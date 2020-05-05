@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -46,6 +46,14 @@ class MEDIAASSETS_API UMediaTexture
 	/** The color used to clear the texture if AutoClear is enabled (default = black). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="MediaTexture")
 	FLinearColor ClearColor;
+
+	/** Basic enablement for mip generation. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "MediaTexture", meta = (DisplayName = "Enable Mipmap generation"))
+	bool EnableGenMips;
+
+	/** The number of mips to use (default = 1). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MediaTexture", meta=(DisplayName="Total number of Mipmaps to output"))
+	uint8 NumMips;
 
 public:
 

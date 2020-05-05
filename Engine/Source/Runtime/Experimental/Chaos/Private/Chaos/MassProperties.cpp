@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "Chaos/MassProperties.h"
 #include "Chaos/Rotation.h"
 #include "Chaos/Matrix.h"
@@ -64,17 +64,20 @@ namespace Chaos
 		// Return results
 		Inertia = PMatrix<T, d, d>(m00, 0, 0, m11, 0, m22);
 		PMatrix<T, d, d> RotationMatrix = DoSwap ? PMatrix<T, d, d>(Eigenvector2, Eigenvector1, -Eigenvector0) : PMatrix<T, d, d>(Eigenvector0, Eigenvector1, Eigenvector2);
-		FinalRotation = TRotation<T,d>(RotationMatrix);
-		check(FMath::IsNearlyEqual(FinalRotation.Size(), 1.0f, KINDA_SMALL_NUMBER));
+		// NOTE: UE Matrix are column-major, so the PMatrix constructor is not setting eigenvectors - we need to transpose it to get a UE rotation matrix.
+		FinalRotation = TRotation<T,d>(RotationMatrix.GetTransposed());
+		if (!ensure(FMath::IsNearlyEqual(FinalRotation.Size(), 1.0f, KINDA_SMALL_NUMBER)))
+		{
+			return TRotation<T, d>::FromElements(TVector<T, d>(0), 1);
+		}
 		
 		return FinalRotation;
 	}
-	template TRotation<float, 3> TransformToLocalSpace(PMatrix<float, 3, 3>& Inertia);
 
-	template <typename T, int d>
-	void CalculateVolumeAndCenterOfMass(const TParticles<T, d>& Vertices, const TTriangleMesh<T>& Surface, T& OutVolume, TVector<T, d>& OutCenterOfMass)
+	template<typename T, int d, typename TSurfaces>
+	void CalculateVolumeAndCenterOfMass(const TParticles<T, d>& Vertices, const TSurfaces& Surfaces, T& OutVolume, TVector<T, d>& OutCenterOfMass)
 	{
-		if (!Surface.GetSurfaceElements().Num())
+		if (!Surfaces.Num())
 		{
 			OutVolume = 0;
 			return;
@@ -82,9 +85,12 @@ namespace Chaos
 		
 		T Volume = 0;
 		TVector<T, d> VolumeTimesSum(0);
-		TVector<T, d> Center = Vertices.X(Surface.GetSurfaceElements()[0][0]);
-		for (const auto& Element : Surface.GetSurfaceElements())
+		TVector<T, d> Center = Vertices.X(Surfaces[0][0]);
+		for (const auto& Element : Surfaces)
 		{
+			// For now we only support triangular elements
+			ensure(Element.Num() == 3);
+
 			PMatrix<T, d, d> DeltaMatrix;
 			TVector<T, d> PerElementSize;
 			for (int32 i = 0; i < Element.Num(); ++i)
@@ -113,15 +119,15 @@ namespace Chaos
 		OutVolume = Volume / 6;
 	}
 
-	template <typename T, int d>
-	void CalculateInertiaAndRotationOfMass(const TParticles<T, d>& Vertices, const TTriangleMesh<T>& Surface, const T Density, const TVector<T,d>& CenterOfMass,
+	template <typename T, int d, typename TSurfaces>
+	void CalculateInertiaAndRotationOfMass(const TParticles<T, d>& Vertices, const TSurfaces& Surfaces, const T Density, const TVector<T,d>& CenterOfMass,
 	PMatrix<T,d,d>& OutInertiaTensor, TRotation<T,d>& OutRotationOfMass)
 	{
 		check(Density > 0);
 
 		static const PMatrix<T, d, d> Standard(2, 1, 1, 2, 1, 2);
 		PMatrix<T, d, d> Covariance(0);
-		for (const auto& Element : Surface.GetSurfaceElements())
+		for (const auto& Element : Surfaces)
 		{
 			PMatrix<T, d, d> DeltaMatrix(0);
 			for (int32 i = 0; i < Element.Num(); ++i)
@@ -144,23 +150,32 @@ namespace Chaos
 	}
 
 
-	template<class T, int d>
+	template<class T, int d, typename TSurfaces>
 	TMassProperties<T, d> CalculateMassProperties(
 		const TParticles<T, d> & Vertices,
-		const TTriangleMesh<T>& Surface, const T Mass)
+		const TSurfaces& Surfaces,
+		const T Mass)
 	{
 		TMassProperties<T, d> MassProperties;
-		CalculateVolumeAndCenterOfMass(Vertices, Surface, MassProperties.Volume, MassProperties.CenterOfMass);
+		CalculateVolumeAndCenterOfMass(Vertices, Surfaces, MassProperties.Volume, MassProperties.CenterOfMass);
 
 		check(Mass > 0);
 		check(MassProperties.Volume > SMALL_NUMBER);
-		CalculateInertiaAndRotationOfMass(Vertices, Surface, Mass / MassProperties.Volume, MassProperties.CenterOfMass, MassProperties.InertiaTensor, MassProperties.RotationOfMass);
+		CalculateInertiaAndRotationOfMass(Vertices, Surfaces, Mass / MassProperties.Volume, MassProperties.CenterOfMass, MassProperties.InertiaTensor, MassProperties.RotationOfMass);
 		
 		return MassProperties;
 	}
 
 	template<class T, int d>
 	TMassProperties<T, d> Combine(const TArray<TMassProperties<T, d>>& MPArray)
+	{
+		TMassProperties<T, d> NewMP = CombineWorldSpace(MPArray, 1.f);
+		NewMP.RotationOfMass = TransformToLocalSpace<T, d>(NewMP.InertiaTensor);
+		return NewMP;
+	}
+
+	template<class T, int d>
+	TMassProperties<T, d> CombineWorldSpace(const TArray<TMassProperties<T, d>>& MPArray, float InDensityKGPerCM)
 	{
 		check(MPArray.Num() > 0);
 		if (MPArray.Num() == 1)
@@ -178,7 +193,7 @@ namespace Chaos
 		NewMP.CenterOfMass /= NewMP.Volume;
 		for (const TMassProperties<T, d>& Child : MPArray)
 		{
-			const T M = Child.Volume;
+			const T M = Child.Volume * InDensityKGPerCM;
 			const TVector<T, d> ParentToChild = Child.CenterOfMass - NewMP.CenterOfMass;
 			const T P0 = ParentToChild[0];
 			const T P1 = ParentToChild[1];
@@ -186,20 +201,32 @@ namespace Chaos
 			const T MP0P0 = M * P0 * P0;
 			const T MP1P1 = M * P1 * P1;
 			const T MP2P2 = M * P2 * P2;
-			NewMP.InertiaTensor += PMatrix<T, d, d>(MP1P1+MP2P2, -M*P1*P0, -M*P2*P0, MP2P2+MP0P0, -M*P2*P1, MP1P1+MP0P0);
+			NewMP.InertiaTensor += PMatrix<T, d, d>(MP1P1 + MP2P2, -M * P1 * P0, -M * P2 * P0, MP2P2 + MP0P0, -M * P2 * P1, MP1P1 + MP0P0);
 		}
-		NewMP.RotationOfMass = TransformToLocalSpace<T, d>(NewMP.InertiaTensor);
 		return NewMP;
 	}
 
-	template CHAOS_API TMassProperties<float, 3> CalculateMassProperties(const TParticles<float, 3> & Vertices,
-		const TTriangleMesh<float>& Surface, const float Mass);
+	template CHAOS_API TMassProperties<float, 3> CalculateMassProperties(const TParticles<float, 3> & Vertices, 
+		const TArray<TVector<int32, 3>>& Surfaces, const float Mass);
+
+	template CHAOS_API TMassProperties<float, 3> CalculateMassProperties(const TParticles<float, 3> & Vertices, 
+		const TArray<TArray<int32>>& Surfaces, const float Mass);
 
 	template CHAOS_API void CalculateVolumeAndCenterOfMass(const TParticles<float, 3>& Vertices,
-		const TTriangleMesh<float>& Surface, float& OutVolume, TVector<float, 3>& OutCenterOfMass);
+		const TArray<TVector<int32, 3>>& Surfaces, float& OutVolume, TVector<float, 3>& OutCenterOfMass);
 
-	template CHAOS_API void CalculateInertiaAndRotationOfMass(const TParticles<float, 3>& Vertices, const TTriangleMesh<float>& Surface, const float Density,
+	template CHAOS_API void CalculateVolumeAndCenterOfMass(const TParticles<float, 3>& Vertices,
+		const TArray<TArray<int32>>& Surfaces, float& OutVolume, TVector<float, 3>& OutCenterOfMass);
+
+	template CHAOS_API void CalculateInertiaAndRotationOfMass(const TParticles<float, 3>& Vertices, const TArray<TVector<int32, 3>>& Surface, const float Density,
+		const TVector<float, 3>& CenterOfMass, PMatrix<float, 3, 3>& OutInertiaTensor, TRotation<float, 3>& OutRotationOfMass);
+
+	template CHAOS_API void CalculateInertiaAndRotationOfMass(const TParticles<float, 3>& Vertices, const TArray<TArray<int32>>& Surface, const float Density,
 		const TVector<float, 3>& CenterOfMass, PMatrix<float, 3, 3>& OutInertiaTensor, TRotation<float, 3>& OutRotationOfMass);
 
 	template CHAOS_API TMassProperties<float, 3> Combine(const TArray<TMassProperties<float, 3>>& MPArray);
+
+	template CHAOS_API TMassProperties<float, 3> CombineWorldSpace(const TArray<TMassProperties<float, 3>>& MPArray, float InDensityKGPerCM);
+
+	template CHAOS_API TRotation<float, 3> TransformToLocalSpace(PMatrix<float, 3, 3>& Inertia);
 }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -37,6 +37,17 @@ public:
 		XrReferenceSpaceType ReferenceSpaceType;
 		XrAction Action;
 		XrSpace Space;
+	};
+
+	// The game and render threads each have a separate copy of this structure so that they don't stomp on each other or cause tearing
+	// when the game thread progresses to the next frame while the render thread is still working on the previous frame.
+	struct FPipelinedFrameState
+	{
+		XrFrameState FrameState{XR_TYPE_FRAME_STATE};
+		XrViewState ViewState{XR_TYPE_VIEW_STATE};
+		TArray<XrView> Views;
+		TArray<XrSpaceLocation> DeviceLocations;
+		XrSpace TrackingSpace;
 	};
 
 	class FVulkanExtensions : public IHeadMountedDisplayVulkanExtensions
@@ -113,6 +124,10 @@ protected:
 	void BuildOcclusionMeshes();
 	bool BuildOcclusionMesh(XrVisibilityMaskTypeKHR Type, int View, FHMDViewMesh& Mesh);
 
+	const FPipelinedFrameState& GetPipelinedFrameStateForThread() const;
+	FPipelinedFrameState& GetPipelinedFrameStateForThread();
+	void UpdateDeviceLocations();
+
 public:
 	/** IHeadMountedDisplay interface */
 	virtual bool IsHMDConnected() override { return true; }
@@ -142,6 +157,7 @@ public:
 	virtual int32 GetDesiredNumberOfViews(bool bStereoRequested) const override;
 	virtual EStereoscopicPass GetViewPassForIndex(bool bStereoRequested, uint32 ViewIndex) const override;
 	virtual uint32 GetViewIndexForPass(EStereoscopicPass StereoPassType) const override;
+	virtual uint32 DeviceGetLODViewIndex() const override;
 	
 	virtual FMatrix GetStereoProjectionMatrix(const enum EStereoscopicPass StereoPassType) const override;
 	virtual void GetEyeRenderParams_RenderThread(const struct FRenderingCompositePassContext& Context, FVector2D& EyeToSrcUVScaleValue, FVector2D& EyeToSrcUVOffsetValue) const override;
@@ -170,7 +186,7 @@ public:
 
 public:
 	/** Constructor */
-	FOpenXRHMD(const FAutoRegister&, XrInstance InInstance, XrSystemId InSystem, TRefCountPtr<FOpenXRRenderBridge>& InRenderBridge, const TSet<FString>& Extensions);
+	FOpenXRHMD(const FAutoRegister&, XrInstance InInstance, XrSystemId InSystem, TRefCountPtr<FOpenXRRenderBridge>& InRenderBridge, TArray<const char*> InEnabledExtensions);
 
 	/** Destructor */
 	virtual ~FOpenXRHMD();
@@ -187,6 +203,7 @@ public:
 	FXRSwapChain* GetSwapchain() { return Swapchain.Get(); }
 	FXRSwapChain* GetDepthSwapchain() { return DepthSwapchain.Get(); }
 
+	bool IsExtensionEnabled(const FString& Name) const { return EnabledExtensions.Contains(Name); }
 	XrInstance GetInstance() { return Instance; }
 	XrSystemId GetSystem() { return System; }
 	XrSession GetSession() { return Session; }
@@ -204,26 +221,25 @@ private:
 	bool					bDepthExtensionSupported;
 	bool					bHiddenAreaMaskSupported;
 	bool					bNeedReAllocatedDepth;
-	
+	bool					bIsMobileMultiViewEnabled;
+
 	XrSessionState			CurrentSessionState;
 
-	FTransform				BaseTransform;
+	TArray<const char*>		EnabledExtensions;
 	XrInstance				Instance;
 	XrSystemId				System;
 	XrSession				Session;
 	XrSpace					LocalSpace;
 	XrSpace					StageSpace;
-	XrSpace					TrackingSpaceRHI;
 	XrReferenceSpaceType	TrackingSpaceType;
 	XrViewConfigurationType SelectedViewConfigurationType;
+	XrEnvironmentBlendMode  SelectedEnvironmentBlendMode;
 
-	XrFrameState			FrameState;
-	XrFrameState			FrameStateRHI;
-	XrViewState				ViewState;
+	FPipelinedFrameState	PipelinedFrameStateGame;
+	FPipelinedFrameState	PipelinedFrameStateRHI;
 
 	TArray<XrViewConfigurationView> Configs;
-	TArray<XrView>			Views;
-	TArray<XrCompositionLayerProjectionView> ViewsRHI;
+	TArray<XrCompositionLayerProjectionView> ProjectionViewsRHI;
 	TArray<XrCompositionLayerDepthInfoKHR> DepthLayersRHI;
 
 	TArray<FDeviceSpace>	DeviceSpaces;
@@ -233,6 +249,8 @@ private:
 
 	FXRSwapChainPtr			Swapchain;
 	FXRSwapChainPtr			DepthSwapchain;
+	uint8					LastRequestedSwapchainFormat;
+	uint8					LastRequestedDepthSwapchainFormat;
 
 	TArray<FHMDViewMesh>	HiddenAreaMeshes;
 	TArray<FHMDViewMesh>	VisibleAreaMeshes;

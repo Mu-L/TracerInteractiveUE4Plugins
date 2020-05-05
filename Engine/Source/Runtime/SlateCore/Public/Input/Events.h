@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -152,7 +152,7 @@ struct FVirtualPointerPosition
  * Base class for all mouse and keyevents.
  */
 USTRUCT(BlueprintType)
-struct SLATECORE_VTABLE FInputEvent
+struct FInputEvent
 {
 	GENERATED_USTRUCT_BODY()
 
@@ -370,7 +370,7 @@ struct TStructOpsTypeTraits<FInputEvent> : public TStructOpsTypeTraitsBase2<FInp
  * It is passed to event handlers dealing with key input.
  */
 USTRUCT(BlueprintType)
-struct SLATECORE_VTABLE FKeyEvent : public FInputEvent
+struct FKeyEvent : public FInputEvent
 {
 	GENERATED_USTRUCT_BODY()
 
@@ -464,7 +464,7 @@ struct TStructOpsTypeTraits<FKeyEvent> : public TStructOpsTypeTraitsBase2<FKeyEv
  * It is passed to event handlers dealing with analog keys.
  */
 USTRUCT(BlueprintType)
-struct SLATECORE_VTABLE FAnalogInputEvent
+struct FAnalogInputEvent
 	: public FKeyEvent
 {
 	GENERATED_USTRUCT_BODY()
@@ -527,7 +527,7 @@ struct TStructOpsTypeTraits<FAnalogInputEvent> : public TStructOpsTypeTraitsBase
  * FCharacterEvent describes a keyboard action where the utf-16 code is given.  Used for OnKeyChar messages
  */
 USTRUCT(BlueprintType)
-struct SLATECORE_VTABLE FCharacterEvent
+struct FCharacterEvent
 	: public FInputEvent
 {
 	GENERATED_USTRUCT_BODY()
@@ -609,7 +609,7 @@ public:
  * It is passed to event handlers dealing with pointer-based input.
  */
 USTRUCT(BlueprintType)
-struct SLATECORE_VTABLE FPointerEvent
+struct FPointerEvent
 	: public FInputEvent
 {
 	GENERATED_USTRUCT_BODY()
@@ -816,7 +816,7 @@ public:
 	const FVector2D& GetLastScreenSpacePosition() const { return LastScreenSpacePosition; }
 
 	/** Returns the distance the mouse traveled since the last event was handled. */
-	FVector2D GetCursorDelta() const { return CursorDelta; }
+	const FVector2D& GetCursorDelta() const { return CursorDelta; }
 
 	/** Mouse buttons that are currently pressed */
 	bool IsMouseButtonDown( FKey MouseButton ) const { return PressedButtons.Contains( MouseButton ); }

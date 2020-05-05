@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	SkeletalRenderStatic.cpp: CPU skinned skeletal mesh rendering code.
@@ -159,6 +159,7 @@ void FSkeletalMeshObjectStatic::FSkeletalMeshObjectLOD::InitResources(FSkelMeshC
 					Segment.VertexBufferStride = VertexBufferStride;
 					Segment.FirstPrimitive = Section.BaseIndex / 3;
 					Segment.NumPrimitives = Section.NumTriangles;
+					Segment.bEnabled = !Section.bDisabled;
 					GeometrySections.Add(Segment);
 				}
 				Initializer.Segments = GeometrySections;

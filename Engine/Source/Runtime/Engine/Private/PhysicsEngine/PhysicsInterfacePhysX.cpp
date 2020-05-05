@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #if !WITH_CHAOS && !WITH_IMMEDIATE_PHYSX
 
@@ -967,16 +967,6 @@ bool FPhysicsInterface_PhysX::IsQueryShape(const FPhysicsShapeHandle_PhysX& InSh
 	if(InShape.IsValid())
 	{
 		return InShape.Shape->getFlags() & PxShapeFlag::eSCENE_QUERY_SHAPE;
-	}
-
-	return false;
-}
-
-bool FPhysicsInterface_PhysX::IsShapeType(const FPhysicsShapeHandle_PhysX& InShape, ECollisionShapeType InType)
-{
-	if(InShape.IsValid())
-	{
-		return InShape.Shape->getGeometryType() == U2PCollisionShapeType(InType);
 	}
 
 	return false;

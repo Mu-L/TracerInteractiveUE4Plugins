@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "USDImportOptions.h"
 #include "UObject/UnrealType.h"
@@ -24,6 +24,7 @@ void UUSDImportOptions::PostEditChangeProperty(struct FPropertyChangedEvent& Pro
 UUSDSceneImportOptions::UUSDSceneImportOptions(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	PurposesToImport = (int32) (EUsdPurpose::Default | EUsdPurpose::Proxy);
 	bFlattenHierarchy = true;
 	bImportMeshes = true;
 	PathForAssets.Path = TEXT("/Game");
@@ -37,14 +38,14 @@ void UUSDSceneImportOptions::PostEditChangeProperty(struct FPropertyChangedEvent
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 }
 
-bool UUSDSceneImportOptions::CanEditChange(const UProperty* InProperty) const
+bool UUSDSceneImportOptions::CanEditChange(const FProperty* InProperty) const
 {
 	bool bCanEdit = Super::CanEditChange(InProperty);
 
 	FName PropertyName = InProperty ? InProperty->GetFName() : NAME_None;
 
 	if (GET_MEMBER_NAME_CHECKED(UUSDImportOptions, MeshImportType) == PropertyName ||
-		GET_MEMBER_NAME_CHECKED(UUSDImportOptions, bApplyWorldTransformToGeometry) == PropertyName || 
+		GET_MEMBER_NAME_CHECKED(UUSDImportOptions, bApplyWorldTransformToGeometry) == PropertyName ||
 		GET_MEMBER_NAME_CHECKED(UUSDImportOptions, bGenerateUniquePathPerUSDPrim) == PropertyName)
 	{
 		bCanEdit &= bImportMeshes;
@@ -68,14 +69,14 @@ void UUSDBatchImportOptions::PostEditChangeProperty(struct FPropertyChangedEvent
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 }
 
-bool UUSDBatchImportOptions::CanEditChange(const UProperty* InProperty) const
+bool UUSDBatchImportOptions::CanEditChange(const FProperty* InProperty) const
 {
 	bool bCanEdit = Super::CanEditChange(InProperty);
 
 	FName PropertyName = InProperty ? InProperty->GetFName() : NAME_None;
 
 	if (GET_MEMBER_NAME_CHECKED(UUSDImportOptions, MeshImportType) == PropertyName ||
-		GET_MEMBER_NAME_CHECKED(UUSDImportOptions, bApplyWorldTransformToGeometry) == PropertyName || 
+		GET_MEMBER_NAME_CHECKED(UUSDImportOptions, bApplyWorldTransformToGeometry) == PropertyName ||
 		GET_MEMBER_NAME_CHECKED(UUSDImportOptions, bGenerateUniquePathPerUSDPrim) == PropertyName)
 	{
 		bCanEdit &= bImportMeshes;

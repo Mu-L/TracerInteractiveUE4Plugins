@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -8,14 +8,6 @@
 #include "Stats/StatsMisc.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(TimingProfiler, Log, All);
-
-#define DEBUG_TIMING_PROFILER_PERFORMANCE 0
-
-#if DEBUG_TIMING_PROFILER_PERFORMANCE==1
-#define TP_SCOPE_LOG_TIME(arg0,arg1) SCOPE_LOG_TIME(arg0,arg1)
-#else
-#define TP_SCOPE_LOG_TIME(arg0,arg1)
-#endif
 
 DECLARE_STATS_GROUP(TEXT("TimingProfiler"), STATGROUP_TimingProfiler, STATCAT_Advanced);
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MinimalClient.h"
 
@@ -598,7 +598,7 @@ void UMinimalClient::ResetConnTimeout(float Duration)
 		// @todo #JohnBHack: This is a slightly hacky way of setting the timeout to a large value, which will be overridden by newly
 		//				received packets, making it unsuitable for most situations (except crashes - but that could still be subject
 		//				to a race condition)
-		double NewLastReceiveTime = UnitDriver->Time + Duration;
+		const double NewLastReceiveTime = UnitDriver->GetElapsedTime() + Duration;
 
 		UnitConn->LastReceiveTime = FMath::Max(NewLastReceiveTime, UnitConn->LastReceiveTime);
 	}
@@ -666,8 +666,8 @@ bool UMinimalClient::ConnectMinimalClient()
 		{
 			// Replace the package map class
 			TSubclassOf<UPackageMap> OldClass = DefConn->PackageMapClass;
-			UProperty* OldPostConstructLink = NetConnClass->PostConstructLink;
-			UProperty* PackageMapProp = FindFieldChecked<UProperty>(NetConnClass, TEXT("PackageMapClass"));
+			FProperty* OldPostConstructLink = NetConnClass->PostConstructLink;
+			FProperty* PackageMapProp = FindFieldChecked<FProperty>(NetConnClass, TEXT("PackageMapClass"));
 
 			// Hack - force property initialization for the PackageMapClass property, so changing its default value works.
 			check(PackageMapProp != nullptr && PackageMapProp->PostConstructLinkNext == nullptr);

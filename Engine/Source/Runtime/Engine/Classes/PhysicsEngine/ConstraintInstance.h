@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -134,8 +134,8 @@ struct ENGINE_API FConstraintInstance
 
 	///////////////////////////// Body1 ref frame
 	
-	/** Location of constraint in Body1 reference frame. */
-	UPROPERTY()
+	/** Location of constraint in Body1 reference frame (usually the "child" body for skeletal meshes). */
+	UPROPERTY(EditAnywhere, Category=Constraint)
 	FVector Pos1;
 
 	/** Primary (twist) axis in Body1 reference frame. */
@@ -148,8 +148,8 @@ struct ENGINE_API FConstraintInstance
 
 	///////////////////////////// Body2 ref frame
 	
-	/** Location of constraint in Body2 reference frame. */
-	UPROPERTY()
+	/** Location of constraint in Body2 reference frame (usually the "parent" body for skeletal meshes). */
+	UPROPERTY(EditAnywhere, Category=Constraint)
 	FVector Pos2;
 
 	/** Primary (twist) axis in Body2 reference frame. */
@@ -358,6 +358,60 @@ public:
 		UpdateAngularLimit();
 	}
 
+	/** Whether the linear limits are soft (only if at least one axis if Limited) */
+	bool GetIsSoftLinearLimit() const
+	{
+		return ProfileInstance.LinearLimit.bSoftConstraint;
+	}
+
+	/** Linear stiffness if the constraint is set to use soft linear limits */
+	float GetSoftLinearLimitStiffness() const
+	{
+		return ProfileInstance.LinearLimit.Stiffness;
+	}
+
+	/** Linear damping if the constraint is set to use soft linear limits */
+	float GetSoftLinearLimitDamping() const
+	{
+		return ProfileInstance.LinearLimit.Damping;
+	}
+
+	/** Whether the twist limits are soft (only available if twist is Limited) */
+	bool GetIsSoftTwistLimit() const
+	{
+		return ProfileInstance.TwistLimit.bSoftConstraint;
+	}
+
+	/** Twist stiffness if the constraint is set to use soft limits */
+	float GetSoftTwistLimitStiffness() const
+	{
+		return ProfileInstance.TwistLimit.Stiffness;
+	}
+
+	/** Twist damping if the constraint is set to use soft limits */
+	float GetSoftTwistLimitDamping() const
+	{
+		return ProfileInstance.TwistLimit.Damping;
+	}
+
+	/** Whether the swing limits are soft (only available if swing1 and/or swing2 is Limited) */
+	bool GetIsSoftSwingLimit() const
+	{
+		return ProfileInstance.ConeLimit.bSoftConstraint;
+	}
+
+	/** Swing stiffness if the constraint is set to use soft limits */
+	float GetSoftSwingLimitStiffness() const
+	{
+		return ProfileInstance.ConeLimit.Stiffness;
+	}
+
+	/** Swing damping if the constraint is set to use soft limits */
+	float GetSoftSwingLimitDamping() const
+	{
+		return ProfileInstance.ConeLimit.Damping;
+	}
+
 	/** Sets the Linear Breakable properties
 	*	@param bInLinearBreakable		Whether it is possible to break the joint with linear force
 	*	@param InLinearBreakThreshold	Force needed to break the joint
@@ -543,11 +597,23 @@ public:
 	void PostSerialize(const FArchive& Ar);
 #endif
 
+	/** Whether projection is enabled for this constraint */
+	bool IsProjectionEnabled() const
+	{
+		return ProfileInstance.bEnableProjection;
+	}
+
 	/** Turn on linear and angular projection */
 	void EnableProjection();
 
 	/** Turn off linear and angular projection */
 	void DisableProjection();
+
+	/** Whether parent domination is enabled (meaning the parent body cannot be be affected at all by a child) */
+	bool IsParentDominatesEnabled() const
+	{
+		return ProfileInstance.bParentDominates;
+	}
 
 	/** Enable/Disable parent dominates (meaning the parent body cannot be be affected at all by a child) */
 	void EnableParentDominates();

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SoundSubmixEditorUtilities.h"
 #include "AudioEditorModule.h"
@@ -12,7 +12,7 @@ void FSoundSubmixEditorUtilities::CreateSoundSubmix(const UEdGraph* Graph, UEdGr
 	check(Graph);
 
 	// Cast outer to SoundSubmix
-	USoundSubmix* SoundSubmix = CastChecked<USoundSubmix>(Graph->GetOuter());
+	USoundSubmixBase* SoundSubmix = CastChecked<USoundSubmixBase>(Graph->GetOuter());
 
 	if (SoundSubmix != nullptr)
 	{

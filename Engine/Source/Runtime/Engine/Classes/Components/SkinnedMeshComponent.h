@@ -1,9 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GPUSkinPublicDefs.h"
 #include "UObject/ObjectMacros.h"
 #include "UObject/Object.h"
 #include "Engine/EngineTypes.h"
@@ -12,6 +13,8 @@
 #include "Components/MeshComponent.h"
 #include "Containers/SortedMap.h"
 #include "SkinnedMeshComponent.generated.h"
+
+enum class ESkinCacheUsage : uint8;
 
 class FPrimitiveSceneProxy;
 class FColorVertexBuffer;
@@ -129,18 +132,6 @@ struct FActiveMorphTarget
 	}
 };
 
-struct FSkeletalMeshObjectCallbackData
-{
-	enum class EEventType { Register, Unregister, Update };
-	typedef void (*TCallbackMeshObjectCallback)(
-		EEventType Event, 
-		class FSkeletalMeshObject* MeshObject,
-		uint64 UserData);
-
-	uint64 UserData = 0;
-	TCallbackMeshObjectCallback Run = nullptr;
-};
-
 /** Vertex skin weight info supplied for a component override. */
 USTRUCT(BlueprintType, meta = (HasNativeMake = "Engine.KismetRenderingLibrary.MakeSkinWeightInfo", HasNativeBreak = "Engine.KismetRenderingLibrary.BreakSkinWeightInfo"))
 struct FSkelMeshSkinWeightInfo
@@ -149,10 +140,10 @@ struct FSkelMeshSkinWeightInfo
 
 	/** Index of bones that influence this vertex */
 	UPROPERTY()
-	int32	Bones[8];
+	int32	Bones[MAX_TOTAL_INFLUENCES];
 	/** Influence of each bone on this vertex */
 	UPROPERTY()
-	uint8	Weights[8];
+	uint8	Weights[MAX_TOTAL_INFLUENCES];
 };
 
 /** LOD specific setup for the skeletal mesh component. */
@@ -229,6 +220,12 @@ class ENGINE_API USkinnedMeshComponent : public UMeshComponent
 	 */
 	UPROPERTY(BlueprintReadOnly, Category="Mesh")
 	TWeakObjectPtr<USkinnedMeshComponent> MasterPoseComponent;
+
+	/**
+	 * How this Component's LOD uses the skin cache feature. Auto will defer to the asset's (SkeletalMesh) option. If Ray Tracing is enabled, will imply Enabled
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Mesh")
+	TArray<ESkinCacheUsage> SkinCacheUsage;
 
 	/** const getters for previous transform idea */
 	const TArray<uint8>& GetPreviousBoneVisibilityStates() const
@@ -334,6 +331,11 @@ public:
 	FColor WireframeColor_DEPRECATED;
 #endif
 
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+	/** Debug draw color */
+	TOptional<FLinearColor> DebugDrawColor;
+#endif
+
 protected:
 	/** Information for current ref pose override, if present */
 	FSkelMeshRefPoseOverride* RefPoseOverride;
@@ -349,6 +351,20 @@ public:
 	 * @param	InLODIndex		The LOD we want to export
 	 */
 	void GetCPUSkinnedVertices(TArray<struct FFinalSkinVertex>& OutVertices, int32 InLODIndex);
+
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+	/** Get whether to draw this mesh's debug skeleton */
+	bool ShouldDrawDebugSkeleton() const { return bDrawDebugSkeleton; }
+
+	/** Set whether to draw this mesh's debug skeleton */
+	void SetDrawDebugSkeleton(bool bInDraw) { bDrawDebugSkeleton = bInDraw; }
+
+	/** Get debug draw color */
+	const TOptional<FLinearColor>& GetDebugDrawColor() const { return DebugDrawColor; }
+
+	/** Set debug draw color */
+	void SetDebugDrawColor(const FLinearColor& InColor) { DebugDrawColor = InColor; }
+#endif
 
 	/** Array indicating all active morph targets. This array is updated inside RefreshBoneTransforms based on the Anim Blueprint. */
 	TArray<FActiveMorphTarget> ActiveMorphTargets;
@@ -594,6 +610,12 @@ protected:
 	/** External flag indicating that we may not be evaluated every frame */
 	uint8 bExternalEvaluationRateLimited:1;
 
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+private:
+	/** Whether to draw this mesh's debug skeleton (regardless of showflags) */
+	uint8 bDrawDebugSkeleton:1;
+#endif
+
 public:
 	/** Set whether we have our tick rate externally controlled non-URO-based interpolation */
 	void EnableExternalTickRateControl(bool bInEnable) { bExternalTickRateControlled = bInEnable; }
@@ -633,7 +655,6 @@ public:
 
 	/** Object responsible for sending bone transforms, morph target state etc. to render thread. */
 	class FSkeletalMeshObject*	MeshObject;
-	FSkeletalMeshObjectCallbackData MeshObjectCallbackData;
 
 	/** Gets the skeletal mesh resource used for rendering the component. */
 	FSkeletalMeshRenderData* GetSkeletalMeshRenderData() const;
@@ -773,6 +794,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Components|SkinnedMesh")
 	bool GetTwistAndSwingAngleOfDeltaRotationFromRefPose(FName BoneName, float& OutTwistAngle, float& OutSwingAngle) const;
 
+	bool IsSkinCacheAllowed(int32 LodIdx) const;
+
 public:
 	//~ Begin UObject Interface
 	virtual void BeginDestroy() override;
@@ -780,7 +803,7 @@ public:
 	virtual void GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize) override;
 	virtual FString GetDetailedInfoInternal() const override;
 #if WITH_EDITOR
-	virtual bool CanEditChange(const UProperty* InProperty) const override;
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
 #endif // WITH_EDITOR
 	//~ End UObject Interface
 
@@ -788,7 +811,7 @@ protected:
 	//~ Begin UActorComponent Interface
 	virtual void OnRegister() override;
 	virtual void OnUnregister() override;
-	virtual void CreateRenderState_Concurrent() override;
+	virtual void CreateRenderState_Concurrent(FRegisterComponentContext* Context) override;
 	virtual void SendRenderDynamicData_Concurrent() override;
 	virtual void DestroyRenderState_Concurrent() override;
 	virtual bool RequiresGameThreadEndOfFrameRecreate() const override
@@ -1531,14 +1554,25 @@ public:
 
 		if (bWasRenderStateCreated && bIsRegistered)
 		{
-			Component->CreateRenderState_Concurrent();
+			Component->CreateRenderState_Concurrent(nullptr);
 		}
 	}
 };
 
+/** Simple, CPU evaluation of a vertex's skinned tangent basis */
+void GetTypedSkinnedTangentBasis(
+	const USkinnedMeshComponent* SkinnedComp,
+	const FSkelMeshRenderSection& Section,
+	const FStaticMeshVertexBuffers& StaticVertexBuffers,
+	const FSkinWeightVertexBuffer& SkinWeightVertexBuffer,
+	const int32 VertIndex,
+	const TArray<FMatrix> & RefToLocals,
+	FVector& OutTangentX,
+	FVector& OutTangentZ
+);
 
 /** Simple, CPU evaluation of a vertex's skinned position helper function */
-template <bool bExtraBoneInfluencesT, bool bCachedMatrices>
+template <bool bCachedMatrices>
 FVector GetTypedSkinnedVertexPosition(
 	const USkinnedMeshComponent* SkinnedComp,
 	const FSkelMeshRenderSection& Section,

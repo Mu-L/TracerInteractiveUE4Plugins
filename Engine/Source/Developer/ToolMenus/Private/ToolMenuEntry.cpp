@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ToolMenuEntry.h"
 #include "ToolMenus.h"
@@ -15,7 +15,8 @@ FToolMenuEntry::FToolMenuEntry() :
 	Type(EMultiBlockType::None),
 	UserInterfaceActionType(EUserInterfaceActionType::Button),
 	bShouldCloseWindowAfterMenuSelection(true),
-	ScriptObject(nullptr)
+	ScriptObject(nullptr),
+	bAddedDuringRegister(false)
 {
 }
 
@@ -25,7 +26,8 @@ FToolMenuEntry::FToolMenuEntry(const FToolMenuOwner InOwner, const FName InName,
 	Type(InType),
 	UserInterfaceActionType(EUserInterfaceActionType::Button),
 	bShouldCloseWindowAfterMenuSelection(true),
-	ScriptObject(nullptr)
+	ScriptObject(nullptr),
+	bAddedDuringRegister(false)
 {
 }
 
@@ -163,7 +165,7 @@ FToolMenuEntry FToolMenuEntry::InitToolBarButton(const TSharedPtr< const FUIComm
 	return Entry;
 }
 
-FToolMenuEntry FToolMenuEntry::InitComboButton(const FName InName, const FToolUIActionChoice& InAction, const FNewToolMenuWidgetChoice& InMenuContentGenerator, const TAttribute<FText>& InLabel, const TAttribute<FText>& InToolTip, const TAttribute<FSlateIcon>& InIcon, bool bInSimpleComboBox, FName InTutorialHighlightName)
+FToolMenuEntry FToolMenuEntry::InitComboButton(const FName InName, const FToolUIActionChoice& InAction, const FNewToolMenuChoice& InMenuContentGenerator, const TAttribute<FText>& InLabel, const TAttribute<FText>& InToolTip, const TAttribute<FSlateIcon>& InIcon, bool bInSimpleComboBox, FName InTutorialHighlightName)
 {
 	FToolMenuEntry Entry(UToolMenus::Get()->CurrentOwner(), InName, EMultiBlockType::ToolBarComboButton);
 	Entry.TutorialHighlightName = InTutorialHighlightName;

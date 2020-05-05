@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -11,26 +11,6 @@
 
 class FUICommandList;
 
-/**
- * Unreal editor main frame actions related to the Layout section
- */
-class FMainFrameLayoutCommands
-{
-public:
-	// Load-based commands
-	TArray<TSharedPtr<FUICommandInfo>> LoadLayoutCommands;
-	TArray<TSharedPtr<FUICommandInfo>> LoadUserLayoutCommands;
-	TSharedPtr< FUICommandInfo > ImportLayout;
-	// Save-based commands
-	TArray<TSharedPtr<FUICommandInfo>> OverrideLayoutCommands;
-	TArray<TSharedPtr<FUICommandInfo>> OverrideUserLayoutCommands;
-	TSharedPtr< FUICommandInfo > SaveLayoutAs;
-	TSharedPtr< FUICommandInfo > ExportLayout;
-	// Remove-based commands
-	TArray<TSharedPtr<FUICommandInfo>> RemoveLayoutCommands;
-	TArray<TSharedPtr<FUICommandInfo>> RemoveUserLayoutCommands;
-	TSharedPtr< FUICommandInfo > RemoveUserLayouts;
-};
 
 /**
  * Unreal editor main frame actions
@@ -83,7 +63,10 @@ public:
 	TSharedPtr< FUICommandInfo > CreditsUnrealEd;
 
 	// Layout
-	FMainFrameLayoutCommands MainFrameLayoutCommands;
+	TSharedPtr< FUICommandInfo > ImportLayout;
+	TSharedPtr< FUICommandInfo > SaveLayoutAs;
+	TSharedPtr< FUICommandInfo > ExportLayout;
+	TSharedPtr< FUICommandInfo > RemoveUserLayouts;
 
 	TSharedPtr< FUICommandInfo > ToggleFullscreen;
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -24,6 +24,7 @@ public:
 	virtual void AddSceneNode(const FDisplayClusterConfigSceneNode& InCfgSNode) = 0;
 	virtual void AddGeneral(const FDisplayClusterConfigGeneral& InCfgGeneral) = 0;
 	virtual void AddRender(const FDisplayClusterConfigRender& InCfgRender) = 0;
+	virtual void AddNvidia(const FDisplayClusterConfigNvidia& InCfgNvidia) = 0;
 	virtual void AddStereo(const FDisplayClusterConfigStereo& InCfgStereo) = 0;
 	virtual void AddNetwork(const FDisplayClusterConfigNetwork& InCfgNetwork) = 0;
 	virtual void AddDebug(const FDisplayClusterConfigDebug& InCfgDebug) = 0;

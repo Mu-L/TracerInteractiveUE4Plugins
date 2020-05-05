@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -66,6 +66,14 @@ public:
 	/** Whether we should save subject settings in the the live link section. If not, we'll create one with subject information with no settings */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Subjects")
 	bool bSaveSubjectSettings;
+
+	/** If true we use timecode even if not synchronized, else we use world time*/
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Subjects")
+	bool bUseSourceTimecode;
+
+	/** If true discard livelink samples with timecode that occurs before the start of recording*/
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Subjects", meta=(EditCondition = bUseSourceTimecode))
+	bool bDiscardSamplesBeforeStart;
 
 	/**
 	* The master track recorder we created.

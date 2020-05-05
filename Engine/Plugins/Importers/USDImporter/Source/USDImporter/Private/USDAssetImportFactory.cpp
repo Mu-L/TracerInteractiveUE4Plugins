@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "USDAssetImportFactory.h"
 #include "USDImporter.h"
@@ -45,6 +45,7 @@ UUSDAssetImportFactory::UUSDAssetImportFactory(const FObjectInitializer& ObjectI
 UObject* UUSDAssetImportFactory::FactoryCreateFile(UClass* InClass, UObject* InParent, FName InName, EObjectFlags Flags, const FString& Filename, const TCHAR* Parms, FFeedbackContext* Warn, bool& bOutOperationCanceled)
 {
 	UObject* ImportedObject = nullptr;
+	AdditionalImportedObjects.Empty();
 
 #if USE_USD_SDK
 	UUSDImporter* USDImporter = IUSDImporterModule::Get().GetImporter();
@@ -96,8 +97,19 @@ UObject* UUSDAssetImportFactory::FactoryCreateFile(UClass* InClass, UObject* InP
 			TArray<UObject*> ImportedObjects = USDImporter->ImportMeshes(ImportContext, PrimsToImport);
 
 			// Just return the first one imported
-			ImportedObject = ImportedObjects.Num() > 0 ? ImportedObjects[0] : nullptr;
+			if (ImportedObjects.Num() > 0)
+			{
+				ImportedObject = ImportedObjects[0];
+				AdditionalImportedObjects.Reserve(ImportedObjects.Num() - 1);
+				for (int32 ImportedObjectIndex = 1; ImportedObjectIndex < ImportedObjects.Num(); ++ImportedObjectIndex)
+				{
+					AdditionalImportedObjects.Add(ImportedObjects[ImportedObjectIndex]);
+				}
+			}
 		}
+
+		// Reset this cache or else reimport will not work properly
+		ImportContext.PathToImportAssetMap.Empty();
 
 		ImportContext.DisplayErrorMessages(IsAutomatedImport());
 	}
@@ -126,6 +138,7 @@ bool UUSDAssetImportFactory::FactoryCanImport(const FString& Filename)
 void UUSDAssetImportFactory::CleanUp()
 {
 	ImportContext = FUSDAssetImportContext();
+	Super::CleanUp();
 }
 
 bool UUSDAssetImportFactory::CanReimport(UObject* Obj, TArray<FString>& OutFilenames)

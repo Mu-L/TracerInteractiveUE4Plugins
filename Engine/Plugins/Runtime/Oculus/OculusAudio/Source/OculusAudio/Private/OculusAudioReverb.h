@@ -1,24 +1,24 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "IAudioExtensionPlugin.h"
-#include "Sound/SoundEffectSubmix.h"
 #include "OVR_Audio.h"
+#include "Sound/SoundEffectBase.h"
+#include "Sound/SoundEffectSubmix.h"
+#include "Templates/UniquePtr.h"
+#include "UObject/Object.h"
+#include "UObject/ObjectMacros.h"
 
+#include "OculusAudioReverb.generated.h"
+
+
+// Forward Declarations
+class USubmixEffectOculusReverbPluginPreset;
 
 class FSubmixEffectOculusReverbPlugin : public FSoundEffectSubmix
 {
-public:
-	FSubmixEffectOculusReverbPlugin();
-
-	void SetContext(ovrAudioContext* SharedContext);
-	void ClearContext();
-
-	virtual void Init(const FSoundEffectSubmixInitData& InSampleRate) override
-	{
-		return; // PAS
-	}
+	virtual void Init(const FSoundEffectSubmixInitData& InInitData) override;
 	virtual uint32 GetDesiredInputChannelCountOverride() const override
 	{
 		static const int STEREO = 2;
@@ -29,8 +29,14 @@ public:
 	{
 		return; // PAS
 	}
+
+public:
+	FSubmixEffectOculusReverbPlugin();
+
+	void ClearContext();
+
 private:
-	ovrAudioContext* Context;
+	ovrAudioContext Context;
 	FCriticalSection ContextLock;
 };
 
@@ -44,11 +50,11 @@ class OculusAudioReverb : public IAudioReverb
 public:
 	OculusAudioReverb()
 		: Context(nullptr)
+		, ReverbPreset(nullptr)
 	{
 		// empty
 	}
 
-	void SetContext(ovrAudioContext* SharedContext);
 	void ClearContext();
 
 	virtual void OnInitSource(const uint32 SourceId, const FName& AudioComponentUserId, const uint32 NumChannels, UReverbPluginSourceSettingsBase* InSettings) override
@@ -61,7 +67,9 @@ public:
 		return; // PAS
 	}
 
-	virtual class FSoundEffectSubmix* GetEffectSubmix(class USoundSubmix* Submix) override;
+	virtual FSoundEffectSubmixPtr GetEffectSubmix() override;
+
+	virtual USoundSubmix* GetSubmix() override;
 
 	virtual void ProcessSourceAudio(const FAudioPluginSourceInputData& InputData, FAudioPluginSourceOutputData& OutputData) override
 	{
@@ -69,5 +77,31 @@ public:
 	}
 private:
 	ovrAudioContext* Context;
-	TArray<FSubmixEffectOculusReverbPlugin*> Submixes;
+	TSoundEffectSubmixPtr SubmixEffect;
+	USubmixEffectOculusReverbPluginPreset* ReverbPreset;
+};
+
+USTRUCT()
+struct OCULUSAUDIO_API FSubmixEffectOculusReverbPluginSettings
+{
+	GENERATED_USTRUCT_BODY()
+
+	FSubmixEffectOculusReverbPluginSettings() = default;
+};
+
+UCLASS()
+class OCULUSAUDIO_API USubmixEffectOculusReverbPluginPreset : public USoundEffectSubmixPreset
+{
+	GENERATED_BODY()
+
+public:
+	EFFECT_PRESET_METHODS(SubmixEffectOculusReverbPlugin)
+
+	UFUNCTION()
+	void SetSettings(const FSubmixEffectOculusReverbPluginSettings& InSettings)
+	{
+	}
+
+	UPROPERTY()
+	FSubmixEffectOculusReverbPluginSettings Settings;
 };

@@ -1,7 +1,8 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MediaCapture.h"
 
+#include "Application/ThrottleManager.h"
 #include "Async/Async.h"
 #include "Engine/GameEngine.h"
 #include "Engine/RendererSettings.h"
@@ -77,6 +78,7 @@ FMediaCaptureOptions::FMediaCaptureOptions()
 	: Crop(EMediaCaptureCroppingType::None)
 	, CustomCapturePoint(FIntPoint::ZeroValue)
 	, bResizeSourceBuffer(false)
+	, bSkipFrameWhenRunningExpensiveTasks(true)
 {
 
 }
@@ -89,6 +91,7 @@ UMediaCapture::UMediaCapture(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, CurrentResolvedTargetIndex(0)
 	, NumberOfCaptureFrame(2)
+	, CaptureRequestCount(0)
 	, MediaState(EMediaCaptureState::Stopped)
 	, DesiredSize(1280, 720)
 	, DesiredPixelFormat(EPixelFormat::PF_A2B10G10R10)
@@ -176,22 +179,30 @@ bool UMediaCapture::CaptureSceneViewport(TSharedPtr<FSceneViewport>& InSceneView
 	}
 
 	SetState(EMediaCaptureState::Preparing);
-	if (!CaptureSceneViewportImpl(InSceneViewport))
+	bool bInitialized = CaptureSceneViewportImpl(InSceneViewport);
+
+	if (bInitialized)
+	{
+		InitializeResolveTarget(MediaOutput->NumberOfTextureBuffers);
+		bInitialized = GetState() != EMediaCaptureState::Stopped;
+	}
+
+	if (bInitialized)
+	{
+		//no lock required, the command on the render thread is not active
+		CapturingSceneViewport = InSceneViewport;
+
+		CurrentResolvedTargetIndex = 0;
+		FCoreDelegates::OnEndFrame.AddUObject(this, &UMediaCapture::OnEndFrame_GameThread);
+	}
+	else
 	{
 		ResetFixedViewportSize(InSceneViewport, false);
 		SetState(EMediaCaptureState::Stopped);
 		MediaCaptureDetails::ShowSlateNotification();
-		return false;
 	}
 
-	//no lock required, the command on the render thread is not active
-	CapturingSceneViewport = InSceneViewport;
-
-	InitializeResolveTarget(MediaOutput->NumberOfTextureBuffers);
-	CurrentResolvedTargetIndex = 0;
-	FCoreDelegates::OnEndFrame.AddUObject(this, &UMediaCapture::OnEndFrame_GameThread);
-
-	return true;
+	return bInitialized;
 }
 
 bool UMediaCapture::CaptureTextureRenderTarget2D(UTextureRenderTarget2D* InRenderTarget2D, FMediaCaptureOptions CaptureOptions)
@@ -228,21 +239,29 @@ bool UMediaCapture::CaptureTextureRenderTarget2D(UTextureRenderTarget2D* InRende
 	}
 
 	SetState(EMediaCaptureState::Preparing);
-	if (!CaptureRenderTargetImpl(InRenderTarget2D))
+	bool bInitialized = CaptureRenderTargetImpl(InRenderTarget2D);
+
+	if (bInitialized)
+	{
+		InitializeResolveTarget(MediaOutput->NumberOfTextureBuffers);
+		bInitialized = GetState() != EMediaCaptureState::Stopped;
+	}
+
+	if (bInitialized)
+	{
+		//no lock required the command on the render thread is not active yet
+		CapturingRenderTarget = InRenderTarget2D;
+
+		CurrentResolvedTargetIndex = 0;
+		FCoreDelegates::OnEndFrame.AddUObject(this, &UMediaCapture::OnEndFrame_GameThread);
+	}
+	else
 	{
 		SetState(EMediaCaptureState::Stopped);
 		MediaCaptureDetails::ShowSlateNotification();
-		return false;
 	}
 
-	//no lock required the command on the render thread is not active yet
-	CapturingRenderTarget = InRenderTarget2D;
-
-	InitializeResolveTarget(MediaOutput->NumberOfTextureBuffers);
-	CurrentResolvedTargetIndex = 0;
-	FCoreDelegates::OnEndFrame.AddUObject(this, &UMediaCapture::OnEndFrame_GameThread);
-
-	return true;
+	return bInitialized;
 }
 
 void UMediaCapture::CacheMediaOutput(EMediaCaptureSourceType InSourceType)
@@ -502,6 +521,13 @@ bool UMediaCapture::HasFinishedProcessing() const
 
 void UMediaCapture::InitializeResolveTarget(int32 InNumberOfBuffers)
 {
+	if (DesiredOutputSize.X <= 0 || DesiredOutputSize.Y <= 0)
+	{
+		UE_LOG(LogMediaIOCore, Error, TEXT("Can't start the capture. The size requested is negative or zero."));
+		SetState(EMediaCaptureState::Stopped);
+		return;
+	}
+
 	if (bShouldCaptureRHITexture)
 	{
 		// No buffer is needed if the callback is with the RHI Texture
@@ -581,6 +607,11 @@ void UMediaCapture::OnEndFrame_GameThread()
 		return;
 	}
 
+	if (DesiredCaptureOptions.bSkipFrameWhenRunningExpensiveTasks && !FSlateThrottleManager::Get().IsAllowingExpensiveTasks())
+	{
+		return;
+	}
+
 	CurrentResolvedTargetIndex = (CurrentResolvedTargetIndex + 1) % NumberOfCaptureFrame;
 	int32 ReadyFrameIndex = (CurrentResolvedTargetIndex + 1) % NumberOfCaptureFrame; // Next one in the buffer queue
 
@@ -609,6 +640,7 @@ void UMediaCapture::OnEndFrame_GameThread()
 		CapturingFrame->CaptureBaseData.SourceFrameTimecode = FApp::GetTimecode();
 		CapturingFrame->CaptureBaseData.SourceFrameTimecodeFramerate = FApp::GetTimecodeFrameRate();
 		CapturingFrame->CaptureBaseData.SourceFrameNumberRenderThread = GFrameNumber;
+		CapturingFrame->CaptureBaseData.SourceFrameNumber = ++CaptureRequestCount;
 		CapturingFrame->UserData = GetCaptureFrameUserData_GameThread();
 	}
 
@@ -805,7 +837,7 @@ void UMediaCapture::Capture_RenderThread(FRHICommandListImmediate& RHICmdList,
 				TShaderMapRef<FMediaShadersVS> VertexShader(ShaderMap);
 
 				GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GMediaVertexDeclaration.VertexDeclarationRHI;
-				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = GETSAFERHISHADER_VERTEX(*VertexShader);
+				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
 
 				const bool bDoLinearToSRGB = false;
 
@@ -814,7 +846,7 @@ void UMediaCapture::Capture_RenderThread(FRHICommandListImmediate& RHICmdList,
 				case EMediaCaptureConversionOperation::RGBA8_TO_YUV_8BIT:
 				{
 					TShaderMapRef<FRGB8toUYVY8ConvertPS> ConvertShader(ShaderMap);
-					GraphicsPSOInit.BoundShaderState.PixelShaderRHI = GETSAFERHISHADER_PIXEL(*ConvertShader);
+					GraphicsPSOInit.BoundShaderState.PixelShaderRHI = ConvertShader.GetPixelShader();
 					SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit);
 					ConvertShader->SetParameters(RHICmdList, SourceTexture, MediaShaders::RgbToYuvRec709Full, MediaShaders::YUVOffset8bits, bDoLinearToSRGB);
 				}
@@ -822,7 +854,7 @@ void UMediaCapture::Capture_RenderThread(FRHICommandListImmediate& RHICmdList,
 				case EMediaCaptureConversionOperation::RGB10_TO_YUVv210_10BIT:
 				{
 					TShaderMapRef<FRGB10toYUVv210ConvertPS> ConvertShader(ShaderMap);
-					GraphicsPSOInit.BoundShaderState.PixelShaderRHI = GETSAFERHISHADER_PIXEL(*ConvertShader);
+					GraphicsPSOInit.BoundShaderState.PixelShaderRHI = ConvertShader.GetPixelShader();
 					SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit);
 					ConvertShader->SetParameters(RHICmdList, SourceTexture, MediaShaders::RgbToYuvRec709Full, MediaShaders::YUVOffset10bits, bDoLinearToSRGB);
 				}
@@ -830,7 +862,7 @@ void UMediaCapture::Capture_RenderThread(FRHICommandListImmediate& RHICmdList,
 				case EMediaCaptureConversionOperation::INVERT_ALPHA:
 				{
 					TShaderMapRef<FInvertAlphaPS> ConvertShader(ShaderMap);
-					GraphicsPSOInit.BoundShaderState.PixelShaderRHI = GETSAFERHISHADER_PIXEL(*ConvertShader);
+					GraphicsPSOInit.BoundShaderState.PixelShaderRHI = ConvertShader.GetPixelShader();
 					SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit);
 					ConvertShader->SetParameters(RHICmdList, SourceTexture);
 				}
@@ -838,7 +870,7 @@ void UMediaCapture::Capture_RenderThread(FRHICommandListImmediate& RHICmdList,
 				case EMediaCaptureConversionOperation::SET_ALPHA_ONE:
 				{
 					TShaderMapRef<FSetAlphaOnePS> ConvertShader(ShaderMap);
-					GraphicsPSOInit.BoundShaderState.PixelShaderRHI = GETSAFERHISHADER_PIXEL(*ConvertShader);
+					GraphicsPSOInit.BoundShaderState.PixelShaderRHI = ConvertShader.GetPixelShader();
 					SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit);
 					ConvertShader->SetParameters(RHICmdList, SourceTexture);
 				}

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	SceneRendering.h: Scene rendering definitions.
@@ -30,6 +30,7 @@
 #include "Templates/UniquePtr.h"
 #include "RenderGraph.h"
 #include "MeshDrawCommands.h"
+#include "GpuDebugRendering.h"
 
 // Forward declarations.
 class FScene;
@@ -38,7 +39,9 @@ class FViewInfo;
 struct FILCUpdatePrimTaskData;
 class FPostprocessContext;
 struct FILCUpdatePrimTaskData;
-template<typename ShaderMetaType> class TShaderMap;
+class FRaytracingLightDataPacked;
+class FRayTracingLocalShaderBindingWriter;
+struct FExposureBufferData;
 
 DECLARE_STATS_GROUP(TEXT("Command List Markers"), STATGROUP_CommandListMarkers, STATCAT_Advanced);
 
@@ -377,21 +380,21 @@ private:
 class FHZBOcclusionTester : public FRenderResource
 {
 public:
-					FHZBOcclusionTester();
-					~FHZBOcclusionTester() {}
+	FHZBOcclusionTester();
+	~FHZBOcclusionTester() {}
 
 	// FRenderResource interface
-					virtual void	InitDynamicRHI() override;
-					virtual void	ReleaseDynamicRHI() override;
+	virtual void InitDynamicRHI() override;
+	virtual void ReleaseDynamicRHI() override;
 	
-	uint32			GetNum() const { return Primitives.Num(); }
+	uint32 GetNum() const { return Primitives.Num(); }
 
-	uint32			AddBounds( const FVector& BoundsOrigin, const FVector& BoundsExtent );
-	void			Submit(FRHICommandListImmediate& RHICmdList, const FViewInfo& View);
+	uint32 AddBounds( const FVector& BoundsOrigin, const FVector& BoundsExtent );
+	void Submit(FRHICommandListImmediate& RHICmdList, const FViewInfo& View);
 
-	void			MapResults(FRHICommandListImmediate& RHICmdList);
-	void			UnmapResults(FRHICommandListImmediate& RHICmdList);
-	bool			IsVisible( uint32 Index ) const;
+	void MapResults(FRHICommandListImmediate& RHICmdList);
+	void UnmapResults(FRHICommandListImmediate& RHICmdList);
+	bool IsVisible( uint32 Index ) const;
 
 	bool IsValidFrame(uint32 FrameNumber) const;
 
@@ -415,6 +418,7 @@ private:
 	void SetInvalidFrameNumber();
 
 	uint32 ValidFrameNumber;
+	FGPUFenceRHIRef Fence;
 };
 
 DECLARE_STATS_GROUP(TEXT("Parallel Command List Markers"), STATGROUP_ParallelCommandListMarkers, STATCAT_Advanced);
@@ -743,6 +747,7 @@ struct FGTAOTAAHistory
 	//  scene color's RGBA are in RT[0].
 	TRefCountPtr<IPooledRenderTarget> RT[kRenderTargetCount];
 	TRefCountPtr<IPooledRenderTarget> Depth[kRenderTargetCount];
+	TRefCountPtr<IPooledRenderTarget> Velocity[kRenderTargetCount];
 
 	// Reference size of RT. Might be different than RT's actual size to handle down res.
 	FIntPoint ReferenceBufferSize;
@@ -781,10 +786,13 @@ struct FPreviousViewInfo
 	TRefCountPtr<IPooledRenderTarget> GBufferA;
 	TRefCountPtr<IPooledRenderTarget> GBufferB;
 	TRefCountPtr<IPooledRenderTarget> GBufferC;
+	TRefCountPtr<IPooledRenderTarget> ImaginaryReflectionDepthBuffer;
+	TRefCountPtr<IPooledRenderTarget> ImaginaryReflectionGBufferA;
 
 	// Compressed scene textures for bandwidth efficient bilateral kernel rejection.
 	// DeviceZ as float16, and normal in view space.
 	TRefCountPtr<IPooledRenderTarget> CompressedDepthViewNormal;
+	TRefCountPtr<IPooledRenderTarget> ImaginaryReflectionCompressedDepthViewNormal;
 
 	// Bleed free scene color to use for screen space ray tracing.
 	TRefCountPtr<IPooledRenderTarget> ScreenSpaceRayTracingInput;
@@ -819,6 +827,9 @@ struct FPreviousViewInfo
 
 	// History for sky light
 	FScreenSpaceDenoiserHistory SkyLightHistory;
+
+	// History for reflected sky light
+	FScreenSpaceDenoiserHistory ReflectedSkyLightHistory;
 
 	// History for shadow denoising.
 	TMap<const ULightComponent*, FScreenSpaceDenoiserHistory> ShadowHistories;
@@ -1051,7 +1062,8 @@ public:
 	uint32 bTranslucentSurfaceLighting : 1;
 	/** Whether the view has any materials that read from scene depth. */
 	uint32 bUsesSceneDepth : 1;
-	uint32 bUsesCustomDepthStencil : 1;
+	uint32 bCustomDepthStencilValid : 1;
+	uint32 bUsesCustomDepthStencilInTranslucentMaterials : 1;
 
 	/** Whether fog should only be computed on rendered opaque pixels or not. */
 	uint32 bFogOnlyOnRenderedOpaque : 1;
@@ -1070,6 +1082,12 @@ public:
 	 * true if the scene has at least one mesh with a material tagged as water visible in a view.
 	 */
 	uint32 bHasSingleLayerWaterMaterial : 1;
+	/**
+	 * true if the scene has at least one mesh with a material that needs dual blending AND is applied post DOF. If true,
+	 * that means we need to run the separate modulation render pass.
+	 */
+	uint32 bHasTranslucencySeparateModulation : 1;
+
 	/** Bitmask of all shading models used by primitives in this view */
 	uint16 ShadingModelMaskInView;
 
@@ -1081,9 +1099,6 @@ public:
 
 	/** Frame's exposure. Always > 0. */
 	float PreExposure;
-
-	/** Mip bias to apply in material's samplers. */
-	float MaterialTextureMipBias;
 
 	/** Precomputed visibility data, the bits are indexed by VisibilityId of a primitive component. */
 	const uint8* PrecomputedVisibilityData;
@@ -1125,7 +1140,7 @@ public:
 
 	FHeightfieldLightingViewInfo HeightfieldLightingViewInfo;
 
-	TShaderMap<FGlobalShaderType>* ShaderMap;
+	FGlobalShaderMap* ShaderMap;
 
 	bool bIsSnapshot;
 
@@ -1150,6 +1165,8 @@ public:
 
 	FRWBufferStructured ShaderPrintValueBuffer;
 
+	FShaderDrawDebugData ShaderDrawData;
+
 #if RHI_RAYTRACING
 	TArray<FRayTracingGeometryInstance, SceneRenderingAllocator> RayTracingGeometryInstances;
 
@@ -1159,6 +1176,17 @@ public:
 	// Primary pipeline state object to be used with the ray tracing scene for this view.
 	// Material shaders are only available when using this pipeline.
 	FRayTracingPipelineState* RayTracingMaterialPipeline = nullptr;
+
+	TArray<FRayTracingLocalShaderBindingWriter*>	RayTracingMaterialBindings; // One per binding task
+	FGraphEventRef									RayTracingMaterialBindingsTask;
+
+	// Common resources used for lighting in ray tracing effects
+	TRefCountPtr<IPooledRenderTarget>				RayTracingSubSurfaceProfileTexture;
+	FShaderResourceViewRHIRef						RayTracingSubSurfaceProfileSRV;
+	FStructuredBufferRHIRef							RayTracingLightingDataBuffer;
+	TUniformBufferRef<FRaytracingLightDataPacked>	RayTracingLightingDataUniformBuffer;
+	FShaderResourceViewRHIRef						RayTracingLightingDataSRV;
+
 #endif // RHI_RAYTRACING
 
 	/** 
@@ -1243,6 +1271,11 @@ public:
 
 	/**Swap the order of the two eye adaptation targets in the double buffer system */
 	void SwapEyeAdaptationRTs(FRHICommandList& RHICmdList) const;
+
+	const FExposureBufferData* GetEyeAdaptationBuffer() const;
+	const FExposureBufferData* GetLastEyeAdaptationBuffer() const;
+
+	void SwapEyeAdaptationBuffers() const;
 
 	/** Tells if the eyeadaptation texture exists without attempting to allocate it. */
 	bool HasValidEyeAdaptation() const;
@@ -1357,7 +1390,8 @@ typedef TArray<uint8, SceneRenderingAllocator> FPrimitiveViewMasks;
 class FShadowMapRenderTargetsRefCounted
 {
 public:
-	TArray<TRefCountPtr<IPooledRenderTarget>, SceneRenderingAllocator> ColorTargets;
+	// This structure gets included in FCachedShadowMapData, so avoid SceneRenderingAllocator use!
+	TArray<TRefCountPtr<IPooledRenderTarget>, TInlineAllocator<4>> ColorTargets;
 	TRefCountPtr<IPooledRenderTarget> DepthTarget;
 
 	bool IsValid() const
@@ -1751,7 +1785,6 @@ protected:
 	FRHITexture* GetMultiViewSceneColor(const FSceneRenderTargets& SceneContext) const;
 
 	void UpdatePrimitiveIndirectLightingCacheBuffers();
-	void ClearPrimitiveSingleFrameIndirectLightingCacheBuffers();
 
 	void RenderPlanarReflection(class FPlanarReflectionSceneProxy* ReflectionSceneProxy);
 
@@ -1800,6 +1833,8 @@ protected:
 	void BuildCSMVisibilityState(FLightSceneInfo* LightSceneInfo);
 
 	void InitViews(FRHICommandListImmediate& RHICmdList);
+
+	void RenderPrePass(FRHICommandListImmediate& RHICmdList);
 
 	/** Renders the opaque base pass for mobile. */
 	void RenderMobileBasePass(FRHICommandListImmediate& RHICmdList, const TArrayView<const FViewInfo*> PassViews);
@@ -1852,9 +1887,11 @@ protected:
 	void UpdateTranslucentBasePassUniformBuffer(FRHICommandListImmediate& RHICmdList, const FViewInfo& View);
 	void UpdateDirectionalLightUniformBuffers(FRHICommandListImmediate& RHICmdList, const FViewInfo& View);
 	void UpdateSkyReflectionUniformBuffer();
+	void UpdateDepthPrepassUniformBuffer(FRHICommandListImmediate& RHICmdList, const FViewInfo& View);
 	
 private:
 	bool bModulatedShadowsInUse;
+	bool bShouldRenderCustomDepth;
 	static FGlobalDynamicIndexBuffer DynamicIndexBuffer;
 	static FGlobalDynamicVertexBuffer DynamicVertexBuffer;
 	static TGlobalResource<FGlobalDynamicReadBuffer> DynamicReadBuffer;
@@ -1943,6 +1980,7 @@ struct FFastVramConfig
 	uint32 GBufferC;
 	uint32 GBufferD;
 	uint32 GBufferE;
+	uint32 GBufferF;
 	uint32 GBufferVelocity;
 	uint32 HZB;
 	uint32 SceneDepth;
@@ -1971,6 +2009,7 @@ struct FFastVramConfig
 	uint32 ScreenSpaceShadowMask;
 	uint32 VolumetricFog;
 	uint32 SeparateTranslucency;
+	uint32 SeparateTranslucencyModulate;
 	uint32 LightAccumulation;
 	uint32 LightAttenuation;
 	uint32 ScreenSpaceAO;

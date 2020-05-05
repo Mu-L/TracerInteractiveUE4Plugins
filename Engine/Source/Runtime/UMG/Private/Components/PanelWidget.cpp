@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Components/PanelWidget.h"
 
@@ -228,10 +228,9 @@ bool UPanelWidget::HasAnyChildren() const
 
 void UPanelWidget::ClearChildren()
 {
-	int32 Children = GetChildrenCount();
-	for ( int32 ChildIndex = 0; ChildIndex < Children; ChildIndex++ )
+	for ( int32 ChildIndex = GetChildrenCount() - 1; ChildIndex >= 0; ChildIndex-- )
 	{
-		RemoveChildAt(0);
+		RemoveChildAt(ChildIndex);
 	}
 }
 

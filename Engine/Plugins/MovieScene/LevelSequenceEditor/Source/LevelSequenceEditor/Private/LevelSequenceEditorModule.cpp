@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "LevelSequenceEditorModule.h"
 #include "Modules/ModuleManager.h"
@@ -370,6 +370,11 @@ protected:
 		return OnMasterSequenceCreatedEvent;
 	}
 
+	FAllowPlaybackContext& OnComputePlaybackContext() override
+	{
+		return OnComputePlaybackContextDelegate;
+	}
+
 	static TSharedRef<ISequencerEditorObjectBinding> OnCreateActorBinding(TSharedRef<ISequencer> InSequencer)
 	{
 		return MakeShareable(new FLevelSequenceEditorActorBinding(InSequencer));
@@ -384,6 +389,11 @@ protected:
 		}
 	}
 
+	virtual FString GetReferencerName() const override
+	{
+		return "FLevelSequenceEditorModule";
+	}
+
 private:
 
 	/** The type actions for interacting with level sequences. */
@@ -395,6 +405,8 @@ private:
 	TSharedPtr<FUICommandList> CommandList;
 
 	FOnMasterSequenceCreated OnMasterSequenceCreatedEvent;
+
+	FAllowPlaybackContext OnComputePlaybackContextDelegate;
 
 	FDelegateHandle ActorBindingDelegateHandle;
 

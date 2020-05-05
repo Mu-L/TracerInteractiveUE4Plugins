@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	UnObj.cpp: Unreal object manager.
@@ -43,6 +43,7 @@
 #include "UObject/LinkerLoad.h"
 #include "Misc/RedirectCollector.h"
 #include "UObject/GCScopeLock.h"
+#include "ProfilingDebugging/LoadTimeTracker.h"
 
 #include "Serialization/ArchiveUObjectFromStructuredArchive.h"
 #include "Serialization/ArchiveDescribeReference.h"
@@ -325,7 +326,7 @@ void UObject::PostLoad()
 }
 
 #if WITH_EDITOR
-void UObject::PreEditChange(UProperty* PropertyAboutToChange)
+void UObject::PreEditChange(FProperty* PropertyAboutToChange)
 {
 	Modify();
 }
@@ -346,8 +347,8 @@ void UObject::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent
 	// This allows listeners to be notified of intermediate changes of state
 	if (PropertyChangedEvent.ChangeType == EPropertyChangeType::Interactive)
 	{
-		const UProperty* ChangedProperty = PropertyChangedEvent.MemberProperty;
-		SnapshotTransactionBuffer(this, TArrayView<const UProperty*>(&ChangedProperty, 1));
+		const FProperty* ChangedProperty = PropertyChangedEvent.MemberProperty;
+		SnapshotTransactionBuffer(this, TArrayView<const FProperty*>(&ChangedProperty, 1));
 	}
 }
 
@@ -364,7 +365,7 @@ void UObject::PreEditChange( FEditPropertyChain& PropertyAboutToChange )
 		SetFlags(RF_Transactional);
 	}
 
-	// forward the notification to the UProperty* version of PreEditChange
+	// forward the notification to the FProperty* version of PreEditChange
 	PreEditChange(PropertyAboutToChange.GetActiveNode()->GetValue());
 
 	FCoreUObjectDelegates::OnPreObjectPropertyChanged.Broadcast(this, PropertyAboutToChange);
@@ -421,8 +422,8 @@ void UObject::PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyCh
 			TArray<UObject*> ArchetypeInstances;
 			GetOuter()->GetArchetypeInstances(ArchetypeInstances);
 
-			// Find UProperty describing this in Outer.
-			for (UProperty* Property = GetOuter()->GetClass()->RefLink; Property != nullptr; Property = Property->NextRef)
+			// Find FProperty describing this in Outer.
+			for (FProperty* Property = GetOuter()->GetClass()->RefLink; Property != nullptr; Property = Property->NextRef)
 			{
 				if (this != *Property->ContainerPtrToValuePtr<UObject*>(GetOuter()))
 				{
@@ -449,7 +450,7 @@ void UObject::PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyCh
 	PostEditChangeProperty(PropertyEvent);
 }
 
-bool UObject::CanEditChange( const UProperty* InProperty ) const
+bool UObject::CanEditChange( const FProperty* InProperty ) const
 {
 	const bool bIsMutable = !InProperty->HasAnyPropertyFlags( CPF_EditConst );
 	return bIsMutable;
@@ -465,7 +466,7 @@ void UObject::PropagatePreEditChange( TArray<UObject*>& AffectedObjects, FEditPr
 
 		// in order to ensure that all objects are saved properly, only process the objects which have this object as their
 		// ObjectArchetype since we are going to call Pre/PostEditChange on each object (which could potentially affect which data is serialized
-		if ( Obj->GetArchetype() == this )
+		if ( Obj->GetArchetype() == this || Obj->GetOuter()->GetArchetype() == this )
 		{
 			// add this object to the list that we're going to process
 			Instances.Add(Obj);
@@ -479,14 +480,17 @@ void UObject::PropagatePreEditChange( TArray<UObject*>& AffectedObjects, FEditPr
 	{
 		UObject* Obj = Instances[i];
 
-		// this object must now be included in any undo/redo operations
-		Obj->SetFlags(RF_Transactional);
+		if ( PropertyAboutToChange.IsArchetypeInstanceAffected(Obj) )
+		{
+			// this object must now be included in any undo/redo operations
+			Obj->SetFlags(RF_Transactional);
 
-		// This will call ClearComponents in the Actor case, so that we do not serialize more stuff than we need to.
-		Obj->PreEditChange(PropertyAboutToChange);
+			// This will call ClearComponents in the Actor case, so that we do not serialize more stuff than we need to.
+			Obj->PreEditChange(PropertyAboutToChange);
 
-		// now recurse into this object, saving its instances
-		Obj->PropagatePreEditChange(AffectedObjects, PropertyAboutToChange);
+			// now recurse into this object, saving its instances
+			Obj->PropagatePreEditChange(AffectedObjects, PropertyAboutToChange);
+		}
 	}
 }
 
@@ -516,11 +520,14 @@ void UObject::PropagatePostEditChange( TArray<UObject*>& AffectedObjects, FPrope
 	{
 		UObject* Obj = Instances[i];
 
-		// notify the object that all changes are complete
-		Obj->PostEditChangeChainProperty(PropertyChangedEvent);
+		if ( PropertyChangedEvent.HasArchetypeInstanceChanged(Obj) )
+		{
+			// notify the object that all changes are complete
+			Obj->PostEditChangeChainProperty(PropertyChangedEvent);
 
-		// now recurse into this object, loading its instances
-		Obj->PropagatePostEditChange(AffectedObjects, PropertyChangedEvent);
+			// now recurse into this object, loading its instances
+			Obj->PropagatePostEditChange(AffectedObjects, PropertyChangedEvent);
+		}
 	}
 }
 
@@ -1241,6 +1248,8 @@ IMPLEMENT_FARCHIVE_SERIALIZER(UObject)
 
 void UObject::Serialize(FStructuredArchive::FRecord Record)
 {
+	SCOPED_LOADTIMER(UObject_Serialize);
+
 #if WITH_EDITOR
 	bool bReportSoftObjectPathRedirects = false;
 
@@ -1541,7 +1550,7 @@ public:
 	}
 
 	// Begin FReferenceCollector interface.
-	virtual void HandleObjectReference(UObject*& InObject, const UObject* InReferencingObject, const UProperty* InReferencingProperty) override
+	virtual void HandleObjectReference(UObject*& InObject, const UObject* InReferencingObject, const FProperty* InReferencingProperty) override
 	{
 		// Only care about unique default subobjects that are outside of the referencing object's outer chain.
 		// Also ignore references to subobjects if they share the same Outer.
@@ -1679,8 +1688,80 @@ FString GetConfigFilename( UObject* SourceObject )
 	else
 #endif
 	{
-		// otherwise look at the class to get the config name
-		return SourceObject->GetClass()->GetConfigName();
+	// otherwise look at the class to get the config name
+	return SourceObject->GetClass()->GetConfigName();
+	}
+}
+
+void GetAssetRegistryTagFromProperty(const void* BaseMemoryLocation, const UObject* OwnerObject, FProperty* Prop, TSet<FName>& OutFoundSpecialStructs, TArray<UObject::FAssetRegistryTag>& OutTags)
+{
+	FName TagName;
+	UObject::FAssetRegistryTag::ETagType TagType = UObject::FAssetRegistryTag::ETagType::TT_Alphabetical;
+	FStructProperty* StructProp = CastField<FStructProperty>(Prop);
+
+	if (StructProp && StructProp->Struct && UObject::FAssetRegistryTag::IsUniqueAssetRegistryTagStruct(StructProp->Struct->GetFName(), TagType))
+	{
+		// Special unique structure type
+		TagName = StructProp->Struct->GetFName();
+
+		if (OutFoundSpecialStructs.Contains(TagName))
+		{
+			UE_LOG(LogObj, Error, TEXT("Object %s has more than one unique asset registry struct %s!"), *OwnerObject->GetPathName(), *TagName.ToString());
+		}
+		else
+		{
+			OutFoundSpecialStructs.Add(TagName);
+		}
+	}
+	else if (Prop->HasAnyPropertyFlags(CPF_AssetRegistrySearchable))
+	{
+		TagName = Prop->GetFName();
+
+		if (Prop->IsA(FIntProperty::StaticClass()) ||
+			Prop->IsA(FFloatProperty::StaticClass()) ||
+			Prop->IsA(FDoubleProperty::StaticClass()))
+		{
+			// ints and floats are always numerical
+			TagType = UObject::FAssetRegistryTag::ETagType::TT_Numerical;
+		}
+		else if (Prop->IsA(FByteProperty::StaticClass()))
+		{
+			// bytes are numerical, enums are alphabetical
+			FByteProperty* ByteProp = static_cast<FByteProperty*>(Prop);
+			if (ByteProp->Enum)
+			{
+				TagType = UObject::FAssetRegistryTag::ETagType::TT_Alphabetical;
+			}
+			else
+			{
+				TagType = UObject::FAssetRegistryTag::ETagType::TT_Numerical;
+			}
+		}
+		else if (Prop->IsA(FEnumProperty::StaticClass()))
+		{
+			// enums are alphabetical
+			TagType = UObject::FAssetRegistryTag::ETagType::TT_Alphabetical;
+		}
+		else if (Prop->IsA(FArrayProperty::StaticClass()) || Prop->IsA(FMapProperty::StaticClass()) || Prop->IsA(FSetProperty::StaticClass())
+			|| Prop->IsA(FStructProperty::StaticClass()) || Prop->IsA(FObjectPropertyBase::StaticClass()))
+		{
+			// Arrays/maps/sets/structs/objects are hidden, it is often too much information to display and sort
+			TagType = UObject::FAssetRegistryTag::ETagType::TT_Hidden;
+		}
+		else
+		{
+			// All other types are alphabetical
+			TagType = UObject::FAssetRegistryTag::ETagType::TT_Alphabetical;
+		}
+	}
+
+	if (TagName != NAME_None)
+	{
+		FString PropertyStr;
+		const uint8* PropertyAddr = Prop->ContainerPtrToValuePtr<uint8>(BaseMemoryLocation);
+		Prop->ExportTextItem(PropertyStr, PropertyAddr, PropertyAddr, nullptr, PPF_None);
+
+		OutTags.Add(UObject::FAssetRegistryTag(TagName, PropertyStr, TagType));
 	}
 }
 
@@ -1689,77 +1770,18 @@ void UObject::FAssetRegistryTag::GetAssetRegistryTagsFromSearchableProperties(co
 	TSet<FName> FoundSpecialStructs;
 
 	check(nullptr != Object);
-	for( TFieldIterator<UProperty> FieldIt( Object->GetClass() ); FieldIt; ++FieldIt )
+	for (TFieldIterator<FProperty> FieldIt( Object->GetClass() ); FieldIt; ++FieldIt)
 	{
-		FName TagName;
-		FAssetRegistryTag::ETagType TagType = TT_Alphabetical;
-		UStructProperty* StructProp = Cast<UStructProperty>(*FieldIt);
+		GetAssetRegistryTagFromProperty(Object, Object, CastField<FProperty>(*FieldIt), FoundSpecialStructs, OutTags);
+	}
 
-		if (StructProp && StructProp->Struct && IsUniqueAssetRegistryTagStruct(StructProp->Struct->GetFName(), TagType))
+	UScriptStruct* SparseClassDataStruct = Object->GetClass()->GetSparseClassDataStruct();
+	if (SparseClassDataStruct)
+	{
+		void* SparseClassData = Object->GetClass()->GetOrCreateSparseClassData();
+		for (TFieldIterator<FProperty> FieldIt(SparseClassDataStruct); FieldIt; ++FieldIt)
 		{
-			// Special unique structure type
-			TagName = StructProp->Struct->GetFName();
-			
-			if (FoundSpecialStructs.Contains(TagName))
-			{
-				UE_LOG(LogObj, Error, TEXT("Object %s has more than one unique asset registry struct %s!"), *Object->GetPathName(), *TagName.ToString());
-			}
-			else
-			{
-				FoundSpecialStructs.Add(TagName);
-			}
-		}
-		else if (FieldIt->HasAnyPropertyFlags(CPF_AssetRegistrySearchable))
-		{
-			TagName = FieldIt->GetFName();
-
-			UClass* Class = FieldIt->GetClass();
-			if (Class->IsChildOf(UIntProperty::StaticClass()) ||
-				Class->IsChildOf(UFloatProperty::StaticClass()) ||
-				Class->IsChildOf(UDoubleProperty::StaticClass()))
-			{
-				// ints and floats are always numerical
-				TagType = FAssetRegistryTag::TT_Numerical;
-			}
-			else if (Class->IsChildOf(UByteProperty::StaticClass()))
-			{
-				// bytes are numerical, enums are alphabetical
-				UByteProperty* ByteProp = static_cast<UByteProperty*>(*FieldIt);
-				if (ByteProp->Enum)
-				{
-					TagType = FAssetRegistryTag::TT_Alphabetical;
-				}
-				else
-				{
-					TagType = FAssetRegistryTag::TT_Numerical;
-				}
-			}
-			else if ( Class->IsChildOf(UEnumProperty::StaticClass()) )
-			{
-				// enums are alphabetical
-				TagType = FAssetRegistryTag::TT_Alphabetical;
-			}
-			else if (Class->IsChildOf(UArrayProperty::StaticClass()) || Class->IsChildOf(UMapProperty::StaticClass()) || Class->IsChildOf(USetProperty::StaticClass())
-				|| Class->IsChildOf(UStructProperty::StaticClass()) || Class->IsChildOf(UObjectPropertyBase::StaticClass()))
-			{
-				// Arrays/maps/sets/structs/objects are hidden, it is often too much information to display and sort
-				TagType = FAssetRegistryTag::TT_Hidden;
-			}
-			else
-			{
-				// All other types are alphabetical
-				TagType = FAssetRegistryTag::TT_Alphabetical;
-			}
-		}
-
-		if (TagName != NAME_None)
-		{
-
-			FString PropertyStr;
-			const uint8* PropertyAddr = FieldIt->ContainerPtrToValuePtr<uint8>(Object);
-			FieldIt->ExportTextItem( PropertyStr, PropertyAddr, PropertyAddr, nullptr, PPF_None );
-
-			OutTags.Add( FAssetRegistryTag(TagName, PropertyStr, TagType) );
+			GetAssetRegistryTagFromProperty(SparseClassData, Object, CastField<FProperty>(*FieldIt), FoundSpecialStructs, OutTags);
 		}
 	}
 }
@@ -1937,7 +1959,7 @@ void UObject::TagSubobjects(EObjectFlags NewFlags)
 	}
 }
 
-void UObject::ReloadConfig( UClass* ConfigClass/*=NULL*/, const TCHAR* InFilename/*=NULL*/, uint32 PropagationFlags/*=LCPF_None*/, UProperty* PropertyToLoad/*=NULL*/ )
+void UObject::ReloadConfig( UClass* ConfigClass/*=NULL*/, const TCHAR* InFilename/*=NULL*/, uint32 PropagationFlags/*=LCPF_None*/, FProperty* PropertyToLoad/*=NULL*/ )
 {
 	if (!GIsEditor)
 	{
@@ -1976,7 +1998,7 @@ void CheckMissingSection(const FString& SectionName, const FString& IniFilename)
 }
 #endif
 
-void UObject::LoadConfig( UClass* ConfigClass/*=NULL*/, const TCHAR* InFilename/*=NULL*/, uint32 PropagationFlags/*=LCPF_None*/, UProperty* PropertyToLoad/*=NULL*/ )
+void UObject::LoadConfig( UClass* ConfigClass/*=NULL*/, const TCHAR* InFilename/*=NULL*/, uint32 PropagationFlags/*=LCPF_None*/, FProperty* PropertyToLoad/*=NULL*/ )
 {
 	SCOPE_CYCLE_COUNTER(STAT_LoadConfig);
 
@@ -1998,9 +2020,9 @@ void UObject::LoadConfig( UClass* ConfigClass/*=NULL*/, const TCHAR* InFilename/
 #if !IS_PROGRAM
 	auto HaveSameProperties = [](const UStruct* Struct1, const UStruct* Struct2) -> bool
 	{
-		TFieldIterator<UProperty> It1(Struct1);
-		TFieldIterator<UProperty> It2(Struct2);
-		for (;;)
+		TFieldIterator<FProperty> It1(Struct1);
+		TFieldIterator<FProperty> It2(Struct2);
+		for (;;++It1,++It2)
 		{
 			bool bAtEnd1 = !It1;
 			bool bAtEnd2 = !It2;
@@ -2203,7 +2225,7 @@ void UObject::LoadConfig( UClass* ConfigClass/*=NULL*/, const TCHAR* InFilename/
 		UE_LOG(LogConfig, Verbose, TEXT("(%s) '%s' loading configuration for property %s from %s"), *ConfigClass->GetName(), *GetName(), *PropertyToLoad->GetName(), *Filename);
 	}
 
-	for ( UProperty* Property = ConfigClass->PropertyLink; Property; Property = Property->PropertyLinkNext )
+	for ( FProperty* Property = ConfigClass->PropertyLink; Property; Property = Property->PropertyLinkNext )
 	{
 #if WITH_EDITOR
 		FSoftObjectPathSerializationScope SerializationScope(NAME_None, Property->GetFName(), Property->IsEditorOnlyProperty() ? ESoftObjectPathCollectType::EditorOnlyCollect : ESoftObjectPathCollectType::AlwaysCollect, ESoftObjectPathSerializeType::AlwaysSerialize);
@@ -2254,7 +2276,7 @@ void UObject::LoadConfig( UClass* ConfigClass/*=NULL*/, const TCHAR* InFilename/
 #endif // #if WITH_EDITOR
 
 		UE_LOG(LogConfig, Verbose, TEXT("   Loading value for %s from [%s]"), *Key, *ClassSection);
-		UArrayProperty* Array = dynamic_cast<UArrayProperty*>( Property );
+		FArrayProperty* Array = CastField<FArrayProperty>( Property );
 		if( Array == NULL )
 		{
 			for( int32 i=0; i<Property->ArrayDim; i++ )
@@ -2419,7 +2441,7 @@ void UObject::SaveConfig( uint64 Flags, const TCHAR* InFilename, FConfigCacheIni
 	// only copy the values to the CDO if this is GConfig and we're not saving the CDO
 	const bool bCopyValues = (this != CDO && Config == GConfig);
 
-	for ( UProperty* Property = GetClass()->PropertyLink; Property; Property = Property->PropertyLinkNext )
+	for ( FProperty* Property = GetClass()->PropertyLink; Property; Property = Property->PropertyLinkNext )
 	{
 		if ( !Property->HasAnyPropertyFlags(CPF_Config) )
 		{
@@ -2471,18 +2493,21 @@ void UObject::SaveConfig( uint64 Flags, const TCHAR* InFilename, FConfigCacheIni
 			const bool bShouldCheckIfIdenticalBeforeAdding = !GetClass()->HasAnyClassFlags(CLASS_ConfigDoNotCheckDefaults) && !bPerObject && bIsPropertyInherited;
 			UObject* SuperClassDefaultObject = GetClass()->GetSuperClass()->GetDefaultObject();
 
-			UArrayProperty* Array   = dynamic_cast<UArrayProperty*>( Property );
+			FArrayProperty* Array   = CastField<FArrayProperty>( Property );
 			if( Array )
 			{
+				FConfigSection* Sec = Config->GetSectionPrivate(*Section, 1, 0, *PropFileName);
+				// Default ini's require the array syntax to be applied to the property name
+				FString CompleteKey = FString::Printf(TEXT("%s%s"), bIsADefaultIniWrite ? TEXT("+") : TEXT(""), *Key);
+				if (Sec)
+				{
+					// Delete the old value for the property in the ConfigCache before (conditionally) adding in the new value
+					Sec->Remove(*CompleteKey);
+				}
+
 				if (!bPropDeprecated && (!bShouldCheckIfIdenticalBeforeAdding || !Property->Identical_InContainer(this, SuperClassDefaultObject)))
 				{
-					FConfigSection* Sec = Config->GetSectionPrivate( *Section, 1, 0, *PropFileName );
 					check(Sec);
-					Sec->Remove( *Key );
-
-					// Default ini's require the array syntax to be applied to the property name
-					FString CompleteKey = FString::Printf(TEXT("%s%s"), bIsADefaultIniWrite ? TEXT("+") : TEXT(""), *Key);
-
 					FScriptArrayHelper_InContainer ArrayHelper(Array, this);
 					for( int32 i=0; i<ArrayHelper.Num(); i++ )
 					{
@@ -2490,16 +2515,6 @@ void UObject::SaveConfig( uint64 Flags, const TCHAR* InFilename, FConfigCacheIni
 						Array->Inner->ExportTextItem( Buffer, ArrayHelper.GetRawPtr(i), ArrayHelper.GetRawPtr(i), this, PortFlags );
 						Sec->Add(*CompleteKey, *Buffer);
 					}
-				}
-				else
-				{
-					// If we are not writing it to config above, we should make sure that this property isn't stagnant in the cache.
-					FConfigSection* Sec = Config->GetSectionPrivate( *Section, 1, 0, *PropFileName );
-					if( Sec )
-					{
-						Sec->Remove( *Key );
-					}
-
 				}
 			}
 			else
@@ -2633,10 +2648,10 @@ void UObject::UpdateGlobalUserConfigFile()
 	UpdateSingleSectionOfConfigFile(GetGlobalUserConfigFilename());
 }
 
-void UObject::UpdateSinglePropertyInConfigFile(const UProperty* InProperty, const FString& InConfigIniName)
+void UObject::UpdateSinglePropertyInConfigFile(const FProperty* InProperty, const FString& InConfigIniName)
 {
 	// Arrays and ini files are a mine field, for now we don't support this.
-	if (!InProperty->IsA(UArrayProperty::StaticClass()))
+	if (!InProperty->IsA(FArrayProperty::StaticClass()))
 	{
 		// create a sandbox FConfigCache
 		FConfigCacheIni Config(EConfigCacheType::Temporary);
@@ -2850,7 +2865,7 @@ void UObject::OutputReferencers( FOutputDevice& Ar, FReferencerInformationList* 
 				{
 					if ( i < RefInfo.ReferencingProperties.Num() )
 					{
-						const UProperty* Referencer = RefInfo.ReferencingProperties[i];
+						const FProperty* Referencer = RefInfo.ReferencingProperties[i];
 						Ar.Logf(TEXT("      %i) %s\r\n"), i, *Referencer->GetFullName());
 					}
 					else
@@ -2878,7 +2893,7 @@ void UObject::OutputReferencers( FOutputDevice& Ar, FReferencerInformationList* 
 				{
 					if ( i < RefInfo.ReferencingProperties.Num() )
 					{
-						const UProperty* Referencer = RefInfo.ReferencingProperties[i];
+						const FProperty* Referencer = RefInfo.ReferencingProperties[i];
 						Ar.Logf(TEXT("      %i) %s\r\n"), i, *Referencer->GetFullName());
 					}
 					else
@@ -2915,7 +2930,7 @@ void UObject::RetrieveReferencers( TArray<FReferencerInformation>* OutInternalRe
 		}
 
 		FArchiveFindCulprit ArFind(this,Object,false);
-		TArray<const UProperty*> Referencers;
+		TArray<const FProperty*> Referencers;
 
 		int32 Count = ArFind.GetCount(Referencers);
 		if ( Count > 0 )
@@ -2945,11 +2960,13 @@ void UObject::RetrieveReferencers( TArray<FReferencerInformation>* OutInternalRe
 
 void UObject::ParseParms( const TCHAR* Parms )
 {
-	if( !Parms )
-		return;
-	for( TFieldIterator<UProperty> It(GetClass()); It; ++It )
+	if (!Parms)
 	{
-		if( It->GetOuter()!=UObject::StaticClass() )
+		return;
+	}
+	for( TFieldIterator<FProperty> It(GetClass()); It; ++It )
+	{
+		if (It->GetOwner<UObject>() != UObject::StaticClass())
 		{
 			FString Value;
 			if( FParse::Value(Parms,*(FString(*It->GetName())+TEXT("=")),Value) )
@@ -3027,20 +3044,20 @@ static void PrivateDumpObjectFlags(UObject* Object, FOutputDevice& Ar)
 static void PrivateRecursiveDumpFlags(UStruct* Struct, void* Data, FOutputDevice& Ar)
 {
 	check(Data != NULL);
-	for( TFieldIterator<UProperty> It(Struct); It; ++It )
+	for( TFieldIterator<FProperty> It(Struct); It; ++It )
 	{
 		if (It->GetOwnerClass() && It->GetOwnerClass()->GetPropertiesSize() != sizeof(UObject) )
 		{
 			for( int32 i=0; i<It->ArrayDim; i++ )
 			{
 				uint8* Value = It->ContainerPtrToValuePtr<uint8>(Data, i);
-				UObjectPropertyBase* Prop = dynamic_cast<UObjectPropertyBase*>(*It);
+				FObjectPropertyBase* Prop = CastField<FObjectPropertyBase>(*It);
 				if(Prop)
 				{
 					UObject* Obj = Prop->GetObjectPropertyValue(Value);
 					PrivateDumpObjectFlags( Obj, Ar );
 				}
-				else if( UStructProperty* StructProperty = dynamic_cast<UStructProperty*>(*It) )
+				else if( FStructProperty* StructProperty = CastField<FStructProperty>(*It) )
 				{
 					PrivateRecursiveDumpFlags( StructProperty->Struct, Value, Ar );
 				}
@@ -3065,7 +3082,7 @@ static void PerformSetCommand( const TCHAR* Str, FOutputDevice& Ar, bool bNotify
 		UClass* Class = FindObject<UClass>(ANY_PACKAGE, ObjectName);
 		if (Class != NULL)
 		{
-			UProperty* Property = FindField<UProperty>(Class, PropertyName);
+			FProperty* Property = FindFProperty<FProperty>(Class, PropertyName);
 			if (Property != NULL)
 			{
 				while (*Str == ' ')
@@ -3084,7 +3101,7 @@ static void PerformSetCommand( const TCHAR* Str, FOutputDevice& Ar, bool bNotify
 			UObject* Object = FindObject<UObject>(ANY_PACKAGE, ObjectName);
 			if (Object != NULL)
 			{
-				UProperty* Property = FindField<UProperty>(Object->GetClass(), PropertyName);
+				FProperty* Property = FindFProperty<FProperty>(Object->GetClass(), PropertyName);
 				if (Property != NULL)
 				{
 					while (*Str == ' ')
@@ -3267,14 +3284,14 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 		// Get a class default variable.
 		TCHAR ClassName[256], PropertyName[256];
 		UClass* Class;
-		UProperty* Property;
+		FProperty* Property;
 		if
 		(	FParse::Token( Str, ClassName, UE_ARRAY_COUNT(ClassName), 1 )
 		&&	(Class=FindObject<UClass>( ANY_PACKAGE, ClassName))!=NULL )
 		{
 			if
 			(	FParse::Token( Str, PropertyName, UE_ARRAY_COUNT(PropertyName), 1 )
-			&&	(Property=FindField<UProperty>( Class, PropertyName))!=NULL )
+			&&	(Property=FindFProperty<FProperty>( Class, PropertyName))!=NULL )
 			{
 				FString	Temp;
 				if( Class->GetDefaultsCount() )
@@ -3318,13 +3335,13 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 					if (AsteriskPos != INDEX_NONE && (QuestionPos == INDEX_NONE || QuestionPos > AsteriskPos))
 					{
 						new(WildcardPieces) FListPropsWildcardPiece(PropWildcard.Left(AsteriskPos), true);
-						PropWildcard = PropWildcard.Right(PropWildcard.Len() - AsteriskPos - 1);
+						PropWildcard.RightInline(PropWildcard.Len() - AsteriskPos - 1, false);
 						bFound = true;
 					}
 					else if (QuestionPos != INDEX_NONE)
 					{
 						new(WildcardPieces) FListPropsWildcardPiece(PropWildcard.Left(QuestionPos), false);
-						PropWildcard = PropWildcard.Right(PropWildcard.Len() - QuestionPos - 1);
+						PropWildcard.RightInline(PropWildcard.Len() - QuestionPos - 1, false);
 						bFound = true;
 					}
 				}
@@ -3337,9 +3354,9 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 
 			// search for matches
 			int32 Count = 0;
-			for (TFieldIterator<UProperty> It(Class); It; ++It)
+			for (TFieldIterator<FProperty> It(Class); It; ++It)
 			{
-				UProperty* Property = *It;
+				FProperty* Property = *It;
 
 				Ar.Logf(TEXT("    Prop %s"), *FString::Printf(TEXT("%s at offset %d; %dx %d bytes of type %s"), *Property->GetName(), Property->GetOffset_ForDebug(), Property->ArrayDim, Property->ElementSize, *Property->GetClass()->GetName()));
 
@@ -3348,7 +3365,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 					Ar.Logf(TEXT("      Flag %s"), Flag);
 				}
 			}
-			for (TFieldIterator<UProperty> It(Class); It; ++It)
+			for (TFieldIterator<FProperty> It(Class); It; ++It)
 			{
 				FString Match = It->GetName();
 				bool bResult = true;
@@ -3368,7 +3385,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 							break;
 						}
 
-						Match = Match.Right(Match.Len() - Pos - WildcardPieces[i].Str.Len());
+						Match.RightInline(Match.Len() - Pos - WildcardPieces[i].Str.Len(), false);
 					}
 				}
 				if (bResult)
@@ -3386,19 +3403,19 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 					if (bResult)
 					{
 						FString ExtraInfo;
-						if (UStructProperty* StructProperty = dynamic_cast<UStructProperty*>(*It))
+						if (FStructProperty* StructProperty = CastField<FStructProperty>(*It))
 						{
 							ExtraInfo = *StructProperty->Struct->GetName();
 						}
-						else if (UClassProperty* ClassProperty = dynamic_cast<UClassProperty*>(*It))
+						else if (FClassProperty* ClassProperty = CastField<FClassProperty>(*It))
 						{
 							ExtraInfo = FString::Printf(TEXT("SubclassOf<%s>"), *ClassProperty->MetaClass->GetName());
 						}
-						else if (USoftClassProperty* SoftClassProperty = dynamic_cast<USoftClassProperty*>(*It))
+						else if (FSoftClassProperty* SoftClassProperty = CastField<FSoftClassProperty>(*It))
 						{
 							ExtraInfo = FString::Printf(TEXT("SoftClassPtr<%s>"), *SoftClassProperty->MetaClass->GetName());
 						}
-						else if (UObjectPropertyBase* ObjectPropertyBase = dynamic_cast<UObjectPropertyBase*>(*It))
+						else if (FObjectPropertyBase* ObjectPropertyBase = CastField<FObjectPropertyBase>(*It))
 						{
 							ExtraInfo = *ObjectPropertyBase->PropertyClass->GetName();
 						}
@@ -3428,14 +3445,14 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 		// iterate through all objects of the specified type and return the value of the specified property for each object
 		TCHAR ClassName[256], PropertyName[256];
 		UClass* Class;
-		UProperty* Property;
+		FProperty* Property;
 
 		if ( FParse::Token(Str,ClassName,UE_ARRAY_COUNT(ClassName), 1) &&
 			(Class=FindObject<UClass>( ANY_PACKAGE, ClassName)) != NULL )
 		{
 			FParse::Token(Str,PropertyName,UE_ARRAY_COUNT(PropertyName),1);
 			{
-				Property=FindField<UProperty>(Class,PropertyName);
+				Property=FindFProperty<FProperty>(Class,PropertyName);
 				{
 					int32 cnt = 0;
 					UObject* LimitOuter = NULL;
@@ -3493,17 +3510,17 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 									}
 									continue;
 								}
-								if ( Property->ArrayDim > 1 || dynamic_cast<UArrayProperty*>(Property) != NULL )
+								if ( Property->ArrayDim > 1 || CastField<FArrayProperty>(Property) != NULL )
 								{
 									uint8* BaseData = Property->ContainerPtrToValuePtr<uint8>(CurrentObject);
 									Ar.Logf(TEXT("%i) %s.%s ="), cnt++, *CurrentObject->GetFullName(), *Property->GetName());
 
 									int32 ElementCount = Property->ArrayDim;
 
-									UProperty* ExportProperty = Property;
+									FProperty* ExportProperty = Property;
 									if ( Property->ArrayDim == 1 )
 									{
-										UArrayProperty* ArrayProp = dynamic_cast<UArrayProperty*>(Property);
+										FArrayProperty* ArrayProp = CastField<FArrayProperty>(Property);
 										FScriptArrayHelper ArrayHelper(ArrayProp, BaseData);
 
 										BaseData = ArrayHelper.GetRawPtr();
@@ -3576,7 +3593,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 
 		if (FParse::Token(Str, ClassName, UE_ARRAY_COUNT(ClassName), true))
 		{
-			//if ( (Property=FindField<UProperty>(Class,PropertyName)) != NULL )
+			//if ( (Property=FindFProperty<FProperty>(Class,PropertyName)) != NULL )
 			UClass* Class = FindObject<UClass>(ANY_PACKAGE, ClassName);
 
 			if (Class != NULL)
@@ -3607,7 +3624,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 
 			if (Class != NULL)
 			{
-				UFunction* Function = FindField<UFunction>(Class, FunctionName);
+				UFunction* Function = FindUField<UFunction>(Class, FunctionName);
 
 				if (Function != NULL)
 				{
@@ -3630,11 +3647,11 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 					
 					// Parameters
 					Ar.Logf(TEXT("  %d parameters taking up %d bytes, with return value at offset %d"), Function->NumParms, Function->ParmsSize, Function->ReturnValueOffset);
-					for (TFieldIterator<UProperty> It(Function); It; ++It)
+					for (TFieldIterator<FProperty> It(Function); It; ++It)
 					{
 						if (It->PropertyFlags & CPF_Parm)
 						{
-							UProperty* Property = *It;
+							FProperty* Property = *It;
 							
 							Ar.Logf(TEXT("    Parameter %s"), *FString::Printf(TEXT("%s at offset %d; %dx %d bytes of type %s"), *Property->GetName(), Property->GetOffset_ForDebug(), Property->ArrayDim, Property->ElementSize, *Property->GetClass()->GetName()));
 
@@ -3648,11 +3665,11 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 					// Locals
 					Ar.Logf(TEXT("  Total stack size %d bytes"), Function->PropertiesSize );
 
-					for (TFieldIterator<UProperty> It(Function); It; ++It)
+					for (TFieldIterator<FProperty> It(Function); It; ++It)
 					{
 						if ((It->PropertyFlags & CPF_Parm) == 0)
 						{							
-							UProperty* Property = *It;
+							FProperty* Property = *It;
 
 							Ar.Logf(TEXT("    Local %s"), *FString::Printf(TEXT("%s at offset %d; %dx %d bytes of type %s"), *Property->GetName(), Property->GetOffset_ForDebug(), Property->ArrayDim, Property->ElementSize, *Property->GetClass()->GetName()));
 
@@ -4238,7 +4255,7 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 			if( ParseObject<UClass>( Str, TEXT("CLASS="), Cls, ANY_PACKAGE ) )
 			{
 				Ar.Logf(TEXT("=== Replicated properties for class: %s==="), *Cls->GetName());
-				for ( TFieldIterator<UProperty> It(Cls); It; ++It )
+				for ( TFieldIterator<FProperty> It(Cls); It; ++It )
 				{
 					if( (It->GetPropertyFlags() & CPF_Net) != 0 )
 					{
@@ -4409,11 +4426,16 @@ void StaticExit()
 		GUObjectArray.CloseDisregardForGC();
 	}
 
+	// Complete any pending incremental GC
+	if (IsIncrementalPurgePending())
+	{
+		IncrementalPurgeGarbage(false);
+	}
+
 	// Make sure no other threads manipulate UObjects
 	AcquireGCLock();
 
-	GatherUnreachableObjects(false);
-	IncrementalPurgeGarbage(false);
+	// Dissolve all clusters before the final GC pass
 	GUObjectClusters.DissolveClusters(true);
 
 	// Keep track of how many objects there are for GC stats as we simulate a mark pass.
@@ -4435,10 +4457,18 @@ void StaticExit()
 		FUObjectItem* ObjItem = *It;
 		checkSlow(ObjItem);
 		UObject* Obj = static_cast<UObject*>(ObjItem->Object);
-		if (Obj && !Obj->IsA<UField>()) // Skip Structures, properties, etc.. They could be still necessary while GC.
+		if (Obj) 
 		{
-			// Mark as unreachable so purge phase will kill it.
-			ObjItem->SetUnreachable();
+			// Skip Structures, properties, etc.. They could be still necessary while GC.
+			if (!Obj->IsA<UField>())
+			{
+				// Mark as unreachable so purge phase will kill it.
+				ObjItem->SetUnreachable();
+			}
+			else
+			{
+				ObjItem->ClearUnreachable();
+			}
 		}
 	}
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System.IO;
@@ -109,10 +109,6 @@ public class UEOgg : ModuleRules
         else if (Target.Platform == UnrealTargetPlatform.TVOS)
         {
             PublicAdditionalLibraries.Add(Path.Combine(OggLibPath, "tvos", "libogg.a"));
-        }
-        else if (Target.Platform == UnrealTargetPlatform.Switch)
-        {
-            PublicAdditionalLibraries.Add(Path.Combine(OggLibPath, "Switch", "NX64", "Ogg_Switch_Static.a"));
         }
     }
 }

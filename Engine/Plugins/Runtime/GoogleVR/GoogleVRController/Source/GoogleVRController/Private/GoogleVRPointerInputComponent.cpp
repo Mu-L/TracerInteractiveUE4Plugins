@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GoogleVRPointerInputComponent.h"
 #include "GoogleVRController.h"
@@ -82,8 +82,8 @@ void UGoogleVRPointerInputComponent::BeginPlay()
 	if (UseControllerClick)
 	{
 		// Bind Controller click events.
-		PlayerController->InputComponent->BindKey(FGamepadKeyNames::MotionController_Right_Thumbstick, EInputEvent::IE_Pressed, this, &UGoogleVRPointerInputComponent::ClickButtonPressed);
-		PlayerController->InputComponent->BindKey(FGamepadKeyNames::MotionController_Right_Thumbstick, EInputEvent::IE_Released, this, &UGoogleVRPointerInputComponent::ClickButtonReleased);
+		PlayerController->InputComponent->BindKey(EKeys::Daydream_Right_Trackpad_Click, EInputEvent::IE_Pressed, this, &UGoogleVRPointerInputComponent::ClickButtonPressed);
+		PlayerController->InputComponent->BindKey(EKeys::Daydream_Right_Trackpad_Click, EInputEvent::IE_Released, this, &UGoogleVRPointerInputComponent::ClickButtonReleased);
 	}
 
 	if (UseTouchClick)

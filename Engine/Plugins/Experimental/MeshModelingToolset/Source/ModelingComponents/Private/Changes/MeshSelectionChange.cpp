@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Changes/MeshSelectionChange.h"
 
@@ -56,10 +56,7 @@ void FMeshSelectionChangeBuilder::Add(int32 ElementID)
 
 void FMeshSelectionChangeBuilder::Add(const TArray<int32>& Elements)
 {
-	for (int32 Index : Elements)
-	{
-		Change->Indices.Add(Index);
-	}
+	Change->Indices.Append(Elements);
 }
 
 void FMeshSelectionChangeBuilder::Add(const TSet<int32>& Elements)

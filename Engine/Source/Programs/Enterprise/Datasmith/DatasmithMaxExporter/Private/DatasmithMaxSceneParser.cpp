@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithMaxSceneParser.h"
 
@@ -520,6 +520,8 @@ void FDatasmithMaxSceneParser::LightTexEnum(INode* Node)
 					}
 				}
 			}
+
+			ParamBlock2->ReleaseDesc();
 		}
 	}
 }

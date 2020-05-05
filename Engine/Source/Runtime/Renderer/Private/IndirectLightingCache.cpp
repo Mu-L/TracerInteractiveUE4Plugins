@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	Implements a volume texture atlas for caching indirect lighting on a per-object basis
@@ -375,7 +375,7 @@ void FIndirectLightingCache::ReleasePrimitive(FPrimitiveComponentId PrimitiveId)
 	}
 }
 
-FIndirectLightingCacheAllocation* FIndirectLightingCache::FindPrimitiveAllocation(FPrimitiveComponentId PrimitiveId)
+FIndirectLightingCacheAllocation* FIndirectLightingCache::FindPrimitiveAllocation(FPrimitiveComponentId PrimitiveId) const
 {
 	return PrimitiveAllocations.FindRef(PrimitiveId);
 }
@@ -549,7 +549,7 @@ void FIndirectLightingCache::UpdateCachePrimitivesInternal(FScene* Scene, FScene
 				{
 					uint32 PrimitiveIndex = BitIt.GetIndex();
 					// FDrawTranslucentMeshAction::AllowIndirectLightingCacheVolumeTexture doesn't allow volume samples on translucency, so we only need to support one if the primitive has at least one opaque material
-					const bool bAllowVolumeSample = View.PrimitiveViewRelevanceMap[PrimitiveIndex].bOpaqueRelevance;
+					const bool bAllowVolumeSample = View.PrimitiveViewRelevanceMap[PrimitiveIndex].bOpaque;
 					ProcessPrimitiveUpdate(Scene, View, PrimitiveIndex, bAllowUnbuiltPreview, bAllowVolumeSample, OutBlocksToUpdate, OutTransitionsOverTimeToUpdate, OutPrimitivesToUpdateStaticMeshes);
 				}
 

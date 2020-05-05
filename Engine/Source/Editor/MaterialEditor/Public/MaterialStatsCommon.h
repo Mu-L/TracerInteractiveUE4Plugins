@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "SceneTypes.h"
@@ -27,6 +27,7 @@ enum class EPlatformCategoryType : int32
 	Desktop,
 	Android,
 	IOS,
+	Console,
 
 	Num
 };

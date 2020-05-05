@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	Model.h: Unreal UModel definition.
@@ -607,7 +607,7 @@ private:
 /**
  * A set of BSP nodes which have the same material and relevant lights.
  */
-class ENGINE_VTABLE FModelElement
+class FModelElement
 {
 public:
 

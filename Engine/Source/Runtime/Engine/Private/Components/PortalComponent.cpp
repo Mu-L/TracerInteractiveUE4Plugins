@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	
@@ -76,9 +76,9 @@ void ULightmassPortalComponent::UpdatePreviewShape()
 	}
 }
 
-void ULightmassPortalComponent::CreateRenderState_Concurrent()
+void ULightmassPortalComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
 {
-	Super::CreateRenderState_Concurrent();
+	Super::CreateRenderState_Concurrent(Context);
 
 	UpdatePreviewShape();
 }

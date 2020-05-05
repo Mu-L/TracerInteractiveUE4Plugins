@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -98,6 +98,17 @@ public:
 	 * @return the created server session
 	 */
 	virtual TSharedPtr<IConcertServerSession> CreateSession(const FConcertSessionInfo& SessionInfo, FText& OutFailureReason) = 0;
+
+	/** 
+	 * Create a new live server session from another session. The source session can be an archive or a live session.
+	 * @param SrcSessionId The ID of the session to copy. If the session is archived, its equivalent to restore it.
+	 * @param NewSessionInfo The information about the new session to create.
+	 * @param SessionFilter The filter controlling which activities should be copied over the new session.
+	 * @param OutFailureReason The reason the operation fails if the function returns null, undefined otherwise.
+	 * @return the created server session
+	 * @note This is equivalent to archiving and restoring a session, but faster as it skips one copy of the session (possibly serveral GB).
+	 */
+	virtual TSharedPtr<IConcertServerSession> CopySession(const FGuid& SrcSessionId, const FConcertSessionInfo& NewSessionInfo, const FConcertSessionFilter& SessionFilter, FText& OutFailureReason) = 0;
 
 	/**
 	 * Restore an archived Concert server session based on the passed session info

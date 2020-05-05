@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "HAL/FileManager.h"
@@ -962,7 +962,7 @@ namespace ImportExportAssetHelper
 			{
 				FString ScreenshotName;
 				const FString TestName = FString::Printf(TEXT("AssetImportExport/Screenshots/%s"), *ImportedAsset->GetName());
-				AutomationCommon::GetScreenshotPath(TestName, ScreenshotName);
+				ScreenshotName = AutomationCommon::GetScreenshotName(TestName);
 
 				TSharedRef<SWidget> WindowRef = ActiveWindow.ToSharedRef();
 
@@ -973,7 +973,7 @@ namespace ImportExportAssetHelper
 					FAutomationScreenshotData Data;
 					Data.Width = OutImageSize.X;
 					Data.Height = OutImageSize.Y;
-					Data.Path = ScreenshotName;
+					Data.ScreenshotName = ScreenshotName;
 					FAutomationTestFramework::Get().OnScreenshotCaptured().ExecuteIfBound(OutImageData, Data);
 				}
 
@@ -1003,9 +1003,9 @@ namespace ImportExportAssetHelper
 					Extension = FPaths::GetExtension(ImportPath);
 				}
 
-				if (Extension.StartsWith(TEXT(".")))
+				if (Extension.StartsWith(TEXT("."), ESearchCase::CaseSensitive))
 				{
-					Extension = Extension.RightChop(1);
+					Extension.RightChopInline(1, false);
 				}
 
 				//Export the asset

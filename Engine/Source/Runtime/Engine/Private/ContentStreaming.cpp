@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	ContentStreaming.cpp: Implementation of content streaming classes.
@@ -21,10 +21,19 @@
 #include "Animation/AnimationStreaming.h"
 #include "AudioStreamingCache.h"
 #include "AudioCompressionSettingsUtils.h"
+#include "VT/VirtualTextureChunkManager.h"
 
 /*-----------------------------------------------------------------------------
 	Globals.
 -----------------------------------------------------------------------------*/
+
+static TAutoConsoleVariable<int32> CVarMeshStreaming(
+	TEXT("r.MeshStreaming"),
+	0,
+	TEXT("Experimental - ")
+	TEXT("When non zero, enables mesh stremaing.\n"),
+	ECVF_ReadOnly | ECVF_RenderThreadSafe);
+
 
 /** Collection of views that need to be taken into account for streaming. */
 TArray<FStreamingViewInfo> IStreamingManager::CurrentViewInfos;
@@ -741,10 +750,10 @@ void IRenderAssetStreamingManager::PauseTextureStreaming(bool bInShouldPause)
 -----------------------------------------------------------------------------*/
 
 FStreamingManagerCollection::FStreamingManagerCollection()
-:	NumIterations(1)
-,	DisableResourceStreamingCount(0)
-,	LoadMapTimeLimit( 5.0f )
-,   TextureStreamingManager( NULL )
+	: NumIterations(1)
+	, DisableResourceStreamingCount(0)
+	, LoadMapTimeLimit(5.0f)
+	, TextureStreamingManager(nullptr)
 {
 #if PLATFORM_SUPPORTS_TEXTURE_STREAMING
 	// Disable texture streaming if that was requested (needs to happen before the call to ProcessNewlyLoadedUObjects, as that can load textures)
@@ -770,6 +779,30 @@ FStreamingManagerCollection::FStreamingManagerCollection()
 
 	AnimationStreamingManager = new FAnimationStreamingManager();
 	AddStreamingManager(AnimationStreamingManager);
+
+	VirtualTextureStreamingManager = new FVirtualTextureChunkStreamingManager();
+	AddStreamingManager(VirtualTextureStreamingManager);
+}
+
+FStreamingManagerCollection::~FStreamingManagerCollection()
+{
+	RemoveStreamingManager(VirtualTextureStreamingManager);
+	delete VirtualTextureStreamingManager;
+	VirtualTextureStreamingManager = nullptr;
+
+	RemoveStreamingManager(AnimationStreamingManager);
+	delete AnimationStreamingManager;
+	AnimationStreamingManager = nullptr;
+
+	RemoveStreamingManager(AudioStreamingManager);
+	delete AudioStreamingManager;
+	AudioStreamingManager = nullptr;
+
+	RemoveStreamingManager(TextureStreamingManager);
+	delete TextureStreamingManager;
+	TextureStreamingManager = nullptr;
+
+	UE_CLOG(StreamingManagers.Num() > 0, LogContentStreaming, Display, TEXT("There are %d unreleased StreamingManagers"), StreamingManagers.Num());
 }
 
 /**
@@ -956,6 +989,11 @@ bool FStreamingManagerCollection::IsTextureStreamingEnabled() const
 	return IsRenderAssetStreamingEnabled();
 }
 
+bool FStreamingManagerCollection::IsMeshStreamingEnabled() const
+{
+	return CVarMeshStreaming.GetValueOnAnyThread() != 0 && IsRenderAssetStreamingEnabled();
+}
+
 bool FStreamingManagerCollection::IsRenderAssetStreamingEnabled() const
 {
 	return TextureStreamingManager != 0;
@@ -986,6 +1024,12 @@ IAnimationStreamingManager& FStreamingManagerCollection::GetAnimationStreamingMa
 {
 	check(AnimationStreamingManager);
 	return *AnimationStreamingManager;
+}
+
+FVirtualTextureChunkStreamingManager& FStreamingManagerCollection::GetVirtualTextureStreamingManager() const
+{
+	check(VirtualTextureStreamingManager);
+	return *VirtualTextureStreamingManager;
 }
 
 /** Don't stream world resources for the next NumFrames. */
@@ -1163,7 +1207,7 @@ void FStreamingManagerCollection::OnAudioStreamingParamsChanged()
 {
 	// Before we swap out the audio streaming manager, we'll need to stop all sounds running on all audio devices:
 	FAudioDeviceManager* DeviceManager = GEngine->GetAudioDeviceManager();
-	TArray<FAudioDevice*>& AudioDevices = DeviceManager->GetAudioDevices();
+	TArray<FAudioDevice*> AudioDevices = DeviceManager->GetAudioDevices();
 	for (FAudioDevice* AudioDevice : AudioDevices)
 	{
 		if (AudioDevice)

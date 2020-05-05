@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // Physics engine integration utilities
 
@@ -142,7 +142,7 @@ void FPhysTestSerializer::SetPhysicsData(physx::PxScene& Scene)
 #endif
 }
 
-void FPhysTestSerializer::SetPhysicsData(Chaos::TPBDRigidsEvolutionGBF<float,3>& Evolution)
+void FPhysTestSerializer::SetPhysicsData(Chaos::FPBDRigidsEvolutionGBF& Evolution)
 {
 	bDiskDataIsChaos = true;
 	Data.Empty();
@@ -269,19 +269,20 @@ void FPhysTestSerializer::CreateChaosData()
 			Particle->GTGeometryParticle()->SetX(Particle->X());
 			Particle->GTGeometryParticle()->SetR(Particle->R());
 
-			if (auto PBDRigid = Particle->AsDynamic())
+			auto PBDRigid = Particle->CastToRigidParticle();
+			if(PBDRigid && PBDRigid->ObjectState() == EObjectStateType::Dynamic)
 			{
 				PBDRigid->P() = Particle->X();
 				PBDRigid->Q() = Particle->R();
 
-				PBDRigid->GTGeometryParticle()->AsDynamic()->SetP(PBDRigid->P());
-				PBDRigid->GTGeometryParticle()->AsDynamic()->SetQ(PBDRigid->R());
+				PBDRigid->GTGeometryParticle()->CastToRigidParticle()->SetP(PBDRigid->P());
+				PBDRigid->GTGeometryParticle()->CastToRigidParticle()->SetQ(PBDRigid->R());
 			}
 
 			PxActorToChaosHandle.Add(Act, Particle.Get());
 
 			//geometry
-			TArray<TUniquePtr<TImplicitObject<float, 3>>> Geoms;
+			TArray<TUniquePtr<FImplicitObject>> Geoms;
 			const int32 NumShapes = Actor->getNbShapes();
 			TArray<PxShape*> Shapes;
 			Shapes.AddUninitialized(NumShapes);
@@ -298,14 +299,25 @@ void FPhysTestSerializer::CreateChaosData()
 			{
 				if (Geoms.Num() == 1)
 				{
-					auto SharedGeom = TSharedPtr<TImplicitObject<float, 3>, ESPMode::ThreadSafe>(Geoms[0].Release());
+					auto SharedGeom = TSharedPtr<FImplicitObject, ESPMode::ThreadSafe>(Geoms[0].Release());
 					GTParticle->SetGeometry(SharedGeom);
 					Particle->SetSharedGeometry(SharedGeom);
 				}
 				else
 				{
-					GTParticle->SetGeometry(MakeUnique<TImplicitObjectUnion<float, 3>>(MoveTemp(Geoms)));
+					GTParticle->SetGeometry(MakeUnique<FImplicitObjectUnion>(MoveTemp(Geoms)));
 					Particle->SetGeometry(GTParticle->Geometry());
+				}
+
+				// Fixup bounds
+				auto Geom = GTParticle->Geometry();
+				if (Geom->HasBoundingBox())
+				{
+					auto& ShapeArray = GTParticle->ShapesArray();
+					for (auto& Shape : ShapeArray)
+					{
+						Shape->WorldSpaceInflatedShapeBounds = Geom->BoundingBox().TransformedAABB(TRigidTransform<FReal, 3>(Particle->X(), Particle->R()));
+					}
 				}
 			}
 
@@ -318,11 +330,11 @@ void FPhysTestSerializer::CreateChaosData()
 			++Idx;
 		}
 
-		ChaosEvolution = MakeUnique<TPBDRigidsEvolutionGBF<float, 3>>(Particles);
+		ChaosEvolution = MakeUnique<FPBDRigidsEvolutionGBF>(Particles);
 	}
 	else
 	{
-		ChaosEvolution = MakeUnique<TPBDRigidsEvolutionGBF<float, 3>>(Particles);
+		ChaosEvolution = MakeUnique<FPBDRigidsEvolutionGBF>(Particles);
 
 		FMemoryReader Ar(Data);
 		FChaosArchive ChaosAr(Ar);

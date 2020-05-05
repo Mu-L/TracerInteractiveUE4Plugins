@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DefaultStereoLayers.h"
 #include "HeadMountedDisplayBase.h"
@@ -74,7 +74,7 @@ void FDefaultStereoLayers::StereoLayerRender(FRHICommandListImmediate& RHICmdLis
 	GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None, true, false>::GetRHI();
 	GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
 	RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
-	RHICmdList.SetViewport(RenderParams.Viewport.Min.X, RenderParams.Viewport.Min.Y, 0, RenderParams.Viewport.Max.X, RenderParams.Viewport.Max.Y, 1.0f);
+	RHICmdList.SetViewport((float)RenderParams.Viewport.Min.X, (float)RenderParams.Viewport.Min.Y, 0, (float)RenderParams.Viewport.Max.X, (float)RenderParams.Viewport.Max.Y, 1.0f);
 
 	// Set initial shader state
 	auto ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
@@ -83,7 +83,7 @@ void FDefaultStereoLayers::StereoLayerRender(FRHICommandListImmediate& RHICmdLis
 	TShaderMapRef<FStereoLayerPS_External> PixelShader_External(ShaderMap);
 
 	GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GFilterVertexDeclaration.VertexDeclarationRHI;
-	GraphicsPSOInit.BoundShaderState.VertexShaderRHI = GETSAFERHISHADER_VERTEX(*VertexShader);
+	GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
 
 	GraphicsPSOInit.PrimitiveType = PT_TriangleList;
 
@@ -110,7 +110,7 @@ void FDefaultStereoLayers::StereoLayerRender(FRHICommandListImmediate& RHICmdLis
 		if (bIsExternal != bLastWasExternal)
 		{
 			bLastWasExternal = bIsExternal;
-			GraphicsPSOInit.BoundShaderState.PixelShaderRHI = bIsExternal ? GETSAFERHISHADER_PIXEL(*PixelShader_External) : GETSAFERHISHADER_PIXEL(*PixelShader);
+			GraphicsPSOInit.BoundShaderState.PixelShaderRHI = bIsExternal ? PixelShader_External.GetPixelShader() : PixelShader.GetPixelShader();
 			bPipelineStateNeedsUpdate = true;
 		}
 
@@ -138,6 +138,8 @@ void FDefaultStereoLayers::StereoLayerRender(FRHICommandListImmediate& RHICmdLis
 			}
 		}
 
+		RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, Layer.Texture);
+
 		// Set shader uniforms
 		VertexShader->SetParameters(
 			RHICmdList,
@@ -161,7 +163,7 @@ void FDefaultStereoLayers::StereoLayerRender(FRHICommandListImmediate& RHICmdLis
 			1.0f, 1.0f,
 			TargetSize,
 			FIntPoint(1, 1),
-			*VertexShader
+			VertexShader
 		);
 	}
 }
@@ -251,7 +253,7 @@ void FDefaultStereoLayers::PostRenderView_RenderThread(FRHICommandListImmediate&
 
 	FRHIRenderPassInfo RPInfo(RenderTarget, ERenderTargetActions::Load_Store);
 	RHICmdList.BeginRenderPass(RPInfo, TEXT("StereoLayerRender"));
-	RHICmdList.SetViewport(RenderParams.Viewport.Min.X, RenderParams.Viewport.Min.Y, 0, RenderParams.Viewport.Max.X, RenderParams.Viewport.Max.Y, 1.0f);
+	RHICmdList.SetViewport((float)RenderParams.Viewport.Min.X, (float)RenderParams.Viewport.Min.Y, 0.0f, (float)RenderParams.Viewport.Max.X, (float)RenderParams.Viewport.Max.Y, 1.0f);
 
 	if (bSplashIsShown || !IsBackgroundLayerVisible())
 	{
@@ -270,7 +272,7 @@ void FDefaultStereoLayers::PostRenderView_RenderThread(FRHICommandListImmediate&
 		RHICmdList.BeginRenderPass(RPInfoOverlayRenderTarget, TEXT("StereoLayerRenderIntoOverlay"));
 
 		DrawClearQuad(RHICmdList, FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
-		RHICmdList.SetViewport(RenderParams.Viewport.Min.X, RenderParams.Viewport.Min.Y, 0, RenderParams.Viewport.Max.X, RenderParams.Viewport.Max.Y, 1.0f);
+		RHICmdList.SetViewport((float)RenderParams.Viewport.Min.X, (float)RenderParams.Viewport.Min.Y, 0.0f, (float)RenderParams.Viewport.Max.X, (float)RenderParams.Viewport.Max.Y, 1.0f);
 	}
 
 	StereoLayerRender(RHICmdList, SortedOverlayLayers, RenderParams);
@@ -290,48 +292,4 @@ void FDefaultStereoLayers::SetupViewFamily(FSceneViewFamily& InViewFamily)
 	FVector HmdPosition = FVector::ZeroVector;
 	HMDDevice->GetCurrentPose(IXRTrackingSystem::HMDDeviceId, HmdOrientation, HmdPosition);
 	HmdTransform = FTransform(HmdOrientation, HmdPosition);
-}
-
-void FDefaultStereoLayers::GetAllocatedTexture(uint32 LayerId, FTextureRHIRef &Texture, FTextureRHIRef &LeftTexture)
-{
-	Texture = LeftTexture = nullptr;
-	FLayerDesc* LayerFound = nullptr;
-
-	if (IsInRenderingThread())
-	{
-		for (int32 LayerIndex = 0; LayerIndex < RenderThreadLayers.Num(); LayerIndex++)
-		{
-			if (RenderThreadLayers[LayerIndex].GetLayerId() == LayerId)
-			{
-				LayerFound = &RenderThreadLayers[LayerIndex];
-			}
-		}
-	}
-
-	else
-	{
-		// Only supporting the use of this function on RenderingThread.
-		check(false);
-		return;
-	}
-
-	if (LayerFound && LayerFound->Texture)
-	{
-		switch (LayerFound->ShapeType)
-		{
-		case IStereoLayers::CubemapLayer:
-			Texture = LayerFound->Texture->GetTextureCube();
-			LeftTexture = LayerFound->LeftTexture ? LayerFound->LeftTexture->GetTextureCube() : nullptr;			
-			break;
-
-		case IStereoLayers::CylinderLayer:
-		case IStereoLayers::QuadLayer:
-			Texture = LayerFound->Texture->GetTexture2D();
-			LeftTexture = LayerFound->LeftTexture ? LayerFound->LeftTexture->GetTexture2D() : nullptr;
-			break;
-
-		default:
-			break;
-		}
-	}
 }

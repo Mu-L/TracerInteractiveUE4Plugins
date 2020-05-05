@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	NetworkProfiler.h: network profiling support.
@@ -9,6 +9,9 @@
 #include "CoreMinimal.h"
 #include "Engine/EngineTypes.h"
 #include "IPAddress.h"
+#include "Containers/BitArray.h"
+#include "Serialization/MemoryWriter.h"
+#include "Misc/ScopeLock.h"
 
 class AActor;
 class FOutBunch;
@@ -74,6 +77,10 @@ class FNetworkProfiler
 private:
 
 	friend struct FNetworkProfilerScopedIgnoreReplicateProperties;
+	friend struct FNetworkProfilerCVarHelper;
+
+	/** Whether or not want to track granular information about comparisons. This can be very expensive. */
+	static bool bIsComparisonTrackingEnabled;
 
 	/** File writer used to serialize data.															*/
 	FArchive*								FileWriter;
@@ -167,8 +174,13 @@ private:
 	*/
 	int32 GetAddressTableIndex( const FString& Address );
 
+	void TrackCompareProperties_Unsafe(const FString& ObjectName, uint32 Cycles, TBitArray<>& PropertiesCompared, TBitArray<>& PropertiesThatChanged, TArray<uint8>& PropertyNameExportData);
+
 	// Used with FScopedIgnoreReplicateProperties.
 	uint32 IgnorePropertyCount;
+
+	// Set of names that correspond to Object's whose top level property names have been exported.
+	TSet<FString> ExportedObjects;
 
 public:
 	/**
@@ -315,14 +327,63 @@ public:
 	 * @param	Actor		Actor being replicated
 	 */
 	void TrackReplicateActor( const AActor* Actor, FReplicationFlags RepFlags, uint32 Cycles, UNetConnection* Connection );
-	
+
+	/**
+	 * Track a set of metadata for a ReplicateProperties call.
+	 *
+	 * @param	Object				Object being replicated
+	 * @param	InactiveProperties	Bitfield describing the properties that are inactive.
+	 * @param	bWasAnythingSent	Whether or not any properties were actually replicated.
+	 * @param	bSentAlProperties	Whether or not we're going to try sending all the properties from the beginning of time.
+	 * @param	Connection			The connection that we're replicating properties to.
+	 */
+	void TrackReplicatePropertiesMetadata(const UObject* Object, TBitArray<>& InactiveProperties, bool bSentAllProperties, UNetConnection* Connection);
+
+	/**
+	 * Track time used to compare properties for a given object.
+	 *
+	 * @param	Object					Object being replicated
+	 * @param	Cycles					The number of CPU Cycles we spent comparing the properties for this object.
+	 * @param	PropertiesCompared		The properties that were compared (only tracks top level properties).
+	 * @param	PropertiesThatChanged	The properties that actually changed (only tracks top level properties).
+	 * @param	PropertyNameContainers	Array of items that we can convert to property names if we need to export them (should only happen the first time we see a given object).
+	 * @param	PropertyNameProjection	Project that can be used to convery a PropertyNameContainer to a usable property name.
+	 */
+	template<typename T, typename ProjectionType>
+	void TrackCompareProperties(const UObject* Object, uint32 Cycles, TBitArray<>& PropertiesCompared, TBitArray<>& PropertiesThatChanged, const TArray<T>& PropertyNameContainers, ProjectionType PropertyNameProjection)
+	{
+		if (IsComparisonTrackingEnabled())
+		{
+            FScopeLock ScopeLock(&CriticalSection);
+
+			FString ObjectName = GetNameSafe(Object);
+			TArray<uint8> PropertyNameExportData;
+
+			if (!ExportedObjects.Contains(ObjectName))
+			{
+				uint32 NumProperties = PropertyNameContainers.Num();
+				PropertyNameExportData.Reserve(2 + (NumProperties * 2));
+				FMemoryWriter PropertyNameAr(PropertyNameExportData);
+
+				PropertyNameAr.SerializeIntPacked(NumProperties);
+				for (const T& PropertyNameContainer : PropertyNameContainers)
+				{
+					uint32 PropertyNameIndex = GetNameTableIndex(PropertyNameProjection(PropertyNameContainer));
+					PropertyNameAr.SerializeIntPacked(PropertyNameIndex);
+				}
+			}
+
+			TrackCompareProperties_Unsafe(ObjectName, Cycles, PropertiesCompared, PropertiesThatChanged, PropertyNameExportData);
+		}
+	}
+
 	/**
 	 * Track property being replicated.
 	 *
 	 * @param	Property	Property being replicated
 	 * @param	NumBits		Number of bits used to replicate this property
 	 */
-	void TrackReplicateProperty( const UProperty* Property, uint16 NumBits, UNetConnection* Connection );
+	void TrackReplicateProperty( const FProperty* Property, uint16 NumBits, UNetConnection* Connection );
 
 	/**
 	 * Track property header being written.
@@ -330,7 +391,7 @@ public:
 	 * @param	Property	Property being replicated
 	 * @param	NumBits		Number of bits used in the header
 	 */
-	void TrackWritePropertyHeader( const UProperty* Property, uint16 NumBits, UNetConnection* Connection );
+	void TrackWritePropertyHeader( const FProperty* Property, uint16 NumBits, UNetConnection* Connection );
 
 	/**
 	 * Track event occuring, like e.g. client join/ leave
@@ -406,6 +467,7 @@ public:
 	bool Exec( UWorld * InWorld, const TCHAR* Cmd, FOutputDevice & Ar );
 
 	bool FORCEINLINE IsTrackingEnabled() const { return bIsTrackingEnabled; }
+	bool IsComparisonTrackingEnabled() const { return bIsTrackingEnabled && bIsComparisonTrackingEnabled;  }
 
 	/** Return the network profile finished delegate */
 	FOnNetworkProfileFinished& OnNetworkProfileFinished() { return OnNetworkProfileFinishedDelegate; }

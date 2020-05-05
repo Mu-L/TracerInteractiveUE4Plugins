@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System.IO;
 using System;
@@ -24,11 +24,11 @@ namespace UnrealBuildTool.Rules
                     "CADLibrary",
 					"Engine",
 					"DatasmithCore",
-                    "DatasmithCoreTechExtension",
+                    "DatasmithCoreTechParametricSurfaceData",
 					"DatasmithContent",
-					"DatasmithImporter",
+					"DatasmithTranslator",
 					"MeshDescription",
-					"StaticMeshDescription"
+					"StaticMeshDescription",
 				}
 			);
 
@@ -41,6 +41,12 @@ namespace UnrealBuildTool.Rules
             {
 				PrivateDependencyModuleNames.Add("CoreTech");
             }
+
+            if (Target.Type == TargetType.Editor)
+            {
+	            PrivateDependencyModuleNames.Add("MessageLog");
+            }
+
         }
     }
 }

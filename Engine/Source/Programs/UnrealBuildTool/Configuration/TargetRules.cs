@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -282,6 +282,12 @@ namespace UnrealBuildTool
 		public bool bBuildAllModules = false;
 
 		/// <summary>
+		/// Additional plugins that are built for this target type but not enabled.
+		/// </summary>
+		[CommandLine("-BuildPlugin=", ListSeparator = '+')]
+		public List<string> BuildPlugins = new List<string>();
+
+		/// <summary>
 		/// A list of additional plugins which need to be included in this target. This allows referencing non-optional plugin modules
 		/// which cannot be disabled, and allows building against specific modules in program targets which do not fit the categories
 		/// in ModuleHostType.
@@ -353,12 +359,16 @@ namespace UnrealBuildTool
 		/// Whether to compile the Chaos physics plugin.
 		/// </summary>
 		[RequiresUniqueBuildEnvironment]
+		[CommandLine("-NoCompileChaos", Value = "false")]
+		[CommandLine("-CompileChaos", Value = "true")]
 		public bool bCompileChaos = false;
 
 		/// <summary>
 		/// Whether to use the Chaos physics interface. This overrides the physx flags to disable APEX and NvCloth
 		/// </summary>
 		[RequiresUniqueBuildEnvironment]
+		[CommandLine("-NoUseChaos", Value = "false")]
+		[CommandLine("-UseChaos", Value = "true")]
 		public bool bUseChaos = false;
 
 		/// <summary>
@@ -411,6 +421,12 @@ namespace UnrealBuildTool
 		[RequiresUniqueBuildEnvironment]
 		[ConfigFile(ConfigHierarchyType.Engine, "/Script/BuildSettings.BuildSettings", "bCompileCEF3")]
 		public bool bCompileCEF3 = true;
+
+		/// <summary>
+		/// Whether to compile using ISPC.
+		/// </summary>
+		[RequiresUniqueBuildEnvironment]
+		public bool bCompileISPC = false;
 
 		/// <summary>
 		/// Whether to compile the editor or not. Only desktop platforms (Windows or Mac) will use this, other platforms force this to false.
@@ -569,6 +585,12 @@ namespace UnrealBuildTool
 			set { bWithServerCodeOverride = value; }
 		}
 		private bool? bWithServerCodeOverride;
+
+		/// <summary>
+		/// When enabled, Push Model Networking will be used on the server. This can help reduce CPU overhead of networking, at the cost of more memory.
+		/// </summary>
+		[RequiresUniqueBuildEnvironment]
+		public bool bWithPushModel = false;
 
 		/// <summary>
 		/// Whether to include stats support even without the engine.
@@ -845,6 +867,12 @@ namespace UnrealBuildTool
 			get { return ShadowVariableWarningLevel == WarningLevel.Error; }
 			set { ShadowVariableWarningLevel = (value? WarningLevel.Error : WarningLevel.Warning); }
 		}
+
+		/// <summary>
+		/// Indicates what warning/error level to treat unsafe type casts as on platforms that support it (e.g., double->float or int64->int32)
+		/// </summary>
+		[XmlConfigFile(Category = "BuildConfiguration")]
+		public WarningLevel UnsafeTypeCastWarningLevel = WarningLevel.Off;
 
 		/// <summary>
 		/// Forces the use of undefined identifiers in conditional expressions to be treated as errors.
@@ -1169,6 +1197,7 @@ namespace UnrealBuildTool
 		/// Which C++ stanard to use for compiling this target
 		/// </summary>
 		[RequiresUniqueBuildEnvironment]
+		[CommandLine("-CppStd")]
 		[XmlConfigFile(Category = "BuildConfiguration")]
 		public CppStandardVersion CppStandard = CppStandardVersion.Default;
 
@@ -1419,7 +1448,8 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// HoloLens-specific target settings.
 		/// </summary>
-		public HoloLensTargetRules HoloLensPlatform = new HoloLensTargetRules();
+		[ConfigSubObject]
+		public HoloLensTargetRules HoloLensPlatform;
 
 		/// <summary>
 		/// Constructor.
@@ -1434,6 +1464,7 @@ namespace UnrealBuildTool
 			this.ProjectFile = Target.ProjectFile;
 			this.Version = Target.Version;
 			this.WindowsPlatform = new WindowsTargetRules(this);
+			this.HoloLensPlatform = new HoloLensTargetRules(Target);
 
 			// Read settings from config files
 			foreach (object ConfigurableObject in GetConfigurableObjects())
@@ -1854,6 +1885,11 @@ namespace UnrealBuildTool
 			get { return Inner.DisablePlugins; }
 		}
 
+		public IEnumerable<string> BuildPlugins
+		{
+			get { return Inner.BuildPlugins; }
+		}
+
 		public string PakSigningKeysFile
 		{
 			get { return Inner.PakSigningKeysFile; }
@@ -1931,6 +1967,11 @@ namespace UnrealBuildTool
 		public bool bCompileCEF3
 		{
 			get { return Inner.bCompileCEF3; }
+		}
+
+		public bool bCompileISPC
+		{
+			get { return Inner.bCompileISPC; }
 		}
 
 		public bool bBuildEditor
@@ -2027,6 +2068,11 @@ namespace UnrealBuildTool
 		public bool bWithServerCode
 		{
 			get { return Inner.bWithServerCode; }
+		}
+
+		public bool bWithPushModel
+		{
+			get { return Inner.bWithPushModel; }
 		}
 
 		public bool bCompileWithStatsWithoutEngine
@@ -2210,6 +2256,11 @@ namespace UnrealBuildTool
 		public WarningLevel ShadowVariableWarningLevel
 		{
 			get { return Inner.ShadowVariableWarningLevel; }
+		}
+
+		public WarningLevel UnsafeTypeCastWarningLevel
+		{
+			get { return Inner.UnsafeTypeCastWarningLevel; }
 		}
 
 		public bool bUndefinedIdentifierErrors

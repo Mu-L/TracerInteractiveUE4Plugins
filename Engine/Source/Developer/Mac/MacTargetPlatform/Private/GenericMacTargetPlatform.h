@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	GenericMacTargetPlatform.h: Declares the TGenericMacTargetPlatform class template.
@@ -120,8 +120,6 @@ return TSuper::SupportsFeature(Feature);
 			OutFormats.AddUnique(NAME_SF_METAL_SM5);
 			static FName NAME_SF_METAL_MACES3_1(TEXT("SF_METAL_MACES3_1"));
 			OutFormats.AddUnique(NAME_SF_METAL_MACES3_1);
-			static FName NAME_SF_METAL_MACES2(TEXT("SF_METAL_MACES2"));
-			OutFormats.AddUnique(NAME_SF_METAL_MACES2);
 			static FName NAME_SF_METAL_MRT_MAC(TEXT("SF_METAL_MRT_MAC"));
 			OutFormats.AddUnique(NAME_SF_METAL_MRT_MAC);
 		}
@@ -322,7 +320,7 @@ return TSuper::SupportsFeature(Feature);
 			return NAME_ADPCM;
 		}
 
-		if (Wave->IsStreaming())
+		if (Wave->IsStreaming(*this->IniPlatformName()))
 		{
 			return NAME_OPUS;
 		}
@@ -339,11 +337,6 @@ return TSuper::SupportsFeature(Feature);
 		OutFormats.Add(NAME_ADPCM);
 		OutFormats.Add(NAME_OGG);
 		OutFormats.Add(NAME_OPUS);
-	}
-
-	virtual FPlatformAudioCookOverrides* GetAudioCompressionSettings() const override
-	{
-		return nullptr;
 	}
 
 #endif //WITH_ENGINE

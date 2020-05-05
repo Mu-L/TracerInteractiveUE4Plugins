@@ -1,31 +1,36 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DetailMultiTopLevelObjectRootNode.h"
 #include "IDetailRootObjectCustomization.h"
 #include "DetailWidgetRow.h"
+#include "ObjectPropertyNode.h"
+#include "Misc/ConfigCacheIni.h"
 
-void SDetailMultiTopLevelObjectTableRow::Construct(const FArguments& InArgs, const TSharedRef<FDetailTreeNode>& InOwnerTreeNode, const TSharedRef<SWidget>& InCustomizedWidgetContents, const TSharedRef<STableViewBase>& InOwnerTableView)
-{
-	Construct(InArgs, InOwnerTreeNode);
-	ChildSlotConstruct(InCustomizedWidgetContents, InOwnerTableView);
-	// Disable toggle functionality
-	bShowExpansionArrow = false;
-}
 
-void SDetailMultiTopLevelObjectTableRow::Construct(const FArguments& InArgs, const TSharedRef<FDetailTreeNode>& InOwnerTreeNode)
+void SDetailMultiTopLevelObjectTableRow::Construct( const FArguments& InArgs, TSharedRef<FDetailTreeNode> InOwnerTreeNode, const TSharedRef<STableViewBase>& InOwnerTableView )
 {
 	OwnerTreeNode = InOwnerTreeNode;
-	bShowExpansionArrow = InArgs._ShowExpansionArrow;
-}
+	ExpansionArrowUsage = InArgs._ExpansionArrowUsage;
 
-void SDetailMultiTopLevelObjectTableRow::ChildSlotConstruct(const TSharedRef<SWidget>& InCustomizedWidgetContents, const TSharedRef<STableViewBase>& InOwnerTableView)
-{
 	ChildSlot
-	[
+	[	
 		SNew( SBox )
 		.Padding( FMargin( 0.0f, 0.0f, SDetailTableRowBase::ScrollbarPaddingSize, 0.0f ) )
 		[
-			InCustomizedWidgetContents
+			SNew( SHorizontalBox )
+			+SHorizontalBox::Slot()
+			.VAlign(VAlign_Center)
+			.Padding(2.0f, 2.0f, 2.0f, 2.0f)
+			.AutoWidth()
+			[
+				SNew( SExpanderArrow, SharedThis(this) )
+				.Visibility(ExpansionArrowUsage == EExpansionArrowUsage::Default ? EVisibility::Visible : EVisibility::Collapsed)
+			]
+			+SHorizontalBox::Slot()
+			.Expose(ContentSlot)
+			[
+				SNullWidget::NullWidget
+			]
 		]
 	];
 
@@ -35,10 +40,16 @@ void SDetailMultiTopLevelObjectTableRow::ChildSlotConstruct(const TSharedRef<SWi
 			.ShowSelection(false),
 		InOwnerTableView
 	);
-	// Enable toggle functionality
-	bShowExpansionArrow = true;
 }
 
+
+void SDetailMultiTopLevelObjectTableRow::SetContent(TSharedRef<SWidget> InContent)
+{
+	(*ContentSlot)
+	[
+		InContent
+	];
+}
 
 const FSlateBrush* SDetailMultiTopLevelObjectTableRow::GetBackgroundImage() const
 {
@@ -54,7 +65,7 @@ const FSlateBrush* SDetailMultiTopLevelObjectTableRow::GetBackgroundImage() cons
 
 FReply SDetailMultiTopLevelObjectTableRow::OnMouseButtonDown( const FGeometry& MyGeometry, const FPointerEvent& MouseEvent )
 {
-	if (bShowExpansionArrow && MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
+	if (ExpansionArrowUsage != EExpansionArrowUsage::None && MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
 		ToggleExpansion();
 		return FReply::Handled();
@@ -71,20 +82,50 @@ FReply SDetailMultiTopLevelObjectTableRow::OnMouseButtonDoubleClick( const FGeom
 }
 
 
-FDetailMultiTopLevelObjectRootNode::FDetailMultiTopLevelObjectRootNode( const FDetailNodeList& InChildNodes, const TSharedPtr<IDetailRootObjectCustomization>& InRootObjectCustomization, IDetailsViewPrivate* InDetailsView, const UObject& InRootObject )
+FDetailMultiTopLevelObjectRootNode::FDetailMultiTopLevelObjectRootNode( const FDetailNodeList& InChildNodes, const TSharedPtr<IDetailRootObjectCustomization>& InRootObjectCustomization, IDetailsViewPrivate* InDetailsView, const FObjectPropertyNode* RootNode)
 	: ChildNodes(InChildNodes)
 	, DetailsView(InDetailsView)
 	, RootObjectCustomization(InRootObjectCustomization)
-	, RootObject(const_cast<UObject*>(&InRootObject))
-	, NodeName(InRootObject.GetFName())
 	, bShouldBeVisible(false)
+	, bHasFilterStrings(false)
 {
+	RootObjectSet.RootObjects.Reserve(RootNode->GetNumObjects());
+	for (int32 ObjectIndex = 0; ObjectIndex < RootNode->GetNumObjects(); ++ObjectIndex)
+	{
+		RootObjectSet.RootObjects.Add(RootNode->GetUObject(ObjectIndex));
+	}
+
+	RootObjectSet.CommonBaseClass = RootNode->GetObjectBaseClass();
+
+	NodeName = RootObjectSet.CommonBaseClass->GetFName();
+}
+
+void FDetailMultiTopLevelObjectRootNode::OnItemExpansionChanged(bool bIsExpanded, bool bShouldSaveState)
+{
+	if (bShouldSaveState)
+	{
+		GConfig->SetBool(TEXT("DetailMultiObjectNodeExpansion"), *NodeName.ToString(), bIsExpanded, GEditorPerProjectIni);
+	}
+}
+
+bool FDetailMultiTopLevelObjectRootNode::ShouldBeExpanded() const
+{
+	if (bHasFilterStrings)
+	{
+		return true;
+	}
+	else
+	{
+		bool bShouldBeExpanded = true;
+		GConfig->GetBool(TEXT("DetailMultiObjectNodeExpansion"), *NodeName.ToString(), bShouldBeExpanded, GEditorPerProjectIni);
+		return bShouldBeExpanded;
+	}
 }
 
 ENodeVisibility FDetailMultiTopLevelObjectRootNode::GetVisibility() const
 {
 	ENodeVisibility FinalVisibility = ENodeVisibility::Visible;
-	if(RootObjectCustomization.IsValid() && RootObject.IsValid() && !RootObjectCustomization.Pin()->IsObjectVisible(RootObject.Get()))
+	if(RootObjectCustomization.IsValid() && !RootObjectCustomization.Pin()->AreObjectsVisible(RootObjectSet))
 	{
 		FinalVisibility = ENodeVisibility::ForcedHidden;
 	}
@@ -98,55 +139,31 @@ ENodeVisibility FDetailMultiTopLevelObjectRootNode::GetVisibility() const
 
 TSharedRef< ITableRow > FDetailMultiTopLevelObjectRootNode::GenerateWidgetForTableView(const TSharedRef<STableViewBase>& OwnerTable, const FDetailColumnSizeData& ColumnSizeData, bool bAllowFavoriteSystem)
 {
-	FDetailWidgetRow Row;
-	TSharedRef<SDetailMultiTopLevelObjectTableRow> DetailMultiTopLevelObjectTableRow = SNew(SDetailMultiTopLevelObjectTableRow, AsShared());
-	GenerateStandaloneWidget(Row, DetailMultiTopLevelObjectTableRow);
-	DetailMultiTopLevelObjectTableRow->ChildSlotConstruct(Row.NameWidget.Widget, OwnerTable);
-	return DetailMultiTopLevelObjectTableRow;
-}
+	EExpansionArrowUsage ExpansionArrowUsage = EExpansionArrowUsage::None;
 
-
-bool GenerateStandaloneWidgetInternal(FDetailWidgetRow& OutRow, TSharedPtr<SWidget>& HeaderWidget, const FName& NodeName)
-{
-	if (!HeaderWidget.IsValid())
+	TSharedPtr<IDetailRootObjectCustomization> Customization = RootObjectCustomization.Pin();
+	if (Customization)
 	{
-		// no customization was supplied or was passed back from the interface as invalid
-		// just make a text block with the name
-		HeaderWidget =
-			SNew(STextBlock)
-			.Font(FEditorStyle::GetFontStyle("DetailsView.CategoryFontStyle"))
-			.Text(FText::FromName(NodeName));
+		ExpansionArrowUsage = Customization->GetExpansionArrowUsage();
 	}
 
-	OutRow.NameContent()
-	[
-		HeaderWidget.ToSharedRef()
-	];
+	TSharedRef<SDetailMultiTopLevelObjectTableRow> TableRowWidget =
+		SNew(SDetailMultiTopLevelObjectTableRow, AsShared(), OwnerTable)
+		.ExpansionArrowUsage(ExpansionArrowUsage);
 
-	return true;
+	FDetailWidgetRow Row;
+	GenerateWidget_Internal(Row, TableRowWidget);
+
+	TableRowWidget->SetContent(Row.NameWidget.Widget);
+
+	return TableRowWidget;
 }
+
 
 bool FDetailMultiTopLevelObjectRootNode::GenerateStandaloneWidget(FDetailWidgetRow& OutRow) const
 {
-	TSharedPtr<SWidget> HeaderWidget;
-	if (RootObjectCustomization.IsValid() && RootObject.IsValid())
-	{
-		HeaderWidget = RootObjectCustomization.Pin()->CustomizeObjectHeader(RootObject.Get());
-	}
-
-	return GenerateStandaloneWidgetInternal(OutRow, HeaderWidget, NodeName);
-}
-
-
-bool FDetailMultiTopLevelObjectRootNode::GenerateStandaloneWidget(FDetailWidgetRow& OutRow, const TSharedRef<ITableRow>& InTableRow) const
-{
-	TSharedPtr<SWidget> HeaderWidget;
-	if (RootObjectCustomization.IsValid() && RootObject.IsValid())
-	{
-		HeaderWidget = RootObjectCustomization.Pin()->CustomizeObjectHeader(RootObject.Get(), InTableRow);
-	}
-
-	return GenerateStandaloneWidgetInternal(OutRow, HeaderWidget, NodeName);
+	GenerateWidget_Internal(OutRow, nullptr);
+	return true;
 }
 
 
@@ -172,6 +189,8 @@ void FDetailMultiTopLevelObjectRootNode::GetChildren(FDetailNodeList& OutChildre
 void FDetailMultiTopLevelObjectRootNode::FilterNode( const FDetailFilter& InFilter )
 {
 	bShouldBeVisible = false;
+	bHasFilterStrings = InFilter.FilterStrings.Num() > 0;
+
 	for( int32 ChildIndex = 0; ChildIndex < ChildNodes.Num(); ++ChildIndex )
 	{
 		TSharedRef<FDetailTreeNode>& Child = ChildNodes[ChildIndex];
@@ -192,5 +211,20 @@ void FDetailMultiTopLevelObjectRootNode::FilterNode( const FDetailFilter& InFilt
 
 bool FDetailMultiTopLevelObjectRootNode::ShouldShowOnlyChildren() const
 {
-	return RootObjectCustomization.IsValid() && RootObject.IsValid() ? !RootObjectCustomization.Pin()->ShouldDisplayHeader(RootObject.Get()) : false;
+	return RootObjectCustomization.IsValid() && RootObjectSet.RootObjects.Num() ? !RootObjectCustomization.Pin()->ShouldDisplayHeader(RootObjectSet) : bShouldShowOnlyChildren;
+}
+
+void FDetailMultiTopLevelObjectRootNode::GenerateWidget_Internal(FDetailWidgetRow& OutRow, TSharedPtr<SDetailMultiTopLevelObjectTableRow> TableRowWidget) const
+{
+	TSharedPtr<SWidget> HeaderWidget;
+	if (RootObjectCustomization.IsValid() && RootObjectSet.RootObjects.Num())
+	{
+		HeaderWidget = RootObjectCustomization.Pin()->CustomizeObjectHeader(RootObjectSet, TableRowWidget);
+	}
+
+	OutRow.NameContent()
+	[
+		HeaderWidget.ToSharedRef()
+	];
+
 }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "ObjectTools.h"
@@ -662,9 +662,10 @@ namespace ObjectTools
 				Arguments.Add(TEXT("Objects"), FText::FromString( RootSetObjectNames ));
 				FText MessageFormatting = NSLOCTEXT("ObjectTools", "ConsolidateAssetsRootSetDlgMsgFormatting", "The assets below were in the root set and we must remove that flag in order to proceed.  Being in the root set means that this was loaded at startup and is meant to remain in memory during gameplay.  For most assets this should be fine.  If, for some reason, there is an error, you will be notified.  Would you like to remove this flag?\n\n{Objects}");
 				FText Message = FText::Format( MessageFormatting, Arguments );
+				FText Title = NSLOCTEXT("ObjectTools", "ConsolidateAssetsRootSetDlg_Title", "Failed to Consolidate Assets");
 
 				// Prompt the user to see if they'd like to remove the root set flag from the assets and attempt to replace them
-				EAppReturnType::Type UserResponse = OpenMsgDlgInt( EAppMsgType::YesNo, EAppReturnType::No, Message, NSLOCTEXT("ObjectTools", "ConsolidateAssetsRootSetDlg_Title", "Failed to Consolidate Assets") );
+				EAppReturnType::Type UserResponse = FMessageDialog::Open( EAppMsgType::YesNo, EAppReturnType::No, Message, &Title );
 
 				// The user elected to not remove the root set flag, so cancel the replacement
 				if (UserResponse == EAppReturnType::No )
@@ -760,7 +761,7 @@ namespace ObjectTools
 		ReplacementMap.GenerateKeyArray( OutInfo.ReplaceableObjects );
 
 		// Find all the properties (and their corresponding objects) that refer to any of the objects to be replaced
-		using PropertyArrayType = TArray<UProperty*, TInlineAllocator<1>>;
+		using PropertyArrayType = TArray<FProperty*, TInlineAllocator<1>>;
 		TArray<UObject*> ReferencingPropertiesMapKeys;
 		TArray<PropertyArrayType> ReferencingPropertiesMapValues;
 
@@ -786,7 +787,7 @@ namespace ObjectTools
 				// changed, and store both the object doing the referencing as well as the properties that were changed in a map (so that
 				// we can correctly call PostEditChange later)
 				TMap<UObject*, int32> CurNumReferencesMap;
-				TMultiMap<UObject*, UProperty*> CurReferencingPropertiesMMap;
+				TMultiMap<UObject*, FProperty*> CurReferencingPropertiesMMap;
 				if ( FindRefsArchive.GetReferenceCounts( CurNumReferencesMap, CurReferencingPropertiesMMap ) > 0  )
 				{
 					PropertyArrayType CurReferencedProperties;
@@ -1277,8 +1278,9 @@ namespace ObjectTools
 				Arguments.Add(TEXT("Objects"), FText::FromString( FailedObjectNames ));
 				FText MessageFormatting = NSLOCTEXT("ObjectTools", "ConsolidateAssetsFailureDlgMFormattings", "The assets below were unable to be consolidated. This is likely because they are referenced by the object to consolidate to.\n\n{Objects}");
 				FText Message = FText::Format( MessageFormatting, Arguments );
+				FText Title = NSLOCTEXT("ObjectTools", "ConsolidateAssetsFailureDlg_Title", "Failed to Consolidate Assets");
 
-				OpenMsgDlgInt( EAppMsgType::Ok, Message, NSLOCTEXT("ObjectTools", "ConsolidateAssetsFailureDlg_Title", "Failed to Consolidate Assets") );
+				FMessageDialog::Open( EAppMsgType::Ok, Message, &Title );
 			}
 
 			// Alert the user to critical object failure
@@ -1303,8 +1305,9 @@ namespace ObjectTools
 				Arguments.Add(TEXT("Packages"), FText::FromString( DirtiedPackageNames ));
 				FText MessageFormatting = NSLOCTEXT("ObjectTools", "ConsolidateAssetsCriticalFailureDlgMsgFormatting", "CRITICAL FAILURE:\nOne or more assets were partially consolidated, yet still cannot be deleted for some reason. It is highly recommended that you restart the editor without saving any of the assets or packages.\n\nAffected Assets:\n{Assets}\n\nPotentially Affected Packages:\n{Packages}");
 				FText Message = FText::Format( MessageFormatting, Arguments );
+				FText Title = NSLOCTEXT("ObjectTools", "ConsolidateAssetsCriticalFailureDlg_Title", "Critical Failure to Consolidate Assets");
 
-				OpenMsgDlgInt( EAppMsgType::Ok, Message, NSLOCTEXT("ObjectTools", "ConsolidateAssetsCriticalFailureDlg_Title", "Critical Failure to Consolidate Assets") );
+				FMessageDialog::Open( EAppMsgType::Ok, Message, &Title );
 			}
 		}
 
@@ -1552,7 +1555,11 @@ namespace ObjectTools
 								Notification->SetCompletionState( CollectionCreated ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail );
 							}
 						}
-					} //-V773
+						if (ContentHelper)
+						{
+							delete ContentHelper;
+						}
+					}
 				}
 			}
 			else
@@ -2113,7 +2120,7 @@ namespace ObjectTools
 			const int32 NumAudioDevices = AudioDeviceManager->GetNumActiveAudioDevices();
 			for (int32 DeviceIndex = 0; DeviceIndex < NumAudioDevices; DeviceIndex++)
 			{
-				FAudioDevice* AudioDevice = AudioDeviceManager->GetAudioDevice(DeviceIndex);
+				FAudioDevice* AudioDevice = AudioDeviceManager->GetAudioDeviceRaw(DeviceIndex);
 				if (AudioDevice != nullptr)
 				{
 					AudioDevice->StopAllSounds();
@@ -2150,10 +2157,11 @@ namespace ObjectTools
 
 		if (ContainsWorldInUse(ObjectsToDelete))
 		{
-			OpenMsgDlgInt(
+			FText Title = NSLOCTEXT("UnrealEd", "DeleteFailedWorldInUseTitle", "Unable to delete level");
+			FMessageDialog::Open(
 				EAppMsgType::Ok,
 				NSLOCTEXT("UnrealEd", "DeleteFailedWorldInUse", "Unable to delete level while it is open"),
-				NSLOCTEXT("UnrealEd", "DeleteFailedWorldInUseTitle", "Unable to delete level")
+				&Title
 			);
 
 			return 0;
@@ -2403,19 +2411,63 @@ namespace ObjectTools
 		return true;
 	}
 
-	static void RecursiveRetrieveReferencers(UObject* Object, TSet<FWeakObjectPtr>& ReferencingObjects)
+	/**
+	 * Inspects all objects in memory and returns the set of all objects that transitively refer to the given InInterestSet
+	 * Objects in the original InInterestSet are included in the output ReferencingObjects set
+	 * Inner Objects that only have a path to the InterestSet through their outers are excluded.
+	 */
+	static void RecursiveRetrieveReferencers(const TArray<UObject*>& InInterestSet, TSet<FWeakObjectPtr>& OutReferencingObjects)
 	{
-		TArray<FReferencerInformation> ExternalReferencers;
-		Object->RetrieveReferencers(nullptr /* internal refs */, &ExternalReferencers);
+		const int32 ExpectedArraySize = 100;
+		const int32 ExpectedReferencesPerObject = 5;
+		TArray<UObject*> InterestSetAdditions(InInterestSet, FMath::Max(0,ExpectedArraySize - InInterestSet.Num()));
 
-		for (const FReferencerInformation& Referencer : ExternalReferencers)
+		TMap<UObject*, int32> References;
+		TArray<UObject*> InterestSet;
+		InterestSet.Reserve(InterestSetAdditions.Max()*2);
+		References.Reserve(ExpectedReferencesPerObject);
+
+		// It would be faster to run a single TObjectIterator+Serialize loop and capture the complete graph of object references, and then do operations
+		// on the resultant graph, but that would require memory equal to sizeof(pointer)*num objects*(average references per object+3) to hold the graph.
+		// The extra cost of the current solution is that the TObjectIterator will be executed a number of times equal to 
+		// the length of the maximum (minimum reference chain length) from any object to the original interest set
+		// TODO: Worth the memory cost?
+		while (InterestSetAdditions.Num() > 0)
 		{
-			bool bAlreadyIn = false;
-			ReferencingObjects.Add(Referencer.Referencer, &bAlreadyIn);
-			if (!bAlreadyIn)
+			InterestSet.Append(InterestSetAdditions);
+			Algo::Sort(InterestSet, TLess<UObject*>());
+			InterestSetAdditions.Reset();
+
+			for (FObjectIterator It; It; ++It)
 			{
-				RecursiveRetrieveReferencers(Referencer.Referencer, ReferencingObjects);
+				UObject* Object = *It;
+				if (Algo::BinarySearch(InterestSet, Object, TLess<UObject*>()) != INDEX_NONE)
+				{
+					continue;
+				}
+
+				const bool bAlsoFindWeakReferences = false;
+				FFindReferencersArchive ArFind(Object, InterestSet, bAlsoFindWeakReferences);
+				ArFind.GetReferenceCounts(References);
+				if (References.Num() > 0)
+				{
+					// Ignore internal references; only add the searched object if it refers to a member of the interest set but is not inside that member
+					for (const TPair<UObject*,int32>& kvpair : References)
+					{
+						if (!Object->IsIn(kvpair.Key))
+						{
+							InterestSetAdditions.Add(Object);
+							break;
+						}
+					}
+					References.Reset();
+				}
 			}
+		}
+
+		for (UObject* Referencer : InterestSet)
+		{
+			OutReferencingObjects.Add(Referencer);
 		}
 	}
 
@@ -2443,12 +2495,7 @@ namespace ObjectTools
 
 		// Recursively find all references to objects being deleted
 		TSet<FWeakObjectPtr> ReferencingObjects;
-		for (UObject* ToDelete : InObjectsToDelete)
-		{
-			ReferencingObjects.Add(ToDelete);
-
-			RecursiveRetrieveReferencers(ToDelete, ReferencingObjects);
-		}
+		RecursiveRetrieveReferencers(InObjectsToDelete, ReferencingObjects);
 
 		// Attempt to close all editors referencing any of the deleted objects
 		bool bClosedAllEditors = true;
@@ -2587,6 +2634,9 @@ namespace ObjectTools
 
 		bool bSelectionChanged = false;
 
+		TArray<UObject*> ObjectsToReplace;
+		ObjectsToReplace.Reserve(ObjectsToDelete.Num());
+
 		// Destroy all Components
 		if (ComponentsToDelete.Num() > 0)
 		{
@@ -2642,6 +2692,12 @@ namespace ObjectTools
 					{
 						CurActor->GetWorld()->EditorDestroyActor( CurActor, false );
 					}
+					// Ensure that we replace any generated actors who don't have worlds that are left such as the template
+					// from Child Actor Components
+					else
+					{
+						ObjectsToReplace.Add(CurActor);
+					}
 
 					bNeedsGarbageCollection = true;
 				}
@@ -2664,9 +2720,6 @@ namespace ObjectTools
 		{
 			int32 ReplaceableObjectsNum = 0;
 			{
-				TArray<UObject*> ObjectsToReplace;
-				ObjectsToReplace.Reserve(ObjectsToDelete.Num());
-
 				for(TWeakObjectPtr<UObject>& Object : ObjectsToDelete)
 				{
 					if(Object.IsValid())
@@ -2724,7 +2777,7 @@ namespace ObjectTools
 					TArray<UObject*> UDStructToReplace;
 					for (int32 Iter = 0; Iter < ObjectsToReplace.Num(); )
 					{
-						if (auto UDStruct = Cast<UUserDefinedStruct>(ObjectsToReplace[Iter]))
+						if (UUserDefinedStruct* UDStruct = Cast<UUserDefinedStruct>(ObjectsToReplace[Iter]))
 						{
 							ObjectsToReplace.RemoveAtSwap(Iter);
 							UDStructToReplace.Add(UDStruct);
@@ -2745,7 +2798,7 @@ namespace ObjectTools
 
 				{
 					FForceReplaceInfo ReplaceInfo;
-					ForceReplaceReferences(NULL, ObjectsToReplace, ReplaceInfo, false);
+					ForceReplaceReferences(nullptr, ObjectsToReplace, ReplaceInfo, false);
 					ReplaceableObjectsNum += ReplaceInfo.ReplaceableObjects.Num();
 				}
 			}
@@ -2764,7 +2817,7 @@ namespace ObjectTools
 			for(auto It = ObjectsToDelete.CreateIterator(); It; ++It)
 			{
 				UObject* CurObject = It->Get();
-				if ( !ensure(CurObject != NULL) )
+				if ( !ensure(CurObject != nullptr) )
 				{
 					continue;
 				}
@@ -2792,17 +2845,20 @@ namespace ObjectTools
 			}
 		}
 
+		TArray<UClass*> DeletedObjectClasses;
 		TArray<UPackage*> PotentialPackagesToDelete;
 		for(TWeakObjectPtr<UObject>& Object : ObjectsToDelete)
 		{
 			if(Object.IsValid())
 			{
+				DeletedObjectClasses.AddUnique(Object->GetClass());
 				PotentialPackagesToDelete.AddUnique(Object->GetOutermost());
 			}
 		}
 
 		if (PotentialPackagesToDelete.Num() > 0)
 		{
+			FEditorDelegates::OnAssetsDeleted.Broadcast(DeletedObjectClasses);
 			CleanupAfterSuccessfulDelete(PotentialPackagesToDelete);
 		}
 		ObjectsToDelete.Empty();
@@ -3280,6 +3336,11 @@ namespace ObjectTools
 						NewPackage->SetPackageFlags(PKG_DisallowExport);
 					}
 
+					if (Object->GetOutermost()->WorldTileInfo.IsValid())
+					{
+						NewPackage->WorldTileInfo = MakeUnique<FWorldTileInfo>(*Object->GetOutermost()->WorldTileInfo);
+					}
+
 					UObjectRedirector* Redirector = Cast<UObjectRedirector>( StaticFindObject(UObjectRedirector::StaticClass(), NewPackage, *NewObjectName) );
 					bool bFoundCompatibleRedirector = false;
 					// If we found a redirector, check that the object it points to is of the same class.
@@ -3375,17 +3436,18 @@ namespace ObjectTools
 				Redirector = NULL;
 			}
 
+			UPackage* OldPackage = Object->GetOutermost();
 			UPackage* NewPackage = CreatePackage( NULL, *PkgName );
+
 			// if this object is being renamed out of the MyLevel package into a content package, we need to mark it RF_Standalone
 			// so that it will be saved (UWorld::CleanupWorld() clears this flag for all objects inside the package)
 			if (!Object->HasAnyFlags(RF_Standalone)
-				&&	Object->GetOutermost()->ContainsMap()
+				&&	(OldPackage && OldPackage->ContainsMap())
 				&&	!NewPackage->GetOutermost()->ContainsMap() )
 			{
 				Object->SetFlags(RF_Standalone);
 			}
 
-			UPackage *OldPackage = Object->GetOutermost();
 			FString OldObjectFullName = Object->GetFullName();
 			FString OldObjectPathName = Object->GetPathName();
 			GEditor->RenameObject( Object, NewPackage, *ObjName, bLeaveRedirector ? REN_None : REN_DontCreateRedirectors );
@@ -3407,6 +3469,12 @@ namespace ObjectTools
 			UObjectRedirector* NewRedirector = FindObject<UObjectRedirector>(NULL, *OldObjectPathName);
 			if ( NewRedirector )
 			{
+				// If we created a redirector to a map asset, ensure the redirector package is flagged as containing a map for it to have the correct file extension.
+				if (NewPackage->ContainsMap())
+				{
+					NewRedirector->GetOutermost()->ThisContainsMap();
+				}
+
 				FAssetRegistryModule::AssetCreated(NewRedirector);
 			}
 
@@ -4125,6 +4193,7 @@ namespace ThumbnailTools
 			// Draw the thumbnail
 			const int32 XPos = 0;
 			const int32 YPos = 0;
+			const bool bAdditionalViewFamily = false;
 			RenderInfo->Renderer->Draw(
 				InObject,
 				XPos,
@@ -4132,7 +4201,8 @@ namespace ThumbnailTools
 				DrawWidth,
 				DrawHeight,
 				RenderTargetResource,
-				&Canvas
+				&Canvas, 
+				bAdditionalViewFamily
 				);
 		}
 
@@ -4589,6 +4659,8 @@ namespace ThumbnailTools
 	/** Loads thumbnails for the specified objects (or copies them from a cache, if they're already loaded.) */
 	bool ConditionallyLoadThumbnailsForObjects( const TArray< FName >& InObjectFullNames, FThumbnailMap& InOutThumbnails )
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(ConditionallyLoadThumbnailsForObjects);
+
 		// Create a list of unique package file names that we'll need to interrogate
 		struct FObjectFullNamesForPackage
 		{

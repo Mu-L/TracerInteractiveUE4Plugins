@@ -1,16 +1,12 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
-
-/*=============================================================================
-	MallocBinned.cpp: Binned memory allocator
-=============================================================================*/
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HAL/MallocBinned.h"
 #include "Misc/ScopeLock.h"
 #include "Misc/BufferedOutputDevice.h"
 
 #include "HAL/MemoryMisc.h"
-#include "HAL/LowLevelMemStats.h"
-#include "HAL/LowLevelMemTracker.h"
+
+PRAGMA_DISABLE_UNSAFE_TYPECAST_WARNINGS
 
 /** Malloc binned allocator specific stats. */
 DEFINE_STAT(STAT_Binned_OsCurrent);
@@ -47,8 +43,8 @@ struct FMallocBinned::FFreeMem
 	FFreeMem*	Next;
 	/** Number of consecutive free blocks here, at least 1. */
 	uint32		NumFreeBlocks;
-	/** make this a size of 16 */
-	uint32 		Padding;
+	/** make the struct 16 bytes for better alignment */
+	uint32		Padding;
 };
 
 // Memory pool info. 32 bytes.
@@ -415,7 +411,7 @@ struct FMallocBinned::Private
 		FPlatformMemory::OnOutOfMemory(Size, Alignment);
 	}
 
-	static FORCEINLINE void TrackStats(FPoolTable* Table, SIZE_T Size)
+	static FORCEINLINE void TrackStats(FPoolTable* Table, uint32 Size)
 	{
 #if STATS
 		// keep track of memory lost to padding
@@ -453,19 +449,18 @@ struct FMallocBinned::Private
 	/**
 	* Initializes tables for HashBuckets if they haven't already been initialized.
 	*/
-	static FORCEINLINE void InitializeHashBuckets(FMallocBinned& Allocator)
+	static FORCEINLINE PoolHashBucket* CreateHashBuckets(const FMallocBinned& Allocator)
 	{
-		if (!Allocator.HashBuckets)
-		{
-			// Init tables.
-            LLM_PLATFORM_SCOPE(ELLMTag::FMalloc);
-			Allocator.HashBuckets = (PoolHashBucket*)FPlatformMemory::BinnedAllocFromOS(Align(Allocator.MaxHashBuckets * sizeof(PoolHashBucket), Allocator.PageSize));
+		// Init tables.
+		LLM_PLATFORM_SCOPE(ELLMTag::FMalloc);
+		PoolHashBucket* Result = (PoolHashBucket*)FPlatformMemory::BinnedAllocFromOS(Align(Allocator.MaxHashBuckets * sizeof(PoolHashBucket), Allocator.PageSize));
 
-			for (uint32 i = 0; i < Allocator.MaxHashBuckets; ++i)
-			{
-				new (Allocator.HashBuckets + i) PoolHashBucket();
-			}
+		for (uint32 i = 0; i < Allocator.MaxHashBuckets; ++i)
+		{
+			new (Result + i) PoolHashBucket();
 		}
+
+		return Result;
 	}
 	
 	/** 
@@ -477,7 +472,7 @@ struct FMallocBinned::Private
 	{
 		if (!Allocator.HashBuckets)
 		{
-			InitializeHashBuckets(Allocator);
+			Allocator.HashBuckets = CreateHashBuckets(Allocator);
 		}
 		checkSlow(Allocator.HashBuckets);
 
@@ -533,9 +528,9 @@ struct FMallocBinned::Private
 	{
 		checkSlow(Allocator.HashBuckets);
 
-		uint32 Key       = Ptr >> Allocator.HashKeyShift;
+		uint32 Key       = (uint32)(Ptr >> Allocator.HashKeyShift);
 		uint32 Hash      = Key & (Allocator.MaxHashBuckets - 1);
-		uint32 PoolIndex = ((UPTRINT)Ptr >> Allocator.PoolBitShift) & Allocator.PoolMask;
+		uint32 PoolIndex = (uint32)(((UPTRINT)Ptr >> Allocator.PoolBitShift) & Allocator.PoolMask);
 
 		JumpOffset = 0;
 
@@ -656,7 +651,7 @@ struct FMallocBinned::Private
 				check(TrailingPool);
 
 				//Set trailing pools to point back to first pool
-				TrailingPool->SetAllocationSizes(0, 0, Offset, Allocator.BinnedOSTableIndex);
+				TrailingPool->SetAllocationSizes(0, 0, (uint32)Offset, (uint32)Allocator.BinnedOSTableIndex);
 			}
 
 			
@@ -1339,7 +1334,10 @@ void* FMallocBinned::Malloc(SIZE_T Size, uint32 Alignment)
 	{
 		//Make sure we have initialized our hash buckets even if we are using the NANO_MALLOC grabber, as otherwise we can end
 		//up making bad assumptions and trying to grab invalid data during a Realloc of this data.
-		Private::InitializeHashBuckets(*this);
+		if (!HashBuckets)
+		{
+			HashBuckets = Private::CreateHashBuckets(*this);
+		}
 		
 		bUsePools = false;
 		UPTRINT AlignedSize = Align(Size, Alignment);
@@ -1367,7 +1365,7 @@ void* FMallocBinned::Malloc(SIZE_T Size, uint32 Alignment)
 #endif
 			checkSlow(Size <= Table->BlockSize);
 
-			Private::TrackStats(Table, Size);
+			Private::TrackStats(Table, (uint32)Size);
 
 			FPoolInfo* Pool = Table->FirstPool;
 			if( !Pool )
@@ -1389,7 +1387,7 @@ void* FMallocBinned::Malloc(SIZE_T Size, uint32 Alignment)
 #endif
 			checkSlow(Size <= Table->BlockSize);
 
-			Private::TrackStats(Table, Size);
+			Private::TrackStats(Table, (uint32)Size);
 
 			FPoolInfo* Pool = Table->FirstPool;
 			if( !Pool )
@@ -1860,3 +1858,5 @@ const TCHAR* FMallocBinned::GetDescriptiveName()
 {
 	return TEXT("binned");
 }
+
+PRAGMA_ENABLE_UNSAFE_TYPECAST_WARNINGS

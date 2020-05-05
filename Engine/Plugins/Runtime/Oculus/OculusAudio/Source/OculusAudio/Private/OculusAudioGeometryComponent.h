@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Components/ActorComponent.h"
@@ -47,6 +47,6 @@ private:
 	bool IncludeChildren = true;
 
 	ovrAudioGeometry ovrGeometry;
-	ovrAudioContext* CachedContext;
+	ovrAudioContext CachedContext;
 	FTransform PreviousTransform;
 };

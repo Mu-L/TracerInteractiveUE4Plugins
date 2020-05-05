@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Components/ListViewBase.h"
 #include "UMGPrivate.h"
@@ -14,6 +14,7 @@ UListViewBase::UListViewBase(const FObjectInitializer& ObjectInitializer)
 	, EntryWidgetPool(*this)
 {
 	bIsVariable = true;
+	Clipping = EWidgetClipping::ClipToBounds;
 }
 
 #if WITH_EDITOR

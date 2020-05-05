@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ComponentReferenceCustomization.h"
 
@@ -47,8 +47,8 @@ void FComponentReferenceCustomization::CustomizeHeader(TSharedRef<IPropertyHandl
 
 	if (bUseComponentPicker)
 	{
-		UProperty* Property = InPropertyHandle->GetProperty();
-		check(Cast<UStructProperty>(Property) && FComponentReference::StaticStruct() == CastChecked<const UStructProperty>(Property)->Struct);
+		FProperty* Property = InPropertyHandle->GetProperty();
+		check(CastField<FStructProperty>(Property) && FComponentReference::StaticStruct() == CastFieldChecked<const FStructProperty>(Property)->Struct);
 
 		bAllowClear = !(InPropertyHandle->GetMetaDataProperty()->PropertyFlags & CPF_NoClear);
 		bAllowAnyActor = InPropertyHandle->HasMetaData(NAME_AllowAnyActor);
@@ -127,13 +127,10 @@ void FComponentReferenceCustomization::BuildClassFilters()
 		if (!MetaDataString.IsEmpty())
 		{
 			TArray<FString> ClassFilterNames;
-			MetaDataString.ParseIntoArray(ClassFilterNames, TEXT(","), true);
+			MetaDataString.ParseIntoArrayWS(ClassFilterNames, TEXT(","), true);
 
-			for (FString& ClassName : ClassFilterNames)
+			for (const FString& ClassName : ClassFilterNames)
 			{
-				// User can potentially list class names with leading or trailing whitespace
-				ClassName.TrimStartAndEndInline();
-
 				UClass* Class = FindObject<UClass>(ANY_PACKAGE, *ClassName);
 				if (!Class)
 				{
@@ -326,7 +323,7 @@ void FComponentReferenceCustomization::SetValue(const FComponentReference& Value
 	if (bIsEmpty || bAllowedToSetBasedOnFilter)
 	{
 		FString TextValue;
-		CastChecked<const UStructProperty>(PropertyHandle->GetProperty())->Struct->ExportText(TextValue, &Value, &Value, nullptr, EPropertyPortFlags::PPF_None, nullptr);
+		CastFieldChecked<const FStructProperty>(PropertyHandle->GetProperty())->Struct->ExportText(TextValue, &Value, &Value, nullptr, EPropertyPortFlags::PPF_None, nullptr);
 		ensure(PropertyHandle->SetValueFromFormattedString(TextValue) == FPropertyAccess::Result::Success);
 	}
 }
@@ -512,7 +509,7 @@ FText FComponentReferenceCustomization::OnGetComponentName() const
 		if (UActorComponent* ActorComponent = CachedComponent.Get())
 		{
 			const FName ComponentName = FComponentEditorUtils::FindVariableNameGivenComponentInstance(ActorComponent);
-			const bool bIsArrayVariable = !ComponentName.IsNone() && ActorComponent->GetOwner() != nullptr && FindField<UArrayProperty>(ActorComponent->GetOwner()->GetClass(), ComponentName);
+			const bool bIsArrayVariable = !ComponentName.IsNone() && ActorComponent->GetOwner() != nullptr && FindFProperty<FArrayProperty>(ActorComponent->GetOwner()->GetClass(), ComponentName);
 
 			if (!ComponentName.IsNone() && !bIsArrayVariable)
 			{

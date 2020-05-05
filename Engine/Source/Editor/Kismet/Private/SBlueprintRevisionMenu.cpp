@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "SBlueprintRevisionMenu.h"
@@ -242,12 +242,7 @@ void SBlueprintRevisionMenu::OnSourceControlQueryComplete(const FSourceControlOp
 	MenuBuilder.EndSection();
 	MenuBox->AddSlot() 
 	[
-		SNew(SBorder)
-		.BorderImage(FEditorStyle::GetBrush("Menu.Background"))
-		.Content()
-		[
-			MenuBuilder.MakeWidget(nullptr, 500)
-		]
+		MenuBuilder.MakeWidget(nullptr, 500)
 	];
 
 	SourceControlQueryOp.Reset();

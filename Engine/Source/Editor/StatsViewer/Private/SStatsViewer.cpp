@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SStatsViewer.h"
 #include "HAL/FileManager.h"
@@ -478,7 +478,7 @@ FReply SStatsViewer::OnExportClicked()
 				{
 					TSharedPtr< FPropertyPath > PropertyPath = Column->GetDataSource()->AsPropertyPath();
 					const FPropertyInfo& PropertyInfo = PropertyPath->GetRootProperty();
-					const TWeakObjectPtr< UProperty > Property = PropertyInfo.Property;
+					const TWeakFieldPtr< FProperty > Property = PropertyInfo.Property;
 					FString Name = UEditorEngine::GetFriendlyName(Property.Get());
 					Name.ReplaceInline( *Delimiter, TEXT(" ") );
 					HeaderRow += Name + Delimiter;
@@ -590,6 +590,45 @@ int32 SStatsViewer::GetObjectSetIndex() const
 	return CurrentObjectSetIndex;
 }
 
+void SStatsViewer::SwitchAndFilterPage(int32 Page, const FString& FilterValue, const FString& FilterProperty)
+{
+	FStatsPageManager& Manager = FStatsPageManager::Get();
+	if(Page < Manager.NumPages())
+	{
+		TSharedRef<IStatsPage> StatsPage = FStatsPageManager::Get().GetPage(Page);
+		SetDisplayedStats(StatsPage);
+
+		int32 FilterIndex = -1;
+		if(FilterProperty.Len())
+		{
+			int32 ColumnIndex = 0;
+			for (TFieldIterator<FProperty> PropertyIter( CurrentStats->GetEntryClass(), EFieldIteratorFlags::IncludeSuper ); PropertyIter; ++PropertyIter )
+			{
+				FProperty* Property = *PropertyIter;
+				if( Property->HasAnyPropertyFlags(CPF_AssetRegistrySearchable) )
+				{
+					FString FilterName = Property->GetDisplayNameText().ToString();
+					if( FilterName.Len() == 0 )
+					{
+						FilterName = UEditorEngine::GetFriendlyName(Property);
+					}
+					if(FilterName == FilterProperty)
+					{
+						FilterIndex = ColumnIndex;
+						break;
+					}
+					ColumnIndex++;
+				}
+			}
+		}
+		if(FilterIndex >= 0)
+		{
+			FilterTextBoxWidget->SetText(FText::FromString(FilterValue));
+			SetSearchFilter(FilterIndex);
+		}
+		Refresh();
+	}
+}
 void SStatsViewer::OnFilterTextChanged( const FText& InFilterText )
 {
 	FilterText = InFilterText.ToString();
@@ -674,9 +713,9 @@ TSharedRef<SWidget> SStatsViewer::OnGetFilterMenuContent() const
 	if( CurrentStats.IsValid() )
 	{
 		int32 ColumnIndex = 0;
-		for (TFieldIterator<UProperty> PropertyIter( CurrentStats->GetEntryClass(), EFieldIteratorFlags::IncludeSuper ); PropertyIter; ++PropertyIter )
+		for (TFieldIterator<FProperty> PropertyIter( CurrentStats->GetEntryClass(), EFieldIteratorFlags::IncludeSuper ); PropertyIter; ++PropertyIter )
 		{
-			TWeakObjectPtr< UProperty > Property = *PropertyIter;
+			TWeakFieldPtr< FProperty > Property = *PropertyIter;
 			if( Property->HasAnyPropertyFlags(CPF_AssetRegistrySearchable) )
 			{
 				FString FilterName = Property->GetDisplayNameText().ToString();
@@ -792,7 +831,7 @@ FText SStatsViewer::OnGetFilterComboButtonLabel() const
 	if( CurrentStats.IsValid() )
 	{
 		int32 ColumnIndex = 0;
-		for (TFieldIterator<UProperty> PropertyIter( CurrentStats->GetEntryClass(), EFieldIteratorFlags::IncludeSuper ); PropertyIter; ++PropertyIter )
+		for (TFieldIterator<FProperty> PropertyIter( CurrentStats->GetEntryClass(), EFieldIteratorFlags::IncludeSuper ); PropertyIter; ++PropertyIter )
 		{
 			if( PropertyIter->HasAnyPropertyFlags(CPF_AssetRegistrySearchable) )
 			{

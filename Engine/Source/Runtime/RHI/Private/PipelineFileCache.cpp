@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 PipelineFileCache.cpp: Pipeline state cache implementation.
@@ -19,6 +19,8 @@ PipelineFileCache.cpp: Pipeline state cache implementation.
 #include "HAL/PlatformFilemanager.h"
 #include "Misc/FileHelper.h"
 #include "ProfilingDebugging/CsvProfiler.h"
+#include "String/LexFromString.h"
+#include "String/ParseTokens.h"
 
 static FString JOURNAL_FILE_EXTENSION(TEXT(".jnl"));
 
@@ -79,7 +81,7 @@ static TAutoConsoleVariable<int32> CVarPSOFileCacheEnabled(
 static TAutoConsoleVariable<int32> CVarPSOFileCacheLogPSO(
 														   TEXT("r.ShaderPipelineCache.LogPSO"),
 														   PIPELINE_CACHE_DEFAULT_ENABLED,
-														   TEXT("1 Logs new PSO entries into the file cache and allow saving, 0 uses existing PSO file cache in readonly mode (if enabled)."),
+														   TEXT("1 Logs new PSO entries into the file cache and allows saving."),
 														   ECVF_Default | ECVF_RenderThreadSafe
 														   );
 
@@ -100,11 +102,7 @@ static FAutoConsoleVariableRef CVarPSOFileCachePrintNewPSODescriptors(
 
 static TAutoConsoleVariable<int32> CVarPSOFileCacheSaveUserCache(
                                                             TEXT("r.ShaderPipelineCache.SaveUserCache"),
-#if PIPELINE_CACHE_DEFAULT_ENABLED
-															(int32)1,
-#else
-															(int32)0,
-#endif
+															PIPELINE_CACHE_DEFAULT_ENABLED && UE_BUILD_SHIPPING,
                                                             TEXT("If > 0 then any missed PSOs will be saved to a writable user cache file for subsequent runs to load and avoid in-game hitches. Enabled by default on macOS only."),
                                                             ECVF_Default | ECVF_RenderThreadSafe
                                                             );
@@ -136,6 +134,7 @@ TMap<uint32, FPSOUsageData> FPipelineFileCache::RunTimeToPSOUsage;
 TMap<uint32, FPSOUsageData> FPipelineFileCache::NewPSOUsage;
 TMap<uint32, FPipelineStateStats*> FPipelineFileCache::Stats;
 TSet<FPipelineCacheFileFormatPSO> FPipelineFileCache::NewPSOs;
+TSet<uint32> FPipelineFileCache::NewPSOHashes;
 uint32 FPipelineFileCache::NumNewPSOs;
 FPipelineFileCache::PSOOrder FPipelineFileCache::RequestedOrder = FPipelineFileCache::PSOOrder::MostToLeastUsed;
 bool FPipelineFileCache::FileCacheEnabled = false;
@@ -270,31 +269,33 @@ FString FPipelineFileCacheRasterizerState::ToString() const
 	);
 }
 
-void FPipelineFileCacheRasterizerState::FromString(const FString& InSrc)
+void FPipelineFileCacheRasterizerState::FromString(const FStringView& Src)
 {
-	FString Src = InSrc;
-	Src.ReplaceInline(TEXT("\r"), TEXT(" "));
-	Src.ReplaceInline(TEXT("\n"), TEXT(" "));
-	Src.ReplaceInline(TEXT("\t"), TEXT(" "));
-	Src.ReplaceInline(TEXT("<"), TEXT(" "));
-	Src.ReplaceInline(TEXT(">"), TEXT(" "));
-	TArray<FString> Parts;
-	Src.TrimStartAndEnd().ParseIntoArray(Parts, TEXT(" "));
+	constexpr int32 PartCount = 6;
 
-	check(Parts.Num() == 6 && sizeof(FillMode) == 1 && sizeof(CullMode) == 1 && sizeof(bAllowMSAA) == 1 && sizeof(bEnableLineAA) == 1); //not a very robust parser
-	LexFromString(DepthBias, *Parts[0]);
-	LexFromString(SlopeScaleDepthBias, *Parts[1]);
-	LexFromString((uint8&)FillMode, *Parts[2]);
-	LexFromString((uint8&)CullMode, *Parts[3]);
-	LexFromString((uint8&)bAllowMSAA, *Parts[4]);
-	LexFromString((uint8&)bEnableLineAA, *Parts[5]);
+	TArray<FStringView, TInlineAllocator<PartCount>> Parts;
+	UE::String::ParseTokensMultiple(Src.TrimStartAndEnd(), {TEXT('\r'), TEXT('\n'), TEXT('\t'), TEXT('<'), TEXT('>'), TEXT(' ')},
+		[&Parts](FStringView Part) { if (!Part.IsEmpty()) { Parts.Add(Part); } });
+
+	check(Parts.Num() == PartCount && sizeof(FillMode) == 1 && sizeof(CullMode) == 1 && sizeof(bAllowMSAA) == 1 && sizeof(bEnableLineAA) == 1); //not a very robust parser
+	const FStringView* PartIt = Parts.GetData();
+
+	LexFromString(DepthBias, *PartIt++);
+	LexFromString(SlopeScaleDepthBias, *PartIt++);
+	LexFromString((uint8&)FillMode, *PartIt++);
+	LexFromString((uint8&)CullMode, *PartIt++);
+	LexFromString((uint8&)bAllowMSAA, *PartIt++);
+	LexFromString((uint8&)bEnableLineAA, *PartIt++);
+
+	check(Parts.GetData() + PartCount == PartIt);
 }
 
 FString FPipelineCacheFileFormatPSO::ComputeDescriptor::ToString() const
 {
 	return ComputeShader.ToString();
 }
-void FPipelineCacheFileFormatPSO::ComputeDescriptor::FromString(const FString& Src)
+
+void FPipelineCacheFileFormatPSO::ComputeDescriptor::FromString(const FStringView& Src)
 {
 	ComputeShader.FromString(Src.TrimStartAndEnd());
 }
@@ -318,18 +319,24 @@ FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::ShadersToString() const
 
 	return Result;
 }
-void FPipelineCacheFileFormatPSO::GraphicsDescriptor::ShadersFromString(const FString& Src)
-{
-	TArray<FString> Parts;
-	Src.TrimStartAndEnd().ParseIntoArray(Parts, TEXT(","));
-	int32 PartIndex = 0;
-	check(Parts.Num() == 5); //not a very robust parser
 
-	VertexShader.FromString(Parts[PartIndex++]);
-	FragmentShader.FromString(Parts[PartIndex++]);
-	GeometryShader.FromString(Parts[PartIndex++]);
-	HullShader.FromString(Parts[PartIndex++]);
-	DomainShader.FromString(Parts[PartIndex++]);
+void FPipelineCacheFileFormatPSO::GraphicsDescriptor::ShadersFromString(const FStringView& Src)
+{
+	constexpr int32 PartCount = 5;
+
+	TArray<FStringView, TInlineAllocator<PartCount>> Parts;
+	UE::String::ParseTokens(Src.TrimStartAndEnd(), TEXT(','), [&Parts](FStringView Part) { Parts.Add(Part); });
+
+	check(Parts.Num() == PartCount); //not a very robust parser
+	const FStringView* PartIt = Parts.GetData();
+
+	VertexShader.FromString(*PartIt++);
+	FragmentShader.FromString(*PartIt++);
+	GeometryShader.FromString(*PartIt++);
+	HullShader.FromString(*PartIt++);
+	DomainShader.FromString(*PartIt++);
+
+	check(Parts.GetData() + PartCount == PartIt);
 }
 
 FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::ShaderHeaderLine()
@@ -400,74 +407,80 @@ FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateToString() const
 	return Result.Left(Result.Len() - 1); // remove trailing comma
 }
 
-bool FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateFromString(const FString& Src)
+bool FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateFromString(const FStringView& Src)
 {
-	TArray<FString> Parts;
-	Src.TrimStartAndEnd().ParseIntoArray(Parts, TEXT(","));
-	int32 PartIndex = 0;
+	constexpr int32 PartCount = FPipelineCacheGraphicsDescPartsNum;
+
+	TArray<FStringView, TInlineAllocator<PartCount>> Parts;
+	UE::String::ParseTokens(Src.TrimStartAndEnd(), TEXT(','), [&Parts](FStringView Part) { Parts.Add(Part); });
 
 	// check if we have expected number of parts
-	if (Parts.Num() != FPipelineCacheGraphicsDescPartsNum)
+	if (Parts.Num() != PartCount)
 	{
 		// instead of crashing let caller handle this case
 		return false;
 	}
 
-	check(Parts.Num() - PartIndex >= 3); //not a very robust parser
-	BlendState.FromString(Parts[PartIndex++]);
-	RasterizerState.FromString(Parts[PartIndex++]);
-	DepthStencilState.FromString(Parts[PartIndex++]);
+	const FStringView* PartIt = Parts.GetData();
+	const FStringView* PartEnd = PartIt + PartCount;
 
-	check(Parts.Num() - PartIndex >= 3 && sizeof(EPixelFormat) == sizeof(uint32)); //not a very robust parser
-	LexFromString(MSAASamples, *Parts[PartIndex++]);
-	LexFromString((uint32&)DepthStencilFormat, *Parts[PartIndex++]);
-	LexFromString(DepthStencilFlags, *Parts[PartIndex++]);
+	check(PartEnd - PartIt >= 3); //not a very robust parser
+	BlendState.FromString(*PartIt++);
+	RasterizerState.FromString(*PartIt++);
+	DepthStencilState.FromString(*PartIt++);
 
-	check(Parts.Num() - PartIndex >= 5 && sizeof(DepthLoad) == 1 && sizeof(StencilLoad) == 1 && sizeof(DepthStore) == 1 && sizeof(StencilStore) == 1 && sizeof(PrimitiveType) == 4); //not a very robust parser
-	LexFromString((uint32&)DepthLoad, *Parts[PartIndex++]);
-	LexFromString((uint32&)StencilLoad, *Parts[PartIndex++]);
-	LexFromString((uint32&)DepthStore, *Parts[PartIndex++]);
-	LexFromString((uint32&)StencilStore, *Parts[PartIndex++]);
-	LexFromString((uint32&)PrimitiveType, *Parts[PartIndex++]);
+	check(PartEnd - PartIt >= 3 && sizeof(EPixelFormat) == sizeof(uint32)); //not a very robust parser
+	LexFromString(MSAASamples, *PartIt++);
+	LexFromString((uint32&)DepthStencilFormat, *PartIt++);
+	LexFromString(DepthStencilFlags, *PartIt++);
 
-	check(Parts.Num() - PartIndex >= 1); //not a very robust parser
-	LexFromString(RenderTargetsActive, *Parts[PartIndex++]);
+	check(PartEnd - PartIt >= 5 && sizeof(DepthLoad) == 1 && sizeof(StencilLoad) == 1 && sizeof(DepthStore) == 1 && sizeof(StencilStore) == 1 && sizeof(PrimitiveType) == 4); //not a very robust parser
+	LexFromString((uint32&)DepthLoad, *PartIt++);
+	LexFromString((uint32&)StencilLoad, *PartIt++);
+	LexFromString((uint32&)DepthStore, *PartIt++);
+	LexFromString((uint32&)StencilStore, *PartIt++);
+	LexFromString((uint32&)PrimitiveType, *PartIt++);
+
+	check(PartEnd - PartIt >= 1); //not a very robust parser
+	LexFromString(RenderTargetsActive, *PartIt++);
 
 	for (int32 Index = 0; Index < MaxSimultaneousRenderTargets; Index++)
 	{
-		check(Parts.Num() - PartIndex >= 4 && sizeof(ERenderTargetLoadAction) == 1 && sizeof(ERenderTargetStoreAction) == 1 && sizeof(EPixelFormat) == sizeof(uint32)); //not a very robust parser
-		LexFromString((uint32&)(RenderTargetFormats[Index]), *Parts[PartIndex++]);
-		LexFromString(RenderTargetFlags[Index], *Parts[PartIndex++]);
+		check(PartEnd - PartIt >= 4 && sizeof(ERenderTargetLoadAction) == 1 && sizeof(ERenderTargetStoreAction) == 1 && sizeof(EPixelFormat) == sizeof(uint32)); //not a very robust parser
+		LexFromString((uint32&)(RenderTargetFormats[Index]), *PartIt++);
+		LexFromString(RenderTargetFlags[Index], *PartIt++);
 		uint8 Load, Store;
-		LexFromString(Load, *Parts[PartIndex++]);
-		LexFromString(Store, *Parts[PartIndex++]);
+		LexFromString(Load, *PartIt++);
+		LexFromString(Store, *PartIt++);
 	}
 
 	// parse sub-pass information
 	{
 		uint32 LocalSubpassHint = 0;
 		uint32 LocalSubpassIndex = 0;
-		check(Parts.Num() - PartIndex >= 2);
-		LexFromString(LocalSubpassHint, *Parts[PartIndex++]);
-		LexFromString(LocalSubpassIndex, *Parts[PartIndex++]);
+		check(PartEnd - PartIt >= 2);
+		LexFromString(LocalSubpassHint, *PartIt++);
+		LexFromString(LocalSubpassIndex, *PartIt++);
 		SubpassHint = LocalSubpassHint;
 		SubpassIndex = LocalSubpassIndex;
 	}
-	
-	check(Parts.Num() - PartIndex >= 1); //not a very robust parser
+
+	check(PartEnd - PartIt >= 1); //not a very robust parser
 	int32 VertDescNum = 0;
-	LexFromString(VertDescNum, *Parts[PartIndex++]);
+	LexFromString(VertDescNum, *PartIt++);
 	check(VertDescNum >= 0 && VertDescNum <= MaxVertexElementCount);
 
 	VertexDescriptor.Empty(VertDescNum);
 	VertexDescriptor.AddZeroed(VertDescNum);
 
-	check(Parts.Num() - PartIndex == MaxVertexElementCount); //not a very robust parser
+	check(PartEnd - PartIt == MaxVertexElementCount); //not a very robust parser
 	for (int32 Index = 0; Index < VertDescNum; Index++)
 	{
-		VertexDescriptor[Index].FromString(Parts[PartIndex++]);
+		VertexDescriptor[Index].FromString(*PartIt++);
 	}
-	
+
+	check(PartIt + MaxVertexElementCount == PartEnd + VertDescNum);
+
 	VertexDescriptor.Sort([](FVertexElement const& A, FVertexElement const& B)
 	  {
 		  if (A.StreamIndex < B.StreamIndex)
@@ -557,17 +570,21 @@ FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::ToString() const
 	return FString::Printf(TEXT("%s,%s"), *ShadersToString(), *StateToString());
 }
 
-bool FPipelineCacheFileFormatPSO::GraphicsDescriptor::FromString(const FString& Src)
+bool FPipelineCacheFileFormatPSO::GraphicsDescriptor::FromString(const FStringView& Src)
 {
-	static const int32 NumShaderParts = 5;
-	TArray<FString> Parts;
-	Src.TrimStartAndEnd().ParseIntoArray(Parts, TEXT(","));
-	check(Parts.Num() > NumShaderParts);
-	TArray<FString> StateParts(Parts);
-	StateParts.RemoveAt(0, NumShaderParts);
-	Parts.RemoveAt(NumShaderParts, Parts.Num() - 5);
-	ShadersFromString(FString::Join(Parts, TEXT(",")));
-	return StateFromString(FString::Join(StateParts, TEXT(",")));
+	constexpr int32 NumShaderParts = 5;
+
+	int32 StateOffset = 0;
+	for (int32 CommaCount = 0; CommaCount < NumShaderParts; ++CommaCount)
+	{
+		int32 CommaOffset = 0;
+		bool FoundComma = Src.RightChop(StateOffset).FindChar(TEXT(','), CommaOffset);
+		check(FoundComma);
+		StateOffset += CommaOffset + 1;
+	}
+
+	ShadersFromString(Src.Left(StateOffset - 1));
+	return StateFromString(Src.RightChop(StateOffset));
 }
 
 FString FPipelineCacheFileFormatPSO::GraphicsDescriptor::HeaderLine()
@@ -592,20 +609,20 @@ FString FPipelineCacheFileFormatPSO::CommonToString() const
 	return FString::Printf(TEXT("\"%d,%llu\""), Count, Mask);
 }
 
-void FPipelineCacheFileFormatPSO::CommonFromString(const FString& Src)
+void FPipelineCacheFileFormatPSO::CommonFromString(const FStringView& Src)
 {
 #if PSO_COOKONLY_DATA
-    TArray<FString> Parts;
-    Src.TrimStartAndEnd().ParseIntoArray(Parts, TEXT(","));
-	
+    TArray<FStringView, TInlineAllocator<2>> Parts;
+	UE::String::ParseTokens(Src.TrimStartAndEnd(), TEXT(','), [&Parts](FStringView Part) { Parts.Add(Part); });
+
 	if (Parts.Num() == 1)
 	{
-		LexFromString(UsageMask, *Parts[0]);
+		LexFromString(UsageMask, Parts[0]);
 	}
 	else if(Parts.Num() > 1)
 	{
-		LexFromString(BindCount, *Parts[0]);
-		LexFromString(UsageMask, *Parts[1]);
+		LexFromString(BindCount, Parts[0]);
+		LexFromString(UsageMask, Parts[1]);
 	}
 #endif
 }
@@ -988,6 +1005,7 @@ FPipelineCacheFileFormatPSO::FPipelineCacheFileFormatPSO()
 	FMemory::Memset(&PSO.GraphicsDesc, 0, sizeof(GraphicsDescriptor));
 	
 	check (Init.BoundShaderState.VertexDeclarationRHI);
+	check (Init.BoundShaderState.VertexDeclarationRHI->IsValid());
 	{
 		bOK &= Init.BoundShaderState.VertexDeclarationRHI->GetInitializer(PSO.GraphicsDesc.VertexDescriptor);
 		check(bOK);
@@ -1292,7 +1310,8 @@ public:
 	
 	bool OpenPipelineFileCache(FString const& FilePath, FGuid& Guid, TSharedPtr<IAsyncReadFileHandle, ESPMode::ThreadSafe>& Handle, FPipelineCacheFileFormatTOC& Content)
 	{
-		bool bOK = false;
+		bool bSuccess = false;
+
 		FArchive* FileReader = IFileManager::Get().CreateFileReader(*FilePath);
 		if (FileReader)
 		{
@@ -1307,19 +1326,18 @@ public:
 				UE_LOG(LogRHI, Log, TEXT("FPipelineCacheFile Header Game Version: %d"), Header.GameVersion);
 				UE_LOG(LogRHI, Log, TEXT("FPipelineCacheFile Header Engine Data Version: %d"), Header.Version);
 				UE_LOG(LogRHI, Log, TEXT("FPipelineCacheFile Header TOC Offset: %llu"), Header.TableOffset);
-				UE_LOG(LogRHI, Log, TEXT("FPipelineCacheFile File Size: %lldBytes"), FileReader->TotalSize());
+				UE_LOG(LogRHI, Log, TEXT("FPipelineCacheFile File Size: %lld Bytes"), FileReader->TotalSize());
 				
 				if(Header.TableOffset < (uint64)FileReader->TotalSize())
 				{
-					TOCOffset = Header.TableOffset;
-					Guid = Header.Guid;
 					FileReader->Seek(Header.TableOffset);
-					
 					*FileReader << Content;
-					bOK = !FileReader->IsError();
+					
+					// FPipelineCacheFileFormatTOC archive read can set the FArchive to error on failure
+					bSuccess = !FileReader->IsError();
 				}
 				
-				if(!bOK)
+				if(!bSuccess)
 				{
 					UE_LOG(LogRHI, Log, TEXT("FPipelineCacheFile: %s is corrupt reading TOC"), *FilePath);
 				}
@@ -1327,14 +1345,27 @@ public:
 			
 			if(!FileReader->Close())
 			{
-				bOK = false;
+				bSuccess = false;
 			}
-			delete FileReader;
 			
-			if(bOK)
+			delete FileReader;
+			FileReader = nullptr;
+			
+			if(bSuccess)
 			{
-				UE_LOG(LogRHI, Log, TEXT("Opened FPipelineCacheFile: %s (GUID: %s) with %d entries."), *FilePath, *Guid.ToString(), Content.MetaData.Num());
 				Handle = MakeShareable(FPlatformFileManager::Get().GetPlatformFile().OpenAsyncRead(*FilePath));
+				if(Handle.IsValid())
+				{
+					UE_LOG(LogRHI, Log, TEXT("Opened FPipelineCacheFile: %s (GUID: %s) with %d entries."), *FilePath, *Guid.ToString(), Content.MetaData.Num());
+					
+					Guid = Header.Guid;
+					TOCOffset = Header.TableOffset;
+				}
+				else
+				{
+					UE_LOG(LogRHI, Log, TEXT("Filed to create async read file handle to FPipelineCacheFile: %s (GUID: %s)"), *FilePath, *Guid.ToString());
+					bSuccess = false;
+				}
 			}
 		}
 		else
@@ -1342,7 +1373,7 @@ public:
 			UE_LOG(LogRHI, Log, TEXT("Could not open FPipelineCacheFile: %s"), *FilePath);
 		}
 		
-		return bOK;
+		return bSuccess;
 	}
 	
     bool ShouldDeleteExistingUserCache()
@@ -1352,10 +1383,15 @@ public:
         if (!bOnce)
         {
             bOnce = true;
-            bCmdLineForce = FParse::Param(FCommandLine::Get(), TEXT("deleteuserpsocache"));
+            bCmdLineForce = FParse::Param(FCommandLine::Get(), TEXT("deleteuserpsocache")) || FParse::Param(FCommandLine::Get(), TEXT("logPSO"));
             UE_CLOG(bCmdLineForce, LogRHI, Warning, TEXT("****************************** Deleting user-writable PSO cache as requested on command line"));
         }
         return bCmdLineForce;
+    }
+    
+    bool ShouldLoadUserCache()
+    {
+		return FPipelineFileCache::LogPSOtoFileCache() && (CVarPSOFileCacheSaveUserCache.GetValueOnAnyThread() > 0);
     }
     
 	bool OpenPipelineFileCache(FString const& FileName, EShaderPlatform Platform, FGuid& OutGameFileGuid)
@@ -1428,7 +1464,7 @@ public:
 
         bool bUserFileOk = false;
         
-        if (FPipelineFileCache::LogPSOtoFileCache() && (CVarPSOFileCacheSaveUserCache.GetValueOnAnyThread() > 0))
+        if (ShouldLoadUserCache())
         {
 			FPipelineCacheFileFormatTOC UserTOC;
             bUserFileOk = OpenPipelineFileCache(FilePath, UserFileGuid, UserAsyncFileHandle, UserTOC);
@@ -2327,7 +2363,7 @@ public:
 			if (Meta.FileGuid == GameFileGuid)
 			{
                 FPipelineCacheFileFormatPSOMetaData const* GameMeta = GameTOC.MetaData.Find(Entry->Hash);
-                if (GameMeta)
+                if (GameMeta && GameAsyncFileHandle.IsValid())
                 {
                     Entry->Data.SetNum(GameMeta->FileSize);
                     Entry->ParentFileHandle = GameAsyncFileHandle;
@@ -2335,16 +2371,25 @@ public:
                 }
                 else
                 {
-                    UE_LOG(LogRHI, Verbose, TEXT("Encountered a PSO entry %u that has been removed from the game-content file: %s"), Entry->Hash, *Meta.FileGuid.ToString());
+                    UE_LOG(LogRHI, Verbose, TEXT("Encountered a PSO entry %u that has been removed from the game-content file: %s or no game-content file"), Entry->Hash, *Meta.FileGuid.ToString());
                     Entry->bValid = false;
                     continue;
                 }
 			}
 			else if (Meta.FileGuid == UserFileGuid)
 			{
-                Entry->Data.SetNum(Meta.FileSize);
-				Entry->ParentFileHandle = UserAsyncFileHandle;
-				Entry->ReadRequest = MakeShareable(UserAsyncFileHandle->ReadRequest(Meta.FileOffset, Meta.FileSize, AIOP_Normal, nullptr, Entry->Data.GetData()));
+				if(UserAsyncFileHandle.IsValid())
+				{
+					Entry->Data.SetNum(Meta.FileSize);
+					Entry->ParentFileHandle = UserAsyncFileHandle;
+					Entry->ReadRequest = MakeShareable(UserAsyncFileHandle->ReadRequest(Meta.FileOffset, Meta.FileSize, AIOP_Normal, nullptr, Entry->Data.GetData()));
+				}
+				else
+				{
+					UE_LOG(LogRHI, Verbose, TEXT("Encountered a PSO entry %u that references user content file ID: %s but async handle not valid"), Entry->Hash, *Meta.FileGuid.ToString());
+					Entry->bValid = false;
+                    continue;
+				}
 			}
             else
             {
@@ -2587,6 +2632,7 @@ void FPipelineFileCache::Shutdown()
 		}
 		Stats.Empty();
 		NewPSOs.Empty();
+		NewPSOHashes.Empty();
         NumNewPSOs = 0;
 		
 		FileCacheEnabled = false;
@@ -2613,6 +2659,7 @@ bool FPipelineFileCache::OpenPipelineFileCache(FString const& Name, EShaderPlatf
 			
 			// File Cache now exists - these caches should be empty for this file otherwise will have false positives from any previous file caching - if not something has been caching when it should not be
 			check(NewPSOs.Num() == 0);
+			check(NewPSOHashes.Num() == 0);
 			check(RunTimeToPSOUsage.Num() == 0);
 		}
 	}
@@ -2681,6 +2728,7 @@ void FPipelineFileCache::ClosePipelineFileCache()
 			RunTimeToPSOUsage.Empty();
 			NewPSOUsage.Empty();
 			NewPSOs.Empty();
+			NewPSOHashes.Empty();
             NumNewPSOs = 0;
 			
 			SET_MEMORY_STAT(STAT_NewCachedPSOMemory, 0);
@@ -2691,7 +2739,7 @@ void FPipelineFileCache::ClosePipelineFileCache()
 
 void FPipelineFileCache::RegisterPSOUsageDataUpdateForNextSave(FPSOUsageData& UsageData)
 {
-	FPSOUsageData& CurrentEntry = NewPSOUsage.FindOrAdd(UsageData.PSOHash);	
+	FPSOUsageData& CurrentEntry = NewPSOUsage.FindOrAdd(UsageData.PSOHash);
 	CurrentEntry.PSOHash = UsageData.PSOHash;
 	CurrentEntry.UsageMask |= UsageData.UsageMask;
 	CurrentEntry.EngineFlags |= UsageData.EngineFlags;
@@ -2722,25 +2770,26 @@ void FPipelineFileCache::CacheGraphicsPSO(uint32 RunTimeHash, FGraphicsPipelineS
 					
 					if (!FileCache->IsPSOEntryCached(NewEntry, &CurrentUsageData))
 					{
-						bool bActuallyNewPSO = true;
-						if (IsOpenGLPlatform(GMaxRHIShaderPlatform)) // OpenGL is a BSS platform and so we don't report BSS matches as missing.
+						bool bActuallyNewPSO = !NewPSOHashes.Contains(PSOHash);
+						if (bActuallyNewPSO && IsOpenGLPlatform(GMaxRHIShaderPlatform)) // OpenGL is a BSS platform and so we don't report BSS matches as missing.
 						{
 							bActuallyNewPSO = !FileCache->IsBSSEquivalentPSOEntryCached(NewEntry);
 						}
 						if (bActuallyNewPSO)
 						{
 							CSV_EVENT(PSO, TEXT("Encountered new graphics PSO"));
-							UE_LOG(LogRHI, Warning, TEXT("Encountered a new graphics PSO: %u"), PSOHash);
+							UE_LOG(LogRHI, Display, TEXT("Encountered a new graphics PSO: %u"), PSOHash);
 							if (GPSOFileCachePrintNewPSODescriptors > 0)
 							{
-								UE_LOG(LogRHI, Warning, TEXT("New Graphics PSO (%u) Description: %s"), PSOHash, *NewEntry.GraphicsDesc.ToString());
+								UE_LOG(LogRHI, Display, TEXT("New Graphics PSO (%u) Description: %s"), PSOHash, *NewEntry.GraphicsDesc.ToString());
 							}
 							if (LogPSOtoFileCache())
 							{
 								NewPSOs.Add(NewEntry);
 								INC_MEMORY_STAT_BY(STAT_NewCachedPSOMemory, sizeof(FPipelineCacheFileFormatPSO) + sizeof(uint32) + sizeof(uint32));
 							}
-							
+							NewPSOHashes.Add(PSOHash);
+
 							NumNewPSOs++;
 							INC_DWORD_STAT(STAT_NewGraphicsPipelineStateCount);
 							INC_DWORD_STAT(STAT_TotalGraphicsPipelineStateCount);
@@ -2797,26 +2846,32 @@ void FPipelineFileCache::CacheComputePSO(uint32 RunTimeHash, FRHIComputeShader c
 					
 					if (!FileCache->IsPSOEntryCached(NewEntry, &CurrentUsageData))
 					{
-						CSV_EVENT(PSO, TEXT("Encountered new compute PSO"));
-						UE_LOG(LogRHI, Warning, TEXT("Encountered a new compute PSO: %u"), PSOHash);
-						if (GPSOFileCachePrintNewPSODescriptors > 0)
+						bool bActuallyNewPSO = !NewPSOHashes.Contains(PSOHash);
+						if (bActuallyNewPSO)
 						{
-							UE_LOG(LogRHI, Warning, TEXT("New compute PSO (%u) Description: %s"), PSOHash, *NewEntry.ComputeDesc.ComputeShader.ToString());
-						}
-
-						if (LogPSOtoFileCache())
-						{
-							NewPSOs.Add(NewEntry);
-							INC_MEMORY_STAT_BY(STAT_NewCachedPSOMemory, sizeof(FPipelineCacheFileFormatPSO) + sizeof(uint32) + sizeof(uint32));
-						}
-
-						NumNewPSOs++;
-						INC_DWORD_STAT(STAT_NewComputePipelineStateCount);
-						INC_DWORD_STAT(STAT_TotalComputePipelineStateCount);
-						
-						if (ReportNewPSOs() && PSOLoggedEvent.IsBound())
-						{
-							PSOLoggedEvent.Broadcast(NewEntry);
+							CSV_EVENT(PSO, TEXT("Encountered new compute PSO"));
+							UE_LOG(LogRHI, Display, TEXT("Encountered a new compute PSO: %u"), PSOHash);
+							if (GPSOFileCachePrintNewPSODescriptors > 0)
+							{
+								UE_LOG(LogRHI, Display, TEXT("New compute PSO (%u) Description: %s"), PSOHash, *NewEntry.ComputeDesc.ComputeShader.ToString());
+							}
+							
+							if (LogPSOtoFileCache())
+							{
+								NewPSOs.Add(NewEntry);
+								INC_MEMORY_STAT_BY(STAT_NewCachedPSOMemory, sizeof(FPipelineCacheFileFormatPSO) + sizeof(uint32) + sizeof(uint32));
+							}
+							
+							NewPSOHashes.Add(PSOHash);
+							
+							NumNewPSOs++;
+							INC_DWORD_STAT(STAT_NewComputePipelineStateCount);
+							INC_DWORD_STAT(STAT_TotalComputePipelineStateCount);
+							
+							if (ReportNewPSOs() && PSOLoggedEvent.IsBound())
+							{
+								PSOLoggedEvent.Broadcast(NewEntry);
+							}
 						}
 					}
 					

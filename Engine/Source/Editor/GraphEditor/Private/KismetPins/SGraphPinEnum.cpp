@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "KismetPins/SGraphPinEnum.h"
@@ -100,6 +100,7 @@ TSharedRef<SWidget>	SGraphPinEnum::GetDefaultValueWidget()
 		.ComboItemList( ComboItems )
 		.VisibleText( this, &SGraphPinEnum::OnGetText )
 		.OnSelectionChanged( this, &SGraphPinEnum::ComboBoxSelectionChanged )
+		.IsEnabled(this, &SGraphPin::GetDefaultValueIsEditable)
 		.Visibility( this, &SGraphPin::GetDefaultValueVisibility )
 		.OnGetDisplayName(this, &SGraphPinEnum::OnGetFriendlyName)
 		.OnGetTooltip(this, &SGraphPinEnum::OnGetTooltip);

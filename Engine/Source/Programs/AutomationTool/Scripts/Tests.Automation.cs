@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -1428,10 +1428,7 @@ class DumpBranch : BuildCommand
 	{
 		LogInformation("************************* DumpBranch");
 
-		var HostPlatforms = new List<UnrealTargetPlatform>();
-		HostPlatforms.Add(UnrealTargetPlatform.Win64);
-		HostPlatforms.Add(UnrealTargetPlatform.Mac);
-		new BranchInfo(HostPlatforms);
+		new BranchInfo();
 	}
 }
 

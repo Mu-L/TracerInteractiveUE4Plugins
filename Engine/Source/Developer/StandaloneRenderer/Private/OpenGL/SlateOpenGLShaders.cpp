@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OpenGL/SlateOpenGLShaders.h"
 #include "Misc/FileHelper.h"
@@ -94,16 +94,16 @@ void FSlateOpenGLShader::CompileShader( const FString& Filename, GLenum ShaderTy
 	FString Header;
 	
 	// pass the #define along to the shader
-#if PLATFORM_USES_ES2
-	Header.Append("#define PLATFORM_USES_ES2 1\n");
+#if PLATFORM_USES_GLES
+	Header.Append("#define PLATFORM_USES_GLES 1\n");
 #elif PLATFORM_LINUX
 	#if LINUX_USE_OPENGL_3_2
-	Header.Append("#version 150\n#define PLATFORM_USES_ES2 0\n");
+	Header.Append("#version 150\n#define PLATFORM_USES_GLES 0\n");
 	#else
-	Header.Append("#version 120\n#define PLATFORM_USES_ES2 0\n");
+	Header.Append("#version 120\n#define PLATFORM_USES_GLES 0\n");
 	#endif // LINUX_USE_OPENGL_3_2
 #else
-	Header.Append("#version 120\n#define PLATFORM_USES_ES2 0\n");
+	Header.Append("#version 120\n#define PLATFORM_USES_GLES 0\n");
 #endif
 	
 #if PLATFORM_LINUX
@@ -276,6 +276,7 @@ void FSlateOpenGLElementProgram::CreateProgram( const FSlateOpenGLVS& VertexShad
 	IgnoreTextureAlphaParam = glGetUniformLocation( ProgramID, "IgnoreTextureAlpha" );
 	ShaderTypeParam = glGetUniformLocation( ProgramID, "ShaderType" );
 	MarginUVsParam = glGetUniformLocation( ProgramID, "MarginUVs" );
+	GammaValuesParam = glGetUniformLocation(ProgramID, "GammaValues");
 
 	CHECK_GL_ERRORS;
 }
@@ -327,5 +328,11 @@ void FSlateOpenGLElementProgram::SetMarginUVs( const FVector4& InMarginUVs )
 {
 	const GLfloat* Params = (GLfloat*)&InMarginUVs;
 	glUniform4fv( MarginUVsParam, 1, Params );
+	CHECK_GL_ERRORS;
+}
+
+void FSlateOpenGLElementProgram::SetGammaValues(const FVector2D& InGammaValues)
+{
+	glUniform2f(GammaValuesParam, InGammaValues.X, InGammaValues.Y);
 	CHECK_GL_ERRORS;
 }

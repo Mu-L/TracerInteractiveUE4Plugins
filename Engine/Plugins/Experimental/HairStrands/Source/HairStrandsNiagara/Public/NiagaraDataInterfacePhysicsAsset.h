@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -31,6 +31,7 @@ struct FNDIPhysicsAssetArrays
 	TArray<FVector4> CurrentTransform;
 	TArray<FVector4> InverseTransform;
 	TArray<FVector4> PreviousTransform;
+	TArray<FVector4> PreviousInverse;
 	TArray<FVector4> RestTransform;
 	TArray<FVector4> RestInverse;
 	TArray<FVector4> ElementExtent;
@@ -43,10 +44,10 @@ struct FNDIPhysicsAssetBuffer : public FRenderResource
 	bool IsValid() const;
 
 	/** Set the assets that will be used to affect the buffer */
-	void SetupArrays(const TWeakObjectPtr<class UPhysicsAsset>  PhysicsAsset, const TWeakObjectPtr<class USkeletalMeshComponent>  SkeletalMesh, const FTransform& InWorldTransform);
+	void Initialize(const TWeakObjectPtr<class UPhysicsAsset>  PhysicsAsset, const TWeakObjectPtr<class USkeletalMeshComponent>  SkeletalMesh, const FTransform& InWorldTransform);
 
 	/** Update the buffers */
-	void UpdateBuffers();
+	void Update();
 
 	/** Init the buffer */
 	virtual void InitRHI() override;
@@ -62,6 +63,9 @@ struct FNDIPhysicsAssetBuffer : public FRenderResource
 
 	/** Previous transform buffer */
 	FRWBuffer PreviousTransformBuffer;
+
+	/** Previous inverse buffer */
+	FRWBuffer PreviousInverseBuffer;
 
 	/** Inverse transform buffer*/
 	FRWBuffer InverseTransformBuffer;
@@ -91,8 +95,14 @@ struct FNDIPhysicsAssetBuffer : public FRenderResource
 /** Data stored per physics asset instance*/
 struct FNDIPhysicsAssetData
 {
+	/** Initialize the buffers */
+	bool Init(class UNiagaraDataInterfacePhysicsAsset* Interface, FNiagaraSystemInstance* SystemInstance);
+
+	/** Release the buffers */
+	void Release();
+
 	/** Physics asset Gpu buffer */
-	FNDIPhysicsAssetBuffer* AssetBuffer;
+	FNDIPhysicsAssetBuffer* PhysicsAssetBuffer;
 
 	/** Bounding box center */
 	FVector BoxOrigin;
@@ -108,6 +118,8 @@ class HAIRSTRANDSNIAGARA_API UNiagaraDataInterfacePhysicsAsset : public UNiagara
 	GENERATED_UCLASS_BODY()
 
 public:
+
+	DECLARE_NIAGARA_DI_PARAMETER();
 
 	/** Skeletal Mesh from which the Physics Asset will be found. */
 	UPROPERTY(EditAnywhere, Category = "Source")
@@ -137,11 +149,13 @@ public:
 	virtual bool Equals(const UNiagaraDataInterface* Other) const override;
 
 	/** GPU simulation  functionality */
-	virtual bool GetFunctionHLSL(const FName&  DefinitionFunctionName, FString InstanceFunctionName, FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual void GetParameterDefinitionHLSL(FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual FNiagaraDataInterfaceParametersCS* ConstructComputeParameters() const override;
+	virtual void GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
+	virtual bool GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL) override;
 	virtual void ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, void* PerInstanceData, const FNiagaraSystemInstanceID& SystemInstance) override;
 	virtual void GetCommonHLSL(FString& OutHLSL) override;
+
+	/** Extract the source component */
+	void ExtractSourceComponent(FNiagaraSystemInstance* SystemInstance);
 
 	/** Get the number of boxes*/
 	void GetNumBoxes(FVectorVMContext& Context);
@@ -152,8 +166,20 @@ public:
 	/** Get the number of capsules */
 	void GetNumCapsules(FVectorVMContext& Context);
 
+	/** Get the element point */
+	void GetElementPoint(FVectorVMContext& Context);
+
+	/** Get the element distance */
+	void GetElementDistance(FVectorVMContext& Context);
+
+	/** Get the closest element */
+	void GetClosestElement(FVectorVMContext& Context);
+
 	/** Get the closest point */
 	void GetClosestPoint(FVectorVMContext& Context);
+
+	/** Get the closest distance */
+	void GetClosestDistance(FVectorVMContext& Context);
 
 	/** Get the closest texture point */
 	void GetTexturePoint(FVectorVMContext& Context);
@@ -169,6 +195,9 @@ public:
 
 	/** Name of the previous transform buffer */
 	static const FString PreviousTransformBufferName;
+
+	/** Name of the previous inverse buffer */
+	static const FString PreviousInverseBufferName;
 
 	/** Name of the inverse transform buffer */
 	static const FString InverseTransformBufferName;
@@ -196,9 +225,6 @@ protected:
 /** Proxy to send data to gpu */
 struct FNDIPhysicsAssetProxy : public FNiagaraDataInterfaceProxy
 {
-	/** Destroy internal data */
-	virtual void DeferredDestroy() override;
-
 	/** Get the size of the data that will be passed to render*/
 	virtual int32 PerInstanceDataPassedToRenderThreadSize() const override { return sizeof(FNDIPhysicsAssetData); }
 
@@ -206,15 +232,22 @@ struct FNDIPhysicsAssetProxy : public FNiagaraDataInterfaceProxy
 	virtual void ConsumePerInstanceDataFromGameThread(void* PerInstanceData, const FNiagaraSystemInstanceID& Instance) override;
 
 	/** Initialize the Proxy data strands buffer */
-	void InitializePerInstanceData(const FNiagaraSystemInstanceID& SystemInstance, FNDIPhysicsAssetBuffer* AssetBuffer, const FVector& BoxOrigin, const FVector& BoxExtent);
+	void InitializePerInstanceData(const FNiagaraSystemInstanceID& SystemInstance);
 
 	/** Destroy the proxy data if necessary */
 	void DestroyPerInstanceData(NiagaraEmitterInstanceBatcher* Batcher, const FNiagaraSystemInstanceID& SystemInstance);
 
+	/** Launch all pre stage functions */
+	virtual void PreStage(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) override;
+
+	/** Launch all post stage functions */
+	virtual void PostStage(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) override;
+
+	/** Reset the buffers  */
+	virtual void ResetData(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) override;
+
+
 	/** List of proxy data for each system instances*/
 	TMap<FNiagaraSystemInstanceID, FNDIPhysicsAssetData> SystemInstancesToProxyData;
-
-	/** List of proxy data to destroy later */
-	TSet<FNiagaraSystemInstanceID> DeferredDestroyList;
 };
 

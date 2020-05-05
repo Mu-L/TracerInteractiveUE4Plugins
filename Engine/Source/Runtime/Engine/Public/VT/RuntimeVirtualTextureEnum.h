@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,6 +7,24 @@
 
 /** Maximum number of texture layers we will have in a runtime virtual texture. Increase if we add a ERuntimeVirtualTextureMaterialType with more layers. */
 namespace RuntimeVirtualTexture { enum { MaxTextureLayers = 3 }; }
+
+/** 
+ * Enumeration of all runtime virtual texture material attributes.
+ * These can be combined to form full ERuntimeVirtualTextureMaterialType layouts.
+ */
+enum class ERuntimeVirtualTextureAttributeType : uint8
+{
+	BaseColor,
+	Normal,
+	Roughness,
+	Specular,
+	Mask,
+	WorldHeight,
+
+	Count
+};
+
+static_assert((uint32)ERuntimeVirtualTextureAttributeType::Count <= 8u, "ERuntimeVirtualTextureAttributeType can no longer be used to create 8bit masks.");
 
 /** 
  * Enumeration of virtual texture stack layouts to support. 
@@ -19,7 +37,8 @@ enum class ERuntimeVirtualTextureMaterialType : uint8
 	BaseColor UMETA(DisplayName = "Base Color"),
 	BaseColor_Normal_DEPRECATED UMETA(Hidden),
 	BaseColor_Normal_Specular UMETA(DisplayName = "Base Color, Normal, Roughness, Specular"),
-	BaseColor_Normal_Specular_YCoCg UMETA(DisplayName = "YCoCg Base Color, Normal, Roughness, Specular", ToolTip="Base Color is stored in YCoCg space. This requires more memory but may provide better quality."),
+	BaseColor_Normal_Specular_YCoCg UMETA(DisplayName = "YCoCg Base Color, Normal, Roughness, Specular", ToolTip = "Base Color is stored in YCoCg space. This requires more memory but may provide better quality."),
+	BaseColor_Normal_Specular_Mask_YCoCg UMETA(DisplayName = "YCoCg Base Color, Normal, Roughness, Specular, Mask", ToolTip="Base Color is stored in YCoCg space. This requires more memory but may provide better quality."),
 	WorldHeight UMETA(DisplayName = "World Height"),
 
 	Count UMETA(Hidden),
@@ -40,8 +59,17 @@ enum class ERuntimeVirtualTextureMainPassType : uint8
 	Always UMETA(DisplayName = "Virtual Texture AND Main Pass"),
 };
 
+/** Enumeration of runtime virtual texture shader uniforms. */
+enum ERuntimeVirtualTextureShaderUniform
+{
+	ERuntimeVirtualTextureShaderUniform_WorldToUVTransform0,
+	ERuntimeVirtualTextureShaderUniform_WorldToUVTransform1,
+	ERuntimeVirtualTextureShaderUniform_WorldToUVTransform2,
+	ERuntimeVirtualTextureShaderUniform_WorldHeightUnpack,
+	ERuntimeVirtualTextureShaderUniform_Count,
+};
+
 /** Enumeration of runtime virtual texture debug modes. */
-UENUM()
 enum class ERuntimeVirtualTextureDebugType
 {
 	None,

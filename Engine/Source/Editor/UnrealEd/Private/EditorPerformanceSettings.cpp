@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Editor/EditorPerformanceSettings.h"
 #include "EditorViewportClient.h"
@@ -14,9 +14,10 @@ UEditorPerformanceSettings::UEditorPerformanceSettings(const FObjectInitializer&
 	: Super(ObjectInitializer)
 	, bShowFrameRateAndMemory(false)
 	, bThrottleCPUWhenNotForeground(true)
-	, bMonitorEditorPerformance(true)
+	, bMonitorEditorPerformance(false)
 	, bOverrideDPIBasedEditorViewportScaling(false)
 	, bEnableSharedDDCPerformanceNotifications(true)
+	, bEnableScalabilityWarningIndicator(true)
 {
 
 }

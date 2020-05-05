@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "AssetViewWidgets.h"
@@ -428,8 +428,12 @@ SAssetViewItem::~SAssetViewItem()
 
 	if (!GExitPurge)
 	{
-		// This hack is here to make abnormal shutdowns less frequent.  Crashes here are the result UI's being shut down as a result of GC at edtior shutdown.  This code attemps to call FindObject which is not allowed during GC.
-		SetForceMipLevelsToBeResident(false);
+		const bool bIsGarbageCollectingOnGameThread = (IsInGameThread() && IsGarbageCollecting());
+		if (!bIsGarbageCollectingOnGameThread)
+		{
+			// This hack is here to make abnormal shutdowns less frequent.  Crashes here are the result UI's being shut down as a result of GC at edtior shutdown.  This code attemps to call FindObject which is not allowed during GC.
+			SetForceMipLevelsToBeResident(false);
+		}
 	}
 }
 
@@ -1255,7 +1259,7 @@ void SAssetViewItem::CacheDisplayTags()
 			continue;
 		}
 
-		UProperty* TagField = FindField<UProperty>(AssetClass, TagAndValuePair.Key);
+		FProperty* TagField = FindFProperty<FProperty>(AssetClass, TagAndValuePair.Key);
 
 		// Build the display name for this tag
 		FText DisplayName;
@@ -1426,19 +1430,20 @@ void SAssetViewItem::CacheDisplayTags()
 				{
 					// Remove the class path for native classes, and also remove Engine. for engine classes
 					const int32 SizeOfPrefix = UE_ARRAY_COUNT(StringToRemove) - 1;
-					ValueString = ValueString.Mid(SizeOfPrefix, ValueString.Len() - SizeOfPrefix).Replace(TEXT("Engine."), TEXT(""));
+					ValueString.MidInline(SizeOfPrefix, ValueString.Len() - SizeOfPrefix, false);
+					ValueString.ReplaceInline(TEXT("Engine."), TEXT(""));
 				}
 
 				if (TagField)
 				{
-					UProperty* TagProp = nullptr;
+					FProperty* TagProp = nullptr;
 					UEnum* TagEnum = nullptr;
-					if (UByteProperty* ByteProp = Cast<UByteProperty>(TagField))
+					if (FByteProperty* ByteProp = CastField<FByteProperty>(TagField))
 					{
 						TagProp = ByteProp;
 						TagEnum = ByteProp->Enum;
 					}
-					else if (UEnumProperty* EnumProp = Cast<UEnumProperty>(TagField))
+					else if (FEnumProperty* EnumProp = CastField<FEnumProperty>(TagField))
 					{
 						TagProp = EnumProp;
 						TagEnum = EnumProp->GetEnum();
@@ -1452,7 +1457,7 @@ void SAssetViewItem::CacheDisplayTags()
 							const FString EnumPrefix = TagEnum->GenerateEnumPrefix();
 							if (EnumPrefix.Len() && ValueString.StartsWith(EnumPrefix))
 							{
-								ValueString = ValueString.RightChop(EnumPrefix.Len() + 1);	// +1 to skip over the underscore
+								ValueString.RightChopInline(EnumPrefix.Len() + 1, false);	// +1 to skip over the underscore
 							}
 						}
 

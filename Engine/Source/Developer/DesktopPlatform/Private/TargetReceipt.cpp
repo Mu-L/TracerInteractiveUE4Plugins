@@ -1,10 +1,26 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TargetReceipt.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
+
+bool TryParseBuildVersion(const FJsonObject& Object, FBuildVersion& OutVersion)
+{
+	if (Object.TryGetNumberField(TEXT("MajorVersion"), OutVersion.MajorVersion) && Object.TryGetNumberField(TEXT("MinorVersion"), OutVersion.MinorVersion) && Object.TryGetNumberField(TEXT("PatchVersion"), OutVersion.PatchVersion))
+	{
+		Object.TryGetNumberField(TEXT("Changelist"), OutVersion.Changelist);
+		Object.TryGetNumberField(TEXT("CompatibleChangelist"), OutVersion.CompatibleChangelist);
+		Object.TryGetNumberField(TEXT("IsLicenseeVersion"), OutVersion.IsLicenseeVersion);
+		Object.TryGetNumberField(TEXT("IsPromotedBuild"), OutVersion.IsPromotedBuild);
+		Object.TryGetStringField(TEXT("BranchName"), OutVersion.BranchName);
+		Object.TryGetStringField(TEXT("BuildId"), OutVersion.BuildId);
+		Object.TryGetStringField(TEXT("BuildVersion"), OutVersion.BuildVersion);
+		return true;
+	}
+	return false;
+}
 
 bool FTargetReceipt::Read(const FString& FileName)
 {
@@ -55,6 +71,13 @@ bool FTargetReceipt::Read(const FString& FileName)
 	// Read the target type
 	FString TargetTypeString;
 	if (!Object->TryGetStringField(TEXT("TargetType"), TargetTypeString) || !LexTryParseString(TargetType, *TargetTypeString))
+	{
+		return false;
+	}
+
+	// Read the version information
+	const TSharedPtr<FJsonObject>* VersionObject;
+	if (!Object->TryGetObjectField(TEXT("Version"), VersionObject) || !VersionObject->IsValid() || !TryParseBuildVersion(*VersionObject->Get(), Version))
 	{
 		return false;
 	}

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Curves/RichCurve.h"
 #include "Templates/Function.h"
@@ -97,7 +97,7 @@ bool FRichCurveKey::Serialize(FArchive& Ar)
 		return false;
 	}
 
-	// Serialization is handled manually to avoid the extra size overhead of UProperty tagging.
+	// Serialization is handled manually to avoid the extra size overhead of FProperty tagging.
 	// Otherwise with many keys in a rich curve the size can become quite large.
 	Ar << InterpMode;
 	Ar << TangentMode;
@@ -161,6 +161,11 @@ FRichCurveKey FRichCurve::GetKey(FKeyHandle KeyHandle) const
 	return Keys[GetIndex(KeyHandle)];
 }
 
+const FRichCurveKey& FRichCurve::GetKeyRef(FKeyHandle KeyHandle) const
+{
+	EnsureAllIndicesHaveHandles();
+	return Keys[GetIndex(KeyHandle)];
+}
 
 FRichCurveKey FRichCurve::GetFirstKey() const
 {
@@ -225,10 +230,12 @@ void FRichCurve::SetKeys(const TArray<FRichCurveKey>& InKeys)
 {
 	Reset();
 
+	Keys.SetNum(InKeys.Num());
+	KeyHandlesToIndices.SetKeyHandles(InKeys.Num());
+
 	for (int32 Index = 0; Index < InKeys.Num(); ++Index)
 	{
-		Keys.Add(InKeys[Index]);
-		KeyHandlesToIndices.Add(FKeyHandle(), Index);
+		Keys[Index] = InKeys[Index];
 	}
 
 	AutoSetTangents();
@@ -387,17 +394,25 @@ TPair<float, float> FRichCurve::GetKeyTimeValuePair(FKeyHandle KeyHandle) const
 
 void FRichCurve::SetKeyInterpMode(FKeyHandle KeyHandle, ERichCurveInterpMode NewInterpMode)
 {
+	SetKeyInterpMode(KeyHandle, NewInterpMode, true);
+}
+
+void FRichCurve::SetKeyInterpMode(FKeyHandle KeyHandle, ERichCurveInterpMode NewInterpMode, bool bAutoSetTangents)
+{
 	if (!IsKeyHandleValid(KeyHandle))
 	{
 		return;
 	}
 
 	GetKey(KeyHandle).InterpMode = NewInterpMode;
-	AutoSetTangents();
+	if (bAutoSetTangents)
+	{
+		AutoSetTangents();
+	}
 }
 
 
-void FRichCurve::SetKeyTangentMode(FKeyHandle KeyHandle, ERichCurveTangentMode NewTangentMode)
+void FRichCurve::SetKeyTangentMode(FKeyHandle KeyHandle, ERichCurveTangentMode NewTangentMode, bool bAutoSetTangents /*= true*/)
 {
 	if (!IsKeyHandleValid(KeyHandle))
 	{
@@ -405,11 +420,14 @@ void FRichCurve::SetKeyTangentMode(FKeyHandle KeyHandle, ERichCurveTangentMode N
 	}
 
 	GetKey(KeyHandle).TangentMode = NewTangentMode;
-	AutoSetTangents();
+	if (bAutoSetTangents)
+	{
+		AutoSetTangents();
+	}
 }
 
 
-void FRichCurve::SetKeyTangentWeightMode(FKeyHandle KeyHandle, ERichCurveTangentWeightMode NewTangentWeightMode)
+void FRichCurve::SetKeyTangentWeightMode(FKeyHandle KeyHandle, ERichCurveTangentWeightMode NewTangentWeightMode, bool bAutoSetTangents /*= true*/)
 {
 	if (!IsKeyHandleValid(KeyHandle))
 	{
@@ -417,7 +435,10 @@ void FRichCurve::SetKeyTangentWeightMode(FKeyHandle KeyHandle, ERichCurveTangent
 	}
 
 	GetKey(KeyHandle).TangentWeightMode = NewTangentWeightMode;
-	AutoSetTangents();
+	if (bAutoSetTangents)
+	{
+		AutoSetTangents();
+	}
 }
 
 
@@ -1130,6 +1151,7 @@ static ERichCurveCompressionFormat FindRichCurveCompressionFormat(const FRichCur
 	switch (RefKey.InterpMode)
 	{
 	case RCIM_Constant:
+		return RCCF_Mixed;
 	case RCIM_None:
 	default:
 		return RCCF_Constant;

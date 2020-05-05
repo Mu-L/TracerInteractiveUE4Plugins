@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Components/RichTextBlock.h"
 #include "UObject/ConstructorHelpers.h"
@@ -79,6 +79,7 @@ void URichTextBlock::SynchronizeProperties()
 	Super::SynchronizeProperties();
 
 	MyRichTextBlock->SetText(Text);
+	MyRichTextBlock->SetMinDesiredWidth(MinDesiredWidth);
 
 	Super::SynchronizeTextLayoutProperties( *MyRichTextBlock );
 }
@@ -169,8 +170,15 @@ const FTextBlockStyle& URichTextBlock::GetDefaultTextStyle() const
 
 const FTextBlockStyle& URichTextBlock::GetCurrentDefaultTextStyle() const
 {
-	ensure(StyleInstance.IsValid());
-	return bOverrideDefaultStyle ? DefaultTextStyleOverride : DefaultTextStyle;
+	if (bOverrideDefaultStyle)
+	{
+		return DefaultTextStyleOverride;
+	}
+	else
+	{
+		ensure(StyleInstance.IsValid());
+		return DefaultTextStyle;
+	}
 }
 
 URichTextBlockDecorator* URichTextBlock::GetDecoratorByClass(TSubclassOf<URichTextBlockDecorator> DecoratorClass)

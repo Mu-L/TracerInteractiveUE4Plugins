@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	AudioThread.cpp: Audio thread implementation.
@@ -44,6 +44,14 @@ static FAutoConsoleVariableRef CVarBatchAudioAsyncBatchSize(
 	GBatchAudioAsyncBatchSize,
 	TEXT("When AudioThread.EnableBatchProcessing = 1, controls the number of audio commands grouped together for threading.")
 );
+
+
+static int32 GAudioCommandFenceWaitTimeMs = 35;
+TAutoConsoleVariable<int32> CVarAudioCommandFenceWaitTimeMs(
+	TEXT("AudioCommand.FenceWaitTimeMs"),
+	GAudioCommandFenceWaitTimeMs, 
+	TEXT("Sets number of ms for fence wait"), 
+	ECVF_Default);
 
 struct FAudioThreadInteractor
 {
@@ -192,6 +200,7 @@ bool FAudioThread::Init()
 void FAudioThread::Exit()
 {
 	GAudioThreadId = 0;
+	FPlatformProcess::TeardownAudioThread();
 }
 
 uint32 FAudioThread::Run()
@@ -527,12 +536,12 @@ void FAudioCommandFence::Wait(bool bProcessGameThreadTasks) const
 		QUICK_SCOPE_CYCLE_COUNTER(STAT_FAudioCommandFence_Wait);
 
 		bool bDone = false;
-		const uint32 WaitTimeMs = 35;
+
 		do
 		{
 			if (FenceDoneEvent)
 			{
-				bDone = FenceDoneEvent->Wait(WaitTimeMs);
+				bDone = FenceDoneEvent->Wait(GAudioCommandFenceWaitTimeMs);
 			}
 			else
 			{
@@ -547,7 +556,7 @@ void FAudioCommandFence::Wait(bool bProcessGameThreadTasks) const
 
 			// Log how long we've been waiting for the audio thread:
 			float ThisTime = FPlatformTime::Seconds() - StartTime;
- 			if (ThisTime > static_cast<float>(WaitTimeMs) / 1000.0f + SMALL_NUMBER)
+ 			if (ThisTime > static_cast<float>(GAudioCommandFenceWaitTimeMs) / 1000.0f + SMALL_NUMBER)
 			{
 				if (GCVarEnableAudioCommandLogging == 1)
 				{

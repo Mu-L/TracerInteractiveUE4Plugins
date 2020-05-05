@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Field/FieldSystemComponent.h"
 
@@ -27,7 +27,6 @@ UFieldSystemComponent::UFieldSystemComponent(const FObjectInitializer& ObjectIni
 	SetGenerateOverlapEvents(false);
 }
 
-
 FPrimitiveSceneProxy* UFieldSystemComponent::CreateSceneProxy()
 {
 	UE_LOG(FSC_Log, Log, TEXT("FieldSystemComponent[%p]::CreateSceneProxy()"), this);
@@ -35,6 +34,35 @@ FPrimitiveSceneProxy* UFieldSystemComponent::CreateSceneProxy()
 	return new FFieldSystemSceneProxy(this);
 }
 
+TSet<FPhysScene_Chaos*> UFieldSystemComponent::GetPhysicsScenes() const
+{
+	TSet<FPhysScene_Chaos*> Scenes;
+	if (SupportedSolvers.Num())
+	{
+		for (const TSoftObjectPtr<AChaosSolverActor>& Actor : SupportedSolvers)
+		{
+			if (!Actor.IsValid())
+				continue;
+			Scenes.Add(Actor->GetPhysicsScene().Get());
+		}
+	}
+	else
+	{
+#if INCLUDE_CHAOS
+		if (ensure(GetOwner()) && ensure(GetOwner()->GetWorld()))
+		{
+			FPhysScene_ChaosInterface* WorldPhysScene = GetOwner()->GetWorld()->GetPhysicsScene();
+			Scenes.Add(&WorldPhysScene->GetScene());
+		}
+		else
+		{
+			check(GWorld);
+			Scenes.Add(&GWorld->GetPhysicsScene()->GetScene());
+		}
+#endif
+	}
+	return Scenes;
+}
 
 void UFieldSystemComponent::OnCreatePhysicsState()
 {
@@ -49,10 +77,13 @@ void UFieldSystemComponent::OnCreatePhysicsState()
 
 		PhysicsProxy = new FFieldSystemPhysicsProxy(this);
 #if INCLUDE_CHAOS
-		TSharedPtr<FPhysScene_Chaos> Scene = GetOwner()->GetWorld()->PhysicsScene_Chaos;
-		Scene->AddObject(this, PhysicsProxy);
+		TSet<FPhysScene_Chaos*> Scenes = GetPhysicsScenes();
+		for (auto* Scene : Scenes)
+		{
+			// Does each scene need its own proxy?
+			Scene->AddObject(this, PhysicsProxy);
+		}
 #endif
-
 		bHasPhysicsState = true;
 
 		if(FieldSystem)
@@ -75,15 +106,19 @@ void UFieldSystemComponent::OnDestroyPhysicsState()
 	}
 
 #if INCLUDE_CHAOS
-	TSharedPtr<FPhysScene_Chaos> Scene = GetOwner()->GetWorld()->PhysicsScene_Chaos;
-	Scene->RemoveObject(PhysicsProxy);
+	//TSharedPtr<FPhysScene_Chaos> Scene = GetOwner()->GetWorld()->PhysicsScene_Chaos;
+	TSet<FPhysScene_Chaos*> Scenes = GetPhysicsScenes();
+	for (auto* Scene : Scenes)
+	{
+		Scene->RemoveObject(PhysicsProxy);
+	}
 #endif
 
 	ChaosModule = nullptr;
+	// Discard the pointer (cleanup happens through the scene or dedicated thread)
 	PhysicsProxy = nullptr;
 
 	bHasPhysicsState = false;
-	
 }
 
 bool UFieldSystemComponent::ShouldCreatePhysicsState() const
@@ -105,33 +140,40 @@ void UFieldSystemComponent::DispatchCommand(const FFieldSystemCommand& InCommand
 		checkSlow(PhysicsDispatcher); // Should always have one of these
 
 		// Assemble a list of compatible solvers
-		TArray<Chaos::FPhysicsSolver*> SolverList;
+		TArray<Chaos::FPhysicsSolver*> SupportedSolverList;
 		if(SupportedSolvers.Num() > 0)
 		{
 			for(TSoftObjectPtr<AChaosSolverActor>& SolverActorPtr : SupportedSolvers)
 			{
 				if(AChaosSolverActor* CurrActor = SolverActorPtr.Get())
 				{
-					SolverList.Add(CurrActor->GetSolver());
+					SupportedSolverList.Add(CurrActor->GetSolver());
 				}
 			}
 		}
 
-		PhysicsDispatcher->EnqueueCommandImmediate([PhysicsProxy = this->PhysicsProxy, NewCommand = InCommand, ChaosModule = this->ChaosModule, SolverList]()
+		TArray<Chaos::FPhysicsSolver*> WorldSolverList = ChaosModule->GetAllSolvers();
+
+		// #BGTODO Currently all commands will end up actually executing a frame late. That's because this command has to be logged as a global command
+		// so we don't end up with multiple solver threads writing to the proxy. We need a better way to buffer up multi-solver commands so they can be
+		// executed in parallel and then move those commands to the respective solver queues to fix the frame delay.
+		if(WorldSolverList.Num() > 0)
 		{
-			const int32 NumFilterSolvers = SolverList.Num();
-			const TArray<Chaos::FPhysicsSolver*>& Solvers = ChaosModule->GetSolvers();
-
-			for(Chaos::FPhysicsSolver* Solver : Solvers)
+			PhysicsDispatcher->EnqueueCommandImmediate([PhysicsProxy = this->PhysicsProxy, NewCommand = InCommand, ChaosModule = this->ChaosModule, SupportedSolverList, WorldSolvers = MoveTemp(WorldSolverList)]()
 			{
-				const bool bSolverValid = NumFilterSolvers == 0 || SolverList.Contains(Solver);
+				const int32 NumFilterSolvers = SupportedSolverList.Num();
 
-				if(Solver->Enabled() && Solver->HasActiveParticles() && bSolverValid)
+				for(Chaos::FPhysicsSolver* Solver : WorldSolvers)
 				{
-					PhysicsProxy->BufferCommand(Solver, NewCommand);
+					const bool bSolverValid = NumFilterSolvers == 0 || SupportedSolverList.Contains(Solver);
+
+					if(Solver->Enabled() && Solver->HasActiveParticles() && bSolverValid)
+					{
+						PhysicsProxy->BufferCommand(Solver, NewCommand);
+					}
 				}
-			}
-		});
+			});
+		}
 	}
 }
 

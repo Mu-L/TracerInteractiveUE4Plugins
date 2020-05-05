@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "UnrealClient.h"
@@ -35,6 +35,8 @@ IMPLEMENT_STRUCT(PostProcessSettings);
 
 bool FViewport::bIsGameRenderingEnabled = true;
 int32 FViewport::PresentAndStopMovieDelay = 0;
+
+static const FName NAME_DummyViewport = FName(TEXT("DummyViewport"));
 
 /**
 * Reads the viewport's displayed pixels into a preallocated color buffer.
@@ -586,36 +588,6 @@ int32 FStatUnitData::DrawStat(FViewport* InViewport, FCanvas* InCanvas, int32 In
 			{
 				const FColor GPUMaxColor = GEngine->GetFrameTimeDisplayColor(Max_GPUFrameTime);
 				InCanvas->DrawShadowedString(X3, InY, *FString::Printf(TEXT("%4.2f ms"), Max_GPUFrameTime), Font, GPUMaxColor);
-			}
-			if (GMaxRHIShaderPlatform == SP_PS4)
-			{
-				FString Warnings;
-
-				{
-					static const auto CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.PS4ContinuousSubmits"));
-					int32 Value = CVar->GetInt();
-
-					if (!Value)
-					{
-						// good for profiling (avoids bubles) but bad for high fps
-						Warnings += TEXT(" r.PS4ContinuousSubmits");
-					}
-				}
-				{
-					static const auto CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.PS4StallsOnMarkers"));
-					int32 Value = CVar->GetInt();
-
-					if (Value)
-					{
-						// good to get Razor aligned GPU profiling but bad for high fps
-						Warnings += TEXT(" r.PS4StallsOnMarkers");
-					}
-				}
-
-				if (!Warnings.IsEmpty())
-				{
-					InCanvas->DrawShadowedString(X3 + 100, InY, *Warnings, Font, FColor::Red);
-				}
 			}
 			InY += RowHeight;
 		}
@@ -1174,6 +1146,7 @@ FViewport::FViewport(FViewportClient* InViewportClient):
 	bHasRequestedToggleFreeze(false),
 	bIsSlateViewport(false),
 	bIsHDR(false),
+	ViewportType(NAME_None),
 	bTakeHighResScreenShot(false)
 {
 	//initialize the hit proxy kernel
@@ -1564,7 +1537,7 @@ void FViewport::Draw( bool bShouldPresent /*= true */)
 				Canvas.SetRenderTargetRect(FIntRect(0, 0, SizeX, SizeY));
 				{
 					// Make sure the Canvas is not rendered upside down
-					Canvas.SetAllowSwitchVerticalAxis(false);
+					Canvas.SetAllowSwitchVerticalAxis(true);
 					ViewportClient->Draw(this, &Canvas);
 				}
 				Canvas.Flush_GameThread();
@@ -2149,26 +2122,20 @@ extern bool ParseResolution( const TCHAR* InResolution, uint32& OutX, uint32& Ou
 ENGINE_API bool GetHighResScreenShotInput(const TCHAR* Cmd, FOutputDevice& Ar, uint32& OutXRes, uint32& OutYRes, float& OutResMult, FIntRect& OutCaptureRegion, bool& OutShouldEnableMask, bool& OutDumpBufferVisualizationTargets, bool& OutCaptureHDR, FString& OutFilenameOverride, bool& OutUseDateTimeAsFileName)
 {
 	FString CmdString = Cmd;
-	int32 SeperatorPos = -1;
-	int32 LastSeperatorPos = 0;
 	TArray<FString> Arguments;
+	const FString FilenameSearchString = TEXT("filename=");
 
-	// Look for an optional filename to override from the default filename and strip it if found.
-	FString FilenameSearchString = TEXT("filename=");
-	int32 FilenamePos = CmdString.Find(FilenameSearchString, ESearchCase::IgnoreCase);
-	if (FilenamePos != INDEX_NONE)
-	{
-		FString FilenameOverride;
-		FParse::Value(Cmd, TEXT("filename="), FilenameOverride);
-		OutFilenameOverride = FilenameOverride;
-		CmdString.RemoveAt(FilenamePos, FilenameSearchString.Len() + FilenameOverride.Len());
-		CmdString.TrimStartAndEndInline(); 
-	}
+	// FParse::Value has better handling of escape characters than FParse::Token
+	FParse::Value(Cmd, *FilenameSearchString, OutFilenameOverride);
 
-	while (CmdString.FindChar(TCHAR(' '), SeperatorPos))
+	FString Arg;
+	while (FParse::Token(Cmd, Arg, true))
 	{
-		Arguments.Add(CmdString.Mid(LastSeperatorPos, SeperatorPos));
-		CmdString = CmdString.Mid(SeperatorPos + 1);
+		// Now skip filename since we already processed it
+		if (!Arg.StartsWith(FilenameSearchString))
+		{
+			Arguments.Add(Arg);
+		}
 	}
 
 	if (CmdString.Len() > 0)
@@ -2297,6 +2264,7 @@ FDummyViewport::FDummyViewport(FViewportClient* InViewportClient)
 	: FViewport(InViewportClient)
 	, DebugCanvas(NULL)
 {
+	ViewportType = NAME_DummyViewport;
 	UWorld* CurWorld = (InViewportClient != NULL ? InViewportClient->GetWorld() : NULL);
 	DebugCanvas = new FCanvas(this, NULL, CurWorld, (CurWorld != NULL ? CurWorld->FeatureLevel.GetValue() : GMaxRHIFeatureLevel));
 		

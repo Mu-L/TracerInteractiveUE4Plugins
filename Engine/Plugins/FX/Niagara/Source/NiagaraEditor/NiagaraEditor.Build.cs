@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 
@@ -41,6 +41,7 @@ public class NiagaraEditor : ModuleRules
 				"GraphEditor",
                 "ShaderFormatVectorVM",
                 "TargetPlatform",
+                "DesktopPlatform",
                 "AppFramework",
 				"MovieSceneTools",
                 "MovieSceneTracks",
@@ -48,6 +49,8 @@ public class NiagaraEditor : ModuleRules
 				"Projects",
                 "MainFrame",
 				"ToolMenus",
+				"Renderer",
+				"EditorWidgets",
 			}
         );
 

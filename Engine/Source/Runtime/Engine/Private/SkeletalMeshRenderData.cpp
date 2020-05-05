@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "Rendering/SkeletalMeshLODRenderData.h"
@@ -58,8 +58,8 @@ static void SerializeLODInfoForDDC(USkeletalMesh* SkeletalMesh, FString& KeySuff
 // If skeletal mesh derived data needs to be rebuilt (new format, serialization
 // differences, etc.) replace the version GUID below with a new one.
 // In case of merge conflicts with DDC versions, you MUST generate a new GUID
-// and set this new GUID as the version.                                       
-#define SKELETALMESH_DERIVEDDATA_VER TEXT("29B218D50FE444AF8EFC8E4234F5D4E1")
+// and set this new GUID as the version.
+#define SKELETALMESH_DERIVEDDATA_VER TEXT("BAD8180EFB1543D79AA1D10F3F5945A2")
 
 static const FString& GetSkeletalMeshDerivedDataVersion()
 {
@@ -71,7 +71,7 @@ static const FString& GetSkeletalMeshDerivedDataVersion()
 	return CachedVersionString;
 }
 
-static FString BuildSkeletalMeshDerivedDataKey(USkeletalMesh* SkelMesh)
+static FString BuildSkeletalMeshDerivedDataKey(const ITargetPlatform* TargetPlatform, USkeletalMesh* SkelMesh)
 {
 	FString KeySuffix(TEXT(""));
 
@@ -105,13 +105,14 @@ static FString BuildSkeletalMeshDerivedDataKey(USkeletalMesh* SkelMesh)
 	KeySuffix += SkelMesh->bHasVertexColors ? "1" : "0";
 	KeySuffix += SkelMesh->VertexColorGuid.ToString(EGuidFormats::Digits);
 
-	const ITargetPlatform* TargetPlatform = GetTargetPlatformManagerRef().GetRunningTargetPlatform();
-	check(TargetPlatform);
 	const FName PlatformGroupName = TargetPlatform->GetPlatformInfo().PlatformGroupName;
 	const FName VanillaPlatformName = TargetPlatform->GetPlatformInfo().VanillaPlatformName;
 
-	const bool bSupportLODStreaming = SkelMesh->bSupportLODStreaming.GetValueForPlatformIdentifiers(PlatformGroupName, VanillaPlatformName);
-	if (bSupportLODStreaming)
+	static auto* VarMeshStreaming = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MeshStreaming"));
+	const bool bMeshStreamingEnabled = !VarMeshStreaming || VarMeshStreaming->GetInt() != 0;
+
+	const bool bSupportLODStreaming = !SkelMesh->NeverStream && SkelMesh->bSupportLODStreaming.GetValueForPlatformIdentifiers(PlatformGroupName, VanillaPlatformName);
+	if (bMeshStreamingEnabled && TargetPlatform->SupportsFeature(ETargetPlatformFeatures::MeshLODStreaming) && bSupportLODStreaming)
 	{
 		const int32 MaxNumStreamedLODs = SkelMesh->MaxNumStreamedLODs.GetValueForPlatformIdentifiers(PlatformGroupName, VanillaPlatformName);
 		const int32 MaxNumOptionalLODs = SkelMesh->MaxNumOptionalLODs.GetValueForPlatformIdentifiers(PlatformGroupName, VanillaPlatformName);
@@ -129,7 +130,7 @@ static FString BuildSkeletalMeshDerivedDataKey(USkeletalMesh* SkelMesh)
 	);
 }
 
-void FSkeletalMeshRenderData::Cache(USkeletalMesh* Owner)
+void FSkeletalMeshRenderData::Cache(const ITargetPlatform* TargetPlatform, USkeletalMesh* Owner)
 {
 	check(Owner);
 
@@ -145,13 +146,12 @@ void FSkeletalMeshRenderData::Cache(USkeletalMesh* Owner)
 	{
 		COOK_STAT(auto Timer = SkeletalMeshCookStats::UsageStats.TimeSyncWork());
 		int32 T0 = FPlatformTime::Cycles();
-		FString DerivedDataKey = BuildSkeletalMeshDerivedDataKey(Owner);
+		FString DerivedDataKey = BuildSkeletalMeshDerivedDataKey(TargetPlatform, Owner);
 
 		TArray<uint8> DerivedData;
-		if (GetDerivedDataCacheRef().GetSynchronous(*DerivedDataKey, DerivedData))
+		if (GetDerivedDataCacheRef().GetSynchronous(*DerivedDataKey, DerivedData, Owner->GetPathName()))
 		{
 			COOK_STAT(Timer.AddHit(DerivedData.Num()));
-			
 
 			FMemoryReader Ar(DerivedData, /*bIsPersistent=*/ true);
 
@@ -163,6 +163,50 @@ void FSkeletalMeshRenderData::Cache(USkeletalMesh* Owner)
 			{
 				FSkeletalMeshModel* SkelMeshModel = Owner->GetImportedModel();
 				check(SkelMeshModel);
+
+				int32 MorphTargetNumber = 0;
+				Ar << MorphTargetNumber;
+				TArray<UMorphTarget*> ToDeleteMorphTargets;
+				ToDeleteMorphTargets.Append(Owner->MorphTargets);
+				Owner->MorphTargets.Empty();
+				//Rebuild the MorphTarget object
+				//We cannot serialize directly the UMorphTarget with a FMemoryArchive. This is not supported.
+				for (int32 MorphTargetIndex = 0; MorphTargetIndex < MorphTargetNumber; ++MorphTargetIndex)
+				{
+					FName MorphTargetName = NAME_None;
+					Ar << MorphTargetName;
+					UMorphTarget* MorphTarget = Cast<UMorphTarget>(StaticFindObjectFast(nullptr, Owner, MorphTargetName));
+					if (!MorphTarget)
+					{
+						MorphTarget = NewObject<UMorphTarget>(Owner, MorphTargetName);
+						check(MorphTarget);
+					}
+					else
+					{
+						ToDeleteMorphTargets.Remove(MorphTarget);
+					}
+					MorphTarget->MorphLODModels.Empty();
+					Owner->MorphTargets.Add(MorphTarget);
+					check(MorphTargetIndex == Owner->MorphTargets.Num() - 1);
+					int32 MorphLODModelNumber = 0;
+					Ar << MorphLODModelNumber;
+					MorphTarget->MorphLODModels.AddDefaulted(MorphLODModelNumber);
+					for (int32 MorphDataIndex = 0; MorphDataIndex < MorphLODModelNumber; ++MorphDataIndex)
+					{
+						Ar << MorphTarget->MorphLODModels[MorphDataIndex];
+					}
+				}
+				//Rebuild the mapping and rehook the curve data
+				Owner->InitMorphTargets();
+				for (int32 DeleteMorphIndex = 0; DeleteMorphIndex < ToDeleteMorphTargets.Num(); ++DeleteMorphIndex)
+				{
+					ToDeleteMorphTargets[DeleteMorphIndex]->BaseSkelMesh = nullptr;
+					ToDeleteMorphTargets[DeleteMorphIndex]->MorphLODModels.Empty();
+					//Move the unused asset in the transient package and mark it pending kill
+					ToDeleteMorphTargets[DeleteMorphIndex]->Rename(nullptr, GetTransientPackage(), REN_ForceNoResetLoaders | REN_DoNotDirty | REN_DontCreateRedirectors | REN_NonTransactional);
+					ToDeleteMorphTargets[DeleteMorphIndex]->MarkPendingKill();
+				}
+
 				//Serialize the LODModel sections since they are dependent on the reduction
 				for (int32 LODIndex = 0; LODIndex < SkelMeshModel->LODModels.Num(); LODIndex++)
 				{
@@ -211,9 +255,11 @@ void FSkeletalMeshRenderData::Cache(USkeletalMesh* Owner)
 				FSkeletalMeshLODModel* LODModel = &(SkelMeshModel->LODModels[LODIndex]);
 				FSkeletalMeshLODInfo* LODInfo = Owner->GetLODInfo(LODIndex);
 				check(LODInfo);
+				bool bRawDataEmpty = Owner->IsLODImportedDataEmpty(LODIndex);
+				bool bRawBuildDataAvailable = Owner->IsLODImportedDataBuildAvailable(LODIndex);
 				//Build the source model before the render data, if we are a purely generated LOD we do not need to be build
-				IMeshBuilderModule& MeshBuilderModule = FModuleManager::Get().LoadModuleChecked<IMeshBuilderModule>("MeshBuilder");
-				if (!LODModel->RawSkeletalMeshBulkData.IsEmpty() && LODModel->RawSkeletalMeshBulkData.IsBuildDataAvailable())
+				IMeshBuilderModule& MeshBuilderModule = IMeshBuilderModule::GetForPlatform(TargetPlatform);
+				if (!bRawDataEmpty && bRawBuildDataAvailable)
 				{
 					MeshBuilderModule.BuildSkeletalMesh(Owner, LODIndex, true);
 					LODModel = &(SkelMeshModel->LODModels[LODIndex]);
@@ -254,6 +300,21 @@ void FSkeletalMeshRenderData::Cache(USkeletalMesh* Owner)
 			//So we do not serialize the LODModel sections.
 			if (!Owner->UseLegacyMeshDerivedDataKey)
 			{
+				int32 MorphTargetNumber = Owner->MorphTargets.Num();
+				Ar << MorphTargetNumber;
+				for (int32 MorphTargetIndex = 0; MorphTargetIndex < MorphTargetNumber; ++MorphTargetIndex)
+				{
+					FName MorphTargetName = Owner->MorphTargets[MorphTargetIndex]->GetFName();
+					Ar << MorphTargetName;
+					int32 MorphLODModelNumber = Owner->MorphTargets[MorphTargetIndex]->MorphLODModels.Num();
+					Ar << MorphLODModelNumber;
+					for (int32 MorphIndex = 0; MorphIndex < MorphLODModelNumber; ++MorphIndex)
+					{
+						Ar << Owner->MorphTargets[MorphTargetIndex]->MorphLODModels[MorphIndex];
+					}
+				}
+				//No need to serialize the morph target mapping since we will rebuild the mapping when loading a ddc
+
 				//Serialize the LODModel sections since they are dependent on the reduction
 				for (int32 LODIndex = 0; LODIndex < SkelMeshModel->LODModels.Num(); LODIndex++)
 				{
@@ -281,7 +342,20 @@ void FSkeletalMeshRenderData::Cache(USkeletalMesh* Owner)
 				const bool bNeedsCPUAccess = FSkeletalMeshLODRenderData::ShouldKeepCPUResources(Owner, LODIndex, bForceKeepCPUResources);
 				LODData.SerializeStreamedData(Ar, Owner, LODIndex, LODStripFlags, bNeedsCPUAccess, bForceKeepCPUResources);
 			}
-			GetDerivedDataCacheRef().Put(*DerivedDataKey, DerivedData);
+
+			//Recompute the derived data key in case there was some data correction during the build process, this make sure the DDC key is always representing the correct build result.
+			//There should never be correction of the data during the build, the data has to be corrected in the post load before calling this function.
+			FString BuiltDerivedDataKey = BuildSkeletalMeshDerivedDataKey(TargetPlatform, Owner);
+			if(BuiltDerivedDataKey != DerivedDataKey)
+			{
+				//If we are in this case we should resave the asset so the source data will be the same and we can use this DDC. Reduction can change the number of sections and the user section data is in the DDC key.
+				//So if we change the reduction algorithm, its possible we fall in this situation.
+				//We save the real data key which force the asset to always rebuild when the editor is loading it until the user save it
+				UE_LOG(LogSkeletalMesh, Log, TEXT("Skeletal mesh [%s]: The derived data key is different after the build. Resave the asset to avoid rebuilding it everytime the editor load it."), *Owner->GetPathName());
+			}
+
+			//Store the data using the built key to avoid DDC corruption
+			GetDerivedDataCacheRef().Put(*BuiltDerivedDataKey, DerivedData, Owner->GetPathName());
 
 			int32 T1 = FPlatformTime::Cycles();
 			UE_LOG(LogSkeletalMesh, Log, TEXT("Built Skeletal Mesh [%.2fs] %s"), FPlatformTime::ToMilliseconds(T1 - T0) / 1000.0f, *Owner->GetPathName());
@@ -387,18 +461,16 @@ void FSkeletalMeshRenderData::ReleaseResources()
 	}
 }
 
-bool FSkeletalMeshRenderData::HasExtraBoneInfluences() const
+uint32 FSkeletalMeshRenderData::GetNumBoneInfluences() const
 {
+	uint32 NumBoneInfluences = 0;
 	for (int32 LODIndex = 0; LODIndex < LODRenderData.Num(); ++LODIndex)
 	{
 		const FSkeletalMeshLODRenderData& Data = LODRenderData[LODIndex];
-		if (Data.DoesVertexBufferHaveExtraBoneInfluences())
-		{
-			return true;
-		}
+		NumBoneInfluences = FMath::Max(NumBoneInfluences, Data.GetVertexBufferMaxBoneInfluences());
 	}
 
-	return false;
+	return NumBoneInfluences;
 }
 
 bool FSkeletalMeshRenderData::RequiresCPUSkinning(ERHIFeatureLevel::Type FeatureLevel) const
@@ -406,7 +478,7 @@ bool FSkeletalMeshRenderData::RequiresCPUSkinning(ERHIFeatureLevel::Type Feature
 	const int32 MaxGPUSkinBones = FMath::Min(GetFeatureLevelMaxNumberOfBones(FeatureLevel), FGPUBaseSkinVertexFactory::GetMaxGPUSkinBones());
 	const int32 MaxBonesPerChunk = GetMaxBonesPerSection();
 	// Do CPU skinning if we need too many bones per chunk, or if we have too many influences per vertex on lower end
-	return (MaxBonesPerChunk > MaxGPUSkinBones) || (HasExtraBoneInfluences() && FeatureLevel < ERHIFeatureLevel::ES3_1);
+	return (MaxBonesPerChunk > MaxGPUSkinBones) || (GetNumBoneInfluences() > MAX_INFLUENCES_PER_STREAM && FeatureLevel < ERHIFeatureLevel::ES3_1);
 }
 
 void FSkeletalMeshRenderData::GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize)
@@ -430,4 +502,15 @@ int32 FSkeletalMeshRenderData::GetMaxBonesPerSection() const
 		}
 	}
 	return MaxBonesPerSection;
+}
+
+int32 FSkeletalMeshRenderData::GetFirstValidLODIdx(int32 MinIdx) const
+{
+	const int32 LODCount = LODRenderData.Num();
+	int32 LODIndex = FMath::Clamp<int32>(MinIdx, 0, LODCount - 1);
+	while (LODIndex < LODCount && !LODRenderData[LODIndex].GetNumVertices())
+	{
+		++LODIndex;
+	}
+	return LODIndex;
 }

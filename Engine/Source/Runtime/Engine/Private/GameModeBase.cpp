@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/GameNetworkManager.h"
@@ -537,7 +537,7 @@ TSubclassOf<APlayerController> AGameModeBase::GetPlayerControllerClassToSpawnFor
 {
 	UClass* PCClassToSpawn = PlayerControllerClass;
 
-	if (PreviousPC && ReplaySpectatorPlayerControllerClass && PreviousPC->PlayerState && PreviousPC->PlayerState->bOnlySpectator)
+	if (PreviousPC && ReplaySpectatorPlayerControllerClass && PreviousPC->PlayerState && PreviousPC->PlayerState->IsOnlyASpectator())
 	{
 		PCClassToSpawn = ReplaySpectatorPlayerControllerClass;
 	}
@@ -640,6 +640,12 @@ void AGameModeBase::PreLogin(const FString& Options, const FString& Address, con
 
 APlayerController* AGameModeBase::Login(UPlayer* NewPlayer, ENetRole InRemoteRole, const FString& Portal, const FString& Options, const FUniqueNetIdRepl& UniqueId, FString& ErrorMessage)
 {
+	if (GameSession == nullptr)
+	{
+		ErrorMessage = TEXT("Failed to spawn player controller, GameSession is null");
+		return nullptr;
+	}
+
 	ErrorMessage = GameSession->ApproveLogin(Options);
 	if (!ErrorMessage.IsEmpty())
 	{
@@ -753,7 +759,7 @@ FString AGameModeBase::InitNewPlayer(APlayerController* NewPlayerController, con
 	FString InName = UGameplayStatics::ParseOption(Options, TEXT("Name")).Left(20);
 	if (InName.IsEmpty())
 	{
-		InName = FString::Printf(TEXT("%s%i"), *DefaultPlayerName.ToString(), NewPlayerController->PlayerState->PlayerId);
+		InName = FString::Printf(TEXT("%s%i"), *DefaultPlayerName.ToString(), NewPlayerController->PlayerState->GetPlayerId());
 	}
 
 	ChangeName(NewPlayerController, InName, false);
@@ -966,9 +972,10 @@ void AGameModeBase::PostLogin(APlayerController* NewPlayer)
 	else
 	{
 		// If NewPlayer is not only a spectator and has a valid ID, add him as a user to the replay.
-		if (NewPlayer->PlayerState->UniqueId.IsValid())
+		const FUniqueNetIdRepl& NewPlayerStateUniqueId = NewPlayer->PlayerState->GetUniqueId();
+		if (NewPlayerStateUniqueId.IsValid())
 		{
-			GetGameInstance()->AddUserToReplay(NewPlayer->PlayerState->UniqueId.ToString());
+			GetGameInstance()->AddUserToReplay(NewPlayerStateUniqueId.ToString());
 		}
 	}
 
@@ -1019,7 +1026,7 @@ bool AGameModeBase::MustSpectate_Implementation(APlayerController* NewPlayerCont
 		return false;
 	}
 
-	return NewPlayerController->PlayerState->bOnlySpectator;
+	return NewPlayerController->PlayerState->IsOnlyASpectator();
 }
 
 bool AGameModeBase::CanSpectate_Implementation(APlayerController* Viewer, APlayerState* ViewTarget)
@@ -1348,7 +1355,7 @@ bool AGameModeBase::SpawnPlayerFromSimulate(const FVector& NewLocation, const FR
 	APlayerController* PC = GetGameInstance()->GetFirstLocalPlayerController();
 	if (PC != nullptr)
 	{
-		PC->PlayerState->bOnlySpectator = false;
+		PC->PlayerState->SetIsOnlyASpectator(false);
 
 		bool bNeedsRestart = true;
 		if (PC->GetPawn() == nullptr)

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AndroidMediaFactoryPrivate.h"
 
@@ -118,6 +118,7 @@ public:
 		SupportedFileExtensions.Add(TEXT("mp4"));
 		SupportedFileExtensions.Add(TEXT("m3u8"));
 		SupportedFileExtensions.Add(TEXT("mp3"));
+		SupportedFileExtensions.Add(TEXT("webm"));
 
 		// supported platforms
 		SupportedPlatforms.Add(TEXT("Android"));

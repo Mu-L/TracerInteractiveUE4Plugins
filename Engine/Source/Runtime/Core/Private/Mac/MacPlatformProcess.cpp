@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	MacPlatformProcess.mm: Mac implementations of Process functions
@@ -78,10 +78,10 @@ FString FMacPlatformProcess::GenerateApplicationPath( const FString& AppName, EB
 	{
 		ExecutableName += FString::Printf(TEXT("-%s-%s"), *PlatformName, LexToString(BuildConfiguration));
 	}
-	
+
 	NSURL* CurrentBundleURL = [[NSBundle mainBundle] bundleURL];
 	NSString* CurrentBundleName = [[CurrentBundleURL lastPathComponent] stringByDeletingPathExtension];
-	if(FString(CurrentBundleName) == ExecutableName)
+	if (FString(CurrentBundleName) == ExecutableName)
 	{
 		CFStringRef FilePath = CFURLCopyFileSystemPath((CFURLRef)CurrentBundleURL, kCFURLPOSIXPathStyle);
 		FString ExecutablePath = FString::Printf(TEXT("%s/Contents/MacOS/%s"), *FString((NSString*)FilePath), *ExecutableName);
@@ -92,7 +92,7 @@ FString FMacPlatformProcess::GenerateApplicationPath( const FString& AppName, EB
 	{
 		// Try expected path of an executable inside an app package in Engine Binaries
 		FString ExecutablePath = FPaths::EngineDir() / FString::Printf(TEXT("Binaries/%s/%s.app/Contents/MacOS/%s"), *PlatformName, *ExecutableName, *ExecutableName);
-			
+
 		NSString* LaunchPath = ExecutablePath.GetNSString();
 		
 		if ([[NSFileManager defaultManager] fileExistsAtPath: LaunchPath])
@@ -101,32 +101,16 @@ FString FMacPlatformProcess::GenerateApplicationPath( const FString& AppName, EB
 		}
 		else
 		{
-			// Next try expected path of a simple executable file in Engine Binaries
+			// Try the path of a simple executable file in Engine Binaries
 			ExecutablePath = FPaths::EngineDir() / FString::Printf(TEXT("Binaries/%s/%s"), *PlatformName, *ExecutableName);
-
 			LaunchPath = ExecutablePath.GetNSString();
 
 			if ([[NSFileManager defaultManager] fileExistsAtPath:LaunchPath])
 			{
 				return ExecutablePath;
 			}
-			else
-			{
-				CFStringRef App = FPlatformString::TCHARToCFString(*ExecutableName);
-				NSWorkspace* Workspace = [NSWorkspace sharedWorkspace];
-				NSString* AppPath = [Workspace fullPathForApplication : (NSString*)App];
-				CFRelease(App);
-				if (AppPath)
-				{
-					ExecutablePath = FString::Printf(TEXT("%s/Contents/MacOS/%s"), *FString(AppPath), *ExecutableName);
-					return ExecutablePath;
-				}
-				else
-				{
-					return FString();
-				}
-			}
 		}
+		return FString(); // Not found.
 	}
 }
 
@@ -254,7 +238,7 @@ FString FMacPlatformProcess::GetGameBundleId()
 	// Encode the data as a string
 	NSString* String = [[NSString alloc] initWithData:_PipeOutput encoding:NSUTF8StringEncoding];
 	
-	OutString = FString(String);
+	OutString += FString(String);
 	
 	[String release];
 }
@@ -738,37 +722,36 @@ FString FMacPlatformProcess::GetApplicationName( uint32 ProcessId )
 
 bool FMacPlatformProcess::IsSandboxedApplication()
 {
-	// Temporarily disabled as it can take 15 seconds or more to execute this function in Fortnite on a low spec Macs.
-	return false;
-#if 0
-	SCOPED_AUTORELEASE_POOL;
-	
-	bool bIsSandboxedApplication = false;
-
-	SecStaticCodeRef SecCodeObj = nullptr;
-	NSURL* BundleURL = [[NSBundle mainBundle] bundleURL];
-    OSStatus Err = SecStaticCodeCreateWithPath((CFURLRef)BundleURL, kSecCSDefaultFlags, &SecCodeObj);
-	if (SecCodeObj)
+	static const bool bIsSandboxedApplication = []
 	{
+		SCOPED_AUTORELEASE_POOL;
+
+		SecStaticCodeRef SecCodeObj = nullptr;
+		NSURL* BundleURL = [[NSBundle mainBundle] bundleURL];
+		OSStatus Err = SecStaticCodeCreateWithPath((CFURLRef)BundleURL, kSecCSDefaultFlags, &SecCodeObj);
+		if (SecCodeObj == nullptr)
+		{
+			return false;
+		}
+
 		check(Err == errSecSuccess);
-		
+
 		SecRequirementRef SandboxRequirement = nullptr;
 		Err = SecRequirementCreateWithString(CFSTR("entitlement[\"com.apple.security.app-sandbox\"] exists"), kSecCSDefaultFlags, &SandboxRequirement);
 		check(Err == errSecSuccess && SandboxRequirement);
-		
-		Err = SecStaticCodeCheckValidityWithErrors(SecCodeObj, kSecCSDefaultFlags, SandboxRequirement, nullptr);
-		
-		bIsSandboxedApplication = (Err == errSecSuccess);
-		
-		if(SandboxRequirement)
+
+		Err = SecStaticCodeCheckValidityWithErrors(SecCodeObj, kSecCSBasicValidateOnly, SandboxRequirement, nullptr);
+
+		if (SandboxRequirement)
 		{
 			CFRelease(SandboxRequirement);
 		}
 		CFRelease(SecCodeObj);
-	}
-	
+
+		return (Err == errSecSuccess);
+	}();
+
 	return bIsSandboxedApplication;
-#endif
 }
 
 const TCHAR* FMacPlatformProcess::BaseDir()

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -6,6 +6,7 @@
 #include "Serialization/Archive.h"
 #include "Math/UnrealMathUtility.h"
 #include "Math/Float32.h"
+#include "Serialization/MemoryLayout.h"
 
 /**
 * 16 bit float components and conversion
@@ -91,7 +92,9 @@ public:
 		return Ar << V.Encoded;
 	}
 };
+template<> struct TCanBulkSerialize<FFloat16> { enum { Value = true }; };
 
+DECLARE_INTRINSIC_TYPE_LAYOUT(FFloat16);
 
 FORCEINLINE FFloat16::FFloat16()
 	:	Encoded(0)
@@ -150,7 +153,7 @@ FORCEINLINE void FFloat16::Set(float FP32Value)
          if ( (14 - NewExp) <= 24 ) // Mantissa might be non-zero
          {
              uint32 Mantissa = FP32.Components.Mantissa | 0x800000; // Hidden 1 bit
-             Components.Mantissa = Mantissa >> (14 - NewExp);
+             Components.Mantissa = (uint16)(Mantissa >> (14 - NewExp));
 			 // Check for rounding
              if ( (Mantissa >> (13 - NewExp)) & 1 )
 			 {
@@ -168,7 +171,7 @@ FORCEINLINE void FFloat16::Set(float FP32Value)
 	// Handle normal number.
 	else
 	{
-		Components.Exponent = int32(FP32.Components.Exponent) - 127 + 15;
+		Components.Exponent = uint16(int32(FP32.Components.Exponent) - 127 + 15);
 		Components.Mantissa = uint16(FP32.Components.Mantissa >> 13);
 	}
 }
@@ -183,7 +186,7 @@ FORCEINLINE void FFloat16::SetWithoutBoundsChecks(const float FP32Value)
 	// of that just use Set().
 
 	Components.Sign = FP32.Components.Sign;
-	Components.Exponent = int32(FP32.Components.Exponent) - 127 + 15;
+	Components.Exponent = uint16(int32(FP32.Components.Exponent) - 127 + 15);
 	Components.Mantissa = uint16(FP32.Components.Mantissa >> 13);
 }
 
@@ -205,7 +208,7 @@ FORCEINLINE float FFloat16::GetFloat() const
 		else
 		{
 			// Denormal.
-			uint32 MantissaShift = 10 - (uint32)FMath::TruncToInt(FMath::Log2(Mantissa));
+			uint32 MantissaShift = 10 - (uint32)FMath::TruncToInt(FMath::Log2((float)Mantissa));
 			Result.Components.Exponent = 127 - (15 - 1) - MantissaShift;
 			Result.Components.Mantissa = Mantissa << (MantissaShift + 23 - 10);
 		}

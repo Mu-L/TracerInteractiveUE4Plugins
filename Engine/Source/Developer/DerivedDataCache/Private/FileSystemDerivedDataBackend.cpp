@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "CoreMinimal.h"
@@ -106,7 +106,7 @@ public:
 				bFailed = false;
 			}
 		}
-		if (FString(FCommandLine::Get()).Contains(TEXT("DerivedDataCache")) )
+		if (FString(FCommandLine::Get()).Contains(TEXT("Run=DerivedDataCache")) )
 		{
 			bTouch = true; // we always touch files when running the DDC commandlet
 		}
@@ -132,6 +132,12 @@ public:
 		{			
 			FDDCCleanup::Get()->AddFilesystem( CachePath, InDaysToDeleteUnusedFiles, InMaxNumFoldersToCheck, InMaxContinuousFileChecks );
 		}
+	}
+
+	/** Return a name for this interface */
+	virtual FString GetName() const override 
+	{ 
+		return CachePath; 
 	}
 
 	/** return true if the cache is usable **/
@@ -181,6 +187,7 @@ public:
 			}
 		}
 
+		UE_LOG(LogDerivedDataCache, Verbose, TEXT("%s CachedDataProbablyExists=%d for %s"), *GetName(), bExists, CacheKey);
 		return bExists;
 	}
 	/**
@@ -206,11 +213,12 @@ public:
 				UE_CLOG(ReadSpeed < 0.5, LogDerivedDataCache, Warning, TEXT("%s is very slow (%.2fMB/s) when accessing %s, consider disabling it."), *CachePath, ReadSpeed, *Filename);
 			}
 
-			UE_LOG(LogDerivedDataCache, Verbose, TEXT("FileSystemDerivedDataBackend: Cache hit on %s"),*Filename);
+			UE_LOG(LogDerivedDataCache, Verbose, TEXT("%s Cache hit on %s"), *GetName(), CacheKey);
 			COOK_STAT(Timer.AddHit(Data.Num()));
 			return true;
 		}
-		UE_LOG(LogDerivedDataCache, Verbose, TEXT("FileSystemDerivedDataBackend: Cache miss on %s"),*Filename);
+
+		UE_LOG(LogDerivedDataCache, Verbose, TEXT("%s: Cache miss on %s"), *GetName(), CacheKey);
 		Data.Empty();
 
 		// If not using a shared cache, record a miss
@@ -265,17 +273,17 @@ public:
 						{
 							if (!IFileManager::Get().Move(*Filename, *TempFilename, true, true, false, true))
 							{
-								UE_LOG(LogDerivedDataCache, Log, TEXT("FFileSystemDerivedDataBackend: Move collision, attempt at redundant update, OK %s."),*Filename);
+								UE_LOG(LogDerivedDataCache, Log, TEXT("%s: Move collision, attempt at redundant update, OK %s."), *GetName(),*Filename);
 							}
 							else
 							{
-								UE_LOG(LogDerivedDataCache, Verbose, TEXT("FFileSystemDerivedDataBackend: Successful cache put to %s"),*Filename);
+								UE_LOG(LogDerivedDataCache, Verbose, TEXT("%s: Successful cache put of %s to %s"),*GetName(), CacheKey, *Filename);
 							}
 						}
 					}
 					else
 					{
-						UE_LOG(LogDerivedDataCache, Warning, TEXT("FFileSystemDerivedDataBackend: Temp file is short %s!"),*TempFilename);
+						UE_LOG(LogDerivedDataCache, Warning, TEXT("%s: Temp file is short %s!"), *GetName(), *TempFilename);
 					}
 				}
 				else
@@ -294,6 +302,7 @@ public:
 			else
 			{
 				COOK_STAT(Timer.AddMiss(Data.Num()));
+				UE_LOG(LogDerivedDataCache, Verbose, TEXT("%s skipping put to existing file %s"), *GetName(), CacheKey);
 			}
 
 			// If not using a shared cache, update estimated build time
@@ -333,7 +342,10 @@ public:
 				}
 
 			}
-
+		}
+		else
+		{
+			UE_LOG(LogDerivedDataCache, Verbose, TEXT("%s is read only. Skipping put of %s"), *GetName(), CacheKey);
 		}
 	}
 

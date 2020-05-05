@@ -1,11 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Modules/ModuleInterface.h"
 #include "Modules/ModuleManager.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogToolMenus, Log, All);
+DECLARE_LOG_CATEGORY_EXTERN(LogToolMenus, Log, All);
 
 class IToolMenusModule : public IModuleInterface
 {

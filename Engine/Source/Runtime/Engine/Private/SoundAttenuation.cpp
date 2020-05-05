@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "Sound/SoundAttenuation.h"
@@ -90,6 +90,7 @@ bool FSoundAttenuationSettings::operator==(const FSoundAttenuationSettings& Othe
 	return (   bAttenuate			    == Other.bAttenuate
 			&& bSpatialize			    == Other.bSpatialize
 			&& dBAttenuationAtMax	    == Other.dBAttenuationAtMax
+			&& FalloffMode				== Other.FalloffMode
 			&& OmniRadius				== Other.OmniRadius
 			&& bApplyNormalizationToStereoSounds == Other.bApplyNormalizationToStereoSounds
 			&& StereoSpread				== Other.StereoSpread
@@ -106,7 +107,8 @@ bool FSoundAttenuationSettings::operator==(const FSoundAttenuationSettings& Othe
 			&& HPFFrequencyAtMax		== Other.HPFFrequencyAtMax
 			&& HPFFrequencyAtMin		== Other.HPFFrequencyAtMin
 			&& bEnableLogFrequencyScaling == Other.bEnableLogFrequencyScaling
-			&& bEnableListenerFocus == Other.bEnableListenerFocus
+			&& bEnableSubmixSends 		== Other.bEnableSubmixSends
+			&& bEnableListenerFocus 	== Other.bEnableListenerFocus
 			&& FocusAzimuth				== Other.FocusAzimuth
 			&& NonFocusAzimuth			== Other.NonFocusAzimuth
 			&& FocusDistanceScale		== Other.FocusDistanceScale

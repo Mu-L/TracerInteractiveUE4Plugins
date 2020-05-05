@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "FractureToolAutoCluster.h"
 
@@ -28,7 +28,7 @@ FText UFractureToolAutoCluster::GetDisplayText() const
 
 FText UFractureToolAutoCluster::GetTooltipText() const
 {
-	return FText(NSLOCTEXT("Fracture", "FractureToolAutoClusterToolTip", "Auto Cluster")); 
+	return FText(NSLOCTEXT("Fracture", "FractureToolAutoClusterToolTip", "Automatically group together pieces of a fractured mesh (based on your settings) and assign them within the Geometry Collection.")); 
 }
 
 FText UFractureToolAutoCluster::GetApplyText() const 

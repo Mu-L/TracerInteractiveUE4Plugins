@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -48,10 +48,7 @@ public:
 	
 	/** If true, render background object in the preview scene. */
 	bool bShowBackground;
-	
-	/** If true, render grid the preview scene. */
-	bool bShowGrid;
-	
+
 	TSharedRef<class FAdvancedPreviewScene> GetPreviewScene() { return AdvancedPreviewScene.ToSharedRef(); }
 
 	/** The material editor has been added to a tab */
@@ -75,6 +72,7 @@ public:
 	{
 		Bounds = 0x020,
 		InstructionCounts = 0x040,
+		ParticleCounts = 0x080,
 	};
 
 	bool GetDrawElement(EDrawElements Element) const;

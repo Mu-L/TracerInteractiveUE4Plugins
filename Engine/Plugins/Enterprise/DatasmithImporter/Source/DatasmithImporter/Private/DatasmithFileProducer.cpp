@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithFileProducer.h"
 
@@ -14,8 +14,9 @@
 #include "DatasmithScene.h"
 #include "DatasmithSceneActor.h"
 #include "DatasmithSceneFactory.h"
+#include "DatasmithStaticMeshImporter.h"
+#include "DatasmithTranslatorManager.h"
 #include "IDatasmithSceneElements.h"
-#include "Translators/DatasmithTranslatorManager.h"
 #include "Utility/DatasmithImporterUtils.h"
 
 #include "Async/ParallelFor.h"
@@ -40,6 +41,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstance.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Misc/FileHelper.h"
 #include "ObjectTools.h"
 #include "PropertyHandle.h"
 #include "ScopedTransaction.h"
@@ -49,7 +51,6 @@
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SWidget.h"
 #include "Widgets/Text/STextBlock.h"
-
 
 #define LOCTEXT_NAMESPACE "DatasmithFileProducer"
 
@@ -130,11 +131,11 @@ bool UDatasmithFileProducer::Initialize()
 	TSharedPtr<IDatasmithTranslator> TranslatorPtr = TranslatableSourcePtr->GetTranslator();
 	if(IDatasmithTranslator* Translator = TranslatorPtr.Get())
 	{
-		TArray< TStrongObjectPtr<UObject> > Options;
+		TArray< TStrongObjectPtr<UDatasmithOptionsBase> > Options;
 		Translator->GetSceneImportOptions( Options );
 
 		bool bUpdateOptions = false;
-		for(TStrongObjectPtr<UObject>& ObjectPtr : Options)
+		for(TStrongObjectPtr<UDatasmithOptionsBase>& ObjectPtr : Options)
 		{
 			if(UDatasmithCommonTessellationOptions* TessellationOption = Cast<UDatasmithCommonTessellationOptions>(ObjectPtr.Get()))
 			{
@@ -172,7 +173,8 @@ bool UDatasmithFileProducer::Initialize()
 	TSharedRef< IDatasmithScene > SceneElement = FDatasmithSceneFactory::CreateScene( *Source.GetSceneName() );
 
 	constexpr EObjectFlags LocalObjectFlags = RF_Public | RF_Standalone | RF_Transactional;
-	if ( !ImportContextPtr->Init( SceneElement, RootPath, LocalObjectFlags, Context.ProgressReporterPtr->GetFeedbackContext(), TSharedPtr< FJsonObject >(), true ) )
+	FFeedbackContext* InFeedbackContext = Context.ProgressReporterPtr ? Context.ProgressReporterPtr->GetFeedbackContext() : nullptr;
+	if ( !ImportContextPtr->Init( SceneElement, RootPath, LocalObjectFlags, InFeedbackContext, TSharedPtr< FJsonObject >(), true ) )
 	{
 		LogError( LOCTEXT( "DatasmithFileProducer_Initialization", "Initialization of producer failed." ) );
 		return false;
@@ -239,6 +241,8 @@ void UDatasmithFileProducer::SceneElementToWorld()
 	// STATIC MESHES
 	FDatasmithImporter::ImportStaticMeshes( *ImportContextPtr );
 
+	FDatasmithStaticMeshImporter::PreBuildStaticMeshes( *ImportContextPtr );
+
 	// ACTORS
 	{
 		FDatasmithImporter::ImportActors( *ImportContextPtr );
@@ -276,27 +280,6 @@ void UDatasmithFileProducer::SceneElementToWorld()
 	TArray<UStaticMesh*> StaticMeshes;
 	ImportContextPtr->ImportedStaticMeshes.GenerateValueArray(StaticMeshes);
 
-	{
-		TRACE_CPUPROFILER_EVENT_SCOPE(CommitMeshDescriptions);
-
-		UStaticMesh::FCommitMeshDescriptionParams Params;
-		Params.bMarkPackageDirty = false;
-		Params.bUseHashAsGuid = true;
-
-		ParallelFor(StaticMeshes.Num(),
-			[&](int32 StaticMeshIndex)
-			{
-				if(UStaticMesh* StaticMesh = StaticMeshes[StaticMeshIndex])
-				{
-					for (int32 Index = 0; Index < StaticMesh->GetNumSourceModels(); ++Index)
-					{
-						StaticMesh->CommitMeshDescription( Index, Params );
-					}
-				}
-			}
-		);
-	}
-
 	// Note: Some of the assets might be null (incomplete or failed import), only add non-null ones to Assets
 
 	for(UStaticMesh* StaticMesh : StaticMeshes)
@@ -323,9 +306,9 @@ void UDatasmithFileProducer::SceneElementToWorld()
 
 			if (UMaterial* SourceMaterial = Cast< UMaterial >(AssetPair.Value))
 			{
-				SourceMaterial->RebuildExpressionTextureReferences();
+				SourceMaterial->UpdateCachedExpressionData();
 
-				for (FMaterialFunctionInfo& MaterialFunctionInfo : SourceMaterial->MaterialFunctionInfos)
+				for (const FMaterialFunctionInfo& MaterialFunctionInfo : SourceMaterial->GetCachedExpressionData().FunctionInfos)
 				{
 					if (MaterialFunctionInfo.Function && MaterialFunctionInfo.Function->GetOutermost() == SourceMaterial->GetOutermost())
 					{
@@ -420,13 +403,23 @@ void UDatasmithFileProducer::PreventNameCollision()
 		// Map containing mapping between previous package to new one
 		TMap<FSoftObjectPath, FSoftObjectPath> AssetRedirectorMap;
 
-		auto MoveAsset = [&AssetRedirectorMap, &PackagesToCheck](UObject* Object, UPackage* NewPackage, bool bCheckPackage)
+		UDatasmithContentBlueprintLibrary* DatasmithContentLibrary = Cast< UDatasmithContentBlueprintLibrary >( UDatasmithContentBlueprintLibrary::StaticClass()->GetDefaultObject() );
+
+		auto MoveAsset = [&](UObject* Object, UPackage* NewPackage, bool bCheckPackage)
 		{
 			if(Object->GetOutermost()->GetName() != NewPackage->GetName())
 			{
 				FSoftObjectPath PreviousObjectPath(Object);
 
 				Object->Rename( nullptr, NewPackage, REN_DontCreateRedirectors | REN_NonTransactional );
+
+				// Replace unique name id with hash of package path to avoid asset's name collision
+				const FString DatasmithUniqueId = DatasmithContentLibrary->GetDatasmithUserDataValueForKey( Object, UDatasmithAssetUserData::UniqueIdMetaDataKey );
+				const FString ObjectIdent = DatasmithUniqueId + DatasmithScenePtr->GetName() + Object->GetName() + Object->GetClass()->GetName();
+				FString NewUniqueId = FMD5::HashBytes( reinterpret_cast<const uint8*>(*ObjectIdent), ObjectIdent.Len() * sizeof(TCHAR) );
+
+				UDatasmithAssetUserData::SetDatasmithUserDataValueForKey(Object, *(FString(TEXT("Old")) + UDatasmithAssetUserData::UniqueIdMetaDataKey), DatasmithUniqueId );
+				UDatasmithAssetUserData::SetDatasmithUserDataValueForKey(Object, UDatasmithAssetUserData::UniqueIdMetaDataKey, NewUniqueId );
 
 				AssetRedirectorMap.Emplace( PreviousObjectPath, Object );
 				if(bCheckPackage)
@@ -444,10 +437,6 @@ void UDatasmithFileProducer::PreventNameCollision()
 		{
 			if( UObject* Object = Assets[Index].Get() )
 			{
-				// Ensure object's package is transient and not public
-				Object->GetOutermost()->ClearFlags( RF_Public );
-				Object->GetOutermost()->SetFlags( RF_Transient );
-
 				PathsToDelete.Add( Object->GetOutermost()->GetPathName() );
 
 				if( Cast<UStaticMesh>( Object ) != nullptr )
@@ -470,7 +459,7 @@ void UDatasmithFileProducer::PreventNameCollision()
 				{
 					if (UMaterial* SourceMaterial = Cast< UMaterial >(MaterialInstance))
 					{
-						for (FMaterialFunctionInfo& MaterialFunctionInfo : SourceMaterial->MaterialFunctionInfos)
+						for (const FMaterialFunctionInfo& MaterialFunctionInfo : SourceMaterial->GetCachedExpressionData().FunctionInfos)
 						{
 							if (MaterialFunctionInfo.Function && MaterialFunctionInfo.Function->GetOutermost() == SourceMaterial->GetOutermost())
 							{
@@ -610,6 +599,13 @@ void UDatasmithFileProducer::PreventNameCollision()
 	FDatasmithFileProducerUtils::DeletePackagesPath( PathsToDelete );
 }
 
+void UDatasmithFileProducer::OnFilePathChanged()
+{
+	FilePath = FPaths::ConvertRelativePathToFull( FilePath );
+	UpdateName();
+	OnChanged.Broadcast( this );
+}
+
 void UDatasmithFileProducer::Reset()
 {
 	DatasmithScenePtr.Reset();
@@ -636,15 +632,13 @@ FString UDatasmithFileProducer::GetNamespace() const
 	return FString::FromInt( GetTypeHash( FilePath ) );
 }
 
-void UDatasmithFileProducer::SetFilename( const FString& InFilename )
+void UDatasmithFileProducer::SetFilePath( const FString& InFilePath )
 {
 	Modify();
 
-	FilePath = FPaths::ConvertRelativePathToFull( InFilename );
+	FilePath = InFilePath;
 
-	UpdateName();
-
-	OnChanged.Broadcast( this );
+	OnFilePathChanged();
 }
 
 void UDatasmithFileProducer::UpdateName()
@@ -671,6 +665,23 @@ bool UDatasmithFileProducer::Supersede(const UDataprepContentProducer* OtherProd
 		FilePath == OtherFileProducer->FilePath;
 }
 
+bool UDatasmithFileProducer::CanAddToProducersArray(bool bIsAutomated)
+{
+	if ( bIsAutomated )
+	{
+		return true;
+	}
+
+	FilePath = FDatasmithFileProducerUtils::SelectFileToImport();
+	if ( !FilePath.IsEmpty() )
+	{
+		UpdateName();
+		return true;
+	}
+
+	return false;
+}
+
 void UDatasmithFileProducer::PostEditUndo()
 {
 	UDataprepContentProducer::PostEditUndo();
@@ -678,15 +689,13 @@ void UDatasmithFileProducer::PostEditUndo()
 	OnChanged.Broadcast( this );
 }
 
-void UDatasmithFileProducer::PostInitProperties()
+void UDatasmithFileProducer::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
-	UDataprepContentProducer::PostInitProperties();
+	FProperty* EditedProperty = PropertyChangedEvent.Property;
 
-	// Set FilePath when creating a new producer
-	if( !HasAnyFlags( RF_ClassDefaultObject | RF_WasLoaded | RF_Transient ) )
+	if ( !EditedProperty || EditedProperty->GetFName() == GET_MEMBER_NAME_CHECKED(UDatasmithFileProducer, FilePath) )
 	{
-		FilePath = FDatasmithFileProducerUtils::SelectFileToImport();
-		UpdateName();
+		OnFilePathChanged();
 	}
 }
 
@@ -761,7 +770,13 @@ bool UDatasmithDirProducer::Execute(TArray< TWeakObjectPtr< UObject > >& OutAsse
 	UPackage* RootTransientPackage = NewObject< UPackage >( nullptr, *RootPath, RF_Transient );
 	RootTransientPackage->FullyLoad();
 
-	for( const FString& FileName : FilesToProcess )
+	TArray<FString> FilesNotProcessed; // these files will be processed one by one
+	if (!ImportAsPlmXml(RootTransientPackage, OutAssets, FilesNotProcessed))
+	{
+		FilesNotProcessed = FilesToProcess.Array();
+	}
+	
+	for( const FString& FileName : FilesNotProcessed )
 	{
 		if ( IsCancelled() )
 		{
@@ -788,7 +803,7 @@ bool UDatasmithDirProducer::Execute(TArray< TWeakObjectPtr< UObject > >& OutAsse
 
 		if( !FileProducer->Produce( Context, OutAssets ) )
 		{
-			FText ErrorReport = FText::Format( LOCTEXT( "DatasmithDirProducer_Failed", "Failed to load {0} ..."), FText::FromString( FileName ) );
+			FText ErrorReport = FText::Format( LOCTEXT( "DatasmithDirProducer_FailedLoad", "Failed to load {0} ..."), FText::FromString( FileName ) );
 			LogError( ErrorReport );
 		}
 	}
@@ -797,6 +812,150 @@ bool UDatasmithDirProducer::Execute(TArray< TWeakObjectPtr< UObject > >& OutAsse
 	Context.SetRootPackage( CachedPackage );
 
 	return !IsCancelled();
+}
+
+// #ueent_todo:  ImportAsPlmXml should be replaced by a new object which will be responsible for the dispatch of import files which are supported by Datasmith
+/** Try to import as many files as possible using PlmXml translator. This is a temporary solution which enables importing multiple files at once using as many CPU cores as possible(fastest).
+ *  DatasmithDispatcher is able to import multiple files in parallel and PlmXmlTranslator is making use of this property of the DatasmithDispatcher.
+ *  Returns false if no files were processed
+ */
+bool UDatasmithDirProducer::ImportAsPlmXml(UPackage* RootPackage, TArray<TWeakObjectPtr<UObject>>& OutAssets, TArray<FString>& FilesNotProcessed)
+{
+	// Find out which translator can import CAD files by retrieving translator for a JT file(this is expected to be 'DatasmithCADTranslator').
+	// And then accept files which have this translator returned as compatible.
+	FDatasmithSceneSource SomeCADFileSource;
+	SomeCADFileSource.SetSourceFile("test.jt");
+	TSharedPtr<IDatasmithTranslator> TranslatorForCADFiles = FDatasmithTranslatorManager::Get().SelectFirstCompatible(SomeCADFileSource);
+	if (!TranslatorForCADFiles.IsValid())
+	{
+		return false;
+	}
+
+	FName CADTranslatorName = TranslatorForCADFiles->GetFName();
+	TArray<FString> FilesToProcessWithPlmXml;
+	for (const FString& FileName : FilesToProcess)
+	{
+		FDatasmithSceneSource Source;
+		Source.SetSourceFile(FileName);
+		TSharedPtr<IDatasmithTranslator> Translator = FDatasmithTranslatorManager::Get().SelectFirstCompatible(Source);
+
+		bool bIsCADFile = Translator.IsValid() && (Translator->GetFName() == CADTranslatorName);
+		if (bIsCADFile)
+		{
+			FilesToProcessWithPlmXml.Add(FileName);
+		}
+		else
+		{
+			FilesNotProcessed.Add(FileName);
+		}
+	}
+
+	// skip plmxml processing for single file
+	if (FilesToProcessWithPlmXml.Num() <= 1)
+	{
+		return false;
+	}
+
+	FString TempDir = FPaths::Combine(FPaths::ProjectIntermediateDir(), TEXT("DatasmithProducerTemp"));
+	if (!IFileManager::Get().DirectoryExists(*TempDir))
+	{
+		IFileManager::Get().MakeDirectory(*TempDir);
+	}
+	FString PlmXmlFileName = FPaths::Combine(TempDir, FPaths::GetBaseFilename(FolderPath) + TEXT(".plmxml"));
+
+	class FXmlWriter
+	{
+	public:
+		FString Buffer;
+
+		FXmlWriter()
+		{
+			Buffer = TEXT("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+			Buffer += LINE_TERMINATOR;
+		}
+
+		class FTagGuard
+		{
+		public:
+			FTagGuard(FXmlWriter& InWriter, FString Opening, FString InClosing)
+				: Writer(InWriter)
+				, Closing(InClosing)
+			{
+				Writer.Buffer += Opening;
+				Writer.Buffer += LINE_TERMINATOR;
+			}
+			~FTagGuard()
+			{
+				Writer.Buffer += Closing;
+				Writer.Buffer += LINE_TERMINATOR;
+			}
+		private:
+			FXmlWriter& Writer;
+			FString Closing;
+		};
+	};
+
+	FXmlWriter Writer;
+	FString& Buffer = Writer.Buffer;
+
+	// Creating PLMXML file where each of files to process is referenced from a ProductRevisionView
+	{
+		FXmlWriter::FTagGuard PLMXMLTag(Writer, TEXT("<PLMXML xmlns=\"http://www.plmxml.org/Schemas/PLMXMLSchema\">"), "</PLMXML>");
+		FXmlWriter::FTagGuard ProductDefTag(Writer, TEXT("<ProductDef id=\"id1\">"), TEXT("</ProductDef>"));
+
+		// Used to assign unique ids to PLMXML entities being created
+		int32 CurrentId = 2;
+
+		// Collect all InstanceId to reference from InstanceGraph rootRefs
+		TArray<FString> InstanceIds;
+		InstanceIds.Reserve(FilesToProcessWithPlmXml.Num());
+		for (const FString& FileName : FilesToProcessWithPlmXml)
+		{
+			InstanceIds.Add(FString::Printf(TEXT("id%d"), CurrentId++));
+		}
+		FXmlWriter::FTagGuard InstanceGraphTag(Writer, FString::Printf(TEXT("<InstanceGraph id=\"id2\" rootRefs=\"%s\">"), *FString::Join(InstanceIds, TEXT(" "))), TEXT("</InstanceGraph>"));
+
+		for (int32 FileIndex = 0; FileIndex < FilesToProcessWithPlmXml.Num(); ++FileIndex)
+		{
+			const FString& FileName = FilesToProcessWithPlmXml[FileIndex];
+			FString InstanceId = InstanceIds[FileIndex];
+			FString InstanceName = FPaths::GetBaseFilename(FileName);
+			FString PartId = FString::Printf(TEXT("id%d"), CurrentId++);
+			FString RepresentationId = FString::Printf(TEXT("id%d"), CurrentId++);
+			{
+				FXmlWriter::FTagGuard ProductInstanceTag(Writer, FString::Printf(TEXT("<ProductInstance id=\"%s\" name=\"%s\" partRef=\"#%s\">"), *InstanceId, *InstanceName, *PartId), TEXT("</ProductInstance>"));
+			}
+			{
+				FXmlWriter::FTagGuard ProductRevisionViewTag(Writer, FString::Printf(TEXT("<ProductRevisionView id=\"%s\" name=\"%s\">"), *PartId, *InstanceName), TEXT("</ProductRevisionView>"));
+				//  omitting 'format' attribute, it's optional anyway
+				FXmlWriter::FTagGuard RepresentationTag(Writer, FString::Printf(TEXT("<Representation id=\"%s\" location=\"%s\">"), *RepresentationId, *FileName), TEXT("</Representation>"));
+			}
+		}
+	}
+
+	if (!FFileHelper::SaveStringToFile(Buffer, *PlmXmlFileName, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		FText ErrorReport = FText::Format(LOCTEXT("DatasmithPlmXmlProducer_FailedCreate", "Failed to create PlmXml file, {0}, for parallel loading ..."), FText::FromString(PlmXmlFileName));
+		LogError(ErrorReport);
+		return false;
+	}
+
+	// Import content of file into the proper content folder to avoid name collision
+	UPackage* TransientPackage = RootPackage;
+
+	Context.SetRootPackage(TransientPackage);
+
+	// Update file producer's filename
+	FileProducer->FilePath = PlmXmlFileName;
+	FileProducer->UpdateName();
+
+	if (!FileProducer->Produce(Context, OutAssets))
+	{
+		FText ErrorReport = FText::Format(LOCTEXT("DatasmithPlmXmlProducer_FailedProduce", "Failed to produce assets with PlmXml file, {0}, for parallel loading ..."), FText::FromString(PlmXmlFileName));
+		LogError(ErrorReport);
+		return false;
+	}
+	return true;
 }
 
 void UDatasmithDirProducer::Reset()
@@ -832,29 +991,60 @@ void UDatasmithDirProducer::Serialize( FArchive& Ar )
 	}
 }
 
-void UDatasmithDirProducer::PostInitProperties()
+void UDatasmithDirProducer::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
-	UDataprepContentProducer::PostInitProperties();
+	FProperty* EditedProperty = PropertyChangedEvent.Property;
 
-	if( !HasAnyFlags( RF_ClassDefaultObject | RF_WasLoaded | RF_Transient ) )
+	if ( !EditedProperty || EditedProperty->GetFName() == GET_MEMBER_NAME_CHECKED(UDatasmithDirProducer, FolderPath) )
 	{
-		FolderPath = FDatasmithFileProducerUtils::SelectDirectory();
-		UpdateName();
+		//OnEditFolderPathChanged();
+	}
+
+	if ( !EditedProperty || EditedProperty->GetFName() == GET_MEMBER_NAME_CHECKED(UDatasmithDirProducer, ExtensionString) )
+	{
+		OnExtensionsChanged();
+	}
+
+	if ( !EditedProperty || EditedProperty->GetFName() == GET_MEMBER_NAME_CHECKED(UDatasmithDirProducer, bRecursive) )
+	{
+		OnRecursivityChanged();
 	}
 }
 
-void UDatasmithDirProducer::SetFolderName( const FString& InFolderName )
+void UDatasmithDirProducer::SetFolderPath( const FString& InFolderPath )
 {
-	if(!InFolderName.IsEmpty())
-	{
-		Modify();
+	Modify();
+	FolderPath = InFolderPath;
+	OnFolderPathChanged();
+}
 
-		FolderPath = FPaths::ConvertRelativePathToFull( InFolderName );
+FString UDatasmithDirProducer::GetFolderPath() const
+{
+	return FolderPath;
+}
 
-		UpdateName();
+void UDatasmithDirProducer::SetExtensionString(const FString& InExtensionString)
+{
+	Modify();
+	ExtensionString = InExtensionString;
+	OnExtensionsChanged();
+}
 
-		OnChanged.Broadcast(this);
-	}
+FString UDatasmithDirProducer::GetExtensionString() const
+{
+	return ExtensionString;
+}
+
+void UDatasmithDirProducer::SetIsRecursive(bool bInRecursive)
+{
+	Modify();
+	bRecursive = bInRecursive;
+	OnRecursivityChanged();
+}
+
+bool UDatasmithDirProducer::IsRecursive() const
+{
+	return bRecursive;
 }
 
 void UDatasmithDirProducer::UpdateName()
@@ -932,6 +1122,31 @@ bool UDatasmithDirProducer::Supersede(const UDataprepContentProducer* OtherProdu
 	}
 
 	return false;
+}
+
+bool UDatasmithDirProducer::CanAddToProducersArray(bool bIsAutomated)
+{
+	if ( bIsAutomated )
+	{
+		return true;
+	}
+
+
+	FolderPath = FDatasmithFileProducerUtils::SelectDirectory();
+	if ( !FolderPath.IsEmpty() )
+	{
+		UpdateName();
+		return true;
+	}
+
+	return false;
+}
+
+void UDatasmithDirProducer::OnFolderPathChanged()
+{
+	FolderPath = FPaths::ConvertRelativePathToFull( FolderPath );
+	UpdateName();
+	OnChanged.Broadcast(this);
 }
 
 void UDatasmithDirProducer::OnRecursivityChanged()
@@ -1076,7 +1291,7 @@ private:
 		{
 			const FScopedTransaction Transaction( LOCTEXT("Producer_SetFilename", "Set Filename") );
 
-			ProducerPtr->SetFilename( SelectedFile );
+			ProducerPtr->SetFilePath( SelectedFile );
 			FileName->SetText( GetFilenameText() );
 		}
 
@@ -1109,17 +1324,17 @@ void FDatasmithFileProducerDetails::CustomizeDetails(IDetailLayoutBuilder& Detai
 
 	DetailBuilder.HideCategory(FName( TEXT( "Warning" ) ) );
 
-	FName CategoryName( TEXT("DatasmithFileProducerCustom") );
-	IDetailCategoryBuilder& ImportSettingsCategoryBuilder = DetailBuilder.EditCategory( CategoryName, FText::GetEmpty(), ECategoryPriority::Important );
+	//FName CategoryName( TEXT("DatasmithFileProducerCustom") );
+	IDetailCategoryBuilder& ImportSettingsCategoryBuilder = DetailBuilder.EditCategory( NAME_None, FText::GetEmpty(), ECategoryPriority::Important );
+
+	TSharedRef<IPropertyHandle> PropertyHandle = DetailBuilder.GetProperty( TEXT("FilePath"), UDatasmithFileProducer::StaticClass() );
+	PropertyHandle->MarkHiddenByCustomization();
 
 	FDetailWidgetRow& CustomAssetImportRow = ImportSettingsCategoryBuilder.AddCustomRow( FText::FromString( TEXT( "Import File" ) ) );
 
 	CustomAssetImportRow.NameContent()
 	[
-		SNew(STextBlock)
-		.Text(LOCTEXT("DatasmithFileProducerDetails_ImportFile", "Filename"))
-		.ToolTipText(LOCTEXT("DatasmithFileProducerDetails_ImportFileTooltip", "The file imported by datasmith."))
-		.Font( IDetailLayoutBuilder::GetDetailFont() )
+		PropertyHandle->CreatePropertyNameWidget()
 	];
 
 	CustomAssetImportRow.ValueContent()
@@ -1186,7 +1401,7 @@ private:
 		if( !SelectedFolder.IsEmpty() )
 		{
 			const FScopedTransaction Transaction( LOCTEXT("Producer_SetFolderName", "Set Folder Name") );
-			ProducerPtr->SetFolderName( SelectedFolder );
+			ProducerPtr->SetFolderPath( SelectedFolder );
 
 			FolderName->SetText( GetFilenameText() );
 		}

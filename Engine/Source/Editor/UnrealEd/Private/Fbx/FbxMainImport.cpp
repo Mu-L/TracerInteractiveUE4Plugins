@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	Main implementation of FFbxImporter : import FBX data to Unreal
@@ -71,7 +71,7 @@ void PrepareAndShowMaterialConflictPreviewDialog(UFbxImportUI* ImportUI)
 		ResultMaterial[Materialindex].ImportedMaterialSlotName = ImportUI->MaterialCompareData.ResultAsset[Materialindex].ImportedMaterialSlotName;
 	}
 	UnFbx::EFBXReimportDialogReturnOption OutReturnOption;
-	UnFbx::FFbxImporter::PrepareAndShowMaterialConflictDialog<TMaterialType>(CurrentMaterial, ResultMaterial, RemapMaterial, RemapMaterialName, true, true, OutReturnOption);
+	UnFbx::FFbxImporter::PrepareAndShowMaterialConflictDialog<TMaterialType>(CurrentMaterial, ResultMaterial, RemapMaterial, RemapMaterialName, true, true, false, OutReturnOption);
 }
 
 void PrepareAndShowSkeletonConflictPreviewDialog(UFbxImportUI* ImportUI)
@@ -294,26 +294,26 @@ FBXImportOptions* GetImportOptions( UnFbx::FFbxImporter* FbxImporter, UFbxImport
 			}
 		}
 
-		ImportUI->SaveConfig();
+		UFbxImportUI::SaveOptions(ImportUI);
 
 		if( ImportUI->StaticMeshImportData )
 		{
-			ImportUI->StaticMeshImportData->SaveOptions();
+			UFbxImportUI::SaveOptions(ImportUI->StaticMeshImportData);
 		}
 
 		if( ImportUI->SkeletalMeshImportData )
 		{
-			ImportUI->SkeletalMeshImportData->SaveOptions();
+			UFbxImportUI::SaveOptions(ImportUI->SkeletalMeshImportData);
 		}
 
 		if( ImportUI->AnimSequenceImportData )
 		{
-			ImportUI->AnimSequenceImportData->SaveOptions();
+			UFbxImportUI::SaveOptions(ImportUI->AnimSequenceImportData);
 		}
 
 		if( ImportUI->TextureImportData )
 		{
-			ImportUI->TextureImportData->SaveOptions();
+			UFbxImportUI::SaveOptions(ImportUI->TextureImportData);
 		}
 
 		if (FbxOptionWindow->ShouldImport())
@@ -352,38 +352,56 @@ FBXImportOptions* GetImportOptions( UnFbx::FFbxImporter* FbxImporter, UFbxImport
 void ApplyImportUIToImportOptions(UFbxImportUI* ImportUI, FBXImportOptions& InOutImportOptions)
 {
 	check(ImportUI);
-	InOutImportOptions.bImportMaterials = ImportUI->bImportMaterials;
-	InOutImportOptions.bInvertNormalMap = ImportUI->TextureImportData->bInvertNormalMaps;
-	InOutImportOptions.MaterialSearchLocation = ImportUI->TextureImportData->MaterialSearchLocation;
-	UMaterialInterface* BaseMaterialInterface = Cast<UMaterialInterface>(ImportUI->TextureImportData->BaseMaterialName.TryLoad());
-	if (BaseMaterialInterface) {
-		InOutImportOptions.BaseMaterial = BaseMaterialInterface;
-		InOutImportOptions.BaseColorName = ImportUI->TextureImportData->BaseColorName;
-		InOutImportOptions.BaseDiffuseTextureName = ImportUI->TextureImportData->BaseDiffuseTextureName;
-		InOutImportOptions.BaseNormalTextureName = ImportUI->TextureImportData->BaseNormalTextureName;
-		InOutImportOptions.BaseEmmisiveTextureName = ImportUI->TextureImportData->BaseEmmisiveTextureName;
-		InOutImportOptions.BaseSpecularTextureName = ImportUI->TextureImportData->BaseSpecularTextureName;
-		InOutImportOptions.BaseEmissiveColorName = ImportUI->TextureImportData->BaseEmissiveColorName;
+
+	//General options
+	{
+		InOutImportOptions.bUsedAsFullName			= ImportUI->bOverrideFullName;
+		InOutImportOptions.ImportType				= ImportUI->MeshTypeToImport;
+
+		InOutImportOptions.bResetToFbxOnMaterialConflict = ImportUI->bResetToFbxOnMaterialConflict;
+		InOutImportOptions.bAutoComputeLodDistances	= ImportUI->bAutoComputeLodDistances;
+		InOutImportOptions.LodDistances.Empty(8);
+		InOutImportOptions.LodDistances.Add(ImportUI->LodDistance0);
+		InOutImportOptions.LodDistances.Add(ImportUI->LodDistance1);
+		InOutImportOptions.LodDistances.Add(ImportUI->LodDistance2);
+		InOutImportOptions.LodDistances.Add(ImportUI->LodDistance3);
+		InOutImportOptions.LodDistances.Add(ImportUI->LodDistance4);
+		InOutImportOptions.LodDistances.Add(ImportUI->LodDistance5);
+		InOutImportOptions.LodDistances.Add(ImportUI->LodDistance6);
+		InOutImportOptions.LodDistances.Add(ImportUI->LodDistance7);
+		InOutImportOptions.LodNumber				= ImportUI->LodNumber;
+		InOutImportOptions.MinimumLodNumber			= ImportUI->MinimumLodNumber;
 	}
-	InOutImportOptions.bImportTextures = ImportUI->bImportTextures;
-	InOutImportOptions.bUsedAsFullName = ImportUI->bOverrideFullName;
-	InOutImportOptions.bImportAnimations = ImportUI->bImportAnimations;
-	InOutImportOptions.SkeletonForAnimation = ImportUI->Skeleton;
-	InOutImportOptions.ImportType = ImportUI->MeshTypeToImport;
 
-	InOutImportOptions.bAutoComputeLodDistances = ImportUI->bAutoComputeLodDistances;
-	InOutImportOptions.LodDistances.Empty(8);
-	InOutImportOptions.LodDistances.Add(ImportUI->LodDistance0);
-	InOutImportOptions.LodDistances.Add(ImportUI->LodDistance1);
-	InOutImportOptions.LodDistances.Add(ImportUI->LodDistance2);
-	InOutImportOptions.LodDistances.Add(ImportUI->LodDistance3);
-	InOutImportOptions.LodDistances.Add(ImportUI->LodDistance4);
-	InOutImportOptions.LodDistances.Add(ImportUI->LodDistance5);
-	InOutImportOptions.LodDistances.Add(ImportUI->LodDistance6);
-	InOutImportOptions.LodDistances.Add(ImportUI->LodDistance7);
-	InOutImportOptions.LodNumber = ImportUI->LodNumber;
-	InOutImportOptions.MinimumLodNumber = ImportUI->MinimumLodNumber;
+	//Animation and skeletal mesh options
+	{
+		InOutImportOptions.bImportAnimations		= ImportUI->bImportAnimations;
+		InOutImportOptions.SkeletonForAnimation		= ImportUI->Skeleton;
+		InOutImportOptions.bCreatePhysicsAsset		= ImportUI->bCreatePhysicsAsset;
+		InOutImportOptions.PhysicsAsset				= ImportUI->PhysicsAsset;
+		InOutImportOptions.AnimationName			= ImportUI->OverrideAnimationName;
+	}
 
+	//Material options
+	{
+		InOutImportOptions.bImportMaterials			= ImportUI->bImportMaterials;
+		InOutImportOptions.bInvertNormalMap			= ImportUI->TextureImportData->bInvertNormalMaps;
+		InOutImportOptions.MaterialSearchLocation	= ImportUI->TextureImportData->MaterialSearchLocation;
+		UMaterialInterface* BaseMaterialInterface	= Cast<UMaterialInterface>(ImportUI->TextureImportData->BaseMaterialName.TryLoad());
+		if (BaseMaterialInterface) {
+			InOutImportOptions.BaseMaterial			= BaseMaterialInterface;
+			InOutImportOptions.BaseColorName		= ImportUI->TextureImportData->BaseColorName;
+			InOutImportOptions.BaseDiffuseTextureName = ImportUI->TextureImportData->BaseDiffuseTextureName;
+			InOutImportOptions.BaseNormalTextureName = ImportUI->TextureImportData->BaseNormalTextureName;
+			InOutImportOptions.BaseEmmisiveTextureName = ImportUI->TextureImportData->BaseEmmisiveTextureName;
+			InOutImportOptions.BaseSpecularTextureName = ImportUI->TextureImportData->BaseSpecularTextureName;
+			InOutImportOptions.BaseOpacityTextureName = ImportUI->TextureImportData->BaseOpacityTextureName;
+			InOutImportOptions.BaseEmissiveColorName = ImportUI->TextureImportData->BaseEmissiveColorName;
+		}
+		InOutImportOptions.bImportTextures			= ImportUI->bImportTextures;
+	}
+
+	//Some options are overlap between static mesh, skeletal mesh and anim sequence. We must set them according to the import type to set them only once
 	if ( ImportUI->MeshTypeToImport == FBXIT_StaticMesh )
 	{
 		UFbxStaticMeshImportData* StaticMeshData	= ImportUI->StaticMeshImportData;
@@ -406,8 +424,6 @@ void ApplyImportUIToImportOptions(UFbxImportUI* ImportUI, FBXImportOptions& InOu
 	else if ( ImportUI->MeshTypeToImport == FBXIT_SkeletalMesh )
 	{
 		UFbxSkeletalMeshImportData* SkeletalMeshData	= ImportUI->SkeletalMeshImportData;
-		InOutImportOptions.bImportAsSkeletalGeometry    = SkeletalMeshData->ImportContentType == EFBXImportContentType::FBXICT_Geometry;
-		InOutImportOptions.bImportAsSkeletalSkinning	= SkeletalMeshData->ImportContentType == EFBXImportContentType::FBXICT_SkinningWeights;
 		InOutImportOptions.NormalImportMethod			= SkeletalMeshData->NormalImportMethod;
 		InOutImportOptions.NormalGenerationMethod		= SkeletalMeshData->NormalGenerationMethod;
 		InOutImportOptions.bComputeWeightedNormals		= SkeletalMeshData->bComputeWeightedNormals;
@@ -439,7 +455,7 @@ void ApplyImportUIToImportOptions(UFbxImportUI* ImportUI, FBXImportOptions& InOu
 	else
 	{
 		UFbxAnimSequenceImportData* AnimData	= ImportUI->AnimSequenceImportData;
-		InOutImportOptions.NormalImportMethod = FBXNIM_ComputeNormals;
+		InOutImportOptions.NormalImportMethod	= FBXNIM_ComputeNormals;
 		InOutImportOptions.bComputeWeightedNormals = true;
 		InOutImportOptions.ImportTranslation	= AnimData->ImportTranslation;
 		InOutImportOptions.ImportRotation		= AnimData->ImportRotation;
@@ -449,54 +465,64 @@ void ApplyImportUIToImportOptions(UFbxImportUI* ImportUI, FBXImportOptions& InOu
 		InOutImportOptions.bConvertSceneUnit	= AnimData->bConvertSceneUnit;
 	}
 
-	InOutImportOptions.bImportMorph = ImportUI->SkeletalMeshImportData->bImportMorphTargets;
-	InOutImportOptions.bUpdateSkeletonReferencePose = ImportUI->SkeletalMeshImportData->bUpdateSkeletonReferencePose;
-	InOutImportOptions.bImportRigidMesh = ImportUI->OriginalImportType == FBXIT_StaticMesh && ImportUI->MeshTypeToImport == FBXIT_SkeletalMesh;
-	InOutImportOptions.bUseT0AsRefPose = ImportUI->SkeletalMeshImportData->bUseT0AsRefPose;
-	InOutImportOptions.bPreserveSmoothingGroups = ImportUI->SkeletalMeshImportData->bPreserveSmoothingGroups;
-	InOutImportOptions.OverlappingThresholds.ThresholdPosition = ImportUI->SkeletalMeshImportData->ThresholdPosition;
-	InOutImportOptions.OverlappingThresholds.ThresholdTangentNormal = ImportUI->SkeletalMeshImportData->ThresholdTangentNormal;
-	InOutImportOptions.OverlappingThresholds.ThresholdUV = ImportUI->SkeletalMeshImportData->ThresholdUV;
-	InOutImportOptions.bCombineToSingle = ImportUI->StaticMeshImportData->bCombineMeshes;
+	//Skeletal mesh unshared options
+	{
+		InOutImportOptions.bImportAsSkeletalGeometry	= ImportUI->SkeletalMeshImportData->ImportContentType == EFBXImportContentType::FBXICT_Geometry;
+		InOutImportOptions.bImportAsSkeletalSkinning	= ImportUI->SkeletalMeshImportData->ImportContentType == EFBXImportContentType::FBXICT_SkinningWeights;
+		InOutImportOptions.bImportMorph					= ImportUI->SkeletalMeshImportData->bImportMorphTargets;
+		InOutImportOptions.bUpdateSkeletonReferencePose = ImportUI->SkeletalMeshImportData->bUpdateSkeletonReferencePose;
+		InOutImportOptions.bImportRigidMesh				= ImportUI->OriginalImportType == FBXIT_StaticMesh && ImportUI->MeshTypeToImport == FBXIT_SkeletalMesh;
+		InOutImportOptions.bUseT0AsRefPose				= ImportUI->SkeletalMeshImportData->bUseT0AsRefPose;
+		InOutImportOptions.bPreserveSmoothingGroups		= ImportUI->SkeletalMeshImportData->bPreserveSmoothingGroups;
+		InOutImportOptions.OverlappingThresholds.ThresholdPosition = ImportUI->SkeletalMeshImportData->ThresholdPosition;
+		InOutImportOptions.OverlappingThresholds.ThresholdTangentNormal = ImportUI->SkeletalMeshImportData->ThresholdTangentNormal;
+		InOutImportOptions.OverlappingThresholds.ThresholdUV = ImportUI->SkeletalMeshImportData->ThresholdUV;
+		InOutImportOptions.OverlappingThresholds.MorphThresholdPosition = ImportUI->SkeletalMeshImportData->MorphThresholdPosition;
+		InOutImportOptions.bImportMeshesInBoneHierarchy = ImportUI->SkeletalMeshImportData->bImportMeshesInBoneHierarchy;
+	}
+
+	//Static mesh unshared options
+	{
+		InOutImportOptions.bCombineToSingle				= ImportUI->StaticMeshImportData->bCombineMeshes;
+		InOutImportOptions.bRemoveDegenerates			= ImportUI->StaticMeshImportData->bRemoveDegenerates;
+		InOutImportOptions.bBuildAdjacencyBuffer		= ImportUI->StaticMeshImportData->bBuildAdjacencyBuffer;
+		InOutImportOptions.bBuildReversedIndexBuffer	= ImportUI->StaticMeshImportData->bBuildReversedIndexBuffer;
+		InOutImportOptions.bGenerateLightmapUVs			= ImportUI->StaticMeshImportData->bGenerateLightmapUVs;
+		InOutImportOptions.bOneConvexHullPerUCX			= ImportUI->StaticMeshImportData->bOneConvexHullPerUCX;
+		InOutImportOptions.bAutoGenerateCollision		= ImportUI->StaticMeshImportData->bAutoGenerateCollision;
+		InOutImportOptions.StaticMeshLODGroup			= ImportUI->StaticMeshImportData->StaticMeshLODGroup;
+	}
 	
-	InOutImportOptions.bRemoveDegenerates = ImportUI->StaticMeshImportData->bRemoveDegenerates;
-	InOutImportOptions.bBuildAdjacencyBuffer = ImportUI->StaticMeshImportData->bBuildAdjacencyBuffer;
-	InOutImportOptions.bBuildReversedIndexBuffer = ImportUI->StaticMeshImportData->bBuildReversedIndexBuffer;
-	InOutImportOptions.bGenerateLightmapUVs = ImportUI->StaticMeshImportData->bGenerateLightmapUVs;
-	InOutImportOptions.bOneConvexHullPerUCX = ImportUI->StaticMeshImportData->bOneConvexHullPerUCX;
-	InOutImportOptions.bAutoGenerateCollision = ImportUI->StaticMeshImportData->bAutoGenerateCollision;
-	InOutImportOptions.StaticMeshLODGroup = ImportUI->StaticMeshImportData->StaticMeshLODGroup;
-	InOutImportOptions.bImportMeshesInBoneHierarchy = ImportUI->SkeletalMeshImportData->bImportMeshesInBoneHierarchy;
-	InOutImportOptions.bCreatePhysicsAsset = ImportUI->bCreatePhysicsAsset;
-	InOutImportOptions.PhysicsAsset = ImportUI->PhysicsAsset;
-	// animation options
-	InOutImportOptions.AnimationLengthImportType = ImportUI->AnimSequenceImportData->AnimationLength;
-	InOutImportOptions.AnimationRange.X = ImportUI->AnimSequenceImportData->FrameImportRange.Min;
-	InOutImportOptions.AnimationRange.Y = ImportUI->AnimSequenceImportData->FrameImportRange.Max;
-	InOutImportOptions.AnimationName = ImportUI->OverrideAnimationName;
-	// only re-sample if they don't want to use default sample rate
-	InOutImportOptions.bResample = !ImportUI->AnimSequenceImportData->bUseDefaultSampleRate;
-	InOutImportOptions.ResampleRate = ImportUI->AnimSequenceImportData->CustomSampleRate;
-	InOutImportOptions.bPreserveLocalTransform = ImportUI->AnimSequenceImportData->bPreserveLocalTransform;
-	InOutImportOptions.bDeleteExistingMorphTargetCurves = ImportUI->AnimSequenceImportData->bDeleteExistingMorphTargetCurves;
-	InOutImportOptions.bRemoveRedundantKeys = ImportUI->AnimSequenceImportData->bRemoveRedundantKeys;
-	InOutImportOptions.bDoNotImportCurveWithZero = ImportUI->AnimSequenceImportData->bDoNotImportCurveWithZero;
-	InOutImportOptions.bImportCustomAttribute = ImportUI->AnimSequenceImportData->bImportCustomAttribute;
-	InOutImportOptions.bDeleteExistingCustomAttributeCurves = ImportUI->AnimSequenceImportData->bDeleteExistingCustomAttributeCurves;
-	InOutImportOptions.bImportBoneTracks = ImportUI->AnimSequenceImportData->bImportBoneTracks;
-	InOutImportOptions.bSetMaterialDriveParameterOnCustomAttribute = ImportUI->AnimSequenceImportData->bSetMaterialDriveParameterOnCustomAttribute;
-	InOutImportOptions.MaterialCurveSuffixes = ImportUI->AnimSequenceImportData->MaterialCurveSuffixes;
+	// animation unshared options
+	{
+		
+		InOutImportOptions.AnimationLengthImportType	= ImportUI->AnimSequenceImportData->AnimationLength;
+		InOutImportOptions.AnimationRange.X				= ImportUI->AnimSequenceImportData->FrameImportRange.Min;
+		InOutImportOptions.AnimationRange.Y				= ImportUI->AnimSequenceImportData->FrameImportRange.Max;
+		// only re-sample if they don't want to use default sample rate
+		InOutImportOptions.bResample					= !ImportUI->AnimSequenceImportData->bUseDefaultSampleRate;
+		InOutImportOptions.ResampleRate					= ImportUI->AnimSequenceImportData->CustomSampleRate;
+		InOutImportOptions.bPreserveLocalTransform		= ImportUI->AnimSequenceImportData->bPreserveLocalTransform;
+		InOutImportOptions.bDeleteExistingMorphTargetCurves = ImportUI->AnimSequenceImportData->bDeleteExistingMorphTargetCurves;
+		InOutImportOptions.bRemoveRedundantKeys			= ImportUI->AnimSequenceImportData->bRemoveRedundantKeys;
+		InOutImportOptions.bDoNotImportCurveWithZero	= ImportUI->AnimSequenceImportData->bDoNotImportCurveWithZero;
+		InOutImportOptions.bImportCustomAttribute		= ImportUI->AnimSequenceImportData->bImportCustomAttribute;
+		InOutImportOptions.bDeleteExistingCustomAttributeCurves = ImportUI->AnimSequenceImportData->bDeleteExistingCustomAttributeCurves;
+		InOutImportOptions.bImportBoneTracks			= ImportUI->AnimSequenceImportData->bImportBoneTracks;
+		InOutImportOptions.bSetMaterialDriveParameterOnCustomAttribute = ImportUI->AnimSequenceImportData->bSetMaterialDriveParameterOnCustomAttribute;
+		InOutImportOptions.MaterialCurveSuffixes		= ImportUI->AnimSequenceImportData->MaterialCurveSuffixes;
+	}
 }
 
-void FImportedMaterialData::AddImportedMaterial( FbxSurfaceMaterial& FbxMaterial, UMaterialInterface& UnrealMaterial )
+void FImportedMaterialData::AddImportedMaterial( const FbxSurfaceMaterial& FbxMaterial, UMaterialInterface& UnrealMaterial )
 {
 	FbxToUnrealMaterialMap.Add( &FbxMaterial, &UnrealMaterial );
 	ImportedMaterialNames.Add( *UnrealMaterial.GetPathName() );
 }
 
-bool FImportedMaterialData::IsUnique( FbxSurfaceMaterial& FbxMaterial, FName ImportedMaterialName ) const
+bool FImportedMaterialData::IsAlreadyImported( const FbxSurfaceMaterial& FbxMaterial, FName ImportedMaterialName ) const
 {
-	UMaterialInterface* FoundMaterial = GetUnrealMaterial( FbxMaterial );
+	const UMaterialInterface* FoundMaterial = GetUnrealMaterial( FbxMaterial );
 
 	return FoundMaterial != NULL || ImportedMaterialNames.Contains( ImportedMaterialName );
 }
@@ -978,6 +1004,8 @@ bool FFbxImporter::OpenFile(FString Filename)
 		return false;
 	}
 
+	TRACE_CPUPROFILER_EVENT_SCOPE(FFbxImporter::OpenFile);
+
 	GWarn->BeginSlowTask( LOCTEXT("OpeningFile", "Reading File"), true);
 	GWarn->StatusForceUpdate(20, 100, LOCTEXT("OpeningFile", "Reading File"));
 
@@ -1272,14 +1300,19 @@ bool FFbxImporter::ImportFile(FString Filename, bool bPreventMaterialNameClash /
 
 void FFbxImporter::ConvertScene()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FFbxImporter::ConvertScene);
+
 	//Merge the anim stack before the conversion since the above 0 layer will not be converted
 	int32 AnimStackCount = Scene->GetSrcObjectCount<FbxAnimStack>();
 	//Merge the animation stack layer before converting the scene
 	for (int32 AnimStackIndex = 0; AnimStackIndex < AnimStackCount; AnimStackIndex++)
 	{
 		FbxAnimStack* CurAnimStack = Scene->GetSrcObject<FbxAnimStack>(AnimStackIndex);
-		int32 ResampleRate = GetGlobalAnimStackSampleRate(CurAnimStack);
-		MergeAllLayerAnimation(CurAnimStack, ResampleRate);
+		if (CurAnimStack->GetMemberCount() > 1)
+		{
+			int32 ResampleRate = GetGlobalAnimStackSampleRate(CurAnimStack);
+			MergeAllLayerAnimation(CurAnimStack, ResampleRate);
+		}
 	}
 
 	//Set the original file information
@@ -1452,6 +1485,7 @@ bool FFbxImporter::ImportFromFile(const FString& Filename, const FString& Type, 
 				  * @EventParam ThresholdPosition float Returns the threshold delta to weld vertices
 				  * @EventParam ThresholdTangentNormal float Returns the threshold delta to weld tangents and normals
 				  * @EventParam ThresholdUV float Returns the threshold delta to weld UVs
+				  * @EventParam MorphThresholdPosition float Returns the morph target threshold delta to compute deltas
 				  * @EventParam AutoComputeLodDistances boolean Returns whether the importer should set the auto compute LOD distance
 				  * @EventParam LodNumber integer Returns the LOD number we should have after the import
 				  * @EventParam BuildAdjacencyBuffer boolean Returns whether the importer should fill the adjacency buffer when building the static mesh
@@ -1549,6 +1583,7 @@ bool FFbxImporter::ImportFromFile(const FString& Filename, const FString& Type, 
 							Attribs.Add(FAnalyticsEventAttribute(TEXT("SkeletalMeshOpt OverlappingThresholds.ThresholdPosition"), CaptureImportOptions->OverlappingThresholds.ThresholdPosition));
 							Attribs.Add(FAnalyticsEventAttribute(TEXT("SkeletalMeshOpt OverlappingThresholds.ThresholdTangentNormal"), CaptureImportOptions->OverlappingThresholds.ThresholdTangentNormal));
 							Attribs.Add(FAnalyticsEventAttribute(TEXT("SkeletalMeshOpt OverlappingThresholds.ThresholdUV"), CaptureImportOptions->OverlappingThresholds.ThresholdUV));
+							Attribs.Add(FAnalyticsEventAttribute(TEXT("SkeletalMeshOpt OverlappingThresholds.MorphThresholdPosition"), CaptureImportOptions->OverlappingThresholds.MorphThresholdPosition));
 						};
 
 						auto AddSMAnalytic = [&Attribs, &CaptureImportOptions]()
@@ -1743,50 +1778,77 @@ FName FFbxImporter::MakeNameForMesh(FString InName, FbxObject* FbxObject)
 	return OutputName;
 }
 
-FbxNode* FFbxImporter::GetMeshNodesFromName(const FString& ReimportMeshName, TArray<FbxNode*>& FbxMeshArray)
+/* The score is the difference between name lower score is better*/
+int32 GetNodeNameDiffScore(const char* MeshName, const FbxNode* FbxMeshNode)
 {
-	//StaticMesh->GetName()
-	char MeshName[1024];
-	FCStringAnsi::Strcpy(MeshName, 1024, TCHAR_TO_UTF8(*ReimportMeshName));
-	// find the Fbx mesh node that the Unreal Mesh matches according to name
-	int32 MeshIndex;
-	for (MeshIndex = 0; MeshIndex < FbxMeshArray.Num(); MeshIndex++)
+	if (FbxMeshNode == nullptr || MeshName == nullptr)
 	{
-		const char* FbxMeshName = FbxMeshArray[MeshIndex]->GetName();
-		// The name of Unreal mesh may have a prefix, so we match from end
-		int32 i = 0;
-		char* MeshPtr = MeshName + FCStringAnsi::Strlen(MeshName) - 1;
-		if (FCStringAnsi::Strlen(FbxMeshName) <= FCStringAnsi::Strlen(MeshName))
-		{
-			const char* FbxMeshPtr = FbxMeshName + FCStringAnsi::Strlen(FbxMeshName) - 1;
-			while (i < FCStringAnsi::Strlen(FbxMeshName))
-			{
-				bool bIsPointAndUnderscore = *FbxMeshPtr == '.' && *MeshPtr == '_';
+		return INDEX_NONE;
+	}
+	int32 MeshNameLen = FCStringAnsi::Strlen(MeshName);
+	if (MeshNameLen == 0)
+	{
+		return INDEX_NONE;
+	}
+	const char* FbxNodeName = FbxMeshNode->GetName();
+	int32 FbxNodeNameLen = FCStringAnsi::Strlen(FbxNodeName);
+	if (FbxNodeNameLen == 0 || FbxNodeNameLen > MeshNameLen)
+	{
+		return INDEX_NONE;
+	}
+	// The name of Unreal mesh may have a prefix, so we match from end
+	int32 i = 0;
+	const char* MeshNamePtr = MeshName + MeshNameLen - 1;
+	const char* FbxMeshPtr = FbxNodeName + FbxNodeNameLen - 1;
+	while (i < FbxNodeNameLen)
+	{
+		bool bIsPointAndUnderscore = *FbxMeshPtr == '.' && *MeshNamePtr == '_';
 
-				if (*MeshPtr != *FbxMeshPtr && !bIsPointAndUnderscore)
-				{
-					break;
-				}
-				else
-				{
-					i++;
-					MeshPtr--;
-					FbxMeshPtr--;
-				}
-			}
+		if (*MeshNamePtr != *FbxMeshPtr && !bIsPointAndUnderscore)
+		{
+			break;
 		}
-
-		if (i == FCStringAnsi::Strlen(FbxMeshName)) // matched
+		else
 		{
-			// check further
-			if (FCStringAnsi::Strlen(FbxMeshName) == FCStringAnsi::Strlen(MeshName) || // the name of Unreal mesh is full match
-				*MeshPtr == '_')														// or the name of Unreal mesh has a prefix
-			{
-				return FbxMeshArray[MeshIndex];
-			}
+			i++;
+			MeshNamePtr--;
+			FbxMeshPtr--;
 		}
 	}
-	return nullptr;
+
+	if (i == FbxNodeNameLen) // matched
+	{
+		if (FbxNodeNameLen == MeshNameLen) // the name of Unreal mesh is full match
+		{
+			return 0;
+		}
+		// The name of Unreal mesh has a prefix
+		if (*MeshNamePtr == '_')
+		{
+			return (MeshNameLen - i);
+		}
+	}
+	return INDEX_NONE;
+}
+
+FbxNode* FFbxImporter::GetMeshNodesFromName(const FString& ReimportMeshName, TArray<FbxNode*>& FbxMeshArray)
+{
+	char MeshName[2048];
+	FCStringAnsi::Strcpy(MeshName, 2048, TCHAR_TO_UTF8(*ReimportMeshName));
+
+	// find the Fbx mesh node that the Unreal Mesh matches according to name
+	int32 BestMatchIndex = INDEX_NONE;
+	int32 BestDiffScore = MAX_int32;
+	for (int32 MeshIndex = 0; MeshIndex < FbxMeshArray.Num(); MeshIndex++)
+	{
+		int32 DiffScore = GetNodeNameDiffScore(MeshName, FbxMeshArray[MeshIndex]);
+		if (DiffScore != INDEX_NONE && DiffScore < BestDiffScore)
+		{
+			BestMatchIndex = MeshIndex;
+			BestDiffScore = DiffScore;
+		}
+	}
+	return FbxMeshArray.IsValidIndex(BestMatchIndex) ? FbxMeshArray[BestMatchIndex] : nullptr;
 }
 
 FbxAMatrix FFbxImporter::ComputeSkeletalMeshTotalMatrix(FbxNode* Node, FbxNode *RootSkeletalNode)
@@ -1957,19 +2019,6 @@ void FFbxImporter::FillFbxMeshArray(FbxNode* Node, TArray<FbxNode*>& outMeshArra
 	for (ChildIndex=0; ChildIndex<Node->GetChildCount(); ++ChildIndex)
 	{
 		FillFbxMeshArray(Node->GetChild(ChildIndex), outMeshArray, FFbxImporter);
-	}
-}
-
-void FFbxImporter::FillFbxSkeletonArray(FbxNode* Node, TArray<FbxNode*>& OutMeshArray)
-{
-	if (Node->GetSkeleton())
-	{
-		OutMeshArray.Add(Node);
-	}
-
-	for (int32 ChildIndex = 0; ChildIndex < Node->GetChildCount(); ++ChildIndex)
-	{
-		FillFbxSkeletonArray(Node->GetChild(ChildIndex), OutMeshArray);
 	}
 }
 
@@ -2154,7 +2203,7 @@ void FFbxImporter::ConvertLodPrefixToLodGroup()
 
 		//Get a valid name for the LODGroup actor
 		FString FbxNodeName = UTF8_TO_TCHAR(FirstNode->GetName());
-		FbxNodeName = FbxNodeName.RightChop(5);
+		FbxNodeName.RightChopInline(5, false);
 		FbxNodeName += TEXT("_LodGroup");
 		//Create a LodGroup and child all fbx node to the Group
 		FbxNode* ActorNode = FbxNode::Create(Scene, TCHAR_TO_UTF8(*FbxNodeName));
@@ -2169,7 +2218,7 @@ void FFbxImporter::ConvertLodPrefixToLodGroup()
 				if (bCanReduce)
 				{
 					FString FbxGeneratedNodeName = UTF8_TO_TCHAR(FirstNode->GetName());
-					FbxGeneratedNodeName = FbxGeneratedNodeName.RightChop(5);
+					FbxGeneratedNodeName.RightChopInline(5, false);
 					FbxGeneratedNodeName += TEXT(GeneratedLODNameSuffix) + FString::FromInt(CurrentLodIndex);
 					//Generated LOD add dummy FbxNode to tell the import to add such a LOD
 					FbxNode* DummyGeneratedLODActorNode = FbxNode::Create(Scene, TCHAR_TO_UTF8(*FbxGeneratedNodeName));
@@ -2214,7 +2263,11 @@ void FFbxImporter::ConvertLodPrefixToLodGroup()
 
 FbxNode *FFbxImporter::RecursiveGetFirstMeshNode(FbxNode* Node, FbxNode* NodeToFind)
 {
-	if (Node->GetMesh() != nullptr)
+	if (Node == nullptr)
+	{
+		return nullptr;
+	}
+	if(Node->GetMesh() != nullptr)
 		return Node;
 	for (int32 ChildIndex = 0; ChildIndex < Node->GetChildCount(); ++ChildIndex)
 	{
@@ -2236,28 +2289,32 @@ FbxNode *FFbxImporter::RecursiveGetFirstMeshNode(FbxNode* Node, FbxNode* NodeToF
 
 void FFbxImporter::RecursiveGetAllMeshNode(TArray<FbxNode *> &OutAllNode, FbxNode* Node)
 {
+	if (Node == nullptr)
+	{
+		return;
+	}
+
 	if (Node->GetMesh() != nullptr)
 	{
 		OutAllNode.Add(Node);
 		return;
 	}
-	else
+
+	//Look if its a generated LOD
+	FString FbxGeneratedNodeName = UTF8_TO_TCHAR(Node->GetName());
+	if (FbxGeneratedNodeName.Contains(TEXT(GeneratedLODNameSuffix)))
 	{
-		//Look if its a generated LOD
-		FString FbxGeneratedNodeName = UTF8_TO_TCHAR(Node->GetName());
-		if (FbxGeneratedNodeName.Contains(TEXT(GeneratedLODNameSuffix)))
+		FString SuffixSearch = TEXT(GeneratedLODNameSuffix);
+		int32 SuffixIndex = FbxGeneratedNodeName.Find(SuffixSearch, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+		SuffixIndex += SuffixSearch.Len();
+		FString LODXNumber = FbxGeneratedNodeName.RightChop(SuffixIndex).Left(1);
+		if (LODXNumber.IsNumeric())
 		{
-			FString SuffixSearch = TEXT(GeneratedLODNameSuffix);
-			int32 SuffixIndex = FbxGeneratedNodeName.Find(SuffixSearch, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
-			SuffixIndex += SuffixSearch.Len();
-			FString LODXNumber = FbxGeneratedNodeName.RightChop(SuffixIndex).Left(1);
-			if (LODXNumber.IsNumeric())
-			{
-				OutAllNode.Add(Node);
-				return;
-			}
+			OutAllNode.Add(Node);
+			return;
 		}
 	}
+
 	for (int32 ChildIndex = 0; ChildIndex < Node->GetChildCount(); ++ChildIndex)
 	{
 		RecursiveGetAllMeshNode(OutAllNode, Node->GetChild(ChildIndex));
@@ -2268,7 +2325,10 @@ FbxNode* FFbxImporter::FindLODGroupNode(FbxNode* NodeLodGroup, int32 LodIndex, F
 {
 	check(NodeLodGroup->GetChildCount() >= LodIndex);
 	FbxNode *ChildNode = NodeLodGroup->GetChild(LodIndex);
-
+	if (ChildNode == nullptr)
+	{
+		return nullptr;
+	}
 	return RecursiveGetFirstMeshNode(ChildNode, NodeToFind);
 }
 
@@ -2276,7 +2336,10 @@ void FFbxImporter::FindAllLODGroupNode(TArray<FbxNode*> &OutNodeInLod, FbxNode* 
 {
 	check(NodeLodGroup->GetChildCount() >= LodIndex);
 	FbxNode *ChildNode = NodeLodGroup->GetChild(LodIndex);
-
+	if (ChildNode == nullptr)
+	{
+		return;
+	}
 	RecursiveGetAllMeshNode(OutNodeInLod, ChildNode);
 }
 
@@ -3052,10 +3115,40 @@ FString GetFbxPropertyStringValue(const FbxProperty& Property)
 		ValueStr = LexToString(BoolValue);
 	}
 	break;
+	case eFbxChar:
+	{
+		FbxChar CharValue = Property.Get<FbxChar>();
+		ValueStr = LexToString(CharValue);
+	}
+	break;
+	case eFbxUChar:
+	{
+		FbxUChar UCharValue = Property.Get<FbxUChar>();
+		ValueStr = LexToString(UCharValue);
+	}
+	break;
+	case eFbxShort:
+	{
+		FbxShort ShortValue = Property.Get<FbxShort>();
+		ValueStr = LexToString(ShortValue);
+	}
+	break;
+	case eFbxUShort:
+	{
+		FbxUShort UShortValue = Property.Get<FbxUShort>();
+		ValueStr = LexToString(UShortValue);
+	}
+	break;
 	case eFbxInt:
 	{
 		FbxInt IntValue = Property.Get<FbxInt>();
 		ValueStr = LexToString(IntValue);
+	}
+	break;
+	case eFbxUInt:
+	{
+		FbxUInt UIntValue = Property.Get<FbxUInt>();
+		ValueStr = LexToString(UIntValue);
 	}
 	break;
 	case eFbxEnum:

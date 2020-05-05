@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -18,23 +18,23 @@ class TRACEANALYSIS_API FControlClient
 public:
 	/** The destructor will ensure disconnection the FControlClient class
 	 * goes out of scope. */
-                ~FControlClient();
+    ~FControlClient();
 
 	/** Initiates a connection to a runtime instance to control.
 	 * @param Host IP address or host name of where the runtime is to be found.
 	 * @returns True if a connection was made successfully. */
-    bool        Connect(const TCHAR* Host, uint16 Port=1985);
+    bool Connect(const TCHAR* Host, uint16 Port=1985);
 
 	/** Initiates a connection to a runtime instance to control.
 	 * @param Fully qualified FInternetAddr object of the runtime's location.
 	 * @returns True if a connection was made successfully. */
-	bool        Connect(const FInternetAddr& Address);
+	bool Connect(const FInternetAddr& Address);
 
 	/** Disconnects the client from the runtime. */
-    void        Disconnect();
+    void Disconnect();
 
 	/** Returns true if the client is currently connected to a runtime */
-    bool        IsConnected() const;
+    bool IsConnected() const;
 
 	/** Tells the runtime to attempt to record its trace event log to a socket.
 	 * @param Host Host IP address that the runtime should send events to. */
@@ -44,16 +44,17 @@ public:
 	 * @param Path File system path that the runtime should write events to. */
     void SendWriteTo(const TCHAR* Path);
 
-	/** Toggles events on and off. Events can be specified in two forms; either
-	 * by logger to address a logger's events as a whole (EventSpec="LoggerName")
-	 * or individually (EventSpec="LoggerName.EventName").
-	 * @param EventSpec Specification of the event to toggle.
-	 * @param bState True to enable the event and false to disable it. */
-    void SendToggleEvent(const TCHAR* EventSpec, bool bState=true);
+	/**
+	 * Toggles one or more channels on and off. A channel or a comma separated list
+	 * of channels can be controlled.
+	 * @param Channels A single channel name or a comma separated list of channel names.
+	 * @param bState True to enable channel(s), false to disable.
+	 */
+	void SendToggleChannel(const TCHAR* Channels, bool bState = true);
 
 	/** Sends a raw command to the instance.
 	 * @param Command The command to send to the runtime (CRLF terminator not required). */
-    void        Send(const TCHAR* Command);
+    void Send(const TCHAR* Command);
 
 private:
     void        FormatAndSend(const TCHAR* Format, ...);

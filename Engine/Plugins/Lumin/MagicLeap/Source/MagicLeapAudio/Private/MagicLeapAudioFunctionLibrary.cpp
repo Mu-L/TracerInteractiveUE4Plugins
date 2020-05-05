@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MagicLeapAudioFunctionLibrary.h"
 #include "MagicLeapAudioModule.h"
@@ -15,4 +15,29 @@ bool UMagicLeapAudioFunctionLibrary::SetOnAudioJackUnpluggedDelegate(const FMagi
 	FMagicLeapAudioJackUnpluggedDelegateMulti ResultDelegate;
 	ResultDelegate.Add(InResultDelegate);
 	return GetMagicLeapAudioModule().SetOnAudioJackUnpluggedDelegate(ResultDelegate);
+}
+
+bool UMagicLeapAudioFunctionLibrary::SetMicMute(bool IsMuted)
+{
+#if WITH_MLSDK
+	auto Result = MLAudioSetMicMute(IsMuted);
+	if (Result == MLResult_Ok)
+	{
+		return true;
+	}
+#endif
+	return false;
+}
+
+bool UMagicLeapAudioFunctionLibrary::IsMicMuted()
+{
+#if WITH_MLSDK
+	auto IsMuted = false;
+	auto Result = MLAudioIsMicMuted(&IsMuted);
+	if (Result == MLResult_Ok)
+	{
+		return IsMuted;
+	}
+#endif
+	return false;
 }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "K2Node_FunctionEntry.h"
@@ -51,7 +51,7 @@ public:
 		//@TODO: Still doesn't handle/allow users to declare new pass by reference, this only helps inherited functions
 		if( Function )
 		{
-			if (UProperty* ParentProperty = FindField<UProperty>(Function, Net->PinName))
+			if (FProperty* ParentProperty = FindFProperty<FProperty>(Function, Net->PinName))
 			{
 				if (ParentProperty->HasAnyPropertyFlags(CPF_ReferenceParm))
 				{
@@ -77,9 +77,9 @@ public:
 		{
 			const UEdGraphSchema_K2* K2Schema = GetDefault<UEdGraphSchema_K2>();
 
-			for (TFieldIterator<UProperty> ParamIt(Function, EFieldIteratorFlags::ExcludeSuper); ParamIt; ++ParamIt)
+			for (TFieldIterator<FProperty> ParamIt(Function, EFieldIteratorFlags::ExcludeSuper); ParamIt; ++ParamIt)
 			{
-				UProperty* ParamProperty = *ParamIt;
+				FProperty* ParamProperty = *ParamIt;
 
 				// mirrored from UK2Node_FunctionResult::CreatePinsForFunctionEntryExit()
 				const bool bIsFunctionInput = !ParamProperty->HasAnyPropertyFlags(CPF_OutParm) || ParamProperty->HasAnyPropertyFlags(CPF_ReferenceParm);
@@ -494,7 +494,7 @@ bool UK2Node_FunctionEntry::UpdateVariableStructFromDefaults(const UStruct* Vari
 	{
 		if (!LocalVariable.DefaultValue.IsEmpty())
 		{
-			UProperty* PinProperty = VariableStruct->FindPropertyByName(LocalVariable.VarName);
+			FProperty* PinProperty = VariableStruct->FindPropertyByName(LocalVariable.VarName);
 
 			if (PinProperty && (!PinProperty->HasAnyPropertyFlags(CPF_OutParm) || PinProperty->HasAnyPropertyFlags(CPF_ReferenceParm)))
 			{
@@ -534,7 +534,7 @@ bool UK2Node_FunctionEntry::UpdateDefaultsFromVariableStruct(const UStruct* Vari
 		if (!LocalVariable.DefaultValue.IsEmpty())
 		{
 			// We don't want to write out fields that were empty before, as they were guaranteed to not have actual real data
-			UProperty* PinProperty = VariableStruct->FindPropertyByName(LocalVariable.VarName);
+			FProperty* PinProperty = VariableStruct->FindPropertyByName(LocalVariable.VarName);
 
 			if (PinProperty && (!PinProperty->HasAnyPropertyFlags(CPF_OutParm) || PinProperty->HasAnyPropertyFlags(CPF_ReferenceParm)))
 			{
@@ -755,7 +755,7 @@ void UK2Node_FunctionEntry::ExpandNode(class FKismetCompilerContext& CompilerCon
 		check(OriginalNode->GetOuter());
 
 		// Find the associated UFunction
-		UFunction* Function = FindField<UFunction>(CompilerContext.Blueprint->SkeletonGeneratedClass, *OriginalNode->GetOuter()->GetName());
+		UFunction* Function = FindUField<UFunction>(CompilerContext.Blueprint->SkeletonGeneratedClass, *OriginalNode->GetOuter()->GetName());
 
 		// When regenerating on load, we may need to import text on certain properties to force load the assets
 		TSharedPtr<FStructOnScope> LocalVarData;
@@ -767,11 +767,11 @@ void UK2Node_FunctionEntry::ExpandNode(class FKismetCompilerContext& CompilerCon
 			}
 		}
 
-		for (TFieldIterator<UProperty> It(Function); It; ++It)
+		for (TFieldIterator<FProperty> It(Function); It; ++It)
 		{
-			if (const UProperty* Property = *It)
+			if (const FProperty* Property = *It)
 			{
-				const UStructProperty* PotentialUDSProperty = Cast<const UStructProperty>(Property);
+				const FStructProperty* PotentialUDSProperty = CastField<const FStructProperty>(Property);
 
 				for (const FBPVariableDescription& LocalVar : LocalVariables)
 				{
@@ -796,7 +796,7 @@ void UK2Node_FunctionEntry::ExpandNode(class FKismetCompilerContext& CompilerCon
 								MakeArray->GetOutputPin()->MakeLinkTo(SetPin);
 								MakeArray->PostReconstructNode();
 
-								const UArrayProperty* ArrayProperty = Cast<UArrayProperty>(Property);
+								const FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property);
 								check(ArrayProperty);
 
 								FScriptArrayHelper_InContainer ArrayHelper(ArrayProperty, StructData->GetStructMemory());
@@ -868,22 +868,7 @@ void UK2Node_FunctionEntry::FixupPinStringDataReferences(FArchive* SavingArchive
 	Super::FixupPinStringDataReferences(SavingArchive);
 	if (SavingArchive)
 	{
-		const UEdGraphSchema_K2* K2Schema = GetDefault<UEdGraphSchema_K2>();
-		// If any of our pins got fixed up, we need to refresh our user pin default values
-		// For custom events, the Pin default values are authoritative
-		for (TSharedPtr<FUserPinInfo> PinInfo : UserDefinedPins)
-		{
-			if (UEdGraphPin* Pin = FindPin(PinInfo->PinName))
-			{
-				if (Pin->Direction == PinInfo->DesiredPinDirection)
-				{
-					if(!K2Schema->DoesDefaultValueMatch(*Pin, PinInfo->PinDefaultValue))
-					{
-						ModifyUserDefinedPinDefaultValue(PinInfo, Pin->GetDefaultAsString());
-					}
-				}
-			}
-		}
+		UpdateUserDefinedPinDefaultValues();
 	}
 }
 

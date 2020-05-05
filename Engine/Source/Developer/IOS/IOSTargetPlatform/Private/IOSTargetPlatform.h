@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	IOSTargetPlatform.h: Declares the FIOSTargetPlatform class.
@@ -105,11 +105,7 @@ public:
 
 
 #if WITH_ENGINE
-	virtual void GetReflectionCaptureFormats( TArray<FName>& OutFormats ) const override
-	{
-		OutFormats.Add(FName(TEXT("EncodedHDR")));
-		OutFormats.Add(FName(TEXT("FullHDR")));
-	}
+	virtual void GetReflectionCaptureFormats(TArray<FName>& OutFormats) const override;
 
 	virtual void GetAllPossibleShaderFormats( TArray<FName>& OutFormats ) const override;
 
@@ -132,8 +128,6 @@ public:
 
 	virtual FName GetWaveFormat( const class USoundWave* Wave ) const override;
 	virtual void GetAllWaveFormats(TArray<FName>& OutFormat) const override;
-
-	virtual FPlatformAudioCookOverrides* GetAudioCompressionSettings() const override;
 
 #endif // WITH_ENGINE
 

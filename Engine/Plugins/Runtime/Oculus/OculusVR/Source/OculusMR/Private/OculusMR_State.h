@@ -1,9 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "UObject/ObjectMacros.h"
 #include "OculusFunctionLibrary.h"
-#include "OVR_Plugin_Types.h"
+#include "OculusPluginWrapper.h"
 
 #include "OculusMR_State.generated.h"
 
@@ -93,8 +93,13 @@ public:
 	UPROPERTY()
 	FTrackedCamera TrackedCamera;
 
+	// Component at the tracking origin that the camera calibration is applied to
 	UPROPERTY()
 	class USceneComponent* TrackingReferenceComponent;
+
+	// A multiplier on the camera distance, should be based on the scaling of the player component
+	UPROPERTY()
+	double ScalingFactor;
 
 	ovrpCameraDevice CurrentCapturingCamera;
 

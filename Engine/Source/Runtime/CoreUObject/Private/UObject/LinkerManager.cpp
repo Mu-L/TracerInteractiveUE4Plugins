@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	LinkerManager.h: Unreal object linker manager
@@ -9,11 +9,21 @@
 #include "UObject/ObjectResource.h"
 #include "UObject/LinkerLoad.h"
 #include "UObject/UObjectThreadContext.h"
+#include "ProfilingDebugging/CsvProfiler.h"
 
 FLinkerManager& FLinkerManager::Get()
 {
 	static TUniquePtr<FLinkerManager> Singleton = MakeUnique<FLinkerManager>();
 	return *Singleton;
+}
+
+FLinkerManager::FLinkerManager() :
+	bHasPendingCleanup(false)
+{
+}
+
+FLinkerManager::~FLinkerManager()
+{
 }
 
 bool FLinkerManager::Exec(class UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar)
@@ -142,6 +152,24 @@ void FLinkerManager::ResetLoaders(UObject* InPkg)
 	}
 }
 
+void FLinkerManager::EnsureLoadingComplete(UPackage* Package)
+{
+	if (!Package)
+	{
+		return;
+	}
+	FLinkerLoad* Linker = FLinkerLoad::FindExistingLinkerForPackage(Package);
+	if (!Linker)
+	{
+		return;
+	}
+
+	if (!Package->HasAnyPackageFlags(PKG_FilterEditorOnly))
+	{
+		Linker->SerializeThumbnails();
+	}
+}
+
 void FLinkerManager::DissociateImportsAndForcedExports()
 {
 	{
@@ -202,28 +230,34 @@ void FLinkerManager::DeleteLinkers()
 {
 	check(IsInGameThread());
 
-	QUICK_SCOPE_CYCLE_COUNTER(STAT_FLinkerManager_DeleteLinkers);
-
-	TArray<FLinkerLoad*> CleanupArray;
+	if(bHasPendingCleanup)
 	{
+		bHasPendingCleanup = false;
+	
+		QUICK_SCOPE_CYCLE_COUNTER(STAT_FLinkerManager_DeleteLinkers);
+		CSV_SCOPED_TIMING_STAT_EXCLUSIVE(DeleteLinkers);
+
+		TArray<FLinkerLoad*> CleanupArray;
+		{
 #if THREADSAFE_UOBJECTS
-		FScopeLock PendingCleanupListLock(&PendingCleanupListCritical);
+			FScopeLock PendingCleanupListLock(&PendingCleanupListCritical);
 #endif
-		CleanupArray = PendingCleanupList.Array();
-		PendingCleanupList.Empty();
-	}
+			CleanupArray = PendingCleanupList.Array();
+			PendingCleanupList.Empty();
+		}
 
-	// Note that even though DeleteLinkers can only be called on the main thread,
-	// we store the IsDeletingLinkers in TLS so that we're sure nothing on
-	// another thread can delete linkers except FLinkerManager at the time
-	// we enter this loop.
-	FUObjectThreadContext& ThreadContext = FUObjectThreadContext::Get();
-	ThreadContext.IsDeletingLinkers = true;
-	for (FLinkerLoad* Linker : CleanupArray)
-	{
-		delete Linker;
+		// Note that even though DeleteLinkers can only be called on the main thread,
+		// we store the IsDeletingLinkers in TLS so that we're sure nothing on
+		// another thread can delete linkers except FLinkerManager at the time
+		// we enter this loop.
+		FUObjectThreadContext& ThreadContext = FUObjectThreadContext::Get();
+		ThreadContext.IsDeletingLinkers = true;
+		for (FLinkerLoad* Linker : CleanupArray)
+		{
+			delete Linker;
+		}
+		ThreadContext.IsDeletingLinkers = false;
 	}
-	ThreadContext.IsDeletingLinkers = false;
 }
 
 void FLinkerManager::RemoveLinker(FLinkerLoad* Linker)
@@ -234,5 +268,6 @@ void FLinkerManager::RemoveLinker(FLinkerLoad* Linker)
 	if (Linker && !PendingCleanupList.Contains(Linker))
 	{
 		PendingCleanupList.Add(Linker);
+		bHasPendingCleanup = true;
 	}
 }

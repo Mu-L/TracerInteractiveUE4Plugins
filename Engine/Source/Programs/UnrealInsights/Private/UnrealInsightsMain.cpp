@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UnrealInsightsMain.h"
 
@@ -33,8 +33,8 @@ int32 UnrealInsightsMain(const TCHAR* CommandLine)
 
 	// Shut down.
 	//im: ??? FCoreDelegates::OnExit.Broadcast();
-	FModuleManager::Get().UnloadModulesAtShutdown();
 	FEngineLoop::AppPreExit(); //im: ???
+	FModuleManager::Get().UnloadModulesAtShutdown();
 
 #if STATS
 	FThreadStats::StopThread();

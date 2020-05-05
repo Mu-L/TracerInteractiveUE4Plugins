@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	D3D12Shader.h: D3D12 Shaders
@@ -39,6 +39,9 @@ public:
 struct FD3D12ShaderData
 {
 	TArray<FShaderCodeVendorExtension> VendorExtensions;
+
+	/** The static slot associated with the resource table index in ShaderResourceTable. */
+	TArray<FUniformBufferStaticSlot> StaticSlots;
 };
 
 /** This represents a vertex shader that hasn't been combined with a specific declaration to create a bound shader. */
@@ -187,6 +190,8 @@ public:
 class FD3D12RayTracingShader : public FRHIRayTracingShader, public FD3D12ShaderData
 {
 public:
+	explicit FD3D12RayTracingShader(EShaderFrequency InFrequency) : FRHIRayTracingShader(InFrequency) {}
+
 	/** The shader's bytecode. */
 	FD3D12ShaderBytecode ShaderBytecode;
 

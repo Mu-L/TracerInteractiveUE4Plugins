@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BmpImageWrapper.h"
 #include "ImageWrapperPrivate.h"
@@ -237,7 +237,7 @@ void FBmpImageWrapper::UncompressBMPData(const ERGBFormat InFormat, const int32 
 }
 
 
-bool FBmpImageWrapper::SetCompressed(const void* InCompressedData, int32 InCompressedSize)
+bool FBmpImageWrapper::SetCompressed(const void* InCompressedData, int64 InCompressedSize)
 {
 	bool bResult = FImageWrapperBase::SetCompressed(InCompressedData, InCompressedSize);
 

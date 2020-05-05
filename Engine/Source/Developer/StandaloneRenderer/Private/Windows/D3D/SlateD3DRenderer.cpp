@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Windows/D3D/SlateD3DRenderer.h"
 #include "Windows/D3D/SlateD3DTextureManager.h"
@@ -225,7 +225,7 @@ void FSlateD3DRenderer::LoadStyleResources( const ISlateStyle& Style )
 FSlateUpdatableTexture* FSlateD3DRenderer::CreateUpdatableTexture(uint32 Width, uint32 Height)
 {
 	FSlateD3DTexture* NewTexture = new FSlateD3DTexture(Width, Height);
-	NewTexture->Init(DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, NULL, true, true);
+	NewTexture->Init(DXGI_FORMAT_B8G8R8A8_UNORM, NULL, true, true);
 	return NewTexture;
 }
 

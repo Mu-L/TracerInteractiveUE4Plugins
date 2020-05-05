@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 // Pattern-Matching that fulfills the OSC 1.0 Protocol on address pattern matching
 #pragma once
 
@@ -8,6 +8,9 @@ class ENGINE_API FAudioAddressPattern
 {
 	static int32 FindPatternTerminatorIndex(const FString& Pattern, int32 PatternIter, TCHAR Terminator);
 
+	static const TArray<TCHAR>& GetInvalidChars();
+	static const TArray<TCHAR>& GetPatternChars();
+	
 public:
 	static bool BracePatternMatches(const FString& Pattern, int32 PatternStartIndex, int32 PatternEndIndex, const FString& Part, int32& PartIter);
 	static bool BracketPatternMatches(const FString& Pattern, int32 PatternStartIndex, int32 PatternEndIndex, TCHAR MatchChar);

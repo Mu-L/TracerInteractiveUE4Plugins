@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OculusAvatarModule.h"
 #include "Features/IModularFeatures.h"
@@ -11,7 +11,6 @@ void OculusAvatarModule::StartupModule()
  
 void OculusAvatarModule::ShutdownModule()
 {
-	UOvrAvatarManager::Get().ShutdownSDK();
 	UOvrAvatarManager::Destroy();
 }
 

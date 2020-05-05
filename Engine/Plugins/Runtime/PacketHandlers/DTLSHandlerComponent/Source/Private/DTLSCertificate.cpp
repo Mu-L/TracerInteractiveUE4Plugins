@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DTLSCertificate.h"
 #include "Misc/ScopeExit.h"
@@ -8,6 +8,10 @@ THIRD_PARTY_INCLUDES_START
 #include <openssl/x509.h>
 THIRD_PARTY_INCLUDES_END
 #undef UI
+
+
+constexpr uint32 FDTLSFingerprint::Length;
+
 
 FDTLSCertificate::FDTLSCertificate()
 	: PKey(nullptr)

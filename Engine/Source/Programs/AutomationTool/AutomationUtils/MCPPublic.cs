@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -135,12 +135,24 @@ namespace EpicGames.MCP.Automation
 		/// PS4 platform
 		/// </summary>
 		PS4,
+
+		/// <summary>
+		/// Switch platform
+		/// </summary>
+		Switch,
+
+		/// <summary>
+		/// Xbox One Platform
+		/// </summary>
+		XboxOne,
+
+
 	}
 
-    /// <summary>
-    /// Enum that defines CDN types
-    /// </summary>
-    public enum CDNType
+	/// <summary>
+	/// Enum that defines CDN types
+	/// </summary>
+	public enum CDNType
     {
         /// <summary>
         /// Internal HTTP CDN server
@@ -252,7 +264,26 @@ namespace EpicGames.MCP.Automation
 			{
 				return MCPPlatform.Linux;
 			}
-
+			else if (TargetPlatform == UnrealTargetPlatform.IOS)
+			{
+				return MCPPlatform.IOS;
+			}
+			else if (TargetPlatform == UnrealTargetPlatform.Android)
+			{
+				return MCPPlatform.Android;
+			}
+			else if (TargetPlatform == UnrealTargetPlatform.PS4)
+			{
+				return MCPPlatform.PS4;
+			}
+			else if (TargetPlatform == UnrealTargetPlatform.XboxOne)
+			{
+				return MCPPlatform.XboxOne;
+			}
+			else if (TargetPlatform == UnrealTargetPlatform.Switch)
+			{
+				return MCPPlatform.Switch;
+			}
 			throw new AutomationException("Platform {0} is not properly supported by the MCP backend yet", TargetPlatform);
         }
 
@@ -277,7 +308,26 @@ namespace EpicGames.MCP.Automation
 			{
 				return UnrealTargetPlatform.Linux;
 			}
-
+			else if (TargetPlatform == MCPPlatform.IOS)
+			{
+				return UnrealTargetPlatform.IOS;
+			}
+			else if (TargetPlatform == MCPPlatform.Android)
+			{
+				return UnrealTargetPlatform.Android;
+			}
+			else if (TargetPlatform == MCPPlatform.PS4)
+			{
+				return UnrealTargetPlatform.PS4;
+			}
+			else if (TargetPlatform == MCPPlatform.XboxOne)
+			{
+				return UnrealTargetPlatform.XboxOne;
+			}
+			else if (TargetPlatform == MCPPlatform.Switch)
+			{
+				return UnrealTargetPlatform.Switch;
+			}
 			throw new AutomationException("Platform {0} is not properly supported by the MCP backend yet", TargetPlatform);
         }
 

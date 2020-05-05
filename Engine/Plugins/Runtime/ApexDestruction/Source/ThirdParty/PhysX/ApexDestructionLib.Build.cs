@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System;
@@ -125,15 +125,12 @@ public class ApexDestructionLib : ModuleRules
 				string LibraryPath = PhysXBinariesDir + String.Format("/libAPEX_Destructible{0}.so", LibrarySuffix);
 				PublicAdditionalLibraries.Add(LibraryPath);
 				RuntimeDependencies.Add(LibraryPath);
+				RuntimeDependencies.Add(Path.ChangeExtension(LibraryPath, ".debug"), StagedFileType.DebugNonUFS);
 			}
         }
         else if (Target.Platform == UnrealTargetPlatform.XboxOne)
         {
 			LibraryFormatString = Path.Combine(ApexLibDir, "XboxOne", "VS2015", "{0}.lib");
-        }
-        else if (Target.Platform == UnrealTargetPlatform.Switch)
-        {
-			LibraryFormatString = Path.Combine(ApexLibDir, "Switch", "lib{0}.a");
         }
 		
 		// Add the libraries needed (used for all platforms except Windows and Mac)

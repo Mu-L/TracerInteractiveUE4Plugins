@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ConcertSyncServerLoop.h"
 #include "ConcertSettings.h"
@@ -86,6 +86,7 @@ int32 ConcertSyncServerLoop(int32 ArgC, TCHAR** ArgV, const FConcertSyncServerLo
 
 		// Setup Concert Sync to run in server mode.
 		TSharedPtr<IConcertSyncServer> ConcertSyncServer = IConcertSyncServerModule::Get().CreateServer(InitArgs.ServiceRole, InitArgs.ServiceAutoArchiveSessionFilter);
+		ConcertSyncServer->SetFileSharingService(InitArgs.FileSharingService);
 		ConcertSyncServer->Startup(ServerConfig, InitArgs.SessionFlags);
 
 		// if we have a default session, set it up properly

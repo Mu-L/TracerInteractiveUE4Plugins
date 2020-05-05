@@ -1,9 +1,30 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Tools/InteractiveToolsCommands.h"
+
+
+
+enum class EModelingModeActionCommands
+{
+	FocusViewToCursor
+};
+
+
+class FModelingModeActionCommands : public TCommands<FModelingModeActionCommands>
+{
+public:
+	FModelingModeActionCommands();
+
+	virtual void RegisterCommands() override;
+
+	TSharedPtr<FUICommandInfo> FocusViewCommand;
+
+	static void RegisterCommandBindings(TSharedPtr<FUICommandList> UICommandList, TFunction<void(EModelingModeActionCommands)> OnCommandExecuted);
+
+};
 
 
 
@@ -74,5 +95,20 @@ class FMeshSelectionToolActionCommands : public TInteractiveToolCommands<FMeshSe
 {
 public:
 	FMeshSelectionToolActionCommands();
+	virtual void GetToolDefaultObjectList(TArray<UInteractiveTool*>& ToolCDOs) override;
+};
+
+
+class FMeshPlaneCutToolActionCommands : public TInteractiveToolCommands<FMeshPlaneCutToolActionCommands>
+{
+public:
+	FMeshPlaneCutToolActionCommands();
+	virtual void GetToolDefaultObjectList(TArray<UInteractiveTool*>& ToolCDOs) override;
+};
+
+class FEditMeshPolygonsToolActionCommands : public TInteractiveToolCommands<FEditMeshPolygonsToolActionCommands>
+{
+public:
+	FEditMeshPolygonsToolActionCommands();
 	virtual void GetToolDefaultObjectList(TArray<UInteractiveTool*>& ToolCDOs) override;
 };

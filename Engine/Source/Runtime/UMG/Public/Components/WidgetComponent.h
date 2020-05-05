@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -110,7 +110,7 @@ public:
 	virtual void GetUsedMaterials(TArray<UMaterialInterface*>& OutMaterials, bool bGetDebugMaterials = false) const override;
 
 #if WITH_EDITOR
-	virtual bool CanEditChange(const UProperty* InProperty) const override;
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 
@@ -371,6 +371,9 @@ public:
 	/** Sets the visibility of the virtual window created to host the widget focusable. */
 	UFUNCTION(BlueprintCallable, Category = UserInterface)
 	void SetWindowVisibility(EWindowVisibility InVisibility);
+
+	/** Hook to allow this component modify the local position of the widget after it has been projected from world space to screen space. */
+	virtual FVector2D ModifyProjectedLocalPosition(const FGeometry& ViewportGeometry, const FVector2D& LocalPosition) { return LocalPosition; }
 
 protected:
 	void OnLevelRemovedFromWorld(ULevel* InLevel, UWorld* InWorld);

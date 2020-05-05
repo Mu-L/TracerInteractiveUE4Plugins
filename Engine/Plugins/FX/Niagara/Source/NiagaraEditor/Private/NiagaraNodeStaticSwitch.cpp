@@ -1,9 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraNodeStaticSwitch.h"
 #include "NiagaraEditorUtilities.h"
 #include "NiagaraHlslTranslator.h"
 #include "NiagaraConstants.h"
+#include "NiagaraScriptVariable.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraNodeStaticSwitch"
 
@@ -14,7 +15,7 @@ UNiagaraNodeStaticSwitch::UNiagaraNodeStaticSwitch(const FObjectInitializer& Obj
 
 void UNiagaraNodeStaticSwitch::DestroyNode()
 {
-	GetNiagaraGraph()->RemoveParameter(FNiagaraVariable(GetInputType(), InputParameterName), true);
+	GetNiagaraGraph()->RemoveParameter(FNiagaraVariable(GetInputType(), InputParameterName));
 	Super::DestroyNode();
 }
 
@@ -48,7 +49,10 @@ void UNiagaraNodeStaticSwitch::OnSwitchParameterTypeChanged(const FNiagaraTypeDe
 {
 	TOptional<FNiagaraVariableMetaData> OldMetaData = GetNiagaraGraph()->GetMetaData(FNiagaraVariable(OldType, InputParameterName));
 	RefreshFromExternalChanges(); // Magick happens here: The old pins are destroyed and new ones are created.
-	GetNiagaraGraph()->SetMetaData(FNiagaraVariable(GetInputType(), InputParameterName), OldMetaData.GetValue());
+	if (OldMetaData.IsSet())
+	{
+		GetNiagaraGraph()->SetMetaData(FNiagaraVariable(GetInputType(), InputParameterName), OldMetaData.GetValue());
+	}
 
 	VisualsChangedDelegate.Broadcast(this);
 	RemoveUnusedGraphParameter(FNiagaraVariable(OldType, InputParameterName));
@@ -102,6 +106,7 @@ void UNiagaraNodeStaticSwitch::RemoveUnusedGraphParameter(const FNiagaraVariable
 	int Index = GraphVariables.Find(OldParameter);
 	if (Index == INDEX_NONE)
 	{
+		// Force delete the old static switch parameter.
 		GetNiagaraGraph()->RemoveParameter(OldParameter, true);
 	}
 	else
@@ -291,7 +296,7 @@ bool UNiagaraNodeStaticSwitch::GetVarIndex(FHlslNiagaraTranslator* Translator, i
 			{
 				Translator->Warning(FText::Format(LOCTEXT("InvalidStaticSwitchIntValue", "The supplied int value {0} is outside the bounds for the static switch."), FText::FromString(FString::FromInt(Value))), this, nullptr);
 			}
-			VarIndexOut = FMath::Clamp(Value, 0, MaxValue) * (InputPinCount / MaxValue);
+			VarIndexOut = FMath::Clamp(Value, 0, MaxValue) * (InputPinCount / (MaxValue + 1));
 			Success = true;
 		}
 		else if (Translator)
@@ -386,6 +391,24 @@ bool UNiagaraNodeStaticSwitch::SubstituteCompiledPin(FHlslNiagaraTranslator* Tra
 		}
 	}
 	return false;
+}
+
+
+void UNiagaraNodeStaticSwitch::PostLoad()
+{
+	Super::PostLoad();
+
+	// Make sure that we are added to the static switch list.
+	if (GetInputType().IsValid() && InputParameterName.IsValid())
+	{
+		UNiagaraScriptVariable* Var = GetNiagaraGraph()->GetScriptVariable(InputParameterName);
+		if (Var != nullptr && Var->Variable.GetType() == GetInputType() && Var->Metadata.GetIsStaticSwitch() == false)
+		{
+			UE_LOG(LogNiagaraEditor, Log, TEXT("Static switch constant \"%s\" in \"%s\" didn't have static switch meta-data conversion set properly. Fixing now."), *InputParameterName.ToString(), *GetPathName())
+			Var->Metadata.SetIsStaticSwitch(true);
+			MarkNodeRequiresSynchronization(TEXT("Static switch metadata updated"), true);
+		}
+	}
 }
 
 UEdGraphPin* UNiagaraNodeStaticSwitch::GetTracedOutputPin(UEdGraphPin* LocallyOwnedOutputPin) const

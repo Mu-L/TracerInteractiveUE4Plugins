@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	D3D12Viewport.h: D3D viewport RHI definitions.
@@ -154,6 +154,7 @@ private:
 	HRESULT PresentInternal(int32 SyncInterval);
 
 	void ResizeInternal();
+	void FinalDestroyInternal();
 
 	uint64 LastFlipTime;
 	uint64 LastFrameComplete;
@@ -165,6 +166,7 @@ private:
 	uint32 SizeX;
 	uint32 SizeY;
 	bool bIsFullscreen;
+	bool bFullscreenLost;
 	EPixelFormat PixelFormat;
 	bool bIsValid;
 	bool bAllowTearing;

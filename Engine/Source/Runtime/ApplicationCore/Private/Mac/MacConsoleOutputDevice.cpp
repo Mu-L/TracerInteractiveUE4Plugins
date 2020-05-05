@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Mac/MacConsoleOutputDevice.h"
 #include "Misc/App.h"
@@ -120,10 +120,13 @@ void FMacConsoleOutputDevice::DestroyConsole()
 		FMacConsoleWindow* ConsoleWindow = ConsoleHandle;
 		ConsoleHandle = nullptr; // Stop further serialization as soon as possible
 
-		do
+		if ([NSThread isGameThread])
 		{
-			FMacPlatformApplicationMisc::PumpMessages( true );
-		} while(OutstandingTasks);
+			do
+			{
+				FMacPlatformApplicationMisc::PumpMessages( true );
+			} while(OutstandingTasks);
+		}
 
 		MainThreadCall(^{
 			SCOPED_AUTORELEASE_POOL;

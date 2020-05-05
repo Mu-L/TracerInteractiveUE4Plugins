@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "HAL/ThreadingBase.h"
@@ -8,6 +8,7 @@
 #include "Misc/EventPool.h"
 #include "Misc/LazySingleton.h"
 #include "Templates/Atomic.h"
+#include "HAL/IConsoleManager.h"
 #include "HAL/PlatformStackWalk.h"
 #include "ProfilingDebugging/MiscTrace.h"
 
@@ -15,6 +16,14 @@ DEFINE_STAT( STAT_EventWaitWithId );
 DEFINE_STAT( STAT_EventTriggerWithId );
 
 DECLARE_DWORD_COUNTER_STAT( TEXT( "ThreadPoolDummyCounter" ), STAT_ThreadPoolDummyCounter, STATGROUP_ThreadPoolAsyncTasks );
+
+static bool GDoPooledThreadWaitTimeouts = false;
+static FAutoConsoleVariableRef CVarDoPooledThreadWaitTimeouts(
+	TEXT("DoPooledThreadWaitTimeouts"),
+	GDoPooledThreadWaitTimeouts,
+	TEXT("If enabled, uses the old behaviour for waking up pool threads every 10ms. Otherwise, lets pooled threads sleep until data arrives."),
+	ECVF_Default
+);
 
 /** The global thread pool */
 FQueuedThreadPool* GThreadPool = nullptr;
@@ -59,7 +68,7 @@ CORE_API bool IsInParallelRenderingThread()
 {
 	if (!GRenderingThread || GIsRenderingThreadSuspended.Load(EMemoryOrder::Relaxed))
 	{
-		return FPlatformTLS::GetCurrentThreadId() == GGameThreadId;
+		return true;
 	}
 	else
 	{
@@ -154,7 +163,8 @@ public:
 
 	virtual bool CreateInternal(FRunnable* InRunnable, const TCHAR* InThreadName,
 		uint32 InStackSize,
-		EThreadPriority InThreadPri, uint64 InThreadAffinityMask) override
+		EThreadPriority InThreadPri, uint64 InThreadAffinityMask,
+		EThreadCreateFlags InCreateFlags = EThreadCreateFlags::None) override
 
 	{
 		Runnable = InRunnable->GetSingleThreadInterface();
@@ -257,6 +267,15 @@ void FThreadManager::GetAllThreadStackBackTraces(TArray<FThreadStackBackTrace>& 
 	}
 }
 #endif
+
+void FThreadManager::ForEachThread(TFunction<void(uint32, class FRunnableThread*)> Func)
+{
+	FScopeLock Lock(&ThreadsCritical);
+	for (const TPair<uint32, FRunnableThread*>& Pair : Threads)
+	{
+		Func(Pair.Key, Pair.Value);
+	}
+}
 
 FThreadManager& FThreadManager::Get()
 {
@@ -384,7 +403,8 @@ FRunnableThread* FRunnableThread::Create(
 	const TCHAR* ThreadName,
 	uint32 InStackSize,
 	EThreadPriority InThreadPri, 
-	uint64 InThreadAffinityMask)
+	uint64 InThreadAffinityMask,
+	EThreadCreateFlags InCreateFlags)
 {
 	FRunnableThread* NewThread = nullptr;
 	if (FPlatformProcess::SupportsMultithreading())
@@ -395,7 +415,7 @@ FRunnableThread* FRunnableThread::Create(
 		if (NewThread)
 		{
 			// Call the thread's create method
-			if (NewThread->CreateInternal(InRunnable,ThreadName,InStackSize,InThreadPri,InThreadAffinityMask) == false)
+			if (NewThread->CreateInternal(InRunnable,ThreadName,InStackSize,InThreadPri,InThreadAffinityMask,InCreateFlags) == false)
 			{
 				// We failed to start the thread correctly so clean up
 				delete NewThread;
@@ -469,80 +489,30 @@ class FQueuedThread
 protected:
 
 	/** The event that tells the thread there is work to do. */
-	FEvent* DoWorkEvent;
+	FEvent* DoWorkEvent = nullptr;
 
 	/** If true, the thread should exit. */
-	TAtomic<bool> TimeToDie;
+	TAtomic<bool> TimeToDie { false };
 
 	/** The work this thread is doing. */
-	IQueuedWork* volatile QueuedWork;
+	IQueuedWork* volatile QueuedWork = nullptr;
 
 	/** The pool this thread belongs to. */
-	class FQueuedThreadPool* OwningThreadPool;
+	class FQueuedThreadPoolBase* OwningThreadPool = nullptr;
 
 	/** My Thread  */
-	FRunnableThread* Thread;
+	FRunnableThread* Thread = nullptr;
 
 	/**
 	 * The real thread entry point. It waits for work events to be queued. Once
 	 * an event is queued, it executes it and goes back to waiting.
 	 */
-	virtual uint32 Run() override
-	{
-		while (!TimeToDie.Load(EMemoryOrder::Relaxed))
-		{
-			// This will force sending the stats packet from the previous frame.
-			SET_DWORD_STAT( STAT_ThreadPoolDummyCounter, 0 );
-			// We need to wait for shorter amount of time
-			bool bContinueWaiting = true;
-
-			// Unless we're collecting stats there doesn't appear to be any reason to wake
-			// up again until there's work to do (or it's time to die)
-
-#if STATS
-			if (FThreadStats::IsCollectingData())
-			{
-			while( bContinueWaiting )
-			{				
-				DECLARE_SCOPE_CYCLE_COUNTER( TEXT( "FQueuedThread::Run.WaitForWork" ), STAT_FQueuedThread_Run_WaitForWork, STATGROUP_ThreadPoolAsyncTasks );
-
-				// Wait for some work to do
-
-				bContinueWaiting = !DoWorkEvent->Wait( 10 );
-			}
-			}
-#endif
-
-			if (bContinueWaiting)
-			{
-				DoWorkEvent->Wait();
-			}
-
-			IQueuedWork* LocalQueuedWork = QueuedWork;
-			QueuedWork = nullptr;
-			FPlatformMisc::MemoryBarrier();
-			check(LocalQueuedWork || TimeToDie.Load(EMemoryOrder::Relaxed)); // well you woke me up, where is the job or termination request?
-			while (LocalQueuedWork)
-			{
-				// Tell the object to do the work
-				LocalQueuedWork->DoThreadedWork();
-				// Let the object cleanup before we remove our ref to it
-				LocalQueuedWork = OwningThreadPool->ReturnToPoolOrGetNextJob(this);
-			} 
-		}
-		return 0;
-	}
+	virtual uint32 Run() override;
 
 public:
 
 	/** Default constructor **/
-	FQueuedThread()
-		: DoWorkEvent(nullptr)
-		, TimeToDie(false)
-		, QueuedWork(nullptr)
-		, OwningThreadPool(nullptr)
-		, Thread(nullptr)
-	{ }
+	FQueuedThread() = default;
 
 	/**
 	 * Creates the thread with the specified stack size and creates the various
@@ -553,7 +523,7 @@ public:
 	 * @param ThreadPriority priority of new thread
 	 * @return True if the thread and all of its initialization was successful, false otherwise
 	 */
-	virtual bool Create(class FQueuedThreadPool* InPool,uint32 InStackSize = 0,EThreadPriority ThreadPriority=TPri_Normal)
+	virtual bool Create(class FQueuedThreadPoolBase* InPool,uint32 InStackSize = 0,EThreadPriority ThreadPriority=TPri_Normal)
 	{
 		static int32 PoolThreadIndex = 0;
 		const FString PoolThreadName = FString::Printf( TEXT( "PoolThread %d" ), PoolThreadIndex );
@@ -574,7 +544,7 @@ public:
 	 *
 	 * @return True if the thread exited graceful, false otherwise
 	 */
-	virtual bool KillThread()
+	bool KillThread()
 	{
 		bool bDidExitOK = true;
 		// Tell the thread it needs to die
@@ -609,7 +579,6 @@ public:
 		// Tell the thread to wake up and do its job
 		DoWorkEvent->Trigger();
 	}
-
 };
 
 
@@ -805,7 +774,7 @@ public:
 		return !!QueuedWork.RemoveSingle(InQueuedWork);
 	}
 
-	virtual IQueuedWork* ReturnToPoolOrGetNextJob(FQueuedThread* InQueuedThread) override
+	IQueuedWork* ReturnToPoolOrGetNextJob(FQueuedThread* InQueuedThread)
 	{
 		check(InQueuedThread != nullptr);
 		IQueuedWork* Work = nullptr;
@@ -840,6 +809,54 @@ FQueuedThreadPool* FQueuedThreadPool::Allocate()
 	return new FQueuedThreadPoolBase;
 }
 
+//////////////////////////////////////////////////////////////////////////
+
+uint32
+FQueuedThread::Run()
+{
+	while (!TimeToDie.Load(EMemoryOrder::Relaxed))
+	{
+		// This will force sending the stats packet from the previous frame.
+		SET_DWORD_STAT(STAT_ThreadPoolDummyCounter, 0);
+		// We need to wait for shorter amount of time
+		bool bContinueWaiting = true;
+
+		// Unless we're collecting stats there doesn't appear to be any reason to wake
+		// up again until there's work to do (or it's time to die)
+
+#if STATS
+		if (FThreadStats::IsCollectingData())
+		{
+			while (bContinueWaiting)
+			{
+				DECLARE_SCOPE_CYCLE_COUNTER(TEXT("FQueuedThread::Run.WaitForWork"), STAT_FQueuedThread_Run_WaitForWork, STATGROUP_ThreadPoolAsyncTasks);
+
+				// Wait for some work to do
+
+				bContinueWaiting = !DoWorkEvent->Wait(GDoPooledThreadWaitTimeouts ? 10 : MAX_uint32);
+			}
+		}
+#endif
+
+		if (bContinueWaiting)
+		{
+			DoWorkEvent->Wait();
+		}
+
+		IQueuedWork* LocalQueuedWork = QueuedWork;
+		QueuedWork = nullptr;
+		FPlatformMisc::MemoryBarrier();
+		check(LocalQueuedWork || TimeToDie.Load(EMemoryOrder::Relaxed)); // well you woke me up, where is the job or termination request?
+		while (LocalQueuedWork)
+		{
+			// Tell the object to do the work
+			LocalQueuedWork->DoThreadedWork();
+			// Let the object cleanup before we remove our ref to it
+			LocalQueuedWork = OwningThreadPool->ReturnToPoolOrGetNextJob(this);
+		}
+	}
+	return 0;
+}
 
 /*-----------------------------------------------------------------------------
 	FThreadSingletonInitializer

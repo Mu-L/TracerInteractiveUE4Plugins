@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HierarchicalLODUtilities.h"
 #include "GameFramework/Actor.h"
@@ -393,8 +393,6 @@ bool FHierarchicalLODUtilities::BuildStaticMeshForLODActor(ALODActor* LODActor, 
 
 	if (AllComponents.Num() > 0)
 	{
-		const AActor* FirstActor = UHLODProxy::FindFirstActor(LODActor);
-
 		TArray<UObject*> OutAssets;
 		FVector OutProxyLocation = FVector::ZeroVector;
 		UStaticMesh* MainMesh = nullptr;
@@ -404,9 +402,16 @@ bool FHierarchicalLODUtilities::BuildStaticMeshForLODActor(ALODActor* LODActor, 
 		const bool bHasMeshReductionCapableModule = (MeshReductionModule.GetMeshMergingInterface() != NULL);
 
 		const IMeshMergeUtilities& MeshMergeUtilities = FModuleManager::Get().LoadModuleChecked<IMeshMergeModule>("MeshMergeUtilities").GetUtilities();
-		// should give unique name, so use level + actor name
-			
-		const FString PackageName = FString::Printf(TEXT("LOD_%s_%i_%s"), *FirstActor->GetOutermost()->GetName(), LODActor->LODLevel - 1, *FirstActor->GetName());
+		
+		// Should give a unique name, so use the LODActor tag, or if empty, the first actor name
+		FString LODActorTag = LODActor->GetLODActorTag();
+		if (LODActorTag.IsEmpty())
+		{
+			const AActor* FirstActor = UHLODProxy::FindFirstActor(LODActor);
+			LODActorTag = *FirstActor->GetName();
+		}
+		const FString PackageName = FString::Printf(TEXT("LOD_%s_%i_%s"), *(AssetsOuter->GetName()), LODActor->LODLevel - 1, *LODActorTag);
+
 		if (bHasMeshReductionCapableModule && LODSetup.bSimplifyMesh)
 		{
 			FHierarchicalLODUtilitiesModule& Module = FModuleManager::LoadModuleChecked<FHierarchicalLODUtilitiesModule>("HierarchicalLODUtilities");
@@ -448,7 +453,7 @@ bool FHierarchicalLODUtilities::BuildStaticMeshForLODActor(ALODActor* LODActor, 
 			// update LOD parents before rebuild to ensure they are valid when mesh merge extensions are called.
 			LODActor->UpdateSubActorLODParents();
 
-			MeshMergeUtilities.MergeComponentsToStaticMesh(AllComponents, FirstActor->GetWorld(), MergeSettings, InBaseMaterial, AssetsOuter, PackageName, OutAssets, OutProxyLocation, LODSetup.TransitionScreenSize, true);
+			MeshMergeUtilities.MergeComponentsToStaticMesh(AllComponents, LODActor->GetWorld(), MergeSettings, InBaseMaterial, AssetsOuter, PackageName, OutAssets, OutProxyLocation, LODSetup.TransitionScreenSize, true);
 
 			// set staticmesh
 			for (UObject* Asset : OutAssets)

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Animation/AnimationAsset.h"
 #include "Engine/AssetUserData.h"
@@ -199,6 +199,18 @@ void UAnimationAsset::PostLoad()
 		}
 		Skeleton->ConditionalPostLoad();
 	}
+
+#if WITH_EDITORONLY_DATA
+	// Load Parent Asset, to make sure anything accessing from PostLoad has valid data to access
+	if (ParentAsset)
+	{
+		if (FLinkerLoad* ParentAssetLinker = ParentAsset->GetLinker())
+		{
+			ParentAssetLinker->Preload(ParentAsset);
+		}
+		ParentAsset->ConditionalPostLoad();
+	}
+#endif
 
 	ValidateSkeleton();
 

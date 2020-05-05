@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.IO;
@@ -9,7 +9,11 @@ namespace UnrealBuildTool.Rules
 	{
 		public USDStage(ReadOnlyTargetRules Target) : base(Target)
 		{
-			bUseRTTI = true;
+			// We require the whole editor to be RTTI enabled on Linux for now
+			if (Target.Platform != UnrealTargetPlatform.Linux)
+			{
+				bUseRTTI = true;
+			}
 
 			PrivateDependencyModuleNames.AddRange(
 				new string[]
@@ -25,12 +29,10 @@ namespace UnrealBuildTool.Rules
 					"LevelSequence",
 					"MaterialEditor",
 					"MeshDescription",
-					"MeshDescriptionOperations",
 					"MeshUtilities",
 					"MessageLog",
 					"MovieScene",
 					"MovieSceneTracks",
-					"PropertyEditor",
 					"PropertyEditor",
 					"PythonScriptPlugin",
 					"RHI",
@@ -39,15 +41,12 @@ namespace UnrealBuildTool.Rules
 					"SlateCore",
 					"StaticMeshDescription",
 					"USDImporter",
+					"UnrealUSDWrapper",
+					"USDSchemas",
 					"USDUtilities",
 					"UnrealEd",
 				}
 				);
-
-			if (Target.Platform == UnrealTargetPlatform.Win64)
-			{
-				PrivateDependencyModuleNames.Add("UnrealUSDWrapper");
-			}
 		}
 	}
 }

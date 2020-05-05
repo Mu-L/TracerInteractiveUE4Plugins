@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreTypes.h"
@@ -23,6 +23,10 @@
 #else
  #define PLATFORM_LIMIT_PROFILER_UNIQUE_NAMED_EVENTS 0
 #endif
+#endif
+
+#ifndef PLATFORM_EMPTY_BASES
+#define PLATFORM_EMPTY_BASES
 #endif
 
 // Master switch for scoped named events
@@ -113,10 +117,10 @@ public:
 #endif
 
 #define SCOPED_NAMED_EVENT(Name, Color) \
-	TRACE_CPUPROFILER_EVENT_SCOPE(Name) \
 	FScopedNamedEventStatic ANONYMOUS_VARIABLE(NamedEvent_##Name##_)(Color, NAMED_EVENT_STR(#Name));
 
 #define SCOPED_NAMED_EVENT_FSTRING(Text, Color)  FScopedNamedEvent       ANONYMOUS_VARIABLE(NamedEvent_)         (Color, *Text);
+#define SCOPED_NAMED_EVENT_TCHAR(Text, Color)    FScopedNamedEvent       ANONYMOUS_VARIABLE(NamedEvent_)         (Color, Text);
 
 #define SCOPED_NAMED_EVENT_TEXT(Text, Color) \
 	FScopedNamedEventStatic ANONYMOUS_VARIABLE(NamedEvent_)         (Color, NAMED_EVENT_STR(Text));
@@ -157,6 +161,7 @@ public:
 
 #define SCOPED_NAMED_EVENT(...)
 #define SCOPED_NAMED_EVENT_FSTRING(...)
+#define SCOPED_NAMED_EVENT_TCHAR(...)
 #define SCOPED_NAMED_EVENT_TEXT(...)
 #define SCOPED_NAMED_EVENT_F(...)
 #define SCOPED_PROFILER_COLOR(...)

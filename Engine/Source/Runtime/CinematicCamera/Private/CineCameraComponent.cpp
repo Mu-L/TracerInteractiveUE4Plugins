@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CineCameraComponent.h"
 #include "UObject/CineCameraObjectVersion.h"
@@ -72,7 +72,7 @@ UCineCameraComponent::UCineCameraComponent()
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> PlaneMesh(TEXT("/Engine/ArtTools/RenderToTexture/Meshes/S_1_Unit_Plane.S_1_Unit_Plane"));
 	FocusPlaneVisualizationMesh = PlaneMesh.Object;
 
-	static ConstructorHelpers::FObjectFinder<UMaterial> PlaneMat(TEXT("/Engine/EngineDebugMaterials/M_SimpleTranslucent.M_SimpleTranslucent"));
+	static ConstructorHelpers::FObjectFinder<UMaterial> PlaneMat(TEXT("/Engine/EngineDebugMaterials/M_SimpleUnlitTranslucent.M_SimpleUnlitTranslucent"));
 	FocusPlaneVisualizationMaterial = PlaneMat.Object;
 #endif
 }
@@ -128,6 +128,11 @@ void UCineCameraComponent::PostLoad()
 		{
 			Filmback = FilmbackSettings_DEPRECATED;
 		}
+	}
+
+	if (FocusSettings.FocusMethod >= ECameraFocusMethod::MAX )
+	{
+		FocusSettings.FocusMethod = ECameraFocusMethod::DoNotOverride;
 	}
 
 	RecalcDerivedData();
@@ -446,7 +451,7 @@ FText UCineCameraComponent::GetFilmbackText() const
 	{
 		FNumberFormattingOptions Opts = FNumberFormattingOptions().SetMaximumFractionalDigits(1);
 		return FText::Format(
-			LOCTEXT("CustomFilmbackFormat", "Custom ({0}mm x {1}mm) | Zoom: {1}mm | Av: {2}"),
+			LOCTEXT("CustomFilmbackFormat", "Custom ({0}mm x {1}mm) | Zoom: {2}mm | Av: {3}"),
 			FText::AsNumber(SensorWidth, &Opts),
 			FText::AsNumber(SensorHeight, &Opts),
 			FText::AsNumber(CurrentFocalLength),
@@ -476,13 +481,19 @@ void UCineCameraComponent::UpdateDebugFocusPlane()
 
 void UCineCameraComponent::UpdateCameraLens(float DeltaTime, FMinimalViewInfo& DesiredView)
 {
-	if (FocusSettings.FocusMethod == ECameraFocusMethod::None)
+	if (FocusSettings.FocusMethod == ECameraFocusMethod::DoNotOverride)
 	{
 		DesiredView.PostProcessSettings.bOverride_DepthOfFieldFstop = false;
 		DesiredView.PostProcessSettings.bOverride_DepthOfFieldMinFstop = false;
 		DesiredView.PostProcessSettings.bOverride_DepthOfFieldBladeCount = false;
 		DesiredView.PostProcessSettings.bOverride_DepthOfFieldFocalDistance = false;
 		DesiredView.PostProcessSettings.bOverride_DepthOfFieldSensorWidth = false;
+	}
+	else if (FocusSettings.FocusMethod == ECameraFocusMethod::Disable)
+	{
+		// There might be a post process volume that is enabled with depth of field settings, override it and disable depth of field by setting the distance to 0
+		DesiredView.PostProcessSettings.bOverride_DepthOfFieldFocalDistance = true;
+		DesiredView.PostProcessSettings.DepthOfFieldFocalDistance = 0.f;
 	}
 	else
 	{

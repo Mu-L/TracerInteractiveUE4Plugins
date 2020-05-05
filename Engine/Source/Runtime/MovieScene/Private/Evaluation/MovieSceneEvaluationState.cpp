@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Evaluation/MovieSceneEvaluationState.h"
 #include "MovieSceneSequence.h"
@@ -332,6 +332,19 @@ UMovieSceneSequence* FMovieSceneEvaluationState::FindSequence(FMovieSceneSequenc
 {
 	const FMovieSceneObjectCache* Cache = ObjectCaches.Find(InSequenceID);
 	return Cache ? Cache->GetSequence() : nullptr;
+}
+
+FMovieSceneSequenceID FMovieSceneEvaluationState::FindSequenceId(UMovieSceneSequence* InSequence) const
+{
+	for (auto& Pair : ObjectCaches)
+	{
+		if (Pair.Value.GetSequence() == InSequence)
+		{
+			return Pair.Key;
+		}
+	}
+
+	return FMovieSceneSequenceID();
 }
 
 FGuid FMovieSceneEvaluationState::FindObjectId(UObject& Object, FMovieSceneSequenceIDRef InSequenceID, IMovieScenePlayer& Player)

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraNodeWriteDataSet.h"
 #include "UObject/UnrealType.h"
@@ -57,6 +57,17 @@ TSharedPtr<SGraphNode> UNiagaraNodeWriteDataSet::CreateVisualWidget()
 	return SNew(SNiagaraGraphNodeWriteDataSet, this);
 }
 
+bool UNiagaraNodeWriteDataSet::SynchronizeWithStruct()
+{
+	bool bSynchronized = Super::SynchronizeWithStruct();
+	if (EventName.IsNone())
+	{
+		EventName = DataSet.Name;
+		VisualsChangedDelegate.Broadcast(this);
+	}
+	return bSynchronized;
+}
+
 FText UNiagaraNodeWriteDataSet::GetNodeTitle(ENodeTitleType::Type TitleType) const
 {
 	return FText::Format(LOCTEXT("NiagaraDataSetWriteFormat", "{0} Write"), FText::FromName(DataSet.Name));
@@ -71,6 +82,14 @@ void UNiagaraNodeWriteDataSet::Compile(class FHlslNiagaraTranslator* Translator,
 	TArray<int32> Inputs;
 	CompileInputPins(Translator, Inputs);
 
+
+	bool bGPUSim = Translator->IsCompileOptionDefined(TEXT("GPUComputeSim"));
+
+	if (bGPUSim)
+	{
+		Translator->Error(LOCTEXT("CannotRunWriteDataSetGPU", "Cannot use an event write node on GPU sims!"), this, nullptr);
+	}
+
 	FString IssuesWithStruct;
 	if (!IsSynchronizedWithStruct(true, &IssuesWithStruct,false))
 	{
@@ -80,6 +99,7 @@ void UNiagaraNodeWriteDataSet::Compile(class FHlslNiagaraTranslator* Translator,
 	if (EventName.IsNone())
 	{
 		EventName = DataSet.Name;
+		VisualsChangedDelegate.Broadcast(this);
 	}
 
 	FNiagaraDataSetID AlteredDataSet = DataSet;

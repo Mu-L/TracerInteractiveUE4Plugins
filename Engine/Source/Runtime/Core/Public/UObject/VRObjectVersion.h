@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreTypes.h"
@@ -17,6 +17,9 @@ struct CORE_API FVRObjectVersion
 
 		// Change how ARSessionConfig stores plane detection configuration from bitmask to bools
 		UseBoolsForARSessionConfigPlaneDetectionConfiguration,
+
+		// Change how UStereoLayerComponent stores additional properties for non-quad layer types
+		UseSubobjectForStereoLayerShapeProperties,
 
 		// -----<new versions can be added above this line>-------------------------------------------------
 		VersionPlusOne,

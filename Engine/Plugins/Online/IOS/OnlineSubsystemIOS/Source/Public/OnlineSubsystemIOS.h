@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -80,6 +80,12 @@ PACKAGE_SCOPE:
 	 * @return true if IAP should be available, false otherwise
 	 */
 	static bool IsInAppPurchasingEnabled();
+	
+	/**
+	 * Is GameCenter enabled
+	 * @return true if enabled, false otherwise
+	 */
+	static bool IsGameCenterEnabled();
 	
 	/**
 	 * Is CloudKit enabled

@@ -1,6 +1,7 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Windows/WindowsWindow.h"
+
 #include "Math/UnrealMathUtility.h"
 #include "HAL/UnrealMemory.h"
 #include "Containers/UnrealString.h"
@@ -956,6 +957,12 @@ int32 FWindowsWindow::GetWindowTitleBarSize() const
 bool FWindowsWindow::IsForegroundWindow() const
 {
 	return ::GetForegroundWindow() == HWnd;
+}
+
+bool FWindowsWindow::IsFullscreenSupported() const
+{
+	// fullscreen not supported when using remote desktop
+	return !::GetSystemMetrics(SM_REMOTESESSION);
 }
 
 void FWindowsWindow::SetText( const TCHAR* const Text )

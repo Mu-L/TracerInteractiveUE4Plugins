@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -146,7 +146,14 @@ public:
 
 	bool operator == (const FDatasmithStaticMeshImportOptions& Other) const
 	{
-		return (MinLightmapResolution == Other.MinLightmapResolution && MaxLightmapResolution == Other.MaxLightmapResolution && bRemoveDegenerates == Other.bRemoveDegenerates);
+		return MinLightmapResolution == Other.MinLightmapResolution
+			&& MaxLightmapResolution == Other.MaxLightmapResolution
+			&& bGenerateLightmapUVs == Other.bGenerateLightmapUVs
+			&& bRemoveDegenerates == Other.bRemoveDegenerates;
+	}
+
+	bool operator != (const FDatasmithStaticMeshImportOptions& Other) const {
+		return !operator==(Other);
 	}
 };
 
@@ -260,16 +267,11 @@ struct DATASMITHCONTENT_API FDatasmithTessellationOptions
 public:
 	bool operator == (const FDatasmithTessellationOptions& Other) const
 	{
-		return (FMath::IsNearlyEqual(ChordTolerance, Other.ChordTolerance) && FMath::IsNearlyEqual(MaxEdgeLength, Other.MaxEdgeLength) && FMath::IsNearlyEqual(NormalTolerance, Other.NormalTolerance) && StitchingTechnique == Other.StitchingTechnique);
+		return FMath::IsNearlyEqual(ChordTolerance, Other.ChordTolerance)
+			&& FMath::IsNearlyEqual(MaxEdgeLength, Other.MaxEdgeLength)
+			&& FMath::IsNearlyEqual(NormalTolerance, Other.NormalTolerance)
+			&& StitchingTechnique == Other.StitchingTechnique;
 	}
-
-	//void operator = (const FDatasmithTessellationOptions& Other)
-	//{
-	//	ChordTolerance = Other.ChordTolerance;
-	//	MaxEdgeLength = Other.MaxEdgeLength;
-	//	NormalTolerance = Other.NormalTolerance;
-	//	StitchingTechnique = Other.StitchingTechnique;
-	//}
 
 	uint32 GetHash() const
 	{
@@ -282,8 +284,25 @@ public:
 	}
 };
 
-UCLASS(BlueprintType, config = EditorPerProjectUserSettings, Transient)
-class DATASMITHCONTENT_API UDatasmithCommonTessellationOptions : public UObject
+/**
+ * Base class for all import options in datasmith.
+ *
+ * Notable feature: forces a full serialization of its properties (by opposition
+ * to the standard delta serialization which stores only the diff wrt the CDO)
+ * The intent is to store the exact options used in a previous import.
+ */
+UCLASS()
+class DATASMITHCONTENT_API UDatasmithOptionsBase : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	void Serialize(FStructuredArchive::FRecord Record) override;
+};
+
+
+UCLASS(BlueprintType, config = EditorPerProjectUserSettings)
+class DATASMITHCONTENT_API UDatasmithCommonTessellationOptions : public UDatasmithOptionsBase
 {
 	GENERATED_BODY()
 
@@ -293,7 +312,7 @@ public:
 };
 
 UCLASS(config = EditorPerProjectUserSettings, HideCategories = ("NotVisible"))
-class DATASMITHCONTENT_API UDatasmithImportOptions : public UObject
+class DATASMITHCONTENT_API UDatasmithImportOptions : public UDatasmithOptionsBase
 {
 	GENERATED_UCLASS_BODY()
 
@@ -355,7 +374,7 @@ public:
 
 	//~ UObject interface
 #if WITH_EDITOR
-	virtual bool CanEditChange(const UProperty* InProperty) const override;
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
 #endif //WITH_EDITOR
 	//~ End UObject interface
 };

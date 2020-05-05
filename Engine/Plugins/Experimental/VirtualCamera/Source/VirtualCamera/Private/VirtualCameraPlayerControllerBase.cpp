@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "VirtualCameraPlayerControllerBase.h"
 
@@ -9,15 +9,16 @@
 #include "Features/IModularFeatures.h"
 #include "Framework/Application/SlateApplication.h"
 #include "IXRTrackingSystem.h"
-#include "RemoteSession/RemoteSession.h"
-#include "RemoteSession/Channels/RemoteSessionInputChannel.h"
-#include "RemoteSession/Channels/RemoteSessionFrameBufferChannel.h"
-#include "RemoteSession/Channels/RemoteSessionXRTrackingChannel.h"
+#include "RemoteSession.h"
+#include "Channels/RemoteSessionInputChannel.h"
+#include "Channels/RemoteSessionFrameBufferChannel.h"
+#include "Channels/RemoteSessionXRTrackingChannel.h"
 #include "Roles/LiveLinkAnimationRole.h"
 #include "Roles/LiveLinkAnimationTypes.h"
 #include "Roles/LiveLinkTransformRole.h"
 #include "Roles/LiveLinkTransformTypes.h"
 #include "VirtualCamera.h"
+#include "VirtualCameraSubsystem.h"
 #include "VPGameMode.h"
 #include "VPRootActor.h"
 
@@ -79,6 +80,12 @@ void AVirtualCameraPlayerControllerBase::BeginPlay()
 	if (RootActor == nullptr)
 	{
 		UE_LOG(LogVirtualCamera, Warning, TEXT("There is no VP Root Actor in the scene. A CineCameraActor will be spawned. Multi user functionalities may suffer."));
+	}
+
+	// set controller implementation (aka this) onto camera subsystem
+	if (UVirtualCameraSubsystem* SubSystem = GEngine->GetEngineSubsystem<UVirtualCameraSubsystem>())
+	{
+		SubSystem->SetVirtualCameraController(this);
 	}
 
 	// Make a default sequence playback controller
@@ -1417,4 +1424,29 @@ bool AVirtualCameraPlayerControllerBase::ToggleAxisLock(const EVirtualCameraAxis
 void AVirtualCameraPlayerControllerBase::ActivateGameViewport()
 {
 	FSlateApplication::Get().ActivateGameViewport();
+}
+
+UCineCameraComponent* AVirtualCameraPlayerControllerBase::GetStreamedCameraComponent_Implementation() const
+{
+	return GetVirtualCameraCineCameraComponent();
+}
+
+UCineCameraComponent* AVirtualCameraPlayerControllerBase::GetRecordingCameraComponent_Implementation() const
+{
+	return TargetCameraActor ? TargetCameraActor->GetCineCameraComponent() : nullptr;
+}
+
+ULevelSequencePlaybackController* AVirtualCameraPlayerControllerBase::GetSequenceController_Implementation() const
+{
+	return LevelSequencePlaybackController;
+}
+
+TScriptInterface<IVirtualCameraPresetContainer> AVirtualCameraPlayerControllerBase::GetPresetContainer_Implementation() const
+{
+	return GetVirtualCameraPawn();
+}
+
+TScriptInterface<IVirtualCameraOptions> AVirtualCameraPlayerControllerBase::GetOptions_Implementation() const
+{
+	return GetVirtualCameraPawn();
 }

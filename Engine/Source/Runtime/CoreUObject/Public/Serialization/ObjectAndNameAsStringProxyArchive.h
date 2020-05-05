@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -18,7 +18,7 @@ class UObject;
  * 
  * @param InInnerArchive The actual FArchive object to serialize normal data types (FStrings, INTs, etc)
  */
-struct COREUOBJECT_VTABLE FObjectAndNameAsStringProxyArchive : public FNameAsStringProxyArchive
+struct FObjectAndNameAsStringProxyArchive : public FNameAsStringProxyArchive
 {
 	/**
 	 * Creates and initializes a new instance.

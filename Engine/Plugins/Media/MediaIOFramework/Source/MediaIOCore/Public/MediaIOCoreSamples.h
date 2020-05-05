@@ -1,12 +1,13 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
-#include "CoreTypes.h"
+#include "CoreMinimal.h"
 #include "IMediaSamples.h"
+#include "IMediaTextureSample.h"
+#include "MediaIOCoreSampleContainer.h"
+#include "Misc/ScopeLock.h"
 #include "Templates/SharedPointer.h"
-
-#include "MediaSampleQueue.h"
 
 class IMediaAudioSample;
 class IMediaBinarySample;
@@ -14,13 +15,27 @@ class IMediaOverlaySample;
 class IMediaTextureSample;
 
 /**
+ * Bitflags about different types of sample a MediaIO can push
+ */
+enum class EMediaIOSampleType
+{
+	None = 0,
+	Video = 1<<0,
+	Audio = 1<<1,
+	Metadata = 1<<2,
+	Subtitles = 1<<3,
+	Caption = 1<<4,
+};
+ENUM_CLASS_FLAGS(EMediaIOSampleType)
+
+/**
  * General purpose media sample queue.
  */
-class MEDIAIOCORE_API FMediaIOCoreSamples
-	: public IMediaSamples
+
+class MEDIAIOCORE_API FMediaIOCoreSamples : public IMediaSamples
 {
 public:
-	FMediaIOCoreSamples() = default;
+	FMediaIOCoreSamples();
 	FMediaIOCoreSamples(const FMediaIOCoreSamples&) = delete;
 	FMediaIOCoreSamples& operator=(const FMediaIOCoreSamples&) = delete;
 
@@ -35,7 +50,7 @@ public:
 	 */
 	bool AddAudio(const TSharedRef<IMediaAudioSample, ESPMode::ThreadSafe>& Sample)
 	{
-		return AudioSampleQueue.Enqueue(Sample);
+		return AudioSamples.AddSample(Sample);
 	}
 
 	/**
@@ -47,7 +62,7 @@ public:
 	 */
 	bool AddCaption(const TSharedRef<IMediaOverlaySample, ESPMode::ThreadSafe>& Sample)
 	{
-		return CaptionSampleQueue.Enqueue(Sample);
+		return CaptionSamples.AddSample(Sample);
 	}
 
 	/**
@@ -59,7 +74,7 @@ public:
 	 */
 	bool AddMetadata(const TSharedRef<IMediaBinarySample, ESPMode::ThreadSafe>& Sample)
 	{
-		return MetadataSampleQueue.Enqueue(Sample);
+		return MetadataSamples.AddSample(Sample);
 	}
 
 	/**
@@ -71,7 +86,7 @@ public:
 	 */
 	bool AddSubtitle(const TSharedRef<IMediaOverlaySample, ESPMode::ThreadSafe>& Sample)
 	{
-		return SubtitleSampleQueue.Enqueue(Sample);
+		return SubtitleSamples.AddSample(Sample);
 	}
 
 	/**
@@ -83,7 +98,7 @@ public:
 	 */
 	bool AddVideo(const TSharedRef<IMediaTextureSample, ESPMode::ThreadSafe>& Sample)
 	{
-		return VideoSampleQueue.Enqueue(Sample);
+		return VideoSamples.AddSample(Sample);
 	}
 
 	/**
@@ -94,7 +109,7 @@ public:
 	 */
 	bool PopAudio()
 	{
-		return AudioSampleQueue.Pop();
+		return AudioSamples.PopSample();
 	}
 
 	/**
@@ -105,7 +120,7 @@ public:
 	 */
 	bool PopCaption()
 	{
-		return CaptionSampleQueue.Pop();
+		return CaptionSamples.PopSample();
 	}
 
 	/**
@@ -116,7 +131,7 @@ public:
 	 */
 	bool PopMetadata()
 	{
-		return MetadataSampleQueue.Pop();
+		return MetadataSamples.PopSample();
 	}
 
 	/**
@@ -127,7 +142,7 @@ public:
 	 */
 	bool PopSubtitle()
 	{
-		return SubtitleSampleQueue.Pop();
+		return SubtitleSamples.PopSample();
 	}
 
 	/**
@@ -138,7 +153,7 @@ public:
 	 */
 	bool PopVideo()
 	{
-		return VideoSampleQueue.Pop();
+		return VideoSamples.PopSample();
 	}
 
 	/**
@@ -149,7 +164,7 @@ public:
 	 */
 	int32 NumAudioSamples() const
 	{
-		return AudioSampleQueue.Num();
+		return AudioSamples.NumSamples();
 	}
 
 	/**
@@ -160,7 +175,7 @@ public:
 	 */
 	int32 NumCaptionSamples() const
 	{
-		return CaptionSampleQueue.Num();
+		return CaptionSamples.NumSamples();
 	}
 
 	/**
@@ -171,7 +186,7 @@ public:
 	 */
 	int32 NumMetadataSamples() const
 	{
-		return MetadataSampleQueue.Num();
+		return MetadataSamples.NumSamples();
 	}
 
 	/**
@@ -182,7 +197,7 @@ public:
 	 */
 	int32 NumSubtitleSamples() const
 	{
-		return SubtitleSampleQueue.Num();
+		return SubtitleSamples.NumSamples();
 	}
 
 	/**
@@ -193,7 +208,7 @@ public:
 	 */
 	int32 NumVideoSamples() const
 	{
-		return VideoSampleQueue.Num();
+		return VideoSamples.NumSamples();
 	}
 
 	/**
@@ -204,15 +219,73 @@ public:
 	 */
 	FTimespan GetNextVideoSampleTime()
 	{
-		FTimespan NextTime;
-		TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe> Sample;
-		const bool bHasSucceed = VideoSampleQueue.Peek(Sample);
-		if (bHasSucceed)
-		{
-			NextTime = Sample->GetTime();
-		}
-		return NextTime;
+		return VideoSamples.GetNextSampleTime();
 	}
+
+	/**
+	 * Get Audio Samples frame dropped count.
+	 *
+	 * @return Number of frames dropped
+	 */
+	int32 GetAudioFrameDropCount() const
+	{
+		return AudioSamples.GetFrameDroppedStat();
+	}
+
+	/**
+	 * Get Video Samples frame dropped count.
+	 *
+	 * @return Number of frames dropped
+	 */
+	int32 GetVideoFrameDropCount() const
+	{
+		return VideoSamples.GetFrameDroppedStat();
+	}
+	
+	/**
+	 * Get Metadata Samples frame dropped count.
+	 *
+	 * @return Number of frames dropped
+	 */
+	int32 GetMetadataFrameDropCount() const
+	{
+		return MetadataSamples.GetFrameDroppedStat();
+	}
+
+	/**
+	 * Get Subtitles Samples frame dropped count.
+	 *
+	 * @return Number of frames dropped
+	 */
+	int32 GetSubtitlesFrameDropCount() const
+	{
+		return SubtitleSamples.GetFrameDroppedStat();
+	}
+
+	/**
+	 * Get Caption Samples frame dropped count.
+	 *
+	 * @return Number of frames dropped
+	 */
+	int32 GetCaptionsFrameDropCount() const
+	{
+		return CaptionSamples.GetFrameDroppedStat();
+	}
+
+	/**
+	 * Caches the current sample container state for a given Player (evaluation) time
+	 */
+	void CacheSamplesState(FTimespan PlayerTime);
+
+	/** Enable or disable channels based on bitfield flag */
+	void EnableTimedDataChannels(ITimedDataInput* Input, EMediaIOSampleType SampleTypes);
+
+	/** Initialize our different buffers with player's settings and wheter or not it should be displayed / supported in Timing monitor */
+	void InitializeVideoBuffer(const FMediaIOSamplingSettings& InSettings);
+	void InitializeAudioBuffer(const FMediaIOSamplingSettings& InSettings);
+	void InitializeMetadataBuffer(const FMediaIOSamplingSettings& InSettings);
+	void InitializeSubtitlesBuffer(const FMediaIOSamplingSettings& InSettings);
+	void InitializeCaptionBuffer(const FMediaIOSamplingSettings& InSettings);
 
 public:
 
@@ -227,18 +300,9 @@ public:
 
 protected:
 
-	/** Audio sample queue. */
-	FMediaAudioSampleQueue AudioSampleQueue;
-
-	/** Caption sample queue. */
-	FMediaOverlaySampleQueue CaptionSampleQueue;
-
-	/** Metadata sample queue. */
-	FMediaBinarySampleQueue MetadataSampleQueue;
-
-	/** Subtitle sample queue. */
-	FMediaOverlaySampleQueue SubtitleSampleQueue;
-
-	/** Video sample queue. */
-	FMediaTextureSampleQueue VideoSampleQueue;
+	FMediaIOCoreSampleContainer<IMediaTextureSample> VideoSamples;
+	FMediaIOCoreSampleContainer<IMediaAudioSample> AudioSamples;
+	FMediaIOCoreSampleContainer<IMediaBinarySample> MetadataSamples;
+	FMediaIOCoreSampleContainer<IMediaOverlaySample> SubtitleSamples;
+	FMediaIOCoreSampleContainer<IMediaOverlaySample> CaptionSamples;
 };

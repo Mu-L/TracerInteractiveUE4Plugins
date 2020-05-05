@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -121,9 +121,19 @@ class GAMEPLAYABILITIES_API UAbilitySystemComponent : public UGameplayTasksCompo
 		return (T*)GetOrCreateAttributeSubobject(T::StaticClass());
 	}
 
-	/** Adds a new AttributeSet that is a DSO (created by called in their CStor) */
 	template <class T>
+	UE_DEPRECATED(4.25, "AddDefaultSubobjectSet is deprecated. Use AddAttributeSetSubobject instead.")
 	const T*	AddDefaultSubobjectSet(T* Subobject)
+	{
+		return AddAttributeSetSubobject(Subobject);
+	}
+
+	/** 
+	 * Manually add a new attribute set that is a subobject of this ability system component.
+	 * All subobjects of this component are automatically added during initialization.
+	 */
+	template <class T>
+	const T* AddAttributeSetSubobject(T* Subobject)
 	{
 		SpawnedAttributes.AddUnique(Subobject);
 		return Subobject;
@@ -151,8 +161,13 @@ class GAMEPLAYABILITIES_API UAbilitySystemComponent : public UGameplayTasksCompo
 	TArray<FAttributeDefaults>	DefaultStartingData;
 
 	/** List of attribute sets */
-	UPROPERTY(Replicated)
+	UPROPERTY(Replicated, Transient)
 	TArray<UAttributeSet*>	SpawnedAttributes;
+
+	/** The linked Anim Instance that this component will play montages in. Use NAME_None for the main anim instance. */
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Skills")
+	FName AffectedAnimInstanceTag; 
+
 
 	/** Sets the base value of an attribute. Existing active modifiers are NOT cleared and will act upon the new base value. */
 	void SetNumericAttributeBase(const FGameplayAttribute &Attribute, float NewBaseValue);
@@ -508,43 +523,9 @@ class GAMEPLAYABILITIES_API UAbilitySystemComponent : public UGameplayTasksCompo
 	/** Update the number of instances of a given tag and calls callback */
 	FORCEINLINE void UpdateTagMap(const FGameplayTagContainer& Container, int32 CountDelta)
 	{
-		// For removal, reorder calls so that FillParentTags is only called once
-		if (CountDelta > 0)
+		if (!Container.IsEmpty())
 		{
-			for (auto TagIt = Container.CreateConstIterator(); TagIt; ++TagIt)
-			{
-				const FGameplayTag& Tag = *TagIt;
-				if (GameplayTagCountContainer.UpdateTagCount(Tag, CountDelta))
-				{
-					OnTagUpdated(Tag, true);
-				}
-			}
-		}
-		else if (CountDelta < 0)
-		{
-			// Defer FillParentTags until all Tags have been removed
-			TArray<FGameplayTag> RemovedTags;
-			RemovedTags.Reserve(Container.Num()); // pre-allocate max number (if all are removed)
-
-			for (auto TagIt = Container.CreateConstIterator(); TagIt; ++TagIt)
-			{
-				const FGameplayTag& Tag = *TagIt;
-				if (GameplayTagCountContainer.UpdateTagCount(Tag, CountDelta, true))
-				{
-					RemovedTags.Add(Tag);
-				}
-			}
-			
-			if (RemovedTags.Num() > 0)
-			{
-				GameplayTagCountContainer.FillParentTags();
-			}
-
-			// Notify last in case OnTagUpdated queries this container
-			for (FGameplayTag& Tag : RemovedTags)
-			{
-				OnTagUpdated(Tag, false);
-			}
+			UpdateTagMap_Internal(Container, CountDelta);
 		}
 	}
 
@@ -650,8 +631,8 @@ class GAMEPLAYABILITIES_API UAbilitySystemComponent : public UGameplayTasksCompo
 	UPROPERTY(meta = (SystemGameplayAttribute = "true"))
 	float IncomingDuration;
 
-	static UProperty* GetOutgoingDurationProperty();
-	static UProperty* GetIncomingDurationProperty();
+	static FProperty* GetOutgoingDurationProperty();
+	static FProperty* GetIncomingDurationProperty();
 
 	static const FGameplayEffectAttributeCaptureDefinition& GetOutgoingDurationCapture();
 	static const FGameplayEffectAttributeCaptureDefinition& GetIncomingDurationCapture();
@@ -683,15 +664,15 @@ class GAMEPLAYABILITIES_API UAbilitySystemComponent : public UGameplayTasksCompo
 	}
 
 	/** Call from OnRep functions to set the attribute base value on the client */
-	void SetBaseAttributeValueFromReplication(float NewValue, FGameplayAttribute Attribute)
+	void SetBaseAttributeValueFromReplication(const FGameplayAttribute& Attribute, float NewValue, float OldValue)
 	{
-		ActiveGameplayEffects.SetBaseAttributeValueFromReplication(Attribute, NewValue);
+		ActiveGameplayEffects.SetBaseAttributeValueFromReplication(Attribute, NewValue, OldValue);
 	}
 
 	/** Call from OnRep functions to set the attribute base value on the client */
-	void SetBaseAttributeValueFromReplication(FGameplayAttributeData NewValue, FGameplayAttribute Attribute)
+	void SetBaseAttributeValueFromReplication(const FGameplayAttribute& Attribute, const FGameplayAttributeData& NewValue, const FGameplayAttributeData& OldValue)
 	{
-		ActiveGameplayEffects.SetBaseAttributeValueFromReplication(Attribute, NewValue.GetBaseValue());
+		ActiveGameplayEffects.SetBaseAttributeValueFromReplication(Attribute, NewValue.GetBaseValue(), OldValue.GetBaseValue());
 	}
 
 	/** Tests if all modifiers in this GameplayEffect will leave the attribute > 0.f */
@@ -712,6 +693,10 @@ class GAMEPLAYABILITIES_API UAbilitySystemComponent : public UGameplayTasksCompo
 	/** Returns list of active effects, for a query */
 	UFUNCTION(BlueprintCallable, BlueprintPure=false, Category = "GameplayEffects", meta=(DisplayName = "Get Activate Gameplay Effects for Query"))
 	TArray<FActiveGameplayEffectHandle> GetActiveEffects(const FGameplayEffectQuery& Query) const;
+
+	/** Returns list of active effects that have all of the passed in tags */
+	UFUNCTION(BlueprintCallable, BlueprintPure = false, Category = "GameplayEffects")
+	TArray<FActiveGameplayEffectHandle> GetActiveEffectsWithAllTags(FGameplayTagContainer Tags) const;
 
 	/** This will give the world time that all effects matching this query will be finished. If multiple effects match, it returns the one that returns last */
 	float GetActiveEffectsEndTime(const FGameplayEffectQuery& Query) const;
@@ -840,7 +825,7 @@ class GAMEPLAYABILITIES_API UAbilitySystemComponent : public UGameplayTasksCompo
 	FGameplayAbilitySpecHandle GiveAbility(const FGameplayAbilitySpec& AbilitySpec);
 
 	/** Grants an ability and attempts to activate it exactly one time, which will cause it to be removed. Only valid on the server! */
-	FGameplayAbilitySpecHandle GiveAbilityAndActivateOnce(const FGameplayAbilitySpec& AbilitySpec);
+	FGameplayAbilitySpecHandle GiveAbilityAndActivateOnce(FGameplayAbilitySpec& AbilitySpec);
 
 	/** Wipes all 'given' abilities. */
 	void ClearAllAbilities();
@@ -1211,6 +1196,9 @@ class GAMEPLAYABILITIES_API UAbilitySystemComponent : public UGameplayTasksCompo
 	/** Returns amount of time left in current section */
 	float GetCurrentMontageSectionTimeLeft() const;
 
+	/** Method to set the replication method for the position in the montage */
+	void SetMontageRepAnimPositionMethod(ERepAnimPositionMethod InMethod);
+
 	// ----------------------------------------------------------------------------------------------------------------
 	//	Actor interaction
 	// ----------------------------------------------------------------------------------------------------------------	
@@ -1449,7 +1437,7 @@ protected:
 	void	ClientActivateAbilitySucceedWithEventData(FGameplayAbilitySpecHandle AbilityToActivate, FPredictionKey PredictionKey, FGameplayEventData TriggerEventData);
 
 	/** Implementation of ServerTryActivateAbility */
-	virtual void InternalServerTryActiveAbility(FGameplayAbilitySpecHandle AbilityToActivate, bool InputPressed, const FPredictionKey& PredictionKey, const FGameplayEventData* TriggerEventData);
+	virtual void InternalServerTryActivateAbility(FGameplayAbilitySpecHandle AbilityToActivate, bool InputPressed, const FPredictionKey& PredictionKey, const FGameplayEventData* TriggerEventData);
 
 	/** Called when a prediction key that played a montage is rejected */
 	void OnPredictiveMontageRejected(UAnimMontage* PredictiveMontage);
@@ -1563,6 +1551,8 @@ protected:
 	const UAttributeSet*	GetAttributeSubobject(const TSubclassOf<UAttributeSet> AttributeClass) const;
 	const UAttributeSet*	GetAttributeSubobjectChecked(const TSubclassOf<UAttributeSet> AttributeClass) const;
 	const UAttributeSet*	GetOrCreateAttributeSubobject(TSubclassOf<UAttributeSet> AttributeClass);
+
+	void UpdateTagMap_Internal(const FGameplayTagContainer& Container, int32 CountDelta);
 
 	friend struct FActiveGameplayEffect;
 	friend struct FActiveGameplayEffectAction;

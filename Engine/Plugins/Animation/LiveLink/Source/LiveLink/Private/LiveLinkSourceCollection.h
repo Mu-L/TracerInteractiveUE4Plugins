@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -8,6 +8,7 @@
 #include "LiveLinkSourceFactory.h"
 #include "LiveLinkSubject.h"
 #include "LiveLinkSubjectSettings.h"
+#include "LiveLinkTimedDataInput.h"
 #include "LiveLinkTypes.h"
 #include "LiveLinkVirtualSubject.h"
 #include "Templates/SubclassOf.h"
@@ -23,10 +24,17 @@ class ULiveLinkVirtualSubject;
 
 struct FLiveLinkCollectionSourceItem
 {
+	FLiveLinkCollectionSourceItem() = default;
+	FLiveLinkCollectionSourceItem(const FLiveLinkCollectionSourceItem&) = delete;
+	FLiveLinkCollectionSourceItem(FLiveLinkCollectionSourceItem&&) = default;
+	FLiveLinkCollectionSourceItem& operator=(const FLiveLinkCollectionSourceItem&) = delete;
+
 	FGuid Guid;
 	ULiveLinkSourceSettings* Setting; // GC by FLiveLinkSourceCollection::AddReferencedObjects
 	TSharedPtr<ILiveLinkSource> Source;
+	TSharedPtr<FLiveLinkTimedDataInput> TimedData;
 	bool bPendingKill = false;
+	bool bIsVirtualSource = false;
 
 public:
 	bool IsVirtualSource() const;
@@ -36,7 +44,7 @@ public:
 struct FLiveLinkCollectionSubjectItem
 {
 	FLiveLinkCollectionSubjectItem(FLiveLinkSubjectKey InKey, TUniquePtr<FLiveLinkSubject> InLiveSubject, ULiveLinkSubjectSettings* InSettings, bool bInEnabled);
-	FLiveLinkCollectionSubjectItem(FLiveLinkSubjectName InSubjectName, ULiveLinkVirtualSubject* InVirtualSubject, bool bInEnabled);
+	FLiveLinkCollectionSubjectItem(FLiveLinkSubjectKey InKey, ULiveLinkVirtualSubject* InVirtualSubject, bool bInEnabled);
 
 public:
 	FLiveLinkSubjectKey Key;
@@ -71,7 +79,7 @@ class FLiveLinkSourceCollection : public FGCObject
 {
 public:
 	// "source guid" for virtual subjects
-	static const FGuid VirtualSubjectGuid;
+	static const FGuid DefaultVirtualSubjectGuid;
 	FLiveLinkSourceCollection();
 
 public:
@@ -91,6 +99,8 @@ public:
 	const FLiveLinkCollectionSourceItem* FindSource(TSharedPtr<ILiveLinkSource> Source) const;
 	FLiveLinkCollectionSourceItem* FindSource(FGuid SourceGuid);
 	const FLiveLinkCollectionSourceItem* FindSource(FGuid SourceGuid) const;
+	FLiveLinkCollectionSourceItem* FindVirtualSource(FName VirtualSourceName);
+	const FLiveLinkCollectionSourceItem* FindVirtualSource(FName VirtualSourceName) const;
 
 	void AddSubject(FLiveLinkCollectionSubjectItem Subject);
 	void RemoveSubject(FLiveLinkSubjectKey SubjectKey);

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -33,9 +33,10 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Constructor
 		/// </summary>
-		public HybridExecutor()
+		public HybridExecutor(int InMaxLocalActions)
 		{
-			this.LocalExecutor = new ParallelExecutor();
+			MaxLocalActions = InMaxLocalActions;
+			this.LocalExecutor = new ParallelExecutor(MaxLocalActions);
 			this.RemoteExecutor = new XGE();
 
 			XmlConfig.ApplyTo(this);

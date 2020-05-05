@@ -1,7 +1,7 @@
 @echo off
 
 rem ## Unreal Engine 4 AutomationTool setup script
-rem ## Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+rem ## Copyright Epic Games, Inc. All Rights Reserved.
 rem ##
 rem ## This script is expecting to exist in the UE4/Engine/Build/BatchFiles directory.  It will not work correctly
 rem ## if you copy it to a different location and run it.
@@ -29,9 +29,6 @@ if not "%ForcePrecompiledUAT%"=="" goto RunPrecompiled
 rem ## check if the UAT projects are present. if not, we'll just use the precompiled ones.
 if not exist Source\Programs\AutomationTool\AutomationTool.csproj goto RunPrecompiled
 if not exist Source\Programs\AutomationToolLauncher\AutomationToolLauncher.csproj goto RunPrecompiled
-
-rem ## find platform extension source code that UBT will need when compiling platform extension automation projects
-call "%~dp0FindPlatformExtensionSources.bat"
 
 rem ## Get the path to MSBuild
 call "%~dp0GetMSBuildPath.bat"

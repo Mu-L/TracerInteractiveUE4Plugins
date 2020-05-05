@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,6 +7,7 @@
 class FExtender;
 class FToolBarBuilder;
 class FWidgetBlueprintEditor;
+class UToolMenu;
 
 /**
  * Handles all of the toolbar related construction for the widget blueprint editor.
@@ -23,14 +24,11 @@ public:
 	 */
 	void AddWidgetBlueprintEditorModesToolbar(TSharedPtr<FExtender> Extender);
 
-	void AddWidgetReflector(TSharedPtr<FExtender> Extender);
+	void AddWidgetReflector(UToolMenu* InMenu);
 
 public:
 	/**  */
 	void FillWidgetBlueprintEditorModesToolbar(FToolBarBuilder& ToolbarBuilder);
-
-	/**  */
-	void FillWidgetReflectorToolbar(FToolBarBuilder& ToolbarBuilder);
 
 	TWeakPtr<FWidgetBlueprintEditor> WidgetEditor;
 };

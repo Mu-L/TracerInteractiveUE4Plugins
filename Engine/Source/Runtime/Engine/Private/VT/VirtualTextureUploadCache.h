@@ -1,10 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "HAL/CriticalSection.h"
 #include "RendererInterface.h"
+#include "RenderResource.h"
 #include "PixelFormat.h"
 
 class FRHITexture2D;
@@ -27,13 +28,17 @@ struct FVTUploadTileHandle
 	uint32 Index;
 };
 
-class FVirtualTextureUploadCache : public IVirtualTextureFinalizer
+class FVirtualTextureUploadCache : public IVirtualTextureFinalizer, public FRenderResource
 {
 public:
 	FVirtualTextureUploadCache();
 	virtual ~FVirtualTextureUploadCache();
 
+	// IVirtualTextureFinalizer
 	virtual void Finalize(FRHICommandListImmediate& RHICmdList) override;
+
+	// FRenderResource
+	virtual void ReleaseRHI() override;
 
 	uint32 GetNumPendingTiles() const { return NumPendingTiles; }
 

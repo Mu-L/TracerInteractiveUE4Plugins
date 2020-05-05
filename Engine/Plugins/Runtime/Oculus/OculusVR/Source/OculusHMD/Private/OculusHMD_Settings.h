@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 #include "OculusHMDPrivate.h"
@@ -88,7 +88,6 @@ public:
 	FIntRect EyeUnscaledRenderViewport[2];
 
 	ovrpMatrix4f EyeProjectionMatrices[2]; // 0 - left, 1 - right, same as Views
-	ovrpMatrix4f PerspectiveProjection[2]; // used for calc ortho projection matrices
 
 	FIntPoint RenderTargetSize;
 	float PixelDensity;

@@ -1,10 +1,13 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GameplayTagPinUtilities.h"
 #include "GameplayTagsManager.h"
 #include "SGraphPin.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_VariableSet.h"
+#include "K2Node_FunctionTerminator.h"
+
+static FName NAME_Categories = FName("Categories");
 
 FString GameplayTagPinUtilities::ExtractTagFilterStringFromGraphPin(UEdGraphPin* InTagPin)
 {
@@ -18,20 +21,31 @@ FString GameplayTagPinUtilities::ExtractTagFilterStringFromGraphPin(UEdGraphPin*
 			FilterString = TagManager.GetCategoriesMetaFromField(PinStructType);
 		}
 
+		UEdGraphNode* OwningNode = InTagPin->GetOwningNode();
+
 		if (FilterString.IsEmpty())
 		{
-			if (UK2Node_CallFunction* CallFuncNode = Cast<UK2Node_CallFunction>(InTagPin->GetOwningNode()))
+			FilterString = OwningNode->GetPinMetaData(InTagPin->PinName, NAME_Categories);
+		}
+
+		if (FilterString.IsEmpty())
+		{
+			if (const UK2Node_CallFunction* CallFuncNode = Cast<UK2Node_CallFunction>(OwningNode))
 			{
-				if (UFunction* ThisFunction = CallFuncNode->GetTargetFunction())
+				if (const UFunction* TargetFunction = CallFuncNode->GetTargetFunction())
 				{
-					FilterString = TagManager.GetCategoriesMetaFromFunction(ThisFunction, InTagPin->PinName);
+					FilterString = TagManager.GetCategoriesMetaFromFunction(TargetFunction, InTagPin->PinName);
 				}
 			}
-			else if (UK2Node_VariableSet* ThisVariable = Cast<UK2Node_VariableSet>(InTagPin->GetOwningNode()))
+			else if (const UK2Node_VariableSet* VariableSetNode = Cast<UK2Node_VariableSet>(OwningNode))
 			{
-				if (UProperty* Property = ThisVariable->GetPropertyForVariable())
+				FilterString = TagManager.GetCategoriesMetaFromField(VariableSetNode->GetPropertyForVariable());
+			}
+			else if (const UK2Node_FunctionTerminator* FuncTermNode = Cast<UK2Node_FunctionTerminator>(OwningNode))
+			{
+				if (const UFunction* SignatureFunction = FuncTermNode->FindSignatureFunction())
 				{
-					FilterString = TagManager.GetCategoriesMetaFromField(Property);
+					FilterString = TagManager.GetCategoriesMetaFromFunction(SignatureFunction, InTagPin->PinName);
 				}
 			}
 		}

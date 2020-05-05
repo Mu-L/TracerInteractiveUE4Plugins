@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CrashDescription.h"
 #include "Misc/DateTime.h"
@@ -93,6 +93,20 @@ int64 FCrashProperty::AsInt64() const
 	return Value;
 }
 
+FCrashPropertyXmlNode::FCrashPropertyXmlNode(const FString& InMainCategory, const FString& InSecondCategory, FPrimaryCrashProperties* InOwner)
+	: Owner(InOwner)
+	, MainCategory(InMainCategory)
+	, SecondCategory(InSecondCategory)
+	, bSet(false)
+{ }
+
+FCrashPropertyXmlNode& FCrashPropertyXmlNode::operator=(const FXmlNode* Node)
+{
+	bSet = true;
+	Owner->SetCrashProperty(MainCategory, SecondCategory, Node);
+	return *this;
+}
+
 /*-----------------------------------------------------------------------------
 	FPrimaryCrashProperties
 -----------------------------------------------------------------------------*/
@@ -122,8 +136,11 @@ FPrimaryCrashProperties::FPrimaryCrashProperties()
 	, PlatformCallbackResult(FGenericCrashContext::PlatformPropertiesTag, TEXT("PlatformCallbackResult"), this)
 	, CrashReportClientVersion(FGenericCrashContext::RuntimePropertiesTag, TEXT("CrashReportClientVersion"), this)
 	, CPUBrand(FGenericCrashContext::RuntimePropertiesTag, TEXT("CPUBrand"), this)
+	, Threads(FGenericCrashContext::RuntimePropertiesTag, TEXT("Threads"), this)	
 	, bIsOOM(false)
 	, bLowMemoryWarning(false)
+	, bInBackground(false)
+	, bIsRequestingExit(false)
 	, XmlFile( nullptr )
 {
 	CrashVersion = ECrashDescVersions::VER_1_NewCrashFormat;
@@ -153,9 +170,8 @@ void FPrimaryCrashProperties::UpdateIDs()
 		EpicAccountId = FString();
 	}
 
-	// Add real user name only if log files were allowed since the user name is in the log file and the user consented to sending this information.
-	const bool bSendUserName = FCrashReportCoreConfig::Get().GetSendLogFile() || FEngineBuildSettings::IsInternalBuild();
-	if (bSendUserName)
+	// Only send user name for internal builds
+	if (FEngineBuildSettings::IsInternalBuild())
 	{
 		// Remove periods from user names to match AutoReporter user names
 		// The name prefix is read by CrashRepository.AddNewCrash in the website code
@@ -409,6 +425,8 @@ void FPrimaryCrashProperties::MakeCrashEventAttributes(TArray<FAnalyticsEventAtt
 	OutCrashAttributes.Add(FAnalyticsEventAttribute(TEXT("CPUBrand"), CPUBrand.AsString()));
 	OutCrashAttributes.Add(FAnalyticsEventAttribute(TEXT("bIsOOM"), bIsOOM ? TEXT("true") : TEXT("false")));
 	OutCrashAttributes.Add(FAnalyticsEventAttribute(TEXT("bLowMemoryWarning"), bLowMemoryWarning ? TEXT("true") : TEXT("false")));
+	OutCrashAttributes.Add(FAnalyticsEventAttribute(TEXT("bInBackground"), bInBackground ? TEXT("true") : TEXT("false")));
+	OutCrashAttributes.Add(FAnalyticsEventAttribute(TEXT("bIsRequestingExit"), bIsRequestingExit ? TEXT("true") : TEXT("false")));
 
 	// Add arbitrary engine data
 	if (XmlFile->IsValid())
@@ -512,7 +530,9 @@ void FCrashContext::SetupPrimaryCrashProperties()
 		GetCrashProperty( PCallStackHash, FGenericCrashContext::RuntimePropertiesTag, TEXT("PCallStackHash"));
 		GetCrashProperty( bIsOOM, FGenericCrashContext::RuntimePropertiesTag, TEXT("MemoryStats.bIsOOM"));
 		GetCrashProperty( bLowMemoryWarning, FGenericCrashContext::GameDataTag, TEXT("bLowMemoryCalled"));
-		
+		GetCrashProperty( bInBackground, FGenericCrashContext::GameDataTag, TEXT("bInBackground"));
+		GetCrashProperty( bIsRequestingExit, FGenericCrashContext::GameDataTag, TEXT("IsRequestingExit"));
+
 		if (CrashDumpMode == ECrashDumpMode::FullDump)
 		{
 			// Set the full dump crash location when we have a full dump.
@@ -583,12 +603,12 @@ FCrashWERContext::FCrashWERContext( const FString& WERXMLFilepath )
 
 			if (ParsedParameters9.Num() > 0)
 			{
-				BranchName = ParsedParameters9[0].Replace( TEXT( "+" ), TEXT( "/" ) );
+				BranchName = ParsedParameters9[0].Replace( TEXT( "+" ), TEXT( "/" ), ESearchCase::CaseSensitive);
 
 				const FString DepotRoot = TEXT( "//depot/" );
 				if (BranchName.StartsWith( DepotRoot ))
 				{
-					BranchName = BranchName.Mid( DepotRoot.Len() );
+					BranchName.MidInline( DepotRoot.Len(), MAX_int32, false );
 				}
 				EngineVersionComponents++;
 			}

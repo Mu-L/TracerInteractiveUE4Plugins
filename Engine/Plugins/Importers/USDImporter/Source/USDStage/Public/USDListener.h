@@ -1,13 +1,17 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #if USE_USD_SDK
 
+#include "Containers/ContainersFwd.h"
+#include "Containers/Map.h"
+
 #include "USDIncludesStart.h"
 
 #include "pxr/base/tf/weakBase.h"
 #include "pxr/usd/sdf/path.h"
+#include "pxr/usd/sdf/notice.h"
 #include "pxr/usd/usd/notice.h"
 #include "pxr/usd/usd/stage.h"
 
@@ -31,18 +35,24 @@ public:
 	DECLARE_EVENT( FUsdListener, FOnStageEditTargetChanged );
 	FOnStageEditTargetChanged OnStageEditTargetChanged;
 
-	DECLARE_EVENT_TwoParams( FUsdListener, FOnPrimChanged, const FString&, bool );
-	FOnPrimChanged OnPrimChanged;
+	using FPrimsChangedList = TMap< FString, bool >;
+	DECLARE_EVENT_OneParam( FUsdListener, FOnPrimsChanged, const FPrimsChangedList& );
+	FOnPrimsChanged OnPrimsChanged;
+
+	DECLARE_EVENT_OneParam( FUsdListener, FOnLayersChanged, const pxr::SdfLayerChangeListVec& );
+	FOnLayersChanged OnLayersChanged;
 
 	FThreadSafeCounter IsBlocked;
 
 protected:
 	void HandleUsdNotice( const pxr::UsdNotice::ObjectsChanged& Notice, const pxr::UsdStageWeakPtr& Sender );
 	void HandleStageEditTargetChangedNotice( const pxr::UsdNotice::StageEditTargetChanged& Notice, const pxr::UsdStageWeakPtr& Sender );
+	void HandleLayersChangedNotice ( const pxr::SdfNotice::LayersDidChange& Notice );
 
 private:
 	pxr::TfNotice::Key RegisteredObjectsChangedKey;
 	pxr::TfNotice::Key RegisteredStageEditTargetChangedKey;
+	pxr::TfNotice::Key RegisteredLayersChangedKey;
 };
 
 class FScopedBlockNotices final

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -23,7 +23,6 @@ class SHorizontalBox;
 class SMultiLineEditableTextBox;
 class STextBlock;
 
-DECLARE_DELEGATE_RetVal_TwoParams(bool, FOnVerifyTextChanged, const FText&, FText&)
 DECLARE_DELEGATE_OneParam(FOnBeginTextEdit, const FText&)
 
 /**

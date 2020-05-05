@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -119,6 +119,12 @@ public:
 	/** @return  The customization settings for the box being built */
 	FMultiBoxCustomization GetCustomization() const;
 
+	/** Sets extender support */
+	void SetExtendersEnabled(bool bEnabled) { bExtendersEnabled = bEnabled; }
+
+	/** @return True if extenders are enabled */
+	bool ExtendersEnabled() const { return bExtendersEnabled; }
+
 protected:
 	/** Applies any potential extension hooks at the current place */
 	virtual void ApplyHook(FName InExtensionHook, EExtensionHook::Position HookPosition) = 0;
@@ -143,6 +149,9 @@ protected:
 
 	/** Name of the menu */
 	FName MenuName;
+
+	/** If extenders are enabled */
+	bool bExtendersEnabled;
 };
 
 
@@ -230,7 +239,7 @@ public:
 	*
 	* @return  New widget object
 	*/
-	virtual TSharedRef< class SWidget > MakeWidget( FMultiBox::FOnMakeMultiBoxBuilderOverride* InMakeMultiBoxBuilderOverride = nullptr, uint32 MaxHeight = INT_MAX) override;
+	virtual TSharedRef< class SWidget > MakeWidget( FMultiBox::FOnMakeMultiBoxBuilderOverride* InMakeMultiBoxBuilderOverride = nullptr, uint32 MaxHeight = 1000) override;
 
 	/**
 	 * Adds a menu separator
@@ -385,8 +394,8 @@ public:
 	 *
 	 * @param	InCommandList	The action list that maps command infos to delegates that should be called for each command associated with a multiblock widget
 	 */
-	FToolBarBuilder( TSharedPtr< const FUICommandList > InCommandList, FMultiBoxCustomization InCustomization, TSharedPtr<FExtender> InExtender = TSharedPtr<FExtender>(), EOrientation Orientation = Orient_Horizontal, const bool InForceSmallIcons = false )
-		: FMultiBoxBuilder( (Orientation == Orient_Horizontal) ? EMultiBoxType::ToolBar : EMultiBoxType::VerticalToolBar, InCustomization, false, InCommandList, InExtender )
+	FToolBarBuilder( TSharedPtr< const FUICommandList > InCommandList, FMultiBoxCustomization InCustomization, TSharedPtr<FExtender> InExtender = TSharedPtr<FExtender>(), EOrientation Orientation = Orient_Horizontal, const bool InForceSmallIcons = false, const bool bUniform = false)
+		: FMultiBoxBuilder(bUniform ? EMultiBoxType::UniformToolBar : (Orientation == Orient_Horizontal) ? EMultiBoxType::ToolBar : EMultiBoxType::VerticalToolBar, InCustomization, false, InCommandList, InExtender )
 		, bSectionNeedsToBeApplied(false)
 		, bIsFocusable(false)
 		, bForceSmallIcons(InForceSmallIcons)
@@ -501,7 +510,6 @@ private:
 	/** Whether this toolbar should always use small icons, regardless of the current settings */
 	bool bForceSmallIcons;
 };
-
 
 /**
  * Button grid builder

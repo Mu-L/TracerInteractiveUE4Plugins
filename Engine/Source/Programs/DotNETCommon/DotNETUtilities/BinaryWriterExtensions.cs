@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -209,6 +209,10 @@ namespace Tools.DotNETCommon
 			{
 				bool? NullableValue = (bool?)Value;
 				Writer.Write(NullableValue.HasValue? NullableValue.Value? 1 : 0 : -1);
+			}
+			else if (FieldType == typeof(FileReference))
+			{
+				Writer.Write((FileReference)Value);
 			}
 			else
 			{

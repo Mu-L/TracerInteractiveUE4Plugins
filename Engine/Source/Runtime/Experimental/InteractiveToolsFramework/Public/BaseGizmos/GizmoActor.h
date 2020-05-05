@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -9,6 +9,8 @@
 class UGizmoArrowComponent;
 class UGizmoRectangleComponent;
 class UGizmoCircleComponent;
+class UGizmoBoxComponent;
+class UGizmoLineHandleComponent;
 
 
 /**
@@ -26,7 +28,7 @@ public:
 	/** Add standard arrow component to Actor, generally used for axis-translation */
 	static UGizmoArrowComponent* AddDefaultArrowComponent(
 		UWorld* World, AActor* Actor,
-		const FLinearColor& Color, const FVector& LocalDirection
+		const FLinearColor& Color, const FVector& LocalDirection, const float Length = 80.0f
 	);
 	/** Add standard rectangle component to Actor, generally used for plane-translation */
 	static UGizmoRectangleComponent* AddDefaultRectangleComponent(
@@ -36,6 +38,21 @@ public:
 	/** Add standard circle component to Actor, generally used for axis-rotation */
 	static UGizmoCircleComponent* AddDefaultCircleComponent(
 		UWorld* World, AActor* Actor,
-		const FLinearColor& Color, const FVector& PlaneNormal
+		const FLinearColor& Color, const FVector& PlaneNormal,
+		float Radius = 120.0f
+	);
+
+	/** Add standard 3D box component to Actor. By default the box is axis-aligned, centered at the specified Origin */
+	static UGizmoBoxComponent* AddDefaultBoxComponent(
+		UWorld* World, AActor* Actor,
+		const FLinearColor& Color, const FVector& Origin, 
+		const FVector& Dimensions = FVector(20.0f, 20.0f, 20.0f)
+	);
+
+	/** Add standard disk component to Actor, generally used for handles */
+	static UGizmoLineHandleComponent* AddDefaultLineHandleComponent(
+		UWorld* World, AActor* Actor,
+		const FLinearColor& Color, const FVector& PlaneNormal, const FVector& LocalDirection,
+		const float Length = 60.f, const bool bImageScale = false
 	);
 };

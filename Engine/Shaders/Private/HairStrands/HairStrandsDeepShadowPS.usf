@@ -1,18 +1,22 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#include "HairStrandsVoxelPageCommonStruct.ush"
+#include "HairStrandsDeepShadowCommonStruct.ush"
 
 #include "../Common.ush"
 
-//#define SceneTexturesStruct DeepShadowPass.SceneTextures
+//#define SceneTexturesStruct VoxelRasterPass.SceneTextures
 
 #include "../SceneTexturesCommon.ush"
 #include "HairStrandsDeepShadowCommon.ush"
 #include "HairStrandsVisibilityCommon.ush"
+#include "HairStrandsVoxelPageCommon.ush"
 #include "/Engine/Generated/Material.ush"
 #include "/Engine/Generated/VertexFactory.ush"
 
 static const float FixPointMaxValue = 1000;	// 100m @hair_todo: make this camera relative, and expose a CVAR fix changing this value
 static const float FixPointScale	= 100;	// 0.1mm precision
-static const float FixPointRange	= 2 * FixPointMaxValue * FixPointScale;
+static const float FixPointRange	= 2 * FixPointMaxValue * FixPointScale;    
 
 #define SUPPORT_OPACITY_MASK 0
 
@@ -44,68 +48,89 @@ void MainDom(
 	#endif
 
 	const uint2 PixelCoord = uint2(floor(SvPosition.xy));
-    const float FrontDepth = DeepShadowPass.FrontDepthTexture.Load(uint3(PixelCoord, 0));
+	const float FrontDepth = DeepRasterPass.FrontDepthTexture.Load(uint3(PixelCoord, 0));
 	const float DistanceToFrontDepth = GetDomDistanceToFrontDepth(FrontDepth, SvPosition.z);
 
-    OutColor = ComputeDOMWeights(DistanceToFrontDepth) * HairCoverage;
+	OutColor = ComputeDOMWeights(DistanceToFrontDepth) * HairCoverage;
 }
 
-#if VF_STRAND_HAIR
-  #if SM5_PROFILE && COMPILER_HLSL
-	RWTexture3D<uint> DensityTexture  : register(u1);
-
-	#if SUPPORT_TANGENT_PROPERTY == 1
-	RWTexture3D<uint> TangentXTexture : register(u2);
-	RWTexture3D<uint> TangentYTexture : register(u3);
-	RWTexture3D<uint> TangentZTexture : register(u4);
-	#endif
-
-	#if SUPPORT_MATERIAL_PROPERTY == 1
-	RWTexture3D<uint> MaterialTexture : register(u5);
-	#endif
-  #else
-	RWTexture3D<uint> DensityTexture;
-
-	#if SUPPORT_TANGENT_PROPERTY == 1
-	RWTexture3D<uint> TangentXTexture;
-	RWTexture3D<uint> TangentYTexture;
-	RWTexture3D<uint> TangentZTexture;
-	#endif
-
-	#if SUPPORT_MATERIAL_PROPERTY == 1
-	RWTexture3D<uint> MaterialTexture;
-	#endif
-  #endif
-#endif 
+#define DEBUG_OUTPUT 0
 
 void MainVoxel(
-#if SUPPORT_TANGENT_PROPERTY == 1 || SUPPORT_MATERIAL_PROPERTY == 1
+#if SUPPORT_TANGENT_PROPERTY == 1 || SUPPORT_MATERIAL_PROPERTY == 1 
 	FVertexFactoryInterpolantsVSToPS Interpolants,
 #endif
 	in float4 SvPosition : SV_Position,
-	in float4 PixelPosition : TEXCOORD6,
-	in float HairCoverage: CUSTOM_COVERAGE,
-	out uint OutColor : SV_Target0)
+	in float4 WorldPositon_Coverage : TEXCOORD6
+#if DEBUG_OUTPUT
+,	out uint OutColor : SV_Target0 // For debug purpose only
+#endif
+)
 {
-#if VF_STRAND_HAIR
-	const int3 VoxelCoord = (PixelPosition.xyz - DeepShadowPass.VoxelMinAABB) / (DeepShadowPass.VoxelMaxAABB - DeepShadowPass.VoxelMinAABB) * DeepShadowPass.VoxelResolution;
+	const float3 WorldPosition = WorldPositon_Coverage.xyz;
+	const float HairCoverage = WorldPositon_Coverage.w;
+
+#if VF_STRAND_HAIR  
+	const FPackedVirtualVoxelNodeDesc PackedNode = VoxelRasterPass.VirtualVoxel.NodeDescBuffer[VoxelRasterPass.MacroGroupId];
+	const FVirtualVoxelNodeDesc NodeDesc = UnpackVoxelNode(PackedNode, VoxelRasterPass.VirtualVoxel.PageResolution);
+
+	const int3 VoxelCoord = PositionToCoord(WorldPosition.xyz, NodeDesc.MinAABB, NodeDesc.MaxAABB, NodeDesc.VirtualResolution);
+	if (VoxelCoord.x >= 0 || VoxelCoord.y >= 0 || VoxelCoord.z >= 0 ||
+		VoxelCoord.x < int(NodeDesc.VirtualResolution.x) || 
+		VoxelCoord.y < int(NodeDesc.VirtualResolution.y) || 
+		VoxelCoord.z < int(NodeDesc.VirtualResolution.z))
+	{
+		const int3 PageIndexCoord		= VoxelCoord / VoxelRasterPass.VirtualVoxel.PageResolution;
+		const uint LinearPageIndexCoord = CoordToIndex(PageIndexCoord, NodeDesc.PageIndexResolution, NodeDesc.PageIndexOffset);
+		const int3 VoxelCoordBase		= PageIndexCoord * VoxelRasterPass.VirtualVoxel.PageResolution;
+		const int3 VoxelCoordOffset		= VoxelCoord - VoxelCoordBase;
+		if (LinearPageIndexCoord < VoxelRasterPass.VirtualVoxel.PageIndexCount)
+		{
+			const uint PageIndex = VoxelRasterPass.VirtualVoxel.PageIndexBuffer[LinearPageIndexCoord];
+			if (PageIndex != INVALID_VOXEL_PAGE_INDEX)
+			{
+				const uint3 PageCoord			= IndexToCoord(PageIndex, VoxelRasterPass.VirtualVoxel.PageCountResolution);
+				const uint3 PageVoxelCoordBase	= PageCoord * VoxelRasterPass.VirtualVoxel.PageResolution;
+				const uint3 PageVoxelCoord		= PageVoxelCoordBase + VoxelCoordOffset;
+
+				const float HairCount			= HairCoverage;
+				const float VoxelFixPointScale	= GetVoxelDensityFixPointScale();
+				InterlockedAdd(VoxelRasterPass.DensityTexture[PageVoxelCoord], HairCount * VoxelFixPointScale);
+
+				#if DEBUG_OUTPUT
+				OutColor = 0xFF;
+				#endif
+				return;
+			}
+			else
+			{
+				#if DEBUG_OUTPUT
+				OutColor = 0x0F;
+				#endif
+				return;
+			}
+		}
+	}
+
+	#if 0 // This code is no longer used, but it is a reference for voxelizing material
+	const int3 VoxelCoord = (WorldPosition.xyz - VoxelRasterPass.VoxelMinAABB) / (VoxelRasterPass.VoxelMaxAABB - VoxelRasterPass.VoxelMinAABB) * VoxelRasterPass.VoxelResolution;
 		 
 	if (VoxelCoord.x >= 0 || VoxelCoord.y >= 0 || VoxelCoord.z >= 0 ||
-		VoxelCoord.x < int(DeepShadowPass.VoxelResolution) || 
-		VoxelCoord.y < int(DeepShadowPass.VoxelResolution) || 
-		VoxelCoord.z < int(DeepShadowPass.VoxelResolution))
+		VoxelCoord.x < int(VoxelRasterPass.VoxelResolution.x) || 
+		VoxelCoord.y < int(VoxelRasterPass.VoxelResolution.y) || 
+		VoxelCoord.z < int(VoxelRasterPass.VoxelResolution.z))
 	{
 		const float HairCount = HairCoverage;
 		const float VoxelFixPointScale = GetVoxelDensityFixPointScale();
-		InterlockedAdd(DensityTexture[VoxelCoord], HairCount * VoxelFixPointScale);
+		InterlockedAdd(VoxelRasterPass.DensityTexture[VoxelCoord], HairCount * VoxelFixPointScale);
 
 		#if SUPPORT_TANGENT_PROPERTY == 1
 		const half3 Tangent = GetTangentToWorld2(Interpolants).xyz;
 		const uint3 Tangent8bits = QuantizeTo8Bits(Tangent);
 
-		InterlockedAdd(TangentXTexture[VoxelCoord], Tangent8bits.x);
-		InterlockedAdd(TangentYTexture[VoxelCoord], Tangent8bits.y);
-		InterlockedAdd(TangentZTexture[VoxelCoord], Tangent8bits.z);
+		InterlockedAdd(VoxelRasterPass.TangentXTexture[VoxelCoord], Tangent8bits.x);
+		InterlockedAdd(VoxelRasterPass.TangentYTexture[VoxelCoord], Tangent8bits.y);
+		InterlockedAdd(VoxelRasterPass.TangentZTexture[VoxelCoord], Tangent8bits.z);
 		#endif	
 
 		#if SUPPORT_MATERIAL_PROPERTY == 1
@@ -123,11 +148,16 @@ void MainVoxel(
 			const float3 BaseColor = GetMaterialBaseColor(PixelMaterialInputs);
 			const float Roughness = GetMaterialRoughness(PixelMaterialInputs);
 			const uint EncodedBaseColorAndRoughness = EncodeBaseColorAndRoughness(BaseColor, Roughness);
-			InterlockedMax(MaterialTexture[VoxelCoord], EncodedBaseColorAndRoughness);
+			InterlockedMax(VoxelRasterPass.MaterialTexture[VoxelCoord], EncodedBaseColorAndRoughness);
 		}
 		#endif
 
 	}
-#endif
+
+	#if DEBUG_OUTPUT
 	OutColor = 0xFF;
+	#endif
+	#endif
+
+#endif
 }

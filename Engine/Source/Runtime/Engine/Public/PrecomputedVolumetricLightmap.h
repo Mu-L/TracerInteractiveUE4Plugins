@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	PrecomputedVolumetricLightmap.h: Declarations for precomputed volumetric lightmap.
@@ -206,7 +206,8 @@ public:
 
 	// CPU indirection table for mobile path
 	TArray<uint8> CPUSubLevelIndirectionTable;
-	TArray<FPrecomputedVolumetricLightmapData*> CPUSubLevelBrickDataList;
+	TSparseArray<FPrecomputedVolumetricLightmapData*> CPUSubLevelBrickDataList;
+	int32 IndexInCPUSubLevelBrickDataList;
 
 private:
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -14,10 +14,4 @@ class FDisplayClusterRenderSyncPolicyNvidiaDX12
 public:
 	FDisplayClusterRenderSyncPolicyNvidiaDX12();
 	virtual ~FDisplayClusterRenderSyncPolicyNvidiaDX12();
-
-public:
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	// IDisplayClusterRenderSyncPolicy
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	virtual bool SynchronizeClusterRendering(int32& InOutSyncInterval) override;
 };

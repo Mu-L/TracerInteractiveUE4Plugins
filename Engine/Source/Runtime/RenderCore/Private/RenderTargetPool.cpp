@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	RenderTargetPool.cpp: Scene render target pool manager.
@@ -548,6 +548,11 @@ Done:
 
 	// Transient RTs have to be targettable
 	check( ( Desc.Flags & TexCreate_Transient ) == 0 || Found->GetRenderTargetItem().TargetableTexture != nullptr );
+
+	if (Found->GetRenderTargetItem().TargetableTexture)
+	{
+		RHIBindDebugLabelName(Found->GetRenderTargetItem().TargetableTexture, InDebugName);
+	}
 
 	return false;
 }
@@ -1213,26 +1218,26 @@ uint32 FPooledRenderTarget::ComputeMemorySize() const
 	{
 		if (Desc.Is2DTexture())
 		{
-			Size += RHIComputeMemorySize((const FTexture2DRHIRef&)RenderTargetItem.TargetableTexture);
+			Size += RHIComputeMemorySize(RenderTargetItem.TargetableTexture);
 			if (RenderTargetItem.ShaderResourceTexture != RenderTargetItem.TargetableTexture)
 			{
-				Size += RHIComputeMemorySize((const FTexture2DRHIRef&)RenderTargetItem.ShaderResourceTexture);
+				Size += RHIComputeMemorySize(RenderTargetItem.ShaderResourceTexture);
 			}
 		}
 		else if (Desc.Is3DTexture())
 		{
-			Size += RHIComputeMemorySize((const FTexture3DRHIRef&)RenderTargetItem.TargetableTexture);
+			Size += RHIComputeMemorySize(RenderTargetItem.TargetableTexture);
 			if (RenderTargetItem.ShaderResourceTexture != RenderTargetItem.TargetableTexture)
 			{
-				Size += RHIComputeMemorySize((const FTexture3DRHIRef&)RenderTargetItem.ShaderResourceTexture);
+				Size += RHIComputeMemorySize(RenderTargetItem.ShaderResourceTexture);
 			}
 		}
 		else
 		{
-			Size += RHIComputeMemorySize((const FTextureCubeRHIRef&)RenderTargetItem.TargetableTexture);
+			Size += RHIComputeMemorySize(RenderTargetItem.TargetableTexture);
 			if (RenderTargetItem.ShaderResourceTexture != RenderTargetItem.TargetableTexture)
 			{
-				Size += RHIComputeMemorySize((const FTextureCubeRHIRef&)RenderTargetItem.ShaderResourceTexture);
+				Size += RHIComputeMemorySize(RenderTargetItem.ShaderResourceTexture);
 			}
 		}
 	}

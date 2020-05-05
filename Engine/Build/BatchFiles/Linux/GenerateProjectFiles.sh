@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+# Copyright Epic Games, Inc. All Rights Reserved.
 
 echo
 echo Setting up Unreal Engine 4 project files...
@@ -21,9 +21,6 @@ if [ ! -d "$BASE_PATH/../../../Source" ]; then
 fi
 
 source "$BASE_PATH/SetupMono.sh" "$BASE_PATH"
-
-# make sure the UBT project has references to auto-discovered platform extension source files
-"${BASE_PATH}/../FindPlatformExtensionSources.sh"
 
 if [ -f "$BASE_PATH/../../../Source/Programs/UnrealBuildTool/UnrealBuildTool.csproj" ]; then
 	xbuild "$BASE_PATH/../../../Source/Programs/UnrealBuildTool/UnrealBuildTool.csproj" /property:Configuration="Development" /verbosity:quiet /nologo /p:NoWarn=1591

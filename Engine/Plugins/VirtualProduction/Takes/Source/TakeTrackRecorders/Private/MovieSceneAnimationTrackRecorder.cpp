@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TrackRecorders/MovieSceneAnimationTrackRecorder.h"
 #include "TrackRecorders/MovieSceneAnimationTrackRecorderSettings.h"
 #include "TakesUtils.h"
+#include "TakeMetaData.h"
 #include "Tracks/MovieSceneSkeletalAnimationTrack.h"
 #include "Sections/MovieSceneSkeletalAnimationSection.h"
 #include "MovieScene.h"
@@ -36,6 +37,8 @@ UMovieSceneTrackRecorder* FMovieSceneAnimationTrackRecorderFactory::CreateTrackR
 
 void UMovieSceneAnimationTrackRecorder::CreateAnimationAssetAndSequence(const AActor* Actor, const FDirectoryPath& AnimationDirectory)
 {
+	UMovieSceneAnimationTrackRecorderSettings* AnimSettings = CastChecked<UMovieSceneAnimationTrackRecorderSettings>(Settings.Get());
+
 	SkeletalMesh = SkeletalMeshComponent->SkeletalMesh;
 	if (SkeletalMesh.IsValid())
 	{
@@ -44,8 +47,14 @@ void UMovieSceneAnimationTrackRecorder::CreateAnimationAssetAndSequence(const AA
 
 		if (ULevelSequence* MasterLevelSequence = OwningTakeRecorderSource->GetMasterLevelSequence())
 		{
-			const FString& MasterLevelSequenceName = MasterLevelSequence->GetName();
-			AnimationAssetName = AnimationAssetName + TEXT("_") + MasterLevelSequenceName;
+			UTakeMetaData* AssetMetaData = MasterLevelSequence->FindMetaData<UTakeMetaData>();
+
+			AnimationAssetName = AssetMetaData->GenerateAssetPath(AnimSettings->AnimationAssetName);
+
+			TMap<FString, FStringFormatArg> FormatArgs;
+			FormatArgs.Add(TEXT("actor"), Actor->GetActorLabel());
+
+			AnimationAssetName = FString::Format(*AnimationAssetName, FormatArgs);
 		}
 
 		AnimSequence = TakesUtils::MakeNewAsset<UAnimSequence>(AnimationDirectory.Path, AnimationAssetName);
@@ -112,9 +121,8 @@ void UMovieSceneAnimationTrackRecorder::CreateTrackImpl()
 		{
 			//If we are syncing to a timecode provider use that's frame rate as our frame rate since
 			//otherwise use the displayrate.
-			const UTimecodeProvider* TimecodeProvider = GEngine->GetTimecodeProvider();
-			FFrameRate SampleRate = (TimecodeProvider && TimecodeProvider->GetSynchronizationState() == ETimecodeProviderSynchronizationState::Synchronized)
-				? TimecodeProvider->GetFrameRate() : MovieScene->GetDisplayRate();
+			const TOptional<FQualifiedFrameTime> CurrentFrameTime = FApp::GetCurrentFrameTime();
+			FFrameRate SampleRate = CurrentFrameTime.IsSet() ? CurrentFrameTime.GetValue().Rate : MovieScene->GetDisplayRate();
 
 			FText Error;
 			FString Name = SkeletalMeshComponent->GetName();
@@ -252,9 +260,8 @@ void UMovieSceneAnimationTrackRecorder::RecordSampleImpl(const FQualifiedFrameTi
 			bRecordInWorldSpace = !OwningTakeRecorderSource->IsOtherActorBeingRecorded(AttachParent->GetOwner());
 		}
 
-		const UTimecodeProvider* TimecodeProvider = GEngine->GetTimecodeProvider();
-		FFrameRate SampleRate = (TimecodeProvider && TimecodeProvider->GetSynchronizationState() == ETimecodeProviderSynchronizationState::Synchronized)
-			? TimecodeProvider->GetFrameRate() : MovieScene->GetDisplayRate();
+		const TOptional<FQualifiedFrameTime> CurrentFrameTime = FApp::GetCurrentFrameTime();
+		FFrameRate SampleRate = CurrentFrameTime.IsSet() ? CurrentFrameTime.GetValue().Rate : MovieScene->GetDisplayRate();
 
 		//Set this up here so we know that it's parent sources have also been added so we record in the correct space
 		FAnimationRecordingSettings RecordingSettings;

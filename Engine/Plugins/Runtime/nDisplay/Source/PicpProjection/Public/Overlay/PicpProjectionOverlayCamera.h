@@ -1,9 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "RHI.h"
+
+#include "PicpProjectionOverlayChromakey.h"
 
 class FMPCDIData;
 
@@ -11,13 +13,16 @@ class FMPCDIData;
 class FPicpProjectionOverlayCamera
 {
 public:
-	FVector  SoftEdge;    // Basic soft edges values
-	//@ Add more render options here
-	
-	//Camera setup
-	FString RTTViewportId;
+	// Basic soft edges setup
+	FVector  SoftEdge;
+	//@todo: Add more render options here
+
+	// Camera setup:
+	FString RTTViewportId;      // The viewport name, used to capture camera frame
 	FRHITexture* CameraTexture; // Texture to render
-	FMatrix Prj; // Projection matrix
+	FMatrix Prj;                // Projection matrix
+
+	FPicpProjectionCameraChromakey Chromakey;
 
 	FRotator ViewRot;
 	FVector  ViewLoc;
@@ -30,15 +35,13 @@ public:
 		, Prj(CameraPrj)
 		, ViewRot(CameraRotation)
 		, ViewLoc(CameraLocation)
+	{ }
+
+	inline bool IsCameraUsed() const
 	{
+		return (CameraTexture != nullptr) && CameraTexture->IsValid();
 	}
 
-	const FMatrix GetRuntimeCameraProjection() const
-	{ return RuntimeCameraProjection; }
-
 	void Empty()
-	{}
-
-public:
-	FMatrix RuntimeCameraProjection;
+	{ }
 };

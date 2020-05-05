@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -61,6 +61,18 @@ struct FTimecode
 		*this = FromFrameNumber(FFrameNumber(NumberOfFrames), InFrameRate, InbDropFrame);
 	}
 
+	/**
+	 * User construction from a time in seconds
+	 * @param InbRollover	- If true, the hours will be the modulo of 24.
+	 * @note Be aware that the Cycles may not correspond to the System Time. See FDateTime and "leap seconds".
+	 */
+	explicit FTimecode(double InSeconds, const FFrameRate& InFrameRate, bool InbRollover)
+		: FTimecode(InSeconds, InFrameRate, UseDropFormatTimecode(InFrameRate), InbRollover)
+	{
+	}
+
+	
+
 	friend bool operator==(const FFrameRate& A, const FFrameRate& B);
 	friend bool operator!=(const FFrameRate& A, const FFrameRate& B);
 
@@ -71,9 +83,14 @@ public:
 	 */
 	FFrameNumber ToFrameNumber(const FFrameRate& InFrameRate) const
 	{
-		const int32 NumberOfFramesInSecond = FMath::CeilToInt(InFrameRate.AsDecimal());
+		const int32 NumberOfFramesInSecond = FMath::CeilToInt((float)InFrameRate.AsDecimal());
 		const int32 NumberOfFramesInMinute = NumberOfFramesInSecond * 60;
 		const int32 NumberOfFramesInHour = NumberOfFramesInMinute * 60;
+
+		if (NumberOfFramesInSecond <= 0)
+		{
+			return FFrameNumber();
+		}
 
 		// Do a quick pre-pass to take any overflow values and move them into bigger time units.
 		int32 SafeSeconds = Seconds + Frames / NumberOfFramesInSecond;
@@ -119,9 +136,14 @@ public:
 	 */
 	static FTimecode FromFrameNumber(const FFrameNumber& InFrameNumber, const FFrameRate& InFrameRate, bool InbDropFrame)
 	{
-		const int32 NumberOfFramesInSecond = FMath::CeilToInt(InFrameRate.AsDecimal());
+		const int32 NumberOfFramesInSecond = FMath::CeilToInt((float)InFrameRate.AsDecimal());
 		const int32 NumberOfFramesInMinute = NumberOfFramesInSecond * 60;
 		const int32 NumberOfFramesInHour = NumberOfFramesInMinute * 60;
+
+		if (NumberOfFramesInSecond <= 0)
+		{
+			return FTimecode();
+		}
 
 		if (InbDropFrame)
 		{
@@ -139,10 +161,10 @@ public:
 			const int32 NumberOfTimecodesToDrop = NumberOfFramesInSecond <= 30 ? 2 : 4;
 
 			// At an ideal 30fps there would be 18,000 frames every 10 minutes, but at 29.97 there's only 17,982 frames.
-			const int32 NumTrueFramesPerTenMinutes = FMath::FloorToInt((60 * 10) * InFrameRate.AsDecimal());
+			const int32 NumTrueFramesPerTenMinutes = FMath::FloorToInt((float)((60 * 10) * InFrameRate.AsDecimal()));
 
 			// Calculate out how many times we've skipped dropping frames (ie: Minute 15 gives us a value of 1, as we've only didn't drop frames on the 10th minute)
-			const int32 NumTimesSkippedDroppingFrames = FMath::FloorToInt(FMath::Abs(InFrameNumber.Value) / (double)NumTrueFramesPerTenMinutes);
+			const int32 NumTimesSkippedDroppingFrames = FMath::FloorToInt(FMath::Abs(InFrameNumber.Value) / (float)NumTrueFramesPerTenMinutes);
 
 			// Now we can figure out how many frame (displays) have been skipped total; 9 times out of every 10 minutes
 			const int32 NumFramesSkippedTotal = NumTimesSkippedDroppingFrames * 9 * NumberOfTimecodesToDrop;
@@ -159,10 +181,10 @@ public:
 			{
 				// Each minute we slip a little bit more out of sync by a small amount, we just wait until we've accumulated enough error
 				// to skip a whole frame and can catch up.
-				const uint32 NumTrueFramesPerMinute = (uint32)FMath::FloorToInt(60 * InFrameRate.AsDecimal());
+				const uint32 NumTrueFramesPerMinute = (uint32)FMath::FloorToInt(60 * (float)InFrameRate.AsDecimal());
 
 				// Figure out which minute we are (0-9) to see how many to skip
-				int32 CurrentMinuteOfTen = FMath::FloorToInt((FrameInTrueFrames - NumberOfTimecodesToDrop) / (double)NumTrueFramesPerMinute);
+				int32 CurrentMinuteOfTen = FMath::FloorToInt((FrameInTrueFrames - NumberOfTimecodesToDrop) / (float)NumTrueFramesPerMinute);
 				int NumAddedFrames = NumFramesSkippedTotal + (NumberOfTimecodesToDrop * CurrentMinuteOfTen);
 				OffsetFrame += NumAddedFrames;
 			}
@@ -188,6 +210,18 @@ public:
 
 			return FTimecode(Hours, Minutes, Seconds, Frames, false);
 		}
+	}
+
+	/**
+	 * Create a FTimecode from a specific frame number at the given frame rate.
+	 *
+	 * @param InFrameNumber - The frame number to convert into a timecode. This should already be converted to InFrameRate's resolution.
+	 * @param InFrameRate	- The framerate that this timecode is based in. This should be the playback framerate as it is used to determine
+	 *						  when the Frame value wraps over.
+	 */
+	static FTimecode FromFrameNumber(const FFrameNumber& InFrameNumber, const FFrameRate& InFrameRate)
+	{
+		return FromFrameNumber(InFrameNumber, InFrameRate, UseDropFormatTimecode(InFrameRate));
 	}
 
 	/**
@@ -219,6 +253,20 @@ public:
 		return FTimecode(InTimespan.GetTotalSeconds(), InFrameRate, InbDropFrame, InbRollover);
 	}
 
+	/**
+	 * Create a FTimecode from a timespan at the given frame rate.
+	 *
+	 * @param InFrameNumber	- The timespan to convert into a timecode.
+	 * @param InFrameRate	- The framerate that this timecode is based in. This should be the playback framerate as it is used to determine
+	 *						  when the Frame value wraps over.
+	 * @param InbRollover	- If true, the hours will be the modulo of 24.
+	 */
+	static FTimecode FromTimespan(const FTimespan& InTimespan, const FFrameRate& InFrameRate, bool InbRollover)
+	{
+		return FTimecode(InTimespan.GetTotalSeconds(), InFrameRate, UseDropFormatTimecode(InFrameRate), InbRollover);
+	}
+
+	/** Drop frame is only support for frame rate of 29.97 or 59.94. */
 	static bool IsDropFormatTimecodeSupported(const FFrameRate& InFrameRate)
 	{
 		// Drop Format Timecode is only valid for 29.97 and 59.94.
@@ -227,6 +275,15 @@ public:
 
 		return InFrameRate == TwentyNineNineSeven || InFrameRate == FiftyNineNineFour;
 	}
+
+	/** If the frame rate support drop frame format and the app wish to use drop frame format by default. */
+	static bool UseDropFormatTimecode(const FFrameRate& InFrameRate)
+	{
+		return IsDropFormatTimecodeSupported(InFrameRate) && UseDropFormatTimecodeByDefaultWhenSupported();
+	}
+
+	/** By default, should we generate a timecode in drop frame format when the frame rate does support it. */
+	static CORE_API bool UseDropFormatTimecodeByDefaultWhenSupported();
 
 	/**
 	 * Get the Qualified Timecode formatted in HH:MM:SS:FF or HH;MM;SS;FF depending on if this represents drop-frame timecode or not.
@@ -237,23 +294,25 @@ public:
 	{
 		bool bHasNegativeComponent = Hours < 0 || Minutes < 0 || Seconds < 0 || Frames < 0;
 
-		FString SignText;
+		const TCHAR* NegativeSign = TEXT("- ");
+		const TCHAR* PositiveSign = TEXT("+ ");
+		const TCHAR* SignText = TEXT("");
 		if (bHasNegativeComponent)
 		{
-			SignText = "- ";
+			SignText = NegativeSign;
 		}
 		else if (bForceSignDisplay)
 		{
-			SignText = "+ ";
+			SignText = PositiveSign;
 		}
 
 		if (bDropFrameFormat)
 		{
-			return FString::Printf(TEXT("%s%02d;%02d;%02d;%02d"), *SignText, FMath::Abs(Hours), FMath::Abs(Minutes), FMath::Abs(Seconds), FMath::Abs(Frames));
+			return FString::Printf(TEXT("%s%02d;%02d;%02d;%02d"), SignText, FMath::Abs(Hours), FMath::Abs(Minutes), FMath::Abs(Seconds), FMath::Abs(Frames));
 		}
 		else
 		{
-			return FString::Printf(TEXT("%s%02d:%02d:%02d:%02d"), *SignText, FMath::Abs(Hours), FMath::Abs(Minutes), FMath::Abs(Seconds), FMath::Abs(Frames));
+			return FString::Printf(TEXT("%s%02d:%02d:%02d:%02d"), SignText, FMath::Abs(Hours), FMath::Abs(Minutes), FMath::Abs(Seconds), FMath::Abs(Frames));
 		}
 	}
 

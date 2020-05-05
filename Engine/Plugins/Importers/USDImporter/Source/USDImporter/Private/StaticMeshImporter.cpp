@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "StaticMeshImporter.h"
 #include "USDImporter.h"
@@ -12,11 +12,11 @@
 #include "Factories/Factory.h"
 #include "Factories/MaterialImportHelpers.h"
 #include "MeshDescription.h"
-#include "MeshDescriptionOperations.h"
 #include "MeshAttributes.h"
 #include "IMeshBuilderModule.h"
 #include "PackageTools.h"
 #include "StaticMeshAttributes.h"
+#include "StaticMeshOperations.h"
 
 #include "USDAssetImportData.h"
 #include "USDGeomMeshConversion.h"
@@ -151,7 +151,7 @@ void FUSDStaticMeshImportState::ProcessMaterials(int32 LODIndex)
 
 		if (Material == nullptr)
 		{
-			if ( FMeshDescriptionOperations::HasVertexColor( *MeshDescription ) )
+			if ( FStaticMeshOperations::HasVertexColor( *MeshDescription ) )
 			{
 				FSoftObjectPath VertexColorMaterialPath( TEXT("Material'/Engine/EngineDebugMaterials/VertexColorMaterial.VertexColorMaterial'") );
 				Material = Cast< UMaterialInterface >( VertexColorMaterialPath.TryLoad() );
@@ -179,7 +179,9 @@ UStaticMesh* FUSDStaticMeshImporter::ImportStaticMesh(FUsdImportContext& ImportC
 {
 	const pxr::UsdPrim& Prim = *PrimToImport.Prim;
 
-	FTransform PrimToWorld = ImportContext.bApplyWorldTransformToGeometry ? UsdToUnreal::ConvertMatrix(ImportContext.Stage.Get(), IUsdPrim::GetLocalTransform( Prim )) : FTransform::Identity;
+	const UsdToUnreal::FUsdStageInfo StageInfo( ImportContext.Stage.Get() );
+
+	FTransform PrimToWorld = ImportContext.bApplyWorldTransformToGeometry ? UsdToUnreal::ConvertMatrix(StageInfo, IUsdPrim::GetLocalTransform( Prim )) : FTransform::Identity;
 
 	FTransform FinalTransform = PrimToWorld;
 	if (ImportContext.ImportOptions->Scale != 1.0f)

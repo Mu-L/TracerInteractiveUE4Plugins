@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GameFramework/WorldSettings.h"
 #include "Algo/Partition.h"
@@ -194,7 +194,7 @@ void AWorldSettings::PostRegisterAllComponents()
 	Super::PostRegisterAllComponents();
 
 	UWorld* World = GetWorld();
-	if (FAudioDevice* AudioDevice = World->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = World->GetAudioDevice())
 	{
 		AudioDevice->SetDefaultAudioSettings(World, DefaultReverbSettings, DefaultAmbientZoneSettings);
 	}
@@ -245,6 +245,7 @@ void AWorldSettings::NotifyBeginPlay()
 			const bool bFromLevelLoad = true;
 			It->DispatchBeginPlay(bFromLevelLoad);
 		}
+
 		World->bBegunPlay = true;
 	}
 }
@@ -439,7 +440,7 @@ void AWorldSettings::PostLoad()
 	for (FHierarchicalSimplification& Entry : HierarchicalLODSetup)
 	{
 		Entry.ProxySetting.PostLoadDeprecated();
-		Entry.MergeSetting.LODSelectionType = EMeshLODSelectionType::CalculateLOD;
+		Entry.MergeSetting.PostLoadDeprecated();
 	}
 
 #endif// WITH_EDITOR
@@ -453,7 +454,7 @@ PRAGMA_DISABLE_DEPRECATION_WARNINGS
 		{
 			TSubclassOf<UNavigationSystemConfig> NavSystemConfigClass = UNavigationSystemConfig::GetDefaultConfigClass();
 			if (*NavSystemConfigClass)
-			{
+		{
 				NavigationSystemConfig = NewObject<UNavigationSystemConfig>(this, NavSystemConfigClass);
 			}
 			bEnableNavigationSystem = false;
@@ -517,16 +518,27 @@ void AWorldSettings::CheckForErrors()
 			->AddToken(FTextToken::Create(LOCTEXT( "MapCheck_Message_RebuildLighting", "Maps need lighting rebuilt" ) ))
 			->AddToken(FMapErrorToken::Create(FMapErrors::RebuildLighting));
 	}
+
+	static const auto CVarAnisotropicBRDF			= IConsoleManager::Get().FindConsoleVariable(TEXT("r.AnisotropicBRDF"));
+	static const auto CVarBasePassOutputVelocity	= IConsoleManager::Get().FindConsoleVariable(TEXT("r.BasePassOutputsVelocity"));
+
+	if (CVarAnisotropicBRDF && CVarBasePassOutputVelocity && CVarAnisotropicBRDF->GetInt() && CVarBasePassOutputVelocity->GetInt())
+	{
+		FMessageLog("MapCheck").Error()
+			->AddToken(FUObjectToken::Create(this))
+			->AddToken(FTextToken::Create(LOCTEXT("MapCheck_Message_AnisotropicBRDF_or_BasePassVelocity", "Anisotropic BRDF and 'output velocity during base pass' options are mutually exclusive. See Project Settings (Rendering) or r.AnisotropicBRDF, r.BasePassOutputsVelocity")))
+			->AddToken(FMapErrorToken::Create(FMapErrors::AnisotropicBRDF_or_BasePassVelocity));
+	}
 }
 
-bool AWorldSettings::CanEditChange(const UProperty* InProperty) const
+bool AWorldSettings::CanEditChange(const FProperty* InProperty) const
 {
 	if (InProperty)
 	{
 		FString PropertyName = InProperty->GetName();
 
-		if (InProperty->GetOuter()
-			&& InProperty->GetOuter()->GetName() == TEXT("LightmassWorldInfoSettings"))
+		if (InProperty->GetOwner<UObject>() &&
+			  InProperty->GetOwner<UObject>()->GetName() == TEXT("LightmassWorldInfoSettings"))
 		{
 			if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(FLightmassWorldInfoSettings, bGenerateAmbientOcclusionMaterialMask)
 				|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(FLightmassWorldInfoSettings, DirectIlluminationOcclusionFraction)
@@ -556,12 +568,6 @@ bool AWorldSettings::CanEditChange(const UProperty* InProperty) const
 				return LightmassSettings.EnvironmentIntensity > 0;
 			}
 		}
-
-		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(AWorldSettings, OverrideBaseMaterial) ||
-			PropertyName == GET_MEMBER_NAME_STRING_CHECKED(AWorldSettings, HierarchicalLODSetup))
-		{
-			return bEnableHierarchicalLODSystem && HLODSetupAsset.IsNull();
-		}
 	}
 
 	return Super::CanEditChange(InProperty);
@@ -569,7 +575,7 @@ bool AWorldSettings::CanEditChange(const UProperty* InProperty) const
 
 void AWorldSettings::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
-	UProperty* PropertyThatChanged = PropertyChangedEvent.Property;
+	FProperty* PropertyThatChanged = PropertyChangedEvent.Property;
 	if (PropertyThatChanged)
 {
 		InternalPostPropertyChanged(PropertyThatChanged->GetFName());
@@ -627,7 +633,7 @@ void AWorldSettings::InternalPostPropertyChanged(FName PropertyName)
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(AWorldSettings, DefaultReverbSettings) || PropertyName == GET_MEMBER_NAME_CHECKED(AWorldSettings, DefaultAmbientZoneSettings))
 {
 		UWorld* World = GetWorld();
-		if (FAudioDevice* AudioDevice = World->GetAudioDevice())
+		if (FAudioDeviceHandle AudioDevice = World->GetAudioDevice())
 	{
 			AudioDevice->SetDefaultAudioSettings(World, DefaultReverbSettings, DefaultAmbientZoneSettings);
 		}
@@ -666,7 +672,7 @@ void AWorldSettings::InternalPostPropertyChanged(FName PropertyName)
 		else if (PropertyName == GET_MEMBER_NAME_CHECKED(AWorldSettings, DefaultBookmarkClass))
 		{
 			UpdateBookmarkClass();
-		}
+	}
 
 	if (GetWorld() != nullptr && GetWorld()->PersistentLevel && GetWorld()->PersistentLevel->GetWorldSettings() == this)
 	{

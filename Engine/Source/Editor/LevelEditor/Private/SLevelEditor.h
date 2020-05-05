@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -121,6 +121,7 @@ public:
 	virtual void OnToolkitHostingFinished( const TSharedRef< class IToolkit >& Toolkit ) override;
 	virtual UWorld* GetWorld() const override;
 	virtual TSharedRef<SWidget> CreateActorDetails( const FName TabIdentifier ) override;
+	virtual void SetActorDetailsFilter(TSharedPtr<FDetailsViewObjectFilter> ActorDetailsFilter) override;
 	virtual TSharedRef<SWidget> CreateToolBox() override;
 
 	/** SWidget overrides */
@@ -139,6 +140,7 @@ private:
 	
 	TSharedRef<SDockTab> SpawnLevelEditorTab(const FSpawnTabArgs& Args, FName TabIdentifier, FString InitializationPayload);
 	bool CanSpawnEditorModeToolbarTab(const FSpawnTabArgs& Args) const;
+	bool CanSpawnEditorModeToolboxTab(const FSpawnTabArgs& Args) const;
 
 	//TSharedRef<SDockTab> SpawnLevelEditorModeTab(const FSpawnTabArgs& Args, FEdMode* EditorMode);
 	TSharedRef<SDockTab> SummonDetailsPanel( FName Identifier );
@@ -165,6 +167,9 @@ private:
 
 	/** Editor mode has been added or removed, clears cached command list so it will be rebuilt */
 	void EditorModeCommandsChanged();
+
+	/** Called when a level editor mode is toggled */
+	void OnEditorModeIdChanged(const FEditorModeID& ModeChangedID, bool bIsEnteringMode);
 
 	/** Gets the tabId mapping to an editor mode */
 	static FName GetEditorModeTabId( FEditorModeID ModeID );
@@ -198,6 +203,9 @@ private:
 	/** Called when a viewport tab is closed */
 	void OnViewportTabClosed(TSharedRef<SDockTab> ClosedTab);
 
+	/** Called when the toolbox tab is closed */
+	void OnToolboxTabClosed(TSharedRef<SDockTab> ClosedTab);
+
 	/** Save the information about the given viewport in the transient viewport information */
 	void SaveViewportTabInfo(TSharedRef<const class FLevelViewportTabContent> ViewportTabContent);
 
@@ -212,6 +220,9 @@ private:
 
 	/** Called when actors are selected or unselected */
 	void OnActorSelectionChanged(const TArray<UObject*>& NewSelection, bool bForceRefresh = false);
+
+	/** Called when an actor changes outer */
+	void OnLevelActorOuterChanged(AActor* InActor = nullptr, UObject* InOldOuter = nullptr);
 private:
 
 	// Tracking the active viewports in this level editor.
@@ -263,4 +274,10 @@ private:
 
 	/** Handle to the registered OnPreviewFeatureLevelChanged delegate. */
 	FDelegateHandle PreviewFeatureLevelChangedHandle;
+
+	/** Handle to the registered OnLevelActorOuterChanged delegate */
+	FDelegateHandle LevelActorOuterChangedHandle;
+		
+	/** If this flag is raised we will force refresh on next selection update. */
+	bool bNeedsRefresh : 1;
 };

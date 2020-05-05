@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraNodeReadDataSet.h"
 #include "UObject/UnrealType.h"
@@ -100,6 +100,13 @@ void UNiagaraNodeReadDataSet::Compile(class FHlslNiagaraTranslator* Translator, 
 {
 	TArray<int32> Inputs;
 	CompileInputPins(Translator, Inputs);
+	
+	bool bGPUSim = Translator->IsCompileOptionDefined(TEXT("GPUComputeSim"));
+
+	if (bGPUSim)
+	{
+		Translator->Error(LOCTEXT("CannotRunReadDataSetGPU", "Cannot use an event read node on GPU sims!"), this, nullptr);
+	}
 
 	FString IssuesWithStruct;
 	if (!IsSynchronizedWithStruct(false, &IssuesWithStruct, false))

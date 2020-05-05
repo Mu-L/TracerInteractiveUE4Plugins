@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /**
 *
@@ -66,7 +66,7 @@ const char * GIgnoreWaitStatName =  "[IGNORE]";
 
 TAutoConsoleVariable<int32> CVarCsvBlockOnCaptureEnd(
 	TEXT("csv.BlockOnCaptureEnd"), 
-	0,
+	1,
 	TEXT("When 1, blocks the game thread until the CSV file has been written completely when the capture is ended.\r\n")
 	TEXT("When 0, the game thread is not blocked whilst the file is written."),
 	ECVF_Default
@@ -118,7 +118,8 @@ static bool GCsvUseProcessingThread = true;
 static int32 GCsvRepeatCount = 0;
 static int32 GCsvRepeatFrameCount = 0;
 static bool GCsvStatCounts = false;
-
+static FString* GStartOnEvent = nullptr;
+static FString* GStopOnEvent = nullptr;
 static uint32 GCsvProcessingThreadId = 0;
 static bool GGameThreadIsCsvProcessingThread = true;
 
@@ -205,7 +206,7 @@ public:
 				{
 					FString Val = ValueStr.Mid(0, CommaIndex);
 					CVarValues.Add(FCString::Atof(*Val));
-					ValueStr = ValueStr.Mid(CommaIndex + 1);
+					ValueStr.MidInline(CommaIndex + 1, MAX_int32, false);
 					continue;
 				}
 			}
@@ -222,7 +223,7 @@ public:
 				{
 					FString Val = ValueStr.Mid(0, SemiColonIndex);
 					CVarValues.Add(FCString::Atof(*Val));
-					ValueStr = ValueStr.Mid(SemiColonIndex);
+					ValueStr.MidInline(SemiColonIndex, MAX_int32, false);
 					continue;
 				}
 			}
@@ -1030,7 +1031,7 @@ struct FCsvStatBase
 		static const uint8 IsExclusiveInsertedMarker = 0x20;
 	};
 
-	CSV_PROFILER_INLINE void Init(uint64 InStatID, int32 InCategoryIndex, uint32 InFlags, uint64 InTimestamp)
+	CSV_PROFILER_INLINE void Init(uint64 InStatID, int32 InCategoryIndex, uint8 InFlags, uint64 InTimestamp)
 	{
 		Timestamp = InTimestamp;
 		Flags = InFlags;
@@ -1219,7 +1220,7 @@ public:
 		int32 StrLen;
 		ANSICHAR StringBuffer[256];
 
-		if (FMath::Frac(Value) == 0.0)
+		if (FMath::Frac((float)Value) == 0.0f)
 		{
 			StrLen = FCStringAnsi::Snprintf(StringBuffer, 256, "%d", int(Value));
 		}
@@ -1232,6 +1233,12 @@ public:
 			StrLen = FCStringAnsi::Snprintf(StringBuffer, 256, "%.4f", Value);
 		}
 		SerializeInternal((void*)StringBuffer, sizeof(ANSICHAR) * StrLen);
+	}
+
+	void WriteMetadataEntry(const FString& Key, const FString& Value)
+	{
+		WriteString(*FString::Printf(TEXT("[%s]"), *Key));
+		WriteString(Value);
 	}
 
 private:
@@ -1604,7 +1611,7 @@ void FCsvStatSeries::FlushIfDirty()
 		switch (SeriesType)
 		{
 		case EType::TimerData:
-			Value.Value.AsFloat = FPlatformTime::ToMilliseconds64(CurrentValue.AsTimerCycles);
+			Value.Value.AsFloat = (float)FPlatformTime::ToMilliseconds64(CurrentValue.AsTimerCycles);
 			break;
 		case EType::CustomStatInt:
 			Value.Value.AsInt = CurrentValue.AsIntValue;
@@ -2103,14 +2110,24 @@ void FCsvStreamWriter::Finalize(const TMap<FString, FString>& Metadata)
 	Stream.NewLine();
 
 	// Insert some metadata to indicate the file has a summary header row
-	Stream.WriteString(TEXT("[HasHeaderRowAtEnd]"));
-	Stream.WriteString(TEXT("1"));
+	Stream.WriteMetadataEntry((TEXT("HasHeaderRowAtEnd")), TEXT("1"));
 
-	// Add metadata at the end of the file
+	// Add metadata at the end of the file, making sure commandline is last (this is required for parsing)
+	const TPair<FString, FString>* CommandlineEntry = NULL;
 	for (const auto& Pair : Metadata)
 	{
-		Stream.WriteString(*FString::Printf(TEXT("[%s]"), *Pair.Key));
-		Stream.WriteString(*Pair.Value);
+		if (Pair.Key == "Commandline")
+		{
+			CommandlineEntry = &Pair;
+		}
+		else
+		{
+			Stream.WriteMetadataEntry(Pair.Key, Pair.Value);
+		}
+	}
+	if (CommandlineEntry)
+	{
+		Stream.WriteMetadataEntry(CommandlineEntry->Key, CommandlineEntry->Value);
 	}
 }
 
@@ -2442,6 +2459,7 @@ FCsvProfiler* FCsvProfiler::Get()
 FCsvProfiler::FCsvProfiler()
 	: NumFramesToCapture(-1)
 	, CaptureFrameNumber(0)
+	, CaptureOnEventFrameCount(-1)
 	, bInsertEndFrameAtFrameStart(false)
 	, LastEndFrameTimestamp(0)
 	, CaptureEndFrameCount(0)
@@ -2456,6 +2474,22 @@ FCsvProfiler::FCsvProfiler()
 	FCoreDelegates::OnBeginFrameRT.AddStatic(CsvProfilerBeginFrameRT);
 	FCoreDelegates::OnEndFrameRT.AddStatic(CsvProfilerEndFrameRT);
 #endif
+
+	// add constant metadata
+	FString PlatformStr = FString::Printf(TEXT("%s"), ANSI_TO_TCHAR(FPlatformProperties::IniPlatformName()));
+	FString BuildConfigurationStr = LexToString(FApp::GetBuildConfiguration());
+	FString CommandlineStr = FString("\"") + FCommandLine::Get() + FString("\"");
+	// Strip newlines
+	CommandlineStr.ReplaceInline(TEXT("\n"), TEXT(""));
+	CommandlineStr.ReplaceInline(TEXT("\r"), TEXT(""));
+	FString BuildVersionString = FApp::GetBuildVersion();
+	FString EngineVersionString = FEngineVersion::Current().ToString();
+
+	MetadataMap.FindOrAdd(TEXT("Platform")) = PlatformStr;
+	MetadataMap.FindOrAdd(TEXT("Config")) = BuildConfigurationStr;
+	MetadataMap.FindOrAdd(TEXT("BuildVersion")) = BuildVersionString;
+	MetadataMap.FindOrAdd(TEXT("EngineVersion")) = EngineVersionString;
+	MetadataMap.FindOrAdd(TEXT("Commandline")) = CommandlineStr;
 }
 
 FCsvProfiler::~FCsvProfiler()
@@ -2472,6 +2506,18 @@ FCsvProfiler::~FCsvProfiler()
 	{
 		FPlatformProcess::ReturnSynchEventToPool(FileWriteBlockingEvent);
 		FileWriteBlockingEvent = nullptr;
+	}
+
+	if (GStartOnEvent)
+	{
+		delete GStartOnEvent;
+		GStartOnEvent = nullptr;
+	}
+
+	if (GStopOnEvent)
+	{
+		delete GStopOnEvent;
+		GStopOnEvent = nullptr;
 	}
 }
 
@@ -2572,6 +2618,11 @@ void FCsvProfiler::BeginFrame()
 					}
 					SetMetadata(TEXT("TargetFramerate"), *FString::FromInt(TargetFPS));
 
+#if !UE_BUILD_SHIPPING
+					int32 ExtraDevelopmentMemoryMB = (int32)(FPlatformMemory::GetExtraDevelopmentMemorySize()/1024ull/1024ull);
+					SetMetadata(TEXT("ExtraDevelopmentMemoryMB"), *FString::FromInt(ExtraDevelopmentMemoryMB)); 
+#endif
+
 					GCsvStatCounts = !!CVarCsvStatCounts.GetValueOnGameThread();
 
 					// Initialize tls before setting the capturing flag to true.
@@ -2620,11 +2671,16 @@ void FCsvProfiler::EndFrame()
 		// Record the frametime (measured since the last EndFrame)
 		uint64 CurrentTimeStamp = FPlatformTime::Cycles64();
 		uint64 ElapsedCycles = CurrentTimeStamp - LastEndFrameTimestamp;
-		float ElapsedMs = FPlatformTime::ToMilliseconds64(ElapsedCycles);
+		float ElapsedMs = (float)FPlatformTime::ToMilliseconds64(ElapsedCycles);
 		CSV_CUSTOM_STAT_DEFINED(FrameTime, ElapsedMs, ECsvCustomStatOp::Set);
 
 		FPlatformMemoryStats MemoryStats = FPlatformMemory::GetStats();
 		float PhysicalMBFree = float(MemoryStats.AvailablePhysical) / (1024.0f * 1024.0f);
+
+#if !UE_BUILD_SHIPPING
+		// Subtract any extra development memory from physical free. This can result in negative values in cases where we would have crashed OOM
+		PhysicalMBFree -= float(FPlatformMemory::GetExtraDevelopmentMemorySize() / 1024ull / 1024ull);
+#endif
 		float PhysicalMBUsed = float(MemoryStats.UsedPhysical) / (1024.0f * 1024.0f);
 		float VirtualMBUsed  = float(MemoryStats.UsedVirtual) / (1024.0f * 1024.0f);
 		CSV_CUSTOM_STAT_GLOBAL(MemoryFreeMB, PhysicalMBFree, ECsvCustomStatOp::Set);
@@ -2679,7 +2735,7 @@ void FCsvProfiler::EndFrame()
 					FinalizeCsvFile();
 					bCaptureComplete = true;
 				}
-				else if (CVarCsvBlockOnCaptureEnd.GetValueOnGameThread() == 0)
+				else if (CVarCsvBlockOnCaptureEnd.GetValueOnGameThread() == 1)
 				{
 					// Suspend the hang and hitch heartbeats, as this is a long running task.
 					FSlowHeartBeatScope SuspendHeartBeat;
@@ -2798,6 +2854,14 @@ TSharedFuture<FString> FCsvProfiler::EndCapture(FGraphEventRef EventToSignal)
 		}
 	});
 
+	// Copy the metadata array for the next FinalizeCsvFile
+	TMap<FString, FString> CopyMetadataMap;
+	{
+		FScopeLock Lock(&MetadataCS);
+		CopyMetadataMap = MetadataMap;
+	}
+	MetadataQueue.Enqueue(MoveTemp(CopyMetadataMap));
+
 	TSharedFuture<FString> Future = Completion->GetFuture().Share();
 	CommandQueue.Enqueue(FCsvCaptureCommand(ECsvCommandType::Stop, GCsvProfilerFrameNumber, Completion, Future));
 
@@ -2816,35 +2880,14 @@ void FCsvProfiler::FinalizeCsvFile()
 	// Do a final process of the stat data
 	ProcessStatData();
 
-	// Copy the metadata array into a local one
-	TMap<FString, FString> LocalMetadata;
-	{
-		FScopeLock Lock(&MetadataCS);
-		LocalMetadata = MetadataMap;
-	}
-
-	// Add metadata
-	FString PlatformStr = FString::Printf(TEXT("%s"), ANSI_TO_TCHAR(FPlatformProperties::IniPlatformName()));
-	FString BuildConfigurationStr = LexToString(FApp::GetBuildConfiguration());
-	FString CommandlineStr = FString("\"") + FCommandLine::Get() + FString("\"");
-	// Strip newlines
-	CommandlineStr.ReplaceInline(TEXT("\n"), TEXT(""));
-	CommandlineStr.ReplaceInline(TEXT("\r"), TEXT(""));
-	FString BuildVersionString = FApp::GetBuildVersion();
-	FString EngineVersionString = FEngineVersion::Current().ToString();
-
-	LocalMetadata.FindOrAdd(TEXT("Platform")) = PlatformStr;
-	LocalMetadata.FindOrAdd(TEXT("Config")) = BuildConfigurationStr;
-	LocalMetadata.FindOrAdd(TEXT("DeviceProfile")) = DeviceProfileName;
-	LocalMetadata.FindOrAdd(TEXT("BuildVersion")) = BuildVersionString;
-	LocalMetadata.FindOrAdd(TEXT("EngineVersion")) = EngineVersionString;
-
-	// Commandline has to be last for parsing, since it might include commas
-	LocalMetadata.FindOrAdd(TEXT("Commandline")) = CommandlineStr;
-
 	uint64 MemoryBytesAtEndOfCapture = CsvWriter->GetAllocatedSize();
+	
+	// Get the queued metadata for the next csv finalize
+	TMap<FString, FString> CurrentMetadata;
+	MetadataQueue.Dequeue(CurrentMetadata);
 
-	CsvWriter->Finalize(LocalMetadata);
+
+	CsvWriter->Finalize(CurrentMetadata);
 
 	delete CsvWriter;
 	CsvWriter = nullptr;
@@ -2866,8 +2909,7 @@ void FCsvProfiler::FinalizeCsvFile()
 
 void FCsvProfiler::SetDeviceProfileName(FString InDeviceProfileName)
 {
-	LLM_SCOPE(ELLMTag::CsvProfiler);
-	DeviceProfileName = InDeviceProfileName;
+	CSV_METADATA(TEXT("DeviceProfile"), *InDeviceProfileName);
 }
 
 /** Push/pop events */
@@ -2970,14 +3012,31 @@ void FCsvProfiler::EndWait()
 
 void FCsvProfiler::RecordEventfInternal(int32 CategoryIndex, const TCHAR* Fmt, ...)
 {
-	if (GCsvProfilerIsCapturing && GCsvCategoriesEnabled[CategoryIndex])
+	bool bIsCsvRecording = GCsvProfilerIsCapturing && GCsvCategoriesEnabled[CategoryIndex];
+	if (bIsCsvRecording || GStartOnEvent)
 	{
 		LLM_SCOPE(ELLMTag::CsvProfiler);
 		TCHAR Buffer[256];
 		GET_VARARGS(Buffer, UE_ARRAY_COUNT(Buffer), UE_ARRAY_COUNT(Buffer) - 1, Fmt, Fmt);
 		Buffer[255] = '\0';
 		FString Str = Buffer;
-		RecordEvent(CategoryIndex, Str);
+
+		if (bIsCsvRecording)
+		{
+			RecordEvent(CategoryIndex, Str);
+
+			if (GStopOnEvent && GStopOnEvent->Equals(Str, ESearchCase::IgnoreCase))
+			{
+				FCsvProfiler::Get()->EndCapture();
+			}
+		}
+		else
+		{
+			if (GStartOnEvent && GStartOnEvent->Equals(Str, ESearchCase::IgnoreCase))
+			{
+				FCsvProfiler::Get()->BeginCapture(FCsvProfiler::Get()->GetNumFrameToCaptureOnEvent());
+			}
+		}
 	}
 }
 
@@ -3063,8 +3122,26 @@ void FCsvProfiler::RecordCustomStat(const FName& StatName, uint32 CategoryIndex,
 void FCsvProfiler::Init()
 {
 #if CSV_PROFILER_ALLOW_DEBUG_FEATURES
+	FParse::Value(FCommandLine::Get(), TEXT("csvCaptureOnEventFrameCount="), CaptureOnEventFrameCount);
 
-	int32 NumCsvFrames = 0;
+	GStartOnEvent = new FString();
+	FParse::Value(FCommandLine::Get(), TEXT("csvStartOnEvent="), *GStartOnEvent);
+
+	if (GStartOnEvent->IsEmpty())
+	{
+		delete GStartOnEvent;
+		GStartOnEvent = nullptr;
+	}
+
+	GStopOnEvent = new FString();
+	FParse::Value(FCommandLine::Get(), TEXT("csvStopOnEvent="), *GStopOnEvent);
+
+	if (GStopOnEvent->IsEmpty())
+	{
+		delete GStopOnEvent;
+		GStopOnEvent = nullptr;
+	}
+
 	if (FParse::Param(FCommandLine::Get(), TEXT("csvGpuStats")))
 	{
 		IConsoleVariable* CVarGPUCsvStatsEnabled = IConsoleManager::Get().FindConsoleVariable(TEXT("r.GPUCsvStatsEnabled"));
@@ -3123,6 +3200,7 @@ void FCsvProfiler::Init()
 	{
 		CVarCsvStatCounts.AsVariable()->Set(1);
 	}
+	int32 NumCsvFrames = 0;
 	if (FParse::Value(FCommandLine::Get(), TEXT("csvCaptureFrames="), NumCsvFrames))
 	{
 		check(IsInGameThread());
@@ -3171,9 +3249,18 @@ bool FCsvProfiler::IsWritingFile()
 	return GCsvProfilerIsWritingFile;
 }
 
+/*Get the current frame capture count*/
 int32 FCsvProfiler::GetCaptureFrameNumber()
 {
 	return CaptureFrameNumber;
+}
+
+//Get the total frame to capture when we are capturing on event. 
+//Example:  -csvStartOnEvent="My Event"
+//			-csvCaptureOnEventFrameCount=2500
+int32 FCsvProfiler::GetNumFrameToCaptureOnEvent()
+{
+	return CaptureOnEventFrameCount;
 }
 
 bool FCsvProfiler::EnableCategoryByString(const FString& CategoryName) const

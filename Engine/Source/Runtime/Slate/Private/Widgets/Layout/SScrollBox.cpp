@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Widgets/Layout/SScrollBox.h"
 #include "Rendering/DrawElements.h"
@@ -124,6 +124,7 @@ void SScrollBox::Construct( const FArguments& InArgs )
 	Orientation = InArgs._Orientation;
 	bScrollToEnd = false;
 	bIsScrollingActiveTimerRegistered = false;
+	bAllowsRightClickDragScrolling = false;
 	ConsumeMouseWheel = InArgs._ConsumeMouseWheel;
 	TickScrollDelta = 0;
 	AllowOverscroll = InArgs._AllowOverscroll;
@@ -131,6 +132,7 @@ void SScrollBox::Construct( const FArguments& InArgs )
 	WheelScrollMultiplier = InArgs._WheelScrollMultiplier;
 	NavigationScrollPadding = InArgs._NavigationScrollPadding;
 	NavigationDestination = InArgs._NavigationDestination;
+	ScrollWhenFocusChanges = InArgs._ScrollWhenFocusChanges;
 	bTouchPanningCapture = false;
 	bVolatilityAlwaysInvalidatesPrepass = true;
 
@@ -355,6 +357,8 @@ void SScrollBox::SetScrollOffset( float NewScrollOffset )
 {
 	DesiredScrollOffset = NewScrollOffset;
 	bScrollToEnd = false;
+
+	Invalidate(EInvalidateWidget::Layout);
 }
 
 void SScrollBox::ScrollToStart()
@@ -996,22 +1000,36 @@ FNavigationReply SScrollBox::OnNavigation(const FGeometry& MyGeometry, const FNa
 	return SCompoundWidget::OnNavigation(MyGeometry, InNavigationEvent);
 }
 
+void SScrollBox::OnFocusChanging(const FWeakWidgetPath& PreviousFocusPath, const FWidgetPath& NewWidgetPath, const FFocusEvent& InFocusEvent)
+{
+	if (ScrollWhenFocusChanges != EScrollWhenFocusChanges::NoScroll)
+	{
+		if (NewWidgetPath.IsValid() && NewWidgetPath.ContainsWidget(SharedThis(this)))
+		{
+			ScrollDescendantIntoView(NewWidgetPath.GetLastWidget(), ScrollWhenFocusChanges == EScrollWhenFocusChanges::AnimatedScroll ? true : false, NavigationDestination, NavigationScrollPadding);
+		}
+	}
+}
+
 TSharedPtr<SWidget> SScrollBox::GetKeyboardFocusableWidget(TSharedPtr<SWidget> InWidget)
 {
-	if (InWidget->SupportsKeyboardFocus() && EVisibility::DoesVisibilityPassFilter(InWidget->GetVisibility(), EVisibility::Visible))
+	if (EVisibility::DoesVisibilityPassFilter(InWidget->GetVisibility(), EVisibility::Visible))
 	{
-		return InWidget;
-	}
-	else
-	{
-		FChildren* Children = InWidget->GetChildren();
-		for (int32 i = 0; i < Children->Num(); ++i)
+		if (InWidget->SupportsKeyboardFocus())
 		{
-			TSharedPtr<SWidget> ChildWidget = Children->GetChildAt(i);
-			TSharedPtr<SWidget> FoucusableWidget = GetKeyboardFocusableWidget(ChildWidget);
-			if (FoucusableWidget.IsValid() && EVisibility::DoesVisibilityPassFilter(FoucusableWidget->GetVisibility(), EVisibility::Visible))
+			return InWidget;
+		}
+		else
+		{
+			FChildren* Children = InWidget->GetChildren();
+			for (int32 i = 0; i < Children->Num(); ++i)
 			{
-				return FoucusableWidget;
+				TSharedPtr<SWidget> ChildWidget = Children->GetChildAt(i);
+				TSharedPtr<SWidget> FoucusableWidget = GetKeyboardFocusableWidget(ChildWidget);
+				if (FoucusableWidget.IsValid() && EVisibility::DoesVisibilityPassFilter(FoucusableWidget->GetVisibility(), EVisibility::Visible))
+				{
+					return FoucusableWidget;
+				}
 			}
 		}
 	}

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,7 +7,6 @@
 #if PLATFORM_WINDOWS
 
 #include "OVR_Audio.h"
-#include "XAudio2Device.h"
 #include "AudioEffect.h"
 #include "XAudio2Effects.h"
 #include "OculusAudioEffect.h"

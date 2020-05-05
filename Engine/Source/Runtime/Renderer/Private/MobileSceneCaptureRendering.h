@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc.All Rights Reserved.
+// Copyright Epic Games, Inc.All Rights Reserved.
 
 #pragma once
 
@@ -19,4 +19,5 @@ void UpdateSceneCaptureContentMobile_RenderThread(
 	const FString& OwnerName,
 	const FResolveParams& ResolveParams,
 	bool bGenerateMips,
-	const FGenerateMipsParams& GenerateMipsParams);
+	const FGenerateMipsParams& GenerateMipsParams,
+	const bool bDisableFlipCopyGLES);

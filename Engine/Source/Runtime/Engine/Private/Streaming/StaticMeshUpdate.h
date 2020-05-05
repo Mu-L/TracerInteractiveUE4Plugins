@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 StaticMeshUpdate.h: Helpers to stream in and out static mesh LODs.
@@ -122,16 +122,23 @@ private:
 	void CreateBuffers_Internal(const FContext& Context);
 };
 
+/** A streamout that doesn't actually touches the CPU data. Required because DDC stream in doesn't reset. */
 class FStaticMeshStreamOut : public FStaticMeshUpdate
 {
 public:
-	FStaticMeshStreamOut(UStaticMesh* InMesh, int32 InRequestedMips);
-
-	virtual ~FStaticMeshStreamOut() {}
+	FStaticMeshStreamOut(UStaticMesh* InMesh, int32 InRequestedMips, bool InDiscardCPUData);
 
 private:
-	/** Release RHI buffers and update SRVs */
-	void DoReleaseBuffers(const FContext& Context);
+
+	void CheckReferencesAndDiscardCPUData(const FContext& Context);
+	void ReleaseRHIBuffers(const FContext& Context);
+	/** Restore */
+	void Cancel(const FContext& Context);
+
+	uint8 InitialFirstLOD = 0;
+	bool bDiscardCPUData = false;
+	int32 NumReferenceChecks = 0;
+	uint32 PreviousNumberOfExternalReferences = 0;
 };
 
 class FStaticMeshStreamIn_IO : public FStaticMeshStreamIn
@@ -183,8 +190,8 @@ protected:
 	/** Called by FAsyncCancelIORequestsTask to cancel inflight IO request if any */
 	void CancelIORequest();
 
-	struct FBulkDataIORequest* IORequest;
-	FAsyncFileCallBack AsyncFileCallback;
+	class IBulkDataIORequest* IORequest;
+	FBulkDataIORequestCallBack AsyncFileCallback;
 	bool bHighPrioIORequest;
 };
 

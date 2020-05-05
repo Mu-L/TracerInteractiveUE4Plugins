@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -167,6 +167,42 @@ struct FInputActionUnifiedDelegate
 		}
 
 		return false;
+	}
+
+	/** Returns the UObject bound to either the native or dynamic delegate (if either is a UFunction or UObject delegate) */
+	inline const UObject* GetUObject() const
+	{
+		switch (BoundDelegateType)
+		{
+		case EBoundDelegate::Delegate:
+			return FuncDelegate->GetUObject();
+
+		case EBoundDelegate::DelegateWithKey:
+			return FuncDelegateWithKey->GetUObject();
+
+		case EBoundDelegate::DynamicDelegate:
+			return FuncDynDelegate->GetUObject();
+		}
+
+		return nullptr;
+	}
+
+	/** Returns the object bound to either the native or dynamic delegate as a raw, untyped pointer. If you're looking for a bound UObject, prefer GetUObject(). */
+	inline const void* GetObject() const
+	{
+		switch (BoundDelegateType)
+		{
+		case EBoundDelegate::Delegate:
+			return FuncDelegate->GetObjectForTimerManager();
+
+		case EBoundDelegate::DelegateWithKey:
+			return FuncDelegateWithKey->GetObjectForTimerManager();
+
+		case EBoundDelegate::DynamicDelegate:
+			return FuncDynDelegate->GetUObject();
+		}
+
+		return nullptr;
 	}
 
 	/** Binds a native delegate and unbinds any bound dynamic delegate */
@@ -801,6 +837,7 @@ public:
 	 * @see AddActionBinding, ClearActionBindings, GetActionBinding, GetNumActionBindings
 	 */
 	void RemoveActionBinding( const int32 BindingIndex );
+	void RemoveActionBinding(FName ActionName, EInputEvent KeyEvent);
 
 	/**
 	 * Removes the action binding at the specified handle.

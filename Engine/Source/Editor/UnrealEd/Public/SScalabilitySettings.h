@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -15,7 +15,7 @@ enum class ECheckBoxState : uint8;
  * Scalability settings configuration widget                                                                  
  **/
 
-class UNREALED_VTABLE SScalabilitySettings : public SCompoundWidget
+class SScalabilitySettings : public SCompoundWidget
 {
 public:
 

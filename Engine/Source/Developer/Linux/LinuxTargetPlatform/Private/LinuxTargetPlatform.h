@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	LinuxTargetPlatform.h: Declares the FLinuxTargetPlatform class.
@@ -68,10 +68,8 @@ public:
 
 		// If we are targeting ES 2.0/3.1, we also must cook encoded HDR reflection captures
 		static FName NAME_SF_VULKAN_ES31(TEXT("SF_VULKAN_ES31"));
-		static FName NAME_OPENGL_150_ES2(TEXT("GLSL_150_ES2"));
 		static FName NAME_OPENGL_150_ES3_1(TEXT("GLSL_150_ES31"));
 		bRequiresEncodedHDRReflectionCaptures = TargetedShaderFormats.Contains(NAME_SF_VULKAN_ES31)
-			|| TargetedShaderFormats.Contains(NAME_OPENGL_150_ES2)
 			|| TargetedShaderFormats.Contains(NAME_OPENGL_150_ES3_1);
 #endif // WITH_ENGINE
 	}
@@ -84,6 +82,11 @@ public:
 	virtual void EnableDeviceCheck(bool OnOff) override {}
 
 	virtual bool AddDevice(const FString& DeviceName, bool bDefault) override
+	{
+		return AddDevice(DeviceName, TEXT(""), TEXT(""), TEXT(""), bDefault);
+	}
+
+	virtual bool AddDevice(const FString& DeviceName, const FString& DeviceUserFriendlyName, const FString& Username, const FString& Password, bool bDefault) override
 	{
 		FLinuxTargetDevicePtr& Device = Devices.FindOrAdd(DeviceName);
 
@@ -101,9 +104,15 @@ public:
 			nullptr));
 #endif // WITH_ENGINE
 
+		if (!Username.IsEmpty() || !Password.IsEmpty())
+		{
+			Device->SetUserCredentials(Username, Password);
+		}
+
 		DeviceDiscoveredEvent.Broadcast(Device.ToSharedRef());
 		return true;
 	}
+
 
 	virtual void GetAllDevices( TArray<ITargetDevicePtr>& OutDevices ) const override
 	{
@@ -323,7 +332,7 @@ public:
 			return NAME_ADPCM;
 		}
 
-		if (Wave->IsStreaming())
+		if (Wave->IsStreaming(*this->IniPlatformName()))
 		{
 			return NAME_OPUS;
 		}
@@ -340,11 +349,6 @@ public:
 		OutFormats.Add(NAME_ADPCM);
 		OutFormats.Add(NAME_OGG);
 		OutFormats.Add(NAME_OPUS);
-	}
-
-	virtual FPlatformAudioCookOverrides* GetAudioCompressionSettings() const override
-	{
-		return nullptr;
 	}
 
 #endif //WITH_ENGINE

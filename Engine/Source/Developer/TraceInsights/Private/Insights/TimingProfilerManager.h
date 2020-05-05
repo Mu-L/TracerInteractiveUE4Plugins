@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -15,7 +15,6 @@ class STimingProfilerWindow;
 
 namespace Trace
 {
-	class ISessionService;
 	class IAnalysisService;
 	class IAnalysisSession;
 }
@@ -103,11 +102,6 @@ public:
 	void SetFramesTrackVisible(const bool bIsVisible) { bIsFramesTrackVisible = bIsVisible; }
 	void ShowHideFramesTrack(const bool bIsVisible);
 
-	/** @return true, if Graph Track is visible */
-	const bool IsGraphTrackVisible() const { return bIsGraphTrackVisible; }
-	void SetGraphTrackVisible(const bool bIsVisible) { bIsGraphTrackVisible = bIsVisible; }
-	void ShowHideGraphTrack(const bool bIsVisible);
-
 	/** @return true, if Timing View is visible */
 	const bool IsTimingViewVisible() const { return bIsTimingViewVisible; }
 	void SetTimingViewVisible(const bool bIsVisible) { bIsTimingViewVisible = bIsVisible; }
@@ -177,9 +171,6 @@ protected:
 
 	/** If the Frames Track is visible or hidden. */
 	bool bIsFramesTrackVisible;
-
-	/** If the Graph Track is visible or hidden. */
-	bool bIsGraphTrackVisible;
 
 	/** If the Timing View is visible or hidden. */
 	bool bIsTimingViewVisible;

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 WeightedRandomSampler.h: 
@@ -23,15 +23,15 @@ GetEntryIndex takes two random floating values. This does not generate randoms f
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Serialization/MemoryImage.h"
+#include "Serialization/MemoryLayout.h"
 
 struct ENGINE_API FWeightedRandomSampler
 {
+	DECLARE_TYPE_LAYOUT(FWeightedRandomSampler, Abstract);
 public:
 	FWeightedRandomSampler();
 	virtual ~FWeightedRandomSampler() { }
-
-	/** Gets the weight of all elements and returns their sum. */
-	virtual float GetWeights(TArray<float>& OutWeights) = 0;
 
 	/**
 	Takes two random values (0...1) and returns the corresponding element index.
@@ -50,11 +50,15 @@ public:
 
 	int32 GetNumEntries() const { return Prob.Num(); }
 
-	const TArray<float>& GetProb() const { return Prob; }
-	const TArray<int32>& GetAlias() const { return Alias; }
+	const TArray<float, FMemoryImageAllocator>& GetProb() const { return Prob; }
+	const TArray<int32, FMemoryImageAllocator>& GetAlias() const { return Alias; }
 
 protected:
-	TArray<float> Prob;
-	TArray<int32> Alias;
-	float TotalWeight;
+
+	/** Gets the weight of all elements and returns their sum. */
+	virtual float GetWeights(TArray<float>& OutWeights) = 0;
+
+	LAYOUT_FIELD(TMemoryImageArray<float>, Prob);
+	LAYOUT_FIELD(TMemoryImageArray<int32>, Alias);
+	LAYOUT_FIELD(float, TotalWeight);
 };

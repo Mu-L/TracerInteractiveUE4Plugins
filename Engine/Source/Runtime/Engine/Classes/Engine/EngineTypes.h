@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -18,6 +18,7 @@
 class AActor;
 class UDecalComponent;
 class UPhysicalMaterial;
+class UPhysicalMaterialMask;
 class UPrimitiveComponent;
 class USceneComponent;
 
@@ -356,7 +357,8 @@ enum ESceneCaptureSource
 	SCS_DeviceDepth UMETA(DisplayName = "DeviceDepth in RGB"),
 	SCS_Normal UMETA(DisplayName="Normal in RGB (Deferred Renderer only)"),
 	SCS_BaseColor UMETA(DisplayName = "BaseColor in RGB (Deferred Renderer only)"),
-	SCS_FinalColorHDR UMETA(DisplayName = "Final Color (HDR) in Linear sRGB gamut")
+	SCS_FinalColorHDR UMETA(DisplayName = "Final Color (HDR) in Linear sRGB gamut"),
+	SCS_FinalToneCurveHDR UMETA(DisplayName = "Final Color (with tone curve) in Linear sRGB gamut")
 };
 
 /** Specifies how scene captures are composited into render buffers */
@@ -473,6 +475,7 @@ enum EMaterialShadingModel
 	MSM_Cloth					UMETA(DisplayName="Cloth"),
 	MSM_Eye						UMETA(DisplayName="Eye"),
 	MSM_SingleLayerWater		UMETA(DisplayName="SingleLayerWater"),
+	MSM_ThinTranslucent			UMETA(DisplayName="Thin Translucent"),
 	/** Number of unique shading models. */
 	MSM_NUM						UMETA(Hidden),
 	/** Shading model will be determined by the Material Expression Graph,
@@ -1537,7 +1540,7 @@ struct ENGINE_API FRotationConversionCache
 		{
 			return CachedRotator;
 		}
-		return InQuat.Rotator();
+		return InQuat.GetNormalized().Rotator();
 	}
 
 	/** Version of QuatToRotator when the Quat is known to already be normalized. */
@@ -2590,6 +2593,9 @@ struct FMeshBuildSettings
 	UPROPERTY(EditAnywhere, Category=BuildSettings, meta=(DisplayName="Two-Sided Distance Field Generation"))
 	uint8 bGenerateDistanceFieldAsIfTwoSided:1;
 
+	UPROPERTY(EditAnywhere, Category=BuildSettings, meta=(DisplayName="Enable Physical Material Mask"))
+	uint8 bSupportFaceRemap : 1;
+
 	UPROPERTY(EditAnywhere, Category=BuildSettings)
 	int32 MinLightmapResolution;
 
@@ -2634,6 +2640,7 @@ struct FMeshBuildSettings
 		, bUseFullPrecisionUVs(false)
 		, bGenerateLightmapUVs(true)
 		, bGenerateDistanceFieldAsIfTwoSided(false)
+		, bSupportFaceRemap(false)
 		, MinLightmapResolution(64)
 		, SrcLightmapIndex(0)
 		, DstLightmapIndex(1)
@@ -2727,6 +2734,10 @@ struct FSkeletalMeshBuildSettings
 	UPROPERTY(EditAnywhere, Category = BuildSettings)
 	float ThresholdUV;
 
+	/** Threshold to compare vertex position equality when computing morph target deltas. */
+	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	float MorphThresholdPosition;
+
 	/** Default settings. */
 	FSkeletalMeshBuildSettings()
 		: bRecomputeNormals(true)
@@ -2740,6 +2751,7 @@ struct FSkeletalMeshBuildSettings
 		, ThresholdPosition(0.00002)
 		, ThresholdTangentNormal(0.00002)
 		, ThresholdUV(0.0009765625)
+		, MorphThresholdPosition(0.015f)
 	{}
 
 	/** Equality operator. */
@@ -2755,7 +2767,8 @@ struct FSkeletalMeshBuildSettings
 			&& bBuildAdjacencyBuffer == Other.bBuildAdjacencyBuffer
 			&& ThresholdPosition == Other.ThresholdPosition
 			&& ThresholdTangentNormal == Other.ThresholdTangentNormal
-			&& ThresholdUV == Other.ThresholdUV;
+			&& ThresholdUV == Other.ThresholdUV
+			&& MorphThresholdPosition == Other.MorphThresholdPosition;
 	}
 
 	/** Inequality. */
@@ -3641,6 +3654,24 @@ enum EPhysicalSurface
 	SurfaceType62 UMETA(Hidden),
 	SurfaceType_Max UMETA(Hidden)
 };
+
+/** Types of valid physical material mask colors which may be associated with a physical material */
+UENUM(BlueprintType)
+namespace EPhysicalMaterialMaskColor
+{
+	enum Type
+	{
+		Red,
+		Green,
+		Blue,
+		Cyan,
+		Magenta,
+		Yellow,
+		White,
+		Black,
+		MAX
+	};
+}
 
 /** Describes how often this component is allowed to move. */
 UENUM(BlueprintType)

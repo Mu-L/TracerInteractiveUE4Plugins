@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Game/DisplayClusterGameManager.h"
 
@@ -65,6 +65,9 @@ bool FDisplayClusterGameManager::StartSession(const FString& configPath, const F
 void FDisplayClusterGameManager::EndSession()
 {
 	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterGame);
+
+	ConfigPath.Reset();
+	ClusterNodeId.Reset();
 }
 
 bool FDisplayClusterGameManager::StartScene(UWorld* InWorld)
@@ -119,6 +122,7 @@ void FDisplayClusterGameManager::EndScene()
 	FScopeLock lock(&InternalsSyncScope);
 
 	DisplayClusterRootActor = nullptr;
+	CurrentWorld = nullptr;
 }
 
 
@@ -259,15 +263,18 @@ TArray<UDisplayClusterSceneComponent*> FDisplayClusterGameManager::GetAllNodes()
 
 ADisplayClusterRootActor* FDisplayClusterGameManager::FindDisplayClusterRootActor(UWorld* InWorld)
 {
-	for (AActor* const Actor : InWorld->PersistentLevel->Actors)
+	if (InWorld && InWorld->PersistentLevel)
 	{
-		if (Actor && !Actor->IsPendingKill())
+		for (AActor* const Actor : InWorld->PersistentLevel->Actors)
 		{
-			ADisplayClusterRootActor* RootActor = Cast<ADisplayClusterRootActor>(Actor);
-			if (RootActor)
+			if (Actor && !Actor->IsPendingKill())
 			{
-				UE_LOG(LogDisplayClusterGame, Log, TEXT("Found root actor - %s"), *RootActor->GetName());
-				return RootActor;
+				ADisplayClusterRootActor* RootActor = Cast<ADisplayClusterRootActor>(Actor);
+				if (RootActor)
+				{
+					UE_LOG(LogDisplayClusterGame, Log, TEXT("Found root actor - %s"), *RootActor->GetName());
+					return RootActor;
+				}
 			}
 		}
 	}

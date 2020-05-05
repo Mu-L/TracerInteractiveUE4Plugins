@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Rendering/SkeletalMeshLODRenderData.h"
 #include "Rendering/SkeletalMeshRenderData.h"
@@ -13,6 +13,7 @@
 #include "UObject/PropertyPortFlags.h"
 
 #if WITH_EDITOR
+#include "Modules/ModuleManager.h"
 #include "Rendering/SkeletalMeshModel.h"
 #include "MeshUtilities.h"
 #endif // WITH_EDITOR
@@ -195,7 +196,7 @@ void FSkeletalMeshLODRenderData::InitResources(bool bNeedsVertexColors, int32 LO
 	{
 		SkinWeightProfilesData.SetDynamicDefaultSkinWeightProfile(Owner, LODIndex);
 	}
-	BeginInitResource(&SkinWeightVertexBuffer);
+	SkinWeightVertexBuffer.BeginInitResources();
 
 	if (bNeedsVertexColors)
 	{
@@ -249,25 +250,41 @@ void FSkeletalMeshLODRenderData::InitResources(bool bNeedsVertexColors, int32 LO
 			UMorphTarget* MorphTarget = InMorphTargets[AnimIdx];
 			int32 NumSrcDeltas = 0;
 			FMorphTargetDelta* MorphDeltas = MorphTarget->GetMorphTargetDelta(LODIndex, NumSrcDeltas);
-			for (int32 DeltaIndex = 0; DeltaIndex < NumSrcDeltas; DeltaIndex++)
+
+			if (NumSrcDeltas == 0)
 			{
-				const auto& MorphDelta = MorphDeltas[DeltaIndex];
-				// when import, we do check threshold, and also when adding weight, we do have threshold for how smaller weight can fit in
-				// so no reason to check here another threshold
-				MaximumValues[0] = FMath::Max(MaximumValues[0], MorphDelta.PositionDelta.X);
-				MaximumValues[1] = FMath::Max(MaximumValues[1], MorphDelta.PositionDelta.Y);
-				MaximumValues[2] = FMath::Max(MaximumValues[2], MorphDelta.PositionDelta.Z);
-				MaximumValues[3] = FMath::Max(MaximumValues[3], FMath::Max(MorphDelta.TangentZDelta.X, FMath::Max(MorphDelta.TangentZDelta.Y, MorphDelta.TangentZDelta.Z)));
+				MaximumValues[0] = 0.0f;
+				MaximumValues[1] = 0.0f;
+				MaximumValues[2] = 0.0f;
+				MaximumValues[3] = 0.0f;
 
-				MinimumValues[0] = FMath::Min(MinimumValues[0], MorphDelta.PositionDelta.X);
-				MinimumValues[1] = FMath::Min(MinimumValues[1], MorphDelta.PositionDelta.Y);
-				MinimumValues[2] = FMath::Min(MinimumValues[2], MorphDelta.PositionDelta.Z);
-				MinimumValues[3] = FMath::Min(MinimumValues[3], FMath::Min(MorphDelta.TangentZDelta.X, FMath::Min(MorphDelta.TangentZDelta.Y, MorphDelta.TangentZDelta.Z)));
+				MinimumValues[0] = 0.0f;
+				MinimumValues[1] = 0.0f;
+				MinimumValues[2] = 0.0f;
+				MinimumValues[3] = 0.0f;
+			}
+			else
+			{
+				for (int32 DeltaIndex = 0; DeltaIndex < NumSrcDeltas; DeltaIndex++)
+				{
+					const auto& MorphDelta = MorphDeltas[DeltaIndex];
+					// when import, we do check threshold, and also when adding weight, we do have threshold for how smaller weight can fit in
+					// so no reason to check here another threshold
+					MaximumValues[0] = FMath::Max(MaximumValues[0], MorphDelta.PositionDelta.X);
+					MaximumValues[1] = FMath::Max(MaximumValues[1], MorphDelta.PositionDelta.Y);
+					MaximumValues[2] = FMath::Max(MaximumValues[2], MorphDelta.PositionDelta.Z);
+					MaximumValues[3] = FMath::Max(MaximumValues[3], FMath::Max(MorphDelta.TangentZDelta.X, FMath::Max(MorphDelta.TangentZDelta.Y, MorphDelta.TangentZDelta.Z)));
 
-				MaxVertexIndex = FMath::Max(MorphDelta.SourceIdx, MaxVertexIndex);
-				MorphTargetVertexInfoBuffers.VertexIndices.Add(MorphDelta.SourceIdx);
-				MorphTargetVertexInfoBuffers.MorphDeltas.Emplace(MorphDelta.PositionDelta, MorphDelta.TangentZDelta);
-				MorphTargetVertexInfoBuffers.NumTotalWorkItems++;
+					MinimumValues[0] = FMath::Min(MinimumValues[0], MorphDelta.PositionDelta.X);
+					MinimumValues[1] = FMath::Min(MinimumValues[1], MorphDelta.PositionDelta.Y);
+					MinimumValues[2] = FMath::Min(MinimumValues[2], MorphDelta.PositionDelta.Z);
+					MinimumValues[3] = FMath::Min(MinimumValues[3], FMath::Min(MorphDelta.TangentZDelta.X, FMath::Min(MorphDelta.TangentZDelta.Y, MorphDelta.TangentZDelta.Z)));
+
+					MaxVertexIndex = FMath::Max(MorphDelta.SourceIdx, MaxVertexIndex);
+					MorphTargetVertexInfoBuffers.VertexIndices.Add(MorphDelta.SourceIdx);
+					MorphTargetVertexInfoBuffers.MorphDeltas.Emplace(MorphDelta.PositionDelta, MorphDelta.TangentZDelta);
+					MorphTargetVertexInfoBuffers.NumTotalWorkItems++;
+				}
 			}
 
 			uint32 MorphTargetSize = MorphTargetVertexInfoBuffers.NumTotalWorkItems - StartOffset;
@@ -473,7 +490,7 @@ void FSkeletalMeshLODRenderData::ReleaseResources()
 
 	BeginReleaseResource(&StaticVertexBuffers.PositionVertexBuffer);
 	BeginReleaseResource(&StaticVertexBuffers.StaticMeshVertexBuffer);
-	BeginReleaseResource(&SkinWeightVertexBuffer);
+	SkinWeightVertexBuffer.BeginReleaseResources();
 	BeginReleaseResource(&StaticVertexBuffers.ColorVertexBuffer);
 	BeginReleaseResource(&ClothVertexBuffer);
 	// DuplicatedVerticesBuffer is used only for SkinCache and Editor features which is SM5 only
@@ -583,7 +600,8 @@ void FSkeletalMeshLODRenderData::BuildFromLODModel(const FSkeletalMeshLODModel* 
 
 	// Init skin weight buffer
 	SkinWeightVertexBuffer.SetNeedsCPUAccess(true);
-	SkinWeightVertexBuffer.SetHasExtraBoneInfluences(ImportedModel->DoSectionsNeedExtraBoneInfluences());
+	SkinWeightVertexBuffer.SetMaxBoneInfluences(ImportedModel->GetMaxBoneInfluences());
+	SkinWeightVertexBuffer.SetUse16BitBoneIndex(ImportedModel->DoSectionsUse16BitBoneIndex());
 	SkinWeightVertexBuffer.Init(Vertices);
 
 	// Init the color buffer if this mesh has vertex colors.
@@ -640,11 +658,8 @@ void FSkeletalMeshLODRenderData::ReleaseCPUResources(bool bForStreaming)
 		{
 			AdjacencyMultiSizeIndexContainer.GetIndexBuffer()->Empty();
 		}
-		if (SkinWeightVertexBuffer.IsWeightDataValid())
-		{
-			SkinWeightVertexBuffer.CleanUp();
-		}
 
+		SkinWeightVertexBuffer.CleanUp();
 		StaticVertexBuffers.PositionVertexBuffer.CleanUp();
 		StaticVertexBuffers.StaticMeshVertexBuffer.CleanUp();
 
@@ -740,11 +755,14 @@ bool FSkeletalMeshLODRenderData::IsLODCookedOut(const ITargetPlatform* TargetPla
 	}
 	check(TargetPlatform);
 
-	const bool bSupportLODStreaming = SkeletalMesh->bSupportLODStreaming.GetValueForPlatformIdentifiers(
+	const bool bSupportLODStreaming = !SkeletalMesh->NeverStream && SkeletalMesh->bSupportLODStreaming.GetValueForPlatformIdentifiers(
 		TargetPlatform->GetPlatformInfo().PlatformGroupName,
 		TargetPlatform->GetPlatformInfo().VanillaPlatformName);
+
+	static auto* VarMeshStreaming = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MeshStreaming"));
+	const bool bMeshStreamingEnabled = !VarMeshStreaming || VarMeshStreaming->GetInt() != 0;
 	
-	return !TargetPlatform->SupportsFeature(ETargetPlatformFeatures::MeshLODStreaming) || !bSupportLODStreaming;
+	return !bMeshStreamingEnabled || !TargetPlatform->SupportsFeature(ETargetPlatformFeatures::MeshLODStreaming) || !bSupportLODStreaming;
 #else
 	return false;
 #endif
@@ -762,9 +780,12 @@ bool FSkeletalMeshLODRenderData::IsLODInlined(const ITargetPlatform* TargetPlatf
 
 	const FName PlatformGroupName = TargetPlatform->GetPlatformInfo().PlatformGroupName;
 	const FName VanillaPlatformName = TargetPlatform->GetPlatformInfo().VanillaPlatformName;
-	const bool bSupportLODStreaming = SkeletalMesh->bSupportLODStreaming.GetValueForPlatformIdentifiers(PlatformGroupName, VanillaPlatformName);
+	const bool bSupportLODStreaming = !SkeletalMesh->NeverStream && SkeletalMesh->bSupportLODStreaming.GetValueForPlatformIdentifiers(PlatformGroupName, VanillaPlatformName);
 
-	if (!TargetPlatform->SupportsFeature(ETargetPlatformFeatures::MeshLODStreaming) || !bSupportLODStreaming)
+	static auto* VarMeshStreaming = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MeshStreaming"));
+	const bool bMeshStreamingEnabled = !VarMeshStreaming || VarMeshStreaming->GetInt() != 0;
+
+	if (!bMeshStreamingEnabled || !TargetPlatform->SupportsFeature(ETargetPlatformFeatures::MeshLODStreaming) || !bSupportLODStreaming)
 	{
 		return true;
 	}
@@ -1036,15 +1057,16 @@ void FSkeletalMeshLODRenderData::Serialize(FArchive& Ar, UObject* Owner, int32 I
 #endif
 			{
 #if USE_BULKDATA_STREAMING_TOKEN
-				FByteBulkData StreamingBulkData;
-				StreamingBulkData.Serialize(Ar, Owner, Idx, false);
+				FByteBulkData TmpBulkData;
+				TmpBulkData.Serialize(Ar, Owner, Idx, false);
+				bIsLODOptional = TmpBulkData.IsOptional();
 
-				BulkDataStreamingToken = StreamingBulkData.CreateStreamingToken();
+				StreamingBulkData = TmpBulkData.CreateStreamingToken();
 #else
 				StreamingBulkData.Serialize(Ar, Owner, Idx, false);
+				bIsLODOptional = StreamingBulkData.IsOptional();
 #endif
-				bIsLODOptional = !!(StreamingBulkData.GetBulkDataFlags() & BULKDATA_OptionalPayload);
-
+			
 				if (StreamingBulkData.GetBulkDataSize() == 0)
 				{
 					bDiscardBulkData = true;

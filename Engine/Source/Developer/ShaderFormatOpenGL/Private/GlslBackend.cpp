@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 // .
 
 // This code is largely based on that in ir_print_glsl_visitor.cpp from
@@ -52,7 +52,7 @@ PRAGMA_ENABLE_SHADOW_VARIABLE_WARNINGS
 #define _strdup strdup
 #endif
 
-static inline std::string FixHlslName(const glsl_type* Type, bool bIsES2)
+static inline std::string FixHlslName(const glsl_type* Type)
 {
 	check(Type->is_image() || Type->is_vector() || Type->is_numeric() || Type->is_void() || Type->is_sampler() || Type->is_scalar());
 	std::string Name = Type->name;
@@ -107,27 +107,6 @@ static inline std::string FixHlslName(const glsl_type* Type, bool bIsES2)
 	else if (Type == glsl_type::half4x4_type)
 	{
 		return "mat4";
-	}
-	else if (bIsES2 && (Type->base_type == GLSL_TYPE_UINT))
-	{
-		// uint does not exist with GLSL 1.00 (ES2)
-		// So we silently swap uint types to int.
-		if (Type == glsl_type::uint_type)
-		{
-			return "int";
-		}
-		else if (Type == glsl_type::uvec2_type)
-		{
-			return "ivec2";
-		}
-		else if (Type == glsl_type::uvec3_type)
-		{
-			return "ivec3";
-		}
-		else if (Type == glsl_type::uvec4_type)
-		{
-			return "ivec4";
-		}
 	}
 	return Name;
 }
@@ -611,10 +590,16 @@ class ir_gen_glsl_visitor : public ir_visitor
 	bool bUsesES2TextureLODExtension;
 
 	/** Whether the shader being cross compiled needs GL_EXT_texture_buffer. */
-	bool bUsesTexelFetch;
+	bool bUsesTextureBuffer;
+
+	/** Whether the shader being cross compiled needs GL_OES_shader_image_atomic. */
+	bool bUseImageAtomic;
 
 	// Found dFdx or dFdy
 	bool bUsesDXDY;
+
+	// True if the discard instruction was encountered.
+	bool bUsesDiscard;
 
 	// Uses gl_InstanceID
 	bool bUsesInstanceID;
@@ -749,7 +734,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 		}
 		else 
 		{
-			std::string Name = FixHlslName(t, bIsES && !bIsES31 && !bIsWebGL);
+			std::string Name = FixHlslName(t);
 			ralloc_asprintf_append(buffer, "%s", Name.c_str());
 		}
 	}
@@ -848,7 +833,8 @@ class ir_gen_glsl_visitor : public ir_visitor
 		}
 		else if (type->is_integer())
 		{
-			return GLSL_PRECISION_HIGHP;
+			// integers use default precision which is always highp
+			return GLSL_PRECISION_DEFAULT;
 		}
 		return GLSL_PRECISION_DEFAULT;
 	}
@@ -1382,7 +1368,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 			}
 			else
 			{
-				ralloc_asprintf_append(buffer, "%s(", FixHlslName(expr->type, bIsES && !bIsES31 && !bIsWebGL).c_str());
+				ralloc_asprintf_append(buffer, "%s(", FixHlslName(expr->type).c_str());
 				expr->operands[0]->accept(this);
 				ralloc_asprintf_append(buffer, ")");
 			}
@@ -1480,7 +1466,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 
 		if (op == ir_txf)
 		{
-			bUsesTexelFetch = true;
+			bUsesTextureBuffer = true;
 		}
 
 		// Emit texture function and sampler.
@@ -1633,6 +1619,12 @@ class ir_gen_glsl_visitor : public ir_visitor
 
 		ir_variable* var = deref->variable_referenced();
 
+		// enable texture buffer extension for "uimagebuffer" and "imagebuffer" which is a sampler_buffer but not a shader_storage_buffer
+		if (var->type->sampler_buffer && !var->type->shader_storage_buffer)
+		{
+			bUsesTextureBuffer = true;
+		}
+
 		ralloc_asprintf_append(buffer, unique_name(var));
 
 
@@ -1741,6 +1733,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 			}
 			else
 			{
+				bUsesTextureBuffer = true;
 				if (src == NULL)
 				{
 					ralloc_asprintf_append(buffer, "imageLoad( ");
@@ -2067,6 +2060,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 			ralloc_asprintf_append(buffer, ") ");
 		}
 		ralloc_asprintf_append(buffer, "discard");
+		bUsesDiscard = true;
 	}
 
 	bool try_conditional_move(ir_if *expr)
@@ -2290,7 +2284,10 @@ class ir_gen_glsl_visitor : public ir_visitor
 		check(scope_depth > 0);
 		ir_dereference_image* image = ir->memory_ref->as_dereference_image();
 
+		bUseImageAtomic = image != NULL;
+
 		ir->lhs->accept(this);
+
 		if (!image || (image->image->type && image->image->type->shader_storage_buffer))
 		{
 			ralloc_asprintf_append(buffer, " = %s(",
@@ -3024,7 +3021,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 	 */
 	void print_layout(_mesa_glsl_parse_state *state)
 	{
-		if (early_depth_stencil)
+		if (early_depth_stencil && this->bUsesDiscard == false)
 		{
 			ralloc_asprintf_append(buffer, "layout(early_fragment_tests) in;\n");
 		}
@@ -3163,6 +3160,10 @@ class ir_gen_glsl_visitor : public ir_visitor
 			ralloc_asprintf_append(buffer, "#extension GL_EXT_gpu_shader5 : enable\n");
 			ralloc_asprintf_append(buffer, "\n#endif\n");
 			
+			ralloc_asprintf_append(buffer, "\n#ifdef GL_OES_shader_image_atomic\n");
+			ralloc_asprintf_append(buffer, "#extension GL_OES_shader_image_atomic : enable\n");
+			ralloc_asprintf_append(buffer, "\n#endif\n");
+
 			ralloc_asprintf_append(buffer, "\n#ifdef GL_EXT_texture_buffer\n");
 			ralloc_asprintf_append(buffer, "#extension GL_EXT_texture_buffer : enable\n");
 			ralloc_asprintf_append(buffer, "\n#endif\n");
@@ -3185,14 +3186,24 @@ class ir_gen_glsl_visitor : public ir_visitor
 				ralloc_asprintf_append(buffer, "#extension GL_EXT_tessellation_shader : enable\n");
 			}
 		}
-		else if ((bIsES || bIsES31) && bUsesTexelFetch)
+		else if ((bIsES || bIsES31))
 		{
-			// Not supported by ES2 and ES3.1 spec, but many phones support this extension
-			// GPU particles require this
-			// App shall not use a shader if this extension is not supported on device
-			ralloc_asprintf_append(buffer, "\n#ifdef GL_EXT_texture_buffer\n");
-			ralloc_asprintf_append(buffer, "#extension GL_EXT_texture_buffer : enable\n");
-			ralloc_asprintf_append(buffer, "\n#endif\n");
+			if (bUseImageAtomic)
+			{
+				ralloc_asprintf_append(buffer, "\n#ifdef GL_OES_shader_image_atomic\n");
+				ralloc_asprintf_append(buffer, "#extension GL_OES_shader_image_atomic : enable\n");
+				ralloc_asprintf_append(buffer, "\n#endif\n");
+			}
+
+			if (bUsesTextureBuffer)
+			{
+				// Not supported by ES2 and ES3.1 spec, but many phones support this extension
+				// GPU particles require this
+				// App shall not use a shader if this extension is not supported on device
+				ralloc_asprintf_append(buffer, "\n#ifdef GL_EXT_texture_buffer\n");
+				ralloc_asprintf_append(buffer, "#extension GL_EXT_texture_buffer : enable\n");
+				ralloc_asprintf_append(buffer, "\n#endif\n");
+			}
 		}
 		ralloc_asprintf_append(buffer, "// end extensions\n");
 	}
@@ -3221,8 +3232,10 @@ public:
 		, should_print_uint_literals_as_ints(false)
 		, loop_count(0)
 		, bUsesES2TextureLODExtension(false)
-		, bUsesTexelFetch(false)
+		, bUsesTextureBuffer(false)
+		, bUseImageAtomic(false)
 		, bUsesDXDY(false)
+		, bUsesDiscard(false)
 		, bUsesInstanceID(false)
 		, bNoGlobalUniforms(bInNoGlobalUniforms)
 	{
@@ -3258,7 +3271,8 @@ public:
 			
 			const char* DefaultPrecision = bDefaultPrecisionIsHalf ? "mediump" : "highp";
 			ralloc_asprintf_append(&default_precision_buffer, "precision %s float;\n", DefaultPrecision);
-			ralloc_asprintf_append(&default_precision_buffer, "precision %s int;\n", DefaultPrecision);
+			// always use highp for integers as shaders use them as bit storage
+			ralloc_asprintf_append(&default_precision_buffer, "precision %s int;\n", "highp");
 
 			if (bIsES) // ES2 workarounds
 			{
@@ -3310,7 +3324,11 @@ bool compiler_internal_AdjustIsFrontFacing(bool isFrontFacing)
 #endif
 }
 )RawStrDelimiter";
-			ralloc_asprintf_append(buffer, func_clipControlAdjustments);
+			
+			if (ShaderTarget != compute_shader)
+			{
+				ralloc_asprintf_append(buffer, func_clipControlAdjustments);
+			}
 		}
 
 		// FramebufferFetchES2 'intrinsic'
@@ -3326,6 +3344,7 @@ bool compiler_internal_AdjustIsFrontFacing(bool isFrontFacing)
 				ralloc_asprintf_append(buffer, "	vec4 FramebufferFetchES2();\n");
 				ralloc_asprintf_append(buffer, "#elif defined( GL_ARM_shader_framebuffer_fetch)\n");
 				ralloc_asprintf_append(buffer, "	#define %sout\n", ES31FrameBufferFetchStorageQualifier);
+				//ralloc_asprintf_append(buffer, "	highp vec4 gl_LastFragColorARM;\n"); // Does not work on S7 MALI
 				ralloc_asprintf_append(buffer, "	vec4 FramebufferFetchES2() { return gl_LastFragColorARM; }\n");
 				ralloc_asprintf_append(buffer, "#else\n");
 				ralloc_asprintf_append(buffer, "	#define %sout\n", ES31FrameBufferFetchStorageQualifier);
@@ -3342,6 +3361,7 @@ bool compiler_internal_AdjustIsFrontFacing(bool isFrontFacing)
 				ralloc_asprintf_append(buffer, "	#endif\n");
 				ralloc_asprintf_append(buffer, "#else\n");
 				ralloc_asprintf_append(buffer, "	#ifdef GL_ARM_shader_framebuffer_fetch\n");
+				//ralloc_asprintf_append(buffer, "		highp vec4 gl_LastFragColorARM;\n"); Does not work on S7 MALI
 				ralloc_asprintf_append(buffer, "		vec4 FramebufferFetchES2() { return gl_LastFragColorARM; }\n");
 				ralloc_asprintf_append(buffer, "	#else\n");
 				ralloc_asprintf_append(buffer, "		vec4 FramebufferFetchES2() { return vec4(65000.0, 65000.0, 65000.0, 65000.0); }\n");
@@ -3359,11 +3379,6 @@ bool compiler_internal_AdjustIsFrontFacing(bool isFrontFacing)
 			ralloc_asprintf_append(buffer, "#else\n");
 			ralloc_asprintf_append(buffer, "float DepthbufferFetchES2(float OptionalDepth, float C1, float C2) { return OptionalDepth; }\n");
 			ralloc_asprintf_append(buffer, "#endif\n\n");
-		}
-
-		if (UsesUEIntrinsic(ir, GET_HDR_32BPP_HDR_ENCODE_MODE_ES2))
-		{
-			ralloc_asprintf_append(buffer, "\nfloat %s() { return HDR_32BPP_ENCODE_MODE; }\n", GET_HDR_32BPP_HDR_ENCODE_MODE_ES2);
 		}
 
 		foreach_iter(exec_list_iterator, iter, *ir)
@@ -3520,13 +3535,15 @@ struct FBreakPrecisionChangesVisitor : public ir_rvalue_visitor
 					case ir_unop_i2f:
 					case ir_unop_b2f:
 					case ir_unop_u2f:
-						bGenerateNewVar = bDefaultPrecisionIsHalf;
+						// integers always use highp
+						bGenerateNewVar = false;
 						break;
 
 					case ir_unop_i2h:
 					case ir_unop_b2h:
 					case ir_unop_u2h:
-						bGenerateNewVar = !bDefaultPrecisionIsHalf;
+						// integers always use highp
+						bGenerateNewVar = true;
 						break;
 
 					case ir_unop_h2f:
@@ -3610,7 +3627,7 @@ char* FGlslCodeBackend::GenerateCode(exec_list* ir, _mesa_glsl_parse_state* stat
 	const bool bUsesDepthBufferFetch = Frequency == HSF_PixelShader && UsesUEIntrinsic(ir, DEPTHBUFFER_FETCH_ES2);
 	ir_gen_glsl_visitor visitor(state->bGenerateES,
 								bEmitPrecision,
-								bIsWebGL,
+								false,
 								Target,
 								state->target,
 								bGenerateLayoutLocations,
@@ -3624,16 +3641,13 @@ char* FGlslCodeBackend::GenerateCode(exec_list* ir, _mesa_glsl_parse_state* stat
 }
 
 // Verify if SampleLevel() is used
-struct SPromoteSampleLevelES2 : public ir_hierarchical_visitor
+struct SPromoteSampleLevel : public ir_hierarchical_visitor
 {
 	_mesa_glsl_parse_state* ParseState;
 	const bool bIsVertexShader;
-	bool bIsES2;
-
-	SPromoteSampleLevelES2(_mesa_glsl_parse_state* InParseState, bool bInIsVertexShader, bool bInIsES2) :
+	SPromoteSampleLevel(_mesa_glsl_parse_state* InParseState, bool bInIsVertexShader) :
 		ParseState(InParseState),
-		bIsVertexShader(bInIsVertexShader),
-		bIsES2(bInIsES2)
+		bIsVertexShader(bInIsVertexShader)
 	{
 	}
 
@@ -3737,7 +3751,7 @@ bool FGlslCodeBackend::ApplyAndVerifyPlatformRestrictions(exec_list* Instruction
 
 		// Handle SampleLevel
 		{
-			SPromoteSampleLevelES2 Visitor(ParseState, bIsVertexShader, Target == HCT_FeatureLevelES2);
+			SPromoteSampleLevel Visitor(ParseState, bIsVertexShader);
 			Visitor.run(Instructions);
 		}
 
@@ -5218,6 +5232,11 @@ bool FGlslCodeBackend::GenerateMain(
 						);
 					break;
 				case ir_var_out:
+					if (Frequency == HSF_PixelShader && Variable->semantic && (strcmp(Variable->semantic, "SV_Depth") == 0))
+					{
+						bExplicitDepthWrites = true;
+					}
+
 					ArgVarDeref = GenShaderOutput(
 						Frequency,
 						ParseState,
@@ -5366,7 +5385,7 @@ bool FGlslCodeBackend::GenerateMain(
 		MainSig->body.push_tail(new(ParseState)ir_call(EntryPointSig, EntryPointReturn, &ArgInstructions));
 		MainSig->body.append_list(&PostCallInstructions);
 		MainSig->maxvertexcount = EntryPointSig->maxvertexcount;
-		MainSig->is_early_depth_stencil = EntryPointSig->is_early_depth_stencil;
+		MainSig->is_early_depth_stencil = (EntryPointSig->is_early_depth_stencil && !bExplicitDepthWrites);
 		MainSig->wg_size_x = EntryPointSig->wg_size_x;
 		MainSig->wg_size_y = EntryPointSig->wg_size_y;
 		MainSig->wg_size_z = EntryPointSig->wg_size_z;
@@ -5658,16 +5677,8 @@ void FGlslCodeBackend::GenShaderPatchConstantFunctionInputs(_mesa_glsl_parse_sta
 
 void FGlslLanguageSpec::SetupLanguageIntrinsics(_mesa_glsl_parse_state* State, exec_list* ir)
 {
-	if (bIsES2)
-	{
-		make_intrinsic_genType(ir, State, GET_HDR_32BPP_HDR_ENCODE_MODE_ES2, ir_invalid_opcode, IR_INTRINSIC_ALL_FLOATING, 0);
-	}
-
-	if (bIsES2 || bIsES31)
-	{
-		make_intrinsic_genType(ir, State, FRAMEBUFFER_FETCH_ES2, ir_invalid_opcode, IR_INTRINSIC_ALL_FLOATING, 0, 4, 4);
-		make_intrinsic_genType(ir, State, DEPTHBUFFER_FETCH_ES2, ir_invalid_opcode, IR_INTRINSIC_ALL_FLOATING, 3, 1, 1);
-	}
+	make_intrinsic_genType(ir, State, FRAMEBUFFER_FETCH_ES2, ir_invalid_opcode, IR_INTRINSIC_ALL_FLOATING, 0, 4, 4);
+	make_intrinsic_genType(ir, State, DEPTHBUFFER_FETCH_ES2, ir_invalid_opcode, IR_INTRINSIC_ALL_FLOATING, 3, 1, 1);
 
 	{
 		ir_function* func = new(State)ir_function("compiler_internal_AdjustInputSemantic");

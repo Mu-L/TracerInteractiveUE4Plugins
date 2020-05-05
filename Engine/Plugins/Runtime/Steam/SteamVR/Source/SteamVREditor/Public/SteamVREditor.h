@@ -1,6 +1,6 @@
 /*
 Copyright 2019 Valve Corporation under https://opensource.org/licenses/BSD-3-Clause
-This code includes modifications by Epic Games.  Modifications (c) 2019 Epic Games, Inc.
+This code includes modifications by Epic Games.  Modifications (c) Epic Games, Inc.
 
 Redistribution and use in source and binary forms, with or without modification,
 are permitted provided that the following conditions are met:
@@ -32,6 +32,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "Modules/ModuleManager.h"
 #include "SteamVRInputDeviceFunctionLibrary.h"
+#include "IDetailCustomization.h"
 
 class FToolBarBuilder;
 class FMenuBuilder;
@@ -54,14 +55,32 @@ public:
 	void LaunchBindingsURL();
 	void AddSampleInputs();
 
+	void RegisterSettings();
+	void UnregisterSettings();
+
 private:
 
-	void AddToolbarExtension(FToolBarBuilder& Builder);
-	void AddMenuExtension(FMenuBuilder& Builder);
 	bool AddUniqueAxisMapping(TArray<FInputAxisKeyMapping> ExistingAxisKeys, UInputSettings* InputSettings, FName ActionName, FKey ActionKey);
 	bool AddUniqueActionMapping(TArray<FInputActionKeyMapping> ExistingActionKeys, UInputSettings* InputSettings, FName ActionName, FKey ActionKey);
+	bool ShowSteamVRInputToolbarDropdown();
 
 	TSharedPtr<class FUICommandList> PluginCommands;
 	TSharedRef<SWidget> FillComboButton(TSharedPtr<class FUICommandList> Commands);
 
+};
+
+class FSteamVRSettingsDetailsCustomization : public IDetailCustomization
+{
+public:
+	/** Makes a new instance of this detail layout class for a specific detail view requesting it */
+	static TSharedRef<IDetailCustomization> MakeInstance();
+
+	// IDetailCustomization interface
+	virtual void CustomizeDetails(IDetailLayoutBuilder& DetailLayout) override;
+	// End of IDetailCustomization interface
+
+	FReply RegenActionManifest();
+	FReply RegenerateControllerBindings();
+	FReply ReloadActionManifest();
+	FReply LaunchBindingsURL();
 };

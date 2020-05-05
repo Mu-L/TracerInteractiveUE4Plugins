@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.IO;
@@ -93,6 +93,7 @@ namespace UnrealBuildTool
 		/// <param name="ProjectDirectory"></param>
 		/// <param name="bIsUE4Game"></param>
 		/// <param name="GameName"></param>
+		/// <param name="bIsClient"></param>
 		/// <param name="ProjectName"></param>
 		/// <param name="InEngineDir"></param>
 		/// <param name="AppDirectory"></param>
@@ -101,10 +102,10 @@ namespace UnrealBuildTool
 		/// <param name="bSupportsLandscape"></param>
 		/// <param name="bSkipIcons"></param>
 		/// <returns></returns>
-		public static bool GeneratePList(FileReference ProjectFile, UnrealTargetConfiguration Config, DirectoryReference ProjectDirectory, bool bIsUE4Game, string GameName, string ProjectName, DirectoryReference InEngineDir, DirectoryReference AppDirectory, FileReference BuildReceiptFileName, out bool bSupportsPortrait, out bool bSupportsLandscape, out bool bSkipIcons)
+		public static bool GeneratePList(FileReference ProjectFile, UnrealTargetConfiguration Config, DirectoryReference ProjectDirectory, bool bIsUE4Game, string GameName, bool bIsClient, string ProjectName, DirectoryReference InEngineDir, DirectoryReference AppDirectory, FileReference BuildReceiptFileName, out bool bSupportsPortrait, out bool bSupportsLandscape, out bool bSkipIcons)
 		{
 			TargetReceipt Receipt = TargetReceipt.Read(BuildReceiptFileName);
-			return new UEDeployIOS().GeneratePList(ProjectFile, Config, ProjectDirectory.FullName, bIsUE4Game, GameName, ProjectName, InEngineDir.FullName, AppDirectory.FullName, Receipt, out bSupportsPortrait, out bSupportsLandscape, out bSkipIcons);
+			return new UEDeployIOS().GeneratePList(ProjectFile, Config, ProjectDirectory.FullName, bIsUE4Game, GameName, bIsClient, ProjectName, InEngineDir.FullName, AppDirectory.FullName, Receipt, out bSupportsPortrait, out bSupportsLandscape, out bSkipIcons);
 		}
 
 		/// <summary>
@@ -293,6 +294,18 @@ namespace UnrealBuildTool
 					Text.AppendLine("\t<key>aps-environment</key>");
 					Text.AppendLine(string.Format("\t<string>{0}</string>", bForDistribution ? "production" : "development"));
 				}
+
+				// for Sign in with Apple
+				bool bSignInWithAppleSupported = false;
+				PlatformGameConfig.GetBool("/Script/IOSRuntimeSettings.IOSRuntimeSettings", "bEnableSignInWithAppleSupport", out bSignInWithAppleSupported);
+
+				if (bSignInWithAppleSupported)
+				{
+					Text.AppendLine("\t<key>com.apple.developer.applesignin</key>");
+					Text.AppendLine("\t<array><string>Default</string></array>");
+				}
+
+				// End of entitlements
 				Text.AppendLine("</dict>");
 				Text.AppendLine("</plist>");
 

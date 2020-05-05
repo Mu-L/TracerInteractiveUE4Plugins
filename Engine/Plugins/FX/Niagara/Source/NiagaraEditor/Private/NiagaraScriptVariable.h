@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -16,11 +16,25 @@ public:
 	GENERATED_UCLASS_BODY()
 
 	virtual void PostLoad() override;
+
+	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
 	
+	/** The default mode. Can be Value, Binding or Custom. */
+	UPROPERTY(EditAnywhere, Category = "Default Value")
+	ENiagaraDefaultMode DefaultMode; 
+
+	/** The default binding. Only used if DefaultMode == ENiagaraDefaultMode::Binding. */
+	UPROPERTY(EditAnywhere, Category = "Default Value")
+	FNiagaraScriptVariableBinding DefaultBinding; 
+
 	/** Variable type, name and data. The data is not persistent, but used as a buffer when interfacing elsewhere. */
 	UPROPERTY()
 	FNiagaraVariable Variable;
+
 	/** The metadata associated with this script variable. */
 	UPROPERTY(EditAnywhere, Category = "Variable", meta=(ShowOnlyInnerProperties))
 	FNiagaraVariableMetaData Metadata;
+	
+	/** Entry point for generating the compile hash.*/
+	bool AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor) const;
 }; 

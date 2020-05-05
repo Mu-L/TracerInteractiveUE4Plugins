@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System.IO;
@@ -118,7 +118,8 @@ public class libOpus : ModuleRules
 			string[] Architectures = new string[] {
 				"ARMv7",
 				"ARM64",
-				"x64",
+				"x86",
+				"x64"
 			};
 
 			foreach(string Architecture in Architectures)
@@ -136,10 +137,6 @@ public class libOpus : ModuleRules
             PublicAdditionalLibraries.Add(LibraryPath + "celt.lib");
             PublicAdditionalLibraries.Add(LibraryPath + "opus.lib");
             PublicAdditionalLibraries.Add(LibraryPath + "speex_resampler.lib");
-        }
-        else if (Target.Platform == UnrealTargetPlatform.Switch)
-        {
-            PublicAdditionalLibraries.Add(LibraryPath +  "Switch/libOpus-1.1/NX64/Release/" + "libOpus-1.1.a");
         }
     }
 }

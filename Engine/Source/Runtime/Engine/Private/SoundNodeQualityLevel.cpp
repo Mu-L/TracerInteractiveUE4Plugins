@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "Sound/SoundNodeQualityLevel.h"
@@ -6,12 +6,14 @@
 #include "ActiveSound.h"
 #include "Sound/AudioSettings.h"
 #include "Sound/SoundCue.h"
+#include "Sound/SoundNode.h"
 #include "GameFramework/GameUserSettings.h"
 #include "Engine/Engine.h"
 
 #if WITH_EDITORONLY_DATA
-#include "Settings/LevelEditorPlaySettings.h"
+#include "EdGraph/EdGraph.h"
 #include "Editor.h"
+#include "Settings/LevelEditorPlaySettings.h"
 #endif
 
 #if WITH_EDITOR
@@ -63,6 +65,44 @@ void USoundNodeQualityLevel::PrimeChildWavePlayers(bool bRecurse)
 	if (ChildNodes.IsValidIndex(QualityLevel) && ChildNodes[QualityLevel])
 	{
 		ChildNodes[QualityLevel]->PrimeChildWavePlayers(bRecurse);
+	}
+}
+
+void USoundNodeQualityLevel::RetainChildWavePlayers(bool bRecurse)
+{
+	// If we're able to retrieve a valid cached quality level for this sound cue,
+	// only retain that quality level.
+	int32 QualityLevel = USoundCue::GetCachedQualityLevel();
+
+#if WITH_EDITOR
+	if (GIsEditor && QualityLevel < 0)
+	{
+		QualityLevel = GetDefault<ULevelEditorPlaySettings>()->PlayInEditorSoundQualityLevel;
+	}
+#endif
+
+	if (ChildNodes.IsValidIndex(QualityLevel) && ChildNodes[QualityLevel])
+	{
+		ChildNodes[QualityLevel]->RetainChildWavePlayers(bRecurse);
+	}
+}
+
+void USoundNodeQualityLevel::ReleaseRetainerOnChildWavePlayers(bool bRecurse)
+{
+	// If we're able to retrieve a valid cached quality level for this sound cue,
+	// only release that quality level.
+	int32 QualityLevel = USoundCue::GetCachedQualityLevel();
+
+#if WITH_EDITOR
+	if (GIsEditor && QualityLevel < 0)
+	{
+		QualityLevel = GetDefault<ULevelEditorPlaySettings>()->PlayInEditorSoundQualityLevel;
+	}
+#endif
+
+	if (ChildNodes.IsValidIndex(QualityLevel) && ChildNodes[QualityLevel])
+	{
+		ChildNodes[QualityLevel]->ReleaseRetainerOnChildWavePlayers(bRecurse);
 	}
 }
 

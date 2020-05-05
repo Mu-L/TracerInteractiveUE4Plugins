@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Curves/KeyHandle.h"
 
@@ -47,6 +47,17 @@ void FKeyHandleMap::Add( const FKeyHandle& InHandle, int32 InIndex )
 	}
 
 	KeyHandlesToIndices.Add(InHandle, InIndex);
+}
+
+
+void FKeyHandleMap::SetKeyHandles(int32 Num)
+{
+	KeyHandles.SetNum(Num);
+	KeyHandlesToIndices.Reserve(Num);
+	for (int32 Index = 0; Index < Num; ++Index)
+	{
+		KeyHandlesToIndices.Add(FKeyHandle(), Index);
+	}
 }
 
 

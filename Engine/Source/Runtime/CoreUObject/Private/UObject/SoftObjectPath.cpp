@@ -1,10 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UObject/SoftObjectPath.h"
 #include "UObject/PropertyPortFlags.h"
 #include "UObject/UnrealType.h"
 #include "UObject/ObjectRedirector.h"
 #include "Misc/PackageName.h"
+#include "Misc/StringBuilder.h"
 #include "UObject/LinkerLoad.h"
 #include "UObject/UObjectThreadContext.h"
 #include "UObject/CoreRedirects.h"
@@ -21,29 +22,49 @@ FSoftObjectPath::FSoftObjectPath(const UObject* InObject)
 FString FSoftObjectPath::ToString() const
 {
 	// Most of the time there is no sub path so we can do a single string allocation
-	FString AssetPathString = GetAssetPathString();
 	if (SubPathString.IsEmpty())
 	{
-		return AssetPathString;
+		return GetAssetPathString();
 	}
+
+	TCHAR Buffer[FName::StringBufferSize];
+	FStringView AssetPathString;
+	if (AssetPathName.IsValid())
+	{
+		AssetPathString = FStringView(Buffer, AssetPathName.ToString(Buffer));
+	}
+
 	FString FullPathString;
 
 	// Preallocate to correct size and then append strings
-	FullPathString.Empty(AssetPathString.Len() + SubPathString.Len() + 1);
-	FullPathString.Append(AssetPathString);
-	FullPathString.AppendChar(':');
-	FullPathString.Append(SubPathString);
+	FullPathString.Reserve(AssetPathString.Len() + SubPathString.Len() + 1);
+	FullPathString += AssetPathString;
+	FullPathString += ':';
+	FullPathString += SubPathString;
 	return FullPathString;
 }
 
-void FSoftObjectPath::SetPath(FString Path)
+void FSoftObjectPath::ToString(FStringBuilderBase& Builder) const
+{
+	if (!AssetPathName.IsNone())
+	{
+		Builder << AssetPathName;
+	}
+
+	if (SubPathString.Len() > 0)
+	{
+		Builder << ':' << SubPathString;
+	}
+}
+
+void FSoftObjectPath::SetPath(FWideStringView Path)
 {
 	if (Path.IsEmpty() || Path.Equals(TEXT("None"), ESearchCase::CaseSensitive))
 	{
 		// Empty path, just empty the pathname.
 		Reset();
 	}
-	else if (ensureMsgf(!FPackageName::IsShortPackageName(Path), TEXT("Cannot create SoftObjectPath with short package name '%s'! You must pass in fully qualified package names"), *Path))
+	else if (ensureMsgf(!FPackageName::IsShortPackageName(Path), TEXT("Cannot create SoftObjectPath with short package name '%.*s'! You must pass in fully qualified package names"), Path.Len(), Path.GetData()))
 	{
 		if (Path[0] != '/')
 		{
@@ -51,20 +72,61 @@ void FSoftObjectPath::SetPath(FString Path)
 			Path = FPackageName::ExportTextPathToObjectPath(Path);
 		}
 
-		int32 ColonIndex = INDEX_NONE;
-
+		int32 ColonIndex;
 		if (Path.FindChar(':', ColonIndex))
 		{
 			// Has a subobject, split on that then create a name from the temporary path
+			AssetPathName = FName(Path.Left(ColonIndex));
 			SubPathString = Path.Mid(ColonIndex + 1);
-			Path.RemoveAt(ColonIndex, Path.Len() - ColonIndex);
-			AssetPathName = *Path;
 		}
 		else
 		{
 			// No Subobject
-			AssetPathName = *Path;
+			AssetPathName = FName(Path);
 			SubPathString.Empty();
+		}
+	}
+}
+
+void FSoftObjectPath::SetPath(FAnsiStringView Path)
+{
+	TStringBuilder<256> Wide;
+	Wide << Path;
+	SetPath(Wide);
+}
+
+void FSoftObjectPath::SetPath(FName PathName)
+{
+	if (PathName.IsNone())
+	{
+		Reset();
+	}
+	else
+	{
+		TCHAR Buffer[FName::StringBufferSize];
+		FStringView Path(Buffer, PathName.ToString(Buffer));
+
+		if (ensureMsgf(!FPackageName::IsShortPackageName(Path), TEXT("Cannot create SoftObjectPath with short package name '%s'! You must pass in fully qualified package names"), Path.GetData()))
+		{
+			if (Path[0] != '/')
+			{
+				// Possibly an ExportText path. Trim the ClassName.
+				Path = FPackageName::ExportTextPathToObjectPath(Path);
+			}
+
+			int32 ColonIndex;
+			if (Path.FindChar(':', ColonIndex))
+			{
+				// Has a subobject, split on that then create a name from the temporary path
+				AssetPathName = FName(Path.Left(ColonIndex));
+				SubPathString = Path.Mid(ColonIndex + 1);
+			}
+			else
+			{
+				// No Subobject
+				AssetPathName = Path.GetData() == Buffer ? PathName : FName(Path);
+				SubPathString.Empty();
+			}
 		}
 	}
 }
@@ -203,13 +265,6 @@ bool FSoftObjectPath::operator==(FSoftObjectPath const& Other) const
 	return AssetPathName == Other.AssetPathName && SubPathString == Other.SubPathString;
 }
 
-FSoftObjectPath& FSoftObjectPath::operator=(FSoftObjectPath Other)
-{
-	AssetPathName = Other.AssetPathName;
-	SubPathString = MoveTemp(Other.SubPathString);
-	return *this;
-}
-
 bool FSoftObjectPath::ExportTextItem(FString& ValueStr, FSoftObjectPath const& DefaultValue, UObject* Parent, int32 PortFlags, UObject* ExportRootScope) const
 {
 	if (0 != (PortFlags & EPropertyPortFlags::PPF_ExportCpp))
@@ -234,26 +289,26 @@ bool FSoftObjectPath::ExportTextItem(FString& ValueStr, FSoftObjectPath const& D
 
 bool FSoftObjectPath::ImportTextItem(const TCHAR*& Buffer, int32 PortFlags, UObject* Parent, FOutputDevice* ErrorText, FArchive* InSerializingArchive)
 {
-	FString ImportedPath;
-	const TCHAR* NewBuffer = UPropertyHelpers::ReadToken(Buffer, ImportedPath, 1);
+	TStringBuilder<256> ImportedPath;
+	const TCHAR* NewBuffer = FPropertyHelpers::ReadToken(Buffer, /* out */ ImportedPath, /* dotted names */ true);
 	if (!NewBuffer)
 	{
 		return false;
 	}
 	Buffer = NewBuffer;
-	if (ImportedPath == TEXT("None"))
+	if (ImportedPath == TEXT("None"_SV))
 	{
-		ImportedPath = TEXT("");
+		Reset();
 	}
 	else
 	{
 		if (*Buffer == TCHAR('\''))
 		{
 			// A ' token likely means we're looking at a path string in the form "Texture2d'/Game/UI/HUD/Actions/Barrel'" and we need to read and append the path part
-			// We have to skip over the first ' as UPropertyHelpers::ReadToken doesn't read single-quoted strings correctly, but does read a path correctly
+			// We have to skip over the first ' as FPropertyHelpers::ReadToken doesn't read single-quoted strings correctly, but does read a path correctly
 			Buffer++; // Skip the leading '
 			ImportedPath.Reset();
-			NewBuffer = UPropertyHelpers::ReadToken(Buffer, ImportedPath, 1);
+			NewBuffer = FPropertyHelpers::ReadToken(Buffer, /* out */ ImportedPath, /* dotted names */ true);
 			if (!NewBuffer)
 			{
 				return false;
@@ -264,9 +319,9 @@ bool FSoftObjectPath::ImportTextItem(const TCHAR*& Buffer, int32 PortFlags, UObj
 				return false;
 			}
 		}
-	}
 
-	SetPath(MoveTemp(ImportedPath));
+		SetPath(ImportedPath);
+	}
 
 #if WITH_EDITOR
 	if (Parent && IsEditorOnlyObject(Parent))
@@ -627,7 +682,7 @@ bool FSoftObjectPathThreadContext::GetSerializationOptions(FName& OutPackageName
 	// Check archive for property/editor only info, this works for any serialize if passed in
 	if (Archive)
 	{
-		UProperty* CurrentProperty = Archive->GetSerializedProperty();
+		FProperty* CurrentProperty = Archive->GetSerializedProperty();
 			
 		if (CurrentProperty && CurrentPropertyName == NAME_None)
 		{

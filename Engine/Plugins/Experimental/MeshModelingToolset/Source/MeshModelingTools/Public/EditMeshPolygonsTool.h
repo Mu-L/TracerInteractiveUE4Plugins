@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,7 +7,7 @@
 #include "BaseTools/MeshSurfacePointTool.h"
 #include "SimpleDynamicMeshComponent.h"
 #include "DynamicMeshAABBTree3.h"
-#include "Drawing/ToolDataVisualizer.h"
+#include "ToolDataVisualizer.h"
 #include "Transforms/QuickAxisTranslater.h"
 #include "Transforms/QuickAxisRotator.h"
 #include "Changes/MeshVertexChange.h"
@@ -15,15 +15,18 @@
 #include "Spatial/GeometrySet3.h"
 #include "Selection/GroupTopologySelector.h"
 #include "Operations/GroupTopologyDeformer.h"
-#include "MeshSolverUtilities/Private/LaplacianMeshSmoother.h"
-#include "Curves/CurveFloat.h"
 #include "ModelingOperators/Public/ModelingTaskTypes.h"
+#include "Transforms/MultiTransformer.h"
+#include "Changes/ValueWatcher.h"
+#include "Selection/PolygonSelectionMechanic.h"
+#include "Mechanics/PlaneDistanceFromHitMechanic.h"
+#include "Mechanics/SpatialCurveDistanceMechanic.h"
+#include "Mechanics/CollectSurfacePathMechanic.h"
+#include "Drawing/PolyEditPreviewMesh.h"
 #include "EditMeshPolygonsTool.generated.h"
 
 class FMeshVertexChangeBuilder;
-class FGroupTopologyLaplacianDeformer;
-class FDeformTask;
-struct FConstraintData;
+
 
 /**
  * ToolBuilder
@@ -32,64 +35,20 @@ UCLASS()
 class MESHMODELINGTOOLS_API UEditMeshPolygonsToolBuilder : public UMeshSurfacePointToolBuilder
 {
 	GENERATED_BODY()
-
 public:
-	UEditMeshPolygonsToolBuilder()
-	{
-	}
+	bool bTriangleMode = false;
 
 	virtual UMeshSurfacePointTool* CreateNewTool(const FToolBuilderState& SceneState) const override;
 };
 
-/** Deformation strategies */
-UENUM()
-enum class EGroupTopologyDeformationStrategy : uint8
-{
-	/** Deforms the mesh using linear translations*/
-	Linear UMETA(DisplayName = "Linear"),
-
-	/** Deforms the mesh using laplacian deformation*/
-	Laplacian UMETA(DisplayName = "Laplacian")
-};
-
-/** Laplacian weight schemes determine how we will look at the curvature at a given vertex in relation to its neighborhood*/
-UENUM()
-enum class EWeightScheme 
-{
-	Uniform				UMETA(DisplayName = "Uniform"),
-	Umbrella			UMETA(DisplayName = "Umbrella"),
-	Valence				UMETA(DisplayName = "Valence"),
-	MeanValue			UMETA(DisplayName = "MeanValue"),
-	Cotangent			UMETA(DisplayName = "Cotangent"),
-	ClampedCotangent	UMETA(DisplayName = "ClampedCotangent")
-};
-
-/** The ELaplacianWeightScheme enum is the same..*/
-static ELaplacianWeightScheme ConvertToLaplacianWeightScheme(const EWeightScheme WeightScheme)
-{
-	return static_cast<ELaplacianWeightScheme>(WeightScheme);
-}
-
-/** Modes for quick transformer */
-UENUM()
-enum class EQuickTransformerMode : uint8
-{
-	/** Translation along frame axes */
-	AxisTranslation = 0 UMETA(DisplayName = "Translate"),
-
-	/** Rotation around frame axes*/
-	AxisRotation = 1 UMETA(DisplayName = "Rotate"),
-};
 
 
 UENUM()
-enum class EPolygonGroupMode : uint8
+enum class ELocalFrameMode
 {
-	KeepInputPolygons						UMETA(DisplayName = "Edit Input Polygons"),
-	RecomputePolygonsByAngleThreshold		UMETA(DisplayName = "Recompute Polygons Based on Angle Threshold"),
-	PolygonsAreTriangles					UMETA(DisplayName = "Edit Triangles Directly")
+	FromObject,
+	FromGeometry
 };
-
 
 
 UCLASS()
@@ -98,306 +57,319 @@ class MESHMODELINGTOOLS_API UPolyEditTransformProperties : public UInteractiveTo
 	GENERATED_BODY()
 
 public:
-	UPolyEditTransformProperties();
-
-#if WITH_EDITOR
-	// UObject interface
-	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
-	// End of UObject interface
-#endif
-
-	//Options
-
-	UPROPERTY(EditAnywhere, Category = Options, meta = (DisplayName = "Deformation Type", ToolTip = "Select the type of deformation you wish to employ on a polygroup."))
-	EGroupTopologyDeformationStrategy DeformationStrategy;
-
 	UPROPERTY(EditAnywhere, Category = Options)
-	EQuickTransformerMode TransformMode;
+	bool bShowWireframe = false;
 
-	UPROPERTY(EditAnywhere, Category = Options)
-	bool bSelectFaces;
+UPROPERTY(EditAnywhere, Category = Gizmo)
+	ELocalFrameMode LocalFrameMode = ELocalFrameMode::FromGeometry;
 
-	UPROPERTY(EditAnywhere, Category = Options)
-	bool bSelectEdges;
+	UPROPERTY(EditAnywhere, Category = Gizmo)
+	bool bLockRotation = false;
 
-	UPROPERTY(EditAnywhere, Category = Options)
-	bool bSelectVertices;
+	UPROPERTY(EditAnywhere, Category = Gizmo)
+	bool bSnapToWorldGrid = false;
 
-	UPROPERTY(EditAnywhere, Category = Options, meta = (DisplayName = "Show Triangle Mesh Wireframe"))
-	bool bWireframe;
-
-	UPROPERTY(EditAnywhere, Category = Options)
-	EPolygonGroupMode PolygonMode;
-
-	UPROPERTY(EditAnywhere, Category = Options, meta = (EditCondition="PolygonMode == EPolygonGroupMode::RecomputePolygonsByAngleThreshold"))
-	float PolygonGroupingAngleThreshold;
-
-	//Laplacian Deformation Options, currently not exposed.
-
-	UPROPERTY() 
-	EWeightScheme SelectedWeightScheme = EWeightScheme::ClampedCotangent;
-
-	UPROPERTY() 
-	double HandleWeight = 1000.0;
-
-	UPROPERTY()
-	bool bPostFixHandles = false;
-/**
-	// How to add a weight curve
-	UPROPERTY(EditAnywhere, Category = LaplacianOptions, meta = (EditCondition="DeformationStrategy == EGroupTopologyDeformationStrategy::Laplacian", DisplayName = "Localize Deformation", ToolTip = "When enabled, only the vertices in the polygroups immediately adjacent to the selected group will be affected by the deformation.\nWhen disabled, the deformer will solve for the curvature of the entire mesh (slower)"))
-	bool bLocalizeDeformation{ true};
-
-	UPROPERTY(EditAnywhere, Category = LaplacianOptions, meta = (EditCondition="DeformationStrategy == EGroupTopologyDeformationStrategy::Laplacian", DisplayName = "Apply Weight Attenuation Curve", ToolTip = "When enabled, the curve below will be used to calculate the weight at a given vertex based on distance from the handles"))
-	bool bApplyAttenuationCurve{ false };
-	
-	FRichCurve DefaultFalloffCurve;
-
-	UPROPERTY(EditAnywhere,  Category = LaplacianOptions, meta = ( EditCondition="DeformationStrategy == EGroupTopologyDeformationStrategy::Laplacian && bApplyAttenuationCurve", DisplayName = "Distance-Weight Attenuation Curve",UIMin = "1.0", UIMax = "1.0", ClampMin = "1.0", ClampMax = "1.0", ToolTip = "This curve determines the weight attenuation over the distance of the mesh.\nThe selected polygroup handle is t=0.0, and t=1.0 is roughly the farthest vertices from the handles.\nThe value of the curve at each time interval represents the weight of the vertices at that distance from the selection."))
-	FRuntimeFloatCurve WeightAttenuationCurve;
-*/ 
 };
 
-//Stores per-vertex data needed by the laplacian deformer object
-//TODO: May be a candidate for a subclass of the FGroupTopologyLaplacianDeformer
-struct FConstraintData
-{
-	FConstraintData& operator=(const FConstraintData& other)
-	{
-		Position = other.Position;
-		Weight   = other.Weight;
-		bPostFix = other.bPostFix;
-		return *this;
-	}
 
-	FVector3d Position;
-	double Weight{ 0.0 };
-	bool bPostFix{ false };
+
+
+
+
+UENUM()
+enum class EEditMeshPolygonsToolActions
+{
+	NoAction,
+	PlaneCut,
+	Extrude,
+	Offset,
+	Inset,
+	Outset,
+	Merge,
+	Delete,
+	CutFaces,
+	RecalculateNormals,
+	FlipNormals,
+	Retriangulate,
+	Decompose,
+	Disconnect,
+
+	CollapseEdge,
+	WeldEdges,
+	StraightenEdge,
+	FillHole,
+
+	PlanarProjectionUV,
+
+	// triangle-specific edits
+	PokeSingleFace,
+	SplitSingleEdge,
+	FlipSingleEdge,
+	CollapseSingleEdge
+
 };
 
-/**
-*	FDeformTask is an object which wraps an asynchronous task to be run multiple times on a separate thread.
-*	The Laplacian deformation process requires the use of potentially large sparse matrices and sparse multiplication.
-*	
-*   Expected usage:
-*
-*   
-*   // define constraints.  Need Constraints[VertID] to hold the constraints for the corresponding vertex.
-*   TArray<FConstraintData> Constraints;
-*   ....
-*
-*   // populate with the VertexIDs of the vertices that are in the region you wish to deform.  
-*   TArray<int32> SrcVertIDs;  //Basically a mini-index buffer.
-*   ...
-* 
-*   // Create or reuse a laplacian deformation task.
-*   FDeformTask*   DeformTask = New FDeformTask(WeightScheme);
-*
-*   // the deformer will have to build a new mesh that represents the regions in SrcVertIDs;
-*   // but set this to false on subsequent calls to UpdateDeformer if the SrcVertIDs array hasn't changed.
-*   bool bRequiresRegion = true;
 
-*   DefTask->UpdateDeformer(WeightScheme, Mesh, Constraints, SrcVertIDs, bRequiresRegion);
-*
-*   DeformTask->DoWork();  or DeformTask->StartBackgroundTask(); //which calls DoWork on background thread.
-*
-*  // wheh DeformTask->IsDone == true; you can copy the results back to the mesh
-*  DeformTask->ExportResults(Mesh);
-*
-* Note: if only the positions in the Constraints change (e.g. handle positions) then subsequent calls 
-* to UpdateDeformer() and DoWork() will be much faster as the matrix system will not be rebuilt or re-factored
-*/
-class FConstrainedMeshDeformerTask : public FNonAbandonableTask
+
+
+UCLASS()
+class MESHMODELINGTOOLS_API UEditMeshPolygonsToolActionPropertySet : public UInteractiveToolPropertySet
 {
-	friend class FAsyncTask<FDeformTask>;
+	GENERATED_BODY()
+
 public:
+	TWeakObjectPtr<UEditMeshPolygonsTool> ParentTool;
 
-	enum
-	{
-		INACTIVE_SUBSET_ID = -1
-	};
+	void Initialize(UEditMeshPolygonsTool* ParentToolIn) { ParentTool = ParentToolIn; }
 
-	FConstrainedMeshDeformerTask(const ELaplacianWeightScheme SelectedWeightScheme)
-	{
-		LaplacianWeightScheme = SelectedWeightScheme;
-	}
-
-	virtual ~FConstrainedMeshDeformerTask() {};
-
-	//NO idea what this is meant to do. Performance analysis maybe? Scheduling data?
-	FORCEINLINE TStatId GetStatId() const
-	{
-		RETURN_QUICK_DECLARE_CYCLE_STAT(FConstrainedMeshDeformerTask, STATGROUP_ThreadPoolAsyncTasks);
-	}
-
-	
-	/** Called by the main thread in the tool, this copies the Constraint buffer right before the task begins on another thread.
-	  * Ensures the FConstrainedMeshDeformer is using correct mesh subset and the selected settings, then updates on change in properties, i.e. weight scheme */
-	void UpdateDeformer(const ELaplacianWeightScheme SelectedWeightScheme, const FDynamicMesh3& Mesh, const TArray<FConstraintData>& ConstraintArray, const TArray<int32>& SrcIDBufferSubset, bool bNewTransaction, const FRichCurve* Curve);
-
-	/** Required by the FAsyncTaskExecutor */
-	void SetAbortSource(bool* bAbort) { bAbortSource = bAbort; };
-
-	/** Called by the FAsyncTask<FDeformTask> object for background computation. */
-	void DoWork();
-
-
-	/** Updates the positions in the target mesh for regions that correspond to the subset mesh */
-	void ExportResults(FDynamicMesh3& TargetMesh) const;
-
-private:
-
-	/** Creates the mesh (i.e. SubsetMesh) that corresponds to the region of the SrcMesh defined by the partial index buffer SrcIDBufferSubset */
-	void InitializeSubsetMesh(const FDynamicMesh3& SrcMesh, const TArray<int32>& SrcIDBufferSubset);
-
-	/** Attenuates the weights of the constraints using the selected curve */
-	void ApplyAttenuation();
-
-	/** Denotes the weight scheme being used by the running background task. Changes when selected property changes in editor. */
-	ELaplacianWeightScheme LaplacianWeightScheme;
-
-	/** positions for each vertex in the subset mesh - for use in the deformer */
-	TArray<FVector3d> SubsetPositionBuffer;
-
-	/** constraint data for each vertex in subset mesh - for use by the deformer*/
-	TArray<FConstraintData> SubsetConstraintBuffer;
-
-	FRichCurve WeightAttenuationCurve;
-
-	/** True only for the first update, and then false for the duration of the Input transaction
-	  * It's passed in and copied in UpdateDeformer() */
-	bool bIsNewTransaction = true;
-
-	/** When true, the constraint weights will be attenuated based on distance using the provided curve object*/
-	bool bAttenuateWeights = false;
-
-	/** The abort bool used by the Task Deleter */
-	bool* bAbortSource = nullptr;
-
-	/** Used to initialize the array mapping, updated during the UpdateDeformer() function */
-	int SrcMeshMaxVertexID;
-
-	/** A subset of the original mesh */
-	FDynamicMesh3 SubsetMesh;
-
-	/** Maps Subset Mesh VertexID to Src Mesh VertexID */
-	TArray<int32> SubsetVertexIDToSrcVertexIDMap;
-
-	/** Laplacian deformer object gets rebuilt each new transaction */
-	TUniquePtr<FConstrainedMeshDeformer> ConstrainedDeformer;
-
-private :
-	FConstrainedMeshDeformerTask();
-
+	void PostAction(EEditMeshPolygonsToolActions Action);
 };
 
-class FGroupTopologyLaplacianDeformer : public FGroupTopologyDeformer
+
+
+UCLASS()
+class MESHMODELINGTOOLS_API UEditMeshPolygonsToolActions : public UEditMeshPolygonsToolActionPropertySet
 {
+	GENERATED_BODY()
+public:
+	/** Extrude the current set of selected faces. Click in viewport to confirm extrude height. */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "Extrude", DisplayPriority = 1))
+	void Extrude() { PostAction(EEditMeshPolygonsToolActions::Extrude); }
+
+	/** Offset the current set of selected faces. Click in viewport to confirm offset distance. */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "Offset", DisplayPriority = 2))
+	void Offset() { PostAction(EEditMeshPolygonsToolActions::Offset); }
+
+	/** Inset the current set of selected faces. Click in viewport to confirm inset distance. */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "Inset", DisplayPriority = 3))
+	void Inset() { PostAction(EEditMeshPolygonsToolActions::Inset);	}
+
+	/** Outset the current set of selected faces. Click in viewport to confirm outset distance. */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "Outset", DisplayPriority = 3))
+	void Outset() { PostAction(EEditMeshPolygonsToolActions::Outset); }
+
+	/** Merge the current set of selected faces into a single face. */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "Merge", DisplayPriority = 4))
+	void Merge() { PostAction(EEditMeshPolygonsToolActions::Merge);	}
+
+	/** Delete the current set of selected faces */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "Delete", DisplayPriority = 4))
+	void Delete() { PostAction(EEditMeshPolygonsToolActions::Delete); }
+
+	/** Cut the current set of selected faces. Click twice in viewport to set cut line. */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "CutFaces", DisplayPriority = 5))
+	void CutFaces() { PostAction(EEditMeshPolygonsToolActions::CutFaces); }
+
+	/** Recalculate normals for the current set of selected faces */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "RecalcNormals", DisplayPriority = 6))
+	void RecalcNormals() { PostAction(EEditMeshPolygonsToolActions::RecalculateNormals); }
+
+	/** Flip normals and face orientation for the current set of selected faces */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "Flip", DisplayPriority = 7))
+	void Flip() { PostAction(EEditMeshPolygonsToolActions::FlipNormals); }
+
+	/** Retriangulate each of the selected faces */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "Retriangulate", DisplayPriority = 9))
+	void Retriangulate() { PostAction(EEditMeshPolygonsToolActions::Retriangulate);	}
+
+	/** Split each of the selected faces into a separate polygon for each triangle */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "Decompose", DisplayPriority = 10))
+	void Decompose() { PostAction(EEditMeshPolygonsToolActions::Decompose);	}
+
+	/** Separate the selected faces at their borders */
+	UFUNCTION(CallInEditor, Category = FaceEdits, meta = (DisplayName = "Disconnect", DisplayPriority = 11))
+	void Disconnect() { PostAction(EEditMeshPolygonsToolActions::Disconnect); }
+};
+
+
+
+UCLASS()
+class MESHMODELINGTOOLS_API UEditMeshPolygonsToolActions_Triangles : public UEditMeshPolygonsToolActionPropertySet
+{
+	GENERATED_BODY()
+public:
+	/** Extrude the current set of selected faces. Click in viewport to confirm extrude height. */
+	UFUNCTION(CallInEditor, Category = TriangleEdits, meta = (DisplayName = "Extrude", DisplayPriority = 1))
+	void Extrude() { PostAction(EEditMeshPolygonsToolActions::Extrude); }
+
+	/** Offset the current set of selected faces. Click in viewport to confirm offset distance. */
+	UFUNCTION(CallInEditor, Category = TriangleEdits, meta = (DisplayName = "Offset", DisplayPriority = 2))
+	void Offset() { PostAction(EEditMeshPolygonsToolActions::Offset); }
+
+	/** Inset the current set of selected faces. Click in viewport to confirm inset distance. */
+	UFUNCTION(CallInEditor, Category = TriangleEdits, meta = (DisplayName = "Inset", DisplayPriority = 3))
+	void Inset() { PostAction(EEditMeshPolygonsToolActions::Inset);	}
+
+	/** Outset the current set of selected faces. Click in viewport to confirm outset distance. */
+	UFUNCTION(CallInEditor, Category = TriangleEdits, meta = (DisplayName = "Outset", DisplayPriority = 3))
+	void Outset() { PostAction(EEditMeshPolygonsToolActions::Outset); }
+
+	/** Delete the current set of selected faces */
+	UFUNCTION(CallInEditor, Category = TriangleEdits, meta = (DisplayName = "Delete", DisplayPriority = 4))
+	void Delete() { PostAction(EEditMeshPolygonsToolActions::Delete); }
+
+	/** Cut the current set of selected faces. Click twice in viewport to set cut line. */
+	UFUNCTION(CallInEditor, Category = TriangleEdits, meta = (DisplayName = "CutFaces", DisplayPriority = 5))
+	void CutFaces() { PostAction(EEditMeshPolygonsToolActions::CutFaces); }
+
+	/** Recalculate normals for the current set of selected faces */
+	UFUNCTION(CallInEditor, Category = TriangleEdits, meta = (DisplayName = "RecalcNormals", DisplayPriority = 6))
+	void RecalcNormals() { PostAction(EEditMeshPolygonsToolActions::RecalculateNormals); }
+
+	/** Flip normals and face orientation for the current set of selected faces */
+	UFUNCTION(CallInEditor, Category = TriangleEdits, meta = (DisplayName = "Flip", DisplayPriority = 7))
+	void Flip() { PostAction(EEditMeshPolygonsToolActions::FlipNormals); }
+
+	/** Separate the selected faces at their borders */
+	UFUNCTION(CallInEditor, Category = TriangleEdits, meta = (DisplayName = "Disconnect", DisplayPriority = 11))
+	void Disconnect() { PostAction(EEditMeshPolygonsToolActions::Disconnect); }
+
+	/** Poke each face at its center point */
+	UFUNCTION(CallInEditor, Category = TriangleEdits, meta = (DisplayName = "Poke", DisplayPriority = 12))
+	void Poke() { PostAction(EEditMeshPolygonsToolActions::PokeSingleFace); }
+};
+
+
+
+
+
+UCLASS()
+class MESHMODELINGTOOLS_API UEditMeshPolygonsToolUVActions : public UEditMeshPolygonsToolActionPropertySet
+{
+	GENERATED_BODY()
 
 public:
 
-	FGroupTopologyLaplacianDeformer() = default;
-
-	virtual ~FGroupTopologyLaplacianDeformer();
-
-	/** Used to begin a procedural addition of modified vertices */
-	inline void ResetModifiedVertices()
+	/** Assign planar-projection UVs to mesh */
+	UFUNCTION(CallInEditor, Category = UVs, meta = (DisplayName = "PlanarProjection", DisplayPriority = 11))
+	void PlanarProjection()
 	{
-		ModifiedVertices.Empty();
-	};
-
-	/** Change tracking */
-	template <typename ValidSetAppendContainerType>
-	void RecordModifiedVertices(const ValidSetAppendContainerType& Container)
-	{
-		ModifiedVertices.Empty();
-		ModifiedVertices.Append(Container);
+		PostAction(EEditMeshPolygonsToolActions::PlanarProjectionUV);
 	}
-
-	/** Used to iteratively add to the active change set (TSet<>)*/
-	inline void RecordModifiedVertex(int32 VertexID)
-	{
-		ModifiedVertices.Add(VertexID);
-	};
-
-
-	void SetActiveHandleFaces(const TArray<int>& FaceGroupIDs) override;
-	void SetActiveHandleEdges(const TArray<int>& TopologyEdgeIDs) override;
-	void SetActiveHandleCorners(const TArray<int>& TopologyCornerIDs) override;
+};
 
 
 
-	/** Allocates shared storage for use in task synchronization */
-	void InitBackgroundWorker(const ELaplacianWeightScheme WeightScheme);
 
 
-	/** Coordinates the background tasks. Returns false if the worker was already running */
-	bool UpdateAndLaunchdWorker(const ELaplacianWeightScheme WeightScheme, const FRichCurve* Curve = nullptr);
+UCLASS()
+class MESHMODELINGTOOLS_API UEditMeshPolygonsToolEdgeActions : public UEditMeshPolygonsToolActionPropertySet
+{
+	GENERATED_BODY()
+public:
+	UFUNCTION(CallInEditor, Category = EdgeEdits, meta = (DisplayName = "Weld", DisplayPriority = 1))
+	void Weld() { PostAction(EEditMeshPolygonsToolActions::WeldEdges); }
 
-	/** Capture data about background task state.*/
-	bool IsTaskInFlight() const;
+	UFUNCTION(CallInEditor, Category = EdgeEdits, meta = (DisplayName = "Straighten", DisplayPriority = 1))
+	void Straighten() { PostAction(EEditMeshPolygonsToolActions::StraightenEdge); }
 
-
-
-	/** Sets the SrcMeshConstraintBuffer to have a size of MaxVertexID, and initializes with the current mesh positions, but weight zero*/
-	void InitializeConstraintBuffer();
-
-	/** Given an array of Group IDs, update the selection and record vertices */
-	void UpdateSelection(const FDynamicMesh3* TargetMesh, const TArray<int>& Groups, bool bLocalizeDeformation);
-
-	/** Updates the mesh preview and/or solvers upon user input, provided a deformation strategy */
-	void UpdateSolution(FDynamicMesh3* TargetMesh, const TFunction<FVector3d(FDynamicMesh3* Mesh, int)>& HandleVertexDeformFunc) override;
-
-	/** Updates the vertex positions of the mesh with the result from the last deformation solve. */
-	void ExportDeformedPositions(FDynamicMesh3* TargetMesh);
-
-	/** Returns true if the asynchronous task has finished. */
-	inline bool IsDone() { return AsyncMeshDeformTask == nullptr || AsyncMeshDeformTask->IsDone(); };
-
-	/** Triggers abort on task and passes off ownership to deleter object */
-	inline void Shutdown();
-
-	const TArray<FROIFace>& GetROIFaces() const { return ROIFaces; }
-
-	/** Stores the position of the vertex constraints and corresponding weights for the entire mesh.  This is used as a form of scratch space.*/
-	TArray<FConstraintData> SrcMeshConstraintBuffer;
-
-	/** Array of vertex indices organized in groups of three - basically an index buffer - that defines the subset of the mesh that the deformation task will work on.*/
-	TArray<int32> SubsetIDBuffer;
-
-	/** Need to update the task with the current submesh */
-	bool bTaskSubmeshIsDirty = true;
-
-	/** Asynchronous task object. This object deals with expensive matrix functionality that computes the deformation of a local mesh. */
-	FAsyncTaskExecuterWithAbort<FConstrainedMeshDeformerTask>* AsyncMeshDeformTask = nullptr;
+	/** Fill the adjacent hole for any selected boundary edges */
+	UFUNCTION(CallInEditor, Category = EdgeEdits, meta = (DisplayName = "Fill Hole", DisplayPriority = 1))
+	void FillHole()	{ PostAction(EEditMeshPolygonsToolActions::FillHole); }
+};
 
 
-	/** The weight which will be applied to the constraints corresponding to the handle vertices. */
-	double HandleWeights = 1.0;
+UCLASS()
+class MESHMODELINGTOOLS_API UEditMeshPolygonsToolEdgeActions_Triangles : public UEditMeshPolygonsToolActionPropertySet
+{
+	GENERATED_BODY()
+public:
+	UFUNCTION(CallInEditor, Category = EdgeEdits, meta = (DisplayName = "Weld", DisplayPriority = 1))
+	void Weld() { PostAction(EEditMeshPolygonsToolActions::WeldEdges); }
 
-	/** This is set to true whenever the user interacts with the tool under laplacian deformation mode.
-	  * It is set to false immediately before beginning a background task and cannot be set to false again until the work is done. */
-	bool bDeformerNeedsToRun = false;
+	/** Fill the adjacent hole for any selected boundary edges */
+	UFUNCTION(CallInEditor, Category = EdgeEdits, meta = (DisplayName = "Fill Hole", DisplayPriority = 1))
+	void FillHole() { PostAction(EEditMeshPolygonsToolActions::FillHole); }
 
+	UFUNCTION(CallInEditor, Category = EdgeEdits, meta = (DisplayName = "Collapse", DisplayPriority = 1))
+	void Collapse() { PostAction(EEditMeshPolygonsToolActions::CollapseSingleEdge); }
 
-	/** When true, tells the solver to attempt to postfix the actual position of the handles to the constrained position */
-	bool bPostfixHandles = false;
+	UFUNCTION(CallInEditor, Category = EdgeEdits, meta = (DisplayName = "Flip", DisplayPriority = 1))
+	void Flip() { PostAction(EEditMeshPolygonsToolActions::FlipSingleEdge); }
 
-	//This is set to false only after 
-	//	1) the asynchronous deformation task is complete
-	//	2) the main thread has seen it complete, and
-	//	3) the main thread updates the vertex positions of the mesh one last time
-	bool bVertexPositionsNeedSync = false;
-
-	bool bLocalize =  true;
+	UFUNCTION(CallInEditor, Category = EdgeEdits, meta = (DisplayName = "Split", DisplayPriority = 1))
+	void Split() { PostAction(EEditMeshPolygonsToolActions::SplitSingleEdge); }
 
 };
+
+
+
+
+UENUM()
+enum class EPolyEditExtrudeDirection
+{
+	SelectionNormal,
+	WorldX,
+	WorldY,
+	WorldZ,
+	LocalX,
+	LocalY,
+	LocalZ
+};
+
+
+UCLASS()
+class MESHMODELINGTOOLS_API UPolyEditExtrudeProperties : public UInteractiveToolPropertySet
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(EditAnywhere, Category = Extrude)
+	EPolyEditExtrudeDirection Direction = EPolyEditExtrudeDirection::SelectionNormal;
+
+	virtual void SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving) override;
+};
+
+
+
+
+UENUM()
+enum class EPolyEditCutPlaneOrientation
+{
+	FaceNormals,
+	ViewDirection
+};
+
+
+
+UCLASS()
+class MESHMODELINGTOOLS_API UPolyEditCutProperties : public UInteractiveToolPropertySet
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(EditAnywhere, Category = Cut)
+	EPolyEditCutPlaneOrientation Orientation = EPolyEditCutPlaneOrientation::FaceNormals;
+
+	UPROPERTY(EditAnywhere, Category = Cut)
+	bool bSnapToVertices = true;
+
+	virtual void SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving) override;
+};
+
+
+
+
+UCLASS()
+class MESHMODELINGTOOLS_API UPolyEditSetUVProperties : public UInteractiveToolPropertySet
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY(EditAnywhere, Category = PlanarProjectUV)
+	bool bShowMaterial = false;
+
+	virtual void SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving) override;
+};
+
+
 
 
 /**
  *
  */
 UCLASS()
-class MESHMODELINGTOOLS_API UEditMeshPolygonsTool : public UMeshSurfacePointTool
+class MESHMODELINGTOOLS_API UEditMeshPolygonsTool : public UMeshSurfacePointTool, public IClickBehaviorTarget
 {
 	GENERATED_BODY()
 
@@ -405,6 +377,7 @@ public:
 	UEditMeshPolygonsTool();
 
 	virtual void RegisterActions(FInteractiveToolActionSet& ActionSet) override;
+	void EnableTriangleMode();
 
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
@@ -417,102 +390,260 @@ public:
 	virtual bool CanAccept() const override { return true; }
 
 
+	// UMeshSurfacePointTool API
 	virtual bool HitTest(const FRay& Ray, FHitResult& OutHit) override;
-	
 	virtual void OnBeginDrag(const FRay& Ray) override;
 	virtual void OnUpdateDrag(const FRay& Ray) override;
 	virtual void OnEndDrag(const FRay& Ray) override;
 	virtual bool OnUpdateHover(const FInputDeviceRay& DevicePos) override;
+	virtual void OnEndHover() override;
+
+	// IClickDragBehaviorTarget API
+	virtual FInputRayHit CanBeginClickDragSequence(const FInputDeviceRay& PressPos) override;
+
+	// IClickBehaviorTarget API
+	virtual FInputRayHit IsHitByClick(const FInputDeviceRay& ClickPos) override;
+	virtual void OnClicked(const FInputDeviceRay& ClickPos) override;
 
 public:
-	virtual void NextTransformTypeAction();
 
-	//
-	float VisualAngleSnapThreshold = 0.5;
+	virtual void RequestAction(EEditMeshPolygonsToolActions ActionType);
 
 protected:
+	// If bTriangleMode = true, then we use a per-triangle FTriangleGroupTopology instead of polygroup topology.
+	// This allows low-level mesh editing with mainly the same code, at a significant cost in overhead.
+	// This is a fundamental mode switch, must be set before ::Setup() is called!
+	bool bTriangleMode;		
+
 	UPROPERTY()
-	USimpleDynamicMeshComponent* DynamicMeshComponent;
+	USimpleDynamicMeshComponent* DynamicMeshComponent = nullptr;
 
 	UPROPERTY()
 	UPolyEditTransformProperties* TransformProps;
+	TValueWatcher<ELocalFrameMode> LocalFrameModeWatcher;
+	TValueWatcher<bool> LockFrameWatcher;
+
+	UPROPERTY()
+	UEditMeshPolygonsToolActions* EditActions;
+	UPROPERTY()
+	UEditMeshPolygonsToolActions_Triangles* EditActions_Triangles;
+
+	UPROPERTY()
+	UEditMeshPolygonsToolEdgeActions* EditEdgeActions;
+	UPROPERTY()
+	UEditMeshPolygonsToolEdgeActions_Triangles* EditEdgeActions_Triangles;
+
+	UPROPERTY()
+	UEditMeshPolygonsToolUVActions* EditUVActions;
+
+	UPROPERTY()
+	UPolyEditExtrudeProperties* ExtrudeProperties;
+	TValueWatcher<EPolyEditExtrudeDirection> ExtrudeDirectionWatcher;
+
+	UPROPERTY()
+	UPolyEditCutProperties* CutProperties;
+
+	UPROPERTY()
+	UPolyEditSetUVProperties* SetUVProperties;
+
+
+	UPROPERTY()
+	UPolygonSelectionMechanic* SelectionMechanic;
+
+
+	bool bSelectionStateDirty = false;
+	void OnSelectionModifiedEvent();
+
+	UPROPERTY()
+	UMultiTransformer* MultiTransformer = nullptr;
+
+	void OnMultiTransformerTransformBegin();
+	void OnMultiTransformerTransformUpdate();
+	void OnMultiTransformerTransformEnd();
+	void UpdateMultiTransformerFrame(const FFrame3d* UseFrame = nullptr);
+	FFrame3d LastGeometryFrame;
+	FFrame3d LastTransformerFrame;
+	FFrame3d LockedTransfomerFrame;
 
 	// realtime visualization
 	void OnDynamicMeshComponentChanged();
 	FDelegateHandle OnDynamicMeshComponentChangedHandle;
 
-	virtual void OnPropertyModified(UObject* PropertySet, UProperty* Property);
-	
-	// camera state at last render
-	FViewCameraState CameraState;
 
-	FToolDataVisualizer PolyEdgesRenderer;
+	// camera state at last render
+	FTransform3d WorldTransform;
+	FViewCameraState CameraState;
 
 	// True for the duration of UI click+drag
 	bool bInDrag;
 
-	FPlane ActiveDragPlane;
-	FVector StartHitPosWorld;
-	FVector StartHitNormalWorld;
-	FVector LastHitPosWorld;
-	FVector LastBrushPosLocal;
-	FVector StartBrushPosLocal;
+	FFrame3d InitialGizmoFrame;
+	FVector3d InitialGizmoScale;
+	void CacheUpdate_Gizmo();
+	bool bGizmoUpdatePending = false;
+	FFrame3d LastUpdateGizmoFrame;
+	FVector3d LastUpdateGizmoScale;
+	void ComputeUpdate_Gizmo();
 
-	FFrame3d ActiveSurfaceFrame;
-	FQuickTransformer* GetActiveQuickTransformer();
-	void UpdateActiveSurfaceFrame(FGroupTopologySelection& Selection);
-	void UpdateQuickTransformer();
-
-	FRay UpdateRay;
-	bool bUpdatePending = false;
-	void ComputeUpdate();
-
-	FVector3d LastMoveDelta;
-	FQuickAxisTranslater QuickAxisTranslater;
-	void ComputeUpdate_Translate();
-
-	FQuickAxisRotator QuickAxisRotator;
-	FVector3d RotationStartPointWorld;
-	FFrame3d RotationStartFrame;
-	void ComputeUpdate_Rotate();
-
-
-	FGroupTopology Topology;
+	TUniquePtr<FGroupTopology> Topology;
 	void PrecomputeTopology();
-	void ComputePolygons(bool RecomputeTopology = true);
 
-	FGroupTopologySelector TopoSelector;
-	
+	FDynamicMeshAABBTree3 MeshSpatial;
+	FDynamicMeshAABBTree3& GetSpatial();
+	bool bSpatialDirty;
+
+	// UV Scale factor to apply to texturing on any new geometry (e.g. new faces added by extrude)
+	float UVScaleFactor = 1.0f;
+
+	EEditMeshPolygonsToolActions PendingAction = EEditMeshPolygonsToolActions::NoAction;
+
+	enum class ECurrentToolMode
+	{
+		TransformSelection,
+		ExtrudeSelection,
+		OffsetSelection,
+		InsetSelection,
+		OutsetSelection,
+		CutSelection,
+		SetUVs
+	};
+	ECurrentToolMode CurrentToolMode = ECurrentToolMode::TransformSelection;
+	int32 CurrentOperationTimestamp = 1;
+	bool CheckInOperation(int32 Timestamp) const { return CurrentOperationTimestamp == Timestamp; }
+
+	void BeginExtrude(bool bIsNormalOffset);
+	void ApplyExtrude(bool bIsOffset);
+	void RestartExtrude();
+	FVector3d GetExtrudeDirection() const;
+
+	void BeginInset(bool bOutset);
+	void ApplyInset(bool bOutset);
+
+	void BeginCutFaces();
+	void ApplyCutFaces();
+
+	void BeginSetUVs();
+	void UpdateSetUVS();
+	void ApplySetUVs();
+
+	void ApplyPlaneCut();
+	void ApplyMerge();
+	void ApplyDelete();
+	void ApplyRecalcNormals();
+	void ApplyFlipNormals();
+	void ApplyRetriangulate();
+	void ApplyDecompose();
+	void ApplyDisconnect();
+	void ApplyPokeSingleFace();
+
+	void ApplyCollapseEdge();
+	void ApplyWeldEdges();
+	void ApplyStraightenEdges();
+	void ApplyFillHole();
+
+	void ApplyFlipSingleEdge();
+	void ApplyCollapseSingleEdge();
+	void ApplySplitSingleEdge();
+
+	FFrame3d ActiveSelectionFrameLocal;
+	FFrame3d ActiveSelectionFrameWorld;
+	TArray<int32> ActiveTriangleSelection;
+	FAxisAlignedBox3d ActiveSelectionBounds;
+
+	struct FSelectedEdge
+	{
+		int32 EdgeTopoID;
+		TArray<int32> EdgeIDs;
+	};
+	TArray<FSelectedEdge> ActiveEdgeSelection;
+
+	bool bPreviewUpdatePending = false;
+
+	UPROPERTY()
+	UPolyEditPreviewMesh* EditPreview;
+
+	enum class EPreviewMaterialType
+	{
+		SourceMaterials, PreviewMaterial, UVMaterial
+	};
+	void UpdateEditPreviewMaterials(EPreviewMaterialType MaterialType);
+	EPreviewMaterialType CurrentPreviewMaterial;
+
+	UPROPERTY()
+	UPlaneDistanceFromHitMechanic* ExtrudeHeightMechanic = nullptr;
+	UPROPERTY()
+	USpatialCurveDistanceMechanic* CurveDistMechanic = nullptr;
+	UPROPERTY()
+	UCollectSurfacePathMechanic* SurfacePathMechanic = nullptr;
+
 	//
 	// data for current drag
 	//
 
-	FGroupTopologySelection HilightSelection;
-	FToolDataVisualizer HilightRenderer;
+	FGroupTopologyDeformer LinearDeformer;
+	void UpdateDeformerFromSelection(const FGroupTopologySelection& Selection);
 
-	FDynamicMeshAABBTree3 MeshSpatial;
-	FDynamicMeshAABBTree3& GetSpatial();
+
 
 	FMeshVertexChangeBuilder* ActiveVertexChange;
-
-	// The two deformer type options.
-	FGroupTopologyDeformer LinearDeformer;
-	FGroupTopologyLaplacianDeformer LaplacianDeformer;
-
-	EGroupTopologyDeformationStrategy DeformationStrategy;
-
-	// Initial polygon group and mesh info
-	TDynamicVector<int> InitialTriangleGroups;
-	TUniquePtr<FDynamicMesh3> InitialMesh;
-	void BackupTriangleGroups();
-	void SetTriangleGroups(const TDynamicVector<int>& Groups);
-	
-	// This is true when the spatial index needs to reflect a modification
-	bool bSpatialDirty; 
-
 	void BeginChange();
 	void EndChange();
 	void UpdateChangeFromROI(bool bFinal);
 
+	bool BeginMeshFaceEditChange();
+	bool BeginMeshFaceEditChangeWithPreview();
+	void CompleteMeshEditChange(const FText& TransactionLabel, TUniquePtr<FToolCommandChange> EditChange, const FGroupTopologySelection& OutputSelection);
+	void CancelMeshEditChange();
+
+	bool BeginMeshEdgeEditChange();
+	bool BeginMeshBoundaryEdgeEditChange(bool bOnlySimple);
+	bool BeginMeshEdgeEditChange(TFunctionRef<bool(int32)> GroupEdgeIDFilterFunc);
+
+	void AfterTopologyEdit();
+	int32 ModifiedTopologyCounter = 0;
+	bool bWasTopologyEdited = false;
+
+	friend class FEditPolygonsTopologyPreEditChange;
+	friend class FEditPolygonsTopologyPostEditChange;
+	friend class FBeginInteractivePolyEditChange;
 };
 
+
+
+
+
+class MESHMODELINGTOOLS_API FEditPolygonsTopologyPreEditChange : public FToolCommandChange
+{
+public:
+	virtual void Apply(UObject* Object) override;
+	virtual void Revert(UObject* Object) override;
+	virtual FString ToString() const override;
+};
+
+class MESHMODELINGTOOLS_API FEditPolygonsTopologyPostEditChange : public FToolCommandChange
+{
+public:
+	virtual void Apply(UObject* Object) override;
+	virtual void Revert(UObject* Object) override;
+	virtual FString ToString() const override;
+};
+
+
+/**
+ * FBeginInteractivePolyEditChange is used to cancel out of an active action on Undo. No action is taken on Redo
+ * No action is taken on Redo, ie we do not re-start the Tool on Redo.
+ */
+class MESHMODELINGTOOLS_API FBeginInteractivePolyEditChange : public FToolCommandChange
+{
+public:
+	bool bHaveDoneUndo = false;
+	int32 OperationTimestamp = 0;
+	FBeginInteractivePolyEditChange(int32 CurrentTimestamp)
+	{
+		OperationTimestamp = CurrentTimestamp;
+	}
+	virtual void Apply(UObject* Object) override {}
+	virtual void Revert(UObject* Object) override;
+	virtual bool HasExpired(UObject* Object) const override;
+	virtual FString ToString() const override;
+};

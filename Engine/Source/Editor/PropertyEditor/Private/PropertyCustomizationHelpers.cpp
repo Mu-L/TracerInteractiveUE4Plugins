@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PropertyCustomizationHelpers.h"
 #include "IDetailChildrenBuilder.h"
@@ -35,6 +35,7 @@
 #include "EditorFontGlyphs.h"
 #include "DetailCategoryBuilder.h"
 #include "IDetailGroup.h"
+#include "AssetToolsModule.h"
 
 #define LOCTEXT_NAMESPACE "PropertyCustomizationHelpers"
 
@@ -385,9 +386,9 @@ namespace PropertyCustomizationHelpers
 		return IDocumentation::Get()->CreateAnchor(DocLink, FString(), DocExcerptName);
 	}
 
-	UBoolProperty* GetEditConditionProperty(const UProperty* InProperty, bool& bNegate)
+	FBoolProperty* GetEditConditionProperty(const FProperty* InProperty, bool& bNegate)
 	{
-		UBoolProperty* EditConditionProperty = NULL;
+		FBoolProperty* EditConditionProperty = NULL;
 		bNegate = false;
 
 		if ( InProperty != NULL )
@@ -407,7 +408,7 @@ namespace PropertyCustomizationHelpers
 			if ( ConditionPropertyName.Len() > 0 && !ConditionPropertyName.Contains(TEXT(".")) )
 			{
 				UStruct* Scope = InProperty->GetOwnerStruct();
-				EditConditionProperty = FindField<UBoolProperty>(Scope, *ConditionPropertyName);
+				EditConditionProperty = FindFProperty<FBoolProperty>(Scope, *ConditionPropertyName);
 			}
 		}
 
@@ -421,32 +422,29 @@ namespace PropertyCustomizationHelpers
 
 	TArray<UFactory*> GetNewAssetFactoriesForClasses(const TArray<const UClass*>& Classes, const TArray<const UClass*>& DisallowedClasses)
 	{
-		TArray<UFactory*> Factories;
-		for (TObjectIterator<UClass> It; It; ++It)
-		{
-			UClass* Class = *It;
-			if (Class->IsChildOf(UFactory::StaticClass()) && !Class->HasAnyClassFlags(CLASS_Abstract))
-			{
-				UFactory* Factory = Class->GetDefaultObject<UFactory>();
-				if (Factory->ShouldShowInNewMenu() && ensure(!Factory->GetDisplayName().IsEmpty()))
+		const IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+		TArray<UFactory*> AllFactories = AssetTools.GetNewAssetFactories();
+		TArray<UFactory*> FilteredFactories;
+
+		for (UFactory* Factory : AllFactories)
 				{
 					UClass* SupportedClass = Factory->GetSupportedClass();
+			auto IsChildOfLambda = [SupportedClass](const UClass* InClass) { return SupportedClass->IsChildOf(InClass); };
+
 					if (SupportedClass != nullptr 
-						&& Classes.ContainsByPredicate([=](const UClass* InClass) { return SupportedClass->IsChildOf(InClass); })
-						&& !DisallowedClasses.ContainsByPredicate([=](const UClass* InClass) { return SupportedClass->IsChildOf(InClass); }))
+				&& Classes.ContainsByPredicate(IsChildOfLambda)
+				&& !DisallowedClasses.ContainsByPredicate(IsChildOfLambda))
 					{
-						Factories.Add(Factory);
-					}
-				}
+				FilteredFactories.Add(Factory);
 			}
 		}
 
-		Factories.Sort([](UFactory& A, UFactory& B) -> bool
+		FilteredFactories.Sort([](UFactory& A, UFactory& B) -> bool
 		{
 			return A.GetDisplayName().CompareToCaseIgnored(B.GetDisplayName()) < 0;
 		});
 
-		return Factories;
+		return FilteredFactories;
 	}
 }
 
@@ -455,6 +453,7 @@ void SObjectPropertyEntryBox::Construct( const FArguments& InArgs )
 	ObjectPath = InArgs._ObjectPath;
 	OnObjectChanged = InArgs._OnObjectChanged;
 	OnShouldSetAsset = InArgs._OnShouldSetAsset;
+	OnIsEnabled = InArgs._OnIsEnabled;
 
 	const TArray<FAssetData>& OwnerAssetDataArray = InArgs._OwnerAssetDataArray;
 
@@ -464,7 +463,6 @@ void SObjectPropertyEntryBox::Construct( const FArguments& InArgs )
 	{
 		ThumbnailSize = InArgs._ThumbnailSizeOverride.Get();
 	}
-
 
 	if( InArgs._PropertyHandle.IsValid() && InArgs._PropertyHandle->IsValidHandle() )
 	{
@@ -490,7 +488,7 @@ void SObjectPropertyEntryBox::Construct( const FArguments& InArgs )
 		}
 
 		// if being used with an object property, check the allowed class is valid for the property
-		UObjectPropertyBase* ObjectProperty = Cast<UObjectPropertyBase>(PropertyHandle->GetProperty());
+		FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(PropertyHandle->GetProperty());
 		if (ObjectProperty != NULL)
 		{
 			checkSlow(InArgs._AllowedClass->IsChildOf(ObjectProperty->PropertyClass));
@@ -502,7 +500,7 @@ void SObjectPropertyEntryBox::Construct( const FArguments& InArgs )
 	if (InArgs._CustomResetToDefault.IsSet() || (PropertyHandle.IsValid() && !PropertyHandle->HasMetaData(TEXT("NoResetToDefault")) && !PropertyHandle->IsResetToDefaultCustomized()))
 	{
 		SAssignNew(ResetButton, SResetToDefaultPropertyEditor, PropertyHandle)
-			.IsEnabled(true)
+			.IsEnabled(this, &SObjectPropertyEntryBox::IsEnabled)
 			.CustomResetToDefault(InArgs._CustomResetToDefault);		
 	};
 
@@ -519,6 +517,7 @@ void SObjectPropertyEntryBox::Construct( const FArguments& InArgs )
 				.ObjectPath( this, &SObjectPropertyEntryBox::OnGetObjectPath )
 				.Class( InArgs._AllowedClass )
 				.NewAssetFactories( InArgs._NewAssetFactories )
+				.IsEnabled(this, &SObjectPropertyEntryBox::IsEnabled)
 				.OnSetObject(this, &SObjectPropertyEntryBox::OnSetObject)
 				.ThumbnailPool(InArgs._ThumbnailPool)
 				.DisplayThumbnail(bDisplayThumbnail)
@@ -574,6 +573,22 @@ void SObjectPropertyEntryBox::OnSetObject(const FAssetData& AssetData)
 		}
 	}
 	OnObjectChanged.ExecuteIfBound(AssetData);
+}
+
+bool SObjectPropertyEntryBox::IsEnabled() const
+{
+	bool IsEnabled = true;
+	if (PropertyHandle.IsValid())
+	{
+		IsEnabled &= PropertyHandle->IsEditable();
+	}
+
+	if (OnIsEnabled.IsBound())
+	{
+		IsEnabled &= OnIsEnabled.Execute();
+	}
+
+	return IsEnabled;
 }
 
 void SClassPropertyEntryBox::Construct(const FArguments& InArgs)
@@ -1091,7 +1106,7 @@ private:
 		FString MaterialSlotDisplayName;
 		SectionItem.MaterialSlotName.ToString(MaterialSlotDisplayName);
 		FString MaterialSlotRemapString = TEXT("");
-		if (SectionItem.DefaultMaterialIndex != SectionItem.MaterialSlotIndex)
+		if (SectionItem.DefaultMaterialIndex != INDEX_NONE && SectionItem.DefaultMaterialIndex != SectionItem.MaterialSlotIndex)
 		{
 			MaterialSlotRemapString = TEXT(" (Modified)");
 		}

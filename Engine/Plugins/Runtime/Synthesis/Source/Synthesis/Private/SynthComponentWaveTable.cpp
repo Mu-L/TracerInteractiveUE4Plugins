@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SynthComponents/SynthComponentWaveTable.h"
 #include "AudioDecompress.h"
@@ -130,7 +130,7 @@ void USynthSamplePlayer::LoadSoundWaveInternal()
 			}
 		};
 
-		SoundWaveLoader.LoadSoundWave(SoundWave, MoveTemp(OnLoaded));
+		SoundWaveLoader.LoadSoundWave(SoundWave, MoveTemp(OnLoaded), true);
 	}
 }
 

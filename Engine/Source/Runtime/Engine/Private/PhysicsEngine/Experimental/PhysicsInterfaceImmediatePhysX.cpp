@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #if WITH_IMMEDIATE_PHYSX
 
@@ -704,25 +704,6 @@ bool FPhysicsInterface_ImmediatePhysX::IsSimulationShape(const FPhysicsShapeHand
 bool FPhysicsInterface_ImmediatePhysX::IsQueryShape(const FPhysicsShapeHandle& InShape)
 {
     return InShape.Actor != nullptr;
-}
-
-bool FPhysicsInterface_ImmediatePhysX::IsShapeType(const FPhysicsShapeHandle& InShape, ECollisionShapeType InType)
-{
-    if (!InShape.Actor)
-    {
-        return false;
-    }
-    const FPhysScene_ImmediatePhysX::FShape& Shape = InShape.Actor->Scene->Actors[InShape.Actor->Index].Shapes[InShape.Index];
-    if ((Shape.Geometry->getType() == PxGeometryType::Enum::eSPHERE && InType == ECollisionShapeType::Sphere)
-        || (Shape.Geometry->getType() == PxGeometryType::Enum::eBOX && InType == ECollisionShapeType::Box)
-        || (Shape.Geometry->getType() == PxGeometryType::Enum::eCONVEXMESH && InType == ECollisionShapeType::Convex)
-        || (Shape.Geometry->getType() == PxGeometryType::Enum::eTRIANGLEMESH && InType == ECollisionShapeType::Trimesh)
-        || (Shape.Geometry->getType() == PxGeometryType::Enum::eHEIGHTFIELD && InType == ECollisionShapeType::Heightfield)
-        || (Shape.Geometry->getType() == PxGeometryType::Enum::eCAPSULE && InType == ECollisionShapeType::TCapsule))
-    {
-        return true;
-    }
-    return false;
 }
 
 ECollisionShapeType FPhysicsInterface_ImmediatePhysX::GetShapeType(const FPhysicsShapeHandle& InShape)

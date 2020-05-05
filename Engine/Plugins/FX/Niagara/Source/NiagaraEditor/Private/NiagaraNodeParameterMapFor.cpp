@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraNodeParameterMapFor.h"
 #include "EdGraphSchema_Niagara.h"
@@ -19,6 +19,8 @@
 
 UNiagaraNodeParameterMapFor::UNiagaraNodeParameterMapFor() : UNiagaraNodeParameterMapSet()
 {
+
+	UEdGraphNode::NodeUpgradeMessage = LOCTEXT("NodeExperimental", "This node is marked as experimental, use with care!");
 }
 
 void UNiagaraNodeParameterMapFor::AllocateDefaultPins()
@@ -49,7 +51,7 @@ void UNiagaraNodeParameterMapFor::Compile(FHlslNiagaraTranslator* Translator, TA
 		else
 		{
 			UNiagaraNodeParameterMapSet::Compile(Translator, Outputs);
-			Translator->Warning(LOCTEXT("UnsupportedParamMapFor", "Parameter map for is not yet supported on cpu."), this, nullptr);
+			Translator->Message(FNiagaraCompileEventSeverity::Log,LOCTEXT("UnsupportedParamMapFor", "Parameter map for is not yet supported on cpu."), this, nullptr);
 		}
 	}
 }

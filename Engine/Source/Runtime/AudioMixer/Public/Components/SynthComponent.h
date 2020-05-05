@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "AudioMixerTypes.h"
@@ -110,7 +110,7 @@ public:
 
 	/** Sets how much audio the sound should send to the given submix. */
 	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
-	void SetSubmixSend(USoundSubmix* Submix, float SendLevel);
+	void SetSubmixSend(USoundSubmixBase* Submix, float SendLevel);
 
 	/** Auto destroy this component on completion */
 	UPROPERTY()
@@ -158,7 +158,7 @@ public:
 
 	/** Submix this sound belongs to */
 	UPROPERTY(EditAnywhere, Category = Effects)
-	USoundSubmix* SoundSubmix;
+	USoundSubmixBase* SoundSubmix;
 
 	/** An array of submix sends. Audio from this sound will send a portion of its audio to these effects.  */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Effects)
@@ -183,6 +183,9 @@ public:
 	/** Whether or not this synth is playing as a preview sound */
 	UPROPERTY()
 	uint8 bIsPreviewSound : 1;
+
+	/** Whether to artificially prioritize the component to play */
+	uint8 bAlwaysPlay : 1;
 
 	/** Call if creating this synth component not via an actor component in BP, but in code or some other location. Optionally override the sample rate of the sound wave, otherwise it uses the audio device's sample rate. */
 	void Initialize(int32 SampleRateOverride = INDEX_NONE);
@@ -212,6 +215,9 @@ public:
 	// Adds and removes audio buffer listener
 	void AddAudioBufferListener(IAudioBufferListener* InAudioBufferListener);
 	void RemoveAudioBufferListener(IAudioBufferListener* InAudioBufferListener);
+
+
+	virtual void BeginDestroy() override;
 
 protected:
 

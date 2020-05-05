@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	Definitions.usf: Defines undefined defines to 0 as Cg can't handle them.
@@ -76,6 +76,10 @@
 
 #ifndef GBUFFER_HAS_VELOCITY
 #define GBUFFER_HAS_VELOCITY							0
+#endif
+
+#ifndef GBUFFER_HAS_TANGENT
+#define GBUFFER_HAS_TANGENT								0
 #endif
 
 #define PC_D3D											SM5_PROFILE

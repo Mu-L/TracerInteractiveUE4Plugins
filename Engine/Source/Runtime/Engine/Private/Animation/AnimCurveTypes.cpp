@@ -1,7 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Animation/AnimCurveTypes.h"
 #include "UObject/FrameworkObjectVersion.h"
+#include "UObject/AnimObjectVersion.h"
+#include "Math/RandomStream.h"
 
 DECLARE_CYCLE_STAT(TEXT("EvalRawCurveData"), STAT_EvalRawCurveData, STATGROUP_Anim);
 
@@ -12,8 +14,9 @@ void FAnimCurveBase::PostSerialize(FArchive& Ar)
 {
 	SmartName::UID_Type CurveUid = SmartName::MaxUID;
 	Ar.UsingCustomVersion(FFrameworkObjectVersion::GUID);
+	Ar.UsingCustomVersion(FAnimObjectVersion::GUID);
 
-	if ((Ar.IsLoading()))
+	if (Ar.IsLoading())
 	{
 		if (Ar.CustomVer(FFrameworkObjectVersion::GUID) < FFrameworkObjectVersion::SmartNameRefactor)
 		{
@@ -29,6 +32,13 @@ void FAnimCurveBase::PostSerialize(FArchive& Ar)
 				Name.DisplayName = LastObservedName_DEPRECATED;
 			}
 		}
+
+#if WITH_EDITORONLY_DATA
+		if(Ar.CustomVer(FAnimObjectVersion::GUID) < FAnimObjectVersion::AnimSequenceCurveColors)
+		{
+			Color = MakeColor();
+		}
+#endif
 	}
 }
 
@@ -65,6 +75,16 @@ int32 FAnimCurveBase::GetCurveTypeFlags() const
 {
 	return CurveTypeFlags;
 }
+
+#if WITH_EDITORONLY_DATA
+FLinearColor FAnimCurveBase::MakeColor()
+{
+	// Create a color based on the hash of the name
+	FRandomStream Stream(GetTypeHash(Name.DisplayName));
+	const uint8 Hue = (uint8)(Stream.FRand() * 255.0f);
+	return FLinearColor::MakeFromHSV8(Hue, 196, 196);
+}
+#endif
 
 ////////////////////////////////////////////////////
 //  FFloatCurve
@@ -118,18 +138,18 @@ FVector FVectorCurve::Evaluate(float CurrentTime, float BlendWeight) const
 {
 	FVector Value;
 
-	Value.X = FloatCurves[X].Eval(CurrentTime)*BlendWeight;
-	Value.Y = FloatCurves[Y].Eval(CurrentTime)*BlendWeight;
-	Value.Z = FloatCurves[Z].Eval(CurrentTime)*BlendWeight;
+	Value.X = FloatCurves[(int32)EIndex::X].Eval(CurrentTime)*BlendWeight;
+	Value.Y = FloatCurves[(int32)EIndex::Y].Eval(CurrentTime)*BlendWeight;
+	Value.Z = FloatCurves[(int32)EIndex::Z].Eval(CurrentTime)*BlendWeight;
 
 	return Value;
 }
 
 void FVectorCurve::UpdateOrAddKey(const FVector& NewKey, float CurrentTime)
 {
-	FloatCurves[X].UpdateOrAddKey(CurrentTime, NewKey.X);
-	FloatCurves[Y].UpdateOrAddKey(CurrentTime, NewKey.Y);
-	FloatCurves[Z].UpdateOrAddKey(CurrentTime, NewKey.Z);
+	FloatCurves[(int32)EIndex::X].UpdateOrAddKey(CurrentTime, NewKey.X);
+	FloatCurves[(int32)EIndex::Y].UpdateOrAddKey(CurrentTime, NewKey.Y);
+	FloatCurves[(int32)EIndex::Z].UpdateOrAddKey(CurrentTime, NewKey.Z);
 }
 
 void FVectorCurve::GetKeys(TArray<float>& OutTimes, TArray<FVector>& OutValues)
@@ -165,9 +185,9 @@ void FVectorCurve::GetKeys(TArray<float>& OutTimes, TArray<FVector>& OutValues)
 
 void FVectorCurve::Resize(float NewLength, bool bInsert/* whether insert or remove*/, float OldStartTime, float OldEndTime)
 {
-	FloatCurves[X].ReadjustTimeRange(0, NewLength, bInsert, OldStartTime, OldEndTime);
-	FloatCurves[Y].ReadjustTimeRange(0, NewLength, bInsert, OldStartTime, OldEndTime);
-	FloatCurves[Z].ReadjustTimeRange(0, NewLength, bInsert, OldStartTime, OldEndTime);
+	FloatCurves[(int32)EIndex::X].ReadjustTimeRange(0, NewLength, bInsert, OldStartTime, OldEndTime);
+	FloatCurves[(int32)EIndex::Y].ReadjustTimeRange(0, NewLength, bInsert, OldStartTime, OldEndTime);
+	FloatCurves[(int32)EIndex::Z].ReadjustTimeRange(0, NewLength, bInsert, OldStartTime, OldEndTime);
 }
 
 int32 FVectorCurve::GetNumKeys()

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -36,14 +36,24 @@ private:
 	bool TryPushNewCaptureTask(FCameraTask::EType InTaskType);
 	void OnAppPause();
 
+	enum class ECaptureState : uint32
+	{
+		Idle,
+		Connecting,
+		Disconnecting,
+		BeginningCapture,
+		Capturing,
+		EndingCapture,
+	};
+
 	FMagicLeapAPISetup APISetup;
 	FTickerDelegate TickDelegate;
 	FDelegateHandle TickDelegateHandle;
 	uint32 UserCount;
+	ECaptureState CaptureState;
+	float MinVidCaptureTimer;
 	MagicLeap::IAppEventHandler AppEventHandler;
 	FCameraRunnable* Runnable;
-	FCameraTask::EType CurrentTaskType;
-	FCameraTask::EType PrevTaskType;
 	FMagicLeapCameraConnect OnCameraConnect;
 	FMagicLeapCameraDisconnect OnCameraDisconnect;
 	FMagicLeapCameraCaptureImgToFileMulti OnCaptureImgToFile;

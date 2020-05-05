@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 /**
@@ -309,14 +309,14 @@ private:
 
 	struct FPendingAsyncLoadRequest
 	{
-		FPendingAsyncLoadRequest(const FNetworkGUID InNetGUID, const float InRequestStartTime):
+		FPendingAsyncLoadRequest(const FNetworkGUID InNetGUID, const double InRequestStartTime):
 			NetGUID(InNetGUID),
 			RequestStartTime(InRequestStartTime)
 		{
 		}
 
 		FNetworkGUID NetGUID;
-		float RequestStartTime;
+		double RequestStartTime;
 	};
 
 	/** Set of packages that are currently pending Async loads, referenced by package name. */
@@ -448,6 +448,18 @@ public:
 
 	virtual void Serialize(FArchive& Ar) override;
 
+	FString GetFullNetGUIDPath(const FNetworkGUID& NetGUID) const
+	{
+		FString FullGuidCachePath;
+
+		if (const FNetGUIDCache * const GuidCacheLocal = GuidCache.Get())
+		{
+			FullGuidCachePath = GuidCacheLocal->FullNetGUIDPath(NetGUID);
+		}
+
+		return FullGuidCachePath;
+	}
+
 protected:
 
 	/** Functions to help with exporting/importing net field export info */
@@ -480,7 +492,7 @@ protected:
 	TSet< FNetworkGUID >				CurrentExportNetGUIDs;				// Current list of NetGUIDs being written to the Export Bunch.
 
 	/** Set of Actor NetGUIDs with currently queued bunches and the time they were first queued. */
-	TMap<FNetworkGUID, float> CurrentQueuedBunchNetGUIDs;
+	TMap<FNetworkGUID, double> CurrentQueuedBunchNetGUIDs;
 
 	TArray< FNetworkGUID >				PendingAckGUIDs;					// Quick access to all GUID's that haven't been acked
 
@@ -507,6 +519,7 @@ private:
 
 public:
 
+	int32 GetNumQueuedBunchNetGUIDs() const;
 	void ConsumeQueuedActorDelinquencyAnalytics(FNetQueuedActorDelinquencyAnalytics& Out);
 	const FNetQueuedActorDelinquencyAnalytics& GetQueuedActorDelinquencyAnalytics() const;
 	void ResetQueuedActorDelinquencyAnalytics();

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -1614,6 +1614,11 @@ protected:
 	/** Performs trace for ProjectLocationFromNavMesh */
 	virtual void FindBestNavMeshLocation(const FVector& TraceStart, const FVector& TraceEnd, const FVector& CurrentFeetLocation, const FVector& TargetNavLocation, FHitResult& OutHitResult) const;
 
+	/** 
+	 * When a character requests a velocity (like when following a path), this method returns true if when we should compute the 
+	 * acceleration toward requested velocity (including friction). If it returns false, it will snap instantly to requested velocity.
+	 */
+	virtual bool ShouldComputeAccelerationToReachRequestedVelocity(const float RequestedSpeed) const;
 public:
 
 	/** Called by owning Character upon successful teleport from AActor::TeleportTo(). */
@@ -2070,7 +2075,7 @@ protected:
 	virtual void PerformMovement(float DeltaTime);
 
 	/** Special Tick for Simulated Proxies */
-	void SimulatedTick(float DeltaSeconds);
+	virtual void SimulatedTick(float DeltaSeconds);
 
 	/** Simulate movement on a non-owning client. Called by SimulatedTick(). */
 	virtual void SimulateMovement(float DeltaTime);

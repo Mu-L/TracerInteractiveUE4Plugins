@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Misc/EngineVersion.h"
 #include "Misc/Guid.h"
@@ -7,14 +7,6 @@
 #include "Runtime/Launch/Resources/Version.h"
 #include "UObject/ReleaseObjectVersion.h"
 #include "BuildSettings.h"
-
-FEngineVersionBase::FEngineVersionBase()
-: Major(0)
-, Minor(0)
-, Patch(0)
-, Changelist(0)
-{
-}
 
 FEngineVersionBase::FEngineVersionBase(uint16 InMajor, uint16 InMinor, uint16 InPatch, uint32 InChangelist)
 : Major(InMajor)
@@ -89,11 +81,6 @@ uint32 FEngineVersionBase::EncodeLicenseeChangelist(uint32 Changelist)
 }
 
 
-FEngineVersion::FEngineVersion()
-{
-	Empty();
-}
-
 FEngineVersion::FEngineVersion(uint16 InMajor, uint16 InMinor, uint16 InPatch, uint32 InChangelist, const FString &InBranch)
 {
 	Set(InMajor, InMinor, InPatch, InChangelist, InBranch);
@@ -111,6 +98,11 @@ void FEngineVersion::Set(uint16 InMajor, uint16 InMinor, uint16 InPatch, uint32 
 void FEngineVersion::Empty()
 {
 	Set(0, 0, 0, 0, FString());
+}
+
+bool FEngineVersion::ExactMatch(const FEngineVersion& Other) const
+{
+	return Major == Other.Major && Minor == Other.Minor && Patch == Other.Patch && Changelist == Other.Changelist && Branch == Other.Branch;
 }
 
 bool FEngineVersion::IsCompatibleWith(const FEngineVersionBase &Other) const
@@ -181,7 +173,7 @@ bool FEngineVersion::Parse(const FString &Text, FEngineVersion &OutVersion)
 	}
 
 	// Build the output version
-	OutVersion.Set(Major, Minor, Patch, Changelist, Branch);
+	OutVersion.Set((uint16)Major, (uint16)Minor, (uint16)Patch, (uint32)Changelist, Branch);
 	return true;
 }
 

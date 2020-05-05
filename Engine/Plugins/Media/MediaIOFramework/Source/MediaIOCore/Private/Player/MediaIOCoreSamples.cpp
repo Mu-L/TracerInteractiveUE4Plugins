@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MediaIOCoreSamples.h"
 
@@ -8,134 +8,98 @@
 #include "IMediaTextureSample.h"
 
 
+FMediaIOCoreSamples::FMediaIOCoreSamples()
+	: VideoSamples("Video")
+	, AudioSamples("Audio")
+	, MetadataSamples("Metadata")
+	, SubtitleSamples("Subtitles")
+	, CaptionSamples("Caption")
+{
+
+}
+
+void FMediaIOCoreSamples::CacheSamplesState(FTimespan PlayerTime)
+{
+	VideoSamples.CacheState(PlayerTime);
+	AudioSamples.CacheState(PlayerTime);
+	MetadataSamples.CacheState(PlayerTime);
+	SubtitleSamples.CacheState(PlayerTime);
+	CaptionSamples.CacheState(PlayerTime);
+}
+
+void FMediaIOCoreSamples::EnableTimedDataChannels(ITimedDataInput* Input, EMediaIOSampleType SampleTypes)
+{
+	VideoSamples.EnableChannel(Input,  EnumHasAnyFlags(SampleTypes, EMediaIOSampleType::Video));
+	AudioSamples.EnableChannel(Input, EnumHasAnyFlags(SampleTypes, EMediaIOSampleType::Audio));
+	MetadataSamples.EnableChannel(Input, EnumHasAnyFlags(SampleTypes, EMediaIOSampleType::Metadata));
+	SubtitleSamples.EnableChannel(Input, EnumHasAnyFlags(SampleTypes, EMediaIOSampleType::Subtitles));
+	CaptionSamples.EnableChannel(Input, EnumHasAnyFlags(SampleTypes, EMediaIOSampleType::Caption));
+}
+
+void FMediaIOCoreSamples::InitializeVideoBuffer(const FMediaIOSamplingSettings& InSettings)
+{
+	VideoSamples.UpdateSettings(InSettings);
+}
+
+void FMediaIOCoreSamples::InitializeAudioBuffer(const FMediaIOSamplingSettings& InSettings)
+{
+	AudioSamples.UpdateSettings(InSettings);
+}
+
+void FMediaIOCoreSamples::InitializeMetadataBuffer(const FMediaIOSamplingSettings& InSettings)
+{
+	MetadataSamples.UpdateSettings(InSettings);
+}
+
+void FMediaIOCoreSamples::InitializeSubtitlesBuffer(const FMediaIOSamplingSettings& InSettings)
+{
+	SubtitleSamples.UpdateSettings(InSettings);
+}
+
+void FMediaIOCoreSamples::InitializeCaptionBuffer(const FMediaIOSamplingSettings& InSettings)
+{
+	CaptionSamples.UpdateSettings(InSettings);
+}
+
+
 /* IMediaSamples interface
 *****************************************************************************/
 
 bool FMediaIOCoreSamples::FetchAudio(TRange<FTimespan> TimeRange, TSharedPtr<IMediaAudioSample, ESPMode::ThreadSafe>& OutSample)
 {
-	TSharedPtr<IMediaAudioSample, ESPMode::ThreadSafe> Sample;
-
-	if (!AudioSampleQueue.Peek(Sample))
-	{
-		return false;
-	}
-
-	const FTimespan SampleTime = Sample->GetTime();
-
-	if (!TimeRange.Overlaps(TRange<FTimespan>(SampleTime, SampleTime + Sample->GetDuration())))
-	{
-		return false;
-	}
-
-	AudioSampleQueue.Pop();
-	OutSample = Sample;
-
-	return true;
+	return AudioSamples.FetchSample(TimeRange, OutSample);
 }
 
 
 bool FMediaIOCoreSamples::FetchCaption(TRange<FTimespan> TimeRange, TSharedPtr<IMediaOverlaySample, ESPMode::ThreadSafe>& OutSample)
 {
-	TSharedPtr<IMediaOverlaySample, ESPMode::ThreadSafe> Sample;
-
-	if (!CaptionSampleQueue.Peek(Sample))
-	{
-		return false;
-	}
-
-	const FTimespan SampleTime = Sample->GetTime();
-
-	if (!TimeRange.Overlaps(TRange<FTimespan>(SampleTime, SampleTime + Sample->GetDuration())))
-	{
-		return false;
-	}
-
-	CaptionSampleQueue.Pop();
-	OutSample = Sample;
-
-	return true;
+	return CaptionSamples.FetchSample(TimeRange, OutSample);
 }
 
 
 bool FMediaIOCoreSamples::FetchMetadata(TRange<FTimespan> TimeRange, TSharedPtr<IMediaBinarySample, ESPMode::ThreadSafe>& OutSample)
 {
-	TSharedPtr<IMediaBinarySample, ESPMode::ThreadSafe> Sample;
-
-	if (!MetadataSampleQueue.Peek(Sample))
-	{
-		return false;
-	}
-
-	const FTimespan SampleTime = Sample->GetTime();
-
-	if (!TimeRange.Overlaps(TRange<FTimespan>(SampleTime, SampleTime + Sample->GetDuration())))
-	{
-		return false;
-	}
-
-	MetadataSampleQueue.Pop();
-	OutSample = Sample;
-
-	return true;
+	return MetadataSamples.FetchSample(TimeRange, OutSample);
 }
 
 
 bool FMediaIOCoreSamples::FetchSubtitle(TRange<FTimespan> TimeRange, TSharedPtr<IMediaOverlaySample, ESPMode::ThreadSafe>& OutSample)
 {
-	TSharedPtr<IMediaOverlaySample, ESPMode::ThreadSafe> Sample;
-
-	if (!SubtitleSampleQueue.Peek(Sample))
-	{
-		return false;
-	}
-
-	const FTimespan SampleTime = Sample->GetTime();
-
-	if (!TimeRange.Overlaps(TRange<FTimespan>(SampleTime, SampleTime + Sample->GetDuration())))
-	{
-		return false;
-	}
-
-	SubtitleSampleQueue.Pop();
-	OutSample = Sample;
-
-	return true;
+	return SubtitleSamples.FetchSample(TimeRange, OutSample);
 }
 
 
 bool FMediaIOCoreSamples::FetchVideo(TRange<FTimespan> TimeRange, TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe>& OutSample)
 {
-	TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe> Sample;
-
-	if (!VideoSampleQueue.Peek(Sample))
-	{
-		return false;
-	}
-
-	const FTimespan SampleTime = Sample->GetTime();
-
-	if (TimeRange.Overlaps(TRange<FTimespan>(SampleTime, SampleTime + Sample->GetDuration())))
-	{
-		VideoSampleQueue.Pop();
-		OutSample = Sample;
-		return true;
-	}
-
-	if (TimeRange.HasLowerBound() && SampleTime < TimeRange.GetLowerBoundValue())
-	{
-		VideoSampleQueue.Pop();
-		Sample.Reset();
-	}
-
-	return false;
+	return VideoSamples.FetchSample(TimeRange, OutSample);
 }
 
 
 void FMediaIOCoreSamples::FlushSamples()
 {
-	AudioSampleQueue.RequestFlush();
-	CaptionSampleQueue.RequestFlush();
-	MetadataSampleQueue.RequestFlush();
-	SubtitleSampleQueue.RequestFlush();
-	VideoSampleQueue.RequestFlush();
+	AudioSamples.FlushSamples();
+	CaptionSamples.FlushSamples();
+	MetadataSamples.FlushSamples();
+	SubtitleSamples.FlushSamples();
+	VideoSamples.FlushSamples();
 }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	D3D11Util.h: D3D RHI utility implementation.
@@ -461,5 +461,7 @@ DEFINE_STAT(STAT_D3D11FreeUniformBufferMemory);
 DEFINE_STAT(STAT_D3D11NumFreeUniformBuffers);
 DEFINE_STAT(STAT_D3D11NumImmutableUniformBuffers);
 DEFINE_STAT(STAT_D3D11NumBoundShaderState);
+DEFINE_STAT(STAT_D3D11RenderTargetCommits);
+DEFINE_STAT(STAT_D3D11RenderTargetCommitsUAV);
 
 #undef LOCTEXT_NAMESPACE

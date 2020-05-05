@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BaseGizmos/TransformProxy.h"
 #include "Components/SceneComponent.h"
@@ -45,6 +45,18 @@ void UTransformProxy::SetTransform(const FTransform& TransformIn)
 }
 
 
+void UTransformProxy::BeginTransformEditSequence()
+{
+	OnBeginTransformEdit.Broadcast(this);
+}
+
+void UTransformProxy::EndTransformEditSequence()
+{
+	OnEndTransformEdit.Broadcast(this);
+}
+
+
+
 
 
 void UTransformProxy::UpdateObjects()
@@ -59,6 +71,7 @@ void UTransformProxy::UpdateObjects()
 			CombinedTransform = Obj.StartTransform;
 			CombinedTransform.AddToTranslation(Temp.GetTranslation());
 			CombinedTransform.ConcatenateRotation(Temp.GetRotation());
+			CombinedTransform.SetScale3D(CombinedTransform.GetScale3D() * Temp.GetScale3D());
 		}
 		else
 		{
@@ -151,6 +164,7 @@ void FTransformProxyChangeSource::BeginChange()
 	{
 		ActiveChange = MakeUnique<FTransformProxyChange>();
 		ActiveChange->From = Proxy->GetTransform();
+		Proxy->BeginTransformEditSequence();
 	}
 }
 
@@ -158,6 +172,7 @@ TUniquePtr<FToolCommandChange> FTransformProxyChangeSource::EndChange()
 {
 	if (Proxy.IsValid())
 	{
+		Proxy->EndTransformEditSequence();
 		ActiveChange->To = Proxy->GetTransform();
 		return MoveTemp(ActiveChange);
 	}

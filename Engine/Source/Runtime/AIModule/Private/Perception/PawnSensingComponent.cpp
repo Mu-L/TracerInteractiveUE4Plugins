@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Perception/PawnSensingComponent.h"
 #include "EngineGlobals.h"
@@ -139,7 +139,10 @@ void UPawnSensingComponent::OnTimer()
 		UpdateAISensing();
 	}
 	
-	SetTimer(SensingInterval);
+	if (bEnableSensingUpdates)
+	{
+		SetTimer(SensingInterval);
+	}
 };
 
 

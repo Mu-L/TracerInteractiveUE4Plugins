@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -16,6 +16,8 @@
 #include "NetworkReplayStreaming.h"
 #include "Engine/DemoNetConnection.h"
 #include "Net/RepLayout.h"
+#include "Templates/Atomic.h"
+
 #include "DemoNetDriver.generated.h"
 
 class FNetworkNotify;
@@ -157,10 +159,11 @@ struct FLevelNameAndTime
 
 enum class EReplayHeaderFlags : uint32
 {
-	None				= 0,
-	ClientRecorded		= (1 << 0),
-	HasStreamingFixes	= (1 << 1),
-	DeltaCheckpoints	= (1 << 2),
+	None					= 0,
+	ClientRecorded			= (1 << 0),
+	HasStreamingFixes		= (1 << 1),
+	DeltaCheckpoints		= (1 << 2),
+	GameSpecificFrameData	= (1 << 3),
 };
 
 ENUM_CLASS_FLAGS(EReplayHeaderFlags);
@@ -297,6 +300,7 @@ struct FRollbackNetStartupActorInfo
 	UObject*	Archetype;
 	FVector		Location;
 	FRotator	Rotation;
+	FVector		Scale3D;
 	UPROPERTY()
 	ULevel*		Level;
 
@@ -370,13 +374,27 @@ struct FMulticastRecordOptions
 	bool bClientSkip;
 };
 
+enum class EWriteDemoFrameFlags : uint32
+{
+	None				= 0,
+	SkipGameSpecific	= (1 << 0),
+};
+
+ENUM_CLASS_FLAGS(EWriteDemoFrameFlags);
+
 /**
  * Simulated network driver for recording and playing back game sessions.
  */
 UCLASS(transient, config=Engine)
 class ENGINE_API UDemoNetDriver : public UNetDriver
 {
-	GENERATED_UCLASS_BODY()
+	GENERATED_BODY()
+
+public:
+
+	UDemoNetDriver(const FObjectInitializer& ObjectInitializer);
+	UDemoNetDriver(FVTableHelper& Helper);
+	~UDemoNetDriver();
 
 	/** Current record/playback frame number */
 	int32 DemoFrameNum;
@@ -436,6 +454,8 @@ class ENGINE_API UDemoNetDriver : public UNetDriver
 	void TickCheckpoint();
 
 private:
+
+	void InitDefaults();
 
 	bool LoadCheckpoint(const FGotoResult& GotoResult);
 
@@ -601,6 +621,9 @@ private:
 	UPROPERTY(config)
 	TArray<FMulticastRecordOptions> MulticastRecordOptions;
 
+	/** PlaybackFrames are used to buffer per frame data up when we read a demo frame, which we can then process when the time is right */
+	TMap<float, TMap<FString, TArray<uint8>>> PlaybackFrames;
+
 public:
 
 	// UNetDriver interface.
@@ -742,8 +765,15 @@ public:
 		return ShouldSkipPlaybackPacket(PlaybackPacket) ||
 				ProcessPacket(PlaybackPacket.Data.GetData(), PlaybackPacket.Data.Num());
 	}
+	
+	void WriteDemoFrameFromQueuedDemoPackets(FArchive& Ar, TArray<FQueuedDemoPacket>& QueuedPackets, float FrameTime, EWriteDemoFrameFlags Flags);
 
-	void WriteDemoFrameFromQueuedDemoPackets(FArchive& Ar, TArray<FQueuedDemoPacket>& QueuedPackets, float FrameTime);
+	UE_DEPRECATED(4.25, "WriteDemoFrameFromQueuedDemoPackets now takes an additional flag value")
+	void WriteDemoFrameFromQueuedDemoPackets(FArchive& Ar, TArray<FQueuedDemoPacket>& QueuedPackets, float FrameTime)
+	{
+		WriteDemoFrameFromQueuedDemoPackets(Ar, QueuedPackets, FrameTime, EWriteDemoFrameFlags::None);
+	}
+
 	void WritePacket(FArchive& Ar, uint8* Data, int32 Count);
 
 	void TickDemoPlayback(float DeltaSeconds);
@@ -903,6 +933,12 @@ public:
 		return bHasDeltaCheckpoints;
 	}
 
+	/** Returns whether or not this replay was recorded / is playing with the game specific per frame data feature. */
+	bool HasGameSpecificFrameData() const
+	{
+		return bHasGameSpecificFrameData;
+	}
+
 	/**
 	 * Gets the actively recording or playback replay (stream) name.
 	 * Note, this will be empty when not recording or playing back.
@@ -1013,6 +1049,9 @@ private:
 	// Checkpoints are delta compressed
 	bool bHasDeltaCheckpoints;
 
+	// Allow appending per frame game specific data
+	bool bHasGameSpecificFrameData;
+
 	// Levels that are currently pending for fast forward.
 	// Using raw pointers, because we manually keep when levels are added and removed.
 	TSet<class ULevel*> LevelsPendingFastForward;
@@ -1042,6 +1081,7 @@ private:
 		ECheckpointSaveState_Idle,
 		ECheckpointSaveState_ProcessCheckpointActors,
 		ECheckpointSaveState_SerializeDeletedStartupActors,
+		ECheckpointSaveState_CacheNetGuids,
 		ECheckpointSaveState_SerializeGuidCache,
 		ECheckpointSaveState_SerializeNetFieldExportGroupMap,
 		ECheckpointSaveState_SerializeDemoFrameFromQueuedDemoPackets,
@@ -1192,7 +1232,8 @@ protected:
 
 	bool DemoReplicateActor(AActor* Actor, UNetConnection* Connection, bool bMustReplicate);
 
-	void SerializeGuidCache(TSharedPtr<class FNetGUIDCache> GuidCache, FArchive* CheckpointArchive);
+	void CacheNetGuids();
+	bool SerializeGuidCache(const FRepActorsCheckpointParams& Params, FArchive* CheckpointArchive);
 
 	void NotifyDemoPlaybackFailure(EDemoPlayFailure::Type FailureType);
 
@@ -1215,4 +1256,41 @@ private:
 
 	bool ProcessFastForwardPackets(TArrayView<FPlaybackPacket> Packets, const TSet<int32>& LevelIndices);
 	void ProcessPlaybackPackets(TArrayView<FPlaybackPacket> Packets);
+
+	virtual ECreateReplicationChangelistMgrFlags GetCreateReplicationChangelistMgrFlags() const override
+	{
+		return ECreateReplicationChangelistMgrFlags::SkipDeltaCustomState;
+	}
+
+	TUniquePtr<struct FDemoBudgetLogHelper> BudgetLogHelper;
+
+//////////////////////////////////////////////////////////////////////////
+// Replay frame fidelity
+public:
+	// Simplified rating of replay frame fidelity as percentage of actors that were replicated.
+	// [0..1] where 0 means nothing was recorded this frame and 1 means full fidelity.
+	// This treats all actors equally. Assuming more important actors are prioritized higher, in general actual "fidelity"
+	// is expected to be higher than reported, which should be fine for detecting low-fidelity frame/intervals in replay file.
+	float GetLastReplayFrameFidelity() const
+	{
+		return LastReplayFrameFidelity;
+	}
+
+private:
+	TAtomic<float> LastReplayFrameFidelity{ 0 };
+
+//////////////////////////////////////////////////////////////////////////
+// Time boxing for net guid cache serialization
+private:
+	struct FNetGuidCacheItem
+	{
+		FNetworkGUID NetGuid;
+		FNetGuidCacheObject NetGuidCacheObject;
+	};
+
+	TArray<FNetGuidCacheItem> NetGuidCacheSnapshot;
+	int32 NextNetGuidForRecording;
+	int32 NumNetGuidsForRecording;
+	FArchivePos NetGuidsCountPos;
+/////////////////////////////////////////////////////////////////////////
 };

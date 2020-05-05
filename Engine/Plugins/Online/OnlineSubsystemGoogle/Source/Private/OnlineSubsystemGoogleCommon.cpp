@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OnlineSubsystemGoogleCommon.h"
 #include "OnlineSubsystemGooglePrivate.h"
@@ -176,11 +176,6 @@ IOnlineTitleFilePtr FOnlineSubsystemGoogleCommon::GetTitleFileInterface() const
 }
 
 IOnlineEntitlementsPtr FOnlineSubsystemGoogleCommon::GetEntitlementsInterface() const
-{
-	return nullptr;
-}
-
-IOnlineStorePtr FOnlineSubsystemGoogleCommon::GetStoreInterface() const
 {
 	return nullptr;
 }

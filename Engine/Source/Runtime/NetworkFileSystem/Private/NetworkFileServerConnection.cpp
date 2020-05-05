@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NetworkFileServerConnection.h"
 #include "HAL/PlatformFilemanager.h"
@@ -1006,7 +1006,7 @@ bool FNetworkFileServerClientConnection::ProcessGetFileList( FArchive& In, FArch
 				int32 GameDirOffset = ConnectedContentFolder.Find(ConnectedProjectDir, ESearchCase::IgnoreCase, ESearchDir::FromEnd);
 				if (GameDirOffset != INDEX_NONE)
 				{
-					ConnectedContentFolder = ConnectedContentFolder.RightChop(GameDirOffset);
+					ConnectedContentFolder.RightChopInline(GameDirOffset, false);
 				}
 			}
 
@@ -1153,7 +1153,6 @@ void FNetworkFileServerClientConnection::ProcessRecompileShaders( FArchive& In, 
 	// tell other side all the materials to load, by pathname
 	In << RecompileData.MaterialsToLoad;
 	In << RecompileData.ShaderPlatform;
-	In << RecompileData.SerializedShaderResources;
 	In << RecompileData.bCompileChangedShaders;
 
 	NetworkFileDelegates->RecompileShadersDelegate.ExecuteIfBound(RecompileData);

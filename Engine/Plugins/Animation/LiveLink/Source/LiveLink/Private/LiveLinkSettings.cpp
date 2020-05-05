@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "LiveLinkSettings.h"
 #include "LiveLinkSubjectSettings.h"
@@ -11,7 +11,9 @@ FLiveLinkRoleProjectSetting::FLiveLinkRoleProjectSetting()
 
 
 ULiveLinkSettings::ULiveLinkSettings()
-	: MessageBusPingRequestFrequency(1.0)
+	: ClockOffsetCorrectionStep(100e-6)
+	, DefaultMessageBusSourceMode(ELiveLinkSourceMode::EngineTime)
+	, MessageBusPingRequestFrequency(1.0)
 	, MessageBusHeartbeatFrequency(1.0)
 	, MessageBusHeartbeatTimeout(2.0)
 	, MessageBusTimeBeforeRemovingInactiveSource(30.0)

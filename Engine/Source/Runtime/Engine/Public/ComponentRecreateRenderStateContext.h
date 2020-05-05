@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -40,7 +40,7 @@ public:
 	{
 		if (Component && !Component->IsRenderStateCreated() && Component->IsRegistered())
 		{
-			Component->CreateRenderState_Concurrent();
+			Component->CreateRenderState_Concurrent(nullptr);
 
 			UpdateAllPrimitiveSceneInfosForSingleComponent(Component, ScenesToUpdateAllPrimitiveSceneInfos);
 		}
@@ -61,7 +61,7 @@ public:
 
 private:
 	/** The recreate contexts for the individual components. */
-	TIndirectArray<FComponentRecreateRenderStateContext> ComponentContexts;
+	TArray<FComponentRecreateRenderStateContext> ComponentContexts;
 
 	TSet<FSceneInterface*> ScenesToUpdateAllPrimitiveSceneInfos;
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -30,6 +30,9 @@ public:
 	virtual ~FDerivedDataBackendInterface()
 	{
 	}
+
+	/** Return a name for this interface */
+	virtual FString GetName() const = 0;
 
 	/** return true if this cache is writable **/
 	virtual bool IsWritable()=0;

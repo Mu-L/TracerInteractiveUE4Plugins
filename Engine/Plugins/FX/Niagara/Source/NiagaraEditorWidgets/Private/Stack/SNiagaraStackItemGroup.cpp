@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Stack/SNiagaraStackItemGroup.h"
 #include "NiagaraEditorWidgetsStyle.h"
@@ -28,20 +28,21 @@ void SNiagaraStackItemGroup::Construct(const FArguments& InArgs, UNiagaraStackIt
 		.VAlign(VAlign_Center)
 		.Padding(2, 0, 0, 0)
 		[
-			SNew(SNiagaraStackDisplayName, InGroup, *InStackViewModel, "NiagaraEditor.Stack.GroupText")
-			.ColorAndOpacity(this, &SNiagaraStackEntryWidget::GetTextColorForSearch)
+			SNew(SNiagaraStackDisplayName, InGroup, *InStackViewModel)
+			.NameStyle(FNiagaraEditorWidgetsStyle::Get(), "NiagaraEditor.Stack.GroupText")
 		]
 		// Delete group button
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		[
 			SNew(SButton)
-			.Visibility(this, &SNiagaraStackItemGroup::GetDeleteButtonVisibility)
 			.ButtonStyle(FEditorStyle::Get(), "HoverHintOnly")
 			.IsFocusable(false)
 			.ForegroundColor(FNiagaraEditorWidgetsStyle::Get().GetColor("NiagaraEditor.Stack.ForegroundColor"))
-			.ToolTipText(LOCTEXT("DeleteGroupToolTip", "Delete this group"))
+			.ToolTipText(this, &SNiagaraStackItemGroup::GetDeleteButtonToolTip)
 			.OnClicked(this, &SNiagaraStackItemGroup::DeleteClicked)
+			.IsEnabled(this, &SNiagaraStackItemGroup::GetDeleteButtonIsEnabled)
+			.Visibility(this, &SNiagaraStackItemGroup::GetDeleteButtonVisibility)
 			.Content()
 			[
 				SNew(STextBlock)
@@ -53,6 +54,7 @@ void SNiagaraStackItemGroup::Construct(const FArguments& InArgs, UNiagaraStackIt
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		.HAlign(HAlign_Right)
+		.Padding(2, 0, 0, 0)
 		[
 			ConstructAddButton()
 		]
@@ -69,16 +71,22 @@ TSharedRef<SWidget> SNiagaraStackItemGroup::ConstructAddButton()
 	return SNullWidget::NullWidget;
 }
 
+FText SNiagaraStackItemGroup::GetDeleteButtonToolTip() const
+{
+	FText Message;
+	Group->TestCanDeleteWithMessage(Message);
+	return Message;
+}
+
+bool SNiagaraStackItemGroup::GetDeleteButtonIsEnabled() const
+{
+	FText UnusedMessage;
+	return Group->TestCanDeleteWithMessage(UnusedMessage);
+}
+
 EVisibility SNiagaraStackItemGroup::GetDeleteButtonVisibility() const
 {
-	if (Group->CanDelete())
-	{
-		return EVisibility::Visible;
-	}
-	else
-	{
-		return EVisibility::Collapsed;
-	}
+	return Group->SupportsDelete() ? EVisibility::Visible : EVisibility::Collapsed;
 }
 
 FReply SNiagaraStackItemGroup::DeleteClicked()

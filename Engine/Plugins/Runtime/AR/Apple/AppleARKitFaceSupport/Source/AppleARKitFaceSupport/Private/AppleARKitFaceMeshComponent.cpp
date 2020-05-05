@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AppleARKitFaceMeshComponent.h"
 #include "ARBlueprintLibrary.h"
@@ -386,14 +386,23 @@ void UAppleARKitFaceMeshComponent::OnRep_RemoteCurves()
 		{
 			BlendShapes.Add(Curve.GetBlendShape(), Curve.GetAmountAsFloat());
 		}
+
 		// We have to manage this since the ar system isn't updating this locally for us
 		LastUpdateTimestamp = FPlatformTime::Seconds();
-		FTimecode Timecode = FApp::GetTimecode();
-		FFrameRate FrameRate = FApp::GetTimecodeFrameRate();
+
 		// If we are publishing to LiveLink, then push the update out
 		if (LiveLinkSource.IsValid())
 		{
-			LiveLinkSource->PublishBlendShapes(LiveLinkSubjectName, Timecode, FrameRate.Numerator, BlendShapes);
+			TOptional<FQualifiedFrameTime> FrameTimeOpt = FApp::GetCurrentFrameTime();
+
+			if (FrameTimeOpt.IsSet())
+			{
+				LiveLinkSource->PublishBlendShapes(LiveLinkSubjectName, *FrameTimeOpt, BlendShapes);
+			}
+			else
+			{
+				LiveLinkSource->PublishBlendShapes(LiveLinkSubjectName, FQualifiedFrameTime(), BlendShapes);
+			}
 		}
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	LinkerManager.h: Unreal object linker manager
@@ -10,10 +10,13 @@
 #include "UObject/ObjectMacros.h"
 #include "Misc/CoreMisc.h"
 #include "Misc/ScopeLock.h"
+#include "HAL/ThreadSafeBool.h"
 
 class FLinkerManager : private FSelfRegisteringExec
 {
 public:
+	FLinkerManager();
+	~FLinkerManager();
 
 	static FLinkerManager& Get();
 
@@ -110,6 +113,9 @@ public:
 	/** Empty the loaders */
 	void ResetLoaders(UObject* InPkg);
 
+	/** Complete all loading (thumbnails/bulkdata) for the given Package */
+	void EnsureLoadingComplete(UPackage* Package);
+
 	/**
 	* Dissociates all linker import and forced export object references. This currently needs to
 	* happen as the referred objects might be destroyed at any time.
@@ -152,4 +158,5 @@ private:
 #if THREADSAFE_UOBJECTS
 	FCriticalSection PendingCleanupListCritical;
 #endif
+	FThreadSafeBool bHasPendingCleanup;
 };

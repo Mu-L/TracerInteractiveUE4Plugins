@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HeadMountedDisplayBase.h"
 
@@ -20,6 +20,9 @@
 // functions (default ctors, etc.) get compiled into this module
 #include "IXRSystemAssets.h"
 
+
+constexpr float FHeadMountedDisplayBase::PixelDensityMin;
+constexpr float FHeadMountedDisplayBase::PixelDensityMax;
 
 FHeadMountedDisplayBase::FHeadMountedDisplayBase(IARSystemSupport* InARImplementation)
 	: FXRTrackingSystemBase(InARImplementation)

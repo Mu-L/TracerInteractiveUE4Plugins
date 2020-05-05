@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraRenderer.h"
 #include "ParticleResources.h"
@@ -26,112 +26,133 @@ static FAutoConsoleVariableRef CVarNiagaraRadixSortThreshold(
 	ECVF_Default
 );
 
-class FNiagaraDummyRWBufferFloat : public FRenderResource
+class FNiagaraEmptyBufferSRV : public FRenderResource
 {
 public:
-	FNiagaraDummyRWBufferFloat(const FString InDebugId) : DebugId(InDebugId) {}
-	FString DebugId;
-	FRWBuffer Buffer;
+	FNiagaraEmptyBufferSRV(EPixelFormat InPixelFormat, const FString& InDebugName, uint32 InDefaultValue = 0) : PixelFormat(InPixelFormat), DebugName(InDebugName), DefaultValue(InDefaultValue) {}
+	EPixelFormat PixelFormat;
+	FString DebugName;
+	FVertexBufferRHIRef Buffer;
+	FShaderResourceViewRHIRef SRV;
+	uint32 DefaultValue = 0;
+
 
 	virtual void InitRHI() override
 	{
-		UE_LOG(LogNiagara, Log, TEXT("FNiagaraDummyRWBufferFloat InitRHI %s"), *DebugId);
-		Buffer.Initialize(sizeof(float), 1, EPixelFormat::PF_R32_FLOAT, BUF_Static, *DebugId);
+		// Create a buffer with one element.
+		uint32 NumBytes = GPixelFormats[PixelFormat].BlockBytes;
+		FRHIResourceCreateInfo CreateInfo;
+		CreateInfo.DebugName = *DebugName;
+		Buffer = RHICreateVertexBuffer(NumBytes, BUF_ShaderResource | BUF_Static, CreateInfo);
+
+		// Zero the buffer memory.
+		void* Data = RHILockVertexBuffer(Buffer, 0, NumBytes, RLM_WriteOnly);
+		FMemory::Memset(Data, 0, NumBytes);
+		
+		if (PixelFormat == PF_R8G8B8A8)
+		{
+			*reinterpret_cast<uint32*>(Data) = DefaultValue;
+		}
+
+		RHIUnlockVertexBuffer(Buffer);
+
+		SRV = RHICreateShaderResourceView(Buffer, NumBytes, PixelFormat);
 	}
 
 	virtual void ReleaseRHI() override
 	{
-		UE_LOG(LogNiagara, Log, TEXT("FNiagaraDummyRWBufferFloat ReleaseRHI %s"), *DebugId);
-		Buffer.Release();
+		SRV.SafeRelease();
+		Buffer.SafeRelease();
 	}
 };
 
-class FNiagaraDummyRWBufferFloat4 : public FRenderResource
+class FNiagaraEmptyTextureSRV : public FRenderResource
 {
 public:
-	FNiagaraDummyRWBufferFloat4(const FString InDebugId) : DebugId(InDebugId) {}
-	FString DebugId;
-	FRWBuffer Buffer;
+	FNiagaraEmptyTextureSRV(EPixelFormat InPixelFormat, const FString& InDebugName) : PixelFormat(InPixelFormat), DebugName(InDebugName) {}
+	EPixelFormat PixelFormat;
+	FString DebugName;
+	FTexture2DRHIRef Texture;
+	FShaderResourceViewRHIRef SRV;
 
 	virtual void InitRHI() override
 	{
-		UE_LOG(LogNiagara, Log, TEXT("FNiagaraDummyRWBufferFloat InitRHI %s"), *DebugId);
-		Buffer.Initialize(sizeof(float) * 4, 1, EPixelFormat::PF_A32B32G32R32F, BUF_Static, *DebugId);
+		// Create a 1x1 texture.
+		FRHIResourceCreateInfo CreateInfo;
+		CreateInfo.DebugName = *DebugName;
+		Texture = RHICreateTexture2D(1, 1, PixelFormat, 1, 1, TexCreate_ShaderResource, CreateInfo);
+
+		// Zero the texture memory (there's only 1 row, so we can use the stride).
+		uint32 Stride;
+		void* Pixels = RHILockTexture2D(Texture, 0, RLM_WriteOnly, Stride, false);
+		FMemory::Memset(Pixels, 0, Stride);
+		RHIUnlockTexture2D(Texture, 0, false);
+
+		SRV = RHICreateShaderResourceView(Texture, 0);
 	}
 
 	virtual void ReleaseRHI() override
 	{
-		UE_LOG(LogNiagara, Log, TEXT("FNiagaraDummyRWBufferFloat4 ReleaseRHI %s"), *DebugId);
-		Buffer.Release();
+		SRV.SafeRelease();
+		Texture.SafeRelease();
 	}
 };
 
-class FNiagaraDummyRWBufferInt : public FRenderResource
-{
-public:
-	FNiagaraDummyRWBufferInt(const FString InDebugId) : DebugId(InDebugId) {}
-	FString DebugId;
-	FRWBuffer Buffer;
-
-	virtual void InitRHI() override
-	{
-		UE_LOG(LogNiagara, Log, TEXT("FNiagaraDummyRWBufferInt InitRHI %s"), *DebugId);
-		Buffer.Initialize(sizeof(int32), 1, EPixelFormat::PF_R32_SINT, BUF_Static, *DebugId);
-	}
-
-	virtual void ReleaseRHI() override
-	{
-		UE_LOG(LogNiagara, Log, TEXT("FNiagaraDummyRWBufferInt ReleaseRHI %s"), *DebugId);
-		Buffer.Release();
-	}
-};
-
-class FNiagaraDummyRWBufferUInt : public FRenderResource
-{
-public:
-	FNiagaraDummyRWBufferUInt(const FString InDebugId) : DebugId(InDebugId) {}
-	FString DebugId;
-	FRWBuffer Buffer;
-
-	virtual void InitRHI() override
-	{
-		UE_LOG(LogNiagara, Log, TEXT("FNiagaraDummyRWBufferUInt InitRHI %s"), *DebugId);
-		Buffer.Initialize(sizeof(uint32), 1, EPixelFormat::PF_R32_UINT, BUF_Static, *DebugId);
-	}
-
-	virtual void ReleaseRHI() override
-	{
-		UE_LOG(LogNiagara, Log, TEXT("FNiagaraDummyRWBufferUInt ReleaseRHI %s"), *DebugId);
-		Buffer.Release();
-	}
-};
-
-FRWBuffer& FNiagaraRenderer::GetDummyFloatBuffer()
+FRHIShaderResourceView* FNiagaraRenderer::GetDummyFloatBuffer()
 {
 	check(IsInRenderingThread());
-	static TGlobalResource<FNiagaraDummyRWBufferFloat> DummyFloatBuffer(TEXT("NiagaraRenderer::DummyFloat"));
-	return DummyFloatBuffer.Buffer;
+	static TGlobalResource<FNiagaraEmptyBufferSRV> DummyFloatBuffer(PF_R32_FLOAT, TEXT("NiagaraRenderer::DummyFloat"));
+	return DummyFloatBuffer.SRV;
 }
 
-FRWBuffer& FNiagaraRenderer::GetDummyFloat4Buffer()
+FRHIShaderResourceView* FNiagaraRenderer::GetDummyFloat2Buffer()
 {
 	check(IsInRenderingThread());
-	static TGlobalResource<FNiagaraDummyRWBufferFloat4> GetDummyFloat4Buffer(TEXT("NiagaraRenderer::DummyFloat4"));
-	return GetDummyFloat4Buffer.Buffer;
+	static TGlobalResource<FNiagaraEmptyBufferSRV> DummyFloat2Buffer(PF_G16R16F, TEXT("NiagaraRenderer::DummyFloat2"));
+	return DummyFloat2Buffer.SRV;
 }
 
-FRWBuffer& FNiagaraRenderer::GetDummyIntBuffer()
+
+FRHIShaderResourceView* FNiagaraRenderer::GetDummyFloat4Buffer()
 {
 	check(IsInRenderingThread());
-	static TGlobalResource<FNiagaraDummyRWBufferInt> DummyIntBuffer(TEXT("NiagaraRenderer::DummyInt"));
-	return DummyIntBuffer.Buffer;
+	static TGlobalResource<FNiagaraEmptyBufferSRV> DummyFloat4Buffer(PF_A32B32G32R32F, TEXT("NiagaraRenderer::DummyFloat4"));
+	return DummyFloat4Buffer.SRV;
 }
 
-FRWBuffer& FNiagaraRenderer::GetDummyUIntBuffer()
+FRHIShaderResourceView* FNiagaraRenderer::GetDummyWhiteColorBuffer()
 {
 	check(IsInRenderingThread());
-	static TGlobalResource<FNiagaraDummyRWBufferUInt> DummyUIntBuffer(TEXT("NiagaraRenderer::DummyUInt"));
-	return DummyUIntBuffer.Buffer;
+	static TGlobalResource<FNiagaraEmptyBufferSRV> DummyWhiteColorBuffer(PF_R8G8B8A8, TEXT("NiagaraRenderer::DummyWhiteColorBuffer"), FColor::White.ToPackedRGBA());
+	return DummyWhiteColorBuffer.SRV;
+}
+
+FRHIShaderResourceView* FNiagaraRenderer::GetDummyIntBuffer()
+{
+	check(IsInRenderingThread());
+	static TGlobalResource<FNiagaraEmptyBufferSRV> DummyIntBuffer(PF_R32_SINT, TEXT("NiagaraRenderer::DummyInt"));
+	return DummyIntBuffer.SRV;
+}
+
+FRHIShaderResourceView* FNiagaraRenderer::GetDummyUIntBuffer()
+{
+	check(IsInRenderingThread());
+	static TGlobalResource<FNiagaraEmptyBufferSRV> DummyUIntBuffer(PF_R32_UINT, TEXT("NiagaraRenderer::DummyUInt"));
+	return DummyUIntBuffer.SRV;
+}
+
+FRHIShaderResourceView* FNiagaraRenderer::GetDummyUInt4Buffer()
+{
+	check(IsInRenderingThread());
+	static TGlobalResource<FNiagaraEmptyBufferSRV> DummyUInt4Buffer(PF_R32G32B32A32_UINT, TEXT("NiagaraRenderer::DummyUInt4"));
+	return DummyUInt4Buffer.SRV;
+}
+
+FRHIShaderResourceView* FNiagaraRenderer::GetDummyTextureReadBuffer2D()
+{
+	check(IsInRenderingThread());
+	static TGlobalResource<FNiagaraEmptyTextureSRV> DummyTextureReadBuffer2D(PF_R32_FLOAT, TEXT("NiagaraRenderer::DummyTextureReadBuffer2D"));
+	return DummyTextureReadBuffer2D.SRV;
 }
 
 bool FNiagaraRenderer::SetVertexFactoryVariable(const FNiagaraDataSet& DataSet, const FNiagaraVariable& Var, int32 VFVarOffset)
@@ -167,9 +188,11 @@ bool FNiagaraRenderer::SetVertexFactoryVariable(const FNiagaraDataSet& DataSet, 
 
 FGlobalDynamicReadBuffer::FAllocation FNiagaraRenderer::TransferDataToGPU(FGlobalDynamicReadBuffer& DynamicReadBuffer, FNiagaraDataBuffer* SrcData)const
 {
-	int32 TotalFloatSize = TotalVFComponents * SrcData->GetNumInstances();
-	int32 ComponentStrideDest = SrcData->GetNumInstances() * sizeof(float);
-	FGlobalDynamicReadBuffer::FAllocation Allocation = DynamicReadBuffer.AllocateFloat(TotalFloatSize);
+	const int32 TotalFloatSize = TotalVFComponents * SrcData->GetNumInstances();
+	const int32 ComponentStrideDest = SrcData->GetNumInstances() * sizeof(float);
+
+	//-TODO: We are allocating 4 bytes where we need no memory, ideally we fix the underlying code to handle 0 allocations this is a temporary band-aid
+	FGlobalDynamicReadBuffer::FAllocation Allocation = DynamicReadBuffer.AllocateFloat(FMath::Max(4, TotalFloatSize));
 	for (const FNiagaraRendererVariableInfo& VarInfo : VFVariables)
 	{
 		int32 GpuOffset = VarInfo.GetGPUOffset();
@@ -246,6 +269,7 @@ FNiagaraRenderer::FNiagaraRenderer(ERHIFeatureLevel::Type InFeatureLevel, const 
 	: DynamicDataRender(nullptr)
 	, bLocalSpace(Emitter->GetCachedEmitter()->bLocalSpace)
 	, bHasLights(false)
+	, bMotionBlurEnabled(InProps ? InProps->bMotionBlurEnabled : false)
 	, SimTarget(Emitter->GetCachedEmitter()->SimTarget)
 	, NumIndicesPerInstance(InProps ? InProps->GetNumIndicesPerInstance() : 0)
 	, FeatureLevel(InFeatureLevel)
@@ -266,7 +290,7 @@ void FNiagaraRenderer::Initialize(const UNiagaraRendererProperties *InProps, con
 		{
 			Mat = UMaterial::GetDefaultMaterial(MD_Surface);
 		}
-		BaseMaterialRelevance_GT |= Mat->GetRelevance(FeatureLevel);
+		BaseMaterialRelevance_GT |= Mat->GetRelevance_Concurrent(FeatureLevel);
 	}
 }
 
@@ -283,7 +307,7 @@ void FNiagaraRenderer::CreateRenderThreadResources(NiagaraEmitterInstanceBatcher
 		NumRegisteredGPURenderers = Batcher->GetGPUInstanceCounterManager().GetGPURendererCount();
 		if (NumRegisteredGPURenderers)
 		{
-			NumRegisteredGPURenderers->Value += 1;
+			NumRegisteredGPURenderers->Value += GetMaxIndirectArgs();
 		}
 	}
 }
@@ -292,7 +316,7 @@ void FNiagaraRenderer::ReleaseRenderThreadResources()
 {
 	if (NumRegisteredGPURenderers)
 	{
-		NumRegisteredGPURenderers->Value -= 1;
+		NumRegisteredGPURenderers->Value -= GetMaxIndirectArgs();
 		NumRegisteredGPURenderers.SafeRelease();
 	}
 }
@@ -308,7 +332,7 @@ FPrimitiveViewRelevance FNiagaraRenderer::GetViewRelevance(const FSceneView* Vie
 	Result.bDynamicRelevance = bHasDynamicData;
 	if (bHasDynamicData)
 	{
-		Result.bOpaqueRelevance = View->Family->EngineShowFlags.Bounds;
+		Result.bOpaque = View->Family->EngineShowFlags.Bounds;
 		DynamicDataRender->GetMaterialRelevance().SetPrimitiveViewRelevance(Result);
 	}
 
@@ -350,7 +374,7 @@ void FNiagaraRenderer::SortIndices(const FNiagaraGPUSortInfo& SortInfo, int32 So
 	SCOPE_CYCLE_COUNTER(STAT_NiagaraSortParticles);
 
 	uint32 NumInstances = Buffer.GetNumInstances();
-	check(OutIndices.ReadBuffer->NumBytes >= OutIndices.FirstIndex + NumInstances * sizeof(int32));
+	check(OutIndices.ReadBuffer->NumBytes >= (OutIndices.Buffer - OutIndices.ReadBuffer->MappedBuffer) + NumInstances * sizeof(int32));
 	check(SortInfo.SortMode != ENiagaraSortMode::None);
 	check(VFVariables.IsValidIndex(SortVarIdx));
 	check(SortInfo.SortAttributeOffset != INDEX_NONE);

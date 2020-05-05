@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	UnParticleEmitterInstances.h: 
@@ -1358,6 +1358,21 @@ void ClearIndices(int32 TrailIndex, int32 ParticleIndex){}
 void CheckIndices(int32 TrailIdx){}
 void CheckAllIndices(){}
 
+#endif
+
+	void DumpCircularTrailsSpam();
+#if !UE_BUILD_SHIPPING
+	bool CheckForCircularTrail(FBaseParticle* StartParticle, FBaseParticle* CheckParticle)
+	{
+		if (StartParticle == CheckParticle)
+		{
+			DumpCircularTrailsSpam();
+			return true;
+		}
+		return false;
+	}
+#else
+	bool CheckForCircularTrail(FBaseParticle* StartParticle, FBaseParticle* CheckParticle) { return StartParticle == CheckParticle; }
 #endif
 
 	/** Constructor	*/

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SplineComponentVisualizer.h"
 #include "CoreMinimal.h"
@@ -163,7 +163,7 @@ FSplineComponentVisualizer::FSplineComponentVisualizer()
 
 	SplineComponentVisualizerActions = MakeShareable(new FUICommandList);
 
-	SplineCurvesProperty = FindField<UProperty>(USplineComponent::StaticClass(), GET_MEMBER_NAME_CHECKED(USplineComponent, SplineCurves));
+	SplineCurvesProperty = FindFProperty<FProperty>(USplineComponent::StaticClass(), GET_MEMBER_NAME_CHECKED(USplineComponent, SplineCurves));
 }
 
 void FSplineComponentVisualizer::OnRegister()
@@ -355,36 +355,49 @@ void FSplineComponentVisualizer::DrawVisualization(const UActorComponent* Compon
 		// Draw the tangent handles before anything else so they will not overdraw the rest of the spline
 		if (SplineComp == EditedSplineComp)
 		{
-			for (int32 SelectedKey : SelectedKeys)
+			if (SplineComp->GetNumberOfSplinePoints() == 0 && SelectedKeys.Num() > 0)
 			{
-				check(SelectedKey >= 0);
-				check(SelectedKey < SplineComp->GetNumberOfSplinePoints());
-
-				if (SplineInfo.Points[SelectedKey].IsCurveKey())
+				ChangeSelectionState(INDEX_NONE, false);
+			}
+			else
+			{
+				const TSet<int32> SelectedKeysCopy = SelectedKeys;
+				for (int32 SelectedKey : SelectedKeysCopy)
 				{
-					const FVector Location = SplineComp->GetLocationAtSplinePoint(SelectedKey, ESplineCoordinateSpace::World);
-					const FVector LeaveTangent = SplineComp->GetLeaveTangentAtSplinePoint(SelectedKey, ESplineCoordinateSpace::World);
-					const FVector ArriveTangent = SplineComp->bAllowDiscontinuousSpline ?
-						SplineComp->GetArriveTangentAtSplinePoint(SelectedKey, ESplineCoordinateSpace::World) : LeaveTangent;
-
-					PDI->SetHitProxy(NULL);
-
-					PDI->DrawLine(Location, Location + LeaveTangent, SelectedColor, SDPG_Foreground);
-					PDI->DrawLine(Location, Location - ArriveTangent, SelectedColor, SDPG_Foreground);
-
-					if (bIsSplineEditable)
+					check(SelectedKey >= 0);
+					if (SelectedKey >= SplineComp->GetNumberOfSplinePoints())
 					{
-						PDI->SetHitProxy(new HSplineTangentHandleProxy(Component, SelectedKey, false));
+						// Catch any keys that might not exist anymore due to the underlying component changing.
+						ChangeSelectionState(SelectedKey, true);
+						continue;
 					}
-					PDI->DrawPoint(Location + LeaveTangent, SelectedColor, TangentHandleSize, SDPG_Foreground);
 
-					if (bIsSplineEditable)
+					if (SplineInfo.Points[SelectedKey].IsCurveKey())
 					{
-						PDI->SetHitProxy(new HSplineTangentHandleProxy(Component, SelectedKey, true));
-					}
-					PDI->DrawPoint(Location - ArriveTangent, SelectedColor, TangentHandleSize, SDPG_Foreground);
+						const FVector Location = SplineComp->GetLocationAtSplinePoint(SelectedKey, ESplineCoordinateSpace::World);
+						const FVector LeaveTangent = SplineComp->GetLeaveTangentAtSplinePoint(SelectedKey, ESplineCoordinateSpace::World);
+						const FVector ArriveTangent = SplineComp->bAllowDiscontinuousSpline ?
+							SplineComp->GetArriveTangentAtSplinePoint(SelectedKey, ESplineCoordinateSpace::World) : LeaveTangent;
 
-					PDI->SetHitProxy(NULL);
+						PDI->SetHitProxy(NULL);
+
+						PDI->DrawLine(Location, Location + LeaveTangent, SelectedColor, SDPG_Foreground);
+						PDI->DrawLine(Location, Location - ArriveTangent, SelectedColor, SDPG_Foreground);
+
+						if (bIsSplineEditable)
+						{
+							PDI->SetHitProxy(new HSplineTangentHandleProxy(Component, SelectedKey, false));
+						}
+						PDI->DrawPoint(Location + LeaveTangent, SelectedColor, TangentHandleSize, SDPG_Foreground);
+
+						if (bIsSplineEditable)
+						{
+							PDI->SetHitProxy(new HSplineTangentHandleProxy(Component, SelectedKey, true));
+						}
+						PDI->DrawPoint(Location - ArriveTangent, SelectedColor, TangentHandleSize, SDPG_Foreground);
+
+						PDI->SetHitProxy(NULL);
+					}
 				}
 			}
 		}
@@ -2348,7 +2361,7 @@ void FSplineComponentVisualizer::OnSetVisualizeRollAndScale()
 
 	SplineComp->bShouldVisualizeScale = !SplineComp->bShouldVisualizeScale;
 
-	NotifyPropertyModified(SplineComp, FindField<UProperty>(USplineComponent::StaticClass(), GET_MEMBER_NAME_CHECKED(USplineComponent, bShouldVisualizeScale)));
+	NotifyPropertyModified(SplineComp, FindFProperty<FProperty>(USplineComponent::StaticClass(), GET_MEMBER_NAME_CHECKED(USplineComponent, bShouldVisualizeScale)));
 
 	GEditor->RedrawLevelEditingViewports(true);
 }
@@ -2384,9 +2397,9 @@ void FSplineComponentVisualizer::OnSetDiscontinuousSpline()
 		}
 	}
 
-	TArray<UProperty*> Properties;
+	TArray<FProperty*> Properties;
 	Properties.Add(SplineCurvesProperty);
-	Properties.Add(FindField<UProperty>(USplineComponent::StaticClass(), GET_MEMBER_NAME_CHECKED(USplineComponent, bAllowDiscontinuousSpline)));
+	Properties.Add(FindFProperty<FProperty>(USplineComponent::StaticClass(), GET_MEMBER_NAME_CHECKED(USplineComponent, bAllowDiscontinuousSpline)));
 	NotifyPropertiesModified(SplineComp, Properties);
 
 	GEditor->RedrawLevelEditingViewports(true);

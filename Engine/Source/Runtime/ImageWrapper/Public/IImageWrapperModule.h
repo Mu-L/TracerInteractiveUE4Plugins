@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -34,7 +34,7 @@ public:
 	 * @param InCompressedSize The size of InCompressedData.
 	 * @return the detected format or EImageFormat::Invalid if the method could not detect the image format.
 	 */
-	virtual EImageFormat DetectImageFormat(const void* InCompressedData, int32 InCompressedSize) = 0;
+	virtual EImageFormat DetectImageFormat(const void* InCompressedData, int64 InCompressedSize) = 0;
 
 public:
 

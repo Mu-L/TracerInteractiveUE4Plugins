@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SRigHierarchy.h"
 #include "Widgets/Input/SComboButton.h"
 #include "EditorStyleSet.h"
+#include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SSearchBox.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "ScopedTransaction.h"
@@ -14,7 +15,6 @@
 #include "Widgets/Text/STextBlock.h"
 #include "K2Node_VariableGet.h"
 #include "ControlRigBlueprintUtils.h"
-#include "NodeSpawners/ControlRigPropertyNodeSpawner.h"
 #include "ControlRigHierarchyCommands.h"
 #include "ControlRigBlueprint.h"
 #include "Graph/ControlRigGraph.h"
@@ -31,7 +31,11 @@
 #include "ControlRig.h"
 #include "ControlRigEditorStyle.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "HAL/PlatformTime.h"
 #include "Dialogs/Dialogs.h"
+#include "IPersonaToolkit.h"
+#include "SKismetInspector.h"
+#include "Types/WidgetActiveTimerDelegate.h"
 
 #define LOCTEXT_NAMESPACE "SRigHierarchy"
 
@@ -226,16 +230,15 @@ SRigHierarchy::~SRigHierarchy()
 		ControlRigEditor.Pin()->GetKeyDownDelegate().Unbind();
 		ControlRigEditor.Pin()->OnViewportContextMenu().Unbind();
 		ControlRigEditor.Pin()->OnViewportContextMenuCommands().Unbind();
+	}
 
-		ControlRigBlueprint = ControlRigEditor.Pin()->GetControlRigBlueprint();
-		if (ControlRigBlueprint.IsValid())
-		{
-			ControlRigBlueprint->HierarchyContainer.OnElementAdded.RemoveAll(this);
-			ControlRigBlueprint->HierarchyContainer.OnElementRemoved.RemoveAll(this);
-			ControlRigBlueprint->HierarchyContainer.OnElementRenamed.RemoveAll(this);
-			ControlRigBlueprint->HierarchyContainer.OnElementReparented.RemoveAll(this);
-			ControlRigBlueprint->HierarchyContainer.OnElementSelected.RemoveAll(this);
-		}
+	if (ControlRigBlueprint.IsValid())
+	{
+		ControlRigBlueprint->HierarchyContainer.OnElementAdded.RemoveAll(this);
+		ControlRigBlueprint->HierarchyContainer.OnElementRemoved.RemoveAll(this);
+		ControlRigBlueprint->HierarchyContainer.OnElementRenamed.RemoveAll(this);
+		ControlRigBlueprint->HierarchyContainer.OnElementReparented.RemoveAll(this);
+		ControlRigBlueprint->HierarchyContainer.OnElementSelected.RemoveAll(this);
 	}
 }
 
@@ -277,11 +280,34 @@ void SRigHierarchy::Construct(const FArguments& InArgs, TSharedRef<FControlRigEd
 			.BorderBackgroundColor(FLinearColor(0.6f, 0.6f, 0.6f, 1.0f))
 			[
 				SNew(SVerticalBox)
+
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.VAlign(VAlign_Top)
+				[
+					SNew(SHorizontalBox)
+					.Visibility(this, &SRigHierarchy::IsToolbarVisible)
+
+					+ SHorizontalBox::Slot()
+					.VAlign(VAlign_Center)
+					.MaxWidth(180.0f)
+					.Padding(3.0f, 1.0f)
+					[
+						SNew(SButton)
+						.ButtonStyle(FEditorStyle::Get(), "FlatButton.Success")
+						.ForegroundColor(FLinearColor::White)
+						.OnClicked(FOnClicked::CreateSP(this, &SRigHierarchy::OnImportSkeletonClicked))
+						.Text(FText::FromString(TEXT("Import Hierarchy")))
+					]
+				]
+
 				+SVerticalBox::Slot()
 				.AutoHeight()
 				.VAlign(VAlign_Top)
 				[
 					SNew(SHorizontalBox)
+					.Visibility(this, &SRigHierarchy::IsSearchbarVisible)
+
 					+SHorizontalBox::Slot()
 					.VAlign(VAlign_Center)
 					.Padding(3.0f, 1.0f)
@@ -299,13 +325,15 @@ void SRigHierarchy::Construct(const FArguments& InArgs, TSharedRef<FControlRigEd
 			.Padding(2.0f)
 			.BorderImage(FEditorStyle::GetBrush("SCSEditor.TreePanel"))
 			[
-				SAssignNew(TreeView, STreeView<TSharedPtr<FRigTreeElement>>)
+				SAssignNew(TreeView, SRigHierarchyTreeView)
 				.TreeItemsSource(&RootElements)
 				.SelectionMode(ESelectionMode::Multi)
 				.OnGenerateRow(this, &SRigHierarchy::MakeTableRowWidget)
 				.OnGetChildren(this, &SRigHierarchy::HandleGetChildrenForTree)
 				.OnSelectionChanged(this, &SRigHierarchy::OnSelectionChanged)
 				.OnContextMenuOpening(this, &SRigHierarchy::CreateContextMenu)
+				.OnMouseButtonClick(this, &SRigHierarchy::OnItemClicked)
+				.OnMouseButtonDoubleClick(this, &SRigHierarchy::OnItemDoubleClicked)
 				.HighlightParentNodesForSelection(true)
 				.ItemHeight(24)
 			]
@@ -373,16 +401,6 @@ void SRigHierarchy::BindCommands()
 		FCanExecuteAction::CreateSP(this, &SRigHierarchy::IsMultiSelected));
 
 	CommandList->MapAction(
-		Commands.ResetInitialTransform,
-		FExecuteAction::CreateSP(this, &SRigHierarchy::HandleResetInitialTransform),
-		FCanExecuteAction::CreateSP(this, &SRigHierarchy::IsMultiSelected));
-
-	CommandList->MapAction(
-		Commands.ResetSpace,
-		FExecuteAction::CreateSP(this, &SRigHierarchy::HandleResetSpace),
-		FCanExecuteAction::CreateSP(this, &SRigHierarchy::IsControlSelected));
-
-	CommandList->MapAction(
 		Commands.SetInitialTransformFromClosestBone,
 		FExecuteAction::CreateSP(this, &SRigHierarchy::HandleSetInitialTransformFromClosestBone),
 		FCanExecuteAction::CreateSP(this, &SRigHierarchy::IsControlOrSpaceSelected));
@@ -390,12 +408,22 @@ void SRigHierarchy::BindCommands()
 	CommandList->MapAction(
 		Commands.SetInitialTransformFromCurrentTransform,
 		FExecuteAction::CreateSP(this, &SRigHierarchy::HandleSetInitialTransformFromCurrentTransform),
-		FCanExecuteAction::CreateSP(this, &SRigHierarchy::IsControlOrSpaceSelected));
+		FCanExecuteAction::CreateSP(this, &SRigHierarchy::IsMultiSelected));
 
 	CommandList->MapAction(
 		Commands.FrameSelection,
 		FExecuteAction::CreateSP(this, &SRigHierarchy::HandleFrameSelection),
 		FCanExecuteAction::CreateSP(this, &SRigHierarchy::IsMultiSelected));
+
+	CommandList->MapAction(
+		Commands.ControlBoneTransform,
+		FExecuteAction::CreateSP(this, &SRigHierarchy::HandleControlBoneOrSpaceTransform),
+		FCanExecuteAction::CreateSP(this, &SRigHierarchy::IsSingleBoneSelected));
+
+	CommandList->MapAction(
+		Commands.ControlSpaceTransform,
+		FExecuteAction::CreateSP(this, &SRigHierarchy::HandleControlBoneOrSpaceTransform),
+		FCanExecuteAction::CreateSP(this, &SRigHierarchy::IsSingleSpaceSelected));
 }
 
 FReply SRigHierarchy::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
@@ -405,6 +433,48 @@ FReply SRigHierarchy::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& In
 		return FReply::Handled();
 	}
 	return FReply::Unhandled();
+}
+
+EVisibility SRigHierarchy::IsToolbarVisible() const
+{
+	if (FRigHierarchyContainer* Container = GetHierarchyContainer())
+	{
+		if (Container->BoneHierarchy.Num() > 0)
+		{
+			return EVisibility::Collapsed;
+		}
+	}
+	return EVisibility::Visible;
+}
+
+EVisibility SRigHierarchy::IsSearchbarVisible() const
+{
+	if (FRigHierarchyContainer* Container = GetHierarchyContainer())
+	{
+		if ((Container->BoneHierarchy.Num() + Container->SpaceHierarchy.Num() + Container->ControlHierarchy.Num()) > 0)
+		{
+			return EVisibility::Visible;
+		}
+	}
+	return EVisibility::Collapsed;
+}
+
+FReply SRigHierarchy::OnImportSkeletonClicked()
+{
+	FRigHierarchyImportSettings Settings;
+	TSharedPtr<FStructOnScope> StructToDisplay = MakeShareable(new FStructOnScope(FRigHierarchyImportSettings::StaticStruct(), (uint8*)&Settings));
+
+	TSharedRef<SKismetInspector> KismetInspector = SNew(SKismetInspector);
+	KismetInspector->ShowSingleStruct(StructToDisplay);
+
+	SGenericDialogWidget::OpenDialog(LOCTEXT("ControlRigHierarchyImport", "Import Hierarchy"), KismetInspector, SGenericDialogWidget::FArguments(), true);
+
+	if (Settings.Mesh != nullptr)
+	{
+		ImportHierarchy(FAssetData(Settings.Mesh));
+	}
+
+	return FReply::Handled();
 }
 
 void SRigHierarchy::OnFilterTextChanged(const FText& SearchText)
@@ -602,6 +672,7 @@ void SRigHierarchy::AddElement(FRigElementKey InKey, FRigElementKey InParentKey)
 		if (InKey.Name.ToString().Contains(FilteredString) || InKey.Name.ToString().Contains(FilteredStringUnderScores))	
 		{
 			TSharedPtr<FRigTreeElement> NewItem = MakeShared<FRigTreeElement>(InKey, SharedThis(this));
+			ElementMap.Add(InKey, NewItem);
 			RootElements.Add(NewItem);
 		}
 	}
@@ -688,6 +759,15 @@ void SRigHierarchy::OnRigElementAdded(FRigHierarchyContainer* Container, const F
 	{
 		return;
 	}
+
+	if (InKey.Type == ERigElementType::Control)
+	{
+		if (Container->GetIndex(InKey) == INDEX_NONE)
+		{
+			return;
+		}
+	}
+
 	RefreshTreeView();
 }
 
@@ -697,6 +777,15 @@ void SRigHierarchy::OnRigElementRemoved(FRigHierarchyContainer* Container, const
 	{
 		return;
 	}
+
+	if (InKey.Type == ERigElementType::Control)
+	{
+		if (Container->GetIndex(InKey) == INDEX_NONE)
+		{
+			return;
+		}
+	}
+
 	RefreshTreeView();
 }
 
@@ -725,6 +814,14 @@ void SRigHierarchy::OnRigElementSelected(FRigHierarchyContainer* Container, cons
 		return;
 	}
 
+	if (InKey.Type == ERigElementType::Control)
+	{
+		if (Container->GetIndex(InKey) == INDEX_NONE)
+		{
+			return;
+		}
+	}
+
 	for (int32 RootIndex = 0; RootIndex < RootElements.Num(); ++RootIndex)
 	{
 		TSharedPtr<FRigTreeElement> Found = FindElement(InKey, RootElements[RootIndex]);
@@ -749,13 +846,58 @@ TSharedPtr< SWidget > SRigHierarchy::CreateContextMenu()
 	return MenuBuilder.MakeWidget();
 }
 
+void SRigHierarchy::OnItemClicked(TSharedPtr<FRigTreeElement> InItem)
+{
+	FRigHierarchyContainer* Hierarchy = GetHierarchyContainer();
+	if (Hierarchy->IsSelected(InItem->Key))
+	{
+		if (ControlRigEditor.IsValid())
+		{
+			ControlRigEditor.Pin()->SetDetailStruct(InItem->Key);
+		}
+
+		if (InItem->Key.Type == ERigElementType::Bone)
+		{
+			const FRigBone& Bone = Hierarchy->BoneHierarchy[InItem->Key.Name];
+			if (Bone.Type == ERigBoneType::Imported)
+			{
+				return;
+			}
+		}
+
+		uint32 CurrentCycles = FPlatformTime::Cycles();
+		double SecondsPassed = double(CurrentCycles - TreeView->LastClickCycles) * FPlatformTime::GetSecondsPerCycle();
+		if (SecondsPassed > 0.5f)
+		{
+			RegisterActiveTimer(0.f, FWidgetActiveTimerDelegate::CreateLambda([this](double, float) {
+				HandleRenameItem();
+				return EActiveTimerReturnType::Stop;
+			}));
+		}
+
+		TreeView->LastClickCycles = CurrentCycles;
+	}
+}
+
+void SRigHierarchy::OnItemDoubleClicked(TSharedPtr<FRigTreeElement> InItem)
+{
+	if (TreeView->IsItemExpanded(InItem))
+	{
+		TreeView->SetItemExpansion(InItem, false);
+	}
+	else
+	{
+		SetExpansionRecursive(InItem, false);
+	}
+}
+
 void SRigHierarchy::FillContextMenu(class FMenuBuilder& MenuBuilder)
 {
 	const FControlRigHierarchyCommands& Actions = FControlRigHierarchyCommands::Get();
 	{
 		struct FLocalMenuBuilder
 		{
-			static void FillNewMenu(FMenuBuilder& InSubMenuBuilder, TSharedPtr<STreeView<TSharedPtr<FRigTreeElement>>> InTreeView)
+			static void FillNewMenu(FMenuBuilder& InSubMenuBuilder, TSharedPtr<SRigHierarchyTreeView> InTreeView)
 			{
 				const FControlRigHierarchyCommands& Actions = FControlRigHierarchyCommands::Get();
 
@@ -770,7 +912,6 @@ void SRigHierarchy::FillContextMenu(class FMenuBuilder& MenuBuilder)
 				{
 					InSubMenuBuilder.AddMenuEntry(Actions.AddBoneItem);
 				}
-
 				InSubMenuBuilder.AddMenuEntry(Actions.AddControlItem);
 				InSubMenuBuilder.AddMenuEntry(Actions.AddSpaceItem);
 			}
@@ -785,6 +926,20 @@ void SRigHierarchy::FillContextMenu(class FMenuBuilder& MenuBuilder)
 		MenuBuilder.AddMenuEntry(Actions.RenameItem);
 		MenuBuilder.EndSection();
 
+		if (IsSingleBoneSelected())
+		{
+			MenuBuilder.BeginSection("Interaction", LOCTEXT("InteractionHeader", "Interaction"));
+			MenuBuilder.AddMenuEntry(Actions.ControlBoneTransform);
+			MenuBuilder.EndSection();
+		}
+
+		if (IsSingleSpaceSelected())
+		{
+			MenuBuilder.BeginSection("Interaction", LOCTEXT("InteractionHeader", "Interaction"));
+			MenuBuilder.AddMenuEntry(Actions.ControlSpaceTransform);
+			MenuBuilder.EndSection();
+		}
+
 		MenuBuilder.BeginSection("Copy&Paste", LOCTEXT("Copy&PasteHeader", "Copy & Paste"));
 		MenuBuilder.AddMenuEntry(Actions.CopyItems);
 		MenuBuilder.AddMenuEntry(Actions.PasteItems);
@@ -794,10 +949,8 @@ void SRigHierarchy::FillContextMenu(class FMenuBuilder& MenuBuilder)
 
 		MenuBuilder.BeginSection("Transforms", LOCTEXT("TransformsHeader", "Transforms"));
 		MenuBuilder.AddMenuEntry(Actions.ResetTransform);
-		MenuBuilder.AddMenuEntry(Actions.ResetInitialTransform);
 		MenuBuilder.AddMenuEntry(Actions.SetInitialTransformFromCurrentTransform);
 		MenuBuilder.AddMenuEntry(Actions.SetInitialTransformFromClosestBone);
-		MenuBuilder.AddMenuEntry(Actions.ResetSpace);
 		MenuBuilder.EndSection();
 
 		MenuBuilder.BeginSection("Assets", LOCTEXT("AssetsHeader", "Assets"));
@@ -859,9 +1012,13 @@ void SRigHierarchy::RefreshHierarchy(const FAssetData& InAssetData)
 		ControlRigBlueprint->Modify();
 
 		const FReferenceSkeleton& RefSkeleton = Mesh->RefSkeleton;
-		Hierarchy->BoneHierarchy.ImportSkeleton(RefSkeleton, NAME_None, true, true, true);
+		Hierarchy->BoneHierarchy.ImportSkeleton(RefSkeleton, NAME_None, true, true, true, false /* notify */);
 	}
+
+	FSlateApplication::Get().DismissAllMenus();
+	RefreshTreeView();
 }
+
 void SRigHierarchy::CreateImportMenu(FMenuBuilder& MenuBuilder)
 {
 	MenuBuilder.AddWidget(
@@ -899,10 +1056,22 @@ void SRigHierarchy::ImportHierarchy(const FAssetData& InAssetData)
 		ControlRigBlueprint->Modify();
 
 		const FReferenceSkeleton& RefSkeleton = Mesh->RefSkeleton;
-		Hierarchy->BoneHierarchy.ImportSkeleton(RefSkeleton, NAME_None, false, false, true);
+		Hierarchy->BoneHierarchy.ImportSkeleton(RefSkeleton, NAME_None, false, false, true, false /* notify */);
+	}
 
-		FSlateApplication::Get().DismissAllMenus();
-		RefreshTreeView();
+	FSlateApplication::Get().DismissAllMenus();
+	RefreshTreeView();
+
+	if (ControlRigBlueprint->GetPreviewMesh() == nullptr &&
+		ControlRigEditor.IsValid() && 
+		Mesh != nullptr)
+	{
+		ControlRigEditor.Pin()->GetPersonaToolkit()->SetPreviewMesh(Mesh, true);
+	}
+
+	if (ControlRigEditor.IsValid())
+	{
+		ControlRigEditor.Pin()->Compile();
 	}
 }
 
@@ -914,6 +1083,24 @@ bool SRigHierarchy::IsMultiSelected() const
 bool SRigHierarchy::IsSingleSelected() const
 {
 	return TreeView->GetNumItemsSelected() == 1;
+}
+
+bool SRigHierarchy::IsSingleBoneSelected() const
+{
+	if(!IsSingleSelected())
+	{
+		return false;
+	}
+	return TreeView->GetSelectedItems()[0]->Key.Type == ERigElementType::Bone;
+}
+
+bool SRigHierarchy::IsSingleSpaceSelected() const
+{
+	if(!IsSingleSelected())
+	{
+		return false;
+	}
+	return TreeView->GetSelectedItems()[0]->Key.Type == ERigElementType::Space;
 }
 
 bool SRigHierarchy::IsControlSelected() const
@@ -1022,10 +1209,10 @@ void SRigHierarchy::HandleDeleteItem()
 				}
 			}
 		}
-
-		RefreshTreeView();
-		FSlateApplication::Get().DismissAllMenus();
  	}
+
+	RefreshTreeView();
+	FSlateApplication::Get().DismissAllMenus();
 }
 
 bool SRigHierarchy::CanDeleteItem() const
@@ -1131,12 +1318,13 @@ void SRigHierarchy::HandleNewItem(ERigElementType InElementType)
 				}
 			}
 		}
+
 		Hierarchy->ClearSelection();
 		Hierarchy->Select(FRigElementKey(NewElementName, InElementType));
-
-		FSlateApplication::Get().DismissAllMenus();
-		RefreshTreeView();
 	}
+
+	FSlateApplication::Get().DismissAllMenus();
+	RefreshTreeView();
 }
 
 /** Check whether we can deleting the selected item(s) */
@@ -1181,6 +1369,18 @@ void SRigHierarchy::HandleDuplicateItem()
 					FRigControl Control = Hierarchy->ControlHierarchy[Key.Name];
 					const FName NewName = CreateUniqueName(Key.Name, Key.Type);
 					FRigControl& NewControl = Hierarchy->ControlHierarchy.Add(NewName, Control.ControlType, Control.ParentName, Control.SpaceName, Control.InitialValue, Control.GizmoName, Control.GizmoTransform, Control.GizmoColor);
+
+					// copy additional members
+					NewControl.bAnimatable = Control.bAnimatable;
+					NewControl.PrimaryAxis = Control.PrimaryAxis;
+					NewControl.bLimitTranslation = Control.bLimitTranslation;
+					NewControl.bLimitRotation = Control.bLimitRotation;
+					NewControl.bLimitScale = Control.bLimitScale;
+					NewControl.MinimumValue = Control.MinimumValue;
+					NewControl.MaximumValue = Control.MaximumValue;
+					NewControl.bDrawLimits = Control.bDrawLimits;
+					NewControl.bGizmoEnabled = Control.bGizmoEnabled;
+
 					NewKeys.Add(NewControl.GetElementKey());
 					break;
 				}
@@ -1204,10 +1404,12 @@ void SRigHierarchy::HandleDuplicateItem()
 		{
 			Hierarchy->Select(NewKeys[Index]);
 		}
-
-		FSlateApplication::Get().DismissAllMenus();
-		RefreshTreeView();
+		
+		ControlRigBlueprint->PropagateHierarchyFromBPToInstances(false);
 	}
+
+	FSlateApplication::Get().DismissAllMenus();
+	RefreshTreeView();
 }
 
 /** Check whether we can deleting the selected item(s) */
@@ -1219,11 +1421,14 @@ bool SRigHierarchy::CanRenameItem() const
 /** Delete Item */
 void SRigHierarchy::HandleRenameItem()
 {
+	if (!CanRenameItem())
+	{
+		return;
+	}
+
 	FRigHierarchyContainer* Hierarchy = GetHierarchyContainer();
 	if (Hierarchy)
 	{
-		ClearDetailPanel();
-
 		FScopedTransaction Transaction(LOCTEXT("HierarchyTreeRenameSelected", "Rename selected item from hierarchy"));
 		ControlRigBlueprint->Modify();
 
@@ -1270,7 +1475,7 @@ bool SRigHierarchy::CanCopyOrPasteItems() const
 
 void SRigHierarchy::HandleCopyItems()
 {
-	if (FRigHierarchyContainer* Hierarchy = GetHierarchyContainer())
+	if (FRigHierarchyContainer* Hierarchy = GetDebuggedHierarchyContainer())
 	{
 		TArray<FRigElementKey> Selection = GetHierarchyContainer()->CurrentSelection();
 		FString Content = Hierarchy->ExportToText(Selection);
@@ -1289,8 +1494,9 @@ void SRigHierarchy::HandlePasteItems()
 		ControlRigBlueprint->Modify();
 
 		Hierarchy->ImportFromText(Content, ERigHierarchyImportMode::Append, true);
-		ControlRigBlueprint->PropagateHierarchyFromBPToInstances(false);
 	}
+
+	ControlRigBlueprint->PropagateHierarchyFromBPToInstances(false);
 }
 
 void SRigHierarchy::HandlePasteLocalTransforms()
@@ -1304,8 +1510,9 @@ void SRigHierarchy::HandlePasteLocalTransforms()
 		ControlRigBlueprint->Modify();
 
 		Hierarchy->ImportFromText(Content, ERigHierarchyImportMode::ReplaceLocalTransform, true);
-		ControlRigBlueprint->PropagateHierarchyFromBPToInstances(false);
 	}
+
+	ControlRigBlueprint->PropagateHierarchyFromBPToInstances(false);
 }
 
 void SRigHierarchy::HandlePasteGlobalTransforms()
@@ -1319,8 +1526,9 @@ void SRigHierarchy::HandlePasteGlobalTransforms()
 		ControlRigBlueprint->Modify();
 
 		Hierarchy->ImportFromText(Content, ERigHierarchyImportMode::ReplaceGlobalTransform, true);
-		ControlRigBlueprint->PropagateHierarchyFromBPToInstances(false);
 	}
+
+	ControlRigBlueprint->PropagateHierarchyFromBPToInstances(false);
 }
 
 FRigHierarchyContainer* SRigHierarchy::GetHierarchyContainer() const
@@ -1379,7 +1587,6 @@ void SRigHierarchy::PostRedo(bool bSuccess)
 {
 	if (bSuccess)
 	{
-		ControlRigBlueprint->PropagateHierarchyFromBPToInstances(false);
 		RefreshTreeView();
 	}
 }
@@ -1388,7 +1595,6 @@ void SRigHierarchy::PostUndo(bool bSuccess)
 {
 	if (bSuccess)
 	{
-		ControlRigBlueprint->PropagateHierarchyFromBPToInstances(false);
 		RefreshTreeView();
 	}
 }
@@ -1732,46 +1938,37 @@ void SRigHierarchy::HandleResetTransform()
 		{
 			if (FRigHierarchyContainer* DebuggedContainer = GetDebuggedHierarchyContainer())
 			{
-				FScopedTransaction Transaction(LOCTEXT("HierarchyResetInitialTransforms", "Reset Initial Transforms"));
+				FScopedTransaction Transaction(LOCTEXT("HierarchyResetTransforms", "Reset Transforms"));
 				Blueprint->Modify();
 
 				TArray<TSharedPtr<FRigTreeElement>> SelectedItems = TreeView->GetSelectedItems();
 				for (TSharedPtr<FRigTreeElement> SelectedItem : SelectedItems)
 				{
 					FRigElementKey Key = SelectedItem->Key;
-					if (Key.Type == ERigElementType::Control || Key.Type == ERigElementType::Space)
+					if (Key.Type == ERigElementType::Control)
+					{
+						GetHierarchyContainer()->SetLocalTransform(Key, FTransform::Identity);
+						DebuggedContainer->SetLocalTransform(Key, FTransform::Identity);
+					}
+
+					else if (Key.Type == ERigElementType::Space)
 					{
 						FTransform InitialTransform = GetHierarchyContainer()->GetInitialTransform(Key);
 						GetHierarchyContainer()->SetLocalTransform(Key, InitialTransform);
 						DebuggedContainer->SetLocalTransform(Key, InitialTransform);
 					}
-				}
-			}
-		}
-	}
-}
 
-void SRigHierarchy::HandleResetInitialTransform()
-{
-	if (IsMultiSelected() && ControlRigEditor.IsValid())
-	{
-		if (UControlRigBlueprint* Blueprint = ControlRigEditor.Pin()->GetControlRigBlueprint())
-		{
-			if (FRigHierarchyContainer* DebuggedContainer = GetDebuggedHierarchyContainer())
-			{
-				FScopedTransaction Transaction(LOCTEXT("HierarchyResetInitialTransforms", "Reset Initial Transforms"));
-				Blueprint->Modify();
-
-				TArray<TSharedPtr<FRigTreeElement>> SelectedItems = TreeView->GetSelectedItems();
-				for (TSharedPtr<FRigTreeElement> SelectedItem : SelectedItems)
-				{
-					FRigElementKey Key = SelectedItem->Key;
-					if (Key.Type == ERigElementType::Control || Key.Type == ERigElementType::Space)
+					else if (Key.Type == ERigElementType::Bone)
 					{
-						GetHierarchyContainer()->SetInitialTransform(Key, FTransform::Identity);
-						GetHierarchyContainer()->SetLocalTransform(Key, FTransform::Identity);
-						DebuggedContainer->SetInitialTransform(Key, FTransform::Identity);
-						DebuggedContainer->SetLocalTransform(Key, FTransform::Identity);
+						FTransform InitialTransform = GetHierarchyContainer()->GetInitialGlobalTransform(Key);
+						GetHierarchyContainer()->SetGlobalTransform(Key, InitialTransform);
+						DebuggedContainer->SetGlobalTransform(Key, InitialTransform);
+
+						Blueprint->RemoveTransientControl(Key);
+						if (ControlRigEditor.Pin()->PreviewInstance)
+						{
+							ControlRigEditor.Pin()->PreviewInstance->RemoveBoneModification(Key.Name);
+						}
 					}
 				}
 			}
@@ -1917,13 +2114,39 @@ void SRigHierarchy::HandleSetInitialTransformFromCurrentTransform()
 				for (TSharedPtr<FRigTreeElement> SelectedItem : SelectedItems)
 				{
 					FRigElementKey Key = SelectedItem->Key;
-					if (Key.Type == ERigElementType::Control || Key.Type == ERigElementType::Space || Key.Type == ERigElementType::Bone)
+
+					FTransform GlobalTransform = GlobalTransforms[Key];
+					FTransform LocalTransform = GlobalTransform.GetRelativeTransform(ParentGlobalTransforms[Key]);
+
+					if (Key.Type == ERigElementType::Control )
 					{
-						FTransform LocalTransform = GlobalTransforms[Key].GetRelativeTransform(ParentGlobalTransforms[Key]);
+						GetHierarchyContainer()->SetInitialTransform(Key, LocalTransform);
+						GetHierarchyContainer()->SetLocalTransform(Key, FTransform::Identity);
+						DebuggedContainer->SetInitialTransform(Key, LocalTransform);
+						DebuggedContainer->SetLocalTransform(Key, FTransform::Identity);
+					}
+					else if (Key.Type == ERigElementType::Space)
+					{
 						GetHierarchyContainer()->SetInitialTransform(Key, LocalTransform);
 						GetHierarchyContainer()->SetLocalTransform(Key, LocalTransform);
 						DebuggedContainer->SetInitialTransform(Key, LocalTransform);
 						DebuggedContainer->SetLocalTransform(Key, LocalTransform);
+					}
+					else if (Key.Type == ERigElementType::Bone)
+					{
+						FTransform InitialTransform = GlobalTransform;
+						if (ControlRigEditor.Pin()->PreviewInstance)
+						{
+							if (FAnimNode_ModifyBone* ModifyBone = ControlRigEditor.Pin()->PreviewInstance->FindModifiedBone(Key.Name))
+							{
+								InitialTransform.SetTranslation(ModifyBone->Translation);
+								InitialTransform.SetRotation(FQuat(ModifyBone->Rotation));
+								InitialTransform.SetScale3D(ModifyBone->Scale);
+								InitialTransform = InitialTransform * ParentGlobalTransforms[Key];
+							}
+						}
+						GetHierarchyContainer()->SetInitialGlobalTransform(Key, InitialTransform);
+						Blueprint->PropagateHierarchyFromBPToInstances(false, false);
 					}
 				}
 			}
@@ -1942,6 +2165,28 @@ void SRigHierarchy::HandleFrameSelection()
 	if (SelectedItems.Num() > 0)
 	{
 		TreeView->RequestScrollIntoView(SelectedItems.Last());
+	}
+}
+
+void SRigHierarchy::HandleControlBoneOrSpaceTransform()
+{
+	UControlRigBlueprint* Blueprint = ControlRigEditor.Pin()->GetControlRigBlueprint();
+	if (Blueprint == nullptr)
+	{
+		return;
+	}
+
+	TArray<TSharedPtr<FRigTreeElement>> SelectedItems = TreeView->GetSelectedItems();
+	for (TSharedPtr<FRigTreeElement> SelectedItem : SelectedItems)
+	{
+		if (SelectedItem->Key.Type == ERigElementType::Bone ||
+			SelectedItem->Key.Type == ERigElementType::Space)
+		{
+			Blueprint->AddTransientControl(SelectedItem->Key);
+			Blueprint->HierarchyContainer.ClearSelection();
+			Blueprint->HierarchyContainer.Select(SelectedItem->Key, true);
+			return;
+		}
 	}
 }
 
@@ -2058,9 +2303,9 @@ void SRigHierarchy::HandleSetInitialTransformFromClosestBone()
 
 						FTransform LocalTransform = ClosestTransforms[Key].GetRelativeTransform(ParentGlobalTransforms[Key]);
 						GetHierarchyContainer()->SetInitialTransform(Key, LocalTransform);
-						GetHierarchyContainer()->SetLocalTransform(Key, LocalTransform);
+						GetHierarchyContainer()->SetLocalTransform(Key, Key.Type == ERigElementType::Control ? FTransform::Identity : LocalTransform);
 						DebuggedContainer->SetInitialTransform(Key, LocalTransform);
-						DebuggedContainer->SetLocalTransform(Key, LocalTransform);
+						DebuggedContainer->SetLocalTransform(Key, Key.Type == ERigElementType::Control ? FTransform::Identity : LocalTransform);
 					}
 				}
 			}

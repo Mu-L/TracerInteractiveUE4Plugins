@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OnlineEncryptedAppTicketInterfaceSteam.h"
 #include "OnlineAsyncTaskManagerSteam.h"
@@ -186,7 +186,7 @@ bool FOnlineEncryptedAppTicketSteam::GetEncryptedAppTicket(TArray<uint8>& OutEnc
 		if (SteamUserPtr)
 		{
 			uint32 ExactTicketSize = 0;
-			SteamUserPtr->GetEncryptedAppTicket(nullptr, 1, &ExactTicketSize);
+			SteamUserPtr->GetEncryptedAppTicket(nullptr, 0, &ExactTicketSize);
 
 			if (ExactTicketSize > 0)
 			{

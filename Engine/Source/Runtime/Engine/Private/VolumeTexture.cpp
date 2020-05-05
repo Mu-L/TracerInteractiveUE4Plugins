@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	VolumeTexture.cpp: UvolumeTexture implementation.
@@ -11,13 +11,6 @@
 #include "DeviceProfiles/DeviceProfile.h"
 #include "DeviceProfiles/DeviceProfileManager.h"
 #include "Containers/ResourceArray.h"
-
-static TAutoConsoleVariable<int32> CVarAllowVolumeTextureAssetCreation(
-	TEXT("r.AllowVolumeTextureAssetCreation"),
-	0,
-	TEXT("Enable UVolumeTexture assets"),
-	ECVF_ReadOnly
-	);
 
 // Limit the possible depth of volume texture otherwise when the user converts 2D textures, he can crash the engine.
 const int32 MAX_VOLUME_TEXTURE_DEPTH = 512;
@@ -239,15 +232,18 @@ uint32 UVolumeTexture::CalcTextureMemorySize(int32 MipCount) const
 	if (PlatformData)
 	{
 		const EPixelFormat Format = GetPixelFormat();
-		const uint32 Flags = (SRGB ? TexCreate_SRGB : 0)  | TexCreate_OfflineProcessed | (bNoTiling ? TexCreate_NoTiling : 0);
+		if (Format != PF_Unknown)
+		{
+			const uint32 Flags = (SRGB ? TexCreate_SRGB : 0)  | TexCreate_OfflineProcessed | (bNoTiling ? TexCreate_NoTiling : 0);
 
-		uint32 SizeX = 0;
-		uint32 SizeY = 0;
-		uint32 SizeZ = 0;
-		CalcMipMapExtent3D(GetSizeX(), GetSizeY(), GetSizeZ(), Format, FMath::Max<int32>(0, GetNumMips() - MipCount), SizeX, SizeY, SizeZ);
+			uint32 SizeX = 0;
+			uint32 SizeY = 0;
+			uint32 SizeZ = 0;
+			CalcMipMapExtent3D(GetSizeX(), GetSizeY(), GetSizeZ(), Format, FMath::Max<int32>(0, GetNumMips() - MipCount), SizeX, SizeY, SizeZ);
 
-		uint32 TextureAlign = 0;
-		Size = (uint32)RHICalcTexture3DPlatformSize(SizeX, SizeY, SizeZ, Format, MipCount, Flags, FRHIResourceCreateInfo(PlatformData->GetExtData()), TextureAlign);
+			uint32 TextureAlign = 0;
+			Size = (uint32)RHICalcTexture3DPlatformSize(SizeX, SizeY, SizeZ, Format, FMath::Max(1, MipCount), Flags, FRHIResourceCreateInfo(PlatformData->GetExtData()), TextureAlign);
+		}
 	}
 	return Size;
 }
@@ -376,7 +372,7 @@ public:
 		bGreyScaleFormat = (PixelFormat == PF_G8) || (PixelFormat == PF_BC4);
 
 		FTexturePlatformData* PlatformData = Owner->PlatformData;
-		if (PlatformData && PlatformData->TryLoadMips(MipBias, InitialData.GetMipData() + MipBias))
+		if (PlatformData && PlatformData->TryLoadMips(MipBias, InitialData.GetMipData() + MipBias, Owner))
 		{
 			for (int32 MipIndex = MipBias; MipIndex < NumMips; ++MipIndex)
 			{
@@ -498,14 +494,19 @@ public:
 	{
 		return FMath::Max<uint32>(SizeY >> CurrentFirstMip, 1);
 	}
+	/** Returns the depth of the texture in pixels. */
+	uint32 GetSizeZ() const override
+	{
+		return FMath::Max<uint32>(SizeZ >> CurrentFirstMip, 1);
+	}
 
 private:
 
-	/** The UTexture2D which this resource represents.														*/
+	/** The UVolumeTexture which this resource represents */
 	UVolumeTexture*	Owner;
 
 #if STATS
-	/** The FName of the LODGroup-specific stat	*/
+	/** The FName of the LODGroup-specific stat */
 	FName LODGroupStatName;
 #endif
 	/** The FName of the texture asset */
@@ -573,9 +574,29 @@ void UVolumeTexture::GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize)
 
 #if WITH_EDITOR
 
+void UVolumeTexture::SetDefaultSource2DTileSize()
+{
+	Source2DTileSizeX = 0;
+	Source2DTileSizeY = 0;
+
+	if (Source2DTexture)
+	{
+		const int32 SourceSizeX = Source2DTexture->Source.GetSizeX();
+		const int32 SourceSizeY = Source2DTexture->Source.GetSizeY();
+		if (SourceSizeX > 0 && SourceSizeY > 0)
+		{
+			const int32 NumPixels = SourceSizeX * SourceSizeY;
+			const int32 TileSize = FMath::RoundToInt(FMath::Pow((float)NumPixels, 1.f / 3.f));
+			const int32 NumTilesBySide = FMath::RoundToInt(FMath::Sqrt((float)(SourceSizeX / TileSize) * (SourceSizeY / TileSize)));
+			Source2DTileSizeX = SourceSizeX / NumTilesBySide;
+			Source2DTileSizeY = SourceSizeY / NumTilesBySide;
+		}
+	}
+}
+
 void UVolumeTexture::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
- 	UProperty* PropertyThatChanged = PropertyChangedEvent.Property;
+ 	FProperty* PropertyThatChanged = PropertyChangedEvent.Property;
 	if (PropertyChangedEvent.Property)
 	{
 		static const FName SourceTextureName("Source2DTexture");
@@ -583,6 +604,13 @@ void UVolumeTexture::PostEditChangeProperty(FPropertyChangedEvent& PropertyChang
 		static const FName TileSizeYName("Source2DTileSizeY");
 
 		const FName PropertyName = PropertyChangedEvent.Property->GetFName();
+
+		// Set default tile size if none is currently specified.
+		if (PropertyName == SourceTextureName && !Source2DTileSizeX && !Source2DTileSizeY)
+		{
+			SetDefaultSource2DTileSize();
+		}
+		// Update the content of the volume texture
 		if (PropertyName == SourceTextureName || PropertyName == TileSizeXName || PropertyName == TileSizeYName)
 		{
 			UpdateSourceFromSourceTexture();
@@ -612,7 +640,7 @@ void UVolumeTexture::UpdateMipGenSettings()
 
 #endif // #if WITH_EDITOR
 
-bool UVolumeTexture::ShaderPlatformSupportsCompression(EShaderPlatform ShaderPlatform)
+bool UVolumeTexture::ShaderPlatformSupportsCompression(FStaticShaderPlatform ShaderPlatform)
 {
 	switch (ShaderPlatform)
 	{
@@ -624,7 +652,7 @@ bool UVolumeTexture::ShaderPlatformSupportsCompression(EShaderPlatform ShaderPla
 		return true;
 
 	default:
-		return FDataDrivenShaderPlatformInfo::GetInfo(ShaderPlatform).bSupportsVolumeTextureCompression;
+		return FDataDrivenShaderPlatformInfo::GetSupportsVolumeTextureCompression(ShaderPlatform);
 	}
 }
 

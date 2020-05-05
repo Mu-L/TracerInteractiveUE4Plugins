@@ -1,4 +1,4 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.IO;
@@ -154,6 +154,13 @@ public class BuildCommonTools : BuildCommand
 		if(Platforms.Contains(UnrealBuildTool.UnrealTargetPlatform.XboxOne))
 		{
 			Agenda.AddTarget("XboxOnePDBFileUtil", UnrealBuildTool.UnrealTargetPlatform.Win64, UnrealBuildTool.UnrealTargetConfiguration.Development);
+		}
+
+		// Platform extensions
+		foreach (UnrealBuildTool.UnrealTargetPlatform UBTPlatform in Platforms)
+		{
+			AutomationTool.Platform AutomationPlatform = Platform.GetPlatform(UBTPlatform);
+			AutomationPlatform.MakeAgenda(Agenda, ExtraBuildProducts);
 		}
 
 		return Agenda;

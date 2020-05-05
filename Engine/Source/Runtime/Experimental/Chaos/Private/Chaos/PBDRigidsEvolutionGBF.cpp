@@ -1,10 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "Chaos/PBDRigidsEvolutionGBF.h"
 #include "Chaos/Defines.h"
 #include "Chaos/Framework/Parallel.h"
 #include "Chaos/ImplicitObjectTransformed.h"
 #include "Chaos/ImplicitObjectUnion.h"
-#include "Chaos/PBDCollisionConstraint.h"
+#include "Chaos/PBDCollisionConstraints.h"
 #include "Chaos/PBDCollisionSpringConstraints.h"
 #include "Chaos/PerParticleEtherDrag.h"
 #include "Chaos/PerParticleEulerStepVelocity.h"
@@ -21,8 +21,16 @@
 #include "Misc/Paths.h"
 #include "HAL/FileManager.h"
 
+//PRAGMA_DISABLE_OPTIMIZATION
+
 namespace Chaos
 {
+#if !UE_BUILD_SHIPPING
+	CHAOS_API bool bPendingHierarchyDump = false;
+#else
+	const bool bPendingHierarchyDump = false;
+#endif
+
 float HackMaxAngularVelocity = 1000.f;
 FAutoConsoleVariableRef CVarHackMaxAngularVelocity(TEXT("p.HackMaxAngularVelocity"), HackMaxAngularVelocity, TEXT("Max cap on angular velocity: rad/s. This is only a temp solution and should not be relied on as a feature. -1.f to disable"));
 
@@ -39,15 +47,32 @@ FAutoConsoleVariableRef CVarHackAngularDrag(TEXT("p.HackAngularDrag2"), HackAngu
 int DisableThreshold = 5;
 FAutoConsoleVariableRef CVarDisableThreshold(TEXT("p.DisableThreshold2"), DisableThreshold, TEXT("Disable threshold frames to transition to sleeping"));
 
+float BoundsThickness = 0;
+float BoundsThicknessVelocityMultiplier = 2.0f;
+FAutoConsoleVariableRef CVarBoundsThickness(TEXT("p.CollisionBoundsThickness"), BoundsThickness, TEXT("Collision inflation for speculative contact generation.[def:0.0]"));
+FAutoConsoleVariableRef CVarBoundsThicknessVelocityMultiplier(TEXT("p.CollisionBoundsVelocityInflation"), BoundsThicknessVelocityMultiplier, TEXT("Collision velocity inflation for speculatibe contact generation.[def:2.0]"));
 
-DECLARE_CYCLE_STAT(TEXT("TPBDRigidsEvolutionGBF::AdvanceOneTimeStep"), STAT_AdvanceOneTimeStep, STATGROUP_Chaos);
-DECLARE_CYCLE_STAT(TEXT("TPBDRigidsEvolutionGBF::Integrate"), STAT_Integrate, STATGROUP_Chaos);
-DECLARE_CYCLE_STAT(TEXT("TPBDRigidsEvolutionGBF::KinematicTargets"), STAT_KinematicTargets, STATGROUP_Chaos);
-DECLARE_CYCLE_STAT(TEXT("TPBDRigidsEvolutionGBF::UpdateConstraintPositionBasedState"), STAT_UpdateConstraintPositionBasedState, STATGROUP_Chaos);
-DECLARE_CYCLE_STAT(TEXT("TPBDRigidsEvolutionGBF::CreateConstraintGraph"), STAT_CreateConstraintGraph, STATGROUP_Chaos);
-DECLARE_CYCLE_STAT(TEXT("TPBDRigidsEvolutionGBF::CreateIslands"), STAT_CreateIslands, STATGROUP_Chaos);
-DECLARE_CYCLE_STAT(TEXT("TPBDRigidsEvolutionGBF::ParallelSolve"), STAT_ParallelSolve, STATGROUP_Chaos);
-DECLARE_CYCLE_STAT(TEXT("TPBDRigidsEvolutionGBF::DeactivateSleep"), STAT_DeactivateSleep, STATGROUP_Chaos);
+float HackCCD_EnableThreshold = 0.0f;
+FAutoConsoleVariableRef CVarHackCCDVelThreshold(TEXT("p.Chaos.CCD.EnableThreshold"), HackCCD_EnableThreshold, TEXT("If distance moved is greater than this times the minimum object dimension, use CCD"));
+
+float HackCCD_DepthThreshold = 0.05f;
+FAutoConsoleVariableRef CVarHackCCDDepthThreshold(TEXT("p.Chaos.CCD.DepthThreshold"), HackCCD_DepthThreshold, TEXT("When returning to TOI, leave this much contact depth (as a fraction of MinBounds)"));
+
+
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::AdvanceOneTimeStep"), STAT_Evolution_AdvanceOneTimeStep, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::Integrate"), STAT_Evolution_Integrate, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::KinematicTargets"), STAT_Evolution_KinematicTargets, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::PrepareConstraints"), STAT_Evolution_PrepareConstraints, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::UnprepareConstraints"), STAT_Evolution_UnprepareConstraints, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::ApplyConstraints"), STAT_Evolution_ApplyConstraints, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::UpdateVelocities"), STAT_Evolution_UpdateVelocites, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::ApplyPushOut"), STAT_Evolution_ApplyPushOut, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::DetectCollisions"), STAT_Evolution_DetectCollisions, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::UpdateConstraintPositionBasedState"), STAT_Evolution_UpdateConstraintPositionBasedState, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::CreateConstraintGraph"), STAT_Evolution_CreateConstraintGraph, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::CreateIslands"), STAT_Evolution_CreateIslands, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::ParallelSolve"), STAT_Evolution_ParallelSolve, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("FPBDRigidsEvolutionGBF::DeactivateSleep"), STAT_Evolution_DeactivateSleep, STATGROUP_Chaos);
 
 int32 SerializeEvolution = 0;
 FAutoConsoleVariableRef CVarSerializeEvolution(TEXT("p.SerializeEvolution"), SerializeEvolution, TEXT(""));
@@ -84,10 +109,146 @@ void SerializeToDisk(TEvolution& Evolution)
 }
 #endif
 
-template <typename T, int d>
-void TPBDRigidsEvolutionGBF<T, d>::AdvanceOneTimeStep(T Dt)
+void FPBDRigidsEvolutionGBF::Advance(const FReal Dt, const FReal MaxStepDt, const int32 MaxSteps)
 {
-	SCOPE_CYCLE_COUNTER(STAT_AdvanceOneTimeStep);
+	// Determine how many steps we would like to take
+	int32 NumSteps = FMath::CeilToInt(Dt / MaxStepDt);
+	if (NumSteps > 0)
+	{
+		// Determine the step time
+		const FReal StepDt = Dt / (FReal)NumSteps;
+
+		// Limit the number of steps
+		// NOTE: This is after step time calculation so simulation will appear to slow down for large Dt
+		// but that is preferable to blowing up from a large timestep.
+		NumSteps = FMath::Clamp(NumSteps, 1, MaxSteps);
+
+		for (int32 Step = 0; Step < NumSteps; ++Step)
+		{
+			// StepFraction: how much of the remaining time this step represents, used to interpolate kinematic targets
+			// E.g., for 4 steps this will be: 1/4, 1/3, 1/2, 1
+			const float StepFraction = (FReal)1 / (FReal)(NumSteps - Step);
+		
+			UE_LOG(LogChaos, Verbose, TEXT("Advance dt = %f [%d/%d]"), StepDt, Step + 1, NumSteps);
+
+			AdvanceOneTimeStep(StepDt, StepFraction);
+		}
+	}
+}
+
+//
+//
+//
+// BEGIN TOI
+//
+//
+//
+
+namespace Collisions
+{
+	extern bool GetTOIHack(const TPBDRigidParticleHandle<FReal, 3>* Particle0, const TGeometryParticleHandle<FReal, 3>* Particle1, FReal& OutTOI, FVec3& OutNormal, FReal& OutPhi);
+}
+
+void PostMoveToTOIHack(FReal Dt, TPBDRigidParticleHandle<FReal, 3>* Particle)
+{
+	// Update bounds, velocity etc
+	TPerParticlePBDUpdateFromDeltaPosition<FReal, 3> VelUpdateRule;
+	VelUpdateRule.Apply(Particle, Dt);
+}
+
+void MoveToTOIPairHack(FReal Dt, TPBDRigidParticleHandle<FReal, 3>* Particle1, const TGeometryParticleHandle<FReal, 3>* Particle2)
+{
+	FReal TOI = 0.0f;
+	FReal Phi = 0.0f;
+	FVec3 Normal = FVec3(0);
+	if (Collisions::GetTOIHack(Particle1, Particle2, TOI, Normal, Phi))
+	{
+		FReal Depth = -Phi;
+		FReal MinBounds = Particle1->Geometry()->BoundingBox().Extents().Min();
+		FReal MaxDepth = MinBounds * HackCCD_DepthThreshold;
+
+		//UE_LOG(LogChaos, Warning, TEXT("MoveTOIHAck: TOI %f; Depth %f"), TOI, Depth);
+
+		if ((Depth > MaxDepth) && (TOI > KINDA_SMALL_NUMBER) && (TOI < 1.0f))
+		{
+			// Move the particle to just after the TOI so we still have a collision to resolve but won't get tunneling
+			// The time after TOI we want is given by the ratio of max acceptable depth to depth at T = 1
+			FReal ExtraT = (1.0f - TOI) * MaxDepth / Depth;
+			FReal FinalT = TOI + ExtraT;
+			FVec3 FinalP = FVec3::Lerp(Particle1->X(), Particle1->P(), FinalT);
+
+			//UE_LOG(LogChaos, Warning, TEXT("MoveTOIHack: FinalTOI %f; Correction %f"), FinalT, (FinalP - Particle1->P()).Size());
+		
+			Particle1->SetP(FinalP);
+			PostMoveToTOIHack(Dt, Particle1);
+		}
+	}
+}
+
+
+void MoveToTOIHack(FReal Dt, TTransientPBDRigidParticleHandle<FReal, 3>& Particle, const ISpatialAcceleration<TAccelerationStructureHandle<FReal, 3>, FReal, 3>* SpatialAcceleration)
+{
+	if (const auto AABBTree = SpatialAcceleration->template As<TAABBTree<TAccelerationStructureHandle<FReal, 3>, TAABBTreeLeafArray<TAccelerationStructureHandle<FReal, 3>, FReal>, FReal>>())
+	{
+		MoveToTOIHackImpl(Dt, Particle, AABBTree);
+	}
+	else if (const auto BV = SpatialAcceleration->template As<TBoundingVolume<TAccelerationStructureHandle<FReal, 3>, FReal, 3>>())
+	{
+		MoveToTOIHackImpl(Dt, Particle, BV);
+	}
+	else if (const auto AABBTreeBV = SpatialAcceleration->template As<TAABBTree<TAccelerationStructureHandle<FReal, 3>, TBoundingVolume<TAccelerationStructureHandle<FReal, 3>, FReal, 3>, FReal>>())
+	{
+		MoveToTOIHackImpl(Dt, Particle, AABBTreeBV);
+	}
+	else if (const auto Collection = SpatialAcceleration->template As<ISpatialAccelerationCollection<TAccelerationStructureHandle<FReal, 3>, FReal, 3>>())
+	{
+		Collection->CallMoveToTOIHack(Dt, Particle);
+	}
+}
+
+bool RequiresCCDHack(FReal Dt, const TTransientPBDRigidParticleHandle<FReal, 3>& Particle)
+{
+	if (Particle.HasBounds() && (Particle.ObjectState() == EObjectStateType::Dynamic))
+	{
+		FReal Dist2 = Particle.V().SizeSquared() * Dt * Dt;
+		FReal MinBounds = Particle.Geometry()->BoundingBox().Extents().Min();
+		FReal MaxDepth = MinBounds * HackCCD_EnableThreshold;
+		if (Dist2 > MaxDepth * MaxDepth)
+		{
+			//UE_LOG(LogChaos, Warning, TEXT("MoveTOIHack: Enabled at DR = %f / %f"), FMath::Sqrt(Dist2), MaxDepth);
+
+			return true;
+		}
+	}
+	return false;
+}
+
+void CCDHack(const FReal Dt, TParticleView<TPBDRigidParticles<FReal, 3>>& ParticlesView, const ISpatialAcceleration<TAccelerationStructureHandle<FReal, 3>, FReal, 3>* SpatialAcceleration)
+{
+	if (HackCCD_EnableThreshold > 0)
+	{
+		for (auto& Particle : ParticlesView)
+		{
+			if (RequiresCCDHack(Dt, Particle))
+			{
+				MoveToTOIHack(Dt, Particle, SpatialAcceleration);
+			}
+		}
+	}
+}
+
+//
+//
+//
+// END TOI
+//
+//
+//
+
+
+void FPBDRigidsEvolutionGBF::AdvanceOneTimeStep(const FReal Dt, const FReal StepFraction)
+{
+	SCOPE_CYCLE_COUNTER(STAT_Evolution_AdvanceOneTimeStep);
 
 #if !UE_BUILD_SHIPPING
 	if (SerializeEvolution)
@@ -97,13 +258,17 @@ void TPBDRigidsEvolutionGBF<T, d>::AdvanceOneTimeStep(T Dt)
 #endif
 
 	{
-		SCOPE_CYCLE_COUNTER(STAT_Integrate);
-		Integrate(Particles.GetNonDisabledDynamicView(), Dt);	//Question: should we use an awake view?
+		Clustering.UnionClusterGroups();
 	}
 
 	{
-		SCOPE_CYCLE_COUNTER(STAT_KinematicTargets);
-		ApplyKinematicTargets(Dt);
+		SCOPE_CYCLE_COUNTER(STAT_Evolution_Integrate);
+		Integrate(Particles.GetActiveParticlesView(), Dt);
+	}
+
+	{
+		SCOPE_CYCLE_COUNTER(STAT_Evolution_KinematicTargets);
+		ApplyKinematicTargets(Dt, StepFraction);
 	}
 
 	if (PostIntegrateCallback != nullptr)
@@ -112,20 +277,47 @@ void TPBDRigidsEvolutionGBF<T, d>::AdvanceOneTimeStep(T Dt)
 	}
 
 	{
-		Base::ComputeIntermediateSpatialAcceleration();
-		CollisionConstraints.SetSpatialAcceleration(InternalAcceleration.Get());
-	}
-
-	{
-		SCOPE_CYCLE_COUNTER(STAT_UpdateConstraintPositionBasedState);
+		SCOPE_CYCLE_COUNTER(STAT_Evolution_UpdateConstraintPositionBasedState);
 		UpdateConstraintPositionBasedState(Dt);
 	}
 	{
-		SCOPE_CYCLE_COUNTER(STAT_CreateConstraintGraph);
+		Base::ComputeIntermediateSpatialAcceleration();
+	}
+
+	CCDHack(Dt, Particles.GetActiveParticlesView(), InternalAcceleration.Get());
+
+	{
+		SCOPE_CYCLE_COUNTER(STAT_Evolution_DetectCollisions);
+		CollisionDetector.GetBroadPhase().SetSpatialAcceleration(InternalAcceleration.Get());
+
+		CollisionStats::FStatData StatData(bPendingHierarchyDump);
+
+		CollisionDetector.DetectCollisions(Dt, StatData);
+
+		CHAOS_COLLISION_STAT(StatData.Print());
+	}
+
+	if (CollisionModifierCallback)
+	{
+		CollisionConstraints.ApplyCollisionModifier(CollisionModifierCallback);
+	}
+
+	if (PostDetectCollisionsCallback != nullptr)
+	{
+		PostDetectCollisionsCallback();
+	}
+
+	{
+		SCOPE_CYCLE_COUNTER(STAT_Evolution_PrepareConstraints);
+		PrepareConstraints(Dt);
+	}
+
+	{
+		SCOPE_CYCLE_COUNTER(STAT_Evolution_CreateConstraintGraph);
 		CreateConstraintGraph();
 	}
 	{
-		SCOPE_CYCLE_COUNTER(STAT_CreateIslands);
+		SCOPE_CYCLE_COUNTER(STAT_Evolution_CreateIslands);
 		CreateIslands();
 	}
 
@@ -135,26 +327,35 @@ void TPBDRigidsEvolutionGBF<T, d>::AdvanceOneTimeStep(T Dt)
 	}
 
 	TArray<bool> SleepedIslands;
-	SleepedIslands.SetNum(ConstraintGraph.NumIslands());
-	TArray<TArray<TPBDRigidParticleHandle<T,d>*>> DisabledParticles;
-	DisabledParticles.SetNum(ConstraintGraph.NumIslands());
-	SleepedIslands.SetNum(ConstraintGraph.NumIslands());
+	SleepedIslands.SetNum(GetConstraintGraph().NumIslands());
+	TArray<TArray<TPBDRigidParticleHandle<FReal, 3>*>> DisabledParticles;
+	DisabledParticles.SetNum(GetConstraintGraph().NumIslands());
+	SleepedIslands.SetNum(GetConstraintGraph().NumIslands());
 	if(Dt > 0)
 	{
-		SCOPE_CYCLE_COUNTER(STAT_ParallelSolve);
-		PhysicsParallelFor(ConstraintGraph.NumIslands(), [&](int32 Island) {
-			const TArray<TGeometryParticleHandle<T, d>*>& IslandParticles = ConstraintGraph.GetIslandParticles(Island);
+		SCOPE_CYCLE_COUNTER(STAT_Evolution_ParallelSolve);
+		PhysicsParallelFor(GetConstraintGraph().NumIslands(), [&](int32 Island) {
+			const TArray<TGeometryParticleHandle<FReal, 3>*>& IslandParticles = GetConstraintGraph().GetIslandParticles(Island);
 
-			ApplyConstraints(Dt, Island);
+			{
+				SCOPE_CYCLE_COUNTER(STAT_Evolution_ApplyConstraints);
+				ApplyConstraints(Dt, Island);
+			}
 
 			if (PostApplyCallback != nullptr)
 			{
 				PostApplyCallback(Island);
 			}
 
-			UpdateVelocities(Dt, Island);
+			{
+				SCOPE_CYCLE_COUNTER(STAT_Evolution_UpdateVelocites);
+				UpdateVelocities(Dt, Island);
+			}
 
-			ApplyPushOut(Dt, Island);
+			{
+				SCOPE_CYCLE_COUNTER(STAT_Evolution_ApplyPushOut);
+				ApplyPushOut(Dt, Island);
+			}
 
 			if (PostApplyPushOutCallback != nullptr)
 			{
@@ -167,7 +368,8 @@ void TPBDRigidsEvolutionGBF<T, d>::AdvanceOneTimeStep(T Dt)
 				// @todo(mlentine): Find a good way of not doing this when we aren't using this functionality
 
 				// increment the disable count for the particle
-				if (auto PBDRigid = Particle->AsDynamic())
+				auto PBDRigid = Particle->CastToRigidParticle();
+				if(PBDRigid && PBDRigid->ObjectState() == EObjectStateType::Dynamic)
 				{
 					if (PBDRigid->AuxilaryValue(PhysicsMaterials) && PBDRigid->V().SizeSquared() < PBDRigid->AuxilaryValue(PhysicsMaterials)->DisabledLinearThreshold &&
 						PBDRigid->W().SizeSquared() < PBDRigid->AuxilaryValue(PhysicsMaterials)->DisabledAngularThreshold)
@@ -194,20 +396,26 @@ void TPBDRigidsEvolutionGBF<T, d>::AdvanceOneTimeStep(T Dt)
 			}
 
 			// Turn off if not moving
-			SleepedIslands[Island] = ConstraintGraph.SleepInactive(Island, PhysicsMaterials);
+			SleepedIslands[Island] = GetConstraintGraph().SleepInactive(Island, PhysicsMaterials);
 		});
 	}
+
 	{
-		SCOPE_CYCLE_COUNTER(STAT_DeactivateSleep);
-		for (int32 Island = 0; Island < ConstraintGraph.NumIslands(); ++Island)
+		SCOPE_CYCLE_COUNTER(STAT_Evolution_UnprepareConstraints);
+		UnprepareConstraints(Dt);
+	}
+
+	{
+		SCOPE_CYCLE_COUNTER(STAT_Evolution_DeactivateSleep);
+		for (int32 Island = 0; Island < GetConstraintGraph().NumIslands(); ++Island)
 		{
 			if (SleepedIslands[Island])
 			{
-				Particles.DeactivateParticles(ConstraintGraph.GetIslandParticles(Island));
+				Particles.DeactivateParticles(GetConstraintGraph().GetIslandParticles(Island));
 			}
 			for (const auto Particle : DisabledParticles[Island])
 			{
-				Particles.DisableParticle(Particle);
+				DisableParticle(Particle);
 			}
 		}
 	}
@@ -217,23 +425,28 @@ void TPBDRigidsEvolutionGBF<T, d>::AdvanceOneTimeStep(T Dt)
 	ParticleUpdatePosition(Particles.GetActiveParticlesView(), Dt);
 }
 
-template <typename T, int d>
-TPBDRigidsEvolutionGBF<T, d>::TPBDRigidsEvolutionGBF(TPBDRigidsSOAs<T, d>& InParticles, int32 InNumIterations)
-	: Base(InParticles, InNumIterations)
-	, CollisionConstraints(InParticles, Collided, PhysicsMaterials, DefaultNumPushOutPairIterations)
-	, CollisionRule(CollisionConstraints, DefaultNumPushOutIterations)
+FPBDRigidsEvolutionGBF::FPBDRigidsEvolutionGBF(TPBDRigidsSOAs<FReal, 3>& InParticles, int32 InNumIterations, int32 InNumPushoutIterations, bool InIsSingleThreaded)
+	: Base(InParticles, InNumIterations, InNumPushoutIterations, InIsSingleThreaded)
+	, Clustering(*this, Particles.GetClusteredParticles())
+	, CollisionConstraints(InParticles, Collided, PhysicsMaterials, DefaultNumPairIterations, DefaultNumPushOutPairIterations)
+	, CollisionRule(CollisionConstraints)
+	, BroadPhase(InParticles, BoundsThickness, BoundsThicknessVelocityMultiplier)
+	, CollisionDetector(BroadPhase, CollisionConstraints)
 	, PostIntegrateCallback(nullptr)
 	, PreApplyCallback(nullptr)
 	, PostApplyCallback(nullptr)
 	, PostApplyPushOutCallback(nullptr)
 {
-	SetParticleUpdateVelocityFunction([PBDUpdateRule = TPerParticlePBDUpdateFromDeltaPosition<float, 3>(), this](const TParticleView<TPBDRigidParticles<T, d>>& ParticlesInput, const T Dt) {
-		ParticlesInput.ParallelFor([&](auto& Particle, int32 Index) {
-			PBDUpdateRule.Apply(Particle, Dt);
+	SetParticleUpdateVelocityFunction([PBDUpdateRule = TPerParticlePBDUpdateFromDeltaPosition<float, 3>(), this](const TArray<TGeometryParticleHandle<FReal, 3>*>& ParticlesInput, const FReal Dt) {
+		ParticlesParallelFor(ParticlesInput, [&](auto& Particle, int32 Index) {
+			if (Particle->CastToRigidParticle() && Particle->ObjectState() == EObjectStateType::Dynamic)
+			{
+				PBDUpdateRule.Apply(Particle->CastToRigidParticle(), Dt);
+			}
 		});
 	});
 
-	SetParticleUpdatePositionFunction([this](const TParticleView<TPBDRigidParticles<T, d>>& ParticlesInput, const T Dt)
+	SetParticleUpdatePositionFunction([this](const TParticleView<TPBDRigidParticles<FReal, 3>>& ParticlesInput, const FReal Dt)
 	{
 		ParticlesInput.ParallelFor([&](auto& Particle, int32 Index)
 		{
@@ -242,25 +455,20 @@ TPBDRigidsEvolutionGBF<T, d>::TPBDRigidsEvolutionGBF(TPBDRigidsSOAs<T, d>& InPar
 		});
 	});
 
-	AddForceFunction([this](TTransientPBDRigidParticleHandle<T, d>& HandleIn, const T Dt) 
-	{
-		ExternalForces.Apply(HandleIn, Dt);
-	});
-
-	AddForceFunction([this](TTransientPBDRigidParticleHandle<T, d>& HandleIn, const T Dt)
+	AddForceFunction([this](TTransientPBDRigidParticleHandle<FReal, 3>& HandleIn, const FReal Dt)
 	{
 		GravityForces.Apply(HandleIn, Dt);
 	});
 
 	AddConstraintRule(&CollisionRule);
+
+	SetInternalParticleInitilizationFunction([](const TGeometryParticleHandle<float, 3>*, const TGeometryParticleHandle<float, 3>*) {});
 }
 
-template <typename T, int d>
-void TPBDRigidsEvolutionGBF<T,d>::Serialize(FChaosArchive& Ar)
+void FPBDRigidsEvolutionGBF::Serialize(FChaosArchive& Ar)
 {
 	Base::Serialize(Ar);
 }
 
 }
 
-template class Chaos::TPBDRigidsEvolutionGBF<float, 3>;

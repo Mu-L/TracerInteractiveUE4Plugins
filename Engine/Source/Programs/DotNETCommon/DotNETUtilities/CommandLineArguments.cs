@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections;
@@ -1191,6 +1191,14 @@ namespace Tools.DotNETCommon
 			}
 			else
 			{
+				// First check for a TypeConverter
+				TypeConverter TypeConverter = TypeDescriptor.GetConverter(FieldType);
+				if (TypeConverter.CanConvertFrom(typeof(string)))
+				{
+					Value = TypeConverter.ConvertFrom(Text);
+					return true;
+				}
+
 				// Otherwise let the framework convert between types
 				try
 				{

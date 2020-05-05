@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 /*=============================================================================================
@@ -23,6 +23,8 @@ class TFunction;
 #endif
 
 #define UE_DEBUG_BREAK_IMPL()	PLATFORM_BREAK()
+
+#define ANDROID_HAS_RTSIGNALS !PLATFORM_LUMIN && PLATFORM_USED_NDK_VERSION_INTEGER >= 21
 
 /**
  * Android implementation of the misc OS functions
@@ -148,6 +150,7 @@ public:
 
 	static void RegisterForRemoteNotifications();
 	static void UnregisterForRemoteNotifications();
+	static bool IsAllowedRemoteNotifications();
 
 	/** @return Memory representing a true type or open type font provided by the platform as a default font for unreal to consume; empty array if the default font failed to load. */
 	static TArray<uint8> GetSystemFontBytes();
@@ -179,6 +182,7 @@ public:
 #if USE_ANDROID_JNI
 	static int GetAndroidBuildVersion();
 #endif
+	static bool IsSupportedAndroidDevice();
 	static TMap<FString, FString> GetConfigRulesTMap();
 	static FString* GetConfigRulesVariable(const FString& Key);
 
@@ -211,6 +215,10 @@ public:
 	typedef TFunction<void()> OnPauseCallBackType;
 	static OnPauseCallBackType GetOnPauseCallback();
 	static void SetOnPauseCallback(OnPauseCallBackType InOnPauseCallback);
+	static void TriggerCrashHandler(const TCHAR* InErrorMessage, const TCHAR* OverrideCallstack);
+	static void TriggerNonFatalCrashHandler(enum class ECrashContextType InType, const FString& Message);
+
+	static bool IsInSignalHandler();
 
 #if !UE_BUILD_SHIPPING
 	static bool IsDebuggerPresent();
@@ -265,7 +273,11 @@ public:
 
 	// Window access is locked by the game thread before preinit and unlocked here after RHIInit (PlatformCreateDynamicRHI). 
 	static void UnlockAndroidWindow();
-
+	
+	/**
+	 * Returns whether or not a 16 bit index buffer should be promoted to 32 bit on load, needed for some Android devices
+	 */
+	static bool Expand16BitIndicesTo32BitOnLoad();
 private:
     static EDeviceScreenOrientation DeviceOrientation;
 };

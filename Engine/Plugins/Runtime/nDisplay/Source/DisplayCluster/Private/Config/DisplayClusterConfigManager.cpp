@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Config/DisplayClusterConfigManager.h"
 
@@ -61,6 +61,9 @@ bool FDisplayClusterConfigManager::StartSession(const FString& configPath, const
 void FDisplayClusterConfigManager::EndSession()
 {
 	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterConfig);
+
+	ConfigPath.Empty();
+	ClusterNodeId.Empty();
 
 	ResetConfigData();
 }
@@ -349,6 +352,13 @@ void FDisplayClusterConfigManager::AddRender(const FDisplayClusterConfigRender& 
 	CfgRender = InCfgRender;
 }
 
+void FDisplayClusterConfigManager::AddNvidia(const FDisplayClusterConfigNvidia& InCfgNvidia)
+{
+	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterConfig);
+	UE_LOG(LogDisplayClusterConfig, Log, TEXT("Found NVIDIA: %s"), *InCfgNvidia.ToString());
+	CfgNvidia = InCfgNvidia;
+}
+
 void FDisplayClusterConfigManager::AddStereo(const FDisplayClusterConfigStereo& InCfgStereo)
 {
 	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterConfig);
@@ -486,16 +496,19 @@ void FDisplayClusterConfigManager::ResetConfigData()
 	CfgWindows.Reset();
 	CfgScreens.Reset();
 	CfgViewports.Reset();
+	CfgPostprocess.Reset();
 	CfgCameras.Reset();
 	CfgSceneNodes.Reset();
 	CfgInputDevices.Reset();
 	CfgInputSetupRecords.Reset();
+	CfgProjections.Reset();
 
 	CfgInfo    = FDisplayClusterConfigInfo();
 	CfgGeneral = FDisplayClusterConfigGeneral();
 	CfgStereo  = FDisplayClusterConfigStereo();
-	CfgNetwork = FDisplayClusterConfigNetwork();
 	CfgRender  = FDisplayClusterConfigRender();
+	CfgNvidia  = FDisplayClusterConfigNvidia();
+	CfgNetwork = FDisplayClusterConfigNetwork();
 	CfgDebug   = FDisplayClusterConfigDebug();
 	CfgCustom  = FDisplayClusterConfigCustom();
 }
@@ -539,6 +552,29 @@ FString FDisplayClusterConfigManager::GetFullPathToFile(const FString& FileName)
 		}
 
 		//@Handle error, file not found
+		UE_LOG(LogDisplayClusterConfig, Warning, TEXT("File '%s' not found. In case of relative path do not forget to put './' at the beginning"), *FileName);
+	}
+
+	return FileName;
+}
+
+FString FDisplayClusterConfigManager::GetFullPathToNewFile(const FString& FileName) const
+{
+	TArray<FString> OrderedBaseDirs;
+
+	//Add ordered search base dirs
+	OrderedBaseDirs.Add(FPaths::GetPath(ConfigPath));
+	OrderedBaseDirs.Add(FPaths::RootDir());
+
+	// Process base dirs in order:
+	for (auto It : OrderedBaseDirs)
+	{
+		FString FullPath = FPaths::ConvertRelativePathToFull(It, FileName);
+		
+		if (FPaths::DirectoryExists(FPaths::GetPath(FullPath)))
+		{
+			return FullPath;
+		}
 	}
 
 	return FileName;

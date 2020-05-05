@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -98,6 +98,9 @@ public:
 	FVertexBufferRHIRef CreateRHIBuffer_RenderThread();
 	FVertexBufferRHIRef CreateRHIBuffer_Async();
 
+	/** Copy everything, keeping reference to the same RHI resources. */
+	void CopyRHIForStreaming(const FPositionVertexBuffer& Other, bool InAllowCPUAccess);
+
 	/** Similar to Init/ReleaseRHI but only update existing SRV so references to the SRV stays valid */
 	template <uint32 MaxNumUpdates>
 	void InitRHIForStreaming(FRHIVertexBuffer* IntermediateBuffer, TRHIResourceUpdateBatcher<MaxNumUpdates>& Batcher)
@@ -143,7 +146,7 @@ private:
 	FShaderResourceViewRHIRef PositionComponentSRV;
 
 	/** The vertex data storage type */
-	class FPositionVertexData* VertexData;
+	TMemoryImagePtr<class FPositionVertexData> VertexData;
 
 	/** The cached vertex data pointer. */
 	uint8* Data;
@@ -162,3 +165,4 @@ private:
 	template <bool bRenderThread>
 	FVertexBufferRHIRef CreateRHIBuffer_Internal();
 };
+

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -418,7 +418,7 @@ private:
 
 
 // This object is a base class helper used when building a list of actions for some menu or palette
-struct ENGINE_VTABLE FGraphActionListBuilderBase
+struct FGraphActionListBuilderBase
 {
 public:
 	/** A single entry in the list - can contain multiple actions */
@@ -545,7 +545,7 @@ public:
 };
 
 /** Used to nest all added action under one root category */
-struct ENGINE_VTABLE FCategorizedGraphActionListBuilder : public FGraphActionListBuilderBase
+struct FCategorizedGraphActionListBuilder : public FGraphActionListBuilderBase
 {
 public:
 	ENGINE_API FCategorizedGraphActionListBuilder(FString Category = FString());
@@ -1037,4 +1037,14 @@ class ENGINE_API UEdGraphSchema : public UObject
 	 * @return	true if the pin types and directions are compatible.
 	 */
 	virtual bool ArePinsCompatible(const UEdGraphPin* PinA, const UEdGraphPin* PinB, const UClass* CallingContext = NULL, bool bIgnoreArray = false) const { return true; }
+
+	/**
+	 * Returns true if the schema wants to overdrive the behaviour of dirtying the blueprint on new node creation.
+	 *
+	 * @param   InBlueprint    The blueprint to dirty or not
+	 * @param   InEdGraphNode  The node that was just added and caused the request
+	 * 
+	 * @return  true if the blueprint marking has been taken care off.
+	 */
+	virtual bool MarkBlueprintDirtyFromNewNode(UBlueprint* InBlueprint, UEdGraphNode* InEdGraphNode) const { return false; }
 };

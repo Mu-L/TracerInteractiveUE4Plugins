@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,6 +7,7 @@
 #include "AudioMixerTypes.h"
 #include "HAL/Runnable.h"
 #include "HAL/ThreadSafeBool.h"
+#include "Misc/ScopeLock.h"
 #include "Misc/SingleThreadRunnable.h"
 #include "AudioMixerNullDevice.h"
 #include "DSP/ParamInterpolator.h"
@@ -66,7 +67,8 @@ namespace EAudioMixerChannel
 		TopBackCenter,
 		TopBackRight,
 		Unknown,
-		ChannelTypeCount
+		ChannelTypeCount,
+		DefaultChannel = FrontLeft
 	};
 
 	static const int32 MaxSupportedChannel = EAudioMixerChannel::TopCenter;
@@ -268,7 +270,7 @@ namespace Audio
 	};
 
 	/** Struct used to store render time analysis data. */
-	struct FAudioRenderTimeAnalysis
+	struct AUDIOMIXERCORE_API FAudioRenderTimeAnalysis
 	{
 		double AvgRenderTime;
 		double MaxRenderTime;
@@ -487,13 +489,10 @@ namespace Audio
 		void ReadNextBuffer();
 
 		/** Reset the fade state (use if reusing audio platform interface, e.g. in main audio device. */
-		void FadeIn();
+		virtual void FadeIn();
 
 		/** Start a fadeout. Prevents pops during shutdown. */
-		void FadeOut();
-
-		/** Sets the mater volume of the audio device. This attenuates all audio, used for muting, etc. */
-		void SetMasterVolume(const float InVolume);
+		virtual void FadeOut();
 
 		/** Returns the last error generated. */
 		FString GetLastError() const { return LastError; }
@@ -512,8 +511,19 @@ namespace Audio
 		/** Is called when an error is generated. */
 		inline void OnAudioMixerPlatformError(const FString& ErrorDetails, const FString& FileName, int32 LineNumber)
 		{
+#if !NO_LOGGING
+			// Log once on these errors to avoid Spam.
+			static FCriticalSection Cs;
+			static TSet<uint32> LogHistory;
+			FScopeLock Lock(&Cs);
 			LastError = FString::Printf(TEXT("Audio Platform Device Error: %s (File %s, Line %d)"), *ErrorDetails, *FileName, LineNumber);
-			UE_LOG(LogAudioMixer, Error, TEXT("%s"), *LastError);
+			uint32 Hash = GetTypeHash(LastError);
+			if (!LogHistory.Contains(Hash))
+			{
+				UE_LOG(LogAudioMixer, Error, TEXT("%s"), *LastError);
+				LogHistory.Add(Hash);
+			}
+#endif //!NO_LOGGING
 		}
 
 		/** Start generating audio from our mixer. */

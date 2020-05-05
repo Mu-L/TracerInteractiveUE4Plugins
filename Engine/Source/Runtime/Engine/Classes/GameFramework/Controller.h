@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -85,6 +85,9 @@ protected:
 	/** The control rotation of the Controller. See GetControlRotation. */
 	UPROPERTY()
 	FRotator ControlRotation;
+
+	/** Return false if rotation contains NaN or extremely large values (usually resulting from uninitialized values). */
+	bool IsValidControlRotation(FRotator CheckRotation) const;
 
 	/**
 	 * If true, the controller location will match the possessed Pawn's location. If false, it will not be updated. Rotation will match ControlRotation in either case.

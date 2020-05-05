@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PIEPreviewDevice.h"
 
@@ -148,11 +148,6 @@ void FPIEPreviewDevice::ComputeContentScaledResolution(int32& Width, int32& Heig
 			case EPIEPreviewDeviceType::Android:
 			{
 				ERHIFeatureLevel::Type DeviceFeatureLevel = GetPreviewDeviceFeatureLevel();
-				if (DeviceFeatureLevel < ERHIFeatureLevel::ES3_1)
-				{
-					AndroidWindowUtils::ApplyMosaicRequirements(Width, Height);
-				}
-
 				AndroidWindowUtils::ApplyContentScaleFactor(Width, Height);
 			}
 			break;
@@ -243,18 +238,13 @@ ERHIFeatureLevel::Type FPIEPreviewDevice::GetPreviewDeviceFeatureLevel() const
 			const bool bDeviceSupportsES31 = DeviceSpecs->AndroidProperties.GLVersion.Split(TEXT("OpenGL ES 3."), nullptr, &SubVersion) && FCString::Atoi(*SubVersion) >= 1;
 
 			// check the project's gles support:
-			bool bProjectBuiltForES2 = false, bProjectBuiltForES31 = false;
+			bool bProjectBuiltForES31 = false;
 			GConfig->GetBool(TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings"), TEXT("bBuildForES31"), bProjectBuiltForES31, GEngineIni);
-			GConfig->GetBool(TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings"), TEXT("bBuildForES2"), bProjectBuiltForES2, GEngineIni);
 
 			// Android Preview Device is currently expected to work on gles.
-			check(bProjectBuiltForES2 || bProjectBuiltForES31);
+			check(bDeviceSupportsES31 && bProjectBuiltForES31);
 
-			// Projects without ES2 support can only expect to run on ES31 devices.
-			check(bProjectBuiltForES2 || bDeviceSupportsES31);
-
-			// ES3.1+ devices fallback to ES2 if the project itself doesn't support ES3.1
-			return bDeviceSupportsES31 && bProjectBuiltForES31 ? ERHIFeatureLevel::ES3_1 : ERHIFeatureLevel::ES2;
+			return ERHIFeatureLevel::ES3_1;
 		}
 		case EPIEPreviewDeviceType::IOS:
 		case EPIEPreviewDeviceType::TVOS:
@@ -367,16 +357,8 @@ void FPIEPreviewDevice::ApplyRHIOverrides() const
 	{
 		case EPIEPreviewDeviceType::Android:
 		{
-			if (PreviewFeatureLevel == ERHIFeatureLevel::ES2)
-			{
-				PreviewPlatform = SP_OPENGL_ES2_ANDROID;
-				RHIOverrideState = &DeviceSpecs->AndroidProperties.GLES2RHIState;
-			}
-			else
-			{
-				PreviewPlatform = SP_OPENGL_ES3_1_ANDROID;
-				RHIOverrideState = &DeviceSpecs->AndroidProperties.GLES31RHIState;
-			}
+			PreviewPlatform = SP_OPENGL_ES3_1_ANDROID;
+			RHIOverrideState = &DeviceSpecs->AndroidProperties.GLES31RHIState;
 		}
 		break;
 
@@ -424,7 +406,6 @@ void FPIEPreviewDevice::ApplyRHIOverrides() const
 		GMaxShadowDepthBufferSizeX.SetPreviewOverride(RHIOverrideState->MaxShadowDepthBufferSizeX);
 		GMaxShadowDepthBufferSizeY.SetPreviewOverride(RHIOverrideState->MaxShadowDepthBufferSizeY);
 		GMaxCubeTextureDimensions.SetPreviewOverride(RHIOverrideState->MaxCubeTextureDimensions);
-		GRHISupportsInstancing.SetPreviewOverride(RHIOverrideState->SupportsInstancing);
 		GSupportsMultipleRenderTargets.SetPreviewOverride(RHIOverrideState->SupportsMultipleRenderTargets);
 		GSupportsRenderTargetFormat_PF_FloatRGBA.SetPreviewOverride(RHIOverrideState->SupportsRenderTargetFormat_PF_FloatRGBA);
 		GSupportsRenderTargetFormat_PF_G8.SetPreviewOverride(RHIOverrideState->SupportsRenderTargetFormat_PF_G8);

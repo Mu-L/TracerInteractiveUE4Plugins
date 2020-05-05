@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -148,24 +148,23 @@ public:
 	/** Current bounds of the component */
 	FBoxSphereBounds Bounds;
 
+private:
 	/** Location of the component relative to its parent */
-	UE_DEPRECATED(4.24, "This member will be made private. Please use GetRelativeLocation or SetRelativeLocation.")
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, ReplicatedUsing=OnRep_Transform, Category = Transform)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, ReplicatedUsing=OnRep_Transform, Category = Transform, meta=(AllowPrivateAccess="true"))
 	FVector RelativeLocation;
 
 	/** Rotation of the component relative to its parent */
-	UE_DEPRECATED(4.24, "This member will be made private. Please use GetRelativeRotation or SetRelativeRotation.")
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, ReplicatedUsing=OnRep_Transform, Category=Transform)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, ReplicatedUsing=OnRep_Transform, Category=Transform, meta=(AllowPrivateAccess="true"))
 	FRotator RelativeRotation;
 
 	/**
 	*	Non-uniform scaling of the component relative to its parent.
 	*	Note that scaling is always applied in local space (no shearing etc)
 	*/
-	UE_DEPRECATED(4.24, "This member will be made private. Please use GetRelativeScale3D or SetRelativeScale3D.")
-	UPROPERTY(BlueprintReadOnly, ReplicatedUsing=OnRep_Transform, interp, Category=Transform)
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing=OnRep_Transform, interp, Category=Transform, meta=(AllowPrivateAccess="true"))
 	FVector RelativeScale3D;
 
+public:
 	/**
 	* Velocity of the component.
 	* @see GetComponentVelocity()
@@ -182,32 +181,22 @@ private:
 	* This should only be set to true as a result of UpdateOverlaps. To dirty this flag see ClearSkipUpdateOverlaps() which is expected when state affecting UpdateOverlaps changes (attachment, Collision settings, etc...) */
 	uint8 bSkipUpdateOverlaps : 1;
 
-public:
 	/** If RelativeLocation should be considered relative to the world, rather than the parent */
-	UE_DEPRECATED(4.24, "This member will be made private. Please use IsUsingAbsoluteLocation or SetUsingAbsoluteLocation.")
-	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, ReplicatedUsing=OnRep_Transform, Category=Transform)
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, ReplicatedUsing=OnRep_Transform, Category=Transform, meta=(AllowPrivateAccess="true"))
 	uint8 bAbsoluteLocation:1;
 
 	/** If RelativeRotation should be considered relative to the world, rather than the parent */
-	UE_DEPRECATED(4.24, "This member will be made private. Please use IsUsingAbsoluteRotation or SetUsingAbsoluteRotation.")
-	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, ReplicatedUsing=OnRep_Transform, Category=Transform)
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, ReplicatedUsing=OnRep_Transform, Category=Transform, meta=(AllowPrivateAccess="true"))
 	uint8 bAbsoluteRotation:1;
 
 	/** If RelativeScale3D should be considered relative to the world, rather than the parent */
-	UE_DEPRECATED(4.24, "This member will be made private. Please use IsUsingAbsoluteScale or SetUsingAbsoluteScale.")
-	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, ReplicatedUsing=OnRep_Transform, Category=Transform)
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, ReplicatedUsing=OnRep_Transform, Category=Transform, meta=(AllowPrivateAccess="true"))
 	uint8 bAbsoluteScale:1;
 
 	/** Whether to completely draw the primitive; if false, the primitive is not drawn, does not cast a shadow. */
-	UE_DEPRECATED(4.24, "This member will be made private. Please use IsVisible or SetVisibility.")
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, ReplicatedUsing=OnRep_Visibility,  Category = Rendering)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, ReplicatedUsing=OnRep_Visibility,  Category = Rendering, meta=(AllowPrivateAccess="true"))
 	uint8 bVisible:1;
 
-	/** Whether to hide the primitive in game, if the primitive is Visible. */
-	UPROPERTY(Interp, EditAnywhere, BlueprintReadOnly, Category=Rendering, meta=(SequencerTrackClass = "MovieSceneVisibilityTrack"))
-	uint8 bHiddenInGame:1;
-
-private:
 	/** Whether or not we should be attached. */
 	UPROPERTY(Transient, Replicated)
 	uint8 bShouldBeAttached : 1;
@@ -226,6 +215,10 @@ private:
 	uint8 bShouldUpdatePhysicsVolume:1;
 
 public:
+	/** Whether to hide the primitive in game, if the primitive is Visible. */
+	UPROPERTY(Interp, EditAnywhere, BlueprintReadOnly, Category=Rendering, meta=(SequencerTrackClass = "MovieSceneVisibilityTrack"))
+	uint8 bHiddenInGame:1;
+
 	/** If true, a change in the bounds of the component will call trigger a streaming data rebuild */
 	UPROPERTY()
 	uint8 bBoundsChangeTriggersStreamingDataRebuild:1;
@@ -671,26 +664,26 @@ public:
 	bool K2_AttachTo(USceneComponent* InParent, FName InSocketName = NAME_None, EAttachLocation::Type AttachType = EAttachLocation::KeepRelativeOffset, bool bWeldSimulatedBodies = true);
 
 	/**
-	 * Attach this component to another scene component, optionally at a named socket. It is valid to call this on components whether or not they have been Registered, however from
-	 * constructor or when not registered it is preferable to use SetupAttachment.
-	 * @param  Parent				Parent to attach to.
-	 * @param  AttachmentRules		How to handle transforms & welding when attaching.
-	 * @param  SocketName			Optional socket to attach to on the parent.
-	 * @return True if attachment is successful (or already attached to requested parent/socket), false if attachment is rejected and there is no change in AttachParent.
-	 */
+	* Attach this component to another scene component, optionally at a named socket. It is valid to call this on components whether or not they have been Registered, however from
+	* constructor or when not registered it is preferable to use SetupAttachment.
+	* @param  Parent				Parent to attach to.
+	* @param  AttachmentRules		How to handle transforms & welding when attaching.
+	* @param  SocketName			Optional socket to attach to on the parent.
+	* @return True if attachment is successful (or already attached to requested parent/socket), false if attachment is rejected and there is no change in AttachParent.
+	*/
 	bool AttachToComponent(USceneComponent* InParent, const FAttachmentTransformRules& AttachmentRules, FName InSocketName = NAME_None );
 
 	/**
-	 * Attach this component to another scene component, optionally at a named socket. It is valid to call this on components whether or not they have been Registered.
-	 * @param  Parent					Parent to attach to.
-	 * @param  SocketName				Optional socket to attach to on the parent.
-	 * @param  LocationRule				How to handle translation when attaching.
-	 * @param  RotationRule				How to handle rotation when attaching.
-	 * @param  ScaleRule					How to handle scale when attaching.
-	 * @param  bWeldSimulatedBodies		Whether to weld together simulated physics bodies.
-	 * @return True if attachment is successful (or already attached to requested parent/socket), false if attachment is rejected and there is no change in AttachParent.
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Utilities|Transformation", meta = (DisplayName = "AttachToComponent", ScriptName = "AttachToComponent", bWeldSimulatedBodies=true))
+	* Attach this component to another scene component, optionally at a named socket. It is valid to call this on components whether or not they have been Registered.
+	* @param  Parent					Parent to attach to.
+	* @param  SocketName				Optional socket to attach to on the parent.
+	* @param  LocationRule				How to handle translation when attaching.
+	* @param  RotationRule				How to handle rotation when attaching.
+	* @param  ScaleRule					How to handle scale when attaching.
+	* @param  bWeldSimulatedBodies		Whether to weld together simulated physics bodies.
+	* @return True if attachment is successful (or already attached to requested parent/socket), false if attachment is rejected and there is no change in AttachParent.
+	*/
+	UFUNCTION(BlueprintCallable, Category = "Utilities|Transformation", meta = (DisplayName = "AttachComponentToComponent", ScriptName = "AttachToComponent", bWeldSimulatedBodies=true))
 	bool K2_AttachToComponent(USceneComponent* Parent, FName SocketName, EAttachmentRule LocationRule, EAttachmentRule RotationRule, EAttachmentRule ScaleRule, bool bWeldSimulatedBodies);
 
 	/** DEPRECATED - Use AttachToComponent() instead */
@@ -868,7 +861,7 @@ public:
 	//~ End ActorComponent Interface
 
 	//~ Begin UObject Interface
-	virtual void PostInterpChange(UProperty* PropertyThatChanged) override;
+	virtual void PostInterpChange(FProperty* PropertyThatChanged) override;
 	virtual void BeginDestroy() override;
 	virtual bool IsPostLoadThreadSafe() const override;
 	virtual void PreNetReceive() override;
@@ -882,7 +875,7 @@ public:
 	virtual bool NeedsLoadForTargetPlatform(const ITargetPlatform* TargetPlatform) const;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChangedEvent) override;
-	virtual bool CanEditChange(const UProperty* Property) const override;
+	virtual bool CanEditChange(const FProperty* Property) const override;
 #endif
 	//~ End UObject Interface
 
@@ -1258,7 +1251,6 @@ private:
 	friend class FScopedPreventAttachedComponentMove;
 	friend struct FDirectAttachChildrenAccessor;
 
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	//~ Begin Methods for Replicated Members.
 private:
 
@@ -1516,7 +1508,6 @@ public:
 	void SetVisibleFlag(const bool bInVisible);
 	
 	//~ End Methods for Replicated Members.
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
 };
 
 /** 
@@ -1779,7 +1770,7 @@ protected:
 	FRotator InitialRelativeRotation;
 	FVector InitialRelativeScale;
 
-	int32 FinalOverlapCandidatesIndex;			// If not INDEX_NONE, overlaps at this index and beyond in PendingOverlaps are at the final destination
+	int32 FinalOverlapCandidatesIndex;		// If not INDEX_NONE, overlaps at this index and beyond in PendingOverlaps are at the final destination
 	TScopedOverlapInfoArray PendingOverlaps;	// All overlaps encountered during the scope of moves.
 	TScopedBlockingHitArray BlockingHits;		// All blocking hits encountered during the scope of moves.
 

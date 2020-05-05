@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraParameterStore.h"
 #include "NiagaraCommon.h"
@@ -24,6 +24,55 @@ static FAutoConsoleVariableRef CVarNiagaraDumpParticleParameterStores(
 );
 #endif
 
+struct FNiagaraVariableSearch
+{
+	static FORCEINLINE int32 Compare(const FNiagaraVariableBase& A, const FNiagaraVariableBase& B)
+	{
+#if NIAGARA_VARIABLE_LEXICAL_SORTING
+		int32 ComparisonDiff = A.GetName().Compare(B.GetName());
+#else
+		int32 ComparisonDiff = A.GetName().CompareIndexes(B.GetName());
+#endif
+		if (ComparisonDiff != 0)
+		{
+			return ComparisonDiff;
+		}
+		else
+		{
+#if NIAGARA_VARIABLE_LEXICAL_SORTING
+			return ComparisonDiff = A.GetType().GetFName().Compare(B.GetType().GetFName());
+#else
+			return ComparisonDiff = A.GetType().GetFName().CompareIndexes(B.GetType().GetFName());
+#endif
+		}
+	}
+
+	static bool Find(const FNiagaraVariableWithOffset* Variables, const FNiagaraVariableBase& Ref, int32 Start, int32 Num, int32& CheckIndex)
+	{
+		while (Num)
+		{
+			const int32 LeftoverSize = Num % 2;
+			Num = Num / 2;
+
+			CheckIndex = Start + Num;
+			const int32 StartIfLess = CheckIndex + LeftoverSize;
+
+			const int32 ComparisonDiff = Compare(Variables[CheckIndex], Ref);
+			if (ComparisonDiff < 0)
+			{
+				Start = CheckIndex + 1;
+				Num += LeftoverSize - 1;
+			}
+			else if (ComparisonDiff == 0)
+			{
+				return true;
+			}
+		}
+		CheckIndex = Start;
+		return false;
+	}
+};
+
 //////////////////////////////////////////////////////////////////////////
 
 int32 GNiagaraAllowQuickSortedParameterOffetsCopy = 1;
@@ -40,17 +89,6 @@ namespace
 	{
 		if (GNiagaraAllowQuickSortedParameterOffetsCopy)
 		{
-		#if DO_GUARD_SLOW
-			// Safeguard while we don't have yet the FNiagaraVariable type without data.
-			for (const FNiagaraVariableWithOffset& ParamWithOffset : Dest)
-			{
-				checkSlow(!ParamWithOffset.IsDataAllocated());
-			}
-			for (const FNiagaraVariableWithOffset& ParamWithOffset : Src)
-			{
-				checkSlow(!ParamWithOffset.IsDataAllocated());
-			}
-		#endif
 			Dest.SetNumUninitialized(Src.Num());
 			FMemory::Memcpy(Dest.GetData(), Src.GetData(), Dest.GetTypeSize() * Dest.Num());
 		}
@@ -63,31 +101,6 @@ namespace
 
 //////////////////////////////////////////////////////////////////////////
 
-bool FNiagaraVariableSearch::Find(const FNiagaraVariableWithOffset* Variables, const FNiagaraVariable& Ref, int32 Start, int32 Num, int32& CheckIndex)
-{
-	while (Num)
-	{
-		const int32 LeftoverSize = Num % 2;
-		Num = Num / 2;
-
-		CheckIndex = Start + Num;
-		const int32 StartIfLess = CheckIndex + LeftoverSize;
-
-		const int32 ComparisonDiff = Compare(Variables[CheckIndex], Ref);
-		if (ComparisonDiff < 0)
-		{
-			Start = CheckIndex + 1;
-			Num += LeftoverSize - 1;
-		}
-		else if (ComparisonDiff == 0)
-		{
-			return true;
-		}
-	}
-	CheckIndex = Start;
-	return false;
-}
-
 FNiagaraParameterStore::FNiagaraParameterStore()
 	: Owner(nullptr)
 	, bParametersDirty(true)
@@ -97,13 +110,9 @@ FNiagaraParameterStore::FNiagaraParameterStore()
 {
 }
 
-FNiagaraParameterStore::FNiagaraParameterStore(UObject* InOwner)
-	: Owner(InOwner)
-	, bParametersDirty(true)
-	, bInterfacesDirty(true)
-	, bUObjectsDirty(true)
-	, LayoutVersion(0)
+void FNiagaraParameterStore::SetOwner(UObject* InOwner)
 {
+	Owner = InOwner;
 #if WITH_EDITORONLY_DATA
 	if (InOwner != nullptr)
 	{
@@ -114,14 +123,11 @@ FNiagaraParameterStore::FNiagaraParameterStore(UObject* InOwner)
 
 FNiagaraParameterStore::FNiagaraParameterStore(const FNiagaraParameterStore& Other)
 {
-	DEC_MEMORY_STAT_BY(STAT_NiagaraParamStoreMemory, ParameterData.GetAllocatedSize());
 	*this = Other;
-	INC_MEMORY_STAT_BY(STAT_NiagaraParamStoreMemory, ParameterData.GetAllocatedSize());
 }
 
 FNiagaraParameterStore& FNiagaraParameterStore::operator=(const FNiagaraParameterStore& Other)
 {
-	Owner = Other.Owner;
 #if WITH_EDITORONLY_DATA
 	ParameterOffsets = Other.ParameterOffsets;
 #endif // WITH_EDITORONLY_DATA
@@ -344,10 +350,9 @@ bool FNiagaraParameterStore::VerifyBinding(const FNiagaraParameterStore* DestSto
 
 void FNiagaraParameterStore::CheckForNaNs()const
 {
-	for (const FNiagaraVariableWithOffset& ParamWithOffset : SortedParameterOffsets)
+	for (const FNiagaraVariableWithOffset& Var : SortedParameterOffsets)
 	{
-		const FNiagaraVariable& Var = ParamWithOffset;
-		const int32 Offset = ParamWithOffset.Offset;
+		const int32 Offset = Var.Offset;
 
 		bool bContainsNans = false;
 		if (Var.GetType() == FNiagaraTypeDefinition::GetFloatDef())
@@ -385,25 +390,14 @@ void FNiagaraParameterStore::CheckForNaNs()const
 	}
 }
 
-void FNiagaraParameterStore::Tick()
+void FNiagaraParameterStore::TickBindings()
 {
-#if NIAGARA_NAN_CHECKING
-	CheckForNaNs();
-#endif
-	if (Bindings.Num() > 0 && (bParametersDirty || bInterfacesDirty || bUObjectsDirty))
+	SCOPE_CYCLE_COUNTER(STAT_NiagaraParameterStoreTick);
+	for (TPair<FNiagaraParameterStore*, FNiagaraParameterStoreBinding>& Binding : Bindings)
 	{
-		SCOPE_CYCLE_COUNTER(STAT_NiagaraParameterStoreTick);
-		for (TPair<FNiagaraParameterStore*, FNiagaraParameterStoreBinding>& Binding : Bindings)
-		{
-			Binding.Value.Tick(Binding.Key, this);
-		}
-		Dump();
+		Binding.Value.Tick(Binding.Key, this);
 	}
-
-	//We have to have ticked all our source stores before now.
-	bParametersDirty = false;
-	bInterfacesDirty = false;
-	bUObjectsDirty = false;
+	Dump();
 }
 
 void FNiagaraParameterStore::UnbindFromSourceStores()
@@ -509,7 +503,9 @@ bool FNiagaraParameterStore::AddParameter(const FNiagaraVariable& Param, bool bI
 		int32 ParamAlignment = Param.GetAlignment();
 		//int32 Offset = AlignArbitrary(ParameterData.Num(), ParamAlignment);//TODO: We need to handle alignment better here. Need to both satisfy CPU and GPU alignment concerns. VM doesn't care but the VM complier needs to be aware. Probably best to have everything adhere to GPU alignment rules.
 		Offset = ParameterData.Num();
-		ParameterData.AddUninitialized(ParamSize);
+		// Memory must be initialized in order to have deterministic cooking. 
+		// This is because some system parameters never get initialized otherwise (particle count, owner rotation, ...)
+		ParameterData.AddZeroed(ParamSize);
 				
 		INC_MEMORY_STAT_BY(STAT_NiagaraParamStoreMemory, ParameterData.GetAllocatedSize());
 
@@ -608,6 +604,13 @@ void FNiagaraParameterStore::RenameParameter(const FNiagaraVariable& Param, FNam
 	check(!ParameterOffsets.Num()); // Migration to SortedParameterOffsets
 #endif
 
+	if (Param.GetName() == NewName)
+	{
+		// Early out here to prevent crashes later on due to delta size mismatches when the newly named
+		// parameter isn't added.
+		return;
+	}
+
 	int32 Idx = IndexOf(Param);
 	if(Idx != INDEX_NONE)
 	{
@@ -648,6 +651,10 @@ void FNiagaraParameterStore::SanityCheckData(bool bInitInterfaces)
 {
 	// This function exists to patch up the issue seen in FORT-208391, where we had entries for DataInterfaces in the offset array but not in the actual DataInterface array entries.
 	// Additional protections were added for safety.
+	bool OwnerDirtied = false;
+
+	int32 ParameterDataSize = 0;
+
 	TArray<FNiagaraVariableWithOffset>::TConstIterator It = SortedParameterOffsets.CreateConstIterator();
 	while (It)
 	{
@@ -665,11 +672,15 @@ void FNiagaraParameterStore::SanityCheckData(bool bInitInterfaces)
 					int32 NewNum = SrcIndex - DataInterfaces.Num() + 1;
 					DataInterfaces.AddZeroed(NewNum);
 					UE_LOG(LogNiagara, Warning, TEXT("Missing data interfaces! Had to add %d data interface entries to ParameterStore on %s"), NewNum , Owner != nullptr ? *Owner->GetPathName() : TEXT("Unknown owner"));
+
+					OwnerDirtied = true;
 				}
 				if (DataInterfaces[SrcIndex] == nullptr && bInitInterfaces && Owner)
 				{
 					DataInterfaces[SrcIndex] = NewObject<UNiagaraDataInterface>(Owner, const_cast<UClass*>(Parameter.GetType().GetClass()), NAME_None, RF_Transactional | RF_Public);
 					UE_LOG(LogNiagara, Warning, TEXT("Had to initialize data interface! %s on %s"), *Parameter.GetName().ToString(), Owner != nullptr ? *Owner->GetPathName() : TEXT("Unknown owner"));
+
+					OwnerDirtied = true;
 				}
 			}
 			else if (Parameter.IsUObject())
@@ -680,6 +691,8 @@ void FNiagaraParameterStore::SanityCheckData(bool bInitInterfaces)
 					int32 NewNum = SrcIndex - UObjects.Num() + 1;
 					UObjects.AddZeroed(NewNum);
 					UE_LOG(LogNiagara, Warning, TEXT("Missing UObject interfaces! Had to add %d UObject entries for %s on %s"), NewNum , *Parameter.GetName().ToString(), Owner != nullptr ? *Owner->GetPathName() : TEXT("Unknown owner"));
+
+					OwnerDirtied = true;
 				}
 			}
 			else
@@ -688,9 +701,22 @@ void FNiagaraParameterStore::SanityCheckData(bool bInitInterfaces)
 				if (ParameterData.Num() < (SrcIndex + Size))
 				{
 					UE_LOG(LogNiagara, Warning, TEXT("Missing parameter data! %s on %s"), *Parameter.GetName().ToString(), Owner != nullptr ? *Owner->GetPathName() : TEXT("Unknown owner"));
+
+					OwnerDirtied = true;
 				}
+				ParameterDataSize = FMath::Max(ParameterDataSize, SrcIndex + Size);
 			}
 		}
+	}
+
+	if (ParameterData.Num() < ParameterDataSize)
+	{
+		ParameterData.AddZeroed(ParameterDataSize - ParameterData.Num());
+	}
+
+	if (Owner && OwnerDirtied)
+	{
+		UE_LOG(LogNiagara, Warning, TEXT("%s needs to be resaved to prevent above warnings due to the parameter state being stale."), *Owner->GetFullName());
 	}
 }
 
@@ -887,7 +913,7 @@ void FNiagaraParameterStore::OnLayoutChange()
 #endif
 }
 
-const FNiagaraVariable* FNiagaraParameterStore::FindVariable(UNiagaraDataInterface* Interface)const
+const FNiagaraVariableBase* FNiagaraParameterStore::FindVariable(const UNiagaraDataInterface* Interface) const
 {
 	SCOPE_CYCLE_COUNTER(STAT_NiagaraParameterStoreFindVar);
 	int32 Idx = DataInterfaces.IndexOfByKey(Interface);
@@ -932,11 +958,6 @@ void FNiagaraParameterStore::PostLoad()
 			SortedParameterOffsets.Add(FNiagaraVariableWithOffset(ParamOffsetPair.Key, ParamOffsetPair.Value));
 		}
 		ParameterOffsets.Empty();
-	}
-	// Safeguard while we don't have yet the FNiagaraVariable type without data
-	for (FNiagaraVariableWithOffset& ParamWithOffset : SortedParameterOffsets)
-	{
-		ParamWithOffset.ClearData();
 	}
 #endif
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Niagara/Public/NiagaraCommon.h"
@@ -15,18 +15,21 @@ class UCurveVector;
 class UCurveLinearColor;
 class UCurveFloat;
 class FNiagaraSystemInstance;
+class FNiagaraEmitterInstance;
 struct FNiagaraDataInterfaceProxy;
 
 struct FNDITransformHandlerNoop
 {
-	FORCEINLINE void TransformPosition(FVector& V, const FMatrix& M) {  }
+	FORCEINLINE void TransformPosition(FVector& V, const FMatrix& M) { }
 	FORCEINLINE void TransformVector(FVector& V, const FMatrix& M) { }
+	FORCEINLINE void TransformRotation(FQuat& Q1, const FQuat& Q2) { }
 };
 
 struct FNDITransformHandler
 {
 	FORCEINLINE void TransformPosition(FVector& P, const FMatrix& M) { P = M.TransformPosition(P); }
 	FORCEINLINE void TransformVector(FVector& V, const FMatrix& M) { V = M.TransformVector(V).GetUnsafeNormal3(); }
+	FORCEINLINE void TransformRotation(FQuat& Q1, const FQuat& Q2) { Q1 = Q2 * Q1; }
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -119,36 +122,85 @@ public:
 		, ErrorSummaryText(InErrorSummaryText)
 		, Fix(InFix)
 
-	{};
+	{}
+
 	FNiagaraDataInterfaceError()
-	{};
+	{}
+
 	/** Returns true if the error can be fixed automatically. */
 	bool GetErrorFixable() const
 	{
 		return Fix.IsBound();
-	};
+	}
 
 	/** Applies the fix if a delegate is bound for it.*/
 	bool TryFixError()
 	{
 		return Fix.IsBound() ? Fix.Execute() : false;
-	};
+	}
 
 	/** Full error description text */
 	FText GetErrorText() const
 	{
 		return ErrorText;
-	};
+	}
 
 	/** Shortened error description text*/
 	FText GetErrorSummaryText() const
 	{
 		return ErrorSummaryText;
-	};
+	}
 
 private:
 	FText ErrorText;
 	FText ErrorSummaryText;
+	FNiagaraDataInterfaceFix Fix;
+};
+
+// Helper class for GUI feedback handling
+DECLARE_DELEGATE_RetVal(bool, FNiagaraDataInterfaceFix);
+class FNiagaraDataInterfaceFeedback
+{
+public:
+	FNiagaraDataInterfaceFeedback(FText InFeedbackText,
+		FText InFeedbackSummaryText,
+		FNiagaraDataInterfaceFix InFix)
+		: FeedbackText(InFeedbackText)
+		, FeedbackSummaryText(InFeedbackSummaryText)
+		, Fix(InFix)
+
+	{}
+
+	FNiagaraDataInterfaceFeedback()
+	{}
+
+	/** Returns true if the feedback can be fixed automatically. */
+	bool GetFeedbackFixable() const
+	{
+		return Fix.IsBound();
+	}
+
+	/** Applies the fix if a delegate is bound for it.*/
+	bool TryFixFeedback()
+	{
+		return Fix.IsBound() ? Fix.Execute() : false;
+	}
+
+	/** Full feedback description text */
+	FText GetFeedbackText() const
+	{
+		return FeedbackText;
+	}
+
+	/** Shortened feedback description text*/
+	FText GetFeedbackSummaryText() const
+	{
+		return FeedbackSummaryText;
+	}
+
+private:
+	FText FeedbackText;
+	FText FeedbackSummaryText;
 	FNiagaraDataInterfaceFix Fix;
 };
 #endif
@@ -157,54 +209,32 @@ private:
 
 struct FNiagaraDataInterfaceProxy : TSharedFromThis<FNiagaraDataInterfaceProxy, ESPMode::ThreadSafe>
 {
+	FNiagaraDataInterfaceProxy() {}
 	virtual ~FNiagaraDataInterfaceProxy() {/*check(IsInRenderingThread());*/}
 
 	virtual int32 PerInstanceDataPassedToRenderThreadSize() const = 0;
 	virtual void ConsumePerInstanceDataFromGameThread(void* PerInstanceData, const FNiagaraSystemInstanceID& Instance) { check(false); }
 
-	virtual void DeferredDestroy() {}
-
 	// #todo(dmp): move all of this stuff to the RW interface to keep it out of here?
-
+	FName SourceDIName;
+	
 	// a set of the shader stages that require the data interface for data output
-	TSet<int> OutputShaderStages;
+	TSet<int> OutputSimulationStages_DEPRECATED;
 
 	// a set of the shader stages that require the data interface for setting number of output elements
-	TSet<int> IterationShaderStages;
+	TSet<int> IterationSimulationStages_DEPRECATED;
 	
 	// number of elements to output to
 	uint32 ElementCount;
 
 	void SetElementCount(uint32 Count) { ElementCount = Count;  }
-	virtual bool IsOutputStage(uint32 CurrentStage) const { return OutputShaderStages.Contains(CurrentStage); }
-	virtual bool IsIterationStage(uint32 CurrentStage) const { return IterationShaderStages.Contains(CurrentStage); }
+	virtual bool IsOutputStage_DEPRECATED(uint32 CurrentStage) const { return OutputSimulationStages_DEPRECATED.Contains(CurrentStage); }
+	virtual bool IsIterationStage_DEPRECATED(uint32 CurrentStage) const { return IterationSimulationStages_DEPRECATED.Contains(CurrentStage); }
 
 	virtual void ResetData(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) { }
 
 	virtual void PreStage(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) {}	
 	virtual void PostStage(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) {}
-};
-
-struct FNiagaraDataInterfaceProxyCurveBase : public FNiagaraDataInterfaceProxy
-{
-	~FNiagaraDataInterfaceProxyCurveBase()
-	{
-		check(IsInRenderingThread());
-		CurveLUT.Release();
-	}
-
-	float LUTMinTime;
-	float LUTMaxTime;
-	float LUTInvTimeRange;
-	FReadBuffer CurveLUT;
-
-	virtual int32 PerInstanceDataPassedToRenderThreadSize() const override
-	{
-		return 0;
-	}
-
-	// @todo REMOVEME
-	virtual void ConsumePerInstanceDataFromGameThread(void* PerInstanceData, const FNiagaraSystemInstanceID& Instance) override { check(false); }
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -214,13 +244,15 @@ UCLASS(abstract, EditInlineNew)
 class NIAGARA_API UNiagaraDataInterface : public UNiagaraDataInterfaceBase
 {
 	GENERATED_UCLASS_BODY()
-		 
-public: 
 
+public:
 	virtual ~UNiagaraDataInterface();
 
 	// UObject Interface
 	virtual void PostLoad() override;
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 	// UObject Interface END
 
 	/** Initializes the per instance data for this interface. Returns false if there was some error and the simulation should be disabled. */
@@ -232,6 +264,9 @@ public:
 	/** Ticks the per instance data for this interface, if it has any. */
 	virtual bool PerInstanceTick(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance, float DeltaSeconds) { return false; }
 	virtual bool PerInstanceTickPostSimulate(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance, float DeltaSeconds) { return false; }
+
+	/** Allows the generic class defaults version of this class to specify any dependencies/version/etc that might invalidate the compile. It should never depend on the value of specific properties.*/
+	virtual bool AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor) const;
 
 	/** 
 		Subclasses that wish to work with GPU systems/emitters must implement this.
@@ -284,6 +319,8 @@ public:
 	virtual bool CanExecuteOnTarget(ENiagaraSimTarget Target)const { return false; }
 
 	virtual bool RequiresDistanceFieldData() const { return false; }
+	virtual bool RequiresDepthBuffer() const { return false; }
+	virtual bool RequiresEarlyViewData() const { return false; }
 
 	virtual bool HasTickGroupPrereqs() const { return false; }
 	virtual ETickingGroup CalculateTickGroup(void* PerInstanceData) const { return NiagaraFirstTickGroup; }
@@ -296,29 +333,62 @@ public:
 	{
 	}
 
-	virtual bool GetFunctionHLSL(const FName& DefinitionFunctionName, FString InstanceFunctionName, FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL)
+	virtual void GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL)
 	{
-//		checkf(false, TEXT("Unefined HLSL in data interface. Interfaces need to be able to return HLSL for each function they define in GetFunctions."));
+	}
+
+	virtual bool GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL)
+	{
 		return false;
 	}
-	virtual void GetParameterDefinitionHLSL(FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL)
+
+#if WITH_EDITORONLY_DATA
+	/**
+	Allows data interfaces the opportunity to rename / change the function signature and perform an upgrade.
+	Return true if the signature was modified and we need to refresh the pins / name, etc.
+	*/
+	virtual bool UpgradeFunctionCall(FNiagaraFunctionSignature& FunctionSignature)
 	{
-//		checkf(false, TEXT("Unefined HLSL in data interface. Interfaces need to define HLSL for uniforms their functions access."));
+		return false;
 	}
+#endif
 
 	virtual void PostExecute() {}
 
 #if WITH_EDITOR	
 	/** Refreshes and returns the errors detected with the corresponding data, if any.*/
 	virtual TArray<FNiagaraDataInterfaceError> GetErrors() { return TArray<FNiagaraDataInterfaceError>(); }
+	
+	/**
+		Query the data interface to give feedback to the end user. 
+		Note that the default implementation, just calls GetErrors on the DataInterface, but derived classes can do much more.
+		Also, InAsset or InComponent may be null values, as the UI for DataInterfaces is displayed in a variety of locations. 
+		In these cases, only provide information that is relevant to that context.
+	*/
+	virtual void GetFeedback(UNiagaraSystem* InAsset, UNiagaraComponent* InComponent, TArray<FNiagaraDataInterfaceError>& OutErrors, TArray<FNiagaraDataInterfaceFeedback>& OutWarnings, TArray<FNiagaraDataInterfaceFeedback>& OutInfo);
+
+	static void GetFeedback(UNiagaraDataInterface* DataInterface, TArray<FNiagaraDataInterfaceError>& Errors, TArray<FNiagaraDataInterfaceFeedback>& Warnings,
+		TArray<FNiagaraDataInterfaceFeedback>& Info);
 
 	/** Validates a function being compiled and allows interface classes to post custom compile errors when their API changes. */
 	virtual void ValidateFunction(const FNiagaraFunctionSignature& Function, TArray<FText>& OutValidationErrors);
+
+	void RefreshErrors();
+
+	FSimpleMulticastDelegate& OnErrorsRefreshed();
 #endif
 
 	FNiagaraDataInterfaceProxy* GetProxy()
 	{
 		return Proxy.Get();
+	}
+
+	/**
+	* Allows a DI to specify data dependencies between emitters, so the system can ensure that the emitter instances are executed in the correct order.
+	* The Dependencies array may already contain items, and this method should only append to it.
+	*/
+	virtual void GetEmitterDependencies(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance, TArray<FNiagaraEmitterInstance*>& Dependencies) const
+	{
 	}
 
 protected:
@@ -332,143 +402,13 @@ protected:
 
 	virtual bool CopyToInternal(UNiagaraDataInterface* Destination) const;
 
-	TSharedPtr<FNiagaraDataInterfaceProxy, ESPMode::ThreadSafe> Proxy;
-};
+	TUniquePtr<FNiagaraDataInterfaceProxy> Proxy;
 
-/** Base class for curve data interfaces which facilitates handling the curve data in a standardized way. */
-UCLASS(EditInlineNew, Category = "Curves", meta = (DisplayName = "Float Curve"))
-class NIAGARA_API UNiagaraDataInterfaceCurveBase : public UNiagaraDataInterface
-{
-protected:
-	GENERATED_BODY()
-	/*UPROPERTY()
-	bool GPUBufferDirty;*/
-	UPROPERTY()
-	TArray<float> ShaderLUT;
-	UPROPERTY()
-	float LUTMinTime;
-	UPROPERTY()
-	float LUTMaxTime;
-	UPROPERTY()
-	float LUTInvTimeRange;
-
-	/** Remap a sample time for this curve to 0 to 1 between first and last keys for LUT access.*/
-	FORCEINLINE float NormalizeTime(float T)
-	{
-		return (T - LUTMinTime) * LUTInvTimeRange;
-	}
-
-	/** Remap a 0 to 1 value between the first and last keys to a real sample time for this curve. */
-	FORCEINLINE float UnnormalizeTime(float T)
-	{
-		return (T / LUTInvTimeRange) + LUTMinTime;
-	}
-
-public:
-	UNiagaraDataInterfaceCurveBase()
-		: LUTMinTime(0.0f)
-		, LUTMaxTime(1.0f)
-		, LUTInvTimeRange(1.0f)
-		, bUseLUT(true)
-#if WITH_EDITORONLY_DATA
-		, ShowInCurveEditor(false)
+private:
+#if WITH_EDITOR
+	FSimpleMulticastDelegate OnErrorsRefreshedDelegate;
 #endif
-	{
-		Proxy = MakeShared<FNiagaraDataInterfaceProxyCurveBase, ESPMode::ThreadSafe>();
-	}
-
-	UNiagaraDataInterfaceCurveBase(FObjectInitializer const& ObjectInitializer)
-		: LUTMinTime(0.0f)
-		, LUTMaxTime(1.0f)
-		, LUTInvTimeRange(1.0f)
-		, bUseLUT(true)
-#if WITH_EDITORONLY_DATA
-		, ShowInCurveEditor(false)
-#endif
-	{
-		Proxy = MakeShared<FNiagaraDataInterfaceProxyCurveBase, ESPMode::ThreadSafe>();
-	}
-
-	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Curve")
-	uint32 bUseLUT : 1;
-	
-#if WITH_EDITORONLY_DATA
-	UPROPERTY(EditAnywhere, Transient, Category = "Curve")
-	bool ShowInCurveEditor;
-#endif
-
-	enum
-	{
-		CurveLUTWidth = 128,
-		CurveLUTWidthMinusOne = 127,
-	};
-	/** Structure to facilitate getting standardized curve information from a curve data interface. */
-	struct FCurveData
-	{
-		FCurveData(FRichCurve* InCurve, FName InName, FLinearColor InColor)
-			: Curve(InCurve)
-			, Name(InName)
-			, Color(InColor)
-		{
-		}
-		/** A pointer to the curve. */
-		FRichCurve* Curve;
-		/** The name of the curve, unique within the data interface, which identifies the curve in the UI. */
-		FName Name;
-		/** The color to use when displaying this curve in the UI. */
-		FLinearColor Color;
-	};
-
-	/** Gets information for all of the curves owned by this curve data interface. */
-	virtual void GetCurveData(TArray<FCurveData>& OutCurveData) { }
-
-	virtual void GetParameterDefinitionHLSL(FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL)override;
-	virtual FNiagaraDataInterfaceParametersCS* ConstructComputeParameters()const override;
-
-	virtual int32 GetCurveNumElems()const 
-	{
-		checkf(false, TEXT("You must implement this function so the GPU buffer can be created of the correct size."));
-		return 0; 
-	}
-
-	//TODO: Make this a texture and get HW filter + clamping?
-	//FReadBuffer& GetCurveLUTGPUBuffer();
-
-	//UNiagaraDataInterface interface
-	virtual bool Equals(const UNiagaraDataInterface* Other) const override;
-	virtual bool CanExecuteOnTarget(ENiagaraSimTarget Target)const override { return true; }
-	virtual void UpdateLUT() { };
-
-	FORCEINLINE float GetMinTime()const { return LUTMinTime; }
-	FORCEINLINE float GetMaxTime()const { return LUTMaxTime; }
-	FORCEINLINE float GetInvTimeRange()const { return LUTInvTimeRange; }
-
-protected:
-	void PushToRenderThread();
-	virtual bool CopyToInternal(UNiagaraDataInterface* Destination) const override;
-	virtual bool CompareLUTS(const TArray<float>& OtherLUT) const;
-	//UNiagaraDataInterface interface END
 };
-
-//External function binder choosing between template specializations based on if a curve should use the LUT over full evaluation.
-template<typename NextBinder>
-struct TCurveUseLUTBinder
-{
-	template<typename... ParamTypes>
-	static void Bind(UNiagaraDataInterface* Interface, const FVMExternalFunctionBindingInfo& BindingInfo, void* InstanceData, FVMExternalFunction &OutFunc)
-	{
-		UNiagaraDataInterfaceCurveBase* CurveInterface = CastChecked<UNiagaraDataInterfaceCurveBase>(Interface);
-		if (CurveInterface->bUseLUT)
-		{
-			NextBinder::template Bind<ParamTypes..., TIntegralConstant<bool, true>>(Interface, BindingInfo, InstanceData, OutFunc);
-		}
-		else
-		{
-			NextBinder::template Bind<ParamTypes..., TIntegralConstant<bool, false>>(Interface, BindingInfo, InstanceData, OutFunc);
-		}
-	}
-};
-
 
 /** Helper class for decoding NDI parameters into a usable struct type. */
 template<typename T>
@@ -643,8 +583,119 @@ struct FNDIRandomHelper
 		return Min + (int(Rand(InstanceIndex) * (Range + 1)));
 	}
 
+	FORCEINLINE_DEBUGGABLE FVector RandomBarycentricCoord(int32 InstanceIndex)
+	{
+		//TODO: This is gonna be slooooow. Move to an LUT possibly or find faster method.
+		//Can probably handle lower quality randoms / uniformity for a decent speed win.
+		FVector2D r = Rand2(InstanceIndex);
+		float sqrt0 = FMath::Sqrt(r.X);
+		float sqrt1 = FMath::Sqrt(r.Y);
+		return FVector(1.0f - sqrt0, sqrt0 * (1.0 - r.Y), r.Y * sqrt0);
+	}
+
 	FVectorVMContext& Context;
 	FNDIParameter<FNiagaraRandInfo> RandParam;
 
 	FNiagaraRandInfo RandInfo;
+};
+
+//Helper to deal with types with potentially several output registers.
+template<typename T>
+struct FNDIOutputParam
+{
+	VectorVM::FExternalFuncRegisterHandler<T> Data;
+	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : Data(Context) {}
+	FORCEINLINE void SetAndAdvance(T Val) { *Data.GetDestAndAdvance() = Val; }
+};
+
+template<>
+struct FNDIOutputParam<FVector2D>
+{
+	VectorVM::FExternalFuncRegisterHandler<float> X;
+	VectorVM::FExternalFuncRegisterHandler<float> Y;
+	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : X(Context), Y(Context) {}
+	FORCEINLINE void SetAndAdvance(FVector2D Val)
+	{
+		*X.GetDestAndAdvance() = Val.X;
+		*Y.GetDestAndAdvance() = Val.Y;
+	}
+};
+
+template<>
+struct FNDIOutputParam<FVector>
+{
+	VectorVM::FExternalFuncRegisterHandler<float> X;
+	VectorVM::FExternalFuncRegisterHandler<float> Y;
+	VectorVM::FExternalFuncRegisterHandler<float> Z;
+	FNDIOutputParam(FVectorVMContext& Context) : X(Context), Y(Context), Z(Context) {}
+	FORCEINLINE void SetAndAdvance(FVector Val)
+	{
+		*X.GetDestAndAdvance() = Val.X;
+		*Y.GetDestAndAdvance() = Val.Y;
+		*Z.GetDestAndAdvance() = Val.Z;
+	}
+};
+
+template<>
+struct FNDIOutputParam<FVector4>
+{
+	VectorVM::FExternalFuncRegisterHandler<float> X;
+	VectorVM::FExternalFuncRegisterHandler<float> Y;
+	VectorVM::FExternalFuncRegisterHandler<float> Z;
+	VectorVM::FExternalFuncRegisterHandler<float> W;
+	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : X(Context), Y(Context), Z(Context), W(Context) {}
+	FORCEINLINE void SetAndAdvance(FVector4 Val)
+	{
+		*X.GetDestAndAdvance() = Val.X;
+		*Y.GetDestAndAdvance() = Val.Y;
+		*Z.GetDestAndAdvance() = Val.Z;
+		*W.GetDestAndAdvance() = Val.W;
+	}
+};
+
+template<>
+struct FNDIOutputParam<FQuat>
+{
+	VectorVM::FExternalFuncRegisterHandler<float> X;
+	VectorVM::FExternalFuncRegisterHandler<float> Y;
+	VectorVM::FExternalFuncRegisterHandler<float> Z;
+	VectorVM::FExternalFuncRegisterHandler<float> W;
+	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : X(Context), Y(Context), Z(Context), W(Context) {}
+	FORCEINLINE void SetAndAdvance(FQuat Val)
+	{
+		*X.GetDestAndAdvance() = Val.X;
+		*Y.GetDestAndAdvance() = Val.Y;
+		*Z.GetDestAndAdvance() = Val.Z;
+		*W.GetDestAndAdvance() = Val.W;
+	}
+};
+
+template<>
+struct FNDIOutputParam<FLinearColor>
+{
+	VectorVM::FExternalFuncRegisterHandler<float> R;
+	VectorVM::FExternalFuncRegisterHandler<float> G;
+	VectorVM::FExternalFuncRegisterHandler<float> B;
+	VectorVM::FExternalFuncRegisterHandler<float> A;
+	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : R(Context), G(Context), B(Context), A(Context) {}
+	FORCEINLINE void SetAndAdvance(FLinearColor Val)
+	{
+		*R.GetDestAndAdvance() = Val.R;
+		*G.GetDestAndAdvance() = Val.G;
+		*B.GetDestAndAdvance() = Val.B;
+		*A.GetDestAndAdvance() = Val.A;
+	}
+};
+
+template<>
+struct FNDIOutputParam<FNiagaraID>
+{
+	VectorVM::FExternalFuncRegisterHandler<int32> Index;
+	VectorVM::FExternalFuncRegisterHandler<int32> AcquireTag;
+	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : Index(Context), AcquireTag(Context) {}
+	FORCEINLINE void SetAndAdvance(FNiagaraID Val)
+	{
+		*Index.GetDestAndAdvance() = Val.Index;
+		*AcquireTag.GetDestAndAdvance() = Val.AcquireTag;
+	}
 };

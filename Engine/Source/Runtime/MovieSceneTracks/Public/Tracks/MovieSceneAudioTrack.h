@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -56,6 +56,8 @@ public:
 	virtual bool SupportsMultipleRows() const override;
 	virtual FMovieSceneTrackRowSegmentBlenderPtr GetRowSegmentBlender() const override;
 	virtual UMovieSceneSection* CreateNewSection() override;
+
+	virtual void PostRename(UObject* OldOuter, const FName OldName) override;
 
 private:
 

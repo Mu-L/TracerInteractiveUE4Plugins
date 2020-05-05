@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	UObjectHash.cpp: Unreal object name hashes
@@ -489,6 +489,26 @@ UObject* StaticFindObjectFastExplicit( const UClass* ObjectClass, FName ObjectNa
 	return Result;
 }
 
+static bool NameEndsWith(FName Name, FName Suffix)
+{
+	if (Name == Suffix)
+	{
+		return true;
+	}
+
+	if (Name.GetNumber() != Suffix.GetNumber())
+	{
+		return false;
+	}
+		
+	TCHAR PlainName[NAME_SIZE];
+	TCHAR PlainSuffix[NAME_SIZE];
+	uint32 NameLen = Name.GetPlainNameString(PlainName);
+	uint32 SuffixLen = Suffix.GetPlainNameString(PlainSuffix);
+
+	return NameLen >= SuffixLen && FCString::Strnicmp(PlainName + NameLen - SuffixLen, PlainSuffix, SuffixLen) == 0;
+}
+
 // Splits an object path into FNames representing an outer chain.
 //
 // Input path examples: "Object", "Package.Object", "Object:Subobject", "Object:Subobject.Nested", "Package.Object:Subobject", "Package.Object:Subobject.NestedSubobject"
@@ -513,14 +533,19 @@ struct FObjectSearchPath
 			End = FAsciiSet::FindFirstOrEnd(Begin, DotColon);
 		}
 
-		Inner = Outers.Num() == 0 ? InPath : FName(static_cast<int32>(End - Begin), Begin, InPath.GetNumber());
+		Inner = Outers.Num() == 0 ? InPath : FName(FStringView(Begin, End - Begin), InPath.GetNumber());
 	}
 
 	bool MatchOuterNames(UObject* Outer) const
 	{
-		for (int32 Idx = Outers.Num() - 1; Idx >= 0; --Idx)
+		if (Outers.Num() == 0)
 		{
-			if (!Outer || Outers[Idx] != Outer->GetFName())
+			return true;
+		}
+
+		for (int32 Idx = Outers.Num() - 1; Idx > 0; --Idx)
+		{
+			if (!Outer || Outer->GetFName() != Outers[Idx])
 			{
 				return false;
 			}
@@ -528,7 +553,7 @@ struct FObjectSearchPath
 			Outer = Outer->GetOuter();
 		}
 
-		return true;
+		return Outer && NameEndsWith(Outer->GetFName(), Outers[0]);
 	}
 };
 
@@ -589,8 +614,6 @@ UObject* StaticFindObjectFastInternalThreadSafe(FUObjectHashTables& ThreadHash, 
 			for (FHashBucketIterator It(*Bucket); It; ++It)
 			{
 				UObject* Object = (UObject*)*It;
-
-				checkSlow(Object->GetFName() != SearchPath.Inner || SearchPath.MatchOuterNames(Object->GetOuter()) == Object->GetPathName().EndsWith(ObjectName.ToString()));
 
 				if
 					((Object->GetFName() == SearchPath.Inner)
@@ -1275,3 +1298,86 @@ void LogHashOuterStatistics(FOutputDevice& Ar, const bool bShowHashBucketCollisi
 	Ar.Logf(TEXT(""));
 }
 
+void LogHashMemoryOverheadStatistics(FOutputDevice& Ar, const bool bShowIndividualStats)
+{
+	Ar.Logf(TEXT("UObject Hash Tables and Maps memory overhead"));
+	Ar.Logf(TEXT("-------------------------------------------------"));
+
+	FUObjectHashTables& HashTables = FUObjectHashTables::Get();
+	FHashTableLock HashLock(HashTables);
+
+	int64 TotalSize = 0;
+	
+	{
+		int64 Size = HashTables.Hash.GetAllocatedSize();
+		for (const TPair<int32, FHashBucket>& Pair : HashTables.Hash)
+		{
+			Size += Pair.Value.GetItemsSize();
+		}
+		if (bShowIndividualStats)
+		{
+			Ar.Logf(TEXT("Memory used by UObject Hash: %lld bytes."), Size);
+		}
+		TotalSize += Size;
+	}
+
+	{
+		int64 Size = HashTables.HashOuter.GetAllocatedSize();
+		if (bShowIndividualStats)
+		{
+			Ar.Logf(TEXT("Memory used by UObject Outer Hash: %lld bytes."), Size);
+		}
+		TotalSize += Size;
+	}
+
+	{
+		int64 Size = HashTables.ObjectOuterMap.GetAllocatedSize();
+		for (const TPair<UObjectBase*, FHashBucket>& Pair : HashTables.ObjectOuterMap)
+		{
+			Size += Pair.Value.GetItemsSize();
+		}
+		if (bShowIndividualStats)
+		{
+			Ar.Logf(TEXT("Memory used by UObject Outer Map: %lld bytes."), Size);
+		}
+		TotalSize += Size;
+	}
+
+	{
+		int64 Size = HashTables.ClassToObjectListMap.GetAllocatedSize();
+		for (const TPair<UClass*, FHashBucket>& Pair : HashTables.ClassToObjectListMap)
+		{
+			Size += Pair.Value.GetItemsSize();
+		}
+		if (bShowIndividualStats)
+		{
+			Ar.Logf(TEXT("Memory used by UClass To UObject List Map: %lld bytes."), Size);
+		}
+		TotalSize += Size;
+	}
+
+	{
+		int64 Size = HashTables.ClassToChildListMap.GetAllocatedSize();
+		for (const TPair<UClass*, TSet<UClass*> >& Pair : HashTables.ClassToChildListMap)
+		{
+			Size += Pair.Value.GetAllocatedSize();
+		}
+		if (bShowIndividualStats)
+		{
+			Ar.Logf(TEXT("Memory used by UClass To Child UClass List Map: %lld bytes."), Size);
+		}
+		TotalSize += Size;
+	}
+
+    {
+        int64 Size = GUObjectArray.GetAllocatedSize();
+        if (bShowIndividualStats)
+        {
+            Ar.Logf(TEXT("Memory used by UObjectArray: %lld bytes."), Size);
+        }
+        TotalSize += Size;
+    }
+    
+	Ar.Logf(TEXT("Total memory allocated by Object hash tables and maps: %lld bytes (%.2f MB)."), TotalSize, (double)TotalSize / 1024.0 / 1024.0);
+	Ar.Logf(TEXT(""));
+}

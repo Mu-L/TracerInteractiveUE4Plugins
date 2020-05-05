@@ -1,10 +1,12 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Rendering/MorphTargetVertexInfoBuffers.h"
-
+#include "ProfilingDebugging/LoadTimeTracker.h"
 
 void FMorphTargetVertexInfoBuffers::InitRHI()
 {
+	SCOPED_LOADTIMER(FFMorphTargetVertexInfoBuffers_InitRHI);
+
 	check(NumTotalWorkItems > 0);
 
 	{

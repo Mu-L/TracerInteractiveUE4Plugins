@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -59,6 +59,10 @@ public:
 	DECLARE_MULTICAST_DELEGATE(FOnWillResignActive);
 	static FOnWillResignActive OnWillResignActive;
 
+	/** INTERNAL - called when becoming active - this is not thread-safe with the game thread or render thread as it is called from the app's Main thread */
+	DECLARE_MULTICAST_DELEGATE(FOnDidBecomeActive);
+	static FOnWillResignActive OnDidBecomeActive;
+	
 private:
 	struct FFilterDelegateAndHandle
 	{
@@ -89,6 +93,8 @@ namespace FAppEntry
     void Suspend(bool bIsInterrupt = false);
     void Resume(bool bIsInterrupt = false);
 	void RestartAudio();
+    void IncrementAudioSuspendCounters();
+    void DecrementAudioSuspendCounters();
 
 	bool IsStartupMoviePlaying();
 
@@ -182,6 +188,8 @@ APPLICATIONCORE_API
 @property (assign) bool bBatteryState;
 @property (assign) int BatteryLevel;
 
+@property (assign) bool bUpdateAvailable;
+
 /**
  * @return the single app delegate object
  */
@@ -202,6 +210,8 @@ APPLICATIONCORE_API
 -(void)CheckForZoomAccessibility;
 -(float)GetBackgroundingMainThreadBlockTime;
 -(void)OverrideBackgroundingMainThreadBlockTime:(float)BlockTime;
+
+-(bool)IsUpdateAvailable;
 
 @property (assign) bool bAudioSessionInitialized;
 

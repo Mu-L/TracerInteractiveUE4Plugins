@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "KismetPins/SGraphPinKey.h"
@@ -41,6 +41,7 @@ TSharedRef<SWidget>	SGraphPinKey::GetDefaultValueWidget()
 	return SNew(SKeySelector)
 		.Visibility(this, &SGraphPin::GetDefaultValueVisibility)
 		.CurrentKey(this, &SGraphPinKey::GetCurrentKey)
+		.IsEnabled(this, &SGraphPin::GetDefaultValueIsEditable)
 		.OnKeyChanged(this, &SGraphPinKey::OnKeyChanged);
 }
 

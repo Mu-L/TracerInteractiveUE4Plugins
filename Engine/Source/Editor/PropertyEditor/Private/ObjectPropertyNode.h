@@ -1,9 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "PropertyNode.h"
+#include "UObject/WeakFieldPtr.h"
 
 //-----------------------------------------------------------------------------
 //	FObjectPropertyNode - Used for the root and various sub-nodes
@@ -23,8 +24,8 @@ public:
 	/** FPropertyNode Interface */
 	virtual FObjectPropertyNode* AsObjectNode() override { return this;}
 	virtual const FObjectPropertyNode* AsObjectNode() const override { return this; }
-	virtual bool GetReadAddressUncached(FPropertyNode& InNode, bool InRequiresSingleSelection, FReadAddressListData* OutAddresses, bool bComparePropertyContents = true, bool bObjectForceCompare = false, bool bArrayPropertiesCanDifferInSize = false) const override;
-	virtual bool GetReadAddressUncached(FPropertyNode& InNode, FReadAddressListData& OutAddresses) const override;
+	virtual bool GetReadAddressUncached(const FPropertyNode& InNode, bool InRequiresSingleSelection, FReadAddressListData* OutAddresses, bool bComparePropertyContents = true, bool bObjectForceCompare = false, bool bArrayPropertiesCanDifferInSize = false) const override;
+	virtual bool GetReadAddressUncached(const FPropertyNode& InNode, FReadAddressListData& OutAddresses) const override;
 
 	/**
 	 * Returns the UObject at index "n" of the Objects Array
@@ -87,7 +88,7 @@ public:
 	{
 		return (uint8*)GetUObject(Index);
 	}
-	virtual uint8* GetValuePtrOfInstance(int32 Index, const UProperty* InProperty, FPropertyNode* InParentNode) override
+	virtual uint8* GetValuePtrOfInstance(int32 Index, const FProperty* InProperty, FPropertyNode* InParentNode) override
 	{
 		uint8* ParentOffset = InParentNode ? InParentNode->GetValueAddressFromObject(GetUObject(Index)) : nullptr;
 		return InProperty ? InProperty->ContainerPtrToValuePtr<uint8>(ParentOffset) : nullptr;
@@ -105,7 +106,7 @@ public:
 
 	//////////////////////////////////////////////////////////////////////////
 	/** @return		The property stored at this node, to be passed to Pre/PostEditChange. */
-	virtual UProperty*		GetStoredProperty()		{ return StoredProperty.IsValid() ? StoredProperty.Get() : nullptr; }
+	virtual FProperty*		GetStoredProperty()		{ return StoredProperty.IsValid() ? StoredProperty.Get() : nullptr; }
 
 	TPropObjectIterator			ObjectIterator()			{ return TPropObjectIterator( Objects ); }
 	TPropObjectConstIterator	ObjectConstIterator() const	{ return TPropObjectConstIterator( Objects ); }
@@ -130,7 +131,7 @@ protected:
 	virtual void InitBeforeNodeFlags() override;
 	virtual void InitChildNodes() override;
 	virtual bool GetQualifiedName( FString& PathPlusIndex, const bool bWithArrayIndex, const FPropertyNode* StopParent = nullptr, bool bIgnoreCategories = false ) const override;
-	virtual uint8* GetValueBaseAddress(uint8* Base, bool bIsSparseData) override;
+	virtual uint8* GetValueBaseAddress(uint8* Base, bool bIsSparseData) const override;
 	/**
 	 * Looks at the Objects array and creates the best base class.  Called by
 	 * Finalize(); that is, when the list of selected objects is being finalized.
@@ -146,7 +147,7 @@ private:
 	void InternalInitChildNodes( FName SingleChildName = NAME_None );
 
 	/** If CurrentProperty should show up in the ClassesToConsider make sure its category is in SortedCategories and CategoriesFromProperties. */
-	void GetCategoryProperties(const TSet<UClass*>& ClassesToConsider, const UProperty* CurrentProperty, bool bShouldShowDisableEditOnInstance, bool bShouldShowHiddenProperties,
+	void GetCategoryProperties(const TSet<UClass*>& ClassesToConsider, const FProperty* CurrentProperty, bool bShouldShowDisableEditOnInstance, bool bShouldShowHiddenProperties,
 	const TSet<FName>& CategoriesFromBlueprints, TSet<FName>& CategoriesFromProperties, TArray<FName>& SortedCategories);
 private:
 	/** The list of objects we are editing properties for. */
@@ -158,7 +159,7 @@ private:
 	/**
 	 * The property passed to Pre/PostEditChange calls.  
 	 */
-	TWeakObjectPtr<UProperty>				StoredProperty;
+	TWeakFieldPtr<FProperty>				StoredProperty;
 
 	/**
 	 * Set of all category names hidden by the objects in this node

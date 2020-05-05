@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -26,8 +26,7 @@ enum class ECollisionQueryHitType : uint8
 
 namespace Chaos
 {
-	template <typename, int>
-	class TImplicitObject;
+	class FImplicitObject;
 }
 
 class ICollisionQueryFilterCallbackBase

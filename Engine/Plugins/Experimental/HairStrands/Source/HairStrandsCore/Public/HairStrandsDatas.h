@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -72,6 +72,7 @@ struct FVector4_16
 	FFloat16 Z;
 	FFloat16 W;
 }; 
+FArchive& operator<<(FArchive& Ar, FVector4_16& Vertex);
 
 struct FHairStrandsPositionFormat
 {
@@ -173,26 +174,14 @@ struct FHairStrandsWeightFormat
 
 /** 
  * Skinned mesh triangle vertex position format
- * Two precision options are available: 4x16bits or 4x32bits
- * Triangle vertices are relative to their bounding box in order to preserve precision, 
- * however this is sometime not enough for large asset, this is why by default the format 
- * use 32bits precision
-*/
+ */
 struct FHairStrandsMeshTrianglePositionFormat
 {
-#if 1
 	using Type = FVector4;
 	static const uint32 ComponentCount = 1;
 	static const uint32 SizeInByte = sizeof(Type);
 	static const EVertexElementType VertexElementType = VET_Float4;
 	static const EPixelFormat Format = PF_A32B32G32R32F;
-#else
-	using Type = FVector4_16;
-	static const uint32 ComponentCount = 1;
-	static const uint32 SizeInByte = sizeof(Type);
-	static const EVertexElementType VertexElementType = VET_Float4;
-	static const EPixelFormat Format = PF_FloatRGBA;
-#endif
 };
 
 struct FHairStrandsCurveTriangleIndexFormat
@@ -324,6 +313,12 @@ struct HAIRSTRANDSCORE_API FHairStrandsCurves
 
 	/** Roots UV. Support UDIM coordinate up to 256x256 */
 	TArray<FVector2D> CurvesRootUV; // [0..256]
+
+	/** Strand ID associated with each curve */
+	TArray<int> StrandIDs;
+
+	/** Mapping of imported Groom ID to index */
+	TMap<int, int> GroomIDToIndex;
 
 	/** Max strands Curves length */
 	float MaxLength = 0;

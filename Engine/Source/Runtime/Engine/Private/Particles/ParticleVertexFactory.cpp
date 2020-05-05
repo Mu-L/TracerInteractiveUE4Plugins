@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	ParticleVertexFactory.cpp: Particle vertex factory implementation.
@@ -50,34 +50,23 @@ TGlobalResource<FNullSubUVCutoutVertexBuffer> GFNullSubUVCutoutVertexBuffer;
  */
 class FParticleSpriteVertexFactoryShaderParameters : public FVertexFactoryShaderParameters
 {
+	DECLARE_INLINE_TYPE_LAYOUT(FParticleSpriteVertexFactoryShaderParameters, NonVirtual);
 public:
-
-	virtual void Bind(const FShaderParameterMap& ParameterMap) override
-	{
-	}
-
-	virtual void Serialize(FArchive& Ar) override
-	{
-	}
+	
+	
 };
 
 class FParticleSpriteVertexFactoryShaderParametersVS : public FParticleSpriteVertexFactoryShaderParameters
 {
+	DECLARE_INLINE_TYPE_LAYOUT(FParticleSpriteVertexFactoryShaderParametersVS, NonVirtual);
 public:
-
-	virtual void Bind(const FShaderParameterMap& ParameterMap) override
+	void Bind(const FShaderParameterMap& ParameterMap)
 	{
 		NumCutoutVerticesPerFrame.Bind(ParameterMap, TEXT("NumCutoutVerticesPerFrame"));
 		CutoutGeometry.Bind(ParameterMap, TEXT("CutoutGeometry"));
 	}
 
-	virtual void Serialize(FArchive& Ar) override
-	{
-		Ar << NumCutoutVerticesPerFrame;
-		Ar << CutoutGeometry;
-	}
-
-	virtual void GetElementShaderBindings(
+	void GetElementShaderBindings(
 		const FSceneInterface* Scene,
 		const FSceneView* View,
 		const FMeshMaterialShader* Shader,
@@ -86,7 +75,7 @@ public:
 		const FVertexFactory* VertexFactory,
 		const FMeshBatchElement& BatchElement,
 		class FMeshDrawSingleShaderBindings& ShaderBindings,
-		FVertexInputStreamArray& VertexStreams) const override
+		FVertexInputStreamArray& VertexStreams) const
 	{
 		FParticleSpriteVertexFactory* SpriteVF = (FParticleSpriteVertexFactory*)VertexFactory;
 		ShaderBindings.Add(Shader->GetUniformBufferParameter<FParticleSpriteUniformParameters>(), SpriteVF->GetSpriteUniformBuffer() );
@@ -97,15 +86,17 @@ public:
 	}
 
 private:
-	FShaderParameter NumCutoutVerticesPerFrame;
-	FShaderResourceParameter CutoutGeometry;
+	
+		LAYOUT_FIELD(FShaderParameter, NumCutoutVerticesPerFrame)
+		LAYOUT_FIELD(FShaderResourceParameter, CutoutGeometry)
+	
 };
 
 class FParticleSpriteVertexFactoryShaderParametersPS : public FParticleSpriteVertexFactoryShaderParameters
 {
+	DECLARE_INLINE_TYPE_LAYOUT(FParticleSpriteVertexFactoryShaderParametersPS, NonVirtual);
 public:
-
-	virtual void GetElementShaderBindings(
+	void GetElementShaderBindings(
 		const FSceneInterface* Scene,
 		const FSceneView* View,
 		const FMeshMaterialShader* Shader,
@@ -114,11 +105,14 @@ public:
 		const FVertexFactory* VertexFactory,
 		const FMeshBatchElement& BatchElement,
 		class FMeshDrawSingleShaderBindings& ShaderBindings,
-		FVertexInputStreamArray& VertexStreams) const override
+		FVertexInputStreamArray& VertexStreams) const
 	{
 		FParticleSpriteVertexFactory* SpriteVF = (FParticleSpriteVertexFactory*)VertexFactory;
 		ShaderBindings.Add(Shader->GetUniformBufferParameter<FParticleSpriteUniformParameters>(), SpriteVF->GetSpriteUniformBuffer() );
 	}
+
+	
+	
 };
 
 /**
@@ -210,48 +204,32 @@ private:
 
 /** The simple element vertex declaration. */
 static TGlobalResource<FParticleSpriteVertexDeclaration> GParticleSpriteVertexDeclarationInstanced(true, false);
-static TGlobalResource<FParticleSpriteVertexDeclaration> GParticleSpriteVertexDeclarationNonInstanced(false, false);
 static TGlobalResource<FParticleSpriteVertexDeclaration> GParticleSpriteVertexDeclarationInstancedDynamic(true, true);
-static TGlobalResource<FParticleSpriteVertexDeclaration> GParticleSpriteVertexDeclarationNonInstancedDynamic(false, true);
 
-static inline TGlobalResource<FParticleSpriteVertexDeclaration>& GetParticleSpriteVertexDeclaration(bool bSupportsInstancing, int32 NumVertsInInstanceBuffer, bool bUsesDynamicParameter)
+static inline TGlobalResource<FParticleSpriteVertexDeclaration>& GetParticleSpriteVertexDeclaration(int32 NumVertsInInstanceBuffer, bool bUsesDynamicParameter)
 {
 	check(NumVertsInInstanceBuffer == 4 || NumVertsInInstanceBuffer == 8);
 	if (bUsesDynamicParameter)
 	{
-		if (bSupportsInstancing)
-		{
-			return GParticleSpriteVertexDeclarationInstancedDynamic;
-		}
-		else
-		{
-			return GParticleSpriteVertexDeclarationNonInstancedDynamic;
-		}
+		return GParticleSpriteVertexDeclarationInstancedDynamic;
 	}
 	else
 	{
-		if (bSupportsInstancing)
-		{
-			return GParticleSpriteVertexDeclarationInstanced;
-		}
-		else
-		{
-			return GParticleSpriteVertexDeclarationNonInstanced;
-		}
+		return GParticleSpriteVertexDeclarationInstanced;
 	}
 }
 
-bool FParticleSpriteVertexFactory::ShouldCompilePermutation(EShaderPlatform Platform, const class FMaterial* Material, const class FShaderType* ShaderType)
+bool FParticleSpriteVertexFactory::ShouldCompilePermutation(const FVertexFactoryShaderPermutationParameters& Parameters)
 {
-	return Material->IsUsedWithParticleSprites() || Material->IsSpecialEngineMaterial();
+	return Parameters.MaterialParameters.bIsUsedWithParticleSprites || Parameters.MaterialParameters.bIsSpecialEngineMaterial;
 }
 
 /**
  * Can be overridden by FVertexFactory subclasses to modify their compile environment just before compilation occurs.
  */
-void FParticleSpriteVertexFactory::ModifyCompilationEnvironment(const FVertexFactoryType* Type, EShaderPlatform Platform, const class FMaterial* Material, FShaderCompilerEnvironment& OutEnvironment)
+void FParticleSpriteVertexFactory::ModifyCompilationEnvironment(const FVertexFactoryShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 {
-	FParticleVertexFactoryBase::ModifyCompilationEnvironment(Type, Platform, Material, OutEnvironment);
+	FParticleVertexFactoryBase::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 
 	// Set a define so we can tell in MaterialTemplate.usf when we are compiling a sprite vertex factory
 	OutEnvironment.SetDefine(TEXT("PARTICLE_SPRITE_FACTORY"),TEXT("1"));
@@ -263,30 +241,25 @@ void FParticleSpriteVertexFactory::ModifyCompilationEnvironment(const FVertexFac
 void FParticleSpriteVertexFactory::InitRHI()
 {
 	InitStreams();
-	SetDeclaration(GetParticleSpriteVertexDeclaration(GRHISupportsInstancing, NumVertsInInstanceBuffer, bUsesDynamicParameter).VertexDeclarationRHI);
+	SetDeclaration(GetParticleSpriteVertexDeclaration(NumVertsInInstanceBuffer, bUsesDynamicParameter).VertexDeclarationRHI);
 }
 
 void FParticleSpriteVertexFactory::InitStreams()
 {
-	const bool bInstanced = GRHISupportsInstancing;
-
 	check(Streams.Num() == 0);
-	if(bInstanced) 
-	{
-		FVertexStream* TexCoordStream = new(Streams) FVertexStream;
-		TexCoordStream->VertexBuffer = &GParticleTexCoordVertexBuffer;
-		TexCoordStream->Stride = sizeof(FVector2D);
-		TexCoordStream->Offset = 0;
-	}
+	FVertexStream* TexCoordStream = new(Streams) FVertexStream;
+	TexCoordStream->VertexBuffer = &GParticleTexCoordVertexBuffer;
+	TexCoordStream->Stride = sizeof(FVector2D);
+	TexCoordStream->Offset = 0;
 	FVertexStream* InstanceStream = new(Streams) FVertexStream;
 	FVertexStream* DynamicParameterStream = new(Streams) FVertexStream;
 	DynamicParameterStream->Stride = bUsesDynamicParameter ? DynamicParameterStride : 0;
 }
 
-void FParticleSpriteVertexFactory::SetInstanceBuffer(const FVertexBuffer* InInstanceBuffer, uint32 StreamOffset, uint32 Stride, bool bInstanced)
+void FParticleSpriteVertexFactory::SetInstanceBuffer(const FVertexBuffer* InInstanceBuffer, uint32 StreamOffset, uint32 Stride)
 {
-	check(Streams.Num() == (bInstanced ? 3 : 2));
-	FVertexStream& InstanceStream = Streams[bInstanced ? 1 : 0];
+	check(Streams.Num() == 3);
+	FVertexStream& InstanceStream = Streams[1];
 	InstanceStream.VertexBuffer = InInstanceBuffer;
 	InstanceStream.Stride = Stride;
 	InstanceStream.Offset = StreamOffset;
@@ -298,10 +271,10 @@ void FParticleSpriteVertexFactory::SetTexCoordBuffer(const FVertexBuffer* InTexC
 	TexCoordStream.VertexBuffer = InTexCoordBuffer;
 }
 
-void FParticleSpriteVertexFactory::SetDynamicParameterBuffer(const FVertexBuffer* InDynamicParameterBuffer, uint32 StreamOffset, uint32 Stride, bool bInstanced)
+void FParticleSpriteVertexFactory::SetDynamicParameterBuffer(const FVertexBuffer* InDynamicParameterBuffer, uint32 StreamOffset, uint32 Stride)
 {
-	check(Streams.Num() == (bInstanced ? 3 : 2));
-	FVertexStream& DynamicParameterStream = Streams[bInstanced ? 2 : 1];
+	check(Streams.Num() == 3);
+	FVertexStream& DynamicParameterStream = Streams[2];
 	if (InDynamicParameterBuffer)
 	{
 		ensure(bUsesDynamicParameter);
@@ -318,17 +291,6 @@ void FParticleSpriteVertexFactory::SetDynamicParameterBuffer(const FVertexBuffer
 	}
 }
 
-FVertexFactoryShaderParameters* FParticleSpriteVertexFactory::ConstructShaderParameters(EShaderFrequency ShaderFrequency)
-{
-	if (ShaderFrequency == SF_Vertex)
-	{
-		return new FParticleSpriteVertexFactoryShaderParametersVS();
-	}
-	else if (ShaderFrequency == SF_Pixel)
-	{
-		return new FParticleSpriteVertexFactoryShaderParametersPS();
-	}
-	return NULL;
-}
-
+IMPLEMENT_VERTEX_FACTORY_PARAMETER_TYPE(FParticleSpriteVertexFactory, SF_Vertex, FParticleSpriteVertexFactoryShaderParametersVS);
+IMPLEMENT_VERTEX_FACTORY_PARAMETER_TYPE(FParticleSpriteVertexFactory, SF_Pixel, FParticleSpriteVertexFactoryShaderParametersPS);
 IMPLEMENT_VERTEX_FACTORY_TYPE(FParticleSpriteVertexFactory,"/Engine/Private/ParticleSpriteVertexFactory.ush",true,false,true,false,false);

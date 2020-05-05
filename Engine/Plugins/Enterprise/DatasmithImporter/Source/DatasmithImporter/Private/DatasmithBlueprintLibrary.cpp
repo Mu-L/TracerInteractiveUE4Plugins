@@ -1,33 +1,35 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithBlueprintLibrary.h"
 
 #include "DatasmithImportFactory.h"
 #include "DatasmithImportOptions.h"
-#include "DatasmithMeshHelper.h"
 #include "DatasmithSceneActor.h"
 #include "DatasmithSceneFactory.h"
 #include "DatasmithSceneSource.h"
 #include "DatasmithStaticMeshImporter.h"
+#include "DatasmithTranslatableSource.h"
 #include "ObjectElements/DatasmithUSceneElement.h"
-#include "Translators/DatasmithTranslatableSource.h"
 #include "Utility/DatasmithImporterUtils.h"
+#include "Utility/DatasmithMeshHelper.h"
 
 #include "Async/ParallelFor.h"
+#include "DatasmithAssetImportData.h"
 #include "Editor.h"
+#include "EditorAssetLibrary.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
-#include "StaticMeshAttributes.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "HAL/FileManager.h"
 #include "MeshExport.h"
 #include "Misc/PackageName.h"
 #include "PackageTools.h"
+#include "StaticMeshAttributes.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 #include "UObject/Package.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UObjectGlobals.h"
-#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "DatasmithBlueprintLibrary"
 
@@ -39,7 +41,7 @@ namespace DatasmithStaticMeshBlueprintLibraryUtil
 	{
 		if ( StaticMesh->GetNumSourceModels() > 0 && StaticMesh->GetSourceModel(0).BuildSettings.bGenerateLightmapUVs )
 		{
-			FDatasmithStaticMeshImporter::PreBuildStaticMesh( StaticMesh );			
+			FDatasmithStaticMeshImporter::PreBuildStaticMesh( StaticMesh );
 		}
 	}
 
@@ -133,10 +135,10 @@ UDatasmithSceneElement* UDatasmithSceneElement::ConstructDatasmithSceneFromFile(
 	FDatasmithSceneSource Source;
 	Source.SetSourceFile(InFilename);
 
-	UDatasmithSceneElement* DatasmithScene = NewObject<UDatasmithSceneElement>();
+	UDatasmithSceneElement* DatasmithSceneElement = NewObject<UDatasmithSceneElement>();
 
-	DatasmithScene->SourcePtr.Reset(new FDatasmithTranslatableSceneSource(Source));
-	FDatasmithTranslatableSceneSource& TranslatableSource = *DatasmithScene->SourcePtr;
+	DatasmithSceneElement->SourcePtr.Reset(new FDatasmithTranslatableSceneSource(Source));
+	FDatasmithTranslatableSceneSource& TranslatableSource = *DatasmithSceneElement->SourcePtr;
 
 	if (!TranslatableSource.IsTranslatable())
 	{
@@ -145,19 +147,90 @@ UDatasmithSceneElement* UDatasmithSceneElement::ConstructDatasmithSceneFromFile(
 	}
 
 	TSharedRef< IDatasmithScene > Scene = FDatasmithSceneFactory::CreateScene(*Source.GetSceneName());
-	DatasmithScene->SetDatasmithSceneElement(Scene);
+	DatasmithSceneElement->SetDatasmithSceneElement(Scene);
 
-	bool bLoadConfig = false; //!IsAutomatedImport();
-	DatasmithScene->ImportContextPtr.Reset(new FDatasmithImportContext(Source.GetSourceFile(), bLoadConfig, GetLoggerName(), GetDisplayName(), TranslatableSource.GetTranslator()));
+	const bool bLoadConfig = false; // don't load values from ini files
+	DatasmithSceneElement->ImportContextPtr.Reset(new FDatasmithImportContext(Source.GetSourceFile(), bLoadConfig, GetLoggerName(), GetDisplayName(), TranslatableSource.GetTranslator()));
 
-	return DatasmithScene;
+	return DatasmithSceneElement;
+}
+
+UDatasmithSceneElement* UDatasmithSceneElement::GetExistingDatasmithScene(const FString& AssetPath)
+{
+	using namespace DatasmithBlueprintLibraryImpl;
+	if (UDatasmithScene* SceneAsset = Cast<UDatasmithScene>(UEditorAssetLibrary::LoadAsset(AssetPath)))
+	{
+		if (!SceneAsset->AssetImportData)
+		{
+			UE_LOG(LogDatasmithImport, Warning, TEXT("Datasmith ReimportScene error: no import data."));
+			return nullptr;
+		}
+
+		UDatasmithSceneImportData& ReimportData = *SceneAsset->AssetImportData;
+
+		FDatasmithSceneSource Source;
+		Source.SetSourceFile(ReimportData.GetFirstFilename());
+		Source.SetSceneName(SceneAsset->GetName()); // keep initial name
+
+		UDatasmithSceneElement* DatasmithSceneElement = NewObject<UDatasmithSceneElement>();
+
+		DatasmithSceneElement->SourcePtr.Reset(new FDatasmithTranslatableSceneSource(Source));
+		FDatasmithTranslatableSceneSource& TranslatableSource = *DatasmithSceneElement->SourcePtr;
+
+		if (!TranslatableSource.IsTranslatable())
+		{
+			UE_LOG(LogDatasmithImport, Warning, TEXT("Datasmith ReimportScene error: no suitable translator found for this source. Abort import."));
+			return nullptr;
+		}
+
+		TSharedRef< IDatasmithScene > Scene = FDatasmithSceneFactory::CreateScene( *Source.GetSceneName() );
+		DatasmithSceneElement->SetDatasmithSceneElement(Scene);
+
+		// Setup pipe for reimport
+		const bool bLoadConfig = false;
+		DatasmithSceneElement->ImportContextPtr.Reset(new FDatasmithImportContext(Source.GetSourceFile(), bLoadConfig, GetLoggerName(), GetDisplayName(), TranslatableSource.GetTranslator()));
+		FDatasmithImportContext& ImportContext = *DatasmithSceneElement->ImportContextPtr;
+		ImportContext.SceneAsset = SceneAsset;
+		ImportContext.Options->BaseOptions = ReimportData.BaseOptions; // Restore options as used in original import
+		ImportContext.bIsAReimport = true;
+
+		FString ImportPath = ImportContext.Options->BaseOptions.AssetOptions.PackagePath.ToString();
+
+		return DatasmithSceneElement;
+	}
+
+	return nullptr;
+}
+
+bool UDatasmithSceneElement::TranslateScene()
+{
+	if (!SourcePtr.IsValid() || !ImportContextPtr.IsValid() || !GetSceneElement().IsValid())
+	{
+		UE_LOG(LogDatasmithImport, Error, TEXT("Invalid State. Ensure ConstructDatasmithSceneFromFile has been called."));
+		return false;
+	}
+
+	FDatasmithTranslatableSceneSource& TranslatableSource = *SourcePtr;
+
+	TSharedRef<IDatasmithScene> Scene = GetSceneElement().ToSharedRef();
+	const bool bSilent = true; // don't pop options window
+	ImportContextPtr->InitOptions(Scene, nullptr, bSilent);
+
+	bTranslated = true;
+	if (!TranslatableSource.Translate(Scene))
+	{
+		UE_LOG(LogDatasmithImport, Error, TEXT("Datasmith import error: Scene translation failure. Abort import."));
+		return false;
+	}
+
+	return true;
 }
 
 FDatasmithImportFactoryCreateFileResult UDatasmithSceneElement::ImportScene(const FString& DestinationFolder)
 {
 	FDatasmithImportFactoryCreateFileResult Result;
 
-	if (this == nullptr || !ImportContextPtr.IsValid() || !SourcePtr.IsValid() || SourcePtr->GetTranslator() == nullptr || !GetSceneElement().IsValid())
+	if (this == nullptr || !ImportContextPtr.IsValid() || !GetSceneElement().IsValid())
 	{
 		UE_LOG(LogDatasmithImport, Error, TEXT("Invalid State. Ensure ConstructDatasmithSceneFromFile has been called."));
 		return Result;
@@ -171,11 +244,60 @@ FDatasmithImportFactoryCreateFileResult UDatasmithSceneElement::ImportScene(cons
 		return Result;
 	}
 
+	if (!bTranslated)
+	{
+		if (!TranslateScene())
+		{
+			return Result;
+		}
+	}
+
 	FDatasmithImportContext& ImportContext = *ImportContextPtr;
+	const EObjectFlags NewObjectFlags = RF_Public | RF_Standalone | RF_Transactional;
+	const bool bIsSilent = true;
+	if (!ImportContext.SetupDestination(DestinationPackage->GetName(), NewObjectFlags, GWarn, bIsSilent))
+	{
+		return Result;
+	}
+	bool bUserCancelled = false;
+	Result.bImportSucceed = DatasmithImportFactoryImpl::ImportDatasmithScene(ImportContext, bUserCancelled);
+	Result.bImportSucceed &= !bUserCancelled;
+
+	if (Result.bImportSucceed)
+	{
+		Result.FillFromImportContext(ImportContext);
+	}
+
+	DestroyScene();
+
+	return Result;
+}
+
+FDatasmithImportFactoryCreateFileResult UDatasmithSceneElement::ReimportScene()
+{
+	FDatasmithImportFactoryCreateFileResult Result;
+
+	if (this == nullptr || !ImportContextPtr.IsValid() || !ImportContextPtr->Options.IsValid() || !SourcePtr.IsValid() || SourcePtr->GetTranslator() == nullptr || !GetSceneElement().IsValid())
+	{
+		UE_LOG(LogDatasmithImport, Error, TEXT("Invalid State. Ensure GetExistingDatasmithScene has been called."));
+		return Result;
+	}
+
+	FDatasmithImportContext& ImportContext = *ImportContextPtr;
+	FString ImportPath = ImportContext.Options->BaseOptions.AssetOptions.PackagePath.ToString();
+
+	UPackage* DestinationPackage;
+	const TCHAR* OutFailureReason = TEXT("");
+	if (!DatasmithBlueprintLibraryImpl::ValidatePackage(ImportPath, DestinationPackage, OutFailureReason))
+	{
+		UE_LOG(LogDatasmithImport, Error, TEXT("Invalid Destination '%s': %s"), *ImportPath, OutFailureReason);
+		return Result;
+	}
+
 	TSharedRef< IDatasmithScene > Scene = GetSceneElement().ToSharedRef();
 	EObjectFlags NewObjectFlags = RF_Public | RF_Standalone | RF_Transactional;
 	TSharedPtr<FJsonObject> ImportSettingsJson;
-	bool bIsSilent = true;
+	const bool bIsSilent = true;
 	if ( !ImportContext.Init( Scene, DestinationPackage->GetName(), NewObjectFlags, GWarn, ImportSettingsJson, bIsSilent ) )
 	{
 		return Result;
@@ -196,6 +318,20 @@ FDatasmithImportFactoryCreateFileResult UDatasmithSceneElement::ImportScene(cons
 	{
 		Result.FillFromImportContext(ImportContext);
 	}
+
+	// Copy over the changes the user may have done on the options
+	if (!ImportContext.SceneAsset->AssetImportData)
+	{
+		UE_LOG(LogDatasmithImport, Warning, TEXT("Datasmith import error: Missing scene asset import data. Abort import."));
+		return Result;
+	}
+
+	UDatasmithSceneImportData& NewReimportData = *ImportContext.SceneAsset->AssetImportData;
+	NewReimportData.BaseOptions = ImportContext.Options->BaseOptions;
+
+	NewReimportData.Modify();
+	NewReimportData.PostEditChange();
+	NewReimportData.MarkPackageDirty();
 
 	DestroyScene();
 
@@ -294,11 +430,11 @@ void UDatasmithStaticMeshBlueprintLibrary::SetupStaticLighting(const TArray< UOb
 			if (LODIndex == 0)
 			{
 				int32 MaxBiggestUVChannel = Lightmass::MAX_TEXCOORDS;
-				
+
 				if (const FMeshDescription* MeshDescription = SourceModel.MeshDescription.Get())
 				{
 					FStaticMeshConstAttributes Attributes(*MeshDescription);
-				
+
 					// 3 is the maximum that lightmass accept. Defined in MeshExport.h : MAX_TEXCOORDS .
 					MaxBiggestUVChannel = FMath::Min(MaxBiggestUVChannel, Attributes.GetVertexInstanceUVs().GetNumIndices() - 1);
 				}
@@ -306,7 +442,7 @@ void UDatasmithStaticMeshBlueprintLibrary::SetupStaticLighting(const TArray< UOb
 				if (bGenerateLightmapUVs)
 				{
 					const int32 GeneratedLightmapChannel = SourceModel.BuildSettings.DstLightmapIndex;
-					
+
 					if (GeneratedLightmapChannel < Lightmass::MAX_TEXCOORDS)
 					{
 						StaticMesh->LightMapCoordinateIndex = GeneratedLightmapChannel;

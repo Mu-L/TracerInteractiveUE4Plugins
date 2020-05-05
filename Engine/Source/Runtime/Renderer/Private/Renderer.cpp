@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	Renderer.cpp: Renderer module implementation.
@@ -71,16 +71,22 @@ void FRendererModule::ReallocateSceneRenderTargets()
 	FSceneRenderTargets::GetGlobalUnsafe().UpdateRHI();
 }
 
-void FRendererModule::OnWorldCleanup(UWorld* World, bool bSessionEnded, bool bCleanupResources)
+void FRendererModule::OnWorldCleanup(UWorld* World, bool bSessionEnded, bool bCleanupResources, bool bWorldChanged)
 {
-	if (bFlushRenderTargetsOnWorldCleanup > 0)
+	FSceneInterface* Scene = World->Scene;
+	ENQUEUE_RENDER_COMMAND(OnWorldCleanup)(
+	[Scene, bWorldChanged](FRHICommandListImmediate& RHICmdList)
 	{
-		ENQUEUE_RENDER_COMMAND(OnWorldCleanup)(
-			[](FRHICommandListImmediate& RHICmdList)
+		if(bFlushRenderTargetsOnWorldCleanup > 0)
 		{
 			GRenderTargetPool.FreeUnusedResources();
-		});
-	}
+		}
+		if(bWorldChanged && Scene)
+		{
+			Scene->OnWorldCleanup();
+		}
+	});
+
 }
 
 void FRendererModule::SceneRenderTargetsSetBufferSize(uint32 SizeX, uint32 SizeY)
@@ -94,7 +100,7 @@ void FRendererModule::InitializeSystemTextures(FRHICommandListImmediate& RHICmdL
 	GSystemTextures.InitializeTextures(RHICmdList, GMaxRHIFeatureLevel);
 }
 
-void FRendererModule::DrawTileMesh(FRHICommandListImmediate& RHICmdList, FMeshPassProcessorRenderState& DrawRenderState, const FSceneView& SceneView, FMeshBatch& Mesh, bool bIsHitTesting, const FHitProxyId& HitProxyId)
+void FRendererModule::DrawTileMesh(FRHICommandListImmediate& RHICmdList, FMeshPassProcessorRenderState& DrawRenderState, const FSceneView& SceneView, FMeshBatch& Mesh, bool bIsHitTesting, const FHitProxyId& HitProxyId, bool bUse128bitRT)
 {
 	if (!GUsingNullRHI)
 	{
@@ -231,7 +237,7 @@ void FRendererModule::DrawTileMesh(FRHICommandListImmediate& RHICmdList, FMeshPa
 				DrawRenderState.SetPassUniformBuffer(BasePassUniformBuffer);
 				
 				DrawDynamicMeshPass(View, RHICmdList,
-					[Scene, &View, &DrawRenderState, &Mesh](FDynamicPassMeshDrawListContext* DynamicMeshPassContext)
+					[Scene, &View, &DrawRenderState, &Mesh, bUse128bitRT](FDynamicPassMeshDrawListContext* DynamicMeshPassContext)
 				{
 					FBasePassMeshProcessor PassMeshProcessor(
 						Scene,
@@ -239,7 +245,7 @@ void FRendererModule::DrawTileMesh(FRHICommandListImmediate& RHICmdList, FMeshPa
 						&View,
 						DrawRenderState,
 						DynamicMeshPassContext,
-						FBasePassMeshProcessor::EFlags::None,
+						bUse128bitRT ? FBasePassMeshProcessor::EFlags::bRequires128bitRT : FBasePassMeshProcessor::EFlags::None,
 						ETranslucencyPass::TPT_AllTranslucency);
 					
 					const uint64 DefaultBatchElementMask = ~0ull;
@@ -311,7 +317,7 @@ void FRendererModule::DrawTileMesh(FRHICommandListImmediate& RHICmdList, FMeshPa
 					DrawRenderState.SetPassUniformBuffer(BasePassUniformBuffer);
 					
 					DrawDynamicMeshPass(View, RHICmdList,
-						[Scene, &View, &DrawRenderState, &Mesh](FDynamicPassMeshDrawListContext* DynamicMeshPassContext)
+						[Scene, &View, &DrawRenderState, &Mesh, bUse128bitRT](FDynamicPassMeshDrawListContext* DynamicMeshPassContext)
 					{
 						FBasePassMeshProcessor PassMeshProcessor(
 							Scene,
@@ -319,7 +325,7 @@ void FRendererModule::DrawTileMesh(FRHICommandListImmediate& RHICmdList, FMeshPa
 							&View,
 							DrawRenderState,
 							DynamicMeshPassContext,
-							FBasePassMeshProcessor::EFlags::None);
+							bUse128bitRT ? FBasePassMeshProcessor::EFlags::bRequires128bitRT : FBasePassMeshProcessor::EFlags::None);
 						
 						const uint64 DefaultBatchElementMask = ~0ull;
 						PassMeshProcessor.AddMeshBatch(Mesh, DefaultBatchElementMask, nullptr);
@@ -549,13 +555,13 @@ static void VisualizeTextureExec( const TCHAR* Cmd, FOutputDevice &Ar )
 		// e.g. mip2 or mip0
 		else if(Parameter.Left(3) == TEXT("mip"))
 		{
-			Parameter = Parameter.Right(Parameter.Len() - 3);
+			Parameter.RightInline(Parameter.Len() - 3, false);
 			GVisualizeTexture.CustomMip = FCString::Atoi(*Parameter);
 		}
 		// e.g. [0] or [2]
 		else if(Parameter.Left(5) == TEXT("index"))
 		{
-			Parameter = Parameter.Right(Parameter.Len() - 5);
+			Parameter.RightInline(Parameter.Len() - 5, false);
 			GVisualizeTexture.ArrayIndex = FCString::Atoi(*Parameter);
 		}
 		// e.g. RGB*6, A, *22, /2.7, A*7
@@ -571,7 +577,7 @@ static void VisualizeTextureExec( const TCHAR* Cmd, FOutputDevice &Ar )
 
 			if(Parameter.Left(3) == TEXT("rgb"))
 			{
-				Parameter = Parameter.Right(Parameter.Len() - 3);
+				Parameter.RightInline(Parameter.Len() - 3, false);
 			}
 			else if(Parameter.Left(1) == TEXT("r")) SingleChannel = 0;
 			else if(Parameter.Left(1) == TEXT("g")) SingleChannel = 1;
@@ -579,7 +585,7 @@ static void VisualizeTextureExec( const TCHAR* Cmd, FOutputDevice &Ar )
 			else if(Parameter.Left(1) == TEXT("a")) SingleChannel = 3;
 			if ( SingleChannel >= 0 )
 			{
-				Parameter = Parameter.Right(Parameter.Len() - 1);
+				Parameter.RightInline(Parameter.Len() - 1, false);
 				GVisualizeTexture.SingleChannel = SingleChannel;
 				GVisualizeTexture.SingleChannelMul = 1;
 				GVisualizeTexture.RGBMul = 0;
@@ -590,12 +596,12 @@ static void VisualizeTextureExec( const TCHAR* Cmd, FOutputDevice &Ar )
 			// * or /
 			if(Parameter.Left(1) == TEXT("*"))
 			{
-				Parameter = Parameter.Right(Parameter.Len() - 1);
+				Parameter.RightInline(Parameter.Len() - 1, false);
 				Mul = FCString::Atof(*Parameter);
 			}
 			else if(Parameter.Left(1) == TEXT("/"))
 			{
-				Parameter = Parameter.Right(Parameter.Len() - 1);
+				Parameter.RightInline(Parameter.Len() - 1, false);
 				Mul = 1.0f / FCString::Atof(*Parameter);
 			}
 			GVisualizeTexture.RGBMul *= Mul;

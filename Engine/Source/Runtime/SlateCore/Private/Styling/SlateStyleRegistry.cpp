@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Styling/SlateStyleRegistry.h"
 #include "Styling/ISlateStyle.h"
@@ -73,4 +73,17 @@ void FSlateStyleRegistry::GetAllResources( TArray< const FSlateBrush* >& OutReso
 	{
 		It->Value->GetResources( OutResources );
 	}
+}
+
+TArray<FName> FSlateStyleRegistry::GetSylesUsingBrush(const FName BrushName)
+{
+	TArray<FName> StylesUsingBrush;
+
+	/* Iterate the style chunks and collect their resources */
+	for (auto It = SlateStyleRepository.CreateConstIterator(); It; ++It)
+	{
+		StylesUsingBrush.Append(It->Value->GetEntriesUsingBrush(BrushName));
+	}
+
+	return StylesUsingBrush;
 }

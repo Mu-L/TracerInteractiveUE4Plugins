@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -166,6 +166,7 @@ struct FBXImportOptions
 	FString BaseNormalTextureName;
 	FString BaseEmmisiveTextureName;
 	FString BaseSpecularTextureName;
+	FString BaseOpacityTextureName;
 	EMaterialSearchLocation MaterialSearchLocation;
 	//If true the materials will be reorder to follow the fbx order
 	bool bReorderMaterialToFbxOrder;
@@ -196,6 +197,7 @@ struct FBXImportOptions
 	bool	bSetMaterialDriveParameterOnCustomAttribute;
 	bool	bRemoveRedundantKeys;
 	bool	bDoNotImportCurveWithZero;
+	bool	bResetToFbxOnMaterialConflict;
 	TArray<FString> MaterialCurveSuffixes;
 
 	/** This allow to add a prefix to the material name when unreal material get created.	
@@ -356,6 +358,9 @@ public:
 	UE_DEPRECATED(4.21, "Please use FRichCurve version instead to get tangent weight support")
 	UNREALED_API void GetCurveData(const FString& NodeName, const FString& PropertyName, int32 ChannelIndex, int32 CompositeIndex, FInterpCurveFloat& CurveData, bool bNegative) const;
 	
+	//This one should be use only by the sequencer the key tangents data is transform to fit the expected data we have in the old matinee code
+	UNREALED_API void GetCurveDataForSequencer(const FString& NodeName, const FString& PropertyName, int32 ChannelIndex, int32 CompositeIndex, FRichCurve& RichCurve, bool bNegative) const;
+
 	UNREALED_API void GetCurveData(const FString& NodeName, const FString& PropertyName, int32 ChannelIndex, int32 CompositeIndex, FRichCurve& CurveData, bool bNegative) const;
 
 	
@@ -368,6 +373,9 @@ public:
 	UE_DEPRECATED(4.21, "Please use FRichCurve version instead to get tangent weight support")
 	UNREALED_API void GetCurveData(const FFbxAnimCurveHandle &CurveHandle, FInterpCurveFloat& CurveData, bool bNegative) const;
 	
+	//This one should be use only by the sequencer the key tangents data is transform to fit the expected data we have in the old matinee code
+	UNREALED_API void GetCurveDataForSequencer(const FFbxAnimCurveHandle &CurveHandle, FRichCurve& RichCurve, bool bNegative) const;
+
 	UNREALED_API void GetCurveData(const FFbxAnimCurveHandle &CurveHandle, FRichCurve& CurveData, bool bNegative) const;
 
 	UNREALED_API void GetBakeCurveData(const FFbxAnimCurveHandle &CurveHandle, TArray<float>& CurveData, float PeriodTime, float StartTime = 0.0f, float StopTime = -1.0f, bool bNegative = false) const;
@@ -382,7 +390,7 @@ public:
 	UNREALED_API void GetConvertedTransformCurveData(const FString& NodeName, FRichCurve& TranslationX, FRichCurve& TranslationY, FRichCurve& TranslationZ,
 		FRichCurve& EulerRotationX, FRichCurve& EulerRotationY, FRichCurve& EulerRotationZ,
 		FRichCurve& ScaleX, FRichCurve& ScaleY, FRichCurve& ScaleZ,
-		FTransform& DefaultTransform) const;
+		FTransform& DefaultTransform, bool bUseSequencerCurve) const;
 
 	FbxScene* Scene;
 	TMap<uint64, FFbxAnimNodeHandle> CurvesData;
@@ -464,7 +472,7 @@ struct FbxSceneInfo
 /**
 * FBX basic data conversion class.
 */
-class FFbxDataConverter
+class UNREALED_API FFbxDataConverter
 {
 public:
 	static void SetJointPostConversionMatrix(FbxAMatrix ConversionMatrix) { JointPostConversionMatrix = ConversionMatrix; }
@@ -483,7 +491,7 @@ public:
 	static FVector ConvertRotationToFVect(FbxQuaternion Quaternion, bool bInvertRot);
 	static FQuat ConvertRotToQuat(FbxQuaternion Quaternion);
 	static float ConvertDist(FbxDouble Distance);
-	static bool ConvertPropertyValue(FbxProperty& FbxProperty, UProperty& UnrealProperty, union UPropertyValue& OutUnrealPropertyValue);
+	static bool ConvertPropertyValue(FbxProperty& FbxProperty, FProperty& UnrealProperty, union UPropertyValue& OutUnrealPropertyValue);
 	static FTransform ConvertTransform(FbxAMatrix Matrix);
 	static FMatrix ConvertMatrix(FbxAMatrix Matrix);
 
@@ -521,13 +529,13 @@ UNREALED_API void ApplyImportUIToImportOptions(UFbxImportUI* ImportUI, FBXImport
 struct FImportedMaterialData
 {
 public:
-	void AddImportedMaterial( FbxSurfaceMaterial& FbxMaterial, UMaterialInterface& UnrealMaterial );
-	bool IsUnique( FbxSurfaceMaterial& FbxMaterial, FName ImportedMaterialName ) const;
+	void AddImportedMaterial( const FbxSurfaceMaterial& FbxMaterial, UMaterialInterface& UnrealMaterial );
+	bool IsAlreadyImported( const FbxSurfaceMaterial& FbxMaterial, FName ImportedMaterialName ) const;
 	UMaterialInterface* GetUnrealMaterial( const FbxSurfaceMaterial& FbxMaterial ) const;
 	void Clear();
 private:
 	/** Mapping of FBX material to Unreal material.  Some materials in FBX have the same name so we use this map to determine if materials are unique */
-	TMap<FbxSurfaceMaterial*, TWeakObjectPtr<UMaterialInterface> > FbxToUnrealMaterialMap;
+	TMap<const FbxSurfaceMaterial*, TWeakObjectPtr<UMaterialInterface> > FbxToUnrealMaterialMap;
 	TSet<FName> ImportedMaterialNames;
 };
 
@@ -826,7 +834,6 @@ public:
 
 		UObject* InParent;
 		TArray<FbxNode*> NodeArray;
-		TArray<FbxNode*> BoneNodeArray;
 		FName Name;
 		EObjectFlags Flags;
 		UFbxSkeletalMeshImportData* TemplateImportData;
@@ -996,14 +1003,6 @@ public:
 	UNREALED_API void FillFbxMeshArray(FbxNode* Node, TArray<FbxNode*>& outMeshArray, UnFbx::FFbxImporter* FFbxImporter);
 
 	/**
-	* Get all Fbx Skeleton nodes
-	*
-	* @param Node Root node to find skeleton nodes
-	* @param outNodeArray return skeleton nodes
-	*/
-	UNREALED_API void FillFbxSkeletonArray(FbxNode* Node, TArray<FbxNode*>& OutNodeArray);
-
-	/**
 	* Get all Fbx mesh objects not under a LOD group and all LOD group node
 	*
 	* @param Node Root node to find meshes
@@ -1049,7 +1048,7 @@ public:
 	static void ShowFbxSkeletonConflictWindow(USkeletalMesh *SkeletalMesh, USkeleton* Skeleton, ImportCompareHelper::FSkeletonCompareData& SkeletonCompareData);
 
 	template<typename TMaterialType>
-	static void PrepareAndShowMaterialConflictDialog(const TArray<TMaterialType>& CurrentMaterial, TArray<TMaterialType>& ResultMaterial, TArray<int32>& RemapMaterial, TArray<FName>& RemapMaterialName, bool bCanShowDialog, bool bIsPreviewDialog, EFBXReimportDialogReturnOption& OutReturnOption);
+	static void PrepareAndShowMaterialConflictDialog(const TArray<TMaterialType>& CurrentMaterial, TArray<TMaterialType>& ResultMaterial, TArray<int32>& RemapMaterial, TArray<FName>& RemapMaterialName, bool bCanShowDialog, bool bIsPreviewDialog, bool bForceResetOnConflict, EFBXReimportDialogReturnOption& OutReturnOption);
 	/*
 	* This function show a dialog to let the user resolve the material conflict that arise when re-importing a mesh
 	*/
@@ -1084,7 +1083,7 @@ public:
 	/**
 	 * Import FbxCurve to Curve
 	 */
-	bool ImportCurve(const FbxAnimCurve* FbxCurve, FRichCurve& RichCurve, const FbxTimeSpan &AnimTimeSpan, const float ValueScale = 1.f) const;
+	static bool ImportCurve(const FbxAnimCurve* FbxCurve, FRichCurve& RichCurve, const FbxTimeSpan &AnimTimeSpan, const float ValueScale = 1.f, const bool bAutoSetTangents = true);
 
 	/**
 	 * Merge all layers of one AnimStack to one layer.
@@ -1221,14 +1220,6 @@ public:
 		FString GetName() const { return FbxMaterial ? ANSI_TO_TCHAR(FbxMaterial->GetName()) : (Material != nullptr ? Material->GetName() : TEXT("None")); }
 	};
 
-	/**
-	* Make material Unreal asset name from the Fbx material
-	*
-	* @param FbxMaterial Material from the Fbx node
-	* @return Sanitized asset name
-	*/
-	FString GetMaterialFullName(FbxSurfaceMaterial& FbxMaterial);
-
 	FbxGeometryConverter* GetGeometryConverter() { return GeometryConverter; }
 
 	/*
@@ -1250,6 +1241,16 @@ protected:
 		FIXEDANDCONVERTED,
 	};
 	
+	/**
+	* Make material Unreal asset name from the Fbx material
+	*
+	* @param FbxMaterial Material from the Fbx node
+	* @return Sanitized asset name
+	*/
+	FString GetMaterialFullName(const FbxSurfaceMaterial& FbxMaterial) const;
+
+	FString GetMaterialBasePackageName(const FString& MaterialFullName) const;
+
 	static TSharedPtr<FFbxImporter> StaticInstance;
 	static TSharedPtr<FFbxImporter> StaticPreviewInstance;
 	
@@ -1391,7 +1392,9 @@ public:
 	*
 	* @returns bool*	true if import successfully.
 	*/
-	bool FillSkeletalMeshImportData(TArray<FbxNode*>& NodeArray, UFbxSkeletalMeshImportData* TemplateImportData, TArray<FbxShape*> *FbxShapeArray, FSkeletalMeshImportData* OutData, TArray<FName> &LastImportedMaterialNames, const bool bIsReimport, const TMap<FVector, FColor>& ExistingVertexColorData);
+	bool FillSkeletalMeshImportData(TArray<FbxNode*>& NodeArray, UFbxSkeletalMeshImportData* TemplateImportData, TArray<FbxShape*> *FbxShapeArray,
+									FSkeletalMeshImportData* OutData, TArray<FbxNode*>& OutImportedSkeletonLinkNodes, TArray<FName> &LastImportedMaterialNames, 
+									const bool bIsReimport, const TMap<FVector, FColor>& ExistingVertexColorData);
 
 protected:
 
@@ -1480,7 +1483,7 @@ protected:
 	 * @param UVSet
 	 * @return bool	
 	 */
-	bool CreateAndLinkExpressionForMaterialProperty(	FbxSurfaceMaterial& FbxMaterial,
+	bool CreateAndLinkExpressionForMaterialProperty(	const FbxSurfaceMaterial& FbxMaterial,
 														UMaterial* UnrealMaterial,
 														const char* MaterialProperty ,
 														FExpressionInput& MaterialInput, 
@@ -1497,7 +1500,7 @@ protected:
 	* @param bSetupAsNormalMap
 	* @return bool
 	*/
-	bool LinkMaterialProperty(FbxSurfaceMaterial& FbxMaterial,
+	bool LinkMaterialProperty(const FbxSurfaceMaterial& FbxMaterial,
 		UMaterialInstanceConstant* UnrealMaterial,
 		const char* MaterialProperty,
 		FName ParameterValue,
@@ -1507,7 +1510,7 @@ protected:
 	 *
 	 * @param unMaterial Unreal material object.
 	 */
-	void FixupMaterial( FbxSurfaceMaterial& FbxMaterial, UMaterial* unMaterial);
+	void FixupMaterial( const FbxSurfaceMaterial& FbxMaterial, UMaterial* unMaterial);
 	
 	/**
 	 * Get material mapping array according "Skinxx" flag in material name
@@ -1529,13 +1532,25 @@ protected:
 	 * Create materials from Fbx node.
 	 * Only setup channels that connect to texture, and setup the UV coordinate of texture.
 	 * If diffuse channel has no texture, one default node will be created with constant.
+	 * If a material cannot be imported a nullptr will be insterted in the outMaterials array in its place.
 	 *
 	 * @param FbxNode  Fbx node
 	 * @param outMaterials Unreal Materials we created
 	 * @param UVSets UV set name list
 	 * @return int32 material count that created from the Fbx node
 	 */
-	int32 CreateNodeMaterials(FbxNode* FbxNode, TArray<UMaterialInterface*>& outMaterials, TArray<FString>& UVSets, bool bForSkeletalMesh);
+	void FindOrImportMaterialsFromNode(FbxNode* FbxNode, TArray<UMaterialInterface*>& outMaterials, TArray<FString>& UVSets, bool bForSkeletalMesh);
+
+	/**
+	 * Tries to find an existing UnrealMaterial from the FbxMaterial, returns nullptr if could not find a material.
+	 * The function will look for materials imported by the FbxFactory first,
+	 * and then search into the asset database using the passed MaterialSearchLocation search scope.
+	 * 
+	 * @param FbxMaterial				The FbxMaterial used to search the UnrealMaterial
+	 * @param MaterialSearchLocation	The asset database search scope.
+	 * @return							The UMaterialInterfaceFound, returns nullptr if no material was found.
+	 */
+	UMaterialInterface* FindExistingMaterialFromFbxMaterial(const FbxSurfaceMaterial& FbxMaterial, EMaterialSearchLocation MaterialSearchLocation);
 
 	/**
 	 * Create Unreal material from Fbx material.
@@ -1543,10 +1558,12 @@ protected:
 	 * If diffuse channel has no texture, one default node will be created with constant.
 	 *
 	 * @param KFbxSurfaceMaterial*  Fbx material
-	 * @param outMaterials Unreal Materials we created
 	 * @param outUVSets
+	 * @param bForSkeletalMesh		If set to true, the material target usage will be set to "SkeletalMesh".
+	 * @return						The created material.
 	 */
-	void CreateUnrealMaterial(FbxSurfaceMaterial& FbxMaterial, TArray<UMaterialInterface*>& OutMaterials, TArray<FString>& UVSets, bool bForSkeletalMesh);
+	UMaterialInterface* CreateUnrealMaterial(const FbxSurfaceMaterial& FbxMaterial, TArray<FString>& OutUVSets, bool bForSkeletalMesh);
+
 
 	/**
 	 * Visit all materials of one node, import textures from materials.

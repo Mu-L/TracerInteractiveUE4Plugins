@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraSystemEditorData.h"
 #include "NiagaraStackEditorData.h"
@@ -8,6 +8,7 @@
 #include "NiagaraEmitter.h"
 #include "NiagaraEmitterEditorData.h"
 #include "NiagaraOverviewNode.h"
+#include "NiagaraNode.h"
 #include "EdGraphSchema_NiagaraSystemOverview.h"
 #include "EdGraph/EdGraph.h"
 
@@ -107,6 +108,14 @@ void UNiagaraSystemEditorData::PostLoadFromOwner(UObject* InOwner)
 	{
 		SynchronizeOverviewGraphWithSystem(*OwningSystem);
 	}
+
+	// Remove any niagara nodes which may have been pasted into the overview graph in error.  This is no longer possible.
+	TArray<UNiagaraNode*> NiagaraNodes;
+	SystemOverviewGraph->GetNodesOfClass<UNiagaraNode>(NiagaraNodes);
+	for (UNiagaraNode* NiagaraNode : NiagaraNodes)
+	{
+		NiagaraNode->DestroyNode();
+	}
 }
 
 UNiagaraSystemEditorFolder& UNiagaraSystemEditorData::GetRootFolder() const
@@ -165,7 +174,7 @@ void UNiagaraSystemEditorData::UpdatePlaybackRangeFromEmitters(UNiagaraSystem& O
 
 		for (const FNiagaraEmitterHandle& EmitterHandle : OwnerSystem.GetEmitterHandles())
 		{
-			UNiagaraEmitterEditorData* EmitterEditorData = Cast<UNiagaraEmitterEditorData>(EmitterHandle.GetInstance()->EditorData);
+			UNiagaraEmitterEditorData* EmitterEditorData = Cast<UNiagaraEmitterEditorData>(EmitterHandle.GetInstance()->GetEditorData());
 			if (EmitterEditorData != nullptr)
 			{
 				EmitterPlaybackRangeMin = FMath::Min(PlaybackRangeMin, EmitterEditorData->GetPlaybackRange().GetLowerBoundValue());

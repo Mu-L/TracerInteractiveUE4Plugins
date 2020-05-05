@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -6,11 +6,7 @@
 
 #if USE_USD_SDK
 
-struct FUsdPrimProperty : public TSharedFromThis< FUsdPrimProperty >
-{
-	FString Label;
-	FString Value;
-};
+struct FUsdPrimProperty;
 
 class SUsdPrimPropertiesList : public SListView< TSharedPtr< FUsdPrimProperty > >
 {
@@ -20,6 +16,7 @@ class SUsdPrimPropertiesList : public SListView< TSharedPtr< FUsdPrimProperty > 
 public:
 	void Construct( const FArguments& InArgs, const TCHAR* InPrimPath );
 	void SetPrimPath( const TCHAR* InPrimPath );
+	const FString& GetPrimPath() { return PrimPath; };
 
 protected:
 	TSharedRef< ITableRow > OnGenerateRow( TSharedPtr< FUsdPrimProperty > InDisplayNode, const TSharedRef< STableViewBase >& OwnerTable );

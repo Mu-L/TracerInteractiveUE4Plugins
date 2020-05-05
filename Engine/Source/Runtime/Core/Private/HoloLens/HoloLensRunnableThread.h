@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -175,7 +175,8 @@ protected:
 
 	virtual bool CreateInternal(FRunnable* InRunnable, const TCHAR* InThreadName,
 		uint32 InStackSize = 0,
-		EThreadPriority InThreadPri = TPri_Normal, uint64 InThreadAffinityMask = 0) override
+		EThreadPriority InThreadPri = TPri_Normal, uint64 InThreadAffinityMask = 0,
+		EThreadCreateFlags InCreateFlags = EThreadCreateFlags::None) override
 	{
 		check(InRunnable);
 		Runnable = InRunnable;

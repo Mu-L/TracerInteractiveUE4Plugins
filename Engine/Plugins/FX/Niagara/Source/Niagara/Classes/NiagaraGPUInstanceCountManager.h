@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*==============================================================================
 NiagaraGPUInstanceCountManager.h: GPU particle count handling
@@ -21,9 +21,9 @@ public:
 	int32 Value = 0;
 };
 
-FORCEINLINE uint32 GetTypeHash(const FNiagaraDrawIndirectArgsGenCS::FArgGenTaskInfo& Info)
+FORCEINLINE uint32 GetTypeHash(const FNiagaraDrawIndirectArgGenTaskInfo& Info)
 {
-	return (Info.InstanceCountBufferOffset << 8) | Info.NumIndicesPerInstance;
+	return HashCombine(Info.InstanceCountBufferOffset, HashCombine(Info.NumIndicesPerInstance, Info.StartIndexLocation));
 }
 
 /** 
@@ -58,7 +58,7 @@ public:
 	bool HasPendingGPUReadback() const;
 
 	/** Add a draw indirect task to generate the draw indirect args. Returns the draw indirect arg buffer offset. */
-	uint32 AddDrawIndirect(uint32 InstanceCountBufferOffset, uint32 NumIndicesPerInstance);
+	uint32 AddDrawIndirect(uint32 InstanceCountBufferOffset, uint32 NumIndicesPerInstance, uint32 StartIndexLocation);
 	FRWBuffer& GetDrawIndirectBuffer() { return DrawIndirectBuffer; }
 
 	/** 
@@ -96,7 +96,7 @@ protected:
 	int32 AllocatedDrawIndirectArgs = 0;
 
 	/** The list of all draw indirected tasks that are to be run in UpdateDrawIndirectBuffer() */
-	typedef FNiagaraDrawIndirectArgsGenCS::FArgGenTaskInfo FArgGenTaskInfo;
+	typedef FNiagaraDrawIndirectArgGenTaskInfo FArgGenTaskInfo;
 
 	TArray<FArgGenTaskInfo> DrawIndirectArgGenTasks;
 	/** The map between each task FArgGenTaskInfo and entry offset from DrawIndirectArgGenTasks. Used to reuse entries. */

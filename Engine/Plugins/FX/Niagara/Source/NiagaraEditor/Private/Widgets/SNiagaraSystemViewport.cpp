@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SNiagaraSystemViewport.h"
 #include "Widgets/Layout/SBox.h"
@@ -42,11 +42,11 @@ public:
 	virtual bool CanSetWidgetMode(FWidget::EWidgetMode NewMode) const override { return false; }
 	virtual bool CanCycleWidgetMode() const override { return false; }
 
-	void SetShowGrid(bool bShowGrid);
 
 	virtual void SetIsSimulateInEditorViewport(bool bInIsSimulateInEditorViewport)override;
 
 	void DrawInstructionCounts(UNiagaraSystem* ParticleSystem, FCanvas* Canvas, float& CurrentX, float& CurrentY, UFont* Font, const float FontHeight);
+	void DrawParticleCounts(UNiagaraComponent* Component, FCanvas* Canvas, float& CurrentX, float& CurrentY, UFont* Font, const float FontHeight);
 
 	TWeakPtr<SNiagaraSystemViewport> NiagaraViewportPtr;
 	bool bCaptureScreenShot;
@@ -101,6 +101,7 @@ void FNiagaraSystemViewportClient::Draw(FViewport* InViewport, FCanvas* Canvas)
 {
 	TSharedPtr<SNiagaraSystemViewport> NiagaraViewport = NiagaraViewportPtr.Pin();
 	UNiagaraSystem* ParticleSystem = NiagaraViewport.IsValid() ? NiagaraViewport->GetPreviewComponent()->GetAsset() : nullptr;
+	UNiagaraComponent* Component = NiagaraViewport.IsValid() ? NiagaraViewport->GetPreviewComponent() : nullptr;
 
 	if (NiagaraViewport.IsValid() && NiagaraViewport->GetDrawElement(SNiagaraSystemViewport::EDrawElements::Bounds))
 	{
@@ -122,9 +123,14 @@ void FNiagaraSystemViewportClient::Draw(FViewport* InViewport, FCanvas* Canvas)
 		UFont* Font = GEngine->GetSmallFont();
 		const float FontHeight = Font->GetMaxCharHeight() * 1.1f;
 
-		if ( NiagaraViewport->GetDrawElement(SNiagaraSystemViewport::EDrawElements::InstructionCounts) )
+		if (NiagaraViewport->GetDrawElement(SNiagaraSystemViewport::EDrawElements::InstructionCounts) && ParticleSystem)
 		{
 			DrawInstructionCounts(ParticleSystem, Canvas, CurrentX, CurrentY, Font, FontHeight);
+			CurrentY += FontHeight;
+		}
+		if (NiagaraViewport->GetDrawElement(SNiagaraSystemViewport::EDrawElements::ParticleCounts) && Component)
+		{
+			DrawParticleCounts(Component, Canvas, CurrentX, CurrentY, Font, FontHeight);
 		}
 	}
 
@@ -183,8 +189,8 @@ void FNiagaraSystemViewportClient::DrawInstructionCounts(UNiagaraSystem* Particl
 			uint32 NumInstructions = 0;
 			if (Script->GetUsage() == ENiagaraScriptUsage::ParticleGPUComputeScript)
 			{
-				FNiagaraShader* Shader = Script->GetRenderThreadScript()->GetShaderGameThread();
-				if (Shader != nullptr)
+				FNiagaraShaderRef Shader = Script->GetRenderThreadScript()->GetShaderGameThread();
+				if (Shader.IsValid())
 				{
 					NumInstructions = Shader->GetNumInstructions();
 				}
@@ -200,6 +206,31 @@ void FNiagaraSystemViewportClient::DrawInstructionCounts(UNiagaraSystem* Particl
 				CurrentY += FontHeight;
 			}
 		}
+	}
+}
+
+void FNiagaraSystemViewportClient::DrawParticleCounts(UNiagaraComponent* Component, FCanvas* Canvas, float& CurrentX, float& CurrentY, UFont* Font, const float FontHeight)
+{
+	FCanvasTextItem TextItem(FVector2D(CurrentX, CurrentY), FText::FromString(TEXT("Particle Counts")), Font, FLinearColor::White);
+	TextItem.EnableShadow(FLinearColor::Black);
+	TextItem.Draw(Canvas);
+	CurrentY += FontHeight;
+
+	FNiagaraSystemInstance* SystemInstance = Component->GetSystemInstance();
+	if (!SystemInstance)
+	{
+		return;
+	}
+
+	for (TSharedRef<FNiagaraEmitterInstance, ESPMode::ThreadSafe> EmitterInstance : SystemInstance->GetEmitters())
+	{
+		FName EmitterName = EmitterInstance->GetEmitterHandle().GetName();
+		int32 CurrentCount = EmitterInstance->GetNumParticles();
+		int32 MaxCount = EmitterInstance->GetEmitterHandle().GetInstance()->GetMaxParticleCountEstimate();
+		TextItem.Text = FText::FromString(FString::Printf(TEXT("%i Current, %i Max (est.) - [%s]"), CurrentCount, MaxCount, *EmitterName.ToString()));
+		TextItem.Position = FVector2D(CurrentX, CurrentY);
+		TextItem.Draw(Canvas);
+		CurrentY += FontHeight;
 	}
 }
 
@@ -224,11 +255,6 @@ FSceneView* FNiagaraSystemViewportClient::CalcSceneView(FSceneViewFamily* ViewFa
 	return SceneView;
 }
 
-void FNiagaraSystemViewportClient::SetShowGrid(bool bShowGrid)
-{
-	DrawHelper.bDrawGrid = bShowGrid;
-}
-
 void FNiagaraSystemViewportClient::SetIsSimulateInEditorViewport(bool bInIsSimulateInEditorViewport)
 {
 	bIsSimulateInEditorViewport = bInIsSimulateInEditorViewport;
@@ -249,7 +275,6 @@ void FNiagaraSystemViewportClient::SetIsSimulateInEditorViewport(bool bInIsSimul
 void SNiagaraSystemViewport::Construct(const FArguments& InArgs)
 {
 	DrawFlags = 0;
-	bShowGrid = false;
 	bShowBackground = false;
 	PreviewComponent = nullptr;
 	AdvancedPreviewScene = MakeShareable(new FAdvancedPreviewScene(FPreviewScene::ConstructionValues()));
@@ -388,6 +413,13 @@ void SNiagaraSystemViewport::BindCommands()
 	);
 
 	CommandList->MapAction(
+		Commands.ToggleParticleCounts,
+		FExecuteAction::CreateLambda([Viewport = this]() { Viewport->ToggleDrawElement(EDrawElements::ParticleCounts); Viewport->RefreshViewport(); }),
+		FCanExecuteAction(),
+		FIsActionChecked::CreateLambda([Viewport = this]() -> bool { return Viewport->GetDrawElement(EDrawElements::ParticleCounts); })
+	);
+
+	CommandList->MapAction(
 		Commands.TogglePreviewBackground,
 		FExecuteAction::CreateSP( this, &SNiagaraSystemViewport::TogglePreviewBackground ),
 		FCanExecuteAction(),
@@ -406,20 +438,24 @@ void SNiagaraSystemViewport::OnFocusViewportToSelection()
 {
 	if( PreviewComponent )
 	{
-		SystemViewportClient->FocusViewportOnBox( PreviewComponent->Bounds.GetBox() );
+		// FocusViewportOnBox disables orbit, so remember our state
+		bool bIsOrbit = SystemViewportClient->ShouldOrbitCamera();
+
+		SystemViewportClient->FocusViewportOnBox(PreviewComponent->Bounds.GetBox());
+
+		SystemViewportClient->ToggleOrbitCamera(bIsOrbit);
 	}
 }
 
 void SNiagaraSystemViewport::TogglePreviewGrid()
 {
-	bShowGrid = !bShowGrid;
-	SystemViewportClient->SetShowGrid(bShowGrid);
+	SystemViewportClient->SetShowGrid();
 	RefreshViewport();
 }
 
 bool SNiagaraSystemViewport::IsTogglePreviewGridChecked() const
 {
-	return bShowGrid;
+	return SystemViewportClient->IsSetShowGridChecked();
 }
 
 void SNiagaraSystemViewport::TogglePreviewBackground()

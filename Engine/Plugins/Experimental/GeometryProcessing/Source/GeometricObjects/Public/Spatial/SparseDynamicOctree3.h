@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -165,6 +165,25 @@ public:
 	 */
 	double MaxExpandFactor = 0.25;
 
+	static constexpr uint32 MaxSupportedTreeDepth = 0x1F;
+
+	int GetMaxTreeDepth()
+	{
+		return MaxTreeDepth;
+	}
+	/**
+	 * Sets max tree depth w/ protection against setting beyond supported max
+	 */
+	void SetMaxTreeDepth(int MaxTreeDepthIn)
+	{
+		if (!ensure((uint32)MaxTreeDepthIn <= MaxSupportedTreeDepth))
+		{
+			MaxTreeDepthIn = (int32)MaxSupportedTreeDepth;
+		}
+
+		MaxTreeDepth = MaxTreeDepthIn;
+	}
+protected:
 	/**
 	 * Objects will not be inserted more than this many levels deep from a Root cell
 	 */
@@ -292,7 +311,8 @@ protected:
 	// calculate the base width of a cell at a given level
 	inline double GetCellWidth(uint32 Level) const
 	{
-		double Divisor = (double)( (uint64)1 << (Level & 0x1F) );
+		checkSlow(Level <= MaxSupportedTreeDepth);
+		double Divisor = (double)( (uint64)1 << (Level & MaxSupportedTreeDepth) );
 		double CellWidth = RootDimension / Divisor;
 		return CellWidth;
 	}
@@ -325,6 +345,8 @@ protected:
 	}
 
 
+	// warning: result here appears to be unstable (due to optimization?) if any of the position values are on the border of a cell
+	// (in testing, pragma-optimization-disabled code produced off-by-one result from calling this function)
 	FVector3i PointToIndex(uint32 Level, const FVector3d& Position) const
 	{
 		double CellWidth = GetCellWidth(Level);
@@ -440,7 +462,8 @@ void FSparseDynamicOctree3::Insert_NewChildCell(int32 ObjectID, const FAxisAlign
 	OrigParentCell.SetChild(ChildIdx, NewChildCell);
 
 	check(CanFit(NewChildCell, Bounds));
-	check(PointToIndex(NewChildCell.Level, Bounds.Center()) == NewChildCell.Index);
+	// this check is unstable if the center point is within machine-epsilon of the cell border
+	//check(PointToIndex(NewChildCell.Level, Bounds.Center()) == NewChildCell.Index);
 }
 
 
@@ -454,7 +477,8 @@ void FSparseDynamicOctree3::Insert_ToCell(int32 ObjectID, const FAxisAlignedBox3
 	CellObjectLists.Insert(ExistingCell.CellID, ObjectID);
 
 	check(CanFit(ExistingCell, Bounds));
-	check(PointToIndex(ExistingCell.Level, Bounds.Center()) == ExistingCell.Index);
+	// this check is unstable if the center point is within machine-epsilon of the cell border
+	//check(PointToIndex(ExistingCell.Level, Bounds.Center()) == ExistingCell.Index);
 }
 
 

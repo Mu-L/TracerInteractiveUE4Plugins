@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -173,7 +173,7 @@ inline double FFrameRate::AsSeconds(FFrameTime FrameTime) const
 
 inline FFrameTime FFrameRate::AsFrameTime(double TimeInSeconds) const
 {
-	// @todo: sequencer-timecode: proper large number integer multiplication/division before coersion to float ?
+	// @todo: sequencer-timecode: proper large number integer multiplication/division before coercion to float ?
 	const double       TimeAsFrame = (TimeInSeconds * Numerator) / Denominator;
 	const FFrameNumber FrameNumber = static_cast<int32>(FMath::FloorToDouble(TimeAsFrame));
 
@@ -183,12 +183,13 @@ inline FFrameTime FFrameRate::AsFrameTime(double TimeInSeconds) const
 		SubFrame = FMath::Min(SubFrame, (double)FFrameTime::MaxSubframe);
 	}
 
-	return FFrameTime(FrameNumber, SubFrame);
+	//@TODO: FLOATPRECISION: FFrameTime needs a general once over for precision (RE: cast to ctor)
+	return FFrameTime(FrameNumber, (float)SubFrame);
 }
 
 inline FFrameNumber FFrameRate::AsFrameNumber(double TimeInSeconds) const
 {
-	// @todo: sequencer-timecode: proper large number integer multiplication/division before coersion to float ?
+	// @todo: sequencer-timecode: proper large number integer multiplication/division before coercion to float ?
 	const double       TimeAsFrame = (double(TimeInSeconds) * Numerator) / Denominator;
 	return static_cast<int32>(FMath::FloorToDouble(TimeAsFrame));
 }
@@ -261,8 +262,8 @@ inline FFrameTime ConvertFrameTime(FFrameTime SourceTime, FFrameRate SourceRate,
 	}
 	//We want NewTime =SourceTime * (DestinationRate/SourceRate);
 	//And want to limit conversions and keep int precision as much as possible
-	int64 NewNumerator = DestinationRate.Numerator * SourceRate.Denominator;
-	int64 NewDenominator = DestinationRate.Denominator * SourceRate.Numerator;
+	int64 NewNumerator = static_cast<int64>(DestinationRate.Numerator) * SourceRate.Denominator;
+	int64 NewDenominator = static_cast<int64>(DestinationRate.Denominator) * SourceRate.Numerator;
 	double NewNumerator_d = double(NewNumerator);
 	double NewDenominator_d = double(NewDenominator);
 	//Now the IntegerPart may have a Float Part, and then the FloatPart may have an IntegerPart,
@@ -279,7 +280,8 @@ inline FFrameTime ConvertFrameTime(FFrameTime SourceTime, FFrameRate SourceRate,
 		SubFrame = FMath::Min(SubFrame, 0.999999940);
 	}
 
-	return FFrameTime( (int32)IntegerPart, SubFrame);
+	//@TODO: FLOATPRECISION: FFrameTime needs a general once over for precision (RE: cast to ctor)
+	return FFrameTime( (int32)IntegerPart, (float)SubFrame);
 }
 
 inline FFrameTime FFrameRate::TransformTime(FFrameTime SourceTime, FFrameRate SourceRate, FFrameRate DestinationRate)

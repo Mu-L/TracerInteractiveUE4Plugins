@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /**
  *
@@ -17,7 +17,7 @@ class AActor;
 class UInterpTrack;
 
 UCLASS(MinimalAPI)
-class ENGINE_VTABLE UInterpTrackInst : public UObject
+class UInterpTrackInst : public UObject
 {
 	GENERATED_UCLASS_BODY()
 

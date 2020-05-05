@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "SPinTypeSelector.h"
 #include "Widgets/SToolTip.h"
 #include "Widgets/Layout/SSpacer.h"
@@ -822,7 +822,9 @@ void SPinTypeSelector::OnSelectPinType(FPinTypeTreeItem InItem, FName InPinCateg
 		// inform user via toast why the type change was exceptional and clear IsMap/IsSetness because this type cannot be hashed:
 		const FText NotificationText = FText::Format(LOCTEXT("TypeCannotBeHashed", "Container type cleared because '{0}' does not have a GetTypeHash function. Maps and Sets require a hash function to insert and find elements"), UEdGraphSchema_K2::TypeToText(NewTargetPinType));
 		FNotificationInfo Info(NotificationText);
-		Info.ExpireDuration = 8.0f;
+		Info.FadeInDuration = 0.0f;
+		Info.FadeOutDuration = 0.0f;
+		Info.ExpireDuration = 10.0f;
 		FSlateNotificationManager::Get().AddNotification(Info);
 	}
 
@@ -905,8 +907,9 @@ TSharedRef<SWidget>	SPinTypeSelector::GetMenuContent(bool bForSecondaryType)
 
 	FilteredTypeTreeRoot = TypeTreeRoot;
 
-	if( !MenuContent.IsValid() )
+	if( !MenuContent.IsValid() || (bForSecondaryType != bMenuContentIsSecondary) )
 	{
+		bMenuContentIsSecondary = bForSecondaryType;
 		// Pre-build the tree view and search box as it is needed as a parameter for the context menu's container.
 		SAssignNew(TypeTreeView, SPinTypeTreeView)
 			.TreeItemsSource(&FilteredTypeTreeRoot)
@@ -945,11 +948,17 @@ TSharedRef<SWidget>	SPinTypeSelector::GetMenuContent(bool bForSecondaryType)
 			];
 			
 
-			TypeComboButton->SetMenuContentWidgetToFocus(FilterTextBox);
+		if (bForSecondaryType)
+		{
 			if (SecondaryTypeComboButton.IsValid())
 			{
 				SecondaryTypeComboButton->SetMenuContentWidgetToFocus(FilterTextBox);
 			}
+		}
+		else
+		{
+			TypeComboButton->SetMenuContentWidgetToFocus(FilterTextBox);
+		}
 	}
 	else
 	{

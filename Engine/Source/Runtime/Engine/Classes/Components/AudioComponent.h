@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Components/SceneComponent.h"
@@ -213,9 +213,6 @@ class ENGINE_API UAudioComponent : public USceneComponent
 	/** If true, this sound will not be stopped when flushing the audio device. */
 	uint8 bIgnoreForFlushing:1;
 
-	/** Whether audio effects are applied */
-	uint8 bEQFilterApplied:1;
-
 	/** Whether to artificially prioritize the component to play */
 	uint8 bAlwaysPlay:1;
 
@@ -254,7 +251,7 @@ private:
 
 public:
 	/** The specific audio device to play this component on */
-	uint32 AudioDeviceHandle;
+	uint32 AudioDeviceID;
 
 	/** Configurable, serialized ID for audio plugins */
 	UPROPERTY()
@@ -492,7 +489,7 @@ public:
 
 	/** Sets how much audio the sound should send to the given submix. */
 	UFUNCTION(BlueprintCallable, Category = "Audio|Components|Audio")
-	void SetSubmixSend(USoundSubmix* Submix, float SendLevel);
+	void SetSubmixSend(USoundSubmixBase* Submix, float SendLevel);
 
 	/** Sets how much audio the sound should send to the given Source Bus (PRE Source Effects).
 		if the Bus Send doesn't already exist, it will be added to the overrides on the active sound */

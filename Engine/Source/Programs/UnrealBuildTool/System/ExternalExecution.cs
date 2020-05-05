@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -46,9 +46,14 @@ namespace UnrealBuildTool
 		FailedDueToHeaderChange = 4,
 
 		/// <summary>
+		/// Compilation failed due to the engine modules needing to be rebuilt
+		/// </summary>
+		FailedDueToEngineChange = 5,
+
+		/// <summary>
 		/// Compilation failed due to compilation errors
 		/// </summary>
-		OtherCompilationError = 5,
+		OtherCompilationError = 6,
 
 		/// <summary>
 		/// Compilation is not supported in the current build
@@ -88,10 +93,12 @@ namespace UnrealBuildTool
 	{
 		Program,
 		EngineRuntime,
+		EngineUncooked,
 		EngineDeveloper,
 		EngineEditor,
 		EngineThirdParty,
 		GameRuntime,
+		GameUncooked,
 		GameDeveloper,
 		GameEditor,
 		GameThirdParty,
@@ -120,7 +127,6 @@ namespace UnrealBuildTool
 				case ModuleHostType.RuntimeNoCommandlet:
 				case ModuleHostType.RuntimeAndProgram:
 				case ModuleHostType.CookedOnly:
-				case ModuleHostType.UncookedOnly:
 				case ModuleHostType.ServerOnly:
 				case ModuleHostType.ClientOnly:
 				case ModuleHostType.ClientOnlyNoCommandlet:
@@ -132,6 +138,8 @@ namespace UnrealBuildTool
 				case ModuleHostType.EditorNoCommandlet:
 				case ModuleHostType.EditorAndProgram:
 					return UHTModuleType.EngineEditor;
+				case ModuleHostType.UncookedOnly:
+					return UHTModuleType.EngineUncooked;
 				default:
 					return null;
 			}
@@ -146,7 +154,6 @@ namespace UnrealBuildTool
 				case ModuleHostType.RuntimeNoCommandlet:
 				case ModuleHostType.RuntimeAndProgram:
 				case ModuleHostType.CookedOnly:
-				case ModuleHostType.UncookedOnly:
 				case ModuleHostType.ServerOnly:
 				case ModuleHostType.ClientOnly:
 				case ModuleHostType.ClientOnlyNoCommandlet:
@@ -158,6 +165,8 @@ namespace UnrealBuildTool
 				case ModuleHostType.EditorNoCommandlet:
 				case ModuleHostType.EditorAndProgram:
 					return UHTModuleType.GameEditor;
+				case ModuleHostType.UncookedOnly:
+					return UHTModuleType.GameUncooked;
 				default:
 					return null;
 			}
@@ -1124,7 +1133,7 @@ namespace UnrealBuildTool
 						TargetDescriptor TargetDescriptor = new TargetDescriptor(ScriptProjectFile, "UnrealHeaderTool", Platform, Configuration, Architecture, null);
 						TargetDescriptor.bQuiet = true;
 
-						using(Timeline.ScopeEvent("Buildng UnrealHeaderTool"))
+						using(Timeline.ScopeEvent("Building UnrealHeaderTool"))
 						{
 							BuildMode.Build(new List<TargetDescriptor>{ TargetDescriptor }, BuildConfiguration, WorkingSet, BuildOptions.None, null);
 						}
@@ -1147,6 +1156,16 @@ namespace UnrealBuildTool
 
 					string CmdLine = (ProjectFile != null) ? "\"" + ProjectFile.FullName + "\"" : TargetName;
 					CmdLine += " \"" + ModuleInfoFileName + "\" -LogCmds=\"loginit warning, logexit warning, logdatabase error\" -Unattended -WarningsAsErrors";
+
+					if (Log.OutputFile != null)
+					{
+						string LogFileName = Log.OutputFile.GetFileNameWithoutExtension();
+						LogFileName = (LogFileName.StartsWith("UBT") ? "UHT" + LogFileName.Substring(3) : LogFileName + "_UHT") + ".txt";
+						LogFileName = FileReference.Combine(Log.OutputFile.Directory, LogFileName).ToString();
+
+						CmdLine += " -abslog=\"" + LogFileName + "\"";
+					}
+
 					if (UnrealBuildTool.IsEngineInstalled())
 					{
 						CmdLine += " -installed";

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
    DebugCameraController.cpp: Native implementation for the debug camera
@@ -960,7 +960,7 @@ FString ADebugCameraController::GetBufferMaterialName(const FString& InBufferNam
 {
 	if (!InBufferName.IsEmpty())
 	{
-		if (UMaterial* Material = GetBufferVisualizationData().GetMaterial(*InBufferName))
+		if (UMaterialInterface* Material = GetBufferVisualizationData().GetMaterial(*InBufferName))
 		{
 			return Material->GetName();
 		}

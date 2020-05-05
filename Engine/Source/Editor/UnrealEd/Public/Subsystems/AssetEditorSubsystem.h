@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -30,6 +30,7 @@ public:
 	virtual bool CloseWindow() = 0;
 	virtual bool IsPrimaryEditor() const = 0;
 	virtual void InvokeTab(const struct FTabId& TabId) = 0;
+	virtual FName GetToolbarTabId() const = 0;
 	virtual TSharedPtr<class FTabManager> GetAssociatedTabManager() = 0;
 	virtual double GetLastActivationTime() = 0;
 	virtual void RemoveEditingAsset(UObject* Asset) = 0;
@@ -55,6 +56,7 @@ class UNREALED_API UAssetEditorSubsystem : public UEditorSubsystem
 public:
 	UAssetEditorSubsystem();
 
+	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 
 	/** Opens an asset by path */
@@ -160,6 +162,9 @@ private:
 
 	/** Handles a package being reloaded */
 	void HandlePackageReloaded(const EPackageReloadPhase InPackageReloadPhase, FPackageReloadedEvent* InPackageReloadedEvent);
+
+	/** Callback for when the Editor closes, before Slate shuts down all the windows. */
+	void OnEditorClose();
 
 private:
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	VulkanPipelineState.h: Vulkan pipeline state definitions.
@@ -51,7 +51,7 @@ public:
 	inline void SetStorageBuffer(uint8 DescriptorSet, uint32 BindingIndex, const FVulkanStructuredBuffer* StructuredBuffer)
 	{
 		check(StructuredBuffer && (StructuredBuffer->GetBufferUsageFlags() & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) == VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-		MarkDirty(DSWriter[DescriptorSet].WriteStorageBuffer(BindingIndex, *StructuredBuffer->GetBufferAllocation(), StructuredBuffer->GetOffset(), StructuredBuffer->GetSize()));
+		MarkDirty(DSWriter[DescriptorSet].WriteStorageBuffer(BindingIndex, *StructuredBuffer->GetBufferAllocation(), StructuredBuffer->GetOffset(), StructuredBuffer->GetCurrentSize()));
 	}
 
 	inline void SetUAVTexelBufferViewState(uint8 DescriptorSet, uint32 BindingIndex, const FVulkanBufferView* View)
@@ -256,7 +256,7 @@ public:
 
 	inline void BindDescriptorSets(VkCommandBuffer CmdBuffer)
 	{
-		Bind(CmdBuffer, GfxPipeline->Pipeline->GetLayout().GetPipelineLayout(), VK_PIPELINE_BIND_POINT_GRAPHICS);
+		Bind(CmdBuffer, GfxPipeline->GetLayout().GetPipelineLayout(), VK_PIPELINE_BIND_POINT_GRAPHICS);
 	}
 
 	void Reset()

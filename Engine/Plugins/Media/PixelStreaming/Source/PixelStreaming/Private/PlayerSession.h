@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -35,7 +35,7 @@ public:
 
 	void SendMessage(PixelStreamingProtocol::EToPlayerMsg Type, const FString& Descriptor);
 
-	void SendFreezeFrame(const TArray<uint8>& JpegBytes);
+	void SendFreezeFrame(const TArray64<uint8>& JpegBytes);
 	void SendUnfreezeFrame();
 
 private:

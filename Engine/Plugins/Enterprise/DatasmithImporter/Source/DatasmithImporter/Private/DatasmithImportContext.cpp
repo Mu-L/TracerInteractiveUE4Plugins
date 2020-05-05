@@ -1,28 +1,52 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithImportContext.h"
 
 #include "DatasmithActorImporter.h"
 #include "DatasmithImportOptions.h"
 #include "DatasmithSceneFactory.h"
+#include "DatasmithTranslator.h"
 #include "DatasmithUtils.h"
 #include "UI/DatasmithImportOptionsWindow.h"
 #include "Utility/DatasmithImporterUtils.h"
-#include "Translators/DatasmithTranslator.h"
 
-#include "Misc/FeedbackContext.h"
-#include "PackageTools.h"
-#include "Misc/Paths.h"
-#include "Interfaces/IMainFrameModule.h"
 #include "Dom/JsonObject.h"
+#include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "FileHelpers.h"
-#include "Engine/StaticMesh.h"
+#include "Interfaces/IMainFrameModule.h"
+#include "Misc/FeedbackContext.h"
+#include "Misc/Paths.h"
+#include "PackageTools.h"
 
 
 #define LOCTEXT_NAMESPACE "DatasmithImportPlugin"
 
-const TCHAR* UserOptionPath = TEXT("Unreal Engine/Enterprise/Datasmith/Config/UserOptions.ini");
+namespace DatasmithImportContextImpl
+{
+	const TCHAR* GetUserOptionPath()
+	{
+		static FString UserDatasmithOptionsFile = FPaths::Combine(FPlatformProcess::UserSettingsDir(), "Unreal Engine/Enterprise/Datasmith/Config/UserOptions.ini");
+		return *UserDatasmithOptionsFile;
+	}
+
+	void LoadOptionConfig(UObject* InOption)
+	{
+		if (InOption)
+		{
+			InOption->LoadConfig(nullptr, GetUserOptionPath());
+		}
+	}
+
+	void SaveOptionConfig(UObject* InOption)
+	{
+		if (InOption)
+		{
+			InOption->SaveConfig(CPF_Config, GetUserOptionPath());
+		}
+	}
+}
+
 
 class FDatasmithImportOptionHelper
 {
@@ -103,7 +127,7 @@ void FDatasmithImportOptionHelper::LoadOptions(const TArray<UObject*>& ImportOpt
 		const TSharedPtr<FJsonObject>& OptionDataJsonObject = ImportSettingsJson->GetObjectField(Object->GetName());
 		if (OptionDataJsonObject.IsValid())
 		{
-			for (TFieldIterator<UProperty> It(Object->GetClass()); It; ++It)
+			for (TFieldIterator<FProperty> It(Object->GetClass()); It; ++It)
 			{
 				if (OptionDataJsonObject->HasField((*It)->GetNameCPP()))
 				{
@@ -136,56 +160,49 @@ FDatasmithImportContext::FDatasmithImportContext(const FString& FileName, bool b
 	, bUserCancelled(false)
 	, bIsAReimport(false)
 	, bImportedViaScript(false)
-	, Warn(nullptr)
+	, FeedbackContext(nullptr)
 	, AssetsContext(*this)
 	, ContextExtension(nullptr)
 	, Logger(LoggerName, LoggerLabel)
 	, CurrentSceneActorIndex(0)
 	, ReferenceCollector(this)
 {
-	ImportOptions.Add(Options.Get());
-	SetFileName(FileName);
-
-	if (bLoadConfig && Options.IsValid())
+	if (SceneTranslator)
 	{
-		FString UserDatasmithOptionsFile = FPaths::Combine(FPlatformProcess::UserSettingsDir(), UserOptionPath);
-		Options->LoadConfig(nullptr, *UserDatasmithOptionsFile);
+		SceneTranslator->GetSceneImportOptions(AdditionalImportOptions);
+	}
+
+	if (bLoadConfig)
+	{
+		DatasmithImportContextImpl::LoadOptionConfig(Options.Get());
+		for (const TStrongObjectPtr<UObject>& AdditionalImportOption : AdditionalImportOptions)
+		{
+			DatasmithImportContextImpl::LoadOptionConfig(AdditionalImportOption.Get());
+		}
 	}
 
 	// Force the SceneHandling to be on current level by default.
 	// Note: This is done because this option was previously persisted and can get overwritten
 	Options->BaseOptions.SceneHandling = EDatasmithImportScene::CurrentLevel;
-
-	if (SceneTranslator)
-	{
-		SceneTranslator->GetSceneImportOptions(AdditionalImportOptions);
-		for (const TStrongObjectPtr<UObject>& Option : AdditionalImportOptions)
-		{
-			ImportOptions.Add(Option.Get());
-		}
-
-		// Temporarily give Rhino translator access to BaseOptions (JIRA UE-81278)
-		AdditionalImportOptions.Add(Options);
-	}
-}
-
-void FDatasmithImportContext::SetFileName(const FString& FileName)
-{
 	Options->FileName = FPaths::GetCleanFilename(FileName);
 	Options->FilePath = FPaths::ConvertRelativePathToFull(FileName);
 
 	FileHash = FMD5Hash::HashFile(*Options->FilePath);
 }
 
-void FDatasmithImportContext::AddOption(UObject* InOption, bool bLoadConfig)
+void FDatasmithImportContext::UpdateImportOption(UDatasmithOptionsBase* NewOption)
 {
-	if (InOption != nullptr)
+	if (NewOption)
 	{
-		ImportOptions.Add(InOption);
-		if (bLoadConfig)
+		auto SameClass = [=](const TStrongObjectPtr<UDatasmithOptionsBase>& Option) { return Option->GetClass() == NewOption->GetClass(); };
+
+		if (TStrongObjectPtr<UDatasmithOptionsBase>* PreviousOptionPtr = AdditionalImportOptions.FindByPredicate(SameClass))
 		{
-			FString UserDatasmithOptionsFile = FPaths::Combine(FPlatformProcess::UserSettingsDir(), UserOptionPath);
-			InOption->LoadConfig(nullptr, *UserDatasmithOptionsFile);
+			PreviousOptionPtr->Reset(NewOption);
+		}
+		else
+		{
+			AdditionalImportOptions.Emplace(NewOption);
 		}
 	}
 }
@@ -205,24 +222,32 @@ TSharedRef<FTokenizedMessage> FDatasmithImportContext::LogInfo(const FText& InIn
 	return Logger.Push(EMessageSeverity::Info, InInfoMessage);
 }
 
-bool FDatasmithImportContext::Init(const FString& InFileName, TSharedRef< IDatasmithScene > InScene, const FString& InImportPath, EObjectFlags InFlags, FFeedbackContext* InWarn, const TSharedPtr<FJsonObject>& ImportSettingsJson, bool bSilent)
-{
-	SetFileName(InFileName);
-	return Init(InScene, InImportPath, InFlags, InWarn, ImportSettingsJson, bSilent);
-}
-
 bool FDatasmithImportContext::Init(TSharedRef< IDatasmithScene > InScene, const FString& InImportPath, EObjectFlags InFlags, FFeedbackContext* InWarn, const TSharedPtr<FJsonObject>& ImportSettingsJson, bool bSilent)
 {
-	check(Options->FileName.Len() > 0);
-	check(Options->FilePath.Len() > 0);
+	return InitOptions(InScene, ImportSettingsJson, bSilent)
+		&& SetupDestination(InImportPath, InFlags, InWarn, bSilent);
+}
 
+bool FDatasmithImportContext::InitOptions(TSharedRef< IDatasmithScene > InScene, const TSharedPtr<FJsonObject>& ImportSettingsJson, bool bSilent)
+{
 	if (!FModuleManager::Get().IsModuleLoaded("AssetTools"))
 	{
 		UE_LOG(LogDatasmithImport, Warning, TEXT("Import failed. The AssetTools module can't be loaded."));
 		return false;
 	}
+	Scene = InScene;
 
-	Options->BaseOptions.AssetOptions.PackagePath = FName( *InImportPath );
+	check(Options->FileName.Len() > 0);
+	check(Options->FilePath.Len() > 0);
+
+	TArray<UObject*> ImportOptions;
+	ImportOptions.Reserve(1 + AdditionalImportOptions.Num());
+
+	ImportOptions.Add(Options.Get());
+	for (const TStrongObjectPtr<UDatasmithOptionsBase>& AdditionalOption : AdditionalImportOptions)
+	{
+		ImportOptions.Add(AdditionalOption.Get());
+	}
 
 	if (bSilent)
 	{
@@ -236,11 +261,11 @@ bool FDatasmithImportContext::Init(TSharedRef< IDatasmithScene > InScene, const 
 	{
 		SetupBaseOptionsVisibility();
 
-		bool bShouldImport = FDatasmithImportOptionHelper::DisplayOptionsDialog(ImportOptions, InScene);
+		bool bShouldImport = FDatasmithImportOptionHelper::DisplayOptionsDialog(ImportOptions, Scene.ToSharedRef());
 
 		ResetBaseOptionsVisibility();
 
-		if ( !bShouldImport )
+		if (!bShouldImport)
 		{
 			FDatasmithImportOptionHelper::CleanUpOptions(ImportOptions);
 			UE_LOG(LogDatasmithImport, Display, TEXT("Import canceled."));
@@ -248,23 +273,35 @@ bool FDatasmithImportContext::Init(TSharedRef< IDatasmithScene > InScene, const 
 		}
 
 		// Update config file with new values
-		FString UserDatasmithOptionsFile = FPaths::Combine(FPlatformProcess::UserSettingsDir(), UserOptionPath);
 		for (UObject* Option : ImportOptions)
 		{
-			Option->SaveConfig(CPF_Config, *UserDatasmithOptionsFile);
+			DatasmithImportContextImpl::SaveOptionConfig(Option);
 		}
 	}
 
 	if (SceneTranslator)
 	{
+		AdditionalImportOptions.Push(Options);
 		SceneTranslator->SetSceneImportOptions(AdditionalImportOptions);
+		AdditionalImportOptions.Pop();
 	}
 
-	Options->UpdateNotDisplayedConfig( bIsAReimport );
+	Options->UpdateNotDisplayedConfig(bIsAReimport);
 
 	FDatasmithImportOptionHelper::CleanUpOptions(ImportOptions);
+	return true;
+}
 
-	if ( !ActorsContext.ImportWorld )
+bool FDatasmithImportContext::SetupDestination(const FString& InImportPath, EObjectFlags InFlags, FFeedbackContext* InWarn, bool bSilent)
+{
+	if (!Scene.IsValid())
+	{
+		return false;
+	}
+
+	Options->BaseOptions.AssetOptions.PackagePath = FName(*InImportPath);
+
+	if (!ActorsContext.ImportWorld)
 	{
 		// User is asking to import model in a new level
 		// Check to see if there is nothing to save and act according to user's selection
@@ -303,20 +340,19 @@ bool FDatasmithImportContext::Init(TSharedRef< IDatasmithScene > InScene, const 
 		}
 	}
 
-	Warn = InWarn;
-	Scene = InScene;
+	FeedbackContext = InWarn;
 
 	// Initialize the filtered scene as a copy of the original scene. We will use it to then filter out items to import.
 	FilteredScene = FDatasmithSceneFactory::DuplicateScene(Scene.ToSharedRef());
 
-	SceneName = Scene->GetName();
+	SceneName = FDatasmithUtils::SanitizeObjectName(Scene->GetName());
 	bUserCancelled = false;
 
 	ObjectFlags = InFlags | RF_Transactional;
 
 	bool bResult = AssetsContext.Init();
 
-	if ( ShouldImportActors() )
+	if (ShouldImportActors())
 	{
 		bResult = bResult && ActorsContext.Init();
 	}
@@ -331,7 +367,7 @@ void FDatasmithImportContext::DisplayMessages()
 
 void FDatasmithImportContext::SetupBaseOptionsVisibility()
 {
-	if ( UProperty* ReimportOptionsProperty = FindField< UProperty >( Options->GetClass(), GET_MEMBER_NAME_CHECKED( UDatasmithImportOptions, ReimportOptions ) ) )
+	if ( FProperty* ReimportOptionsProperty = FindFProperty< FProperty >( Options->GetClass(), GET_MEMBER_NAME_CHECKED( UDatasmithImportOptions, ReimportOptions ) ) )
 	{
 		if ( bIsAReimport )
 		{
@@ -348,7 +384,7 @@ void FDatasmithImportContext::SetupBaseOptionsVisibility()
 
 void FDatasmithImportContext::ResetBaseOptionsVisibility()
 {
-	UProperty* ReimportOptionsProperty = FindField< UProperty >( Options->GetClass(), GET_MEMBER_NAME_CHECKED( UDatasmithImportOptions, ReimportOptions ) );
+	FProperty* ReimportOptionsProperty = FindFProperty< FProperty >( Options->GetClass(), GET_MEMBER_NAME_CHECKED( UDatasmithImportOptions, ReimportOptions ) );
 
 	if ( ReimportOptionsProperty )
 	{

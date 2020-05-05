@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ComponentInstanceDataCache.h"
 #include "Serialization/ObjectWriter.h"
@@ -53,18 +53,19 @@ public:
 		DuplicatedObjectAnnotation.RemoveAllAnnotations();
 	}
 
-	virtual bool ShouldSkipProperty(const UProperty* InProperty) const override
+	virtual bool ShouldSkipProperty(const FProperty* InProperty) const override
 	{
 		// Immutable structs expect to serialize all properties so don't skip regardless of other conditions
-		UScriptStruct* ScriptStruct = Cast<UScriptStruct>(InProperty->GetOuter());
+		UScriptStruct* ScriptStruct = InProperty->GetOwner<UScriptStruct>();
 		const bool bPropertyInImmutableStruct = ScriptStruct && ((ScriptStruct->StructFlags & STRUCT_Immutable) != 0);
-		
+
 		return (!bPropertyInImmutableStruct
-		        && (   InProperty->HasAnyPropertyFlags(CPF_Transient)
-		            || !InProperty->HasAnyPropertyFlags(CPF_Edit | CPF_Interp)
-		            || PropertiesToSkip.Contains(InProperty)
-		           )
-		       );
+			&& (InProperty->HasAnyPropertyFlags(CPF_Transient)
+				|| !InProperty->HasAnyPropertyFlags(CPF_Edit | CPF_Interp)
+				|| InProperty->IsA<FMulticastDelegateProperty>()
+				|| PropertiesToSkip.Contains(InProperty)
+				)
+			);
 	}
 
 
@@ -150,7 +151,7 @@ public:
 private:
 	const UActorComponent* Component;
 	FActorComponentInstanceData& ActorInstanceData;
-	TSet<const UProperty*> PropertiesToSkip;
+	TSet<const FProperty*> PropertiesToSkip;
 	FUObjectAnnotationSparse<FDuplicatedObject,false> DuplicatedObjectAnnotation;
 };
 
@@ -170,7 +171,7 @@ public:
 		Class->SerializeTaggedProperties(*this, (uint8*)InComponent, Class, (uint8*)InComponent->GetArchetype());
 	}
 
-	virtual bool ShouldSkipProperty(const UProperty* InProperty) const override
+	virtual bool ShouldSkipProperty(const FProperty* InProperty) const override
 	{
 		return PropertiesToSkip.Contains(InProperty);
 	}
@@ -201,7 +202,7 @@ public:
 	}
 
 	FActorComponentInstanceData& ActorInstanceData;
-	TSet<const UProperty*> PropertiesToSkip;
+	TSet<const FProperty*> PropertiesToSkip;
 };
 
 
@@ -300,37 +301,7 @@ FActorComponentInstanceData::FActorComponentInstanceData(const UActorComponent* 
 	SourceComponentTemplate = SourceComponent->GetArchetype();
 	SourceComponentCreationMethod = SourceComponent->CreationMethod;
 	SourceComponentTypeSerializedIndex = INDEX_NONE;
-
-	// UCS components can share the same template (e.g. an AddComponent node inside a loop), so we also cache their serialization index here (relative to the shared template) as a means for identification
-	if(SourceComponentCreationMethod == EComponentCreationMethod::UserConstructionScript)
-	{
-		AActor* ComponentOwner = SourceComponent->GetOwner();
-		if (ComponentOwner)
-		{
-			bool bFound = false;
-			for (const UActorComponent* BlueprintCreatedComponent : ComponentOwner->BlueprintCreatedComponents)
-			{
-				if (BlueprintCreatedComponent)
-				{
-					if (BlueprintCreatedComponent == SourceComponent)
-					{
-						++SourceComponentTypeSerializedIndex;
-						bFound = true;
-						break;
-					}
-					else if (   BlueprintCreatedComponent->CreationMethod == SourceComponentCreationMethod
-						&& BlueprintCreatedComponent->GetArchetype() == SourceComponentTemplate)
-					{
-						++SourceComponentTypeSerializedIndex;
-					}
-				}
-			}
-			if (!bFound)
-			{
-				SourceComponentTypeSerializedIndex = INDEX_NONE;
-			}
-		}
-	}
+	SourceComponentTypeSerializedIndex = SourceComponent->GetUCSSerializationIndex();
 
 	if (SourceComponent->IsEditableWhenInherited())
 	{
@@ -384,24 +355,7 @@ bool FActorComponentInstanceData::MatchesComponent(const UActorComponent* Compon
 		}
 		else if (SourceComponentTypeSerializedIndex >= 0)
 		{
-			int32 FoundSerializedComponentsOfType = -1;
-			AActor* ComponentOwner = Component->GetOwner();
-			if (ComponentOwner)
-			{
-				for (const UActorComponent* BlueprintCreatedComponent : ComponentOwner->BlueprintCreatedComponents)
-				{
-					if (BlueprintCreatedComponent != nullptr && BlueprintCreatedComponent->CreationMethod == SourceComponentCreationMethod)
-					{
-						const UObject* BlueprintComponentTemplate = ComponentToArchetypeMap.FindChecked(BlueprintCreatedComponent);
-						if (   (BlueprintComponentTemplate == SourceComponentTemplate || (GIsReinstancing && BlueprintComponentTemplate->GetFName() == SourceComponentTemplate->GetFName()))
-							&& (++FoundSerializedComponentsOfType == SourceComponentTypeSerializedIndex))
-						{
-							bMatches = (BlueprintCreatedComponent == Component);
-							break;
-						}
-					}
-				}
-			}
+			bMatches = (SourceComponentTypeSerializedIndex == Component->GetUCSSerializationIndex());
 		}
 	}
 	return bMatches;
@@ -561,10 +515,10 @@ void FComponentInstanceDataCache::ApplyToActor(AActor* Actor, const ECacheApplyP
 							// components within a child actor are handled by applying the instance data to the child actor component
 							if (ChildComponent->GetOwner() == Actor)
 							{
-								Components.Add(ChildComponent);
-							}
+							Components.Add(ChildComponent);
 						}
 					}
+				}
 				}
 
 				// next loop start with the nodes we just added
@@ -588,14 +542,14 @@ void FComponentInstanceDataCache::ApplyToActor(AActor* Actor, const ECacheApplyP
 					// * If there is an unattached scene component 
 					// * If there is a scene component attached to another Actor's hierarchy
 					// * If the scene is not registered (likely because bAutoRegister is false or component is marked pending kill), then we may not have successfully attached to our parent and properly been handled
-					USceneComponent* ParentComponent = SceneComponent->GetAttachParent();
+				USceneComponent* ParentComponent = SceneComponent->GetAttachParent();
 					if (   (ParentComponent == nullptr)
 					    || (ParentComponent->GetOwner() != Actor) 					
 					    || (!SceneComponent->IsRegistered() && !ParentComponent->GetAttachChildren().Contains(SceneComponent)))
-					{
-						AddComponentHierarchy(SceneComponent);
-					}
+				{
+					AddComponentHierarchy(SceneComponent);
 				}
+			}
 			}
 			else if (Component)
 			{
@@ -609,13 +563,22 @@ void FComponentInstanceDataCache::ApplyToActor(AActor* Actor, const ECacheApplyP
 
 		for (UActorComponent* ComponentInstance : Components)
 		{
-			if (ComponentInstance && (bIsChildActor || ComponentInstance->IsCreatedByConstructionScript()))
+			if (bIsChildActor || ComponentInstance->IsCreatedByConstructionScript())
 			{
 				ComponentToArchetypeMap.Add(ComponentInstance, ComponentInstance->GetArchetype());
 			}
 		}
 
 		// Apply per-instance data.
+		TBitArray<> ComponentInstanceDataToConsider(true, ComponentsInstanceData.Num());
+		for (int32 Index = 0; Index < ComponentsInstanceData.Num(); ++Index)
+		{
+			if (!ComponentsInstanceData[Index].IsValid())
+			{
+				ComponentInstanceDataToConsider[Index] = false;
+			}
+		}
+
 		for (UActorComponent* ComponentInstance : Components)
 		{
 			if (ComponentInstance && (bIsChildActor || ComponentInstance->IsCreatedByConstructionScript())) // Only try and apply data to 'created by construction script' components
@@ -623,13 +586,14 @@ void FComponentInstanceDataCache::ApplyToActor(AActor* Actor, const ECacheApplyP
 				// Cache template here to avoid redundant calls in the loop below
 				const UObject* ComponentTemplate = ComponentToArchetypeMap.FindChecked(ComponentInstance);
 
-				for (const TStructOnScope<FActorComponentInstanceData>& ComponentInstanceData : ComponentsInstanceData)
+				for (TConstSetBitIterator<> ComponentInstanceDataIt(ComponentInstanceDataToConsider); ComponentInstanceDataIt; ++ComponentInstanceDataIt)
 				{
-					if (	ComponentInstanceData.IsValid()
-						&&	ComponentInstanceData->GetComponentClass() == ComponentTemplate->GetClass() // filter on class early to avoid unnecessary virtual and expensive tests
-						&&	ComponentInstanceData->MatchesComponent(ComponentInstance, ComponentTemplate, ComponentToArchetypeMap))
+					const TStructOnScope<FActorComponentInstanceData>& ComponentInstanceData = ComponentsInstanceData[ComponentInstanceDataIt.GetIndex()];
+					if (   ComponentInstanceData->GetComponentClass() == ComponentTemplate->GetClass() // filter on class early to avoid unnecessary virtual and expensive tests
+					    && ComponentInstanceData->MatchesComponent(ComponentInstance, ComponentTemplate, ComponentToArchetypeMap))
 					{
 						ComponentInstanceData->ApplyToComponent(ComponentInstance, CacheApplyPhase);
+						ComponentInstanceDataToConsider[ComponentInstanceDataIt.GetIndex()] = false;
 						break;
 					}
 				}
@@ -637,7 +601,7 @@ void FComponentInstanceDataCache::ApplyToActor(AActor* Actor, const ECacheApplyP
 		}
 
 		// Once we're done attaching, if we have any unattached instance components move them to the root
-		for (auto InstanceTransformPair : InstanceComponentTransformToRootMap)
+		for (const TPair<USceneComponent*, FTransform>& InstanceTransformPair : InstanceComponentTransformToRootMap)
 		{
 			check(Actor->GetRootComponent());
 
@@ -696,7 +660,7 @@ void FComponentInstanceDataCache::CopySerializableProperties(TArray<TStructOnSco
 {
 	auto CopyProperties = [](TStructOnScope<FActorComponentInstanceData>& DestData, const TStructOnScope<FActorComponentInstanceData>& SrcData)
 	{
-		for (TFieldIterator<const UProperty> PropertyIt(SrcData.GetStruct(), EFieldIteratorFlags::IncludeSuper, EFieldIteratorFlags::IncludeDeprecated, EFieldIteratorFlags::ExcludeInterfaces); PropertyIt; ++PropertyIt)
+		for (TFieldIterator<const FProperty> PropertyIt(SrcData.GetStruct(), EFieldIteratorFlags::IncludeSuper, EFieldIteratorFlags::IncludeDeprecated, EFieldIteratorFlags::ExcludeInterfaces); PropertyIt; ++PropertyIt)
 		{
 			const void* SrcValuePtr = PropertyIt->ContainerPtrToValuePtr<void>(SrcData.Get());
 			void* DestValuePtr = PropertyIt->ContainerPtrToValuePtr<void>(DestData.Get());

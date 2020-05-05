@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -17,8 +17,8 @@ enum EARKitTextureType
 /**
 * Implements a node sampling from the ARKit Passthrough external textures.
 */
-UCLASS(collapsecategories, hidecategories = Object, Deprecated)
-class UDEPRECATED_MaterialExpressionARKitPassthroughCamera : public UMaterialExpression
+UCLASS(collapsecategories, hidecategories = Object)
+class UMaterialExpressionARKitPassthroughCamera : public UMaterialExpression
 {
 	GENERATED_UCLASS_BODY()
 

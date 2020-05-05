@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BlueprintStats.h"
 #include "UObject/Class.h"
@@ -34,7 +34,7 @@ void FBlueprintStatRecord::ReadStatsFromBlueprint()
 	NumUserMacros += SourceBlueprint->MacroGraphs.Num();
 	for (const UEdGraph* FunctionGraph : SourceBlueprint->FunctionGraphs)
 	{
-		if (UFunction* Function = FindField<UFunction>(SourceBlueprint->GeneratedClass, FunctionGraph->GetFName()))
+		if (UFunction* Function = FindUField<UFunction>(SourceBlueprint->GeneratedClass, FunctionGraph->GetFName()))
 		{
 			// Make sure we've got the native decl if it was an override
 			Function = GetSupererestFunction(Function);

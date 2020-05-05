@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -36,8 +36,6 @@
 	EnumMacro(PFN_vkGetRefreshCycleDurationGOOGLE, vkGetRefreshCycleDurationGOOGLE) \
 	EnumMacro(PFN_vkGetPastPresentationTimingGOOGLE, vkGetPastPresentationTimingGOOGLE)
 
-#include "../VulkanLoader.h"
-
 // and now, include the GenericPlatform class
 #include "../VulkanGenericPlatform.h"
 
@@ -46,6 +44,8 @@
 class FVulkanAndroidPlatform : public FVulkanGenericPlatform
 {
 public:
+	static void SetupMaxRHIFeatureLevelAndShaderPlatform(ERHIFeatureLevel::Type InRequestedFeatureLevel);
+
 	static bool LoadVulkanLibrary();
 	static bool LoadVulkanInstanceFunctions(VkInstance inInstance);
 	static void FreeVulkanLibrary();
@@ -61,10 +61,20 @@ public:
 
 	static void SetupFeatureLevels()
 	{
-		GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES2] = SP_VULKAN_ES3_1_ANDROID;
-		GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES3_1] = SP_VULKAN_ES3_1_ANDROID;
-		GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM4_REMOVED] = SP_NumPlatforms;
-		GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM5] = SP_NumPlatforms;
+		if (RequiresMobileRenderer())
+		{
+			GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES2_REMOVED] = SP_NumPlatforms;
+			GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES3_1] = SP_VULKAN_ES3_1_ANDROID;
+			GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM4_REMOVED] = SP_NumPlatforms;
+			GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM5] = SP_NumPlatforms;
+		}
+		else
+		{
+			GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES2_REMOVED] = SP_NumPlatforms;
+			GShaderPlatformForFeatureLevel[ERHIFeatureLevel::ES3_1] = SP_VULKAN_SM5_ANDROID;
+			GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM4_REMOVED] = SP_VULKAN_SM5_ANDROID;
+			GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM5] = SP_VULKAN_SM5_ANDROID;
+		}
 	}
 
 	static bool SupportsStandardSwapchain();
@@ -72,7 +82,13 @@ public:
 
 	static bool SupportsTimestampRenderQueries();
 
-	static bool RequiresMobileRenderer() { return true; }
+	static bool RequiresMobileRenderer()
+	{
+		return !FAndroidMisc::ShouldUseDesktopVulkan();
+	}
+
+	static bool SupportsVolumeTextureRendering() { return false; }
+
 	static void OverridePlatformHandlers(bool bInit);
 
 	//#todo-rco: Detect Mali?
@@ -84,8 +100,7 @@ public:
 
 	static bool UseRealUBsOptimization(bool bCodeHeaderUseRealUBs)
 	{
-		// Android is hard-coded to SF_VULKAN_ES31_ANDROID_NOUB shader format
-		return false;
+		return !RequiresMobileRenderer();
 	}
 
 	// Assume most devices can't use the extra cores for running parallel tasks
@@ -100,6 +115,9 @@ public:
 	static bool SupportsNullPixelShader() { return false; }
 
 	static bool RequiresRenderPassResolveAttachments() { return true; }
+
+	//#todo-rco: Detect Mali? Does the platform require depth to be written on stencil clear
+	static bool RequiresDepthWriteOnStencilClear() { return true; }
 
 protected:
 	static void* VulkanLib;

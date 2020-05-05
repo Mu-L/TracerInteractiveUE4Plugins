@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OnlineSubsystemOculus.h"
 #include "OnlineSubsystemOculusPrivate.h"
@@ -85,11 +85,6 @@ IOnlinePartyPtr FOnlineSubsystemOculus::GetPartyInterface() const
 }
 
 IOnlineTitleFilePtr FOnlineSubsystemOculus::GetTitleFileInterface() const
-{
-	return nullptr;
-}
-
-IOnlineStorePtr FOnlineSubsystemOculus::GetStoreInterface() const
 {
 	return nullptr;
 }

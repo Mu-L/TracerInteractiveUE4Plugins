@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SequencerTools.h"
 #include "SequencerScriptingEditor.h"
@@ -8,6 +8,7 @@
 #include "MovieSceneTimeHelpers.h"
 #include "UObject/Stack.h"
 #include "UObject/Package.h"
+#include "LevelSequenceActor.h"
 #include "LevelSequencePlayer.h"
 #include "FbxExporter.h"
 #include "FbxImporter.h"
@@ -16,6 +17,9 @@
 #include "CineCameraActor.h"
 #include "CineCameraComponent.h"
 #include "MovieSceneCommonHelpers.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Animation/AnimSequenceBase.h"
+#include "ScopedTransaction.h"
 
 #define LOCTEXT_NAMESPACE "SequencerTools"
 
@@ -100,11 +104,73 @@ void USequencerToolsFunctionLibrary::CancelMovieRender()
 	}
 }
 
+TArray<FSequencerBoundObjects> USequencerToolsFunctionLibrary::GetBoundObjects(UWorld* InWorld, ULevelSequence* InSequence, const TArray<FSequencerBindingProxy>& InBindings, const FSequencerScriptingRange& InRange)
+{
+	ALevelSequenceActor* OutActor;
+	FMovieSceneSequencePlaybackSettings Settings;
+	FLevelSequenceCameraSettings CameraSettings;
+
+	ULevelSequencePlayer* Player = ULevelSequencePlayer::CreateLevelSequencePlayer(InWorld, InSequence, Settings, OutActor);
+
+	Player->Initialize(InSequence, InWorld->PersistentLevel, Settings, CameraSettings);
+	Player->State.AssignSequence(MovieSceneSequenceID::Root, *InSequence, *Player);
+
+	// Evaluation needs to occur in order to obtain spawnables
+	FFrameRate Resolution = InSequence->GetMovieScene()->GetTickResolution();
+	TRange<FFrameNumber> SpecifiedRange = InRange.ToNative(Resolution);
+	Player->Play();
+	Player->PlayToFrame(SpecifiedRange.GetLowerBoundValue());
+
+	FMovieSceneSequenceID SequenceId = Player->State.FindSequenceId(InSequence);
+
+	TArray<FSequencerBoundObjects> BoundObjects;
+	for (FSequencerBindingProxy Binding : InBindings)
+	{
+		FMovieSceneObjectBindingID ObjectBinding(Binding.BindingID, SequenceId);
+		BoundObjects.Add(FSequencerBoundObjects(Binding, Player->GetBoundObjects(ObjectBinding)));
+	}
+
+	Player->Stop();
+	InWorld->DestroyActor(OutActor);
+	return BoundObjects;
+}
+
+
+TArray<FSequencerBoundObjects> USequencerToolsFunctionLibrary::GetObjectBindings(UWorld* InWorld, ULevelSequence* InSequence, const TArray<UObject*>& InObjects, const FSequencerScriptingRange& InRange)
+{
+	ALevelSequenceActor* OutActor;
+	FMovieSceneSequencePlaybackSettings Settings;
+	FLevelSequenceCameraSettings CameraSettings;
+
+	ULevelSequencePlayer* Player = ULevelSequencePlayer::CreateLevelSequencePlayer(InWorld, InSequence, Settings, OutActor);
+
+	Player->Initialize(InSequence, InWorld->PersistentLevel, Settings, CameraSettings);
+	Player->State.AssignSequence(MovieSceneSequenceID::Root, *InSequence, *Player);
+
+	FFrameRate Resolution = InSequence->GetMovieScene()->GetTickResolution();
+	TRange<FFrameNumber> SpecifiedRange = InRange.ToNative(Resolution);
+	Player->Play();
+	Player->PlayToFrame(SpecifiedRange.GetLowerBoundValue());
+
+	TArray<FSequencerBoundObjects> BoundObjects;
+
+	for (UObject* Object : InObjects)
+	{
+		TArray<FMovieSceneObjectBindingID> ObjectBindings = Player->GetObjectBindings(Object);
+		for (FMovieSceneObjectBindingID ObjectBinding : ObjectBindings)
+		{
+			FSequencerBindingProxy Binding(ObjectBinding.GetGuid(), Player->State.FindSequence(ObjectBinding.GetSequenceID()));
+			BoundObjects.Add(FSequencerBoundObjects(Binding, TArray<UObject*>({ Object })));
+		}
+	}
+
+	Player->Stop();
+	InWorld->DestroyActor(OutActor);
+	return BoundObjects;
+}
 
 bool USequencerToolsFunctionLibrary::ExportFBX(UWorld* World, ULevelSequence* Sequence, const TArray<FSequencerBindingProxy>& InBindings, UFbxExportOption* OverrideOptions, const FString& InFBXFileName)
 {
-	
-	
 	UnFbx::FFbxExporter* Exporter = UnFbx::FFbxExporter::GetInstance();
 	//Show the fbx export dialog options
 	Exporter->SetExportOptionsOverride(OverrideOptions);
@@ -127,10 +193,83 @@ bool USequencerToolsFunctionLibrary::ExportFBX(UWorld* World, ULevelSequence* Se
 	Player->Initialize(Sequence, World->PersistentLevel, Settings, CameraSettings);
 	Player->State.AssignSequence(MovieSceneSequenceID::Root, *Sequence, *Player);
 	FMovieSceneSequenceIDRef Template = MovieSceneSequenceID::Root;
+	bool bDidExport = false;
 	FMovieSceneSequenceTransform RootToLocalTransform;
-	bool bDidExport = MovieSceneToolHelpers::ExportFBX(World, MovieScene, Player, Bindings, NodeNameAdapter, Template, InFBXFileName, RootToLocalTransform);
+
+	FScopedTransaction ExportFBXTransaction(NSLOCTEXT("Sequencer", "ExportFBX", "Export FBX"));
+	{
+		FSpawnableRestoreState SpawnableRestoreState(MovieScene);
+
+		if (SpawnableRestoreState.bWasChanged)
+		{
+			// Evaluate at the beginning of the subscene time to ensure that spawnables are created before export
+			Player->Play();
+			Player->PlayToFrame(MovieScene::DiscreteInclusiveLower(MovieScene->GetPlaybackRange()));
+		}
+
+		bDidExport = MovieSceneToolHelpers::ExportFBX(World, MovieScene, Player, Bindings, NodeNameAdapter, Template, InFBXFileName, RootToLocalTransform);
+
+	}
+		
+	Player->Stop();
 	Exporter->SetExportOptionsOverride(nullptr);
+	World->DestroyActor(OutActor);
+	
 	return bDidExport;
+}
+
+static USkeletalMeshComponent* GetSkelMeshComponent(IMovieScenePlayer* Player, const FSequencerBindingProxy& Binding)
+{
+	FMovieSceneSequenceIDRef Template = MovieSceneSequenceID::Root;
+	for (TWeakObjectPtr<UObject> RuntimeObject : Player->FindBoundObjects(Binding.BindingID, Template))
+	{
+
+		if (AActor* Actor = Cast<AActor>(RuntimeObject.Get()))
+		{
+			for (UActorComponent* Component : Actor->GetComponents())
+			{
+				if (USkeletalMeshComponent* SkeletalMeshComp = Cast<USkeletalMeshComponent>(Component))
+				{
+					return SkeletalMeshComp;
+				}
+			}
+		}
+		else if (USkeletalMeshComponent* SkeletalMeshComponent = Cast<USkeletalMeshComponent>(RuntimeObject.Get()))
+		{
+			if (SkeletalMeshComponent->SkeletalMesh)
+			{
+				return SkeletalMeshComponent;
+			}
+		}
+	}
+	return nullptr;
+}
+
+bool USequencerToolsFunctionLibrary::ExportAnimSequence(UWorld* World, ULevelSequence*  Sequence,  UAnimSequence* AnimSequence, const FSequencerBindingProxy& Binding)
+{
+	UMovieScene* MovieScene = Sequence->GetMovieScene();
+	if (Binding.Sequence != Sequence || !AnimSequence)
+	{
+		return false;
+	}
+	INodeNameAdapter NodeNameAdapter;
+	ALevelSequenceActor* OutActor;
+	FMovieSceneSequencePlaybackSettings Settings;
+	FLevelSequenceCameraSettings CameraSettings;
+	FMovieSceneSequenceIDRef Template = MovieSceneSequenceID::Root;
+	FMovieSceneSequenceTransform RootToLocalTransform;
+	ULevelSequencePlayer* Player = ULevelSequencePlayer::CreateLevelSequencePlayer(World, Sequence, Settings, OutActor);
+	Player->Initialize(Sequence, World->PersistentLevel, Settings, CameraSettings);
+	Player->State.AssignSequence(MovieSceneSequenceID::Root, *Sequence, *Player);
+
+	bool bResult = false;
+	USkeletalMeshComponent* SkeletalMeshComp =  GetSkelMeshComponent(Player, Binding);
+	if (SkeletalMeshComp && SkeletalMeshComp->SkeletalMesh && SkeletalMeshComp->SkeletalMesh->Skeleton)
+	{
+		AnimSequence->SetSkeleton(SkeletalMeshComp->SkeletalMesh->Skeleton);
+		bResult = MovieSceneToolHelpers::ExportToAnimSequence(AnimSequence, MovieScene, Player, SkeletalMeshComp, Template, RootToLocalTransform);
+	}
+	return bResult;
 }
 
 
@@ -286,7 +425,7 @@ bool USequencerToolsFunctionLibrary::ImportFBX(UWorld* World, ULevelSequence* Se
 	ImportFBXCamera(FbxImporter, World, Sequence, MovieScene, Player, MovieSceneSequenceID::Root, ObjectBindingMap, bMatchByNameOnly,
 		ImportFBXSettings->bCreateCameras);
 
-	bool bValid = MovieSceneToolHelpers::ImportFBXIfReady(World, MovieScene, Player, ObjectBindingMap, ImportFBXSettings, InOutParams);
+	bool bValid = MovieSceneToolHelpers::ImportFBXIfReady(World, MovieScene, Player, MovieSceneSequenceID::Root, ObjectBindingMap, ImportFBXSettings, InOutParams);
 
 	return bValid;
 }

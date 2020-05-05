@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 #include "CoreMinimal.h"
@@ -17,6 +17,7 @@ namespace Audio {
 			SDL2,		// Linux
 			OpenSLES, 	// Android
 			Switch, 	// Switch
+			Other,      // Generic output type.
 			Null		// Unknown/not Supported
 		};
 	}

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MeshSimplification.h"
 #include "DynamicMeshAttributeSet.h"
@@ -605,7 +605,7 @@ ESimplificationResult TMeshSimplification<QuadricErrorType>::CollapseEdge(int ed
 	RuntimeDebugCheck(edgeID);
 
 	FEdgeConstraint constraint =
-		(Constraints == nullptr) ? FEdgeConstraint::Unconstrained() : Constraints->GetEdgeConstraint(edgeID);
+		(!Constraints) ? FEdgeConstraint::Unconstrained() : Constraints->GetEdgeConstraint(edgeID);
 	if (constraint.NoModifications())
 	{
 		return ESimplificationResult::Ignored_EdgeIsFullyConstrained;
@@ -628,7 +628,7 @@ ESimplificationResult TMeshSimplification<QuadricErrorType>::CollapseEdge(int ed
 	// look up 'other' verts c (from t0) and d (from t1, if it exists)
 	FIndex3i T0tv = Mesh->GetTriangle(t0);
 	int c = IndexUtil::FindTriOtherVtx(a, b, T0tv);
-	FIndex3i T1tv = (bIsBoundaryEdge) ? FDynamicMesh3::InvalidTriangle() : Mesh->GetTriangle(t1);
+	FIndex3i T1tv = (bIsBoundaryEdge) ? FDynamicMesh3::InvalidTriangle : Mesh->GetTriangle(t1);
 	int d = (bIsBoundaryEdge) ? FDynamicMesh3::InvalidID : IndexUtil::FindTriOtherVtx(a, b, T1tv);
 
 	FVector3d vA = Mesh->GetVertex(a);
@@ -717,7 +717,7 @@ ESimplificationResult TMeshSimplification<QuadricErrorType>::CollapseEdge(int ed
 	{
 		collapseToV = iKeep;
 		Mesh->SetVertex(iKeep, vNewPos);
-		if (Constraints != nullptr)
+		if (Constraints)
 		{
 			Constraints->ClearEdgeConstraint(edgeID);
 			Constraints->ClearEdgeConstraint(collapseInfo.RemovedEdges.A);
@@ -796,7 +796,7 @@ void TMeshSimplification<QuadricErrorType>::ProjectVertex(int vID, IProjectionTa
 template <typename QuadricErrorType>
 FVector3d TMeshSimplification<QuadricErrorType>::GetProjectedCollapsePosition(int vid, const FVector3d& vNewPos)
 {
-	if (Constraints != nullptr)
+	if (Constraints)
 	{
 		FVertexConstraint vc = Constraints->GetVertexConstraint(vid);
 		if (vc.Target != nullptr)

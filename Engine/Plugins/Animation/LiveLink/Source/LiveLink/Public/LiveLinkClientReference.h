@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,22 +7,9 @@
 class ILiveLinkClient;
 class IModularFeature;
 
-// References the live link client modular feature and handles add/remove
+/** References the live link client */
 struct LIVELINK_API FLiveLinkClientReference
 {
 public:
-
-	FLiveLinkClientReference();
-	~FLiveLinkClientReference();
-
-	ILiveLinkClient* GetClient() const { return LiveLinkClient; }
-
-private:
-	void InitClient();
-
-	// Handlers for modular features coming and going
-	void OnLiveLinkClientRegistered(const FName& Type, class IModularFeature* ModularFeature);
-	void OnLiveLinkClientUnregistered(const FName& Type, class IModularFeature* ModularFeature);
-
-	ILiveLinkClient* LiveLinkClient;
+	ILiveLinkClient* GetClient() const;
 };

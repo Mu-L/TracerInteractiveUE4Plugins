@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -229,6 +229,15 @@ public:
 
 	/** Entry point to denoise SkyLight diffuse indirect. */
 	virtual FDiffuseIndirectOutputs DenoiseSkyLight(
+		FRDGBuilder& GraphBuilder,
+		const FViewInfo& View,
+		FPreviousViewInfo* PreviousViewInfos,
+		const FSceneTextureParameters& SceneTextures,
+		const FDiffuseIndirectInputs& Inputs,
+		const FAmbientOcclusionRayTracingConfig Config) const = 0;
+
+	/** Entry point to denoise reflected SkyLight diffuse indirect. */
+	virtual FDiffuseIndirectOutputs DenoiseReflectedSkyLight(
 		FRDGBuilder& GraphBuilder,
 		const FViewInfo& View,
 		FPreviousViewInfo* PreviousViewInfos,

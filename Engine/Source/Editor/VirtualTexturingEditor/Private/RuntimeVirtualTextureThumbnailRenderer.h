@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -13,6 +13,6 @@ class URuntimeVirtualTextureThumbnailRenderer : public UThumbnailRenderer
 
 	//~ Begin UThumbnailRenderer Interface.
 	virtual bool CanVisualizeAsset(UObject* Object);
-	virtual void Draw(UObject* Object, int32 X, int32 Y, uint32 Width, uint32 Height, FRenderTarget*, FCanvas* Canvas) override;
+	virtual void Draw(UObject* Object, int32 X, int32 Y, uint32 Width, uint32 Height, FRenderTarget*, FCanvas* Canvas, bool bAdditionalViewFamily) override;
 	//~ EndUThumbnailRenderer Interface.
 };

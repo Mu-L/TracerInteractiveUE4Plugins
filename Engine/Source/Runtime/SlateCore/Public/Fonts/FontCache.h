@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -132,6 +132,9 @@ struct FShapedGlyphEntry
 	 * False if the glyph is invisible (eg, whitespace or a control code) and should skip drawing, but still include its advance amount.
 	 */
 	bool bIsVisible = false;
+	
+	/** Check whether this entry contains a valid glyph (non-zero, and not the SlateFontRendererUtils::InvalidSubChar glyph) */
+	SLATECORE_API bool HasValidGlyph() const;
 
 	/** Get any additional scale that should be applied when rendering this glyph */
 	SLATECORE_API float GetBitmapRenderScale() const;
@@ -625,7 +628,9 @@ public:
 	virtual int32 GetNumAtlasPages() const override;
 	virtual FSlateShaderResource* GetAtlasPageResource(const int32 InIndex) const override;
 	virtual bool IsAtlasPageResourceAlphaOnly(const int32 InIndex) const override;
-
+#if WITH_ATLAS_DEBUGGING
+	virtual FAtlasSlotInfo GetAtlasSlotInfoAtPosition(FIntPoint InPosition, int32 AtlasIndex) const override { return FAtlasSlotInfo(); }
+#endif
 	/** 
 	 * Performs text shaping on the given string using the given font info. Returns you the shaped text sequence to use for text rendering via FSlateDrawElement::MakeShapedText.
 	 * When using the version which takes a start point and length, the text outside of the given range won't be shaped, but will provide context information to allow the shaping to function correctly.
@@ -710,6 +715,11 @@ public:
 	void ReleaseResources();
 
 	/**
+	 * Event called after releasing the rendering resources in ReleaseResources
+	 */
+	FOnReleaseFontResources& OnReleaseResources() { return OnReleaseResourcesDelegate; }
+
+	/**
 	 * Get the texture resource for a font atlas at a given index
 	 * 
 	 * @param Index	The index of the texture 
@@ -792,6 +802,16 @@ public:
 	 * @return Whether or not the font used has kerning information
 	 */
 	bool HasKerning( const FFontData& InFontData ) const;
+
+	/**
+	 * Whether or not the specified character, within the specified font, can be loaded with the specified maximum font fallback level
+	 *
+	 * @param InFontData		Information about the font to load
+	 * @param InCodepoint		The codepoint being loaded
+	 * @param MaxFallbackLevel	The maximum fallback level to try for the font
+	 * @return					Whether or not the character can be loaded
+	 */
+	bool CanLoadCodepoint(const FFontData& InFontData, const UTF32CHAR InCodepoint, EFontFallback MaxFallbackLevel = EFontFallback::FF_NoFallback) const;
 
 	/**
 	 * Returns the font attributes for the specified font.
@@ -906,6 +926,9 @@ private:
 
 	/** Array of UFont objects that the font cache has been requested to flush. Since GC can happen while the loading screen is running, the request may be deferred until the next call to ConditionalFlushCache */
 	TArray<const UObject*> FontObjectsToFlush;
+
+	/** Called after releasing the rendering resources in ReleaseResources */
+	FOnReleaseFontResources OnReleaseResourcesDelegate;
 
 	ESlateTextureAtlasThreadId OwningThread;
 };

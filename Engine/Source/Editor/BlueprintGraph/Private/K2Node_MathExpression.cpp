@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "K2Node_MathExpression.h"
 #include "UObject/UnrealType.h"
@@ -853,9 +853,9 @@ private:
 			for (UFunction* TestFunction : *OperatorFunctions)
 			{
 				int32 ArgumentIndex = 0;
-				for (TFieldIterator<UProperty> PropIt(TestFunction); PropIt && (PropIt->PropertyFlags & CPF_Parm); ++PropIt)
+				for (TFieldIterator<FProperty> PropIt(TestFunction); PropIt && (PropIt->PropertyFlags & CPF_Parm); ++PropIt)
 				{
-					UProperty* Param = *PropIt;
+					FProperty* Param = *PropIt;
 					if (!Param->HasAnyPropertyFlags(CPF_ReturnParm))
 					{
 						if (ArgumentIndex < InputTypeList.Num())
@@ -948,7 +948,12 @@ private:
 			ADD_ALIAS("POWER")
 			ADD_ALIAS("POW")
 		FUNC_ALIASES_END
-				
+		
+		FUNC_ALIASES_BEGIN("FCEIL")
+			ADD_ALIAS("FCEIL")
+			ADD_ALIAS("CEIL")
+		FUNC_ALIASES_END
+
 		FUNC_ALIASES_BEGIN("ASin")
 			// have to add "ASin" back, because this overwrites the function's
 			// name and we still want it as a viable option
@@ -1214,7 +1219,7 @@ public:
 		bool bSuccess = true;//K2Schema->ArePinTypesCompatible(GetOutputType(), InputPin->PinType);
 		if (bSuccess)
 		{
-			InputPin->DefaultValue = DefaultValue;
+			K2Schema->TrySetDefaultValue(*InputPin, DefaultValue, false);
 		}
 		else 
 		{
@@ -1415,7 +1420,7 @@ public:
 				}
 			}
 
-			if (UProperty* VariableProperty = VariableReference.ResolveMember<UProperty>(TargetBlueprint))
+			if (FProperty* VariableProperty = VariableReference.ResolveMember<FProperty>(TargetBlueprint))
 			{
 				TSharedPtr<FCodeGenFragment_VariableGet> VariableGetFragment = GeneratePropertyFragment(ExpressionNode, VariableProperty, VariableReference, *ActiveMessageLog);
 				if (VariableGetFragment.IsValid())
@@ -1657,7 +1662,7 @@ private:
      * @param  VariableReference    Variable reference to assign to the node
      * @return An empty pointer if we failed to generate something, otherwise new variable-get fragment.
      */
-	TSharedPtr<FCodeGenFragment_VariableGet> GeneratePropertyFragment(FTokenWrapperNode& ExpressionContext, UProperty* VariableProperty, FMemberReference& MemberReference, FCompilerResultsLog& MessageLog)
+	TSharedPtr<FCodeGenFragment_VariableGet> GeneratePropertyFragment(FTokenWrapperNode& ExpressionContext, FProperty* VariableProperty, FMemberReference& MemberReference, FCompilerResultsLog& MessageLog)
 	{
 		check(ExpressionContext.Token.TokenType == FBasicToken::TOKEN_Identifier || ExpressionContext.Token.TokenType == FBasicToken::TOKEN_Guid);
 		check(VariableProperty != nullptr);
@@ -1778,7 +1783,7 @@ private:
 		}
 		else if (UFunction* MatchingFunction = OperatorLookup.FindMatchingFunction(FunctionName, TypeList))
 		{
-			UProperty* ReturnProperty = MatchingFunction->GetReturnProperty();
+			FProperty* ReturnProperty = MatchingFunction->GetReturnProperty();
 			if (ReturnProperty == nullptr)
 			{
 				FText ErrorText = FText::Format(LOCTEXT("NoReturnTypeError", "The '{0}' function returns nothing, it cannot be used in the expression: '@@'"),

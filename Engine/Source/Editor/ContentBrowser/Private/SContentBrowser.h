@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -114,6 +114,9 @@ public:
 	/** Sets the content browser to show the specified paths */
 	void SetSelectedPaths(const TArray<FString>& FolderPaths, bool bNeedsRefresh = false);
 
+	/** Gets the current path if one exists, otherwise returns empty string. */
+	FString GetCurrentPath() const;
+
 	/**
 	 * Forces the content browser to show plugin content
 	 *
@@ -172,9 +175,6 @@ private:
 
 	/** Handler for when a path has been selected in the favorite path view */
 	void FavoritePathSelected(const FString& FolderPath);
-
-	/** Gets the current path if one exists, otherwise returns empty string. */
-	FString GetCurrentPath() const;
 
 	/** Get the asset tree context menu */
 	TSharedRef<FExtender> GetPathContextMenuExtender(const TArray<FString>& SelectedPaths) const;
@@ -241,6 +241,9 @@ private:
 	/** Handle creating a context menu for the "Add New" button */
 	TSharedRef<SWidget> MakeAddNewContextMenu(bool bShowGetContent, bool bShowImport);
 
+	/** Handle populating a context menu for the "Add New" button */
+	void PopulateAddNewContextMenu(class UToolMenu* Menu, bool bShowGetContent, bool bShowImport, const int32 NumAssetPaths);
+
 	/** Called to work out whether the import button should be enabled */
 	bool IsAddNewEnabled() const;
 
@@ -292,6 +295,9 @@ private:
 	/** Gets the visibility of the path expander button */
 	EVisibility GetPathExpanderVisibility() const;
 
+	/** Gets the visibility of the source switch button */
+	EVisibility GetSourcesSwitcherVisibility() const;
+
 	/** Gets the icon used on the source switch button */
 	const FSlateBrush* GetSourcesSwitcherIcon() const;
 
@@ -303,6 +309,9 @@ private:
 
 	/** Gets the source search hint text */
 	FText GetSourcesSearchHintText() const;
+
+	/** Called to handle the Content Browser settings changing */
+	void OnContentBrowserSettingsChanged(FName PropertyName);
 
 	/** Handler for clicking the history back button */
 	FReply BackClicked();
@@ -427,6 +436,9 @@ private:
 	/** Delegate called when generating the context menu for a folder */
 	TSharedPtr<SWidget> GetFolderContextMenu(const TArray<FString>& SelectedPaths, FContentBrowserMenuExtender_SelectedPaths InMenuExtender, FOnCreateNewFolder OnCreateNewFolder, bool bPathView);
 
+	/** Populate the context menu for a folder */
+	void PopulateFolderContextMenu(UToolMenu* Menu);
+
 	/** Delegate called to get the current selection state */
 	void GetSelectionState(TArray<FAssetData>& SelectedAssets, TArray<FString>& SelectedPaths);
 
@@ -441,6 +453,9 @@ private:
 
 	/** Gets the visibility of the favorites view */
 	EVisibility GetFavoriteFolderVisibility() const;
+
+	/** Get the visibility of the docked collections view */
+	EVisibility GetDockedCollectionsVisibility() const;
 
 	/** Toggles the favorite status of an array of folders*/
 	void ToggleFolderFavorite(const TArray<FString>& FolderPaths);

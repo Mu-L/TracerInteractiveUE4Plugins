@@ -1,8 +1,7 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
-#include "Trace/Trace.h"
 #include "Trace/Analyzer.h"
 #include "Templates/SharedPointer.h"
 #include "ProfilingDebugging/MiscTrace.h"
@@ -15,6 +14,7 @@ namespace Trace
 	class FBookmarkProvider;
 	class FLogProvider;
 	class FFrameProvider;
+	class FChannelProvider;
 }
 
 class FMiscTraceAnalyzer
@@ -25,9 +25,12 @@ public:
 					   Trace::FThreadProvider& ThreadProvider,
 					   Trace::FBookmarkProvider& BookmarkProvider,
 					   Trace::FLogProvider& LogProvider,
-					   Trace::FFrameProvider& FrameProvider);
+					   Trace::FFrameProvider& FrameProvider, 
+					   Trace::FChannelProvider& ChannelProvider);
 	virtual void OnAnalysisBegin(const FOnAnalysisContext& Context) override;
 	virtual bool OnEvent(uint16 RouteId, const FOnEventContext& Context) override;
+	virtual void OnChannelAnnounce(const ANSICHAR* ChannelName, uint32 ChannelId) override;
+	virtual void OnChannelToggle(uint32 ChannelId, bool bEnabled) override;
 
 private:
 	enum : uint16
@@ -59,6 +62,7 @@ private:
 	Trace::FBookmarkProvider& BookmarkProvider;
 	Trace::FLogProvider& LogProvider;
 	Trace::FFrameProvider& FrameProvider;
+	Trace::FChannelProvider& ChannelProvider;
 	TMap<uint32, TSharedRef<FThreadState>> ThreadStateMap;
 	uint64 LastFrameCycle[TraceFrameType_Count] = { 0, 0 };
 };

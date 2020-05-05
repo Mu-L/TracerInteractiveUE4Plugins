@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithImporterModule.h"
 
@@ -16,14 +16,10 @@
 #include "DatasmithScene.h"
 #include "DatasmithStaticMeshImporter.h"
 #include "DatasmithUtils.h"
-#include "MasterMaterials/DatasmithC4DMaterialSelector.h"
-#include "MasterMaterials/DatasmithCityEngineMaterialSelector.h"
-#include "MasterMaterials/DatasmithMasterMaterialManager.h"
-#include "MasterMaterials/DatasmithRevitMaterialSelector.h"
-#include "MasterMaterials/DatasmithSketchupMaterialSelector.h"
 #include "ObjectTemplates/DatasmithObjectTemplate.h"
 #include "ObjectTemplates/DatasmithStaticMeshTemplate.h"
 #include "UI/DatasmithUIManager.h"
+#include "UI/DatasmithConsumerDetails.h"
 
 #include "AssetToolsModule.h"
 #include "ContentBrowserDelegates.h"
@@ -31,7 +27,7 @@
 #include "ContentBrowserModule.h"
 #include "DataprepAssetInterface.h"
 #include "DataprepAssetUserData.h"
-#include "DataprepCoreLibrary.h"
+#include "DataprepCoreUtils.h"
 #include "Editor.h"
 #include "EditorFramework/AssetImportData.h"
 #include "EditorStyleSet.h"
@@ -64,17 +60,10 @@ class FDatasmithImporterModule : public IDatasmithImporterModule
 public:
 	virtual void StartupModule() override
 	{
-		FDatasmithMasterMaterialManager::Create();
-
-		FDatasmithMasterMaterialManager::Get().RegisterSelector(TEXT("C4D"), MakeShared< FDatasmithC4DMaterialSelector >());
-		FDatasmithMasterMaterialManager::Get().RegisterSelector(TEXT("Revit"), MakeShared< FDatasmithRevitMaterialSelector >());
-		FDatasmithMasterMaterialManager::Get().RegisterSelector( TEXT("SketchUp"), MakeShared< FDatasmithSketchUpMaterialSelector >() );
-		FDatasmithMasterMaterialManager::Get().RegisterSelector( TEXT("CityEngine"), MakeShared< FDatasmithCityEngineMaterialSelector >() );
-
 		UDatasmithFileProducer::LoadDefaultSettings();
 
 		// Disable any UI feature if running in command mode
-		if (!IsRunningCommandlet())
+		if (UToolMenus::IsToolMenuUIEnabled())
 		{
 			FDatasmithUIManager::Initialize();
 
@@ -92,6 +81,7 @@ public:
 			FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked< FPropertyEditorModule >( TEXT("PropertyEditor") );
 			PropertyModule.RegisterCustomClassLayout( TEXT("DatasmithFileProducer"), FOnGetDetailCustomizationInstance::CreateStatic( &FDatasmithFileProducerDetails::MakeDetails ) );
 			PropertyModule.RegisterCustomClassLayout( TEXT("DatasmithDirProducer"), FOnGetDetailCustomizationInstance::CreateStatic( &FDatasmithDirProducerDetails::MakeDetails ) );
+			PropertyModule.RegisterCustomClassLayout( TEXT("DatasmithConsumer"), FOnGetDetailCustomizationInstance::CreateStatic( &FDatasmithConsumerDetails::MakeDetails ) );
 
 			AddDataprepMenuEntryForDatasmithSceneAsset();
 		}
@@ -100,7 +90,7 @@ public:
 	virtual void ShutdownModule() override
 	{
 		// Disable any UI feature if running in command mode
-		if (!IsRunningCommandlet())
+		if (UToolMenus::IsToolMenuUIEnabled())
 		{
 			RemoveDataprepMenuEntryForDatasmithSceneAsset();
 
@@ -118,11 +108,9 @@ public:
 			// Register the details customizer
 			FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked< FPropertyEditorModule >( TEXT("PropertyEditor") );
 			PropertyModule.UnregisterCustomClassLayout( TEXT("DatasmithFileProducer") );
+			PropertyModule.UnregisterCustomClassLayout( TEXT("DatasmithDirProducer") );
+			PropertyModule.UnregisterCustomClassLayout( TEXT("DatasmithConsumer") );
 		}
-
-		FDatasmithMasterMaterialManager::Get().UnregisterSelector( TEXT("CityEngine") );
-
-		FDatasmithMasterMaterialManager::Destroy();
 	}
 
 	virtual void ResetOverrides( UObject* Object ) override
@@ -252,7 +240,9 @@ void FDatasmithImporterModule::AddDataprepMenuEntryForDatasmithSceneAsset()
 						{
 							for ( const TStrongObjectPtr<UDataprepAssetInterface>& DataprepAssetInterfacePtr : DataprepAssetInterfacesPtr )
 							{
-								UDataprepCoreLibrary::ExecuteWithReporting( DataprepAssetInterfacePtr.Get() );
+								FDataprepCoreUtils::ExecuteDataprep( DataprepAssetInterfacePtr.Get()
+									, MakeShared<FDataprepCoreUtils::FDataprepLogger>()
+									, MakeShared<FDataprepCoreUtils::FDataprepProgressUIReporter>() );
 							}
 						});
 

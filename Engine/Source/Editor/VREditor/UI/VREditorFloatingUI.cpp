@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "VREditorFloatingUI.h"
 #include "VREditorUISystem.h"
@@ -202,8 +202,10 @@ void AVREditorFloatingUI::TickManually(float DeltaTime)
 
 void AVREditorFloatingUI::Destroyed()
 {
-	CleanupWidgetReferences();
-
+	if (!IsPendingKill())
+	{
+		CleanupWidgetReferences();
+	}
 
 	Super::Destroyed();
 }
@@ -218,7 +220,10 @@ void AVREditorFloatingUI::CleanupWidgetReferences()
 		WidgetComponent = nullptr;
 	}
 
-	this->SlateWidget = nullptr;
+	if (SlateWidget.IsValid())
+	{
+		SlateWidget.Reset();
+	}
 
 	// @todo vreditor unreal: UMG has a bug that prevents you from re-using the user widget for a new widget component
 	// after a previous widget component that was using it was destroyed

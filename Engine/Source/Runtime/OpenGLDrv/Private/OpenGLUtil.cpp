@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	OpenGLUtil.h: OpenGL RHI utility implementation.
@@ -29,6 +29,26 @@ void VerifyOpenGLResult(GLenum ErrorCode, const TCHAR* Msg1, const TCHAR* Msg2, 
 		UE_LOG(LogRHI,Fatal,TEXT("%s(%u): %s%s failed with error %s (0x%x)"),
 			Filename,Line,Msg1,Msg2,ErrorStrings[ErrorIndex],ErrorCode);
 	}
+}
+
+GLenum GetOpenGLCubeFace(ECubeFace Face)
+{
+	switch (Face)
+	{
+	case CubeFace_PosX:
+	default:
+		return GL_TEXTURE_CUBE_MAP_POSITIVE_X;
+	case CubeFace_NegX:
+		return GL_TEXTURE_CUBE_MAP_NEGATIVE_X;
+	case CubeFace_PosY:
+		return GL_TEXTURE_CUBE_MAP_POSITIVE_Y;
+	case CubeFace_NegY:
+		return GL_TEXTURE_CUBE_MAP_NEGATIVE_Y;
+	case CubeFace_PosZ:
+		return GL_TEXTURE_CUBE_MAP_POSITIVE_Z;
+	case CubeFace_NegZ:
+		return GL_TEXTURE_CUBE_MAP_NEGATIVE_Z;
+	};
 }
 
 //

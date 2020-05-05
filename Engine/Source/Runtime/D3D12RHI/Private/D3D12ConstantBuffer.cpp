@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 D3D12ConstantBuffer.cpp: D3D Constant buffer RHI implementation.
@@ -11,13 +11,13 @@ DEFINE_STAT(STAT_D3D12GlobalConstantBufferUpdateTime);
 // New circular buffer system for faster constant uploads.  Avoids CopyResource and speeds things up considerably
 FD3D12ConstantBuffer::FD3D12ConstantBuffer(FD3D12Device* InParent, FD3D12FastConstantAllocator& InAllocator) :
 	FD3D12DeviceChild(InParent),
+#if USE_STATIC_ROOT_SIGNATURE
+	View(nullptr),
+#endif
 	CurrentUpdateSize(0),
 	TotalUpdateSize(0),
 	bIsDirty(false),
 	Allocator(InAllocator)
-#if USE_STATIC_ROOT_SIGNATURE
-	, View(nullptr)
-#endif
 {
 	FMemory::Memset(ShadowData, 0);
 #if USE_STATIC_ROOT_SIGNATURE

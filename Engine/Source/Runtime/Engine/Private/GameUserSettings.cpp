@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GameFramework/GameUserSettings.h"
 #include "HAL/FileManager.h"
@@ -16,6 +16,7 @@
 #include "Sound/SoundCue.h"
 #include "AudioDevice.h"
 #include "DynamicResolutionState.h"
+#include "HAL/PlatformFramePacer.h"
 
 extern EWindowMode::Type GetWindowModeType(EWindowMode::Type WindowMode);
 
@@ -447,7 +448,7 @@ void UGameUserSettings::ApplyNonResolutionSettings()
 		Scalability::SetQualityLevels(ScalabilityQuality);
 	}
 
-	FAudioDevice* AudioDevice = GEngine->GetMainAudioDevice();
+	FAudioDeviceHandle AudioDevice = GEngine->GetMainAudioDevice();
 	if (AudioDevice)
 	{
 		FAudioQualitySettings AudioSettings = AudioDevice->GetQualityLevelSettings();
@@ -595,7 +596,7 @@ void UGameUserSettings::PreloadResolutionSettings()
 		GConfig->GetBool(*GameUserSettingsCategory, TEXT("bUseHDRDisplayOutput"), bUseHDR, GGameUserSettingsIni);
 	}
 
-#if !PLATFORM_XBOXONE
+#if !PLATFORM_MANAGES_HDR_SETTING
 	if ( IsHDRAllowed() )
 	{
 		// Set the user-preference HDR switch
@@ -639,6 +640,11 @@ int32 UGameUserSettings::GetSyncInterval()
 	{
 		return 0;
 	}
+}
+
+int32 UGameUserSettings::GetFramePace()
+{
+	return FPlatformRHIFramePacer::GetFramePace();
 }
 
 void UGameUserSettings::ResetToCurrentSettings()
@@ -913,7 +919,7 @@ void UGameUserSettings::EnableHDRDisplayOutput(bool bEnable, int32 DisplayNits /
 		}
 
 		// Update final requested state for saved config
-#if !PLATFORM_PS4 && !PLATFORM_XBOXONE
+#if !PLATFORM_PS4 && !PLATFORM_USES_FIXED_HDR_SETTING
 		// Do not override the user setting on console (we rely on the OS setting)
 		bUseHDRDisplayOutput = bEnable;
 #endif

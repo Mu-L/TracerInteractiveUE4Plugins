@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "Misc/Guid.h"
@@ -31,9 +31,10 @@
 #include "Engine/InheritableComponentHandler.h"
 #include "Engine/DynamicBlueprintBinding.h"
 #include "Blueprint/BlueprintSupport.h"
+#include "Engine/CollisionProfile.h"
 
 void FEmitDefaultValueHelper::OuterGenerate(FEmitterLocalContext& Context
-	, const UProperty* Property
+	, const FProperty* Property
 	, const FString& OuterPath
 	, const uint8* DataContainer
 	, const uint8* OptionalDefaultDataContainer
@@ -54,14 +55,14 @@ void FEmitDefaultValueHelper::OuterGenerate(FEmitterLocalContext& Context
 		return;
 	}
 
-	if (Property->IsA<UDelegateProperty>() || Property->IsA<UMulticastDelegateProperty>())
+	if (Property->IsA<FDelegateProperty>() || Property->IsA<FMulticastDelegateProperty>())
 	{
 		UE_LOG(LogK2Compiler, Verbose, TEXT("FEmitDefaultValueHelper delegate property: %s"), *Property->GetPathName());
 		return;
 	}
 
 	// Check if this is an object property and cache the result.
-	const UObjectProperty* ObjectProperty = Cast<UObjectProperty>(Property);
+	const FObjectProperty* ObjectProperty = CastField<FObjectProperty>(Property);
 
 	for (int32 ArrayIndex = 0; ArrayIndex < Property->ArrayDim; ++ArrayIndex)
 	{
@@ -81,8 +82,8 @@ void FEmitDefaultValueHelper::OuterGenerate(FEmitterLocalContext& Context
 			if (PropertyOwnerAsBPGC && !Context.Dependencies.WillClassBeConverted(PropertyOwnerAsBPGC))
 			{
 				ensure(EPropertyAccessOperator::None != AccessOperator);
-				const FString OperatorStr = (EPropertyAccessOperator::Dot == AccessOperator) ? TEXT("&") : TEXT("");
-				const FString ContainerStr = (EPropertyAccessOperator::None == AccessOperator) ? TEXT("this") : FString::Printf(TEXT("%s(%s)"), *OperatorStr, *OuterPath);
+				const TCHAR* OperatorStr = (EPropertyAccessOperator::Dot == AccessOperator) ? TEXT("&") : TEXT("");
+				const FString ContainerStr = (EPropertyAccessOperator::None == AccessOperator) ? TEXT("this") : FString::Printf(TEXT("%s(%s)"), OperatorStr, *OuterPath);
 
 				PathToMember = FString::Printf(TEXT("FUnconvertedWrapper__%s(%s).GetRef__%s()"), *FEmitHelper::GetCppName(PropertyOwnerAsBPGC), *ContainerStr
 					, *UnicodeToCPPIdentifier(Property->GetName(), false, nullptr));
@@ -90,19 +91,19 @@ void FEmitDefaultValueHelper::OuterGenerate(FEmitterLocalContext& Context
 			}
 			else if (bInaccessibleScriptStructProperty || Property->HasAnyPropertyFlags(CPF_NativeAccessSpecifierPrivate) || (!bAllowProtected && Property->HasAnyPropertyFlags(CPF_NativeAccessSpecifierProtected)))
 			{
-				const UBoolProperty* BoolProperty = Cast<const UBoolProperty>(Property);
+				const FBoolProperty* BoolProperty = CastField<const FBoolProperty>(Property);
 				const bool bBietfield = BoolProperty && !BoolProperty->IsNativeBool();
-				const FString OperatorStr = (EPropertyAccessOperator::Dot == AccessOperator) ? TEXT("&") : TEXT("");
-				const FString ContainerStr = (EPropertyAccessOperator::None == AccessOperator) ? TEXT("this") : OuterPath;
+				const TCHAR* OperatorStr = (EPropertyAccessOperator::Dot == AccessOperator) ? TEXT("&") : TEXT("");
+				const TCHAR* ContainerStr = (EPropertyAccessOperator::None == AccessOperator) ? TEXT("this") : *OuterPath;
 				if (bBietfield)
 				{
 					const FString PropertyLocalName = FEmitHelper::GenerateGetPropertyByName(Context, Property);
 					const FString ValueStr = Context.ExportTextItem(Property, Property->ContainerPtrToValuePtr<uint8>(DataContainer, ArrayIndex));
-					Context.AddLine(FString::Printf(TEXT("(((UBoolProperty*)%s)->%s(%s(%s), %s, %d));")
+					Context.AddLine(FString::Printf(TEXT("(((FBoolProperty*)%s)->%s(%s(%s), %s, %d));")
 						, *PropertyLocalName
-						, GET_FUNCTION_NAME_STRING_CHECKED(UBoolProperty, SetPropertyValue_InContainer)
-						, *OperatorStr
-						, *ContainerStr
+						, GET_FUNCTION_NAME_STRING_CHECKED(FBoolProperty, SetPropertyValue_InContainer)
+						, OperatorStr
+						, ContainerStr
 						, *ValueStr
 						, ArrayIndex));
 					continue;
@@ -125,11 +126,11 @@ void FEmitDefaultValueHelper::OuterGenerate(FEmitterLocalContext& Context
 			}
 			else
 			{
-				const FString AccessOperatorStr = (EPropertyAccessOperator::None == AccessOperator) ? TEXT("")
+				const TCHAR* AccessOperatorStr = (EPropertyAccessOperator::None == AccessOperator) ? TEXT("")
 					: ((EPropertyAccessOperator::Pointer == AccessOperator) ? TEXT("->") : TEXT("."));
 				const bool bStaticArray = (Property->ArrayDim > 1);
 				const FString ArrayPost = bStaticArray ? FString::Printf(TEXT("[%d]"), ArrayIndex) : TEXT("");
-				PathToMember = FString::Printf(TEXT("%s%s%s%s"), *OuterPath, *AccessOperatorStr, *FEmitHelper::GetCppName(Property), *ArrayPost);
+				PathToMember = FString::Printf(TEXT("%s%s%s%s"), *OuterPath, AccessOperatorStr, *FEmitHelper::GetCppName(Property), *ArrayPost);
 			}
 
 			const uint8* ValuePtr = Property->ContainerPtrToValuePtr<uint8>(DataContainer, ArrayIndex);
@@ -156,7 +157,7 @@ void FEmitDefaultValueHelper::GenerateUserStructConstructor(const UUserDefinedSt
 		TGuardValue<FCodeText*> OriginalDefaultTarget(Context.DefaultTarget, &Context.Body);
 		FStructOnScope StructData(Struct);
 		FUserStructOnScopeIgnoreDefaults RawDefaultStructOnScope(Struct);
-		for (const UProperty* Property : TFieldRange<const UProperty>(Struct))
+		for (const FProperty* Property : TFieldRange<const FProperty>(Struct))
 		{
 			// Since UDS types are converted to native USTRUCT, all POD fields must be initialized in the ctor, just as with "regular" native USTRUCT types.
 			const bool bForceInit = Property->HasAnyPropertyFlags(CPF_IsPlainOldData);
@@ -168,7 +169,7 @@ void FEmitDefaultValueHelper::GenerateUserStructConstructor(const UUserDefinedSt
 	Context.Body.AddLine(TEXT("}"));
 }
 
-void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const UProperty* Property, const FString& PathToMember, const uint8* ValuePtr, const uint8* DefaultValuePtr, EPropertyGenerationControlFlags ControlFlags)
+void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const FProperty* Property, const FString& PathToMember, const uint8* ValuePtr, const uint8* DefaultValuePtr, EPropertyGenerationControlFlags ControlFlags)
 {
 	const bool bWithoutFirstConstructionLine = !(ControlFlags & EPropertyGenerationControlFlags::IncludeFirstConstructionLine);
 
@@ -186,13 +187,13 @@ void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const
 	};
 	auto InlineValueData = [](UScriptStruct* OuterStruct, const uint8* LocalValuePtr) -> const uint8*{ return FBackendHelperUMG::InlineValueData(OuterStruct, LocalValuePtr); };
 	auto IsTInlineStruct = [](UScriptStruct* OuterStruct) -> bool { return FBackendHelperUMG::IsTInlineStruct(OuterStruct); };
-	auto OneLineConstruction = [&](FEmitterLocalContext& LocalContext, const UProperty* LocalProperty, const uint8* LocalValuePtr, FString& OutSingleLine, bool bGenerateEmptyStructConstructor) -> bool
+	auto OneLineConstruction = [&](FEmitterLocalContext& LocalContext, const FProperty* LocalProperty, const uint8* LocalValuePtr, FString& OutSingleLine, bool bGenerateEmptyStructConstructor) -> bool
 	{
 		bool bComplete = true;
 		FString ValueStr = HandleSpecialTypes(LocalContext, LocalProperty, LocalValuePtr);
 		if (ValueStr.IsEmpty())
 		{
-			const UStructProperty* StructProperty = Cast<const UStructProperty>(LocalProperty);
+			const FStructProperty* StructProperty = CastField<const FStructProperty>(LocalProperty);
 			UScriptStruct* InnerInlineStruct = InlineValueStruct(StructProperty ? StructProperty->Struct : nullptr, LocalValuePtr);
 			if (StructProperty && StructProperty->Struct && InnerInlineStruct)
 			{
@@ -234,13 +235,13 @@ void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const
 			Context.AddLine(FString::Printf(TEXT("%s = %s;"), *PathToMember, *ValueStr));
 		}
 		// array initialization "array_var = TArray<..>()" is complete, but it still needs items.
-		if (bComplete && !Property->IsA<UArrayProperty>() && !Property->IsA<USetProperty>() && !Property->IsA<UMapProperty>())
+		if (bComplete && !Property->IsA<FArrayProperty>() && !Property->IsA<FSetProperty>() && !Property->IsA<FMapProperty>())
 		{
 			return;
 		}
 	}
 
-	if (const UStructProperty* StructProperty = Cast<const UStructProperty>(Property))
+	if (const FStructProperty* StructProperty = CastField<const FStructProperty>(Property))
 	{
 		check(StructProperty->Struct);
 		UScriptStruct* InnerInlineStruct = InlineValueStruct(StructProperty->Struct, ValuePtr);
@@ -253,7 +254,7 @@ void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const
 
 		const FString ActualPathToMember = InnerInlineStruct ? FString::Printf(TEXT("((%s*)%s.GetPtr())"), *FEmitHelper::GetCppName(InnerInlineStruct), *PathToMember) : PathToMember;
 
-		for (const UProperty* LocalProperty : TFieldRange<const UProperty>(ActualStruct))
+		for (const FProperty* LocalProperty : TFieldRange<const FProperty>(ActualStruct))
 		{
 			OuterGenerate(Context, LocalProperty, ActualPathToMember, ActualValuePtr
 				, (ActualDefaultValuePtr ? ActualDefaultValuePtr : DefaultStructOnScope.GetStructMemory())
@@ -269,7 +270,7 @@ void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const
 		Custom,
 	};
 
-	auto StructConstruction = [IsTInlineStruct](const UStructProperty* InnerStructProperty) -> EStructConstructionType
+	auto StructConstruction = [IsTInlineStruct](const FStructProperty* InnerStructProperty) -> EStructConstructionType
 	{
 		//TODO: if the struct has a custom ExportTextItem, that support PPF_ExportCpp, then ELocalConstructionType::Custom should be returned
 
@@ -287,7 +288,7 @@ void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const
 		return bInitializeWithoutScriptStruct ? EStructConstructionType::EmptyConstructor : EStructConstructionType::Custom;
 	};
 
-	auto CreateElementSimple = [OneLineConstruction, ControlFlags](FEmitterLocalContext& LocalContext, const UProperty* LocalProperty, const uint8* LocalValuePtr) -> FString
+	auto CreateElementSimple = [OneLineConstruction, ControlFlags](FEmitterLocalContext& LocalContext, const FProperty* LocalProperty, const uint8* LocalValuePtr) -> FString
 	{
 		FString ValueStr;
 		const bool bComplete = OneLineConstruction(LocalContext, LocalProperty, LocalValuePtr, ValueStr, true);
@@ -302,13 +303,13 @@ void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const
 		return ValueStr;
 	};
 
-	if (const UArrayProperty* ArrayProperty = Cast<const UArrayProperty>(Property))
+	if (const FArrayProperty* ArrayProperty = CastField<const FArrayProperty>(Property))
 	{
 		check(ArrayProperty->Inner);
 		FScriptArrayHelper ScriptArrayHelper(ArrayProperty, ValuePtr);
 		if (ScriptArrayHelper.Num())
 		{
-			const UStructProperty* StructProperty = Cast<const UStructProperty>(ArrayProperty->Inner);
+			const FStructProperty* StructProperty = CastField<const FStructProperty>(ArrayProperty->Inner);
 			const EStructConstructionType Construction = StructConstruction(StructProperty);
 			if(EStructConstructionType::InitializeStruct == Construction)
 			{
@@ -349,7 +350,7 @@ void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const
 			}
 		}
 	}
-	else if(const USetProperty* SetProperty = Cast<const USetProperty>(Property))
+	else if(const FSetProperty* SetProperty = CastField<const FSetProperty>(Property))
 	{
 		check(SetProperty->ElementProp);
 		FScriptSetHelper ScriptSetHelper(SetProperty, ValuePtr);
@@ -370,7 +371,7 @@ void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const
 				}
 			};
 
-			const UStructProperty* StructProperty = Cast<const UStructProperty>(SetProperty->ElementProp);
+			const FStructProperty* StructProperty = CastField<const FStructProperty>(SetProperty->ElementProp);
 			const EStructConstructionType Construction = StructConstruction(StructProperty);
 			if (EStructConstructionType::InitializeStruct == Construction)
 			{
@@ -379,7 +380,7 @@ void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const
 				const FString SetHelperName = Context.GenerateUniqueLocalName();
 				const FString PropertyLocalName = FEmitHelper::GenerateGetPropertyByName(Context, SetProperty);
 				const FString StructCppName = FEmitHelper::GetCppName(InnerStruct);
-				Context.AddLine(FString::Printf(TEXT("FScriptSetHelper %s(CastChecked<USetProperty>(%s), &%s);"), *SetHelperName, *PropertyLocalName, *PathToMember));
+				Context.AddLine(FString::Printf(TEXT("FScriptSetHelper %s(CastFieldChecked<FSetProperty>(%s), &%s);"), *SetHelperName, *PropertyLocalName, *PathToMember));
 				ForEachElementInSet([&](int32 Index)
 				{
 					const FString ElementName = Context.GenerateUniqueLocalName();
@@ -399,12 +400,12 @@ void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const
 			}
 		}
 	}
-	else if(const UMapProperty* MapProperty = Cast<const UMapProperty>(Property))
+	else if(const FMapProperty* MapProperty = CastField<const FMapProperty>(Property))
 	{
 		check(MapProperty->KeyProp && MapProperty->ValueProp);
 		FScriptMapHelper ScriptMapHelper(MapProperty, ValuePtr);
 		if (ScriptMapHelper.Num())
-		{
+		{	
 			auto ForEachPairInMap = [&](TFunctionRef<void(int32)> Process)
 			{
 				int32 Size = ScriptMapHelper.Num();
@@ -420,15 +421,15 @@ void FEmitDefaultValueHelper::InnerGenerate(FEmitterLocalContext& Context, const
 
 			Context.AddLine(FString::Printf(TEXT("%s.Reserve(%d);"), *PathToMember, ScriptMapHelper.Num()));
 
-			const UStructProperty* KeyStructProperty = Cast<const UStructProperty>(MapProperty->KeyProp);
+			const FStructProperty* KeyStructProperty = CastField<const FStructProperty>(MapProperty->KeyProp);
 			const EStructConstructionType KeyConstruction = StructConstruction(KeyStructProperty);
-			const UStructProperty* ValueStructProperty = Cast<const UStructProperty>(MapProperty->ValueProp);
+			const FStructProperty* ValueStructProperty = CastField<const FStructProperty>(MapProperty->ValueProp);
 			const EStructConstructionType ValueConstruction = StructConstruction(ValueStructProperty);
 			if ((EStructConstructionType::InitializeStruct == KeyConstruction) || (EStructConstructionType::InitializeStruct == ValueConstruction))
 			{
 				const FString MapHelperName = Context.GenerateUniqueLocalName();
 				const FString PropertyLocalName = FEmitHelper::GenerateGetPropertyByName(Context, MapProperty);
-				Context.AddLine(FString::Printf(TEXT("FScriptMapHelper %s(CastChecked<UMapProperty>(%s), &%s);"), *MapHelperName, *PropertyLocalName, *PathToMember));
+				Context.AddLine(FString::Printf(TEXT("FScriptMapHelper %s(CastFieldChecked<FMapProperty>(%s), &%s);"), *MapHelperName, *PropertyLocalName, *PathToMember));
 				const uint32 ElementTypeCppExportFlags = EPropertyExportCPPFlags::CPPF_CustomTypeName | EPropertyExportCPPFlags::CPPF_BlueprintCppBackend | EPropertyExportCPPFlags::CPPF_NoConst;
 				const FString ElementTypeStr = Context.ExportCppDeclaration(MapProperty, EExportedDeclaration::Member, ElementTypeCppExportFlags, FEmitterLocalContext::EPropertyNameInDeclaration::Skip).TrimEnd()
 					+ TEXT("::ElementType");
@@ -727,97 +728,6 @@ bool FEmitDefaultValueHelper::SpecialStructureConstructor(const UStruct* Struct,
 	return false;
 }
 
-FString FEmitDefaultValueHelper::HandleSpecialTypes(FEmitterLocalContext& Context, const UProperty* Property, const uint8* ValuePtr)
-{
-	auto HandleObjectValueLambda = [&Context, Property, ValuePtr](UObject* Object, UClass* Class) -> FString
-	{
-		if (Object)
-		{
-			const bool bIsDefaultSubobject = Object->IsDefaultSubobject() && Object->HasAllFlags(RF_DefaultSubObject);
-			const bool bIsInstancedReference = Property->HasAnyPropertyFlags(CPF_InstancedReference);
-
-			UClass* ObjectClassToUse = Context.GetFirstNativeOrConvertedClass(Class);
-			{
-				const FString MappedObject = Context.FindGloballyMappedObject(Object, ObjectClassToUse);
-				if (!MappedObject.IsEmpty())
-				{
-					return MappedObject;
-				}
-			}
-
-			UClass* BPGC = Context.GetCurrentlyGeneratedClass();
-
-			UChildActorComponent* OuterCAC = Cast<UChildActorComponent>(Object->GetOuter());
-			const bool bObjectIsCACTemplate = OuterCAC && OuterCAC->IsIn(BPGC) && OuterCAC->GetChildActorTemplate() == Object;
-
-			const bool bCreatingSubObjectsOfClass = (Context.CurrentCodeType == FEmitterLocalContext::EGeneratedCodeType::SubobjectsOfClass);
-			{
-				UObject* CDO = BPGC ? BPGC->GetDefaultObject(false) : nullptr;
-				if (BPGC && Object && CDO && Object->IsIn(BPGC) && !Object->IsIn(CDO) && bCreatingSubObjectsOfClass)
-				{
-					return HandleClassSubobject(Context, Object, FEmitterLocalContext::EClassSubobjectList::MiscConvertedSubobjects, true, true, bObjectIsCACTemplate);
-				}
-			}
-
-			if (!bCreatingSubObjectsOfClass && bIsInstancedReference)
-			{
-				// Emit ctor code to create the instance only if it's not a default subobject; otherwise, just assign the reference value to a local variable for initialization.
-				// Note that we also skip the editor-only check if it's a default subobject. In that case, the instance will either have already been created with CreateDefaultSubobject(),
-				// or creation will have been skipped (e.g. CreateEditorOnlyDefaultSubobject()). We check the pointer for NULL before assigning default value overrides in the generated ctor.
-				const FString MappedObject = HandleInstancedSubobject(Context, Object, /* bCreateInstance = */ !bIsDefaultSubobject, /* bSkipEditorOnlyCheck = */ bIsDefaultSubobject);
-
-				// We should always find a mapping in this case.
-				if (ensure(!MappedObject.IsEmpty()))
-				{
-					return MappedObject;
-				}
-			}
-
-			if (!bCreatingSubObjectsOfClass && bObjectIsCACTemplate)
-			{
-				Context.TemplateFromSubobjectsOfClass.AddUnique(Object);
-				const FString MappedObject = Context.FindGloballyMappedObject(Object, ObjectClassToUse);
-				if (!MappedObject.IsEmpty())
-				{
-					return MappedObject;
-				}
-			}
-		}
-		else
-		{
-			// Emit valid representation for a null object.
-			return Context.ExportTextItem(Property, ValuePtr);
-		}
-
-		return FString();
-	};
-
-	FString Result;
-
-	if (const UObjectProperty* ObjectProperty = Cast<UObjectProperty>(Property))
-	{
-		Result = HandleObjectValueLambda(ObjectProperty->GetPropertyValue(ValuePtr), ObjectProperty->PropertyClass);
-	}
-	else if (const UWeakObjectProperty* WeakObjectProperty = Cast<UWeakObjectProperty>(Property))
-	{
-		Result = HandleObjectValueLambda(WeakObjectProperty->GetObjectPropertyValue(ValuePtr), WeakObjectProperty->PropertyClass);
-	}
-	else if (const UInterfaceProperty* InterfaceProperty = Cast<UInterfaceProperty>(Property))
-	{
-		Result = HandleObjectValueLambda(InterfaceProperty->GetPropertyValue(ValuePtr).GetObject(), InterfaceProperty->InterfaceClass);
-	}
-	else if (const UStructProperty* StructProperty = Cast<UStructProperty>(Property))
-	{
-		FString StructConstructor;
-		if (SpecialStructureConstructor(StructProperty->Struct, ValuePtr, &StructConstructor))
-		{
-			Result = StructConstructor;
-		}
-	}
-
-	return Result;
-}
-
 struct FDefaultSubobjectData
 {
 	UObject* Object;
@@ -879,7 +789,7 @@ struct FDefaultSubobjectData
 		// Now walk through the property list and initialize delta values for this instance. Any nested instanced default
 		// subobjects found above that are also assigned to a reference property will be correctly seen as already handled.
 		const UClass* ObjectClass = Object->GetClass();
-		for (const UProperty* Property : TFieldRange<const UProperty>(ObjectClass))
+		for (const FProperty* Property : TFieldRange<const FProperty>(ObjectClass))
 		{
 			if (!HandledAsSpecialProperty(Context, Property))
 			{
@@ -899,7 +809,7 @@ struct FDefaultSubobjectData
 
 protected:
 	// Generate special-case property initialization code. This could be something that is normally handled through custom serialization.
-	bool HandledAsSpecialProperty(FEmitterLocalContext& Context, const UProperty* Property)
+	bool HandledAsSpecialProperty(FEmitterLocalContext& Context, const FProperty* Property)
 	{
 		bool bWasHandled = true;
 
@@ -947,7 +857,7 @@ protected:
 		// In a cooked build, all three of native C++, nativized Blueprint class C++ and non-nativized Blueprint generated class cases deserialize the 'BodyInstance'
 		// value that is serialized along with the owned, instanced component, and will call UBodyInstance::FixupData() to initialize the transient collision response
 		// data that depends on it. See UPrimitiveComponent::PostLoad() for the point at which this will occur at runtime for all non-template, instanced components.
-		static const UProperty* BodyInstanceProperty = UPrimitiveComponent::StaticClass()->FindPropertyByName(GET_MEMBER_NAME_CHECKED(UPrimitiveComponent, BodyInstance));
+		static const FProperty* BodyInstanceProperty = UPrimitiveComponent::StaticClass()->FindPropertyByName(GET_MEMBER_NAME_CHECKED(UPrimitiveComponent, BodyInstance));
 
 		if (Property == BodyInstanceProperty)
 		{
@@ -958,24 +868,33 @@ protected:
 			// Get the current collision profile names for each.
 			const FName ComponentCollisionProfileName = Component->BodyInstance.GetCollisionProfileName();
 			const FName ComponentArchetypeCollisionProfileName = ComponentArchetype->BodyInstance.GetCollisionProfileName();
+			const bool bIsArchetypeUsingCustomCollisionProfile = ComponentArchetypeCollisionProfileName == UCollisionProfile::CustomCollisionProfileName;
 
 			// Initialize a new struct instance that matches the archetype (represents the default struct value inherited by the component template).
 			FStructOnScope BodyInstanceToCompare(FBodyInstance::StaticStruct());
 			FBodyInstance::StaticStruct()->CopyScriptStruct(BodyInstanceToCompare.GetStructMemory(), &ComponentArchetype->BodyInstance);
 
-			if (ComponentCollisionProfileName != ComponentArchetypeCollisionProfileName)
+			// If the component template's collision profile setting differs from the default value (or is custom), set it using the API to load the modified collision profile.
+			bool bResetCollisionProfileAtRuntime = false;
+			if (ComponentCollisionProfileName != ComponentArchetypeCollisionProfileName || bIsArchetypeUsingCustomCollisionProfile)
 			{
-				// If the component template's collision profile setting differs from the default value, set it using the API to load the modified collision profile.
 				// This will initialize the struct's default value in the same manner as will occur at runtime, so we don't emit redundant initialization code to the ctor.
 				((FBodyInstance*)BodyInstanceToCompare.GetStructMemory())->SetCollisionProfileName(ComponentCollisionProfileName);
 
-				// Now emit the code to call SetCollisionProfileName() at runtime to initialize the collision profile within the instanced UPrimitiveComponent (see notes above).
-				Context.AddLine(FString::Printf(TEXT("%s->SetCollisionProfileName(FName(TEXT(\"%s\")));"), *VariableName, *ComponentCollisionProfileName.ToString().ReplaceCharWithEscapedChar()));
+				// We must also emit the same call at runtime to override the default collision profile within the instanced UPrimitiveComponent (see notes above).
+				bResetCollisionProfileAtRuntime = true;
 			}
 
 			// Emit the C++ code needed to initialize the remainder of the struct's value within the component that's now being instanced as a default subobject within the converted context.
 			const FString PathToMember = FString::Printf(TEXT("%s->BodyInstance"), *VariableName);
 			FEmitDefaultValueHelper::InnerGenerate(Context, BodyInstanceProperty, PathToMember, (const uint8*)&Component->BodyInstance, BodyInstanceToCompare.GetStructMemory(), FEmitDefaultValueHelper::EPropertyGenerationControlFlags::IncludeFirstConstructionLine);
+
+			// For a custom collision profile override, we need to have initialized the ResponseArray at runtime prior to calling SetCollisionProfileName(), so don't emit this call until after
+			// we've emitted the code above to initialize the remainder of the BodyInstance struct value. It's ok to emit this call last for any non-custom collision profile overrides as well.
+			if (bResetCollisionProfileAtRuntime)
+			{
+				Context.AddLine(FString::Printf(TEXT("%s->SetCollisionProfileName(FName(TEXT(\"%s\")));"), *VariableName, *ComponentCollisionProfileName.ToString().ReplaceCharWithEscapedChar()));
+			}
 		}
 		else
 		{
@@ -1027,8 +946,118 @@ struct FNonNativeComponentData : public FDefaultSubobjectData
 	}
 };
 
+FString FEmitDefaultValueHelper::HandleSpecialTypes(FEmitterLocalContext& Context, const FProperty* Property, const uint8* ValuePtr)
+{
+	auto HandleObjectValueLambda = [&Context, Property, ValuePtr](UObject* Object, UClass* Class) -> FString
+	{
+		if (Object)
+		{
+			const bool bIsDefaultSubobject = Object->IsDefaultSubobject() && Object->HasAllFlags(RF_DefaultSubObject);
+			const bool bIsInstancedReference = Property->HasAnyPropertyFlags(CPF_InstancedReference);
+
+			UClass* ObjectClassToUse = Context.GetFirstNativeOrConvertedClass(Class);
+			{
+				const FString MappedObject = Context.FindGloballyMappedObject(Object, ObjectClassToUse);
+				if (!MappedObject.IsEmpty())
+				{
+					return MappedObject;
+				}
+			}
+
+			UClass* BPGC = Context.GetCurrentlyGeneratedClass();
+
+			UChildActorComponent* OuterCAC = Cast<UChildActorComponent>(Object->GetOuter());
+			const bool bObjectIsCACTemplate = OuterCAC && OuterCAC->IsIn(BPGC) && OuterCAC->GetChildActorTemplate() == Object;
+
+			const bool bCreatingSubObjectsOfClass = (Context.CurrentCodeType == FEmitterLocalContext::EGeneratedCodeType::SubobjectsOfClass);
+			{
+				UObject* CDO = BPGC ? BPGC->GetDefaultObject(false) : nullptr;
+				if (BPGC && Object && CDO && Object->IsIn(BPGC) && !Object->IsIn(CDO) && bCreatingSubObjectsOfClass)
+				{
+					if (Object->GetOuter() == BPGC || bObjectIsCACTemplate)
+					{
+						return HandleClassSubobject(Context, Object, FEmitterLocalContext::EClassSubobjectList::MiscConvertedSubobjects, true, true, bObjectIsCACTemplate);
+					}
+					else
+					{
+						// Treat initialization of nested objects owned by class subobjects like "normal" instanced subobjects, but disable scoped initialization because class subobjects can also reference nested DSOs.
+						FDefaultSubobjectData ClassSubobjectNestedDSOData;
+						ClassSubobjectNestedDSOData.bAddLocalScope = false;
+						const FString MappedObject = HandleInstancedSubobject(Context, Object, !bIsDefaultSubobject, bIsDefaultSubobject, &ClassSubobjectNestedDSOData);
+						
+						// We should always find a mapping in this case.
+						if (ensure(!MappedObject.IsEmpty()))
+						{
+							// Since we are using our own subobject data context to avoid scoping, we must explicitly emit the initialization code.
+							ClassSubobjectNestedDSOData.EmitPropertyInitialization(Context);
+
+							return MappedObject;
+						}
+					}
+				}
+			}
+
+			if (!bCreatingSubObjectsOfClass && bIsInstancedReference)
+			{
+				// Emit ctor code to create the instance only if it's not a default subobject; otherwise, just assign the reference value to a local variable for initialization.
+				// Note that we also skip the editor-only check if it's a default subobject. In that case, the instance will either have already been created with CreateDefaultSubobject(),
+				// or creation will have been skipped (e.g. CreateEditorOnlyDefaultSubobject()). We check the pointer for NULL before assigning default value overrides in the generated ctor.
+				const FString MappedObject = HandleInstancedSubobject(Context, Object, /* bCreateInstance = */ !bIsDefaultSubobject, /* bSkipEditorOnlyCheck = */ bIsDefaultSubobject);
+
+				// We should always find a mapping in this case.
+				if (ensure(!MappedObject.IsEmpty()))
+				{
+					return MappedObject;
+				}
+			}
+
+			if (!bCreatingSubObjectsOfClass && bObjectIsCACTemplate)
+			{
+				Context.TemplateFromSubobjectsOfClass.AddUnique(Object);
+				const FString MappedObject = Context.FindGloballyMappedObject(Object, ObjectClassToUse);
+				if (!MappedObject.IsEmpty())
+				{
+					return MappedObject;
+				}
+			}
+		}
+		else
+		{
+			// Emit valid representation for a null object.
+			return Context.ExportTextItem(Property, ValuePtr);
+		}
+
+		return FString();
+	};
+
+	FString Result;
+
+	if (const FObjectProperty* ObjectProperty = CastField<FObjectProperty>(Property))
+	{
+		Result = HandleObjectValueLambda(ObjectProperty->GetPropertyValue(ValuePtr), ObjectProperty->PropertyClass);
+	}
+	else if (const FWeakObjectProperty* WeakObjectProperty = CastField<FWeakObjectProperty>(Property))
+	{
+		Result = HandleObjectValueLambda(WeakObjectProperty->GetObjectPropertyValue(ValuePtr), WeakObjectProperty->PropertyClass);
+	}
+	else if (const FInterfaceProperty* InterfaceProperty = CastField<FInterfaceProperty>(Property))
+	{
+		Result = HandleObjectValueLambda(InterfaceProperty->GetPropertyValue(ValuePtr).GetObject(), InterfaceProperty->InterfaceClass);
+	}
+	else if (const FStructProperty* StructProperty = CastField<FStructProperty>(Property))
+	{
+		FString StructConstructor;
+		if (SpecialStructureConstructor(StructProperty->Struct, ValuePtr, &StructConstructor))
+		{
+			Result = StructConstructor;
+		}
+	}
+
+	return Result;
+}
+
 FString FEmitDefaultValueHelper::HandleNonNativeComponent(FEmitterLocalContext& Context, const USCS_Node* Node
-	, TSet<const UProperty*>& OutHandledProperties, TArray<FString>& NativeCreatedComponentProperties
+	, TSet<const FProperty*>& OutHandledProperties, TArray<FString>& NativeCreatedComponentProperties
 	, const USCS_Node* ParentNode, TArray<FNonNativeComponentData>& ComponentsToInit
 	, bool bBlockRecursion)
 {
@@ -1041,7 +1070,7 @@ FString FEmitDefaultValueHelper::HandleNonNativeComponent(FEmitterLocalContext& 
 	{
 		const FString VariableCleanName = Node->GetVariableName().ToString();
 
-		const UObjectProperty* VariableProperty = FindField<UObjectProperty>(BPGC, *VariableCleanName);
+		const FObjectProperty* VariableProperty = FindFProperty<FObjectProperty>(BPGC, *VariableCleanName);
 		if (VariableProperty)
 		{
 			NativeVariablePropertyName = FEmitHelper::GetCppName(VariableProperty);
@@ -1090,7 +1119,7 @@ FString FEmitDefaultValueHelper::HandleNonNativeComponent(FEmitterLocalContext& 
 				if (ParentNode)
 				{
 					const FString CleanParentVariableName = ParentNode->GetVariableName().ToString();
-					const UObjectProperty* ParentVariableProperty = FindField<UObjectProperty>(BPGC, *CleanParentVariableName);
+					const FObjectProperty* ParentVariableProperty = FindFProperty<FObjectProperty>(BPGC, *CleanParentVariableName);
 					ParentVariableName = ParentVariableProperty ? FEmitHelper::GetCppName(ParentVariableProperty) : CleanParentVariableName;
 				}
 				else if (USceneComponent* ParentComponentTemplate = Node->GetParentComponentTemplate(CastChecked<UBlueprint>(BPGC->ClassGeneratedBy)))
@@ -1181,15 +1210,11 @@ struct FFakeImportTableHelper
 
 				TArray<UObject*> ObjectsInsideStruct;
 				GetObjectsWithOuter(InStruct, ObjectsInsideStruct, true);
-				for (UObject* Obj : ObjectsInsideStruct)
-				{
-					UProperty* Property = Cast<UProperty>(Obj);
-					if (!Property)
+				for (TFieldIterator<FProperty> It(InStruct); It; ++It)
 					{
-						continue;
-					}
-					const UProperty* OwnerProperty = Property->GetOwnerProperty();
-					if (!IsValid(OwnerProperty))
+					FProperty* Property = *It;
+					const FProperty* OwnerProperty = Property->GetOwnerProperty();
+					if (!OwnerProperty)
 					{
 						continue;
 					}
@@ -1199,7 +1224,7 @@ struct FFakeImportTableHelper
 					// Should we try to fix it at this stage?
 
 					const bool bIsParam = (0 != (OwnerProperty->PropertyFlags & CPF_Parm)) && OwnerProperty->IsIn(InStruct);
-					const bool bIsMemberVariable = (OwnerProperty->GetOuter() == InStruct);
+					const bool bIsMemberVariable = (OwnerProperty->GetOwner<UObject>() == InStruct);
 					if (bIsParam || bIsMemberVariable) // Affects the class signature. It is necessary while ZCOnstructor/linking.
 					{
 						TArray<UObject*> LocalPreloadDependencies;
@@ -1477,7 +1502,7 @@ void FEmitDefaultValueHelper::AddStaticFunctionsForDependencies(FEmitterLocalCon
 			if (const UObject* ItObj = *Iter)
 			{
 				// Special case, we don't need to load any dependencies from CoreUObject.
-				static const UPackage* CoreUObjectPackage = UProperty::StaticClass()->GetOutermost();
+				static const UPackage* CoreUObjectPackage = UObject::StaticClass()->GetOutermost();
 				bCanExclude = ItObj->GetOutermost() == CoreUObjectPackage;
 
 				// We can exclude native type dependencies if EDL is not going to be enabled at boot time.
@@ -1812,7 +1837,7 @@ void FEmitDefaultValueHelper::GenerateConstructor(FEmitterLocalContext& Context)
 	UObject* ParentCDO = BPGC->GetSuperClass()->GetDefaultObject(false);
 	check(CDO && ParentCDO);
 
-	TArray<const UProperty*> AnimNodeProperties;
+	TArray<const FProperty*> AnimNodeProperties;
 	TArray<FString> NativeCreatedComponentProperties;
 
 	{
@@ -1834,7 +1859,7 @@ void FEmitDefaultValueHelper::GenerateConstructor(FEmitterLocalContext& Context)
 			Context.AddLine(TEXT(""));
 
 			FString NativeRootComponentFallback;
-			TSet<const UProperty*> HandledProperties;
+			TSet<const FProperty*> HandledProperties;
 
 			// Generate ctor init code for native class default subobjects that are always instanced (e.g. components).
 			// @TODO - We can probably make this faster by generating code to directly index through the DSO array instead (i.e. in place of HandleInstancedSubobject which will generate a lookup call per DSO).
@@ -1876,7 +1901,7 @@ void FEmitDefaultValueHelper::GenerateConstructor(FEmitterLocalContext& Context)
 			// Check for a valid RootComponent property value; mark it as handled if already set in the defaults.
 			bool bNeedsRootComponentAssignment = false;
 			static const FName RootComponentPropertyName(TEXT("RootComponent"));
-			const UObjectProperty* RootComponentProperty = FindField<UObjectProperty>(BPGC, RootComponentPropertyName);
+			const FObjectProperty* RootComponentProperty = FindFProperty<FObjectProperty>(BPGC, RootComponentPropertyName);
 			if (RootComponentProperty)
 			{
 				if (RootComponentProperty->GetObjectPropertyValue_InContainer(CDO))
@@ -1948,7 +1973,7 @@ void FEmitDefaultValueHelper::GenerateConstructor(FEmitterLocalContext& Context)
 			}
 
 			// Collect all anim node properties
-			for (const UProperty* Property : TFieldRange<const UProperty>(BPGC))
+			for (const FProperty* Property : TFieldRange<const FProperty>(BPGC))
 			{
 				if (!HandledProperties.Contains(Property))
 				{
@@ -1966,7 +1991,7 @@ void FEmitDefaultValueHelper::GenerateConstructor(FEmitterLocalContext& Context)
 			}
 
 			// Generate ctor init code for generated Blueprint class property values that may differ from parent class defaults (or that otherwise belong to the generated Blueprint class).
-			for (const UProperty* Property : TFieldRange<const UProperty>(BPGC))
+			for (const FProperty* Property : TFieldRange<const FProperty>(BPGC))
 			{
 				if (!HandledProperties.Contains(Property))
 				{
@@ -1992,7 +2017,7 @@ void FEmitDefaultValueHelper::GenerateConstructor(FEmitterLocalContext& Context)
 		FBackendHelperAnim::AddAllAnimNodesInitializationFunction(Context, CppClassName, AnimNodeProperties);
 
 		// Add any anim node properties as their own functions now
-		for(const UProperty* AnimNodeProperty : AnimNodeProperties)
+		for(const FProperty* AnimNodeProperty : AnimNodeProperties)
 		{
 			const bool bNewProperty = AnimNodeProperty->GetOwnerStruct() == BPGC;
 			FBackendHelperAnim::AddAnimNodeInitializationFunction(Context, CppClassName, AnimNodeProperty, bNewProperty, CDO, ParentCDO);
@@ -2088,7 +2113,7 @@ FString FEmitDefaultValueHelper::HandleClassSubobject(FEmitterLocalContext& Cont
 		if (ensure(!LocalNativeName.IsEmpty()))
 		{
 			UObject* CDO = Object->GetClass()->GetDefaultObject(false);
-			for (const UProperty* Property : TFieldRange<const UProperty>(Object->GetClass()))
+			for (const FProperty* Property : TFieldRange<const FProperty>(Object->GetClass()))
 			{
 				OuterGenerate(Context, Property, LocalNativeName
 					, reinterpret_cast<const uint8*>(Object)

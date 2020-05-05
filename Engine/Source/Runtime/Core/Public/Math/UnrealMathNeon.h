@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -1343,9 +1343,11 @@ FORCEINLINE void VectorSinCos(  VectorRegister* VSinAngles, VectorRegister* VCos
 // Returns true if the vector contains a component that is either NAN or +/-infinite.
 inline bool VectorContainsNaNOrInfinite(const VectorRegister& Vec)
 {
-#if PLATFORM_HOLOLENS
-	//TODO : The implementation below does not compile on Hololens Arm64.Temporarily working around this problem.
-	return false;
+// ArmV7 doesn't have vqtbx1q_u8, so fallback in this case.
+#if PLATFORM_ANDROID_ARM
+	float VecComponents[4];
+	vst1q_f32(VecComponents, Vec);
+	return  !FMath::IsFinite(VecComponents[0]) || !FMath::IsFinite(VecComponents[1]) || !FMath::IsFinite(VecComponents[2]) || !FMath::IsFinite(VecComponents[3]);
 #else
 	// https://en.wikipedia.org/wiki/IEEE_754-1985
 	// Infinity is represented with all exponent bits set, with the correct sign bit.
@@ -1656,7 +1658,7 @@ FORCEINLINE VectorRegisterInt VectorIntSelect(const VectorRegisterInt& Mask, con
 * @param Ptr	Unaligned memory pointer to the 4 int32s
 * @return		VectorRegisterInt(*Ptr, *Ptr, *Ptr, *Ptr)
 */
-#define VectorIntLoad1( Ptr )	vld1q_dup_s32((int32*)Ptr)
+#define VectorIntLoad1( Ptr )	vld1q_dup_s32((int32*)(Ptr))
 
 // To be continued...
 

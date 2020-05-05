@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "RHI.h"
 #include "Modules/ModuleManager.h"
@@ -12,7 +12,7 @@ FDynamicRHI* PlatformCreateDynamicRHI()
 	IDynamicRHIModule* DynamicRHIModule = NULL;
 	ERHIFeatureLevel::Type RequestedFeatureLevel = ERHIFeatureLevel::Num;
 
-	if (FPlatformMisc::ShouldUseVulkan())
+	if (FPlatformMisc::ShouldUseVulkan() || FPlatformMisc::ShouldUseDesktopVulkan())
 	{
 		// Vulkan is required, release the EGL created by FAndroidAppEntry::PlatformInit.
 		FAndroidAppEntry::ReleaseEGL();

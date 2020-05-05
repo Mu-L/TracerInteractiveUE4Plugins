@@ -1,10 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
 #include "PhysicsEngine/ShapeElem.h"
+#include "Chaos/Convex.h"
 
 #if WITH_CHAOS
 #include "Chaos/Serializable.h"
@@ -22,8 +23,10 @@ namespace physx
 
 namespace Chaos
 {
+	class FImplicitObject;
+
 	template <typename T, int d>
-	class TImplicitObject;
+	class TConvex;
 }
 
 /** One convex hull, used for simplified collision. */
@@ -35,6 +38,9 @@ struct FKConvexElem : public FKShapeElem
 	/** Array of indices that make up the convex hull. */
 	UPROPERTY()
 	TArray<FVector> VertexData;
+
+	UPROPERTY()
+	TArray<int32> IndexData;
 
 	/** Bounding box of this convex hull. */
 	UPROPERTY()
@@ -52,7 +58,7 @@ private:
 	physx::PxConvexMesh*   ConvexMeshNegX;
 
 #if WITH_CHAOS
-	TUniquePtr<Chaos::TImplicitObject<float, 3>> ChaosConvex;
+	TSharedPtr<Chaos::FConvex, ESPMode::ThreadSafe> ChaosConvex;
 #endif
 
 public:
@@ -104,11 +110,18 @@ public:
 	ENGINE_API void SetMirroredConvexMesh(physx::PxConvexMesh* InMesh);
 
 #if WITH_CHAOS
-	ENGINE_API const TUniquePtr<Chaos::TImplicitObject<float, 3>>& GetChaosConvexMesh() const;
+	ENGINE_API const auto& GetChaosConvexMesh() const
+	{
+		return ChaosConvex;
+	}
 
-	ENGINE_API void SetChaosConvexMesh(TUniquePtr<Chaos::TImplicitObject<float, 3>>&& InChaosConvex);
+	ENGINE_API void SetChaosConvexMesh(TSharedPtr<Chaos::FConvex, ESPMode::ThreadSafe>&& InChaosConvex);
 
 	ENGINE_API void ResetChaosConvexMesh();
+
+	ENGINE_API void ComputeChaosConvexIndices(bool bForceCompute = false);
+
+	ENGINE_API TArray<int32> GetChaosConvexIndices() const;
 #endif
 
 	/** Get current transform applied to convex mesh vertices */

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -48,8 +48,14 @@ enum class EUpdateClockSource : uint8
 	/** Use the audio clock for timing. Does not honor world or actor pause state. */
 	Audio,
 
+	/** Time relative to the timecode provider for timing. Does not honor world or actor pause state. */
+	RelativeTimecode,
+
 	/** Use current timecode provider for timing. Does not honor world or actor pause state. */
 	Timecode,
+
+	/** Custom clock source created and defined externally. */
+	Custom,
 };
 
 MOVIESCENE_API DECLARE_LOG_CATEGORY_EXTERN(LogMovieScene, Log, All);

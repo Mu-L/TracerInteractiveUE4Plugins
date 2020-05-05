@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -19,19 +19,49 @@ enum ENiagaraGraphActionType
 	GRAPHACTION_GenericNeedsRecompile = 0x1 << 16,
 };
 
+struct FInputPinsAndOutputPins
+{
+	TArray<UEdGraphPin*> InputPins;
+	TArray<UEdGraphPin*> OutputPins;
+};
+
 class UNiagaraNode;
 class UNiagaraGraph;
 
-typedef TPair<FGuid, TWeakObjectPtr<UNiagaraNode>> FNiagaraGraphParameterReference;
+USTRUCT()
+struct FNiagaraGraphParameterReference
+{
+	GENERATED_USTRUCT_BODY()
+public:
+	FNiagaraGraphParameterReference() {}
+	FNiagaraGraphParameterReference(const FGuid& InKey, UObject* InValue): Key(InKey), Value(InValue){}
 
+
+	UPROPERTY()
+	FGuid Key;
+
+	UPROPERTY()
+	TWeakObjectPtr<UObject> Value;
+
+	FORCEINLINE bool operator==(const FNiagaraGraphParameterReference& Other)const
+	{
+		return Other.Key == Key && Other.Value == Value;
+	}
+};
+
+USTRUCT()
 struct FNiagaraGraphParameterReferenceCollection
 {
+
+	GENERATED_USTRUCT_BODY()
 public:
 	FNiagaraGraphParameterReferenceCollection(const bool bInCreated = false);
 
 	/** All the references in the graph. */
+	UPROPERTY()
 	TArray<FNiagaraGraphParameterReference> ParameterReferences;
 
+	UPROPERTY()
 	const UNiagaraGraph* Graph;
 
 	/** Returns true if this parameter was initially created by the user. */
@@ -39,8 +69,10 @@ public:
 
 private:
 	/** Whether this parameter was initially created by the user. */
+	UPROPERTY()
 	bool bCreated;
 };
+
 
 /** Container for UNiagaraGraph cached data for managing CompileIds and Traversals.*/
 USTRUCT()
@@ -66,6 +98,14 @@ public:
 	/** The hash that we calculated last traversal. */
 	UPROPERTY()
 	FNiagaraCompileHash CompileHash;
+
+	/** The hash that we calculated last traversal. */
+	UPROPERTY()
+	FNiagaraCompileHash CompileHashFromGraph;
+
+	UPROPERTY(Transient)
+	TArray<FNiagaraCompileHashVisitorDebugInfo> CompileLastObjects;
+
 
 	/** The traversal of output to input nodes for this graph. This is not a recursive traversal, it just includes nodes from this graph.*/
 	UPROPERTY()
@@ -93,6 +133,8 @@ class UNiagaraGraph : public UEdGraph
 	GENERATED_UCLASS_BODY()
 
 	DECLARE_MULTICAST_DELEGATE(FOnDataInterfaceChanged);
+	DECLARE_DELEGATE_RetVal_OneParam(TSharedRef<SWidget>, FOnGetPinVisualWidget, const UEdGraphPin*);
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnSubObjectSelectionChanged, const UObject*);
 
 	//~ Begin UObject Interface
 	virtual void PostLoad() override;
@@ -149,6 +191,32 @@ class UNiagaraGraph : public UEdGraph
 		FGuid TargetScriptUsageId;
 	};
 
+	/** Options for the AddParameter function. */
+	struct FAddParameterOptions
+	{
+		FAddParameterOptions()
+			: NewParameterScopeName(TOptional<FName>())
+			, NewParameterUsage(TOptional<ENiagaraScriptParameterUsage>())
+			, bRefreshMetaDataScopeAndUsage(false)
+			, bIsStaticSwitch(false)
+			, bMakeParameterNameUnique(false)
+			, bAddedFromSystemEditor(false)
+		{};
+
+		/** Optional scope to assign to the new parameter. New scope is force assigned and will ignore any scope that would be assigned if bRefreshMetaDataScopeAndUsage is true. */
+		TOptional<FName> NewParameterScopeName;
+		/** Optional usage to assign to the new parameter. New usage is force assigned and will ignore any usage that would be assigned if bRefreshMetaDataScopeAndUsage is true.*/
+		TOptional<ENiagaraScriptParameterUsage> NewParameterUsage;
+		/** Whether the new or already existing parameter should refresh its scope and usage. If no scope is assigned, assign a scope from the variable name. Set a new usage depending on associated in/out pins in the graph. */
+		bool bRefreshMetaDataScopeAndUsage;
+		/** Whether the new parameter should be a static switch parameter. */
+		bool bIsStaticSwitch;
+		/** Whether the new parameter should have a unique name (append 001 onwards if new name is an alias.) */
+		bool bMakeParameterNameUnique;
+		/** Whether the new parameter was added from the System Toolkit. Will set bCreatedInSystemEditor on the new parameter's metadata. */
+		bool bAddedFromSystemEditor;
+	};
+
 	/** Finds input nodes in the graph with. */
 	void FindInputNodes(TArray<class UNiagaraNodeInput*>& OutInputNodes, FFindInputNodeOptions Options = FFindInputNodeOptions()) const;
 
@@ -181,7 +249,7 @@ class UNiagaraGraph : public UEdGraph
 	void GetAllReferencedGraphs(TArray<const UNiagaraGraph*>& Graphs) const;
 
 	/** Gather all the change ids of external references for this specific graph traversal.*/
-	void GatherExternalDependencyData(ENiagaraScriptUsage InUsage, const FGuid& InUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<UObject*>& InReferencedObjs);
+	void GatherExternalDependencyData(ENiagaraScriptUsage InUsage, const FGuid& InUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<FString>& InReferencedObjs);
 
 	/** Determine if there are any external dependencies wrt to scripts and ensure that those dependencies are sucked into the existing package.*/
 	void SubsumeExternalDependencies(TMap<const UObject*, UObject*>& ExistingConversions);
@@ -212,11 +280,18 @@ class UNiagaraGraph : public UEdGraph
 	/** Walk through the graph for an ParameterMapGet nodes and see if any of them specify a default for VariableName.*/
 	UEdGraphPin* FindParameterMapDefaultValuePin(const FName VariableName, ENiagaraScriptUsage InUsage, ENiagaraScriptUsage InParentUsage) const;
 
+	/** Walk through the graph for an ParameterMapGet nodes and find all matching default pins for VariableName, irrespective of usage. */
+	TArray<UEdGraphPin*> FindParameterMapDefaultValuePins(const FName VariableName) const;
+
 	/** Gets the meta-data associated with this variable, if it exists.*/
 	TOptional<FNiagaraVariableMetaData> GetMetaData(const FNiagaraVariable& InVar) const;
 
-	/** Sets the meta-data associated with this variable.*/
+	/** Sets the meta-data associated with this variable. Creates a new UNiagaraScriptVariable if the target variable cannot be found. Illegal to call on FNiagaraVariables that are Niagara Constants. */
 	void SetMetaData(const FNiagaraVariable& InVar, const FNiagaraVariableMetaData& MetaData);
+
+	/** Sets the usage metadata associated with this variable for a given script. Creates a new UNiagaraScriptVariable if the target variable cannot be found. */
+	void SetPerScriptMetaData(const FNiagaraVariable& InVar, const FNiagaraVariableMetaData& InMetaData);
+
 
 	const TMap<FNiagaraVariable, UNiagaraScriptVariable*>& GetAllMetaData() const;
 	TMap<FNiagaraVariable, UNiagaraScriptVariable*>& GetAllMetaData();
@@ -227,21 +302,47 @@ class UNiagaraGraph : public UEdGraph
 	UNiagaraScriptVariable* GetScriptVariable(FName ParameterName) const;
 
 	/** Adds parameter to parameters map setting it as created by the user.*/
-	void AddParameter(const FNiagaraVariable& Parameter, bool bIsStaticSwitch = false);
+	UNiagaraScriptVariable* AddParameter(const FNiagaraVariable& Parameter, bool bIsStaticSwitch = false);
 
-	/** Adds parameter to parameters map setting it as created by the user.*/
-	void AddParameterReference(const FNiagaraVariable& Parameter, const UEdGraphPin* Pin);
+	UNiagaraScriptVariable* AddParameter(FNiagaraVariable& Parameter, const FAddParameterOptions Options);
+
+	/** Adds an FNiagaraGraphParameterReference to the ParameterToReferenceMap. */
+	void AddParameterReference(const FNiagaraVariable& Parameter, FNiagaraGraphParameterReference& NewParameterReference);
 
 	/** Remove parameter from map and all the pins associated. */
-	void RemoveParameter(const FNiagaraVariable& Parameter, bool bFromStaticSwitch = false);
+	void RemoveParameter(const FNiagaraVariable& Parameter, bool bAllowDeleteStaticSwitch = false);
 
-	/** Rename parameter from map and all the pins associated. */
-	bool RenameParameter(const FNiagaraVariable& Parameter, FName NewName, bool bFromStaticSwitch = false);
+	/**
+	* Rename parameter from map and all the pins associated.
+	*
+	* @param Parameter				The target FNiagaraVariable key to lookup the canonical UNiagaraScriptVariable to rename.
+	* @param NewName				The new name to apply.
+	* @param bFromStaticSwitch		Whether the target parameter is from a static switch. Used to determine whether to fixup binding strings.
+	* @param NewScopeName			The new scope name from the FNiagaraVariable's associated FNiagaraVariableMetaData. Used if changing the scope triggered a rename. Applied to the canonical UNiagaraScriptVariable's Metadata.
+	* @param bMerged				Whether or not the rename ended up merging with a different parameter because the names are the same.
+	* @return						true if the new name was applied. 
+	*/
+	bool RenameParameter(const FNiagaraVariable& Parameter, FName NewName, bool bRenameRequestedFromStaticSwitch = false, FName NewScopeName = FName(), bool* bMerged = nullptr);
+
+	/** Rename a pin inline in a graph. If this is the only instance used in the graph, then rename them all, otherwise make a duplicate. */
+	bool RenameParameterFromPin(const FNiagaraVariable& Parameter, FName NewName, UEdGraphPin* InPin);
+
+
+	/** 
+	 * Sets the ENiagaraScriptParameterUsage on the Metadata of a ScriptVariable depending on its pin usage in the node graph (used on input/output pins). 
+	 * 
+	 * @param ScriptVariable		The ScriptVariable to update the Metadata of.
+	 * @return						false if the ScriptVariable no longer has any referencing Map Get or Set pins in its owning Graph.
+	*/
+	bool UpdateUsageForScriptVariable(UNiagaraScriptVariable* ScriptVariable) const;
 
 	/** Gets a delegate which is called whenever a contained data interfaces changes. */
 	FOnDataInterfaceChanged& OnDataInterfaceChanged();
 
-	void InvalidateCachedCompileIds();
+	/** Gets a delegate which is called whenever a custom subobject in the graph is selected*/
+	FOnSubObjectSelectionChanged& OnSubObjectSelectionChanged();
+
+	void ForceGraphToRecompileOnNextCheck();
 
 	/** Add a listener for OnGraphNeedsRecompile events */
 	FDelegateHandle AddOnGraphNeedsRecompileHandler(const FOnGraphChanged::FDelegate& InHandler);
@@ -265,11 +366,32 @@ class UNiagaraGraph : public UEdGraph
 
 	void CopyCachedReferencesMap(UNiagaraGraph* TargetGraph);
 
+	bool IsPinVisualWidgetProviderRegistered() const;
+
+	/** Wrapper to provide visual widgets for pins that are managed by external viewmodels.
+	 *  Used with FNiagaraScriptToolkitParameterPanelViewModel to provide SNiagaraParameterNameView widget with validation delegates.
+	 */
+	TSharedRef<SWidget> GetPinVisualWidget(const UEdGraphPin* Pin) const;
+
+	FDelegateHandle RegisterPinVisualWidgetProvider(FOnGetPinVisualWidget OnGetPinVisualWidget);
+	void UnregisterPinVisualWidgetProvider(const FDelegateHandle& InHandle);
+
+	void ScriptVariableChanged(FNiagaraVariable Variable);
+
+	/** Go through all known parameter names in this graph and generate a new unique one.*/
+	FName MakeUniqueParameterName(const FName& InName);
+
+
+	static FName MakeUniqueParameterNameAcrossGraphs(const FName& InName, TArray<TWeakObjectPtr<UNiagaraGraph>>& InGraphs);
+
+	static FName StandardizeName(FName Name, ENiagaraScriptUsage Usage, bool bIsGet, bool bIsSet);
+
 protected:
 	void RebuildNumericCache();
 	bool bNeedNumericCacheRebuilt;
 	TMap<TPair<FGuid, UEdGraphNode*>, FNiagaraTypeDefinition> CachedNumericConversions;
 	void ResolveNumerics(TMap<UNiagaraNode*, bool>& VisitedNodes, UEdGraphNode* Node);
+	bool AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor, const TArray<UNiagaraNode*>& InTraversal) const;
 
 private:
 	virtual void NotifyGraphChanged(const FEdGraphEditAction& InAction) override;
@@ -280,15 +402,39 @@ private:
 	/** Marks the found parameter collections as invalid so they're rebuilt the next time they're requested. */
 	void InvalidateCachedParameterData();
 
+	/** When a new variable is added to the VariableToScriptVariableMap, generate appropriate scope and usage. */
+	void GenerateMetaDataForScriptVariable(UNiagaraScriptVariable* InScriptVariable) const;
+
+	/** Helper to get a map of variables to all input/output pins with the same name. */
+	const TMap<FNiagaraVariable, FInputPinsAndOutputPins> CollectVarsToInOutPinsMap() const;
+
+	/**
+	 * Set the usage of a script variable depending on input/output pins with same name.
+	 * @param VarToPinsMap			Mapping of Pins to the associated UNiagaraScriptVariable.
+	 * @param ScriptVariable		The UNiagaraScriptVariable to modify its Metadata Usage.
+	 * @return ShouldDelete			True if the ScriptVariable was previously of a non-local type and no longer has any associated Input or Output pins.
+	 */
+	bool SetScriptVariableUsageForPins(const TMap<FNiagaraVariable, FInputPinsAndOutputPins>& VarToPinsMap, UNiagaraScriptVariable* ScriptVariable) const;
+
 	/** A delegate that broadcasts a notification whenever the graph needs recompile due to structural change. */
 	FOnGraphChanged OnGraphNeedsRecompile;
 
 	/** Find all nodes in the graph that can be reached during compilation. */
 	TArray<UEdGraphNode*> FindReachbleNodes() const;
-	
+
+	/** Compares the values on the default pins with the metadata and syncs the two if necessary */
+	void ValidateDefaultPins();
+
+	void StandardizeParameterNames();
+
+private:
 	/** The current change identifier for this graph overall. Used to sync status with UNiagaraScripts.*/
 	UPROPERTY()
 	FGuid ChangeId;
+
+	/** Internal value used to invalidate a DDC key for the script no matter what.*/
+	UPROPERTY()
+	FGuid ForceRebuildId;
 
 	UPROPERTY()
 	FGuid LastBuiltTraversalDataChangeId;
@@ -305,13 +451,16 @@ private:
 	mutable TMap<FNiagaraVariable, UNiagaraScriptVariable*> VariableToScriptVariable;
 	
 	/** A map of parameters in the graph to their referencers. */
+	UPROPERTY(Transient)
 	mutable TMap<FNiagaraVariable, FNiagaraGraphParameterReferenceCollection> ParameterToReferencesMap;
 
 	FOnDataInterfaceChanged OnDataInterfaceChangedDelegate;
+	FOnSubObjectSelectionChanged OnSelectedSubObjectChanged;
 
 	/** Whether currently renaming a parameter to prevent recursion. */
 	bool bIsRenamingParameter;
 
 	mutable bool bParameterReferenceRefreshPending;
-};
 
+	FOnGetPinVisualWidget OnGetPinVisualWidgetDelegate;
+};

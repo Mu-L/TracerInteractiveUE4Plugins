@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved. 
+// Copyright Epic Games, Inc. All Rights Reserved. 
 
 #include "CableComponent.h"
 #include "EngineGlobals.h"
@@ -674,9 +674,9 @@ void UCableComponent::TickComponent(float DeltaTime, enum ELevelTick TickType, F
 	UpdateComponentToWorld();
 };
 
-void UCableComponent::CreateRenderState_Concurrent()
+void UCableComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
 {
-	Super::CreateRenderState_Concurrent();
+	Super::CreateRenderState_Concurrent(Context);
 
 	SendRenderDynamicData_Concurrent();
 }

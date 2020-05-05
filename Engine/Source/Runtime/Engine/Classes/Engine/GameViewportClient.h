@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -18,6 +18,7 @@
 #include "Engine/DebugDisplayProperty.h"
 #include "UObject/SoftObjectPath.h"
 #include "StereoRendering.h"
+#include "AudioDeviceManager.h"
 
 #include "GameViewportClient.generated.h"
 
@@ -34,6 +35,8 @@ class UNetDriver;
 
 /** Delegate for overriding the behavior when a navigation action is taken, Not to be confused with FNavigationDelegate which allows a specific widget to override behavior for itself */
 DECLARE_DELEGATE_RetVal_TwoParams(bool, FCustomNavigationHandler, const uint32, TSharedPtr<SWidget>);
+DECLARE_MULTICAST_DELEGATE_SevenParams(FOnInputAxisSignature, FViewport* /*InViewport*/, int32 /*ControllerId*/, FKey /*Key*/, float /*Delta*/, float /*DeltaTime*/, int32 /*NumSamples*/, bool /*bGamepad*/);
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnInputKeySignature, const FInputKeyEventArgs& /*EventArgs*/);
 
 /**
  * A game viewport (FViewport) is a high-level abstract interface for the
@@ -71,9 +74,13 @@ public:
 	/** Array of the screen data needed for all the different splitscreen configurations */
 	TArray<struct FSplitscreenData> SplitscreenInfo;
 
-	int32 MaxSplitscreenPlayers;
+	UPROPERTY(Config)
+	int32 MaxSplitscreenPlayers = 4;
 
-	/** if true then the title safe border is drawn */
+	/** if true then the title safe border is drawn
+	  * @deprecated - Use the cvar "r.DebugSafeZone.Mode=1".
+	  */
+	UE_DEPRECATED(4.26, "Use the cvar \"r.DebugSafeZone.Mode=1\".")
 	uint32 bShowTitleSafeZone:1;
 
 	/** If true, this viewport is a play in editor viewport */
@@ -99,6 +106,9 @@ protected:
 	/** If true will suppress the blue transition text messages. */
 	bool bSuppressTransitionMessage;
 
+	/** Strong handle to the audio device used by this viewport. */
+	FAudioDeviceHandle AudioDevice;
+
 public:
 
 	/** see enum EViewModeIndex */
@@ -108,8 +118,10 @@ public:
 	UFUNCTION(exec)
 	virtual void SSSwapControllers();
 
-	/** Exec for toggling the display of the title safe area */
-	UFUNCTION(exec)
+	/** Exec for toggling the display of the title safe area
+	  * @deprecated Use the cvar "r.DebugSafeZone.Mode=1".
+	  */
+	UFUNCTION(exec, meta = (DeprecatedFunction, DeprecationMessage = "Use the cvar \"r.DebugSafeZone.Mode=1.\""))
 	virtual void ShowTitleSafeArea();
 
 	/** Sets the player which console commands will be executed in the context of. */
@@ -336,7 +348,7 @@ public:
 	bool IsExclusiveFullscreenViewport() const;
 
 	/** @return mouse position in game viewport coordinates (does not account for splitscreen) */
-	bool GetMousePosition(FVector2D& MousePosition) const;
+	virtual bool GetMousePosition(FVector2D& MousePosition) const;
 
 	/**
 	 * Determine whether a fullscreen viewport should be used in cases where there are multiple players.
@@ -431,7 +443,7 @@ public:
 	bool CalculateDeadZoneForAllSides( ULocalPlayer* LPlayer, UCanvas* Canvas, float& fTopSafeZone, float& fBottomSafeZone, float& fLeftSafeZone, float& fRightSafeZone, bool bUseMaxPercent = false );
 
 	/**  
-	 * Draw the safe area using the current TitleSafeZone settings. 
+	 * Draws the safe area using the current r.DebugSafeZone.Mode=1 when there is not a valid PlayerController HUD.
 	 * 
 	 * @param Canvas	Canvas on which to draw
 	 */
@@ -571,6 +583,18 @@ public:
 		return CustomNavigationEvent;
 	}
 
+	/** fetches OnInputKeyEvent reference */
+	FOnInputKeySignature& OnInputKey()
+	{
+		return OnInputKeyEvent;
+	}
+
+	/** fetches OnInputAxisEvent reference */
+	FOnInputAxisSignature& OnInputAxis()
+	{
+		return OnInputAxisEvent;
+	}
+
 	/** Return the engine show flags for this viewport */
 	virtual FEngineShowFlags* GetEngineShowFlags() override
 	{ 
@@ -597,6 +621,9 @@ protected:
 	void SetCurrentBufferVisualizationMode(FName NewBufferVisualizationMode) { CurrentBufferVisualizationMode = NewBufferVisualizationMode; }
 	FName GetCurrentBufferVisualizationMode() const { return CurrentBufferVisualizationMode; }
 	bool HasAudioFocus() const { return bHasAudioFocus; }
+
+	/** Updates CSVProfiler camera stats */
+	void UpdateCsvCameraStats(const FSceneView* View);
 
 protected:
 	/** FCommonViewportClient interface */
@@ -910,9 +937,6 @@ private:
 	 */
 	bool SetDisplayConfiguration( const FIntPoint* Dimensions, EWindowMode::Type WindowMode);
 
-	/** Updates CSVProfiler camera stats */
-	void UpdateCsvCameraStats(const FSceneView* View);
-
 #if WITH_EDITOR
 	/** Delegate called when game viewport client received input key */
 	FOnGameViewportInputKey GameViewportInputKeyDelegate;
@@ -957,6 +981,12 @@ private:
 	/** Delegate for custom navigation behavior */
 	FCustomNavigationHandler CustomNavigationEvent;
 
+	/** A broadcast delegate broadcasting from UGameViewportClient::InputKey */
+	FOnInputKeySignature OnInputKeyEvent;
+
+	/** A broadcast delegate broadcasting from UGameViewportClient::InputAxis */
+	FOnInputAxisSignature OnInputAxisEvent;
+
 	/** Data needed to display perframe stat tracking when STAT UNIT is enabled */
 	FStatUnitData* StatUnitData;
 
@@ -980,9 +1010,6 @@ private:
 
 	/** Mouse cursor locking behavior when the viewport is clicked */
 	EMouseLockMode MouseLockMode;
-
-	/** Handle to the audio device created for this viewport. Each viewport (for multiple PIE) will have its own audio device. */
-	uint32 AudioDeviceHandle;
 
 	/** Whether or not this audio device is in audio-focus */
 	bool bHasAudioFocus;

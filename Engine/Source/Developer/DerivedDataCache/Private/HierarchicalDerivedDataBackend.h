@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -27,6 +27,12 @@ public:
 	{
 		check(InnerBackends.Num() > 1); // if it is just one, then you don't need this wrapper
 		UpdateAsyncInnerBackends();
+	}
+
+	/** Return a name for this interface */
+	virtual FString GetName() const override
+	{
+		return TEXT("HierarchicalDerivedDataBackend");
 	}
 
 	void UpdateAsyncInnerBackends()
@@ -88,9 +94,19 @@ public:
 				COOK_STAT(Timer.AddHit(0));
 				return true;
 			}
+			else
+			{
+				extern bool GVerifyDDC;
+
+				if (GVerifyDDC)
+				{
+					ensureMsgf(!AsyncPutInnerBackends[CacheIndex]->CachedDataProbablyExists(CacheKey), TEXT("%s did not exist in sync interface for CachedDataProbablyExists but was found in async wrapper"), CacheKey);
+				}
+			}
 		}
 		return false;
 	}
+
 	/**
 	 * Synchronous retrieve of a cache item
 	 *
@@ -112,16 +128,17 @@ public:
 					{
 						if (InnerBackends[PutCacheIndex]->IsWritable())
 						{
+							bool bForce = false;
 							if (InnerBackends[PutCacheIndex]->BackfillLowerCacheLevels() &&
 								InnerBackends[PutCacheIndex]->CachedDataProbablyExists(CacheKey))
 							{
 								InnerBackends[PutCacheIndex]->RemoveCachedData(CacheKey, /*bTransient=*/ false); // it apparently failed, so lets delete what is there
-								AsyncPutInnerBackends[PutCacheIndex]->PutCachedData(CacheKey, OutData, true); // we force a put here because it must have failed
+								bForce = true; // we force a put here because it must have failed
 							}
-							else
-							{
-								AsyncPutInnerBackends[PutCacheIndex]->PutCachedData(CacheKey, OutData, false); 
-							}
+						
+							AsyncPutInnerBackends[PutCacheIndex]->PutCachedData(CacheKey, OutData, bForce);
+							UE_LOG(LogDerivedDataCache, Verbose, TEXT("forward-filling cache %s with: %s (%d bytes) (force=%d)"), *InnerBackends[PutCacheIndex]->GetName(), CacheKey, OutData.Num(), false);
+
 						}
 					}
 					if (InnerBackends[CacheIndex]->BackfillLowerCacheLevels())
@@ -136,12 +153,23 @@ public:
 							if (InnerBackends[PutCacheIndex]->IsWritable())
 							{
 								AsyncPutInnerBackends[PutCacheIndex]->PutCachedData(CacheKey, OutData, false); // we do not need to force a put here
+								UE_LOG(LogDerivedDataCache, Verbose, TEXT("Back-filling cache %s with: %s (%d bytes) (force=%d)"), *AsyncPutInnerBackends[PutCacheIndex]->GetName(), CacheKey, OutData.Num(), false);
 							}
 						}
 					}
 				}
 				COOK_STAT(Timer.AddHit(OutData.Num()));
 				return true;
+			}
+			else
+			{
+				extern bool GVerifyDDC;
+
+				if (GVerifyDDC)
+				{
+					TArray<uint8> TempData;
+					ensureMsgf(!AsyncPutInnerBackends[CacheIndex]->GetCachedData(CacheKey, TempData), TEXT("CacheKey %s did not exist in sync interface for GetCachedData but was found in async wrapper"), CacheKey);
+				}
 			}
 		}
 		return false;

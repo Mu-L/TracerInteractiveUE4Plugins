@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Engine/GameViewportClient.h"
 #include "HAL/FileManager.h"
@@ -160,9 +160,6 @@ void UGameViewportClient::UpdateCsvCameraStats(const FSceneView* View)
 
 UGameViewportClient::UGameViewportClient(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
-#if WITH_EDITOR
-	, bShowTitleSafeZone(true)
-#endif
 	, EngineShowFlags(ESFIM_Game)
 	, CurrentBufferVisualizationMode(NAME_None)
 	, HighResScreenshotDialog(NULL)
@@ -171,7 +168,6 @@ UGameViewportClient::UGameViewportClient(const FObjectInitializer& ObjectInitial
 	, MouseCaptureMode(EMouseCaptureMode::CapturePermanently)
 	, bHideCursorDuringCapture(false)
 	, MouseLockMode(EMouseLockMode::LockOnCapture)
-	, AudioDeviceHandle(INDEX_NONE)
 	, bHasAudioFocus(false)
 	, bIsMouseOverClient(false)
 #if WITH_EDITOR
@@ -183,6 +179,9 @@ UGameViewportClient::UGameViewportClient(const FObjectInitializer& ObjectInitial
 	ViewModeIndex = VMI_Lit;
 
 	SplitscreenInfo.Init(FSplitscreenData(), ESplitScreenType::SplitTypeCount);
+
+	static float OneOverThree = 1.0f / 3.0f;
+	static float TwoOverThree = 2.0f / 3.0f;
 
 	SplitscreenInfo[ESplitScreenType::None].PlayerData.Add(FPerPlayerSplitscreenData(1.0f, 1.0f, 0.0f, 0.0f));
 
@@ -200,13 +199,13 @@ UGameViewportClient::UGameViewportClient(const FObjectInitializer& ObjectInitial
 	SplitscreenInfo[ESplitScreenType::ThreePlayer_FavorBottom].PlayerData.Add(FPerPlayerSplitscreenData(0.5f, 0.5f, 0.5f, 0.0f));
 	SplitscreenInfo[ESplitScreenType::ThreePlayer_FavorBottom].PlayerData.Add(FPerPlayerSplitscreenData(1.0f, 0.5f, 0.0f, 0.5f));
 
-	SplitscreenInfo[ESplitScreenType::ThreePlayer_Vertical].PlayerData.Add(FPerPlayerSplitscreenData(0.333f, 1.0f, 0.0f, 0.0f));
-	SplitscreenInfo[ESplitScreenType::ThreePlayer_Vertical].PlayerData.Add(FPerPlayerSplitscreenData(0.333f, 1.0f, 0.333f, 0.0f));
-	SplitscreenInfo[ESplitScreenType::ThreePlayer_Vertical].PlayerData.Add(FPerPlayerSplitscreenData(0.333f, 1.0f, 0.666f, 0.0f));
+	SplitscreenInfo[ESplitScreenType::ThreePlayer_Vertical].PlayerData.Add(FPerPlayerSplitscreenData(OneOverThree, 1.0f, 0.0f, 0.0f));
+	SplitscreenInfo[ESplitScreenType::ThreePlayer_Vertical].PlayerData.Add(FPerPlayerSplitscreenData(OneOverThree, 1.0f, OneOverThree, 0.0f));
+	SplitscreenInfo[ESplitScreenType::ThreePlayer_Vertical].PlayerData.Add(FPerPlayerSplitscreenData(OneOverThree, 1.0f, TwoOverThree, 0.0f));
 
-	SplitscreenInfo[ESplitScreenType::ThreePlayer_Horizontal].PlayerData.Add(FPerPlayerSplitscreenData(1.0f, 0.333f, 0.0f, 0.0f));
-	SplitscreenInfo[ESplitScreenType::ThreePlayer_Horizontal].PlayerData.Add(FPerPlayerSplitscreenData(1.0f, 0.333f, 0.0f, 0.333f));
-	SplitscreenInfo[ESplitScreenType::ThreePlayer_Horizontal].PlayerData.Add(FPerPlayerSplitscreenData(1.0f, 0.333f, 0.0f, 0.666f));
+	SplitscreenInfo[ESplitScreenType::ThreePlayer_Horizontal].PlayerData.Add(FPerPlayerSplitscreenData(1.0f, OneOverThree, 0.0f, 0.0f));
+	SplitscreenInfo[ESplitScreenType::ThreePlayer_Horizontal].PlayerData.Add(FPerPlayerSplitscreenData(1.0f, OneOverThree, 0.0f, OneOverThree));
+	SplitscreenInfo[ESplitScreenType::ThreePlayer_Horizontal].PlayerData.Add(FPerPlayerSplitscreenData(1.0f, OneOverThree, 0.0f, TwoOverThree));
 
 	SplitscreenInfo[ESplitScreenType::FourPlayer_Grid].PlayerData.Add(FPerPlayerSplitscreenData(0.5f, 0.5f, 0.0f, 0.0f));
 	SplitscreenInfo[ESplitScreenType::FourPlayer_Grid].PlayerData.Add(FPerPlayerSplitscreenData(0.5f, 0.5f, 0.5f, 0.0f));
@@ -223,7 +222,6 @@ UGameViewportClient::UGameViewportClient(const FObjectInitializer& ObjectInitial
 	SplitscreenInfo[ESplitScreenType::FourPlayer_Horizontal].PlayerData.Add(FPerPlayerSplitscreenData(1.f, 0.25f, 0.0f, 0.5f));
 	SplitscreenInfo[ESplitScreenType::FourPlayer_Horizontal].PlayerData.Add(FPerPlayerSplitscreenData(1.f, 0.25f, 0.0f, 0.75f));
 
-	MaxSplitscreenPlayers = 4;
 	bSuppressTransitionMessage = true;
 
 	if (HasAnyFlags(RF_ClassDefaultObject) == false)
@@ -247,9 +245,6 @@ UGameViewportClient::UGameViewportClient(const FObjectInitializer& ObjectInitial
 
 UGameViewportClient::UGameViewportClient(FVTableHelper& Helper)
 	: Super(Helper)
-#if WITH_EDITOR
-	, bShowTitleSafeZone(true)
-#endif
 	, EngineShowFlags(ESFIM_Game)
 	, CurrentBufferVisualizationMode(NAME_None)
 	, HighResScreenshotDialog(NULL)
@@ -257,7 +252,6 @@ UGameViewportClient::UGameViewportClient(FVTableHelper& Helper)
 	, MouseCaptureMode(EMouseCaptureMode::CapturePermanently)
 	, bHideCursorDuringCapture(false)
 	, MouseLockMode(EMouseLockMode::LockOnCapture)
-	, AudioDeviceHandle(INDEX_NONE)
 	, bHasAudioFocus(false)
 {
 
@@ -304,14 +298,7 @@ void UGameViewportClient::PostInitProperties()
 
 void UGameViewportClient::BeginDestroy()
 {
-	if (GEngine)
-	{
-		class FAudioDeviceManager* AudioDeviceManager = GEngine->GetAudioDeviceManager();
-		if (AudioDeviceManager)
-		{
-			AudioDeviceManager->ShutdownAudioDevice(AudioDeviceHandle);
-		}
-	}
+	AudioDevice.Reset();
 
 	RemoveAllViewportWidgets();
 	Super::BeginDestroy();
@@ -327,12 +314,20 @@ void UGameViewportClient::DetachViewportClient()
 
 FSceneViewport* UGameViewportClient::GetGameViewport()
 {
-	return static_cast<FSceneViewport*>(Viewport);
+	if (Viewport && Viewport->GetViewportType() == NAME_SceneViewport)
+	{
+		return static_cast<FSceneViewport*>(Viewport);
+	}
+	return nullptr;
 }
 
 const FSceneViewport* UGameViewportClient::GetGameViewport() const
 {
-	return static_cast<FSceneViewport*>(Viewport);
+	if (Viewport && Viewport->GetViewportType() == NAME_SceneViewport)
+	{
+		return static_cast<FSceneViewport*>(Viewport);
+	}
+	return nullptr;
 }
 
 
@@ -413,6 +408,14 @@ void UGameViewportClient::Init(struct FWorldContext& WorldContext, UGameInstance
 		}
 	}
 	MouseLockMode = GetDefault<UInputSettings>()->DefaultViewportMouseLockMode;
+
+	// Don't capture mouse when headless
+	if(!FApp::CanEverRender())
+	{
+		MouseCaptureMode = EMouseCaptureMode::NoCapture;
+		MouseLockMode = EMouseLockMode::DoNotLock;
+	}
+
 	// In off-screen rendering mode don't lock mouse to the viewport, as we don't want mouse to lock to an invisible window
 	if (FSlateApplication::Get().IsRenderingOffScreen()) {
 		MouseLockMode = EMouseLockMode::DoNotLock;
@@ -426,11 +429,14 @@ void UGameViewportClient::Init(struct FWorldContext& WorldContext, UGameInstance
 		FAudioDeviceManager* AudioDeviceManager = GEngine->GetAudioDeviceManager();
 		if (AudioDeviceManager)
 		{
-			FAudioDeviceManager::FCreateAudioDeviceResults NewDeviceResults;
-			if (AudioDeviceManager->CreateAudioDevice(bCreateNewAudioDevice, NewDeviceResults))
-			{
-				AudioDeviceHandle = NewDeviceResults.Handle;
+			// Get a new audio device for this world.
+			FAudioDeviceParams DeviceParams = AudioDeviceManager->GetDefaultParamsForNewWorld();
+			DeviceParams.AssociatedWorld = World;
 
+			AudioDevice = AudioDeviceManager->RequestAudioDevice(DeviceParams);
+
+			if (AudioDevice.IsValid())
+			{
 #if ENABLE_AUDIO_DEBUG
 				FAudioDebugger::ResolveDesiredStats(this);
 #endif // ENABLE_AUDIO_DEBUG
@@ -438,15 +444,15 @@ void UGameViewportClient::Init(struct FWorldContext& WorldContext, UGameInstance
 				// Set the base mix of the new device based on the world settings of the world
 				if (World)
 				{
-					NewDeviceResults.AudioDevice->SetDefaultBaseSoundMix(World->GetWorldSettings()->DefaultBaseSoundMix);
+					AudioDevice.GetAudioDevice()->SetDefaultBaseSoundMix(World->GetWorldSettings()->DefaultBaseSoundMix);
 
 					// Set the world's audio device handle to use so that sounds which play in that world will use the correct audio device
-					World->SetAudioDeviceHandle(AudioDeviceHandle);
+					World->SetAudioDevice(AudioDevice);
 				}
 
 				// Set this audio device handle on the world context so future world's set onto the world context
 				// will pass the audio device handle to them and audio will play on the correct audio device
-				WorldContext.AudioDeviceHandle = AudioDeviceHandle;
+				WorldContext.AudioDeviceID = AudioDevice.GetDeviceID();
 			}
 		}
 	}
@@ -527,6 +533,8 @@ bool UGameViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
 		GEngine->RemapGamepadControllerIdForPIE(this, ControllerId);
 	}
 
+	OnInputKeyEvent.Broadcast(EventArgs);
+
 #if WITH_EDITOR
 	// Give debugger commands a chance to process key binding
 	if (GameViewportInputKeyDelegate.IsBound())
@@ -593,6 +601,8 @@ bool UGameViewportClient::InputAxis(FViewport* InViewport, int32 ControllerId, F
 		GEngine->RemapGamepadControllerIdForPIE(this, ControllerId);
 	}
 
+	OnInputAxisEvent.Broadcast(InViewport, ControllerId, Key, Delta, DeltaTime, NumSamples, bGamepad);
+	
 	bool bResult = false;
 
 	// Don't allow mouse/joystick input axes while in PIE and the console has forced the cursor to be visible.  It's
@@ -1218,8 +1228,6 @@ void UGameViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCanvas)
 	}
 
 	TMap<ULocalPlayer*,FSceneView*> PlayerViewMap;
-
-	FAudioDevice* AudioDevice = MyWorld->GetAudioDevice();
 	TArray<FSceneView*> Views;
 
 	for (FLocalPlayerIterator Iterator(GEngine, MyWorld); Iterator; ++Iterator)
@@ -1257,6 +1265,11 @@ void UGameViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCanvas)
 						View->DiffuseOverrideParameter = FVector4(GEngine->LightingOnlyBrightness.R, GEngine->LightingOnlyBrightness.G, GEngine->LightingOnlyBrightness.B, 0.0f);
 						View->SpecularOverrideParameter = FVector4(.1f, .1f, .1f, 0.0f);
 					}
+					else if (View->Family->EngineShowFlags.LightingOnlyOverride)
+					{
+						View->DiffuseOverrideParameter = FVector4(GEngine->LightingOnlyBrightness.R, GEngine->LightingOnlyBrightness.G, GEngine->LightingOnlyBrightness.B, 0.0f);
+						View->SpecularOverrideParameter = FVector4(0.f, 0.f, 0.f, 0.f);
+					}
 					else if (View->Family->EngineShowFlags.ReflectionOverride)
 					{
 						View->DiffuseOverrideParameter = FVector4(0.f, 0.f, 0.f, 0.f);
@@ -1288,7 +1301,7 @@ void UGameViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCanvas)
 						PlayerViewMap.Add(LocalPlayer, View);
 
 						// Update the listener.
-						if (AudioDevice != NULL && PlayerController != NULL)
+						if (AudioDevice && PlayerController != NULL)
 						{
 							bool bUpdateListenerPosition = true;
 
@@ -1301,8 +1314,8 @@ void UGameViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCanvas)
 								// If there is more than one world referencing the main audio device
 								if (AudioDeviceManager->GetNumMainAudioDeviceWorlds() > 1)
 								{
-									uint32 MainAudioDeviceHandle = GEngine->GetAudioDeviceHandle();
-									if (AudioDevice->DeviceHandle == MainAudioDeviceHandle && !bHasAudioFocus)
+									Audio::FDeviceId MainAudioDeviceID = GEngine->GetMainAudioDeviceID();
+									if (AudioDevice->DeviceID == MainAudioDeviceID && !bHasAudioFocus)
 									{
 										bUpdateListenerPosition = false;
 									}
@@ -1334,11 +1347,11 @@ void UGameViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCanvas)
 								FVector OverrideAttenuation;
 								if (PlayerController->GetAudioListenerAttenuationOverridePosition(OverrideAttenuation))
 								{
-									AudioDevice->SetListenerAttenuationOverride(OverrideAttenuation);
+									AudioDevice->SetListenerAttenuationOverride(ViewportIndex, OverrideAttenuation);
 								}
 								else
 								{
-									AudioDevice->ClearListenerAttenuationOverride();
+									AudioDevice->ClearListenerAttenuationOverride(ViewportIndex);
 								}
 							}
 						}
@@ -1512,6 +1525,8 @@ void UGameViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCanvas)
 	}
 	else
 	{
+		GetRendererModule().PerFrameCleanupIfSkipRenderer();
+
 		// Make sure RHI resources get flushed if we're not using a renderer
 		ENQUEUE_RENDER_COMMAND(UGameViewportClient_FlushRHIResources)(
 			[](FRHICommandListImmediate& RHICmdList)
@@ -1807,7 +1822,7 @@ void UGameViewportClient::Precache()
 	if(!GIsEditor)
 	{
 		// Precache sounds...
-		if (FAudioDevice* AudioDevice = GetWorld()->GetAudioDevice())
+		if (AudioDevice)
 		{
 			UE_LOG(LogPlayerManagement, Log, TEXT("Precaching sounds..."));
 			for(TObjectIterator<USoundWave> It;It;++It)
@@ -1874,7 +1889,7 @@ void UGameViewportClient::ReceivedFocus(FViewport* InViewport)
 
 	if (GEngine && GEngine->GetAudioDeviceManager())
 	{
-		GEngine->GetAudioDeviceManager()->SetActiveDevice(AudioDeviceHandle);
+		GEngine->GetAudioDeviceManager()->SetActiveDevice(AudioDevice.GetDeviceID());
 		bHasAudioFocus = true;
 	}
 }
@@ -1945,12 +1960,8 @@ bool UGameViewportClient::IsOrtho() const
 void UGameViewportClient::PostRender(UCanvas* Canvas)
 {
 #if WITH_EDITOR
-	if(bShowTitleSafeZone)
-	{
-		DrawTitleSafeArea(Canvas);
-	}
+	DrawTitleSafeArea(Canvas);
 #endif
-
 	// Draw the transition screen.
 	DrawTransition(Canvas);
 }
@@ -1992,9 +2003,19 @@ void UGameViewportClient::SSSwapControllers()
 
 void UGameViewportClient::ShowTitleSafeArea()
 {
-#if !UE_BUILD_SHIPPING
-	bShowTitleSafeZone = !bShowTitleSafeZone;
-#endif
+	static IConsoleVariable* DebugSafeZoneModeCvar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.DebugSafeZone.Mode"));
+	if (DebugSafeZoneModeCvar)
+	{
+		const int32 DebugSafeZoneMode = DebugSafeZoneModeCvar->GetInt();
+		if (DebugSafeZoneMode != 1)
+		{
+			DebugSafeZoneModeCvar->Set(1);
+		}
+		else
+		{
+			DebugSafeZoneModeCvar->Set(0);
+		}
+	}
 }
 
 void UGameViewportClient::SetConsoleTarget(int32 PlayerIndex)
@@ -2419,13 +2440,33 @@ bool UGameViewportClient::CalculateDeadZoneForAllSides( ULocalPlayer* LPlayer, U
 void UGameViewportClient::DrawTitleSafeArea( UCanvas* Canvas )
 {
 #if WITH_EDITOR
+	// If we have a valid player hud, then the title area has already rendered.
+	APlayerController* FirstPlayerController = GetWorld()->GetFirstPlayerController();
+	if (FirstPlayerController && FirstPlayerController->GetHUD())
+	{
+		return;
+	}
+
+	// If r.DebugSafeZone.Mode isn't set to draw title area, don't draw it.
+	static IConsoleVariable* SafeZoneModeCvar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.DebugSafeZone.Mode"));
+	if (SafeZoneModeCvar && (SafeZoneModeCvar->GetInt() != 1))
+	{
+		return;
+	}
+
 	FMargin SafeZone;
 	const ULevelEditorPlaySettings* PlayInSettings = GetDefault<ULevelEditorPlaySettings>();
 
 	float Width, Height;
 	GetPixelSizeOfScreen(Width, Height, Canvas, 0);
 
-	const FLinearColor UnsafeZoneColor(1.0f, 0.0f, 0.0f, 0.25f);
+	FLinearColor UnsafeZoneColor(1.0f, 0.0f, 0.0f, 0.25f);
+	static IConsoleVariable* AlphaCvar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.DebugSafeZone.OverlayAlpha"));
+	if (AlphaCvar)
+	{
+		UnsafeZoneColor.A = AlphaCvar->GetFloat();
+	}
+
 	FCanvasTileItem TileItem(FVector2D::ZeroVector, GWhiteTexture, UnsafeZoneColor);
 	TileItem.BlendMode = SE_BLEND_Translucent;
 
@@ -2611,7 +2652,8 @@ void UGameViewportClient::VerifyPathRenderingComponents()
 
 bool UGameViewportClient::CaptureMouseOnLaunch()
 {
-	return GetDefault<UInputSettings>()->bCaptureMouseOnLaunch;
+	// Capture mouse unless headless
+	return !FApp::CanEverRender() ? false : GetDefault<UInputSettings>()->bCaptureMouseOnLaunch;
 }
 
 bool UGameViewportClient::Exec( UWorld* InWorld, const TCHAR* Cmd,FOutputDevice& Ar)
@@ -2940,7 +2982,7 @@ void UGameViewportClient::ToggleShowCollision()
 	if (World != nullptr)
 	{
 		// Tell engine to create proxies for hidden components, so we can still draw collision
-		World->bCreateRenderStateForHiddenComponents = bIsShowingCollision;
+		World->bCreateRenderStateForHiddenComponentsWithCollsion = bIsShowingCollision;
 
 		// Need to recreate scene proxies when this flag changes.
 		FGlobalComponentRecreateRenderStateContext Recreate;
@@ -3451,7 +3493,7 @@ bool UGameViewportClient::HandleDisplayCommand( const TCHAR* Cmd, FOutputDevice&
 		if (Obj != nullptr)
 		{
 			FName PropertyName(PropStr, FNAME_Find);
-			if (PropertyName != NAME_None && FindField<UProperty>(Obj->GetClass(), PropertyName) != nullptr)
+			if (PropertyName != NAME_None && FindFProperty<FProperty>(Obj->GetClass(), PropertyName) != nullptr)
 			{
 				AddDebugDisplayProperty(Obj, nullptr, PropertyName);
 			}
@@ -3503,7 +3545,7 @@ bool UGameViewportClient::HandleDisplayAllCommand( const TCHAR* Cmd, FOutputDevi
 			if (Cls != nullptr)
 			{
 				FName PropertyName(PropStr, FNAME_Find);
-				UProperty* Prop = PropertyName != NAME_None ? FindField<UProperty>(Cls, PropertyName) : nullptr;
+				FProperty* Prop = PropertyName != NAME_None ? FindFProperty<FProperty>(Cls, PropertyName) : nullptr;
 				{
 					// add all un-GCable things immediately as that list is static
 					// so then we only have to iterate over dynamic things each frame
@@ -3816,6 +3858,11 @@ bool UGameViewportClient::GetUseMouseForTouch() const
 
 void* UGameViewportClient::LoadCursorFromPngs(ICursor& PlatformCursor, const FString& InPathToCursorWithoutExtension, FVector2D InHotSpot)
 {
+	if (!PlatformCursor.IsCreateCursorFromRGBABufferSupported())
+	{
+		return nullptr;
+	}
+
 	TArray<TSharedPtr<FPngFileData>> CursorPngFiles;
 	if (!LoadAvailableCursorPngs(CursorPngFiles, InPathToCursorWithoutExtension))
 	{
@@ -3839,13 +3886,13 @@ void* UGameViewportClient::LoadCursorFromPngs(ICursor& PlatformCursor, const FSt
 
 	if (PngImageWrapper.IsValid() && PngImageWrapper->SetCompressed(NearestCursor->FileData.GetData(), NearestCursor->FileData.Num()))
 	{
-		const TArray<uint8>* RawImageData = nullptr;
+		TArray64<uint8> RawImageData;
 		if (PngImageWrapper->GetRaw(ERGBFormat::RGBA, 8, RawImageData))
 		{
 			const int32 Width = PngImageWrapper->GetWidth();
 			const int32 Height = PngImageWrapper->GetHeight();
 
-			return PlatformCursor.CreateCursorFromRGBABuffer((FColor*) RawImageData->GetData(), Width, Height, InHotSpot);
+			return PlatformCursor.CreateCursorFromRGBABuffer((FColor*) RawImageData.GetData(), Width, Height, InHotSpot);
 		}
 	}
 

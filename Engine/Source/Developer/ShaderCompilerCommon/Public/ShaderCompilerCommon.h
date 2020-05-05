@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -40,8 +40,40 @@ extern SHADERCOMPILERCOMMON_API void BuildResourceTableTokenStream(
 // Finds the number of used uniform buffers in a resource map
 extern SHADERCOMPILERCOMMON_API int16 GetNumUniformBuffersUsed(const FShaderCompilerResourceTable& InSRT);
 
-/** Moves all the shader parameter defined in the root scope of the shader into the root uniform buffer. */
-extern SHADERCOMPILERCOMMON_API void MoveShaderParametersToRootConstantBuffer(const FShaderCompilerInput& CompilerInput, FString& PreprocessedShaderSource, const FString& ConstantBufferType);
+
+/** Validates and moves all the shader loose data parameter defined in the root scope of the shader into the root uniform buffer. */
+class SHADERCOMPILERCOMMON_API FShaderParameterParser
+{
+public:
+	bool ParseAndMoveShaderParametersToRootConstantBuffer(
+		const FShaderCompilerInput& CompilerInput,
+		FShaderCompilerOutput& CompilerOutput,
+		FString& PreprocessedShaderSource,
+		const TCHAR* ConstantBufferType);
+
+	void ValidateShaderParameterTypes(
+		const FShaderCompilerInput& CompilerInput,
+		FShaderCompilerOutput& CompilerOutput) const;
+
+private:
+	struct FParsedShaderParameter
+	{
+		FString Type;
+		int32 PragamLineoffset;
+		int32 LineOffset;
+
+		bool IsFound() const
+		{
+			return !Type.IsEmpty();
+		}
+	};
+
+	void ExtractFileAndLine(int32 PragamLineoffset, int32 LineOffset, FString& OutFile, FString& OutLine) const;
+
+	FString OriginalParsedShader;
+
+	TMap<FString, FParsedShaderParameter> ParsedParameters;
+};
 
 // The cross compiler doesn't yet support struct initializers needed to construct static structs for uniform buffers
 // Replace all uniform buffer struct member references (View.WorldToClip) with a flattened name that removes the struct dependency (View_WorldToClip)
@@ -324,3 +356,6 @@ namespace CrossCompiler
 	}
 
 }
+
+// Error code for SCW to help track down crashes
+extern SHADERCOMPILERCOMMON_API ESCWErrorCode GSCWErrorCode;

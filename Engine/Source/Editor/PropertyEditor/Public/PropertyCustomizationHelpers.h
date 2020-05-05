@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -51,6 +51,7 @@ DECLARE_DELEGATE_ThreeParams(FOnGetPropertyComboBoxStrings, TArray< TSharedPtr<F
 DECLARE_DELEGATE_RetVal(FString, FOnGetPropertyComboBoxValue);
 DECLARE_DELEGATE_OneParam(FOnPropertyComboBoxValueSelected, const FString&);
 DECLARE_DELEGATE_ThreeParams(FOnInstancedPropertyIteration, IDetailCategoryBuilder&, IDetailGroup*, TSharedRef<IPropertyHandle>&);
+DECLARE_DELEGATE_RetVal(bool, FOnIsEnabled);
 
 namespace PropertyCustomizationHelpers
 {
@@ -78,8 +79,8 @@ namespace PropertyCustomizationHelpers
 	PROPERTYEDITOR_API TSharedRef<SWidget> MakeEditConfigHierarchyButton(FSimpleDelegate OnEditConfigClicked, TAttribute<FText> OptionalToolTipText = FText(), TAttribute<bool> IsEnabled = true);
 	PROPERTYEDITOR_API TSharedRef<SWidget> MakeDocumentationButton(const TSharedRef<FPropertyEditor>& InPropertyEditor);
 
-	/** @return the UBoolProperty edit condition property if one exists. */
-	PROPERTYEDITOR_API UBoolProperty* GetEditConditionProperty(const UProperty* InProperty, bool& bNegate);
+	/** @return the FBoolProperty edit condition property if one exists. */
+	PROPERTYEDITOR_API FBoolProperty* GetEditConditionProperty(const FProperty* InProperty, bool& bNegate);
 
 	/** Returns a list of factories which can be used to create new assets, based on the supplied class */
 	PROPERTYEDITOR_API TArray<UFactory*> GetNewAssetFactoriesForClasses(const TArray<const UClass*>& Classes);
@@ -118,7 +119,7 @@ DECLARE_DELEGATE_OneParam( FOnSetObject, const FAssetData& );
 
 /**
  * Simulates an object property field 
- * Can be used when a property should act like a UObjectProperty but it isn't one
+ * Can be used when a property should act like a FObjectProperty but it isn't one
  */
 class SObjectPropertyEntryBox : public SCompoundWidget
 {
@@ -150,6 +151,8 @@ public:
 		SLATE_EVENT(FOnSetObject, OnObjectChanged)
 		/** Called to check if an asset is valid to use */
 		SLATE_EVENT(FOnShouldFilterAsset, OnShouldFilterAsset)
+		/** Called to check if the asset should be enabled. */
+		SLATE_EVENT(FOnIsEnabled, OnIsEnabled)
 		/** Whether the asset can be 'None' */
 		SLATE_ARGUMENT(bool, AllowClear)
 		/** Whether to show the 'Use Selected' button */
@@ -181,11 +184,16 @@ private:
 
 	/** @return the object path for the object we are viewing */
 	FString OnGetObjectPath() const;
+
+	bool IsEnabled() const;
+
 private:
 	/** Delegate to call to determine whether the asset should be set */
 	FOnShouldSetAsset OnShouldSetAsset;
 	/** Delegate to call when the object changes */
 	FOnSetObject OnObjectChanged;
+	/** Delegate to call to check if this widget should be enabled. */
+	FOnIsEnabled OnIsEnabled;
 	/** Path to the object */
 	TAttribute<FString> ObjectPath;
 	/** Handle to a property we modify (if any)*/
@@ -201,7 +209,7 @@ DECLARE_DELEGATE_OneParam( FOnSetClass, const UClass* );
 
 /**
  * Simulates a class property field 
- * Can be used when a property should act like a UClassProperty but it isn't one
+ * Can be used when a property should act like a FClassProperty but it isn't one
  */
 class SClassPropertyEntryBox : public SCompoundWidget
 {
@@ -289,10 +297,10 @@ private:
 
 
 /**
- * Represents a widget that can display a UProperty 
+ * Represents a widget that can display a FProperty 
  * With the ability to customize the look of the property                 
  */
-class PROPERTYEDITOR_VTABLE SProperty
+class SProperty
 	: public SCompoundWidget
 {
 public:
@@ -331,7 +339,7 @@ public:
 	PROPERTYEDITOR_API virtual FText GetResetToDefaultLabel() const;
 
 	/**
-	 * Returns whether or not this property is valid.  Sometimes property widgets are created even when their UProperty is not exposed to the user.  In that case the property is invalid
+	 * Returns whether or not this property is valid.  Sometimes property widgets are created even when their FProperty is not exposed to the user.  In that case the property is invalid
 	 * Properties can also become invalid if selection changes in the detail view and this value is stored somewhere.
 	 * @return Whether or not the property is valid.                   
 	 */

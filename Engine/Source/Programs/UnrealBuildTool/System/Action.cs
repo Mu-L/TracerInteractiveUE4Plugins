@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -168,6 +168,12 @@ namespace UnrealBuildTool
 		public Action(ActionType InActionType)
 		{
 			ActionType = InActionType;
+
+			// link actions are going to run locally on SN-DBS so don't try to distribute them as that generates warnings for missing tool templates
+			if ( ActionType == ActionType.Link )
+			{
+				bCanExecuteRemotelyWithSNDBS = false;
+			}
 		}
 
 		public Action(BinaryArchiveReader Reader)
@@ -358,26 +364,6 @@ namespace UnrealBuildTool
 			{
 				Writer.WriteValue("DependencyListFile", DependencyListFile.AbsolutePath);
 			}
-		}
-
-		/// <summary>
-		/// Creates an action which calls UBT recursively
-		/// </summary>
-		/// <param name="Type">Type of the action</param>
-		/// <param name="Arguments">Arguments for the action</param>
-		/// <returns>New action instance</returns>
-		public static Action CreateRecursiveAction<T>(ActionType Type, string Arguments) where T : ToolMode
-		{
-			ToolModeAttribute Attribute = typeof(T).GetCustomAttribute<ToolModeAttribute>();
-			if(Attribute == null)
-			{
-				throw new BuildException("Missing ToolModeAttribute on {0}", typeof(T).Name);
-			}
-
-			Action NewAction = new Action(Type);
-			NewAction.CommandPath = UnrealBuildTool.GetUBTPath();
-			NewAction.CommandArguments = String.Format("-Mode={0} {1}", Attribute.Name, Arguments);
-			return NewAction;
 		}
 
 		/// <summary>

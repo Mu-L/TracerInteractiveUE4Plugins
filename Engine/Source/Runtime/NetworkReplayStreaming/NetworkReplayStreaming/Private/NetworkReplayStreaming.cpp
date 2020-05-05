@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NetworkReplayStreaming.h"
 #include "Misc/CommandLine.h"
@@ -76,6 +76,11 @@ FString FNetworkReplayStreaming::GetAutomaticReplayPrefix()
 	return CVarReplayStreamerAutoDemoPrefix.GetValueOnAnyThread();
 }
 
+FString FNetworkReplayStreaming::GetReplayFileExtension()
+{
+	return TEXT(".replay");
+}
+
 bool FNetworkReplayStreaming::UseDateTimeAsAutomaticReplayPostfix()
 {
 	return !!CVarReplayStreamerAutoDemoUseDateTimePostfix.GetValueOnAnyThread();
@@ -122,48 +127,4 @@ bool FNetworkReplayStreaming::Exec(UWorld* InWorld, const TCHAR* Cmd, FOutputDev
 	}
 
 	return false;
-}
-
-void INetworkReplayStreamer::StartStreaming(const FString& CustomName, const FString& FriendlyName, const TArray<FString>& UserNames, bool bRecord, const FNetworkReplayVersion& ReplayVersion, const FStartStreamingCallback& Delegate)
-{
-	FStartStreamingParameters Params;
-	Params.CustomName = CustomName;
-	Params.FriendlyName = FriendlyName;
-	
-	for (const FString& UserString : UserNames)
-	{
-		Params.UserIndices.Emplace(GetUserIndexFromUserString(UserString));
-	}
-	
-	Params.bRecord = bRecord;
-	Params.ReplayVersion = ReplayVersion;
-
-	StartStreaming(Params, Delegate);
-}
-
-void INetworkReplayStreamer::StartStreaming(const FString& CustomName, const FString& FriendlyName, const TArray<int32>& UserIndices, bool bRecord, const FNetworkReplayVersion& ReplayVersion, const FStartStreamingCallback& Delegate)
-{
-	FStartStreamingParameters Params;
-	Params.CustomName = CustomName;
-	Params.FriendlyName = FriendlyName;
-	Params.UserIndices = UserIndices;
-	Params.bRecord = bRecord;
-	Params.ReplayVersion = ReplayVersion;
-
-	StartStreaming(Params, Delegate);
-}
-
-void INetworkReplayStreamer::EnumerateStreams(const FNetworkReplayVersion& ReplayVersion, const FString& UserString, const FString& MetaString, const FEnumerateStreamsCallback& Delegate)
-{
-	EnumerateStreams(ReplayVersion, GetUserIndexFromUserString(UserString), MetaString, TArray<FString>(), Delegate);
-}
-
-void INetworkReplayStreamer::EnumerateStreams(const FNetworkReplayVersion& ReplayVersion, const FString& UserString, const FString& MetaString, const TArray<FString>& ExtraParms, const FEnumerateStreamsCallback& Delegate)
-{
-	EnumerateStreams(ReplayVersion, GetUserIndexFromUserString(UserString), MetaString, ExtraParms, Delegate);
-}
-
-void INetworkReplayStreamer::EnumerateRecentStreams(const FNetworkReplayVersion& ReplayVersion, const FString& RecentViewer, const FEnumerateStreamsCallback& Delegate)
-{
-	EnumerateRecentStreams(ReplayVersion, GetUserIndexFromUserString(RecentViewer), Delegate);
 }

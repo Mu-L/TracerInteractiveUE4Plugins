@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreTypes.h"
+
 #include "GenericPlatform/GenericWindow.h"
 #include "Templates/SharedPointer.h"
 #include "Windows/WindowsHWrapper.h"
@@ -124,6 +125,7 @@ public:
 	virtual int32 GetWindowTitleBarSize() const override;
 	virtual void* GetOSWindowHandle() const  override { return HWnd; }
 	virtual bool IsForegroundWindow() const override;
+	virtual bool IsFullscreenSupported() const override;
 	virtual void SetText(const TCHAR* const Text) override;
 	virtual void DrawAttention(const FWindowDrawAttentionParameters& Parameters) override;
 

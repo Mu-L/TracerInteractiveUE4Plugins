@@ -1,10 +1,22 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraRibbonRendererProperties.h"
 #include "NiagaraRendererRibbons.h"
 #include "NiagaraConstants.h"
 #include "NiagaraBoundsCalculatorHelper.h"
 #include "Modules/ModuleManager.h"
+#if WITH_EDITOR
+#include "Widgets/Images/SImage.h"
+#include "Styling/SlateIconFinder.h"
+#include "Widgets/SWidget.h"
+#include "Styling/SlateBrush.h"
+#include "AssetThumbnail.h"
+#include "Widgets/Text/STextBlock.h"
+#endif
+
+
+
+#define LOCTEXT_NAMESPACE "UNiagaraRibbonRendererProperties"
 
 TArray<TWeakObjectPtr<UNiagaraRibbonRendererProperties>> UNiagaraRibbonRendererProperties::RibbonRendererPropertiesToDeferredInit;
 
@@ -24,6 +36,24 @@ UNiagaraRibbonRendererProperties::UNiagaraRibbonRendererProperties()
 	, TessellationAngle(15)
 	, bScreenSpaceTessellation(true)
 {
+	FNiagaraTypeDefinition MaterialDef(UMaterialInterface::StaticClass());
+	MaterialUserParamBinding.Parameter.SetType(MaterialDef);
+
+	AttributeBindings.Reserve(14);
+	AttributeBindings.Add(&PositionBinding);
+	AttributeBindings.Add(&ColorBinding);
+	AttributeBindings.Add(&VelocityBinding);
+	AttributeBindings.Add(&NormalizedAgeBinding);
+	AttributeBindings.Add(&RibbonTwistBinding);
+	AttributeBindings.Add(&RibbonWidthBinding);
+	AttributeBindings.Add(&RibbonFacingBinding);
+	AttributeBindings.Add(&RibbonIdBinding);
+	AttributeBindings.Add(&RibbonLinkOrderBinding);
+	AttributeBindings.Add(&MaterialRandomBinding);
+	AttributeBindings.Add(&DynamicMaterialBinding);
+	AttributeBindings.Add(&DynamicMaterial1Binding);
+	AttributeBindings.Add(&DynamicMaterial2Binding);
+	AttributeBindings.Add(&DynamicMaterial3Binding);
 }
 
 FNiagaraRenderer* UNiagaraRibbonRendererProperties::CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel, const FNiagaraEmitterInstance* Emitter)
@@ -33,6 +63,21 @@ FNiagaraRenderer* UNiagaraRibbonRendererProperties::CreateEmitterRenderer(ERHIFe
 	return NewRenderer;
 }
 
+
+void UNiagaraRibbonRendererProperties::PostLoad()
+{
+	Super::PostLoad();
+
+#if WITH_EDITORONLY_DATA
+
+	if (MaterialUserParamBinding.Parameter.GetType().GetClass() != UMaterialInterface::StaticClass())
+	{
+		FNiagaraTypeDefinition MaterialDef(UMaterialInterface::StaticClass());
+		MaterialUserParamBinding.Parameter.SetType(MaterialDef);
+	}
+#endif
+}
+
 FNiagaraBoundsCalculator* UNiagaraRibbonRendererProperties::CreateBoundsCalculator()
 {
 	return new FNiagaraBoundsCalculatorHelper<false, false, true>();
@@ -40,7 +85,17 @@ FNiagaraBoundsCalculator* UNiagaraRibbonRendererProperties::CreateBoundsCalculat
 
 void UNiagaraRibbonRendererProperties::GetUsedMaterials(const FNiagaraEmitterInstance* InEmitter, TArray<UMaterialInterface*>& OutMaterials) const
 {
-	OutMaterials.Add(Material);
+
+	bool bSet = false;
+	if (InEmitter != nullptr && MaterialUserParamBinding.Parameter.IsValid() && InEmitter->FindBinding(MaterialUserParamBinding, OutMaterials))
+	{
+		bSet = true;
+	}
+
+	if (!bSet)
+	{
+		OutMaterials.Add(Material);
+	}
 }
 
 void UNiagaraRibbonRendererProperties::PostInitProperties()
@@ -109,18 +164,6 @@ void UNiagaraRibbonRendererProperties::PostEditChangeProperty(struct FPropertyCh
 	}
 }
 
-const TArray<FNiagaraVariable>& UNiagaraRibbonRendererProperties::GetRequiredAttributes()
-{
-	static TArray<FNiagaraVariable> Attrs;
-
-	if (Attrs.Num() == 0)
-	{
-	}
-
-	return Attrs;
-}
-
-
 const TArray<FNiagaraVariable>& UNiagaraRibbonRendererProperties::GetOptionalAttributes()
 {
 	static TArray<FNiagaraVariable> Attrs;
@@ -141,6 +184,51 @@ const TArray<FNiagaraVariable>& UNiagaraRibbonRendererProperties::GetOptionalAtt
 }
 
 
+void UNiagaraRibbonRendererProperties::GetRendererWidgets(const FNiagaraEmitterInstance* InEmitter, TArray<TSharedPtr<SWidget>>& OutWidgets, TSharedPtr<FAssetThumbnailPool> InThumbnailPool) const
+{
+	TSharedRef<SWidget> ThumbnailWidget = SNullWidget::NullWidget;
+	int32 ThumbnailSize = 32;
+	TArray<UMaterialInterface*> Materials;
+	GetUsedMaterials(InEmitter, Materials);
+	for (UMaterialInterface* PreviewedMaterial : Materials)
+	{
+		TSharedPtr<FAssetThumbnail> AssetThumbnail = MakeShareable(new FAssetThumbnail(PreviewedMaterial, ThumbnailSize, ThumbnailSize, InThumbnailPool));
+		if (AssetThumbnail)
+		{
+			ThumbnailWidget = AssetThumbnail->MakeThumbnailWidget();
+		}
+		OutWidgets.Add(ThumbnailWidget);
+	}
+
+	if (Materials.Num() == 0)
+	{
+		TSharedRef<SWidget> SpriteWidget = SNew(SImage)
+			.Image(FSlateIconFinder::FindIconBrushForClass(GetClass()));
+		OutWidgets.Add(SpriteWidget);
+	}
+}
+
+void UNiagaraRibbonRendererProperties::GetRendererTooltipWidgets(const FNiagaraEmitterInstance* InEmitter, TArray<TSharedPtr<SWidget>>& OutWidgets, TSharedPtr<FAssetThumbnailPool> InThumbnailPool) const
+{
+	TArray<UMaterialInterface*> Materials;
+	GetUsedMaterials(InEmitter, Materials);
+	if (Materials.Num() > 0)
+	{
+		GetRendererWidgets(InEmitter, OutWidgets, InThumbnailPool);
+	}
+	else
+	{
+		TSharedRef<SWidget> RibbonTooltip = SNew(STextBlock)
+			.Text(LOCTEXT("RibbonRendererNoMat", "Ribbon Renderer (No Material Set)"));
+		OutWidgets.Add(RibbonTooltip);
+	}
+}
+
+
+void UNiagaraRibbonRendererProperties::GetRendererFeedback(const UNiagaraEmitter* InEmitter, TArray<FText>& OutErrors, TArray<FText>& OutWarnings, TArray<FText>& OutInfo) const
+{
+	Super::GetRendererFeedback(InEmitter, OutErrors, OutWarnings, OutInfo);
+}
 
 
 bool UNiagaraRibbonRendererProperties::IsMaterialValidForRenderer(UMaterial* InMaterial, FText& InvalidMessage)
@@ -160,7 +248,7 @@ void UNiagaraRibbonRendererProperties::FixMaterial(UMaterial* InMaterial)
 	InMaterial->ForceRecompileForRendering();
 }
 
-bool UNiagaraRibbonRendererProperties::CanEditChange(const UProperty* InProperty) const
+bool UNiagaraRibbonRendererProperties::CanEditChange(const FProperty* InProperty) const
 {
 
 	if (InProperty->HasMetaData(TEXT("Category")) && InProperty->GetMetaData(TEXT("Category")).Contains("Tessellation"))
@@ -184,3 +272,4 @@ bool UNiagaraRibbonRendererProperties::CanEditChange(const UProperty* InProperty
 }
 
 #endif // WITH_EDITORONLY_DATA
+#undef LOCTEXT_NAMESPACE

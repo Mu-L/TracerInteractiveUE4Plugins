@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -79,12 +79,12 @@ public:
 
 	/** Copy the data of the specified set of particles/rigid body ids to this object. */
 	//void Sync(const Chaos::FPhysicsSolver* Solver, const TManagedArray<int32>& RigidBodyIds);
-	void Sync(const Chaos::FPhysicsSolver* Solver, const TManagedArray<FGuid>& RigidBodyIds);
+	void Sync(Chaos::FPhysicsSolver* Solver, const TManagedArray<FGuid>& RigidBodyIds);
 
 	const Chaos::TVector<T, d>               & GetX                     (int32 Index) const { check(HasSyncedData(EGeometryCollectionParticlesData::X                     )); return BufferedData.GetGameDataForRead().X                     [Index]; }
 	const Chaos::TRotation<T, d>             & GetR                     (int32 Index) const { check(HasSyncedData(EGeometryCollectionParticlesData::R                     )); return BufferedData.GetGameDataForRead().R                     [Index]; }
-	const Chaos::TImplicitObject<T, d>* const& GetGeometry              (int32 Index) const { check(HasSyncedData(EGeometryCollectionParticlesData::Geometry              )); return BufferedData.GetGameDataForRead().Geometry              [Index]; }
-	const Chaos::ImplicitObjectType          & GetGeometryType          (int32 Index) const { check(HasSyncedData(EGeometryCollectionParticlesData::GeometryType          )); return BufferedData.GetGameDataForRead().GeometryType          [Index]; }
+	const Chaos::FImplicitObject* const& GetGeometry              (int32 Index) const { check(HasSyncedData(EGeometryCollectionParticlesData::Geometry              )); return BufferedData.GetGameDataForRead().Geometry              [Index]; }
+	const Chaos::EImplicitObjectType         & GetGeometryType          (int32 Index) const { check(HasSyncedData(EGeometryCollectionParticlesData::GeometryType          )); return BufferedData.GetGameDataForRead().GeometryType          [Index]; }
 	const bool                               & IsGeometryConvex         (int32 Index) const { check(HasSyncedData(EGeometryCollectionParticlesData::GeometryIsConvex      )); return BufferedData.GetGameDataForRead().GeometryIsConvex      [Index]; }
 	const bool                               & HasGeometryBoundingBoxm  (int32 Index) const { check(HasSyncedData(EGeometryCollectionParticlesData::GeometryHasBoundingBox)); return BufferedData.GetGameDataForRead().GeometryHasBoundingBox[Index]; }
 	const Chaos::TVector<T, d>               & GetGeometryBoxMin        (int32 Index) const { check(HasSyncedData(EGeometryCollectionParticlesData::GeometryBoxMin        )); return BufferedData.GetGameDataForRead().GeometryBoxMin        [Index]; }
@@ -125,8 +125,8 @@ private:
 		FDataFlags SyncedDataFlags;
 		Chaos::TArrayCollectionArray<Chaos::TVector<T, d>               > X;
 		Chaos::TArrayCollectionArray<Chaos::TRotation<T, d>             > R;
-		Chaos::TArrayCollectionArray<const Chaos::TImplicitObject<T, d>*> Geometry;
-		Chaos::TArrayCollectionArray<Chaos::ImplicitObjectType          > GeometryType;
+		Chaos::TArrayCollectionArray<const Chaos::FImplicitObject*> Geometry;
+		Chaos::TArrayCollectionArray<Chaos::EImplicitObjectType         > GeometryType;
 		Chaos::TArrayCollectionArray<bool                               > GeometryIsConvex;
 		Chaos::TArrayCollectionArray<bool                               > GeometryHasBoundingBox;
 		Chaos::TArrayCollectionArray<Chaos::TVector<T, d>               > GeometryBoxMin;

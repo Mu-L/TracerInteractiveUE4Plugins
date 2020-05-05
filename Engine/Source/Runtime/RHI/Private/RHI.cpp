@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	RHI.cpp: Render Hardware Interface implementation.
@@ -10,6 +10,8 @@
 #include "Misc/MessageDialog.h"
 #include "RHIShaderFormatDefinitions.inl"
 #include "ProfilingDebugging/CsvProfiler.h"
+#include "String/LexFromString.h"
+#include "String/ParseTokens.h"
 
 IMPLEMENT_MODULE(FDefaultModuleImpl, RHI);
 
@@ -34,6 +36,13 @@ DEFINE_STAT(STAT_IndexBufferMemory);
 DEFINE_STAT(STAT_VertexBufferMemory);
 DEFINE_STAT(STAT_StructuredBufferMemory);
 DEFINE_STAT(STAT_PixelBufferMemory);
+
+IMPLEMENT_TYPE_LAYOUT(FRHIUniformBufferLayout);
+IMPLEMENT_TYPE_LAYOUT(FRHIUniformBufferLayout::FResourceParameter);
+
+#if !defined(RHIRESOURCE_NUM_FRAMES_TO_EXPIRE)
+	#define RHIRESOURCE_NUM_FRAMES_TO_EXPIRE 3
+#endif
 
 static FAutoConsoleVariable CVarUseVulkanRealUBs(
 	TEXT("r.Vulkan.UseRealUBs"),
@@ -138,22 +147,26 @@ FString FVertexElement::ToString() const
 
 void FVertexElement::FromString(const FString& InSrc)
 {
-	FString Src = InSrc;
-	Src.ReplaceInline(TEXT("\r"), TEXT(" "));
-	Src.ReplaceInline(TEXT("\n"), TEXT(" "));
-	Src.ReplaceInline(TEXT("\t"), TEXT(" "));
-	Src.ReplaceInline(TEXT("<"), TEXT(" "));
-	Src.ReplaceInline(TEXT(">"), TEXT(" "));
-	TArray<FString> Parts;
-	Src.TrimStartAndEnd().ParseIntoArray(Parts, TEXT(" "));
+	FromString(FStringView(InSrc));
+}
 
-	check(Parts.Num() == 6 && sizeof(Type) == 1); //not a very robust parser
-	LexFromString(StreamIndex, *Parts[0]);
-	LexFromString(Offset, *Parts[1]);
-	LexFromString((uint8&)Type, *Parts[2]);
-	LexFromString(AttributeIndex, *Parts[3]);
-	LexFromString(Stride, *Parts[4]);
-	LexFromString(bUseInstanceIndex, *Parts[5]);
+void FVertexElement::FromString(const FStringView& InSrc)
+{
+	constexpr int32 PartCount = 6;
+
+	TArray<FStringView, TInlineAllocator<PartCount>> Parts;
+	UE::String::ParseTokensMultiple(InSrc.TrimStartAndEnd(), {TEXT('\r'), TEXT('\n'), TEXT('\t'), TEXT('<'), TEXT('>'), TEXT(' ')},
+		[&Parts](FStringView Part) { if (!Part.IsEmpty()) { Parts.Add(Part); } });
+
+	check(Parts.Num() == PartCount && sizeof(Type) == 1); //not a very robust parser
+	const FStringView* PartIt = Parts.GetData();
+	LexFromString(StreamIndex, *PartIt++);
+	LexFromString(Offset, *PartIt++);
+	LexFromString((uint8&)Type, *PartIt++);
+	LexFromString(AttributeIndex, *PartIt++);
+	LexFromString(Stride, *PartIt++);
+	LexFromString(bUseInstanceIndex, *PartIt++);
+	check(Parts.GetData() + PartCount == PartIt);
 }
 
 FString FDepthStencilStateInitializerRHI::ToString() const
@@ -182,36 +195,43 @@ FString FDepthStencilStateInitializerRHI::ToString() const
 			, uint32(StencilWriteMask)
 		);
 }
+
 void FDepthStencilStateInitializerRHI::FromString(const FString& InSrc)
 {
-	FString Src = InSrc;
-	Src.ReplaceInline(TEXT("\r"), TEXT(" "));
-	Src.ReplaceInline(TEXT("\n"), TEXT(" "));
-	Src.ReplaceInline(TEXT("\t"), TEXT(" "));
-	Src.ReplaceInline(TEXT("<"), TEXT(" "));
-	Src.ReplaceInline(TEXT(">"), TEXT(" "));
-	TArray<FString> Parts;
-	Src.TrimStartAndEnd().ParseIntoArray(Parts, TEXT(" "));
+	FromString(FStringView(InSrc));
+}
 
-	check(Parts.Num() == 14 && sizeof(bool) == 1 && sizeof(FrontFaceStencilFailStencilOp) == 1 && sizeof(BackFaceStencilTest) == 1 && sizeof(BackFaceDepthFailStencilOp) == 1); //not a very robust parser
+void FDepthStencilStateInitializerRHI::FromString(const FStringView& InSrc)
+{
+	constexpr int32 PartCount = 14;
 
-	LexFromString((uint8&)bEnableDepthWrite, *Parts[0]);
-	LexFromString((uint8&)DepthTest, *Parts[1]);
+	TArray<FStringView, TInlineAllocator<PartCount>> Parts;
+	UE::String::ParseTokensMultiple(InSrc.TrimStartAndEnd(), {TEXT('\r'), TEXT('\n'), TEXT('\t'), TEXT('<'), TEXT('>'), TEXT(' ')},
+		[&Parts](FStringView Part) { if (!Part.IsEmpty()) { Parts.Add(Part); } });
 
-	LexFromString((uint8&)bEnableFrontFaceStencil, *Parts[2]);
-	LexFromString((uint8&)FrontFaceStencilTest, *Parts[3]);
-	LexFromString((uint8&)FrontFaceStencilFailStencilOp, *Parts[4]);
-	LexFromString((uint8&)FrontFaceDepthFailStencilOp, *Parts[5]);
-	LexFromString((uint8&)FrontFacePassStencilOp, *Parts[6]);
+	check(Parts.Num() == PartCount && sizeof(bool) == 1 && sizeof(FrontFaceStencilFailStencilOp) == 1 && sizeof(BackFaceStencilTest) == 1 && sizeof(BackFaceDepthFailStencilOp) == 1); //not a very robust parser
 
-	LexFromString((uint8&)bEnableBackFaceStencil, *Parts[7]);
-	LexFromString((uint8&)BackFaceStencilTest, *Parts[8]);
-	LexFromString((uint8&)BackFaceStencilFailStencilOp, *Parts[9]);
-	LexFromString((uint8&)BackFaceDepthFailStencilOp, *Parts[10]);
-	LexFromString((uint8&)BackFacePassStencilOp, *Parts[11]);
+	const FStringView* PartIt = Parts.GetData();
 
-	LexFromString(StencilReadMask, *Parts[12]);
-	LexFromString(StencilWriteMask, *Parts[13]);
+	LexFromString((uint8&)bEnableDepthWrite, *PartIt++);
+	LexFromString((uint8&)DepthTest, *PartIt++);
+
+	LexFromString((uint8&)bEnableFrontFaceStencil, *PartIt++);
+	LexFromString((uint8&)FrontFaceStencilTest, *PartIt++);
+	LexFromString((uint8&)FrontFaceStencilFailStencilOp, *PartIt++);
+	LexFromString((uint8&)FrontFaceDepthFailStencilOp, *PartIt++);
+	LexFromString((uint8&)FrontFacePassStencilOp, *PartIt++);
+
+	LexFromString((uint8&)bEnableBackFaceStencil, *PartIt++);
+	LexFromString((uint8&)BackFaceStencilTest, *PartIt++);
+	LexFromString((uint8&)BackFaceStencilFailStencilOp, *PartIt++);
+	LexFromString((uint8&)BackFaceDepthFailStencilOp, *PartIt++);
+	LexFromString((uint8&)BackFacePassStencilOp, *PartIt++);
+
+	LexFromString(StencilReadMask, *PartIt++);
+	LexFromString(StencilWriteMask, *PartIt++);
+
+	check(Parts.GetData() + PartCount == PartIt);
 }
 
 FString FBlendStateInitializerRHI::ToString() const
@@ -227,22 +247,26 @@ FString FBlendStateInitializerRHI::ToString() const
 
 void FBlendStateInitializerRHI::FromString(const FString& InSrc)
 {
-	FString Src = InSrc;
-	Src.ReplaceInline(TEXT("\r"), TEXT(" "));
-	Src.ReplaceInline(TEXT("\n"), TEXT(" "));
-	Src.ReplaceInline(TEXT("\t"), TEXT(" "));
-	Src.ReplaceInline(TEXT("<"), TEXT(" "));
-	Src.ReplaceInline(TEXT(">"), TEXT(" "));
-	TArray<FString> Parts;
-	Src.TrimStartAndEnd().ParseIntoArray(Parts, TEXT(" "));
+	FromString(FStringView(InSrc));
+}
 
+void FBlendStateInitializerRHI::FromString(const FStringView& InSrc)
+{
+	constexpr int32 PartCount = MaxSimultaneousRenderTargets * FRenderTarget::NUM_STRING_FIELDS + 1;
 
-	check(Parts.Num() == MaxSimultaneousRenderTargets * FRenderTarget::NUM_STRING_FIELDS + 1 && sizeof(bool) == 1); //not a very robust parser
+	TArray<FStringView, TInlineAllocator<PartCount>> Parts;
+	UE::String::ParseTokensMultiple(InSrc.TrimStartAndEnd(), {TEXT('\r'), TEXT('\n'), TEXT('\t'), TEXT('<'), TEXT('>'), TEXT(' ')},
+		[&Parts](FStringView Part) { if (!Part.IsEmpty()) { Parts.Add(Part); } });
+
+	check(Parts.Num() == PartCount && sizeof(bool) == 1); //not a very robust parser
+	const FStringView* PartIt = Parts.GetData();
 	for (int32 Index = 0; Index < MaxSimultaneousRenderTargets; Index++)
 	{
-		RenderTargets[Index].FromString(Parts, FRenderTarget::NUM_STRING_FIELDS * Index);
+		RenderTargets[Index].FromString(MakeArrayView(PartIt, FRenderTarget::NUM_STRING_FIELDS));
+		PartIt += FRenderTarget::NUM_STRING_FIELDS;
 	}
-	LexFromString((int8&)bUseIndependentRenderTargetBlendStates, *Parts[MaxSimultaneousRenderTargets * FRenderTarget::NUM_STRING_FIELDS]);
+	LexFromString((int8&)bUseIndependentRenderTargetBlendStates, *PartIt++);
+	check(Parts.GetData() + PartCount == PartIt);
 }
 
 
@@ -269,6 +293,19 @@ void FBlendStateInitializerRHI::FRenderTarget::FromString(const TArray<FString>&
 	LexFromString((uint8&)AlphaSrcBlend, *Parts[Index++]);
 	LexFromString((uint8&)AlphaDestBlend, *Parts[Index++]);
 	LexFromString((uint8&)ColorWriteMask, *Parts[Index++]);
+}
+
+void FBlendStateInitializerRHI::FRenderTarget::FromString(TArrayView<const FStringView> Parts)
+{
+	check(Parts.Num() == NUM_STRING_FIELDS);
+	const FStringView* PartIt = Parts.GetData();
+	LexFromString((uint8&)ColorBlendOp, *PartIt++);
+	LexFromString((uint8&)ColorSrcBlend, *PartIt++);
+	LexFromString((uint8&)ColorDestBlend, *PartIt++);
+	LexFromString((uint8&)AlphaBlendOp, *PartIt++);
+	LexFromString((uint8&)AlphaSrcBlend, *PartIt++);
+	LexFromString((uint8&)AlphaDestBlend, *PartIt++);
+	LexFromString((uint8&)ColorWriteMask, *PartIt++);
 }
 
 bool FRHIResource::Bypass()
@@ -333,12 +370,7 @@ void FRHIResource::FlushPendingDeletes(bool bFlushDeferredDeletes)
 		}
 	}
 
-#if PLATFORM_XBOXONE
-	// Adding another frame of latency on Xbox. Speculative GPU crash fix.
-	const uint32 NumFramesToExpire = 4;
-#else
-	const uint32 NumFramesToExpire = 3;
-#endif
+	const uint32 NumFramesToExpire = RHIRESOURCE_NUM_FRAMES_TO_EXPIRE;
 
 	if (DeferredDeletionQueue.Num())
 	{
@@ -425,6 +457,40 @@ static TAutoConsoleVariable<int32> CVarGPUCrashDebugging(
 	ECVF_ReadOnly
 	);
 
+static TAutoConsoleVariable<int32> CVarGPUCrashDump(
+	TEXT("r.GPUCrashDump"),
+	0,
+	TEXT("Enable vendor specific GPU crash dumps"),
+	ECVF_ReadOnly
+);
+
+static TAutoConsoleVariable<int32> CVarGPUCrashDebuggingAftermathMarkers(
+	TEXT("r.GPUCrashDebugging.Aftermath.Markers"),
+	0,
+	TEXT("Enable draw event markers in Aftermath dumps"),
+	ECVF_ReadOnly
+);
+
+static TAutoConsoleVariable<int32> CVarGPUCrashDebuggingAftermathCallstack(
+	TEXT("r.GPUCrashDebugging.Aftermath.Callstack"),
+	0,
+	TEXT("Enable callstack capture in Aftermath dumps"),
+	ECVF_ReadOnly
+);
+
+static TAutoConsoleVariable<int32> CVarGPUCrashDebuggingAftermathResourceTracking(
+	TEXT("r.GPUCrashDebugging.Aftermath.ResourceTracking"),
+	0,
+	TEXT("Enable resource tracking for Aftermath dumps"),
+	ECVF_ReadOnly
+);
+
+static TAutoConsoleVariable<int32> CVarGPUCrashDebuggingAftermathTrackAll(
+	TEXT("r.GPUCrashDebugging.Aftermath.TrackAll"),
+	1,
+	TEXT("Enable maximum tracking for Aftermath dumps"),
+	ECVF_ReadOnly
+);
 
 namespace RHIConfig
 {
@@ -472,6 +538,7 @@ bool GHardwareHiddenSurfaceRemoval = false;
 bool GRHISupportsAsyncTextureCreation = false;
 bool GRHISupportsQuadTopology = false;
 bool GRHISupportsRectTopology = false;
+bool GRHISupportsPrimitiveShaders = false;
 bool GRHISupportsAtomicUInt64 = false;
 bool GRHISupportsResummarizeHTile = false;
 bool GRHISupportsExplicitHTile = false;
@@ -488,6 +555,8 @@ bool GSupportsTexture3D = true;
 bool GSupportsMobileMultiView = false;
 bool GSupportsImageExternal = false;
 bool GSupportsResourceView = true;
+bool GRHISupportsDrawIndirect = true;
+bool GRHISupportsMultithreading = false;
 TRHIGlobal<bool> GSupportsMultipleRenderTargets(true);
 bool GSupportsWideMRT = true;
 float GMinClipZ = 0.0f;
@@ -500,8 +569,10 @@ bool GRHISupportsLazyShaderCodeLoading = false;
 TRHIGlobal<int32> GMaxShadowDepthBufferSizeX(2048);
 TRHIGlobal<int32> GMaxShadowDepthBufferSizeY(2048);
 TRHIGlobal<int32> GMaxTextureDimensions(2048);
+TRHIGlobal<int64> GMaxBufferDimensions(2<<27);
 TRHIGlobal<int32> GMaxVolumeTextureDimensions(2048);
 TRHIGlobal<int32> GMaxCubeTextureDimensions(2048);
+bool GRHISupportsRWTextureBuffers = true;
 int32 GMaxTextureArrayLayers = 256;
 int32 GMaxTextureSamplers = 16;
 bool GUsingNullRHI = false;
@@ -513,19 +584,22 @@ bool GRHISupportsTextureStreaming = false;
 bool GSupportsDepthBoundsTest = false;
 bool GSupportsEfficientAsyncCompute = false;
 bool GRHISupportsBaseVertexIndex = true;
-TRHIGlobal<bool> GRHISupportsInstancing(true);
 bool GRHISupportsFirstInstance = false;
 bool GRHISupportsDynamicResolution = false;
 bool GRHISupportsRayTracing = false;
+bool GRHISupportsRayTracingMissShaderBindings = false;
+bool GRHISupportsRayTracingAsyncBuildAccelerationStructure = false;
 bool GRHISupportsWaveOperations = false;
+int32 GRHIMinimumWaveSize = 4; // Minimum supported value in SM 6.0
+int32 GRHIMaximumWaveSize = 128; // Maximum supported value in SM 6.0
 bool GRHISupportsRHIThread = false;
 bool GRHISupportsRHIOnTaskThread = false;
 bool GRHISupportsParallelRHIExecute = false;
-bool GSupportsHDR32bppEncodeModeIntrinsic = false;
 bool GSupportsParallelOcclusionQueries = false;
 bool GSupportsTransientResourceAliasing = false;
 bool GRHIRequiresRenderTargetForPixelShaderUAVs = false;
 bool GRHISupportsUAVFormatAliasing = false;
+bool GRHISupportsDirectGPUMemoryLock = false;
 
 bool GRHISupportsMSAADepthSampleAccess = false;
 bool GRHISupportsResolveCubemapFaces = false;
@@ -538,6 +612,8 @@ EPixelFormat GRHIHDRDisplayOutputFormat = PF_FloatRGBA;
 
 uint64 GRHIPresentCounter = 1;
 
+bool GRHISupportsArrayIndexFromAnyShader = false;
+
 /** Whether we are profiling GPU hitches. */
 bool GTriggerGPUHitchProfile = false;
 
@@ -546,7 +622,6 @@ FVertexElementTypeSupportInfo GVertexElementTypeSupport;
 RHI_API int32 volatile GCurrentTextureMemorySize = 0;
 RHI_API int32 volatile GCurrentRendertargetMemorySize = 0;
 RHI_API int64 GTexturePoolSize = 0 * 1024 * 1024;
-RHI_API int64 GMaxTextureBufferSize = 0;
 RHI_API int32 GPoolSizeVRAMPercentage = 0;
 
 RHI_API EShaderPlatform GShaderPlatformForFeatureLevel[ERHIFeatureLevel::Num] = {SP_NumPlatforms,SP_NumPlatforms,SP_NumPlatforms,SP_NumPlatforms};
@@ -703,10 +778,7 @@ FName ShaderPlatformToPlatformName(EShaderPlatform Platform)
 	switch (Platform)
 	{
 	case SP_PCD3D_SM5:
-	case SP_OPENGL_SM4:
-	case SP_OPENGL_PCES2:
 	case SP_OPENGL_SM5:
-	case SP_PCD3D_ES2:
 	case SP_PCD3D_ES3_1:
 	case SP_OPENGL_PCES3_1:
 	case SP_VULKAN_PCES3_1:
@@ -716,20 +788,17 @@ FName ShaderPlatformToPlatformName(EShaderPlatform Platform)
 		return NAME_PLATFORM_PS4;
 	case SP_XBOXONE_D3D12:
 		return NAME_PLATFORM_XBOXONE;
-	case SP_OPENGL_ES2_ANDROID:
 	case SP_OPENGL_ES31_EXT:
 	case SP_VULKAN_ES3_1_ANDROID:
+	case SP_VULKAN_SM5_ANDROID:
 	case SP_OPENGL_ES3_1_ANDROID:
 		return NAME_PLATFORM_ANDROID;
-	case SP_OPENGL_ES2_WEBGL:
-		return FName(TEXT(PREPROCESSOR_TO_STRING(PLATFORM_HEADER_NAME))); // WIP: platform extension magic
 	case SP_METAL:
 	case SP_METAL_MRT:
 		return NAME_PLATFORM_IOS;
 	case SP_METAL_SM5:
 	case SP_METAL_SM5_NOTESS:
 	case SP_METAL_MACES3_1:
-	case SP_METAL_MACES2:
 	case SP_METAL_MRT_MAC:
 		return NAME_PLATFORM_MAC;
 	case SP_SWITCH:
@@ -818,7 +887,7 @@ RHI_API const TCHAR* RHIVendorIdToString(EGpuVendorId VendorId)
 	return TEXT("Unknown");
 }
 
-RHI_API uint32 RHIGetShaderLanguageVersion(const EShaderPlatform Platform)
+RHI_API uint32 RHIGetShaderLanguageVersion(const FStaticShaderPlatform Platform)
 {
 	uint32 Version = 0;
 	if (IsMetalPlatform(Platform))
@@ -857,7 +926,7 @@ RHI_API uint32 RHIGetShaderLanguageVersion(const EShaderPlatform Platform)
 	return Version;
 }
 
-RHI_API bool RHISupportsTessellation(const EShaderPlatform Platform)
+RHI_API bool RHISupportsTessellation(const FStaticShaderPlatform Platform)
 {
 	if (IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM5))
 	{
@@ -866,7 +935,7 @@ RHI_API bool RHISupportsTessellation(const EShaderPlatform Platform)
 	return false;
 }
 
-RHI_API bool RHISupportsPixelShaderUAVs(const EShaderPlatform Platform)
+RHI_API bool RHISupportsPixelShaderUAVs(const FStaticShaderPlatform Platform)
 {
 	if (IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM5))
 	{
@@ -875,10 +944,10 @@ RHI_API bool RHISupportsPixelShaderUAVs(const EShaderPlatform Platform)
 	return false;
 }
 
-RHI_API bool RHISupportsIndexBufferUAVs(const EShaderPlatform Platform)
+RHI_API bool RHISupportsIndexBufferUAVs(const FStaticShaderPlatform Platform)
 {
 	return Platform == SP_PCD3D_SM5 || IsVulkanPlatform(Platform) || IsMetalSM5Platform(Platform) || Platform == SP_XBOXONE_D3D12 || Platform == SP_PS4 
-		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bSupportsIndexBufferUAVs;
+		|| FDataDrivenShaderPlatformInfo::GetSupportsIndexBufferUAVs(Platform);
 }
 
 
@@ -892,19 +961,9 @@ RHI_API void RHISetMobilePreviewFeatureLevel(ERHIFeatureLevel::Type MobilePrevie
 
 bool RHIGetPreviewFeatureLevel(ERHIFeatureLevel::Type& PreviewFeatureLevelOUT)
 {
-	static bool bForceFeatureLevelES2 = !GIsEditor && FParse::Param(FCommandLine::Get(), TEXT("FeatureLevelES2"));
 	static bool bForceFeatureLevelES3_1 = !GIsEditor && (FParse::Param(FCommandLine::Get(), TEXT("FeatureLevelES31")) || FParse::Param(FCommandLine::Get(), TEXT("FeatureLevelES3_1")));
 
-	if (bForceFeatureLevelES2)
-	{
-		if (!UE_BUILD_SHIPPING)
-		{
-			FMessageDialog::Open(EAppMsgType::Ok, NSLOCTEXT("RHI", "ES2Deprecated", "Warning: FeatureLevel ES2 is deprecated, please use FeatureLevel ES3.1."));
-		}
-
-		PreviewFeatureLevelOUT = ERHIFeatureLevel::ES2;
-	}
-	else if (bForceFeatureLevelES3_1)
+	if (bForceFeatureLevelES3_1)
 	{
 		PreviewFeatureLevelOUT = ERHIFeatureLevel::ES3_1;
 	}
@@ -973,19 +1032,6 @@ void FRHIRenderPassInfo::ConvertToRenderTargetsInfo(FRHISetRenderTargetsInfo& Ou
 	OutRTInfo.bClearStencil = (StencilLoadAction == ERenderTargetLoadAction::EClear);
 
 	OutRTInfo.FoveationTexture = FoveationTexture;
-
-	if (NumUAVs > 0)
-	{
-		check(UAVIndex != -1);
-		int32 StartingUAVIndex = FMath::Max(UAVIndex, OutRTInfo.NumColorRenderTargets);
-		check((StartingUAVIndex+NumUAVs) <= MaxSimultaneousUAVs);
-		OutRTInfo.NumColorRenderTargets = StartingUAVIndex;
-		for (int32 Index = 0; Index < NumUAVs; ++Index)
-		{
-			OutRTInfo.UnorderedAccessView[Index] = UAVs[Index];
-		}
-		OutRTInfo.NumUAVs = NumUAVs;
-	}
 }
 
 void FRHIRenderPassInfo::OnVerifyNumUAVsFailed(int32 InNumUAVs)
@@ -1128,13 +1174,8 @@ FString LexToString(EShaderPlatform Platform)
 	{
 	case SP_PCD3D_SM5: return TEXT("PCD3D_SM5");
 	case SP_PCD3D_ES3_1: return TEXT("PCD3D_ES3_1");
-	case SP_PCD3D_ES2: return TEXT("PCD3D_ES2");
-	case SP_OPENGL_SM4: return TEXT("OPENGL_SM4");
 	case SP_OPENGL_SM5: return TEXT("OPENGL_SM5");
-	case SP_OPENGL_PCES2: return TEXT("OPENGL_PCES2");
 	case SP_OPENGL_PCES3_1: return TEXT("OPENGL_PCES3_1");
-	case SP_OPENGL_ES2_ANDROID: return TEXT("OPENGL_ES2_ANDROID");
-	case SP_OPENGL_ES2_WEBGL: return TEXT("OPENGL_ES2_WEBGL");
 	case SP_OPENGL_ES31_EXT: return TEXT("OPENGL_ES31_EXT");
 	case SP_OPENGL_ES3_1_ANDROID: return TEXT("OPENGL_ES3_1_ANDROID");
 	case SP_PS4: return TEXT("PS4");
@@ -1149,20 +1190,26 @@ FString LexToString(EShaderPlatform Platform)
 	case SP_METAL_SM5: return TEXT("METAL_SM5");
 	case SP_METAL_SM5_NOTESS: return TEXT("METAL_SM5_NOTESS");
 	case SP_METAL_MACES3_1: return TEXT("METAL_MACES3_1");
-	case SP_METAL_MACES2: return TEXT("METAL_MACES2");
 	case SP_VULKAN_ES3_1_ANDROID: return TEXT("VULKAN_ES3_1_ANDROID");
 	case SP_VULKAN_ES3_1_LUMIN: return TEXT("VULKAN_ES3_1_LUMIN");
 	case SP_VULKAN_PCES3_1: return TEXT("VULKAN_PCES3_1");
 	case SP_VULKAN_SM5: return TEXT("VULKAN_SM5");
 	case SP_VULKAN_SM5_LUMIN: return TEXT("VULKAN_SM5_LUMIN");
+	case SP_VULKAN_SM5_ANDROID: return TEXT("VULKAN_SM5_ANDROID");
 
-	case SP_OPENGL_ES2_IOS_DEPRECATED:
-	case SP_VULKAN_SM4_DEPRECATED:
-	case SP_PCD3D_SM4_DEPRECATED:
+	case SP_OPENGL_ES2_ANDROID_REMOVED:
+	case SP_OPENGL_ES2_WEBGL_REMOVED:
+	case SP_OPENGL_ES2_IOS_REMOVED:
+	case SP_VULKAN_SM4_REMOVED:
+	case SP_PCD3D_SM4_REMOVED:
+	case SP_OPENGL_SM4_REMOVED:
+	case SP_PCD3D_ES2_REMOVED:
+	case SP_OPENGL_PCES2_REMOVED:
+	case SP_METAL_MACES2_REMOVED:
 		return TEXT("");
 
 	default:
-		if (Platform >= SP_StaticPlatform_First && Platform <= SP_StaticPlatform_Last)
+		if (FStaticShaderPlatformNames::IsStaticPlatform(Platform))
 		{
 			return FStaticShaderPlatformNames::Get().GetShaderPlatform(Platform).ToString();
 		}
@@ -1189,14 +1236,14 @@ void LexFromString(EShaderPlatform& Value, const TCHAR* String)
 }
 
 
-FName LANGUAGE_D3D("D3D");
-FName LANGUAGE_Metal("Metal");
-FName LANGUAGE_OpenGL("OpenGL");
-FName LANGUAGE_Vulkan("Vulkan");
-FName LANGUAGE_Sony("Sony");
-FName LANGUAGE_Nintendo("Nintendo");
+const FName LANGUAGE_D3D("D3D");
+const FName LANGUAGE_Metal("Metal");
+const FName LANGUAGE_OpenGL("OpenGL");
+const FName LANGUAGE_Vulkan("Vulkan");
+const FName LANGUAGE_Sony("Sony");
+const FName LANGUAGE_Nintendo("Nintendo");
 
-RHI_API FDataDrivenShaderPlatformInfo FDataDrivenShaderPlatformInfo::Infos[SP_NumPlatforms];
+RHI_API FGenericDataDrivenShaderPlatformInfo FGenericDataDrivenShaderPlatformInfo::Infos[SP_NumPlatforms];
 
 // Gets a string from a section, or empty string if it didn't exist
 FString GetSectionString(const FConfigSection& Section, FName Key)
@@ -1210,7 +1257,7 @@ bool GetSectionBool(const FConfigSection& Section, FName Key)
 	return FCString::ToBool(*GetSectionString(Section, Key));
 }
 
-inline void ParseDataDrivenShaderInfo(const FConfigSection& Section, FDataDrivenShaderPlatformInfo& Info)
+void FGenericDataDrivenShaderPlatformInfo::ParseDataDrivenShaderInfo(const FConfigSection& Section, FGenericDataDrivenShaderPlatformInfo& Info)
 {
 	Info.Language = *GetSectionString(Section, "Language");
 	GetFeatureLevelFromName(*GetSectionString(Section, "MaxFeatureLevel"), Info.MaxFeatureLevel);
@@ -1235,13 +1282,23 @@ inline void ParseDataDrivenShaderInfo(const FConfigSection& Section, FDataDriven
 	Info.bSupports4ComponentUAVReadWrite = GetSectionBool(Section, "bSupports4ComponentUAVReadWrite");
 	Info.bSupportsRenderTargetWriteMask = GetSectionBool(Section, "bSupportsRenderTargetWriteMask");
 	Info.bSupportsRayTracing = GetSectionBool(Section, "bSupportsRayTracing");
+	Info.bSupportsRayTracingMissShaderBindings = GetSectionBool(Section, "bSupportsRayTracingMissShaderBindings");
+	Info.bSupportsRayTracingIndirectInstanceData = GetSectionBool(Section, "bSupportsRayTracingIndirectInstanceData");
 	Info.bSupportsGPUSkinCache = GetSectionBool(Section, "bSupportsGPUSkinCache");
-
+	Info.bSupportsByteBufferComputeShaders = GetSectionBool(Section, "bSupportsByteBufferComputeShaders");
+	Info.bSupportsGPUScene = GetSectionBool(Section, "bSupportsGPUScene");
+	Info.bSupportsPrimitiveShaders = GetSectionBool(Section, "bSupportsPrimitiveShaders");
+	Info.bSupportsUInt64ImageAtomics = GetSectionBool(Section, "bSupportsUInt64ImageAtomics");
+	Info.bSupportsTemporalHistoryUpscale = GetSectionBool(Section, "bSupportsTemporalHistoryUpscale");
+	Info.bSupportsRTIndexFromVS = GetSectionBool(Section, "bSupportsRTIndexFromVS");
+	Info.bSupportsWaveOperations = GetSectionBool(Section, "bSupportsWaveOperations");
+	Info.bSupportsGPUScene = GetSectionBool(Section, "bSupportsGPUScene");
+	Info.bRequiresExplicit128bitRT = GetSectionBool(Section, "bRequiresExplicit128bitRT");
 	Info.bTargetsTiledGPU = GetSectionBool(Section, "bTargetsTiledGPU");
 	Info.bNeedsOfflineCompiler = GetSectionBool(Section, "bNeedsOfflineCompiler");
 }
 
-void FDataDrivenShaderPlatformInfo::Initialize()
+void FGenericDataDrivenShaderPlatformInfo::Initialize()
 {
 	// look for the standard DataDriven ini files
 	int32 NumDDInfoFiles = FDataDrivenPlatformInfoRegistry::GetNumDataDrivenIniFiles();
@@ -1270,6 +1327,7 @@ void FDataDrivenShaderPlatformInfo::Initialize()
 				
 				// at this point, we can start pulling information out
 				ParseDataDrivenShaderInfo(Section.Value, Infos[ShaderPlatform]);	
+				Infos[ShaderPlatform].bContainsValidPlatformInfo = true;
 			}
 		}
 	}

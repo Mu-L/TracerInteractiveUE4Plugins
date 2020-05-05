@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // This code is modified from that in the Mesa3D Graphics library available at
 // http://mesa3d.org/
@@ -485,7 +485,7 @@ static bool verify_parameter_modes(_mesa_glsl_parse_state *state,
 				if (deref)
 				{
 					ir_variable * var = deref->variable_referenced();
-					if (var != NULL && var->mode == ir_var_shared)
+					if (var != NULL && (var->mode == ir_var_shared || var->type->is_image()))
 					{
 						fail = false;
 					}

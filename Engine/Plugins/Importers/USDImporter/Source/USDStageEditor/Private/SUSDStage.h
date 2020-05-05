@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,9 +12,10 @@
 #include "Widgets/SCompoundWidget.h"
 
 class AUsdStageActor;
-enum class EUsdInitialLoadSet;
 class FLevelCollectionModel;
 class FMenuBuilder;
+enum class EMapChangeType : uint8;
+enum class EUsdInitialLoadSet;
 struct FSlateBrush;
 
 #if USE_USD_SDK
@@ -30,25 +31,34 @@ class SUsdStage : public SCompoundWidget
 
 protected:
 	void SetupStageActorDelegates();
+	void ClearStageActorDelegates();
 
 	TSharedRef< SWidget > MakeMainMenu();
 	void FillFileMenu( FMenuBuilder& MenuBuilder );
 	void FillActionsMenu( FMenuBuilder& MenuBuilder );
+	void FillOptionsMenu( FMenuBuilder& MenuBuilder );
+	void FillPayloadsSubMenu( FMenuBuilder& MenuBuilder );
+	void FillPurposesToLoadSubMenu( FMenuBuilder& MenuBuilder );
 
 	void OnNew();
 	void OnOpen();
 	void OnSave();
 	void OnReloadStage();
+	void OnClose();
 
 	void OnImport();
 
 	void OnPrimSelected( FString PrimPath );
-	void OnInitialLoadSetChanged( EUsdInitialLoadSet InitialLoadSet );
 
 	void OpenStage( const TCHAR* FilePath );
+	void CloseStage();
+
+	void Refresh();
 
 	void OnStageActorLoaded( AUsdStageActor* InUsdStageActor );
 	void OnStageActorPropertyChanged( UObject* ObjectBeingModified, FPropertyChangedEvent& PropertyChangedEvent );
+
+	void OnMapChanged( UWorld* World, EMapChangeType ChangeType );
 
 protected:
 	TSharedPtr< class SUsdStageInfo > UsdStageInfoWidget;
@@ -59,10 +69,13 @@ protected:
 	TWeakObjectPtr< AUsdStageActor > UsdStageActor;
 
 	FDelegateHandle OnActorLoadedHandle;
+	FDelegateHandle OnActorDestroyedHandle;
 	FDelegateHandle OnStageActorPropertyChangedHandle;
 	FDelegateHandle OnStageChangedHandle;
 	FDelegateHandle OnStageEditTargetChangedHandle;
 	FDelegateHandle OnPrimChangedHandle;
+
+	FString SelectedPrimPath;
 };
 
 #endif // #if USE_USD_SDK

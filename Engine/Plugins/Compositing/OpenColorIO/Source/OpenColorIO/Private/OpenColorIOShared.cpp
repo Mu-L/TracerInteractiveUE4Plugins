@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	OpenColorIOShared.cpp: Shared OpenColorIO pixel shader implementation.
@@ -19,6 +19,11 @@
 #include "UObject/CoreObjectVersion.h"
 #include "UObject/UObjectHash.h"
 #include "UObject/UObjectIterator.h"
+#include "Interfaces/ITargetPlatform.h"
+
+IMPLEMENT_TYPE_LAYOUT(FOpenColorIOCompilationOutput);
+IMPLEMENT_TYPE_LAYOUT(FOpenColorIOShaderMapId);
+IMPLEMENT_TYPE_LAYOUT(FOpenColorIOShaderMapContent);
 
 FOpenColorIOTransformResource::~FOpenColorIOTransformResource()
 {
@@ -88,7 +93,7 @@ void FOpenColorIOTransformResource::GetDependentShaderTypes(EShaderPlatform InPl
 	OutShaderTypes.Sort(FCompareShaderTypes());
 }
 
-OPENCOLORIO_API void FOpenColorIOTransformResource::GetShaderMapId(EShaderPlatform InPlatform, FOpenColorIOShaderMapId& OutId) const
+OPENCOLORIO_API void FOpenColorIOTransformResource::GetShaderMapId(EShaderPlatform InPlatform, const ITargetPlatform* TargetPlatform, FOpenColorIOShaderMapId& OutId) const
 {
 	if (bLoadedCookedShaderMapId)
 	{
@@ -102,14 +107,22 @@ OPENCOLORIO_API void FOpenColorIOTransformResource::GetShaderMapId(EShaderPlatfo
 		OutId.FeatureLevel = GetFeatureLevel();
 		OutId.ShaderCodeHash = ShaderCodeHash;
 		OutId.SetShaderDependencies(ShaderTypes, InPlatform);
-	}
-}
-
-void FOpenColorIOTransformResource::RegisterShaderMap()
-{
-	if (GameThreadShaderMap)
-	{
-		GameThreadShaderMap->RegisterSerializedShaders(false);
+#if WITH_EDITOR
+		if (TargetPlatform)
+		{
+			OutId.LayoutParams.InitializeForPlatform(TargetPlatform->IniPlatformName(), TargetPlatform->HasEditorOnlyData());
+		}
+		else
+		{
+			OutId.LayoutParams.InitializeForCurrent();
+		}
+#else
+		if (TargetPlatform != nullptr)
+		{
+			UE_LOG(LogShaders, Error, TEXT("FOpenColorIOTransformResource::GetShaderMapId: TargetPlatform is not null, but a cooked executable cannot target platforms other than its own."));
+		}
+		OutId.LayoutParams.InitializeForCurrent();
+#endif
 	}
 }
 
@@ -131,11 +144,7 @@ void FOpenColorIOTransformResource::ReleaseShaderMap()
 void FOpenColorIOTransformResource::DiscardShaderMap()
 {
 	check(RenderingThreadShaderMap == nullptr);
-	if (GameThreadShaderMap)
-	{
-		GameThreadShaderMap->DiscardSerializedShaders();
-		GameThreadShaderMap = nullptr;
-	}
+	GameThreadShaderMap = nullptr;
 }
 
 void FOpenColorIOTransformResource::SerializeShaderMap(FArchive& Ar)
@@ -177,17 +186,12 @@ void FOpenColorIOTransformResource::SerializeShaderMap(FArchive& Ar)
 			if (bValid)
 			{
 				TRefCountPtr<FOpenColorIOShaderMap> LoadedShaderMap = new FOpenColorIOShaderMap();
-				LoadedShaderMap->Serialize(Ar);
+				bool bSuccessfullyLoaded = LoadedShaderMap->Serialize(Ar);
 
-				// Toss the loaded shader data if this is a server only instance
-				//@todo - don't cook it in the first place
-				if (FApp::CanEverRender())
+				// Toss the loaded shader data if this is a server only instance (@todo - don't cook it in the first place) or if it's for a different RHI than the current one
+				if (bSuccessfullyLoaded && FApp::CanEverRender())
 				{
 					GameThreadShaderMap = RenderingThreadShaderMap = LoadedShaderMap;
-				}
-				else
-				{
-					LoadedShaderMap->DiscardSerializedShaders();
 				}
 			}
 		}
@@ -219,10 +223,10 @@ OPENCOLORIO_API  bool FOpenColorIOTransformResource::IsCompilationFinished() con
 	return bRet;
 }
 
-bool FOpenColorIOTransformResource::CacheShaders(EShaderPlatform InPlatform, bool bApplyCompletedShaderMapForRendering, bool bSynchronous)
+bool FOpenColorIOTransformResource::CacheShaders(EShaderPlatform InPlatform, const ITargetPlatform* TargetPlatform, bool bApplyCompletedShaderMapForRendering, bool bSynchronous)
 {
 	FOpenColorIOShaderMapId ResourceShaderMapId;
-	GetShaderMapId(InPlatform, ResourceShaderMapId);
+	GetShaderMapId(InPlatform, TargetPlatform, ResourceShaderMapId);
 	return CacheShaders(ResourceShaderMapId, InPlatform, bApplyCompletedShaderMapForRendering, bSynchronous);
 }
 
@@ -351,24 +355,24 @@ void FOpenColorIOTransformResource::FinishCompilation()
 #endif
 }
 
-OPENCOLORIO_API  FOpenColorIOPixelShader* FOpenColorIOTransformResource::GetShader() const
+OPENCOLORIO_API  TShaderRef<FOpenColorIOPixelShader> FOpenColorIOTransformResource::GetShader() const
 {
 	check(!GIsThreadedRendering || !IsInGameThread());
 	if (!GIsEditor || RenderingThreadShaderMap)
 	{
 		return RenderingThreadShaderMap->GetShader<FOpenColorIOPixelShader>();
 	}
-	return nullptr;
+	return TShaderRef<FOpenColorIOPixelShader>();
 };
 
-OPENCOLORIO_API  FOpenColorIOPixelShader* FOpenColorIOTransformResource::GetShaderGameThread() const
+OPENCOLORIO_API  TShaderRef<FOpenColorIOPixelShader> FOpenColorIOTransformResource::GetShaderGameThread() const
 {
 	if (GameThreadShaderMap)
 	{
 		return GameThreadShaderMap->GetShader<FOpenColorIOPixelShader>();
 	}
 
-	return nullptr;
+	return TShaderRef<FOpenColorIOPixelShader>();
 };
 
 void FOpenColorIOTransformResource::GetShaderMapIDsWithUnfinishedCompilation(TArray<int32>& OutShaderMapIds)
@@ -443,7 +447,7 @@ void FOpenColorIOShaderMapId::SetShaderDependencies(const TArray<FShaderType*>& 
 			if (ShaderType != nullptr)
 			{
 				FShaderTypeDependency Dependency;
-				Dependency.ShaderType = ShaderType;
+				Dependency.ShaderTypeName = ShaderType->GetHashedName();
 				Dependency.SourceHash = ShaderType->GetSourceHash(InShaderPlatform);
 				ShaderTypeDependencies.Add(Dependency);
 			}
@@ -456,7 +460,7 @@ bool FOpenColorIOShaderMapId::ContainsShaderType(const FShaderType* ShaderType) 
 {
 	for (int32 TypeIndex = 0; TypeIndex < ShaderTypeDependencies.Num(); TypeIndex++)
 	{
-		if (ShaderTypeDependencies[TypeIndex].ShaderType == ShaderType)
+		if (ShaderTypeDependencies[TypeIndex].ShaderTypeName == ShaderType->GetHashedName())
 		{
 			return true;
 		}

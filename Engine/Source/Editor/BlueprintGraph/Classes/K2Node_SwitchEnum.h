@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -27,7 +27,7 @@ class UK2Node_SwitchEnum : public UK2Node_Switch, public INodeDependingOnEnumInt
 	TArray<FName> EnumEntries;
 
 	/** List of the current entries in the enum */
-	UPROPERTY()
+	UPROPERTY(Transient)
 	TArray<FText> EnumFriendlyNames;
 
 	// INodeDependingOnEnumInterface

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreTypes.h"
@@ -665,7 +665,7 @@ private:
 		void GetTableIdAndKey(FName& OutTableId, FString& OutKey) const;
 
 		/** Collect any string table asset references */
-		void CollectStringTableAssetReferences(FStructuredArchive::FRecord Record) const;
+		void CollectStringTableAssetReferences(FStructuredArchive::FRecord Record);
 
 		/** Resolve the string table pointer, potentially re-caching it if it's missing or stale */
 		FStringTableEntryConstPtr ResolveStringTableEntry();

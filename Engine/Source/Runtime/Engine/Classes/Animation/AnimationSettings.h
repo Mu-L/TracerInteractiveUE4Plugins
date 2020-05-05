@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	AnimationSettings.h: Declares the AnimationSettings class.
@@ -28,29 +28,6 @@ class ENGINE_API UAnimationSettings : public UDeveloperSettings
 	UPROPERTY(config, EditAnywhere, Category = Compression)
 	TArray<FString> KeyEndEffectorsMatchNameArray;
 
-	UPROPERTY(config, EditAnywhere, Category = Compression, NoClear)
-	TSubclassOf<class UAnimCompress>  DefaultCompressionAlgorithm; 
-
-	UPROPERTY(config, EditAnywhere, Category = Compression)
-	TEnumAsByte<AnimationCompressionFormat> RotationCompressionFormat;
-
-	UPROPERTY(config, EditAnywhere, Category = Compression)
-	TEnumAsByte<AnimationCompressionFormat> TranslationCompressionFormat;
-
-	/** Max error for compression of curves using remove redundant keys */
-	UPROPERTY(config, EditAnywhere, Category = Compression)
-	float MaxCurveError;
-
-	/** The alternate error threshold (0.0 means don't try anything other than the current / default scheme) 
-	* 
-	* Determines the current setting for world-space error tolerance in the animation compressor.
-	* When requested, animation being compressed will also consider an alternative compression
-	* method if the end result of that method produces less error than the AlternativeCompressionThreshold.
-	* Also known as "Max End Effector Error"
-	*/
-	UPROPERTY(config, EditAnywhere, Category = Compression, meta=(ClampMin = "0", UIMin = "0"))
-	float AlternativeCompressionThreshold;
-
 	UPROPERTY(config, EditAnywhere, Category = Compression)
 	bool ForceRecompression;
 
@@ -70,14 +47,6 @@ class ENGINE_API UAnimationSettings : public UDeveloperSettings
 	/** If true and the existing compression error is greater than Alternative Compression Threshold, then Alternative Compression Threshold will be effectively raised to the existing error level */
 	UPROPERTY(config, EditAnywhere, Category = Compression)
 	bool bRaiseMaxErrorToExisting;
-
-	/** If true, then an exhaustive search is used otherwise only a short list of the best methods is tried */
-	UPROPERTY(config, EditAnywhere, Category = Compression)
-	bool bTryExhaustiveSearch;
-
-	/** If true, anim sequences are compressed in segments. This allows for parallel compression of individual sequences. */
-	UPROPERTY(config, EditAnywhere, Category = Compression)
-	bool bEnableSegmenting;
 
 	UPROPERTY(config, EditAnywhere, Category = Performance)
 	bool bEnablePerformanceLog;

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	VulkanConfiguration.h: Control compilation of the runtime RHI.
@@ -121,6 +121,12 @@
 	#define VULKAN_SUPPORTS_VALIDATION_CACHE					0
 #endif
 
+#ifdef VK_EXT_validation_features
+	#define VULKAN_HAS_VALIDATION_FEATURES						1
+#else
+	#define VULKAN_HAS_VALIDATION_FEATURES						0
+#endif
+
 #ifndef VULKAN_SUPPORTS_DEDICATED_ALLOCATION
 	#ifdef VK_KHR_dedicated_allocation
 		// Disable this for now as it is causing a large memory leak
@@ -172,43 +178,58 @@
 
 #ifndef VULKAN_SUPPORTS_DEBUG_UTILS
 	#ifdef VK_EXT_debug_utils
-		#define VULKAN_SUPPORTS_DEBUG_UTILS							1
+		#define VULKAN_SUPPORTS_DEBUG_UTILS						1
 	#else
-		#define VULKAN_SUPPORTS_DEBUG_UTILS							0
+		#define VULKAN_SUPPORTS_DEBUG_UTILS						0
 	#endif
 #endif
 
 #ifndef VULKAN_SUPPORTS_MEMORY_PRIORITY
 	#ifdef VK_EXT_memory_priority
-		#define VULKAN_SUPPORTS_MEMORY_PRIORITY						1
+		#define VULKAN_SUPPORTS_MEMORY_PRIORITY					1
 	#else
-		#define VULKAN_SUPPORTS_MEMORY_PRIORITY						0
+		#define VULKAN_SUPPORTS_MEMORY_PRIORITY					0
 	#endif
 #endif
 
 #ifndef VULKAN_SUPPORTS_PHYSICAL_DEVICE_PROPERTIES2
 	#ifdef VK_KHR_get_physical_device_properties2
-		#define VULKAN_SUPPORTS_PHYSICAL_DEVICE_PROPERTIES2			1
+		#define VULKAN_SUPPORTS_PHYSICAL_DEVICE_PROPERTIES2		1
 	#else
-		#define VULKAN_SUPPORTS_PHYSICAL_DEVICE_PROPERTIES2			0
+		#define VULKAN_SUPPORTS_PHYSICAL_DEVICE_PROPERTIES2		0
 	#endif
 #endif
 
 #ifndef VULKAN_SUPPORTS_EXTERNAL_MEMORY
 	#ifdef VK_KHR_external_memory_capabilities
-		#define VULKAN_SUPPORTS_EXTERNAL_MEMORY							(VULKAN_SUPPORTS_PHYSICAL_DEVICE_PROPERTIES2)	// Requirement
+		#define VULKAN_SUPPORTS_EXTERNAL_MEMORY					(VULKAN_SUPPORTS_PHYSICAL_DEVICE_PROPERTIES2)	// Requirement
 	#else
-		#define VULKAN_SUPPORTS_EXTERNAL_MEMORY							0
+		#define VULKAN_SUPPORTS_EXTERNAL_MEMORY					0
 	#endif
 #endif
 
 #ifndef VULKAN_SUPPORTS_DRIVER_PROPERTIES
 	#ifdef VK_KHR_driver_properties
-		#define VULKAN_SUPPORTS_DRIVER_PROPERTIES						1
+		#define VULKAN_SUPPORTS_DRIVER_PROPERTIES				1
 	#else
-		#define VULKAN_SUPPORTS_DRIVER_PROPERTIES						0
+		#define VULKAN_SUPPORTS_DRIVER_PROPERTIES				0
 	#endif
 #endif
+
+#ifndef VULKAN_SUPPORTS_FULLSCREEN_EXCLUSIVE
+	#ifdef VK_EXT_full_screen_exclusive
+		#define VULKAN_SUPPORTS_FULLSCREEN_EXCLUSIVE			1
+	#else
+		#define VULKAN_SUPPORTS_FULLSCREEN_EXCLUSIVE			0
+	#endif
+#endif
+
+
+#ifndef VULKAN_OBJECT_TRACKING 
+#define VULKAN_OBJECT_TRACKING 0 //Track objects created and memory used. use r.vulkan.dumpmemory to dump to console
+#endif
+
+
 
 DECLARE_LOG_CATEGORY_EXTERN(LogVulkanRHI, Log, All);
 

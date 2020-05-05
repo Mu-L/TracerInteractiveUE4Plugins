@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -24,12 +24,6 @@
 
 		#define PLATFORM_SUPPORTS_ICMP 1
 		#define PLATFORM_USES_POSIX_ICMP 1
-		#define PING_ALLOWS_CUSTOM_THREAD_SIZE 0
-
-	#elif PLATFORM_XBOXONE
-
-		#define PLATFORM_SUPPORTS_ICMP 0
-		#define PLATFORM_USES_POSIX_ICMP 0
 		#define PING_ALLOWS_CUSTOM_THREAD_SIZE 0
 
 	#elif PLATFORM_ANDROID

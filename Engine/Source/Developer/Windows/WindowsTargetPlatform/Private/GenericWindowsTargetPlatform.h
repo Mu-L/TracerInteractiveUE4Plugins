@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -6,6 +6,7 @@
 #include "Common/TargetPlatformBase.h"
 #include "Misc/ConfigCacheIni.h"
 #include "LocalPcTargetDevice.h"
+#include "Serialization/MemoryLayout.h"
 
 #if WITH_ENGINE
 	#include "Sound/SoundWave.h"
@@ -19,131 +20,6 @@
 
 #define LOCTEXT_NAMESPACE "TGenericWindowsTargetPlatform"
 
-namespace Windows
-{
-#if WITH_ENGINE
-	FORCEINLINE void CachePlatformAudioCookOverrides(FPlatformAudioCookOverrides& OutOverrides)
-	{
-		const TCHAR* CategoryName = TEXT("/Script/WindowsTargetPlatform.WindowsTargetSettings");
-
-		int32 SoundCueQualityIndex = INDEX_NONE;
-		if (GConfig->GetInt(CategoryName, TEXT("SoundCueCookQualityIndex"), SoundCueQualityIndex, GEngineIni))
-		{
-			OutOverrides.SoundCueCookQualityIndex = SoundCueQualityIndex;
-		}
-
-		GConfig->GetBool(CategoryName, TEXT("bUseAudioStreamCaching"), OutOverrides.bUseStreamCaching, GEngineIni);
-
-		int32 RetrievedChunkSizeKB = 256;
-		GConfig->GetInt(CategoryName, TEXT("ChunkSizeKB"), RetrievedChunkSizeKB, GEngineIni);
-		OutOverrides.StreamChunkSizeKB = RetrievedChunkSizeKB;
-
-		/** Memory Load On Demand Settings */
-		if (OutOverrides.bUseStreamCaching)
-		{
-			// Cache size:
-			int32 RetrievedCacheSize = 32 * 1024;
-			GConfig->GetInt(CategoryName, TEXT("CacheSizeKB"), RetrievedCacheSize, GEngineIni);
-			OutOverrides.StreamCachingSettings.CacheSizeKB = RetrievedCacheSize;
-		}
-
-		GConfig->GetBool(CategoryName, TEXT("bResampleForDevice"), OutOverrides.bResampleForDevice, GEngineIni);
-
-		GConfig->GetFloat(CategoryName, TEXT("CompressionQualityModifier"), OutOverrides.CompressionQualityModifier, GEngineIni);
-
-		GConfig->GetFloat(CategoryName, TEXT("AutoStreamingThreshold"), OutOverrides.AutoStreamingThreshold, GEngineIni);
-
-		//Cache sample rate map:
-		float RetrievedSampleRate = -1.0f;
-
-		GConfig->GetFloat(CategoryName, TEXT("MaxSampleRate"), RetrievedSampleRate, GEngineIni);
-		float* FoundSampleRate = OutOverrides.PlatformSampleRates.Find(ESoundwaveSampleRateSettings::Max);
-
-		if (FoundSampleRate)
-		{
-			if (!FMath::IsNearlyEqual(*FoundSampleRate, RetrievedSampleRate))
-			{
-				*FoundSampleRate = RetrievedSampleRate;
-			}
-
-		}
-		else
-		{
-			OutOverrides.PlatformSampleRates.Add(ESoundwaveSampleRateSettings::Max, RetrievedSampleRate);
-		}
-
-		RetrievedSampleRate = -1.0f;
-
-		GConfig->GetFloat(CategoryName, TEXT("HighSampleRate"), RetrievedSampleRate, GEngineIni);
-		FoundSampleRate = OutOverrides.PlatformSampleRates.Find(ESoundwaveSampleRateSettings::High);
-
-		if (FoundSampleRate)
-		{
-			if (!FMath::IsNearlyEqual(*FoundSampleRate, RetrievedSampleRate))
-			{
-				*FoundSampleRate = RetrievedSampleRate;
-			}
-
-		}
-		else
-		{
-			OutOverrides.PlatformSampleRates.Add(ESoundwaveSampleRateSettings::High, RetrievedSampleRate);
-		}
-
-
-		RetrievedSampleRate = -1.0f;
-
-		GConfig->GetFloat(CategoryName, TEXT("MedSampleRate"), RetrievedSampleRate, GEngineIni);
-		FoundSampleRate = OutOverrides.PlatformSampleRates.Find(ESoundwaveSampleRateSettings::Medium);
-
-		if (FoundSampleRate)
-		{
-			if (!FMath::IsNearlyEqual(*FoundSampleRate, RetrievedSampleRate))
-			{
-				*FoundSampleRate = RetrievedSampleRate;
-			}
-		}
-		else
-		{
-			OutOverrides.PlatformSampleRates.Add(ESoundwaveSampleRateSettings::Medium, RetrievedSampleRate);
-		}
-
-		RetrievedSampleRate = -1.0f;
-
-		GConfig->GetFloat(CategoryName, TEXT("LowSampleRate"), RetrievedSampleRate, GEngineIni);
-		FoundSampleRate = OutOverrides.PlatformSampleRates.Find(ESoundwaveSampleRateSettings::Low);
-
-		if (FoundSampleRate)
-		{
-			if (!FMath::IsNearlyEqual(*FoundSampleRate, RetrievedSampleRate))
-			{
-				*FoundSampleRate = RetrievedSampleRate;
-			}
-		}
-		else
-		{
-			OutOverrides.PlatformSampleRates.Add(ESoundwaveSampleRateSettings::Low, RetrievedSampleRate);
-		}
-
-		RetrievedSampleRate = -1.0f;
-
-		GConfig->GetFloat(CategoryName, TEXT("MinSampleRate"), RetrievedSampleRate, GEngineIni);
-		FoundSampleRate = OutOverrides.PlatformSampleRates.Find(ESoundwaveSampleRateSettings::Min);
-
-		if (FoundSampleRate)
-		{
-			if (!FMath::IsNearlyEqual(*FoundSampleRate, RetrievedSampleRate))
-			{
-				*FoundSampleRate = RetrievedSampleRate;
-			}
-		}
-		else
-		{
-			OutOverrides.PlatformSampleRates.Add(ESoundwaveSampleRateSettings::Min, RetrievedSampleRate);
-		}
-	}
-#endif
-}
 
 /**
  * Template for Windows target platforms
@@ -208,13 +84,13 @@ public:
 			}
 		}
 
-		// If we are targeting ES 2.0/3.1, we also must cook encoded HDR reflection captures
+		// If we are targeting ES3.1, we also must cook encoded HDR reflection captures
 		static FName NAME_SF_VULKAN_ES31(TEXT("SF_VULKAN_ES31"));
-		static FName NAME_OPENGL_150_ES2(TEXT("GLSL_150_ES2"));
 		static FName NAME_OPENGL_150_ES3_1(TEXT("GLSL_150_ES31"));
+		static FName NAME_PCD3D_ES3_1(TEXT("PCD3D_ES31"));
 		bRequiresEncodedHDRReflectionCaptures =	TargetedShaderFormats.Contains(NAME_SF_VULKAN_ES31)
-												 || TargetedShaderFormats.Contains(NAME_OPENGL_150_ES2)
-												 || TargetedShaderFormats.Contains(NAME_OPENGL_150_ES3_1);
+												|| TargetedShaderFormats.Contains(NAME_OPENGL_150_ES3_1)
+												|| TargetedShaderFormats.Contains(NAME_PCD3D_ES3_1);
 	#endif
 	}
 
@@ -328,24 +204,18 @@ public:
 		if (!IS_DEDICATED_SERVER)
 		{
 			static FName NAME_PCD3D_SM5(TEXT("PCD3D_SM5"));
-			static FName NAME_GLSL_150(TEXT("GLSL_150"));
 			static FName NAME_GLSL_430(TEXT("GLSL_430"));
 			static FName NAME_VULKAN_ES31(TEXT("SF_VULKAN_ES31"));
-			static FName NAME_OPENGL_150_ES2(TEXT("GLSL_150_ES2"));
 			static FName NAME_OPENGL_150_ES3_1(TEXT("GLSL_150_ES31"));
 			static FName NAME_VULKAN_SM5(TEXT("SF_VULKAN_SM5"));
 			static FName NAME_PCD3D_ES3_1(TEXT("PCD3D_ES31"));
-			static FName NAME_PCD3D_ES2(TEXT("PCD3D_ES2"));
 
 			OutFormats.AddUnique(NAME_PCD3D_SM5);
-			OutFormats.AddUnique(NAME_GLSL_150);
 			OutFormats.AddUnique(NAME_GLSL_430);
 			OutFormats.AddUnique(NAME_VULKAN_ES31);
-			OutFormats.AddUnique(NAME_OPENGL_150_ES2);
 			OutFormats.AddUnique(NAME_OPENGL_150_ES3_1);
 			OutFormats.AddUnique(NAME_VULKAN_SM5);
 			OutFormats.AddUnique(NAME_PCD3D_ES3_1);
-			OutFormats.AddUnique(NAME_PCD3D_ES2);
 		}
 	}
 
@@ -562,21 +432,6 @@ public:
 		OutFormats.Add(NAME_OPUS);
 	}
 
-	virtual FPlatformAudioCookOverrides* GetAudioCompressionSettings() const override
-	{
-		static FPlatformAudioCookOverrides Settings;
-
-		static bool bCachedPlatformSettings = false;
-
-		if (!bCachedPlatformSettings)
-		{
-			Windows::CachePlatformAudioCookOverrides(Settings);
-			bCachedPlatformSettings = true;
-		}
-
-		return &Settings;
-	}
-
 #endif //WITH_ENGINE
 
 	virtual bool SupportsVariants() const override
@@ -624,6 +479,14 @@ public:
 	virtual FOnTargetDeviceLost& OnDeviceLost( ) override
 	{
 		return DeviceLostEvent;
+	}
+
+	virtual bool UsesRayTracing() const override
+	{
+		bool bEnableRayTracing = false;
+		GConfig->GetBool(TEXT("/Script/WindowsTargetPlatform.WindowsTargetSettings"), TEXT("bEnableRayTracing"), bEnableRayTracing, GEngineIni);
+
+		return bEnableRayTracing;
 	}
 
 	//~ End ITargetPlatform Interface

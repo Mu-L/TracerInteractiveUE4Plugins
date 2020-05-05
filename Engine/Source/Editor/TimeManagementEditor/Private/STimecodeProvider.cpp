@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "STimecodeProvider.h"
 
@@ -29,7 +29,11 @@ void STimecodeProvider::Construct(const FArguments& InArgs)
 			{
 				return TimecodeProviderPtr->GetFrameRate().ToPrettyText();
 			}
-			return GEngine->DefaultTimecodeFrameRate.ToPrettyText();
+			else if (GEngine->bGenerateDefaultTimecode)
+			{
+				return GEngine->GenerateDefaultTimecodeFrameRate.ToPrettyText();
+			}
+			return NSLOCTEXT("TimecodeProvider", "Undefined", "<Undefined>");
 		}))
 		.Font(InArgs._TimecodeProviderFont)
 		.ColorAndOpacity(InArgs._TimecodeProviderColor)
@@ -61,7 +65,11 @@ void STimecodeProvider::Construct(const FArguments& InArgs)
 					{
 						return FText::FromName(TimecodeProviderPtr->GetFName());
 					}
-					return FText::FromString(TEXT("[System Clock]"));
+					else if (GEngine->bGenerateDefaultTimecode)
+					{
+						return NSLOCTEXT("TimecodeProvider", "EngineDefault", "Engine Default");
+					}
+					return NSLOCTEXT("TimecodeProvider", "Undefined", "<Undefined>");
 				}))
 				.Font(InArgs._TimecodeProviderFont)
 				.ColorAndOpacity(InArgs._TimecodeProviderColor)
@@ -123,6 +131,10 @@ FSlateColor STimecodeProvider::HandleIconColorAndOpacity() const
 			return FLinearColor::Yellow;
 		}
 	}
+	else if (GEngine->bGenerateDefaultTimecode)
+	{
+		return FLinearColor::Green;
+	}
 	return FSlateColor::UseForeground();
 }
 
@@ -141,6 +153,10 @@ FText STimecodeProvider::HandleStateText() const
 		case ETimecodeProviderSynchronizationState::Synchronizing:
 			return FEditorFontGlyphs::Hourglass_O;
 		}
+	}
+	else if (GEngine->bGenerateDefaultTimecode)
+	{
+		return FEditorFontGlyphs::Clock_O;
 	}
 
 	return FEditorFontGlyphs::Exclamation;

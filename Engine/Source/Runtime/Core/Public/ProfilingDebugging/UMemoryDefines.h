@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -14,6 +14,13 @@
  */
 #ifndef TBB_ALLOCATOR_ALLOWED
 	#define TBB_ALLOCATOR_ALLOWED 1
+#endif
+
+ /**
+  * true if mimalloc can be used (different to the platform actually supporting it)
+  */
+#ifndef MIMALLOC_ALLOCATOR_ALLOWED
+	#define MIMALLOC_ALLOCATOR_ALLOWED 1
 #endif
 
 /**

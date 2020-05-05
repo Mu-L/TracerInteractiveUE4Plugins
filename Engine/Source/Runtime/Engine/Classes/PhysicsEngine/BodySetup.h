@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -19,6 +19,7 @@
 
 class ITargetPlatform;
 class UPhysicalMaterial;
+class UPhysicalMaterialMask;
 class UPrimitiveComponent;
 struct FShapeData;
 enum class EPhysXMeshCookFlags : uint8;
@@ -42,11 +43,9 @@ namespace physx
 #if WITH_CHAOS
 namespace Chaos
 {
-	template<typename T, int d>
-	class TImplicitObject;
+	class FImplicitObject;
 
-	template <typename T>
-	class TTriangleMeshImplicitObject;
+	class FTriangleMeshImplicitObject;
 }
 
 template<typename T, int d>
@@ -121,6 +120,9 @@ struct ENGINE_API FCookBodySetupInfo
 
 	/** Whether to support UV from hit results */
 	bool bSupportUVFromHitResults;
+
+	/** Whether to support face remap, needed for physical material masks */
+	bool bSupportFaceRemap;
 
 	/** Error generating cook info for trimesh*/
 	bool bTriMeshError;
@@ -203,6 +205,13 @@ class UBodySetup : public UObject
 	UPROPERTY()
 	uint8 bGenerateMirroredCollision:1;
 
+	/** 
+	 * If true, the physics triangle mesh will store UVs and the face remap table. This is needed
+	 * to support physical material masks in scene queries. 
+	 */
+	UPROPERTY()
+	uint8 bSupportUVsAndFaceRemap:1;
+
 	/** Flag used to know if we have created the physics convex and tri meshes from the cooked data yet */
 	uint8 bCreatedPhysicsMeshes:1;
 
@@ -264,11 +273,14 @@ public:
 
 #if WITH_CHAOS
 	//FBodySetupTriMeshes* TriMeshWrapper;
-	TArray<TUniquePtr<Chaos::TTriangleMeshImplicitObject<float>>> ChaosTriMeshes;
+	TArray<TSharedPtr<Chaos::FTriangleMeshImplicitObject, ESPMode::ThreadSafe>> ChaosTriMeshes;
 #endif
 
 	/** Additional UV info, if available. Used for determining UV for a line trace impact. */
 	FBodySetupUVInfo UVInfo;
+
+	/** Additional face remap table, if available. Used for determining face index mapping from collision mesh to static mesh, for use with physical material masks */
+	TArray<int32> FaceRemap;
 
 	/** Default properties of the body instance, copied into objects on instantiation, was URB_BodyInstance */
 	UPROPERTY(EditAnywhere, Category=Collision, meta=(FullyExpand = "true"))
@@ -390,7 +402,7 @@ public:
 	 * @param		bRemoveExisting			If true, clears any pre-existing collision
 	 * @return								true on success, false on failure because of vertex count overflow.
 	 */
-	ENGINE_API void CreateFromModel(class UModel* InModel, bool bRemoveExisting);
+	ENGINE_API bool CreateFromModel(class UModel* InModel, bool bRemoveExisting);
 
 	/**
 	 * Updates the tri mesh collision with new positions, and refits the BVH to match. 
@@ -442,7 +454,7 @@ public:
 	/*
 	* Copy all UPROPERTY settings except the collision geometry.
 	* This function is use when we restore the original data after a re-import of a static mesh.
-	* All UProperty should be copy here except the collision geometry (i.e. AggGeom)
+	* All FProperty should be copy here except the collision geometry (i.e. AggGeom)
 	*/
 	ENGINE_API virtual void CopyBodySetupProperty(const UBodySetup* Other);
 #endif // WITH_EDITOR
@@ -454,7 +466,8 @@ public:
 		FBodyInstance* OwningInstance, 
 		FVector& Scale3D, 
 		UPhysicalMaterial* SimpleMaterial,
-		TArray<UPhysicalMaterial*>& ComplexMaterials, 
+		TArray<UPhysicalMaterial*>& ComplexMaterials,
+		TArray<FPhysicalMaterialMaskParams>& ComplexMaterialMasks,
 		const FBodyCollisionData& BodyCollisionData,
 		const FTransform& RelativeTM = FTransform::Identity, 
 		TArray<FPhysicsShapeHandle>* NewShapes = NULL);

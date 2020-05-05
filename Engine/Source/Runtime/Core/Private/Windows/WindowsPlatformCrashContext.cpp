@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Windows/WindowsPlatformCrashContext.h"
 #include "HAL/PlatformMallocCrash.h"
@@ -31,6 +31,7 @@
 #include <Shlwapi.h>
 #include <psapi.h>
 #include <tlhelp32.h>
+#include <shellapi.h>
 
 #ifndef UE_LOG_CRASH_CALLSTACK
 	#define UE_LOG_CRASH_CALLSTACK 1
@@ -97,7 +98,7 @@ namespace {
 		// CrashContext.runtime-xml is now a part of the minidump file.
 		MINIDUMP_USER_STREAM CrashContextStream = { 0 };
 		CrashContextStream.Type = UE4_MINIDUMP_CRASHCONTEXT;
-		CrashContextStream.BufferSize = InContext.GetBuffer().GetAllocatedSize();
+		CrashContextStream.BufferSize = (ULONG)InContext.GetBuffer().GetAllocatedSize();
 		CrashContextStream.Buffer = (void*)*InContext.GetBuffer();
 
 		MINIDUMP_USER_STREAM_INFORMATION CrashContextStreamInformation = { 0 };
@@ -135,6 +136,22 @@ struct FAssertInfo
 	{
 	}
 };
+
+const TCHAR* const FWindowsPlatformCrashContext::UE4GPUAftermathMinidumpName = TEXT("UE4AftermathD3D12.nv-gpudmp");
+
+/**
+* Implement platform specific static cleanup function
+*/
+void FGenericCrashContext::CleanupPlatformSpecificFiles()
+{
+	// Manually delete any potential leftover gpu dumps because the crash reporter will upload any leftover crash data from last session
+	const FString CrashVideoPath = FPaths::ProjectLogDir() + TEXT("CrashVideo.avi");
+	IFileManager::Get().Delete(*CrashVideoPath);
+
+	const FString GPUMiniDumpPath = FPaths::Combine(FPaths::ProjectLogDir(), FWindowsPlatformCrashContext::UE4GPUAftermathMinidumpName);
+	IFileManager::Get().Delete(*GPUMiniDumpPath);
+}
+
 
 void FWindowsPlatformCrashContext::GetProcModuleHandles(const FProcHandle& ProcessHandle, FModuleHandleArray& OutHandles)
 {
@@ -305,6 +322,15 @@ void FWindowsPlatformCrashContext::CopyPlatformSpecificFiles(const TCHAR* Output
 		const FString CrashVideoDstAbsolute = FPaths::Combine(OutputDirectory, *CrashVideoFilename);
 		static_cast<void>(IFileManager::Get().Copy(*CrashVideoDstAbsolute, *CrashVideoPath));	// best effort, so don't care about result: couldn't copy -> tough, no video
 	}
+
+	// If present, include the gpu crash minidump
+	const FString GPUMiniDumpPath = FPaths::Combine(FPaths::ProjectLogDir(), FWindowsPlatformCrashContext::UE4GPUAftermathMinidumpName);
+	if (IFileManager::Get().FileExists(*GPUMiniDumpPath))
+	{
+		FString GPUMiniDumpFilename = FPaths::GetCleanFilename(GPUMiniDumpPath);
+		const FString GPUMiniDumpDstAbsolute = FPaths::Combine(OutputDirectory, *GPUMiniDumpFilename);
+		static_cast<void>(IFileManager::Get().Copy(*GPUMiniDumpDstAbsolute, *GPUMiniDumpPath));	// best effort, so don't care about result: couldn't copy -> tough, no video
+	}
 }
 
 void FWindowsPlatformCrashContext::CaptureAllThreadContexts()
@@ -389,7 +415,7 @@ bool CreateCrashReportClientPath(TCHAR* OutClientPath, int32 MaxLength)
 /**
  * Launches crash reporter client and creates the pipes for communication.
  */
-FProcHandle LaunchCrashReportClient(void** OutWritePipe, void** OutReadPipe)
+FProcHandle LaunchCrashReportClient(void** OutWritePipe, void** OutReadPipe, uint32* CrashReportClientProcessId)
 {
 	TCHAR CrashReporterClientPath[CR_CLIENT_MAX_PATH_LEN] = { 0 };
 	TCHAR CrashReporterClientArgs[CR_CLIENT_MAX_ARGS_LEN] = { 0 };
@@ -414,6 +440,35 @@ FProcHandle LaunchCrashReportClient(void** OutWritePipe, void** OutReadPipe)
 		FCString::Strncat(CrashReporterClientArgs, PidStr, CR_CLIENT_MAX_ARGS_LEN);
 	}
 
+	// Parse commandline arguments relevant to pass to the client. Note that since we run this from static initialization
+	// FCommandline has not yet been initialized, instead we need to use the OS provided methods.
+	{
+		LPWSTR* ArgList;
+		int ArgCount;
+		ArgList = CommandLineToArgvW(GetCommandLineW(), &ArgCount);
+		if (ArgList != nullptr)
+		{
+			for (int It = 0; It < ArgCount; ++It)
+			{
+				TCHAR Path[MAX_PATH];
+				if (FParse::Value(ArgList[It], TEXT("abscrashreportclientlog="), Path, UE_ARRAY_COUNT(Path)))
+				{
+					FCString::Strncat(CrashReporterClientArgs, TEXT(" -abslog="), CR_CLIENT_MAX_ARGS_LEN);
+					FCString::Strncat(CrashReporterClientArgs, Path, CR_CLIENT_MAX_ARGS_LEN);
+				}
+				
+			#if !USE_NULL_RHI
+				const bool bHasNullRHIOnCommandline = FParse::Param(ArgList[It], TEXT("nullrhi"));
+				if (bHasNullRHIOnCommandline)
+			#endif
+				{
+					FCString::Strncat(CrashReporterClientArgs, TEXT(" -nullrhi"), CR_CLIENT_MAX_ARGS_LEN);
+				}
+			}
+		}
+	}
+
+
 #if WITH_EDITOR // Disaster recovery is only enabled for the Editor. Start the server even if in -game, -server, commandlet, the client-side will not connect (its too soon here to query this executable config).
 	{
 		// Disaster recovery service command line.
@@ -431,7 +486,7 @@ FProcHandle LaunchCrashReportClient(void** OutWritePipe, void** OutReadPipe)
 			CrashReporterClientPath,
 			CrashReporterClientArgs,
 			true, false, false,
-			nullptr, 0,
+			CrashReportClientProcessId, 0,
 			nullptr,
 			nullptr,
 			nullptr
@@ -487,6 +542,9 @@ int32 ReportCrashForMonitor(
 	bool bSendUnattendedBugReports = true;
 	bool bSendUsageData = true;
 	bool bCanSendCrashReport = true;
+	// Some projects set this value in non editor builds to automatically send error reports unattended, but display
+	// a plain message box in the crash report client. See CRC app code for details.
+	bool bImplicitSend = false;
 
 	if (FCommandLine::IsInitialized())
 	{
@@ -497,6 +555,14 @@ int32 ReportCrashForMonitor(
 	{
 		GConfig->GetBool(TEXT("/Script/UnrealEd.CrashReportsPrivacySettings"), TEXT("bSendUnattendedBugReports"), bSendUnattendedBugReports, GEditorSettingsIni);
 		GConfig->GetBool(TEXT("/Script/UnrealEd.AnalyticsPrivacySettings"), TEXT("bSendUsageData"), bSendUsageData, GEditorSettingsIni);
+		
+#if !UE_EDITOR
+		if (ReportUI != EErrorReportUI::ReportInUnattendedMode)
+		{
+			// Only check if we are in a non-editor build
+			GConfig->GetBool(TEXT("CrashReportClient"), TEXT("bImplicitSend"), bImplicitSend, GEngineIni);
+		}
+#endif
 	}
 
 #if !UE_EDITOR
@@ -523,14 +589,10 @@ int32 ReportCrashForMonitor(
 	SharedContext->UserSettings.bNoDialog = bNoDialog;
 	SharedContext->UserSettings.bSendUnattendedBugReports = bSendUnattendedBugReports;
 	SharedContext->UserSettings.bSendUsageData = bSendUsageData;
+	SharedContext->UserSettings.bImplicitSend = bImplicitSend;
 
 	SharedContext->SessionContext.bIsExitRequested = IsEngineExitRequested();
 	FCString::Strcpy(SharedContext->ErrorMessage, CR_MAX_ERROR_MESSAGE_CHARS-1, ErrorMessage);
-
-	if (GLog)
-	{
-		GLog->PanicFlushThreadedLogs();
-	}
 
 	// Setup all the thread ids and names using snapshot dbghelp. Since it's not possible to 
 	// query thread names from an external process.
@@ -554,8 +616,11 @@ int32 ReportCrashForMonitor(
 					if (ThreadEntry.th32ThreadID != CurrentThreadId)
 					{
 						HANDLE ThreadHandle = OpenThread(THREAD_SUSPEND_RESUME, FALSE, ThreadEntry.th32ThreadID);
-						SuspendThread(ThreadHandle);
-						ThreadHandles.Push(ThreadHandle);
+						if (ThreadHandle != NULL)
+						{
+							SuspendThread(ThreadHandle);
+							ThreadHandles.Push(ThreadHandle);
+						}
 					}
 
 					SharedContext->ThreadIds[ThreadIdx] = ThreadEntry.th32ThreadID;
@@ -601,25 +666,34 @@ int32 ReportCrashForMonitor(
 	}
 
 	// Write the shared context to the pipe
-	int32 OutDataWritten = 0;
-	FPlatformProcess::WritePipe(WritePipe, (UINT8*)SharedContext, sizeof(FSharedCrashContext), &OutDataWritten);
-	check(OutDataWritten == sizeof(FSharedCrashContext));
-
-	// Wait for a response, saying it's ok to continue
-	bool bCanContinueExecution = false;
-	int32 ExitCode = 0;
-	// Would like to use TInlineAllocator here to avoid heap allocation on crashes, but it doesn't work since ReadPipeToArray 
-	// cannot take array with non-default allocator
-	TArray<uint8> ResponseBuffer;
-	ResponseBuffer.AddZeroed(16);
-	while (!FPlatformProcess::GetProcReturnCode(CrashMonitorHandle, &ExitCode) && !bCanContinueExecution)
+	bool bPipeWriteSucceeded = true;
+	const uint8* DataIt = (const uint8*)SharedContext;
+	const uint8* DataEndIt = DataIt + sizeof(FSharedCrashContext);
+	while (DataIt != DataEndIt && bPipeWriteSucceeded)
 	{
-		if (FPlatformProcess::ReadPipeToArray(ReadPipe, ResponseBuffer))
+		int32 OutDataWritten = 0;
+		bPipeWriteSucceeded = FPlatformProcess::WritePipe(WritePipe, DataIt, static_cast<int32>(DataEndIt - DataIt), &OutDataWritten);
+		DataIt += OutDataWritten;
+	}
+
+	if (bPipeWriteSucceeded) // The receiver is not likely to respond if the shared context wasn't successfully written to the pipe.
+	{
+		// Wait for a response, saying it's ok to continue
+		bool bCanContinueExecution = false;
+		int32 ExitCode = 0;
+		// Would like to use TInlineAllocator here to avoid heap allocation on crashes, but it doesn't work since ReadPipeToArray 
+		// cannot take array with non-default allocator
+		TArray<uint8> ResponseBuffer;
+		ResponseBuffer.AddZeroed(16);
+		while (!FPlatformProcess::GetProcReturnCode(CrashMonitorHandle, &ExitCode) && !bCanContinueExecution)
 		{
-			if (ResponseBuffer[0] == 0xd && ResponseBuffer[1] == 0xe &&
-				ResponseBuffer[2] == 0xa && ResponseBuffer[3] == 0xd)
+			if (FPlatformProcess::ReadPipeToArray(ReadPipe, ResponseBuffer))
 			{
-				bCanContinueExecution = true;
+				if (ResponseBuffer[0] == 0xd && ResponseBuffer[1] == 0xe &&
+					ResponseBuffer[2] == 0xa && ResponseBuffer[3] == 0xd)
+				{
+					bCanContinueExecution = true;
+				}
 			}
 		}
 	}
@@ -704,7 +778,6 @@ int32 ReportCrashUsingCrashReportClient(FWindowsPlatformCrashContext& InContext,
 			InContext.CopyPlatformSpecificFiles(*CrashFolderAbsolute, (void*) ExceptionInfo);
 
 			// Copy the log file to output
-			GLog->PanicFlushThreadedLogs();
 			FGenericCrashContext::DumpLog(CrashFolderAbsolute);
 
 			// Build machines do not upload these automatically since it is not okay to have lingering processes after the build completes.
@@ -895,6 +968,8 @@ private:
 	void* CrashMonitorWritePipe;
 	/** Pipe for reading from the monitor process. */
 	void* CrashMonitorReadPipe;
+	/** The crash report client process ID. */
+	uint32 CrashMonitorPid;
 	/** Memory allocated for crash context. */
 	FSharedCrashContext SharedContext;
 	
@@ -909,26 +984,40 @@ private:
 	/** Main loop that waits for a crash to trigger the report generation */
 	FORCENOINLINE uint32 Run()
 	{
-		// Removed vectored exception handler, we are now guaranteed to
-		// be able to catch unhandled exception in the main try/catch block.
-#if _WIN32_WINNT >= 0x0500
-		if (!FPlatformMisc::IsDebuggerPresent())
-		{
-			RemoveVectoredExceptionHandler(VectoredExceptionHandle);
-		}
+#if !PLATFORM_SEH_EXCEPTIONS_DISABLED
+		__try
 #endif
-		while (StopTaskCounter.GetValue() == 0)
 		{
-			if (WaitForSingleObject(CrashEvent, 500) == WAIT_OBJECT_0)
+			// Removed vectored exception handler, we are now guaranteed to
+			// be able to catch unhandled exception in the main try/catch block.
+#if _WIN32_WINNT >= 0x0500
+			if (!FPlatformMisc::IsDebuggerPresent())
 			{
-				ResetEvent(CrashHandledEvent);
-				HandleCrashInternal();
-				ResetEvent(CrashEvent);
-				// Let the thread that crashed know we're done.				
-				SetEvent(CrashHandledEvent);
-				break;
+				RemoveVectoredExceptionHandler(VectoredExceptionHandle);
+			}
+#endif
+			while (StopTaskCounter.GetValue() == 0)
+			{
+				if (WaitForSingleObject(CrashEvent, 500) == WAIT_OBJECT_0)
+				{
+					ResetEvent(CrashHandledEvent);
+					HandleCrashInternal();
+
+					ResetEvent(CrashEvent);
+					// Let the thread that crashed know we're done.
+					SetEvent(CrashHandledEvent);
+
+					break;
+				}
 			}
 		}
+#if !PLATFORM_SEH_EXCEPTIONS_DISABLED
+		__except(EXCEPTION_EXECUTE_HANDLER)
+		{
+			// The crash reporting thread crashed itself. Exit with a code that the out-of-process monitor will be able to pick up and report into analytics.
+			::exit(ECrashExitCodes::CrashReporterCrashed);
+		}
+#endif
 		return 0;
 	}
 
@@ -951,6 +1040,7 @@ public:
 		, VectoredExceptionHandle(INVALID_HANDLE_VALUE)
 		, CrashMonitorWritePipe(nullptr)
 		, CrashMonitorReadPipe(nullptr)
+		, CrashMonitorPid(0)
 	{
 		// Synchronization objects
 		CrashEvent = CreateEvent(nullptr, true, 0, nullptr);
@@ -966,8 +1056,11 @@ public:
 #endif
 
 #if USE_CRASH_REPORTER_MONITOR
-		CrashClientHandle = LaunchCrashReportClient(&CrashMonitorWritePipe, &CrashMonitorReadPipe);
-		FMemory::Memzero(SharedContext);
+		if (!FPlatformProperties::IsServerOnly())
+		{
+			CrashClientHandle = LaunchCrashReportClient(&CrashMonitorWritePipe, &CrashMonitorReadPipe, &CrashMonitorPid);
+			FMemory::Memzero(SharedContext);
+		}
 #endif
 
 		// Create a background thread that will process the crash and generate crash reports
@@ -977,7 +1070,10 @@ public:
 			SetThreadPriority(Thread, THREAD_PRIORITY_BELOW_NORMAL);
 		}
 
-		FGenericCrashContext::SetIsOutOfProcessCrashReporter(CrashClientHandle.IsValid());
+		if (CrashClientHandle.IsValid())
+		{
+			FGenericCrashContext::SetOutOfProcessCrashReporterPid(CrashMonitorPid);
+		}
 	}
 
 	FORCENOINLINE ~FCrashReportingThread()
@@ -1088,13 +1184,13 @@ private:
 		// Stop the heartbeat thread so that it doesn't interfere with crashreporting
 		FThreadHeartBeat::Get().Stop();
 
-		GLog->PanicFlushThreadedLogs();
-
 		// Then try run time crash processing and broadcast information about a crash.
 		FCoreDelegates::OnHandleSystemError.Broadcast();
 
 		if (GLog)
 		{
+			//Panic flush the logs to make sure there are no entries queued. This is
+			//not thread safe so it will skip for example editor log.
 			GLog->PanicFlushThreadedLogs();
 		}
 		
@@ -1123,6 +1219,8 @@ private:
 		// Generic exception description is stored in GErrorExceptionDescription
 		else if (ExceptionInfo->ExceptionRecord->ExceptionCode != 1)
 		{
+			// When a generic exception is thrown, it is important to get all the stack frames
+			NumStackFramesToIgnore = 0;
 			CreateExceptionInfoString(ExceptionInfo->ExceptionRecord);
 			ErrorMessage = GErrorExceptionDescription;
 		}
@@ -1259,12 +1357,24 @@ LONG WINAPI UnhandledStaticInitException(LPEXCEPTION_POINTERS ExceptionInfo)
  * Fallback for catching exceptions which aren't caught elsewhere. This allows catching exceptions on threads created outside the engine.
  * Note that Windows does not call this handler if a debugger is attached, separately to our internal logic around crash handling.
  */
-LONG WINAPI UnhandledException(EXCEPTION_POINTERS *ExceptionInfo)
+LONG WINAPI UnhandledException(EXCEPTION_POINTERS* ExceptionInfo)
 {
-	ReportCrash(ExceptionInfo);
-	GIsCriticalError = true;
-	FPlatformMisc::RequestExit(true);
-	return EXCEPTION_CONTINUE_SEARCH;
+#if !PLATFORM_SEH_EXCEPTIONS_DISABLED
+	__try
+#endif
+	{
+		ReportCrash(ExceptionInfo);
+		GIsCriticalError = true;
+		FPlatformMisc::RequestExit(true);
+		return EXCEPTION_CONTINUE_SEARCH;
+	}
+#if !PLATFORM_SEH_EXCEPTIONS_DISABLED
+	__except(EXCEPTION_EXECUTE_HANDLER)
+	{
+		// The crash handler crashed itself, exit with a code that the out-of-process monitor will be able to pick up and report into analytics.
+		::exit(ECrashExitCodes::CrashHandlerCrashed);
+	}
+#endif
 }
 
 // #CrashReport: 2015-05-28 This should be named EngineCrashHandler
@@ -1344,11 +1454,22 @@ FORCENOINLINE void ReportGPUCrash(const TCHAR* ErrorMessage, int NumStackFramesT
 {
 	/** This is the last place to gather memory stats before exception. */
 	FGenericCrashContext::SetMemoryStats(FPlatformMemory::GetStats());
+	
+	// GPUCrash can be called when the guarded entry is not set
+#if !PLATFORM_SEH_EXCEPTIONS_DISABLED
+	__try
+	{
+		FAssertInfo Info(ErrorMessage, NumStackFramesToIgnore + 2); // +2 for this function and RaiseException()
 
-	FAssertInfo Info(ErrorMessage, NumStackFramesToIgnore + 2); // +2 for this function and RaiseException()
+		ULONG_PTR Arguments[] = { (ULONG_PTR)&Info };
+		::RaiseException(GPUCrashExceptionCode, 0, UE_ARRAY_COUNT(Arguments), Arguments);
+	}
+	__except (ReportCrash(GetExceptionInformation()))
+	{
+		FPlatformMisc::RequestExit(false);
+	}
+#endif
 
-	ULONG_PTR Arguments[] = { (ULONG_PTR)&Info };
-	::RaiseException(GPUCrashExceptionCode, 0, UE_ARRAY_COUNT(Arguments), Arguments);
 }
 
 void ReportHang(const TCHAR* ErrorMessage, const uint64* StackFrames, int32 NumStackFrames, uint32 HungThreadId)

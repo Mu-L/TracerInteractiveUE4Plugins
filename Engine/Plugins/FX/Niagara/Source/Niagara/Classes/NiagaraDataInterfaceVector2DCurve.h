@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "NiagaraCommon.h"
@@ -6,8 +6,7 @@
 #include "VectorVM.h"
 #include "StaticMeshResources.h"
 #include "Curves/RichCurve.h"
-#include "NiagaraDataInterface.h"
-
+#include "NiagaraDataInterfaceCurveBase.h"
 #include "NiagaraDataInterfaceVector2DCurve.generated.h"
 
 
@@ -27,16 +26,15 @@ public:
 	enum
 	{
 		CurveLUTNumElems = 2,
-		CurveLUTMax = (CurveLUTWidth * CurveLUTNumElems) - 1,
 	};
-
-	void UpdateLUT();
 
 	//UObject Interface
 	virtual void PostInitProperties() override;
-	virtual void PostLoad() override;
-
+	virtual void Serialize(FArchive& Ar) override;
 	//UObject Interface End
+	
+	virtual void UpdateTimeRanges() override;
+	virtual TArray<float> BuildLUT(int32 NumEntries) const override;
 
 	virtual bool Equals(const UNiagaraDataInterface* Other) const override;
 
@@ -51,7 +49,7 @@ public:
 	//~ UNiagaraDataInterfaceCurveBase interface
 	virtual void GetCurveData(TArray<FCurveData>& OutCurveData) override;
 
-	virtual bool GetFunctionHLSL(const FName&  DefinitionFunctionName, FString InstanceFunctionName, FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
+	virtual bool GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL) override;
 
 	virtual int32 GetCurveNumElems()const { return CurveLUTNumElems; }
 protected:

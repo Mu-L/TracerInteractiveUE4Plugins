@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -800,9 +800,6 @@ public:
 
 	void UpdateLevelCollision(ULevel* InLevel);
 
-	UE_DEPRECATED(4.24, "Use OnEditorModeIDChanged instead")
-	virtual void OnEditorModeChanged(FEdMode* Mode, bool IsEntering);
-	virtual void OnEditorModeIDChanged(const FEditorModeID& ModeID, bool IsEntering);
 #endif // WITH_EDITOR
 
 	FORCEINLINE bool IsSetUpForLazyGeometryExporting() const { return bGenerateNavigationOnlyAroundNavigationInvokers; }
@@ -1003,6 +1000,8 @@ protected:
 	 *  Depends on runtime generation settings of each navigation data, always ERuntimeGenerationType::Dynamic in the editor world
 	 */
 	ERuntimeGenerationType GetRuntimeGenerationType() const;
+
+	void LogNavDataRegistrationResult(ERegistrationResult);
 	
 	//----------------------------------------------------------------------//
 	// new stuff

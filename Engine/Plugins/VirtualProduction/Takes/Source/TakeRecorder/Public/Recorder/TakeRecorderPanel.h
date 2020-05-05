@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -65,11 +65,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Take Recorder|Panel", DisplayName="Set Mode (Read-Only Level Sequence)")
 	void SetupForViewing(ULevelSequence* LevelSequenceAsset);
 
+	UE_DEPRECATED(4.25, "Please use ClearPendingTake instead")
+	UFUNCTION(BlueprintCallable, Category = "Take Recorder|Panel", DisplayName = "New Take", meta = (DeprecatedFunction, DeprecationMessage = "Please use ClearPendingTake instead"))
+	void NewTake() { ClearPendingTake(); }
+
 	/*
-	 * Setup for a new take by clearing out sources and the transient level sequence
+	 * Clear the pending take level sequence
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Take Recorder|Panel", DisplayName = "New Take")
-	void NewTake();
+	UFUNCTION(BlueprintCallable, Category = "Take Recorder|Panel", DisplayName = "Clear Pending Take")
+	void ClearPendingTake();
 
 	/**
 	 * Access the level sequence for this take
@@ -90,6 +94,20 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category="Take Recorder|Panel")
 	FFrameRate GetFrameRate() const;
+
+
+	/**
+	* Set the frame rate for this take
+	*/
+	UFUNCTION(BlueprintCallable, Category = "Take Recorder|Panel")
+	void SetFrameRate(FFrameRate InFrameRate);
+
+
+	/**
+	* Set if the frame rate is set from the Timecode frame rate
+	*/
+	UFUNCTION(BlueprintCallable, Category = "Take Recorder|Panel")
+	void SetFrameRateFromTimecode(bool  bInFromTimecode);
 
 
 	/**

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -56,8 +56,9 @@ public:
 
 	/**
 	 * Connect to the default connection setup
+	 * @return true if default connection process properly started
 	 */
-	virtual void DefaultConnect() = 0;
+	virtual bool DefaultConnect() = 0;
 
 	/**
 	 * Disconnect from the current session if any, but prompt the user about session changes first.

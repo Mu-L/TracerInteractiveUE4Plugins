@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "LevelEditorViewport.h"
@@ -53,7 +53,6 @@
 #include "AssetRegistryModule.h"
 #include "IPlacementModeModule.h"
 #include "Engine/Polys.h"
-#include "Editor/GeometryMode/Public/EditorGeometry.h"
 #include "ActorEditorUtils.h"
 #include "ObjectTools.h"
 #include "PackageTools.h"
@@ -77,6 +76,7 @@
 #include "ActorGroupingUtils.h"
 #include "EditorWorldExtension.h"
 #include "VREditorMode.h"
+#include "Subsystems/BrushEditingSubsystem.h"
 #include "Engine/VolumeTexture.h"
 #include "Materials/MaterialExpressionDivide.h"
 #include "Materials/MaterialExpressionSubtract.h"
@@ -230,25 +230,25 @@ static UDirectionalLightComponent* GetAtmosphericLight(const uint8 DesiredLightI
 
 namespace LevelEditorViewportClientHelper
 {
-	UProperty* GetEditTransformProperty(FWidget::EWidgetMode WidgetMode)
+	FProperty* GetEditTransformProperty(FWidget::EWidgetMode WidgetMode)
 	{
-		UProperty* ValueProperty = nullptr;
+		FProperty* ValueProperty = nullptr;
 		switch (WidgetMode)
 		{
 		case FWidget::WM_Translate:
-			ValueProperty = FindField<UProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeLocationPropertyName());
+			ValueProperty = FindFProperty<FProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeLocationPropertyName());
 			break;
 		case FWidget::WM_Rotate:
-			ValueProperty = FindField<UProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeRotationPropertyName());
+			ValueProperty = FindFProperty<FProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeRotationPropertyName());
 			break;
 		case FWidget::WM_Scale:
-			ValueProperty = FindField<UProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeScale3DPropertyName());
+			ValueProperty = FindFProperty<FProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeScale3DPropertyName());
 			break;
 		case FWidget::WM_TranslateRotateZ:
-			ValueProperty = FindField<UProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeLocationPropertyName());
+			ValueProperty = FindFProperty<FProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeLocationPropertyName());
 			break;
 		case FWidget::WM_2D:
-			ValueProperty = FindField<UProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeLocationPropertyName());
+			ValueProperty = FindFProperty<FProperty>(USceneComponent::StaticClass(), USceneComponent::GetRelativeLocationPropertyName());
 			break;
 		default:
 			break;
@@ -543,6 +543,7 @@ static bool TryAndCreateMaterialInput( UMaterial* UnrealMaterial, EMaterialKind:
 		UnrealMaterial->Normal.Expression = UnrealTextureExpression;
 	}
 
+
 	return true;
 }
 
@@ -634,6 +635,9 @@ UObject* FLevelEditorViewportClient::GetOrCreateMaterialFromTexture( UTexture* U
 		TryAndCreateMaterialInput( UnrealMaterial, EMaterialKind::Emissive, EmissiveTexture, UnrealMaterial->EmissiveColor, HSpace, VSpace * 1 );
 		TryAndCreateMaterialInput( UnrealMaterial, EMaterialKind::Normal, NormalTexture, UnrealMaterial->Normal, HSpace, VSpace * 2 );
 	}
+
+	UnrealMaterial->PreEditChange(nullptr);
+	UnrealMaterial->PostEditChange();
 
 	// Notify the asset registry
 	FAssetRegistryModule::AssetCreated( UnrealMaterial );
@@ -1800,9 +1804,13 @@ FLevelEditorViewportClient::~FLevelEditorViewportClient()
 		Layers->RemoveViewFromActorViewVisibility(this);
 
 		GEditor->RemoveLevelViewportClients(this);
+		
+		if (FocusTimerHandle.IsValid())
+		{
+			GEditor->GetTimerManager()->ClearTimer(FocusTimerHandle);
+		}
 
 		GetMutableDefault<ULevelEditorViewportSettings>()->OnSettingChanged().RemoveAll(this);
-
 
 		RemoveReferenceToWorldContext(GEditor->GetEditorWorldContext());
 	}
@@ -1836,8 +1844,6 @@ void FLevelEditorViewportClient::InitializeVisibilityFlags()
 FSceneView* FLevelEditorViewportClient::CalcSceneView(FSceneViewFamily* ViewFamily, const EStereoscopicPass StereoPass)
 {
 	bWasControlledByOtherViewport = false;
-
-	UpdateViewForLockedActor();
 
 	// set all other matching viewports to my location, if the LOD locking is enabled,
 	// unless another viewport already set me this frame (otherwise they fight)
@@ -1960,7 +1966,7 @@ void FLevelEditorViewportClient::BeginCameraMovement(bool bHasMovement)
 			{
 				GEditor->BroadcastBeginCameraMovement(*ActorLock);
 				// consider modification from piloting as relative location changes
-				UProperty* TransformProperty = LevelEditorViewportClientHelper::GetEditTransformProperty(FWidget::WM_Translate);
+				FProperty* TransformProperty = LevelEditorViewportClientHelper::GetEditTransformProperty(FWidget::WM_Translate);
 				if (TransformProperty)
 				{
 					// Create edit property event
@@ -1989,7 +1995,7 @@ void FLevelEditorViewportClient::EndCameraMovement()
 		{
 			GEditor->BroadcastEndCameraMovement(*ActorLock);
 			// Create post edit property change event, consider modification from piloting as relative location changes
-			UProperty* TransformProperty = LevelEditorViewportClientHelper::GetEditTransformProperty(FWidget::WM_Translate);
+			FProperty* TransformProperty = LevelEditorViewportClientHelper::GetEditTransformProperty(FWidget::WM_Translate);
 			FPropertyChangedEvent PropertyChangedEvent(TransformProperty, EPropertyChangeType::ValueSet);
 
 			// Broadcast Post Edit change notification, we can't call PostEditChangeProperty directly on Actor or ActorComponent from here since it wasn't pair with a proper PreEditChange
@@ -2093,13 +2099,13 @@ void FLevelEditorViewportClient::ReceivedFocus(FViewport* InViewport)
 		bReceivedFocusRecently = true;
 
 		// A few frames can pass between receiving focus and processing a click, so we use a timer to track whether we have recently received focus.
-		FTimerHandle DummyHandle;
 		FTimerDelegate ResetFocusReceivedTimer;
 		ResetFocusReceivedTimer.BindLambda([&] ()
 		{
 			bReceivedFocusRecently = false;
+			FocusTimerHandle.Invalidate(); // The timer will only execute once, so we can invalidate now.
 		});
-		GEditor->GetTimerManager()->SetTimer(DummyHandle, ResetFocusReceivedTimer, 0.1f, false);
+		GEditor->GetTimerManager()->SetTimer(FocusTimerHandle, ResetFocusReceivedTimer, 0.1f, false);	
 	}
 
 	FEditorViewportClient::ReceivedFocus(InViewport);
@@ -2118,18 +2124,19 @@ void FLevelEditorViewportClient::LostFocus(FViewport* InViewport)
 //
 void FLevelEditorViewportClient::ProcessClick(FSceneView& View, HHitProxy* HitProxy, FKey Key, EInputEvent Event, uint32 HitX, uint32 HitY)
 {
+	UBrushEditingSubsystem* BrushSubsystem = GEditor->GetEditorSubsystem<UBrushEditingSubsystem>();
 
 	const FViewportClick Click(&View,this,Key,Event,HitX,HitY);
 	if (Click.GetKey() == EKeys::MiddleMouseButton && !Click.IsAltDown() && !Click.IsShiftDown())
 	{
-		ClickHandlers::ClickViewport(this, Click);
+		LevelViewportClickHandlers::ClickViewport(this, Click);
 		return;
 	}
 	if (!ModeTools->HandleClick(this, HitProxy,Click))
 	{
 		if (HitProxy == NULL)
 		{
-			ClickHandlers::ClickBackdrop(this,Click);
+			LevelViewportClickHandlers::ClickBackdrop(this,Click);
 		}
 		else if (HitProxy->IsA(HWidgetAxis::StaticGetType()))
 		{
@@ -2201,11 +2208,11 @@ void FLevelEditorViewportClient::ProcessClick(FSceneView& View, HHitProxy* HitPr
 
 				if (bSelectComponent)
 				{
-					ClickHandlers::ClickComponent(this, ActorHitProxy, Click);
+					LevelViewportClickHandlers::ClickComponent(this, ActorHitProxy, Click);
 				}
 				else
 				{
-					ClickHandlers::ClickActor(this, ConsideredActor, Click, true);
+					LevelViewportClickHandlers::ClickActor(this, ConsideredActor, Click, true);
 				}
 
 				// We clicked an actor, allow the pivot to reposition itself.
@@ -2214,56 +2221,19 @@ void FLevelEditorViewportClient::ProcessClick(FSceneView& View, HHitProxy* HitPr
 		}
 		else if (HitProxy->IsA(HInstancedStaticMeshInstance::StaticGetType()))
 		{
-			ClickHandlers::ClickActor(this, ((HInstancedStaticMeshInstance*)HitProxy)->Component->GetOwner(), Click, true);
+			LevelViewportClickHandlers::ClickActor(this, ((HInstancedStaticMeshInstance*)HitProxy)->Component->GetOwner(), Click, true);
 		}
 		else if (HitProxy->IsA(HBSPBrushVert::StaticGetType()) && ((HBSPBrushVert*)HitProxy)->Brush.IsValid())
 		{
-			ClickHandlers::ClickBrushVertex(this,((HBSPBrushVert*)HitProxy)->Brush.Get(),((HBSPBrushVert*)HitProxy)->Vertex,Click);
+			LevelViewportClickHandlers::ClickBrushVertex(this,((HBSPBrushVert*)HitProxy)->Brush.Get(),((HBSPBrushVert*)HitProxy)->Vertex,Click);
 		}
 		else if (HitProxy->IsA(HStaticMeshVert::StaticGetType()))
 		{
-			ClickHandlers::ClickStaticMeshVertex(this,((HStaticMeshVert*)HitProxy)->Actor,((HStaticMeshVert*)HitProxy)->Vertex,Click);
+			LevelViewportClickHandlers::ClickStaticMeshVertex(this,((HStaticMeshVert*)HitProxy)->Actor,((HStaticMeshVert*)HitProxy)->Vertex,Click);
 		}
-		else if (HitProxy->IsA(HGeomPolyProxy::StaticGetType()))
+		else if (BrushSubsystem && BrushSubsystem->ProcessClickOnBrushGeometry(this, HitProxy, Click))
 		{
-			HGeomPolyProxy* GeomHitProxy = (HGeomPolyProxy*)HitProxy;
-
-			if( GeomHitProxy->GetGeomObject() )
-			{
-				FHitResult CheckResult(ForceInit);
-				FCollisionQueryParams BoxParams(SCENE_QUERY_STAT(ProcessClickTrace), false, GeomHitProxy->GetGeomObject()->ActualBrush);
-				bool bHit = GWorld->SweepSingleByObjectType(CheckResult, Click.GetOrigin(), Click.GetOrigin() + Click.GetDirection() * HALF_WORLD_MAX, FQuat::Identity, FCollisionObjectQueryParams(ECC_WorldStatic), FCollisionShape::MakeBox(FVector(1.f)), BoxParams);
-
-				if(bHit)
-				{
-					GEditor->UnsnappedClickLocation = CheckResult.Location;
-					GEditor->ClickLocation = CheckResult.Location;
-					GEditor->ClickPlane = FPlane(CheckResult.Location, CheckResult.Normal);
-				}
-
-				if(!ClickHandlers::ClickActor(this, GeomHitProxy->GetGeomObject()->ActualBrush, Click, false))
-				{
-					ClickHandlers::ClickGeomPoly(this, GeomHitProxy, Click);
-				}
-
-				Invalidate(true, true);
-			}
-		}
-		else if (HitProxy->IsA(HGeomEdgeProxy::StaticGetType()))
-		{
-			HGeomEdgeProxy* GeomHitProxy = (HGeomEdgeProxy*)HitProxy;
-
-			if( GeomHitProxy->GetGeomObject() !=nullptr )
-			{
-				if(!ClickHandlers::ClickGeomEdge(this, GeomHitProxy, Click))
-				{
-					ClickHandlers::ClickActor(this, GeomHitProxy->GetGeomObject()->ActualBrush, Click, true);
-				}
-			}
-		}
-		else if (HitProxy->IsA(HGeomVertexProxy::StaticGetType()))
-		{
-			ClickHandlers::ClickGeomVertex(this,(HGeomVertexProxy*)HitProxy,Click);
+			// Handled by the brush subsystem
 		}
 		else if (HitProxy->IsA(HModel::StaticGetType()))
 		{
@@ -2276,12 +2246,12 @@ void FLevelEditorViewportClient::ProcessClick(FSceneView& View, HHitProxy* HitPr
 			uint32 SurfaceIndex = INDEX_NONE;
 			if(ModelHit->ResolveSurface(SceneView,HitX,HitY,SurfaceIndex))
 			{
-				ClickHandlers::ClickSurface(this,ModelHit->GetModel(),SurfaceIndex,Click);
+				LevelViewportClickHandlers::ClickSurface(this,ModelHit->GetModel(),SurfaceIndex,Click);
 			}
 		}
 		else if (HitProxy->IsA(HLevelSocketProxy::StaticGetType()))
 		{
-			ClickHandlers::ClickLevelSocket(this, HitProxy, Click);
+			LevelViewportClickHandlers::ClickLevelSocket(this, HitProxy, Click);
 		}
 	}
 }
@@ -2638,7 +2608,7 @@ bool FLevelEditorViewportClient::InputWidgetDelta(FViewport* InViewport, EAxisLi
 				}
 				else
 				{
-					FSnappingUtils::SnapDragLocationToNearestVertex( ModeTools->PivotLocation, Drag, this );
+					FSnappingUtils::SnapDragLocationToNearestVertex( ModeTools->PivotLocation, Drag, this, true );
 					GUnrealEd->SetPivotMovedIndependently(true);
 					bOnlyMovedPivot = true;
 				}
@@ -2778,7 +2748,7 @@ bool FLevelEditorViewportClient::InputKey(FViewport* InViewport, int32 Controlle
 	FSceneView* View = CalcSceneView( &ViewFamily );
 
 	// Compute the click location.
-	if ( InputState.IsAnyMouseButtonDown() )
+	if ( InputState.IsMouseButtonEvent() && InputState.IsAnyMouseButtonDown() )
 	{
 		const FViewportCursorLocation Cursor(View, this, HitX, HitY);
 		const FActorPositionTraceResult TraceResult = FActorPositioning::TraceWorldForPositionWithDefault(Cursor, *View);
@@ -2805,7 +2775,7 @@ bool FLevelEditorViewportClient::InputKey(FViewport* InViewport, int32 Controlle
 			{
 				FText TrackingDescription = FText::Format(LOCTEXT("RotatationShortcut", "Rotate Atmosphere Light {0}"), LightIndex);
 				TrackingTransaction.Begin(TrackingDescription, SelectedSunLight->GetOwner());
-				SetRealtime(true, true); // The first time, save that setting for RestoreRealtime
+				SetRealtimeOverride(true, LOCTEXT("RealtimeOverrideMessage_AtmospherelLight", "Atmosphere Light Control"));// The first time, save that setting for RestoreRealtime
 			}
 			bCurrentUserControl = true;
 			UserIsControllingAtmosphericLightTimer = 3.0f; // Keep the widget open for a few seconds even when not tweaking the sun light
@@ -2827,7 +2797,7 @@ bool FLevelEditorViewportClient::InputKey(FViewport* InViewport, int32 Controlle
 	if (bUserIsControllingAtmosphericLight0 || bUserIsControllingAtmosphericLight1)
 	{
 		TrackingTransaction.End();					// End undo/redo translation
-		RestoreRealtime(true);						// Restore previous real-time state
+		RemoveRealtimeOverride();						// Restore previous real-time state
 	}
 	bUserIsControllingAtmosphericLight0 = false;	// Disable all atmospheric light controls
 	bUserIsControllingAtmosphericLight1 = false;
@@ -2902,7 +2872,7 @@ void FLevelEditorViewportClient::TrackingStarted( const FInputEventState& InInpu
 
 	// Create edit property event
 	FEditPropertyChain PropertyChain;
-	UProperty* TransformProperty = LevelEditorViewportClientHelper::GetEditTransformProperty(GetWidgetMode());
+	FProperty* TransformProperty = LevelEditorViewportClientHelper::GetEditTransformProperty(GetWidgetMode());
 	if (TransformProperty)
 	{
 		PropertyChain.AddHead(TransformProperty);
@@ -3094,9 +3064,11 @@ void FLevelEditorViewportClient::TrackingStopped()
 	if( bDidAnythingActuallyChange && MouseDeltaTracker->HasReceivedDelta() )
 	{
 		// Create post edit property change event
-		UProperty* TransformProperty = LevelEditorViewportClientHelper::GetEditTransformProperty(GetWidgetMode());
+		FProperty* TransformProperty = LevelEditorViewportClientHelper::GetEditTransformProperty(GetWidgetMode());
 		FPropertyChangedEvent PropertyChangedEvent(TransformProperty, EPropertyChangeType::ValueSet);
-		
+
+		TArray<AActor*> MovedActors;
+
 		for (FSelectionIterator It(GEditor->GetSelectedActorIterator()); It; ++It) 
 		{
 			AActor* Actor = static_cast<AActor*>( *It );
@@ -3172,10 +3144,14 @@ void FLevelEditorViewportClient::TrackingStopped()
 				// Broadcast Post Edit change notification, we can't call PostEditChangeProperty directly on Actor or ActorComponent from here since it wasn't pair with a proper PreEditChange
 				FCoreUObjectDelegates::OnObjectPropertyChanged.Broadcast(Actor, PropertyChangedEvent);
 				Actor->PostEditMove(true);
+
+				MovedActors.Add(Actor);
 	
 				GEditor->BroadcastEndObjectMovement(*Actor);
 			}
 		}
+
+		GEditor->BroadcastActorsMoved(MovedActors);
 
 		if (!GUnrealEd->IsPivotMovedIndependently())
 		{
@@ -4690,7 +4666,7 @@ void FLevelEditorViewportClient::UpdateAudioListener(const FSceneView& View)
 
 	if (ViewportWorld)
 	{
-		if (FAudioDevice* AudioDevice = ViewportWorld->GetAudioDevice())
+		if (FAudioDevice* AudioDevice = ViewportWorld->GetAudioDeviceRaw())
 		{
 			FVector ViewLocation = GetViewLocation();
 
@@ -5147,16 +5123,16 @@ bool FLevelEditorViewportClient::GetPivotForOrbit(FVector& Pivot) const
 			}
 			else
 			{
-				// It's possible that it doesn't have a bounding box, so just take its position in that case
-				FBox ComponentBBox = Component->Bounds.GetBox();
-				if (ComponentBBox.GetVolume() != 0)
-				{
-					BoundingBox += ComponentBBox;
-				}
-				else
-				{
-					BoundingBox += Component->GetComponentLocation();
-				}
+			// It's possible that it doesn't have a bounding box, so just take its position in that case
+			FBox ComponentBBox = Component->Bounds.GetBox();
+			if (ComponentBBox.GetVolume() != 0)
+			{
+				BoundingBox += ComponentBBox;
+			}
+			else
+			{
+				BoundingBox += Component->GetComponentLocation();
+			}
 			}
 			++NumValidComponents;
 		}
@@ -5190,7 +5166,7 @@ bool FLevelEditorViewportClient::GetPivotForOrbit(FVector& Pivot) const
 					}
 					else
 					{
-						BoundingBox += PrimitiveComponent->Bounds.GetBox();
+					BoundingBox += PrimitiveComponent->Bounds.GetBox();
 					}
 					++NumSelectedActors;
 				}
@@ -5208,10 +5184,3 @@ bool FLevelEditorViewportClient::GetPivotForOrbit(FVector& Pivot) const
 }
 
 #undef LOCTEXT_NAMESPACE
-
-// Doxygen cannot parse these correctly since the declarations are made in Editor, not UnrealEd
-#if !UE_BUILD_DOCS
-IMPLEMENT_HIT_PROXY(HGeomPolyProxy,HHitProxy);
-IMPLEMENT_HIT_PROXY(HGeomEdgeProxy,HHitProxy);
-IMPLEMENT_HIT_PROXY(HGeomVertexProxy,HHitProxy);
-#endif

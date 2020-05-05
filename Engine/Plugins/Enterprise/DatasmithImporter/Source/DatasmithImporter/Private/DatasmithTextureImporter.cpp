@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithTextureImporter.h"
 
@@ -31,10 +31,9 @@
 #include "Modules/ModuleManager.h"
 
 #include "ObjectTools.h"
+#include "RHI.h"
 
 #define LOCTEXT_NAMESPACE "DatasmithTextureImport"
-
-const uint32 MaxTextureSize = 4096;
 
 namespace
 {
@@ -42,7 +41,7 @@ namespace
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(ResizeTexture);
 
-		EDSTextureUtilsError ErrorCode = FDatasmithTextureResize::ResizeTexture(Filename, ResizedFilename, EDSResizeTextureMode::NearestPowerOfTwo, MaxTextureSize, bCreateNormal);
+		EDSTextureUtilsError ErrorCode = FDatasmithTextureResize::ResizeTexture(Filename, ResizedFilename, EDSResizeTextureMode::NearestPowerOfTwo, GMaxTextureDimensions, bCreateNormal);
 
 		switch (ErrorCode)
 		{
@@ -85,6 +84,9 @@ FDatasmithTextureImporter::FDatasmithTextureImporter(FDatasmithImportContext& In
 	, TextureFact( NewObject< UTextureFactory >() )
 {
 	TextureFact->SuppressImportOverwriteDialog();
+
+	// Avoid recomputing DDC when importing the same texture more than once
+	TextureFact->bUseHashAsGuid = true;
 
 	TempDir = FPaths::Combine(FPaths::ProjectIntermediateDir(), TEXT("DatasmithTextureImport"));
 	IFileManager::Get().MakeDirectory(*TempDir);
@@ -274,12 +276,30 @@ UTexture* FDatasmithTextureImporter::CreateTexture(const TSharedPtr<IDatasmithTe
 		// Notify the asset registry
 		FAssetRegistryModule::AssetCreated(Texture);
 
+		bool bUpdateResource = false;
+
 		if (FMath::IsNearlyEqual(RGBCurve, 1.0f) == false && RGBCurve > 0.f)
 		{
 			Texture->AdjustRGBCurve = RGBCurve;
-			Texture->UpdateResource();
+			bUpdateResource = true;
 		}
 
+		EDatasmithColorSpace ColorSpace = TextureElement->GetSRGB();
+		if (!Texture->SRGB && ColorSpace == EDatasmithColorSpace::sRGB)
+		{
+			Texture->SRGB = true;
+			bUpdateResource = true;
+		}
+		else if (Texture->SRGB && ColorSpace == EDatasmithColorSpace::Linear)
+		{
+			Texture->SRGB = false;
+			bUpdateResource = true;
+		}
+
+		if (bUpdateResource)
+		{
+			Texture->UpdateResource();
+		}
 		Texture->MarkPackageDirty();
 	}
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	VorbisAudioInfo.h: Unreal audio vorbis decompression interface object.
@@ -16,6 +16,14 @@
 #ifndef WITH_OGGVORBIS
 	#define WITH_OGGVORBIS 0
 #endif
+
+/**
+ * Whether to load OggVorbis DLLs
+ **/
+#ifndef WITH_OGGVORBIS_DLL
+	#define WITH_OGGVORBIS_DLL (PLATFORM_WINDOWS || PLATFORM_HOLOLENS)
+#endif
+
 
 namespace VorbisChannelInfo
 {

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Tiles/WorldTileModel.h"
 #include "Engine/World.h"
@@ -11,6 +11,7 @@
 #include "EditorLevelUtils.h"
 #include "LevelCollectionModel.h"
 
+#include "Modules/ModuleManager.h"
 #include "Tiles/WorldTileDetails.h"
 #include "Tiles/WorldTileCollectionModel.h"
 #include "Engine/WorldComposition.h"
@@ -1017,6 +1018,11 @@ ALandscapeProxy* FWorldTileModel::ImportLandscapeTile(const FLandscapeImportSett
 	// Create landscape components
 	LandscapeProxy->Import(	Settings.LandscapeGuid, 0, 0, Settings.SizeX - 1, Settings.SizeY - 1, Settings.SectionsPerComponent, Settings.QuadsPerSection, HeightmapDataPerLayers, *Settings.HeightmapFilename,	
 							MaterialLayerDataPerLayer,	Settings.ImportLayerType);
+
+	for (const FLandscapeImportLayerInfo& ImportLayerInfo : Settings.ImportLayers)
+	{
+		LandscapeProxy->EditorLayerSettings.Add(FLandscapeEditorLayerSettings(ImportLayerInfo.LayerInfo, ImportLayerInfo.SourceFilePath));
+	}
 
 	return LandscapeProxy;
 }

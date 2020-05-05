@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -37,7 +37,7 @@ public:
 	float V[NumTotalFloats];
 
 	/** The integral of the constant SH basis. */
-	static constexpr float ConstantBasisIntegral = 3.5449077018110320545963349666823; // 2 * Sqrt(PI)
+	static constexpr float ConstantBasisIntegral = 3.5449077018110320545963349666823f; // 2 * Sqrt(PI)
 
 	/** Default constructor. */
 	TSHVector()

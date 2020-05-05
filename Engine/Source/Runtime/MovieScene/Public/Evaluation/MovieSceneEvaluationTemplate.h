@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -75,14 +75,15 @@ struct FMovieSceneTrackFieldData
 		return true;
 	}
 
-	friend bool operator==(const FMovieSceneTrackFieldData& A, const FMovieSceneTrackFieldData& B)
+	/** Only called for serialization. Returns false to always serialize. */
+	bool Identical(const FMovieSceneTrackFieldData* Other, uint32 PortFlags) const
 	{
-		return A.Field == B.Field;
+		return Field == Other->Field;
 	}
 
 	TMovieSceneEvaluationTree<FMovieSceneTrackIdentifier> Field;
 };
-template<> struct TStructOpsTypeTraits<FMovieSceneTrackFieldData> : public TStructOpsTypeTraitsBase2<FMovieSceneTrackFieldData> { enum { WithSerializer = true, WithIdenticalViaEquality = true }; };
+template<> struct TStructOpsTypeTraits<FMovieSceneTrackFieldData> : public TStructOpsTypeTraitsBase2<FMovieSceneTrackFieldData> { enum { WithSerializer = true, WithIdentical = true }; };
 
 /** Data that represents a single sub-section */
 USTRUCT()
@@ -129,9 +130,15 @@ struct FMovieSceneSubSectionFieldData
 		return true;
 	}
 
+	/** Only called for serialization. Returns false to always serialize. */
+	bool Identical(const FMovieSceneSubSectionFieldData* Other, uint32 PortFlags) const
+	{
+		return Field == Other->Field;
+	}
+
 	TMovieSceneEvaluationTree<FMovieSceneSubSectionData> Field;
 };
-template<> struct TStructOpsTypeTraits<FMovieSceneSubSectionFieldData> : public TStructOpsTypeTraitsBase2<FMovieSceneSubSectionFieldData> { enum { WithSerializer = true }; };
+template<> struct TStructOpsTypeTraits<FMovieSceneSubSectionFieldData> : public TStructOpsTypeTraitsBase2<FMovieSceneSubSectionFieldData> { enum { WithSerializer = true, WithIdentical = true }; };
 
 
 /**
@@ -282,7 +289,9 @@ public:
 	/**
 	 * Called after this template has been serialized in some way
 	 */
+#if WITH_EDITORONLY_DATA
 	MOVIESCENE_API void PostSerialize(const FArchive& Ar);
+#endif
 
 	/**
 	 * Purge any stale tracks we may have
@@ -360,4 +369,6 @@ private:
 	FMovieSceneSubSectionFieldData SubSectionFieldData;
 
 };
+#if WITH_EDITORONLY_DATA
 template<> struct TStructOpsTypeTraits<FMovieSceneEvaluationTemplate> : public TStructOpsTypeTraitsBase2<FMovieSceneEvaluationTemplate> { enum { WithPostSerialize = true }; };
+#endif

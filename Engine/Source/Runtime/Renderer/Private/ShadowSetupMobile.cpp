@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 ShadowSetupMobile.cpp: Shadow setup implementation for mobile specific features.
@@ -146,10 +146,10 @@ static bool MobileDetermineStaticMeshesCSMVisibilityStateInner(
 			FVisibleLightViewInfo& VisibleLightViewInfo = View.VisibleLightInfos[LightSceneInfo.Id];
 
 			const FPrimitiveViewRelevance& Relevance = View.PrimitiveViewRelevanceMap[PrimitiveSceneInfo->GetIndex()];
-			const bool bLit = (Relevance.ShadingModelMaskRelevance != (1 << MSM_Unlit));
+			const bool bLit = (Relevance.ShadingModelMask != (1 << MSM_Unlit));
 			bool bCanReceiveDynamicShadow =
 				bLit
-				&& (Relevance.bOpaqueRelevance || Relevance.bMaskedRelevance)
+				&& (Relevance.bOpaque || Relevance.bMasked)
 				&& IsReceiverFunc(PrimitiveBounds.Origin, PrimitiveBounds.BoxExtent, PrimitiveBounds.SphereRadius);
 
 			if (bCanReceiveDynamicShadow)

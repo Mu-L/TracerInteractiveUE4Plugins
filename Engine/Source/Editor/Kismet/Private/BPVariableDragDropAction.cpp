@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BPVariableDragDropAction.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
@@ -39,7 +39,7 @@ UBlueprint* FKismetVariableDragDropAction::GetSourceBlueprint() const
 	return UBlueprint::GetBlueprintFromClass(VariableSourceClass);
 }
 
-void FKismetVariableDragDropAction::GetLinksThatWillBreak(	UEdGraphNode* Node, UProperty* NewVariableProperty, 
+void FKismetVariableDragDropAction::GetLinksThatWillBreak(	UEdGraphNode* Node, FProperty* NewVariableProperty, 
 						   TArray<class UEdGraphPin*>& OutBroken)
 {
 	if(UK2Node_Variable* VarNodeUnderCursor = Cast<UK2Node_Variable>(Node))
@@ -63,9 +63,33 @@ void FKismetVariableDragDropAction::GetLinksThatWillBreak(	UEdGraphNode* Node, U
 	}
 }
 
+namespace
+{
+	/**
+	* Helper function to determine if a node has any split pins on it.
+	*
+	* @return	True if there is a split pin on the node
+	*/
+	static bool NodeHasSplitPins(UEdGraphNode* InNode)
+	{
+		if (InNode)
+		{
+			for (UEdGraphPin* Pin : InNode->Pins)
+			{
+				// If a pin has no parent node but has SubPins then it is a split pin
+				if (Pin && !Pin->ParentPin && Pin->SubPins.Num() > 0)
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+}
+
 void FKismetVariableDragDropAction::HoverTargetChanged()
 {
-	UProperty* VariableProperty = GetVariableProperty();
+	FProperty* VariableProperty = GetVariableProperty();
 	if (VariableProperty == nullptr)
 	{
 		return;
@@ -93,7 +117,7 @@ void FKismetVariableDragDropAction::HoverTargetChanged()
 			bBadGraph = true;
 		}
 
-		UStruct* Outer = CastChecked<UStruct>(VariableProperty->GetOuter());
+		UStruct* Outer = VariableProperty->GetOwnerChecked<UStruct>();
 
 		FNodeConstructionParams NewNodeParams;
 		NewNodeParams.VariableName = VariableName;
@@ -116,7 +140,7 @@ void FKismetVariableDragDropAction::HoverTargetChanged()
 		Args.Add(TEXT("VariableName"), FText::FromString(VariableString));
 		Args.Add(TEXT("Scope"), FText::FromString(TheHoveredGraph->GetName()));
 
-		if (IsFromBlueprint(FBlueprintEditorUtils::FindBlueprintForGraph(TheHoveredGraph)) && VariableProperty->GetOuter()->IsA(UFunction::StaticClass()))
+		if (IsFromBlueprint(FBlueprintEditorUtils::FindBlueprintForGraph(TheHoveredGraph)) && VariableProperty->GetOwner<UFunction>())
 		{
 			SetFeedbackMessageError(FText::Format( LOCTEXT("IncorrectGraphForLocalVariable_Error", "Cannot place local variable '{VariableName}' in external scope '{Scope}'"), Args));
 		}
@@ -185,8 +209,14 @@ void FKismetVariableDragDropAction::HoverTargetChanged()
 			const UBlueprint* Blueprint = FBlueprintEditorUtils::FindBlueprintForNode(VarNodeUnderCursor);
 			const bool bWritableProperty = (FBlueprintEditorUtils::IsPropertyWritableInBlueprint(Blueprint, VariableProperty) == FBlueprintEditorUtils::EPropertyWritableState::Writable);
 			const bool bCanWriteIfNeeded = bIsRead || bWritableProperty;
+			// If this node has split pins then the reconstruction cannot handle it, so don't allow it
+			const bool bHasSplitPins = NodeHasSplitPins(VarNodeUnderCursor);
 
-			if (bCanWriteIfNeeded)
+			if (bHasSplitPins)
+			{
+				SetFeedbackMessageError(FText::Format(LOCTEXT("SplitPinVar_Error", "Cannot change '{VariableName}' because it has split pins"), Args));
+			}
+			else if (bCanWriteIfNeeded)
 			{
 				Args.Add(TEXT("ReadOrWrite"), bIsRead ? LOCTEXT("Read", "read") : LOCTEXT("Write", "write"));
 				SetFeedbackMessageOK(WillBreakLinks(VarNodeUnderCursor, VariableProperty) ?
@@ -233,9 +263,9 @@ FReply FKismetVariableDragDropAction::DroppedOnPin(FVector2D ScreenPosition, FVe
 			{
 				const bool bIsExecPin = Schema->IsExecPin(*TargetPin);
 
-				UProperty* VariableProperty = GetVariableProperty();
+				FProperty* VariableProperty = GetVariableProperty();
 
-				if (CanVariableBeDropped(VariableProperty, *TargetPin->GetOwningNode()->GetGraph()))
+				if (CanVariableBeDropped(VariableProperty, *TargetPin->GetOwningNode()->GetGraph()) && !NodeHasSplitPins(TargetPin->GetOwningNode()))
 				{
 					const bool bIsRead = (TargetPin->Direction == EGPD_Input) && !bIsExecPin;
 					const UBlueprint* Blueprint = FBlueprintEditorUtils::FindBlueprintForNode(TargetPin->GetOwningNode());
@@ -272,12 +302,12 @@ FReply FKismetVariableDragDropAction::DroppedOnNode(FVector2D ScreenPosition, FV
 
 	if (TargetNode && (VariableName != TargetNode->GetVarName()))
 	{
-		const FScopedTransaction Transaction( LOCTEXT("ReplacePinVariable", "Replace Pin Variable") );
+		FProperty* VariableProperty = GetVariableProperty();
 
-		UProperty* VariableProperty = GetVariableProperty();
-
-		if(CanVariableBeDropped(VariableProperty, *TargetNode->GetGraph()))
+		if(CanVariableBeDropped(VariableProperty, *TargetNode->GetGraph()) && !NodeHasSplitPins(TargetNode))
 		{
+			const FScopedTransaction Transaction(LOCTEXT("ReplacePinVariable", "Replace Pin Variable"));
+
 			const FName OldVarName = TargetNode->GetVarName();
 			const UEdGraphSchema_K2* Schema = Cast<const UEdGraphSchema_K2>(TargetNode->GetSchema());
 
@@ -290,15 +320,14 @@ FReply FKismetVariableDragDropAction::DroppedOnNode(FVector2D ScreenPosition, FV
 			DropOnBlueprint->Modify();
 			TargetNode->Modify();
 
-			if (Pin != NULL)
+			if (Pin != nullptr)
 			{
 				Pin->Modify();
 			}
 
 			UEdGraphSchema_K2::ConfigureVarNode(TargetNode, VariableName, VariableSource.Get(), DropOnBlueprint);
 
-
-			if ((Pin == NULL) || (Pin->LinkedTo.Num() == BadLinks.Num()) || (Schema == NULL))
+			if ((Pin == nullptr) || (Pin->LinkedTo.Num() == BadLinks.Num()) || (Schema == nullptr))
 			{
 				TargetNode->GetSchema()->ReconstructNode(*TargetNode);
 			}
@@ -347,7 +376,7 @@ void FKismetVariableDragDropAction::MakeSetter(FNodeConstructionParams InParams)
 	}
 }
 
-bool FKismetVariableDragDropAction::CanExecuteMakeSetter(FNodeConstructionParams InParams, UProperty* InVariableProperty)
+bool FKismetVariableDragDropAction::CanExecuteMakeSetter(FNodeConstructionParams InParams, FProperty* InVariableProperty)
 {
 	check(InVariableProperty);
 	check(InParams.VariableSource.Get());
@@ -367,10 +396,10 @@ FReply FKismetVariableDragDropAction::DroppedOnPanel( const TSharedRef< SWidget 
 {	
 	if (Graph.GetSchema()->IsA<UEdGraphSchema_K2>())
 	{
-		UProperty* VariableProperty = GetVariableProperty();
+		FProperty* VariableProperty = GetVariableProperty();
 		if (VariableProperty && CanVariableBeDropped(VariableProperty, Graph))
 		{
-			UStruct* Outer = CastChecked<UStruct>(VariableProperty->GetOuter());
+			UStruct* Outer = VariableProperty->GetOwnerChecked<UStruct>();
 			
 			FNodeConstructionParams NewNodeParams;
 			NewNodeParams.VariableName = VariableName;
@@ -442,21 +471,19 @@ FReply FKismetVariableDragDropAction::DroppedOnPanel( const TSharedRef< SWidget 
 	return FReply::Handled();
 }
 
-bool FKismetVariableDragDropAction::CanVariableBeDropped(const UProperty* InVariableProperty, const UEdGraph& InGraph) const
+bool FKismetVariableDragDropAction::CanVariableBeDropped(const FProperty* InVariableProperty, const UEdGraph& InGraph) const
 {
 	bool bCanVariableBeDropped = false;
 	if (InVariableProperty)
 	{
-		UObject* Outer = InVariableProperty->GetOuter();
-
 		// Only allow variables to be placed within the same blueprint (otherwise the self context on the dropped node will be invalid)
 		bCanVariableBeDropped = IsFromBlueprint(FBlueprintEditorUtils::FindBlueprintForGraph(&InGraph));
 
 		// Local variables have some special conditions for being allowed to be placed
-		if (bCanVariableBeDropped && Outer->IsA(UFunction::StaticClass()))
+		if (bCanVariableBeDropped && InVariableProperty->GetOwner<UFunction>())
 		{
 			// Check if the top level graph has the same name as the function, if they do not then the variable cannot be placed in the graph
-			if (FBlueprintEditorUtils::GetTopLevelGraph(&InGraph)->GetFName() != Outer->GetFName())
+			if (FBlueprintEditorUtils::GetTopLevelGraph(&InGraph)->GetFName() != InVariableProperty->GetOwner<UFunction>()->GetFName())
 			{
 				bCanVariableBeDropped = false;
 			}

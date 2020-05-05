@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Chaos/Array.h"
@@ -11,6 +11,7 @@
 #include "Chaos/UniformGrid.h"
 #include "Chaos/ISpatialAcceleration.h"
 #include "ChaosStats.h"
+#include "ChaosLog.h"
 #include "HAL/IConsoleManager.h"
 #include "Chaos/ParticleHandleFwd.h"
 #include "Templates/Models.h"
@@ -64,14 +65,14 @@ namespace Chaos
 template<typename TPayloadType, typename T, int d>
 struct TBVCellElement
 {
-	TBox<T, d> Bounds;
+	TAABB<T, d> Bounds;
 	TPayloadType Payload;
 	TVector<int32, 3> StartIdx;
 	TVector<int32, 3> EndIdx;
 
 	void Serialize(FChaosArchive& Ar)
 	{
-		Ar << Bounds;
+		TBox<T, d>::SerializeAsAABB(Ar, Bounds);
 		Ar << Payload;
 		Ar << StartIdx;
 		Ar << EndIdx;
@@ -185,7 +186,7 @@ public:
 		GenerateTree(Particles, bUseVelocity, Dt, MaxCells);
 	}
 
-	TArray<TPayloadType> FindAllIntersectionsImp(const TBox<T,d>& Intersection) const
+	TArray<TPayloadType> FindAllIntersectionsImp(const TAABB<T,d>& Intersection) const
 	{
 		struct FSimpleVisitor
 		{
@@ -195,6 +196,7 @@ public:
 				CollectedResults.Add(Instance.Payload);
 				return true;
 			}
+			const void* GetQueryData() const { return nullptr; }
 			TArray<TPayloadType>& CollectedResults;
 		};
 
@@ -229,7 +231,7 @@ public:
 		}
 	}
 
-	virtual void UpdateElement(const TPayloadType& Payload, const TBox<T,d>& NewBounds, bool bHasBounds) override
+	virtual void UpdateElement(const TPayloadType& Payload, const TAABB<T,d>& NewBounds, bool bHasBounds) override
 	{
 		SCOPE_CYCLE_COUNTER(STAT_BoundingVolumeUpdateElement);
 		if (FPayloadInfo* PayloadInfo = MPayloadInfo.Find(Payload))
@@ -249,7 +251,7 @@ public:
 	}
 
 	// Begin ISpatialAcceleration interface
-	virtual TArray<TPayloadType> FindAllIntersections(const TBox<T, d>& Box) const override { return FindAllIntersectionsImp(Box); }
+	virtual TArray<TPayloadType> FindAllIntersections(const TAABB<T, d>& Box) const override { return FindAllIntersectionsImp(Box); }
 
 	const TArray<TPayloadBoundsElement<TPayloadType, T>>& GlobalObjects() const
 	{
@@ -263,27 +265,16 @@ public:
 	}
 
 	template <typename SQVisitor>
-	bool RaycastFast(const TVector<T,d>& Start, const TVector<T,d>& Dir, const TVector<T,d>& InvDir, const bool* bParallel, T& CurrentLength, T& InvCurrentLength, SQVisitor& Visitor) const
+	bool RaycastFast(const TVector<T,d>& Start, FQueryFastData& CurData, SQVisitor& Visitor) const
 	{
-		return RaycastImp(Start, Dir, InvDir, bParallel, CurrentLength, InvCurrentLength, Visitor);
+		return RaycastImp(Start, CurData, Visitor);
 	}
 
 	template <typename SQVisitor, bool bPruneDuplicates = true>
 	void Raycast(const TVector<T, d>& Start, const TVector<T, d>& Dir, const T Length, SQVisitor& Visitor) const
 	{
-		ensure(Length);
-		T CurLength = Length;
-		bool bParallel[d];
-		TVector<T, d> InvDir;
-
-		T InvLength = 1 / Length;
-		for (int Axis = 0; Axis < d; ++Axis)
-		{
-			bParallel[Axis] = Dir[Axis] == 0;
-			InvDir[Axis] = bParallel[Axis] ? 0 : 1 / Dir[Axis];
-		}
-
-		RaycastImp<SQVisitor, bPruneDuplicates>(Start, Dir, InvDir, bParallel, CurLength, InvLength, Visitor);
+		FQueryFastData CurData(Dir, Length); 
+		RaycastImp<SQVisitor, bPruneDuplicates>(Start, CurData, Visitor);
 	}
 
 	void Sweep(const TVector<T, d>& Start, const TVector<T, d>& Dir, const T Length, const TVector<T, d> QueryHalfExtents, ISpatialVisitor<TPayloadType, T>& Visitor) const override
@@ -293,43 +284,32 @@ public:
 	}
 
 	template <typename SQVisitor>
-	bool SweepFast(const TVector<T,d>& Start, const TVector<T,d>& Dir, const TVector<T,d>& InvDir, const bool* bParallel, T& CurrentLength, T& InvCurrentLength, const TVector<T,d>& QueryHalfExtents, SQVisitor& Visitor) const
+	bool SweepFast(const TVector<T,d>& Start, FQueryFastData& CurData, const TVector<T,d>& QueryHalfExtents, SQVisitor& Visitor) const
 	{
-		return SweepImp(Start, Dir, InvDir, bParallel, CurrentLength, InvCurrentLength, QueryHalfExtents, Visitor);
+		return SweepImp(Start, CurData, QueryHalfExtents, Visitor);
 	}
 
 	template <typename SQVisitor, bool bPruneDuplicates = true>
 	void Sweep(const TVector<T, d>& Start, const TVector<T, d>& Dir, const T Length, const TVector<T, d> QueryHalfExtents, SQVisitor& Visitor) const
 	{
-		ensure(Length);
-		T CurLength = Length;
-		bool bParallel[d];
-		TVector<T, d> InvDir;
-
-		T InvLength = 1 / Length;
-		for (int Axis = 0; Axis < d; ++Axis)
-		{
-			bParallel[Axis] = Dir[Axis] == 0;
-			InvDir[Axis] = bParallel[Axis] ? 0 : 1 / Dir[Axis];
-		}
-
-		SweepImp<SQVisitor, bPruneDuplicates>(Start, Dir, InvDir, bParallel, CurLength, InvLength, QueryHalfExtents, Visitor);
+		FQueryFastData CurData(Dir, Length);
+		SweepImp<SQVisitor, bPruneDuplicates>(Start, CurData, QueryHalfExtents, Visitor);
 	}
 
-	virtual void Overlap(const TBox<T, d>& QueryBounds, ISpatialVisitor<TPayloadType, T>& Visitor) const override
+	virtual void Overlap(const TAABB<T, d>& QueryBounds, ISpatialVisitor<TPayloadType, T>& Visitor) const override
 	{
 		TSpatialVisitor<TPayloadType, T> ProxyVisitor(Visitor);
 		Overlap(QueryBounds, ProxyVisitor);
 	}
 
 	template <typename SQVisitor>
-	bool OverlapFast(const TBox<T, d>& QueryBounds, SQVisitor& Visitor) const
+	bool OverlapFast(const TAABB<T, d>& QueryBounds, SQVisitor& Visitor) const
 	{
 		return OverlapImp(QueryBounds, Visitor);
 	}
 
 	template <typename SQVisitor, bool bPruneDuplicates = true>
-	void Overlap(const TBox<T, d>& QueryBounds, SQVisitor& Visitor) const
+	void Overlap(const TAABB<T, d>& QueryBounds, SQVisitor& Visitor) const
 	{
 		OverlapImp<SQVisitor, bPruneDuplicates>(QueryBounds, Visitor);
 	}
@@ -344,7 +324,7 @@ public:
 			MGlobalPayloads.Reserve(TmpPayloads.Num());
 			for (auto& Payload : TmpPayloads)
 			{
-				MGlobalPayloads.Add({ Payload, TBox<T,d>(TVector<T,d>(TNumericLimits<T>::Lowest()), TVector<T,d>(TNumericLimits<T>::Max())) });
+				MGlobalPayloads.Add({ Payload, TAABB<T,d>(TVector<T,d>(TNumericLimits<T>::Lowest()), TVector<T,d>(TNumericLimits<T>::Max())) });
 			}
 			MaxPayloadBounds = DefaultMaxPayloadBounds;
 		}
@@ -359,19 +339,53 @@ public:
 		Ar << MDirtyElements;
 		Ar << bIsEmpty;
 
-		TArray<TPayloadType> Payloads;
-		if (!Ar.IsLoading())
-		{
-			MPayloadInfo.GenerateKeyArray(Payloads);
-		}
-		Ar << Payloads;
+		Ar << MPayloadInfo;
+		
 
-		for (auto Payload : Payloads)
+	}
+
+	void GatherElements(TArray<TPayloadBoundsElement<TPayloadType, T>>& OutElements)
+	{
+		OutElements.Reserve(GetReserveCount());
+		OutElements.Append(MGlobalPayloads);
+		
+		for (const FCellElement& Elem : MDirtyElements)
 		{
-			auto& Info = MPayloadInfo.FindOrAdd(Payload);
-			Ar << Info;
+			OutElements.Add(TPayloadBoundsElement<TPayloadType,T>{Elem.Payload,Elem.Bounds});
 		}
 
+		const auto& Counts = MGrid.Counts();
+		for (int32 X = 0; X < Counts[0]; ++X)
+		{
+			for (int32 Y = 0; Y < Counts[1]; ++Y)
+			{
+				for (int32 Z = 0; Z < Counts[2]; ++Z)
+				{
+					const auto& Elems = MElements(X, Y, Z);
+					for (const auto& Elem : Elems)
+					{
+						//elements can be in multiple cells, only add for the first cell
+						if (Elem.StartIdx == TVector<int32, 3>(X, Y, Z))
+						{
+							OutElements.Add(TPayloadBoundsElement<TPayloadType, T>{Elem.Payload, Elem.Bounds});
+						}
+					}
+				}
+			}
+		}
+	}
+
+	SIZE_T GetReserveCount() const
+	{
+		// Optimize for fewer memory allocations.
+		const auto& Counts = MGrid.Counts(); 
+		const SIZE_T GridCount = Counts[0] * Counts[1] * Counts[2] * MElements.Num();
+		return MGlobalPayloads.Num() + MDirtyElements.Num() + GridCount;
+	}
+
+	TAABB<T, d> GetBounds() const
+	{
+		return TAABB<T, d>(MGrid.MinCorner(), MGrid.MaxCorner());
 	}
 
 private:
@@ -380,19 +394,25 @@ private:
 	using FPayloadInfo = TBVPayloadInfo<T, d>;
 
 	template <typename SQVisitor, bool bPruneDuplicates = true>
-	bool RaycastImp(const TVector<T, d>& Start, const TVector<T, d>& Dir, const TVector<T, d>& InvDir, const bool* bParallel, T& CurrentLength, T& InvCurrentLength, SQVisitor& Visitor) const
+	bool RaycastImp(const TVector<T, d>& Start, FQueryFastData& CurData, SQVisitor& Visitor) const
 	{
 		TVector<T, d> TmpPosition;
 		T TOI;
+		const void* QueryData = Visitor.GetQueryData();
 
 		for (const auto& Elem : MGlobalPayloads)
 		{
+			if (PrePreFilterHelper(Elem.Payload, QueryData))
+			{
+				continue;
+			}
+
 			const auto& InstanceBounds = Elem.Bounds;
-			if (TBox<T, d>::RaycastFast(InstanceBounds.Min(), InstanceBounds.Max(), Start, Dir, InvDir, bParallel, CurrentLength, InvCurrentLength, TOI, TmpPosition))
+			if (InstanceBounds.RaycastFast(Start,
+				CurData.Dir, CurData.InvDir, CurData.bParallel, CurData.CurrentLength, CurData.InvCurrentLength, TOI, TmpPosition))
 			{
 				TSpatialVisitorData<TPayloadType> VisitData(Elem.Payload, true, InstanceBounds);
-				const bool bContinue = Visitor.VisitRaycast(VisitData, CurrentLength);
-				InvCurrentLength = 1 / CurrentLength;
+				const bool bContinue = Visitor.VisitRaycast(VisitData, CurData);
 
 				if (!bContinue)
 				{
@@ -403,16 +423,21 @@ private:
 
 		for (const auto& Elem : MDirtyElements)
 		{
+			if (PrePreFilterHelper(Elem.Payload, QueryData))
+			{
+				continue;
+			}
+
 			const auto& InstanceBounds = Elem.Bounds;
-			if (TBox<T, d>::RaycastFast(InstanceBounds.Min(), InstanceBounds.Max(), Start, Dir, InvDir, bParallel, CurrentLength, InvCurrentLength, TOI, TmpPosition))
+			if (InstanceBounds.RaycastFast(Start, CurData.Dir,
+				CurData.InvDir, CurData.bParallel, CurData.CurrentLength, CurData.InvCurrentLength, TOI, TmpPosition))
 			{
 				TSpatialVisitorData<TPayloadType> VisitData(Elem.Payload, true, InstanceBounds);
-				const bool bContinue = Visitor.VisitRaycast(VisitData, CurrentLength);
+				const bool bContinue = Visitor.VisitRaycast(VisitData, CurData);
 				if (!bContinue)
 				{
 					return false;
 				}
-				InvCurrentLength = 1 / CurrentLength;
 			}
 		}
 
@@ -421,10 +446,11 @@ private:
 			return true;
 		}
 
-		TBox<T, d> GlobalBounds(MGrid.MinCorner(), MGrid.MaxCorner());
+		TAABB<T, d> GlobalBounds(MGrid.MinCorner(), MGrid.MaxCorner());
 		TVector<T, d> NextStart;
 		TVector<int32, d> CellIdx;
-		bool bCellsLeft = MElements.Num() && TBox<T, d>::RaycastFast(GlobalBounds.Min(), GlobalBounds.Max(), Start, Dir, InvDir, bParallel, CurrentLength, InvCurrentLength, TOI, NextStart);
+		bool bCellsLeft = MElements.Num() && GlobalBounds.RaycastFast(Start, CurData.Dir,
+			CurData.InvDir, CurData.bParallel, CurData.CurrentLength, CurData.InvCurrentLength, TOI, NextStart);
 		if (bCellsLeft)
 		{
 			CellIdx = MGrid.Cell(NextStart);
@@ -466,15 +492,15 @@ private:
 						}
 					}
 					const auto& InstanceBounds = Elem.Bounds;
-					if (TBox<T, d>::RaycastFast(InstanceBounds.Min(), InstanceBounds.Max(), Start, Dir, InvDir, bParallel, CurrentLength, InvCurrentLength, TOI, TmpPosition))
+					if (InstanceBounds.RaycastFast(Start,
+						CurData.Dir, CurData.InvDir, CurData.bParallel, CurData.CurrentLength, CurData.InvCurrentLength, TOI, TmpPosition))
 					{
 						TSpatialVisitorData<TPayloadType> VisitData(Elem.Payload, true, InstanceBounds);
-						const bool bContinue = Visitor.VisitRaycast(VisitData, CurrentLength);
+						const bool bContinue = Visitor.VisitRaycast(VisitData, CurData);
 						if (!bContinue)
 						{
 							return false;
 						}
-						InvCurrentLength = 1 / CurrentLength;	//todo: pass into visitor
 					}
 				}
 
@@ -488,15 +514,15 @@ private:
 				const TVector<T, d>& Dx = MGrid.Dx();
 
 				T Times[3];
-				T BestTime = CurrentLength;
+				T BestTime = CurData.CurrentLength;
 				bool bTerminate = true;
 				for (int Axis = 0; Axis < d; ++Axis)
 				{
-					if (!bParallel[Axis])
+					if (!CurData.bParallel[Axis])
 					{
-						const T CrossPoint = Dir[Axis] > 0 ? CellCenter[Axis] + Dx[Axis] / 2 : CellCenter[Axis] - Dx[Axis] / 2;
+						const T CrossPoint = CurData.Dir[Axis] > 0 ? CellCenter[Axis] + Dx[Axis] / 2 : CellCenter[Axis] - Dx[Axis] / 2;
 						const T Distance = CrossPoint - NextStart[Axis];	//note: CellCenter already has /2, we probably want to use the corner instead
-						const T Time = Distance * InvDir[Axis];
+						const T Time = Distance * CurData.InvDir[Axis];
 						Times[Axis] = Time;
 						if (Time < BestTime)
 						{
@@ -518,14 +544,14 @@ private:
 				for (int Axis = 0; Axis < d; ++Axis)
 				{
 					constexpr T Epsilon = 1e-2;	//if raycast is slightly off we still count it as hitting the cell surface
-					CellIdx[Axis] += (Times[Axis] <= BestTime + Epsilon) ? (Dir[Axis] > 0 ? 1 : -1) : 0;
+					CellIdx[Axis] += (Times[Axis] <= BestTime + Epsilon) ? (CurData.Dir[Axis] > 0 ? 1 : -1) : 0;
 					if (CellIdx[Axis] < 0 || CellIdx[Axis] >= MGrid.Counts()[Axis])
 					{
 						return true;
 					}
 				}
 
-				NextStart = NextStart + Dir * BestTime;
+				NextStart = NextStart + CurData.Dir * BestTime;
 			} while (true);
 		}
 
@@ -533,42 +559,51 @@ private:
 	}
 
 	template <typename SQVisitor, bool bPruneDuplicates = true>
-	bool SweepImp(const TVector<T, d>& Start, const TVector<T, d>& Dir, const TVector<T,d>& InvDir, const bool* bParallel, T& CurrentLength, T& InvCurrentLength, const TVector<T, d> QueryHalfExtents, SQVisitor& Visitor) const
+	bool SweepImp(const TVector<T, d>& Start, FQueryFastData& CurData, const TVector<T, d> QueryHalfExtents, SQVisitor& Visitor) const
 	{
 		T TOI = 0;
+		const void* QueryData = Visitor.GetQueryData();
 		for (const auto& Elem : MGlobalPayloads)
 		{
-			const TBox<T, d>& InstanceBounds = Elem.Bounds;
+			if (PrePreFilterHelper(Elem.Payload, QueryData))
+			{
+				continue;
+			}
+
+			const TAABB<T, d>& InstanceBounds = Elem.Bounds;
 			const TVector<T, d> Min = InstanceBounds.Min() - QueryHalfExtents;
 			const TVector<T, d> Max = InstanceBounds.Max() + QueryHalfExtents;
 			TVector<T, d> TmpPosition;
-			if (TBox<T, d>::RaycastFast(Min, Max, Start, Dir, InvDir, bParallel, CurrentLength, InvCurrentLength, TOI, TmpPosition))
+			if (TAABB<T, d>(Min,Max).RaycastFast(Start, CurData.Dir, CurData.InvDir, CurData.bParallel, CurData.CurrentLength, CurData.InvCurrentLength, TOI, TmpPosition))
 			{
 				TSpatialVisitorData<TPayloadType> VisitData(Elem.Payload, true, InstanceBounds);
-				const bool bContinue = Visitor.VisitSweep(VisitData, CurrentLength);
+				const bool bContinue = Visitor.VisitSweep(VisitData, CurData);
 				if (!bContinue)
 				{
 					return false;
 				}
-				InvCurrentLength = 1 / CurrentLength;
 			}
 		}
 
 		for (const auto& Elem : MDirtyElements)
 		{
-			const TBox<T, d>& InstanceBounds = Elem.Bounds;
+			if (PrePreFilterHelper(Elem.Payload, QueryData))
+			{
+				continue;
+			}
+
+			const TAABB<T, d>& InstanceBounds = Elem.Bounds;
 			const TVector<T, d> Min = InstanceBounds.Min() - QueryHalfExtents;
 			const TVector<T, d> Max = InstanceBounds.Max() + QueryHalfExtents;
 			TVector<T, d> TmpPosition;
-			if (TBox<T, d>::RaycastFast(Min, Max, Start, Dir, InvDir, bParallel, CurrentLength, InvCurrentLength, TOI, TmpPosition))
+			if (TAABB<T, d>(Min, Max).RaycastFast(Start, CurData.Dir, CurData.InvDir, CurData.bParallel, CurData.CurrentLength, CurData.InvCurrentLength, TOI, TmpPosition))
 			{
 				TSpatialVisitorData<TPayloadType> VisitData(Elem.Payload, true, InstanceBounds);
-				const bool bContinue = Visitor.VisitSweep(VisitData, CurrentLength);
+				const bool bContinue = Visitor.VisitSweep(VisitData, CurData);
 				if (!bContinue)
 				{
 					return false;
 				}
-				InvCurrentLength = 1 / CurrentLength;
 			}
 		}
 
@@ -577,7 +612,7 @@ private:
 			return true;
 		}
 
-		TBox<T, d> GlobalBounds(MGrid.MinCorner() - QueryHalfExtents, MGrid.MaxCorner() + QueryHalfExtents);
+		TAABB<T, d> GlobalBounds(MGrid.MinCorner() - QueryHalfExtents, MGrid.MaxCorner() + QueryHalfExtents);
 
 
 		struct FCellIntersection
@@ -586,19 +621,69 @@ private:
 			T TOI;
 		};
 
+		const TVector<int32, d> StartMinIndex = MGrid.ClampIndex(MGrid.Cell(Start - QueryHalfExtents));
+		const TVector<int32, d> StartMaxIndex = MGrid.ClampIndex(MGrid.Cell(Start + QueryHalfExtents));
 
-		TVector<T, d> HitPoint;
+		if (StartMinIndex == StartMaxIndex)
+		{
+			const TVector<T, d> End = Start + CurData.CurrentLength * CurData.Dir;
+			const TVector<int32, d> EndMinIndex = MGrid.ClampIndex(MGrid.Cell(End  - QueryHalfExtents));
+			const TVector<int32, d> EndMaxIndex = MGrid.ClampIndex(MGrid.Cell(End + QueryHalfExtents));
+			if (StartMinIndex == EndMinIndex && StartMinIndex == EndMaxIndex)
+			{
+				//sweep is fully contained within one cell, this is a common special case - just test all elements
+				const auto& Elems = MElements(StartMinIndex);
+				TVector<T, d> TmpPoint;
+				for (const auto& Elem : Elems)
+				{
+					const TAABB<T, d>& InstanceBounds = Elem.Bounds;
+					const TVector<T, d> Min = InstanceBounds.Min() - QueryHalfExtents;
+					const TVector<T, d> Max = InstanceBounds.Max() + QueryHalfExtents;
+					if (TAABB<T, d>(Min, Max).RaycastFast(Start, CurData.Dir, CurData.InvDir, CurData.bParallel, CurData.CurrentLength, CurData.InvCurrentLength, TOI, TmpPoint))
+					{
+						TSpatialVisitorData<TPayloadType> VisitData(Elem.Payload, true, InstanceBounds);
+						const bool bContinue = Visitor.VisitSweep(VisitData, CurData);
+						if (!bContinue)
+						{
+							return false;
+						}
+					}
+				}
+
+				return true;
+			}
+		}
+
 		FGridSet IdxsSeen(MGrid.Counts());
 		FGridSet CellsVisited(MGrid.Counts());
-		const bool bInitialHit = TBox<T, d>::RaycastFast(GlobalBounds.Min(), GlobalBounds.Max(), Start, Dir, InvDir, bParallel, CurrentLength, InvCurrentLength, TOI, HitPoint);
-		if (bInitialHit)
+		TArray<FCellIntersection> IdxsQueue;	//cells we need to visit
+
+		for (int32 X = StartMinIndex[0]; X <= StartMaxIndex[0]; ++X)
+		{
+			for (int32 Y = StartMinIndex[1]; Y <= StartMaxIndex[1]; ++Y)
+			{
+				for (int32 Z = StartMinIndex[2]; Z <= StartMaxIndex[2]; ++Z)
+				{
+					const TVector<int32, 3> Idx(X, Y, Z);
+					IdxsQueue.Add({Idx, 0 });
+					IdxsSeen.Add(Idx);
+				}
+			}
+		}
+
+		TVector<T, d> HitPoint;
+		const bool bInitialHit = GlobalBounds.RaycastFast(Start, CurData.Dir, CurData.InvDir, CurData.bParallel, CurData.CurrentLength, CurData.InvCurrentLength, TOI, HitPoint);
+		if (bInitialHit)	//NOTE: it's possible to have a non empty IdxsQueue and bInitialHit be false. This is because the IdxsQueue works off clamped cells which we can skip
 		{
 			//Flood fill from inflated cell so that we get all cells along the ray
 			TVector<int32, d> HitCellIdx = MGrid.Cell(HitPoint);
 			HitCellIdx = MGrid.ClampIndex(HitCellIdx);	//inflation means we likely are outside grid, just get closest cell
 
-			TArray<FCellIntersection> IdxsQueue;	//cells we need to visit
-			IdxsQueue.Add({ HitCellIdx, TOI });
+			if (!IdxsSeen.Contains(HitCellIdx))
+			{
+				ensure(TOI > 0);	//Not an initial overlap so TOI must be positive
+				IdxsQueue.Add({ HitCellIdx, TOI });
+			}
 
 			const TVector<T, d> HalfDx = MGrid.Dx() * (T)0.5;
 
@@ -606,7 +691,7 @@ private:
 			while (QueueIdx < IdxsQueue.Num())
 			{
 				const FCellIntersection CellIntersection = IdxsQueue[QueueIdx++];
-				if (CellIntersection.TOI > CurrentLength)
+				if (CellIntersection.TOI > CurData.CurrentLength)
 				{
 					continue;
 				}
@@ -650,7 +735,7 @@ private:
 						const TVector<T, d> NeighborCenter = MGrid.Location(NeighborIdx);
 						const TVector<T, d> Min = NeighborCenter - QueryHalfExtents - HalfDx;
 						const TVector<T, d> Max = NeighborCenter + QueryHalfExtents + HalfDx;
-						if (TBox<T, d>::RaycastFast(Min, Max, Start, Dir, InvDir, bParallel, CurrentLength, InvCurrentLength, TOI, HitPoint))
+						if (TAABB<T, d>(Min, Max).RaycastFast(Start, CurData.Dir, CurData.InvDir, CurData.bParallel, CurData.CurrentLength, CurData.InvCurrentLength, TOI, HitPoint))
 						{
 							IdxsQueue.Add({ NeighborIdx, TOI });	//should we sort by TOI?
 						}
@@ -688,18 +773,18 @@ private:
 						}
 					}
 
-					const TBox<T, d>& InstanceBounds = Elem.Bounds;
+					const TAABB<T, d>& InstanceBounds = Elem.Bounds;
 					const TVector<T, d> Min = InstanceBounds.Min() - QueryHalfExtents;
 					const TVector<T, d> Max = InstanceBounds.Max() + QueryHalfExtents;
-					if (TBox<T, d>::RaycastFast(Min, Max, Start, Dir, InvDir, bParallel, CurrentLength, InvCurrentLength, TOI, HitPoint))
+					if (TAABB<T, d>(Min,Max).RaycastFast(Start,
+						CurData.Dir, CurData.InvDir, CurData.bParallel, CurData.CurrentLength, CurData.InvCurrentLength, TOI, HitPoint))
 					{
 						TSpatialVisitorData<TPayloadType> VisitData(Elem.Payload, true, InstanceBounds);
-						const bool bContinue = Visitor.VisitSweep(VisitData, CurrentLength);
+						const bool bContinue = Visitor.VisitSweep(VisitData, CurData);
 						if (!bContinue)
 						{
 							return false;
 						}
-						InvCurrentLength = 1 / CurrentLength;
 					}
 				}
 				CellsVisited.Add(CellIntersection.CellIdx);
@@ -710,11 +795,17 @@ private:
 	}
 
 	template <typename SQVisitor, bool bPruneDuplicates = true>
-	bool OverlapImp(const TBox<T, d>& QueryBounds, SQVisitor& Visitor) const
+	bool OverlapImp(const TAABB<T, d>& QueryBounds, SQVisitor& Visitor) const
 	{
+		const void* QueryData = Visitor.GetQueryData();
 		for (const auto& Elem : MGlobalPayloads)
 		{
-			const TBox<T, d>& InstanceBounds = Elem.Bounds;
+			if (PrePreFilterHelper(Elem.Payload, QueryData))
+			{
+				continue;
+			}
+
+			const TAABB<T, d>& InstanceBounds = Elem.Bounds;
 			if (QueryBounds.Intersects(InstanceBounds))
 			{
 				TSpatialVisitorData<TPayloadType> VisitData(Elem.Payload, true, InstanceBounds);
@@ -727,7 +818,12 @@ private:
 
 		for (const auto& Elem : MDirtyElements)
 		{
-			const TBox<T, d>& InstanceBounds = Elem.Bounds;
+			if (PrePreFilterHelper(Elem.Payload, QueryData))
+			{
+				continue;
+			}
+
+			const TAABB<T, d>& InstanceBounds = Elem.Bounds;
 			if (QueryBounds.Intersects(InstanceBounds))
 			{
 				TSpatialVisitorData<TPayloadType> VisitData(Elem.Payload, true, InstanceBounds);
@@ -743,11 +839,11 @@ private:
 			return true;
 		}
 
-		TBox<T, d> GlobalBounds(MGrid.MinCorner(), MGrid.MaxCorner());
+		TAABB<T, d> GlobalBounds(MGrid.MinCorner(), MGrid.MaxCorner());
 
 		const TVector<int32, d> StartIndex = MGrid.ClampIndex(MGrid.Cell(QueryBounds.Min()));
 		const TVector<int32, d> EndIndex = MGrid.ClampIndex(MGrid.Cell(QueryBounds.Max()));
-		TSet<TPayloadType> InstancesSeen;
+		TSet<FUniqueIdx> InstancesSeen;
 
 		for (int32 X = StartIndex[0]; X <= EndIndex[0]; ++X)
 		{
@@ -760,13 +856,13 @@ private:
 					{
 						if (bPruneDuplicates)
 						{
-							if (InstancesSeen.Contains(Elem.Payload))
+							if (InstancesSeen.Contains(GetUniqueIdx(Elem.Payload)))
 							{
 								continue;
 							}
-							InstancesSeen.Add(Elem.Payload);
+							InstancesSeen.Add(GetUniqueIdx(Elem.Payload));
 						}
-						const TBox<T, d>& InstanceBounds = Elem.Bounds;
+						const TAABB<T, d>& InstanceBounds = Elem.Bounds;
 						if (QueryBounds.Intersects(InstanceBounds))
 						{
 							TSpatialVisitorData<TPayloadType> VisitData(Elem.Payload, true, InstanceBounds);
@@ -786,6 +882,10 @@ private:
 	template <typename ParticleView>
 	void GenerateTree(const ParticleView& Particles, const bool bUseVelocity, const T Dt, const int32 MaxCells)
 	{
+		MGlobalPayloads.Reset();
+		MPayloadInfo.Reset();
+		bIsEmpty = true;
+
 		if (!Particles.Num())
 		{
 			bIsEmpty = true;
@@ -793,13 +893,13 @@ private:
 		}
 
 		SCOPE_CYCLE_COUNTER(STAT_BoundingVolumeGenerateTree);
-		TArray<TBox<T, d>> AllBounds;
+		TArray<TAABB<T, d>> AllBounds;
 		TArray<bool> HasBounds;
 
 		AllBounds.SetNum(Particles.Num());
 		HasBounds.SetNum(Particles.Num());
 		int32 MaxPayloadBoundsCopy = MaxPayloadBounds;
-		auto GetValidBounds = [MaxPayloadBoundsCopy, bUseVelocity, Dt](const auto& Particle, TBox<T,d>& OutBounds) -> bool
+		auto GetValidBounds = [MaxPayloadBoundsCopy, bUseVelocity, Dt](const auto& Particle, TAABB<T,d>& OutBounds) -> bool
 		{
 			if (HasBoundingBox(Particle))
 			{
@@ -815,23 +915,21 @@ private:
 		};
 
 		//compute DX and fill global payloads
-		MGlobalPayloads.Reset();
 		auto& GlobalPayloads = MGlobalPayloads;
 		auto& PayloadInfos = MPayloadInfo;
 		T NumObjectsWithBounds = 0;
-		MPayloadInfo.Reset();
 
-		auto ComputeBoxAndDx = [&Particles, &AllBounds, &HasBounds, &GlobalPayloads, &PayloadInfos, &GetValidBounds, &NumObjectsWithBounds](TBox<T,d>& OutGlobalBox, bool bFirstPass) -> T
+		auto ComputeBoxAndDx = [&Particles, &AllBounds, &HasBounds, &GlobalPayloads, &PayloadInfos, &GetValidBounds, &NumObjectsWithBounds](TAABB<T,d>& OutGlobalBox, bool bFirstPass) -> T
 		{
 			SCOPE_CYCLE_COUNTER(STAT_BoundingVolumeComputeGlobalBox);
-			OutGlobalBox = TBox<T, d>::EmptyBox();
+			OutGlobalBox = TAABB<T, d>::EmptyAABB();
 			constexpr T InvD = (T)1 / d;
 			int32 Idx = 0;
 			T Dx = 0;
 			NumObjectsWithBounds = 0;
 			for (auto& Particle : Particles)
 			{
-				TBox<T,d>& Bounds = AllBounds[Idx];
+				TAABB<T,d>& Bounds = AllBounds[Idx];
 				if ((bFirstPass && GetValidBounds(Particle, Bounds)) || (!bFirstPass && HasBounds[Idx]))
 				{
 					HasBounds[Idx] = true;
@@ -846,7 +944,7 @@ private:
 
 					const int32 GlobalPayloadIdx = GlobalPayloads.Num();
 					bool bTooBig = HasBoundingBox(Particle);	//todo: avoid this as it was already called in GetValidBounds
-					GlobalPayloads.Add({ Payload, bTooBig ? Bounds : TBox<T,d>(TVector<T,d>(TNumericLimits<T>::Lowest()), TVector<T,d>(TNumericLimits<T>::Max())) });
+					GlobalPayloads.Add({ Payload, bTooBig ? Bounds : TAABB<T,d>(TVector<T,d>(TNumericLimits<T>::Lowest()), TVector<T,d>(TNumericLimits<T>::Max())) });
 					PayloadInfos.Add(Payload, FPayloadInfo{ GlobalPayloadIdx, INDEX_NONE });
 				}
 				++Idx;
@@ -856,7 +954,7 @@ private:
 			return Dx;
 		};
 
-		TBox<T, d> GlobalBox;
+		TAABB<T, d> GlobalBox;
 		T Dx = ComputeBoxAndDx(GlobalBox, /*bFirstPass=*/true);
 
 		if (FBoundingVolumeCVars::FilterFarBodies)
@@ -924,7 +1022,7 @@ private:
 			{
 				if (HasBounds[Idx])
 				{
-					const TBox<T, d>& ObjectBox = AllBounds[Idx];
+					const TAABB<T, d>& ObjectBox = AllBounds[Idx];
 					NumObjectsWithBounds += 1;
 					const auto StartIndex = MGrid.ClampIndex(MGrid.Cell(ObjectBox.Min()));
 					const auto EndIndex = MGrid.ClampIndex(MGrid.Cell(ObjectBox.Max()));
@@ -990,7 +1088,7 @@ private:
 		}
 	}
 
-	void AddElementToExistingGrid(const TPayloadType& Payload, FPayloadInfo& PayloadInfo, const TBox<T, d>& NewBounds, bool bHasBounds)
+	void AddElementToExistingGrid(const TPayloadType& Payload, FPayloadInfo& PayloadInfo, const TAABB<T, d>& NewBounds, bool bHasBounds)
 	{
 		bool bTooBig = false;
 		if (bHasBounds)
@@ -1052,11 +1150,11 @@ private:
 		{
 			PayloadInfo.GlobalPayloadIdx = MGlobalPayloads.Num();
 			PayloadInfo.DirtyPayloadIdx = INDEX_NONE;
-			MGlobalPayloads.Add({ Payload, bTooBig ? NewBounds : TBox<T,d>(TVector<T,d>(TNumericLimits<T>::Lowest()), TVector<T,d>(TNumericLimits<T>::Max())) });
+			MGlobalPayloads.Add({ Payload, bTooBig ? NewBounds : TAABB<T,d>(TVector<T,d>(TNumericLimits<T>::Lowest()), TVector<T,d>(TNumericLimits<T>::Max())) });
 		}
 	}
 
-	TArray<TPayloadType> FindAllIntersectionsHelper(const TBox<T, d>& ObjectBox) const
+	TArray<TPayloadType> FindAllIntersectionsHelper(const TAABB<T, d>& ObjectBox) const
 	{
 		TArray<TPayloadType> Intersections;
 		const auto StartIndex = MGrid.ClampIndex(MGrid.Cell(ObjectBox.Min()));
@@ -1080,8 +1178,10 @@ private:
 			}
 		}
 
-
-		Algo::Sort(Intersections);
+		Algo::Sort(Intersections,[](const TPayloadType& A,const TPayloadType& B)
+		{
+			return GetUniqueIdx(A) < GetUniqueIdx(B);
+		});
 
 		for (int32 i = Intersections.Num() - 1; i > 0; i--)
 		{
@@ -1144,10 +1244,18 @@ private:
 	TUniformGrid<T, d> MGrid;
 	TArrayND<TArray<FCellElement>, d> MElements;
 	TArray<FCellElement> MDirtyElements;
-	TMap<TPayloadType, FPayloadInfo> MPayloadInfo;
+	TArrayAsMap<TPayloadType, FPayloadInfo> MPayloadInfo;
 	T MaxPayloadBounds;
 	bool bIsEmpty;
 };
+
+#if PLATFORM_MAC || PLATFORM_LINUX
+    extern template class CHAOS_API TBoundingVolume<int32,float,3>;
+    extern template class CHAOS_API TBoundingVolume<TAccelerationStructureHandle<float,3>,float,3>;
+#else
+    extern template class TBoundingVolume<int32,float,3>;
+    extern template class TBoundingVolume<TAccelerationStructureHandle<float,3>,float,3>;
+#endif
 
 template<typename TPayloadType, class T, int d>
 FArchive& operator<<(FArchive& Ar, TBoundingVolume<TPayloadType, T, d>& BoundingVolume)

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -13,6 +13,7 @@
 #include "RSA.h"
 #include "Misc/SecureHash.h"
 #include "GenericPlatform/GenericPlatformChunkInstall.h"
+#include "Serialization/MemoryImage.h"
 
 class FChunkCacheWorker;
 class IAsyncReadFileHandle;
@@ -92,6 +93,7 @@ struct FPakInfo
 		PakFile_Version_DeleteRecords = 6,
 		PakFile_Version_EncryptionKeyGuid = 7,
 		PakFile_Version_FNameBasedCompressionMethod = 8,
+		PakFile_Version_FrozenIndex = 9,
 
 
 		PakFile_Version_Last,
@@ -111,6 +113,9 @@ struct FPakInfo
 	FSHAHash IndexHash;
 	/** Flag indicating if the pak index has been encrypted. */
 	uint8 bEncryptedIndex;
+	/** Flag indicating if the pak index has been frozen */
+	// @todo loadtime: we should find a way to unload the index - potentially make two indices, the full one and unloaded one? unclear how, but at least we now have an option to choose per-platform
+	uint8 bIndexIsFrozen;
 	/** Encryption key guid. Empty if we should use the embedded key. */
 	FGuid EncryptionKeyGuid;
 	/** Compression methods used in this pak file (FNames, saved as FStrings) */
@@ -125,6 +130,7 @@ struct FPakInfo
 		, IndexOffset(-1)
 		, IndexSize(0)
 		, bEncryptedIndex(0)
+		, bIndexIsFrozen(0)
 	{
 		// we always put in a NAME_None entry as index 0, so that an uncompressed PakEntry will have CompressionMethodIndex of 0 and can early out easily
 		CompressionMethods.Add(NAME_None);
@@ -140,6 +146,7 @@ struct FPakInfo
 		int64 Size = sizeof(Magic) + sizeof(Version) + sizeof(IndexOffset) + sizeof(IndexSize) + sizeof(IndexHash) + sizeof(bEncryptedIndex);
 		if (InVersion >= PakFile_Version_EncryptionKeyGuid) Size += sizeof(EncryptionKeyGuid);
 		if (InVersion >= PakFile_Version_FNameBasedCompressionMethod) Size += CompressionMethodNameLen * MaxNumCompressionMethods;
+		if (InVersion >= PakFile_Version_FrozenIndex) Size += sizeof(bIndexIsFrozen);
 
 		return Size;
 	}
@@ -193,6 +200,11 @@ struct FPakInfo
 			{
 				EncryptionKeyGuid.Invalidate();
 			}
+		}
+
+		if (Version >= PakFile_Version_FrozenIndex)
+		{
+			Ar << bIndexIsFrozen;
 		}
 
 		if (Version < PakFile_Version_FNameBasedCompressionMethod)
@@ -264,10 +276,12 @@ struct FPakInfo
  */
 struct FPakCompressedBlock
 {
+	DECLARE_TYPE_LAYOUT(FPakCompressedBlock, NonVirtual);
+
 	/** Offset of the start of a compression block. Offset is relative to the start of the compressed chunk data */
-	int64 CompressedStart;
+	LAYOUT_FIELD(int64, CompressedStart);
 	/** Offset of the end of a compression block. This may not align completely with the start of the next block. Offset is relative to the start of the compressed chunk data. */
-	int64 CompressedEnd;
+	LAYOUT_FIELD(int64, CompressedEnd);
 
 	bool operator == (const FPakCompressedBlock& B) const
 	{
@@ -301,28 +315,30 @@ FORCEINLINE FArchive& operator<<(FArchive& Ar, FPakCompressedBlock& Block)
  */
 struct FPakEntry
 {
+	DECLARE_TYPE_LAYOUT(FPakEntry, NonVirtual);
+
 	static const uint8 Flag_None = 0x00;
 	static const uint8 Flag_Encrypted = 0x01;
 	static const uint8 Flag_Deleted = 0x02;
 
 	/** Offset into pak file where the file is stored.*/
-	int64 Offset;
+	LAYOUT_FIELD(int64, Offset);
 	/** Serialized file size. */
-	int64 Size;
+	LAYOUT_FIELD(int64, Size);
 	/** Uncompressed file size. */
-	int64 UncompressedSize;
+	LAYOUT_FIELD(int64, UncompressedSize);
 	/** File SHA1 value. */
-	uint8 Hash[20];
+	LAYOUT_ARRAY(uint8, Hash, 20);
 	/** Array of compression blocks that describe how to decompress this pak entry. */
-	TArray<FPakCompressedBlock> CompressionBlocks;
+	LAYOUT_FIELD(TMemoryImageArray<FPakCompressedBlock>, CompressionBlocks);
 	/** Size of a compressed block in the file. */
-	uint32 CompressionBlockSize;
+	LAYOUT_FIELD(uint32, CompressionBlockSize);
 	/** Index into the compression methods in this pakfile. */
-	uint32 CompressionMethodIndex;
+	LAYOUT_FIELD(uint32, CompressionMethodIndex);
 	/** Pak entry flags. */
-	uint8 Flags;
+	LAYOUT_FIELD(uint8, Flags);
 	/** Flag is set to true when FileHeader has been checked against PakHeader. It is not serialized. */
-	mutable bool  Verified;
+	LAYOUT_MUTABLE_FIELD(bool, Verified);
 
 	/**
 	 * Constructor.
@@ -496,7 +512,20 @@ struct FPakEntry
 };
 
 /** Pak directory type mapping a filename to a FPakEntry index within the FPakFile.Files array or the MiniPakEntriesOffsets array depending on the bit-encoded state of the FPakEntry structures. */
-typedef TMap<FString, int32> FPakDirectory;
+typedef TMemoryImageMap<FMemoryImageString, int32> FPakDirectory;
+
+struct PAKFILE_API FPakFileData
+{
+	DECLARE_TYPE_LAYOUT(FPakFileData, NonVirtual);
+
+
+	/** Mount point. */
+	LAYOUT_FIELD(FMemoryImageString, MountPoint);
+	/** Info on all files stored in pak. */
+	LAYOUT_FIELD(TMemoryImageArray<FPakEntry>, Files);
+	/** Pak Index organized as a map of directories for faster Directory iteration. Completely valid only when bFilenamesRemoved == false, although portions may still be valid after a call to UnloadPakEntryFilenames() while utilizing DirectoryRootsToKeep. */
+	LAYOUT_FIELD((TMemoryImageMap<FMemoryImageString, FPakDirectory>), Index);
+};
 
 /**
  * Pak file.
@@ -504,6 +533,8 @@ typedef TMap<FString, int32> FPakDirectory;
 class PAKFILE_API FPakFile : FNoncopyable
 {
 	friend class FPakPlatformFile;
+
+	TUniquePtr<FPakFileData> Data;
 
 	/** Pak filename. */
 	FString PakFilename;
@@ -518,10 +549,6 @@ class PAKFILE_API FPakFile : FNoncopyable
 	FPakInfo Info;
 	/** Mount point. */
 	FString MountPoint;
-	/** Info on all files stored in pak. */
-	TArray<FPakEntry> Files;	
-	/** Pak Index organized as a map of directories for faster Directory iteration. Completely valid only when bFilenamesRemoved == false, although portions may still be valid after a call to UnloadPakEntryFilenames() while utilizing DirectoryRootsToKeep. */
-	TMap<FString, FPakDirectory> Index;
 	/** The hash to use when generating a filename hash (CRC) to avoid collisions within the hashed filename space. */
 	uint64 FilenameStartHash;
 	/** An array of 256 + 1 size that represents the starting index of the most significant byte of a hash group within the FilenameHashes array. */
@@ -547,7 +574,7 @@ class PAKFILE_API FPakFile : FNoncopyable
 	/** True if all filenames in memory for this pak file have been hashed to a 32-bit value. Wildcard traversal is impossible when true. */
 	bool bFilenamesRemoved;
 	/** ID for the chunk this pakfile is part of. INDEX_NONE if this isn't a pak chunk (derived from filename) */
-	int32 ChunkID;
+	int32 PakchunkIndex;
 	/** Flag to say we tried shrinking pak entries already */
 	bool bAttemptedPakEntryShrink;
 	/** Flag to say we tried unloading pak index filenames already */
@@ -672,9 +699,9 @@ public:
 	 *
 	 * @return Pak index.
 	 */
-	const TMap<FString, FPakDirectory>& GetIndex() const
+	const TMemoryImageMap<FMemoryImageString, FPakDirectory>& GetIndex() const
 	{
-		return Index;
+		return Data->Index;
 	}
 
 	/**
@@ -761,7 +788,7 @@ public:
 			//checkf(!bFilenamesRemoved, TEXT("FPakFile::FindFilesAtPath() can only be used before FPakPlatformFile::UnloadFilenames() is called."));
 
 			TArray<FString> DirectoriesInPak; // List of all unique directories at path
-			for (TMap<FString, FPakDirectory>::TConstIterator It(Index); It; ++It)
+			for (TMemoryImageMap<FMemoryImageString, FPakDirectory>::TConstIterator It(Data->Index); It; ++It)
 			{
 				FString PakPath(MountPoint + It.Key());
 				// Check if the file is under the specified path.
@@ -823,7 +850,7 @@ public:
 		// Check the specified path is under the mount point of this pak file.
 		if (Directory.StartsWith(MountPoint))
 		{
-			PakDirectory = Index.Find(Directory.Mid(MountPoint.Len()));
+			PakDirectory = Data->Index.Find(Directory.Mid(MountPoint.Len()));
 		}
 		return PakDirectory;
 	}
@@ -852,7 +879,7 @@ public:
 		/** Owner pak file. */
 		const FPakFile& PakFile;
 		/** Index iterator. */
-		TMap<FString, FPakDirectory>::TConstIterator IndexIt;
+		TMemoryImageMap<FMemoryImageString, FPakDirectory>::TConstIterator IndexIt;
 		/** Directory iterator. */
 		FPakDirectory::TConstIterator DirectoryIt;
 		/** The cached filename for return in Filename() */
@@ -867,10 +894,10 @@ public:
 		 * @param InPakFile Pak file to iterate.
 		 */
 		FFileIterator(const FPakFile& InPakFile, bool bInIncludeDeleted = false )
-		:	PakFile(InPakFile)
-		, IndexIt(PakFile.GetIndex())
-		, DirectoryIt((IndexIt ? FPakDirectory::TConstIterator(IndexIt.Value()): FPakDirectory()))
-		, bIncludeDeleted(bInIncludeDeleted)
+			: PakFile(InPakFile)
+			, IndexIt(PakFile.GetIndex())
+			, DirectoryIt((IndexIt ? FPakDirectory::TConstIterator(IndexIt.Value()): FPakDirectory()))
+			, bIncludeDeleted(bInIncludeDeleted)
 		{
 			AdvanceToValid();
 			UpdateCachedFilename();
@@ -897,11 +924,11 @@ public:
 		}
 
 		const FString& Filename() const		{ return CachedFilename; }
-		const FPakEntry& Info() const	{ return PakFile.Files[DirectoryIt.Value()]; }
+		const FPakEntry& Info() const	{ return PakFile.Data->Files[DirectoryIt.Value()]; }
 		const int32 GetIndexInPakFile() const { return DirectoryIt.Value(); }
 
 	private:
-		FORCEINLINE void AdvanceToValid()
+		void AdvanceToValid()
 		{
 			SkipDeletedIfRequired();
 			while (!DirectoryIt && IndexIt)
@@ -923,7 +950,7 @@ public:
 		{
 			if (!!IndexIt && !!DirectoryIt)
 			{
-				CachedFilename = IndexIt.Key() + DirectoryIt.Key();
+				CachedFilename = FString(IndexIt.Key()) + FString(DirectoryIt.Key());
 			}
 			else
 			{
@@ -1415,7 +1442,7 @@ class PAKFILE_API FPakPlatformFile : public IPlatformFile
 		FString Path;
 		uint32 ReadOrder;
 		FGuid EncryptionKeyGuid;
-		int32 ChunkID;
+		int32 PakchunkIndex;
 	};
 	
 	/** Wrapped file */
@@ -1565,9 +1592,9 @@ public:
 	static void SetMountStartupPaksWildCard(const FString& WildCard);
 
 	/**
-	* Determine location information for a given chunk ID. Will be DoesNotExist if the pak file wasn't detected, NotAvailable if it exists but hasn't been mounted due to a missing encryption key, or LocalFast if it exists and has been mounted
+	* Determine location information for a given pakchunk index. Will be DoesNotExist if the pak file wasn't detected, NotAvailable if it exists but hasn't been mounted due to a missing encryption key, or LocalFast if it exists and has been mounted
 	*/
-	EChunkLocation::Type GetPakChunkLocation(int32 InChunkID) const;
+	EChunkLocation::Type GetPakChunkLocation(int32 InPakchunkIndex) const;
 
 	/**
 	* Returns true if any of the mounted or pending pak files are chunks (filenames starting pakchunkN)
@@ -1922,7 +1949,7 @@ public:
 			{
 				for (FPakDirectory::TConstIterator DirectoryIt(*PakDirectory); DirectoryIt; ++DirectoryIt)
 				{
-					if (PakFile->Files[DirectoryIt.Value()].Offset == FileEntry.Offset)
+					if (PakFile->Data->Files[DirectoryIt.Value()].Offset == FileEntry.Offset)
 					{
 						const FString& RealFilename = DirectoryIt.Key();
 						return Path / RealFilename;
@@ -2407,11 +2434,29 @@ public:
 	// Access static delegate for custom encryption
 	static FPakCustomEncryptionDelegate& GetPakCustomEncryptionDelegate();
 
+	struct FPakSigningFailureHandlerData
+	{
+		FCriticalSection Lock;
+		FPakChunkSignatureCheckFailedHandler ChunkSignatureCheckFailedDelegate;
+		FPakMasterSignatureTableCheckFailureHandler MasterSignatureTableCheckFailedDelegate;
+	};
+
 	// Access static delegate for handling a pak signature check failure
+	static FPakSigningFailureHandlerData& GetPakSigningFailureHandlerData();
+	
+	// Access static delegate for handling a pak signature check failure
+	UE_DEPRECATED(4.25, "GetPakChunkSignatureCheckFailedHandler is not thread safe, so please migrate to using GetPakSigningFailureHandlerData and locking the critical section around any use of the delegates")
 	static FPakChunkSignatureCheckFailedHandler& GetPakChunkSignatureCheckFailedHandler();
 
 	// Access static delegate for handling a pak signature check failure
+	UE_DEPRECATED(4.25, "GetPakMasterSignatureTableCheckFailureHandler is not thread safe, so please migrate to using GetPakSigningFailureHandlerData and locking the critical section around any use of the delegates")
 	static FPakMasterSignatureTableCheckFailureHandler& GetPakMasterSignatureTableCheckFailureHandler();
+
+	// Broadacast a signature check failure through any registered delegates in a thread safe way
+	static void BroadcastPakChunkSignatureCheckFailure(const FPakChunkSignatureCheckFailedData& InData);
+
+	// Broadacast a master signature table failure through any registered delegates in a thread safe way
+	static void BroadcastPakMasterSignatureTableCheckFailure(const FString& InFilename);
 
 	// Get a list of which files live in a given chunk
 	void GetFilenamesInChunk(const FString& InPakFilename, const TArray<int32>& InChunkIDs, TArray<FString>& OutFileList);
@@ -2531,7 +2576,7 @@ struct FPakSignatureFile
 			}
 		}
 
-		FPakPlatformFile::GetPakMasterSignatureTableCheckFailureHandler().Broadcast(InFilename);
+		FPakPlatformFile::BroadcastPakMasterSignatureTableCheckFailure(InFilename);
 		return false;
 	}
 

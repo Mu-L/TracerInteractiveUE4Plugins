@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AudioMixerPlatformXAudio2.h"
 #include "AudioMixer.h"
@@ -7,6 +7,13 @@
 class FAudioMixerModuleXAudio2 : public IAudioDeviceModule
 {
 public:
+	virtual void StartupModule() override
+	{
+		IAudioDeviceModule::StartupModule();
+
+		FModuleManager::Get().LoadModuleChecked(TEXT("AudioMixerCore"));
+	}
+
 	virtual bool IsAudioMixerModule() const override 
 	{ 
 		return true;

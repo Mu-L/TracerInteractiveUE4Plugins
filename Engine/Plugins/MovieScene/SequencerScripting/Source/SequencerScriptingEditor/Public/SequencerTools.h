@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,11 +7,34 @@
 #include "Modules/ModuleManager.h"
 #include "MovieSceneCaptureDialogModule.h"
 #include "SequencerBindingProxy.h"
+#include "SequencerScriptingRange.h"
 #include "SequencerTools.generated.h"
 
 class UFbxExportOption;
+class UAnimSequence;
+class UPoseAsset;
 
 DECLARE_DYNAMIC_DELEGATE_OneParam(FOnRenderMovieStopped, bool, bSuccess);
+
+USTRUCT(BlueprintType)
+struct FSequencerBoundObjects
+{
+	GENERATED_BODY()
+
+	FSequencerBoundObjects()
+	{}
+
+	FSequencerBoundObjects(FSequencerBindingProxy InBindingProxy, const TArray<UObject*>& InBoundObjects)
+		: BindingProxy(InBindingProxy)
+		, BoundObjects(InBoundObjects)
+	{}
+
+	UPROPERTY(BlueprintReadWrite, Category=Binding)
+	FSequencerBindingProxy BindingProxy;
+
+	UPROPERTY(BlueprintReadWrite, Category=Binding)
+	TArray<UObject*> BoundObjects;
+};
 
 /** 
  * This is a set of helper functions to access various parts of the Sequencer API via Python. Because Sequencer itself is not suitable for exposing, most functionality
@@ -48,6 +71,22 @@ public:
 	static void CancelMovieRender();
 
 public:
+
+	/*
+	 * Retrieve all objects currently bound to the specified binding identifiers. The sequence will be evaluated in lower bound of the specified range, 
+	 * which allows for retrieving spawnables in that period of time.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Sequencer Tools")
+	static TArray<FSequencerBoundObjects> GetBoundObjects(UWorld* InWorld, ULevelSequence* InSequence, const TArray<FSequencerBindingProxy>& InBindings, const FSequencerScriptingRange& InRange);
+
+	/*
+	 * Get the object bindings for the requested object. The sequence will be evaluated in lower bound of the specified range, 
+	 * which allows for retrieving spawnables in that period of time.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Sequencer Tools")
+	static TArray<FSequencerBoundObjects> GetObjectBindings(UWorld* InWorld, ULevelSequence* InSequence, const TArray<UObject*>& InObject, const FSequencerScriptingRange& InRange);
+
+public:
 	/*
 	 * Export Passed in Bindings to FBX
 	 *
@@ -60,6 +99,18 @@ public:
 	static bool ExportFBX(UWorld* InWorld, ULevelSequence* InSequence, const TArray<FSequencerBindingProxy>& InBindings, UFbxExportOption* OverrideOptions,const FString& InFBXFileName);
 
 	/*
+	 * Export Passed in Binding as an Anim Seqquence.
+	 *
+	 * @InWorld World to export
+	 * @InSequence Sequence to export
+	 * @AnimSequence The AnimSequence to save into.
+	 * @InBinding Binding to export that has a skelmesh component on it
+	 * @InAnimSequenceFilename File to create
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Sequencer Tools | Animation")
+	static bool ExportAnimSequence(UWorld* World, ULevelSequence*  Sequence, UAnimSequence* AnimSequence, const FSequencerBindingProxy& Binding);
+
+	/*
 	 * Import Passed in Bindings to FBX
 	 *
 	 * @InWorld World to import to
@@ -70,6 +121,5 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Sequencer Tools | FBX")
 	static bool ImportFBX(UWorld* InWorld, ULevelSequence* InSequence, const TArray<FSequencerBindingProxy>& InBindings, UMovieSceneUserImportFBXSettings* InImportFBXSettings, const FString&  InImportFilename);
-
 
 };

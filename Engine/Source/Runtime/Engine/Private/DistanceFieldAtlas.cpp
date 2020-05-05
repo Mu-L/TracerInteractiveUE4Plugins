@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	DistanceFieldAtlas.cpp
@@ -17,6 +17,9 @@
 #include "Engine/StaticMesh.h"
 #include "Misc/AutomationTest.h"
 #include "Async/ParallelFor.h"
+#include "DistanceFieldDownsampling.h"
+#include "GlobalShader.h"
+#include "RenderGraph.h"
 
 #if WITH_EDITOR
 #include "DerivedDataCacheInterface.h"
@@ -78,14 +81,12 @@ static TAutoConsoleVariable<float> CVarDistFieldResScale(
 static TAutoConsoleVariable<int32> CVarDistFieldAtlasResXY(
 	TEXT("r.DistanceFields.AtlasSizeXY"),
 	512,	
-	TEXT("Max size of the global mesh distance field atlas volume texture in X and Y."),
-	ECVF_ReadOnly);
+	TEXT("Max size of the global mesh distance field atlas volume texture in X and Y."));
 
 static TAutoConsoleVariable<int32> CVarDistFieldAtlasResZ(
 	TEXT("r.DistanceFields.AtlasSizeZ"),
 	1024,	
-	TEXT("Max size of the global mesh distance field atlas volume texture in Z."),
-	ECVF_ReadOnly);
+	TEXT("Max size of the global mesh distance field atlas volume texture in Z."));
 
 int32 GDistanceFieldForceAtlasRealloc = 0;
  
@@ -102,6 +103,11 @@ static TAutoConsoleVariable<int32> CVarDistFieldThrottleCopyToAtlasInBytes(
 	TEXT("When enabled (higher than 0), throttle mesh distance field copy to global mesh distance field atlas volume (in bytes uncompressed)."),
 	ECVF_Default);
 
+static TAutoConsoleVariable<float> CVarDistFieldRuntimeDownsampling(
+	TEXT("r.DistanceFields.RuntimeDownsamplingFactor"),
+	0,
+	TEXT("When enabled (higher than 0 and lower than 1), mesh distance field will be downsampled by factor value on GPU and uploaded to the atlas."),
+	ECVF_Default);
 
 static TAutoConsoleVariable<int32> CVarLandscapeGI(
 	TEXT("r.GenerateLandscapeGIData"),
@@ -116,18 +122,68 @@ static TAutoConsoleVariable<int32> CVarDistFieldForceMaxAtlasSize(
 	TEXT("When enabled, we'll always allocate the largest possible volume texture for the distance field atlas regardless of how many blocks we need.  This is an optimization to avoid re-packing the texture, for projects that are expected to always require the largest amount of space."),
 	ECVF_Default);
 
-static int32 GDistanceFieldParallelAtlasUpdate = 0;
+static int32 GDistanceFieldParallelAtlasUpdate = 1;
 static FAutoConsoleVariableRef CVarDistanceFieldParallelAtlasUpdate(
 	TEXT("r.DistanceFields.ParallelAtlasUpdate"),
 	GDistanceFieldParallelAtlasUpdate,
 	TEXT("Whether to parallelize distance field data decompression and copying to upload buffer"),
 	ECVF_RenderThreadSafe);
 
+static int32 GHeightFieldAtlasTileSize = 64;
+static FAutoConsoleVariableRef CVarHeightFieldAtlasTileSize(
+	TEXT("r.HeightFields.AtlasTileSize"),
+	GHeightFieldAtlasTileSize,
+	TEXT("Suballocation granularity"),
+	ECVF_RenderThreadSafe);
+
+static int32 GHeightFieldAtlasDimInTiles = 16;
+static FAutoConsoleVariableRef CVarHeightFieldAtlasDimInTiles(
+	TEXT("r.HeightFields.AtlasDimInTiles"),
+	GHeightFieldAtlasDimInTiles,
+	TEXT("Number of tiles the atlas has in one dimension"),
+	ECVF_RenderThreadSafe);
+
+static int32 GHeightFieldAtlasDownSampleLevel = 2;
+static FAutoConsoleVariableRef CVarHeightFieldAtlasDownSampleLevel(
+	TEXT("r.HeightFields.AtlasDownSampleLevel"),
+	GHeightFieldAtlasDownSampleLevel,
+	TEXT("Max number of times a suballocation can be down-sampled"),
+	ECVF_RenderThreadSafe);
+
+static int32 GHFVisibilityAtlasTileSize = 64;
+static FAutoConsoleVariableRef CVarHFVisibilityAtlasTileSize(
+	TEXT("r.HeightFields.VisibilityAtlasTileSize"),
+	GHFVisibilityAtlasTileSize,
+	TEXT("Suballocation granularity"),
+	ECVF_RenderThreadSafe);
+
+static int32 GHFVisibilityAtlasDimInTiles = 8;
+static FAutoConsoleVariableRef CVarHFVisibilityAtlasDimInTiles(
+	TEXT("r.HeightFields.VisibilityAtlasDimInTiles"),
+	GHFVisibilityAtlasDimInTiles,
+	TEXT("Number of tiles the atlas has in one dimension"),
+	ECVF_RenderThreadSafe);
+
+static int32 GHFVisibilityAtlasDownSampleLevel = 2;
+static FAutoConsoleVariableRef CVarHFVisibilityAtlasDownSampleLevel(
+	TEXT("r.HeightFields.VisibilityAtlasDownSampleLevel"),
+	GHFVisibilityAtlasDownSampleLevel,
+	TEXT("Max number of times a suballocation can be down-sampled"),
+	ECVF_RenderThreadSafe);
+
 TGlobalResource<FDistanceFieldVolumeTextureAtlas> GDistanceFieldVolumeTextureAtlas = TGlobalResource<FDistanceFieldVolumeTextureAtlas>();
+TGlobalResource<FLandscapeTextureAtlas> GHeightFieldTextureAtlas(FLandscapeTextureAtlas::SAT_Height);
+TGlobalResource<FLandscapeTextureAtlas> GHFVisibilityTextureAtlas(FLandscapeTextureAtlas::SAT_Visibility);
 
 FDistanceFieldVolumeTextureAtlas::FDistanceFieldVolumeTextureAtlas() :
 	BlockAllocator(0, 0, 0, 0, 0, 0, false, false),
-	bInitialized(false)
+	bInitialized(false),
+	AllocatedPixels(0),
+	FailedAllocatedPixels(0),
+	MaxUsedAtlasX(0),
+	MaxUsedAtlasY(0),
+	MaxUsedAtlasZ(0)
+
 {
 	// Warning: can't access cvars here, this is called during global init
 	Generation = 0;
@@ -151,6 +207,10 @@ void FDistanceFieldVolumeTextureAtlas::InitializeIfNeeded()
 		const int32 AtlasZ = CVarZ->GetValueOnAnyThread();
 
 		BlockAllocator = FTextureLayout3d(0, 0, 0, AtlasXY, AtlasXY, AtlasZ, false, false);
+
+		MaxUsedAtlasX = 0;
+		MaxUsedAtlasY = 0;
+		MaxUsedAtlasZ = 0;
 	}
 }
 
@@ -255,7 +315,7 @@ void FDistanceFieldVolumeTextureAtlas::AddAllocation(FDistanceFieldVolumeTexture
 	{
 		Texture->bThrottled = true;
 	}
-	
+	const FIntVector Size = Texture->VolumeData.Size;
 }
 
 void FDistanceFieldVolumeTextureAtlas::RemoveAllocation(FDistanceFieldVolumeTexture* Texture)
@@ -263,12 +323,50 @@ void FDistanceFieldVolumeTextureAtlas::RemoveAllocation(FDistanceFieldVolumeText
 	InitializeIfNeeded();
 	PendingAllocations.Remove(Texture);
 
-	if (CurrentAllocations.Contains(Texture))
+	if (FailedAllocations.Remove(Texture) > 0)
 	{
-		const FIntVector Min = Texture->GetAllocationMin();
-		const FIntVector Size = Texture->VolumeData.Size;
-		verify(BlockAllocator.RemoveElement(Min.X, Min.Y, Min.Z, Size.X, Size.Y, Size.Z));
-		CurrentAllocations.Remove(Texture);
+		FailedAllocatedPixels -= Texture->VolumeData.Size.X * Texture->VolumeData.Size.Y * Texture->VolumeData.Size.Z;;
+	}
+
+	if (!CurrentAllocations.Contains(Texture))
+	{
+		return;
+	}
+	
+	FIntVector Size = Texture->SizeInAtlas;
+	int PixelAreaSize = Size.X * Size.Y * Size.Z;
+
+	const FIntVector Min = Texture->GetAllocationMin();
+	verify(BlockAllocator.RemoveElement(Min.X, Min.Y, Min.Z, Size.X, Size.Y, Size.Z));
+	CurrentAllocations.Remove(Texture);
+	AllocatedPixels -= PixelAreaSize;
+
+	FIntVector RemainingSize = Size;
+	
+	// Check if there is room for a previous failed allocation
+	for (int32 Index = 0; Index < FailedAllocations.Num(); Index++)
+	{
+		FDistanceFieldVolumeTexture* PreviouslyFailedAllocatedTexture = FailedAllocations[Index];
+		Size = PreviouslyFailedAllocatedTexture->VolumeData.Size;
+		if (Size.X > RemainingSize.X || Size.Y > RemainingSize.Y || Size.Z > RemainingSize.Z)
+		{
+			continue;
+		}
+		// Room available. Add texture to pending list
+		PendingAllocations.Add(PreviouslyFailedAllocatedTexture);
+		FailedAllocations.RemoveAt(Index);
+		Index--;
+		FailedAllocatedPixels -= PixelAreaSize;
+
+		RemainingSize.X -= Size.X;
+		RemainingSize.Y -= Size.Y;
+		RemainingSize.Z -= Size.Z;
+		
+		// Continue iterating if remaining size can support another mesh DF
+		if (RemainingSize.X < 4 || RemainingSize.Y < 4 || RemainingSize.Z < 4)
+		{
+			break;
+		}
 	}
 }
 
@@ -280,8 +378,67 @@ struct FCompareVolumeAllocation
 	}
 };
 
-void FDistanceFieldVolumeTextureAtlas::UpdateAllocations()
+static void CopyToUpdateTextureData
+(
+	const FIntVector& SrcSize,
+	int32 FormatSize,
+	const TArray<uint8>& SrcData,
+	const FUpdateTexture3DData& UpdateTextureData,
+	const FIntVector& DstOffset
+)
 {
+	// Is there any padding? If not, straight memcpy
+	if ((UpdateTextureData.DepthPitch * SrcSize.Z) == SrcData.Num())
+	{
+		FPlatformMemory::Memcpy(UpdateTextureData.Data, SrcData.GetData(), SrcData.Num());
+	}
+	else
+	{
+
+		const int32 SourcePitch = SrcSize.X * FormatSize;
+		check(SourcePitch <= (int32)UpdateTextureData.RowPitch);
+
+		for (int32 ZIndex = 0; ZIndex < SrcSize.Z; ZIndex++)
+		{
+			const int32 DestZIndex = (DstOffset.Z + ZIndex) * UpdateTextureData.DepthPitch + DstOffset.X * FormatSize;
+			const int32 SourceZIndex = ZIndex * SrcSize.Y * SourcePitch;
+
+			for (int32 YIndex = 0; YIndex < SrcSize.Y; YIndex++)
+			{
+				const int32 DestIndex = DestZIndex + (DstOffset.Y + YIndex) * UpdateTextureData.RowPitch;
+				const int32 SourceIndex = SourceZIndex + YIndex * SourcePitch;
+				check(uint32(DestIndex) + SourcePitch <= UpdateTextureData.DataSizeBytes);
+				FMemory::Memcpy((uint8*)&UpdateTextureData.Data[DestIndex], (const uint8*)&(SrcData[SourceIndex]), SourcePitch);
+			}
+		}
+	}
+}
+
+void FDistanceFieldVolumeTextureAtlas::UpdateAllocations(FRHICommandListImmediate& RHICmdList, ERHIFeatureLevel::Type InFeatureLevel)
+{
+	SCOPED_NAMED_EVENT(FDistanceFieldVolumeTextureAtlas_UpdateAllocations, FColor::Emerald);
+
+	{
+		uint32 TotalSurface = BlockAllocator.GetMaxSizeX() * BlockAllocator.GetMaxSizeY() * BlockAllocator.GetMaxSizeZ();
+		CSV_CUSTOM_STAT_GLOBAL(DFAtlasPercentageUsage, float((float(AllocatedPixels) / float(TotalSurface))*100.0f), ECsvCustomStatOp::Set);
+		CSV_CUSTOM_STAT_GLOBAL(DFAtlasMaxX, float(MaxUsedAtlasX), ECsvCustomStatOp::Set);
+		CSV_CUSTOM_STAT_GLOBAL(DFAtlasMaxY, float(MaxUsedAtlasY), ECsvCustomStatOp::Set);
+		CSV_CUSTOM_STAT_GLOBAL(DFAtlasMaxZ, float(MaxUsedAtlasZ), ECsvCustomStatOp::Set);
+		CSV_CUSTOM_STAT_GLOBAL(DFAtlasFailedAllocatedMagaPixels, (float(FailedAllocatedPixels)/1024)/1024, ECsvCustomStatOp::Set);
+	}
+
+	static const auto CVarXY = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.DistanceFields.AtlasSizeXY"));
+	const int32 AtlasXY = CVarXY->GetValueOnAnyThread();
+
+	static const auto CVarZ = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.DistanceFields.AtlasSizeZ"));
+	const int32 AtlasZ = CVarZ->GetValueOnAnyThread();
+
+	if (bInitialized && (BlockAllocator.GetMaxSizeX() != AtlasXY || BlockAllocator.GetMaxSizeZ() != AtlasZ))
+	{
+		// Atlas size has changed (most likely because of a hotfix). Reallocate everything
+		GDistanceFieldForceAtlasRealloc = 1;
+	}
+
 	if (PendingAllocations.Num() > 0 || GDistanceFieldForceAtlasRealloc != 0)
 	{
 		const double StartTime = FPlatformTime::Seconds();
@@ -296,25 +453,51 @@ void FDistanceFieldVolumeTextureAtlas::UpdateAllocations()
 		int ThrottledCopyCount = 0;
 		int PendingCopyCount = PendingAllocations.Num();
 
-		const int32 ThrottleSize = CVarDistFieldThrottleCopyToAtlasInBytes.GetValueOnAnyThread();
-		const bool bThrottleUpdateAllocation = ThrottleSize >= 1024;
+		const float RuntimeDownsamplingFactor = CVarDistFieldRuntimeDownsampling->GetFloat();
+		const bool bRuntimeDownsampling = FDistanceFieldDownsampling::CanDownsample() && (RuntimeDownsamplingFactor > 0 && RuntimeDownsamplingFactor < 1);
 
 		auto AllocateBlocks = [&]()
 		{
+			int32 FailedAllocationCount = FailedAllocations.Num();
 			for (int32 AllocationIndex = 0; AllocationIndex < LocalPendingAllocations->Num(); AllocationIndex++)
 			{
 				FDistanceFieldVolumeTexture* Texture = (*LocalPendingAllocations)[AllocationIndex];
-				const FIntVector Size = Texture->VolumeData.Size;
+				FIntVector Size = Texture->VolumeData.Size;
+				
+				if (bRuntimeDownsampling)
+				{
+					FDistanceFieldDownsampling::GetDownsampledSize(Size, RuntimeDownsamplingFactor, Size);
+				}
+				
+				Texture->SizeInAtlas = Size;
 				Texture->bThrottled = false;
 
 				if (!BlockAllocator.AddElement((uint32&)Texture->AtlasAllocationMin.X, (uint32&)Texture->AtlasAllocationMin.Y, (uint32&)Texture->AtlasAllocationMin.Z, Size.X, Size.Y, Size.Z))
 				{
-					UE_LOG(LogStaticMesh, Error, TEXT("Failed to allocate %ux%ux%u in distance field atlas"), Size.X, Size.Y, Size.Z);
+					UE_LOG(LogStaticMesh, Warning, TEXT("Failed to allocate %ux%ux%u in distance field atlas. Moved mesh distance field to FailedAllocations list"), Size.X, Size.Y, Size.Z);
 					LocalPendingAllocations->RemoveAt(AllocationIndex);
+					FailedAllocations.Add(Texture);
+					FailedAllocatedPixels += Size.X * Size.Y * Size.Z;
 					AllocationIndex--;
 				}
+				else
+				{
+					MaxUsedAtlasX = FMath::Max<uint32>(MaxUsedAtlasX, Texture->AtlasAllocationMin.X + Size.X);
+					MaxUsedAtlasY = FMath::Max<uint32>(MaxUsedAtlasY, Texture->AtlasAllocationMin.Y + Size.Y);
+					MaxUsedAtlasZ = FMath::Max<uint32>(MaxUsedAtlasZ, Texture->AtlasAllocationMin.Z + Size.Z);
+					AllocatedPixels += Size.X * Size.Y * Size.Z;
+				}
+			}
+
+			if (FailedAllocations.Num() > FailedAllocationCount)
+			{
+				// Sort largest to smallest
+				FailedAllocations.Sort(FCompareVolumeAllocation());
 			}
 		};
+
+		const int32 ThrottleSize = CVarDistFieldThrottleCopyToAtlasInBytes.GetValueOnAnyThread();
+		const bool bThrottleUpdateAllocation = ThrottleSize >= 1024;
 
 		if (bThrottleUpdateAllocation)
 		{
@@ -340,6 +523,9 @@ void FDistanceFieldVolumeTextureAtlas::UpdateAllocations()
 		static const auto CVarCompress = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.DistanceFieldBuild.Compress"));
 		const bool bDataIsCompressed = CVarCompress->GetValueOnAnyThread() != 0;
 
+		TArray<FDistanceFieldDownsamplingDataTask> DownsamplingTasks;
+		TArray<FUpdateTexture3DData> UpdateDataArray;
+
 		if (!VolumeTextureRHI
 			|| BlockAllocator.GetSizeX() > VolumeTextureRHI->GetSizeX()
 			|| BlockAllocator.GetSizeY() > VolumeTextureRHI->GetSizeY()
@@ -348,16 +534,14 @@ void FDistanceFieldVolumeTextureAtlas::UpdateAllocations()
 		{
 			if (CurrentAllocations.Num() > 0)
 			{
-				static const auto CVarXY = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.DistanceFields.AtlasSizeXY"));
-				const int32 AtlasXY = CVarXY->GetValueOnAnyThread();
-
-				static const auto CVarZ = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.DistanceFields.AtlasSizeZ"));
-				const int32 AtlasZ = CVarZ->GetValueOnAnyThread();
-
 				// Remove all allocations from the layout so we have a clean slate
 				BlockAllocator = FTextureLayout3d(0, 0, 0, AtlasXY, AtlasXY, AtlasZ, false, false);
 				
 				Generation++;
+
+				MaxUsedAtlasX = 0;
+				MaxUsedAtlasY = 0;
+				MaxUsedAtlasZ = 0;
 
 				// Re-upload all textures since we had to reallocate
 				PendingAllocations.Append(CurrentAllocations);
@@ -373,7 +557,7 @@ void FDistanceFieldVolumeTextureAtlas::UpdateAllocations()
 
 				if (bThrottleUpdateAllocation)
 				{
-					// Throttling during a full realloc when not using the max sime of volume texture will make the same blocks being reused over and over
+					// Throttling during a full realloc when not using the max size of volume texture will make the same blocks being reused over and over
 					// allocate everything pending to avoid this
 					LocalPendingAllocations = &PendingAllocations;
 					ThrottledCopyCount = ThrottledAllocations.Num();
@@ -384,10 +568,11 @@ void FDistanceFieldVolumeTextureAtlas::UpdateAllocations()
 				AllocateBlocks();
 			}
 
-			// Fully free the previous atlas memory before allocating a new one6
+			// Fully free the previous atlas memory before allocating a new one
 			{
 				// Remove last ref, add to deferred delete list
-				VolumeTextureRHI = NULL;
+				VolumeTextureRHI = nullptr;
+				VolumeTextureUAVRHI = nullptr;
 
 				// Flush commandlist, flush RHI thread, delete deferred resources (GNM Memblock defers further)
 				FRHICommandListExecutor::GetImmediateCommandList().ImmediateFlush(EImmediateFlushType::FlushRHIThreadFlushResources);
@@ -410,8 +595,9 @@ void FDistanceFieldVolumeTextureAtlas::UpdateAllocations()
 				VolumeTextureSize.Z, 
 				Format,
 				1,
-				TexCreate_ShaderResource,
+				TexCreate_ShaderResource | TexCreate_UAV,
 				CreateInfo);
+			VolumeTextureUAVRHI = RHICreateUnorderedAccessView(VolumeTextureRHI, 0);
 
 			UE_LOG(LogStaticMesh,Log,TEXT("%s"),*GetSizeString());
 
@@ -422,24 +608,38 @@ void FDistanceFieldVolumeTextureAtlas::UpdateAllocations()
 				const int32 DepthPitch = BlockAllocator.GetSizeX() * BlockAllocator.GetSizeY() * FormatSize;
 
 				const FUpdateTextureRegion3D UpdateRegion(FIntVector::ZeroValue, FIntVector::ZeroValue, BlockAllocator.GetSize());
-				FUpdateTexture3DData TextureUpdateData = RHIBeginUpdateTexture3D(VolumeTextureRHI, 0, UpdateRegion);
+				// FUpdateTexture3DData default constructor is private. it might not be used if copy is done on GPU
+				// Not sure we want to make it public. let's be conservative, and allocate on stack an array of its size
+				uint8 TextureUpdateDataStackMem[sizeof(FUpdateTexture3DData)];
+				FUpdateTexture3DData* TextureUpdateDataPtr = reinterpret_cast<FUpdateTexture3DData*>(&TextureUpdateDataStackMem);
 
-				TArray<uint8> UncompressedData;
-
-				for (int32 AllocationIndex = 0; AllocationIndex < LocalPendingAllocations->Num(); AllocationIndex++)
+				if (!bRuntimeDownsampling)
 				{
+					*TextureUpdateDataPtr = RHIBeginUpdateTexture3D(VolumeTextureRHI, 0, UpdateRegion);
+				}
+
+				if (bRuntimeDownsampling)
+				{
+					UpdateDataArray.Empty(LocalPendingAllocations->Num());
+					UpdateDataArray.AddUninitialized(LocalPendingAllocations->Num());
+					DownsamplingTasks.AddDefaulted(LocalPendingAllocations->Num());
+				}
+
+				// @todo arne @todo beni: can you verify i properly merged the optimizations here and in Main?
+				ParallelFor(LocalPendingAllocations->Num(), [FormatSize, this, bDataIsCompressed, bRuntimeDownsampling, &LocalPendingAllocations, &TextureUpdateDataPtr, &DownsamplingTasks, &UpdateDataArray](int32 AllocationIndex)
+				{
+					TArray<uint8> UncompressedData;
 					FDistanceFieldVolumeTexture* Texture = (*LocalPendingAllocations)[AllocationIndex];
-					const FIntVector Size = Texture->VolumeData.Size;
-					const int32 UncompressedSize = Size.X * Size.Y * Size.Z * FormatSize;
-
+					FIntVector Size = Texture->VolumeData.Size;
+					
 					const TArray<uint8>* SourceDataPtr = NULL;
-
 					if (bDataIsCompressed)
 					{
+						const int32 UncompressedSize = Size.X * Size.Y * Size.Z * FormatSize;
 						UncompressedData.Reset(UncompressedSize);
 						UncompressedData.AddUninitialized(UncompressedSize);
 
-						verify(FCompression::UncompressMemory(NAME_Zlib, UncompressedData.GetData(), UncompressedSize, Texture->VolumeData.CompressedDistanceFieldVolume.GetData(), Texture->VolumeData.CompressedDistanceFieldVolume.Num()));
+						verify(FCompression::UncompressMemory(NAME_LZ4, UncompressedData.GetData(), UncompressedSize, Texture->VolumeData.CompressedDistanceFieldVolume.GetData(), Texture->VolumeData.CompressedDistanceFieldVolume.Num()));
 
 						SourceDataPtr = &UncompressedData;
 					}
@@ -450,114 +650,101 @@ void FDistanceFieldVolumeTextureAtlas::UpdateAllocations()
 						SourceDataPtr = &Texture->VolumeData.CompressedDistanceFieldVolume;
 					}
 
-					const int32 SourcePitch = Size.X * FormatSize;
-					check(SourcePitch <= (int32)TextureUpdateData.RowPitch);
-
-					// Copy each row into the correct position in TextureUpdateData.Data
-					for (int32 ZIndex = 0; ZIndex < Size.Z; ZIndex++)
+					FIntVector DstOffset = FIntVector::ZeroValue;
+					
+					if (bRuntimeDownsampling)
 					{
-						const int32 DestZIndex = (Texture->AtlasAllocationMin.Z + ZIndex) * TextureUpdateData.DepthPitch + Texture->AtlasAllocationMin.X * FormatSize;
-						const int32 SourceZIndex = ZIndex * Size.Y * SourcePitch;
-
-						for (int32 YIndex = 0; YIndex < Size.Y; YIndex++)
-						{
-							const int32 DestIndex = DestZIndex + (Texture->AtlasAllocationMin.Y + YIndex) * TextureUpdateData.RowPitch;
-							const int32 SourceIndex = SourceZIndex + YIndex * SourcePitch;
-							check( uint32(DestIndex) + SourcePitch <= TextureUpdateData.DataSizeBytes );
-							FMemory::Memcpy((uint8*)&TextureUpdateData.Data[DestIndex], (const uint8*)&(*SourceDataPtr)[SourceIndex], SourcePitch );
-						}
+						FDistanceFieldDownsamplingDataTask& DownsamplingTask = DownsamplingTasks[AllocationIndex];
+						TextureUpdateDataPtr = &UpdateDataArray[AllocationIndex];
+						FDistanceFieldDownsampling::FillDownsamplingTask(Size, Texture->SizeInAtlas, Texture->GetAllocationMin(), Format, DownsamplingTask, *TextureUpdateDataPtr);
 					}
-				}
+					else
+					{
+						DstOffset = Texture->GetAllocationMin();
+					}
+					
+					CopyToUpdateTextureData(Size, FormatSize, *SourceDataPtr, *TextureUpdateDataPtr, DstOffset);
+				}, !GDistanceFieldParallelAtlasUpdate, false);
 
-				UncompressedData.Empty();
-				RHIEndUpdateTexture3D(TextureUpdateData);
+				if (!bRuntimeDownsampling)
+				{
+					RHIEndUpdateTexture3D(*TextureUpdateDataPtr);
+				}
 			}
 		}
 		else
 		{
 			const int32 NumUpdates = LocalPendingAllocations->Num();
-			TArray<FUpdateTexture3DData> UpdateDataArray;
 			UpdateDataArray.Empty(NumUpdates);
 			UpdateDataArray.AddUninitialized(NumUpdates);
 			
 			// Allocate upload buffers
-			for (int32 Idx = 0; Idx < NumUpdates; ++Idx)
+			if (!bRuntimeDownsampling)
 			{
-				FDistanceFieldVolumeTexture* Texture = (*LocalPendingAllocations)[Idx];
-				const FIntVector& Size = Texture->VolumeData.Size;
-				const FUpdateTextureRegion3D UpdateRegion(Texture->AtlasAllocationMin, FIntVector::ZeroValue, Size);
+				for (int32 Idx = 0; Idx < NumUpdates; ++Idx)
+				{
+					FDistanceFieldVolumeTexture* Texture = (*LocalPendingAllocations)[Idx];
 
-				UpdateDataArray[Idx] = RHIBeginUpdateTexture3D(VolumeTextureRHI, 0, UpdateRegion);
+					const FUpdateTextureRegion3D UpdateRegion(Texture->AtlasAllocationMin, FIntVector::ZeroValue, Texture->SizeInAtlas);
 
-				check(!!UpdateDataArray[Idx].Data);
-				check(static_cast<int32>(UpdateDataArray[Idx].RowPitch) >= Size.X * FormatSize);
-				check(static_cast<int32>(UpdateDataArray[Idx].DepthPitch) >= Size.X * Size.Y * FormatSize);
+					UpdateDataArray[Idx] = RHIBeginUpdateTexture3D(VolumeTextureRHI, 0, UpdateRegion);
+
+					check(!!UpdateDataArray[Idx].Data);
+					check(static_cast<int32>(UpdateDataArray[Idx].RowPitch) >= Texture->SizeInAtlas.X * FormatSize);
+					check(static_cast<int32>(UpdateDataArray[Idx].DepthPitch) >= Texture->SizeInAtlas.X * Texture->SizeInAtlas.Y * FormatSize);
+				}
+			}
+			else
+			{
+				DownsamplingTasks.Empty(NumUpdates);
+				DownsamplingTasks.AddDefaulted(NumUpdates);
+
+				for (int32 Idx = 0; Idx < NumUpdates; ++Idx)
+				{
+					FDistanceFieldVolumeTexture* Texture = (*LocalPendingAllocations)[Idx];
+					FDistanceFieldDownsampling::FillDownsamplingTask(Texture->VolumeData.Size, Texture->SizeInAtlas, Texture->GetAllocationMin(), Format, DownsamplingTasks[Idx], UpdateDataArray[Idx]);
+				}
 			}
 
 			// Copy data to upload buffers and decompress source data if necessary
 			ParallelFor(
 				NumUpdates,
-				[this, FormatSize, bDataIsCompressed, &UpdateDataArray, LocalPendingAllocations](int32 Idx)
-			{
-				FUpdateTexture3DData& UpdateData = UpdateDataArray[Idx];
-				FDistanceFieldVolumeTexture* Texture = (*LocalPendingAllocations)[Idx];
-				const FIntVector& Size = Texture->VolumeData.Size;
-
-				TArray<uint8> UncompressedData;
-				const uint32 SrcRowPitch = Size.X * FormatSize;
-				const uint32 SrcDepthPitch = Size.Y * SrcRowPitch;
-				const bool bRowByRowCopy = SrcRowPitch != UpdateData.RowPitch
-					|| SrcDepthPitch != UpdateData.DepthPitch;
-				const uint8* SrcData = Texture->VolumeData.CompressedDistanceFieldVolume.GetData();
-				uint32 SrcDataSize = Texture->VolumeData.CompressedDistanceFieldVolume.Num();
-
-				if (bDataIsCompressed)
+				[this, FormatSize, bDataIsCompressed, bRuntimeDownsampling, &UpdateDataArray, LocalPendingAllocations](int32 Idx)
 				{
-					const int32 UncompressedSize = Size.Z * SrcDepthPitch;
-					UncompressedData.Empty(UncompressedSize);
-					UncompressedData.AddUninitialized(UncompressedSize);
-					verify(FCompression::UncompressMemory(
-						NAME_Zlib,
-						UncompressedData.GetData(),
-						UncompressedSize,
-						SrcData,
-						SrcDataSize));
-					SrcData = UncompressedData.GetData();
-					SrcDataSize = UncompressedSize;
-				}
+					FUpdateTexture3DData& UpdateData = UpdateDataArray[Idx];
+					FDistanceFieldVolumeTexture* Texture = (*LocalPendingAllocations)[Idx];
+					const FIntVector& Size = Texture->VolumeData.Size;
 
-				if (bRowByRowCopy)
-				{
-					const uint32 NumRows = UpdateData.DepthPitch / UpdateData.RowPitch;
-					uint8* DstSliceData = UpdateData.Data;
-					const uint8* SrcSliceData = SrcData;
-					for (uint32 SliceIdx = 0; SliceIdx < UpdateData.UpdateRegion.Depth; ++SliceIdx)
+					if (!bDataIsCompressed)
 					{
-						uint8* DstRowData = DstSliceData;
-						const uint8* SrcRowData = SrcSliceData;
-						for (uint32 RowIdx = 0; RowIdx < NumRows; ++RowIdx)
-						{
-							FMemory::Memcpy(DstRowData, SrcRowData, SrcRowPitch);
-							DstRowData += UpdateData.RowPitch;
-							SrcRowData += SrcRowPitch;
-						}
-						DstSliceData += UpdateData.DepthPitch;
-						SrcSliceData += SrcDepthPitch;
+						CopyToUpdateTextureData(Size, FormatSize, Texture->VolumeData.CompressedDistanceFieldVolume, UpdateDataArray[Idx], FIntVector::ZeroValue);
 					}
-				}
-				else
-				{
-					FMemory::Memcpy(UpdateData.Data, SrcData, SrcDataSize);
-				}
-			},
-				!GDistanceFieldParallelAtlasUpdate);
+					else
+					{
+						const int32 UncompressedSize = Size.X * Size.Y * Size.Z * FormatSize;
+						TArray<uint8> UncompressedData;
+						UncompressedData.Empty(UncompressedSize);
+						UncompressedData.AddUninitialized(UncompressedSize);
+						verify(FCompression::UncompressMemory(NAME_LZ4, UncompressedData.GetData(), UncompressedSize, Texture->VolumeData.CompressedDistanceFieldVolume.GetData(), Texture->VolumeData.CompressedDistanceFieldVolume.Num()));
+						
+						CopyToUpdateTextureData(Size, FormatSize, UncompressedData, UpdateDataArray[Idx], FIntVector::ZeroValue);
+					}
+				}, !GDistanceFieldParallelAtlasUpdate, false);
 
-			// For some RHIs, this has the advantage of reducing transition barriers
-			RHIEndMultiUpdateTexture3D(UpdateDataArray);
+			if (!bRuntimeDownsampling)
+			{
+				// For some RHIs, this has the advantage of reducing transition barriers
+				RHIEndMultiUpdateTexture3D(UpdateDataArray);
+			}
 		}
 
 		CurrentAllocations.Append(*LocalPendingAllocations);
 		LocalPendingAllocations->Empty();
+
+		if (DownsamplingTasks.Num() > 0)
+		{
+			FDistanceFieldDownsampling::DispatchDownsampleTasks(RHICmdList, VolumeTextureUAVRHI, InFeatureLevel, DownsamplingTasks, UpdateDataArray);
+		}
 
 		const double EndTime = FPlatformTime::Seconds();
 		const float UpdateDurationMs = (float)(EndTime - StartTime) * 1000.0f;
@@ -567,7 +754,7 @@ void FDistanceFieldVolumeTextureAtlas::UpdateAllocations()
 			UE_LOG(LogStaticMesh,Verbose,TEXT("FDistanceFieldVolumeTextureAtlas::UpdateAllocations took %.1fms"), UpdateDurationMs);
 		}
 		GDistanceFieldForceAtlasRealloc = 0;
-	}	
+	}
 }
 
 FDistanceFieldVolumeTexture::~FDistanceFieldVolumeTexture()
@@ -628,7 +815,7 @@ FDistanceFieldAsyncQueue* GDistanceFieldAsyncQueue = NULL;
 #if WITH_EDITOR
 
 // DDC key for distance field data, must be changed when modifying the generation code or data format
-#define DISTANCEFIELD_DERIVEDDATA_VER TEXT("E1AE9CB64EF64BA9A5EA17E72C88F9D")
+#define DISTANCEFIELD_DERIVEDDATA_VER TEXT("6CBBF5D788CA4699B140BAEC2A3B6B67")
 
 FString BuildDistanceFieldDerivedDataKey(const FString& InMeshKey)
 {
@@ -667,7 +854,7 @@ void FDistanceFieldVolumeData::CacheDerivedData(const FString& InDDCKey, UStatic
 	TArray<uint8> DerivedData;
 
 	COOK_STAT(auto Timer = DistanceFieldCookStats::UsageStats.TimeSyncWork());
-	if (GetDerivedDataCacheRef().GetSynchronous(*InDDCKey, DerivedData))
+	if (GetDerivedDataCacheRef().GetSynchronous(*InDDCKey, DerivedData, Mesh->GetPathName()))
 	{
 		COOK_STAT(Timer.AddHit(DerivedData.Num()));
 		FMemoryReader Ar(DerivedData, /*bIsPersistent=*/ true);
@@ -733,7 +920,7 @@ public:
 	}
 
 	// FRunnable interface.
-	virtual bool Init() { bIsRunning = true; return true; }
+	virtual bool Init() { return true; }
 	virtual void Exit() { bIsRunning = false; }
 	virtual void Stop() { bForceFinish = true; }
 	virtual uint32 Run();
@@ -742,8 +929,15 @@ public:
 	{
 		check(!bIsRunning);
 
+		// Calling Reset will call Kill which in turn will call Stop and set bForceFinish to true.
+		Thread.Reset();
+
+		// Now we can set bForceFinish to false without being overwritten by the old thread shutting down.
 		bForceFinish = false;
 		Thread.Reset(FRunnableThread::Create(this, *FString::Printf(TEXT("BuildDistanceFieldThread%u"), NextThreadIndex), 0, TPri_Normal, FPlatformAffinity::GetPoolThreadMask()));
+
+		// Set this now before exiting so that IsRunning() returns true without having to wait on the thread to be completely started.
+		bIsRunning = true;
 		NextThreadIndex++;
 	}
 
@@ -766,6 +960,7 @@ private:
 
 FQueuedThreadPool* CreateWorkerThreadPool()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(CreateWorkerThreadPool)
 	const int32 NumThreads = FMath::Max<int32>(FPlatformMisc::NumberOfCoresIncludingHyperthreads() - 2, 1);
 	FQueuedThreadPool* WorkerThreadPool = FQueuedThreadPool::Allocate();
 	WorkerThreadPool->Create(NumThreads, 32 * 1024, TPri_BelowNormal);
@@ -774,9 +969,16 @@ FQueuedThreadPool* CreateWorkerThreadPool()
 
 uint32 FBuildDistanceFieldThreadRunnable::Run()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FBuildDistanceFieldThreadRunnable::Run)
+
 	bool bHasWork = true;
 
-	while (!bForceFinish && bHasWork)
+	// Do not exit right away if no work to do as it often leads to stop and go problems
+	// when tasks are being queued at a slower rate than the processor capability to process them.
+	const uint64 ExitAfterIdleCycle = static_cast<uint64>(10.0 / FPlatformTime::GetSecondsPerCycle64()); // 10s
+
+	uint64 LastWorkCycle = FPlatformTime::Cycles64();
+	while (!bForceFinish &&  (bHasWork || (FPlatformTime::Cycles64() - LastWorkCycle) < ExitAfterIdleCycle))
 	{
 		// LIFO build order, since meshes actually visible in a map are typically loaded last
 		FAsyncDistanceFieldTask* Task = AsyncQueue.TaskQueue.Pop();
@@ -789,11 +991,13 @@ uint32 FBuildDistanceFieldThreadRunnable::Run()
 			}
 
 			AsyncQueue.Build(Task, *WorkerThreadPool);
+			LastWorkCycle = FPlatformTime::Cycles64();
 			bHasWork = true;
 		}
 		else
 		{
 			bHasWork = false;
+			FPlatformProcess::Sleep(.01f);
 		}
 	}
 
@@ -865,6 +1069,8 @@ void FDistanceFieldAsyncQueue::AddTask(FAsyncDistanceFieldTask* Task)
 
 void FDistanceFieldAsyncQueue::BlockUntilBuildComplete(UStaticMesh* StaticMesh, bool bWarnIfBlocked)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FDistanceFieldAsyncQueue::BlockUntilBuildComplete)
+
 	// We will track the wait time here, but only the cycles used.
 	// This function is called whether or not an async task is pending, 
 	// so we have to look elsewhere to properly count how many resources have actually finished building.
@@ -914,6 +1120,7 @@ void FDistanceFieldAsyncQueue::BlockUntilBuildComplete(UStaticMesh* StaticMesh, 
 
 void FDistanceFieldAsyncQueue::BlockUntilAllBuildsComplete()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FDistanceFieldAsyncQueue::BlockUntilAllBuildsComplete)
 	do 
 	{
 		ProcessAsyncTasks();
@@ -925,10 +1132,11 @@ void FDistanceFieldAsyncQueue::BlockUntilAllBuildsComplete()
 void FDistanceFieldAsyncQueue::Build(FAsyncDistanceFieldTask* Task, FQueuedThreadPool& ThreadPool)
 {
 #if WITH_EDITOR
-
-	// Editor 'force delete' can null any UObject pointers which are seen by reference collecting (eg UProperty or serialized)
+	// Editor 'force delete' can null any UObject pointers which are seen by reference collecting (eg FProperty or serialized)
 	if (Task->StaticMesh && Task->GenerateSource)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(FDistanceFieldAsyncQueue::Build)
+
 		const FStaticMeshLODResources& LODModel = Task->GenerateSource->RenderData->LODResources[0];
 
 		MeshUtilities->GenerateSignedDistanceFieldVolumeData(
@@ -964,6 +1172,7 @@ FString FDistanceFieldAsyncQueue::GetReferencerName() const
 
 void FDistanceFieldAsyncQueue::ProcessAsyncTasks()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FDistanceFieldAsyncQueue::ProcessAsyncTasks)
 #if WITH_EDITOR
 	TArray<FAsyncDistanceFieldTask*> LocalCompletedTasks;
 	CompletedTasks.PopAll(LocalCompletedTasks);
@@ -976,16 +1185,23 @@ void FDistanceFieldAsyncQueue::ProcessAsyncTasks()
 
 		ReferencedTasks.Remove(Task);
 
-		// Editor 'force delete' can null any UObject pointers which are seen by reference collecting (eg UProperty or serialized)
+		// Editor 'force delete' can null any UObject pointers which are seen by reference collecting (eg FProperty or serialized)
 		if (Task->StaticMesh)
 		{
 			Task->GeneratedVolumeData->VolumeTexture.Initialize(Task->StaticMesh);
 			FDistanceFieldVolumeData* OldVolumeData = Task->StaticMesh->RenderData->LODResources[0].DistanceFieldData;
 
+			// Renderstates are not initialized between UStaticMesh::PreEditChange() and UStaticMesh::PostEditChange()
+			if (Task->StaticMesh->RenderData->IsInitialized())
 			{
 				// Cause all components using this static mesh to get re-registered, which will recreate their proxies and primitive uniform buffers
 				FStaticMeshComponentRecreateRenderStateContext RecreateRenderStateContext(Task->StaticMesh, false);
 
+				// Assign the new volume data
+				Task->StaticMesh->RenderData->LODResources[0].DistanceFieldData = Task->GeneratedVolumeData;
+			}
+			else
+			{
 				// Assign the new volume data
 				Task->StaticMesh->RenderData->LODResources[0].DistanceFieldData = Task->GeneratedVolumeData;
 			}
@@ -1000,7 +1216,7 @@ void FDistanceFieldAsyncQueue::ProcessAsyncTasks()
 				// Save built distance field volume to DDC
 				FMemoryWriter Ar(DerivedData, /*bIsPersistent=*/ true);
 				Ar << *(Task->StaticMesh->RenderData->LODResources[0].DistanceFieldData);
-				GetDerivedDataCacheRef().Put(*Task->DDCKey, DerivedData);
+				GetDerivedDataCacheRef().Put(*Task->DDCKey, DerivedData, Task->StaticMesh->GetPathName());
 				COOK_STAT(Timer.AddMiss(DerivedData.Num()));
 			}
 		}
@@ -1029,4 +1245,621 @@ void FDistanceFieldAsyncQueue::Shutdown()
 		}
 		FPlatformProcess::Sleep(0.01f);
 	}
+}
+
+FLandscapeTextureAtlas::FLandscapeTextureAtlas(ESubAllocType InSubAllocType)
+	: MaxDownSampleLevel(0)
+	, Generation(0)
+	, SubAllocType(InSubAllocType)
+{}
+
+void FLandscapeTextureAtlas::InitializeIfNeeded()
+{
+	const bool bHeight = SubAllocType == SAT_Height;
+	const uint32 LocalTileSize = bHeight ? GHeightFieldAtlasTileSize : GHFVisibilityAtlasTileSize;
+	const uint32 LocalDimInTiles = bHeight ? GHeightFieldAtlasDimInTiles : GHFVisibilityAtlasDimInTiles;
+	const uint32 LocalDownSampleLevel = bHeight ? GHeightFieldAtlasDownSampleLevel : GHFVisibilityAtlasDownSampleLevel;
+
+	if (!AtlasTextureRHI
+		|| AddrSpaceAllocator.TileSize != LocalTileSize
+		|| AddrSpaceAllocator.DimInTiles != LocalDimInTiles
+		|| MaxDownSampleLevel != LocalDownSampleLevel)
+	{
+		AddrSpaceAllocator.Init(LocalTileSize, 1, LocalDimInTiles);
+
+		for (int32 Idx = 0; Idx < PendingStreamingTextures.Num(); ++Idx)
+		{
+			UTexture2D* Texture = PendingStreamingTextures[Idx];
+			Texture->bForceMiplevelsToBeResident = false;
+		}
+		PendingStreamingTextures.Empty();
+
+		for (TSet<FAllocation>::TConstIterator It(CurrentAllocations); It; ++It)
+		{
+			check(!PendingAllocations.Contains(*It));
+			PendingAllocations.Add(*It);
+		}
+
+		CurrentAllocations.Reset();
+
+		const uint32 SizeX = AddrSpaceAllocator.DimInTexels;
+		const uint32 SizeY = AddrSpaceAllocator.DimInTexels;
+		const uint32 Flags = TexCreate_ShaderResource | TexCreate_UAV;
+		const EPixelFormat Format = bHeight ? PF_R8G8 : PF_G8;
+		FRHIResourceCreateInfo CreateInfo(bHeight ? TEXT("HeightFieldAtlas") : TEXT("VisibilityAtlas"));
+
+		AtlasTextureRHI = RHICreateTexture2D(SizeX, SizeY, Format, 1, 1, Flags, CreateInfo);
+		AtlasUAVRHI = RHICreateUnorderedAccessView(AtlasTextureRHI, 0);
+
+		MaxDownSampleLevel = LocalDownSampleLevel;
+		++Generation;
+	}
+}
+
+void FLandscapeTextureAtlas::AddAllocation(UTexture2D* Texture, uint32 VisibilityChannel)
+{
+	check(Texture);
+
+	FAllocation* Found = CurrentAllocations.Find(Texture);
+	if (Found)
+	{
+		++Found->RefCount;
+		return;
+	}
+
+	Found = FailedAllocations.Find(Texture);
+	if (Found)
+	{
+		++Found->RefCount;
+		return;
+	}
+
+	Found = PendingAllocations.Find(Texture);
+	if (Found)
+	{
+		++Found->RefCount;
+	}
+	else
+	{
+		PendingAllocations.Add(FAllocation(Texture, VisibilityChannel));
+	}
+}
+
+void FLandscapeTextureAtlas::RemoveAllocation(UTexture2D* Texture)
+{
+	FSetElementId Id = PendingAllocations.FindId(Texture);
+	if (Id.IsValidId())
+	{
+		check(PendingAllocations[Id].RefCount);
+		if (!--PendingAllocations[Id].RefCount)
+		{
+			check(!PendingStreamingTextures.Contains(Texture));
+			PendingAllocations.Remove(Id);
+		}
+		return;
+	}
+
+	Id = FailedAllocations.FindId(Texture);
+	if (Id.IsValidId())
+	{
+		check(FailedAllocations[Id].RefCount);
+		if (!--FailedAllocations[Id].RefCount)
+		{
+			check(!PendingStreamingTextures.Contains(Texture));
+			FailedAllocations.Remove(Id);
+		}
+		return;
+	}
+
+	Id = CurrentAllocations.FindId(Texture);
+	if (Id.IsValidId())
+	{
+		FAllocation& Allocation = CurrentAllocations[Id];
+		check(Allocation.RefCount && Allocation.Handle != INDEX_NONE);
+		if (!--Allocation.RefCount)
+		{
+			AddrSpaceAllocator.Free(Allocation.Handle);
+			PendingStreamingTextures.Remove(Texture);
+			CurrentAllocations.Remove(Id);
+		}
+	}
+}
+
+class FUploadLandscapeTextureToAtlasCS : public FGlobalShader
+{
+public:
+	BEGIN_SHADER_PARAMETER_STRUCT(FSharedParameters, )
+		SHADER_PARAMETER(FUintVector4, UpdateRegionOffsetAndSize)
+		SHADER_PARAMETER(FVector4, SourceScaleBias)
+		SHADER_PARAMETER(uint32, SourceMipBias)
+		SHADER_PARAMETER_TEXTURE(Texture2D, SourceTexture)
+		SHADER_PARAMETER_SAMPLER(SamplerState, SourceTextureSampler)
+	END_SHADER_PARAMETER_STRUCT()
+
+	FUploadLandscapeTextureToAtlasCS() = default;
+
+	FUploadLandscapeTextureToAtlasCS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
+		: FGlobalShader(Initializer)
+	{}
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5) && DoesPlatformSupportDistanceFieldShadowing(Parameters.Platform);
+	}
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEX"), ThreadGroupSizeX);
+		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEY"), ThreadGroupSizeY);
+	}
+
+	static constexpr uint32 ThreadGroupSizeX = 8;
+	static constexpr uint32 ThreadGroupSizeY = 8;
+};
+
+class FUploadHeightFieldToAtlasCS : public FUploadLandscapeTextureToAtlasCS
+{
+	DECLARE_GLOBAL_SHADER(FUploadHeightFieldToAtlasCS);
+	SHADER_USE_PARAMETER_STRUCT(FUploadHeightFieldToAtlasCS, FUploadLandscapeTextureToAtlasCS);
+
+	using FPermutationDomain = FShaderPermutationNone;
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
+		SHADER_PARAMETER_STRUCT_INCLUDE(FUploadLandscapeTextureToAtlasCS::FSharedParameters, SharedParams)
+		SHADER_PARAMETER_UAV(RWTexture2D<float2>, RWHeightFieldAtlas)
+	END_SHADER_PARAMETER_STRUCT()
+};
+
+IMPLEMENT_GLOBAL_SHADER(FUploadHeightFieldToAtlasCS, "/Engine/Private/HeightFieldAtlasManagement.usf", "UploadHeightFieldToAtlasCS", SF_Compute);
+
+class FUploadVisibilityToAtlasCS : public FUploadLandscapeTextureToAtlasCS
+{
+	DECLARE_GLOBAL_SHADER(FUploadVisibilityToAtlasCS);
+	SHADER_USE_PARAMETER_STRUCT(FUploadVisibilityToAtlasCS, FUploadLandscapeTextureToAtlasCS);
+
+	using FPermutationDomain = FShaderPermutationNone;
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_STRUCT_INCLUDE(FUploadLandscapeTextureToAtlasCS::FSharedParameters, SharedParams)
+		SHADER_PARAMETER(FVector4, VisibilityChannelMask)
+		SHADER_PARAMETER_UAV(RWTexture2D<float>, RWVisibilityAtlas)
+	END_SHADER_PARAMETER_STRUCT()
+};
+
+IMPLEMENT_GLOBAL_SHADER(FUploadVisibilityToAtlasCS, "/Engine/Private/HeightFieldAtlasManagement.usf", "UploadVisibilityToAtlasCS", SF_Compute);
+
+uint32 FLandscapeTextureAtlas::CalculateDownSampleLevel(uint32 SizeX, uint32 SizeY) const
+{
+	const uint32 TileSize = AddrSpaceAllocator.TileSize;
+
+	for (uint32 CurLevel = 0; CurLevel <= MaxDownSampleLevel; ++CurLevel)
+	{
+		const uint32 DownSampledSizeX = SizeX >> CurLevel;
+		const uint32 DownSampledSizeY = SizeY >> CurLevel;
+
+		if (DownSampledSizeX <= TileSize && DownSampledSizeY <= TileSize)
+		{
+			return CurLevel;
+		}
+	}
+
+	return MaxDownSampleLevel;
+}
+
+void FLandscapeTextureAtlas::UpdateAllocations(FRHICommandListImmediate& RHICmdList, ERHIFeatureLevel::Type InFeatureLevel)
+{
+	InitializeIfNeeded();
+
+	TArray<FPendingUpload, TInlineAllocator<8>> PendingUploads;
+
+	auto AllocSortPred = [](const FAllocation& A, const FAllocation& B)
+	{
+		const int32 SizeA = FMath::Max(A.SourceTexture->GetSizeX(), A.SourceTexture->GetSizeY());
+		const int32 SizeB = FMath::Max(B.SourceTexture->GetSizeX(), B.SourceTexture->GetSizeY());
+		return SizeA < SizeB;
+	};
+
+	for (int32 Idx = 0; Idx < PendingStreamingTextures.Num(); ++Idx)
+	{
+		UTexture2D* SourceTexture = PendingStreamingTextures[Idx];
+		const uint32 SizeX = SourceTexture->GetSizeX();
+		const uint32 SizeY = SourceTexture->GetSizeY();
+		const uint32 DownSampleLevel = CalculateDownSampleLevel(SizeX, SizeY);
+		const uint32 NumMissingMips = SourceTexture->GetNumMips() - SourceTexture->GetCachedNumResidentLODs();
+
+		if (NumMissingMips <= DownSampleLevel)
+		{
+			SourceTexture->bForceMiplevelsToBeResident = false;
+			const uint32 SourceMipBias = DownSampleLevel - NumMissingMips;
+			const FAllocation* Allocation = CurrentAllocations.Find(SourceTexture);
+			check(Allocation && Allocation->Handle != INDEX_NONE);
+			const uint32 VisibilityChannel = Allocation->VisibilityChannel;
+			PendingUploads.Emplace(SourceTexture, SizeX >> DownSampleLevel, SizeY >> DownSampleLevel, SourceMipBias, Allocation->Handle, VisibilityChannel);
+			PendingStreamingTextures.RemoveAtSwap(Idx--);
+		}
+	}
+
+	if (PendingAllocations.Num())
+	{
+		PendingAllocations.Sort(AllocSortPred);
+		bool bAllocFailed = false;
+
+		for (TSet<FAllocation>::TConstIterator It(PendingAllocations); It; ++It)
+		{
+			FAllocation TmpAllocation = *It;
+
+			if (!bAllocFailed)
+			{
+				UTexture2D* SourceTexture = TmpAllocation.SourceTexture;
+				const uint32 SizeX = SourceTexture->GetSizeX();
+				const uint32 SizeY = SourceTexture->GetSizeY();
+				const uint32 DownSampleLevel = CalculateDownSampleLevel(SizeX, SizeY);
+				const uint32 DownSampledSizeX = SizeX >> DownSampleLevel;
+				const uint32 DownSampledSizeY = SizeY >> DownSampleLevel;
+				const uint32 Handle = AddrSpaceAllocator.Alloc(DownSampledSizeX, DownSampledSizeY);
+				const uint32 VisibilityChannel = TmpAllocation.VisibilityChannel;
+
+				if (Handle == INDEX_NONE)
+				{
+					FailedAllocations.Add(TmpAllocation);
+					bAllocFailed = true;
+					continue;
+				}
+
+				const uint32 NumMissingMips = SourceTexture->GetNumMips() - SourceTexture->GetCachedNumResidentLODs();
+				const uint32 SourceMipBias = NumMissingMips > DownSampleLevel ? 0 : DownSampleLevel - NumMissingMips;
+
+				if (NumMissingMips > DownSampleLevel)
+				{
+					SourceTexture->bForceMiplevelsToBeResident = true;
+					check(!PendingStreamingTextures.Contains(SourceTexture));
+					PendingStreamingTextures.Add(SourceTexture);
+				}
+
+				TmpAllocation.Handle = Handle;
+				CurrentAllocations.Add(TmpAllocation);
+				PendingUploads.Emplace(SourceTexture, DownSampledSizeX, DownSampledSizeY, SourceMipBias, Handle, VisibilityChannel);
+			}
+			else
+			{
+				FailedAllocations.Add(TmpAllocation);
+			}
+		}
+
+		if (bAllocFailed)
+		{
+			FailedAllocations.Sort(AllocSortPred);
+		}
+		PendingAllocations.Empty();
+	}
+
+	if (FailedAllocations.Num())
+	{
+		for (TSet<FAllocation>::TIterator It(FailedAllocations); It; ++It)
+		{
+			FAllocation TmpAllocation = *It;
+			UTexture2D* SourceTexture = TmpAllocation.SourceTexture;
+			const uint32 SizeX = SourceTexture->GetSizeX();
+			const uint32 SizeY = SourceTexture->GetSizeY();
+			const uint32 DownSampleLevel = CalculateDownSampleLevel(SizeX, SizeY);
+			const uint32 DownSampledSizeX = SizeX >> DownSampleLevel;
+			const uint32 DownSampledSizeY = SizeY >> DownSampleLevel;
+			const uint32 Handle = AddrSpaceAllocator.Alloc(DownSampledSizeX, DownSampledSizeY);
+			const uint32 VisibilityChannel = TmpAllocation.VisibilityChannel;
+
+			if (Handle == INDEX_NONE)
+			{
+				break;
+			}
+
+			const uint32 NumMissingMips = SourceTexture->GetNumMips() - SourceTexture->GetCachedNumResidentLODs();
+			const uint32 SourceMipBias = NumMissingMips > DownSampleLevel ? 0 : DownSampleLevel - NumMissingMips;
+
+			if (NumMissingMips > DownSampleLevel)
+			{
+				SourceTexture->bForceMiplevelsToBeResident = true;
+				check(!PendingStreamingTextures.Contains(SourceTexture));
+				PendingStreamingTextures.Add(SourceTexture);
+			}
+
+			TmpAllocation.Handle = Handle;
+			CurrentAllocations.Add(TmpAllocation);
+			PendingUploads.Emplace(SourceTexture, DownSampledSizeX, DownSampledSizeY, SourceMipBias, Handle, VisibilityChannel);
+			It.RemoveCurrent();
+		}
+	}
+
+	if (PendingUploads.Num())
+	{
+		FRDGBuilder GraphBuilder(RHICmdList);
+
+		RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, AtlasUAVRHI);
+
+		if (SubAllocType == SAT_Height)
+		{
+			TShaderMapRef<FUploadHeightFieldToAtlasCS> ComputeShader(GetGlobalShaderMap(InFeatureLevel));
+			for (int32 Idx = 0; Idx < PendingUploads.Num(); ++Idx)
+			{
+				typename FUploadHeightFieldToAtlasCS::FParameters* Parameters = GraphBuilder.AllocParameters<typename FUploadHeightFieldToAtlasCS::FParameters>();
+				const FIntPoint UpdateRegion = PendingUploads[Idx].SetShaderParameters(Parameters, *this);
+				const bool bNeedBarrier = Idx > 0;
+				GraphBuilder.AddPass(
+					RDG_EVENT_NAME("UploadHeightFieldToAtlas"),
+					Parameters,
+					ERDGPassFlags::Compute,
+					[Parameters, ComputeShader, UpdateRegion, bNeedBarrier](FRHICommandList& CmdList)
+				{
+					if (bNeedBarrier)
+					{
+						CmdList.TransitionResource(EResourceTransitionAccess::ERWNoBarrier, EResourceTransitionPipeline::EComputeToCompute, Parameters->RWHeightFieldAtlas);
+					}
+					FComputeShaderUtils::Dispatch(CmdList, ComputeShader, *Parameters, FIntVector(UpdateRegion.X, UpdateRegion.Y, 1));
+				});
+			}
+		}
+		else
+		{
+			TShaderMapRef<FUploadVisibilityToAtlasCS> ComputeShader(GetGlobalShaderMap(InFeatureLevel));
+			for (int32 Idx = 0; Idx < PendingUploads.Num(); ++Idx)
+			{
+				typename FUploadVisibilityToAtlasCS::FParameters* Parameters = GraphBuilder.AllocParameters<typename FUploadVisibilityToAtlasCS::FParameters>();
+				const FIntPoint UpdateRegion = PendingUploads[Idx].SetShaderParameters(Parameters, *this);
+				const bool bNeedBarrier = Idx > 0;
+				GraphBuilder.AddPass(
+					RDG_EVENT_NAME("UploadVisibilityToAtlas"),
+					Parameters,
+					ERDGPassFlags::Compute,
+					[Parameters, ComputeShader, UpdateRegion, bNeedBarrier](FRHICommandList& CmdList)
+				{
+					if (bNeedBarrier)
+					{
+						CmdList.TransitionResource(EResourceTransitionAccess::ERWNoBarrier, EResourceTransitionPipeline::EComputeToCompute, Parameters->RWVisibilityAtlas);
+					}
+					FComputeShaderUtils::Dispatch(CmdList, ComputeShader, *Parameters, FIntVector(UpdateRegion.X, UpdateRegion.Y, 1));
+				});
+			}
+		}
+
+		GraphBuilder.Execute();
+		RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToGfx, AtlasUAVRHI);
+	}
+}
+
+uint32 FLandscapeTextureAtlas::GetAllocationHandle(UTexture2D* Texture) const
+{
+	const FAllocation* Allocation = CurrentAllocations.Find(Texture);
+	return Allocation ? Allocation->Handle : INDEX_NONE;
+}
+
+FVector4 FLandscapeTextureAtlas::GetAllocationScaleBias(uint32 Handle) const
+{
+	return AddrSpaceAllocator.GetScaleBias(Handle);
+}
+
+void FLandscapeTextureAtlas::FSubAllocator::Init(uint32 InTileSize, uint32 InBorderSize, uint32 InDimInTiles)
+{
+	check(InDimInTiles && !(InDimInTiles & (InDimInTiles - 1)));
+
+	TileSize = InTileSize;
+	BorderSize = InBorderSize;
+	TileSizeWithBorder = InTileSize + 2 * InBorderSize;
+	DimInTiles = InDimInTiles;
+	DimInTilesShift = FMath::CountBits(InDimInTiles - 1);
+	DimInTilesMask = InDimInTiles - 1;
+	DimInTexels = InDimInTiles * TileSizeWithBorder;
+	MaxNumTiles = InDimInTiles * InDimInTiles;
+	
+	TexelSize = 1.f / DimInTexels;
+	TileScale = TileSize * TexelSize;
+
+	LevelOffsets.Empty();
+	MarkerQuadTree.Empty();
+	SubAllocInfos.Empty();
+
+	uint32 NumBits = 0;
+	for (uint32 Level = 1; Level <= DimInTiles; Level <<= 1)
+	{
+		const uint32 NumQuadsInLevel = Level * Level;
+		LevelOffsets.Add(NumBits);
+		NumBits += NumQuadsInLevel;
+	}
+	MarkerQuadTree.Add(false, NumBits);
+}
+
+uint32 FLandscapeTextureAtlas::FSubAllocator::Alloc(uint32 SizeX, uint32 SizeY)
+{
+	const uint32 NumTiles1D = FMath::DivideAndRoundUp(FMath::Max(SizeX, SizeY), TileSize);
+	check(NumTiles1D <= DimInTiles);
+	const uint32 NumLevels = LevelOffsets.Num();
+	const uint32 Level = NumLevels - FMath::CeilLogTwo(NumTiles1D) - 1;
+	const uint32 LevelOffset = LevelOffsets[Level];
+	const uint32 QuadsInLevel1D = 1u << Level;
+	const uint32 SearchEnd = LevelOffset + QuadsInLevel1D * QuadsInLevel1D;
+
+	uint32 QuadIdx = LevelOffset;
+	for (; QuadIdx < SearchEnd; ++QuadIdx)
+	{
+		if (!MarkerQuadTree[QuadIdx])
+		{
+			break;
+		}
+	}
+
+	if (QuadIdx != SearchEnd)
+	{
+		const uint32 QuadIdxInLevel = QuadIdx - LevelOffset;
+		
+		uint32 ParentLevel = Level;
+		uint32 ParentQuadIdxInLevel = QuadIdxInLevel;
+		for (; ParentLevel != (uint32)-1; --ParentLevel)
+		{
+			const uint32 ParentLevelOffset = LevelOffsets[ParentLevel];
+			const uint32 ParentQuadIdx = ParentLevelOffset + ParentQuadIdxInLevel;
+			FBitReference Marker = MarkerQuadTree[ParentQuadIdx];
+			if (Marker)
+			{
+				break;
+			}
+			Marker = true;
+			ParentQuadIdxInLevel >>= 2;
+		}
+
+		uint32 ChildLevel = Level + 1;
+		uint32 ChildQuadIdxInLevel = QuadIdxInLevel << 2;
+		uint32 NumChildren = 4;
+		for (; ChildLevel < NumLevels; ++ChildLevel)
+		{
+			const uint32 ChildQuadIdx = ChildQuadIdxInLevel + LevelOffsets[ChildLevel];
+			for (uint32 Idx = 0; Idx < NumChildren; ++Idx)
+			{
+				check(!MarkerQuadTree[ChildQuadIdx + Idx]);
+				MarkerQuadTree[ChildQuadIdx + Idx] = true;
+			}
+			ChildQuadIdxInLevel <<= 2;
+			NumChildren <<= 2;
+		}
+		
+		const uint32 QuadX = FMath::ReverseMortonCode2(QuadIdxInLevel);
+		const uint32 QuadY = FMath::ReverseMortonCode2(QuadIdxInLevel >> 1);
+		const uint32 QuadSizeInTiles1D = DimInTiles >> Level;
+		const uint32 TileX = QuadX * QuadSizeInTiles1D;
+		const uint32 TileY = QuadY * QuadSizeInTiles1D;
+
+		FSubAllocInfo SubAllocInfo;
+		SubAllocInfo.Level = Level;
+		SubAllocInfo.QuadIdx = QuadIdx;
+		SubAllocInfo.UVScaleBias.X = SizeX * TexelSize;
+		SubAllocInfo.UVScaleBias.Y = SizeY * TexelSize;
+		SubAllocInfo.UVScaleBias.Z = TileX / (float)DimInTiles + BorderSize * TexelSize;
+		SubAllocInfo.UVScaleBias.W = TileY / (float)DimInTiles + BorderSize * TexelSize;
+
+		return SubAllocInfos.Add(SubAllocInfo);
+	}
+
+	return INDEX_NONE;
+}
+
+void FLandscapeTextureAtlas::FSubAllocator::Free(uint32 Handle)
+{
+	check(SubAllocInfos.IsValidIndex(Handle));
+
+	const FSubAllocInfo SubAllocInfo = SubAllocInfos[Handle];
+	SubAllocInfos.RemoveAt(Handle);
+
+	const uint32 Level = SubAllocInfo.Level;
+	const uint32 QuadIdx = SubAllocInfo.QuadIdx;
+	
+	uint32 ChildLevel = Level;
+	uint32 ChildIdxInLevel = QuadIdx - LevelOffsets[Level];
+	uint32 NumChildren = 1;
+	const uint32 NumLevels = LevelOffsets.Num();
+	for (; ChildLevel < NumLevels; ++ChildLevel)
+	{
+		const uint32 ChildIdx = ChildIdxInLevel + LevelOffsets[ChildLevel];
+		for (uint32 Idx = 0; Idx < NumChildren; ++Idx)
+		{
+			check(MarkerQuadTree[ChildIdx + Idx]);
+			MarkerQuadTree[ChildIdx + Idx] = false;
+		}
+		ChildIdxInLevel <<= 2;
+		NumChildren <<= 2;
+	}
+
+	uint32 TestIdxInLevel = (QuadIdx - LevelOffsets[Level]) & ~3u;
+	uint32 ParentLevel = Level - 1;
+	for (; ParentLevel != (uint32)-1; --ParentLevel)
+	{
+		const uint32 TestIdx = TestIdxInLevel + LevelOffsets[ParentLevel + 1];
+		const bool bParentFree = !MarkerQuadTree[TestIdx] && !MarkerQuadTree[TestIdx + 1] && !MarkerQuadTree[TestIdx + 2] && !MarkerQuadTree[TestIdx + 3];
+		if (!bParentFree)
+		{
+			break;
+		}
+		const uint32 ParentIdxInLevel = TestIdxInLevel >> 2;
+		const uint32 ParentIdx = ParentIdxInLevel + LevelOffsets[ParentLevel];
+		MarkerQuadTree[ParentIdx] = false;
+		TestIdxInLevel = ParentIdxInLevel & ~3u;
+	}
+}
+
+FVector4 FLandscapeTextureAtlas::FSubAllocator::GetScaleBias(uint32 Handle) const
+{
+	check(SubAllocInfos.IsValidIndex(Handle));
+	return SubAllocInfos[Handle].UVScaleBias;
+}
+
+FIntPoint FLandscapeTextureAtlas::FSubAllocator::GetStartOffset(uint32 Handle) const
+{
+	check(SubAllocInfos.IsValidIndex(Handle));
+	const FSubAllocInfo& Info = SubAllocInfos[Handle];
+	const uint32 QuadIdxInLevel = Info.QuadIdx - LevelOffsets[Info.Level];
+	const uint32 QuadX = FMath::ReverseMortonCode2(QuadIdxInLevel);
+	const uint32 QuadY = FMath::ReverseMortonCode2(QuadIdxInLevel >> 1);
+	const uint32 QuadSizeInTexels1D = (DimInTiles >> Info.Level) * TileSizeWithBorder;	
+	return FIntPoint(QuadX * QuadSizeInTexels1D, QuadY * QuadSizeInTexels1D);
+}
+
+FLandscapeTextureAtlas::FAllocation::FAllocation()
+	: SourceTexture(nullptr)
+	, Handle(INDEX_NONE)
+	, VisibilityChannel(0)
+	, RefCount(0)
+{}
+
+FLandscapeTextureAtlas::FAllocation::FAllocation(UTexture2D* InTexture, uint32 InVisibilityChannel)
+	: SourceTexture(InTexture)
+	, Handle(INDEX_NONE)
+	, VisibilityChannel(InVisibilityChannel)
+	, RefCount(1)
+{}
+
+FLandscapeTextureAtlas::FPendingUpload::FPendingUpload(UTexture2D* Texture, uint32 SizeX, uint32 SizeY, uint32 MipBias, uint32 InHandle, uint32 Channel)
+	: SourceTexture(Texture->Resource->TextureRHI)
+	, SizesAndMipBias(FIntVector(SizeX, SizeY, MipBias))
+	, VisibilityChannel(Channel)
+	, Handle(InHandle)
+{}
+
+FIntPoint FLandscapeTextureAtlas::FPendingUpload::SetShaderParameters(void* ParamsPtr, const FLandscapeTextureAtlas& Atlas) const
+{
+	if (Atlas.SubAllocType == SAT_Height)
+	{
+		typename FUploadHeightFieldToAtlasCS::FParameters* Params = (typename FUploadHeightFieldToAtlasCS::FParameters*)ParamsPtr;
+		Params->RWHeightFieldAtlas = Atlas.AtlasUAVRHI;
+		return SetCommonShaderParameters(&Params->SharedParams, Atlas);
+	}
+	else
+	{
+		typename FUploadVisibilityToAtlasCS::FParameters* Params = (typename FUploadVisibilityToAtlasCS::FParameters*)ParamsPtr;
+		FVector4 ChannelMask(ForceInitToZero);
+		ChannelMask[VisibilityChannel] = 1.f;
+		Params->VisibilityChannelMask = ChannelMask;
+		Params->RWVisibilityAtlas = Atlas.AtlasUAVRHI;
+		return SetCommonShaderParameters(&Params->SharedParams, Atlas);
+	}
+}
+
+FIntPoint FLandscapeTextureAtlas::FPendingUpload::SetCommonShaderParameters(void* ParamsPtr, const FLandscapeTextureAtlas& Atlas) const
+{
+	const uint32 DownSampledSizeX = SizesAndMipBias.X;
+	const uint32 DownSampledSizeY = SizesAndMipBias.Y;
+	const uint32 SourceMipBias = SizesAndMipBias.Z;
+	const float InvDownSampledSizeX = 1.f / DownSampledSizeX;
+	const float InvDownSampledSizeY = 1.f / DownSampledSizeY;
+	const uint32 BorderSize = Atlas.AddrSpaceAllocator.BorderSize;
+	const uint32 UpdateRegionSizeX = DownSampledSizeX + 2 * BorderSize;
+	const uint32 UpdateRegionSizeY = DownSampledSizeY + 2 * BorderSize;
+	const FIntPoint StartOffset = Atlas.AddrSpaceAllocator.GetStartOffset(Handle);
+
+	typename FUploadLandscapeTextureToAtlasCS::FSharedParameters* CommonParams = (typename FUploadLandscapeTextureToAtlasCS::FSharedParameters*)ParamsPtr;
+	CommonParams->UpdateRegionOffsetAndSize = FUintVector4(StartOffset.X, StartOffset.Y, UpdateRegionSizeX, UpdateRegionSizeY);
+	CommonParams->SourceScaleBias = FVector4(InvDownSampledSizeX, InvDownSampledSizeY, (.5f - BorderSize) * InvDownSampledSizeX, (.5f - BorderSize) * InvDownSampledSizeY);
+	CommonParams->SourceMipBias = SourceMipBias;
+	CommonParams->SourceTexture = SourceTexture;
+	CommonParams->SourceTextureSampler = TStaticSamplerState<SF_Bilinear>::GetRHI();
+
+	const uint32 NumGroupsX = FMath::DivideAndRoundUp(UpdateRegionSizeX, FUploadLandscapeTextureToAtlasCS::ThreadGroupSizeX);
+	const uint32 NumGroupsY = FMath::DivideAndRoundUp(UpdateRegionSizeY, FUploadLandscapeTextureToAtlasCS::ThreadGroupSizeY);
+	return FIntPoint(NumGroupsX, NumGroupsY);
 }

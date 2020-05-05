@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HttpModule.h"
 #include "Misc/ConfigCacheIni.h"
@@ -47,6 +47,11 @@ void FHttpModule::UpdateConfigs()
 
 	AllowedDomains.Empty();
 	GConfig->GetArray(TEXT("HTTP"), TEXT("AllowedDomains"), AllowedDomains, GEngineIni);
+
+	if (HttpManager != nullptr)
+	{
+		HttpManager->UpdateConfigs();
+	}
 }
 
 void FHttpModule::StartupModule()
@@ -85,7 +90,7 @@ void FHttpModule::StartupModule()
 	FPlatformHttp::Init();
 
 	HttpManager = FPlatformHttp::CreatePlatformHttpManager();
-	if (NULL == HttpManager)
+	if (nullptr == HttpManager)
 	{
 		// platform does not provide specific HTTP manager, use generic one
 		HttpManager = new FHttpManager();

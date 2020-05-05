@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "SFilterList.h"
@@ -24,6 +24,7 @@
 #include "AssetToolsModule.h"
 #include "FrontendFilters.h"
 #include "ContentBrowserFrontEndFilterExtension.h"
+#include "Misc/BlacklistNames.h"
 
 #define LOCTEXT_NAMESPACE "ContentBrowser"
 
@@ -108,6 +109,7 @@ class SFilter : public SCompoundWidget
 {
 public:
 	DECLARE_DELEGATE_OneParam( FOnRequestRemove, const TSharedRef<SFilter>& /*FilterToRemove*/ );
+	DECLARE_DELEGATE_OneParam( FOnRequestRemoveAllButThis, const TSharedRef<SFilter>& /*FilterToKeep*/ );
 	DECLARE_DELEGATE_OneParam( FOnRequestEnableOnly, const TSharedRef<SFilter>& /*FilterToEnable*/ );
 	DECLARE_DELEGATE( FOnRequestEnableAll );
 	DECLARE_DELEGATE( FOnRequestDisableAll );
@@ -139,6 +141,9 @@ public:
 		/** Invoked when a request to remove all filters originated from within this filter */
 		SLATE_EVENT( FOnRequestRemoveAll, OnRequestRemoveAll )
 
+		/** Invoked when a request to remove all filters originated from within this filter */
+		SLATE_EVENT( FOnRequestRemoveAllButThis, OnRequestRemoveAllButThis )
+
 	SLATE_END_ARGS()
 
 	/** Constructs this widget with InArgs */
@@ -152,6 +157,7 @@ public:
 		OnRequestEnableAll = InArgs._OnRequestEnableAll;
 		OnRequestDisableAll = InArgs._OnRequestDisableAll;
 		OnRequestRemoveAll = InArgs._OnRequestRemoveAll;
+		OnRequestRemoveAllButThis = InArgs._OnRequestRemoveAllButThis;
 		FrontendFilter = InArgs._FrontendFilter;
 
 		// Get the tooltip and color of the type represented by this filter
@@ -303,7 +309,7 @@ private:
 				);
 
 			MenuBuilder.AddMenuEntry(
-				FText::Format( LOCTEXT("EnableOnlyThisFilter", "Enable this only: {0}"), GetFilterName() ),
+				FText::Format( LOCTEXT("EnableOnlyThisFilter", "Enable Only This: {0}"), GetFilterName() ),
 				LOCTEXT("EnableOnlyThisFilterTooltip", "Enable only this filter from the list."),
 				FSlateIcon(),
 				FUIAction( FExecuteAction::CreateSP(this, &SFilter::EnableOnly) )
@@ -334,6 +340,13 @@ private:
 				FSlateIcon(),
 				FUIAction( FExecuteAction::CreateSP(this, &SFilter::RemoveAllFilters) )
 				);
+
+			MenuBuilder.AddMenuEntry(
+				FText::Format( LOCTEXT("RemoveAllButThisFilter", "Remove All But This: {0}"), GetFilterName() ),
+				LOCTEXT("RemoveAllButThisFilterTooltip", "Remove all other filters except this one from the list."),
+				FSlateIcon(),
+				FUIAction( FExecuteAction::CreateSP(this, &SFilter::RemoveAllButThis) )
+				);
 		}
 		MenuBuilder.EndSection();
 
@@ -350,6 +363,13 @@ private:
 	{
 		TSharedRef<SFilter> Self = SharedThis(this);
 		OnRequestRemove.ExecuteIfBound( Self );
+	}
+
+	/** Remove all but this filter from the filter list. */
+	void RemoveAllButThis()
+	{
+		TSharedRef<SFilter> Self = SharedThis(this);
+		OnRequestRemoveAllButThis.ExecuteIfBound(Self);
 	}
 
 	/** Enables only this filter from the filter list */
@@ -442,6 +462,9 @@ private:
 
 	/** Invoked when a request to remove all filters originated from within this filter */
 	FOnRequestDisableAll OnRequestRemoveAll;
+
+	/** Invoked when a request to remove all filters except this one originated from within this filter */
+	FOnRequestRemoveAllButThis OnRequestRemoveAllButThis;
 
 	/** true when this filter should be applied to the search */
 	bool bEnabled;
@@ -645,10 +668,16 @@ TSharedRef<SWidget> SFilterList::ExternalMakeAddFilterMenu(EAssetTypeCategories:
 
 void SFilterList::EnableAllFilters()
 {
-	for (auto FilterIt = Filters.CreateConstIterator(); FilterIt; ++FilterIt)
+	for (const TSharedRef<SFilter>& Filter : Filters)
 	{
-		(*FilterIt)->SetEnabled(true);
+		Filter->SetEnabled(true, false);
+		if (const TSharedPtr<FFrontendFilter>& FrontendFilter = Filter->GetFrontendFilter())
+		{
+			SetFrontendFilterActive(FrontendFilter.ToSharedRef(), true);
+		}
 	}
+
+	OnFilterChanged.ExecuteIfBound();
 }
 
 void SFilterList::DisableAllFilters()
@@ -656,6 +685,10 @@ void SFilterList::DisableAllFilters()
 	for (const TSharedRef<SFilter>& Filter : Filters)
 	{
 		Filter->SetEnabled(false, false);
+		if (const TSharedPtr<FFrontendFilter>& FrontendFilter = Filter->GetFrontendFilter())
+		{
+			SetFrontendFilterActive(FrontendFilter.ToSharedRef(), false);
+		}
 	}
 
 	OnFilterChanged.ExecuteIfBound();
@@ -680,6 +713,29 @@ void SFilterList::RemoveAllFilters()
 		// Notify that a filter has changed
 		OnFilterChanged.ExecuteIfBound();
 	}
+}
+
+void SFilterList::RemoveAllButThis(const TSharedRef<SFilter>& FilterToKeep)
+{
+	for (const TSharedRef<SFilter>& Filter : Filters)
+	{
+		if (Filter == FilterToKeep)
+		{
+			continue;
+		}
+
+		if (const TSharedPtr<FFrontendFilter>& FrontendFilter = Filter->GetFrontendFilter())
+		{
+			SetFrontendFilterActive(FrontendFilter.ToSharedRef(), false);
+		}
+	}
+
+	FilterBox->ClearChildren();
+	Filters.Empty();
+
+	AddFilter(FilterToKeep);
+
+	OnFilterChanged.ExecuteIfBound();
 }
 
 void SFilterList::DisableFiltersThatHideAssets(const TArray<FAssetData>& AssetDataList)
@@ -949,7 +1005,8 @@ TSharedRef<SFilter> SFilterList::AddFilter(const TWeakPtr<IAssetTypeActions>& As
 		.OnRequestEnableOnly(this, &SFilterList::EnableOnlyThisFilter)
 		.OnRequestEnableAll(this, &SFilterList::EnableAllFilters)
 		.OnRequestDisableAll(this, &SFilterList::DisableAllFilters)
-		.OnRequestRemoveAll(this, &SFilterList::RemoveAllFilters);
+		.OnRequestRemoveAll(this, &SFilterList::RemoveAllFilters)
+		.OnRequestRemoveAllButThis(this, &SFilterList::RemoveAllButThis);
 
 	AddFilter( NewFilter );
 
@@ -963,9 +1020,11 @@ TSharedRef<SFilter> SFilterList::AddFilter(const TSharedRef<FFrontendFilter>& Fr
 		.FrontendFilter(FrontendFilter)
 		.OnFilterChanged( this, &SFilterList::FrontendFilterChanged, FrontendFilter )
 		.OnRequestRemove(this, &SFilterList::RemoveFilterAndUpdate)
+		.OnRequestEnableOnly(this, &SFilterList::EnableOnlyThisFilter)
 		.OnRequestEnableAll(this, &SFilterList::EnableAllFilters)
 		.OnRequestDisableAll(this, &SFilterList::DisableAllFilters)
-		.OnRequestRemoveAll(this, &SFilterList::RemoveAllFilters);
+		.OnRequestRemoveAll(this, &SFilterList::RemoveAllFilters)
+		.OnRequestRemoveAllButThis(this, &SFilterList::RemoveAllButThis);
 
 	AddFilter( NewFilter );
 
@@ -1015,6 +1074,10 @@ void SFilterList::EnableOnlyThisFilter(const TSharedRef<SFilter>& FilterToEnable
 	{
 		bool bEnable = Filter == FilterToEnable;
 		Filter->SetEnabled(bEnable, /*ExecuteOnFilterChange*/false);
+		if (const TSharedPtr<FFrontendFilter>& FrontendFilter = Filter->GetFrontendFilter())
+		{
+			SetFrontendFilterActive(FrontendFilter.ToSharedRef(), bEnable);
+		}
 	}
 
 	OnFilterChanged.ExecuteIfBound();
@@ -1133,7 +1196,7 @@ void SFilterList::CreateOtherFiltersMenuCategory(FMenuBuilder& MenuBuilder, TSha
 	}
 }
 
-bool IsFilteredByPicker(TArray<UClass*> FilterClassList, UClass* TestClass)
+bool IsFilteredByPicker(const TArray<UClass*>& FilterClassList, UClass* TestClass)
 {
 	if (FilterClassList.Num() == 0)
 	{
@@ -1205,6 +1268,8 @@ TSharedRef<SWidget> SFilterList::MakeAddFilterMenu(EAssetTypeCategories::Type Me
 	};
 	AssetTypeActionsList.Sort( FCompareIAssetTypeActions() );
 
+	TSharedRef<FBlacklistNames> AssetClassBlacklist = AssetToolsModule.Get().GetAssetClassBlacklist();
+
 	// For every asset type, move it into all the categories it should appear in
 	for (int32 ClassIdx = 0; ClassIdx < AssetTypeActionsList.Num(); ++ClassIdx)
 	{
@@ -1214,7 +1279,8 @@ TSharedRef<SWidget> SFilterList::MakeAddFilterMenu(EAssetTypeCategories::Type Me
 			TSharedPtr<IAssetTypeActions> TypeActions = WeakTypeActions.Pin();
 			if ( ensure(TypeActions.IsValid()) && TypeActions->CanFilter() )
 			{
-				if(!IsFilteredByPicker(InitialClassFilters, TypeActions->GetSupportedClass()))
+				UClass* SupportedClass = TypeActions->GetSupportedClass();
+				if ((!SupportedClass || AssetClassBlacklist->PassesFilter(SupportedClass->GetFName())) && !IsFilteredByPicker(InitialClassFilters, SupportedClass))
 				{
 					for ( auto MenuIt = CategoryToMenuMap.CreateIterator(); MenuIt; ++MenuIt )
 					{
@@ -1439,6 +1505,7 @@ void SFilterList::GetTypeActionsForCategory(EAssetTypeCategories::Type Category,
 	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
 	TArray<TWeakPtr<IAssetTypeActions>> AssetTypeActionsList;
 	AssetToolsModule.Get().GetAssetTypeActionsList(AssetTypeActionsList);
+	TSharedRef<FBlacklistNames> AssetClassBlacklist = AssetToolsModule.Get().GetAssetClassBlacklist();
 
 	// Find all asset type actions that match the category
 	for (int32 ClassIdx = 0; ClassIdx < AssetTypeActionsList.Num(); ++ClassIdx)
@@ -1448,7 +1515,10 @@ void SFilterList::GetTypeActionsForCategory(EAssetTypeCategories::Type Category,
 
 		if (ensure(AssetTypeActions.IsValid()) && AssetTypeActions->CanFilter() && AssetTypeActions->GetCategories() & Category)
 		{
-			TypeActions.Add(WeakTypeActions);
+			if (AssetTypeActions->GetSupportedClass() == nullptr || AssetClassBlacklist->PassesFilter(AssetTypeActions->GetSupportedClass()->GetFName()))
+			{
+				TypeActions.Add(WeakTypeActions);
+			}
 		}
 	}
 }

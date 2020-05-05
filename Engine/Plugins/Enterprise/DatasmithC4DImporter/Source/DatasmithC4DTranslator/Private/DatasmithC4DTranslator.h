@@ -1,10 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
-#include "Translators/DatasmithTranslator.h"
 #include "DatasmithC4DImporter.h"
 #include "DatasmithC4DImportOptions.h"
+#include "DatasmithTranslator.h"
+
 #include "CoreMinimal.h"
 
 class FDatasmithC4DTranslator : public IDatasmithTranslator
@@ -12,7 +13,6 @@ class FDatasmithC4DTranslator : public IDatasmithTranslator
 public:
 	virtual FName GetFName() const override { return "DatasmithC4DTranslator"; };
 
-	// IDatasmithTranslator interface
 #ifndef _MELANGE_SDK_
 	virtual void Initialize(FDatasmithTranslatorCapabilities& OutCapabilities) override { OutCapabilities.bIsEnabled = false; }
 #else
@@ -24,9 +24,11 @@ public:
 	virtual bool LoadStaticMesh(const TSharedRef<IDatasmithMeshElement> MeshElement, FDatasmithMeshElementPayload& OutMeshPayload) override;
 	virtual bool LoadLevelSequence(const TSharedRef<IDatasmithLevelSequenceElement> LevelSequenceElement, FDatasmithLevelSequencePayload& OutLevelSequencePayload) override;
 
-	virtual void GetSceneImportOptions(TArray<TStrongObjectPtr<UObject>>& Options) override;
-	virtual void SetSceneImportOptions(TArray<TStrongObjectPtr<UObject>>& Options) override;
-	//~ End IDatasmithTranslator interface
+	virtual void GetSceneImportOptions(TArray<TStrongObjectPtr<UDatasmithOptionsBase>>& Options) override;
+	virtual void SetSceneImportOptions(TArray<TStrongObjectPtr<UDatasmithOptionsBase>>& Options) override;
+
+private:
+	TStrongObjectPtr<UDatasmithC4DImportOptions>& GetOrCreateC4DImportOptions();
 
 private:
 	TStrongObjectPtr<UDatasmithC4DImportOptions> ImportOptions;

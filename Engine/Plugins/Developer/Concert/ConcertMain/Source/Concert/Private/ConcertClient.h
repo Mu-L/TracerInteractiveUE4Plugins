@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -64,6 +64,7 @@ public:
 	virtual bool IsAutoConnecting() const override;
 	virtual void StartAutoConnect() override;
 	virtual void StopAutoConnect() override;
+	virtual FConcertConnectionError GetLastConnectionError() const override;
 
 	virtual TArray<FConcertServerInfo> GetKnownServers() const override;
 	virtual FSimpleMulticastDelegate& OnKnownServersUpdated() override;
@@ -77,7 +78,8 @@ public:
 	virtual EConcertConnectionStatus GetSessionConnectionStatus() const override;
 	virtual TFuture<EConcertResponseCode> CreateSession(const FGuid& ServerAdminEndpointId, const FConcertCreateSessionArgs& CreateSessionArgs) override;
 	virtual TFuture<EConcertResponseCode> JoinSession(const FGuid& ServerAdminEndpointId, const FGuid& SessionId) override;
-	virtual TFuture<EConcertResponseCode> RestoreSession(const FGuid& ServerAdminEndpointId, const FConcertRestoreSessionArgs& RestoreSessionArgs) override;
+	virtual TFuture<EConcertResponseCode> RestoreSession(const FGuid& ServerAdminEndpointId, const FConcertCopySessionArgs& RestoreSessionArgs) override;
+	virtual TFuture<EConcertResponseCode> CopySession(const FGuid& ServerAdminEndpointId, const FConcertCopySessionArgs& CopySessionArgs) override;
 	virtual TFuture<EConcertResponseCode> ArchiveSession(const FGuid& ServerAdminEndpointId, const FConcertArchiveSessionArgs& ArchiveSessionArgs) override;
 	virtual TFuture<EConcertResponseCode> RenameSession(const FGuid& ServerAdminEndpointId, const FGuid& SessionId, const FString& NewName) override;
 	virtual TFuture<EConcertResponseCode> DeleteSession(const FGuid& ServerAdminEndpointId, const FGuid& SessionId) override;
@@ -108,8 +110,11 @@ private:
 
 	TFuture<EConcertResponseCode> InternalCreateSession(const FGuid& ServerAdminEndpointId, const FConcertCreateSessionArgs& CreateSessionArgs, TUniquePtr<FAsyncTaskNotification> OngoingNotification = nullptr);
 	TFuture<EConcertResponseCode> InternalJoinSession(const FGuid& ServerAdminEndpointId, const FGuid& SessionId, TUniquePtr<FAsyncTaskNotification> OngoingNotification = nullptr);
-	TFuture<EConcertResponseCode> InternalRestoreSession(const FGuid& ServerAdminEndpointId, const FConcertRestoreSessionArgs& RestoreSessionArgs, TUniquePtr<FAsyncTaskNotification> OngoingNotification = nullptr);
+	TFuture<EConcertResponseCode> InternalCopySession(const FGuid& ServerAdminEndpointId, const FConcertCopySessionArgs& CopySessionArgs, bool bRestoreOnlyConstraint, TUniquePtr<FAsyncTaskNotification> OngoingNotification = nullptr);
 	void InternalDisconnectSession();
+
+	/** Set the connection error. */
+	void SetLastConnectionError(FConcertConnectionError LastError);
 
 	/** */
 	void OnEndFrame();
@@ -176,11 +181,11 @@ private:
 	/** Pointer to the Concert Session the client is connected to */
 	TSharedPtr<FConcertClientSession> ClientSession;
 
-	/** True if the client session disconnected this frame and should be fully destroyed at the end of the frame (this is mainly to handle timeouts) */
-	bool bClientSessionPendingDestroy;
-
 	/** Client settings object we were configured with */
 	TStrongObjectPtr<const UConcertClientConfig> Settings;
+
+	/** The last connection attempt error, if any. */
+	FConcertConnectionError LastConnectionError;
 
 	/** Holds the auto connection routine, if any. */
 	TUniquePtr<FConcertAutoConnection> AutoConnection;
@@ -190,4 +195,7 @@ private:
 
 	/** The promise sets when the connection to the current session is confirmed or infirmed. */
 	TUniquePtr<TPromise<EConcertResponseCode>> ConnectionPromise;
+
+	/** True if the client session disconnected this frame and should be fully destroyed at the end of the frame (this is mainly to handle timeouts) */
+	bool bClientSessionPendingDestroy;
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -126,7 +126,7 @@ public:
 	 *
 	 * @return True if the plugin is currently enabled by default.
 	 */
-	virtual bool IsEnabledByDefault() const = 0;
+	virtual bool IsEnabledByDefault(bool bAllowEnginePluginsEnabledByDefault) const = 0;
 
 	/**
 	 * Determines if the plugin is should be displayed in-editor for the user to enable/disable freely.
@@ -180,6 +180,13 @@ public:
 	virtual void RefreshPluginsList() = 0;
 
 	/**
+	 * Adds a single plugin to the list of plugins. Faster than refreshing all plugins with RefreshPluginsList() when you only want to add one. Does nothing if already in the list.
+	 * 
+	 * @return True if the plugin was added or already in the list. False if it failed to load.
+	 */
+	virtual bool AddToPluginsList( const FString& PluginFilename ) = 0;
+
+	/**
 	 * Loads all plug-ins
 	 *
 	 * @param	LoadingPhase	Which loading phase we're loading plug-in modules from.  Only modules that are configured to be
@@ -216,10 +223,11 @@ public:
 	/** 
 	 * Checks whether modules for the enabled plug-ins are up to date.
 	 *
-	 * @param OutIncompatibleNames	Array to receive a list of incompatible module names.
+	 * @param OutIncompatibleModules Array to receive a list of incompatible module names.
+	 * @param OutIncompatibleEngineModules Array to receive a list of incompatible engine module names.
 	 * @returns true if the enabled plug-in modules are up to date.
 	 */
-	virtual bool CheckModuleCompatibility( TArray<FString>& OutIncompatibleModules ) = 0;
+	virtual bool CheckModuleCompatibility( TArray<FString>& OutIncompatibleModules, TArray<FString>& OutIncompatibleEngineModules ) = 0;
 #endif
 
 	/**
@@ -290,6 +298,12 @@ public:
 	 * Marks a newly created plugin as enabled, mounts its content and tries to load its modules
 	 */
 	virtual void MountNewlyCreatedPlugin(const FString& PluginName) = 0;
+
+	/**
+	 * Marks an explicitly loaded plugin as enabled, mounts its content and tries to load its modules.
+	 * These plugins are not loaded implicitly, but instead wait for this function to be called.
+	 */
+	virtual void MountExplicitlyLoadedPlugin(const FString& PluginName) = 0;
 
 	/**
 	* Does a reverse lookup to try to figure out what the UObject package name is for a plugin

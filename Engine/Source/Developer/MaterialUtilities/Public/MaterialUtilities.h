@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -38,7 +38,9 @@ enum class EFlattenMaterialProperties : uint8
 	Metallic,
 	Specular,
 	Roughness,
+	Anisotropy,
 	Normal,
+	Tangent,
 	Opacity,
 	Emissive,
 	SubSurface,

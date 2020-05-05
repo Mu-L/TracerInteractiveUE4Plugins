@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -17,14 +17,14 @@ public:
 	FDisplayClusterProjectionPolicyBase(const FString& ViewportId);
 	virtual ~FDisplayClusterProjectionPolicyBase() = 0;
 
-protected:
-	void InitializeOriginComponent(const FString& OriginCopmId);
-
 	const FString& GetViewportId() const
 	{ return PolicyViewportId; }
 
 	const USceneComponent* const GetOriginComp() const
 	{ return PolicyOriginComp; }
+
+protected:
+	void InitializeOriginComponent(const FString& OriginCopmId);
 
 private:
 	// Added 'Policy' prefix to avoid "... hides class name ..." warnings in child classes

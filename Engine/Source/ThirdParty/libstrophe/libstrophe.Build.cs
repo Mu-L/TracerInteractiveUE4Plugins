@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System.IO;
@@ -60,10 +60,6 @@ public class libstrophe : ModuleRules
 		{
 			string LibrayPath = Path.Combine(StrophePackagePath, Target.Platform.ToString(), ConfigName) + "/";
 			PublicSystemLibraries.Add(LibrayPath + "libstrophe.a");
-		}
-		else if (Target.Platform == UnrealTargetPlatform.Switch)
-		{
-			PublicAdditionalLibraries.Add(Path.Combine(StrophePackagePath, Target.Platform.ToString(), ConfigName, "libstrophe.a"));
 		}
 		else if (Target.IsInPlatformGroup(UnrealPlatformGroup.Unix))
 		{

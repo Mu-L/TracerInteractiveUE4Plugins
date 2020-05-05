@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Engine/LocalPlayer.h"
 #include "Misc/FileHelper.h"
@@ -15,6 +15,7 @@
 #include "UObject/UObjectIterator.h"
 #include "GameFramework/OnlineReplStructs.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
 #include "Engine/SkeletalMesh.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "UnrealEngine.h"
@@ -28,13 +29,13 @@
 #include "Physics/PhysicsInterfaceCore.h"
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "Framework/Application/SlateApplication.h"
 
 #include "IHeadMountedDisplay.h"
 #include "IXRTrackingSystem.h"
 #include "IXRCamera.h"
 #include "SceneViewExtension.h"
 #include "Net/DataChannel.h"
-#include "GameFramework/PlayerState.h"
 
 #include "GameDelegates.h"
 
@@ -318,7 +319,7 @@ bool ULocalPlayer::SpawnPlayActor(const FString& URL,FString& OutError, UWorld* 
 	return PlayerController != NULL;
 }
 
-void ULocalPlayer::SendSplitJoin()
+void ULocalPlayer::SendSplitJoin(TArray<FString>& Options)
 {
 	UNetDriver* NetDriver = NULL;
 
@@ -371,6 +372,11 @@ void ULocalPlayer::SendSplitJoin()
 			if (GameUrlOptions.Len() > 0)
 			{
 				URL.AddOption(*FString::Printf(TEXT("%s"), *GameUrlOptions));
+			}
+
+			for (FString& Option : Options)
+			{
+				URL.AddOption(*FString::Printf(TEXT("%s"), *Option));
 			}
 
 			// Send the player unique Id at login
@@ -545,11 +551,12 @@ public:
 		if (bShouldLockView)
 		{
 			PlayerState.bLocked = true;
-			PlayerStates.AddAnnotation(Player, PlayerState);
 
 			// Also copy to the clipboard.
 			FString ViewPointString = ViewPointToString(PlayerState.ViewPoint);
 			FPlatformApplicationMisc::ClipboardCopy(*ViewPointString);
+
+			PlayerStates.AddAnnotation(Player, MoveTemp(PlayerState));
 		}
 
 		if (bPrintHelp)
@@ -1021,7 +1028,7 @@ bool ULocalPlayer::GetPixelPoint(const FSceneViewProjectionData& ProjectionData,
 bool ULocalPlayer::GetProjectionData(FViewport* Viewport, EStereoscopicPass StereoPass, FSceneViewProjectionData& ProjectionData) const
 {
 	// If the actor
-	if ((Viewport == NULL) || (PlayerController == NULL) || (Viewport->GetSizeXY().X == 0) || (Viewport->GetSizeXY().Y == 0))
+	if ((Viewport == NULL) || (PlayerController == NULL) || (Viewport->GetSizeXY().X == 0) || (Viewport->GetSizeXY().Y == 0) || (Size.X == 0) || (Size.Y == 0))
 	{
 		return false;
 	}
@@ -1622,6 +1629,16 @@ bool ULocalPlayer::IsCachedUniqueNetIdPairedWithControllerId() const
 	return (CachedUniqueNetId == UniqueIdFromController);
 }
 
+TSharedPtr<FSlateUser> ULocalPlayer::GetSlateUser()
+{
+	return FSlateApplication::Get().GetUserFromControllerId(ControllerId);
+}
+
+TSharedPtr<const FSlateUser> ULocalPlayer::GetSlateUser() const
+{
+	return FSlateApplication::Get().GetUserFromControllerId(ControllerId);
+}
+
 UWorld* ULocalPlayer::GetWorld() const
 {
 	return ViewportClient ? ViewportClient->GetWorld() : nullptr;
@@ -1650,8 +1667,12 @@ void ULocalPlayer::AddReferencedObjects(UObject* InThis, FReferenceCollector& Co
 
 bool ULocalPlayer::IsPrimaryPlayer() const
 {
-	ULocalPlayer* const PrimaryPlayer = GetOuterUEngine()->GetFirstGamePlayer(GetWorld());
-	return (this == PrimaryPlayer);
+	if (UWorld* World = GetWorld())
+	{
+		ULocalPlayer* const PrimaryPlayer = GetOuterUEngine()->GetFirstGamePlayer(World);
+		return (this == PrimaryPlayer);
+	}
+	return false;
 }
 
 void ULocalPlayer::CleanupViewState()

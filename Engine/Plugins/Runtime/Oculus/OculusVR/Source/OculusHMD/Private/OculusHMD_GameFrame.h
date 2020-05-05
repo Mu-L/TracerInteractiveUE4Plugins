@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 #include "OculusHMDPrivate.h"
@@ -29,6 +29,8 @@ public:
 	FTransform TrackingToWorld;		// (OnEndGameFrame)
 
 	EFixedFoveatedRenderingLevel FFRLevel; // OnStartGameFrame
+
+	ovrpFovf Fov[ovrpEye_Count];	// UpdateStereoRenderingParams
 
 	union
 	{

@@ -1,10 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PostProcess/PostProcessEyeAdaptation.h"
 #include "RHIGPUReadback.h"
 #include "Curves/CurveFloat.h"
 
-RENDERCORE_API bool UsePreExposure(EShaderPlatform Platform);
+bool IsMobileEyeAdaptationEnabled(const FViewInfo& View);
 
 namespace
 {
@@ -27,14 +27,6 @@ TAutoConsoleVariable<int32> CVarEyeAdaptationMethodOverride(
 	TEXT(" 3: Manual"),
 	ECVF_Scalability | ECVF_RenderThreadSafe);
 
-TAutoConsoleVariable<float> CVarEyeAdaptationFocus(
-	TEXT("r.EyeAdaptation.Focus"),
-	1.0f,
-	TEXT("Applies to basic adapation mode only\n")
-	TEXT(" 0: Uniform weighting\n")
-	TEXT(">0: Center focus, 1 is a good number (default)"),
-	ECVF_Scalability | ECVF_RenderThreadSafe);
-
 TAutoConsoleVariable<int32> CVarEyeAdaptationBasicCompute(
 	TEXT("r.EyeAdaptation.Basic.Compute"),
 	1,
@@ -43,13 +35,49 @@ TAutoConsoleVariable<int32> CVarEyeAdaptationBasicCompute(
 	TEXT("> 0 : Compute Shader (default) \n"),
 	ECVF_Scalability | ECVF_RenderThreadSafe);
 
+TAutoConsoleVariable<float> CVarEyeAdaptationExponentialTransitionDistance(
+	TEXT("r.EyeAdaptation.ExponentialTransitionDistance"),
+	1.5,
+	TEXT("The auto exposure moves linearly, but when it gets ExponentialTransitionDistance F-stops away from the\n")
+	TEXT("target exposure it switches to as slower exponential function.\n"),
+	ECVF_RenderThreadSafe);
+
+TAutoConsoleVariable<int> CVarEyeAdaptationVisualizeDebugType(
+	TEXT("r.EyeAdaptation.VisualizeDebugType"),
+	0,
+	TEXT("When enabling Show->Visualize->HDR (Eye Adaptation) is enabled, this flag controls the scene color.\n")
+	TEXT("    0: Scene Color after tonemapping (default).\n")
+	TEXT("    1: Histogram Debug\n"),
+	ECVF_RenderThreadSafe);
+
+TAutoConsoleVariable<float> CVarEyeAdaptationLensAttenuation(
+	TEXT("r.EyeAdaptation.LensAttenuation"),
+	0.78,
+	TEXT("The camera lens attenuation (q). Set this number to 0.78 for lighting to be unitless (1.0cd/m^2 becomes 1.0 at EV100) or 0.65 to match previous versions (1.0cd/m^2 becomes 1.2 at EV100)."),
+	ECVF_RenderThreadSafe);
+
+TAutoConsoleVariable<float> CVarEyeAdaptationBlackHistogramBucketInfluence(
+	TEXT("r.EyeAdaptation.BlackHistogramBucketInfluence"),
+	0.0,
+	TEXT("This parameter controls how much weight to apply to completely dark 0.0 values in the exposure histogram.\n")
+	TEXT("When set to 1.0, fully dark pixels will accumulate normally, whereas when set to 0.0 fully dark pixels\n")
+	TEXT("will have no influence.\n"),
+	ECVF_RenderThreadSafe);
+
 static TAutoConsoleVariable<int32> CVarEnablePreExposureOnlyInTheEditor(
 	TEXT("r.EyeAdaptation.EditorOnly"),
-	1,
+	0,
 	TEXT("When pre-exposure is enabled, 0 to enable it everywhere, 1 to enable it only in the editor (default).\n")
 	TEXT("This is to because it currently has an impact on the renderthread performance\n"),
 	ECVF_ReadOnly);
 const ERHIFeatureLevel::Type BasicEyeAdaptationMinFeatureLevel = ERHIFeatureLevel::SM5;
+}
+
+// Function is static because EyeAdaptation is the only system that should be checking this value.
+static bool UsePreExposureEnabled()
+{
+	static const auto CVarUsePreExposure = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.UsePreExposure"));
+	return CVarUsePreExposure->GetValueOnAnyThread() != 0;
 }
 
 bool IsAutoExposureMethodSupported(ERHIFeatureLevel::Type FeatureLevel, EAutoExposureMethod AutoExposureMethodId)
@@ -57,12 +85,33 @@ bool IsAutoExposureMethodSupported(ERHIFeatureLevel::Type FeatureLevel, EAutoExp
 	switch (AutoExposureMethodId)
 	{
 	case EAutoExposureMethod::AEM_Histogram:
-		return FeatureLevel >= ERHIFeatureLevel::SM5;
 	case EAutoExposureMethod::AEM_Basic:
 	case EAutoExposureMethod::AEM_Manual:
 		return FeatureLevel >= ERHIFeatureLevel::ES3_1;
 	}
 	return false;
+}
+
+bool IsExtendLuminanceRangeEnabled()
+{
+	static const auto VarDefaultAutoExposureExtendDefaultLuminanceRange = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange"));
+
+	return VarDefaultAutoExposureExtendDefaultLuminanceRange->GetValueOnRenderThread() == 1;
+}
+
+float LuminanceMaxFromLensAttenuation()
+{
+	const bool bExtendedLuminanceRange = IsExtendLuminanceRangeEnabled();
+
+	float LensAttenuation = CVarEyeAdaptationLensAttenuation.GetValueOnRenderThread();
+
+	// 78 is defined in the ISO 12232:2006 standard.
+	const float kISOSaturationSpeedConstant = 0.78f;
+
+	const float LuminanceMax = kISOSaturationSpeedConstant / FMath::Max<float>(LensAttenuation, .01f);
+	
+	// if we do not have luminance range extended, the math is hardcoded to 1.0 scale.
+	return bExtendedLuminanceRange ? LuminanceMax : 1.0f;
 }
 
 // Query the view for the auto exposure method, and allow for CVar override.
@@ -117,129 +166,237 @@ EAutoExposureMethod GetAutoExposureMethod(const FViewInfo& View)
 	return AutoExposureMethod;
 }
 
-bool IsExtendLuminanceRangeEnabled()
-{
-	static const auto VarDefaultAutoExposureExtendDefaultLuminanceRange = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange"));
-
-	return VarDefaultAutoExposureExtendDefaultLuminanceRange->GetValueOnRenderThread() == 1;
-}
-
-float GetBasicAutoExposureFocus()
-{
-	const float FocusMax = 10.f;
-	const float FocusValue = CVarEyeAdaptationFocus.GetValueOnRenderThread();
-	return FMath::Max(FMath::Min(FocusValue, FocusMax), 0.0f);
-}
-
-float GetAutoExposureCompensation(const FViewInfo& View)
+float GetAutoExposureCompensationFromSettings(const FViewInfo& View)
 {
 	const FPostProcessSettings& Settings = View.FinalPostProcessSettings;
-
-	const FEngineShowFlags& EngineShowFlags = View.Family->EngineShowFlags;
 
 	// This scales the average luminance AFTER it gets clamped, affecting the exposure value directly.
 	float AutoExposureBias = Settings.AutoExposureBias;
 
+	return FMath::Pow(2.0f, AutoExposureBias);
+}
+
+
+float GetAutoExposureCompensationFromCurve(const FViewInfo& View)
+{
+	const FPostProcessSettings& Settings = View.FinalPostProcessSettings;
+
+	const float LuminanceMax = LuminanceMaxFromLensAttenuation();
+
+	float AutoExposureBias = 0.0f;
+
 	if (Settings.AutoExposureBiasCurve)
 	{
+		// Note that we are using View.GetLastAverageSceneLuminance() instead of the alternatives. GetLastAverageSceneLuminance()
+		// immediately converges because it is calculated from the current frame's average luminance (without any history).
+		// 
+		// Note that when there is an abrupt change, there will be an immediate change in exposure compensation. But this is
+		// fine because the shader will recalculate a new target exposure. The next result is that the smoothed exposure (purple
+		// line in HDR visualization) will have sudden shifts, but the actual output exposure value (white line in HDR visualization)
+		// will be smooth.
 		const float AverageSceneLuminance = View.GetLastAverageSceneLuminance();
 
 		if (AverageSceneLuminance > 0)
 		{
-			AutoExposureBias += Settings.AutoExposureBiasCurve->GetFloatValue(LuminanceToEV100(AverageSceneLuminance));
+			// We need the Log2(0.18) to convert from average luminance to saturation luminance
+			const float LuminanceEV100 = LuminanceToEV100(LuminanceMax, AverageSceneLuminance) + FMath::Log2(1.0f / 0.18f);
+			AutoExposureBias += Settings.AutoExposureBiasCurve->GetFloatValue(LuminanceEV100);
 		}
 	}
 
 	return FMath::Pow(2.0f, AutoExposureBias);
 }
 
+bool IsAutoExposureDebugMode(const FViewInfo& View)
+{
+	const FEngineShowFlags& EngineShowFlags = View.Family->EngineShowFlags;
+
+	return View.Family->UseDebugViewPS() ||
+		!EngineShowFlags.Lighting ||
+		(EngineShowFlags.VisualizeBuffer && View.CurrentBufferVisualizationMode != NAME_None) ||
+		EngineShowFlags.RayTracingDebug ||
+		EngineShowFlags.VisualizeDistanceFieldAO ||
+		EngineShowFlags.VisualizeMeshDistanceFields ||
+		EngineShowFlags.VisualizeGlobalDistanceField ||
+		EngineShowFlags.CollisionVisibility ||
+		EngineShowFlags.CollisionPawn ||
+		!EngineShowFlags.PostProcessing;
+}
+
+float CalculateFixedAutoExposure(const FViewInfo& View)
+{
+	const bool bExtendedLuminanceRange = IsExtendLuminanceRangeEnabled();
+	const float LuminanceMax = bExtendedLuminanceRange ? LuminanceMaxFromLensAttenuation() : 1.0f;
+	return EV100ToLuminance(LuminanceMax, View.Family->ExposureSettings.FixedEV100);
+}
+
+// on mobile, we are never using the Physical Camera, which is why we need the bForceDisablePhysicalCamera
+float CalculateManualAutoExposure(const FViewInfo& View, bool bForceDisablePhysicalCamera)
+{
+	const bool bExtendedLuminanceRange = IsExtendLuminanceRangeEnabled();
+	const float LuminanceMax = bExtendedLuminanceRange ? LuminanceMaxFromLensAttenuation() : 1.0f;
+
+	const FPostProcessSettings& Settings = View.FinalPostProcessSettings;
+
+	const float BasePhysicalCameraEV100 = FMath::Log2(FMath::Square(Settings.DepthOfFieldFstop) * Settings.CameraShutterSpeed * 100 / FMath::Max(1.f, Settings.CameraISO));
+	const float PhysicalCameraEV100 = (!bForceDisablePhysicalCamera && Settings.AutoExposureApplyPhysicalCameraExposure) ? BasePhysicalCameraEV100 : 0.0f;
+
+	float FoundLuminance = EV100ToLuminance(LuminanceMax, PhysicalCameraEV100);
+	return FoundLuminance;
+}
+
 FEyeAdaptationParameters GetEyeAdaptationParameters(const FViewInfo& View, ERHIFeatureLevel::Type MinFeatureLevel)
 {
+	const bool bExtendedLuminanceRange = IsExtendLuminanceRangeEnabled();
+
 	const FPostProcessSettings& Settings = View.FinalPostProcessSettings;
 
 	const FEngineShowFlags& EngineShowFlags = View.Family->EngineShowFlags;
 
 	const EAutoExposureMethod AutoExposureMethod = GetAutoExposureMethod(View);
-
-	const bool bExtendedLuminanceRange = IsExtendLuminanceRangeEnabled();
+	
+	const float LuminanceMax = bExtendedLuminanceRange ? LuminanceMaxFromLensAttenuation() : 1.0f;
 
 	const float PercentToScale = 0.01f;
 
 	const float ExposureHighPercent = FMath::Clamp(Settings.AutoExposureHighPercent, 1.0f, 99.0f) * PercentToScale;
 	const float ExposureLowPercent = FMath::Min(FMath::Clamp(Settings.AutoExposureLowPercent, 1.0f, 99.0f) * PercentToScale, ExposureHighPercent);
 
-	const float HistogramLogMax = bExtendedLuminanceRange ? EV100ToLog2(Settings.HistogramLogMax) : Settings.HistogramLogMax;
-	const float HistogramLogMin = FMath::Min(bExtendedLuminanceRange ? EV100ToLog2(Settings.HistogramLogMin) : Settings.HistogramLogMin, HistogramLogMax - 1);
+	const float HistogramLogMax = bExtendedLuminanceRange ? EV100ToLog2(LuminanceMax, Settings.HistogramLogMax) : Settings.HistogramLogMax;
+	const float HistogramLogMin = FMath::Min(bExtendedLuminanceRange ? EV100ToLog2(LuminanceMax, Settings.HistogramLogMin) : Settings.HistogramLogMin, HistogramLogMax - 1);
 
-	// These clamp the average luminance computed from the scene color.
-	float MinAverageLuminance = 1.0f;
-	float MaxAverageLuminance = 1.0f;
-	float ExposureCompensation = GetAutoExposureCompensation(View);
+	// These clamp the average luminance computed from the scene color. We are going to calculate the white point first, and then
+	// figure out the average grey point later. I.e. if the white point is 1.0, the middle grey point should be 0.18.
+	float MinWhitePointLuminance = 1.0f; 
+	float MaxWhitePointLuminance = 1.0f;
 
-	// Force an exposure of 1 when any of these flags are set.
-	if (View.Family->UseDebugViewPS() ||
-		!EngineShowFlags.Lighting ||
-		(EngineShowFlags.VisualizeBuffer && View.CurrentBufferVisualizationMode != NAME_None) ||
-		EngineShowFlags.RayTracingDebug ||
-		EngineShowFlags.VisualizeDistanceFieldAO ||
-		EngineShowFlags.VisualizeGlobalDistanceField ||
-		EngineShowFlags.CollisionVisibility ||
-		EngineShowFlags.CollisionPawn)
+	// Get the exposure compensation from the post process volume settings (everything except the curve)
+	float ExposureCompensationSettings = GetAutoExposureCompensationFromSettings(View);
+
+	// Get the exposure compensation from the curve
+	float ExposureCompensationCurve = GetAutoExposureCompensationFromCurve(View);
+	const float BlackHistogramBucketInfluence = CVarEyeAdaptationBlackHistogramBucketInfluence.GetValueOnRenderThread();
+
+	const float kMiddleGrey = 0.18f;
+
+	// AEM_Histogram and AEM_Basic adjust their ExposureCompensation to middle grey (0.18). AEM_Manual ExposureCompensation is already calibrated to 1.0.
+	const float GreyMult = (AutoExposureMethod == AEM_Manual) ? 1.0f : kMiddleGrey;
+
+	const bool IsDebugViewMode = IsAutoExposureDebugMode(View);
+
+	if (IsDebugViewMode)
 	{
-		ExposureCompensation = 1.0f;
+		ExposureCompensationSettings = 1.0f;
+		ExposureCompensationCurve = 1.0f;
 	}
 	// Fixed exposure override in effect.
 	else if (View.Family->ExposureSettings.bFixed)
 	{
-		ExposureCompensation = 1.0f;
-		MinAverageLuminance = MaxAverageLuminance = EV100ToLuminance(View.Family->ExposureSettings.FixedEV100);
+		ExposureCompensationSettings = 1.0f;
+		ExposureCompensationCurve = 1.0f;
+
+		// ignores bExtendedLuminanceRange
+		MinWhitePointLuminance = MaxWhitePointLuminance = CalculateFixedAutoExposure(View);
 	}
-	// When !EngineShowFlags.EyeAdaptation (from "r.EyeAdaptationQuality 0") or the feature level doesn't support eye adaptation, only Settings.AutoExposureBias controls exposure.
-	else if (EngineShowFlags.EyeAdaptation && View.GetFeatureLevel() >= MinFeatureLevel)
+	else if (!EngineShowFlags.EyeAdaptation)
+	{
+		// if eye adaptation is off, then set everything to 1.0
+		ExposureCompensationSettings = 1.0f;
+		ExposureCompensationCurve = 1.0f;
+
+		// GetAutoExposureMethod() should return Manual in this case.
+		check(AutoExposureMethod == AEM_Manual);
+
+		// just lock to 1.0, it's not possible to guess a reasonable value using the min and max.
+		MinWhitePointLuminance = MaxWhitePointLuminance = 1.0;
+	}
+	// This should always be true now that it works on mobile
+	else if (View.GetFeatureLevel() >= MinFeatureLevel)
 	{
 		if (AutoExposureMethod == EAutoExposureMethod::AEM_Manual)
 		{
-			const float FixedEV100 = FMath::Log2(FMath::Square(Settings.DepthOfFieldFstop) * Settings.CameraShutterSpeed * 100 / FMath::Max(1.f, Settings.CameraISO));
-			MinAverageLuminance = MaxAverageLuminance = EV100ToLuminance(FixedEV100);
-		}
-		else if (bExtendedLuminanceRange)
-		{
-			MinAverageLuminance = EV100ToLuminance(Settings.AutoExposureMinBrightness);
-			MaxAverageLuminance = EV100ToLuminance(Settings.AutoExposureMaxBrightness);
+			// ignores bExtendedLuminanceRange
+			MinWhitePointLuminance = MaxWhitePointLuminance = CalculateManualAutoExposure(View, false);
 		}
 		else
 		{
-			MinAverageLuminance = Settings.AutoExposureMinBrightness;
-			MaxAverageLuminance = Settings.AutoExposureMaxBrightness;
+			if (bExtendedLuminanceRange)
+			{
+				MinWhitePointLuminance = EV100ToLuminance(LuminanceMax, Settings.AutoExposureMinBrightness);
+				MaxWhitePointLuminance = EV100ToLuminance(LuminanceMax, Settings.AutoExposureMaxBrightness);
+			}
+			else
+			{
+				MinWhitePointLuminance = Settings.AutoExposureMinBrightness;
+				MaxWhitePointLuminance = Settings.AutoExposureMaxBrightness;
+			}
 		}
 	}
 
-	MinAverageLuminance = FMath::Min(MinAverageLuminance, MaxAverageLuminance);
-
-	// This scales the average luminance BEFORE it gets clamped. Note that AEM_Histogram implements the calibration constant through ExposureLowPercent and ExposureHighPercent.
-	const float CalibrationConstant = FMath::Clamp(Settings.AutoExposureCalibrationConstant, 1.0f, 100.0f) * PercentToScale;
-
-	const float WeightSlope = (AutoExposureMethod == EAutoExposureMethod::AEM_Basic) ? GetBasicAutoExposureFocus() : 0.0f;
+	MinWhitePointLuminance = FMath::Min(MinWhitePointLuminance, MaxWhitePointLuminance);
 
 	const float HistogramLogDelta = HistogramLogMax - HistogramLogMin;
 	const float HistogramScale = 1.0f / HistogramLogDelta;
 	const float HistogramBias = -HistogramLogMin * HistogramScale;
 	const float LuminanceMin = FMath::Exp2(HistogramLogMin);
 
+	//AutoExposureMeterMask
+	const FTextureRHIRef MeterMask = Settings.AutoExposureMeterMask ?
+									Settings.AutoExposureMeterMask->Resource->TextureRHI :
+									GSystemTextures.WhiteDummy->GetRenderTargetItem().ShaderResourceTexture;
+
+	// The distance at which we switch from linear to exponential. I.e. at StartDistance=1.5, when linear is 1.5 f-stops away from hitting the 
+	// target, we switch to exponential.
+	const float StartDistance = CVarEyeAdaptationExponentialTransitionDistance.GetValueOnRenderThread();
+	const float StartTimeUp = StartDistance / FMath::Max(Settings.AutoExposureSpeedUp,0.001f);
+	const float StartTimeDown = StartDistance / FMath::Max(Settings.AutoExposureSpeedDown,0.001f);
+
+	// We want to ensure that at time=StartT, that the derivative of the exponential curve is the same as the derivative of the linear curve.
+	// For the linear curve, the step will be AdaptationSpeed * FrameTime.
+	// For the exponential curve, the step will be at t=StartT, M is slope modifier:
+	//      slope(t) = M * (1.0f - exp2(-FrameTime * AdaptionSpeed)) * AdaptionSpeed * StartT
+	//      AdaptionSpeed * FrameTime = M * (1.0f - exp2(-FrameTime * AdaptionSpeed)) * AdaptationSpeed * StartT
+	//      M = FrameTime / (1.0f - exp2(-FrameTime * AdaptionSpeed)) * StartT
+	//
+	// To be technically correct, we should take the limit as FrameTime->0, but for simplicity we can make FrameTime a small number. So:
+	const float kFrameTimeEps = 1.0f/60.0f;
+	const float ExponentialUpM = kFrameTimeEps / ((1.0f - exp2(-kFrameTimeEps * Settings.AutoExposureSpeedUp)) * StartTimeUp);
+	const float ExponentialDownM = kFrameTimeEps / ((1.0f - exp2(-kFrameTimeEps * Settings.AutoExposureSpeedDown)) * StartTimeDown);
+
+	// If the white point luminance is 1.0, then the middle grey luminance should be 0.18.
+	const float MinAverageLuminance = MinWhitePointLuminance * kMiddleGrey;
+	const float MaxAverageLuminance = MaxWhitePointLuminance * kMiddleGrey;
+
+	const bool bValidRange = View.FinalPostProcessSettings.AutoExposureMinBrightness < View.FinalPostProcessSettings.AutoExposureMaxBrightness;
+
+	// if it is a camera cut we force the exposure to go all the way to the target exposure without blending.
+	// if it is manual mode, we also force the exposure to hit the target, which matters for HDR Visualization
+	// if we don't have a valid range (AutoExposureMinBrightness == AutoExposureMaxBrightness) then force it like Manual as well.
+	const float ForceTarget = (View.bCameraCut || AutoExposureMethod == EAutoExposureMethod::AEM_Manual || !bValidRange) ? 1.0f : 0.0f;
+
 	FEyeAdaptationParameters Parameters;
 	Parameters.ExposureLowPercent = ExposureLowPercent;
 	Parameters.ExposureHighPercent = ExposureHighPercent;
 	Parameters.MinAverageLuminance = MinAverageLuminance;
 	Parameters.MaxAverageLuminance = MaxAverageLuminance;
-	Parameters.ExposureCompensation = ExposureCompensation;
+	Parameters.ExposureCompensationSettings = ExposureCompensationSettings;
+	Parameters.ExposureCompensationCurve = ExposureCompensationCurve;
 	Parameters.DeltaWorldTime = View.Family->DeltaWorldTime;
 	Parameters.ExposureSpeedUp = Settings.AutoExposureSpeedUp;
 	Parameters.ExposureSpeedDown = Settings.AutoExposureSpeedDown;
 	Parameters.HistogramScale = HistogramScale;
 	Parameters.HistogramBias = HistogramBias;
 	Parameters.LuminanceMin = LuminanceMin;
-	Parameters.CalibrationConstantInverse = 1.0f / CalibrationConstant;
-	Parameters.WeightSlope = WeightSlope;
+	Parameters.BlackHistogramBucketInfluence = BlackHistogramBucketInfluence; // no calibration constant because it is now baked into ExposureCompensation
+	Parameters.GreyMult = GreyMult;
+	Parameters.ExponentialDownM = ExponentialDownM;
+	Parameters.ExponentialUpM = ExponentialUpM;
+	Parameters.StartDistance = StartDistance;
+	Parameters.LuminanceMax = LuminanceMax;
+	Parameters.ForceTarget = ForceTarget;
+	Parameters.VisualizeDebugType = CVarEyeAdaptationVisualizeDebugType.GetValueOnRenderThread();
+	Parameters.MeterMaskTexture = MeterMask;
+	Parameters.MeterMaskSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 	return Parameters;
 }
 
@@ -249,9 +406,11 @@ float GetEyeAdaptationFixedExposure(const FViewInfo& View)
 
 	const float Exposure = (Parameters.MinAverageLuminance + Parameters.MaxAverageLuminance) * 0.5f;
 
-	const float ExposureScale = 1.0f / FMath::Max(0.0001f, Exposure);
+	const float kMiddleGrey = 0.18f;
+	const float ExposureScale = kMiddleGrey / FMath::Max(0.0001f, Exposure);
 
-	return ExposureScale * Parameters.ExposureCompensation;
+	// We're ignoring any curve influence
+	return ExposureScale * Parameters.ExposureCompensationSettings;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -346,7 +505,7 @@ FRDGTextureRef AddHistogramEyeAdaptationPass(
 		FComputeShaderUtils::AddPass(
 			GraphBuilder,
 			RDG_EVENT_NAME("HistogramEyeAdaptation (CS)"),
-			*ComputeShader,
+			ComputeShader,
 			PassParameters,
 			FIntVector(1, 1, 1));
 	}
@@ -364,7 +523,7 @@ FRDGTextureRef AddHistogramEyeAdaptationPass(
 			View,
 			FScreenPassTextureViewport(OutputTexture),
 			FScreenPassTextureViewport(HistogramTexture),
-			*PixelShader,
+			PixelShader,
 			PassParameters);
 	}
 
@@ -391,7 +550,7 @@ public:
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return IsFeatureLevelSupported(Parameters.Platform, BasicEyeAdaptationMinFeatureLevel);
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::Type(BasicEyeAdaptationMinFeatureLevel));
 	}
 };
 
@@ -430,7 +589,7 @@ FScreenPassTexture AddBasicEyeAdaptationSetupPass(
 		View,
 		Viewport,
 		Viewport,
-		*PixelShader,
+		PixelShader,
 		PassParameters,
 		EScreenPassDrawFlags::AllowHMDHiddenAreaMask);
 
@@ -458,7 +617,7 @@ public:
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return IsFeatureLevelSupported(Parameters.Platform, BasicEyeAdaptationMinFeatureLevel);
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::Type(BasicEyeAdaptationMinFeatureLevel));
 	}
 
 	FBasicEyeAdaptationShader() = default;
@@ -539,7 +698,7 @@ FRDGTextureRef AddBasicEyeAdaptationPass(
 		FComputeShaderUtils::AddPass(
 			GraphBuilder,
 			RDG_EVENT_NAME("BasicEyeAdaptation (CS)"),
-			*ComputeShader,
+			ComputeShader,
 			PassParameters,
 			FIntVector(1, 1, 1));
 	}
@@ -559,7 +718,7 @@ FRDGTextureRef AddBasicEyeAdaptationPass(
 			View,
 			OutputViewport,
 			OutputViewport,
-			*PixelShader,
+			PixelShader,
 			PassParameters);
 	}
 
@@ -574,6 +733,11 @@ void FSceneViewState::FEyeAdaptationRTManager::SafeRelease()
 	PooledRenderTarget[1].SafeRelease();
 
 	ExposureTextureReadback = nullptr;
+
+	ExposureBufferData[0].SafeRelease();
+	ExposureBufferData[1].SafeRelease();
+
+	ExposureBufferReadback = nullptr;
 }
 
 void FSceneViewState::FEyeAdaptationRTManager::SwapRTs(bool bInUpdateLastExposure)
@@ -593,6 +757,15 @@ void FSceneViewState::FEyeAdaptationRTManager::SwapRTs(bool bInUpdateLastExposur
 		}
 		else if (ExposureTextureReadback->IsReady())
 		{
+			// Workaround until FRHIGPUTextureReadback::Lock has multigpu support
+			FRHIGPUMask ReadBackGPUMask = RHICmdList.GetGPUMask();
+			if (!ReadBackGPUMask.HasSingleIndex())
+			{
+				ReadBackGPUMask = FRHIGPUMask::GPU0();
+			}
+
+			SCOPED_GPU_MASK(RHICmdList, ReadBackGPUMask);
+
 			// Read the last request results.
 			FVector4* ReadbackData = (FVector4*)ExposureTextureReadback->Lock(sizeof(FVector4));
 			if (ReadbackData)
@@ -630,6 +803,71 @@ TRefCountPtr<IPooledRenderTarget>& FSceneViewState::FEyeAdaptationRTManager::Get
 	return PooledRenderTarget[BufferNumber];
 }
 
+FExposureBufferData& FSceneViewState::FEyeAdaptationRTManager::GetBufferRef(const int BufferNumber)
+{
+	check(BufferNumber == 0 || BufferNumber == 1);
+
+	// Create textures if needed.
+	if (!ExposureBufferData[BufferNumber].IsValid())
+	{
+		FRHIResourceCreateInfo CreateInfo(TEXT("ExposureBuffer"));
+		ExposureBufferData[BufferNumber].Buffer = RHICreateVertexBuffer(sizeof(FVector4), BUF_Static | BUF_ShaderResource | BUF_UnorderedAccess | BUF_SourceCopy, CreateInfo);
+		
+		FVector4* BufferData = (FVector4*)RHILockVertexBuffer(ExposureBufferData[BufferNumber].Buffer, 0, sizeof(FVector4), RLM_WriteOnly);
+		*BufferData = FVector4(1.0f, 1.0f, 1.0f, 1.0f);
+		RHIUnlockVertexBuffer(ExposureBufferData[BufferNumber].Buffer);
+
+		ExposureBufferData[BufferNumber].SRV = RHICreateShaderResourceView(ExposureBufferData[BufferNumber].Buffer, sizeof(FVector4), PF_A32B32G32R32F);
+		ExposureBufferData[BufferNumber].UAV = RHICreateUnorderedAccessView(ExposureBufferData[BufferNumber].Buffer, PF_A32B32G32R32F);
+	}
+
+	return ExposureBufferData[BufferNumber];
+}
+
+void FSceneViewState::FEyeAdaptationRTManager::SwapBuffers(bool bInUpdateLastExposure)
+{
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_FEyeAdaptationRTManager_SwapBuffers);
+
+	FRHICommandListImmediate& RHICmdList = FRHICommandListExecutor::GetImmediateCommandList();
+
+	if (bInUpdateLastExposure && ExposureBufferData[CurrentBuffer].IsValid() && (GIsEditor || CVarEnablePreExposureOnlyInTheEditor.GetValueOnRenderThread() == 0))
+	{
+		if (!ExposureBufferReadback)
+		{
+			static const FName ExposureValueName(TEXT("Scene view state exposure readback"));
+			ExposureBufferReadback.Reset(new FRHIGPUBufferReadback(ExposureValueName));
+			// Send the first request.
+			ExposureBufferReadback->EnqueueCopy(RHICmdList, ExposureBufferData[CurrentBuffer].Buffer);
+		}
+		else if (ExposureBufferReadback->IsReady())
+		{
+			// Workaround until FRHIGPUTextureReadback::Lock has multigpu support
+			FRHIGPUMask ReadBackGPUMask = RHICmdList.GetGPUMask();
+			if (!ReadBackGPUMask.HasSingleIndex())
+			{
+				ReadBackGPUMask = FRHIGPUMask::GPU0();
+			}
+
+			SCOPED_GPU_MASK(RHICmdList, ReadBackGPUMask);
+
+			// Read the last request results.
+			FVector4* ReadbackData = (FVector4*)ExposureBufferReadback->Lock(sizeof(FVector4));
+			if (ReadbackData)
+			{
+				LastExposure = ReadbackData->X;
+				LastAverageSceneLuminance = ReadbackData->Z;
+
+				ExposureBufferReadback->Unlock();
+			}
+
+			// Send the request for next update.
+			ExposureBufferReadback->EnqueueCopy(RHICmdList, ExposureBufferData[CurrentBuffer].Buffer);
+		}
+	}
+
+	CurrentBuffer = 1 - CurrentBuffer;
+}
+
 void FSceneViewState::UpdatePreExposure(FViewInfo& View)
 {
 	const FSceneViewFamily& ViewFamily = *View.Family;
@@ -653,17 +891,16 @@ void FSceneViewState::UpdatePreExposure(FViewInfo& View)
 	PreExposure = 1.f;
 	bUpdateLastExposure = false;
 
+	bool bEnableAutoExposure = true;
+
 	if (IsMobilePlatform(View.GetShaderPlatform()))
 	{
-		if (!IsMobileHDR())
-		{
-			// In gamma space, the exposure is fully applied in the pre-exposure (no post-exposure compensation)
-			PreExposure = GetEyeAdaptationFixedExposure(View);
-		}
+		bEnableAutoExposure &= IsMobileEyeAdaptationEnabled(View);
 	}
-	else if (bIsPreExposureRelevant)
+	
+	if (bIsPreExposureRelevant && bEnableAutoExposure)
 	{
-		if (UsePreExposure(View.GetShaderPlatform()))
+		if (UsePreExposureEnabled())
 		{
 			const float PreExposureOverride = CVarEyeAdaptationPreExposureOverride.GetValueOnRenderThread();
 			const float LastExposure = View.GetLastEyeAdaptationExposure();
@@ -678,10 +915,16 @@ void FSceneViewState::UpdatePreExposure(FViewInfo& View)
 
 			bUpdateLastExposure = true;
 		}
-		// The exposure compensation curves require the scene average luminance
-		else if (View.FinalPostProcessSettings.AutoExposureBiasCurve)
+		else
 		{
-			bUpdateLastExposure = true;
+			if (View.FinalPostProcessSettings.AutoExposureBiasCurve)
+			{
+				// The exposure compensation curves require the scene average luminance
+				bUpdateLastExposure = true;
+			}
+
+			// Whe PreExposure is not used, we will override the PreExposure value to 1.0, which simulates PreExposure being off.
+			PreExposure = 1.0f;
 		}
 	}
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 namespace UnrealBuildTool.Rules
 {
@@ -21,8 +21,18 @@ namespace UnrealBuildTool.Rules
 					"Renderer",
 					"RHI",
 					"ChaosCore",
-					"Chaos"
+					"Chaos",
+					"Eigen"
 				});
+
+			if (Target.bBuildEditor == true)
+			{
+				PrivateDependencyModuleNames.AddRange(
+					new string[]
+					{
+					"DerivedDataCache",
+					});
+			}
 		}
 	}
 }

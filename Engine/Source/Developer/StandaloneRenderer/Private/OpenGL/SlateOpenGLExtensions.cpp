@@ -1,9 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OpenGL/SlateOpenGLExtensions.h"
 
 // not needed with ES2
-#if !PLATFORM_USES_ES2
+#if !PLATFORM_USES_GLES
 
 
 #pragma warning(disable:4191)
@@ -132,4 +132,4 @@ void LoadOpenGLExtensions()
 	// If extensions are needed for your platform add support for them here 
 }
 
-#endif // !PLATFORM_USES_ES2
+#endif // !PLATFORM_USES_GLES

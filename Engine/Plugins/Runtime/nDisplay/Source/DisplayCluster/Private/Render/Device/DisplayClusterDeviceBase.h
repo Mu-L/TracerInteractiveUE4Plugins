@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -17,7 +17,7 @@
 
 class IDisplayClusterPostProcess;
 class FDisplayClusterPresentationBase;
-
+class FSceneView;
 
 /**
  * Abstract render device
@@ -39,6 +39,7 @@ public:
 	virtual bool Initialize() override;
 	virtual void StartScene(UWorld* InWorld) override;
 	virtual void EndScene() override;
+	virtual void PreTick(float DeltaSeconds) override;
 	virtual void SetViewportCamera(const FString& InCameraId = FString(), const FString& InViewportId = FString()) override;
 	virtual void SetStartPostProcessingSettings(const FString& ViewportID, const FPostProcessSettings& StartPostProcessingSettings) override;
 	virtual void SetOverridePostProcessingSettings(const FString& ViewportID, const FPostProcessSettings& OverridePostProcessingSettings, float BlendWeight = 1.0f) override;

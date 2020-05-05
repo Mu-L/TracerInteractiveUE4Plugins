@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -10,6 +10,7 @@
 #include "RenderingThread.h"
 #include "Components/LightComponentBase.h"
 #include "Math/SHMath.h"
+#include "Rendering/SkyLightImportanceSampling.h"
 #include "SkyLightComponent.generated.h"
 
 class FSkyLightSceneProxy;
@@ -169,11 +170,11 @@ class ENGINE_API USkyLightComponent : public ULightComponentBase
 	//~ Begin UObject Interface
 	virtual void PostInitProperties() override;
 	virtual void PostLoad() override;
-	virtual void PostInterpChange(UProperty* PropertyThatChanged) override;
+	virtual void PostInterpChange(FProperty* PropertyThatChanged) override;
 #if WITH_EDITOR
-	virtual void PreEditChange(UProperty* PropertyAboutToChange) override;
+	virtual void PreEditChange(FProperty* PropertyAboutToChange) override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
-	virtual bool CanEditChange(const UProperty* InProperty) const override;
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
 	virtual void CheckForErrors() override;
 #endif // WITH_EDITOR
 	virtual void BeginDestroy() override;
@@ -258,6 +259,8 @@ public:
 		IrradianceEnvironmentMap = InIrradianceEnvironmentMap;
 	}
 
+	void UpdateImportanceSamplingData();
+
 	virtual void Serialize(FArchive& Ar) override;
 
 protected:
@@ -275,6 +278,10 @@ protected:
 	TRefCountPtr<FSkyTextureCubeResource> ProcessedSkyTexture;
 	FSHVectorRGB3 IrradianceEnvironmentMap;
 	float AverageBrightness;
+
+#if RHI_RAYTRACING
+	TRefCountPtr<FSkyLightImportanceSamplingData> ImportanceSamplingData;
+#endif
 
 	/** If 0, no blend is present.  If > 0, BlendDestinationProcessedSkyTexture and BlendDestinationIrradianceEnvironmentMap must be generated and used for rendering. */
 	float BlendFraction;
@@ -303,7 +310,7 @@ protected:
 	static FCriticalSection SkyCapturesToUpdateLock;
 
 	//~ Begin UActorComponent Interface
-	virtual void CreateRenderState_Concurrent() override;
+	virtual void CreateRenderState_Concurrent(FRegisterComponentContext* Context) override;
 	virtual void DestroyRenderState_Concurrent() override;
 	//~ Begin UActorComponent Interface
 
@@ -345,6 +352,10 @@ public:
 
 	// This has to be refcounted to keep it alive during the handoff without doing a deep copy
 	TRefCountPtr<FSkyTextureCubeResource> ProcessedSkyTexture;
+
+#if RHI_RAYTRACING
+	TRefCountPtr<FSkyLightImportanceSamplingData> ImportanceSamplingData;
+#endif
 
 	FSHVectorRGB3 IrradianceEnvironmentMap;
 };

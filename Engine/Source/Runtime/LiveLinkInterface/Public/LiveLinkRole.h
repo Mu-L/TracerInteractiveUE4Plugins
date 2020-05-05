@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -35,6 +35,11 @@ USTRUCT(BlueprintType)
 struct LIVELINKINTERFACE_API FLiveLinkSubjectRepresentation
 {
 	GENERATED_BODY()
+
+	FLiveLinkSubjectRepresentation() = default;
+	FLiveLinkSubjectRepresentation(const FLiveLinkSubjectName& InSubject, const TSubclassOf<ULiveLinkRole>& InRole)
+		: Subject(InSubject), Role(InRole)
+	{ }
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Live Link")
 	FLiveLinkSubjectName Subject;

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BlueprintComponentNodeSpawner.h"
 #include "Engine/Blueprint.h"
@@ -7,6 +7,7 @@
 #include "EdGraphSchema_K2.h"
 #include "K2Node_AddComponent.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
 #include "Styling/SlateIconFinder.h"
 #include "BlueprintNodeTemplateCache.h"
 #include "ComponentAssetBroker.h"
@@ -79,7 +80,7 @@ UBlueprintComponentNodeSpawner* UBlueprintComponentNodeSpawner::Create(const FCo
 		return NodeSpawner;
 	}
 
-	if (ComponentClass->HasAnyClassFlags(CLASS_Abstract) || !ComponentClass->HasMetaData(FBlueprintMetadata::MD_BlueprintSpawnableComponent))
+	if (!FKismetEditorUtilities::IsClassABlueprintSpawnableComponent(ComponentClass))
 	{
 		// loaded class that is marked as abstract or not spawnable, don't create an entry:
 		return nullptr;
@@ -127,7 +128,7 @@ UBlueprintComponentNodeSpawner::UBlueprintComponentNodeSpawner(FObjectInitialize
 FBlueprintNodeSignature UBlueprintComponentNodeSpawner::GetSpawnerSignature() const
 {
 	FBlueprintNodeSignature SpawnerSignature(NodeClass);
-	SpawnerSignature.AddSubObject(ComponentClass);
+	SpawnerSignature.AddSubObject(ComponentClass.Get());
 	return SpawnerSignature;
 }
 
@@ -223,9 +224,12 @@ FBlueprintActionUiSpec UBlueprintComponentNodeSpawner::GetUiSpec(FBlueprintActio
 	if (Bindings.Num() > 0)
 	{
 		FText AssetName;
-		if (UObject* AssetBinding = Bindings.CreateConstIterator()->Get())
 		{
-			AssetName = FText::FromName(AssetBinding->GetFName());
+			FBindingObject Binding = *Bindings.CreateConstIterator();
+			if (Binding.IsValid())
+			{
+				AssetName = FText::FromName(Binding.GetFName());
+			}
 		}
 
 		FText const ComponentTypeName = FText::FromName(ComponentClass->GetFName());
@@ -237,19 +241,19 @@ FBlueprintActionUiSpec UBlueprintComponentNodeSpawner::GetUiSpec(FBlueprintActio
 }
 
 //------------------------------------------------------------------------------
-bool UBlueprintComponentNodeSpawner::IsBindingCompatible(UObject const* BindingCandidate) const
+bool UBlueprintComponentNodeSpawner::IsBindingCompatible(FBindingObject BindingCandidate) const
 {
 	bool bCanBindWith = false;
-	if (BindingCandidate->IsAsset())
+	if (BindingCandidate.IsUObject() && BindingCandidate.Get<UObject>()->IsAsset())
 	{
-		TArray< TSubclassOf<UActorComponent> > ComponentClasses = FComponentAssetBrokerage::GetComponentsForAsset(BindingCandidate);
+		TArray< TSubclassOf<UActorComponent> > ComponentClasses = FComponentAssetBrokerage::GetComponentsForAsset(BindingCandidate.Get<UObject>());
 		bCanBindWith = ComponentClasses.Contains(ComponentClass);
 	}
 	return bCanBindWith;
 }
 
 //------------------------------------------------------------------------------
-bool UBlueprintComponentNodeSpawner::BindToNode(UEdGraphNode* Node, UObject* Binding) const
+bool UBlueprintComponentNodeSpawner::BindToNode(UEdGraphNode* Node, FBindingObject Binding) const
 {
 	bool bSuccessfulBinding = false;
 	UK2Node_AddComponent* AddCompNode = CastChecked<UK2Node_AddComponent>(Node);
@@ -257,7 +261,8 @@ bool UBlueprintComponentNodeSpawner::BindToNode(UEdGraphNode* Node, UObject* Bin
 	UActorComponent* ComponentTemplate = AddCompNode->GetTemplateFromNode();
 	if (ComponentTemplate != nullptr)
 	{
-		bSuccessfulBinding = FComponentAssetBrokerage::AssignAssetToComponent(ComponentTemplate, Binding);
+		check(!Binding.IsValid() || Binding.IsUObject()); // FProp
+		bSuccessfulBinding = FComponentAssetBrokerage::AssignAssetToComponent(ComponentTemplate, Binding.Get<UObject>());
 		AddCompNode->ReconstructNode();
 	}
 	return bSuccessfulBinding;

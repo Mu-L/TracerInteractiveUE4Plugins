@@ -10,7 +10,7 @@
     "DocsURL" : "",
     "MarketplaceURL" : "",
     "SupportURL" : "",
-    "EnabledByDefault" : false,
+    "EnabledByDefault" : true,
     "CanContainContent" : false,
     "IsBetaVersion" : true,
     "Installed" : false,
@@ -18,7 +18,7 @@
       {
         "Name": "ChaosCloth",
         "Type": "Runtime",
-        "LoadingPhase": "PostEngineInit"
+        "LoadingPhase": "Default"
       }
     ]
 }

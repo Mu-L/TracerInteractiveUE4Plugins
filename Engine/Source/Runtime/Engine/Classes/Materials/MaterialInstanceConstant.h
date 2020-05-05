@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -9,13 +9,15 @@
 
 #include "MaterialInstanceConstant.generated.h"
 
+class UPhysicalMaterialMask;
+
 /**
  * Material Instances may be used to change the appearance of a material without incurring an expensive recompilation of the material.
  * General modification of the material cannot be supported without recompilation, so the instances are limited to changing the values of
  * predefined material parameters. The parameters are statically defined in the compiled material by a unique name, type and default value.
  */
 UCLASS(hidecategories=Object, collapsecategories, BlueprintType,MinimalAPI)
-class ENGINE_VTABLE UMaterialInstanceConstant : public UMaterialInstance
+class UMaterialInstanceConstant : public UMaterialInstance
 {
 	GENERATED_UCLASS_BODY()
 
@@ -34,6 +36,14 @@ class ENGINE_VTABLE UMaterialInstanceConstant : public UMaterialInstance
 
 	virtual ENGINE_API void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
+
+	/** Physical material mask to use for this graphics material. Used for sounds, effects etc.*/
+	UPROPERTY(EditAnywhere, Category = PhysicalMaterial)
+	class UPhysicalMaterialMask* PhysMaterialMask;
+
+	// Begin UMaterialInterface interface.
+	ENGINE_API virtual UPhysicalMaterialMask* GetPhysicalMaterialMask() const override;
+	// End UMaterialInterface interface.
 
 	/** Get the scalar (float) parameter value from an MIC */
 	UFUNCTION(BlueprintCallable, meta=(DisplayName = "GetScalarParameterValue", ScriptName = "GetScalarParameterValue", Keywords = "GetFloatParameterValue"), Category="Rendering|Material")

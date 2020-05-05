@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	EditorExporters.cpp: Editor exporters.
@@ -60,7 +60,7 @@
 #include "MatineeExporter.h"
 #include "FbxExporter.h"
 #include "StaticMeshAttributes.h"
-#include "MeshDescriptionOperations.h"
+#include "StaticMeshOperations.h"
 #include "MaterialUtilities.h"
 #include "InstancedFoliageActor.h"
 #include "LandscapeProxy.h"
@@ -217,12 +217,12 @@ bool USoundSurroundExporterWAV::SupportsObject(UObject* Object) const
 	return bSupportsObject;
 }
 
-int32 USoundSurroundExporterWAV::GetFileCount( void ) const
+int32 USoundSurroundExporterWAV::GetFileCount( UObject* Object ) const
 {
 	return( SPEAKER_Count );
 }
 
-FString USoundSurroundExporterWAV::GetUniqueFilename( const TCHAR* Filename, int32 FileIndex )
+FString USoundSurroundExporterWAV::GetUniqueFilename( const TCHAR* Filename, int32 FileIndex, int32 FileCount )
 {
 	static FString SpeakerLocations[SPEAKER_Count] =
 	{
@@ -1756,7 +1756,7 @@ bool UStaticMeshExporterOBJ::ExportText(const FExportObjectInnerContext* Context
 			{
 				SmoothingMasks.AddZeroed(TriangleCount);
 
-				FMeshDescriptionOperations::ConvertHardEdgesToSmoothGroup(*MeshDescription, SmoothingMasks);
+				FStaticMeshOperations::ConvertHardEdgesToSmoothGroup(*MeshDescription, SmoothingMasks);
 				for (uint32 SmoothValue : SmoothingMasks)
 				{
 					UniqueSmoothingMasks.AddUnique(SmoothValue);

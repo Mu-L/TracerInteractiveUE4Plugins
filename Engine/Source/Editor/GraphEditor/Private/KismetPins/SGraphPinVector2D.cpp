@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "KismetPins/SGraphPinVector2D.h"
@@ -118,6 +118,7 @@ TSharedRef<SWidget>	SGraphPinVector2D::GetDefaultValueWidget()
 			.VisibleText_X( this, &SGraphPinVector2D::GetCurrentValue_X )
 			.VisibleText_Y( this, &SGraphPinVector2D::GetCurrentValue_Y )
 			.Visibility( this, &SGraphPin::GetDefaultValueVisibility )
+			.IsEnabled(this, &SGraphPin::GetDefaultValueIsEditable )
 			.OnFloatCommitted_Box_X( this, &SGraphPinVector2D::OnChangedValueTextBox_X )
 			.OnFloatCommitted_Box_Y( this, &SGraphPinVector2D::OnChangedValueTextBox_Y );
 }

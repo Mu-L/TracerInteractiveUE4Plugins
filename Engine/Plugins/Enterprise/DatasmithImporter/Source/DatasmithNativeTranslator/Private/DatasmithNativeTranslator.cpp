@@ -1,22 +1,21 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithNativeTranslator.h"
 
 #include "DatasmithAnimationElements.h"
 #include "DatasmithAnimationSerializer.h"
-#include "DatasmithMeshHelper.h"
 #include "DatasmithMeshUObject.h"
 #include "DatasmithSceneSource.h"
 #include "DatasmithSceneXmlReader.h"
 #include "IDatasmithSceneElements.h"
+#include "Utility/DatasmithMeshHelper.h"
 
 #include "HAL/FileManager.h"
-#include "MeshDescriptionOperations.h"
 #include "Serialization/MemoryReader.h"
+#include "StaticMeshOperations.h"
 #include "Templates/SharedPointer.h"
 #include "Templates/UniquePtr.h"
 #include "UObject/StrongObjectPtr.h"
-
 
 
 void FDatasmithNativeTranslator::Initialize(FDatasmithTranslatorCapabilities& OutCapabilities)
@@ -105,7 +104,12 @@ namespace DatasmithNativeTranslatorImpl
 
 		FMeshDescription MeshDescription;
 		DatasmithMeshHelper::PrepareAttributeForStaticMesh(MeshDescription);
-		FMeshDescriptionOperations::ConvertFromRawMesh(RawMesh, MeshDescription, GroupNamePerGroupIndex);
+
+		// Do not compute normals and tangents during conversion since we have other operations to apply
+		// on the mesh that might invalidate them anyway and we must also validate the mesh to detect 
+		// vertex positions containing NaN before doing computation as MikkTSpace crashes on NaN values.
+		const bool bSkipNormalsAndTangents = true;
+		FStaticMeshOperations::ConvertFromRawMesh(RawMesh, MeshDescription, GroupNamePerGroupIndex, bSkipNormalsAndTangents);
 		return MeshDescription;
 	}
 

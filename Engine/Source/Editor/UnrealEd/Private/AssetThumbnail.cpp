@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AssetThumbnail.h"
 #include "Engine/Blueprint.h"
@@ -600,7 +600,7 @@ private:
 
 			if ( ClassDisplayName.IsEmpty() )
 			{
-				ClassDisplayName = FText::FromString( FName::NameToDisplayString(*Class->GetName(), false) );
+				ClassDisplayName = Class->GetDisplayNameText();
 			}
 		}
 

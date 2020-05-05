@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -49,7 +49,7 @@ public:
 	template <typename TContextType>
 	TContextType* FindContext() const
 	{
-		return Context.Find<TContextType>();
+		return Context.FindContext<TContextType>();
 	}
 
 	FToolMenuEntry* FindEntry(const FName InName);
@@ -65,9 +65,9 @@ private:
 	int32 IndexOfBlock(const FName InName) const;
 	int32 FindBlockInsertIndex(const FToolMenuEntry& InBlock) const;
 
-	void AssembleBlock(const FToolMenuEntry& InBlock);
-
 	bool IsNonLegacyDynamic() const;
+
+	bool IsRegistering() const;
 
 	friend class UToolMenuSectionExtensions;
 	friend class UToolMenus;
@@ -93,4 +93,9 @@ public:
 	TAttribute<FText> Label;
 
 	FNewSectionConstructChoice Construct;
+
+private:
+
+	bool bIsRegistering;
+	bool bAddedDuringRegister;
 };

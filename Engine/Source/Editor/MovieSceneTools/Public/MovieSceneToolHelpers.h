@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -13,7 +13,10 @@
 #include "ISequencer.h"
 #include "Logging/TokenizedMessage.h"
 #include "MovieSceneTranslator.h"
+#include "MovieSceneSpawnable.h"
 #include "MovieSceneCaptureSettings.h"
+#include "SEnumCombobox.h"
+#include "Animation/AnimSequence.h"
 
 
 class ISequencer;
@@ -46,8 +49,6 @@ struct FFBXInOutParameters
 	bool bConvertSceneUnitBackup;
 	bool bForceFrontXAxisBackup;
 };
-
-DECLARE_DELEGATE_TwoParams(FOnEnumSelectionChanged, int32 /*Selection*/, ESelectInfo::Type /*SelectionType*/);
 
 class MOVIESCENETOOLS_API MovieSceneToolHelpers
 {
@@ -157,7 +158,7 @@ public:
 	 * @param OnSelectionChanged Delegate fired when selection is changed
 	 * @return The new widget
 	 */
-	static TSharedRef<SWidget> MakeEnumComboBox(const UEnum* Enum, TAttribute<int32> CurrentValue, FOnEnumSelectionChanged OnSelectionChanged);
+	static TSharedRef<SWidget> MakeEnumComboBox(const UEnum* Enum, TAttribute<int32> CurrentValue, SEnumComboBox::FOnEnumSelectionChanged OnSelectionChanged);
 
 
 	/**
@@ -262,14 +263,15 @@ public:
 	* loading the data.
 	*
 	* @param World The world to import the fbx into
-	* @param World The movie scene to import the fbx into
+	* @param InMovieScene The movie scene to import the fbx into
 	* @param ObjectBindingMap Map relating binding id's to track names. 
+	* @param TemplateID Id of the sequence that contains the objects being imported onto 
 	* @param ImportFBXSettings FBX Import Settings to enforce.
 	* @param InFBXParams Paremter from ImportReadiedFbx used to reset some internal fbx settings that we override.
 	* @return Whether the fbx file was ready and is ready to be import.
 	*/
 
-	static bool ImportFBXIfReady(UWorld* World, UMovieScene* MovieScene, IMovieScenePlayer* Player, TMap<FGuid, FString>& ObjectBindingMap, UMovieSceneUserImportFBXSettings* ImportFBXSettings,
+	static bool ImportFBXIfReady(UWorld* World, UMovieScene* InMovieScene, IMovieScenePlayer* Player, FMovieSceneSequenceIDRef TemplateID, TMap<FGuid, FString>& ObjectBindingMap, UMovieSceneUserImportFBXSettings* ImportFBXSettings,
 		const FFBXInOutParameters& InFBXParams);
 
 	/**
@@ -278,7 +280,7 @@ public:
 	* @param FbxImporter The Fbx importer
 	* @param InMovieScene The movie scene to import the fbx into
 	* @param Player The player we are getting objects from.
-	* @param TemplateID Id of the sequence template ID.
+	* @param TemplateID Id of the sequence that contains the objects being imported onto
 	* @param InObjectBindingNameMap The object binding to name map to map import fbx animation onto
 	* @param bCreateCameras Whether to allow creation of cameras if found in the fbx file.
 	* @param bNotifySlate  If an issue show's up, whether or not to notify the UI.
@@ -346,6 +348,14 @@ public:
 	static UObject* ExportToCameraAnim(UMovieScene* InMovieScene, FGuid& InObjectBinding);
 
 	/*
+	
+	
+	*/
+	static bool ExportToAnimSequence(UAnimSequence* AnimSequence, UMovieScene* MovieScene, IMovieScenePlayer* Player,
+		USkeletalMeshComponent* SkelMesh, FMovieSceneSequenceIDRef& Template, FMovieSceneSequenceTransform& RootToLocalTransform);
+
+
+	/*
 	 * @return Whether this object class has hidden mobility and can't be animated
 	 */
 	static bool HasHiddenMobility(const UClass* ObjectClass);
@@ -367,6 +377,18 @@ public:
 	 * Get the fbx camera name
 	 */
 	static FString GetCameraName(fbxsdk::FbxCamera* InCamera);
+
+};
+
+// Helper to make spawnables persist throughout the export process and then restore properly afterwards
+struct MOVIESCENETOOLS_API FSpawnableRestoreState
+{
+	FSpawnableRestoreState(UMovieScene* MovieScene);
+	~FSpawnableRestoreState();
+
+	bool bWasChanged;
+	TMap<FGuid, ESpawnOwnership> SpawnOwnershipMap;
+	TWeakObjectPtr<UMovieScene> WeakMovieScene;
 };
 
 class FTrackEditorBindingIDPicker : public FMovieSceneObjectBindingIDPicker

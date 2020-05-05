@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	D3D12Residency.h: D3D memory residency functions.
@@ -6,8 +6,12 @@
 
 #pragma once
 
-#if PLATFORM_XBOXONE
-static_assert(ENABLE_RESIDENCY_MANAGEMENT == 0, "Xbox One doesn't need memory residency management. Please disable it.");
+#if !defined(D3D12_PLATFORM_NEEDS_RESIDENCY_MANAGEMENT)
+	#define D3D12_PLATFORM_NEEDS_RESIDENCY_MANAGEMENT 1
+#endif
+
+#if !(D3D12_PLATFORM_NEEDS_RESIDENCY_MANAGEMENT)
+static_assert(ENABLE_RESIDENCY_MANAGEMENT == 0, "This platform doesn't need memory residency management. Please disable it.");
 namespace D3DX12Residency
 {
 	class ManagedObject {};

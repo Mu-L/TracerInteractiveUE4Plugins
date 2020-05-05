@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ViewModels/Stack/NiagaraStackViewModel.h"
 #include "ViewModels/Stack/NiagaraStackRoot.h"
@@ -6,7 +6,7 @@
 #include "ViewModels/NiagaraEmitterViewModel.h"
 #include "ViewModels/NiagaraEmitterHandleViewModel.h"
 #include "NiagaraScriptGraphViewModel.h"
-#include "NiagaraScriptViewModel.h"
+#include "ViewModels/NiagaraScriptViewModel.h"
 #include "NiagaraSystemEditorData.h"
 #include "NiagaraEmitterEditorData.h"
 #include "NiagaraStackEditorData.h"
@@ -90,8 +90,6 @@ void UNiagaraStackViewModel::InitializeWithViewModels(TSharedPtr<FNiagaraSystemV
 
 	if (SystemViewModelPinned.IsValid())
 	{
-		GEditor->RegisterForUndo(this);
-
 		if (EmitterViewModel.IsValid())
 		{
 			EmitterViewModel->OnScriptCompiled().AddUObject(this, &UNiagaraStackViewModel::OnEmitterCompiled);
@@ -129,7 +127,8 @@ void UNiagaraStackViewModel::InitializeWithRootEntry(UNiagaraStackEntry* InRootE
 	RootEntry->OnRequestFullRefreshDeferred().AddUObject(this, &UNiagaraStackViewModel::EntryRequestFullRefreshDeferred);
 	RootEntries.Add(RootEntry);
 
-	GEditor->RegisterForUndo(this);
+	bExternalRootEntry = true;
+
 	StructureChangedDelegate.Broadcast();
 }
 
@@ -162,9 +161,8 @@ void UNiagaraStackViewModel::Reset()
 	}
 
 	TopLevelViewModels.Empty();
-	
-	GEditor->UnregisterForUndo(this);
 
+	CurrentIssueCycleIndex = -1;
 	CurrentFocusedSearchMatchIndex = -1;
 	bRestartSearch = false;
 	bRefreshPending = false;
@@ -194,8 +192,8 @@ void UNiagaraStackViewModel::Tick()
 		if (bRefreshPending)
 		{
 			RootEntry->RefreshChildren();
-			OnSearchTextChanged(CurrentSearchText);
 			bRefreshPending = false;
+			InvalidateSearchResults();
 		}
 
 		SearchTick();
@@ -207,7 +205,6 @@ void UNiagaraStackViewModel::OnSearchTextChanged(const FText& SearchText)
 	if (RootEntry && !CurrentSearchText.EqualTo(SearchText))
 	{
 		CurrentSearchText = SearchText;
-		RestoreStackEntryExpansionPreSearch();
 		// postpone searching until next tick; protects against crashes from the GC
 		// also this can be triggered by multiple events, so better wait
 		bRestartSearch = true;
@@ -350,15 +347,14 @@ void UNiagaraStackViewModel::GetPathForEntry(UNiagaraStackEntry* Entry, TArray<U
 
 void UNiagaraStackViewModel::OnSystemCompiled()
 {
-	RootEntry->RefreshChildren();
-	// when the entries are refreshed, make sure search results are still valid, the stack counts on them
-	OnSearchTextChanged(CurrentSearchText);
+	// Queue a refresh for the next tick because forcing a refresh now can cause entries to be finalized while they're still being used.
+	bRefreshPending = true;
 }
 
 void UNiagaraStackViewModel::OnEmitterCompiled()
 {
-	RootEntry->RefreshChildren();
-	OnSearchTextChanged(CurrentSearchText);
+	// Queue a refresh for the next tick because forcing a refresh now can cause entries to be finalized while they're still being used.
+	bRefreshPending = true;
 }
 
 void UNiagaraStackViewModel::EmitterParentRemoved()
@@ -472,26 +468,9 @@ void UNiagaraStackViewModel::GeneratePathForEntry(UNiagaraStackEntry* Root, UNia
 	}
 }
 
-void UNiagaraStackViewModel::RestoreStackEntryExpansionPreSearch()
+void UNiagaraStackViewModel::InvalidateSearchResults()
 {
-	GenerateTraversalEntries(RootEntry, TArray<UNiagaraStackEntry*>(), ItemsToRestoreExpansionState);
-
-	while (ItemsToRestoreExpansionState.Num() != 0)
-	{
-		UNiagaraStackEntry* EntryToProcess = ItemsToRestoreExpansionState[0].GetEntry();
-		if (EntryToProcess->GetIsSearchResult() && !EntryToProcess->IsA<UNiagaraStackRoot>())
-		{
-			for (UNiagaraStackEntry* EntryToExpand : ItemsToRestoreExpansionState[0].EntryPath)
-			{
-				if (!EntryToExpand->IsA<UNiagaraStackRoot>())
-				{
-					UNiagaraStackEditorData& StackEditorData = EntryToExpand->GetStackEditorData();
-					EntryToExpand->SetIsExpanded(StackEditorData.GetStackEntryWasExpandedPreSearch(EntryToExpand->GetStackEditorDataKey(), false));
-				}
-			}
-		}
-		ItemsToRestoreExpansionState.RemoveAtSwap(0);
-	}
+	bRestartSearch = true;
 }
 
 UNiagaraStackEntry* UNiagaraStackViewModel::GetRootEntry()
@@ -512,6 +491,11 @@ UNiagaraStackViewModel::FOnStructureChanged& UNiagaraStackViewModel::OnStructure
 UNiagaraStackViewModel::FOnSearchCompleted& UNiagaraStackViewModel::OnSearchCompleted()
 {
 	return SearchCompletedDelegate;
+}
+
+UNiagaraStackViewModel::FOnDataObjectChanged& UNiagaraStackViewModel::OnDataObjectChanged()
+{
+	return DataObjectChangedDelegate;
 }
 
 bool UNiagaraStackViewModel::GetShowAllAdvanced() const
@@ -536,7 +520,7 @@ void UNiagaraStackViewModel::SetShowAllAdvanced(bool bInShowAllAdvanced)
 		}
 	}
 
-	OnSearchTextChanged(CurrentSearchText);
+	InvalidateSearchResults();
 	StructureChangedDelegate.Broadcast();
 }
 
@@ -563,7 +547,7 @@ void UNiagaraStackViewModel::SetShowOutputs(bool bInShowOutputs)
 	}
 	
 	// Showing outputs changes indenting so a full refresh is needed.
-	OnSearchTextChanged(CurrentSearchText);
+	InvalidateSearchResults();
 	RootEntry->RefreshChildren();
 }
 
@@ -590,7 +574,33 @@ void UNiagaraStackViewModel::SetShowLinkedInputs(bool bInShowLinkedInputs)
 	}
 
 	// Showing linked inputs changes indenting so a full refresh is needed.
-	OnSearchTextChanged(CurrentSearchText);
+	InvalidateSearchResults();
+	RootEntry->RefreshChildren();
+}
+
+bool UNiagaraStackViewModel::GetShowOnlyIssues() const
+{
+	for (TSharedRef<FTopLevelViewModel> TopLevelViewModel : TopLevelViewModels)
+	{
+		if (TopLevelViewModel->IsValid() && TopLevelViewModel->GetStackEditorData()->GetShowOnlyIssues())
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void UNiagaraStackViewModel::SetShowOnlyIssues(bool bInShowOnlyIssues)
+{
+	for (TSharedRef<FTopLevelViewModel> TopLevelViewModel : TopLevelViewModels)
+	{
+		if (TopLevelViewModel->IsValid())
+		{
+			TopLevelViewModel->GetStackEditorData()->SetShowOnlyIssues(bInShowOnlyIssues);
+		}
+	}
+
+	InvalidateSearchResults();
 	RootEntry->RefreshChildren();
 }
 
@@ -618,12 +628,6 @@ void UNiagaraStackViewModel::NotifyStructureChanged()
 	EntryStructureChanged();
 }
 
-void UNiagaraStackViewModel::PostUndo(bool bSuccess)
-{
-	RootEntry->RefreshChildren();
-	OnSearchTextChanged(CurrentSearchText);
-}
-
 void UNiagaraStackViewModel::EntryStructureChanged()
 {
 	if (bUsesTopLevelViewModels)
@@ -632,7 +636,7 @@ void UNiagaraStackViewModel::EntryStructureChanged()
 	}
 	RefreshHasIssues();
 	StructureChangedDelegate.Broadcast();
-	OnSearchTextChanged(CurrentSearchText);
+	InvalidateSearchResults();
 }
 
 void UNiagaraStackViewModel::EntryDataObjectModified(UObject* ChangedObject)
@@ -641,7 +645,8 @@ void UNiagaraStackViewModel::EntryDataObjectModified(UObject* ChangedObject)
 	{
 		SystemViewModel.Pin()->NotifyDataObjectChanged(ChangedObject);
 	}
-	OnSearchTextChanged(CurrentSearchText);
+	InvalidateSearchResults();
+	DataObjectChangedDelegate.Broadcast(ChangedObject);
 }
 
 void UNiagaraStackViewModel::EntryRequestFullRefresh()
@@ -740,6 +745,61 @@ void UNiagaraStackViewModel::RefreshHasIssues()
 	else
 	{
 		bHasIssues = RootEntry->HasIssuesOrAnyChildHasIssues();
+	}
+}
+
+UNiagaraStackEntry* UNiagaraStackViewModel::GetCurrentFocusedIssue() const
+{
+	if (CurrentIssueCycleIndex >= 0)
+	{
+		UNiagaraStackEntry* CyclingRootEntry = CyclingIssuesForTopLevel.Pin()->RootEntry.Get();
+		if (CyclingRootEntry != nullptr)
+		{
+			const TArray<UNiagaraStackEntry*>& Issues = CyclingRootEntry->GetAllChildrenWithIssues();
+			return Issues[CurrentIssueCycleIndex];
+		}
+	}
+	
+	return nullptr;
+}
+
+void UNiagaraStackViewModel::OnCycleThroughIssues(TSharedPtr<UNiagaraStackViewModel::FTopLevelViewModel> TopLevelToCycle)
+{
+	if (RootEntries.Num() == 0)
+	{
+		CurrentIssueCycleIndex = -1;
+		CyclingIssuesForTopLevel.Reset();
+		return;
+	}
+
+	if (CyclingIssuesForTopLevel.IsValid() && CyclingIssuesForTopLevel != TopLevelToCycle)
+	{
+		CurrentIssueCycleIndex = -1;
+	}
+
+	CyclingIssuesForTopLevel = TopLevelToCycle;
+
+	UNiagaraStackEntry* CyclingRootEntry = nullptr;
+	if (CyclingIssuesForTopLevel.IsValid())
+	{
+		CyclingRootEntry = CyclingIssuesForTopLevel.Pin()->RootEntry.Get();
+	}
+	
+	if (CyclingRootEntry == nullptr)
+	{
+		CurrentIssueCycleIndex = -1;
+		CyclingIssuesForTopLevel.Reset();
+		return;
+	}
+
+	const TArray<UNiagaraStackEntry*>& Issues = CyclingRootEntry->GetAllChildrenWithIssues();
+	if (Issues.Num() > 0)
+	{
+		++CurrentIssueCycleIndex;
+		if (CurrentIssueCycleIndex >= Issues.Num())
+		{
+			CurrentIssueCycleIndex = 0;
+		}
 	}
 }
 

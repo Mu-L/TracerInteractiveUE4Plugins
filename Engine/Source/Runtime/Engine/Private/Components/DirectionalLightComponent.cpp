@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	DirectionalLightComponent.cpp: DirectionalLightComponent implementation.
@@ -44,7 +44,13 @@ static TAutoConsoleVariable<float> CVarPerObjectCastDistanceRadiusScale(
 	TEXT("PerObjectCastDistanceRadiusScale The scale factor multiplied with the radius of the object to calculate the maximum distance a per-object directional shadow can reach. This will only take effect after a certain (large) radius. Default is 8 times the object radius."),
 	ECVF_RenderThreadSafe
 	);
-
+static TAutoConsoleVariable<float> CVarPerObjectCastDistanceMin(
+	TEXT("r.Shadow.PerObjectCastDistanceMin"),
+	(float)HALF_WORLD_MAX / 32.0f,
+	TEXT("Minimum cast distance for Per-Object shadows, i.e., CastDistDance = Max(r.Shadow.PerObjectCastDistanceRadiusScale * object-radius, r.Shadow.PerObjectCastDistanceMin).\n")
+	TEXT("  Default: HALF_WORLD_MAX / 32.0f"),
+	ECVF_RenderThreadSafe
+	);
 static TAutoConsoleVariable<int32> CVarMaxNumFarShadowCascades(
 	TEXT("r.Shadow.MaxNumFarShadowCascades"),
 	10,
@@ -398,7 +404,7 @@ public:
 		// Reduce casting distance on a directional light
 		// This is necessary to improve floating point precision in several places, especially when deriving frustum verts from InvReceiverMatrix
 		// This takes the object size into account to ensure that large objects get an extended distance
-		OutInitializer.MaxDistanceToCastInLightW = FMath::Clamp(SubjectBounds.SphereRadius * CVarPerObjectCastDistanceRadiusScale.GetValueOnRenderThread(), (float)HALF_WORLD_MAX / 32.0f, (float)WORLD_MAX);
+		OutInitializer.MaxDistanceToCastInLightW = FMath::Clamp(SubjectBounds.SphereRadius * CVarPerObjectCastDistanceRadiusScale.GetValueOnRenderThread(), CVarPerObjectCastDistanceMin.GetValueOnRenderThread(), (float)WORLD_MAX);
 
 		return true;
 	}
@@ -406,7 +412,9 @@ public:
 	virtual bool ShouldCreateRayTracedCascade(ERHIFeatureLevel::Type InFeatureLevel, bool bPrecomputedLightingIsValid, int32 MaxNearCascades) const override
 	{
 		static auto CVarDistanceFieldShadowing = IConsoleManager::Get().FindConsoleVariable(TEXT("r.DistanceFieldShadowing"));
-		if (CVarDistanceFieldShadowing != nullptr && CVarDistanceFieldShadowing->GetInt() == 0)
+		static IConsoleVariable* CVarHFShadowing = IConsoleManager::Get().FindConsoleVariable(TEXT("r.HeightFieldShadowing"));
+
+		if (CVarDistanceFieldShadowing != nullptr && CVarDistanceFieldShadowing->GetInt() == 0 && (!CVarHFShadowing || !CVarHFShadowing->GetInt()))
 		{
 			return false;
 		}
@@ -779,12 +787,16 @@ private:
 		{
 			SplitFar += FadeExtension;
 		}
-		else if (bIsRayTracedCascade)
+		// Only do this if there is no static shadowing taking over after the fade (i.e., the intention is to fade to nothing, when only dynamic shadowing is used)
+		else if (!(bPrecomputedLightingIsValid && bStaticShadowing))
 		{
-			FadeExtension *= FMath::Clamp(CVarRtdfFarTransitionScale.GetValueOnAnyThread(), 0.0f, 1.0f);
-			// For the ray-traced cascade, we want to fade out to avoid a hard line.
-			// Since there is no further cascade, extending the far makes less sensse as it affects performance by extending the shadow range.
-			// Thus, we instead move the fade plane closer.
+			if (bIsRayTracedCascade)
+			{
+				FadeExtension *= FMath::Clamp(CVarRtdfFarTransitionScale.GetValueOnAnyThread(), 0.0f, 1.0f);
+			}
+			// For the last cascade, we want to fade out to avoid a hard line, since there is no further cascade to overlap with, 
+			// extending the far makes little sensse as extending the shadow range would be counter intuitive and affect performance. 
+			// Thus, move the fade plane closer:
 			FadePlane -= FadeExtension;
 		}
 
@@ -810,6 +822,7 @@ private:
 			OutCascadeSettings->FadePlaneOffset = FadePlane;
 			OutCascadeSettings->FadePlaneLength = SplitFar - FadePlane;
 			OutCascadeSettings->CascadeBiasDistribution = ShadowCascadeBiasDistribution;
+			OutCascadeSettings->ShadowSplitIndex = (int32)ShadowSplitIndex;
 		}
 
 		const FSphere CascadeSphere = FDirectionalLightSceneProxy::GetShadowSplitBoundsDepthRange(View, View.ViewMatrices.GetViewOrigin(), SplitNear, SplitFar, OutCascadeSettings);
@@ -868,7 +881,7 @@ UDirectionalLightComponent::UDirectionalLightComponent(const FObjectInitializer&
 /**
  * Called after property has changed via e.g. property window or set command.
  *
- * @param	PropertyThatChanged	UProperty that has been changed, NULL if unknown
+ * @param	PropertyThatChanged	FProperty that has been changed, NULL if unknown
  */
 void UDirectionalLightComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
@@ -893,7 +906,7 @@ void UDirectionalLightComponent::PostEditChangeProperty(FPropertyChangedEvent& P
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 }
 
-bool UDirectionalLightComponent::CanEditChange(const UProperty* InProperty) const
+bool UDirectionalLightComponent::CanEditChange(const FProperty* InProperty) const
 {
 	if (InProperty)
 	{

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	UObjectClusters.h: Unreal UObject Cluster helper functions
@@ -25,3 +25,5 @@ COREUOBJECT_API void FindStaleClusters(const TArray<FString>& Args);
 
 #endif // !UE_BUILD_SHIPPING
 
+// Whether object clusters can be created or not.
+bool CanCreateObjectClusters();

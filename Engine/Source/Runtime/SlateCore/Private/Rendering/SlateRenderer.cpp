@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Rendering/SlateRenderer.h"
 #include "Textures/TextureAtlas.h"
@@ -18,6 +18,24 @@ FSlateFontServices::FSlateFontServices(TSharedRef<class FSlateFontCache> InGameT
 	, RenderThreadFontMeasure((GameThreadFontCache == RenderThreadFontCache) ? GameThreadFontMeasure : FSlateFontMeasure::Create(RenderThreadFontCache))
 {
 	UE_LOG(LogSlate, Log, TEXT("SlateFontServices - WITH_FREETYPE: %d, WITH_HARFBUZZ: %d"), WITH_FREETYPE, WITH_HARFBUZZ);
+	
+	GameThreadFontCache->OnReleaseResources().AddRaw(this, &FSlateFontServices::HandleFontCacheReleaseResources);
+
+	if (GameThreadFontCache != RenderThreadFontCache)
+	{
+		RenderThreadFontCache->OnReleaseResources().AddRaw(this, &FSlateFontServices::HandleFontCacheReleaseResources);
+	}
+}
+
+
+FSlateFontServices::~FSlateFontServices()
+{
+	GameThreadFontCache->OnReleaseResources().RemoveAll(this);
+
+	if (GameThreadFontCache != RenderThreadFontCache)
+	{
+		RenderThreadFontCache->OnReleaseResources().RemoveAll(this);
+	}
 }
 
 
@@ -94,8 +112,42 @@ void FSlateFontServices::ReleaseResources()
 }
 
 
+FOnReleaseFontResources& FSlateFontServices::OnReleaseResources()
+{
+	return OnReleaseResourcesDelegate;
+}
+
+
+void FSlateFontServices::HandleFontCacheReleaseResources(const FSlateFontCache& InFontCache)
+{
+	OnReleaseResourcesDelegate.Broadcast(InFontCache);
+}
+
+
 /* FSlateRenderer interface
  *****************************************************************************/
+
+FSlateRenderer::FSlateRenderer(const TSharedRef<FSlateFontServices>& InSlateFontServices)
+	: SlateFontServices(InSlateFontServices)
+{
+	SlateFontServices->OnReleaseResources().AddRaw(this, &FSlateRenderer::HandleFontCacheReleaseResources);
+}
+
+
+FSlateRenderer::~FSlateRenderer()
+{
+	if (SlateFontServices)
+	{
+		SlateFontServices->OnReleaseResources().RemoveAll(this);
+	}
+}
+
+
+void FSlateRenderer::HandleFontCacheReleaseResources(const class FSlateFontCache& InFontCache)
+{
+	FlushCommands();
+}
+
 
 bool FSlateRenderer::IsViewportFullscreen( const SWindow& Window ) const
 {
@@ -111,7 +163,14 @@ bool FSlateRenderer::IsViewportFullscreen( const SWindow& Window ) const
 		}
 		else
 		{
-			bFullscreen = Window.GetWindowMode() == EWindowMode::Fullscreen;
+			bFullscreen = Window.GetNativeWindow()->IsFullscreenSupported() && Window.GetWindowMode() == EWindowMode::Fullscreen;
+
+#if PLATFORM_WINDOWS
+			// When we are in fullscreen mode but the user alt-tabs out we need to temporarily drop out of fullscreen while the window has lost focus, otherwise DXGI will eventually
+			// forcibly throw us out of fullscreen mode with device loss and crash as typical result. By returning false here we'll trigger a mode switch to windowed when the user
+			// alt-tabs, and back to fullscreen again once the window comes back in focus, through the regular path. DXGI will never need to intervene and everyone is happy.
+			bFullscreen = bFullscreen && Window.GetNativeWindow()->IsForegroundWindow();
+#endif
 		}
 	}
 	else

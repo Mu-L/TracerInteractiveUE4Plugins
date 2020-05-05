@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Chaos/Box.h"
@@ -10,26 +10,22 @@
 namespace Chaos
 {
 
-template <typename T, int d>
-void TImplicitObjectTransformSerializeHelper(FChaosArchive& Ar, TSerializablePtr<TImplicitObject<T, d>>& Obj)
+inline void TImplicitObjectTransformSerializeHelper(FChaosArchive& Ar, TSerializablePtr<FImplicitObject>& Obj)
 {
 	Ar << Obj;
 }
 
-template <typename T, int d>
-void TImplicitObjectTransformSerializeHelper(FChaosArchive& Ar, const TImplicitObject<T, d>* Obj)
+inline void TImplicitObjectTransformSerializeHelper(FChaosArchive& Ar, const FImplicitObject* Obj)
 {
 	check(false);
 }
 
-template <typename T, int d>
-void TImplicitObjectTransformAccumulateSerializableHelper(TArray<Pair<TSerializablePtr<TImplicitObject<T, d>>, TRigidTransform<T, d>>>& Out, TSerializablePtr<TImplicitObject<T, d>> Obj, const TRigidTransform<T, d>& NewTM)
+inline void TImplicitObjectTransformAccumulateSerializableHelper(TArray<Pair<TSerializablePtr<FImplicitObject>, FRigidTransform3>>& Out, TSerializablePtr<FImplicitObject> Obj, const FRigidTransform3& NewTM)
 {
 	Obj->AccumulateAllSerializableImplicitObjects(Out, NewTM, Obj);
 }
 
-template <typename T, int d>
-void TImplicitObjectTransformAccumulateSerializableHelper(TArray<Pair<TSerializablePtr<TImplicitObject<T, d>>, TRigidTransform<T, d>>>& Out, const TImplicitObject<T, d>* Obj, const TRigidTransform<T, d>& NewTM)
+inline void TImplicitObjectTransformAccumulateSerializableHelper(TArray<Pair<TSerializablePtr<FImplicitObject>, FRigidTransform3>>& Out, const FImplicitObject* Obj, const FRigidTransform3& NewTM)
 {
 	check(false);
 }
@@ -40,60 +36,68 @@ void TImplicitObjectTransformAccumulateSerializableHelper(TArray<Pair<TSerializa
  * @template bSerializable Whether the shape can be serialized (usually true). Set to false for transient/stack-allocated objects. 
  */
 template<class T, int d, bool bSerializable = true>
-class TImplicitObjectTransformed final : public TImplicitObject<T, d>
+class TImplicitObjectTransformed final : public FImplicitObject
 {
 	using FStorage = TImplicitObjectPtrStorage<T, d, bSerializable>;
 	using ObjectType = typename FStorage::PtrType;
 
 public:
-	using TImplicitObject<T, d>::GetTypeName;
+	using FImplicitObject::GetTypeName;
 
 	/**
 	 * Create a transform around an ImplicitObject. Lifetime of the wrapped object is managed externally.
 	 */
 	TImplicitObjectTransformed(ObjectType Object, const TRigidTransform<T, d>& InTransform)
-	    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::Transformed)
+	    : FImplicitObject(EImplicitObject::HasBoundingBox, ImplicitObjectType::Transformed)
 	    , MObject(Object)
 	    , MTransform(InTransform)
-	    , MLocalBoundingBox(Object->BoundingBox().TransformedBox(InTransform))
+	    , MLocalBoundingBox(Object->BoundingBox().TransformedAABB(InTransform))
 	{
 		this->bIsConvex = Object->IsConvex();
+		this->bDoCollide = MObject->GetDoCollide();
 	}
 
 	/**
 	 * Create a transform around an ImplicitObject and take control of its lifetime.
 	 */
-	TImplicitObjectTransformed(TUniquePtr<Chaos::TImplicitObject<T,d>> &&ObjectOwner, const TRigidTransform<T, d>& InTransform)
-	    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::Transformed)
+	TImplicitObjectTransformed(TUniquePtr<Chaos::FImplicitObject> &&ObjectOwner, const TRigidTransform<T, d>& InTransform)
+	    : FImplicitObject(EImplicitObject::HasBoundingBox, ImplicitObjectType::Transformed)
 		, MObjectOwner(MoveTemp(ObjectOwner))
 	    , MTransform(InTransform)
 	{
 		static_assert(bSerializable, "Non-serializable TImplicitObjectTransformed created with a UniquePtr");
 		this->MObject = FStorage::Convert(MObjectOwner);
-		this->MLocalBoundingBox = MObject->BoundingBox().TransformedBox(InTransform);
+		this->MLocalBoundingBox = MObject->BoundingBox().TransformedAABB(InTransform);
 		this->bIsConvex = MObject->IsConvex();
+		this->bDoCollide = MObject->GetDoCollide();
 	}
 
 	TImplicitObjectTransformed(const TImplicitObjectTransformed<T, d, bSerializable>& Other) = delete;
 	TImplicitObjectTransformed(TImplicitObjectTransformed<T, d, bSerializable>&& Other)
-	    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::Transformed)
+	    : FImplicitObject(EImplicitObject::HasBoundingBox, ImplicitObjectType::Transformed)
 	    , MObject(Other.MObject)
 		, MObjectOwner(MoveTemp(Other.MObjectOwner))
 	    , MTransform(Other.MTransform)
 	    , MLocalBoundingBox(MoveTemp(Other.MLocalBoundingBox))
 	{
 		this->bIsConvex = Other.MObject->IsConvex();
+		this->bDoCollide = Other.MObject->GetDoCollide();
 	}
 	~TImplicitObjectTransformed() {}
 
-	static ImplicitObjectType GetType()
+	static constexpr EImplicitObjectType StaticType()
 	{
 		return ImplicitObjectType::Transformed;
 	}
 
-	const TImplicitObject<T, d>* GetTransformedObject() const
+	const FImplicitObject* GetTransformedObject() const
 	{
 		return MObject.Get();
+	}
+
+	bool GetDoCollide() const
+	{
+		return MObject->GetDoCollide();
 	}
 
 	virtual T PhiWithNormal(const TVector<T, d>& x, TVector<T, d>& Normal) const override
@@ -113,8 +117,11 @@ public:
 
 		if (MObject->Raycast(LocalStart, LocalDir, Length, Thickness, OutTime, LocalPosition, LocalNormal, OutFaceIndex))
 		{
-			OutPosition = MTransform.TransformPosition(LocalPosition);
-			OutNormal = MTransform.TransformVector(LocalNormal);
+			if (OutTime != 0.0f)
+			{
+				OutPosition = MTransform.TransformPosition(LocalPosition);
+				OutNormal = MTransform.TransformVector(LocalNormal);
+			}
 			return true;
 		}
 		
@@ -154,9 +161,18 @@ public:
 		return ClosestIntersection;
 	}
 
-	virtual TVector<T, d> Support(const TVector<T, d>& Direction, const T Thickness) const override
+	virtual int32 FindClosestFaceAndVertices(const FVec3& Position, TArray<FVec3>& FaceVertices, FReal SearchDist = 0.01) const override
 	{
-		return MTransform.TransformPosition(MObject->Support(MTransform.InverseTransformVector(Direction), Thickness));
+		const FVec3 LocalPoint = MTransform.InverseTransformPosition(Position);
+		int32 FaceIndex = MObject->FindClosestFaceAndVertices(LocalPoint, FaceVertices, SearchDist);
+		if (FaceIndex != INDEX_NONE)
+		{
+			for (FVec3& Vec : FaceVertices)
+			{
+				Vec = MTransform.TransformPosition(Vec);
+			}
+		}
+		return FaceIndex;
 	}
 
 	const TRigidTransform<T, d>& GetTransform() const { return MTransform; }
@@ -166,22 +182,22 @@ public:
 		MTransform = InTransform;
 	}
 
-	virtual void AccumulateAllImplicitObjects(TArray<Pair<const TImplicitObject<T, d>*, TRigidTransform<T, d>>>& Out, const TRigidTransform<T, d>& ParentTM) const
+	virtual void AccumulateAllImplicitObjects(TArray<Pair<const FImplicitObject*, TRigidTransform<T, d>>>& Out, const TRigidTransform<T, d>& ParentTM) const
 	{
 		const TRigidTransform<T, d> NewTM = MTransform * ParentTM;
 		MObject->AccumulateAllImplicitObjects(Out, NewTM);
 	}
 
-	virtual void AccumulateAllSerializableImplicitObjects(TArray<Pair<TSerializablePtr<TImplicitObject<T, d>>, TRigidTransform<T, d>>>& Out, const TRigidTransform<T, d>& ParentTM, TSerializablePtr<TImplicitObject<T,d>> This) const
+	virtual void AccumulateAllSerializableImplicitObjects(TArray<Pair<TSerializablePtr<FImplicitObject>, TRigidTransform<T, d>>>& Out, const TRigidTransform<T, d>& ParentTM, TSerializablePtr<FImplicitObject> This) const
 	{
 		check(bSerializable);
 		const TRigidTransform<T, d> NewTM = MTransform * ParentTM;
 		TImplicitObjectTransformAccumulateSerializableHelper(Out, MObject, NewTM);
 	}
 
-	virtual void FindAllIntersectingObjects(TArray < Pair<const TImplicitObject<T, d>*, TRigidTransform<T, d>>>& Out, const TBox<T, d>& LocalBounds) const
+	virtual void FindAllIntersectingObjects(TArray < Pair<const FImplicitObject*, TRigidTransform<T, d>>>& Out, const TAABB<T, d>& LocalBounds) const
 	{
-		const TBox<T, d> SubobjectBounds = LocalBounds.TransformedBox(MTransform.Inverse());
+		const TAABB<T, d> SubobjectBounds = LocalBounds.TransformedAABB(MTransform.Inverse());
 		int32 NumOut = Out.Num();
 		MObject->FindAllIntersectingObjects(Out, SubobjectBounds);
 		if (Out.Num() > NumOut)
@@ -190,7 +206,26 @@ public:
 		}
 	}
 
-	virtual const TBox<T, d>& BoundingBox() const override { return MLocalBoundingBox; }
+	virtual const TAABB<T, d> BoundingBox() const override { return MLocalBoundingBox; }
+
+	const FReal GetVolume() const
+	{
+		// TODO: More precise volume!
+		return BoundingBox().GetVolume();
+	}
+
+	const FMatrix33 GetInertiaTensor(const FReal Mass) const
+	{
+		// TODO: More precise inertia!
+		return BoundingBox().GetInertiaTensor(Mass);
+	}
+
+	const FVec3 GetCenterOfMass() const
+	{
+		// TODO: Actually compute this!
+		return BoundingBox().GetCenterOfMass();
+	}
+
 
 	const ObjectType Object() const { return MObject; }
 	
@@ -198,10 +233,10 @@ public:
 	{
 		check(bSerializable);
 		FChaosArchiveScopedMemory ScopedMemory(Ar, GetTypeName(), false);
-		TImplicitObject<T, d>::SerializeImp(Ar);
+		FImplicitObject::SerializeImp(Ar);
 		TImplicitObjectTransformSerializeHelper(Ar, MObject);
 		Ar << MTransform;
-		Ar << MLocalBoundingBox;
+		TBox<T, d>::SerializeAsAABB(Ar, MLocalBoundingBox);
 	}
 
 	virtual uint32 GetTypeHash() const override
@@ -210,15 +245,21 @@ public:
 		return HashCombine(MObject->GetTypeHash(), ::GetTypeHash(MTransform));
 	}
 
+	virtual uint16 GetMaterialIndex(uint32 HintIndex) const override
+	{
+		return MObject->GetMaterialIndex(HintIndex);
+	}
+
 private:
 	ObjectType MObject;
-	TUniquePtr<Chaos::TImplicitObject<T, d>> MObjectOwner;
+	TUniquePtr<Chaos::FImplicitObject> MObjectOwner;
 	TRigidTransform<T, d> MTransform;
-	TBox<T, d> MLocalBoundingBox;
+	TAABB<T, d> MLocalBoundingBox;
 
 	//needed for serialization
-	TImplicitObjectTransformed() : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::Transformed) {}
-	friend TImplicitObject<T, d>;	//needed for serialization
+	TImplicitObjectTransformed() : FImplicitObject(EImplicitObject::HasBoundingBox, ImplicitObjectType::Transformed) {}
+
+	friend FImplicitObject;	//needed for serialization
 };
 
 template <typename T, int d>

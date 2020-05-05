@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -10,24 +10,25 @@
 #include "GroomActor.h"
 #include "NiagaraDataInterfaceHairStrands.generated.h"
 
-/** Size of each strands*/
-UENUM(BlueprintType)
-enum class EHairStrandsSize : uint8
-{
-	None = 0 UMETA(Hidden),
-	Size2 = 0x02 UMETA(DisplatName = "2"),
-	Size4 = 0x04 UMETA(DisplatName = "4"),
-	Size8 = 0x08 UMETA(DisplatName = "8"),
-	Size16 = 0x10 UMETA(DisplatName = "16"),
-	Size32 = 0x20 UMETA(DisplatName = "32")
-};
+static const int32 MaxDelay = 2;
+static const int32 NumScales = 4;
+static const int32 StretchOffset = 0;
+static const int32 BendOffset = 1;
+static const int32 RadiusOffset = 2;
+static const int32 ThicknessOffset = 3;
+
+struct FNDIHairStrandsData;
 
 /** Render buffers that will be used in hlsl functions */
 struct FNDIHairStrandsBuffer : public FRenderResource
 {
 	/** Set the asset that will be used to affect the buffer */
-	void SetHairAsset(const FHairStrandsDatas*  HairStrandsDatas, const FHairStrandsRestResource*  HairStrandsRestResource, 
-		const FHairStrandsDeformedResource*  HairStrandsDeformedResource, const FHairStrandsRootResource* HairStrandsRootResource );
+	void Initialize(const FHairStrandsDatas*  HairStrandsDatas, 
+		const FHairStrandsRestResource*  HairStrandsRestResource, 
+		const FHairStrandsDeformedResource*  HairStrandsDeformedResource, 
+		const FHairStrandsRestRootResource* HairStrandsRestRootResource, 
+		const FHairStrandsDeformedRootResource* HairStrandsDeformedRootResource,
+		const FNDIHairStrandsData* NDIStrandsDatas);
 
 	/** Init the buffer */
 	virtual void InitRHI() override;
@@ -38,41 +39,20 @@ struct FNDIHairStrandsBuffer : public FRenderResource
 	/** Get the resource name */
 	virtual FString GetFriendlyName() const override { return TEXT("FNDIHairStrandsBuffer"); }
 
-	/** Clear the bounding box buffer */
-	void ClearBuffer(FRHICommandList& RHICmdList);
-
 	/** Strand curves point offset buffer */
 	FRWBuffer CurvesOffsetsBuffer;
 
 	/** Deformed position buffer in case no ressource are there */
 	FRWBuffer DeformedPositionBuffer;
 
-	/**Rest triangle position of vertex A*/
-	FRWBuffer RestTrianglePositionABuffer;
+	/** Bounding Box Buffer A*/
+	FRWBuffer BoundingBoxBufferA;
 
-	/**Rest triangle position of vertex B*/
-	FRWBuffer RestTrianglePositionBBuffer;
+	/** Bounding Box Buffer B*/
+	FRWBuffer BoundingBoxBufferB;
 
-	/**Rest triangle position of vertex C*/
-	FRWBuffer RestTrianglePositionCBuffer;
-
-	/**Deformed triangle position of vertex A*/
-	FRWBuffer DeformedTrianglePositionABuffer;
-
-	/**Deformed triangle position of vertex B*/
-	FRWBuffer DeformedTrianglePositionBBuffer;
-
-	/**Deformed triangle position of vertex C*/
-	FRWBuffer DeformedTrianglePositionCBuffer;
-
-	/**Root barycentric coordinates */
-	FRWBuffer RootBarycentricCoordinatesBuffer;
-
-	/** Bounding Box Buffer*/
-	FRWBuffer BoundingBoxBuffer;
-
-	/** Node Bound Buffer*/
-	FRWBuffer NodeBoundBuffer;
+	/** Params scale buffer */
+	FRWBuffer ParamsScaleBuffer;
 
 	/** The strand asset datas from which to sample */
 	const FHairStrandsDatas* SourceDatas;
@@ -84,20 +64,142 @@ struct FNDIHairStrandsBuffer : public FRenderResource
 	const FHairStrandsDeformedResource* SourceDeformedResources;
 
 	/** The strand root resource to write into */
-	const FHairStrandsRootResource* SourceRootResources;
+	const FHairStrandsRestRootResource* SourceRestRootResources;
+	
+	/** The strand root resource to write into */
+	const FHairStrandsDeformedRootResource* SourceDeformedRootResources;
+
+	/** Niagara datas interface datas */
+	const FNDIHairStrandsData* NDIDatas;
 };
 
 /** Data stored per strand base instance*/
 struct FNDIHairStrandsData
 {
+	FNDIHairStrandsData()
+	{
+		ResetDatas();
+	}
+	/** Initialize the buffers */
+	bool Init(class UNiagaraDataInterfaceHairStrands* Interface, FNiagaraSystemInstance* SystemInstance);
+
+	/** Release the buffers */
+	void Release();
+
+	/** Update the buffers */
+	void Update(UNiagaraDataInterfaceHairStrands* Interface, FNiagaraSystemInstance* SystemInstance, const FHairStrandsDatas* HairStrandsDatas, UGroomAsset* GroomAsset, const int32 GroupIndex);
+
+	inline void ResetDatas()
+	{
+		WorldTransform.SetIdentity();
+		BoxCenter = FVector(0, 0, 0);
+		BoxExtent = FVector(0, 0, 0);
+
+		GlobalInterpolation = false;
+
+		TickCount = 0;
+		ForceReset = true;
+
+		NumStrands = 0;
+		StrandsSize = 0;
+
+		SubSteps = 5;
+		IterationCount = 20;
+
+		GravityVector = FVector(0.0, 0.0, -981.0);
+		AirDrag = 0.1;
+		AirVelocity = FVector(0, 0, 0);
+
+		SolveBend = true;
+		ProjectBend = false;
+		BendDamping = 0.01;
+		BendStiffness = 0.01;
+
+		SolveStretch = true;
+		ProjectStretch = false;
+		StretchDamping = 0.01;
+		StretchStiffness = 1.0;
+
+		SolveCollision = true;
+		ProjectCollision = true;
+		KineticFriction = 0.1;
+		StaticFriction = 0.1;
+		StrandsViscosity = 1.0;
+		GridDimension = FIntVector(30,30,30);
+		CollisionRadius = 1.0;
+
+		StrandsDensity = 1.0;
+		StrandsSmoothing = 0.1;
+		StrandsThickness = 0.01;
+
+		for (int32 i = 0; i < 32 * NumScales; ++i)
+		{
+			ParamsScale[i] = 1.0;
+		}
+	}
+
+	inline void CopyDatas(const FNDIHairStrandsData* OtherDatas)
+	{
+		if (OtherDatas != nullptr)
+		{
+			HairStrandsBuffer = OtherDatas->HairStrandsBuffer;
+
+			WorldTransform = OtherDatas->WorldTransform;
+			BoxCenter = OtherDatas->BoxCenter;
+			BoxExtent = OtherDatas->BoxExtent;
+
+			GlobalInterpolation = OtherDatas->GlobalInterpolation;
+
+			TickCount = OtherDatas->TickCount;
+			ForceReset = OtherDatas->ForceReset;
+
+			NumStrands = OtherDatas->NumStrands;
+			StrandsSize = OtherDatas->StrandsSize;
+
+			SubSteps = OtherDatas->SubSteps;
+			IterationCount = OtherDatas->IterationCount;
+
+			GravityVector = OtherDatas->GravityVector;
+			AirDrag = OtherDatas->AirDrag;
+			AirVelocity = OtherDatas->AirVelocity;
+
+			SolveBend = OtherDatas->SolveBend;
+			ProjectBend = OtherDatas->ProjectBend;
+			BendDamping = OtherDatas->BendDamping;
+			BendStiffness = OtherDatas->BendStiffness;
+
+			SolveStretch = OtherDatas->SolveStretch;
+			ProjectStretch = OtherDatas->ProjectStretch;
+			StretchDamping = OtherDatas->StretchDamping;
+			StretchStiffness = OtherDatas->StretchStiffness;
+
+			SolveCollision = OtherDatas->SolveCollision;
+			ProjectCollision = OtherDatas->ProjectCollision;
+			StaticFriction = OtherDatas->StaticFriction;
+			KineticFriction = OtherDatas->KineticFriction;
+			StrandsViscosity = OtherDatas->StrandsViscosity;
+			GridDimension = OtherDatas->GridDimension;
+			CollisionRadius = OtherDatas->CollisionRadius;
+
+			StrandsDensity = OtherDatas->StrandsDensity;
+			StrandsSmoothing = OtherDatas->StrandsSmoothing;
+			StrandsThickness = OtherDatas->StrandsThickness;
+
+			ParamsScale = OtherDatas->ParamsScale;
+		}
+	}
+
 	/** Cached World transform. */
 	FTransform WorldTransform;
+
+	/** Global Interpolation */
+	bool GlobalInterpolation;
 
 	/** Number of strands*/
 	int32 NumStrands;
 
 	/** Strand size */
-	int32 StrandSize;
+	int32 StrandsSize;
 
 	/** Bounding box center */
 	FVector BoxCenter;
@@ -111,11 +213,80 @@ struct FNDIHairStrandsData
 	/** Force reset simulation */
 	bool ForceReset;
 
-	/** Reset Tick*/
-	int32 ResetTick;
-
 	/** Strands Gpu buffer */
 	FNDIHairStrandsBuffer* HairStrandsBuffer;
+	
+	/** Number of substeps to be used */
+	int32 SubSteps;
+
+	/** Number of iterations for the constraint solver  */
+	int32 IterationCount;
+
+	/** Acceleration vector in cm/s2 to be used for the gravity*/
+	FVector GravityVector;
+
+	/** Coefficient between 0 and 1 to be used for the air drag */
+	float AirDrag;
+
+	/** Velocity of the surrounding air in cm/s  */
+	FVector AirVelocity;
+
+	/** Velocity of the surrounding air in cm/s */
+	bool SolveBend;
+
+	/** Enable the solve of the bend constraint during the xpbd loop */
+	bool ProjectBend;
+
+	/** Damping for the bend constraint between 0 and 1 */
+	float BendDamping;
+
+	/** Stiffness for the bend constraint in GPa */
+	float BendStiffness;
+
+	/** Enable the solve of the stretch constraint during the xpbd loop */
+	bool SolveStretch;
+
+	/** Enable the projection of the stretch constraint after the xpbd loop */
+	bool ProjectStretch;
+
+	/** Damping for the stretch constraint between 0 and 1 */
+	float StretchDamping;
+
+	/** Stiffness for the stretch constraint in GPa */
+	float StretchStiffness;
+
+	/** Enable the solve of the collision constraint during the xpbd loop  */
+	bool SolveCollision;
+
+	/** Enable ther projection of the collision constraint after the xpbd loop */
+	bool ProjectCollision;
+
+	/** Static friction used for collision against the physics asset */
+	float StaticFriction;
+
+	/** Kinetic friction used for collision against the physics asset*/
+	float KineticFriction;
+
+	/** Radius that will be used for the collision detection against the physics asset */
+	float StrandsViscosity;
+
+	/** Grid Dimension used to compute the viscosity forces */
+	FIntVector GridDimension;
+
+	/** Radius scale along the strand */
+	float CollisionRadius;
+
+	/** Density of the strands in g/cm3 */
+	float StrandsDensity;
+
+	/** Smoothing between 0 and 1 of the incoming guides curves for better stability */
+	float StrandsSmoothing;
+
+	/** Strands thickness in cm that will be used for mass and inertia computation */
+	float StrandsThickness;
+
+	/** Scales along the strand */
+	TStaticArray<float, 32 * NumScales> ParamsScale;
 };
 
 /** Data Interface for the strand base */
@@ -126,9 +297,7 @@ class HAIRSTRANDSNIAGARA_API UNiagaraDataInterfaceHairStrands : public UNiagaraD
 
 public:
 
-	/** Size of each strand. */
-	UPROPERTY(EditAnywhere, Category = "Spawn")
-	EHairStrandsSize StrandSize;
+	DECLARE_NIAGARA_DI_PARAMETER();
 
 	/** Hair Strands Asset used to sample from when not overridden by a source actor from the scene. Also useful for previewing in the editor. */
 	UPROPERTY(EditAnywhere, Category = "Source")
@@ -140,10 +309,6 @@ public:
 
 	/** The source component from which to sample */
 	TWeakObjectPtr<class UGroomComponent> SourceComponent;
-
-	/** Group Index to be used */
-	UPROPERTY(EditAnywhere, Category = "Source")
-	int32 GroupIndex;
 
 	/** UObject Interface */
 	virtual void PostInitProperties() override;
@@ -159,27 +324,87 @@ public:
 	virtual bool Equals(const UNiagaraDataInterface* Other) const override;
 
 	/** GPU simulation  functionality */
-	virtual bool GetFunctionHLSL(const FName&  DefinitionFunctionName, FString InstanceFunctionName, FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual void GetParameterDefinitionHLSL(FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual FNiagaraDataInterfaceParametersCS* ConstructComputeParameters() const override;
+	virtual void GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
+	virtual bool GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL) override;
 	virtual void ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, void* PerInstanceData, const FNiagaraSystemInstanceID& SystemInstance) override;
 	virtual void GetCommonHLSL(FString& OutHLSL) override;
 
 	/** Update the source component */
-	void UpdateSourceComponent(FNiagaraSystemInstance* SystemInstance);
+	void ExtractSourceComponent(FNiagaraSystemInstance* SystemInstance);
 
 	/** Check if the component is Valid */
 	bool IsComponentValid() const;
 
 	/** Extract datas and resources */
-	void ExtractDatasAndResources(FNiagaraSystemInstance* SystemInstance, FHairStrandsDatas*& OutStrandsDatas,
-		FHairStrandsRestResource*& OutStrandsRestResource, FHairStrandsDeformedResource*& OutStrandsDeformedResource, FHairStrandsRootResource*& OutStrandsRootResource);
+	void ExtractDatasAndResources(
+		FNiagaraSystemInstance* SystemInstance, 
+		FHairStrandsDatas*& OutStrandsDatas,
+		FHairStrandsRestResource*& OutStrandsRestResource, 
+		FHairStrandsDeformedResource*& OutStrandsDeformedResource, 
+		FHairStrandsRestRootResource*& OutStrandsRestRootResource, 
+		FHairStrandsDeformedRootResource*& OutStrandsDeformedRootResource,
+		UGroomAsset*& OutGroomAsset,
+		int32& OutGroupIndex);
 
 	/** Get the number of strands */
 	void GetNumStrands(FVectorVMContext& Context);
 
-	/** Get the strand size  */
+	/** Get the groom asset datas  */
 	void GetStrandSize(FVectorVMContext& Context);
+
+	void GetSubSteps(FVectorVMContext& Context);
+
+	void GetIterationCount(FVectorVMContext& Context);
+
+	void GetGravityVector(FVectorVMContext& Context);
+
+	void GetAirDrag(FVectorVMContext& Context);
+
+	void GetAirVelocity(FVectorVMContext& Context);
+
+	void GetSolveBend(FVectorVMContext& Context);
+
+	void GetProjectBend(FVectorVMContext& Context);
+
+	void GetBendDamping(FVectorVMContext& Context);
+
+	void GetBendStiffness(FVectorVMContext& Context);
+
+	void GetBendScale(FVectorVMContext& Context);
+
+	void GetSolveStretch(FVectorVMContext& Context);
+
+	void GetProjectStretch(FVectorVMContext& Context);
+
+	void GetStretchDamping(FVectorVMContext& Context);
+
+	void GetStretchStiffness(FVectorVMContext& Context);
+
+	void GetStretchScale(FVectorVMContext& Context);
+
+	void GetSolveCollision(FVectorVMContext& Context);
+
+	void GetProjectCollision(FVectorVMContext& Context);
+
+	void GetStaticFriction(FVectorVMContext& Context);
+
+	void GetKineticFriction(FVectorVMContext& Context);
+
+	void GetStrandsViscosity(FVectorVMContext& Context);
+
+	void GetGridDimension(FVectorVMContext& Context);
+
+	void GetCollisionRadius(FVectorVMContext& Context);
+
+	void GetRadiusScale(FVectorVMContext& Context);
+
+	void GetStrandsSmoothing(FVectorVMContext& Context);
+
+	void GetStrandsDensity(FVectorVMContext& Context);
+
+	void GetStrandsThickness(FVectorVMContext& Context);
+
+	void GetThicknessScale(FVectorVMContext& Context);
 
 	/** Get the world transform */
 	void GetWorldTransform(FVectorVMContext& Context);
@@ -284,16 +509,28 @@ public:
 	void ProjectBendRodMaterial(FVectorVMContext& Context);
 
 	/** Solve the static collision constraint */
-	void SolveStaticCollisionConstraint(FVectorVMContext& Context);
+	void SolveHardCollisionConstraint(FVectorVMContext& Context);
 
 	/** Project the static collision constraint */
-	void ProjectStaticCollisionConstraint(FVectorVMContext& Context);
+	void ProjectHardCollisionConstraint(FVectorVMContext& Context);
+
+	/** Solve the soft collision constraint */
+	void SolveSoftCollisionConstraint(FVectorVMContext& Context);
+
+	/** Project the soft collision constraint */
+	void ProjectSoftCollisionConstraint(FVectorVMContext& Context);
+
+	/** Setup the soft collision constraint */
+	void SetupSoftCollisionConstraint(FVectorVMContext& Context);
 
 	/** Compute the rest direction*/
-	void ComputeRestDirection(FVectorVMContext& Context);
+	void ComputeEdgeDirection(FVectorVMContext& Context);
 
-	/** Update the node orientation to match the bishop frame*/
-	void UpdateNodeOrientation(FVectorVMContext& Context);
+	/** Update the strands material frame */
+	void UpdateMaterialFrame(FVectorVMContext& Context);
+
+	/** Compute the strands material frame */
+	void ComputeMaterialFrame(FVectorVMContext& Context);
 
 	/** Compute the air drag force */
 	void ComputeAirDragForce(FVectorVMContext& Context);
@@ -304,8 +541,17 @@ public:
 	/** Attach the node position and orientation to the transform or to the skin cache */
 	void AttachNodeState(FVectorVMContext& Context);
 
+	/** Update the node position and orientation based on rbf transfer */
+	void UpdateNodeState(FVectorVMContext& Context);
+
 	/** Check if we need or not a simulation reset*/
 	void NeedSimulationReset(FVectorVMContext& Context);
+
+	/** Check if we have a global interpolation */
+	void HasGlobalInterpolation(FVectorVMContext& Context);
+
+	/** Eval the skinned position given a rest position*/
+	void EvalSkinnedPosition(FVectorVMContext& Context);
 
 	/** Name of the world transform */
 	static const FString WorldTransformName;
@@ -329,10 +575,10 @@ public:
 	static const FString CurvesOffsetsBufferName;
 
 	/** Name of bounding box buffer */
-	static const FString BoundingBoxBufferName;
+	static const FString BoundingBoxBufferAName;
 
 	/** Name of node bound buffer */
-	static const FString NodeBoundBufferName;
+	static const FString BoundingBoxBufferBName;
 
 	/** Name of the nodes positions buffer */
 	static const FString RestPositionBufferName;
@@ -344,7 +590,7 @@ public:
 	static const FString BoxExtentName;
 
 	/** Param to check if the roots have been attached to the skin */
-	static const FString HasRootAttachedName;
+	static const FString InterpolationModeName;
 
 	/** boolean to check if we need to rest the simulation*/
 	static const FString ResetSimulationName;
@@ -382,6 +628,18 @@ public:
 	/** Deformed center of all the position */
 	static const FString DeformedPositionOffsetName;
 
+	/** Number of samples for rbf interpolation */
+	static const FString SampleCountName;
+
+	/** Rbf sample weights */
+	static const FString MeshSampleWeightsName;
+
+	/** Rbf Sample rest positions */
+	static const FString RestSamplePositionsName;
+
+	/** Params scale buffer */
+	static const FString ParamsScaleBufferName;
+
 protected:
 	/** Copy one niagara DI to this */
 	virtual bool CopyToInternal(UNiagaraDataInterface* Destination) const override;
@@ -390,9 +648,6 @@ protected:
 /** Proxy to send data to gpu */
 struct FNDIHairStrandsProxy : public FNiagaraDataInterfaceProxy
 {
-	/** Destroy internal data */
-	virtual void DeferredDestroy() override;
-
 	/** Get the size of the data that will be passed to render*/
 	virtual int32 PerInstanceDataPassedToRenderThreadSize() const override { return sizeof(FNDIHairStrandsData); }
 
@@ -400,7 +655,7 @@ struct FNDIHairStrandsProxy : public FNiagaraDataInterfaceProxy
 	virtual void ConsumePerInstanceDataFromGameThread(void* PerInstanceData, const FNiagaraSystemInstanceID& Instance) override;
 
 	/** Initialize the Proxy data strands buffer */
-	void InitializePerInstanceData(const FNiagaraSystemInstanceID& SystemInstance, FNDIHairStrandsBuffer* StrandsBuffer, const uint32 NumStrands, const uint8 StrandSize, const FVector& BoxCenter, const FVector& BoxExtent, const FTransform& WorldTransform);
+	void InitializePerInstanceData(const FNiagaraSystemInstanceID& SystemInstance);
 
 	/** Destroy the proxy data if necessary */
 	void DestroyPerInstanceData(NiagaraEmitterInstanceBatcher* Batcher, const FNiagaraSystemInstanceID& SystemInstance);
@@ -416,8 +671,5 @@ struct FNDIHairStrandsProxy : public FNiagaraDataInterfaceProxy
 
 	/** List of proxy data for each system instances*/
 	TMap<FNiagaraSystemInstanceID, FNDIHairStrandsData> SystemInstancesToProxyData;
-
-	/** List of proxy data to destroy later */
-	TSet<FNiagaraSystemInstanceID> DeferredDestroyList;
 };
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ThumbnailRendering/SlateBrushThumbnailRenderer.h"
 #include "Styling/SlateBrush.h"
@@ -14,7 +14,7 @@ USlateBrushThumbnailRenderer::USlateBrushThumbnailRenderer(const FObjectInitiali
 {
 }
 
-void USlateBrushThumbnailRenderer::Draw(UObject* Object, int32 X, int32 Y, uint32 Width, uint32 Height, FRenderTarget* RenderTarget, FCanvas* Canvas)
+void USlateBrushThumbnailRenderer::Draw(UObject* Object, int32 X, int32 Y, uint32 Width, uint32 Height, FRenderTarget* RenderTarget, FCanvas* Canvas, bool bAdditionalViewFamily)
 {
 	USlateBrushAsset* SlateBrushAsset = Cast<USlateBrushAsset>(Object);
 	if (SlateBrushAsset)

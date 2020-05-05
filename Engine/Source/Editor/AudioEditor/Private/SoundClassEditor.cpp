@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SoundClassEditor.h"
 #include "Modules/ModuleManager.h"
@@ -465,6 +465,8 @@ void FSoundClassEditor::PostUndo(bool bSuccess)
 {
 	GraphEditor->ClearSelectionSet();
 	GraphEditor->NotifyGraphChanged();
+
+	FSlateApplication::Get().DismissAllMenus();
 }
 
 #undef LOCTEXT_NAMESPACE

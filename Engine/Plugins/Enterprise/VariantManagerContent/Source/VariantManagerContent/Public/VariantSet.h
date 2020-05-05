@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -8,9 +8,7 @@
 
 #include "VariantSet.generated.h"
 
-
 class UVariant;
-
 
 UCLASS(BlueprintType)
 class VARIANTMANAGERCONTENT_API UVariantSet : public UObject

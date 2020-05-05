@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Editor/UnrealEdEngine.h"
 #include "HAL/PlatformFilemanager.h"
@@ -63,15 +63,19 @@
 #include "AutoReimport/AssetSourceFilenameCache.h"
 #include "UObject/UObjectThreadContext.h"
 #include "EngineUtils.h"
-
-
+#include "EngineAnalytics.h"
 #include "CookerSettings.h"
+#include "Misc/MessageDialog.h"
+
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealEdEngine, Log, All);
 
 
 void UUnrealEdEngine::Init(IEngineLoop* InEngineLoop)
 {
 	Super::Init(InEngineLoop);
+
+	// Display warnings to the user about disk space issues
+	ValidateFreeDiskSpace();
 
 	// Build databases used by source code navigation
 	FSourceCodeNavigation::Initialize();
@@ -751,8 +755,8 @@ void UUnrealEdEngine::ConvertMatinees()
 				StartLocation.Y += 50;
 								
 				MatineeActor->MatineeData = InterpData;
-				UProperty* MatineeDataProp = NULL;
-				for( UProperty* Property = MatineeActor->GetClass()->PropertyLink; Property != NULL; Property = Property->PropertyLinkNext )
+				FProperty* MatineeDataProp = NULL;
+				for( FProperty* Property = MatineeActor->GetClass()->PropertyLink; Property != NULL; Property = Property->PropertyLinkNext )
 				{
 					if( Property->GetName() == TEXT("MatineeData") )
 					{
@@ -1468,5 +1472,44 @@ void UUnrealEdEngine::UpdateEdModeOnMatineeClose(const FEditorModeID& EditorMode
 
 		// Remove this delegate. 
 		GLevelEditorModeTools().OnEditorModeIDChanged().Remove(UpdateEdModeOnMatineeCloseDelegateHandle);
+	}
+}
+
+bool IsBelowFreeDiskSpaceLimit(const TCHAR* TestDir, FText& OutAppendMessage, const FText& LocationDescriptor, const uint64 MinMB = 5120)
+{
+	uint64 TotalDiskSpace = 0;
+	uint64 FreeDiskSpace = 0;
+
+	if (FPlatformMisc::GetDiskTotalAndFreeSpace(TestDir, TotalDiskSpace, FreeDiskSpace))
+	{
+		const uint64 HardDriveFreeMB = FreeDiskSpace / (1024 * 1024);
+		if (HardDriveFreeMB < MinMB)
+		{
+			static const FText AppendWarning = NSLOCTEXT("DriveSpaceDialog", "LowHardDriveSpaceFormatMsg", "{0}\n  {1} MB Free \t\t {2}\n \t\t\t\t {3} \n");
+
+			OutAppendMessage = FText::Format(AppendWarning, OutAppendMessage, HardDriveFreeMB, FText::FromString(FPaths::ConvertRelativePathToFull(TestDir)), LocationDescriptor);
+
+			return true;
+		}
+	}
+	return false;
+}
+
+void UUnrealEdEngine::ValidateFreeDiskSpace() const
+{
+	FText Message = NSLOCTEXT("DriveSpaceDialog", "LowHardDriveSpaceMsgHeader", "The following drive locations have limited free space.\nIt is recommended that you free some space to avoid issues such as crashed and data loss due to files not being able to be written and saved.\n");
+	
+	bool bShowWarning = false;
+	bShowWarning |= IsBelowFreeDiskSpaceLimit(FPlatformProcess::BaseDir(), Message, NSLOCTEXT("DriveSpaceDialog", "BaseDirDescriptor", "The base engine directory."));
+	bShowWarning |= IsBelowFreeDiskSpaceLimit(FPlatformMisc::ProjectDir(), Message, NSLOCTEXT("DriveSpaceDialog", "ProjectDirDescriptor", "The project directory."));
+	bShowWarning |= IsBelowFreeDiskSpaceLimit(FPlatformProcess::UserDir(), Message, NSLOCTEXT("DriveSpaceDialog", "UserDirDescriptor", "User directory where user specific settings are stored."), 1024);
+
+	if (bShowWarning)
+	{
+		FEngineAnalytics::LowDriveSpaceDetected();
+
+		const FText Title = NSLOCTEXT("DriveSpaceDialog", "LowHardDriveSpaceMsgTitle", "Low drive space warning");
+
+		FMessageDialog::Open(EAppMsgType::Ok, Message, &Title);
 	}
 }

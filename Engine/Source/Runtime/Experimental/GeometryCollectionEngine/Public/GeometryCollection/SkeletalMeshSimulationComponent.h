@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Components/MeshComponent.h"
@@ -172,5 +172,5 @@ private:
 	FSkeletalMeshPhysicsProxy* PhysicsProxy;
 
 	//@todo(mlentine): Don't have one per static mesh
-	TUniquePtr<Chaos::TChaosPhysicsMaterial<float>> ChaosMaterial;
+	TUniquePtr<Chaos::FChaosPhysicsMaterial> ChaosMaterial;
 };

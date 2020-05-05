@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -410,6 +410,40 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
+		/// Information about a Windows type library (TLB/OLB file) which requires a generated header.
+		/// </summary>
+		public class TypeLibrary
+		{
+			/// <summary>
+			/// Name of the type library
+			/// </summary>
+			public string FileName;
+
+			/// <summary>
+			/// Additional attributes for the #import directive
+			/// </summary>
+			public string Attributes;
+
+			/// <summary>
+			/// Name of the output header
+			/// </summary>
+			public string Header;
+
+			/// <summary>
+			/// Constructor
+			/// </summary>
+			/// <param name="FileName">Name of the type library. Follows the same conventions as the filename parameter in the MSVC #import directive.</param>
+			/// <param name="Attributes">Additional attributes for the import directive</param>
+			/// <param name="Header">Name of the output header</param>
+			public TypeLibrary(string FileName, string Attributes, string Header)
+			{
+				this.FileName = FileName;
+				this.Attributes = Attributes;
+				this.Header = Header;
+			}
+		}
+
+		/// <summary>
 		/// Name of this module
 		/// </summary>
 		public string Name
@@ -567,7 +601,8 @@ namespace UnrealBuildTool
 		public bool bUseRTTI = false;
 
 		/// <summary>
-		/// Use AVX instructions
+		/// Direct the compiler to generate AVX instructions wherever SSE or AVX intrinsics are used, on the platforms that support it.
+		/// Note that by enabling this you are changing the minspec for the PC platform, and the resultant executable will crash on machines without AVX support.
 		/// </summary>
 		public bool bUseAVX = false;
 
@@ -607,6 +642,16 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
+		/// How to treat unsafe implicit type cast warnings (e.g., double->float or int64->int32)
+		/// </summary>
+		public WarningLevel UnsafeTypeCastWarningLevel
+		{
+			get { return UnsafeTypeCastWarningLevelPrivate ?? Target.UnsafeTypeCastWarningLevel; }
+			set { UnsafeTypeCastWarningLevelPrivate = value; }
+		}
+		private WarningLevel? UnsafeTypeCastWarningLevelPrivate;
+
+		/// <summary>
 		/// Enable warnings for using undefined identifiers in #if expressions
 		/// </summary>
 		public bool bEnableUndefinedIdentifierWarnings = true;
@@ -617,7 +662,7 @@ namespace UnrealBuildTool
 		[Obsolete("bFasterWithoutUnity has been deprecated in favor of setting 'bUseUnity' on a per module basis in BuildConfiguration")]
 		public bool bFasterWithoutUnity
 		{
-			set { bUseUnity = value; }
+			set { bUseUnity = !value; }
 		}
 
 		private bool? bUseUnityOverride;
@@ -680,6 +725,11 @@ namespace UnrealBuildTool
 		/// List of folders which are whitelisted to be referenced when compiling this binary, without propagating restricted folder names
 		/// </summary>
 		public List<string> WhitelistRestrictedFolders = new List<string>();
+
+		/// <summary>
+		/// Set of aliased restricted folder references
+		/// </summary>
+		public Dictionary<string, string> AliasRestrictedFolders = new Dictionary<string, string>();
 
 		/// <summary>
 		/// Enforce "include what you use" rules when PCHUsage is set to ExplicitOrSharedPCH; warns when monolithic headers (Engine.h, UnrealEd.h, etc...) 
@@ -809,6 +859,11 @@ namespace UnrealBuildTool
 		public List<BundleResource> AdditionalBundleResources = new List<BundleResource>();
 
 		/// <summary>
+		/// List of type libraries that we need to generate headers for (Windows only)
+		/// </summary>
+		public List<TypeLibrary> TypeLibraries = new List<TypeLibrary>();
+
+		/// <summary>
 		/// For builds that execute on a remote machine (e.g. iOS), this list contains additional files that
 		/// need to be copied over in order for the app to link successfully.  Source/header files and PCHs are
 		/// automatically copied.  Usually this is simply a list of precompiled third party library dependencies.
@@ -926,6 +981,18 @@ namespace UnrealBuildTool
 		///  Control visibility of symbols
 		/// </summary>
 		public SymbolVisibility ModuleSymbolVisibility = ModuleRules.SymbolVisibility.Default;
+
+		/// <summary>
+		/// The AutoSDK directory for the active host platform
+		/// </summary>
+		public string AutoSdkDirectory
+		{
+			get
+			{
+				DirectoryReference AutoSdkDir;
+				return UEBuildPlatformSDK.TryGetHostPlatformAutoSDKDir(out AutoSdkDir) ? AutoSdkDir.FullName : null;
+			}
+		}
 
 		/// <summary>
 		/// The current engine directory
@@ -1159,7 +1226,6 @@ namespace UnrealBuildTool
 				{
 					PublicDefinitions.Add("WITH_CHAOS=1");
 					PublicDefinitions.Add("WITH_CHAOS_NEEDS_TO_BE_FIXED=1");
-					PublicDefinitions.Add("COMPILE_ID_TYPES_AS_INTS=0");
 					PublicDefinitions.Add("WITH_CHAOS_CLOTHING=1");
 					PublicDefinitions.Add("WITH_CLOTH_COLLISION_DETECTION=1");
 					

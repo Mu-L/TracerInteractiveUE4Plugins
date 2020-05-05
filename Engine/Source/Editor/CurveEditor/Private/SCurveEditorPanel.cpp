@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SCurveEditorPanel.h"
 #include "Templates/Tuple.h"
@@ -11,9 +11,12 @@
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Widgets/SNullWidget.h"
 #include "Widgets/SOverlay.h"
+#include "Widgets/SWindow.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Docking/SDockTab.h"
+#include "Framework/Docking/TabManager.h"
 #include "EditorStyleSet.h"
 #include "Misc/Attribute.h"
 #include "Algo/Sort.h"
@@ -232,13 +235,13 @@ void SCurveEditorPanel::Construct(const FArguments& InArgs, TSharedRef<FCurveEdi
 			.PhysicalSplitterHandleSize(2.0f)
 
 			+ SSplitter::Slot()
-			.Value(0.30f)
+			.Value(InArgs._TreeSplitterWidth)
 			[
 				InArgs._TreeContent.Widget
 			]
 
 			+ SSplitter::Slot()
-			.Value(0.7f)
+			.Value(InArgs._ContentSplitterWidth)
 			[
 				MainContent
 			]
@@ -608,16 +611,16 @@ void SCurveEditorPanel::UpdateCommonCurveInfo()
 {
 	// Gather up common extended curve info for the current set of curves
 	TOptional<FCurveAttributes> AccumulatedCurveAttributes;
-	for (const FCurveModelID& CurveID : CurveEditor->GetEditedCurves())
+	for (const TTuple<FCurveModelID, FKeyHandleSet>& Pair : CurveEditor->Selection.GetAll())
 	{
 		FCurveAttributes Attributes;
 		
-		FCurveModel* Curve = CurveEditor->FindCurve(CurveID);
+		FCurveModel* Curve = CurveEditor->FindCurve(Pair.Key);
 		if (Curve)
 		{
 			Curve->GetCurveAttributes(Attributes);
 
-			// Some curves don't support extrapolation. We don't count them for determinine the accumulated state.
+			// Some curves don't support extrapolation. We don't count them for determine the accumulated state.
 			if (Attributes.HasPreExtrapolation() && Attributes.GetPreExtrapolation() == RCCE_None && Attributes.HasPostExtrapolation() && Attributes.GetPostExtrapolation() == RCCE_None)
 			{
 				continue;
@@ -684,12 +687,14 @@ void SCurveEditorPanel::UpdateEditBox()
 	for (TTuple<FCurveModelID, TMap<FKeyHandle, UObject*>>& OuterPair : EditObjects->CurveIDToKeyProxies)
 	{
 		const FKeyHandleSet* SelectedKeys = Selection.FindForCurve(OuterPair.Key);
-
-		for (TTuple<FKeyHandle, UObject*>& InnerPair : OuterPair.Value)
+		if(SelectedKeys)
 		{
-			if (ICurveEditorKeyProxy* Proxy = Cast<ICurveEditorKeyProxy>(InnerPair.Value))
+			for (TTuple<FKeyHandle, UObject*>& InnerPair : OuterPair.Value)
 			{
-				Proxy->UpdateValuesFromRawData();
+				if (ICurveEditorKeyProxy* Proxy = Cast<ICurveEditorKeyProxy>(InnerPair.Value))
+				{
+					Proxy->UpdateValuesFromRawData();
+				}
 			}
 		}
 	}
@@ -775,10 +780,13 @@ void SCurveEditorPanel::SetCurveAttributes(FCurveAttributes CurveAttributes, FTe
 {
 	FScopedTransaction Transaction(Description);
 
-	for (const TTuple<FCurveModelID, TUniquePtr<FCurveModel>>& Pair : CurveEditor->GetCurves())
+	for (const TTuple<FCurveModelID, FKeyHandleSet>& Pair : CurveEditor->Selection.GetAll())
 	{
-		Pair.Value->Modify();
-		Pair.Value->SetCurveAttributes(CurveAttributes);
+		if (FCurveModel* Curve = CurveEditor->FindCurve(Pair.Key))
+		{
+			Curve->Modify();
+			Curve->SetCurveAttributes(CurveAttributes);
+		}
 	}
 }
 
@@ -976,10 +984,10 @@ FSlateIcon SCurveEditorPanel::GetCurveExtrapolationPostIcon() const
 void SCurveEditorPanel::ShowCurveFilterUI(TSubclassOf<UCurveEditorFilterBase> FilterClass)
 {
 	TSharedPtr<FTabManager> TabManager = WeakTabManager.Pin();
-	if (TabManager)
-	{
-		SCurveEditorFilterPanel::OpenDialog(TabManager.ToSharedRef(), CurveEditor.ToSharedRef(), FilterClass);
-	}
+	TSharedPtr<SDockTab> OwnerTab = TabManager.IsValid() ? TabManager->GetOwnerTab() : TSharedPtr<SDockTab>();
+	TSharedPtr<SWindow> RootWindow = OwnerTab.IsValid() ? OwnerTab->GetParentWindow() : TSharedPtr<SWindow>();
+
+	SCurveEditorFilterPanel::OpenDialog(RootWindow, CurveEditor.ToSharedRef(), FilterClass);
 }
 
 const FGeometry& SCurveEditorPanel::GetScrollPanelGeometry() const

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
   RHIGPUReadback.h: classes for managing fences and staging buffers for
@@ -29,7 +29,7 @@ public:
 	/** Indicates if the data is in place and ready to be read. */
 	FORCEINLINE bool IsReady()
 	{
-		return !Fence || Fence->Poll();
+		return !Fence || (Fence->NumPendingWriteCommands.GetValue() == 0 && Fence->Poll());
 	}
 
 	/** Indicates if the data is in place and ready to be read on a subset of GPUs. */

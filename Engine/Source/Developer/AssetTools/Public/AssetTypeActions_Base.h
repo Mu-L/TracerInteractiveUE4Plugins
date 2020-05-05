@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -167,6 +167,16 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		return FText::GetEmpty();
 	}
 
+	virtual void SetSupported(bool bInSupported) final
+	{
+		bIsSupported = bInSupported;
+	}
+
+	virtual bool IsSupported() const final
+	{
+		return bIsSupported;
+	}
+
 protected:
 
 	// Here are some convenience functions for common asset type actions logic
@@ -207,11 +217,11 @@ protected:
 	}
 
 	template <typename T>
-	static TArray<T> GetTypedObjectPtrs(const TArray<UObject*>& InObjects)
+	static TArray<T*> GetTypedObjectPtrs(const TArray<UObject*>& InObjects)
 	{
 		check(InObjects.Num() > 0);
 
-		TArray<T> TypedObjects;
+		TArray<T*> TypedObjects;
 		for (UObject* ObjIt : InObjects)
 		{
 			TypedObjects.Add(CastChecked<T>(ObjIt));
@@ -219,4 +229,7 @@ protected:
 
 		return TypedObjects;
 	}
+
+private:
+	bool bIsSupported = true;
 };

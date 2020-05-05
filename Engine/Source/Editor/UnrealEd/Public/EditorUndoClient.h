@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	EditorUndoClient.h: Declares the FEditorUndoClient interface.
@@ -43,4 +43,14 @@ public:
 
 	/** Return the transaction context for this client */
 	virtual FString GetTransactionContext() const { return FString(); }
+};
+
+/** An undo client that registers itself in its constructor and unregisters itself in its destructor */
+class UNREALED_API FSelfRegisteringEditorUndoClient : public FEditorUndoClient
+{
+public:
+	/** Register in constructor */
+	FSelfRegisteringEditorUndoClient();
+
+	/** FEditorUndoClient already unregisters in its destructor */
 };

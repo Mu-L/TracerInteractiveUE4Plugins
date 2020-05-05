@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Engine/WindDirectionalSource.h"
 #include "UObject/ConstructorHelpers.h"
@@ -217,9 +217,9 @@ void UWindDirectionalSourceComponent::SetWindType(EWindSourceType InNewType)
 	MarkRenderDynamicDataDirty();
 }
 
-void UWindDirectionalSourceComponent::CreateRenderState_Concurrent()
+void UWindDirectionalSourceComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
 {
-	Super::CreateRenderState_Concurrent();
+	Super::CreateRenderState_Concurrent(Context);
 	GetWorld()->Scene->AddWindSource(this);
 }
 

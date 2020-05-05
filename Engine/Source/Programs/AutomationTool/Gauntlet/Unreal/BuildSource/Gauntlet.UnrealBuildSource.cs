@@ -1,4 +1,4 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -198,10 +198,9 @@ namespace Gauntlet
 					return false;
 				}
 				
-				// include binaries path for packaged builds
+				// include binaries path for packaged builds if it exists
 				string BinariesPath = Path.Combine(ProjectPath.Directory.FullName, "Binaries");
-
-				OutBuildPaths = new string[] { StagedPath, BinariesPath };
+				OutBuildPaths = Directory.Exists(BinariesPath) ? new string[] { StagedPath, BinariesPath } : new string[] { StagedPath };
 			}
 			else if (BuildDir.Name.Equals("editor", StringComparison.OrdinalIgnoreCase))
 			{
@@ -585,7 +584,7 @@ namespace Gauntlet
                     {
                         Flags |= BuildFlags.Bulk;
                     }
-					else
+					else if(Globals.Params.ParseParam("notbulk"))
 					{
 						Flags |= BuildFlags.NotBulk;
 					}

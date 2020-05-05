@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SActorDetails.h"
 #include "Widgets/SBoxPanel.h"
@@ -29,6 +29,12 @@
 #include "ScopedTransaction.h"
 #include "SourceCodeNavigation.h"
 #include "Widgets/Docking/SDockTab.h"
+#include "Subsystems/PanelExtensionSubsystem.h"
+#include "DetailsViewObjectFilter.h"
+
+
+IConsoleVariable* SActorDetails::ShowComponents = IConsoleManager::Get().RegisterConsoleVariable(TEXT("ShowFlag.DetailsPanelComponents"), true, TEXT("Show components in editor details panel."), ECVF_Cheat);
+
 
 class SActorDetailsUneditableComponentWarning : public SCompoundWidget
 {
@@ -149,9 +155,17 @@ void SActorDetails::Construct(const FArguments& InArgs, const FName TabIdentifie
 		[
 			DetailsView->GetNameAreaWidget().ToSharedRef()
 		]
+		+ SVerticalBox::Slot()
+		.Padding(0.0f, 0.0f, 0.0f, 0.0f)
+		.AutoHeight()
+		[
+			SNew(SExtensionPanel)
+			.ExtensionPanelID("ActorDetailsPanel")
+		]
 		+SVerticalBox::Slot()
 		[
 			SAssignNew(DetailsSplitter, SSplitter)
+			.MinimumSlotHeight(80.0f)
 			.Orientation(Orient_Vertical)
 			.Style(FEditorStyle::Get(), "SplitterDark")
 			.PhysicalSplitterHandleSize(2.0f)
@@ -182,7 +196,7 @@ void SActorDetails::Construct(const FArguments& InArgs, const FName TabIdentifie
 				[
 					SNew(SActorDetailsUneditableComponentWarning)
 					.Visibility(this, &SActorDetails::GetNativeComponentWarningVisibility)
-					.WarningText(NSLOCTEXT("SActorDetails", "UneditableNativeComponentWarning", "Native components are editable when declared as a UProperty in <a id=\"HyperlinkDecorator\" style=\"DetailsView.BPMessageHyperlinkStyle\">C++</>"))
+					.WarningText(NSLOCTEXT("SActorDetails", "UneditableNativeComponentWarning", "Native components are editable when declared as a FProperty in <a id=\"HyperlinkDecorator\" style=\"DetailsView.BPMessageHyperlinkStyle\">C++</>"))
 					.OnHyperlinkClicked(this, &SActorDetails::OnNativeComponentWarningHyperlinkClicked)
 				]
 				+ SVerticalBox::Slot()
@@ -221,7 +235,7 @@ SActorDetails::~SActorDetails()
 	}
 }
 
-void SActorDetails::OnDetailsViewObjectArrayChanged(const FString& InTitle, const TArray<TWeakObjectPtr<UObject>>& InObjects)
+void SActorDetails::OnDetailsViewObjectArrayChanged(const FString& InTitle, const TArray<UObject*>& InObjects)
 {
 	// The DetailsView will already check validity every tick and hide itself when invalid, so this piggy-backs on that code instead of needing a second tick function.
 	if (InObjects.Num() == 0 && !LockedActorSelection.IsValid())
@@ -256,7 +270,8 @@ void SActorDetails::SetObjects(const TArray<UObject*>& InObjects, bool bForceRef
 			}
 		}
 
-		ComponentsBox->SetVisibility(bShowingComponents ? EVisibility::Visible : EVisibility::Collapsed);
+		bool ShowComponentsInDetailsPanel = ShowComponents->GetBool();
+ 		ComponentsBox->SetVisibility((bShowingComponents & ShowComponentsInDetailsPanel) ? EVisibility::Visible : EVisibility::Collapsed);
 
 		if(DetailsView->GetHostTabManager().IsValid())
 		{
@@ -302,6 +317,11 @@ void SActorDetails::PostUndo(bool bSuccess)
 void SActorDetails::PostRedo(bool bSuccess)
 {
 	PostUndo(bSuccess);
+}
+
+void SActorDetails::SetActorDetailsFilter(TSharedPtr<FDetailsViewObjectFilter> InFilter)
+{
+	DetailsView->SetObjectFilter(InFilter);
 }
 
 void SActorDetails::OnComponentsEditedInWorld()
@@ -617,7 +637,7 @@ bool SActorDetails::IsPropertyReadOnly(const FPropertyAndParent& PropertyAndPare
 		UActorComponent* Component = Node->GetComponentTemplate();
 		if (Component && Component->CreationMethod == EComponentCreationMethod::SimpleConstructionScript)
 		{
-			TSet<const UProperty*> UCSModifiedProperties;
+			TSet<const FProperty*> UCSModifiedProperties;
 			Component->GetUCSModifiedProperties(UCSModifiedProperties);
 			if (UCSModifiedProperties.Contains(&PropertyAndParent.Property) || 
 				(PropertyAndParent.ParentProperties.Num() > 0 && UCSModifiedProperties.Contains(PropertyAndParent.ParentProperties[0])))

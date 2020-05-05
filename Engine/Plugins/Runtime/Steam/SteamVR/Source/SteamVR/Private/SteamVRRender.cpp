@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 //
 #include "CoreMinimal.h"
 #include "SteamVRPrivate.h"
@@ -152,6 +152,8 @@ bool FSteamVRHMD::BridgeBaseImpl::Present(int& SyncInterval)
 	// Increment swap chain index post-swap.
 	SwapChain->IncrementSwapChainIndex_RHIThread();
 	DepthSwapChain->IncrementSwapChainIndex_RHIThread();
+
+	SyncInterval = 0;
 
 	return true;
 }

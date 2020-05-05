@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -157,6 +157,13 @@ struct FMovieSceneEvaluationState
 	 * @param InSequenceID		The sequence ID to lookup
 	 */
 	MOVIESCENE_API UMovieSceneSequence* FindSequence(FMovieSceneSequenceIDRef InSequenceID) const;
+
+	/**
+	 * Attempt to locate a sequence ID from a sequence
+	 *
+	 * @param InSequence		The sequence to look up
+	 */
+	MOVIESCENE_API FMovieSceneSequenceID FindSequenceId(UMovieSceneSequence* InSequence) const;
 
 	/**
 	 * Attempt deduce the posessable or spawnable that relates to the specified object

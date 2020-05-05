@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UdpMessagingPrivate.h"
 
@@ -165,7 +165,7 @@ public:
 				Ar.Logf(TEXT("    Total Bytes Out: %i"), MessageTunnel->GetTotalOutboundBytes());
 
 				TArray<TSharedPtr<IUdpMessageTunnelConnection>> Connections;
-			
+
 				if (MessageTunnel->GetConnections(Connections) > 0)
 				{
 					Ar.Log(TEXT("  Active Connections:"));
@@ -258,8 +258,12 @@ public:
 		ParseCommandLine(GetMutableDefault<UUdpMessagingSettings>(), FCommandLine::Get());
 
 		// register application events
-		FCoreDelegates::ApplicationHasReactivatedDelegate.AddRaw(this, &FUdpMessagingModule::HandleApplicationHasReactivated);
-		FCoreDelegates::ApplicationWillDeactivateDelegate.AddRaw(this, &FUdpMessagingModule::HandleApplicationWillDeactivate);
+		const UUdpMessagingSettings& Settings = *GetDefault<UUdpMessagingSettings>();
+		if (Settings.bStopServiceWhenAppDeactivates)
+		{
+			FCoreDelegates::ApplicationHasReactivatedDelegate.AddRaw(this, &FUdpMessagingModule::HandleApplicationHasReactivated);
+			FCoreDelegates::ApplicationWillDeactivateDelegate.AddRaw(this, &FUdpMessagingModule::HandleApplicationWillDeactivate);
+		}
 
 		RestartServices();
 
@@ -308,7 +312,7 @@ public:
 
 	virtual bool IsSupportEnabled() const
 	{
-#if !IS_PROGRAM && UE_BUILD_SHIPPING
+#if  !IS_PROGRAM && UE_BUILD_SHIPPING && !(defined(ALLOW_UDP_MESSAGING_SHIPPING) && ALLOW_UDP_MESSAGING_SHIPPING)
 		return false;
 #else
 		// disallow unsupported platforms
@@ -429,7 +433,7 @@ protected:
 
 		// Initialize the service with the additional endpoints added through the modular interface
 		TArray<FIPv4Endpoint> StaticEndpoints = AdditionalStaticEndpoints.Array();
-		
+
 		for (auto& StaticEndpoint : Settings->StaticEndpoints)
 		{
 			FIPv4Endpoint Endpoint;
@@ -447,7 +451,7 @@ protected:
 		if (Settings->MulticastTimeToLive == 0)
 		{
 			Settings->MulticastTimeToLive = 1;
-			ResaveSettings = true;		
+			ResaveSettings = true;
 		}
 
 		if (ResaveSettings)
@@ -536,7 +540,7 @@ protected:
 			FParse::Bool(CommandLine, TEXT("-UDPMESSAGING_TRANSPORT_ENABLE="), Settings->EnableTransport);
 			FParse::Value(CommandLine, TEXT("-UDPMESSAGING_TRANSPORT_UNICAST="), Settings->UnicastEndpoint);
 			FParse::Value(CommandLine, TEXT("-UDPMESSAGING_TRANSPORT_MULTICAST="), Settings->MulticastEndpoint);
-			
+
 			FString StaticEndpoints;
 			FParse::Value(CommandLine, TEXT("-UDPMESSAGING_TRANSPORT_STATIC="), StaticEndpoints, false);
 			TArray<FString> CommandLineStaticEndpoints;
@@ -569,7 +573,7 @@ protected:
 		{
 			MessageTunnel->StopServer();
 			MessageTunnel.Reset();
-		}		
+		}
 	}
 #endif
 

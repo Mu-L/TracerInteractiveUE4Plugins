@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -48,7 +48,7 @@ namespace Audio
 		void SetHPFFrequency(const float InFrequency);
 
 		// Sets the source voice's channel map (2d or 3d).
-		void SetChannelMap(ESubmixChannelFormat InChannelType, const uint32 NumInputChannels, const Audio::AlignedFloatBuffer& InChannelMap, const bool bInIs3D, const bool bInIsCenterChannelOnly);
+		void SetChannelMap(const uint32 NumInputChannels, const Audio::AlignedFloatBuffer& InChannelMap, const bool bInIs3D, const bool bInIsCenterChannelOnly);
 
 		// Sets params used by HRTF spatializer
 		void SetSpatializationParams(const FSpatializationParams& InParams);
@@ -83,6 +83,11 @@ namespace Audio
 		// Whether or not the device changed and needs another speaker map sent
 		bool NeedsSpeakerMap() const;
 
+		// Whether or not the voice is currently using HRTF spatialization.
+		//
+		// @param bDefaultValue - This value will be returned if voice does not have a valid source id.
+		bool IsUsingHRTFSpatializer(bool bDefaultValue) const;
+
 		// Retrieves the total number of samples played.
 		int64 GetNumFramesPlayed() const;
 
@@ -90,7 +95,13 @@ namespace Audio
 		float GetEnvelopeValue() const;
 
 		// Mixes the dry and wet buffer audio into the given buffers.
-		void MixOutputBuffers(const ESubmixChannelFormat InSubmixChannelType, const float SendLevel, AlignedFloatBuffer& OutWetBuffer) const;
+		void MixOutputBuffers(int32 InNumChannels, const float SendLevel, AlignedFloatBuffer& OutWetBuffer) const;
+
+		// For soundfield conversions, get the encoded audio.
+		const ISoundfieldAudioPacket* GetEncodedOutput(const FSoundfieldEncodingKey& InKey) const;
+
+		// This will return the listener rotation used for this source voice.
+		const FQuat GetListenerRotationForVoice() const;
 
 		// Sets the submix send levels
 		void SetSubmixSendInfo(FMixerSubmixWeakPtr Submix, const float SendLevel);
@@ -108,7 +119,7 @@ namespace Audio
 		FMixerSourceManager* SourceManager;
 		TMap<uint32, FMixerSourceSubmixSend> SubmixSends;
 		FMixerDevice* MixerDevice;
-		TMap<ESubmixChannelFormat, TArray<float>> ChannelMaps;
+		TArray<float> DeviceChannelMap;
 		FThreadSafeBool bStopFadedOut;
 		float Pitch;
 		float Volume;

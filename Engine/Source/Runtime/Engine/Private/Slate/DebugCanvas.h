@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -93,6 +93,11 @@ private:
 	* Release the internal layer texture
 	*/
 	void ReleaseTexture();
+
+	/**
+	 * Called after a font cache has released its rendering resources
+	 */
+	void HandleReleaseFontResources(const class FSlateFontCache& InFontCache);
 
 private:
 	/** The canvas that can be used by the game thread */

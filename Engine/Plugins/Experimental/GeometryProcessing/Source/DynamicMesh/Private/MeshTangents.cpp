@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MeshTangents.h"
 #include "Async/ParallelFor.h"
@@ -35,7 +35,7 @@ void TMeshTangents<RealType>::Internal_ComputePerTriangleTangents(const FDynamic
 
 	ParallelFor(MaxTriangleID, [this, NormalOverlay, UVOverlay](int TriangleID)
 	{
-		if (Mesh->IsTriangle(TriangleID) == false)
+		if (Mesh->IsTriangle(TriangleID) == false || UVOverlay->IsSetTriangle(TriangleID) == false)
 		{
 			return;
 		}

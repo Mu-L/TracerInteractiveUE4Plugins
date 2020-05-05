@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AudioCaptureAndroid.h"
 
@@ -47,9 +47,11 @@ bool Audio::FAudioCaptureAndroidStream::OpenCaptureStream(const FAudioCaptureDev
 
 bool Audio::FAudioCaptureAndroidStream::CloseStream()
 {
-	check(InputOboeStream != nullptr);
-	InputOboeStream->close();
-	InputOboeStream.Reset();
+	if (!InputOboeStream)
+	{
+		InputOboeStream->close();
+		InputOboeStream.Reset();
+	}
 
 	return true;
 }
@@ -113,7 +115,7 @@ bool Audio::FAudioCaptureAndroidStream::IsCapturing() const
 void Audio::FAudioCaptureAndroidStream::OnAudioCapture(void* InBuffer, uint32 InBufferFrames, double StreamTime, bool bOverflow)
 {
 	const float* FloatBuffer = static_cast<float*>(InBuffer);
-	OnCapture(FloatBuffer, InBufferFrames, NumChannels, StreamTime, bOverflow);
+	OnCapture(FloatBuffer, InBufferFrames, NumChannels, SampleRate, StreamTime, bOverflow);
 }
 
 bool Audio::FAudioCaptureAndroidStream::GetInputDevicesAvailable(TArray<FCaptureDeviceInfo>& OutDevices)

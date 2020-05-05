@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	DeferredShadingRenderer.h: Scene rendering definitions.
@@ -29,6 +29,7 @@ void SetupSceneTextureParameters(
 	OutTextures->SceneGBufferC = GraphBuilder.TryRegisterExternalTexture(SceneContext.GBufferC, TEXT("GBufferC"));
 	OutTextures->SceneGBufferD = GraphBuilder.TryRegisterExternalTexture(SceneContext.GBufferD, TEXT("GBufferD"));
 	OutTextures->SceneGBufferE = GraphBuilder.TryRegisterExternalTexture(SceneContext.GBufferE, TEXT("GBufferE"));
+	OutTextures->SceneGBufferF = GraphBuilder.TryRegisterExternalTexture(SceneContext.GBufferF, TEXT("GBufferF"));
 
 	// Lighting channels might be disabled when all lights are on the same channel.
 	if (SceneContext.LightingChannels)
@@ -53,6 +54,7 @@ void SetupSceneTextureSamplers(FSceneTextureSamplerParameters* OutSamplers)
 	OutSamplers->SceneGBufferCSampler = Sampler;
 	OutSamplers->SceneGBufferDSampler = Sampler;
 	OutSamplers->SceneGBufferESampler = Sampler;
+	OutSamplers->SceneGBufferFSampler = Sampler;
 }
 
 FRDGTextureRef GetEyeAdaptationTexture(FRDGBuilder& GraphBuilder, const FViewInfo& View)

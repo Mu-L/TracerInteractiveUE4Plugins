@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -16,7 +16,7 @@ struct FWeakObjectPtr;
 /**
  * UObject Memory Reader Archive. Reads from InBytes, writes to Obj.
  */
-class COREUOBJECT_VTABLE FObjectReader : public FMemoryArchive
+class FObjectReader : public FMemoryArchive
 {
 public:
 	FObjectReader(UObject* Obj, TArray<uint8>& InBytes, bool bIgnoreClassRef = false, bool bIgnoreArchetypeRef = false)

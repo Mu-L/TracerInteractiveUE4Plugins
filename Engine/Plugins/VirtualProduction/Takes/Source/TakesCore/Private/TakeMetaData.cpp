@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TakeMetaData.h"
 #include "TakePreset.h"
@@ -7,6 +7,7 @@
 #include "ObjectTools.h"
 #include "Engine/Level.h"
 #include "Editor.h"
+#include "MovieSceneToolsProjectSettings.h"
 
 const FName UTakeMetaData::AssetRegistryTag_Slate       = "TakeMetaData_Slate";
 const FName UTakeMetaData::AssetRegistryTag_TakeNumber  = "TakeMetaData_TakeNumber";
@@ -22,6 +23,8 @@ UTakeMetaData::UTakeMetaData(const FObjectInitializer& ObjInit)
 {
 	TakeNumber = 1;
 	bIsLocked = false;
+	bFrameRateFromTimecode = true;
+	FrameRate = FApp::GetTimecodeFrameRate();
 }
 
 UTakeMetaData* UTakeMetaData::GetConfigInstance()
@@ -74,6 +77,9 @@ FString UTakeMetaData::GenerateAssetPath(const FString& PathFormatString) const
 	}
 #endif
 
+	const UMovieSceneToolsProjectSettings* ProjectSettings = GetDefault<UMovieSceneToolsProjectSettings>();
+	const int32 TakeNumDigits = ProjectSettings->TakeNumDigits;
+
 	TMap<FString, FStringFormatArg> FormatArgs;
 	FormatArgs.Add(TEXT("day"),    FString::Printf(TEXT("%02i"), TimestampToUse.GetDay()));
 	FormatArgs.Add(TEXT("month"),  FString::Printf(TEXT("%02i"), TimestampToUse.GetMonth()));
@@ -81,7 +87,7 @@ FString UTakeMetaData::GenerateAssetPath(const FString& PathFormatString) const
 	FormatArgs.Add(TEXT("hour"),   FString::Printf(TEXT("%02i"), TimestampToUse.GetHour()));
 	FormatArgs.Add(TEXT("minute"), FString::Printf(TEXT("%02i"), TimestampToUse.GetMinute()));
 	FormatArgs.Add(TEXT("second"), FString::Printf(TEXT("%02i"), TimestampToUse.GetSecond()));
-	FormatArgs.Add(TEXT("take"),   FString::Printf(TEXT("%04i"), TakeNumber));
+	FormatArgs.Add(TEXT("take"),   FString::Printf(TEXT("%0*d"), TakeNumDigits, TakeNumber));
 	FormatArgs.Add(TEXT("slate"),  *Slate);
 	FormatArgs.Add(TEXT("map"),    *MapName);
 
@@ -118,8 +124,12 @@ FFrameTime UTakeMetaData::GetDuration() const
 	return Duration;
 }
 
-FFrameRate UTakeMetaData::GetFrameRate() const
+FFrameRate UTakeMetaData::GetFrameRate() 
 {
+	if (bFrameRateFromTimecode)
+	{
+		FrameRate = FApp::GetTimecodeFrameRate();
+	}
 	return FrameRate;
 }
 
@@ -141,6 +151,11 @@ ULevel* UTakeMetaData::GetLevelOrigin() const
 FString UTakeMetaData::GetLevelPath() const
 {
 	return !LevelOrigin.IsNull() ? LevelOrigin.ToString() : FString();
+}
+
+bool UTakeMetaData::GetFrameRateFromTimecode() const
+{
+	return bFrameRateFromTimecode;
 }
 
 void UTakeMetaData::SetSlate(FString InSlate, bool bEmitChanged)
@@ -232,6 +247,15 @@ void UTakeMetaData::SetLevelOrigin(ULevel* InLevelOrigin)
 		LevelOrigin = InLevelOrigin; 
 	}
 }
+
+void UTakeMetaData::SetFrameRateFromTimecode(bool InFromTimecode)
+{
+	if (!bIsLocked)
+	{
+		bFrameRateFromTimecode = InFromTimecode;
+	}
+}
+
 
 void UTakeMetaData::ExtendAssetRegistryTags(TArray<FAssetRegistryTag>& OutTags) const
 {

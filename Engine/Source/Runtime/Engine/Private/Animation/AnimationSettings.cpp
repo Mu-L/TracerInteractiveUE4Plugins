@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Animation/AnimationSettings.h"
 #include "Animation/AnimCompress_BitwiseCompressOnly.h"
@@ -6,18 +6,11 @@
 UAnimationSettings::UAnimationSettings(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, CompressCommandletVersion(2)	// Bump this up to trigger full recompression. Otherwise only new animations imported will be recompressed.
-	, DefaultCompressionAlgorithm(UAnimCompress_BitwiseCompressOnly::StaticClass())
-	, RotationCompressionFormat(ACF_Float96NoW)
-	, TranslationCompressionFormat(ACF_None)
-	, MaxCurveError(0.f)
-	, AlternativeCompressionThreshold(1.f)
 	, ForceRecompression(false)
 	, bOnlyCheckForMissingSkeletalMeshes(false)
 	, bForceBelowThreshold(false)
 	, bFirstRecompressUsingCurrentOrDefault(true)
 	, bRaiseMaxErrorToExisting(false)
-	, bTryExhaustiveSearch(false)
-	, bEnableSegmenting(true)
 	, bEnablePerformanceLog(false)
 	, bTickAnimationOnSkeletalMeshInit(true)
 {

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System.IO;
@@ -24,6 +24,7 @@ public class MeshMergeUtilities : ModuleRules
                 "SkeletalMeshEditor",
                 "MaterialBaking",
                 "MeshUtilitiesCommon",
+				"ToolMenus",
             }
 		);
         
@@ -32,7 +33,6 @@ public class MeshMergeUtilities : ModuleRules
                 "RawMesh",
                 "MeshDescription",
 				"StaticMeshDescription",
-                "MeshDescriptionOperations"
             }
 		);
 

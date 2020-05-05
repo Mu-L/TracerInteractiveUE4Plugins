@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -138,6 +138,9 @@ struct CORE_API FMapErrors
 	/** Component is a static type but has invalid lightmap settings!  Indirect lighting will be black.  Common causes are lightmap resolution of 0, LightmapCoordinateIndex out of bounds. */
 	static FLazyName StaticComponentHasInvalidLightmapSettings;
 
+	/** Anisotropic BRDF and output velocity during base pass are mutually exclusive options */
+	static FLazyName AnisotropicBRDF_or_BasePassVelocity;
+
 	/** Navigation */
 
 	/** Paths need to be rebuilt: **TODO** */
@@ -202,7 +205,7 @@ struct CORE_API FMapErrors
 
     /**  Uncategorized */
 
-	/** Filename {Filename} is too long - this may interfere with cooking for consoles.  Unreal filenames should be no longer than {Length} characters.: Please rename the file to be within the length specified. */
+	/** Filename is too long ({FilenameLength} characters) - this may interfere with cooking for consoles. Unreal filenames should be no longer than {Length} characters. Filename value: {Filename}: Please rename the file to be within the length specified. */
     static FLazyName FilenameIsTooLongForCooking;
     
 	/** {ObjectName} : Externally referenced */

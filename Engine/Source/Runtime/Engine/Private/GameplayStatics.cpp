@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Kismet/GameplayStatics.h"
 #include "Serialization/MemoryWriter.h"
@@ -966,22 +966,25 @@ void UGameplayStatics::PlayWorldCameraShake(const UObject* WorldContextObject, T
 UParticleSystemComponent* CreateParticleSystem(UParticleSystem* EmitterTemplate, UWorld* World, AActor* Actor, bool bAutoDestroy, EPSCPoolMethod PoolingMethod)
 {
 	//Defaulting to creating systems from a pool. Can be disabled via fx.ParticleSystemPool.Enable 0
-	UParticleSystemComponent* PSC;
+	UParticleSystemComponent* PSC = nullptr;
 
-	if (PoolingMethod != EPSCPoolMethod::None)
+	if (FApp::CanEverRender() && World && !World->IsNetMode(NM_DedicatedServer))
 	{
-		//If system is set to auto destroy the we should be safe to automatically allocate from a the world pool.
-		PSC = World->GetPSCPool().CreateWorldParticleSystem(EmitterTemplate, World, PoolingMethod);
-	}
-	else
-	{
-		PSC = NewObject<UParticleSystemComponent>((Actor ? Actor : (UObject*)World));
-		PSC->bAutoDestroy = bAutoDestroy;
-		PSC->bAllowAnyoneToDestroyMe = true;
-		PSC->SecondsBeforeInactive = 0.0f;
-		PSC->bAutoActivate = false;
-		PSC->SetTemplate(EmitterTemplate);
-		PSC->bOverrideLODMethod = false;
+		if (PoolingMethod != EPSCPoolMethod::None)
+		{
+			//If system is set to auto destroy the we should be safe to automatically allocate from a the world pool.
+			PSC = World->GetPSCPool().CreateWorldParticleSystem(EmitterTemplate, World, PoolingMethod);
+		}
+		else
+		{
+			PSC = NewObject<UParticleSystemComponent>((Actor ? Actor : (UObject*)World));
+			PSC->bAutoDestroy = bAutoDestroy;
+			PSC->bAllowAnyoneToDestroyMe = true;
+			PSC->SecondsBeforeInactive = 0.0f;
+			PSC->bAutoActivate = false;
+			PSC->SetTemplate(EmitterTemplate);
+			PSC->bOverrideLODMethod = false;
+		}
 	}
 
 	return PSC;
@@ -996,9 +999,9 @@ UParticleSystemComponent* UGameplayStatics::InternalSpawnEmitterAtLocation(UWorl
 {
 	check(World && EmitterTemplate);
 
-	if (UParticleSystemComponent* PSC = CreateParticleSystem(EmitterTemplate, World, World->GetWorldSettings(), bAutoDestroy, PoolingMethod))
+	UParticleSystemComponent* PSC = CreateParticleSystem(EmitterTemplate, World, World->GetWorldSettings(), bAutoDestroy, PoolingMethod);
+	if (PSC)
 	{
-
 		PSC->SetUsingAbsoluteLocation(true);
 		PSC->SetUsingAbsoluteRotation(true);
 		PSC->SetUsingAbsoluteScale(true);
@@ -1208,7 +1211,7 @@ bool UGameplayStatics::FindCollisionUV(const struct FHitResult& Hit, int32 UVCha
 	return bSuccess;
 }
 
-bool UGameplayStatics::AreAnyListenersWithinRange(const UObject* WorldContextObject, FVector Location, float MaximumRange)
+bool UGameplayStatics::AreAnyListenersWithinRange(const UObject* WorldContextObject, const FVector& Location, float MaximumRange)
 {
 	if (!GEngine || !GEngine->UseSound())
 	{
@@ -1222,12 +1225,42 @@ bool UGameplayStatics::AreAnyListenersWithinRange(const UObject* WorldContextObj
 	}
 	
 	// If there is no valid world from the world context object then there certainly are no listeners
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		return AudioDevice->LocationIsAudible(Location, MaximumRange);
 	}	
 
 	return false;
+}
+
+bool UGameplayStatics::GetClosestListenerLocation(const UObject* WorldContextObject, const FVector& Location, float MaximumRange, const bool bAllowAttenuationOverride, FVector& ListenerPosition)
+{
+	if (!GEngine || !GEngine->UseSound())
+	{
+		return false;
+	}
+
+	UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+	if (!ThisWorld)
+	{
+		return false;
+	}
+
+	// If there is no valid world from the world context object then there certainly are no listeners
+	FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice();
+	if (!AudioDevice)
+	{
+		return false;
+	}
+
+	float OutDistSq;
+	const int32 ClosestListenerIndex = AudioDevice->FindClosestListenerIndex(Location, OutDistSq, bAllowAttenuationOverride);
+	if (ClosestListenerIndex == INDEX_NONE || ((MaximumRange * MaximumRange) < OutDistSq))
+	{
+		return false;
+	}
+
+	return AudioDevice->GetListenerPosition(ClosestListenerIndex, ListenerPosition, bAllowAttenuationOverride);
 }
 
 void UGameplayStatics::SetGlobalPitchModulation(const UObject* WorldContextObject, float PitchModulation, float TimeSec)
@@ -1243,9 +1276,28 @@ void UGameplayStatics::SetGlobalPitchModulation(const UObject* WorldContextObjec
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		AudioDevice->SetGlobalPitchModulation(PitchModulation, TimeSec);
+	}
+}
+
+void UGameplayStatics::SetSoundClassDistanceScale(const UObject* WorldContextObject, USoundClass* SoundClass, float DistanceAttenuationScale, float TimeSec)
+{
+	if (!GEngine || !GEngine->UseSound())
+	{
+		return;
+	}
+
+	UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+	if (!ThisWorld || !ThisWorld->bAllowAudioPlayback || ThisWorld->IsNetMode(NM_DedicatedServer))
+	{
+		return;
+	}
+
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
+	{
+		AudioDevice->SetSoundClassDistanceScale(SoundClass, DistanceAttenuationScale, TimeSec);
 	}
 }
 
@@ -1262,7 +1314,7 @@ void UGameplayStatics::SetGlobalListenerFocusParameters(const UObject* WorldCont
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		FGlobalFocusSettings NewFocusSettings;
 		NewFocusSettings.FocusAzimuthScale = FMath::Max(FocusAzimuthScale, 0.0f);
@@ -1291,7 +1343,7 @@ void UGameplayStatics::PlaySound2D(const UObject* WorldContextObject, USoundBase
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		FActiveSound NewActiveSound;
 		NewActiveSound.SetSound(Sound);
@@ -1333,7 +1385,7 @@ UAudioComponent* UGameplayStatics::CreateSound2D(const UObject* WorldContextObje
 	}
 
 	FAudioDevice::FCreateComponentParams Params = bPersistAcrossLevelTransition
-		? FAudioDevice::FCreateComponentParams(ThisWorld->GetAudioDevice())
+		? FAudioDevice::FCreateComponentParams(ThisWorld->GetAudioDeviceRaw())
 		: FAudioDevice::FCreateComponentParams(ThisWorld);
 
 	if (ConcurrencySettings)
@@ -1378,7 +1430,7 @@ void UGameplayStatics::PlaySoundAtLocation(const UObject* WorldContextObject, cl
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		AudioDevice->PlaySoundAtLocation(Sound, ThisWorld, VolumeMultiplier, PitchMultiplier, StartTime, Location, Rotation, AttenuationSettings, ConcurrencySettings, nullptr, OwningActor);
 	}
@@ -1584,7 +1636,7 @@ void UGameplayStatics::SetBaseSoundMix(const UObject* WorldContextObject, USound
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		AudioDevice->SetBaseSoundMix(InSoundMix);
 	}
@@ -1603,7 +1655,7 @@ void UGameplayStatics::PushSoundMixModifier(const UObject* WorldContextObject, U
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		AudioDevice->PushSoundMixModifier(InSoundMixModifier);
 	}
@@ -1642,7 +1694,7 @@ void UGameplayStatics::SetSoundMixClassOverride(const UObject* WorldContextObjec
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		AudioDevice->SetSoundMixClassOverride(InSoundMixModifier, InSoundClass, Volume, Pitch, FadeInTime, bApplyToChildren);
 	}
@@ -1661,7 +1713,7 @@ void UGameplayStatics::ClearSoundMixClassOverride(const UObject* WorldContextObj
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		AudioDevice->ClearSoundMixClassOverride(InSoundMixModifier, InSoundClass, FadeOutTime);
 	}
@@ -1680,7 +1732,7 @@ void UGameplayStatics::PopSoundMixModifier(const UObject* WorldContextObject, US
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		AudioDevice->PopSoundMixModifier(InSoundMixModifier);
 	}
@@ -1699,7 +1751,7 @@ void UGameplayStatics::ClearSoundMixModifiers(const UObject* WorldContextObject)
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		AudioDevice->ClearSoundMixModifiers();
 	}
@@ -1718,7 +1770,7 @@ void UGameplayStatics::ActivateReverbEffect(const UObject* WorldContextObject, c
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		AudioDevice->ActivateReverbEffect(ReverbEffect, TagName, Priority, Volume, FadeTime);
 	}
@@ -1737,7 +1789,7 @@ void UGameplayStatics::DeactivateReverbEffect(const UObject* WorldContextObject,
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		AudioDevice->DeactivateReverbEffect(TagName);
 	}
@@ -1756,7 +1808,7 @@ class UReverbEffect* UGameplayStatics::GetCurrentReverbEffect(const UObject* Wor
 		return nullptr;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		return AudioDevice->GetCurrentReverbEffect();
 	}
@@ -1776,7 +1828,7 @@ void UGameplayStatics::SetMaxAudioChannelsScaled(const UObject* WorldContextObje
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		AudioDevice->SetMaxChannelsScaled(MaxChannelCountScale);
 	}
@@ -1796,7 +1848,7 @@ int32 UGameplayStatics::GetMaxAudioChannelCount(const UObject* WorldContextObjec
 		return 0;
 	}
 
-	if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = ThisWorld->GetAudioDevice())
 	{
 		return AudioDevice->GetMaxChannels();
 	}
@@ -2801,16 +2853,17 @@ bool UGameplayStatics::GrabOption( FString& Options, FString& Result )
 	{
 		// Get result.
 		Result = Options.Mid(1, MAX_int32);
-		if (Result.Contains(QuestionMark, ESearchCase::CaseSensitive))
+		const int32 QMIdx = Result.Find(QuestionMark, ESearchCase::CaseSensitive);
+		if (QMIdx != INDEX_NONE)
 		{
-			Result = Result.Left(Result.Find(QuestionMark, ESearchCase::CaseSensitive));
+			Result.LeftInline(QMIdx, false);
 		}
 
 		// Update options.
-		Options = Options.Mid(1, MAX_int32);
+		Options.MidInline(1, MAX_int32, false);
 		if (Options.Contains(QuestionMark, ESearchCase::CaseSensitive))
 		{
-			Options = Options.Mid(Options.Find(QuestionMark, ESearchCase::CaseSensitive), MAX_int32);
+			Options.MidInline(Options.Find(QuestionMark, ESearchCase::CaseSensitive), MAX_int32, false);
 		}
 		else
 		{

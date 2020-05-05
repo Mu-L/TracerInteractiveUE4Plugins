@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System;
@@ -76,10 +76,6 @@ public class PhysXCookingLib : ModuleRules
 				System.Object VersionName = XboxOnePlatformType.GetMethod("GetVisualStudioCompilerVersionName").Invoke(null, null) as string;
                 PublicAdditionalLibraries.Add(Path.Combine(PhysXLibDir, "XboxOne", "VS" + VersionName, String.Format("PhysX3Cooking{0}.lib", LibrarySuffix)));
             }
-        }
-        else if (Target.Platform == UnrealTargetPlatform.Switch)
-        {
-            PublicAdditionalLibraries.Add(Path.Combine(PhysXLibDir, "Switch", String.Format("libPhysX3Cooking{0}.a", LibrarySuffix)));
         }
 	}
 }

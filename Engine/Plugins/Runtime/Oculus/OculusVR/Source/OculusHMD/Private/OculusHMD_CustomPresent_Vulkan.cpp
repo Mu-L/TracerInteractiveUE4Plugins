@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OculusHMD_CustomPresent.h"
 #include "OculusHMDPrivateRHI.h"
@@ -69,7 +69,7 @@ bool FVulkanCustomPresent::IsUsingCorrectDisplayAdapter() const
 	const void* luid;
 
 	FVulkanDynamicRHI* const DynamicRHI = static_cast<FVulkanDynamicRHI*>(GDynamicRHI);
-	if (OVRP_SUCCESS(ovrp_GetDisplayAdapterId2(&luid)) &&
+	if (OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().GetDisplayAdapterId2(&luid)) &&
 		luid &&
 		DynamicRHI->GetOptionalExtensions().HasKHRGetPhysicalDeviceProperties2)
 	{

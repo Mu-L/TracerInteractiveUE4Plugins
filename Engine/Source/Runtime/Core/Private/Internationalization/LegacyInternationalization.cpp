@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Internationalization/LegacyInternationalization.h"
 #include "Internationalization/Cultures/LeetCulture.h"
@@ -46,7 +46,11 @@ bool FLegacyInternationalization::IsCultureAllowed(const FString& Name)
 	return true;
 }
 
-void FLegacyInternationalization::HandleLanguageChanged(const FString& Name)
+void FLegacyInternationalization::RefreshCultureDisplayNames(const TArray<FString>& InPrioritizedDisplayCultureNames)
+{
+}
+
+void FLegacyInternationalization::HandleLanguageChanged(const FCultureRef InNewLanguage)
 {
 }
 

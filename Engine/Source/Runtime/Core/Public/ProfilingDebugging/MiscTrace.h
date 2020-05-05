@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -6,10 +6,12 @@
 #include "Trace/Config.h"
 #include "ProfilingDebugging/FormatArgsTrace.h"
 
+#if !defined(MISCTRACE_ENABLED)
 #if UE_TRACE_ENABLED && !UE_BUILD_SHIPPING
 #define MISCTRACE_ENABLED 1
 #else
 #define MISCTRACE_ENABLED 0
+#endif
 #endif
 
 enum ETraceFrameType
@@ -26,7 +28,7 @@ struct FTraceUtils
 	{
 		do
 		{
-			uint8 HasMoreBytes = (Value > uint64(0x7F)) << 7;
+			uint8 HasMoreBytes = (uint8)((Value > uint64(0x7F)) << 7);
 			*(BufferPtr++) = (uint8)(Value & 0x7F) | HasMoreBytes;
 			Value >>= 7;
 		} while (Value > 0);

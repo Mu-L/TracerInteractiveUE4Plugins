@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 //=============================================================================
 // LocalPlayer
@@ -27,6 +27,7 @@
 
 class AActor;
 class FSceneView;
+class FSlateUser;
 class UGameInstance;
 class ULocalPlayer;
 struct FMinimalViewInfo;
@@ -264,6 +265,10 @@ public:
 	FReply& GetSlateOperations() { return SlateOperations; }
 	const FReply& GetSlateOperations() const { return SlateOperations; }
 
+	/** Get the SlateUser that this LocalPlayer corresponds to */
+	TSharedPtr<FSlateUser> GetSlateUser();
+	TSharedPtr<const FSlateUser> GetSlateUser() const;
+
 	/**
 	 * Get the world the players actor belongs to
 	 *
@@ -381,8 +386,10 @@ public:
 	 * @note this happens automatically for all viewports that exist during the initial server connect
 	 * 	so it's only necessary to manually call this for viewports created after that
 	 * if the join fails (because the server was full, for example) all viewports on this client will be disconnected
+	 *
+	 * @param	Options		array of URL options to append.
 	 */
-	virtual void SendSplitJoin();
+	virtual void SendSplitJoin(TArray<FString>& Options);
 	
 	/**
 	 * Change the ControllerId for this player; if the specified ControllerId is already taken by another player, changes the ControllerId

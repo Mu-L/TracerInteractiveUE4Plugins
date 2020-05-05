@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once 
 
@@ -45,22 +45,11 @@ namespace UsdUtils
 		return Value;
 	}
 
-	static pxr::TfToken GetUsdStageAxis(pxr::UsdStageRefPtr Stage)
-	{
-		if (Stage->HasAuthoredMetadata(pxr::UsdGeomTokens->upAxis))
-		{
-			pxr::TfToken Axis;
-			Stage->GetMetadata(pxr::UsdGeomTokens->upAxis, &Axis);
-			return Axis;
-		}
+	USDUTILITIES_API pxr::TfToken GetUsdStageAxis( const pxr::UsdStageRefPtr& Stage );
+	USDUTILITIES_API void SetUsdStageAxis( const pxr::UsdStageRefPtr& Stage, pxr::TfToken Axis );
 
-		return pxr::UsdGeomTokens->z;
-	}
-
-	static void SetUsdStageAxis( pxr::UsdStageRefPtr Stage, pxr::TfToken Axis )
-	{
-		Stage->SetMetadata( pxr::UsdGeomTokens->upAxis, Axis );
-	}
+	USDUTILITIES_API float GetUsdStageMetersPerUnit( const pxr::UsdStageRefPtr& Stage );
+	USDUTILITIES_API void SetUsdStageMetersPerUnit( const pxr::UsdStageRefPtr& Stage, float MetersPerUnit );
 
 	inline bool HasCompositionArcs( const pxr::UsdPrim& Prim )
 	{
@@ -77,6 +66,15 @@ namespace UsdUtils
 	USDUTILITIES_API UClass* GetComponentTypeForPrim( const pxr::UsdPrim& Prim );
 
 	USDUTILITIES_API TUsdStore< pxr::TfToken > GetUVSetName( int32 UVChannelIndex );
+
+	USDUTILITIES_API bool IsAnimated( const pxr::UsdPrim& Prim );
+
+	/**
+	 * Returns all prims of type SchemaType (or a descendant type) in the subtree of prims rooted at StartPrim.
+	 * Stops going down the subtrees when it hits a schema type to exclude.
+	 */
+	USDUTILITIES_API TArray< TUsdStore< pxr::UsdPrim > > GetAllPrimsOfType( const pxr::UsdPrim& StartPrim, const pxr::TfType& SchemaType, const TArray< TUsdStore< pxr::TfType > >& ExcludeSchemaTypes = {} );
+	USDUTILITIES_API TArray< TUsdStore< pxr::UsdPrim > > GetAllPrimsOfType( const pxr::UsdPrim& StartPrim, const pxr::TfType& SchemaType, TFunction< bool( const pxr::UsdPrim& ) > PruneChildren, const TArray< TUsdStore< pxr::TfType > >& ExcludeSchemaTypes = {} );
 }
 
 #endif // #if USE_USD_SDK

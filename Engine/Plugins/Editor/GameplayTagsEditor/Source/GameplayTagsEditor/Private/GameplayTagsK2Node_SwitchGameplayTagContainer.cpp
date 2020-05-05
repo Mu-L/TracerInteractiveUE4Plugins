@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GameplayTagsK2Node_SwitchGameplayTagContainer.h"
 #include "EdGraphSchema_K2.h"
@@ -23,7 +23,7 @@ void UGameplayTagsK2Node_SwitchGameplayTagContainer::CreateFunctionPin()
 	FunctionPin->bNotConnectable = true;
 	FunctionPin->bHidden = true;
 
-	UFunction* Function = FindField<UFunction>(FunctionClass, FunctionName);
+	UFunction* Function = FindUField<UFunction>(FunctionClass, FunctionName);
 	const bool bIsStaticFunc = Function->HasAllFunctionFlags(FUNC_Static);
 	if (bIsStaticFunc)
 	{

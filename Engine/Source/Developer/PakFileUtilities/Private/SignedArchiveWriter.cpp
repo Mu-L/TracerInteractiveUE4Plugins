@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SignedArchiveWriter.h"
 #include "IPlatformFilePak.h"
@@ -6,13 +6,15 @@
 #include "HAL/FileManager.h"
 
 FSignedArchiveWriter::FSignedArchiveWriter(FArchive& InPak, const FString& InPakFilename, const FRSAKeyHandle InSigningKey)
-: BufferArchive(Buffer)
-	, PakWriter(InPak)
-	, PakSignaturesFilename(FPaths::ChangeExtension(InPakFilename, TEXT("sig")))
-	, SizeOnDisk(0)
-	, PakSize(0)
-	, SigningKey(InSigningKey)
+: FArchive(InPak)
+, BufferArchive(Buffer)
+, PakWriter(InPak)
+, PakSignaturesFilename(FPaths::ChangeExtension(InPakFilename, TEXT("sig")))
+, SizeOnDisk(0)
+, PakSize(0)
+, SigningKey(InSigningKey)
 {
+	check(IsSaving());
 	Buffer.Reserve(FPakInfo::MaxChunkDataSize);
 }
 

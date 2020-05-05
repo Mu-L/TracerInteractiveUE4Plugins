@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*================================================================================================
 	RayTracingDebugDefinitions.ush: used in ray tracing debug shaders and C++ code to define common constants
@@ -27,4 +27,6 @@
 #define RAY_TRACING_DEBUG_VIZ_HITKIND					17  
 #define RAY_TRACING_DEBUG_VIZ_BARYCENTRICS				18  
 #define RAY_TRACING_DEBUG_VIZ_PRIMARY_RAYS				19  
+#define RAY_TRACING_DEBUG_VIZ_WORLD_TANGENT				20 
+#define RAY_TRACING_DEBUG_VIZ_ANISOTROPY				21 
 

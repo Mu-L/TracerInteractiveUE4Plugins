@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,6 +12,32 @@
 #include "Templates/IsArrayOrRefOfType.h"
 
 #define MAX_SPRINTF 1024
+
+/** Determines case sensitivity options for string comparisons. */
+namespace ESearchCase
+{
+	enum Type
+	{
+		/** Case sensitive. Upper/lower casing must match for strings to be considered equal. */
+		CaseSensitive,
+
+		/** Ignore case. Upper/lower casing does not matter when making a comparison. */
+		IgnoreCase,
+	};
+};
+
+/** Determines search direction for string operations. */
+namespace ESearchDir
+{
+	enum Type
+	{
+		/** Search from the start, moving forward through the string. */
+		FromStart,
+
+		/** Search from the end, moving backward through the string. */
+		FromEnd,
+	};
+}
 
 /** Helper class used to convert CString into a boolean value. */
 struct CORE_API FToBoolHelper
@@ -245,7 +271,15 @@ struct TCString
 	 * strlen wrapper
 	 */
 	static FORCEINLINE int32 Strlen( const CharType* String );
-	
+
+	/**
+	 * Calculate the length of the string up to the given size.
+	 * @param String A possibly-null-terminated string in a character array with a size of at least StringSize.
+	 * @param StringSize The maximum number of characters to read from String.
+	 * @return Length The smaller of StringSize and the number of characters in String before a null character.
+	 */
+	static FORCEINLINE int32 Strnlen( const CharType* String, SIZE_T StringSize );
+
 	/**
 	 * strstr wrapper
 	 */
@@ -674,6 +708,12 @@ int32 TCString<T>::Strlen( const CharType* String )
 }
 
 template <typename T> FORCEINLINE
+int32 TCString<T>::Strnlen( const CharType* String, SIZE_T StringSize ) 
+{
+	return FPlatformString::Strnlen(String, StringSize);
+}
+
+template <typename T> FORCEINLINE
 const typename TCString<T>::CharType* TCString<T>::Strstr( const CharType* String, const CharType* Find )
 {
 	return FPlatformString::Strstr(String, Find);
@@ -740,10 +780,10 @@ typename TCString<T>::CharType* TCString<T>::Strrstr( CharType* String, const Ch
 template <typename T> FORCEINLINE
 int32 TCString<T>::Strspn( const CharType* String, const CharType* Mask )
 {
-	const TCHAR* StringIt = String;
+	const CharType* StringIt = String;
 	while (*StringIt)
 	{
-		for (const TCHAR* MaskIt = Mask; *MaskIt; ++MaskIt)
+		for (const CharType* MaskIt = Mask; *MaskIt; ++MaskIt)
 		{
 			if (*StringIt == *MaskIt)
 			{
@@ -751,22 +791,22 @@ int32 TCString<T>::Strspn( const CharType* String, const CharType* Mask )
 			}
 		}
 
-		return StringIt - String;
+		return UE_PTRDIFF_TO_INT32(StringIt - String);
 
 	NextChar:
 		++StringIt;
 	}
 
-	return StringIt - String;
+	return UE_PTRDIFF_TO_INT32(StringIt - String);
 }
 
 template <typename T> FORCEINLINE
 int32 TCString<T>::Strcspn( const CharType* String, const CharType* Mask )
 {
-	const TCHAR* StringIt = String;
+	const CharType* StringIt = String;
 	while (*StringIt)
 	{
-		for (const TCHAR* MaskIt = Mask; *MaskIt; ++MaskIt)
+		for (const CharType* MaskIt = Mask; *MaskIt; ++MaskIt)
 		{
 			if (*StringIt == *MaskIt)
 			{

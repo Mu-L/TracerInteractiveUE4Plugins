@@ -1,6 +1,6 @@
 /*
 Copyright 2019 Valve Corporation under https://opensource.org/licenses/BSD-3-Clause
-This code includes modifications by Epic Games.  Modifications (c) 2019 Epic Games, Inc.
+This code includes modifications by Epic Games.  Modifications (c) Epic Games, Inc.
 
 Redistribution and use in source and binary forms, with or without modification,
 are permitted provided that the following conditions are met:
@@ -52,6 +52,9 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #if WITH_EDITOR
 #include "Editor.h"
+#include "IVREditorModule.h"
+#include "VREditorMode.h"
+#include "VREditorInteractor.h"
 #endif
 
 #define LOCTEXT_NAMESPACE "SteamVRInputDevice"
@@ -166,19 +169,18 @@ void FSteamVRInputDevice::Tick(float DeltaTime)
 		InitSteamVRSystem();
 		//UE_LOG(LogSteamVRInputDevice, Warning, TEXT("SteamVR System Inactive. Trying to initialize..."));
 	}
-	else if(SteamVRHMDModule && SteamVRHMDModule->GetVRSystem())
+	else if(GEngine->XRSystem.IsValid() && SteamVRHMDModule && SteamVRHMDModule->GetVRSystem())
 	{
 		// Cache the controller transform to ensure ResetOrientationAndPosition gets the correct values (Valid for UE4.18 upwards)
 		// https://github.com/ValveSoftware/steamvr_unreal_plugin/issues/2
-		if (GEngine->XRSystem.IsValid() && SteamVRHMDModule && SteamVRHMDModule->GetVRSystem())
-		{
-			CachedBaseOrientation = GEngine->XRSystem->GetBaseOrientation();
-			CachedBasePosition = GEngine->XRSystem->GetBasePosition();
-		}
+		CachedBaseOrientation = GEngine->XRSystem->GetBaseOrientation();
+		CachedBasePosition = GEngine->XRSystem->GetBasePosition();
 	}
-
-	CachedBaseOrientation = FQuat::Identity;
-	CachedBasePosition = FVector::ZeroVector;
+	else
+	{
+		CachedBaseOrientation = FQuat::Identity;
+		CachedBasePosition = FVector::ZeroVector;
+	}
 }
 
 void FSteamVRInputDevice::FindAxisMappings(const UInputSettings* InputSettings, const FName InAxisName, TArray<FInputAxisKeyMapping>& OutMappings) const
@@ -1260,36 +1262,36 @@ void FSteamVRInputDevice::OnVREditingModeEnter()
 	// Set Input Settings
 	auto InputSettings = GetMutableDefault<UInputSettings>();
 
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_WorldMovementL", EKeys::MotionController_Left_Grip1), false);
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_TouchL", EKeys::Vive_Left_Trackpad_Touch), false);
-	InputSettings->AddAxisMapping(FInputAxisKeyMapping("VREditor_TriggerL", EKeys::MotionController_Left_Trigger), false);
-	InputSettings->AddAxisMapping(FInputAxisKeyMapping("VREditor_TriggerAxisL", EKeys::MotionController_Left_TriggerAxis), false);
-	InputSettings->AddAxisMapping(FInputAxisKeyMapping("VREditor_TrackpadPositionL_X", EKeys::MotionController_Left_Thumbstick_X), false);
-	InputSettings->AddAxisMapping(FInputAxisKeyMapping("VREditor_TrackpadPositionL_Y", EKeys::MotionController_Left_Thumbstick_Y), false);
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_ConfirmRadialSelectionL", EKeys::MotionController_Left_Thumbstick), false);
+	UVREditorMode* EditorMode = IVREditorModule::Get().GetVRMode();
+	if (!EditorMode)
+	{
+		return;
+	}
 
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_ModifierL", EKeys::Vive_Left_Menu_Click), false);
+	for (UVREditorInteractor* Interactor : EditorMode->GetVRInteractors())
+	{
+		FName Hand = Interactor->GetControllerHandSide();
+		for (const auto& KeyToAction : Interactor->GetKeyToActionMap())
+		{
+			const FKey Key = KeyToAction.Key;
+			if (Key.GetFName().ToString().StartsWith("MotionController"))
+			{
+				continue;
+			}
 
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_TrackpadDownL", EKeys::Vive_Left_Trackpad_Down), false); // down
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_TrackpadLeftL", EKeys::Vive_Left_Trackpad_Left), false);
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_TrackpadRightL", EKeys::Vive_Left_Trackpad_Right), false);
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_TrackpadUpL", EKeys::Vive_Left_Trackpad_Up), false);
+			const FName Action = KeyToAction.Value.ActionType;
+			FName CombinedName = FName("VREditor_" + Hand.ToString() + "_" + Action.ToString());
 
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_WorldMovementR", EKeys::MotionController_Right_Grip1), false);
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_TouchR", EKeys::Vive_Right_Trackpad_Touch), false);
-	InputSettings->AddAxisMapping(FInputAxisKeyMapping("VREditor_TriggerR", EKeys::MotionController_Right_Trigger), false);
-	InputSettings->AddAxisMapping(FInputAxisKeyMapping("VREditor_TriggerAxisR", EKeys::MotionController_Right_TriggerAxis), false);
-	InputSettings->AddAxisMapping(FInputAxisKeyMapping("VREditor_TrackpadPositionR_X", EKeys::MotionController_Right_Thumbstick_X), false);
-	InputSettings->AddAxisMapping(FInputAxisKeyMapping("VREditor_TrackpadPositionR_Y", EKeys::MotionController_Right_Thumbstick_Y), false);
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_ConfirmRadialSelectionR", EKeys::MotionController_Right_Thumbstick), false);
-
-
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_ModifierR", EKeys::Vive_Right_Menu_Click), false);
-
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_TrackpadDownR", EKeys::Vive_Right_Trackpad_Down), false); // down
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_TrackpadLeftR", EKeys::Vive_Right_Trackpad_Left), false);
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_TrackpadRightR", EKeys::Vive_Right_Trackpad_Right), false);
-	InputSettings->AddActionMapping(FInputActionKeyMapping("VREditor_TrackpadUpR", EKeys::Vive_Right_Trackpad_Up), false);
+			if (Key.IsFloatAxis())
+			{
+				InputSettings->AddAxisMapping(FInputAxisKeyMapping(CombinedName, Key), false);
+			}
+			else
+			{
+				InputSettings->AddActionMapping(FInputActionKeyMapping(CombinedName, Key), false);
+			}
+		}
+	}
 
 	InputSettings->ForceRebuildKeymaps();
 
@@ -1301,34 +1303,36 @@ void FSteamVRInputDevice::OnVREditingModeExit()
 	// Set Input Settings
 	auto InputSettings = GetMutableDefault<UInputSettings>();
 
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_WorldMovementL", EKeys::MotionController_Left_Grip1), false);
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_TouchL", EKeys::Vive_Left_Trackpad_Touch), false);
-	InputSettings->RemoveAxisMapping(FInputAxisKeyMapping("VREditor_TriggerAxisL", EKeys::MotionController_Left_TriggerAxis), false);
-	InputSettings->RemoveAxisMapping(FInputAxisKeyMapping("VREditor_TrackpadPositionL_X", EKeys::MotionController_Left_Thumbstick_X), false);
-	InputSettings->RemoveAxisMapping(FInputAxisKeyMapping("VREditor_TrackpadPositionL_Y", EKeys::MotionController_Left_Thumbstick_Y), false);
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_ConfirmRadialSelectionL", EKeys::MotionController_Left_Thumbstick), false);
+	UVREditorMode* EditorMode = IVREditorModule::Get().GetVRMode();
+	if (!EditorMode)
+	{
+		return;
+	}
 
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_ModifierL", EKeys::Vive_Left_Menu_Click), false);
+	for (UVREditorInteractor* Interactor : EditorMode->GetVRInteractors())
+	{
+		FName Hand = Interactor->GetControllerHandSide();
+		for (const auto& KeyToAction : Interactor->GetKeyToActionMap())
+		{
+			const FKey Key = KeyToAction.Key;
+			if (Key.GetFName().ToString().StartsWith("MotionController"))
+			{
+				continue;
+			}
 
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_TrackpadDownL", EKeys::Vive_Left_Trackpad_Down), false); // down
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_TrackpadLeftL", EKeys::Vive_Left_Trackpad_Left), false);
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_TrackpadRightL", EKeys::Vive_Left_Trackpad_Right), false);
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_TrackpadUpL", EKeys::Vive_Left_Trackpad_Up), false);
+			const FName Action = KeyToAction.Value.ActionType;
+			FName CombinedName = FName("VREditor_" + Hand.ToString() + "_" + Action.ToString());
 
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_WorldMovementR", EKeys::MotionController_Right_Grip1), false);
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_TouchR", EKeys::Vive_Right_Trackpad_Touch), false);
-	InputSettings->RemoveAxisMapping(FInputAxisKeyMapping("VREditor_TriggerAxisR", EKeys::MotionController_Right_TriggerAxis), false);
-	InputSettings->RemoveAxisMapping(FInputAxisKeyMapping("VREditor_TrackpadPositionR_X", EKeys::MotionController_Right_Thumbstick_X), false);
-	InputSettings->RemoveAxisMapping(FInputAxisKeyMapping("VREditor_TrackpadPositionR_Y", EKeys::MotionController_Right_Thumbstick_Y), false);
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_ConfirmRadialSelectionR", EKeys::MotionController_Right_Thumbstick), false);
-
-
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_ModifierR", EKeys::Vive_Right_Menu_Click), false);
-
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_TrackpadDownR", EKeys::Vive_Right_Trackpad_Down), false); // down
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_TrackpadLeftR", EKeys::Vive_Right_Trackpad_Left), false);
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_TrackpadRightR", EKeys::Vive_Right_Trackpad_Right), false);
-	InputSettings->RemoveActionMapping(FInputActionKeyMapping("VREditor_TrackpadUpR", EKeys::Vive_Right_Trackpad_Up), false);
+			if (Key.IsFloatAxis())
+			{
+				InputSettings->RemoveAxisMapping(FInputAxisKeyMapping(CombinedName, Key), false);
+			}
+			else
+			{
+				InputSettings->RemoveActionMapping(FInputActionKeyMapping(CombinedName, Key), false);
+			}
+		}
+	}
 
 	InputSettings->ForceRebuildKeymaps();
 
@@ -2517,77 +2521,77 @@ void FSteamVRInputDevice::GenerateActionManifest(bool GenerateActions, bool Gene
 		// Controller poses
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_CONTROLLER_LEFT));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Pose, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
 				FName(TEXT("Left Controller [Pose]")), FString(TEXT(ACTION_PATH_CONT_RAW_LEFT))));
 		}
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_CONTROLLER_RIGHT));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Pose, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
 				FName(TEXT("Right Controller [Pose]")), FString(TEXT(ACTION_PATH_CONT_RAW_RIGHT))));
 		}
 
 		// Other poses
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_BACK_L));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Pose, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
 				FName(TEXT("Special 1 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_BACK_LEFT))));
 		}
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_BACK_R));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Pose, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
 				FName(TEXT("Special 2 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_BACK_RIGHT))));
 		}
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_FRONT_L));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Pose, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
 				FName(TEXT("Special 3 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONT_LEFT))));
 		}
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_FRONT_R));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Pose, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
 				FName(TEXT("Special 4 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONT_RIGHT))));
 		}
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_FRONTR_L));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Pose, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
 				FName(TEXT("Special 5 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONTR_LEFT))));
 		}
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_FRONTR_R));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Pose, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
 				FName(TEXT("Special 6 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONTR_RIGHT))));
 		}
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_PISTOL_L));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Pose, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
 				FName(TEXT("Special 7 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_PISTOL_LEFT))));
 		}
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_PISTOL_R));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Pose, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
 				FName(TEXT("Special 8 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_PISTOL_RIGHT))));
 		}
 
 		// Skeletal Data
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_SKELETON_LEFT));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Skeleton, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Skeleton, false,
 				FName(TEXT("Skeleton (Left)")), FString(TEXT(ACTION_PATH_SKEL_HAND_LEFT))));
 		}
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_SKELETON_RIGHT));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Skeleton, false,
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Skeleton, false,
 				FName(TEXT("Skeleton (Right)")), FString(TEXT(ACTION_PATH_SKEL_HAND_RIGHT))));
 		}
 
 		// Haptics
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_VIBRATE_LEFT));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Vibration, false, FName(TEXT("Haptic (Left)"))));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Vibration, false, FName(TEXT("Haptic (Left)"))));
 		}
 		{
 			FString ConstActionPath = FString(TEXT(ACTION_PATH_VIBRATE_RIGHT));
-			Actions.Add(FSteamVRInputAction(ConstActionPath, EActionType::Vibration, false, FName(TEXT("Haptic (Right)"))));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Vibration, false, FName(TEXT("Haptic (Right)"))));
 		}
 
 		// Add base actions to the action manifest
@@ -2624,7 +2628,7 @@ void FSteamVRInputDevice::GenerateActionManifest(bool GenerateActions, bool Gene
 				//UE_LOG(LogTemp, Warning, TEXT("Action: %s Type: [%s]"), *Action.KeyX.ToString(), *Action.GetActionTypeName());
 
 				// Check for boolean/digital input
-				if (Action.Type == EActionType::Boolean)
+				if (Action.Type == ESteamVRActionType::Boolean)
 				{
 					// Set Key Actions Linked To This Input Key
 					TArray<FInputActionKeyMapping> ActionKeyMappings;
@@ -2639,7 +2643,7 @@ void FSteamVRInputDevice::GenerateActionManifest(bool GenerateActions, bool Gene
 				}
 
 				// Check for axes/analog input
-				if (Action.Type == EActionType::Vector1 || Action.Type == EActionType::Vector2 || Action.Type == EActionType::Vector3)
+				if (Action.Type == ESteamVRActionType::Vector1 || Action.Type == ESteamVRActionType::Vector2 || Action.Type == ESteamVRActionType::Vector3)
 				{
 					// Set Axis Actions Linked To This Input Key
 					FString ActionAxis = Action.Name.ToString();
@@ -2691,7 +2695,7 @@ void FSteamVRInputDevice::GenerateActionManifest(bool GenerateActions, bool Gene
 				};
 
 				// Add hand if skeleton
-				if (Action.Type == EActionType::Skeleton)
+				if (Action.Type == ESteamVRActionType::Skeleton)
 				{
 					ActionFields.Append({ TEXT("skeleton"), Action.StringPath });
 				}
@@ -2829,7 +2833,7 @@ void FSteamVRInputDevice::GenerateActionManifest(bool GenerateActions, bool Gene
 		{
 			bool bIsGenerated = true;
 
-			if (DeleteIfExists)
+			if (!FileManager.FileExists(*ManifestPath) || DeleteIfExists)
 			{
 				// Set this binding as one we need to regenerate
 				bIsGenerated = false;
@@ -2881,13 +2885,17 @@ void FSteamVRInputDevice::GenerateActionManifest(bool GenerateActions, bool Gene
 		}
 	}
 
-#if WITH_EDITOR
+// Jira UE-86396 - Motion Controllers fail to track during Launch On
+// Currently, due to UE-87371 "SteamVR Bindings packaged incorrectly on content - only projects" there are no bindings copied for launch
+// That is the root cause, but fix for UE-87371 is too big of a change for 4.25
+// Instead, for 4.25 generate bindings even if this is not in the editor.
+//#if WITH_EDITOR
 	// If we're running in the editor, build the controller bindings if they don't exist yet
 	if (GenerateBindings)
 	{
 		GenerateControllerBindings(ControllerBindingsPath, ControllerTypes, ControllerBindings, Actions, InputMappings, DeleteIfExists);
 	}
-#endif
+//#endif
 
 	// Add the default bindings object to the action manifest
 	if (ControllerBindings.Num() == 0)
@@ -3714,7 +3722,7 @@ void FSteamVRInputDevice::ProcessActionEvents(FSteamVRInputActionSet SteamVRInpu
 			continue;
 		}
 
-		if (Action.Type == EActionType::Boolean && !Action.Path.Contains(TEXT(" axis")) && !Action.Path.Contains(TEXT("_axis")))
+		if (Action.Type == ESteamVRActionType::Boolean && !Action.Path.Contains(TEXT(" axis")) && !Action.Path.Contains(TEXT("_axis")))
 		{
 			// Get digital data from SteamVR
 			InputDigitalActionData_t DigitalData;
@@ -3771,9 +3779,9 @@ void FSteamVRInputDevice::ProcessActionEvents(FSteamVRInputActionSet SteamVRInpu
 				}
 			}
 		}
-		else if (Action.Type == EActionType::Vector1
-			|| Action.Type == EActionType::Vector2
-			|| Action.Type == EActionType::Vector3)
+		else if (Action.Type == ESteamVRActionType::Vector1
+			|| Action.Type == ESteamVRActionType::Vector2
+			|| Action.Type == ESteamVRActionType::Vector3)
 		{
 			// Get analog data from SteamVR
 			InputAnalogActionData_t AnalogData;

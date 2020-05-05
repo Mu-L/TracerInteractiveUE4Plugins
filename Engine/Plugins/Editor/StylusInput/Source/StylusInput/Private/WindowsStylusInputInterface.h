@@ -1,10 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "IStylusInputModule.h"
 
 class FWindowsStylusInputInterfaceImpl;
+class SWindow;
 
 class FWindowsStylusInputInterface : public IStylusInputInterfaceInternal
 {
@@ -20,4 +21,7 @@ private:
 	// pImpl to avoid including Windows headers.
 	TUniquePtr<FWindowsStylusInputInterfaceImpl> Impl;
 	TArray<IStylusMessageHandler*> MessageHandlers;
+
+	void CreateStylusPluginForHWND(void* HwndPtr);
+	void RemovePluginForWindow(const TSharedRef<SWindow>& Window);
 };

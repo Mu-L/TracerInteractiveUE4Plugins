@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -45,13 +45,17 @@ public:
 
 	FFrameRate GetFrameRate() const;
 
+	void SetFrameRate(FFrameRate InFrameRate);
+
+	void SetFrameRateFromTimecode(bool  bInFromTimecode);
+
 	UTakeRecorderSources* GetSources() const;
 
 	void StartRecording() const;
 
 	void StopRecording() const;
 
-	void NewTake();
+	void ClearPendingTake();
 
 private:
 

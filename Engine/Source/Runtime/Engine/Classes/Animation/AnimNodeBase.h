@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,16 +12,25 @@
 #include "BonePose.h"
 #include "Logging/TokenizedMessage.h"
 #include "Stats/StatsHierarchical.h"
+#include "Animation/AnimTrace.h"
+#include "UObject/FieldPath.h"
+
+// WARNING: This should always be the last include in any file that needs it (except .generated.h)
+#include "UObject/UndefineUPropertyMacros.h"
+
 #include "AnimNodeBase.generated.h"
 
 #define DECLARE_SCOPE_HIERARCHICAL_COUNTER_ANIMNODE(Method) \
 	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
+
+#define ANIM_NODE_IDS_AVAILABLE	(ANIM_TRACE_ENABLED || WITH_EDITORONLY_DATA)
 
 class IAnimClassInterface;
 class UAnimBlueprint;
 class UAnimInstance;
 struct FAnimInstanceProxy;
 struct FAnimNode_Base;
+class UProperty;
 
 /**
  * Utility container for tracking a stack of ancestor nodes by node type during graph traversal
@@ -152,6 +161,21 @@ public:
 	ENGINE_API UAnimBlueprint* GetAnimBlueprint() const;
 #endif //WITH_EDITORONLY_DATA
 
+#if ANIM_NODE_IDS_AVAILABLE
+	// Get the current node Id, set when we recurse into graph traversal functions from pose links
+	ENGINE_API int32 GetCurrentNodeId() const { return CurrentNodeId; }
+
+	// Get the previous node Id, set when we recurse into graph traversal functions from pose links
+	ENGINE_API int32 GetPreviousNodeId() const { return PreviousNodeId; }
+
+protected:
+	// The current node ID, set when we recurse into graph traversal functions from pose links
+	int32 CurrentNodeId;
+
+	// The previous node ID, set when we recurse into graph traversal functions from pose links
+	int32 PreviousNodeId;
+#endif
+
 protected:
 
 	/** Interface for node contexts to register log messages with the proxy */
@@ -220,6 +244,10 @@ public:
 		, RootMotionWeightModifier(Copy.RootMotionWeightModifier)
 		, DeltaTime(Copy.DeltaTime)
 	{
+#if ANIM_TRACE_ENABLED
+		CurrentNodeId = Copy.CurrentNodeId;
+		PreviousNodeId = Copy.PreviousNodeId;
+#endif
 	}
 
 public:
@@ -232,6 +260,11 @@ public:
 	{
 		FAnimationUpdateContext Result(*this);
 		Result.SharedContext = InSharedContext;
+
+#if ANIM_TRACE_ENABLED
+		// This is currently only used in the case of cached poses, where we dont want to preserve the previous node, so clear it here
+		Result.PreviousNodeId = INDEX_NONE;
+#endif
 
 		return Result;
 	}
@@ -270,6 +303,16 @@ public:
 
 		return Result;
 	}
+
+#if ANIM_NODE_IDS_AVAILABLE
+	FAnimationUpdateContext WithNodeId(int32 InNodeId) const
+	{ 
+		FAnimationUpdateContext Result(*this);
+		Result.PreviousNodeId = CurrentNodeId;
+		Result.CurrentNodeId = InNodeId;
+		return Result; 
+	}
+#endif
 
 	// Add a node to the list of tracked ancestors
 	template<typename NodeType>
@@ -340,7 +383,26 @@ public:
 		, bExpectsAdditivePose(SourceContext.bExpectsAdditivePose || bInOverrideExpectsAdditivePose)
 	{
 		Initialize(SourceContext.AnimInstanceProxy);
+
+#if ANIM_NODE_IDS_AVAILABLE
+		CurrentNodeId = SourceContext.CurrentNodeId;
+		PreviousNodeId = SourceContext.PreviousNodeId;
+#endif
 	}
+
+#if ANIM_NODE_IDS_AVAILABLE
+	void SetNodeId(int32 InNodeId)
+	{ 
+		PreviousNodeId = CurrentNodeId;
+		CurrentNodeId = InNodeId;
+	}
+
+	void SetNodeIds(const FAnimationBaseContext& InContext)
+	{ 
+		CurrentNodeId = InContext.GetCurrentNodeId();
+		PreviousNodeId = InContext.GetPreviousNodeId();
+	}
+#endif
 
 	ENGINE_API void Initialize(FAnimInstanceProxy* InAnimInstanceProxy);
 
@@ -417,7 +479,26 @@ public:
 		: FAnimationBaseContext(SourceContext.AnimInstanceProxy)
 	{
 		// No need to initialize, done through FA2CSPose::AllocateLocalPoses
+
+#if ANIM_NODE_IDS_AVAILABLE
+		CurrentNodeId = SourceContext.CurrentNodeId;
+		PreviousNodeId = SourceContext.PreviousNodeId;
+#endif
 	}
+
+#if ANIM_NODE_IDS_AVAILABLE
+	void SetNodeId(int32 InNodeId)
+	{ 
+		PreviousNodeId = CurrentNodeId;
+		CurrentNodeId = InNodeId;
+	}
+
+	void SetNodeIds(const FAnimationBaseContext& InContext)
+	{ 
+		CurrentNodeId = InContext.GetCurrentNodeId();
+		PreviousNodeId = InContext.GetPreviousNodeId();
+	}
+#endif
 
 	ENGINE_API void ResetToRefPose();
 
@@ -638,8 +719,8 @@ enum class EPostCopyOperation : uint8
 UENUM()
 enum class ECopyType : uint8
 {
-	// Just copy the memory
-	MemCopy,
+	// For plain old data types, we do a simple memcpy.
+	PlainProperty,
 
 	// Read and write properties using bool property helpers, as source/dest could be bitfield or boolean
 	BoolProperty,
@@ -649,6 +730,9 @@ enum class ECopyType : uint8
 
 	// Read and write properties using object property helpers, as source/dest could be regular/weak/lazy etc.
 	ObjectProperty,
+
+	// FName needs special case because its size changes between editor/compiler and runtime.
+	NameProperty,
 };
 
 
@@ -667,7 +751,7 @@ struct FExposedValueCopyRecord
 		, SourceArrayIndex(0)
 		, bInstanceIsTarget(false)
 		, PostCopyOperation(EPostCopyOperation::None)
-		, CopyType(ECopyType::MemCopy)
+		, CopyType(ECopyType::PlainProperty)
 		, DestProperty(nullptr)
 		, DestArrayIndex(0)
 		, Size(0)
@@ -675,7 +759,7 @@ struct FExposedValueCopyRecord
 		, CachedSourceStructSubProperty(nullptr)
 	{}
 
-	void* GetDestAddr(FAnimInstanceProxy* Proxy, const UProperty* NodeProperty) const;
+	void* GetDestAddr(FAnimInstanceProxy* Proxy, const FProperty* NodeProperty) const;
 	const void* GetSourceAddr(FAnimInstanceProxy* Proxy) const;
 
 #if WITH_EDITORONLY_DATA
@@ -705,7 +789,7 @@ struct FExposedValueCopyRecord
 	ECopyType CopyType;
 
 	UPROPERTY()
-	UProperty* DestProperty;
+	TFieldPath<FProperty> DestProperty;
 
 	UPROPERTY()
 	int32 DestArrayIndex;
@@ -715,10 +799,10 @@ struct FExposedValueCopyRecord
 
 	// cached source property
 	UPROPERTY()
-	UProperty* CachedSourceProperty;
+	TFieldPath<FProperty> CachedSourceProperty;
 
 	UPROPERTY()
-	UProperty* CachedSourceStructSubProperty;
+	TFieldPath<FProperty> CachedSourceStructSubProperty;
 };
 
 #if WITH_EDITORONLY_DATA
@@ -762,7 +846,7 @@ struct ENGINE_API FExposedValueHandler
 	// is instantiated from this property the node's ExposedValueHandler will 
 	// point back to this FExposedValueHandler:
 	UPROPERTY()
-	UStructProperty* ValueHandlerNodeProperty;
+	TFieldPath<FStructProperty> ValueHandlerNodeProperty;
 
 	// Prevent multiple initialization
 	bool bInitialized;
@@ -939,3 +1023,6 @@ private:
 	// Reference to the exposed value handler used by this node. Allocated on the class, rather than per instance:
 	const FExposedValueHandler* ExposedValueHandler = nullptr;
 };
+
+
+#include "UObject/DefineUPropertyMacros.h"

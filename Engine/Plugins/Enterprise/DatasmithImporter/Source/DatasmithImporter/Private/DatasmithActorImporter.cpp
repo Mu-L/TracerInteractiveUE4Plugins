@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithActorImporter.h"
 
@@ -27,6 +27,7 @@
 #include "Materials/MaterialInterface.h"
 #include "Materials/Material.h"
 #include "Misc/Paths.h"
+#include "Misc/UObjectToken.h"
 #include "ObjectTools.h"
 #include "UObject/PropertyPortFlags.h"
 
@@ -135,7 +136,7 @@ AActor* FDatasmithActorImporter::ImportActor( UClass* ActorClass, const TSharedR
 	return ImportedActor;
 }
 
-USceneComponent* FDatasmithActorImporter::ImportSceneComponent( UClass* ComponentClass, const TSharedRef< IDatasmithActorElement >& ActorElement, FDatasmithImportContext& ImportContext, UObject* Outer )
+USceneComponent* FDatasmithActorImporter::ImportSceneComponent( UClass* ComponentClass, const TSharedRef< IDatasmithActorElement >& ActorElement, FDatasmithImportContext& ImportContext, UObject* Outer, FDatasmithActorUniqueLabelProvider& UniqueNameProvider )
 {
 	if ( !ComponentClass->IsChildOf( USceneComponent::StaticClass() ) )
 	{
@@ -186,15 +187,14 @@ USceneComponent* FDatasmithActorImporter::ImportSceneComponent( UClass* Componen
 
 	if ( !ValidSceneComponent )
 	{
-		if ( SceneComponent || FindObjectWithOuter( Outer, UObject::StaticClass() , ActorElement->GetLabel() ) )
+		FName ComponentName( ActorElement->GetLabel() );
+		if ( SceneComponent || FindObjectWithOuter( Outer, UObject::StaticClass(), ComponentName ) )
 		{
-			// There is already a object with this name inside the outer. Let the new object assigning it a name.
-			ValidSceneComponent = NewObject< USceneComponent >( Outer, ComponentClass, NAME_None, RF_Transactional );
+			// There is already a object with this name inside the outer. Generate unique name.
+			UniqueNameProvider.AddExistingName( ComponentName.ToString() );
+			ComponentName = *UniqueNameProvider.GenerateUniqueName( ComponentName.ToString() );
 		}
-		else
-		{
-			ValidSceneComponent = NewObject< USceneComponent >( Outer, ComponentClass, ActorElement->GetLabel(), RF_Transactional );
-		}
+		ValidSceneComponent = NewObject< USceneComponent >( Outer, ComponentClass, ComponentName, RF_Transactional );
 	}
 
 	if ( !ValidSceneComponent )
@@ -232,14 +232,14 @@ AActor* FDatasmithActorImporter::ImportBaseActor( FDatasmithImportContext& Impor
 	return Actor;
 }
 
-USceneComponent* FDatasmithActorImporter::ImportBaseActorAsComponent(FDatasmithImportContext& ImportContext, const TSharedRef< IDatasmithActorElement >& ActorElement, UObject* Outer)
+USceneComponent* FDatasmithActorImporter::ImportBaseActorAsComponent(FDatasmithImportContext& ImportContext, const TSharedRef< IDatasmithActorElement >& ActorElement, UObject* Outer, FDatasmithActorUniqueLabelProvider& UniqueNameProvider)
 {
 	if ( ImportContext.Options->OtherActorImportPolicy == EDatasmithImportActorPolicy::Ignore )
 	{
 		return nullptr;
 	}
 
-	USceneComponent* SceneComponent = FDatasmithActorImporter::ImportSceneComponent( USceneComponent::StaticClass(), ActorElement, ImportContext, Outer );
+	USceneComponent* SceneComponent = FDatasmithActorImporter::ImportSceneComponent( USceneComponent::StaticClass(), ActorElement, ImportContext, Outer, UniqueNameProvider );
 	SceneComponent->RegisterComponent();
 
 	ImportContext.AddSceneComponent(SceneComponent->GetName(), SceneComponent);
@@ -263,14 +263,14 @@ AStaticMeshActor* FDatasmithActorImporter::ImportStaticMeshActor(FDatasmithImpor
 	return StaticMeshActor;
 }
 
-UStaticMeshComponent* FDatasmithActorImporter::ImportStaticMeshComponent( FDatasmithImportContext& ImportContext, const TSharedRef<IDatasmithMeshActorElement>& InMeshActor, UObject* Outer )
+UStaticMeshComponent* FDatasmithActorImporter::ImportStaticMeshComponent( FDatasmithImportContext& ImportContext, const TSharedRef<IDatasmithMeshActorElement>& InMeshActor, UObject* Outer, FDatasmithActorUniqueLabelProvider& UniqueNameProvider )
 {
 	if ( ImportContext.Options->StaticMeshActorImportPolicy == EDatasmithImportActorPolicy::Ignore )
 	{
 		return nullptr;
 	}
 
-	USceneComponent* SceneComponent =  FDatasmithActorImporter::ImportSceneComponent( UStaticMeshComponent::StaticClass(), InMeshActor, ImportContext, Outer );
+	USceneComponent* SceneComponent =  FDatasmithActorImporter::ImportSceneComponent( UStaticMeshComponent::StaticClass(), InMeshActor, ImportContext, Outer, UniqueNameProvider );
 	UStaticMeshComponent* StaticMeshComponent = Cast< UStaticMeshComponent >( SceneComponent );
 
 	SetupStaticMeshComponent( ImportContext, StaticMeshComponent, InMeshActor );
@@ -323,7 +323,7 @@ AActor* FDatasmithActorImporter::ImportCameraActor(FDatasmithImportContext& Impo
 	return FDatasmithCameraImporter::ImportCameraActor(InCameraActor, ImportContext);
 }
 
-AActor* FDatasmithActorImporter::ImportCustomActor(FDatasmithImportContext& ImportContext, const TSharedRef< IDatasmithCustomActorElement >& InCustomActorElement)
+AActor* FDatasmithActorImporter::ImportCustomActor(FDatasmithImportContext& ImportContext, const TSharedRef< IDatasmithCustomActorElement >& InCustomActorElement, FDatasmithActorUniqueLabelProvider& UniqueNameProvider)
 {
 	if ( ImportContext.Options->OtherActorImportPolicy == EDatasmithImportActorPolicy::Ignore )
 	{
@@ -370,7 +370,7 @@ AActor* FDatasmithActorImporter::ImportCustomActor(FDatasmithImportContext& Impo
 
 	if ( !Actor->GetRootComponent() )
 	{
-		USceneComponent* RootComponent = FDatasmithActorImporter::ImportSceneComponent( USceneComponent::StaticClass(), InCustomActorElement, ImportContext, Actor );
+		USceneComponent* RootComponent = FDatasmithActorImporter::ImportSceneComponent( USceneComponent::StaticClass(), InCustomActorElement, ImportContext, Actor, UniqueNameProvider );
 		RootComponent->bVisualizeComponent = true;
 
 		Actor->SetRootComponent( RootComponent );
@@ -380,7 +380,7 @@ AActor* FDatasmithActorImporter::ImportCustomActor(FDatasmithImportContext& Impo
 	{
 		TSharedPtr< IDatasmithKeyValueProperty > KeyValueProperty = InCustomActorElement->GetProperty( i );
 
-		UProperty* Property = FindField< UProperty >( Actor->GetClass(), KeyValueProperty->GetName() );
+		FProperty* Property = FindFProperty< FProperty >( Actor->GetClass(), KeyValueProperty->GetName() );
 
 		if ( Property )
 		{
@@ -494,7 +494,7 @@ AActor* FDatasmithActorImporter::ImportEnvironment(FDatasmithImportContext& Impo
 	return Actor;
 }
 
-AActor* FDatasmithActorImporter::ImportHierarchicalInstancedStaticMeshAsActor(FDatasmithImportContext& ImportContext, const TSharedRef< IDatasmithHierarchicalInstancedStaticMeshActorElement >& HierarchicalInstancedStaticMeshActorElement)
+AActor* FDatasmithActorImporter::ImportHierarchicalInstancedStaticMeshAsActor(FDatasmithImportContext& ImportContext, const TSharedRef< IDatasmithHierarchicalInstancedStaticMeshActorElement >& HierarchicalInstancedStaticMeshActorElement, FDatasmithActorUniqueLabelProvider& UniqueNameProvider)
 {
 	AActor* Actor = ImportActor(AActor::StaticClass(), HierarchicalInstancedStaticMeshActorElement, ImportContext, ImportContext.Options->StaticMeshActorImportPolicy);
 
@@ -505,12 +505,12 @@ AActor* FDatasmithActorImporter::ImportHierarchicalInstancedStaticMeshAsActor(FD
 		if (Actor->GetRootComponent())
 		{
 			ImportContext.Hierarchy.Push(Actor->GetRootComponent());
-			ImportHierarchicalInstancedStaticMeshComponent(ImportContext, HierarchicalInstancedStaticMeshActorElement, Actor);
+			ImportHierarchicalInstancedStaticMeshComponent(ImportContext, HierarchicalInstancedStaticMeshActorElement, Actor, UniqueNameProvider);
 			ImportContext.Hierarchy.Pop();
 		}
 		else
 		{
-			ImportHierarchicalInstancedStaticMeshComponent(ImportContext, HierarchicalInstancedStaticMeshActorElement, Actor);
+			ImportHierarchicalInstancedStaticMeshComponent(ImportContext, HierarchicalInstancedStaticMeshActorElement, Actor, UniqueNameProvider);
 		}
 		HierarchicalInstancedStaticMeshActorElement->SetLabel(*OriginalLabel);
 	}
@@ -519,14 +519,14 @@ AActor* FDatasmithActorImporter::ImportHierarchicalInstancedStaticMeshAsActor(FD
 }
 
 UHierarchicalInstancedStaticMeshComponent* FDatasmithActorImporter::ImportHierarchicalInstancedStaticMeshComponent(FDatasmithImportContext& ImportContext, const TSharedRef< IDatasmithHierarchicalInstancedStaticMeshActorElement >& HierarchicalInstancedStatictMeshActorElement,
-	UObject* Outer)
+	UObject* Outer, FDatasmithActorUniqueLabelProvider& UniqueNameProvider)
 {
 	if ( ImportContext.Options->StaticMeshActorImportPolicy == EDatasmithImportActorPolicy::Ignore )
 	{
 		return nullptr;
 	}
 
-	USceneComponent* SeneComponent = FDatasmithActorImporter::ImportSceneComponent(UHierarchicalInstancedStaticMeshComponent::StaticClass(), HierarchicalInstancedStatictMeshActorElement, ImportContext, Outer);
+	USceneComponent* SeneComponent = FDatasmithActorImporter::ImportSceneComponent(UHierarchicalInstancedStaticMeshComponent::StaticClass(), HierarchicalInstancedStatictMeshActorElement, ImportContext, Outer, UniqueNameProvider);
 	UHierarchicalInstancedStaticMeshComponent* HierarchilcalInstanciedStaticMeshComponent = Cast< UHierarchicalInstancedStaticMeshComponent >(SeneComponent);
 
 	SetupHierarchicalInstancedStaticMeshComponent(ImportContext, HierarchilcalInstanciedStaticMeshComponent, HierarchicalInstancedStatictMeshActorElement);
@@ -549,10 +549,27 @@ void FDatasmithActorImporter::SetupHierarchicalInstancedStaticMeshComponent(FDat
 	HierarchicalInstancedStaticMeshComponent->ClearInstances();
 
 	int32 InstanceCount = HierarchicalInstancedStatictMeshActorElement->GetInstancesCount();
+	bool bContainsInvertedMeshes = false;
 
 	for (int32 i = 0; i < InstanceCount; i++)
 	{
-		HierarchicalInstancedStaticMeshComponent->AddInstance(HierarchicalInstancedStatictMeshActorElement->GetInstance(i));
+		FTransform Instance = HierarchicalInstancedStatictMeshActorElement->GetInstance(i);
+		HierarchicalInstancedStaticMeshComponent->AddInstance(Instance);
+
+		FVector InstanceScale = Instance.GetScale3D();
+		if ((InstanceScale.X * InstanceScale.Y * InstanceScale.Z) < 0)
+		{
+			bContainsInvertedMeshes = true;
+		}
+	}
+
+	if (bContainsInvertedMeshes)
+	{
+		ImportContext.LogWarning(FText::GetEmpty())
+			->AddToken(FUObjectToken::Create(HierarchicalInstancedStaticMeshComponent))
+			->AddToken(FTextToken::Create(FText::Format(LOCTEXT("HierarchicalInstancedStaticMeshComponentHasInvertedScale",
+				"{0} has instances with negative scaling producing unsupported inverted meshes."),
+				FText::FromString(HierarchicalInstancedStatictMeshActorElement->GetLabel()))));
 	}
 
 	SetupStaticMeshComponent(ImportContext, HierarchicalInstancedStaticMeshComponent, HierarchicalInstancedStatictMeshActorElement);

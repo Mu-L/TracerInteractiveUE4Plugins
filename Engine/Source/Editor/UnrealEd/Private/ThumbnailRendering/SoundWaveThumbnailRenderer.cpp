@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ThumbnailRendering/SoundWaveThumbnailRenderer.h"
 #include "CanvasItem.h"
@@ -21,7 +21,7 @@ bool USoundWaveThumbnailRenderer::CanVisualizeAsset(UObject* Object)
 	return true;
 }
 
-void USoundWaveThumbnailRenderer::Draw(UObject* Object, int32 X, int32 Y, uint32 Width, uint32 Height, FRenderTarget*, FCanvas* Canvas)
+void USoundWaveThumbnailRenderer::Draw(UObject* Object, int32 X, int32 Y, uint32 Width, uint32 Height, FRenderTarget*, FCanvas* Canvas, bool bAdditionalViewFamily)
 {
 	USoundWave* SoundWave = Cast<USoundWave>(Object);
 	if (SoundWave != nullptr && SoundWave->NumChannels > 0)

@@ -821,6 +821,9 @@ namespace ShaderConductor
 				}
 			}
 			mslOpts.swizzle_texture_samples = false;
+			/* UE Change Begin: Ensure base vertex and instance indices start with zero if source language is HLSL */
+			mslOpts.enable_base_index_zero = true;
+			/* UE Change End: Ensure base vertex and instance indices start with zero if source language is HLSL */
             for (unsigned i = 0; i < target.numOptions; i++)
 			{
                 auto& Define = target.options[i];
@@ -912,6 +915,15 @@ namespace ShaderConductor
 					mslOpts.enable_decoration_binding = (std::stoi(Define.value) != 0);
 				}
 				/* UE Change End: Allow user to enable decoration binding */
+				/* UE Change Begin: Specify dimension of subpass input attachments */
+				static const char* subpassInputDimIdent = "subpass_input_dimension";
+				static const size_t subpassInputDimIdentLen = std::strlen(subpassInputDimIdent);
+				if (!strncmp(Define.name, subpassInputDimIdent, subpassInputDimIdentLen))
+				{
+					int binding = std::stoi(Define.name + subpassInputDimIdentLen);
+					mslOpts.subpass_input_dimensions[static_cast<uint32_t>(binding)] = std::stoi(Define.value);
+				}
+				/* UE Change End: Specify dimension of subpass input attachments */
 			}
 			
 			mslCompiler->set_msl_options(mslOpts);

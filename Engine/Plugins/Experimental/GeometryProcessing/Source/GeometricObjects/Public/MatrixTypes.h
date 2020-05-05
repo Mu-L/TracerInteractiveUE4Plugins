@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -384,6 +384,11 @@ struct TMatrix2
 		RealType cs = TMathUtil<RealType>::Cos(AngleRad);
 		RealType sn = TMathUtil<RealType>::Sin(AngleRad);
 		return TMatrix2<RealType>(cs, -sn, sn, cs);
+	}
+
+	static TMatrix2<RealType> RotationDeg(RealType AngleDeg)
+	{
+		return RotationRad(AngleDeg * TMathUtil<RealType>::DegToRad);
 	}
 
 	/**

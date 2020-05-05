@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -14,6 +14,8 @@ public:
 	static void AddImportMessage(const TSharedRef<FTokenizedMessage> Message);
 	/** Outputs the messages to a new named page in the message log */
 	ALEMBICLIBRARY_API static void OutputMessages(const FString& PageName);
+	/** Returns the messages and flushes them from the logger */
+	ALEMBICLIBRARY_API static TArray<TSharedRef<FTokenizedMessage>> RetrieveMessages();
 private:
 	/** Error messages **/
 	static TArray<TSharedRef<FTokenizedMessage>> TokenizedErrorMessages;

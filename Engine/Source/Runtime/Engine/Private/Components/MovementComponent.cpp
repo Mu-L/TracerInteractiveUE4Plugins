@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "GameFramework/MovementComponent.h"
@@ -114,7 +114,7 @@ void UMovementComponent::InitializeComponent()
 	Super::InitializeComponent();
 
 	// RootComponent is null in OnRegister for blueprint (non-native) root components.
-	if (!UpdatedComponent && bAutoRegisterUpdatedComponent)
+	if (bAutoRegisterUpdatedComponent && !IsValid(UpdatedComponent))
 	{
 		// Auto-register owner's root component if found.
 		if (AActor* MyActor = GetOwner())
@@ -248,7 +248,7 @@ void UMovementComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyC
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 
-	const UProperty* PropertyThatChanged = PropertyChangedEvent.MemberProperty;
+	const FProperty* PropertyThatChanged = PropertyChangedEvent.MemberProperty;
 	if (PropertyThatChanged)
 	{
 		if (PropertyThatChanged->GetFName() == GET_MEMBER_NAME_CHECKED(UMovementComponent, PlaneConstraintAxisSetting))

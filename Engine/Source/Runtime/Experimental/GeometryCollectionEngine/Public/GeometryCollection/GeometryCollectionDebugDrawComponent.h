@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -20,7 +20,7 @@ class AGeometryCollectionDebugDrawActor;
 class AChaosSolverActor;
 
 #if GEOMETRYCOLLECTION_DEBUG_DRAW
-namespace Chaos { template<class T, int d> class TImplicitObject; }
+namespace Chaos { class FImplicitObject; }
 namespace Chaos { template<class T, int d> class TPBDRigidParticles; }
 #endif  // #if GEOMETRYCOLLECTION_DEBUG_DRAW
 

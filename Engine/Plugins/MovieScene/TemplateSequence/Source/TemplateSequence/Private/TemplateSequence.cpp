@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TemplateSequence.h"
 #include "Components/ActorComponent.h"
@@ -27,6 +27,17 @@ void UTemplateSequence::Initialize()
 
 	FFrameRate DisplayRate(30, 1);
 	MovieScene->SetDisplayRate(DisplayRate);
+}
+
+FGuid UTemplateSequence::GetRootObjectBindingID() const
+{
+	if (MovieScene != nullptr && MovieScene->GetSpawnableCount() > 0)
+	{
+		const FMovieSceneSpawnable& FirstSpawnable = MovieScene->GetSpawnable(0);
+		return FirstSpawnable.GetGuid();
+	}
+
+	return FGuid();
 }
 
 void UTemplateSequence::BindPossessableObject(const FGuid& ObjectId, UObject& PossessedObject, UObject* Context)
@@ -103,4 +114,32 @@ FText UTemplateSequence::GetDisplayName() const
 {
 	return UMovieSceneSequence::GetDisplayName();
 }
+
+void UTemplateSequence::GetAssetRegistryTags(TArray<FAssetRegistryTag>& OutTags) const
+{
+	Super::GetAssetRegistryTags(OutTags);
+
+	if (BoundActorClass != nullptr)
+	{
+		FAssetRegistryTag Tag("BoundActorClass", BoundActorClass->GetName(), FAssetRegistryTag::TT_Alphabetical);
+		OutTags.Add(Tag);
+	}
+	else
+	{
+		OutTags.Emplace("BoundActorClass", "(None)", FAssetRegistryTag::TT_Alphabetical);
+	}
+}
+
+void UTemplateSequence::GetAssetRegistryTagMetadata(TMap<FName, FAssetRegistryTagMetadata>& OutMetadata) const
+{
+	Super::GetAssetRegistryTagMetadata(OutMetadata);
+
+	OutMetadata.Add(
+		"BoundActorClass",
+		FAssetRegistryTagMetadata()
+			.SetDisplayName(NSLOCTEXT("TemplateSequence", "BoundActorClass_Label", "Bound Actor Class"))
+			.SetTooltip(NSLOCTEXT("TemplateSequence", "BoundActorClass_Tooltip", "The type of actor bound to this template sequence"))
+		);
+}
+
 #endif

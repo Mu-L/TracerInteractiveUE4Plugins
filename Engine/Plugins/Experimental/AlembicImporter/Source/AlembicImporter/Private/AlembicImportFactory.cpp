@@ -1,18 +1,17 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AlembicImportFactory.h"
+#include "AssetImportTask.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/SkeletalMesh.h"
 #include "Editor.h"
 #include "EditorFramework/AssetImportData.h"
 #include "HAL/FileManager.h"
 #include "Framework/Application/SlateApplication.h"
-
-
 #include "Interfaces/IMainFrameModule.h"
+#include "Math/UnrealMathUtility.h"
 
 #include "AlembicImportOptions.h"
-
 #include "AlembicLibraryModule.h"
 #include "AbcImporter.h"
 #include "AbcImportLogger.h"
@@ -75,6 +74,7 @@ UObject* UAlembicImportFactory::FactoryCreateFile(UClass* InClass, UObject* InPa
 	FAbcImporter Importer;
 	EAbcImportError ErrorCode = Importer.OpenAbcFileForImport(Filename);
 	ImportSettings->bReimport = false;
+	AdditionalImportedObjects.Empty();
 
 	if (ErrorCode != AbcImportError_NoError)
 	{
@@ -96,6 +96,14 @@ UObject* UAlembicImportFactory::FactoryCreateFile(UClass* InClass, UObject* InPa
 		// Set whether or not the user canceled
 		bOutOperationCanceled = !Options->ShouldImport();
 	}
+	else
+	{
+		UAbcImportSettings* ScriptedSettings = AssetImportTask ? Cast<UAbcImportSettings>(AssetImportTask->Options) : nullptr;
+		if (ScriptedSettings)
+		{
+			ImportSettings = ScriptedSettings;
+		}
+	}
 
 	// Set up message log page name to separate different assets
 	const FString PageName = "Importing " + InName.ToString() + ".abc";
@@ -105,48 +113,48 @@ UObject* UAlembicImportFactory::FactoryCreateFile(UClass* InClass, UObject* InPa
 	{
 		GEditor->GetEditorSubsystem<UImportSubsystem>()->BroadcastAssetPreImport(this, InClass, InParent, InName, TEXT("ABC"));
 
-			int32 NumThreads = 1;
-			if (FPlatformProcess::SupportsMultithreading())
-			{
-				NumThreads = FPlatformMisc::NumberOfCores();
-			}
+		int32 NumThreads = 1;
+		if (FPlatformProcess::SupportsMultithreading())
+		{
+			NumThreads = FPlatformMisc::NumberOfCores();
+		}
 
-			// Import file		
-			ErrorCode = Importer.ImportTrackData(NumThreads, ImportSettings);
+		// Import file		
+		ErrorCode = Importer.ImportTrackData(NumThreads, ImportSettings);
 
-			if (ErrorCode != AbcImportError_NoError)
+		if (ErrorCode != AbcImportError_NoError)
+		{
+			// Failed to read the file info, fail the import
+			GEditor->GetEditorSubsystem<UImportSubsystem>()->BroadcastAssetPostImport(this, nullptr);
+			FAbcImportLogger::OutputMessages(PageName);
+			return nullptr;
+		}
+		else
+		{
+			if (ImportSettings->ImportType == EAlembicImportType::StaticMesh)
 			{
-				// Failed to read the file info, fail the import
-				GEditor->GetEditorSubsystem<UImportSubsystem>()->BroadcastAssetPostImport(this, nullptr);
-				FAbcImportLogger::OutputMessages(PageName);
-				return nullptr;
+				const TArray<UObject*> ResultStaticMeshes = ImportStaticMesh(Importer, InParent, Flags);
+				ResultAssets.Append(ResultStaticMeshes);
 			}
-			else
+			else if (ImportSettings->ImportType == EAlembicImportType::GeometryCache)
 			{
-				if (ImportSettings->ImportType == EAlembicImportType::StaticMesh)
+				UObject* GeometryCache = ImportGeometryCache(Importer, InParent, Flags);
+				if (GeometryCache)
 				{
-					const TArray<UObject*> ResultStaticMeshes = ImportStaticMesh(Importer, InParent, Flags);
-					ResultAssets.Append(ResultStaticMeshes);
-				}
-				else if (ImportSettings->ImportType == EAlembicImportType::GeometryCache)
-				{
-					UObject* GeometryCache = ImportGeometryCache(Importer, InParent, Flags);
-					if (GeometryCache)
-					{
-						ResultAssets.Add(GeometryCache);
-					}
-				}
-				else if (ImportSettings->ImportType == EAlembicImportType::Skeletal)
-				{
-					UObject* SkeletalMesh = ImportSkeletalMesh(Importer, InParent, Flags);
-					if (SkeletalMesh)
-					{
-						ResultAssets.Add(SkeletalMesh);
-					}
+					ResultAssets.Add(GeometryCache);
 				}
 			}
+			else if (ImportSettings->ImportType == EAlembicImportType::Skeletal)
+			{
+				UObject* SkeletalMesh = ImportSkeletalMesh(Importer, InParent, Flags);
+				if (SkeletalMesh)
+				{
+					ResultAssets.Add(SkeletalMesh);
+				}
+			}
+		}
 
-
+		AdditionalImportedObjects.Reserve(ResultAssets.Num());
 		for (UObject* Object : ResultAssets)
 		{
 			if (Object)
@@ -154,6 +162,7 @@ UObject* UAlembicImportFactory::FactoryCreateFile(UClass* InClass, UObject* InPa
 				GEditor->GetEditorSubsystem<UImportSubsystem>()->BroadcastAssetPostImport(this, Object);
 				Object->MarkPackageDirty();
 				Object->PostEditChange();
+				AdditionalImportedObjects.Add(Object);
 			}
 		}
 
@@ -496,10 +505,12 @@ EReimportResult::Type UAlembicImportFactory::Reimport(UObject* Obj)
 
 void UAlembicImportFactory::ShowImportOptionsWindow(TSharedPtr<SAlembicImportOptions>& Options, FString FilePath, const FAbcImporter& Importer)
 {
+	// Window size computed from SAlembicImportOptions
+	const float WindowHeight = 500.f + FMath::Clamp(Importer.GetPolyMeshes().Num() * 16.f, 0.f, 250.f);
 
 	TSharedRef<SWindow> Window = SNew(SWindow)
 		.Title(LOCTEXT("WindowTitle", "Alembic Cache Import Options"))
-		.SizingRule(ESizingRule::Autosized);
+		.ClientSize(FVector2D(522.f, WindowHeight));
 
 	Window->SetContent
 		(

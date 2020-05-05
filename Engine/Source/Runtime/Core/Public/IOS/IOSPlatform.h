@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*================================================================================
 	IOSPlatform.h: Setup for the iOS platform
@@ -58,12 +58,12 @@ typedef FIOSPlatformTypes FPlatformTypes;
 #define	PLATFORM_RUNTIME_MALLOCPROFILER_SYMBOLICATION	0	
 #define PLATFORM_NUM_AUDIODECOMPRESSION_PRECACHE_BUFFERS		0
 #if PLATFORM_TVOS
-#define PLATFORM_USES_ES2								0
+#define PLATFORM_USES_GLES								0
 #define PLATFORM_HAS_TOUCH_MAIN_SCREEN					0
 #define	PLATFORM_SUPPORTS_OPUS_CODEC					0
 #define PLATFORM_SUPPORTS_VORBIS_CODEC					0
 #else
-#define PLATFORM_USES_ES2								1
+#define PLATFORM_USES_GLES								1
 #define PLATFORM_HAS_TOUCH_MAIN_SCREEN					1
 #endif
 #define PLATFORM_UI_HAS_MOBILE_SCROLLBARS				1
@@ -73,6 +73,7 @@ typedef FIOSPlatformTypes FPlatformTypes;
 #define PLATFORM_NEEDS_RHIRESOURCELIST					0
 #define PLATFORM_SUPPORTS_GEOMETRY_SHADERS				0
 #define PLATFORM_SUPPORTS_TESSELLATION_SHADERS			0
+#define PLATFORM_SUPPORTS_VIRTUAL_TEXTURE_STREAMING		1
 
 #define PLATFORM_GLOBAL_LOG_CATEGORY					LogIOS
 

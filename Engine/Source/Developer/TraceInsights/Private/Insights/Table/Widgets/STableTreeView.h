@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -66,7 +66,11 @@ public:
 
 	TSharedPtr<Insights::FTable> GetTable() const { return Table; }
 
+	void UpdateSourceTable(TSharedPtr<Trace::IUntypedTable> SourceTable);
+
 	virtual void Reset();
+
+	void RebuildColumns();
 
 	/**
 	 * Rebuilds the tree (if necessary).

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Fonts/FontCache.h"
 #include "Misc/ScopeLock.h"
@@ -74,10 +74,25 @@ ETextShapingMethod GetDefaultTextShapingMethod()
 }
 
 
+bool FShapedGlyphEntry::HasValidGlyph() const
+{
+#if WITH_FREETYPE
+	TSharedPtr<FFreeTypeFace> FontFacePin = FontFaceData ? FontFaceData->FontFace.Pin() : nullptr;
+	if (FontFacePin && GlyphIndex != 0)
+	{
+		const uint32 InvalidSubCharGlyphIndex = FT_Get_Char_Index(FontFacePin->GetFace(), SlateFontRendererUtils::InvalidSubChar);
+		return GlyphIndex != InvalidSubCharGlyphIndex;
+	}
+#endif	// WITH_FREETYPE
+
+	return false;
+}
+
 float FShapedGlyphEntry::GetBitmapRenderScale() const
 {
 	return FontFaceData ? FontFaceData->BitmapRenderScale : 1.0f;
 }
+
 
 FShapedGlyphEntryKey::FShapedGlyphEntryKey(const FShapedGlyphFaceData& InFontFaceData, uint32 InGlyphIndex, const FFontOutlineSettings& InOutlineSettings)
 	: FontFace(InFontFaceData.FontFace)
@@ -1088,6 +1103,11 @@ bool FSlateFontCache::HasKerning( const FFontData& InFontData ) const
 	return FontRenderer->HasKerning(InFontData);
 }
 
+bool FSlateFontCache::CanLoadCodepoint(const FFontData& InFontData, const UTF32CHAR InCodepoint, EFontFallback MaxFallbackLevel) const
+{
+	return FontRenderer->CanLoadCodepoint(InFontData, InCodepoint, MaxFallbackLevel);
+}
+
 const TSet<FName>& FSlateFontCache::GetFontAttributes( const FFontData& InFontData ) const
 {
 	return CompositeFontCache->GetFontAttributes(InFontData);
@@ -1178,6 +1198,7 @@ void FSlateFontCache::ReleaseResources()
 	{
 		FontTexture->ReleaseResources();
 	}
+	OnReleaseResourcesDelegate.Broadcast(*this);
 }
 
 bool FSlateFontCache::FlushCache()
@@ -1188,9 +1209,6 @@ bool FSlateFontCache::FlushCache()
 
 		FlushData();
 		ReleaseResources();
-
-		// hack
-		FSlateApplicationBase::Get().GetRenderer()->FlushCommands();
 
 		SET_DWORD_STAT(STAT_SlateNumFontAtlases, 0);
 		SET_DWORD_STAT(STAT_SlateNumFontNonAtlasedTextures, 0);

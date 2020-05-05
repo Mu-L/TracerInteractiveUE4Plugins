@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MagicLeapHandMeshingModule.h"
 #include "GameFramework/Actor.h"
@@ -43,6 +43,11 @@ bool FMagicLeapHandMeshingModule::ConnectMRMesh(UMRMeshComponent* InMRMeshPtr)
 bool FMagicLeapHandMeshingModule::DisconnectMRMesh(class UMRMeshComponent* InMRMeshPtr)
 {
 	return MeshTracker.DisconnectMRMesh(InMRMeshPtr);
+}
+
+void FMagicLeapHandMeshingModule::SetUseWeightedNormals(const bool bInUseWeightedNormals)
+{
+	MeshTracker.SetUseWeightedNormals(bInUseWeightedNormals);
 }
 
 bool FMagicLeapHandMeshingModule::HasMRMesh() const

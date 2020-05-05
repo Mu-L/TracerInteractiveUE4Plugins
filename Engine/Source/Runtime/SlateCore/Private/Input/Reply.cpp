@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Input/Reply.h"
 
@@ -25,6 +25,15 @@ FReply& FReply::ClearUserFocus(EFocusCause ReasonFocusIsChanging, bool bInAllUse
 	this->bReleaseUserFocus = true;
 	this->bSetUserFocus = false;
 	this->bAllUsers = bInAllUsers;
+	return Me();
+}
+
+FReply& FReply::CancelFocusRequest()
+{
+	this->bSetUserFocus = false;
+	this->FocusRecipient = nullptr;
+	this->bReleaseUserFocus = false;
+
 	return Me();
 }
 

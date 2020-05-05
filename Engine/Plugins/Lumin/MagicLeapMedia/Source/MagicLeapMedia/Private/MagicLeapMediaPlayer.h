@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -160,9 +160,9 @@ protected:
 private:
 	bool GetMediaPlayerState(uint16 FlagToPoll) const;
 	void RegisterExternalTexture(const FGuid& InGuid, FTextureRHIRef& InTextureRHI, FSamplerStateRHIRef& InSamplerStateRHI);
-	bool RenderThreadIsBufferAvailable(MLHandle MediaPlayerHandle);
-	bool RenderThreadGetNativeBuffer(const MLHandle MediaPlayerHandle, MLHandle& NativeBuffer, bool& OutIsVideoTextureValid);
-	bool RenderThreadReleaseNativeBuffer(const MLHandle MediaPlayerHandle, MLHandle NativeBuffer);
-	bool RenderThreadGetCurrentPosition(const MLHandle MediaPlayerHandle, int32& CurrentPosition);
+	bool IsBufferAvailable_RenderThread(MLHandle InMediaPlayerHandle);
+	bool GetNativeBuffer_RenderThread(const MLHandle InMediaPlayerHandle, MLHandle& NativeBuffer, bool& OutIsVideoTextureValid);
+	bool ReleaseNativeBuffer_RenderThread(const MLHandle InMediaPlayerHandle, MLHandle NativeBuffer);
+	bool GetCurrentPosition_RenderThread(const MLHandle InMediaPlayerHandle, int32& CurrentPosition);
 	void TriggerResetAndDestroy();
 };

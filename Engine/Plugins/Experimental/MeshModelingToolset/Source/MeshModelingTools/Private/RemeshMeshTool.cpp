@@ -1,9 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "RemeshMeshTool.h"
+#include "ComponentSourceInterfaces.h"
 #include "InteractiveToolManager.h"
 #include "ToolBuilderUtil.h"
 
+#include "Util/ColorConstants.h"
 #include "ToolSetupUtil.h"
 
 #include "DynamicMesh3.h"
@@ -21,8 +23,6 @@
 /*
  * ToolBuilder
  */
-
-
 bool URemeshMeshToolBuilder::CanBuildTool(const FToolBuilderState& SceneState) const
 {
 	return ToolBuilderUtil::CountComponents(SceneState, CanMakeComponentTarget) == 1;
@@ -43,20 +43,19 @@ UInteractiveTool* URemeshMeshToolBuilder::BuildTool(const FToolBuilderState& Sce
 	return NewTool;
 }
 
-
-
 /*
  * Tool
  */
-
 URemeshMeshToolProperties::URemeshMeshToolProperties()
 {
 	TargetTriangleCount = 5000;
-	SmoothingSpeed = 0.25;
+	SmoothingStrength = 0.25;
 	RemeshIterations = 20;
 	bDiscardAttributes = false;
 	SmoothingType = ERemeshSmoothingType::MeanValue;
 	bPreserveSharpEdges = true;
+	bShowWireframe = true;
+	bShowGroupColors = false;
 
 	TargetEdgeLength = 5.0;
 	bFlips = true;
@@ -67,12 +66,39 @@ URemeshMeshToolProperties::URemeshMeshToolProperties()
 	bUseTargetEdgeLength = false;
 }
 
+void
+URemeshMeshToolProperties::SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving)
+{
+	URemeshMeshToolProperties* PropertyCache = GetPropertyCache<URemeshMeshToolProperties>();
 
+	// MeshConstraintProperties
+	SaveRestoreProperty(PropertyCache->bPreserveSharpEdges, this->bPreserveSharpEdges, bSaving);
+	SaveRestoreProperty(PropertyCache->MeshBoundaryConstraint, this->MeshBoundaryConstraint, bSaving);
+	SaveRestoreProperty(PropertyCache->GroupBoundaryConstraint, this->GroupBoundaryConstraint, bSaving);
+	SaveRestoreProperty(PropertyCache->MaterialBoundaryConstraint, this->MaterialBoundaryConstraint, bSaving);
+	SaveRestoreProperty(PropertyCache->bPreventNormalFlips, this->bPreventNormalFlips, bSaving);
+
+	//RemeshProperties
+	SaveRestoreProperty(PropertyCache->SmoothingStrength, this->SmoothingStrength, bSaving);
+	SaveRestoreProperty(PropertyCache->bFlips, this->bFlips, bSaving);
+	SaveRestoreProperty(PropertyCache->bSplits, this->bSplits, bSaving);
+	SaveRestoreProperty(PropertyCache->bCollapses, this->bCollapses, bSaving);
+
+	//RemeshMeshToolProperties
+	SaveRestoreProperty(PropertyCache->TargetTriangleCount, this->TargetTriangleCount, bSaving);
+	SaveRestoreProperty(PropertyCache->SmoothingType, this->SmoothingType, bSaving);
+	SaveRestoreProperty(PropertyCache->RemeshIterations, this->RemeshIterations, bSaving);
+	SaveRestoreProperty(PropertyCache->bDiscardAttributes, this->bDiscardAttributes, bSaving);
+	SaveRestoreProperty(PropertyCache->bShowWireframe, this->bShowWireframe, bSaving);
+	SaveRestoreProperty(PropertyCache->bShowGroupColors, this->bShowGroupColors, bSaving);
+	SaveRestoreProperty(PropertyCache->bUseTargetEdgeLength, this->bUseTargetEdgeLength, bSaving);
+	SaveRestoreProperty(PropertyCache->TargetEdgeLength, this->TargetEdgeLength, bSaving);
+	SaveRestoreProperty(PropertyCache->bReproject, this->bReproject, bSaving);
+}
 
 URemeshMeshTool::URemeshMeshTool()
 {
 }
-
 
 void URemeshMeshTool::SetWorld(UWorld* World)
 {
@@ -84,12 +110,12 @@ void URemeshMeshTool::SetAssetAPI(IToolsContextAssetAPI* AssetAPIIn)
 	this->AssetAPI = AssetAPIIn;
 }
 
-
 void URemeshMeshTool::Setup()
 {
 	UInteractiveTool::Setup();
 
 	BasicProperties = NewObject<URemeshMeshToolProperties>(this);
+	BasicProperties->RestoreProperties(this);
 	MeshStatisticsProperties = NewObject<UMeshStatisticsProperties>(this);
 
 	// hide component and create + show preview
@@ -100,18 +126,26 @@ void URemeshMeshTool::Setup()
 	{
 		MeshStatisticsProperties->Update(*Compute->PreviewMesh->GetPreviewDynamicMesh());
 	});
-	Preview->ConfigureMaterials(
-		ToolSetupUtil::GetDefaultMaterial(GetToolManager(), ComponentTarget->GetMaterial(0)),
-		ToolSetupUtil::GetDefaultWorkingMaterial(GetToolManager())
+	FComponentMaterialSet MaterialSet;
+	ComponentTarget->GetMaterialSet(MaterialSet);
+	Preview->ConfigureMaterials( MaterialSet.Materials,
+								 ToolSetupUtil::GetDefaultWorkingMaterial(GetToolManager())
 	);
-	Preview->PreviewMesh->EnableWireframe(true);
+	Preview->PreviewMesh->EnableWireframe(BasicProperties->bShowWireframe);
+
+	ShowGroupsWatcher.Initialize(
+		[this]() { return BasicProperties->bShowGroupColors; },
+		[this](bool bNewValue) { UpdateVisualization(); }, BasicProperties->bShowGroupColors );
+	ShowWireFrameWatcher.Initialize(
+		[this]() { return BasicProperties->bShowWireframe; },
+		[this](bool bNewValue) { UpdateVisualization(); }, BasicProperties->bShowWireframe );
 
 	OriginalMesh = MakeShared<FDynamicMesh3>();
 	FMeshDescriptionToDynamicMesh Converter;
-	Converter.bPrintDebugMessages = true;
 	Converter.Convert(ComponentTarget->GetMesh(), *OriginalMesh);
 
 	Preview->PreviewMesh->SetTransform(ComponentTarget->GetWorldTransform());
+	Preview->PreviewMesh->SetTangentsMode(EDynamicMeshTangentCalcType::AutoCalculated);
 	Preview->PreviewMesh->UpdatePreview(OriginalMesh.Get());
 
 	OriginalMeshSpatial = MakeShared<FDynamicMeshAABBTree3>(OriginalMesh.Get(), true);
@@ -123,10 +157,10 @@ void URemeshMeshTool::Setup()
 	{
 		InitialMeshArea += OriginalMesh->GetTriArea(tid);
 	}
-	
+
 	// set properties defaults
-	
-	// arbitrary threshold of 5000 tris seems reasonable? 
+
+	// arbitrary threshold of 5000 tris seems reasonable?
 	BasicProperties->TargetTriangleCount = (OriginalMesh->TriangleCount() < 5000) ? 5000 : OriginalMesh->TriangleCount();
 	BasicProperties->TargetEdgeLength = CalculateTargetEdgeLength(BasicProperties->TargetTriangleCount);
 
@@ -137,27 +171,28 @@ void URemeshMeshTool::Setup()
 	Preview->InvalidateResult();
 }
 
-
 void URemeshMeshTool::Shutdown(EToolShutdownType ShutdownType)
 {
+	BasicProperties->SaveProperties(this);
 	ComponentTarget->SetOwnerVisibility(true);
-	TUniquePtr<FDynamicMeshOpResult> Result = Preview->Shutdown();
+	FDynamicMeshOpResult Result = Preview->Shutdown();
 	if (ShutdownType == EToolShutdownType::Accept)
 	{
-		GenerateAsset(*Result);
+		GenerateAsset(Result);
 	}
 }
 
-
 void URemeshMeshTool::Tick(float DeltaTime)
 {
+	ShowWireFrameWatcher.CheckAndUpdate();
+	ShowGroupsWatcher.CheckAndUpdate();
+
 	Preview->Tick(DeltaTime);
 }
 
-
-TSharedPtr<FDynamicMeshOperator> URemeshMeshTool::MakeNewOperator()
+TUniquePtr<FDynamicMeshOperator> URemeshMeshTool::MakeNewOperator()
 {
-	TSharedPtr<FRemeshMeshOp> Op = MakeShared<FRemeshMeshOp>();
+	TUniquePtr<FRemeshMeshOp> Op = MakeUnique<FRemeshMeshOp>();
 
 	if (!BasicProperties->bUseTargetEdgeLength)
 	{
@@ -172,13 +207,15 @@ TSharedPtr<FDynamicMeshOperator> URemeshMeshTool::MakeNewOperator()
 	Op->bDiscardAttributes = BasicProperties->bDiscardAttributes;
 	Op->bFlips = BasicProperties->bFlips;
 	Op->bPreserveSharpEdges = BasicProperties->bPreserveSharpEdges;
+	Op->MeshBoundaryConstraint = (EEdgeRefineFlags)BasicProperties->MeshBoundaryConstraint;
+	Op->GroupBoundaryConstraint = (EEdgeRefineFlags)BasicProperties->GroupBoundaryConstraint;
+	Op->MaterialBoundaryConstraint = (EEdgeRefineFlags)BasicProperties->MaterialBoundaryConstraint;
 	Op->bPreventNormalFlips = BasicProperties->bPreventNormalFlips;
 	Op->bReproject = BasicProperties->bReproject;
 	Op->bSplits = BasicProperties->bSplits;
 	Op->RemeshIterations = BasicProperties->RemeshIterations;
-	Op->SmoothingSpeed = BasicProperties->SmoothingSpeed;
+	Op->SmoothingStrength = BasicProperties->SmoothingStrength;
 	Op->SmoothingType = BasicProperties->SmoothingType;
-	Op->TargetTriangleCount = BasicProperties->TargetTriangleCount;
 
 	FTransform LocalToWorld = ComponentTarget->GetWorldTransform();
 	Op->SetTransform(LocalToWorld);
@@ -188,7 +225,6 @@ TSharedPtr<FDynamicMeshOperator> URemeshMeshTool::MakeNewOperator()
 
 	return Op;
 }
-
 
 void URemeshMeshTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
@@ -200,25 +236,56 @@ void URemeshMeshTool::Render(IToolsContextRenderAPI* RenderAPI)
 	if (TargetMesh && TargetMesh->HasAttributes())
 	{
 		const FDynamicMeshUVOverlay* UVOverlay = TargetMesh->Attributes()->PrimaryUV();
-		for (int eid : TargetMesh->EdgeIndicesItr()) 
+		for (int eid : TargetMesh->EdgeIndicesItr())
 		{
-			if (UVOverlay->IsSeamEdge(eid)) 
+			if (UVOverlay->IsSeamEdge(eid))
 			{
 				FVector3d A, B;
 				TargetMesh->GetEdgeV(eid, A, B);
-				PDI->DrawLine(Transform.TransformPosition(A), Transform.TransformPosition(B),
+				PDI->DrawLine(Transform.TransformPosition((FVector)A), Transform.TransformPosition((FVector)B),
 					LineColor, 0, 2.0, 1.0f, true);
 			}
 		}
 	}
 }
 
-
-void URemeshMeshTool::OnPropertyModified(UObject* PropertySet, UProperty* Property)
+void URemeshMeshTool::OnPropertyModified(UObject* PropertySet, FProperty* Property)
 {
-	Preview->InvalidateResult();
+	if ( Property )
+	{
+		if ( ( Property->GetFName() == GET_MEMBER_NAME_CHECKED(URemeshMeshToolProperties, bShowWireframe) ) ||
+			 ( Property->GetFName() == GET_MEMBER_NAME_CHECKED(URemeshMeshToolProperties, bShowGroupColors) ) )
+		{
+			UpdateVisualization();
+		}
+		else
+		{
+			Preview->InvalidateResult();
+		}
+	}
 }
 
+void URemeshMeshTool::UpdateVisualization()
+{
+	Preview->PreviewMesh->EnableWireframe(BasicProperties->bShowWireframe);
+	FComponentMaterialSet MaterialSet;
+	if (BasicProperties->bShowGroupColors)
+	{
+		MaterialSet.Materials = {ToolSetupUtil::GetSelectionMaterial(GetToolManager())};
+		Preview->PreviewMesh->SetTriangleColorFunction([this](const FDynamicMesh3* Mesh, int TriangleID)
+		{
+			return LinearColors::SelectFColor(Mesh->GetTriangleGroup(TriangleID));
+		},
+		UPreviewMesh::ERenderUpdateMode::FastUpdate);
+	}
+	else
+	{
+		ComponentTarget->GetMaterialSet(MaterialSet);
+		Preview->PreviewMesh->ClearTriangleColorFunction(UPreviewMesh::ERenderUpdateMode::FastUpdate);
+	}
+	Preview->ConfigureMaterials(MaterialSet.Materials,
+								ToolSetupUtil::GetDefaultWorkingMaterial(GetToolManager()));
+}
 
 double URemeshMeshTool::CalculateTargetEdgeLength(int TargetTriCount)
 {
@@ -237,23 +304,20 @@ bool URemeshMeshTool::CanAccept() const
 	return Preview->HaveValidResult();
 }
 
-
 void URemeshMeshTool::GenerateAsset(const FDynamicMeshOpResult& Result)
 {
 	GetToolManager()->BeginUndoTransaction(LOCTEXT("RemeshMeshToolTransactionName", "Remesh Mesh"));
 
 	check(Result.Mesh.Get() != nullptr);
-	ComponentTarget->CommitMesh([&Result](FMeshDescription* MeshDescription)
+	ComponentTarget->CommitMesh([&Result](const FPrimitiveComponentTarget::FCommitParams& CommitParams)
 	{
 		FDynamicMeshToMeshDescription Converter;
 
 		// full conversion if normal topology changed or faces were inverted
-		Converter.Convert(Result.Mesh.Get(), *MeshDescription);
+		Converter.Convert(Result.Mesh.Get(), *CommitParams.MeshDescription);
 	});
 
 	GetToolManager()->EndUndoTransaction();
 }
-
-
 
 #undef LOCTEXT_NAMESPACE

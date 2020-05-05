@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -20,7 +20,6 @@ public:
 	FAllocatedVirtualTexture(FVirtualTextureSystem* InSystem,
 		uint32 InFrame,
 		const FAllocatedVTDescription& InDesc,
-		FVirtualTextureSpace* InSpace,
 		FVirtualTextureProducer* const* InProducers,
 		uint32 InBlockWidthInTiles,
 		uint32 InBlockHeightInTiles,

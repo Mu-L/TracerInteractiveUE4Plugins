@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -44,6 +44,7 @@ class FRequestPayloadInMemory : public FRequestPayload
 {
 public:
 	FRequestPayloadInMemory(const TArray<uint8>& Array);
+	FRequestPayloadInMemory(TArray<uint8>&& Array);
 	virtual ~FRequestPayloadInMemory();
 	virtual int32 GetContentLength() const override;
 	virtual const TArray<uint8>& GetContent() const override;

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	BodySetup.cpp
@@ -21,6 +21,8 @@
 #include "UObject/UObjectIterator.h"
 #include "UObject/PropertyPortFlags.h"
 #include "Components/SplineMeshComponent.h"
+#include "ChaosCheck.h"
+#include "Chaos/Convex.h"
 
 #include "PhysXCookHelper.h"
 
@@ -47,6 +49,7 @@
 #if WITH_CHAOS
 	#include "Experimental/ChaosDerivedData.h"
 	#include "Physics/Experimental/ChaosDerivedDataReader.h"
+	#include "Chaos/CollisionConvexMesh.h"
 #endif
 
 /** Helper for enum output... */
@@ -95,6 +98,7 @@ FCookBodySetupInfo::FCookBodySetupInfo() :
 	bConvexDeformableMesh(false),
 	bCookTriMesh(false),
 	bSupportUVFromHitResults(false),
+	bSupportFaceRemap(false),
 	bTriMeshError(false)
 {
 }
@@ -175,6 +179,7 @@ UBodySetup::UBodySetup(const FObjectInitializer& ObjectInitializer)
 	bNeverNeedsCookedCollisionData = false;
 	bGenerateMirroredCollision = true;
 	bGenerateNonMirroredCollision = true;
+	bSupportUVsAndFaceRemap = false;
 	DefaultInstance.SetObjectType(ECC_PhysicsBody);
 #if WITH_EDITORONLY_DATA
 	BuildScale_DEPRECATED = 1.0f;
@@ -348,6 +353,8 @@ void UBodySetup::GetCookInfo(FCookBodySetupInfo& OutCookInfo, EPhysXMeshCookFlag
 			}
 
 			OutCookInfo.TriMeshCookFlags = CookFlags;
+
+			OutCookInfo.bSupportFaceRemap = bSupportUVsAndFaceRemap;
 		}
 		else
 		{
@@ -355,7 +362,7 @@ void UBodySetup::GetCookInfo(FCookBodySetupInfo& OutCookInfo, EPhysXMeshCookFlag
 		}
 	}
 
-	OutCookInfo.bSupportUVFromHitResults = UPhysicsSettings::Get()->bSupportUVFromHitResults;
+	OutCookInfo.bSupportUVFromHitResults = UPhysicsSettings::Get()->bSupportUVFromHitResults || bSupportUVsAndFaceRemap;
 
 #endif // WITH_PHYSX
 }
@@ -686,7 +693,6 @@ bool UBodySetup::RuntimeCookPhysics_Chaos()
 
 void UBodySetup::FinishCreatingPhysicsMeshes_Chaos(FChaosDerivedDataReader<float, 3>& InReader)
 {
-	check(IsInGameThread());
 	ClearPhysicsMeshes();
 
 	const FString FullName = GetFullName();
@@ -696,9 +702,14 @@ void UBodySetup::FinishCreatingPhysicsMeshes_Chaos(FChaosDerivedDataReader<float
 		{
 			FKConvexElem& ConvexElem = AggGeom.ConvexElems[ElementIndex];
 
-			if (ensure(InReader.ConvexImplicitObjects[ElementIndex]->IsValidGeometry()))
+			if (CHAOS_ENSURE( (ElementIndex < InReader.ConvexImplicitObjects.Num())
+				&& InReader.ConvexImplicitObjects[ElementIndex]->IsValidGeometry()))
 			{
 				ConvexElem.SetChaosConvexMesh(MoveTemp(InReader.ConvexImplicitObjects[ElementIndex]));
+
+#if TRACK_CHAOS_GEOMETRY
+				ConvexElem.GetChaosConvexMesh()->Track(Chaos::MakeSerializable(ConvexElem.GetChaosConvexMesh()),FullName);
+#endif
 
 				if (ConvexElem.GetChaosConvexMesh()->IsPerformanceWarning())
 				{
@@ -708,14 +719,34 @@ void UBodySetup::FinishCreatingPhysicsMeshes_Chaos(FChaosDerivedDataReader<float
 			}
 			else
 			{
-				UE_LOG(LogPhysics, Warning, TEXT("TConvex Name:%s, Element [%d] has no Geometry"), FullName.GetCharArray().GetData(), ElementIndex);
+				if (ElementIndex >= InReader.ConvexImplicitObjects.Num())
+				{
+					UE_LOG(LogPhysics, Warning, TEXT("InReader.ConvexImplicitObjects.Num() [%d], AggGeom.ConvexElems.Num() [%d]"),
+						InReader.ConvexImplicitObjects.Num(), AggGeom.ConvexElems.Num());
+				}
+				CHAOS_LOG(LogPhysics, Warning, TEXT("TConvex Name:%s, Element [%d] has no Geometry"), FullName.GetCharArray().GetData(), ElementIndex);
 			}
-
 		}
 		InReader.ConvexImplicitObjects.Reset();
 	}
 
 	ChaosTriMeshes = MoveTemp(InReader.TrimeshImplicitObjects);
+	UVInfo = MoveTemp(InReader.UVInfo);
+	FaceRemap = MoveTemp(InReader.FaceRemap);
+#if TRACK_CHAOS_GEOMETRY
+	for (auto& TriMesh : ChaosTriMeshes)
+	{
+		TriMesh->Track(Chaos::MakeSerializable(TriMesh), FullName);
+	}
+#endif
+
+#if WITH_CHAOS
+	// Force trimesh collisions off
+	for (auto& TriMesh : ChaosTriMeshes)
+	{
+		TriMesh->SetDoCollide(false);
+	}
+#endif
 
 	// Clear the cooked data
 	if (!GIsEditor && !bSharedCookedData)
@@ -782,15 +813,21 @@ void UBodySetup::ClearPhysicsMeshes()
 	AggGeom.FreeRenderInfo();
 }
 
+DECLARE_CYCLE_STAT(TEXT("AddShapesToRigidActor"), STAT_AddShapesToActor, STATGROUP_Physics);
+DECLARE_CYCLE_STAT(TEXT("AddGeomToSolver"), STAT_AddGeomToSolver, STATGROUP_Physics);
+
 void UBodySetup::AddShapesToRigidActor_AssumesLocked(
 	FBodyInstance* OwningInstance, 
 	FVector& Scale3D, 
 	UPhysicalMaterial* SimpleMaterial,
-	TArray<UPhysicalMaterial*>& ComplexMaterials, 
+	TArray<UPhysicalMaterial*>& ComplexMaterials,
+	TArray<FPhysicalMaterialMaskParams>& ComplexMaterialMasks,
 	const FBodyCollisionData& BodyCollisionData,
 	const FTransform& RelativeTM, 
 	TArray<FPhysicsShapeHandle>* NewShapes)
 {
+	SCOPE_CYCLE_COUNTER(STAT_AddShapesToActor);
+
 	check(OwningInstance);
 
 	// in editor, there are a lot of things relying on body setup to create physics meshes
@@ -812,7 +849,11 @@ void UBodySetup::AddShapesToRigidActor_AssumesLocked(
 	AddParams.Scale = Scale3D;
 	AddParams.SimpleMaterial = SimpleMaterial;
 	AddParams.ComplexMaterials = TArrayView<UPhysicalMaterial*>(ComplexMaterials);
+#if WITH_CHAOS
+	AddParams.ComplexMaterialMasks = TArrayView<FPhysicalMaterialMaskParams>(ComplexMaterialMasks);
+#endif
 	AddParams.LocalTransform = RelativeTM;
+	AddParams.WorldTransform = OwningInstance->GetUnrealWorldTransform();
 	AddParams.Geometry = &AggGeom;
 #if WITH_PHYSX
 	AddParams.TriMeshes = TArrayView<PxTriangleMesh*>(TriMeshes);
@@ -821,7 +862,10 @@ void UBodySetup::AddShapesToRigidActor_AssumesLocked(
 #if WITH_CHAOS
 	AddParams.ChaosTriMeshes = MakeArrayView(ChaosTriMeshes);
 #endif
-	FPhysicsInterface::AddGeometry(OwningInstance->ActorHandle, AddParams, NewShapes);
+	{
+		SCOPE_CYCLE_COUNTER(STAT_AddGeomToSolver);
+		FPhysicsInterface::AddGeometry(OwningInstance->ActorHandle, AddParams, NewShapes);
+	}
 }
 
 void UBodySetup::RemoveSimpleCollision()
@@ -922,6 +966,7 @@ void UBodySetup::FinishDestroy()
 void UBodySetup::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
+	Ar.UsingCustomVersion(FExternalPhysicsCustomObjectVersion::GUID);
 
 	// Load GUID (or create one for older versions)
 	Ar << BodySetupGuid;
@@ -997,6 +1042,25 @@ void UBodySetup::Serialize(FArchive& Ar)
 #if WITH_EDITOR
 	AggGeom.FixupDeprecated( Ar );
 #endif
+
+#if WITH_CHAOS && WITH_EDITOR
+
+	if (Ar.IsLoading())
+	{
+		const bool bForceIndexRebuild = Ar.CustomVer(FExternalPhysicsCustomObjectVersion::GUID) < FExternalPhysicsCustomObjectVersion::ForceRebuildBodySetupIndices;
+		for (FKConvexElem& Convex : AggGeom.ConvexElems)
+		{
+			// Reset potentially corrupted index data to correctly rebuild below
+			if (bForceIndexRebuild)
+			{
+				Convex.IndexData.Reset();
+			}
+			// Build an index buffer if we don't have one, either as a consequence of the check above or loading in a mesh that has never been
+			// processed with Chaos previously
+			Convex.ComputeChaosConvexIndices();
+		}
+	}
+#endif
 }
 
 void UBodySetup::PostLoad()
@@ -1071,6 +1135,18 @@ void UBodySetup::PostLoad()
 			}
 		}
 	}
+
+#if WITH_CHAOS
+	// For drawing of convex elements we require an index buffer, previously we could
+	// get this from a PxConvexMesh but Chaos doesn't maintain that data. Instead now
+	// it is a part of the element rather than the physics geometry, if we load in an
+	// element without that data present, generate a convex hull from the convex vert
+	// data and extract the index data from there.
+	for(FKConvexElem& Convex : AggGeom.ConvexElems)
+	{
+		Convex.ComputeChaosConvexIndices();
+	}
+#endif
 }
 
 void UBodySetup::UpdateTriMeshVertices(const TArray<FVector> & NewPositions)
@@ -1351,6 +1427,11 @@ void UBodySetup::GetGeometryDDCKey(FString& OutString) const
 		(int32)UPhysicsSettings::Get()->bSupportUVFromHitResults,
 		(int32)GetCollisionTraceFlag(),
 		(int32)BODY_SETUP_GEOMETRY_KEY_VER);
+
+	if (bSupportUVsAndFaceRemap)
+	{
+		OutString += FString(TEXT("_1"));
+	}
 }
 
 void UBodySetup::PostInitProperties()
@@ -1453,6 +1534,8 @@ void UBodySetup::GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize)
 		const FByteBulkData& FmtData = CookedFormatData.GetFormat(FPlatformProperties::GetPhysicsFormat());
 		CumulativeResourceSize.AddDedicatedSystemMemoryBytes(FmtData.GetBulkDataSize());
 	}
+
+	CumulativeResourceSize.AddDedicatedSystemMemoryBytes(FaceRemap.GetAllocatedSize());
 	
 	// Count any UV info
 	UVInfo.GetResourceSizeEx(CumulativeResourceSize);
@@ -1584,10 +1667,9 @@ void FKConvexElem::CloneElem(const FKConvexElem& Other)
 {
 	Super::CloneElem(Other);
 	VertexData = Other.VertexData;
+	IndexData = Other.IndexData;
 	ElemBox = Other.ElemBox;
 	Transform = Other.Transform;
-
-	// TODO: Should this also copy the ChaosConvexMesh?
 }
 
 void FKConvexElem::ScaleElem(FVector DeltaSize, float MinSize)
@@ -1666,19 +1748,55 @@ float FKConvexElem::GetVolume(const FVector& Scale) const
 }
 
 #if WITH_CHAOS
-const TUniquePtr<Chaos::TImplicitObject<float, 3>>& FKConvexElem::GetChaosConvexMesh() const
-{
-	return ChaosConvex;
-}
 
-void FKConvexElem::SetChaosConvexMesh(TUniquePtr<Chaos::TImplicitObject<float, 3>>&& InChaosConvex)
+void FKConvexElem::SetChaosConvexMesh(TSharedPtr<Chaos::FConvex, ESPMode::ThreadSafe>&& InChaosConvex)
 {
 	ChaosConvex = MoveTemp(InChaosConvex);
+	
+	const bool bForceCompute = true;
+	ComputeChaosConvexIndices(bForceCompute);
 }
 
 void FKConvexElem::ResetChaosConvexMesh()
 {
 	ChaosConvex.Reset();
+}
+
+ENGINE_API void FKConvexElem::ComputeChaosConvexIndices(bool bForceCompute)
+{
+	if (bForceCompute || IndexData.Num() == 0)
+	{
+		IndexData = GetChaosConvexIndices();
+	}
+}
+
+TArray<int32> FKConvexElem::GetChaosConvexIndices() const
+{
+	TArray<int32> ResultIndexData;
+	const int32 NumVerts = VertexData.Num();
+	if (NumVerts > 0)
+	{
+		Chaos::TParticles<Chaos::FReal, 3> ConvexParticles;
+		ConvexParticles.AddParticles(NumVerts);
+
+		for (int32 VertIndex = 0; VertIndex < NumVerts; ++VertIndex)
+		{
+			ConvexParticles.X(VertIndex) = VertexData[VertIndex];
+		}
+
+		TArray<Chaos::TVector<int32, 3>> Triangles;
+		Chaos::FConvexBuilder::BuildConvexHull(ConvexParticles, Triangles);
+
+		ResultIndexData.Reserve(Triangles.Num() * 3);
+		for (Chaos::TVector<int32, 3> Tri : Triangles)
+		{
+			ResultIndexData.Add(Tri[0]);
+			ResultIndexData.Add(Tri[1]);
+			ResultIndexData.Add(Tri[2]);
+		}
+	}
+
+	return ResultIndexData;
 }
 #endif
 

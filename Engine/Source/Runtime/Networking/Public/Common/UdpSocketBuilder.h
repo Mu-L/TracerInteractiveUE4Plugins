@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -318,7 +318,7 @@ public:
 		}
 		else
 		{
-			TSharedRef<FInternetAddr> MulticastAddress = SocketSubsystem->CreateInternetAddr();
+			TSharedRef<FInternetAddr> MulticastAddress = SocketSubsystem->CreateInternetAddr(RemoteAddr->GetProtocolType());
 			MulticastAddress->SetBroadcastAddress();
 			TSharedPtr<FInternetAddr> AddressToUse = nullptr;
 

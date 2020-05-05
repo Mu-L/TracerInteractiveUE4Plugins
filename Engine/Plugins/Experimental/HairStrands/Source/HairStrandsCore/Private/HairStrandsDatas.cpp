@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HairStrandsDatas.h"
 #include "UObject/ReleaseObjectVersion.h"
@@ -49,6 +49,15 @@ void FHairStrandsPoints::Reset()
 	PointsPosition.Reset();
 	PointsRadius.Reset();
 	PointsCoordU.Reset();
+}
+
+FArchive& operator<<(FArchive& Ar, FVector4_16& Vertex)
+{
+	Ar << Vertex.X;
+	Ar << Vertex.Y;
+	Ar << Vertex.Z;
+	Ar << Vertex.W;
+	return Ar;
 }
 
 FArchive& operator<<(FArchive& Ar, FPackedHairVertex& Vertex)

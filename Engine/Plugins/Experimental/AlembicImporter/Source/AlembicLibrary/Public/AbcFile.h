@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -10,13 +10,11 @@
 #include "Windows/AllowWindowsPlatformTypes.h"
 #endif
 
-PRAGMA_DEFAULT_VISIBILITY_START
 THIRD_PARTY_INCLUDES_START
 #include <Alembic/AbcCoreFactory/IFactory.h>
 #include <Alembic/Abc/IArchive.h>
 #include <Alembic/Abc/IObject.h>
 THIRD_PARTY_INCLUDES_END
-PRAGMA_DEFAULT_VISIBILITY_END
 
 #if PLATFORM_WINDOWS
 #include "Windows/HideWindowsPlatformTypes.h"
@@ -45,7 +43,7 @@ enum class EFrameReadFlags : uint8
 
 ENUM_CLASS_FLAGS(EFrameReadFlags);
 
-class FAbcFile
+class ALEMBICLIBRARY_API FAbcFile
 {
 public:
 	FAbcFile(const FString& InFilePath);
@@ -67,6 +65,7 @@ public:
 	const int32 GetMaxFrameIndex() const;
 	const float GetImportTimeOffset() const;
 	const float GetImportLength() const;
+	const int32 GetImportNumFrames() const;
 	const int32 GetFramerate() const;
 	const FBoxSphereBounds& GetArchiveBounds() const;
 	const bool ContainsHeterogeneousMeshes() const;
@@ -85,10 +84,16 @@ public:
 	IMeshUtilities* GetMeshUtilities() const;
 	/** Returns a material for the specified material(faceset) name or null if it wasn't created or found */
 	UMaterialInterface** GetMaterialByName(const FString& InMaterialName);		
+	/** Returns frame index equivalent to a given time, based on the frame rate of the file */
+	int32 GetFrameIndex(float Time);
+	/** Reads the frame data for the given FrameIndex, with the ReadIndex used to specify the current read when doing concurrent reads (up to 8 at the same time) */
+	void ReadFrame(int32 FrameIndex, const EFrameReadFlags InFlags, const int32 ReadIndex = INDEX_NONE);
+	/** Cleans up frame data. Must be called after ReadFrame when the frame data (with matching ReadIndex) is not needed anymore */
+	void CleanupFrameData(const int32 ReadIndex);
+	/** Returns the list of unique face set names from the meshes to be imported */
+	const TArray<FString>& GetUniqueFaceSetNames() const { return UniqueFaceSetNames; }
 protected:
 	void TraverseAbcHierarchy(const Alembic::Abc::IObject& InObject, IAbcObject* InParent);
-	void ReadFrame(int32 FrameIndex, const EFrameReadFlags InFlags, const int32 ReadIndex = INDEX_NONE);
-	void CleanupFrameData(const int32 ReadIndex);
 protected:
 	/** File path for the ABC file */
 	const FString FilePath;
@@ -119,7 +124,8 @@ protected:
 	
 	/** Map of material created for the imported alembic file identified by material names */
 	TMap<FString, UMaterialInterface*> MaterialMap;
-	
+	TArray<FString> UniqueFaceSetNames;
+
 	/** Total (max) number of frames in the Alembic file */
 	int32 NumFrames;
 	/** Frames per second (retrieved and specified in top Alembic object) */

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MDLImporter.h"
 
@@ -170,15 +170,6 @@ bool FMDLImporter::OpenFile(const FString& InFileName, const UMDLImporterOptions
 		return false;
 	}
 
-	// set export path for textures
-	{
-		const FString  ExporthPath  = FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() + FPaths::GetBaseFilename(InFileName));
-		IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-		PlatformFile.CreateDirectory(*ExporthPath);
-
-		MdlContext->GetDistiller()->SetExportPath(ExporthPath);
-	}
-
 	bool bSuccess = false;
 	// load mdl module
 	{
@@ -278,11 +269,9 @@ void FMDLImporter::ConvertUnsuportedVirtualTextures() const
 	{
 		if (UMaterial* CurrentMaterial = Cast<UMaterial>(CurrentMaterialInterface))
 		{
-			TArray<UObject*> ReferencedTextures;
-			CurrentMaterial->AppendReferencedTextures(ReferencedTextures);
 			for (UTexture2D* VirtualTexture : VirtualTexturesToConvert)
 			{
-				if (ReferencedTextures.Contains(VirtualTexture))
+				if (CurrentMaterial->GetCachedExpressionData().ReferencedTextures.Contains(VirtualTexture))
 				{
 					MaterialsToRefreshAfterVirtualTextureConversion.Add(CurrentMaterial);
 					break;

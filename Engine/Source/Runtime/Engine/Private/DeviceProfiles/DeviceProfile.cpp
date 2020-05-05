@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DeviceProfiles/DeviceProfile.h"
 #include "Misc/Paths.h"
@@ -170,7 +170,7 @@ void UDeviceProfile::PostEditChangeProperty( FPropertyChangedEvent& PropertyChan
 							ParentProfile = ClassCDO;
 						}
 
-						for (TFieldIterator<UProperty> CurrentObjPropertyIter( GetClass() ); CurrentObjPropertyIter; ++CurrentObjPropertyIter)
+						for (TFieldIterator<FProperty> CurrentObjPropertyIter( GetClass() ); CurrentObjPropertyIter; ++CurrentObjPropertyIter)
 						{
 							bool bIsSameParent = CurrentObjPropertyIter->Identical_InContainer( ClassCDO, CurrentGenerationProfile );
 							if( bIsSameParent )
@@ -319,8 +319,12 @@ const TMap<FString, FString>& UDeviceProfile::GetConsolidatedCVars() const
 		{
 			FString CVarKey, CVarValue;
 			if (CurrentCVar.Split(TEXT("="), &CVarKey, &CVarValue))
-			{
-				InOutMap.Add(CVarKey, CVarValue);
+			{	
+				//Prevent parents from overwriting the values in child profiles.
+				if (InOutMap.Find(CVarKey) == nullptr)
+				{
+					InOutMap.Add(CVarKey, CVarValue);
+				}
 			}
 		}
 	};

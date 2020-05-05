@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "SNodePanel.h"
@@ -200,9 +200,10 @@ namespace NodePanelDefs
 };
 
 SNodePanel::SNodePanel()
-: Children(this)
-, VisibleChildren(this)
+	: Children(this)
+	, VisibleChildren(this)
 {
+	bHasRelativeLayoutScale = true;
 }
 
 void SNodePanel::OnArrangeChildren(const FGeometry& AllottedGeometry, FArrangedChildren& ArrangedChildren) const
@@ -326,6 +327,8 @@ void SNodePanel::Construct()
 	TotalGestureMagnify = 0.0f;
 
 	ScopedTransactionPtr.Reset();
+
+	bVisualUpdatePending = false;
 }
 
 FVector2D SNodePanel::ComputeEdgePanAmount(const FGeometry& MyGeometry, const FVector2D& TargetPosition)
@@ -473,7 +476,7 @@ void SNodePanel::Tick( const FGeometry& AllottedGeometry, const double InCurrent
 	}
 
 	// Zoom to node extents
-	if( bDeferredZoomToNodeExtents )
+	if( bDeferredZoomToNodeExtents && bVisualUpdatePending == false )
 	{
 		bDeferredZoomToNodeExtents = false;
 		ZoomPadding = NodePanelDefs::DefaultZoomPadding;
@@ -609,6 +612,7 @@ FReply SNodePanel::OnMouseButtonDown( const FGeometry& MyGeometry, const FPointe
 		SoftwareCursorPosition = PanelCoordToGraphCoord(MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition()));
 
 		DeferredMovementTargetObject = nullptr; // clear any interpolation when you manually pan
+		CancelZoomToFit();
 
 		// MIDDLE BUTTON is for dragging only.
 		return ReplyState;
@@ -1062,7 +1066,7 @@ FReply SNodePanel::OnTouchEnded( const FGeometry& MyGeometry, const FPointerEven
 	return FReply::Unhandled();
 }
 
-float SNodePanel::GetRelativeLayoutScale(const FSlotBase& Child, float LayoutScaleMultiplier) const
+float SNodePanel::GetRelativeLayoutScale(int32 ChildIndex, float LayoutScaleMultiplier) const
 {
 	return GetZoomAmount();
 }

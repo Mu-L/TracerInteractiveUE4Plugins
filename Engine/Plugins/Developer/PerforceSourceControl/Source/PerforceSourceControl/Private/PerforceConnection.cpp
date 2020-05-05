@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PerforceConnection.h"
 #include "HAL/PlatformProcess.h"
@@ -199,6 +199,8 @@ static bool TestConnection(ClientApi& P4Client, const FString& ClientSpecName, b
 	// clean up args
 	delete [] ClientSpecUTF8Name;
 
+	FPerforceSourceControlModule::SetLastErrors(OutErrorMessages);
+
 	// If there are error messages, user name is most likely invalid. Otherwise, make sure workspace actually
 	// exists on server by checking if we have it's update date.
 	bool bConnectionOK = OutErrorMessages.Num() == 0 && Records.Num() > 0 && Records[0].Contains(TEXT("Update"));
@@ -381,6 +383,7 @@ bool FPerforceConnection::EnsureValidConnection(FString& InOutServerName, FStrin
 			TestP4.SetCwd(FROM_TCHAR(*FPaths::RootDir(), bIsUnicodeServer));
 			TestP4.SetUser(FROM_TCHAR(*NewUserName, bIsUnicodeServer));
 			TestP4.SetClient(FROM_TCHAR(*NewClientSpecName, bIsUnicodeServer));
+			TestP4.SetPassword(FROM_TCHAR(*InConnectionInfo.Ticket, bIsUnicodeServer));
 
 		}
 	}
@@ -639,6 +642,18 @@ bool FPerforceConnection::RunCommand(const FString& InCommand, const TArray<FStr
 	}
 	delete [] ArgV;
 
+	// Only report connection related errors to avoid clearing of connection related error messages
+	static TSet<FString> CommandsWithoutLoginErrors;
+	if (CommandsWithoutLoginErrors.Num() == 0)
+	{
+		CommandsWithoutLoginErrors.Add(TEXT("info"));
+	}
+
+	if (!CommandsWithoutLoginErrors.Contains(InCommand))
+	{
+		FPerforceSourceControlModule::SetLastErrors(OutErrorMessage);
+	}
+
 	if (bInStandardDebugOutput)
 	{
 		UE_LOG( LogSourceControl, VeryVerbose, TEXT("P4 execution time: %0.4f seconds. Command: %s"), FPlatformTime::Seconds() - SCCStartTime, *FullCommand );
@@ -739,7 +754,11 @@ void FPerforceConnection::EstablishConnection(const FPerforceConnectionInfo& InC
 			// Now we know our unicode status we can gather the client root
 			P4Client.SetUser(FROM_TCHAR(*InConnectionInfo.UserName, bIsUnicode));
 
-			if(InConnectionInfo.Password.Len() > 0)
+			if (InConnectionInfo.Ticket.Len() > 0)
+			{
+				P4Client.SetPassword(FROM_TCHAR(*InConnectionInfo.Ticket, bIsUnicode));
+			}
+			else if (InConnectionInfo.Password.Len() > 0)
 			{
 				Login(InConnectionInfo);
 			}

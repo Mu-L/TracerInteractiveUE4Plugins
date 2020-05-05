@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AnimationRecorder.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
@@ -15,7 +15,6 @@
 #include "AssetRegistryModule.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
-#include "Animation/AnimationSettings.h"
 #include "Animation/AnimationRecordingSettings.h"
 #include "Animation/AnimNotifies/AnimNotify.h"
 #include "Animation/AnimNotifies/AnimNotifyState.h"
@@ -70,16 +69,18 @@ void FAnimationRecorder::SetSampleRateAndLength(float SampleRateHz, float Length
 	}
 }
 
-bool FAnimationRecorder::SetAnimCompressionScheme(TSubclassOf<UAnimCompress> SchemeClass)
+bool FAnimationRecorder::SetAnimCompressionScheme(UAnimBoneCompressionSettings* Settings)
 {
 	if (AnimationObject)
 	{
-		UAnimCompress* const SchemeObject = NewObject<UAnimCompress>(GetTransientPackage(), SchemeClass);
-		if (SchemeObject)
+		if (Settings == nullptr)
 		{
-			AnimationObject->CompressionScheme = SchemeObject;
-			return true;
+			// The caller has not supplied a settings asset, use our default value
+			Settings = FAnimationUtils::GetDefaultAnimationRecorderBoneCompressionSettings();
 		}
+
+		AnimationObject->BoneCompressionSettings = Settings;
+		return true;
 	}
 
 	return false;
@@ -216,6 +217,7 @@ void FAnimationRecorder::StartRecord(USkeletalMeshComponent* Component, UAnimSeq
 	AnimationObject = InAnimationObject;
 
 	AnimationObject->RecycleAnimSequence();
+	AnimationObject->BoneCompressionSettings = FAnimationUtils::GetDefaultAnimationRecorderBoneCompressionSettings();
 
 	GetBoneTransforms(Component, PreviousSpacesBases);
 	PreviousAnimCurves = Component->GetAnimationCurves();
@@ -292,16 +294,6 @@ UAnimSequence* FAnimationRecorder::StopRecord(bool bShowMessage)
 
 		FixupNotifies();
 
-		// force anim settings for speed, we dont want any fancy recompression at present
-		UAnimationSettings* AnimationSettings = GetMutableDefault<UAnimationSettings>();
-		TSubclassOf<UAnimCompress> OldDefaultCompressionAlgorithm = AnimationSettings->DefaultCompressionAlgorithm;
-		TEnumAsByte<AnimationCompressionFormat> OldRotationCompressionFormat = AnimationSettings->RotationCompressionFormat;
-		TEnumAsByte<AnimationCompressionFormat> OldTranslationCompressionFormat = AnimationSettings->TranslationCompressionFormat;
-
-		AnimationSettings->DefaultCompressionAlgorithm = UAnimCompress_BitwiseCompressOnly::StaticClass();
-		AnimationSettings->RotationCompressionFormat = ACF_None;
-		AnimationSettings->TranslationCompressionFormat = ACF_None;
-
 		// post-process applies compression etc.
 		// @todo figure out why removing redundant keys is inconsistent
 
@@ -371,11 +363,6 @@ UAnimSequence* FAnimationRecorder::StopRecord(bool bShowMessage)
 
 		//AnimationObject->RawCurveData.RemoveRedundantKeys();
 		AnimationObject->PostProcessSequence();
-
-		// restore old settings
-		AnimationSettings->DefaultCompressionAlgorithm = OldDefaultCompressionAlgorithm;
-		AnimationSettings->RotationCompressionFormat = OldRotationCompressionFormat;
-		AnimationSettings->TranslationCompressionFormat = OldTranslationCompressionFormat;
 
 		AnimationObject->MarkPackageDirty();
 		
@@ -815,7 +802,6 @@ void FAnimRecorderInstance::InitInternal(USkeletalMeshComponent* InComponent, co
 	Recorder->bRecordLocalToWorld = Settings.bRecordInWorldSpace;
 	Recorder->InterpMode = Settings.InterpMode;
 	Recorder->TangentMode = Settings.TangentMode;
-	Recorder->SetAnimCompressionScheme(UAnimCompress_BitwiseCompressOnly::StaticClass());
 	Recorder->bAutoSaveAsset = Settings.bAutoSaveAsset;
 	Recorder->bRemoveRootTransform = Settings.bRemoveRootAnimation;
 	Recorder->bCheckDeltaTimeAtBeginning = Settings.bCheckDeltaTimeAtBeginning;

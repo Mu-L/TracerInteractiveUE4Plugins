@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -661,6 +661,10 @@ struct FAutomationWorkerScreenImage
 	/** The screen shot data. */
 	UPROPERTY(EditAnywhere, Category="Message")
 	TArray<uint8> ScreenImage;
+
+	/** The frame trace data. */
+	UPROPERTY(EditAnywhere, Category = "Message")
+	TArray<uint8> FrameTrace;
 
 	/** The screen shot name. */
 	UPROPERTY(EditAnywhere, Category="Message")

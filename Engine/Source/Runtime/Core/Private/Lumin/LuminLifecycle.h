@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 #include "Lumin/CAPIShims/LuminAPILifecycle.h"
@@ -22,6 +22,9 @@ private:
 	static void OnDeviceActive_Handler(void* ApplicationContext);
 	static void OnDeviceReality_Handler(void* ApplicationContext);
 	static void OnDeviceStandby_Handler(void* ApplicationContext);
+
+	static void OnFocusLost_Handler(void* ApplicationContext, MLLifecycleFocusLostReason reason);
+	static void OnFocusGained_Handler(void* ApplicationContext);
 
 	static void OnFEngineLoopInitComplete_Handler();
 

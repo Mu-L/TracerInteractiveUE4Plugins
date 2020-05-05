@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MaterialOptionsWindow.h"
 #include "Modules/ModuleManager.h"
@@ -11,7 +11,7 @@
 #include "MaterialBakingStructures.h"
 #include "MaterialOptions.h"
 #include "MaterialOptionsCustomization.h"
-#include "Dialogs/Dialogs.h"
+#include "Misc/MessageDialog.h"
 
 #define LOCTEXT_NAMESPACE "SMaterialOptions"
 
@@ -34,9 +34,7 @@ void SMaterialOptions::Construct(const FArguments& InArgs)
 	DetailsView = PropertyEditorModule.CreateDetailView(DetailsViewArgs);
 	// Register instance property customization
 	DetailsView->RegisterInstancedCustomPropertyLayout(UMaterialOptions::StaticClass(), FOnGetDetailCustomizationInstance::CreateLambda([=]() { return FMaterialOptionsCustomization::MakeInstance(InArgs._NumLODs); }));
-	// Set up root object customization to get desired layout
-	DetailsView->SetRootObjectCustomizationInstance(MakeShareable(new FSimpleRootObjectCustomization));
-	
+
 	// Set provided objects on SDetailsView
 	DetailsView->SetObjects(InArgs._SettingsObjects, true);
 	
@@ -82,7 +80,8 @@ FReply SMaterialOptions::OnConfirm()
 	// Ensure the user has selected at least one LOD index
 	if (GetMutableDefault<UMaterialOptions>()->LODIndices.Num() == 0)
 	{
-		OpenMsgDlgInt(EAppMsgType::Ok, LOCTEXT("MaterialBake_SelectLODError", "Ensure that atleast one LOD index is selected."), LOCTEXT("MaterialBake_SelectLODErrorTitle", "Invalid options"));
+		FText Title = LOCTEXT("MaterialBake_SelectLODErrorTitle", "Invalid options");
+		FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("MaterialBake_SelectLODError", "Ensure that atleast one LOD index is selected."), &Title);
 	}
 	else
 	{
@@ -118,11 +117,6 @@ FReply SMaterialOptions::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent&
 bool SMaterialOptions::WasUserCancelled()
 {
 	return bUserCancelled;
-}
-
-TSharedPtr<SWidget> FSimpleRootObjectCustomization::CustomizeObjectHeader(const UObject* InRootObject)
-{
-	return SNullWidget::NullWidget;
 }
 
 #undef LOCTEXT_NAMESPACE //"SMaterialOptions"

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -14,6 +14,16 @@ class UActorComponent;
 class UPrimitiveComponent;
 struct FMeshDescription;
 class UMaterialInterface;
+
+/**
+ * FComponentMaterialSet is the set of materials assigned to a component (ie Material Slots on a StaticMesh)
+ */
+struct INTERACTIVETOOLSFRAMEWORK_API FComponentMaterialSet
+{
+	TArray<UMaterialInterface*> Materials;
+	bool operator!=(const FComponentMaterialSet& Other) const;
+};
+
 
 /**
  * Wrapper around a UObject Component that can provide a MeshDescription, and
@@ -33,6 +43,9 @@ public:
 	 */
 	FPrimitiveComponentTarget( UPrimitiveComponent* Component ): Component( Component ){}
 
+	/** @return true if component target is still valid. May become invalid for various reasons (eg Component was deleted out from under us) */
+	bool IsValid() const;
+
 	/** @return the Actor that owns this Component */
 	AActor* GetOwnerActor() const;
 
@@ -48,6 +61,13 @@ public:
 	 * @return MaterialInterface pointer, or null if MaterialIndex is invalid
 	 */
 	UMaterialInterface* GetMaterial(int32 MaterialIndex) const;
+
+	/**
+	 * Get material set provided by this source
+	 * @param MaterialSetOut returned material set
+	 * @param bAssetMaterials if an underlying asset exists, return the Asset-level material assignment instead of the component materials
+	 */
+	virtual void GetMaterialSet(FComponentMaterialSet& MaterialSetOut, bool bAssetMaterials = false) const;
 
 	/**
 	 * @return the transform on this component
@@ -69,7 +89,27 @@ public:
 	 */
 	void SetOwnerVisibility(bool bVisible) const;
 
-	using  FCommitter  = TFunction< void( FMeshDescription* ) >;
+
+	/**
+	 * Checks if the underlying asset that would be edited by CommitMesh() is the same for two ComponentTargets
+	 * @param OtherTarget Another component target to compare against
+	 * @return true if both component targets are known to share the same source asset
+	 */
+	virtual bool HasSameSourceData(const FPrimitiveComponentTarget& OtherTarget) const = 0;
+
+	/**
+	 * Commit an update to the material set. This may generate a transaction.
+	 * @param MaterialSet new list of materials
+	 * @param bApplyToAsset if true, materials of Asset are updated (if Asset exists), rather than Component
+	 */
+	virtual void CommitMaterialSetUpdate(const FComponentMaterialSet& MaterialSet, bool bApplyToAsset);
+
+
+	struct FCommitParams
+	{
+		FMeshDescription* MeshDescription{ nullptr };
+	};
+	using  FCommitter  = TFunction< void( const FCommitParams& ) >;
 	virtual FMeshDescription* GetMesh() = 0;
 	virtual void CommitMesh( const FCommitter& ) = 0;
 

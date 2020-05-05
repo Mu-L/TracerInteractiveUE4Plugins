@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using IncludeTool.Support;
 using System;
@@ -339,13 +339,29 @@ namespace IncludeTool
 					throw new NotImplementedException();
 				case "alignof":
 					throw new NotImplementedException();
+				case "__has_builtin":
 				case "__has_feature":
+				case "__has_warning":
 					if(Tokens[Idx + 1].Text != "(" || Tokens[Idx + 3].Text != ")")
 					{
 						throw new NotImplementedException();
 					}
 					Idx += 4;
 					return 0;
+				case "__has_include":
+					if(Tokens[Idx + 1].Text == "(")
+					{
+						Idx += 4; // 4 = __has_inc, (, "" or <>
+						for (; Idx < Tokens.Count; ++Idx)
+						{
+							if (Tokens[Idx].Text == ")")
+							{
+								++Idx;
+								return 0;
+							}
+						}
+					}
+					throw new NotImplementedException();
 				case "__building_module":
 					if(Tokens[Idx + 1].Text != "(" || Tokens[Idx + 3].Text != ")")
 					{

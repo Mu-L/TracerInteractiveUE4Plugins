@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -8,6 +8,7 @@
 
 class UNiagaraNodeFunctionCall;
 class UNiagaraStackFunctionInput;
+class UNiagaraClipboardFunctionInput;
 class UEdGraphPin;
 
 UCLASS()
@@ -35,6 +36,10 @@ public:
 
 	void SetShouldShowInStack(bool bInShouldShowInStack);
 
+	void ToClipboardFunctionInputs(UObject* InOuter, TArray<const UNiagaraClipboardFunctionInput*>& OutClipboardFunctionInputs) const;
+
+	void SetValuesFromClipboardFunctionInputs(const TArray<const UNiagaraClipboardFunctionInput*>& ClipboardFunctionInputs);
+
 protected:
 	virtual void FinalizeInternal() override;
 
@@ -46,6 +51,8 @@ private:
 	void OnFunctionInputsChanged();
 
 	UNiagaraStackEntry::FStackIssueFix GetNodeRemovalFix(UEdGraphPin* PinToRemove, FText FixDescription);
+
+	UNiagaraStackEntry::FStackIssueFix GetResetPinFix(UEdGraphPin* PinToReset, FText FixDescription);
 
 	struct FInputData
 	{

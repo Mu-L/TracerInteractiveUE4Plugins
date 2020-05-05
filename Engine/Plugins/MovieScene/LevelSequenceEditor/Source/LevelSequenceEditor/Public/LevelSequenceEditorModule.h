@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -18,4 +18,7 @@ class ILevelSequenceEditorModule
 public:
 	DECLARE_EVENT_OneParam(ILevelSequenceEditorModule, FOnMasterSequenceCreated, UObject*);
 	virtual FOnMasterSequenceCreated& OnMasterSequenceCreated() = 0;
+
+	DECLARE_MULTICAST_DELEGATE_OneParam(FAllowPlaybackContext, bool&);
+	virtual FAllowPlaybackContext& OnComputePlaybackContext() = 0;
 };

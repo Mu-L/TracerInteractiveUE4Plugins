@@ -1,11 +1,14 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
-#include "SNiagaraScriptGraph.h"
+#include "Widgets/SNiagaraScriptGraph.h"
 #include "NiagaraScriptGraphViewModel.h"
 #include "NiagaraEditorUtilities.h"
 #include "NiagaraGraph.h"
 #include "NiagaraNode.h"
 #include "NiagaraNodeInput.h"
+#include "NiagaraEditorStyle.h"
+#include "NiagaraNodeParameterMapBase.h"
+#include "NiagaraNodeReroute.h"
 
 #include "GraphEditor.h"
 #include "EditorStyleSet.h"
@@ -28,6 +31,7 @@
 #include "GraphEditorActions.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "Editor.h"
+#include "EditorFontGlyphs.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraScriptGraph"
 
@@ -40,8 +44,13 @@ void SNiagaraScriptGraph::Construct(const FArguments& InArgs, TSharedRef<FNiagar
 	bUpdatingGraphSelectionFromViewModel = false;
 
 	GraphTitle = InArgs._GraphTitle;
+	ForegroundColor = InArgs._ForegroundColor;
 
 	GraphEditor = ConstructGraphEditor();
+	if (InArgs._ZoomToFitOnLoad)
+	{
+		GraphEditor->ZoomToFit(false);
+	}
 
 	ChildSlot
 	[
@@ -63,6 +72,7 @@ TSharedRef<SGraphEditor> SNiagaraScriptGraph::ConstructGraphEditor()
 		.BorderImage(FEditorStyle::GetBrush(TEXT("Graph.TitleBackground")))
 		.HAlign(HAlign_Fill)
 		[
+			// Error Indicator and Title
 			SNew(SOverlay)
 			+SOverlay::Slot()
 			[
@@ -86,54 +96,54 @@ TSharedRef<SGraphEditor> SNiagaraScriptGraph::ConstructGraphEditor()
 					.Justification(ETextJustify::Center)
 				]
 			]
+			// Search Box
 			+SOverlay::Slot()
 			.HAlign(HAlign_Right)
 			.VAlign(VAlign_Fill)
 			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot()
-				.HAlign(HAlign_Fill)
-				.VAlign(VAlign_Fill)
-				.AutoWidth()
-				.MaxWidth(400.0f) // Limit max search box width to avoid extending over titlebar
+				SNew(SBorder)
+				.BorderImage(FEditorStyle::GetBrush("WhiteBrush"))
+				.BorderBackgroundColor(FNiagaraEditorStyle::Get().GetColor("NiagaraEditor.ScriptGraph.SearchBorderColor"))
+				.Visibility(this, &SNiagaraScriptGraph::GetGraphSearchBoxVisibility)
+				.Padding(5)
 				[
-					SAssignNew(SearchBox, SSearchBox)
-					.HintText(LOCTEXT("GraphSearchBoxHint", "Search Nodes and Pins in Graph"))
-					.SearchResultData(this, &SNiagaraScriptGraph::GetSearchResultData)
-					.OnTextChanged(this, &SNiagaraScriptGraph::OnSearchTextChanged)
-					.OnTextCommitted(this, &SNiagaraScriptGraph::OnSearchBoxTextCommitted)
-					.DelayChangeNotificationsWhileTyping(true)
-					.OnSearch(this, &SNiagaraScriptGraph::OnSearchBoxSearch)
-					.Visibility(this, &SNiagaraScriptGraph::GetGraphSearchBoxVisibility)
-					.OnKeyDownHandler(this, &SNiagaraScriptGraph::HandleGraphSearchBoxKeyDown)
-				]
-				+SHorizontalBox::Slot()
-				.HAlign(HAlign_Fill)
-				.VAlign(VAlign_Fill)
-				.AutoWidth()
-				[
-					SNew(SBorder)
-					.HAlign(HAlign_Center)
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot()
+					.HAlign(HAlign_Fill)
 					.VAlign(VAlign_Fill)
-					.BorderImage(&Style.TextBoxStyle.BackgroundImageHovered)
-					.BorderBackgroundColor(Style.TextBoxStyle.BackgroundColor)
-					.ForegroundColor(Style.TextBoxStyle.ForegroundColor)
-					.Padding(0)
+					.AutoWidth()
+					[
+						SNew(SBox)
+						.WidthOverride(200)
+						[
+							SAssignNew(SearchBox, SSearchBox)
+							.HintText(LOCTEXT("GraphSearchBoxHint", "Search Nodes and Pins in Graph"))
+							.SearchResultData(this, &SNiagaraScriptGraph::GetSearchResultData)
+							.OnTextChanged(this, &SNiagaraScriptGraph::OnSearchTextChanged)
+							.OnTextCommitted(this, &SNiagaraScriptGraph::OnSearchBoxTextCommitted)
+							.DelayChangeNotificationsWhileTyping(true)
+							.OnSearch(this, &SNiagaraScriptGraph::OnSearchBoxSearch)
+							.OnKeyDownHandler(this, &SNiagaraScriptGraph::HandleGraphSearchBoxKeyDown)
+						]
+					]
+					+SHorizontalBox::Slot()
+					.HAlign(HAlign_Center)
+					.VAlign(VAlign_Center)
+					.AutoWidth()
+					.Padding(2.0f, 0.0f, 0.0f, 0.0f)
 					[
 						SNew(SButton)
-						.ButtonStyle(FCoreStyle::Get(), "NoBorder")
-						.ContentPadding(0)
-						.HAlign(HAlign_Center)
-						.VAlign(VAlign_Center)
+						.ButtonStyle(FEditorStyle::Get(), "HoverHintOnly")
 						.IsFocusable(false)
+						.ForegroundColor(FNiagaraEditorStyle::Get().GetColor("NiagaraEditor.Stack.FlatButtonColor"))
 						.ToolTipText(LOCTEXT("CloseGraphSearchBox", "Close Graph search box"))
-						.Visibility(this, &SNiagaraScriptGraph::GetGraphSearchBoxVisibility)
 						.OnClicked(this, &SNiagaraScriptGraph::CloseGraphSearchBoxPressed)
+						.ContentPadding(3)
 						.Content()
 						[
- 							SNew(SImage)
- 							.Image(FEditorStyle::GetBrush("Symbols.X"))
-							.ColorAndOpacity(FSlateColor::UseForeground())
+							SNew(STextBlock)
+							.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.10"))
+							.Text(FEditorFontGlyphs::Times)
 						]
 					]
 				]
@@ -155,16 +165,55 @@ TSharedRef<SGraphEditor> SNiagaraScriptGraph::ConstructGraphEditor()
 	Commands->MapAction(
 		FGraphEditorCommands::Get().CreateComment,
 		FExecuteAction::CreateRaw(this, &SNiagaraScriptGraph::OnCreateComment));
+	// Alignment Commands
+	Commands->MapAction(FGraphEditorCommands::Get().AlignNodesTop,
+		FExecuteAction::CreateSP(this, &SNiagaraScriptGraph::OnAlignTop)
+	);
+
+	Commands->MapAction(FGraphEditorCommands::Get().AlignNodesMiddle,
+		FExecuteAction::CreateSP(this, &SNiagaraScriptGraph::OnAlignMiddle)
+	);
+
+	Commands->MapAction(FGraphEditorCommands::Get().AlignNodesBottom,
+		FExecuteAction::CreateSP(this, &SNiagaraScriptGraph::OnAlignBottom)
+	);
+
+	Commands->MapAction(FGraphEditorCommands::Get().AlignNodesLeft,
+		FExecuteAction::CreateSP(this, &SNiagaraScriptGraph::OnAlignLeft)
+	);
+
+	Commands->MapAction(FGraphEditorCommands::Get().AlignNodesCenter,
+		FExecuteAction::CreateSP(this, &SNiagaraScriptGraph::OnAlignCenter)
+	);
+
+	Commands->MapAction(FGraphEditorCommands::Get().AlignNodesRight,
+		FExecuteAction::CreateSP(this, &SNiagaraScriptGraph::OnAlignRight)
+	);
+
+	Commands->MapAction(FGraphEditorCommands::Get().StraightenConnections,
+		FExecuteAction::CreateSP(this, &SNiagaraScriptGraph::OnStraightenConnections)
+	);
+
+	// Distribution Commands
+	Commands->MapAction(FGraphEditorCommands::Get().DistributeNodesHorizontally,
+		FExecuteAction::CreateSP(this, &SNiagaraScriptGraph::OnDistributeNodesH)
+	);
+
+	Commands->MapAction(FGraphEditorCommands::Get().DistributeNodesVertically,
+		FExecuteAction::CreateSP(this, &SNiagaraScriptGraph::OnDistributeNodesV)
+	);
 	
 	TSharedRef<SGraphEditor> CreatedGraphEditor = SNew(SGraphEditor)
 		.AdditionalCommands(Commands.ToSharedRef())
 		.Appearance(AppearanceInfo)
 		.TitleBar(TitleBarWidget)
 		.GraphToEdit(ViewModel->GetGraph())
-		.GraphEvents(Events);
+		.GraphEvents(Events)
+		.ShowGraphStateOverlay(false);
 
 	// Set a niagara node factory.
 	CreatedGraphEditor->SetNodeFactory(MakeShareable(new FNiagaraNodeFactory()));
+	CreatedGraphEditor->ZoomToFit(false);
 
 	return CreatedGraphEditor;
 }
@@ -433,30 +482,83 @@ void SNiagaraScriptGraph::FocusGraphElement(const INiagaraScriptGraphFocusInfo* 
 	checkf(false, TEXT("Requested focus for a graph element without specifying a Node or Pin to focus!"));
 }
 
+bool NodeMatchesSearch(UNiagaraNode* Node, const FString& SearchTextString)
+{
+	if (Node->IsA<UNiagaraNodeReroute>())
+	{
+		// Ignore reroute nodes.
+		return false;
+	}
+
+	if (Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString().Contains(SearchTextString))
+	{
+		return true;
+	}
+	
+	if (Node->IsA<UNiagaraNodeParameterMapBase>())
+	{
+		UNiagaraNodeParameterMapBase* ParameterMapNode = CastChecked<UNiagaraNodeParameterMapBase>(Node);
+		for (UEdGraphPin* Pin : ParameterMapNode->Pins)
+		{
+			if (ParameterMapNode->IsAddPin(Pin))
+			{
+				if (Pin->GetDisplayName().ToString().Contains(SearchTextString))
+				{
+					return true;
+				}
+			}
+			else
+			{
+				if (FNiagaraParameterUtilities::DoesParameterNameMatchSearchText(Pin->PinName, SearchTextString))
+				{
+					return true;
+				}
+			}
+		}
+	}
+	else
+	{
+		if (Node->Pins.ContainsByPredicate([&SearchTextString](UEdGraphPin* Pin) { return Pin->GetDisplayName().ToString().Contains(SearchTextString); }))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 void SNiagaraScriptGraph::OnSearchTextChanged(const FText& SearchText)
 {
 	if (!CurrentSearchText.EqualTo(SearchText))
 	{
 		CurrentSearchResults.Empty();
 		CurrentSearchText = SearchText;
-		TArray<UNiagaraNode*> Nodes;
-		ViewModel->GetGraph()->GetNodesOfClass<UNiagaraNode>(Nodes);
-		for (UNiagaraNode* Node : Nodes)
+
+		TArray<UNiagaraNode*> AllNodes;
+		ViewModel->GetGraph()->GetNodesOfClass<UNiagaraNode>(AllNodes);
+
+		TArray<UNiagaraNodeOutput*> OutputNodes;
+		ViewModel->GetGraph()->GetNodesOfClass<UNiagaraNodeOutput>(OutputNodes);
+
+		TArray<UNiagaraNode*> TraversedNodes;
+		for (UNiagaraNodeOutput* OutputNode : OutputNodes)
 		{
-			if (Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString().Contains(SearchText.ToString()))
-			{	
-				CurrentSearchResults.Add(MakeShared<FNiagaraScriptGraphNodeToFocusInfo>(Node->NodeGuid));
-			}
-			
-			if (Node->IsA<UNiagaraNodeOutput>() == false) 
+			TArray<UNiagaraNode*> OutputNodeTraversal;
+			UNiagaraGraph::BuildTraversal(OutputNodeTraversal, OutputNode, false);
+			TraversedNodes.Append(OutputNodeTraversal);
+		}
+
+		AllNodes.RemoveAll([&TraversedNodes](UNiagaraNode* Node) { return TraversedNodes.Contains(Node); });
+
+		TArray<UNiagaraNode*> OrderedSearchNodes;
+		OrderedSearchNodes.Append(TraversedNodes);
+		OrderedSearchNodes.Append(AllNodes);
+
+		FString SearchTextString = SearchText.ToString();
+		for (UNiagaraNode* SearchNode : OrderedSearchNodes)
+		{
+			if(NodeMatchesSearch(SearchNode, SearchTextString))
 			{
-				for (UEdGraphPin* Pin : Node->GetAllPins())
-				{
-					if (Pin->GetDisplayName().ToString().Contains(SearchText.ToString()))
-					{
-						CurrentSearchResults.Add(MakeShared<FNiagaraScriptGraphPinToFocusInfo>(Pin->PersistentGuid));
-					}
-				}
+				CurrentSearchResults.Add(MakeShared<FNiagaraScriptGraphNodeToFocusInfo>(SearchNode->NodeGuid));
 			}
 		}
 
@@ -470,9 +572,16 @@ void SNiagaraScriptGraph::OnSearchTextChanged(const FText& SearchText)
 
 void SNiagaraScriptGraph::OnSearchBoxTextCommitted(const FText& NewText, ETextCommit::Type CommitInfo)
 {
-	if (SearchBox->HasKeyboardFocus())
+	if (CommitInfo == ETextCommit::OnEnter)
 	{
-		OnSearchBoxSearch(SSearchBox::Next);
+		if (CurrentSearchText.CompareTo(NewText) == 0)
+		{
+			OnSearchBoxSearch(SSearchBox::Next);
+		}
+		else
+		{
+			OnSearchTextChanged(NewText);
+		}
 	}
 }
 
@@ -500,6 +609,80 @@ FReply SNiagaraScriptGraph::HandleGraphSearchBoxKeyDown(const FGeometry& MyGeome
 	}
 	return FReply::Unhandled();
 }
+
+
+void SNiagaraScriptGraph::OnAlignTop()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnAlignTop();
+	}
+}
+
+void SNiagaraScriptGraph::OnAlignMiddle()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnAlignMiddle();
+	}
+}
+
+void SNiagaraScriptGraph::OnAlignBottom()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnAlignBottom();
+	}
+}
+
+void SNiagaraScriptGraph::OnAlignLeft()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnAlignLeft();
+	}
+}
+
+void SNiagaraScriptGraph::OnAlignCenter()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnAlignCenter();
+	}
+}
+
+void SNiagaraScriptGraph::OnAlignRight()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnAlignRight();
+	}
+}
+
+void SNiagaraScriptGraph::OnStraightenConnections()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnStraightenConnections();
+	}
+}
+
+void SNiagaraScriptGraph::OnDistributeNodesH()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnDistributeNodesH();
+	}
+}
+
+void SNiagaraScriptGraph::OnDistributeNodesV()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnDistributeNodesV();
+	}
+}
+
 
 void SNiagaraScriptGraph::FocusGraphSearchBox()
 {

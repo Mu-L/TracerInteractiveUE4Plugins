@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -95,6 +95,7 @@ class ULandscapeHeightfieldCollisionComponent : public UPrimitiveComponent
 #endif	//WITH_PHYSX
 
 #if WITH_CHAOS
+		TArray<Chaos::FMaterialHandle> UsedChaosMaterials;
 		TUniquePtr<Chaos::THeightField<float>> Heightfield = nullptr;
 	    TUniquePtr<Chaos::THeightField<float>> HeightfieldSimple = nullptr;
 #if WITH_EDITOR

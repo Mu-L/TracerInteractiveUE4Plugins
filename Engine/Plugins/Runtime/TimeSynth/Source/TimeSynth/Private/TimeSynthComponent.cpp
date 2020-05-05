@@ -1,8 +1,16 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TimeSynthComponent.h"
 #include "AudioThread.h"
 #include "TimeSynthModule.h"
+
+static int32 DisableTimeSynthCvar = 0;
+FAutoConsoleVariableRef CVarDisableTimeSynth(
+	TEXT("au.DisableTimeSynth"),
+	DisableTimeSynthCvar,
+	TEXT("Disables all TimeSynth rendering/processing.\n")
+	TEXT("0: Not Disabled, 1: Disabled"),
+	ECVF_Default);
  
 static_assert((int32)Audio::EEventQuantization::Count == (int32)ETimeSynthEventQuantization::Count, "These enumerations need to match");
 
@@ -16,6 +24,8 @@ UTimeSynthComponent::UTimeSynthComponent(const FObjectInitializer& ObjectInitial
 	: Super(ObjectInitializer)
 	, MaxPoolSize(20)
 	, TimeSynthEventListener(this)
+	, bHasActiveClips(false)
+	, bTimeSynthWasDisabled(false)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 }
@@ -92,6 +102,11 @@ void UTimeSynthComponent::AddQuantizationEventDelegate(ETimeSynthEventQuantizati
 
 void UTimeSynthComponent::SetFilterSettings(ETimeSynthFilter InFilter, const FTimeSynthFilterSettings& InSettings)
 {
+	if (DisableTimeSynthCvar || bTimeSynthWasDisabled)
+	{
+		return;
+	}
+
 	if (InFilter == ETimeSynthFilter::FilterA)
 	{
 		FilterASettings = InSettings;
@@ -110,6 +125,11 @@ void UTimeSynthComponent::SetFilterSettings(ETimeSynthFilter InFilter, const FTi
 
 void UTimeSynthComponent::SetEnvelopeFollowerSettings(const FTimeSynthEnvelopeFollowerSettings& InSettings)
 {
+	if (DisableTimeSynthCvar || bTimeSynthWasDisabled)
+	{
+		return;
+	}
+
 	EnvelopeFollowerSettings = InSettings;
 
 	SynthCommand([this, InSettings]
@@ -121,6 +141,11 @@ void UTimeSynthComponent::SetEnvelopeFollowerSettings(const FTimeSynthEnvelopeFo
 
 void UTimeSynthComponent::SetFilterEnabled(ETimeSynthFilter InFilter, bool bInIsFilterEnabled)
 {
+	if (DisableTimeSynthCvar || bTimeSynthWasDisabled)
+	{
+		return;
+	}
+
 	if (InFilter == ETimeSynthFilter::FilterA)
 	{
 		bIsFilterAEnabled = bInIsFilterEnabled;
@@ -138,6 +163,11 @@ void UTimeSynthComponent::SetFilterEnabled(ETimeSynthFilter InFilter, bool bInIs
 
 void UTimeSynthComponent::SetEnvelopeFollowerEnabled(bool bInIsEnabled)
 {
+	if (DisableTimeSynthCvar || bTimeSynthWasDisabled)
+	{
+		return;
+	}
+
 	bIsEnvelopeFollowerEnabled = bInIsEnabled;
 
 	// Set the envelope value to 0.0 immediately if we're disabling the envelope follower
@@ -168,6 +198,11 @@ Audio::FSpectrumAnalyzerSettings::EFFTSize UTimeSynthComponent::GetFFTSize(ETime
 
 void UTimeSynthComponent::SetFFTSize(ETimeSynthFFTSize InFFTSize)
 {
+	if (DisableTimeSynthCvar || bTimeSynthWasDisabled)
+	{
+		return;
+	}
+
 	Audio::FSpectrumAnalyzerSettings::EFFTSize NewFFTSize = GetFFTSize(InFFTSize);
 
 	SynthCommand([this, NewFFTSize]
@@ -177,8 +212,18 @@ void UTimeSynthComponent::SetFFTSize(ETimeSynthFFTSize InFFTSize)
 	});
 }
 
+bool UTimeSynthComponent::HasActiveClips()
+{
+	return bHasActiveClips;
+}
+
 void UTimeSynthComponent::OnQuantizationEvent(Audio::EEventQuantization EventQuantizationType, int32 Bars, float Beat)
 {
+	if (DisableTimeSynthCvar || bTimeSynthWasDisabled)
+	{
+		return;
+	}
+
 	// When this happens, we want to queue up the event data so it can be safely consumed on the game thread
 	GameCommand([this, EventQuantizationType, Bars, Beat]()
 	{
@@ -204,6 +249,14 @@ void UTimeSynthComponent::TickComponent(float DeltaTime, enum ELevelTick TickTyp
 {
 	// Pump the command queue for any event data that is coming back from the audio render thread/callback
 	PumpGameCommandQueue();
+
+	if (DisableTimeSynthCvar || bTimeSynthWasDisabled)
+	{
+		OnEndGenerate();
+		SetActive(false);
+		bTimeSynthWasDisabled = static_cast<bool>(DisableTimeSynthCvar);
+		return;
+	}
 
 	// Broadcast the playback time
 	if (OnPlaybackTime.IsBound())
@@ -231,8 +284,15 @@ void UTimeSynthComponent::TickComponent(float DeltaTime, enum ELevelTick TickTyp
 			VolumeGroup.CurrentTime += DeltaTime;
 		}
 
+		if (FMath::IsNearlyEqual(VolumeGroup.CurrentVolumeDb, VolumeGroup.LastVolumeDb, KINDA_SMALL_NUMBER))
+		{
+			continue;
+		}
+
 		for (FTimeSynthClipHandle& ClipHandle : VolumeGroup.Clips)
 		{
+			VolumeGroup.LastVolumeDb = VolumeGroup.CurrentVolumeDb;
+
 			float LinearVolume = Audio::ConvertToLinear(VolumeGroup.CurrentVolumeDb);
 
 			SynthCommand([this, ClipHandle, LinearVolume]
@@ -287,7 +347,15 @@ void UTimeSynthComponent::UpdateEnvelopeFollower()
 }
 
 bool UTimeSynthComponent::Init(int32& InSampleRate)
-{ 
+{
+	if (DisableTimeSynthCvar || bTimeSynthWasDisabled)
+	{
+		SetActive(false);
+		OnEndGenerate();
+		bTimeSynthWasDisabled = static_cast<bool>(DisableTimeSynthCvar);
+		return false;
+	}
+
 	SampleRate = InSampleRate;
 	SoundWaveDecoder.Init(GetAudioDevice(), InSampleRate);
 	NumChannels = 2;
@@ -311,7 +379,7 @@ bool UTimeSynthComponent::Init(int32& InSampleRate)
 	DynamicsProcessor.SetKneeBandwidth(10.0f);
 	DynamicsProcessor.SetInputGain(0.0f);
 	DynamicsProcessor.SetOutputGain(0.0f);
-	DynamicsProcessor.SetChannelLinked(true);
+	DynamicsProcessor.SetChannelLinkMode(Audio::EDynamicsProcessorChannelLinkMode::Average);
 	DynamicsProcessor.SetAnalogMode(true);
 	DynamicsProcessor.SetPeakMode(Audio::EPeakMode::Peak);
 	DynamicsProcessor.SetProcessingMode(Audio::EDynamicsProcessingMode::Compressor);
@@ -348,16 +416,23 @@ void UTimeSynthComponent::ShutdownPlayingClips()
 		int32 ClipIndex = ActivePlayingClipIndices_AudioRenderThread[i];
 		FPlayingClipInfo& PlayingClip = PlayingClipsPool_AudioRenderThread[ClipIndex];
 
-		// Block until the decoder has initialized
-		while (!SoundWaveDecoder.IsInitialized(PlayingClip.DecodingSoundSourceHandle))
+		// try to wait for the decoder to be initialized
+		// if we time out, this is probably in shutdown and the decoder won't ever init.
+		if(!SoundWaveDecoder.IsInitialized(PlayingClip.DecodingSoundSourceHandle))
 		{
-			FPlatformProcess::Sleep(0);
+			FPlatformProcess::Sleep(0.5f);
 		}
 
 		SoundWaveDecoder.RemoveDecodingSource(PlayingClip.DecodingSoundSourceHandle);
 		ActivePlayingClipIndices_AudioRenderThread.RemoveAtSwap(i, 1, false);
 		FreePlayingClipIndices_AudioRenderThread.Add(ClipIndex);
 	}
+	ActivePlayingClipIndices_AudioRenderThread.Reset();
+	FreePlayingClipIndices_AudioRenderThread.Reset();
+	ClipIdToClipIndexMap_AudioRenderThread.Reset();
+	DecodingSounds_GameThread.Reset();
+
+	bHasActiveClips.AtomicSet(false);
 }
 
 void UTimeSynthComponent::OnEndGenerate() 
@@ -367,6 +442,12 @@ void UTimeSynthComponent::OnEndGenerate()
 
 int32 UTimeSynthComponent::OnGenerateAudio(float* OutAudio, int32 NumSamples)
 {
+	if (DisableTimeSynthCvar || bTimeSynthWasDisabled)
+	{
+		bTimeSynthWasDisabled = static_cast<bool>(DisableTimeSynthCvar);
+		return 0;
+	}
+
 	// Update the decoder
 	SoundWaveDecoder.UpdateRenderThread();
 
@@ -377,13 +458,17 @@ int32 UTimeSynthComponent::OnGenerateAudio(float* OutAudio, int32 NumSamples)
 	// to begin rendering. THe lambda callback will then enqueue any new rendering clips
 	// to the list of active clips. So we only need to loop through active clip indices to render the audio output
 	EventQuantizer.NotifyEvents(NumFrames);
+	const int32 NumActiveClips = ActivePlayingClipIndices_AudioRenderThread.Num();
+
+	bHasActiveClips.AtomicSet(NumActiveClips > 0);
 
 	// Loop through all active loops and render their audio
-	for (int32 i = ActivePlayingClipIndices_AudioRenderThread.Num() - 1; i >= 0; --i)
+	for (int32 i = NumActiveClips - 1; i >= 0; --i)
 	{
 		// Grab the playing clip at the active index
 		int32 ClipIndex = ActivePlayingClipIndices_AudioRenderThread[i];
 		FPlayingClipInfo& PlayingClip = PlayingClipsPool_AudioRenderThread[ClipIndex];
+		PlayingClip.bHasStartedPlaying = true;
 
 		// Compute the number of frames we need to read
 		int32 NumFramesToRead = NumFrames - PlayingClip.StartFrameOffset;
@@ -515,8 +600,19 @@ int32 UTimeSynthComponent::OnGenerateAudio(float* OutAudio, int32 NumSamples)
 
 void UTimeSynthComponent::SetQuantizationSettings(const FTimeSynthQuantizationSettings& InQuantizationSettings)
 {
+	if (DisableTimeSynthCvar || bTimeSynthWasDisabled)
+	{
+		return;
+	}
+
 	// Store the quantization on the UObject for BP querying
 	QuantizationSettings = InQuantizationSettings;
+
+	// EventQuantizer will handle this case gracefully, but still warn.
+ 	if (!SampleRate)
+ 	{
+ 		UE_LOG(LogTimeSynth, Warning, TEXT("SetQuantizationSettings called with a sample rate of 0.  Did you forget to activate the time synth component?"));
+ 	}
 
 	// Local store what the global quantization is so we can assign it to clips using global quantization
 	GlobalQuantization = (Audio::EEventQuantization)InQuantizationSettings.GlobalQuantization;
@@ -538,11 +634,18 @@ void UTimeSynthComponent::SetQuantizationSettings(const FTimeSynthQuantizationSe
 
 void UTimeSynthComponent::SetBPM(const float InBeatsPerMinute)
 {
-	QuantizationSettings.BeatsPerMinute = InBeatsPerMinute;
+	float NewBeatsPerMinute = FMath::Clamp(InBeatsPerMinute, 0.0f, 999.0f);
 
-	SynthCommand([this, InBeatsPerMinute]
+	if (!FMath::IsNearlyEqual(NewBeatsPerMinute, InBeatsPerMinute))
 	{
-		EventQuantizer.SetBPM(InBeatsPerMinute);
+		UE_LOG(LogTimeSynth, Warning, TEXT("Clapming provided BPM from %f to %f"), InBeatsPerMinute, NewBeatsPerMinute);
+	}
+
+	QuantizationSettings.BeatsPerMinute = NewBeatsPerMinute;
+
+	SynthCommand([this, NewBeatsPerMinute]
+	{
+		EventQuantizer.SetBPM(NewBeatsPerMinute);
 	});
 }
 
@@ -563,6 +666,17 @@ void UTimeSynthComponent::ResetSeed()
 
 FTimeSynthClipHandle UTimeSynthComponent::PlayClip(UTimeSynthClip* InClip, UTimeSynthVolumeGroup* InVolumeGroup)
 {
+	if (DisableTimeSynthCvar || !GetAudioDevice() || bTimeSynthWasDisabled)
+	{
+		SetActive(false);
+		if (!bTimeSynthWasDisabled)
+		{
+			OnEndGenerate();
+		}
+		bTimeSynthWasDisabled = true;
+		return FTimeSynthClipHandle();
+	}
+
 	if (!InClip)
 	{
 		UE_LOG(LogTimeSynth, Warning, TEXT("Failed to play clip. Null UTimeSynthClip object."));
@@ -595,6 +709,17 @@ FTimeSynthClipHandle UTimeSynthComponent::PlayClip(UTimeSynthClip* InClip, UTime
 
 	// Get the distance to nearest listener using this transform
 	const FAudioDevice* OwningAudioDevice = GetAudioDevice();
+
+	// Validate audio device since it might not be available (i.e. -nosound)
+	if (OwningAudioDevice == nullptr)
+	{
+		static bool bShouldWarn = true;
+		UE_CLOG(bShouldWarn, LogTimeSynth, Warning, TEXT("Failed to play clip: no audio device. Running -nosound?"));
+		bShouldWarn = false;
+
+		return FTimeSynthClipHandle();
+	}
+
 	const float DistanceToListener = OwningAudioDevice->GetDistanceToNearestListener(ThisComponentTransform.GetTranslation());
 
 	TArray<FTimeSynthClipSound> ValidSounds;
@@ -691,16 +816,17 @@ FTimeSynthClipHandle UTimeSynthComponent::PlayClip(UTimeSynthClip* InClip, UTime
 		FVolumeGroupData* VolumeGroup = VolumeGroupData.Find(Id);
 		if (!VolumeGroup)
 		{
-			FVolumeGroupData NewData;
+			FVolumeGroupData NewData(InVolumeGroup->DefaultVolume);
 			NewData.Clips.Add(NewHandle);
-			VolumeGroupData.Add(Id, NewData);
+			VolumeGroup = &VolumeGroupData.Add(Id, NewData);
 		}
 		else
 		{
-			// Get the current volume group value and "scale" it into the volume scale
-			VolumeScale *= Audio::ConvertToLinear(VolumeGroup->CurrentVolumeDb);
 			VolumeGroup->Clips.Add(NewHandle);
 		}
+
+		// Get the current volume group value and "scale" it into the volume scale
+		VolumeScale *= Audio::ConvertToLinear(VolumeGroup->CurrentVolumeDb);
 	}
 
 	Audio::FSourceDecodeInit DecodeInit;
@@ -709,6 +835,7 @@ FTimeSynthClipHandle UTimeSynthComponent::PlayClip(UTimeSynthClip* InClip, UTime
 	DecodeInit.VolumeScale = VolumeScale;
 	DecodeInit.SoundWave = ChosenSound.SoundWave;
 	DecodeInit.SeekTime = 0;
+	DecodeInit.bForceSyncDecode = true;
 
 	// Update the synth component on the audio thread
 	FAudioThread::RunCommandOnAudioThread([this, DecodeInit]()
@@ -777,6 +904,7 @@ FTimeSynthClipHandle UTimeSynthComponent::PlayClip(UTimeSynthClip* InClip, UTime
 		if(bCurrentPoolSizeChanged)
 		{
 			PlayingClipsPool_AudioRenderThread.Add(NewClipInfo);
+			PlayingClipsPool_AudioRenderThread[PlayingClipsPool_AudioRenderThread.Num() - 1].bIsInitialized = true;
 
 			UE_LOG(LogTimeSynth, Warning, TEXT("Reallocating PlayingClipsPool to %i (which is a performance hit.) If this wasn't caused by a hitch, consider initializing Pool Size to a larger value.")
 				, PlayingClipsPool_AudioRenderThread.Num());
@@ -784,6 +912,7 @@ FTimeSynthClipHandle UTimeSynthComponent::PlayClip(UTimeSynthClip* InClip, UTime
 		else
 		{
 			PlayingClipsPool_AudioRenderThread[FreeClipIndex] = NewClipInfo;
+			PlayingClipsPool_AudioRenderThread[FreeClipIndex].bIsInitialized = true;
 		}
 
 		// Add a mapping of the clip handle id to the free index
@@ -799,6 +928,12 @@ FTimeSynthClipHandle UTimeSynthComponent::PlayClip(UTimeSynthClip* InClip, UTime
 			[this, FreeClipIndex, ClipDuration, FadeInTime, FadeOutTime](uint32 NumFramesOffset)
 			{
 				FPlayingClipInfo& PlayingClipInfo = PlayingClipsPool_AudioRenderThread[FreeClipIndex];
+
+				// early exit.  Quantized stop event was just proccessed for this same Quantization step
+				if (PlayingClipInfo.bHasBeenStopped)
+				{
+					return;
+				}
 
 				// Setup the duration of various things using the event quantizer
 				PlayingClipInfo.DurationFrames = EventQuantizer.GetDurationInFrames(ClipDuration.NumBars, (float)ClipDuration.NumBeats);
@@ -830,14 +965,43 @@ void UTimeSynthComponent::StopClip(FTimeSynthClipHandle InClipHandle, ETimeSynth
 
 			[this, InClipHandle](uint32 NumFramesOffset)
 			{
-				int32* PlayingClipIndex = ClipIdToClipIndexMap_AudioRenderThread.Find(InClipHandle.ClipId);
-				if (PlayingClipIndex)
+				int32* PlayingClipIndexPtr = ClipIdToClipIndexMap_AudioRenderThread.Find(InClipHandle.ClipId);
+				if (PlayingClipIndexPtr)
 				{
+					const int32 PlayingClipIndex = *PlayingClipIndexPtr;
 					// Grab the clip info
-					FPlayingClipInfo& PlayingClipInfo = PlayingClipsPool_AudioRenderThread[*PlayingClipIndex];
+					FPlayingClipInfo& PlayingClipInfo = PlayingClipsPool_AudioRenderThread[PlayingClipIndex];
 
-					// Only do anything if the clip is not yet already fading
-					if (PlayingClipInfo.CurrentFrameCount < PlayingClipInfo.DurationFrames)
+					if (!PlayingClipInfo.bHasStartedPlaying)
+					{
+						// add index back to free pool
+						FreePlayingClipIndices_AudioRenderThread.Add(PlayingClipIndex);
+
+						// remove map entry
+						ClipIdToClipIndexMap_AudioRenderThread.Remove(InClipHandle.ClipId);
+
+						// Clip may have been staged to play, so we can search and remove it manually
+						bool bFoundClip = false;
+						int32 NumActivePlayingClipIndices = ActivePlayingClipIndices_AudioRenderThread.Num();
+
+						for (int i = 0; i < NumActivePlayingClipIndices; ++i)
+						{
+							if (ActivePlayingClipIndices_AudioRenderThread[i] == PlayingClipIndex)
+							{
+								ActivePlayingClipIndices_AudioRenderThread.RemoveAtSwap(i, 1, false);
+								bFoundClip = true;
+								--NumActivePlayingClipIndices;
+							}
+						}
+
+						// clip wasn't staged to play yet. Raise the flag for the Notify
+						if (!bFoundClip)
+						{
+							PlayingClipInfo.bHasBeenStopped = true;
+						}
+					}
+					// Already playing the clip, so force the clip to start fading if its already playing
+					else if (PlayingClipInfo.CurrentFrameCount < PlayingClipInfo.DurationFrames)
 					{
 						// Adjust the duration of the clip to "spoof" it's code which triggers a fade this render callback block.
 						PlayingClipInfo.DurationFrames = PlayingClipInfo.CurrentFrameCount + NumFramesOffset;

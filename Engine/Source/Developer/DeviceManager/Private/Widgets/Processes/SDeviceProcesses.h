@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -53,6 +53,8 @@ protected:
 	 * @param FullyReload true reload all entries, false to refresh the existing entries.
 	 */
 	void ReloadProcessList(bool FullyReload);
+
+	void UpdateProcessTree();
 
 	/** Periodically refreshes the process list. */
 	EActiveTimerReturnType UpdateProcessList(double InCurrentTime, float InDeltaTime);

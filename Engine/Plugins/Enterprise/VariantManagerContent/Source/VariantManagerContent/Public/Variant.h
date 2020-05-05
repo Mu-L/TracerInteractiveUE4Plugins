@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -8,11 +8,11 @@
 
 #include "Variant.generated.h"
 
+#define VARIANT_THUMBNAIL_SIZE 256
 
 class UVariantObjectBinding;
 
-
-UCLASS(DefaultToInstanced)
+UCLASS(BlueprintType)
 class VARIANTMANAGERCONTENT_API UVariant : public UObject
 {
 	GENERATED_UCLASS_BODY()
@@ -49,7 +49,16 @@ public:
 	void SwitchOn();
 
 	// Returns true if none of our properties are dirty
+	UFUNCTION(BlueprintCallable, Category="Variant")
 	bool IsActive();
+
+	// Sets the thumbnail to use for this variant. Can receive nullptr to clear it
+	// On the Variant Manager a cleared thumbnail will be displayed as the default thumbnail for Variant assets
+	void SetThumbnail(UTexture2D* NewThumbnail);
+
+	// Gets the thumbnail currently used for this variant
+	UFUNCTION(BlueprintCallable, Category="Variant")
+	UTexture2D* GetThumbnail();
 
 private:
 
@@ -61,4 +70,7 @@ private:
 
 	UPROPERTY()
 	TArray<UVariantObjectBinding*> ObjectBindings;
+
+	UPROPERTY()
+	UTexture2D* Thumbnail;
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -15,14 +15,14 @@ struct FShaderCompilerOutput;
 
 enum GLSLVersion 
 {
-	GLSL_150,
+	GLSL_150_REMOVED,
 	GLSL_430,
-	GLSL_ES2,
-	GLSL_ES2_WEBGL,
-	GLSL_150_ES2,	// ES2 Emulation
-	GLSL_150_ES2_NOUB,	// ES2 Emulation with NoUBs
+	GLSL_ES2_REMOVED,
+	GLSL_ES2_WEBGL_REMOVED,
+	GLSL_150_ES2_DEPRECATED,	// ES2 Emulation
+	GLSL_150_ES2_NOUB_DEPRECATED,	// ES2 Emulation with NoUBs
 	GLSL_150_ES3_1,	// ES3.1 Emulation
-	GLSL_ES2_IOS_DEPRECATED,
+	GLSL_ES2_IOS_REMOVED,
 	GLSL_310_ES_EXT,
 	GLSL_ES3_1_ANDROID,
 	GLSL_SWITCH,
@@ -90,7 +90,6 @@ protected:
 
 	void BuildShaderOutput(FShaderCompilerOutput& ShaderOutput, const FShaderCompilerInput& ShaderInput, const ANSICHAR* InShaderSource, int32 SourceLen, GLSLVersion Version);
 	void PrecompileShader(FShaderCompilerOutput& ShaderOutput, const FShaderCompilerInput& ShaderInput, const ANSICHAR* ShaderSource, GLSLVersion Version, EHlslShaderFrequency Frequency);
-	void PrecompileGLSLES2(FShaderCompilerOutput& ShaderOutput, const FShaderCompilerInput& ShaderInput, const ANSICHAR* ShaderSource, EHlslShaderFrequency Frequency);
 
 	bool PlatformSupportsOfflineCompilation(const GLSLVersion ShaderVersion) const;
 

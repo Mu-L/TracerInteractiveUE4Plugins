@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Internationalization/TextHistory.h"
 #include "UObject/ObjectVersion.h"
@@ -550,10 +550,10 @@ const TCHAR* ReadDateTimeFromBuffer(const TCHAR* Buffer, const FString& TokenMar
 			OutDateTime = FDateTime::FromUnixTimestamp(UnixTimestampValue.GetUIntValue());
 			break;
 		case EFormatArgumentType::Float:
-			OutDateTime = FDateTime::FromUnixTimestamp(UnixTimestampValue.GetFloatValue());
+			OutDateTime = FDateTime::FromUnixTimestamp((int64)UnixTimestampValue.GetFloatValue());
 			break;
 		case EFormatArgumentType::Double:
-			OutDateTime = FDateTime::FromUnixTimestamp(UnixTimestampValue.GetDoubleValue());
+			OutDateTime = FDateTime::FromUnixTimestamp((int64)UnixTimestampValue.GetDoubleValue());
 			break;
 		default:
 			return nullptr;
@@ -676,7 +676,7 @@ bool FTextHistory::GetHistoricNumericData(const FText& InText, FHistoricTextNume
 
 void FTextHistory::SerializeForDisplayString(FStructuredArchive::FRecord Record, FTextDisplayStringPtr& InOutDisplayString)
 {
-	if(Record.GetUnderlyingArchive().IsLoading())
+	if(Record.GetArchiveState().IsLoading())
 	{
 		PrepareDisplayStringForRebuild(InOutDisplayString);
 	}
@@ -1831,10 +1831,10 @@ const TCHAR* FTextHistory_AsCurrency::ReadFromBuffer(const TCHAR* Buffer, const 
 		switch (SourceValue.GetType())
 		{
 		case EFormatArgumentType::Int:
-			BaseValue = SourceValue.GetIntValue();
+			BaseValue = (double)SourceValue.GetIntValue();
 			break;
 		case EFormatArgumentType::UInt:
-			BaseValue = SourceValue.GetUIntValue();
+			BaseValue = (double)SourceValue.GetUIntValue();
 			break;
 		case EFormatArgumentType::Float:
 			BaseValue = SourceValue.GetFloatValue();
@@ -1849,7 +1849,7 @@ const TCHAR* FTextHistory_AsCurrency::ReadFromBuffer(const TCHAR* Buffer, const 
 		// We need to convert the "base" value back to its pre-divided version
 		const FDecimalNumberFormattingRules& FormattingRules = Culture.GetCurrencyFormattingRules(CurrencyCode);
 		const FNumberFormattingOptions& FormattingOptions = FormattingRules.CultureDefaultFormattingOptions;
-		SourceValue = BaseValue / FMath::Pow(10.0f, FormattingOptions.MaximumFractionalDigits);
+		SourceValue = BaseValue / FMath::Pow(10.0f, (float)FormattingOptions.MaximumFractionalDigits);
 
 		PrepareDisplayStringForRebuild(OutDisplayString);
 		return Buffer;
@@ -1869,10 +1869,10 @@ bool FTextHistory_AsCurrency::WriteToBuffer(FString& Buffer, FTextDisplayStringP
 	switch (SourceValue.GetType())
 	{
 	case EFormatArgumentType::Int:
-		DividedValue = SourceValue.GetIntValue();
+		DividedValue = (double)SourceValue.GetIntValue();
 		break;
 	case EFormatArgumentType::UInt:
-		DividedValue = SourceValue.GetUIntValue();
+		DividedValue = (double)SourceValue.GetUIntValue();
 		break;
 	case EFormatArgumentType::Float:
 		DividedValue = SourceValue.GetFloatValue();
@@ -1887,7 +1887,7 @@ bool FTextHistory_AsCurrency::WriteToBuffer(FString& Buffer, FTextDisplayStringP
 	// We need to convert the value back to its "base" version
 	const FDecimalNumberFormattingRules& FormattingRules = Culture.GetCurrencyFormattingRules(CurrencyCode);
 	const FNumberFormattingOptions& FormattingOptions = FormattingRules.CultureDefaultFormattingOptions;
-	const int64 BaseVal = static_cast<int64>(DividedValue * FMath::Pow(10.0f, FormattingOptions.MaximumFractionalDigits));
+	const int64 BaseVal = static_cast<int64>(DividedValue * FMath::Pow(10.0f, (float)FormattingOptions.MaximumFractionalDigits));
 
 	// Produces LOCGEN_CURRENCY(..., "...", "...")
 	Buffer += TEXT("LOCGEN_CURRENCY(");
@@ -2489,7 +2489,7 @@ void FTextHistory_StringTableEntry::Serialize(FStructuredArchive::FRecord Record
 
 void FTextHistory_StringTableEntry::SerializeForDisplayString(FStructuredArchive::FRecord Record, FTextDisplayStringPtr& InOutDisplayString)
 {
-	if (Record.GetUnderlyingArchive().IsLoading())
+	if (Record.GetArchiveState().IsLoading())
 	{
 		// We will definitely need to do a rebuild later
 		Revision = 0;
@@ -2613,12 +2613,20 @@ void FTextHistory_StringTableEntry::FStringTableReferenceData::GetTableIdAndKey(
 	OutKey = Key;
 }
 
-void FTextHistory_StringTableEntry::FStringTableReferenceData::CollectStringTableAssetReferences(FStructuredArchive::FRecord Record) const
+void FTextHistory_StringTableEntry::FStringTableReferenceData::CollectStringTableAssetReferences(FStructuredArchive::FRecord Record)
 {
 	if (Record.GetUnderlyingArchive().IsObjectReferenceCollector())
 	{
 		FScopeLock ScopeLock(&DataCS);
+
+		const FName OldTableId = TableId;
 		IStringTableEngineBridge::CollectStringTableAssetReferences(TableId, Record.EnterField(SA_FIELD_NAME(TEXT("AssetReferences"))));
+
+		if (TableId != OldTableId)
+		{
+			// This String Table asset was redirected, so we'll need to re-resolve the String Table entry later
+			StringTableEntry.Reset();
+		}
 	}
 }
 

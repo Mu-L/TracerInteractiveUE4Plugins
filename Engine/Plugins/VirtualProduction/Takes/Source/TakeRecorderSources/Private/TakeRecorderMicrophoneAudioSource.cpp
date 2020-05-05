@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TakeRecorderMicrophoneAudioSource.h"
 #include "TakeRecorderSources.h"
@@ -175,6 +175,9 @@ void UTakeRecorderMicrophoneAudioSource::StopRecording(class ULevelSequence* InS
 	UMovieScene* MovieScene = InSequence->GetMovieScene();
 	check(CachedAudioTrack.IsValid());
 
+	FFrameRate TickResolution = MovieScene->GetTickResolution();
+	FFrameRate DisplayRate = MovieScene->GetDisplayRate();
+
 	if (bReplaceRecordedAudio)
 	{
 		CachedAudioTrack->RemoveAllAnimationData();
@@ -194,11 +197,11 @@ void UTakeRecorderMicrophoneAudioSource::StopRecording(class ULevelSequence* InS
 
 		UMovieSceneAudioSection* NewAudioSection = NewObject<UMovieSceneAudioSection>(CachedAudioTrack.Get(), UMovieSceneAudioSection::StaticClass());
 
-		FFrameRate TickResolution = CachedAudioTrack->GetTypedOuter<UMovieScene>()->GetTickResolution();
+		FFrameNumber RecordStartFrame = Parameters.Project.bStartAtCurrentTimecode ? FFrameRate::TransformTime(FFrameTime(TimecodeSource.ToFrameNumber(DisplayRate)), DisplayRate, TickResolution).FloorToFrame() : MovieScene->GetPlaybackRange().GetLowerBoundValue();
 
-		NewAudioSection->SetRowIndex(RowIndex + 1);
 		NewAudioSection->SetSound(RecordedAudio);
-		NewAudioSection->SetRange(TRange<FFrameNumber>(FFrameNumber(0), (RecordedAudio->GetDuration() * TickResolution).CeilToFrame()));
+		NewAudioSection->SetRange(TRange<FFrameNumber>(RecordStartFrame, RecordStartFrame + (RecordedAudio->GetDuration() * TickResolution).CeilToFrame()));
+		NewAudioSection->TimecodeSource = TimecodeSource;
 
 		CachedAudioTrack->AddSection(*NewAudioSection);
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	ShaderCore.h: Shader core module implementation.
@@ -22,7 +22,10 @@
 #include "Interfaces/ITargetPlatform.h"
 #include "Interfaces/ITargetPlatformManagerModule.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Misc/StringBuilder.h"
 #endif
+
+#define VALIDATE_GLOBAL_UNIFORM_BUFFERS (!UE_BUILD_SHIPPING && !UE_BUILD_TEST)
 
 static TAutoConsoleVariable<int32> CVarShaderDevelopmentMode(
 	TEXT("r.ShaderDevelopmentMode"),
@@ -90,7 +93,6 @@ DEFINE_STAT(STAT_Shaders_TotalRTShaderInitForRenderingTime);
 DEFINE_STAT(STAT_Shaders_FrameRTShaderInitForRenderingTime);
 DEFINE_STAT(STAT_Shaders_ShaderMemory);
 DEFINE_STAT(STAT_Shaders_ShaderResourceMemory);
-DEFINE_STAT(STAT_Shaders_ShaderMapMemory);
 
 DEFINE_STAT(STAT_Shaders_NumShadersRegistered);
 DEFINE_STAT(STAT_Shaders_NumShadersDuplicated);
@@ -260,7 +262,9 @@ bool AllowDebugViewmodes(EShaderPlatform Platform)
 	const int32 ForceDebugViewValue = CVarForceDebugViewModes.GetValueOnAnyThread();
 	bool bForceEnable = ForceDebugViewValue == 1;
 	bool bForceDisable = ForceDebugViewValue == 2;
-	ITargetPlatform* TargetPlatform = GetTargetPlatformManager()->FindTargetPlatform(ShaderPlatformToPlatformName(Platform).ToString());
+	TStringBuilder<64> PlatformName;
+	ShaderPlatformToPlatformName(Platform).ToString(PlatformName);
+	ITargetPlatform* TargetPlatform = GetTargetPlatformManager()->FindTargetPlatform(PlatformName);
 	return (!bForceDisable) && (bForceEnable || !TargetPlatform || !TargetPlatform->RequiresCookedData());
 #else
 	return AllowDebugViewmodes();
@@ -350,6 +354,44 @@ bool ShouldExportShaderDebugInfo(EShaderPlatform Platform)
 {
 	static uint64 GExportDebugInfoPlatforms = GetExportShaderDebugInfoPlatforms();
 	return (GExportDebugInfoPlatforms & (uint64(1) << Platform)) != 0;
+}
+
+void ValidateStaticUniformBuffer(FRHIUniformBuffer* UniformBuffer, FUniformBufferStaticSlot Slot, uint32 ExpectedHash)
+{
+#if VALIDATE_GLOBAL_UNIFORM_BUFFERS
+	FUniformBufferStaticSlotRegistry& SlotRegistry = FUniformBufferStaticSlotRegistry::Get();
+
+	if (!UniformBuffer)
+	{
+		const FShaderParametersMetadata* ExpectedStructMetadata = FindUniformBufferStructByLayoutHash(ExpectedHash);
+
+		checkf(
+			ExpectedStructMetadata,
+			TEXT("Shader is requesting a uniform buffer at slot %s with hash '%u', but a reverse lookup of the hash can't find it. The shader cache may be out of date."),
+			*SlotRegistry.GetDebugDescription(Slot), ExpectedHash);
+
+		UE_LOG(LogShaders, Warning, TEXT("Shader requested a global uniform buffer of type '%s' at static slot '%s', but it was null."), ExpectedStructMetadata->GetShaderVariableName(), *SlotRegistry.GetDebugDescription(Slot));
+	}
+	else
+	{
+		const FRHIUniformBufferLayout& Layout = UniformBuffer->GetLayout();
+
+		if (Layout.GetHash() != ExpectedHash)
+		{
+			const FShaderParametersMetadata* ExpectedStructMetadata = FindUniformBufferStructByLayoutHash(ExpectedHash);
+
+			checkf(
+				ExpectedStructMetadata,
+				TEXT("Shader is requesting uniform buffer '%s' at slot %s with hash '%u', but a reverse lookup of the hash can't find it. The shader cache may be out of date."),
+				*Layout.GetDebugName(), *SlotRegistry.GetDebugDescription(Slot), ExpectedHash);
+
+			checkf(
+				false,
+				TEXT("Shader attempted to bind uniform buffer '%s' at slot %s with hash '%u', but the shader expected '%s' with hash '%u'."),
+				*Layout.GetDebugName(), *SlotRegistry.GetDebugDescription(Slot), ExpectedHash, ExpectedStructMetadata->GetShaderVariableName(), Layout.GetHash());
+		}
+	}
+#endif
 }
 
 bool FShaderParameterMap::FindParameterAllocation(const TCHAR* ParameterName,uint16& OutBufferIndex,uint16& OutBaseIndex,uint16& OutSize) const
@@ -611,18 +653,18 @@ static FString GetShaderSourceFilePath(const FString& VirtualFilePath, TArray<FS
 FString ParseVirtualShaderFilename(const FString& InFilename)
 {
 	FString ShaderDir = FString(FPlatformProcess::ShaderDir());
-	ShaderDir.ReplaceInline(TEXT("\\"), TEXT("/"));
+	ShaderDir.ReplaceInline(TEXT("\\"), TEXT("/"), ESearchCase::CaseSensitive);
 	int32 CharIndex = ShaderDir.Find(TEXT("/"), ESearchCase::CaseSensitive, ESearchDir::FromEnd, ShaderDir.Len() - 1);
 	if (CharIndex != INDEX_NONE)
 	{
-		ShaderDir = ShaderDir.Right(ShaderDir.Len() - CharIndex);
+		ShaderDir.RightInline(ShaderDir.Len() - CharIndex, false);
 	}
 
-	FString RelativeFilename = InFilename.Replace(TEXT("\\"), TEXT("/"));
+	FString RelativeFilename = InFilename.Replace(TEXT("\\"), TEXT("/"), ESearchCase::CaseSensitive);
 	// remove leading "/" because this makes path absolute on Linux (and Mac).
 	if (RelativeFilename.Len() > 0 && RelativeFilename[0] == TEXT('/'))
 	{
-		RelativeFilename = RelativeFilename.Right(RelativeFilename.Len() - 1);
+		RelativeFilename.RightInline(RelativeFilename.Len() - 1, false);
 	}
 	RelativeFilename = IFileManager::Get().ConvertToRelativePath(*RelativeFilename);
 	CharIndex = RelativeFilename.Find(ShaderDir);
@@ -646,7 +688,7 @@ FString ParseVirtualShaderFilename(const FString& InFilename)
 			}
 			while (NewCharIndex != INDEX_NONE && ++NumDirsSkipped < NumDirsToSkip);
 		}
-		RelativeFilename = RelativeFilename.Mid(CharIndex, RelativeFilename.Len() - CharIndex);
+		RelativeFilename.MidInline(CharIndex, RelativeFilename.Len() - CharIndex, false);
 	}
 
 	// add leading "/" to the relative filename because that's what virtual shader path expects

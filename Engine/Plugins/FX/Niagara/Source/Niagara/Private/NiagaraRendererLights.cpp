@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraRendererLights.h"
 #include "ParticleResources.h"
@@ -37,7 +37,7 @@ FPrimitiveViewRelevance FNiagaraRendererLights::GetViewRelevance(const FSceneVie
 	Result.bDrawRelevance = false;
 	Result.bShadowRelevance = false;
 	Result.bDynamicRelevance = false;
-	Result.bOpaqueRelevance = false;
+	Result.bOpaque = false;
 	Result.bHasSimpleLights = true;
 	//MaterialRelevance.SetPrimitiveViewRelevance(Result);
 	return Result;

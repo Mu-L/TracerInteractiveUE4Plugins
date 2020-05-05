@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithCADWorkerImpl.h"
 
@@ -12,18 +12,16 @@
 #include "SocketSubsystem.h"
 #include "Sockets.h"
 
-DEFINE_LOG_CATEGORY(LogDatasmithCADWorker);
 using namespace DatasmithDispatcher;
 
 
-FDatasmithCADWorkerImpl::FDatasmithCADWorkerImpl(int32 InServerPID, int32 InServerPort, const FString& InKernelIOPath, const FString& InCachePath)
+FDatasmithCADWorkerImpl::FDatasmithCADWorkerImpl(int32 InServerPID, int32 InServerPort, const FString& InEnginePluginsPath, const FString& InCachePath)
 	: ServerPID(InServerPID)
 	, ServerPort(InServerPort)
-	, KernelIOPath(InKernelIOPath)
+	, EnginePluginsPath(InEnginePluginsPath)
 	, CachePath(InCachePath)
 	, PingStartCycle(0)
 {
-	UE_SET_LOG_VERBOSITY(LogDatasmithCADWorker, Verbose);
 }
 
 bool FDatasmithCADWorkerImpl::Run()
@@ -121,13 +119,13 @@ void FDatasmithCADWorkerImpl::ProcessCommand(const FImportParametersCommand& Imp
 
 void FDatasmithCADWorkerImpl::ProcessCommand(const FRunTaskCommand& RunTaskCommand)
 {
-	const FString& FileToProcess = RunTaskCommand.JobFilePath;
-	UE_LOG(LogDatasmithCADWorker, Verbose, TEXT("Process %s"), *FileToProcess);
+	const CADLibrary::FFileDescription& FileToProcess = RunTaskCommand.JobFileDescription;
+	UE_LOG(LogDatasmithCADWorker, Verbose, TEXT("Process %s"), *FileToProcess.Name);
 
 	FCompletedTaskCommand CompletedTask;
 #ifdef CAD_INTERFACE
-	CADLibrary::FCoreTechFileParser FileParser(FileToProcess, CachePath, ImportParameters, *KernelIOPath);
-	CADLibrary::FCoreTechFileParser::EProcessResult ProcessResult = FileParser.ProcessFile();
+	CADLibrary::FCoreTechFileParser FileParser(ImportParameters, EnginePluginsPath, CachePath);
+	CADLibrary::FCoreTechFileParser::EProcessResult ProcessResult = FileParser.ProcessFile(FileToProcess);
 
 	CompletedTask.ProcessResult = ProcessResult;
 
@@ -136,10 +134,11 @@ void FDatasmithCADWorkerImpl::ProcessCommand(const FRunTaskCommand& RunTaskComma
 		CompletedTask.ExternalReferences = FileParser.GetExternalRefSet().Array();
 		CompletedTask.SceneGraphFileName = FileParser.GetSceneGraphFile();
 		CompletedTask.GeomFileName = FileParser.GetMeshFileName();
+		CompletedTask.WarningMessages = FileParser.GetWarningMessages();
 	}
 #endif // CAD_INTERFACE
 	CommandIO.SendCommand(CompletedTask, Config::SendCommandTimeout_s);
 
-	UE_LOG(LogDatasmithCADWorker, Verbose, TEXT("End of Process %s"), *FileToProcess);
+	UE_LOG(LogDatasmithCADWorker, Verbose, TEXT("End of Process %s"), *FileToProcess.Name);
 }
 

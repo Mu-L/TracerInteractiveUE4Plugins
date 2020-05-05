@@ -1,12 +1,14 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PropertyValueColor.h"
 
-#include "CoreMinimal.h"
-#include "Components/LightComponent.h"
-#include "Atmosphere/AtmosphericFogComponent.h"
-#include "HAL/UnrealMemory.h"
+#include "VariantManagerContentLog.h"
 #include "VariantObjectBinding.h"
+
+#include "Atmosphere/AtmosphericFogComponent.h"
+#include "Components/LightComponent.h"
+#include "CoreMinimal.h"
+#include "HAL/UnrealMemory.h"
 #include "UObject/Package.h"
 
 #define LOCTEXT_NAMESPACE "PropertyValueColor"

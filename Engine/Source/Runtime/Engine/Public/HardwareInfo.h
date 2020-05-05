@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	HardwareInfo.h: Declares the hardware info class
@@ -9,9 +9,9 @@
 #include "CoreMinimal.h"
 
 /** Hardware entry lookups */
-static const FName NAME_RHI( "RHI" );
-static const FName NAME_TextureFormat( "TextureFormat" );
-static const FName NAME_DeviceType( "DeviceType" );
+extern ENGINE_API const FName NAME_RHI;
+extern ENGINE_API const FName NAME_TextureFormat;
+extern ENGINE_API const FName NAME_DeviceType;
 
 
 struct ENGINE_API FHardwareInfo

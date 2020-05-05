@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // This code is modified from that in the Mesa3D Graphics library available at
 // http://mesa3d.org/
@@ -579,6 +579,15 @@ public:
 
 	bool is_precision_statement;
 	unsigned precision : 2;
+
+	inline bool IsStructuredOrRWStructuredBuffer() const
+	{
+		check(type_name);
+		const bool bStructuredBuffer = !strcmp(this->type_name, "StructuredBuffer");
+		const bool bRWStructuredBuffer = !strcmp(this->type_name, "RWStructuredBuffer");
+		return bStructuredBuffer || bRWStructuredBuffer;
+	}
+
 };
 
 

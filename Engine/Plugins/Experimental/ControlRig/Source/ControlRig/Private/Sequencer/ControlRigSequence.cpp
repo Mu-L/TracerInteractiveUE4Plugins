@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Sequencer/ControlRigSequence.h"
 #include "UObject/Package.h"
@@ -73,9 +73,7 @@ UObject* UControlRigSequence::MakeSpawnableTemplateFromInstance(UObject& InSourc
 {
 	UObject* NewInstance = NewObject<UObject>(MovieScene, InSourceObject.GetClass(), ObjectName);
 
-	UEngine::FCopyPropertiesForUnrelatedObjectsParams CopyParams;
-	CopyParams.bNotifyObjectReplacement = false;
-	UEngine::CopyPropertiesForUnrelatedObjects(&InSourceObject, NewInstance, CopyParams);
+	UEngine::CopyPropertiesForUnrelatedObjects(&InSourceObject, NewInstance);
 
 	return NewInstance;
 }

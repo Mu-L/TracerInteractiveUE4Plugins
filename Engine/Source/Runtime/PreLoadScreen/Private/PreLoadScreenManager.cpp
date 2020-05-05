@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PreLoadScreenManager.h"
 
@@ -339,6 +339,7 @@ void FPreLoadScreenManager::GameLogicFrameTick()
 		DeltaTime = FMath::Min(DeltaTime, MaxTickTime);
 
         //We have to manually tick everything as we are looping the main thread here
+		FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
         FTicker::GetCoreTicker().Tick(DeltaTime);
         FThreadManager::Get().Tick();
 
@@ -354,6 +355,8 @@ void FPreLoadScreenManager::GameLogicFrameTick()
         FSlateApplication::Get().PollGameDeviceState();
         // Gives widgets a chance to process any accumulated input
         FSlateApplication::Get().FinishedInputThisFrame();
+
+		FSlateApplication::Get().GetPlatformApplication()->Tick(DeltaTime);
 
         //Needed as this won't be incrementing on its own and some other tick functions rely on this (like analytics)
         GFrameCounter++;

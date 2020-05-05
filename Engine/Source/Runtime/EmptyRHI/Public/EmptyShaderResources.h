@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	EmptyShaderResources.h: Empty shader resource RHI definitions.
@@ -18,7 +18,7 @@ public:
 	TEmptyBaseShader()
 	{
 	}
-	TEmptyBaseShader(const TArray<uint8>& InCode);
+	TEmptyBaseShader(TArrayView<const uint8> Code);
 
 	/** Destructor */
 	virtual ~TEmptyBaseShader();

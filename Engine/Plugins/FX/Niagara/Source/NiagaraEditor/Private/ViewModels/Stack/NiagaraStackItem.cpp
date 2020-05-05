@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ViewModels/Stack/NiagaraStackItem.h"
 #include "ViewModels/Stack/NiagaraStackItemFooter.h"
@@ -8,6 +8,8 @@
 #include "ViewModels/NiagaraSystemViewModel.h"
 #include "ViewModels/NiagaraSystemSelectionViewModel.h"
 #include "NiagaraStackEditorData.h"
+
+#include "EditorStyleSet.h"
 
 void UNiagaraStackItem::Initialize(FRequiredEntryData InRequiredEntryData, FString InStackEditorDataKey)
 {
@@ -25,6 +27,16 @@ UNiagaraStackItem::FOnModifiedGroupItems& UNiagaraStackItem::OnModifiedGroupItem
 	return ModifiedGroupItemsDelegate;
 }
 
+void UNiagaraStackItem::SetOnRequestCanPaste(FOnRequestCanPaste InOnRequestCanPaste)
+{
+	RequestCanPasteDelegete = InOnRequestCanPaste;
+}
+
+void UNiagaraStackItem::SetOnRequestPaste(FOnRequestPaste InOnRequestCanPaste)
+{
+	RequestPasteDelegate = InOnRequestCanPaste;
+}
+
 void UNiagaraStackItem::SetIsEnabled(bool bInIsEnabled)
 {
 	if (ItemFooter != nullptr)
@@ -34,13 +46,15 @@ void UNiagaraStackItem::SetIsEnabled(bool bInIsEnabled)
 	SetIsEnabledInternal(bInIsEnabled);
 }
 
-void UNiagaraStackItem::Delete()
+const TArray<FNiagaraScriptHighlight>& UNiagaraStackItem::GetHighlights() const
 {
-	if (GetDisplayedObject() != nullptr)
-	{
-		GetSystemViewModel()->GetSelectionViewModel()->RemoveEntryFromSelectionByDisplayedObject(GetDisplayedObject());
-	}
-	DeleteInternal();
+	static TArray<FNiagaraScriptHighlight> Empty;
+	return Empty;
+}
+
+const FSlateBrush* UNiagaraStackItem::GetIconBrush() const
+{
+	return FEditorStyle::GetBrush("NoBrush");
 }
 
 void UNiagaraStackItem::RefreshChildrenInternal(const TArray<UNiagaraStackEntry*>& CurrentChildren, TArray<UNiagaraStackEntry*>& NewChildren, TArray<FStackIssue>& NewIssues)
@@ -158,3 +172,15 @@ bool UNiagaraStackItemContent::FilterAdvancedChildren(const UNiagaraStackEntry& 
 		return GetStackEditorData().GetShowAllAdvanced() || GetStackEditorData().GetStackItemShowAdvanced(OwningStackItemEditorDataKey, false);
 	}
 }
+
+void UNiagaraStackItemTextContent::Initialize(FRequiredEntryData InRequiredEntryData, FText InDisplayText, bool bInIsAdvanced, FString InOwningStackItemEditorDataKey)
+{
+	Super::Initialize(InRequiredEntryData, bInIsAdvanced, InOwningStackItemEditorDataKey, InOwningStackItemEditorDataKey + InDisplayText.ToString());
+	DisplayText = InDisplayText;
+}
+
+FText UNiagaraStackItemTextContent::GetDisplayName() const
+{
+	return DisplayText;
+}
+

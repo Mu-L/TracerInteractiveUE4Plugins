@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "WebMVideoDecoder.h"
 
@@ -101,17 +101,25 @@ bool FWebMVideoDecoder::Initialize(const char* CodecName)
 
 void FWebMVideoDecoder::DecodeVideoFramesAsync(const TArray<TSharedPtr<FWebMFrame>>& VideoFrames)
 {
-	FGraphEventRef PreviousDecodingTask = VideoDecodingTask;
-
-	VideoDecodingTask = FFunctionGraphTask::CreateAndDispatchWhenReady([this, PreviousDecodingTask, VideoFrames]()
+	static bool bUseRenderThread = FPlatformMisc::UseRenderThread();
+	if (bUseRenderThread)
 	{
-		if(PreviousDecodingTask && !PreviousDecodingTask->IsComplete())
-		{
-			FTaskGraphInterface::Get().WaitUntilTaskCompletes(PreviousDecodingTask);
-		}
+		FGraphEventRef PreviousDecodingTask = VideoDecodingTask;
 
+		VideoDecodingTask = FFunctionGraphTask::CreateAndDispatchWhenReady([this, PreviousDecodingTask, VideoFrames]()
+		{
+			if(PreviousDecodingTask && !PreviousDecodingTask->IsComplete())
+			{
+				FTaskGraphInterface::Get().WaitUntilTaskCompletes(PreviousDecodingTask);
+			}
+
+			DoDecodeVideoFrames(VideoFrames);
+		}, TStatId(), nullptr, ENamedThreads::AnyThread);
+	}
+	else
+	{
 		DoDecodeVideoFrames(VideoFrames);
-	}, TStatId(), nullptr, ENamedThreads::AnyThread);
+	}
 }
 
 bool FWebMVideoDecoder::IsBusy() const
@@ -205,45 +213,43 @@ void FWebMVideoDecoder::ConvertYUVToRGBAndSubmit(const FConvertParams& Params)
 
 	// render video frame into output texture
 	FRHICommandListImmediate& CommandList = GetImmediateCommandList_ForRenderCommand();
+
 	{
-		// copy the Y plane out of the video buffer
+		const auto CopyTextureMemory = [Image](
+			FRHICommandListImmediate& InCommandList,
+			FRHITexture2D* RHITexture,
+			int ImageIndex,
+			int CopyHeight)
 		{
 			uint32 Stride = 0;
-			void * TextureMemory = GDynamicRHI->LockTexture2D_RenderThread(CommandList, DecodedY.GetReference(), 0, RLM_WriteOnly, Stride, false);
+			unsigned char* TextureMemory = (unsigned char*)GDynamicRHI->LockTexture2D_RenderThread(InCommandList, RHITexture, 0, RLM_WriteOnly, Stride, false);
 
 			if (TextureMemory)
 			{
-				check(Stride == Image->stride[0]);
-				memcpy(TextureMemory, Image->planes[0], Image->stride[0] * Image->d_h);
-				GDynamicRHI->UnlockTexture2D_RenderThread(CommandList, DecodedY.GetReference(), 0, false);
+				check(Stride >= (uint32)Image->stride[ImageIndex]);
+				if (Stride == Image->stride[ImageIndex])
+				{
+					FMemory::Memcpy(TextureMemory, Image->planes[ImageIndex], Image->stride[ImageIndex] * CopyHeight);
+				}
+				else
+				{
+					for (int h = 0; h < CopyHeight; ++h)
+					{
+						FMemory::Memcpy(TextureMemory + h * Stride, Image->planes[ImageIndex] + h * Image->stride[ImageIndex], Image->stride[ImageIndex]);
+					}
+				}
+				GDynamicRHI->UnlockTexture2D_RenderThread(InCommandList, RHITexture, 0, false);
 			}
-		}
+		};
+
+		// copy the Y plane out of the video buffer
+		CopyTextureMemory(CommandList, DecodedY.GetReference(), 0, Image->d_h);
 
 		// copy the U plane out of the video buffer
-		{
-			uint32 Stride = 0;
-			void * TextureMemory = GDynamicRHI->LockTexture2D_RenderThread(CommandList, DecodedU.GetReference(), 0, RLM_WriteOnly, Stride, false);
-
-			if (TextureMemory)
-			{
-				check(Stride == Image->stride[1]);
-				memcpy(TextureMemory, Image->planes[1], Image->stride[1] * Image->d_h / 2);
-				GDynamicRHI->UnlockTexture2D_RenderThread(CommandList, DecodedU.GetReference(), 0, false);
-			}
-		}
+		CopyTextureMemory(CommandList, DecodedU.GetReference(), 1, Image->d_h / 2);
 
 		// copy the V plane out of the video buffer
-		{
-			uint32 Stride = 0;
-			void * TextureMemory = GDynamicRHI->LockTexture2D_RenderThread(CommandList, DecodedV.GetReference(), 0, RLM_WriteOnly, Stride, false);
-
-			if (TextureMemory)
-			{
-				check(Stride == Image->stride[2]);
-				memcpy(TextureMemory, Image->planes[2], Image->stride[2] * Image->d_h / 2);
-				GDynamicRHI->UnlockTexture2D_RenderThread(CommandList, DecodedV.GetReference(), 0, false);
-			}
-		}
+		CopyTextureMemory(CommandList, DecodedV.GetReference(), 2, Image->d_h / 2);
 
 		FRHITexture* RenderTarget = VideoSample->GetTexture();
 		FRHIRenderPassInfo RPInfo(RenderTarget, ERenderTargetActions::Load_Store);
@@ -262,8 +268,8 @@ void FWebMVideoDecoder::ConvertYUVToRGBAndSubmit(const FConvertParams& Params)
 				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<>::GetRHI();
 				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
 				GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GMoviePlayerResources.VertexDeclarationRHI;
-				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = GETSAFERHISHADER_VERTEX(*VertexShader);
-				GraphicsPSOInit.BoundShaderState.PixelShaderRHI = GETSAFERHISHADER_PIXEL(*PixelShader);
+				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
+				GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
 				GraphicsPSOInit.PrimitiveType = PT_TriangleStrip;
 			}
 
@@ -271,7 +277,7 @@ void FWebMVideoDecoder::ConvertYUVToRGBAndSubmit(const FConvertParams& Params)
 			PixelShader->SetParameters(CommandList, DecodedY->GetTexture2D(), DecodedU->GetTexture2D(), DecodedV->GetTexture2D(), FIntPoint(Image->d_w, Image->d_h), MediaShaders::YuvToSrgbDefault, MediaShaders::YUVOffset8bits, true);
 
 			// draw full-size quad
-			CommandList.SetViewport(0, 0, 0.0f, Image->w, Image->d_h, 1.0f);
+			CommandList.SetViewport(0, 0, 0.0f, Image->d_w, Image->d_h, 1.0f);
 			CommandList.SetStreamSource(0, GMoviePlayerResources.VertexBufferRHI, 0);
 			CommandList.DrawPrimitive(0, 2, 1);
 		}

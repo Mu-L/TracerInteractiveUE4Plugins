@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "RejoinCheck.h"
 #include "Engine/GameInstance.h"
@@ -204,7 +204,7 @@ void URejoinCheck::RejoinCheckTimer()
 	}
 }
 
-void URejoinCheck::RejoinLastSession(FOnRejoinLastSessionComplete& InCompletionDelegate)
+void URejoinCheck::RejoinLastSession(const FOnRejoinLastSessionComplete& InCompletionDelegate)
 {
 	if (LastKnownStatus == ERejoinStatus::UpdatingStatus)
 	{

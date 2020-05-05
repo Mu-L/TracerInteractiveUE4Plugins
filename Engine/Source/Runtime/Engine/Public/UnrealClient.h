@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	UnrealClient.h: Interface definition for platform specific client code.
@@ -24,7 +24,7 @@ class UModel;
 /**
  * A render target.
  */
-class ENGINE_VTABLE FRenderTarget
+class FRenderTarget
 {
 public:
 
@@ -305,7 +305,7 @@ struct FStatHitchesData
  * Encapsulates the I/O of a viewport.
  * The viewport display is implemented using the platform independent RHI.
  */
-class ENGINE_VTABLE FViewport : public FRenderTarget, protected FRenderResource
+class FViewport : public FRenderTarget, protected FRenderResource
 {
 public:
 	/** delegate type for viewport resize events ( Params: FViewport* Viewport, uint32 ) */
@@ -603,6 +603,8 @@ public:
 	/** Returns dimensions of RenderTarget texture. Can be called on a game thread. */
 	virtual FIntPoint GetRenderTargetTextureSizeXY() const { return GetSizeXY(); }
 
+	inline FName GetViewportType() const { return ViewportType; }
+
 protected:
 
 	/** The viewport's client. */
@@ -713,6 +715,9 @@ protected:
 
 	/** If true this viewport is being displayed on a HDR monitor */
 	uint32 bIsHDR : 1;
+
+	/** Used internally for testing runtime instance type before casting */
+	FName ViewportType;
 
 	/** true if we should draw game viewports (has no effect on Editor viewports) */
 	ENGINE_API static bool bIsGameRenderingEnabled;
@@ -1087,7 +1092,7 @@ extern ENGINE_API class FCommonViewportClient* GStatProcessingViewportClient;
  * Common functionality for game and editor viewport clients
  */
 
-class ENGINE_VTABLE FCommonViewportClient : public FViewportClient
+class FCommonViewportClient : public FViewportClient
 {
 public:
 	FCommonViewportClient()

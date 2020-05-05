@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ViewModels/Stack/NiagaraStackObject.h"
 #include "ViewModels/Stack/NiagaraStackPropertyRow.h"
 #include "NiagaraNode.h"
+#include "NiagaraEditorModule.h"
 
 #include "Modules/ModuleManager.h"
 #include "IPropertyRowGenerator.h"
@@ -45,7 +46,7 @@ UObject* UNiagaraStackObject::GetObject()
 	return Object;
 }
 
-void UNiagaraStackObject::NotifyPostChange(const FPropertyChangedEvent& PropertyChangedEvent, UProperty* PropertyThatChanged)
+void UNiagaraStackObject::NotifyPostChange(const FPropertyChangedEvent& PropertyChangedEvent, FProperty* PropertyThatChanged)
 {
 	OnDataObjectModified().Broadcast(Object);
 }
@@ -65,6 +66,11 @@ void UNiagaraStackObject::FinalizeInternal()
 	if (PropertyRowGenerator.IsValid())
 	{
 		PropertyRowGenerator->OnRowsRefreshed().RemoveAll(this);
+		PropertyRowGenerator->SetObjects(TArray<UObject*>());
+
+		// Enqueue the row generator for destruction because stack entries might be finalized during the system view model tick
+		// and you can't destruct tickables while other tickables are being ticked.
+		FNiagaraEditorModule::Get().EnqueueObjectForDeferredDestruction(PropertyRowGenerator.ToSharedRef());
 		PropertyRowGenerator.Reset();
 	}
 	Super::FinalizeInternal();
@@ -126,6 +132,45 @@ void UNiagaraStackObject::RefreshChildrenInternal(const TArray<UNiagaraStackEntr
 		}
 
 		NewChildren.Add(ChildRow);
+	}
+
+	// TODO: Handle this in a more generic way.  Maybe add error apis to UNiagaraMergable, or use a UObject interface, or create a
+	// data interface specific implementation of UNiagaraStackObject.
+	UNiagaraDataInterface* DataInterfaceObject = Cast<UNiagaraDataInterface>(Object);
+	if (DataInterfaceObject != nullptr)
+	{
+		TArray<FNiagaraDataInterfaceError> Errors;
+		TArray<FNiagaraDataInterfaceFeedback> Warnings, Info;
+		UNiagaraDataInterface::GetFeedback(DataInterfaceObject, Errors, Warnings, Info);
+		if (Errors.Num() > 0)
+		{
+			NewIssues.Add(FStackIssue(
+				EStackIssueSeverity::Error,
+				NSLOCTEXT("StackObject", "ObjectErrorsShort", "Object has errors"),
+				NSLOCTEXT("StackObject", "ObjectErrorsLong", "The displayed object has errors.  Check the object properties or the message log for details."),
+				GetStackEditorDataKey(),
+				false));
+		}
+		if (Warnings.Num() > 0)
+		{
+			NewIssues.Add(FStackIssue(
+				EStackIssueSeverity::Warning,
+				NSLOCTEXT("StackObject", "ObjectWarningsShort", "Object has warnings"),
+				NSLOCTEXT("StackObject", "ObjectWarningsLong", "The displayed object has warnings.  Check the object properties or the message log for details."),
+				GetStackEditorDataKey(),
+				false));
+		}
+	}
+}
+
+void UNiagaraStackObject::PostRefreshChildrenInternal()
+{
+	Super::PostRefreshChildrenInternal();
+
+	UNiagaraDataInterface* DataInterfaceObject = Cast<UNiagaraDataInterface>(Object);
+	if (DataInterfaceObject != nullptr)
+	{
+		DataInterfaceObject->RefreshErrors();		
 	}
 }
 

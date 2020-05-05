@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	InstancedStaticMesh.h: Instanced static mesh header
@@ -37,6 +37,13 @@ extern TAutoConsoleVariable<float> CVarFoliageLODDistanceScale;
 extern TAutoConsoleVariable<float> CVarRandomLODRange;
 extern TAutoConsoleVariable<int32> CVarMinLOD;
 
+BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FInstancedStaticMeshVertexFactoryUniformShaderParameters, ENGINE_API)
+	SHADER_PARAMETER_SRV(Buffer<float4>, VertexFetch_InstanceOriginBuffer)
+	SHADER_PARAMETER_SRV(Buffer<float4>, VertexFetch_InstanceTransformBuffer)
+	SHADER_PARAMETER_SRV(Buffer<float4>, VertexFetch_InstanceLightmapBuffer)
+	SHADER_PARAMETER_SRV(Buffer<float>, InstanceCustomDataBuffer)
+	SHADER_PARAMETER(int32, NumCustomDataFloats)
+END_GLOBAL_SHADER_PARAMETER_STRUCT()
 
 // This must match the maximum a user could specify in the material (see 
 // FHLSLMaterialTranslator::TextureCoordinate), otherwise the material will attempt 
@@ -86,6 +93,11 @@ public:
 		InstanceData->GetInstanceShaderValues(InstanceIndex, InstanceTransform, InstanceLightmapAndShadowMapUVBias, InstanceOrigin);
 	}
 	
+	FORCEINLINE  void GetInstanceCustomDataValues(int32 InstanceIndex, TArray<float>& InstanceCustomData) const
+	{
+		InstanceData->GetInstanceShaderCustomDataValues(InstanceIndex, InstanceCustomData);
+	}
+	
 	FORCEINLINE FStaticMeshInstanceData* GetInstanceData() const
 	{
 		return InstanceData.Get();
@@ -127,6 +139,12 @@ private:
 	} InstanceLightmapBuffer;
 	FShaderResourceViewRHIRef InstanceLightmapSRV;
 
+	class FInstanceCustomDataBuffer : public FVertexBuffer
+	{
+		virtual FString GetFriendlyName() const override { return TEXT("FInstanceCustomDataBuffer"); }
+	} InstanceCustomDataBuffer;
+	FShaderResourceViewRHIRef InstanceCustomDataSRV;	
+
 	/** Delete existing resources */
 	void CleanUp();
 
@@ -153,6 +171,7 @@ struct FInstancingUserData
 	bool bRenderSelected;
 	bool bRenderUnselected;
 	FVector AverageInstancesScale;
+	FVector InstancingOffset;
 };
 
 struct FInstancedStaticMeshDataType
@@ -169,10 +188,9 @@ struct FInstancedStaticMeshDataType
 	FRHIShaderResourceView* InstanceOriginSRV = nullptr;
 	FRHIShaderResourceView* InstanceTransformSRV = nullptr;
 	FRHIShaderResourceView* InstanceLightmapSRV = nullptr;
+	FRHIShaderResourceView* InstanceCustomDataSRV = nullptr;
 
-	/** Used to track state for debugging. */
-	uint32 NumInstances = 0;
-	bool bInitialized = false;
+	int32 NumCustomDataFloats = 0;
 };
 
 /**
@@ -194,33 +212,13 @@ public:
 	/**
 	 * Should we cache the material's shadertype on this platform with this vertex factory? 
 	 */
-	static bool ShouldCompilePermutation(EShaderPlatform Platform, const class FMaterial* Material, const class FShaderType* ShaderType);
+	static bool ShouldCompilePermutation(const FVertexFactoryShaderPermutationParameters& Parameters);
 
 	/**
 	 * Modify compile environment to enable instancing
 	 * @param OutEnvironment - shader compile environment to modify
 	 */
-	static void ModifyCompilationEnvironment(const FVertexFactoryType* Type, EShaderPlatform Platform, const FMaterial* Material, FShaderCompilerEnvironment& OutEnvironment)
-	{
-		const bool ContainsManualVertexFetch = OutEnvironment.GetDefinitions().Contains("MANUAL_VERTEX_FETCH");
-		if (!ContainsManualVertexFetch && RHISupportsManualVertexFetch(Platform))
-		{
-			OutEnvironment.SetDefine(TEXT("MANUAL_VERTEX_FETCH"), TEXT("1"));
-		}
-
-		OutEnvironment.SetDefine(TEXT("USE_INSTANCING"),TEXT("1"));
-		if (IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM5))
-		{
-			OutEnvironment.SetDefine(TEXT("USE_DITHERED_LOD_TRANSITION_FOR_INSTANCED"), ALLOW_DITHERED_LOD_FOR_INSTANCED_STATIC_MESHES);
-		}
-		else
-		{
-			// On mobile dithered LOD transition has to be explicitly enabled in material and project settings
-			OutEnvironment.SetDefine(TEXT("USE_DITHERED_LOD_TRANSITION_FOR_INSTANCED"), Material->IsDitheredLODTransition() && ALLOW_DITHERED_LOD_FOR_INSTANCED_STATIC_MESHES);
-		}
-		
-		FLocalVertexFactory::ModifyCompilationEnvironment(Type, Platform, Material, OutEnvironment);
-	}
+	static void ModifyCompilationEnvironment(const FVertexFactoryShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment);
 
 	/**
 	 * An implementation of the interface used by TSynchronizedResource to update the resource with new data from the game thread.
@@ -241,8 +239,6 @@ public:
 	// FRenderResource interface.
 	virtual void InitRHI() override;
 
-	static FVertexFactoryShaderParameters* ConstructShaderParameters(EShaderFrequency ShaderFrequency);
-
 	/** Make sure we account for changes in the signature of GetStaticBatchElementVisibility() */
 	static CONSTEXPR uint32 NumBitsForVisibilityMask()
 	{		
@@ -262,16 +258,6 @@ public:
 	virtual bool SupportsNullPixelShader() const override { return false; }
 #endif
 
-	inline bool IsDataInitialized() const
-	{
-		return Data.bInitialized;
-	}
-
-	inline uint32 GetNumInstances() const
-	{
-		return Data.NumInstances;
-	}
-
 	inline FRHIShaderResourceView* GetInstanceOriginSRV() const
 	{
 		return Data.InstanceOriginSRV;
@@ -287,45 +273,27 @@ public:
 		return Data.InstanceLightmapSRV;
 	}
 
+	inline FRHIShaderResourceView* GetInstanceCustomDataSRV() const
+	{
+		return Data.InstanceCustomDataSRV;
+	}
+
+	FRHIUniformBuffer* GetUniformBuffer() const
+	{
+		return UniformBuffer.GetReference();
+	}
+
 private:
 	FDataType Data;
-};
 
-
-struct FEmulatedInstancedStaticMeshVertexFactory : public FInstancedStaticMeshVertexFactory
-{
-	DECLARE_VERTEX_FACTORY_TYPE(FEmulatedInstancedStaticMeshVertexFactory);
-public:
-	FEmulatedInstancedStaticMeshVertexFactory(ERHIFeatureLevel::Type InFeatureLevel)
-		: FInstancedStaticMeshVertexFactory(InFeatureLevel)
-	{
-	}
-
-	/**
-	 * Should we cache the material's shadertype on this platform with this vertex factory? 
-	 */
-	static bool ShouldCompilePermutation(EShaderPlatform Platform, const class FMaterial* Material, const class FShaderType* ShaderType)
-	{
-		// Android may not support on old devices
-		return	(Platform == SP_OPENGL_ES2_ANDROID)
-				&& (Material->IsUsedWithInstancedStaticMeshes() || Material->IsSpecialEngineMaterial())
-				&& FLocalVertexFactory::ShouldCompilePermutation(Platform, Material, ShaderType);
-	}
-
-	/**
-	 * Modify compile environment to enable instancing
-	 * @param OutEnvironment - shader compile environment to modify
-	 */
-	static void ModifyCompilationEnvironment(const FVertexFactoryType* Type, EShaderPlatform Platform, const FMaterial* Material, FShaderCompilerEnvironment& OutEnvironment)
-	{
-		FInstancedStaticMeshVertexFactory::ModifyCompilationEnvironment(Type, Platform, Material, OutEnvironment);
-		OutEnvironment.SetDefine(TEXT("USE_INSTANCING_EMULATED"), TEXT("1"));
-	}
+	TUniformBufferRef<FInstancedStaticMeshVertexFactoryUniformShaderParameters> UniformBuffer;
 };
 
 class FInstancedStaticMeshVertexFactoryShaderParameters : public FLocalVertexFactoryShaderParametersBase
 {
-	virtual void Bind(const FShaderParameterMap& ParameterMap) override
+	DECLARE_TYPE_LAYOUT(FInstancedStaticMeshVertexFactoryShaderParameters, NonVirtual);
+public:
+	void Bind(const FShaderParameterMap& ParameterMap)
 	{
 		FLocalVertexFactoryShaderParametersBase::Bind(ParameterMap);
 
@@ -333,18 +301,16 @@ class FInstancedStaticMeshVertexFactoryShaderParameters : public FLocalVertexFac
 		InstancingViewZCompareZeroParameter.Bind(ParameterMap, TEXT("InstancingViewZCompareZero"));
 		InstancingViewZCompareOneParameter.Bind(ParameterMap, TEXT("InstancingViewZCompareOne"));
 		InstancingViewZConstantParameter.Bind(ParameterMap, TEXT("InstancingViewZConstant"));
+		InstancingOffsetParameter.Bind(ParameterMap, TEXT("InstancingOffset"));
 		InstancingWorldViewOriginZeroParameter.Bind(ParameterMap, TEXT("InstancingWorldViewOriginZero"));
 		InstancingWorldViewOriginOneParameter.Bind(ParameterMap, TEXT("InstancingWorldViewOriginOne"));
-		CPUInstanceOrigin.Bind(ParameterMap, TEXT("CPUInstanceOrigin"));
-		CPUInstanceTransform.Bind(ParameterMap, TEXT("CPUInstanceTransform"));
-		CPUInstanceLightmapAndShadowMapBias.Bind(ParameterMap, TEXT("CPUInstanceLightmapAndShadowMapBias"));
 		VertexFetch_InstanceOriginBufferParameter.Bind(ParameterMap, TEXT("VertexFetch_InstanceOriginBuffer"));
 		VertexFetch_InstanceTransformBufferParameter.Bind(ParameterMap, TEXT("VertexFetch_InstanceTransformBuffer"));
 		VertexFetch_InstanceLightmapBufferParameter.Bind(ParameterMap, TEXT("VertexFetch_InstanceLightmapBuffer"));
 		InstanceOffset.Bind(ParameterMap, TEXT("InstanceOffset"));
 	}
 
-	virtual void GetElementShaderBindings(
+	void GetElementShaderBindings(
 		const class FSceneInterface* Scene,
 		const FSceneView* View,
 		const FMeshMaterialShader* Shader,
@@ -354,44 +320,22 @@ class FInstancedStaticMeshVertexFactoryShaderParameters : public FLocalVertexFac
 		const FMeshBatchElement& BatchElement,
 		FMeshDrawSingleShaderBindings& ShaderBindings,
 		FVertexInputStreamArray& VertexStreams
-		) const override;
-
-	void Serialize(FArchive& Ar) override
-	{
-		FLocalVertexFactoryShaderParametersBase::Serialize(Ar);
-		Ar << InstancingFadeOutParamsParameter;
-		Ar << InstancingViewZCompareZeroParameter;
-		Ar << InstancingViewZCompareOneParameter;
-		Ar << InstancingViewZConstantParameter;
-		Ar << InstancingWorldViewOriginZeroParameter;
-		Ar << InstancingWorldViewOriginOneParameter;
-		Ar << CPUInstanceOrigin;
-		Ar << CPUInstanceTransform;
-		Ar << CPUInstanceLightmapAndShadowMapBias;
-		Ar << VertexFetch_InstanceOriginBufferParameter;
-		Ar << VertexFetch_InstanceTransformBufferParameter;
-		Ar << VertexFetch_InstanceLightmapBufferParameter;
-		Ar << InstanceOffset;
-	}
-
-	virtual uint32 GetSize() const override { return sizeof(*this); }
+		) const;
 
 private:
-	FShaderParameter InstancingFadeOutParamsParameter;
-	FShaderParameter InstancingViewZCompareZeroParameter;
-	FShaderParameter InstancingViewZCompareOneParameter;
-	FShaderParameter InstancingViewZConstantParameter;
-	FShaderParameter InstancingWorldViewOriginZeroParameter;
-	FShaderParameter InstancingWorldViewOriginOneParameter;
+	
+	LAYOUT_FIELD(FShaderParameter, InstancingFadeOutParamsParameter)
+	LAYOUT_FIELD(FShaderParameter, InstancingViewZCompareZeroParameter)
+	LAYOUT_FIELD(FShaderParameter, InstancingViewZCompareOneParameter)
+	LAYOUT_FIELD(FShaderParameter, InstancingViewZConstantParameter)
+	LAYOUT_FIELD(FShaderParameter, InstancingOffsetParameter);
+	LAYOUT_FIELD(FShaderParameter, InstancingWorldViewOriginZeroParameter)
+	LAYOUT_FIELD(FShaderParameter, InstancingWorldViewOriginOneParameter)
 
-	FShaderParameter CPUInstanceOrigin;
-	FShaderParameter CPUInstanceTransform;
-	FShaderParameter CPUInstanceLightmapAndShadowMapBias;
-
-	FShaderResourceParameter VertexFetch_InstanceOriginBufferParameter;
-	FShaderResourceParameter VertexFetch_InstanceTransformBufferParameter;
-	FShaderResourceParameter VertexFetch_InstanceLightmapBufferParameter;
-	FShaderParameter InstanceOffset;
+	LAYOUT_FIELD(FShaderResourceParameter, VertexFetch_InstanceOriginBufferParameter)
+	LAYOUT_FIELD(FShaderResourceParameter, VertexFetch_InstanceTransformBufferParameter)
+	LAYOUT_FIELD(FShaderResourceParameter, VertexFetch_InstanceLightmapBufferParameter)
+	LAYOUT_FIELD(FShaderParameter, InstanceOffset)
 };
 
 struct FInstanceUpdateCmdBuffer;
@@ -475,7 +419,7 @@ public:
 	TIndirectArray<FInstancedStaticMeshVertexFactory> VertexFactories;
 
 	/** LOD render data from the static mesh. */
-	TIndirectArray<FStaticMeshLODResources>& LODModels;
+	FStaticMeshLODResourcesArray& LODModels;
 
 	/** Feature level used when creating instance data */
 	ERHIFeatureLevel::Type FeatureLevel;
@@ -524,8 +468,6 @@ public:
 
 	~FInstancedStaticMeshSceneProxy()
 	{
-		InstancedRenderData.ReleaseResources(&GetScene( ), StaticMesh);
-
 #if RHI_RAYTRACING
 		for (int32 i = 0; i < RayTracingCullClusterInstances.Num(); ++i)
 		{
@@ -535,7 +477,9 @@ public:
 	}
 
 	// FPrimitiveSceneProxy interface.
-	
+
+	virtual void DestroyRenderThreadResources() override;
+
 	virtual FPrimitiveViewRelevance GetViewRelevance(const FSceneView* View) const override
 	{
 		FPrimitiveViewRelevance Result;
@@ -567,7 +511,10 @@ public:
 	virtual void GetLightRelevance(const FLightSceneProxy* LightSceneProxy, bool& bDynamic, bool& bRelevant, bool& bLightMapped, bool& bShadowMapped) const override;
 	virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, FMeshElementCollector& Collector) const override;
 
-	virtual int32 GetNumMeshBatches() const override;
+	virtual int32 GetNumMeshBatches() const override
+	{
+		return 1;
+	}
 
 	/** Sets up a shadow FMeshBatch for a specific LOD. */
 	virtual bool GetShadowMeshElement(int32 LODIndex, int32 BatchIndex, uint8 InDepthPriorityGroup, FMeshBatch& OutMeshBatch, bool bDitheredLODTransition) const override;

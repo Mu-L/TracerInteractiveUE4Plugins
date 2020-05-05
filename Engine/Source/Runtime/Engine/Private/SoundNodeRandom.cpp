@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "Sound/SoundNodeRandom.h"
@@ -174,6 +174,10 @@ int32 USoundNodeRandom::DetermineAmountOfBranchesToPreselect()
 		// If we have to decide between the override and this node's PreselectAtLevelLoad property,
 		// use the minimum of either:
 		AmountOfBranchesToPreselect = FMath::Min(PreselectAtLevelLoad, OverrideForAmountOfBranchesToPreselect);
+	}
+	else if (PreselectAtLevelLoad > 0)
+	{
+		AmountOfBranchesToPreselect = PreselectAtLevelLoad;
 	}
 	else
 	{

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "HAL/FileManager.h"
@@ -430,6 +430,7 @@ ULevelEditorMiscSettings::ULevelEditorMiscSettings( const FObjectInitializer& Ob
 	PercentageThresholdForPrompt = 20.0f;
 	MinimumBoundsForCheckingSize = FVector(500.0f, 500.0f, 50.0f);
 	bCreateNewAudioDeviceForPlayInEditor = true;
+	bEnableLegacyMeshPaintMode = false;
 }
 
 void ULevelEditorMiscSettings::PostEditChangeProperty( struct FPropertyChangedEvent& PropertyChangedEvent )
@@ -461,12 +462,16 @@ ULevelEditorPlaySettings::ULevelEditorPlaySettings( const FObjectInitializer& Ob
 {
 	ClientWindowWidth = 640;
 	ClientWindowHeight = 480;
+	PlayNetMode = EPlayNetMode::PIE_Standalone;
+	bLaunchSeparateServer = false;
 	PlayNumberOfClients = 1;
 	ServerPort = 17777;
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	PlayNetDedicated = false;
+	AutoConnectToServer = true;
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 	RunUnderOneProcess = true;
 	RouteGamepadToSecondWindow = false;
-	AutoConnectToServer = true;
 	BuildGameBeforeLaunch = EPlayOnBuildMode::PlayOnBuild_Default;
 	LaunchConfiguration = EPlayOnLaunchConfiguration::LaunchConfig_Default;
 	bAutoCompileBlueprintsOnLaunch = true;
@@ -508,17 +513,43 @@ void ULevelEditorPlaySettings::PostInitProperties()
 	NetworkEmulationSettings.OnPostInitProperties();
 
 #if WITH_EDITOR
-	FCoreDelegates::OnSafeFrameChangedEvent.AddUObject(this, &ULevelEditorPlaySettings::SwapSafeZoneTypes);
+	FCoreDelegates::OnSafeFrameChangedEvent.AddUObject(this, &ULevelEditorPlaySettings::UpdateCustomSafeZones);
 #endif
 }
 
-#if WITH_EDITOR
-void ULevelEditorPlaySettings::SwapSafeZoneTypes()
+bool ULevelEditorPlaySettings::CanEditChange(const FProperty* InProperty) const
 {
+	const bool ParentVal = Super::CanEditChange(InProperty);
+	FName PropertyName = InProperty->GetFName();
+
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(ULevelEditorPlaySettings, AdditionalServerLaunchParameters))
+	{
+		return ParentVal && (!RunUnderOneProcess && (PlayNetMode == EPlayNetMode::PIE_Client || bLaunchSeparateServer));
+	}
+
+	return ParentVal;
+}
+
+#if WITH_EDITOR
+void ULevelEditorPlaySettings::UpdateCustomSafeZones()
+{
+	// Prefer to use r.DebugSafeZone.TitleRatio if it is set
 	if (FDisplayMetrics::GetDebugTitleSafeZoneRatio() < 1.f)
 	{
-		DeviceToEmulate = FString();
+		FSlateApplication::Get().ResetCustomSafeZone();
+		PIESafeZoneOverride = FMargin();
 	}
+	else
+	{
+		PIESafeZoneOverride = CalculateCustomUnsafeZones(CustomUnsafeZoneStarts, CustomUnsafeZoneDimensions, DeviceToEmulate, FVector2D(NewWindowWidth, NewWindowHeight));
+	}
+
+	FMargin SafeZoneRatio = PIESafeZoneOverride;
+	SafeZoneRatio.Left /= (NewWindowWidth / 2.0f);
+	SafeZoneRatio.Right /= (NewWindowWidth / 2.0f);
+	SafeZoneRatio.Bottom /= (NewWindowHeight / 2.0f);
+	SafeZoneRatio.Top /= (NewWindowHeight / 2.0f);
+	FSlateApplication::Get().OnDebugSafeZoneChanged.Broadcast(SafeZoneRatio, true);
 }
 #endif
 
@@ -1084,7 +1115,7 @@ void UProjectPackagingSettings::PostEditChangeProperty( FPropertyChangedEvent& P
 	}
 }
 
-bool UProjectPackagingSettings::CanEditChange( const UProperty* InProperty ) const
+bool UProjectPackagingSettings::CanEditChange( const FProperty* InProperty ) const
 {
 	if (InProperty->GetFName() == FName(TEXT("NativizeBlueprintAssets")))
 	{

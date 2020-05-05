@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -38,7 +38,7 @@
  * on its own (see comments in ApplyReplaceChange)
  */
 template<typename RealType, int ElementSize>
-class DYNAMICMESH_API TDynamicMeshAttributeChange
+class TDynamicMeshAttributeChange
 {
 public:
 	void SaveInitialElement(const TDynamicMeshOverlay<RealType,ElementSize>* Overlay, int ElementID);
@@ -92,8 +92,13 @@ typedef TDynamicMeshAttributeChange<float,3> FDynamicMeshNormalChange;
 class DYNAMICMESH_API FDynamicMeshAttributeChangeSet
 {
 public:
+	UE_NONCOPYABLE(FDynamicMeshAttributeChangeSet);
+	FDynamicMeshAttributeChangeSet() = default;
+
 	TArray<FDynamicMeshUVChange> UVChanges;
 	TArray<FDynamicMeshNormalChange> NormalChanges;
+	TOptional<FDynamicMeshTriangleAttributeChange<int32, 1>> MaterialIDAttribChange;
+	TArray<TUniquePtr<FDynamicMeshAttributeChangeBase>> RegisteredAttributeChanges;
 
 	/** call ::Apply() on all the UV and Normal changes */
 	bool Apply(FDynamicMeshAttributeSet* Attributes, bool bRevert) const;
@@ -123,7 +128,7 @@ public:
 	/** Store the final state of a triangle */
 	void StoreFinalTriangle(const FDynamicMesh3* Mesh, int TriangleID);
 
-	/** Attach an attribute change set to this mesh change, which will the be applied/reverted autoamtically */
+	/** Attach an attribute change set to this mesh change, which will the be applied/reverted automatically */
 	void AttachAttributeChanges(TUniquePtr<FDynamicMeshAttributeChangeSet> AttribChanges)
 	{
 		this->AttributeChanges = MoveTemp(AttribChanges);
@@ -202,6 +207,12 @@ public:
 	/** store the final state of a set of triangles */
 	void StoreAllFinalTriangles(const TArray<int>& TriangleIDs);
 
+	/** Store the initial state of a vertex */
+	void SaveInitialVertex(int VertexID);
+
+	/** store the final state of a set of vertices */
+	void StoreAllFinalVertices(const TArray<int>& VertexIDs);
+
 
 protected:
 	const FDynamicMeshAttributeSet* Attribs = nullptr;
@@ -245,6 +256,8 @@ protected:
  * Call BeginChange() before making any changes to the mesh, then call SaveVertex()
  * and SaveTriangle() before modifying the respective elements. Then call EndChange()
  * to construct a FDynamicMeshChange that represents the mesh delta.
+ *
+ * @warning Currently only vertices that are part of saved triangles will be stored in the emitted FMeshChange!
  * 
  */
 class DYNAMICMESH_API FDynamicMeshChangeTracker
@@ -258,13 +271,45 @@ public:
 	/** Construct a change object that represents the delta between the Begin and End states */
 	TUniquePtr<FDynamicMeshChange> EndChange();
 
-	/** Save necessary information about a vertex before it is modified */
-	void SaveVertex(int VertexID);
 	/** Save necessary information about a triangle before it is modified */
-	void SaveTriangle(int TriangleID, bool bSaveVertices);
+	void SaveTriangle(int32 TriangleID, bool bSaveVertices);
+
+	/** Save necessary information about an edge before it is modified */
+	inline void SaveEdge(int32 EdgeID, bool bVertices);
+
+	/** Save necessary information about a set of triangles before they are modified */
+	template<typename EnumerableType>
+	void SaveTriangles(EnumerableType TriangleIDs, bool bSaveVertices);
+
+	/** Save necessary information about a set of triangles before they are modified, and also include any direct triangle neighbours */
+	template<typename EnumerableType>
+	void SaveTrianglesAndNeighbourTris(EnumerableType TriangleIDs, bool bSaveVertices);
+
+	/** Save necessary information about a set of triangles in one-ring of a vertex */
+	inline void SaveVertexOneRingTriangles(int32 VertexID, bool bSaveVertices);
+
+	/** Save necessary information about a set of triangles in one-rings of a set of vertices */
+	template<typename EnumerableType>
+	void SaveVertexOneRingTriangles(EnumerableType VertexIDs, bool bSaveVertices);
 
 	/** Do (limited) sanity checking to make sure that the change is well-formed*/
 	void VerifySaveState();
+
+protected:
+
+	//
+	// Currently EndChange() only stores vertices that are part of modified triangles.
+	// So calling SaveVertex() independently, on triangles that are not saved, will be lost.
+	// (This needs to be fixed)
+	//
+
+	/** Save necessary information about a vertex before it is modified */
+	void SaveVertex(int32 VertexID);
+
+	/** Save necessary information about a set of vertices before they are modified */
+	template<typename EnumerableType>
+	void SaveVertices(EnumerableType VertexIDs);
+
 
 protected:
 	const FDynamicMesh3* Mesh = nullptr;
@@ -275,12 +320,79 @@ protected:
 	/** Active change that is being constructed */
 	FDynamicMeshChange* Change = nullptr;
 
-	int MaxTriangleID;
+	int32 MaxTriangleID;
 	TBitArray<> StartTriangles;		// bit is 1 if triangle ID was in initial mesh on BeginChange()
 	TBitArray<> ChangedTriangles;	// bit is set to 1 if triangle was in StartTriangles and then had SaveTriangle() called for it
 
-	int MaxVertexID;
+	int32 MaxVertexID;
 	TBitArray<> StartVertices;		// bit is 1 if vertex ID was in initial mesh on BeginChange()
 	TBitArray<> ChangedVertices;	// bit is set to 1 if vertex was in StartVertices and then had SaveVertex() called for it
 };
+
+
+
+void FDynamicMeshChangeTracker::SaveEdge(int32 EdgeID, bool bVertices)
+{
+	FIndex4i EdgeInfo = Mesh->GetEdge(EdgeID);
+	SaveTriangle(EdgeInfo.C, bVertices);
+	if (EdgeInfo.D != FDynamicMesh3::InvalidID)
+	{
+		SaveTriangle(EdgeInfo.D, bVertices);
+	}
+}
+
+template<typename EnumerableType>
+void FDynamicMeshChangeTracker::SaveVertices(EnumerableType VertexIDs)
+{
+	for (int32 VertexID : VertexIDs)
+	{
+		SaveVertex(VertexID);
+	}
+}
+
+template<typename EnumerableType>
+void FDynamicMeshChangeTracker::SaveTriangles(EnumerableType TriangleIDs, bool bSaveVertices)
+{
+	for (int32 TriangleID : TriangleIDs)
+	{
+		SaveTriangle(TriangleID, bSaveVertices);
+	}
+}
+
+
+template<typename EnumerableType>
+void FDynamicMeshChangeTracker::SaveTrianglesAndNeighbourTris(EnumerableType TriangleIDs, bool bSaveVertices)
+{
+	for (int32 TriangleID : TriangleIDs)
+	{
+		SaveTriangle(TriangleID, bSaveVertices);
+
+		FIndex3i TriNbrs = Mesh->GetTriNeighbourTris(TriangleID);
+		for (int32 j = 0; j < 3; ++j)
+		{
+			if (TriNbrs[j] != FDynamicMesh3::InvalidID)
+			{
+				SaveTriangle(TriNbrs[j], bSaveVertices);
+			}
+		}
+	}
+}
+
+
+void FDynamicMeshChangeTracker::SaveVertexOneRingTriangles(int32 VertexID, bool bSaveVertices)
+{
+	for (int32 TriangleID : Mesh->VtxTrianglesItr(VertexID))
+	{
+		SaveTriangle(TriangleID, bSaveVertices);
+	}
+}
+
+template<typename EnumerableType>
+void FDynamicMeshChangeTracker::SaveVertexOneRingTriangles(EnumerableType VertexIDs, bool bSaveVertices)
+{
+	for (int32 VertexID : VertexIDs)
+	{
+		SaveVertexOneRingTriangles(VertexID, bSaveVertices);
+	}
+}
 

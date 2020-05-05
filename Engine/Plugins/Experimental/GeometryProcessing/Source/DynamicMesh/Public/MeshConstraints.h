@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // Port of geometry3cpp MeshConstraints
 
@@ -157,6 +157,15 @@ public:
 
 	/** @return a Pinned-but-Movable vertex constraint */
 	static FVertexConstraint PinnedMovable() { return FVertexConstraint(true, true); }
+
+	/** Combine the incoming constraint with this constraint. The combination cannot be less restrictive than the
+	    existing constraint. */
+	void CombineConstraint(const FVertexConstraint& OtherConstraint)
+	{
+		Fixed = Fixed || OtherConstraint.Fixed;
+		Movable = Movable && OtherConstraint.Movable;
+	}
+
 };
 
 

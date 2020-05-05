@@ -10,9 +10,9 @@
 #include "MixedRealityInterop.h"
 
 
-#if PLATFORM_HOLOLENS
-static WindowsMixedReality::MixedRealityInterop hmd;
-#endif
+#include "WindowsMixedRealityInteropLoader.h"
+
+static WindowsMixedReality::MixedRealityInterop* HMD = nullptr;
 
 bool FWindowsMixedRealityRHIModule::SupportsDynamicReloading()
 { 
@@ -23,6 +23,14 @@ void FWindowsMixedRealityRHIModule::StartupModule()
 {
 	LUID id = {0,0};
 
+	if (!HMD)
+	{
+		HMD = WindowsMixedReality::LoadInteropLibrary();
+		if (!HMD)
+		{
+			return;
+		}
+	}
 #if PLATFORM_HOLOLENS
 	if (HoloSpace)
 	{
@@ -30,7 +38,7 @@ void FWindowsMixedRealityRHIModule::StartupModule()
 	}
 
 	HoloSpace = HolographicSpace::CreateForCoreWindow(CoreWindow::GetForCurrentThread());
-	hmd.SetHolographicSpace(HoloSpace);
+	HMD->SetHolographicSpace(HoloSpace);
 	id =
 	{
 		HoloSpace->PrimaryAdapterId.LowPart,
@@ -101,6 +109,14 @@ void FWindowsMixedRealityRHIModule::StartupModule()
 
 }
 
+void FWindowsMixedRealityRHIModule::ShutdownModule()
+{
+	delete HMD;
+	HMD = nullptr;
+}
+
+
+
 bool FWindowsMixedRealityRHIModule::IsSupported()
 {
 #if PLATFORM_HOLOLENS
@@ -119,7 +135,7 @@ bool FWindowsMixedRealityRHIModule::IsSupported()
 		return false;
 	}
 #endif
-	return true;
+	return HMD != nullptr;
 }
 
 
@@ -150,6 +166,13 @@ FViewportRHIRef FWindowsMixedRealityDynamicRHI::RHICreateViewport(void* WindowHa
 {
 	check(IsInGameThread());
 
+#if PLATFORM_HOLOLENS
+	static const auto CVarMobileMultiView = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("vr.MobileMultiView"));
+	static const auto CVarMobileHDR = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.MobileHDR"));
+	const bool bMobileHDR = (CVarMobileHDR && CVarMobileHDR->GetValueOnAnyThread() != 0);
+	bIsMobileMultiViewEnabled = (GRHISupportsArrayIndexFromAnyShader && !bMobileHDR) && (CVarMobileMultiView && CVarMobileMultiView->GetValueOnAnyThread() != 0);
+#endif
+	
 	// Use a default pixel format if none was specified	
 	if (PreferredPixelFormat == EPixelFormat::PF_Unknown)
 	{
@@ -157,12 +180,31 @@ FViewportRHIRef FWindowsMixedRealityDynamicRHI::RHICreateViewport(void* WindowHa
 		PreferredPixelFormat = EDefaultBackBufferPixelFormat::Convert2PixelFormat(EDefaultBackBufferPixelFormat::FromInt(CVarDefaultBackBufferPixelFormat->GetValueOnGameThread()));
 	}
 
+	if (GIsEditor)
+	{
+		// DXGI device maximum frame latency counts the total number of presents enqueued rather than logical engine frames in flight. Inside the editor we can easily
+		// run into the default limit of 3 presents for different HWNDs when a VR preview window is active, causing frame rate to be throttled by the local monitor.
+		// Increase the limit so that the HMD can properly take ownership of frame pacing instead.
+		IConsoleManager::Get().FindConsoleVariable(TEXT("RHI.MaximumFrameLatency"))->Set(16);
+	}
+
+	if (bIsMobileMultiViewEnabled)
+	{
+		return new FD3D11Viewport(this, (HWND)WindowHandle, SizeX, SizeY, bIsFullscreen, PreferredPixelFormat);
+	}
+	
 	return new FWindowsMixedRealityViewport(this, (HWND)WindowHandle, SizeX, SizeY, bIsFullscreen, PreferredPixelFormat);
 }
 
 void FWindowsMixedRealityDynamicRHI::RHIBeginFrame()
 {
 	FD3D11DynamicRHI::RHIBeginFrame();
+
+	if (bIsMobileMultiViewEnabled)
+	{
+		return;
+	}
+	
 	for (int i=0; i< Viewports.Num(); ++i)
 	{
 		((FWindowsMixedRealityViewport *)Viewports[i])->UpdateBackBuffer();
@@ -188,7 +230,7 @@ FWindowsMixedRealityViewport::FWindowsMixedRealityViewport(FD3D11DynamicRHI* InD
 	SizeY = InSizeY;
 	bIsFullscreen = bInIsFullscreen;
 	PixelFormat  = InPreferredPixelFormat;
-	bIsValid = true;
+	ValidState = 0;
 
 	D3DRHI->Viewports.Add(this);
 
@@ -261,7 +303,7 @@ void FWindowsMixedRealityViewport::UpdateBackBuffer()
 void FWindowsMixedRealityViewport::Resize(uint32 InSizeX, uint32 InSizeY, bool bInIsFullscreen, EPixelFormat PreferredPixelFormat)
 {
 	// Unbind any dangling references to resources
-	D3DRHI->RHISetRenderTargets(0, nullptr, nullptr, 0, nullptr);
+	D3DRHI->RHISetRenderTargets(0, nullptr, nullptr);
 	D3DRHI->ClearState();
 	D3DRHI->GetDeviceContext()->Flush(); // Potential perf hit
 
@@ -296,7 +338,7 @@ void FWindowsMixedRealityViewport::Resize(uint32 InSizeX, uint32 InSizeY, bool b
 	if (bIsFullscreen != bInIsFullscreen)
 	{
 		bIsFullscreen = bInIsFullscreen;
-		bIsValid = false;
+		ValidState = VIEWPORT_INVALID;
 	}
 
 	// Float RGBA backbuffers are requested whenever HDR mode is desired

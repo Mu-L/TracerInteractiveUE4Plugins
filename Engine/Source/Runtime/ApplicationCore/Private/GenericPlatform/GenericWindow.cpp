@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GenericPlatform/GenericWindow.h"
 
@@ -146,6 +146,12 @@ void* FGenericWindow::GetOSWindowHandle() const
 }
 
 bool FGenericWindow::IsForegroundWindow() const 
+{
+	// empty default functionality
+	return true;
+}
+
+bool FGenericWindow::IsFullscreenSupported() const
 {
 	// empty default functionality
 	return true;

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "EditorModeRegistry.h"
 #include "Modules/ModuleManager.h"
@@ -9,15 +9,13 @@
 
 #include "Editor/PlacementMode/Public/IPlacementModeModule.h"
 #include "Editor/LandscapeEditor/Public/LandscapeEditorModule.h"
-#include "Editor/BspMode/Public/IBspModeModule.h"
 #include "Editor/MeshPaint/Public/MeshPaintModule.h"
-#include "Editor/GeometryMode/Public/GeometryEdMode.h"
 #include "Editor/ActorPickerMode/Public/ActorPickerMode.h"
 #include "Editor/SceneDepthPickerMode/Public/SceneDepthPickerMode.h"
-#include "Editor/TextureAlignMode/Public/TextureAlignEdMode.h"
 #include "Editor/FoliageEdit/Public/FoliageEditModule.h"
 #include "Editor/VirtualTexturingEditor/Public/VirtualTexturingEditorModule.h"
 #include "Tools/UEdMode.h"
+#include "Classes/EditorStyleSettings.h"
 
 FEditorModeInfo::FEditorModeInfo()
 	: ID(NAME_None)
@@ -52,16 +50,25 @@ void FEditorModeRegistry::Initialize()
 {
 	Get();
 
-	// Add default editor modes
-	GModeRegistry->RegisterMode<FEdModeDefault>(FBuiltinEditorModes::EM_Default);
+	if(!GetDefault<UEditorStyleSettings>()->bEnableLegacyEditorModeUI)
+	{
+		// Add default editor modes
+		FEditorModeRegistry::Get().RegisterMode<FEdModeDefault>(
+			FBuiltinEditorModes::EM_Default,
+			NSLOCTEXT("DefaultMode", "DisplayName", "Select"),
+			FSlateIcon(FEditorStyle::GetStyleSetName(), "LevelEditor.SelectMode", "LevelEditor.SelectMode.Small"),
+			true, 0);
+	}
+	else
+	{
+		GModeRegistry->RegisterMode<FEdModeDefault>(FBuiltinEditorModes::EM_Default);
+	}
+
 	GModeRegistry->RegisterMode<FEdModeInterpEdit>(FBuiltinEditorModes::EM_InterpEdit);
 
 	// Load editor mode modules that will automatically register their editor modes, and clean themselves up on unload.
 	//@TODO: ROCKET: These are probably good plugin candidates, that shouldn't have to be force-loaded here but discovery loaded somehow
 	FModuleManager::LoadModuleChecked<IPlacementModeModule>(TEXT("PlacementMode"));
-	FModuleManager::LoadModuleChecked<IBspModeModule>(TEXT("BspMode"));
-	FModuleManager::LoadModuleChecked<FTextureAlignModeModule>(TEXT("TextureAlignMode"));
-	FModuleManager::LoadModuleChecked<FGeometryModeModule>(TEXT("GeometryMode"));
 	FModuleManager::LoadModuleChecked<FActorPickerModeModule>(TEXT("ActorPickerMode"));
 	FModuleManager::LoadModuleChecked<FSceneDepthPickerModeModule>(TEXT("SceneDepthPickerMode"));
 	FModuleManager::LoadModuleChecked<IMeshPaintModule>(TEXT("MeshPaintMode"));

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -41,7 +41,7 @@ public:
 	FStringToken() : TokenStart(nullptr), TokenEnd(nullptr), LineNumber(0), CharacterIndex(0) {}
 
 	/** Get the string representation of this token */
-	FString GetString() const { return FString(TokenEnd - TokenStart, TokenStart); }
+	FString GetString() const { return FString((int32)(TokenEnd - TokenStart), TokenStart); }
 
 	/** Check if this token is valid */
 	bool IsValid() const { return TokenEnd != TokenStart; }
@@ -166,6 +166,10 @@ template<> struct TGetExpressionNodeTypeId<TYPE>\
 	}\
 };
 template<typename T> struct TGetExpressionNodeTypeId;
+
+/** Primitive types should only be declared once inside the codebase to avoid conflicts */
+DEFINE_EXPRESSION_NODE_TYPE(bool, 	0xCACBC715, 0x505A6B4A, 0x8808809F, 0x897AA5F6)
+DEFINE_EXPRESSION_NODE_TYPE(double, 0x8444A8A3, 0x19AE4E13, 0xBCFA75EE, 0x39982BD6)
 
 /**
  * A node in an expression.

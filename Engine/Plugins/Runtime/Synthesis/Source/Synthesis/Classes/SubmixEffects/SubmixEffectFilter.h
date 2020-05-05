@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -66,7 +66,7 @@ class SYNTHESIS_API FSubmixEffectFilter : public FSoundEffectSubmix
 {
 public:
 	FSubmixEffectFilter();
-	~FSubmixEffectFilter();
+	virtual ~FSubmixEffectFilter() = default;
 
 	//~ Begin FSoundEffectSubmix
 	virtual void Init(const FSoundEffectSubmixInitData& InData) override;

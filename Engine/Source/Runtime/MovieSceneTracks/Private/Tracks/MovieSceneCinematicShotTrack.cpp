@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Tracks/MovieSceneCinematicShotTrack.h"
 #include "MovieSceneSequence.h"
@@ -157,7 +157,7 @@ FMovieSceneTrackRowSegmentBlenderPtr UMovieSceneCinematicShotTrack::GetRowSegmen
 }
 
 #if WITH_EDITOR
-void UMovieSceneCinematicShotTrack::OnSectionMoved(UMovieSceneSection& Section)
+void UMovieSceneCinematicShotTrack::OnSectionMoved(UMovieSceneSection& Section, const FMovieSceneSectionMovedParams& Params)
 {
 	//MovieSceneHelpers::FixupConsecutiveSections(Sections, Section, false);
 }

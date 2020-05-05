@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AudioMixerBlueprintLibrary.h"
 #include "Engine/World.h"
@@ -9,6 +9,7 @@
 #include "ContentStreaming.h"
 #include "AudioCompressionSettingsUtils.h"
 #include "Async/Async.h"
+#include "Sound/SoundEffectPreset.h"
 
 // This is our global recording task:
 static TUniquePtr<Audio::FAudioRecordingData> RecordingData;
@@ -22,7 +23,7 @@ static FAudioDevice* GetAudioDeviceFromWorldContext(const UObject* WorldContextO
 		return nullptr;
 	}
 
-	return ThisWorld->GetAudioDevice();
+	return ThisWorld->GetAudioDevice().GetAudioDevice();
 }
 
 static Audio::FMixerDevice* GetAudioMixerDeviceFromWorldContext(const UObject* WorldContextObject)
@@ -51,18 +52,13 @@ void UAudioMixerBlueprintLibrary::AddMasterSubmixEffect(const UObject* WorldCont
 
 	if (Audio::FMixerDevice* MixerDevice = GetAudioMixerDeviceFromWorldContext(WorldContextObject))
 	{
-		// Immediately create a new sound effect base here before the object becomes potentially invalidated
-		FSoundEffectBase* SoundEffectBase = SubmixEffectPreset->CreateNewEffect();
-
-		// Cast it to a sound effect submix type
-		FSoundEffectSubmix* SoundEffectSubmix = static_cast<FSoundEffectSubmix*>(SoundEffectBase);
-
 		FSoundEffectSubmixInitData InitData;
 		InitData.SampleRate = MixerDevice->GetSampleRate();
+		InitData.DeviceID = MixerDevice->DeviceID;
+		InitData.PresetSettings = nullptr;
 
-		// Initialize and set the preset immediately
-		SoundEffectSubmix->Init(InitData);
-		SoundEffectSubmix->SetPreset(SubmixEffectPreset);
+		// Immediately create a new sound effect base here before the object becomes potentially invalidated
+		TSoundEffectSubmixPtr SoundEffectSubmix = USoundEffectPreset::CreateInstance<FSoundEffectSubmixInitData, FSoundEffectSubmix>(InitData, *SubmixEffectPreset);
 		SoundEffectSubmix->SetEnabled(true);
 
 		// Get a unique id for the preset object on the game thread. Used to refer to the object on audio render thread.
@@ -96,6 +92,78 @@ void UAudioMixerBlueprintLibrary::ClearMasterSubmixEffects(const UObject* WorldC
 		MixerDevice->ClearMasterSubmixEffects();
 	}
 }
+
+int32 UAudioMixerBlueprintLibrary::AddSubmixEffect(const UObject* WorldContextObject, USoundSubmix* InSoundSubmix, USoundEffectSubmixPreset* SubmixEffectPreset)
+{
+	if (!SubmixEffectPreset || !InSoundSubmix)
+	{
+		return 0;
+	}
+
+	if (Audio::FMixerDevice* MixerDevice = GetAudioMixerDeviceFromWorldContext(WorldContextObject))
+	{
+		FSoundEffectSubmixInitData InitData;
+		InitData.SampleRate = MixerDevice->GetSampleRate();
+
+		TSoundEffectSubmixPtr SoundEffectSubmix = USoundEffectPreset::CreateInstance<FSoundEffectSubmixInitData, FSoundEffectSubmix>(InitData, *SubmixEffectPreset);
+		SoundEffectSubmix->SetEnabled(true);
+
+		// Get a unique id for the preset object on the game thread. Used to refer to the object on audio render thread.
+		uint32 SubmixPresetUniqueId = SubmixEffectPreset->GetUniqueID();
+
+		return MixerDevice->AddSubmixEffect(InSoundSubmix, SubmixPresetUniqueId, SoundEffectSubmix);
+	}
+
+	return 0;
+}
+
+void UAudioMixerBlueprintLibrary::RemoveSubmixEffectPreset(const UObject* WorldContextObject, USoundSubmix* InSoundSubmix, USoundEffectSubmixPreset* InSubmixEffectPreset)
+{
+	if (Audio::FMixerDevice* MixerDevice = GetAudioMixerDeviceFromWorldContext(WorldContextObject))
+	{
+		uint32 SubmixPresetUniqueId = InSubmixEffectPreset->GetUniqueID();
+		MixerDevice->RemoveSubmixEffect(InSoundSubmix, SubmixPresetUniqueId);
+	}
+}
+
+void UAudioMixerBlueprintLibrary::RemoveSubmixEffectPresetAtIndex(const UObject* WorldContextObject, USoundSubmix* InSoundSubmix, int32 SubmixChainIndex)
+{
+	if (Audio::FMixerDevice* MixerDevice = GetAudioMixerDeviceFromWorldContext(WorldContextObject))
+	{
+		MixerDevice->RemoveSubmixEffectAtIndex(InSoundSubmix, SubmixChainIndex);
+	}
+}
+
+void UAudioMixerBlueprintLibrary::ReplaceSoundEffectSubmix(const UObject* WorldContextObject, USoundSubmix* InSoundSubmix, int32 SubmixChainIndex, USoundEffectSubmixPreset* SubmixEffectPreset)
+{
+	if (!SubmixEffectPreset || !InSoundSubmix)
+	{
+		return;
+	}
+
+	if (Audio::FMixerDevice* MixerDevice = GetAudioMixerDeviceFromWorldContext(WorldContextObject))
+	{
+		FSoundEffectSubmixInitData InitData;
+		InitData.SampleRate = MixerDevice->GetSampleRate();
+
+		TSoundEffectSubmixPtr SoundEffectSubmix = USoundEffectPreset::CreateInstance<FSoundEffectSubmixInitData, FSoundEffectSubmix>(InitData, *SubmixEffectPreset);
+		SoundEffectSubmix->SetEnabled(true);
+
+		// Get a unique id for the preset object on the game thread. Used to refer to the object on audio render thread.
+		uint32 SubmixPresetUniqueId = SubmixEffectPreset->GetUniqueID();
+
+		MixerDevice->ReplaceSoundEffectSubmix(InSoundSubmix, SubmixChainIndex, SubmixPresetUniqueId, SoundEffectSubmix);
+	}
+}
+
+void UAudioMixerBlueprintLibrary::ClearSubmixEffects(const UObject* WorldContextObject, USoundSubmix* InSoundSubmix)
+{
+	if (Audio::FMixerDevice* MixerDevice = GetAudioMixerDeviceFromWorldContext(WorldContextObject))
+	{
+		MixerDevice->ClearSubmixEffects(InSoundSubmix);
+	}
+}
+
 
 void UAudioMixerBlueprintLibrary::StartRecordingOutput(const UObject* WorldContextObject, float ExpectedDuration, USoundSubmix* SubmixToRecord)
 {

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	TaskGraphInterfaces.h: TaskGraph library
@@ -48,7 +48,7 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("ParallelForTask"), STAT_ParallelForTask, STATGRO
 
 namespace ENamedThreads
 {
-	enum Type
+	enum Type : int32
 	{
 		UnusedAnchor = -1,
 		/** The always-present, named threads are listed next **/
@@ -210,6 +210,8 @@ namespace ENamedThreads
 
 }
 
+DECLARE_INTRINSIC_TYPE_LAYOUT(ENamedThreads::Type);
+
 extern CORE_API int32 GEnablePowerSavingThreadPriorityReductionCVar;
 
 enum class EPowerSavingEligibility : uint8
@@ -340,7 +342,7 @@ public:
 	 *	Requests that a named thread, which must be this thread, run until idle, then return.
 	 *	@param	CurrentThread; The name of this thread
 	**/
-	virtual void ProcessThreadUntilIdle(ENamedThreads::Type CurrentThread)=0;
+	virtual uint64 ProcessThreadUntilIdle(ENamedThreads::Type CurrentThread)=0;
 
 	/** 
 	 *	Requests that a named thread, which must be this thread, run until an explicit return request is received, then return.
@@ -422,7 +424,7 @@ public:
 		/** Total size in bytes for a small task that will use the custom allocator **/
 		SMALL_TASK_SIZE = 256
 	};
-	typedef TLockFreeFixedSizeAllocator_TLSCache<SMALL_TASK_SIZE, PLATFORM_CACHE_LINE_SIZE> TSmallTaskAllocator;
+	typedef TLockFreeFixedSizeAllocator_TLSCache<SMALL_TASK_SIZE, PLATFORM_CACHE_LINE_SIZE, FNoopCounter, true> TSmallTaskAllocator;
 protected:
 	/** 
 	 *	Constructor
@@ -732,7 +734,7 @@ public:
  *	Embeds a user defined task, as exemplified above, for doing the work and provides the functionality for setting up and handling prerequisites and subsequents
  **/
 template<typename TTask>
-class TGraphTask : public FBaseGraphTask
+class TGraphTask final : public FBaseGraphTask
 {
 public:
 	/** 
@@ -828,7 +830,7 @@ private:
 	 *	Dispatches the subsequents.
 	 *	Destroys myself.
 	 **/
-	virtual void ExecuteTask(TArray<FBaseGraphTask*>& NewTasks, ENamedThreads::Type CurrentThread) final override
+	void ExecuteTask(TArray<FBaseGraphTask*>& NewTasks, ENamedThreads::Type CurrentThread) override
 	{
 		checkThreadGraph(TaskConstructed);
 
@@ -885,7 +887,7 @@ private:
 	/** 
 	 *	Private destructor, just checks that the task appears to be completed
 	**/
-	virtual ~TGraphTask() final override
+	~TGraphTask() override
 	{
 		checkThreadGraph(!TaskConstructed);
 	}

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	Main implementation of FFbxExporter : export FBX data from Unreal
@@ -68,7 +68,7 @@
 #include "FbxExporter.h"
 
 #include "StaticMeshAttributes.h"
-#include "MeshDescriptionOperations.h"
+#include "StaticMeshOperations.h"
 
 #include "Components/BrushComponent.h"
 #include "CineCameraComponent.h"
@@ -92,6 +92,12 @@
 #include "geometry/PxConvexMesh.h"
 #include "PhysicsEngine/BodySetup.h"
 #endif // WITH_PHYSX
+
+#if WITH_CHAOS
+#include "Chaos/Core.h"
+#include "Chaos/Particles.h"
+#include "Chaos/Plane.h"
+#endif
 
 #include "Exporters/FbxExportOption.h"
 #include "FbxExportOptionsWindow.h"
@@ -1130,7 +1136,7 @@ void FFbxExporter::ExportBSP( UModel* Model, bool bSelectedOnly )
 	{
 		if( It.Value().Mesh.Vertices().Num() )
 		{
-			FMeshDescriptionOperations::ConvertSmoothGroupToHardEdges(It.Value().SmoothGroups, It.Value().Mesh);
+			FStaticMeshOperations::ConvertSmoothGroupToHardEdges(It.Value().SmoothGroups, It.Value().Mesh);
 
 			UStaticMesh* NewMesh = CreateStaticMesh( It.Value().Mesh, It.Value().Materials, GetTransientPackage(), It.Key()->GetFName() );
 
@@ -1427,25 +1433,24 @@ FString FFbxExporter::FMatineeNodeNameAdapter::GetActorNodeName(const AActor* Ac
 	return NodeName;
 }
 
-
-FFbxExporter::FMatineeAnimTrackAdapter::FMatineeAnimTrackAdapter( AMatineeActor* InMatineeActor )
+FMatineeAnimTrackAdapter::FMatineeAnimTrackAdapter( AMatineeActor* InMatineeActor )
 {
 	MatineeActor = InMatineeActor;
 }
 
-int32 FFbxExporter::FMatineeAnimTrackAdapter::GetLocalStartFrame() const
+int32 FMatineeAnimTrackAdapter::GetLocalStartFrame() const
 {
 	return 0;
 }
 
 
-int32 FFbxExporter::FMatineeAnimTrackAdapter::GetLength() const
+int32 FMatineeAnimTrackAdapter::GetLength() const
 {
 	return MatineeActor->MatineeData->InterpLength * (1.f / GetFrameRate());
 }
 
 
-void FFbxExporter::FMatineeAnimTrackAdapter::UpdateAnimation( int32 LocalFrame )
+void FMatineeAnimTrackAdapter::UpdateAnimation( int32 LocalFrame )
 {
 	float Time = LocalFrame * GetFrameRate();
 	MatineeActor->UpdateInterp( Time, true );
@@ -1580,29 +1585,28 @@ FbxNode* FFbxExporter::FLevelSequenceNodeNameAdapter::GetFbxNode(UObject* InObje
 	return nullptr;
 }
 
-FFbxExporter::FLevelSequenceAnimTrackAdapter::FLevelSequenceAnimTrackAdapter( IMovieScenePlayer* InMovieScenePlayer, UMovieScene* InMovieScene, const FMovieSceneSequenceTransform& InRootToLocalTransform)
+FLevelSequenceAnimTrackAdapter::FLevelSequenceAnimTrackAdapter( IMovieScenePlayer* InMovieScenePlayer, UMovieScene* InMovieScene, const FMovieSceneSequenceTransform& InRootToLocalTransform)
 {
 	MovieScenePlayer = InMovieScenePlayer;
 	MovieScene = InMovieScene;
 	RootToLocalTransform = InRootToLocalTransform;
 }
 
-
-int32 FFbxExporter::FLevelSequenceAnimTrackAdapter::GetLocalStartFrame() const
+int32 FLevelSequenceAnimTrackAdapter::GetLocalStartFrame() const
 {
 	FFrameRate TickResolution = MovieScene->GetTickResolution();
 	FFrameRate DisplayRate = MovieScene->GetDisplayRate();
 	return FFrameRate::TransformTime(FFrameTime(MovieScene::DiscreteInclusiveLower(MovieScene->GetPlaybackRange())), TickResolution, DisplayRate).RoundToFrame().Value;
 }
 
-int32 FFbxExporter::FLevelSequenceAnimTrackAdapter::GetStartFrame() const
+int32 FLevelSequenceAnimTrackAdapter::GetStartFrame() const
 {
 	FFrameRate TickResolution = MovieScene->GetTickResolution();
 	FFrameRate DisplayRate = MovieScene->GetDisplayRate();
-	return FFrameRate::TransformTime(FFrameTime(MovieScene::DiscreteInclusiveLower(MovieScene->GetPlaybackRange()) * RootToLocalTransform.Inverse()), TickResolution, DisplayRate).RoundToFrame().Value;
+	return FFrameRate::TransformTime(FFrameTime(MovieScene::DiscreteInclusiveLower(MovieScene->GetPlaybackRange()) * RootToLocalTransform.InverseLinearOnly()), TickResolution, DisplayRate).RoundToFrame().Value;
 }
 
-int32 FFbxExporter::FLevelSequenceAnimTrackAdapter::GetLength() const
+int32 FLevelSequenceAnimTrackAdapter::GetLength() const
 {
 	FFrameRate TickResolution = MovieScene->GetTickResolution();
 	FFrameRate DisplayRate = MovieScene->GetDisplayRate();
@@ -1610,28 +1614,36 @@ int32 FFbxExporter::FLevelSequenceAnimTrackAdapter::GetLength() const
 }
 
 
-void FFbxExporter::FLevelSequenceAnimTrackAdapter::UpdateAnimation( int32 LocalFrame )
+void FLevelSequenceAnimTrackAdapter::UpdateAnimation( int32 LocalFrame )
 {	
 	FFrameRate TickResolution = MovieScene->GetTickResolution();
 	FFrameRate DisplayRate = MovieScene->GetDisplayRate();
 
 	FFrameTime LocalTime = FFrameRate::TransformTime(FFrameTime(LocalFrame), DisplayRate, TickResolution);
-	FFrameTime GlobalTime = LocalTime * RootToLocalTransform.Inverse();
+	FFrameTime GlobalTime = LocalTime * RootToLocalTransform.InverseLinearOnly();
 
 	FMovieSceneContext Context = FMovieSceneContext(FMovieSceneEvaluationRange(GlobalTime, TickResolution), MovieScenePlayer->GetPlaybackStatus()).SetHasJumped(true);
 
 	MovieScenePlayer->GetEvaluationTemplate().Evaluate( Context, *MovieScenePlayer );
 }
 
-
-float FFbxExporter::FLevelSequenceAnimTrackAdapter::GetFrameRate() const
+float FLevelSequenceAnimTrackAdapter::GetFrameRate() const
 {
 	return MovieScene->GetDisplayRate().AsDecimal();
 }
 
-
-bool FFbxExporter::ExportLevelSequenceTracks(UMovieScene* MovieScene, IMovieScenePlayer* MovieScenePlayer, FbxNode* FbxActor, AActor* Actor, const TArray<UMovieSceneTrack*>& Tracks, const FMovieSceneSequenceTransform& RootToLocalTransform)
+bool FFbxExporter::ExportLevelSequenceTracks(UMovieScene* MovieScene, IMovieScenePlayer* MovieScenePlayer, FMovieSceneSequenceIDRef InSequenceID, FbxNode* FbxActor, UObject* BoundObject, const TArray<UMovieSceneTrack*>& Tracks, const FMovieSceneSequenceTransform& RootToLocalTransform)
 {
+	AActor* Actor = Cast<AActor>(BoundObject);
+	if (!Actor)
+	{
+		UActorComponent* Component = Cast<UActorComponent>(BoundObject);
+		if (Component)
+		{
+			Actor = Component->GetOwner();
+		}
+	}
+
 	USkeletalMeshComponent* SkeletalMeshComp = Actor ? Cast<USkeletalMeshComponent>(Actor->GetComponentByClass(USkeletalMeshComponent::StaticClass())) : nullptr;
 
 	FFrameRate DisplayRate = MovieScene->GetDisplayRate();
@@ -1645,7 +1657,7 @@ bool FFbxExporter::ExportLevelSequenceTracks(UMovieScene* MovieScene, IMovieScen
 		if (Track->IsA(UMovieScene3DTransformTrack::StaticClass()) && !bSkip3DTransformTrack)
 		{
 			UMovieScene3DTransformTrack* TransformTrack = (UMovieScene3DTransformTrack*)Track;
-			ExportLevelSequence3DTransformTrack(FbxActor, *TransformTrack, Actor, MovieScene->GetPlaybackRange(), RootToLocalTransform);
+			ExportLevelSequence3DTransformTrack(FbxActor, MovieScenePlayer, InSequenceID, *TransformTrack, BoundObject, MovieScene->GetPlaybackRange(), RootToLocalTransform);
 		}
 		else if (Track->IsA(UMovieScenePropertyTrack::StaticClass()))
 		{
@@ -1662,19 +1674,17 @@ bool FFbxExporter::ExportLevelSequenceTracks(UMovieScene* MovieScene, IMovieScen
 			}
 		}
 	}
-
 	return true;
 }
 
-
-bool FFbxExporter::ExportLevelSequence( UMovieScene* MovieScene, const TArray<FGuid>& Bindings, IMovieScenePlayer* MovieScenePlayer, INodeNameAdapter& NodeNameAdapter, FMovieSceneSequenceIDRef SequenceID, const FMovieSceneSequenceTransform& RootToLocalTransform)
+bool FFbxExporter::ExportLevelSequence(UMovieScene* MovieScene, const TArray<FGuid>& Bindings, IMovieScenePlayer* MovieScenePlayer, INodeNameAdapter& NodeNameAdapter, FMovieSceneSequenceIDRef SequenceID, const FMovieSceneSequenceTransform& RootToLocalTransform)
 {
-	if ( MovieScene == nullptr || MovieScenePlayer == nullptr )
+	if (MovieScene == nullptr || MovieScenePlayer == nullptr)
 	{
 		return false;
 	}
 
-	for ( const FMovieSceneBinding& MovieSceneBinding : MovieScene->GetBindings() )
+	for (const FMovieSceneBinding& MovieSceneBinding : MovieScene->GetBindings())
 	{
 		// If there are specific bindings to export, export those only
 		if (Bindings.Num() != 0 && !Bindings.Contains(MovieSceneBinding.GetObjectGuid()))
@@ -1684,18 +1694,18 @@ bool FFbxExporter::ExportLevelSequence( UMovieScene* MovieScene, const TArray<FG
 
 		bool bAnyBindingsExported = false;
 
-		for ( TWeakObjectPtr<UObject> RuntimeObject : MovieScenePlayer->FindBoundObjects(MovieSceneBinding.GetObjectGuid(), SequenceID) )
+		for (TWeakObjectPtr<UObject> RuntimeObject : MovieScenePlayer->FindBoundObjects(MovieSceneBinding.GetObjectGuid(), SequenceID))
 		{
-			if ( RuntimeObject.IsValid() )
+			if (RuntimeObject.IsValid())
 			{
-				AActor* Actor = Cast<AActor>( RuntimeObject.Get() );
-				UActorComponent* Component = Cast<UActorComponent>( RuntimeObject.Get() );
-				if ( Actor == nullptr && Component != nullptr )
+				AActor* Actor = Cast<AActor>(RuntimeObject.Get());
+				UActorComponent* Component = Cast<UActorComponent>(RuntimeObject.Get());
+				if (Actor == nullptr && Component != nullptr)
 				{
 					Actor = Component->GetOwner();
 				}
 
-				if ( Actor == nullptr )
+				if (Actor == nullptr)
 				{
 					continue;
 				}
@@ -1703,9 +1713,9 @@ bool FFbxExporter::ExportLevelSequence( UMovieScene* MovieScene, const TArray<FG
 				FbxNode* FbxActor = FindActor(Actor, &NodeNameAdapter);
 
 				// now it should export everybody
-				if ( FbxActor )
+				if (FbxActor)
 				{
-					ExportLevelSequenceTracks(MovieScene, MovieScenePlayer, FbxActor, Actor, MovieSceneBinding.GetTracks(), RootToLocalTransform);
+					ExportLevelSequenceTracks(MovieScene, MovieScenePlayer, SequenceID, FbxActor, RuntimeObject.Get(), MovieSceneBinding.GetTracks(), RootToLocalTransform);
 					bAnyBindingsExported = true;
 				}
 			}
@@ -1714,7 +1724,7 @@ bool FFbxExporter::ExportLevelSequence( UMovieScene* MovieScene, const TArray<FG
 		// If no bindings exported, create a dummy actor to export tracks onto
 		if (!bAnyBindingsExported)
 		{
-			ExportLevelSequenceTracks(MovieScene, MovieScenePlayer, nullptr, nullptr, MovieSceneBinding.GetTracks(), RootToLocalTransform);
+			ExportLevelSequenceTracks(MovieScene, MovieScenePlayer, SequenceID, nullptr, nullptr, MovieSceneBinding.GetTracks(), RootToLocalTransform);
 		}
 	}
 
@@ -2516,7 +2526,7 @@ void FFbxExporter::ExportChannelToFbxCurve(FbxAnimCurve& InFbxCurve, const FMovi
 
 		FbxTime FbxTime;
 		FbxAnimCurveKey FbxKey;
-		const double KeyTimeSeconds = GetExportOptions()->bExportLocalTime ? KeyTime / TickResolution : (KeyTime * RootToLocalTransform.Inverse()) / TickResolution;
+		const double KeyTimeSeconds = GetExportOptions()->bExportLocalTime ? KeyTime / TickResolution : (KeyTime * RootToLocalTransform.InverseLinearOnly()) / TickResolution;
 
 		FbxTime.SetSecondDouble(KeyTimeSeconds);
 
@@ -2573,13 +2583,14 @@ void FFbxExporter::ExportChannelToFbxCurve(FbxAnimCurve& InFbxCurve, const FMovi
 	InFbxCurve.KeyModifyEnd();
 }
 
-void FFbxExporter::ExportLevelSequence3DTransformTrack( FbxNode* FbxNode, UMovieScene3DTransformTrack& TransformTrack, AActor* Actor, const TRange<FFrameNumber>& InPlaybackRange, const FMovieSceneSequenceTransform& RootToLocalTransform )
+void FFbxExporter::ExportLevelSequence3DTransformTrack(FbxNode* FbxNode, IMovieScenePlayer* MovieScenePlayer, FMovieSceneSequenceIDRef InSequenceID, UMovieScene3DTransformTrack& TransformTrack, UObject* BoundObject, const TRange<FFrameNumber>& InPlaybackRange, const FMovieSceneSequenceTransform& RootToLocalTransform)
 {
-	FbxAnimLayer* BaseLayer = AnimStack->GetMember<FbxAnimLayer>( 0 );
-
-	const bool bIsCameraActor = Actor ? Actor->IsA(ACameraActor::StaticClass()) : false;
-	const bool bIsLightActor = Actor ? Actor->IsA(ALight::StaticClass()) : false;
-	const bool bBakeRotations = bIsCameraActor || bIsLightActor;
+	//if more than one section, we use baked version of all sections.
+	if (TransformTrack.GetAllSections().Num() > 1)
+	{
+		ExportLevelSequenceInterrogated3DTransformTrack(FbxNode, MovieScenePlayer, InSequenceID, TransformTrack, BoundObject, InPlaybackRange, RootToLocalTransform);
+		return;
+	}
 
 	// TODO: Support more than one section?
 	UMovieScene3DTransformSection* TransformSection = TransformTrack.GetAllSections().Num() > 0
@@ -2591,6 +2602,15 @@ void FFbxExporter::ExportLevelSequence3DTransformTrack( FbxNode* FbxNode, UMovie
 		return;
 	}
 
+	FbxAnimLayer* BaseLayer = AnimStack->GetMember<FbxAnimLayer>(0);
+
+	AActor* BoundActor = Cast<AActor>(BoundObject);
+	USceneComponent* BoundComponent = Cast<USceneComponent>(BoundObject);
+
+	const bool bIsCameraActor = BoundActor ? BoundActor->IsA(ACameraActor::StaticClass()) : BoundComponent ? BoundComponent->IsA(UCameraComponent::StaticClass()) : false;
+	const bool bIsLightActor = BoundActor ? BoundActor->IsA(ALight::StaticClass()) : BoundComponent ? BoundComponent->IsA(ULightComponent::StaticClass()) : false;
+	const bool bBakeRotations = bIsCameraActor || bIsLightActor;
+
 	if (!FbxNode)
 	{
 		FbxNode = CreateNode(TransformTrack.GetDisplayName().ToString());
@@ -2599,21 +2619,21 @@ void FFbxExporter::ExportLevelSequence3DTransformTrack( FbxNode* FbxNode, UMovie
 	FFrameRate TickResolution = TransformTrack.GetTypedOuter<UMovieScene>()->GetTickResolution();
 	FFrameRate DisplayRate = TransformTrack.GetTypedOuter<UMovieScene>()->GetDisplayRate();
 
-	FbxAnimCurveNode* TranslationNode = FbxNode->LclTranslation.GetCurveNode( BaseLayer, true );
-	FbxAnimCurveNode* RotationNode = FbxNode->LclRotation.GetCurveNode( BaseLayer, true );
-	FbxAnimCurveNode* ScaleNode = FbxNode->LclScaling.GetCurveNode( BaseLayer, true );
+	FbxAnimCurveNode* TranslationNode = FbxNode->LclTranslation.GetCurveNode(BaseLayer, true);
+	FbxAnimCurveNode* RotationNode = FbxNode->LclRotation.GetCurveNode(BaseLayer, true);
+	FbxAnimCurveNode* ScaleNode = FbxNode->LclScaling.GetCurveNode(BaseLayer, true);
 
-	FbxAnimCurve* FbxCurveTransX = FbxNode->LclTranslation.GetCurve( BaseLayer, FBXSDK_CURVENODE_COMPONENT_X, true );
-	FbxAnimCurve* FbxCurveTransY = FbxNode->LclTranslation.GetCurve( BaseLayer, FBXSDK_CURVENODE_COMPONENT_Y, true );
-	FbxAnimCurve* FbxCurveTransZ = FbxNode->LclTranslation.GetCurve( BaseLayer, FBXSDK_CURVENODE_COMPONENT_Z, true );
+	FbxAnimCurve* FbxCurveTransX = FbxNode->LclTranslation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_X, true);
+	FbxAnimCurve* FbxCurveTransY = FbxNode->LclTranslation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Y, true);
+	FbxAnimCurve* FbxCurveTransZ = FbxNode->LclTranslation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Z, true);
 
-	FbxAnimCurve* FbxCurveRotX = FbxNode->LclRotation.GetCurve( BaseLayer, FBXSDK_CURVENODE_COMPONENT_X, true );
-	FbxAnimCurve* FbxCurveRotY = FbxNode->LclRotation.GetCurve( BaseLayer, FBXSDK_CURVENODE_COMPONENT_Y, true );
-	FbxAnimCurve* FbxCurveRotZ = FbxNode->LclRotation.GetCurve( BaseLayer, FBXSDK_CURVENODE_COMPONENT_Z, true );
+	FbxAnimCurve* FbxCurveRotX = FbxNode->LclRotation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_X, true);
+	FbxAnimCurve* FbxCurveRotY = FbxNode->LclRotation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Y, true);
+	FbxAnimCurve* FbxCurveRotZ = FbxNode->LclRotation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Z, true);
 
-	FbxAnimCurve* FbxCurveScaleX = FbxNode->LclScaling.GetCurve( BaseLayer, FBXSDK_CURVENODE_COMPONENT_X, true );
-	FbxAnimCurve* FbxCurveScaleY = FbxNode->LclScaling.GetCurve( BaseLayer, FBXSDK_CURVENODE_COMPONENT_Y, true );
-	FbxAnimCurve* FbxCurveScaleZ = FbxNode->LclScaling.GetCurve( BaseLayer, FBXSDK_CURVENODE_COMPONENT_Z, true );
+	FbxAnimCurve* FbxCurveScaleX = FbxNode->LclScaling.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_X, true);
+	FbxAnimCurve* FbxCurveScaleY = FbxNode->LclScaling.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Y, true);
+	FbxAnimCurve* FbxCurveScaleZ = FbxNode->LclScaling.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Z, true);
 
 	TArrayView<FMovieSceneFloatChannel*> FloatChannels = TransformSection->GetChannelProxy().GetChannels<FMovieSceneFloatChannel>();
 
@@ -2656,7 +2676,7 @@ void FFbxExporter::ExportLevelSequence3DTransformTrack( FbxNode* FbxNode, UMovie
 		FbxCurveRotZ->KeyModifyBegin();
 
 		int32 LocalStartFrame = FFrameRate::TransformTime(FFrameTime(MovieScene::DiscreteInclusiveLower(InPlaybackRange)), TickResolution, DisplayRate).RoundToFrame().Value;
-		int32 StartFrame = FFrameRate::TransformTime(FFrameTime(MovieScene::DiscreteInclusiveLower(InPlaybackRange) * RootToLocalTransform.Inverse()), TickResolution, DisplayRate).RoundToFrame().Value;
+		int32 StartFrame = FFrameRate::TransformTime(FFrameTime(MovieScene::DiscreteInclusiveLower(InPlaybackRange) * RootToLocalTransform.InverseLinearOnly()), TickResolution, DisplayRate).RoundToFrame().Value;
 		int32 AnimationLength = FFrameRate::TransformTime(FFrameTime(FFrameNumber(MovieScene::DiscreteSize(InPlaybackRange))), TickResolution, DisplayRate).RoundToFrame().Value;
 
 		for (int32 FrameCount = 0; FrameCount <= AnimationLength; ++FrameCount)
@@ -2704,6 +2724,173 @@ void FFbxExporter::ExportLevelSequence3DTransformTrack( FbxNode* FbxNode, UMovie
 		FbxCurveRotZ->KeyModifyEnd();
 	}
 }
+
+
+static void GetLocationAtTime(IMovieScenePlayer* MovieScenePlayer, FMovieSceneEvaluationTrack* Track, UObject* Object, FFrameTime KeyTime, FVector& KeyPos, FRotator& KeyRot, FVector& KeyScale, FFrameRate TickResolution)
+{
+	FMovieSceneInterrogationData InterrogationData;
+	MovieScenePlayer->GetEvaluationTemplate().CopyActuators(InterrogationData.GetAccumulator());
+
+	FMovieSceneContext Context(FMovieSceneEvaluationRange(KeyTime, TickResolution));
+	Track->Interrogate(Context, InterrogationData, Object);
+
+	for (const FTransformData& Transform : InterrogationData.Iterate<FTransformData>(UMovieScene3DTransformSection::GetInterrogationKey()))
+	{
+		KeyPos = Transform.Translation;
+		KeyRot = Transform.Rotation;
+		KeyScale = Transform.Scale;
+		break;
+	}
+}
+void FFbxExporter::ExportLevelSequenceInterrogated3DTransformTrack(FbxNode* FbxNode, IMovieScenePlayer* MovieScenePlayer, FMovieSceneSequenceIDRef InSequenceID, UMovieScene3DTransformTrack& TransformTrack, UObject* BoundObject, const TRange<FFrameNumber>& InPlaybackRange, const FMovieSceneSequenceTransform& RootToLocalTransform)
+{
+	if (TransformTrack.GetAllSections().Num() <= 0)
+	{
+		return;
+	}
+
+	FbxAnimLayer* BaseLayer = AnimStack->GetMember<FbxAnimLayer>(0);
+
+	AActor* BoundActor = Cast<AActor>(BoundObject);
+	USceneComponent* BoundComponent = Cast<USceneComponent>(BoundObject);
+
+	const bool bIsCameraActor = BoundActor ? BoundActor->IsA(ACameraActor::StaticClass()) : BoundComponent ? BoundComponent->IsA(UCameraComponent::StaticClass()) : false;
+	const bool bIsLightActor = BoundActor ? BoundActor->IsA(ALight::StaticClass()) : BoundComponent ? BoundComponent->IsA(ULightComponent::StaticClass()) : false;
+	const bool bBakeRotations = bIsCameraActor || bIsLightActor;
+
+	if (!FbxNode)
+	{
+		FbxNode = CreateNode(TransformTrack.GetDisplayName().ToString());
+	}
+
+	FFrameRate TickResolution = TransformTrack.GetTypedOuter<UMovieScene>()->GetTickResolution();
+	FFrameRate DisplayRate = TransformTrack.GetTypedOuter<UMovieScene>()->GetDisplayRate();
+
+	FbxAnimCurveNode* TranslationNode = FbxNode->LclTranslation.GetCurveNode(BaseLayer, true);
+	FbxAnimCurveNode* RotationNode = FbxNode->LclRotation.GetCurveNode(BaseLayer, true);
+	FbxAnimCurveNode* ScaleNode = FbxNode->LclScaling.GetCurveNode(BaseLayer, true);
+
+	FbxAnimCurve* FbxCurveTransX = FbxNode->LclTranslation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_X, true);
+	FbxAnimCurve* FbxCurveTransY = FbxNode->LclTranslation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Y, true);
+	FbxAnimCurve* FbxCurveTransZ = FbxNode->LclTranslation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Z, true);
+
+	FbxAnimCurve* FbxCurveRotX = FbxNode->LclRotation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_X, true);
+	FbxAnimCurve* FbxCurveRotY = FbxNode->LclRotation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Y, true);
+	FbxAnimCurve* FbxCurveRotZ = FbxNode->LclRotation.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Z, true);
+
+	FbxAnimCurve* FbxCurveScaleX = FbxNode->LclScaling.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_X, true);
+	FbxAnimCurve* FbxCurveScaleY = FbxNode->LclScaling.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Y, true);
+	FbxAnimCurve* FbxCurveScaleZ = FbxNode->LclScaling.GetCurve(BaseLayer, FBXSDK_CURVENODE_COMPONENT_Z, true);
+
+	FTransform RotationDirectionConvert;
+	if (bIsCameraActor)
+	{
+		FRotator Rotator = FFbxDataConverter::GetCameraRotation().GetInverse();
+		RotationDirectionConvert = FTransform(Rotator);
+	}
+	else if (bIsLightActor)
+	{
+		FRotator Rotator = FFbxDataConverter::GetLightRotation().GetInverse();
+		RotationDirectionConvert = FTransform(Rotator);
+	}
+
+	FbxCurveTransX->KeyModifyBegin();
+	FbxCurveTransY->KeyModifyBegin();
+	FbxCurveTransZ->KeyModifyBegin();
+
+	FbxCurveRotX->KeyModifyBegin();
+	FbxCurveRotY->KeyModifyBegin();
+	FbxCurveRotZ->KeyModifyBegin();
+
+	if (!bIsCameraActor)
+	{
+		FbxCurveScaleX->KeyModifyBegin();
+		FbxCurveScaleY->KeyModifyBegin();
+		FbxCurveScaleZ->KeyModifyBegin();
+	}
+
+	int32 LocalStartFrame = FFrameRate::TransformTime(FFrameTime(MovieScene::DiscreteInclusiveLower(InPlaybackRange)), TickResolution, DisplayRate).RoundToFrame().Value;
+	int32 StartFrame = FFrameRate::TransformTime(FFrameTime(MovieScene::DiscreteInclusiveLower(InPlaybackRange) * RootToLocalTransform.InverseLinearOnly()), TickResolution, DisplayRate).RoundToFrame().Value;
+	int32 AnimationLength = FFrameRate::TransformTime(FFrameTime(FFrameNumber(MovieScene::DiscreteSize(InPlaybackRange))), TickResolution, DisplayRate).RoundToFrame().Value;
+
+	FMovieSceneEvaluationTemplate* Template = MovieScenePlayer->GetEvaluationTemplate().FindTemplate(InSequenceID);
+	FMovieSceneEvaluationTrack* EvalTrack = nullptr;
+	if (Template)
+	{
+		EvalTrack = Template->FindTrack(TransformTrack.GetSignature());
+	}
+	if (!EvalTrack)
+	{
+		if (BoundObject)
+		{
+			UE_LOG(LogFbx, Warning, TEXT("Exporting 3D TransformTrack on %s failed, can not create eval track.\n\n"), *BoundObject->GetFName().ToString());
+		}
+		else
+		{
+			UE_LOG(LogFbx, Warning, TEXT("Exporting 3D TransformTrack on an Unbound Actor failed, can not create eval track.\n\n"));
+		}
+		return;
+
+	}
+
+	for (int32 FrameCount = 0; FrameCount <= AnimationLength; ++FrameCount)
+	{
+		int32 LocalFrame = LocalStartFrame + FrameCount;
+
+		FFrameTime LocalTime = FFrameRate::TransformTime(FFrameTime(LocalFrame), DisplayRate, TickResolution);
+
+		FVector Trans = FVector::ZeroVector;
+		FRotator Rotator;
+		FVector Scale;
+
+		GetLocationAtTime(MovieScenePlayer, EvalTrack, BoundObject, LocalTime, Trans, Rotator, Scale, TickResolution);
+
+		FTransform RelativeTransform;
+		RelativeTransform.SetTranslation(Trans);
+		RelativeTransform.SetRotation(Rotator.Quaternion());
+		RelativeTransform.SetScale3D(Scale);
+
+		RelativeTransform = RotationDirectionConvert * RelativeTransform;
+
+		FbxVector4 KeyTrans = Converter.ConvertToFbxPos(RelativeTransform.GetTranslation());
+		FbxVector4 KeyRot = Converter.ConvertToFbxRot(RelativeTransform.GetRotation().Euler());
+		FbxVector4 KeyScale = Converter.ConvertToFbxScale(RelativeTransform.GetScale3D());
+
+		FbxTime FbxTime;
+		FbxTime.SetSecondDouble(GetExportOptions()->bExportLocalTime ? DisplayRate.AsSeconds(LocalFrame) : DisplayRate.AsSeconds(StartFrame + FrameCount));
+
+		FbxCurveTransX->KeySet(FbxCurveTransX->KeyAdd(FbxTime), FbxTime, KeyTrans[0]);
+		FbxCurveTransY->KeySet(FbxCurveTransY->KeyAdd(FbxTime), FbxTime, KeyTrans[1]);
+		FbxCurveTransZ->KeySet(FbxCurveTransZ->KeyAdd(FbxTime), FbxTime, KeyTrans[2]);
+
+		FbxCurveRotX->KeySet(FbxCurveRotX->KeyAdd(FbxTime), FbxTime, KeyRot[0]);
+		FbxCurveRotY->KeySet(FbxCurveRotY->KeyAdd(FbxTime), FbxTime, KeyRot[1]);
+		FbxCurveRotZ->KeySet(FbxCurveRotZ->KeyAdd(FbxTime), FbxTime, KeyRot[2]);
+
+		if (!bIsCameraActor)
+		{
+			FbxCurveScaleX->KeySet(FbxCurveScaleX->KeyAdd(FbxTime), FbxTime, KeyScale[0]);
+			FbxCurveScaleY->KeySet(FbxCurveScaleY->KeyAdd(FbxTime), FbxTime, KeyScale[1]);
+			FbxCurveScaleZ->KeySet(FbxCurveScaleZ->KeyAdd(FbxTime), FbxTime, KeyScale[2]);
+		}
+	}
+
+	FbxCurveTransX->KeyModifyEnd();
+	FbxCurveTransY->KeyModifyEnd();
+	FbxCurveTransZ->KeyModifyEnd();
+
+	FbxCurveRotX->KeyModifyEnd();
+	FbxCurveRotY->KeyModifyEnd();
+	FbxCurveRotZ->KeyModifyEnd();
+
+	if (!bIsCameraActor)
+	{
+		FbxCurveScaleX->KeyModifyEnd();
+		FbxCurveScaleY->KeyModifyEnd();
+		FbxCurveScaleZ->KeyModifyEnd();
+	}
+}
+
 
 void FFbxExporter::ExportLevelSequencePropertyTrack( FbxNode* FbxNode, UMovieScenePropertyTrack& PropertyTrack, const TRange<FFrameNumber>& InPlaybackRange, const FMovieSceneSequenceTransform& RootToLocalTransform)
 {
@@ -2941,7 +3128,7 @@ void DetermineVertsToWeld(TArray<int32>& VertRemap, TArray<int32>& UniqueVerts, 
 	}
 }
 
-#if WITH_PHYSX
+#if (WITH_PHYSX && PHYSICS_INTERFACE_PHYSX) || WITH_CHAOS
 
 class FCollisionFbxExporter
 {
@@ -3109,7 +3296,11 @@ public:
 private:
 	uint32 GetConvexVerticeNumber(const FKConvexElem &ConvexElem)
 	{
+#if WITH_PHYSX && PHYSICS_INTERFACE_PHYSX
 		return ConvexElem.GetConvexMesh() != nullptr ? ConvexElem.GetConvexMesh()->getNbVertices() : 0;
+#elif WITH_CHAOS
+		return ConvexElem.VertexData.Num();
+#endif
 	}
 
 	uint32 GetBoxVerticeNumber() { return 24; }
@@ -3120,6 +3311,7 @@ private:
 
 	void AddConvexVertex(const FKConvexElem &ConvexElem)
 	{
+#if WITH_PHYSX && PHYSICS_INTERFACE_PHYSX
 		const physx::PxConvexMesh* ConvexMesh = ConvexElem.GetConvexMesh();
 		if (ConvexMesh == nullptr)
 		{
@@ -3132,10 +3324,20 @@ private:
 			ControlPoints[CurrentVertexOffset + PosIndex] = FbxVector4(Position.X, -Position.Y, Position.Z);
 		}
 		CurrentVertexOffset += ConvexMesh->getNbVertices();
+#elif WITH_CHAOS
+		const TArray<FVector>& VertexArray = ConvexElem.VertexData;
+		for (int32 PosIndex = 0; PosIndex < VertexArray.Num(); ++PosIndex)
+		{
+			FVector Position = VertexArray[PosIndex];
+			ControlPoints[CurrentVertexOffset + PosIndex] = FbxVector4(Position.X, -Position.Y, Position.Z);
+		}
+		CurrentVertexOffset += VertexArray.Num();
+#endif
 	}
 
 	void AddConvexNormals(const FKConvexElem &ConvexElem)
 	{
+#if WITH_PHYSX && PHYSICS_INTERFACE_PHYSX
 		const physx::PxConvexMesh* ConvexMesh = ConvexElem.GetConvexMesh();
 		if (ConvexMesh == nullptr)
 		{
@@ -3159,10 +3361,29 @@ private:
 				LayerElementNormal->GetDirectArray().Add(FbxNormal);
 			}
 		}
+#elif WITH_CHAOS
+		const auto& ConvexMesh = ConvexElem.GetChaosConvexMesh();
+		if (!ConvexMesh.IsValid())
+		{
+			return;
+		}
+		const TArray<Chaos::TPlaneConcrete<Chaos::FReal, 3>>& Faces = ConvexMesh->GetFaces();
+		for (int32 PolyIndex = 0; PolyIndex < Faces.Num(); ++PolyIndex)
+		{
+			FVector Normal = Faces[PolyIndex].Normal().GetSafeNormal();
+			FbxVector4 FbxNormal = FbxVector4(Normal.X, -Normal.Y, Normal.Z);
+			// add vertices 
+			for (int32 j = 0; j < 3; ++j)
+			{
+				LayerElementNormal->GetDirectArray().Add(FbxNormal);
+			}
+		}
+#endif
 	}
 
 	void AddConvexPolygon(const FKConvexElem &ConvexElem)
 	{
+#if WITH_PHYSX && PHYSICS_INTERFACE_PHYSX
 		const physx::PxConvexMesh* ConvexMesh = ConvexElem.GetConvexMesh();
 		if (ConvexMesh == nullptr)
 		{
@@ -3188,6 +3409,29 @@ private:
 			Mesh->EndPolygon();
 		}
 		CurrentVertexOffset += ConvexMesh->getNbVertices();
+#elif WITH_CHAOS
+		const auto& ConvexMesh = ConvexElem.GetChaosConvexMesh();
+		if (!ConvexMesh.IsValid())
+		{
+			return;
+		}
+		TArray<int32> IndexData(ConvexElem.IndexData);
+		if (IndexData.Num() == 0)
+		{
+			IndexData = ConvexElem.GetChaosConvexIndices();
+		}
+		check(IndexData.Num() % 3 == 0);
+		for (int32 VertexIndex = 0; VertexIndex < IndexData.Num(); VertexIndex += 3)
+		{
+			Mesh->BeginPolygon(ActualMatIndex);
+			Mesh->AddPolygon(CurrentVertexOffset + IndexData[VertexIndex]);
+			Mesh->AddPolygon(CurrentVertexOffset + IndexData[VertexIndex + 1]);
+			Mesh->AddPolygon(CurrentVertexOffset + IndexData[VertexIndex + 2]);
+			Mesh->EndPolygon();
+		}
+
+		CurrentVertexOffset += ConvexElem.VertexData.Num();
+#endif
 	}
 
 	void AddBoxVertex(const FKBoxElem &BoxElem)
@@ -3622,7 +3866,7 @@ FbxNode* FFbxExporter::ExportCollisionMesh(const UStaticMesh* StaticMesh, const 
 	FbxActor->SetNodeAttribute(CollisionMesh);
 	return FbxActor;
 }
-#endif
+#endif //WITH_PHYSX
 
 void FFbxExporter::ExportObjectMetadata(const UObject* ObjectToExport, FbxNode* Node)
 {
@@ -3993,7 +4237,7 @@ FbxNode* FFbxExporter::ExportStaticMeshToFbx(const UStaticMesh* StaticMesh, int3
 		}
 	}
 
-#if WITH_PHYSX
+#if (WITH_PHYSX && PHYSICS_INTERFACE_PHYSX) || WITH_CHAOS
 	if ((ExportLOD == 0 || ExportLOD == -1) && GetExportOptions()->Collision)
 	{
 		ExportCollisionMesh(StaticMesh, MeshName, FbxActor);

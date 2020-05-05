@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -41,7 +41,7 @@ public:
 	 * This does not apply completed results to the renderer scenes.
 	 * Caller is responsible for deleting OutCachedResource.
 	 */
-	void CacheResourceShadersForCooking(EShaderPlatform InShaderPlatform, const FString& InShaderHash, const FString& InShaderCode, TArray<FOpenColorIOTransformResource*>& OutCachedResources);
+	void CacheResourceShadersForCooking(EShaderPlatform InShaderPlatform, const ITargetPlatform* TargetPlatform, const FString& InShaderHash, const FString& InShaderCode, TArray<FOpenColorIOTransformResource*>& OutCachedResources);
 
 	/**
 	 * Serialize LUT data. This will effectively serialize the LUT only when cooking
@@ -59,7 +59,7 @@ public:
 	 * If a matching shader map is not found in memory or the DDC, a new one will be compiled.
 	 */
 	void CacheResourceShadersForRendering(bool bRegenerateId);
-	void CacheShadersForResources(EShaderPlatform InShaderPlatform, FOpenColorIOTransformResource* InResourcesToCache, bool bApplyCompletedShaderMapForRendering, bool bIsCooking);
+	void CacheShadersForResources(EShaderPlatform InShaderPlatform, FOpenColorIOTransformResource* InResourcesToCache, bool bApplyCompletedShaderMapForRendering, bool bIsCooking, const ITargetPlatform* TargetPlatform = nullptr);
 
 	FOpenColorIOTransformResource* AllocateResource();
 

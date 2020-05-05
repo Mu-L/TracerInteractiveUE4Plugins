@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GeometryCollection/GeometryCollectionConversion.h"
 
@@ -203,8 +203,7 @@ void FGeometryCollectionConversion::AppendStaticMesh(const UStaticMesh * StaticM
 		// necessary since we reindex after all the meshes are added, but it is a good step to have
 		// optimal min/max vertex index right from the static mesh.  All we really need to do is
 		// assign material ids and rely on reindexing, in theory
-		const TArray<FStaticMeshSection> &StaticMeshSections = StaticMesh->RenderData->LODResources[0].Sections;
-		for (const FStaticMeshSection &CurrSection : StaticMeshSections)
+		for (const FStaticMeshSection &CurrSection : StaticMesh->RenderData->LODResources[0].Sections)
 		{			
 			// create new section
 			int32 SectionIndex = GeometryCollection->AddElements(1, FGeometryCollection::MaterialGroup);
@@ -330,10 +329,10 @@ void FGeometryCollectionConversion::AppendSkeletalMesh(const USkeletalMesh* Skel
 						{
 							int VertexOffset = VertexBaseIndex + VertexIndex;
 							BoneMap[VertexOffset] = -1;
-							if (const TSkinWeightInfo<false> * SkinWeightInfo = SkinWeightVertexBuffer.GetSkinWeightPtr<false>(VertexIndex))
+							int32 SkeletalBoneIndex = -1;
+							check(SkinWeightVertexBuffer.GetRigidWeightBone(VertexIndex, SkeletalBoneIndex));
+							if (SkeletalBoneIndex > -1)
 							{
-								uint8 SkeletalBoneIndex = -1;
-								check(SkinWeightInfo->GetRigidWeightBone(SkeletalBoneIndex));
 								BoneMap[VertexOffset] = SkeletalBoneIndex + TransformBaseIndex;
 								Vertex[VertexOffset] = Transform[BoneMap[VertexOffset]].ToInverseMatrixWithScale().TransformPosition(PositionVertexBuffer.VertexPosition(VertexIndex));
 							}

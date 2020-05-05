@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -44,6 +44,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Asset Validation")
 	void AssetPasses(UObject* InAsset);
 
+	UFUNCTION(BlueprintCallable, Category = "Asset Validation")
+	void AssetWarning(UObject* InAsset, const FText& InMessage);
+
 	virtual bool IsEnabled() const
 	{
 		return bIsEnabled;
@@ -62,6 +65,8 @@ public:
 		return ValidationResult;
 	}
 
+	const TArray<FText>& GetAllWarnings() const;
+
 protected:
 	void LogElapsedTime(FFormatNamedArguments &Arguments);
 
@@ -71,6 +76,7 @@ protected:
 
 private:
 	EDataValidationResult ValidationResult;
+	TArray<FText> AllWarnings;
 
 	FDateTime ValidationTime;
 };

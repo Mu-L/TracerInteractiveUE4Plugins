@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	SceneManagement.h: Scene manager definitions.
@@ -28,6 +28,7 @@
 #include "LightmapUniformShaderParameters.h"
 #include "DynamicBufferAllocator.h"
 #include "Rendering/SkyAtmosphereCommonData.h"
+#include "Rendering/SkyLightImportanceSampling.h"
 
 class FCanvas;
 class FLightMap;
@@ -52,6 +53,7 @@ struct FDynamicMeshVertex;
 class ULightMapVirtualTexture2D;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogBufferVisualization, Log, All);
+DECLARE_LOG_CATEGORY_EXTERN(LogMultiView, Log, All);
 
 // -----------------------------------------------------------------------------
 
@@ -677,10 +679,14 @@ class FShadowMap;
 
 BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FLightmapResourceClusterShaderParameters,ENGINE_API)
 	SHADER_PARAMETER_TEXTURE(Texture2D, LightMapTexture)
-	SHADER_PARAMETER_TEXTURE(Texture2D, LightMapTexture_1) // VT
 	SHADER_PARAMETER_TEXTURE(Texture2D, SkyOcclusionTexture) 
 	SHADER_PARAMETER_TEXTURE(Texture2D, AOMaterialMaskTexture) 
 	SHADER_PARAMETER_TEXTURE(Texture2D, StaticShadowTexture)
+	SHADER_PARAMETER_SRV(Texture2D<float4>, VTLightMapTexture) // VT
+	SHADER_PARAMETER_SRV(Texture2D<float4>, VTLightMapTexture_1) // VT
+	SHADER_PARAMETER_SRV(Texture2D<float4>, VTSkyOcclusionTexture) // VT
+	SHADER_PARAMETER_SRV(Texture2D<float4>, VTAOMaterialMaskTexture) // VT
+	SHADER_PARAMETER_SRV(Texture2D<float4>, VTStaticShadowTexture) // VT
 	SHADER_PARAMETER_SAMPLER(SamplerState, LightMapSampler) 
 	SHADER_PARAMETER_SAMPLER(SamplerState, SkyOcclusionSampler) 
 	SHADER_PARAMETER_SAMPLER(SamplerState, AOMaterialMaskSampler) 
@@ -1001,7 +1007,7 @@ public:
 	}
 };
 
-inline bool DoesPlatformSupportDistanceFields(EShaderPlatform Platform)
+inline bool DoesPlatformSupportDistanceFields(const FStaticShaderPlatform Platform)
 {
 	return Platform == SP_PCD3D_SM5
 		|| Platform == SP_PS4
@@ -1010,7 +1016,7 @@ inline bool DoesPlatformSupportDistanceFields(EShaderPlatform Platform)
 		|| IsVulkanSM5Platform(Platform)
 		|| Platform == SP_SWITCH
 		|| Platform == SP_SWITCH_FORWARD
-		|| FDataDrivenShaderPlatformInfo::GetInfo(Platform).bSupportsDistanceFields;
+		|| FDataDrivenShaderPlatformInfo::GetSupportsDistanceFields(Platform);
 }
 
 inline bool DoesPlatformSupportDistanceFieldShadowing(EShaderPlatform Platform)
@@ -1081,33 +1087,11 @@ public:
 	float MinOcclusion;
 	FLinearColor OcclusionTint;
 	int32 SamplesPerPixel;
+#if RHI_RAYTRACING
+	FSkyLightImportanceSamplingData* ImportanceSamplingData;
+#endif
 
 	bool IsMovable() { return bMovable; }
-
-#if RHI_RAYTRACING
-	bool IsDirtyImportanceSamplingData;
-	bool ShouldRebuildCdf() const;
-
-	FRWBuffer RowCdf;
-	FRWBuffer ColumnCdf;
-	FRWBuffer CubeFaceCdf;
-
-	FRWBuffer SkyLightMipTreePosX;
-	FRWBuffer SkyLightMipTreeNegX;
-	FRWBuffer SkyLightMipTreePosY;
-	FRWBuffer SkyLightMipTreeNegY;
-	FRWBuffer SkyLightMipTreePosZ;
-	FRWBuffer SkyLightMipTreeNegZ;
-	FIntVector SkyLightMipDimensions;
-
-	FRWBuffer SkyLightMipTreePdfPosX;
-	FRWBuffer SkyLightMipTreePdfNegX;
-	FRWBuffer SkyLightMipTreePdfPosY;
-	FRWBuffer SkyLightMipTreePdfNegY;
-	FRWBuffer SkyLightMipTreePdfPosZ;
-	FRWBuffer SkyLightMipTreePdfNegZ;
-	FRWBuffer SolidAnglePdf;
-#endif
 
 	void SetLightColor(const FLinearColor& InColor)
 	{
@@ -1136,6 +1120,8 @@ public:
 	float GetHeightFogContribution() const { return HeightFogContribution; }
 
 	const FAtmosphereSetup& GetAtmosphereSetup() const { return AtmosphereSetup; }
+
+	void UpdateTransform(const FTransform& ComponentTransform, uint8 TranformMode) { AtmosphereSetup.UpdateTransform(ComponentTransform, TranformMode); }
 
 	FVector GetAtmosphereLightDirection(int32 AtmosphereLightIndex, const FVector& DefaultDirection) const;
 
@@ -2327,11 +2313,6 @@ public:
 		DynamicVertexBuffer = InDynamicVertexBuffer;
 		DynamicReadBuffer = InDynamicReadBuffer;
 	}
-
-	~FRayTracingMeshResourceCollector()
-	{
-		FMeshElementCollector::~FMeshElementCollector();
-	}
 };
 
 struct FRayTracingDynamicGeometryUpdateParams
@@ -2354,6 +2335,7 @@ struct FRayTracingMaterialGatheringContext
 	const class FScene* Scene;
 	const FSceneView* ReferenceView;
 	const FSceneViewFamily& ReferenceViewFamily;
+	FRHICommandListImmediate& RHICmdList;
 
 	FRayTracingMeshResourceCollector& RayTracingMeshResourceCollector;
 	TArray<FRayTracingDynamicGeometryUpdateParams> DynamicRayTracingGeometriesToUpdate;
@@ -2723,7 +2705,30 @@ extern ENGINE_API void DrawDashedLine(class FPrimitiveDrawInterface* PDI, const 
  */
 extern ENGINE_API void DrawWireDiamond(class FPrimitiveDrawInterface* PDI, const FMatrix& DiamondMatrix, float Size, const FLinearColor& InColor, uint8 DepthPriority, float Thickness = 0.0f);
 
+/**
+ * Draws a coordinate system (Red for X axis, Green for Y axis, Blue for Z axis).
+ *
+ * @param	PDI				Draw interface.
+ * @param	AxisLoc			Location of the coordinate system.
+ * @param	AxisRot			Location of the coordinate system.
+ * @param	Scale			Scale for the axis lines.
+ * @param	DepthPriority	Depth priority coordinate system.
+ * @param	Thickness		How thick to draw the axis lines
+ */
 extern ENGINE_API void DrawCoordinateSystem(FPrimitiveDrawInterface* PDI, FVector const& AxisLoc, FRotator const& AxisRot, float Scale, uint8 DepthPriority, float Thickness = 0.0f);
+
+/**
+ * Draws a coordinate system with a fixed color.
+ *
+ * @param	PDI				Draw interface.
+ * @param	AxisLoc			Location of the coordinate system.
+ * @param	AxisRot			Location of the coordinate system.
+ * @param	Scale			Scale for the axis lines.
+ * @param	InColor			Color of the axis lines.
+ * @param	DepthPriority	Depth priority coordinate system.
+ * @param	Thickness		How thick to draw the axis lines
+ */
+extern ENGINE_API void DrawCoordinateSystem(FPrimitiveDrawInterface* PDI, FVector const& AxisLoc, FRotator const& AxisRot, float Scale, const FLinearColor& InColor, uint8 DepthPriority, float Thickness = 0.0f);
 
 /**
  * Draws a wireframe of the bounds of a frustum as defined by a transform from clip-space into world-space.
@@ -2796,10 +2801,10 @@ extern ENGINE_API bool IsRichView(const FSceneViewFamily& ViewFamily);
 	 * true if we debug material names with SCOPED_DRAW_EVENT.
 	 * Toggle with "r.ShowMaterialDrawEvents" cvar.
 	 */
-	extern ENGINE_API void BeginMeshDrawEvent_Inner(FRHICommandList& RHICmdList, const class FPrimitiveSceneProxy* PrimitiveSceneProxy, const struct FMeshBatch& Mesh, struct TDrawEvent<FRHICommandList>& DrawEvent);
+	extern ENGINE_API void BeginMeshDrawEvent_Inner(FRHICommandList& RHICmdList, const class FPrimitiveSceneProxy* PrimitiveSceneProxy, const struct FMeshBatch& Mesh, struct FDrawEvent& DrawEvent);
 #endif
 
-FORCEINLINE void BeginMeshDrawEvent(FRHICommandList& RHICmdList, const class FPrimitiveSceneProxy* PrimitiveSceneProxy, const struct FMeshBatch& Mesh, struct TDrawEvent<FRHICommandList>& DrawEvent, bool ShowMaterialDrawEvent)
+FORCEINLINE void BeginMeshDrawEvent(FRHICommandList& RHICmdList, const class FPrimitiveSceneProxy* PrimitiveSceneProxy, const struct FMeshBatch& Mesh, struct FDrawEvent& DrawEvent, bool ShowMaterialDrawEvent)
 {
 #if WANTS_DRAW_MESH_EVENTS
 	if (ShowMaterialDrawEvent)

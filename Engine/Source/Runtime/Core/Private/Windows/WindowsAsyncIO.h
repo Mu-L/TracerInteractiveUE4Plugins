@@ -1,11 +1,17 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "ProfilingDebugging/PlatformFileTrace.h"
 
+PRAGMA_DISABLE_UNSAFE_TYPECAST_WARNINGS
+
 class FWindowsReadRequest;
 class FWindowsAsyncReadFileHandle;
+
+#if !defined(USE_WINAPI_CREATEFILE2)
+	#define USE_WINAPI_CREATEFILE2 0
+#endif
 
 class FWindowsReadRequestWorker : public FNonAbandonableTask
 {
@@ -188,7 +194,7 @@ public:
 
 			for (int32 Try = 0; bFailed && Try < 10; Try++)
 			{
-#if PLATFORM_XBOXONE
+#if USE_WINAPI_CREATEFILE2
 				DWORD  Access = GENERIC_READ;
 				DWORD  WinFlags = FILE_SHARE_READ;
 				DWORD  Create = OPEN_EXISTING;
@@ -335,9 +341,14 @@ public:
 		Size = InFileSize;
 		SetComplete();
 	}
+
 	virtual void WaitCompletionImpl(float TimeLimitSeconds) override
 	{
+		// Even though SetComplete called in the constructor and sets bCompleteAndCallbackCalled=true, we still need to implement WaitComplete as
+		// the CompleteCallback can end up starting async tasks that can overtake the constructor execution and need to wait for the constructor to finish.
+		while (!*(volatile bool*)&bCompleteAndCallbackCalled);
 	}
+
 	virtual void CancelImpl()
 	{
 	}
@@ -351,9 +362,14 @@ public:
 	{
 		SetComplete();
 	}
+
 	virtual void WaitCompletionImpl(float TimeLimitSeconds) override
 	{
+		// Even though SetComplete called in the constructor and sets bCompleteAndCallbackCalled=true, we still need to implement WaitComplete as
+		// the CompleteCallback can end up starting async tasks that can overtake the constructor execution and need to wait for the constructor to finish.
+		while (!*(volatile bool*)&bCompleteAndCallbackCalled);
 	}
+
 	virtual void CancelImpl()
 	{
 	}
@@ -489,3 +505,5 @@ const TCHAR* FWindowsReadRequest::GetFileNameForErrorMessagesAndPanicRetry()
 {
 	return *Owner->FileNameForErrorMessagesAndPanicRetry;
 }
+
+PRAGMA_ENABLE_UNSAFE_TYPECAST_WARNINGS

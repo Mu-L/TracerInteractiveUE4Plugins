@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -10,12 +10,18 @@
 #include "Templates/IsValidVariadicFunctionArg.h"
 #include "Misc/VarArgs.h"
 
-#if DO_CHECK || DO_GUARD_SLOW
+#if (DO_CHECK || DO_GUARD_SLOW) && !PLATFORM_CPU_ARM_FAMILY
 	// We'll put all assert implementation code into a separate section in the linked
 	// executable. This code should never execute so using a separate section keeps
 	// it well off the hot path and hopefully out of the instruction cache. It also
 	// facilitates reasoning about the makeup of a compiled/linked binary.
 	#define UE_DEBUG_SECTION PLATFORM_CODE_SECTION(".uedbg")
+#else
+	// On ARM we can't do this because the executable will require jumps larger
+	// than the branch instruction can handle. Clang will only generate
+	// the trampolines in the .text segment of the binary. If the uedbg segment
+	// is present it will generate code that it cannot link.
+	#define UE_DEBUG_SECTION
 #endif // DO_CHECK || DO_GUARD_SLOW
 
 namespace ELogVerbosity
@@ -102,18 +108,6 @@ public:
 	static FORCEINLINE typename TEnableIf<TIsArrayOrRefOfType<FmtType, TCHAR>::Value, bool>::Type OptionallyLogFormattedEnsureMessageReturningFalse(bool bLog, const ANSICHAR* Expr, const ANSICHAR* File, int32 Line, const FmtType& FormattedMsg, Types... Args)
 	{
 		static_assert(TIsArrayOrRefOfType<FmtType, TCHAR>::Value, "Formatting string must be a TCHAR array.");
-		static_assert(TAnd<TIsValidVariadicFunctionArg<Types>...>::Value, "Invalid argument(s) passed to ensureMsgf");
-
-		return OptionallyLogFormattedEnsureMessageReturningFalseImpl(bLog, Expr, File, Line, FormattedMsg, Args...);
-	}
-
-	template <typename FmtType, typename... Types>
-	UE_DEPRECATED(4.20, "The formatting string must now be a TCHAR string literal.")
-	static FORCEINLINE typename TEnableIf<!TIsArrayOrRefOfType<FmtType, TCHAR>::Value, bool>::Type OptionallyLogFormattedEnsureMessageReturningFalse(bool bLog, const ANSICHAR* Expr, const ANSICHAR* File, int32 Line, const FmtType& FormattedMsg, Types... Args)
-	{
-		// NOTE: When this deprecated function is removed, the return type of the overload above
-		//       should be set to simply bool.
-
 		static_assert(TAnd<TIsValidVariadicFunctionArg<Types>...>::Value, "Invalid argument(s) passed to ensureMsgf");
 
 		return OptionallyLogFormattedEnsureMessageReturningFalseImpl(bLog, Expr, File, Line, FormattedMsg, Args...);

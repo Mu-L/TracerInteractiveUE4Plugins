@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -20,6 +20,9 @@ public:
 
 	void Initialize();
 
+	/** Gets the object binding that corresponds to the root spawnable that serves as the template. */
+	FGuid GetRootObjectBindingID() const;
+
 	//~ UMovieSceneSequence interface
 	virtual void BindPossessableObject(const FGuid& ObjectId, UObject& PossessedObject, UObject* Context) override;
 	virtual bool CanPossessObject(UObject& Object, UObject* InPlaybackContext) const override;
@@ -34,6 +37,9 @@ public:
 
 #if WITH_EDITOR
 	virtual FText GetDisplayName() const override;
+
+	virtual void GetAssetRegistryTagMetadata(TMap<FName, FAssetRegistryTagMetadata>& OutMetadata) const override;
+	virtual void GetAssetRegistryTags(TArray<FAssetRegistryTag>& OutTags) const override;
 #endif
 
 public:

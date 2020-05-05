@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Input/DisplayClusterInputManager.h"
 
@@ -61,6 +61,9 @@ void FDisplayClusterInputManager::EndSession()
 {
 	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterInput);
 
+	ConfigPath.Reset();
+	ClusterNodeId.Reset();
+
 	ReleaseDevices();
 }
 
@@ -77,6 +80,8 @@ bool FDisplayClusterInputManager::StartScene(UWorld* pWorld)
 void FDisplayClusterInputManager::EndScene()
 {
 	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterInput);
+
+	CurrentWorld = nullptr;
 }
 
 void FDisplayClusterInputManager::StartFrame(uint64 FrameNum)

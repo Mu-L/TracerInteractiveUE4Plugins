@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BoneControllers/AnimNode_RigidBody.h"
 #include "AnimationRuntime.h"
@@ -14,7 +14,7 @@
 #include "PhysicsEngine/PhysicsSettings.h"
 #include "Logging/MessageLog.h"
 
-//#pragma optimize("", off)
+//PRAGMA_DISABLE_OPTIMIZATION
 
 /////////////////////////////////////////////////////
 // FAnimNode_RigidBody
@@ -23,15 +23,20 @@
 
 DEFINE_STAT(STAT_RigidBodyNodeInitTime);
 
-TAutoConsoleVariable<int32> CVarEnableRigidBodyNode(TEXT("p.RigidBodyNode"), 1, TEXT("Enables/disables rigid body node updates and evaluations"), ECVF_ReadOnly);
+CSV_DECLARE_CATEGORY_MODULE_EXTERN(ENGINE_API, Animation);
+
+TAutoConsoleVariable<int32> CVarEnableRigidBodyNode(TEXT("p.RigidBodyNode"), 1, TEXT("Enables/disables rigid body node updates and evaluations"), ECVF_Default);
 TAutoConsoleVariable<int32> CVarRigidBodyLODThreshold(TEXT("p.RigidBodyLODThreshold"), -1, TEXT("Max LOD that rigid body node is allowed to run on. Provides a global threshold that overrides per-node the LODThreshold property. -1 means no override."), ECVF_Scalability);
 
 int32 RBAN_MaxSubSteps = 4;
-FAutoConsoleVariableRef CVarRigidBodyNodeMaxSteps(TEXT("p.RigidBodyNode.MaxSubSteps"), RBAN_MaxSubSteps, TEXT("Set the maximum number of simulation steps in the update loop"), ECVF_ReadOnly);
+bool bRBAN_EnableTimeBasedReset = true;
+FAutoConsoleVariableRef CVarRigidBodyNodeMaxSteps(TEXT("p.RigidBodyNode.MaxSubSteps"), RBAN_MaxSubSteps, TEXT("Set the maximum number of simulation steps in the update loop"), ECVF_Default);
+FAutoConsoleVariableRef CVarRigidBodyNodeEnableTimeBasedReset(TEXT("p.RigidBodyNode.EnableTimeBasedReset"), bRBAN_EnableTimeBasedReset, TEXT("If true, Rigid Body nodes are reset when they have not been updated for a while (default true)"), ECVF_Default);
 
 FAnimNode_RigidBody::FAnimNode_RigidBody():
 	QueryParams(NAME_None, FCollisionQueryParams::GetUnknownStatId())
 {
+	AccumulatedDeltaTime = 0.0f;
 	ResetSimulatedTeleportType = ETeleportType::None;
 	PhysicsSimulation = nullptr;
 	OverridePhysicsAsset = nullptr;
@@ -46,6 +51,7 @@ FAnimNode_RigidBody::FAnimNode_RigidBody():
 	OverrideWorldGravity = FVector::ZeroVector;
 	TotalMass = 0.f;
 	CachedBounds.W = 0;
+	PhysScene = nullptr;
 	UnsafeWorld = nullptr;
 	bSimulationStarted = false;
 	bCheckForBodyTransformInit = false;
@@ -54,6 +60,13 @@ FAnimNode_RigidBody::FAnimNode_RigidBody():
 	bTransferBoneVelocities = false;
 	bFreezeIncomingPoseOnStart = false;
 	bClampLinearTranslationLimitToRefPose = false;
+
+	OverrideSolverIterations.SolverIterations = -1;
+	OverrideSolverIterations.JointIterations = -1;
+	OverrideSolverIterations.CollisionIterations = -1;
+	OverrideSolverIterations.SolverPushOutIterations = -1;
+	OverrideSolverIterations.JointPushOutIterations = -1;
+	OverrideSolverIterations.CollisionPushOutIterations = -1;
 
 	PreviousTransform = CurrentTransform = FTransform::Identity;
 	PreviousComponentLinearVelocity = FVector::ZeroVector;	
@@ -243,6 +256,7 @@ void FAnimNode_RigidBody::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseC
 {
 	DECLARE_SCOPE_HIERARCHICAL_COUNTER_ANIMNODE(EvaluateSkeletalControl_AnyThread)
 	SCOPE_CYCLE_COUNTER(STAT_RigidBody_Eval);
+	CSV_SCOPED_TIMING_STAT(Animation, RigidBodyEval);
 	FScopeCycleCounterUObject AdditionalScope(UsePhysicsAsset, GET_STATID(STAT_RigidBody_Eval));
 	SCOPE_CYCLE_COUNTER(STAT_ImmediateEvaluateSkeletalControl);
 	//SCOPED_NAMED_EVENT_TEXT("FAnimNode_RigidBody::EvaluateSkeletalControl_AnyThread", FColor::Magenta);
@@ -252,7 +266,7 @@ void FAnimNode_RigidBody::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseC
 	{
 		// Always propagate skip rate as it can go up and down between updates
 		EvalCounter.SetMaxSkippedFrames(Output.AnimInstanceProxy->GetEvaluationCounter().GetMaxSkippedFrames());
-		if(!EvalCounter.WasSynchronizedLastFrame(Output.AnimInstanceProxy->GetEvaluationCounter()))
+		if(!EvalCounter.WasSynchronizedLastFrame(Output.AnimInstanceProxy->GetEvaluationCounter())  && bRBAN_EnableTimeBasedReset)
 		{
 			ResetSimulatedTeleportType = ETeleportType::ResetPhysics;
 		}
@@ -262,7 +276,7 @@ void FAnimNode_RigidBody::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseC
 	const float DeltaSeconds = AccumulatedDeltaTime;
 	AccumulatedDeltaTime = 0.f;
 
-	if (CVarEnableRigidBodyNode.GetValueOnAnyThread() != 0 && PhysicsSimulation)	
+	if (bEnabled && PhysicsSimulation)	
 	{
 		const FBoneContainer& BoneContainer = Output.Pose.GetPose().GetBoneContainer();
 		const FTransform CompWorldSpaceTM = Output.AnimInstanceProxy->GetComponentTransform();
@@ -272,10 +286,7 @@ void FAnimNode_RigidBody::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseC
 		}
 		const FTransform BaseBoneTM = Output.Pose.GetComponentSpaceTransform(BaseBoneRef.GetCompactPoseIndex(BoneContainer));
 
-#if !UE_BUILD_SHIPPING
-		// Only used for debug draw...
 		PhysicsSimulation->SetSimulationSpaceTransform(SpaceToWorldTransform(SimulationSpace, CompWorldSpaceTM, BaseBoneTM));
-#endif
 
 		// Initialize potential new bodies because of LOD change.
 		if (ResetSimulatedTeleportType == ETeleportType::None && bCheckForBodyTransformInit)
@@ -478,15 +489,35 @@ void FAnimNode_RigidBody::EvaluateSkeletalControl_AnyThread(FComponentSpacePoseC
 			// DeltaTime can be higher due to URO, so take multiple iterations in that case.
 			const int32 MaxSteps = RBAN_MaxSubSteps;
 			const float MaxDeltaSeconds = 1.f / 30.f;
+
+#if !WITH_CHAOS
 			const int32 NumSteps = FMath::Clamp(FMath::CeilToInt(DeltaSeconds / MaxDeltaSeconds), 1, MaxSteps);
 			const float StepDeltaTime = DeltaSeconds / float(NumSteps);
-
 			for (int32 Step = 1; Step <= NumSteps; Step++)
 			{
 				// We call the _AssumesLocked version here without a lock as the simulation is local to this node and we know
 				// we're not going to alter anything while this is running.
 				PhysicsSimulation->Simulate_AssumesLocked(StepDeltaTime, SimSpaceGravity);
 			}
+#else
+			PhysicsSimulation->SetSolverIterations(
+				SolverIterations.SolverIterations,
+				SolverIterations.JointIterations,
+				SolverIterations.CollisionIterations,
+				SolverIterations.SolverPushOutIterations,
+				SolverIterations.JointPushOutIterations,
+				SolverIterations.CollisionPushOutIterations
+			);
+			PhysicsSimulation->SetSolverIterations(
+				OverrideSolverIterations.SolverIterations, 
+				OverrideSolverIterations.JointIterations, 
+				OverrideSolverIterations.CollisionIterations, 
+				OverrideSolverIterations.SolverPushOutIterations, 
+				OverrideSolverIterations.JointPushOutIterations, 
+				OverrideSolverIterations.CollisionPushOutIterations);
+
+			PhysicsSimulation->Simulate_AssumesLocked(DeltaSeconds, MaxDeltaSeconds, MaxSteps, SimSpaceGravity);
+#endif
 		}
 		
 		//write back to animation system
@@ -605,6 +636,9 @@ void FAnimNode_RigidBody::InitPhysics(const UAnimInstance* InAnimInstance)
 {
 	SCOPE_CYCLE_COUNTER(STAT_RigidBodyNodeInitTime);
 
+	delete PhysicsSimulation;
+	PhysicsSimulation = nullptr;
+
 	const USkeletalMeshComponent* SkeletalMeshComp = InAnimInstance->GetSkelMeshComponent();
 	const USkeletalMesh* SkeletalMeshAsset = SkeletalMeshComp->SkeletalMesh;
 
@@ -635,10 +669,10 @@ void FAnimNode_RigidBody::InitPhysics(const UAnimInstance* InAnimInstance)
 		AnimPhysicsMinDeltaTime = 0.f;
 		bSimulateAnimPhysicsAfterReset = false;
 	}
-
-	if(CVarEnableRigidBodyNode.GetValueOnAnyThread() != 0 && UsePhysicsAsset)
+	
+	bEnabled = UsePhysicsAsset && SkeletalMeshComp->GetAllowRigidBodyAnimNode() && CVarEnableRigidBodyNode.GetValueOnAnyThread() != 0;
+	if(bEnabled)
 	{
-		delete PhysicsSimulation;
 		PhysicsSimulation = new ImmediatePhysics::FSimulation();
 		const int32 NumBodies = UsePhysicsAsset->SkeletalBodySetups.Num();
 		Bodies.Empty(NumBodies);
@@ -648,15 +682,22 @@ void FAnimNode_RigidBody::InitPhysics(const UAnimInstance* InAnimInstance)
 		TotalMass = 0.f;
 
 		// Instantiate a FBodyInstance/FConstraintInstance set that will be cloned into the Immediate Physics sim.
+		// NOTE: We do not have a skeleton at the moment, so we have to use the ref pose
 		TArray<FBodyInstance*> HighLevelBodyInstances;
 		TArray<FConstraintInstance*> HighLevelConstraintInstances;
-#if WITH_CHAOS
+
 		// Chaos relies on the initial pose to set up constraint positions
-		SkeletalMeshComp->InstantiatePhysicsAssetRefPose(*UsePhysicsAsset, SimulationSpace == ESimulationSpace::WorldSpace ? SkeletalMeshComp->GetComponentToWorld().GetScale3D() : FVector(1.f), HighLevelBodyInstances, HighLevelConstraintInstances);
-#else
-		// PhysX sets up constraints each tick
-		SkeletalMeshComp->InstantiatePhysicsAsset(*UsePhysicsAsset, SimulationSpace == ESimulationSpace::WorldSpace ? SkeletalMeshComp->GetComponentToWorld().GetScale3D() : FVector(1.f), HighLevelBodyInstances, HighLevelConstraintInstances);
-#endif
+		bool bCreateBodiesInRefPose = (WITH_CHAOS != 0);
+		SkeletalMeshComp->InstantiatePhysicsAssetRefPose(
+			*UsePhysicsAsset, 
+			SimulationSpace == ESimulationSpace::WorldSpace ? SkeletalMeshComp->GetComponentToWorld().GetScale3D() : FVector(1.f), 
+			HighLevelBodyInstances, 
+			HighLevelConstraintInstances, 
+			nullptr, 
+			nullptr, 
+			INDEX_NONE, 
+			FPhysicsAggregateHandle(),
+			bCreateBodiesInRefPose);
 
 		TMap<FName, ImmediatePhysics::FActorHandle*> NamesToHandles;
 		TArray<ImmediatePhysics::FActorHandle*> IgnoreCollisionActors;
@@ -666,8 +707,11 @@ void FAnimNode_RigidBody::InitPhysics(const UAnimInstance* InAnimInstance)
 
 		const int32 NumBonesLOD0 = InsertionOrder.Num();
 
+		// If our skeleton is not the one that was used to build the PhysicsAsset, some bodies may be missing, or rearranged.
+		// We need to map the original indices to the new bodies for use by the CollisionDisableTable.
+		// NOTE: This array is indexed by the original BodyInstance body index (BodyInstance->InstanceBodyIndex)
 		TArray<ImmediatePhysics::FActorHandle*> BodyIndexToActorHandle;
-		BodyIndexToActorHandle.AddZeroed(NumBonesLOD0);
+		BodyIndexToActorHandle.AddZeroed(HighLevelBodyInstances.Num());
 
 		TArray<FBodyInstance*> BodiesSorted;
 		BodiesSorted.AddZeroed(NumBonesLOD0);
@@ -708,6 +752,10 @@ void FAnimNode_RigidBody::InitPhysics(const UAnimInstance* InAnimInstance)
 					{
 						IgnoreCollisionActors.Add(NewBodyHandle);
 					}
+
+#if WITH_CHAOS
+					NewBodyHandle->SetName(BodySetup->BoneName);
+#endif
 				}
 			}
 		}
@@ -807,14 +855,34 @@ void FAnimNode_RigidBody::InitPhysics(const UAnimInstance* InAnimInstance)
 		const TMap<FRigidBodyIndexPair, bool>& DisableTable = UsePhysicsAsset->CollisionDisableTable;
 		for(auto ConstItr = DisableTable.CreateConstIterator(); ConstItr; ++ConstItr)
 		{
-			ImmediatePhysics::FSimulation::FIgnorePair Pair;
-			Pair.A = BodyIndexToActorHandle[ConstItr.Key().Indices[0]];
-			Pair.B = BodyIndexToActorHandle[ConstItr.Key().Indices[1]];
-			IgnorePairs.Add(Pair);
+			int32 IndexA = ConstItr.Key().Indices[0];
+			int32 IndexB = ConstItr.Key().Indices[1];
+			if ((IndexA < BodyIndexToActorHandle.Num()) && (IndexB < BodyIndexToActorHandle.Num()))
+			{
+				if ((BodyIndexToActorHandle[IndexA] != nullptr) && (BodyIndexToActorHandle[IndexB] != nullptr))
+				{
+					ImmediatePhysics::FSimulation::FIgnorePair Pair;
+					Pair.A = BodyIndexToActorHandle[IndexA];
+					Pair.B = BodyIndexToActorHandle[IndexB];
+					IgnorePairs.Add(Pair);
+				}
+			}
 		}
 
 		PhysicsSimulation->SetIgnoreCollisionPairTable(IgnorePairs);
 		PhysicsSimulation->SetIgnoreCollisionActors(IgnoreCollisionActors);
+
+#if WITH_CHAOS
+		SolverIterations = UsePhysicsAsset->SolverIterations;
+		PhysicsSimulation->SetSolverIterations(
+			SolverIterations.SolverIterations,
+			SolverIterations.JointIterations,
+			SolverIterations.CollisionIterations,
+			SolverIterations.SolverPushOutIterations,
+			SolverIterations.JointPushOutIterations,
+			SolverIterations.CollisionPushOutIterations
+		);
+#endif
 	}
 }
 
@@ -915,14 +983,13 @@ DECLARE_CYCLE_STAT(TEXT("RigidBody_PreUpdate"), STAT_RigidBody_PreUpdate, STATGR
 void FAnimNode_RigidBody::PreUpdate(const UAnimInstance* InAnimInstance)
 {
 	// Don't update geometry if RBN is disabled
-	if(CVarEnableRigidBodyNode.GetValueOnAnyThread() == 0)
+	if(!bEnabled)
 	{
 		return;
 	}
 
 	SCOPE_CYCLE_COUNTER(STAT_RigidBody_PreUpdate);
 
-	UWorld* World = InAnimInstance->GetWorld();
 	USkeletalMeshComponent* SKC = InAnimInstance->GetSkelMeshComponent();
 	APawn* PawnOwner = InAnimInstance->TryGetPawnOwner();
 	UPawnMovementComponent* MovementComp = PawnOwner ? PawnOwner->GetMovementComponent() : nullptr;
@@ -935,19 +1002,23 @@ void FAnimNode_RigidBody::PreUpdate(const UAnimInstance* InAnimInstance)
 	}
 #endif
 
-	WorldSpaceGravity = bOverrideWorldGravity ? OverrideWorldGravity : (MovementComp ? FVector(0.f, 0.f, MovementComp->GetGravityZ()) : FVector(0.f, 0.f, World->GetGravityZ()));
-	if(SKC)
+	UWorld* World = InAnimInstance->GetWorld();
+	if (World)
 	{
-		if (PhysicsSimulation && bEnableWorldGeometry && SimulationSpace == ESimulationSpace::WorldSpace)
+		WorldSpaceGravity = bOverrideWorldGravity ? OverrideWorldGravity : (MovementComp ? FVector(0.f, 0.f, MovementComp->GetGravityZ()) : FVector(0.f, 0.f, World->GetGravityZ()));
+		if(SKC)
 		{
-			UpdateWorldGeometry(*World, *SKC);
-		}
+			if (PhysicsSimulation && bEnableWorldGeometry && SimulationSpace == ESimulationSpace::WorldSpace)
+			{
+				UpdateWorldGeometry(*World, *SKC);
+			}
 
-		PendingRadialForces = SKC->GetPendingRadialForces();
+			PendingRadialForces = SKC->GetPendingRadialForces();
 
-		PreviousTransform = CurrentTransform;
-		CurrentTransform = SKC->GetComponentToWorld();
-	}	
+			PreviousTransform = CurrentTransform;
+			CurrentTransform = SKC->GetComponentToWorld();
+		}	
+	}
 }
 
 int32 FAnimNode_RigidBody::GetLODThreshold() const
@@ -975,7 +1046,7 @@ void FAnimNode_RigidBody::UpdateInternal(const FAnimationUpdateContext& Context)
 {
 	DECLARE_SCOPE_HIERARCHICAL_COUNTER_ANIMNODE(UpdateInternal)
 	// Avoid this work if RBN is disabled, as the results would be discarded
-	if(CVarEnableRigidBodyNode.GetValueOnAnyThread() == 0)
+	if(!bEnabled)
 	{
 		return;
 	}
@@ -1038,10 +1109,20 @@ void FAnimNode_RigidBody::InitializeBoneReferences(const FBoneContainer& Require
 		BaseBoneRef.Initialize(RequiredBones);
 	}
 
-	for(int32 Index = 0; Index < NumRequiredBoneIndices; ++Index)
+	bool bHasInvalidBoneReference = false;
+	for (int32 Index = 0; Index < NumRequiredBoneIndices; ++Index)
 	{
 		const FCompactPoseBoneIndex CompactPoseBoneIndex(Index);
 		const FBoneIndexType SkeletonBoneIndex = RequiredBones.GetSkeletonIndex(CompactPoseBoneIndex);
+		const FBoneIndexType IndexToBodyNum = SkeletonBoneIndexToBodyIndex.Num();
+
+		// If we have a missing bone in our skeleton, we don't want to have an out of bounds access.
+		if (SkeletonBoneIndex >= IndexToBodyNum)
+		{
+			bHasInvalidBoneReference = true;
+			break;
+		}
+
 		const int32 BodyIndex = SkeletonBoneIndexToBodyIndex[SkeletonBoneIndex];
 
 		if (BodyIndex != INDEX_NONE)
@@ -1064,6 +1145,14 @@ void FAnimNode_RigidBody::InitializeBoneReferences(const FBoneContainer& Require
 			while (CompactParentIndex != INDEX_NONE)
 			{
 				const FBoneIndexType SkeletonParentBoneIndex = RequiredBones.GetSkeletonIndex(CompactParentIndex);
+
+				// Must check our parent as well for a missing bone.
+				if (SkeletonParentBoneIndex >= IndexToBodyNum)
+				{
+					bHasInvalidBoneReference = true;
+					break;
+				}
+
 				OutputData->ParentBodyIndex = SkeletonBoneIndexToBodyIndex[SkeletonParentBoneIndex];
 				if (OutputData->ParentBodyIndex != INDEX_NONE)
 				{
@@ -1073,25 +1162,57 @@ void FAnimNode_RigidBody::InitializeBoneReferences(const FBoneContainer& Require
 				OutputData->BoneIndicesToParentBody.Add(CompactParentIndex);
 				CompactParentIndex = RequiredBones.GetParentBoneIndex(CompactParentIndex);
 			}
+
+			if (bHasInvalidBoneReference)
+			{
+				break;
+			}
 		}
 	}
 
-	// New bodies potentially introduced with new LOD
-	// We'll have to initialize their transform.
-	bCheckForBodyTransformInit = true;
-
-	if(PhysicsSimulation)
+	if (bHasInvalidBoneReference)
 	{
-		PhysicsSimulation->SetNumActiveBodies(NumSimulatedBodies);
+		// If a bone was missing, let us know which asset it happened on, and clear our bone container to make the bad asset visible.
+		ensureMsgf(false, TEXT("FAnimNode_RigidBody::InitializeBoneReferences: The Skeleton %s, is missing bones that SkeletalMesh %s needs. Skeleton might need to be resaved."),
+			*GetNameSafe(RequiredBones.GetSkeletonAsset()), *GetNameSafe(RequiredBones.GetSkeletalMeshAsset()));
+		OutputBoneData.Empty();
 	}
+	else
+	{
+		// New bodies potentially introduced with new LOD
+		// We'll have to initialize their transform.
+		bCheckForBodyTransformInit = true;
 
-	// We're switching to a new LOD, this invalidates our captured poses.
-	CapturedFrozenPose.Empty();
-	CapturedFrozenCurves.Empty();
+		if (PhysicsSimulation)
+		{
+			PhysicsSimulation->SetNumActiveBodies(NumSimulatedBodies);
+		}
+
+		// We're switching to a new LOD, this invalidates our captured poses.
+		CapturedFrozenPose.Empty();
+		CapturedFrozenCurves.Empty();
+	}
 }
+
+void FAnimNode_RigidBody::AddImpulseAtLocation(FVector Impulse, FVector Location, FName BoneName)
+{
+#if WITH_CHAOS
+	// Find the body. This is currently only used in the editor and will need optimizing if used in game
+	for (int32 BodyIndex = 0; BodyIndex < Bodies.Num(); ++BodyIndex)
+	{
+		ImmediatePhysics::FActorHandle* Body = Bodies[BodyIndex];
+		if (Body->GetName() == BoneName)
+		{
+			Body->AddImpulseAtLocation(Impulse, Location);
+		}
+	}
+#endif
+}
+
 
 void FAnimNode_RigidBody::OnInitializeAnimInstance(const FAnimInstanceProxy* InProxy, const UAnimInstance* InAnimInstance)
 {
+	CSV_SCOPED_TIMING_STAT(Animation, RigidBodyInit);
 	InitPhysics(InAnimInstance);
 }
 

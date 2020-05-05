@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OnlineSubsystemNull.h"
 #include "HAL/RunnableThread.h"
@@ -85,11 +85,6 @@ IOnlineIdentityPtr FOnlineSubsystemNull::GetIdentityInterface() const
 }
 
 IOnlineTitleFilePtr FOnlineSubsystemNull::GetTitleFileInterface() const
-{
-	return nullptr;
-}
-
-IOnlineStorePtr FOnlineSubsystemNull::GetStoreInterface() const
 {
 	return nullptr;
 }

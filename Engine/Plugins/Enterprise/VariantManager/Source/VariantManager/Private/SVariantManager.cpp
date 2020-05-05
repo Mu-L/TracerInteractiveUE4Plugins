@@ -1,64 +1,76 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SVariantManager.h"
 
-#include "Widgets/Text/STextBlock.h"
-#include "Widgets/Layout/SSplitter.h"
-#include "Widgets/Layout/SScrollBorder.h"
+#include "CapturableProperty.h"
+#include "DisplayNodes/VariantManagerActorNode.h"
+#include "DisplayNodes/VariantManagerColorPropertyNode.h"
+#include "DisplayNodes/VariantManagerDisplayNode.h"
+#include "DisplayNodes/VariantManagerEnumPropertyNode.h"
+#include "DisplayNodes/VariantManagerFunctionPropertyNode.h"
+#include "DisplayNodes/VariantManagerOptionPropertyNode.h"
+#include "DisplayNodes/VariantManagerPropertyNode.h"
+#include "DisplayNodes/VariantManagerStringPropertyNode.h"
+#include "DisplayNodes/VariantManagerStructPropertyNode.h"
+#include "DisplayNodes/VariantManagerVariantNode.h"
+#include "DisplayNodes/VariantManagerVariantSetNode.h"
+#include "FunctionCaller.h"
+#include "LevelVariantSets.h"
+#include "PropertyValue.h"
+#include "SVariantManagerActorListView.h"
+#include "SVariantManagerNodeTreeView.h"
+#include "SVariantManagerTableRow.h"
+#include "SwitchActor.h"
+#include "Variant.h"
+#include "VariantManager.h"
+#include "VariantManagerClipboard.h"
+#include "VariantManagerEditorCommands.h"
+#include "VariantManagerLog.h"
+#include "VariantManagerSelection.h"
+#include "VariantManagerUtils.h"
+#include "VariantSet.h"
+
+#include "Brushes/SlateImageBrush.h"
+#include "ContentBrowserModule.h"
+#include "CoreMinimal.h"
+#include "DesktopPlatformModule.h"
+#include "DragAndDrop/ActorDragDropGraphEdOp.h"
+#include "DragAndDrop/AssetDragDropOp.h"
+#include "DragAndDrop/ClassDragDropOp.h"
+#include "Editor.h"
+#include "EditorFontGlyphs.h"
+#include "Engine/BlueprintGeneratedClass.h"
+#include "Engine/Selection.h"
+#include "Framework/Commands/GenericCommands.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "Framework/Notifications/NotificationManager.h"
+#include "GameFramework/Actor.h"
+#include "GenericPlatform/GenericPlatformFile.h"
+#include "HAL/PlatformFilemanager.h"
+#include "IContentBrowserSingleton.h"
+#include "ImageUtils.h"
+#include "LevelEditor.h"
+#include "Misc/CString.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/FileHelper.h"
+#include "Misc/ITransaction.h"
+#include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
+#include "ObjectTools.h"
+#include "SceneOutlinerModule.h"
+#include "SceneOutlinerPublicTypes.h"
+#include "ScopedTransaction.h"
+#include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSearchBox.h"
+#include "Widgets/Layout/SScrollBorder.h"
+#include "Widgets/Layout/SSplitter.h"
+#include "Widgets/Notifications/SNotificationList.h"
+#include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/STableRow.h"
 #include "Widgets/Views/STableViewBase.h"
-#include "Widgets/Input/SButton.h"
-#include "Widgets/Input/SCheckBox.h"
-#include "GameFramework/Actor.h"
-#include "Editor.h"
-#include "EditorFontGlyphs.h"
-#include "Engine/Selection.h"
-#include "DragAndDrop/AssetDragDropOp.h"
-#include "DragAndDrop/ActorDragDropGraphEdOp.h"
-#include "DragAndDrop/ClassDragDropOp.h"
-#include "Framework/Commands/GenericCommands.h"
-#include "Framework/MultiBox/MultiBoxBuilder.h"
-#include "VariantManager.h"
-#include "LevelVariantSets.h"
-#include "VariantSet.h"
-#include "Variant.h"
-#include "FunctionCaller.h"
-#include "VariantManagerClipboard.h"
-#include "VariantManagerEditorCommands.h"
-#include "DisplayNodes/VariantManagerDisplayNode.h"
-#include "DisplayNodes/VariantManagerActorNode.h"
-#include "DisplayNodes/VariantManagerVariantNode.h"
-#include "DisplayNodes/VariantManagerVariantSetNode.h"
-#include "DisplayNodes/VariantManagerPropertyNode.h"
-#include "DisplayNodes/VariantManagerStructPropertyNode.h"
-#include "DisplayNodes/VariantManagerEnumPropertyNode.h"
-#include "DisplayNodes/VariantManagerStringPropertyNode.h"
-#include "DisplayNodes/VariantManagerFunctionPropertyNode.h"
-#include "DisplayNodes/VariantManagerOptionPropertyNode.h"
-#include "SVariantManagerNodeTreeView.h"
-#include "SVariantManagerActorListView.h"
-#include "SVariantManagerTableRow.h"
-#include "IContentBrowserSingleton.h"
-#include "ContentBrowserModule.h"
-#include "ObjectTools.h"
-#include "PropertyValue.h"
-#include "ScopedTransaction.h"
-#include "Misc/ConfigCacheIni.h"
-#include "Misc/CString.h"
-#include "VariantManagerSelection.h"
-#include "Widgets/Input/SButton.h"
-#include "Misc/ITransaction.h"
-#include "Modules/ModuleManager.h"
-#include "LevelEditor.h"
-#include "Framework/Notifications/NotificationManager.h"
-#include "Widgets/Notifications/SNotificationList.h"
-#include "CapturableProperty.h"
-#include "Engine/BlueprintGeneratedClass.h"
-#include "VariantManagerUtils.h"
-#include "SwitchActor.h"
-#include "Brushes/SlateImageBrush.h"
 
 #define LOCTEXT_NAMESPACE "SVariantManager"
 
@@ -172,8 +184,12 @@ void SVariantManager::Construct(const FArguments& InArgs, TSharedRef<FVariantMan
 	// Subscribe to when objects are modified so that we can auto-resolve when components/array properties are added/removed/renamed
 	OnObjectTransactedHandle = FCoreUObjectDelegates::OnObjectTransacted.AddRaw(this, &SVariantManager::OnObjectTransacted);
 	OnObjectPropertyChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this, &SVariantManager::OnObjectPropertyChanged);
+	OnPreObjectPropertyChangedHandle = FCoreUObjectDelegates::OnPreObjectPropertyChanged.AddRaw(this, &SVariantManager::OnPreObjectPropertyChanged);
+
 	OnBeginPieHandle = FEditorDelegates::BeginPIE.AddRaw(this, &SVariantManager::OnPieEvent);
 	OnEndPieHandle = FEditorDelegates::EndPIE.AddRaw(this, &SVariantManager::OnPieEvent);
+
+	OnEditorSelectionChangedHandle = USelection::SelectionChangedEvent.AddRaw(this, &SVariantManager::OnEditorSelectionChanged);
 
 	// Do this so that if we recompile a function caller changing a function name we'll rebuild our nodes to display the
 	// new names
@@ -290,9 +306,56 @@ void SVariantManager::Construct(const FArguments& InArgs, TSharedRef<FVariantMan
 				.HAlign(HAlign_Center)
 				.VAlign(VAlign_Center)
 				[
+					SNew(SHorizontalBox)
+
+					+SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					[
 					SNew(STextBlock)
 					.TextStyle(FEditorStyle::Get(), "NormalText.Important")
 					.Text(LOCTEXT("ActorsText", "Actors"))
+				]
+
+					+SHorizontalBox::Slot()
+					.VAlign(VAlign_Center)
+					.HAlign(HAlign_Right)
+					.MaxWidth(24.0f)
+					.AutoWidth()
+					.Padding(FMargin(4.f, 0.f, 4.f, 0.f))
+					[
+						SNew(SButton)
+						.ButtonStyle(FEditorStyle::Get(), "NoBorder")
+						.ToolTipText(LOCTEXT("AddActorPlusTooltip", "Add a new actor binding to selected variants"))
+						.OnClicked(this, &SVariantManager::OnSummonAddActorMenu)
+						.ContentPadding(FMargin(2.0f, 1.0f))
+						.IsEnabled_Lambda([&]() -> bool
+						{
+							TSharedPtr<FVariantManager> VariantManager = VariantManagerPtr.Pin();
+							if (VariantManager.IsValid())
+							{
+								TArray<UVariant*> Variants;
+								TArray<UVariantSet*> VariantSets;
+								VariantManager->GetSelection().GetSelectedVariantsAndVariantSets(Variants, VariantSets);
+
+								int32 NumVariants = Variants.Num();
+								for (UVariantSet* VariantSet : VariantSets)
+								{
+									NumVariants += VariantSet->GetNumVariants();
+								}
+
+								return NumVariants > 0;
+							}
+							return false;
+						})
+						.Content()
+						[
+							SNew(STextBlock)
+							.TextStyle(FEditorStyle::Get(), "NormalText.Important")
+							.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.10"))
+							.Text(FEditorFontGlyphs::Plus)
+						]
+					]
 				]
 			]
 
@@ -331,9 +394,51 @@ void SVariantManager::Construct(const FArguments& InArgs, TSharedRef<FVariantMan
 					.HAlign(HAlign_Center)
 					.VAlign(VAlign_Center)
 					[
+						SNew(SHorizontalBox)
+
+						+SHorizontalBox::Slot()
+						.AutoWidth()
+						.VAlign(VAlign_Center)
+						[
 						SNew(STextBlock)
 						.TextStyle(FEditorStyle::Get(), "NormalText.Important")
 						.Text(LOCTEXT("PropertiesText", "Properties"))
+					]
+
+						+SHorizontalBox::Slot()
+						.VAlign(VAlign_Center)
+						.HAlign(HAlign_Right)
+						.MaxWidth(24.0f)
+						.AutoWidth()
+						.Padding(FMargin(4.f, 0.f, 4.f, 0.f))
+						[
+							SNew(SButton)
+							.ButtonStyle(FEditorStyle::Get(), "NoBorder")
+							.ToolTipText(LOCTEXT("CapturePropertiesPlusTooltip", "Capture properties from the selected actor bindings"))
+							.OnClicked_Lambda([this]
+							{
+								CaptureNewPropertiesFromSelectedActors();
+								return FReply::Handled();
+							})
+							.ContentPadding(FMargin(2.0f, 1.0f))
+							.IsEnabled_Lambda([&]() -> bool
+							{
+								TSharedPtr<FVariantManager> VariantManager = VariantManagerPtr.Pin();
+								if (VariantManager.IsValid())
+								{
+									const TSet<TSharedRef<FVariantManagerActorNode>>& SelectedActorNodes = VariantManager->GetSelection().GetSelectedActorNodes();
+									return SelectedActorNodes.Num() > 0;
+								}
+								return false;
+							})
+							.Content()
+							[
+								SNew(STextBlock)
+								.TextStyle(FEditorStyle::Get(), "NormalText.Important")
+								.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.10"))
+								.Text(FEditorFontGlyphs::Plus)
+							]
+						]
 					]
 				]
 				+ SSplitter::Slot()
@@ -382,11 +487,17 @@ SVariantManager::~SVariantManager()
 	FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(OnObjectPropertyChangedHandle);
 	OnObjectPropertyChangedHandle.Reset();
 
+	FCoreUObjectDelegates::OnPreObjectPropertyChanged.Remove(OnPreObjectPropertyChangedHandle);
+	OnPreObjectPropertyChangedHandle.Reset();
+
 	FEditorDelegates::BeginPIE.Remove(OnBeginPieHandle);
 	OnBeginPieHandle.Reset();
 
 	FEditorDelegates::EndPIE.Remove(OnEndPieHandle);
 	OnEndPieHandle.Reset();
+
+	USelection::SelectionChangedEvent.Remove(OnEditorSelectionChangedHandle);
+	OnEditorSelectionChangedHandle.Reset();
 
 	if (FModuleManager::Get().IsModuleLoaded(TEXT("LevelEditor")))
 	{
@@ -473,6 +584,12 @@ void SVariantManager::CreateCommandBindings()
 	);
 
 	VariantTreeCommandBindings->MapAction(
+		FVariantManagerEditorCommands::Get().LoadThumbnailVariantCommand,
+		FExecuteAction::CreateSP(this, &SVariantManager::LoadThumbnail),
+		FCanExecuteAction::CreateSP(this, &SVariantManager::CanLoadThumbnail)
+	);
+
+	VariantTreeCommandBindings->MapAction(
 		FVariantManagerEditorCommands::Get().ClearThumbnailVariantCommand,
 		FExecuteAction::CreateSP(this, &SVariantManager::ClearThumbnail),
 		FCanExecuteAction::CreateSP(this, &SVariantManager::CanClearThumbnail)
@@ -540,6 +657,18 @@ void SVariantManager::CreateCommandBindings()
 		FVariantManagerEditorCommands::Get().AddFunction,
 		FExecuteAction::CreateSP(this, &SVariantManager::AddFunctionCaller),
 		FCanExecuteAction::CreateSP(this, &SVariantManager::CanAddFunctionCaller)
+	);
+
+	ActorListCommandBindings->MapAction(
+		FVariantManagerEditorCommands::Get().RebindActorDisabled,
+		FExecuteAction::CreateLambda([](){}),
+		FCanExecuteAction::CreateLambda([](){ return false; })
+	);
+
+	ActorListCommandBindings->MapAction(
+		FVariantManagerEditorCommands::Get().RebindToSelected,
+		FExecuteAction::CreateSP(this, &SVariantManager::RebindToSelectedActor),
+		FCanExecuteAction::CreateSP(this, &SVariantManager::CanRebindToSelectedActor)
 	);
 
 	ActorListCommandBindings->MapAction(
@@ -1123,39 +1252,121 @@ void SVariantManager::CreateThumbnail()
 		return;
 	}
 
-	const TSet<TSharedRef<FVariantManagerDisplayNode>>& Nodes = VariantManager->GetSelection().GetSelectedOutlinerNodes();
-
 	FViewport* Viewport = GEditor->GetActiveViewport();
 
-	if ( ensure(GCurrentLevelEditingViewportClient) && ensure(Viewport) )
+	if ( !ensure(GCurrentLevelEditingViewportClient) || !ensure(Viewport) )
 	{
-		TArray<FAssetData> SelectedAssets;
-		for (const TSharedRef<FVariantManagerDisplayNode>& Node : Nodes)
-		{
-			if (Node->GetType() == EVariantManagerNodeType::Variant)
-			{
-				TSharedPtr<FVariantManagerVariantNode> NodeAsVariant = StaticCastSharedRef<FVariantManagerVariantNode>(Node);
-				if (NodeAsVariant.IsValid())
-				{
-					UVariant* Variant = &NodeAsVariant->GetVariant();
-
-					SelectedAssets.Emplace(Variant);
-				}
-			}
+		return;
 		}
 
+	// Copied from FAssetContextMenu::ExecuteCaptureThumbnail
 		//have to re-render the requested viewport
 		FLevelEditorViewportClient* OldViewportClient = GCurrentLevelEditingViewportClient;
 		//remove selection box around client during render
 		GCurrentLevelEditingViewportClient = nullptr;
 		Viewport->Draw();
 
-		IContentBrowserSingleton& ContentBrowser = FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser").Get();
-		ContentBrowser.CaptureThumbnailFromViewport(Viewport, SelectedAssets);
+	// Copied from FContentBrowserSingleton::CaptureThumbnailFromViewport
+	//capture the thumbnail
+	uint32 SrcWidth = Viewport->GetSizeXY().X;
+	uint32 SrcHeight = Viewport->GetSizeXY().Y;
+	// Read the contents of the viewport into an array.
+	TArray<FColor> OrigBitmap;
+	if (!Viewport->ReadPixels(OrigBitmap) || OrigBitmap.Num() != SrcWidth * SrcHeight)
+	{
+		return;
+	}
+
+	TArray<FColor> ScaledBitmap;
+	FImageUtils::CropAndScaleImage(SrcWidth, SrcHeight, VARIANT_THUMBNAIL_SIZE, VARIANT_THUMBNAIL_SIZE, OrigBitmap, ScaledBitmap);
 
 		//redraw viewport to have the yellow highlight again
 		GCurrentLevelEditingViewportClient = OldViewportClient;
 		Viewport->Draw();
+
+	TArray<UVariant*> Vars;
+	TArray<UVariantSet*> VarSets;
+	VariantManager->GetSelection().GetSelectedVariantsAndVariantSets(Vars, VarSets);
+	if (Vars.Num() < 1)
+	{
+		return;
+	}
+
+	FScopedTransaction Transaction(LOCTEXT("CaptureThumbnailTransaction", "Capture viewport as a variant thumbnail"));
+
+	FCreateTexture2DParameters Params;
+	Params.bDeferCompression = true;
+
+	for (UVariant* Var : Vars)
+	{
+		// Create one thumbnail for each so that the Variants can own them
+		UTexture2D* ResizedTexture = FImageUtils::CreateTexture2D(VARIANT_THUMBNAIL_SIZE, VARIANT_THUMBNAIL_SIZE, ScaledBitmap, Var, FString(), RF_NoFlags, Params);
+		if (!ResizedTexture)
+		{
+			continue;
+		}
+
+		Var->SetThumbnail(ResizedTexture);
+	}
+
+	RefreshVariantTree();
+}
+
+void SVariantManager::LoadThumbnail()
+{
+	TSharedPtr<FVariantManager> VariantManager = VariantManagerPtr.Pin();
+	if (!VariantManager.IsValid())
+	{
+		return;
+	}
+
+	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+	if (DesktopPlatform == nullptr)
+	{
+		return;
+	}
+
+	// Formats that IImageWrapper can handle
+	const FString Filter = TEXT("Image files (*.jpg; *.png; *.bmp; *.ico; *.exr; *.icns)|*.jpg; *.png; *.bmp; *.ico; *.exr; *.icns|All files (*.*)|*.*");
+	TArray<FString> OutFiles;
+	TSharedPtr<SWindow> ParentWindow = FSlateApplication::Get().FindWidgetWindow(AsShared());
+	void* ParentWindowHandle = (ParentWindow.IsValid() && ParentWindow->GetNativeWindow().IsValid()) ? ParentWindow->GetNativeWindow()->GetOSWindowHandle() : nullptr;
+
+	bool bPickedFile = DesktopPlatform->OpenFileDialog(ParentWindowHandle,
+													   LOCTEXT("LoadThumbnailFromFileTitle", "Choose a file for the thumbnail").ToString(),
+													   TEXT(""), TEXT(""), Filter, EFileDialogFlags::None, OutFiles);
+	if (!bPickedFile || OutFiles.Num() != 1)
+	{
+		return;
+	}
+
+	FString SourceImagePath = FPaths::ConvertRelativePathToFull(OutFiles[0]);
+	if (!FPlatformFileManager::Get().GetPlatformFile().FileExists(*SourceImagePath))
+	{
+		return;
+	}
+
+	UTexture2D* OriginalTexture = FImageUtils::ImportFileAsTexture2D(SourceImagePath);
+	if (!OriginalTexture)
+	{
+		return;
+	}
+
+	TArray<UVariant*> Vars;
+	TArray<UVariantSet*> VarSets;
+	VariantManager->GetSelection().GetSelectedVariantsAndVariantSets(Vars, VarSets);
+	if (Vars.Num() < 1)
+	{
+		return;
+	}
+
+	FScopedTransaction Transaction(FText::Format(
+		LOCTEXT("LoadThumbnailTransaction", "Load file '{0}' as a variant thumbnail"), FText::FromString(SourceImagePath)
+	));
+
+	for (UVariant* Var : Vars)
+	{
+		Var->SetThumbnail(OriginalTexture);
 	}
 
 	RefreshVariantTree();
@@ -1172,15 +1383,16 @@ void SVariantManager::ClearThumbnail()
 	TArray<UVariant*> SelectedVariants;
 	TArray<UVariantSet*> SelectedVariantSets;
 	VarMan->GetSelection().GetSelectedVariantsAndVariantSets(SelectedVariants, SelectedVariantSets);
+	if (SelectedVariants.Num() < 1)
+	{
+		return;
+	}
+
+	FScopedTransaction Transaction(LOCTEXT("ClearThumbnailTransaction", "Cleared variant thumbnails"));
 
 	for (UVariant* Variant : SelectedVariants)
 	{
-		UPackage* VariantPackage = Variant->GetOutermost();
-
-		ThumbnailTools::CacheEmptyThumbnail(Variant->GetFullName(), VariantPackage);
-
-		VariantPackage->MarkPackageDirty();
-		Variant->PostEditChange();
+		Variant->SetThumbnail(nullptr);
 	}
 
 	RefreshVariantTree();
@@ -1214,6 +1426,11 @@ bool SVariantManager::CanCreateThumbnail()
 	return true;
 }
 
+bool SVariantManager::CanLoadThumbnail()
+{
+	return true;
+}
+
 bool SVariantManager::CanClearThumbnail()
 {
 	return true;
@@ -1222,8 +1439,11 @@ bool SVariantManager::CanClearThumbnail()
 void SVariantManager::CaptureNewPropertiesFromSelectedActors()
 {
 	TSharedPtr<FVariantManager> PinnedVariantManager = VariantManagerPtr.Pin();
-	if (PinnedVariantManager.IsValid())
+	if (!PinnedVariantManager.IsValid())
 	{
+		return;
+	}
+
 		FVariantManagerSelection& Selection = PinnedVariantManager->GetSelection();
 		const TSet<TSharedRef<FVariantManagerActorNode>>& SelectedActorNodes = Selection.GetSelectedActorNodes();
 
@@ -1238,6 +1458,10 @@ void SVariantManager::CaptureNewPropertiesFromSelectedActors()
 		}
 
 		int32 NumBindings = SelectedBindings.Num();
+	if (NumBindings == 0)
+	{
+		return;
+	}
 
 		FScopedTransaction Transaction(FText::Format(
 			LOCTEXT("ActorNodeCaptureNewPropertiesTransaction", "Capture new properties for {0} actor {0}|plural(one=binding,other=bindings)"),
@@ -1246,7 +1470,6 @@ void SVariantManager::CaptureNewPropertiesFromSelectedActors()
 
 		PinnedVariantManager->CaptureNewProperties(SelectedBindings);
 		PinnedVariantManager->GetVariantManagerWidget()->RefreshPropertyList();
-	}
 }
 
 bool SVariantManager::CanCaptureNewPropertiesFromSelectedActors()
@@ -1308,6 +1531,83 @@ bool SVariantManager::CanAddFunctionCaller()
 	const TSet<TSharedRef<FVariantManagerActorNode>>& SelectedActorNodes = Selection.GetSelectedActorNodes();
 
 	return SelectedActorNodes.Num() > 0;
+}
+
+void SVariantManager::GetSelectedBindingAndEditorActor(UVariantObjectBinding*& OutSelectedBinding, UObject*& OutSelectedObject)
+{
+	TSharedPtr<FVariantManager> PinnedVariantManager = VariantManagerPtr.Pin();
+	if (!PinnedVariantManager.IsValid())
+	{
+		return;
+	}
+
+	FVariantManagerSelection& Selection = PinnedVariantManager->GetSelection();
+	TSet<TSharedRef<FVariantManagerActorNode>>& SelectedActorNodes = Selection.GetSelectedActorNodes();
+	if (SelectedActorNodes.Num() != 1)
+	{
+		return;
+	}
+
+	TSharedRef<FVariantManagerActorNode> SelectedNode = *SelectedActorNodes.CreateIterator();
+	TWeakObjectPtr<UVariantObjectBinding> SelectedBinding = SelectedNode->GetObjectBinding();
+	if (!SelectedBinding.IsValid())
+	{
+		return;
+	}
+	OutSelectedBinding = SelectedBinding.Get();
+
+	// Cache all actors bound to the selected actor node's Variant
+	TSet<UObject*> BoundObjects;
+	UVariant* ParentVariant = SelectedBinding->GetParent();
+	for (const UVariantObjectBinding* Binding : ParentVariant->GetBindings())
+	{
+		BoundObjects.Add(Binding->GetObject());
+	}
+
+	// See if any of the selected actors can be bound to that variant
+	USelection* EditorSelection = GEditor->GetSelectedActors();
+	for (FSelectionIterator SelectedObjectIter(*EditorSelection); SelectedObjectIter; ++SelectedObjectIter)
+	{
+		UObject* EditorSelectedObject = *SelectedObjectIter;
+		if (EditorSelectedObject && !BoundObjects.Contains(EditorSelectedObject))
+		{
+			OutSelectedObject = EditorSelectedObject;
+			return;
+		}
+	}
+}
+
+void SVariantManager::RebindToSelectedActor()
+{
+	UVariantObjectBinding* SelectedBinding = nullptr;
+	UObject* SelectedObject = nullptr;
+	GetSelectedBindingAndEditorActor(SelectedBinding, SelectedObject);
+
+	AActor* SelectedActor = Cast<AActor>(SelectedObject);
+
+	if (SelectedBinding && SelectedActor)
+	{
+		FScopedTransaction Transaction(FText::Format(
+			LOCTEXT("RebindToSelectedTransaction", "Rebind variant to selected actor '{0}'"),
+			FText::FromString(SelectedActor->GetActorLabel())
+		));
+
+		SelectedBinding->SetObject(SelectedObject);
+	}
+}
+
+bool SVariantManager::CanRebindToSelectedActor()
+{
+	UVariantObjectBinding* SelectedBinding = nullptr;
+	UObject* SelectedActor = nullptr;
+	GetSelectedBindingAndEditorActor(SelectedBinding, SelectedActor);
+
+	if (SelectedBinding && SelectedActor)
+	{
+		return true;
+	}
+
+	return false;
 }
 
 void SVariantManager::RemoveActorBindings()
@@ -1751,6 +2051,9 @@ void SVariantManager::OnActorNodeSelectionChanged()
 	TSharedPtr<FVariantManager> PinnedVariantManager = VariantManagerPtr.Pin();
 	if (PinnedVariantManager.IsValid())
 	{
+		// Prevent OnEditorSelectionChanged from firing when we update this selection
+		TGuardValue<bool> Guard(bRespondToEditorSelectionEvents, false);
+
 		const TSet<TSharedRef<FVariantManagerActorNode>>& SelectedActorNodes = PinnedVariantManager->GetSelection().GetSelectedActorNodes();
 
 		GEditor->SelectNone(true, true);
@@ -1952,89 +2255,174 @@ void SVariantManager::RefreshActorList()
 	RefreshPropertyList();
 }
 
+namespace SVariantManagerUtils
+{
+	enum class ERowType : uint8
+	{
+		None = 0,
+		PropertyValue = 1,
+		FunctionCaller = 2,
+	};
+
+	struct FPropertyPanelRow
+	{
+		FPropertyPanelRow(ERowType InRowType, TArray<UPropertyValue*>&& InPropertyValues)
+			: PropertyValues(InPropertyValues)
+			, FunctionCaller(nullptr)
+			, Binding(nullptr)
+			, RowType(InRowType)
+			, DisplayOrder(UINT32_MAX)
+		{
+			ensure(RowType == ERowType::PropertyValue);
+
+			for (UPropertyValue* PropertyValue : PropertyValues)
+			{
+				DisplayOrder = FMath::Min(DisplayOrder, PropertyValue->GetDisplayOrder());
+			}
+		}
+
+		FPropertyPanelRow(ERowType InRowType, FFunctionCaller* InFunctionCaller, UVariantObjectBinding* InBinding)
+			: FunctionCaller(InFunctionCaller)
+			, Binding(InBinding)
+			, RowType(InRowType)
+			, DisplayOrder(UINT32_MAX)
+		{
+			ensure(RowType == ERowType::FunctionCaller);
+
+			DisplayOrder = FunctionCaller->GetDisplayOrder();
+		}
+
+		FName GetName() const
+		{
+			if (RowType == ERowType::PropertyValue && PropertyValues.Num() > 0)
+			{
+				return *PropertyValues[0]->GetFullDisplayString();
+			}
+			else if (RowType == ERowType::FunctionCaller && FunctionCaller)
+			{
+				return FunctionCaller->FunctionName;
+			}
+
+			return NAME_None;
+		}
+
+		TArray<UPropertyValue*> PropertyValues;
+
+		FFunctionCaller* FunctionCaller;
+		UVariantObjectBinding* Binding;
+
+		ERowType RowType;
+		uint32 DisplayOrder;
+	};
+}
+
 void SVariantManager::RefreshPropertyList()
 {
 	FVariantManagerSelection& Selection = VariantManagerPtr.Pin()->GetSelection();
 
-	TArray<UPropertyValue*> NewCapturedProps;
-	TArray<UVariantObjectBinding*> SelectedBindings;
+	TArray<UPropertyValue*> Properties;
+
+	TArray<SVariantManagerUtils::FPropertyPanelRow> Rows;
 
 	for (const TSharedRef<FVariantManagerActorNode>& Node : Selection.GetSelectedActorNodes())
 	{
-		// Ignore unresolved actor bindings
 		UVariantObjectBinding* Binding = Node->GetObjectBinding().Get();
 		if (Binding == nullptr || Binding->GetObject() == nullptr)
 		{
 			continue;
 		}
 
-		NewCapturedProps.Append(Binding->GetCapturedProperties());
-		SelectedBindings.Add(Binding);
+		Properties.Append(Binding->GetCapturedProperties());
+
+		// Add function caller rows first as we need the bindings
+		for (FFunctionCaller& Caller : Binding->GetFunctionCallers())
+		{
+			Rows.Emplace(SVariantManagerUtils::ERowType::FunctionCaller, &Caller, Binding);
+		}
 	}
 
-	// Group properties by PathHash
+	// Group properties with the same hash, to show a "multiple object" type of property editor
 	TMap<uint32, TArray<UPropertyValue*>> PropsByHash;
-	for (UPropertyValue* NewCapturedProp : NewCapturedProps)
+	for (UPropertyValue* Property : Properties)
 	{
-		uint32 Hash = NewCapturedProp->GetPropertyPathHash();
-		TArray<UPropertyValue*>& Props = PropsByHash.FindOrAdd(Hash);
-
-		Props.Add(NewCapturedProp);
-	}
-
-	DisplayedPropertyNodes.Empty();
-	for (auto HashToPropArray : PropsByHash)
-	{
-		TArray<UPropertyValue*>& Props = HashToPropArray.Value;
-		if (Props.Num() < 1)
+		if (!Property)
 		{
 			continue;
 		}
 
-		UPropertyValue* FirstProp = Props[0];
-
-		// Attempts to resolve first so that we can fetch the objects below
-		FirstProp->Resolve();
-
-		UStruct* Struct = FirstProp->GetStructPropertyStruct();
-		UEnum* Enum = FirstProp->GetEnumPropertyEnum();
-
-		if (Struct)
-		{
-			DisplayedPropertyNodes.Add(MakeShareable(new FVariantManagerStructPropertyNode(Props, VariantManagerPtr)));
-		}
-		else if (Enum)
-		{
-			DisplayedPropertyNodes.Add(MakeShareable(new FVariantManagerEnumPropertyNode(Props, VariantManagerPtr)));
-		}
-		else if (FirstProp->GetPropertyClass()->IsChildOf(UStrProperty::StaticClass()) ||
-				 FirstProp->GetPropertyClass()->IsChildOf(UNameProperty::StaticClass()) ||
-				 FirstProp->GetPropertyClass()->IsChildOf(UTextProperty::StaticClass()))
-		{
-			DisplayedPropertyNodes.Add(MakeShareable(new FVariantManagerStringPropertyNode(Props, VariantManagerPtr)));
-		}
-		else if (FirstProp->GetPropCategory() == EPropertyValueCategory::Option)
-		{
-			DisplayedPropertyNodes.Add(MakeShareable(new FVariantManagerOptionPropertyNode(Props, VariantManagerPtr)));
-		}
-		else
-		{
-			DisplayedPropertyNodes.Add(MakeShareable(new FVariantManagerPropertyNode(Props, VariantManagerPtr)));
-		}
+		uint32 Hash = Property->GetPropertyPathHash();
+		PropsByHash.FindOrAdd(Hash).Add(Property);
 	}
 
-	//TODO @Speed
-	DisplayedPropertyNodes.Sort([](const TSharedPtr<FVariantManagerPropertyNode>& A, const TSharedPtr<FVariantManagerPropertyNode>& B)
+	// Add the grouped property rows
+	for (TTuple<uint32, TArray<UPropertyValue*>>& HashToPropArray : PropsByHash)
 	{
-		return A->GetDisplayName().ToString() < B->GetDisplayName().ToString();
+		Rows.Emplace(SVariantManagerUtils::ERowType::PropertyValue, MoveTemp(HashToPropArray.Value));
+	}
+	PropsByHash.Reset();
+
+	Rows.Sort([](const SVariantManagerUtils::FPropertyPanelRow& Left, const SVariantManagerUtils::FPropertyPanelRow& Right)
+	{
+		if (Left.DisplayOrder == Right.DisplayOrder)
+		{
+			return Left.GetName().LexicalLess(Right.GetName());
+	}
+
+		return Left.DisplayOrder < Right.DisplayOrder;
 	});
 
-	// Add a node for each function caller
-	for (UVariantObjectBinding* Binding : SelectedBindings)
+	DisplayedPropertyNodes.Empty();
+	for(SVariantManagerUtils::FPropertyPanelRow& Row : Rows)
 	{
-		for (FFunctionCaller& Caller : Binding->GetFunctionCallers())
+		if (Row.RowType == SVariantManagerUtils::ERowType::PropertyValue)
 		{
-			DisplayedPropertyNodes.Add(MakeShareable(new FVariantManagerFunctionPropertyNode(Binding, Caller, VariantManagerPtr)));
+			TArray<UPropertyValue*>& Props = Row.PropertyValues;
+			if (Props.Num() < 1)
+			{
+				continue;
+			}
+
+			// Attempts to resolve first so that we can fetch the objects below
+			UPropertyValue* FirstProp = Props[0];
+			FirstProp->Resolve();
+
+			UScriptStruct* Struct = FirstProp->GetStructPropertyStruct();
+			UEnum* Enum = FirstProp->GetEnumPropertyEnum();
+
+			if (Struct)
+			{
+				FName StructName = Struct->GetFName();
+				if (StructName == NAME_Color || StructName == NAME_LinearColor)
+				{
+					DisplayedPropertyNodes.Add(MakeShared<FVariantManagerColorPropertyNode>(Props, VariantManagerPtr));
+				}
+				else
+				{
+					DisplayedPropertyNodes.Add(MakeShared<FVariantManagerStructPropertyNode>(Props, VariantManagerPtr));
+				}
+			}
+			else if (Enum)
+			{
+				DisplayedPropertyNodes.Add(MakeShared<FVariantManagerEnumPropertyNode>(Props, VariantManagerPtr));
+			}
+			else if (FirstProp->GetPropertyClass()->IsChildOf(FStrProperty::StaticClass()) ||
+					 FirstProp->GetPropertyClass()->IsChildOf(FNameProperty::StaticClass()) ||
+					 FirstProp->GetPropertyClass()->IsChildOf(FTextProperty::StaticClass()))
+			{
+				DisplayedPropertyNodes.Add(MakeShared<FVariantManagerStringPropertyNode>(Props, VariantManagerPtr));
+			}
+			else if (FirstProp->GetPropCategory() == EPropertyValueCategory::Option)
+			{
+				DisplayedPropertyNodes.Add(MakeShared<FVariantManagerOptionPropertyNode>(Props, VariantManagerPtr));
+			}
+			else
+			{
+				DisplayedPropertyNodes.Add(MakeShared<FVariantManagerPropertyNode>(Props, VariantManagerPtr));
+			}
+		}
+		else if (Row.RowType == SVariantManagerUtils::ERowType::FunctionCaller && Row.Binding && Row.FunctionCaller)
+		{
+			DisplayedPropertyNodes.Add(MakeShared<FVariantManagerFunctionPropertyNode>(Row.Binding, *Row.FunctionCaller, VariantManagerPtr));
 		}
 	}
 
@@ -2187,9 +2575,135 @@ FReply SVariantManager::OnAddVariantSetClicked()
 	return FReply::Handled();
 }
 
+FReply SVariantManager::OnSummonAddActorMenu()
+{
+	using namespace SceneOutliner;
+
+	TSharedPtr<FVariantManager> VarMan = VariantManagerPtr.Pin();
+	if (!VarMan.IsValid())
+	{
+		return FReply::Unhandled();
+	}
+
+	TArray<UVariant*> SelectedVariants;
+	TArray<UVariantSet*> SelectedVariantSets;
+	VarMan->GetSelection().GetSelectedVariantsAndVariantSets(SelectedVariants, SelectedVariantSets);
+	if (SelectedVariants.Num() + SelectedVariantSets.Num() == 0)
+	{
+		return FReply::Unhandled();
+	}
+
+	for (UVariantSet* VarSet : SelectedVariantSets)
+	{
+		if (!VarSet)
+		{
+			continue;
+		}
+
+		SelectedVariants.Append(VarSet->GetVariants());
+	}
+
+	// Find the set of actors that is already bound to all selected variants: We can't add bindings to those
+	TArray<TSet<const AActor*>> BoundActorSets;
+	BoundActorSets.SetNum(SelectedVariants.Num());
+	for (int32 VariantIndex = 0; VariantIndex < SelectedVariants.Num(); ++VariantIndex)
+	{
+		UVariant* SelectedVariant = SelectedVariants[VariantIndex];
+		if (!SelectedVariant)
+		{
+			continue;
+		}
+
+		const TArray<UVariantObjectBinding*>& Bindings = SelectedVariant->GetBindings();
+
+		TSet<const AActor*>& BoundActors = BoundActorSets[VariantIndex];
+		BoundActors.Reserve(Bindings.Num());
+		for (UVariantObjectBinding* Binding : Bindings)
+		{
+			if (!Binding)
+			{
+				continue;
+			}
+
+			if (AActor* BoundActor = Cast<AActor>(Binding->GetObject()))
+			{
+				BoundActors.Add(BoundActor);
+			}
+		}
+	}
+	TSet<const AActor*> CommonActorSet;
+	if (BoundActorSets.Num() > 0)
+	{
+		CommonActorSet = BoundActorSets[0];
+		for (int32 Index = 1; Index < BoundActorSets.Num(); ++Index)
+		{
+			CommonActorSet = CommonActorSet.Intersect(BoundActorSets[Index]);
+		}
+	}
+
+	auto IsActorValidForAssignment = [CommonActorSet](const AActor* InActor)
+	{
+		return !CommonActorSet.Contains(InActor);
+	};
+
+	FInitializationOptions InitOptions;
+	InitOptions.Mode = ESceneOutlinerMode::ActorPicker;
+	InitOptions.bShowHeaderRow = true;
+	InitOptions.bShowSearchBox = true;
+	InitOptions.bShowCreateNewFolder = false;
+	InitOptions.bFocusSearchBoxWhenOpened = true;
+	InitOptions.ColumnMap.Add(FBuiltInColumnTypes::Label(), FColumnInfo(EColumnVisibility::Visible, 0));
+	InitOptions.Filters->AddFilterPredicate( FActorFilterPredicate::CreateLambda( IsActorValidForAssignment ) );
+
+	// Create mini scene outliner menu
+	FSceneOutlinerModule& SceneOutlinerModule = FModuleManager::LoadModuleChecked<FSceneOutlinerModule>("SceneOutliner");
+	TSharedRef< SWidget > MiniSceneOutliner =
+		SNew( SBox )
+		.MaxDesiredHeight(400.0f)
+		.WidthOverride(300.0f)
+		[
+			SceneOutlinerModule.CreateSceneOutliner(
+				InitOptions,
+				FOnActorPicked::CreateLambda([SelectedVariants, VarMan, this](AActor* Actor)
+				{
+					if (!Actor)
+					{
+						return;
+					}
+
+					FSlateApplication::Get().DismissAllMenus();
+
+					FScopedTransaction Transaction(FText::Format(
+						LOCTEXT("AddActorPlusTransaction", "Add actor '{0}' to selected variants"),
+						FText::FromString(Actor->GetActorLabel())));
+
+					VarMan->CreateObjectBindings({Actor}, SelectedVariants);
+					RefreshActorList();
+				})
+			)
+		];
+
+	// I'm not sure why we need a menu builder here as opposed to just passing the MiniSceneOutliner
+	// directly to PushMenu. If we do that though we get a bunch of drawing glitches
+	FMenuBuilder MenuBuilder(true, nullptr);
+	MenuBuilder.BeginSection(TEXT("ChooseActorSection"), LOCTEXT("ChooseActor", "Choose Actor:"));
+	MenuBuilder.AddWidget(MiniSceneOutliner, FText::GetEmpty(), true);
+
+	const FVector2D MouseCursorLocation = FSlateApplication::Get().GetCursorPos();
+	FSlateApplication::Get().PushMenu(
+		AsShared(),
+		FWidgetPath(),
+		MenuBuilder.MakeWidget(),
+		MouseCursorLocation,
+		FPopupTransitionEffect( FPopupTransitionEffect::ContextMenu )
+	);
+
+	return FReply::Handled();
+}
+
 // Tries capturing and recording new data for the property at PropertyPath for TargetActor, into whatever Variants we have selected.
 // Will return true if it created or updated a UPropertyValue
-bool AutoCaptureProperty(FVariantManager* VarMan, AActor* TargetActor, const FString& PropertyPath, const UProperty* Property)
+bool AutoCaptureProperty(FVariantManager* VarMan, AActor* TargetActor, const FString& PropertyPath, const FProperty* Property)
 {
 	// Transient actors are generated temporarily while dragging actors into the level. Once the
 	// mouse is released, another non-transient actor is instantiated
@@ -2217,13 +2731,18 @@ bool AutoCaptureProperty(FVariantManager* VarMan, AActor* TargetActor, const FSt
 
 	// Create property captures
 	TArray<TSharedPtr<FCapturableProperty>> OutProps;
-	VarMan->GetCapturableProperties(TargetActorArr, OutProps, PropertyPath);
+	VarMan->GetCapturableProperties(TargetActorArr, OutProps, PropertyPath, true);
+	if (OutProps.Num() == 0)
+	{
+		return false;
+	}
+
 	TArray<UPropertyValue*> CreatedProps = VarMan->CreatePropertyCaptures(OutProps, {Bindings}, true);
 
 	// UPropertyValue always contains the Inner for array properties, but the event that
 	// calls this function only provides the outer
-	UProperty* FilterProperty = const_cast<UProperty*>(Property);
-	if (const UArrayProperty* ArrayProp = Cast<UArrayProperty>(Property))
+	FProperty* FilterProperty = const_cast<FProperty*>(Property);
+	if (const FArrayProperty* ArrayProp = CastField<FArrayProperty>(Property))
 	{
 		FilterProperty = ArrayProp->Inner;
 	}
@@ -2430,152 +2949,362 @@ void SVariantManager::OnObjectTransacted(UObject* Object, const class FTransacti
 	}
 }
 
-void SVariantManager::OnObjectPropertyChanged(UObject* Object, struct FPropertyChangedEvent& Event)
+namespace SVariantManagerUtils
 {
-	if (!bAutoCaptureProperties || !Object || !Event.Property)
+	struct FReconstructionResult
 	{
-		return;
-	}
+		FString PathActorToLeafComponent;
+		FString PathTailProperty;
+		AActor* TargetActor = nullptr;
+		USceneComponent* LeafComponent = nullptr;
+	};
 
-	AActor* TargetActor = nullptr;
-	FString PropertyPath;
-
-	bool bIsStructProperty = Event.MemberProperty && Event.MemberProperty->IsA(UStructProperty::StaticClass());
-	bool bIsBuiltIn = bIsStructProperty && FVariantManagerUtils::IsBuiltInStructProperty(Event.MemberProperty);
-
-	// We don't want to capture just the X component of a RelativeLocation property, but we want to capture
-	// the ISO property of a FPostProcessSettings StructProperty
-	UProperty* Prop = bIsBuiltIn? Event.MemberProperty : Event.Property;
-
-	// Fetch TargetActor
-	USceneComponent* ObjAsSceneComp = Cast<USceneComponent>(Object);
-	if (ObjAsSceneComp)
+	// This needs to be a separate function because OnPreObjectPropertyChanged is required to parse generic properties and
+	// disambiguate property paths (as it provides the full path), but it does not fire for some changes, like Materials.
+	// OnObjectPropertyChanged seems to fire for everything, but it doesn't provide the full path. This means that we sometimes need
+	// to reconstruct the path from OnObjectPropertyChanged, and sometimes from OnPreObjectPropertyChanged
+	FReconstructionResult ReconstructPropertyPath(UObject* SomeObject, FProperty* ParentProperty, FProperty* ChildProperty)
 	{
-		TargetActor = Cast<AActor>(ObjAsSceneComp->GetOwner());
-	}
-	else if (UActorComponent* ObjAsActorComp = Cast<UActorComponent>(Object))
-	{
-		TargetActor = ObjAsActorComp->GetTypedOuter<AActor>();
-		PropertyPath = ObjAsActorComp->GetName() + PATH_DELIMITER;
-	}
-	else
-	{
-		TargetActor = Cast<AActor>(Object);
-	}
-
-	if (!TargetActor)
-	{
-		return;
-	}
-
-	// We need to check if its a blueprint actor or not, as we handle blueprint root component
-	// names a little bit differently
-	bool bIsBlueprintGeneratedClass = ((UObject*)TargetActor->GetClass())->IsA(UBlueprintGeneratedClass::StaticClass());
-
-	// Build the property path with the components, if we're nested in one
-	while (ObjAsSceneComp)
-	{
-		USceneComponent* AttachParent = ObjAsSceneComp->GetAttachParent();
-		FString ComponentName;
-
-		// We're some form of root component
-		if (AttachParent == nullptr || AttachParent->GetOwner() != TargetActor)
+		FReconstructionResult Result;
+		if (!SomeObject || !ParentProperty)
 		{
-			if (bIsBlueprintGeneratedClass)
-			{
-				// Users can rename of the root component for a blueprint generated class, so lets
-				// use that
-				ComponentName = ObjAsSceneComp->GetName();
-			}
-			else
-			{
-				// Users can't rename root components, and their actual names are always
-				// something like StaticMeshComponent0 or LightComponent0 (even if its class is a
-				// UPointLightComponent). Getting the class display name matches how the Variant Manager
-				// behaves
-				ComponentName = ObjAsSceneComp->GetClass()->GetDisplayNameText().ToString();
-			}
-			ObjAsSceneComp = nullptr;
+			return Result;
+		}
+
+		FString ComponentPath;
+
+		AActor* TargetActor = nullptr;
+		USceneComponent* LeafComponent = Cast<USceneComponent>(SomeObject);
+		if (LeafComponent)
+		{
+			TargetActor = LeafComponent->GetOwner();
+		}
+		else if (UActorComponent* ObjAsActorComp = Cast<UActorComponent>(SomeObject))
+		{
+			TargetActor = ObjAsActorComp->GetOwner();
+
+			// Actor components can't be attached to scene components, so we know we're
+			// attached directly to the actor and there are no other components in the chain
+			ComponentPath = ObjAsActorComp->GetName() + PATH_DELIMITER;
 		}
 		else
 		{
-			ComponentName = ObjAsSceneComp->GetName();
-			ObjAsSceneComp = AttachParent;
+			TargetActor = Cast<AActor>(SomeObject);
+		}
+		if (!TargetActor)
+		{
+			return Result;
 		}
 
-		PropertyPath = ComponentName + PATH_DELIMITER + PropertyPath;
-	}
-
-	// If we're a non-built in struct property, build the path with the categories
-	// like the propertycapturer would have done (this is mostly to manage Post Process Volume properties)
-	if (bIsStructProperty && !bIsBuiltIn)
-	{
-		// Add 'Settings /'
-		PropertyPath += Event.MemberProperty->GetDisplayNameText().ToString() + PATH_DELIMITER;
-
-		FString Category = Prop->GetMetaData(TEXT("Category"));
-		if (!Category.IsEmpty())
+		// Some AActor types have direct UPROPERTY pointer "shortcuts" to components that are on their own
+		// component hierarchies (e.g. ALight, ACameraActor, etc). On those cases the property pointers may be
+		// those shortcut components, and our picture of the component hierarchy could be incorrect.
+		// What we do know is that we can always resolve the parent property on the Object itself to retrieve a
+		// valid Component, so here we just travel it upwards to complete the path avoiding any shortcuts
+		if (TargetActor == SomeObject)
 		{
-			Category = Category.Replace(TEXT("|"), PATH_DELIMITER);
-			// Add 'Lens / Camera /'
-			PropertyPath += Category + PATH_DELIMITER;
-		}
-	}
-
-	FString PropertyName = Prop->GetDisplayNameText().ToString();
-	TArray<FString> PropertyPaths;
-	static const TSet<FString> ProxyPropertyPaths{ TEXT("Relative Location"), TEXT("Relative Rotation"), TEXT("Relative Scale 3D") };
-
-	// We capture as just 'Materials' in the Variant Manager UI, instead of 'Override Materials'
-	// Override Materials doesn't work like a regular UArrayProperty, we need to use GetNumMaterials
-	if (Prop == FVariantManagerUtils::GetOverrideMaterialsProperty())
-	{
-		if (UStaticMeshComponent* ObjAsComp = Cast<UStaticMeshComponent>(Object))
-		{
-			for (int32 Index = 0; Index < ObjAsComp->GetNumMaterials(); ++Index)
+			if (FObjectProperty* ObjectProperty = CastField<FObjectProperty>(ParentProperty))
 			{
-				// 'Static Mesh Component / Material' + '[0]'
-				PropertyPaths.Add(PropertyPath + FString::Printf(TEXT("Material[%d]"), Index));
+				void* ObjectContainer = ObjectProperty->ContainerPtrToValuePtr<void>(TargetActor);
+				UObject* TargetObject = ObjectProperty->GetObjectPropertyValue(ObjectContainer);
+
+				if (USceneComponent* StartingSceneComp = Cast<USceneComponent>(TargetObject))
+				{
+					if (StartingSceneComp->GetOwner() == TargetActor)
+					{
+						LeafComponent = StartingSceneComp;
+					}
+				}
+				else if (UActorComponent* StartingActorComp = Cast<UActorComponent>(TargetObject))
+				{
+					if (StartingActorComp->GetOwner() == TargetActor)
+					{
+						// Actor components can't be attached to scene components, so we know we're
+						// attached directly to the actor and there are no other components in the chain
+						ComponentPath = StartingActorComp->GetName() + PATH_DELIMITER;
+						LeafComponent = nullptr;
+					}
+				}
 			}
 		}
-	}
-	// Generate one path for each array position. Because the event doesn't tell us which array
-	// element that fired it, we must capture all positions of the array
-	else if (UArrayProperty* ArrayProp = Cast<UArrayProperty>(Prop))
-	{
-		FScriptArrayHelper ArrayHelper(ArrayProp, ArrayProp->ContainerPtrToValuePtr<void>(Object));
-		for (int32 Index = 0; Index < ArrayHelper.Num(); ++Index)
+
+		// We need to check if its a blueprint actor or not, as we handle blueprint root component
+		// names a little bit differently
+		bool bIsBlueprintGeneratedClass = ((UObject*)TargetActor->GetClass())->IsA(UBlueprintGeneratedClass::StaticClass());
+
+		// Build component path up to TargetActor, if our Object is actually a SceneComponent
+		USceneComponent* ComponentPointer = LeafComponent;
+		while (ComponentPointer)
 		{
-			// 'Static Mesh Component / ' + 'Tags[0]'
-			PropertyPaths.Add(PropertyPath + FString::Printf(TEXT("%s[%d]"), *PropertyName, Index));
+			USceneComponent* AttachParent = ComponentPointer->GetAttachParent();
+
+			FString ComponentName;
+
+			// We're some form of root component, naming is different
+			if (AttachParent == nullptr || AttachParent->GetOwner() != TargetActor)
+			{
+				// Users can rename of the root component for a blueprint generated class, so lets use that.
+				// On other cases, users can't rename root components, and their actual names are always
+				// something like StaticMeshComponent0 or LightComponent0 (even if its class is a UPointLightComponent).
+				// Getting the class display name matches how the Variant Manager behaves
+				ComponentName = bIsBlueprintGeneratedClass ?
+					ComponentPointer->GetName() :
+					ComponentPointer->GetClass()->GetDisplayNameText().ToString();
+
+				ComponentPointer = nullptr;
+			}
+			else
+			{
+				ComponentName = ComponentPointer->GetName();
+				ComponentPointer = AttachParent;
+			}
+
+			ComponentPath = ComponentName + PATH_DELIMITER + ComponentPath;
+		}
+
+		FString PropertyPath;
+
+		FString ChildPropertyName = ChildProperty ? ChildProperty->GetDisplayNameText().ToString() : FString();
+		static const TSet<FString> ProxyPropertyPaths{TEXT("Relative Location"), TEXT("Relative Rotation"), TEXT("Relative Scale 3D")};
+
+		// We capture as just 'Material' in the Variant Manager UI, instead of 'Override Materials'
+		// Override Materials doesn't work like a regular UArrayProperty, we need to use GetNumMaterials
+		if (ChildProperty == FVariantManagerUtils::GetOverrideMaterialsProperty())
+		{
+			if (UStaticMeshComponent* MeshComponent = Cast<UStaticMeshComponent>(LeafComponent))
+			{
+				// We'll capture all array indices
+				PropertyPath += TEXT("Material");
+			}
+		}
+		// Some properties are exposed on the actors, but are actually just proxies for the root component. Here we redirect those
+		// to be on the root component itself, so as to remove duplicates
+		else if (ComponentPath.IsEmpty() && ProxyPropertyPaths.Contains(ChildPropertyName))
+		{
+			FString RootComponentName = bIsBlueprintGeneratedClass ?
+				TargetActor->GetRootComponent()->GetName() :
+				TargetActor->GetRootComponent()->GetClass()->GetDisplayNameText().ToString();
+
+			ComponentPath = RootComponentName + PATH_DELIMITER;
+			PropertyPath += ChildPropertyName;
+		}
+		else
+		{
+			PropertyPath += ChildPropertyName;
+		}
+
+		Result.TargetActor = TargetActor;
+		Result.LeafComponent = LeafComponent;
+		Result.PathActorToLeafComponent = ComponentPath;
+		Result.PathTailProperty = PropertyPath;
+		return Result;
+	}
+}
+
+void SVariantManager::OnObjectPropertyChanged(UObject* Object, struct FPropertyChangedEvent& Event)
+{
+	if (!bAutoCaptureProperties || !Object || !Event.Property)
+		{
+		return;
+		}
+
+	bool bIsStructProperty = Event.MemberProperty && Event.MemberProperty->IsA(FStructProperty::StaticClass());
+	bool bIsBuiltIn = bIsStructProperty && FVariantManagerUtils::IsBuiltInStructProperty(Event.MemberProperty);
+	FProperty* Prop = bIsBuiltIn? Event.MemberProperty : Event.Property;
+
+	FString PropertyPath;
+	AActor* TargetActor = nullptr;
+
+	// Fetch property path from the cache we build in OnPreObjectPropertyChanged
+	for (int32 Index = CachedPropertyPathStack.Num() - 1; Index >= 0; --Index)
+	{
+		const SVariantManager::FCachedPropertyPath& CachedPropertyPath = CachedPropertyPathStack[Index];
+
+		if (Object == CachedPropertyPath.Object &&
+			Event.Property == CachedPropertyPath.ChildProperty &&
+			Event.MemberProperty == CachedPropertyPath.ParentProperty)
+		{
+			PropertyPath = CachedPropertyPath.Path;
+			TargetActor = CachedPropertyPath.TargetActor;
+			CachedPropertyPathStack.RemoveAt(Index);
+			break;
 		}
 	}
-	// Some properties are reported as from the actor, but really they are just proxies for the root component
-	// The Variant Manager doesn't capture these, only showing the root component versions, so we need to tweak the path
-	else if (PropertyPath.IsEmpty() && ProxyPropertyPaths.Contains(PropertyName))
-	{
-		FString RootComponentName = bIsBlueprintGeneratedClass ? TargetActor->GetRootComponent()->GetName() :
-									TargetActor->GetRootComponent()->GetClass()->GetDisplayNameText().ToString();
 
-		// 'Static Mesh Component' + ' / ' + 'Relative Location'
-		PropertyPaths.Add(RootComponentName + PATH_DELIMITER + PropertyName);
-	}
-	else
+	// If its not in the cache, the best we got is to try and reconstruct the path with just ReconstructPropertyPath
+	if (PropertyPath.IsEmpty())
 	{
-		PropertyPaths.Add(PropertyPath + PropertyName);
-	}
+		SVariantManagerUtils::FReconstructionResult Result = SVariantManagerUtils::ReconstructPropertyPath(Object, Event.MemberProperty, Event.Property);
+		if (Result.TargetActor == nullptr)
+		{
+			UE_LOG(LogVariantManager, Warning, TEXT("Failed to auto-expose property '%s' for object '%s'"), Event.MemberProperty? *Event.MemberProperty->GetDisplayNameText().ToString() : TEXT("nullptr"), Object ? *Object->GetName() : TEXT("nullptr"));
+			return;
+		}
 
-	bool bUpdatedSomething = false;
-	TSharedPtr<FVariantManager> PinnedVarMan = VariantManagerPtr.Pin();
-	for (const FString& SomePropertyPath : PropertyPaths)
-	{
-		bUpdatedSomething |= AutoCaptureProperty(PinnedVarMan.Get(), TargetActor, SomePropertyPath, Prop);
+		PropertyPath = Result.PathActorToLeafComponent + Result.PathTailProperty;
+		TargetActor = Result.TargetActor;
 	}
 
+	if (PropertyPath.IsEmpty())
+		{
+		return;
+		}
+
+	bool bUpdatedSomething = AutoCaptureProperty(VariantManagerPtr.Pin().Get(), TargetActor, PropertyPath, Prop);
 	if (bUpdatedSomething)
 	{
 		RefreshActorList();
 	}
+}
+
+namespace SVariantManagerUtils
+{
+	int32 HashObjectAndPropChain(UObject* Object, const class FEditPropertyChain& PropChain)
+	{
+		using PropNode = TDoubleLinkedList<FProperty*>::TDoubleLinkedListNode;
+
+		int32 Hash = 7;
+		for (PropNode* Node = PropChain.GetHead(); Node; Node = Node->GetNextNode())
+		{
+			Hash = HashCombine(Hash, GetTypeHash(Node->GetValue()));
+		}
+
+		Hash = HashCombine(Hash, GetTypeHash(Object));
+
+		return Hash;
+	}
+}
+
+void SVariantManager::OnPreObjectPropertyChanged(UObject* Object, const class FEditPropertyChain& PropChain)
+{
+	// For BP actors, Object will be the USceneComponent, and the path will start off from that component
+	// For regular actors, it will fire twice. In both, the path starts from root component and goes to leaf,
+	// but in the first firing the root component is Object, and in the second firing, the root component is
+
+	if (!bAutoCaptureProperties || !Object)
+	{
+		return;
+	}
+
+	int32 Hash = SVariantManagerUtils::HashObjectAndPropChain(Object, PropChain);
+
+	FProperty* ParentProp = PropChain.GetActiveMemberNode()->GetValue();
+	FProperty* ChildProp = PropChain.GetActiveNode()->GetValue();
+
+	SVariantManager::FCachedPropertyPath& CachedPropertyPath = CachedPropertyPaths.FindOrAdd(Hash);
+	FString& Path = CachedPropertyPath.Path;
+	if (!CachedPropertyPath.Path.IsEmpty())
+	{
+		CachedPropertyPathStack.Push(CachedPropertyPath);
+		return;
+	}
+
+	using PropNode = TDoubleLinkedList<FProperty*>::TDoubleLinkedListNode;
+	PropNode* Head = PropChain.GetHead();
+	if (!Head || !Head->GetValue())
+	{
+		return;
+	}
+
+	PropNode* Tail = PropChain.GetTail();
+	if (!Tail || !Tail->GetValue())
+	{
+		return;
+	}
+
+	SVariantManagerUtils::FReconstructionResult Reconstruction = SVariantManagerUtils::ReconstructPropertyPath(Object, ParentProp, ChildProp);
+
+	// Our first property may be a "shortcut" component pointer, so let's skip it
+	while (Head && Reconstruction.LeafComponent)
+	{
+		FProperty* HeadProperty = Head->GetValue();
+
+		bool bHeadPropertyInLeafComponent = false;
+		for (TFieldIterator<FProperty> PropertyIterator(Reconstruction.LeafComponent->GetClass()); PropertyIterator; ++PropertyIterator)
+		{
+			if (*PropertyIterator == HeadProperty)
+			{
+				bHeadPropertyInLeafComponent = true;
+				break;
+			}
+		}
+
+		if (bHeadPropertyInLeafComponent)
+		{
+			break;
+		}
+
+		Head = Head->GetNextNode();
+	}
+
+	// Component path is actually complete, lets travel down the property path.
+	// Note how we don't visit the tail: The leaf property is processed in ReconstructPropertyPath already!
+	bool bShowCategories = false;
+	FString IntermediatePath = PATH_DELIMITER;
+	for (PropNode* Node = Head; Node; Node = Node->GetNextNode())
+	{
+		FProperty* Prop = Node->GetValue();
+		if (!Prop)
+		{
+			return;
+		}
+
+		FString PropertyName = Prop->GetDisplayNameText().ToString();
+
+		// If we're a property inside a Struct, show the category
+		if (bShowCategories)
+		{
+			FString Category = Prop->GetMetaData(TEXT("Category"));
+			if (!Category.IsEmpty())
+			{
+				Category = Category.Replace(TEXT("|"), PATH_DELIMITER);
+
+				int32 LastDelimiterIndex = Category.Find(PATH_DELIMITER, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+				FString LastCategorySegment = (LastDelimiterIndex == INDEX_NONE) ? Category : Category.RightChop(LastDelimiterIndex + 1);
+
+				if (!IntermediatePath.EndsWith(PATH_DELIMITER + Category + PATH_DELIMITER) &&
+					LastCategorySegment != PropertyName)
+				{
+					IntermediatePath += Category + PATH_DELIMITER;
+				}
+			}
+		}
+
+		if (Node == Tail)
+		{
+			break;
+		}
+
+		IntermediatePath += PropertyName + PATH_DELIMITER;
+
+		if (FStructProperty* StructProperty = CastField<FStructProperty>(Prop))
+		{
+			if (FVariantManagerUtils::IsBuiltInStructProperty(Prop))
+			{
+				// We don't care about anything deeper than this in this case
+				Reconstruction.PathTailProperty.Empty();
+				IntermediatePath.RemoveFromEnd(PATH_DELIMITER);
+				break;
+			}
+			else if (FVariantManagerUtils::IsWalkableStructProperty(Prop))
+			{
+				bShowCategories = true;
+			}
+		}
+		else
+		{
+			bShowCategories = false;
+		}
+	}
+	IntermediatePath.RemoveFromStart(PATH_DELIMITER);
+
+	CachedPropertyPath.Object = Object;
+	CachedPropertyPath.ParentProperty = ParentProp;
+	CachedPropertyPath.ChildProperty = ChildProp;
+	CachedPropertyPath.TargetActor = Reconstruction.TargetActor;
+	CachedPropertyPath.Path = Reconstruction.PathActorToLeafComponent + IntermediatePath + Reconstruction.PathTailProperty;
+
+	CachedPropertyPathStack.Push(CachedPropertyPath);
 }
 
 void SVariantManager::OnPieEvent(bool bIsSimulating)
@@ -2605,7 +3334,110 @@ void SVariantManager::OnPieEvent(bool bIsSimulating)
 		}
 	}
 
+	CachedPropertyPaths.Empty();
+	CachedPropertyPathStack.Empty();
+
 	CachedAllActorPaths.Empty();
+	RefreshActorList();
+}
+
+void SVariantManager::ReorderPropertyNodes(const TArray<TSharedPtr<FVariantManagerPropertyNode>>& TheseNodes, TSharedPtr<FVariantManagerPropertyNode> Pivot, EItemDropZone RelativePosition)
+{
+	FScopedTransaction Transaction(LOCTEXT("ReorderedPropertyTransaction", "Reorder property or function captures"));
+
+	// Remove them from their current position
+	for (const TSharedPtr<FVariantManagerPropertyNode>& ThisNode : TheseNodes)
+	{
+		DisplayedPropertyNodes.Remove(ThisNode);
+	}
+
+	// Insert them into their new position
+	int32 Index = DisplayedPropertyNodes.IndexOfByKey(Pivot);
+	Index += RelativePosition == EItemDropZone::BelowItem ? 1 : 0;
+	DisplayedPropertyNodes.Insert(TheseNodes, Index);
+
+	// Normalize the DisplayOrder to an increasing count
+	uint32 Order = 0;
+	for (TSharedPtr<FVariantManagerPropertyNode>& DisplayedNode : DisplayedPropertyNodes)
+	{
+		if (DisplayedNode.IsValid())
+		{
+			DisplayedNode->SetDisplayOrder(Order++);
+		}
+	}
+
+	RefreshPropertyList();
+}
+
+void SVariantManager::OnEditorSelectionChanged(UObject* NewSelection)
+{
+	if (!bRespondToEditorSelectionEvents)
+	{
+		return;
+	}
+
+	USelection* Selection = Cast<USelection>(NewSelection);
+	if (!Selection)
+	{
+		return;
+	}
+
+	TSharedPtr<FVariantManager> PinnedVariantManager = VariantManagerPtr.Pin();
+	if (!PinnedVariantManager.IsValid())
+	{
+		return;
+	}
+
+	FVariantManagerSelection& VariantSelection = PinnedVariantManager->GetSelection();
+
+	TArray<UObject*> SelectedActors;
+	Selection->GetSelectedObjects(AActor::StaticClass(), SelectedActors);
+	TSet<UObject*> SelectedActorsSet{SelectedActors};
+
+	TArray<UActorComponent*> SelectedComponents;
+	Selection->GetSelectedObjects<UActorComponent>(SelectedComponents);
+	for (UActorComponent* Component : SelectedComponents)
+	{
+		SelectedActorsSet.Add(Component->GetOwner());
+	}
+
+	SelectedActorsSet.Remove(nullptr);
+
+	// No point in clearing our selection the editor doesn't have anything selected either
+	// Sometimes empty selection events seem to fire when selecting the actual actor "row" on its
+	// component tree display
+	if (SelectedActorsSet.Num() == 0)
+	{
+		return;
+	}
+
+	VariantSelection.SuspendBroadcast();
+	for (TSharedRef<FVariantManagerDisplayNode>& DisplayedActor : DisplayedActors)
+	{
+		if (DisplayedActor->GetType() != EVariantManagerNodeType::Actor)
+		{
+			continue;
+		}
+
+		TSharedRef<FVariantManagerActorNode> ActorNode = StaticCastSharedRef<FVariantManagerActorNode>(DisplayedActor);
+		TWeakObjectPtr<UVariantObjectBinding> ObjectBinding = ActorNode->GetObjectBinding();
+		if (!ObjectBinding.IsValid())
+		{
+			continue;
+		}
+
+		UObject* BindingObject = ObjectBinding->GetObject();
+		if (BindingObject && SelectedActorsSet.Contains(BindingObject))
+		{
+			VariantSelection.AddActorNodeToSelection(ActorNode);
+		}
+		else
+		{
+			VariantSelection.RemoveActorNodeFromSelection(ActorNode);
+		}
+	}
+	VariantSelection.ResumeBroadcast();
+
 	RefreshActorList();
 }
 

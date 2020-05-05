@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "AudioDerivedData.h"
 #include "Interfaces/IAudioFormat.h"
 #include "Misc/CommandLine.h"
@@ -183,18 +183,7 @@ static FName GetWaveFormatForRunningPlatform(USoundWave& SoundWave)
 
 static const FPlatformAudioCookOverrides* GetCookOverridesForRunningPlatform()
 {
-	ITargetPlatformManagerModule* TPM = GetTargetPlatformManager();
-	if (TPM)
-	{
-		ITargetPlatform* CurrentPlatform = GetRunningTargetPlatform(TPM);
-
-
-		return CurrentPlatform->GetAudioCompressionSettings();
-	}
-	else
-	{
-		return nullptr;
-	}
+	return FPlatformCompressionUtilities::GetCookOverrides(ANSI_TO_TCHAR(FPlatformProperties::IniPlatformName()));
 }
 
 /**
@@ -206,7 +195,8 @@ static const FPlatformAudioCookOverrides* GetCookOverridesForRunningPlatform()
  */
 static uint32 PutDerivedDataInCache(
 	FStreamedAudioPlatformData* DerivedData,
-	const FString& DerivedDataKeySuffix
+	const FString& DerivedDataKeySuffix,
+	const FStringView& SoundWaveName
 	)
 {
 	TArray<uint8> RawDerivedData;
@@ -243,14 +233,14 @@ static uint32 PutDerivedDataInCache(
 				);
 		}
 
-		TotalBytesPut += Chunk.StoreInDerivedDataCache(ChunkDerivedDataKey);
+		TotalBytesPut += Chunk.StoreInDerivedDataCache(ChunkDerivedDataKey, SoundWaveName);
 	}
 
 	// Store derived data.
 	// At this point we've stored all the non-inline data in the DDC, so this will only serialize and store the metadata and any inline chunks
 	FMemoryWriter Ar(RawDerivedData, /*bIsPersistent=*/ true);
 	DerivedData->Serialize(Ar, NULL);
-	GetDerivedDataCacheRef().Put(*DerivedDataKey, RawDerivedData);
+	GetDerivedDataCacheRef().Put(*DerivedDataKey, RawDerivedData, SoundWaveName);
 	TotalBytesPut += RawDerivedData.Num();
 	UE_LOG(LogAudio, Verbose, TEXT("%s  Derived Data: %d bytes"), *LogString, RawDerivedData.Num());
 	return TotalBytesPut;
@@ -330,17 +320,12 @@ class FStreamedAudioCacheDerivedDataWorker : public FNonAbandonableTask
 				// Set the ideal chunk size to be 256k to optimize for data reads on console.
 				int32 MaxChunkSize = 256 * 1024;
 				
-				// If there is a chunk size override, use that.
-				if (CompressionOverrides && (CompressionOverrides->StreamChunkSizeKB != 0))
-				{
-					MaxChunkSize = CompressionOverrides->StreamChunkSizeKB * 1024;
-				}
-
 				// By default, the first chunk's max size is the same as the other chunks.
 				int32 FirstChunkSize = MaxChunkSize;
 
 				const int32 MinimumChunkSize = AudioFormat->GetMinimumSizeForInitialChunk(AudioFormatName, CompressedBuffer);
 				const bool bUseStreamCaching = CompressionOverrides && CompressionOverrides->bUseStreamCaching;
+				const bool bForceLegacyStreamChunking = SoundWave.bStreaming && CompressionOverrides && CompressionOverrides->StreamCachingSettings.bForceLegacyStreamChunking;
 
 				// If the initial chunk  for this sound wave was overridden, use that:
 				if (SoundWave.InitialChunkSize > 0)
@@ -352,14 +337,28 @@ class FStreamedAudioCacheDerivedDataWorker : public FNonAbandonableTask
 					// Ensure that the minimum chunk size is nonzero if our compressed buffer is not empty.
 					checkf(CompressedBuffer.Num() == 0 || MinimumChunkSize != 0, TEXT("To use Load On Demand, please override GetMinimumSizeForInitialChunk"));
 
-					// Otherwise if we're using Load On Demand, the first chunk should be as small as possible:
-					FirstChunkSize = MinimumChunkSize;
+					//
+					if (bForceLegacyStreamChunking)
+					{
+						int32 LegacyZerothChunkSize = CompressionOverrides->StreamCachingSettings.ZerothChunkSizeForLegacyStreamChunkingKB * 1024;
+						if (LegacyZerothChunkSize == 0)
+						{
+							LegacyZerothChunkSize = MaxChunkSize;
+						}
+
+						FirstChunkSize = LegacyZerothChunkSize;
+					}
+					else
+					{
+						// Otherwise if we're using Audio Stream Caching, the first chunk should be as small as possible:
+						FirstChunkSize = MinimumChunkSize;
+					}
 				}
 
 				if (bUseStreamCaching)
 				{
-					// Fix up chunk size if we have too small a cache size to safely play our sources.
-					MaxChunkSize = FPlatformCompressionUtilities::GetMaxChunkSizeForCookOverrides(CompressionOverrides, MaxChunkSize / 1024);
+					// Use the chunk size for this duration:
+					MaxChunkSize = FPlatformCompressionUtilities::GetMaxChunkSizeForCookOverrides(CompressionOverrides);
 					UE_LOG(LogAudio, Display, TEXT("Chunk size for %s: %d"), *SoundWave.GetFullName(), MaxChunkSize);
 				}
 				
@@ -455,7 +454,7 @@ class FStreamedAudioCacheDerivedDataWorker : public FNonAbandonableTask
 				// @todo: This will remove the streaming bulk data, which we immediately reload below!
 				// Should ideally avoid this redundant work, but it only happens when we actually have
 				// to build the compressed audio, which should only ever be once.
-				this->BytesCached = PutDerivedDataInCache(DerivedData, KeySuffix);
+				this->BytesCached = PutDerivedDataInCache(DerivedData, KeySuffix, SoundWave.GetPathName());
 
 				check(this->BytesCached != 0);
 			}
@@ -510,7 +509,7 @@ public:
 		bool bForDDC = (CacheFlags & EStreamedAudioCacheFlags::ForDDCBuild) != 0;
 		bool bAllowAsyncBuild = (CacheFlags & EStreamedAudioCacheFlags::AllowAsyncBuild) != 0;
 
-		if (!bForceRebuild && GetDerivedDataCacheRef().GetSynchronous(*DerivedData->DerivedDataKey, RawDerivedData))
+		if (!bForceRebuild && GetDerivedDataCacheRef().GetSynchronous(*DerivedData->DerivedDataKey, RawDerivedData, SoundWave.GetPathName()))
 		{
 			BytesCached = RawDerivedData.Num();
 			FMemoryReader Ar(RawDerivedData, /*bIsPersistent=*/ true);
@@ -601,7 +600,7 @@ void FStreamedAudioPlatformData::Cache(USoundWave& InSoundWave, const FPlatformA
 
 	uint32 Flags = InFlags;
 
-	static bool bForDDC = FString(FCommandLine::Get()).Contains(TEXT("DerivedDataCache"));
+	static bool bForDDC = FString(FCommandLine::Get()).Contains(TEXT("Run=DerivedDataCache"));
 	if (bForDDC)
 	{
 		Flags |= EStreamedAudioCacheFlags::ForDDCBuild;
@@ -664,7 +663,7 @@ static void BeginLoadDerivedChunks(TIndirectArray<FStreamedAudioChunk>& Chunks, 
 		const FStreamedAudioChunk& Chunk = Chunks[ChunkIndex];
 		if (!Chunk.DerivedDataKey.IsEmpty())
 		{
-			OutHandles[ChunkIndex] = DDC.GetAsynchronous(*Chunk.DerivedDataKey);
+			OutHandles[ChunkIndex] = DDC.GetAsynchronous(*Chunk.DerivedDataKey, TEXT("Unknown SoundWave"_SV));
 		}
 	}
 }
@@ -808,14 +807,14 @@ int32 FStreamedAudioPlatformData::GetChunkFromDDC(int32 ChunkIndex, uint8** OutC
 	{
 		if (bMakeSureChunkIsLoaded)
 		{
-			if (DDC.GetSynchronous(*Chunk.DerivedDataKey, TempData))
+			if (DDC.GetSynchronous(*Chunk.DerivedDataKey, TempData, TEXT("Unknown SoundWave"_SV)))
 			{
 				ChunkDataSize = DeserializeChunkFromDDC(TempData, Chunk, ChunkIndex, OutChunkData);
 			}
 		}
 		else
 		{
-			AsyncHandle = DDC.GetAsynchronous(*Chunk.DerivedDataKey);
+			AsyncHandle = DDC.GetAsynchronous(*Chunk.DerivedDataKey, TEXT("Unknown SoundWave"_SV));
 		}
 	}
 
@@ -1021,6 +1020,8 @@ static void CookSimpleWave(USoundWave* SoundWave, FName FormatName, const IAudio
 	FScopeLock ScopeLock(&SoundWave->RawDataCriticalSection);
 #endif
 
+	SoundWave->RawData.ForceBulkDataResident();
+
 	// check if there is any raw sound data
 	if( SoundWave->RawData.GetBulkDataSize() > 0 )
 	{
@@ -1044,7 +1045,7 @@ static void CookSimpleWave(USoundWave* SoundWave, FName FormatName, const IAudio
 
 	if(!Input.Num())
 	{
-		UE_LOG(LogAudioDerivedData, Warning, TEXT( "Can't cook %s because there is no source compressed or uncompressed PC sound data" ), *SoundWave->GetFullName() );
+		UE_LOG(LogAudioDerivedData, Warning, TEXT( "Can't cook %s because there is no source LPCM data" ), *SoundWave->GetFullName() );
 	}
 	else
 	{
@@ -1088,7 +1089,9 @@ static void CookSimpleWave(USoundWave* SoundWave, FName FormatName, const IAudio
 		QualityInfo.NumChannels = *WaveInfo.pChannels;
 		QualityInfo.SampleRate = WaveSampleRate;
 		QualityInfo.SampleDataSize = Input.Num();
-		QualityInfo.bStreaming = SoundWave->IsStreaming();
+		// without overrides, we don't know the target platform's name to be able to look up, and passing nullptr will use editor platform's settings, which could be wrong
+		// @todo: Pass in TargetPlatform/PlatformName maybe?
+		QualityInfo.bStreaming = SoundWave->IsStreaming(CompressionOverrides ? *CompressionOverrides : FPlatformAudioCookOverrides());
 		QualityInfo.DebugName = SoundWave->GetFullName();
 
 		// Cook the data.
@@ -1294,7 +1297,7 @@ static void CookSurroundWave( USoundWave* SoundWave, FName FormatName, const IAu
 			QualityInfo.NumChannels = ChannelCount;
 			QualityInfo.SampleRate = WaveSampleRate;
 			QualityInfo.SampleDataSize = SampleDataSize;
-			QualityInfo.bStreaming = SoundWave->IsStreaming();
+			QualityInfo.bStreaming = SoundWave->IsStreaming(CompressionOverrides ? *CompressionOverrides : FPlatformAudioCookOverrides());
 			QualityInfo.DebugName = SoundWave->GetFullName();
 			//@todo tighten up the checking for empty results here
 			if(Format.CookSurround(FormatName, SourceBuffers, QualityInfo, Output))
@@ -1436,7 +1439,7 @@ void USoundWave::SerializeCookedPlatformData(FArchive& Ar)
 		check(!Ar.CookingTarget()->IsServerOnly());
 
 		FName PlatformFormat = Ar.CookingTarget()->GetWaveFormat(this);
-		const FPlatformAudioCookOverrides* CompressionOverrides = Ar.CookingTarget()->GetAudioCompressionSettings();
+		const FPlatformAudioCookOverrides* CompressionOverrides = FPlatformCompressionUtilities::GetCookOverrides(*Ar.CookingTarget()->IniPlatformName());
 		FString DerivedDataKey;
 
 		GetStreamedAudioDerivedDataKeySuffix(*this, PlatformFormat, CompressionOverrides, DerivedDataKey);
@@ -1509,13 +1512,14 @@ void USoundWave::BeginCachePlatformData()
 
 void USoundWave::BeginCacheForCookedPlatformData(const ITargetPlatform *TargetPlatform)
 {
-	if (TargetPlatform->SupportsFeature(ETargetPlatformFeatures::AudioStreaming) && IsStreaming())
+	const FPlatformAudioCookOverrides* CompressionOverrides = FPlatformCompressionUtilities::GetCookOverrides(*TargetPlatform->IniPlatformName());
+
+	if (TargetPlatform->SupportsFeature(ETargetPlatformFeatures::AudioStreaming) && IsStreaming(*CompressionOverrides))
 	{
 		// Retrieve format to cache for targetplatform.
 		FName PlatformFormat = TargetPlatform->GetWaveFormat(this);
 		uint32 CacheFlags = EStreamedAudioCacheFlags::Async | EStreamedAudioCacheFlags::InlineChunks;
 
-		const FPlatformAudioCookOverrides* CompressionOverrides = TargetPlatform->GetAudioCompressionSettings();
 
 		// If source data is resident in memory then allow the streamed audio to be built
 		// in a background thread.
@@ -1548,11 +1552,12 @@ void USoundWave::BeginCacheForCookedPlatformData(const ITargetPlatform *TargetPl
 
 bool USoundWave::IsCachedCookedPlatformDataLoaded( const ITargetPlatform* TargetPlatform )
 {
-	if (TargetPlatform->SupportsFeature(ETargetPlatformFeatures::AudioStreaming) && IsStreaming())
+	const FPlatformAudioCookOverrides* CompressionOverrides = FPlatformCompressionUtilities::GetCookOverrides(*TargetPlatform->IniPlatformName());
+
+	if (TargetPlatform->SupportsFeature(ETargetPlatformFeatures::AudioStreaming) && IsStreaming(*CompressionOverrides))
 	{
 		// Retrieve format to cache for targetplatform.
 		FName PlatformFormat = TargetPlatform->GetWaveFormat(this);
-		const FPlatformAudioCookOverrides* CompressionOverrides = TargetPlatform->GetAudioCompressionSettings();
 		// find format data by comparing derived data keys.
 		FString DerivedDataKey;
 		GetStreamedAudioDerivedDataKeySuffix(*this, PlatformFormat, CompressionOverrides, DerivedDataKey);
@@ -1595,11 +1600,12 @@ void USoundWave::ClearCachedCookedPlatformData( const ITargetPlatform* TargetPla
 {
 	Super::ClearCachedCookedPlatformData(TargetPlatform);
 
-	if (TargetPlatform->SupportsFeature(ETargetPlatformFeatures::AudioStreaming) && IsStreaming())
+	const FPlatformAudioCookOverrides* CompressionOverrides = FPlatformCompressionUtilities::GetCookOverrides(*TargetPlatform->IniPlatformName());
+
+	if (TargetPlatform->SupportsFeature(ETargetPlatformFeatures::AudioStreaming) && IsStreaming(*CompressionOverrides))
 	{
 		// Retrieve format to cache for targetplatform.
 		FName PlatformFormat = TargetPlatform->GetWaveFormat(this);
-		const FPlatformAudioCookOverrides* CompressionOverrides = TargetPlatform->GetAudioCompressionSettings();
 
 		// find format data by comparing derived data keys.
 		FString DerivedDataKey;

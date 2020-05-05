@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -91,7 +91,7 @@ public:
 	/** Updates from HoloLens or iOS */
 	void UpdateMesh(const FVector& InLocation, const FQuat& InRotation, const FVector& Scale, TArray<FVector>& Vertices, TArray<MRMESH_INDEX_TYPE>& Indices);
 
-	void SetEnableMeshOcclusion(bool bEnable) { bEnableOcclusion = bEnable; }
+	void SetEnableMeshOcclusion(bool bEnable);
 	bool GetEnableMeshOcclusion() const { return bEnableOcclusion; }
 	void SetUseWireframe(bool bUseWireframe) { bUseWireframeForNoMaterial = bUseWireframe; }
 	bool GetUseWireframe() const { return bUseWireframeForNoMaterial; }
@@ -106,7 +106,7 @@ public:
 	virtual void SetCollisionResponseToAllChannels(ECollisionResponse NewResponse) override;
 	virtual void SetCollisionResponseToChannels(const FCollisionResponseContainer& NewResponses) override;
 	virtual void SetCollisionEnabled(ECollisionEnabled::Type NewType) override;
-	virtual void SetCollisionProfileName(FName InCollisionProfileName) override;
+	virtual void SetCollisionProfileName(FName InCollisionProfileName, bool bUpdateOverlaps=true) override;
 
 	virtual void SetWalkableSlopeOverride(const FWalkableSlopeOverride& NewOverride) override;
 

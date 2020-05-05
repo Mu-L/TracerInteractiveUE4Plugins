@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "KismetPins/SGraphPinObject.h"
 #include "Modules/ModuleManager.h"
@@ -219,7 +219,7 @@ TSharedRef<SWidget> SGraphPinObject::GenerateAssetPicker()
 
 		// Parse and add the classes from the metadata
 		TArray<FString> AllowedClassesFilterNames;
-		AllowedClassesFilterString.ParseIntoArray(AllowedClassesFilterNames, TEXT(","), true);
+		AllowedClassesFilterString.ParseIntoArrayWS(AllowedClassesFilterNames, TEXT(","), true);
 		for(const FString& AllowedClassesFilterName : AllowedClassesFilterNames)
 		{
 			AssetPickerConfig.Filter.ClassNames.Add(FName(*AllowedClassesFilterName));
@@ -230,7 +230,7 @@ TSharedRef<SWidget> SGraphPinObject::GenerateAssetPicker()
 	if(!DisallowedClassesFilterString.IsEmpty())
 	{
 		TArray<FString> DisallowedClassesFilterNames;
-		DisallowedClassesFilterString.ParseIntoArray(DisallowedClassesFilterNames, TEXT(","), true);
+		DisallowedClassesFilterString.ParseIntoArrayWS(DisallowedClassesFilterNames, TEXT(","), true);
 		for(const FString& DisallowedClassesFilterName : DisallowedClassesFilterNames)
 		{
 			AssetPickerConfig.Filter.RecursiveClassesExclusionSet.Add(FName(*DisallowedClassesFilterName));

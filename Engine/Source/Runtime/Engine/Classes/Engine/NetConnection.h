@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 //
 // A network connection.
@@ -20,10 +20,11 @@
 #include "ProfilingDebugging/Histogram.h"
 #include "Containers/ArrayView.h"
 #include "Containers/CircularBuffer.h"
+#include "Net/Core/Trace/Config.h"
 #include "ReplicationDriver.h"
 #include "Analytics/EngineNetAnalytics.h"
 #include "Net/Core/Misc/PacketTraits.h"
-#include "Net/Util/ResizableCircularQueue.h"
+#include "Net/Core/Misc/ResizableCircularQueue.h"
 #include "Net/NetAnalyticsTypes.h"
 
 #include "NetConnection.generated.h"
@@ -38,6 +39,13 @@ class UChildConnection;
 
 typedef TMap<TWeakObjectPtr<AActor>, UActorChannel*, FDefaultSetAllocator, TWeakObjectPtrMapKeyFuncs<TWeakObjectPtr<AActor>, UActorChannel*>> FActorChannelMap;
 
+namespace NetConnectionHelper
+{
+	/** Number of bits to use in the packet header for sending the milliseconds on the clock when the packet is sent */
+	constexpr int32 NumBitsForJitterClockTimeInHeader = 10;
+}
+
+
 /*-----------------------------------------------------------------------------
 	Types.
 -----------------------------------------------------------------------------*/
@@ -45,8 +53,9 @@ enum { RELIABLE_BUFFER = 256 }; // Power of 2 >= 1.
 enum { MAX_PACKETID = FNetPacketNotify::SequenceNumberT::SeqNumberCount };  // Power of 2 >= 1, covering guaranteed loss/misorder time.
 enum { MAX_CHSEQUENCE = 1024 }; // Power of 2 >RELIABLE_BUFFER, covering loss/misorder time.
 enum { MAX_BUNCH_HEADER_BITS = 256 };
-enum { UE_PACKET_MAX_SEQUENCE_HISTORY_BITS = FNetPacketNotify::MaxSequenceHistoryLength };
-enum { MAX_PACKET_HEADER_BITS = 49 + UE_PACKET_MAX_SEQUENCE_HISTORY_BITS }; // = [(Header)32 + (SeqHistory)32-MaxSequenceHistoryLength|(bool)1|?(ServerTime)8|(ReceviedRateByte)8]
+enum { MAX_PACKET_RELIABLE_SEQUENCE_HEADER_BITS = 32 /*PackedHeader*/ + FNetPacketNotify::SequenceHistoryT::MaxSizeInBits };
+enum { MAX_PACKET_INFO_HEADER_BITS = 1 /*bHasPacketInfo*/ + NetConnectionHelper::NumBitsForJitterClockTimeInHeader + 1 /*bHasServerFrameTime*/ + 8 /*ServerFrameTime*/};
+enum { MAX_PACKET_HEADER_BITS = MAX_PACKET_RELIABLE_SEQUENCE_HEADER_BITS + MAX_PACKET_INFO_HEADER_BITS  };
 enum { MAX_PACKET_TRAILER_BITS = 1 };
 
 // 
@@ -248,10 +257,11 @@ public:
 };
 
 UCLASS(customConstructor, Abstract, MinimalAPI, transient, config=Engine)
-class ENGINE_VTABLE UNetConnection : public UPlayer
+class UNetConnection : public UPlayer
 {
-	GENERATED_UCLASS_BODY()
+	GENERATED_BODY()
 
+public:
 	/** child connections for secondary viewports */
 	UPROPERTY(transient)
 	TArray<class UChildConnection*> Children;
@@ -287,9 +297,23 @@ class ENGINE_VTABLE UNetConnection : public UPlayer
 	UPROPERTY()
 	int32	MaxPacket;						// Maximum packet size.
 
+	UE_DEPRECATED(4.25, "Please use IsInternalAck/SetInternalAck instead")
 	UPROPERTY()
 	uint32 InternalAck:1;					// Internally ack all packets, for 100% reliable connections.
 
+	bool IsInternalAck() const { return bInternalAck; }
+	void SetInternalAck(bool bValue) 
+	{ 
+		bInternalAck = bValue; 
+		PRAGMA_DISABLE_DEPRECATION_WARNINGS
+		InternalAck = bValue;
+		PRAGMA_ENABLE_DEPRECATION_WARNINGS
+	}
+
+private:
+	uint32 bInternalAck : 1;	// Internally ack all packets, for 100% reliable connections.
+
+public:
 	struct FURL			URL;				// URL of the other side.
 	
 	/** The remote address of this connection, typically generated from the URL. */
@@ -371,14 +395,40 @@ public:
 	int32			QueuedBits;			// Bits assumed to be queued up.
 	int32			TickCount;				// Count of ticks.
 	uint32			LastProcessedFrame;   // The last frame where we gathered and processed actors for this connection
+
 	/** The last time an ack was received */
+	UE_DEPRECATED(4.25, "Please use GetLastRecvAckTime() instead.")
 	float			LastRecvAckTime;
+
+	double GetLastRecvAckTime() const { return LastRecvAckTimestamp; }
+
 	/** Time when connection request was first initiated */
+	UE_DEPRECATED(4.25, "Please use GetConnectTime() instead.")
 	float			ConnectTime;
 
+	double GetConnectTime() const { return ConnectTimestamp; }
+
 private:
+	/** The last time an ack was received */
+	double			LastRecvAckTimestamp;
+
+	/** Time when connection request was first initiated */
+	double			ConnectTimestamp;
+
 	FPacketTimestamp	LastOSReceiveTime;		// Last time a packet was received at the OS/NIC layer
 	bool				bIsOSReceiveTimeLocal;	// Whether LastOSReceiveTime uses the same clock as the game, or needs translating
+
+	/** Did we write the dummy PacketInfo in the current SendBuffer */
+	bool bSendBufferHasDummyPacketInfo = false;
+
+	/** Stores the bit number where we wrote the dummy packet info in the packet header */
+	FBitWriterMark HeaderMarkForPacketInfo;
+
+	/** The difference between the send and receive clock time of the last received packet */
+	int32 PreviousJitterTimeDelta;
+
+	/** Timestamp of the last packet sent*/
+	double PreviousPacketSendTimeInS;
 
 public:
 	// Merge info.
@@ -396,16 +446,38 @@ public:
 	double			StatUpdateTime;
 	/** Interval between gathering stats */
 	float			StatPeriod;
-	float			BestLag,   AvgLag;		// Lag.
 
-	// Stat accumulators.
-	double			LagAcc, BestLagAcc;		// Previous msec lag.
-	int32			LagCount;				// Counter for lag measurement.
-	double			LastTime, FrameTime;	// Monitors frame time.
-	/** @todo document */
-	double			CumulativeTime, AverageFrameTime; 
-	/** @todo document */
+	/** Average lag seen during the last StatPeriod */
+	float AvgLag;
+
+private:
+	// BestLag variable is deprecated. Use AvgLag instead
+	float			BestLag;
+	// BestLagAcc variable is deprecated. Use LagAcc instead
+	double			BestLagAcc;
+
+public:
+
+	/** Total accumulated lag values during the current StatPeriod */
+	double			LagAcc;
+	/** Nb of stats accumulated in LagAcc */
+	int32			LagCount;
+	
+	/** Monitors frame time */
+	double			LastTime, FrameTime;
+
+	/** Total frames times accumulator */
+	double			CumulativeTime;
+	
+	/** The average frame delta time over the last 1 second period.*/
+	double			AverageFrameTime;
+
+	/** Current jitter for this connection in milliseconds */
+	float			GetAverageJitterInMS() const { return AverageJitterInMS; }
+
+	/** Nb of stats accumulated in CumulativeTime */
 	int32			CountedFrames;
+
 	/** bytes sent/received on this connection (accumulated during a StatPeriod) */
 	int32 InBytes, OutBytes;
 	/** total bytes sent/received on this connection */
@@ -425,6 +497,30 @@ public:
 	/** total acks sent on this connection */
 	int32 OutTotalAcks;
 
+	/** Percentage of packets lost during the last StatPeriod */
+	using FNetConnectionPacketLoss = TPacketLossData<3>;
+	const FNetConnectionPacketLoss& GetInLossPercentage() const  { return InPacketsLossPercentage; }
+	const FNetConnectionPacketLoss& GetOutLossPercentage() const { return OutPacketsLossPercentage;  }
+
+
+private:
+
+	FNetConnectionPacketLoss InPacketsLossPercentage;
+	FNetConnectionPacketLoss OutPacketsLossPercentage;
+
+	/** Counts the number of stat samples taken */
+	int32 StatPeriodCount;
+
+	/**
+	* Jitter represents the average time divergence of all sent packets.
+	* Ex:
+	* If the time between the sending and the reception of packets is always 100ms; the jitter will be 0.
+	* If the time difference is either 150ms or 100ms, the jitter will tend towards 50ms.
+	*/
+	float AverageJitterInMS;
+
+public:
+
 	/** Net Analytics */
 
 	/** The locally cached/updated analytics variables, for the NetConnection - aggregated upon connection Close */
@@ -438,6 +534,7 @@ public:
 	double			OutLagTime[256];				// For lag measuring.
 	int32			OutLagPacketId[256];			// For lag measuring.
 	uint8			OutBytesPerSecondHistory[256];	// For saturation measuring.
+	UE_DEPRECATED(4.25, "RemoteSaturation is not calculated anymore and is now deprecated")
 	float			RemoteSaturation;
 	int32			InPacketId;						// Full incoming packet index.
 	int32			OutPacketId;					// Most recently sent packet.
@@ -464,6 +561,15 @@ public:
 	double			LogCallLastTime;
 	int32			LogCallCount;
 	int32			LogSustainedCount;
+
+	uint32 GetConnectionId() const { return ConnectionId; }
+	void SetConnectionId(uint32 InConnectionId) { ConnectionId = InConnectionId; }
+
+	/** If this is a child connection it will return the topmost parent coonnection ID, otherwise it will return its own ID. */
+	ENGINE_API uint32 GetParentConnectionId() const;
+
+	FNetTraceCollector* GetInTraceCollector() const;
+	FNetTraceCollector* GetOutTraceCollector() const;
 
 	// ----------------------------------------------
 	// Actor Channel Accessors
@@ -635,8 +741,11 @@ private:
 	/** delayed incoming packet array */
 	TArray<FDelayedIncomingPacket> DelayedIncomingPackets;
 
+	/** Allow emulated packets to be sent out of order. This causes packet loss on the receiving end */
+	bool bSendDelayedPacketsOutofOrder = false;
+
 	/** set to true when already delayed packets are reinjected */
-	bool bIsReinjectingDelayedPackets;
+	bool bIsReinjectingDelayedPackets = false;
 
 	/** Process incoming packets that have been delayed for long enough */
 	void ReinjectDelayedPackets();
@@ -903,7 +1012,7 @@ public:
 	/**
 	 * Returns true if encryption is enabled for this connection.
 	 */
-	ENGINE_API bool IsEncryptionEnabled() const;
+	ENGINE_API virtual bool IsEncryptionEnabled() const;
 
 	/** 
 	* Gets a unique ID for the connection, this ID depends on the underlying connection
@@ -959,8 +1068,9 @@ public:
 	 */
 	ENGINE_API virtual void ReceivedRawPacket(void* Data,int32 Count);
 
-	/** Send a raw bunch. */
-	ENGINE_API int32 SendRawBunch( FOutBunch& Bunch, bool InAllowMerge );
+	/** Send a raw bunch */
+	ENGINE_API int32 SendRawBunch(FOutBunch& Bunch, bool InAllowMerge, const FNetTraceCollector* BunchCollector);
+	inline int32 SendRawBunch( FOutBunch& Bunch, bool InAllowMerge ) { return SendRawBunch(Bunch, InAllowMerge, nullptr); }
 
 	/** The maximum number of bits allowed within a single bunch. */
 	FORCEINLINE int32 GetMaxSingleBunchSizeBits() const
@@ -978,8 +1088,11 @@ public:
 	/** Create a channel. */
 	ENGINE_API UChannel* CreateChannelByName( const FName& ChName, EChannelCreateFlags CreateFlags, int32 ChannelIndex=INDEX_NONE );
 
-	/** Handle a packet we just received. */
-	void ReceivedPacket( FBitReader& Reader );
+	/** 
+	* Handle a packet we just received. 
+	* bIsReinjectedPacket is true if a packet is reprocessed after getting cached 
+	*/
+	void ReceivedPacket( FBitReader& Reader, bool bIsReinjectedPacket=false );
 
 	/** Packet was negatively acknowledged. */
 	void ReceivedNak( int32 NakPacketId );
@@ -1035,7 +1148,7 @@ public:
 	/**
 	* Return current timeout value that should be used
 	*/
-	ENGINE_API float GetTimeoutValue();
+	ENGINE_API virtual float GetTimeoutValue();
 
 	/** Adds the channel to the ticking channels list. USed to selectively tick channels that have queued bunches or are pending dormancy. */
 	void StartTickingChannel(UChannel* Channel) { ChannelsToTick.AddUnique(Channel); }
@@ -1050,7 +1163,7 @@ public:
 	{
 		// The InternalAck and ServerConnection conditions, are only there to exclude demo's and clients from this check,
 		// so that the check is only performed on servers.
-		return !!InternalAck || Driver->ServerConnection != nullptr || InReliable[0] != InitInReliable;
+		return IsInternalAck() || Driver->ServerConnection != nullptr || InReliable[0] != InitInReliable;
 	}
 
 	/**
@@ -1167,12 +1280,20 @@ public:
 
 protected:
 
+	bool GetPendingCloseDueToSocketSendFailure() const
+	{
+		return bConnectionPendingCloseDueToSocketSendFailure;
+	}
+
 	ENGINE_API void SetPendingCloseDueToSocketSendFailure();
 
 	void CleanupDormantActorState();
 
 	/** Called internally to destroy an actor during replay fast-forward when the actor channel index will be recycled */
 	ENGINE_API virtual void DestroyIgnoredActor(AActor* Actor);
+
+	/** This is called whenever a connection has passed the relative time to be considered timed out. */
+	ENGINE_API virtual void HandleConnectionTimeout(const FString& Error);
 
 private:
 	/**
@@ -1215,14 +1336,32 @@ private:
 	/** Write packetHeader */
 	void WritePacketHeader(FBitWriter& Writer);
 
-	/** Write extended packet header information (ServerFrameTime, SaturationData) */
-	void WritePacketInfo(FBitWriter& Writer) const;
+	/** Write placeholder bits for data filled before the real send (ServerFrameTime, JitterClockTime) */
+	void WriteDummyPacketInfo(FBitWriter& Writer);
+
+	/** Overwrite the dummy packet info values with real values before sending */
+	void WriteFinalPacketInfo(FBitWriter& Writer, double PacketSentTimeInS);
 	
-	/** Read extended packet header information (ServerFrameTime, SaturationData) */
-	bool ReadPacketInfo(FBitReader& Reader);
+	/** Read extended packet header information (ServerFrameTime) */
+	bool ReadPacketInfo(FBitReader& Reader, bool bHasPacketInfoPayload);
 
 	/** Packet was acknowledged as delivered */
 	void ReceivedAck(int32 AckPacketId);
+
+	/** Calculate the average jitter while adding the new packet's jitter value */
+	void ProcessJitter(uint32 PacketJitterClockTimeMS);
+
+	/** Flush outgoing packet if needed before we write data to it */
+	void PrepareWriteBitsToSendBuffer(const int32 SizeInBits, const int32 ExtraSizeInBits);
+	
+	/** Write data to outgoing send buffer, PrepareWriteBitsToSendBuffer should be called before to make sure that
+		data will fit in packet. */
+	int32 WriteBitsToSendBufferInternal( 
+		const uint8 *	Bits, 
+		const int32		SizeInBits, 
+		const uint8 *	ExtraBits, 
+		const int32		ExtraSizeInBits,
+		EWriteBitsDataType DataType =  EWriteBitsDataType::Unknown);
 
 	/**
 	 * on the server, the world the client has told us it has loaded
@@ -1290,6 +1429,21 @@ private:
 
 	/** Whether or not PacketOrderCache is presently being flushed */
 	bool bFlushingPacketOrderCache;
+
+	/** Unique ID that can be used instead of passing around a pointer to the connection */
+	uint32 ConnectionId;
+
+#if UE_NET_TRACE_ENABLED
+	FNetTraceCollector* InTraceCollector = nullptr;
+	FNetTraceCollector* OutTraceCollector = nullptr;
+	/** Cached NetTrace id from the NetDriver */
+	uint32 NetTraceId = 0;
+#endif
+
+	/** 
+	* Set to true after a packet is flushed (sent) and reset at the end of the connection's Tick. 
+	*/
+	bool bFlushedNetThisFrame = false;
 };
 
 /** Help structs for temporarily setting network settings */
@@ -1362,4 +1516,13 @@ public:
 
 	virtual TSharedPtr<const FInternetAddr> GetRemoteAddr() override { return nullptr; }
 };
+
+#if UE_NET_TRACE_ENABLED
+	inline FNetTraceCollector* UNetConnection::GetInTraceCollector() const { return InTraceCollector; }
+	inline FNetTraceCollector* UNetConnection::GetOutTraceCollector() const { return OutTraceCollector; }
+#else
+	inline FNetTraceCollector* UNetConnection::GetInTraceCollector() const { return nullptr; }
+	inline FNetTraceCollector* UNetConnection::GetOutTraceCollector() const { return nullptr; }
+#endif
+
 

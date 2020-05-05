@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	PostProcessAmbient.cpp: Post processing ambient implementation.
@@ -17,6 +17,7 @@
 /*-----------------------------------------------------------------------------
 FCubemapShaderParameters
 -----------------------------------------------------------------------------*/
+IMPLEMENT_TYPE_LAYOUT(FCubemapShaderParameters);
 
 void FCubemapShaderParameters::Bind(const FShaderParameterMap& ParameterMap)
 {

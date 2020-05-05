@@ -1,18 +1,18 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithWireTranslator.h"
 
 #include "Containers/List.h"
 #include "DatasmithImportOptions.h"
-#include "DatasmithMeshHelper.h"
 #include "DatasmithSceneFactory.h"
+#include "DatasmithTranslator.h"
 #include "DatasmithUtils.h"
 #include "DatasmithWireTranslatorModule.h"
 #include "IDatasmithSceneElements.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "OpenModelUtils.h"
-#include "Translators\DatasmithTranslator.h"
+#include "Utility/DatasmithMeshHelper.h"
 
 #include "StaticMeshDescription.h"
 #include "StaticMeshOperations.h"
@@ -141,9 +141,14 @@ public:
 		, FileLength(0)
 		, NumCRCErrors(0)
 	{
+		// Set ProductName, ProductVersion in DatasmithScene for Analytics purpose
+		// application_name is something like "Catia V5"
 		DatasmithScene->SetHost(TEXT("Alias"));
 		DatasmithScene->SetVendor(TEXT("Autodesk"));
 		DatasmithScene->SetExporterSDKVersion(TEXT("2019"));
+		DatasmithScene->SetProductName(TEXT("Alias Tools"));
+		DatasmithScene->SetProductVersion(TEXT("Alias 2019"));
+
 #ifdef CAD_LIBRARY
 		LocalSession = FAliasCoretechWrapper::GetSharedSession();
 #endif
@@ -2163,40 +2168,14 @@ void FDatasmithWireTranslator::UnloadScene()
 bool FDatasmithWireTranslator::LoadStaticMesh(const TSharedRef<IDatasmithMeshElement> MeshElement, FDatasmithMeshElementPayload& OutMeshPayload)
 {
 #ifdef USE_OPENMODEL
-
 	CADLibrary::FImportParameters& ImportParameters = Translator->GetImportParameters();
 	CADLibrary::FMeshParameters MeshParameters;
 	if (TOptional< FMeshDescription > Mesh = Translator->GetMeshDescription(MeshElement, MeshParameters))
 	{
 		OutMeshPayload.LodMeshes.Add(MoveTemp(Mesh.GetValue()));
-
 #ifdef CAD_LIBRARY
-		// Store CoreTech additional data if provided
-		const TCHAR* CoretechFile = MeshElement->GetFile();
-		if (FPaths::FileExists(CoretechFile))
-		{
-			TArray<uint8> ByteArray;
-			if (FFileHelper::LoadFileToArray(ByteArray, CoretechFile))
-			{
-				UCoreTechParametricSurfaceData* CoreTechData = Datasmith::MakeAdditionalData<UCoreTechParametricSurfaceData>();
-				CoreTechData->SourceFile = CoretechFile;
-				CoreTechData->RawData = MoveTemp(ByteArray);
-				CoreTechData->SceneParameters.ModelCoordSys = uint8(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded);
-				CoreTechData->SceneParameters.MetricUnit = ImportParameters.MetricUnit;
-				CoreTechData->SceneParameters.ScaleFactor = ImportParameters.ScaleFactor;
-
-				CoreTechData->MeshParameters.bNeedSwapOrientation = MeshParameters.bNeedSwapOrientation;
-				CoreTechData->MeshParameters.bIsSymmetric = MeshParameters.bIsSymmetric;
-				CoreTechData->MeshParameters.SymmetricNormal = MeshParameters.SymmetricNormal;
-				CoreTechData->MeshParameters.SymmetricOrigin = MeshParameters.SymmetricOrigin;
-
-				CoreTechData->LastTessellationOptions = GetCommonTessellationOptions();
-
-				OutMeshPayload.AdditionalData.Add(CoreTechData);
-			}
-		}
-#endif
-
+		DatasmithCoreTechParametricSurfaceData::AddCoreTechSurfaceDataForMesh(MeshElement, ImportParameters, MeshParameters, GetCommonTessellationOptions(), OutMeshPayload);
+#endif //CAD_LIBRARY
 	}
 	return OutMeshPayload.LodMeshes.Num() > 0;
 #else
@@ -2204,7 +2183,7 @@ bool FDatasmithWireTranslator::LoadStaticMesh(const TSharedRef<IDatasmithMeshEle
 #endif
 }
 
-void FDatasmithWireTranslator::SetSceneImportOptions(TArray<TStrongObjectPtr<UObject>>& Options)
+void FDatasmithWireTranslator::SetSceneImportOptions(TArray<TStrongObjectPtr<UDatasmithOptionsBase>>& Options)
 {
 #ifdef USE_OPENMODEL
 	FDatasmithCoreTechTranslator::SetSceneImportOptions(Options);

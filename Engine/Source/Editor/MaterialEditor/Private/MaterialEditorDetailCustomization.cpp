@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MaterialEditorDetailCustomization.h"
 #include "Widgets/Text/STextBlock.h"
@@ -215,7 +215,7 @@ void FMaterialExpressionParameterDetails::CustomizeDetails( IDetailLayoutBuilder
 				DetailLayout.HideCategory(MaterialExpressionCategory);
 			}
 
-			if (ValueHandle.IsValid() && ValueHandle->IsValidHandle())
+			if (ValueHandle.IsValid() && ValueHandle->IsValidHandle() && !VectorParameter->IsUsedAsChannelMask())
 			{
 				static const FName Red("R");
 				static const FName Green("G");
@@ -237,6 +237,12 @@ void FMaterialExpressionParameterDetails::CustomizeDetails( IDetailLayoutBuilder
 				{
 					ValueHandle->GetChildHandle(Alpha)->SetPropertyDisplayName(VectorParameter->ChannelNames.A);
 				}
+			}
+
+			if (VectorParameter->IsUsedAsChannelMask())
+			{
+				TSharedPtr<IPropertyHandle> ChannelNameHandle = DetailLayout.GetProperty("ChannelNames", UMaterialExpressionVectorParameter::StaticClass());
+				ChannelNameHandle->MarkHiddenByCustomization();
 			}
 		}
 
@@ -755,7 +761,7 @@ void FMaterialDetailCustomization::CustomizeDetails( IDetailLayoutBuilder& Detai
 
 		for( TSharedRef<IPropertyHandle>& PropertyHandle : AllProperties )
 		{
-			UProperty* Property = PropertyHandle->GetProperty();
+			FProperty* Property = PropertyHandle->GetProperty();
 			FName PropertyName = Property->GetFName();
 
 			if (bUIMaterial)
@@ -800,7 +806,7 @@ void FMaterialDetailCustomization::CustomizeDetails( IDetailLayoutBuilder& Detai
 
 			for (TSharedRef<IPropertyHandle>& PropertyHandle : AllProperties)
 			{
-				UProperty* Property = PropertyHandle->GetProperty();
+				FProperty* Property = PropertyHandle->GetProperty();
 				FName PropertyName = Property->GetFName();
 
 				if (PropertyName != GET_MEMBER_NAME_CHECKED(UMaterial, bUseFullPrecision)) 

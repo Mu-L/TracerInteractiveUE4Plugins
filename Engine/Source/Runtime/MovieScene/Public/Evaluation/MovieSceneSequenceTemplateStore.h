@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -25,7 +25,7 @@ struct IMovieSceneSequenceTemplateStore
 /**
  * Implementation of a template store that just returns UMovieSceneSequence::PrecompiledEvaluationTemplate
  */
-struct MOVIESCENE_VTABLE FMovieSceneSequencePrecompiledTemplateStore : IMovieSceneSequenceTemplateStore
+struct FMovieSceneSequencePrecompiledTemplateStore : IMovieSceneSequenceTemplateStore
 {
 	MOVIESCENE_API virtual FMovieSceneEvaluationTemplate& AccessTemplate(UMovieSceneSequence& Sequence);
 };

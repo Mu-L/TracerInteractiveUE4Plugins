@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -109,9 +109,10 @@ public:
 	virtual void UpdateViewportRHIBridge(bool bUseSeparateRenderTarget, const class FViewport& Viewport, FRHIViewport* const ViewportRHI) override;
 	virtual bool ShouldUseSeparateRenderTarget() const override
 	{
-		check(IsInGameThread());
 		return IsStereoEnabled();
 	}
+	virtual bool NeedReAllocateDepthTexture(const TRefCountPtr<IPooledRenderTarget>& DepthTarget) override;
+	virtual bool AllocateDepthTexture(uint32 Index, uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 InTexFlags, uint32 TargetableTextureFlags, FTexture2DRHIRef& OutTargetableTexture, FTexture2DRHIRef& OutShaderResourceTexture, uint32 NumSamples = 1) override;
 
 public:
 	/** Constructor */
@@ -183,7 +184,10 @@ public:
 	uint32 DebugViewportHeight;
 #if WITH_MLSDK
 	MLHandle GraphicsClient;
+	MLHandle InputTracker = ML_INVALID_HANDLE;
 #endif //WITH_MLSDK
+	FTexture2DRHIRef DepthBuffer;
+	bool bNeedReAllocateDepthTexture;
 
 
 	/**
@@ -324,6 +328,7 @@ private:
 	bool bHeadTrackingStateAvailable;
 
 	bool bHeadposeMapEventsAvailable;
+	TSet<EMagicLeapHeadTrackingMapEvent> PreviousHeadposeMapEvents;
 	TSet<EMagicLeapHeadTrackingMapEvent> HeadposeMapEvents;
 
 #if WITH_EDITOR

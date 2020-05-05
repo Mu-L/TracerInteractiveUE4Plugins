@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SUSDLayersTreeView.h"
 
@@ -70,7 +70,7 @@ public:
 		{
 			FScopedUsdAllocs UsdAllocs;
 
-			pxr::SdfLayerHandle UsdLayer = GetLayerHandle().Get();
+			pxr::SdfLayerRefPtr UsdLayer = GetLayerHandle().Get();
 
 			if ( UsdLayer )
 			{
@@ -117,15 +117,28 @@ public:
 		{
 			FScopedUsdAllocs UsdAllocs;
 
-			pxr::SdfLayerHandle UsdLayer = GetLayerHandle().Get();
+			pxr::SdfLayerRefPtr UsdLayer = GetLayerHandle().Get();
 
 			if ( UsdLayer )
 			{
+				TSet< FString > AllLayerIdentifiers;
+
+				FUsdLayersTreeItem* CurrentItem = this;
+				while ( CurrentItem )
+				{
+					AllLayerIdentifiers.Add( UsdToUnreal::ConvertString( CurrentItem->LayerIdentifier.Get() ) );
+					CurrentItem = CurrentItem->ParentItem;
+				}
+
 				for ( std::string SubLayerPath : UsdLayer->GetSubLayerPaths() )
 				{
 					std::string AssetPathRelativeToLayer = pxr::SdfComputeAssetPathRelativeToLayer( UsdLayer, SubLayerPath );
 
-					Children.Add( MakeShared< FUsdLayersTreeItem >( this, UsdStage, MakeUsdStore< std::string >( AssetPathRelativeToLayer ) ) );
+					// Prevent infinite recursions if a sublayer refers to a parent of the same hierarchy
+					if ( !AllLayerIdentifiers.Contains( UsdToUnreal::ConvertString( AssetPathRelativeToLayer ) ) )
+					{
+						Children.Add( MakeShared< FUsdLayersTreeItem >( this, UsdStage, MakeUsdStore< std::string >( AssetPathRelativeToLayer ) ) );
+					}
 				}
 			}
 		}
@@ -144,7 +157,9 @@ public:
 
 		LayerData->DisplayName = FText::FromString( UsdToUnreal::ConvertString( pxr::SdfLayer::GetDisplayNameFromIdentifier( LayerIdentifier.Get() ) ) );
 		LayerData->bIsMuted = UsdStage.Get()->IsLayerMuted( LayerIdentifier.Get() );
-		LayerData->bIsEditTarget = ( UsdStage.Get()->GetEditTarget().GetLayer()->GetIdentifier() == LayerIdentifier.Get() );
+
+		const pxr::SdfLayerHandle& EditTargetLayer = UsdStage.Get()->GetEditTarget().GetLayer();
+		LayerData->bIsEditTarget = ( EditTargetLayer ? EditTargetLayer->GetIdentifier() == LayerIdentifier.Get() : false );
 
 		for ( FUsdLayersTreeItemRef Child : Children )
 		{
@@ -152,9 +167,9 @@ public:
 		}
 	}
 
-	TUsdStore< pxr::SdfLayerHandle > GetLayerHandle() const
+	TUsdStore< pxr::SdfLayerRefPtr > GetLayerHandle() const
 	{
-		return MakeUsdStore< pxr::SdfLayerHandle >( pxr::SdfLayer::FindOrOpen( LayerIdentifier.Get() ) );
+		return MakeUsdStore< pxr::SdfLayerRefPtr >( pxr::SdfLayer::FindOrOpen( LayerIdentifier.Get() ) );
 	}
 
 public:
@@ -231,7 +246,7 @@ public:
 				SNew( SImage )
 				.Image( this, &FUsdLayerMutedColumn::GetBrush, TreeItem )
 			];
-		
+
 		return Item;
 	}
 
@@ -289,7 +304,7 @@ public:
 			SNew(SImage)
 				.Image( this, &FUsdLayerEditColumn::GetCheckedImage, TreeItem )
 				.ColorAndOpacity( FEditorStyle::Get().GetWidgetStyle< FCheckBoxStyle >( "Checkbox" ).ForegroundColor );
-		
+
 		return Item;
 	}
 };
@@ -401,7 +416,7 @@ TSharedPtr< SWidget > SUsdLayersTreeView::ConstructLayerContextMenu()
 			FSlateIcon(),
 			FUIAction(
 				FExecuteAction::CreateSP( this, &SUsdLayersTreeView::OnAddSubLayer ),
-				FCanExecuteAction()
+				FCanExecuteAction::CreateSP( this, &SUsdLayersTreeView::CanAddSubLayer )
 			),
 			NAME_None,
 			EUserInterfaceActionType::Button
@@ -413,7 +428,7 @@ TSharedPtr< SWidget > SUsdLayersTreeView::ConstructLayerContextMenu()
 			FSlateIcon(),
 			FUIAction(
 				FExecuteAction::CreateSP( this, &SUsdLayersTreeView::OnNewSubLayer ),
-				FCanExecuteAction()
+				FCanExecuteAction::CreateSP( this, &SUsdLayersTreeView::CanAddSubLayer )
 			),
 			NAME_None,
 			EUserInterfaceActionType::Button
@@ -467,7 +482,7 @@ void SUsdLayersTreeView::OnEditSelectedLayer()
 
 	for ( FUsdLayersTreeItemRef SelectedItem : MySelectedItems )
 	{
-		TUsdStore< pxr::SdfLayerHandle > LayerHandle = SelectedItem->GetLayerHandle();
+		TUsdStore< pxr::SdfLayerRefPtr > LayerHandle = SelectedItem->GetLayerHandle();
 		if ( !LayerHandle.Get() || !CanEditLayer( SelectedItem ) )
 		{
 			continue;
@@ -479,11 +494,16 @@ void SUsdLayersTreeView::OnEditSelectedLayer()
 	}
 }
 
+bool SUsdLayersTreeView::CanAddSubLayer() const
+{
+	return GetSelectedItems().Num() > 0;
+}
+
 void SUsdLayersTreeView::OnAddSubLayer()
 {
-	TOptional< FString > LayerFile = UsdUtils::BrowseUsdFile( UsdUtils::EBrowseFileMode::Open, AsShared() );
+	TOptional< FString > SubLayerFile = UsdUtils::BrowseUsdFile( UsdUtils::EBrowseFileMode::Open, AsShared() );
 
-	if ( !LayerFile )
+	if ( !SubLayerFile )
 	{
 		return;
 	}
@@ -492,14 +512,8 @@ void SUsdLayersTreeView::OnAddSubLayer()
 
 	for ( FUsdLayersTreeItemRef SelectedItem : MySelectedItems )
 	{
-		FScopedUsdAllocs UsdAllocs;
+		UsdUtils::InsertSubLayer( SelectedItem->GetLayerHandle(), *SubLayerFile.GetValue() );
 
-		pxr::SdfLayerHandle LayerHandle = SelectedItem->GetLayerHandle().Get();
-		if ( LayerHandle )
-		{
-			LayerHandle->InsertSubLayerPath( UnrealToUsd::ConvertString( *LayerFile.GetValue() ).Get() );
-		}
-		
 		break;
 	}
 
@@ -508,9 +522,9 @@ void SUsdLayersTreeView::OnAddSubLayer()
 
 void SUsdLayersTreeView::OnNewSubLayer()
 {
-	TOptional< FString > LayerFile = UsdUtils::BrowseUsdFile( UsdUtils::EBrowseFileMode::Save, AsShared() );
+	TOptional< FString > SubLayerFile = UsdUtils::BrowseUsdFile( UsdUtils::EBrowseFileMode::Save, AsShared() );
 
-	if ( !LayerFile )
+	if ( !SubLayerFile )
 	{
 		return;
 	}
@@ -521,15 +535,8 @@ void SUsdLayersTreeView::OnNewSubLayer()
 		FScopedUsdAllocs UsdAllocs;
 		for ( FUsdLayersTreeItemRef SelectedItem : MySelectedItems )
 		{
-			pxr::SdfLayerRefPtr SubLayerHandle = UsdUtils::CreateNewLayer( SelectedItem->UsdStage, *LayerFile.GetValue() ).Get();
+			UsdUtils::CreateNewLayer( SelectedItem->UsdStage, SelectedItem->GetLayerHandle(), *SubLayerFile.GetValue() );
 
-			pxr::SdfLayerHandle LayerHandle = SelectedItem->GetLayerHandle().Get();
-
-			if ( LayerHandle && SubLayerHandle )
-			{
-				LayerHandle->InsertSubLayerPath( SubLayerHandle->GetRealPath() );
-			}
-			
 			break;
 		}
 	}

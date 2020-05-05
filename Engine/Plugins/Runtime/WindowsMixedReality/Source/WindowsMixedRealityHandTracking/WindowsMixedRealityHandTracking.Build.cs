@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System.IO;
 
@@ -31,6 +31,16 @@ namespace UnrealBuildTool.Rules
                     "LiveLinkInterface"
                 }
 			);
+			
+			if (Target.Platform == UnrealTargetPlatform.Win64 && Target.bBuildEditor == true)
+			{
+				PrivateDependencyModuleNames.Add("WindowsMixedRealityInputSimulation");
+				PrivateDefinitions.Add("WITH_INPUT_SIMULATION=1");
+			}
+			else
+			{
+				PrivateDefinitions.Add("WITH_INPUT_SIMULATION=0");
+			}
 
             AddEngineThirdPartyPrivateStaticDependencies(Target, "WindowsMixedRealityInterop");
         }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "IMultiUserClientModule.h"
 
@@ -10,7 +10,9 @@
 #include "ConcertLogGlobal.h"
 #include "ConcertFrontendStyle.h"
 #include "ConcertSyncSettings.h"
+#include "ConcertWorkspaceData.h"
 #include "ConcertWorkspaceUI.h"
+#include "ConcertUtil.h"
 #include "MultiUserClientUtils.h"
 
 #include "Misc/App.h"
@@ -30,6 +32,9 @@
 #include "ISourceControlProvider.h"
 #include "SourceControlOperations.h"
 
+#include "MessageLogModule.h"
+#include "Logging/MessageLog.h"
+
 #include "Framework/Commands/Commands.h"
 #include "Framework/Commands/UICommandList.h"
 #include "Framework/Docking/TabManager.h"
@@ -39,7 +44,6 @@
 #include "EditorStyleSet.h"
 #include "Delegates/IDelegateInstance.h"
 #include "Interfaces/IEditorStyleModule.h"
-#include "MessageLogModule.h"
 #include "IDetailCustomization.h"
 #include "DetailLayoutBuilder.h"
 #include "DetailCategoryBuilder.h"
@@ -87,47 +91,24 @@ void KillProcess(uint32 ProcessID)
 #endif
 }
 
+// Validation task error codes;
+constexpr uint32 GenericWorkspaceValidationErrorCode = 100;
+constexpr uint32 SourceControlValidationGenericErrorCode = 110;
+constexpr uint32 SourceControlValidationCancelErrorCode = 111;
+constexpr uint32 SourceControlValidationErrorCode = 112;
+constexpr uint32 DirtyPackageValidationErrorCode = 113;
 }
 
 /**
- * Connection task used to validate that the workspace has no local changes (according to source control) or in-memory changes (dirty packages).
+ * Common connection task used to validate the workspace
  */
 class FConcertClientConnectionValidationTask : public IConcertClientConnectionTask
 {
 public:
-	FConcertClientConnectionValidationTask()
-		: SharedState(MakeShared<FSharedAsyncState, ESPMode::ThreadSafe>())
-	{
-	}
-
-	virtual void Execute() override
-	{
-		check(SharedState && SharedState->Result == EConcertResponseCode::Pending);
-
-		ISourceControlModule& SourceControlModule = ISourceControlModule::Get();
-		ISourceControlProvider& SourceControlProvider = SourceControlModule.GetProvider();
-
-		// Query source control to make sure we don't have any local changes before allowing us to join a remote session
-		if (SourceControlModule.IsEnabled() && SourceControlProvider.IsAvailable())
-		{
-			// Query all content paths
-			TArray<FString> RootPaths;
-			FPackageName::QueryRootContentPaths(RootPaths);
-			for (const FString& RootPath : RootPaths)
-			{
-				const FString RootPathOnDisk = FPackageName::LongPackageNameToFilename(RootPath);
-				SharedState->ContentPaths.Add(FPaths::ConvertRelativePathToFull(RootPathOnDisk));
-			}
-
-			UpdateStatusOperation = ISourceControlOperation::Create<FUpdateStatus>();
-			UpdateStatusOperation->SetUpdateModifiedState(true);
-			SourceControlProvider.Execute(UpdateStatusOperation.ToSharedRef(), SharedState->ContentPaths, EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateStatic(&FConcertClientConnectionValidationTask::HandleAsyncResult, SharedState.ToSharedRef()));
-		}
-		else
-		{
-			HandleDirtyPackages(SharedState.ToSharedRef());
-		}
-	}
+	FConcertClientConnectionValidationTask(const UConcertClientConfig* InClientConfig)
+		: ClientConfig(InClientConfig)
+		, SharedState(MakeShared<FSharedAsyncState, ESPMode::ThreadSafe>())
+	{}
 
 	virtual void Abort() override
 	{
@@ -135,9 +116,21 @@ public:
 		SharedState.Reset(); // Always abandon the result
 	}
 
-	virtual void Tick(const bool bShouldCancel) override
+	virtual void Tick(EConcertConnectionTaskAction TaskAction) override
 	{
-		if (bShouldCancel)
+		// InvalidRequest is used here to signify a prompt
+		if (GetStatus() == EConcertResponseCode::InvalidRequest)
+		{
+			if (TaskAction == EConcertConnectionTaskAction::Continue)
+			{
+				SharedState->Result = EConcertResponseCode::Success;
+			}
+			else if (TaskAction == EConcertConnectionTaskAction::Cancel)
+			{
+				SharedState->Result = EConcertResponseCode::Failed;
+			}
+		}
+		else if (TaskAction == EConcertConnectionTaskAction::Cancel)
 		{
 			Cancel();
 		}
@@ -155,9 +148,22 @@ public:
 		return SharedState ? SharedState->Result : EConcertResponseCode::Failed;
 	}
 
-	virtual FText GetError() const override
+	virtual FText GetPrompt() const override
 	{
-		return SharedState ? SharedState->ErrorText : LOCTEXT("ValidatingWorkspace_Aborted", "The workspace validation request was aborted.");
+		return SharedState ? SharedState->PromptText : FText::GetEmpty();
+	}
+
+	virtual FConcertConnectionError GetError() const override
+	{
+		return SharedState ? SharedState->Error : FConcertConnectionError{ MultiUserClientUtil::GenericWorkspaceValidationErrorCode , LOCTEXT("ValidatingWorkspace_Aborted", "The workspace validation request was aborted.") };
+	}
+
+	virtual FSimpleDelegate GetErrorDelegate() const override
+	{
+		return FSimpleDelegate::CreateLambda([]()
+		{
+			FMessageLog("Concert").Open();
+		});
 	}
 
 	virtual FText GetDescription() const override
@@ -165,100 +171,77 @@ public:
 		return LOCTEXT("ValidatingWorkspace", "Validating Workspace...");
 	}
 
-private:
+protected:
 	struct FSharedAsyncState
 	{
 		TArray<FString> ContentPaths;
 		EConcertResponseCode Result = EConcertResponseCode::Pending;
-		FText ErrorText;
+		FText PromptText;
+		FConcertConnectionError Error;
 	};
 
-	/** Common function to query for in-memory changes to packages */
-	static void HandleDirtyPackages(TSharedRef<FSharedAsyncState, ESPMode::ThreadSafe> InSharedState)
+	static EConcertResponseCode GetValidationModeResultOnFailure(const UConcertClientConfig* InClientConfig)
 	{
-		TArray<UPackage*> DirtyPackages;
-#if WITH_EDITOR
+		switch (InClientConfig->SourceControlSettings.ValidationMode)
 		{
-			FScopedSlowTask SlowTask(1.0f, LOCTEXT("ValidatingWorkspace_DirtyPackagesTask", "Checking for Dirty Packages..."));
-			SlowTask.MakeDialog();
-
-			UEditorLoadingAndSavingUtils::GetDirtyMapPackages(DirtyPackages);
-			UEditorLoadingAndSavingUtils::GetDirtyContentPackages(DirtyPackages);
+		case EConcertSourceValidationMode::Hard:
+			return EConcertResponseCode::Failed;
+		case EConcertSourceValidationMode::Soft:
+			// InvalidRequest is used here to signify a prompt
+			return EConcertResponseCode::InvalidRequest;
+		case EConcertSourceValidationMode::SoftAutoProceed:
+			return EConcertResponseCode::Success;
 		}
-#endif
+		return EConcertResponseCode::Failed;
+	}
 
-		if (DirtyPackages.Num() > 0)
+	virtual void Cancel() {}
+
+	const UConcertClientConfig* ClientConfig;
+	TSharedPtr<FSharedAsyncState, ESPMode::ThreadSafe> SharedState;
+};
+
+/**
+ * Client pre-connection source control validation task
+ */
+class FConcertClientConnectionSourceControlValidationTask : public FConcertClientConnectionValidationTask
+{
+public:
+	FConcertClientConnectionSourceControlValidationTask(const UConcertClientConfig* InClientConfig)
+		: FConcertClientConnectionValidationTask(InClientConfig)
+	{}
+
+	virtual void Execute() override
+	{
+		// Source Control Validation Task
+		check(SharedState && SharedState->Result == EConcertResponseCode::Pending);
+		ISourceControlModule& SourceControlModule = ISourceControlModule::Get();
+		ISourceControlProvider& SourceControlProvider = SourceControlModule.GetProvider();
+
+		// Query source control to make sure we don't have any local changes before allowing us to join a remote session
+		if (SourceControlModule.IsEnabled() && SourceControlProvider.IsAvailable())
 		{
-			InSharedState->Result = EConcertResponseCode::Failed;
-			InSharedState->ErrorText = LOCTEXT("ValidatingWorkspace_InMemoryChanges", "This workspace has in-memory changes. Please save or discard these changes before attempting to connect.");
+			// Query all content paths
+			TArray<FString> RootPaths;
+			FPackageName::QueryRootContentPaths(RootPaths);
+			for (const FString& RootPath : RootPaths)
+			{
+				const FString RootPathOnDisk = FPackageName::LongPackageNameToFilename(RootPath);
+				SharedState->ContentPaths.Add(FPaths::ConvertRelativePathToFull(RootPathOnDisk));
+			}
+
+			UpdateStatusOperation = ISourceControlOperation::Create<FUpdateStatus>();
+			UpdateStatusOperation->SetUpdateModifiedState(true);
+			SourceControlProvider.Execute(UpdateStatusOperation.ToSharedRef(), SharedState->ContentPaths, EConcurrency::Asynchronous, FSourceControlOperationComplete::CreateStatic(&FConcertClientConnectionSourceControlValidationTask::HandleAsyncResult, SharedState.ToSharedRef(), ClientConfig));
 		}
 		else
 		{
-			InSharedState->Result = EConcertResponseCode::Success;
+			SharedState->Result = EConcertResponseCode::Success;
 		}
 	}
 
-	/** Callback for the source control result - deliberately not a member function as 'this' may be deleted while the request is in flight, so the shared state is used as a safe bridge */
-	static void HandleAsyncResult(const FSourceControlOperationRef& InOperation, ECommandResult::Type InResult, TSharedRef<FSharedAsyncState, ESPMode::ThreadSafe> InSharedState)
-	{
-		switch (InResult)
-		{
-		case ECommandResult::Succeeded:
-		{
-			ISourceControlModule& SourceControlModule = ISourceControlModule::Get();
-			ISourceControlProvider& SourceControlProvider = SourceControlModule.GetProvider();
-			if (ensure(SourceControlProvider.IsEnabled() && SourceControlProvider.IsAvailable()))
-			{
-				bool bHasLocalChanges = false;
-				for (const FString& ContentPath : InSharedState->ContentPaths)
-				{
-					IFileManager::Get().IterateDirectoryRecursively(*ContentPath, [&bHasLocalChanges, &SourceControlProvider](const TCHAR* InFilename, bool InIsDirectory) -> bool
-					{
-						const FString FilenameStr = InFilename;
-						if (!InIsDirectory && FPackageName::IsPackageFilename(FilenameStr))
-						{
-							FSourceControlStatePtr FileState = SourceControlProvider.GetState(FilenameStr, EStateCacheUsage::Use);
-							if (FileState.IsValid() && (FileState->IsAdded() || FileState->IsDeleted() || FileState->IsModified() || (SourceControlProvider.UsesCheckout() && FileState->IsCheckedOut()))) // TODO: Include unversioned files?
-							{
-								bHasLocalChanges = true;
-								UE_LOG(LogConcert, Warning, TEXT("%s has local changes before joining a multi-user session."), *FileState->GetFilename());
-								return false; // end iteration
-							}
-						}
-						return true; // continue iteration
-					});
-
-					if (bHasLocalChanges)
-					{
-						break;
-					}
-				}
-				if (bHasLocalChanges)
-				{
-					InSharedState->Result = EConcertResponseCode::Failed;
-					InSharedState->ErrorText = LOCTEXT("ValidatingWorkspace_LocalChanges", "This workspace has local changes. Please submit or revert these changes before attempting to connect. See output log for details.");
-				}
-				else
-				{
-					HandleDirtyPackages(InSharedState);
-				}
-			}
-		}
-		break;
-
-		case ECommandResult::Cancelled:
-			InSharedState->Result = EConcertResponseCode::Failed;
-			InSharedState->ErrorText = LOCTEXT("ValidatingWorkspace_Canceled", "The workspace validation request was canceled.");
-			break;
-
-		default:
-			InSharedState->Result = EConcertResponseCode::Failed;
-			InSharedState->ErrorText = LOCTEXT("ValidatingWorkspace_Failed", "The workspace validation request failed. Please check your source control settings.");
-			break;
-		}
-	}
-
-	void Cancel()
+private:
+	virtual void Cancel() override
 	{
 		if (SharedState && UpdateStatusOperation)
 		{
@@ -281,10 +264,104 @@ private:
 		}
 	}
 
+	/** Callback for the source control result - deliberately not a member function as 'this' may be deleted while the request is in flight, so the shared state is used as a safe bridge */
+	static void HandleAsyncResult(const FSourceControlOperationRef& InOperation, ECommandResult::Type InResult, TSharedRef<FSharedAsyncState, ESPMode::ThreadSafe> InSharedState, const UConcertClientConfig* InClientConfig)
+	{
+		switch (InResult)
+		{
+		case ECommandResult::Succeeded:
+		{
+			ISourceControlModule& SourceControlModule = ISourceControlModule::Get();
+			ISourceControlProvider& SourceControlProvider = SourceControlModule.GetProvider();
+			if (ensure(SourceControlProvider.IsEnabled() && SourceControlProvider.IsAvailable()))
+			{
+				FMessageLog MessageLog("Concert");
+				TArray<FSourceControlStateRef> ModifiedStates = SourceControlProvider.GetCachedStateByPredicate([](const FSourceControlStateRef& StateRef)
+					{
+						return ((StateRef->IsAdded() || StateRef->IsDeleted() || StateRef->IsModified()) &&
+							FPackageName::IsPackageFilename(StateRef->GetFilename()));
+					});
+
+				// Add warning to the multi-user message log
+				for (const FSourceControlStateRef& StateRef : ModifiedStates)
+				{
+					MessageLog.Warning(FText::Format(LOCTEXT("ValidatingWorkspace_LocalChanges_Log", "Workspace validation failed: '{0}' contains local changes before joining a multi-user session."), FText::FromString(StateRef->GetFilename())));
+				}
+
+				if (ModifiedStates.Num() > 0)
+				{
+					InSharedState->Result = GetValidationModeResultOnFailure(InClientConfig);
+					InSharedState->PromptText = LOCTEXT("ValidatingWorkspace_SCContinue", "Continue");
+					InSharedState->Error.ErrorCode = MultiUserClientUtil::SourceControlValidationErrorCode;
+					InSharedState->Error.ErrorText = InClientConfig->SourceControlSettings.ValidationMode == EConcertSourceValidationMode::Hard ?
+						LOCTEXT("ValidatingWorkspace_LocalChangesHard", "This workspace has local changes. Please submit or revert these changes before attempting to connect.") :
+						LOCTEXT("ValidatingWorkspace_LocalChangesSoft", "This workspace has local changes. Local changes won't be immediately available to other users.");
+				}
+				else
+				{
+					InSharedState->Result = EConcertResponseCode::Success;
+				}
+			}
+		}
+		break;
+		case ECommandResult::Cancelled:
+			InSharedState->Result = EConcertResponseCode::Failed;
+			InSharedState->Error.ErrorCode = MultiUserClientUtil::SourceControlValidationCancelErrorCode;
+			InSharedState->Error.ErrorText = LOCTEXT("ValidatingWorkspace_Canceled", "The workspace validation request was canceled.");
+			break;
+		default:
+			InSharedState->Result = EConcertResponseCode::Failed;
+			InSharedState->Error.ErrorCode = MultiUserClientUtil::SourceControlValidationGenericErrorCode;
+			InSharedState->Error.ErrorText = LOCTEXT("ValidatingWorkspace_Failed", "The workspace validation request failed. Please check your source control settings.");
+			break;
+		}
+	}
+
 	TSharedPtr<FUpdateStatus, ESPMode::ThreadSafe> UpdateStatusOperation;
-	TSharedPtr<FSharedAsyncState, ESPMode::ThreadSafe> SharedState;
 };
 
+/**
+ * Client pre-connection in memory change (dirty packages) validation task
+ */
+class FConcertClientConnectionDirtyPackagesValidationTask : public FConcertClientConnectionValidationTask
+{
+public:
+	FConcertClientConnectionDirtyPackagesValidationTask(const UConcertClientConfig* InClientConfig)
+		: FConcertClientConnectionValidationTask(InClientConfig)
+	{}
+
+	virtual void Execute() override
+	{
+		TArray<UPackage*> DirtyPackages;
+#if WITH_EDITOR
+		{
+			FScopedSlowTask SlowTask(1.0f, LOCTEXT("ValidatingWorkspace_DirtyPackagesTask", "Checking for Dirty Packages..."));
+			SlowTask.MakeDialog();
+
+			UEditorLoadingAndSavingUtils::GetDirtyMapPackages(DirtyPackages);
+			UEditorLoadingAndSavingUtils::GetDirtyContentPackages(DirtyPackages);
+		}
+#endif
+		if (DirtyPackages.Num() > 0)
+		{
+			// Print which package are dirty to the message log
+			FMessageLog MessageLog("Concert");
+			for (UPackage* Package : DirtyPackages)
+			{
+				MessageLog.Warning(FText::Format(LOCTEXT("ValidatingWorkspace_InMemoryChanges_Log", "Workspace validation failed: '{0}' contains in-memory changes before joining a multi-user session."), FText::FromName(Package->GetFName())));
+			}
+
+			SharedState->Result = GetValidationModeResultOnFailure(ClientConfig);
+			SharedState->PromptText = LOCTEXT("ValidatingWorkspace_DiscardChanges", "Discard");
+			SharedState->Error.ErrorCode = MultiUserClientUtil::DirtyPackageValidationErrorCode;
+			SharedState->Error.ErrorText = LOCTEXT("ValidatingWorkspace_InMemoryChanges", "This workspace has in-memory changes. Continue will discard changes.");
+		}
+		else
+		{
+			SharedState->Result = EConcertResponseCode::Success;
+		}
+	}
+};
 
 /**
  * Customize the multi-user settings to add validation and visual feedback when a user enter something invalid.
@@ -519,6 +596,10 @@ public:
 			ClientConfig->bAutoConnect = false; // Prevent user from auto-connecting if there is no compatible plugin loaded to find and communicate with the server.
 		}
 
+		// Handle notification when a session is staring or ending.
+		MultiUserClient->OnWorkspaceStartup().AddRaw(this, &FMultiUserClientModule::OnWorkspaceStartup);
+		MultiUserClient->OnWorkspaceShutdown().AddRaw(this, &FMultiUserClientModule::OnWorkspaceShutdown);
+
 		// Boot the client instance
 		MultiUserClient->Startup(ClientConfig, EConcertSyncSessionFlags::Default_MultiUserSession);
 
@@ -567,14 +648,17 @@ public:
 
 	/**
 	 * Connect to the default connection setup
+	 * @return true if the connection process started
 	 */
-	virtual void DefaultConnect() override
+	virtual bool DefaultConnect() override
 	{
 		IConcertClientRef ConcertClient = MultiUserClient->GetConcertClient();
 		if (ConcertClient->CanAutoConnect() && ConcertClient->GetSessionConnectionStatus() == EConcertConnectionStatus::Disconnected)
 		{
 			ConcertClient->StartAutoConnect();
+			return true;
 		}
+		return false;
 	}
 
 	/**
@@ -655,6 +739,36 @@ public:
 	}
 
 private:
+	void OnWorkspaceStartup(const TSharedPtr<IConcertClientWorkspace>& InWorkspace)
+	{
+		//InWorkspace.OnPackageTooLargeError().AddRaw(this, &FMultiUserClientModule::HandlePackageTooLargeError);
+	}
+
+	void OnWorkspaceShutdown(const TSharedPtr<IConcertClientWorkspace>& InWorkspace)
+	{
+		//InWorkspace.OnPackageTooLargeError().RemoveAll(this);
+	}
+
+	void HandlePackageTooLargeError(const FConcertPackageInfo& PackageInfo, int64 PackageSize, int64 MaxPackageSizeSupported)
+	{
+		if (PackageInfo.PackageUpdateType == EConcertPackageUpdateType::Added)
+		{
+			UE_LOG(LogConcert, Warning, TEXT("The newly added package '%s' was too large (%s) to be synchronized on other Multi-User clients. It is recommended to save the package, leave and persist the session, submit the file to the source control, sync all clients to this submit and create a new session."), *PackageInfo.PackageName.ToString(), *FText::AsMemory(PackageSize).ToString());
+		}
+		else if (PackageInfo.PackageUpdateType == EConcertPackageUpdateType::Saved)
+		{
+			UE_LOG(LogConcert, Warning, TEXT("The saved package '%s' was too large (%s) to be synchronized on other Multi-User clients. It is recommended to leave and persist the session, submit the file to the source control, sync all clients to this submit and create a new session."), *PackageInfo.PackageName.ToString(), *FText::AsMemory(PackageSize).ToString());
+		}
+		else if (PackageInfo.PackageUpdateType == EConcertPackageUpdateType::Renamed)
+		{
+			UE_LOG(LogConcert, Warning, TEXT("The renamed package '%s' was too large (%s) to be synchronized on other Multi-User clients. It is recommended to leave and persist the session, submit the file to the source control, sync all clients to this submit and create a new session."), *PackageInfo.NewPackageName.ToString(), *FText::AsMemory(PackageSize).ToString());
+		}
+		else // Other events are not expected to trigger a 'too large' error, but log it if something unexpected slips in.
+		{
+			UE_LOG(LogConcert, Error, TEXT("A package event on package '%s' was unexpectedly ignored because the package was too large (%s)."), *PackageInfo.PackageName.ToString(), *FText::AsMemory(PackageSize).ToString());
+		}
+	}
+
 	void RegisterUI()
 	{
 		bHasRegisteredTabSpawners = false;
@@ -734,7 +848,7 @@ private:
 		DefaultConnectConsoleCommand = MakeUnique<FAutoConsoleCommand>(
 			TEXT("Concert.DefaultConnect"),
 			TEXT("Connect to the default Multi-User session (as defined in the Multi-User settings)"),
-			FExecuteAction::CreateRaw(this, &FMultiUserClientModule::DefaultConnect)
+			FExecuteAction::CreateLambda([this]() { DefaultConnect(); })
 			);
 
 		DisconnectConsoleCommand = MakeUnique<FAutoConsoleCommand>(
@@ -758,6 +872,9 @@ private:
 
 		if (MultiUserClient)
 		{
+			MultiUserClient->OnWorkspaceStartup().RemoveAll(this);
+			MultiUserClient->OnWorkspaceShutdown().RemoveAll(this);
+
 			MultiUserClient->GetConcertClient()->OnGetPreConnectionTasks().RemoveAll(this);
 			MultiUserClient->Shutdown();
 			MultiUserClient.Reset();
@@ -766,7 +883,8 @@ private:
 
 	void GetPreConnectionTasks(const IConcertClient& InClient, TArray<TUniquePtr<IConcertClientConnectionTask>>& OutTasks)
 	{
-		OutTasks.Emplace(MakeUnique<FConcertClientConnectionValidationTask>());
+		OutTasks.Emplace(MakeUnique<FConcertClientConnectionSourceControlValidationTask>(InClient.GetConfiguration()));
+		OutTasks.Emplace(MakeUnique<FConcertClientConnectionDirtyPackagesValidationTask>(InClient.GetConfiguration()));
 	}
 
 	/** Returns the toolbar icon title. */
@@ -1177,10 +1295,26 @@ private:
 		if (EngineConfig)
 		{
 			TArray<FString> Settings;
-			FString& Setting = Settings.Emplace_GetRef();
+			FString Setting;
 
 			// Unicast endpoint setting
 			EngineConfig->GetString(TEXT("/Script/UdpMessaging.UdpMessagingSettings"), TEXT("UnicastEndpoint"), Setting);
+
+			// if the unicast endpoint port is bound, add 1 to the port for server 
+			if (Setting.ParseIntoArray(Settings, TEXT(":"), false) == 2)
+			{
+				const UConcertClientConfig* ClientConfig = GetDefault<UConcertClientConfig>();
+				if (ClientConfig && ClientConfig->ClientSettings.ServerPort != 0)
+				{
+					Setting = FString::Printf(TEXT("%s:%d"), *Settings[0], ClientConfig->ClientSettings.ServerPort);
+				}
+				else if (Settings[1] != TEXT("0"))
+				{
+					int32 Port = FCString::Atoi(*Settings[1]);
+					Port += 1;
+					Setting = FString::Printf(TEXT("%s:%d"), *Settings[0], Port);
+				}
+			}
 			CmdLine = TEXT("-UDPMESSAGING_TRANSPORT_UNICAST=") + Setting;
 
 			// Multicast endpoint setting

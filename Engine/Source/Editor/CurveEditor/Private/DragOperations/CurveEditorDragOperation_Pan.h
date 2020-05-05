@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -14,12 +14,15 @@ public:
 
 	virtual void OnBeginDrag(FVector2D InitialPosition, FVector2D CurrentPosition, const FPointerEvent& MouseEvent) override;
 	virtual void OnDrag(FVector2D InitialPosition, FVector2D CurrentPosition, const FPointerEvent& MouseEvent) override;
+	virtual FReply OnMouseWheel(FVector2D InitialPosition, FVector2D CurrentPosition, const FPointerEvent& MouseEvent) override;
 
 private:
 
 	FCurveEditor* CurveEditor;
 	TSharedPtr<SCurveEditorView> View;
 
+	bool bIsDragging;
+	
 	double InitialInputMin, InitialInputMax;
 	double InitialOutputMin, InitialOutputMax;
 	FCurveEditorAxisSnap::FSnapState SnappingState;

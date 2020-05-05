@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -19,10 +19,12 @@ class FSocket;
 
 
 // Delegates
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOSCReceivedMessageEvent, const FOSCMessage&, Message);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOSCDispatchMessageEvent, const FOSCAddress&, AddressPattern, const FOSCMessage&, Message);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOSCReceivedBundleEvent, const FOSCBundle&, Bundle);
-DECLARE_DYNAMIC_DELEGATE_TwoParams(FOSCDispatchMessageEventBP, const FOSCAddress&, AddressPattern, const FOSCMessage&, Message);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOSCReceivedMessageEvent, const FOSCMessage&, Message, const FString&, IPAddress, int32, Port);
+DECLARE_MULTICAST_DELEGATE_ThreeParams(FOSCReceivedMessageNativeEvent, const FOSCMessage&, const FString& /*IPAddress*/, uint16 /*Port*/);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FOSCDispatchMessageEvent, const FOSCAddress&, AddressPattern, const FOSCMessage&, Message, const FString&, IPAddress, int32, Port);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOSCReceivedBundleEvent, const FOSCBundle&, Bundle, const FString&, IPAddress, int32, Port);
+DECLARE_MULTICAST_DELEGATE_ThreeParams(FOSCReceivedBundleNativeEvent, const FOSCBundle&, const FString& /*IPAddress*/, uint16 /*Port*/);
+DECLARE_DYNAMIC_DELEGATE_FourParams(FOSCDispatchMessageEventBP, const FOSCAddress&, AddressPattern, const FOSCMessage&, Message, const FString&, IPAddress, int32, Port);
 
 DECLARE_STATS_GROUP(TEXT("OSC Commands"), STATGROUP_OSCNetworkCommands, STATCAT_Advanced);
 
@@ -33,11 +35,16 @@ class OSC_API IOSCServerProxy
 public:
 	virtual ~IOSCServerProxy() { }
 
+	virtual FString GetIpAddress() const = 0;
+	virtual int32 GetPort() const = 0;
 	virtual bool GetMulticastLoopback() const = 0;
 	virtual bool IsActive() const = 0;
 	virtual void Listen(const FString& ServerName) = 0;
 	virtual bool SetAddress(const FString& InReceiveIPAddress, int32 InPort) = 0;
 	virtual void SetMulticastLoopback(bool bInMulticastLoopback) = 0;
+#if WITH_EDITOR
+	virtual void SetTickableInEditor(bool bInTickInEditor) = 0;
+#endif // WITH_EDITOR
 	virtual void Stop() = 0;
 	virtual void AddWhitelistedClient(const FString& InIPAddress) = 0;
 	virtual void RemoveWhitelistedClient(const FString& IPAddress) = 0;
@@ -52,8 +59,6 @@ class OSC_API UOSCServer : public UObject
 	GENERATED_UCLASS_BODY()
 
 public:
-	void Connect();
-
 	/** Gets whether or not to loopback if ReceiveIPAddress provided is multicast. */
 	UFUNCTION(BlueprintCallable, Category = "Audio|OSC")
 	bool GetMulticastLoopback() const;
@@ -82,9 +87,15 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Audio|OSC")
 	FOSCReceivedMessageEvent OnOscMessageReceived;
 
+	/** Native event that gets called when an OSC message is received. */
+	FOSCReceivedMessageNativeEvent OnOscMessageReceivedNative;
+
 	/** Event that gets called when an OSC bundle is received. */
 	UPROPERTY(BlueprintAssignable, Category = "Audio|OSC")
 	FOSCReceivedBundleEvent OnOscBundleReceived;
+
+	/** Native event that gets called when an OSC bundle is received. */
+	FOSCReceivedBundleNativeEvent OnOscBundleReceivedNative;
 
 	/** When set to true, server will only process received 
 	  * messages from whitelisted clients.
@@ -103,6 +114,14 @@ public:
 	/** Clears client whitelist to listen for. */
 	UFUNCTION(BlueprintCallable, Category = "Audio|OSC")
 	void ClearWhitelistedClients();
+
+	/** Returns the IP for the server if connected as a string. */
+	UFUNCTION(BlueprintCallable, Category = "Audio|OSC")
+	FString GetIpAddress(bool bIncludePort) const;
+
+	/** Returns the port for the server if connected. */
+	UFUNCTION(BlueprintCallable, Category = "Audio|OSC")
+	int32 GetPort() const;
 
 	/** Returns set of whitelisted clients. */
 	UFUNCTION(BlueprintCallable, Category = "Audio|OSC")
@@ -128,24 +147,32 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Audio|OSC")
 	TArray<FOSCAddress> GetBoundOSCAddressPatterns() const;
 
+#if WITH_EDITOR
+	/** Set whether server instance can be ticked in-editor (editor only and available to blueprint
+	  * for use in editor utility scripts/script actions).
+	  */
+	UFUNCTION(BlueprintCallable, Category = "Audio|OSC")
+	void SetTickInEditor(bool bInTickInEditor);
+#endif // WITH_EDITOR
+
 	/** Clears all packets pending processing */
 	void ClearPackets();
 
 	/** Enqueues packet to be processed */
-	void EnqueuePacket(TSharedPtr<IOSCPacket>);
+	void EnqueuePacket(TSharedPtr<IOSCPacket> InPacket);
 
 	/** Callback for when packet is received by server */
-	void OnPacketReceived(const FString& InIPAddress);
+	void PumpPacketQueue(const TSet<uint32>* InWhitelistedClients);
 
 protected:
 	void BeginDestroy() override;
 
 private:
 	/** Dispatches provided bundle received */
-	void DispatchBundle(const FString& InIPAddress, const FOSCBundle& InBundle);
+	void DispatchBundle(const FString& InIPAddress, uint16 InPort, const FOSCBundle& InBundle);
 
 	/** Dispatches provided message received */
-	void DispatchMessage(const FString& InIPAddress, const FOSCMessage& InMessage);
+	void DispatchMessage(const FString& InIPAddress, uint16 InPort, const FOSCMessage& InMessage);
 
 	/** Pointer to internal implementation of server proxy */
 	TUniquePtr<IOSCServerProxy> ServerProxy;

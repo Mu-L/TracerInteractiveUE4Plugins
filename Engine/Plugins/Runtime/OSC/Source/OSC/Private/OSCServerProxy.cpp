@@ -1,9 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "OSCServerProxy.h"
 
 #include "Common/UdpSocketBuilder.h"
-#include "Runtime/Core/Public/Async/TaskGraphInterfaces.h"
+#include "CoreGlobals.h"
 #include "Sockets.h"
+#include "Stats/Stats.h"
+#include "Tickable.h"
 
 #include "OSCLog.h"
 #include "OSCStream.h"
@@ -17,34 +19,39 @@ FOSCServerProxy::FOSCServerProxy(UOSCServer& InServer)
 	, Port(0)
 	, bMulticastLoopback(false)
 	, bWhitelistClients(false)
+#if WITH_EDITOR
+	, bTickInEditor(false)
+#endif // WITH_EDITOR
 {
 }
 
-void FOSCServerProxy::OnPacketReceived(const FArrayReaderPtr& Data, const FIPv4Endpoint& Endpoint)
+FOSCServerProxy::~FOSCServerProxy()
 {
-	TSharedPtr<IOSCPacket> Packet = IOSCPacket::CreatePacket(Data->GetData());
+	Stop();
+}
+
+void FOSCServerProxy::OnPacketReceived(const FArrayReaderPtr& InData, const FIPv4Endpoint& InEndpoint)
+{
+	TSharedPtr<IOSCPacket> Packet = IOSCPacket::CreatePacket(InData->GetData(), InEndpoint.Address.ToString(), InEndpoint.Port);
 	if (!Packet.IsValid())
 	{
-		UE_LOG(LogOSC, Verbose, TEXT("Message received from endpoint '%s' invalid OSC packet."), *Endpoint.ToString());
+		UE_LOG(LogOSC, Verbose, TEXT("Message received from endpoint '%s' invalid OSC packet."), *InEndpoint.ToString());
 		return;
 	}
 
-	FOSCStream Stream = FOSCStream(Data->GetData(), Data->Num());
+	FOSCStream Stream = FOSCStream(InData->GetData(), InData->Num());
 	Packet->ReadData(Stream);
 	Server->EnqueuePacket(Packet);
+}
 
-	DECLARE_CYCLE_STAT(TEXT("OSCServer.OnPacketReceived"), STAT_OSCServerOnPacketReceived, STATGROUP_OSCNetworkCommands);
-	FFunctionGraphTask::CreateAndDispatchWhenReady([this, Endpoint]()
-	{
-		// Throw request on the ground if endpoint address not whitelisted.
-		if (bWhitelistClients && !ClientWhitelist.Contains(Endpoint.Address.Value))
-		{
-			Server->ClearPackets();
-			return;
-		}
+FString FOSCServerProxy::GetIpAddress() const
+{
+	return ReceiveIPAddress.ToString();
+}
 
-		Server->OnPacketReceived(Endpoint.Address.ToString());
-	}, GET_STATID(STAT_OSCServerOnPacketReceived), nullptr, ENamedThreads::GameThread);
+int32 FOSCServerProxy::GetPort() const
+{
+	return Port;
 }
 
 bool FOSCServerProxy::GetMulticastLoopback() const
@@ -57,16 +64,16 @@ bool FOSCServerProxy::IsActive() const
 	return SocketReceiver != nullptr;
 }
 
-void FOSCServerProxy::Listen(const FString& ServerName)
+void FOSCServerProxy::Listen(const FString& InServerName)
 {
 	if (IsActive())
 	{
 		UE_LOG(LogOSC, Error, TEXT("OSCServer currently listening: %s:%d. Failed to start new service prior to calling stop."),
-			*ServerName, *ReceiveIPAddress.ToString(), Port);
+			*InServerName, *ReceiveIPAddress.ToString(), Port);
 		return;
 	}
 
-	FUdpSocketBuilder Builder(*ServerName);
+	FUdpSocketBuilder Builder(*InServerName);
 	Builder.BoundToPort(Port);
 	if (ReceiveIPAddress.IsMulticastAddress())
 	{
@@ -81,7 +88,7 @@ void FOSCServerProxy::Listen(const FString& ServerName)
 		if (bMulticastLoopback)
 		{
 			UE_LOG(LogOSC, Warning, TEXT("OSCServer '%s' ReceiveIPAddress provided is not a multicast address.  Not respecting MulticastLoopback boolean."),
-				*ServerName);
+				*InServerName);
 		}
 		Builder.BoundToAddress(ReceiveIPAddress);
 	}
@@ -89,15 +96,15 @@ void FOSCServerProxy::Listen(const FString& ServerName)
 	Socket = Builder.Build();
 	if (Socket)
 	{
-		SocketReceiver = new FUdpSocketReceiver(Socket, FTimespan::FromMilliseconds(100), *(ServerName + TEXT("_ListenerThread")));
+		SocketReceiver = new FUdpSocketReceiver(Socket, FTimespan::FromMilliseconds(100), *(InServerName + TEXT("_ListenerThread")));
 		SocketReceiver->OnDataReceived().BindRaw(this, &FOSCServerProxy::OnPacketReceived);
 		SocketReceiver->Start();
 
-		UE_LOG(LogOSC, Display, TEXT("OSCServer '%s' Listening: %s:%d."), *ServerName, *ReceiveIPAddress.ToString(), Port);
+		UE_LOG(LogOSC, Display, TEXT("OSCServer '%s' Listening: %s:%d."), *InServerName, *ReceiveIPAddress.ToString(), Port);
 	}
 	else
 	{
-		UE_LOG(LogOSC, Warning, TEXT("OSCServer '%s' failed to bind to socket on %s:%d."), *ServerName, *ReceiveIPAddress.ToString(), Port);
+		UE_LOG(LogOSC, Warning, TEXT("OSCServer '%s' failed to bind to socket on %s:%d."), *InServerName, *ReceiveIPAddress.ToString(), Port);
 	}
 }
 
@@ -130,6 +137,18 @@ void FOSCServerProxy::SetMulticastLoopback(bool bInMulticastLoopback)
 	bMulticastLoopback = bInMulticastLoopback;
 }
 
+#if WITH_EDITOR
+bool FOSCServerProxy::IsTickableInEditor() const
+{
+	return bTickInEditor;
+}
+
+void FOSCServerProxy::SetTickableInEditor(bool bInTickInEditor)
+{
+	bTickInEditor = bInTickInEditor;
+}
+#endif // WITH_EDITOR
+
 void FOSCServerProxy::Stop()
 {
 	if (SocketReceiver)
@@ -144,26 +163,28 @@ void FOSCServerProxy::Stop()
 		ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->DestroySocket(Socket);
 		Socket = nullptr;
 	}
+
+
 }
 
-void FOSCServerProxy::AddWhitelistedClient(const FString& IPAddress)
+void FOSCServerProxy::AddWhitelistedClient(const FString& InIPAddress)
 {
 	FIPv4Address OutAddress;
-	if (!FIPv4Address::Parse(IPAddress, OutAddress))
+	if (!FIPv4Address::Parse(InIPAddress, OutAddress))
 	{
-		UE_LOG(LogOSC, Warning, TEXT("OSCServer '%s' failed to whitelist IP Address '%s'. Address is invalid."), *IPAddress);
+		UE_LOG(LogOSC, Warning, TEXT("OSCServer '%s' failed to whitelist IP Address '%s'. Address is invalid."), *InIPAddress);
 		return;
 	}
 
 	ClientWhitelist.Add(OutAddress.Value);
 }
 
-void FOSCServerProxy::RemoveWhitelistedClient(const FString& IPAddress)
+void FOSCServerProxy::RemoveWhitelistedClient(const FString& InIPAddress)
 {
 	FIPv4Address OutAddress;
-	if (!FIPv4Address::Parse(IPAddress, OutAddress))
+	if (!FIPv4Address::Parse(InIPAddress, OutAddress))
 	{
-		UE_LOG(LogOSC, Warning, TEXT("OSCServer '%s' failed to remove whitelisted IP Address '%s'. Address is invalid."), *IPAddress);
+		UE_LOG(LogOSC, Warning, TEXT("OSCServer '%s' failed to remove whitelisted IP Address '%s'. Address is invalid."), *InIPAddress);
 		return;
 	}
 
@@ -186,7 +207,26 @@ TSet<FString> FOSCServerProxy::GetWhitelistedClients() const
 	return OutWhitelist;
 }
 
-void FOSCServerProxy::SetWhitelistClientsEnabled(bool bEnabled)
+void FOSCServerProxy::SetWhitelistClientsEnabled(bool bInEnabled)
 {
-	bWhitelistClients = bEnabled;
+	bWhitelistClients = bInEnabled;
+}
+
+void FOSCServerProxy::Tick(float InDeltaTime)
+{
+	check(IsInGameThread());
+	check(Server);
+
+	Server->PumpPacketQueue(bWhitelistClients ? &ClientWhitelist : nullptr);
+}
+
+TStatId FOSCServerProxy::GetStatId() const
+{
+	RETURN_QUICK_DECLARE_CYCLE_STAT(FOSCServerProxy, STATGROUP_Tickables);
+}
+
+UWorld* FOSCServerProxy::GetTickableGameObjectWorld() const
+{
+	check(Server);
+	return Server->GetWorld();
 }

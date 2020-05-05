@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -10,7 +10,7 @@ enum class EMemberExitedReason : uint8;
 class FSocialUserList : public ISocialUserList, public FGCObject, public TSharedFromThis<FSocialUserList>
 {
 public:
-	static TSharedRef<FSocialUserList> CreateUserList(USocialToolkit& InOwnerToolkit, const FSocialUserListConfig& Config);
+	static TSharedRef<FSocialUserList> CreateUserList(const USocialToolkit& InOwnerToolkit, const FSocialUserListConfig& Config);
 
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
 
@@ -22,9 +22,13 @@ public:
 
 	void UpdateNow();
 	void SetAllowAutoUpdate(bool bIsEnabled);
+	void SetAllowSortDuringUpdate(bool bIsEnabled);
 	const TArray<USocialUser*>& GetUsers() const { return Users; }
 
 	bool HasPresenceFilters() const;
+
+PARTY_SCOPE:
+	const FSocialUserListConfig& GetListConfig() const { return ListConfig; }
 
 private:
 	void HandleOwnerToolkitReset();
@@ -66,10 +70,10 @@ private:
 	void HandlePartyMemberLeft(EMemberExitedReason Reason, UPartyMember* Member);
 
 private:
-	FSocialUserList(USocialToolkit& InOwnerToolkit, const FSocialUserListConfig& Config);
+	FSocialUserList(const USocialToolkit& InOwnerToolkit, const FSocialUserListConfig& Config);
 	void InitializeList();
 
-	TWeakObjectPtr<USocialToolkit> OwnerToolkit;
+	TWeakObjectPtr<const USocialToolkit> OwnerToolkit;
 
 	UPROPERTY()
 	TArray<USocialUser*> Users;
@@ -82,10 +86,9 @@ private:
 
 	FSocialUserListConfig ListConfig;
 
-	// give external access to disable list update for perf
-	bool bAllowAutoUpdate = true;
 	bool bNeedsSort = false;
-	float AutoUpdatePeriod = 5.f;
+	int32 AutoUpdateRequests = 0;
+	float AutoUpdatePeriod = .5f;
 	FDelegateHandle UpdateTickerHandle;
 
 	mutable FOnUserAdded OnUserAddedEvent;

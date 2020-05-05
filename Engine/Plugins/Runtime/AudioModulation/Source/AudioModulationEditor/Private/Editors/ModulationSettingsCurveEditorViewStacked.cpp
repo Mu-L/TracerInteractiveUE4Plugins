@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ModulationSettingsCurveEditorViewStacked.h"
 
@@ -9,6 +9,7 @@
 #include "EditorStyleSet.h"
 #include "Fonts/FontMeasure.h"
 #include "SCurveEditorPanel.h"
+#include "SoundModulationPatch.h"
 #include "Widgets/Text/STextBlock.h"
 
 
@@ -16,31 +17,34 @@
 
 
 FModCurveEditorModel::FModCurveEditorModel(FRichCurve& InRichCurve, UObject* InOwner, FName InControlName, EModSettingsOutputEditorCurveSource InSource, UCurveFloat* InSharedCurve)
-	: FRichCurveEditorModel(&InRichCurve, InOwner)
+	: FRichCurveEditorModelRaw(&InRichCurve, InOwner)
 	, Output(EModSettingsEditorCurveOutput::Control)
 	, Source(InSource)
 {
 	SupportedViews = ViewId;
-	Refresh(EModSettingsEditorCurveOutput::Control, &InControlName, InSharedCurve);
+	Init(&InControlName, InSharedCurve);
 }
 
 FModCurveEditorModel::FModCurveEditorModel(FRichCurve& InRichCurve, UObject* InOwner, EModSettingsEditorCurveOutput InOutput, EModSettingsOutputEditorCurveSource InSource, UCurveFloat* InSharedCurve)
-	: FRichCurveEditorModel(&InRichCurve, InOwner)
+	: FRichCurveEditorModelRaw(&InRichCurve, InOwner)
+	, Settings(Cast<USoundModulationSettings>(InOwner))
 	, Output(InOutput)
 	, Source(InSource)
 {
 	SupportedViews = ViewId;
-	Refresh(InOutput, nullptr /* InControlName */, InSharedCurve);
+	Init(nullptr /* InControlName */, InSharedCurve);
 }
 
-void FModCurveEditorModel::Refresh(EModSettingsEditorCurveOutput InCurveOutput, const FName* InControlName, UCurveFloat* InSharedCurve)
+void FModCurveEditorModel::Init(const FName* InControlName, UCurveFloat* InSharedCurve)
 {
+	bKeyDrawEnabled = true;
+
 	FText ShortNameBase;
-	switch (InCurveOutput)
+	switch (Output)
 	{
 		case EModSettingsEditorCurveOutput::Volume:
 		{
-			Color = FAudioModulationStyle::GetVolumeBusColor();
+			Color = UAudioModulationStyle::GetVolumeBusColor();
 			ShortNameBase = LOCTEXT("ModulationOutputVolumeBus", "Volume");
 			IntentionName = TEXT("AudioVolume");
 		}
@@ -48,7 +52,7 @@ void FModCurveEditorModel::Refresh(EModSettingsEditorCurveOutput InCurveOutput, 
 
 		case EModSettingsEditorCurveOutput::Pitch:
 		{
-			Color = FAudioModulationStyle::GetPitchBusColor();
+			Color = UAudioModulationStyle::GetPitchBusColor();
 			ShortNameBase = LOCTEXT("ModulationOutputPitchBus", "Pitch");
 			IntentionName = TEXT("AudioPitch");
 		}
@@ -56,7 +60,7 @@ void FModCurveEditorModel::Refresh(EModSettingsEditorCurveOutput InCurveOutput, 
 
 		case EModSettingsEditorCurveOutput::Highpass:
 		{
-			Color = FAudioModulationStyle::GetHPFBusColor();
+			Color = UAudioModulationStyle::GetHPFBusColor();
 			ShortNameBase = LOCTEXT("ModulationOutputHPFBus", "Highpass");
 			IntentionName = TEXT("AudioHPFFreq");
 		}
@@ -64,7 +68,7 @@ void FModCurveEditorModel::Refresh(EModSettingsEditorCurveOutput InCurveOutput, 
 
 		case EModSettingsEditorCurveOutput::Lowpass:
 		{
-			Color = FAudioModulationStyle::GetLPFBusColor();
+			Color = UAudioModulationStyle::GetLPFBusColor();
 			ShortNameBase = LOCTEXT("ModulationOutputLPFBus", "Lowpass");
 			IntentionName = TEXT("AudioLPFFreq");
 		}
@@ -72,50 +76,102 @@ void FModCurveEditorModel::Refresh(EModSettingsEditorCurveOutput InCurveOutput, 
 
 		case EModSettingsEditorCurveOutput::Control:
 		{
-			Color = FAudioModulationStyle::GetControlBusColor();
+			Color = UAudioModulationStyle::GetControlBusColor();
 			ShortNameBase = FText::FromName(*InControlName);
 			IntentionName = TEXT("AudioControlValue");
 		}
 		break;
 	}
 
-	switch (Source)
+	const bool bIsBypassed = GetIsBypassed();
+	if (bIsBypassed)
 	{
-		case EModSettingsOutputEditorCurveSource::Shared:
+		SetShortDisplayName(FText::Format(LOCTEXT("ModulationCurveDisabledDisplayName", "{0} (Bypassed)"), ShortNameBase));
+		bKeyDrawEnabled = false;
+	}
+	else
+	{
+		switch (Source)
 		{
-			check(InSharedCurve);
-			FText CurveNameText = FText::FromString(InSharedCurve->GetName());
-			SetShortDisplayName(FText::Format(LOCTEXT("ModulationSharedDisplayName", "{0} (Shared - {1})"), ShortNameBase, CurveNameText));
-		}
-		break;
+			case EModSettingsOutputEditorCurveSource::Shared:
+			{
+				check(InSharedCurve);
+				FText CurveNameText = FText::FromString(InSharedCurve->GetName());
+				SetShortDisplayName(FText::Format(LOCTEXT("ModulationSharedDisplayName", "{0} (Shared - {1})"), ShortNameBase, CurveNameText));
+			}
+			break;
 
-		case EModSettingsOutputEditorCurveSource::Custom:
-		{
-			ShortDisplayName = FText::Format(LOCTEXT("ModulationOutputCurveDisplayName", "{0} (Custom)"), ShortNameBase);
-		}
-		break;
+			case EModSettingsOutputEditorCurveSource::Custom:
+			{
+				ShortDisplayName = FText::Format(LOCTEXT("ModulationOutputCurveDisplayName", "{0} (Custom)"), ShortNameBase);
+			}
+			break;
 
-		case EModSettingsOutputEditorCurveSource::Expression:
-		{
-			bKeyDrawEnabled = 0;
-			ShortDisplayName = FText::Format(LOCTEXT("ModulationOutputCurveExpressionDisplayName", "{0} (Expression)"), ShortNameBase);
-		}
-		break;
+			case EModSettingsOutputEditorCurveSource::Expression:
+			{
+				bKeyDrawEnabled = false;
+				ShortDisplayName = FText::Format(LOCTEXT("ModulationOutputCurveExpressionDisplayName", "{0} (Expression)"), ShortNameBase);
+			}
+			break;
 
-		case EModSettingsOutputEditorCurveSource::Unset:
-		default:
-		{
-			bKeyDrawEnabled = 0;
-			ShortDisplayName = FText::Format(LOCTEXT("ModulationOutputCurveUnsetDisplayName", "{0} (Shared - Unset)"), ShortNameBase);
+			case EModSettingsOutputEditorCurveSource::Unset:
+			default:
+			{
+				bKeyDrawEnabled = false;
+				ShortDisplayName = FText::Format(LOCTEXT("ModulationOutputCurveUnsetDisplayName", "{0} (Shared - Unset)"), ShortNameBase);
+			}
+			break;
 		}
 	}
 }
 
 FLinearColor FModCurveEditorModel::GetColor() const
 {
-	return Source == EModSettingsOutputEditorCurveSource::Custom || Source == EModSettingsOutputEditorCurveSource::Expression
+	return !GetIsBypassed() && (Source == EModSettingsOutputEditorCurveSource::Custom || Source == EModSettingsOutputEditorCurveSource::Expression)
 		? Color
 		: Color.Desaturate(0.45f);
+}
+
+bool FModCurveEditorModel::GetIsBypassed() const
+{
+	if (Settings.IsValid())
+	{
+		switch (Output)
+		{
+		case EModSettingsEditorCurveOutput::Volume:
+		{
+			return Settings->Volume.bBypass;
+		}
+		break;
+
+		case EModSettingsEditorCurveOutput::Pitch:
+		{
+			return Settings->Pitch.bBypass;
+		}
+		break;
+
+		case EModSettingsEditorCurveOutput::Highpass:
+		{
+			return Settings->Highpass.bBypass;
+		}
+		break;
+
+		case EModSettingsEditorCurveOutput::Lowpass:
+		{
+			return Settings->Lowpass.bBypass;
+		}
+		break;
+
+		case EModSettingsEditorCurveOutput::Control:
+		default:
+		{
+			return false;
+		}
+		break;
+		}
+	}
+
+	return false;
 }
 
 EModSettingsEditorCurveOutput FModCurveEditorModel::GetOutput() const

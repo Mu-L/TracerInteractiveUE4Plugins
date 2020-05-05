@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	VulkanMemory.cpp: Vulkan memory RHI implementation.
@@ -16,6 +16,16 @@ const uint32 NUM_FRAMES_TO_WAIT_FOR_RESOURCE_DELETE = 2;
 
 #define VULKAN_MAX_SUB_ALLOCATION (64llu << 20llu) // set to 0 to disable
 #define VULKAN_FAKE_MEMORY_LIMIT 0llu /// set to # of GB to fake out of memory when hitting limit.
+
+
+DECLARE_STATS_GROUP(TEXT("Vulkan Memory"), STATGROUP_VulkanMemory, STATCAT_Advanced);
+DECLARE_MEMORY_STAT_EXTERN(TEXT("Dedicated Memory"), STAT_VulkanDedicatedMemory, STATGROUP_VulkanMemory, );
+DECLARE_MEMORY_STAT_EXTERN(TEXT("NonDedicated Memory"), STAT_VulkanNonDedicatedMemory, STATGROUP_VulkanMemory, );
+DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("FOldResourceHeap Pages"), STAT_VulkanOldResourceHeapPages, STATGROUP_VulkanMemory);
+DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("FOldResourceHeap Allocations"), STAT_VulkanOldResourceHeapAllocations, STATGROUP_VulkanMemory);
+DEFINE_STAT(STAT_VulkanDedicatedMemory);
+DEFINE_STAT(STAT_VulkanNonDedicatedMemory);
+
 
 
 #if UE_BUILD_DEBUG
@@ -48,6 +58,26 @@ constexpr int32 GForceCoherent = 0;
 
 namespace VulkanRHI
 {
+	struct FVulkanMemoryAllocation
+	{
+		const TCHAR* Name;
+		FName ResourceName;
+		void* Address;
+		void* RHIResouce;
+		uint32 Size;
+		uint32 Width;
+		uint32 Height;
+		uint32 Depth;
+		uint32 BytesPerPixel;
+	};
+
+	struct FVulkanMemoryBucket
+	{
+		TArray<FVulkanMemoryAllocation> Allocations;
+	};
+
+
+
 	enum
 	{
 		GPU_ONLY_HEAP_PAGE_SIZE = 256 * 1024 * 1024,
@@ -229,10 +259,14 @@ namespace VulkanRHI
 		{
 			((VkMemoryDedicatedAllocateInfoKHR*)DedicatedAllocateInfo)->pNext = Info.pNext;
 			Info.pNext = DedicatedAllocateInfo;
+			INC_DWORD_STAT_BY(STAT_VulkanDedicatedMemory, AllocationSize);
 		}
-#else
-		check(!DedicatedAllocateInfo);
+		else
 #endif
+		{
+			INC_DWORD_STAT_BY(STAT_VulkanNonDedicatedMemory, AllocationSize);
+			check(!DedicatedAllocateInfo);
+		}
 
 		VkDeviceMemory Handle;
 		VkResult Result;
@@ -307,6 +341,12 @@ namespace VulkanRHI
 		NewAllocation->bCanBeMapped = ((MemoryProperties.memoryTypes[MemoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) == VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 		NewAllocation->bIsCoherent = ((MemoryProperties.memoryTypes[MemoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 		NewAllocation->bIsCached = ((MemoryProperties.memoryTypes[MemoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) == VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+#if VULKAN_SUPPORTS_DEDICATED_ALLOCATION
+		NewAllocation->bDedicatedMemory = DedicatedAllocateInfo != 0;
+#else
+		NewAllocation->bDedicatedMemory = 0;
+
+#endif
 #if VULKAN_MEMORY_TRACK_FILE_LINE
 		NewAllocation->File = File;
 		NewAllocation->Line = Line;
@@ -334,6 +374,7 @@ namespace VulkanRHI
 #if VULKAN_USE_LLM
 		LLM_PLATFORM_SCOPE_VULKAN(ELLMTagVulkan::VulkanDriverMemoryGPU);
 		LLM(FLowLevelMemTracker::Get().OnLowLevelAlloc(ELLMTracker::Platform, (void*)NewAllocation->Handle, AllocationSize, ELLMTag::GraphicsPlatform, ELLMAllocType::System));
+		LLM_TRACK_VULKAN_SPARE_MEMORY_GPU((int64)AllocationSize);
 #endif
 
 		INC_DWORD_STAT(STAT_VulkanNumPhysicalMemAllocations);
@@ -351,11 +392,20 @@ namespace VulkanRHI
 #if VULKAN_FAKE_MEMORY_LIMIT
 		GDeviceMemAllocated -= Allocation->Size;
 #endif
+		if (Allocation->bDedicatedMemory)
+		{
+			DEC_DWORD_STAT_BY(STAT_VulkanDedicatedMemory, Allocation->Size);
+		}
+		else
+		{
 
+			DEC_DWORD_STAT_BY(STAT_VulkanNonDedicatedMemory, Allocation->Size);
+		}
 		VulkanRHI::vkFreeMemory(DeviceHandle, Allocation->Handle, VULKAN_CPU_ALLOCATOR);
 
 #if VULKAN_USE_LLM
 		LLM(FLowLevelMemTracker::Get().OnLowLevelFree(ELLMTracker::Platform, (void*)Allocation->Handle, ELLMAllocType::System));
+		LLM_TRACK_VULKAN_SPARE_MEMORY_GPU(-(int64)Allocation->Size);
 #endif
 
 		--NumAllocations;
@@ -375,19 +425,24 @@ namespace VulkanRHI
 	void FDeviceMemoryManager::DumpMemory()
 	{
 		SetupAndPrintMemInfo();
-		UE_LOG(LogVulkanRHI, Display, TEXT("Device Memory: %d allocations on %d heaps"), NumAllocations, HeapInfos.Num());
+#if 1 //in case of debugging, it is useful to be able to log directly to LowLevelPrintf, as this is easier to diff. Please do not delete this code.
+#define VULKAN_LOGMEMORY(fmt, ...) UE_LOG(LogVulkanRHI, Display, fmt, ##__VA_ARGS__)
+#else 
+#define VULKAN_LOGMEMORY(fmt, ...) FPlatformMisc::LowLevelOutputDebugStringf(fmt TEXT("\n"), ##__VA_ARGS__)
+#endif
+		VULKAN_LOGMEMORY(TEXT("Device Memory: %d allocations on %d heaps"), NumAllocations, HeapInfos.Num());
 		for (int32 Index = 0; Index < HeapInfos.Num(); ++Index)
 		{
 			FHeapInfo& HeapInfo = HeapInfos[Index];
-			UE_LOG(LogVulkanRHI, Display, TEXT("\tHeap %d, %d allocations"), Index, HeapInfo.Allocations.Num());
+			VULKAN_LOGMEMORY(TEXT("\tHeap %d, %d allocations"), Index, HeapInfo.Allocations.Num());
 			uint64 TotalSize = 0;
 
 			if (HeapInfo.Allocations.Num() > 0)
 			{
 #if VULKAN_MEMORY_TRACK_FILE_LINE
-				UE_LOG(LogVulkanRHI, Display, TEXT("\t\tAlloc AllocSize(MB) TotalSize(MB)    Handle  UID  File(Line)"));
+				VULKAN_LOGMEMORY(TEXT("\t\tAlloc AllocSize(MB) TotalSize(MB)    Handle  UID  File(Line)"));
 #else
-				UE_LOG(LogVulkanRHI, Display, TEXT("\t\tAlloc AllocSize(MB) TotalSize(MB)    Handle"));
+				VULKAN_LOGMEMORY(TEXT("\t\tAlloc AllocSize(MB) TotalSize(MB)    Handle"));
 #endif
 			}
 
@@ -395,14 +450,66 @@ namespace VulkanRHI
 			{
 				FDeviceMemoryAllocation* Allocation = HeapInfo.Allocations[SubIndex];
 #if VULKAN_MEMORY_TRACK_FILE_LINE
-				UE_LOG(LogVulkanRHI, Display, TEXT("\t\t%5d %13.3f %13.3f %p %4d %s(%d)"), SubIndex, Allocation->Size / 1024.f / 1024.f, TotalSize / 1024.0f / 1024.0f, (void*)Allocation->Handle, Allocation->UID, ANSI_TO_TCHAR(Allocation->File), Allocation->Line);
+				VULKAN_LOGMEMORY(TEXT("\t\t%5d %13.3f %13.3f %p %4d %s(%d)"), SubIndex, Allocation->Size / 1024.f / 1024.f, TotalSize / 1024.0f / 1024.0f, (void*)Allocation->Handle, Allocation->UID, ANSI_TO_TCHAR(Allocation->File), Allocation->Line);
 #else
-				UE_LOG(LogVulkanRHI, Display, TEXT("\t\t%5d %13.3f %13.3f %p"), SubIndex, Allocation->Size / 1024.f / 1024.f, TotalSize / 1024.0f / 1024.0f, (void*)Allocation->Handle);
+				VULKAN_LOGMEMORY(TEXT("\t\t%5d %13.3f %13.3f %p"), SubIndex, Allocation->Size / 1024.f / 1024.f, TotalSize / 1024.0f / 1024.0f, (void*)Allocation->Handle);
 #endif
 				TotalSize += Allocation->Size;
 			}
-			UE_LOG(LogVulkanRHI, Display, TEXT("\t\tTotal Allocated %.2f MB, Peak %.2f MB"), TotalSize / 1024.0f / 1024.0f, HeapInfo.PeakSize / 1024.0f / 1024.0f);
+			VULKAN_LOGMEMORY(TEXT("\t\tTotal Allocated %.2f MB, Peak %.2f MB"), TotalSize / 1024.0f / 1024.0f, HeapInfo.PeakSize / 1024.0f / 1024.0f);
 		}
+#if VULKAN_OBJECT_TRACKING
+		{
+
+			TSortedMap<uint32, FVulkanMemoryBucket> AllocationBuckets;
+			auto Collector = [&](const TCHAR* Name, FName ResourceName, void* Address, void* RHIRes, uint32 Width, uint32 Height, uint32 Depth, uint32 Format)
+			{
+				uint32 BytesPerPixel = (Format != VK_FORMAT_UNDEFINED ? GetNumBitsPerPixel((VkFormat)Format) : 8) / 8;
+				uint32 Size = FPlatformMath::Max(Width,1u) * FPlatformMath::Max(Height,1u) * FPlatformMath::Max(Depth, 1u) * BytesPerPixel;
+				uint32 Bucket = Size;
+				if(Bucket >= (1<<20))
+				{
+					Bucket = (Bucket + ((1 << 20) - 1)) & ~((1 << 20)-1);
+				}
+				else
+				{
+					Bucket = (Bucket + ((1 << 10) - 1)) & ~((1 << 10)-1);
+				}
+				FVulkanMemoryAllocation Allocation = 
+				{
+					Name, ResourceName, Address, RHIRes, Size, Width, Height, Depth, BytesPerPixel
+				};
+				FVulkanMemoryBucket& ActualBucket = AllocationBuckets.FindOrAdd(Bucket);
+				ActualBucket.Allocations.Add(Allocation);
+			};
+
+
+			TVulkanTrackBase<FVulkanTextureBase>::CollectAll(Collector);
+			TVulkanTrackBase<FVulkanResourceMultiBuffer>::CollectAll(Collector);
+			for(auto& Itr : AllocationBuckets)
+			{
+				VULKAN_LOGMEMORY(TEXT("***** BUCKET < %d kb *****"), Itr.Key/1024);
+				FVulkanMemoryBucket& B = Itr.Value;
+				uint32 Size = 0;
+				for (FVulkanMemoryAllocation& A : B.Allocations)
+				{
+					Size += A.Size;
+				}
+				VULKAN_LOGMEMORY(TEXT("\t\t%d / %d kb"), B.Allocations.Num(), Size / 1024);
+
+
+				B.Allocations.Sort([](const FVulkanMemoryAllocation& L, const FVulkanMemoryAllocation& R)
+				{
+					return L.Address < R.Address;
+				}
+				);
+				for(FVulkanMemoryAllocation& A : B.Allocations)
+				{
+					VULKAN_LOGMEMORY(TEXT("\t\t%p/%p %6.2fkb (%d) %5d/%5d/%5d %s ::: %s"), A.Address, A.RHIResouce, A.Size / 1024.f, A.Size, A.Width, A.Height, A.Depth, A.Name, *A.ResourceName.ToString());
+				}
+			}
+		}
+#endif
 		Device->GetResourceHeapManager().DumpMemory();
 		GLog->PanicFlushThreadedLogs();
 	}
@@ -687,10 +794,15 @@ namespace VulkanRHI
 		CaptureCallStack(Callstack);
 #endif
 		//UE_LOG(LogVulkanRHI, Display, TEXT("*** OldResourceAlloc HeapType %d PageID %d Handle %p Offset %d Size %d @ %s %d"), InOwner->GetOwner()->GetMemoryTypeIndex(), InOwner->GetID(), InDeviceMemoryAllocation->GetHandle(), InAllocationOffset, InAllocationSize, ANSI_TO_TCHAR(InFile), InLine);
+
+		INC_DWORD_STAT(STAT_VulkanOldResourceHeapAllocations);
+
+
 	}
 
 	FOldResourceAllocation::~FOldResourceAllocation()
 	{
+		DEC_DWORD_STAT(STAT_VulkanOldResourceHeapAllocations);
 		Owner->ReleaseAllocation(this);
 	}
 
@@ -734,10 +846,12 @@ namespace VulkanRHI
 		FullRange.Offset = 0;
 		FullRange.Size = MaxSize;
 		FRange::Add(FreeList, FullRange);
+		INC_DWORD_STAT(STAT_VulkanOldResourceHeapPages);
 	}
 
 	FOldResourceHeapPage::~FOldResourceHeapPage()
 	{
+		DEC_DWORD_STAT(STAT_VulkanOldResourceHeapPages);
 		check(!DeviceMemoryAllocation);
 	}
 
@@ -765,6 +879,8 @@ namespace VulkanRHI
 
 				LLM_TRACK_VULKAN_HIGH_LEVEL_ALLOC(NewResourceAllocation, Size);
 
+				LLM_TRACK_VULKAN_SPARE_MEMORY_GPU(-(int64)Size);
+
 				return NewResourceAllocation;
 			}
 		}
@@ -776,6 +892,8 @@ namespace VulkanRHI
 	{
 		{
 			LLM_TRACK_VULKAN_HIGH_LEVEL_FREE(Allocation);
+
+			LLM_TRACK_VULKAN_SPARE_MEMORY_GPU((int64)Allocation->RequestedSize);
 
 			FScopeLock ScopeLock(&GOldResourcePageLock);
 			ResourceAllocations.RemoveSingleSwap(Allocation, false);
@@ -1415,13 +1533,10 @@ namespace VulkanRHI
 
 		bool bIsTexelBuffer = (BufferUsageFlags & (VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT)) != 0;
 		bool bIsStorageBuffer = (BufferUsageFlags & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) != 0;
-		if (bIsTexelBuffer)
+		if (bIsTexelBuffer || bIsStorageBuffer)
 		{
-			Alignment = FMath::Max(Alignment, (uint32)Limits.minTexelBufferOffsetAlignment);
-		}
-		else if (bIsStorageBuffer)
-		{
-			Alignment = FMath::Max(Alignment, (uint32)Limits.minStorageBufferOffsetAlignment);
+			Alignment = FMath::Max(Alignment, bIsTexelBuffer ? (uint32)Limits.minTexelBufferOffsetAlignment : 0);
+			Alignment = FMath::Max(Alignment, bIsStorageBuffer ? (uint32)Limits.minStorageBufferOffsetAlignment : 0);
 		}
 		else
 		{
@@ -1720,6 +1835,8 @@ namespace VulkanRHI
 
 				LLM_TRACK_VULKAN_HIGH_LEVEL_ALLOC(NewSuballocation, InSize);
 
+				LLM_TRACK_VULKAN_SPARE_MEMORY_GPU(-(int64)InSize);
+
 				//PeakNumAllocations = FMath::Max(PeakNumAllocations, ResourceAllocations.Num());
 				return NewSuballocation;
 			}
@@ -1741,6 +1858,8 @@ namespace VulkanRHI
 			Suballocations.RemoveSingleSwap(Suballocation, false);
 
 			LLM_TRACK_VULKAN_HIGH_LEVEL_FREE(Suballocation);
+
+			LLM_TRACK_VULKAN_SPARE_MEMORY_GPU((int64)Suballocation->RequestedSize);
 
 			FRange NewFree;
 			NewFree.Offset = Suballocation->AllocationOffset;
@@ -2199,10 +2318,11 @@ namespace VulkanRHI
 		FVulkanQueue* Queue = Device->GetGraphicsQueue();
 
 		FEntry Entry;
-		Queue->GetLastSubmittedInfo(Entry.CmdBuffer, Entry.FenceCounter);
-		Entry.Handle = Handle;
 		Entry.StructureType = Type;
+		Queue->GetLastSubmittedInfo(Entry.CmdBuffer, Entry.FenceCounter);
 		Entry.FrameNumber = GVulkanRHIDeletionFrameNumber;
+
+		Entry.Handle = Handle;
 
 		{
 			FScopeLock ScopeLock(&CS);
@@ -2214,6 +2334,25 @@ namespace VulkanRHI
 				});
 			checkf(ExistingEntry == nullptr, TEXT("Attempt to double-delete resource, FDeferredDeletionQueue::EType: %d, Handle: %llu"), (int32)Type, Handle);
 #endif
+
+			Entries.Add(Entry);
+		}
+	}
+
+	void FDeferredDeletionQueue::EnqueueResourceAllocation(TRefCountPtr<VulkanRHI::FOldResourceAllocation> ResourceAllocation)
+	{
+		FVulkanQueue* Queue = Device->GetGraphicsQueue();
+
+		FEntry Entry;
+		Entry.StructureType = EType::ResourceAllocation;
+		Queue->GetLastSubmittedInfo(Entry.CmdBuffer, Entry.FenceCounter);
+		Entry.FrameNumber = GVulkanRHIDeletionFrameNumber;
+
+		Entry.Handle = VK_NULL_HANDLE;
+		Entry.ResourceAllocation = ResourceAllocation;
+
+		{
+			FScopeLock ScopeLock(&CS);
 
 			Entries.Add(Entry);
 		}
@@ -2255,6 +2394,9 @@ namespace VulkanRHI
 				VKSWITCH(ShaderModule);
 				VKSWITCH(Event);
 #undef VKSWITCH
+				case EType::ResourceAllocation:
+					Entry->ResourceAllocation.SafeRelease();
+					break;
 				default:
 					check(0);
 					break;
@@ -2299,7 +2441,9 @@ namespace VulkanRHI
 		Size = InSize;
 		PeakUsed = 0;
 		BufferSuballocation = InDevice->GetResourceHeapManager().AllocateBuffer(InSize,
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT,
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | 
+			VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | 
+			VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 			__FILE__, __LINE__);
 		MappedData = (uint8*)BufferSuballocation->GetMappedPointer();
@@ -2414,7 +2558,8 @@ namespace VulkanRHI
 
 	FSemaphore::FSemaphore(FVulkanDevice& InDevice) :
 		Device(InDevice),
-		SemaphoreHandle(VK_NULL_HANDLE)
+		SemaphoreHandle(VK_NULL_HANDLE),
+		bExternallyOwned(false)
 	{
 		// Create semaphore
 		VkSemaphoreCreateInfo CreateInfo;
@@ -2424,10 +2569,19 @@ namespace VulkanRHI
 		VERIFYVULKANRESULT(VulkanRHI::vkCreateSemaphore(Device.GetInstanceHandle(), &CreateInfo, VULKAN_CPU_ALLOCATOR, &SemaphoreHandle));
 	}
 
+	FSemaphore::FSemaphore(FVulkanDevice& InDevice, const VkSemaphore& InExternalSemaphore) :
+		Device(InDevice),
+		SemaphoreHandle(InExternalSemaphore),
+		bExternallyOwned(true)
+	{}
+
 	FSemaphore::~FSemaphore()
 	{
 		check(SemaphoreHandle != VK_NULL_HANDLE);
-		Device.GetDeferredDeletionQueue().EnqueueResource(VulkanRHI::FDeferredDeletionQueue::EType::Semaphore, SemaphoreHandle);
+		if (!bExternallyOwned)
+		{
+			Device.GetDeferredDeletionQueue().EnqueueResource(VulkanRHI::FDeferredDeletionQueue::EType::Semaphore, SemaphoreHandle);
+		}
 		SemaphoreHandle = VK_NULL_HANDLE;
 	}
 }

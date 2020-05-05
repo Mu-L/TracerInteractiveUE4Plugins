@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ConcertActivityStream.h"
 
@@ -26,8 +26,8 @@ bool FConcertActivityStream::Read(TArray<TSharedPtr<FConcertClientSessionActivit
 	if (!OutErrorMsg.IsEmpty())
 	{
 		OutReadCount = 0;
-		LastErrorMsg = FText();
-		return false; // Not done yet. This allow the caller to deal with the error and decide to continue or not. He will most likely abort, but lets him decide.
+		bAllActivitiesFetched = true;
+		return true; // Done? When an error occurs, the stream is in a unknown state, consider the streaming done.
 	}
 
 	if (!bAllActivitiesFetched)
@@ -101,6 +101,7 @@ void FConcertActivityStream::Fetch(int64 RequestFetchCount)
 						SyncActivity = SyncPackageActivity;
 						EventPayload = MakeUnique<FConcertSessionSerializedPayload>();
 						EventPayload->SetTypedPayload(SyncPackageActivity->EventData);
+						checkf(!SyncPackageActivity->EventData.Package.HasPackageData(), TEXT("The concert activity stream should only stream the package meta data. The package data itself should not be required where ConcertActivityStream is used. (The package data can be very large)"));
 					}
 					else // bIncludeActivityDetails was false/Other type of activities (lock/connection) don't have interesting data to inspect other than the one already provided by the generic activity.
 					{

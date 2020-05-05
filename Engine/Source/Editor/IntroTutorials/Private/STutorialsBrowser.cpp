@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "STutorialsBrowser.h"
 #include "Brushes/SlateDynamicImageBrush.h"
@@ -33,6 +33,8 @@
 class FTutorialListEntry_Tutorial;
 
 DECLARE_DELEGATE_OneParam(FOnCategorySelected, const FString& /* InCategory */);
+
+DEFINE_LOG_CATEGORY_STATIC(LogTutorials, Log, All);
 
 namespace TutorialBrowserConstants
 {
@@ -543,6 +545,7 @@ void STutorialsBrowser::Construct(const FArguments& InArgs)
 	OnClosed = InArgs._OnClosed;
 	OnLaunchTutorial = InArgs._OnLaunchTutorial;
 	ParentWindow = InArgs._ParentWindow;
+	ExternalCategories = InArgs._ExternalCategories;
 
 	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
 	AssetRegistryModule.Get().OnAssetAdded().AddSP(this, &STutorialsBrowser::HandleAssetAdded);
@@ -660,6 +663,12 @@ TSharedPtr<FTutorialListEntry_Category> STutorialsBrowser::RebuildCategories()
 	TSharedPtr<FTutorialListEntry_Category> RootCategory = MakeShareable(new FTutorialListEntry_Category(FOnCategorySelected::CreateSP(this, &STutorialsBrowser::OnCategorySelected)));
 	Categories.Add(RootCategory);
 
+	// add external categories
+	for (const auto& TutorialCategory : ExternalCategories)
+	{
+		Categories.Add(MakeShareable(new FTutorialListEntry_Category(TutorialCategory, FOnCategorySelected::CreateSP(this, &STutorialsBrowser::OnCategorySelected), TAttribute<FText>::Create(TAttribute<FText>::FGetter::CreateSP(this, &STutorialsBrowser::GetSearchText)))));
+	}
+
 	// rebuild categories
 	for(const auto& TutorialCategory : GetDefault<UTutorialSettings>()->Categories)
 	{
@@ -750,6 +759,9 @@ void STutorialsBrowser::RebuildTutorials(TSharedPtr<FTutorialListEntry_Category>
 	TArray<FAssetData> AssetData;
 	AssetRegistry.Get().GetAssets(Filter, AssetData);
 
+	TArray<FString> DeletedTabs;
+	DeletedTabs.Add("LevelEditorToolBox");
+
 	for (const auto& TutorialAsset : AssetData)
 	{
 		UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *TutorialAsset.ObjectPath.ToString());
@@ -760,7 +772,29 @@ void STutorialsBrowser::RebuildTutorials(TSharedPtr<FTutorialListEntry_Category>
 			//UEditorTutorial* Tutorial = Blueprint->GeneratedClass->GetDefaultObject<UEditorTutorial>();
 			if(!Tutorial->bHideInBrowser)
 			{
-				Tutorials.Add(MakeShareable(new FTutorialListEntry_Tutorial(Tutorial, FOnTutorialSelected::CreateSP(this, &STutorialsBrowser::OnTutorialSelected), TAttribute<FText>::Create(TAttribute<FText>::FGetter::CreateSP(this, &STutorialsBrowser::GetSearchText)))));
+				bool bUsesDeletedTab = false;
+				for (const FTutorialStage& Stage : Tutorial->Stages)
+				{
+					for (const FTutorialWidgetContent& TutorialWidgetContent : Stage.WidgetContent)
+					{
+						if (DeletedTabs.Contains(TutorialWidgetContent.WidgetAnchor.TabToFocusOrOpen))
+						{
+							bUsesDeletedTab = true;
+							UE_LOG(LogTutorials, Warning, TEXT("Tutorial uses deleted tab: %s, tutorial: %s"), *TutorialWidgetContent.WidgetAnchor.TabToFocusOrOpen, *Blueprint->GetFullName());
+							break;
+						}
+					}
+
+					if (bUsesDeletedTab)
+					{
+						break;
+					}
+				}
+
+				if (!bUsesDeletedTab)
+				{
+					Tutorials.Add(MakeShareable(new FTutorialListEntry_Tutorial(Tutorial, FOnTutorialSelected::CreateSP(this, &STutorialsBrowser::OnTutorialSelected), TAttribute<FText>::Create(TAttribute<FText>::FGetter::CreateSP(this, &STutorialsBrowser::GetSearchText)))));
+				}
 			}
 		}
 	}

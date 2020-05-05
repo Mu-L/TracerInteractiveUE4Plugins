@@ -1,9 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Rendering/StaticMeshVertexBuffer.h"
 #include "EngineUtils.h"
 #include "Components.h"
 #include "GPUSkinCache.h"
+#include "ProfilingDebugging/LoadTimeTracker.h"
 
 FStaticMeshVertexBuffer::FStaticMeshVertexBuffer() :
 	TangentsData(nullptr),
@@ -270,7 +271,7 @@ FVertexBufferRHIRef FStaticMeshVertexBuffer::CreateTangentsRHIBuffer_Internal()
 {
 	if (GetNumVertices())
 	{
-		FResourceArrayInterface* RESTRICT ResourceArray = TangentsData ? TangentsData->GetResourceArray() : nullptr;
+ 		FResourceArrayInterface* RESTRICT ResourceArray = TangentsData ? TangentsData->GetResourceArray() : nullptr;
 		const uint32 SizeInBytes = ResourceArray ? ResourceArray->GetResourceDataSize() : 0;
 		FRHIResourceCreateInfo CreateInfo(ResourceArray);
 		CreateInfo.bWithoutNativeResource = !TangentsData;
@@ -327,8 +328,38 @@ FVertexBufferRHIRef FStaticMeshVertexBuffer::CreateTexCoordRHIBuffer_Async()
 	return CreateTexCoordRHIBuffer_Internal<false>();
 }
 
+void FStaticMeshVertexBuffer::CopyRHIForStreaming(const FStaticMeshVertexBuffer& Other, bool InAllowCPUAccess)
+{
+	// Copy serialized properties.
+	TangentsStride = Other.TangentsStride;
+	TexcoordStride = Other.TexcoordStride;
+	NumTexCoords = Other.NumTexCoords;
+	NumVertices = Other.NumVertices;
+	bUseFullPrecisionUVs = Other.bUseFullPrecisionUVs;
+	bUseHighPrecisionTangentBasis = Other.bUseHighPrecisionTangentBasis;
+
+	// Handle CPU access.
+	if (InAllowCPUAccess)
+	{
+		NeedsCPUAccess = Other.NeedsCPUAccess;
+		AllocateData(NeedsCPUAccess);
+	}
+	else
+	{
+		NeedsCPUAccess = false;
+	}
+
+	// Copy resource references.
+	TangentsVertexBuffer.VertexBufferRHI = Other.TangentsVertexBuffer.VertexBufferRHI;
+	TexCoordVertexBuffer.VertexBufferRHI = Other.TexCoordVertexBuffer.VertexBufferRHI;
+	TangentsSRV = Other.TangentsSRV;
+	TextureCoordinatesSRV = Other.TextureCoordinatesSRV;
+}
+
 void FStaticMeshVertexBuffer::InitRHI()
 {
+	SCOPED_LOADTIMER(FStaticMeshVertexBuffer_InitRHI);
+
 	TangentsVertexBuffer.VertexBufferRHI = CreateTangentsRHIBuffer_RenderThread();
 	TexCoordVertexBuffer.VertexBufferRHI = CreateTexCoordRHIBuffer_RenderThread();
 	if (TangentsVertexBuffer.VertexBufferRHI && (RHISupportsManualVertexFetch(GMaxRHIShaderPlatform) || IsGPUSkinCacheAvailable(GMaxRHIShaderPlatform)))

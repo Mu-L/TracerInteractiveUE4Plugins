@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreTypes.h"
@@ -44,6 +44,9 @@ struct CORE_API FSequencerObjectVersion
 
 		// Change the linear keys so they act the old way and interpolate always.
 		ModifyLinearKeysForOldInterp,
+
+		// Full Manual serialization of float channel
+		SerializeFloatChannelCompletely,
 
 		// -----<new versions can be added above this line>-------------------------------------------------
 		VersionPlusOne,

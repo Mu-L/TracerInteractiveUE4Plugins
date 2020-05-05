@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -43,7 +43,7 @@ public:
 	}
 
 	/**
-	 * An even should return FReply::Handled().SetMousePos to ask Slate to move the mouse cursor to a different location
+	 * An event should return FReply::Handled().SetMousePos to ask Slate to move the mouse cursor to a different location
 	 */
 	FReply& SetMousePos( const FIntPoint& NewMousePos );
 
@@ -58,6 +58,13 @@ public:
 
 	/** An event should return a FReply::Handled().ClearUserFocus() to ask the system to clear user focus*/
 	FReply& ClearUserFocus(EFocusCause ReasonFocusIsChanging, bool bInAllUsers = false);
+
+	/** 
+	 *	An event should rarely invoke FReply::CancelFocusRequest. This will change the reply
+	 *  so that it no longer contains a request for the system to set or clear focus. 
+	 *  This is most useful when a reply has been cached for use in async operations.
+	 */
+	FReply& CancelFocusRequest();
 
 	/** An event should return FReply::Handled().SetNavigation( NavigationType ) as a means of asking the system to attempt a navigation*/
 	FReply& SetNavigation(EUINavigation InNavigationType, const ENavigationGenesis InNavigationGenesis, const ENavigationSource InNavigationSource = ENavigationSource::FocusedWidget)
@@ -177,16 +184,16 @@ public:
 	bool ShouldThrottle() const { return !bPreventThrottling; }
 
 	/** Returns the widget that the mouse should be locked to (if any) */
-	const TSharedPtr<SWidget>& GetMouseLockWidget() const { return MouseLockWidget; }
+	TSharedPtr<SWidget> GetMouseLockWidget() const { return MouseLockWidget.Pin(); }
 
 	/** When not nullptr, user focus has been requested to be set on the FocusRecipient. */
-	const TSharedPtr<SWidget>& GetUserFocusRecepient() const { return FocusRecipient; }
+	TSharedPtr<SWidget> GetUserFocusRecepient() const { return FocusRecipient.Pin(); }
 
 	/** Get the reason that a focus change is being requested. */
 	EFocusCause GetFocusCause() const { return FocusChangeReason; }
 
 	/** If the event replied with a request to capture the mouse, this returns the desired mouse captor. Otherwise returns an invalid pointer. */
-	const TSharedPtr<SWidget>& GetMouseCaptor() const { return MouseCaptor; }	
+	TSharedPtr<SWidget> GetMouseCaptor() const { return MouseCaptor.Pin(); }
 
 	/** Get the navigation type (Invalid if no navigation is requested). */
 	EUINavigation GetNavigationType() const { return NavigationType; }
@@ -198,7 +205,7 @@ public:
 	ENavigationSource GetNavigationSource() const { return NavigationSource; }
 
 	/** Get the widget that is the navigation destination. */
-	const TSharedPtr<SWidget>& GetNavigationDestination() const { return NavigationDestination; }
+	TSharedPtr<SWidget> GetNavigationDestination() const { return NavigationDestination.Pin(); }
 
 	/** @return the Content that we should use for the Drag and Drop operation; Invalid SharedPtr if a drag and drop operation is not requested*/
 	const TSharedPtr<FDragDropOperation>& GetDragDropContent() const { return DragDropContent; }
@@ -207,7 +214,7 @@ public:
 	bool ShouldEndDragDrop() const { return bEndDragDrop; }
 
 	/** @return a widget for which to detect a drag; Invalid SharedPtr if no drag detection requested */
-	const TSharedPtr<SWidget>& GetDetectDragRequest() const { return DetectDragForWidget; }  
+	TSharedPtr<SWidget> GetDetectDragRequest() const { return DetectDragForWidget.Pin(); }
 
 	/** @return the mouse button for which we are detecting a drag */
 	FKey GetDetectDragRequestButton() const { return DetectDragForMouseButton; }
@@ -272,12 +279,12 @@ private:
 private:
 
 	TOptional<FIntPoint> RequestedMousePos;
-	TSharedPtr<SWidget> EventHandler;
-	TSharedPtr<SWidget> MouseCaptor;
-	TSharedPtr<SWidget> FocusRecipient;
-	TSharedPtr<SWidget> MouseLockWidget;
-	TSharedPtr<SWidget> DetectDragForWidget;
-	TSharedPtr<SWidget> NavigationDestination;
+	TWeakPtr<SWidget> EventHandler;
+	TWeakPtr<SWidget> MouseCaptor;
+	TWeakPtr<SWidget> FocusRecipient;
+	TWeakPtr<SWidget> MouseLockWidget;
+	TWeakPtr<SWidget> DetectDragForWidget;
+	TWeakPtr<SWidget> NavigationDestination;
 	FKey DetectDragForMouseButton;
 	TSharedPtr<FDragDropOperation> DragDropContent;
 	EFocusCause FocusChangeReason;

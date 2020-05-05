@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "OSCClient.h"
 
 #include "Common/UdpSocketBuilder.h"
@@ -22,6 +22,11 @@ void UOSCClient::Connect()
 {
 	check(!ClientProxy.IsValid());
 	ClientProxy.Reset(new FOSCClientProxy(GetName()));
+}
+
+bool UOSCClient::IsActive() const
+{
+	return ClientProxy.IsValid() && ClientProxy->IsActive();
 }
 
 void UOSCClient::GetSendIPAddress(FString& InIPAddress, int32& Port)

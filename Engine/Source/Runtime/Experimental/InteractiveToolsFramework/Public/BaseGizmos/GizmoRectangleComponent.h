@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -37,6 +37,9 @@ public:
 
 	UPROPERTY(EditAnywhere, Category = Options)
 	float Thickness = 2.0f;
+
+	UPROPERTY(EditAnywhere, Category = Options)
+	uint8 SegmentFlags = 0x1 | 0x2 | 0x4 | 0x8;
 
 
 private:

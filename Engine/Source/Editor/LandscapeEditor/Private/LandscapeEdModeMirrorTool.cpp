@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "InputCoreTypes.h"
@@ -46,7 +46,8 @@ public:
 	}
 
 	virtual const TCHAR* GetToolName() override { return TEXT("Mirror"); }
-	virtual FText GetDisplayName() override { return FText(); /*NSLOCTEXT("UnrealEd", "LandscapeTool_Mirror", "Mirror Landscape");*/ };
+	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeTool_Mirror", "Mirror Landscape"); };
+	virtual FText GetDisplayMessage() override { return NSLOCTEXT("UnrealEd", "LandscapeTool_Mirror_Message", "Copy one side of a landscape to the other side so that you can easily mirror or rotate the landscape geometry along the X or Y axis."); };
 
 	virtual void SetEditRenderType() override { GLandscapeEditRenderMode = ELandscapeEditRenderMode::None | (GLandscapeEditRenderMode & ELandscapeEditRenderMode::BitMaskForMask); }
 	virtual bool SupportsMask() override { return false; }
@@ -669,9 +670,8 @@ public:
 	void CenterMirrorPoint()
 	{
 		ULandscapeInfo* const LandscapeInfo = EdMode->CurrentToolTarget.LandscapeInfo.Get();
-		ALandscapeProxy* const LandscapeProxy = LandscapeInfo->GetLandscapeProxy();
 		int32 MinX, MinY, MaxX, MaxY;
-		if (LandscapeInfo->GetLandscapeExtent(MinX, MinY, MaxX, MaxY))
+		if (LandscapeInfo && LandscapeInfo->GetLandscapeExtent(MinX, MinY, MaxX, MaxY))
 		{
 			EdMode->UISettings->MirrorPoint = FVector2D((float)(MinX + MaxX) / 2.0f, (float)(MinY + MaxY) / 2.0f);
 		}

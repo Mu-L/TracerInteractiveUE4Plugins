@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -247,6 +247,8 @@ class GAMEPLAYABILITIES_API UAbilitySystemGlobals : public UObject
 			ActivateFailNetworkingTag = FGameplayTag::RequestGameplayTag(ActivateFailNetworkingName);
 		}
 	}
+
+	void InitTargetDataScriptStructCache();
 
 	/** Initialize GameplayCue Parameters */
 	virtual void InitGameplayCueParameters(FGameplayCueParameters& CueParameters, const FGameplayEffectSpecForRPC &Spec);

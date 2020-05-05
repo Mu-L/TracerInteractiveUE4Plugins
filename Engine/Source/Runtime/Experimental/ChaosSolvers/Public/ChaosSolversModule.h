@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -15,6 +15,7 @@
 #include "PhysicsCoreTypes.h"
 #include "Chaos/Framework/MultiBufferResource.h"
 #include "Chaos/Declares.h"
+#include "Chaos/PhysicalMaterials.h"
 
 /** Classes that want to set the solver actor class can implement this. */
 class IChaosSolverActorClassProvider
@@ -77,6 +78,13 @@ private:
 	FSolverStateStorage& operator =(FSolverStateStorage&& InSteal) = default;
 
 };
+
+enum class ESolverFlags : uint8
+{
+	None = 0,
+	Standalone = 1 << 0
+};
+ENUM_CLASS_FLAGS(ESolverFlags);
 
 class CHAOSSOLVERS_API FChaosSolversModule : public IModuleInterface
 {
@@ -148,9 +156,21 @@ public:
 	 * Should be called from the game thread to create a new solver. After creation, non-standalone solvers
 	 * are dispatched to the physics thread automatically if it is available
 	 *
+	 * @param InOwner Ptr to some owning UObject. The module doesn't use this but allows calling code to organize solver ownership
 	 * @param bStandalone Whether the solver is standalone (not sent to physics thread - updating left to caller)
 	 */
-	Chaos::FPhysicsSolver* CreateSolver(bool bStandalone = false);
+	Chaos::FPhysicsSolver* CreateSolver(UObject* InOwner
+#if CHAOS_CHECKED
+		, const FName& DebugName = NAME_None
+#endif
+	);
+	Chaos::FPhysicsSolver* CreateSolver(UObject* InOwner, ESolverFlags InFlags
+#if CHAOS_CHECKED
+		, const FName& DebugName = NAME_None
+#endif
+	);
+
+	void MigrateSolver(Chaos::FPhysicsSolver* InSolver, const UObject* InNewOwner);
 
 	Chaos::EMultiBufferMode GetBufferModeFromThreadingModel(Chaos::EThreadingMode ThreadingMode) const
 	{
@@ -217,11 +237,19 @@ public:
 	 */
 	void DestroySolver(Chaos::FPhysicsSolver* InState);
 
+	/** Retrieve the master list of solvers. This contains all owned, unowned and standalone solvers */
+	const TArray<Chaos::FPhysicsSolver*>& GetAllSolvers() const;
+
 	/**
 	 * Read access to the current solver-state objects, be aware which thread owns this data when
 	 * attempting to use this. Physics thread will query when spinning up to get current world state
 	 */
-	const TArray<Chaos::FPhysicsSolver*>& GetSolvers() const { return Solvers; }
+	TArray<const Chaos::FPhysicsSolver*> GetSolvers(const UObject* InOwner) const;
+	void GetSolvers(const UObject* InOwner, TArray<const Chaos::FPhysicsSolver*>& OutSolvers) const;
+
+	/** Non-const access to the solver array is private - only the module should ever modify the storage lists */
+	TArray<Chaos::FPhysicsSolver*> GetSolversMutable(const UObject* InOwner);
+	void GetSolversMutable(const UObject* InOwner, TArray<Chaos::FPhysicsSolver*>& OutSolvers);
 
 	/**
 	 * Outputs statistics for the solver hierarchies. Currently engine calls into this
@@ -284,6 +312,21 @@ public:
 	Chaos::EThreadingMode GetDesiredThreadingMode() const;
 	Chaos::EMultiBufferMode GetDesiredBufferingMode() const;
 
+	/** Events that the material manager will emit for us to update our threaded data */
+	void OnUpdateMaterial(Chaos::FMaterialHandle InHandle);
+	void OnCreateMaterial(Chaos::FMaterialHandle InHandle);
+	void OnDestroyMaterial(Chaos::FMaterialHandle InHandle);
+
+	void OnUpdateMaterialMask(Chaos::FMaterialMaskHandle InHandle);
+	void OnCreateMaterialMask(Chaos::FMaterialMaskHandle InHandle);
+	void OnDestroyMaterialMask(Chaos::FMaterialMaskHandle InHandle);
+
+	/** Calls from engine tick notifying how the frame is updated */
+	void DispatchGlobalCommands();
+
+	/** Gets a list of pending prerequisites required before proceeding with a solver update */
+	void GetSolverUpdatePrerequisites(FGraphEventArray& InPrerequisiteContainer);
+
 private:
 
 	/** Safe method for always getting a settings provider (from the external caller or an internal default) */
@@ -308,14 +351,12 @@ private:
 	// Core delegate signaling app shutdown, clean up and spin down threads before exit.
 	FDelegateHandle PreExitHandle;
 
-	// Allocated storage for solvers and proxies. Existing on the module makes it easier for hand off in multi threaded mode.
-	// To actually use a solver, call CreateSolver to receive one of these and use it to hold the solver. In the event
-	// of switching to multi threaded mode these will be handed over to the other thread.
-	//
-	// Where these objects are valid for interaction depends on the current threading mode. Use IsPersistentTaskRunning to
-	// check whether the physics thread owns these before manipulating. When adding/removing solver or proxy items in
-	// multi threaded mode the physics thread must also be notified of the change.
-	TArray<Chaos::FPhysicsSolver*> Solvers;
+	// Flat list of every solver the module has created.
+	TArray<Chaos::FPhysicsSolver*> AllSolvers;
+
+	// Map of solver owners to the solvers they own. Nullptr is a valid 'owner' in that it's a map
+	// key for unowned, standalone solvers
+	TMap<const UObject*, TArray<Chaos::FPhysicsSolver*>> SolverMap;
 
 	// Lock for the above list to ensure we don't delete solvers out from underneath other threads
 	// or mess up the solvers array during use.
@@ -329,6 +370,9 @@ private:
 
 	/** SolverActorClass is require to be this class or a child thereof */
 	UClass* SolverActorRequiredBaseClass;
+
+	/** Reference to an in progress or completed task to run global and thread commands (a prerequisite for any solver ticking) */
+	FGraphEventRef GlobalCommandTaskEventRef;
 
 #if STATS
 	// Stored stats from the physics thread
@@ -348,6 +392,15 @@ private:
 
 	// Whether we're initialized, gates work in Initialize() and Shutdown()
 	bool bModuleInitialized;
+
+	/** Event binding handles */
+	FDelegateHandle OnCreateMaterialHandle;
+	FDelegateHandle OnDestroyMaterialHandle;
+	FDelegateHandle OnUpdateMaterialHandle;
+
+	FDelegateHandle OnCreateMaterialMaskHandle;
+	FDelegateHandle OnDestroyMaterialMaskHandle;
+	FDelegateHandle OnUpdateMaterialMaskHandle;
 };
 
 /**

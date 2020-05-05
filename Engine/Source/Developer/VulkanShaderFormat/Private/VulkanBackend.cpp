@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // This code is largely based on that in ir_print_glsl_visitor.cpp from
 // glsl-optimizer.
@@ -772,6 +772,9 @@ class FGenerateVulkanVisitor : public ir_visitor
 	/** Found dFdx or dFdy */
 	bool bUsesDXDY;
 
+	// True if the discard instruction was encountered.
+	bool bUsesDiscard;
+
 	/** Found image atomic functions (e.g. imageAtomicAdd) */
 	bool bUsesImageWriteAtomic;
 
@@ -1115,10 +1118,12 @@ class FGenerateVulkanVisitor : public ir_visitor
 		const char * const GLSLmode_str[] = { "", "uniform ", "in ", "out ", "inout ", "in ", "", "shared ", "", "", "uniform_ref " };
 		const char * const ESVSmode_str[] = { "", "uniform ", "attribute ", "varying ", "inout ", "in ", "", "shared " };
 		const char * const ESFSmode_str[] = { "", "uniform ", "varying ", "attribute ", "", "in ", "", "shared " };
-		const char * const interp_str[] = { "", "smooth ", "flat ", "noperspective " };
+		const char * const GLSLinterp_str[] = { "", "smooth ", "flat ", "noperspective " };
+		const char * const ES31interp_str[] = { "", "smooth ", "flat ", "" };
 		const char * const layout_str[] = { "", "layout(origin_upper_left) ", "layout(pixel_center_integer) ", "layout(origin_upper_left,pixel_center_integer) " };
 
 		const char * const * mode_str = bIsES ? ((ParseState->target == vertex_shader) ? ESVSmode_str : ESFSmode_str) : GLSLmode_str;
+		const char * const * interp_str = bIsES31 ? ES31interp_str : GLSLinterp_str;
 
 		// Check for an initialized const variable
 		// If var is read-only and initialized, set it up as an initialized const
@@ -2325,6 +2330,7 @@ class FGenerateVulkanVisitor : public ir_visitor
 			ralloc_asprintf_append(buffer, ") ");
 		}
 		ralloc_asprintf_append(buffer, "discard");
+		bUsesDiscard = true;
 	}
 
 	bool try_conditional_move(ir_if *expr)
@@ -3272,7 +3278,7 @@ class FGenerateVulkanVisitor : public ir_visitor
 	*/
 	void print_layout(_mesa_glsl_parse_state *state)
 	{
-		if (early_depth_stencil)
+		if (early_depth_stencil && this->bUsesDiscard == false)
 		{
 			ralloc_asprintf_append(buffer, "layout(early_fragment_tests) in;\n");
 		}
@@ -3429,6 +3435,7 @@ public:
 		, loop_count(0)
 		, bUsesES2TextureLODExtension(false)
 		, bUsesDXDY(false)
+		, bUsesDiscard(false)
 		, bUsesImageWriteAtomic(false)
 	{
 		printable_names = hash_table_ctor(32, hash_table_pointer_hash, hash_table_pointer_compare);
@@ -3489,7 +3496,8 @@ public:
 
 			const char* DefaultPrecision = bDefaultPrecisionIsHalf ? "mediump" : "highp";
 			ralloc_asprintf_append(buffer, "precision %s float;\n", DefaultPrecision);
-			ralloc_asprintf_append(buffer, "precision %s int;\n", DefaultPrecision);
+			// always use highp for integers as shaders use them as bit storage
+			ralloc_asprintf_append(buffer, "precision %s int;\n", "highp");
 			//ralloc_asprintf_append(buffer, "\n#ifndef DONTEMITSAMPLERDEFAULTPRECISION\n");
 			ralloc_asprintf_append(buffer, "precision %s sampler;\n", DefaultPrecision);
 			ralloc_asprintf_append(buffer, "precision %s sampler2D;\n", DefaultPrecision);
@@ -4201,13 +4209,16 @@ static void ConfigureInOutVariableLayout(EHlslShaderFrequency Frequency,
 	{
 		Variable->explicit_location = 1;
 		Variable->semantic = ralloc_strdup(Variable, Semantic);
+		unsigned int NumVectors = (Variable->type->matrix_columns > 1) ? Variable->type->matrix_columns : 1;
 		if (Mode == ir_var_in)
 		{
-			Variable->location = ParseState->next_in_location_slot++;
+			Variable->location = ParseState->next_in_location_slot;
+			ParseState->next_in_location_slot += NumVectors;
 		}
 		else
 		{
-			Variable->location = ParseState->next_out_location_slot++;
+			Variable->location = ParseState->next_out_location_slot;
+			ParseState->next_out_location_slot += NumVectors;
 		}
 	}
 }
@@ -4311,7 +4322,7 @@ static ir_rvalue* GenShaderInputSemantic(
 
 							return TempVariableDeref->clone(ParseState, NULL);
 						}
-						else if (ParseState->adjust_clip_space_dx11_to_opengl && SystemValues[i].bApplyClipSpaceAdjustment)
+						else if (SystemValues[i].bApplyClipSpaceAdjustment)
 						{
 							// incoming gl_FrontFacing. Make it (!gl_FrontFacing), due to vertical flip in OpenGL
 							return new(ParseState)ir_expression(ir_unop_logic_not, glsl_type::bool_type, VariableDeref, NULL);
@@ -5176,7 +5187,7 @@ static void GenShaderOutputForVariable(
 					);
 			}
 
-			// GLSL doesn't support pow2 partitioning, so we treate pow2 as integer partitioning and
+			// GLSL doesn't support pow2 partitioning, so we treat pow2 as integer partitioning and
 			// manually compute the next power of two via exp2(pow(ceil(log2(Src)));
 			if (ApplyClampPowerOfTwo)
 			{
@@ -5364,8 +5375,8 @@ bool FVulkanCodeBackend::GenerateMain(
 	exec_list* Instructions,
 	_mesa_glsl_parse_state* ParseState)
 {
-	// Force coordinate system adjustment from GLSL->Vulkan
-	ParseState->adjust_clip_space_dx11_to_opengl = true;
+	// Don't force coordinate system adjustment from GLSL->Vulkan as we transition to flipping the viewport instead of gl_Position.y coordinate
+	ParseState->adjust_clip_space_dx11_to_opengl = false;
 
 	{
 		// Set up origin_upper_left for gl_FragCoord, depending on HLSLCC_DX11ClipSpace flag presence.
@@ -5374,7 +5385,8 @@ bool FVulkanCodeBackend::GenerateMain(
 		{
 			if (FCStringAnsi::Stricmp(SystemValues[i].GlslName, "gl_FragCoord") == 0)
 			{
-				SystemValues[i].bOriginUpperLeft = !ParseState->adjust_clip_space_dx11_to_opengl;
+				// Always disable layout(origin_upper_left) attribute as we transition to flipping the viewport instead of gl_Position.y coordinate
+				SystemValues[i].bOriginUpperLeft = false;// !ParseState->adjust_clip_space_dx11_to_opengl;// false;
 				break;
 			}
 		}
@@ -5478,6 +5490,11 @@ bool FVulkanCodeBackend::GenerateMain(
 						);
 					break;
 				case ir_var_out:
+					if (Frequency == HSF_PixelShader && Variable->semantic && (strcmp(Variable->semantic, "SV_Depth") == 0))
+					{
+						bExplicitDepthWrites = true;
+					}
+					
 					ArgVarDeref = GenShaderOutput(
 						Frequency,
 						ParseState,
@@ -5626,7 +5643,7 @@ bool FVulkanCodeBackend::GenerateMain(
 		MainSig->body.push_tail(new(ParseState)ir_call(EntryPointSig, EntryPointReturn, &ArgInstructions));
 		MainSig->body.append_list(&PostCallInstructions);
 		MainSig->maxvertexcount = EntryPointSig->maxvertexcount;
-		MainSig->is_early_depth_stencil = EntryPointSig->is_early_depth_stencil;
+		MainSig->is_early_depth_stencil = (EntryPointSig->is_early_depth_stencil && !bExplicitDepthWrites);
 		MainSig->wg_size_x = EntryPointSig->wg_size_x;
 		MainSig->wg_size_y = EntryPointSig->wg_size_y;
 		MainSig->wg_size_z = EntryPointSig->wg_size_z;

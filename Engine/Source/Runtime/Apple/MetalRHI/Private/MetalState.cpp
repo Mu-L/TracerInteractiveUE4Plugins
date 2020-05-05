@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	MetalState.cpp: Metal state implementation.
@@ -349,7 +349,13 @@ static FMetalSampler FindOrCreateSamplerState(mtlpp::Device Device, const FSampl
 		Desc.SetRAddressMode(TranslateWrapMode(Initializer.AddressW));
 		Desc.SetLodMinClamp(Initializer.MinMipLevel);
 		Desc.SetLodMaxClamp(Initializer.MaxMipLevel);
+#if PLATFORM_TVOS
+		Desc.SetCompareFunction(mtlpp::CompareFunction::Never);	
+#elif PLATFORM_IOS
+		Desc.SetCompareFunction(Device.SupportsFeatureSet(mtlpp::FeatureSet::iOS_GPUFamily3_v1) ? TranslateSamplerCompareFunction(Initializer.SamplerComparisonFunction) : mtlpp::CompareFunction::Never);
+#else
 		Desc.SetCompareFunction(TranslateSamplerCompareFunction(Initializer.SamplerComparisonFunction));
+#endif
 #if PLATFORM_MAC
 		Desc.SetBorderColor(Initializer.BorderColor == 0 ? mtlpp::SamplerBorderColor::TransparentBlack : mtlpp::SamplerBorderColor::OpaqueWhite);
 #endif
@@ -530,8 +536,8 @@ FMetalBlendState::FMetalBlendState(const FBlendStateInitializerRHI& Initializer)
 		{
 			Key = &BlendSettingsToUniqueKeyMap.Add(BlendBitMask, NextKey++);
 
-			// only giving 5 bits to the key, since we need to pack a bunch of them into 64 bits
-			checkf(NextKey < 32, TEXT("Too many unique blend states to fit into the PipelineStateHash"));
+			// only giving limited bits to the key, since we need to pack 8 of them into a key
+			checkf(NextKey < (1 << NumBits_BlendState), TEXT("Too many unique blend states to fit into the PipelineStateHash [%d allowed]"), 1 << NumBits_BlendState);
 		}
 		// set the key
 		RenderTargetStates[RenderTargetIndex].BlendStateKey = *Key;

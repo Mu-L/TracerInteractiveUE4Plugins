@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithCameraImporter.h"
 
@@ -39,9 +39,9 @@ AActor* FDatasmithCameraImporter::ImportCameraActor( const TSharedRef< IDatasmit
 	return CameraActor;
 }
 
-UCineCameraComponent* FDatasmithCameraImporter::ImportCineCameraComponent( const TSharedRef< IDatasmithCameraActorElement >& CameraElement, FDatasmithImportContext& ImportContext, UObject* Outer )
+UCineCameraComponent* FDatasmithCameraImporter::ImportCineCameraComponent( const TSharedRef< IDatasmithCameraActorElement >& CameraElement, FDatasmithImportContext& ImportContext, UObject* Outer, FDatasmithActorUniqueLabelProvider& UniqueNameProvider )
 {
-	UCineCameraComponent* CineCameraComponent = Cast< UCineCameraComponent >( FDatasmithActorImporter::ImportSceneComponent( UCineCameraComponent::StaticClass(), CameraElement, ImportContext, Outer ) );
+	UCineCameraComponent* CineCameraComponent = Cast< UCineCameraComponent >( FDatasmithActorImporter::ImportSceneComponent( UCineCameraComponent::StaticClass(), CameraElement, ImportContext, Outer, UniqueNameProvider ) );
 
 	if ( !CineCameraComponent )
 	{
@@ -110,7 +110,7 @@ void FDatasmithCameraImporter::SetupCineCameraComponent( UCineCameraComponent* C
 	CameraTemplate->CurrentFocalLength = CameraElement->GetFocalLength();
 	CameraTemplate->CurrentAperture = CameraElement->GetFStop();
 
-	CameraTemplate->FocusSettings.FocusMethod = CameraElement->GetEnableDepthOfField() ? ECameraFocusMethod::Manual : ECameraFocusMethod::None;
+	CameraTemplate->FocusSettings.FocusMethod = CameraElement->GetEnableDepthOfField() ? ECameraFocusMethod::Manual : ECameraFocusMethod::DoNotOverride;
 	CameraTemplate->FocusSettings.ManualFocusDistance = CameraElement->GetFocusDistance();
 
 	CameraTemplate->PostProcessSettings = FDatasmithPostProcessImporter::CopyDatasmithPostProcessToUEPostProcess( CameraElement->GetPostProcess() );

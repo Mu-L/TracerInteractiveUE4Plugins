@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Kismet/KismetMathLibrary.h"
 #include "EngineGlobals.h"
@@ -126,6 +126,16 @@ void UKismetMathLibrary::ReportError_ProjectVectorOnToVector()
 void UKismetMathLibrary::ReportError_Divide_Vector2DFloat()
 {
 	FFrame::KismetExecutionMessage(TEXT("Divide by zero: Divide_Vector2DFloat"), ELogVerbosity::Warning, DivideByZeroWarning);
+}
+
+void UKismetMathLibrary::ReportError_Divide_IntPointOnInt()
+{
+	FFrame::KismetExecutionMessage(TEXT("Divide by zero: Divide_IntPointInt"), ELogVerbosity::Warning, DivideByZeroWarning);
+}
+
+void UKismetMathLibrary::ReportError_Divide_IntPointOnIntPoint()
+{
+	FFrame::KismetExecutionMessage(TEXT("Divide by zero: Divide_IntPointIntPoint"), ELogVerbosity::Warning, DivideByZeroWarning);
 }
 
 void UKismetMathLibrary::ReportError_DaysInMonth()

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SUSDStage.h"
 
@@ -7,17 +7,20 @@
 #include "SUSDPrimInfo.h"
 #include "SUSDStageInfo.h"
 #include "SUSDStageTreeView.h"
-#include "UnrealUSDWrapper.h"
+#include "USDErrorUtils.h"
+#include "USDImportOptions.h"
 #include "USDImporter.h"
 #include "USDLayerUtils.h"
 #include "USDStageActor.h"
 #include "USDStageModule.h"
 #include "USDTypesConversion.h"
+#include "UnrealUSDWrapper.h"
 
 #include "Dialogs/DlgPickPath.h"
 #include "EditorStyleSet.h"
 #include "Engine/World.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "LevelEditor.h"
 #include "Modules/ModuleManager.h"
 #include "ScopedTransaction.h"
 #include "UObject/GCObjectScopeGuard.h"
@@ -33,6 +36,7 @@
 #include "USDIncludesStart.h"
 
 #include "pxr/pxr.h"
+#include "pxr/usd/kind/registry.h"
 #include "pxr/usd/sdf/copyUtils.h"
 #include "pxr/usd/sdf/schema.h"
 #include "pxr/usd/usd/editTarget.h"
@@ -63,11 +67,6 @@ void SUsdStage::Construct( const FArguments& InArgs )
 	if ( UsdStageActor.IsValid() )
 	{
 		UsdStage = UsdStageActor->GetUsdStage();
-
-		if ( !UsdStage.Get() )
-		{
-			UsdStageActor.Reset();
-		}
 	}
 
 	ChildSlot
@@ -93,7 +92,6 @@ void SUsdStage::Construct( const FArguments& InArgs )
 				.BorderImage( FEditorStyle::GetBrush(TEXT("ToolPanel.GroupBorder")) )
 				[
 					SAssignNew( UsdStageInfoWidget, SUsdStageInfo, UsdStageActor.Get() )
-					.OnInitialLoadSetChanged( this, &SUsdStage::OnInitialLoadSetChanged )
 				]
 			]
 
@@ -153,6 +151,8 @@ void SUsdStage::SetupStageActorDelegates()
 {
 	if ( UsdStageActor.IsValid() )
 	{
+		ClearStageActorDelegates();
+
 		OnPrimChangedHandle = UsdStageActor->OnPrimChanged.AddLambda(
 			[ this ]( const FString& PrimPath, bool bResync )
 			{
@@ -161,49 +161,40 @@ void SUsdStage::SetupStageActorDelegates()
 					this->UsdStageTreeView->RefreshPrim( PrimPath, bResync );
 				}
 
-				if ( this->UsdPrimInfoWidget )
+				if ( this->UsdPrimInfoWidget && UsdStageActor.IsValid() && SelectedPrimPath.Equals( PrimPath, ESearchCase::IgnoreCase ) )
 				{
 					this->UsdPrimInfoWidget->SetPrimPath( UsdStageActor->GetUsdStage(), *PrimPath );
 				}
 			}
 		);
 
-		if ( !OnStageChangedHandle.IsValid() )
-		{
-			OnStageChangedHandle = UsdStageActor->OnStageChanged.AddLambda(
-				[ this ]()
+		OnStageChangedHandle = UsdStageActor->OnStageChanged.AddLambda(
+			[ this ]()
+			{
+				if ( UsdStageActor.IsValid() )
 				{
-					if ( UsdStageActor.IsValid() )
+					if ( this->UsdPrimInfoWidget )
 					{
-						if ( this->UsdStageInfoWidget )
-						{
-							this->UsdStageInfoWidget->RefreshStageInfos( UsdStageActor.Get() );
-						}
-
-						if ( this->UsdStageTreeView )
-						{
-							this->UsdStageTreeView->Refresh( UsdStageActor.Get() );
-							this->UsdStageTreeView->RequestTreeRefresh();
-						}
-
-						if ( this->UsdPrimInfoWidget )
-						{
-							this->UsdPrimInfoWidget->SetPrimPath( UsdStageActor->GetUsdStage(), TEXT("/") );
-						}
-
-						if ( this->UsdLayersTreeView )
-						{
-							this->UsdLayersTreeView->Refresh( UsdStageActor.Get(), true );
-						}
+						this->UsdPrimInfoWidget->SetPrimPath( UsdStageActor->GetUsdStage(), TEXT("/") );
 					}
 				}
-			);
-		}
+
+				this->Refresh();
+			}
+		);
+
+		OnActorDestroyedHandle = UsdStageActor->OnActorDestroyed.AddLambda(
+			[ this ]()
+			{
+				ClearStageActorDelegates();
+				this->CloseStage();
+			}
+		);
 
 		OnStageEditTargetChangedHandle = UsdStageActor->GetUsdListener().OnStageEditTargetChanged.AddLambda(
 			[ this ]()
 			{
-				if ( this->UsdLayersTreeView )
+				if ( this->UsdLayersTreeView && UsdStageActor.IsValid() )
 				{
 					this->UsdLayersTreeView->Refresh( UsdStageActor.Get(), false );
 				}
@@ -212,18 +203,24 @@ void SUsdStage::SetupStageActorDelegates()
 	}
 }
 
+void SUsdStage::ClearStageActorDelegates()
+{
+	if ( UsdStageActor.IsValid() )
+	{
+		UsdStageActor->OnStageChanged.Remove( OnStageChangedHandle );
+		UsdStageActor->OnPrimChanged.Remove( OnPrimChangedHandle );
+		UsdStageActor->OnActorDestroyed.Remove ( OnActorDestroyedHandle );
+
+		UsdStageActor->GetUsdListener().OnStageEditTargetChanged.Remove( OnStageEditTargetChangedHandle );
+	}
+}
+
 SUsdStage::~SUsdStage()
 {
 	FCoreUObjectDelegates::OnObjectPropertyChanged.Remove( OnStageActorPropertyChangedHandle );
 	AUsdStageActor::OnActorLoaded.Remove( OnActorLoadedHandle );
 
-	if ( UsdStageActor.IsValid() )
-	{
-		UsdStageActor->OnStageChanged.Remove( OnStageChangedHandle );
-		UsdStageActor->OnPrimChanged.Remove( OnPrimChangedHandle );
-
-		UsdStageActor->GetUsdListener().OnStageEditTargetChanged.Remove( OnStageEditTargetChangedHandle );
-	}
+	ClearStageActorDelegates();
 }
 
 TSharedRef< SWidget > SUsdStage::MakeMainMenu()
@@ -241,6 +238,12 @@ TSharedRef< SWidget > SUsdStage::MakeMainMenu()
 			LOCTEXT( "ActionsMenu", "Actions" ),
 			LOCTEXT( "ActionsMenu_ToolTip", "Opens the actions menu" ),
 			FNewMenuDelegate::CreateSP( this, &SUsdStage::FillActionsMenu ) );
+
+		// Options
+		MenuBuilder.AddPullDownMenu(
+			LOCTEXT( "OptionsMenu", "Options" ),
+			LOCTEXT( "OptionsMenu_ToolTip", "Opens the options menu" ),
+			FNewMenuDelegate::CreateSP( this, &SUsdStage::FillOptionsMenu ) );
 	}
 
 	// Create the menu bar
@@ -300,6 +303,18 @@ void SUsdStage::FillFileMenu( FMenuBuilder& MenuBuilder )
 			NAME_None,
 			EUserInterfaceActionType::Button
 		);
+
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("Close", "Close"),
+			LOCTEXT("Close_ToolTip", "Closes the opened stage"),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateSP( this, &SUsdStage::OnClose ),
+				FCanExecuteAction()
+			),
+			NAME_None,
+			EUserInterfaceActionType::Button
+		);
 	}
 	MenuBuilder.EndSection();
 }
@@ -323,12 +338,162 @@ void SUsdStage::FillActionsMenu( FMenuBuilder& MenuBuilder )
 	MenuBuilder.EndSection();
 }
 
+void SUsdStage::FillOptionsMenu(FMenuBuilder& MenuBuilder)
+{
+	MenuBuilder.BeginSection( "Options", LOCTEXT("Options", "Options") );
+	{
+		MenuBuilder.AddSubMenu(
+			LOCTEXT("Payloads", "Payloads"),
+			LOCTEXT("Payloads_ToolTip", "What to do with payloads when initially opening the stage"),
+			FNewMenuDelegate::CreateSP(this, &SUsdStage::FillPayloadsSubMenu));
+
+		MenuBuilder.AddMenuSeparator();
+
+		MenuBuilder.AddSubMenu(
+			LOCTEXT("PurposesToLoad", "Purposes to load"),
+			LOCTEXT("PurposesToLoad_ToolTip", "Only load prims with these specific purposes from the USD stage"),
+			FNewMenuDelegate::CreateSP(this, &SUsdStage::FillPurposesToLoadSubMenu),
+			false,
+			FSlateIcon(),
+			false);
+	}
+	MenuBuilder.EndSection();
+}
+
+void SUsdStage::FillPayloadsSubMenu(FMenuBuilder& MenuBuilder)
+{
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("LoadAll", "Load all"),
+		LOCTEXT("LoadAll_ToolTip", "Loads all payloads initially"),
+		FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([this]()
+			{
+				if(AUsdStageActor* StageActor = UsdStageActor.Get())
+				{
+					FScopedTransaction Transaction(FText::Format(
+						LOCTEXT("SetLoadAllTransaction", "Set USD stage actor '{0}' actor to load all payloads initially"),
+						FText::FromString(StageActor->GetActorLabel())
+					));
+
+					StageActor->Modify();
+					StageActor->InitialLoadSet = EUsdInitialLoadSet::LoadAll;
+				}
+			}),
+			FCanExecuteAction::CreateLambda([this]()
+			{
+				return UsdStageActor.Get() != nullptr;
+			}),
+			FIsActionChecked::CreateLambda([this]()
+			{
+				if(AUsdStageActor* StageActor = UsdStageActor.Get())
+				{
+					return StageActor->InitialLoadSet == EUsdInitialLoadSet::LoadAll;
+				}
+				return false;
+			})
+		),
+		NAME_None,
+		EUserInterfaceActionType::RadioButton
+	);
+
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("LoadNone", "Load none"),
+		LOCTEXT("LoadNone_ToolTip", "Don't load any payload initially"),
+		FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([this]()
+			{
+				if(AUsdStageActor* StageActor = UsdStageActor.Get())
+				{
+					FScopedTransaction Transaction(FText::Format(
+						LOCTEXT("SetLoadNoneTransaction", "Set USD stage actor '{0}' actor to load no payloads initially"),
+						FText::FromString(StageActor->GetActorLabel())
+					));
+
+					StageActor->Modify();
+					StageActor->InitialLoadSet = EUsdInitialLoadSet::LoadNone;
+				}
+			}),
+			FCanExecuteAction::CreateLambda([this]()
+			{
+				return UsdStageActor.Get() != nullptr;
+			}),
+			FIsActionChecked::CreateLambda([this]()
+			{
+				if(AUsdStageActor* StageActor = UsdStageActor.Get())
+				{
+					return StageActor->InitialLoadSet == EUsdInitialLoadSet::LoadNone;
+				}
+				return false;
+			})
+		),
+		NAME_None,
+		EUserInterfaceActionType::RadioButton
+	);
+}
+
+void SUsdStage::FillPurposesToLoadSubMenu(FMenuBuilder& MenuBuilder)
+{
+	auto AddPurposeEntry = [&](const EUsdPurpose& Purpose, const FText& Text)
+	{
+		MenuBuilder.AddMenuEntry(
+			Text,
+			FText::GetEmpty(),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateLambda([this, Purpose]()
+				{
+					if(AUsdStageActor* StageActor = UsdStageActor.Get())
+					{
+						FScopedTransaction Transaction(FText::Format(
+							LOCTEXT("PurposesToLoadTransaction", "Change purposes to load for USD stage actor '{0}'"),
+							FText::FromString(StageActor->GetActorLabel())
+						));
+
+						StageActor->Modify();
+						StageActor->PurposesToLoad = (int32)((EUsdPurpose)StageActor->PurposesToLoad ^ Purpose);
+
+						FPropertyChangedEvent PropertyChangedEvent(
+							FindFieldChecked< FProperty >( StageActor->GetClass(), GET_MEMBER_NAME_CHECKED( AUsdStageActor, PurposesToLoad ) )
+						);
+						StageActor->PostEditChangeProperty(PropertyChangedEvent);
+					}
+				}),
+				FCanExecuteAction::CreateLambda([this]()
+				{
+					return UsdStageActor.Get() != nullptr;
+				}),
+				FIsActionChecked::CreateLambda([this, Purpose]()
+				{
+					if(AUsdStageActor* StageActor = UsdStageActor.Get())
+					{
+						return EnumHasAllFlags((EUsdPurpose)StageActor->PurposesToLoad, Purpose);
+					}
+					return false;
+				})
+			),
+			NAME_None,
+			EUserInterfaceActionType::Check
+		);
+	};
+
+	AddPurposeEntry(EUsdPurpose::Proxy,  LOCTEXT("ProxyPurpose",  "Proxy"));
+	AddPurposeEntry(EUsdPurpose::Render, LOCTEXT("RenderPurpose", "Render"));
+	AddPurposeEntry(EUsdPurpose::Guide,  LOCTEXT("GuidePurpose",  "Guide"));
+}
+
 void SUsdStage::OnNew()
 {
 	TOptional< FString > UsdFilePath = UsdUtils::BrowseUsdFile( UsdUtils::EBrowseFileMode::Save, AsShared() );
 
 	if ( UsdFilePath )
 	{
+		FScopedTransaction Transaction(FText::Format(
+			LOCTEXT("NewStageTransaction", "Created new USD stage '{0}'"),
+			FText::FromString(UsdFilePath.GetValue())
+		));
+
 		{
 			FScopedUsdAllocs UsdAllocs;
 
@@ -342,7 +507,7 @@ void SUsdStage::OnNew()
 
 			// Create default prim
 			pxr::UsdGeomXform RootPrim = pxr::UsdGeomXform::Define( UsdStage, UnrealToUsd::ConvertPath( TEXT("/Root") ).Get() );
-			pxr::UsdModelAPI( RootPrim ).SetKind( pxr::TfToken("component") );
+			pxr::UsdModelAPI( RootPrim ).SetKind( pxr::KindTokens->assembly );
 
 			// Set default prim
 			UsdStage->SetDefaultPrim( RootPrim.GetPrim() );
@@ -361,7 +526,16 @@ void SUsdStage::OnOpen()
 
 	if ( UsdFilePath )
 	{
+		FScopedTransaction Transaction(FText::Format(
+			LOCTEXT("OpenStageTransaction", "Open USD stage '{0}'"),
+			FText::FromString(UsdFilePath.GetValue())
+		));
+
+		UsdUtils::StartMonitoringErrors();
+
 		OpenStage( *UsdFilePath.GetValue() );
+
+		UsdUtils::ShowErrorsAndStopMonitoring(FText::Format(LOCTEXT("USDOpenError", "Encountered some errors opening USD file at path '{0}!\nCheck the Output Log for details."), FText::FromString(UsdFilePath.GetValue())));
 	}
 }
 
@@ -375,7 +549,11 @@ void SUsdStage::OnSave()
 		{
 			FScopedUsdAllocs UsdAllocs;
 
+			UsdUtils::StartMonitoringErrors();
+
 			UsdStage->Save();
+
+			UsdUtils::ShowErrorsAndStopMonitoring(LOCTEXT("USDSaveError", "Failed to save current USD Stage!\nCheck the Output Log for details."));
 		}
 	}
 }
@@ -388,7 +566,17 @@ void SUsdStage::OnReloadStage()
 
 		if ( UsdStage )
 		{
-			UsdStage->Reload();
+			UsdUtils::StartMonitoringErrors();
+			{
+				FScopedUsdAllocs Allocs;
+				const std::vector<pxr::SdfLayerHandle>& HandleVec = UsdStage->GetUsedLayers();
+				bool bForce = true;
+				pxr::SdfLayer::ReloadLayers({HandleVec.begin(), HandleVec.end()}, bForce);
+			}
+			if (UsdUtils::ShowErrorsAndStopMonitoring())
+			{
+				return;
+			}
 
 			// If we were editing an unsaved layer, when we reload the edit target will be cleared.
 			// We need to make sure we're always editing something or else UsdEditContext might trigger some errors
@@ -406,14 +594,22 @@ void SUsdStage::OnReloadStage()
 	}
 }
 
+void SUsdStage::OnClose()
+{
+	FScopedTransaction Transaction(LOCTEXT("CloseTransaction", "Close USD stage"));
+
+	CloseStage();
+}
+
 void SUsdStage::OnImport()
 {
-	if ( !UsdStageActor.IsValid() )
+	AUsdStageActor* StageActor = UsdStageActor.Get();
+	if ( !StageActor )
 	{
 		return;
 	}
 
-	const pxr::UsdStageRefPtr& UsdStage = UsdStageActor->GetUsdStage();
+	const pxr::UsdStageRefPtr& UsdStage = StageActor->GetUsdStage();
 
 	if ( !UsdStage )
 	{
@@ -461,6 +657,11 @@ void SUsdStage::OnImport()
 		ImportContextContainer->ImportContext.bIsAutomated = false;
 		ImportContextContainer->ImportContext.bApplyWorldTransformToGeometry = false;
 
+		if (UUSDSceneImportOptions* SceneOptions = Cast<UUSDSceneImportOptions>(ImportContextContainer->ImportContext.ImportOptions))
+		{
+			SceneOptions->PurposesToImport = StageActor->PurposesToLoad;
+		}
+
 		UUSDImporter* UsdImporter = IUSDImporterModule::Get().GetImporter();
 
 		bCanceled = !UsdImporter->ShowImportOptions( ImportContextContainer->ImportContext );
@@ -489,17 +690,8 @@ void SUsdStage::OnPrimSelected( FString PrimPath )
 			UsdStage = UsdStageActor->GetUsdStage();
 		}
 
+		SelectedPrimPath = PrimPath;
 		UsdPrimInfoWidget->SetPrimPath( UsdStage, *PrimPath );
-	}
-}
-
-void SUsdStage::OnInitialLoadSetChanged( EUsdInitialLoadSet InitialLoadSet )
-{
-	if ( UsdStageActor.IsValid() && UsdStageActor->InitialLoadSet != InitialLoadSet )
-	{
-		const FScopedTransaction Transaction( LOCTEXT("EditInitialLoadSetTransaction", "Edit Initial Load Set") );
-		UsdStageActor->Modify();
-		UsdStageActor->InitialLoadSet = InitialLoadSet;
 	}
 }
 
@@ -510,19 +702,47 @@ void SUsdStage::OpenStage( const TCHAR* FilePath )
 		IUsdStageModule& UsdStageModule = FModuleManager::Get().LoadModuleChecked< IUsdStageModule >( "UsdStage" );
 		UsdStageActor = &UsdStageModule.GetUsdStageActor( GWorld );
 
-		if ( UsdStageInfoWidget )
-		{
-			UsdStageActor->InitialLoadSet = UsdStageInfoWidget->GetInitialLoadSet();
-		}
-
 		SetupStageActorDelegates();
 	}
 
 	check( UsdStageActor.IsValid() );
-	UsdStageActor->RootLayer.FilePath = FilePath;
+	UsdStageActor->Modify();
 
-	FPropertyChangedEvent RootLayerPropertyChangedEvent( FindFieldChecked< UProperty >( UsdStageActor->GetClass(), FName("RootLayer") ) );
+	UsdStageActor->RootLayer.FilePath = FilePath;
+	FPropertyChangedEvent RootLayerPropertyChangedEvent( FindFieldChecked< FProperty >( UsdStageActor->GetClass(), FName("RootLayer") ) );
 	UsdStageActor->PostEditChangeProperty( RootLayerPropertyChangedEvent );
+}
+
+void SUsdStage::CloseStage()
+{
+	if ( AUsdStageActor* StageActor = UsdStageActor.Get() )
+	{
+		StageActor->Reset();
+	}
+
+	Refresh();
+}
+
+void SUsdStage::Refresh()
+{
+	// May be nullptr, but that is ok. Its how the widgets are reset
+	AUsdStageActor* StageActor = UsdStageActor.Get();
+
+	if (UsdLayersTreeView)
+	{
+		UsdLayersTreeView->Refresh( StageActor, true );
+	}
+
+	if (UsdStageInfoWidget)
+	{
+		UsdStageInfoWidget->RefreshStageInfos( StageActor );
+	}
+
+	if (UsdStageTreeView)
+	{
+		UsdStageTreeView->Refresh( StageActor );
+		UsdStageTreeView->RequestTreeRefresh();
+	}
 }
 
 void SUsdStage::OnStageActorLoaded( AUsdStageActor* InUsdStageActor )
@@ -532,8 +752,13 @@ void SUsdStage::OnStageActorLoaded( AUsdStageActor* InUsdStageActor )
 		return;
 	}
 
+	ClearStageActorDelegates();
 	UsdStageActor = InUsdStageActor;
 	SetupStageActorDelegates();
+
+	// Refresh here because we may be receiving an actor that has a stage already loaded,
+	// like during undo/redo
+	Refresh();
 }
 
 void SUsdStage::OnStageActorPropertyChanged( UObject* ObjectBeingModified, FPropertyChangedEvent& PropertyChangedEvent )

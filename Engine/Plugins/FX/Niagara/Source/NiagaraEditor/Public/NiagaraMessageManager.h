@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,6 +7,7 @@
 #include "Logging/TokenizedMessage.h"
 #include "NiagaraGraph.h"
 #include "TickableEditorObject.h"
+#include "UObject/ObjectKey.h"
 
 class FNiagaraScriptToolkit;
 
@@ -46,6 +47,12 @@ public:
 
 	virtual const ENiagaraMessageType GetMessageType() const = 0;
 
+	// TODO: Add a better API for generating stack issues.
+	virtual FText GenerateMessageText() const = 0;
+	virtual void GenerateLinks(TArray<FText>& OutLinkDisplayNames, TArray<FSimpleDelegate>& OutLinkNavigationActions) const = 0;
+
+	virtual void GetAssociatedObjectKeys(TArray<FObjectKey>& OutAssociatedObjectKeys) const = 0;
+
 	virtual ~INiagaraMessage() {};
 };
 
@@ -80,10 +87,12 @@ private:
 
 	bool RecursiveGetScriptNamesAndAssetPathsFromContextStack(
 		  TArray<FGuid>& InContextStackNodeGuids
+		, FGuid NodeGuid
 		, const UNiagaraGraph* InGraphToSearch
 		, TArray<FNiagaraScriptNameAndAssetPath>& OutContextScriptNamesAndAssetPaths
 		, TOptional<const FString>& OutEmitterName
 		, TOptional<const FText>& OutFailureReason
+		, TArray<FObjectKey>& OutContextNodeObjectKeys
 	) const;
 
 	const FNiagaraCompileEvent CompileEvent;
@@ -123,18 +132,25 @@ public:
 		, TArray<FNiagaraScriptNameAndAssetPath>& InContextScriptNamesAndAssetPaths
 		, TOptional<const FText>& InOwningScriptNameAndUsageText
 		, TOptional<const FNiagaraScriptNameAndAssetPath>& InCompiledScriptNameAndAssetPath
+		, const TArray<FObjectKey>& InAssociatedObjectKeys
 	);
 
 	virtual TSharedRef<FTokenizedMessage> GenerateTokenizedMessage() const override;
-	//@todo(message manager) make stack specific message type generator here
 
 	virtual const ENiagaraMessageType GetMessageType() const override { return ENiagaraMessageType::CompileEventMessage; };
+
+	virtual FText GenerateMessageText() const override;
+
+	virtual void GenerateLinks(TArray<FText>& OutLinkDisplayNames, TArray<FSimpleDelegate>& OutLinkNavigationActions) const override;
+
+	virtual void GetAssociatedObjectKeys(TArray<FObjectKey>& OutAssociatedObjectKeys) const override { OutAssociatedObjectKeys.Append(AssociatedObjectKeys); }
 
 private:
 	const FNiagaraCompileEvent CompileEvent;
 	const TArray<FNiagaraScriptNameAndAssetPath> ContextScriptNamesAndAssetPaths;
 	const TOptional<const FText> OwningScriptNameAndUsageText;
 	const TOptional<const FNiagaraScriptNameAndAssetPath> CompiledScriptNameAndAssetPath;
+	const TArray<FObjectKey> AssociatedObjectKeys;
 };
 
 class FNiagaraMessageNeedRecompile : public INiagaraMessage
@@ -148,6 +164,12 @@ public:
 	virtual TSharedRef<FTokenizedMessage> GenerateTokenizedMessage() const override;
 
 	virtual const ENiagaraMessageType GetMessageType() const override { return ENiagaraMessageType::NeedRecompileMessage; };
+
+	virtual FText GenerateMessageText() const override;
+
+	virtual void GenerateLinks(TArray<FText>& OutLinkDisplayNames, TArray<FSimpleDelegate>& OutLinkNavigationActions) const override { }
+
+	virtual void GetAssociatedObjectKeys(TArray<FObjectKey>& OutAssociatedObjectKeys) const override { }
 
 private:
 	const FText NeedRecompileMessage;
@@ -166,6 +188,12 @@ public:
 	
 	// we alias the message type as post compile summary is always generated with compile events
 	virtual const ENiagaraMessageType GetMessageType() const override { return  ENiagaraMessageType::CompileEventMessage; };
+
+	virtual FText GenerateMessageText() const override;
+
+	virtual void GenerateLinks(TArray<FText>& OutLinkDisplayNames, TArray<FSimpleDelegate>& OutLinkNavigationActions) const override { }
+
+	virtual void GetAssociatedObjectKeys(TArray<FObjectKey>& OutAssociatedObjectKeys) const override { }
 
 private:
 	const FText PostCompileSummaryText;
@@ -253,6 +281,8 @@ public:
 
 	const TArray<TSharedRef<const INiagaraMessage>> GetMessagesForAssetKey(const FGuid& InAssetKey) const;
 
+	const TArray<TSharedRef<const INiagaraMessage>> GetMessagesForAssetKeyAndObjectKey(const FGuid& InAssetKey, const FObjectKey& InObjectKey);
+
 	FOnRequestRefresh& GetOnRequestRefresh() { return OnRequestRefresh; };
 
 	//~ Begin FTickableEditorObject Interface.
@@ -264,6 +294,19 @@ public:
 	//~ End FTickableEditorObject Interface
 
 private:
+	class FMessageData
+	{
+	public:
+		const TArray<TSharedRef<const INiagaraMessage>>& GetMessages() const;
+		const void GetMessagesForObjectKey(FObjectKey InObjectKey, TArray<TSharedRef<const INiagaraMessage>>& OutMessages) const;
+		void AddMessage(TSharedRef<const INiagaraMessage> InMessage);
+		void Reset();
+
+	private:
+		TArray<TSharedRef<const INiagaraMessage>> Messages;
+		TMap<FObjectKey, TArray<TSharedRef<const INiagaraMessage>>> ObjectKeyToMessagesMap;
+	};
+
 	FNiagaraMessageManager();
 
 	FOnRequestRefresh OnRequestRefresh;
@@ -272,6 +315,6 @@ private:
 	static const double MaxJobWorkTime;
 	TArray<FNiagaraMessageJobBatch> MessageJobBatchArr;
 	TArray<TSharedRef<const INiagaraMessage>> GeneratedMessagesForCurrentMessageJobBatch;
-	TMap<FGuid, TMap<const ENiagaraMessageJobType, TArray<TSharedRef<const INiagaraMessage>>>> ObjectToTypeMappedMessagesMap;
+	TMap<FGuid, TMap<const ENiagaraMessageJobType, FMessageData>> ObjectToTypeMappedMessagesMap;
 	static FNiagaraMessageManager* Singleton;
 };

@@ -1,8 +1,8 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
-#include "NiagaraParameterEditMode.h"
+#include "ViewModels/NiagaraParameterEditMode.h"
 #include "Delegates/DelegateCombinations.h"
 #include "Delegates/Delegate.h"
 #include "Styling/SlateTypes.h"

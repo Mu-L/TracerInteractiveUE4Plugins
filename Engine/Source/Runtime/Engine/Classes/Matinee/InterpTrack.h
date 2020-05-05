@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /**
  *
@@ -100,7 +100,7 @@ struct FSubTrackGroup
 };
 
 UCLASS(collapsecategories, hidecategories=Object, abstract, MinimalAPI)
-class ENGINE_VTABLE UInterpTrack : public UObject, public FCurveEdInterface, public FInterpEdInputInterface
+class UInterpTrack : public UObject, public FCurveEdInterface, public FInterpEdInputInterface
 {
 	GENERATED_UCLASS_BODY()
 

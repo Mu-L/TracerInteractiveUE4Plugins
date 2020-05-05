@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -94,13 +94,21 @@ namespace Gauntlet
 		/// <summary>
 		/// Used to track how much of our log has been written out
 		/// </summary>
-		private int LastLogCount ;
+		private int LastLogCount;
 
 		private int CurrentPass;
 
 		private int NumPasses;
 
 		static protected DateTime SessionStartTime = DateTime.MinValue;
+
+		/// <summary>
+		/// Standard semantic versioning for tests. Should be overwritten within individual tests, and individual test maintainers
+		/// are responsible for updating their own versions. See https://semver.org/ for more info on maintaining semantic versions.
+		/// </summary>
+		/// 
+		protected Version TestVersion;
+		
 
 		/// <summary>
 		/// Path to the directory that logs and other artifacts are copied to after the test run.
@@ -122,7 +130,7 @@ namespace Gauntlet
 		protected DateTime TimeOfFirstMissingProcess;
 
 		protected int TimeToWaitForProcesses { get; set; }
-
+		
 		protected DateTime LastHeartbeatTime = DateTime.MinValue;
 		protected DateTime LastActiveHeartbeatTime = DateTime.MinValue;
 
@@ -141,6 +149,7 @@ namespace Gauntlet
 			LastLogCount = 0;
 			CurrentPass = 0;
 			NumPasses = 0;
+			TestVersion = new Version("1.0.0");
 			ArtifactPath = string.Empty;
 		}
 
@@ -459,7 +468,7 @@ namespace Gauntlet
 			// if doing multiple passes, put each in a subdir
 			if (NumPasses > 1)
 			{
-				ArtifactPath = Path.Combine(ArtifactPath, string.Format("Pass_{0}_of_{1}", CurrentPass, NumPasses));
+				ArtifactPath = Path.Combine(ArtifactPath, string.Format("Pass_{0}_of_{1}", CurrentPass + 1, NumPasses));
 			}
 
 			// When running with -parallel we could have several identical tests (same test, configurations) in flight so
@@ -493,6 +502,10 @@ namespace Gauntlet
 			} while (ArtifactPathIsTaken);
 
 			ReservedArtifcactPaths.Add(ArtifactPath);
+
+			// We need to create this directory at the start of the test rather than the end of the test - we are running into instances where multiple A/B tests
+			// on the same build are seeing the directory as non-existent and thinking it is safe to write to.
+			Directory.CreateDirectory(ArtifactPath);
 
 			// Launch the test
 			TestInstance = UnrealApp.LaunchSession();
@@ -629,6 +642,7 @@ namespace Gauntlet
 			try
 			{
 				Log.Info("Saving artifacts to {0}", ArtifactPath);
+				// run create dir again just in case the already made dir was cleaned up by another buildfarm job or something similar.
 				Directory.CreateDirectory(ArtifactPath);
 				Utils.SystemHelpers.MarkDirectoryForCleanup(ArtifactPath);
 
@@ -850,6 +864,7 @@ namespace Gauntlet
 		private void CheckHeartbeat()
 		{
 			if (CachedConfig == null 
+				|| CachedConfig.DisableHeartbeatTimeout
 				|| CachedConfig.HeartbeatOptions.bExpectHeartbeats == false
 				|| GetTestStatus() != TestStatus.InProgress)
 			{

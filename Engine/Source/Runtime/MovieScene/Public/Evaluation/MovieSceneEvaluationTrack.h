@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -43,9 +43,15 @@ struct FSectionEvaluationDataTree
 		return true;
 	}
 
+	/** Only called for serialization. Returns false to always serialize. */
+	bool Identical(const FSectionEvaluationDataTree* Other, uint32 PortFlags) const
+	{
+		return Tree == Other->Tree;
+	}
+
 	TMovieSceneEvaluationTree<FSectionEvaluationData> Tree;
 };
-template<> struct TStructOpsTypeTraits<FSectionEvaluationDataTree> : public TStructOpsTypeTraitsBase2<FSectionEvaluationDataTree> { enum { WithSerializer = true }; };
+template<> struct TStructOpsTypeTraits<FSectionEvaluationDataTree> : public TStructOpsTypeTraitsBase2<FSectionEvaluationDataTree> { enum { WithSerializer = true, WithIdentical = true }; };
 
 /** Structure that references a sorted array of segments by indirect identifiers */
 USTRUCT()

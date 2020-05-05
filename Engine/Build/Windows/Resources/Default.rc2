@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 //
 // This file contains resources which are edited by hand, and cannot be loaded/saved by the Visual Studio resource editor.
 
@@ -93,31 +93,6 @@ END
 
 #ifdef BUILD_ICON_FILE_NAME
 IDICON_UE4Game          ICON                    BUILD_ICON_FILE_NAME
-#endif
-
-/////////////////////////////////////////////////////////////////////////////
-//
-// Application Manifest
-//
-
-#if _DEBUG
-
-// Debug manifest
-#if _WIN64
-1						RT_MANIFEST				"Default-Win64-Debug.manifest"
-#else
-1						RT_MANIFEST				"Default-Win32-Debug.manifest"
-#endif
-
-#else
-
-// Release manifest
-#if _WIN64
-1						RT_MANIFEST				"Default-Win64.manifest"
-#else
-1						RT_MANIFEST				"Default-Win32.manifest"
-#endif
-
 #endif
 
 #endif    // English (United States) resources

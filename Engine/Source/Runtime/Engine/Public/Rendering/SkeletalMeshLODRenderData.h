@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -130,11 +130,7 @@ public:
 
 	uint32 BuffersSize;
 
-#if USE_BULKDATA_STREAMING_TOKEN
-	FBulkDataStreamingToken BulkDataStreamingToken;
-#else
-	FByteBulkData StreamingBulkData;
-#endif
+	typename TChooseClass<USE_BULKDATA_STREAMING_TOKEN, FBulkDataStreamingToken, FByteBulkData>::Result StreamingBulkData;
 
 	/** Whether buffers of this LOD is inlined (i.e. stored in .uexp instead of .ubulk) */
 	uint32 bStreamedDataInlined : 1;
@@ -165,7 +161,7 @@ public:
 	/** Constructor (default) */
 	FSkeletalMeshLODRenderData()
 		: BuffersSize(0)
-		, bStreamedDataInlined(false)
+		, bStreamedDataInlined(true)
 		, bIsLODOptional(false)
 	{
 	}
@@ -203,9 +199,14 @@ public:
 		return StaticVertexBuffers.PositionVertexBuffer.GetNumVertices();
 	}
 
-	bool DoesVertexBufferHaveExtraBoneInfluences() const
+	uint32 GetVertexBufferMaxBoneInfluences() const
 	{
-		return SkinWeightVertexBuffer.HasExtraBoneInfluences();
+		return SkinWeightVertexBuffer.GetMaxBoneInfluences();
+	}
+
+	bool DoesVertexBufferUse16BitBoneIndex() const
+	{
+		return SkinWeightVertexBuffer.Use16BitBoneIndex();
 	}
 
 	uint32 GetNumTexCoords() const

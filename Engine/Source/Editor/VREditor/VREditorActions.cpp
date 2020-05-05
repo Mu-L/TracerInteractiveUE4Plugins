@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "VREditorActions.h"
 #include "VREditorModule.h"
@@ -307,8 +307,9 @@ void FVREditorActionCallbacks::OnPlayButtonClicked(UVREditorMode* InVRMode)
 bool FVREditorActionCallbacks::CanPlay(UVREditorMode* InVRMode)
 {
 	static const FName OculusSystemName(TEXT("OculusHMD"));
-	return FLevelEditorActionCallbacks::DefaultCanExecuteAction() && VREd::AllowPlay->GetInt() == 1 &&
-		(InVRMode->GetHMDDeviceType() != OculusSystemName || (InVRMode->GetHMDDeviceType() == OculusSystemName && GEditor != nullptr && !GEditor->bIsSimulatingInEditor));
+	return FLevelEditorActionCallbacks::DefaultCanExecuteAction() 
+		&& VREd::AllowPlay->GetInt() == 1 
+		&& (GEditor != nullptr && !GEditor->bIsSimulatingInEditor);
 }
 
 void FVREditorActionCallbacks::OnSimulateButtonClicked(UVREditorMode* InVRMode)

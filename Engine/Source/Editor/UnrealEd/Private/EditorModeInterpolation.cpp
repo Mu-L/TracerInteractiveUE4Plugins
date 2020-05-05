@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	EditorModeInterpolation : Editor mode for setting up interpolation sequences.
@@ -191,10 +191,8 @@ void FEdModeInterpEdit::ActorSelectionChangeNotify()
 bool FEdModeInterpEdit::IsCompatibleWith(FEditorModeID OtherModeID) const
 {
 	return
-		OtherModeID == FBuiltinEditorModes::EM_Placement	||
-		OtherModeID == FBuiltinEditorModes::EM_MeshPaint	||
-		OtherModeID == FBuiltinEditorModes::EM_Geometry		||
-		OtherModeID == FBuiltinEditorModes::EM_Bsp;
+		OtherModeID == FBuiltinEditorModes::EM_Placement ||
+		OtherModeID == FBuiltinEditorModes::EM_MeshPaint;
 }
 
 //////////////////////////////////////////////////////////////////////////

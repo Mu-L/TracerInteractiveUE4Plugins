@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MovieSceneSpawnableAnnotation.h"
 
@@ -17,7 +17,7 @@ void FMovieSceneSpawnableAnnotation::Add(UObject* SpawnedObject, const FGuid& Ob
 		Annotation.ObjectBindingID = ObjectBindingID;
 		Annotation.OriginatingSequence = InOriginatingSequence;
 
-		SpawnedObjectAnnotation.AddAnnotation(SpawnedObject, Annotation);
+		SpawnedObjectAnnotation.AddAnnotation(SpawnedObject, MoveTemp(Annotation));
 	}
 }
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	LightMap.cpp: Light-map implementation.
@@ -22,6 +22,7 @@
 #include "VT/VirtualTexture.h"
 #include "EngineModule.h"
 #include "Misc/PackageName.h"
+#include "ProfilingDebugging/LoadTimeTracker.h"
 
 #define VISUALIZE_PACKING 0
 
@@ -307,7 +308,7 @@ struct FLightMapAllocation
 				// Need to create per-LOD instance data to fix that
 				MeshBuildData->PerInstanceLightmapData[InstanceIndex].LightmapUVBias = LightMap->GetCoordinateBias();
 
-				int32 RenderIndex = Component->InstanceReorderTable.IsValidIndex(InstanceIndex) ? Component->InstanceReorderTable[InstanceIndex] : InstanceIndex;
+				const int32 RenderIndex = Component->GetRenderIndex(InstanceIndex);
 				if (RenderIndex != INDEX_NONE)
 				{
 					Component->InstanceUpdateCmdBuffer.SetLightMapData(RenderIndex, MeshBuildData->PerInstanceLightmapData[InstanceIndex].LightmapUVBias);
@@ -421,7 +422,7 @@ struct FLightMapPendingTexture : public FTextureLayout
 		, OwningWorld(InWorld)
 		, Bounds(FBox(ForceInit))
 		, LightmapFlags(LMF_None)
-		, UnallocatedTexels(InSizeX * InSizeY)
+		, UnallocatedTexels(static_cast<int64>(InSizeX) * InSizeY)
 		, NumOutstandingAsyncTasks(0)
 		, bUObjectsCreated(false)
 		, NumNonPower2Texels(0)
@@ -3294,15 +3295,15 @@ void FLightmapResourceCluster::UpdateUniformBuffer(ERHIFeatureLevel::Type InFeat
 	ENQUEUE_RENDER_COMMAND(SetFeatureLevel)(
 		[Cluster, InFeatureLevel](FRHICommandList& RHICmdList)
 	{
-		Cluster->FeatureLevel = InFeatureLevel;
+		Cluster->SetFeatureLevel(InFeatureLevel);
 		Cluster->UpdateUniformBuffer_RenderThread();
 	});
 }
 
 bool FLightmapResourceCluster::GetUseVirtualTexturing() const
 {
-	const bool bAllowHighQualityLightMaps = AllowHighQualityLightmaps(FeatureLevel);
-	return bAllowHighQualityLightMaps && (CVarVirtualTexturedLightMaps.GetValueOnRenderThread() != 0) && UseVirtualTexturing(FeatureLevel);
+	const bool bAllowHighQualityLightMaps = AllowHighQualityLightmaps(GetFeatureLevel());
+	return bAllowHighQualityLightMaps && (CVarVirtualTexturedLightMaps.GetValueOnRenderThread() != 0) && UseVirtualTexturing(GetFeatureLevel());
 }
 
 void FLightmapResourceCluster::UpdateUniformBuffer_RenderThread()
@@ -3310,7 +3311,7 @@ void FLightmapResourceCluster::UpdateUniformBuffer_RenderThread()
 	check(IsInRenderingThread());
 
 	FLightmapResourceClusterShaderParameters Parameters;
-	GetLightmapClusterResourceParameters(FeatureLevel, Input, GetUseVirtualTexturing() ? AcquireAllocatedVT() : nullptr, Parameters);
+	GetLightmapClusterResourceParameters(GetFeatureLevel(), Input, GetUseVirtualTexturing() ? AcquireAllocatedVT() : nullptr, Parameters);
 
 	RHIUpdateUniformBuffer(UniformBuffer, &Parameters);
 }
@@ -3388,14 +3389,16 @@ void FLightmapResourceCluster::ReleaseAllocatedVT()
 
 void FLightmapResourceCluster::InitRHI()
 {
+	SCOPED_LOADTIMER(FLightmapResourceCluster_InitRHI);
+
 	FLightmapResourceClusterShaderParameters Parameters;
 
 	// Lightmap resources are normally created before the feature level is known, so we'll use defaults and rely on a subsequent call to UpdateUniformBuffer()
 	// to set the correct level and update things accordingly. However, when we're coming from FRenderResource::ChangeFeatureLevel(), the feature level
 	// has already been set, so we can go ahead and use the correct level and input from the start (UpdateUniformBuffer() is not being called in that case).
-	if (FeatureLevel < ERHIFeatureLevel::Num)
+	if (HasValidFeatureLevel())
 	{
-		GetLightmapClusterResourceParameters(FeatureLevel, Input, GetUseVirtualTexturing() ? AcquireAllocatedVT() : nullptr, Parameters);
+		GetLightmapClusterResourceParameters(GetFeatureLevel(), Input, GetUseVirtualTexturing() ? AcquireAllocatedVT() : nullptr, Parameters);
 	}
 	else
 	{

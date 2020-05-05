@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "IOSPlatformWebBrowser.h"
 
@@ -11,7 +11,6 @@
 
 #import <UIKit/UIKit.h>
 #import <MetalKit/MetalKit.h>
-#include <OpenGLES/ES2/glext.h>
 #include "ExternalTexture.h"
 #include "WebBrowserModule.h"
 #include "IWebBrowserSingleton.h"

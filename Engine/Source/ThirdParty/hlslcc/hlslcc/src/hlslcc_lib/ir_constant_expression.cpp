@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // This code is modified from that in the Mesa3D Graphics library available at
 // http://mesa3d.org/
@@ -489,7 +489,6 @@ ir_constant* ir_expression::constant_expression_value()
 		break;
 
 	case ir_unop_rcp:
-		check(op[0]->type->is_float());
 		for (unsigned c = 0; c < op[0]->type->components(); c++)
 		{
 			switch (this->type->base_type)

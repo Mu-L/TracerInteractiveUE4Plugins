@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	DeferredShadingRenderer.cpp: Top level rendering loop for deferred shading
@@ -31,6 +31,7 @@
 #include "VT/VirtualTextureSystem.h"
 #include "GPUScene.h"
 #include "RayTracing/RayTracingMaterialHitShaders.h"
+#include "RayTracing/RayTracingLighting.h"
 #include "RayTracingDynamicGeometryCollection.h"
 #include "SceneTextureParameters.h"
 #include "ScreenSpaceDenoise.h"
@@ -39,7 +40,9 @@
 #include "RayTracingDefinitions.h"
 #include "RayTracingInstance.h"
 #include "ShaderPrint.h"
+#include "GpuDebugRendering.h"
 #include "HairStrands/HairStrandsRendering.h"
+#include "GPUSortManager.h"
 
 static TAutoConsoleVariable<int32> CVarStencilForLODDither(
 	TEXT("r.StencilForLODDither"),
@@ -150,13 +153,14 @@ static TAutoConsoleVariable<int32> CVarForceAllRayTracingEffects(
 	TEXT(" 1: All ray tracing effects enabled"),
 	ECVF_RenderThreadSafe);
 
-static int32 GRayTracingSceneCaptures = 1;
+static int32 GRayTracingSceneCaptures = -1;
 static FAutoConsoleVariableRef CVarRayTracingSceneCaptures(
 	TEXT("r.RayTracing.SceneCaptures"),
 	GRayTracingSceneCaptures,
 	TEXT("Enable ray tracing in scene captures.\n")
+	TEXT(" -1: Use scene capture settings (default) \n")
 	TEXT(" 0: off \n")
-	TEXT(" 1: on (default)"),
+	TEXT(" 1: on"),
 	ECVF_RenderThreadSafe);
 
 static int32 GRayTracingExcludeDecals = 0;
@@ -228,6 +232,8 @@ DECLARE_GPU_STAT(VirtualTextureUpdate);
 DECLARE_GPU_STAT(UploadDynamicBuffers);
 DECLARE_GPU_STAT(PostOpaqueExtensions);
 
+CSV_DEFINE_CATEGORY(LightCount, true);
+
 const TCHAR* GetDepthPassReason(bool bDitheredLODTransitionsUseStencil, EShaderPlatform ShaderPlatform)
 {
 	if (IsForwardShadingEnabled(ShaderPlatform))
@@ -298,31 +304,9 @@ void FDeferredShadingSceneRenderer::ClearGBufferAtMaxZ(FRHICommandList& RHICmdLi
 	auto ShaderMap = GetGlobalShaderMap(FeatureLevel);
 
 	TShaderMapRef<TOneColorVS<true> > VertexShader(ShaderMap);
-	FOneColorPS* PixelShader = NULL; 
-
-	// Assume for now all code path supports SM4, otherwise render target numbers are changed
-	switch(NumActiveRenderTargets)
-	{
-	case 5:
-		{
-			TShaderMapRef<TOneColorPixelShaderMRT<5> > MRTPixelShader(ShaderMap);
-			PixelShader = *MRTPixelShader;
-		}
-		break;
-	case 6:
-		{
-			TShaderMapRef<TOneColorPixelShaderMRT<6> > MRTPixelShader(ShaderMap);
-			PixelShader = *MRTPixelShader;
-		}
-		break;
-	default:
-	case 1:
-		{
-			TShaderMapRef<TOneColorPixelShaderMRT<1> > MRTPixelShader(ShaderMap);
-			PixelShader = *MRTPixelShader;
-		}
-		break;
-	}
+	TOneColorPixelShaderMRT::FPermutationDomain PermutationVector;
+	PermutationVector.Set<TOneColorPixelShaderMRT::TOneColorPixelShaderNumOutputs>(NumActiveRenderTargets);
+	TShaderMapRef<TOneColorPixelShaderMRT>PixelShader(ShaderMap, PermutationVector);
 
 	FGraphicsPipelineStateInitializer GraphicsPSOInit;
 	RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
@@ -333,8 +317,8 @@ void FDeferredShadingSceneRenderer::ClearGBufferAtMaxZ(FRHICommandList& RHICmdLi
 	GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_DepthNearOrEqual>::GetRHI();
 
 	GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GetVertexDeclarationFVector4();
-	GraphicsPSOInit.BoundShaderState.VertexShaderRHI = GETSAFERHISHADER_VERTEX(*VertexShader);
-	GraphicsPSOInit.BoundShaderState.PixelShaderRHI = GETSAFERHISHADER_PIXEL(PixelShader);
+	GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
+	GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
 	GraphicsPSOInit.PrimitiveType = PT_TriangleStrip;
 
 	SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit);
@@ -463,6 +447,16 @@ static FORCEINLINE bool NeedsPrePass(const FDeferredShadingSceneRenderer* Render
 		(Renderer->EarlyZPassMode != DDM_None || Renderer->bEarlyZPassMovable != 0);
 }
 
+static bool DoesHairStrandsRequestHzb(EShaderPlatform Platform)
+{
+	auto HzbRequested = [&]()
+	{
+		IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("HairStrands.Cluster.CullingUsesHzb"));
+		return CVar && CVar->GetInt() > 0;
+	};
+	return IsHairStrandsEnable(Platform) && HzbRequested();
+}
+
 bool FDeferredShadingSceneRenderer::RenderHzb(FRHICommandListImmediate& RHICmdList)
 {
 	FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(RHICmdList);
@@ -484,8 +478,9 @@ bool FDeferredShadingSceneRenderer::RenderHzb(FRHICommandListImmediate& RHICmdLi
 		const bool bSSR  = ShouldRenderScreenSpaceReflections(View);
 		const bool bSSAO = ShouldRenderScreenSpaceAmbientOcclusion(View);
 		const bool bSSGI = ShouldRenderScreenSpaceDiffuseIndirect(View);
+		const bool bHair = DoesHairStrandsRequestHzb(Scene->GetShaderPlatform());
 
-		if (bSSAO || bHZBOcclusion || bSSR || bSSGI)
+		if (bSSAO || bHZBOcclusion || bSSR || bSSGI || bHair)
 		{
 			FRDGBuilder GraphBuilder(RHICmdList);
 
@@ -561,11 +556,30 @@ static int32 GetCustomDepthPassLocation()
 
 void FDeferredShadingSceneRenderer::PrepareDistanceFieldScene(FRHICommandListImmediate& RHICmdList, bool bSplitDispatch)
 {
-	if (ShouldPrepareDistanceFieldScene())
+	CSV_SCOPED_TIMING_STAT_EXCLUSIVE(RenderDFAO);
+	SCOPE_CYCLE_COUNTER(STAT_FDeferredShadingSceneRenderer_DistanceFieldAO_Init);
+
+	const bool bShouldPrepareHeightFieldScene = ShouldPrepareHeightFieldScene();
+	const bool bShouldPrepareDistanceFieldScene = ShouldPrepareDistanceFieldScene();
+
+	if (bShouldPrepareHeightFieldScene)
 	{
-		CSV_SCOPED_TIMING_STAT_EXCLUSIVE(RenderDFAO);
-		SCOPE_CYCLE_COUNTER(STAT_FDeferredShadingSceneRenderer_DistanceFieldAO_Init);
-		GDistanceFieldVolumeTextureAtlas.UpdateAllocations();
+		extern int32 GHFShadowQuality;
+		if (GHFShadowQuality > 2)
+		{
+			GHFVisibilityTextureAtlas.UpdateAllocations(RHICmdList, FeatureLevel);
+		}
+		GHeightFieldTextureAtlas.UpdateAllocations(RHICmdList, FeatureLevel);
+		UpdateGlobalHeightFieldObjectBuffers(RHICmdList);
+	}
+	else if (bShouldPrepareDistanceFieldScene)
+	{
+		AddOrRemoveSceneHeightFieldPrimitives();
+	}
+
+	if (bShouldPrepareDistanceFieldScene)
+	{
+		GDistanceFieldVolumeTextureAtlas.UpdateAllocations(RHICmdList, FeatureLevel);
 		UpdateGlobalDistanceFieldObjectBuffers(RHICmdList);
 		if (bSplitDispatch)
 		{
@@ -603,15 +617,17 @@ void FDeferredShadingSceneRenderer::PrepareDistanceFieldScene(FRHICommandListImm
 
 bool FDeferredShadingSceneRenderer::GatherRayTracingWorldInstances(FRHICommandListImmediate& RHICmdList)
 {
-	if (!IsRayTracingEnabled() || GetForceRayTracingEffectsCVarValue() == 0 || Views.Num() == 0)
+	if (!IsRayTracingEnabled() || Views.Num() == 0)
 	{
 		return false;
 	}
 
 	bool bAnyRayTracingPassEnabled = false;
+	bool bPathTracingOrDebugViewEnabled = false;
 	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
 	{
 		bAnyRayTracingPassEnabled |= AnyRayTracingPassEnabled(Scene, Views[ViewIndex]);
+		bPathTracingOrDebugViewEnabled |= !CanOverlayRayTracingOutput(Views[ViewIndex]);
 	}
 
 	if (!bAnyRayTracingPassEnabled)
@@ -619,60 +635,92 @@ bool FDeferredShadingSceneRenderer::GatherRayTracingWorldInstances(FRHICommandLi
 		return false;
 	}
 
+	if (GetForceRayTracingEffectsCVarValue() == 0 && !bPathTracingOrDebugViewEnabled)
 	{
-		SCOPE_CYCLE_COUNTER(STAT_GatherRayTracingWorldInstances);
-		RayTracingCollector.ClearViewMeshArrays();
-		TArray<int> DynamicMeshBatchStartOffset;
-		TArray<int> VisibleDrawCommandStartOffset;
+		return false;
+	}
 
-		TArray<FPrimitiveUniformShaderParameters> DummyDynamicPrimitiveShaderData;
+	TRACE_CPUPROFILER_EVENT_SCOPE(FDeferredShadingSceneRenderer::GatherRayTracingWorldInstances);
+	SCOPE_CYCLE_COUNTER(STAT_GatherRayTracingWorldInstances);
 
-		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
-		{
-			FViewInfo& View = Views[ViewIndex];
-			DynamicMeshBatchStartOffset.Add(0);
-			VisibleDrawCommandStartOffset.Add(0);
-			View.RayTracingGeometryInstances.Reserve(Scene->Primitives.Num());
+	RayTracingCollector.ClearViewMeshArrays();
+	TArray<int> DynamicMeshBatchStartOffset;
+	TArray<int> VisibleDrawCommandStartOffset;
 
-			RayTracingCollector.AddViewMeshArrays(
-				&View,
-				&View.RayTracedDynamicMeshElements,
-				&View.SimpleElementCollector,
-				&DummyDynamicPrimitiveShaderData,
-				ViewFamily.GetFeatureLevel(),
-				&DynamicIndexBufferForInitViews,
-				&DynamicVertexBufferForInitViews,
-				&DynamicReadBufferForInitViews
-				);
+	TArray<FPrimitiveUniformShaderParameters> DummyDynamicPrimitiveShaderData;
 
-			View.DynamicRayTracingMeshCommandStorage.RayTracingMeshCommands.Reserve(Scene->Primitives.Num());
-			View.VisibleRayTracingMeshCommands.Reserve(Scene->Primitives.Num());
-		}
+	TArray<FRayTracingInstance> RayTracingInstances;
 
-		FViewInfo& ReferenceView = Views[0];
+	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
+	{
+		FViewInfo& View = Views[ViewIndex];
+		DynamicMeshBatchStartOffset.Add(0);
+		VisibleDrawCommandStartOffset.Add(0);
+		View.RayTracingGeometryInstances.Reserve(Scene->Primitives.Num());
 
-		extern TSet<IPersistentViewUniformBufferExtension*> PersistentViewUniformBufferExtensions;
-
-		for (IPersistentViewUniformBufferExtension* Extension : PersistentViewUniformBufferExtensions)
-		{
-			Extension->BeginRenderView(&ReferenceView);
-		}
-
-		ReferenceView.RayTracingMeshResourceCollector = MakeUnique<FRayTracingMeshResourceCollector>(
-			Scene->GetFeatureLevel(),
+		RayTracingCollector.AddViewMeshArrays(
+			&View,
+			&View.RayTracedDynamicMeshElements,
+			&View.SimpleElementCollector,
+			&DummyDynamicPrimitiveShaderData,
+			ViewFamily.GetFeatureLevel(),
 			&DynamicIndexBufferForInitViews,
 			&DynamicVertexBufferForInitViews,
-			&DynamicReadBufferForInitViews);
+			&DynamicReadBufferForInitViews
+			);
 
-		FRayTracingMaterialGatheringContext MaterialGatheringContext
-		{
-			Scene,
-			&ReferenceView,
-			ViewFamily,
-			*ReferenceView.RayTracingMeshResourceCollector
-		};
+		View.DynamicRayTracingMeshCommandStorage.RayTracingMeshCommands.Reserve(Scene->Primitives.Num());
+		View.VisibleRayTracingMeshCommands.Reserve(Scene->Primitives.Num());
+	}
+
+	const int8 ReferenceViewIndex = 0;
+	FViewInfo& ReferenceView = Views[ReferenceViewIndex];
+
+	extern TSet<IPersistentViewUniformBufferExtension*> PersistentViewUniformBufferExtensions;
+
+	for (IPersistentViewUniformBufferExtension* Extension : PersistentViewUniformBufferExtensions)
+	{
+		Extension->BeginRenderView(&ReferenceView);
+	}
+
+	ReferenceView.RayTracingMeshResourceCollector = MakeUnique<FRayTracingMeshResourceCollector>(
+		Scene->GetFeatureLevel(),
+		&DynamicIndexBufferForInitViews,
+		&DynamicVertexBufferForInitViews,
+		&DynamicReadBufferForInitViews);
+
+	FRayTracingMaterialGatheringContext MaterialGatheringContext
+	{
+		Scene,
+		&ReferenceView,
+		ViewFamily,
+		RHICmdList,
+		*ReferenceView.RayTracingMeshResourceCollector
+	};
+
+	struct FRelevantPrimitive
+	{
+		FRHIRayTracingGeometry* RayTracingGeometryRHI = nullptr;
+		TArrayView<const int32> CachedRayTracingMeshCommandIndices;
+		int32 PrimitiveIndex = -1;
+		int8 ViewIndex = -1;
+		int8 LODIndex = -1;
+		uint8 RayTracedMeshElementsMask = 0;
+		uint8 InstanceMask = 0;
+		bool bAllSegmentsOpaque = true;
+		bool bAnySegmentsCastShadow = false;
+		bool bAnySegmentsDecal = false;
+	};
+
+	// Unified array is used for static and dynamic primitives because we don't know ahead of time how many we'll have of each.
+	TArray<FRelevantPrimitive> RelevantPrimitives;
+	RelevantPrimitives.Reserve(Scene->PrimitiveSceneProxies.Num());
+
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(GatherRayTracingWorldInstances_RelevantPrimitives);
 
 		int32 BroadIndex = 0;
+
 		for (int PrimitiveIndex = 0; PrimitiveIndex < Scene->PrimitiveSceneProxies.Num(); PrimitiveIndex++)
 		{
 			while (PrimitiveIndex >= int(Scene->TypeOffsetTable[BroadIndex].Offset))
@@ -680,7 +728,7 @@ bool FDeferredShadingSceneRenderer::GatherRayTracingWorldInstances(FRHICommandLi
 				BroadIndex++;
 			}
 
-			FPrimitiveSceneInfo* SceneInfo = Scene->Primitives[PrimitiveIndex];
+			const FPrimitiveSceneInfo* SceneInfo = Scene->Primitives[PrimitiveIndex];
 
 			if (!SceneInfo->bIsRayTracingRelevant)
 			{
@@ -694,7 +742,16 @@ bool FDeferredShadingSceneRenderer::GatherRayTracingWorldInstances(FRHICommandLi
 				continue;
 			}
 
-			uint8 RayTracedMeshElementsMask = 0;
+			if (!(SceneInfo->bShouldRenderInMainPass && SceneInfo->bDrawInGame))
+			{
+				continue;
+			}
+
+			bool bIsDynamic = false;
+
+			FRelevantPrimitive Item;
+			Item.PrimitiveIndex = PrimitiveIndex;
+
 			for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
 			{
 				FViewInfo& View = Views[ViewIndex];
@@ -703,164 +760,307 @@ bool FDeferredShadingSceneRenderer::GatherRayTracingWorldInstances(FRHICommandLi
 					continue;
 				}
 
-				if ((View.bIsReflectionCapture && !SceneInfo->bIsVisibleInReflectionCaptures)
-					|| (View.bIsSceneCapture && GRayTracingSceneCaptures == 0))
+				if (View.bIsReflectionCapture)
 				{
 					continue;
 				}
 
-				//#dxr_todo UE-68621  The Raytracing codepath does not support Showflags since data moved to the SceneInfo. 
-				//Touching the SceneProxy to determine this would simply cost too much
-				if (SceneInfo->bShouldRenderInMainPass && SceneInfo->bDrawInGame)
+				if (View.HiddenPrimitives.Contains(SceneInfo->PrimitiveComponentId))
 				{
-					if (SceneInfo->bIsRayTracingStaticRelevant && View.Family->EngineShowFlags.StaticMeshes)
-					{
-						static const auto ICVarStaticMeshLODDistanceScale = IConsoleManager::Get().FindConsoleVariable(TEXT("r.StaticMeshLODDistanceScale"));
-						float LODScale = ICVarStaticMeshLODDistanceScale->GetFloat() * View.LODDistanceFactor;
+					continue;
+				}
 
-						const FPrimitiveBounds& Bounds = Scene->PrimitiveBounds[PrimitiveIndex];
-						const FPrimitiveSceneInfo* RESTRICT PrimitiveSceneInfo = Scene->Primitives[PrimitiveIndex];
+				if (View.ShowOnlyPrimitives.IsSet() && !View.ShowOnlyPrimitives->Contains(SceneInfo->PrimitiveComponentId))
+				{
+					continue;
+				}
 
-						FLODMask LODToRender;
+				bool bShouldRayTraceSceneCapture = GRayTracingSceneCaptures > 0 || (GRayTracingSceneCaptures == -1 && View.bSceneCaptureUsesRayTracing);
+				if (View.bIsSceneCapture && (!bShouldRayTraceSceneCapture || !SceneInfo->bIsVisibleInReflectionCaptures))
+				{
+					continue;
+				}
+				
+				FSceneViewState* ViewState = (FSceneViewState*)View.State;
+				const bool bHLODActive = Scene->SceneLODHierarchy.IsActive();
+				const FHLODVisibilityState* const HLODState = bHLODActive && ViewState ? &ViewState->HLODVisibilityState : nullptr;
 
-						const int8 CurFirstLODIdx = PrimitiveSceneInfo->Proxy->GetCurrentFirstLODIdx_RenderThread();
-						check(CurFirstLODIdx >= 0);
+				if (HLODState && HLODState->IsNodeForcedHidden(PrimitiveIndex))
+				{
+					continue;
+				}
 
-						float MeshScreenSizeSquared = 0;
-						int32 ForcedLODLevel = GetCVarForceLOD();
-						if (SceneInfo->bIsUsingCustomLODRules)
-						{
-							FPrimitiveSceneProxy* SceneProxy = Scene->PrimitiveSceneProxies[PrimitiveIndex];
-							LODToRender = SceneProxy->GetCustomLOD(View, View.LODDistanceFactor, ForcedLODLevel, MeshScreenSizeSquared);
-							LODToRender.ClampToFirstLOD(CurFirstLODIdx);
-						}
-						else
-						{
-							LODToRender = ComputeLODForMeshes(SceneInfo->StaticMeshRelevances, View, Bounds.BoxSphereBounds.Origin, Bounds.BoxSphereBounds.SphereRadius, ForcedLODLevel, MeshScreenSizeSquared, CurFirstLODIdx, LODScale, false);
-						}
-
-						FRayTracingGeometryRHIRef RayTracingGeometryInstance = SceneInfo->GetStaticRayTracingGeometryInstance(LODToRender.GetRayTracedLOD());
-						if (!RayTracingGeometryInstance.IsValid())
-						{
-							continue;
-						}
-
-						const int NewInstanceIndex = View.RayTracingGeometryInstances.Num();
-						uint8 NewInstanceMask = 0;
-						bool bAllSegmentsOpaque = true;
-						bool bAnySegmentsCastShadow = false;
-						bool bAnySegmentsDecal = false;
-
-						uint32 LODIndex = LODToRender.GetRayTracedLOD();
-						// Sometimes LODIndex is out of range because it is clamped by ClampToFirstLOD, like the requested LOD is being streamed in and hasn't been available
-						// According to InitViews, we should hide the static mesh instance
-						if (SceneInfo->CachedRayTracingMeshCommandIndicesPerLOD.IsValidIndex(LODIndex))
-						{
-							const auto& CachedRayTracingMeshCommandIndices = SceneInfo->CachedRayTracingMeshCommandIndicesPerLOD[LODIndex];
-							for (auto CommandIndex : CachedRayTracingMeshCommandIndices)
-							{
-								if (CommandIndex >= 0)
-								{
-									FVisibleRayTracingMeshCommand NewVisibleMeshCommand;
-
-									NewVisibleMeshCommand.RayTracingMeshCommand = &Scene->CachedRayTracingMeshCommands.RayTracingMeshCommands[CommandIndex];
-									NewVisibleMeshCommand.InstanceIndex = NewInstanceIndex;
-
-									View.VisibleRayTracingMeshCommands.Add(NewVisibleMeshCommand);
-									VisibleDrawCommandStartOffset[ViewIndex]++;
-
-									NewInstanceMask |= NewVisibleMeshCommand.RayTracingMeshCommand->InstanceMask;
-									bAllSegmentsOpaque &= NewVisibleMeshCommand.RayTracingMeshCommand->bOpaque;
-									bAnySegmentsCastShadow |= NewVisibleMeshCommand.RayTracingMeshCommand->bCastRayTracedShadows;
-									bAnySegmentsDecal |= NewVisibleMeshCommand.RayTracingMeshCommand->bDecal;
-								}
-								else
-								{
-									// CommandIndex == -1 indicates that the mesh batch has been filtered by FRayTracingMeshProcessor (like the shadow depth pass batch)
-									// Do nothing in this case
-								}
-							}
-
-							if (GRayTracingExcludeDecals && bAnySegmentsDecal)
-							{
-								continue;
-							}
-
-							NewInstanceMask |= bAnySegmentsCastShadow ? RAY_TRACING_MASK_SHADOW : 0;
-
-							// When no cached command is found, NewInstanceMask == 0 and the instance is effectively filtered out
-							FRayTracingGeometryInstance RayTracingInstance = { RayTracingGeometryInstance };
-							RayTracingInstance.Transforms.Add(Scene->PrimitiveTransforms[PrimitiveIndex]);
-							RayTracingInstance.UserData.Add((uint32)PrimitiveIndex);
-							RayTracingInstance.Mask = NewInstanceMask;
-							RayTracingInstance.bForceOpaque = bAllSegmentsOpaque;
-							View.RayTracingGeometryInstances.Add(RayTracingInstance);
-						}
-					}
-					else if (View.Family->EngineShowFlags.SkeletalMeshes)
-					{
-						RayTracedMeshElementsMask |= 1 << ViewIndex;
-					}
+				//#dxr_todo UE-68621  The Raytracing code path does not support ShowFlags since data moved to the SceneInfo. 
+				//Touching the SceneProxy to determine this would simply cost too much
+				if (SceneInfo->bIsRayTracingStaticRelevant && View.Family->EngineShowFlags.StaticMeshes)
+				{
+					Item.ViewIndex = ViewIndex;
+					RelevantPrimitives.Add(Item);
+				}
+				else if (View.Family->EngineShowFlags.SkeletalMeshes)
+				{
+					Item.RayTracedMeshElementsMask |= 1 << ViewIndex;
 				}
 			}
 
-			if (RayTracedMeshElementsMask != 0)
+			if (Item.RayTracedMeshElementsMask)
 			{
-				FPrimitiveSceneProxy* SceneProxy = Scene->PrimitiveSceneProxies[PrimitiveIndex];
-				TArray<FRayTracingInstance> RayTracingInstances;
-				SceneProxy->GetDynamicRayTracingInstances(MaterialGatheringContext, RayTracingInstances);
+				Item.ViewIndex = ReferenceViewIndex;
+				RelevantPrimitives.Add(Item);
+			}
+		}
+	}
 
+	FGraphEventArray LODTaskList;
+
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(GatherRayTracingWorldInstances_ComputeLOD);
+
+		static const auto ICVarStaticMeshLODDistanceScale = IConsoleManager::Get().FindConsoleVariable(TEXT("r.StaticMeshLODDistanceScale"));
+		const float LODScaleCVarValue = ICVarStaticMeshLODDistanceScale->GetFloat();
+		const int32 ForcedLODLevel = GetCVarForceLOD();
+
+		const uint32 NumTotalItems = RelevantPrimitives.Num();
+		const uint32 TargetItemsPerTask = 1024; // Granularity based on profiling Infiltrator scene
+		const uint32 NumTasks = FMath::Max(1u, FMath::DivideAndRoundUp(NumTotalItems, TargetItemsPerTask));
+		const uint32 ItemsPerTask = FMath::DivideAndRoundUp(NumTotalItems, NumTasks); // Evenly divide commands between tasks (avoiding potential short last task)
+
+		LODTaskList.Reserve(NumTasks);
+
+		for (uint32 TaskIndex = 0; TaskIndex < NumTasks; ++TaskIndex)
+		{
+			const uint32 FirstTaskItemIndex = TaskIndex * ItemsPerTask;
+
+			LODTaskList.Add(FFunctionGraphTask::CreateAndDispatchWhenReady(
+			[	Items = RelevantPrimitives.GetData() + FirstTaskItemIndex,
+				NumItems = FMath::Min(ItemsPerTask, NumTotalItems - FirstTaskItemIndex),
+				Views = Views.GetData(),
+				Scene = this->Scene,
+				LODScaleCVarValue,
+				ForcedLODLevel
+			]()
+			{
+				TRACE_CPUPROFILER_EVENT_SCOPE(GatherRayTracingWorldInstances_ComputeLOD_Task);
+
+				for (uint32 i = 0; i < NumItems; ++i)
 				{
-					for (auto DynamicRayTracingGeometryUpdate : MaterialGatheringContext.DynamicRayTracingGeometriesToUpdate)
+					FRelevantPrimitive& RelevantPrimitive = Items[i];
+					if (RelevantPrimitive.RayTracedMeshElementsMask)
 					{
-						Scene->GetRayTracingDynamicGeometryCollection()->AddDynamicMeshBatchForGeometryUpdate(
-							Scene,
-							&ReferenceView,
-							SceneProxy,
-							DynamicRayTracingGeometryUpdate,
-							PrimitiveIndex
-						);
+						continue; // skip dynamic primitives
 					}
 
-					MaterialGatheringContext.DynamicRayTracingGeometriesToUpdate.Reset();
-				}
+					const int32 PrimitiveIndex = RelevantPrimitive.PrimitiveIndex;
+					const FPrimitiveSceneInfo* SceneInfo = Scene->Primitives[PrimitiveIndex];
+					const int32 ViewIndex = RelevantPrimitive.ViewIndex;
+					const FViewInfo& View = Views[ViewIndex];
 
-				if (RayTracingInstances.Num() > 0)
-				{
-					for (FRayTracingInstance& Instance : RayTracingInstances)
+					const FPrimitiveBounds& Bounds = Scene->PrimitiveBounds[PrimitiveIndex];
+					const FPrimitiveSceneInfo* RESTRICT PrimitiveSceneInfo = Scene->Primitives[PrimitiveIndex];
+
+					FLODMask LODToRender;
+
+					const int8 CurFirstLODIdx = PrimitiveSceneInfo->Proxy->GetCurrentFirstLODIdx_RenderThread();
+					check(CurFirstLODIdx >= 0);
+
+					float MeshScreenSizeSquared = 0;
+					if (SceneInfo->bIsUsingCustomLODRules)
 					{
-						FRayTracingGeometryInstance RayTracingInstance = { Instance.Geometry->RayTracingGeometryRHI };
-						RayTracingInstance.UserData.Add((uint32)PrimitiveIndex);
-						RayTracingInstance.Mask = Instance.Mask;
-						RayTracingInstance.bForceOpaque = Instance.bForceOpaque;
+						PRAGMA_DISABLE_DEPRECATION_WARNINGS
+						FPrimitiveSceneProxy* SceneProxy = Scene->PrimitiveSceneProxies[PrimitiveIndex];
+						LODToRender = SceneProxy->GetCustomLOD(View, View.LODDistanceFactor, ForcedLODLevel, MeshScreenSizeSquared);
+						LODToRender.ClampToFirstLOD(CurFirstLODIdx);
+						PRAGMA_ENABLE_DEPRECATION_WARNINGS
+					}
+					else
+					{
+						float LODScale = LODScaleCVarValue * View.LODDistanceFactor;
+						LODToRender = ComputeLODForMeshes(SceneInfo->StaticMeshRelevances, View, Bounds.BoxSphereBounds.Origin, Bounds.BoxSphereBounds.SphereRadius, ForcedLODLevel, MeshScreenSizeSquared, CurFirstLODIdx, LODScale, false);
+					}
 
-						// Thin geometries like hair don't have material, as they only support shadow at the moment.
-						check(Instance.Materials.Num() == Instance.Geometry->Initializer.Segments.Num() || 
-							 (Instance.Geometry->Initializer.Segments.Num() == 0 && Instance.Materials.Num() == 1) || 
-							 (Instance.Materials.Num() == 0 && (Instance.Mask & RAY_TRACING_MASK_THIN_SHADOW) > 0));
+					FRHIRayTracingGeometry* RayTracingGeometryInstance = SceneInfo->GetStaticRayTracingGeometryInstance(LODToRender.GetRayTracedLOD());
+					if (RayTracingGeometryInstance == nullptr)
+					{
+						continue;
+					}
 
+
+					// Sometimes LODIndex is out of range because it is clamped by ClampToFirstLOD, like the requested LOD is being streamed in and hasn't been available
+					// According to InitViews, we should hide the static mesh instance
+					const int8 LODIndex = LODToRender.GetRayTracedLOD();
+					if (SceneInfo->CachedRayTracingMeshCommandIndicesPerLOD.IsValidIndex(LODIndex))
+					{
+						RelevantPrimitive.LODIndex = LODIndex;
+						RelevantPrimitive.RayTracingGeometryRHI = SceneInfo->GetStaticRayTracingGeometryInstance(LODIndex);
+
+						RelevantPrimitive.CachedRayTracingMeshCommandIndices = SceneInfo->CachedRayTracingMeshCommandIndicesPerLOD[LODIndex];
+
+						for (int32 CommandIndex : RelevantPrimitive.CachedRayTracingMeshCommandIndices)
+						{
+							if (CommandIndex >= 0)
+							{
+								const FRayTracingMeshCommand& RayTracingMeshCommand = Scene->CachedRayTracingMeshCommands.RayTracingMeshCommands[CommandIndex];
+
+								RelevantPrimitive.InstanceMask |= RayTracingMeshCommand.InstanceMask;
+								RelevantPrimitive.bAllSegmentsOpaque &= RayTracingMeshCommand.bOpaque;
+								RelevantPrimitive.bAnySegmentsCastShadow |= RayTracingMeshCommand.bCastRayTracedShadows;
+								RelevantPrimitive.bAnySegmentsDecal |= RayTracingMeshCommand.bDecal;
+							}
+							else
+							{
+								// CommandIndex == -1 indicates that the mesh batch has been filtered by FRayTracingMeshProcessor (like the shadow depth pass batch)
+								// Do nothing in this case
+							}
+						}
+
+						RelevantPrimitive.InstanceMask |= RelevantPrimitive.bAnySegmentsCastShadow ? RAY_TRACING_MASK_SHADOW : 0;
+					}
+				}
+			},
+			TStatId(), nullptr, ENamedThreads::AnyThread));
+		}
+	}
+
+	//
+
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(GatherRayTracingWorldInstances_DynamicElements);
+
+		for (const FRelevantPrimitive& RelevantPrimitive : RelevantPrimitives)
+		{
+			const uint8 RayTracedMeshElementsMask = RelevantPrimitive.RayTracedMeshElementsMask;
+
+			if (RayTracedMeshElementsMask == 0)
+			{
+				continue;
+			}
+
+			const int32 PrimitiveIndex = RelevantPrimitive.PrimitiveIndex;
+			const FPrimitiveSceneInfo* SceneInfo = Scene->Primitives[PrimitiveIndex];
+
+			FPrimitiveSceneProxy* SceneProxy = Scene->PrimitiveSceneProxies[PrimitiveIndex];
+			RayTracingInstances.Reset();
+			SceneProxy->GetDynamicRayTracingInstances(MaterialGatheringContext, RayTracingInstances);
+
+			for (auto DynamicRayTracingGeometryUpdate : MaterialGatheringContext.DynamicRayTracingGeometriesToUpdate)
+			{
+				Scene->GetRayTracingDynamicGeometryCollection()->AddDynamicMeshBatchForGeometryUpdate(
+					Scene,
+					&ReferenceView,
+					SceneProxy,
+					DynamicRayTracingGeometryUpdate,
+					PrimitiveIndex
+				);
+			}
+
+			MaterialGatheringContext.DynamicRayTracingGeometriesToUpdate.Reset();
+
+			if (RayTracingInstances.Num() > 0)
+			{
+				for (FRayTracingInstance& Instance : RayTracingInstances)
+				{
+					FRayTracingGeometryInstance RayTracingInstance = { Instance.Geometry->RayTracingGeometryRHI };
+					RayTracingInstance.UserData.Add((uint32)PrimitiveIndex);
+					RayTracingInstance.Mask = Instance.Mask;
+					RayTracingInstance.bForceOpaque = Instance.bForceOpaque;
+
+					// Thin geometries like hair don't have material, as they only support shadow at the moment.
+					check(Instance.Materials.Num() == Instance.Geometry->Initializer.Segments.Num() ||
+						(Instance.Geometry->Initializer.Segments.Num() == 0 && Instance.Materials.Num() == 1) ||
+						(Instance.Materials.Num() == 0 && (Instance.Mask & RAY_TRACING_MASK_THIN_SHADOW) > 0));
+
+					if (Instance.InstanceGPUTransformsSRV.IsValid())
+					{
+						RayTracingInstance.NumTransforms = Instance.NumTransforms;
+						RayTracingInstance.GPUTransformsSRV = Instance.InstanceGPUTransformsSRV;
+					}
+					else 
+					{
+						RayTracingInstance.NumTransforms = Instance.InstanceTransforms.Num();
 						RayTracingInstance.Transforms.SetNumUninitialized(Instance.InstanceTransforms.Num());
 						FMemory::Memcpy(RayTracingInstance.Transforms.GetData(), Instance.InstanceTransforms.GetData(), Instance.InstanceTransforms.Num() * sizeof(RayTracingInstance.Transforms[0]));
 						static_assert(TIsSame<decltype(RayTracingInstance.Transforms[0]), decltype(Instance.InstanceTransforms[0])>::Value, "Unexpected transform type");
+					}			
 
-						uint32 InstanceIndex = ReferenceView.RayTracingGeometryInstances.Add(RayTracingInstance);
+					uint32 InstanceIndex = ReferenceView.RayTracingGeometryInstances.Add(RayTracingInstance);
 
-						for (int32 ViewIndex = 1; ViewIndex < Views.Num(); ViewIndex++)
-						{
-							Views[ViewIndex].RayTracingGeometryInstances.Add(RayTracingInstance);
-						}
+					for (int32 ViewIndex = 1; ViewIndex < Views.Num(); ViewIndex++)
+					{
+						Views[ViewIndex].RayTracingGeometryInstances.Add(RayTracingInstance);
+					}
 
-						for (int32 SegmentIndex = 0; SegmentIndex < Instance.Materials.Num(); SegmentIndex++)
-						{
-							FMeshBatch& MeshBatch = Instance.Materials[SegmentIndex];
-							FDynamicRayTracingMeshCommandContext CommandContext(ReferenceView.DynamicRayTracingMeshCommandStorage, ReferenceView.VisibleRayTracingMeshCommands, SegmentIndex, InstanceIndex);
-							FRayTracingMeshProcessor RayTracingMeshProcessor(&CommandContext, Scene, &ReferenceView);
+					for (int32 SegmentIndex = 0; SegmentIndex < Instance.Materials.Num(); SegmentIndex++)
+					{
+						FMeshBatch& MeshBatch = Instance.Materials[SegmentIndex];
+						FDynamicRayTracingMeshCommandContext CommandContext(ReferenceView.DynamicRayTracingMeshCommandStorage, ReferenceView.VisibleRayTracingMeshCommands, SegmentIndex, InstanceIndex);
+						FRayTracingMeshProcessor RayTracingMeshProcessor(&CommandContext, Scene, &ReferenceView);
 
-							RayTracingMeshProcessor.AddMeshBatch(MeshBatch, 1, SceneProxy);
-						}
+						RayTracingMeshProcessor.AddMeshBatch(MeshBatch, 1, SceneProxy);
 					}
 				}
 			}
+		}
+	}
+
+	//
+
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(GatherRayTracingWorldInstances_AddInstances);
+
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(WaitForLODTasks);
+			FTaskGraphInterface::Get().WaitUntilTasksComplete(LODTaskList, ENamedThreads::GetRenderThread_Local());
+		}
+
+		for (const FRelevantPrimitive& RelevantPrimitive : RelevantPrimitives)
+		{
+			const int32 PrimitiveIndex = RelevantPrimitive.PrimitiveIndex;
+			const FPrimitiveSceneInfo* SceneInfo = Scene->Primitives[PrimitiveIndex];
+			const int32 ViewIndex = RelevantPrimitive.ViewIndex;
+			FViewInfo& View = Views[ViewIndex];
+			const int8 LODIndex = RelevantPrimitive.LODIndex;
+
+			if (LODIndex < 0 || RelevantPrimitive.RayTracedMeshElementsMask != 0)
+			{
+				continue; // skip dynamic primitives and other 
+			}
+
+			const int NewInstanceIndex = View.RayTracingGeometryInstances.Num();
+
+
+			for (int32 CommandIndex : RelevantPrimitive.CachedRayTracingMeshCommandIndices)
+			{
+				if (CommandIndex >= 0)
+				{
+					FVisibleRayTracingMeshCommand NewVisibleMeshCommand;
+
+					NewVisibleMeshCommand.RayTracingMeshCommand = &Scene->CachedRayTracingMeshCommands.RayTracingMeshCommands[CommandIndex];
+					NewVisibleMeshCommand.InstanceIndex = NewInstanceIndex;
+					View.VisibleRayTracingMeshCommands.Add(NewVisibleMeshCommand);
+					VisibleDrawCommandStartOffset[ViewIndex]++;
+				}
+				else
+				{
+					// CommandIndex == -1 indicates that the mesh batch has been filtered by FRayTracingMeshProcessor (like the shadow depth pass batch)
+					// Do nothing in this case
+				}
+			}
+
+			if (GRayTracingExcludeDecals && RelevantPrimitive.bAnySegmentsDecal)
+			{
+				continue;
+			}
+
+			FRayTracingGeometryInstance& RayTracingInstance = View.RayTracingGeometryInstances.Emplace_GetRef();
+			RayTracingInstance.NumTransforms = 1;
+			RayTracingInstance.Transforms.SetNumUninitialized(1);
+			RayTracingInstance.UserData.SetNumUninitialized(1);
+
+			RayTracingInstance.GeometryRHI = RelevantPrimitive.RayTracingGeometryRHI;
+			RayTracingInstance.Transforms[0] = Scene->PrimitiveTransforms[PrimitiveIndex];
+			RayTracingInstance.UserData[0] = (uint32)PrimitiveIndex;
+			RayTracingInstance.Mask = RelevantPrimitive.InstanceMask; // When no cached command is found, InstanceMask == 0 and the instance is effectively filtered out
+			RayTracingInstance.bForceOpaque = RelevantPrimitive.bAllSegmentsOpaque;
 		}
 	}
 
@@ -869,15 +1069,17 @@ bool FDeferredShadingSceneRenderer::GatherRayTracingWorldInstances(FRHICommandLi
 
 bool FDeferredShadingSceneRenderer::DispatchRayTracingWorldUpdates(FRHICommandListImmediate& RHICmdList)
 {
-	if (!IsRayTracingEnabled() || GetForceRayTracingEffectsCVarValue() == 0 || Views.Num() == 0)
+	if (!IsRayTracingEnabled() || Views.Num() == 0)
 	{
 		return false;
 	}
 
 	bool bAnyRayTracingPassEnabled = false;
+	bool bPathTracingOrDebugViewEnabled = false;
 	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
 	{
 		bAnyRayTracingPassEnabled |= AnyRayTracingPassEnabled(Scene, Views[ViewIndex]);
+		bPathTracingOrDebugViewEnabled |= !CanOverlayRayTracingOutput(Views[ViewIndex]);
 	}
 
 	if (!bAnyRayTracingPassEnabled)
@@ -885,8 +1087,70 @@ bool FDeferredShadingSceneRenderer::DispatchRayTracingWorldUpdates(FRHICommandLi
 		return false;
 	}
 
+	if (GetForceRayTracingEffectsCVarValue() == 0 && !bPathTracingOrDebugViewEnabled)
+	{
+		return false;
+	}
+
+	TRACE_CPUPROFILER_EVENT_SCOPE(FDeferredShadingSceneRenderer::DispatchRayTracingWorldUpdates);
+
 	bool bAsyncUpdateGeometry = (CVarRayTracingAsyncBuild.GetValueOnRenderThread() != 0)
-							  && GSupportAsyncComputeRaytracingBuildBVH;
+							  && GRHISupportsRayTracingAsyncBuildAccelerationStructure;
+
+	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
+	{
+		FViewInfo& View = Views[ViewIndex];
+		SET_DWORD_STAT(STAT_RayTracingInstances, View.RayTracingGeometryInstances.Num());
+
+		FRayTracingSceneInitializer SceneInitializer;
+		SceneInitializer.Instances = View.RayTracingGeometryInstances;
+		SceneInitializer.ShaderSlotsPerGeometrySegment = RAY_TRACING_NUM_SHADER_SLOTS;
+		SceneInitializer.NumMissShaderSlots = RAY_TRACING_NUM_MISS_SHADER_SLOTS;
+
+		// #dxr_todo: UE-72565: refactor ray tracing effects to not be member functions of DeferredShadingRenderer. register each effect at startup and just loop over them automatically to gather all required shaders
+		TArray<FRHIRayTracingShader*> RayGenShaders;
+		PrepareRayTracingReflections(View, *Scene, RayGenShaders);
+		PrepareRayTracingShadows(View, RayGenShaders);
+		PrepareRayTracingAmbientOcclusion(View, RayGenShaders);
+		PrepareRayTracingSkyLight(View, RayGenShaders);
+		PrepareRayTracingRectLight(View, RayGenShaders);
+		PrepareRayTracingGlobalIllumination(View, RayGenShaders);
+		PrepareRayTracingTranslucency(View, RayGenShaders);
+		PrepareRayTracingDebug(View, RayGenShaders);
+		PreparePathTracing(View, RayGenShaders);
+
+		View.RayTracingScene.RayTracingSceneRHI = RHICreateRayTracingScene(SceneInitializer);
+
+		if (RayGenShaders.Num())
+		{
+			auto DefaultHitShader = View.ShaderMap->GetShader<FOpaqueShadowHitGroup>().GetRayTracingShader();
+
+			View.RayTracingMaterialPipeline = BindRayTracingMaterialPipeline(RHICmdList, View,
+				RayGenShaders,
+				DefaultHitShader
+			);
+		}
+
+		// Initialize common resources used for lighting in ray tracing effects
+
+		View.RayTracingSubSurfaceProfileTexture = GetSubsufaceProfileTexture_RT(RHICmdList);
+		if (!View.RayTracingSubSurfaceProfileTexture)
+		{
+			View.RayTracingSubSurfaceProfileTexture = GSystemTextures.BlackDummy;
+		}
+
+		View.RayTracingSubSurfaceProfileSRV = RHICreateShaderResourceView(View.RayTracingSubSurfaceProfileTexture->GetRenderTargetItem().ShaderResourceTexture, 0);
+
+		View.RayTracingLightingDataUniformBuffer = CreateLightDataPackedUniformBuffer(Scene->Lights, View,
+			EUniformBufferUsage::UniformBuffer_SingleFrame,
+			View.RayTracingLightingDataBuffer,
+			View.RayTracingLightingDataSRV);
+
+		if (CanUseRayTracingLightingMissShader(View.GetShaderPlatform()))
+		{
+			SetupRayTracingLightingMissShader(RHICmdList, View);
+		}
+	}
 
 	if (!bAsyncUpdateGeometry)
 	{
@@ -895,15 +1159,14 @@ bool FDeferredShadingSceneRenderer::DispatchRayTracingWorldUpdates(FRHICommandLi
 
 		Scene->GetRayTracingDynamicGeometryCollection()->DispatchUpdates(RHICmdList);
 
-		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
 		{
-			FViewInfo& View = Views[ViewIndex];
-			SET_DWORD_STAT(STAT_RayTracingInstances, View.RayTracingGeometryInstances.Num());
-			FRayTracingSceneInitializer Initializer;
-			Initializer.Instances = View.RayTracingGeometryInstances;
-			Initializer.ShaderSlotsPerGeometrySegment = RAY_TRACING_NUM_SHADER_SLOTS;
-			View.RayTracingScene.RayTracingSceneRHI = RHICreateRayTracingScene(Initializer);
-			RHICmdList.BuildAccelerationStructure(View.RayTracingScene.RayTracingSceneRHI);
+			SCOPED_DRAW_EVENT(RHICmdList, BuildRayTracingScene);
+
+			for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
+			{
+				FViewInfo& View = Views[ViewIndex];
+				RHICmdList.BuildAccelerationStructure(View.RayTracingScene.RayTracingSceneRHI);
+			}
 		}
 	}
 	else
@@ -920,15 +1183,9 @@ bool FDeferredShadingSceneRenderer::DispatchRayTracingWorldUpdates(FRHICommandLi
 		RHIAsyncCmdList.WaitComputeFence(RayTracingDynamicGeometryUpdateBeginFence);
 		Scene->GetRayTracingDynamicGeometryCollection()->DispatchUpdates(RHIAsyncCmdList);
 
-
 		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
 		{
 			FViewInfo& View = Views[ViewIndex];
-			SET_DWORD_STAT(STAT_RayTracingInstances, View.RayTracingGeometryInstances.Num());
-			FRayTracingSceneInitializer Initializer;
-			Initializer.Instances = View.RayTracingGeometryInstances;
-			Initializer.ShaderSlotsPerGeometrySegment = RAY_TRACING_NUM_SHADER_SLOTS;
-			View.RayTracingScene.RayTracingSceneRHI = RHICreateRayTracingScene(Initializer);
 			RHIAsyncCmdList.BuildAccelerationStructure(View.RayTracingScene.RayTracingSceneRHI);
 		}
 
@@ -944,37 +1201,44 @@ void FDeferredShadingSceneRenderer::WaitForRayTracingScene(FRHICommandListImmedi
 {
 	if (!IsRayTracingEnabled()) return;
 
+	TRACE_CPUPROFILER_EVENT_SCOPE(FDeferredShadingSceneRenderer::WaitForRayTracingScene);
+
+	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
+	{
+		FViewInfo& View = Views[ViewIndex];
+		if (View.RayTracingMaterialBindings.Num())
+		{
+			FTaskGraphInterface::Get().WaitUntilTaskCompletes(View.RayTracingMaterialBindingsTask, ENamedThreads::GetRenderThread_Local());
+
+			for (FRayTracingLocalShaderBindingWriter* BindingWriter : View.RayTracingMaterialBindings)
+			{
+				// Data is kept alive at the high level and explicitly deleted on RHI timeline,
+				// so we can avoid copying parameters to the command list and simply pass raw pointers around.
+				const bool bCopyDataToInlineStorage = false;
+				BindingWriter->Commit(
+					RHICmdList,
+					View.RayTracingScene.RayTracingSceneRHI,
+					View.RayTracingMaterialPipeline,
+					bCopyDataToInlineStorage);
+			}
+
+			// Move the ray tracing binding container ownership to the command list, so that memory will be
+			// released on the RHI thread timeline, after the commands that reference it are processed.
+			RHICmdList.EnqueueLambda([Ptrs = MoveTemp(View.RayTracingMaterialBindings)](FRHICommandListImmediate&)
+			{
+				for (auto Ptr : Ptrs)
+				{
+					delete Ptr;
+				}
+			});
+		}
+	}
+
 	if (RayTracingDynamicGeometryUpdateEndFence)
 	{
 		RHICmdList.WaitComputeFence(RayTracingDynamicGeometryUpdateEndFence);
 		RayTracingDynamicGeometryUpdateBeginFence = nullptr;
 		RayTracingDynamicGeometryUpdateEndFence = nullptr;
-	}
-
-	for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
-	{
-		FViewInfo& View = Views[ViewIndex];
-		// #dxr_todo: UE-72565: refactor ray tracing effects to not be member functions of DeferredShadingRenderer. register each effect at startup and just loop over them automatically to gather all required shaders
-		TArray<FRHIRayTracingShader*> RayGenShaders;
-		PrepareRayTracingReflections(View, RayGenShaders);
-		PrepareRayTracingShadows(View, RayGenShaders);
-		PrepareRayTracingAmbientOcclusion(View, RayGenShaders);
-		PrepareRayTracingSkyLight(View, RayGenShaders);
-		PrepareRayTracingRectLight(View, RayGenShaders);
-		PrepareRayTracingGlobalIllumination(View, RayGenShaders);
-		PrepareRayTracingTranslucency(View, RayGenShaders);
-		PrepareRayTracingDebug(View, RayGenShaders);
-		PreparePathTracing(View, RayGenShaders);
-
-		if (RayGenShaders.Num())
-		{
-			auto DefaultHitShader = View.ShaderMap->GetShader<FOpaqueShadowHitGroup>()->GetRayTracingShader();
-
-			View.RayTracingMaterialPipeline = BindRayTracingMaterialPipeline(RHICmdList, View,
-				RayGenShaders,
-				DefaultHitShader
-			);
-		}
 	}
 }
 
@@ -990,7 +1254,7 @@ static TAutoConsoleVariable<float> CVarStallInitViews(
 
 void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 {
-	Scene->UpdateAllPrimitiveSceneInfos(RHICmdList);
+	Scene->UpdateAllPrimitiveSceneInfos(RHICmdList, true);
 
 	check(RHICmdList.IsOutsideRenderPass());
 
@@ -1099,7 +1363,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 
 	// Find the visible primitives.
 	RHICmdList.ImmediateFlush(EImmediateFlushType::DispatchToRHIThread);
-	
+
 	bool bDoInitViewAftersPrepass = false;
 	{
 		SCOPED_GPU_STAT(RHICmdList, VisibilityCommands);
@@ -1155,6 +1419,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		if (GDoPrepareDistanceFieldSceneAfterRHIFlush && (GRHINeedsExtraDeletionLatency || !GRHICommandList.Bypass()))
 		{
 			// we will probably stall on occlusion queries, so might as well have the RHI thread and GPU work while we wait.
+			CSV_SCOPED_TIMING_STAT_EXCLUSIVE(PostInitViews_FlushDel);
 			SCOPE_CYCLE_COUNTER(STAT_PostInitViews_FlushDel);
 			RHICmdList.ImmediateFlush(EImmediateFlushType::FlushRHIThreadFlushResources);
 		}
@@ -1172,6 +1437,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 			FViewInfo& View = Views[ViewIndex];
 			SCOPED_GPU_MASK(RHICmdList, View.GPUMask);
 			ShaderPrint::BeginView(RHICmdList, View);
+			ShaderDrawDebug::BeginView(RHICmdList, View);
 		}
 
 		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
@@ -1190,6 +1456,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		if (!GDoPrepareDistanceFieldSceneAfterRHIFlush && (GRHINeedsExtraDeletionLatency || !GRHICommandList.Bypass()))
 		{
 			// we will probably stall on occlusion queries, so might as well have the RHI thread and GPU work while we wait.
+			CSV_SCOPED_TIMING_STAT_EXCLUSIVE(PostInitViews_FlushDel);
 			SCOPE_CYCLE_COUNTER(STAT_PostInitViews_FlushDel);
 			FRHICommandListExecutor::GetImmediateCommandList().ImmediateFlush(EImmediateFlushType::FlushRHIThreadFlushResources);
 		}
@@ -1362,6 +1629,10 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		SCOPE_CYCLE_COUNTER(STAT_FDeferredShadingSceneRenderer_FXSystem_PreRender);
 		RHICmdList.SetCurrentStat(GET_STATID(STAT_CLM_FXPreRender));
 		Scene->FXSystem->PreRender(RHICmdList, &Views[0].GlobalDistanceFieldInfo.ParameterData, Views[0].AllowGPUParticleUpdate());
+		if (FGPUSortManager* GPUSortManager = Scene->FXSystem->GetGPUSortManager())
+		{
+			GPUSortManager->OnPreRender(RHICmdList);
+		}
 	}
 
 	if (AsyncDitherLODEndFence)
@@ -1403,13 +1674,23 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 
 	RunGPUSkinCacheTransition(RHICmdList, Scene, EGPUSkinCacheTransition::Renderer);
 
+	if (HasHairStrandsProcess(Scene->GetShaderPlatform()))
+	{
+		auto ShaderMap = GetGlobalShaderMap(FeatureLevel);
+		RunHairStrandsProcess(RHICmdList, ShaderMap);
+	}
+
 	// Interpolation needs to happen after the skin cache run as there is a dependency 
 	// on the skin cache output.
-	if (IsHairStrandsEnable(Scene->GetShaderPlatform()) && Views.Num() > 0)
+	const bool bRunHairStrands = IsHairStrandsEnable(Scene->GetShaderPlatform()) && (Views.Num() > 0) && !ViewFamily.bWorldIsPaused;
+	FHairStrandClusterData HairClusterData;
+	if (bRunHairStrands)
 	{
 		const EWorldType::Type WorldType = Views[0].Family->Scene->GetWorld()->WorldType;
 		auto ShaderMap = GetGlobalShaderMap(FeatureLevel);
-		RunHairStrandsInterpolation(RHICmdList, WorldType, ShaderMap, EHairStrandsInterpolationType::RenderStrands);
+
+		FGPUSkinCache* GPUSkinCache = Scene->GetGPUSkinCache();
+		RunHairStrandsInterpolation(RHICmdList, WorldType, GPUSkinCache, &Views[0].ShaderDrawData, ShaderMap, EHairStrandsInterpolationType::RenderStrands, &HairClusterData); // Send data to full up with culling
 	}
 
 	// Before starting the render, all async task for the Custom data must be completed
@@ -1464,7 +1745,12 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		SCOPED_GPU_STAT(RHICmdList, SortLights);
 		GatherAndSortLights(SortedLightSet);
 		ComputeLightGrid(RHICmdList, bComputeLightGrid, SortedLightSet);
+
 	}
+
+	CSV_CUSTOM_STAT(LightCount, All,  float(SortedLightSet.SortedLights.Num()), ECsvCustomStatOp::Set);
+	CSV_CUSTOM_STAT(LightCount, ShadowOff, float(SortedLightSet.AttenuationLightStart), ECsvCustomStatOp::Set);
+	CSV_CUSTOM_STAT(LightCount, ShadowOn, float(SortedLightSet.SortedLights.Num()) - float(SortedLightSet.AttenuationLightStart), ECsvCustomStatOp::Set);
 
 	{
 		SCOPE_CYCLE_COUNTER(STAT_FDeferredShadingSceneRenderer_AllocGBufferTargets);
@@ -1539,16 +1825,23 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		ComputeVolumetricFog(RHICmdList);
 	}
 
-	TRefCountPtr<IPooledRenderTarget> ForwardScreenSpaceShadowMask;
+	FHairStrandsDatas* HairDatas = nullptr;
+	FHairStrandsDatas HairDatasStorage;
+	const bool bIsViewCompatible = Views.Num() > 0 && Views[0].Family->ViewMode == VMI_Lit;
+	const bool bHairEnable = IsHairStrandsEnable(Scene->GetShaderPlatform()) && bIsViewCompatible;
 
+	TRefCountPtr<IPooledRenderTarget> ForwardScreenSpaceShadowMask;
+	TRefCountPtr<IPooledRenderTarget> ForwardScreenSpaceShadowMask_Hair;
 	if (IsForwardShadingEnabled(ShaderPlatform))
 	{
-		RenderForwardShadingShadowProjections(RHICmdList, ForwardScreenSpaceShadowMask);
+		if (bHairEnable)
+		{
+			RenderHairPrePass(RHICmdList, Scene, Views, HairClusterData, HairDatasStorage);
+			RenderHairBasePass(RHICmdList, Scene, SceneContext, Views, HairClusterData, HairDatasStorage);
+			HairDatas = &HairDatasStorage;
+		}
 
-		RenderIndirectCapsuleShadows(
-			RHICmdList, 
-			NULL, 
-			NULL);
+		RenderForwardShadingShadowProjections(RHICmdList, ForwardScreenSpaceShadowMask, ForwardScreenSpaceShadowMask_Hair, HairDatas);
 	}
 
 	// only temporarily available after early z pass and until base pass
@@ -1585,6 +1878,11 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		ServiceLocalQueue();
 	}
 	
+	if (IsForwardShadingEnabled(ShaderPlatform))
+	{
+		RenderIndirectCapsuleShadows( RHICmdList, NULL,
+			SceneContext.bScreenSpaceAOIsValid ? SceneContext.ScreenSpaceAO->GetRenderTargetItem().TargetableTexture : NULL);
+	}
 	checkSlow(RHICmdList.IsOutsideRenderPass());
 
 	if (bRenderDeferredLighting)
@@ -1632,7 +1930,8 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		 
 		// if we didn't to the prepass above, then we will need to clear now, otherwise, it's already been cleared and rendered to
 		ERenderTargetLoadAction ColorLoadAction = ERenderTargetLoadAction::ELoad;
-		ERenderTargetLoadAction DepthLoadAction = bClearDepth ? ERenderTargetLoadAction::EClear : (!IsMetalPlatform(ShaderPlatform) ? ERenderTargetLoadAction::ENoAction : ERenderTargetLoadAction::ELoad);
+
+		ERenderTargetLoadAction DepthLoadAction = bClearDepth ? ERenderTargetLoadAction::EClear : ERenderTargetLoadAction::ELoad;
 
 		const bool bClearBlack = ViewFamily.EngineShowFlags.ShaderComplexity || ViewFamily.EngineShowFlags.StationaryLightOverlap;
 		const float ClearAlpha = GetSceneColorClearAlpha();
@@ -1649,14 +1948,16 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		}
 		else
 		{
-		bIsGBufferCurrent = true;
+			bIsGBufferCurrent = true;
 		}
 		ServiceLocalQueue();
-	}
 
-	if (bRenderSkyAtmosphereEditorNotifications)
-	{
-		RenderSkyAtmosphereEditorNotifications(RHICmdList);
+		if (bRenderSkyAtmosphereEditorNotifications)
+		{
+			// We only render this warning text when bRequiresRHIClear==true to make sure the scene color buffer is allocated at this stage.
+			// When false, the option specifies that all pixels must be written to by a sky dome anyway.
+			RenderSkyAtmosphereEditorNotifications(RHICmdList);
+		}
 	}
 
 	// Wireframe mode requires bRequiresRHIClear to be true. 
@@ -1684,7 +1985,8 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 	{
 		// Make sure we have began the renderpass
 		ERenderTargetLoadAction DepthLoadAction = bDepthWasCleared ? ERenderTargetLoadAction::ELoad : ERenderTargetLoadAction::EClear;
-		SceneContext.BeginRenderingGBuffer(RHICmdList, (!IsMetalPlatform(ShaderPlatform) ? ERenderTargetLoadAction::ENoAction : ERenderTargetLoadAction::ELoad), DepthLoadAction, BasePassDepthStencilAccess, ViewFamily.EngineShowFlags.ShaderComplexity);
+
+		SceneContext.BeginRenderingGBuffer(RHICmdList, ERenderTargetLoadAction::ELoad, DepthLoadAction, BasePassDepthStencilAccess, ViewFamily.EngineShowFlags.ShaderComplexity);
 	}
 	// Wait for Async SSAO before rendering base pass with forward rendering
 	if (IsForwardShadingEnabled(ShaderPlatform))
@@ -1848,6 +2150,13 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		ServiceLocalQueue();
 	}
 
+	// Hair base pass for deferred shading
+	if (bHairEnable && !IsForwardShadingEnabled(ShaderPlatform))
+	{
+		RenderHairPrePass(RHICmdList, Scene, Views, HairClusterData, HairDatasStorage);
+		HairDatas = &HairDatasStorage;
+	}
+
 #if !UE_BUILD_SHIPPING
 	if (CVarForceBlackVelocityBuffer.GetValueOnRenderThread())
 	{
@@ -1863,7 +2172,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 	const bool bRayTracingEnabled = IsRayTracingEnabled();
 	if (bRayTracingEnabled && bCanOverlayRayTracingOutput && !IsForwardShadingEnabled(ShaderPlatform))
 	{		
-		RenderRayTracingSkyLight(RHICmdList, SkyLightRT, SkyLightHitDistanceRT);
+		RenderRayTracingSkyLight(RHICmdList, SkyLightRT, SkyLightHitDistanceRT, HairDatas);
 	}
 #endif // RHI_RAYTRACING
 	checkSlow(RHICmdList.IsOutsideRenderPass());
@@ -1926,8 +2235,9 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 	{
 		// Clear stencil to 0 now that deferred decals are done using what was setup in the base pass
 		// Shadow passes and other users of stencil assume it is cleared to 0 going in
+		// NB: Depth Load/Write necessary for Vulkan Platforms
 		FRHIRenderPassInfo RPInfo(SceneContext.GetSceneDepthSurface(),
-			EDepthStencilTargetActions::ClearStencilDontLoadDepth_StoreStencilNotDepth);
+			EDepthStencilTargetActions::LoadDepthClearStencil_StoreDepthStencil);
 		RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil = FExclusiveDepthStencil::DepthNop_StencilWrite;
 
 		RHICmdList.TransitionResource(FExclusiveDepthStencil::DepthNop_StencilWrite, SceneContext.GetSceneDepthSurface());
@@ -1940,29 +2250,11 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 
 	checkSlow(RHICmdList.IsOutsideRenderPass());
 
-	// #hair_todo: Add multi-view
-	FHairStrandsDatas* HairDatas = nullptr;
-	FHairStrandsDatas HairDatasStorage;
-	const bool bIsViewCompatible = Views.Num() > 0 && Views[0].Family->ViewMode == VMI_Lit; 
-	if (IsHairStrandsEnable(Scene->GetShaderPlatform()) && bIsViewCompatible)
+	// Hair base pass for deferred shading
+	if (bHairEnable && !IsForwardShadingEnabled(ShaderPlatform))
 	{
-		SCOPED_GPU_STAT(RHICmdList, HairRendering);
-		HairDatasStorage.HairClusterPerViews = CreateHairStrandsClusters(RHICmdList, Scene, Views);
-		VoxelizeHairStrands(RHICmdList, Scene, Views, HairDatasStorage.HairClusterPerViews);
-		HairDatasStorage.DeepShadowViews = RenderHairStrandsDeepShadows(RHICmdList, Scene, Views, HairDatasStorage.HairClusterPerViews);
-		HairDatasStorage.HairVisibilityViews = RenderHairStrandsVisibilityBuffer(RHICmdList, Scene, Views, SceneContext.GBufferB, SceneContext.GetSceneColor(), SceneContext.SceneDepthZ, SceneContext.SceneVelocity, HairDatasStorage.HairClusterPerViews);
-		ServiceLocalQueue();
-
-		HairDatas = &HairDatasStorage;
-
-		if (SceneContext.bScreenSpaceAOIsValid && SceneContext.ScreenSpaceAO)
-		{
-			RenderHairStrandsAmbientOcclusion(
-				RHICmdList,
-				Views,
-				HairDatas,
-				SceneContext.ScreenSpaceAO);
-		}
+		check(HairDatas);
+		RenderHairBasePass(RHICmdList, Scene, SceneContext, Views, HairClusterData, HairDatasStorage);
 	}
 
 	// Render lighting.
@@ -2059,6 +2351,10 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 
 		ComputeSubsurfaceShim(RHICmdList, Views);
 
+		if (HairDatas)
+		{
+			RenderHairStrandsSceneColorScattering(RHICmdList, Views, HairDatas);
+		}
 #if RHI_RAYTRACING
 		if (SkyLightRT)
 		{
@@ -2067,20 +2363,58 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 #endif // RHI_RAYTRACING
 		ServiceLocalQueue();
 	}
-
+	else if (HairDatas)
+	{
+		RenderLightsForHair(RHICmdList, SortedLightSet, HairDatas, ForwardScreenSpaceShadowMask_Hair);
+		RenderDeferredReflectionsAndSkyLightingHair(RHICmdList, HairDatas);
+	}
 	checkSlow(RHICmdList.IsOutsideRenderPass());
 
-	
 	const bool bShouldRenderSingleLayerWater = ShouldRenderSingleLayerWater(Views, ViewFamily.EngineShowFlags);
+	// All views are considered above water if we don't render any water materials
+	bool bHasAnyViewsAbovewater = !bShouldRenderSingleLayerWater;
+
 	if(bShouldRenderSingleLayerWater)
 	{
+		bool bHasAnyViewsUnderwater = false;
+		bool bAnyViewWithRaytracingTranslucency = false;
+		for (const FViewInfo& View : Views)
+		{
+			bHasAnyViewsUnderwater = bHasAnyViewsUnderwater || View.IsUnderwater();
+			bHasAnyViewsAbovewater = bHasAnyViewsAbovewater || !View.IsUnderwater();
+#if RHI_RAYTRACING
+			bAnyViewWithRaytracingTranslucency = bAnyViewWithRaytracingTranslucency || ShouldRenderRayTracingTranslucency(View);
+#endif
+		}
+
+		// Run a translucency pass here if there are any views underwater. The views that run their translucency here will not run it later in the regular translucency pass
+		// The translucency pass run here will force all objects to be rendered in fullscreen pass. No partial resolution pass supported here, so that might differ from the behavior if it was rendered in the regular pass instead.
+		if (bHasAnyViewsUnderwater && !bAnyViewWithRaytracingTranslucency && ViewFamily.EngineShowFlags.Translucency && !ViewFamily.EngineShowFlags.VisualizeLightCulling && !ViewFamily.UseDebugViewPS())
+		{
+			CSV_SCOPED_TIMING_STAT_EXCLUSIVE(RenderTranslucency);
+			SCOPE_CYCLE_COUNTER(STAT_TranslucencyDrawTime);
+
+			RHICmdList.SetCurrentStat(GET_STATID(STAT_CLM_Translucency));
+
+			const bool bDrawUnderwaterViews = true;
+			RenderTranslucency(RHICmdList, bDrawUnderwaterViews);
+			ServiceLocalQueue();
+		}
+
 		RHICmdList.SetCurrentStat(GET_STATID(STAT_CLM_WaterPass));
 		SCOPED_DRAW_EVENTF(RHICmdList, WaterRendering, TEXT("WaterRendering"));
 		SCOPED_GPU_STAT(RHICmdList, WaterRendering);
 
 		// Copy the texture to be available for the water surface to refrace
 		FSingleLayerWaterPassData SingleLayerWaterPassData;
+		SingleLayerWaterPassData.ViewData.SetNum(Views.Num());
 		CopySingleLayerWaterTextures(RHICmdList, SingleLayerWaterPassData);
+
+		// Render heightfog over the color buffer if it is allocated, e.g. SingleLayerWaterUsesSimpleShading is true which is not the case on Switch.
+		if (bCanOverlayRayTracingOutput && ShouldRenderFog(ViewFamily) && SingleLayerWaterPassData.SceneColorWithoutSingleLayerWater.IsValid())
+		{
+			RenderUnderWaterFog(RHICmdList, SingleLayerWaterPassData);
+		}
 
 		// Make the Depth texture writable since the water GBuffer pass will update it
 		RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable,  SceneContext.GetSceneDepthSurface());
@@ -2178,7 +2512,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		SetupSceneTextureUniformParameters(SceneContext, FeatureLevel, ESceneTextureSetupMode::SceneDepth | ESceneTextureSetupMode::GBuffers, SceneTextureParameters);
 		TUniformBufferRef<FSceneTexturesUniformParameters> SceneTextureUniformBuffer = TUniformBufferRef<FSceneTexturesUniformParameters>::CreateUniformBufferImmediate(SceneTextureParameters, UniformBuffer_SingleFrame);
 
-        SceneContext.BeginRenderingSceneColor(RHICmdList, (!IsMetalPlatform(ShaderPlatform) ? ESimpleRenderTargetMode::EUninitializedColorExistingDepth : ESimpleRenderTargetMode::EExistingColorAndDepth));
+        SceneContext.BeginRenderingSceneColor(RHICmdList, ESimpleRenderTargetMode::EExistingColorAndDepth);
 		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
 		{
 			const FViewInfo& View = Views[ViewIndex];
@@ -2190,7 +2524,9 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 	}
 	checkSlow(RHICmdList.IsOutsideRenderPass());
 	// Unbind everything in case FX has to read.
+	PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	UnbindRenderTargets(RHICmdList);
+	PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 	// Notify the FX system that opaque primitives have been rendered and we now have a valid depth buffer.
 	if (Scene->FXSystem && Views.IsValidIndex(0))
@@ -2213,6 +2549,11 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 			SceneTextureUniformBuffer.GetReference(),
 			Views[0].AllowGPUParticleUpdate()
 		);
+
+		if (FGPUSortManager* GPUSortManager = Scene->FXSystem->GetGPUSortManager())
+		{
+			GPUSortManager->OnPostRenderOpaque(RHICmdList);
+		}
 		ServiceLocalQueue();
 	}
 
@@ -2231,7 +2572,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 	GRenderTargetPool.AddPhaseEvent(TEXT("Translucency"));
 
 	// Draw translucency.
-	if (bCanOverlayRayTracingOutput && ViewFamily.EngineShowFlags.Translucency && !ViewFamily.EngineShowFlags.VisualizeLightCulling && !ViewFamily.UseDebugViewPS())
+	if (bHasAnyViewsAbovewater && bCanOverlayRayTracingOutput && ViewFamily.EngineShowFlags.Translucency && !ViewFamily.EngineShowFlags.VisualizeLightCulling && !ViewFamily.UseDebugViewPS())
 	{
 		CSV_SCOPED_TIMING_STAT_EXCLUSIVE(RenderTranslucency);
 		SCOPE_CYCLE_COUNTER(STAT_TranslucencyDrawTime);
@@ -2254,27 +2595,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		else
 #endif
 		{
-			// For now there is only one resolve for all translucency passes. This can be changed by enabling the resolve in RenderTranslucency()
-			TRefCountPtr<IPooledRenderTarget> SceneColorCopy;
-			ConditionalResolveSceneColorForTranslucentMaterials(RHICmdList, SceneColorCopy);
-
-			// Disable UAV cache flushing so we have optimal VT feedback performance.
-			RHICmdList.AutomaticCacheFlushAfterComputeShader(false);
-
-			if (ViewFamily.AllowTranslucencyAfterDOF())
-			{
-				RenderTranslucency(RHICmdList, ETranslucencyPass::TPT_StandardTranslucency, SceneColorCopy);
-				// Translucency after DOF is rendered now, but stored in the separate translucency RT for later use.
-				RenderTranslucency(RHICmdList, ETranslucencyPass::TPT_TranslucencyAfterDOF, SceneColorCopy);
-			}
-			else // Otherwise render translucent primitives in a single bucket.
-			{
-				RenderTranslucency(RHICmdList, ETranslucencyPass::TPT_AllTranslucency, SceneColorCopy);
-			}
-
-			RHICmdList.AutomaticCacheFlushAfterComputeShader(true);
-			RHICmdList.FlushComputeShaderCache();
-
+			RenderTranslucency(RHICmdList);
 			ServiceLocalQueue();
 
 			static const auto DisableDistortionCVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.DisableDistortion"));
@@ -2311,12 +2632,12 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		SCOPED_GPU_STAT(RHICmdList, HairRendering);
 		if (HairDatas)
 		{
-			RenderHairComposeSubPixel(RHICmdList, Views, HairDatas);
+			RenderHairComposition(RHICmdList, Views, HairDatas);
 		}
 
 		if (IsHairStrandsEnable(Scene->GetShaderPlatform()))
 		{
-			RenderHairStrandsDebugInfo(RHICmdList, Views, HairDatas);
+			RenderHairStrandsDebugInfo(RHICmdList, Views, HairDatas, HairClusterData);
 		}
 	}
 
@@ -2334,7 +2655,13 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 	{
 		SCOPED_GPU_STAT(RHICmdList, VirtualTextureUpdate);
 		// No pass after this can make VT page requests
-		SceneContext.VirtualTextureFeedback.TransferGPUToCPU(RHICmdList, Views[0].ViewRect);
+		TArray<FIntRect, TInlineAllocator<FVirtualTextureFeedback::MaxRectPerTarget>> ViewRects;
+		ViewRects.AddUninitialized(Views.Num());
+		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
+		{
+			ViewRects[ViewIndex] = Views[ViewIndex].ViewRect;
+		}
+		SceneContext.VirtualTextureFeedback.TransferGPUToCPU(RHICmdList, ViewRects);
 	}
 
 #if RHI_RAYTRACING
@@ -2437,6 +2764,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		PostProcessingInputs.SceneColor = GraphBuilder.RegisterExternalTexture(SceneContext.GetSceneColor(), TEXT("SceneColor"));
 		PostProcessingInputs.CustomDepth = GraphBuilder.TryRegisterExternalTexture(SceneContext.CustomDepth, TEXT("CustomDepth"));
 		PostProcessingInputs.SeparateTranslucency = RegisterExternalTextureWithFallback(GraphBuilder, SceneContext.SeparateTranslucencyRT, SceneContext.GetSeparateTranslucencyDummy(), TEXT("SeparateTranslucency"));
+		PostProcessingInputs.SeparateModulation = RegisterExternalTextureWithFallback(GraphBuilder, SceneContext.SeparateTranslucencyModulateRT, SceneContext.GetSeparateTranslucencyModulateDummy(), TEXT("SeparateModulate"));
 
 		if (ViewFamily.UseDebugViewPS())
 		{
@@ -2462,6 +2790,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		}
 
 		SceneContext.FreeSeparateTranslucency();
+		SceneContext.FreeSeparateTranslucencyModulate();
 		SceneContext.SetSceneColor(nullptr);
 		SceneContext.AdjustGBufferRefCount(GraphBuilder.RHICmdList, -1);
 
@@ -2483,6 +2812,7 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
 		{
 			ShaderPrint::EndView(Views[ViewIndex]);
+			ShaderDrawDebug::EndView(Views[ViewIndex]);
 		}
 
 #if WITH_MGPU
@@ -2506,6 +2836,13 @@ void FDeferredShadingSceneRenderer::Render(FRHICommandListImmediate& RHICmdList)
 				RHICmdList.ClearRayTracingBindings(View.RayTracingScene.RayTracingSceneRHI);
 				View.RayTracingScene.RayTracingSceneRHI.SafeRelease();
 			}
+
+			// Release common lighting resources
+			View.RayTracingLightingDataSRV.SafeRelease();
+			View.RayTracingSubSurfaceProfileSRV.SafeRelease();
+			View.RayTracingSubSurfaceProfileTexture.SafeRelease();
+			View.RayTracingLightingDataBuffer.SafeRelease();
+			View.RayTracingLightingDataUniformBuffer.SafeRelease();
 		}
 #endif //  RHI_RAYTRACING
 	}
@@ -2544,13 +2881,13 @@ public:
 
 	void SetParameters(FRHICommandList& RHICmdList, const FSceneView& View, bool bUseMaxDepth, FIntPoint ViewMax)
 	{
-		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, GetPixelShader(), View.ViewUniformBuffer);
+		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, RHICmdList.GetBoundPixelShader(), View.ViewUniformBuffer);
 		FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(RHICmdList);
 
 		// Used to remap view space Z (which is stored in scene color alpha) into post projection z and w so we can write z/w into the downsized depth buffer
 		const FVector2D ProjectionScaleBiasValue(View.ViewMatrices.GetProjectionMatrix().M[2][2], View.ViewMatrices.GetProjectionMatrix().M[3][2]);
-		SetShaderValue(RHICmdList, GetPixelShader(), ProjectionScaleBias, ProjectionScaleBiasValue);
-		SetShaderValue(RHICmdList, GetPixelShader(), UseMaxDepth, (bUseMaxDepth ? 1.0f : 0.0f));
+		SetShaderValue(RHICmdList, RHICmdList.GetBoundPixelShader(), ProjectionScaleBias, ProjectionScaleBiasValue);
+		SetShaderValue(RHICmdList, RHICmdList.GetBoundPixelShader(), UseMaxDepth, (bUseMaxDepth ? 1.0f : 0.0f));
 
 		FIntPoint BufferSize = SceneContext.GetBufferSizeXY();
 
@@ -2559,34 +2896,22 @@ public:
 
 		// Offsets of the four full resolution pixels corresponding with a low resolution pixel
 		const FVector4 Offsets01(0.0f, 0.0f, 1.0f / DownsampledBufferSizeX, 0.0f);
-		SetShaderValue(RHICmdList, GetPixelShader(), SourceTexelOffsets01, Offsets01);
+		SetShaderValue(RHICmdList, RHICmdList.GetBoundPixelShader(), SourceTexelOffsets01, Offsets01);
 		const FVector4 Offsets23(0.0f, 1.0f / DownsampledBufferSizeY, 1.0f / DownsampledBufferSizeX, 1.0f / DownsampledBufferSizeY);
-		SetShaderValue(RHICmdList, GetPixelShader(), SourceTexelOffsets23, Offsets23);
-		SceneTextureParameters.Set(RHICmdList, GetPixelShader(), View.FeatureLevel, ESceneTextureSetupMode::All);
+		SetShaderValue(RHICmdList, RHICmdList.GetBoundPixelShader(), SourceTexelOffsets23, Offsets23);
+		SceneTextureParameters.Set(RHICmdList, RHICmdList.GetBoundPixelShader(), View.FeatureLevel, ESceneTextureSetupMode::All);
 
 		// Set MaxUV, so we won't sample outside of a valid texture region.
 		FVector2D const SourceMaxUV((ViewMax.X - 0.5f) / BufferSize.X, (ViewMax.Y - 0.5f) / BufferSize.Y);
-		SetShaderValue(RHICmdList, GetPixelShader(), SourceMaxUVParameter, SourceMaxUV);
+		SetShaderValue(RHICmdList, RHICmdList.GetBoundPixelShader(), SourceMaxUVParameter, SourceMaxUV);
 	}
 
-	virtual bool Serialize(FArchive& Ar) override
-	{
-		bool bShaderHasOutdatedParameters = FGlobalShader::Serialize(Ar);
-		Ar << ProjectionScaleBias;
-		Ar << SourceTexelOffsets01;
-		Ar << SourceTexelOffsets23;
-		Ar << SceneTextureParameters;
-		Ar << UseMaxDepth;
-		Ar << SourceMaxUVParameter;
-		return bShaderHasOutdatedParameters;
-	}
-
-	FShaderParameter ProjectionScaleBias;
-	FShaderParameter SourceTexelOffsets01;
-	FShaderParameter SourceTexelOffsets23;
-	FShaderParameter SourceMaxUVParameter;
-	FSceneTextureShaderParameters SceneTextureParameters;
-	FShaderParameter UseMaxDepth;
+	LAYOUT_FIELD(FShaderParameter, ProjectionScaleBias);
+	LAYOUT_FIELD(FShaderParameter, SourceTexelOffsets01);
+	LAYOUT_FIELD(FShaderParameter, SourceTexelOffsets23);
+	LAYOUT_FIELD(FShaderParameter, SourceMaxUVParameter);
+	LAYOUT_FIELD(FSceneTextureShaderParameters, SceneTextureParameters);
+	LAYOUT_FIELD(FShaderParameter, UseMaxDepth);
 };
 
 IMPLEMENT_SHADER_TYPE(,FDownsampleSceneDepthPS,TEXT("/Engine/Private/DownsampleDepthPixelShader.usf"),TEXT("Main"),SF_Pixel);
@@ -2636,8 +2961,8 @@ void FDeferredShadingSceneRenderer::DownsampleDepthSurface(FRHICommandList& RHIC
 	GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<true, CF_Always>::GetRHI();
 
 	GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GFilterVertexDeclaration.VertexDeclarationRHI;
-	GraphicsPSOInit.BoundShaderState.VertexShaderRHI = GETSAFERHISHADER_VERTEX(*ScreenVertexShader);
-	GraphicsPSOInit.BoundShaderState.PixelShaderRHI = GETSAFERHISHADER_PIXEL(*PixelShader);
+	GraphicsPSOInit.BoundShaderState.VertexShaderRHI = ScreenVertexShader.GetVertexShader();
+	GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
 	GraphicsPSOInit.PrimitiveType = PT_TriangleList;
 
 	SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit);
@@ -2658,7 +2983,7 @@ void FDeferredShadingSceneRenderer::DownsampleDepthSurface(FRHICommandList& RHIC
 		View.ViewRect.Width(), View.ViewRect.Height(),
 		FIntPoint(DownsampledSizeX, DownsampledSizeY),
 		SceneContext.GetBufferSizeXY(),
-		*ScreenVertexShader,
+		ScreenVertexShader,
 		EDRF_UseTriangleOptimization);
 	}
 	RHICmdList.EndRenderPass();
@@ -2691,20 +3016,13 @@ public:
 
 	void SetParameters(FRHICommandList& RHICmdList, const FSceneView& View)
 	{
-		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, GetPixelShader(), View.ViewUniformBuffer);
+		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, RHICmdList.GetBoundPixelShader(), View.ViewUniformBuffer);
 		FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(RHICmdList);
 
-		SetSRVParameter(RHICmdList, GetPixelShader(), SceneStencilTexture, SceneContext.SceneStencilSRV);
+		SetSRVParameter(RHICmdList, RHICmdList.GetBoundPixelShader(), SceneStencilTexture, SceneContext.SceneStencilSRV);
 	}
 
-	virtual bool Serialize(FArchive& Ar) override
-	{
-		bool bShaderHasOutdatedParameters = FGlobalShader::Serialize(Ar);
-		Ar << SceneStencilTexture;
-		return bShaderHasOutdatedParameters;
-	}
-
-	FShaderResourceParameter SceneStencilTexture;
+	LAYOUT_FIELD(FShaderResourceParameter, SceneStencilTexture);
 };
 
 IMPLEMENT_SHADER_TYPE(,FCopyStencilToLightingChannelsPS,TEXT("/Engine/Private/DownsampleDepthPixelShader.usf"),TEXT("CopyStencilToLightingChannelsPS"),SF_Pixel);
@@ -2750,8 +3068,8 @@ void FDeferredShadingSceneRenderer::CopyStencilToLightingChannelTexture(FRHIComm
 			TShaderMapRef<FScreenVS> ScreenVertexShader(View.ShaderMap);
 			TShaderMapRef<FCopyStencilToLightingChannelsPS> PixelShader(View.ShaderMap);
 
-			GraphicsPSOInit.BoundShaderState.VertexShaderRHI = GETSAFERHISHADER_VERTEX(*ScreenVertexShader);
-			GraphicsPSOInit.BoundShaderState.PixelShaderRHI = GETSAFERHISHADER_PIXEL(*PixelShader);
+			GraphicsPSOInit.BoundShaderState.VertexShaderRHI = ScreenVertexShader.GetVertexShader();
+			GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
 			GraphicsPSOInit.PrimitiveType = PT_TriangleList;
 
 			SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit);
@@ -2767,7 +3085,7 @@ void FDeferredShadingSceneRenderer::CopyStencilToLightingChannelTexture(FRHIComm
 				View.ViewRect.Width(), View.ViewRect.Height(),
 				FIntPoint(View.ViewRect.Width(), View.ViewRect.Height()),
 				SceneContext.GetBufferSizeXY(),
-				*ScreenVertexShader,
+				ScreenVertexShader,
 				EDRF_UseTriangleOptimization);
 		}
 		}
@@ -2827,7 +3145,11 @@ int32 GetForceRayTracingEffectsCVarValue()
 
 bool CanOverlayRayTracingOutput(const FViewInfo& View)
 {
-	return (View.RayTracingRenderMode != ERayTracingRenderMode::PathTracing)
-		&& (View.RayTracingRenderMode != ERayTracingRenderMode::RayTracingDebug);
+	static auto CVarWiper = IConsoleManager::Get().FindConsoleVariable(TEXT("r.PathTracing.WiperMode"));
+
+	return (
+		(View.RayTracingRenderMode != ERayTracingRenderMode::PathTracing || (View.RayTracingRenderMode == ERayTracingRenderMode::PathTracing && CVarWiper && CVarWiper->GetInt() > 0))
+		&& (View.RayTracingRenderMode != ERayTracingRenderMode::RayTracingDebug)
+		);
 }
 #endif // RHI_RAYTRACING

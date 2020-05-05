@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -83,11 +83,6 @@ namespace UnrealBuildTool
 		public readonly FileReference ResourceCompilerPath;
 
 		/// <summary>
-		/// Path to the ISPC compiler
-		/// </summary>
-		public readonly FileReference ISPCCompilerPath;
-
-		/// <summary>
 		/// The default system include paths
 		/// </summary>
 		public readonly List<DirectoryReference> IncludePaths = new List<DirectoryReference>();
@@ -136,9 +131,6 @@ namespace UnrealBuildTool
 			// Get the resource compiler path from the Windows SDK
 			ResourceCompilerPath = GetResourceCompilerToolPath(Platform, WindowsSdkDir, WindowsSdkVersion);
 
-			// Get the ISPC compiler bundled with the engine
-			ISPCCompilerPath = GetISPCCompilerToolPath(Platform);
-
 			// Get all the system include paths
 			SetupEnvironment(Platform);
 		}
@@ -169,6 +161,12 @@ namespace UnrealBuildTool
 				AddDirectoryToPath(GetVCToolPath(ToolChain, ToolChainDir, WindowsArchitecture.ARM64));
 				AddDirectoryToPath(GetVCToolPath(ToolChain, ToolChainDir, WindowsArchitecture.x86));
 				AddDirectoryToPath(GetVCToolPath(ToolChain, ToolChainDir, WindowsArchitecture.x64));
+			}
+
+			// Add the Windows SDK directory to the path too, for mt.exe.
+			if (WindowsSdkVersion >= new VersionNumber(10))
+			{
+				AddDirectoryToPath(DirectoryReference.Combine(WindowsSdkDir, "bin", WindowsSdkVersion.ToString(), Architecture.ToString()));
 			}
 		}
 
@@ -345,10 +343,10 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Gets the path to the resource compiler's rc.exe for the specified platform.
 		/// </summary>
-		static FileReference GetResourceCompilerToolPath(UnrealTargetPlatform Platform, DirectoryReference WindowsSdkDir, VersionNumber WindowsSdkVersion)
+		virtual protected FileReference GetResourceCompilerToolPath(UnrealTargetPlatform Platform, DirectoryReference WindowsSdkDir, VersionNumber WindowsSdkVersion)
 		{
 			// 64 bit -- we can use the 32 bit version to target 64 bit on 32 bit OS.
-			if (Platform == UnrealTargetPlatform.Win64)
+			if (Platform != UnrealTargetPlatform.Win32)
 			{
 				FileReference ResourceCompilerPath = FileReference.Combine(WindowsSdkDir, "bin", WindowsSdkVersion.ToString(), "x64", "rc.exe");
 				if(FileReference.Exists(ResourceCompilerPath))
@@ -377,21 +375,6 @@ namespace UnrealBuildTool
 				}
 			}
 			throw new BuildException("Unable to find path to the Windows resource compiler under {0} (version {1})", WindowsSdkDir, WindowsSdkVersion);
-		}
-
-		/// <summary>
-		/// Gets the path to the ISPC compiler's ispc.exe for the specified platform.
-		/// </summary>
-		static FileReference GetISPCCompilerToolPath(UnrealTargetPlatform Platform)
-		{
-			FileReference ISPCCompilerPath = FileReference.Combine(UnrealBuildTool.EngineSourceThirdPartyDirectory, "IntelISPC", "bin", "Windows", "ispc.exe");
-
-			if(FileReference.Exists(ISPCCompilerPath))
-			{
-				return ISPCCompilerPath;
-			}
-
-			throw new BuildException("Unable to find ISPC compiler path under {0}", ISPCCompilerPath);
 		}
 
 		/// <summary>
@@ -496,8 +479,9 @@ namespace UnrealBuildTool
 		/// <param name="Architecture">The Architecture to target</param>
 		/// <param name="CompilerVersion">The specific toolchain version to use</param>
 		/// <param name="WindowsSdkVersion">Version of the Windows SDK to use</param>
+		/// <param name="SuppliedSdkDirectoryForVersion">If specified, this is the SDK directory to use, otherwise, attempt to look up via registry. If specified, the WindowsSdkVersion is used directly</param>
 		/// <returns>New environment object with paths for the given settings</returns>
-		public static VCEnvironment Create(WindowsCompiler Compiler, UnrealTargetPlatform Platform, WindowsArchitecture Architecture, string CompilerVersion, string WindowsSdkVersion)
+		public static VCEnvironment Create(WindowsCompiler Compiler, UnrealTargetPlatform Platform, WindowsArchitecture Architecture, string CompilerVersion, string WindowsSdkVersion, string SuppliedSdkDirectoryForVersion)
 		{
 			// Get the compiler version info
 			VersionNumber SelectedCompilerVersion;
@@ -536,9 +520,22 @@ namespace UnrealBuildTool
 			// Get the actual Windows SDK directory
 			VersionNumber SelectedWindowsSdkVersion;
 			DirectoryReference SelectedWindowsSdkDir;
-			if(!WindowsPlatform.TryGetWindowsSdkDir(WindowsSdkVersion, out SelectedWindowsSdkVersion, out SelectedWindowsSdkDir))
+			if (SuppliedSdkDirectoryForVersion != null)
 			{
-				throw new BuildException("Windows SDK{0} must be installed in order to build this target.", String.IsNullOrEmpty(WindowsSdkVersion) ? "" : String.Format(" ({0})", WindowsSdkVersion));
+				SelectedWindowsSdkDir = new DirectoryReference(SuppliedSdkDirectoryForVersion);
+				SelectedWindowsSdkVersion = VersionNumber.Parse(WindowsSdkVersion);
+
+				if (!DirectoryReference.Exists(SelectedWindowsSdkDir))
+				{
+					throw new BuildException("Windows SDK{0} must be installed at {1}.", String.IsNullOrEmpty(WindowsSdkVersion) ? "" : String.Format(" ({0})", WindowsSdkVersion), SuppliedSdkDirectoryForVersion);
+				}
+			}
+			else
+			{
+				if (!WindowsPlatform.TryGetWindowsSdkDir(WindowsSdkVersion, out SelectedWindowsSdkVersion, out SelectedWindowsSdkDir))
+				{
+					throw new BuildException("Windows SDK{0} must be installed in order to build this target.", String.IsNullOrEmpty(WindowsSdkVersion) ? "" : String.Format(" ({0})", WindowsSdkVersion));
+				}
 			}
 
 			return new VCEnvironment(Platform, Compiler, SelectedCompilerDir, SelectedCompilerVersion, Architecture, ToolChain, SelectedToolChainDir, SelectedToolChainVersion, SelectedWindowsSdkDir, SelectedWindowsSdkVersion);

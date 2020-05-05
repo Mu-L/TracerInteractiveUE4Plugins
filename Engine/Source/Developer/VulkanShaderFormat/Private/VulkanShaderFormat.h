@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -83,7 +83,7 @@ struct FSpirv
 
 	int32 FindBinding(const FString& Name, bool bOuter = false) const
 	{
-		for (const auto& Entry : ReflectionInfo)
+		for (const FEntry& Entry : ReflectionInfo)
 		{
 			if (Entry.Name == Name)
 			{
@@ -97,6 +97,21 @@ struct FSpirv
 				}
 
 				return Entry.Binding;
+			}
+		}
+
+		if (!bOuter)
+		{
+			for (const FEntry& Entry : ReflectionInfo)
+			{
+				if (Entry.Name.StartsWith(Name) && Entry.Name.Len() > Name.Len() && Entry.Name[Name.Len()] == (TCHAR)'.')
+				{
+					// Try the outer group variable; eg 
+					// layout(set=0, binding=0) buffer  MainAndPostPassPersistentStates_BUFFER { FPersistentState MainAndPostPassPersistentStates[]; };
+					FString OuterName = Name;
+					OuterName += TEXT("_BUFFER");
+					return FindBinding(OuterName, true);
+				}
 			}
 		}
 
@@ -142,4 +157,9 @@ struct FSpirv
 		return nullptr;
 	}
 };
+
+// Updates all reflection entries in the specified SPIR-V module.
+extern bool PathSpirvReflectionEntriesAndEntryPoint(FSpirv& OutSpirv);
+
+// Generates SPIR-V out of the specified GLSL source code.
 extern bool GenerateSpirv(const ANSICHAR* Source, FCompilerInfo& CompilerInfo, FString& OutErrors, const FString& DumpDebugInfoPath, FSpirv& OutSpirv);

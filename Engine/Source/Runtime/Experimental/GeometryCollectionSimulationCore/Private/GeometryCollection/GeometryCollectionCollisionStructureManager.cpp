@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GeometryCollection/GeometryCollectionCollisionStructureManager.h"
 #include "ChaosLog.h"
@@ -33,9 +33,9 @@ FAutoConsoleVariableRef CVarCollisionParticlesMax(TEXT("p.CollisionParticlesMax"
 FCollisionStructureManager::FSimplicial*
 FCollisionStructureManager::NewSimplicial(
 	const Chaos::TParticles<float, 3>& Vertices,
-	Chaos::TTriangleMesh<float>& TriMesh,
-	const Chaos::TImplicitObject<float, 3>* Implicit,
-	int32 CollisionParticlesMaxInput)
+	const Chaos::TTriangleMesh<float>& TriMesh,
+	const Chaos::FImplicitObject* Implicit,
+	const int32 CollisionParticlesMaxInput)
 {
 	FCollisionStructureManager::FSimplicial * Simplicial = new FCollisionStructureManager::FSimplicial();
 	if (Implicit || Vertices.Size())
@@ -124,22 +124,19 @@ FCollisionStructureManager::NewSimplicial(
 	return Simplicial;
 }
 
-
-
 FCollisionStructureManager::FSimplicial*
 FCollisionStructureManager::NewSimplicial(
 	const Chaos::TParticles<float,3>& AllParticles,
 	const TManagedArray<int32>& BoneMap,
 	const ECollisionTypeEnum CollisionType,
 	Chaos::TTriangleMesh<float>& TriMesh,
-	const float CollisionParticlesFraction
-)
+	const float CollisionParticlesFraction)
 {
 	const bool bEnableCollisionParticles = (CollisionType == ECollisionTypeEnum::Chaos_Surface_Volumetric);
 	if (bEnableCollisionParticles || true)
 	{
 		// @todo : Clean collision particles need to operate on the collision mask from the DynamicCollection,
-		//         then transfer only the good collision particles during the initialization. 
+		//         then transfer only the good collision particles during the initialization. `
 		FCollisionStructureManager::FSimplicial * Simplicial = new FCollisionStructureManager::FSimplicial();
 		const TArrayView<const Chaos::TVector<float, 3>> ArrayView(&AllParticles.X(0), AllParticles.Size());
 		const TArray<Chaos::TVector<float,3>>& Result = Chaos::CleanCollisionParticles(TriMesh, ArrayView, CollisionParticlesFraction);
@@ -172,26 +169,135 @@ FCollisionStructureManager::NewSimplicial(
 	return new FCollisionStructureManager::FSimplicial();
 }
 
-
-void FCollisionStructureManager::UpdateImplicitFlags(FImplicit* Implicit, ECollisionTypeEnum CollisionType)
+void FCollisionStructureManager::UpdateImplicitFlags(
+	FImplicit* Implicit, 
+	const ECollisionTypeEnum CollisionType)
 {
-	if (Implicit && (CollisionType == ECollisionTypeEnum::Chaos_Surface_Volumetric))
+	if (ensure(Implicit))
 	{
-		Implicit->IgnoreAnalyticCollisions();
-		Implicit->SetConvex(false);
+		Implicit->SetCollsionType(CollisionType == ECollisionTypeEnum::Chaos_Surface_Volumetric ? Chaos::ImplicitObjectType::LevelSet : Implicit->GetType());
+		if (Implicit && (CollisionType == ECollisionTypeEnum::Chaos_Surface_Volumetric) && Implicit->GetType() == Chaos::ImplicitObjectType::LevelSet)
+		{
+			Implicit->SetDoCollide(false);
+			Implicit->SetConvex(false);
+		}
 	}
 }
 
-Chaos::TLevelSet<float, 3>* FCollisionStructureManager::NewLevelset(
-	Chaos::FErrorReporter& ErrorReporter,
+FCollisionStructureManager::FImplicit* 
+FCollisionStructureManager::NewImplicit(
+	Chaos::FErrorReporter ErrorReporter,
 	const Chaos::TParticles<float, 3>& MeshParticles,
 	const Chaos::TTriangleMesh<float>& TriMesh,
 	const FBox& CollisionBounds,
-	int32 MinRes,
-	int32 MaxRes,
-	ECollisionTypeEnum CollisionType
-	)
+	const float Radius, 
+	const int32 MinRes,
+	const int32 MaxRes,
+	const float CollisionObjectReduction,
+	const ECollisionTypeEnum CollisionType,
+	const EImplicitTypeEnum ImplicitType)
 {
+	if (ImplicitType == EImplicitTypeEnum::Chaos_Implicit_Box)
+	{
+		return NewImplicitBox(CollisionBounds, CollisionObjectReduction, CollisionType);
+	}
+	else if (ImplicitType == EImplicitTypeEnum::Chaos_Implicit_Sphere)
+	{
+		return NewImplicitSphere(Radius, CollisionObjectReduction, CollisionType);
+	}
+	else if (ImplicitType == EImplicitTypeEnum::Chaos_Implicit_LevelSet)
+	{
+		return NewImplicitLevelset(ErrorReporter, MeshParticles, TriMesh, CollisionBounds, MinRes, MaxRes, CollisionObjectReduction, CollisionType);
+	}
+	
+	return nullptr;
+}
+
+FCollisionStructureManager::FImplicit*
+FCollisionStructureManager::NewImplicitBox(
+	const FBox& CollisionBounds,
+	const float CollisionObjectReduction,
+	const ECollisionTypeEnum CollisionType)
+{
+	const FVector HalfExtents = CollisionBounds.GetExtent() * (1 - CollisionObjectReduction / 100.f);
+	const FVector Center = CollisionBounds.GetCenter();
+	Chaos::FImplicitObject* Implicit = new Chaos::TBox<float, 3>(Center - HalfExtents, Center + HalfExtents);
+	UpdateImplicitFlags(Implicit, CollisionType);
+	return Implicit;
+}
+
+FCollisionStructureManager::FImplicit*
+FCollisionStructureManager::NewImplicitSphere(
+	const float Radius,
+	const float CollisionObjectReduction,
+	const ECollisionTypeEnum CollisionType)
+{
+	Chaos::FImplicitObject* Implicit = new Chaos::TSphere<float, 3>(Chaos::TVector<float, 3>(0), Radius * (1 - CollisionObjectReduction / 100.f));
+	UpdateImplicitFlags(Implicit, CollisionType);
+	return Implicit;
+}
+
+FCollisionStructureManager::FImplicit*
+FCollisionStructureManager::NewImplicitLevelset(
+	Chaos::FErrorReporter ErrorReporter,
+	const Chaos::TParticles<float, 3>& MeshParticles,
+	const Chaos::TTriangleMesh<float>& TriMesh,
+	const FBox& CollisionBounds,
+	const int32 MinRes,
+	const int32 MaxRes,
+	const float CollisionObjectReduction,
+	const ECollisionTypeEnum CollisionType)
+{
+	FVector HalfExtents = CollisionBounds.GetExtent();
+	if (HalfExtents.GetAbsMin() < KINDA_SMALL_NUMBER)
+	{
+		return nullptr;
+	}
+	Chaos::TLevelSet<float, 3>* LevelSet = NewLevelset(ErrorReporter, MeshParticles, TriMesh, CollisionBounds, MinRes, MaxRes, CollisionType);
+	if (LevelSet)
+	{
+		const float DomainVolume = LevelSet->BoundingBox().GetVolume();
+		const float FilledVolume = LevelSet->ApproximateNegativeMaterial();
+		if (FilledVolume < DomainVolume * 0.05)
+		{
+			const Chaos::TVector<float,3> Extent = LevelSet->BoundingBox().Extents();
+			ErrorReporter.ReportWarning(
+				*FString::Printf(TEXT(
+					"Level set is small or empty:\n"
+					"    domain extent: (%g %g %g) volume: %g\n"
+					"    estimated level set volume: %g\n"
+					"    percentage filled: %g%%"),
+					Extent[0], Extent[1], Extent[2], DomainVolume, FilledVolume, FilledVolume / DomainVolume * 100.0));
+		}
+		HalfExtents *= CollisionObjectReduction / 100.f;
+		const float MinExtent = FMath::Min(HalfExtents[0], FMath::Min(HalfExtents[1], HalfExtents[2]));
+		if (MinExtent > 0)
+		{
+			LevelSet->Shrink(MinExtent);
+		}
+	}
+	else
+	{
+		ErrorReporter.ReportError(TEXT("Level set rasterization failed."));
+	}
+	return LevelSet;
+}
+
+Chaos::TLevelSet<float, 3>* FCollisionStructureManager::NewLevelset(
+	Chaos::FErrorReporter ErrorReporter,
+	const Chaos::TParticles<float, 3>& MeshParticles,
+	const Chaos::TTriangleMesh<float>& TriMesh,
+	const FBox& CollisionBounds,
+	const int32 MinRes,
+	const int32 MaxRes,
+	const ECollisionTypeEnum CollisionType)
+{
+	if(TriMesh.GetNumElements() == 0)
+	{
+		// Empty tri-mesh, can't create a new level set
+		return nullptr;
+	}
+
 	Chaos::TVector<int32, 3> Counts;
 	const FVector Extents = CollisionBounds.GetExtent();
 	if (Extents.X < Extents.Y && Extents.X < Extents.Z)
@@ -236,51 +342,6 @@ Chaos::TLevelSet<float, 3>* FCollisionStructureManager::NewLevelset(
 	return Implicit;
 }
 
-FCollisionStructureManager::FImplicit* 
-FCollisionStructureManager::NewImplicit(
-	Chaos::FErrorReporter& ErrorReporter,
-	const Chaos::TParticles<float, 3>& MeshParticles,
-	const Chaos::TTriangleMesh<float>& TriMesh,
-	const FBox& CollisionBounds,
-	const float Radius, 
-	const int32 MinRes,
-	const int32 MaxRes,
-	const float CollisionObjectReduction,
-	const ECollisionTypeEnum CollisionType,
-	const EImplicitTypeEnum ImplicitType)
-{
-	Chaos::TImplicitObject<float, 3>* Implicit = nullptr;
-	if (ImplicitType == EImplicitTypeEnum::Chaos_Implicit_Box)
-	{
-		FVector HalfExtents = CollisionBounds.GetExtent() * (1 - CollisionObjectReduction / 100.f);
-		FVector Center = CollisionBounds.GetCenter();
-		Implicit = new Chaos::TBox<float, 3>(Center - HalfExtents, Center + HalfExtents);
-	}
-	else if (ImplicitType == EImplicitTypeEnum::Chaos_Implicit_Sphere)
-	{
-		Implicit = new Chaos::TSphere<float, 3>(Chaos::TVector<float, 3>(0), Radius * (1 - CollisionObjectReduction / 100.f));
-	}
-	else if (ImplicitType == EImplicitTypeEnum::Chaos_Implicit_LevelSet)
-	{
-		FVector HalfExtents = CollisionBounds.GetExtent();
-		if (HalfExtents.X < KINDA_SMALL_NUMBER || HalfExtents.Y < KINDA_SMALL_NUMBER || HalfExtents.Z < KINDA_SMALL_NUMBER)
-		{
-			return nullptr;
-		}
-		HalfExtents *= CollisionObjectReduction / 100.f;
-		float MinExtent = FMath::Min(HalfExtents[0], FMath::Min(HalfExtents[1], HalfExtents[2]));
-		Chaos::TLevelSet<float, 3>* LevelSet = NewLevelset(ErrorReporter, MeshParticles, TriMesh, CollisionBounds, MinRes, MaxRes, CollisionType);
-		if (LevelSet && MinExtent > 0)
-		{
-			LevelSet->Shrink(MinExtent);
-		}
-		return LevelSet;
-	}
-	
-	UpdateImplicitFlags(Implicit, CollisionType);
-	return Implicit;
-}
-
 FVector 
 FCollisionStructureManager::CalculateUnitMassInertiaTensor(
 	const FBox& Bounds,
@@ -292,7 +353,7 @@ FCollisionStructureManager::CalculateUnitMassInertiaTensor(
 	if (ImplicitType == EImplicitTypeEnum::Chaos_Implicit_Box)
 	{
 		const Chaos::TVector<float, 3> Size = Bounds.GetSize();
-		const Chaos::PMatrix<float, 3, 3> I = Chaos::TBox<float, 3>::GetInertiaTensor(1.0, Size);
+		const Chaos::PMatrix<float, 3, 3> I = Chaos::TAABB<float, 3>::GetInertiaTensor(1.0, Size);
 		Tensor = { I.M[0][0], I.M[1][1], I.M[2][2] };
 	}
 	else if (ImplicitType == EImplicitTypeEnum::Chaos_Implicit_Sphere)

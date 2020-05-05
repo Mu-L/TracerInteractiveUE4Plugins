@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	HairRendering.h: Hair rendering implementation.
@@ -11,6 +11,7 @@
 #include "Shader.h"
 #include "HairStrandsUtils.h"
 #include "HairStrandsCluster.h"
+#include "HairStrandsClusters.h"
 #include "HairStrandsLUT.h"
 #include "HairStrandsDeepShadow.h"
 #include "HairStrandsVoxelization.h"
@@ -24,9 +25,9 @@
 /// Hold all the hair strands data
 struct FHairStrandsDatas
 {
-	FHairStrandsDeepShadowViews DeepShadowViews;
 	FHairStrandsVisibilityViews HairVisibilityViews;
-	FHairStrandsClusterViews HairClusterPerViews;
+	FHairStrandsMacroGroupViews MacroGroupsPerViews;
+	FHairStrandsDebugData DebugData;
 };
 
 enum class EHairStrandsInterpolationType
@@ -38,5 +39,23 @@ enum class EHairStrandsInterpolationType
 void RunHairStrandsInterpolation(
 	FRHICommandListImmediate& RHICmdList, 
 	EWorldType::Type WorldType, 
-	TShaderMap<FGlobalShaderType>* ShaderMap, 
-	EHairStrandsInterpolationType Type);
+	const class FGPUSkinCache* GPUSkinCache,
+	const struct FShaderDrawDebugData* DebugShaderData,
+	FGlobalShaderMap* ShaderMap, 
+	EHairStrandsInterpolationType Type,
+	FHairStrandClusterData* ClusterData);
+
+void RenderHairPrePass(
+	FRHICommandListImmediate& RHICmdList,
+	FScene* Scene,
+	TArray<FViewInfo>& Views,
+	FHairStrandClusterData HairClusterData,
+	FHairStrandsDatas& OutHairDatas);
+
+void RenderHairBasePass(
+	FRHICommandListImmediate& RHICmdList,
+	FScene* Scene,
+	FSceneRenderTargets& SceneContext,
+	TArray<FViewInfo>& Views,
+	FHairStrandClusterData HairClusterData,
+	FHairStrandsDatas& OutHairDatas);

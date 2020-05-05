@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved..
+// Copyright Epic Games, Inc. All Rights Reserved..
 
 /*=============================================================================
 	VulkanPendingState.cpp: Private VulkanPendingState function definitions.
@@ -402,15 +402,11 @@ void FVulkanPendingComputeState::PrepareForDispatch(FVulkanCmdBuffer* InCmdBuffe
 
 FVulkanPendingGfxState::~FVulkanPendingGfxState()
 {
-	TArray<FVulkanGraphicsPipelineDescriptorState*> DescriptorStates;
-
-	for (auto& Pair : PipelineStates)
+	TMap<FVulkanRHIGraphicsPipelineState*, FVulkanGraphicsPipelineDescriptorState*> Temp;
+	Swap(Temp, PipelineStates);
+	for (auto& Pair : Temp)
 	{
 		FVulkanGraphicsPipelineDescriptorState* State = Pair.Value;
-		DescriptorStates.Push(State);
-	}
-	for(FVulkanGraphicsPipelineDescriptorState* State : DescriptorStates)
-	{
 		delete State;
 	}
 }
@@ -445,7 +441,7 @@ void FVulkanPendingGfxState::PrepareForDraw(FVulkanCmdBuffer* CmdBuffer)
 		SCOPE_CYCLE_COUNTER(STAT_VulkanBindVertexStreamsTime);
 #endif
 		// Its possible to have no vertex buffers
-		const FVulkanVertexInputStateInfo& VertexInputStateInfo = CurrentPipeline->Pipeline->GetVertexInputState();
+		const FVulkanVertexInputStateInfo& VertexInputStateInfo = CurrentPipeline->GetVertexInputState();
 		if (VertexInputStateInfo.AttributesNum == 0)
 		{
 			// However, we need to verify that there are also no bindings
@@ -528,7 +524,13 @@ void FVulkanPendingGfxState::InternalUpdateDynamicStates(FVulkanCmdBuffer* Cmd)
 	if (bNeedsUpdateViewport)
 	{
 		ensure(Viewport.width > 0 || Viewport.height > 0);
-		VulkanRHI::vkCmdSetViewport(Cmd->GetHandle(), 0, 1, &Viewport);
+
+		// Flip viewport on Y-axis to be uniform between HLSLcc and DXC generated SPIR-V shaders (requires VK_KHR_maintenance1 extension)
+		VkViewport FlippedViewport = Viewport;
+		FlippedViewport.y += FlippedViewport.height;
+		FlippedViewport.height = -FlippedViewport.height;
+		VulkanRHI::vkCmdSetViewport(Cmd->GetHandle(), 0, 1, &FlippedViewport);
+
 		FMemory::Memcpy(Cmd->CurrentViewport, Viewport);
 		Cmd->bHasViewport = true;
 	}
@@ -922,4 +924,34 @@ float FVulkanDescriptorSetCache::FCachedPool::CalcAllocRatio() const
 		AllocRatio = MinAllocRatio;
 	}
 	return AllocRatio;
+}
+bool FVulkanPendingGfxState::SetGfxPipeline(FVulkanRHIGraphicsPipelineState* InGfxPipeline, bool bForceReset)
+{
+	bool bChanged = bForceReset;
+
+	if (InGfxPipeline != CurrentPipeline)
+	{
+		CurrentPipeline = InGfxPipeline;
+		FVulkanGraphicsPipelineDescriptorState** Found = PipelineStates.Find(InGfxPipeline);
+		if (Found)
+		{
+			CurrentState = *Found;
+			check(CurrentState->GfxPipeline == InGfxPipeline);
+		}
+		else
+		{
+			CurrentState = new FVulkanGraphicsPipelineDescriptorState(Device, InGfxPipeline);
+			PipelineStates.Add(CurrentPipeline, CurrentState);
+		}
+
+		PrimitiveType = InGfxPipeline->PrimitiveType;
+		bChanged = true;
+	}
+
+	if (bChanged || bForceReset)
+	{
+		CurrentState->Reset();
+	}
+
+	return bChanged;
 }

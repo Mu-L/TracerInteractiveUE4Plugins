@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Field/FieldSystemObjects.h"
 
@@ -450,6 +450,10 @@ UCullingField* UCullingField::SetCullingField(const UFieldNodeBase* InCulling, c
 	return this;
 }
 
+FFieldNodeBase::EFieldType UCullingField::Type() const
+{
+	return Field ? Field->Type() : Super::Type();
+}
 
 // UReturnResultsField
 FFieldNodeBase* UReturnResultsTerminal::NewEvaluationGraph(TArray<const UFieldNodeBase*>& Nodes) const

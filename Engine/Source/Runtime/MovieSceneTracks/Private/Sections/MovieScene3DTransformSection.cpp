@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Sections/MovieScene3DTransformSection.h"
 #include "UObject/StructOnScope.h"
@@ -108,7 +108,7 @@ struct F3DTransformChannelEditorData
 
 	static TOptional<FVector> GetTranslation(UObject& InObject, FTrackInstancePropertyBindings* Bindings)
 	{
-		const UStructProperty* TransformProperty = Bindings ? Cast<UStructProperty>(Bindings->GetProperty(InObject)) : nullptr;
+		const FStructProperty* TransformProperty = Bindings ? CastField<FStructProperty>(Bindings->GetProperty(InObject)) : nullptr;
 
 		if (TransformProperty)
 		{
@@ -127,6 +127,10 @@ struct F3DTransformChannelEditorData
 				}
 			}
 		}
+		else if (USceneComponent* SceneComponent = Cast<USceneComponent>(&InObject))
+		{
+			return SceneComponent->GetRelativeTransform().GetTranslation();		
+		}
 		else if (AActor* Actor = Cast<AActor>(&InObject))
 		{
 			if (USceneComponent* RootComponent = Actor->GetRootComponent())
@@ -140,7 +144,7 @@ struct F3DTransformChannelEditorData
 
 	static TOptional<FRotator> GetRotator(UObject& InObject, FTrackInstancePropertyBindings* Bindings)
 	{
-		const UStructProperty* TransformProperty = Bindings ? Cast<UStructProperty>(Bindings->GetProperty(InObject)) : nullptr;
+		const FStructProperty* TransformProperty = Bindings ? CastField<FStructProperty>(Bindings->GetProperty(InObject)) : nullptr;
 
 		if (TransformProperty)
 		{
@@ -159,6 +163,10 @@ struct F3DTransformChannelEditorData
 				}
 			}
 		}
+		else if (USceneComponent* SceneComponent = Cast<USceneComponent>(&InObject))
+		{
+			return SceneComponent->GetRelativeRotation();
+		}
 		else if (AActor* Actor = Cast<AActor>(&InObject))
 		{
 			if (USceneComponent* RootComponent = Actor->GetRootComponent())
@@ -172,7 +180,7 @@ struct F3DTransformChannelEditorData
 
 	static TOptional<FVector> GetScale(UObject& InObject, FTrackInstancePropertyBindings* Bindings)
 	{
-		const UStructProperty* TransformProperty = Bindings ? Cast<UStructProperty>(Bindings->GetProperty(InObject)) : nullptr;
+		const FStructProperty* TransformProperty = Bindings ? CastField<FStructProperty>(Bindings->GetProperty(InObject)) : nullptr;
 
 		if (TransformProperty)
 		{
@@ -190,6 +198,10 @@ struct F3DTransformChannelEditorData
 					return EulerTransform->Scale;
 				}
 			}
+		}
+		else if (USceneComponent* SceneComponent = Cast<USceneComponent>(&InObject))
+		{
+			return SceneComponent->GetRelativeTransform().GetScale3D();
 		}
 		else if (AActor* Actor = Cast<AActor>(&InObject))
 		{

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ToolMenuSection.h"
 #include "ToolMenus.h"
@@ -11,7 +11,9 @@
 #include "Internationalization/Internationalization.h"
 
 FToolMenuSection::FToolMenuSection() :
-	ToolMenuSectionDynamic(nullptr)
+	ToolMenuSectionDynamic(nullptr),
+	bIsRegistering(false),
+	bAddedDuringRegister(false)
 {
 
 }
@@ -33,22 +35,32 @@ void FToolMenuSection::InitGeneratedSectionCopy(const FToolMenuSection& Source, 
 	Context = InContext;
 }
 
+bool FToolMenuSection::IsRegistering() const
+{
+	return bIsRegistering;
+}
+
 FToolMenuEntry& FToolMenuSection::AddEntry(const FToolMenuEntry& Args)
 {
 	if (Args.Name == NAME_None)
 	{
-		return Blocks.Add_GetRef(Args);
+		FToolMenuEntry& Result = Blocks.Add_GetRef(Args);
+		Result.bAddedDuringRegister = IsRegistering();
+		return Result;
 	}
 
 	int32 BlockIndex = IndexOfBlock(Args.Name);
 	if (BlockIndex != INDEX_NONE)
 	{
 		Blocks[BlockIndex] = Args;
+		Blocks[BlockIndex].bAddedDuringRegister = IsRegistering();
 		return Blocks[BlockIndex];
 	}
 	else
 	{
-		return Blocks.Add_GetRef(Args);
+		FToolMenuEntry& Result = Blocks.Add_GetRef(Args);
+		Result.bAddedDuringRegister = IsRegistering();
+		return Result;
 	}
 }
 
@@ -162,38 +174,6 @@ bool FToolMenuSection::IsNonLegacyDynamic() const
 	return ToolMenuSectionDynamic || Construct.NewToolMenuDelegate.IsBound();
 }
 
-void FToolMenuSection::AssembleBlock(const FToolMenuEntry& Block)
-{
-	const EToolMenuInsertType Position = Block.InsertPosition.Position;
-
-	int32 ExistingIndex = IndexOfBlock(Block.Name);
-	if (ExistingIndex != INDEX_NONE)
-	{
-		Blocks[ExistingIndex] = Block;
-	}
-	else if (Position == EToolMenuInsertType::Before || Position == EToolMenuInsertType::After)
-	{
-		int32 DestIndex = IndexOfBlock(Block.InsertPosition.Name);
-		if (DestIndex != INDEX_NONE)
-		{
-			if (Position == EToolMenuInsertType::After)
-			{
-				++DestIndex;
-			}
-
-			Blocks.Insert(Block, DestIndex);
-		}
-	}
-	else if (Position == EToolMenuInsertType::First)
-	{
-		Blocks.Insert(Block, 0);
-	}
-	else
-	{
-		Blocks.Add(Block);
-	}
-}
-
 int32 FToolMenuSection::RemoveEntry(const FName InName)
 {
 	return Blocks.RemoveAll([InName](const FToolMenuEntry& Block) { return Block.Name == InName; });
@@ -237,7 +217,7 @@ int32 FToolMenuSection::FindBlockInsertIndex(const FToolMenuEntry& InBlock) cons
 		return INDEX_NONE;
 	}
 
-	if (InsertPosition.Position == EToolMenuInsertType::After)
+	if (InPosition.Position == EToolMenuInsertType::After)
 	{
 		++DestIndex;
 	}

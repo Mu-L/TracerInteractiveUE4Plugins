@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Widgets/SMediaPlayerEditorMedia.h"
 #include "Modules/ModuleManager.h"
@@ -139,7 +139,7 @@ void SMediaPlayerEditorMedia::RegisterMenus()
 			FSlateIcon(FEditorStyle::GetStyleSetName(), "ContentBrowser.AssetActions.Edit"),
 			FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& InContext)
 			{
-				if (UMediaPlayerEditorMediaContext* Context = InContext.Find<UMediaPlayerEditorMediaContext>())
+				if (UMediaPlayerEditorMediaContext* Context = InContext.FindContext<UMediaPlayerEditorMediaContext>())
 				{
 					if (Context->SelectedAsset)
 					{
@@ -161,7 +161,7 @@ void SMediaPlayerEditorMedia::RegisterMenus()
 					FSlateIcon(Context->StyleSetName, "MediaPlayerEditor.NextMedia.Small"),
 					FToolMenuExecuteAction::CreateLambda([=](const FToolMenuContext& InContext)
 					{
-						if (UMediaPlayerEditorMediaContext* Context = InContext.Find<UMediaPlayerEditorMediaContext>())
+						if (UMediaPlayerEditorMediaContext* Context = InContext.FindContext<UMediaPlayerEditorMediaContext>())
 						{
 							if (Context->MediaPlayerEditorMedia.IsValid())
 							{
@@ -183,7 +183,7 @@ void SMediaPlayerEditorMedia::RegisterMenus()
 			FSlateIcon(FEditorStyle::GetStyleSetName(), "SystemWideCommands.FindInContentBrowser"),
 			FToolMenuExecuteAction::CreateLambda([](const FToolMenuContext& InContext)
 			{
-				if (UMediaPlayerEditorMediaContext* Context = InContext.Find<UMediaPlayerEditorMediaContext>())
+				if (UMediaPlayerEditorMediaContext* Context = InContext.FindContext<UMediaPlayerEditorMediaContext>())
 				{
 					TArray<UObject*> AssetsToSync = TArrayBuilder<UObject*>().Add(Context->SelectedAsset);
 					GEditor->SyncBrowserToObjects(AssetsToSync);

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -24,17 +24,19 @@ extern ONLINESUBSYSTEM_API bool IsUniqueIdLocal(const FUniqueNetId& UniqueId);
 #endif
 
 /** Maximum players supported on a given platform */
-#if PLATFORM_XBOXONE
-#define MAX_LOCAL_PLAYERS 4
-#elif PLATFORM_PS4
-#define MAX_LOCAL_PLAYERS 4
-#elif PLATFORM_SWITCH
-#define MAX_LOCAL_PLAYERS 8
-#elif PLATFORM_WINDOWS
-#define MAX_LOCAL_PLAYERS 4
-#else
-#define MAX_LOCAL_PLAYERS 1
-#endif
+#if !defined(MAX_LOCAL_PLAYERS)
+	#if PLATFORM_XBOXONE
+	#define MAX_LOCAL_PLAYERS 4
+	#elif PLATFORM_PS4
+	#define MAX_LOCAL_PLAYERS 4
+	#elif PLATFORM_SWITCH
+	#define MAX_LOCAL_PLAYERS 8
+	#elif PLATFORM_WINDOWS
+	#define MAX_LOCAL_PLAYERS 4
+	#else
+	#define MAX_LOCAL_PLAYERS 1
+	#endif
+#endif //MAX_LOCAL_PLAYERS
 
 #define DEDICATED_SERVER_USER_INDEX 0
 
@@ -1041,6 +1043,11 @@ public:
 	bool IsValidRange() const
 	{
 		return Start >= 0 && Count >= 0;
+	}
+
+	bool operator==(const FPagedQuery& Other) const
+	{
+		return Other.Start == Start && Other.Count == Count;
 	}
 
 	/** first entry to fetch */

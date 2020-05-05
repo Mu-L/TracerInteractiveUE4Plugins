@@ -1,10 +1,12 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SimplifyMeshTool.h"
 #include "InteractiveToolManager.h"
+#include "Properties/RemeshProperties.h"
 #include "ToolBuilderUtil.h"
 
 #include "ToolSetupUtil.h"
+#include "Util/ColorConstants.h"
 
 #include "DynamicMesh3.h"
 
@@ -27,18 +29,13 @@
 #include "Misc/ScopedSlowTask.h"
 #endif
 
-
-
 #define LOCTEXT_NAMESPACE "USimplifyMeshTool"
-
 
 DEFINE_LOG_CATEGORY_STATIC(LogMeshSimplification, Log, All);
 
 /*
  * ToolBuilder
  */
-
-
 bool USimplifyMeshToolBuilder::CanBuildTool(const FToolBuilderState& SceneState) const
 {
 	return ToolBuilderUtil::CountComponents(SceneState, CanMakeComponentTarget) == 1;
@@ -59,12 +56,9 @@ UInteractiveTool* USimplifyMeshToolBuilder::BuildTool(const FToolBuilderState& S
 	return NewTool;
 }
 
-
-
 /*
  * Tool
  */
-
 USimplifyMeshToolProperties::USimplifyMeshToolProperties()
 {
 	SimplifierType = ESimplifyType::QEM;
@@ -75,8 +69,35 @@ USimplifyMeshToolProperties::USimplifyMeshToolProperties()
 	bReproject = false;
 	bPreventNormalFlips = true;
 	bDiscardAttributes = false;
+	bShowWireframe = true;
+	bShowGroupColors = false;
+	GroupBoundaryConstraint = EGroupBoundaryConstraint::Ignore;
+	MaterialBoundaryConstraint = EMaterialBoundaryConstraint::Ignore;
 }
 
+void
+USimplifyMeshToolProperties::SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving)
+{
+	USimplifyMeshToolProperties* PropertyCache = GetPropertyCache<USimplifyMeshToolProperties>();
+
+	// MeshConstraintProperties
+	SaveRestoreProperty(PropertyCache->bPreserveSharpEdges, this->bPreserveSharpEdges, bSaving);
+	SaveRestoreProperty(PropertyCache->MeshBoundaryConstraint, this->MeshBoundaryConstraint, bSaving);
+	SaveRestoreProperty(PropertyCache->GroupBoundaryConstraint, this->GroupBoundaryConstraint, bSaving);
+	SaveRestoreProperty(PropertyCache->MaterialBoundaryConstraint, this->MaterialBoundaryConstraint, bSaving);
+	SaveRestoreProperty(PropertyCache->bPreventNormalFlips, this->bPreventNormalFlips, bSaving);
+
+	// SimplifyMeshToolProperties
+	SaveRestoreProperty(PropertyCache->TargetMode, this->TargetMode, bSaving);
+	SaveRestoreProperty(PropertyCache->SimplifierType, this->SimplifierType, bSaving);
+	SaveRestoreProperty(PropertyCache->TargetPercentage, this->TargetPercentage, bSaving);
+	SaveRestoreProperty(PropertyCache->TargetEdgeLength, this->TargetEdgeLength, bSaving);
+	SaveRestoreProperty(PropertyCache->TargetCount, this->TargetCount, bSaving);
+	SaveRestoreProperty(PropertyCache->bDiscardAttributes, this->bDiscardAttributes, bSaving);
+	SaveRestoreProperty(PropertyCache->bShowWireframe, this->bShowWireframe, bSaving);
+	SaveRestoreProperty(PropertyCache->bShowGroupColors, this->bShowGroupColors, bSaving);
+	SaveRestoreProperty(PropertyCache->bReproject, this->bReproject, bSaving);
+}
 
 void USimplifyMeshTool::SetWorld(UWorld* World)
 {
@@ -88,22 +109,20 @@ void USimplifyMeshTool::SetAssetAPI(IToolsContextAssetAPI* AssetAPIIn)
 	this->AssetAPI = AssetAPIIn;
 }
 
-
-
 void USimplifyMeshTool::Setup()
 {
 	UInteractiveTool::Setup();
 
-	
+
 	// hide component and create + show preview
 	ComponentTarget->SetOwnerVisibility(false);
 	Preview = NewObject<UMeshOpPreviewWithBackgroundCompute>(this, "Preview");
 	Preview->Setup(this->TargetWorld, this);
-	Preview->ConfigureMaterials(
-		ToolSetupUtil::GetDefaultMaterial(GetToolManager(), ComponentTarget->GetMaterial(0)),
+	FComponentMaterialSet MaterialSet;
+	ComponentTarget->GetMaterialSet(MaterialSet);
+	Preview->ConfigureMaterials( MaterialSet.Materials,
 		ToolSetupUtil::GetDefaultWorkingMaterial(GetToolManager())
 	);
-	Preview->PreviewMesh->EnableWireframe(true);
 
 	{
 		// if in editor, create progress indicator dialog because building mesh copies can be slow (for very large meshes)
@@ -116,7 +135,7 @@ void USimplifyMeshTool::Setup()
 
 		// Declare progress shortcut lambdas
 		auto EnterProgressFrame = [&SlowTask](int Progress)
-		{
+	{
 			SlowTask.EnterProgressFrame((float)Progress);
 		};
 #else
@@ -126,18 +145,26 @@ void USimplifyMeshTool::Setup()
 		EnterProgressFrame(1);
 		OriginalMesh = MakeShared<FDynamicMesh3>();
 		FMeshDescriptionToDynamicMesh Converter;
-		Converter.bPrintDebugMessages = true;
 		Converter.Convert(ComponentTarget->GetMesh(), *OriginalMesh);
 		EnterProgressFrame(2);
 		OriginalMeshSpatial = MakeShared<FDynamicMeshAABBTree3>(OriginalMesh.Get(), true);
 	}
 
 	Preview->PreviewMesh->SetTransform(ComponentTarget->GetWorldTransform());
+	Preview->PreviewMesh->SetTangentsMode(EDynamicMeshTangentCalcType::AutoCalculated);
 	Preview->PreviewMesh->UpdatePreview(OriginalMesh.Get());
 
 	// initialize our properties
 	SimplifyProperties = NewObject<USimplifyMeshToolProperties>(this);
+	SimplifyProperties->RestoreProperties(this);
 	AddToolPropertySource(SimplifyProperties);
+
+	ShowGroupsWatcher.Initialize(
+		[this]() { return SimplifyProperties->bShowGroupColors; },
+		[this](bool bNewValue) { UpdateVisualization(); }, SimplifyProperties->bShowGroupColors );
+	ShowWireFrameWatcher.Initialize(
+		[this]() { return SimplifyProperties->bShowWireframe; },
+		[this](bool bNewValue) { UpdateVisualization(); }, SimplifyProperties->bShowWireframe );
 
 	MeshStatisticsProperties = NewObject<UMeshStatisticsProperties>(this);
 	AddToolPropertySource(MeshStatisticsProperties);
@@ -147,39 +174,47 @@ void USimplifyMeshTool::Setup()
 		MeshStatisticsProperties->Update(*Compute->PreviewMesh->GetPreviewDynamicMesh());
 	});
 
+	UpdateVisualization();
 	Preview->InvalidateResult();
 }
 
 
 void USimplifyMeshTool::Shutdown(EToolShutdownType ShutdownType)
 {
+	SimplifyProperties->SaveProperties(this);
 	ComponentTarget->SetOwnerVisibility(true);
-	TUniquePtr<FDynamicMeshOpResult> Result = Preview->Shutdown();
+	FDynamicMeshOpResult Result = Preview->Shutdown();
 	if (ShutdownType == EToolShutdownType::Accept)
 	{
-		GenerateAsset(*Result);
+		GenerateAsset(Result);
 	}
 }
 
 
 void USimplifyMeshTool::Tick(float DeltaTime)
 {
+	ShowWireFrameWatcher.CheckAndUpdate();
+	ShowGroupsWatcher.CheckAndUpdate();
+
 	Preview->Tick(DeltaTime);
 }
 
-TSharedPtr<FDynamicMeshOperator> USimplifyMeshTool::MakeNewOperator()
+TUniquePtr<FDynamicMeshOperator> USimplifyMeshTool::MakeNewOperator()
 {
-	TSharedPtr<FSimplifyMeshOp> Op = MakeShared<FSimplifyMeshOp>();
+	TUniquePtr<FSimplifyMeshOp> Op = MakeUnique<FSimplifyMeshOp>();
 
 	Op->bDiscardAttributes = SimplifyProperties->bDiscardAttributes;
 	Op->bPreventNormalFlips = SimplifyProperties->bPreventNormalFlips;
+	Op->bPreserveSharpEdges = SimplifyProperties->bPreserveSharpEdges;
 	Op->bReproject = SimplifyProperties->bReproject;
 	Op->SimplifierType = SimplifyProperties->SimplifierType;
 	Op->TargetCount = SimplifyProperties->TargetCount;
 	Op->TargetEdgeLength = SimplifyProperties->TargetEdgeLength;
 	Op->TargetMode = SimplifyProperties->TargetMode;
 	Op->TargetPercentage = SimplifyProperties->TargetPercentage;
-
+	Op->MeshBoundaryConstraint = (EEdgeRefineFlags)SimplifyProperties->MeshBoundaryConstraint;
+	Op->GroupBoundaryConstraint = (EEdgeRefineFlags)SimplifyProperties->GroupBoundaryConstraint;
+	Op->MaterialBoundaryConstraint = (EEdgeRefineFlags)SimplifyProperties->MaterialBoundaryConstraint;
 	FTransform LocalToWorld = ComponentTarget->GetWorldTransform();
 	Op->SetTransform(LocalToWorld);
 
@@ -193,11 +228,9 @@ TSharedPtr<FDynamicMeshOperator> USimplifyMeshTool::MakeNewOperator()
 	return Op;
 }
 
-
-
 void USimplifyMeshTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
-	
+
 	FPrimitiveDrawInterface* PDI = RenderAPI->GetPrimitiveDrawInterface();
 	FTransform Transform = ComponentTarget->GetWorldTransform(); //Actor->GetTransform();
 
@@ -206,23 +239,55 @@ void USimplifyMeshTool::Render(IToolsContextRenderAPI* RenderAPI)
 	if (TargetMesh->HasAttributes())
 	{
 		const FDynamicMeshUVOverlay* UVOverlay = TargetMesh->Attributes()->PrimaryUV();
-		for (int eid : TargetMesh->EdgeIndicesItr()) 
+		for (int eid : TargetMesh->EdgeIndicesItr())
 		{
-			if (UVOverlay->IsSeamEdge(eid)) 
+			if (UVOverlay->IsSeamEdge(eid))
 			{
 				FVector3d A, B;
 				TargetMesh->GetEdgeV(eid, A, B);
-				PDI->DrawLine(Transform.TransformPosition(A), Transform.TransformPosition(B),
+				PDI->DrawLine(Transform.TransformPosition((FVector)A), Transform.TransformPosition((FVector)B),
 					LineColor, 0, 2.0, 1.0f, true);
 			}
 		}
 	}
 }
 
-
-void USimplifyMeshTool::OnPropertyModified(UObject* PropertySet, UProperty* Property)
+void USimplifyMeshTool::OnPropertyModified(UObject* PropertySet, FProperty* Property)
 {
-	Preview->InvalidateResult();
+	if ( Property )
+	{
+		if ( ( Property->GetFName() == GET_MEMBER_NAME_CHECKED(USimplifyMeshToolProperties, bShowWireframe) ) ||
+			 ( Property->GetFName() == GET_MEMBER_NAME_CHECKED(USimplifyMeshToolProperties, bShowGroupColors) ) )
+		{
+			UpdateVisualization();
+		}
+		else
+		{
+			Preview->InvalidateResult();
+		}
+	}
+}
+
+void USimplifyMeshTool::UpdateVisualization()
+{
+	Preview->PreviewMesh->EnableWireframe(SimplifyProperties->bShowWireframe);
+	FComponentMaterialSet MaterialSet;
+	if (SimplifyProperties->bShowGroupColors)
+	{
+		MaterialSet.Materials = {ToolSetupUtil::GetSelectionMaterial(GetToolManager())};
+		Preview->PreviewMesh->SetTriangleColorFunction([this](const FDynamicMesh3* Mesh, int TriangleID)
+		{
+			return LinearColors::SelectFColor(Mesh->GetTriangleGroup(TriangleID));
+		},
+		UPreviewMesh::ERenderUpdateMode::FastUpdate);
+	}
+	else
+	{
+		ComponentTarget->GetMaterialSet(MaterialSet);
+		Preview->PreviewMesh->ClearTriangleColorFunction(UPreviewMesh::ERenderUpdateMode::FastUpdate);
+	}
+	Preview->ConfigureMaterials(MaterialSet.Materials,
+								ToolSetupUtil::GetDefaultWorkingMaterial(GetToolManager()));
 }
 
 bool USimplifyMeshTool::HasAccept() const
@@ -240,12 +305,12 @@ void USimplifyMeshTool::GenerateAsset(const FDynamicMeshOpResult& Result)
 	GetToolManager()->BeginUndoTransaction(LOCTEXT("SimplifyMeshToolTransactionName", "Simplify Mesh"));
 
 	check(Result.Mesh.Get() != nullptr);
-	ComponentTarget->CommitMesh([&Result](FMeshDescription* MeshDescription)
+	ComponentTarget->CommitMesh([&Result](const FPrimitiveComponentTarget::FCommitParams& CommitParams)
 	{
 		FDynamicMeshToMeshDescription Converter;
 
 		// full conversion if normal topology changed or faces were inverted
-		Converter.Convert(Result.Mesh.Get(), *MeshDescription);
+		Converter.Convert(Result.Mesh.Get(), *CommitParams.MeshDescription);
 	});
 
 	GetToolManager()->EndUndoTransaction();

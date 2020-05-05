@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -43,6 +43,15 @@ struct FLocalVoiceData
 	Audio::FPatchSplitter LocalVoiceOutput;
 };
 
+/**
+ * Container for voice amplitude data
+ */
+struct FVoiceAmplitudeData
+{
+	float Amplitude = 0.0;
+	double LastSeen = 0.0;
+};
+
 /** 
  * Remote voice data playing on a single client
  */
@@ -85,6 +94,10 @@ public:
 	TArray<uint8> UncompressedDataQueue;
 	/** Per remote talker voice decoding state */
 	TSharedPtr<IVoiceDecoder> VoiceDecoder;
+	/** Patch splitter to expose incoming audio to multiple outputs. */
+	Audio::FPatchSplitter RemoteVoiceOutput;
+	/** Loudness of the incoming audio, computed on the remote machine using the microphonei input audio and serialized into the packet. */
+	float MicrophoneAmplitude;
 };
 
 /**
@@ -158,8 +171,8 @@ class ONLINESUBSYSTEMUTILS_API FVoiceEngineImpl : public IVoiceEngine, public FS
 	/** Mapping of UniqueIds to the incoming voice data and their audio component */
 	typedef TMap<FUniqueNetIdWrapper, FRemoteTalkerDataImpl> FRemoteTalkerData;
 
-	/** Reference to the main online subsystem */
-	IOnlineSubsystem* OnlineSubsystem;
+	/** Instance name of associated online subsystem */
+	FName OnlineInstanceName;
 
 	FLocalVoiceData PlayerVoiceData[MAX_SPLITSCREEN_TALKERS];
 	/** Reference to voice capture device */
@@ -188,6 +201,9 @@ class ONLINESUBSYSTEMUTILS_API FVoiceEngineImpl : public IVoiceEngine, public FS
 	TArray<uint8> DecompressedVoiceBuffer;
 	/** Serialization helper */
 	FVoiceSerializeHelper* SerializeHelper;
+
+	/** Voice Amplitude data to prevent using FRemoteTalkerData if we don't actually require voice*/
+	TMap<FUniqueNetIdWrapper, FVoiceAmplitudeData> VoiceAmplitudes;
 
 	/** Audio taps for the full mixdown of all remote players. */
 	Audio::FPatchMixerSplitter AllRemoteTalkerAudio;
@@ -330,6 +346,9 @@ public:
 
 	virtual Audio::FPatchOutputStrongPtr GetMicrophoneOutput() override;
 	virtual Audio::FPatchOutputStrongPtr GetRemoteTalkerOutput() override;
+	virtual float GetMicrophoneAmplitude(int32 LocalUserNum) override;
+	virtual float GetIncomingAudioAmplitude(const FUniqueNetIdWrapper& RemoteUserId) override;
+	virtual uint32 SetRemoteVoiceAmplitude(const FUniqueNetIdWrapper& RemoteTalkerId, float InAmplitude) override;
 
 
 	virtual bool PatchRemoteTalkerOutputToEndpoint(const FString& InDeviceName, bool bMuteInGameOutput = true) override;
@@ -358,7 +377,7 @@ private:
 	void OnPostLoadMap(UWorld*);
 
 protected:
-	virtual IOnlineSubsystem*				 GetOnlineSubSystem()			{ return OnlineSubsystem; }
+	virtual IOnlineSubsystem*				 GetOnlineSubSystem();
 	virtual const TSharedPtr<IVoiceCapture>& GetVoiceCapture() const		{ return VoiceCapture; }
 	virtual TSharedPtr<IVoiceCapture>&		 GetVoiceCapture()				{ return VoiceCapture; }
 	virtual const TSharedPtr<IVoiceEncoder>& GetVoiceEncoder() const		{ return VoiceEncoder; }
@@ -378,6 +397,8 @@ protected:
 
 	//~ Begin IDeviceChangedListener
 	virtual void OnDefaultDeviceChanged() override;
+
+	bool bDeviceChangeListenerRegistered;
 #else
 	virtual void OnDefaultDeviceChanged() override {}
 #endif

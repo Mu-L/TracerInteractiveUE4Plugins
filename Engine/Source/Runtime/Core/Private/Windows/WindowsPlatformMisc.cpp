@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Windows/WindowsPlatformMisc.h"
 #include "Misc/DateTime.h"
@@ -249,7 +249,7 @@ int32 GetOSVersionsHelper( TCHAR* OutOSVersionLabel, int32 OSVersionLabelLength,
 				}
 				else
 				{
-					OSVersionLabel = TEXT("Windows Server Technical Preview");
+					OSVersionLabel = TEXT("Windows Server 2019");
 				}
 
 				// For Windows 10, get the release number and append that to the string too (eg. 1709 = Fall Creators Update). There doesn't seem to be any good way to get
@@ -871,6 +871,12 @@ void FWindowsPlatformMisc::BeginNamedEvent(const struct FColor& Color, const TCH
 		Profiler->StartScopedEvent(Text);
 	}
 #endif
+#if CPUPROFILERTRACE_ENABLED
+	if (CpuChannel)
+	{
+		FCpuProfilerTrace::OutputBeginDynamicEvent(Text);
+	}
+#endif
 }
 
 void FWindowsPlatformMisc::BeginNamedEvent(const struct FColor& Color, const ANSICHAR* Text)
@@ -884,6 +890,12 @@ void FWindowsPlatformMisc::BeginNamedEvent(const struct FColor& Color, const ANS
 		Profiler->StartScopedEvent(ANSI_TO_TCHAR(Text));
 	}
 #endif
+#if CPUPROFILERTRACE_ENABLED
+	if (CpuChannel)
+	{
+		FCpuProfilerTrace::OutputBeginDynamicEvent(Text);
+	}
+#endif
 }
 
 void FWindowsPlatformMisc::EndNamedEvent()
@@ -895,6 +907,12 @@ void FWindowsPlatformMisc::EndNamedEvent()
 	if (Profiler)
 	{
 		Profiler->EndScopedEvent();
+	}
+#endif
+#if CPUPROFILERTRACE_ENABLED
+	if (CpuChannel)
+	{
+		FCpuProfilerTrace::OutputEndEvent();
 	}
 #endif
 }
@@ -1177,17 +1195,17 @@ int MessageBoxExtInternal( EAppMsgType::Type MsgType, HWND HandleWnd, const TCHA
 		case EAppMsgType::YesNoYesAllNoAll:
 		{
 			GCancelButtonEnabled = false;
-			return DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_YESNO2ALL), HandleWnd, MessageBoxDlgProc);
+			return (int)DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_YESNO2ALL), HandleWnd, MessageBoxDlgProc);
 		}
 		case EAppMsgType::YesNoYesAllNoAllCancel:
 		{
 			GCancelButtonEnabled = true;
-			return DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_YESNO2ALLCANCEL), HandleWnd, MessageBoxDlgProc);
+			return (int)DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_YESNO2ALLCANCEL), HandleWnd, MessageBoxDlgProc);
 		}
 		case EAppMsgType::YesNoYesAll:
 		{
 			GCancelButtonEnabled = false;
-			return DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_YESNOYESTOALL), HandleWnd, MessageBoxDlgProc);
+			return (int)DialogBox(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_YESNOYESTOALL), HandleWnd, MessageBoxDlgProc);
 		}
 	}
 
@@ -1892,7 +1910,7 @@ bool FWindowsPlatformMisc::DeleteStoredValue(const FString& InStoreId, const FSt
 FString FWindowsPlatformMisc::GetDefaultLanguage()
 {
 	// Only use GetUserPreferredUILanguages on Windows 8+ as older versions didn't always have language packs available
-	if (FWindowsPlatformMisc::VerifyWindowsVersion(6, 2))
+	if (FPlatformMisc::VerifyWindowsVersion(6, 2))
 	{
 		ULONG NumLanguages = 0;
 		ULONG LangBufferSize = 0;
@@ -1926,6 +1944,11 @@ FString FWindowsPlatformMisc::GetDefaultLocale()
 uint32 FWindowsPlatformMisc::GetLastError()
 {
 	return (uint32)::GetLastError();
+}
+
+void FWindowsPlatformMisc::SetLastError(uint32 ErrorCode)
+{
+	::SetLastError((DWORD)ErrorCode);
 }
 
 bool FWindowsPlatformMisc::CoInitialize()
@@ -1993,7 +2016,7 @@ class FCPUIDQueriedData
 {
 public:
 	FCPUIDQueriedData()
-		: bHasCPUIDInstruction(CheckForCPUIDInstruction()), Vendor(), CPUInfo(0), CacheLineSize(1)
+		: bHasCPUIDInstruction(CheckForCPUIDInstruction()), Vendor(), CPUInfo(0), CacheLineSize(PLATFORM_CACHE_LINE_SIZE)
 	{
 		if(bHasCPUIDInstruction)
 		{
@@ -2075,9 +2098,13 @@ private:
 	 */
 	static bool CheckForCPUIDInstruction()
 	{
-#if PLATFORM_SEH_EXCEPTIONS_DISABLED
-		return false;
+		// all x86 64-bit CPUs support CPUID, no check required
+#if PLATFORM_HAS_CPUID && PLATFORM_64BITS
+		return true;
 #else
+	#if PLATFORM_SEH_EXCEPTIONS_DISABLED
+		return false;
+	#else
 		__try
 		{
 			int Args[4];
@@ -2088,6 +2115,7 @@ private:
 			return false;
 		}
 		return true;
+	#endif
 #endif
 	}
 

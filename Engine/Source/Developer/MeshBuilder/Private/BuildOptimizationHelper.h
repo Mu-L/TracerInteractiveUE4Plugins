@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -223,7 +223,7 @@ public:
 		TArray<uint32>& OutDepthIndices,
 		const TArray<FStaticMeshBuildVertex>& InVertices,
 		const TArray<uint32>& InIndices,
-		const TArray<FStaticMeshSection>& InSections
+		const TArrayView<FStaticMeshSection>& InSections
 	)
 	{
 		int32 NumVertices = InVertices.Num();

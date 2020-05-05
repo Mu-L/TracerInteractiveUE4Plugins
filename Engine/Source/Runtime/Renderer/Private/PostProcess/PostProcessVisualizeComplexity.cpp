@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PostProcess/PostProcessVisualizeComplexity.h"
 #include "CanvasTypes.h"
@@ -27,15 +27,29 @@ public:
 		RENDER_TARGET_BINDING_SLOTS()
 	END_SHADER_PARAMETER_STRUCT()
 
+	enum class EQuadOverdraw
+	{
+		Disable,
+		Enable,
+		MAX
+	};
+
+	class FQuadOverdraw : SHADER_PERMUTATION_ENUM_CLASS("READ_QUAD_OVERDRAW", EQuadOverdraw);
+	using FPermutationDomain = TShaderPermutationDomain<FQuadOverdraw>;
+
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
+		const FPermutationDomain PermutationVector(Parameters.PermutationId);
+		if (PermutationVector.Get<FVisualizeComplexityApplyPS::FQuadOverdraw>() == FVisualizeComplexityApplyPS::EQuadOverdraw::Enable)
+		{
+			return AllowDebugViewShaderMode(DVSM_QuadComplexity, Parameters.Platform, GetMaxSupportedFeatureLevel(Parameters.Platform));
+		}
 		return true;
 	}
 
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
-		OutEnvironment.SetDefine(TEXT("READ_QUAD_OVERDRAW"), AllowDebugViewShaderMode(DVSM_QuadComplexity, Parameters.Platform, GetMaxSupportedFeatureLevel(Parameters.Platform)));
 		OutEnvironment.SetDefine(TEXT("MAX_NUM_COMPLEXITY_COLORS"), MaxNumShaderComplexityColors);
 		// EVisualizeComplexityColorSamplingMethod values
 		OutEnvironment.SetDefine(TEXT("CS_RAMP"), (uint32)FVisualizeComplexityInputs::EColorSamplingMethod::Ramp);
@@ -56,8 +70,6 @@ float GetMaxShaderComplexityCount(ERHIFeatureLevel::Type FeatureLevel)
 {
 	switch (FeatureLevel)
 	{
-	case ERHIFeatureLevel::ES2:
-		return GEngine->MaxES2PixelShaderAdditiveComplexityCount;
 	case ERHIFeatureLevel::ES3_1:
 		return GEngine->MaxES3PixelShaderAdditiveComplexityCount;
 	default:
@@ -108,14 +120,16 @@ FScreenPassTexture AddVisualizeComplexityPass(FRDGBuilder& GraphBuilder, const F
 	const FSceneRenderTargets& SceneRenderTargets = FSceneRenderTargets::Get(GraphBuilder.RHICmdList);
 	const EDebugViewShaderMode DebugViewShaderMode = View.Family->GetDebugViewShaderMode();
 
-	if (FRDGTextureRef QuadOverdrawTexture = GraphBuilder.TryRegisterExternalTexture(SceneRenderTargets.QuadOverdrawBuffer))
+	PassParameters->DebugViewShaderMode = DVSM_ShaderComplexity;
+	FVisualizeComplexityApplyPS::EQuadOverdraw QuadOverdrawEnum = FVisualizeComplexityApplyPS::EQuadOverdraw::Disable;
+
+	FRDGTextureRef QuadOverdrawTexture = GraphBuilder.TryRegisterExternalTexture(SceneRenderTargets.QuadOverdrawBuffer);
+
+	if (QuadOverdrawTexture && AllowDebugViewShaderMode(DVSM_QuadComplexity, View.GetShaderPlatform(), View.FeatureLevel))
 	{
 		PassParameters->QuadOverdrawTexture = QuadOverdrawTexture;
 		PassParameters->DebugViewShaderMode = DebugViewShaderMode;
-	}
-	else // Otherwise fallback to a complexity mode that does not require the QuadOverdraw resources.
-	{
-		PassParameters->DebugViewShaderMode = DVSM_ShaderComplexity;
+		QuadOverdrawEnum = FVisualizeComplexityApplyPS::EQuadOverdraw::Enable;
 	}
 
 	PassParameters->bLegend = Inputs.bDrawLegend;
@@ -124,11 +138,13 @@ FScreenPassTexture AddVisualizeComplexityPass(FRDGBuilder& GraphBuilder, const F
 	PassParameters->ComplexityScale = Inputs.ComplexityScale;
 	PassParameters->UsedQuadTextureSize = FIntPoint(View.ViewRect.Size() + FIntPoint(1, 1)) / 2;
 
-	TShaderMapRef<FVisualizeComplexityApplyPS> PixelShader(View.ShaderMap);
+	FVisualizeComplexityApplyPS::FPermutationDomain PermutationVector;
+	PermutationVector.Set<FVisualizeComplexityApplyPS::FQuadOverdraw>(QuadOverdrawEnum);
+	TShaderMapRef<FVisualizeComplexityApplyPS> PixelShader(View.ShaderMap, PermutationVector);
 
 	RDG_EVENT_SCOPE(GraphBuilder, "VisualizeComplexity");
 
-	AddDrawScreenPass(GraphBuilder, RDG_EVENT_NAME("Visualizer"), View, FScreenPassTextureViewport(Output), InputViewport, *PixelShader, PassParameters);
+	AddDrawScreenPass(GraphBuilder, RDG_EVENT_NAME("Visualizer"), View, FScreenPassTextureViewport(Output), InputViewport, PixelShader, PassParameters);
 
 	Output.LoadAction = ERenderTargetLoadAction::ELoad;
 

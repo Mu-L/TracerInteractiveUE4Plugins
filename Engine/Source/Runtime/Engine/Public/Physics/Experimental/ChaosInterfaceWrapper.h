@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "ChaosInterfaceWrapperCore.h"
@@ -44,7 +44,9 @@ inline FQueryFilterData MakeQueryFilterData(const FCollisionFilterData& FilterDa
 
 FBodyInstance* GetUserData(const Chaos::TGeometryParticle<float, 3>& Actor);
 
-UPhysicalMaterial* GetUserData(const FPhysTypeDummy& Material);
+#if WITH_CHAOS
+UPhysicalMaterial* GetUserData(const Chaos::FChaosPhysicsMaterial& Material);
+#endif
 
 }
 

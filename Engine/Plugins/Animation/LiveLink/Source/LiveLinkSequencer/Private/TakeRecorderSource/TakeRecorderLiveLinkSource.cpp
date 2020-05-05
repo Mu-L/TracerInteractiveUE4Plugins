@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TakeRecorderLiveLinkSource.h"
 #include "MovieSceneLiveLinkTrackRecorder.h"
@@ -23,6 +23,8 @@ UTakeRecorderLiveLinkSource::UTakeRecorderLiveLinkSource(const FObjectInitialize
 	, bReduceKeys(false)
 	, SubjectName(NAME_None)
 	, bSaveSubjectSettings(true)
+	, bUseSourceTimecode(true)
+	, bDiscardSamplesBeforeStart(true)
 {
 	TrackTint = FColor(74, 108, 164);
 }
@@ -31,7 +33,7 @@ TArray<UTakeRecorderSource*> UTakeRecorderLiveLinkSource::PreRecording(class ULe
 {
 	UMovieScene* MovieScene = InSequence->GetMovieScene();
 	TrackRecorder = NewObject<UMovieSceneLiveLinkTrackRecorder>();
-	TrackRecorder->CreateTrack(MovieScene, SubjectName, bSaveSubjectSettings, nullptr);
+	TrackRecorder->CreateTrack(MovieScene, SubjectName, bSaveSubjectSettings, bUseSourceTimecode, bDiscardSamplesBeforeStart, nullptr);
 
 	return TArray<UTakeRecorderSource*>();
 }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -6,6 +6,7 @@
 #include "LiveLinkRole.h"
 #include "LiveLinkTypes.h"
 #include "IPropertyTypeCustomization.h"
+#include "SLiveLinkSubjectRepresentationPicker.h"
 
 class FLiveLinkSubjectRepresentationDetailCustomization : public IPropertyTypeCustomization
 {
@@ -19,8 +20,8 @@ public:
 	virtual void CustomizeChildren(TSharedRef<IPropertyHandle> PropertyHandle, IDetailChildrenBuilder& ChildBuilder, IPropertyTypeCustomizationUtils& CustomizationUtils) override;
 
 private:
-	FLiveLinkSubjectRepresentation GetValue() const;
-	void SetValue(FLiveLinkSubjectRepresentation NewValue);
+	SLiveLinkSubjectRepresentationPicker::FLiveLinkSourceSubjectRole GetValue() const;
+	void SetValue(SLiveLinkSubjectRepresentationPicker::FLiveLinkSourceSubjectRole NewValue);
 	bool HasMultipleValues() const;
 
 	TSharedPtr<IPropertyHandle> StructPropertyHandle;

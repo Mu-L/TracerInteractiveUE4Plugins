@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -45,6 +45,12 @@ public:
 
 	/** Step backward */
 	TSharedPtr< FUICommandInfo > StepBackward;
+
+	/** Step forward */
+	TSharedPtr< FUICommandInfo > StepForward2;
+
+	/** Step backward */
+	TSharedPtr< FUICommandInfo > StepBackward2;
 
 	/** Step to next key */
 	TSharedPtr< FUICommandInfo > StepToNextKey;
@@ -289,9 +295,6 @@ public:
 	/** Toggles whether to show channel colors in the track area. */
 	TSharedPtr< FUICommandInfo > ToggleChannelColors;
 
-	/** Toggles whether the label browser is enabled in the level editor. */
-	TSharedPtr< FUICommandInfo > ToggleLabelBrowser;
-
 	/** Turns auto scroll on and off. */
 	TSharedPtr< FUICommandInfo > ToggleAutoScroll;
 
@@ -354,6 +357,20 @@ public:
 
 	/** Toggle whether we should evaluate sub sequences in isolation */
 	TSharedPtr< FUICommandInfo > ToggleEvaluateSubSequencesInIsolation;
+
+	/** Sets a transform key at the current time for the selected actor */
+	TSharedPtr< FUICommandInfo > AddTransformKey;
+
+	/** Sets a translation key at the current time for the selected actor */
+	TSharedPtr< FUICommandInfo > AddTranslationKey;
+
+	/** Sets a rotation key at the current time for the selected actor */
+	TSharedPtr< FUICommandInfo > AddRotationKey;
+
+	/** Sets a scale key at the current time for the selected actor */
+	TSharedPtr< FUICommandInfo > AddScaleKey;
+
+
 
 	/**
 	 * Initialize commands

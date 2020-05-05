@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -275,11 +275,16 @@ struct FMeshSectionInfo
 	UPROPERTY()
 	bool bCastShadow;
 
+	/** If true, this section will always considered opaque in ray tracing Geometry. */
+	UPROPERTY()
+	bool bForceOpaque;
+
 	/** Default values. */
 	FMeshSectionInfo()
 		: MaterialIndex(0)
 		, bEnableCollision(true)
 		, bCastShadow(true)
+		, bForceOpaque(false)
 	{
 	}
 
@@ -288,6 +293,7 @@ struct FMeshSectionInfo
 		: MaterialIndex(InMaterialIndex)
 		, bEnableCollision(true)
 		, bCastShadow(true)
+		, bForceOpaque(false)
 	{
 	}
 };
@@ -658,6 +664,14 @@ class UStaticMesh : public UStreamableRenderAsset, public IInterface_CollisionDa
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = StaticMesh)
 	uint8 bSupportUniformlyDistributedSampling : 1;
 
+	/** 
+		If true, complex collision data will store UVs and face remap table for use when performing
+	    PhysicalMaterialMask lookups in cooked builds. Note the increased memory cost for this
+		functionality.
+	*/
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = StaticMesh)
+	uint8 bSupportPhysicalMaterialMasks : 1;
+
 	/**
 	 * If true, StaticMesh has been built at runtime
 	 */
@@ -880,17 +894,12 @@ public:
 
 	/** Builds static mesh LODs from the array of StaticMeshDescriptions passed in */
 	UFUNCTION(BlueprintCallable, Category="StaticMesh")
-	ENGINE_API void BuildFromStaticMeshDescriptions(const TArray<UStaticMeshDescription*>& StaticMeshDescriptions);
+	ENGINE_API void BuildFromStaticMeshDescriptions(const TArray<UStaticMeshDescription*>& StaticMeshDescriptions, bool bBuildSimpleCollision = false);
 
 	/**
 	 * Builds static mesh render buffers from a list of MeshDescriptions, one per LOD.
 	 */
-	ENGINE_API bool BuildFromMeshDescriptions(const TArray<const FMeshDescription*>& MeshDescriptions);
-
-	/**
-	 * Builds simple collisions at runtime
-	 */
-	ENGINE_API bool BuildSimpleCollision();
+	ENGINE_API bool BuildFromMeshDescriptions(const TArray<const FMeshDescription*>& MeshDescriptions, bool bBuildSimpleCollision = false);
 
 	/** Builds a LOD resource from a MeshDescription */
 	void BuildFromMeshDescription(const FMeshDescription& MeshDescription, FStaticMeshLODResources& LODResources);
@@ -913,7 +922,7 @@ public:
 
 	//~ Begin UObject Interface.
 #if WITH_EDITOR
-	ENGINE_API virtual void PreEditChange(UProperty* PropertyAboutToChange) override;
+	ENGINE_API virtual void PreEditChange(FProperty* PropertyAboutToChange) override;
 	ENGINE_API virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	ENGINE_API virtual void PostEditUndo() override;
 	ENGINE_API virtual void GetAssetRegistryTagMetadata(TMap<FName, FAssetRegistryTagMetadata>& OutMetadata) const override;
@@ -979,6 +988,7 @@ public:
 	virtual int32 CalcNumOptionalMips() const final override;
 	virtual int32 CalcCumulativeLODSize(int32 NumLODs) const final override;
 	virtual bool GetMipDataFilename(const int32 MipIndex, FString& BulkDataFilename) const final override;
+	virtual bool DoesMipDataExist(const int32 MipIndex) const final override;
 	virtual bool IsReadyForStreaming() const final override;
 	virtual int32 GetNumResidentMips() const final override;
 	virtual int32 GetNumRequestedMips() const final override;
@@ -1332,5 +1342,10 @@ private:
 	 * Fixes up the material when it was converted to the new staticmesh build process
 	 */
 	bool bCleanUpRedundantMaterialPostLoad;
+
+	/**
+	 * Guard to ignore re-entrant PostEditChange calls.
+	 */
+	bool bIsInPostEditChange = false;
 #endif // #if WITH_EDITOR
 };

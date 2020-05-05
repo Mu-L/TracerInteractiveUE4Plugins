@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -60,6 +60,8 @@ private:
 	FString TagName;
 
 	void OnTagDoubleClicked();
+	void OnSearchForReferences();
+
 	EVisibility GetVisibilityForTagTextBlockWidget(bool ForTextWidget) const;
 
 	TSharedPtr<class SComboButton> EditButton;

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -133,7 +133,7 @@ public:
  * Base class for movie scene sections
  */
 UCLASS(abstract, DefaultToInstanced, MinimalAPI, BlueprintType)
-class MOVIESCENE_VTABLE UMovieSceneSection
+class UMovieSceneSection
 	: public UMovieSceneSignedObject
 {
 	GENERATED_UCLASS_BODY()
@@ -534,6 +534,10 @@ public:
 	*  For Most Sections it's just the Ease Value, but for some Sections also have an extra Weight Curve
 	*/
 	MOVIESCENE_API virtual float GetTotalWeightValue(FFrameTime InTime) const { return EvaluateEasing(InTime); }
+
+#if WITH_EDITOR
+	MOVIESCENE_API virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 
 protected:
 

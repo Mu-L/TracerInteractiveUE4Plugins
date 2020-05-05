@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithIFCTranslator.h"
 
@@ -11,11 +11,14 @@
 #include "GenericPlatform/GenericPlatformProcess.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
-#include "IMessageLogListing.h"
 #include "Logging/LogMacros.h"
 #include "Logging/TokenizedMessage.h"
-#include "MessageLogModule.h"
 #include "Templates/TypeHash.h"
+
+#if WITH_EDITOR
+#include "IMessageLogListing.h"
+#include "MessageLogModule.h"
+#endif //WITH_EDITOR
 
 #include "DatasmithIFCImporter.h"
 
@@ -23,6 +26,7 @@ void ShowLogMessages(const TArray<IFC::FLogMessage>& Errors)
 {
 	if (Errors.Num() > 0)
 	{
+#if WITH_EDITOR
 		FMessageLogModule& MessageLogModule = FModuleManager::LoadModuleChecked<FMessageLogModule>("MessageLog");
 		TSharedRef<IMessageLogListing> LogListing = (MessageLogModule.GetLogListing("LoadErrors"));
 		LogListing->ClearMessages();
@@ -34,6 +38,24 @@ void ShowLogMessages(const TArray<IFC::FLogMessage>& Errors)
 		}
 
 		MessageLogModule.OpenMessageLog("LoadErrors");
+#else
+		for (const IFC::FLogMessage& LogError : Errors)
+		{
+			switch (LogError.Get<0>())
+			{
+			case EMessageSeverity::Error:
+				UE_LOG(LogDatasmithIFCImport, Error, TEXT("%s"), *LogError.Get<1>());
+				break;
+			case EMessageSeverity::Info:
+				UE_LOG(LogDatasmithIFCImport, Log, TEXT("%s"), *LogError.Get<1>());
+				break;
+			case EMessageSeverity::Warning:
+			default:
+				UE_LOG(LogDatasmithIFCImport, Warning, TEXT("%s"), *LogError.Get<1>());
+				break;
+			}
+		}
+#endif //!WITH_EDIOR
 	}
 }
 
@@ -91,7 +113,7 @@ bool FDatasmithIFCTranslator::LoadLevelSequence(const TSharedRef<IDatasmithLevel
 	return false;
 }
 
-void FDatasmithIFCTranslator::GetSceneImportOptions(TArray<TStrongObjectPtr<UObject>>& Options)
+void FDatasmithIFCTranslator::GetSceneImportOptions(TArray<TStrongObjectPtr<UDatasmithOptionsBase>>& Options)
 {
 	if (!ImportOptions.IsValid())
 	{
@@ -101,12 +123,11 @@ void FDatasmithIFCTranslator::GetSceneImportOptions(TArray<TStrongObjectPtr<UObj
 	Options.Add(ImportOptions);
 }
 
-void FDatasmithIFCTranslator::SetSceneImportOptions(TArray<TStrongObjectPtr<UObject>>& Options)
+void FDatasmithIFCTranslator::SetSceneImportOptions(TArray<TStrongObjectPtr<UDatasmithOptionsBase>>& Options)
 {
-	for (TStrongObjectPtr<UObject>& OptionPtr : Options)
+	for (const TStrongObjectPtr<UDatasmithOptionsBase>& OptionPtr : Options)
 	{
-		UObject* Option = OptionPtr.Get();
-		if (UDatasmithIFCImportOptions* InImportOptions = Cast<UDatasmithIFCImportOptions>(Option))
+		if (UDatasmithIFCImportOptions* InImportOptions = Cast<UDatasmithIFCImportOptions>(OptionPtr.Get()))
 		{
 			ImportOptions.Reset(InImportOptions);
 		}

@@ -1,12 +1,14 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Internationalization/TextLocalizationResource.h"
 #include "Internationalization/TextLocalizationResourceVersion.h"
 #include "Internationalization/Culture.h"
 #include "HAL/FileManager.h"
+#include "Misc/App.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
 #include "Misc/Optional.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Templates/UniquePtr.h"
 #include "Internationalization/Internationalization.h"
 #include "Misc/FileHelper.h"
@@ -612,14 +614,19 @@ TArray<FString> TextLocalizationResourceUtil::GetLocalizedCultureNames(const TAr
 	const FString PlatformFolderName = FPaths::GetPlatformLocalizationFolderName();
 	for (const FString& LocalizationPath : InLocalizationPaths)
 	{
-		IFileManager::Get().IterateDirectory(*LocalizationPath, [&CultureNames, &PlatformFolderName](const TCHAR* FilenameOrDirectory, bool bIsDirectory) -> bool
+		const FString LocResFilename = FPaths::GetBaseFilename(LocalizationPath) + TEXT(".locres");
+		IFileManager::Get().IterateDirectory(*LocalizationPath, [&CultureNames, &PlatformFolderName, &LocResFilename](const TCHAR* FilenameOrDirectory, bool bIsDirectory) -> bool
 		{
 			if (bIsDirectory && FCString::Stricmp(FilenameOrDirectory, *PlatformFolderName) != 0)
 			{
-				// UE localization resource folders use "en-US" style while ICU uses "en_US"
-				const FString LocalizationFolder = FPaths::GetCleanFilename(FilenameOrDirectory);
-				const FString CanonicalName = FCulture::GetCanonicalName(LocalizationFolder);
-				CultureNames.AddUnique(CanonicalName);
+				const FString LocResPath = FilenameOrDirectory / LocResFilename;
+				if (FPaths::FileExists(LocResPath))
+				{
+					// UE localization resource folders use "en-US" style while ICU uses "en_US"
+					const FString LocalizationFolder = FPaths::GetCleanFilename(FilenameOrDirectory);
+					const FString CanonicalName = FCulture::GetCanonicalName(LocalizationFolder);
+					CultureNames.AddUnique(CanonicalName);
+				}
 			}
 			return true;
 		});
@@ -633,6 +640,47 @@ TArray<FString> TextLocalizationResourceUtil::GetLocalizedCultureNames(const TAr
 	});
 
 	return CultureNames;
+}
+
+const TArray<FString>& TextLocalizationResourceUtil::GetDisabledLocalizationTargets()
+{
+	static TArray<FString> DisabledLocalizationTargets;
+	static bool bHasInitializedDisabledLocalizationTargets = false;
+
+	if (!bHasInitializedDisabledLocalizationTargets)
+	{
+		check(GConfig && GConfig->IsReadyForUse());
+
+		const bool bShouldLoadEditor = GIsEditor;
+		const bool bShouldLoadGame = FApp::IsGame();
+
+		GConfig->GetArray(TEXT("Internationalization"), TEXT("DisabledLocalizationTargets"), DisabledLocalizationTargets, GEngineIni);
+
+		if (bShouldLoadEditor)
+		{
+			TArray<FString> EditorArray;
+			GConfig->GetArray(TEXT("Internationalization"), TEXT("DisabledLocalizationTargets"), EditorArray, GEditorIni);
+			DisabledLocalizationTargets.Append(MoveTemp(EditorArray));
+		}
+
+		if (bShouldLoadGame)
+		{
+			TArray<FString> GameArray;
+			GConfig->GetArray(TEXT("Internationalization"), TEXT("DisabledLocalizationTargets"), GameArray, GGameIni);
+			DisabledLocalizationTargets.Append(MoveTemp(GameArray));
+		}
+
+		bHasInitializedDisabledLocalizationTargets = true;
+	}
+
+	return DisabledLocalizationTargets;
+}
+
+FString TextLocalizationResourceUtil::GetLocalizationTargetNameForChunkId(const FString& InLocalizationTargetName, const int32 InChunkId)
+{
+	return InChunkId == INDEX_NONE || InChunkId == 0
+		? InLocalizationTargetName
+		: FString::Printf(TEXT("%s_locchunk%d"), *InLocalizationTargetName, InChunkId);
 }
 
 #undef PRELOAD_LOCMETA_FILES

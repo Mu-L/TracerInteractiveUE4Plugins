@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -21,7 +21,5 @@ public:
 
 	// Toggle pose watching for a given node
 	TSharedPtr<FUICommandInfo> TogglePoseWatch;
-	
-	// Toggle hiding nodes which are not related to the selected nodes
-	TSharedPtr< FUICommandInfo > ToggleHideUnrelatedNodes;
+
 };

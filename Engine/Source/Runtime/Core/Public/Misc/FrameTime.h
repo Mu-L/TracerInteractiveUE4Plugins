@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -100,8 +100,10 @@ private:
 	friend bool operator<=(FFrameTime A, FFrameTime B);
 
 	friend FFrameTime& operator+=(FFrameTime& LHS, FFrameTime RHS);
+	friend FFrameTime& operator-=(FFrameTime& LHS, FFrameTime RHS);
 	friend FFrameTime  operator+(FFrameTime A, FFrameTime B);
 	friend FFrameTime  operator-(FFrameTime A, FFrameTime B);
+	friend FFrameTime  operator%(FFrameTime A, FFrameTime B);
 
 	friend FFrameTime  operator-(FFrameTime A);
 
@@ -208,6 +210,19 @@ FORCEINLINE_DEBUGGABLE FFrameTime operator+(FFrameTime A, FFrameTime B)
 }
 
 
+FORCEINLINE_DEBUGGABLE FFrameTime& operator-=(FFrameTime& LHS, FFrameTime RHS)
+{
+	// Ensure SubFrame is always between 0 and 1
+	// Note that the difference between frame -1.5 and 1.5 is 2, not 3, since sub frame positions are always positive
+	const float        NewSubFrame     = LHS.SubFrame - RHS.SubFrame;
+	const int          FlooredSubFrame = FMath::FloorToInt(NewSubFrame);
+	LHS.FrameNumber  = LHS.FrameNumber - RHS.FrameNumber + FFrameNumber(FlooredSubFrame);
+	LHS.SubFrame = NewSubFrame - FlooredSubFrame;
+
+	return LHS;
+}
+
+
 FORCEINLINE_DEBUGGABLE FFrameTime operator-(FFrameTime A, FFrameTime B)
 {
 	// Ensure SubFrame is always between 0 and 1
@@ -217,6 +232,26 @@ FORCEINLINE_DEBUGGABLE FFrameTime operator-(FFrameTime A, FFrameTime B)
 	const FFrameNumber NewFrameNumber  = A.FrameNumber - B.FrameNumber + FFrameNumber(FlooredSubFrame);
 
 	return FFrameTime(NewFrameNumber, NewSubFrame - FlooredSubFrame);
+}
+
+
+FORCEINLINE_DEBUGGABLE FFrameTime operator%(FFrameTime A, FFrameTime B)
+{
+	check(B.FrameNumber.Value != 0 || B.GetSubFrame() != 0.f);
+
+	if (A.SubFrame == 0.f && B.SubFrame == 0.f)
+	{
+		return FFrameTime(A.FrameNumber % B.FrameNumber);
+	}
+	else
+	{
+		FFrameTime Result = A;
+		while (Result >= B)
+		{
+			Result = Result - B;
+		}
+		return Result;
+	}
 }
 
 
@@ -233,6 +268,10 @@ FORCEINLINE FFrameTime operator*(FFrameTime A, float Scalar)
 	return FFrameTime::FromDecimal(A.AsDecimal() * Scalar);
 }
 
+FORCEINLINE FFrameTime operator*(float Scalar, FFrameTime A)
+{
+	return FFrameTime::FromDecimal(A.AsDecimal() * Scalar);
+}
 
 FORCEINLINE FFrameTime operator/(FFrameTime A, float Scalar)
 {
@@ -269,7 +308,7 @@ FORCEINLINE_DEBUGGABLE FFrameTime FFrameTime::FromDecimal(double InDecimalFrame)
 
 	// Ensure fractional parts above the highest sub frame float precision do not round to 0.0
 	double Fraction = InDecimalFrame - FMath::FloorToDouble(InDecimalFrame);
-	return FFrameTime(NewFrame, FMath::Clamp(Fraction, 0.0, (double)MaxSubframe));
+	return FFrameTime(NewFrame, FMath::Clamp((float)Fraction, 0.0f, MaxSubframe));
 }
 
 /** Convert a FFrameTime into a string */

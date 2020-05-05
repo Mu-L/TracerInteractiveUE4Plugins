@@ -2,7 +2,7 @@
  * Copyright 2016-2017 Nikolay Aleksiev. All rights reserved.
  * License: https://github.com/naleksiev/mtlpp/blob/master/LICENSE
  */
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 // Modifications for Unreal Engine
 
 #include <Metal/MTLRenderCommandEncoder.h>
@@ -551,7 +551,7 @@ namespace mtlpp
     {
         Validate();
 #if MTLPP_CONFIG_IMP_CACHE
-		m_table->DrawprimitivesIndirectbufferIndirectbufferoffset(m_ptr, MTLPrimitiveType(primitiveType), (id<MTLBuffer>)indirectBuffer.GetPtr(), indirectBufferOffset);
+		m_table->DrawprimitivesIndirectbufferIndirectbufferoffset(m_ptr, MTLPrimitiveType(primitiveType), (id<MTLBuffer>)indirectBuffer.GetPtr(), indirectBufferOffset + indirectBuffer.GetOffset());
 #else
         [(id<MTLRenderCommandEncoder>)m_ptr drawPrimitives:MTLPrimitiveType(primitiveType)
                                                      indirectBuffer:(id<MTLBuffer>)indirectBuffer.GetPtr()
@@ -714,9 +714,9 @@ namespace mtlpp
 		{
 			[(id<MTLRenderCommandEncoder>)m_ptr drawPatches:numberOfPatchControlPoints
 													patchIndexBuffer:(id<MTLBuffer>)patchIndexBuffer.GetPtr()
-											  patchIndexBufferOffset:patchIndexBufferOffset
+											  patchIndexBufferOffset:patchIndexBufferOffset + patchIndexBuffer.GetOffset()
 													  indirectBuffer:(id<MTLBuffer>)indirectBuffer.GetPtr()
-												indirectBufferOffset:indirectBufferOffset];
+												indirectBufferOffset:indirectBufferOffset + indirectBuffer.GetOffset()];
 		}
 #endif
 #endif

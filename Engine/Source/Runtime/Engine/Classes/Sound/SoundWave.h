@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,9 +12,10 @@
 #include "Misc/Guid.h"
 #include "Async/AsyncWork.h"
 #include "Sound/SoundBase.h"
-#include "Sound/SoundClass.h"
 #include "Serialization/BulkData.h"
+#include "Serialization/BulkDataBuffer.h"
 #include "Sound/SoundGroups.h"
+#include "Sound/SoundWaveLoadingBehavior.h"
 #include "AudioMixerTypes.h"
 #include "AudioCompressionSettings.h"
 #include "PerPlatformProperties.h"
@@ -78,7 +79,7 @@ struct FStreamedAudioChunk
 	 * Place chunk data in the derived data cache associated with the provided
 	 * key.
 	 */
-	uint32 StoreInDerivedDataCache(const FString& InDerivedDataKey);
+	uint32 StoreInDerivedDataCache(const FString& InDerivedDataKey, const FStringView& SoundWaveName);
 #endif // #if WITH_EDITORONLY_DATA
 };
 
@@ -287,7 +288,8 @@ struct ISoundWaveClient
 	ISoundWaveClient() {}
 	virtual ~ISoundWaveClient() {}
 	
-	virtual void OnBeginDestroy(class USoundWave* Wave) = 0;
+	// OnBeginDestroy() returns true to unsubscribe as an ISoundWaveClient
+	virtual bool OnBeginDestroy(class USoundWave* Wave) = 0;
 	virtual bool OnIsReadyForFinishDestroy(class USoundWave* Wave) const = 0;
 	virtual void OnFinishDestroy(class USoundWave* Wave) = 0;
 };
@@ -327,12 +329,15 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Playback|Streaming", meta = (DisplayName = "Seekable", EditCondition = "bStreaming"))
 	uint8 bSeekableStreaming:1;
 
-	/** If stream caching is enabled, this can be used to specify how and when compressed audio data is loaded for this asset. */
+	/** Specifies how and when compressed audio data is loaded for asset if stream caching is enabled. */
 	UPROPERTY(EditAnywhere, Category = "Loading", meta = (DisplayName = "Loading Behavior Override"))
 	ESoundWaveLoadingBehavior LoadingBehavior;
 
 	/** Set to true for programmatically generated audio. */
 	uint8 bProcedural:1;
+	
+	/** Set to true if the source is procedural and currently playing */
+	uint8 bPlayingProcedural : 1;
 
 	/** Set to true of this is a bus sound source. This will result in the sound wave not generating audio for itself, but generate audio through instances. Used only in audio mixer. */
 	uint8 bIsBus:1;
@@ -360,7 +365,9 @@ public:
 	uint8 bVirtualizeWhenSilent_DEPRECATED:1;
 #endif // WITH_EDITORONLY_DATA
 
-	/** Whether or not this source is ambisonics file format. */
+	/** Whether or not this source is ambisonics file format. If set, sound always uses the 
+	  * 'Master Ambisonics Submix' as set in the 'Audio' category of Project Settings'
+	  * and ignores submix if provided locally or in the referenced SoundClass. */
 	UPROPERTY(EditAnywhere, Category = Format)
 	uint8 bIsAmbisonics : 1;
 
@@ -475,6 +482,8 @@ public:
 
 	/** If stream caching is enabled and au.streamcache.KeepFirstChunkInMemory is 1, this will release this USoundWave's first chunk, allowing it to be deleted. */
 	void ReleaseCompressedAudio();
+
+	bool IsRetainingAudio();
 
 	/** Returns the loading behavior we should use for this sound wave.
 	 *  If this is called within Serialize(), this should be called with bCheckSoundClasses = false,
@@ -625,7 +634,7 @@ public:
 	const uint8* ResourceData;
 
 	/** Zeroth Chunk of audio for sources that use Load On Demand. */
-	TArray<uint8> ZerothChunkData;
+	FBulkDataBuffer<uint8> ZerothChunkData;
 
 	/** Uncompressed wav data 16 bit in mono or stereo - stereo not allowed for multichannel data */
 	FByteBulkData RawData;
@@ -726,7 +735,7 @@ public:
 	{
 		SampleRate = InSampleRate;
 #if !WITH_EDITOR
-		// Ensure that we invalidate our cached sample rate if the UProperty sample rate is changed.
+		// Ensure that we invalidate our cached sample rate if the FProperty sample rate is changed.
 		bCachedSampleRateFromPlatformSettings = false;
 		bSampleRateManuallyReset = true;
 #endif //WITH_EDITOR
@@ -878,7 +887,8 @@ public:
 #endif // WITH_EDITOR
 
 	/** Checks whether sound has been categorised as streaming. */
-	bool IsStreaming(const FPlatformAudioCookOverrides* Overrides = nullptr) const;
+	bool IsStreaming(const TCHAR* PlatformName = nullptr) const;
+	bool IsStreaming(const FPlatformAudioCookOverrides& Overrides) const;
 
 	/** Checks whether sound has seekable streaming enabled. */
 	bool IsSeekableStreaming() const;
@@ -890,7 +900,7 @@ public:
 	/**
 	 * This returns the initial chunk of compressed data for streaming data sources.
 	 */
-	TArrayView<const uint8> GetZerothChunk();
+	TArrayView<const uint8> GetZerothChunk(bool bForImmediatePlayback = false);
 
 	/**
 	 * Attempts to update the cached platform data after any changes that might affect it

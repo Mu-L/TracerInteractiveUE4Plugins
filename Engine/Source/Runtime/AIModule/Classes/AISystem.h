@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -73,7 +73,13 @@ public:
 	UPROPERTY(globalconfig, EditDefaultsOnly, Category = "AISystem")
 	bool bEnableDebuggerPlugin;
 
-	UPROPERTY(globalconfig, EditAnywhere, Category = "PerceptionSystem")
+	/** If set, actors will be forgotten by the perception system when their stimulus has expired.
+	 *	If not set, the perception system will remember the actor even if they are no longer perceived and their
+	 *	stimuli has exceeded its max age */
+	UPROPERTY(globalconfig, EditDefaultsOnly, Category = "AISystem")
+	bool bForgetStaleActors;
+
+	UPROPERTY(globalconfig, EditDefaultsOnly, Category = "PerceptionSystem")
 	TEnumAsByte<ECollisionChannel> DefaultSightCollisionChannel;
 
 protected:

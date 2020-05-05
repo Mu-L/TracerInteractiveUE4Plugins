@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Rendering/PositionVertexBuffer.h"
 
@@ -18,8 +18,8 @@ class FPositionVertexData :
 	public TStaticMeshVertexData<FPositionVertex>
 {
 public:
-	FPositionVertexData( bool InNeedsCPUAccess=false )
-		: TStaticMeshVertexData<FPositionVertex>( InNeedsCPUAccess )
+	FPositionVertexData(bool InNeedsCPUAccess = false)
+		: TStaticMeshVertexData<FPositionVertex>(InNeedsCPUAccess)
 	{
 	}
 };
@@ -43,7 +43,7 @@ void FPositionVertexBuffer::CleanUp()
 	if (VertexData)
 	{
 		delete VertexData;
-		VertexData = NULL;
+		VertexData = nullptr;
 	}
 }
 
@@ -217,6 +217,29 @@ FVertexBufferRHIRef FPositionVertexBuffer::CreateRHIBuffer_RenderThread()
 FVertexBufferRHIRef FPositionVertexBuffer::CreateRHIBuffer_Async()
 {
 	return CreateRHIBuffer_Internal<false>();
+}
+
+/** Copy everything, keeping reference to the same RHI resources. */
+void FPositionVertexBuffer::CopyRHIForStreaming(const FPositionVertexBuffer& Other, bool InAllowCPUAccess)
+{
+	// Copy serialized properties.
+	Stride = Other.Stride;
+	NumVertices = Other.NumVertices;
+
+	// Handle CPU access.
+	if (InAllowCPUAccess)
+	{
+		bNeedsCPUAccess = Other.bNeedsCPUAccess;
+		AllocateData(bNeedsCPUAccess);
+	}
+	else
+	{
+		bNeedsCPUAccess = false;
+	}
+
+	// Copy resource references.
+	VertexBufferRHI = Other.VertexBufferRHI;
+	PositionComponentSRV = Other.PositionComponentSRV;
 }
 
 void FPositionVertexBuffer::InitRHI()

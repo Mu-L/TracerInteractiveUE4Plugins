@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -134,7 +134,13 @@ namespace UnrealBuildTool
 		public bool bUseInlining = false;
 
 		/// <summary>
-		/// Use AVX instructions
+		/// Whether to compile ISPC files.
+		/// </summary>
+		public bool bCompileISPC = false;
+
+		/// <summary>
+		/// Direct the compiler to generate AVX instructions wherever SSE or AVX intrinsics are used.
+		/// Note that by enabling this you are changing the minspec for the PC platform, and the resultant executable will crash on machines without AVX support.
 		/// </summary>
 		public bool bUseAVX = false;
 
@@ -179,6 +185,11 @@ namespace UnrealBuildTool
 		/// Whether to warn about the use of shadow variables
 		/// </summary>
 		public WarningLevel ShadowVariableWarningLevel = WarningLevel.Warning;
+
+		/// <summary>
+		/// How to treat unsafe implicit type cast warnings (e.g., double->float or int64->int32)
+		/// </summary>
+		public WarningLevel UnsafeTypeCastWarningLevel = WarningLevel.Off;
 
 		/// <summary>
 		/// Whether to warn about the use of undefined identifiers in #if expressions
@@ -386,6 +397,7 @@ namespace UnrealBuildTool
 			bUseSharedBuildEnvironment = Other.bUseSharedBuildEnvironment;
 			bUseRTTI = Other.bUseRTTI;
 			bUseInlining = Other.bUseInlining;
+			bCompileISPC = Other.bCompileISPC;
 			bUseAVX = Other.bUseAVX;
 			bUseUnity = Other.bUseUnity;
 			MinSourceFilesForUnityBuildOverride = Other.MinSourceFilesForUnityBuildOverride;
@@ -394,6 +406,7 @@ namespace UnrealBuildTool
 			bEnableExceptions = Other.bEnableExceptions;
 			bEnableObjCExceptions = Other.bEnableObjCExceptions;
 			ShadowVariableWarningLevel = Other.ShadowVariableWarningLevel;
+			UnsafeTypeCastWarningLevel = Other.UnsafeTypeCastWarningLevel;
 			bUndefinedIdentifierWarningsAsErrors = Other.bUndefinedIdentifierWarningsAsErrors;
 			bEnableUndefinedIdentifierWarnings = Other.bEnableUndefinedIdentifierWarnings;
 			bOptimizeCode = Other.bOptimizeCode;

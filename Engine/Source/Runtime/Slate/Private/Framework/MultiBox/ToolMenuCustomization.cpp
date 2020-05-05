@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Framework/MultiBox/ToolMenuBase.h"
 
@@ -193,6 +193,8 @@ FCustomizedToolMenu FCustomizedToolMenuHierarchy::GenerateFlattened() const
 				Result.Sections.Add(SectionIterator.Key, SectionIterator.Value);
 			}
 		}
+
+		Result.BlacklistFilter.Append(Current->BlacklistFilter);
 	}
 
 	return Result;

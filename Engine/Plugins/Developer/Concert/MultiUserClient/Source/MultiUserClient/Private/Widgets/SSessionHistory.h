@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -62,8 +62,8 @@ private:
 	/** Returns the text to highlight when the search bar has a text set. */
 	FText HighlightSearchedText() const;
 
-	/** Returns the specified package event if available. */
-	TFuture<TOptional<FConcertSyncPackageEvent>> GetPackageEvent(const FConcertClientSessionActivity& Activity) const;
+	/** Returns the specified package event (without the package data itself) if available. */
+	bool GetPackageEvent(const FConcertClientSessionActivity& Activity, FConcertSyncPackageEventMetaData& OutPackageEvent) const;
 
 	/** Returns the specified package event if available. */
 	TFuture<TOptional<FConcertSyncTransactionEvent>> GetTransactionEvent(const FConcertClientSessionActivity& Activity) const;

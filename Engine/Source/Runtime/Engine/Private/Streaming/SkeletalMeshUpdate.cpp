@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 SkeletalMeshUpdate.cpp: Helpers to stream in and out skeletal mesh LODs.
@@ -89,7 +89,8 @@ void FSkeletalMeshStreamIn::FIntermediateBuffers::SafeRelease()
 	TexCoordVertexBuffer.SafeRelease();
 	PositionVertexBuffer.SafeRelease();
 	ColorVertexBuffer.SafeRelease();
-	SkinWeightVertexBuffer.SafeRelease();
+	SkinWeightVertexBuffer.DataVertexBufferRHI.SafeRelease();
+	SkinWeightVertexBuffer.LookupVertexBufferRHI.SafeRelease();
 	ClothVertexBuffer.SafeRelease();
 	IndexBuffer.SafeRelease();
 	AdjacencyIndexBuffer.SafeRelease();
@@ -117,7 +118,8 @@ void FSkeletalMeshStreamIn::FIntermediateBuffers::CheckIsNull() const
 		&& !TexCoordVertexBuffer
 		&& !PositionVertexBuffer
 		&& !ColorVertexBuffer
-		&& !SkinWeightVertexBuffer
+		&& !SkinWeightVertexBuffer.DataVertexBufferRHI
+		&& !SkinWeightVertexBuffer.LookupVertexBufferRHI
 		&& !ClothVertexBuffer
 		&& !IndexBuffer
 		&& !AdjacencyIndexBuffer
@@ -362,7 +364,7 @@ FString FSkeletalMeshStreamIn_IO::GetIOFilename(const FContext& Context)
 
 void FSkeletalMeshStreamIn_IO::SetAsyncFileCallback(const FContext& Context)
 {
-	AsyncFileCallback = [this, Context](bool bWasCancelled, IAsyncReadRequest* Req)
+	AsyncFileCallback = [this, Context](bool bWasCancelled, IBulkDataIORequest*)
 	{
 		// At this point task synchronization would hold the number of pending requests.
 		TaskSynchronization.Decrement();
@@ -405,27 +407,21 @@ void FSkeletalMeshStreamIn_IO::SetIORequest(const FContext& Context, const FStri
 	{
 		SetAsyncFileCallback(Context);
 
-		const FSkeletalMeshLODRenderData& FirstLOD = RenderData->LODRenderData[PendingFirstMip];
-		const FSkeletalMeshLODRenderData& LastLOD = RenderData->LODRenderData[CurrentFirstLODIdx - 1];
+		FBulkDataInterface::BulkDataRangeArray BulkDataArray;
+		for (int32 Index = PendingFirstMip; Index < CurrentFirstLODIdx; ++Index)
+		{
+			BulkDataArray.Push(&RenderData->LODRenderData[Index].StreamingBulkData);
+		}
 
 		// Increment as we push the request. If a request complete immediately, then it will call the callback
 		// but that won't do anything because the tick would not try to acquire the lock since it is already locked.
 		TaskSynchronization.Increment();
 
-#if USE_BULKDATA_STREAMING_TOKEN
-		IORequest = FUntypedBulkData::CreateStreamingRequestForRange(
-			IOFilename,
-			FirstLOD.BulkDataStreamingToken,
-			LastLOD.BulkDataStreamingToken,
+		IORequest = FBulkDataInterface::CreateStreamingRequestForRange(
+			STREAMINGTOKEN_PARAM(IOFilename)
+			BulkDataArray,
 			bHighPrioIORequest ? AIOP_BelowNormal : AIOP_Low,
 			&AsyncFileCallback);
-#else
-		IORequest = BulkDataUtils::CreateStreamingRequestForRange(
-			FirstLOD.StreamingBulkData,
-			LastLOD.StreamingBulkData,
-			bHighPrioIORequest ? AIOP_BelowNormal : AIOP_Low,
-			&AsyncFileCallback);
-#endif
 	}
 	else
 	{
@@ -495,8 +491,14 @@ template <bool bRenderThread>
 void TSkeletalMeshStreamIn_IO<bRenderThread>::DoInitiateIO(const FContext& Context)
 {
 	check(Context.CurrentThread == TT_Async);
+
+#if USE_BULKDATA_STREAMING_TOKEN
 	const FString IOFilename = GetIOFilename(Context);
 	SetIORequest(Context, IOFilename);
+#else
+	SetIORequest(Context, FString());
+#endif
+
 	PushTask(Context, TT_Async, SRA_UPDATE_CALLBACK(DoSerializeLODData), TT_Async, SRA_UPDATE_CALLBACK(DoCancelIO));
 }
 

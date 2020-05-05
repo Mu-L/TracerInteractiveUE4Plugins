@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Chaos/PBDParticles.h"
@@ -8,7 +8,7 @@
 namespace Chaos
 {
 template<class T, int d>
-class TPBDChainConstraints : public TPBDConstraintContainer<T, d>
+class TPBDChainConstraints : public FPBDConstraintContainer
 {
 public:
 	TPBDChainConstraints(const TDynamicParticles<T, d>& InParticles, TArray<TArray<int32>>&& Constraints, const T Coefficient = (T)1)

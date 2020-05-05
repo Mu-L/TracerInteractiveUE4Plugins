@@ -1,9 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PlatformInfo.h"
 #include "DesktopPlatformPrivate.h"
 #include "Misc/DataDrivenPlatformInfoRegistry.h"
 #include "HAL/FileManager.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
 
 #define LOCTEXT_NAMESPACE "PlatformInfo"
@@ -226,6 +227,9 @@ const FPlatformInfo* FindPlatformInfo(const FName& InPlatformName)
 			return &PlatformInfo;
 		}
 	}
+
+	UE_LOG(LogDesktopPlatform, Warning, TEXT("Unable to find platform info for '%s'"), *InPlatformName.ToString());
+
 	return nullptr;
 }
 

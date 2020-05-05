@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Linux/LinuxCursor.h"
 
@@ -170,11 +170,6 @@ FLinuxCursor::~FLinuxCursor()
 				break;
 		}
 	}
-}
-
-void* FLinuxCursor::CreateCursorFromFile(const FString& InPathToCursorWithoutExtension, FVector2D HotSpot)
-{
-	return nullptr;
 }
 
 void* FLinuxCursor::CreateCursorFromRGBABuffer(const FColor* Pixels, int32 Width, int32 Height, FVector2D InHotSpot)

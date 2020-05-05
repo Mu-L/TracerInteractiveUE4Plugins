@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -39,7 +39,7 @@ public:
 	FMatrix TransformMatrix = FMatrix::Identity;
 	CadId ReferenceNodeId = 0;
 	bool bIsExternalRef = false;
-	FString ExternalRef;
+	FFileDescription ExternalRef;
 };
 
 class CADINTERFACES_API FArchiveComponent : public ICADArchiveObject
@@ -121,16 +121,19 @@ public:
 	FCADMaterial Material;
 };
 
-class CADINTERFACES_API FArchiveMockUp
+class CADINTERFACES_API FArchiveSceneGraph
 {
 public:
-	friend FArchive& operator<<(FArchive& Ar, FArchiveMockUp& C);
+	friend FArchive& operator<<(FArchive& Ar, FArchiveSceneGraph& C);
+
+	void SerializeMockUp(const TCHAR* Filename);
+	void DeserializeMockUpFile(const TCHAR* Filename);
 
 public:
-	FString CADFile;
-	FString SceneGraphArchive;
+	FString CADFileName;
+	FString ArchiveFileName;
 	FString FullPath;
-	TSet<FString> ExternalRefSet;
+	TSet<FFileDescription> ExternalRefSet;
 
 	TMap<ColorId, FArchiveColor> ColorHIdToColor;
 	TMap<MaterialId, FArchiveMaterial> MaterialHIdToMaterial;
@@ -146,8 +149,6 @@ public:
 	TMap<CadId, int32> CADIdToInstanceIndex;
 };
 
-CADINTERFACES_API void SerializeMockUp(FArchiveMockUp& Object, const TCHAR* Filename);
-CADINTERFACES_API void DeserializeMockUpFile(const TCHAR* Filename, FArchiveMockUp& MockUp);
 
 }
 

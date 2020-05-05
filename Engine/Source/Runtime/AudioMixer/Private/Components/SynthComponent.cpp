@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Components/SynthComponent.h"
 #include "AudioDevice.h"
@@ -44,8 +44,10 @@ void USynthSound::StartOnAudioDevice(FAudioDevice* InAudioDevice)
 
 void USynthSound::OnBeginGenerate()
 {
-	check(OwningSynthComponent);
-	OwningSynthComponent->OnBeginGenerate();
+	if (ensure(OwningSynthComponent))
+	{
+		OwningSynthComponent->OnBeginGenerate();
+	}
 }
 
 int32 USynthSound::OnGeneratePCMAudio(TArray<uint8>& OutAudio, int32 NumSamples)
@@ -121,7 +123,7 @@ USynthComponent::USynthComponent(const FObjectInitializer& ObjectInitializer)
 	bIsSynthPlaying = false;
 	bIsInitialized = false;
 	bIsUISound = false;
-
+	bAlwaysPlay = true;
 	Synth = nullptr;
 
 	// Set the default sound class
@@ -146,6 +148,12 @@ void USynthComponent::OnAudioComponentEnvelopeValue(const UAudioComponent* InAud
 	{
 		OnAudioEnvelopeValueNative.Broadcast(InAudioComponent, EnvelopeValue);
 	}
+}
+
+void USynthComponent::BeginDestroy()
+{
+	Super::BeginDestroy();
+	Stop();
 }
 
 void USynthComponent::Activate(bool bReset)
@@ -288,6 +296,7 @@ void USynthComponent::CreateAudioComponent()
 		// Set defaults to be the same as audio component defaults
 		AudioComponent->EnvelopeFollowerAttackTime = EnvelopeFollowerAttackTime;
 		AudioComponent->EnvelopeFollowerReleaseTime = EnvelopeFollowerReleaseTime;
+		AudioComponent->bAlwaysPlay = bAlwaysPlay;
 	}
 }
 
@@ -399,13 +408,7 @@ FAudioDevice* USynthComponent::GetAudioDevice()
 	// If the synth component has a world, that means it was already registed with that world
 	if (UWorld* World = GetWorld())
 	{
-		// Make sure it has a proper audio device handle and retrieve it
-		if (World->AudioDeviceHandle != INDEX_NONE)
-		{
-			FAudioDeviceManager* AudioDeviceManager = GEngine->GetAudioDeviceManager();
-			check(AudioDeviceManager);
-			return AudioDeviceManager->GetAudioDevice(World->AudioDeviceHandle);
-		}
+		return World->AudioDeviceHandle.GetAudioDevice();
 	}
 
 	// Otherwise, retrieve the audio component's audio device (probably from it's owner)
@@ -475,11 +478,6 @@ void USynthComponent::Start()
 		AudioComponent->SetSound(Synth);
 		AudioComponent->Play(0);
 
-		// Copy sound base data to the sound
-		Synth->SourceEffectChain = SourceEffectChain;
-		Synth->SoundSubmixObject = SoundSubmix;
-		Synth->SoundSubmixSends = SoundSubmixSends;
-
 		SetActiveFlag(AudioComponent->IsActive());
 
 		if (IsActive())
@@ -517,7 +515,7 @@ void USynthComponent::SetVolumeMultiplier(float VolumeMultiplier)
 	}
 }
 
-void USynthComponent::SetSubmixSend(USoundSubmix* Submix, float SendLevel)
+void USynthComponent::SetSubmixSend(USoundSubmixBase* Submix, float SendLevel)
 {
 	if (AudioComponent)
 	{

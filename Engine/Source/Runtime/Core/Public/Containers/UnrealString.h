@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // This needed to be UnrealString.h to avoid conflicting with
 // the Windows platform SDK string.h
@@ -11,10 +11,12 @@
 #include "Misc/AssertionMacros.h"
 #include "HAL/UnrealMemory.h"
 #include "Templates/IsArithmetic.h"
+#include "Templates/IsArray.h"
 #include "Templates/UnrealTypeTraits.h"
 #include "Templates/UnrealTemplate.h"
 #include "Math/NumericLimits.h"
 #include "Containers/Array.h"
+#include "Containers/StringFwd.h"
 #include "Misc/CString.h"
 #include "Misc/Crc.h"
 #include "Math/UnrealMathUtility.h"
@@ -28,31 +30,18 @@
 struct FStringFormatArg;
 template<typename KeyType,typename ValueType,typename SetAllocator ,typename KeyFuncs > class TMap;
 
-/** Determines case sensitivity options for string comparisons. */
-namespace ESearchCase
-{
-	enum Type
-	{
-		/** Case sensitive. Upper/lower casing must match for strings to be considered equal. */
-		CaseSensitive,
+typedef TMap<FString, FStringFormatArg> FStringFormatNamedArguments;
+typedef TArray<FStringFormatArg> FStringFormatOrderedArguments;
 
-		/** Ignore case. Upper/lower casing does not matter when making a comparison. */
-		IgnoreCase,
-	};
+template <>
+struct TIsContiguousContainer<FString>
+{
+	enum { Value = true };
 };
 
-/** Determines search direction for string operations. */
-namespace ESearchDir
-{
-	enum Type
-	{
-		/** Search from the start, moving forward through the string. */
-		FromStart,
-
-		/** Search from the end, moving backward through the string. */
-		FromEnd,
-	};
-}
+TCHAR* GetData(FString& String);
+const TCHAR* GetData(const FString& String);
+int32 GetNum(const FString& String);
 
 /**
  * A dynamically sizeable string.
@@ -113,6 +102,7 @@ public:
 		{
 			int32 SrcLen  = TCString<CharType>::Strlen(Src) + 1;
 			int32 DestLen = FPlatformString::ConvertedLength<TCHAR>(Src, SrcLen);
+			Data.Reserve(DestLen);
 			Data.AddUninitialized(DestLen);
 
 			FPlatformString::Convert(Data.GetData(), DestLen, Src, SrcLen);
@@ -136,6 +126,7 @@ public:
 			int32 DestLen = FPlatformString::ConvertedLength<TCHAR>(InSrc, InCount);
 			if (DestLen > 0)
 			{
+				Data.Reserve(DestLen + 1);
 				Data.AddUninitialized(DestLen + 1);
 
 				FPlatformString::Convert(Data.GetData(), DestLen, InSrc, InCount);
@@ -143,6 +134,8 @@ public:
 			}
 		}
 	}
+
+	explicit FString(const FStringView& Other);
 
 #ifdef __OBJC__
 	/** Convert Objective-C NSString* to FString */
@@ -163,6 +156,7 @@ public:
 			if (CFStringGetBytes((__bridge CFStringRef)In, Range, Encoding, '?', false, NULL, 0, &BytesNeeded) > 0)
 			{
 				const size_t Length = BytesNeeded / sizeof(TCHAR);
+				Data.Reserve(Length + 1);
 				Data.AddUninitialized(Length + 1);
 				CFStringGetBytes((__bridge CFStringRef)In, Range, Encoding, '?', false, (uint8*)Data.GetData(), Length * sizeof(TCHAR) + 1, NULL);
 				Data[Length] = 0;
@@ -191,6 +185,16 @@ public:
 		}
 		return *this;
 	}
+
+	/**
+	 * Copy assignment from a string view
+	 */
+	FString& operator=(const FStringView& Other);
+
+	/**
+	 * Implicit conversion to a string view
+	 */
+	operator FStringView() const;
 
 	/**
 	 * Return specific character from this string
@@ -245,7 +249,7 @@ public:
 	FORCEINLINE DataType::RangedForConstIteratorType end  () const { auto Result = Data.end();   if (Data.Num()) { --Result; }     return Result; }
 
 public:
-	FORCEINLINE uint32 GetAllocatedSize() const
+	FORCEINLINE SIZE_T GetAllocatedSize() const
 	{
 		return Data.GetAllocatedSize();
 	}
@@ -355,59 +359,49 @@ public:
 	}
 #endif
 
-	/**
-	 * Appends an array of characters to the string.  
+	/** 
+	 * Appends a character range without null-terminators in it
 	 *
-	 * @param Array A pointer to the start of an array of characters to append.  This array need not be null-terminated, and null characters are not treated specially.
-	 * @param Count The number of characters to copy from Array.
+	 * @param Str can be null if Count is 0. Can be unterminated, Str[Count] isn't read.
 	 */
-	FORCEINLINE void AppendChars(const TCHAR* Array, int32 Count)
+	void AppendChars(const ANSICHAR* Str, int32 Count);
+	void AppendChars(const WIDECHAR* Str, int32 Count);
+	void AppendChars(const UCS2CHAR* Str, int32 Count);
+
+	/** Append a string and return a reference to this */
+	template<class CharType>
+	FORCEINLINE FString& Append(const CharType* Str, int32 Count)
 	{
-		check(Count >= 0);
-
-		if (!Count)
-			return;
-
-		checkSlow(Array);
-
-		int32 Index = Data.Num();
-
-		// Reserve enough space - including an extra gap for a null terminator if we don't already have a string allocated
-		Data.AddUninitialized(Count + (Index ? 0 : 1));
-
-		TCHAR* EndPtr = Data.GetData() + Index - (Index ? 1 : 0);
-
-		// Copy characters to end of string, overwriting null terminator if we already have one
-		CopyAssignItems(EndPtr, Array, Count);
-
-		// (Re-)establish the null terminator
-		*(EndPtr + Count) = 0;
+		AppendChars(Str, Count);
+		return *this;
 	}
-
+	
 	/**
-	 * Concatenate this with given string
-	 * 
-	 * @param Str array of TCHAR to be concatenated onto the end of this
-	 * @return reference to this
+	 * Append a valid null-terminated string and return a reference to this
+	 *
+	 * CharType is not const to use this overload for mutable char arrays and call
+	 * Strlen() instead of getting the static length N from GetNum((&T)[N]).
+	 * Oddly MSVC ranks a const T* overload over T&& for T[N] while clang picks T&&.
 	 */
-	FORCEINLINE FString& operator+=( const TCHAR* Str )
+	template<class CharType>
+	FORCEINLINE FString& Append(/* no const! */ CharType* Str)
 	{
 		checkSlow(Str);
-		CheckInvariants();
-
-		AppendChars(Str, FCString::Strlen(Str));
-
+		AppendChars(Str, TCString<typename TRemoveConst<CharType>::Type>::Strlen(Str));
+		return *this;
+	}
+	
+	/** Append a string and return a reference to this */
+	template <typename StrType, typename = decltype(GetData(DeclVal<StrType>()))>
+	FORCEINLINE FString& Append(StrType&& Str)
+	{
+		static_assert(!TIsArray<StrType>::Value, "Char arrays shouldn't use this overload");
+		AppendChars(GetData(Str), GetNum(Str));
 		return *this;
 	}
 
-	/**
-	 * Concatenate this with given char
-	 * 
-	 * @param inChar other Char to be concatenated onto the end of this string
-	 * @return reference to this
-	 */
-	template <typename CharType>
-	FORCEINLINE typename TEnableIf<TIsCharType<CharType>::Value, FString&>::Type operator+=(CharType InChar)
+	/** Append a single character and return a reference to this */
+	FORCEINLINE FString& AppendChar(TCHAR InChar)
 	{
 		CheckInvariants();
 
@@ -428,49 +422,14 @@ public:
 		return *this;
 	}
 
-	/**
-	 * Concatenate this with given char
-	 * 
-	 * @param InChar other Char to be concatenated onto the end of this string
-	 * @return reference to this
-	 */
-	FORCEINLINE FString& AppendChar(const TCHAR InChar)
-	{
-		*this += InChar;
-		return *this;
-	}
+	/** Append a string and return a reference to this */
+	template <typename StrType>
+	FORCEINLINE FString& operator+=(StrType&& Str)	{ return Append(Forward<StrType>(Str)); }
 
-	FORCEINLINE FString& Append(const FString& Text)
-	{
-		*this += Text;
-		return *this;
-	}
-
-	FString& Append(const TCHAR* Text, int32 Count)
-	{
-		CheckInvariants();
-
-		if (Count != 0)
-		{
-			// position to insert the character.  
-			// At the end of the string if we have existing characters, otherwise at the 0 position
-			int32 InsertIndex = (Data.Num() > 0) ? Data.Num() - 1 : 0;
-
-			// number of characters to add.  If we don't have any existing characters, 
-			// we'll need to append the terminating zero as well.
-			int32 FinalCount = (Data.Num() > 0) ? Count : Count + 1;
-
-			Data.AddUninitialized(FinalCount);
-
-			for (int32 Index = 0; Index < Count; Index++)
-			{
-				Data[InsertIndex + Index] = Text[Index];
-			}
-
-			Data[Data.Num() - 1] = 0;
-		}
-		return *this;
-	}
+	/** Append a single character and return a reference to this */
+	FORCEINLINE FString& operator+=(ANSICHAR Char)	{ return AppendChar(Char); }
+	FORCEINLINE FString& operator+=(WIDECHAR Char)	{ return AppendChar(Char); }
+	FORCEINLINE FString& operator+=(UCS2CHAR Char)	{ return AppendChar(Char); }
 
 	/**
 	 * Removes characters within the string.
@@ -481,7 +440,7 @@ public:
 	 */
 	FORCEINLINE void RemoveAt(int32 Index, int32 Count = 1, bool bAllowShrinking = true)
 	{
-		Data.RemoveAt(Index, Count, bAllowShrinking);
+		Data.RemoveAt(Index, FMath::Clamp(Count, 0, Len()-Index), bAllowShrinking);
 	}
 
 	FORCEINLINE void InsertAt(int32 Index, TCHAR Character)
@@ -552,22 +511,6 @@ public:
 	 * @param StrLength Exact number of characters from Str to append.
 	 */
 	void PathAppend(const TCHAR* Str, int32 StrLength);
-
-	/**
-	 * Concatenate this with given string
-	 * 
-	 * @param Str other string to be concatenated onto the end of this
-	 * @return reference to this
-	 */
-	FORCEINLINE FString& operator+=( const FString& Str )
-	{
-		CheckInvariants();
-		Str.CheckInvariants();
-
-		AppendChars(Str.Data.GetData(), Str.Len());
-
-		return *this;
-	}
 
 	/**
 	 * Concatenates an FString with a TCHAR.
@@ -645,6 +588,7 @@ private:
 		// the memory could be reused here without constructing a new object.  However, until there is proof otherwise,
 		// I believe this will be relatively rare and isn't worth making the code a lot more complex right now.
 		FString Result;
+		Result.Data.Reserve(LhsLen + RhsLen + 1);
 		Result.Data.AddUninitialized(LhsLen + RhsLen + 1);
 
 		TCHAR* ResultData = Result.Data.GetData();
@@ -1142,38 +1086,110 @@ public:
 	}
 
 	/** Returns the left most given number of characters */
-	FORCEINLINE FString Left( int32 Count ) const
+	FORCEINLINE FString Left( int32 Count ) const &
 	{
 		return FString( FMath::Clamp(Count,0,Len()), **this );
 	}
 
-	/** Returns the left most characters from the string chopping the given number of characters from the end */
-	FORCEINLINE FString LeftChop( int32 Count ) const
+	FORCEINLINE FString Left(int32 Count) &&
 	{
-		return FString( FMath::Clamp(Len()-Count,0,Len()), **this );
+		LeftInline(Count, false);
+		return MoveTemp(*this);
+	}
+
+	/** Modifies the string such that it is now the left most given number of characters */
+	FORCEINLINE void LeftInline(int32 Count, bool bAllowShrinking = true)
+	{
+		const int32 Length = Len();
+		Count = FMath::Clamp(Count, 0, Length);
+		RemoveAt(Count, Length-Count, bAllowShrinking);
+	}
+
+	/** Returns the left most characters from the string chopping the given number of characters from the end */
+	FORCEINLINE FString LeftChop( int32 Count ) const &
+	{
+		const int32 Length = Len();
+		return FString( FMath::Clamp(Length-Count,0, Length), **this );
+	}
+
+	FORCEINLINE FString LeftChop(int32 Count)&&
+	{
+		LeftChopInline(Count, false);
+		return MoveTemp(*this);
+	}
+
+	/** Modifies the string such that it is now the left most characters chopping the given number of characters from the end */
+	FORCEINLINE void LeftChopInline(int32 Count, bool bAllowShrinking = true)
+	{
+		const int32 Length = Len();
+		RemoveAt(FMath::Clamp(Length-Count, 0, Length), Count, bAllowShrinking);
 	}
 
 	/** Returns the string to the right of the specified location, counting back from the right (end of the word). */
-	FORCEINLINE FString Right( int32 Count ) const
+	FORCEINLINE FString Right( int32 Count ) const &
 	{
-		return FString( **this + Len()-FMath::Clamp(Count,0,Len()) );
+		const int32 Length = Len();
+		return FString( **this + Length-FMath::Clamp(Count,0,Length) );
+	}
+
+	FORCEINLINE FString Right(int32 Count) &&
+	{
+		RightInline(Count, false);
+		return MoveTemp(*this);
+	}
+
+	/** Modifies the string such that it is now the right most given number of characters */
+	FORCEINLINE void RightInline(int32 Count, bool bAllowShrinking = true)
+	{
+		const int32 Length = Len();
+		RemoveAt(0, Length-FMath::Clamp(Count,0,Length), bAllowShrinking);
 	}
 
 	/** Returns the string to the right of the specified location, counting forward from the left (from the beginning of the word). */
-	FORCEINLINE FString RightChop( int32 Count ) const
+	FORCEINLINE FString RightChop( int32 Count ) const &
 	{
-		return FString( **this + Len()-FMath::Clamp(Len()-Count,0,Len()) );
+		const int32 Length = Len();
+		return FString( **this + Length-FMath::Clamp(Length-Count,0, Length) );
+	}
+
+	FORCEINLINE FString RightChop(int32 Count) &&
+	{
+		RightChopInline(Count, false);
+		return MoveTemp(*this);
+	}
+
+	/** Modifies the string such that it is now the string to the right of the specified location, counting forward from the left (from the beginning of the word). */
+	FORCEINLINE void RightChopInline(int32 Count, bool bAllowShrinking = true)
+	{
+		RemoveAt(0, Count, bAllowShrinking);
 	}
 
 	/** Returns the substring from Start position for Count characters. */
-	FORCEINLINE FString Mid( int32 Start, int32 Count=MAX_int32 ) const
+	FORCEINLINE FString Mid( int32 Start, int32 Count=MAX_int32 ) const &
 	{
-		check(Count >= 0);
-		uint32 End = Count;
-		End += Start;
-		Start    = FMath::Clamp( (uint32)Start, (uint32)0,     (uint32)Len() );
-		End      = FMath::Clamp( (uint32)End,   (uint32)Start, (uint32)Len() );
-		return FString( End-Start, **this + Start );
+		FString Result;
+		if (Count >= 0)
+		{
+			const int32 Length = Len();
+			const int32 RequestedStart = Start;
+			Start = FMath::Clamp(Start, 0, Length);
+			const int32 End = (int32)FMath::Clamp((int64)Count + RequestedStart, (int64)Start, (int64)Length);
+			Result = FString(End-Start, **this + Start);
+		}
+		return Result;
+	}
+
+	FORCEINLINE FString Mid(int32 Start, int32 Count = MAX_int32) &&
+	{
+		MidInline(Start, Count, false);
+		return MoveTemp(*this);
+	}
+
+	/** Modifies the string such that it is now the substring from Start position for Count characters. */
+	FORCEINLINE void MidInline(int32 Start, int32 Count = MAX_int32, bool bAllowShrinking = true)
+	{
+		LeftInline((int32)FMath::Min((int64)Count+Start, (int64)MAX_int32), false);
+		RightChopInline(Start, bAllowShrinking);
 	}
 
 	/**
@@ -1183,7 +1199,7 @@ public:
 	 * @param SubStr			The string array of TCHAR to search for
 	 * @param StartPosition		The start character position to search from
 	 * @param SearchCase		Indicates whether the search is case sensitive or not
-	 * @param SearchDir			Indicates whether the search starts at the begining or at the end.
+	 * @param SearchDir			Indicates whether the search starts at the beginning or at the end.
 	 */
 	int32 Find( const TCHAR* SubStr, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase, 
 				ESearchDir::Type SearchDir = ESearchDir::FromStart, int32 StartPosition=INDEX_NONE ) const;
@@ -1195,7 +1211,7 @@ public:
 	 * @param SubStr			The string to search for
 	 * @param StartPosition		The start character position to search from
 	 * @param SearchCase		Indicates whether the search is case sensitive or not ( defaults to ESearchCase::IgnoreCase )
-	 * @param SearchDir			Indicates whether the search starts at the begining or at the end ( defaults to ESearchDir::FromStart )
+	 * @param SearchDir			Indicates whether the search starts at the beginning or at the end ( defaults to ESearchDir::FromStart )
 	 */
 	FORCEINLINE int32 Find( const FString& SubStr, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase, 
 							ESearchDir::Type SearchDir = ESearchDir::FromStart, int32 StartPosition=INDEX_NONE ) const
@@ -1208,7 +1224,7 @@ public:
 	 *
 	 * @param SubStr			Find to search for
 	 * @param SearchCase		Indicates whether the search is case sensitive or not ( defaults to ESearchCase::IgnoreCase )
-	 * @param SearchDir			Indicates whether the search starts at the begining or at the end ( defaults to ESearchDir::FromStart )
+	 * @param SearchDir			Indicates whether the search starts at the beginning or at the end ( defaults to ESearchDir::FromStart )
 	 * @return					Returns whether the string contains the substring
 	 **/
 	FORCEINLINE bool Contains(const TCHAR* SubStr, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase, 
@@ -1222,7 +1238,7 @@ public:
 	 *
 	 * @param SubStr			Find to search for
 	 * @param SearchCase		Indicates whether the search is case sensitive or not ( defaults to ESearchCase::IgnoreCase )
-	 * @param SearchDir			Indicates whether the search starts at the begining or at the end ( defaults to ESearchDir::FromStart )
+	 * @param SearchDir			Indicates whether the search starts at the beginning or at the end ( defaults to ESearchDir::FromStart )
 	 * @return					Returns whether the string contains the substring
 	 **/
 	FORCEINLINE bool Contains(const FString& SubStr, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase, 
@@ -1329,7 +1345,7 @@ public:
 	 * @param LeftS out the string to the left of InStr, not updated if return is false
 	 * @param RightS out the string to the right of InStr, not updated if return is false
 	 * @param SearchCase		Indicates whether the search is case sensitive or not ( defaults to ESearchCase::IgnoreCase )
-	 * @param SearchDir			Indicates whether the search starts at the begining or at the end ( defaults to ESearchDir::FromStart )
+	 * @param SearchDir			Indicates whether the search starts at the beginning or at the end ( defaults to ESearchDir::FromStart )
 	 * @return true if string is split, otherwise false
 	 */
 	bool Split(const FString& InS, FString* LeftS, FString* RightS, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase,
@@ -1398,18 +1414,6 @@ public:
 		return PrintfImpl(Fmt, Args...);
 	}
 
-	template <typename FmtType, typename... Types>
-	UE_DEPRECATED(4.20, "The formatting string must now be a TCHAR string literal.")
-	static typename TEnableIf<!TIsArrayOrRefOfType<FmtType, TCHAR>::Value, FString>::Type Printf(const FmtType& Fmt, Types... Args)
-	{
-		// NOTE: When this deprecated function is removed, the return type of the overload above
-		//       should be set to simply FString.
-
-		static_assert(TAnd<TIsValidVariadicFunctionArg<Types>...>::Value, "Invalid argument(s) passed to FString::Printf");
-
-		return PrintfImpl(Fmt, Args...);
-	}
-
 	/**
 	 * Just like Printf, but appends the formatted text to the existing FString instead.
 	 * @return a reference to the modified string, so that it can be chained
@@ -1435,7 +1439,7 @@ public:
 	 * @param InNamedArguments		A map of named arguments that match the tokens specified in InExpression
 	 * @return A string containing the formatted text
 	 */
-	static FString Format(const TCHAR* InFormatString, const TMap<FString, FStringFormatArg>& InNamedArguments);
+	static FString Format(const TCHAR* InFormatString, const FStringFormatNamedArguments& InNamedArguments);
 
 	/**
 	 * Format the specified string using the specified arguments. Replaces instances of {0} with indices from the given array matching the index specified in the token
@@ -1443,7 +1447,7 @@ public:
 	 * @param InOrderedArguments	An array of ordered arguments that match the tokens specified in InExpression
 	 * @return A string containing the formatted text
 	 */
-	static FString Format(const TCHAR* InFormatString, const TArray<FStringFormatArg>& InOrderedArguments);
+	static FString Format(const TCHAR* InFormatString, const FStringFormatOrderedArguments& InOrderedArguments);
 
 	/** Returns a string containing only the Ch character */
 	static FString Chr( TCHAR Ch );
@@ -1525,18 +1529,6 @@ public:
 	}
 
 	/**
-	 * Removes whitespace characters from the front of this string.
-	 */
-	UE_DEPRECATED(4.18, "FString::Trim() has been split into separate functions for copy and mutate semantics. Call FString::TrimStart() to return a copy of the string with whitespace trimmed from the start, or FString::TrimStartInline() to modify an FString object in-place.")
-	FString Trim();
-
-	/**
-	 * Removes trailing whitespace characters
-	 */
-	UE_DEPRECATED(4.18, "FString::TrimTrailing() has been split into separate functions for copy and mutate semantics. Call FString::TrimEnd() to return a copy of the string with whitespace trimmed from the start, or FString::TrimEndInline() to modify an FString object in-place.")
-	FString TrimTrailing();
-
-	/**
 	 * Removes whitespace characters from the start and end of this string. Modifies the string in-place.
 	 */
 	void TrimStartAndEndInline();
@@ -1592,10 +1584,21 @@ public:
 	 */
 	void TrimToNullTerminator();
 
+
+	/**
+	 * Trims wrapping quotation marks from this string.
+	 */
+	void TrimQuotesInline(bool* bQuotesRemoved = nullptr);
+
 	/**
 	 * Returns a copy of this string with wrapping quotation marks removed.
 	 */
-	FString TrimQuotes( bool* bQuotesRemoved = nullptr ) const;
+	FString TrimQuotes( bool* bQuotesRemoved = nullptr ) const &;
+
+	/**
+	 * Returns this string with wrapping quotation marks removed.
+	 */
+	FString TrimQuotes(bool* bQuotesRemoved = nullptr) &&;
 
 	/**
 	 * Breaks up a delimited string into elements of a string array.
@@ -1640,7 +1643,7 @@ public:
 	*
 	* @return	The number of elements in InArray
 	*/
-	int32 ParseIntoArray(TArray<FString>& OutArray, const TCHAR** DelimArray, int32 NumDelims, bool InCullEmpty = true) const;
+	int32 ParseIntoArray(TArray<FString>& OutArray, const TCHAR*const* DelimArray, int32 NumDelims, bool InCullEmpty = true) const;
 
 	/**
 	 * Takes an array of strings and removes any zero length entries.
@@ -1730,12 +1733,23 @@ public:
 	 */
 	FString ReplaceEscapedCharWithChar( const TArray<TCHAR>* Chars = nullptr ) const;
 
+	/**
+	 * Replaces all instances of '\t' with TabWidth number of spaces
+	 * @param InSpacesPerTab - Number of spaces that a tab represents
+	 */
+	void ConvertTabsToSpacesInline(const int32 InSpacesPerTab);
+
 	/** 
 	 * Replaces all instances of '\t' with TabWidth number of spaces
 	 * @param InSpacesPerTab - Number of spaces that a tab represents
 	 * @return copy of this string with replacement made
 	 */
-	FString ConvertTabsToSpaces(const int32 InSpacesPerTab);
+	FString ConvertTabsToSpaces(const int32 InSpacesPerTab) const
+	{
+		FString FinalString(*this);
+		FinalString.ConvertTabsToSpacesInline(InSpacesPerTab);
+		return FinalString;
+	}
 
 	// Takes the number passed in and formats the string in comma format ( 12345 becomes "12,345")
 	static FString FormatAsNumber( int32 InNumber );
@@ -1904,12 +1918,6 @@ struct TContainerTraits<FString> : public TContainerTraitsBase<FString>
 template<> struct TIsZeroConstructType<FString> { enum { Value = true }; };
 Expose_TNameOf(FString)
 
-template <>
-struct TIsContiguousContainer<FString>
-{
-	enum { Value = true };
-};
-
 inline TCHAR* GetData(FString& String)
 {
 	return String.GetCharArray().GetData();
@@ -1920,7 +1928,7 @@ inline const TCHAR* GetData(const FString& String)
 	return String.GetCharArray().GetData();
 }
 
-inline SIZE_T GetNum(const FString& String)
+inline int32 GetNum(const FString& String)
 {
 	return String.Len();
 }
@@ -1928,7 +1936,8 @@ inline SIZE_T GetNum(const FString& String)
 /** Case insensitive string hash function. */
 FORCEINLINE uint32 GetTypeHash(const FString& S)
 {
-	return FCrc::Strihash_DEPRECATED(*S);
+	// This must match the GetTypeHash behavior of FStringView
+	return FCrc::Strihash_DEPRECATED(S.Len(), *S);
 }
 
 /** 
@@ -2029,21 +2038,25 @@ inline const bool CheckTCharIsHex( const TCHAR Char )
 
 /**
  * Convert a TChar to equivalent hex value as a uint8
- * @param Char		The character
+ * @param Hex		The character
  * @return	The uint8 value of a hex character
  */
-inline const uint8 TCharToNibble( const TCHAR Char )
+inline const uint8 TCharToNibble(const TCHAR Hex)
 {
-	check( CheckTCharIsHex( Char ) );
-	if( Char >= TEXT('0') && Char <= TEXT('9') )
+	if (Hex >= '0' && Hex <= '9')
 	{
-		return Char - TEXT('0');
+		return uint8(Hex - '0');
 	}
-	else if( Char >= TEXT('A') && Char <= TEXT('F') )
+	if (Hex >= 'A' && Hex <= 'F')
 	{
-		return ( Char - TEXT('A') ) + 10;
+		return uint8(Hex - 'A' + 10);
 	}
-	return ( Char - TEXT('a') ) + 10;
+	if (Hex >= 'a' && Hex <= 'f')
+	{
+		return uint8(Hex - 'a' + 10);
+	}
+	checkf(false, TEXT("'%c' (0x%02X) is not a valid hexadecimal digit"), Hex, Hex);
+	return 0;
 }
 
 /** 
@@ -2052,23 +2065,7 @@ inline const uint8 TCharToNibble( const TCHAR Char )
  * @param OutBytes		Ptr to memory must be preallocated large enough
  * @return	The number of bytes copied
  */
-inline int32 HexToBytes( const FString& HexString, uint8* OutBytes )
-{
-	int32 NumBytes = 0;
-	const bool bPadNibble = ( HexString.Len() % 2 ) == 1;
-	const TCHAR* CharPos = *HexString;
-	if( bPadNibble )
-	{
-		OutBytes[ NumBytes++ ] = TCharToNibble( *CharPos++ );
-	}
-	while( *CharPos )
-	{
-		OutBytes[ NumBytes ] = TCharToNibble( *CharPos++ ) << 4;
-		OutBytes[ NumBytes ] += TCharToNibble( *CharPos++ );
-		++NumBytes;
-	}
-	return NumBytes;
-}
+CORE_API int32 HexToBytes(const FString& HexString, uint8* OutBytes);
 
 /**
  * Generalized API to convert something to a string. Function named after the (deprecated) Lex namespace, which
@@ -2089,13 +2086,13 @@ inline int32 HexToBytes( const FString& HexString, uint8* OutBytes )
  */
 
  /** Covert a string buffer to intrinsic types */
-inline void LexFromString(int8& OutValue, 		const TCHAR* Buffer)	{	OutValue = FCString::Atoi(Buffer);		}
-inline void LexFromString(int16& OutValue,		const TCHAR* Buffer)	{	OutValue = FCString::Atoi(Buffer);		}
-inline void LexFromString(int32& OutValue,		const TCHAR* Buffer)	{	OutValue = FCString::Atoi(Buffer);		}
+inline void LexFromString(int8& OutValue, 		const TCHAR* Buffer)	{	OutValue = (int8)FCString::Atoi(Buffer);		}
+inline void LexFromString(int16& OutValue,		const TCHAR* Buffer)	{	OutValue = (int16)FCString::Atoi(Buffer);		}
+inline void LexFromString(int32& OutValue,		const TCHAR* Buffer)	{	OutValue = (int32)FCString::Atoi(Buffer);		}
 inline void LexFromString(int64& OutValue,		const TCHAR* Buffer)	{	OutValue = FCString::Atoi64(Buffer);	}
-inline void LexFromString(uint8& OutValue,		const TCHAR* Buffer)	{	OutValue = FCString::Atoi(Buffer);		}
-inline void LexFromString(uint16& OutValue, 	const TCHAR* Buffer)	{	OutValue = FCString::Atoi(Buffer);		}
-inline void LexFromString(uint32& OutValue, 	const TCHAR* Buffer)	{	OutValue = FCString::Atoi64(Buffer);	}	//64 because this unsigned and so Atoi might overflow
+inline void LexFromString(uint8& OutValue,		const TCHAR* Buffer)	{	OutValue = (uint8)FCString::Atoi(Buffer);		}
+inline void LexFromString(uint16& OutValue, 	const TCHAR* Buffer)	{	OutValue = (uint16)FCString::Atoi(Buffer);		}
+inline void LexFromString(uint32& OutValue, 	const TCHAR* Buffer)	{	OutValue = (uint32)FCString::Atoi64(Buffer);	}	//64 because this unsigned and so Atoi might overflow
 inline void LexFromString(uint64& OutValue, 	const TCHAR* Buffer)	{	OutValue = FCString::Strtoui64(Buffer, nullptr, 0); }
 inline void LexFromString(float& OutValue,		const TCHAR* Buffer)	{	OutValue = FCString::Atof(Buffer);		}
 inline void LexFromString(double& OutValue, 	const TCHAR* Buffer)	{	OutValue = FCString::Atod(Buffer);		}
@@ -2164,7 +2161,7 @@ LexTryParseString(T& OutValue, const TCHAR* Buffer)
 	}
 
 	LexFromString(OutValue, Buffer);
-	if (OutValue == 0 && FMath::IsFinite(OutValue))
+	if (OutValue == 0 && FMath::IsFinite((float)OutValue)) //@TODO:FLOATPRECISION: ? huh ?
 	{
 		bool bSawZero = false;
 		TCHAR C = *Buffer;
@@ -2196,51 +2193,6 @@ static bool LexTryParseString(bool& OutValue, const TCHAR* Buffer)
 	return true;
 }
 
-
-/** Deprecated Lex namespace. Forwards on to Lex prefixed equivalents for backwards compatibility. See Lex-prefixed functions above. */
-namespace Lex
-{
-	
-	template<typename T> 
-	UE_DEPRECATED(4.20, "Lex::FromString has been deprecated. Please use LexFromString instead.")
-	void FromString(T& OutValue, const TCHAR* Buffer) 
-	{ 
-		LexFromString(OutValue, Buffer); 
-	}
-
-	template<typename T> 
-	UE_DEPRECATED(4.20, "Lex::ToString has been deprecated. Please use LexToString instead.")
-#if PLATFORM_COMPILER_HAS_DECLTYPE_AUTO
-	decltype(auto) ToString(T&& Value)
-#else
-	auto ToString(T&& Value) -> decltype(LexToString(Forward<T>(Value)))
-#endif
-	{
-		return LexToString(Forward<T>(Value)); 
-	}
-
-	template<typename T>
-	UE_DEPRECATED(4.20, "Lex::ToSanitizedString has been deprecated. Please use LexToSanitizedString instead.")
-#if PLATFORM_COMPILER_HAS_DECLTYPE_AUTO
-	decltype(auto) ToSanitizedString(T&& Value)
-#else
-	auto ToSanitizedString(T&& Value) -> decltype(LexToSanitizedString(Forward<T>(Value)))
-#endif
-	{
-		return LexToSanitizedString(Forward<T>(Value)); 
-	}
-
-	template<typename T>
-	UE_DEPRECATED(4.20, "Lex::TryParseString has been deprecated. Please use LexTryParseString instead.")
-	bool TryParseString(T& OutValue, const TCHAR* Buffer) 
-	{ 
-		return LexTryParseString(OutValue, Buffer); 
-	}
-}
-
-// Deprecated alias for old LexicalConversion namespace.
-// Namespace alias deprecation doesn't exist, so we can't actually mark it with the UE_DEPRECATED() macro.
-namespace LexicalConversion = Lex;
 
 /** Shorthand legacy use for Lex functions */
 template<typename T>

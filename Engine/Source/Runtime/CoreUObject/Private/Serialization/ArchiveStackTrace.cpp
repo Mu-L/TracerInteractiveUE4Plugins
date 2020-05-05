@@ -1,4 +1,4 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Serialization/ArchiveStackTrace.h"
 #include "Misc/CommandLine.h"
@@ -20,6 +20,7 @@
 #include "Misc/PackageName.h"
 #include "Templates/UniquePtr.h"
 #include "UObject/UObjectGlobals.h"
+#include "Misc/ScopeExit.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogArchiveDiff, Log, All);
 
@@ -92,7 +93,7 @@ FArchiveStackTrace::FCallstackData::FCallstackData()
 {
 }
 
-FArchiveStackTrace::FCallstackData::FCallstackData(ANSICHAR* InCallstack, UObject* InSerializedObject, UProperty* InSerializedProperty)
+FArchiveStackTrace::FCallstackData::FCallstackData(ANSICHAR* InCallstack, UObject* InSerializedObject, FProperty* InSerializedProperty)
 	: Callstack(InCallstack)
 	, SerializedProp(InSerializedProperty)
 {
@@ -138,7 +139,7 @@ FString FArchiveStackTrace::FCallstackData::ToString(const TCHAR* CallstackCutof
 			int32 CutoffIndex = StackLine.Find(TEXT(" "), ESearchCase::CaseSensitive);
 			if (CutoffIndex >= -1 && CutoffIndex < StackLine.Len() - 2)
 			{
-				StackLine = StackLine.Mid(CutoffIndex + 1);
+				StackLine.MidInline(CutoffIndex + 1, MAX_int32, false);
 			}
 		}
 		HumanReadableString += Indent;
@@ -196,7 +197,7 @@ FArchiveStackTrace::~FArchiveStackTrace()
 	}
 }
 
-ANSICHAR* FArchiveStackTrace::AddUniqueCallstack(UObject* InSerializedObject, UProperty* InSerializedProperty, uint32& OutCallstackCRC)
+ANSICHAR* FArchiveStackTrace::AddUniqueCallstack(UObject* InSerializedObject, FProperty* InSerializedProperty, uint32& OutCallstackCRC)
 {
 	ANSICHAR* Callstack = nullptr;
 	if (bCollectCallstacks)
@@ -281,7 +282,7 @@ void FArchiveStackTrace::Serialize(void* InData, int64 Num)
 		}
 
 		// Walk the stack and dump it to the allocated memory.
-		bool bShouldCollectCallstack = bCollectCallstacks && (DiffMap == nullptr || IsInDiffMap(CurrentOffset)) && !GIgnoreDiffManager.ShouldIgnoreDiff();
+		bool bShouldCollectCallstack = bCollectCallstacks && ShouldLogOffset(CurrentOffset) && !GIgnoreDiffManager.ShouldIgnoreDiff();
 		if (bShouldCollectCallstack)
 		{
 			StackTrace[0] = '\0';
@@ -465,32 +466,32 @@ bool FArchiveStackTrace::LoadPackageIntoMemory(const TCHAR* InFilename, FPackage
 
 namespace
 {
-	bool ShouldDumpPropertyValueState(UProperty* Prop)
+	bool ShouldDumpPropertyValueState(FProperty* Prop)
 	{
-		if (Prop->IsA<UNumericProperty>()
-			|| Prop->IsA<UStrProperty>()
-			|| Prop->IsA<UBoolProperty>()
-			|| Prop->IsA<UNameProperty>())
+		if (Prop->IsA<FNumericProperty>()
+			|| Prop->IsA<FStrProperty>()
+			|| Prop->IsA<FBoolProperty>()
+			|| Prop->IsA<FNameProperty>())
 		{
 			return true;
 		}
 
-		if (UArrayProperty* ArrayProp = Cast<UArrayProperty>(Prop))
+		if (FArrayProperty* ArrayProp = CastField<FArrayProperty>(Prop))
 		{
 			return ShouldDumpPropertyValueState(ArrayProp->Inner);
 		}
 
-		if (UMapProperty* MapProp = Cast<UMapProperty>(Prop))
+		if (FMapProperty* MapProp = CastField<FMapProperty>(Prop))
 		{
 			return ShouldDumpPropertyValueState(MapProp->KeyProp) && ShouldDumpPropertyValueState(MapProp->ValueProp);
 		}
 
-		if (USetProperty* SetProp = Cast<USetProperty>(Prop))
+		if (FSetProperty* SetProp = CastField<FSetProperty>(Prop))
 		{
 			return ShouldDumpPropertyValueState(SetProp->ElementProp);
 		}
 
-		if (UStructProperty* StructProp = Cast<UStructProperty>(Prop))
+		if (FStructProperty* StructProp = CastField<FStructProperty>(Prop))
 		{
 			if (StructProp->Struct == TBaseStructure<FVector>::Get()
 				|| StructProp->Struct == TBaseStructure<FGuid>::Get())
@@ -530,123 +531,149 @@ void FArchiveStackTrace::CompareWithInternal(const FPackageData& SourcePackage, 
 		const int64 SourceAbsoluteOffset = LocalOffset + SourcePackage.StartOffset;
 		const int64 DestAbsoluteOffset = LocalOffset + DestPackage.StartOffset;
 
-		if (SourcePackage.Data[SourceAbsoluteOffset] != DestPackage.Data[DestAbsoluteOffset])
+		const uint8 SourceByte = SourcePackage.Data[SourceAbsoluteOffset];
+		const uint8 DestByte   = DestPackage  .Data[DestAbsoluteOffset];
+		if (SourceByte == DestByte)
 		{
-			if (DiffMap == nullptr || IsInDiffMap(DestAbsoluteOffset))
+			continue;
+		}
+
+		bool bDifferenceLogged = false;
+		ON_SCOPE_EXIT
+		{
+			if (bDifferenceLogged)
 			{
-				int32 DifferenceCallstackoffsetIndex = GetCallstackAtOffset(DestAbsoluteOffset, FMath::Max(LastDifferenceCallstackOffsetIndex, 0));
-				if (DifferenceCallstackoffsetIndex >= 0 && DifferenceCallstackoffsetIndex != LastDifferenceCallstackOffsetIndex)
+				InOutDiffsLogged++;
+				NumDiffsLoggedLocal++;
+			}
+		};
+
+		if (ShouldLogOffset(DestAbsoluteOffset))
+		{
+			int32 DifferenceCallstackoffsetIndex = GetCallstackAtOffset(DestAbsoluteOffset, FMath::Max(LastDifferenceCallstackOffsetIndex, 0));
+			ON_SCOPE_EXIT
+			{
+				LastDifferenceCallstackOffsetIndex = DifferenceCallstackoffsetIndex;
+			};
+
+			if (DifferenceCallstackoffsetIndex < 0)
+			{
+				UE_LOG(LogArchiveDiff, Warning, TEXT("%s: Difference at offset %lld (absolute offset: %lld), unknown callstack"), AssetFilename, LocalOffset, DestAbsoluteOffset);
+				continue;
+			}
+
+			if (DifferenceCallstackoffsetIndex == LastDifferenceCallstackOffsetIndex)
+			{
+				continue;
+			}
+
+			const FCallstactAtOffset& CallstackAtOffset = CallstackAtOffsetMap[DifferenceCallstackoffsetIndex];
+			const FCallstackData& DifferenceCallstackData = UniqueCallstacks[CallstackAtOffset.Callstack];
+			FString DifferenceCallstackDataText = DifferenceCallstackData.ToString(CallstackCutoffText);
+			if (LastDifferenceCallstackDataText.Compare(DifferenceCallstackDataText, ESearchCase::CaseSensitive) == 0)
+			{
+				continue;
+			}
+			ON_SCOPE_EXIT
+			{
+				LastDifferenceCallstackDataText = MoveTemp(DifferenceCallstackDataText);
+			};
+
+			if (!CallstackAtOffset.bIgnore && (MaxDiffsToLog < 0 || InOutDiffsLogged < MaxDiffsToLog))
+			{
+				FString BeforePropertyVal;
+				FString AfterPropertyVal;
+				if (FProperty* SerProp = DifferenceCallstackData.SerializedProp)
 				{
-					const FCallstactAtOffset& CallstackAtOffset = CallstackAtOffsetMap[DifferenceCallstackoffsetIndex];
-					const FCallstackData& DifferenceCallstackData = UniqueCallstacks[CallstackAtOffset.Callstack];
-					FString DifferenceCallstackDataText = DifferenceCallstackData.ToString(CallstackCutoffText);
-					if (LastDifferenceCallstackDataText.Compare(DifferenceCallstackDataText, ESearchCase::CaseSensitive) != 0)
+					if (SourceSize == DestSize && ShouldDumpPropertyValueState(SerProp))
 					{
-						if (!CallstackAtOffset.bIgnore && (MaxDiffsToLog < 0 || InOutDiffsLogged < MaxDiffsToLog))
+						// Walk backwards until we find a callstack which wasn't from the given property
+						int32 OffsetX = DestAbsoluteOffset;
+						for (;;)
 						{
-							FString BeforePropertyVal;
-							FString AfterPropertyVal;
-							if (UProperty* SerProp = DifferenceCallstackData.SerializedProp)
+							if (OffsetX == 0)
 							{
-								if (SourceSize == DestSize && ShouldDumpPropertyValueState(SerProp))
-								{
-									// Walk backwards until we find a callstack which wasn't from the given property
-									int32 OffsetX = DestAbsoluteOffset;
-									for (;;)
-									{
-										if (OffsetX == 0)
-										{
-											break;
-										}
-
-										int32 CallstackIndex = GetCallstackAtOffset(OffsetX - 1, 0);
-
-										const FCallstactAtOffset& PreviousCallstack = CallstackAtOffsetMap[CallstackIndex];
-										if (UniqueCallstacks[PreviousCallstack.Callstack].SerializedProp != SerProp)
-										{
-											break;
-										}
-
-										--OffsetX;
-									}
-
-									FPropertyTempVal SourceVal(SerProp);
-									FPropertyTempVal DestVal  (SerProp);
-
-									FStaticMemoryReader SourceReader(&SourcePackage.Data[SourceAbsoluteOffset - (DestAbsoluteOffset - OffsetX)], SourcePackage.Size - SourceAbsoluteOffset);
-									FStaticMemoryReader DestReader(&DestPackage.Data[OffsetX], DestPackage.Size - DestAbsoluteOffset);
-
-									SourceVal.Serialize(SourceReader);
-									DestVal  .Serialize(DestReader);
-
-									if (!SourceReader.ArIsError && !DestReader.ArIsError)
-									{
-										SourceVal.ExportText(BeforePropertyVal);
-										DestVal  .ExportText(AfterPropertyVal);
-									}
-								}
+								break;
 							}
 
-							FString DiffValues;
-							if (BeforePropertyVal != AfterPropertyVal)
+							int32 CallstackIndex = GetCallstackAtOffset(OffsetX - 1, 0);
+
+							const FCallstactAtOffset& PreviousCallstack = CallstackAtOffsetMap[CallstackIndex];
+							if (UniqueCallstacks[PreviousCallstack.Callstack].SerializedProp != SerProp)
 							{
-								DiffValues = FString::Printf(TEXT("\r\n%sBefore: %s\r\n%sAfter:  %s"), Indent, *BeforePropertyVal, Indent, *AfterPropertyVal);
+								break;
 							}
 
-							FString DebugDataStackText;
-#if WITH_EDITOR
-							//check for a debug data stack as part of the unique stack entry, and log it out if we find it.
-							FString FullStackText = DifferenceCallstackData.Callstack;
-							int32 DebugDataIndex = FullStackText.Find(ANSI_TO_TCHAR(DebugDataStackMarker), ESearchCase::CaseSensitive);
-							if (DebugDataIndex > 0)
-							{
-								DebugDataStackText = FString::Printf(TEXT("\r\n%s"), FDiffFormatHelper::Get().Indent) + FullStackText.RightChop(DebugDataIndex + 2);
-							}
-#endif
-							UE_LOG(
-								LogArchiveDiff,
-								Warning,
-								TEXT("%s: Difference at offset %lld%s (absolute offset: %lld), callstack:%s%s%s%s%s"),
-								AssetFilename,
-								CallstackAtOffset.Offset - DestPackage.StartOffset,
-								DestAbsoluteOffset > CallstackAtOffset.Offset ? *FString::Printf(TEXT("(+%lld)"), DestAbsoluteOffset - CallstackAtOffset.Offset) : TEXT(""),
-								DestAbsoluteOffset,
-								LineTerminator,
-								LineTerminator,
-								*DifferenceCallstackDataText,
-								*DiffValues,
-								*DebugDataStackText
-							);
-							InOutDiffsLogged++;
-							NumDiffsLoggedLocal++;
+							--OffsetX;
 						}
-						else if (FirstUnreportedDiffIndex == -1)
+
+						FPropertyTempVal SourceVal(SerProp);
+						FPropertyTempVal DestVal  (SerProp);
+
+						FStaticMemoryReader SourceReader(&SourcePackage.Data[SourceAbsoluteOffset - (DestAbsoluteOffset - OffsetX)], SourcePackage.Size - SourceAbsoluteOffset);
+						FStaticMemoryReader DestReader(&DestPackage.Data[OffsetX], DestPackage.Size - DestAbsoluteOffset);
+
+						SourceVal.Serialize(SourceReader);
+						DestVal  .Serialize(DestReader);
+
+						if (!SourceReader.ArIsError && !DestReader.ArIsError)
 						{
-							FirstUnreportedDiffIndex = DestAbsoluteOffset;
+							SourceVal.ExportText(BeforePropertyVal);
+							DestVal  .ExportText(AfterPropertyVal);
 						}
-						LastDifferenceCallstackDataText = MoveTemp(DifferenceCallstackDataText);
-						OutStats.FindOrAdd(AssetClass).NumDiffs++;
-						NumDiffsLocal++;
 					}
 				}
-				else if (DifferenceCallstackoffsetIndex < 0)
+
+				FString DiffValues;
+				if (BeforePropertyVal != AfterPropertyVal)
 				{
-					UE_LOG(LogArchiveDiff, Warning, TEXT("%s: Difference at offset %lld (absolute offset: %lld), unknown callstack"), AssetFilename, LocalOffset, DestAbsoluteOffset);
+					DiffValues = FString::Printf(TEXT("\r\n%sBefore: %s\r\n%sAfter:  %s"), Indent, *BeforePropertyVal, Indent, *AfterPropertyVal);
 				}
-				LastDifferenceCallstackOffsetIndex = DifferenceCallstackoffsetIndex;
+
+				FString DebugDataStackText;
+#if WITH_EDITOR
+				//check for a debug data stack as part of the unique stack entry, and log it out if we find it.
+				FString FullStackText = DifferenceCallstackData.Callstack;
+				int32 DebugDataIndex = FullStackText.Find(ANSI_TO_TCHAR(DebugDataStackMarker), ESearchCase::CaseSensitive);
+				if (DebugDataIndex > 0)
+				{
+					DebugDataStackText = FString::Printf(TEXT("\r\n%s"), FDiffFormatHelper::Get().Indent) + FullStackText.RightChop(DebugDataIndex + 2);
+				}
+#endif
+				UE_LOG(
+					LogArchiveDiff,
+					Warning,
+					TEXT("%s: Difference at offset %lld%s (absolute offset: %lld), callstack:%s%s%s%s%s"),
+					AssetFilename,
+					CallstackAtOffset.Offset - DestPackage.StartOffset,
+					DestAbsoluteOffset > CallstackAtOffset.Offset ? *FString::Printf(TEXT("(+%lld)"), DestAbsoluteOffset - CallstackAtOffset.Offset) : TEXT(""),
+					DestAbsoluteOffset,
+					LineTerminator,
+					LineTerminator,
+					*DifferenceCallstackDataText,
+					*DiffValues,
+					*DebugDataStackText
+				);
+				bDifferenceLogged = true;
 			}
-			else
+			else if (FirstUnreportedDiffIndex == -1)
 			{
-				// Each byte will count as a difference but without callstack data there's no way around it
-				OutStats.FindOrAdd(AssetClass).NumDiffs++;
-				NumDiffsLocal++;
-				if (FirstUnreportedDiffIndex == -1)
-				{
-					FirstUnreportedDiffIndex = DestAbsoluteOffset;
-				}
+				FirstUnreportedDiffIndex = DestAbsoluteOffset;
 			}
-			OutStats.FindOrAdd(AssetClass).DiffSize++;
+			OutStats.FindOrAdd(AssetClass).NumDiffs++;
+			NumDiffsLocal++;
 		}
+		else
+		{
+			// Each byte will count as a difference but without callstack data there's no way around it
+			OutStats.FindOrAdd(AssetClass).NumDiffs++;
+			NumDiffsLocal++;
+			if (FirstUnreportedDiffIndex == -1)
+			{
+				FirstUnreportedDiffIndex = DestAbsoluteOffset;
+			}
+		}
+		OutStats.FindOrAdd(AssetClass).DiffSize++;
 	}
 
 	if (MaxDiffsToLog >= 0 && NumDiffsLocal > NumDiffsLoggedLocal)
@@ -678,6 +705,7 @@ void FArchiveStackTrace::CompareWith(const TCHAR* InFilename, const int64 TotalH
 		DestPackage.StartOffset = 0;
 
 		UE_LOG(LogArchiveDiff, Display, TEXT("Comparing: %s"), *GetArchiveName());
+		UE_LOG(LogArchiveDiff, Display, TEXT("Asset class: %s"), *AssetClass.ToString());
 
 		int32 NumLoggedDiffs = 0;
 
@@ -1360,6 +1388,15 @@ void FArchiveStackTrace::DumpPackageHeaderDiffs(const FPackageData& SourcePackag
 #endif // !NO_LOGGING
 }
 
+FArchiveStackTraceReader::FSerializeData::FSerializeData(int64 InOffset, int64 InSize, UObject* InObject, FProperty* InProperty)
+: Offset(InOffset)
+, Size(InSize)
+, Count(1)
+, Object(InObject)
+, PropertyName(InProperty->GetFName())
+, FullPropertyName(GetFullNameSafe(InProperty))
+{}
+
 FArchiveStackTraceReader::FArchiveStackTraceReader(const TCHAR* InFilename, const uint8* InData, const int64 Num)
 	: FLargeMemoryReader(InData, Num, ELargeMemoryReaderFlags::TakeOwnership, InFilename)
 	, ThreadContext(FUObjectThreadContext::Get())
@@ -1374,7 +1411,7 @@ void FArchiveStackTraceReader::Serialize(void* OutData, int64 Num)
 	if (SerializeTrace.Num())
 	{
 		FSerializeData& Last = SerializeTrace.Last();
-		if (Last != NewData)
+		if (NewData.IsContiguousSerialization(Last))
 		{
 			SerializeTrace.Add(NewData);
 		}

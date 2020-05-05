@@ -1,10 +1,12 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 
 class UMaterialInterface;
+class UMaterialInstanceDynamic;
+class UTexture;
 class UInteractiveToolManager;
 
 /**
@@ -27,18 +29,50 @@ namespace ToolSetupUtil
 	/**
 	 * @return default material to use for brush volume indicators
 	 */
-	MODELINGCOMPONENTS_API UMaterialInterface* GetDefaultBrushVolumeMaterial(UInteractiveToolManager* ToolManager);
+	MODELINGCOMPONENTS_API UMaterialInstanceDynamic* GetDefaultBrushVolumeMaterial(UInteractiveToolManager* ToolManager);
 
 
 	/**
 	 * @return Sculpt Material 1
 	 */
-	MODELINGCOMPONENTS_API UMaterialInterface* GetSculptMaterial1(UInteractiveToolManager* ToolManager);
+	MODELINGCOMPONENTS_API UMaterialInterface* GetDefaultSculptMaterial(UInteractiveToolManager* ToolManager);
+
+
+	/** Types of image-based material that we can create */
+	enum class ImageMaterialType
+	{
+		DefaultBasic,
+		DefaultSoft,
+		TangentNormalFromView
+	};
+
+	/**
+	 * @return Image-based sculpt material instance, based ImageMaterialType
+	 */
+	MODELINGCOMPONENTS_API UMaterialInterface* GetImageBasedSculptMaterial(UInteractiveToolManager* ToolManager, ImageMaterialType Type);
+
+	/**
+	 * @return Image-based sculpt material that supports changing the image
+	 */
+	MODELINGCOMPONENTS_API UMaterialInstanceDynamic* GetCustomImageBasedSculptMaterial(UInteractiveToolManager* ToolManager, UTexture* SetImage);
 
 
 	/**
 	 * @return Selection Material 1
 	 */
 	MODELINGCOMPONENTS_API UMaterialInterface* GetSelectionMaterial(UInteractiveToolManager* ToolManager);
+
+	/**
+	 * @return Selection Material 1 with custom color
+	 */
+	MODELINGCOMPONENTS_API UMaterialInterface* GetSelectionMaterial(const FLinearColor& UseColor, UInteractiveToolManager* ToolManager);
+
+
+
+	/**
+	 * @param bRoundPoints true for round points, false for square
+	 * @return custom material suitable for use with UPointSetComponent
+	 */
+	MODELINGCOMPONENTS_API UMaterialInterface* GetDefaultPointComponentMaterial(bool bRoundPoints, UInteractiveToolManager* ToolManager);
 
 }

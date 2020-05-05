@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "FractureEditorModeToolkit.h"
 
@@ -52,17 +52,9 @@
 #include "GeometryCollection/GeometryCollectionClusteringUtility.h"
 #include "Editor.h"
 #include "LevelEditorViewport.h"
+#include "Widgets/Layout/SUniformGridPanel.h"
 
 #define LOCTEXT_NAMESPACE "FFractureEditorModeToolkit"
-
-class FFractureRootObjectCustomization : public IDetailRootObjectCustomization
-{
-public:
-	/** IDetailRootObjectCustomization interface */
-	virtual TSharedPtr<SWidget> CustomizeObjectHeader(const UObject* InRootObject) override { return SNullWidget::NullWidget; }
-	virtual bool IsObjectVisible(const UObject* InRootObject) const override { return true; }
-	virtual bool ShouldDisplayHeader(const UObject* InRootObject) const override { return false; }
-};
 
 TArray<UClass*> FindFractureToolClasses()
 {
@@ -112,10 +104,9 @@ void FFractureEditorModeToolkit::Init(const TSharedPtr<IToolkitHost>& InitToolki
 	DetailsViewArgs.bShowAnimatedPropertiesOption = false;
 
 	DetailsView = EditModule.CreateDetailView(DetailsViewArgs);
-	DetailsView->SetRootObjectCustomizationInstance(MakeShareable(new FFractureRootObjectCustomization));
 
 	float Padding = 4.0f;
-	float MorePadding = 10.0f;
+	FMargin MorePadding = FMargin(10.0f, 2.0f);
 
 	SAssignNew(ExplodedViewWidget, SSpinBox<int32>)
 	.Style(&FFractureEditorStyle::Get().GetWidgetStyle<FSpinBoxStyle>("FractureEditor.SpinBox"))
@@ -125,7 +116,7 @@ void FFractureEditorModeToolkit::Init(const TSharedPtr<IToolkitHost>& InitToolki
 	.MinValue(0)
 	.MaxValue(100)
 	.Delta(1)
-	.Font(FCoreStyle::GetDefaultFontStyle("Regular", 14))
+	.Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
 	.MinDesiredWidth(36.f)
 	.Justification(ETextJustify::Center)
 	.ToolTipText(LOCTEXT("FractureEditor.Exploded_Tooltip", "How much to seperate the drawing of the bones to aid in setup.  Does not effect simulation"))
@@ -156,7 +147,7 @@ void FFractureEditorModeToolkit::Init(const TSharedPtr<IToolkitHost>& InitToolki
 				return FText::Format(NSLOCTEXT("FractureEditor", "CurrentLevel", "{0}"), FText::AsNumber(FractureLevel));
 
 			})
-			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
+			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 11))
 			.ToolTipText(LOCTEXT("FractureEditor.Level_Tooltip", "Set the currently view level of the geometry collection"))
 		]
 
@@ -177,7 +168,7 @@ void FFractureEditorModeToolkit::Init(const TSharedPtr<IToolkitHost>& InitToolki
 	TSharedRef<SExpandableArea> OutlinerExpander = SNew(SExpandableArea)
 	.AreaTitle(FText(LOCTEXT("Outliner", "Outliner")))
 	.HeaderPadding(FMargin(2.0, 2.0))
-	.Padding(FMargin(MorePadding))
+	.Padding(MorePadding)
 	.BorderImage(FEditorStyle::Get().GetBrush("DetailsView.CategoryTop"))
 	.BorderBackgroundColor( FLinearColor( .6,.6,.6, 1.0f ) )
 	.BodyBorderBackgroundColor (FLinearColor( 1.0, 0.0, 0.0))
@@ -191,7 +182,7 @@ void FFractureEditorModeToolkit::Init(const TSharedPtr<IToolkitHost>& InitToolki
 	TSharedRef<SExpandableArea> StatisticsExpander = SNew(SExpandableArea)
 	.AreaTitle(FText(LOCTEXT("LevelStatistics", "Level Statistics")))
 	.HeaderPadding(FMargin(2.0, 2.0))
-	.Padding(FMargin(MorePadding))
+	.Padding(MorePadding)
 	.BorderImage(FEditorStyle::Get().GetBrush("DetailsView.CategoryTop"))
 	.BorderBackgroundColor( FLinearColor( .6,.6,.6, 1.0f ) )
 	.BodyBorderBackgroundColor (FLinearColor( 1.0, 0.0, 0.0))
@@ -203,19 +194,8 @@ void FFractureEditorModeToolkit::Init(const TSharedPtr<IToolkitHost>& InitToolki
 	];
 
 	SAssignNew(ToolkitWidget, SBox)
-	.Padding(8)
 	[
 		SNew(SVerticalBox)
-
-		+SVerticalBox::Slot()
-		.Padding(0.0f, Padding)
-		.AutoHeight()
-		.HAlign(HAlign_Center)
-		[
-			SNew(STextBlock)
-			.Text(FText(LOCTEXT("FractureEditorPanelLabel", "Fracture Editor")))
-			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
-		]
 
 		+SVerticalBox::Slot()
 		[
@@ -245,53 +225,37 @@ void FFractureEditorModeToolkit::Init(const TSharedPtr<IToolkitHost>& InitToolki
 					StatisticsExpander
 				]
 			]
-
 			+ SWidgetSwitcher::Slot()
 			[
-
 				SNew(SScrollBox)
-
 				+SScrollBox::Slot()
-				.Padding(0.0f, MorePadding)
+				.Padding(0.0f, 10.0f, 0.0f, 0.0f)
 				[
 					DetailsView.ToSharedRef()
 				]
-
 				+SScrollBox::Slot()
-				.Padding(16.f)
+				.HAlign(HAlign_Center)
 				[
-					SNew(SHorizontalBox)
-
-					+SHorizontalBox::Slot()
-					.FillWidth(1)
-
-					+SHorizontalBox::Slot()
-					.AutoWidth()
+					SNew(SUniformGridPanel)
+					.MinDesiredSlotWidth(100.f)
+					.SlotPadding(10.f)
+					+SUniformGridPanel::Slot(0, 0)
 					[
 						SNew( SButton )
 						.HAlign(HAlign_Center)
-						.ContentPadding(FMargin(MorePadding, Padding))
+						.ContentPadding(FMargin(10.f, Padding))
 						.OnClicked(this, &FFractureEditorModeToolkit::OnFractureClicked)
 						.IsEnabled( this, &FFractureEditorModeToolkit::CanExecuteFracture)
 						.Text_Lambda( [this] () -> FText { return ActiveTool ? ActiveTool->GetApplyText() :  LOCTEXT("FractureApplyButton", "Apply"); })
 					]
-
-					+SHorizontalBox::Slot()
-					.FillWidth(1)
-
-					+SHorizontalBox::Slot()
-					.AutoWidth()
+					+ SUniformGridPanel::Slot(1, 0)
 					[
 						SNew(SButton)
 						.HAlign(HAlign_Center)
-						.ContentPadding(FMargin(MorePadding, Padding))
+						.ContentPadding(FMargin(10.f, Padding))
 						.OnClicked_Lambda( [this] () -> FReply { SetActiveTool(0); return FReply::Handled(); } )
 						.Text(FText(LOCTEXT("FractureCancelButton", "Cancel")))
 					]
-
-
-					+SHorizontalBox::Slot()
-					.FillWidth(1)
 				]
 			]
 		]
@@ -306,7 +270,7 @@ void FFractureEditorModeToolkit::Init(const TSharedPtr<IToolkitHost>& InitToolki
 
 const TArray<FName> FFractureEditorModeToolkit::PaletteNames = { FName(TEXT("Fracture")), FName(TEXT("Cluster")) };
 
-FText FFractureEditorModeToolkit::GetToolPaletteDisplayName(FName Palette) 
+FText FFractureEditorModeToolkit::GetToolPaletteDisplayName(FName Palette) const
 { 
 	return FText::FromName(Palette);
 }
@@ -317,9 +281,6 @@ void FFractureEditorModeToolkit::BuildToolPalette(FName PaletteIndex, class FToo
 
 	if (PaletteIndex == PaletteNames[0])
 	{
-
-		ToolbarBuilder.AddWidget(SNew(SBox).WidthOverride(4));
-
 		ToolbarBuilder.AddToolBarButton(Commands.GenerateAsset);
 
 		ToolbarBuilder.AddSeparator();
@@ -797,6 +758,24 @@ UFractureTool* FFractureEditorModeToolkit::GetActiveTool() const
 bool FFractureEditorModeToolkit::IsActiveTool(UFractureTool* InActiveTool)
 {
 	return bool(ActiveTool == InActiveTool);
+}
+
+FText FFractureEditorModeToolkit::GetActiveToolDisplayName() const
+{
+	if (ActiveTool != nullptr)
+	{
+		return ActiveTool->GetDisplayText();	
+	}
+	return LOCTEXT("FractureNoTool", "Fracture Editor");
+}
+
+FText FFractureEditorModeToolkit::GetActiveToolMessage() const
+{
+	if (ActiveTool != nullptr)
+	{
+		return ActiveTool->GetTooltipText();	
+	}
+	return LOCTEXT("FractureNoToolMessage", "Select geometry and use “New+” to create a new Geometry Collection to begin fracturing.  Choose one of the fracture tools to break apart the selected Geometry Collection.");
 }
 
 void FFractureEditorModeToolkit::SetOutlinerComponents(const TArray<UGeometryCollectionComponent*>& InNewComponents)

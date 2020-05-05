@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -132,6 +132,9 @@ protected:
 
 	virtual void OnRightMouseButtonDown(const FPointerEvent& MouseEvent) override;
 	virtual void OnRightMouseButtonUp(const FPointerEvent& MouseEvent) override;
+
+	virtual FReply OnDragOver(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent) override;
+	virtual FReply OnDrop(const FGeometry& MyGeometry, const FDragDropEvent& DragDropEvent) override;
 
 public:
 

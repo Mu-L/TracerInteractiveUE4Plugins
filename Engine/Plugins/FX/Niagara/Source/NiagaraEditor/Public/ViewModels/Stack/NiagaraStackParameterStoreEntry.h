@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 #include "ViewModels/Stack/NiagaraStackItem.h"
@@ -23,7 +23,6 @@ class NIAGARAEDITOR_API UNiagaraStackParameterStoreEntry : public UNiagaraStackI
 
 public:
 	DECLARE_MULTICAST_DELEGATE(FOnValueChanged);
-	DECLARE_MULTICAST_DELEGATE(FOnParameterDeleted);
 
 public:
 	UNiagaraStackParameterStoreEntry();
@@ -73,25 +72,16 @@ public:
 	void Reset();
 
 	/** Returns whether or not this input can be renamed. */
-	bool CanRenameInput() const;
-
-	/** Gets whether this input has a rename pending. */
-	bool GetIsRenamePending() const;
-
-	/** Sets whether this input has a rename pending. */
-	void SetIsRenamePending(bool bIsRenamePending);
+	virtual bool SupportsRename() const override { return true; }
 
 	/** Renames this input to the name specified. */
-	void RenameInput(FString NewName);
+	virtual void OnRenamed(FText NewName) override;
 
 	/** Checks if the chosen name is unique (not duplicate) */
 	bool IsUniqueName(FString NewName);
 
 	/** Gets a multicast delegate which is called whenever the value on this input changes. */
 	FOnValueChanged& OnValueChanged();
-
-	/** Gets a multicast delegate which is called when this parameter is deleted. */
-	FOnParameterDeleted& OnParameterDeleted();
 
 	/** Delete the parameter from the ParameterStore and notify that the store changed. */
 	void Delete();
@@ -127,15 +117,11 @@ private:
 	/** A multicast delegate which is called when the value of this input is changed. */
 	FOnValueChanged ValueChangedDelegate;
 
-	/** A multicast delegate which is called when this parameter is deleted. */
-	FOnParameterDeleted ParameterDeletedDelegate;
-
 	/** A pointer to the data interface object for this input if one is available. */
-	UPROPERTY()
-	UObject* ValueObject;
+	TWeakObjectPtr<UObject> ValueObject;
 
-	UPROPERTY()
-	UObject* Owner;
+	/** A pointer to the owner of the parameter store that owns this entry. */
+	TWeakObjectPtr<UObject> Owner;
 
 	FNiagaraParameterStore* ParameterStore;
 

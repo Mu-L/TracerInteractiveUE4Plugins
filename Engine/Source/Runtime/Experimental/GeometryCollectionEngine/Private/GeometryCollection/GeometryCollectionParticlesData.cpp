@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GeometryCollection/GeometryCollectionParticlesData.h"
 
@@ -27,7 +27,7 @@ TGeometryCollectionParticlesData<T, d>::TGeometryCollectionParticlesData()
 
 template<class T, int d>
 //void TGeometryCollectionParticlesData<T, d>::Sync(const Chaos::FPhysicsSolver* Solver, const TManagedArray<int32>& RigidBodyIds)
-void TGeometryCollectionParticlesData<T, d>::Sync(const Chaos::FPhysicsSolver* Solver, const TManagedArray<FGuid>& RigidBodyIds)
+void TGeometryCollectionParticlesData<T, d>::Sync(Chaos::FPhysicsSolver* Solver, const TManagedArray<FGuid>& RigidBodyIds)
 {
 	// No point in calling twice the sync function within the same frame
 	if (!ensureMsgf(SyncFrame != GFrameCounter, TEXT("Sync should not happen twice during the same tick.")))
@@ -54,7 +54,7 @@ void TGeometryCollectionParticlesData<T, d>::Sync(const Chaos::FPhysicsSolver* S
 			Chaos::IDispatcher* const PhysicsDispatcher = ChaosModule->GetDispatcher();
 			check(PhysicsDispatcher);
 
-			PhysicsDispatcher->EnqueueCommandImmediate([this, Solver, &RigidBodyIds]()
+			PhysicsDispatcher->EnqueueCommandImmediate(Solver, [this, &RigidBodyIds](Chaos::FPhysicsSolver* InSolver)
 			{
 				// Iterate through all data
 				FData& Data = BufferedData.GetPhysicsDataForWrite();
@@ -63,7 +63,7 @@ void TGeometryCollectionParticlesData<T, d>::Sync(const Chaos::FPhysicsSolver* S
 					// Only sync required infos
 					if (Data.RequiredDataFlags[DataIndex])
 					{
-						Data.Copy(EGeometryCollectionParticlesData(DataIndex), Solver, RigidBodyIds);
+						Data.Copy(EGeometryCollectionParticlesData(DataIndex), InSolver, RigidBodyIds);
 					}
 					else
 					{
@@ -147,29 +147,29 @@ void TGeometryCollectionParticlesData<T, d>::FData::Copy(EGeometryCollectionPart
 	const Chaos::TPBDRigidClustering<FPBDRigidsEvolution, FPBDCollisionConstraints, T, d>& Clustering = Solver->GetRigidClustering();
 
 	// Lambdas used to flatten the particle structure
-	// Can't rely on TImplicitObject<T, d>::GetType, as it returns Unknown
+	// Can't rely on FImplicitObject::GetType, as it returns Unknown
 	// TODO: Would there be something to fix in TImplicitObject so we can use this simpler line of code instead?:
-	//    auto GetType = [](const Chaos::TImplicitObject<T, d>* Geometry) { return Geometry ? Geometry->GetType(): Chaos::ImplicitObjectType::Unknown; };
-	auto GetType = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject)
+	//    auto GetType = [](const Chaos::FImplicitObject* Geometry) { return Geometry ? Geometry->GetType(): Chaos::ImplicitObjectType::Unknown; };
+	auto GetType = [](Chaos::TSerializablePtr<Chaos::FImplicitObject> ImplicitObject)
 	{
 		if (ImplicitObject)
 		{
 			if      (ImplicitObject->template GetObject<Chaos::TSphere                   <T, d>>()) { return Chaos::ImplicitObjectType::Sphere     ; }
-			else if (ImplicitObject->template GetObject<Chaos::TBox                      <T, d>>()) { return Chaos::ImplicitObjectType::Box        ; }
+			else if (ImplicitObject->template GetObject<Chaos::TAABB                      <T, d>>()) { return Chaos::ImplicitObjectType::Box        ; }
 			else if (ImplicitObject->template GetObject<Chaos::TPlane                    <T, d>>()) { return Chaos::ImplicitObjectType::Plane      ; }
 			else if (ImplicitObject->template GetObject<Chaos::TImplicitObjectTransformed<T, d>>()) { return Chaos::ImplicitObjectType::Transformed; }
-			else if (ImplicitObject->template GetObject<Chaos::TImplicitObjectUnion      <T, d>>()) { return Chaos::ImplicitObjectType::Union      ; }
+			else if (ImplicitObject->template GetObject<Chaos::FImplicitObjectUnion>()) { return Chaos::ImplicitObjectType::Union      ; }
 			else if (ImplicitObject->template GetObject<Chaos::TLevelSet                 <T, d>>()) { return Chaos::ImplicitObjectType::LevelSet   ; }
 		}
 		return Chaos::ImplicitObjectType::Unknown;
 	};
-	auto IsConvex       = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { return ImplicitObject ? ImplicitObject->IsConvex      (): false; };
-	auto HasBoundingBox = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { return ImplicitObject ? ImplicitObject->HasBoundingBox(): false; };
-	auto BoxMin         = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TBox     <T, d>* Box     ; return ImplicitObject && (Box      = ImplicitObject->template GetObject<Chaos::TBox     <T, d>>()) != nullptr ? Box     ->Min    (): Chaos::TVector<T, d>(T(0)); };
-	auto BoxMax         = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TBox     <T, d>* Box     ; return ImplicitObject && (Box      = ImplicitObject->template GetObject<Chaos::TBox     <T, d>>()) != nullptr ? Box     ->Max    (): Chaos::TVector<T, d>(T(0)); };
-	auto SphereCenter   = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TSphere  <T, d>* Sphere  ; return ImplicitObject && (Sphere   = ImplicitObject->template GetObject<Chaos::TSphere  <T, d>>()) != nullptr ? Sphere  ->GetCenter (): Chaos::TVector<T, d>(T(0)); };
-	auto SphereRadius   = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TSphere  <T, d>* Sphere  ; return ImplicitObject && (Sphere   = ImplicitObject->template GetObject<Chaos::TSphere  <T, d>>()) != nullptr ? Sphere  ->GetRadius (): T(0); };
-	auto LevelSetGrid   = [](Chaos::TSerializablePtr<Chaos::TImplicitObject<T, d>> ImplicitObject) { const Chaos::TLevelSet<T, d>* LevelSet; return ImplicitObject && (LevelSet = ImplicitObject->template GetObject<Chaos::TLevelSet<T, d>>()) != nullptr ? LevelSet->GetGrid(): Chaos::TUniformGrid<T, d>(); };
+	auto IsConvex       = [](Chaos::TSerializablePtr<Chaos::FImplicitObject> ImplicitObject) { return ImplicitObject ? ImplicitObject->IsConvex      (): false; };
+	auto HasBoundingBox = [](Chaos::TSerializablePtr<Chaos::FImplicitObject> ImplicitObject) { return ImplicitObject ? ImplicitObject->HasBoundingBox(): false; };
+	auto BoxMin         = [](Chaos::TSerializablePtr<Chaos::FImplicitObject> ImplicitObject) { const Chaos::TAABB     <T, d>* Box     ; return ImplicitObject && (Box      = ImplicitObject->template GetObject<Chaos::TAABB     <T, d>>()) != nullptr ? Box     ->Min    (): Chaos::TVector<T, d>(T(0)); };
+	auto BoxMax         = [](Chaos::TSerializablePtr<Chaos::FImplicitObject> ImplicitObject) { const Chaos::TAABB     <T, d>* Box     ; return ImplicitObject && (Box      = ImplicitObject->template GetObject<Chaos::TAABB     <T, d>>()) != nullptr ? Box     ->Max    (): Chaos::TVector<T, d>(T(0)); };
+	auto SphereCenter   = [](Chaos::TSerializablePtr<Chaos::FImplicitObject> ImplicitObject) { const Chaos::TSphere  <T, d>* Sphere  ; return ImplicitObject && (Sphere   = ImplicitObject->template GetObject<Chaos::TSphere  <T, d>>()) != nullptr ? Sphere  ->GetCenter (): Chaos::TVector<T, d>(T(0)); };
+	auto SphereRadius   = [](Chaos::TSerializablePtr<Chaos::FImplicitObject> ImplicitObject) { const Chaos::TSphere  <T, d>* Sphere  ; return ImplicitObject && (Sphere   = ImplicitObject->template GetObject<Chaos::TSphere  <T, d>>()) != nullptr ? Sphere  ->GetRadius (): T(0); };
+	auto LevelSetGrid   = [](Chaos::TSerializablePtr<Chaos::FImplicitObject> ImplicitObject) { const Chaos::TLevelSet<T, d>* LevelSet; return ImplicitObject && (LevelSet = ImplicitObject->template GetObject<Chaos::TLevelSet<T, d>>()) != nullptr ? LevelSet->GetGrid(): Chaos::TUniformGrid<T, d>(); };
 
 	// Data type copy for all particles
 	const int32 Count = RigidBodyIds.Num();
@@ -212,7 +212,7 @@ void TGeometryCollectionParticlesData<T, d>::FData::Copy(EGeometryCollectionPart
 template<class T, int d>
 FString TGeometryCollectionParticlesData<T, d>::FData::ToString(int32 Index, const TCHAR* Separator) const
 {
-	auto TypeText = [](Chaos::ImplicitObjectType Type)
+	auto TypeText = [](Chaos::EImplicitObjectType Type)
 	{
 		switch (Type)
 		{

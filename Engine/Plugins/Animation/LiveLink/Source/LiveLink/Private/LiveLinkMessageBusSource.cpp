@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "LiveLinkMessageBusSource.h"
 
@@ -15,6 +15,20 @@
 
 #include "MessageEndpointBuilder.h"
 #include "Misc/App.h"
+
+
+FLiveLinkMessageBusSource::FLiveLinkMessageBusSource(const FText& InSourceType, const FText& InSourceMachineName, const FMessageAddress& InConnectionAddress, double InMachineTimeOffset)
+	: ConnectionAddress(InConnectionAddress)
+	, SourceType(InSourceType)
+	, SourceMachineName(InSourceMachineName)
+	, ConnectionLastActive(0.0)
+	, bIsValid(false)
+	, MachineTimeOffset(InMachineTimeOffset)
+{}
+
+void FLiveLinkMessageBusSource::InitializeSettings(ULiveLinkSourceSettings* Settings)
+{
+}
 
 void FLiveLinkMessageBusSource::ReceiveClient(ILiveLinkClient* InClient, FGuid InSourceGuid)
 {
@@ -190,7 +204,7 @@ void FLiveLinkMessageBusSource::InternalHandleMessage(const TSharedRef<IMessageC
 		FLiveLinkFrameDataStruct DataStruct(MessageTypeInfo);
 		const FLiveLinkBaseFrameData* Message = reinterpret_cast<const FLiveLinkBaseFrameData*>(Context->GetMessage());
 		DataStruct.InitializeWith(MessageTypeInfo, Message);
-		DataStruct.GetBaseData()->WorldTime = FLiveLinkWorldTime(Message->WorldTime.GetOffsettedTime(), MachineTimeOffset);
+		DataStruct.GetBaseData()->WorldTime = Message->WorldTime.GetOffsettedTime();
 		Client->PushSubjectFrameData_AnyThread(SubjectKey, MoveTemp(DataStruct));
 	}
 }

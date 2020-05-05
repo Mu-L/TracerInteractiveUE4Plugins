@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	HlslExpressionParser.inl - Implementation for parsing hlsl expressions.
@@ -170,15 +170,22 @@ namespace CrossCompiler
 		ETF_SAMPLER_TEXTURE_BUFFER	= 1 << 2,
 		ETF_USER_TYPES				= 1 << 3,
 		ETF_ERROR_IF_NOT_USER_TYPE	= 1 << 4,
+		ETF_UNORM					= 1 << 5,
+	};
+
+	enum EExtraQualifiers
+	{
+		EEQ_PRECISE		= 1 << 0,
+		EEQ_UNORM		= 1 << 1,
+		EEQ_SNORM		= 1 << 2,
 	};
 
 	enum EExpressionFlags
 	{
 		EEF_ALLOW_ASSIGNMENT	= 1 << 0,
-		EEF_ALLOW_SEQUENCE		= 1 << 1,
 	};
 
-	EParseResult ParseGeneralType(const FHlslToken* Token, int32 TypeFlags, bool bPrecise, FLinearAllocator* Allocator, AST::FTypeSpecifier** OutSpecifier)
+	EParseResult ParseGeneralTypeToken(const FHlslToken* Token, int32 TypeFlags, int32 ExtraQualifierFlags, FLinearAllocator* Allocator, AST::FTypeSpecifier** OutSpecifier)
 	{
 		if (!Token)
 		{
@@ -332,12 +339,19 @@ namespace CrossCompiler
 		case EHlslToken::RWTexture2D:
 		case EHlslToken::RWTexture2DArray:
 		case EHlslToken::RWTexture3D:
+		case EHlslToken::ConstantBuffer:
 		case EHlslToken::StructuredBuffer:
-		case EHlslToken::RaytracingAccelerationStructure:
 			if (TypeFlags & ETF_SAMPLER_TEXTURE_BUFFER)
 			{
 				bMatched = true;
 				InnerType = TEXT("float4");
+			}
+			break;
+
+		case EHlslToken::RaytracingAccelerationStructure:
+			if (TypeFlags & ETF_SAMPLER_TEXTURE_BUFFER)
+			{
+				bMatched = true;
 			}
 			break;
 
@@ -360,10 +374,18 @@ namespace CrossCompiler
 		if (bMatched)
 		{
 			//#todo-rco: Don't re-allocate types
+			FString TypeName;
+			TypeName += (ExtraQualifierFlags & EEQ_SNORM) == EEQ_SNORM
+				? TEXT("snorm ")
+				: ((ExtraQualifierFlags & EEQ_UNORM) == EEQ_UNORM
+					? TEXT("unorm ")
+					: TEXT(""));
+			TypeName += Token->String;
+
 			auto* Type = new(Allocator) AST::FTypeSpecifier(Allocator, Token->SourceInfo);
-			Type->TypeName = Allocator->Strdup(Token->String);
+			Type->TypeName = Allocator->Strdup(TypeName);
 			Type->InnerType = InnerType;
-			Type->bPrecise = bPrecise;
+			Type->bPrecise = (ExtraQualifierFlags & EEQ_PRECISE) == EEQ_PRECISE;
 			*OutSpecifier = Type;
 			return EParseResult::Matched;
 		}
@@ -371,11 +393,11 @@ namespace CrossCompiler
 		return EParseResult::NotMatched;
 	}
 
-	EParseResult ParseGeneralTypeFromToken(const FHlslToken* Token, int32 TypeFlags, bool bPrecise, FSymbolScope* SymbolScope, FLinearAllocator* Allocator, AST::FTypeSpecifier** OutSpecifier)
+	EParseResult ParseGeneralTypeFromToken(const FHlslToken* Token, int32 TypeFlags, int32 ExtraQualifierFlags, FSymbolScope* SymbolScope, FLinearAllocator* Allocator, AST::FTypeSpecifier** OutSpecifier)
 	{
 		if (Token)
 		{
-			if (ParseGeneralType(Token, TypeFlags, bPrecise, Allocator, OutSpecifier) == EParseResult::Matched)
+			if (ParseGeneralTypeToken(Token, TypeFlags, ExtraQualifierFlags, Allocator, OutSpecifier) == EParseResult::Matched)
 			{
 				return EParseResult::Matched;
 			}
@@ -468,14 +490,31 @@ namespace CrossCompiler
 			}
 		}
 
+		int32 ExtraQualifiers = 0;
 		bool bPrecise = false;
 		if (Scanner.MatchToken(EHlslToken::Precise))
 		{
 			Token = Scanner.GetCurrentToken();
-			bPrecise = true;
+			ExtraQualifiers |= EEQ_PRECISE;
 		}
 
-		auto Result = ParseGeneralTypeFromToken(Token, TypeFlags, bPrecise, SymbolScope, Allocator, OutSpecifier);
+		if ((TypeFlags & ETF_UNORM) == ETF_UNORM && Token && Token->String.Len() == 5)
+		{
+			if (!FCString::Strcmp(*Token->String, TEXT("unorm")))
+			{
+				ExtraQualifiers |= EEQ_UNORM;
+				Scanner.Advance();
+				Token = Scanner.GetCurrentToken();
+			}
+			else if (!FCString::Strcmp(*Token->String, TEXT("snorm")))
+			{
+				ExtraQualifiers |= EEQ_SNORM;
+				Scanner.Advance();
+				Token = Scanner.GetCurrentToken();
+			}
+		}
+
+		auto Result = ParseGeneralTypeFromToken(Token, TypeFlags, ExtraQualifiers, SymbolScope, Allocator, OutSpecifier);
 		if (Result == EParseResult::Matched)
 		{
 			Scanner.Advance();
@@ -573,7 +612,7 @@ namespace CrossCompiler
 
 				AST::FTypeSpecifier* TypeSpecifier = nullptr;
 				//#todo-rco: Is precise allowed on casts?
-				if (Peek1 && ParseGeneralTypeFromToken(Peek1, ETF_BUILTIN_NUMERIC | ETF_USER_TYPES, false, SymbolScope, Allocator, &TypeSpecifier) == EParseResult::Matched && Peek2 && Peek2->Token == EHlslToken::RightParenthesis)
+				if (Peek1 && ParseGeneralTypeFromToken(Peek1, ETF_BUILTIN_NUMERIC | ETF_USER_TYPES, 0, SymbolScope, Allocator, &TypeSpecifier) == EParseResult::Matched && Peek2 && Peek2->Token == EHlslToken::RightParenthesis)
 				{
 					for (; PeekN > 0; --PeekN) //-V::654,621
 					{
@@ -589,7 +628,7 @@ namespace CrossCompiler
 					auto* Expression = new(Allocator) AST::FUnaryExpression(Allocator, AST::EOperators::TypeCast, nullptr, Token->SourceInfo);
 					if (PrevExpression)
 					{
-						PrevExpression->SubExpressions[0] = Expression;
+						PrevExpression->Expressions[0] = Expression;
 					}
 
 					Expression->TypeSpecifier = TypeSpecifier;
@@ -617,7 +656,7 @@ namespace CrossCompiler
 			auto* Expression = new(Allocator) AST::FUnaryExpression(Allocator, Operator, nullptr, Token->SourceInfo);
 			if (PrevExpression)
 			{
-				PrevExpression->SubExpressions[0] = Expression;
+				PrevExpression->Expressions[0] = Expression;
 			}
 
 			if (!*OuterExpression)
@@ -765,22 +804,11 @@ namespace CrossCompiler
 		AST::FExpression* AtomExpression = nullptr;
 		switch (Token->Token)
 		{
-		case EHlslToken::BoolConstant:
+		case EHlslToken::Literal:
 			Scanner.Advance();
-			AtomExpression = new(Allocator) AST::FUnaryExpression(Allocator, AST::EOperators::BoolConstant, nullptr, Token->SourceInfo);
-			AtomExpression->BoolConstant = Token->UnsignedInteger != 0;
-			break;
-
-		case EHlslToken::UnsignedIntegerConstant:
-			Scanner.Advance();
-			AtomExpression = new(Allocator) AST::FUnaryExpression(Allocator, AST::EOperators::UintConstant, nullptr, Token->SourceInfo);
-			AtomExpression->UintConstant = Token->UnsignedInteger;
-			break;
-
-		case EHlslToken::FloatConstant:
-			Scanner.Advance();
-			AtomExpression = new(Allocator) AST::FUnaryExpression(Allocator, AST::EOperators::FloatConstant, nullptr, Token->SourceInfo);
+			AtomExpression = new(Allocator) AST::FExpression(Allocator, AST::EOperators::Literal, Token->SourceInfo);
 			AtomExpression->Identifier = Allocator->Strdup(Token->String);
+			AtomExpression->LiteralType = Token->LiteralType;
 			break;
 
 		case EHlslToken::Identifier:
@@ -801,13 +829,13 @@ namespace CrossCompiler
 					Token2 = Scanner.PeekToken(1);
 				}
 
-				AtomExpression = new(Allocator) AST::FUnaryExpression(Allocator, AST::EOperators::Identifier, nullptr, Token->SourceInfo);
+				AtomExpression = new(Allocator) AST::FExpression(Allocator, AST::EOperators::Identifier, Token->SourceInfo);
 				AtomExpression->Identifier = Allocator->Strdup(*Name);
 			}
 			else
 			{
 				Scanner.Advance();
-				AtomExpression = new(Allocator) AST::FUnaryExpression(Allocator, AST::EOperators::Identifier, nullptr, Token->SourceInfo);
+				AtomExpression = new(Allocator) AST::FExpression(Allocator, AST::EOperators::Identifier, Token->SourceInfo);
 				AtomExpression->Identifier = Allocator->Strdup(Token->String);
 			}
 		}
@@ -817,14 +845,30 @@ namespace CrossCompiler
 		{
 			Scanner.Advance();
 
-			// Check if it's a cast expression first
-			const auto* Peek1 = Scanner.PeekToken(0);
-			const auto* Peek2 = Scanner.PeekToken(1);
 			// Parenthesis expression
-			if (ComputeExpr(Scanner, 1, /*Info,*/ SymbolScope, (ExpressionFlags | EEF_ALLOW_SEQUENCE), Allocator, &AtomExpression, nullptr) != EParseResult::Matched)
+			if (ComputeExpr(Scanner, 1, /*Info,*/ SymbolScope, ExpressionFlags, Allocator, &AtomExpression, nullptr) != EParseResult::Matched)
 			{
 				Scanner.SourceError(TEXT("Expected expression!"));
 				return ParseResultError();
+			}
+
+			if (Scanner.MatchToken(EHlslToken::Comma))
+			{
+				AST::FExpression* FirstSequenceEntry = AtomExpression;
+				AtomExpression = new(Allocator) AST::FExpressionList(Allocator, AST::FExpressionList::EType::Parenthesized, Token->SourceInfo);
+				AtomExpression->Expressions.Add(FirstSequenceEntry);
+
+				do
+				{
+					AST::FExpression* NextExpression = nullptr;
+					if (ComputeExpr(Scanner, 1, /*Info,*/ SymbolScope, (ExpressionFlags), Allocator, &NextExpression, nullptr) != EParseResult::Matched)
+					{
+						Scanner.SourceError(TEXT("Expected expression!"));
+						return ParseResultError();
+					}
+					AtomExpression->Expressions.Add(NextExpression);
+				}
+				while (Scanner.MatchToken(EHlslToken::Comma));
 			}
 
 			if (!Scanner.MatchToken(EHlslToken::RightParenthesis))
@@ -842,8 +886,8 @@ namespace CrossCompiler
 			// Grrr handle Sampler as a variable name... This is safe here since Declarations are always handled first
 			if (ParseGeneralType(Scanner, ETF_SAMPLER_TEXTURE_BUFFER, nullptr, Allocator, &TypeSpecifier) == EParseResult::Matched)
 			{
-				//@todo-rco: Check this var exists on the symnbol table
-				AtomExpression = new(Allocator) AST::FUnaryExpression(Allocator, AST::EOperators::Identifier, nullptr, TypeSpecifier->SourceInfo);
+				//@todo-rco: Check this var exists on the symbol table
+				AtomExpression = new(Allocator) AST::FExpression(Allocator, AST::EOperators::Identifier, TypeSpecifier->SourceInfo);
 				AtomExpression->Identifier = TypeSpecifier->TypeName;
 				break;
 			}
@@ -852,7 +896,7 @@ namespace CrossCompiler
 			{
 				if (Scanner.MatchToken(EHlslToken::LeftParenthesis))
 				{
-					auto* TypeExpression = new(Allocator) AST::FUnaryExpression(Allocator, AST::EOperators::Identifier, nullptr, TypeSpecifier->SourceInfo);
+					auto* TypeExpression = new(Allocator) AST::FExpression(Allocator, AST::EOperators::Identifier, TypeSpecifier->SourceInfo);
 					TypeExpression->Identifier = TypeSpecifier->TypeName;
 					auto* FunctionCall = new(Allocator) AST::FFunctionExpression(Allocator, Token->SourceInfo, TypeExpression);
 					auto Result = ParseExpressionList(EHlslToken::RightParenthesis, Scanner, SymbolScope, EHlslToken::Invalid, Allocator, FunctionCall);
@@ -896,8 +940,8 @@ namespace CrossCompiler
 		// Patch unary if necessary
 		if (InnerUnaryExpression)
 		{
-			check(!InnerUnaryExpression->SubExpressions[0]);
-			InnerUnaryExpression->SubExpressions[0] = AtomExpression;
+			check(!InnerUnaryExpression->Expressions[0]);
+			InnerUnaryExpression->Expressions[0] = AtomExpression;
 		}
 
 		if (!*OutExpression)
@@ -1017,7 +1061,7 @@ namespace CrossCompiler
 		return false;
 	}
 
-	bool IsSequenceOperator(const FHlslToken* Token)
+	static inline bool IsSequenceOperator(const FHlslToken* Token)
 	{
 		if (Token)
 		{
@@ -1036,7 +1080,6 @@ namespace CrossCompiler
 	EParseResult ComputeExpr(FHlslScanner& Scanner, int32 MinPrec, /*FInfo& Info,*/ FSymbolScope* SymbolScope, int32 ExpressionFlags, FLinearAllocator* Allocator, AST::FExpression** OutExpression, AST::FExpression** OutTernaryExpression)
 	{
 		const bool bAllowAssignment = ((ExpressionFlags & EEF_ALLOW_ASSIGNMENT) == EEF_ALLOW_ASSIGNMENT);
-		const bool bAllowSequence = ((ExpressionFlags & EEF_ALLOW_SEQUENCE) == EEF_ALLOW_SEQUENCE);
 
 		auto OriginalToken = Scanner.GetCurrentTokenIndex();
 		//FInfoIndentScope Scope(Info);
@@ -1069,7 +1112,7 @@ namespace CrossCompiler
 		{
 			auto* Token = Scanner.GetCurrentToken();
 			int32 Precedence = GetPrecedence(Token);
-			if (!Token || !IsBinaryOperator(Token) || Precedence < MinPrec || (!bAllowAssignment && IsAssignmentOperator(Token)) || (!bAllowSequence && IsSequenceOperator(Token)) || (OutTernaryExpression && *OutTernaryExpression))
+			if (!Token || !IsBinaryOperator(Token) || Precedence < MinPrec || (!bAllowAssignment && IsAssignmentOperator(Token)) || IsSequenceOperator(Token) || (OutTernaryExpression && *OutTernaryExpression))
 			{
 				break;
 			}
@@ -1108,9 +1151,9 @@ namespace CrossCompiler
 		{
 			if (!OutTernaryExpression)
 			{
-				if (!TernaryExpression->SubExpressions[0])
+				if (!TernaryExpression->Expressions[0])
 				{
-					TernaryExpression->SubExpressions[0] = *OutExpression;
+					TernaryExpression->Expressions[0] = *OutExpression;
 					*OutExpression = TernaryExpression;
 				}
 				else
@@ -1133,6 +1176,69 @@ namespace CrossCompiler
 		return ComputeExpr(Scanner, 0, /*Info,*/ SymbolScope, ExpressionFlags, Allocator, OutExpression, nullptr);
 	}
 
+	EParseResult ParseExpressionList2(FHlslScanner& Scanner, FSymbolScope* SymbolScope, FLinearAllocator* Allocator, AST::FExpressionList::EType ExpressionType, AST::FExpression** OutExpression)
+	{
+		check(OutExpression);
+		auto* Token = Scanner.GetCurrentToken();
+		if (!Token)
+		{
+			Scanner.SourceError(TEXT("Invalid expression list\n"));
+			return ParseResultError();
+		}
+		AST::FExpressionList* ExpressionList = new(Allocator) AST::FExpressionList(Allocator, ExpressionType, Token->SourceInfo);
+		while (Scanner.HasMoreTokens())
+		{
+			auto* Peek = Scanner.PeekToken();
+			if ((ExpressionType == AST::FExpressionList::EType::Braced && Peek->Token == EHlslToken::RightBrace) ||
+				(ExpressionType == AST::FExpressionList::EType::Parenthesized && Peek->Token == EHlslToken::RightParenthesis))
+			{
+				*OutExpression = ExpressionList;
+				return EParseResult::Matched;
+			}
+
+			AST::FExpression* Expression = nullptr;
+			if (Scanner.MatchToken(EHlslToken::LeftBrace))
+			{
+				auto Result = ParseExpressionList2(Scanner, SymbolScope, Allocator, AST::FExpressionList::EType::Braced, &Expression);
+				if (Result != EParseResult::Matched)
+				{
+					Scanner.SourceError(TEXT("Invalid expression list\n"));
+					return ParseResultError();
+				}
+
+				if (!Scanner.MatchToken(EHlslToken::RightBrace))
+				{
+					Scanner.SourceError(TEXT("Invalid expression list; '}' expected\n"));
+					return ParseResultError();
+				}
+			}
+			else
+			{
+				auto Result = ParseExpression(Scanner, SymbolScope, EEF_ALLOW_ASSIGNMENT, Allocator, &Expression);
+				if (Result == EParseResult::Error)
+				{
+					Scanner.SourceError(TEXT("Invalid expression list\n"));
+					return ParseResultError();
+				}
+				else if (Result == EParseResult::NotMatched)
+				{
+					Scanner.SourceError(TEXT("Expected expression\n"));
+					return ParseResultError();
+				}
+			}
+
+			ExpressionList->Expressions.Add(Expression);
+
+			if (!Scanner.MatchToken(EHlslToken::Comma))
+			{
+				*OutExpression = ExpressionList;
+				return EParseResult::Matched;
+			}
+		}
+
+		return EParseResult::NotMatched;
+	}
+
 	EParseResult ParseExpressionList(EHlslToken EndListToken, FHlslScanner& Scanner, FSymbolScope* SymbolScope, EHlslToken NewStartListToken, FLinearAllocator* Allocator, AST::FExpression* OutExpression)
 	{
 		check(OutExpression);
@@ -1147,6 +1253,8 @@ namespace CrossCompiler
 			else if (NewStartListToken != EHlslToken::Invalid && Token->Token == NewStartListToken)
 			{
 				Scanner.Advance();
+				check(0);
+/*
 				auto* SubExpression = new(Allocator) AST::FInitializerListExpression(Allocator, Token->SourceInfo);
 				auto Result = ParseExpressionList(EndListToken, Scanner, SymbolScope, NewStartListToken, Allocator, SubExpression);
 				if (Result != EParseResult::Matched)
@@ -1155,6 +1263,7 @@ namespace CrossCompiler
 				}
 
 				OutExpression->Expressions.Add(SubExpression);
+*/
 			}
 			else
 			{

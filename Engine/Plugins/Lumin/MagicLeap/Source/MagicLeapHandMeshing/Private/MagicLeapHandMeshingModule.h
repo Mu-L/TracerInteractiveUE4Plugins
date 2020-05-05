@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -19,6 +19,7 @@ public:
 	bool DestroyClient();
 	bool ConnectMRMesh(UMRMeshComponent* InMRMeshPtr);
 	bool DisconnectMRMesh(class UMRMeshComponent* InMRMeshPtr);
+	void SetUseWeightedNormals(const bool bInUseWeightedNormals);
 	bool HasMRMesh() const;
 	bool HasClient() const;
 

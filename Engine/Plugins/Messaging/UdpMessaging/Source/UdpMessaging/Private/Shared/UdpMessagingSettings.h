@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -10,6 +10,31 @@
 
 #include "UdpMessagingSettings.generated.h"
 
+/** Defines the UDP message format available (how the message data is encoded). */
+UENUM()
+enum class EUdpMessageFormat : uint8
+{
+	/** No format specified. Legacy - Not exposed to user.*/
+	None = 0 UMETA(Hidden),
+
+	/** JSON format specified. Legacy - Not exposed to user.*/
+	Json UMETA(Hidden),
+
+	/** Tagged property format specified. Legacy - Not exposed to user.*/
+	TaggedProperty UMETA(Hidden),
+
+	/**
+	 * UDP messages are encoded in CBOR, using the platform endianness. This is the fastest and preferred option, but the CBOR data will not be readable by an external standard-compliant CBOR parser
+	 * if generated from a little endian platform. If the data needs to be consumed outside the Unreal Engine, consider using CborStandardEndianness format instead.
+	 */
+	CborPlatformEndianness UMETA(DisplayName="CBOR (Platform Endianness)"),
+
+	/**
+	 * UDP messages are encoded in CBOR, using the CBOR standard-complinant endianness (big endian). It will perform slower on a little-endian platform, but the data will be readable by standard CBOR parsers.
+	 * Useful if the UDP messages needs to be analyzed/consumed outside the Unreal Engine.
+	 */
+	CborStandardEndianness UMETA(DisplayName="CBOR (Standard Endianness)"),
+};
 
 UCLASS(config=Engine)
 class UUdpMessagingSettings
@@ -30,12 +55,18 @@ public:
 	UPROPERTY(config, EditAnywhere, Category=Transport, AdvancedDisplay)
 	bool bAutoRepair = true;
 
+	/** Whether to stop the transport service when the application deactivates, and restart it when the application is reactivated */
+	UPROPERTY(config)
+	bool bStopServiceWhenAppDeactivates = true;
+
 	/**
 	 * The IP endpoint to listen to and send packets from.
 	 *
 	 * The format is IP_ADDRESS:PORT_NUMBER.
 	 * 0.0.0.0:0 will bind to the default network adapter on Windows,
 	 * and all available network adapters on other operating systems.
+	 * Specifying an interface IP here, will use that interface for multicasting and static endpoint *might* also reach this client through <unicast ip:multicast port>
+	 * Specifying both the IP and Port will allow usage of static endpoint to reach this client
 	 * Can be specified on the command line with `-UDPMESSAGING_TRANSPORT_UNICAST=`
 	 */
 	UPROPERTY(config, EditAnywhere, Category=Transport)
@@ -51,6 +82,10 @@ public:
 	UPROPERTY(config, EditAnywhere, Category=Transport)
 	FString MulticastEndpoint;
 
+	/** The format used to serialize the UDP message payload. */
+	UPROPERTY(config, EditAnywhere, Category=Transport)
+	EUdpMessageFormat MessageFormat = EUdpMessageFormat::CborPlatformEndianness;
+
 	/** The time-to-live (TTL) for sent multicast packets. */
 	UPROPERTY(config, EditAnywhere, Category=Transport, AdvancedDisplay)
 	uint8 MulticastTimeToLive;
@@ -58,7 +93,7 @@ public:
 	/**
 	 * The IP endpoints of static devices.
 	 *
-	 * Use this setting to list devices on other subnets, such as mobile phones on a WiFi network.
+	 * Use this setting to reach devices on other subnets, such as mobile phones on a WiFi network.
 	 * The format is IP_ADDRESS:PORT_NUMBER.
 	 */
 	UPROPERTY(config, EditAnywhere, Category=Transport, AdvancedDisplay)

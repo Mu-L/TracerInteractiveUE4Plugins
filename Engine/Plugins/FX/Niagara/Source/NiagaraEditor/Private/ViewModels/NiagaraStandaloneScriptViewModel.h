@@ -1,10 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "Internationalization/Text.h"
-#include "NiagaraParameterEditMode.h"
-#include "NiagaraScriptViewModel.h"
+#include "ViewModels/NiagaraParameterEditMode.h"
+#include "ViewModels/NiagaraScriptViewModel.h"
 
 class FNiagaraMessageLogViewModel;
 class UNiagaraScript;
@@ -20,6 +20,7 @@ public:
 	);
 
 	void Initialize(UNiagaraScript* InScript, UNiagaraScript* InSourceScript);
+	UNiagaraScript* GetStandaloneScript();
 
 private:
 	virtual void OnVMScriptCompiled(UNiagaraScript* InScript) override;

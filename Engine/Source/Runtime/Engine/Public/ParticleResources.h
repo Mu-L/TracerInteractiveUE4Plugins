@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	ParticleResources.h: Declaration of global particle resources.
@@ -80,22 +80,3 @@ private:
 
 /** The global scratch vertex buffer. */
 extern TGlobalResource<FParticleScratchVertexBuffer> GParticleScratchVertexBuffer;
-
-
-/**
- * Vertex buffer used to hold particle indices.
- */
-class FParticleIndicesVertexBuffer : public FVertexBuffer
-{
-public:
-
-	/** Shader resource view of the vertex buffer. */
-	FShaderResourceViewRHIRef VertexBufferSRV;
-
-	/** Release RHI resources. */
-	virtual void ReleaseRHI() override
-	{
-		VertexBufferSRV.SafeRelease();
-		FVertexBuffer::ReleaseRHI();
-	}
-};

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Windows/WindowsPlatformProcess.h"
 #include "HAL/PlatformMisc.h"
@@ -36,6 +36,8 @@
 
 #pragma comment(lib, "psapi.lib")
 
+PRAGMA_DISABLE_UNSAFE_TYPECAST_WARNINGS
+
 // static variables
 TArray<FString> FWindowsPlatformProcess::DllDirectoryStack;
 TArray<FString> FWindowsPlatformProcess::DllDirectories;
@@ -47,6 +49,11 @@ void FWindowsPlatformProcess::AddDllDirectory(const TCHAR* Directory)
 	FPaths::NormalizeDirectoryName(NormalizedDirectory);
 	FPaths::MakePlatformFilename(NormalizedDirectory);
 	DllDirectories.AddUnique(NormalizedDirectory);
+}
+
+void FWindowsPlatformProcess::GetDllDirectories(TArray<FString>& OutDllDirectories)
+{
+	OutDllDirectories = DllDirectories;
 }
 
 void* FWindowsPlatformProcess::GetDllHandle( const TCHAR* FileName )
@@ -499,8 +506,8 @@ bool FWindowsPlatformProcess::GetPerFrameProcessorUsage(uint32 ProcessId, float&
 {
 	bool bSuccess = true;
 
-	static float LastProcessTime = 0.f;
-	static float LastIdleTime = 0.f;
+	static double LastProcessTime = 0.f;
+	static double LastIdleTime = 0.f;
 	static uint32 LastFrameNumber = 0;
 
 	if (LastFrameNumber != GFrameNumber)
@@ -1621,6 +1628,16 @@ bool FWindowsPlatformProcess::Daemonize()
 	return true;
 }
 
+void FWindowsPlatformProcess::SetupAudioThread()
+{
+	ensure(FPlatformMisc::CoInitialize());
+}
+
+void FWindowsPlatformProcess::TeardownAudioThread()
+{
+	FPlatformMisc::CoUninitialize();
+}
+
 /**
  * Maps a relative virtual address (RVA) to an address in memory.
  *
@@ -1918,5 +1935,74 @@ FString FWindowsPlatformProcess::FProcEnumInfo::GetFullPath() const
 {
 	return GetApplicationName(GetPID());
 }
+
+namespace WindowsPlatformProcessImpl
+{
+	static void SetThreadName(LPCSTR ThreadName)
+	{
+#if !PLATFORM_SEH_EXCEPTIONS_DISABLED
+		/**
+		 * Code setting the thread name for use in the debugger.
+		 *
+		 * http://msdn.microsoft.com/en-us/library/xcb2z8hs.aspx
+		 */
+		const uint32 MS_VC_EXCEPTION=0x406D1388;
+
+		struct THREADNAME_INFO
+		{
+			uint32 dwType;		// Must be 0x1000.
+			LPCSTR szName;		// Pointer to name (in user addr space).
+			uint32 dwThreadID;	// Thread ID (-1=caller thread).
+			uint32 dwFlags;		// Reserved for future use, must be zero.
+		};
+
+		THREADNAME_INFO ThreadNameInfo;
+		ThreadNameInfo.dwType		= 0x1000;
+		ThreadNameInfo.szName		= ThreadName;
+		ThreadNameInfo.dwThreadID	= ::GetCurrentThreadId();
+		ThreadNameInfo.dwFlags		= 0;
+
+		__try
+		{
+			RaiseException( MS_VC_EXCEPTION, 0, sizeof(ThreadNameInfo)/sizeof(ULONG_PTR), (ULONG_PTR*)&ThreadNameInfo );
+		}
+		__except( EXCEPTION_EXECUTE_HANDLER )
+		CA_SUPPRESS(6322)
+		{
+		}
+#endif
+	}
+
+	static void SetThreadDescription(PCWSTR lpThreadDescription)
+	{
+		// SetThreadDescription is only available from Windows 10 version 1607 / Windows Server 2016
+		//
+		// So in order to be compatible with older Windows versions we probe for the API at runtime
+		// and call it only if available.
+
+		typedef HRESULT(WINAPI *SetThreadDescriptionFnPtr)(HANDLE hThread, PCWSTR lpThreadDescription);
+
+	#pragma warning( push )
+	#pragma warning( disable: 4191 )	// unsafe conversion from 'type of expression' to 'type required'
+		static SetThreadDescriptionFnPtr RealSetThreadDescription = (SetThreadDescriptionFnPtr) GetProcAddress(GetModuleHandle(TEXT("kernel32.dll")), "SetThreadDescription");
+	#pragma warning( pop )
+
+		if (RealSetThreadDescription)
+		{
+			RealSetThreadDescription(::GetCurrentThread(), lpThreadDescription);
+		}
+	}
+}
+
+void FWindowsPlatformProcess::SetThreadName( const TCHAR* ThreadName )
+{
+	// We try to use the SetThreadDescription API where possible since this
+	// enables thread names in crashdumps and ETW traces
+	WindowsPlatformProcessImpl::SetThreadDescription(TCHAR_TO_WCHAR(ThreadName));
+
+	WindowsPlatformProcessImpl::SetThreadName(TCHAR_TO_ANSI(ThreadName));
+}
+
+PRAGMA_ENABLE_UNSAFE_TYPECAST_WARNINGS
 
 #include "Windows/HideWindowsPlatformTypes.h"

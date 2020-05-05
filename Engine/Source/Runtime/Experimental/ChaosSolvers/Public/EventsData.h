@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
-#include "Chaos/PBDCollisionTypes.h"
+#include "Chaos/ExternalCollisionData.h"
+#include "Chaos/CollisionResolutionTypes.h"
 #include "Chaos/Framework/PhysicsProxy.h"
 
 namespace Chaos
@@ -85,7 +86,6 @@ namespace Chaos
 		FBreakingEventData() {}
 
 		FAllBreakingData BreakingData;
-		FIndicesByPhysicsProxy PhysicsProxyToBreakingIndices;
 	};
 
 	/* Trailing */
@@ -111,7 +111,6 @@ namespace Chaos
 		FTrailingEventData() {}
 
 		FAllTrailingData TrailingData;
-		FIndicesByPhysicsProxy PhysicsProxyToTrailingIndices;
 	};
 
 	struct FSleepingEventData
@@ -119,7 +118,6 @@ namespace Chaos
 		FSleepingEventData() {}
 
 		FSleepingDataArray SleepingData;
-		FIndicesByPhysicsProxy PhysicsProxyToSleepingIndices;
 	};
 
 }

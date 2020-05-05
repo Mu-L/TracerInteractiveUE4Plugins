@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Lumin/LuminPlatformMisc.h"
 #include "Lumin/LuminLifecycle.h"
@@ -17,7 +17,6 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
-#include "Lumin/CAPIShims/LuminAPILifecycle.h"
 #include "Lumin/CAPIShims/LuminAPILogging.h"
 #include "Lumin/CAPIShims/LuminAPILocale.h"
 
@@ -58,6 +57,12 @@ void FLuminPlatformMisc::PlatformPreInit()
 	InitApplicationPaths();
 }
 
+void FLuminPlatformMisc::PlatformInit()
+{
+	// Setup user specified thread affinity if any
+	extern void LuminSetupDefaultThreadAffinity();
+	LuminSetupDefaultThreadAffinity();
+}
 
 // The PhysX Android libraries refer to some Android only utilities.
 // So we reproduce them here as a hack as we build our own PhysX as if it's Android.

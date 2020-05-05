@@ -1,7 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
+#include "NiagaraCommon.h"
+#include "MovieScene/MovieSceneNiagaraSystemSpawnSection.h"
 #include "Evaluation/MovieSceneEvalTemplate.h"
 #include "Evaluation/MovieSceneTrackImplementation.h"
 #include "MovieSceneNiagaraSystemTrackTemplate.generated.h"
@@ -24,9 +26,12 @@ struct FMovieSceneNiagaraSystemTrackImplementation : public FMovieSceneTrackImpl
 	GENERATED_BODY()
 
 public:
-	FMovieSceneNiagaraSystemTrackImplementation() { }
-	FMovieSceneNiagaraSystemTrackImplementation(FFrameNumber InSpawnSectionStartFrame, FFrameNumber InSpawnSectionEndFrame);
-	
+	FMovieSceneNiagaraSystemTrackImplementation();
+	FMovieSceneNiagaraSystemTrackImplementation(
+		FFrameNumber InSpawnSectionStartFrame, FFrameNumber InSpawnSectionEndFrame,
+		ENiagaraSystemSpawnSectionStartBehavior InSectionStartBehavior, ENiagaraSystemSpawnSectionEvaluateBehavior InSectionEvaluateBehavior,
+		ENiagaraSystemSpawnSectionEndBehavior InSectionEndBehavior, ENiagaraAgeUpdateMode InAgeUpdateMode);
+
 	virtual void SetupOverrides() override
 	{
 		EnableOverrides(CustomEvaluateFlag);
@@ -41,4 +46,12 @@ private:
 	FFrameNumber SpawnSectionStartFrame;
 	UPROPERTY()
 	FFrameNumber SpawnSectionEndFrame;
+	UPROPERTY()
+	ENiagaraSystemSpawnSectionStartBehavior SpawnSectionStartBehavior;
+	UPROPERTY()
+	ENiagaraSystemSpawnSectionEvaluateBehavior SpawnSectionEvaluateBehavior;
+	UPROPERTY()
+	ENiagaraSystemSpawnSectionEndBehavior SpawnSectionEndBehavior;
+	UPROPERTY()
+	ENiagaraAgeUpdateMode AgeUpdateMode;
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	RenderingCompositionGraph.h: Scene pass order and dependency system.
@@ -23,8 +23,6 @@ struct FRenderingCompositeOutput;
 struct FRenderingCompositeOutputRef;
 struct FRenderingCompositePass;
 struct FRenderingCompositePassContext;
-
-template<typename ShaderMetaType> class TShaderMap;
 
 class FRenderingCompositionGraph
 {
@@ -114,7 +112,7 @@ struct FRenderingCompositePassContext
 	{
 		ViewPortRect = InViewPortRect;
 
-		RHICmdList.SetViewport(ViewPortRect.Min.X, ViewPortRect.Min.Y, InMinZ, ViewPortRect.Max.X, ViewPortRect.Max.Y, InMaxZ);
+		RHICmdList.SetViewport((float)ViewPortRect.Min.X, (float)ViewPortRect.Min.Y, InMinZ, (float)ViewPortRect.Max.X, (float)ViewPortRect.Max.Y, InMaxZ);
 	}
 
 	// call this method instead of RHISetViewport() so we can cache the values and use them to map beteen ScreenPos and pixels
@@ -206,7 +204,7 @@ struct FRenderingCompositePassContext
 
 	ERHIFeatureLevel::Type GetFeatureLevel() const { return FeatureLevel; }
 	EShaderPlatform GetShaderPlatform() const { return GShaderPlatformForFeatureLevel[FeatureLevel]; }
-	TShaderMap<FGlobalShaderType>* GetShaderMap() const { check(ShaderMap); return ShaderMap; }
+	FGlobalShaderMap* GetShaderMap() const { check(ShaderMap); return ShaderMap; }
 
 	//
 	const FViewInfo& View;
@@ -232,7 +230,7 @@ private:
 	//
 	ERHIFeatureLevel::Type FeatureLevel;
 	//
-	TShaderMap<FGlobalShaderType>* ShaderMap;
+	FGlobalShaderMap* ShaderMap;
 	// to ensure we only process the graph once
 	bool bWasProcessed;
 	// updated once a frame in Process()

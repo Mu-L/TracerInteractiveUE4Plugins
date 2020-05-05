@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -14,6 +14,8 @@
 #include "SkeletalMeshTypes.h"
 #include "Rendering/SkeletalMeshLODImporterData.h"
 #include "Animation/SkinWeightProfile.h"
+#include "CoreTypes.h"
+#include "HAL/CriticalSection.h"
 
 //
 //	FSoftSkinVertex
@@ -34,11 +36,11 @@ struct FSoftSkinVertex
 	FVector2D		UVs[MAX_TEXCOORDS];
 	// VertexColor
 	FColor			Color;
-	uint8			InfluenceBones[MAX_TOTAL_INFLUENCES];
+	FBoneIndexType	InfluenceBones[MAX_TOTAL_INFLUENCES];
 	uint8			InfluenceWeights[MAX_TOTAL_INFLUENCES];
 
 	/** If this vert is rigidly weighted to a bone, return true and the bone index. Otherwise return false. */
-	ENGINE_API bool GetRigidWeightBone(uint8& OutBoneIndex) const;
+	ENGINE_API bool GetRigidWeightBone(FBoneIndexType& OutBoneIndex) const;
 
 	/** Returns the maximum weight of any bone that influences this vertex. */
 	ENGINE_API uint8 GetMaximumWeight() const;
@@ -109,6 +111,9 @@ struct FSkelMeshSection
 	/** max # of bones used to skin the vertices in this section */
 	int32 MaxBoneInfluences;
 
+	/** whether to store bone indices as 16 bit or 8 bit in vertex buffer for rendering. */
+	bool bUse16BitBoneIndex;
+
 	// INDEX_NONE if not set
 	int16 CorrespondClothAssetIndex;
 
@@ -157,6 +162,7 @@ struct FSkelMeshSection
 		, BaseVertexIndex(0)
 		, NumVertices(0)
 		, MaxBoneInfluences(4)
+		, bUse16BitBoneIndex(false)
 		, CorrespondClothAssetIndex(INDEX_NONE)
 		, bDisabled(false)
 		, GenerateUpToLodIndex(INDEX_NONE)
@@ -196,9 +202,19 @@ struct FSkelMeshSection
 	*/
 	ENGINE_API void CalcMaxBoneInfluences();
 
-	FORCEINLINE bool HasExtraBoneInfluences() const
+	FORCEINLINE int32 GetMaxBoneInfluences() const
 	{
-		return MaxBoneInfluences > MAX_INFLUENCES_PER_STREAM;
+		return MaxBoneInfluences;
+	}
+
+	/**
+	* Calculate if this skel mesh section needs 16-bit bone indices
+	*/
+	ENGINE_API void CalcUse16BitBoneIndex();
+
+	FORCEINLINE bool Use16BitBoneIndex() const
+	{
+		return bUse16BitBoneIndex;
 	}
 
 	// Serialization.
@@ -313,17 +329,61 @@ public:
 	FWordBulkData				LegacyRawPointIndices;
 
 	/** Imported raw mesh data. Optional, only the imported mesh LOD has this, generated LOD or old asset will be null. */
-	FRawSkeletalMeshBulkData	RawSkeletalMeshBulkData;
+	FRawSkeletalMeshBulkData	RawSkeletalMeshBulkData_DEPRECATED;
+	/** This ID is use to create the DDC key, it must be set when we save the FRawSkeletalMeshBulkData. */
+	FString						RawSkeletalMeshBulkDataID;
+	bool						bIsBuildDataAvailable;
+	bool						bIsRawSkeletalMeshBulkDataEmpty;
 
 	/** Constructor (default) */
 	FSkeletalMeshLODModel()
 		: NumVertices(0)
 		, NumTexCoords(0)
 		, MaxImportVertex(-1)
+		, RawSkeletalMeshBulkDataID(TEXT(""))
+		, bIsBuildDataAvailable(false)
+		, bIsRawSkeletalMeshBulkDataEmpty(true)
 		, BuildStringID(TEXT(""))
 	{
+		//Sice this ID is part of the DDC Key, we have to set it to an empty GUID not an empty string
+		RawSkeletalMeshBulkDataID = FGuid().ToString();
+		//Allocate the private mutex
+		BulkDataReadMutex = new FCriticalSection();
 	}
 
+	~FSkeletalMeshLODModel()
+	{
+		//Release the allocate resources
+		if(BulkDataReadMutex != nullptr)
+		{
+			delete BulkDataReadMutex;
+			BulkDataReadMutex = nullptr;
+		}
+	}
+
+	/*Empty the skeletal mesh LOD model. Empty copy a default constructed FSkeletalMeshLODModel but will not copy the BulkDataReadMutex which will be the same after*/
+	void Empty()
+	{
+		FCriticalSection* BackupBulkDataReadMutex = BulkDataReadMutex;
+		*this = FSkeletalMeshLODModel();
+		BulkDataReadMutex = BackupBulkDataReadMutex;
+	}
+
+private:
+	//Mutex use by the CopyStructure function. It's a pointer because FCriticalSection privatize the operator= function, which will prevent this class operator= to use the default.
+	//We want to avoid having a custom equal operator that will get deprecated if dev forget to add the new member in this class
+	//The CopyStructure function will copy everything but make sure the destination mutex is set to a new mutex pointer.
+	FCriticalSection* BulkDataReadMutex;
+
+	//Use the static FSkeletalMeshLODModel::CopyStructure function to copy from one instance to another
+	//The reason is we want the copy to be multithread safe and use the BulkDataReadMutex.
+	FSkeletalMeshLODModel& operator=(const FSkeletalMeshLODModel& Other) = default;
+
+	//Use the static FSkeletalMeshLODModel::CreateCopy function to copy from one instance to another
+	//The reason is we want the copy to be multithread safe and use the BulkDataReadMutex.
+	FSkeletalMeshLODModel(const FSkeletalMeshLODModel& Other) = delete;
+
+public:
 	/**
 	* Special serialize function passing the owning UObject along as required by FUnytpedBulkData
 	* serialization.
@@ -370,7 +430,8 @@ public:
 	*/
 	ENGINE_API void GetNonClothVertices(TArray<FSoftSkinVertex>& OutVertices) const;
 
-	ENGINE_API bool DoSectionsNeedExtraBoneInfluences() const;
+	ENGINE_API int32 GetMaxBoneInfluences() const;
+	bool DoSectionsUse16BitBoneIndex() const;
 
 	void GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize) const;
 
@@ -397,8 +458,21 @@ public:
 
 	/**
 	* Copy one structure to the other, make sure all bulk data is unlock and the data can be read before copying.
+	*
+	* It also use a private mutex to make sure it's thread safe to copy the same source multiple time in multiple thread.
 	*/
-	static ENGINE_API bool CopyStructure(FSkeletalMeshLODModel* Destination, FSkeletalMeshLODModel* Source);
+	static ENGINE_API void CopyStructure(FSkeletalMeshLODModel* Destination, FSkeletalMeshLODModel* Source);
+
+	/**
+	* Create a new FSkeletalMeshLODModel on the heap. Copy data from the "FSkeletalMeshLODModel* Other" to the just created LODModel return the heap allocated LODModel.
+	* This function is thread safe since its use the thread safe CopyStructure function to copy the data from Other.
+	*/
+	static ENGINE_API FSkeletalMeshLODModel* CreateCopy(FSkeletalMeshLODModel* Other)
+	{
+		FSkeletalMeshLODModel* Destination = new FSkeletalMeshLODModel();
+		FSkeletalMeshLODModel::CopyStructure(Destination, Other);
+		return Destination;
+	}
 };
 
 #endif // WITH_EDITOR

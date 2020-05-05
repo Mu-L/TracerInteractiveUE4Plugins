@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Atmosphere/AtmosphericFogComponent.h"
 #include "Atmosphere/Atmosphere.h"
@@ -292,9 +292,9 @@ void UAtmosphericFogComponent::ReleaseResource()
 	}
 }
 
-void UAtmosphericFogComponent::CreateRenderState_Concurrent()
+void UAtmosphericFogComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
 {
-	Super::CreateRenderState_Concurrent();
+	Super::CreateRenderState_Concurrent(Context);
 	AddFogIfNeeded();
 }
 
@@ -515,7 +515,7 @@ void UAtmosphericFogComponent::PostEditChangeProperty(FPropertyChangedEvent& Pro
 }
 #endif // WITH_EDITOR
 
-void UAtmosphericFogComponent::PostInterpChange(UProperty* PropertyThatChanged)
+void UAtmosphericFogComponent::PostInterpChange(FProperty* PropertyThatChanged)
 {
 	Super::PostInterpChange(PropertyThatChanged);
 

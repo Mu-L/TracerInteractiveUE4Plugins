@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -160,6 +160,12 @@ public:
 	float MassScale;
 
 	/*
+	* 
+	*/
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ChaosPhysics", meta = (DisplayName = "Generate Contact Graph"))
+	bool bGenerateContactGraph;
+
+	/*
 	* Control to pause/step/substep the solver to the next synchronization point.
 	*/
 	UPROPERTY(EditAnywhere, Category = "ChaosPhysics|Debug")
@@ -169,7 +175,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ChaosPhysics")
 	void SetAsCurrentWorldSolver();
 
-	/** Controles whether the solver is able to simulate particles it controls */
+	/** Controls whether the solver is able to simulate particles it controls */
 	UFUNCTION(BlueprintCallable, Category = "ChaosPhysics")
 	virtual void SetSolverActive(bool bActive);
 
@@ -189,6 +195,8 @@ public:
 #endif
 	virtual void PostRegisterAllComponents() override;
 	
+	virtual void PostDuplicate(EDuplicateMode::Type DuplicateMode) override;
+	virtual void PreInitializeComponents() override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type ReasonEnd) override;
 

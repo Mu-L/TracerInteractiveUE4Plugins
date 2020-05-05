@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -14,6 +14,15 @@ UCLASS(MinimalAPI)
 class UEnvQueryTest_GameplayTags : public UEnvQueryTest
 {
 	GENERATED_UCLASS_BODY()
+
+public:
+	/**
+	 * @note Calling function only makes sense before first run of given query
+	 * by the EQS manager. The query gets preprocessed and cached then so the query 
+	 * value will get stored and calling this function will not change it (unless 
+	 * you call it on the cached test's instance, see UEnvQueryManager::CreateQueryInstance).
+	 */
+	void SetTagQueryToMatch(FGameplayTagQuery& GameplayTagQuery);
 
 protected:
 	virtual void RunTest(FEnvQueryInstance& QueryInstance) const override;

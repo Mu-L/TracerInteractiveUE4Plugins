@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GameFramework/PlayerController.h"
 #include "Misc/PackageName.h"
@@ -28,6 +28,7 @@
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Framework/Application/SlateUser.h"
 #include "Widgets/SViewport.h"
 #include "Engine/Console.h"
 #include "Net/UnrealNetwork.h"
@@ -104,6 +105,7 @@ const float ForceRetryClientRestartTime = -100.0f;
 
 FUpdateLevelVisibilityLevelInfo::FUpdateLevelVisibilityLevelInfo(const ULevel* const Level, const bool bInIsVisible)
 	: bIsVisible(bInIsVisible)
+	, bSkipCloseOnError(false)
 {
 	const UPackage* const LevelPackage = Level->GetOutermost();
 	PackageName = LevelPackage->GetFName();
@@ -809,7 +811,7 @@ void APlayerController::ClientRestart_Implementation(APawn* NewPawn)
 void APlayerController::OnPossess(APawn* PawnToPossess)
 {
 	if ( PawnToPossess != NULL && 
-		(PlayerState == NULL || !PlayerState->bOnlySpectator) )
+		(PlayerState == NULL || !PlayerState->IsOnlyASpectator()) )
 	{
 		const bool bNewPawn = (GetPawn() != PawnToPossess);
 
@@ -1219,7 +1221,7 @@ void APlayerController::Reset()
 	SetViewTarget(this);
 	ResetCameraMode();
 
-	bPlayerIsWaiting = !PlayerState->bOnlySpectator;
+	bPlayerIsWaiting = !PlayerState->IsOnlyASpectator();
 	ChangeState(NAME_Spectating);
 }
 
@@ -1230,7 +1232,7 @@ void APlayerController::ClientReset_Implementation()
 	ResetCameraMode();
 	SetViewTarget(this);
 
-	bPlayerIsWaiting = (PlayerState == nullptr) || !PlayerState->bOnlySpectator;
+	bPlayerIsWaiting = (PlayerState == nullptr) || !PlayerState->IsOnlyASpectator();
 	ChangeState(NAME_Spectating);
 }
 
@@ -2685,7 +2687,7 @@ void APlayerController::SpawnPlayerCameraManager()
 	}
 }
 
-void APlayerController::GetAudioListenerPosition(FVector& OutLocation, FVector& OutFrontDir, FVector& OutRightDir)
+void APlayerController::GetAudioListenerPosition(FVector& OutLocation, FVector& OutFrontDir, FVector& OutRightDir) const
 {
 	FVector ViewLocation;
 	FRotator ViewRotation;
@@ -2716,7 +2718,7 @@ void APlayerController::GetAudioListenerPosition(FVector& OutLocation, FVector& 
 	OutRightDir = ViewRotationMatrix.GetUnitAxis( EAxis::Y );
 }
 
-bool APlayerController::GetAudioListenerAttenuationOverridePosition(FVector& OutLocation)
+bool APlayerController::GetAudioListenerAttenuationOverridePosition(FVector& OutLocation) const
 {
 	if (bOverrideAudioAttenuationListener)
 	{
@@ -3046,7 +3048,7 @@ void APlayerController::ServerRestartPlayer_Implementation()
 
 bool APlayerController::CanRestartPlayer()
 {
-	return PlayerState && !PlayerState->bOnlySpectator && HasClientLoadedCurrentWorld() && PendingSwapConnection == NULL;
+	return PlayerState && !PlayerState->IsOnlyASpectator() && HasClientLoadedCurrentWorld() && PendingSwapConnection == NULL;
 }
 
 /// @cond DOXYGEN_WARNINGS
@@ -4337,6 +4339,22 @@ void APlayerController::ClientStopCameraShake_Implementation( TSubclassOf<class 
 	}
 }
 
+void APlayerController::ClientPlayCameraShakeFromSource(TSubclassOf<class UCameraShake> Shake, class UCameraShakeSourceComponent* SourceComponent)
+{
+	if (PlayerCameraManager != NULL)
+	{
+		PlayerCameraManager->PlayCameraShakeFromSource(Shake, SourceComponent);
+	}
+}
+
+void APlayerController::ClientStopCameraShakesFromSource(class UCameraShakeSourceComponent* SourceComponent, bool bImmediately)
+{
+	if (PlayerCameraManager != NULL)
+	{
+		PlayerCameraManager->StopAllInstancesOfCameraShakeFromSource(SourceComponent, bImmediately);
+	}
+}
+
 void APlayerController::ClientPlayCameraAnim_Implementation( UCameraAnim* AnimToPlay, float Scale, float Rate,
 						float BlendInTime, float BlendOutTime, bool bLoop,
 						bool bRandomStartTime, ECameraAnimPlaySpace::Type Space, FRotator CustomPlaySpace )
@@ -4484,7 +4502,16 @@ ULocalPlayer* APlayerController::GetLocalPlayer() const
 
 bool APlayerController::IsInViewportClient(UGameViewportClient* ViewportClient) const
 {
-	return ViewportClient && ViewportClient->GetGameViewportWidget().IsValid() && ViewportClient->GetGameViewportWidget()->IsDirectlyHovered();
+	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	if (LocalPlayer && ViewportClient)
+	{
+		TSharedPtr<const FSlateUser> SlateUser = LocalPlayer->GetSlateUser();
+		if (SlateUser && SlateUser->IsWidgetDirectlyUnderCursor(ViewportClient->GetGameViewportWidget()))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 int32 APlayerController::GetInputIndex() const
@@ -4818,8 +4845,8 @@ bool APlayerController::DefaultCanUnpause()
 void APlayerController::StartSpectatingOnly()
 {
 	ChangeState(NAME_Spectating);
-	PlayerState->bIsSpectator = true;
-	PlayerState->bOnlySpectator = true;
+	PlayerState->SetIsSpectator(true);
+	PlayerState->SetIsOnlyASpectator(true);
 	bPlayerIsWaiting = false; // Can't spawn, we are only allowed to be a spectator.
 }
 
@@ -5003,11 +5030,11 @@ void APlayerController::EndSpectatingState()
 {
 	if ( PlayerState != NULL )
 	{
-		if ( PlayerState->bOnlySpectator )
+		if ( PlayerState->IsOnlyASpectator() )
 		{
 			UE_LOG(LogPlayerController, Warning, TEXT("Spectator only UPlayer* leaving spectating state"));
 		}
-		PlayerState->bIsSpectator = false;
+		PlayerState->SetIsSpectator(false);
 	}
 
 	bPlayerIsWaiting = false;

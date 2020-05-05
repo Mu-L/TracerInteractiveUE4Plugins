@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*==============================================================================
 	NiagaraSortKeyGen.usf: Shader to generate particle sorting keys.
@@ -17,6 +17,10 @@
 
 #define NIAGARA_KEYGEN 1
 #include "NiagaraVFParticleAccess.usf"
+
+#if NIAGARA_LOOSEPARAM_BINDING
+Buffer<float> NiagaraParticleDataFloat;
+#endif
 
 Buffer<uint> GPUParticleCountBuffer;
 

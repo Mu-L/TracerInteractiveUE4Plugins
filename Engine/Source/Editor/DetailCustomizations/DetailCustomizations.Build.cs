@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 
@@ -12,6 +12,7 @@ public class DetailCustomizations : ModuleRules
 			new string[] {
 				"AppFramework",
 				"Core",
+				"AudioEditor",
 				"CoreUObject",
 				"ApplicationCore",
 				"DesktopWidgets",
@@ -50,7 +51,6 @@ public class DetailCustomizations : ModuleRules
 				"NavigationSystem",
 				"AIModule", 
 				"ConfigEditor",
-				"Persona",
 				"CinematicCamera",
 				"ComponentVisualizers",
 				"SkeletonEditor",

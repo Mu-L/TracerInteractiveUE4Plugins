@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -550,7 +550,7 @@ protected:
 	virtual void SetViewportSettings(const TMap<FViewportClient*, EMovieSceneViewportParams>& ViewportParamsMap) override {}
 	virtual void GetViewportSettings(TMap<FViewportClient*, EMovieSceneViewportParams>& ViewportParamsMap) const override {}
 	virtual bool CanUpdateCameraCut() const override { return !PlaybackSettings.bDisableCameraCuts; }
-	virtual void UpdateCameraCut(UObject* CameraObject, UObject* UnlockIfCameraObject, bool bJumpCut) override {}
+	virtual void UpdateCameraCut(UObject* CameraObject, const EMovieSceneCameraCutParams& CameraCutParams) override {}
 	virtual void ResolveBoundObjects(const FGuid& InBindingId, FMovieSceneSequenceID SequenceID, UMovieSceneSequence& Sequence, UObject* ResolutionContext, TArray<UObject*, TInlineAllocator<1>>& OutObjects) const override;
 	virtual IMovieScenePlaybackClient* GetPlaybackClient() override { return PlaybackClient ? &*PlaybackClient : nullptr; }
 
@@ -635,10 +635,10 @@ protected:
 
 	struct FLatentAction
 	{
-		enum class EType : uint8 { Stop, Pause, Update };
+		enum class EType : uint8 { Stop, Pause, Update, Play };
 
 		FLatentAction(EType InType, FFrameTime DesiredTime = 0)
-			: Type(InType)
+			: Type(InType), Position(DesiredTime)
 		{}
 
 		FLatentAction(EUpdatePositionMethod InUpdateMethod, FFrameTime DesiredTime)
@@ -687,9 +687,7 @@ private:
 
 	/**
 	* The last world game time at which we were ticked. Game time used is dependent on bTickEvenWhenPaused
-	* Valid only if we've been ticked at least once since having a tick interval; otherwise set to -1.f
+	* Valid only if we've been ticked at least once since having a tick interval
 	*/
-	float LastTickGameTimeSeconds;
-
-
+	TOptional<float> LastTickGameTimeSeconds;
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ParameterCollection.h"
 #include "UObject/UObjectHash.h"
@@ -20,7 +20,7 @@ FAutoConsoleVariableRef CVarDeferUpdateRenderStates(
 	ECVF_RenderThreadSafe
 );
 
-TMap<FGuid, FMaterialParameterCollectionInstanceResource*> GDefaultMaterialParameterCollectionInstances;
+TMultiMap<FGuid, FMaterialParameterCollectionInstanceResource*> GDefaultMaterialParameterCollectionInstances;
 
 UMaterialParameterCollection::UMaterialParameterCollection(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -63,11 +63,12 @@ void UMaterialParameterCollection::BeginDestroy()
 {
 	if (DefaultResource)
 	{
+		FMaterialParameterCollectionInstanceResource* Resource = DefaultResource;
 		FGuid Id = StateId;
 		ENQUEUE_RENDER_COMMAND(RemoveDefaultResourceCommand)(
-			[Id](FRHICommandListImmediate& RHICmdList)
+			[Resource, Id](FRHICommandListImmediate& RHICmdList)
 			{	
-				GDefaultMaterialParameterCollectionInstances.Remove(Id);			
+				GDefaultMaterialParameterCollectionInstances.RemoveSingle(Id, Resource);
 			}
 		);
 	}
@@ -159,7 +160,7 @@ void SanitizeParameters(TArray<ParameterType>& Parameters)
 int32 PreviousNumScalarParameters = 0;
 int32 PreviousNumVectorParameters = 0;
 
-void UMaterialParameterCollection::PreEditChange(UProperty* PropertyThatWillChange)
+void UMaterialParameterCollection::PreEditChange(FProperty* PropertyThatWillChange)
 {
 	Super::PreEditChange(PropertyThatWillChange);
 
@@ -217,9 +218,9 @@ void UMaterialParameterCollection::PostEditChangeProperty(FPropertyChangedEvent&
 				}
 				else
 				{
-					for (int32 FunctionIndex = 0; FunctionIndex < CurrentMaterial->MaterialParameterCollectionInfos.Num() && !bRecompile; FunctionIndex++)
+					for (int32 FunctionIndex = 0; FunctionIndex < CurrentMaterial->GetCachedExpressionData().ParameterCollectionInfos.Num() && !bRecompile; FunctionIndex++)
 					{
-						if (CurrentMaterial->MaterialParameterCollectionInfos[FunctionIndex].ParameterCollection == this)
+						if (CurrentMaterial->GetCachedExpressionData().ParameterCollectionInfos[FunctionIndex].ParameterCollection == this)
 						{
 							bRecompile = true;
 							break;
@@ -408,17 +409,17 @@ void UMaterialParameterCollection::CreateBufferStruct()
 	new(Members) FShaderParametersMetadata::FMember(TEXT("Vectors"),TEXT(""),NextMemberOffset,UBMT_FLOAT32,EShaderPrecisionModifier::Half,1,4,NumVectors, nullptr);
 	const uint32 VectorArraySize = NumVectors * sizeof(FVector4);
 	NextMemberOffset += VectorArraySize;
-	static FName LayoutName(TEXT("MaterialCollection"));
 	const uint32 StructSize = Align(NextMemberOffset, SHADER_PARAMETER_STRUCT_ALIGNMENT);
 
 	// If Collections ever get non-numeric resources (eg Textures), OutEnvironment.ResourceTableMap has a map by name
 	// and the N ParameterCollection Uniform Buffers ALL are named "MaterialCollection" with different hashes!
 	// (and the hlsl cbuffers are named MaterialCollection0, etc, so the names don't match the layout)
 	UniformBufferStruct = MakeUnique<FShaderParametersMetadata>(
-		FShaderParametersMetadata::EUseCase::DataDrivenShaderParameterStruct,
-		LayoutName,
+		FShaderParametersMetadata::EUseCase::DataDrivenUniformBuffer,
 		TEXT("MaterialCollection"),
 		TEXT("MaterialCollection"),
+		TEXT("MaterialCollection"),
+		nullptr,
 		StructSize,
 		Members
 		);
@@ -684,9 +685,8 @@ void FMaterialParameterCollectionInstanceResource::GameThread_Destroy()
 	);
 }
 
-static FName MaterialParameterCollectionInstanceResourceName(TEXT("MaterialParameterCollectionInstanceResource"));
 FMaterialParameterCollectionInstanceResource::FMaterialParameterCollectionInstanceResource() :
-	UniformBufferLayout(MaterialParameterCollectionInstanceResourceName)
+	UniformBufferLayout(TEXT("MaterialParameterCollectionInstanceResource"))
 {
 }
 

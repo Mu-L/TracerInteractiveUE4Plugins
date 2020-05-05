@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -18,15 +18,9 @@ public:
 	{
 	}
 
-	virtual bool Serialize(FArchive& Ar) override
-	{
-		bool bShaderHasOutdatedParameters = FGlobalShader::Serialize(Ar);
-		return bShaderHasOutdatedParameters;
-	}
-
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5) || (Parameters.Platform == SP_PCD3D_ES2);
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 };
 
@@ -50,15 +44,6 @@ public:
 		ResolveOrigin.Bind(Initializer.ParameterMap, TEXT("ResolveOrigin"));
 	}
 
-	virtual bool Serialize(FArchive& Ar) override
-	{
-		bool bShaderHasOutdatedParameters = FGlobalShader::Serialize(Ar);
-		Ar << Tex;
-		Ar << FMaskTex;
-		Ar << ResolveOrigin;
-		return bShaderHasOutdatedParameters;
-	}
-
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
 		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
@@ -66,7 +51,7 @@ public:
 
 	void SetParameters(FRHICommandList& RHICmdList, FRHITexture* Texture2DMS, FRHIShaderResourceView* FmaskSRV, FIntPoint Origin)
 	{
-		FRHIPixelShader* PixelShaderRHI = GetPixelShader();
+		FRHIPixelShader* PixelShaderRHI = RHICmdList.GetBoundPixelShader();
 		SetTextureParameter(RHICmdList, PixelShaderRHI, Tex, Texture2DMS);
 		if (MSAASampleCount > 0)
 		{
@@ -84,9 +69,9 @@ public:
 	}
 
 protected:
-	FShaderResourceParameter Tex;
-	FShaderResourceParameter FMaskTex;
-	FShaderParameter ResolveOrigin;
+	LAYOUT_FIELD(FShaderResourceParameter, Tex);
+	LAYOUT_FIELD(FShaderResourceParameter, FMaskTex);
+	LAYOUT_FIELD(FShaderParameter, ResolveOrigin);
 };
 
 extern void ResolveFilterWide(

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "FractureToolUniform.h"
 
@@ -35,12 +35,12 @@ UFractureToolUniform::UFractureToolUniform(const FObjectInitializer& ObjInit)
 
 FText UFractureToolUniform::GetDisplayText() const
 { 
-	return FText(NSLOCTEXT("Fracture", "FractureToolUniform", "Uniform Voronoi")); 
+	return FText(NSLOCTEXT("Fracture", "FractureToolUniform", "Uniform Voronoi Fracture")); 
 }
 
 FText UFractureToolUniform::GetTooltipText() const 
 { 
-	return FText(NSLOCTEXT("Fracture", "FractureToolUniformTooltip", "Uniform Voronoi Fracture")); 
+	return FText(NSLOCTEXT("Fracture", "FractureToolUniformTooltip", "Uniform Fracture will create pieces of approximately the same volume.  Specify minimum and maximum number of cites.  Using the same Random Seed will produce the same fracture.")); 
 }
 
 FSlateIcon UFractureToolUniform::GetToolIcon() const 

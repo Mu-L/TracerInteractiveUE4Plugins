@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -109,18 +109,22 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Determines whether the plugin should be enabled by default
 		/// </summary>
-		public bool EnabledByDefault
+		public bool IsEnabledByDefault(bool bAllowEnginePluginsEnabledByDefault)
 		{
-			get
+			if (Descriptor.bEnabledByDefault.HasValue)
 			{
-				if(Descriptor.bEnabledByDefault.HasValue)
+				if (Descriptor.bEnabledByDefault.Value)
 				{
-					return Descriptor.bEnabledByDefault.Value;
+					return (LoadedFrom == PluginLoadedFrom.Project ? true : bAllowEnginePluginsEnabledByDefault);
 				}
 				else
 				{
-					return (LoadedFrom == PluginLoadedFrom.Project);
+					return false;
 				}
+			}
+			else
+			{
+				return (LoadedFrom == PluginLoadedFrom.Project);
 			}
 		}
 
@@ -189,30 +193,29 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Read all the plugins available to a given project
 		/// </summary>
-		/// <param name="EngineDirectoryName">Path to the engine directory</param>
-		/// <param name="ProjectFileName">Path to the project file (or null)</param>
-        /// <param name="AdditionalDirectories">List of additional directories to scan for available plugins</param>
+		/// <param name="EngineDir">Path to the engine directory</param>
+		/// <param name="ProjectDir">Path to the project directory (or null)</param>
+		/// <param name="AdditionalDirectories">List of additional directories to scan for available plugins</param>
 		/// <returns>Sequence of PluginInfo objects, one for each discovered plugin</returns>
-		public static List<PluginInfo> ReadAvailablePlugins(DirectoryReference EngineDirectoryName, FileReference ProjectFileName, string[] AdditionalDirectories)
+		public static List<PluginInfo> ReadAvailablePlugins(DirectoryReference EngineDir, DirectoryReference ProjectDir, List<DirectoryReference> AdditionalDirectories)
 		{
 			List<PluginInfo> Plugins = new List<PluginInfo>();
 
 			// Read all the engine plugins
-			Plugins.AddRange(ReadEnginePlugins(EngineDirectoryName));
+			Plugins.AddRange(ReadEnginePlugins(EngineDir));
 
 			// Read all the project plugins
-			if (ProjectFileName != null)
+			if (ProjectDir != null)
 			{
-				Plugins.AddRange(ReadProjectPlugins(ProjectFileName.Directory));
+				Plugins.AddRange(ReadProjectPlugins(ProjectDir));
 			}
 
             // Scan for shared plugins in project specified additional directories
 			if(AdditionalDirectories != null)
 			{
-				foreach (string AdditionalDirectory in AdditionalDirectories)
+				foreach (DirectoryReference AdditionalDirectory in AdditionalDirectories)
 				{
-					DirectoryReference DirRef = DirectoryReference.Combine(ProjectFileName.Directory, AdditionalDirectory);
-					Plugins.AddRange(ReadPluginsFromDirectory(DirRef, "", PluginType.External));
+					Plugins.AddRange(ReadPluginsFromDirectory(AdditionalDirectory, "", PluginType.External));
 				}
 			}
 
@@ -291,11 +294,10 @@ namespace UnrealBuildTool
 		/// Read all of the plugins found in the project specified additional plugin directories
 		/// </summary>
 		/// <param name="AdditionalDirectory">The additional directory to scan</param>
-		/// <param name="Subdirectory">A subdirectory to look under for AdditionalDirectory </param>
 		/// <returns>List of the found PluginInfo objects</returns>
-		public static IReadOnlyList<PluginInfo> ReadAdditionalPlugins(DirectoryReference AdditionalDirectory, string Subdirectory)
+		public static IReadOnlyList<PluginInfo> ReadAdditionalPlugins(DirectoryReference AdditionalDirectory)
 		{
-			return ReadPluginsFromDirectory(AdditionalDirectory, Subdirectory, PluginType.External);
+			return ReadPluginsFromDirectory(AdditionalDirectory, "", PluginType.External);
 		}
 
 		/// <summary>
@@ -366,42 +368,107 @@ namespace UnrealBuildTool
 			// add our uplugin file to the existing plugin to be used to search for modules later
 			Parent.ChildFiles.Add(Child.File);
 
-			// merge the supported platforms
-			Parent.Descriptor.MergeSupportedTargetPlatforms(Child.Descriptor.SupportedTargetPlatforms);
+			// this should cause an error if it's invalid platform name
+			//UnrealTargetPlatform Platform = UnrealTargetPlatform.Parse(PlatformName);
 
-			// make sure we are whitelisted for any modules we list, if the parent had a whitelist
+			// merge the supported platforms
+			if (Child.Descriptor.SupportedTargetPlatforms != null)
+			{
+				if (Parent.Descriptor.SupportedTargetPlatforms == null)
+				{
+					Parent.Descriptor.SupportedTargetPlatforms = Child.Descriptor.SupportedTargetPlatforms;
+				}
+				else
+				{
+					Parent.Descriptor.SupportedTargetPlatforms = Parent.Descriptor.SupportedTargetPlatforms.Union(Child.Descriptor.SupportedTargetPlatforms).ToList();
+				}
+			}
+
+			// make sure we are whitelisted for any modules we list
 			if (Child.Descriptor.Modules != null)
 			{
-				// this should cause an error if it's invalid platform name
-				UnrealTargetPlatform Platform = UnrealTargetPlatform.Parse(PlatformName);
-
-				foreach (ModuleDescriptor ChildModule in Child.Descriptor.Modules)
+				if (Parent.Descriptor.Modules == null)
 				{
-					ModuleDescriptor ParentModule = Parent.Descriptor.Modules.FirstOrDefault(x => x.Name.Equals(ChildModule.Name) && x.Type == ChildModule.Type);
-					if (ParentModule != null)
+					Parent.Descriptor.Modules = Child.Descriptor.Modules;
+				}
+				else
+				{
+					foreach (ModuleDescriptor ChildModule in Child.Descriptor.Modules)
 					{
-						// merge white/blacklists (if the parent had a list, and child didn't specify a list, just add the child platform to the parent list - for white and black!)
-						if (ParentModule.WhitelistPlatforms != null && ParentModule.WhitelistPlatforms.Length > 0)
+						ModuleDescriptor ParentModule = Parent.Descriptor.Modules.FirstOrDefault(x => x.Name.Equals(ChildModule.Name) && x.Type == ChildModule.Type);
+						if (ParentModule != null)
 						{
-							List<UnrealTargetPlatform> Whitelist = ParentModule.WhitelistPlatforms.ToList();
-							if (ChildModule.WhitelistPlatforms != null && ChildModule.WhitelistPlatforms.Length > 0)
+							// merge white/blacklists (if the parent had a list, and child didn't specify a list, just add the child platform to the parent list - for white and black!)
+							if (ChildModule.WhitelistPlatforms != null)
 							{
-								Whitelist.AddRange(ChildModule.WhitelistPlatforms);
+								if (ParentModule.WhitelistPlatforms == null)
+								{
+									ParentModule.WhitelistPlatforms = ChildModule.WhitelistPlatforms;
+								}
+								else
+								{
+									ParentModule.WhitelistPlatforms = ParentModule.WhitelistPlatforms.Union(ChildModule.WhitelistPlatforms).ToList();
+								}
 							}
-							else
+							if (ChildModule.BlacklistPlatforms != null)
 							{
-								Whitelist.Add(Platform);
+								if (ParentModule.BlacklistPlatforms == null)
+								{
+									ParentModule.BlacklistPlatforms = ChildModule.BlacklistPlatforms;
+								}
+								else
+								{
+									ParentModule.BlacklistPlatforms = ParentModule.BlacklistPlatforms.Union(ChildModule.BlacklistPlatforms).ToList();
+								}
 							}
-							ParentModule.WhitelistPlatforms = Whitelist.ToArray();
 						}
-						if (ParentModule.BlacklistPlatforms != null && ParentModule.BlacklistPlatforms.Length > 0)
+						else
 						{
-							if (ChildModule.BlacklistPlatforms != null && ChildModule.BlacklistPlatforms.Length > 0)
+							Parent.Descriptor.Modules.Add(ChildModule);
+						}
+					}
+				}
+			}
+
+			// make sure we are whitelisted for any plugins we list
+			if (Child.Descriptor.Plugins != null)
+			{
+				if (Parent.Descriptor.Plugins == null)
+				{
+					Parent.Descriptor.Plugins = Child.Descriptor.Plugins;
+				}
+				else
+				{ 
+					foreach (PluginReferenceDescriptor ChildPluginReference in Child.Descriptor.Plugins)
+					{
+						PluginReferenceDescriptor ParentPluginReference = Parent.Descriptor.Plugins.FirstOrDefault(x => x.Name.Equals(ChildPluginReference.Name));
+						if (ParentPluginReference != null)
+						{
+							// we only need to whitelist the platform if the parent had a whitelist (otherwise, we could mistakenly remove all other platforms)
+							if (ParentPluginReference.WhitelistPlatforms != null)
 							{
-								List<UnrealTargetPlatform> Blacklist = ParentModule.BlacklistPlatforms.ToList();
-								Blacklist.AddRange(ChildModule.BlacklistPlatforms);
-								ParentModule.BlacklistPlatforms = Blacklist.ToArray();
+								if (ChildPluginReference.WhitelistPlatforms != null)
+								{
+									ParentPluginReference.WhitelistPlatforms = ParentPluginReference.WhitelistPlatforms.Union(ChildPluginReference.WhitelistPlatforms).ToList();
+								}
 							}
+
+							// if we want to blacklist a platform, add it even if the parent didn't have a blacklist. this won't cause problems with other platforms
+							if (ChildPluginReference.BlacklistPlatforms != null)
+							{
+								if (ParentPluginReference.BlacklistPlatforms == null)
+								{
+									ParentPluginReference.BlacklistPlatforms = ChildPluginReference.BlacklistPlatforms;
+								}
+								else
+								{
+									ParentPluginReference.BlacklistPlatforms = ParentPluginReference.BlacklistPlatforms.Union(ChildPluginReference.BlacklistPlatforms).ToList();
+								}
+							}
+						}
+						else
+						{
+							Parent.Descriptor.Plugins.Add(ChildPluginReference);
 						}
 					}
 				}
@@ -550,7 +617,8 @@ namespace UnrealBuildTool
 				return false;
 			}
 
-			bool bEnabled = Plugin.EnabledByDefault;
+			bool bAllowEnginePluginsEnabledByDefault = (Project == null ? true : !Project.DisableEnginePluginsByDefault);
+			bool bEnabled = Plugin.IsEnabledByDefault(bAllowEnginePluginsEnabledByDefault);
 			if (Project != null && Project.Plugins != null)
 			{
 				foreach (PluginReferenceDescriptor PluginReference in Project.Plugins)

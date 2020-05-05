@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Widgets/STakeRecorderCockpit.h"
 #include "Widgets/TakeRecorderWidgetConstants.h"
@@ -17,6 +17,9 @@
 #include "Recorder/TakeRecorderBlueprintLibrary.h"
 #include "LevelSequence.h"
 #include "Algo/Find.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+
+#include "MovieSceneToolsProjectSettings.h"
 
 // AssetRegistry includes
 #include "AssetRegistryModule.h"
@@ -91,6 +94,29 @@ struct SNonThrottledButton : SButton
 	}
 };
 
+struct FDigitsTypeInterface : INumericTypeInterface<int32>
+{
+	virtual FString ToString(const int32& Value) const override
+	{
+		const UMovieSceneToolsProjectSettings* ProjectSettings = GetDefault<UMovieSceneToolsProjectSettings>();
+
+		return FString::Printf(TEXT("%0*d"), ProjectSettings->TakeNumDigits, Value);
+	}
+
+	virtual TOptional<int32> FromString(const FString& InString, const int32& ExistingValue) override
+	{
+		return (int32)FCString::Atoi(*InString);
+	}
+
+	virtual int32 GetMinFractionalDigits() const override { return 0; }
+	virtual int32 GetMaxFractionalDigits() const override { return 0; }
+
+	virtual void SetMinFractionalDigits(const TAttribute<TOptional<int32>>& NewValue) override {}
+	virtual void SetMaxFractionalDigits(const TAttribute<TOptional<int32>>& NewValue) override {}
+
+	virtual bool IsCharacterValid(TCHAR InChar) const override { return true; }
+};
+	
 void STakeRecorderCockpit::Construct(const FArguments& InArgs)
 {
 	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
@@ -120,6 +146,8 @@ void STakeRecorderCockpit::Construct(const FArguments& InArgs)
 	UpdateRecordError();
 
 	CommandList = MakeShareable(new FUICommandList);
+	
+	DigitsTypeInterface = MakeShareable(new FDigitsTypeInterface);
 
 	BindCommands();
 
@@ -234,6 +262,7 @@ void STakeRecorderCockpit::Construct(const FArguments& InArgs)
 						.OnValueChanged(this, &STakeRecorderCockpit::SetTakeNumber)
 						.OnValueCommitted(this, &STakeRecorderCockpit::SetTakeNumber_FromCommit)
 						.OnEndSliderMovement(this, &STakeRecorderCockpit::OnEndSetTakeNumber)
+						.TypeInterface(DigitsTypeInterface)
 					]
 				]
 
@@ -380,11 +409,11 @@ void STakeRecorderCockpit::Construct(const FArguments& InArgs)
 					+ SHorizontalBox::Slot()
 					.AutoWidth()
 					[
-						SNew(SButton)
+						SNew(SComboButton)
 						.ButtonStyle(FEditorStyle::Get(), "NoBorder")
-						.OnClicked(this, &STakeRecorderCockpit::SetFrameRate)
+						.OnGetMenuContent(this, &STakeRecorderCockpit::OnCreateMenu)
 						.ForegroundColor(FSlateColor::UseForeground())
-						.Content()
+						.ButtonContent()
 						[
 							SNew(STextBlock)
 							.ColorAndOpacity(FSlateColor::UseSubduedForeground())
@@ -493,7 +522,7 @@ void STakeRecorderCockpit::UpdateRecordError()
 
 	if (PackageName.Len() > MaxLength)
 	{
-		RecordErrorText = FText::Format(LOCTEXT("ErrorWidget_TooLong", "The path to the asset is too long '{0}', the maximum is '{1}'\nPlease choose a shorter name for the slate or create it in a shallower folder structure with shorter folder names."), FText::AsNumber(PackageName.Len()), FText::AsNumber(MaxLength));
+		RecordErrorText = FText::Format(LOCTEXT("ErrorWidget_TooLong", "The path to the asset is too long ({0} characters), the maximum is {1}.\nPlease choose a shorter name for the slate or create it in a shallower folder structure with shorter folder names."), FText::AsNumber(PackageName.Len()), FText::AsNumber(MaxLength));
 		return;
 	}
 }
@@ -592,6 +621,14 @@ void STakeRecorderCockpit::CacheMetaData()
 		// Forcibly update any UI?
 	}
 
+	//Set MovieScene Display Rate to the Preset Frame Rate.
+	ULevelSequence* Sequence = LevelSequenceAttribute.Get();
+	UMovieScene*    MovieScene = Sequence ? Sequence->GetMovieScene() : nullptr;
+	if (MovieScene)
+	{
+		MovieScene->SetDisplayRate(TakeMetaData->GetFrameRate());
+	}
+
 	check(TakeMetaData);
 }
 
@@ -643,27 +680,29 @@ FText STakeRecorderCockpit::GetTimestampTooltipText() const
 	}
 }
 
-FReply STakeRecorderCockpit::SetFrameRate()
+void STakeRecorderCockpit::SetFrameRate(FFrameRate InFrameRate, bool bFromTimecode)
 {
-	if (ISettingsModule* SettingsModule = FModuleManager::GetModulePtr<ISettingsModule>("Settings"))
+	if (TakeMetaData)
 	{
-		SettingsModule->ShowViewer("Project", "Engine", "General");
-		return FReply::Handled();
+		TakeMetaData->SetFrameRateFromTimecode(bFromTimecode);
+		TakeMetaData->SetFrameRate(InFrameRate);
 	}
-	return FReply::Unhandled();
+	ULevelSequence* Sequence = LevelSequenceAttribute.Get();
+	UMovieScene*    MovieScene = Sequence ? Sequence->GetMovieScene() : nullptr;
+	if (MovieScene)
+	{
+		MovieScene->SetDisplayRate(InFrameRate);
+	}
+}
+
+bool STakeRecorderCockpit::IsSameFrameRate(FFrameRate InFrameRate) const
+{
+	return (InFrameRate == GetFrameRate());
 }
 
 FFrameRate STakeRecorderCockpit::GetFrameRate() const
 {
-	// If not recorded, return app timecode frame rate
-	if (TakeMetaData->GetTimestamp() == FDateTime(0))
-	{
-		return FApp::GetTimecodeFrameRate();
-	}
-	else
-	{
-		return TakeMetaData->GetFrameRate();
-	}
+	return TakeMetaData->GetFrameRate();
 }
 
 FText STakeRecorderCockpit::GetFrameRateText() const
@@ -673,15 +712,7 @@ FText STakeRecorderCockpit::GetFrameRateText() const
 
 FText STakeRecorderCockpit::GetFrameRateTooltipText() const
 {
-	// If not recorded, return app timecode frame rate
-	if (TakeMetaData->GetTimestamp() == FDateTime(0))
-	{
-		return LOCTEXT("ProjectFrameRate", "The project timecode frame rate. The resulting recorded sequence will be at this frame rate.");
-	}
-	else
-	{
-		return LOCTEXT("FrameRate", "The frame rate this recording was created at");
-	}
+	return LOCTEXT("ProjectFrameRate", "The project timecode frame rate. The resulting recorded sequence will be at this frame rate.");
 }
 
 bool STakeRecorderCockpit::IsFrameRateCompatible(FFrameRate InFrameRate) const
@@ -690,6 +721,11 @@ bool STakeRecorderCockpit::IsFrameRateCompatible(FFrameRate InFrameRate) const
 	UMovieScene*    MovieScene = Sequence ? Sequence->GetMovieScene() : nullptr;
 
 	return MovieScene && InFrameRate.IsMultipleOf(MovieScene->GetTickResolution());
+}
+
+bool STakeRecorderCockpit::IsSetFromTimecode() const
+{
+	return TakeMetaData->GetFrameRateFromTimecode();
 }
 
 void STakeRecorderCockpit::SetSlateText(const FText& InNewText, ETextCommit::Type InCommitType)
@@ -1006,6 +1042,76 @@ TSharedRef<SWidget> STakeRecorderCockpit::MakeLockButton()
 		.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.14"))
 		.Text_Lambda([this]() { return TakeMetaData->IsLocked() ? FEditorFontGlyphs::Lock : FEditorFontGlyphs::Unlock; } )
 	];
+}
+
+TSharedRef<SWidget> STakeRecorderCockpit::OnCreateMenu()
+{
+	ULevelSequence* Sequence = LevelSequenceAttribute.Get();
+	if (!Sequence || !Sequence->GetMovieScene())
+	{
+		return SNullWidget::NullWidget;
+	}
+	UMovieScene* MovieScene = Sequence->GetMovieScene();
+
+	
+	FMenuBuilder MenuBuilder(true, nullptr);
+
+	FFrameRate TickResolution = MovieScene->GetTickResolution();
+
+	TArray<FCommonFrameRateInfo> CompatibleRates;
+	for (const FCommonFrameRateInfo& Info : FCommonFrameRates::GetAll())
+	{
+		if (Info.FrameRate.IsMultipleOf(TickResolution))
+		{
+			CompatibleRates.Add(Info);
+		}
+	}
+
+	CompatibleRates.Sort(
+		[=](const FCommonFrameRateInfo& A, const FCommonFrameRateInfo& B)
+	{
+		return A.FrameRate.AsDecimal() < B.FrameRate.AsDecimal();
+	}
+	);
+
+	MenuBuilder.BeginSection(NAME_None, LOCTEXT("RecommendedRates", "Sequence Display Rate"));
+	{
+		for (const FCommonFrameRateInfo& Info : CompatibleRates)
+		{
+			MenuBuilder.AddMenuEntry(
+				Info.DisplayName,
+				Info.Description,
+				FSlateIcon(),
+				FUIAction(
+					FExecuteAction::CreateSP(this, &STakeRecorderCockpit::SetFrameRate, Info.FrameRate,false),
+					FCanExecuteAction(),
+					FIsActionChecked::CreateSP(this, &STakeRecorderCockpit::IsSameFrameRate, Info.FrameRate)
+				),
+				NAME_None,
+				EUserInterfaceActionType::RadioButton
+			);
+
+		}
+	}
+	MenuBuilder.EndSection();
+	
+	MenuBuilder.AddMenuSeparator();
+	FFrameRate TimecodeFrameRate = FApp::GetTimecodeFrameRate();
+	FText DisplayName = FText::Format(LOCTEXT("TimecodeFrameRate", "Timecode ({0})"), TimecodeFrameRate.ToPrettyText());
+
+	MenuBuilder.AddMenuEntry(
+		DisplayName,
+		DisplayName,
+		FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateSP(this, &STakeRecorderCockpit::SetFrameRate, TimecodeFrameRate,true),
+			FCanExecuteAction(),
+			FIsActionChecked::CreateSP(this, &STakeRecorderCockpit::IsSetFromTimecode)
+		),
+		NAME_None,
+		EUserInterfaceActionType::RadioButton
+	);
+	return MenuBuilder.MakeWidget();
 }
 
 #undef LOCTEXT_NAMESPACE

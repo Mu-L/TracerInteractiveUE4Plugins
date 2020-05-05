@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,13 +7,13 @@
 
 #include "LevelVariantSets.generated.h"
 
-class UVariantSet;
-class ULevelVariantSetsFunctionDirector;
 class ALevelVariantSetsActor;
-class UBlueprintGeneratedClass;
 class UBlueprint;
+class UBlueprintGeneratedClass;
+class ULevelVariantSetsFunctionDirector;
+class UVariantSet;
 
-UCLASS(DefaultToInstanced)
+UCLASS(BlueprintType)
 class VARIANTMANAGERCONTENT_API ULevelVariantSets : public UObject
 {
 	GENERATED_UCLASS_BODY()

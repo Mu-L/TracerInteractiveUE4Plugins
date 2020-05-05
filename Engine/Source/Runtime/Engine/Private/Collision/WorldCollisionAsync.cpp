@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	WorldCollisionAsync.cpp: UWorld async collision implementation
@@ -14,6 +14,9 @@
 #include "Engine/World.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "Physics/PhysicsInterfaceCore.h"
+#include "ProfilingDebugging/CsvProfiler.h"
+
+CSV_DEFINE_CATEGORY(WorldCollision, true);
 
 /**
  * Async trace functions
@@ -318,6 +321,9 @@ namespace
 	template <typename DatumType>
 	FTraceHandle StartNewTrace(FWorldAsyncTraceState& State, const DatumType& Val)
 	{
+		// Using async traces outside of the game thread can cause memory corruption
+		check(IsInGameThread());
+
 		// Get the buffer for the current frame
 		AsyncTraceData& DataBuffer = State.GetBufferForCurrentFrame();
 
@@ -455,6 +461,7 @@ void UWorld::WaitForAllAsyncTraceTasks()
 		if (DataBufferExecuted.AsyncTraceCompletionEvent.Num() > 0)
 		{
 			QUICK_SCOPE_CYCLE_COUNTER(STAT_WaitForAllAsyncTraceTasks);
+			CSV_SCOPED_TIMING_STAT(WorldCollision, StatWaitForAllAsyncTraceTasks);
 			FTaskGraphInterface::Get().WaitUntilTasksComplete(DataBufferExecuted.AsyncTraceCompletionEvent, ENamedThreads::GameThread);
 			DataBufferExecuted.AsyncTraceCompletionEvent.Reset();
 		}

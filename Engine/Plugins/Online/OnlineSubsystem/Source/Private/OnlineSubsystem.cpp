@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OnlineSubsystem.h"
 #include "Misc/CommandLine.h"
@@ -61,6 +61,27 @@ ONLINESUBSYSTEM_API DEFINE_STAT(STAT_Session_Interface);
 ONLINESUBSYSTEM_API DEFINE_STAT(STAT_Voice_Interface);
 #endif
 
+/** The default key that will update presence text in the platform's UI */
+const FString DefaultPresenceKey = TEXT("RichPresence");
+
+/** Custom presence data that is not seen by users but can be polled */
+const FString CustomPresenceDataKey = TEXT("CustomData");
+
+/** Name of the client that sent the presence update */
+const FString DefaultAppIdKey = TEXT("AppId");
+
+/** Platform of the client that sent the presence update */
+const FString DefaultPlatformKey = TEXT("Platform");
+
+/** Override Id of the client to set the presence state to */
+const FString OverrideAppIdKey = TEXT("OverrideAppId");
+
+/** Id of the session for the presence update. @todo samz - SessionId on presence data should be FUniqueNetId not uint64 */
+const FString DefaultSessionIdKey = TEXT("SessionId");
+
+/** Resource the client is logged in with */
+const FString PresenceResourceKey = TEXT("ResourceKey");
+
 namespace OnlineIdentity
 {
 	namespace Errors
@@ -80,20 +101,28 @@ namespace OnlineIdentity
 /** Workaround, please avoid using this */
 TSharedPtr<const FUniqueNetId> GetFirstSignedInUser(IOnlineIdentityPtr IdentityInt)
 {
-	TSharedPtr<const FUniqueNetId> UserId = nullptr;
 	if (IdentityInt.IsValid())
 	{
+		// find an entry for a fully logged in user
 		for (int32 i = 0; i < MAX_LOCAL_PLAYERS; i++)
 		{
-			UserId = IdentityInt->GetUniquePlayerId(i);
+			TSharedPtr<const FUniqueNetId> UserId = IdentityInt->GetUniquePlayerId(i);
+			if (UserId.IsValid() && UserId->IsValid() && IdentityInt->GetLoginStatus(*UserId) == ELoginStatus::LoggedIn)
+			{
+				return UserId;
+			}
+		}
+		// find an entry for a locally logged in user
+		for (int32 i = 0; i < MAX_LOCAL_PLAYERS; i++)
+		{
+			TSharedPtr<const FUniqueNetId> UserId = IdentityInt->GetUniquePlayerId(i);
 			if (UserId.IsValid() && UserId->IsValid())
 			{
-				break;
+				return UserId;
 			}
 		}
 	}
-
-	return UserId;
+	return nullptr;
 }
 
 int32 GetBuildUniqueId()

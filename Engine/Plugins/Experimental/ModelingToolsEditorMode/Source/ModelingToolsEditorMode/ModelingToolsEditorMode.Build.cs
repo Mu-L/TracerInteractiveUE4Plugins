@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 
@@ -47,12 +47,16 @@ public class ModelingToolsEditorMode : ModuleRules
                 "LevelEditor",
 				"EditorStyle",
                 "Projects",
+				"MeshDescription",
+				"StaticMeshDescription",
                 "InteractiveToolsFramework",
 				"EditorInteractiveToolsFramework",
 				"MeshModelingTools",
 				"MeshModelingToolsEditorOnly",
 
-                "ViewportInteraction"
+                "ViewportInteraction",
+
+				"StylusInput"
 
 				// ... add private dependencies that you statically link with here ...	
 			}
@@ -62,8 +66,9 @@ public class ModelingToolsEditorMode : ModuleRules
 		DynamicallyLoadedModuleNames.AddRange(
 			new string[]
 			{
-				// ... add any modules that your module loads dynamically here ...
+				"Settings"
 			}
 			);
+
 	}
 }

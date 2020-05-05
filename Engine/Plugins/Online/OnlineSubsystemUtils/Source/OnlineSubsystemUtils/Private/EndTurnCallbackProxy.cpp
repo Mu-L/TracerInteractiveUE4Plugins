@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "EndTurnCallbackProxy.h"
 #include "Serialization/BitWriter.h"
@@ -34,7 +34,7 @@ UEndTurnCallbackProxy* UEndTurnCallbackProxy::EndTurn(UObject* WorldContextObjec
 
 void UEndTurnCallbackProxy::Activate()
 {
-	FOnlineSubsystemBPCallHelper Helper(TEXT("ConnectToService"), WorldContextObject);
+	FOnlineSubsystemBPCallHelper Helper(TEXT("EndTurn"), WorldContextObject);
 	Helper.QueryIDFromPlayerController(PlayerControllerWeakPtr.Get());
 
 	if (Helper.IsValid())

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Kismet/KismetSystemLibrary.h"
 #include "HAL/IConsoleManager.h"
@@ -36,13 +36,32 @@
 #include "KismetTraceUtils.h"
 #include "Engine/AssetManager.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "UObject/FieldPathProperty.h"
 
 //////////////////////////////////////////////////////////////////////////
 // UKismetSystemLibrary
 
+#define LOCTEXT_NAMESPACE "UKismetSystemLibrary"
+
+const FName PropertyGetFailedWarning = FName("PropertyGetFailedWarning");
+const FName PropertySetFailedWarning = FName("PropertySetFailedWarning");
+
 UKismetSystemLibrary::UKismetSystemLibrary(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	FBlueprintSupport::RegisterBlueprintWarning(
+		FBlueprintWarningDeclaration(
+			PropertyGetFailedWarning,
+			LOCTEXT("PropertyGetFailedWarning", "Property Get Failed")
+		)
+	);
+
+	FBlueprintSupport::RegisterBlueprintWarning(
+		FBlueprintWarningDeclaration(
+			PropertySetFailedWarning,
+			LOCTEXT("PropertySetFailedWarning", "Property Set Failed")
+		)
+	);
 }
 
 void UKismetSystemLibrary::StackTraceImpl(const FFrame& StackFrame)
@@ -140,6 +159,11 @@ FString UKismetSystemLibrary::GetPlatformUserName()
 	return FString(FPlatformProcess::UserName());
 }
 
+FString UKismetSystemLibrary::GetPlatformUserDir()
+{
+	return FString(FPlatformProcess::UserDir());
+}
+
 bool UKismetSystemLibrary::DoesImplementInterface(UObject* TestObject, TSubclassOf<UInterface> Interface)
 {
 	if (Interface != NULL && TestObject != NULL)
@@ -182,6 +206,12 @@ bool UKismetSystemLibrary::IsStandalone(UObject* WorldContextObject)
 {
 	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
 	return World ? (World->GetNetMode() == NM_Standalone) : false;
+}
+
+bool UKismetSystemLibrary::IsSplitScreen(UObject* WorldContextObject)
+{
+	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+	return World ? GEngine->IsSplitScreen(World) : false;
 }
 
 bool UKismetSystemLibrary::IsPackagedForDistribution()
@@ -322,10 +352,10 @@ float UKismetSystemLibrary::GetConsoleVariableFloatValue(const FString& Variable
 {
 	float Value = 0.0f;
 
-	TConsoleVariableData<float>* Variable = IConsoleManager::Get().FindTConsoleVariableDataFloat(*VariableName);
+	IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(*VariableName);
 	if (Variable)
 	{
-		Value = Variable->GetValueOnGameThread();
+		Value = Variable->GetFloat();
 	}
 	else
 	{
@@ -339,10 +369,10 @@ int32 UKismetSystemLibrary::GetConsoleVariableIntValue(const FString& VariableNa
 {
 	int32 Value = 0;
 
-	TConsoleVariableData<int32>* Variable = IConsoleManager::Get().FindTConsoleVariableDataInt(*VariableName);
+	IConsoleVariable* Variable = IConsoleManager::Get().FindConsoleVariable(*VariableName);
 	if (Variable)
 	{
-		Value = Variable->GetValueOnGameThread();
+		Value = Variable->GetInt();
 	}
 	else
 	{
@@ -419,7 +449,7 @@ FTimerHandle UKismetSystemLibrary::K2_SetTimer(UObject* Object, FString Function
 	InitialStartDelay += FMath::RandRange(-InitialStartDelayVariance, InitialStartDelayVariance);
 	if (Time <= 0.f || ((Time + InitialStartDelay) - InitialStartDelayVariance) < 0.f)
 	{
-		FFrame::KismetExecutionMessage(TEXT("SetTimer passed a negative time.  The associated timer may fail to fire!  If using InitialStartDelayVariance, be sure it is smaller than (Time + InitialStartDelay)."), ELogVerbosity::Warning);
+		FFrame::KismetExecutionMessage(TEXT("SetTimer passed a negative or zero time.  The associated timer may fail to fire!  If using InitialStartDelayVariance, be sure it is smaller than (Time + InitialStartDelay)."), ELogVerbosity::Warning);
 	}
 
 	FTimerDynamicDelegate Delegate;
@@ -438,7 +468,7 @@ FTimerHandle UKismetSystemLibrary::K2_SetTimerDelegate(FTimerDynamicDelegate Del
 			InitialStartDelay += FMath::RandRange(-InitialStartDelayVariance, InitialStartDelayVariance);
 			if (Time <= 0.f || ((Time + InitialStartDelay) - InitialStartDelayVariance) < 0.f)
 			{
-				FFrame::KismetExecutionMessage(TEXT("SetTimer passed a negative time or initial start delay.  The associated timer may fail to fire!  If using InitialStartDelayVariance, be sure it is smaller than (Time + InitialStartDelay)."), ELogVerbosity::Warning);
+				FFrame::KismetExecutionMessage(TEXT("SetTimer passed a negative or zero time.  The associated timer may fail to fire!  If using InitialStartDelayVariance, be sure it is smaller than (Time + InitialStartDelay)."), ELogVerbosity::Warning);
 			}
 
 			FTimerManager& TimerManager = World->GetTimerManager();
@@ -818,7 +848,7 @@ void UKismetSystemLibrary::SetIntPropertyByName(UObject* Object, FName PropertyN
 {
 	if(Object != NULL)
 	{
-		UIntProperty* IntProp = FindField<UIntProperty>(Object->GetClass(), PropertyName);
+		FIntProperty* IntProp = FindFProperty<FIntProperty>(Object->GetClass(), PropertyName);
 		if(IntProp != NULL)
 		{
 			IntProp->SetPropertyValue_InContainer(Object, Value);
@@ -830,7 +860,7 @@ void UKismetSystemLibrary::SetInt64PropertyByName(UObject* Object, FName Propert
 {
 	if (Object != NULL)
 	{
-		UInt64Property* IntProp = FindField<UInt64Property>(Object->GetClass(), PropertyName);
+		FInt64Property* IntProp = FindFProperty<FInt64Property>(Object->GetClass(), PropertyName);
 		if (IntProp != NULL)
 		{
 			IntProp->SetPropertyValue_InContainer(Object, Value);
@@ -842,14 +872,14 @@ void UKismetSystemLibrary::SetBytePropertyByName(UObject* Object, FName Property
 {
 	if(Object != NULL)
 	{
-		if(UByteProperty* ByteProp = FindField<UByteProperty>(Object->GetClass(), PropertyName))
+		if(FByteProperty* ByteProp = FindFProperty<FByteProperty>(Object->GetClass(), PropertyName))
 		{
 			ByteProp->SetPropertyValue_InContainer(Object, Value);
 		}
-		else if(UEnumProperty* EnumProp = FindField<UEnumProperty>(Object->GetClass(), PropertyName))
+		else if(FEnumProperty* EnumProp = FindFProperty<FEnumProperty>(Object->GetClass(), PropertyName))
 		{
 			void* PropAddr = EnumProp->ContainerPtrToValuePtr<void>(Object);
-			UNumericProperty* UnderlyingProp = EnumProp->GetUnderlyingProperty();
+			FNumericProperty* UnderlyingProp = EnumProp->GetUnderlyingProperty();
 			UnderlyingProp->SetIntPropertyValue(PropAddr, (int64)Value);
 		}
 	}
@@ -859,7 +889,7 @@ void UKismetSystemLibrary::SetFloatPropertyByName(UObject* Object, FName Propert
 {
 	if(Object != NULL)
 	{
-		UFloatProperty* FloatProp = FindField<UFloatProperty>(Object->GetClass(), PropertyName);
+		FFloatProperty* FloatProp = FindFProperty<FFloatProperty>(Object->GetClass(), PropertyName);
 		if(FloatProp != NULL)
 		{
 			FloatProp->SetPropertyValue_InContainer(Object, Value);
@@ -871,7 +901,7 @@ void UKismetSystemLibrary::SetBoolPropertyByName(UObject* Object, FName Property
 {
 	if(Object != NULL)
 	{
-		UBoolProperty* BoolProp = FindField<UBoolProperty>(Object->GetClass(), PropertyName);
+		FBoolProperty* BoolProp = FindFProperty<FBoolProperty>(Object->GetClass(), PropertyName);
 		if(BoolProp != NULL)
 		{
 			BoolProp->SetPropertyValue_InContainer(Object, Value );
@@ -883,7 +913,7 @@ void UKismetSystemLibrary::SetObjectPropertyByName(UObject* Object, FName Proper
 {
 	if(Object != NULL && Value != NULL)
 	{
-		UObjectPropertyBase* ObjectProp = FindField<UObjectPropertyBase>(Object->GetClass(), PropertyName);
+		FObjectPropertyBase* ObjectProp = FindFProperty<FObjectPropertyBase>(Object->GetClass(), PropertyName);
 		if(ObjectProp != NULL && Value->IsA(ObjectProp->PropertyClass)) // check it's the right type
 		{
 			ObjectProp->SetObjectPropertyValue_InContainer(Object, Value);
@@ -895,7 +925,7 @@ void UKismetSystemLibrary::SetClassPropertyByName(UObject* Object, FName Propert
 {
 	if (Object && *Value)
 	{
-		UClassProperty* ClassProp = FindField<UClassProperty>(Object->GetClass(), PropertyName);
+		FClassProperty* ClassProp = FindFProperty<FClassProperty>(Object->GetClass(), PropertyName);
 		if (ClassProp != NULL && Value->IsChildOf(ClassProp->MetaClass)) // check it's the right type
 		{
 			ClassProp->SetObjectPropertyValue_InContainer(Object, *Value);
@@ -907,7 +937,7 @@ void UKismetSystemLibrary::SetInterfacePropertyByName(UObject* Object, FName Pro
 {
 	if (Object)
 	{
-		UInterfaceProperty* InterfaceProp = FindField<UInterfaceProperty>(Object->GetClass(), PropertyName);
+		FInterfaceProperty* InterfaceProp = FindFProperty<FInterfaceProperty>(Object->GetClass(), PropertyName);
 		if (InterfaceProp != NULL && Value.GetObject()->GetClass()->ImplementsInterface(InterfaceProp->InterfaceClass)) // check it's the right type
 		{
 			InterfaceProp->SetPropertyValue_InContainer(Object, Value);
@@ -919,7 +949,7 @@ void UKismetSystemLibrary::SetStringPropertyByName(UObject* Object, FName Proper
 {
 	if(Object != NULL)
 	{
-		UStrProperty* StringProp = FindField<UStrProperty>(Object->GetClass(), PropertyName);
+		FStrProperty* StringProp = FindFProperty<FStrProperty>(Object->GetClass(), PropertyName);
 		if(StringProp != NULL)
 		{
 			StringProp->SetPropertyValue_InContainer(Object, Value);
@@ -931,7 +961,7 @@ void UKismetSystemLibrary::SetNamePropertyByName(UObject* Object, FName Property
 {
 	if(Object != NULL)
 	{
-		UNameProperty* NameProp = FindField<UNameProperty>(Object->GetClass(), PropertyName);
+		FNameProperty* NameProp = FindFProperty<FNameProperty>(Object->GetClass(), PropertyName);
 		if(NameProp != NULL)
 		{
 			NameProp->SetPropertyValue_InContainer(Object, Value);
@@ -943,9 +973,19 @@ void UKismetSystemLibrary::SetSoftObjectPropertyByName(UObject* Object, FName Pr
 {
 	if (Object != NULL)
 	{
-		USoftObjectProperty* ObjectProp = FindField<USoftObjectProperty>(Object->GetClass(), PropertyName);
+		FSoftObjectProperty* ObjectProp = FindFProperty<FSoftObjectProperty>(Object->GetClass(), PropertyName);
 		const FSoftObjectPtr* SoftObjectPtr = (const FSoftObjectPtr*)(&Value);
 		ObjectProp->SetPropertyValue_InContainer(Object, *SoftObjectPtr);
+	}
+}
+
+void UKismetSystemLibrary::SetFieldPathPropertyByName(UObject* Object, FName PropertyName, const TFieldPath<FField>& Value)
+{
+	if (Object != NULL)
+	{
+		FFieldPathProperty* FieldProp = FindFProperty<FFieldPathProperty>(Object->GetClass(), PropertyName);
+		const FFieldPath* FieldPathPtr = (const FFieldPath*)(&Value);
+		FieldProp->SetPropertyValue_InContainer(Object, *FieldPathPtr);
 	}
 }
 
@@ -953,7 +993,7 @@ void UKismetSystemLibrary::SetSoftClassPropertyByName(UObject* Object, FName Pro
 {
 	if (Object != NULL)
 	{
-		USoftClassProperty* ObjectProp = FindField<USoftClassProperty>(Object->GetClass(), PropertyName);
+		FSoftClassProperty* ObjectProp = FindFProperty<FSoftClassProperty>(Object->GetClass(), PropertyName);
 		const FSoftObjectPtr* SoftObjectPtr = (const FSoftObjectPtr*)(&Value);
 		ObjectProp->SetPropertyValue_InContainer(Object, *SoftObjectPtr);
 	}
@@ -1079,7 +1119,7 @@ void UKismetSystemLibrary::SetTextPropertyByName(UObject* Object, FName Property
 {
 	if(Object != NULL)
 	{
-		UTextProperty* TextProp = FindField<UTextProperty>(Object->GetClass(), PropertyName);
+		FTextProperty* TextProp = FindFProperty<FTextProperty>(Object->GetClass(), PropertyName);
 		if(TextProp != NULL)
 		{
 			TextProp->SetPropertyValue_InContainer(Object, Value);
@@ -1092,7 +1132,7 @@ void UKismetSystemLibrary::SetVectorPropertyByName(UObject* Object, FName Proper
 	if(Object != NULL)
 	{
 		UScriptStruct* VectorStruct = TBaseStructure<FVector>::Get();
-		UStructProperty* VectorProp = FindField<UStructProperty>(Object->GetClass(), PropertyName);
+		FStructProperty* VectorProp = FindFProperty<FStructProperty>(Object->GetClass(), PropertyName);
 		if(VectorProp != NULL && VectorProp->Struct == VectorStruct)
 		{
 			*VectorProp->ContainerPtrToValuePtr<FVector>(Object) = Value;
@@ -1105,7 +1145,7 @@ void UKismetSystemLibrary::SetRotatorPropertyByName(UObject* Object, FName Prope
 	if(Object != NULL)
 	{
 		UScriptStruct* RotatorStruct = TBaseStructure<FRotator>::Get();
-		UStructProperty* RotatorProp = FindField<UStructProperty>(Object->GetClass(), PropertyName);
+		FStructProperty* RotatorProp = FindFProperty<FStructProperty>(Object->GetClass(), PropertyName);
 		if(RotatorProp != NULL && RotatorProp->Struct == RotatorStruct)
 		{
 			*RotatorProp->ContainerPtrToValuePtr<FRotator>(Object) = Value;
@@ -1118,7 +1158,7 @@ void UKismetSystemLibrary::SetLinearColorPropertyByName(UObject* Object, FName P
 	if(Object != NULL)
 	{
 		UScriptStruct* ColorStruct = TBaseStructure<FLinearColor>::Get();
-		UStructProperty* ColorProp = FindField<UStructProperty>(Object->GetClass(), PropertyName);
+		FStructProperty* ColorProp = FindFProperty<FStructProperty>(Object->GetClass(), PropertyName);
 		if(ColorProp != NULL && ColorProp->Struct == ColorStruct)
 		{
 			*ColorProp->ContainerPtrToValuePtr<FLinearColor>(Object) = Value;
@@ -1131,7 +1171,7 @@ void UKismetSystemLibrary::SetTransformPropertyByName(UObject* Object, FName Pro
 	if(Object != NULL)
 	{
 		UScriptStruct* TransformStruct = TBaseStructure<FTransform>::Get();
-		UStructProperty* TransformProp = FindField<UStructProperty>(Object->GetClass(), PropertyName);
+		FStructProperty* TransformProp = FindFProperty<FStructProperty>(Object->GetClass(), PropertyName);
 		if(TransformProp != NULL && TransformProp->Struct == TransformStruct)
 		{
 			*TransformProp->ContainerPtrToValuePtr<FTransform>(Object) = Value;
@@ -1149,7 +1189,7 @@ void UKismetSystemLibrary::Generic_SetStructurePropertyByName(UObject* OwnerObje
 {
 	if (OwnerObject != NULL)
 	{
-		UStructProperty* StructProp = FindField<UStructProperty>(OwnerObject->GetClass(), StructPropertyName);
+		FStructProperty* StructProp = FindFProperty<FStructProperty>(OwnerObject->GetClass(), StructPropertyName);
 		if (StructProp != NULL)
 		{
 			void* Dest = StructProp->ContainerPtrToValuePtr<void>(OwnerObject);
@@ -2456,6 +2496,12 @@ bool UKismetSystemLibrary::GetVolumeButtonsHandledBySystem()
 	return FPlatformMisc::GetVolumeButtonsHandledBySystem();
 }
 
+void UKismetSystemLibrary::SetGamepadsBlockDeviceFeedback(bool bBlock)
+{
+	FPlatformApplicationMisc::SetGamepadsBlockDeviceFeedback(bBlock);
+
+}
+
 void UKismetSystemLibrary::ResetGamepadAssignments()
 {
 	FPlatformApplicationMisc::ResetGamepadAssignments();
@@ -2641,6 +2687,192 @@ bool UKismetSystemLibrary::IsUnattended()
 {
 	return FApp::IsUnattended();
 }
+
+#if WITH_EDITOR
+
+bool UKismetSystemLibrary::GetEditorProperty(UObject* Object, const FName PropertyName, int32& PropertyValue)
+{
+	// We should never hit this! Stubbed to avoid NoExport on the class.
+	check(0);
+	return false;
+}
+
+bool UKismetSystemLibrary::Generic_GetEditorProperty(const UObject* Object, const FProperty* ObjectProp, void* ValuePtr, const FProperty* ValueProp)
+{
+	const EPropertyAccessResultFlags AccessResult = PropertyAccessUtil::GetPropertyValue_Object(ObjectProp, Object, ValueProp, ValuePtr, INDEX_NONE);
+
+	if (EnumHasAnyFlags(AccessResult, EPropertyAccessResultFlags::PermissionDenied))
+	{
+		if (EnumHasAnyFlags(AccessResult, EPropertyAccessResultFlags::AccessProtected))
+		{
+			FFrame::KismetExecutionMessage(*FString::Printf(TEXT("Property '%s' on '%s' (%s) is protected and cannot be read"), *ObjectProp->GetName(), *Object->GetPathName(), *Object->GetClass()->GetName()), ELogVerbosity::Warning, PropertyGetFailedWarning);
+			return false;
+		}
+
+		FFrame::KismetExecutionMessage(*FString::Printf(TEXT("Property '%s' on '%s' (%s) cannot be read"), *ObjectProp->GetName(), *Object->GetPathName(), *Object->GetClass()->GetName()), ELogVerbosity::Warning, PropertyGetFailedWarning);
+		return false;
+	}
+
+	if (EnumHasAnyFlags(AccessResult, EPropertyAccessResultFlags::ConversionFailed))
+	{
+		FFrame::KismetExecutionMessage(*FString::Printf(TEXT("Property '%s' (%s) on '%s' (%s) tried to get to a property value of the incorrect type (%s)"), *ObjectProp->GetName(), *ObjectProp->GetClass()->GetName(), *Object->GetPathName(), *Object->GetClass()->GetName(), *ValueProp->GetClass()->GetName()), ELogVerbosity::Warning, PropertyGetFailedWarning);
+		return false;
+	}
+
+	return true;
+}
+
+DEFINE_FUNCTION(UKismetSystemLibrary::execGetEditorProperty)
+{
+	P_GET_OBJECT(UObject, Object);
+	P_GET_PROPERTY(FNameProperty, PropertyName);
+
+	Stack.StepCompiledIn<FProperty>(nullptr);
+	const FProperty* ValueProp = Stack.MostRecentProperty;
+	void* ValuePtr = Stack.MostRecentPropertyAddress;
+
+	P_FINISH;
+
+	if (!ValueProp || !ValuePtr)
+	{
+		FBlueprintExceptionInfo ExceptionInfo(
+			EBlueprintExceptionType::AccessViolation,
+			LOCTEXT("GetEditorProperty_MissingOutputProperty", "Failed to resolve the output parameter for GetEditorProperty.")
+		);
+		FBlueprintCoreDelegates::ThrowScriptException(P_THIS, Stack, ExceptionInfo);
+	}
+
+	if (!Object)
+	{
+		FBlueprintExceptionInfo ExceptionInfo(
+			EBlueprintExceptionType::AccessViolation, 
+			LOCTEXT("GetEditorProperty_AccessNone", "Accessed None attempting to call GetEditorProperty.")
+		);
+		FBlueprintCoreDelegates::ThrowScriptException(P_THIS, Stack, ExceptionInfo);
+	}
+
+	bool bResult = false;
+
+	if (Object)
+	{
+		const FProperty* ObjectProp = PropertyAccessUtil::FindPropertyByName(PropertyName, Object->GetClass());
+		if (ObjectProp)
+		{
+			P_NATIVE_BEGIN;
+			bResult = Generic_GetEditorProperty(Object, ObjectProp, ValuePtr, ValueProp);
+			P_NATIVE_END;
+		}
+		else
+		{
+			FFrame::KismetExecutionMessage(*FString::Printf(TEXT("Property '%s' on '%s' (%s) was missing"), *PropertyName.ToString(), *Object->GetPathName(), *Object->GetClass()->GetName()), ELogVerbosity::Warning, PropertyGetFailedWarning);
+		}
+	}
+
+	*(bool*)RESULT_PARAM = bResult;
+}
+
+bool UKismetSystemLibrary::SetEditorProperty(UObject* Object, const FName PropertyName, const int32& PropertyValue, const EPropertyAccessChangeNotifyMode ChangeNotifyMode)
+{
+	// We should never hit this! Stubbed to avoid NoExport on the class.
+	check(0);
+	return false;
+}
+
+bool UKismetSystemLibrary::Generic_SetEditorProperty(UObject* Object, const FProperty* ObjectProp, const void* ValuePtr, const FProperty* ValueProp, const EPropertyAccessChangeNotifyMode ChangeNotifyMode)
+{
+	const EPropertyAccessResultFlags AccessResult = PropertyAccessUtil::SetPropertyValue_Object(ObjectProp, Object, ValueProp, ValuePtr, INDEX_NONE, PropertyAccessUtil::EditorReadOnlyFlags, ChangeNotifyMode);
+
+	if (EnumHasAnyFlags(AccessResult, EPropertyAccessResultFlags::PermissionDenied))
+	{
+		if (EnumHasAnyFlags(AccessResult, EPropertyAccessResultFlags::AccessProtected))
+		{
+			FFrame::KismetExecutionMessage(*FString::Printf(TEXT("Property '%s' on '%s' (%s) is protected and cannot be set"), *ObjectProp->GetName(), *Object->GetPathName(), *Object->GetClass()->GetName()), ELogVerbosity::Warning, PropertySetFailedWarning);
+			return false;
+		}
+
+		if (EnumHasAnyFlags(AccessResult, EPropertyAccessResultFlags::CannotEditTemplate))
+		{
+			FFrame::KismetExecutionMessage(*FString::Printf(TEXT("Property '%s' on '%s' (%s) cannot be edited on templates"), *ObjectProp->GetName(), *Object->GetPathName(), *Object->GetClass()->GetName()), ELogVerbosity::Warning, PropertySetFailedWarning);
+			return false;
+		}
+
+		if (EnumHasAnyFlags(AccessResult, EPropertyAccessResultFlags::CannotEditInstance))
+		{
+			FFrame::KismetExecutionMessage(*FString::Printf(TEXT("Property '%s' on '%s' (%s) cannot be edited on instances"), *ObjectProp->GetName(), *Object->GetPathName(), *Object->GetClass()->GetName()), ELogVerbosity::Warning, PropertySetFailedWarning);
+			return false;
+		}
+
+		if (EnumHasAnyFlags(AccessResult, EPropertyAccessResultFlags::ReadOnly))
+		{
+			FFrame::KismetExecutionMessage(*FString::Printf(TEXT("Property '%s' on '%s' (%s) is read-only and cannot be set"), *ObjectProp->GetName(), *Object->GetPathName(), *Object->GetClass()->GetName()), ELogVerbosity::Warning, PropertySetFailedWarning);
+			return false;
+		}
+
+		FFrame::KismetExecutionMessage(*FString::Printf(TEXT("Property '%s' on '%s' (%s) cannot be set"), *ObjectProp->GetName(), *Object->GetPathName(), *Object->GetClass()->GetName()), ELogVerbosity::Warning, PropertySetFailedWarning);
+		return false;
+	}
+
+	if (EnumHasAnyFlags(AccessResult, EPropertyAccessResultFlags::ConversionFailed))
+	{
+		FFrame::KismetExecutionMessage(*FString::Printf(TEXT("Property '%s' (%s) on '%s' (%s) tried to set from a property value of the incorrect type (%s)"), *ObjectProp->GetName(), *ObjectProp->GetClass()->GetName(), *Object->GetPathName(), *Object->GetClass()->GetName(), *ValueProp->GetClass()->GetName()), ELogVerbosity::Warning, PropertySetFailedWarning);
+		return false;
+	}
+
+	return true;
+}
+
+DEFINE_FUNCTION(UKismetSystemLibrary::execSetEditorProperty)
+{
+	P_GET_OBJECT(UObject, Object);
+	P_GET_PROPERTY(FNameProperty, PropertyName);
+
+	Stack.StepCompiledIn<FProperty>(nullptr);
+	const FProperty* ValueProp = Stack.MostRecentProperty;
+	const void* ValuePtr = Stack.MostRecentPropertyAddress;
+
+	P_GET_ENUM(EPropertyAccessChangeNotifyMode, ChangeNotifyMode);
+
+	P_FINISH;
+
+	if (!ValueProp || !ValuePtr)
+	{
+		FBlueprintExceptionInfo ExceptionInfo(
+			EBlueprintExceptionType::AccessViolation,
+			LOCTEXT("SetEditorProperty_MissingOutputProperty", "Failed to resolve the output parameter for SetEditorProperty.")
+		);
+		FBlueprintCoreDelegates::ThrowScriptException(P_THIS, Stack, ExceptionInfo);
+	}
+
+	if (!Object)
+	{
+		FBlueprintExceptionInfo ExceptionInfo(
+			EBlueprintExceptionType::AccessViolation, 
+			LOCTEXT("SetEditorProperty_AccessNone", "Accessed None attempting to call SetEditorProperty.")
+		);
+		FBlueprintCoreDelegates::ThrowScriptException(P_THIS, Stack, ExceptionInfo);
+	}
+
+	bool bResult = false;
+
+	if (Object)
+	{
+		const FProperty* ObjectProp = PropertyAccessUtil::FindPropertyByName(PropertyName, Object->GetClass());
+		if (ObjectProp)
+		{
+			P_NATIVE_BEGIN;
+			bResult = Generic_SetEditorProperty(Object, ObjectProp, ValuePtr, ValueProp, ChangeNotifyMode);
+			P_NATIVE_END;
+		}
+		else
+		{
+			FFrame::KismetExecutionMessage(*FString::Printf(TEXT("Property '%s' on '%s' (%s) was missing"), *PropertyName.ToString(), *Object->GetPathName(), *Object->GetClass()->GetName()), ELogVerbosity::Warning, PropertySetFailedWarning);
+		}
+	}
+
+	*(bool*)RESULT_PARAM = bResult;
+}
+
+#endif	// WITH_EDITOR
 
 int32 UKismetSystemLibrary::BeginTransaction(const FString& Context, FText Description, UObject* PrimaryObject)
 {
@@ -2867,3 +3099,4 @@ void UKismetSystemLibrary::GetPrimaryAssetsWithBundleState(const TArray<FName>& 
 		Manager->GetPrimaryAssetsWithBundleState(OutPrimaryAssetIdList, ValidTypes, RequiredBundles, ExcludedBundles, bForceCurrentState);
 	}
 }
+#undef LOCTEXT_NAMESPACE

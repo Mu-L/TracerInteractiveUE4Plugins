@@ -1,23 +1,22 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithStaticMeshImporter.h"
 
 #include "DatasmithImportContext.h"
 #include "DatasmithImporterModule.h"
 #include "DatasmithMaterialImporter.h"
-#include "DatasmithMeshHelper.h"
 #include "DatasmithMeshUObject.h"
 #include "IDatasmithSceneElements.h"
 #include "ObjectTemplates/DatasmithStaticMeshTemplate.h"
-#include "Translators/DatasmithPayload.h"
+#include "DatasmithPayload.h"
 #include "Utility/DatasmithImporterUtils.h"
+#include "Utility/DatasmithMeshHelper.h"
 
 #include "Algo/AnyOf.h"
 #include "Async/Async.h"
 #include "Engine/StaticMesh.h"
 #include "LayoutUV.h"
 #include "MeshBuild.h"
-#include "MeshDescriptionOperations.h"
 #include "MeshUtilities.h"
 #include "Misc/FeedbackContext.h"
 #include "Misc/Paths.h"
@@ -94,6 +93,63 @@ namespace DatasmithStaticMeshImporterImpl
 	}
 }
 
+void FDatasmithStaticMeshImporter::CleanupMeshDescriptions(TArray<FMeshDescription>& MeshDescriptions)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(FDatasmithStaticMeshImporter::CleanupMeshDescriptions)
+
+	TSet<FPolygonID> PolygonsToDelete;
+	for (FMeshDescription& MeshDescription : MeshDescriptions)
+	{
+		FStaticMeshConstAttributes Attributes(MeshDescription);
+		const TVertexAttributesConstRef<FVector> VertexPositions = Attributes.GetVertexPositions();
+		if (VertexPositions.IsValid())
+		{
+			for (const FVertexID VertexID : MeshDescription.Vertices().GetElementIDs())
+			{
+				// Ensure that no vertices contains NaN since it can wreck havoc in other algorithms (i.e. MikkTSpace)
+				if (VertexPositions[VertexID].ContainsNaN())
+				{
+					for (FPolygonID PolygonID : MeshDescription.GetVertexConnectedPolygons(VertexID))
+					{
+						PolygonsToDelete.Add(PolygonID);
+					}
+				}
+			}
+		}
+
+		if (PolygonsToDelete.Num() > 0)
+		{
+			TArray<FEdgeID> OrphanedEdges;
+			TArray<FVertexInstanceID> OrphanedVertexInstances;
+			TArray<FPolygonGroupID> OrphanedPolygonGroups;
+			TArray<FVertexID> OrphanedVertices;
+			for (FPolygonID PolygonID : PolygonsToDelete)
+			{
+				MeshDescription.DeletePolygon(PolygonID, &OrphanedEdges, &OrphanedVertexInstances, &OrphanedPolygonGroups);
+			}
+			for (FPolygonGroupID PolygonGroupID : OrphanedPolygonGroups)
+			{
+				MeshDescription.DeletePolygonGroup(PolygonGroupID);
+			}
+			for (FVertexInstanceID VertexInstanceID : OrphanedVertexInstances)
+			{
+				MeshDescription.DeleteVertexInstance(VertexInstanceID, &OrphanedVertices);
+			}
+			for (FEdgeID EdgeID : OrphanedEdges)
+			{
+				MeshDescription.DeleteEdge(EdgeID, &OrphanedVertices);
+			}
+			for (FVertexID VertexID : OrphanedVertices)
+			{
+				MeshDescription.DeleteVertex(VertexID);
+			}
+
+			FElementIDRemappings Remappings;
+			MeshDescription.Compact(Remappings);
+		}
+	}
+}
+
 UStaticMesh* FDatasmithStaticMeshImporter::ImportStaticMesh(const TSharedRef< IDatasmithMeshElement > MeshElement, FDatasmithMeshElementPayload& Payload, EObjectFlags ObjectFlags, const FDatasmithStaticMeshImportOptions& ImportOptions, FDatasmithAssetsImportContext& AssetsContext, UStaticMesh* ExistingMesh)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(FDatasmithStaticMeshImporter::ImportStaticMesh);
@@ -107,6 +163,9 @@ UStaticMesh* FDatasmithStaticMeshImporter::ImportStaticMesh(const TSharedRef< ID
 	{
 		return nullptr;
 	}
+
+	// Destructive cleanup of the mesh descriptions to avoid passing invalid data to the rest of the editor
+	CleanupMeshDescriptions(MeshDescriptions);
 
 	// 2. find the destination
 	UStaticMesh* ResultStaticMesh = nullptr;
@@ -125,7 +184,9 @@ UStaticMesh* FDatasmithStaticMeshImporter::ImportStaticMesh(const TSharedRef< ID
 	{
 		if ( ExistingMesh->GetOuter() != Outer )
 		{
-			ResultStaticMesh = DuplicateObject< UStaticMesh >( ExistingMesh, Outer, *StaticMeshName );
+			// We don't need to copy over the mesh BulkData as it is going to be recreated anyway, this also prevent ExistingMesh from being invalidated.
+			const bool bIgnoreBulkData = true;
+			ResultStaticMesh = FDatasmithImporterUtils::DuplicateStaticMesh( ExistingMesh, Outer, *StaticMeshName, bIgnoreBulkData);
 			IDatasmithImporterModule::Get().ResetOverrides( ResultStaticMesh ); // Don't copy the existing overrides
 		}
 		else
@@ -306,8 +367,12 @@ void FDatasmithStaticMeshImporter::PreBuildStaticMeshes( FDatasmithImportContext
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(FDatasmithStaticMeshImporter::PreBuildStaticMeshes);
 
-	FScopedSlowTask Progress(ImportContext.ImportedStaticMeshes.Num(), LOCTEXT("PreBuildStaticMeshes", "Setting up UVs..."), true, *ImportContext.Warn);
-	Progress.MakeDialog(true);
+	TUniquePtr<FScopedSlowTask> ProgressPtr;
+	if ( ImportContext.FeedbackContext )
+	{ 
+		ProgressPtr = MakeUnique<FScopedSlowTask>(ImportContext.ImportedStaticMeshes.Num(), LOCTEXT("PreBuildStaticMeshes", "Setting up UVs..."), true, *ImportContext.FeedbackContext);
+		ProgressPtr->MakeDialog(true);
+	}
 
 	IMeshUtilities& MeshUtilities = FModuleManager::Get().LoadModuleChecked< IMeshUtilities >( "MeshUtilities" );
 
@@ -345,12 +410,17 @@ void FDatasmithStaticMeshImporter::PreBuildStaticMeshes( FDatasmithImportContext
 		);
 	}
 
+	FScopedSlowTask* Progress = ProgressPtr.Get();
+
 	// Ensure UI stays responsive by updating the progress even when the number of tasks hasn't changed
 	for (int32 OldTasksDone = 0, NewTasksDone = 0; OldTasksDone != SortedMesh.Num(); OldTasksDone = NewTasksDone)
 	{
 		NewTasksDone = TasksDone.Load();
-		Progress.EnterProgressFrame(NewTasksDone - OldTasksDone, FText::FromString(FString::Printf(TEXT("Packing UVs and computing tangents for static mesh %d/%d ..."), NewTasksDone, SortedMesh.Num())));
-		FPlatformProcess::Sleep(0.1);
+		if ( Progress )
+		{
+			Progress->EnterProgressFrame(NewTasksDone - OldTasksDone, FText::FromString(FString::Printf(TEXT("Packing UVs and computing tangents for static mesh %d/%d ..."), NewTasksDone, SortedMesh.Num())));
+			FPlatformProcess::Sleep(0.01);
+		}
 	}
 
 	for (int32 Index = 0; Index < TasksIsMeshValidResult.Num(); ++Index)

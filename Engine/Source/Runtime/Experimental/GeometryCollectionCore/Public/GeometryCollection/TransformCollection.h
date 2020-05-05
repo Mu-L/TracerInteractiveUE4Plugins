@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -49,13 +49,20 @@ public:
 	static const FName TransformAttribute;
 	static const FName ParentAttribute;
 	static const FName ChildrenAttribute;
+	static const FName ParticlesAttribute;
 
 	/** Serialize */
 	virtual void Serialize(Chaos::FChaosArchive& Ar) override;
 
 	/*
+	* SingleTransform:
+	*   Create a single transform.
+	*/
+	static FTransformCollection SingleTransform(const FTransform& TransformRoot = FTransform::Identity);
+
+	/*
 	* AppendTransform:
-	*   Append a single transform at the end of the collection without
+	*   Append a transform at the end of the collection without
 	*   parenting. 
 	*/
 	int32 AppendTransform(const FTransformCollection & GeometryCollection, const FTransform& TransformRoot = FTransform::Identity);
@@ -67,6 +74,7 @@ public:
 	*/
 	void ParentTransforms(const int32 TransformIndex, const int32 ChildIndex);
 	void ParentTransforms(const int32 TransformIndex, const TArray<int32>& SelectedBones);
+	void UnparentTransform(const int32 ChildIndex);
 
 	/*
 	* RelativeTransformation

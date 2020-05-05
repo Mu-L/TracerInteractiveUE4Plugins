@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "HAL/FileManager.h"
@@ -281,7 +281,7 @@ bool FLoadAllMapsInEditorTest::RunTest(const FString& Parameters)
 
 		//Create a screen shot filename and path
 		const FString LoadAllMapsTestName = FString::Printf(TEXT("LoadAllMaps_Editor/%s"), *FPaths::GetBaseFilename(MapName));
-		AutomationCommon::GetScreenshotPath(LoadAllMapsTestName, WindowParameters.ScreenshotName);
+		WindowParameters.ScreenshotName = AutomationCommon::GetScreenshotName(LoadAllMapsTestName);
 
 		//Get the current number of seconds.  This will be used to track how long it took to load the map.
 		MapLoadStartTime = FPlatformTime::Seconds();

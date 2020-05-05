@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -127,7 +127,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Sequence", meta=(ScriptMethod))
 	static FSequencerScriptingRange MakeRangeSeconds(UMovieSceneSequence* Sequence, float StartTime, float Duration);
 
-	UE_DEPRECATED(4.22, "Please use GetPlaybackStart and GetPlaybackEnd instead.")
+	/**
+	 * Get playback range of this sequence
+	 *
+	 * @param Sequence        The sequence within which to get the playback range
+	 * @return Playback range of this sequence
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Sequence", meta = (ScriptMethod))
 	static FSequencerScriptingRange GetPlaybackRange(UMovieSceneSequence* Sequence);
 
 	/**
@@ -367,10 +373,11 @@ public:
 	 *
 	 * @param MasterSequence  The master sequence that contains the sequence
 	 * @param Binding The binding proxy to generate the binding id from
+	 * @param Space The object binding space to resolve from (Root or Local)
 	 * @return The new object binding id
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Sequence", meta = (ScriptMethod))
-	static FMovieSceneObjectBindingID MakeBindingID(UMovieSceneSequence* MasterSequence, const FSequencerBindingProxy& InBinding);
+	static FMovieSceneObjectBindingID MakeBindingID(UMovieSceneSequence* MasterSequence, const FSequencerBindingProxy& InBinding, EMovieSceneObjectBindingSpace Space = EMovieSceneObjectBindingSpace::Root);
 
 	/**
 	 * Get the root folders in the provided sequence
@@ -422,18 +429,18 @@ public:
 	static int32 AddMarkedFrame(UMovieSceneSequence* Sequence, const FMovieSceneMarkedFrame& InMarkedFrame);
 
 	/*
-	 * Remove the user marked frame by index.
+	 * Delete the user marked frame by index.
 	 *
-	 * @RemoveIndex The index to the user marked frame to remove
+	 * @DeleteIndex The index to the user marked frame to delete
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Sequence", meta = (ScriptMethod))
-	static void RemoveMarkedFrame(UMovieSceneSequence* Sequence, int32 RemoveIndex);
+	static void DeleteMarkedFrame(UMovieSceneSequence* Sequence, int32 DeleteIndex);
 
 	/*
-	 * Clear all user marked frames
+	 * Delete all user marked frames
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Sequence", meta = (ScriptMethod))
-	static void ClearMarkedFrames(UMovieSceneSequence* Sequence);
+	static void DeleteMarkedFrames(UMovieSceneSequence* Sequence);
 
 	/*
 	 * Find the user marked frame by label
@@ -459,4 +466,20 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Sequence", meta = (ScriptMethod))
 	static int32 FindNextMarkedFrame(UMovieSceneSequence* Sequence, FFrameNumber InFrameNumber, bool bForward);
+
+	/*
+	 * Set read only
+	 *
+	 * @bInReadOnly Whether the movie scene should be read only or not
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Sequence", meta = (ScriptMethod))
+	static void SetReadOnly(UMovieSceneSequence* Sequence, bool bInReadOnly);
+
+	/*
+	 * Is read only
+	 *
+	 * @return Whether the movie scene is read only or not
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Sequence", meta = (ScriptMethod))
+	static bool IsReadOnly(UMovieSceneSequence* Sequence);
 };

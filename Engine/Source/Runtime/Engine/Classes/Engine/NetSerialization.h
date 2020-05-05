@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	NetworkSerialization.h: 
@@ -190,7 +190,7 @@ struct TStructOpsTypeTraits< FExampleArray > : public TStructOpsTypeTraitsBase2<
  *
  *	The UActorChannel has 2 ways to decide what properties need to be sent.
  *		The traditional way, which is a flat TArray<uint8> buffer: UActorChannel::Recent. This represents a flat block of the actor properties.
- *		This block literally can be cast to an AActor* and property values can be looked up if you know the UProperty offset.
+ *		This block literally can be cast to an AActor* and property values can be looked up if you know the FProperty offset.
  *		The Recent buffer represents the values that the client using this actor channel has. We use recent to compare to current, and decide what to send.
  *
  *		This works great for 'atomic' properties; ints, floats, object*, etc.
@@ -213,7 +213,7 @@ struct TStructOpsTypeTraits< FExampleArray > : public TStructOpsTypeTraitsBase2<
  *	Base States and dynamic properties replication.
  *		As far as the replication system / UActorChannel is concerned, a base state can be anything. The base state only deals with INetDeltaBaseState*.
  *
- *		UActorChannel::ReplicateActor will ultimately decide whether to call UProperty::NetSerializeItem or UProperty::NetDeltaSerializeItem.
+ *		UActorChannel::ReplicateActor will ultimately decide whether to call FProperty::NetSerializeItem or FProperty::NetDeltaSerializeItem.
  *
  *		As mentioned above NetDeltaSerialize takes in an extra base state and produces a diff state and a full state. The full state produced is used
  *		as the base state for future delta serialization. NetDeltaSerialize uses the base state and the current values of the actor to determine what parts
@@ -225,21 +225,21 @@ struct TStructOpsTypeTraits< FExampleArray > : public TStructOpsTypeTraitsBase2<
  *
  *	
  *	Generic Delta Replication
- *		Generic Delta Replication is implemented by UStructProperty::NetDeltaSerializeItem, UArrayProperty::NetDeltaSerializeItem, UProperty::NetDeltaSerializeItem.
- *		It works by first NetSerializing the current state of the object (the 'full' state) and using memcmp to compare it to previous base state. UProperty
+ *		Generic Delta Replication is implemented by FStructProperty::NetDeltaSerializeItem, FArrayProperty::NetDeltaSerializeItem, FProperty::NetDeltaSerializeItem.
+ *		It works by first NetSerializing the current state of the object (the 'full' state) and using memcmp to compare it to previous base state. FProperty
  *		is what actually implements the comparison, writing the current state to the diff state if it has changed, and always writing to the full state otherwise.
- *		The UStructProperty and UArrayProperty functions work by iterating their fields or array elements and calling the UProperty function, while also embedding
+ *		The FStructProperty and FArrayProperty functions work by iterating their fields or array elements and calling the FProperty function, while also embedding
  *		meta data. 
  *
- *		For example UArrayProperty basically writes: 
- *			"Array has X elements now" -> "Here is element Y" -> Output from UProperty::NetDeltaSerialize -> "Here is element Z" -> etc
+ *		For example FArrayProperty basically writes: 
+ *			"Array has X elements now" -> "Here is element Y" -> Output from FProperty::NetDeltaSerialize -> "Here is element Z" -> etc
  *
- *		Generic Data Replication is the 'default' way of handling UArrayProperty and UStructProperty serialization. This will work for any array or struct with any 
+ *		Generic Data Replication is the 'default' way of handling FArrayProperty and FStructProperty serialization. This will work for any array or struct with any 
  *		sub properties as long as those properties can NetSerialize.
  *
  *	Custom Net Delta Serialiation
  *		Custom Net Delta Serialiation works by using the struct trait system. If a struct has the WithNetDeltaSerializer trait, then its native NetDeltaSerialize
- *		function will be called instead of going through the Generic Delta Replication code path in UStructProperty::NetDeltaSerializeItem.
+ *		function will be called instead of going through the Generic Delta Replication code path in FStructProperty::NetDeltaSerializeItem.
  *
  *	Fast TArray Replication
  *		Fast TArray Replication is implemented through custom net delta serialization. Instead of a flat TArray buffer to repesent states, it only is concerned
@@ -671,7 +671,7 @@ private:
 	int32 CachedNumItems;
 	int32 CachedNumItemsToConsiderForWriting;
 
-	UPROPERTY(NotReplicated)
+	UPROPERTY(NotReplicated, Transient)
 	EFastArraySerializerDeltaFlags DeltaFlags;
 };
 
@@ -903,7 +903,7 @@ bool FFastArraySerializer::TFastArraySerializeHelper<Type, SerializerType>::Read
 	Reader << Header.ArrayReplicationKey;
 	Reader << Header.BaseReplicationKey;
 
-	int32 NumDeletes;
+	int32 NumDeletes = 0;
 	Reader << NumDeletes;
 
 	UE_LOG(LogNetFastTArray, Log, TEXT("Received [%d/%d]."), Header.ArrayReplicationKey, Header.BaseReplicationKey);
@@ -933,7 +933,7 @@ bool FFastArraySerializer::TFastArraySerializeHelper<Type, SerializerType>::Read
 	{
 		for (int32 i = 0; i < NumDeletes; ++i)
 		{
-			int32 ElementID;
+			int32 ElementID = 0;
 			Reader << ElementID;
 
 			int32* ElementIndexPtr = ArraySerializer.ItemMap.Find(ElementID);
@@ -1338,7 +1338,7 @@ bool FFastArraySerializer::FastArrayDeltaSerialize(TArray<Type> &Items, FNetDelt
 		//---------------
 		for(int32 i = 0; i < Header.NumChanged; ++i)
 		{
-			int32 ElementID;
+			int32 ElementID = 0;
 			Reader << ElementID;
 
 			int32* ElementIndexPtr = ArraySerializer.ItemMap.Find(ElementID);
@@ -2099,8 +2099,8 @@ struct TStructOpsTypeTraits< FVector_NetQuantizeNormal > : public TStructOpsType
  *	
  */
 
-template<int32 MaxNum, typename T>
-int32 SafeNetSerializeTArray_HeaderOnly(FArchive& Ar, TArray<T>& Array, bool& bOutSuccess)
+template<int32 MaxNum, typename T, typename A>
+int32 SafeNetSerializeTArray_HeaderOnly(FArchive& Ar, TArray<T, A>& Array, bool& bOutSuccess)
 {
 	const uint32 NumBits = FMath::CeilLogTwo(MaxNum)+1;
 	
@@ -2124,6 +2124,12 @@ int32 SafeNetSerializeTArray_HeaderOnly(FArchive& Ar, TArray<T>& Array, bool& bO
 	// Preallocate new items on loading side
 	if (Ar.IsLoading())
 	{
+		if (ArrayNum > MaxNum)
+		{
+			// If MaxNum doesn't fully utilize all bits that are needed to send the array size we can receive a larger value.
+			bOutSuccess = false;
+			ArrayNum = MaxNum;
+		}
 		Array.Reset();
 		Array.AddDefaulted(ArrayNum);
 	}
@@ -2131,11 +2137,11 @@ int32 SafeNetSerializeTArray_HeaderOnly(FArchive& Ar, TArray<T>& Array, bool& bO
 	return ArrayNum;
 }
 
-template<int32 MaxNum, typename T>
-bool SafeNetSerializeTArray_Default(FArchive& Ar, TArray<T>& Array)
+template<int32 MaxNum, typename T, typename A>
+bool SafeNetSerializeTArray_Default(FArchive& Ar, TArray<T, A>& Array)
 {
 	bool bOutSuccess = true;
-	int32 ArrayNum = SafeNetSerializeTArray_HeaderOnly<MaxNum, T>(Ar, Array, bOutSuccess);
+	int32 ArrayNum = SafeNetSerializeTArray_HeaderOnly<MaxNum, T, A>(Ar, Array, bOutSuccess);
 
 	// Serialize each element in the array with the << operator
 	for (int32 idx=0; idx < ArrayNum && Ar.IsError() == false; ++idx)
@@ -2144,15 +2150,15 @@ bool SafeNetSerializeTArray_Default(FArchive& Ar, TArray<T>& Array)
 	}
 
 	// Return
-	bOutSuccess |= Ar.IsError();
+	bOutSuccess &= !Ar.IsError();
 	return bOutSuccess;
 }
 
-template<int32 MaxNum, typename T >
-bool SafeNetSerializeTArray_WithNetSerialize(FArchive& Ar, TArray<T>& Array, class UPackageMap* PackageMap)
+template<int32 MaxNum, typename T, typename A>
+bool SafeNetSerializeTArray_WithNetSerialize(FArchive& Ar, TArray<T, A>& Array, class UPackageMap* PackageMap)
 {
 	bool bOutSuccess = true;
-	int32 ArrayNum = SafeNetSerializeTArray_HeaderOnly<MaxNum, T>(Ar, Array, bOutSuccess);
+	int32 ArrayNum = SafeNetSerializeTArray_HeaderOnly<MaxNum, T, A>(Ar, Array, bOutSuccess);
 
 	// Serialize each element in the array with the << operator
 	for (int32 idx=0; idx < ArrayNum && Ar.IsError() == false; ++idx)
@@ -2161,6 +2167,6 @@ bool SafeNetSerializeTArray_WithNetSerialize(FArchive& Ar, TArray<T>& Array, cla
 	}
 
 	// Return
-	bOutSuccess |= Ar.IsError();
+	bOutSuccess &= !Ar.IsError();
 	return bOutSuccess;
 }

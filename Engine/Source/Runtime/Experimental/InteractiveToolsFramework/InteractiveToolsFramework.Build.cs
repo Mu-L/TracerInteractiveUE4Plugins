@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 
@@ -29,6 +29,7 @@ public class InteractiveToolsFramework : ModuleRules
                 "CoreUObject",
                 "InputCore",
                 "ApplicationCore",
+				"MeshDescription"
 				// ... add other public dependencies that you statically link with here ...
 			}
             );

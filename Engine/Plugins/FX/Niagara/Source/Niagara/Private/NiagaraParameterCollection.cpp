@@ -1,7 +1,8 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraParameterCollection.h"
 #include "NiagaraDataInterface.h"
+#include "Misc/SecureHash.h"
 #if WITH_EDITORONLY_DATA
 	#include "IAssetTools.h"
 #endif
@@ -11,8 +12,8 @@
 
 UNiagaraParameterCollectionInstance::UNiagaraParameterCollectionInstance(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
-	, ParameterStorage(this)
 {
+	ParameterStorage.SetOwner(this);
 	//Bind(ParameterStorage);
 }
 
@@ -142,7 +143,7 @@ void UNiagaraParameterCollectionInstance::SetOverridesParameter(const FNiagaraVa
 //Blueprint Accessors
 bool UNiagaraParameterCollectionInstance::GetBoolParameter(const FString& InVariableName)
 {
-	return ParameterStorage.GetParameterValue<bool>(FNiagaraVariable(FNiagaraTypeDefinition::GetBoolDef(), *Collection->ParameterNameFromFriendlyName(InVariableName)));
+	return ParameterStorage.GetParameterValue<int32>(FNiagaraVariable(FNiagaraTypeDefinition::GetBoolDef(), *Collection->ParameterNameFromFriendlyName(InVariableName))) == FNiagaraBool::True;
 }
 
 float UNiagaraParameterCollectionInstance::GetFloatParameter(const FString& InVariableName)
@@ -183,7 +184,7 @@ FLinearColor UNiagaraParameterCollectionInstance::GetColorParameter(const FStrin
 
 void UNiagaraParameterCollectionInstance::SetBoolParameter(const FString& InVariableName, bool InValue)
 {
-	ParameterStorage.SetParameterValue(InValue, FNiagaraVariable(FNiagaraTypeDefinition::GetBoolDef(), *Collection->ParameterNameFromFriendlyName(InVariableName)));
+	ParameterStorage.SetParameterValue(InValue ? FNiagaraBool::True : FNiagaraBool::False, FNiagaraVariable(FNiagaraTypeDefinition::GetBoolDef(), *Collection->ParameterNameFromFriendlyName(InVariableName)));
 }
 
 void UNiagaraParameterCollectionInstance::SetFloatParameter(const FString& InVariableName, float InValue)
@@ -297,7 +298,7 @@ FNiagaraCompileHash UNiagaraParameterCollection::GetCompileHash() const
 	CompileHash.Final();
 
 	TArray<uint8> DataHash;
-	DataHash.AddUninitialized(20);
+	DataHash.AddUninitialized(FSHA1::DigestSize);
 	CompileHash.GetHash(DataHash.GetData());
 
 	return FNiagaraCompileHash(DataHash);
@@ -369,6 +370,9 @@ void UNiagaraParameterCollection::MakeNamespaceNameUnique()
 void UNiagaraParameterCollection::PostLoad()
 {
 	Super::PostLoad();
+
+	DefaultInstance->ConditionalPostLoad();
+
 	if (CompileId.IsValid() == false)
 	{
 		CompileId = FGuid::NewGuid();

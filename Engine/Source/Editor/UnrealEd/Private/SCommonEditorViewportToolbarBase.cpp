@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SCommonEditorViewportToolbarBase.h"
 #include "Widgets/SBoxPanel.h"
@@ -13,9 +13,15 @@
 #include "SEditorViewport.h"
 #include "EditorViewportCommands.h"
 #include "SEditorViewportToolBarMenu.h"
+#include "SEditorViewportToolBarButton.h"
 #include "SEditorViewportViewMenu.h"
+#include "Editor/EditorPerformanceSettings.h"
+#include "Scalability.h"
+#include "SScalabilitySettings.h"
+#include "AssetEditorViewportLayout.h"
+#include "SAssetEditorViewport.h"
 
-#define LOCTEXT_NAMESPACE "LevelViewportToolBar"
+#define LOCTEXT_NAMESPACE "SCommonEditorViewportToolbarBase"
 
 //////////////////////////////////////////////////////////////////////////
 // SCommonEditorViewportToolbarBase
@@ -93,6 +99,30 @@ void SCommonEditorViewportToolbarBase::Construct(const FArguments& InArgs, TShar
 			.OnGetMenuContent(this, &SCommonEditorViewportToolbarBase::GenerateShowMenu)
 		];
 
+	// Realtime button
+	if (InArgs._AddRealtimeButton)
+	{
+		MainBoxPtr->AddSlot()
+			.AutoWidth()
+			.Padding(ToolbarSlotPadding)
+			[
+				SNew(SEditorViewportToolBarButton)
+				.Cursor(EMouseCursor::Default)
+				.ButtonType(EUserInterfaceActionType::Button)
+				.ButtonStyle(&FEditorStyle::Get().GetWidgetStyle<FButtonStyle>("EditorViewportToolBar.MenuButtonWarning"))
+				.OnClicked(this, &SCommonEditorViewportToolbarBase::OnRealtimeWarningClicked)
+				.Visibility(this, &SCommonEditorViewportToolbarBase::GetRealtimeWarningVisibility)
+				.ToolTipText(LOCTEXT("RealtimeOff_ToolTip", "This viewport is not updating in realtime.  Click to turn on realtime mode."))
+				.Content()
+				[
+					SNew(STextBlock)
+					.Font(FEditorStyle::GetFontStyle("EditorViewportToolBar.Font"))
+					.Text(LOCTEXT("RealtimeOff", "Realtime: Off"))
+					.ColorAndOpacity(FLinearColor::Black)
+				]
+			];
+	}
+
 	MainBoxPtr->AddSlot()
 		.AutoWidth()
 		.Padding(ToolbarSlotPadding)
@@ -104,6 +134,21 @@ void SCommonEditorViewportToolbarBase::Construct(const FArguments& InArgs, TShar
 			.Visibility(this, &SCommonEditorViewportToolbarBase::GetViewModeOptionsVisibility)
 			.OnGetMenuContent(this, &SCommonEditorViewportToolbarBase::GenerateViewModeOptionsMenu)
 		];
+
+	MainBoxPtr->AddSlot()
+		.AutoWidth()
+		.Padding(ToolbarSlotPadding)
+		[
+			// Button to show scalability warnings
+			SNew(SEditorViewportToolbarMenu)
+			.ParentToolBar(SharedThis(this))
+			.Cursor(EMouseCursor::Default)
+			.Label(this, &SCommonEditorViewportToolbarBase::GetScalabilityWarningLabel)
+			.MenuStyle(FEditorStyle::Get(), "EditorViewportToolBar.MenuButtonWarning")
+			.OnGetMenuContent(this, &SCommonEditorViewportToolbarBase::GetScalabilityWarningMenuContent)
+			.Visibility(this, &SCommonEditorViewportToolbarBase::GetScalabilityWarningVisibility)
+			.ToolTipText(LOCTEXT("ScalabilityWarning_ToolTip", "Non-default scalability settings could be affecting what is shown in this viewport.\nFor example you may experience lower visual quality, reduced particle counts, and other artifacts that don't match what the scene would look like when running outside of the editor. Click to make changes."))
+			];
 
 	// Add optional toolbar slots to be added by child classes inherited from this common viewport toolbar
 	ExtendLeftAlignedToolbarSlots(MainBoxPtr, SharedThis(this));
@@ -181,6 +226,20 @@ TSharedRef<SWidget> SCommonEditorViewportToolbarBase::GenerateOptionsMenu() cons
 			OptionsMenuBuilder.AddWidget(GenerateScreenPercentageMenu(), LOCTEXT("ScreenPercentage", "Screen Percentage"));
 		}
 		OptionsMenuBuilder.EndSection();
+
+ 		TSharedPtr<SAssetEditorViewport> AssetEditorViewportPtr = StaticCastSharedRef<SAssetEditorViewport>(ViewportRef);
+ 		if (AssetEditorViewportPtr.IsValid())
+		{
+			OptionsMenuBuilder.BeginSection("EditorViewportLayouts");
+			{
+				OptionsMenuBuilder.AddSubMenu(
+					LOCTEXT("ConfigsSubMenu", "Layouts"),
+					FText::GetEmpty(),
+					FNewMenuDelegate::CreateSP(AssetEditorViewportPtr.Get(), &SAssetEditorViewport::GenerateLayoutMenu));
+			}
+			OptionsMenuBuilder.EndSection();
+		}
+
 		ExtendOptionsMenu(OptionsMenuBuilder);
 	}
 
@@ -410,6 +469,21 @@ void SCommonEditorViewportToolbarBase::OnFarViewPlaneValueChanged(float NewValue
 	GetViewportClient().OverrideFarClipPlane(NewValue);
 }
 
+FReply SCommonEditorViewportToolbarBase::OnRealtimeWarningClicked()
+{
+	FEditorViewportClient& ViewportClient = GetViewportClient();
+	ViewportClient.SetRealtime(true);
+
+	return FReply::Handled();
+}
+
+EVisibility SCommonEditorViewportToolbarBase::GetRealtimeWarningVisibility() const
+{
+	FEditorViewportClient& ViewportClient = GetViewportClient();
+	// If the viewport is not realtime and there is no override then realtime is off
+	return !ViewportClient.IsRealtime() && !ViewportClient.IsRealtimeOverrideSet() ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
 TSharedPtr<FExtender> SCommonEditorViewportToolbarBase::GetCombinedExtenderList(TSharedRef<FExtender> MenuExtender) const
 {
 	TSharedPtr<FExtender> HostEditorExtenders = GetInfoProvider().GetExtenders();
@@ -471,6 +545,33 @@ TSharedRef<SEditorViewportViewMenu> SCommonEditorViewportToolbarBase::MakeViewMe
 	return SNew(SEditorViewportViewMenu, ViewportRef, SharedThis(this))
 		.Cursor(EMouseCursor::Default)
 		.MenuExtenders(GetViewMenuExtender());
+}
+
+FText SCommonEditorViewportToolbarBase::GetScalabilityWarningLabel() const
+{
+	const int32 QualityLevel = Scalability::GetQualityLevels().GetMinQualityLevel();
+	if (QualityLevel >= 0)
+	{
+		return FText::Format(LOCTEXT("ScalabilityWarning", "Scalability: {0}"), Scalability::GetScalabilityNameFromQualityLevel(QualityLevel));
+	}
+
+	return FText::GetEmpty();
+}
+
+EVisibility SCommonEditorViewportToolbarBase::GetScalabilityWarningVisibility() const
+{
+	//This method returns magic numbers. 3 means epic
+	return GetDefault<UEditorPerformanceSettings>()->bEnableScalabilityWarningIndicator && GetShowScalabilityMenu() && Scalability::GetQualityLevels().GetMinQualityLevel() < 3 ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+TSharedRef<SWidget> SCommonEditorViewportToolbarBase::GetScalabilityWarningMenuContent() const
+{
+	return
+		SNew(SBorder)
+		.BorderImage(FEditorStyle::GetBrush("Menu.Background"))
+		[
+			SNew(SScalabilitySettings)
+		];
 }
 
 #undef LOCTEXT_NAMESPACE

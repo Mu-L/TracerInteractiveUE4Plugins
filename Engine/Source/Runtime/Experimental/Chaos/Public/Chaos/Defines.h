@@ -1,11 +1,6 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
-#ifndef COMPILE_ID_TYPES_AS_INTS
-#define COMPILE_ID_TYPES_AS_INTS 0
-#endif
-
-#include <functional>
 #if COMPILE_WITHOUT_UNREAL_SUPPORT
 	#include <stdint.h>
 #else
@@ -15,85 +10,117 @@
 #endif
 #include "Serializable.h"
 
+#include "UObject/ExternalPhysicsCustomObjectVersion.h"
+#include "Chaos/Core.h"
+
 #if COMPILE_WITHOUT_UNREAL_SUPPORT
 #define PI 3.14159
 #define check(condition)
 typedef int32_t int32;
 #endif
 
-
 namespace Chaos
 {
-#if COMPILE_ID_TYPES_AS_INTS
-typedef uint32 IslandId;
-
-static FORCEINLINE uint32 ToValue(uint32 Id) { return Id; }
-#else
-#define CREATEIDTYPE(IDNAME) \
-    class IDNAME \
-    { \
-      public: \
-        IDNAME() {} \
-        IDNAME(const uint32 InValue) : Value(InValue) {} \
-        bool operator==(const IDNAME& Other) const { return Value == Other.Value; } \
-        uint32 Value; \
-    }
-
-CREATEIDTYPE(IslandId);
-
-template<class T_ID>
-static uint32 ToValue(T_ID Id)
-{
-    return Id.Value;
-}
-#endif
-template<class T>
-class TChaosPhysicsMaterial
-{
-public:
-	T Friction;
-	T Restitution;
-	T SleepingLinearThreshold;
-	T SleepingAngularThreshold;
-	T DisabledLinearThreshold;
-	T DisabledAngularThreshold;
-
-	TChaosPhysicsMaterial()
-		: Friction((T)0.5)
-		, Restitution((T)0.1)
-		, SleepingLinearThreshold((T)1)
-		, SleepingAngularThreshold((T)1)
-		, DisabledLinearThreshold((T)0)
-		, DisabledAngularThreshold((T)0)
+	class FChaosPhysicsMaterial
 	{
-	}
+	public:
 
-	static constexpr bool IsSerializablePtr = true;
+		Chaos::FReal Friction;
+		Chaos::FReal StaticFriction;
+		Chaos::FReal Restitution;
+		Chaos::FReal LinearEtherDrag;
+		Chaos::FReal AngularEtherDrag;
+		Chaos::FReal SleepingLinearThreshold;
+		Chaos::FReal SleepingAngularThreshold;
+		Chaos::FReal DisabledLinearThreshold;
+		Chaos::FReal DisabledAngularThreshold;
+		int32 SleepCounterThreshold;
+		void* UserData;
 
-	static void StaticSerialize(FArchive& Ar, TSerializablePtr<TChaosPhysicsMaterial<T>>& Serializable)
-	{
-		TChaosPhysicsMaterial<T>* Material = const_cast<TChaosPhysicsMaterial<T>*>(Serializable.Get());
-		
-		if (Ar.IsLoading())
+		/** Variable defaults are used for \c UChaosPhysicalMaterial \c UPROPERTY defaults. */
+		FChaosPhysicsMaterial()
+			: Friction(0.5)
+			, StaticFriction(0.0)
+			, Restitution(0.1)
+			, LinearEtherDrag(0.0)
+			, AngularEtherDrag(0.0)
+			, SleepingLinearThreshold(1)
+			, SleepingAngularThreshold(1)
+			, DisabledLinearThreshold(0)
+			, DisabledAngularThreshold(0)
+			, SleepCounterThreshold(0)
+			, UserData(nullptr)
 		{
-			Material = new TChaosPhysicsMaterial<T>();
-			Serializable.SetFromRawLowLevel(Material);
 		}
-		
-		Material->Serialize(Ar);
-	}
 
-	void Serialize(FArchive& Ar)
+		static constexpr bool IsSerializablePtr = true;
+
+		static void StaticSerialize(FArchive& Ar, TSerializablePtr<FChaosPhysicsMaterial>& Serializable)
+		{
+			FChaosPhysicsMaterial* Material = const_cast<FChaosPhysicsMaterial*>(Serializable.Get());
+
+			if(Ar.IsLoading())
+			{
+				Material = new FChaosPhysicsMaterial();
+				Serializable.SetFromRawLowLevel(Material);
+			}
+
+			Material->Serialize(Ar);
+		}
+
+		void Serialize(FArchive& Ar)
+		{
+			Ar.UsingCustomVersion(FExternalPhysicsCustomObjectVersion::GUID);
+
+			Ar << Friction << StaticFriction << Restitution << LinearEtherDrag << AngularEtherDrag << SleepingLinearThreshold << SleepingAngularThreshold << DisabledLinearThreshold << DisabledAngularThreshold;
+
+			if (Ar.CustomVer(FExternalPhysicsCustomObjectVersion::GUID) >= FExternalPhysicsCustomObjectVersion::PhysicsMaterialSleepCounterThreshold)
+			{
+				Ar << SleepCounterThreshold;
+			}
+		}
+	};
+
+	class FChaosPhysicsMaterialMask
 	{
-		Ar << Friction << Restitution << SleepingLinearThreshold << SleepingAngularThreshold << DisabledLinearThreshold << DisabledAngularThreshold;
-	}
-};
+	public:
 
+		int32 SizeX;
+		int32 SizeY;
+		TArray<uint32> MaskData;
 
-template <typename T>
-FORCEINLINE FArchive& operator<<(FArchive& Ar, TChaosPhysicsMaterial<T>& Value)
-{
-	Value.Serialize(Ar);
-	return Ar;
-}
+		int32 UVChannelIndex;
+		int32 AddressX;
+		int32 AddressY;
+
+		FChaosPhysicsMaterialMask()
+			: SizeX(0)
+			, SizeY(0)
+			, MaskData()
+			, UVChannelIndex(0)
+			, AddressX(0)
+			, AddressY(0)
+		{
+		}
+
+		static constexpr bool IsSerializablePtr = true;
+
+		static void StaticSerialize(FArchive& Ar, TSerializablePtr<FChaosPhysicsMaterialMask>& Serializable)
+		{
+			FChaosPhysicsMaterialMask* MaterialMask = const_cast<FChaosPhysicsMaterialMask*>(Serializable.Get());
+
+			if (Ar.IsLoading())
+			{
+				MaterialMask = new FChaosPhysicsMaterialMask();
+				Serializable.SetFromRawLowLevel(MaterialMask);
+			}
+
+			MaterialMask->Serialize(Ar);
+		}
+
+		void Serialize(FArchive& Ar)
+		{
+			Ar << SizeX << SizeY << UVChannelIndex << AddressX << AddressY << MaskData;
+		}
+	};
 }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "CoreMinimal.h"
@@ -944,6 +944,7 @@ float FQuadricSkeletalMeshReduction::SimplifyMesh( const FSkeletalMeshOptimizati
 	const bool bLockEdges             = Settings.bLockEdges;
 	const bool bPreserveVolume        = (VolumeImportance > 1.e-4);
 	const bool bEnforceBoneBoundaries = Settings.bEnforceBoneBoundaries;
+	const bool bLockColorBoundaries   = Settings.bLockColorBounaries;
 
 	// Terminator tells the simplifier when to stop
 	SkeletalSimplifier::FSimplifierTerminator Terminator(MinTriNumToRetain, SrcTriNum, MinVerNumToRetain, SrcVertNum, MaxCollapseCost, MaxDist);
@@ -1047,7 +1048,7 @@ float FQuadricSkeletalMeshReduction::SimplifyMesh( const FSkeletalMeshOptimizati
 	const float CoAlignmentLimit = FMath::Cos(45.f * PI / 180.); // 45 degrees limit
 
 	// Create the simplifier
-
+	
 	SkeletalSimplifier::FMeshSimplifier  Simplifier(Mesh.VertexBuffer, (uint32)Mesh.NumVertices(),
 		                                            Mesh.IndexBuffer, (uint32)Mesh.NumIndices(), 
 		                                            CoAlignmentLimit, VolumeImportance, bPreserveVolume,  bEnforceBoneBoundaries);
@@ -1077,6 +1078,12 @@ float FQuadricSkeletalMeshReduction::SimplifyMesh( const FSkeletalMeshOptimizati
 		{
 			// If locking the boundary, this has be be done before costs are computed.
 			Simplifier.SetBoundaryLocked();
+		}
+
+		if (bLockColorBoundaries)
+		{
+			// Lock the verts in edges that connect differnt colors.  Also locks verts that have multiple colors.
+			Simplifier.SetColorEdgeLocked();
 		}
 
 	}
@@ -1320,7 +1327,7 @@ namespace
 
 	void Empty(FSkeletalMeshLODModel& LODModel)
 	{
-		LODModel = FSkeletalMeshLODModel();
+		LODModel.Empty();
 	}
 
 }
@@ -1373,7 +1380,7 @@ void  FQuadricSkeletalMeshReduction::AddSourceModelInfluences( const FSkeletalMe
 					// Add the non-zero weights 
 					for (int32 b = 0; b < MAX_TOTAL_INFLUENCES; ++b)
 					{
-						uint8 LocalBoneId = SrcRawSkinWeight.InfluenceBones[b];
+						FBoneIndexType LocalBoneId = SrcRawSkinWeight.InfluenceBones[b];
 						uint8 Weight = SrcRawSkinWeight.InfluenceWeights[b];
 
 						checkSlow(LocalBoneId < BoneMap.Num());
@@ -1448,7 +1455,8 @@ void  FQuadricSkeletalMeshReduction::AddSourceModelInfluences( const FSkeletalMe
 
 			//  Create a structure that allows us to look-up by SourceModel Vertex ID 
 			
-			BoneIdWeightMap* VtxToBoneIdWeightMap             = new  BoneIdWeightMap[NumImportVertex];
+			TArray<BoneIdWeightMap> VtxToBoneIdWeightMap;
+			VtxToBoneIdWeightMap.AddDefaulted(NumImportVertex);
 
 			for (int32 i = 0; i < SrcModelInfluences.Num(); ++i)
 			{
@@ -1534,7 +1542,6 @@ void  FQuadricSkeletalMeshReduction::AddSourceModelInfluences( const FSkeletalMe
 				}
 			}
 
-			delete[] VtxToBoneIdWeightMap;
 		}
 
 	}
@@ -1584,9 +1591,7 @@ void FQuadricSkeletalMeshReduction::ConvertToFSkeletalMeshLODModel( const int32 
 	Options.bComputeTangents = false;
 	Options.bUseMikkTSpace = true; //Avoid builtin build by specifying true for mikkt space
 	Options.bComputeWeightedNormals = false;
-	Options.OverlappingThresholds.ThresholdPosition = 0.0f;
-	Options.OverlappingThresholds.ThresholdTangentNormal = 0.0f;
-	Options.OverlappingThresholds.ThresholdUV = 0.0f;
+	//Leave the default threshold
 	Options.bRemoveDegenerateTriangles = false;
 	IMeshUtilities& MeshUtilities = FModuleManager::Get().LoadModuleChecked<IMeshUtilities>("MeshUtilities");
 	
@@ -1828,7 +1833,7 @@ void FQuadricSkeletalMeshReduction::ReduceSkeletalMesh(USkeletalMesh& SkeletalMe
 
 	TMap<int32, FSkelMeshSourceSectionUserData> BackupUserSectionsData;
 	FString BackupLodModelBuildStringID = TEXT("");
-
+	FString BackupRawSkeletalMeshBulkDataID = TEXT("");
 
 	
 
@@ -1860,6 +1865,7 @@ void FQuadricSkeletalMeshReduction::ReduceSkeletalMesh(USkeletalMesh& SkeletalMe
 	{
 		FSkeletalMeshLODModel& DstBackupSectionLODModel = SkeletalMeshResource.LODModels[LODIndex];
 		BackupLodModelBuildStringID = DstBackupSectionLODModel.BuildStringID;
+		BackupRawSkeletalMeshBulkDataID = DstBackupSectionLODModel.RawSkeletalMeshBulkDataID;
 		BackupUserSectionsData = DstBackupSectionLODModel.UserSectionsData;
 	}
 
@@ -1987,12 +1993,12 @@ void FQuadricSkeletalMeshReduction::ReduceSkeletalMesh(USkeletalMesh& SkeletalMe
 
 		if (!bReducingSourceModel && Old)
 		{
+			bool bIsOldRawSkelMeshEmpty = SkeletalMesh.IsLODImportedDataEmpty(LODIndex);
 			//We need to backup the original RawSkeletalMeshBulkData in case it was an imported LOD
-			if (!bLODModelAdded && !Old->RawSkeletalMeshBulkData.IsEmpty())
+			if (!bLODModelAdded && !bIsOldRawSkelMeshEmpty)
 			{
-				Old->RawSkeletalMeshBulkData.LoadRawMesh(RawMesh);
-				GeoImportVersion = Old->RawSkeletalMeshBulkData.GeoImportVersion;
-				SkinningImportVersion = Old->RawSkeletalMeshBulkData.SkinningImportVersion;
+				SkeletalMesh.LoadLODImportedData(LODIndex, RawMesh);
+				SkeletalMesh.GetLODImportedDataVersions(LODIndex, GeoImportVersion, SkinningImportVersion);
 			}
 			//If the delegate is not bound 
 			if (!Settings.OnDeleteLODModelDelegate.IsBound())
@@ -2009,18 +2015,16 @@ void FQuadricSkeletalMeshReduction::ReduceSkeletalMesh(USkeletalMesh& SkeletalMe
 		}
 		else if(bReducingSourceModel)
 		{
-			//In case we reduce the source model we want to keep the original import data
-			SrcModel->RawSkeletalMeshBulkData.LoadRawMesh(RawMesh);
-			GeoImportVersion = SrcModel->RawSkeletalMeshBulkData.GeoImportVersion;
-			SkinningImportVersion = SrcModel->RawSkeletalMeshBulkData.SkinningImportVersion;
+			SkeletalMesh.LoadLODImportedData(BaseLOD, RawMesh);
+			SkeletalMesh.GetLODImportedDataVersions(BaseLOD, GeoImportVersion, SkinningImportVersion);
 		}
 	}
 
 	
 
-	// Reduce LOD model with SrcMesh
+	// Reduce LOD model with SrcMesh if src mesh has more then 1 triangle
 
-	if (ReduceSkeletalLODModel(*SrcModel, *NewModel, SkeletalMesh.GetImportedBounds(), SkeletalMesh.RefSkeleton, Settings, ImportantBones, RelativeToRefPoseMatrices, LODIndex, bReducingSourceModel))
+	if (SrcModel->NumVertices > 3 && ReduceSkeletalLODModel(*SrcModel, *NewModel, SkeletalMesh.GetImportedBounds(), SkeletalMesh.RefSkeleton, Settings, ImportantBones, RelativeToRefPoseMatrices, LODIndex, bReducingSourceModel))
 	{
 		FSkeletalMeshLODInfo* ReducedLODInfoPtr = SkeletalMesh.GetLODInfo(LODIndex);
 		check(ReducedLODInfoPtr);
@@ -2078,6 +2082,16 @@ void FQuadricSkeletalMeshReduction::ReduceSkeletalMesh(USkeletalMesh& SkeletalMe
 						Section.ChunkedParentSectionIndex = bIsChunkedSection ? CurrentParentSectionIndex : INDEX_NONE;
 						//If we reduce inline the source model, we want to use the real source original section
 						Section.OriginalDataSectionIndex = bReducingSourceModel ? SectionData.OriginalDataSectionIndex : OriginalSectionIndex;
+
+						if (!bLODModelAdded)
+						{
+							if (FSkelMeshSourceSectionUserData* BackUpUserSectionData = BackupUserSectionsData.Find(SectionData.OriginalDataSectionIndex))
+							{
+								FSkelMeshSourceSectionUserData& ReducedUserSectionData = ImportedModelLOD.UserSectionsData.FindOrAdd(Section.OriginalDataSectionIndex);
+								ReducedUserSectionData = *BackUpUserSectionData;
+							}
+						}
+
 						SectionMatched = true; //a backup section can be restore only once
 						break;
 					}
@@ -2086,9 +2100,9 @@ void FQuadricSkeletalMeshReduction::ReduceSkeletalMesh(USkeletalMesh& SkeletalMe
 
 			if (!bLODModelAdded)
 			{
-				//If its an existing LOD re-apply the UserSectionData
-				ImportedModelLOD.UserSectionsData = BackupUserSectionsData;
+				//If its an existing LOD put back the buildStringID
 				ImportedModelLOD.BuildStringID = BackupLodModelBuildStringID;
+				ImportedModelLOD.RawSkeletalMeshBulkDataID = BackupRawSkeletalMeshBulkDataID;
 			}
 		}
 	}
@@ -2146,9 +2160,8 @@ void FQuadricSkeletalMeshReduction::ReduceSkeletalMesh(USkeletalMesh& SkeletalMe
 	if ((bReducingSourceModel || !bLODModelAdded ) && RawMesh.Points.Num() > 0)
 	{
 		//Put back the original import data, we need it to allow inline reduction and skeletal mesh split workflow
-		SkeletalMeshResource.LODModels[LODIndex].RawSkeletalMeshBulkData.SaveRawMesh(RawMesh);
-		SkeletalMeshResource.LODModels[LODIndex].RawSkeletalMeshBulkData.GeoImportVersion = GeoImportVersion;
-		SkeletalMeshResource.LODModels[LODIndex].RawSkeletalMeshBulkData.SkinningImportVersion = SkinningImportVersion;
+		SkeletalMesh.SaveLODImportedData(LODIndex, RawMesh);
+		SkeletalMesh.SetLODImportedDataVersions(LODIndex, GeoImportVersion, SkinningImportVersion);
 	}
 
 	SkeletalMesh.CalculateRequiredBones(SkeletalMeshResource.LODModels[LODIndex], SkeletalMesh.RefSkeleton, &BonesToRemove);

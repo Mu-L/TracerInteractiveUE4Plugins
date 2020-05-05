@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Components/WidgetComponent.h"
 #include "PrimitiveViewRelevance.h"
@@ -533,7 +533,7 @@ public:
 		Result.bShadowRelevance = IsShadowCast(View);
 		Result.bTranslucentSelfShadow = bCastVolumetricTranslucentShadow;
 		Result.bEditorPrimitiveRelevance = false;
-		Result.bVelocityRelevance = IsMovable() && Result.bOpaqueRelevance && Result.bRenderInMainPass;
+		Result.bVelocityRelevance = IsMovable() && Result.bOpaque && Result.bRenderInMainPass;
 
 		return Result;
 	}
@@ -700,7 +700,7 @@ void UWidgetComponent::UpdateMaterialInstance()
 	MaterialInstance = UMaterialInstanceDynamic::Create(BaseMaterial, this);
 	if (MaterialInstance)
 	{
-			MaterialInstance->AddToCluster(this);
+		MaterialInstance->AddToCluster(this);
 	}
 	UpdateMaterialInstanceParameters();
 }
@@ -837,6 +837,9 @@ FCollisionShape UWidgetComponent::GetCollisionShape(float Inflation) const
 
 void UWidgetComponent::OnRegister()
 {
+	// Set this prior to registering the scene component so that bounds are calculated correctly.
+	CurrentDrawSize = DrawSize;
+
 	Super::OnRegister();
 
 #if !UE_SERVER
@@ -1310,7 +1313,7 @@ void UWidgetComponent::GetUsedMaterials(TArray<UMaterialInterface*>& OutMaterial
 
 #if WITH_EDITOR
 
-bool UWidgetComponent::CanEditChange(const UProperty* InProperty) const
+bool UWidgetComponent::CanEditChange(const FProperty* InProperty) const
 {
 	if ( InProperty )
 	{
@@ -1348,7 +1351,7 @@ bool UWidgetComponent::CanEditChange(const UProperty* InProperty) const
 
 void UWidgetComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
-	UProperty* Property = PropertyChangedEvent.MemberProperty;
+	FProperty* Property = PropertyChangedEvent.MemberProperty;
 
 	if( Property && PropertyChangedEvent.ChangeType != EPropertyChangeType::Interactive )
 	{
@@ -1415,13 +1418,15 @@ void UWidgetComponent::InitWidget()
 	// Don't do any work if Slate is not initialized
 	if ( FSlateApplication::IsInitialized() )
 	{
-		if ( WidgetClass && Widget == nullptr && GetWorld() )
+		UWorld* World = GetWorld();
+
+		if ( WidgetClass && Widget == nullptr && World && !World->bIsTearingDown)
 		{
 			Widget = CreateWidget(GetWorld(), WidgetClass);
 		}
 		
 #if WITH_EDITOR
-		if ( Widget && !GetWorld()->IsGameWorld() && !bEditTimeUsable )
+		if ( Widget && !World->IsGameWorld() && !bEditTimeUsable )
 		{
 			if( !GEnableVREditorHacks )
 			{
@@ -1503,7 +1508,7 @@ void UWidgetComponent::SetSlateWidget(const TSharedPtr<SWidget>& InSlateWidget)
 void UWidgetComponent::UpdateWidget()
 {
 	// Don't do any work if Slate is not initialized
-	if ( FSlateApplication::IsInitialized() )
+	if (FSlateApplication::IsInitialized() && !IsPendingKill())
 	{
 		if ( Space != EWidgetSpace::Screen )
 		{
@@ -1538,7 +1543,7 @@ void UWidgetComponent::UpdateWidget()
 					bWidgetChanged = true;
 				}
 			}
-			else if( SlateWidget.IsValid() )
+			else if ( SlateWidget.IsValid() )
 			{
 				if ( SlateWidget != CurrentSlateWidget || bNeededNewWindow )
 				{
@@ -1851,7 +1856,9 @@ TArray<FWidgetAndPointer> UWidgetComponent::GetHitWidgetPath(FVector2D WidgetSpa
 	TArray<FWidgetAndPointer> ArrangedWidgets;
 	if ( SlateWindow.IsValid() )
 	{
-		ArrangedWidgets = SlateWindow->GetHittestGrid().GetBubblePath( LocalHitLocation, CursorRadius, bIgnoreEnabledStatus );
+		// @todo slate - widget components would need to be associated with a user for this to be anthing valid
+		const int32 UserIndex = INDEX_NONE;
+		ArrangedWidgets = SlateWindow->GetHittestGrid().GetBubblePath( LocalHitLocation, CursorRadius, bIgnoreEnabledStatus, UserIndex);
 
 		for( FWidgetAndPointer& ArrangedWidget : ArrangedWidgets )
 		{
@@ -1995,16 +2002,19 @@ void UWidgetComponent::SetWidgetClass(TSubclassOf<UUserWidget> InWidgetClass)
 	{
 		WidgetClass = InWidgetClass;
 
-		if(HasBegunPlay())
+		if (FSlateApplication::IsInitialized())
 		{
-			if (WidgetClass)
+			if (HasBegunPlay() && !GetWorld()->bIsTearingDown)
 			{
-				UUserWidget* NewWidget = CreateWidget(GetWorld(), WidgetClass);
-				SetWidget(NewWidget);
-			}
-			else
-			{
-				SetWidget(nullptr);
+				if (WidgetClass)
+				{
+					UUserWidget* NewWidget = CreateWidget(GetWorld(), WidgetClass);
+					SetWidget(NewWidget);
+				}
+				else
+				{
+					SetWidget(nullptr);
+				}
 			}
 		}
 	}

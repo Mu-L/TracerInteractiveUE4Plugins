@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -27,15 +27,10 @@ struct FChaosBreakingEventData
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Data")
 	float Mass;
 
-	// The particle index of the breaking event
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Data")
-	int32 ParticleIndex;
-
 	FChaosBreakingEventData()
 		: Location(FVector::ZeroVector)
 		, Velocity(FVector::ZeroVector)
 		, Mass(0.0f)
-		, ParticleIndex(INDEX_NONE)
 	{
 	}
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SDetailSingleItemRow.h"
 #include "ObjectPropertyNode.h"
@@ -186,10 +186,6 @@ FReply SDetailSingleItemRow::OnArrayDrop(const FDragDropEvent& DragDropEvent)
 		{
 			int32 OriginalIndex = SwappingPropertyNode->GetArrayIndex();
 			int32 NewIndex = SwappablePropertyNode->GetArrayIndex();
-			if (NewIndex > OriginalIndex)
-			{
-				NewIndex += 1;
-			}
 			TSharedPtr<IPropertyHandle> SwappingHandle = PropertyEditorHelpers::GetPropertyHandle(SwappingPropertyNode.ToSharedRef(), OwnerTreeNode.Pin()->GetDetailsView()->GetNotifyHook(), OwnerTreeNode.Pin()->GetDetailsView()->GetPropertyUtilities());
 			TSharedPtr<IPropertyHandleArray> ParentHandle = SwappingHandle->GetParentHandle()->AsArray();
 			if (ParentHandle.IsValid() && SwappablePropertyNode->GetParentNode() == SwappingPropertyNode->GetParentNode())
@@ -369,8 +365,8 @@ void SDetailSingleItemRow::Construct( const FArguments& InArgs, FDetailLayoutCus
 				SwappablePropertyNode = PropertyNode;
 			}
 			else if (PropertyNode.IsValid() 
-				&& Cast<UArrayProperty>(PropertyNode->GetProperty()) != nullptr // Is an array
-				&& Cast<UObjectProperty>(Cast<UArrayProperty>(PropertyNode->GetProperty())->Inner) != nullptr) // Is an object array
+				&& CastField<FArrayProperty>(PropertyNode->GetProperty()) != nullptr // Is an array
+				&& CastField<FObjectProperty>(CastField<FArrayProperty>(PropertyNode->GetProperty())->Inner) != nullptr) // Is an object array
 			{
 				ArrayDragDelegate = FOnTableRowDragEnter::CreateSP(this, &SDetailSingleItemRow::OnArrayDragEnter);
 				ArrayDragLeaveDelegate = FOnTableRowDragLeave::CreateSP(this, &SDetailSingleItemRow::OnArrayDragLeave);
@@ -622,6 +618,7 @@ void SDetailSingleItemRow::OnPasteProperty()
 			TSharedPtr<IPropertyHandle> Handle = PropertyEditorHelpers::GetPropertyHandle(PropertyNode.ToSharedRef(), OwnerTreeNode.Pin()->GetDetailsView()->GetNotifyHook(), OwnerTreeNode.Pin()->GetDetailsView()->GetPropertyUtilities());
 
 			Handle->SetValueFromFormattedString(ClipboardContent);
+			PropertyNode->RebuildChildren();
 			TArray<TSharedPtr<IPropertyHandle>> CopiedHandles;
 
 			CopiedHandles.Add(Handle);

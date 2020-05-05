@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System;
@@ -166,14 +166,6 @@ public class FreeType2 : ModuleRules
 
 				PublicAdditionalLibraries.Add(LibPath);
 			}
-		}
-		else if (Target.Platform == UnrealTargetPlatform.Switch)
-		{
-			LibPath = Target.Configuration == UnrealTargetConfiguration.Debug && Target.bDebugBuildsActuallyUseDebugCRT
-				? "Debug"
-				: "Release";
-
-			PublicAdditionalLibraries.Add(Path.Combine(FreeType2LibPath, "Switch", LibPath, "libFreetype.a"));
 		}
 	}
 }

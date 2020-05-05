@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -17,6 +17,7 @@
 #include "Subsystems/SubsystemCollection.h"
 #include "Subsystems/EngineSubsystem.h"
 #include "RHI.h"
+#include "AudioDeviceManager.h"
 #include "Engine.generated.h"
 
 #define WITH_DYNAMIC_RESOLUTION (!UE_SERVER)
@@ -24,7 +25,6 @@
 class AMatineeActor;
 class APlayerController;
 class Error;
-class FAudioDeviceManager;
 class FCanvas;
 class FCommonViewportClient;
 class FFineGrainedPerformanceTracker;
@@ -366,7 +366,7 @@ struct FWorldContext
 	bool	bWaitingOnOnlineSubsystem;
 
 	/** Handle to this world context's audio device.*/
-	uint32 AudioDeviceHandle;
+	uint32 AudioDeviceID;
 
 	/** Custom description to be display in blueprint debugger UI */
 	FString CustomDescription;
@@ -414,7 +414,7 @@ struct FWorldContext
 		, PIEWorldFeatureLevel(ERHIFeatureLevel::Num)
 		, RunAsDedicated(false)
 		, bWaitingOnOnlineSubsystem(false)
-		, AudioDeviceHandle(INDEX_NONE)
+		, AudioDeviceID(INDEX_NONE)
 		, ThisCurrentWorld(nullptr)
 	{ }
 
@@ -862,22 +862,6 @@ public:
 	UPROPERTY(globalconfig)
 	FString WireframeMaterialName;
 
-	/** The material used to default hair meshes. */
-	UPROPERTY()
-	class UMaterial* HairDefaultMaterial;
-
-	/** @todo document */
-	UPROPERTY(globalconfig)
-	FString HairDefaultMaterialName;
-
-	/** The material used to debug hair meshes. */
-	UPROPERTY()
-	class UMaterial* HairDebugMaterial;
-
-	/** @todo document */
-	UPROPERTY(globalconfig)
-	FString HairDebugMaterialName;
-
 #if WITH_EDITORONLY_DATA
 	/** A translucent material used to render things in geometry mode. */
 	UPROPERTY()
@@ -1027,6 +1011,14 @@ public:
 	UPROPERTY(globalconfig)
 	FSoftObjectPath ClothPaintMaterialWireframeName;
 
+	/** A material used to render physical material mask on mesh. */
+	UPROPERTY()
+	class UMaterial* PhysicalMaterialMaskMaterial;
+
+	/** A material used to render physical material mask on mesh. */
+	UPROPERTY(globalconfig)
+	FSoftObjectPath PhysicalMaterialMaskMaterialName;
+
 	/** A material used to render debug meshes. */
 	UPROPERTY()
 	class UMaterial* DebugEditorMaterial;
@@ -1125,9 +1117,6 @@ public:
 	*/
 	UPROPERTY(globalconfig)
 	float MaxPixelShaderAdditiveComplexityCount;
-
-	UPROPERTY(globalconfig)
-	float MaxES2PixelShaderAdditiveComplexityCount;
 
 	UPROPERTY(globalconfig)
 	float MaxES3PixelShaderAdditiveComplexityCount;
@@ -1323,13 +1312,15 @@ public:
 	FFloatRange SmoothedFrameRateRange;
 
 private:
-	/** Control how the Engine process the Framerate/Timestep */
+	/** Controls how the Engine process the Framerate/Timestep */
 	UPROPERTY(transient)
-	UEngineCustomTimeStep* DefaultCustomTimeStep;
+	UEngineCustomTimeStep* CustomTimeStep;
 
-	/** Control how the Engine process the Framerate/Timestep */
-	UPROPERTY(transient)
-	UEngineCustomTimeStep* CurrentCustomTimeStep;
+	/** Broadcasts whenever the custom time step changed. */
+	FSimpleMulticastDelegate CustomTimeStepChangedEvent;
+
+	/** Is the current custom time step was initialized properly and if we should shut it down. */
+	bool bIsCurrentCustomTimeStepInitialized;
 
 public:
 	/**
@@ -1337,48 +1328,45 @@ public:
 	 * This class will be responsible of updating the application Time and DeltaTime.
 	 * Can be used to synchronize the engine with another process (gen-lock).
 	 */
-	UPROPERTY(AdvancedDisplay, config, EditAnywhere, Category=Framerate, meta=(MetaClass="EngineCustomTimeStep", DisplayName="Custom TimeStep", ConfigRestartRequired=true))
+	UPROPERTY(AdvancedDisplay, config, EditAnywhere, Category=Framerate, meta=(MetaClass="EngineCustomTimeStep", DisplayName="Custom TimeStep"))
 	FSoftClassPath CustomTimeStepClassName;
 
 private:
-	/**
-	 * Default timecode provider that will be used when no custom provider is set.
-	 * This is expected to be valid throughout the entire life of the application.
-	 */
+	/** Controls the Engine's timecode. */
 	UPROPERTY(transient)
-	UTimecodeProvider* DefaultTimecodeProvider;
+	UTimecodeProvider* TimecodeProvider;
 
-	UPROPERTY(transient)
-	UTimecodeProvider* CustomTimecodeProvider;
+	/** Broadcasts whenever the timecode provider changed. */
+	FSimpleMulticastDelegate TimecodeProviderChangedEvent;
+
+	/** Is the current timecode provider was initialized properly and if we should shut it down. */
+	bool bIsCurrentTimecodeProviderInitialized;
 
 public:
-
-	/**
-	 * Allows UEngine subclasses a chance to override the DefaultTimecodeProvider class.
-	 * This must be set before InitializeObjectReferences is called.
-	 * This is intentionally protected and not exposed to config.
-	 */
-	UPROPERTY(config, EditAnywhere, Category=Timecode, meta=(MetaClass="TimecodeProvider", DisplayName="DefaultTimecodeProvider", ConfigRestartRequired=true))
-	FSoftClassPath DefaultTimecodeProviderClassName;
-
-	/**
-	 * Override the CustomTimecodeProvider when the engine is started.
-	 * When set, this does not change the DefaultTImecodeProvider class.
-	 * Instead, it will create an instance and set it as the CustomTimecodeProvider.
-	 */
-	UPROPERTY(config, EditAnywhere, Category=Timecode, meta=(MetaClass="TimecodeProvider", DisplayName="TimecodeProvider", ConfigRestartRequired=true))
+	/** Set TimecodeProvider when the engine is started. */
+	UPROPERTY(config, EditAnywhere, Category=Timecode, meta=(MetaClass="TimecodeProvider", DisplayName="Timecode Provider"))
 	FSoftClassPath TimecodeProviderClassName;
-	
+
 	/**
-	 * Frame rate used to generated the engine Timecode's frame number when no TimecodeProvider are specified.
-	 * It doesn't control the Engine frame rate. The Engine can run faster or slower that the specified TimecodeFrameRate.
+	 * Generate a default timecode from the computer clock when there is no timecode provider.
+	 * On desktop, the system time will be used and will behave as if a USystemTimecodeProvider was set.
+	 * On console, the high performance clock will be used. That may introduce drift over time.
+	 * If you wish to use the system time on console, set the timecode provider to USystemeTimecodeProvider.
 	 */
-	UPROPERTY(config, EditAnywhere, Category=Timecode, Meta=(ConfigRestartRequired=true))
-	FFrameRate DefaultTimecodeFrameRate;
+	UPROPERTY(config, EditAnywhere, Category=Timecode)
+	bool bGenerateDefaultTimecode;
+
+	/** When generating a default timecode (bGenerateDefaultTimecode is true and no timecode provider is set) at which frame rate it should be generated (number of frames). */
+	UPROPERTY(config, EditAnywhere, Category=Timecode, meta=(EditCondition="bGenerateDefaultTimecode"))
+	FFrameRate GenerateDefaultTimecodeFrameRate;
+
+	/** Number of frames to subtract from generated default timecode. */
+	UPROPERTY(AdvancedDisplay, config, EditAnywhere, Category=Timecode, meta=(EditCondition="bGenerateDefaultTimecode"))
+	float GenerateDefaultTimecodeFrameDelay;
 
 public:
 	/** 
-	 * Whether we should check for more than N pawns spawning in a single frame.  
+	 * Whether we should check for more than N pawns spawning in a single frame.
 	 * Basically, spawning pawns and all of their attachments can be slow.  And on consoles it
 	 * can be really slow.  If this bool is true we will display a 
 	 **/
@@ -1588,9 +1576,6 @@ public:
 	UPROPERTY(globalconfig)
 	FString ParticleEventManagerClassPath;
 
-	/** A collection of messages to display on-screen. */
-	TArray<struct FScreenMessageString> PriorityScreenMessages;
-
 	/** Used to alter the intensity level of the selection highlight on selected objects */
 	UPROPERTY(transient)
 	float SelectionHighlightIntensity;
@@ -1788,12 +1773,32 @@ protected:
 	FAudioDeviceManager* AudioDeviceManager;
 
 	/** Audio device handle to the main audio device. */
-	uint32 MainAudioDeviceHandle;
+	FAudioDeviceHandle MainAudioDeviceHandle;
 
-public:
+private:
+	/** A collection of messages to display on-screen. */
+	TArray<struct FScreenMessageString> PriorityScreenMessages;
 
 	/** A collection of messages to display on-screen. */
 	TMap<int32, FScreenMessageString> ScreenMessages;
+
+public:
+	float DrawOnscreenDebugMessages(UWorld* World, FViewport* Viewport, FCanvas* Canvas, UCanvas* CanvasObject, float MessageX, float MessageY);
+
+	/** Add a FString to the On-screen debug message system. bNewerOnTop only works with Key == INDEX_NONE */
+	void AddOnScreenDebugMessage(uint64 Key, float TimeToDisplay, FColor DisplayColor, const FString& DebugMessage, bool bNewerOnTop = true, const FVector2D& TextScale = FVector2D::UnitVector);
+
+	/** Add a FString to the On-screen debug message system. bNewerOnTop only works with Key == INDEX_NONE */
+	void AddOnScreenDebugMessage(int32 Key, float TimeToDisplay, FColor DisplayColor, const FString& DebugMessage, bool bNewerOnTop = true, const FVector2D& TextScale = FVector2D::UnitVector);
+
+	/** Retrieve the message for the given key */
+	bool OnScreenDebugMessageExists(uint64 Key);
+
+	/** Clear any existing debug messages */
+	void ClearOnScreenDebugMessages();
+
+	//Remove the message for the given key
+	void RemoveOnScreenDebugMessage(uint64 Key);
 
 	/** Reference to the stereoscopic rendering interface, if any */
 	TSharedPtr< class IStereoRendering, ESPMode::ThreadSafe > StereoRenderingDevice;
@@ -1853,6 +1858,13 @@ public:
 	/** Called by internal engine systems after level actors have changed to notify other subsystems */
 	void BroadcastLevelActorDeleted(AActor* InActor) { LevelActorDeletedEvent.Broadcast(InActor); }
 
+	/** Editor-only event triggered when actors outer changes */
+	DECLARE_EVENT_TwoParams(UEngine, FLevelActorOuterChangedEvent, AActor*, UObject*);
+	FLevelActorOuterChangedEvent& OnLevelActorOuterChanged() { return LevelActorOuterChangedEvent; }
+
+	/** Called by internal engine systems after level actors have changed outer */
+	void BroadcastLevelActorOuterChanged(AActor* InActor, UObject* InOldOuter) { LevelActorOuterChangedEvent.Broadcast(InActor, InOldOuter); }
+
 	/** Editor-only event triggered when actors are attached in the world */
 	DECLARE_EVENT_TwoParams( UEngine, FLevelActorAttachedEvent, AActor*, const AActor* );
 	FLevelActorAttachedEvent& OnLevelActorAttached() { return LevelActorAttachedEvent; }
@@ -1873,6 +1885,22 @@ public:
 
 	/** Called by internal engine systems after a level actor's folder has been changed */
 	void BroadcastLevelActorFolderChanged(const AActor* InActor, FName OldPath) { LevelActorFolderChangedEvent.Broadcast(InActor, OldPath); }
+
+	/** Editor-only event triggered when an actor is being moved, rotated or scaled (AActor::PostEditMove) */
+	DECLARE_EVENT_OneParam(UEngine, FOnActorMovingEvent, AActor*);
+	FOnActorMovingEvent& OnActorMoving() { return OnActorMovingEvent; }
+
+	/** Called by internal engine systems when an actor is being moved to notify other subsystems */
+	void BroadcastOnActorMoving(AActor* Actor) { OnActorMovingEvent.Broadcast(Actor); }
+
+	/** Editor-only event triggered after actors are moved, rotated or scaled by an editor system */
+	DECLARE_EVENT_OneParam(UEditorEngine, FOnActorsMovedEvent, TArray<AActor*>&);
+	FOnActorsMovedEvent& OnActorsMoved() { return OnActorsMovedEvent; }
+
+	/**
+	 * Called when actors have been translated, rotated, or scaled by the editor
+	 */
+	void BroadcastActorsMoved(TArray<AActor*>& Actors) const { OnActorsMovedEvent.Broadcast(Actors); }
 
 	/** Editor-only event triggered after an actor is moved, rotated or scaled (AActor::PostEditMove) */
 	DECLARE_EVENT_OneParam( UEngine, FOnActorMovedEvent, AActor* );
@@ -1952,6 +1980,9 @@ public:
 	virtual void Serialize(FArchive& Ar) override;
 	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
 	virtual bool IsDestructionThreadSafe() const override { return false; }
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 	//~ End UObject Interface.
 
 	/** Initialize the game engine. */
@@ -2076,24 +2107,23 @@ public:
 	 */
 	virtual double CorrectNegativeTimeDelta(double DeltaRealTime);
 
-	/** Causes the current CustomTimeStep to be shut down and then reinitialized. */
+	/** Causes the current custom time step to be shut down and then reinitialized. */
 	void ReinitializeCustomTimeStep();
 
 	/**
-	 * Set the CustomTimeStep that will control the Engine Framerate/Timestep
+	 * Set the custom time step that will control the Engine Framerate/Timestep.
+	 * It will shutdown the previous custom time step.
+	 * The new custom time step will be initialized.
 	 *
-	 * @return	true if the CustomTimeStep was properly initialized
+	 * @return	the result of the custom time step initialization.
 	 */
 	bool SetCustomTimeStep(UEngineCustomTimeStep* InCustomTimeStep);
 
-	/** Get the CustomTimeStep that control the Engine Framerate/Timestep */
-	UEngineCustomTimeStep* GetCustomTimeStep() const { return CurrentCustomTimeStep; };
+	/** Get the custom time step that control the Engine Framerate/Timestep */
+	UEngineCustomTimeStep* GetCustomTimeStep() const { return CustomTimeStep; };
 
-	/**
-	 * Get the DefaultCustomTimeStep created at the engine initialization.
-	 * This may be null if no CustomTimeStep was defined in the project settings and may not be currently active.
-	 */
-	UEngineCustomTimeStep* GetDefaultCustomTimeStep() const { return DefaultCustomTimeStep; }
+	/** Return custom time step changed event. */
+	FSimpleMulticastDelegate& OnCustomTimeStepChanged() { return CustomTimeStepChangedEvent; }
 
 	/** Executes the deferred commands */
 	void TickDeferredCommands();
@@ -2116,34 +2146,23 @@ public:
 	/** Update FApp::Timecode. */
 	void UpdateTimecode();
 
-	/** Causes the current TimecodeProvider to be shut down and then reinitialized. */
+	/** Causes the current timecode provider to be shut down and then reinitialized. */
 	void ReinitializeTimecodeProvider();
 
 	/**
-	 * Sets the CustomTimecodeProvider for the engine, shutting down the the default provider if necessary.
-	 * Passing nullptr will clear the current CustomTimecodeProvider, and re-initialize the default.
+	 * Set the timecode provider that will control the Engine's timecode.
+	 * It will shutdown the previous timecode provider.
+	 * The new timecode provider will be initialized.
 	 *
-	 * @return True if the provider was set (and initialized successfully when non-null).
+	 * @return	the result value of the new timecode provider initialization.
 	 */
 	bool SetTimecodeProvider(UTimecodeProvider* InTimecodeProvider);
 
-	/**
-	 * Get the TimecodeProvider that control the Engine's Timecode
-	 * The return value should always be non-null.
-	 */
-	const UTimecodeProvider* GetTimecodeProvider() const { return CustomTimecodeProvider ? CustomTimecodeProvider : GetDefaultTimecodeProvider(); }
+	/** Get the TimecodeProvider that control the Engine's Timecode. */
+	UTimecodeProvider* GetTimecodeProvider() const { return TimecodeProvider; };
 
-	/**
-	 * Get the DefaultTimecodeProvider.
-	 * This should be valid throughout the lifetime of the Engine (although, it may not always be active).
-	 */
-	const UTimecodeProvider* GetDefaultTimecodeProvider() const { check(DefaultTimecodeProvider != nullptr); return DefaultTimecodeProvider; }
-
-protected:
-
-	/** Provide mutable access to the current TimecodeProvider to Engine. This is needed to Initialize / Shutdown providers. */
-	UTimecodeProvider* GetTimecodeProviderProtected() { return const_cast<UTimecodeProvider*>(const_cast<const UEngine*>(this)->GetTimecodeProvider()); }
-	UTimecodeProvider* GetDefaultTimecodeProviderProtected() { return const_cast<UTimecodeProvider*>(const_cast<const UEngine*>(this)->GetDefaultTimecodeProvider()); }
+	/** Return timecode provider changed event. */
+	FSimpleMulticastDelegate& OnTimecodeProviderChanged() { return TimecodeProviderChangedEvent; }
 
 public:
 
@@ -2339,18 +2358,6 @@ public:
 	 */
 	float GetTimeBetweenGarbageCollectionPasses() const;
 
-	/** Add a FString to the On-screen debug message system. bNewerOnTop only works with Key == INDEX_NONE */
-	void AddOnScreenDebugMessage(uint64 Key,float TimeToDisplay,FColor DisplayColor,const FString& DebugMessage, bool bNewerOnTop = true, const FVector2D& TextScale = FVector2D::UnitVector);
-
-	/** Add a FString to the On-screen debug message system. bNewerOnTop only works with Key == INDEX_NONE */
-	void AddOnScreenDebugMessage(int32 Key, float TimeToDisplay, FColor DisplayColor, const FString& DebugMessage, bool bNewerOnTop = true, const FVector2D& TextScale = FVector2D::UnitVector);
-
-	/** Retrieve the message for the given key */
-	bool OnScreenDebugMessageExists(uint64 Key);
-
-	/** Clear any existing debug messages */
-	void ClearOnScreenDebugMessages();
-
 #if !UE_BUILD_SHIPPING
 	/** 
 	 * Capture screenshots and performance metrics
@@ -2444,16 +2451,17 @@ public:
 	FAudioDeviceManager* GetAudioDeviceManager();
 
 	/** @return the main audio device handle used by the engine. */
-	uint32 GetAudioDeviceHandle() const;
+	uint32 GetMainAudioDeviceID() const;
 
 	/** @return the main audio device. */
-	class FAudioDevice* GetMainAudioDevice();
+	FAudioDeviceHandle GetMainAudioDevice();
+	class FAudioDevice* GetMainAudioDeviceRaw();
 
 	/** @return the currently active audio device */
-	class FAudioDevice* GetActiveAudioDevice();
+	FAudioDeviceHandle GetActiveAudioDevice();
 
 	/** @return whether we're currently running in split screen (more than one local player) */
-	bool IsSplitScreen(UWorld *InWorld);
+	virtual bool IsSplitScreen(UWorld *InWorld);
 
 	/** @return whether we're currently running with stereoscopic 3D enabled for the specified viewport (or globally, if viewport is nullptr) */
 	bool IsStereoscopic3D(FViewport* InViewport = nullptr);
@@ -2520,13 +2528,13 @@ public:
 	 * Find a Local Player Controller, which may not exist at all if this is a server.
 	 * @return first found LocalPlayerController. Fine for single player, in split screen, one will be picked. 
 	 */
-	class APlayerController* GetFirstLocalPlayerController(UWorld *InWorld);
+	class APlayerController* GetFirstLocalPlayerController(const UWorld* InWorld);
 
 	/** Gets all local players associated with the engine. 
 	 *	This function should only be used in rare cases where no UWorld* is available to get a player list associated with the world.
 	 *  E.g, - use GetFirstLocalPlayerController(UWorld *InWorld) when possible!
 	 */
-	void GetAllLocalPlayerControllers(TArray<APlayerController*>	& PlayerList);
+	void GetAllLocalPlayerControllers(TArray<APlayerController*>& PlayerList);
 
 	/** Returns the GameViewport widget */
 	virtual TSharedPtr<class SViewport> GetGameViewportWidget() const
@@ -2645,7 +2653,7 @@ public:
 			, bCopyDeprecatedProperties(false)
 			, bPreserveRootComponent(true)
 			, bSkipCompilerGeneratedDefaults(false)
-			, bNotifyObjectReplacement(true)
+			, bNotifyObjectReplacement(false)
 			, bClearReferences(true)
 		{}
 	};
@@ -2717,6 +2725,9 @@ private:
 	/** Broadcasts whenever an actor is removed. */
 	FLevelActorDeletedEvent LevelActorDeletedEvent;
 
+	/** Broadcasts whenever an actor's outer changes */
+	FLevelActorOuterChangedEvent LevelActorOuterChangedEvent;
+
 	/** Broadcasts whenever an actor is attached. */
 	FLevelActorAttachedEvent LevelActorAttachedEvent;
 
@@ -2732,8 +2743,14 @@ private:
 	/** Broadcasts whenever a component is being renamed */
 	FLevelComponentRequestRenameEvent LevelComponentRequestRenameEvent;
 
+	/** Broadcasts when an actor is being moved, rotated or scaled */
+	FOnActorMovingEvent	OnActorMovingEvent;
+
 	/** Broadcasts after an actor has been moved, rotated or scaled */
-	FOnActorMovedEvent		OnActorMovedEvent;
+	FOnActorMovedEvent	OnActorMovedEvent;
+
+	/** Broadcast when a group of actors have been moved, rotated, or scaled */
+	FOnActorsMovedEvent OnActorsMovedEvent;
 
 	/** Broadcasts after a component has been moved, rotated or scaled */
 	FOnComponentTransformChangedEvent OnComponentTransformChangedEvent;

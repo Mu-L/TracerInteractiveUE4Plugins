@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ControlRigGizmoActor.h"
 #include "Engine/World.h"
@@ -12,7 +12,6 @@ AControlRigGizmoActor::AControlRigGizmoActor(const FObjectInitializer& ObjectIni
 	, bEnabled(true)
 	, bSelected(false)
 	, bHovered(false)
-	, bManipulating(false)
 {
 
 	ActorRootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("SceneComponent0"));
@@ -21,6 +20,9 @@ AControlRigGizmoActor::AControlRigGizmoActor(const FObjectInitializer& ObjectIni
 	StaticMeshComponent->Mobility = EComponentMobility::Movable;
 	StaticMeshComponent->SetGenerateOverlapEvents(false);
 	StaticMeshComponent->bUseDefaultCollision = true;
+#if WITH_EDITORONLY_DATA
+	StaticMeshComponent->HitProxyPriority = HPP_Wireframe;
+#endif
 
 	RootComponent = ActorRootComponent;
 	StaticMeshComponent->SetupAttachment(RootComponent);
@@ -82,22 +84,16 @@ bool AControlRigGizmoActor::IsHovered() const
 	return bHovered;
 }
 
-void AControlRigGizmoActor::SetManipulating(bool bInManipulating)
+
+void AControlRigGizmoActor::SetGizmoColor(const FLinearColor& InColor)
 {
-	bool bOldManipulating = bManipulating;
-
-	bManipulating = bInManipulating;
-
-	if(bManipulating != bOldManipulating)
+	if (StaticMeshComponent && !ColorParameterName.IsNone())
 	{
-		FEditorScriptExecutionGuard Guard;
-		OnManipulatingChanged(bManipulating);
+		if (UMaterialInstanceDynamic* MaterialInstance = Cast<UMaterialInstanceDynamic>(StaticMeshComponent->GetMaterial(0)))
+		{
+			MaterialInstance->SetVectorParameterValue(ColorParameterName, FVector(InColor));
+		}
 	}
-}
-
-bool AControlRigGizmoActor::IsManipulating() const
-{
-	return bManipulating;
 }
 
 // FControlRigGizmoHelper START
@@ -173,6 +169,7 @@ namespace FControlRigGizmoHelper
 			}
 			if (CreationParam.StaticMesh.IsValid())
 			{
+				GizmoActor->ColorParameterName = CreationParam.ColorParameterName;
 				UMaterialInstanceDynamic* MaterialInstance = UMaterialInstanceDynamic::Create(CreationParam.Material.Get(), GizmoActor);
 				MaterialInstance->SetVectorParameterValue(CreationParam.ColorParameterName, FVector(CreationParam.Color));
 				MeshComponent->SetMaterial(0, MaterialInstance);

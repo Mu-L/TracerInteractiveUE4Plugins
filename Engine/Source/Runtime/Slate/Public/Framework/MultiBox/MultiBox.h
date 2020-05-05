@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -23,6 +23,7 @@ class SMultiBoxWidget;
 class STableViewBase;
 class SVerticalBox;
 class UToolMenuBase;
+class SUniformToolbarPanel;
 
 namespace MultiBoxConstants
 {	
@@ -76,8 +77,9 @@ public:
 	 *
 	 * @InAction UI action delegates that should be used in place of UI commands (dynamic menu items)
 	 */
-	FMultiBlock( const FUIAction& InAction,  FName InExtensionHook = NAME_None, EMultiBlockType InType = EMultiBlockType::None, bool bInIsPartOfHeading = false )
+	FMultiBlock( const FUIAction& InAction,  FName InExtensionHook = NAME_None, EMultiBlockType InType = EMultiBlockType::None, bool bInIsPartOfHeading = false, TSharedPtr< const FUICommandList > InCommandList = nullptr )
 		: DirectActions( InAction )
+		, ActionList( InCommandList )
 		, ExtensionHook( InExtensionHook )
 		, Type( InType )
 		, TutorialHighlightName( NAME_None )
@@ -295,7 +297,7 @@ public:
 	 *
 	 * @return  MultiBox widget object
 	 */
-	TSharedRef< class SMultiBoxWidget > MakeWidget( bool bSearchable, FOnMakeMultiBoxBuilderOverride* InMakeMultiBoxBuilderOverride = nullptr );
+	TSharedRef< class SMultiBoxWidget > MakeWidget( bool bSearchable, FOnMakeMultiBoxBuilderOverride* InMakeMultiBoxBuilderOverride = nullptr, TAttribute<float> InMaxHeight = TAttribute<float>() );
 
 
 	/**
@@ -582,7 +584,12 @@ public:
 	* @return	Whether this block is searchable
 	*/
 	bool GetSearchable() const;
-	
+
+	/**
+	* Sets optional maximum height of widget
+	*/
+	void SetMaxHeight(TAttribute<float> InMaxHeight) { MaxHeight = InMaxHeight; }
+
 	/**
 	 * Builds this MultiBox widget up from the MultiBox associated with it
 	 */
@@ -752,6 +759,9 @@ private:
 	/** Specialized box widget to handle clipping of toolbars and menubars */
 	TSharedPtr<class SClippingHorizontalBox> ClippedHorizontalBox;
 
+	/** Specialized box widget to handle clipping of toolbars and menubars */
+	TSharedPtr<SUniformToolbarPanel> UniformToolbarPanel;
+
 	/** A preview of a block being dragged inside this box */
 	FDraggedMultiBlockPreview DragPreview;
 
@@ -769,4 +779,7 @@ private:
 
 	/** Whether this multibox can be searched */
 	bool bSearchable;
+
+	/** Optional maximum height of widget */
+	TAttribute<float> MaxHeight;
 };

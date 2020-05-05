@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	Audio.cpp: Unreal base audio.
@@ -20,6 +20,7 @@
 #include "Misc/Paths.h"
 #include "Sound/SoundBase.h"
 #include "Sound/SoundCue.h"
+#include "Sound/SoundSubmix.h"
 #include "Sound/SoundNodeWavePlayer.h"
 #include "Sound/SoundWave.h"
 #include "UObject/UObjectHash.h"
@@ -349,20 +350,7 @@ bool FSoundSource::SetReverbApplied(bool bHardwareAvailable)
 
 float FSoundSource::SetStereoBleed()
 {
-	StereoBleed = 0.0f;
-
-	// All stereo sounds bleed by default
-	if (WaveInstance->WaveData->NumChannels == 2)
-	{
-		StereoBleed = WaveInstance->StereoBleed;
-
-		if (AudioDevice->GetMixDebugState() == DEBUGSTATE_TestStereoBleed)
-		{
-			StereoBleed = 1.0f;
-		}
-	}
-
-	return StereoBleed;
+	return 0.f;
 }
 
 float FSoundSource::SetLFEBleed()
@@ -446,7 +434,11 @@ void FSoundSource::UpdateStereoEmitterPositions()
 	if (!DisableStereoSpreadCvar && WaveInstance->StereoSpread > 0.0f)
 	{
 		// We need to compute the stereo left/right channel positions using the audio component position and the spread
-		FVector ListenerPosition = AudioDevice->Listeners[0].Transform.GetLocation();
+		FVector ListenerPosition;
+
+		const bool bAllowAttenuationOverride = false;
+		const int32 ListenerIndex = WaveInstance->ActiveSound ? WaveInstance->ActiveSound->GetClosestListenerIndex() : 0;
+		AudioDevice->GetListenerPosition(ListenerIndex, ListenerPosition, bAllowAttenuationOverride);
 		FVector ListenerToSourceDir = (WaveInstance->Location - ListenerPosition).GetSafeNormal();
 
 		float HalfSpread = 0.5f * WaveInstance->StereoSpread;
@@ -494,12 +486,12 @@ float FSoundSource::GetDebugVolume(const float InVolume)
 		}
 	}
 
-	// SoundCues mutes/solos											
+	// SoundCues mutes/solos (not strictly just cues but any SoundBase)
 	if (OutVolume != 0.0f && WaveInstance->ActiveSound)
 	{						
-		if (USoundCue* SoundCue = Cast<USoundCue>(WaveInstance->ActiveSound->GetSound()))
+		if (USoundBase* ActiveSound= WaveInstance->ActiveSound->GetSound())
 		{
-			Debugger.QuerySoloMuteSoundCue(SoundCue->GetName(), Info.bIsSoloed, Info.bIsMuted, Info.MuteSoloReason);
+			Debugger.QuerySoloMuteSoundCue(ActiveSound->GetName(), Info.bIsSoloed, Info.bIsMuted, Info.MuteSoloReason);
 			if (Info.bIsMuted)
 			{
 				OutVolume = 0.0f;
@@ -576,9 +568,11 @@ FSpatializationParams FSoundSource::GetSpatializationParams()
 	}
 	Params.EmitterWorldPosition = WaveInstance->Location;
 
+	int32 ListenerIndex = 0;
 	if (WaveInstance->ActiveSound != nullptr)
 	{
 		Params.EmitterWorldRotation = WaveInstance->ActiveSound->Transform.GetRotation();
+		ListenerIndex = WaveInstance->ActiveSound->GetClosestListenerIndex();
 	}
 	else
 	{
@@ -586,7 +580,8 @@ FSpatializationParams FSoundSource::GetSpatializationParams()
 	}
 
 	// Pass the actual listener orientation and position
-	const FTransform& ListenerTransform = AudioDevice->GetListeners()[0].Transform;
+	FTransform ListenerTransform;
+	AudioDevice->GetListenerTransform(ListenerIndex, ListenerTransform);
 	Params.ListenerOrientation = ListenerTransform.GetRotation();
 	Params.ListenerPosition = ListenerTransform.GetLocation();
 
@@ -793,7 +788,6 @@ FWaveInstance::FWaveInstance(const UPTRINT InWaveInstanceHash, FActiveSound& InA
 	, VoiceCenterChannelVolume(0.0f)
 	, RadioFilterVolume(0.0f)
 	, RadioFilterVolumeThreshold(0.0f)
-	, StereoBleed(0.0f)
 	, LFEBleed(0.0f)
 	, LoopingMode(LOOP_Never)
 	, StartTime(-1.f)
@@ -805,7 +799,6 @@ FWaveInstance::FWaveInstance(const UPTRINT InWaveInstanceHash, FActiveSound& InA
 	, bUseSpatialization(false)
 	, bEnableLowPassFilter(false)
 	, bIsOccluded(false)
-	, bEQFilterApplied(false)
 	, bIsUISound(false)
 	, bIsMusic(false)
 	, bReverb(true)
@@ -961,6 +954,14 @@ void FWaveInstance::AddReferencedObjects( FReferenceCollector& Collector )
 		}
 	}
 
+	for (FAttenuationSubmixSendSettings& SubmixSend : SubmixSendSettings)
+	{
+		if (SubmixSend.Submix)
+		{
+			Collector.AddReferencedObject(SubmixSend.Submix);
+		}
+	}
+
 	Collector.AddReferencedObject( SoundClass );
 	NotifyBufferFinishedHooks.AddReferencedObjects( Collector );
 }
@@ -1010,6 +1011,11 @@ float FWaveInstance::GetDynamicVolume() const
 					OutVolume *= DeviceManager->GetDynamicSoundVolume(ESoundType::Cue, Sound->GetFName());
 				}
 			}
+
+			if (SoundClass)
+			{
+				OutVolume *= DeviceManager->GetDynamicSoundVolume(ESoundType::Class, SoundClass->GetFName());
+			}
 		}
 	}
 
@@ -1040,6 +1046,12 @@ bool FWaveInstance::ShouldStopDueToMaxConcurrency() const
 
 float FWaveInstance::GetVolumeWeightedPriority() const
 {
+	// If priority has been set via bAlwaysPlay, it will have a priority larger than MAX_SOUND_PRIORITY. If that's the case, we should ignore volume weighting.
+	if (Priority > MAX_SOUND_PRIORITY)
+	{
+		return Priority;
+	}
+
 	// This will result in zero-volume sounds still able to be sorted due to priority but give non-zero volumes higher priority than 0 volumes
 	float ActualVolume = GetVolumeWithDistanceAttenuation();
 	if (ActualVolume > 0.0f)
@@ -1089,7 +1101,7 @@ bool FWaveInstance::IsSeekable() const
 
 bool FWaveInstance::IsStreaming() const
 {
-	return FPlatformProperties::SupportsAudioStreaming() && WaveData != nullptr && WaveData->IsStreaming();
+	return FPlatformProperties::SupportsAudioStreaming() && WaveData != nullptr && WaveData->IsStreaming(nullptr);
 }
 
 bool FWaveInstance::GetUseSpatialization() const

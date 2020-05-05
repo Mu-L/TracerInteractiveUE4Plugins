@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "UserInterface/PropertyEditor/SPropertyEditorInteractiveActorPicker.h"
 #include "Modules/ModuleManager.h"
 #include "Widgets/Images/SImage.h"
@@ -11,7 +11,10 @@ SPropertyEditorInteractiveActorPicker::~SPropertyEditorInteractiveActorPicker()
 	FActorPickerModeModule& ActorPickerMode = FModuleManager::Get().GetModuleChecked<FActorPickerModeModule>("ActorPickerMode");
 
 	// make sure we are unregistered when this widget goes away
-	ActorPickerMode.EndActorPickingMode();
+	if (ActorPickerMode.IsInActorPickingMode())
+	{
+		ActorPickerMode.EndActorPickingMode();
+	}
 }
 
 void SPropertyEditorInteractiveActorPicker::Construct( const FArguments& InArgs )

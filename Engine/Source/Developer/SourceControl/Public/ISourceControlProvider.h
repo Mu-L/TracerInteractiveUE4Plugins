@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -71,7 +71,7 @@ DECLARE_MULTICAST_DELEGATE(FSourceControlStateChanged);
 /**
  * Interface to talking with source control providers.
  */
-class SOURCECONTROL_VTABLE ISourceControlProvider : public IModularFeature
+class ISourceControlProvider : public IModularFeature
 {
 public:
 	/**

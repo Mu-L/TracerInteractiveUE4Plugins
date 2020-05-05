@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Chaos/Defines.h"
@@ -7,7 +7,7 @@
 #include "Chaos/Framework/PhysicsSolverBase.h"
 #include "Chaos/PBDRigidParticles.h"
 #include "Chaos/PBDRigidsEvolutionGBF.h"
-#include "Chaos/PBDCollisionConstraint.h"
+#include "Chaos/PBDCollisionConstraints.h"
 #include "Chaos/PBDRigidDynamicSpringConstraints.h"
 #include "Chaos/PBDPositionConstraints.h"
 #include "Chaos/PBDJointConstraints.h"
@@ -15,6 +15,7 @@
 #include "Chaos/PerParticleGravity.h"
 #include "Chaos/ParticleHandle.h"
 #include "Chaos/Transform.h"
+#include "Chaos/Framework/PhysicsProxy.h"
 #include "CoreMinimal.h"
 #include "Containers/Queue.h"
 #include "EventManager.h"
@@ -32,6 +33,12 @@ class FStaticMeshPhysicsProxy;
 class FGeometryCollectionPhysicsProxy;
 class FFieldSystemPhysicsProxy;
 
+#define PBDRIGID_PREALLOC_COUNT 1024
+#define KINEMATIC_GEOM_PREALLOC_COUNT 100
+#define GEOMETRY_PREALLOC_COUNT 100
+
+extern int32 ChaosSolverParticlePoolNumFrameUntilShrink;
+
 /**
 *
 */
@@ -39,17 +46,34 @@ namespace Chaos
 {
 	class AdvanceOneTimeStepTask;
 	class FPersistentPhysicsTask;
-	class FPhysicsCommand;
 	class FChaosArchive;
+	class FPBDRigidsSolver;
+
+	enum class ELockType : uint8
+	{
+		Read,
+		Write
+	};
+
+	template<ELockType LockType>
+	struct TSolverQueryMaterialScope
+	{
+		TSolverQueryMaterialScope() = delete;
+	};
+
 	/**
 	*
 	*/
 	class CHAOSSOLVERS_API FPBDRigidsSolver : public FPhysicsSolverBase
 	{
 
-		FPBDRigidsSolver(const EMultiBufferMode BufferingModeIn);
+		FPBDRigidsSolver(const EMultiBufferMode BufferingModeIn, UObject* InOwner);
 
 	public:
+
+		// #BGTODO ensure no external callers directly deleting, make private and push everything through DestroySolver.
+		~FPBDRigidsSolver();
+
 		typedef FPhysicsSolverBase Super;
 
 		friend class FPersistentPhysicsTask;
@@ -71,17 +95,16 @@ namespace Chaos
 
 		typedef Chaos::TGeometryParticle<float, 3> FParticle;
 		typedef Chaos::TGeometryParticleHandle<float, 3> FHandle;
-		typedef Chaos::TPBDRigidsEvolutionGBF<float, 3> FPBDRigidsEvolution;
-		typedef Chaos::TPBDCollisionConstraint<float, 3> FPBDCollisionConstraints;
+		typedef Chaos::FPBDRigidsEvolutionGBF FPBDRigidsEvolution;
+		typedef Chaos::TPBDCollisionConstraints<float, 3> FPBDCollisionConstraints;
 
 		typedef FPBDCollisionConstraints FCollisionConstraints;
-		typedef TPBDJointConstraints<float, 3> FJointConstraints;
 		typedef TPBDRigidDynamicSpringConstraints<float, 3> FRigidDynamicSpringConstraints;
 		typedef TPBDPositionConstraints<float, 3> FPositionConstraints;
 
-		typedef TPBDConstraintIslandRule<FJointConstraints, float, 3> FJointConstraintsRule;
-		typedef TPBDConstraintIslandRule<FRigidDynamicSpringConstraints, float, 3> FRigidDynamicSpringConstraintsRule;
-		typedef TPBDConstraintIslandRule<FPositionConstraints, float, 3> FPositionConstraintsRule;
+		typedef TPBDConstraintIslandRule<FPBDJointConstraints> FJointConstraintsRule;
+		typedef TPBDConstraintIslandRule<FRigidDynamicSpringConstraints> FRigidDynamicSpringConstraintsRule;
+		typedef TPBDConstraintIslandRule<FPositionConstraints> FPositionConstraintsRule;
 
 		//
 		// Execution API
@@ -206,6 +229,9 @@ namespace Chaos
 		void PushPhysicsState(IDispatcher* Dispatcher = nullptr);
 
 		/**/
+		void PushPhysicsStatePooled(IDispatcher* Dispatcher);
+
+		/**/
 		void BufferPhysicsResults();
 
 		/**/
@@ -224,25 +250,30 @@ namespace Chaos
 		const float GetSolverTime() const { return MTime; }
 
 		/**/
-		const float GetLastDt() const { return MLastDt; }
-		const float GetMaxDeltaTime() const { return MMaxDeltaTime; }
+		void SetMaxDeltaTime(const float InMaxDeltaTime) { MMaxDeltaTime = InMaxDeltaTime; }
+		float GetLastDt() const { return MLastDt; }
+		float GetMaxDeltaTime() const { return MMaxDeltaTime; }
+		float GetMinDeltaTime() const { return MMinDeltaTime; }
+		void SetMaxSubSteps(const int32 InMaxSubSteps) { MMaxSubSteps = InMaxSubSteps; }
+		int32 GetMaxSubSteps() const { return MMaxSubSteps; }
+
+		/**/
+		void SetIterations(const int32 InNumIterations) { GetEvolution()->SetNumIterations(InNumIterations); }
+		void SetPushOutIterations(const int32 InNumIterations) {  GetEvolution()->SetNumPushOutIterations(InNumIterations); }
+		void SetPushOutPairIterations(const int32 InNumIterations) {  GetEvolution()->GetCollisionConstraints().SetPushOutPairIterations(InNumIterations); }
+		void SetUseContactGraph(const bool bInUseContactGraph) { GetEvolution()->GetCollisionConstraintsRule().SetUseContactGraph(bInUseContactGraph); }
 
 		/**/
 		void SetGenerateCollisionData(bool bDoGenerate) { GetEventFilters()->SetGenerateCollisionEvents(bDoGenerate); }
 		void SetGenerateBreakingData(bool bDoGenerate)
 		{
 			GetEventFilters()->SetGenerateBreakingEvents(bDoGenerate);
-#if TODO_REIMPLEMENT_RIGID_CLUSTERING
-			GetRigidClustering().SetGenerateClusterBreaking(GenerateBreakingEventsEnabled);
-#endif
+			GetEvolution()->GetRigidClustering().SetGenerateClusterBreaking(bDoGenerate);
 		}
 		void SetGenerateTrailingData(bool bDoGenerate) { GetEventFilters()->SetGenerateTrailingEvents(bDoGenerate); }
 		void SetCollisionFilterSettings(const FSolverCollisionFilterSettings& InCollisionFilterSettings) { GetEventFilters()->GetCollisionFilter()->UpdateFilterSettings(InCollisionFilterSettings); }
 		void SetBreakingFilterSettings(const FSolverBreakingFilterSettings& InBreakingFilterSettings) { GetEventFilters()->GetBreakingFilter()->UpdateFilterSettings(InBreakingFilterSettings); }
 		void SetTrailingFilterSettings(const FSolverTrailingFilterSettings& InTrailingFilterSettings) { GetEventFilters()->GetTrailingFilter()->UpdateFilterSettings(InTrailingFilterSettings); }
-		void SetHasFloor(bool bHasFloorIn) { bHasFloor = bHasFloorIn; }
-		void SetIsFloorAnalytic(bool bIsAnalytic) { bIsFloorAnalytic = bIsAnalytic; }
-		void SetFloorHeight(float Height) { FloorHeight = Height; }
 
 		/**/
 		FPBDRigidsEvolution* GetEvolution() { return MEvolution.Get(); }
@@ -250,6 +281,24 @@ namespace Chaos
 
 		FParticlesType& GetParticles() { return Particles; }
 		const FParticlesType& GetParticles() const { return Particles; }
+
+		void AddParticleToProxy(const Chaos::TGeometryParticleHandle<float, 3>* Particle, IPhysicsProxyBase* Proxy)
+		{
+			if (!MParticleToProxy.Find(Particle))
+				MParticleToProxy.Add(Particle, TSet<IPhysicsProxyBase*>());
+			MParticleToProxy[Particle].Add(Proxy); 
+		}
+		
+		void RemoveParticleToProxy(const Chaos::TGeometryParticleHandle<float, 3>* Particle)
+		{
+			MParticleToProxy.Remove(Particle);
+		}
+		
+		const TSet<IPhysicsProxyBase*> * GetProxies(const Chaos::TGeometryParticleHandle<float, 3>* Handle) const
+		{
+			const TSet<IPhysicsProxyBase*>* PhysicsProxyPtr = MParticleToProxy.Find(Handle);
+			return PhysicsProxyPtr ? PhysicsProxyPtr : nullptr;
+		}
 
 		/**/
 		FEventManager* GetEventManager() { return MEventManager.Get(); }
@@ -269,24 +318,64 @@ namespace Chaos
 			return FieldSystemPhysicsProxies;
 		}
 
+		TArray<FGeometryCollectionPhysicsProxy*>& GetGeometryCollectionPhysicsProxies()
+		{
+			return GeometryCollectionPhysicsProxies;
+		}
+
+		/** Events hooked up to the Chaos material manager */
+		void UpdateMaterial(Chaos::FMaterialHandle InHandle, const Chaos::FChaosPhysicsMaterial& InNewData);
+		void CreateMaterial(Chaos::FMaterialHandle InHandle, const Chaos::FChaosPhysicsMaterial& InNewData);
+		void DestroyMaterial(Chaos::FMaterialHandle InHandle);
+		void UpdateMaterialMask(Chaos::FMaterialMaskHandle InHandle, const Chaos::FChaosPhysicsMaterialMask& InNewData);
+		void CreateMaterialMask(Chaos::FMaterialMaskHandle InHandle, const Chaos::FChaosPhysicsMaterialMask& InNewData);
+		void DestroyMaterialMask(Chaos::FMaterialMaskHandle InHandle);
+
+		/** Access to the internal material mirrors */
+		const THandleArray<FChaosPhysicsMaterial>& GetQueryMaterials() const { return QueryMaterials; }
+		const THandleArray<FChaosPhysicsMaterialMask>& GetQueryMaterialMasks() const { return QueryMaterialMasks; }
+		const THandleArray<FChaosPhysicsMaterial>& GetSimMaterials() const { return SimMaterials; }
+		const THandleArray<FChaosPhysicsMaterialMask>& GetSimMaterialMasks() const { return SimMaterialMasks; }
+
+		/** Copy the simulation material list to the query material list, to be done when the SQ commits an update */
+		void SyncQueryMaterials();
+
 	private:
 
 		template<typename ParticleType>
 		void FlipBuffer(Chaos::TGeometryParticleHandle<float, 3>* Handle)
 		{
-			((ParticleType*)(Handle->GTGeometryParticle()->Proxy))->FlipBuffer();
+			if (const TSet<IPhysicsProxyBase*>* Proxies = GetProxies(Handle))
+			{
+				for (IPhysicsProxyBase* Proxy : *Proxies)
+				{
+					((ParticleType*)(Proxy))->FlipBuffer();
+				}
+			}
 		}
 
 		template<typename ParticleType>
 		void PullFromPhysicsState(Chaos::TGeometryParticleHandle<float, 3>* Handle)
 		{
-			((ParticleType*)(Handle->GTGeometryParticle()->Proxy))->PullFromPhysicsState();
+			if (const TSet<IPhysicsProxyBase*>* Proxies = GetProxies(Handle))
+			{
+				for (IPhysicsProxyBase* Proxy : *Proxies)
+				{
+					((ParticleType*)(Proxy))->PullFromPhysicsState();
+				}
+			}
 		}
 
 		template<typename ParticleType>
 		void BufferPhysicsResults(Chaos::TGeometryParticleHandle<float, 3>* Handle)
 		{
-			((ParticleType*)(Handle->GTGeometryParticle()->Proxy))->BufferPhysicsResults();
+			if (const TSet<IPhysicsProxyBase*>* Proxies = GetProxies(Handle))
+			{
+				for (IPhysicsProxyBase* Proxy : *Proxies)
+				{
+					((ParticleType*)(Proxy))->BufferPhysicsResults();
+				}
+			}
 		}
 
 		//
@@ -296,8 +385,8 @@ namespace Chaos
 		float MTime;
 		float MLastDt;
 		float MMaxDeltaTime;
-		float TimeStepMultiplier;
-
+		float MMinDeltaTime;
+		int32 MMaxSubSteps;
 		bool bEnabled;
 		bool bHasFloor;
 		bool bIsFloorAnalytic;
@@ -308,6 +397,7 @@ namespace Chaos
 		TUniquePtr<FEventManager> MEventManager;
 		TUniquePtr<FSolverEventFilters> MSolverEventFilters;
 		TUniquePtr<FActiveParticlesBuffer> MActiveParticlesBuffer;
+		TMap<const Chaos::TGeometryParticleHandle<float, 3>*, TSet<IPhysicsProxyBase*> > MParticleToProxy;
 
 		//
 		// Commands
@@ -325,7 +415,145 @@ namespace Chaos
 		TArray< FStaticMeshPhysicsProxy* > StaticMeshPhysicsProxies; // dep
 		TArray< FGeometryCollectionPhysicsProxy* > GeometryCollectionPhysicsProxies;
 		TArray< FFieldSystemPhysicsProxy* > FieldSystemPhysicsProxies;
+
+		// Physics material mirrors for the solver. These should generally stay in sync with the global material list from
+		// the game thread. This data is read only in the solver as we should never need to update it here. External threads can
+		// Enqueue commands to change parameters.
+		//
+		// There are two copies here to enable SQ to lock only the solvers that it needs to handle the material access during a query
+		// instead of having to lock the entire physics state of the runtime.
+		FRWLock QueryMaterialLock;
+		THandleArray<FChaosPhysicsMaterial> QueryMaterials;
+		THandleArray<FChaosPhysicsMaterialMask> QueryMaterialMasks;
+		THandleArray<FChaosPhysicsMaterial> SimMaterials;
+		THandleArray<FChaosPhysicsMaterialMask> SimMaterialMasks;
+
+		template<ELockType>
+		friend struct TSolverQueryMaterialScope;
+
+	public:
+
+		template<typename ParticleEntry, typename ProxyEntry, SIZE_T PreAllocCount>
+		class TFramePool
+		{
+		public:
+
+			struct TPoolEntry
+			{
+				TPoolEntry()
+				{
+					Proxy = nullptr;
+				}
+
+				ParticleEntry Particle;
+				ProxyEntry    Proxy;
+			};
+
+			TFramePool()
+			{
+				EntryCount = 0;
+				MaxEntryCount = 0;
+				FrameCount = 0;
+				// Prealloc default object in the pool. 
+				// Must call DirtyParticleData.Init + DirtyParticleData.Reset each 
+				// time you use an entry in the pool.
+				Pool.AddDefaulted(PreAllocCount);
+			}
+
+			void ResetPool() 
+			{ 
+				// try to shrink each (n) frames
+				MaxEntryCount = (EntryCount >= MaxEntryCount) ? EntryCount : MaxEntryCount;
 				
+				if (FrameCount % ChaosSolverParticlePoolNumFrameUntilShrink == 0)
+				{
+					int32 NextLowerBound = (Pool.Num() / PreAllocCount) - 1;
+					NextLowerBound = (NextLowerBound >= 1) ? NextLowerBound : 1;
+					NextLowerBound *= PreAllocCount;
+					if (MaxEntryCount < NextLowerBound)
+					{
+						Pool.SetNum(NextLowerBound);
+					}
+					MaxEntryCount = 0;
+				}
+
+				FrameCount++;
+				EntryCount = 0;
+			}
+
+			int32 GetEntryCount()
+			{
+				return EntryCount;
+			}
+
+			TPoolEntry& GetEntry(int32 Index)
+			{
+				ensure(Index < Pool.Num());
+				return Pool[Index];
+			}
+
+			TPoolEntry& GetNewEntry()
+			{
+				if (EntryCount >= Pool.Num())
+				{
+					Pool.Add(TPoolEntry());
+				}
+				return Pool[EntryCount++];
+			}
+
+		private:
+			TArray<TPoolEntry> Pool;
+			int32 EntryCount;
+			int32 MaxEntryCount;
+			int32 FrameCount;
+		};
+
+		TFramePool<Chaos::TPBDRigidParticleData<float, 3>, FSingleParticlePhysicsProxy< Chaos::TPBDRigidParticle<float, 3> >*, PBDRIGID_PREALLOC_COUNT> RigidParticlePool;
+		TFramePool<Chaos::TKinematicGeometryParticleData<float, 3>, FSingleParticlePhysicsProxy< Chaos::TKinematicGeometryParticle<float, 3> >*, KINEMATIC_GEOM_PREALLOC_COUNT> KinematicGeometryParticlePool;
+		TFramePool<Chaos::TGeometryParticleData<float, 3>, FSingleParticlePhysicsProxy< Chaos::TGeometryParticle<float, 3> >*, GEOMETRY_PREALLOC_COUNT> GeometryParticlePool;
+	};
+
+	template<>
+	struct TSolverQueryMaterialScope<ELockType::Read>
+	{
+		TSolverQueryMaterialScope() = delete;
+
+
+		explicit TSolverQueryMaterialScope(FPBDRigidsSolver* InSolver)
+			: Solver(InSolver)
+		{
+			check(Solver);
+			Solver->QueryMaterialLock.ReadLock();
+		}
+
+		~TSolverQueryMaterialScope()
+		{
+			Solver->QueryMaterialLock.ReadUnlock();
+		}
+
+	private:
+		FPBDRigidsSolver* Solver;
+	};
+
+	template<>
+	struct TSolverQueryMaterialScope<ELockType::Write>
+	{
+		TSolverQueryMaterialScope() = delete;
+
+		explicit TSolverQueryMaterialScope(FPBDRigidsSolver* InSolver)
+			: Solver(InSolver)
+		{
+			check(Solver);
+			Solver->QueryMaterialLock.WriteLock();
+		}
+
+		~TSolverQueryMaterialScope()
+		{
+			Solver->QueryMaterialLock.WriteUnlock();
+		}
+
+	private:
+		FPBDRigidsSolver* Solver;
 	};
 
 }; // namespace Chaos

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -21,6 +21,10 @@ public:
 
 	FMeshDescription* GetMesh() override;
 	void CommitMesh( const FCommitter& ) override;
+	virtual bool HasSameSourceData(const FPrimitiveComponentTarget& OtherTarget) const override
+	{
+		return OtherTarget.Component == Component;
+	}
 private:
 	TUniquePtr<FMeshDescription> MeshDescription;
 };

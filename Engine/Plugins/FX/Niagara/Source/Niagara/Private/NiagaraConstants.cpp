@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraConstants.h"
 #include "NiagaraModule.h"
@@ -19,6 +19,37 @@ TMap<FNiagaraVariable, FNiagaraVariableMetaData> FNiagaraConstants::AttrMetaData
 TMap<FNiagaraVariable, FNiagaraVariable> FNiagaraConstants::AttrDefaultsValueMap;
 TMap<FNiagaraVariable, FNiagaraVariable> FNiagaraConstants::AttrDataSetKeyMap;
 TArray<FNiagaraVariable> FNiagaraConstants::EngineManagedAttributes;
+
+const FName FNiagaraConstants::InputPinName("InputPin");
+const FName FNiagaraConstants::OutputPinName("OutputPin");
+
+const FName FNiagaraConstants::UserNamespace(TEXT("User"));
+const FName FNiagaraConstants::EngineNamespace(TEXT("Engine"));
+const FName FNiagaraConstants::SystemNamespace(TEXT("System"));
+const FName FNiagaraConstants::EmitterNamespace(TEXT("Emitter"));
+const FName FNiagaraConstants::ParticleAttributeNamespace(TEXT("Particles"));
+const FName FNiagaraConstants::ModuleNamespace(TEXT("Module"));
+const FName FNiagaraConstants::OutputNamespace(TEXT("Output"));
+const FName FNiagaraConstants::TransientNamespace(TEXT("Transient"));
+const FName FNiagaraConstants::DataInstanceNamespace(TEXT("DataInstance"));
+const FName FNiagaraConstants::StaticSwitchNamespace(TEXT("StaticSwitch"));
+const FName FNiagaraConstants::ArrayNamespace(TEXT("Array"));
+const FName FNiagaraConstants::ParameterCollectionNamespace(TEXT("NPC"));
+const FString FNiagaraConstants::InitialPrefix(TEXT("Initial"));
+const FName FNiagaraConstants::LocalNamespace(TEXT("Local"));
+const FName FNiagaraConstants::InitialNamespace(TEXT("Initial"));
+const FName FNiagaraConstants::OwnerNamespace(TEXT("Owner"));
+
+const FName FNiagaraConstants::EngineOwnerScopeName(TEXT("EngineOwner"));
+const FName FNiagaraConstants::EngineSystemScopeName(TEXT("EngineSystem"));
+const FName FNiagaraConstants::EngineEmitterScopeName(TEXT("EngineEmitter"));
+const FName FNiagaraConstants::CustomScopeName(TEXT("Custom"));
+
+const FName FNiagaraConstants::InputScopeName(TEXT("Input"));
+const FName FNiagaraConstants::OutputScopeName(TEXT("Output"));
+const FName FNiagaraConstants::UniqueOutputScopeName(TEXT("OutputModule"));
+const FName FNiagaraConstants::ScriptTransientScopeName(TEXT("ScriptTransient"));
+const FName FNiagaraConstants::ScriptPersistentScopeName(TEXT("ScriptPersistent"));
 
 void FNiagaraConstants::Init()
 {
@@ -46,6 +77,7 @@ void FNiagaraConstants::Init()
 		SystemParameters.Add(SYS_PARAM_ENGINE_WORLD_TO_LOCAL_NO_SCALE);
 
 		SystemParameters.Add(SYS_PARAM_ENGINE_LOD_DISTANCE);
+		SystemParameters.Add(SYS_PARAM_ENGINE_LOD_DISTANCE_FRACTION);
 		SystemParameters.Add(SYS_PARAM_ENGINE_TIME_SINCE_RENDERED);
 
 		SystemParameters.Add(SYS_PARAM_ENGINE_EXECUTION_STATE);
@@ -160,6 +192,7 @@ void FNiagaraConstants::Init()
 
 		SystemStrMap.Add(SYS_PARAM_ENGINE_TIME_SINCE_RENDERED, LOCTEXT("TimeSinceRendered", "The time in seconds that have passed since this system was last rendered."));
 		SystemStrMap.Add(SYS_PARAM_ENGINE_LOD_DISTANCE, LOCTEXT("LODDistance", "The distance to use in LOD scaling/culling. Typically, the distance to the nearest camera."));
+		SystemStrMap.Add(SYS_PARAM_ENGINE_LOD_DISTANCE_FRACTION, LOCTEXT("LODDistanceFraction", "The distance fraction between this system and it's max culling distance defined in it's EffectType scalabiltiy settings."));
 		SystemStrMap.Add(SYS_PARAM_ENGINE_EXECUTION_STATE, LOCTEXT("ExecutionState", "The execution state of the systems owner. Takes precedence over the systems internal execution state."));
 
 		SystemStrMap.Add(SYS_PARAM_ENGINE_EXEC_COUNT, LOCTEXT("ExecCountDesc", "The index of this particle in the read buffer."));
@@ -344,9 +377,9 @@ void FNiagaraConstants::Init()
 		Var.SetValue<float>(10.0f);
 		AttrDefaultsValueMap.Add(SYS_PARAM_PARTICLES_LIGHT_EXPONENT, Var);
 
-		AttrDefaultsStrMap.Add(SYS_PARAM_PARTICLES_LIGHT_VOLUMETRIC_SCATTERING, TEXT("1.0"));
+		AttrDefaultsStrMap.Add(SYS_PARAM_PARTICLES_LIGHT_VOLUMETRIC_SCATTERING, TEXT("0.0"));
 		Var = SYS_PARAM_PARTICLES_LIGHT_VOLUMETRIC_SCATTERING;
-		Var.SetValue<float>(1.0f);
+		Var.SetValue<float>(0.0f);
 		AttrDefaultsValueMap.Add(SYS_PARAM_PARTICLES_LIGHT_VOLUMETRIC_SCATTERING, Var);
 
 		AttrDefaultsStrMap.Add(SYS_PARAM_PARTICLES_RIBBONID, TEXT("0"));
@@ -383,7 +416,7 @@ void FNiagaraConstants::Init()
 		AttrDescStrMap.Add(SYS_PARAM_PARTICLES_SPRITE_ROTATION, LOCTEXT("SpriteRotDesc", "The screen aligned roll of the particle in degrees."));
 		AttrDescStrMap.Add(SYS_PARAM_PARTICLES_NORMALIZED_AGE, LOCTEXT("NormalizedAgeDesc", "The age in seconds divided by lifetime in seconds. Useful for animation as the value is between 0 and 1."));
 		AttrDescStrMap.Add(SYS_PARAM_PARTICLES_SPRITE_SIZE, LOCTEXT("SpriteSizeDesc", "The size of the sprite quad."));
-		AttrDescStrMap.Add(SYS_PARAM_PARTICLES_SPRITE_FACING, LOCTEXT("FacingDesc", "Makes the surface of the sprite face towards a custom vector. Must be used with the SpriteRenderer's CustomFacingVector FacingMode and CustomFacingVectorMask options."));
+		AttrDescStrMap.Add(SYS_PARAM_PARTICLES_SPRITE_FACING, LOCTEXT("FacingDesc", "Makes the surface of the sprite face towards a custom vector. Must be used with the SpriteRenderer's CustomFacingVector FacingMode option."));
 		AttrDescStrMap.Add(SYS_PARAM_PARTICLES_SPRITE_ALIGNMENT, LOCTEXT("AlignmentDesc", "Imagine the texture having an arrow pointing up, this attribute makes the arrow point towards the alignment axis. Must be used with the SpriteRenderer's CustomAlignment Alignment option."));
 		AttrDescStrMap.Add(SYS_PARAM_PARTICLES_SUB_IMAGE_INDEX, LOCTEXT("SubImageIndexDesc", "A value from 0 to the number of entries in the table of SubUV images."));
 		FText DynParamText = LOCTEXT("DynamicMaterialParameterDesc", "The 4-float vector used to send custom data to renderer.");

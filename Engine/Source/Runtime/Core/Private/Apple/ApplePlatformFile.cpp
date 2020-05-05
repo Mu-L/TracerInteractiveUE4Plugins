@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	ApplePlatformFile.mm: Apple platform implementations of File functions
@@ -34,7 +34,7 @@ namespace
 			MacEpoch + FTimespan::FromSeconds(FileInfo.st_mtime), 
 			FileSize,
 			bIsDirectory,
-			!!(FileInfo.st_mode & S_IWUSR)
+			!(FileInfo.st_mode & S_IWUSR)
 		);
 	}
 }
@@ -221,7 +221,9 @@ public:
 			return false;
 		}
 #endif
-		return ftruncate(FileHandle, NewSize) == 0;
+		int Result = 0;
+		do { Result = ftruncate(FileHandle, NewSize); } while (Result < 0 && errno == EINTR);
+		return Result == 0;
 	}
 	virtual int64 Size() override
 	{
@@ -379,17 +381,13 @@ __thread double FFileHandleApple::AccessTimes[ FFileHandleApple::ACTIVE_HANDLE_C
 FString FApplePlatformFile::NormalizeFilename(const TCHAR* Filename)
 {
 	FString Result(Filename);
-	Result.ReplaceInline(TEXT("\\"), TEXT("/"));
+	Result.ReplaceInline(TEXT("\\"), TEXT("/"), ESearchCase::CaseSensitive);
 	return Result;
 }
 FString FApplePlatformFile::NormalizeDirectory(const TCHAR* Directory)
 {
 	FString Result(Directory);
-	Result.ReplaceInline(TEXT("\\"), TEXT("/"));
-	if (Result.EndsWith(TEXT("/")))
-	{
-		Result.LeftChop(1);
-	}
+	Result.ReplaceInline(TEXT("\\"), TEXT("/"), ESearchCase::CaseSensitive);
 	return Result;
 }
 

@@ -1,8 +1,7 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Modules/ModuleManager.h"
 #include "TraceServices/ITraceServicesModule.h"
-#include "SessionServicePrivate.h"
 #include "AnalysisServicePrivate.h"
 #include "ModuleServicePrivate.h"
 #include "Features/IModularFeatures.h"
@@ -17,15 +16,15 @@ class FTraceServicesModule
 	: public ITraceServicesModule
 {
 public:
-	virtual TSharedPtr<Trace::ISessionService> GetSessionService() override;
 	virtual TSharedPtr<Trace::IAnalysisService> GetAnalysisService() override;
 	virtual TSharedPtr<Trace::IModuleService> GetModuleService() override;
+	virtual TSharedPtr<Trace::IAnalysisService> CreateAnalysisService() override;
+	virtual TSharedPtr<Trace::IModuleService> CreateModuleService() override;
 
 	virtual void StartupModule() override;
 	virtual void ShutdownModule() override;
 
 private:
-	TSharedPtr<Trace::FSessionService> SessionService;
 	TSharedPtr<Trace::FAnalysisService> AnalysisService;
 	TSharedPtr<Trace::FModuleService> ModuleService;
 
@@ -36,16 +35,6 @@ private:
 	Trace::FCountersModule CountersModule;
 	Trace::FNetProfilerModule NetProfilerModule;
 };
-
-TSharedPtr<Trace::ISessionService> FTraceServicesModule::GetSessionService()
-{
-	if (!SessionService.IsValid())
-	{
-		GetModuleService();
-		SessionService = MakeShared<Trace::FSessionService>(*ModuleService.Get());
-	}
-	return SessionService;
-}
 
 TSharedPtr<Trace::IAnalysisService> FTraceServicesModule::GetAnalysisService()
 {
@@ -63,6 +52,21 @@ TSharedPtr<Trace::IModuleService> FTraceServicesModule::GetModuleService()
 	{
 		ModuleService = MakeShared<Trace::FModuleService>();
 	}
+	return ModuleService;
+}
+
+TSharedPtr<Trace::IAnalysisService> FTraceServicesModule::CreateAnalysisService()
+{
+	checkf(!AnalysisService.IsValid(), TEXT("A AnalysisService already exists."));
+	GetModuleService();
+	AnalysisService = MakeShared<Trace::FAnalysisService>(*ModuleService.Get());
+	return AnalysisService;
+}
+
+TSharedPtr<Trace::IModuleService> FTraceServicesModule::CreateModuleService()
+{
+	checkf(!ModuleService.IsValid(), TEXT("A ModuleService already exists."));
+	ModuleService = MakeShared<Trace::FModuleService>();
 	return ModuleService;
 }
 
@@ -88,6 +92,9 @@ void FTraceServicesModule::ShutdownModule()
 #endif
 	IModularFeatures::Get().UnregisterModularFeature(Trace::ModuleFeatureName, &LoadTimeProfilerModule);
 	IModularFeatures::Get().UnregisterModularFeature(Trace::ModuleFeatureName, &TimingProfilerModule);
+
+	AnalysisService.Reset();
+	ModuleService.Reset();
 }
 
 IMPLEMENT_MODULE(FTraceServicesModule, TraceServices)

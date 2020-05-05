@@ -1,4 +1,4 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -8,12 +8,14 @@ using Autodesk.Revit.ApplicationServices;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.DB.Events;
+using Autodesk.Revit.DB.Mechanical;
+using Autodesk.Revit.DB.Plumbing;
 using Autodesk.Revit.DB.Structure;
 using Autodesk.Revit.DB.Visual;
 
 namespace DatasmithRevitExporter
 {
-	// Custom export context for command Export to Unreal Datasmith. 
+	// Custom export context for command Export to Unreal Datasmith.
 	public class FDatasmithRevitExportContext : IPhotoRenderContext
 	{
 		// Revit application information for Datasmith.
@@ -30,14 +32,14 @@ namespace DatasmithRevitExporter
 		// Active Revit document being exported.
 		private Document RevitDocument = null;
 
-		// Datasmith output file path.
-		private string DatasmithFilePath = null;
+		// Datasmith file paths for each 3D view to be exported.
+		private Dictionary<ElementId, string> DatasmithFilePaths = null;
 
 		// Multi-line debug log.
 		private FDatasmithFacadeLog DebugLog = null;
 
 		// Level of detail when tessellating faces (between -1 and 15).
-		private int LevelOfTessellation = 8;
+		public int LevelOfTessellation { get; set; } = 8;
 
 		// Stack of world Transforms for the Revit instances being processed.
 		private Stack<Transform> WorldTransformStack = new Stack<Transform>();
@@ -50,20 +52,23 @@ namespace DatasmithRevitExporter
 
 		// List of extra search paths for Revit texture files.
 		private IList<string> ExtraTexturePaths = new List<string>();
-		
+
 		// List of messages generated during the export process.
 		private List<string> MessageList = new List<string>();
 
+		// The file path for the view that is currently being exported.
+		private string CurrentDatasmithFilePath = null;
+
 		public FDatasmithRevitExportContext(
-			Application                 InApplication,       // running Revit application
-			Document                    InDocument,          // active Revit document
-			string                      InDatasmithFilePath, // Datasmith output file path
-			DatasmithRevitExportOptions InExportOptions      // Unreal Datasmith export options
+			Application						InApplication,        // running Revit application
+			Document						InDocument,           // active Revit document
+			Dictionary<ElementId, string>	InDatasmithFilePaths, // Datasmith output file path
+			DatasmithRevitExportOptions		InExportOptions       // Unreal Datasmith export options
 		)
 		{
-			ProductVersion    = InApplication.VersionNumber;
-			RevitDocument     = InDocument;
-			DatasmithFilePath = InDatasmithFilePath;
+			ProductVersion     = InApplication.VersionNumber;
+			RevitDocument      = InDocument;
+			DatasmithFilePaths = InDatasmithFilePaths;
 
 			// Get the Unreal Datasmith export options.
 			DebugLog            = InExportOptions.GetWriteLogFile() ? new FDatasmithFacadeLog() : null;
@@ -111,7 +116,7 @@ namespace DatasmithRevitExporter
 		{
 			if (DebugLog != null)
 			{
-				DebugLog.WriteFile(DatasmithFilePath.Replace(".udatasmith", ".log"));
+				DebugLog.WriteFile(CurrentDatasmithFilePath.Replace(".udatasmith", ".log"));
 			}
 		}
 
@@ -135,9 +140,16 @@ namespace DatasmithRevitExporter
 
 			// Create an empty Datasmith scene.
 			DatasmithScene = new FDatasmithFacadeScene(HOST_NAME, VENDOR_NAME, PRODUCT_NAME, ProductVersion);
+			DatasmithScene.PreExport();
+
+			View3D ViewToExport = RevitDocument.GetElement(InViewNode.ViewId) as View3D;
+			if (!DatasmithFilePaths.TryGetValue(ViewToExport.Id, out CurrentDatasmithFilePath))
+			{
+				return RenderNodeAction.Skip; // TODO log error?
+			}
 
 			// Add a new camera actor to the Datasmith scene for the 3D view camera.
-			AddCameraActor(RevitDocument.GetElement(InViewNode.ViewId) as View3D, InViewNode.GetCameraInfo());
+			AddCameraActor(ViewToExport, InViewNode.GetCameraInfo());
 
 			// Keep track of the active Revit document being exported.
 			PushDocument(RevitDocument);
@@ -159,11 +171,11 @@ namespace DatasmithRevitExporter
 			DatasmithScene.Optimize();
 
 			// Build and export the Datasmith scene instance and its scene element assets.
-			DatasmithScene.ExportScene(DatasmithFilePath);
+			DatasmithScene.ExportScene(CurrentDatasmithFilePath);
 
 			// Dispose of the Datasmith scene.
 			DatasmithScene = null;
-			
+
 			// Forget the 3D view world transform.
 			WorldTransformStack.Pop();
 		}
@@ -179,12 +191,12 @@ namespace DatasmithRevitExporter
 			{
 				// Keep track of the element being processed.
 				PushElement(CurrentElement, WorldTransformStack.Peek(), "Element Begin");
-			
+
 				// We want to export the element.
 				return RenderNodeAction.Proceed;
 			}
 
-			return RenderNodeAction.Skip;
+            return RenderNodeAction.Skip;
 		}
 
 		// OnElementEnd marks the end of an element being exported.
@@ -223,12 +235,11 @@ namespace DatasmithRevitExporter
 				{
 					PushElement(CurrentInstance, WorldTransformStack.Peek(), "Symbol Begin");
 				}
-
-				// We want to process the instance.
-				return RenderNodeAction.Proceed;
 			}
 
-			return RenderNodeAction.Skip;
+			// We always wanna proceed, because in certain cases where InInstanceNode is valid but CurrentInstance is not, 
+			// what follows is valid geometry related to the instance previously exported.
+            return RenderNodeAction.Proceed;
 		}
 
 		// OnInstanceEnd marks the end of a family instance being exported.
@@ -277,7 +288,7 @@ namespace DatasmithRevitExporter
 			if (LinkedDocument != null)
 			{
 				// Keep track of the linked document being processed.
-				PushDocument(LinkedDocument);
+				PushDocument(LinkedDocument, false);
 			}
 
 			return (CurrentInstanceType != null && LinkedDocument != null) ? RenderNodeAction.Proceed : RenderNodeAction.Skip;
@@ -320,7 +331,7 @@ namespace DatasmithRevitExporter
 			// Forget the current light world transform.
 			WorldTransformStack.Pop();
 		}
-		
+
 		// OnRPC marks the beginning of export of an RPC object.
 		// This method is only called for interface IPhotoRenderContext.
 		public void OnRPC(
@@ -375,6 +386,7 @@ namespace DatasmithRevitExporter
 
 			// Retrieve the Datasmith mesh being processed.
 			FDatasmithFacadeMesh CurrentMesh = GetCurrentMesh();
+			Transform MeshPointsTransform = GetCurrentMeshPointsTransform();
 
 			// Retrieve the index of the current material and make the Datasmith mesh keep track of it.
 			int CurrentMaterialIndex = GetCurrentMaterialIndex();
@@ -382,9 +394,10 @@ namespace DatasmithRevitExporter
 			int initialVertexCount = CurrentMesh.GetVertexCount();
 
 			// Add the vertex points (in right-handed Z-up coordinates) to the Datasmith mesh.
-			foreach (XYZ point in InPolymeshNode.GetPoints())
+			foreach (XYZ Point in InPolymeshNode.GetPoints())
 			{
-				CurrentMesh.AddVertex((float) point.X, (float) point.Y, (float) point.Z);
+				XYZ FinalPoint = MeshPointsTransform != null ? MeshPointsTransform.OfPoint(Point) : Point;
+				CurrentMesh.AddVertex((float) FinalPoint.X, (float) FinalPoint.Y, (float) FinalPoint.Z);
 			}
 
 			// Add the vertex UV texture coordinates to the Datasmith mesh.
@@ -393,12 +406,13 @@ namespace DatasmithRevitExporter
 				CurrentMesh.AddUV(0, (float) uv.U, (float) -uv.V);
 			}
 
+			IList<PolymeshFacet> Facets = InPolymeshNode.GetFacets();
 			// Add the triangle vertex indexes to the Datasmith mesh.
-			foreach (PolymeshFacet facet in InPolymeshNode.GetFacets())
+			foreach (PolymeshFacet facet in Facets)
 			{
 				CurrentMesh.AddTriangle(initialVertexCount + facet.V1, initialVertexCount + facet.V2, initialVertexCount + facet.V3, CurrentMaterialIndex);
 			}
-			
+
 			// Add the triangle vertex normals (in right-handed Z-up coordinates) to the Datasmith mesh.
 			// Normals can be associated with either points or facets of the polymesh.
 			switch (InPolymeshNode.DistributionOfNormals)
@@ -406,21 +420,44 @@ namespace DatasmithRevitExporter
 				case DistributionOfNormals.AtEachPoint:
 				{
 					IList<XYZ> normals = InPolymeshNode.GetNormals();
-					foreach (PolymeshFacet facet in InPolymeshNode.GetFacets())
+					if (MeshPointsTransform != null)
 					{
-						XYZ normal1 = normals[facet.V1];
-						XYZ normal2 = normals[facet.V2];
-						XYZ normal3 = normals[facet.V3];
+						foreach (PolymeshFacet facet in Facets)
+						{
+							XYZ normal1 = MeshPointsTransform.OfVector(normals[facet.V1]);
+							XYZ normal2 = MeshPointsTransform.OfVector(normals[facet.V2]);
+							XYZ normal3 = MeshPointsTransform.OfVector(normals[facet.V3]);
 
-						CurrentMesh.AddNormal((float) normal1.X, (float) normal1.Y, (float) normal1.Z);
-						CurrentMesh.AddNormal((float) normal2.X, (float) normal2.Y, (float) normal2.Z);
-						CurrentMesh.AddNormal((float) normal3.X, (float) normal3.Y, (float) normal3.Z);
+							CurrentMesh.AddNormal((float)normal1.X, (float)normal1.Y, (float)normal1.Z);
+							CurrentMesh.AddNormal((float)normal2.X, (float)normal2.Y, (float)normal2.Z);
+							CurrentMesh.AddNormal((float)normal3.X, (float)normal3.Y, (float)normal3.Z);
+						}
 					}
+					else
+					{
+						foreach (PolymeshFacet facet in Facets)
+						{
+							XYZ normal1 = normals[facet.V1];
+							XYZ normal2 = normals[facet.V2];
+							XYZ normal3 = normals[facet.V3];
+
+							CurrentMesh.AddNormal((float)normal1.X, (float)normal1.Y, (float)normal1.Z);
+							CurrentMesh.AddNormal((float)normal2.X, (float)normal2.Y, (float)normal2.Z);
+							CurrentMesh.AddNormal((float)normal3.X, (float)normal3.Y, (float)normal3.Z);
+						}
+					}
+
 					break;
 				}
 				case DistributionOfNormals.OnePerFace:
 				{
 					XYZ normal = InPolymeshNode.GetNormals()[0];
+
+					if (MeshPointsTransform != null)
+					{
+						normal = MeshPointsTransform.OfVector(normal);
+					}
+
 					for (int i = 0; i < 3 * InPolymeshNode.NumberOfFacets; i++)
 					{
 						CurrentMesh.AddNormal((float) normal.X, (float) normal.Y, (float) normal.Z);
@@ -429,11 +466,24 @@ namespace DatasmithRevitExporter
 				}
 				case DistributionOfNormals.OnEachFacet:
 				{
-					foreach (XYZ normal in InPolymeshNode.GetNormals())
+					if (MeshPointsTransform != null)
 					{
-						CurrentMesh.AddNormal((float) normal.X, (float) normal.Y, (float) normal.Z);
-						CurrentMesh.AddNormal((float) normal.X, (float) normal.Y, (float) normal.Z);
-						CurrentMesh.AddNormal((float) normal.X, (float) normal.Y, (float) normal.Z);
+						foreach (XYZ normal in InPolymeshNode.GetNormals())
+						{
+							XYZ FinalNormal = MeshPointsTransform.OfVector(normal);
+							CurrentMesh.AddNormal((float)FinalNormal.X, (float)FinalNormal.Y, (float)FinalNormal.Z);
+							CurrentMesh.AddNormal((float)FinalNormal.X, (float)FinalNormal.Y, (float)FinalNormal.Z);
+							CurrentMesh.AddNormal((float)FinalNormal.X, (float)FinalNormal.Y, (float)FinalNormal.Z);
+						}
+					}
+					else
+					{
+						foreach (XYZ normal in InPolymeshNode.GetNormals())
+						{
+							CurrentMesh.AddNormal((float)normal.X, (float)normal.Y, (float)normal.Z);
+							CurrentMesh.AddNormal((float)normal.X, (float)normal.Y, (float)normal.Z);
+							CurrentMesh.AddNormal((float)normal.X, (float)normal.Y, (float)normal.Z);
+						}
 					}
 					break;
 				}
@@ -495,12 +545,16 @@ namespace DatasmithRevitExporter
 		}
 
 		private void PushDocument(
-			Document InDocument
+			Document InDocument,
+			bool bInAddLocationActors = true
 		)
 		{
 			DocumentDataStack.Push(new FDocumentData(InDocument, ref MessageList));
 
-			DocumentDataStack.Peek().AddLocationActors(WorldTransformStack.Peek());
+			if (bInAddLocationActors)
+			{
+				DocumentDataStack.Peek().AddLocationActors(WorldTransformStack.Peek());
+			}
 		}
 
 		private void PopDocument()
@@ -601,6 +655,11 @@ namespace DatasmithRevitExporter
 			return DocumentDataStack.Peek().GetCurrentMesh();
 		}
 
+		private Transform GetCurrentMeshPointsTransform()
+		{
+			return DocumentDataStack.Peek().GetCurrentMeshPointsTransform();
+		}
+
 		private int GetCurrentMaterialIndex()
 		{
 			return DocumentDataStack.Peek().GetCurrentMaterialIndex();
@@ -689,9 +748,10 @@ namespace DatasmithRevitExporter
 
 			public  Element                   CurrentElement;
 			private ElementType               CurrentElementType;
-			private Stack<FInstanceData>      InstanceDataStack = new Stack<FInstanceData>();
-			public  FDatasmithFacadeMesh      ElementMesh       = null;
-			public  FDatasmithFacadeActorMesh ElementActor      = null;
+			private Stack<FInstanceData>      InstanceDataStack		= new Stack<FInstanceData>();
+			public  FDatasmithFacadeMesh      ElementMesh			= null;
+			public  FDatasmithFacadeActorMesh ElementActor			= null;
+			public	Transform				  MeshPointsTransform	= null;
 
 			public FElementData(
 				Element   InElement,
@@ -701,7 +761,157 @@ namespace DatasmithRevitExporter
 				CurrentElement     = InElement;
 				CurrentElementType = InElement.Document.GetElement(InElement.GetTypeId()) as ElementType;
 
+				// If element has location, use it as a transform in order to have better pivot placement.
+				Transform PivotTransform = GetPivotTransform(CurrentElement);
+				if (PivotTransform != null)
+				{
+					if (!InWorldTransform.IsIdentity)
+					{
+						InWorldTransform = InWorldTransform * PivotTransform;
+					}
+					else
+					{
+						InWorldTransform = PivotTransform;
+					}
+
+					if (CurrentElement.GetType() == typeof(Wall)
+						|| CurrentElement.GetType() == typeof(ModelText)
+						|| CurrentElement.GetType().IsSubclassOf(typeof(MEPCurve)))
+					{
+						MeshPointsTransform = PivotTransform.Inverse;
+					}
+				}
+
 				CreateMeshActor(InWorldTransform, out ElementMesh, out ElementActor);
+			}
+
+			// Compute orthonormal basis, given the X vector.
+			static private void ComputeBasis(XYZ BasisX, ref XYZ BasisY, ref XYZ BasisZ)
+			{
+				BasisY = XYZ.BasisZ.CrossProduct(BasisX);
+				if (BasisY.GetLength() < 0.0001)
+				{
+					// BasisX is aligned with Z, use dot product to take direction in account
+					BasisY = BasisX.CrossProduct(BasisX.DotProduct(XYZ.BasisZ) * XYZ.BasisX).Normalize();
+					BasisZ = BasisX.CrossProduct(BasisY).Normalize();
+				}
+				else
+				{
+					BasisY = BasisY.Normalize();
+					BasisZ = BasisX.CrossProduct(BasisY).Normalize();
+				}
+			}
+
+			private Transform GetPivotTransform(Element InElement)
+			{
+				if (InElement.Location == null || (InElement as FamilyInstance) != null)
+				{
+					return null;
+				}
+
+				XYZ Translation = new XYZ();
+				XYZ BasisX = new XYZ();
+				XYZ BasisY = new XYZ();
+				XYZ BasisZ = new XYZ();
+
+				// Get pivot translation
+
+				if (InElement.Location.GetType() == typeof(LocationCurve))
+				{
+					LocationCurve CurveLocation = InElement.Location as LocationCurve;
+					Translation = CurveLocation.Curve.GetEndPoint(0);
+				}
+				else if (InElement.Location.GetType() == typeof(LocationPoint))
+				{
+					Translation = (InElement.Location as LocationPoint).Point;
+				}
+				else if (InElement.GetType() == typeof(Railing))
+				{
+					// Railings don't have valid location, so instead we need to get location from its path.
+					IList<Curve> Paths = (InElement as Railing).GetPath();
+					if (Paths.Count > 0)
+					{
+						Translation = Paths[0].GetEndPoint(0);
+					}
+				}
+				else
+				{
+					return null; // Cannot get valid translation
+				}
+
+				// Get pivot basis
+
+				if (InElement.GetType() == typeof(Wall))
+				{
+					BasisY = (InElement as Wall).Orientation.Normalize();
+					BasisX = BasisY.CrossProduct(XYZ.BasisZ).Normalize();
+					BasisZ = BasisX.CrossProduct(BasisY).Normalize();
+				}
+				else if (InElement.GetType() == typeof(Railing))
+				{
+					IList<Curve> Paths = (InElement as Railing).GetPath();
+					if (Paths.Count > 0)
+					{
+						Curve FirstPath = Paths[0];
+						if (FirstPath.GetType() == typeof(Line))
+						{
+							BasisX = (FirstPath as Line).Direction.Normalize();
+							ComputeBasis(BasisX, ref BasisY, ref BasisZ);
+						}
+						else if (FirstPath.GetType() == typeof(Arc) && FirstPath.IsBound)
+						{
+							Transform Derivatives = (FirstPath as Arc).ComputeDerivatives(0f, true);
+							BasisX = Derivatives.BasisX.Normalize();
+							BasisY = Derivatives.BasisY.Normalize();
+							BasisZ = Derivatives.BasisZ.Normalize();
+						}
+					}
+				}
+				else if (InElement.GetType() == typeof(ModelText))
+				{
+					// Model text has no direction information!
+					BasisX = XYZ.BasisX;
+					BasisY = XYZ.BasisY;
+					BasisZ = XYZ.BasisZ;
+				}
+				else if (InElement.GetType() == typeof(FlexDuct))
+				{
+					BasisX = (InElement as FlexDuct).StartTangent;
+					ComputeBasis(BasisX, ref BasisY, ref BasisZ);
+				}
+				else if (InElement.GetType() == typeof(FlexPipe))
+				{
+					BasisX = (InElement as FlexPipe).StartTangent;
+					ComputeBasis(BasisX, ref BasisY, ref BasisZ);
+				}
+				else if (InElement.Location.GetType() == typeof(LocationCurve))
+				{
+					LocationCurve CurveLocation = InElement.Location as LocationCurve;
+
+					if (CurveLocation.Curve.GetType() == typeof(Line))
+					{
+						BasisX = (CurveLocation.Curve as Line).Direction;
+						ComputeBasis(BasisX, ref BasisY, ref BasisZ);
+					}
+					else if (CurveLocation.Curve.IsBound)
+					{
+						Transform Derivatives = CurveLocation.Curve.ComputeDerivatives(0f, true);
+						BasisX = Derivatives.BasisX.Normalize();
+						BasisY = Derivatives.BasisY.Normalize();
+						BasisZ = Derivatives.BasisZ.Normalize();
+					}
+				}
+				else
+				{
+					return null; // Cannot get valid basis
+				}
+
+				Transform PivotTransform = Transform.CreateTranslation(Translation);
+				PivotTransform.BasisX = BasisX;
+				PivotTransform.BasisY = BasisY;
+				PivotTransform.BasisZ = BasisZ;
+
+				return PivotTransform;
 			}
 
 			public void PushInstance(
@@ -715,11 +925,11 @@ namespace DatasmithRevitExporter
 
 				CreateMeshActor(InWorldTransform, out InstanceData.InstanceMesh, out InstanceData.InstanceActor);
 
-				// The Datasmith instance actor is a component in the hierarchy.
-				InstanceData.InstanceActor.SetIsComponent(true);
-			}
+                // The Datasmith instance actor is a component in the hierarchy.
+                InstanceData.InstanceActor.SetIsComponent(true);
+            }
 
-			public FDatasmithFacadeMesh PopInstance()
+            public FDatasmithFacadeMesh PopInstance()
 			{
 				FInstanceData InstanceData = InstanceDataStack.Pop();
 
@@ -755,6 +965,10 @@ namespace DatasmithRevitExporter
 				// Set the base properties of the Datasmith light actor.
 				string LayerName = Category.GetCategory(CurrentElement.Document, BuiltInCategory.OST_LightingFixtureSource)?.Name ?? "Light Sources";
 				SetActorProperties(LayerName, LightActor);
+
+				// Set the Datasmith light actor layer to its predefined name.
+				string CategoryName = Category.GetCategory(CurrentElement.Document, BuiltInCategory.OST_LightingFixtureSource)?.Name ?? "Light Sources";
+				LightActor.SetLayer(CategoryName);
 
 				// Set the specific properties of the Datasmith light actor.
 				FDatasmithRevitLight.SetLightProperties(InLightAsset, CurrentElement, LightActor);
@@ -1041,12 +1255,19 @@ namespace DatasmithRevitExporter
 				IOActor.AddTag($"Revit.Element.Id.{CurrentElement.Id.IntegerValue}");
 				IOActor.AddTag($"Revit.Element.UniqueId.{CurrentElement.UniqueId}");
 
-				// For an hosted Revit family instance, add the host ID and Unique ID tags to the Datasmith actor.
+				// For an hosted Revit family instance, add the host ID, Unique ID and Mirrored/Flipped flags as tags to the Datasmith actor.
 				FamilyInstance CurrentFamilyInstance = CurrentElement as FamilyInstance;
-				if (CurrentFamilyInstance?.Host != null)
+				if (CurrentFamilyInstance != null)
 				{
-					IOActor.AddTag($"Revit.Host.Id.{CurrentFamilyInstance.Host.Id.IntegerValue}");
-					IOActor.AddTag($"Revit.Host.UniqueId.{CurrentFamilyInstance.Host.UniqueId}");
+					IOActor.AddTag($"Revit.DB.FamilyInstance.Mirrored.{CurrentFamilyInstance.Mirrored}");
+					IOActor.AddTag($"Revit.DB.FamilyInstance.HandFlipped.{CurrentFamilyInstance.HandFlipped}");
+					IOActor.AddTag($"Revit.DB.FamilyInstance.FaceFlipped.{CurrentFamilyInstance.FacingFlipped}");
+
+					if (CurrentFamilyInstance.Host != null)
+					{
+						IOActor.AddTag($"Revit.Host.Id.{CurrentFamilyInstance.Host.Id.IntegerValue}");
+						IOActor.AddTag($"Revit.Host.UniqueId.{CurrentFamilyInstance.Host.UniqueId}");
+					}
 				}
 
 				// Add the Revit element category name metadata to the Datasmith actor.
@@ -1188,7 +1409,7 @@ namespace DatasmithRevitExporter
 		{
 			ElementDataStack.Peek().AddLightActor(InWorldTransform, InLightAsset);
 		}
-		
+
 		public void AddRPCActor(
 			Transform InWorldTransform,
 			Asset     InRPCAsset
@@ -1249,6 +1470,11 @@ namespace DatasmithRevitExporter
 		public FDatasmithFacadeMesh GetCurrentMesh()
 		{
 			return ElementDataStack.Peek().GetCurrentMesh();
+		}
+
+		public Transform GetCurrentMeshPointsTransform()
+		{
+			return ElementDataStack.Peek().MeshPointsTransform;
 		}
 
 		public int GetCurrentMaterialIndex()
@@ -1518,6 +1744,10 @@ namespace DatasmithRevitExporter
 			else if (SourceElement as ContinuousRail != null)
 			{
 				return CurrentDocument.GetElement((SourceElement as ContinuousRail).HostRailingId);
+			}
+			else if (SourceElement.GetType().IsSubclassOf(typeof(InsulationLiningBase)))
+			{
+				return CurrentDocument.GetElement((SourceElement as InsulationLiningBase).HostElementId);
 			}
 
 			return null;

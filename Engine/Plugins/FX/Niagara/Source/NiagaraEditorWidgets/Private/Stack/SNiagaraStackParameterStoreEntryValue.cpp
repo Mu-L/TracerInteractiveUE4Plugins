@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Stack/SNiagaraStackParameterStoreEntryValue.h"
 #include "NiagaraEditorModule.h"
@@ -93,7 +93,6 @@ void SNiagaraStackParameterStoreEntryValue::Construct(const FArguments& InArgs, 
 			.IsFocusable(false)
 			.ForegroundColor(FSlateColor::UseForeground())
 			.ToolTipText(LOCTEXT("DeleteToolTip", "Delete this parameter"))
-			.Visibility(this, &SNiagaraStackParameterStoreEntryValue::GetDeleteButtonVisibility)
 			.OnClicked(this, &SNiagaraStackParameterStoreEntryValue::DeleteClicked)
 			.Content()
 			[
@@ -111,7 +110,7 @@ FReply SNiagaraStackParameterStoreEntryValue::DeleteClicked()
 	FNotificationInfo Info(FText::Format(LOCTEXT("NiagaraDeletedUserParameter", "System exposed parameter was deleted.\n{0}\n(All links to inner variables were invalidated in the process.)"), StackEntry->GetDisplayName()));
 	Info.ExpireDuration = 5.0f;
 	Info.bFireAndForget = true;
-	Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Info"));
+	Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Note"));
 	FSlateNotificationManager::Get().AddNotification(Info);
 
 	// Delete after the notification is posted to prevent the entry from becoming invalidated before generating the message.
@@ -248,11 +247,6 @@ void SNiagaraStackParameterStoreEntryValue::ParameterValueChanged(TSharedRef<SNi
 void SNiagaraStackParameterStoreEntryValue::ParameterPropertyValueChanged(const FPropertyChangedEvent& PropertyChangedEvent)
 {
 	StackEntry->NotifyValueChanged();
-}
-
-EVisibility SNiagaraStackParameterStoreEntryValue::GetDeleteButtonVisibility() const
-{
-	return StackEntry->CanRenameInput() ? EVisibility::Visible : EVisibility::Collapsed;
 }
 
 EVisibility SNiagaraStackParameterStoreEntryValue::GetReferenceVisibility() const

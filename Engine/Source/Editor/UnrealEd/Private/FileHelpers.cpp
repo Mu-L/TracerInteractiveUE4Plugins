@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "FileHelpers.h"
@@ -64,6 +64,10 @@
 #include "Engine/LevelStreaming.h"
 #include "AutoSaveUtils.h"
 #include "AssetRegistryModule.h"
+#include "Misc/BlacklistNames.h"
+#include "EngineAnalytics.h"
+#include "StudioAnalytics.h"
+#include "AnalyticsEventAttribute.h"
 
 
 DEFINE_LOG_CATEGORY_STATIC(LogFileHelpers, Log, All);
@@ -202,7 +206,31 @@ namespace FileDialogHelpers
 	}
 }
 
+namespace FileHelperPackageUtil
+{
+	/**
+	 * DoesPackageExist helper that rely on the AssetRegistry to validate if a package exists instead of hitting the FS
+	 * Fallback to the FS if the asset registry initial scan isn't done or we aren't in Editor
+	 */
+	bool DoesPackageExist(UPackage* Package, FString* OutFilename = nullptr)
+	{
+		// Test using asset registry to figure out existence
+		IAssetRegistry& AssetRegistry = FAssetRegistryModule::GetRegistry();
+		if (!AssetRegistry.IsLoadingAssets() || !GIsEditor)
+		{
+			TArray<FAssetData> Data;
+			FAssetRegistryModule::GetRegistry().GetAssetsByPackageName(Package->GetFName(), Data, true);
 
+			if (Data.Num() > 0 && OutFilename)
+			{
+				*OutFilename = FPackageName::LongPackageNameToFilename(Package->GetName(), Package->ContainsMap() ? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension());
+			}
+
+			return Data.Num() > 0;
+		}
+		return FPackageName::DoesPackageExist(Package->GetName(), nullptr, OutFilename);
+	}
+}
 
 /**
  * Queries the user if they want to quit out of interpolation editing before save.
@@ -290,7 +318,9 @@ static bool ConfirmPackageBranchCheckOutStatus(const TArray<UPackage*>& Packages
 			const FText Message = SourceControlState->IsModifiedInOtherBranch() ? FText::Format(LOCTEXT("WarningModifiedOtherBranch", "WARNING: Package {3} modified in {0} CL {1}\n\n{2}\n\nCheck out packages anyway?"), FText::FromString(HeadBranch), FText::AsNumber(HeadCL, &NoCommas), InfoText, PackageNameText)
 				: FText::Format(LOCTEXT("WarningCheckedOutOtherBranch", "WARNING: Package {2} checked out in {0}\n\n{1}\n\nCheck out packages anyway?"), FText::FromString(SourceControlState->GetOtherUserBranchCheckedOuts()), InfoText, PackageNameText);
 
-			return OpenMsgDlgInt(EAppMsgType::YesNo, Message, SourceControlState->IsModifiedInOtherBranch() ? FText::FromString("Package Branch Modifications") : FText::FromString("Package Branch Checkouts")) == EAppReturnType::Yes;
+			const FText Title = SourceControlState->IsModifiedInOtherBranch() ? FText::FromString("Package Branch Modifications") : FText::FromString("Package Branch Checkouts");
+
+			return FMessageDialog::Open(EAppMsgType::YesNo, Message, &Title) == EAppReturnType::Yes;
 		}
 	}
 
@@ -537,6 +567,8 @@ static bool SaveWorld(UWorld* World,
 		return false;
 	}
 
+	TRACE_CPUPROFILER_EVENT_SCOPE(SaveWorld);
+
 	FString PackageName = Package->GetName();
 
 	FString	ExistingFilename;
@@ -544,7 +576,7 @@ static bool SaveWorld(UWorld* World,
 	FString	CleanFilename;
 
 	// Does a filename already exist for this package?
-	const bool bPackageExists = FPackageName::DoesPackageExist( PackageName, NULL, &ExistingFilename );
+	const bool bPackageExists = FileHelperPackageUtil::DoesPackageExist(Package, &ExistingFilename );
 
 	if ( ForceFilename )
 	{
@@ -1364,7 +1396,7 @@ bool FEditorFileUtils::AddCheckoutPackageItems(bool bCheckDirty, TArray<UPackage
 				}
 				
 				FString Filename;
-				if (FPackageName::DoesPackageExist(Package->GetName(), NULL, &Filename))
+				if (FileHelperPackageUtil::DoesPackageExist(Package, &Filename))
 				{
 					if (IFileManager::Get().IsReadOnly(*Filename))
 					{
@@ -1418,7 +1450,7 @@ bool FEditorFileUtils::AddCheckoutPackageItems(bool bCheckDirty, TArray<UPackage
 		bool bPkgReadOnly = true;
 		bool bCareAboutReadOnly = SourceControlProvider.UsesLocalReadOnlyState();
 		// Find the filename for this package
-		bool bFoundFile = FPackageName::DoesPackageExist(CurPackage->GetName(), NULL, &Filename);
+		bool bFoundFile = FileHelperPackageUtil::DoesPackageExist(CurPackage, &Filename);
 		if (bFoundFile)
 		{
 			// determine if the package file is read only
@@ -1600,11 +1632,6 @@ bool FEditorFileUtils::PromptToCheckoutPackages(bool bCheckDirty, const TArray<U
 		
 		// Prepare the buttons for the checkout dialog
 
-		if (OutPackagesNotNeedingCheckout != nullptr && OutPackagesNotNeedingCheckout->Num() > 0)
-		{
-			CheckoutPackagesDialogModule.AddButton(DRT_Save, NSLOCTEXT("PackagesDialogModule", "Dlg_SaveCheckedOutButton", "Save Checked Out"), NSLOCTEXT("PackagesDialogModule", "Dlg_SaveCheckedOutTooltip", "Save already checked out packages, but not the packages in this dialog."));
-		}
-
 		// The checkout button should be disabled if no packages can be checked out.
 		CheckoutPackagesDialogModule.AddButton(DRT_CheckOut, NSLOCTEXT("PackagesDialogModule", "Dlg_CheckOutButtonp", "Check Out Selected"), NSLOCTEXT("PackagesDialogModule", "Dlg_CheckOutTooltip", "Attempt to Check Out Checked Assets"), CheckOutSelectedDisabledAttrib );
 		
@@ -1655,7 +1682,7 @@ bool FEditorFileUtils::PromptToCheckoutPackages(bool bCheckDirty, const TArray<U
 					UPackage* PackageToMakeWritable = *PkgsToMakeWritableIter;
 					FString Filename;
 
-					bool bFoundFile = FPackageName::DoesPackageExist( PackageToMakeWritable->GetName(), NULL, &Filename );
+					bool bFoundFile = FileHelperPackageUtil::DoesPackageExist( PackageToMakeWritable, &Filename );
 					if( bFoundFile )
 					{
 						// If we're ignoring the package due to the user ignoring it for saving, remove it from the ignore list
@@ -1693,8 +1720,8 @@ bool FEditorFileUtils::PromptToCheckoutPackages(bool bCheckDirty, const TArray<U
 					FText MessageFormatting = NSLOCTEXT("FileHelper", "FailedMakingWritableDlgMessageFormatting", "The following assets could not be made writable:{Packages}");
 					FText Message = FText::Format( MessageFormatting, Arguments );
 
-					FText Tile = NSLOCTEXT("FileHelper", "FailedMakingWritableDlg_Title", "Unable to make assets writable");
-					FMessageDialog::Open(EAppMsgType::Ok, Message, &Tile);
+					FText Title = NSLOCTEXT("FileHelper", "FailedMakingWritableDlg_Title", "Unable to make assets writable");
+					FMessageDialog::Open(EAppMsgType::Ok, Message, &Title);
 				}
 
 				bPerformedOperation = true;
@@ -1704,7 +1731,7 @@ bool FEditorFileUtils::PromptToCheckoutPackages(bool bCheckDirty, const TArray<U
 				bResult = true;
 				bPerformedOperation = true;
 			}
-			else if (UserResponse == DRT_Cancel)
+			else if (UserResponse == DRT_Cancel || UserResponse == DRT_None)
 			{
 				// Handle the case of the user canceling out of the dialog
 				bResult = false;
@@ -1733,14 +1760,17 @@ bool FEditorFileUtils::PromptToCheckoutPackages(bool bCheckDirty, const TArray<U
 	return bResult;
 }
 
-ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<UPackage*>& PkgsToCheckOut, TArray<UPackage*>* OutPackagesCheckedOut, const bool bErrorIfAlreadyCheckedOut)
+ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<UPackage*>& PkgsToCheckOut, TArray<UPackage*>* OutPackagesCheckedOut, const bool bErrorIfAlreadyCheckedOut, const bool bConfirmPackageBranchCheckOutStatus)
 {
+	const bool bErrorIfFileMissing = false;
+
 	ECommandResult::Type CheckOutResult = ECommandResult::Succeeded;
 	FString PkgsWhichFailedCheckout;
 
 	ISourceControlProvider& SourceControlProvider = ISourceControlModule::Get().GetProvider();
 
 	TArray<UPackage*> FinalPackageCheckoutList;
+	TArray<UPackage*> FinalPackageMarkForAddList;
 
 	// Source control may have been enabled in the package checkout dialog.
 	// Ensure the status is up to date
@@ -1752,7 +1782,7 @@ ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<UPackage*>&
 	if(CheckOutResult != ECommandResult::Cancelled)
 	{
 		// If any packages are checked out or modified in another branch, prompt for confirmation
-		if (!ConfirmPackageBranchCheckOutStatus(PkgsToCheckOut))
+		if (bConfirmPackageBranchCheckOutStatus && !ConfirmPackageBranchCheckOutStatus(PkgsToCheckOut))
 		{
 			return ECommandResult::Cancelled;
 		}
@@ -1779,6 +1809,22 @@ ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<UPackage*>&
 					bShowCheckoutError = false;
 					FinalPackageCheckoutList.Add(PackageToCheckOut);
 				}
+				else if (SourceControlState->CanAdd())
+				{
+					// Cannot add unsaved packages to source control
+					FString Filename;
+					if (!PackageToCheckOut->HasAnyPackageFlags(PKG_NewlyCreated) || FPackageName::DoesPackageExist(PackageToCheckOut->GetName(), nullptr, &Filename))
+					{
+						bShowCheckoutError = false;
+						FinalPackageMarkForAddList.Add(PackageToCheckOut);
+					}
+					else if (!bErrorIfFileMissing)
+					{
+						// Silently skip package that has not been saved yet
+						// Expected when called by InternalCheckoutAndSavePackages before packages saved
+						bShowCheckoutError = false;
+					}
+				}
 				else if( !bErrorIfAlreadyCheckedOut && SourceControlState->IsCheckedOut() && !SourceControlState->IsCheckedOutOther() )
 				{
 					bShowCheckoutError = false;
@@ -1799,12 +1845,32 @@ ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<UPackage*>&
 	if(FinalPackageCheckoutList.Num() > 0)
 	{
 		CheckOutResult = SourceControlProvider.Execute(ISourceControlOperation::Create<FCheckOut>(), FinalPackageCheckoutList);
-		if(CheckOutResult != ECommandResult::Cancelled)
+	}
+
+	// Attempt to mark for add each package the user specified that is not already tracked by source control
+	ECommandResult::Type MarkForAddResult = ECommandResult::Cancelled;
+	if (FinalPackageMarkForAddList.Num() > 0)
+	{
+		MarkForAddResult = SourceControlProvider.Execute(ISourceControlOperation::Create<FMarkForAdd>(), FinalPackageMarkForAddList);
+	}
+
+	TArray<UPackage*> CombinedPackageList = FinalPackageCheckoutList;
+	CombinedPackageList.Append(FinalPackageMarkForAddList);
+
+	if (CombinedPackageList.Num() > 0)
+	{
 		{
 			// Checked out some or all files successfully, so check their state
-			for( auto PkgsToCheckOutIter = FinalPackageCheckoutList.CreateConstIterator(); PkgsToCheckOutIter; ++PkgsToCheckOutIter )
+			for (int32 i=0; i < CombinedPackageList.Num(); ++i)
 			{
-				UPackage* CurPackage = *PkgsToCheckOutIter;
+				const bool bCheckedOut = (i < FinalPackageCheckoutList.Num()) && (CheckOutResult != ECommandResult::Cancelled);
+				const bool bMarkedForAdd = (i >= FinalPackageMarkForAddList.Num()) && (MarkForAddResult != ECommandResult::Cancelled);
+				if (!(bCheckedOut || bMarkedForAdd))
+				{
+					continue;
+				}
+
+				UPackage* CurPackage = CombinedPackageList[i];
 
 				// If we're ignoring the package due to the user ignoring it for saving, remove it from the ignore list
 				// as getting here means we've explicitly decided to save the asset.
@@ -1812,7 +1878,7 @@ ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<UPackage*>&
 				PackagesNotSavedDuringSaveAll.Remove(CurPackageName);
 
 				FSourceControlStatePtr SourceControlState = SourceControlProvider.GetState(CurPackage, EStateCacheUsage::Use);
-				if(SourceControlState.IsValid() && SourceControlState->IsCheckedOut())
+				if (SourceControlState.IsValid() && (SourceControlState->IsCheckedOut() || SourceControlState->IsAdded()))
 				{
 					if ( OutPackagesCheckedOut )
 					{
@@ -1836,8 +1902,8 @@ ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<UPackage*>&
 		FText MessageFormat = NSLOCTEXT("FileHelper", "FailedCheckoutDlgMessageFormatting", "The following assets could not be successfully checked out from source control:{Packages}");
 		FText Message = FText::Format( MessageFormat, Arguments );
 
-		FText Tile = NSLOCTEXT("FileHelper", "FailedCheckoutDlg_Title", "Unable to Check Out From Source Control!");
-		FMessageDialog::Open(EAppMsgType::Ok, Message, &Tile);
+		FText Title = NSLOCTEXT("FileHelper", "FailedCheckoutDlg_Title", "Unable to Check Out From Source Control!");
+		FMessageDialog::Open(EAppMsgType::Ok, Message, &Title);
 	}
 
 	return CheckOutResult;
@@ -1873,6 +1939,7 @@ ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<FString>& P
 	}
 
 	TArray<FString> FinalPackageCheckoutList;
+	TArray<FString> FinalPackageMarkForAddList;
 	if(CheckOutResult != ECommandResult::Cancelled)
 	{
 		// Assemble a final list of packages to check out
@@ -1906,6 +1973,11 @@ ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<FString>& P
 					bShowCheckoutError = false;
 					FinalPackageCheckoutList.Add(PackageToCheckOutName);
 				}
+				else if (SourceControlState->CanAdd())
+				{
+					bShowCheckoutError = false;
+					FinalPackageMarkForAddList.Add(PackageToCheckOutName);
+				}
 				else if( !bErrorIfAlreadyCheckedOut && SourceControlState->IsCheckedOut() && !SourceControlState->IsCheckedOutOther() )
 				{
 					bShowCheckoutError = false;
@@ -1921,34 +1993,57 @@ ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<FString>& P
 		}
 	}
 
-	// Attempt to check out each package the user specified to be checked out that is not read only
-	if ( FinalPackageCheckoutList.Num() > 0 )
+	// We have an array of package names, but the SCC needs an array of their corresponding filenames
+	auto GetFilenamesFromPackageNames = [](const TArray<FString>& PackageNames)
 	{
+		TArray<FString> Filenames;
+		Filenames.Reserve(PackageNames.Num());
+
+		for (const FString& PackageName : PackageNames)
 		{
-			// We have an array of package names, but the SCC needs an array of their corresponding filenames
-			TArray<FString> FinalPackageCheckoutListFilenames;
-			FinalPackageCheckoutListFilenames.Reserve(FinalPackageCheckoutList.Num());
-
-			for( auto PkgsToCheckOutIter = FinalPackageCheckoutList.CreateConstIterator(); PkgsToCheckOutIter; ++PkgsToCheckOutIter )
+			FString PackageFilename;
+			if (FPackageName::DoesPackageExist(PackageName, nullptr, &PackageFilename))
 			{
-				const FString& PackageToCheckOutName = *PkgsToCheckOutIter;
-
-				FString PackageFilename;
-				if(FPackageName::DoesPackageExist(PackageToCheckOutName, nullptr, &PackageFilename))
-				{
-					FinalPackageCheckoutListFilenames.Add(PackageFilename);
-				}
+				Filenames.Add(PackageFilename);
 			}
-
-			CheckOutResult = SourceControlProvider.Execute(ISourceControlOperation::Create<FCheckOut>(), FinalPackageCheckoutListFilenames);
 		}
 
-		if(CheckOutResult != ECommandResult::Cancelled)
+		return Filenames;
+	};
+
+	// Attempt to check out each package the user specified to be checked out that is not read only
+	if (FinalPackageCheckoutList.Num() > 0)
+	{
+		// We have an array of package names, but the SCC needs an array of their corresponding filenames
+		TArray<FString> Filenames = GetFilenamesFromPackageNames(FinalPackageCheckoutList);
+		CheckOutResult = SourceControlProvider.Execute(ISourceControlOperation::Create<FCheckOut>(), Filenames);
+	}
+
+	// Attempt to mark for add each package the user specified not already tracked by source control
+	ECommandResult::Type MarkForAddResult = ECommandResult::Succeeded;
+	if (FinalPackageMarkForAddList.Num() > 0)
+	{
+		TArray<FString> Filenames = GetFilenamesFromPackageNames(FinalPackageMarkForAddList);
+		MarkForAddResult = SourceControlProvider.Execute(ISourceControlOperation::Create<FMarkForAdd>(), Filenames);
+	}
+
+	TArray<FString> CombinedPackageList = FinalPackageCheckoutList;
+	CombinedPackageList.Append(FinalPackageMarkForAddList);
+
+	if (CombinedPackageList.Num() > 0)
+	{
 		{
 			// Checked out some or all files successfully, so check their state
-			for( auto PkgsToCheckOutIter = FinalPackageCheckoutList.CreateConstIterator(); PkgsToCheckOutIter; ++PkgsToCheckOutIter )
+			for (int32 i = 0; i < CombinedPackageList.Num(); ++i)
 			{
-				const FString& CurPackageName = *PkgsToCheckOutIter;
+				const bool bCheckedOut = (i < FinalPackageCheckoutList.Num()) && (CheckOutResult != ECommandResult::Cancelled);
+				const bool bMarkedForAdd = (i >= FinalPackageCheckoutList.Num()) && (MarkForAddResult != ECommandResult::Cancelled);
+				if (!(bCheckedOut || bMarkedForAdd))
+				{
+					continue;
+				}
+
+				const FString& CurPackageName = CombinedPackageList[i];
 
 				// If we're ignoring the package due to the user ignoring it for saving, remove it from the ignore list
 				// as getting here means we've explicitly decided to save the asset.
@@ -1964,7 +2059,7 @@ ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<FString>& P
 					SourceControlState = SourceControlProvider.GetState(PackageFilename, EStateCacheUsage::Use);
 				}
 
-				if(SourceControlState.IsValid() && SourceControlState->IsCheckedOut())
+				if (SourceControlState.IsValid() && (SourceControlState->IsCheckedOut() || SourceControlState->IsAdded()))
 				{
 					if ( OutPackagesCheckedOut )
 					{
@@ -2075,7 +2170,7 @@ void FEditorFileUtils::OpenLevelPickingDialog(const FOnLevelsChosen& OnLevelsCho
 				// Remove the slash if needed
 				if ( FilesystemPath.EndsWith(TEXT("/"), ESearchCase::CaseSensitive) )
 				{
-					FilesystemPath = FilesystemPath.LeftChop(1);
+					FilesystemPath.LeftChopInline(1, false);
 				}
 
 				FEditorDirectories::Get().SetLastDirectory(ELastDirectory::LEVEL, FilesystemPath);
@@ -2404,7 +2499,7 @@ static void NotifyBSPNeedsRebuild(const FString& PackageName)
  */
 bool FEditorFileUtils::LoadMap(const FString& InFilename, bool LoadAsTemplate, bool bShowProgress)
 {
-	double LoadStartTime = FPlatformTime::Seconds();
+	double LoadStartTime = FStudioAnalytics::GetAnalyticSeconds();
 	
 	if (GEditor->WarnIfLightingBuildIsCurrentlyRunning())
 	{
@@ -2513,7 +2608,10 @@ bool FEditorFileUtils::LoadMap(const FString& InFilename, bool LoadAsTemplate, b
 	}
 
 	// Track time spent loading map.
-	UE_LOG(LogFileHelpers, Log, TEXT("Loading map '%s' took %.3f"), *FPaths::GetBaseFilename(Filename), FPlatformTime::Seconds() - LoadStartTime );
+	const double MapLoadTime = FStudioAnalytics::GetAnalyticSeconds() - LoadStartTime;
+	UE_LOG(LogFileHelpers, Log, TEXT("Loading map '%s' took %.3f"), *FPaths::GetBaseFilename(Filename), MapLoadTime);
+
+	FStudioAnalytics::FireEvent_Loading(TEXT("LoadMap"), MapLoadTime, { FAnalyticsEventAttribute(TEXT("MapName"), FPaths::GetBaseFilename(Filename)) });
 
 	if (GUnrealEd)
 	{
@@ -2780,6 +2878,8 @@ enum class InternalSavePackageResult : int8
  */
 static InternalSavePackageResult InternalSavePackage(UPackage* PackageToSave, bool bUseDialog, bool& bOutPackageLocallyWritable, FOutputDevice &SaveOutput)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(InternalSavePackage);
+
 	// What we will be returning. Assume for now that everything will go fine
 	InternalSavePackageResult ReturnCode = InternalSavePackageResult::Success;
 
@@ -2808,7 +2908,7 @@ static InternalSavePackageResult InternalSavePackage(UPackage* PackageToSave, bo
 	if( bIsValidPath )
 	{
 		FString ExistingFilename;
-		const bool bPackageAlreadyExists = FPackageName::DoesPackageExist(PackageName, NULL, &ExistingFilename);
+		const bool bPackageAlreadyExists = FileHelperPackageUtil::DoesPackageExist(PackageToSave, &ExistingFilename);
 		if (!bPackageAlreadyExists)
 		{
 			// Construct a filename from long package name.
@@ -3129,6 +3229,8 @@ static void InternalNotifyNoPackagesSaved(const bool bUseDialog)
  */
 static bool InternalSavePackagesFast(const TArray<UPackage*>& PackagesToSave, bool bUseDialog, TArray<UPackage*>& OutFailedPackages)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(InternalSavePackagesFast);
+
 	bool bReturnCode = true;
 
 	FSaveErrorOutputDevice SaveErrors;
@@ -3140,7 +3242,7 @@ static bool InternalSavePackagesFast(const TArray<UPackage*>& PackagesToSave, bo
 
 		// Check if a file exists for this package
 		FString Filename;
-		bool bFoundFile = FPackageName::DoesPackageExist(CurPackage->GetName(), NULL, &Filename);
+		bool bFoundFile = FileHelperPackageUtil::DoesPackageExist(CurPackage, &Filename);
 		if (bFoundFile)
 		{
 			// determine if the package file is read only
@@ -3230,6 +3332,8 @@ static bool InternalSavePackages(const TArray<UPackage*>& PackagesToSave, bool b
 
 void FEditorFileUtils::SaveMapDataPackages(UWorld* WorldToSave, bool bCheckDirty)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FEditorFileUtils_SaveMapDataPackages);
+
 	TArray<UPackage*> PackagesToSave;
 	ULevel* Level = WorldToSave->PersistentLevel;
 	UPackage* WorldPackage = WorldToSave->GetOutermost();
@@ -3325,6 +3429,8 @@ bool FEditorFileUtils::SaveLevel(ULevel* Level, const FString& DefaultFilename, 
 
 bool FEditorFileUtils::SaveDirtyPackages(const bool bPromptUserToSave, const bool bSaveMapPackages, const bool bSaveContentPackages, const bool bFastSave, const bool bNotifyNoPackagesSaved, const bool bCanBeDeclined, bool* bOutPackagesNeededSaving )
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(FEditorFileUtils::SaveDirtyPackages);
+
 	bool bReturnCode = true;
 
 	if (bOutPackagesNeededSaving != NULL)
@@ -3435,6 +3541,8 @@ bool FEditorFileUtils::SaveDirtyContentPackages(TArray<UClass*>& SaveContentClas
 bool FEditorFileUtils::SaveCurrentLevel()
 {
 	bool bReturnCode = false;
+
+	TRACE_CPUPROFILER_EVENT_SCOPE(FEditorFileUtils_SaveCurrentLevel);
 
 	ULevel* Level = GWorld->GetCurrentLevel();
 	if ( Level && FEditorFileUtils::PromptToCheckoutLevels( false, Level ) )
@@ -3995,11 +4103,17 @@ FString FEditorFileUtils::ExtractPackageName(const FString& ObjectPath)
 
 void FEditorFileUtils::GetDirtyWorldPackages(TArray<UPackage*>& OutDirtyPackages)
 {
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+	const TSharedRef<FBlacklistPaths>& WritableFolderFilter = AssetToolsModule.Get().GetWritableFolderBlacklist();
+	const bool bHasWritableFolderFilter = WritableFolderFilter->HasFiltering();
+
 	for (TObjectIterator<UWorld> WorldIt; WorldIt; ++WorldIt)
 	{
 		UPackage* WorldPackage = WorldIt->GetOutermost();
 		if (!WorldPackage->HasAnyPackageFlags(PKG_PlayInEditor)
-			&& !WorldPackage->HasAnyFlags(RF_Transient))
+			&& !WorldPackage->HasAnyFlags(RF_Transient)
+			&& (!bHasWritableFolderFilter || WritableFolderFilter->PassesStartsWithFilter(WorldPackage->GetName()))
+			)
 		{
 			if (WorldPackage->IsDirty())
 			{
@@ -4011,22 +4125,32 @@ void FEditorFileUtils::GetDirtyWorldPackages(TArray<UPackage*>& OutDirtyPackages
 			{
 				UPackage* BuiltDataPackage = WorldIt->PersistentLevel->MapBuildData->GetOutermost();
 
-				if (BuiltDataPackage->IsDirty() && BuiltDataPackage != WorldPackage)
+				if (BuiltDataPackage != WorldPackage)
 				{
-					// If built data package does not have a name yet add the world package so a user is prompted to have a name chosen
-					if (!WorldPackage->IsDirty())
+					if (WorldPackage->IsDirty() && !BuiltDataPackage->IsDirty())
 					{
-						const FString WorldPackageName = WorldPackage->GetName();
-						const bool bIncludeReadOnlyRoots = false;
-						const bool bIsValidPath = FPackageName::IsValidLongPackageName(WorldPackageName, bIncludeReadOnlyRoots);
-						if (!bIsValidPath)
-						{
-							WorldPackage->MarkPackageDirty();
-							OutDirtyPackages.Add(WorldPackage);
-						}
+						// Must become dirty because new prompts to save should not be brought up after each individual map saves
+						// We also cannot bring up a second prompt to save because a recursion guard blocks it
+						BuiltDataPackage->MarkPackageDirty();
 					}
 
-					OutDirtyPackages.Add(BuiltDataPackage);
+					if (BuiltDataPackage->IsDirty())
+					{
+						// If built data package does not have a name yet add the world package so a user is prompted to have a name chosen
+						if (!WorldPackage->IsDirty())
+						{
+							const FString WorldPackageName = WorldPackage->GetName();
+							const bool bIncludeReadOnlyRoots = false;
+							const bool bIsValidPath = FPackageName::IsValidLongPackageName(WorldPackageName, bIncludeReadOnlyRoots);
+							if (!bIsValidPath)
+							{
+								WorldPackage->MarkPackageDirty();
+								OutDirtyPackages.Add(WorldPackage);
+							}
+						}
+
+						OutDirtyPackages.Add(BuiltDataPackage);
+					}
 				}
 			}
 		}
@@ -4035,6 +4159,10 @@ void FEditorFileUtils::GetDirtyWorldPackages(TArray<UPackage*>& OutDirtyPackages
 
 void FEditorFileUtils::GetDirtyContentPackages(TArray<UPackage*>& OutDirtyPackages)
 {
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+	const TSharedRef<FBlacklistPaths>& WritableFolderFilter = AssetToolsModule.Get().GetWritableFolderBlacklist();
+	const bool bHasWritableFolderFilter = WritableFolderFilter->HasFiltering();
+
 	// Make a list of all content packages that we should save
 	for (TObjectIterator<UPackage> It; It; ++It)
 	{
@@ -4060,8 +4188,19 @@ void FEditorFileUtils::GetDirtyContentPackages(TArray<UPackage*>& OutDirtyPackag
 			// Ignore map packages, they are caught above.
 			bShouldIgnorePackage |= bIsMapPackage;
 
-			// Ignore packages with long, invalid names. This culls out packages with paths in read-only roots such as /Temp.
-			bShouldIgnorePackage |= (!FPackageName::IsShortPackageName(Package->GetFName()) && !FPackageName::IsValidLongPackageName(Package->GetName(), /*bIncludeReadOnlyRoots=*/false));
+			if (!bShouldIgnorePackage)
+			{
+				FString PackageName = Package->GetName();
+
+				// Ignore packages with long, invalid names. This culls out packages with paths in read-only roots such as /Temp.
+				bShouldIgnorePackage |= (!FPackageName::IsShortPackageName(Package->GetFName()) && !FPackageName::IsValidLongPackageName(PackageName, /*bIncludeReadOnlyRoots=*/false));
+
+				// Ignore packages that cannot be saved due to a custom filter
+				if (!bShouldIgnorePackage && bHasWritableFolderFilter)
+				{
+					bShouldIgnorePackage |= (!WritableFolderFilter->PassesStartsWithFilter(PackageName));
+				}
+			}
 		}
 
 		if (!bShouldIgnorePackage)
@@ -4165,12 +4304,33 @@ static bool InternalCheckoutAndSavePackages(const TArray<UPackage*>& PackagesToS
 			// Prevent modal window if not requested.
 			TGuardValue<bool> UnattendedScriptGuard(GIsRunningUnattendedScript, true);
 
+			TArray<UPackage*> PackagesCheckedOut;
 			const bool bErrorIfAlreadyCheckedOut = false;
-			const bool bShowDialogIfFailure = false;
-			FEditorFileUtils::CheckoutPackages(PackagesToSave, nullptr, bErrorIfAlreadyCheckedOut);
+			const bool bConfirmPackageBranchCheckOutStatus = bUseDialog;
+			FEditorFileUtils::CheckoutPackages(PackagesToSave, &PackagesCheckedOut, bErrorIfAlreadyCheckedOut, bConfirmPackageBranchCheckOutStatus);
+
+			// Cannot mark files for add until after packages saved
+			TArray<UPackage*> PackagesToMarkForAdd;
+			for (UPackage* Package : PackagesToSave)
+			{
+				// List unsaved packages that were not checked out
+				if (Package->HasAnyPackageFlags(PKG_NewlyCreated) && !PackagesCheckedOut.Contains(Package))
+				if (!PackagesCheckedOut.Contains(Package))
+				{
+					PackagesToMarkForAdd.Add(Package);
+				}
+			}
 
 			TArray<UPackage*> FailedPackages;
 			FEditorFileUtils::EPromptReturnCode ReturnResponse = InternalPromptForCheckoutAndSave(PackagesToSave, bUseDialog, FailedPackages);
+
+			// Mark files for add now that packages have saved
+			PackagesToMarkForAdd.RemoveAll([&FailedPackages](UPackage* Package) { return FailedPackages.Contains(Package); });
+			if (PackagesToMarkForAdd.Num() > 0)
+			{
+				FEditorFileUtils::CheckoutPackages(PackagesToMarkForAdd, nullptr, bErrorIfAlreadyCheckedOut);
+			}
+
 			bResult = (ReturnResponse == FEditorFileUtils::PR_Success);
 		}
 	}

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.IO;
@@ -36,6 +36,12 @@ namespace nDisplayLauncher
 			if (ctrlListApps.SelectedIndex < 0 || ctrlComboConfigs.SelectedIndex < 0)
 			{
 				AppLogger.Log("No application/config selected");
+				return;
+			}
+
+			if (TheLauncher.SelectedConfig.Contains(" "))
+			{
+				System.Windows.Forms.MessageBox.Show("Paths with spaces currently not supported. Please make sure there is no spaces in the config path.");
 				return;
 			}
 
@@ -129,6 +135,12 @@ namespace nDisplayLauncher
 			if (openFileDialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
 			{
 				string configPath = openFileDialog.FileName;
+				if (configPath.Contains(" "))
+				{
+					System.Windows.Forms.MessageBox.Show("Paths with spaces currently not supported");
+					return;
+				}
+
 				if (!TheLauncher.Configs.Exists(x => x == configPath))
 				{
 					TheLauncher.AddConfig(configPath);

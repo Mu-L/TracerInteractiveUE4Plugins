@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -174,6 +174,16 @@ typedef FOnRejectInviteComplete::FDelegate FOnRejectInviteCompleteDelegate;
  * @param Error error information on failure
  */
 DECLARE_DELEGATE_FourParams(FOnSetFriendAliasComplete, int32 /*LocalUserNum*/, const FUniqueNetId& /*FriendId*/, const FString& /*ListName*/, const FOnlineError& /*Error*/);
+
+/**
+ * Delegate used when a delete friend alias request has completed
+ *
+ * @param LocalUserNum the controller number of the associated user that made the request
+ * @param FriendId player that we delete alias from
+ * @param ListName name of the friends list that was operated on
+ * @param Error error information on failure
+ */
+DECLARE_DELEGATE_FourParams(FOnDeleteFriendAliasComplete, int32 /*LocalUserNum*/, const FUniqueNetId& /*FriendId*/, const FString& /*ListName*/, const FOnlineError& /*Error*/);
 
 /**
  * Delegate used when an friend delete request has completed
@@ -457,7 +467,17 @@ public:
 	 *
 	 */
 	virtual void SetFriendAlias(int32 LocalUserNum, const FUniqueNetId& FriendId, const FString& ListName, const FString& Alias, const FOnSetFriendAliasComplete& Delegate = FOnSetFriendAliasComplete()) = 0;
-	
+
+	/**
+	 * Starts an async task that delete an alias from a friend.
+	 *
+	 * @param LocalUserNum the user that is setting the alias
+	 * @param FriendId player that will have the alias deleted from
+	 * @param ListName name of the friends list to operate on
+	 *
+	 */
+	virtual void DeleteFriendAlias(int32 LocalUserNum, const FUniqueNetId& FriendId, const FString& ListName, const FOnDeleteFriendAliasComplete& Delegate = FOnDeleteFriendAliasComplete()) = 0;
+
 	/**
 	 * Delegate used when an invite reject request has completed
 	 *

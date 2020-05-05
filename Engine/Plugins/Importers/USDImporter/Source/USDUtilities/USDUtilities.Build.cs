@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.IO;
@@ -35,15 +35,11 @@ namespace UnrealBuildTool.Rules
 					"RenderCore",
 					"RHI",
 					"StaticMeshDescription",
+					"UnrealUSDWrapper",
 					"MessageLog",
 					"JsonUtilities",
 				}
 				);
-
-			if (Target.Platform == UnrealTargetPlatform.Win64)
-			{
-				PrivateDependencyModuleNames.Add("UnrealUSDWrapper");
-			}
 		}
 	}
 }

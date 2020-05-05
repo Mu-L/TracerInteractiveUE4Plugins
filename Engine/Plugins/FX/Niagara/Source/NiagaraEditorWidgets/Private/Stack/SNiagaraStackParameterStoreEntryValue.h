@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -36,8 +36,6 @@ private:
 	void ParameterValueChanged(TSharedRef<SNiagaraParameterEditor> ParameterEditor);
 
 	void ParameterPropertyValueChanged(const FPropertyChangedEvent& PropertyChangedEvent);
-
-	EVisibility GetDeleteButtonVisibility() const;
 
 	EVisibility GetReferenceVisibility() const;
 

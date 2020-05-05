@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "GeometryCollection/SkeletalMeshSimulationComponent.h"
 #include "GeometryCollection/GeometryCollectionCollisionStructureManager.h"
 #include "GeometryCollection/GeometryCollectionSimulationTypes.h"
@@ -65,7 +65,7 @@ USkeletalMeshSimulationComponent::USkeletalMeshSimulationComponent(const FObject
 {
 	// Enable calls to TickComponent()
 	UActorComponent::PrimaryComponentTick.bCanEverTick = true;	
-	ChaosMaterial = MakeUnique<Chaos::TChaosPhysicsMaterial<float>>();
+	ChaosMaterial = MakeUnique<Chaos::FChaosPhysicsMaterial>();
 }
 
 Chaos::FPhysicsSolver* GetSolver(const USkeletalMeshSimulationComponent& SkeletalMeshSimulationComponent)

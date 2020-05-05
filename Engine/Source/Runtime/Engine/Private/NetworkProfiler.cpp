@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	NetworkProfiler.cpp: server network profiling support.
@@ -8,14 +8,30 @@
 #include "HAL/FileManager.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Paths.h"
-#include "Misc/ScopeLock.h"
 #include "Misc/App.h"
 #include "Engine/EngineBaseTypes.h"
 #include "Engine/World.h"
+#include "Serialization/MemoryWriter.h"
+#include "HAL/IConsoleManager.h"
 
 #if USE_NETWORK_PROFILER
 
 #define SCOPE_LOCK_REF(X) FScopeLock ScopeLock(&X);
+
+struct FNetworkProfilerCVarHelper
+{
+	static bool& GetNetProfilerIsComparisonTrackingEnabled()
+	{
+		return FNetworkProfiler::bIsComparisonTrackingEnabled;
+	}
+};
+
+bool FNetworkProfiler::bIsComparisonTrackingEnabled = false;
+static FAutoConsoleVariableRef CVarProfilerUseComparisonTracking(
+	TEXT("Net.ProfilerUseComparisonTracking"),
+	FNetworkProfilerCVarHelper::GetNetProfilerIsComparisonTrackingEnabled(),
+	TEXT("")
+);
 
 
 /**
@@ -38,6 +54,7 @@ enum class ENetworkProfilerVersionHistory : uint32
 	ChannelTypesAsStrings = 11,
 	AddressesAsStrings = 12,
 	LargeRPCFix = 13,				// Changed RPC size tracking to packed 32 bits instead of plain uint16s, to handle very large RPCs.
+	PushModelTracking = 14,			// Adding some new data to help profile Push Model changes, and to help identify things that could utilize Push Model effectively.
 
 	// New history items go above here.
 
@@ -69,7 +86,9 @@ enum ENetworkProfilingPayloadType
 	NPTYPE_WritePropertyHandle,			// Property handles
 	NPTYPE_ConnectionChanged,			// Connection changed
 	NPTYPE_NameReference,				// New reference to name
-	NPTYPE_ConnectionReference			// New reference to connection
+	NPTYPE_ConnectionReference,			// New reference to connection
+	NPTYPE_PropertyComparison,			// Data about property comparions.
+	NPTYPE_ReplicatePropertiesMetadata	// Full set of top level properties for an object.
 };
 
 /*=============================================================================
@@ -496,11 +515,11 @@ void FNetworkProfiler::FlushOutgoingBunches( UNetConnection* Connection )
  */
 void FNetworkProfiler::TrackReplicateActor( const AActor* Actor, FReplicationFlags RepFlags, uint32 Cycles, UNetConnection* Connection )
 {
-	if( bIsTrackingEnabled )
+	if (bIsTrackingEnabled)
 	{
-		SCOPE_LOCK_REF( CriticalSection );
+		SCOPE_LOCK_REF(CriticalSection);
 
-		SetCurrentConnection( Connection );
+		SetCurrentConnection(Connection);
 
 		uint32 NameTableIndex = GetNameTableIndex(GetNameSafe(Actor->GetClass()));
 
@@ -508,11 +527,68 @@ void FNetworkProfiler::TrackReplicateActor( const AActor* Actor, FReplicationFla
 		(*FileWriter) << Type;
 		uint8 NetFlags = (RepFlags.bNetInitial << 1) | (RepFlags.bNetOwner << 2);
 		(*FileWriter) << NetFlags;
-		(*FileWriter).SerializeIntPacked( NameTableIndex );
+		(*FileWriter).SerializeIntPacked(NameTableIndex);
 		float TimeInMS = FPlatformTime::ToMilliseconds(Cycles);	// FIXME: We may want to just pass in cycles to profiler to we don't lose precision
 		(*FileWriter) << TimeInMS;
 		// Use actor replication as indication whether session is worth keeping or not.
 		bHasNoticeableNetworkTrafficOccured = true;
+	}
+}
+
+template<typename Allocator>
+static void ProfilerSerializeBitArray(FArchive& Ar, TBitArray<Allocator>& ToWrite)
+{
+	uint32 NumBits = ToWrite.Num();
+	Ar.SerializeIntPacked(NumBits);
+
+	uint32* Data = ToWrite.GetData();
+	const uint32 NumDWords = ((NumBits + NumBitsPerDWORD - 1) >> NumBitsPerDWORDLogTwo);
+	for (uint32 i = 0; i < NumDWords; ++i)
+	{
+		Ar.SerializeIntPacked(Data[i]);
+	}
+}
+
+void FNetworkProfiler::TrackCompareProperties_Unsafe(const FString& ObjectName, uint32 Cycles, TBitArray<>& PropertiesCompared, TBitArray<>& PropertiesThatChanged, TArray<uint8>& PropertyNameExportData)
+{
+	uint32 ObjectNameTableIndex = GetNameTableIndex(ObjectName);
+	uint8 Type = NPTYPE_PropertyComparison;
+	float TimeInMS = FPlatformTime::ToMilliseconds(Cycles);
+
+	(*FileWriter) << Type;
+	(*FileWriter).SerializeIntPacked(ObjectNameTableIndex);
+	(*FileWriter) << TimeInMS;
+	ProfilerSerializeBitArray(*FileWriter, PropertiesCompared);
+	ProfilerSerializeBitArray(*FileWriter, PropertiesThatChanged);
+
+	if (PropertyNameExportData.Num() == 0)
+	{
+		uint32 Size = 0;
+		(*FileWriter).SerializeIntPacked(Size);
+	}
+	else
+	{
+		(*FileWriter).Serialize(PropertyNameExportData.GetData(), PropertyNameExportData.Num());
+	}
+
+}
+
+void FNetworkProfiler::TrackReplicatePropertiesMetadata(const UObject* Object, TBitArray<>& InactiveProperties, bool bSentAllProperties, UNetConnection* Connection)
+{
+	if (IsComparisonTrackingEnabled())
+	{
+		SCOPE_LOCK_REF(CriticalSection);
+
+		SetCurrentConnection(Connection);
+
+		uint32 ObjectNameTableIndex = GetNameTableIndex(GetNameSafe(Object));
+		uint8 Type = NPTYPE_ReplicatePropertiesMetadata;
+		uint8 Flags = (bSentAllProperties ? 1 : 0);
+		
+		(*FileWriter) << Type;
+		(*FileWriter).SerializeIntPacked(ObjectNameTableIndex);
+		(*FileWriter) << Flags;
+		ProfilerSerializeBitArray(*FileWriter, InactiveProperties);
 	}
 }
 
@@ -522,7 +598,7 @@ void FNetworkProfiler::TrackReplicateActor( const AActor* Actor, FReplicationFla
  * @param	Property	Property being replicated
  * @param	NumBits		Number of bits used to replicate this property
  */
-void FNetworkProfiler::TrackReplicateProperty( const UProperty* Property, uint16 NumBits, UNetConnection* Connection )
+void FNetworkProfiler::TrackReplicateProperty( const FProperty* Property, uint16 NumBits, UNetConnection* Connection )
 {
 	if(bIsTrackingEnabled && !!!IgnorePropertyCount)
 	{
@@ -539,7 +615,7 @@ void FNetworkProfiler::TrackReplicateProperty( const UProperty* Property, uint16
 	}
 }
 
-void FNetworkProfiler::TrackWritePropertyHeader( const UProperty* Property, uint16 NumBits, UNetConnection* Connection )
+void FNetworkProfiler::TrackWritePropertyHeader( const FProperty* Property, uint16 NumBits, UNetConnection* Connection )
 {
 	if( bIsTrackingEnabled )
 	{

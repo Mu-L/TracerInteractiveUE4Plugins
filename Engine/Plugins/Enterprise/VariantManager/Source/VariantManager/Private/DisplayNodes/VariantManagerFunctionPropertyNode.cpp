@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DisplayNodes/VariantManagerFunctionPropertyNode.h"
 
@@ -60,6 +60,16 @@ TWeakObjectPtr<UVariantObjectBinding> FVariantManagerFunctionPropertyNode::GetOb
 FFunctionCaller& FVariantManagerFunctionPropertyNode::GetFunctionCaller() const
 {
 	return FunctionCaller;
+}
+
+uint32 FVariantManagerFunctionPropertyNode::GetDisplayOrder() const
+{
+	return FunctionCaller.GetDisplayOrder();
+}
+
+void FVariantManagerFunctionPropertyNode::SetDisplayOrder(uint32 InDisplayOrder)
+{
+	FunctionCaller.SetDisplayOrder(InDisplayOrder);
 }
 
 void FVariantManagerFunctionPropertyNode::SetBindingTargetFunction(UK2Node_FunctionEntry* NewFunctionEntry)
@@ -242,7 +252,7 @@ TSharedRef<SWidget> FVariantManagerFunctionPropertyNode::GetMenuContent()
 				}
 				else
 				{
-					TooltipText = LOCTEXT("InvalidTooltip", "Function must be valid and have either no input pins\nor a single object reference input pin!");
+					TooltipText = LOCTEXT("InvalidTooltip", "Function must be valid and have either: \n - Zero input pins;\n - One input pin (with type matching the bound actor's class);\n - 4 input pins (with types: the bound actor's class, Level Variant Sets, Variant Set and Variant)");
 				}
 			}
 			else

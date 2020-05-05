@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "SThumbnailEditModeTools.h"
@@ -191,7 +191,7 @@ FReply SThumbnailEditModeTools::OnMouseButtonDown( const FGeometry& MyGeometry, 
 				bModifiedThumbnailWhileDragging = false;
 				DragStartLocation = FIntPoint(MouseEvent.GetScreenSpacePosition().X, MouseEvent.GetScreenSpacePosition().Y);
 
-				return FReply::Handled().CaptureMouse( AsShared() ).UseHighPrecisionMouseMovement( AsShared() );
+				return FReply::Handled().CaptureMouse(AsShared()).UseHighPrecisionMouseMovement(AsShared()).PreventThrottling();
 			}
 		}
 
@@ -276,7 +276,7 @@ FReply SThumbnailEditModeTools::OnMouseMove( const FGeometry& MyGeometry, const 
 			AssetThumbnail.Pin()->RefreshThumbnail();
 		}
 
-		return FReply::Handled();
+		return FReply::Handled().PreventThrottling();
 	}
 
 	return FReply::Unhandled();

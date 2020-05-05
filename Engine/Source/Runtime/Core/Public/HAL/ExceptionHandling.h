@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -28,11 +28,6 @@ extern CORE_API void ReportAssert(const TCHAR* ErrorMessage, int NumStackFramesT
 extern CORE_API void ReportGPUCrash(const TCHAR* ErrorMessage, int NumStackFramesToIgnore);
 extern CORE_API void ReportEnsure(const TCHAR* ErrorMessage, int NumStackFramesToIgnore);
 extern CORE_API void ReportHang(const TCHAR*, const uint64* StackFrames, int32 NumStackFrames, uint32 HungThreadId);
-#elif PLATFORM_XBOXONE
-#include "XboxOne/XboxOneSystemIncludes.h"
-// #CrashReport: 2014-10-09 Should be move to another file
-extern CORE_API int32 ReportCrash(int ExceptionCode, LPEXCEPTION_POINTERS ExceptionInfo);
-extern CORE_API void ReportEnsure(const TCHAR* ErrorMessage, int NumStackFramesToIgnore);
 #elif PLATFORM_MAC
 // #CrashReport: 2014-10-09 Should be move to another file
 #include <signal.h>

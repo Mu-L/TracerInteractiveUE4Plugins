@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -7,7 +7,14 @@
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
 #include "Sound/SoundNode.h"
+
+#if WITH_EDITOR
+#include "EdGraph/EdGraph.h"
+#endif
+
 #include "SoundCue.generated.h"
+
+
 
 class USoundCue;
 class USoundNode;
@@ -110,7 +117,7 @@ protected:
 	float SubtitlePriority;
 
 private:
-	float MaxAudibleDistance;
+	float MaxAudibleDistance;	
 
 public:
 	/* Indicates whether attenuation should use the Attenuation Overrides or the Attenuation Settings asset */
@@ -122,6 +129,8 @@ public:
 	uint8 bExcludeFromRandomNodeBranchCulling : 1;
 
 private:
+	UPROPERTY()
+	int32 CookedQualityIndex = INDEX_NONE;
 	
 	/** Whether a sound has play when silent enabled (i.e. for a sound cue, if any sound wave player has it enabled). */
 	UPROPERTY()
@@ -131,6 +140,7 @@ private:
 	uint8 bHasAttenuationNodeInitialized : 1;
 	uint8 bShouldApplyInteriorVolumes : 1;
 	uint8 bShouldApplyInteriorVolumesCached : 1;
+	uint8 bIsRetainingAudio : 1;
 
 public:
 
@@ -145,6 +155,7 @@ public:
 	virtual void Serialize(FStructuredArchive::FRecord Record) override;
 	virtual bool CanBeClusterRoot() const override;
 	virtual bool CanBeInCluster() const override;
+	virtual void BeginDestroy() override;
 	//~ End UObject Interface.
 
 	//~ Begin USoundBase Interface.
@@ -239,12 +250,19 @@ public:
 	static void StaticAudioQualityChanged(int32 NewQualityLevel);
 
 	FORCEINLINE static int32 GetCachedQualityLevel() { return CachedQualityLevel; }
+	
+	/** Set the Quality level that the Cue was cooked at, called by the SoundQualityNodes */
+	int32 GetCookedQualityIndex() const { return CookedQualityIndex; }
 
 	/** Call to cache any values which need to be computed from the sound cue graph. e.g. MaxDistance, Duration, etc. */
 	void CacheAggregateValues();
 
 	/** Call this when stream caching is enabled to prime all SoundWave assets referenced by this Sound Cue. */
 	void PrimeSoundCue();
+
+	/** Call this when stream caching is enabled to retain all soundwave assets referenced by this sound cue. */
+	void RetainSoundCue();
+	void ReleaseRetainedAudio();
 
 protected:
 	bool RecursiveFindPathToNode(USoundNode* CurrentNode, const UPTRINT CurrentHash, const UPTRINT NodeHashToFind, TArray<USoundNode*>& OutPath) const;
@@ -257,6 +275,8 @@ private:
 
 	FDelegateHandle OnPostEngineInitHandle;
 	static int32 CachedQualityLevel;
+
+	void ApplySoundClassLoadingBehaviorToSoundWaves();
 
 public:
 
@@ -300,5 +320,7 @@ private:
 
 	/** Ptr to interface to sound cue editor operations. */
 	static TSharedPtr<ISoundCueAudioEditor> SoundCueAudioEditor;
+
+	FCriticalSection EditorOnlyCs;
 #endif // WITH_EDITOR
 };

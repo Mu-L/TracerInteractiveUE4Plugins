@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System.IO;
@@ -20,7 +20,7 @@ public class OodleCompressionFormat : ModuleRules
 				"Analytics"
 			});
 
-		if (Target.Platform == UnrealTargetPlatform.Win64 || Target.Platform == UnrealTargetPlatform.Win32)
+		if (Target.Platform.IsInGroup(UnrealPlatformGroup.Windows))
 		{
 			// this is needed to hunt down the DLL in the binaries directory for running unstaged
 			PrivateDependencyModuleNames.AddRange(

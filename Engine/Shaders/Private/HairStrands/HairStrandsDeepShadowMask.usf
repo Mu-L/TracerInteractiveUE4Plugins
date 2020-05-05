@@ -1,40 +1,61 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+#include "HairStrandsVoxelPageCommonStruct.ush"
+#include "HairStrandsDeepShadowCommonStruct.ush"
 
 #include "../Common.ush"
 #include "../CommonViewUniformBuffer.ush"
-#include "../SceneTextureParameters.ush"
 #include "../DeferredShadingCommon.ush"
 #include "HairStrandsVisibilityCommon.ush"
-#include "HairStrandsDeepVoxelCommon.ush"
+#include "HairStrandsVoxelPageCommon.ush"
 
-float4x4			DeepShadow_WorldToLightTransform;
-uint				DeepShadow_IsWholeSceneLight;
+#include "HairStrandsCommon.ush"
+#include "HairStrandsDeepShadowCommon.ush"
+#include "HairStrandsDebugCommon.ush"
+#include "HairStrandsDeepTransmittanceCommon.ush"
+
+#define OPAQUE_MASK_TYPE_DEEP_SHADOW 0
+#define OPAQUE_MASK_TYPE_VIRTUAL_VOXEL 1
+
+#define VOXEL_TRAVERSAL_DEBUG 0
+#if PERMUTATION_OPAQUEMASK_TYPE == OPAQUE_MASK_TYPE_VIRTUAL_VOXEL
+	#define VOXEL_TRAVERSAL_TYPE VOXEL_TRAVERSAL_LINEAR_MIPMAP
+	#include "HairStrandsVoxelPageTraversal.ush"
+#endif
+
+StructuredBuffer<FDeepShadowTransform> DeepShadow_WorldToLightTransformBuffer;
+uint				DeepShadow_bIsGPUDriven;
+
+float4x4			DeepShadow_CPUWorldToLightTransform;
+uint				bIsWholeSceneLight;
 int2				DeepShadow_SlotResolution;
 int2				DeepShadow_SlotOffset;
+uint				DeepShadow_SlotIndex;
 uint				DeepShadow_KernelType;
+float				DeepShadow_DepthBiasScale;
+float				DeepShadow_DensityScale;
 
 float4				Voxel_LightPosition;
 float3				Voxel_LightDirection;
-float				Voxel_DensityScale;
-float3				Voxel_MinAABB;
-uint				Voxel_Resolution;
-float3				Voxel_MaxAABB;
-Texture3D<uint> 	Voxel_DensityTexture;
+uint				Voxel_MacroGroupId;
 
-Texture2D<float4>	DeepShadow_FrontDepthTexture;
+Texture2D<float4>	RayMarchMaskTexture;
+
+Texture2D<float>	DeepShadow_FrontDepthTexture;
+Texture2D<float4>	DeepShadow_DomTexture;
+
+Texture2D<float>	SceneDepthTexture;
 Texture2D<uint4>	CategorizationTexture;
 RWTexture2D<float4>	OutputColor;
 
 SamplerState		LinearSampler;	
 SamplerState 		ShadowSampler;
 
-#define OPAQUE_MASK_TYPE_DEEP_SHADOW 0
-#define OPAQUE_MASK_TYPE_VOXEL 1
-
 #define KERNEL_TYPE_2x2 0 
 #define KERNEL_TYPE_4x4 1
 #define KERNEL_TYPE_Gaussian8 2
 #define KERNEL_TYPE_Gaussian16 3
+#define KERNEL_TYPE_GaussianTransmission8 4
 
 float3 TotWorldPosition(float2 UV, float Depth)
 {
@@ -49,7 +70,17 @@ float3 TotWorldPosition(float2 UV, float Depth)
 
 float3 ToLightPosition(float3 WorldPosition)
 {
-    float4 LightPos = mul(float4(WorldPosition,1), DeepShadow_WorldToLightTransform);
+	float4x4 WorldToLightTransform = 0;
+	if (DeepShadow_bIsGPUDriven > 0)
+	{
+		WorldToLightTransform = DeepShadow_WorldToLightTransformBuffer.Load(DeepShadow_SlotIndex).WorldToClip;
+	}
+	else
+	{
+		WorldToLightTransform = DeepShadow_CPUWorldToLightTransform;
+	}
+
+    float4 LightPos = mul(float4(WorldPosition,1), WorldToLightTransform);
 	LightPos.xyz/= LightPos.w;
     const float2 LightUV = (LightPos.xy + float(1).xx) * 0.5f;
     return float3(LightUV.x, 1-LightUV.y, LightPos.z);
@@ -66,7 +97,8 @@ bool IsCloser(float DepthA, float DepthB)
 
 struct FHairSamplingSettings
 {
-	Texture2D		ShadowDepthTexture;
+	Texture2D<float>ShadowDepthTexture;
+	Texture2D<float4>ShadowDomTexture;
 	SamplerState	ShadowDepthTextureSampler;
 	float2			ShadowAtlasInvResolution;
 	float2			ShadowSlotResolution;
@@ -269,17 +301,55 @@ float InternalGaussianFilter(float2 ShadowPosition, FHairSamplingSettings Settin
 	return AccShadow;
 }
 
+float InternalGaussianTransmissionFilter(float3 ShadowPosition, FHairSamplingSettings Settings, uint SampleCount)
+{
+	// Poisson disk position http://developer.download.nvidia.com/whitepapers/2008/PCSS_Integration.pdf
+	float2 PoissonDisk[16] =
+	{
+			float2(-0.94201624, -0.39906216),
+			float2(0.94558609, -0.76890725),
+			float2(-0.094184101, -0.92938870),
+			float2(0.34495938, 0.29387760),
+			float2(-0.91588581, 0.45771432),
+			float2(-0.81544232, -0.87912464),
+			float2(-0.38277543, 0.27676845),
+			float2(0.97484398, 0.75648379),
+			float2(0.44323325, -0.97511554),
+			float2(0.53742981, -0.47373420),
+			float2(-0.26496911, -0.41893023),
+			float2(0.79197514, 0.19090188),
+			float2(-0.24188840, 0.99706507),
+			float2(-0.81409955, 0.91437590),
+			float2(0.19984126, 0.78641367),
+			float2(0.14383161, -0.14100790)
+	};
+
+	const float SampleRadius = 3.f / Settings.ShadowSlotResolution.x;
+	float AccHairCount = 0;
+	for (uint SampleIt = 0; SampleIt < SampleCount; ++SampleIt)
+	{
+		const float2 Offset = PoissonDisk[SampleIt] * SampleRadius;
+		const float DepthBias = LAYER_DEPTH0 * DeepShadow_DepthBiasScale;
+		const float3 LightSpacePositionInAtlas = (ShadowPosition+float3(Offset,0)) * float3(DeepShadow_SlotResolution, 1) + float3(DeepShadow_SlotOffset, 0);
+		const float HairCount = SampleDOM_PCF2x2(LightSpacePositionInAtlas.xyz, DepthBias, Settings.ShadowDepthTexture, Settings.ShadowDomTexture);
+		AccHairCount += saturate(HairCount);
+	}
+
+	AccHairCount /= SampleCount;
+	return AccHairCount;
+}
+
 void MainPS(
 	FScreenVertexOutput Input,
 	out float4 OutColor : SV_Target0)
 {
 	const float2 UV = Input.UV;
 	const uint2 PixelCoord = floor(Input.Position.xy);
-	FGBufferData GBuffer = GetGBufferDataFromSceneTextures(UV);
+	const float SceneDepth = ConvertFromDeviceZ(SceneDepthTexture.Load(uint3(PixelCoord, 0)));
 	const FCategorizationData Categorization = DecodeCategorizationData(CategorizationTexture.Load(uint3(PixelCoord, 0)));
 	const bool bIsHairPixel = Categorization.PixelCoverage >= 1;
 
-	const float3 WorldPosition		= TotWorldPosition(UV, GBuffer.Depth);
+	const float3 WorldPosition		= TotWorldPosition(UV, SceneDepth);
 	const float3 LightSpacePosition = ToLightPosition(WorldPosition);
 
 	// PCF or simple point sampler
@@ -292,6 +362,7 @@ void MainPS(
 	#if OPAQUE_PCF == 1
 		FHairSamplingSettings ShadowSettings;
 		ShadowSettings.ShadowDepthTexture = DeepShadow_FrontDepthTexture;
+		ShadowSettings.ShadowDomTexture = DeepShadow_DomTexture;
 		ShadowSettings.ShadowDepthTextureSampler = ShadowSampler;
 		ShadowSettings.ShadowAtlasInvResolution = 1 / float2(ShadowAtlasResolution);
 		ShadowSettings.ShadowSlotResolution = DeepShadow_SlotResolution;
@@ -303,6 +374,8 @@ void MainPS(
 			Visibility = 1 - InternalGaussianFilter(LightSpacePosition.xy, ShadowSettings, 8);
 		#elif PERMUTATION_KERNEL_TYPE == KERNEL_TYPE_Gaussian16
 			Visibility = 1 - InternalGaussianFilter(LightSpacePosition.xy, ShadowSettings, 16);
+		#elif PERMUTATION_KERNEL_TYPE == KERNEL_TYPE_GaussianTransmission8
+			Visibility = 1 - InternalGaussianTransmissionFilter(LightSpacePosition.xyz, ShadowSettings, 8);
 		#else//PERMUTATION_KERNEL_TYPE == KERNEL_TYPE_2x2
 			Visibility = 1 - InternalManual2x2PCF(LightSpacePosition.xy, ShadowSettings);
 		#endif	
@@ -320,12 +393,12 @@ void MainPS(
 
 	// Depending of if the light is direction (i.e., WholeSceneLight) or a local light (Point/Spot/Rect), 
 	// we change the output layout
-    OutColor = DeepShadow_IsWholeSceneLight ? float4(Visibility, 1, 1, 1) : float4(1, 1, Visibility, 1);
+    OutColor = bIsWholeSceneLight ? float4(Visibility, 1, 1, 1) : float4(1, 1, Visibility, 1);
 }
 
 #endif
 
-#if PERMUTATION_OPAQUEMASK_TYPE == OPAQUE_MASK_TYPE_VOXEL
+#if PERMUTATION_OPAQUEMASK_TYPE == OPAQUE_MASK_TYPE_VIRTUAL_VOXEL
 
 void MainPS(
 	FScreenVertexOutput Input,
@@ -333,36 +406,82 @@ void MainPS(
 {
 	const float2 UV = Input.UV;
 	const uint2 PixelCoord = floor(Input.Position.xy);
-	FGBufferData GBuffer = GetGBufferDataFromSceneTextures(UV);
+	const float SceneDepth = ConvertFromDeviceZ(SceneDepthTexture.Load(uint3(PixelCoord, 0)));
+
 	const FCategorizationData Categorization = DecodeCategorizationData(CategorizationTexture.Load(uint3(PixelCoord, 0)));
 	const bool bIsHairPixel = Categorization.PixelCoverage >= 1;
 
-	float3 WorldPosition = TotWorldPosition(UV, GBuffer.Depth);
+	float3 WorldPosition = TotWorldPosition(UV, SceneDepth);
 
 	// PCF or simple point sampler
 	float Visibility = 1;
 	if (!bIsHairPixel)
 	{
+		const float VoxelShadowMaxDistance = 100000.0; // 1 km shadow distance
 		const bool bIsDirectionalLight = Voxel_LightPosition.w == 0;
-		const float3 L = bIsDirectionalLight ? -Voxel_LightDirection : normalize(Voxel_LightPosition.xyz - WorldPosition);
+		const float3 LightPosition  = bIsDirectionalLight ? -Voxel_LightDirection*VoxelShadowMaxDistance + WorldPosition : Voxel_LightPosition.xyz;
+		const float3 LightDirection = bIsDirectionalLight ? -Voxel_LightDirection : normalize(Voxel_LightPosition.xyz - WorldPosition);
 
 		// Depth bias
 		// Origin is shifted 2 voxels away towards the light + a constant bias of the size of the voxel
+		const float3 Random = GetHairVoxelJitter(PixelCoord.xy, View.StateFrameIndexMod8);
 		{
-			const float3 Random = GetHairVoxelJitter(PixelCoord.xy, View.StateFrameIndexMod8);
-			const float3 VoxelSize = (Voxel_MaxAABB - Voxel_MinAABB) / Voxel_Resolution;
-			const float3 DepthBias = max(VoxelSize.x, max(VoxelSize.y, VoxelSize.z)) * (2 * L + Random);
+			const float3 DepthBias = VirtualVoxel.VoxelWorldSize * (2 * LightDirection + Random);
 			WorldPosition += DepthBias;
 		}
 
-		const float DistanceThreshold = 100000;
-		const float HairCount = ComputeHairCountVoxel(WorldPosition, L, Voxel_MinAABB, Voxel_MaxAABB, Voxel_Resolution, Voxel_DensityTexture, Voxel_DensityScale, 1, DistanceThreshold);
-		Visibility = saturate(1 - HairCount);
+		FHairTraversalResult Result = InitHairTraversalResult();
+
+		const float DistanceThreshold = 100000.0f;
+		const float CoverageThreshold = 0.995f; // When Coverage is high, we do not trace shadow on opaque since hair/fur is covering the background.
+
+		FVirtualVoxelCommonDesc CommonDesc;
+		CommonDesc.PageCountResolution = VirtualVoxel.PageCountResolution;
+		CommonDesc.VoxelWorldSize = VirtualVoxel.VoxelWorldSize;
+		CommonDesc.PageTextureResolution = VirtualVoxel.PageTextureResolution;
+		CommonDesc.PageResolution = VirtualVoxel.PageResolution;
+
+		const FPackedVirtualVoxelNodeDesc PackedNode = VirtualVoxel.NodeDescBuffer[Voxel_MacroGroupId];
+		const FVirtualVoxelNodeDesc NodeDesc = UnpackVoxelNode(PackedNode, VirtualVoxel.PageResolution);
+
+		#if VOXEL_TRAVERSAL_DEBUG
+		const bool bDebugEnabled = PixelCoord.x == GetCursorPos().x && PixelCoord.y == GetCursorPos().y;
+		#else
+		const bool bDebugEnabled = false;
+		#endif	
+
+		FHairTraversalSettings TraversalSettings = InitHairTraversalSettings();
+		TraversalSettings.DensityScale = VirtualVoxel.DensityScale;
+		TraversalSettings.CountThreshold = 1;
+		TraversalSettings.DistanceThreshold = DistanceThreshold;
+		TraversalSettings.bDebugEnabled = bDebugEnabled;
+		TraversalSettings.SteppingScale = VirtualVoxel.SteppingScale;
+		TraversalSettings.Random = Random;
+		TraversalSettings.PixelRadius = SceneDepth * VirtualVoxel.HairCoveragePixelRadiusAtDepth1;
+		
+		if (RayMarchMaskTexture.Load(uint3(PixelCoord, 0)).r > 0.0f &&  Categorization.PixelCoverage < CoverageThreshold)
+		{
+			Result = ComputeHairCountVirtualVoxel(
+				WorldPosition,
+				LightPosition,
+				CommonDesc,
+				NodeDesc,
+				VirtualVoxel.PageIndexBuffer,
+				VirtualVoxel.PageTexture,
+				TraversalSettings);
+
+		}
+		else
+		{
+			discard;
+		}
+
+		Visibility = min(saturate(1 - Result.HairCount), Result.Visibility);
 	}
 
 	// Depending of if the light is direction (i.e., WholeSceneLight) or a local light (Point/Spot/Rect), 
 	// we change the output layout
-	OutColor = DeepShadow_IsWholeSceneLight ? float4(Visibility, 1, 1, 1) : float4(1, 1, Visibility, 1);
+	OutColor = bIsWholeSceneLight ? float4(Visibility, 1, 1, 1) : float4(1, 1, Visibility, 1);
 }
 
 #endif

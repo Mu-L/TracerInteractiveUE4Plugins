@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "K2Node_Switch.h"
@@ -91,7 +91,7 @@ public:
 
 			// Pull out function to use
 			UClass* FuncClass = Cast<UClass>(FuncPin->PinType.PinSubCategoryObject.Get());
-			UFunction* FunctionPtr = FindField<UFunction>(FuncClass, FuncPin->PinName);
+			UFunction* FunctionPtr = FindUField<UFunction>(FuncClass, FuncPin->PinName);
 			check(FunctionPtr);
 
 			// Run thru all the output pins except for the default label
@@ -248,7 +248,7 @@ void UK2Node_Switch::RemovePinFromSwitchNode(UEdGraphPin* TargetPin)
 	// If removing the default pin, we'll need to reconstruct the node, so send a property changed event to handle that
 	if(bHasDefaultPin && TargetPin == GetDefaultPin())
 	{
-		UProperty* HasDefaultPinProperty = FindField<UProperty>(GetClass(), "bHasDefaultPin");
+		FProperty* HasDefaultPinProperty = FindFProperty<FProperty>(GetClass(), "bHasDefaultPin");
 		if(HasDefaultPinProperty)
 		{
 			PreEditChange(HasDefaultPinProperty);
@@ -299,7 +299,7 @@ void UK2Node_Switch::CreateFunctionPin()
 	FunctionPin->bNotConnectable = true;
 	FunctionPin->bHidden = true;
 
-	UFunction* Function = FindField<UFunction>(FunctionClass, FunctionName);
+	UFunction* Function = FindUField<UFunction>(FunctionClass, FunctionName);
 	const bool bIsStaticFunc = Function->HasAllFunctionFlags(FUNC_Static);
 	if (bIsStaticFunc)
 	{

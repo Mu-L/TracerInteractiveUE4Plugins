@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	SceneFilterRendering.cpp: Filter rendering implementation.
@@ -12,6 +12,8 @@
 #include "IXRTrackingSystem.h"
 #include "PixelShaderUtils.h"
 #include "CommonRenderResources.h"
+
+IMPLEMENT_TYPE_LAYOUT(FGammaShaderParameters);
 
 void FTesselatedScreenRectangleIndexBuffer::InitRHI()
 {
@@ -104,7 +106,7 @@ static inline void InternalDrawRectangle(
 	float SizeV,
 	FIntPoint TargetSize,
 	FIntPoint TextureSize,
-	FShader* VertexShader,
+	const TShaderRef<FShader>& VertexShader,
 	EDrawRectangleFlags Flags,
 	uint32 InstanceCount
 	)
@@ -131,7 +133,7 @@ static inline void InternalDrawRectangle(
 		1.0f / TargetSize.X, 1.0f / TargetSize.Y,
 		1.0f / TextureSize.X, 1.0f / TextureSize.Y);
 
-	SetUniformBufferParameterImmediate(RHICmdList, VertexShader->GetVertexShader(), VertexShader->GetUniformBufferParameter<FDrawRectangleParameters>(), Parameters);
+	SetUniformBufferParameterImmediate(RHICmdList, VertexShader.GetVertexShader(), VertexShader->GetUniformBufferParameter<FDrawRectangleParameters>(), Parameters);
 
 	if(Flags == EDRF_UseTesselatedIndexBuffer)
 	{
@@ -173,7 +175,7 @@ void DrawRectangle(
 	float SizeV,
 	FIntPoint TargetSize,
 	FIntPoint TextureSize,
-	FShader* VertexShader,
+	const TShaderRef<FShader>& VertexShader,
 	EDrawRectangleFlags Flags,
 	uint32 InstanceCount
 )
@@ -245,7 +247,7 @@ void DrawHmdMesh(
 	FIntPoint TargetSize,
 	FIntPoint TextureSize,
 	EStereoscopicPass StereoView,
-	FShader* VertexShader
+	const TShaderRef<FShader>& VertexShader
 	)
 {
 	FDrawRectangleParameters Parameters;
@@ -256,7 +258,7 @@ void DrawHmdMesh(
 		1.0f / TargetSize.X, 1.0f / TargetSize.Y,
 		1.0f / TextureSize.X, 1.0f / TextureSize.Y);
 
-	SetUniformBufferParameterImmediate(RHICmdList, VertexShader->GetVertexShader(), VertexShader->GetUniformBufferParameter<FDrawRectangleParameters>(), Parameters);
+	SetUniformBufferParameterImmediate(RHICmdList, VertexShader.GetVertexShader(), VertexShader->GetUniformBufferParameter<FDrawRectangleParameters>(), Parameters);
 
 	if (GEngine->XRSystem->GetHMDDevice())
 	{
@@ -276,7 +278,7 @@ void DrawPostProcessPass(
 	float SizeV,
 	FIntPoint TargetSize,
 	FIntPoint TextureSize,
-	FShader* VertexShader,
+	const TShaderRef<FShader>& VertexShader,
 	EStereoscopicPass StereoView,
 	bool bHasCustomMesh,
 	EDrawRectangleFlags Flags)

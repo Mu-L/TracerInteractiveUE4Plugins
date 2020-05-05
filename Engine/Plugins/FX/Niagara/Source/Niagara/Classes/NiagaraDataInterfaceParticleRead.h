@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,63 +7,60 @@
 #include "NiagaraEmitterInstance.h"
 #include "NiagaraDataInterfaceParticleRead.generated.h"
 
-struct FNDIParticleRead_InstanceData
-{
-	FNiagaraSystemInstance* SystemInstance;
-	FNiagaraEmitterInstance* EmitterInstance;
-};
-
 UCLASS(EditInlineNew, Category = "ParticleRead", meta = (DisplayName = "Particle Attribute Reader"))
 class NIAGARA_API UNiagaraDataInterfaceParticleRead : public UNiagaraDataInterface
 {
 	GENERATED_UCLASS_BODY()
 public:
+	DECLARE_NIAGARA_DI_PARAMETER();
+
 	UPROPERTY(EditAnywhere, Category = "ParticleRead")
 	FString EmitterName;
 
 	//UObject Interface
 	virtual void PostInitProperties()override;
-	virtual void PostLoad() override;
-#if WITH_EDITOR
-	virtual void PreEditChange(UProperty* PropertyAboutToChange) override;
-	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
-#endif
 	//UObject Interface End
 
 	//UNiagaraDataInterface Interface
 	virtual bool InitPerInstanceData(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance) override;
 	virtual void DestroyPerInstanceData(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance) override;
-	virtual int32 PerInstanceDataSize() const { return sizeof(FNDIParticleRead_InstanceData); }
-	
-	virtual bool PerInstanceTick(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance, float DeltaSeconds);
-	virtual bool PerInstanceTickPostSimulate(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance, float DeltaSeconds);
-
+	virtual int32 PerInstanceDataSize() const override;
 	virtual void GetFunctions(TArray<FNiagaraFunctionSignature>& OutFunctions) override;
-	virtual void GetVMExternalFunction(const FVMExternalFunctionBindingInfo& BindingInfo, void* InstanceData, FVMExternalFunction &OutFunc) override;
-	virtual bool CanExecuteOnTarget(ENiagaraSimTarget Target)const override { return Target == ENiagaraSimTarget::CPUSim; }
+	virtual void GetVMExternalFunction(const FVMExternalFunctionBindingInfo& BindingInfo, void* InstanceData, FVMExternalFunction& OutFunc) override;
+	virtual bool CanExecuteOnTarget(ENiagaraSimTarget Target) const override { return true; }
 	virtual bool Equals(const UNiagaraDataInterface* Other) const override;
-
-	// GPU sim functionality
-	virtual bool GetFunctionHLSL(const FName& DefinitionFunctionName, FString InstanceFunctionName, FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual void GetParameterDefinitionHLSL(FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual FNiagaraDataInterfaceParametersCS* ConstructComputeParameters() const override;
-
+	virtual void GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
+	virtual bool GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL) override;
+	virtual void ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, void* PerInstanceData, const FNiagaraSystemInstanceID& SystemInstance) override;
+#if WITH_EDITOR	
+	virtual void GetFeedback(UNiagaraSystem* Asset, UNiagaraComponent* Component, TArray<FNiagaraDataInterfaceError>& OutErrors, TArray<FNiagaraDataInterfaceFeedback>& Warnings, TArray<FNiagaraDataInterfaceFeedback>& Info) override;
+#endif
+	virtual void GetEmitterDependencies(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance, TArray<FNiagaraEmitterInstance*>& Dependencies) const override;
 	//UNiagaraDataInterface Interface End
 
-	virtual void ReadFloat(FVectorVMContext& Context, FName AttributeToRead);
-	virtual void ReadVector2(FVectorVMContext& Context, FName AttributeToRead);
-	virtual void ReadVector3(FVectorVMContext& Context, FName AttributeToRead);
-	virtual void ReadVector4(FVectorVMContext& Context, FName AttributeToRead);
-	virtual void ReadInt(FVectorVMContext& Context, FName AttributeToRead);
-	virtual void ReadBool(FVectorVMContext& Context, FName AttributeToRead);
-	virtual void ReadColor(FVectorVMContext& Context, FName AttributeToRead);
-	virtual void ReadQuat(FVectorVMContext& Context, FName AttributeToRead);
+	void GetNumSpawnedParticles(FVectorVMContext& Context);
+	void GetSpawnedIDAtIndex(FVectorVMContext& Context);
+	void GetNumParticles(FVectorVMContext& Context);
+	void GetParticleIndex(FVectorVMContext& Context);
+	void ReadInt(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadBool(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadFloat(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadVector2(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadVector3(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadVector4(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadColor(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadQuat(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadID(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadIntByIndex(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadBoolByIndex(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadFloatByIndex(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadVector2ByIndex(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadVector3ByIndex(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadVector4ByIndex(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadColorByIndex(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadQuatByIndex(FVectorVMContext& Context, FName AttributeToRead);
+	void ReadIDByIndex(FVectorVMContext& Context, FName AttributeToRead);
 
 protected:
 	virtual bool CopyToInternal(UNiagaraDataInterface* Destination) const override;
-
-private:
-	template<typename T>
-	T RetrieveValueWithCheck(FNiagaraEmitterInstance* EmitterInstance, const FNiagaraTypeDefinition& Type, const FName& Attr, const FNiagaraID& ParticleID, bool &bValid);
-
 };

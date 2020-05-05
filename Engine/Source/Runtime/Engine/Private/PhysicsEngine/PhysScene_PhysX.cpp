@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #if !WITH_CHAOS && !WITH_IMMEDIATE_PHYSX
 
@@ -435,6 +435,7 @@ FPhysScene_PhysX::FPhysScene_PhysX(const AWorldSettings* Settings)
 #endif
 #endif 
 {
+	LLM_SCOPE(ELLMTag::PhysX);
 	LineBatcher = NULL;
 	OwningWorld = NULL;
 #if WITH_PHYSX
@@ -955,7 +956,7 @@ void GatherClothingStats(const UWorld* World)
 }
 
 
-void FPhysScene_PhysX::MarkForPreSimKinematicUpdate(USkeletalMeshComponent* InSkelComp, ETeleportType InTeleport, bool bNeedsSkinning)
+bool FPhysScene_PhysX::MarkForPreSimKinematicUpdate(USkeletalMeshComponent* InSkelComp, ETeleportType InTeleport, bool bNeedsSkinning)
 {
 	// If null, or pending kill, do nothing
 	if (InSkelComp != nullptr && !InSkelComp->IsPendingKill())
@@ -970,7 +971,7 @@ void FPhysScene_PhysX::MarkForPreSimKinematicUpdate(USkeletalMeshComponent* InSk
 				Info.TeleportType = InTeleport;
 				Info.bNeedsSkinning = bNeedsSkinning;
 				DeferredKinematicUpdateSkelMeshes.Emplace(InSkelComp, Info);
-				return;
+				return true;
 			}
 
 			FDeferredKinematicUpdateInfo& Info = FoundItem->Value;
@@ -1000,6 +1001,8 @@ void FPhysScene_PhysX::MarkForPreSimKinematicUpdate(USkeletalMeshComponent* InSk
 			InSkelComp->bDeferredKinematicUpdate = true;
 		}
 	}
+
+	return true;
 }
 
 void FPhysScene_PhysX::ClearPreSimKinematicUpdate(USkeletalMeshComponent* InSkelComp)
@@ -1437,7 +1440,7 @@ void FPhysScene_PhysX::DispatchPhysNotifications_AssumesLocked()
 
 }
 
-void FPhysScene_PhysX::SetUpForFrame(const FVector* NewGrav, float InDeltaSeconds, float InMaxPhysicsDeltaTime)
+void FPhysScene_PhysX::SetUpForFrame(const FVector* NewGrav, float InDeltaSeconds, float InMaxPhysicsDeltaTime, float InMaxSubstepDeltaTime, int32 InMaxSubsteps)
 {
 	DeltaSeconds = InDeltaSeconds;
 	MaxPhysicsDeltaTime = InMaxPhysicsDeltaTime;

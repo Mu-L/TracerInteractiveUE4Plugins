@@ -1,11 +1,72 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
+#include "Audio.h"
 #include "AudioMixer.h"
 #include "AudioMixerDevice.h"
 #include "Misc/ConfigCacheIni.h"
 
 namespace Audio
 {
+	/** Channel type matrix for submix speaker channel mappings. */
+	const TArray<TArray<EAudioMixerChannel::Type>> SubmixOutputChannelMatrix
+	{
+		// ESubmixChannelFormat::Device
+		// Placeholder: Should never be used as Device signifies dynamically set
+		{
+		},
+
+		// ESubmixChannelFormat::Stereo
+		{
+			EAudioMixerChannel::FrontLeft,
+			EAudioMixerChannel::FrontRight
+		},
+
+		// ESubmixChannelFormat::Quad
+		{
+			EAudioMixerChannel::FrontLeft,
+			EAudioMixerChannel::FrontRight,
+			EAudioMixerChannel::SideLeft,
+			EAudioMixerChannel::SideRight
+		},
+
+		// ESubmixChannelFormat::FiveDotOne
+		{
+			EAudioMixerChannel::FrontLeft,
+			EAudioMixerChannel::FrontRight,
+			EAudioMixerChannel::FrontCenter,
+			EAudioMixerChannel::LowFrequency,
+			EAudioMixerChannel::SideLeft,
+			EAudioMixerChannel::SideRight
+		},
+
+		// ESubmixChannelFormat::SevenDotOne
+		{
+			EAudioMixerChannel::FrontLeft,
+			EAudioMixerChannel::FrontRight,
+			EAudioMixerChannel::FrontCenter,
+			EAudioMixerChannel::LowFrequency,
+			EAudioMixerChannel::BackLeft,
+			EAudioMixerChannel::BackRight,
+			EAudioMixerChannel::SideLeft,
+			EAudioMixerChannel::SideRight
+		},
+
+		// ESubmixChannelFormat::Ambisonics
+		// Ambisonics output is encoded to max encoded channel (i.e. 7.1).
+		// To support ambisonic encoded output, will need to convert to
+		// Ambisonics_W/X/Y/Z alias values.
+		{
+			EAudioMixerChannel::FrontLeft,
+			EAudioMixerChannel::FrontRight,
+			EAudioMixerChannel::FrontCenter,
+			EAudioMixerChannel::LowFrequency,
+			EAudioMixerChannel::BackLeft,
+			EAudioMixerChannel::BackRight,
+			EAudioMixerChannel::SideLeft,
+			EAudioMixerChannel::SideRight
+		}, 
+	};
+
 	// Tables based on Ac-3 down-mixing
 	// Rows: output speaker configuration
 	// Cols: input source channels
@@ -202,10 +263,9 @@ namespace Audio
 		return Index;
 	}
 
-	void FMixerDevice::Get2DChannelMap(bool bIsVorbis, const ESubmixChannelFormat InSubmixChannelType, const int32 NumSourceChannels, const bool bIsCenterChannelOnly, Audio::AlignedFloatBuffer& OutChannelMap) const
+	void FMixerDevice::Get2DChannelMap(bool bIsVorbis, const int32 NumSourceChannels, const bool bIsCenterChannelOnly, Audio::AlignedFloatBuffer& OutChannelMap) const
 	{
-		int32 NumOutputChannels = GetNumChannelsForSubmixFormat(InSubmixChannelType);
-		Get2DChannelMap(bIsVorbis, NumSourceChannels, NumOutputChannels, bIsCenterChannelOnly, OutChannelMap);
+		Get2DChannelMap(bIsVorbis, NumSourceChannels, PlatformInfo.NumChannels, bIsCenterChannelOnly, OutChannelMap);
 	}
 
 	void FMixerDevice::Get2DChannelMap(bool bIsVorbis, const int32 NumSourceChannels, const int32 NumOutputChannels, const bool bIsCenterChannelOnly, Audio::AlignedFloatBuffer& OutChannelMap)
@@ -397,36 +457,36 @@ namespace Audio
 		// Now setup the hard-coded values
 		if (NumChannels == 2)
 		{
-			DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontLeft] = { EAudioMixerChannel::FrontLeft, 270 };
-			DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontRight] = { EAudioMixerChannel::FrontRight, 90 };
+			DefaultChannelAzimuthPositions[EAudioMixerChannel::FrontLeft] = { EAudioMixerChannel::FrontLeft, 270 };
+			DefaultChannelAzimuthPositions[EAudioMixerChannel::FrontRight] = { EAudioMixerChannel::FrontRight, 90 };
 		}
 		else
 		{
-			DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontLeft] = { EAudioMixerChannel::FrontLeft, 330 };
-			DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontRight] = { EAudioMixerChannel::FrontRight, 30 };
+			DefaultChannelAzimuthPositions[EAudioMixerChannel::FrontLeft] = { EAudioMixerChannel::FrontLeft, 330 };
+			DefaultChannelAzimuthPositions[EAudioMixerChannel::FrontRight] = { EAudioMixerChannel::FrontRight, 30 };
 		}
 
 		if (bAllowCenterChannel3DPanning)
 		{
 			// Allow center channel for azimuth computations
-			DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontCenter] = { EAudioMixerChannel::FrontCenter, 0 };
+			DefaultChannelAzimuthPositions[EAudioMixerChannel::FrontCenter] = { EAudioMixerChannel::FrontCenter, 0 };
 		}
 		else
 		{
 			// Ignore front center for azimuth computations. 
-			DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontCenter] = { EAudioMixerChannel::FrontCenter, INDEX_NONE };
+			DefaultChannelAzimuthPositions[EAudioMixerChannel::FrontCenter] = { EAudioMixerChannel::FrontCenter, INDEX_NONE };
 		}
 
 		// Always ignore low frequency channel for azimuth computations. 
-		DefaultChannelAzimuthPosition[EAudioMixerChannel::LowFrequency] = { EAudioMixerChannel::LowFrequency, INDEX_NONE };
+		DefaultChannelAzimuthPositions[EAudioMixerChannel::LowFrequency] = { EAudioMixerChannel::LowFrequency, INDEX_NONE };
 
-		DefaultChannelAzimuthPosition[EAudioMixerChannel::BackLeft] = { EAudioMixerChannel::BackLeft, 210 };
-		DefaultChannelAzimuthPosition[EAudioMixerChannel::BackRight] = { EAudioMixerChannel::BackRight, 150 };
-		DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontLeftOfCenter] = { EAudioMixerChannel::FrontLeftOfCenter, 15 };
-		DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontRightOfCenter] = { EAudioMixerChannel::FrontRightOfCenter, 345 };
-		DefaultChannelAzimuthPosition[EAudioMixerChannel::BackCenter] = { EAudioMixerChannel::BackCenter, 180 };
-		DefaultChannelAzimuthPosition[EAudioMixerChannel::SideLeft] = { EAudioMixerChannel::SideLeft, 250 };
-		DefaultChannelAzimuthPosition[EAudioMixerChannel::SideRight] = { EAudioMixerChannel::SideRight, 110 };
+		DefaultChannelAzimuthPositions[EAudioMixerChannel::BackLeft] = { EAudioMixerChannel::BackLeft, 210 };
+		DefaultChannelAzimuthPositions[EAudioMixerChannel::BackRight] = { EAudioMixerChannel::BackRight, 150 };
+		DefaultChannelAzimuthPositions[EAudioMixerChannel::FrontLeftOfCenter] = { EAudioMixerChannel::FrontLeftOfCenter, 15 };
+		DefaultChannelAzimuthPositions[EAudioMixerChannel::FrontRightOfCenter] = { EAudioMixerChannel::FrontRightOfCenter, 345 };
+		DefaultChannelAzimuthPositions[EAudioMixerChannel::BackCenter] = { EAudioMixerChannel::BackCenter, 180 };
+		DefaultChannelAzimuthPositions[EAudioMixerChannel::SideLeft] = { EAudioMixerChannel::SideLeft, 250 };
+		DefaultChannelAzimuthPositions[EAudioMixerChannel::SideRight] = { EAudioMixerChannel::SideRight, 110 };
 
 		// Check any engine ini overrides for these default positions
 		if (NumChannels != 2)
@@ -448,7 +508,7 @@ namespace Audio
 							bool bIsUnique = true;
 							for (int32 ExistingChannelIndex = 0; ExistingChannelIndex < EAudioMixerChannel::MaxSupportedChannel; ++ExistingChannelIndex)
 							{
-								if (DefaultChannelAzimuthPosition[ExistingChannelIndex].Azimuth == AzimuthPositionOverride)
+								if (DefaultChannelAzimuthPositions[ExistingChannelIndex].Azimuth == AzimuthPositionOverride)
 								{
 									bIsUnique = false;
 
@@ -465,7 +525,7 @@ namespace Audio
 
 							if (bIsUnique)
 							{
-								DefaultChannelAzimuthPosition[MixerChannelType].Azimuth = AzimuthPositionOverride;
+								DefaultChannelAzimuthPositions[MixerChannelType].Azimuth = AzimuthPositionOverride;
 							}
 						}
 						else
@@ -486,102 +546,28 @@ namespace Audio
 			}
 		};
 
-		// Build a map of azimuth positions of only the current audio device's output channels
-		ChannelAzimuthPositions.Reset();
+		// Build a array of azimuth positions of only the current audio device's output channels
+		DeviceChannelAzimuthPositions.Reset();
 
 		// Setup the default channel azimuth positions
 		TArray<FChannelPositionInfo> DevicePositions;
 		for (EAudioMixerChannel::Type Channel : PlatformInfo.OutputChannelArray)
 		{
 			// Only track non-LFE and non-Center channel azimuths for use with 3d channel mappings
-			if (Channel != EAudioMixerChannel::LowFrequency && DefaultChannelAzimuthPosition[Channel].Azimuth >= 0)
+			if (Channel != EAudioMixerChannel::LowFrequency && DefaultChannelAzimuthPositions[Channel].Azimuth >= 0)
 			{
-				DevicePositions.Add(DefaultChannelAzimuthPosition[Channel]);
+				DeviceChannelAzimuthPositions.Add(DefaultChannelAzimuthPositions[Channel]);
 			}
 		}
-		DevicePositions.Sort(FCompareByAzimuth());
-		ChannelAzimuthPositions.Add(ESubmixChannelFormat::Device, DevicePositions);
-		OutputChannels[int32(ESubmixChannelFormat::Device)] = 0;
-
-		// Now add channel mappings for the other submix types
-		TArray<FChannelPositionInfo> StereoPositions;
-		StereoPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontLeft]);
-		StereoPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontRight]);
-		StereoPositions.Sort(FCompareByAzimuth());
-		ChannelAzimuthPositions.Add(ESubmixChannelFormat::Stereo, StereoPositions);
-		OutputChannels[int32(ESubmixChannelFormat::Stereo)] = StereoPositions.Num();
-
-		TArray<FChannelPositionInfo> QuadPositions;
-		QuadPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontLeft]);
-		QuadPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontRight]);
-		QuadPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::SideLeft]);
-		QuadPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::SideRight]);
-		QuadPositions.Sort(FCompareByAzimuth());
-		ChannelAzimuthPositions.Add(ESubmixChannelFormat::Quad, QuadPositions);
-		OutputChannels[int32(ESubmixChannelFormat::Quad)] = QuadPositions.Num();
-
-		TArray<FChannelPositionInfo> FiveDotOnePositions;
-		FiveDotOnePositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontLeft]);
-		FiveDotOnePositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontRight]);
-		FiveDotOnePositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::SideLeft]);
-		FiveDotOnePositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::SideRight]);
-		FiveDotOnePositions.Sort(FCompareByAzimuth());
-		ChannelAzimuthPositions.Add(ESubmixChannelFormat::FiveDotOne, FiveDotOnePositions);
-		OutputChannels[int32(ESubmixChannelFormat::FiveDotOne)] = FiveDotOnePositions.Num();
-
-		TArray<FChannelPositionInfo> SevenDotOnePositions;
-		SevenDotOnePositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontLeft]);
-		SevenDotOnePositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontRight]);
-		SevenDotOnePositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::BackLeft]);
-		SevenDotOnePositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::BackRight]);
-		SevenDotOnePositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::SideLeft]);
-		SevenDotOnePositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::SideRight]);
-		SevenDotOnePositions.Sort(FCompareByAzimuth());
-		ChannelAzimuthPositions.Add(ESubmixChannelFormat::SevenDotOne, SevenDotOnePositions);
-		OutputChannels[int32(ESubmixChannelFormat::SevenDotOne)] = SevenDotOnePositions.Num();
-
-		// ambisonics is special cased and uses a plugin.
-		TArray<FChannelPositionInfo> FirstOrderAmbisonicsPositions;
-		FirstOrderAmbisonicsPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontLeft]);
-		FirstOrderAmbisonicsPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::FrontRight]);
-		FirstOrderAmbisonicsPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::SideLeft]);
-		FirstOrderAmbisonicsPositions.Add(DefaultChannelAzimuthPosition[EAudioMixerChannel::SideRight]);
-		FirstOrderAmbisonicsPositions.Sort(FCompareByAzimuth());
-		ChannelAzimuthPositions.Add(ESubmixChannelFormat::Ambisonics, FirstOrderAmbisonicsPositions);
-		OutputChannels[int32(ESubmixChannelFormat::Ambisonics)] = FirstOrderAmbisonicsPositions.Num();
+		DeviceChannelAzimuthPositions.Sort(FCompareByAzimuth());
 	}
 
-	int32 FMixerDevice::GetNumChannelsForSubmixFormat(const ESubmixChannelFormat InSubmixChannelType) const
+	const TArray<EAudioMixerChannel::Type>& FMixerDevice::GetChannelArray() const
 	{
-		if (InSubmixChannelType == ESubmixChannelFormat::Device)
-		{
-			return PlatformInfo.NumChannels;
-		}
-
-		return OutputChannels[(int32)InSubmixChannelType];
+		return PlatformInfo.OutputChannelArray;
 	}
-
-	ESubmixChannelFormat FMixerDevice::GetSubmixChannelFormatForNumChannels(const int32 InNumChannels) const
+	const FChannelPositionInfo* FMixerDevice::GetDefaultChannelPositions() const
 	{
-		for (int32 i = 0; i < (int32)ESubmixChannelFormat::Count; ++i)
-		{
-			if (OutputChannels[i] == InNumChannels)
-			{
-				return (ESubmixChannelFormat)i;
-			}
-		}
-		ensureMsgf(false, TEXT("Unsupported number of submix channels %d"), InNumChannels);
-		return ESubmixChannelFormat::Device;
+		return DefaultChannelAzimuthPositions;
 	}
-
-	const TArray<EAudioMixerChannel::Type>& FMixerDevice::GetChannelArrayForSubmixChannelType(const ESubmixChannelFormat InSubmixChannelType) const
-	{
-		if (InSubmixChannelType == ESubmixChannelFormat::Device)
-		{
-			return PlatformInfo.OutputChannelArray;
-		}
-		const TArray<EAudioMixerChannel::Type>* ChannelArray = ChannelArrays.Find(InSubmixChannelType);
-		return *ChannelArray;
-	}
-
 }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	VulkanRenderTarget.cpp: Vulkan render target implementation.
@@ -182,6 +182,14 @@ void FTransitionAndLayoutManager::BeginEmulatedRenderPass(FVulkanCommandListCont
 		FVulkanSurface& Surface = FVulkanTextureBase::Cast(DSTexture)->Surface;
 		VkImageLayout& DSLayout = Layouts.FindOrAdd(Surface.Image);
 		FExclusiveDepthStencil RequestedDSAccess = RenderTargetsInfo.DepthStencilRenderTarget.GetDepthStencilAccess();
+		
+		if (FVulkanPlatform::RequiresDepthWriteOnStencilClear() && 
+			RenderTargetsInfo.DepthStencilRenderTarget.DepthStoreAction == ERenderTargetStoreAction::EStore &&
+			RenderTargetsInfo.DepthStencilRenderTarget.GetStencilStoreAction() == ERenderTargetStoreAction::EStore)
+		{
+			RequestedDSAccess = FExclusiveDepthStencil::DepthWrite_StencilWrite;
+		}
+
 		VkImageLayout FinalLayout = VulkanRHI::GetDepthStencilLayout(RequestedDSAccess, InDevice);
 
 		// Check if we need to transition the depth stencil texture(s) based on the current layout and the requested access mode for the render target
@@ -512,7 +520,7 @@ void FTransitionAndLayoutManager::TransitionResource(FVulkanCmdBuffer* CmdBuffer
 	}
 }
 
-void FVulkanCommandListContext::RHISetRenderTargets(uint32 NumSimultaneousRenderTargets, const FRHIRenderTargetView* NewRenderTargets, const FRHIDepthRenderTargetView* NewDepthStencilTarget, uint32 NumUAVs, FRHIUnorderedAccessView* const* UAVs)
+void FVulkanCommandListContext::RHISetRenderTargets(uint32 NumSimultaneousRenderTargets, const FRHIRenderTargetView* NewRenderTargets, const FRHIDepthRenderTargetView* NewDepthStencilTarget)
 {
 	FRHIDepthRenderTargetView DepthView;
 	if (NewDepthStencilTarget)
@@ -530,16 +538,7 @@ void FVulkanCommandListContext::RHISetRenderTargets(uint32 NumSimultaneousRender
 	}
 
 	FRHISetRenderTargetsInfo RenderTargetsInfo(NumSimultaneousRenderTargets, NewRenderTargets, DepthView);
-
-	if (NumUAVs)
-	{
-		RenderTargetsInfo.NumUAVs = NumUAVs;
-		for (uint32 Index = 0; Index < NumUAVs; Index++)
-		{
-			RenderTargetsInfo.UnorderedAccessView[Index] = UAVs[Index];
-		}
-	}
-
+	
 	RHISetRenderTargetsAndClear(RenderTargetsInfo);
 }
 
@@ -643,19 +642,6 @@ void FVulkanCommandListContext::RHISetRenderTargetsAndClear(const FRHISetRenderT
 		}
 	}
 
-	// Yuck - Bind pending pixel shader UAVs from SetRenderTargets
-	{
-		PendingPixelUAVs.Reset();
-		uint32 NumUAVs = RenderTargetsInfo.NumUAVs;
-		for (uint32 UAVIndex = 0; UAVIndex < NumUAVs; ++UAVIndex)
-		{
-			FVulkanUnorderedAccessView* UAV = ResourceCast(RenderTargetsInfo.UnorderedAccessView[UAVIndex].GetReference());
-			if (UAV)
-			{
-				PendingPixelUAVs.Add({ UAV, UAVIndex });
-			}
-		}
-	}
 }
 
 void FVulkanCommandListContext::RHICopyToResolveTarget(FRHITexture* SourceTextureRHI, FRHITexture* DestTextureRHI, const FResolveParams& InResolveParams)
@@ -812,22 +798,37 @@ void FVulkanDynamicRHI::RHIReadSurfaceData(FRHITexture* TextureRHI, FIntRect Rec
 	FVulkanCmdBuffer* CmdBuffer = ImmediateContext.GetCommandBufferManager()->GetUploadCmdBuffer();
 
 	ensure(Texture2D->Surface.StorageFormat == VK_FORMAT_R8G8B8A8_UNORM || Texture2D->Surface.StorageFormat == VK_FORMAT_B8G8R8A8_UNORM || Texture2D->Surface.StorageFormat == VK_FORMAT_R16G16B16A16_SFLOAT || Texture2D->Surface.StorageFormat == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || Texture2D->Surface.StorageFormat == VK_FORMAT_R16G16B16A16_UNORM);
-	const bool bIs8Bpp = (Texture2D->Surface.StorageFormat == VK_FORMAT_R16G16B16A16_SFLOAT);
+	bool bIs8Bpp = true;
+	switch(Texture2D->Surface.StorageFormat)
+	{
+	case VK_FORMAT_R16G16B16A16_SFLOAT:
+	case VK_FORMAT_R16G16B16A16_SNORM:
+	case VK_FORMAT_R16G16B16A16_UINT:
+	case VK_FORMAT_R16G16B16A16_SINT:
+		bIs8Bpp = false;
+		break;
+	default:
+		break;
+	}
+
 	const uint32 Size = NumPixels * sizeof(FColor) * (bIs8Bpp ? 2 : 1);
 	VulkanRHI::FStagingBuffer* StagingBuffer = Device->GetStagingManager().AcquireBuffer(Size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
 	if (GIgnoreCPUReads == 0)
 	{
 		VkBufferImageCopy CopyRegion;
 		FMemory::Memzero(CopyRegion);
+		uint32 MipLevel = InFlags.GetMip();
+		uint32 SizeX = FMath::Max(TextureRHI2D->GetSizeX() >> MipLevel, 1u);
+		uint32 SizeY = FMath::Max(TextureRHI2D->GetSizeY() >> MipLevel, 1u);
 		//CopyRegion.bufferOffset = 0;
-		CopyRegion.bufferRowLength = TextureRHI2D->GetSizeX();
-		CopyRegion.bufferImageHeight = TextureRHI2D->GetSizeY();
+		CopyRegion.bufferRowLength = SizeX;
+		CopyRegion.bufferImageHeight = SizeY;
 		CopyRegion.imageSubresource.aspectMask = Texture2D->Surface.GetFullAspectMask();
-		CopyRegion.imageSubresource.mipLevel = InFlags.GetMip();
+		CopyRegion.imageSubresource.mipLevel = MipLevel;
 		//CopyRegion.imageSubresource.baseArrayLayer = 0;
 		CopyRegion.imageSubresource.layerCount = 1;
-		CopyRegion.imageExtent.width = TextureRHI2D->GetSizeX();
-		CopyRegion.imageExtent.height = TextureRHI2D->GetSizeY();
+		CopyRegion.imageExtent.width = SizeX;
+		CopyRegion.imageExtent.height = SizeY;
 		CopyRegion.imageExtent.depth = 1;
 
 		//#todo-rco: Multithreaded!
@@ -835,13 +836,13 @@ void FVulkanDynamicRHI::RHIReadSurfaceData(FRHITexture* TextureRHI, FIntRect Rec
 		bool bHadLayout = (CurrentLayout != VK_IMAGE_LAYOUT_UNDEFINED);
 		if (CurrentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
 		{
-			VulkanSetImageLayoutSimple(CmdBuffer->GetHandle(), Texture2D->Surface.Image, CurrentLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+			VulkanSetImageLayoutAllMips(CmdBuffer->GetHandle(), Texture2D->Surface.Image, CurrentLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 		}
 
 		VulkanRHI::vkCmdCopyImageToBuffer(CmdBuffer->GetHandle(), Texture2D->Surface.Image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, StagingBuffer->GetHandle(), 1, &CopyRegion);
 		if (bHadLayout && CurrentLayout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
 		{
-			VulkanSetImageLayoutSimple(CmdBuffer->GetHandle(), Texture2D->Surface.Image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, CurrentLayout);
+			VulkanSetImageLayoutAllMips(CmdBuffer->GetHandle(), Texture2D->Surface.Image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, CurrentLayout);
 		}
 		else
 		{
@@ -949,8 +950,9 @@ void FVulkanDynamicRHI::RHIMapStagingSurface(FRHITexture* TextureRHI, FRHIGPUFen
 		VkSubresourceLayout SubResourceLayout;
 		VulkanRHI::vkGetImageSubresourceLayout(Device->GetInstanceHandle(), Texture2D->Surface.Image, &ImageSubResource, &SubResourceLayout);
 
-		int32 BytesPerPixel = GetNumBitsPerPixel(Texture2D->Surface.StorageFormat) / 8;
-		Pitch = SubResourceLayout.rowPitch / BytesPerPixel;
+		int32 BitsPerPixel = (int32)GetNumBitsPerPixel(Texture2D->Surface.StorageFormat);
+		int32 RowPitchBits = SubResourceLayout.rowPitch * 8;
+		Pitch = RowPitchBits / BitsPerPixel;
 	}
 
 	OutWidth = Pitch;
@@ -959,19 +961,6 @@ void FVulkanDynamicRHI::RHIMapStagingSurface(FRHITexture* TextureRHI, FRHIGPUFen
 	OutData = Texture2D->Surface.GetMappedPointer();
 	Texture2D->Surface.InvalidateMappedMemory();
 }
-
-
-void FVulkanDynamicRHI::RHIMapStagingSurface_RenderThread(class FRHICommandListImmediate& RHICmdList, FRHITexture* Texture, FRHIGPUFence* Fence, void*& OutData, int32& OutWidth, int32& OutHeight)
-{
-	RHIMapStagingSurface(Texture, Fence, OutData, OutWidth, OutHeight, RHICmdList.GetGPUMask().ToIndex());
-}
-
-void FVulkanDynamicRHI::RHIUnmapStagingSurface_RenderThread(class FRHICommandListImmediate& RHICmdList, FRHITexture* Texture)
-{
-	RHIUnmapStagingSurface(Texture, RHICmdList.GetGPUMask().ToIndex());
-}
-
-
 
 void FVulkanDynamicRHI::RHIUnmapStagingSurface(FRHITexture* TextureRHI, uint32 GPUIndex)
 {
@@ -1245,6 +1234,33 @@ void FVulkanCommandListContext::RHITransitionResources(EResourceTransitionAccess
 		if (PendingTransition.Textures.Num() > 0)
 		{
 			PendingTransition.TransitionType = TransitionType;
+			PendingTransition.TransitionPipeline = EResourceTransitionPipeline::EGfxToGfx; // Default to GfxToGfx which is ignored for textures
+			TransitionResources(PendingTransition);
+		}
+	}
+}
+
+void FVulkanCommandListContext::RHITransitionResources(EResourceTransitionAccess TransitionType, EResourceTransitionPipeline TransitionPipeline, FRHITexture** InTextures, int32 NumTextures)
+{
+	if (NumTextures > 0)
+	{
+		FPendingTransition PendingTransition;
+		for (int32 Index = 0; Index < NumTextures; ++Index)
+		{
+			FRHITexture* RHITexture = InTextures[Index];
+			if (RHITexture)
+			{
+				PendingTransition.Textures.Add(RHITexture);
+
+				FVulkanTextureBase* VulkanTexture = FVulkanTextureBase::Cast(RHITexture);
+				VulkanTexture->OnTransitionResource(*this, TransitionType);
+			}
+		}
+
+		if (PendingTransition.Textures.Num() > 0)
+		{
+			PendingTransition.TransitionType = TransitionType;
+			PendingTransition.TransitionPipeline = TransitionPipeline;
 			TransitionResources(PendingTransition);
 		}
 	}
@@ -1290,6 +1306,14 @@ bool FVulkanCommandListContext::FPendingTransition::GatherBarriers(FTransitionAn
 		if (UAV->SourceVertexBuffer)
 		{
 			VkBufferMemoryBarrier& Barrier = OutBufferBarriers[OutBufferBarriers.AddUninitialized()];
+			if (BUF_DrawIndirect == (UAV->SourceVertexBuffer->GetUEUsage() & BUF_DrawIndirect)) //for indirect read we translate Read INDIRECT_COMMAND_READ
+			{
+				if (DestAccess == VK_ACCESS_SHADER_READ_BIT)
+				{
+					DestAccess = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+				}
+			}
+
 			VulkanRHI::SetupAndZeroBufferBarrier(Barrier, SrcAccess, DestAccess, UAV->SourceVertexBuffer->GetHandle(), UAV->SourceVertexBuffer->GetOffset(), UAV->SourceVertexBuffer->GetSize());
 			bEmpty = false;
 		}
@@ -1309,6 +1333,18 @@ bool FVulkanCommandListContext::FPendingTransition::GatherBarriers(FTransitionAn
 		else if (UAV->SourceStructuredBuffer)
 		{
 			VkBufferMemoryBarrier& Barrier = OutBufferBarriers[OutBufferBarriers.AddUninitialized()];
+			
+			if(BUF_DrawIndirect == (UAV->SourceStructuredBuffer->GetUEUsage() & BUF_DrawIndirect)) //for indirect read we translate Read INDIRECT_COMMAND_READ
+			{
+				if(SrcAccess == VK_ACCESS_SHADER_READ_BIT)
+				{
+					SrcAccess = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+				}
+				else if(DestAccess == VK_ACCESS_SHADER_READ_BIT)
+				{
+					DestAccess = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+				}
+			}
 			VulkanRHI::SetupAndZeroBufferBarrier(Barrier, SrcAccess, DestAccess, UAV->SourceStructuredBuffer->GetHandle(), UAV->SourceStructuredBuffer->GetOffset(), UAV->SourceStructuredBuffer->GetSize());
 			bEmpty = false;
 		}
@@ -1445,6 +1481,27 @@ void FVulkanCommandListContext::TransitionResources(const FPendingTransition& Pe
 			VulkanRHI::FPendingBarrier Barrier;
 			for (int32 Index = 0; Index < PendingTransition.Textures.Num(); ++Index)
 			{
+				// If we are transitioning from compute we need additional pipeline stages
+				// We can ignore the other transition types as their barriers are more explicitly handled elsewhere
+				VkPipelineStageFlags SourceStage = 0, DestStage = 0;
+				switch (PendingTransition.TransitionPipeline)
+				{
+				case EResourceTransitionPipeline::EGfxToGfx:
+				case EResourceTransitionPipeline::EGfxToCompute:
+					break;
+				case EResourceTransitionPipeline::EComputeToGfx:
+					SourceStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+					DestStage = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+					break;
+				case EResourceTransitionPipeline::EComputeToCompute:
+					SourceStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+					DestStage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+					break;
+				default:
+					ensureMsgf(0, TEXT("Unknown transition pipeline %d"), (int32)PendingTransition.TransitionPipeline);
+					break;
+				}
+
 				FVulkanTextureBase* VulkanTexture = FVulkanTextureBase::Cast(PendingTransition.Textures[Index]);
 				VkImageLayout& SrcLayout = TransitionAndLayoutManager.FindOrAddLayoutRW(VulkanTexture->Surface.Image, VK_IMAGE_LAYOUT_UNDEFINED);
 				bool bIsDepthStencil = VulkanTexture->Surface.IsDepthOrStencilAspect();
@@ -1454,7 +1511,7 @@ void FVulkanCommandListContext::TransitionResources(const FPendingTransition& Pe
 
 				int32 BarrierIndex = Barrier.AddImageBarrier(VulkanTexture->Surface.Image, VulkanTexture->Surface.GetFullAspectMask(), VulkanTexture->Surface.GetNumMips(), VulkanTexture->Surface.NumArrayLevels);
 				Barrier.SetTransition(BarrierIndex, VulkanRHI::GetImageLayoutFromVulkanLayout(SrcLayout), VulkanRHI::GetImageLayoutFromVulkanLayout(DstLayout));
-
+				Barrier.AddStages(SourceStage, DestStage);
 				SrcLayout = DstLayout;
 			}
 			//#todo-rco: Temp ensure disabled
@@ -1720,20 +1777,6 @@ void FVulkanCommandListContext::RHIBeginRenderPass(const FRHIRenderPassInfo& InI
 	FVulkanRenderPass* RenderPass = TransitionAndLayoutManager.GetOrCreateRenderPass(*Device, RTLayout);
 	FRHISetRenderTargetsInfo RTInfo;
 	InInfo.ConvertToRenderTargetsInfo(RTInfo);
-
-	// yuck. bind UAVs.
-	{
-		PendingPixelUAVs.Reset();
-		uint32 NumUAVs = InInfo.NumUAVs;
-		for (uint32 UAVIndex = 0; UAVIndex < NumUAVs; ++UAVIndex)
-		{
-			FVulkanUnorderedAccessView* UAV = ResourceCast(InInfo.UAVs[UAVIndex].GetReference());
-			if (UAV)
-			{
-				PendingPixelUAVs.Add({ UAV, UAVIndex });
-			}
-		}
-	}
 
 	FVulkanFramebuffer* Framebuffer = TransitionAndLayoutManager.GetOrCreateFramebuffer(*Device, RTInfo, RTLayout, RenderPass);
 	checkf(RenderPass != nullptr && Framebuffer != nullptr, TEXT("RenderPass not started! Bad combination of values? Depth %p #Color %d Color0 %p"), (void*)InInfo.DepthStencilRenderTarget.DepthStencilTarget, InInfo.GetNumColorRenderTargets(), (void*)InInfo.ColorRenderTargets[0].RenderTarget);
@@ -2171,7 +2214,14 @@ FVulkanRenderTargetLayout::FVulkanRenderTargetLayout(FVulkanDevice& InDevice, co
 			ensure(CurrDesc.stencilStoreOp == VK_ATTACHMENT_STORE_OP_DONT_CARE);
 		}
 
-		DepthStencilLayout = VulkanRHI::GetDepthStencilLayout(RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil, InDevice);
+		FExclusiveDepthStencil ExclusiveDepthStencil = RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil;
+		if (FVulkanPlatform::RequiresDepthWriteOnStencilClear() &&
+			RPInfo.DepthStencilRenderTarget.Action == EDepthStencilTargetActions::LoadDepthClearStencil_StoreDepthStencil)
+		{
+			ExclusiveDepthStencil = FExclusiveDepthStencil::DepthWrite_StencilWrite;
+		}
+
+		DepthStencilLayout = VulkanRHI::GetDepthStencilLayout(ExclusiveDepthStencil, InDevice);
 		// If the initial != final we need to change the FullHashInfo and use FinalLayout
 		CurrDesc.initialLayout = DepthStencilLayout;
 		CurrDesc.finalLayout = DepthStencilLayout;
@@ -2392,6 +2442,37 @@ FVulkanRenderTargetLayout::FVulkanRenderTargetLayout(const FGraphicsPipelineStat
 
 		++NumAttachmentDescriptions;
 		bHasDepthStencil = true;
+	}
+
+	if (Initializer.bHasFragmentDensityAttachment)
+	{
+		VkAttachmentDescription& CurrDesc = Desc[NumAttachmentDescriptions];
+		FMemory::Memzero(CurrDesc);
+
+		const VkImageLayout FragmentDensityLayout = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
+
+		CurrDesc.flags = 0;
+		CurrDesc.format = VK_FORMAT_R8G8_UNORM;
+		CurrDesc.samples = VK_SAMPLE_COUNT_1_BIT;
+		CurrDesc.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		CurrDesc.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		CurrDesc.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		CurrDesc.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		CurrDesc.initialLayout = FragmentDensityLayout;
+		CurrDesc.finalLayout = FragmentDensityLayout;
+
+		FragmentDensityReference.attachment = NumAttachmentDescriptions;
+		FragmentDensityReference.layout = FragmentDensityLayout;
+
+		FullHashInfo.LoadOps[MaxSimultaneousRenderTargets + 2] = CurrDesc.stencilLoadOp;
+		FullHashInfo.StoreOps[MaxSimultaneousRenderTargets + 2] = CurrDesc.stencilStoreOp;
+#if VULKAN_USE_REAL_RENDERPASS_COMPATIBILITY
+		FullHashInfo.InitialLayout[MaxSimultaneousRenderTargets + 1] = FragmentDensityLayout;
+#endif
+		CompatibleHashInfo.Formats[MaxSimultaneousRenderTargets + 1] = CurrDesc.format;
+
+		++NumAttachmentDescriptions;
+		bHasFragmentDensityAttachment = true;
 	}
 
 	SubpassHint = Initializer.SubpassHint;

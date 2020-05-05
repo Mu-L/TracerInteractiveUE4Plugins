@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Render/Synchronization/DisplayClusterRenderSyncPolicySoftwareDX11.h"
 
@@ -20,7 +20,7 @@
 #include "D3D11Resources.h"
 #include "D3D11Viewport.h"
 
-#include "NVIDIA/nvapi/nvapi.h"
+#include "nvapi.h"
 
 
 static TAutoConsoleVariable<int32> CVarAdvancedSyncEnabled(

@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "Render/Projection/IDisplayClusterProjectionPolicyFactory.h"
+#include "Policy/DisplayClusterProjectionPolicyBase.h"
 
 
 /**
@@ -20,4 +21,10 @@ public:
 	// IDisplayClusterProjectionPolicyFactory
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	virtual TSharedPtr<IDisplayClusterProjectionPolicy> Create(const FString& PolicyType, const FString& RHIName, const FString& ViewportId) override;
+
+	TArray<TSharedPtr<FDisplayClusterProjectionPolicyBase>> GetPolicy();
+	TSharedPtr<FDisplayClusterProjectionPolicyBase>         GetPolicyByViewport(const FString& ViewportId);
+
+private:
+	TArray<TSharedPtr<FDisplayClusterProjectionPolicyBase>> Policy;
 };

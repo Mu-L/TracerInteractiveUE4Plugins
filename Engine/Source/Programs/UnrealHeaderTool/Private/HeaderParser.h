@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -15,7 +15,7 @@ class UPackage;
 struct FManifestModule;
 class IScriptGeneratorPluginInterface;
 class FStringOutputDevice;
-class UProperty;
+class FProperty;
 class FUnrealSourceFile;
 class UFunction;
 class UEnum;
@@ -80,6 +80,18 @@ namespace EVariableCategory
 		Member
 	};
 }
+
+enum class ELayoutMacroType
+{
+	None = -1,
+	Array,
+	ArrayEditorOnly,
+	Bitfield,
+	BitfieldEditorOnly,
+	Field,
+	FieldEditorOnly,
+	FieldInitialized,
+};
 
 /** Information for a particular nesting level. */
 class FNestInfo
@@ -433,7 +445,7 @@ public:
 	 * @param InNameToCheck - Name w/ potential prefix to check
 	 * @param OriginalClassName - Name of class w/ no prefix to check against
 	 */
-	static bool ClassNameHasValidPrefix(const FString InNameToCheck, const FString OriginalClassName);
+	static bool ClassNameHasValidPrefix(const FString& InNameToCheck, const FString& OriginalClassName);
 
 	/**
 	 * Tries to convert the header file name to a class name (with 'U' prefix)
@@ -453,7 +465,7 @@ public:
 	 * @param out InnerForm Inner formated string
 	 * @return true on success, false otherwise.
 	 */
-	static bool DefaultValueStringCppFormatToInnerFormat(const UProperty* Property, const FString& CppForm, FString &InnerForm);
+	static bool DefaultValueStringCppFormatToInnerFormat(const FProperty* Property, const FString& CppForm, FString &InnerForm);
 
 	/**
 	 * Parse Class's annotated headers and optionally its child classes.  Marks the class as CLASS_Parsed.
@@ -671,7 +683,7 @@ protected:
 	bool IsValidDelegateDeclaration(const FToken& Token) const;
 
 	// Returns true if the current token is a bitfield type
-	bool IsBitfieldProperty();
+	bool IsBitfieldProperty(ELayoutMacroType LayoutMacroType);
 
 	// Parse the parameter list of a function or delegate declaration
 	void ParseParameterList(FClasses& AllClasses, UFunction* Function, bool bExpectCommaBeforeName = false, TMap<FName, FString>* MetaData = NULL);
@@ -697,6 +709,7 @@ public:
 	* @return	a pointer to a UField with a name matching InIdentifier, or NULL if it wasn't found
 	*/
 	static UField* FindField( UStruct* InScope, const TCHAR* InIdentifier, bool bIncludeParents=true, UClass* FieldClass=UField::StaticClass(), const TCHAR* Thing=nullptr );
+	static FField* FindProperty(UStruct* InScope, const TCHAR* InIdentifier, bool bIncludeParents = true, FFieldClass* FieldClass = FField::StaticClass(), const TCHAR* Thing = nullptr);
 
 	// Checks ToValidate to make sure that its associated sparse class data struct, if one exists, is a valid structure to use for storing sparse class data.
 	static void CheckSparseClassData(const UStruct* ToValidate);
@@ -767,7 +780,7 @@ protected:
 	/** Skip C++ (noexport) declaration. */
 	bool SkipDeclaration(FToken& Token);
 	/** Similar to MatchSymbol() but will return to the exact location as on entry if the symbol was not found. */
-	bool SafeMatchSymbol(const TCHAR* Match);
+	bool SafeMatchSymbol(const TCHAR Match);
 	void HandleOneInheritedClass(FClasses& AllClasses, UClass* Class, FString InterfaceName);
 	FClass* ParseClassNameDeclaration(FClasses& AllClasses, FString& DeclaredClassName, FString& RequiredAPIMacroIfPresent);
 
@@ -818,7 +831,7 @@ protected:
 	// nesting level.
 	void CheckAllow(const TCHAR* Thing, ENestAllowFlags AllowFlags);
 
-	UStruct* GetSuperScope( UStruct* CurrentScope, const FName& SearchName );
+	UStruct* GetSuperScope( UStruct* CurrentScope, const FName& SearchName );	
 
 	void SkipStatements( int32 SubCount, const TCHAR* ErrorTag );
 
@@ -842,21 +855,23 @@ protected:
 		const FToken*                   OuterPropertyType,
 		EPropertyDeclarationStyle::Type PropertyDeclarationStyle,
 		EVariableCategory::Type         VariableCategory,
-		FIndexRange*                    ParsedVarIndexRange = nullptr);
+		FIndexRange*                    ParsedVarIndexRange = nullptr,
+		ELayoutMacroType*               OutLayoutMacroType = nullptr);
 
 	/**
-	 * Parses a variable name declaration and creates a new UProperty object.
+	 * Parses a variable name declaration and creates a new FProperty object.
 	 *
 	 * @param	Scope				struct to create the property in
 	 * @param	VarProperty			type and propertyflag info for the new property (inout)
 	 * @param   VariableCategory	what kind of variable is being created
 	 *
-	 * @return	a pointer to the new UProperty if successful, or NULL if there was no property to parse
+	 * @return	a pointer to the new FProperty if successful, or NULL if there was no property to parse
 	 */
-	UProperty* GetVarNameAndDim(
+	FProperty* GetVarNameAndDim(
 		UStruct* Struct,
 		FToken& VarProperty,
-		EVariableCategory::Type VariableCategory);
+		EVariableCategory::Type VariableCategory,
+		ELayoutMacroType LayoutMacroType = ELayoutMacroType::None);
 	
 	/**
 	 * Returns whether the specified class can be referenced from the class currently being compiled.
@@ -869,7 +884,7 @@ protected:
 	bool AllowReferenceToClass(UStruct* Scope, UClass* CheckClass) const;
 
 	/**
-	 * @return	true if Scope has UProperty objects in its list of fields
+	 * @return	true if Scope has FProperty objects in its list of fields
 	 */
 	static bool HasMemberProperties( const UStruct* Scope );
 
@@ -996,13 +1011,13 @@ private:
 	void VerifyPropertyMarkups( UClass* TargetClass );
 
 	// Verifies the target function meets the criteria for a blueprint property getter
-	void VerifyBlueprintPropertyGetter(UProperty* Property, UFunction* TargetFunction);
+	void VerifyBlueprintPropertyGetter(FProperty* Property, UFunction* TargetFunction);
 
 	// Verifies the target function meets the criteria for a blueprint property setter
-	void VerifyBlueprintPropertySetter(UProperty* Property, UFunction* TargetFunction);
+	void VerifyBlueprintPropertySetter(FProperty* Property, UFunction* TargetFunction);
 
 	// Verifies the target function meets the criteria for a replication notify callback
-	void VerifyRepNotifyCallback(UProperty* Property, UFunction* TargetFunction);
+	void VerifyRepNotifyCallback(FProperty* Property, UFunction* TargetFunction);
 
 	// Constructs the policy from a string
 	static FDocumentationPolicy GetDocumentationPolicyFromName(const FString& PolicyName);

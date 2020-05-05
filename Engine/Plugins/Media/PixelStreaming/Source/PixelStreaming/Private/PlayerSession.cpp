@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PlayerSession.h"
 #include "Streamer.h"
@@ -252,7 +252,7 @@ void FPlayerSession::SendMessage(PixelStreamingProtocol::EToPlayerMsg Type, cons
 	DataChannel->Send(webrtc::DataBuffer(Buffer, true));
 }
 
-void FPlayerSession::SendFreezeFrame(const TArray<uint8>& JpegBytes)
+void FPlayerSession::SendFreezeFrame(const TArray64<uint8>& JpegBytes)
 {
 	if (!DataChannel)
 	{

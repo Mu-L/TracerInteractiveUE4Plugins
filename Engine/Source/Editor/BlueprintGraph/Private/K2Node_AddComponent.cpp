@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "K2Node_AddComponent.h"
@@ -11,6 +11,7 @@
 #include "Engine/BlueprintGeneratedClass.h"
 #include "EdGraphSchema_K2.h"
 #include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
 #include "UObject/ReleaseObjectVersion.h"
 #include "KismetCompilerMisc.h"
 #include "KismetCompiler.h"
@@ -94,10 +95,10 @@ void UK2Node_AddComponent::AllocatePinsForExposedVariables()
 	{
 		const UObject* ClassDefaultObject = ComponentClass->ClassDefaultObject;
 
-		for (TFieldIterator<UProperty> PropertyIt(ComponentClass, EFieldIteratorFlags::IncludeSuper); PropertyIt; ++PropertyIt)
+		for (TFieldIterator<FProperty> PropertyIt(ComponentClass, EFieldIteratorFlags::IncludeSuper); PropertyIt; ++PropertyIt)
 		{
-			UProperty* Property = *PropertyIt;
-			const bool bNotDelegate = !Property->IsA(UMulticastDelegateProperty::StaticClass());
+			FProperty* Property = *PropertyIt;
+			const bool bNotDelegate = !Property->IsA(FMulticastDelegateProperty::StaticClass());
 			const bool bIsExposedToSpawn = UEdGraphSchema_K2::IsPropertyExposedOnSpawn(Property);
 			const bool bIsVisible = Property->HasAllPropertyFlags(CPF_BlueprintVisible);
 			const bool bNotParam = !Property->HasAllPropertyFlags(CPF_Parm);
@@ -210,7 +211,7 @@ void UK2Node_AddComponent::ValidateNodeDuringCompilation(FCompilerResultsLog& Me
 	const UClass* TemplateClass = GetSpawnedType();
 	if (TemplateClass)
 	{
-		if (!TemplateClass->IsChildOf(UActorComponent::StaticClass()) || TemplateClass->HasAnyClassFlags(CLASS_Abstract) || !TemplateClass->HasMetaData(FBlueprintMetadata::MD_BlueprintSpawnableComponent) )
+		if (!FKismetEditorUtilities::IsClassABlueprintSpawnableComponent(TemplateClass))
 		{
 			FFormatNamedArguments Args;
 			Args.Add(TEXT("TemplateClass"), FText::FromString(TemplateClass->GetName()));

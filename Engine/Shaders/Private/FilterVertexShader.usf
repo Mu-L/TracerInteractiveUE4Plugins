@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	FilterVertexShader.usf: Filter vertex shader source.
@@ -12,7 +12,7 @@
 
 #define PACKED_STATIC_SAMPLE_COUNT ((STATIC_SAMPLE_COUNT + 1) / 2)
 
-#define USE_UNPACKED_UVS (ES2_PROFILE || ES3_1_PROFILE)
+#define USE_UNPACKED_UVS (ES3_1_PROFILE)
 
 float4 SampleOffsets[PACKED_STATIC_SAMPLE_COUNT];
 

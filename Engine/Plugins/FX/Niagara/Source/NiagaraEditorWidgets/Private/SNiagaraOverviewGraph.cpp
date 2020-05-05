@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SNiagaraOverviewGraph.h"
 #include "NiagaraOverviewGraphNodeFactory.h"
@@ -24,8 +24,13 @@
 #include "Templates/SharedPointer.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
+#include "Framework/Commands/GenericCommands.h"
+#include "Widgets/Input/SCheckBox.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraOverviewGraph"
+
+bool SNiagaraOverviewGraph::bShowLibraryOnly = false;
+bool SNiagaraOverviewGraph::bShowTemplateOnly = false;
 
 void SNiagaraOverviewGraph::Construct(const FArguments& InArgs, TSharedRef<FNiagaraOverviewGraphViewModel> InViewModel)
 {
@@ -39,6 +44,7 @@ void SNiagaraOverviewGraph::Construct(const FArguments& InArgs, TSharedRef<FNiag
 	SGraphEditor::FGraphEditorEvents Events;
 	Events.OnSelectionChanged = SGraphEditor::FOnSelectionChanged::CreateSP(this, &SNiagaraOverviewGraph::GraphSelectionChanged);
 	Events.OnCreateActionMenu = SGraphEditor::FOnCreateActionMenu::CreateSP(this, &SNiagaraOverviewGraph::OnCreateGraphActionMenu);
+	Events.OnVerifyTextCommit = FOnNodeVerifyTextCommit::CreateSP(this, &SNiagaraOverviewGraph::OnVerifyNodeTitle);
 	Events.OnTextCommitted = FOnNodeTextCommitted::CreateSP(this, &SNiagaraOverviewGraph::OnNodeTitleCommitted);
 
 	FGraphAppearanceInfo AppearanceInfo;
@@ -77,13 +83,36 @@ void SNiagaraOverviewGraph::Construct(const FArguments& InArgs, TSharedRef<FNiag
 	Commands->MapAction(
 		FNiagaraEditorModule::Get().GetCommands().ZoomToFitAll,
 		FExecuteAction::CreateSP(this, &SNiagaraOverviewGraph::ZoomToFitAll));
-	
+	// Alignment Commands
+	Commands->MapAction(FGraphEditorCommands::Get().AlignNodesTop,
+		FExecuteAction::CreateSP(this, &SNiagaraOverviewGraph::OnAlignTop)
+	);
+
+	Commands->MapAction(FGraphEditorCommands::Get().AlignNodesMiddle,
+		FExecuteAction::CreateSP(this, &SNiagaraOverviewGraph::OnAlignMiddle)
+	);
+
+	Commands->MapAction(FGraphEditorCommands::Get().AlignNodesBottom,
+		FExecuteAction::CreateSP(this, &SNiagaraOverviewGraph::OnAlignBottom)
+	);
+
+	// Distribution Commands
+	Commands->MapAction(FGraphEditorCommands::Get().DistributeNodesHorizontally,
+		FExecuteAction::CreateSP(this, &SNiagaraOverviewGraph::OnDistributeNodesH)
+	);
+
+	Commands->MapAction(FGraphEditorCommands::Get().DistributeNodesVertically,
+		FExecuteAction::CreateSP(this, &SNiagaraOverviewGraph::OnDistributeNodesV)
+	);
+
+
 	GraphEditor = SNew(SGraphEditor)
 		.AdditionalCommands(Commands)
 		.Appearance(AppearanceInfo)
 		.TitleBar(TitleBarWidget)
 		.GraphToEdit(ViewModel->GetGraph())
-		.GraphEvents(Events);
+		.GraphEvents(Events)
+		.ShowGraphStateOverlay(false);
 
 	GraphEditor->SetNodeFactory(MakeShared<FNiagaraOverviewGraphNodeFactory>());
 
@@ -184,6 +213,12 @@ FActionMenuContent SNiagaraOverviewGraph::OnCreateGraphActionMenu(UEdGraph* InGr
 				LOCTEXT("CommentsToolTip", "Add a comment box"),
 				FSlateIcon(),
 				FExecuteAction::CreateSP(this, &SNiagaraOverviewGraph::OnCreateComment));
+
+			MenuBuilder.AddMenuEntry(
+				LOCTEXT("ClearIsolatedLabel", "Clear Isolated"),
+				LOCTEXT("ClearIsolatedToolTip", "Clear the current set of isolated emitters."),
+				FSlateIcon(),
+				FExecuteAction::CreateSP(this, &SNiagaraOverviewGraph::OnClearIsolated));
 		}
 		MenuBuilder.EndSection();
 
@@ -191,6 +226,12 @@ FActionMenuContent SNiagaraOverviewGraph::OnCreateGraphActionMenu(UEdGraph* InGr
 		{
 			MenuBuilder.AddMenuEntry(FNiagaraEditorCommands::Get().ZoomToFit);
 			MenuBuilder.AddMenuEntry(FNiagaraEditorCommands::Get().ZoomToFitAll);
+		}
+		MenuBuilder.EndSection();
+
+		MenuBuilder.BeginSection(TEXT("NiagaraOverview_Edit"), LOCTEXT("Edit", "Edit"));
+		{
+			MenuBuilder.AddMenuEntry(FGenericCommands::Get().Paste);
 		}
 		MenuBuilder.EndSection();
 
@@ -205,6 +246,26 @@ void SNiagaraOverviewGraph::OnCreateComment()
 {
 	FNiagaraSchemaAction_NewComment CommentAction = FNiagaraSchemaAction_NewComment(GraphEditor);
 	CommentAction.PerformAction(ViewModel->GetGraph(), nullptr, GraphEditor->GetPasteLocation(), false);
+}
+
+void SNiagaraOverviewGraph::OnClearIsolated()
+{
+	ViewModel->GetSystemViewModel()->IsolateEmitters(TArray<FGuid>());
+}
+
+bool SNiagaraOverviewGraph::OnVerifyNodeTitle(const FText& NewText, UEdGraphNode* Node, FText& OutErrorMessage) const
+{
+	UNiagaraOverviewNode* NiagaraNode = Cast<UNiagaraOverviewNode>(Node);
+	if (NiagaraNode != nullptr)
+	{
+		TSharedPtr<FNiagaraEmitterHandleViewModel> NodeEmitterHandleViewModel = ViewModel->GetSystemViewModel()->GetEmitterHandleViewModelById(NiagaraNode->GetEmitterHandleGuid());
+		if (ensureMsgf(NodeEmitterHandleViewModel.IsValid(), TEXT("Failed to find EmitterHandleViewModel with matching Emitter GUID to Overview Node!")))
+		{
+			return NodeEmitterHandleViewModel->VerifyNameTextChanged(NewText, OutErrorMessage);
+		}
+	}
+
+	return true;
 }
 
 void SNiagaraOverviewGraph::OnNodeTitleCommitted(const FText& NewText, ETextCommit::Type CommitInfo, UEdGraphNode* NodeBeingChanged)
@@ -254,6 +315,8 @@ void SNiagaraOverviewGraph::CreateAddEmitterMenuContent(FMenuBuilder& MenuBuilde
 		AssetPickerConfig.bAllowNullSelection = false;
 		AssetPickerConfig.InitialAssetViewType = EAssetViewType::List;
 		AssetPickerConfig.Filter.ClassNames.Add(UNiagaraEmitter::StaticClass()->GetFName());
+		AssetPickerConfig.OnShouldFilterAsset.BindSP(this, &SNiagaraOverviewGraph::ShouldFilterEmitter);
+		AssetPickerConfig.RefreshAssetViewDelegates.Add(&RefreshAssetView);
 	}
 
 	FContentBrowserModule& ContentBrowserModule = FModuleManager::Get().LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
@@ -261,13 +324,51 @@ void SNiagaraOverviewGraph::CreateAddEmitterMenuContent(FMenuBuilder& MenuBuilde
 	TSharedRef<SWidget> EmitterAddSubMenu =
 		SNew(SBorder)
 		.BorderImage(FEditorStyle::GetBrush("Menu.Background"))
-		.Padding(5.0f)
+		.Padding(0.0f)
 		[
-			SNew(SBox)
-			.WidthOverride(300.0f)
-			.HeightOverride(300.0f)
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.Padding(3)
+			.AutoHeight()
 			[
-				ContentBrowserModule.Get().CreateAssetPicker(AssetPickerConfig)
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.Padding(FEditorStyle::GetMargin("StandardDialog.SlotPadding"))
+				.FillWidth(1.0f)
+				.HAlign(HAlign_Right)
+				[
+					SNew(SCheckBox)
+					.OnCheckStateChanged(this, &SNiagaraOverviewGraph::TemplateCheckBoxStateChanged)
+					.IsChecked(this, &SNiagaraOverviewGraph::GetTemplateCheckBoxState)
+					[
+						SNew(STextBlock)
+						.Text(LOCTEXT("TemplateOnly", "Template Only"))
+					]
+				]
+				+ SHorizontalBox::Slot()
+				.Padding(FEditorStyle::GetMargin("StandardDialog.SlotPadding"))
+				.AutoWidth()
+				.HAlign(HAlign_Right)
+				[
+					SNew(SCheckBox)
+					.OnCheckStateChanged(this, &SNiagaraOverviewGraph::LibraryCheckBoxStateChanged)
+					.IsChecked(this, &SNiagaraOverviewGraph::GetLibraryCheckBoxState)
+					[
+						SNew(STextBlock)
+						.Text(LOCTEXT("LibraryOnly", "Library Only"))
+					]
+				]
+
+			]
+			+ SVerticalBox::Slot()
+			.FillHeight(1.0f)
+			[
+				SNew(SBox)
+				.WidthOverride(300.0f)
+				.HeightOverride(300.0f)
+				[
+					ContentBrowserModule.Get().CreateAssetPicker(AssetPickerConfig)
+				]
 			]
 		];
 
@@ -283,5 +384,114 @@ void SNiagaraOverviewGraph::ZoomToFitAll()
 {
 	GraphEditor->ZoomToFit(false);
 }
+
+
+void SNiagaraOverviewGraph::OnAlignTop()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnAlignTop();
+	}
+}
+
+void SNiagaraOverviewGraph::OnAlignMiddle()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnAlignMiddle();
+	}
+}
+
+void SNiagaraOverviewGraph::OnAlignBottom()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnAlignBottom();
+	}
+}
+
+void SNiagaraOverviewGraph::OnDistributeNodesH()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnDistributeNodesH();
+	}
+}
+
+void SNiagaraOverviewGraph::OnDistributeNodesV()
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->OnDistributeNodesV();
+	}
+}
+
+void SNiagaraOverviewGraph::LibraryCheckBoxStateChanged(ECheckBoxState InCheckbox)
+{
+	SNiagaraOverviewGraph::bShowLibraryOnly = (InCheckbox == ECheckBoxState::Checked);
+	RefreshAssetView.ExecuteIfBound(true);
+}
+
+ECheckBoxState SNiagaraOverviewGraph::GetLibraryCheckBoxState() const
+{
+	return SNiagaraOverviewGraph::bShowLibraryOnly ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+}
+
+void SNiagaraOverviewGraph::TemplateCheckBoxStateChanged(ECheckBoxState InCheckbox)
+{
+	SNiagaraOverviewGraph::bShowTemplateOnly = (InCheckbox == ECheckBoxState::Checked);
+	RefreshAssetView.ExecuteIfBound(true);
+}
+
+ECheckBoxState SNiagaraOverviewGraph::GetTemplateCheckBoxState() const
+{
+	return SNiagaraOverviewGraph::bShowTemplateOnly ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+}
+
+
+bool SNiagaraOverviewGraph::ShouldFilterEmitter(const FAssetData& AssetData)
+{
+	// Check if library script
+	bool bScriptAllowed = true;
+	bool bInLibrary = false;
+	bool bIsTemplate = false;
+	if (SNiagaraOverviewGraph::bShowLibraryOnly == true)
+	{
+		bool bFoundLibraryTag = AssetData.GetTagValue(GET_MEMBER_NAME_CHECKED(UNiagaraEmitter, bExposeToLibrary), bInLibrary);
+
+		if (bFoundLibraryTag == false)
+		{
+			if (AssetData.IsAssetLoaded())
+			{
+				UNiagaraEmitter* EmitterAsset = static_cast<UNiagaraEmitter*>(AssetData.GetAsset());
+				if (EmitterAsset != nullptr)
+				{
+					bInLibrary = EmitterAsset->bExposeToLibrary;
+				}
+			}
+		}
+		bScriptAllowed &= bFoundLibraryTag;
+	}
+	if (SNiagaraOverviewGraph::bShowTemplateOnly == true)
+	{
+		bool bFoundTemplateTag = AssetData.GetTagValue(GET_MEMBER_NAME_CHECKED(UNiagaraEmitter, bIsTemplateAsset), bIsTemplate);
+
+		if (bFoundTemplateTag == false)
+		{
+			if (AssetData.IsAssetLoaded())
+			{
+				UNiagaraEmitter* EmitterAsset = static_cast<UNiagaraEmitter*>(AssetData.GetAsset());
+				if (EmitterAsset != nullptr)
+				{
+					bIsTemplate = EmitterAsset->bIsTemplateAsset;
+				}
+			}
+		}
+		bScriptAllowed &= bIsTemplate;
+	}
+
+	return !bScriptAllowed;
+}
+
 
 #undef LOCTEXT_NAMESPACE // "NiagaraOverviewGraph"

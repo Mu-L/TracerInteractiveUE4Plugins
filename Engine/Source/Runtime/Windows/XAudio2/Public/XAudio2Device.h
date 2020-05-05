@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	XAudio2Device.h: Unreal XAudio2 audio interface object.
@@ -124,7 +124,7 @@ private:
 		static const FName NAME_OPUS(TEXT("OPUS"));
 		static const FName NAME_XMA(TEXT("XMA"));
 
-		if (SoundWave->IsStreaming())
+		if (SoundWave->IsStreaming(nullptr))
 		{
 			if (SoundWave->IsSeekableStreaming())
 			{

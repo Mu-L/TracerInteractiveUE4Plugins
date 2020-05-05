@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MagicLeapHandTracking.h"
 #include "IMagicLeapHandTrackingPlugin.h"
@@ -191,7 +191,7 @@ void FMagicLeapHandTracking::UpdateLiveLink()
 		FLiveLinkAnimationFrameData* LiveLinkRightFramePtr = LiveLinkRightFrame.Cast<FLiveLinkAnimationFrameData>();
 
 		LiveLinkLeftFramePtr->WorldTime = LiveLinkRightFramePtr->WorldTime = FPlatformTime::Seconds();
-		LiveLinkLeftFramePtr->MetaData.SceneTime = LiveLinkRightFramePtr->MetaData.SceneTime = FQualifiedFrameTime(FApp::GetTimecode(), FApp::GetTimecodeFrameRate());
+		LiveLinkLeftFramePtr->MetaData.SceneTime = LiveLinkRightFramePtr->MetaData.SceneTime = FApp::GetCurrentFrameTime().Get(FQualifiedFrameTime());
 
 		// Update the transforms for each subject from tracking data
 		UpdateLiveLinkTransforms(LiveLinkLeftFramePtr->Transforms, LeftHand);
@@ -202,7 +202,7 @@ void FMagicLeapHandTracking::UpdateLiveLink()
 		FLiveLinkFrameDataStruct NewLiveLinkRightFrame;
 		NewLiveLinkLeftFrame.InitializeWith(LiveLinkLeftFrame);
 		NewLiveLinkRightFrame.InitializeWith(LiveLinkRightFrame);
-		LiveLinkClient->PushSubjectFrameData_AnyThread(LeftKey, MoveTemp(LiveLinkLeftFrame));
+		LiveLinkClient->PushSubjectFrameData_AnyThread(LeftKey, MoveTemp(NewLiveLinkLeftFrame));
 		LiveLinkClient->PushSubjectFrameData_AnyThread(RightKey, MoveTemp(NewLiveLinkRightFrame));
 	}
 }

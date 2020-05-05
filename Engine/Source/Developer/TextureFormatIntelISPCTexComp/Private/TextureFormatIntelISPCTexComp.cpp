@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "HAL/FileManager.h"
@@ -317,10 +317,10 @@ static void IntelBC6HCompressScans(bc6h_enc_settings* pEncSettings, FImage* pInI
 	check((yStart >= 0) && (yStart <= pInImage->SizeY));
 	check((yEnd   >= 0) && (yEnd   <= pInImage->SizeY));
 
-	const int InStride = pInImage->SizeX * 8;
-	const int OutStride = pInImage->SizeX / 4 * BLOCK_SIZE_IN_BYTES;
-	const int InSliceSize = pInImage->SizeY * InStride;
-	const int OutSliceSize = pInImage->SizeY / 4 * OutStride;
+	const int64 InStride = (int64)pInImage->SizeX * 8;
+	const int64 OutStride = (int64)pInImage->SizeX / 4 * BLOCK_SIZE_IN_BYTES;
+	const int64 InSliceSize = (int64)pInImage->SizeY * InStride;
+	const int64 OutSliceSize = (int64)pInImage->SizeY / 4 * OutStride;
 
 	uint8* pInTexels = reinterpret_cast<uint8*>(&pInImage->RawData[0]) + InSliceSize * SliceIndex;
 	uint8* pOutTexels = reinterpret_cast<uint8*>(&pOutImage->RawData[0]) + OutSliceSize * SliceIndex;
@@ -346,10 +346,10 @@ static void IntelBC7CompressScans(bc7_enc_settings* pEncSettings, FImage* pInIma
 	check((yStart >= 0) && (yStart <= pInImage->SizeY));
 	check((yEnd   >= 0) && (yEnd   <= pInImage->SizeY));
 
-	const int InStride = pInImage->SizeX * 4;
-	const int OutStride = pInImage->SizeX / 4 * BLOCK_SIZE_IN_BYTES;
-	const int InSliceSize = pInImage->SizeY * InStride;
-	const int OutSliceSize = pInImage->SizeY / 4 * OutStride;
+	const int64 InStride = (int64)pInImage->SizeX * 4;
+	const int64 OutStride = (int64)pInImage->SizeX / 4 * BLOCK_SIZE_IN_BYTES;
+	const int64 InSliceSize = (int64)pInImage->SizeY * InStride;
+	const int64 OutSliceSize = (int64)pInImage->SizeY / 4 * OutStride;
 
 	uint8* pInTexels = reinterpret_cast<uint8*>(&pInImage->RawData[0]) + InSliceSize * SliceIndex;
 	uint8* pOutTexels = reinterpret_cast<uint8*>(&pOutImage->RawData[0]) + OutSliceSize * SliceIndex;
@@ -428,10 +428,10 @@ static void IntelASTCCompressScans(FASTCEncoderSettings* pEncSettings, FImage* p
 	check((yStart >= 0) && (yStart <= pInImage->SizeY));
 	check((yEnd   >= 0) && (yEnd   <= pInImage->SizeY));
 
-	const int InStride = pInImage->SizeX * 4;
-	const int OutStride = pInImage->SizeX / pEncSettings->block_width * BLOCK_SIZE_IN_BYTES;
-	const int InSliceSize = pInImage->SizeY * InStride;
-	const int OutSliceSize = pInImage->SizeY / pEncSettings->block_height * OutStride;
+	const int64 InStride = (int64)pInImage->SizeX * 4;
+	const int64 OutStride = (int64)pInImage->SizeX / pEncSettings->block_width * BLOCK_SIZE_IN_BYTES;
+	const int64 InSliceSize = (int64)pInImage->SizeY * InStride;
+	const int64 OutSliceSize = (int64)pInImage->SizeY / pEncSettings->block_height * OutStride;
 
 	uint8* pInTexels = reinterpret_cast<uint8*>(&pInImage->RawData[0]) + InSliceSize * SliceIndex;
 	uint8* pOutTexels = reinterpret_cast<uint8*>(&pOutImage->RawData[0]) + OutSliceSize * SliceIndex;
@@ -574,7 +574,7 @@ public:
 		const int AlignedSizeY = AlignArbitrary(InImage.SizeY, BlockHeight);
 		const int WidthInBlocks = AlignedSizeX / BlockWidth;
 		const int HeightInBlocks = AlignedSizeY / BlockHeight;
-		const int SizePerSlice = WidthInBlocks * HeightInBlocks * BLOCK_SIZE_IN_BYTES;
+		const int64 SizePerSlice = (int64)WidthInBlocks * HeightInBlocks * BLOCK_SIZE_IN_BYTES;
 		OutCompressedImage.RawData.AddUninitialized(SizePerSlice * InImage.NumSlices);
 		OutCompressedImage.SizeX = FMath::Max(AlignedSizeX, BlockWidth);
 		OutCompressedImage.SizeY = FMath::Max(AlignedSizeY, BlockHeight);
@@ -589,9 +589,9 @@ public:
 	{
 		const int AlignedSizeX = AlignArbitrary(InOutImage.SizeX, BlockWidth);
 		const int AlignedSizeY = AlignArbitrary(InOutImage.SizeY, BlockHeight);
-		const int AlignedSliceSize = AlignedSizeX * AlignedSizeY * BytesPerPixel;
-		const int AlignedTotalSize = AlignedSliceSize * InOutImage.NumSlices;
-		const int OriginalSliceSize = InOutImage.SizeX * InOutImage.SizeY * BytesPerPixel;
+		const int64 AlignedSliceSize = (int64)AlignedSizeX * AlignedSizeY * BytesPerPixel;
+		const int64 AlignedTotalSize = AlignedSliceSize * InOutImage.NumSlices;
+		const int64 OriginalSliceSize = (int64)InOutImage.SizeX * InOutImage.SizeY * BytesPerPixel;
 
 		// Early out if no padding is necessary
 		if (AlignedSizeX == InOutImage.SizeX && AlignedSizeY == InOutImage.SizeY)
@@ -601,7 +601,7 @@ public:
 
 		// Allocate temp buffer
 		//@TODO: Optimize away this temp buffer (could avoid last FMemory::Memcpy)
-		TArray<uint8> TempBuffer;
+		TArray64<uint8> TempBuffer;
 		TempBuffer.SetNumUninitialized(AlignedTotalSize);
 
 		const int PaddingX = AlignedSizeX - InOutImage.SizeX;
@@ -639,9 +639,7 @@ public:
 		}
 
 		// Replace InOutImage with the new data
-		InOutImage.RawData.Empty(AlignedTotalSize);
-		InOutImage.RawData.SetNumUninitialized(AlignedTotalSize);
-		FMemory::Memcpy(InOutImage.RawData.GetData(), TempBuffer.GetData(), AlignedTotalSize);
+		InOutImage.RawData = MoveTemp(TempBuffer);
 		InOutImage.SizeX = AlignedSizeX;
 		InOutImage.SizeY = AlignedSizeY;
 	}
@@ -654,9 +652,9 @@ public:
 	{
 		check(InOutImage.Format == ERawImageFormat::RGBA16F);
 
-		const int32 TexelNum = InOutImage.RawData.Num() / sizeof(FFloat16);
+		const int64 TexelNum = InOutImage.RawData.Num() / sizeof(FFloat16);
 		FFloat16* Data = reinterpret_cast<FFloat16*>(&InOutImage.RawData[0]);
-		for (int TexelIndex = 0; TexelIndex < TexelNum; ++TexelIndex)
+		for (int64 TexelIndex = 0; TexelIndex < TexelNum; ++TexelIndex)
 		{
 			// Flush negative values to 0, as those aren't supported by BC6H_UF16.
 			FFloat16& F16Value = Data[TexelIndex];
@@ -736,7 +734,18 @@ public:
 			bool bIsNormalMap = (BuildSettings.TextureFormatName == GTextureFormatNameASTC_NormalAG ||
 				BuildSettings.TextureFormatName == GTextureFormatNameASTC_NormalRG);
 
-			CompressedPixelFormat = GetQualityFormat( BlockWidth, BlockHeight, bIsNormalMap ? FORCED_NORMAL_MAP_COMPRESSION_SIZE_VALUE : BuildSettings.CompressionQuality );
+			if (BuildSettings.bVirtualStreamable)
+			{
+				// Always use 4x4 for streamable VT, to reduce texture format fragmentation
+				CompressedPixelFormat = PF_ASTC_4x4;
+				BlockWidth = 4;
+				BlockHeight = 4;
+			}
+			else
+			{
+				CompressedPixelFormat = GetQualityFormat( BlockWidth, BlockHeight, bIsNormalMap ? FORCED_NORMAL_MAP_COMPRESSION_SIZE_VALUE : BuildSettings.CompressionQuality );
+			}
+			check(CompressedPixelFormat == PF_ASTC_4x4 || !BuildSettings.bVirtualStreamable);
 
 			FASTCEncoderSettings EncoderSettings;
 			if (BuildSettings.TextureFormatName == GTextureFormatNameASTC_NormalAG)
@@ -744,24 +753,32 @@ public:
 				GetProfile_astc_alpha_fast(&EncoderSettings, BlockWidth, BlockHeight);
 				EncoderSettings.TextureFormatName = BuildSettings.TextureFormatName;
 				bCompressionSucceeded = true;
+				check(EncoderSettings.block_width!=0);
 			}
 			else if (BuildSettings.TextureFormatName == GTextureFormatNameASTC_NormalRG)
 			{
 				GetProfile_astc_fast(&EncoderSettings, BlockWidth, BlockHeight);
 				EncoderSettings.TextureFormatName = BuildSettings.TextureFormatName;
 				bCompressionSucceeded = true;
+				check(EncoderSettings.block_width!=0);
 			}
 			else if (bIsRGBColorASTC)
 			{
 				GetProfile_astc_fast(&EncoderSettings, BlockWidth, BlockHeight);
 				EncoderSettings.TextureFormatName = GTextureFormatNameASTC_RGB;
 				bCompressionSucceeded = true;
+				check(EncoderSettings.block_width!=0);
 			}
 			else if (bIsRGBAColorASTC)
 			{
 				GetProfile_astc_alpha_fast(&EncoderSettings, BlockWidth, BlockHeight);
 				EncoderSettings.TextureFormatName = GTextureFormatNameASTC_RGBA;
 				bCompressionSucceeded = true;
+				check(EncoderSettings.block_width!=0);
+			}
+			else
+			{
+				check(0);
 			}
 
 			if (bCompressionSucceeded)
@@ -822,7 +839,7 @@ public:
 /**
  * Module for DXT texture compression.
  */
-static ITextureFormat* Singleton = NULL;
+static ITextureFormat* Singleton = nullptr;
 
 class FTextureFormatIntelISPCTexCompModule : public ITextureFormatModule
 {
@@ -835,7 +852,7 @@ public:
 	virtual ~FTextureFormatIntelISPCTexCompModule()
 	{
 		delete Singleton;
-		Singleton = NULL;
+		Singleton = nullptr;
 
 		if ( mDllHandle != nullptr )
 		{
@@ -848,17 +865,29 @@ public:
 	{
 		if (!Singleton)
 		{
+			FString DLLPath;
 #if PLATFORM_WINDOWS
 	#if PLATFORM_64BITS
-			mDllHandle = FPlatformProcess::GetDllHandle(TEXT("../../../Engine/Binaries/ThirdParty/IntelISPCTexComp/Win64-Release/ispc_texcomp.dll"));
+			DLLPath = FPaths::EngineDir() / TEXT("Binaries/ThirdParty/IntelISPCTexComp/Win64-Release/ispc_texcomp.dll");
 	#else	//32-bit platform
-			mDllHandle = FPlatformProcess::GetDllHandle(TEXT("../../../Engine/Binaries/ThirdParty/IntelISPCTexComp/Win32-Release/ispc_texcomp.dll"));
+			DLLPath = FPaths::EngineDir() / TEXT("Binaries/ThirdParty/IntelISPCTexComp/Win32-Release/ispc_texcomp.dll");
 	#endif
 #elif PLATFORM_MAC
-			mDllHandle = FPlatformProcess::GetDllHandle(TEXT("libispc_texcomp.dylib"));
+			DLLPath = TEXT("libispc_texcomp.dylib");
 #elif PLATFORM_LINUX
-			mDllHandle = FPlatformProcess::GetDllHandle(TEXT("../../../Engine/Binaries/ThirdParty/IntelISPCTexComp/Linux64-Release/libispc_texcomp.so"));
+			DLLPath = FPaths::EngineDir() / TEXT("Binaries/ThirdParty/IntelISPCTexComp/Linux64-Release/libispc_texcomp.so");
 #endif
+
+			if (DLLPath.Len() > 0)
+			{
+				mDllHandle = FPlatformProcess::GetDllHandle(*DLLPath);
+				UE_CLOG(mDllHandle == nullptr, LogTextureFormatIntelISPCTexComp, Warning, TEXT("Unable to load %s"), *DLLPath);
+			}
+			else
+			{
+				UE_LOG(LogTextureFormatIntelISPCTexComp, Warning, TEXT("Platform does not have an ispc_texcomp DLL/library"));
+			}
+
 			Singleton = new FTextureFormatIntelISPCTexComp();
 		}
 		return Singleton;

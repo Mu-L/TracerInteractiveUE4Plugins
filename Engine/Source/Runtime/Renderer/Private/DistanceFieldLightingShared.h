@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	DistanceFieldLightingShared.h
@@ -29,6 +29,7 @@ DECLARE_LOG_CATEGORY_EXTERN(LogDistanceField, Warning, All);
 extern int32 GDistanceFieldAOTileSizeX;
 extern int32 GDistanceFieldAOTileSizeY;
 extern int32 GAverageObjectsPerShadowCullTile;
+extern int32 GAverageHeightFieldObjectsPerShadowCullTile;
 
 extern int32 GDistanceFieldGI;
 
@@ -43,7 +44,15 @@ extern bool IsDistanceFieldGIAllowed(const FViewInfo& View);
 extern bool UseDistanceFieldAO();
 extern bool UseAOObjectDistanceField();
 
-class FDistanceFieldObjectBuffers
+enum EDistanceFieldPrimitiveType
+{
+	DFPT_SignedDistanceField,
+	DFPT_HeightField,
+	DFPT_Num
+};
+
+template <EDistanceFieldPrimitiveType PrimitiveType>
+class TDistanceFieldObjectBuffers
 {
 public:
 
@@ -55,7 +64,7 @@ public:
 	FRWBuffer Bounds;
 	FRWBuffer Data;
 
-	FDistanceFieldObjectBuffers()
+	TDistanceFieldObjectBuffers()
 	{
 		MaxObjects = 0;
 	}
@@ -73,6 +82,9 @@ public:
 		return Bounds.NumBytes + Data.NumBytes;
 	}
 };
+
+class FDistanceFieldObjectBuffers : public TDistanceFieldObjectBuffers<DFPT_SignedDistanceField> {};
+class FHeightFieldObjectBuffers : public TDistanceFieldObjectBuffers<DFPT_HeightField> {};
 
 class FSurfelBuffers
 {
@@ -135,8 +147,10 @@ public:
 	FRWBuffer VPLFlux;
 };
 
-class FDistanceFieldObjectBufferParameters
+template <EDistanceFieldPrimitiveType PrimitiveType>
+class TDistanceFieldObjectBufferParameters
 {
+	DECLARE_INLINE_TYPE_LAYOUT(TDistanceFieldObjectBufferParameters, NonVirtual);
 public:
 	void Bind(const FShaderParameterMap& ParameterMap)
 	{
@@ -149,7 +163,16 @@ public:
 	}
 
 	template<typename TParamRef>
-	void Set(FRHICommandList& RHICmdList, const TParamRef& ShaderRHI, const FDistanceFieldObjectBuffers& ObjectBuffers, int32 NumObjectsValue, bool bBarrier = false)
+	void Set(
+		FRHICommandList& RHICmdList,
+		const TParamRef& ShaderRHI,
+		const TDistanceFieldObjectBuffers<PrimitiveType>& ObjectBuffers,
+		int32 NumObjectsValue,
+		FRHITexture* TextureAtlas,
+		int32 AtlasSizeX,
+		int32 AtlasSizeY,
+		int32 AtlasSizeZ,
+		bool bBarrier = false)
 	{
 		if (bBarrier)
 		{
@@ -169,18 +192,17 @@ public:
 			DistanceFieldTexture,
 			DistanceFieldSampler,
 			TStaticSamplerState<SF_Bilinear,AM_Clamp,AM_Clamp,AM_Clamp>::GetRHI(),
-			GDistanceFieldVolumeTextureAtlas.VolumeTextureRHI
-			);
+			TextureAtlas);
 
-		const int32 NumTexelsOneDimX = GDistanceFieldVolumeTextureAtlas.GetSizeX();
-		const int32 NumTexelsOneDimY = GDistanceFieldVolumeTextureAtlas.GetSizeY();
-		const int32 NumTexelsOneDimZ = GDistanceFieldVolumeTextureAtlas.GetSizeZ();
+		const int32 NumTexelsOneDimX = AtlasSizeX;
+		const int32 NumTexelsOneDimY = AtlasSizeY;
+		const int32 NumTexelsOneDimZ = AtlasSizeZ;
 		const FVector InvTextureDim(1.0f / NumTexelsOneDimX, 1.0f / NumTexelsOneDimY, 1.0f / NumTexelsOneDimZ);
 		SetShaderValue(RHICmdList, ShaderRHI, DistanceFieldAtlasTexelSize, InvTextureDim);
 	}
 
 	template<typename TParamRef>
-	void UnsetParameters(FRHICommandList& RHICmdList, const TParamRef& ShaderRHI, const FDistanceFieldObjectBuffers& ObjectBuffers, bool bBarrier = false)
+	void UnsetParameters(FRHICommandList& RHICmdList, const TParamRef& ShaderRHI, const TDistanceFieldObjectBuffers<PrimitiveType>& ObjectBuffers, bool bBarrier = false)
 	{
 		SceneObjectBounds.UnsetUAV(RHICmdList, ShaderRHI);
 		SceneObjectData.UnsetUAV(RHICmdList, ShaderRHI);
@@ -194,7 +216,7 @@ public:
 		}
 	}
 
-	friend FArchive& operator<<(FArchive& Ar, FDistanceFieldObjectBufferParameters& P)
+	friend FArchive& operator<<(FArchive& Ar, TDistanceFieldObjectBufferParameters& P)
 	{
 		Ar << P.SceneObjectBounds << P.SceneObjectData << P.NumSceneObjects << P.DistanceFieldTexture << P.DistanceFieldSampler << P.DistanceFieldAtlasTexelSize;
 		return Ar;
@@ -206,16 +228,18 @@ public:
 	}
 
 private:
-	FRWShaderParameter SceneObjectBounds;
-	FRWShaderParameter SceneObjectData;
-	FShaderParameter NumSceneObjects;
-	FShaderResourceParameter DistanceFieldTexture;
-	FShaderResourceParameter DistanceFieldSampler;
-	FShaderParameter DistanceFieldAtlasTexelSize;
+	
+	LAYOUT_FIELD(FRWShaderParameter, SceneObjectBounds)
+	LAYOUT_FIELD(FRWShaderParameter, SceneObjectData)
+	LAYOUT_FIELD(FShaderParameter, NumSceneObjects)
+	LAYOUT_FIELD(FShaderResourceParameter, DistanceFieldTexture)
+	LAYOUT_FIELD(FShaderResourceParameter, DistanceFieldSampler)
+	LAYOUT_FIELD(FShaderParameter, DistanceFieldAtlasTexelSize)
 };
 
 class FSurfelBufferParameters
 {
+	DECLARE_TYPE_LAYOUT(FSurfelBufferParameters, NonVirtual);
 public:
 	void Bind(const FShaderParameterMap& ParameterMap)
 	{
@@ -247,12 +271,15 @@ public:
 	}
 
 private:
-	FRWShaderParameter InterpolatedVertexData;
-	FRWShaderParameter SurfelData;
-	FRWShaderParameter VPLFlux;
+	
+		LAYOUT_FIELD(FRWShaderParameter, InterpolatedVertexData)
+		LAYOUT_FIELD(FRWShaderParameter, SurfelData)
+		LAYOUT_FIELD(FRWShaderParameter, VPLFlux)
+	
 };
 
-class FDistanceFieldCulledObjectBuffers
+template <EDistanceFieldPrimitiveType PrimitiveType>
+class TDistanceFieldCulledObjectBuffers
 {
 public:
 
@@ -268,7 +295,7 @@ public:
 	FRWBufferStructured Data;
 	FRWBufferStructured BoxBounds;
 
-	FDistanceFieldCulledObjectBuffers()
+	TDistanceFieldCulledObjectBuffers()
 	{
 		MaxObjects = 0;
 		bWantBoxBounds = false;
@@ -278,16 +305,43 @@ public:
 	{
 		if (MaxObjects > 0)
 		{
+			const TCHAR* ObjectIndirectArgumentsDebugName;
+			const TCHAR* ObjectIndirectDispatchDebugName;
+			const TCHAR* BoundsDebugName;
+			const TCHAR* DataDebugName;
+			const TCHAR* BoxBoundsDebugName;
+			uint32 BoundsNumElements;
+
+			if (PrimitiveType == DFPT_HeightField)
+			{
+				ObjectIndirectArgumentsDebugName = TEXT("FHeightFieldCulledObjectBuffers_ObjectIndirectArguments");
+				ObjectIndirectDispatchDebugName = TEXT("FHeightFieldCulledObjectBuffers_ObjectIndirectDispatch");
+				BoundsDebugName = TEXT("FHeightFieldCulledObjectBuffers_Bounds");
+				DataDebugName = TEXT("FHeightFieldCulledObjectBuffers_Data");
+				BoxBoundsDebugName = TEXT("FHeightFieldCulledObjectBuffers_BoxBounds");
+				BoundsNumElements = MaxObjects * 2;
+			}
+			else
+			{
+				check(PrimitiveType == DFPT_SignedDistanceField);
+				ObjectIndirectArgumentsDebugName = TEXT("FDistanceFieldCulledObjectBuffers_ObjectIndirectArguments");
+				ObjectIndirectDispatchDebugName = TEXT("FDistanceFieldCulledObjectBuffers_ObjectIndirectDispatch");
+				BoundsDebugName = TEXT("FDistanceFieldCulledObjectBuffers_Bounds");
+				DataDebugName = TEXT("FDistanceFieldCulledObjectBuffers_Data");
+				BoxBoundsDebugName = TEXT("FDistanceFieldCulledObjectBuffers_BoxBounds");
+				BoundsNumElements = MaxObjects;
+			}
+
 			const uint32 FastVRamFlag = GFastVRamConfig.DistanceFieldCulledObjectBuffers | ( IsTransientResourceBufferAliasingEnabled() ? BUF_Transient : BUF_None );
 
-			ObjectIndirectArguments.Initialize(sizeof(uint32), 5, PF_R32_UINT, BUF_Static | BUF_DrawIndirect, TEXT("FDistanceFieldCulledObjectBuffers::ObjectIndirectArguments"));
-			ObjectIndirectDispatch.Initialize(sizeof(uint32), 3, PF_R32_UINT, BUF_Static | BUF_DrawIndirect, TEXT("FDistanceFieldCulledObjectBuffers::ObjectIndirectDispatch"));
-			Bounds.Initialize(sizeof(FVector4), MaxObjects, BUF_Static | FastVRamFlag, TEXT("FDistanceFieldCulledObjectBuffers::Bounds"));
-			Data.Initialize(sizeof(FVector4), MaxObjects * ObjectDataStride, BUF_Static | FastVRamFlag, TEXT("FDistanceFieldCulledObjectBuffers::Data"));
+			ObjectIndirectArguments.Initialize(sizeof(uint32), 5, PF_R32_UINT, BUF_Static | BUF_DrawIndirect, ObjectIndirectArgumentsDebugName);
+			ObjectIndirectDispatch.Initialize(sizeof(uint32), 3, PF_R32_UINT, BUF_Static | BUF_DrawIndirect, ObjectIndirectDispatchDebugName);
+			Bounds.Initialize(sizeof(FVector4), BoundsNumElements, BUF_Static | FastVRamFlag, BoundsDebugName);
+			Data.Initialize(sizeof(FVector4), MaxObjects * ObjectDataStride, BUF_Static | FastVRamFlag, DataDebugName);
 
 			if (bWantBoxBounds)
 			{
-				BoxBounds.Initialize(sizeof(FVector4), MaxObjects * ObjectBoxBoundsStride, BUF_Static | FastVRamFlag, TEXT("FDistanceFieldCulledObjectBuffers::BoxBounds"));
+				BoxBounds.Initialize(sizeof(FVector4), MaxObjects * ObjectBoxBoundsStride, BUF_Static | FastVRamFlag, BoxBoundsDebugName);
 			}
 		}
 	}
@@ -327,10 +381,14 @@ public:
 	}
 };
 
-class FDistanceFieldObjectBufferResource : public FRenderResource
+class FDistanceFieldCulledObjectBuffers : public TDistanceFieldCulledObjectBuffers<DFPT_SignedDistanceField> {};
+class FHeightFieldCulledObjectBuffers : public TDistanceFieldCulledObjectBuffers<DFPT_HeightField> {};
+
+template <EDistanceFieldPrimitiveType PrimitiveType>
+class TDistanceFieldObjectBufferResource : public FRenderResource
 {
 public:
-	FDistanceFieldCulledObjectBuffers Buffers;
+	typename TChooseClass<PrimitiveType == DFPT_HeightField, FHeightFieldCulledObjectBuffers, FDistanceFieldCulledObjectBuffers>::Result Buffers;
 
 	virtual void InitDynamicRHI()  override
 	{
@@ -343,8 +401,13 @@ public:
 	}
 };
 
-class FDistanceFieldCulledObjectBufferParameters
+class FDistanceFieldObjectBufferResource : public TDistanceFieldObjectBufferResource<DFPT_SignedDistanceField> {};
+class FHeightFieldObjectBufferResource : public TDistanceFieldObjectBufferResource<DFPT_HeightField> {};
+
+template <EDistanceFieldPrimitiveType PrimitiveType>
+class TDistanceFieldCulledObjectBufferParameters
 {
+	DECLARE_INLINE_TYPE_LAYOUT(TDistanceFieldCulledObjectBufferParameters, NonVirtual);
 public:
 	void Bind(const FShaderParameterMap& ParameterMap)
 	{
@@ -352,13 +415,20 @@ public:
 		CulledObjectBounds.Bind(ParameterMap, TEXT("CulledObjectBounds"));
 		CulledObjectData.Bind(ParameterMap, TEXT("CulledObjectData"));
 		CulledObjectBoxBounds.Bind(ParameterMap, TEXT("CulledObjectBoxBounds"));
+		HFVisibilityTexture.Bind(ParameterMap, TEXT("HFVisibilityTexture"));
 		DistanceFieldTexture.Bind(ParameterMap, TEXT("DistanceFieldTexture"));
 		DistanceFieldSampler.Bind(ParameterMap, TEXT("DistanceFieldSampler"));
 		DistanceFieldAtlasTexelSize.Bind(ParameterMap, TEXT("DistanceFieldAtlasTexelSize"));
 	}
 
 	template<typename TShaderRHI, typename TRHICommandList>
-	void Set(TRHICommandList& RHICmdList, TShaderRHI* ShaderRHI, const FDistanceFieldCulledObjectBuffers& ObjectBuffers)
+	void Set(
+		TRHICommandList& RHICmdList,
+		TShaderRHI* ShaderRHI,
+		const TDistanceFieldCulledObjectBuffers<PrimitiveType>& ObjectBuffers,
+		FRHITexture* TextureAtlas,
+		const FIntVector& AtlasSizes,
+		FRHITexture* HFVisibilityAtlas = nullptr)
 	{
 		ObjectIndirectArguments.SetBuffer(RHICmdList, ShaderRHI, ObjectBuffers.ObjectIndirectArguments);
 		CulledObjectBounds.SetBuffer(RHICmdList, ShaderRHI, ObjectBuffers.Bounds);
@@ -376,12 +446,18 @@ public:
 			DistanceFieldTexture,
 			DistanceFieldSampler,
 			TStaticSamplerState<SF_Bilinear,AM_Clamp,AM_Clamp,AM_Clamp>::GetRHI(),
-			GDistanceFieldVolumeTextureAtlas.VolumeTextureRHI
+			TextureAtlas
 			);
 
-		const int32 NumTexelsOneDimX = GDistanceFieldVolumeTextureAtlas.GetSizeX();
-		const int32 NumTexelsOneDimY = GDistanceFieldVolumeTextureAtlas.GetSizeY();
-		const int32 NumTexelsOneDimZ = GDistanceFieldVolumeTextureAtlas.GetSizeZ();
+		if (HFVisibilityTexture.IsBound())
+		{
+			check(HFVisibilityAtlas);
+			SetTextureParameter(RHICmdList, ShaderRHI, HFVisibilityTexture, HFVisibilityAtlas);
+		}
+
+		const int32 NumTexelsOneDimX = AtlasSizes.X;
+		const int32 NumTexelsOneDimY = AtlasSizes.Y;
+		const int32 NumTexelsOneDimZ = AtlasSizes.Z;
 		const FVector InvTextureDim(1.0f / NumTexelsOneDimX, 1.0f / NumTexelsOneDimY, 1.0f / NumTexelsOneDimZ);
 		SetShaderValue(RHICmdList, ShaderRHI, DistanceFieldAtlasTexelSize, InvTextureDim);
 	}
@@ -395,7 +471,7 @@ public:
 		CulledObjectBoxBounds.UnsetUAV(RHICmdList, ShaderRHI);
 	}
 
-	void GetUAVs(const FDistanceFieldCulledObjectBuffers& ObjectBuffers, TArray<FRHIUnorderedAccessView*>& UAVs)
+	void GetUAVs(const TDistanceFieldCulledObjectBuffers<PrimitiveType>& ObjectBuffers, TArray<FRHIUnorderedAccessView*>& UAVs)
 	{
 		uint32 MaxIndex = 0;
 		MaxIndex = FMath::Max(MaxIndex, ObjectIndirectArguments.GetUAVIndex());
@@ -428,20 +504,29 @@ public:
 		check(UAVs.Num() > 0);
 	}
 
-	friend FArchive& operator<<(FArchive& Ar, FDistanceFieldCulledObjectBufferParameters& P)
+	friend FArchive& operator<<(FArchive& Ar, TDistanceFieldCulledObjectBufferParameters<PrimitiveType>& P)
 	{
-		Ar << P.ObjectIndirectArguments << P.CulledObjectBounds << P.CulledObjectData << P.CulledObjectBoxBounds << P.DistanceFieldTexture << P.DistanceFieldSampler << P.DistanceFieldAtlasTexelSize;
+		Ar << P.ObjectIndirectArguments;
+		Ar << P.CulledObjectBounds;
+		Ar << P.CulledObjectData;
+		Ar << P.CulledObjectBoxBounds;
+		Ar << P.HFVisibilityTexture;
+		Ar << P.DistanceFieldTexture;
+		Ar << P.DistanceFieldSampler;
+		Ar << P.DistanceFieldAtlasTexelSize;
 		return Ar;
 	}
 
 private:
-	FRWShaderParameter ObjectIndirectArguments;
-	FRWShaderParameter CulledObjectBounds;
-	FRWShaderParameter CulledObjectData;
-	FRWShaderParameter CulledObjectBoxBounds;
-	FShaderResourceParameter DistanceFieldTexture;
-	FShaderResourceParameter DistanceFieldSampler;
-	FShaderParameter DistanceFieldAtlasTexelSize;
+	
+	LAYOUT_FIELD(FRWShaderParameter, ObjectIndirectArguments)
+	LAYOUT_FIELD(FRWShaderParameter, CulledObjectBounds)
+	LAYOUT_FIELD(FRWShaderParameter, CulledObjectData)
+	LAYOUT_FIELD(FRWShaderParameter, CulledObjectBoxBounds)
+	LAYOUT_FIELD(FShaderResourceParameter, HFVisibilityTexture);
+	LAYOUT_FIELD(FShaderResourceParameter, DistanceFieldTexture)
+	LAYOUT_FIELD(FShaderResourceParameter, DistanceFieldSampler)
+	LAYOUT_FIELD(FShaderParameter, DistanceFieldAtlasTexelSize)
 };
 
 class FCPUUpdatedBuffer
@@ -495,18 +580,22 @@ class FLightTileIntersectionResources
 {
 public:
 
-	FLightTileIntersectionResources() :
-		b16BitIndices(false)
+	FLightTileIntersectionResources() 
+		: TileDimensions(FIntPoint::ZeroValue)
+		, TileAlignedDimensions(FIntPoint::ZeroValue)
+		, b16BitIndices(false)
 	{}
 
-	void Initialize()
+	void Initialize(int32 MaxNumObjectsPerTile)
 	{
-		TileNumCulledObjects.Initialize(sizeof(uint32), TileDimensions.X * TileDimensions.Y, PF_R32_UINT, BUF_Static);
-		NextStartOffset.Initialize(sizeof(uint32), 1, PF_R32_UINT, BUF_Static);
-		TileStartOffsets.Initialize(sizeof(uint32), TileDimensions.X * TileDimensions.Y, PF_R32_UINT, BUF_Static);
+		TileAlignedDimensions = FIntPoint(Align(TileDimensions.X, 64), Align(TileDimensions.Y, 64));
+			
+		TileNumCulledObjects.Initialize(sizeof(uint32), TileAlignedDimensions.X * TileAlignedDimensions.Y, PF_R32_UINT, BUF_Static, TEXT("FLightTileIntersectionResources::TileNumCulledObjects"));
+		TileStartOffsets.Initialize(sizeof(uint32), TileAlignedDimensions.X * TileAlignedDimensions.Y, PF_R32_UINT, BUF_Static, TEXT("FLightTileIntersectionResources::TileStartOffsets"));
+		NextStartOffset.Initialize(sizeof(uint32), 1, PF_R32_UINT, BUF_Static, TEXT("FLightTileIntersectionResources::NextStartOffset"));
 
 		//@todo - handle max exceeded
-		TileArrayData.Initialize(b16BitIndices ? sizeof(uint16) : sizeof(uint32), GAverageObjectsPerShadowCullTile * TileDimensions.X * TileDimensions.Y * LightTileDataStride, b16BitIndices ? PF_R16_UINT : PF_R32_UINT, BUF_Static);
+		TileArrayData.Initialize(b16BitIndices ? sizeof(uint16) : sizeof(uint32), MaxNumObjectsPerTile * TileAlignedDimensions.X * TileAlignedDimensions.Y * LightTileDataStride, b16BitIndices ? PF_R16_UINT : PF_R32_UINT, BUF_Static, TEXT("FLightTileIntersectionResources::TileArrayData"));
 	}
 
 	void Release()
@@ -522,7 +611,18 @@ public:
 		return TileNumCulledObjects.NumBytes + NextStartOffset.NumBytes + TileStartOffsets.NumBytes + TileArrayData.NumBytes;
 	}
 
+	FIntPoint GetTileAlignedDimensions() const 
+	{
+		return TileAlignedDimensions;
+	}
+	
+	static FIntPoint GetAlignedDimensions(FIntPoint InTileDimensions)
+	{
+		return FIntPoint(Align(InTileDimensions.X, 64), Align(InTileDimensions.Y, 64));
+	}
+
 	FIntPoint TileDimensions;
+	FIntPoint TileAlignedDimensions;
 
 	FRWBuffer TileNumCulledObjects;
 	FRWBuffer NextStartOffset;
@@ -533,6 +633,7 @@ public:
 
 class FLightTileIntersectionParameters
 {
+	DECLARE_TYPE_LAYOUT(FLightTileIntersectionParameters, NonVirtual);
 public:
 
 	static void ModifyCompilationEnvironment(EShaderPlatform Platform, FShaderCompilerEnvironment& OutEnvironment)
@@ -621,12 +722,14 @@ public:
 	}
 
 private:
-	FRWShaderParameter ShadowTileNumCulledObjects;
-	FRWShaderParameter ShadowTileStartOffsets;
-	FRWShaderParameter NextStartOffset;
-	FRWShaderParameter ShadowTileArrayData;
-	FShaderParameter ShadowTileListGroupSize;
-	FShaderParameter ShadowAverageObjectsPerTile;
+	
+		LAYOUT_FIELD(FRWShaderParameter, ShadowTileNumCulledObjects)
+		LAYOUT_FIELD(FRWShaderParameter, ShadowTileStartOffsets)
+		LAYOUT_FIELD(FRWShaderParameter, NextStartOffset)
+		LAYOUT_FIELD(FRWShaderParameter, ShadowTileArrayData)
+		LAYOUT_FIELD(FShaderParameter, ShadowTileListGroupSize)
+		LAYOUT_FIELD(FShaderParameter, ShadowAverageObjectsPerTile)
+	
 };
 
 extern void CullDistanceFieldObjectsForLight(
@@ -636,6 +739,17 @@ extern void CullDistanceFieldObjectsForLight(
 	const FMatrix& WorldToShadowValue, 
 	int32 NumPlanes, 
 	const FPlane* PlaneData, 
+	const FVector4& ShadowBoundingSphereValue,
+	float ShadowBoundingRadius,
+	TUniquePtr<class FLightTileIntersectionResources>& TileIntersectionResources);
+
+extern void CullHeightFieldObjectsForLight(
+	FRHICommandListImmediate& RHICmdList,
+	const FViewInfo& View,
+	const FLightSceneProxy* LightSceneProxy,
+	const FMatrix& WorldToShadowValue,
+	int32 NumPlanes,
+	const FPlane* PlaneData,
 	const FVector4& ShadowBoundingSphereValue,
 	float ShadowBoundingRadius,
 	TUniquePtr<class FLightTileIntersectionResources>& TileIntersectionResources);
@@ -727,3 +841,25 @@ public:
 extern TGlobalResource<FDistanceFieldObjectBufferResource> GAOCulledObjectBuffers;
 
 extern bool SupportsDistanceFieldAO(ERHIFeatureLevel::Type FeatureLevel, EShaderPlatform ShaderPlatform);
+
+template <bool bIsAType> struct TSelector {};
+
+template <>
+struct TSelector<true>
+{
+	template <typename AType, typename BType>
+	AType& operator()(AType& A, BType& B)
+	{
+		return A;
+	}
+};
+
+template <>
+struct TSelector<false>
+{
+	template <typename AType, typename BType>
+	BType& operator()(AType& A, BType& B)
+	{
+		return B;
+	}
+};

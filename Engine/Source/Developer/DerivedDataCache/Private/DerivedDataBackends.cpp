@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "HAL/PlatformFilemanager.h"
@@ -62,8 +62,8 @@ public:
 		RootCache = NULL;
 		TMap<FString, FDerivedDataBackendInterface*> ParsedNodes;		
 
-		// Create the graph using ini settings
-		if( FParse::Value( FCommandLine::Get(), TEXT("-DDC="), GraphName ) )
+		// Create the graph using ini settings. The string "default" forwards creation to use the default graph.
+		if( FParse::Value( FCommandLine::Get(), TEXT("-DDC="), GraphName ) && FCString::Stricmp(*GraphName, TEXT("default")) != 0 )
 		{
 			if( GraphName.Len() > 0 )
 			{
@@ -75,7 +75,7 @@ public:
 				// Remove references to any backend instances that might have been created
 				ParsedNodes.Empty();
 				DestroyCreatedBackends();
-				UE_LOG( LogDerivedDataCache, Warning, TEXT("FDerivedDataBackendGraph:  Unable to create backend graph using the specified graph settings (%s). Reverting to default."), *GraphName );
+				UE_LOG( LogDerivedDataCache, Warning, TEXT("FDerivedDataBackendGraph: Unable to create backend graph using the specified graph settings (\"%s\"). Reverting to the default graph."), *GraphName );
 			}
 		}
 
@@ -89,8 +89,12 @@ public:
 				UE_LOG( LogDerivedDataCache, Fatal, TEXT("Unable to create backend graph using the default graph settings (%s) ini=%s."), *GraphName, *GEngineIni );
 			}
 			RootCache = ParseNode( TEXT("Root"), GEngineIni, *GraphName, ParsedNodes );
+			if (!RootCache)
+			{
+				UE_LOG(LogDerivedDataCache, Fatal, TEXT("Unable to create backend graph using the default graph settings (%s) ini=%s. ")
+					TEXT("At least one backend in the graph must be available."), *GraphName, *GEngineIni);
+			}
 		}
-		check(RootCache);
 
 		// Make sure AsyncPutWrapper and KeyLengthWrapper are created
 		if( !AsyncPutWrapper )
@@ -628,7 +632,7 @@ public:
 			MaxCacheSize = FMath::Min(MaxCacheSize, MaxSupportedCacheSize);
 
 			UE_LOG( LogDerivedDataCache, Display, TEXT("Max Cache Size: %d MB"), MaxCacheSize);
-			Cache = new FMemoryDerivedDataBackend(MaxCacheSize * 1024 * 1024);
+			Cache = new FMemoryDerivedDataBackend(TEXT("Boot"), MaxCacheSize * 1024 * 1024);
 
 			if( Cache && Filename.Len() )
 			{
@@ -671,7 +675,7 @@ public:
 		FString Filename;
 
 		FParse::Value( Entry, TEXT("Filename="), Filename );
-		Cache = new FMemoryDerivedDataBackend;
+		Cache = new FMemoryDerivedDataBackend(NodeName);
 		if( Cache && Filename.Len() )
 		{
 			if( Cache->LoadCache( *Filename ) )

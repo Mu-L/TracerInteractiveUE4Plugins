@@ -1,7 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Stack/SNiagaraStackFunctionInputValue.h"
 #include "ViewModels/Stack/NiagaraStackFunctionInput.h"
+#include "ViewModels/NiagaraScratchPadViewModel.h"
+#include "ViewModels/NiagaraScratchPadScriptViewModel.h"
 #include "NiagaraEditorModule.h"
 #include "INiagaraEditorTypeUtilities.h"
 #include "NiagaraEditorUtilities.h"
@@ -28,20 +30,23 @@
 #include "NiagaraParameterCollection.h"
 #include "ViewModels/NiagaraSystemViewModel.h"
 #include "NiagaraSystem.h"
+#include "SNiagaraGraphActionWidget.h"
 #include "Subsystems/AssetEditorSubsystem.h"
+#include "EditorFontGlyphs.h"
+#include "Widgets/SNiagaraLibraryOnlyToggleHeader.h"
+#include "Widgets/SNiagaraParameterName.h"
+#include "NiagaraEditorSettings.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraStackFunctionInputValue"
 
 const float TextIconSize = 16;
 
-bool SNiagaraStackFunctionInputValue::bIncludeNonLibraryInputs = false;
+bool SNiagaraStackFunctionInputValue::bLibraryOnly = true;
 
 void SNiagaraStackFunctionInputValue::Construct(const FArguments& InArgs, UNiagaraStackFunctionInput* InFunctionInput)
 {
 	FunctionInput = InFunctionInput;
-
 	FunctionInput->OnValueChanged().AddSP(this, &SNiagaraStackFunctionInputValue::OnInputValueChanged);
-	DisplayedLocalValueStruct = FunctionInput->GetLocalValueStruct();
 
 	FMargin ItemPadding = FMargin(0);
 	ChildSlot
@@ -78,96 +83,13 @@ void SNiagaraStackFunctionInputValue::Construct(const FArguments& InArgs, UNiaga
 				]
 			]
 			+ SHorizontalBox::Slot()
+			.VAlign(VAlign_Center)
 			[
-				// TODO Don't generate all of these widgets for every input, only generate the ones that are used based on the value type.
-
-				// Local struct
-				SNew(SOverlay)
-				+ SOverlay::Slot()
+				// Value container and widgets.
+				SAssignNew(ValueContainer, SBox)
+				.ToolTipText_UObject(FunctionInput, &UNiagaraStackFunctionInput::GetValueToolTip)
 				[
-					SAssignNew(LocalValueStructContainer, SBox)
-					.Visibility(this, &SNiagaraStackFunctionInputValue::GetValueWidgetVisibility, UNiagaraStackFunctionInput::EValueMode::Local)
-					[
-						ConstructLocalValueStructWidget()
-					]
-				]
-
-				// Linked handle
-				+ SOverlay::Slot()
-				.Padding(0.0f, 0.0f, 0.0f, 2.0f)
-				[
-					SNew(SBox)
-					.Visibility(this, &SNiagaraStackFunctionInputValue::GetValueWidgetVisibility, UNiagaraStackFunctionInput::EValueMode::Linked)
-					.ToolTipText_UObject(InFunctionInput, &UNiagaraStackFunctionInput::GetTooltipText, UNiagaraStackFunctionInput::EValueMode::Linked)
-					.VAlign(VAlign_Center)
-					[
-						SNew(STextBlock)
-						.TextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.ParameterText")
-						.Text(this, &SNiagaraStackFunctionInputValue::GetLinkedValueHandleText)
-						.OnDoubleClicked(this, &SNiagaraStackFunctionInputValue::OnLinkedInputDoubleClicked)
-					]
-				]
-
-				// Data Object
-				+ SOverlay::Slot()
-				.Padding(0.0f, 0.0f, 0.0f, 2.0f)
-				[
-					SNew(SBox)
-					.Visibility(this, &SNiagaraStackFunctionInputValue::GetValueWidgetVisibility, UNiagaraStackFunctionInput::EValueMode::Data)
-					.VAlign(VAlign_Center)
-					[
-						SNew(STextBlock)
-						.TextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.ParameterText")
-						.Text(this, &SNiagaraStackFunctionInputValue::GetDataValueText)
-					]
-				]
-
-				// Dynamic input name
-				+ SOverlay::Slot()
-				[
-					SNew(SBox)
-					.Visibility(this, &SNiagaraStackFunctionInputValue::GetValueWidgetVisibility, UNiagaraStackFunctionInput::EValueMode::Dynamic)
-					.VAlign(VAlign_Center)
-					[
-						SNew(STextBlock)
-						.TextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.ParameterText")
-						.Text(this, &SNiagaraStackFunctionInputValue::GetDynamicValueText)
-						.OnDoubleClicked(this, &SNiagaraStackFunctionInputValue::DynamicInputTextDoubleClicked)
-					]
-				]
-
-				// Expression input
-				+ SOverlay::Slot()
-				[
-					SNew(SBox)
-					.Visibility(this, &SNiagaraStackFunctionInputValue::GetValueWidgetVisibility, UNiagaraStackFunctionInput::EValueMode::Expression)
-					.VAlign(VAlign_Center)
-					[
-						//SNew(SInlineEditableTextBlock)
-						//.Style(FNiagaraEditorStyle::Get(), "NiagaraEditor.ParameterInlineEditableText")
-						//.Text(this, &SNiagaraStackFunctionInputValue::GetExpressionValueText)
-						//.OnTextCommitted(this, &SNiagaraStackFunctionInputValue::OnExpressionTextCommitted)
-						// SNew(SMultiLineEditableTextBox)
-						//.AutoWrapText(false)
-						SNew(SEditableTextBox)
-						.IsReadOnly(false)
-						.Text(this, &SNiagaraStackFunctionInputValue::GetExpressionValueText)
-						.OnTextCommitted(this, &SNiagaraStackFunctionInputValue::OnExpressionTextCommitted)
-					]
-				]
-
-				// Invalid input
-				+ SOverlay::Slot()
-				[
-					SNew(SBox)
-					.Visibility(this, &SNiagaraStackFunctionInputValue::GetValueWidgetVisibility, UNiagaraStackFunctionInput::EValueMode::Invalid)
-					.VAlign(VAlign_Center)
-					[
-						SNew(STextBlock)
-						.TextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.ParameterText")
-						.Text(this, &SNiagaraStackFunctionInputValue::GetInvalidValueText)
-						.ToolTipText(this, &SNiagaraStackFunctionInputValue::GetInvalidValueToolTipText)
-					]
+					ConstructValueWidgets()
 				]
 			]
 
@@ -230,6 +152,8 @@ void SNiagaraStackFunctionInputValue::Construct(const FArguments& InArgs, UNiaga
 			]
 		]
 	];
+
+	ValueModeForGeneratedWidgets = FunctionInput->GetValueMode();
 }
 
 void SNiagaraStackFunctionInputValue::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
@@ -241,20 +165,108 @@ void SNiagaraStackFunctionInputValue::Tick(const FGeometry& AllottedGeometry, co
 	}
 }
 
+TSharedRef<SWidget> SNiagaraStackFunctionInputValue::ConstructValueWidgets()
+{
+	DisplayedLocalValueStruct.Reset();
+	LocalValueStructParameterEditor.Reset();
+	LocalValueStructDetailsView.Reset();
+
+	switch (FunctionInput->GetValueMode())
+	{
+	case UNiagaraStackFunctionInput::EValueMode::Local:
+	{
+		return ConstructLocalValueStructWidget();
+	}
+	case UNiagaraStackFunctionInput::EValueMode::Linked:
+	{
+		return SNew(SNiagaraParameterName)
+			.ReadOnlyTextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.ParameterText")
+			.ParameterName(this, &SNiagaraStackFunctionInputValue::GetLinkedValueHandleName)
+			.OnDoubleClicked(this, &SNiagaraStackFunctionInputValue::OnLinkedInputDoubleClicked);
+	}
+	case UNiagaraStackFunctionInput::EValueMode::Data:
+	{
+		return SNew(STextBlock)
+			.TextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.ParameterText")
+			.Text(this, &SNiagaraStackFunctionInputValue::GetDataValueText);
+	}
+	case UNiagaraStackFunctionInput::EValueMode::Dynamic:
+	{
+		TSharedRef<SWidget> DynamicInputText = SNew(STextBlock)
+			.TextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.ParameterText")
+			.Text(this, &SNiagaraStackFunctionInputValue::GetDynamicValueText)
+			.OnDoubleClicked(this, &SNiagaraStackFunctionInputValue::DynamicInputTextDoubleClicked);
+		if (FunctionInput->IsScratchDynamicInput())
+		{
+			return SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.VAlign(VAlign_Center)
+				[
+					DynamicInputText
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(SButton)
+					.ButtonStyle(FEditorStyle::Get(), "RoundButton")
+					.OnClicked(this, &SNiagaraStackFunctionInputValue::ScratchButtonPressed)
+					.ToolTipText(LOCTEXT("OpenInScratchToolTip", "Open this dynamic input in the scratch pad."))
+					.ContentPadding(FMargin(1.0f, 0.0f))
+					.Content()
+					[
+						SNew(SImage)
+						.Image(FNiagaraEditorStyle::Get().GetBrush("NiagaraEditor.Scratch"))
+					]
+				];
+		}
+		else
+		{
+			return DynamicInputText;
+		}
+	}
+	case UNiagaraStackFunctionInput::EValueMode::DefaultFunction:
+	{
+		return SNew(STextBlock)
+			.TextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.ParameterText")
+			.Text(this, &SNiagaraStackFunctionInputValue::GetDefaultFunctionText);
+	}
+	case UNiagaraStackFunctionInput::EValueMode::Expression:
+	{
+		return SNew(SEditableTextBox)
+			.IsReadOnly(false)
+			.Text_UObject(FunctionInput, &UNiagaraStackFunctionInput::GetCustomExpressionText)
+			.OnTextCommitted(this, &SNiagaraStackFunctionInputValue::OnExpressionTextCommitted);
+	}
+	case UNiagaraStackFunctionInput::EValueMode::InvalidOverride:
+	{
+		return SNew(STextBlock)
+			.TextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.ParameterText")
+			.Text(LOCTEXT("InvalidOverrideText", "Invalid Script Value"));
+	}
+	case UNiagaraStackFunctionInput::EValueMode::UnsupportedDefault:
+	{
+		return SNew(STextBlock)
+			.TextStyle(FNiagaraEditorStyle::Get(), "NiagaraEditor.ParameterText")
+			.Text(LOCTEXT("UnsupportedDefault", "Custom Default"));
+	}
+	default:
+		return SNullWidget::NullWidget;
+	}
+}
+
+
 bool SNiagaraStackFunctionInputValue::GetInputEnabled() const
 {
 	return FunctionInput->GetHasEditCondition() == false || FunctionInput->GetEditConditionEnabled();
-}
-
-EVisibility SNiagaraStackFunctionInputValue::GetValueWidgetVisibility(UNiagaraStackFunctionInput::EValueMode ValidMode) const
-{
-	return FunctionInput->GetValueMode() == ValidMode ? EVisibility::Visible : EVisibility::Collapsed;
 }
 
 TSharedRef<SWidget> SNiagaraStackFunctionInputValue::ConstructLocalValueStructWidget()
 {
 	LocalValueStructParameterEditor.Reset();
 	LocalValueStructDetailsView.Reset();
+
+	DisplayedLocalValueStruct = MakeShared<FStructOnScope>(FunctionInput->GetInputType().GetStruct());
+	FNiagaraEditorUtilities::CopyDataTo(*DisplayedLocalValueStruct.Get(), *FunctionInput->GetLocalValueStruct().Get());
 	if (DisplayedLocalValueStruct.IsValid())
 	{
 		FNiagaraEditorModule& NiagaraEditorModule = FModuleManager::GetModuleChecked<FNiagaraEditorModule>("NiagaraEditor");
@@ -303,23 +315,33 @@ TSharedRef<SWidget> SNiagaraStackFunctionInputValue::ConstructLocalValueStructWi
 
 void SNiagaraStackFunctionInputValue::OnInputValueChanged()
 {
-	TSharedPtr<FStructOnScope> NewLocalValueStruct = FunctionInput->GetLocalValueStruct();
-	if (DisplayedLocalValueStruct == NewLocalValueStruct)
+	if (ValueModeForGeneratedWidgets != FunctionInput->GetValueMode())
 	{
-		if (LocalValueStructParameterEditor.IsValid())
-		{
-			LocalValueStructParameterEditor->UpdateInternalValueFromStruct(DisplayedLocalValueStruct.ToSharedRef());
-		}
-		if (LocalValueStructDetailsView.IsValid())
-		{
-			LocalValueStructDetailsView->SetStructureData(TSharedPtr<FStructOnScope>());
-			LocalValueStructDetailsView->SetStructureData(DisplayedLocalValueStruct);
-		}
+		ValueContainer->SetContent(ConstructValueWidgets());
+		ValueModeForGeneratedWidgets = FunctionInput->GetValueMode();
 	}
 	else
 	{
-		DisplayedLocalValueStruct = NewLocalValueStruct;
-		LocalValueStructContainer->SetContent(ConstructLocalValueStructWidget());
+		if (ValueModeForGeneratedWidgets == UNiagaraStackFunctionInput::EValueMode::Local)
+		{
+			if (DisplayedLocalValueStruct->GetStruct() == FunctionInput->GetLocalValueStruct()->GetStruct())
+			{
+				FNiagaraEditorUtilities::CopyDataTo(*DisplayedLocalValueStruct.Get(), *FunctionInput->GetLocalValueStruct().Get());
+				if (LocalValueStructParameterEditor.IsValid())
+				{
+					LocalValueStructParameterEditor->UpdateInternalValueFromStruct(DisplayedLocalValueStruct.ToSharedRef());
+				}
+				if (LocalValueStructDetailsView.IsValid())
+				{
+					LocalValueStructDetailsView->SetStructureData(TSharedPtr<FStructOnScope>());
+					LocalValueStructDetailsView->SetStructureData(DisplayedLocalValueStruct);
+				}
+			}
+			else
+			{
+				ValueContainer->SetContent(ConstructLocalValueStructWidget());
+			}
+		}
 	}
 }
 
@@ -348,9 +370,9 @@ void SNiagaraStackFunctionInputValue::ParameterPropertyValueChanged(const FPrope
 	FunctionInput->SetLocalValue(DisplayedLocalValueStruct.ToSharedRef());
 }
 
-FText SNiagaraStackFunctionInputValue::GetLinkedValueHandleText() const
+FName SNiagaraStackFunctionInputValue::GetLinkedValueHandleName() const
 {
-	return FText::FromName(FunctionInput->GetLinkedValueHandle().GetParameterHandleString());
+	return FunctionInput->GetLinkedValueHandle().GetParameterHandleString();
 }
 
 FText SNiagaraStackFunctionInputValue::GetDataValueText() const
@@ -377,57 +399,42 @@ FText SNiagaraStackFunctionInputValue::GetDynamicValueText() const
 	}
 }
 
-FText SNiagaraStackFunctionInputValue::GetExpressionValueText() const
+FText SNiagaraStackFunctionInputValue::GetDefaultFunctionText() const
 {
-	if (FunctionInput->GetExpressionNode() != nullptr)
+	if (FunctionInput->GetDefaultFunctionNode() != nullptr)
 	{
-		return FunctionInput->GetExpressionNode()->GetHlslText();
+		return FText::FromString(FName::NameToDisplayString(FunctionInput->GetDefaultFunctionNode()->GetFunctionName(), false));
 	}
 	else
 	{
-		return LOCTEXT("InvalidDynamicDisplayName", "(Invalid)");
+		return LOCTEXT("InvalidDefaultFunctionDisplayName", "(Invalid)");
 	}
 }
 
 void SNiagaraStackFunctionInputValue::OnExpressionTextCommitted(const FText& Name, ETextCommit::Type CommitInfo)
 {
-	if (FunctionInput->GetExpressionNode() != nullptr)
-	{
-		FunctionInput->GetExpressionNode()->OnCustomHlslTextCommitted(Name, CommitInfo);
-	}
-}
-
-FText SNiagaraStackFunctionInputValue::GetInvalidValueText() const
-{
-	if (FunctionInput->CanReset())
-	{
-		return LOCTEXT("InvalidResetLabel", "Unsupported value - Reset to fix.");
-	}
-	else
-	{
-		return LOCTEXT("InvalidLabel", "Custom value");
-	}
-}
-
-FText SNiagaraStackFunctionInputValue::GetInvalidValueToolTipText() const
-{
-	if (FunctionInput->CanReset())
-	{
-		return LOCTEXT("InvalidResetToolTip", "This input has an unsupported value assigned in the stack.\nUse the reset button to remove the unsupported value.");
-	}
-	else
-	{
-		return LOCTEXT("InvalidToolTip", "The script that defines the source of this input has\n a custom default value that can not be displayed in the stack view.\nYou can set a local override value using the drop down menu.");
-	}
+	FunctionInput->SetCustomExpression(Name.ToString());
 }
 
 FReply SNiagaraStackFunctionInputValue::DynamicInputTextDoubleClicked(const FGeometry& MyGeometry, const FPointerEvent& PointerEvent)
 {
 	UNiagaraNodeFunctionCall* DynamicInputNode = FunctionInput->GetDynamicInputNode();
-	if (DynamicInputNode->FunctionScript != nullptr && DynamicInputNode->FunctionScript->IsAsset())
+	if (DynamicInputNode->FunctionScript != nullptr)
 	{
-		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(DynamicInputNode->FunctionScript);
-		return FReply::Handled();
+		if (DynamicInputNode->FunctionScript->IsAsset())
+		{
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(DynamicInputNode->FunctionScript);
+			return FReply::Handled();
+		}
+		else
+		{
+			TSharedPtr<FNiagaraScratchPadScriptViewModel> ScratchPadScriptViewModel = FunctionInput->GetSystemViewModel()->GetScriptScratchPadViewModel()->GetViewModelForScript(DynamicInputNode->FunctionScript);
+			if(ScratchPadScriptViewModel.IsValid())
+			{
+				FunctionInput->GetSystemViewModel()->GetScriptScratchPadViewModel()->FocusScratchPadScriptViewModel(ScratchPadScriptViewModel.ToSharedRef());
+				return FReply::Handled();
+			}
+		}
 	}
 	return FReply::Unhandled();
 }
@@ -471,57 +478,45 @@ TSharedRef<SExpanderArrow> SNiagaraStackFunctionInputValue::CreateCustomNiagaraF
 
 TSharedRef<SWidget> SNiagaraStackFunctionInputValue::OnGetAvailableHandleMenu()
 {
+	TSharedPtr<SNiagaraLibraryOnlyToggleHeader> LibraryOnlyToggle;
+	TSharedPtr<SGraphActionMenu> GraphActionMenu;
+
 	TSharedRef<SBorder> MenuWidget = SNew(SBorder)
 	.BorderImage(FEditorStyle::GetBrush("Menu.Background"))
 	.Padding(5)
 	[
 		SNew(SBox)
-		.WidthOverride(300)
+		.MinDesiredWidth(300)
 		.HeightOverride(400)
 		[
 			SNew(SVerticalBox)
 			+SVerticalBox::Slot()
 			.Padding(1.0f)
 			[
-				SNew(SHorizontalBox)
-
-				// Search context description
-				+SHorizontalBox::Slot()
-				.VAlign(VAlign_Center)
-				.AutoWidth()
-				[
-					SNew(STextBlock)
-					.Text(LOCTEXT("FunctionInputValueTitle", "Edit value"))
-				]
-
-				// Library Only Toggle
-				+SHorizontalBox::Slot()
-				.HAlign(HAlign_Right)
-				.VAlign(VAlign_Center)
-				[
-					SNew(SCheckBox)
-					.OnCheckStateChanged(this, &SNiagaraStackFunctionInputValue::OnLibraryToggleChanged)
-					.IsChecked(this, &SNiagaraStackFunctionInputValue::LibraryToggleIsChecked)
-					[
-						SNew(STextBlock)
-						.Text(LOCTEXT("LibraryOnly", "Library Only"))
-					]
-				]
+				SAssignNew(LibraryOnlyToggle, SNiagaraLibraryOnlyToggleHeader)
+				.HeaderLabelText(LOCTEXT("FunctionInputValueTitle", "Edit value"))
+				.LibraryOnly(this, &SNiagaraStackFunctionInputValue::GetLibraryOnly)
+				.LibraryOnlyChanged(this, &SNiagaraStackFunctionInputValue::SetLibraryOnly)
 			]
 			+SVerticalBox::Slot()
 			.FillHeight(15)
 			[
-				SAssignNew(SelectInputFunctionMenu, SGraphActionMenu)
+				SAssignNew(GraphActionMenu, SGraphActionMenu)
 				.OnActionSelected(this, &SNiagaraStackFunctionInputValue::OnActionSelected)
 				.OnCollectAllActions(this, &SNiagaraStackFunctionInputValue::CollectAllActions)
 				.AutoExpandActionMenu(false)
 				.ShowFilterTextBox(true)
 				.OnCreateCustomRowExpander_Static(&CreateCustomNiagaraFunctionInputActionExpander)
+				.OnCreateWidgetForAction_Lambda([](const FCreateWidgetForActionData* InData)
+				{
+					return SNew(SNiagaraGraphActionWidget, InData);
+				})
 			]
 		]
 	];
 
-	SetFunctionInputButton->SetMenuContentWidgetToFocus(SelectInputFunctionMenu->GetFilterTextBox()->AsShared());
+	LibraryOnlyToggle->SetActionMenu(GraphActionMenu.ToSharedRef());
+	SetFunctionInputButton->SetMenuContentWidgetToFocus(GraphActionMenu->GetFilterTextBox()->AsShared());
 	return MenuWidget;
 }
 
@@ -544,17 +539,17 @@ void SNiagaraStackFunctionInputValue::OnActionSelected(const TArray<TSharedPtr<F
 
 void SNiagaraStackFunctionInputValue::CollectAllActions(FGraphActionListBuilderBase& OutAllActions)
 {
-	// Set a local value
-	{
-		bool bCanSetLocalValue =
-			FunctionInput->GetValueMode() != UNiagaraStackFunctionInput::EValueMode::Local &&
-			FunctionInput->GetInputType().IsDataInterface() == false;
+	bool bIsDataInterfaceOrObject = FunctionInput->GetInputType().IsDataInterface() || FunctionInput->GetInputType().IsUObject();
 
-		const FText NameText = LOCTEXT("LocalValue", "Set a local value");
+	// Set a local value
+	if(bIsDataInterfaceOrObject == false)
+	{
+		bool bCanSetLocalValue = FunctionInput->GetValueMode() != UNiagaraStackFunctionInput::EValueMode::Local;
+
+		const FText NameText = LOCTEXT("LocalValue", "New Local Value");
 		const FText Tooltip = FText::Format(LOCTEXT("LocalValueToolTip", "Set a local editable value for this input."), NameText);
-		const FText CategoryName = LOCTEXT("LocalValueCategory", "Local");
 		TSharedPtr<FNiagaraMenuAction> SetLocalValueAction(
-			new FNiagaraMenuAction(CategoryName, NameText, Tooltip, 0, FText(),
+			new FNiagaraMenuAction(FText(), NameText, Tooltip, 0, FText(),
 				FNiagaraMenuAction::FOnExecuteStackAction::CreateSP(this, &SNiagaraStackFunctionInputValue::SetToLocalValue),
 				FNiagaraMenuAction::FCanExecuteStackAction::CreateLambda([=]() { return bCanSetLocalValue; })));
 		OutAllActions.AddAction(SetLocalValueAction);
@@ -565,13 +560,15 @@ void SNiagaraStackFunctionInputValue::CollectAllActions(FGraphActionListBuilderB
 	{
 		const FText CategoryName = LOCTEXT("DynamicInputValueCategory", "Dynamic Inputs");
 		TArray<UNiagaraScript*> DynamicInputScripts;
-		FunctionInput->GetAvailableDynamicInputs(DynamicInputScripts, bIncludeNonLibraryInputs);
+		FunctionInput->GetAvailableDynamicInputs(DynamicInputScripts, bLibraryOnly == false);
 		for (UNiagaraScript* DynamicInputScript : DynamicInputScripts)
 		{
-			const FText DynamicInputText = FText::FromString(FName::NameToDisplayString(DynamicInputScript->GetName() + (DynamicInputScript->bExposeToLibrary ? "" : "*"), false));
-			const FText Tooltip = FNiagaraEditorUtilities::FormatScriptAssetDescription(DynamicInputScript->Description, *(DynamicInputScript->GetPathName() + (DynamicInputScript->bExposeToLibrary ? "" : "\n*Not exposed to library")));
+			const FText DynamicInputText = FNiagaraEditorUtilities::FormatScriptName(DynamicInputScript->GetFName(), DynamicInputScript->bExposeToLibrary);
+			const FText Tooltip = FNiagaraEditorUtilities::FormatScriptDescription(DynamicInputScript->Description, *DynamicInputScript->GetPathName(), DynamicInputScript->bExposeToLibrary);
 			TSharedPtr<FNiagaraMenuAction> DynamicInputAction(new FNiagaraMenuAction(CategoryName, DynamicInputText, Tooltip, 0, DynamicInputScript->Keywords,
 				FNiagaraMenuAction::FOnExecuteStackAction::CreateSP(this, &SNiagaraStackFunctionInputValue::DynamicInputScriptSelected, DynamicInputScript)));
+
+			DynamicInputAction->IsExperimental = DynamicInputScript->bExperimental;
 			OutAllActions.AddAction(DynamicInputAction);
 		}
 	}
@@ -580,67 +577,24 @@ void SNiagaraStackFunctionInputValue::CollectAllActions(FGraphActionListBuilderB
 	TArray<FNiagaraParameterHandle> AvailableHandles;
 	FunctionInput->GetAvailableParameterHandles(AvailableHandles);
 
-	TArray<FNiagaraParameterHandle> ParameterCollectionHandles;
-	TArray<FNiagaraParameterHandle> UserHandles;
-	TArray<FNiagaraParameterHandle> EngineHandles;
-	TArray<FNiagaraParameterHandle> SystemHandles;
-	TArray<FNiagaraParameterHandle> EmitterHandles;
-	TArray<FNiagaraParameterHandle> ParticleAttributeHandles;
-	TArray<FNiagaraParameterHandle> OtherHandles;
-	for (const FNiagaraParameterHandle AvailableHandle : AvailableHandles)
+	const FString RootCategoryName = FString("Link Inputs");
+	const FText MapInputFormat = LOCTEXT("LinkInputFormat", "Link this input to {0}");
+	for (const FNiagaraParameterHandle& AvailableHandle : AvailableHandles)
 	{
-		 if (AvailableHandle.IsParameterCollectionHandle())
+		TArray<FName> HandleParts = AvailableHandle.GetHandleParts();
+		FNiagaraNamespaceMetadata NamespaceMetadata = GetDefault<UNiagaraEditorSettings>()->GetMetaDataForNamespaces(HandleParts);
+		if (NamespaceMetadata.IsValid())
 		{
-			ParameterCollectionHandles.Add(AvailableHandle);
+			// Only add handles which are in known namespaces to prevent collecting parameter handles
+			// which are being used to configure modules and dynamic inputs in the stack graphs.
+			const FText Category = NamespaceMetadata.DisplayName;
+			const FText DisplayName = FText::FromName(AvailableHandle.GetParameterHandleString());
+			const FText Tooltip = FText::Format(MapInputFormat, FText::FromName(AvailableHandle.GetParameterHandleString()));
+			TSharedPtr<FNiagaraMenuAction> LinkAction(new FNiagaraMenuAction(Category, DisplayName, Tooltip, 0, FText(),
+				FNiagaraMenuAction::FOnExecuteStackAction::CreateSP(this, &SNiagaraStackFunctionInputValue::ParameterHandleSelected, AvailableHandle)));
+			LinkAction->SetParamterVariable(FNiagaraVariable(FunctionInput->GetInputType(), AvailableHandle.GetParameterHandleString()));
+			OutAllActions.AddAction(LinkAction, RootCategoryName);
 		}
-		else if (AvailableHandle.IsUserHandle())
-		{
-			UserHandles.Add(AvailableHandle);
-		}
-		else if (AvailableHandle.IsEngineHandle())
-		{
-			EngineHandles.Add(AvailableHandle);
-		}
-		else if (AvailableHandle.IsSystemHandle())
-		{
-			SystemHandles.Add(AvailableHandle);
-		}
-		else if (AvailableHandle.IsEmitterHandle())
-		{
-			EmitterHandles.Add(AvailableHandle);
-		}
-		else if (AvailableHandle.IsParticleAttributeHandle())
-		{
-			ParticleAttributeHandles.Add(AvailableHandle);
-		}
-		else
-		{
-			OtherHandles.Add(AvailableHandle);
-		}
-	}
-
-	{
-		const FString RootCategoryName = FString("Link Inputs");
-		auto AddMenuItemsForHandleList = [&](const TArray<FNiagaraParameterHandle>& Handles, const FText& SectionDisplay)
-		{
-			const FText MapInputFormat = LOCTEXT("LinkInputFormat", "Link this input to {0}");
-			for (const FNiagaraParameterHandle& Handle : Handles)
-			{
-				const FText DisplayName = FText::FromName(Handle.GetParameterHandleString());
-				const FText Tooltip = FText::Format(MapInputFormat, FText::FromName(Handle.GetParameterHandleString()));
-				TSharedPtr<FNiagaraMenuAction> LinkAction(new FNiagaraMenuAction(SectionDisplay, DisplayName, Tooltip, 0, FText(),
-					FNiagaraMenuAction::FOnExecuteStackAction::CreateSP(this, &SNiagaraStackFunctionInputValue::ParameterHandleSelected, Handle)));
-				OutAllActions.AddAction(LinkAction, RootCategoryName);
-			}
-		};
-
-		AddMenuItemsForHandleList(ParameterCollectionHandles, LOCTEXT("NPC", "Parameter Collections"));
-		AddMenuItemsForHandleList(UserHandles, LOCTEXT("UserSection", "User Exposed"));
-		AddMenuItemsForHandleList(EngineHandles, LOCTEXT("EngineSection", "Engine"));
-		AddMenuItemsForHandleList(SystemHandles, LOCTEXT("SystemSection", "System"));
-		AddMenuItemsForHandleList(EmitterHandles, LOCTEXT("EmitterSection", "Emitter"));
-		AddMenuItemsForHandleList(ParticleAttributeHandles, LOCTEXT("ParticleAttributeSection", "Particle Attribute"));
-		AddMenuItemsForHandleList(OtherHandles, LOCTEXT("OtherSection", "Other"));
 	}
 
 	// Read from new attribute
@@ -648,14 +602,14 @@ void SNiagaraStackFunctionInputValue::CollectAllActions(FGraphActionListBuilderB
 		const FText CategoryName = LOCTEXT("MakeCategory", "Make");
 
 		TArray<FName> AvailableNamespaces;
-		FunctionInput->GetNamespacesForNewParameters(AvailableNamespaces);
+		FunctionInput->GetNamespacesForNewReadParameters(AvailableNamespaces);
 
 		TArray<FString> InputNames;
 		for (int32 i = FunctionInput->GetInputParameterHandlePath().Num() - 1; i >= 0; i--)
 		{
 			InputNames.Add(FunctionInput->GetInputParameterHandlePath()[i].GetName().ToString());
 		}
-		FName InputName = *FString::Join(InputNames, TEXT("."));
+		FName InputName = *FString::Join(InputNames, TEXT("_")).Replace(TEXT("."), TEXT("_"));
 
 		for (const FName AvailableNamespace : AvailableNamespaces)
 		{
@@ -675,18 +629,35 @@ void SNiagaraStackFunctionInputValue::CollectAllActions(FGraphActionListBuilderB
 		}
 	}
 
+	if (bIsDataInterfaceOrObject == false)
 	{
-		const FText CategoryName = LOCTEXT("ExpressionCategory", "Expression");
-		const FText DisplayName = LOCTEXT("ExpressionLabel", "Make new expression");
-		const FText Tooltip = LOCTEXT("ExpressionToolTipl", "Resolve this variable with a custom expression.");
-		TSharedPtr<FNiagaraMenuAction> ExpressionAction(new FNiagaraMenuAction(CategoryName, DisplayName, Tooltip, 0, FText(),
-			FNiagaraMenuAction::FOnExecuteStackAction::CreateSP(this, &SNiagaraStackFunctionInputValue::CustomExpressionSelected)));
+		// Leaving the internal usage of bIsDataInterfaceObject that the tooltip and disabling will work properly when they're moved out of a graph action menu.
+		const FText DisplayName = LOCTEXT("ExpressionLabel", "New Expression");
+		const FText Tooltip = bIsDataInterfaceOrObject
+			? LOCTEXT("NoExpresionsForObjects", "Expressions can not be used to set object or data interface parameters.")
+			: LOCTEXT("ExpressionToolTipl", "Resolve this variable with a custom expression.");
+		TSharedPtr<FNiagaraMenuAction> ExpressionAction(new FNiagaraMenuAction(FText(), DisplayName, Tooltip, 0, FText(),
+			FNiagaraMenuAction::FOnExecuteStackAction::CreateSP(this, &SNiagaraStackFunctionInputValue::CustomExpressionSelected),
+			FNiagaraMenuAction::FCanExecuteStackAction::CreateLambda([bIsDataInterfaceOrObject]() { return bIsDataInterfaceOrObject == false; })));
 		OutAllActions.AddAction(ExpressionAction);
+	}
+
+	if (bIsDataInterfaceOrObject == false)
+	{
+		// Leaving the internal usage of bIsDataInterfaceObject that the tooltip and disabling will work properly when they're moved out of a graph action menu.
+		const FText CreateDisplayName = LOCTEXT("ScratchLabel", "New Scratch Dynamic Input");
+		const FText CreateTooltip = bIsDataInterfaceOrObject
+			? LOCTEXT("NoScratchForObjects", "Dynamic inputs can not be used to set object or data interface parameters.")
+			: LOCTEXT("ScratchToolTipl", "Create a new dynamic input in the scratch pad.");
+		TSharedPtr<FNiagaraMenuAction> CreateScratchAction(new FNiagaraMenuAction(FText(), CreateDisplayName, CreateTooltip, 0, FText(),
+			FNiagaraMenuAction::FOnExecuteStackAction::CreateSP(this, &SNiagaraStackFunctionInputValue::CreateScratchSelected),
+			FNiagaraMenuAction::FCanExecuteStackAction::CreateLambda([bIsDataInterfaceOrObject]() { return bIsDataInterfaceOrObject == false; })));
+		OutAllActions.AddAction(CreateScratchAction);
 	}
 
 	if (FunctionInput->CanDeleteInput())
 	{
-		const FText NameText = LOCTEXT("DeleteInput", "Remove");
+		const FText NameText = LOCTEXT("DeleteInput", "Remove this input");
 		const FText Tooltip = FText::Format(LOCTEXT("DeleteInputTooltip", "Remove input from module."), NameText);
 		TSharedPtr<FNiagaraMenuAction> SetLocalValueAction(
 			new FNiagaraMenuAction(FText::GetEmpty(), NameText, Tooltip, 0, FText::GetEmpty(),
@@ -719,7 +690,13 @@ void SNiagaraStackFunctionInputValue::DynamicInputScriptSelected(UNiagaraScript*
 
 void SNiagaraStackFunctionInputValue::CustomExpressionSelected()
 {
-	FunctionInput->SetCustomExpression(TEXT("// Insert expression here"));
+	FText CustomHLSLComment = LOCTEXT("NewCustomExpressionComment", "Custom HLSL!");
+	FunctionInput->SetCustomExpression(FHlslNiagaraTranslator::GetHlslDefaultForType(FunctionInput->GetInputType()) + TEXT(" /* ") + CustomHLSLComment.ToString() + TEXT(" */"));
+}
+
+void SNiagaraStackFunctionInputValue::CreateScratchSelected()
+{
+	FunctionInput->SetScratch();
 }
 
 void SNiagaraStackFunctionInputValue::ParameterHandleSelected(FNiagaraParameterHandle Handle)
@@ -773,17 +750,19 @@ FText SNiagaraStackFunctionInputValue::GetInputIconText() const
 	switch (FunctionInput->GetValueMode())
 	{
 	case UNiagaraStackFunctionInput::EValueMode::Linked:
-		return FText::FromString(FString(TEXT("\xf0C1") /* fa-link */));
+		return FEditorFontGlyphs::Link;
 	case UNiagaraStackFunctionInput::EValueMode::Data:
-		return FText::FromString(FString(TEXT("\xf1C0") /* fa-database */));
+		return FEditorFontGlyphs::Database;
 	case UNiagaraStackFunctionInput::EValueMode::Dynamic:
-		return FText::FromString(FString(TEXT("\xf201") /* fa-line-chart */));
+		return FEditorFontGlyphs::Line_Chart;
 	case UNiagaraStackFunctionInput::EValueMode::Expression:
-		return FText::FromString(FString(TEXT("\xf120") /* fa-terminal */));
-	case UNiagaraStackFunctionInput::EValueMode::Invalid:
-		return FunctionInput->CanReset()
-			? FText::FromString(FString(TEXT("\xf128") /* fa-question */))
-			: FText::FromString(FString(TEXT("\xf005") /* fa-star */));
+		return FEditorFontGlyphs::Terminal;
+	case UNiagaraStackFunctionInput::EValueMode::DefaultFunction:
+		return FEditorFontGlyphs::Plug;
+	case UNiagaraStackFunctionInput::EValueMode::InvalidOverride:
+		return FEditorFontGlyphs::Question;
+	case UNiagaraStackFunctionInput::EValueMode::UnsupportedDefault:
+		return FEditorFontGlyphs::Star;
 	default:
 		return FText::FromString(FString(TEXT("\xf128") /* fa-question */));
 	}
@@ -802,10 +781,12 @@ FText SNiagaraStackFunctionInputValue::GetInputIconToolTip() const
 		return LOCTEXT("DynamicInputIconToolTip", "Dynamic Value");
 	case UNiagaraStackFunctionInput::EValueMode::Expression:
 		return LOCTEXT("ExpressionInputIconToolTip", "Custom Expression");
-	case UNiagaraStackFunctionInput::EValueMode::Invalid:
-		return FunctionInput->CanReset()
-			? InvalidText
-			: LOCTEXT("CustomInputIconToolTip", "Custom value");
+	case UNiagaraStackFunctionInput::EValueMode::DefaultFunction:
+		return LOCTEXT("DefaultFunctionIconToolTip", "Script Defined Default Function");
+	case UNiagaraStackFunctionInput::EValueMode::InvalidOverride:
+		return LOCTEXT("InvalidOverrideIconToolTip", "Invalid Script State");
+	case UNiagaraStackFunctionInput::EValueMode::UnsupportedDefault:
+		return LOCTEXT("UnsupportedDefaultIconToolTip", "Script Defined Custom Default");
 	default:
 		return InvalidText;
 	}
@@ -823,7 +804,9 @@ FSlateColor SNiagaraStackFunctionInputValue::GetInputIconColor() const
 		return FLinearColor(FColor::Cyan);
 	case UNiagaraStackFunctionInput::EValueMode::Expression:
 		return FLinearColor(FColor::Green);
-	case UNiagaraStackFunctionInput::EValueMode::Invalid:
+	case UNiagaraStackFunctionInput::EValueMode::InvalidOverride:
+	case UNiagaraStackFunctionInput::EValueMode::UnsupportedDefault:
+	case UNiagaraStackFunctionInput::EValueMode::DefaultFunction:
 	default:
 		return FLinearColor(FColor::White);
 	}
@@ -849,6 +832,11 @@ bool SNiagaraStackFunctionInputValue::OnFunctionInputAllowDrop(TSharedPtr<FDragD
 {
 	if (FunctionInput && DragDropOperation->IsOfType<FNiagaraParameterDragOperation>())
 	{
+		if (FunctionInput->IsStaticParameter())
+		{
+			return false;
+		}
+
 		TSharedPtr<FNiagaraParameterDragOperation> InputDragDropOperation = StaticCastSharedPtr<FNiagaraParameterDragOperation>(DragDropOperation);
 		TSharedPtr<FNiagaraParameterAction> Action = StaticCastSharedPtr<FNiagaraParameterAction>(InputDragDropOperation->GetSourceAction());
 		if (Action->GetParameter().GetType() == FunctionInput->GetInputType() && FNiagaraStackGraphUtilities::ParameterAllowedInExecutionCategory(Action->GetParameter().GetName(), FunctionInput->GetExecutionCategoryName()))
@@ -865,15 +853,15 @@ void ReassignDynamicInputScript(UNiagaraStackFunctionInput* FunctionInput, UNiag
 	FunctionInput->ReassignDynamicInputScript(NewDynamicInputScript);
 }
 
-void CollectDynamicInputActions(FGraphActionListBuilderBase& DynamicInputActions, UNiagaraStackFunctionInput* FunctionInput)
+void SNiagaraStackFunctionInputValue::CollectDynamicInputActionsForReassign(FGraphActionListBuilderBase& DynamicInputActions) const
 {
 	const FText CategoryName = LOCTEXT("DynamicInputValueCategory", "Dynamic Inputs");
 	TArray<UNiagaraScript*> DynamicInputScripts;
-	FunctionInput->GetAvailableDynamicInputs(DynamicInputScripts);
+	FunctionInput->GetAvailableDynamicInputs(DynamicInputScripts, bLibraryOnly == false);
 	for (UNiagaraScript* DynamicInputScript : DynamicInputScripts)
 	{
-		const FText DynamicInputText = FText::FromString(FName::NameToDisplayString(DynamicInputScript->GetName(), false));
-		const FText Tooltip = FNiagaraEditorUtilities::FormatScriptAssetDescription(DynamicInputScript->Description, *DynamicInputScript->GetPathName());
+		const FText DynamicInputText = FNiagaraEditorUtilities::FormatScriptName(DynamicInputScript->GetFName(), DynamicInputScript->bExposeToLibrary);
+		const FText Tooltip = FNiagaraEditorUtilities::FormatScriptDescription(DynamicInputScript->Description, *DynamicInputScript->GetPathName(), DynamicInputScript->bExposeToLibrary);
 		TSharedPtr<FNiagaraMenuAction> DynamicInputAction(new FNiagaraMenuAction(CategoryName, DynamicInputText, Tooltip, 0, DynamicInputScript->Keywords,
 			FNiagaraMenuAction::FOnExecuteStackAction::CreateStatic(&ReassignDynamicInputScript, FunctionInput, DynamicInputScript)));
 		DynamicInputActions.AddAction(DynamicInputAction);
@@ -882,6 +870,9 @@ void CollectDynamicInputActions(FGraphActionListBuilderBase& DynamicInputActions
 
 void SNiagaraStackFunctionInputValue::ShowReassignDynamicInputScriptMenu()
 {
+	TSharedPtr<SNiagaraLibraryOnlyToggleHeader> LibraryOnlyToggle;
+	TSharedPtr<SGraphActionMenu> GraphActionMenu;
+
 	TSharedRef<SBorder> MenuWidget = SNew(SBorder)
 		.BorderImage(FEditorStyle::GetBrush("Menu.Background"))
 		.Padding(5)
@@ -890,14 +881,29 @@ void SNiagaraStackFunctionInputValue::ShowReassignDynamicInputScriptMenu()
 			.WidthOverride(300)
 			.HeightOverride(400)
 			[
-				SNew(SGraphActionMenu)
-				.OnActionSelected(this, &SNiagaraStackFunctionInputValue::OnActionSelected)
-				.OnCollectAllActions_Static(CollectDynamicInputActions, FunctionInput)
-				.AutoExpandActionMenu(true)
-				.ShowFilterTextBox(true)
-				.OnCreateCustomRowExpander_Static(&CreateCustomNiagaraFunctionInputActionExpander)
+				SNew(SVerticalBox)
+				+SVerticalBox::Slot()
+				.Padding(1.0f)
+				[
+					SAssignNew(LibraryOnlyToggle, SNiagaraLibraryOnlyToggleHeader)
+					.HeaderLabelText(LOCTEXT("ReassignDynamicInputLabel", "Select a new dynamic input"))
+					.LibraryOnly(this, &SNiagaraStackFunctionInputValue::GetLibraryOnly)
+					.LibraryOnlyChanged(this, &SNiagaraStackFunctionInputValue::SetLibraryOnly)
+				]
+				+SVerticalBox::Slot()
+				.FillHeight(15)
+				[
+					SAssignNew(GraphActionMenu, SGraphActionMenu)
+					.OnActionSelected(this, &SNiagaraStackFunctionInputValue::OnActionSelected)
+					.OnCollectAllActions(this, &SNiagaraStackFunctionInputValue::CollectDynamicInputActionsForReassign)
+					.AutoExpandActionMenu(true)
+					.ShowFilterTextBox(true)
+					.OnCreateCustomRowExpander_Static(&CreateCustomNiagaraFunctionInputActionExpander)
+				]
 			]
 		];
+
+	LibraryOnlyToggle->SetActionMenu(GraphActionMenu.ToSharedRef());
 
 	FGeometry ThisGeometry = GetCachedGeometry();
 	bool bAutoAdjustForDpiScale = false; // Don't adjust for dpi scale because the push menu command is expecting an unscaled position.
@@ -905,15 +911,26 @@ void SNiagaraStackFunctionInputValue::ShowReassignDynamicInputScriptMenu()
 	FSlateApplication::Get().PushMenu(AsShared(), FWidgetPath(), MenuWidget, MenuPosition, FPopupTransitionEffect::ContextMenu);
 }
 
-void SNiagaraStackFunctionInputValue::OnLibraryToggleChanged(ECheckBoxState CheckState)
+bool SNiagaraStackFunctionInputValue::GetLibraryOnly() const
 {
-	SNiagaraStackFunctionInputValue::bIncludeNonLibraryInputs = CheckState == ECheckBoxState::Unchecked;
-	SelectInputFunctionMenu->RefreshAllActions(true, false);
+	return bLibraryOnly;
 }
 
-ECheckBoxState SNiagaraStackFunctionInputValue::LibraryToggleIsChecked() const
+void SNiagaraStackFunctionInputValue::SetLibraryOnly(bool bInIsLibraryOnly)
 {
-	return SNiagaraStackFunctionInputValue::bIncludeNonLibraryInputs ? ECheckBoxState::Unchecked : ECheckBoxState::Checked;
+	bLibraryOnly = bInIsLibraryOnly;
+}
+
+FReply SNiagaraStackFunctionInputValue::ScratchButtonPressed() const
+{
+	TSharedPtr<FNiagaraScratchPadScriptViewModel> ScratchDynamicInputViewModel = 
+		FunctionInput->GetSystemViewModel()->GetScriptScratchPadViewModel()->GetViewModelForScript(FunctionInput->GetDynamicInputNode()->FunctionScript);
+	if (ScratchDynamicInputViewModel.IsValid())
+	{
+		FunctionInput->GetSystemViewModel()->GetScriptScratchPadViewModel()->FocusScratchPadScriptViewModel(ScratchDynamicInputViewModel.ToSharedRef());
+		return FReply::Handled();
+	}
+	return FReply::Unhandled();
 }
 
 #undef LOCTEXT_NAMESPACE

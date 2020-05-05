@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 //
 #include "MaterialStatsCommon.h"
 #include "EngineGlobals.h"
@@ -109,6 +109,9 @@ FString FMaterialStatsUtils::GetPlatformTypeName(const EPlatformCategoryType InE
 		case EPlatformCategoryType::IOS:
 			PlatformName = FString("IOS");
 		break;
+		case EPlatformCategoryType::Console:
+			PlatformName = FString("Console");
+		break;
 	}
 
 	return PlatformName;
@@ -120,22 +123,12 @@ FString FMaterialStatsUtils::ShaderPlatformTypeName(const EShaderPlatform Platfo
 	{
 		case SP_PCD3D_SM5:
 			return FString("PCD3D_SM5");
-		case SP_OPENGL_SM4:
-			return FString("OPENGL_SM4");
 		case SP_PS4:
 			return FString("PS4");
-		case SP_OPENGL_PCES2:
-			return FString("OPENGL_PCES2");
 		case SP_XBOXONE_D3D12:
 			return FString("XBOXONE_D3D12");
 		case SP_OPENGL_SM5:
 			return FString("OPENGL_SM5");
-		case SP_PCD3D_ES2:
-			return FString("PCD3D_ES2");
-		case SP_OPENGL_ES2_ANDROID:
-			return FString("OPENGL_ES2_ANDROID");
-		case SP_OPENGL_ES2_WEBGL:
-			return FString("OPENGL_ES2_WEBGL");
 		case SP_METAL:
 			return FString("METAL");
 		case SP_METAL_MRT:
@@ -160,10 +153,10 @@ FString FMaterialStatsUtils::ShaderPlatformTypeName(const EShaderPlatform Platfo
 			return FString("VULKAN_SM5");
 		case SP_VULKAN_ES3_1_ANDROID:
 			return FString("VULKAN_ES3_1_ANDROID");
+		case SP_VULKAN_SM5_ANDROID:
+			return FString("VULKAN_SM5_ANDROID");
 		case SP_METAL_MACES3_1:
 			return FString("METAL_MACES3_1");
-		case SP_METAL_MACES2:
-			return FString("METAL_MACES2");
 		case SP_OPENGL_ES3_1_ANDROID:
 			return FString("OPENGL_ES3_1_ANDROID");
 		case SP_SWITCH:
@@ -176,7 +169,7 @@ FString FMaterialStatsUtils::ShaderPlatformTypeName(const EShaderPlatform Platfo
 			FString FormatName = ShaderPlatformToShaderFormatName(PlatformID).ToString();
 			if (FormatName.StartsWith(TEXT("SF_")))
 			{
-				FormatName = FormatName.Mid(3);
+				FormatName.MidInline(3, MAX_int32, false);
 			}
 			return FormatName;
 	}
@@ -186,9 +179,9 @@ FString FMaterialStatsUtils::GetPlatformOfflineCompilerPath(const EShaderPlatfor
 {
 	switch (ShaderPlatform)
 	{
-		case SP_OPENGL_ES2_ANDROID:
 		case SP_OPENGL_ES3_1_ANDROID:
 		case SP_VULKAN_ES3_1_ANDROID:
+		case SP_VULKAN_SM5_ANDROID:
 			return FPaths::ConvertRelativePathToFull(GetDefault<UMaterialEditorSettings>()->MaliOfflineCompilerPath.FilePath);
 		break;
 
@@ -213,24 +206,20 @@ bool FMaterialStatsUtils::PlatformNeedsOfflineCompiler(const EShaderPlatform Sha
 {
 	switch (ShaderPlatform)
 	{
-		case SP_OPENGL_SM4:
 		case SP_PS4:
-		case SP_OPENGL_PCES2:
 		case SP_OPENGL_SM5:
-		case SP_OPENGL_ES2_ANDROID:
 		case SP_OPENGL_ES31_EXT:
 		case SP_OPENGL_PCES3_1:
-		case SP_OPENGL_ES2_WEBGL:
 		case SP_VULKAN_PCES3_1:
 		case SP_VULKAN_SM5:
 		case SP_VULKAN_ES3_1_ANDROID:
+		case SP_VULKAN_SM5_ANDROID:
 		case SP_OPENGL_ES3_1_ANDROID:
 			return true;
 
 
 		case SP_PCD3D_SM5:
 		case SP_XBOXONE_D3D12:
-		case SP_PCD3D_ES2:
 		case SP_METAL:
 		case SP_METAL_MRT:
 		case SP_METAL_TVOS:
@@ -239,14 +228,13 @@ bool FMaterialStatsUtils::PlatformNeedsOfflineCompiler(const EShaderPlatform Sha
 		case SP_METAL_SM5:
 		case SP_METAL_SM5_NOTESS:
 		case SP_METAL_MACES3_1:
-		case SP_METAL_MACES2:
 		case SP_SWITCH:
 		case SP_SWITCH_FORWARD:
 		case SP_METAL_MRT_MAC:
 			return false;
 
 		default:
-			return FDataDrivenShaderPlatformInfo::GetInfo(ShaderPlatform).bNeedsOfflineCompiler;
+			return FDataDrivenShaderPlatformInfo::GetNeedsOfflineCompiler(ShaderPlatform);
 	}
 
 	return false;
@@ -314,6 +302,9 @@ FLinearColor FMaterialStatsUtils::PlatformTypeColor(EPlatformCategoryType Platfo
 		case EPlatformCategoryType::IOS:
 			Color = FLinearColor::Gray;
 		break;
+		case EPlatformCategoryType::Console:
+			Color = FLinearColor::Red;
+		break;
 
 		default:
 			return Color;
@@ -351,13 +342,13 @@ void FMaterialStatsUtils::GetRepresentativeShaderTypesAndDescriptions(TMap<FName
 	bool bMobileHDR = MobileHDR && MobileHDR->GetValueOnAnyThread() == 1;
 
 	static const FName FLocalVertexFactoryName = FLocalVertexFactory::StaticType.GetFName();
-	static const FName FGPUFactoryName = TGPUSkinVertexFactory<true>::StaticType.GetFName();
+	static const FName FGPUFactoryName = TEXT("TGPUSkinVertexFactoryExtra");
 
 	if (TargetMaterial->IsUIMaterial())
 	{
-		static FName TSlateMaterialShaderPSDefaultfalseName = TEXT("TSlateMaterialShaderPSDefaultfalse");
+		static FName TSlateMaterialShaderPSDefaultName = TEXT("TSlateMaterialShaderPSDefault");
 		ShaderTypeNamesAndDescriptions.FindOrAdd(FLocalVertexFactoryName)
-			.Add(FRepresentativeShaderInfo(ERepresentativeShader::UIDefaultFragmentShader, TSlateMaterialShaderPSDefaultfalseName, TEXT("Default UI Pixel Shader")));
+			.Add(FRepresentativeShaderInfo(ERepresentativeShader::UIDefaultFragmentShader, TSlateMaterialShaderPSDefaultName, TEXT("Default UI Pixel Shader")));
 
 		static FName TSlateMaterialShaderVSfalseName = TEXT("TSlateMaterialShaderVSfalse");
 		ShaderTypeNamesAndDescriptions.FindOrAdd(FLocalVertexFactoryName)
@@ -613,6 +604,7 @@ void FMaterialStatsUtils::GetRepresentativeInstructionCounts(TArray<FShaderInstr
 					const FRepresentativeShaderInfo& ShaderInfo = DescriptionArray[i];
 
 					FShaderType* ShaderType = FindShaderTypeByName(ShaderInfo.ShaderName);
+					check(ShaderType);
 					const int32 NumInstructions = MaterialShaderMap->GetMaxNumInstructionsForShader(ShaderType);
 
 					FShaderInstructionsInfo Info;
@@ -632,8 +624,8 @@ void FMaterialStatsUtils::GetRepresentativeInstructionCounts(TArray<FShaderInstr
 				const FMeshMaterialShaderMap* MeshShaderMap = MaterialShaderMap->GetMeshShaderMap(FactoryType);
 				if (MeshShaderMap)
 				{
-					TMap<FName, FShader*> ShaderMap;
-					MeshShaderMap->GetShaderList(ShaderMap);
+					TMap<FHashedName, TShaderRef<FShader>> ShaderMap;
+					MeshShaderMap->GetShaderList(*MaterialShaderMap, ShaderMap);
 
 					auto& DescriptionArray = DescriptionPair.Value;
 
@@ -641,12 +633,12 @@ void FMaterialStatsUtils::GetRepresentativeInstructionCounts(TArray<FShaderInstr
 					{
 						const FRepresentativeShaderInfo& ShaderInfo = DescriptionArray[i];
 
-						FShader** ShaderEntry = ShaderMap.Find(ShaderInfo.ShaderName);
+						TShaderRef<FShader>* ShaderEntry = ShaderMap.Find(ShaderInfo.ShaderName);
 						if (ShaderEntry != nullptr)
 						{
-							FShaderType* ShaderType = (*ShaderEntry)->GetType();
+							FShaderType* ShaderType = (*ShaderEntry).GetType();
 							{
-								const int32 NumInstructions = MeshShaderMap->GetMaxNumInstructionsForShader(ShaderType);
+								const int32 NumInstructions = MeshShaderMap->GetMaxNumInstructionsForShader(*MaterialShaderMap, ShaderType);
 
 								FShaderInstructionsInfo Info;
 								Info.ShaderType = ShaderInfo.ShaderType;

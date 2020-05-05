@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -10,7 +10,6 @@
 #include "NiagaraNodeWithDynamicPins.generated.h"
 
 class UEdGraphPin;
-class SNiagaraGraphPinAdd;
 
 DECLARE_DELEGATE_OneParam(FOnAddParameter, const FNiagaraVariable&);
 
@@ -42,19 +41,30 @@ public:
 	virtual void CollectAddPinActions(FGraphActionListBuilderBase& OutActions, bool& bOutCreateRemainingActions, UEdGraphPin* Pin);
 
 	/** Request a new pin. */
-	void AddParameter(FNiagaraVariable Parameter, UEdGraphPin* AddPin);
+	void AddParameter(FNiagaraVariable Parameter, const UEdGraphPin* AddPin);
+	void AddParameter(FNiagaraVariable Parameter, const struct UNiagaraGraph::FAddParameterOptions AddParameterOptions);
 
+	/** Request a new pin and assign MetaData to the newly generated UNiagaraScriptVariable. */
+//	void AddParameterAndSetMetaData(FNiagaraVariable& Parameter, const FNiagaraVariableMetaData& ParameterMetaData, UEdGraphPin* AddPin);
 protected:
 	virtual bool AllowDynamicPins() const { return true; }
 
 	/** Creates an add pin on the node for the specified direction. */
 	void CreateAddPin(EEdGraphPinDirection Direction);
 
+	void UpdateAddedPinMetaData(const UEdGraphPin* AddedPin);
+
 	/** Called when a new typed pin is added by the user. */
 	virtual void OnNewTypedPinAdded(UEdGraphPin* NewPin) { }
+	
+	/** Called in subclasses to restrict renaming.*/
+	/** Verify that the potential rename has produced acceptable results for a pin.*/
+	virtual bool VerifyEditablePinName(const FText& InName, FText& OutErrorMessage, const UEdGraphPin* InGraphPinObj) const { OutErrorMessage = FText::GetEmpty(); return true; }
 
 	/** Called when a pin is renamed. */
 	virtual void OnPinRenamed(UEdGraphPin* RenamedPin, const FString& OldPinName) { }
+
+	virtual bool CanRenamePinFromContextMenu(const UEdGraphPin* Pin) const { return CanRenamePin(Pin); }
 
 	/** Called to determine if a pin can be renamed by the user. */
 	virtual bool CanRenamePin(const UEdGraphPin* Pin) const;
@@ -70,6 +80,13 @@ protected:
 
 	virtual void MoveDynamicPin(UEdGraphPin* Pin, int32 DirectionToMove);
 
+	virtual bool OnVerifyTextChanged(const FText& NewText, FText& OutMessage) { return true; };
+
+	/** Convenience method to determine whether this Node is a Map Get or Map Set when adding a parameter through the parameter panel. */
+	virtual EEdGraphPinDirection GetPinDirectionForNewParameters() { return EEdGraphPinDirection::EGPD_MAX; };
+
+	bool IsValidPinToCompile(UEdGraphPin* Pin) const override;
+
 private:
 
 	/** Gets the display text for a pin. */
@@ -77,6 +94,8 @@ private:
 
 	/** Called when a pin's name text is committed. */
 	void PinNameTextCommitted(const FText& Text, ETextCommit::Type CommitType, UEdGraphPin* Pin);
+	
+	void RenameDynamicPinFromMenu(UEdGraphPin* Pin);
 
 	void RemoveDynamicPinFromMenu(UEdGraphPin* Pin);
 

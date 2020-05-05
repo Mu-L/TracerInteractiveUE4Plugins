@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -268,7 +268,7 @@ struct FTextureSource
 	ENGINE_API bool GetMipData(TArray64<uint8>& OutMipData, int32 BlockIndex, int32 LayerIndex, int32 MipIndex, class IImageWrapperModule* ImageWrapperModule = nullptr);
 
 	/** Computes the size of a single mip. */
-	ENGINE_API int32 CalcMipSize(int32 BlockIndex, int32 LayerIndex, int32 MipIndex) const;
+	ENGINE_API int64 CalcMipSize(int32 BlockIndex, int32 LayerIndex, int32 MipIndex) const;
 
 	/** Computes the number of bytes per-pixel. */
 	ENGINE_API int32 GetBytesPerPixel(int32 LayerIndex = 0) const;
@@ -301,7 +301,7 @@ struct FTextureSource
 	FORCEINLINE int32 GetNumBlocks() const { return Blocks.Num() + 1; }
 	FORCEINLINE ETextureSourceFormat GetFormat(int32 LayerIndex = 0) const { return (LayerIndex == 0) ? Format : LayerFormat[LayerIndex]; }
 	FORCEINLINE bool IsPNGCompressed() const { return bPNGCompressed; }
-	FORCEINLINE int32 GetSizeOnDisk() const { return BulkData.GetBulkDataSize(); }
+	FORCEINLINE int64 GetSizeOnDisk() const { return BulkData.GetBulkDataSize(); }
 	FORCEINLINE bool IsBulkDataLoaded() const { return BulkData.IsBulkDataLoaded(); }
 	FORCEINLINE bool LoadBulkDataWithFileReader() { return BulkData.LoadBulkDataWithFileReader(); }
 	FORCEINLINE void RemoveBulkData() { BulkData.RemoveBulkData(); }
@@ -315,7 +315,7 @@ struct FTextureSource
 		return GetMipData(OutMipData, 0, 0, MipIndex, ImageWrapperModule);
 	}
 
-	FORCEINLINE int32 CalcMipSize(int32 MipIndex) const { return CalcMipSize(0, 0, MipIndex); }
+	FORCEINLINE int64 CalcMipSize(int32 MipIndex) const { return CalcMipSize(0, 0, MipIndex); }
 	FORCEINLINE uint8* LockMip(int32 MipIndex) { return LockMip(0, 0, MipIndex); }
 	FORCEINLINE void UnlockMip(int32 MipIndex) { UnlockMip(0, 0, MipIndex); }
 
@@ -342,14 +342,15 @@ private:
 	/** Removes source data. */
 	void RemoveSourceData();
 	/** Retrieve the size and offset for a source mip. The size includes all slices. */
-	int32 CalcMipOffset(int32 BlockIndex, int32 LayerIndex, int32 MipIndex) const;
+	int64 CalcMipOffset(int32 BlockIndex, int32 LayerIndex, int32 MipIndex) const;
 
-	int32 CalcBlockSize(int32 BlockIndex) const;
-	int32 CalcLayerSize(int32 BlockIndex, int32 LayerIndex) const;
+	int64 CalcBlockSize(int32 BlockIndex) const;
+	int64 CalcLayerSize(int32 BlockIndex, int32 LayerIndex) const;
 
-	/** Uses a hash as the GUID, useful to prevent creating new GUIDs on load for legacy assets. */
-	void UseHashAsGuid();
 public:
+	/** Uses a hash as the GUID, useful to prevent creating new GUIDs on load for legacy assets. */
+	ENGINE_API void UseHashAsGuid();
+
 	void ReleaseSourceMemory(); // release the memory from the mips (does almost the same as remove source data except doesn't rebuild the guid)
 	FORCEINLINE bool HasHadBulkDataCleared() const { return bHasHadBulkDataCleared; }
 private:
@@ -393,7 +394,7 @@ private:
 	UPROPERTY(VisibleAnywhere, Category=TextureSource)
 	bool bPNGCompressed;
 
-	/** Legacy textures use a hash instead of a GUID. */
+	/** Uses hash instead of guid to identify content to improve DDC cache hit. */
 	UPROPERTY(VisibleAnywhere, Category=TextureSource)
 	bool bGuidIsHash;
 
@@ -505,9 +506,10 @@ public:
 	 * @param OutMipData -	Must point to an array of pointers with at least
 	 *						Texture.Mips.Num() - FirstMipToLoad + 1 entries. Upon
 	 *						return those pointers will contain mip data.
+	 * @param Texture - The texture to load mips for.
 	 * @returns true if all requested mips have been loaded.
 	 */
-	bool TryLoadMips(int32 FirstMipToLoad, void** OutMipData);
+	bool TryLoadMips(int32 FirstMipToLoad, void** OutMipData, UTexture* Texture);
 
 	/** Serialization. */
 	void Serialize(FArchive& Ar, class UTexture* Owner);
@@ -572,7 +574,7 @@ public:
 		uint32 InFlags,
 		class ITextureCompressorModule* Compressor);
 	void FinishCache();
-	ENGINE_API bool TryInlineMipData(int32 FirstMipToLoad = 0);
+	ENGINE_API bool TryInlineMipData(int32 FirstMipToLoad = 0, UTexture* Texture = nullptr);
 	bool AreDerivedMipsAvailable() const;
 	bool AreDerivedVTChunksAvailable() const;
 #endif
@@ -617,7 +619,7 @@ struct FTextureFormatSettings
 };
 
 UCLASS(abstract, MinimalAPI, BlueprintType)
-class ENGINE_VTABLE UTexture : public UStreamableRenderAsset, public IInterface_AssetUserData
+class UTexture : public UStreamableRenderAsset, public IInterface_AssetUserData
 {
 	GENERATED_UCLASS_BODY()
 
@@ -685,7 +687,7 @@ public:
 	uint32 CompressionNone:1;
 
 	/** If enabled, defer compression of the texture until save. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=Compression)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=Compression, meta=(NoResetToDefault))
 	uint32 DeferCompression:1;
 
 	/** How aggressively should any relevant lossy compression be applied. */
@@ -1010,7 +1012,7 @@ public:
 	//~ Begin UObject Interface.
 #if WITH_EDITOR
 	ENGINE_API virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
-	ENGINE_API virtual bool CanEditChange(const UProperty* InProperty) const override;
+	ENGINE_API virtual bool CanEditChange(const FProperty* InProperty) const override;
 #endif // WITH_EDITOR
 	ENGINE_API virtual void Serialize(FArchive& Ar) override;
 	ENGINE_API virtual void PostInitProperties() override;
@@ -1106,6 +1108,11 @@ public:
 #else
 		LightingGuid = FGuid(0, 0, 0, 0);
 #endif // WITH_EDITORONLY_DATA
+	}
+
+	void SetLightingGuid(const FGuid& Guid)
+	{
+		LightingGuid = Guid;
 	}
 
 	/**

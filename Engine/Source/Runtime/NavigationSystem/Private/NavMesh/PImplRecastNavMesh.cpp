@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NavMesh/PImplRecastNavMesh.h"
 #include "NavigationSystem.h"
@@ -44,6 +44,7 @@ static_assert(RECAST_UNWALKABLE_POLY_COST == DT_UNWALKABLE_POLY_COST, "Unwalkabl
 
 static void* DetourMalloc(int Size, dtAllocHint)
 {
+	LLM_SCOPE(ELLMTag::NavigationRecast);
 	void* Result = FMemory::Malloc(uint32(Size));
 #if STATS
 	const uint32 ActualSize = FMemory::GetAllocSize(Result);
@@ -55,6 +56,7 @@ static void* DetourMalloc(int Size, dtAllocHint)
 
 static void* RecastMalloc(int Size, rcAllocHint)
 {
+	LLM_SCOPE(ELLMTag::NavigationRecast);
 	void* Result = FMemory::Malloc(uint32(Size));
 #if STATS
 	const uint32 ActualSize = FMemory::GetAllocSize(Result);
@@ -66,6 +68,7 @@ static void* RecastMalloc(int Size, rcAllocHint)
 
 static void RecastFree( void* Original )
 {
+	LLM_SCOPE(ELLMTag::NavigationRecast);
 #if STATS
 	const uint32 Size = FMemory::GetAllocSize(Original);
 	DEC_DWORD_STAT_BY(STAT_NavigationMemory, Size);	
@@ -206,6 +209,11 @@ bool FRecastQueryFilter::IsBacktrackingEnabled() const
 	return getIsBacktracking();
 }
 
+float FRecastQueryFilter::GetHeuristicScale() const
+{
+	return getHeuristicScale();
+}
+
 bool FRecastQueryFilter::IsEqual(const INavigationQueryFilterInterface* Other) const
 {
 	// @NOTE: not type safe, should be changed when another filter type is introduced
@@ -273,8 +281,11 @@ void FPImplRecastNavMesh::ReleaseDetourNavMesh()
 	}
 	DetourNavMesh = nullptr;
 	
-	//
 	CompressedTileCacheLayers.Empty();
+
+#if RECAST_INTERNAL_DEBUG_DATA
+	DebugDataMap.Empty();
+#endif
 }
 
 /**
@@ -777,8 +788,13 @@ void FPImplRecastNavMesh::Raycast(const FVector& StartLoc, const FVector& EndLoc
 	}
 }
 
+ENavigationQueryResult::Type FPImplRecastNavMesh::FindPath(const FVector& StartLoc, const FVector& EndLoc, FNavMeshPath& Path, const FNavigationQueryFilter& Filter, const UObject* Owner) const
+{
+	return FindPath(StartLoc, EndLoc, FLT_MAX, Path, Filter, Owner);
+}
+
 // @TODONAV
-ENavigationQueryResult::Type FPImplRecastNavMesh::FindPath(const FVector& StartLoc, const FVector& EndLoc, FNavMeshPath& Path, const FNavigationQueryFilter& InQueryFilter, const UObject* Owner) const
+ENavigationQueryResult::Type FPImplRecastNavMesh::FindPath(const FVector& StartLoc, const FVector& EndLoc, const float CostLimit, FNavMeshPath& Path, const FNavigationQueryFilter& InQueryFilter, const UObject* Owner) const
 {
 	// temporarily disabling this check due to it causing too much "crashes"
 	// @todo but it needs to be back at some point since it realy checks for a buggy setup
@@ -816,7 +832,7 @@ ENavigationQueryResult::Type FPImplRecastNavMesh::FindPath(const FVector& StartL
 
 	// get path corridor
 	dtQueryResult PathResult;
-	const dtStatus FindPathStatus = NavQuery.findPath(StartPolyID, EndPolyID, &RecastStartPos.X, &RecastEndPos.X, QueryFilter, PathResult, 0);
+	const dtStatus FindPathStatus = NavQuery.findPath(StartPolyID, EndPolyID, &RecastStartPos.X, &RecastEndPos.X, CostLimit, QueryFilter, PathResult, 0);
 
 	// check for special case, where path has not been found, and starting polygon
 	// was the one closest to the target
@@ -887,8 +903,9 @@ ENavigationQueryResult::Type FPImplRecastNavMesh::TestPath(const FVector& StartL
 
 	// get path corridor
 	dtQueryResult PathResult;
+	const float CostLimit = FLT_MAX;
 	const dtStatus FindPathStatus = NavQuery.findPath(StartPolyID, EndPolyID,
-		&RecastStartPos.X, &RecastEndPos.X, QueryFilter, PathResult, 0);
+		&RecastStartPos.X, &RecastEndPos.X, CostLimit, QueryFilter, PathResult, 0);
 
 	if (NumVisitedNodes)
 	{
@@ -1266,7 +1283,7 @@ static void StorePathfindingDebugStep(const dtNavMeshQuery& NavQuery, const dtNa
 	}
 }
 
-int32 FPImplRecastNavMesh::DebugPathfinding(const FVector& StartLoc, const FVector& EndLoc, const FNavigationQueryFilter& Filter, const UObject* Owner, TArray<FRecastDebugPathfindingData>& Steps)
+int32 FPImplRecastNavMesh::DebugPathfinding(const FVector& StartLoc, const FVector& EndLoc, const float CostLimit, const FNavigationQueryFilter& Filter, const UObject* Owner, TArray<FRecastDebugPathfindingData>& Steps)
 {
 	int32 NumSteps = 0;
 
@@ -1288,7 +1305,7 @@ int32 FPImplRecastNavMesh::DebugPathfinding(const FVector& StartLoc, const FVect
 		return NumSteps;
 	}
 
-	dtStatus status = NavQuery.initSlicedFindPath(StartPolyID, EndPolyID, &RecastStartPos.X, &RecastEndPos.X, QueryFilter);
+	dtStatus status = NavQuery.initSlicedFindPath(StartPolyID, EndPolyID, &RecastStartPos.X, &RecastEndPos.X, CostLimit, QueryFilter);
 	while (dtStatusInProgress(status))
 	{
 		StorePathfindingDebugStep(NavQuery, DetourNavMesh, Steps);
@@ -1511,7 +1528,7 @@ NavNodeRef FPImplRecastNavMesh::FindNearestPoly(FVector const& Loc, FVector cons
 
 bool FPImplRecastNavMesh::GetPolysWithinPathingDistance(FVector const& StartLoc, const float PathingDistance, 
 	const FNavigationQueryFilter& Filter, const UObject* Owner,
-	TArray<NavNodeRef>& FoundPolys, FRecastDebugPathfindingData* DebugData) const
+	TArray<NavNodeRef>& FoundPolys, FRecastDebugPathfindingData* OutDebugData) const
 {
 	ensure(PathingDistance > 0.0f && "PathingDistance <= 0 doesn't make sense");
 	
@@ -1555,9 +1572,9 @@ bool FPImplRecastNavMesh::GetPolysWithinPathingDistance(FVector const& StartLoc,
 	NavQuery.findPolysInPathDistance(StartPolyID, RecastStartPos, PathingDistance, QueryFilter, FoundPolys.GetData(), &NumPolys, MaxSearchNodes);
 	FoundPolys.RemoveAt(NumPolys, FoundPolys.Num() - NumPolys);
 
-	if (DebugData)
+	if (OutDebugData)
 	{
-		StorePathfindingDebugData(NavQuery, DetourNavMesh, *DebugData);
+		StorePathfindingDebugData(NavQuery, DetourNavMesh, *OutDebugData);
 	}
 
 	return FoundPolys.Num() > 0;
@@ -2262,7 +2279,11 @@ int32 FPImplRecastNavMesh::GetTilesDebugGeometry(const FRecastNavMeshGenerator* 
 	check(NavMeshOwner && DetourNavMesh);
 	dtMeshHeader const* const Header = Tile.header;
 	check(Header);
-	
+
+#if RECAST_INTERNAL_DEBUG_DATA
+	OutGeometry.TilesToDisplayInternalData.Push(FIntPoint(Header->x, Header->y));
+#endif
+
 	const bool bIsBeingBuilt = Generator != nullptr && !!NavMeshOwner->bDistinctlyDrawTilesBeingBuilt
 		&& Generator->IsTileChanged(TileIdx == INDEX_NONE ? DetourNavMesh->decodePolyIdTile(DetourNavMesh->getTileRef(&Tile)) : TileIdx);
 
@@ -2274,6 +2295,7 @@ int32 FPImplRecastNavMesh::GetTilesDebugGeometry(const FRecastNavMeshGenerator* 
 		OutGeometry.MeshVerts.Add(VertPos);
 		F += 3;
 	}
+
 	int32 const DetailVertIndexBase = Header->vertCount;
 	// add the detail verts
 	F = Tile.detailVerts;
@@ -2742,7 +2764,11 @@ void FPImplRecastNavMesh::RemoveTileCacheLayer(int32 TileX, int32 TileY, int32 L
 		
 		if (ExistingLayersList->Num() == 0)
 		{
-			CompressedTileCacheLayers.Remove(FIntPoint(TileX, TileY));
+			RemoveTileCacheLayers(TileX, TileY);
+
+#if RECAST_INTERNAL_DEBUG_DATA
+			NavMeshOwner->RemoveTileDebugData(TileX, TileY);
+#endif
 		}
 	}
 }

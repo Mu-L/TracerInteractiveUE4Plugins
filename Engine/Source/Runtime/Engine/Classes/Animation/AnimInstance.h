@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -423,6 +423,17 @@ class ENGINE_API UAnimInstance : public UObject
 	/** Flag to check back on the game thread that indicates we need to run PostUpdateAnimation() in the post-eval call */
 	uint8 bNeedsUpdate : 1;
 
+	/** Flag to check if created by LinkedAnimGraph in ReinitializeLinkedAnimInstance */
+	uint8 bCreatedByLinkedAnimGraph : 1;
+
+	/** Whether to process notifies from any linked anim instances */
+	UPROPERTY(EditDefaultsOnly, Category = Notifies)
+	uint8 bReceiveNotifiesFromLinkedInstances : 1;
+
+	/** Whether to propagate notifies to any linked anim instances */
+	UPROPERTY(EditDefaultsOnly, Category = Notifies)
+	uint8 bPropagateNotifiesToLinkedInstances : 1;
+
 private:
 	/** True when Montages are being ticked, and Montage Events should be queued. 
 	 * When Montage are being ticked, we queue AnimNotifies and Events. We trigger notifies first, then Montage events. */
@@ -441,8 +452,6 @@ public:
 
 	// @todo document
 	void MakeMontageTickRecord(FAnimTickRecord& TickRecord, class UAnimMontage* Montage, float CurrentPosition, float PreviousPosition, float MoveDelta, float Weight, TArray<FPassedMarker>& MarkersPassedThisTick, FMarkerTickRecord& MarkerTickRecord);
-
-	bool IsSlotNodeRelevantForNotifies(FName SlotNodeName) const;
 
 	/** Get global weight in AnimGraph for this slot node.
 	* Note: this is the weight of the node, not the weight of any potential montage it is playing. */
@@ -495,6 +504,22 @@ public:
 	// Can does this anim instance need an update (parallel or not)?
 	bool NeedsUpdate() const;
 
+	/** Get whether to process notifies from any linked anim instances */
+	UFUNCTION(BlueprintPure, Category = "Notifies")
+	bool GetReceiveNotifiesFromLinkedInstances() const { return bReceiveNotifiesFromLinkedInstances; }
+
+	/** Set whether to process notifies from any linked anim instances */
+	UFUNCTION(BlueprintCallable, Category = "Notifies")
+	void SetReceiveNotifiesFromLinkedInstances(bool bSet) { bReceiveNotifiesFromLinkedInstances = bSet; }
+
+	/** Get whether to propagate notifies to any linked anim instances */
+	UFUNCTION(BlueprintPure, Category = "Notifies")
+	bool GetPropagateNotifiesToLinkedInstances() const { return bPropagateNotifiesToLinkedInstances; }
+
+	/** Set whether to propagate notifies to any linked anim instances */
+	UFUNCTION(BlueprintCallable, Category = "Notifies")
+	void SetPropagateNotifiesToLinkedInstances(bool bSet) { bPropagateNotifiesToLinkedInstances = bSet; }
+
 private:
 	// Does this anim instance need immediate update (rather than parallel)?
 	bool NeedsImmediateUpdate(float DeltaSeconds) const;
@@ -525,6 +550,10 @@ public:
 	/** Executed when begin play is called on the owning component */
 	UFUNCTION(BlueprintImplementableEvent)
 	void BlueprintBeginPlay();
+
+	/** Executed when the all Linked Animation Layers are initialized */
+	UFUNCTION(BlueprintImplementableEvent)
+	void BlueprintLinkedAnimationLayersInitialized();
 
 	bool CanTransitionSignature() const;
 	
@@ -565,6 +594,10 @@ public:
 	/** Stops the animation montage. If reference is NULL, it will stop ALL active montages. */
 	UFUNCTION(BlueprintCallable, Category = "Montage")
 	void Montage_Stop(float InBlendOutTime, const UAnimMontage* Montage = NULL);
+
+	/** Stops all active montages belonging to a group. */
+	UFUNCTION(BlueprintCallable, Category = "Montage")
+	void Montage_StopGroupByName(float InBlendOutTime, FName GroupName);
 
 	/** Pauses the animation montage. If reference is NULL, it will pause ALL active montages. */
 	UFUNCTION(BlueprintCallable, Category = "Montage")
@@ -1250,7 +1283,7 @@ public:
 	void AddCurveValue(const FName& CurveName, float Value);
 
 	/** Given a machine and state index, record a state weight for this frame */
-	void RecordStateWeight(const int32 InMachineClassIndex, const int32 InStateIndex, const float InStateWeight);
+	void RecordStateWeight(const int32 InMachineClassIndex, const int32 InStateIndex, const float InStateWeight, const float InElapsedTime);
 
 protected:
 #if WITH_EDITORONLY_DATA
@@ -1323,22 +1356,36 @@ protected:
 	/** Override point for derived classes to destroy their own proxy objects (allows custom allocation) */
 	virtual void DestroyAnimInstanceProxy(FAnimInstanceProxy* InProxy);
 
+	/** Access the proxy but block if a task is currently in progress as it wouldn't be safe to access it 
+	 *	This is protected static member for allowing derived to access
+	 */
+	template <typename T /*= FAnimInstanceProxy*/>	// @TODO: Cant default parameters to this function on Xbox One until we move off the VS2012 compiler
+	FORCEINLINE static T* GetProxyOnGameThreadStatic(UAnimInstance* InAnimInstance)
+	{
+		if (InAnimInstance)
+		{
+			check(IsInGameThread());
+			UObject* OuterObj = InAnimInstance->GetOuter();
+			if (OuterObj && OuterObj->IsA<USkeletalMeshComponent>())
+			{
+				bool bBlockOnTask = true;
+				bool bPerformPostAnimEvaluation = true;
+				InAnimInstance->GetSkelMeshComponent()->HandleExistingParallelEvaluationTask(bBlockOnTask, bPerformPostAnimEvaluation);
+			}
+			if (InAnimInstance->AnimInstanceProxy == nullptr)
+			{
+				InAnimInstance->AnimInstanceProxy = InAnimInstance->CreateAnimInstanceProxy();
+			}
+			return static_cast<T*>(InAnimInstance->AnimInstanceProxy);
+		}
+
+		return nullptr;
+	}
 	/** Access the proxy but block if a task is currently in progress as it wouldn't be safe to access it */
 	template <typename T /*= FAnimInstanceProxy*/>	// @TODO: Cant default parameters to this function on Xbox One until we move off the VS2012 compiler
 	FORCEINLINE T& GetProxyOnGameThread()
 	{
-		check(IsInGameThread());
-		if(GetOuter() && GetOuter()->IsA<USkeletalMeshComponent>())
-		{
-			bool bBlockOnTask = true;
-			bool bPerformPostAnimEvaluation = true;
-			GetSkelMeshComponent()->HandleExistingParallelEvaluationTask(bBlockOnTask, bPerformPostAnimEvaluation);
-		}
-		if(AnimInstanceProxy == nullptr)
-		{
-			AnimInstanceProxy = CreateAnimInstanceProxy();
-		}
-		return *static_cast<T*>(AnimInstanceProxy);
+		return *GetProxyOnGameThreadStatic<T>(this);
 	}
 
 	/** Access the proxy but block if a task is currently in progress as it wouldn't be safe to access it */
@@ -1401,8 +1448,8 @@ protected:
 
 	friend struct FAnimNode_LinkedAnimGraph;
 	
-	/** Return whethere this AnimNotifyState should be triggered */
-	virtual bool ShouldTriggerAnimNotifyState(const UAnimNotifyState* AnimNotifyState) const { return true; }
+	/** Return whether this AnimNotifyState should be triggered */
+	virtual bool ShouldTriggerAnimNotifyState(const UAnimNotifyState* AnimNotifyState) const;
 
 protected:
 	/** Proxy object, nothing should access this from an externally-callable API as it is used as a scratch area on worker threads */

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AssetTypeActions/AssetTypeActions_Texture2D.h"
 #include "ToolMenus.h"
@@ -42,8 +42,7 @@ void FAssetTypeActions_Texture2D::GetActions(const TArray<UObject*>& InObjects, 
 			);
 	}
 
-	static const auto AllowVolumeTextureAssetCreationVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.AllowVolumeTextureAssetCreation"));
-	if (InObjects.Num() == 1 && AllowVolumeTextureAssetCreationVar->GetValueOnGameThread() != 0)
+	if (InObjects.Num() == 1)
 	{
 		Section.AddMenuEntry(
 			"Texture2D_CreateVolumeTexture",

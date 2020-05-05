@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	XXXTargetPlatform.h: Declares the FXXXTargetPlatform class.
@@ -79,11 +79,6 @@ public:
 
 	// this should be all the possible return values from the function GetWaveFormat
 	virtual void GetAllWaveFormats( TArray<FName>& OutFormats ) const override;
-
-	virtual FPlatformAudioCookOverrides* GetAudioCompressionSettings() const override
-	{
-		return nullptr;
-	}
 
 #endif // WITH_ENGINE
 

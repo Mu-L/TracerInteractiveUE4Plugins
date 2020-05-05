@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "EnvironmentQuery/Tests/EnvQueryTest_GameplayTags.h"
 #include "GameFramework/Actor.h"
@@ -113,4 +113,9 @@ void UEnvQueryTest_GameplayTags::RunTest(FEnvQueryInstance& QueryInstance) const
 FText UEnvQueryTest_GameplayTags::GetDescriptionDetails() const
 {
 	return FText::FromString(TagQueryToMatch.GetDescription());
+}
+
+void UEnvQueryTest_GameplayTags::SetTagQueryToMatch(FGameplayTagQuery& GameplayTagQuery)
+{
+	TagQueryToMatch = GameplayTagQuery;
 }

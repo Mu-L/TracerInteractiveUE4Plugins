@@ -1,13 +1,13 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "EditorSessionSummarySender.h"
 
 #include "AnalyticsEventAttribute.h"
 #include "Algo/Transform.h"
-#include "Interfaces/IAnalyticsProvider.h"
+#include "IAnalyticsProviderET.h"
 #include "EditorAnalyticsSession.h"
 #include "HAL/PlatformProcess.h"
-#include "IAnalyticsProviderET.h"
+#include "Misc/EngineVersion.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogEditorSessionSummary, Verbose, All);
 
@@ -27,32 +27,7 @@ namespace EditorSessionSenderDefs
 	static const FString AbnormalSessionToken(TEXT("AbnormalShutdown"));
 }
 
-namespace EditorSessionSenderUtil_4_24_3
-{
-	static const FString StoreId(TEXT("Epic Games"));
-	static const FString SessionSummarySection(TEXT("Unreal Engine/Session Summary/1_0"));
-
-	static const FString AppIdStoreKey( TEXT("AppId"));
-	static const FString AppVersionStoreKey(TEXT("AppVersion"));
-	static const FString UserIdStoreKey(TEXT("UserId"));
-
-	void DeleteExtraSessionKeys(const FString& SessionId)
-	{
-		const FString SectionName = SessionSummarySection + TEXT("/") + SessionId;
-		FPlatformMisc::DeleteStoredValue(StoreId, SectionName, AppIdStoreKey);
-		FPlatformMisc::DeleteStoredValue(StoreId, SectionName, AppVersionStoreKey);
-		FPlatformMisc::DeleteStoredValue(StoreId, SectionName, UserIdStoreKey);
-	}
-
-	void ReadAndDeleteExtraSessionKey(const FString& SessionId, const FString& InKey, FString& OutValue)
-	{
-		const FString SectionName = SessionSummarySection + TEXT("/") + SessionId;
-		FPlatformMisc::GetStoredValue(StoreId, SectionName, InKey, OutValue);
-		FPlatformMisc::DeleteStoredValue(StoreId, SectionName, InKey);
-	}
-}
-
-FEditorSessionSummarySender::FEditorSessionSummarySender(IAnalyticsProvider& InAnalyticsProvider, const FString& InSenderName, const int32 InCurrentSessionProcessId)
+FEditorSessionSummarySender::FEditorSessionSummarySender(IAnalyticsProviderET& InAnalyticsProvider, const FString& InSenderName, const uint32 InCurrentSessionProcessId)
 	: HeartbeatTimeElapsed(0.0f)
 	, AnalyticsProvider(InAnalyticsProvider)
 	, Sender(InSenderName)
@@ -81,100 +56,81 @@ void FEditorSessionSummarySender::Shutdown()
 	SendStoredSessions(/*bForceSendCurrentSession*/true);
 }
 
-void FEditorSessionSummarySender::SetCurrentSessionExitCode(const int32 InCurrentSessionProcessId, const int32 InExitCode)
+void FEditorSessionSummarySender::SetMonitorDiagnosticLogs(TMap<uint32, FString>&& Logs)
 {
-	check(CurrentSessionProcessId == InCurrentSessionProcessId);
-	CurrentSessionExitCode = InExitCode;
+	MonitorMiniLogs = Logs;
 }
 
-bool FEditorSessionSummarySender::FindCurrentSession(FEditorAnalyticsSession& OutSession) const
+void FEditorSessionSummarySender::SendStoredSessions(const bool bForceSendOwnedSession) const
 {
-	if (FPlatformProcess::IsApplicationRunning(CurrentSessionProcessId))
-	{
-		// still running, can't be abnormal termination
-		return false;
-	}
-
-	bool bFound = false;
-
-	if (FEditorAnalyticsSession::Lock(FTimespan::FromMilliseconds(100)))
-	{
-		TArray<FEditorAnalyticsSession> ExistingSessions;
-		FEditorAnalyticsSession::LoadAllStoredSessions(ExistingSessions);
-
-		const int32 ProcessID = CurrentSessionProcessId;
-		FEditorAnalyticsSession* CurrentSession = ExistingSessions.FindByPredicate(
-			[ProcessID](const FEditorAnalyticsSession& Session)
-			{
-				return Session.PlatformProcessID == ProcessID;
-			});
-
-		if (CurrentSession != nullptr)
-		{
-			OutSession = *CurrentSession;
-			bFound = true;
-		}
-
-		FEditorAnalyticsSession::Unlock();
-	}
-
-	return bFound;
-}
-
-void FEditorSessionSummarySender::SendStoredSessions(const bool bForceSendCurrentSession) const
-{
+	// Load the list of sessions to process. Expect contention on the analytic session lock between the Editor and CrashReportClientEditor (on windows) or between Editor instances (on mac/linux)
+	//   - Try every 'n' seconds if bForceSendCurrentSession is true.
+	//   - Don't block and don't loop if bForceSendCurrentSession is false.
 	TArray<FEditorAnalyticsSession> SessionsToReport;
-
-	if (FEditorAnalyticsSession::Lock(FTimespan::FromMilliseconds(100)))
+	FTimespan Timemout(bForceSendOwnedSession ? FTimespan::FromSeconds(5) : FTimespan::Zero());
+	bool bSessionsLoaded = false;
+	do
 	{
-		// Get list of sessions in storage
-		TArray<FEditorAnalyticsSession> ExistingSessions;
-		FEditorAnalyticsSession::LoadAllStoredSessions(ExistingSessions);
-
-		TArray<FEditorAnalyticsSession> SessionsToDelete;
-
-		// Check each stored session to see if they should be sent or not 
-		for (FEditorAnalyticsSession& Session : ExistingSessions)
+		if (FEditorAnalyticsSession::Lock(Timemout))
 		{
-			const bool bForceSendSession = bForceSendCurrentSession && (Session.PlatformProcessID == CurrentSessionProcessId);
-			if (!bForceSendSession && FPlatformProcess::IsApplicationRunning(Session.PlatformProcessID))
-			{
-				// Skip processes that are still running
-				continue;
-			}
+			// Get list of sessions in storage
+			TArray<FEditorAnalyticsSession> ExistingSessions;
+			FEditorAnalyticsSession::LoadAllStoredSessions(ExistingSessions);
 
-			const FTimespan SessionAge = FDateTime::UtcNow() - Session.Timestamp;
-			if (SessionAge < EditorSessionSenderDefs::SessionExpiration)
-			{
-				SessionsToReport.Add(Session);
-			}
-			else // Session is expired (and will not be sent)
-			{
-				// Hack 4.24.3: Normally, the extra keys are deleted once the summary event is sent, but this session summary will not be sent. Delete the extra keys now to avoid accumulating.
-				EditorSessionSenderUtil_4_24_3::DeleteExtraSessionKeys(Session.SessionId);
-			}
-			
-			SessionsToDelete.Add(Session);
-		}
+			TArray<FEditorAnalyticsSession> SessionsToDelete;
 
-		for (const FEditorAnalyticsSession& ToDelete : SessionsToDelete)
-		{
-			ToDelete.Delete();
-			ExistingSessions.RemoveAll([&ToDelete](const FEditorAnalyticsSession& Session)
+			// Whether this summary sender instance was tasked to send the specified session.
+			auto HasOwnershipOf = [this](const FEditorAnalyticsSession& InSession) { return InSession.PlatformProcessID == CurrentSessionProcessId; };
+
+			// Whether the process(es) writing and/or sending the specified session are all dead (and cannot write or send the session anymore).
+			auto IsOrphan = [](const FEditorAnalyticsSession& InSession) { return !FPlatformProcess::IsApplicationRunning(InSession.PlatformProcessID) && (InSession.MonitorProcessID == 0 || !FPlatformProcess::IsApplicationRunning(InSession.MonitorProcessID)); };
+
+			// Check each stored session to see if they should be sent or not
+			for (FEditorAnalyticsSession& Session : ExistingSessions)
+			{
+				if (HasOwnershipOf(Session)) // This process was configured to send this session.
 				{
-					return Session.SessionId == ToDelete.SessionId;
-				});
+					if (!bForceSendOwnedSession) // Don't send until forced to (on shutdown).
+					{
+						continue;
+					}
+				}
+				else if (!IsOrphan(Session))
+				{
+					continue; // Skip, another process is in charge of sending this session.
+				}
+
+				const FTimespan SessionAge = FDateTime::UtcNow() - Session.Timestamp;
+				if (SessionAge < EditorSessionSenderDefs::SessionExpiration)
+				{
+					SessionsToReport.Add(Session);
+				}
+				SessionsToDelete.Add(Session);
+			}
+
+			// NOTE: The sessions are deleted before sending (while holding the lock) to prevent another process from finding and sending the same orphan sessions twice.
+			//       This also ensures a session will never be sent twice in case a crash occurs while sending, but all sessions loaded in memory for sending will also be lost.
+			for (const FEditorAnalyticsSession& ToDelete : SessionsToDelete)
+			{
+				ToDelete.Delete();
+				ExistingSessions.RemoveAll([&ToDelete](const FEditorAnalyticsSession& Session)
+					{
+						return Session.SessionId == ToDelete.SessionId;
+					});
+			}
+
+			TArray<FString> SessionIDs;
+			SessionIDs.Reserve(ExistingSessions.Num());
+			Algo::Transform(ExistingSessions, SessionIDs, &FEditorAnalyticsSession::SessionId);
+
+			FEditorAnalyticsSession::SaveStoredSessionIDs(SessionIDs);
+
+			FEditorAnalyticsSession::Unlock();
+			bSessionsLoaded = true;
 		}
+	} while (bForceSendOwnedSession && !bSessionsLoaded); // Retry until session are loaded if the sender is forced to send the current session.
 
-		TArray<FString> SessionIDs;
-		SessionIDs.Reserve(ExistingSessions.Num());
-		Algo::Transform(ExistingSessions, SessionIDs, &FEditorAnalyticsSession::SessionId);
-
-		FEditorAnalyticsSession::SaveStoredSessionIDs(SessionIDs);
-
-		FEditorAnalyticsSession::Unlock();
-	}
-
+	// Send the sessions (without holding the lock).
 	for (const FEditorAnalyticsSession& Session : SessionsToReport)
 	{
 		SendSessionSummaryEvent(Session);
@@ -199,20 +155,30 @@ void FEditorSessionSummarySender::SendSessionSummaryEvent(const FEditorAnalytics
 	FString PluginsString = FString::Join(Session.Plugins, TEXT(","));
 
 	TArray<FAnalyticsEventAttribute> AnalyticsAttributes;
+
+	// Track which app/user is sending the summary (summary can be sent by another process (CrashReportClient) or another instance in case of crash/abnormal terminaison.
+	AnalyticsAttributes.Emplace(TEXT("SummarySenderAppId"), AnalyticsProvider.GetAppID());
+	AnalyticsAttributes.Emplace(TEXT("SummarySenderAppVersion"), AnalyticsProvider.GetAppVersion());
+	AnalyticsAttributes.Emplace(TEXT("SummarySenderEngineVersion"), FEngineVersion::Current().ToString(EVersionComponent::Changelist)); // Same as in EditorSessionSummaryWriter.cpp
+	AnalyticsAttributes.Emplace(TEXT("SummarySenderUserId"), AnalyticsProvider.GetUserID());
+	AnalyticsAttributes.Emplace(TEXT("SummarySenderSessionId"), AnalyticsProvider.GetSessionID()); // Not stripping the {} around the GUID like EditorSessionSummaryWriter does with SessionId.
+
 	AnalyticsAttributes.Emplace(TEXT("ProjectName"), Session.ProjectName);
 	AnalyticsAttributes.Emplace(TEXT("ProjectID"), Session.ProjectID);
 	AnalyticsAttributes.Emplace(TEXT("ProjectDescription"), Session.ProjectDescription);
 	AnalyticsAttributes.Emplace(TEXT("ProjectVersion"), Session.ProjectVersion);
-	AnalyticsAttributes.Emplace(TEXT("Platform"), FPlatformProperties::PlatformName());
-	AnalyticsAttributes.Emplace(TEXT("SessionId"), SessionIdString);
-	AnalyticsAttributes.Emplace(TEXT("EngineVersion"), Session.EngineVersion);
+	AnalyticsAttributes.Emplace(TEXT("Platform"), FPlatformProperties::IniPlatformName());
+	AnalyticsAttributes.Emplace(TEXT("SessionId"), SessionIdString); // The provider is expected to add it as "SessionID" param in the HTTP request, but keep it for completness, because the formats are slightly different.
+	AnalyticsAttributes.Emplace(TEXT("EngineVersion"), Session.EngineVersion); // The provider is expected to add it as "AppVersion" param in the HTTP request, but keep it for completness, because the formats are slightly different.
 	AnalyticsAttributes.Emplace(TEXT("ShutdownType"), ShutdownTypeString);
 	AnalyticsAttributes.Emplace(TEXT("StartupTimestamp"), Session.StartupTimestamp.ToIso8601());
 	AnalyticsAttributes.Emplace(TEXT("Timestamp"), Session.Timestamp.ToIso8601());
-	AnalyticsAttributes.Emplace(TEXT("SessionDuration"), Session.SessionDuration);
+	AnalyticsAttributes.Emplace(TEXT("SessionDuration"), FMath::FloorToInt(static_cast<float>((Session.Timestamp - Session.StartupTimestamp).GetTotalSeconds())));
 	AnalyticsAttributes.Emplace(TEXT("1MinIdle"), Session.Idle1Min);
 	AnalyticsAttributes.Emplace(TEXT("5MinIdle"), Session.Idle5Min);
 	AnalyticsAttributes.Emplace(TEXT("30MinIdle"), Session.Idle30Min);
+	AnalyticsAttributes.Emplace(TEXT("TotalUserInactivitySecs"), Session.TotalUserInactivitySeconds);
+	AnalyticsAttributes.Emplace(TEXT("TotalEditorInactivitySecs"), Session.TotalEditorInactivitySeconds);
 	AnalyticsAttributes.Emplace(TEXT("CurrentUserActivity"), Session.CurrentUserActivity);
 	AnalyticsAttributes.Emplace(TEXT("AverageFPS"), Session.AverageFPS);
 	AnalyticsAttributes.Emplace(TEXT("Plugins"), PluginsString);
@@ -239,59 +205,62 @@ void FEditorSessionSummarySender::SendSessionSummaryEvent(const FEditorAnalytics
 	AnalyticsAttributes.Emplace(TEXT("IsInPIE"), Session.bIsInPIE);
 	AnalyticsAttributes.Emplace(TEXT("IsInEnterprise"), Session.bIsInEnterprise);
 	AnalyticsAttributes.Emplace(TEXT("IsInVRMode"), Session.bIsInVRMode);
+	AnalyticsAttributes.Emplace(TEXT("IsLowDriveSpace"), Session.bIsLowDriveSpace);
 	AnalyticsAttributes.Emplace(TEXT("SentFrom"), Sender);
 
-	// was this sent from some other process than itself or the out-of-process monitor for that run?
+	bool bErrorDetected = (ShutdownTypeString != EditorSessionSenderDefs::ShutdownSessionToken && ShutdownTypeString != EditorSessionSenderDefs::TerminatedSessionToken);
+
+	// Add the exit code to the report if it was set by out-of-process monitor (CrashReportClientEditor).
+	if (Session.ExitCode.IsSet())
+	{
+		AnalyticsAttributes.Emplace(TEXT("ExitCode"), Session.ExitCode.GetValue());
+		bErrorDetected |= Session.ExitCode.GetValue() != 0;
+	}
+
+	// Add the monitor exception code in case the out-of-process monitor (CrashReportClientEditor) crashed itself, caught the exception and was able to store it in the session before dying.
+	if (Session.MonitorExceptCode.IsSet())
+	{
+		AnalyticsAttributes.Emplace(TEXT("MonitorExceptCode"), Session.MonitorExceptCode.GetValue());
+		bErrorDetected = true;
+	}
+
+	// If the session did not end normally, try to attache the mini-log created for that session to help diagnose abnormal terminations.
+	if (bErrorDetected && !Session.bWasEverDebugger)
+	{
+		// Check if a monitor log is available. (Set by CrashReportClientEditor before sending the summary events).
+		if (const FString* MonitorLog = MonitorMiniLogs.Find(Session.MonitorProcessID))
+		{
+			AnalyticsAttributes.Emplace(TEXT("MonitorLog"), *MonitorLog);
+		}
+	}
+
+	// Was this summary produced by another process than itself or the out-of-process monitor for that run?
 	AnalyticsAttributes.Emplace(TEXT("DelayedSend"), Session.PlatformProcessID != CurrentSessionProcessId);
 
-	if (Session.PlatformProcessID == CurrentSessionProcessId && CurrentSessionExitCode.IsSet())
+	// Sending the summary event of the current process analytic session?
+	if (AnalyticsProvider.GetSessionID().Contains(Session.SessionId)) // The string (GUID) returned by GetSessionID() is surrounded with braces like "{3FEA3232-...}" while Session.SessionId is not -> "3FEA3232-..."
 	{
-		AnalyticsAttributes.Emplace(TEXT("ExitCode"), CurrentSessionExitCode.GetValue());
-	}
-
-	// Hack for 4.24.3: Downcast to IAnalyticsProviderET. In 4.24, FEditorSessionSummarySender is only instantiated by the Editor or CrashReportClientEditor and in this context, the Provider is an IAnalyticsProviderET.
-	IAnalyticsProviderET& ProviderET = static_cast<IAnalyticsProviderET&>(AnalyticsProvider);
-	if (ProviderET.GetAppID().StartsWith(TEXT("CrashReporter"))) // Detect if this is called within the crash report client vs Editor. CrashReporter AppID is set in CrashReportAnalyticsConfiguration.cpp as CrashReporter.Release or CrashReporter.Dev
-	{
-		// Extract the information from the session -> Kept the public header files untouched for 4.24.3 (The member were added to FEditorAnalyticsSession in 4.25)
-		FString AppId;
-		FString AppVersion;
-		FString UserId;
-		FEditorAnalyticsSession::Lock();
-		EditorSessionSenderUtil_4_24_3::ReadAndDeleteExtraSessionKey(Session.SessionId, EditorSessionSenderUtil_4_24_3::AppIdStoreKey, AppId);
-		EditorSessionSenderUtil_4_24_3::ReadAndDeleteExtraSessionKey(Session.SessionId, EditorSessionSenderUtil_4_24_3::AppVersionStoreKey, AppVersion);
-		EditorSessionSenderUtil_4_24_3::ReadAndDeleteExtraSessionKey(Session.SessionId, EditorSessionSenderUtil_4_24_3::UserIdStoreKey, UserId);
-		FEditorAnalyticsSession::Unlock();
-
-		FString OldSessionId = ProviderET.GetSessionID();
-		FString OldAppId = ProviderET.GetAppID();
-		FString OldAppVersion = ProviderET.GetAppVersion();
-		FString OldUserId = ProviderET.GetUserID();
-
-		// Impersonate the Editor sending the summary. Since it in CrashReporter, its unlikely that another thread is going to send telemetry event(s) at the same time to interfere.
-		ProviderET.SetSessionID(CopyTemp(SessionIdString)); // This also flushes the current events.
-		ProviderET.SetAppID(CopyTemp(AppId));
-		ProviderET.SetAppVersion(CopyTemp(AppVersion));
-		ProviderET.SetUserID(CopyTemp(UserId));
-
-		// Send the event.
-		ProviderET.RecordEvent(TEXT("SessionSummary"), AnalyticsAttributes);
-
-		// Restore the provider to its original config. (This also flushes the events as side effects)
-		ProviderET.SetSessionID(MoveTemp(OldSessionId));
-		ProviderET.SetAppID(MoveTemp(OldAppId));
-		ProviderET.SetAppVersion(MoveTemp(OldAppVersion));
-		ProviderET.SetUserID(MoveTemp(OldUserId));
-	}
-	else
-	{
-		// Send the event.
 		AnalyticsProvider.RecordEvent(TEXT("SessionSummary"), AnalyticsAttributes);
+	}
+	else // The summary was created by another process/instance in a different session. (Ex: Editor sending a summary a prevoulsy crashed instance or CrashReportClientEditor sending it on behalf of the Editor)
+	{
+		// The provider sending a 'summary event' created by another instance/process must parametrize its post request 'as if' it was sent from the instance/session that created it (backend expectation).
+		// Create a new provider to avoid interfering with the current session events. (ex. if another thread sends telemetry at the same time, don't accidently tag it with the wrong SessionID, AppID, etc.).
+		TSharedPtr<IAnalyticsProviderET> TempSummaryProvider = FAnalyticsET::Get().CreateAnalyticsProvider(AnalyticsProvider.GetConfig());
+		
+		// Reconfigure the analytics provider to sent the summary event 'as if' it was sent by the process that created it. This is required by the analytics backend.
+		FGuid SessionGuid;
+		FGuid::Parse(Session.SessionId, SessionGuid);
+		TempSummaryProvider->SetSessionID(SessionGuid.ToString(EGuidFormats::DigitsWithHyphensInBraces)); // Ensure to put back the {} around the GUID.
+		TempSummaryProvider->SetAppID(CopyTemp(Session.AppId));
+		TempSummaryProvider->SetAppVersion(CopyTemp(Session.AppVersion));
+		TempSummaryProvider->SetUserID(CopyTemp(Session.UserId));
 
-		// Just in case the extra keys were added.
-		FEditorAnalyticsSession::Lock();
-		EditorSessionSenderUtil_4_24_3::DeleteExtraSessionKeys(Session.SessionId);
-		FEditorAnalyticsSession::Unlock();
+		// Send the summary.
+		TempSummaryProvider->RecordEvent(TEXT("SessionSummary"), AnalyticsAttributes);
+
+		// The temporary provider is about to be deleted (going out of scope), ensure it sents its report.
+		TempSummaryProvider->BlockUntilFlushed(2.0f);
 	}
 
 	UE_LOG(LogEditorSessionSummary, Log, TEXT("EditorSessionSummary sent report. Type=%s, SessionId=%s"), *ShutdownTypeString, *SessionIdString);

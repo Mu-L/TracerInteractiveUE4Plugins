@@ -1,17 +1,18 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ChaosInterfaceWrapperCore.h"
 
 #include "Chaos/Capsule.h"
 #include "Chaos/ImplicitObject.h"
+#include "Chaos/ImplicitObjectTransformed.h"
 #include "Chaos/ParticleHandle.h"
 #include "PhysXPublicCore.h"
 
 namespace ChaosInterface
 {
-	ECollisionShapeType GetImplicitType(const Chaos::TImplicitObject<float, 3>& InGeometry)
+	FORCEINLINE ECollisionShapeType ImplicitTypeToCollisionType(int32 ImplicitObjectType)
 	{
-		switch (InGeometry.GetType())
+		switch (ImplicitObjectType)
 		{
 		case Chaos::ImplicitObjectType::Sphere: return ECollisionShapeType::Sphere;
 		case Chaos::ImplicitObjectType::Box: return ECollisionShapeType::Box;
@@ -19,11 +20,24 @@ namespace ChaosInterface
 		case Chaos::ImplicitObjectType::Convex: return ECollisionShapeType::Convex;
 		case Chaos::ImplicitObjectType::TriangleMesh: return ECollisionShapeType::Trimesh;
 		case Chaos::ImplicitObjectType::HeightField: return ECollisionShapeType::Heightfield;
-		case Chaos::ImplicitObjectType::Scaled: return ECollisionShapeType::Scaled;
 		default: break;
 		}
 
 		return ECollisionShapeType::None;
+	}
+
+
+	ECollisionShapeType GetImplicitType(const Chaos::FImplicitObject& InGeometry)
+	{
+		using namespace Chaos;
+		int32 ImplicitObjectType = GetInnerType(InGeometry.GetType());
+
+		if (ImplicitObjectType == ImplicitObjectType::Transformed)
+		{
+			ImplicitObjectType = static_cast<const TImplicitObjectTransformed<FReal, 3>*>(&InGeometry)->Object()->GetType();
+		}
+
+		return ImplicitTypeToCollisionType(ImplicitObjectType);
 	}
 
 	float GetRadius(const Chaos::TCapsule<float>& InCapsule)
@@ -43,7 +57,7 @@ namespace ChaosInterface
 
 	FCollisionFilterData GetSimulationFilterData(const Chaos::TPerShapeData<float, 3>& Shape)
 	{
-		return Shape.QueryData;
+		return Shape.SimData;
 	}
 
 

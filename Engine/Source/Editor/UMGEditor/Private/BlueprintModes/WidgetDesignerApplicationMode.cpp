@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BlueprintModes/WidgetDesignerApplicationMode.h"
 
@@ -8,7 +8,7 @@
 
 #include "WidgetBlueprintEditorToolbar.h"
 #include "UMGEditorModule.h"
-
+#include "ToolMenus.h"
 
 #include "TabFactory/PaletteTabSummoner.h"
 #include "TabFactory/HierarchyTabSummoner.h"
@@ -123,9 +123,13 @@ FWidgetDesignerApplicationMode::FWidgetDesignerApplicationMode(TSharedPtr<FWidge
 	ToolbarExtender = UMGEditorModule.GetToolBarExtensibilityManager()->GetAllExtenders();
 	
 	InWidgetEditor->GetWidgetToolbarBuilder()->AddWidgetBlueprintEditorModesToolbar(ToolbarExtender);
-	InWidgetEditor->GetWidgetToolbarBuilder()->AddWidgetReflector(ToolbarExtender);
-	InWidgetEditor->GetToolbarBuilder()->AddCompileToolbar(ToolbarExtender);
-	InWidgetEditor->GetToolbarBuilder()->AddDebuggingToolbar(ToolbarExtender);
+
+	if (UToolMenu* Toolbar = InWidgetEditor->RegisterModeToolbarIfUnregistered(GetModeName()))
+	{
+		InWidgetEditor->GetWidgetToolbarBuilder()->AddWidgetReflector(Toolbar);
+		InWidgetEditor->GetToolbarBuilder()->AddCompileToolbar(Toolbar);
+		InWidgetEditor->GetToolbarBuilder()->AddDebuggingToolbar(Toolbar);
+	}
 }
 
 void FWidgetDesignerApplicationMode::RegisterTabFactories(TSharedPtr<FTabManager> InTabManager)

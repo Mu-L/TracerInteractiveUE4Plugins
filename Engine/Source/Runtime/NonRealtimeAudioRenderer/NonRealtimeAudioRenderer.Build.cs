@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 namespace UnrealBuildTool.Rules
 {
@@ -35,11 +35,6 @@ namespace UnrealBuildTool.Rules
 					"libOpus",
 					"UELibSampleRate"
 					);
-
-            if (Target.Platform == UnrealTargetPlatform.XboxOne)
-            {
-                PrivateDependencyModuleNames.Add("XMA2");
-            }
         }
 	}
 }

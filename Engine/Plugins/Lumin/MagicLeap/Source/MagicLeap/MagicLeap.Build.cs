@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System.IO;
 
@@ -53,7 +53,7 @@ namespace UnrealBuildTool.Rules
 				}
 			);
 
-			if (Target.Platform != UnrealTargetPlatform.Mac)
+			if (Target.Platform != UnrealTargetPlatform.Mac && Target.Platform != UnrealTargetPlatform.IOS)
 			{
 				PrivateDependencyModuleNames.AddRange(
 					new string[]

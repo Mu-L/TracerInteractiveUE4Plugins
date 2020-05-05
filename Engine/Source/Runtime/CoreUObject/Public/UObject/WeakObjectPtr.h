@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	WeakObjectPtr.h: Weak pointer to UObject
@@ -20,6 +20,8 @@
 struct FWeakObjectPtr
 {
 public:
+
+	friend struct FFieldPath;
 
 	/** Null constructor **/
 	FORCEINLINE FWeakObjectPtr()

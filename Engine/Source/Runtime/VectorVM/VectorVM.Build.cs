@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 
@@ -9,15 +9,14 @@ public class VectorVM : ModuleRules
         PublicDependencyModuleNames.AddRange(
             new string[] {
                 "Core",
-                "Engine"
+                "CoreUObject"
             }
         );
 
 		PrivateDependencyModuleNames.AddRange(
             new string[] {
                 "Core",
-				"CoreUObject", 
-                "Engine"
+				"CoreUObject"
             }
         );
 

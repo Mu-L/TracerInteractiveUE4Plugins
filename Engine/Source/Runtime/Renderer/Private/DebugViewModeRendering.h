@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 DebugViewModeRendering.h: Contains definitions for rendering debug viewmodes.
@@ -22,11 +22,13 @@ struct FMeshDrawingRenderState;
 class FDebugViewModeInterface;
 
 static const int32 NumStreamingAccuracyColors = 5;
+static const int32 NumLODColorationColors = 8;
 static const float UndefinedStreamingAccuracyIntensity = .015f;
 
 BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FDebugViewModePassPassUniformParameters, )
 	SHADER_PARAMETER_STRUCT(FSceneTexturesUniformParameters, SceneTextures)
 	SHADER_PARAMETER_ARRAY(FLinearColor, AccuracyColors, [NumStreamingAccuracyColors])
+	SHADER_PARAMETER_ARRAY(FLinearColor, LODColors, [NumLODColorationColors])
 END_GLOBAL_SHADER_PARAMETER_STRUCT()
 
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
@@ -104,7 +106,7 @@ public:
 	static void SetCommonDefinitions(const FMaterialShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		// SM4 has less input interpolants. Also instanced meshes use more interpolants.
-		if (Parameters.Material->IsDefaultMaterial() || (IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5) && !Parameters.Material->IsUsedWithInstancedStaticMeshes()))
+		if (Parameters.MaterialParameters.bIsDefaultMaterial || (IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5) && !Parameters.MaterialParameters.bIsUsedWithInstancedStaticMeshes))
 		{	// Force the default material to pass enough texcoords to the pixel shaders (even though not using them).
 			// This is required to allow material shaders to have access to the sampled coords.
 			OutEnvironment.SetDefine(TEXT("MIN_MATERIAL_TEXCOORDS"), (uint32)4);
@@ -173,61 +175,22 @@ public:
 class FDebugViewModePS : public FMeshMaterialShader
 {
 public:
-
 	FDebugViewModePS(const FMeshMaterialShaderType::CompiledShaderInitializerType& Initializer);
-
 	FDebugViewModePS() {}
 
 	void GetElementShaderBindings(
-		const FScene* Scene, 
-		const FSceneView* ViewIfDynamicMeshCommand, 
+		const FShaderMapPointerTable& PointerTable,
+		const FScene* Scene,
+		const FSceneView* ViewIfDynamicMeshCommand,
 		const FVertexFactory* VertexFactory,
 		const EVertexInputStreamType InputStreamType,
 		ERHIFeatureLevel::Type FeatureLevel,
 		const FPrimitiveSceneProxy* PrimitiveSceneProxy,
 		const FMeshBatch& MeshBatch,
-		const FMeshBatchElement& BatchElement, 
+		const FMeshBatchElement& BatchElement,
 		const FDebugViewModeShaderElementData& ShaderElementData,
 		FMeshDrawSingleShaderBindings& ShaderBindings,
-		FVertexInputStreamArray& VertexStreams) const
-	{
-		FMeshMaterialShader::GetElementShaderBindings(Scene, ViewIfDynamicMeshCommand, VertexFactory, InputStreamType, FeatureLevel, PrimitiveSceneProxy, MeshBatch, BatchElement, ShaderElementData, ShaderBindings, VertexStreams);
-	
-		int8 VisualizeElementIndex = 0;
-#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
-		VisualizeElementIndex = BatchElement.VisualizeElementIndex;
-#endif
-
-		GetDebugViewModeShaderBindings(
-			PrimitiveSceneProxy,
-			ShaderElementData.MaterialRenderProxy,
-			ShaderElementData.Material,
-			ShaderElementData.DebugViewMode,
-			ShaderElementData.ViewOrigin,
-			ShaderElementData.VisualizeLODIndex,
-			VisualizeElementIndex,
-			ShaderElementData.NumVSInstructions,
-			ShaderElementData.NumPSInstructions,
-			ShaderElementData.ViewModeParam,
-			ShaderElementData.ViewModeParamName,
-			ShaderBindings
-		);
-	}
-
-	virtual void GetDebugViewModeShaderBindings(
-		const FPrimitiveSceneProxy* RESTRICT PrimitiveSceneProxy,
-		const FMaterialRenderProxy& RESTRICT MaterialRenderProxy,
-		const FMaterial& RESTRICT Material,
-		EDebugViewShaderMode DebugViewMode,
-		const FVector& ViewOrigin,
-		int32 VisualizeLODIndex,
-		int32 VisualizeElementIndex,
-		int32 NumVSInstructions,
-		int32 NumPSInstructions,
-		int32 ViewModeParam,
-		FName ViewModeParamName,
-		FMeshDrawSingleShaderBindings& ShaderBindings
-	) const = 0;
+		FVertexInputStreamArray& VertexStreams) const;
 };
 
 class FDebugViewModeMeshProcessor : public FMeshPassProcessor

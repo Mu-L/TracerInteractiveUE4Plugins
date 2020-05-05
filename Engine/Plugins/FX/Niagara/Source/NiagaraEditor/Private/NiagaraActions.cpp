@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraActions.h"
 #include "NiagaraNodeParameterMapGet.h"
@@ -9,6 +9,8 @@
 #include "Framework/Application/MenuStack.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Layout/WidgetPath.h"
+#include "ScopedTransaction.h"
+#include "ViewModels/NiagaraParameterPanelViewModel.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraActions"
 
@@ -26,17 +28,79 @@ FNiagaraMenuAction::FNiagaraMenuAction(FText InNodeCategory, FText InMenuDesc, F
 	, CanPerformAction(InCanPerformAction)
 {}
 
+TOptional<FNiagaraVariable> FNiagaraMenuAction::GetParameterVariable() const
+{
+	return ParameterVariable;
+}
+
+void FNiagaraMenuAction::SetParamterVariable(const FNiagaraVariable& InParameterVariable)
+{
+	ParameterVariable = InParameterVariable;
+}
+
 /************************************************************************/
 /* FNiagaraParameterAction												*/
 /************************************************************************/
 FNiagaraParameterAction::FNiagaraParameterAction(const FNiagaraVariable& InParameter,
 	const TArray<FNiagaraGraphParameterReferenceCollection>& InReferenceCollection,
-	FText InNodeCategory, FText InMenuDesc, FText InToolTip, const int32 InGrouping, FText InKeywords, int32 InSectionID)
+	FText InNodeCategory, FText InMenuDesc, FText InToolTip, const int32 InGrouping, FText InKeywords,
+	TSharedPtr<TArray<FName>> ParameterWithNamespaceModifierRenamePending, 
+	int32 InSectionID)
 	: FEdGraphSchemaAction(MoveTemp(InNodeCategory), MoveTemp(InMenuDesc), MoveTemp(InToolTip), InGrouping, MoveTemp(InKeywords), InSectionID)
 	, Parameter(InParameter)
 	, ReferenceCollection(InReferenceCollection)
+	, bIsExternallyReferenced(false)
+	, ParameterWithNamespaceModifierRenamePendingWeak(ParameterWithNamespaceModifierRenamePending)
 {
 }
+
+FNiagaraParameterAction::FNiagaraParameterAction(const FNiagaraVariable& InParameter,
+	FText InNodeCategory, FText InMenuDesc, FText InToolTip, const int32 InGrouping, FText InKeywords,
+	TSharedPtr<TArray<FName>> ParameterWithNamespaceModifierRenamePending, 
+	int32 InSectionID)
+	: FEdGraphSchemaAction(MoveTemp(InNodeCategory), MoveTemp(InMenuDesc), MoveTemp(InToolTip), InGrouping, MoveTemp(InKeywords), InSectionID)
+	, Parameter(InParameter)
+	, bIsExternallyReferenced(false)
+	, ParameterWithNamespaceModifierRenamePendingWeak(ParameterWithNamespaceModifierRenamePending)
+{
+}
+
+bool FNiagaraParameterAction::GetIsNamespaceModifierRenamePending() const
+{
+	TSharedPtr<TArray<FName>> ParameterNamesWithNamespaceModifierRenamePending = ParameterWithNamespaceModifierRenamePendingWeak.Pin();
+	if (ParameterNamesWithNamespaceModifierRenamePending.IsValid())
+	{
+		return ParameterNamesWithNamespaceModifierRenamePending->Contains(Parameter.GetName());
+	}
+	return false;
+}
+
+void FNiagaraParameterAction::SetIsNamespaceModifierRenamePending(bool bIsNamespaceModifierRenamePending)
+{
+	TSharedPtr<TArray<FName>> ParameterNamesWithNamespaceModifierRenamePending = ParameterWithNamespaceModifierRenamePendingWeak.Pin();
+	if (ParameterNamesWithNamespaceModifierRenamePending.IsValid())
+	{
+		if (bIsNamespaceModifierRenamePending)
+		{
+			ParameterNamesWithNamespaceModifierRenamePending->AddUnique(Parameter.GetName());
+		}
+		else
+		{
+			ParameterNamesWithNamespaceModifierRenamePending->Remove(Parameter.GetName());
+		}
+	}
+}
+
+/************************************************************************/
+/* FNiagaraScriptVarAndViewInfoAction									*/
+/************************************************************************/
+FNiagaraScriptVarAndViewInfoAction::FNiagaraScriptVarAndViewInfoAction(const FNiagaraScriptVariableAndViewInfo& InScriptVariableAndViewInfo,
+	FText InNodeCategory, FText InMenuDesc, FText InToolTip, const int32 InGrouping, FText InKeywords, int32 InSectionID)
+	: FEdGraphSchemaAction(MoveTemp(InNodeCategory), MoveTemp(InMenuDesc), MoveTemp(InToolTip), InGrouping, MoveTemp(InKeywords), InSectionID)
+	, ScriptVariableAndViewInfo(InScriptVariableAndViewInfo)
+{
+}
+
 
 /************************************************************************/
 /* FNiagaraParameterGraphDragOperation									*/
@@ -88,11 +152,17 @@ FReply FNiagaraParameterGraphDragOperation::DroppedOnNode(FVector2D ScreenPositi
 		const FNiagaraVariable& Parameter = ParameterAction->GetParameter();
 		if (UNiagaraNodeParameterMapGet* GetMapNode = Cast<UNiagaraNodeParameterMapGet>(GetHoveredNode()))
 		{
-			GetMapNode->RequestNewTypedPin(EGPD_Output, Parameter.GetType(), Parameter.GetName());
+			FScopedTransaction AddNewPinTransaction(LOCTEXT("Drop Onto Get Pin", "Drop parameter onto Get node"));
+			GetMapNode->Modify();
+			UEdGraphPin* Pin = GetMapNode->RequestNewTypedPin(EGPD_Output, Parameter.GetType(), Parameter.GetName());
+			GetMapNode->CancelEditablePinName(FText::GetEmpty(), Pin);
 		} 
 		else if (UNiagaraNodeParameterMapSet* SetMapNode = Cast<UNiagaraNodeParameterMapSet>(GetHoveredNode()))
 		{
-			SetMapNode->RequestNewTypedPin(EGPD_Input, Parameter.GetType(), Parameter.GetName());
+			FScopedTransaction AddNewPinTransaction(LOCTEXT("Drop Onto Set Pin", "Drop parameter onto Set node"));
+			SetMapNode->Modify();
+			UEdGraphPin* Pin = SetMapNode->RequestNewTypedPin(EGPD_Input, Parameter.GetType(), Parameter.GetName());
+			SetMapNode->CancelEditablePinName(FText::GetEmpty(), Pin);
 		}
 	}
 
@@ -172,8 +242,15 @@ FReply FNiagaraParameterGraphDragOperation::DroppedOnPanel(const TSharedRef<SWid
 }
 
 
+bool FNiagaraParameterGraphDragOperation::IsCurrentlyHoveringNode(const UEdGraphNode* TestNode) const
+{
+	return TestNode == GetHoveredNode();
+}
+
 void FNiagaraParameterGraphDragOperation::MakeGetMap(FNiagaraParameterNodeConstructionParams InParams)
 {
+
+	FScopedTransaction AddNewPinTransaction(LOCTEXT("MakeGetMap", "Make Get Node For Variable"));
 	check(InParams.Graph);
 	InParams.Graph->Modify();
 	FGraphNodeCreator<UNiagaraNodeParameterMapGet> GetNodeCreator(*InParams.Graph);
@@ -186,6 +263,7 @@ void FNiagaraParameterGraphDragOperation::MakeGetMap(FNiagaraParameterNodeConstr
 
 void FNiagaraParameterGraphDragOperation::MakeSetMap(FNiagaraParameterNodeConstructionParams InParams)
 {
+	FScopedTransaction AddNewPinTransaction(LOCTEXT("MakeSetMap", "Make Set Node For Variable"));
 	check(InParams.Graph);
 	InParams.Graph->Modify();
 	FGraphNodeCreator<UNiagaraNodeParameterMapSet> SetNodeCreator(*InParams.Graph);

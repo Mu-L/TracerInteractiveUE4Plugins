@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OculusAudio.h"
 #include "OculusAmbisonicSpatializer.h"
@@ -26,11 +26,6 @@ TAudioSpatializationPtr FOculusSpatializationPluginFactory::CreateNewSpatializat
 #endif
 }
 
-
-TAmbisonicsMixerPtr FOculusSpatializationPluginFactory::CreateNewAmbisonicsMixer(FAudioDevice* OwningDevice)
-{
-	return TAmbisonicsMixerPtr(new FOculusAmbisonicsMixer());
-}
 
 TAudioReverbPtr FOculusReverbPluginFactory::CreateNewReverbPlugin(FAudioDevice* OwningDevice)
 {

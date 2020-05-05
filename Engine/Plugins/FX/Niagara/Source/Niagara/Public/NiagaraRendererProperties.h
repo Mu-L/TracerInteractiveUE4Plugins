@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -23,6 +23,9 @@ class FNiagaraRenderer;
 class UMaterial;
 class UMaterialInterface;
 class FNiagaraEmitterInstance;
+class SWidget;
+class FAssetThumbnailPool;
+class FNiagaraDataSet;
 
 UCLASS(ABSTRACT)
 class NIAGARA_API UNiagaraRendererProperties : public UNiagaraMergeable
@@ -31,7 +34,8 @@ class NIAGARA_API UNiagaraRendererProperties : public UNiagaraMergeable
 
 public:
 	UNiagaraRendererProperties()
-	: bIsEnabled(true)
+		: bIsEnabled(true)
+		, bMotionBlurEnabled(true)
 	{
 	}
 
@@ -42,13 +46,28 @@ public:
 
 	virtual bool IsSimTargetSupported(ENiagaraSimTarget InSimTarget) const { return false; };
 
+	const TArray<const FNiagaraVariableAttributeBinding*>& GetAttributeBindings() const { return AttributeBindings; }
+	uint32 ComputeMaxUsedComponents(const FNiagaraDataSet& DataSet) const;
+
 #if WITH_EDITORONLY_DATA
+
 	virtual bool IsMaterialValidForRenderer(UMaterial* Material, FText& InvalidMessage) { return true; }
 
 	virtual void FixMaterial(UMaterial* Material) { }
 
+	virtual const TArray<FNiagaraVariable>& GetBoundAttributes();
 	virtual const TArray<FNiagaraVariable>& GetRequiredAttributes() { static TArray<FNiagaraVariable> Vars; return Vars; };
 	virtual const TArray<FNiagaraVariable>& GetOptionalAttributes() { static TArray<FNiagaraVariable> Vars; return Vars; };
+
+	UNiagaraRendererProperties* StaticDuplicateWithNewMergeId(UObject* InOuter) const
+	{
+		return CastChecked<UNiagaraRendererProperties>(Super::StaticDuplicateWithNewMergeIdInternal(InOuter));
+	}
+
+	virtual void GetRendererWidgets(const FNiagaraEmitterInstance* InEmitter, TArray<TSharedPtr<SWidget>>& OutWidgets, TSharedPtr<FAssetThumbnailPool> InThumbnailPool) const PURE_VIRTUAL(UNiagaraRendererProperties::GetRendererWidgets, );
+	virtual void GetRendererTooltipWidgets(const FNiagaraEmitterInstance* InEmitter, TArray<TSharedPtr<SWidget>>& OutWidgets, TSharedPtr<FAssetThumbnailPool> InThumbnailPool) const PURE_VIRTUAL(UNiagaraRendererProperties::GetRendererTooltipWidgets, );
+	virtual void GetRendererFeedback(const UNiagaraEmitter* InEmitter, TArray<FText>& OutErrors, TArray<FText>& OutWarnings, TArray<FText>& OutInfo) const {};
+
 #endif // WITH_EDITORONLY_DATA
 
 
@@ -65,6 +84,15 @@ public:
 	
 	UPROPERTY()
 	bool bIsEnabled;
+
+	/** Is motion blur enabled on this renderer or not, the material must also have motion blur enabled. */
+	UPROPERTY(EditAnywhere, Category = "Rendering")
+	bool bMotionBlurEnabled;
+
+protected:
+	TArray<const FNiagaraVariableAttributeBinding*> AttributeBindings;
+
+	// Copy of variables in the attribute binding, updated when GetBoundAttributes() is called.
+	TArray<FNiagaraVariable> CurrentBoundAttributes;
+
 };
-
-

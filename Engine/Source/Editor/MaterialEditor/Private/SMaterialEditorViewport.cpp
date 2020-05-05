@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SMaterialEditorViewport.h"
 #include "Widgets/SBoxPanel.h"
@@ -29,7 +29,6 @@
 #include "AdvancedPreviewScene.h"
 #include "AssetViewerSettings.h"
 #include "Engine/PostProcessVolume.h"
-#include "Widgets/Input/SCheckBox.h"
 #include "MaterialEditorSettings.h"
 
 #define LOCTEXT_NAMESPACE "MaterialEditor"
@@ -47,8 +46,6 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void Draw(FViewport* Viewport,FCanvas* Canvas) override;
 	virtual bool ShouldOrbitCamera() const override;
-	
-	void SetShowGrid(bool bShowGrid);
 
 	/**
 	* Focuses the viewport to the center of the bounding box/sphere ensuring that the entire bounds are in view
@@ -184,11 +181,6 @@ FLinearColor FMaterialEditorViewportClient::GetBackgroundColor() const
 	}
 }
 
-void FMaterialEditorViewportClient::SetShowGrid(bool bShowGrid)
-{
-	DrawHelper.bDrawGrid = bShowGrid;
-}
-
 void FMaterialEditorViewportClient::FocusViewportOnBounds(const FBoxSphereBounds Bounds, bool bInstant /*= false*/)
 {
 	const FVector Position = Bounds.Origin;
@@ -250,7 +242,6 @@ void SMaterialEditor3DPreviewViewport::Construct(const FArguments& InArgs)
 			AdvancedPreviewScene->GetWorld()->ChangeFeatureLevel(NewFeatureLevel);
 		});
 
-	bShowGrid = false;
 
 	PreviewPrimType = TPT_None;
 
@@ -374,6 +365,13 @@ bool SMaterialEditor3DPreviewViewport::SetPreviewAsset(UObject* InAsset)
 		else
 		{
 			PreviewPrimType = TPT_None;
+		}
+
+		// Update the rotation of the plane mesh so that it is front facing to the viewport camera's default forward view.
+		if (PreviewPrimType == TPT_Plane)
+		{
+			const FRotator PlaneRotation(0.0f, 180.0f, 0.0f);
+			Transform.SetRotation(FQuat(PlaneRotation));
 		}
 	}
 	else if (InAsset != nullptr)
@@ -639,14 +637,13 @@ bool SMaterialEditor3DPreviewViewport::IsPreviewMeshFromSelectionChecked() const
 
 void SMaterialEditor3DPreviewViewport::TogglePreviewGrid()
 {
-	bShowGrid = !bShowGrid;
-	EditorViewportClient->SetShowGrid(bShowGrid);
+	EditorViewportClient->SetShowGrid();
 	RefreshViewport();
 }
 
 bool SMaterialEditor3DPreviewViewport::IsTogglePreviewGridChecked() const
 {
-	return bShowGrid;
+	return EditorViewportClient->IsSetShowGridChecked();
 }
 
 void SMaterialEditor3DPreviewViewport::TogglePreviewBackground()
@@ -707,7 +704,7 @@ TSharedRef<FEditorViewportClient> SMaterialEditor3DPreviewViewport::MakeEditorVi
 	EditorViewportClient = MakeShareable( new FMaterialEditorViewportClient(MaterialEditorPtr, *AdvancedPreviewScene.Get(), SharedThis(this)) );
 	UAssetViewerSettings::Get()->OnAssetViewerSettingsChanged().AddRaw(this, &SMaterialEditor3DPreviewViewport::OnAssetViewerSettingsChanged);
 	EditorViewportClient->SetViewLocation( FVector::ZeroVector );
-	EditorViewportClient->SetViewRotation( FRotator(0.0f, -90.0f, 0.0f) );
+	EditorViewportClient->SetViewRotation( FRotator(-15.0f, -90.0f, 0.0f) );
 	EditorViewportClient->SetViewLocationForOrbiting( FVector::ZeroVector );
 	EditorViewportClient->bSetListenerPosition = false;
 	EditorViewportClient->EngineShowFlags.EnableAdvancedFeatures();
@@ -758,7 +755,7 @@ void SMaterialEditor3DPreviewViewport::OnPropertyChanged(UObject* ObjectBeingMod
 {
 	if (ObjectBeingModified != nullptr && ObjectBeingModified == PreviewMaterial)
 	{
-		UProperty* PropertyThatChanged = PropertyChangedEvent.Property;
+		FProperty* PropertyThatChanged = PropertyChangedEvent.Property;
 		static const FString MaterialDomain = TEXT("MaterialDomain");
 		if (PropertyThatChanged != nullptr && PropertyThatChanged->GetName() == MaterialDomain)
 		{
@@ -897,7 +894,6 @@ void SMaterialEditorUIPreviewZoomer::SetPreviewMaterial(UMaterialInterface* InPr
 
 void SMaterialEditorUIPreviewViewport::Construct( const FArguments& InArgs, UMaterialInterface* PreviewMaterial )
 {
-	bRealtime = false;
 	ChildSlot
 	[
 		SNew( SVerticalBox )
@@ -910,21 +906,6 @@ void SMaterialEditorUIPreviewViewport::Construct( const FArguments& InArgs, UMat
 			.BorderImage( FEditorStyle::GetBrush("ToolPanel.GroupBorder") )
 			[
 				SNew( SHorizontalBox )
-				+ SHorizontalBox::Slot()
-				.VAlign(VAlign_Center)
-				.Padding( 9.f )
-				.AutoWidth()
-				[
-					SNew( SCheckBox )
-					.CheckBoxContentUsesAutoWidth( true )
-					.OnCheckStateChanged(this, &SMaterialEditorUIPreviewViewport::OnRealtimeChanged)
-					.IsChecked(this, &SMaterialEditorUIPreviewViewport::IsRealtimeChecked)
-					.Content()
-					[
-						SNew(STextBlock)
-						.Text(LOCTEXT("Realtime", "Realtime"))
-					]
-				]
 				+ SHorizontalBox::Slot()
 				.VAlign(VAlign_Center)
 				.Padding( 3.f )
@@ -1027,32 +1008,5 @@ void SMaterialEditorUIPreviewViewport::OnPreviewYCommitted( int32 NewValue, ETex
 	OnPreviewYChanged( NewValue );
 }
 
-void SMaterialEditorUIPreviewViewport::OnRealtimeChanged(ECheckBoxState State)
-{
-	if (State == ECheckBoxState::Checked)
-	{
-		bRealtime = true;
-		ActiveTimerHandle = RegisterActiveTimer(0.f, FWidgetActiveTimerDelegate::CreateSP(this, &SMaterialEditorUIPreviewViewport::EnsureTick));
-	}
-	else
-	{
-		bRealtime = false;
-		if (ActiveTimerHandle.IsValid())
-		{
-			UnRegisterActiveTimer(ActiveTimerHandle.Pin().ToSharedRef());
-		}
-	}
-}
-
-ECheckBoxState SMaterialEditorUIPreviewViewport::IsRealtimeChecked() const
-{
-	return bRealtime ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-}
-
-EActiveTimerReturnType SMaterialEditorUIPreviewViewport::EnsureTick(double InCurrentTime, float InDeltaTime)
-{
-	// Keep the timer going if we're realtime
-	return bRealtime ? EActiveTimerReturnType::Continue : EActiveTimerReturnType::Stop;
-}
 
 #undef LOCTEXT_NAMESPACE

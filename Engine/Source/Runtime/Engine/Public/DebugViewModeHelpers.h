@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /**
  * Definition and helpers for debug view modes
@@ -29,6 +29,7 @@ enum EDebugViewShaderMode
 	DVSM_OutputMaterialTextureScales, // Outputs the material texture scales.
 	DVSM_RequiredTextureResolution, // Visualize the accuracy of the material texture scales used for texture streaming.
 	DVSM_RayTracingDebug,			// Visualize ray tracing debug modes.
+	DVSM_LODColoration,				// Visualize primitive LOD .
 	DVSM_MAX
 };
 

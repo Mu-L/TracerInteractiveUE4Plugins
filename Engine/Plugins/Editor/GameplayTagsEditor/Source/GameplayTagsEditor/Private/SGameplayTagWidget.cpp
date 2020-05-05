@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SGameplayTagWidget.h"
 #include "Misc/ConfigCacheIni.h"
@@ -8,7 +8,7 @@
 #include "Widgets/Images/SImage.h"
 #include "EditorStyleSet.h"
 #include "Widgets/SWindow.h"
-#include "Dialogs/Dialogs.h"
+#include "Misc/MessageDialog.h"
 #include "GameplayTagsModule.h"
 #include "ScopedTransaction.h"
 #include "Textures/SlateIcon.h"
@@ -314,36 +314,41 @@ void SGameplayTagWidget::OnFilterTextChanged( const FText& InFilterText )
 {
 	FilterString = InFilterText.ToString();	
 
-	if( FilterString.IsEmpty() )
-	{
-		TagTreeWidget->SetTreeItemsSource( &TagItems );
+	FilterTagTree();
+}
 
-		for( int32 iItem = 0; iItem < TagItems.Num(); ++iItem )
+void SGameplayTagWidget::FilterTagTree()
+{
+	if (FilterString.IsEmpty())
+	{
+		TagTreeWidget->SetTreeItemsSource(&TagItems);
+
+		for (int32 iItem = 0; iItem < TagItems.Num(); ++iItem)
 		{
-			SetDefaultTagNodeItemExpansion( TagItems[iItem] );
+			SetDefaultTagNodeItemExpansion(TagItems[iItem]);
 		}
 	}
 	else
 	{
 		FilteredTagItems.Empty();
 
-		for( int32 iItem = 0; iItem < TagItems.Num(); ++iItem )
+		for (int32 iItem = 0; iItem < TagItems.Num(); ++iItem)
 		{
-			if( FilterChildrenCheck( TagItems[iItem] ) )
+			if (FilterChildrenCheck(TagItems[iItem]))
 			{
-				FilteredTagItems.Add( TagItems[iItem] );
-				SetTagNodeItemExpansion( TagItems[iItem], true );
+				FilteredTagItems.Add(TagItems[iItem]);
+				SetTagNodeItemExpansion(TagItems[iItem], true);
 			}
 			else
 			{
-				SetTagNodeItemExpansion( TagItems[iItem], false );
+				SetTagNodeItemExpansion(TagItems[iItem], false);
 			}
 		}
 
-		TagTreeWidget->SetTreeItemsSource( &FilteredTagItems );	
+		TagTreeWidget->SetTreeItemsSource(&FilteredTagItems);
 	}
-		
-	TagTreeWidget->RequestTreeRefresh();	
+
+	TagTreeWidget->RequestTreeRefresh();
 }
 
 bool SGameplayTagWidget::FilterChildrenCheck( TSharedPtr<FGameplayTagNode> InItem )
@@ -1070,7 +1075,8 @@ void SGameplayTagWidget::VerifyAssetTagValidity()
 				FFormatNamedArguments Arguments;
 				Arguments.Add(TEXT("Objects"), FText::FromString( InvalidTagNames ));
 				FText DialogText = FText::Format( LOCTEXT("GameplayTagWidget_InvalidTags", "Invalid Tags that have been removed: \n\n{Objects}"), Arguments );
-				OpenMsgDlgInt( EAppMsgType::Ok, DialogText, LOCTEXT("GameplayTagWidget_Warning", "Warning") );
+				FText DialogTitle = LOCTEXT("GameplayTagWidget_Warning", "Warning");
+				FMessageDialog::Open( EAppMsgType::Ok, DialogText, &DialogTitle );
 			}
 		}
 	}
@@ -1212,7 +1218,7 @@ void SGameplayTagWidget::RefreshTags()
 		}
 	}
 
-	TagTreeWidget->SetTreeItemsSource(&TagItems);
+	FilterTagTree();
 }
 
 EVisibility SGameplayTagWidget::DetermineExpandableUIVisibility() const

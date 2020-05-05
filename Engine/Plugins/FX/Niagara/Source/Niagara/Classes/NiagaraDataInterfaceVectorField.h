@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "NiagaraDataInterface.h"
@@ -27,11 +27,13 @@ public:
 public:
 	//~ UObject interface
 
+	DECLARE_NIAGARA_DI_PARAMETER();
+
 	virtual void PostInitProperties() override;
 	virtual void PostLoad() override; 
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
-	virtual void PreEditChange(UProperty* PropertyAboutToChange) override;
+	virtual void PreEditChange(FProperty* PropertyAboutToChange) override;
 #endif
 	//~ UObject interface END
 
@@ -48,9 +50,8 @@ public:
 #endif
 
 	// GPU sim functionality
-	virtual void GetParameterDefinitionHLSL(FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override; 
-	virtual bool GetFunctionHLSL(const FName&  DefinitionFunctionName, FString InstanceFunctionName, FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual FNiagaraDataInterfaceParametersCS* ConstructComputeParameters() const override;
+	virtual void GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
+	virtual bool GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL) override;
 	//~ UNiagaraDataInterface interface END
 
 	// VM functions
@@ -92,4 +93,20 @@ struct FNiagaraDataInterfaceProxyVectorField : public FNiagaraDataInterfaceProxy
 	{
 		return 0;
 	}
+};
+
+struct FNiagaraDataInterfaceParametersCS_VectorField : public FNiagaraDataInterfaceParametersCS
+{
+	DECLARE_TYPE_LAYOUT(FNiagaraDataInterfaceParametersCS_VectorField, NonVirtual);
+public:
+	void Bind(const FNiagaraDataInterfaceGPUParamInfo& ParameterInfo, const class FShaderParameterMap& ParameterMap);
+	void Set(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) const;
+
+private:
+	LAYOUT_FIELD(FShaderResourceParameter, VectorFieldSampler);
+	LAYOUT_FIELD(FShaderResourceParameter, VectorFieldTexture);
+	LAYOUT_FIELD(FShaderParameter, TilingAxes);
+	LAYOUT_FIELD(FShaderParameter, Dimensions);
+	LAYOUT_FIELD(FShaderParameter, MinBounds);
+	LAYOUT_FIELD(FShaderParameter, MaxBounds);
 };

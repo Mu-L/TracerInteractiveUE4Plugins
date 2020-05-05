@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Widgets/SSettingsEditor.h"
 #include "UObject/UnrealType.h"
@@ -74,6 +74,8 @@ void SSettingsEditor::Construct( const FArguments& InArgs, const ISettingsEditor
 	RootObjectCustomization->Initialize();
 	SettingsView->SetRootObjectCustomizationInstance(RootObjectCustomization);
 
+	TSharedPtr<SScrollBox> ScrollBox;
+
 	ChildSlot
 	[
 		SNew(SVerticalBox)
@@ -88,7 +90,7 @@ void SSettingsEditor::Construct( const FArguments& InArgs, const ISettingsEditor
 			.Padding(0.0f, 16.0f)
 			[
 				// categories menu
-				SNew(SScrollBox)
+				SAssignNew(ScrollBox, SScrollBox)
 				+ SScrollBox::Slot()
 				[
 					SNew(SHorizontalBox)
@@ -140,6 +142,8 @@ void SSettingsEditor::Construct( const FArguments& InArgs, const ISettingsEditor
 		]
 	];
 
+	ScrollBox->SetScrollBarRightClickDragAllowed(true);
+
 	FInternationalization::Get().OnCultureChanged().AddSP(this, &SSettingsEditor::HandleCultureChanged);
 	Model->OnSelectionChanged().AddSP(this, &SSettingsEditor::HandleModelSelectionChanged);
 	SettingsContainer->OnCategoryModified().AddSP(this, &SSettingsEditor::HandleSettingsContainerCategoryModified);
@@ -154,8 +158,6 @@ void SSettingsEditor::NotifyPostChange( const FPropertyChangedEvent& PropertyCha
 {
 	if (PropertyChangedEvent.ChangeType != EPropertyChangeType::Interactive)
 	{
-		UObject* Outer = PropertyChangedEvent.Property->GetOuter();
-
 		// Note while there could be multiple objects in the details panel, only one is ever edited at once.
 		// There could be zero objects being edited in the FStructOnScope case.
 		
@@ -199,15 +201,15 @@ void SSettingsEditor::NotifyPostChange( const FPropertyChangedEvent& PropertyCha
 				}
 
 				// Determine if the Property is an Array or Array Element
-				bool bIsArrayOrArrayElement = PropertyThatChanged->GetActiveMemberNode()->GetValue()->IsA(UArrayProperty::StaticClass()) 
+				bool bIsArrayOrArrayElement = PropertyThatChanged->GetActiveMemberNode()->GetValue()->IsA(FArrayProperty::StaticClass()) 
 					|| PropertyThatChanged->GetActiveMemberNode()->GetValue()->ArrayDim > 1
-					|| ((Outer != nullptr) && Outer->IsA(UArrayProperty::StaticClass()));
+					|| PropertyChangedEvent.Property->GetOwner<FArrayProperty>();
 
-				bool bIsSetOrSetElement = PropertyThatChanged->GetActiveMemberNode()->GetValue()->IsA(USetProperty::StaticClass())
-					|| ((Outer != nullptr) && Outer->IsA(USetProperty::StaticClass()));
+				bool bIsSetOrSetElement = PropertyThatChanged->GetActiveMemberNode()->GetValue()->IsA(FSetProperty::StaticClass())
+					|| PropertyChangedEvent.Property->GetOwner<FSetProperty>();
 
-				bool bIsMapOrMapElement = PropertyThatChanged->GetActiveMemberNode()->GetValue()->IsA(UMapProperty::StaticClass())
-					|| ((Outer != nullptr) && Outer->IsA(UMapProperty::StaticClass()));
+				bool bIsMapOrMapElement = PropertyThatChanged->GetActiveMemberNode()->GetValue()->IsA(FMapProperty::StaticClass())
+					|| PropertyChangedEvent.Property->GetOwner<FMapProperty>();
 
 				if (ObjectBeingEdited->GetClass()->HasAnyClassFlags(CLASS_DefaultConfig) && !bIsArrayOrArrayElement && !bIsSetOrSetElement && !bIsMapOrMapElement)
 				{
@@ -322,7 +324,7 @@ TSharedRef<SWidget> SSettingsEditor::MakeCategoryWidget( const ISettingsCategory
 
 void SSettingsEditor::RecordPreferenceChangedAnalytics( ISettingsSectionPtr SelectedSection, const FPropertyChangedEvent& PropertyChangedEvent ) const
 {
-	UProperty* ChangedProperty = PropertyChangedEvent.MemberProperty;
+	FProperty* ChangedProperty = PropertyChangedEvent.MemberProperty;
 	// submit analytics data
 	if(FEngineAnalytics::IsAvailable() && ChangedProperty != nullptr && ChangedProperty->GetOwnerClass() != nullptr)
 	{

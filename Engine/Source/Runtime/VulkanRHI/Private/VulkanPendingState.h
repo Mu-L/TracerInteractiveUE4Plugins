@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved..
+// Copyright Epic Games, Inc. All Rights Reserved..
 
 /*=============================================================================
 	VulkanPendingState.h: Private VulkanPendingState definitions.
@@ -7,7 +7,6 @@
 #pragma once
 
 // Dependencies
-#include "VulkanGlobals.h"
 #include "VulkanConfiguration.h"
 #include "VulkanState.h"
 #include "VulkanResources.h"
@@ -147,8 +146,8 @@ public:
 protected:
 	TArray<FVulkanUnorderedAccessView*> UAVListForAutoFlush;
 
-	FVulkanComputePipeline* CurrentPipeline;
-	FVulkanComputePipelineDescriptorState* CurrentState;
+	FVulkanComputePipeline* CurrentPipeline = nullptr;
+	FVulkanComputePipelineDescriptorState* CurrentState = nullptr;
 
 	TMap<FVulkanComputePipeline*, FVulkanComputePipelineDescriptorState*> PipelineStates;
 
@@ -197,7 +196,7 @@ public:
 		return GetCurrentShaderKey(ShaderStage::GetFrequencyForGfxStage(Stage));
 	}
 
-	void SetViewport(uint32 MinX, uint32 MinY, float MinZ, uint32 MaxX, uint32 MaxY, float MaxZ)
+	void SetViewport(float MinX, float MinY, float MinZ, float MaxX, float MaxY, float MaxZ)
 	{
 		FMemory::Memzero(Viewport);
 
@@ -216,7 +215,7 @@ public:
 			Viewport.maxDepth = MaxZ;
 		}
 
-		SetScissorRect(MinX, MinY, MaxX - MinX, MaxY - MinY);
+		SetScissorRect((uint32)MinX, (uint32)MinY, (uint32)(MaxX - MinX), (uint32)(MaxY - MinY));
 		bScissorEnable = false;
 	}
 
@@ -341,36 +340,7 @@ public:
 
 	void PrepareForDraw(FVulkanCmdBuffer* CmdBuffer);
 
-	bool SetGfxPipeline(FVulkanRHIGraphicsPipelineState* InGfxPipeline, bool bForceReset)
-	{
-		bool bChanged = bForceReset;
-
-		if (InGfxPipeline != CurrentPipeline)
-		{
-			CurrentPipeline = InGfxPipeline;
-			FVulkanGraphicsPipelineDescriptorState** Found = PipelineStates.Find(InGfxPipeline);
-			if (Found)
-			{
-				CurrentState = *Found;
-				check(CurrentState->GfxPipeline == InGfxPipeline);
-			}
-			else
-			{
-				CurrentState = new FVulkanGraphicsPipelineDescriptorState(Device, InGfxPipeline);
-				PipelineStates.Add(CurrentPipeline, CurrentState);
-			}
-
-			PrimitiveType = InGfxPipeline->PrimitiveType;
-			bChanged = true;
-		}
-
-		if (bChanged || bForceReset)
-		{
-			CurrentState->Reset();
-		}
-
-		return bChanged;
-	}
+	bool SetGfxPipeline(FVulkanRHIGraphicsPipelineState* InGfxPipeline, bool bForceReset);
 
 	inline void UpdateDynamicStates(FVulkanCmdBuffer* Cmd)
 	{

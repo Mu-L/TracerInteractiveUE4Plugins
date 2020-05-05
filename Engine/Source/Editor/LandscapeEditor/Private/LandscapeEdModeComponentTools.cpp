@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "Misc/MessageDialog.h"
@@ -147,6 +147,8 @@ public:
 
 	virtual const TCHAR* GetToolName() override { return TEXT("Select"); }
 	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Selection", "Component Selection"); };
+	virtual FText GetDisplayMessage() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Selection_Message", "Paint a mask on the Landscape to protect areas from editing."); };
+
 	virtual void SetEditRenderType() override { GLandscapeEditRenderMode = ELandscapeEditRenderMode::SelectComponent | (GLandscapeEditRenderMode & ELandscapeEditRenderMode::BitMaskForMask); }
 	virtual bool SupportsMask() override { return false; }
 };
@@ -248,6 +250,8 @@ public:
 
 	virtual const TCHAR* GetToolName() override { return TEXT("Mask"); }
 	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Mask", "Region Selection"); };
+	virtual FText GetDisplayMessage() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Mask_Message", "Region Selection"); };
+
 	virtual void SetEditRenderType() override { GLandscapeEditRenderMode = ELandscapeEditRenderMode::SelectRegion | (GLandscapeEditRenderMode & ELandscapeEditRenderMode::BitMaskForMask); }
 	virtual bool SupportsMask() override { return true; }
 
@@ -327,24 +331,12 @@ public:
 
 	virtual bool BeginTool(FEditorViewportClient* ViewportClient, const FLandscapeToolTarget& InTarget, const FVector& InHitLocation) override
 	{
-		ALandscapeProxy* Proxy = InTarget.LandscapeInfo->GetLandscapeProxy();
-		UMaterialInterface* HoleMaterial = Proxy->GetLandscapeHoleMaterial();
-		if (!HoleMaterial)
-		{
-			HoleMaterial = Proxy->GetLandscapeMaterial();
-		}
-		if (!HoleMaterial->GetMaterial()->HasAnyExpressionsInMaterialAndFunctionsOfType<UMaterialExpressionLandscapeVisibilityMask>())
-		{
-			FMessageDialog::Open(EAppMsgType::Ok,
-				LOCTEXT("LandscapeVisibilityMaskMissing", "You must add a \"Landscape Visibility Mask\" node to your material before you can paint visibility."));
-			return false;
-		}
-
 		return FLandscapeToolBase<FLandscapeToolStrokeVisibility>::BeginTool(ViewportClient, InTarget, InHitLocation);
 	}
 
 	virtual const TCHAR* GetToolName() override { return TEXT("Visibility"); }
 	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Visibility", "Visibility"); };
+	virtual FText GetDisplayMessage() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Visibility_Message", "This tool will allow you to mask out the visibility and collision of areas of your Landscape when used in conjunction with the Landscape Hole Material."); };
 
 	virtual void SetEditRenderType() override { GLandscapeEditRenderMode = ELandscapeEditRenderMode::None | (GLandscapeEditRenderMode & ELandscapeEditRenderMode::BitMaskForMask); }
 	virtual bool SupportsMask() override { return false; }
@@ -480,205 +472,16 @@ public:
 				FScopedSlowTask SlowTask(0, LOCTEXT("BeginMovingLandscapeComponentsToCurrentLevelTask", "Moving Landscape components to current level"));
 				SlowTask.MakeDialogDelayed(10); // show slow task dialog after 10 seconds
 
-				LandscapeInfo->SortSelectedComponents();
-				const int32 ComponentSizeVerts = Landscape->NumSubsections * (Landscape->SubsectionSizeQuads + 1);
-				const int32 NeedHeightmapSize = 1 << FMath::CeilLogTwo(ComponentSizeVerts);
-
-				TSet<ALandscapeProxy*> SelectProxies;
-				TSet<ULandscapeComponent*> TargetSelectedComponents;
-				TArray<ULandscapeHeightfieldCollisionComponent*> TargetSelectedCollisionComponents;
-				for (ULandscapeComponent* Component : SelectedComponents)
+				if (ALandscapeProxy* LandscapeProxy = LandscapeInfo->MoveComponentsToLevel(SelectedComponents.Array(), World->GetCurrentLevel()))
 				{
-					SelectProxies.Add(Component->GetLandscapeProxy());
-					if (Component->GetLandscapeProxy()->GetOuter() != World->GetCurrentLevel())
-					{
-						TargetSelectedComponents.Add(Component);
-					}
+					GEditor->SelectNone(false, true);
+					GEditor->SelectActor(LandscapeProxy, true, false, true);
 
-					ULandscapeHeightfieldCollisionComponent* CollisionComp = Component->CollisionComponent.Get();
-					SelectProxies.Add(CollisionComp->GetLandscapeProxy());
-					if (CollisionComp->GetLandscapeProxy()->GetOuter() != World->GetCurrentLevel())
-					{
-						TargetSelectedCollisionComponents.Add(CollisionComp);
-					}
+					GEditor->SelectNone(false, true);
+
+					// Remove Selection
+					LandscapeInfo->ClearSelectedRegion(true);
 				}
-
-				// Check which ones are need for height map change
-				TSet<UTexture2D*> OldHeightmapTextures;
-				for (ULandscapeComponent* Component : TargetSelectedComponents)
-				{
-					Component->Modify();
-					OldHeightmapTextures.Add(Component->GetHeightmap());
-				}
-
-				// Need to split all the component which share Heightmap with selected components
-				TMap<ULandscapeComponent*, bool> HeightmapUpdateComponents;
-				HeightmapUpdateComponents.Reserve(TargetSelectedComponents.Num() * 4); // worst case
-				for (ULandscapeComponent* Component : TargetSelectedComponents)
-				{
-					// Search neighbor only
-					const int32 SearchX = Component->GetHeightmap()->Source.GetSizeX() / NeedHeightmapSize - 1;
-					const int32 SearchY = Component->GetHeightmap()->Source.GetSizeY() / NeedHeightmapSize - 1;
-					const FIntPoint ComponentBase = Component->GetSectionBase() / Component->ComponentSizeQuads;
-
-					for (int32 Y = -SearchY; Y <= SearchY; ++Y)
-					{
-						for (int32 X = -SearchX; X <= SearchX; ++X)
-						{
-							ULandscapeComponent* const Neighbor = LandscapeInfo->XYtoComponentMap.FindRef(ComponentBase + FIntPoint(X, Y));
-							if (Neighbor && Neighbor->GetHeightmap() == Component->GetHeightmap() && !HeightmapUpdateComponents.Contains(Neighbor))
-							{
-								Neighbor->Modify();
-								bool bNeedsMoveToCurrentLevel = TargetSelectedComponents.Contains(Neighbor);
-								HeightmapUpdateComponents.Add(Neighbor, bNeedsMoveToCurrentLevel);
-							}
-						}
-					}
-				}
-
-				ALandscapeProxy* LandscapeProxy = LandscapeInfo->GetCurrentLevelLandscapeProxy(false);
-				if (!LandscapeProxy)
-				{
-					LandscapeProxy = World->SpawnActor<ALandscapeStreamingProxy>();
-					// copy shared properties to this new proxy
-					LandscapeProxy->GetSharedProperties(Landscape);
-					LandscapeProxy->CreateLandscapeInfo();
-					
-					// set proxy location
-					// by default first component location
-					ULandscapeComponent* FirstComponent = *TargetSelectedComponents.CreateConstIterator();
-					LandscapeProxy->GetRootComponent()->SetWorldLocationAndRotation(FirstComponent->GetComponentLocation(), FirstComponent->GetComponentRotation());
-					LandscapeProxy->LandscapeSectionOffset = FirstComponent->GetSectionBase();
-
-					// Hide(unregister) the new landscape if owning level currently in hidden state
-					if (LandscapeProxy->GetLevel()->bIsVisible == false)
-					{
-						LandscapeProxy->UnregisterAllComponents();
-					}
-				}
-
-				// Changing Heightmap format for selected components
-				for (const auto& HeightmapUpdateComponentPair : HeightmapUpdateComponents)
-				{
-					ALandscape::SplitHeightmap(HeightmapUpdateComponentPair.Key, HeightmapUpdateComponentPair.Value ? LandscapeProxy : nullptr);
-				}
-								
-				// Delete if it is no referenced textures...
-				for (UTexture2D* Texture : OldHeightmapTextures)
-				{
-					Texture->SetFlags(RF_Transactional);
-					Texture->Modify();
-					Texture->MarkPackageDirty();
-					Texture->ClearFlags(RF_Standalone);
-				}
-
-				for (ALandscapeProxy* Proxy : SelectProxies)
-				{
-					Proxy->Modify();
-				}
-
-				LandscapeProxy->Modify();
-				LandscapeProxy->MarkPackageDirty();
-
-				// Handle XY-offset textures (these don't need splitting, as they aren't currently shared between components like heightmaps/weightmaps can be)
-				for (ULandscapeComponent* Component : TargetSelectedComponents)
-				{
-					if (Component->XYOffsetmapTexture)
-					{
-						Component->XYOffsetmapTexture->Modify();
-						Component->XYOffsetmapTexture->Rename(nullptr, LandscapeProxy);
-					}
-				}
-
-				// Change Weight maps...
-				{
-					FLandscapeEditDataInterface LandscapeEdit(LandscapeInfo);
-					for (ULandscapeComponent* Component : TargetSelectedComponents)
-					{
-						Component->ReallocateWeightmaps(&LandscapeEdit, false, true, false, true, LandscapeProxy);
-						Component->ForEachLayer([&](const FGuid& LayerGuid, FLandscapeLayerComponentData& LayerData)
-						{
-							FScopedSetLandscapeEditingLayer Scope(Landscape, LayerGuid);
-							Component->ReallocateWeightmaps(&LandscapeEdit, true, true, false, true, LandscapeProxy);
-						});
-						Landscape->RequestLayersContentUpdateForceAll();
-					}
-
-					// Need to Repacking all the Weight map (to make it packed well...)
-					for (ALandscapeProxy* Proxy : SelectProxies)
-					{
-						Proxy->RemoveInvalidWeightmaps();
-					}
-				}
-
-				// Move the components to the Proxy actor
-				// This does not use the MoveSelectedActorsToCurrentLevel path as there is no support to only move certain components.
-				for (ULandscapeComponent* Component :TargetSelectedComponents)
-				{
-					// Need to move or recreate all related data (Height map, Weight map, maybe collision components, allocation info)
-					Component->GetLandscapeProxy()->LandscapeComponents.Remove(Component);
-					Component->UnregisterComponent();
-					Component->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
-					Component->InvalidateLightingCache();
-					Component->Rename(nullptr, LandscapeProxy);
-					LandscapeProxy->LandscapeComponents.Add(Component);
-					Component->AttachToComponent(LandscapeProxy->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
-					
-					// clear transient mobile data
-					Component->MobileDataSourceHash.Invalidate();
-					Component->MobileMaterialInterfaces.Reset();
-					Component->MobileWeightmapTextures.Reset();
-					
-					Component->UpdateMaterialInstances();
-										
-					FFormatNamedArguments Args;
-					Args.Add(TEXT("ComponentName"), FText::FromString(Component->GetName()));
-				}
-				LandscapeProxy->UpdateCachedHasLayersContent();
-
-				for (ULandscapeHeightfieldCollisionComponent* Component : TargetSelectedCollisionComponents)
-				{
-					// Need to move or recreate all related data (Height map, Weight map, maybe collision components, allocation info)
-
-					Component->GetLandscapeProxy()->CollisionComponents.Remove(Component);
-					Component->UnregisterComponent();
-					Component->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
-					Component->Rename(nullptr, LandscapeProxy);
-					LandscapeProxy->CollisionComponents.Add(Component);
-					Component->AttachToComponent(LandscapeProxy->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
-
-					// Move any foliage associated
-					AInstancedFoliageActor::MoveInstancesForComponentToCurrentLevel(Component);
-
-					FFormatNamedArguments Args;
-					Args.Add(TEXT("ComponentName"), FText::FromString(Component->GetName()));
-				}
-
-				GEditor->SelectNone(false, true);
-				GEditor->SelectActor(LandscapeProxy, true, false, true);
-
-				GEditor->SelectNone(false, true);
-
-				// Register our new components if destination landscape is registered in scene 
-				if (LandscapeProxy->GetRootComponent()->IsRegistered())
-				{
-					LandscapeProxy->RegisterAllComponents();
-				}
-
-				for (ALandscapeProxy* Proxy : SelectProxies)
-				{
-					if (Proxy->GetRootComponent()->IsRegistered())
-					{
-						Proxy->RegisterAllComponents();
-					}
-				}
-
-				//Landscape->bLockLocation = (LandscapeInfo->XYtoComponentMap.Num() != Landscape->LandscapeComponents.Num());
-
-				// Remove Selection
-				LandscapeInfo->ClearSelectedRegion(true);
-
-				//EdMode->SetMaskEnable(Landscape->SelectedRegion.Num());
 			}
 		}
 	}
@@ -695,6 +498,7 @@ public:
 
 	virtual const TCHAR* GetToolName() override { return TEXT("MoveToLevel"); }
 	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_MoveToLevel", "Move to Streaming Level"); };
+	virtual FText GetDisplayMessage() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_MoveToLevel_Message", "Move the selected components, via using the Selection tool, to the current streaming level.  This makes it possible to move sections of a Landscape into a streaming level so that they will be streamed in and out with that level, optimizing the performance of the Landscape."); };
 
 	virtual void SetEditRenderType() override { GLandscapeEditRenderMode = ELandscapeEditRenderMode::SelectComponent | (GLandscapeEditRenderMode & ELandscapeEditRenderMode::BitMaskForMask); }
 	virtual bool SupportsMask() override { return false; }
@@ -985,6 +789,7 @@ public:
 
 	virtual const TCHAR* GetToolName() override { return TEXT("AddComponent"); }
 	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_AddComponent", "Add New Landscape Component"); };
+	virtual FText GetDisplayMessage() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_AddComponent_Message", "Create new components for the current Landscape, one at a time.  The cursor shows a green wireframe where new components can be added."); };
 
 	virtual void SetEditRenderType() override { GLandscapeEditRenderMode = ELandscapeEditRenderMode::None | (GLandscapeEditRenderMode & ELandscapeEditRenderMode::BitMaskForMask); }
 	virtual bool SupportsMask() override { return false; }
@@ -1057,6 +862,7 @@ public:
 
 	virtual const TCHAR* GetToolName() override { return TEXT("DeleteComponent"); }
 	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_DeleteComponent", "Delete Landscape Components"); };
+	virtual FText GetDisplayMessage() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_DeleteComponent_Message", "Delete selected components . If no components are currently selected, deletes the component highlighted under the mouse cursor. "); };
 
 	virtual void SetEditRenderType() override { GLandscapeEditRenderMode = ELandscapeEditRenderMode::SelectComponent | (GLandscapeEditRenderMode & ELandscapeEditRenderMode::BitMaskForMask); }
 	virtual bool SupportsMask() override { return false; }
@@ -1382,6 +1188,8 @@ public:
 
 	virtual const TCHAR* GetToolName() override { return TEXT("Copy"); }
 	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Copy", "Copy"); };
+	virtual FText GetDisplayMessage() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Copy_Message", "Copy and Paste allows you to copy terrain data from one area of your Landscape to another.  Use the select tool  in conjunction with the Copy gizmo to further refine your selection."); };
+
 
 	virtual void SetEditRenderType() override
 	{
@@ -1699,6 +1507,7 @@ public:
 
 	virtual const TCHAR* GetToolName() override { return TEXT("Paste"); }
 	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Region", "Region Copy/Paste"); };
+	virtual FText GetDisplayMessage() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Region_Message", "Copy and Paste allows you to copy terrain data from one area of your Landscape to another.  Use the select tool  in conjunction with the Copy gizmo to further refine your selection."); };
 
 	virtual void SetEditRenderType() override
 	{
@@ -1779,6 +1588,7 @@ public:
 	// Just hybrid of Copy and Paste tool
 	virtual const TCHAR* GetToolName() override { return TEXT("CopyPaste"); }
 	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Region", "Region Copy/Paste"); };
+	virtual FText GetDisplayMessage() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_Region_Message", "Copy and Paste allows you to copy terrain data from one area of your Landscape to another.  Use the select tool  in conjunction with the Copy gizmo to further refine your selection."); };
 
 	virtual void EnterTool() override
 	{
@@ -1856,6 +1666,7 @@ public:
 
 	virtual const TCHAR* GetToolName() override { return TEXT("NewLandscape"); }
 	virtual FText GetDisplayName() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_NewLandscape", "New Landscape"); };
+	virtual FText GetDisplayMessage() override { return NSLOCTEXT("UnrealEd", "LandscapeMode_NewLandscape_Message", "Create or import a new heightmap.  Assign a material and configure the components.  When you are ready to create your new Landscape, press the Create button in the lower-right corner of this panel. "); };
 
 	virtual void SetEditRenderType() override { GLandscapeEditRenderMode = ELandscapeEditRenderMode::None | (GLandscapeEditRenderMode & ELandscapeEditRenderMode::BitMaskForMask); }
 	virtual bool SupportsMask() override { return false; }
@@ -1908,6 +1719,7 @@ public:
 
 	virtual const TCHAR* GetToolName() override { return TEXT("ResizeLandscape"); }
 	virtual FText GetDisplayName() override { return LOCTEXT("LandscapeMode_ResizeLandscape", "Change Landscape Component Size"); };
+	virtual FText GetDisplayMessage() override { return LOCTEXT("LandscapeMode_ResizeLandscape_Message", "Change Landscape Component Size"); };
 
 	virtual void SetEditRenderType() override { GLandscapeEditRenderMode = ELandscapeEditRenderMode::None | (GLandscapeEditRenderMode & ELandscapeEditRenderMode::BitMaskForMask); }
 	virtual bool SupportsMask() override { return false; }

@@ -1,9 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "AnalyticsEventAttribute.h"
+#include "AnalyticsET.h"
 #include "Interfaces/IAnalyticsProvider.h"
 
 /** ET specific analytics provider instance. Exposes additional APIs to support Json-based events. */
@@ -119,4 +120,9 @@ public:
 	* Blocks execution in the thread until all events have been flushed to the network.
 	*/
 	virtual void BlockUntilFlushed(float InTimeoutSec) = 0;
+
+	/**
+	 * Return the current provider configuration.
+	 */
+	virtual const FAnalyticsET::Config& GetConfig() const = 0;
 };

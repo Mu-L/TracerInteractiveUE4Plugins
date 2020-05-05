@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -73,8 +73,6 @@ namespace SkeletalSimplifier
 
 		~FSimplifierMeshManager()
 		{
-			if (VertArray) delete[] VertArray;
-			if (TriArray)  delete[] TriArray;
 		}
 
 		// Extract the currently valid verts / indices from this object.  If LockedVerts != NULL
@@ -89,6 +87,8 @@ namespace SkeletalSimplifier
 		// Apply a flag to all verts that are identified as being at the corner of a box.
 		void        FlagBoxCorners(const ESimpElementFlags Flag);
 
+		// Apply flag to edges when the IsDifferent(AVert, BVert) == true
+		void        FlagEdges(const TFunction<bool(const SimpVertType*, const SimpVertType*)> IsDifferent, const ESimpElementFlags Flag);
 
 		// Change the attributes on a given simplifier vert.
 		void UpdateVertexAttributes(SimpVertType& Vertex, const MeshVertType& AttributeVert)
@@ -423,8 +423,11 @@ namespace SkeletalSimplifier
 		int32   ReducedNumVerts;
 		int32   ReducedNumTris;
 
-		SimpVertType*		VertArray;
-		SimpTriType*		TriArray;
+		// Note after these arrays are constructed, they should never be resized.
+		// code holds pointers to array elements.
+		TArray<SimpVertType>  VertArray;
+		TArray<SimpTriType>   TriArray;
+
 
 		// Hash based on the Ids of the edge's verts.
 		// used to map verts to edges.
@@ -439,8 +442,8 @@ namespace SkeletalSimplifier
 
 		// Methods used in the initial construction of the simplifier mesh
 
-		void GroupVerts(SimpVertType* Verts, const int32 NumVerts);
-		void MakeEdges(const SimpVertType* Verts, const int32 NumVerts, const int32 NumTris, TArray<SimpEdgeType>& Edges);
+		void GroupVerts(TArray<SimpVertType>& Verts);
+		void MakeEdges(const TArray<SimpVertType>& Verts, const int32 NumTris, TArray<SimpEdgeType>& Edges);
 		void AppendConnectedEdges(const SimpVertType* Vert, TArray<SimpEdgeType>& Edges);
 		void GroupEdges(TArray< SimpEdgeType >& Edges);
 

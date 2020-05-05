@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "AnimationBlueprintEditor.h"
@@ -67,6 +67,7 @@
 #include "Widgets/Input/SButton.h"
 #include "EditorFontGlyphs.h"
 #include "AnimationBlueprintInterfaceEditorMode.h"
+#include "ToolMenus.h"
 
 // Hide related nodes feature
 #include "Preferences/AnimationBlueprintEditorOptions.h"
@@ -193,20 +194,16 @@ void FAnimationBlueprintEditor::ExtendMenu()
 	}
 
 	MenuExtender = MakeShareable(new FExtender);
-
-	UAnimBlueprint* AnimBlueprint = GetAnimBlueprint();
-	if(AnimBlueprint)
-	{
-		TSharedPtr<FExtender> AnimBPMenuExtender = MakeShareable(new FExtender);
-		FKismet2Menu::SetupBlueprintEditorMenu(AnimBPMenuExtender, *this);
-		AddMenuExtender(AnimBPMenuExtender);
-	}
-
 	AddMenuExtender(MenuExtender);
 
 	// add extensible menu if exists
 	FAnimationBlueprintEditorModule& AnimationBlueprintEditorModule = FModuleManager::LoadModuleChecked<FAnimationBlueprintEditorModule>("AnimationBlueprintEditor");
 	AddMenuExtender(AnimationBlueprintEditorModule.GetMenuExtensibilityManager()->GetAllExtenders(GetToolkitCommands(), GetEditingObjects()));
+}
+
+void FAnimationBlueprintEditor::RegisterMenus()
+{
+	FBlueprintEditor::RegisterMenus();
 }
 
 void FAnimationBlueprintEditor::InitAnimationBlueprintEditor(const EToolkitMode::Type Mode, const TSharedPtr< class IToolkitHost >& InitToolkitHost, UAnimBlueprint* InAnimBlueprint)
@@ -249,6 +246,12 @@ void FAnimationBlueprintEditor::InitAnimationBlueprintEditor(const EToolkitMode:
 	TArray<UObject*> ObjectsBeingEdited;
 	ObjectsBeingEdited.Add(InAnimBlueprint);
 
+	CreateDefaultCommands();
+
+	BindCommands();
+
+	RegisterMenus();
+
 	// Initialize the asset editor and spawn tabs
 	const TSharedRef<FTabManager::FLayout> DummyLayout = FTabManager::NewLayout("NullLayout")->AddArea(FTabManager::NewPrimaryArea());
 	const bool bCreateDefaultStandaloneMenu = true;
@@ -259,8 +262,6 @@ void FAnimationBlueprintEditor::InitAnimationBlueprintEditor(const EToolkitMode:
 	AnimBlueprints.Add(InAnimBlueprint);
 
 	CommonInitialization(AnimBlueprints);
-
-	BindCommands();
 
 	if(InAnimBlueprint->BlueprintType == BPTYPE_Interface)
 	{
@@ -369,39 +370,6 @@ void FAnimationBlueprintEditor::ExtendToolbar()
 			}
 		));
 	}
-
-	struct Local
-	{
-		static void FillToolbar(FToolBarBuilder& ToolbarBuilder, const TSharedRef< FUICommandList > ToolkitCommands, FAnimationBlueprintEditor* BlueprintEditor)
-		{
-			ToolbarBuilder.BeginSection("Graph");
-			{
-				ToolbarBuilder.AddToolBarButton(
-					FAnimGraphCommands::Get().ToggleHideUnrelatedNodes,
-					NAME_None,
-					TAttribute<FText>(),
-					TAttribute<FText>(),
-					FSlateIcon(FEditorStyle::GetStyleSetName(), "GraphEditor.ToggleHideUnrelatedNodes")
-				);
-				ToolbarBuilder.AddComboButton(
-					FUIAction(),
-					FOnGetContent::CreateSP(BlueprintEditor, &FBlueprintEditor::MakeHideUnrelatedNodesOptionsMenu),
-					LOCTEXT("HideUnrelatedNodesOptions", "Hide Unrelated Nodes Options"),
-					LOCTEXT("HideUnrelatedNodesOptionsMenu", "Hide Unrelated Nodes options menu"),
-					TAttribute<FSlateIcon>(),
-					true
-				);
-			}
-			ToolbarBuilder.EndSection();
-		}
-	};
-
-	ToolbarExtender->AddToolBarExtension(
-		"Asset",
-		EExtensionHook::After,
-		GetToolkitCommands(),
-		FToolBarExtensionDelegate::CreateStatic( &Local::FillToolbar, GetToolkitCommands(), this )
-	);
 }
 
 UBlueprint* FAnimationBlueprintEditor::GetBlueprintObj() const
@@ -462,22 +430,8 @@ void FAnimationBlueprintEditor::OnGraphEditorBackgrounded(const TSharedRef<SGrap
 /** Create Default Tabs **/
 void FAnimationBlueprintEditor::CreateDefaultCommands() 
 {
-	if (GetBlueprintObj())
 	{
 		FBlueprintEditor::CreateDefaultCommands();
-
-		ToolkitCommands->MapAction(
-			FAnimGraphCommands::Get().ToggleHideUnrelatedNodes,
-			FExecuteAction::CreateSP(this, &FBlueprintEditor::ToggleHideUnrelatedNodes),
-			FCanExecuteAction(),
-			FIsActionChecked::CreateSP(this, &FBlueprintEditor::IsToggleHideUnrelatedNodesChecked));
-	}
-	else
-	{
-		ToolkitCommands->MapAction( FGenericCommands::Get().Undo, 
-			FExecuteAction::CreateSP( this, &FAnimationBlueprintEditor::UndoAction ));
-		ToolkitCommands->MapAction( FGenericCommands::Get().Redo, 
-			FExecuteAction::CreateSP( this, &FAnimationBlueprintEditor::RedoAction ));
 	}
 }
 
@@ -1285,7 +1239,7 @@ void FAnimationBlueprintEditor::ClearupPreviewMeshAnimNotifyStates()
 	}
 }
 
-void FAnimationBlueprintEditor::GetCustomDebugObjects(TArray<FCustomDebugObject>& DebugList) const
+UAnimInstance* FAnimationBlueprintEditor::GetPreviewInstance() const
 {
 	UDebugSkelMeshComponent* PreviewMeshComponent = PersonaToolkit->GetPreviewMeshComponent();
 	if (PreviewMeshComponent->IsAnimBlueprintInstanced())
@@ -1306,8 +1260,22 @@ void FAnimationBlueprintEditor::GetCustomDebugObjects(TArray<FCustomDebugObject>
 			}
 		}
 
+		return PreviewInstance;
+	}
+
+	return nullptr;
+}
+
+void FAnimationBlueprintEditor::GetCustomDebugObjects(TArray<FCustomDebugObject>& DebugList) const
+{
+	UAnimInstance* PreviewInstance = GetPreviewInstance();
+	if (PreviewInstance)
+	{
 		new (DebugList) FCustomDebugObject(PreviewInstance, LOCTEXT("PreviewObjectLabel", "Preview Instance").ToString());
 	}
+
+	FAnimationBlueprintEditorModule& AnimationBlueprintEditorModule = FModuleManager::GetModuleChecked<FAnimationBlueprintEditorModule>("AnimationBlueprintEditor");
+	AnimationBlueprintEditorModule.OnGetCustomDebugObjects().Broadcast(*this, DebugList);
 }
 
 void FAnimationBlueprintEditor::CreateDefaultTabContents(const TArray<UBlueprint*>& InBlueprints)
@@ -1375,7 +1343,7 @@ void FAnimationBlueprintEditor::RedoAction()
 	GEditor->RedoTransaction();
 }
 
-void FAnimationBlueprintEditor::NotifyPostChange(const FPropertyChangedEvent& PropertyChangedEvent, UProperty* PropertyThatChanged)
+void FAnimationBlueprintEditor::NotifyPostChange(const FPropertyChangedEvent& PropertyChangedEvent, FProperty* PropertyThatChanged)
 {
 	FBlueprintEditor::NotifyPostChange(PropertyChangedEvent, PropertyThatChanged);
 
@@ -1624,7 +1592,7 @@ void FAnimationBlueprintEditor::HandleSetObjectBeingDebugged(UObject* InObject)
 			}
 			else
 			{
-				// Otherwise eet us to display the debugged instance via copy-pose
+				// Otherwise set us to display the debugged instance via copy-pose
 				GetPreviewScene()->GetPreviewMeshComponent()->EnablePreview(true, nullptr);
 				GetPreviewScene()->GetPreviewMeshComponent()->PreviewInstance->SetDebugSkeletalMeshComponent(SkeletalMeshComponent);
 			}

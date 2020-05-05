@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "RayTracingDebugVisualizationMenuCommands.h"
 #include "Containers/UnrealString.h"
@@ -51,6 +51,8 @@ void FRayTracingDebugVisualizationMenuCommands::CreateRayTracingDebugVisualizati
 	RayTracingDebugModeNames.Add(LOCTEXT("HitKind", "HitKind"));
 	RayTracingDebugModeNames.Add(LOCTEXT("Barycentrics", "Barycentrics"));
 	RayTracingDebugModeNames.Add(LOCTEXT("PrimaryRays", "PrimaryRays"));
+	RayTracingDebugModeNames.Add(LOCTEXT("World Tangent", "World Tangent"));
+	RayTracingDebugModeNames.Add(LOCTEXT("Anisotropy", "Anisotropy"));
 
 	for ( int32 RayTracingDebugIndex = 0; RayTracingDebugIndex < RayTracingDebugModeNames.Num(); ++RayTracingDebugIndex)
 	{
@@ -73,13 +75,9 @@ bool FRayTracingDebugVisualizationMenuCommands::DebugModeShouldBeTonemapped(cons
 	static TArray<FName> TonemappedRayTracingDebugVisualizationModes;
 	if (TonemappedRayTracingDebugVisualizationModes.Num() == 0)
 	{
-		// World normal is tonemapped to match raster buffer visualization mode
-		TonemappedRayTracingDebugVisualizationModes.Add(*LOCTEXT("World Normal", "World Normal").ToString());
-		TonemappedRayTracingDebugVisualizationModes.Add(*LOCTEXT("BaseColor", "BaseColor").ToString());
-		TonemappedRayTracingDebugVisualizationModes.Add(*LOCTEXT("DiffuseColor", "DiffuseColor").ToString());
-		TonemappedRayTracingDebugVisualizationModes.Add(*LOCTEXT("SpecularColor", "SpecularColor").ToString());
-		TonemappedRayTracingDebugVisualizationModes.Add(*LOCTEXT("ShadingModelID", "ShadingModelID").ToString());
 		TonemappedRayTracingDebugVisualizationModes.Add(*LOCTEXT("PrimaryRays", "PrimaryRays").ToString());
+		TonemappedRayTracingDebugVisualizationModes.Add(*LOCTEXT("Radiance", "Radiance").ToString());
+		TonemappedRayTracingDebugVisualizationModes.Add(*LOCTEXT("IndirectIrradiance", "IndirectIrradiance").ToString());
 	}
 
 	return TonemappedRayTracingDebugVisualizationModes.Contains(RayTracingDebugModeName);

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SLevelViewport.h"
 #include "Materials/MaterialInterface.h"
@@ -462,11 +462,6 @@ void SLevelViewport::ConstructLevelEditorViewportClient( const FArguments& InArg
 			ViewportInstanceSettings.BufferVisualizationMode = NAME_None;
 		}
 
-		// Disable realtime viewports by default for remote sessions
-		if (FPlatformMisc::IsRemoteSession())
-		{
-			ViewportInstanceSettings.bIsRealtime = false;
-		}
 	}
 
 	if(ViewportInstanceSettings.ViewportType == LVT_Perspective)
@@ -536,6 +531,14 @@ void SLevelViewport::ConstructLevelEditorViewportClient( const FArguments& InArg
 	LevelViewportClient->SetViewModes(ViewportInstanceSettings.PerspViewModeIndex, ViewportInstanceSettings.OrthoViewModeIndex );
 
 	bShowFullToolbar = ViewportInstanceSettings.bShowFullToolbar;
+
+
+	// Disable realtime viewports by default for remote sessions
+	if (FPlatformMisc::IsRemoteSession())
+	{
+		bool bShouldBeRealtime = false;
+		LevelViewportClient->SetRealtimeOverride(bShouldBeRealtime, LOCTEXT("RealtimeOverrideMessage_RDP", "Remote Desktop"));
+	}
 }
 
 FSceneViewport* SLevelViewport::GetGameSceneViewport() const
@@ -1105,6 +1108,10 @@ TSharedRef< SWidget > SLevelViewport::BuildViewportDragDropContextMenu()
 
 void SLevelViewport::OnMapChanged( UWorld* World, EMapChangeType MapChangeType )
 {
+	// If the level is being unloaded, disable input in the viewport. Since click actions are deferred,
+	// It's possible to get into a state where the selected actors have been cleaned up by the time the click message is handled
+	LevelViewportClient->bDisableInput = (MapChangeType == EMapChangeType::TearDownWorld);
+
 	if( World && ( ( World == GetWorld() ) || ( World->EditorViews[LevelViewportClient->ViewportType].CamUpdated ) ) )
 	{
 		if( MapChangeType == EMapChangeType::LoadMap )
@@ -1212,7 +1219,7 @@ void FLevelViewportDropContextMenuImpl::FillDropAddReplaceActorMenu( bool bRepla
 				}
 				else
 				{
-					FUIAction Action( FExecuteAction::CreateStatic( &FLevelEditorActionCallbacks::AddActor_Clicked, MenuItem.FactoryToUse, MenuItem.AssetData, false ) );
+					FUIAction Action( FExecuteAction::CreateStatic( &FLevelEditorActionCallbacks::AddActor_Clicked, MenuItem.FactoryToUse, MenuItem.AssetData ) );
 				
 					FText MenuEntryName = FText::Format( NSLOCTEXT("SLevelViewport", "AddActorMenuFormat", "Add {0}"), MenuItem.FactoryToUse->GetDisplayName() );
 					if ( MenuItem.AssetData.IsValid() )
@@ -2186,11 +2193,9 @@ void SLevelViewport::SaveConfig(const FString& ConfigName) const
 		ViewportInstanceSettings.RayTracingDebugVisualizationMode = LevelViewportClient->CurrentRayTracingDebugVisualizationMode;
 		ViewportInstanceSettings.ExposureSettings = LevelViewportClient->ExposureSettings;
 		ViewportInstanceSettings.FOVAngle = LevelViewportClient->FOVAngle;
-		if (!FPlatformMisc::IsRemoteSession())
-		{
-			// Only save this when we're not a remote session, as remote sessions force realtime to be disabled
-			ViewportInstanceSettings.bIsRealtime = LevelViewportClient->IsRealtime();
-		}
+	
+		LevelViewportClient->SaveRealtimeStateToConfig(ViewportInstanceSettings.bIsRealtime);
+	
 		ViewportInstanceSettings.bShowOnScreenStats = LevelViewportClient->ShouldShowStats();
 		ViewportInstanceSettings.FarViewPlane = LevelViewportClient->GetFarClipPlaneOverride();
 		ViewportInstanceSettings.bShowFullToolbar = bShowFullToolbar;
@@ -2287,12 +2292,6 @@ FLevelEditorViewportInstanceSettings SLevelViewport::LoadLegacyConfigFromIni(con
 	GConfig->GetBool(*IniSection, *(InConfigKey + TEXT(".bWantStats")), ViewportInstanceSettings.bShowOnScreenStats, GEditorPerProjectIni);
 	GConfig->GetBool(*IniSection, *(InConfigKey + TEXT(".bWantFPS")), ViewportInstanceSettings.bShowFPS_DEPRECATED, GEditorPerProjectIni);
 	GConfig->GetFloat(*IniSection, *(InConfigKey + TEXT(".FOVAngle")), ViewportInstanceSettings.FOVAngle, GEditorPerProjectIni);
-
-	// Disable realtime viewports by default for remote sessions
-	if (FPlatformMisc::IsRemoteSession())
-	{
-		ViewportInstanceSettings.bIsRealtime = false;
-	}
 
 	return ViewportInstanceSettings;
 }

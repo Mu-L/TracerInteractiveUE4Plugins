@@ -1,9 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Misc/CoreMisc.h"
+#include "Containers/Ticker.h"
 #include "XmppConnection.h"
 #include "Modules/ModuleInterface.h"
 #include "XmppMultiUserChat.h"
@@ -15,7 +16,7 @@ class Error;
  * Use CreateConnection to create a new Xmpp connection
  */
 class XMPP_API FXmppModule :
-	public IModuleInterface, public FSelfRegisteringExec
+	public IModuleInterface, public FSelfRegisteringExec, public FTickerObjectBase
 {
 
 public:
@@ -96,6 +97,9 @@ public:
 		return bEnabled;
 	}
 
+	// FTickerObjectBase
+	virtual bool Tick(float DeltaTime) override;
+
 	/**
 	 * Delegate callback when a system acquires ownership over an XMPP connection
 	 *
@@ -113,6 +117,16 @@ public:
 	 */
 	DECLARE_EVENT_TwoParams(FXmppModule, FOnXmppConnectionRelinquished, const TSharedRef<IXmppConnection>& /*XmppConnection*/, const FString& /*SystemName*/);
 	FOnXmppConnectionRelinquished OnXmppConnectionRelinquished;
+
+	/**
+	* Delegate fired when an Xmpp connection is created.
+	*
+	* @param NewConnection Reference to newly created Xmpp connection
+	*
+	*/
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnXmppConnectionCreated, const TSharedRef<IXmppConnection>& /*NewConnection*/);
+	FOnXmppConnectionCreated OnXmppConnectionCreated;
+
 
 private:
 

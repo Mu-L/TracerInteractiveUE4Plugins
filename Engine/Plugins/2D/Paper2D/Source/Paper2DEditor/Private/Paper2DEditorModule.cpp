@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Paper2DEditorModule.h"
 #include "Paper2DEditorLog.h"
@@ -71,6 +71,8 @@
 #include "ISettingsModule.h"
 
 // Intro tutorials
+#include "EditorTutorial.h"
+#include "IIntroTutorials.h"
 
 // Mesh paint adapters
 #include "MeshPaintModule.h"
@@ -181,7 +183,10 @@ public:
 		OnPropertyChangedDelegateHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddRaw(this, &FPaper2DEditor::OnPropertyChanged);
 
 		// Register to be notified when an asset is reimported
-		OnAssetReimportDelegateHandle = GEditor->GetEditorSubsystem<UImportSubsystem>()->OnAssetReimport.AddRaw(this, &FPaper2DEditor::OnObjectReimported);
+		if (GEditor)
+		{
+			OnAssetReimportDelegateHandle = GEditor->GetEditorSubsystem<UImportSubsystem>()->OnAssetReimport.AddRaw(this, &FPaper2DEditor::OnObjectReimported);
+		}
 
 		// Register the thumbnail renderers
 		UThumbnailManager::Get().RegisterCustomRenderer(UPaperSprite::StaticClass(), UPaperSpriteThumbnailRenderer::StaticClass());
@@ -214,6 +219,18 @@ public:
 			SpriteMeshPaintAdapterFactory = MakeShareable(new FMeshPaintSpriteAdapterFactory());
 			MeshPaintModule->RegisterGeometryAdapterFactory(SpriteMeshPaintAdapterFactory.ToSharedRef());
 		}
+
+		// Register Paper2D tutorial category with the tutorial browser
+		FTutorialCategory Paper2DCategory = FTutorialCategory();
+		Paper2DCategory.Identifier = "Paper2D";
+		Paper2DCategory.Title = NSLOCTEXT("TutorialCategories", "Paper2DTitle", "Paper2D");
+		Paper2DCategory.Description = NSLOCTEXT("TutorialCategories", "Paper2DDescription", "Tutorials covering the usage of the Unreal Engine 4 2D game tool: Paper2D.");
+		Paper2DCategory.Icon = "ClassThumbnail.PaperSprite";
+		Paper2DCategory.Texture = FSoftObjectPath("/Paper2D/Tutorial/Paper2D/TutorialAssets/Paper2DSprite_TutorialIcon.Paper2DSprite_TutorialIcon");
+		Paper2DCategory.SortOrder = 500;
+
+		IIntroTutorials& IntroTutorials = FModuleManager::GetModuleChecked<IIntroTutorials>(TEXT("IntroTutorials"));
+		IntroTutorials.RegisterCategory(Paper2DCategory);
 
 		//
 		RegisterSettings();
@@ -261,7 +278,10 @@ public:
 			FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(OnPropertyChangedDelegateHandle);
 
 			// Unregister the asset reimport handler
-			GEditor->GetEditorSubsystem<UImportSubsystem>()->OnAssetReimport.Remove(OnAssetReimportDelegateHandle);
+			if (GEditor)
+			{
+				GEditor->GetEditorSubsystem<UImportSubsystem>()->OnAssetReimport.Remove(OnAssetReimportDelegateHandle);
+			}
 		}
 
 		// Unregister the details customization

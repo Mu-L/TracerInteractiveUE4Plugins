@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AudioMixerModule.h"
 #include "Modules/ModuleManager.h"
@@ -9,6 +9,8 @@ public:
 
 	virtual void StartupModule() override
 	{
+		FModuleManager::Get().LoadModuleChecked(TEXT("AudioMixerCore"));
+		FModuleManager::Get().LoadModuleChecked(TEXT("SignalProcessing"));
 	}
 };
 

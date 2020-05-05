@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -8,76 +8,21 @@
 // This implementation is used by both Windows and XBoxOne
 #if PLATFORM_WINDOWS
 #include <intrin.h>
-#elif PLATFORM_XBOXONE
-#include "XboxOne/XboxOneSystemIncludes.h"
+#include <smmintrin.h>
 #endif
 
-#if PLATFORM_ENABLE_VECTORINTRINSICS
-#include "Math/UnrealPlatformMathSSE.h"
-#endif
+#include "Math/UnrealPlatformMathSSE4.h"
 
 /**
 * Windows implementation of the Math OS functions
 **/
-struct FWindowsPlatformMath : public FGenericPlatformMath
+struct FWindowsPlatformMath : public TUnrealPlatformMathSSE4Base<FGenericPlatformMath>
 {
 #if PLATFORM_ENABLE_VECTORINTRINSICS
-	static FORCEINLINE int32 TruncToInt(float F)
-	{
-		return _mm_cvtt_ss2si(_mm_set_ss(F));
-	}
-
-	static FORCEINLINE float TruncToFloat( float F )
-	{
-		return (float)TruncToInt(F); // same as generic implementation, but this will call the faster trunc
-	}
-
-	static FORCEINLINE int32 RoundToInt( float F )
-	{
-		// Note: the x2 is to workaround the rounding-to-nearest-even-number issue when the fraction is .5
-		return _mm_cvt_ss2si( _mm_set_ss(F + F + 0.5f) ) >> 1;
-	}
-
-	static FORCEINLINE float RoundToFloat(float F)
-	{
-		return (float)RoundToInt(F);
-	}
-
-	static FORCEINLINE int32 FloorToInt(float F)
-	{
-		return _mm_cvt_ss2si(_mm_set_ss(F + F - 0.5f)) >> 1;
-	}
-
-	static FORCEINLINE float FloorToFloat(float F)
-	{
-		return (float)FloorToInt(F);
-	}
-
-	static FORCEINLINE int32 CeilToInt(float F)
-	{
-		// Note: the x2 is to workaround the rounding-to-nearest-even-number issue when the fraction is .5
-		return -(_mm_cvt_ss2si(_mm_set_ss(-0.5f - (F + F))) >> 1);
-	}
-
-	static FORCEINLINE float CeilToFloat(float F)
-	{
-		// Note: the x2 is to workaround the rounding-to-nearest-even-number issue when the fraction is .5
-		return (float)CeilToInt(F);
-	}
-
 	static FORCEINLINE bool IsNaN( float A ) { return _isnan(A) != 0; }
+	static FORCEINLINE bool IsNaN(double A) { return _isnan(A) != 0; }
 	static FORCEINLINE bool IsFinite( float A ) { return _finite(A) != 0; }
-
-	static FORCEINLINE float InvSqrt(float F)
-	{
-		return UnrealPlatformMathSSE::InvSqrt(F);
-	}
-
-	static FORCEINLINE float InvSqrtEst( float F )
-	{
-		return UnrealPlatformMathSSE::InvSqrtEst(F);
-	}
-		
+	static FORCEINLINE bool IsFinite(double A) { return _finite(A) != 0; }
 
 	#pragma intrinsic( _BitScanReverse )
 	static FORCEINLINE uint32 FloorLog2(uint32 Value) 

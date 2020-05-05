@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	RaytracingOptions.h declares ray tracing options for use in rendering
@@ -59,6 +59,8 @@ extern bool CanOverlayRayTracingOutput(const FViewInfo& View);
 extern bool EnableRayTracingShadowTwoSidedGeometry();
 extern float GetRaytracingMaxNormalBias();
 
+extern bool CanUseRayTracingLightingMissShader(EShaderPlatform ShaderPlatform);
+
 #else
 
 FORCEINLINE bool AnyRayTracingPassEnabled(const FScene* Scene, const FViewInfo& View)
@@ -114,6 +116,11 @@ FORCEINLINE bool ShouldRenderRayTracingStochasticRectLight(const FLightSceneInfo
 FORCEINLINE bool CanOverlayRayTracingOutput(const FViewInfo& View)
 {
 	return true;
+}
+
+FORCEINLINE bool CanUseRayTracingLightingMissShader(EShaderPlatform)
+{
+	return false;
 }
 
 #endif

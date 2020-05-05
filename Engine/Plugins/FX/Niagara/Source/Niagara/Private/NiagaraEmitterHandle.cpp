@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraEmitterHandle.h"
 #include "NiagaraSystem.h"
@@ -83,12 +83,12 @@ void FNiagaraEmitterHandle::SetName(FName InName, UNiagaraSystem& InOwnerSystem)
 	Name = UniqueName;
 	if (Instance->SetUniqueEmitterName(Name.ToString()))
 	{
-#if WITH_EDITOR
+ #if WITH_EDITOR
 		if (InOwnerSystem.GetSystemSpawnScript() && InOwnerSystem.GetSystemSpawnScript()->GetSource())
 		{
 			// Just invalidate the system scripts here. The emitter scripts have their important variables 
 			// changed in the SetUniqueEmitterName method above.
-			InOwnerSystem.GetSystemSpawnScript()->GetSource()->InvalidateCachedCompileIds();
+			InOwnerSystem.GetSystemSpawnScript()->GetSource()->MarkNotSynchronized(TEXT("EmitterHandleRenamed"));
 		}
 #endif
 	}
@@ -112,8 +112,9 @@ bool FNiagaraEmitterHandle::SetIsEnabled(bool bInIsEnabled, UNiagaraSystem& InOw
 			InOwnerSystem.GetSystemSpawnScript()->GetSource()->RefreshFromExternalChanges();
 
 			// Need to cause us to recompile in the future if necessary...
-			InOwnerSystem.GetSystemSpawnScript()->InvalidateCompileResults();
-			InOwnerSystem.GetSystemUpdateScript()->InvalidateCompileResults();
+			FString InvalidateReason = TEXT("Emitter enabled changed.");
+			InOwnerSystem.GetSystemSpawnScript()->InvalidateCompileResults(InvalidateReason);
+			InOwnerSystem.GetSystemUpdateScript()->InvalidateCompileResults(InvalidateReason);
 
 			// Clean out the emitter's compile results for cleanliness.
 			if (Instance)

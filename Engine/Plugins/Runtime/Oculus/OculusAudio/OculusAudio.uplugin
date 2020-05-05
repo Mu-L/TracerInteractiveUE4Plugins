@@ -11,7 +11,7 @@
 	"MarketplaceURL": "",
 	"SupportURL": "https://forums.oculusvr.com/developer/categories/audio-development",
 	"EnabledByDefault": false,
-	"CanContainContent": false,
+	"CanContainContent": true,
 	"IsBetaVersion": false,
 	"Installed": false,
 	"Modules": [
@@ -20,7 +20,8 @@
 			"Type": "Runtime",
 			"LoadingPhase": "PostConfigInit",
 			"WhitelistPlatforms": [
-				"Win64"
+				"Win64",
+				"Android"
 			]
 		},
 		{

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,7 +12,7 @@
  */
 struct FCompressedImage2D
 {
-	TArray<uint8> RawData;
+	TArray64<uint8> RawData;
 	int32 SizeX;
 	int32 SizeY;
 	int32 SizeZ; // Only for Volume Texture

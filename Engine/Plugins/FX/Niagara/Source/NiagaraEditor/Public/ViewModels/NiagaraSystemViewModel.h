@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -36,6 +36,7 @@ struct FEdGraphEditAction;
 class UNiagaraNodeFunctionCall;
 class FNiagaraEmitterViewModel;
 class FNiagaraOverviewGraphViewModel;
+class UNiagaraScratchPadViewModel;
 
 /** Defines different editing modes for this system view model. */
 enum class NIAGARAEDITOR_API ENiagaraSystemViewModelEditMode
@@ -102,6 +103,8 @@ public:
 
 	DECLARE_MULTICAST_DELEGATE(FOnPreClose);
 
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnRequestFocusTab, FName /* TabName */);
+
 public:
 	struct FEmitterHandleToDuplicate
 	{
@@ -152,10 +155,11 @@ public:
 	/** Gets an array of the view models for the emitter handles owned by this System. */
 	NIAGARAEDITOR_API const TArray<TSharedRef<FNiagaraEmitterHandleViewModel>>& GetEmitterHandleViewModels();
 
-	/** Gets an emitter handle view model by id.  Returns an invalid shared ptr if it can't be found. */
+	/** Gets an emitter handle view model by ID. Returns an invalid shared ptr if it can't be found. */
 	NIAGARAEDITOR_API TSharedPtr<FNiagaraEmitterHandleViewModel> GetEmitterHandleViewModelById(FGuid InEmitterHandleId);
 
-	TSharedPtr<FNiagaraEmitterHandleViewModel> GetEmitterHandleViewModelForEmitter(UNiagaraEmitter* InEmitter) const;
+	/** Gets an emitter handle view model for the given emitter. Returns an invalid shared ptr if it can't be found. */
+	NIAGARAEDITOR_API TSharedPtr<FNiagaraEmitterHandleViewModel> GetEmitterHandleViewModelForEmitter(UNiagaraEmitter* InEmitter) const;
 
 	/** Gets the view model for the System script. */
 	TSharedPtr<FNiagaraSystemScriptViewModel> GetSystemScriptViewModel();
@@ -179,13 +183,13 @@ public:
 	NIAGARAEDITOR_API ENiagaraSystemViewModelEditMode GetEditMode() const;
 
 	/** Adds a new emitter to the System from an emitter asset data. */
-	NIAGARAEDITOR_API void AddEmitterFromAssetData(const FAssetData& AssetData);
+	NIAGARAEDITOR_API TSharedPtr<FNiagaraEmitterHandleViewModel> AddEmitterFromAssetData(const FAssetData& AssetData);
 
 	/** Adds a new emitter to the System. */
-	void AddEmitter(UNiagaraEmitter& Emitter);
+	NIAGARAEDITOR_API TSharedPtr<FNiagaraEmitterHandleViewModel> AddEmitter(UNiagaraEmitter& Emitter);
 
 	/** Deletes the emitters with the supplied ids from the system */
-	void DeleteEmitters(TSet<FGuid> EmitterHandleIdsToDelete);
+	NIAGARAEDITOR_API void DeleteEmitters(TSet<FGuid> EmitterHandleIdsToDelete);
 
 	/** Gets a multicast delegate which is called any time the array of emitter handle view models changes. */
 	NIAGARAEDITOR_API FOnEmitterHandleViewModelsChanged& OnEmitterHandleViewModelsChanged();
@@ -240,7 +244,7 @@ public:
 	void Cleanup();
 
 	/** Reinitializes all System instances, and rebuilds emitter handle view models and tracks. */
-	void RefreshAll();
+	NIAGARAEDITOR_API void RefreshAll();
 
 	/** Called to notify the system view model that one of the data objects in the system was modified. */
 	void NotifyDataObjectChanged(UObject* ChangedObject);
@@ -249,7 +253,7 @@ public:
 	void UpdateEmitterFixedBounds();
 
 	/** Isolates the supplied emitters.  This will remove all other emitters from isolation. */
-	void IsolateEmitters(TArray<FGuid> EmitterHandlesIdsToIsolate);
+	NIAGARAEDITOR_API void IsolateEmitters(TArray<FGuid> EmitterHandlesIdsToIsolate);
 
 	/** Toggles the isolation state of a single emitter. */
 	void ToggleEmitterIsolation(TSharedRef<FNiagaraEmitterHandleViewModel> InEmitterHandle);
@@ -274,6 +278,10 @@ public:
 	NIAGARAEDITOR_API void NotifyPreClose();
 
 	NIAGARAEDITOR_API FOnPreClose& OnPreClose();
+
+	FOnRequestFocusTab& OnRequestFocusTab();
+
+	NIAGARAEDITOR_API void FocusTab(FName TabName);
 	
 	/** Gets the system toolkit command list. */
 	NIAGARAEDITOR_API TSharedPtr<FUICommandList> GetToolkitCommands();
@@ -296,13 +304,21 @@ public:
 	/** Gets the a view model representing the selected entries in the overview. */
 	NIAGARAEDITOR_API UNiagaraSystemSelectionViewModel* GetSelectionViewModel();
 
+	NIAGARAEDITOR_API UNiagaraScratchPadViewModel* GetScriptScratchPadViewModel();
+
 	/** Duplicates a set of emitters and refreshes everything.*/
 	void DuplicateEmitters(TArray<FEmitterHandleToDuplicate> EmitterHandlesToDuplicate);
+
+	FGuid GetMessageLogGuid() const;
 
 private:
 
 	/** Sends message jobs to FNiagaraMessageManager for all compile events from the last compile. */
 	void SendLastCompileMessageJobs() const;
+
+	void InvalidateCachedCompileStatus();
+
+	void TickCompileStatus();
 
 	/** Sets up the preview component and System instance. */
 	void SetupPreviewComponentAndInstance();
@@ -420,8 +436,17 @@ private:
 	/** builds stack module data for use in module dependencies */
 	void BuildStackModuleData(UNiagaraScript* Script, FGuid InEmitterHandleId, TArray<FNiagaraStackModuleData>& OutStackModuleData);
 
+	/** Returns true if our system has scripts pending compilation (including GPU compute scripts) */
+	bool WaitingOnCompilation() const;
+
+	/** Called when a property on the System is changed. */
+	void SystemChanged(UNiagaraSystem* ChangedSystem);
+
 	/** Called whenever one of the owned stack viewmodels structure changes. */
 	void StackViewModelStructureChanged();
+
+	/** Called whenever one of the scripts in the scratch pad changes. */
+	void ScratchPadScriptsChanged();
 
 private:
 	/** The System being viewed and edited by this view model. */
@@ -487,6 +512,8 @@ private:
 	/** A multicast delegate which is called whenever this has been notified it's owner will be closing. */
 	FOnPreClose OnPreCloseDelegate;
 
+	FOnRequestFocusTab OnRequestFocusTabDelegate;
+
 	/** A flag for preventing reentrancy when syncrhonizing sequencer data. */
 	bool bUpdatingEmittersFromSequencerDataChange;
 
@@ -538,7 +565,10 @@ private:
 	TMap<FGuid, TArray<FNiagaraStackModuleData>> GuidToCachedStackModuleData;
 	
 	/** A handle to the on graph changed delegate for the system script. */
-	FDelegateHandle SystemScriptGraphChangedHandler;
+	FDelegateHandle SystemScriptGraphChangedHandle;
+
+	/** A handle to the on graph needs recompile delegate for the system script. */
+	FDelegateHandle SystemScriptGraphNeedsRecompileHandle;
 
 	/** An array of emitter handle ids which need their sequencer tracks refreshed next frame. */
 	TArray<FGuid> EmitterIdsRequiringSequencerTrackUpdate;
@@ -552,4 +582,13 @@ private:
 	UNiagaraStackViewModel* SystemStackViewModel;
 
 	UNiagaraSystemSelectionViewModel* SelectionViewModel;
+
+	UNiagaraScratchPadViewModel* ScriptScratchPadViewModel;
+
+	TArray<UNiagaraScript*> ScriptsToCheckForStatus;
+	TArray<ENiagaraScriptCompileStatus> ScriptCompileStatuses;
+
+	TOptional<ENiagaraScriptCompileStatus> LatestCompileStatusCache;
+
+	FDelegateHandle SystemChangedDelegateHandle;
 };

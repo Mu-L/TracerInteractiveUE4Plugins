@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MeshUtilities.h"
 #include "MeshUtilitiesPrivate.h"
@@ -17,6 +17,8 @@
 #include "Framework/Commands/UICommandList.h"
 #include "Framework/MultiBox/MultiBoxExtender.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "ToolMenus.h"
+#include "SkeletalMeshToolMenuContext.h"
 #include "Components/MeshComponent.h"
 #include "RawIndexBuffer.h"
 #include "Components/StaticMeshComponent.h"
@@ -95,7 +97,7 @@
 #include "MeshUtilitiesCommon.h"
 
 #include "StaticMeshAttributes.h"
-#include "MeshDescriptionOperations.h"
+#include "StaticMeshOperations.h"
 
 #if WITH_EDITOR
 #include "Editor.h"
@@ -788,6 +790,7 @@ void FMeshUtilities::BuildSkeletalModelFromChunks(FSkeletalMeshLODModel& LODMode
 
 		// update max bone influences
 		Section.CalcMaxBoneInfluences();
+		Section.CalcUse16BitBoneIndex();
 
 		// Log info about the chunk.
 		UE_LOG(LogSkeletalMesh, Log, TEXT("Section %u: %u vertices, %u active bones"),
@@ -2118,7 +2121,7 @@ static void BuildDepthOnlyIndexBuffer(
 	TArray<uint32>& OutDepthIndices,
 	const TArray<FStaticMeshBuildVertex>& InVertices,
 	const TArray<uint32>& InIndices,
-	const TArray<FStaticMeshSection>& InSections
+	const TArrayView<FStaticMeshSection>& InSections
 	)
 {
 	int32 NumVertices = InVertices.Num();
@@ -2644,10 +2647,10 @@ public:
 				FStaticMeshAttributes(DestMeshdescription).Register();
 
 				TMap<int32, FName> FromMaterialMap;
-				FMeshDescriptionOperations::ConvertFromRawMesh(InMesh, SrcMeshdescription, FromMaterialMap);
+				FStaticMeshOperations::ConvertFromRawMesh(InMesh, SrcMeshdescription, FromMaterialMap);
 				MeshReduction->ReduceMeshDescription(DestMeshdescription, LODMaxDeviation[NumValidLODs], SrcMeshdescription, InOverlappingCorners, ReductionSettings);
 				TMap<FName, int32> ToMaterialMap;
-				FMeshDescriptionOperations::ConvertToRawMesh(DestMeshdescription, DestMesh, ToMaterialMap);
+				FStaticMeshOperations::ConvertToRawMesh(DestMeshdescription, DestMesh, ToMaterialMap);
 
 				if (DestMesh.WedgeIndices.Num() > 0 && !DestMesh.IsValid())
 				{
@@ -2768,9 +2771,11 @@ public:
 			// Build and cache optimize vertex and index buffers.
 			{
 				// TODO_STATICMESH: The wedge map is only valid for LODIndex 0 if no reduction has been performed.
+				// TODO - write directly to TMemoryImageArray
 				// We can compute an approximate one instead for other LODs.
 				TArray<int32> TempWedgeMap;
-				TArray<int32>& WedgeMap = (LODIndex == 0 && InOutModels[0].ReductionSettings.PercentTriangles >= 1.0f) ? OutRenderData.WedgeMap : TempWedgeMap;
+				TArray<int32>& WedgeMap = InOutModels[LODIndex].ReductionSettings.PercentTriangles >= 1.0f ? LODModel.WedgeMap : TempWedgeMap;
+				WedgeMap.Reset();
 				float ComparisonThreshold = GetComparisonThreshold(LODBuildSettings[LODIndex]);
 				MeshUtilities.BuildStaticMeshVertexAndIndexBuffers(Vertices, PerSectionIndices, WedgeMap, RawMesh, LODOverlappingCorners[LODIndex], MaterialToSectionMapping, ComparisonThreshold, LODBuildSettings[LODIndex].BuildScale3D, ImportVersion);
 				check(WedgeMap.Num() == RawMesh.WedgeIndices.Num());
@@ -3585,8 +3590,8 @@ public:
 			bool bSkipNTB = true;
 			for (int32 CornerIndex = 0; CornerIndex < 3; CornerIndex++)
 			{
-				bCornerHasNormal[CornerIndex] = !WedgeTangentZ[WedgeOffset + CornerIndex].IsZero();
-				bCornerHasTangents[CornerIndex] = !WedgeTangentX[WedgeOffset + CornerIndex].IsZero() && !WedgeTangentY[WedgeOffset + CornerIndex].IsZero();
+				bCornerHasNormal[CornerIndex] = !WedgeTangentZ[WedgeOffset + CornerIndex].IsNearlyZero();
+				bCornerHasTangents[CornerIndex] = !WedgeTangentX[WedgeOffset + CornerIndex].IsNearlyZero() && !WedgeTangentY[WedgeOffset + CornerIndex].IsNearlyZero();
 
 				//If we want to compute mikkt we dont check tangents to skip this corner
 				if (!bCornerHasNormal[CornerIndex] || (!bUseMikktSpace && !bCornerHasTangents[CornerIndex]))
@@ -3811,15 +3816,15 @@ public:
 							}
 						}
 					}
-					if (!WedgeTangentX[WedgeOffset + CornerIndex].IsZero())
+					if (!WedgeTangentX[WedgeOffset + CornerIndex].IsNearlyZero())
 					{
 						CornerTangentX[CornerIndex] = WedgeTangentX[WedgeOffset + CornerIndex];
 					}
-					if (!WedgeTangentY[WedgeOffset + CornerIndex].IsZero())
+					if (!WedgeTangentY[WedgeOffset + CornerIndex].IsNearlyZero())
 					{
 						CornerTangentY[CornerIndex] = WedgeTangentY[WedgeOffset + CornerIndex];
 					}
-					if (!WedgeTangentZ[WedgeOffset + CornerIndex].IsZero())
+					if (!WedgeTangentZ[WedgeOffset + CornerIndex].IsNearlyZero())
 					{
 						CornerNormal[CornerIndex] = WedgeTangentZ[WedgeOffset + CornerIndex];
 					}
@@ -3867,7 +3872,7 @@ public:
 						}
 						else
 						{
-							UE_LOG(LogSkeletalMesh, Warning, TEXT("%s"), *(TextMessage.ToString()));
+							UE_LOG(LogSkeletalMesh, Display, TEXT("%s"), *(TextMessage.ToString()));
 						}
 					}
 				}
@@ -4057,7 +4062,13 @@ public:
 						InfluenceCount++;
 						LookIdx++;
 					}
+
 					InfluenceCount = FMath::Min<uint32>(InfluenceCount, MAX_TOTAL_INFLUENCES);
+					if (InfluenceCount > EXTRA_BONE_INFLUENCES && !FGPUBaseSkinVertexFactory::UseUnlimitedBoneInfluences(InfluenceCount))
+					{
+						InfluenceCount = EXTRA_BONE_INFLUENCES;
+						UE_LOG(LogSkeletalMesh, Warning, TEXT("Skeletal mesh of %d bone influences requires unlimited bone influence mode on. Influence truncated to %d."), InfluenceCount, EXTRA_BONE_INFLUENCES);
+					}
 
 					// Setup the vertex influences.
 					Vertex.InfluenceBones[0] = 0;
@@ -5553,20 +5564,21 @@ void FMeshUtilities::StartupModule()
 			{
 				AddAnimationEditorToolbarExtender();
 			}
-			else if (InModuleName == "SkeletalMeshEditor")
-			{
-				AddSkeletalMeshEditorToolbarExtender();
-			}
 			else if (InModuleName == "SkeletonEditor")
 			{
 				AddSkeletonEditorToolbarExtender();
 			}
 		}
 	});
+
+	UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FMeshUtilities::RegisterMenus));
 }
 
 void FMeshUtilities::ShutdownModule()
 {
+	UToolMenus::UnRegisterStartupCallback(this);
+	UToolMenus::UnregisterOwner(this);
+
 	static const FName PropertyEditorModuleName("PropertyEditor");
 	if(FModuleManager::Get().IsModuleLoaded(PropertyEditorModuleName))
 	{
@@ -5580,12 +5592,42 @@ void FMeshUtilities::ShutdownModule()
 	RemoveLevelViewportMenuExtender();
 	RemoveAnimationBlueprintEditorToolbarExtender();
 	RemoveAnimationEditorToolbarExtender();
-	RemoveSkeletalMeshEditorToolbarExtender();
 	RemoveSkeletonEditorToolbarExtender();
 	FModuleManager::Get().OnModulesChanged().Remove(ModuleLoadedDelegateHandle);
 	VersionString.Empty();
 }
 
+void FMeshUtilities::RegisterMenus()
+{
+	FToolMenuOwnerScoped OwnerScoped(this);
+
+	static auto AddMakeStaticMeshToolbarButton = [this](FToolMenuSection& InSection, const FToolMenuExecuteAction& InAction)
+	{
+		InSection.AddEntry(FToolMenuEntry::InitToolBarButton(
+			"MakeStaticMesh",
+			InAction,
+			LOCTEXT("MakeStaticMesh", "Make Static Mesh"),
+			LOCTEXT("MakeStaticMeshTooltip", "Make a new static mesh out of the preview's current pose."),
+			FSlateIcon("EditorStyle", "Persona.ConvertToStaticMesh")
+		));
+	};
+
+	{
+		UToolMenu* Toolbar = UToolMenus::Get()->ExtendMenu("AssetEditor.SkeletalMeshEditor.ToolBar");
+		FToolMenuSection& Section = Toolbar->FindOrAddSection("SkeletalMesh");
+		AddMakeStaticMeshToolbarButton(Section, FToolMenuExecuteAction::CreateLambda([this](const FToolMenuContext& InMenuContext)
+		{
+			USkeletalMeshToolMenuContext* Context = InMenuContext.FindContext<USkeletalMeshToolMenuContext>();
+			if (Context && Context->SkeletalMeshEditor.IsValid())
+			{
+				if (UMeshComponent* MeshComponent = Context->SkeletalMeshEditor.Pin()->GetPersonaToolkit()->GetPreviewMeshComponent())
+				{
+					ConvertMeshesToStaticMesh(TArray<UMeshComponent*>({ MeshComponent }), MeshComponent->GetComponentToWorld());
+				}
+			}
+		}));
+	}
+}
 
 bool FMeshUtilities::GenerateUniqueUVsForSkeletalMesh(const FSkeletalMeshLODModel& LODModel, int32 TextureResolution, TArray<FVector2D>& OutTexCoords) const
 {
@@ -5703,8 +5745,7 @@ void FMeshUtilities::GenerateRuntimeSkinWeightData(const FSkeletalMeshLODModel* 
 		TargetLODModel.GetVertices(TargetVertices);
 
 		// Determine how many influences each skinweight can contain
-		const bool bTargetExtraBoneInfluences = TargetLODModel.DoSectionsNeedExtraBoneInfluences();
-		const int32 NumInfluences = bTargetExtraBoneInfluences ? MAX_TOTAL_INFLUENCES : MAX_INFLUENCES_PER_STREAM;
+		const int32 NumInfluences = TargetLODModel.GetMaxBoneInfluences();
 
 		TArray<FRawSkinWeight> UniqueWeights;
 		for (int32 VertexIndex = 0; VertexIndex < TargetVertices.Num(); ++VertexIndex)
@@ -5753,9 +5794,9 @@ void FMeshUtilities::GenerateRuntimeSkinWeightData(const FSkeletalMeshLODModel* 
 					{
 						if (SourceSkinWeight.InfluenceWeights[InfluenceIndex] > 0)
 						{
-							const uint16 Index = SourceSkinWeight.InfluenceBones[InfluenceIndex] << 8;
-							const uint16 Weight = SourceSkinWeight.InfluenceWeights[InfluenceIndex];
-							const uint16 Value = Index | Weight;
+							const uint32 Index = SourceSkinWeight.InfluenceBones[InfluenceIndex] << 16;
+							const uint32 Weight = SourceSkinWeight.InfluenceWeights[InfluenceIndex];
+							const uint32 Value = Index | Weight;
 
 							InOutSkinWeightOverrideData.Weights.Add(Value);
 							++DeltaOverride.NumInfluences;
@@ -5843,25 +5884,6 @@ TSharedRef<FExtender> FMeshUtilities::GetAnimationEditorToolbarExtender(const TS
 	);
 
 	return Extender;
-}
-
-void FMeshUtilities::AddSkeletalMeshEditorToolbarExtender()
-{
-	ISkeletalMeshEditorModule& SkeletalMeshEditorModule = FModuleManager::Get().LoadModuleChecked<ISkeletalMeshEditorModule>("SkeletalMeshEditor");
-	auto& ToolbarExtenders = SkeletalMeshEditorModule.GetAllSkeletalMeshEditorToolbarExtenders();
-
-	ToolbarExtenders.Add(ISkeletalMeshEditorModule::FSkeletalMeshEditorToolbarExtender::CreateRaw(this, &FMeshUtilities::GetSkeletalMeshEditorToolbarExtender));
-	SkeletalMeshEditorExtenderHandle = ToolbarExtenders.Last().GetHandle();
-}
-
-void FMeshUtilities::RemoveSkeletalMeshEditorToolbarExtender()
-{
-	ISkeletalMeshEditorModule* SkeletalMeshEditorModule = FModuleManager::Get().GetModulePtr<ISkeletalMeshEditorModule>("SkeletalMeshEditor");
-	if (SkeletalMeshEditorModule)
-	{
-		typedef ISkeletalMeshEditorModule::FSkeletalMeshEditorToolbarExtender DelegateType;
-		SkeletalMeshEditorModule->GetAllSkeletalMeshEditorToolbarExtenders().RemoveAll([=](const DelegateType& In) { return In.GetHandle() == SkeletalMeshEditorExtenderHandle; });
-	}
 }
 
 TSharedRef<FExtender> FMeshUtilities::GetSkeletalMeshEditorToolbarExtender(const TSharedRef<FUICommandList> CommandList, TSharedRef<ISkeletalMeshEditor> InSkeletalMeshEditor)

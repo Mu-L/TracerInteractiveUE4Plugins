@@ -1,11 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "StaticMeshResources.h"
 #include "Materials/MaterialInstance.h"
 #include "StaticMeshAttributes.h"
-#include "MeshDescriptionOperations.h"
 
 typedef TPair<uint32, uint32> MeshLODPair;
 typedef TPair<uint32, uint32> SectionRemapPair;

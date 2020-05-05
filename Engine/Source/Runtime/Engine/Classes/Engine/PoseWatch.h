@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -11,6 +11,8 @@ struct FCompactHeapPose;
 
 struct FAnimNodePoseWatch
 {
+	// Object (anim instance) that this pose came from
+	TWeakObjectPtr<const UObject>	Object;
 	TSharedPtr<FCompactHeapPose>	PoseInfo;
 	FColor							PoseDrawColour;
 	int32							NodeID;

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Chaos/Array.h"
@@ -15,13 +15,21 @@ namespace Chaos
 	{
 	public:
 		TTriangleMesh();
-		TTriangleMesh(TArray<TVector<int32, 3>>&& Elements, const int32 StartIdx = 0, const int32 EndIdx = -1);
+		TTriangleMesh(TArray<TVector<int32, 3>>&& Elements, const int32 StartIdx = 0, const int32 EndIdx = -1, const bool CullDegenerateElements=true);
 		TTriangleMesh(const TTriangleMesh& Other) = delete;
 		TTriangleMesh(TTriangleMesh&& Other);
 		~TTriangleMesh();
 
-		void Init(TArray<TVector<int32, 3>>&& Elements, const int32 StartIdx = 0, const int32 EndIdx = -1);
-		void Init(const TArray<TVector<int32, 3>>& Elements, const int32 StartIdx = 0, const int32 EndIdx = -1);
+		/**
+		 * Initialize the \c TTriangleMesh.
+		 *
+		 *	\p CullDegenerateElements removes faces with degenerate indices, and 
+		 *	will change the order of \c MElements.
+		 */
+		void Init(TArray<TVector<int32, 3>>&& Elements, const int32 StartIdx = 0, const int32 EndIdx = -1, const bool CullDegenerateElements=true);
+		void Init(const TArray<TVector<int32, 3>>& Elements, const int32 StartIdx = 0, const int32 EndIdx = -1, const bool CullDegenerateElements=true);
+
+		void ResetAuxiliaryStructures();
 
 		/**
 		 * Returns the closed interval of the smallest vertex index used by 
@@ -80,13 +88,13 @@ namespace Chaos
 
 		int32 GetNumElements() const { return MElements.Num(); }
 
-		const TMap<int32, TSet<uint32>>& GetPointToNeighborsMap();
-		const TSet<uint32>& GetNeighbors(const int32 Element) { return GetPointToNeighborsMap()[Element]; }
+		const TMap<int32, TSet<uint32>>& GetPointToNeighborsMap() const;
+		const TSet<uint32>& GetNeighbors(const int32 Element) const { return GetPointToNeighborsMap()[Element]; }
 
-		const TMap<int32, TArray<int32>>& GetPointToTriangleMap();
-		const TArray<int32>& GetCoincidentTriangles(const int32 Element) { return GetPointToTriangleMap()[Element]; }
+		const TMap<int32, TArray<int32>>& GetPointToTriangleMap() const;
+		const TArray<int32>& GetCoincidentTriangles(const int32 Element) const { return GetPointToTriangleMap()[Element]; }
 
-		TSet<int32> GetNRing(const int32 Element, const int32 N)
+		TSet<int32> GetNRing(const int32 Element, const int32 N) const
 		{
 			TSet<int32> Neighbors;
 			TSet<uint32> LevelNeighbors, PrevLevelNeighbors;
@@ -123,9 +131,12 @@ namespace Chaos
 			return Neighbors;
 		}
 
-		TArray<Chaos::TVector<int32, 2>> GetUniqueAdjacentPoints();
-		TArray<Chaos::TVector<int32, 4>> GetUniqueAdjacentElements();
+		TArray<Chaos::TVector<int32, 2>> GetUniqueAdjacentPoints() const;
+		TArray<Chaos::TVector<int32, 4>> GetUniqueAdjacentElements() const;
 
+		/** The GetFaceNormals functions assume Counter Clockwise triangle windings in a Left Handed coordinate system
+			If this is not the case the returned face normals may be inverted
+		*/
 		TArray<TVector<T, 3>> GetFaceNormals(const TArrayView<const TVector<T, 3>>& Points, const bool ReturnEmptyOnError = true) const;
 		void GetFaceNormals(TArray<TVector<T, 3>>& Normals, const TArrayView<const TVector<T, 3>>& Points, const bool ReturnEmptyOnError = true) const;
 		/** Deprecated. Use TArrayView version. */
@@ -178,6 +189,21 @@ namespace Chaos
 		TArray<T> GetCurvatureOnPoints(const TArrayView<const TVector<T, 3>>& points);
 
 		/**
+		 * Get the set of point indices that live on the boundary (an edge with only 1 
+		 * coincident face).
+		 */
+		TSet<int32> GetBoundaryPoints();
+
+		/**
+		 * Find vertices that are coincident within the subset @param TestIndices 
+		 * of given coordinates @param Points, and return a correspondence mapping
+		 * from redundant vertex index to consolidated vertex index.
+		 */
+		TMap<int32, int32> FindCoincidentVertexRemappings(
+			const TArray<int32>& TestIndices,
+			const TArrayView<const TVector<T, 3>>& Points);
+
+		/**
 		 * @ret An array of vertex indices ordered from most important to least.
 		 * @param Points - point positions.
 		 * @param PointCurvatures - a per-point measure of curvature.
@@ -197,6 +223,10 @@ namespace Chaos
 
 		/** @brief Reorder vertices according to @param Order. */
 		void RemapVertices(const TArray<int32>& Order);
+		void RemapVertices(const TMap<int32, int32>& Remapping);
+
+		void RemoveDuplicateElements();
+		void RemoveDegenerateElements();
 
 		static void InitEquilateralTriangleXY(TTriangleMesh<T>& TriMesh, TParticles<T, 3>& Particles)
 		{
@@ -230,7 +260,7 @@ namespace Chaos
 		}
 
 	private:
-		void InitHelper(const int32 StartIdx, const int32 EndIdx);
+		void InitHelper(const int32 StartIdx, const int32 EndIdx, const bool CullDegenerateElements=true);
 
 		int32 GlobalToLocal(int32 GlobalIdx) const
 		{
@@ -241,8 +271,8 @@ namespace Chaos
 
 		TArray<TVector<int32, 3>> MElements;
 
-		TMap<int32, TArray<int32>> MPointToTriangleMap;
-		TMap<int32, TSet<uint32>> MPointToNeighborsMap;
+		mutable TMap<int32, TArray<int32>> MPointToTriangleMap;
+		mutable TMap<int32, TSet<uint32>> MPointToNeighborsMap;
 
 		TSegmentMesh<T> MSegmentMesh;
 		TArray<TVector<int32, 3>> MFaceToEdges;

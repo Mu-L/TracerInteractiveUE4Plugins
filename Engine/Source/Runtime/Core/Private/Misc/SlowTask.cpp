@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Misc/SlowTask.h"
 #include "HAL/PlatformTime.h"
@@ -98,15 +98,23 @@ void FSlowTask::MakeDialogDelayed(float Threshold, bool bShowCancelButton, bool 
 	bDelayedDialogAllowInPIE = bAllowInPIE;
 }
 
-void FSlowTask::EnterProgressFrame(float ExpectedWorkThisFrame, FText Text)
+void FSlowTask::EnterProgressFrame(float ExpectedWorkThisFrame, const FText& Text)
 {
-	FrameMessage = Text;
+	check(!bEnabled || IsInGameThread());
+
+	// Should actually be FrameMessage = Text; but this code is to investigate crashes in FSlowTask::GetCurrentMessage()
+	if (!Text.IsEmpty())
+	{
+		FrameMessage = Text;
+	}
+	else
+	{
+		FrameMessage = FText::GetEmpty();
+	}
 	CompletedWork += CurrentFrameScope;
 
-#if PLATFORM_XBOXONE
 	// Make sure OS events are getting through while the task is being processed
-	FXboxOneMisc::PumpMessages(true);
-#endif
+	FPlatformMisc::PumpMessagesForSlowTask();
 
 	const float WorkRemaining = TotalAmountOfWork - CompletedWork;
 	// Add a small threshold here because when there are a lot of tasks, numerical imprecision can add up and trigger this.
@@ -124,7 +132,7 @@ void FSlowTask::EnterProgressFrame(float ExpectedWorkThisFrame, FText Text)
 	}
 }
 
-FText FSlowTask::GetCurrentMessage() const
+const FText& FSlowTask::GetCurrentMessage() const
 {
 	return FrameMessage.IsEmpty() ? DefaultMessage : FrameMessage;
 }
@@ -148,5 +156,14 @@ void FSlowTask::MakeDialog(bool bShowCancelButton, bool bAllowInPIE)
 
 bool FSlowTask::ShouldCancel() const
 {
-	return Context.ReceivedUserCancel();
+	if (bEnabled)
+	{
+		check(IsInGameThread()); // FSlowTask is only meant to be used on the main thread currently
+
+		// update the UI from time to time (throttling is done in RequestUpdateUI) so that the cancel button interaction can be detected: 
+		Context.RequestUpdateUI();
+
+		return Context.ReceivedUserCancel();
+	}
+	return false;
 }

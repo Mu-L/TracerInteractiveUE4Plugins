@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -33,4 +33,9 @@ namespace MagicLeap
 #endif // WITH_MLSDK
 	}
 
+#if WITH_MLSDK
+	static FGuid INVALID_FGUID = MLHandleToFGuid(ML_INVALID_HANDLE);
+#else
+	static FGuid INVALID_FGUID = FGuid();
+#endif // WITH_MLSDK
 }

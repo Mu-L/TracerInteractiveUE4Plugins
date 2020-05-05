@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -28,11 +28,13 @@ protected:
 	EVisibility IsCustomCurveSelected() const;
 
 	TAttribute<bool> GetIsAttenuationEnabledAttribute() const;
+	TAttribute<bool> GetIsFalloffModeEnabledAttribute() const;
 	TSharedPtr<IPropertyHandle> GetOverrideAttenuationHandle(TSharedRef<IPropertyHandle> StructPropertyHandle);
 
 	TSharedPtr<IPropertyHandle> bIsAttenuatedHandle;
 	TSharedPtr<IPropertyHandle> AttenuationShapeHandle;
 	TSharedPtr<IPropertyHandle> DistanceAlgorithmHandle;
+	TSharedPtr<IPropertyHandle> DbAttenuationAtMaxHandle;
 	TSharedPtr<IPropertyHandle> bOverrideAttenuationHandle;
 };
 
@@ -53,7 +55,10 @@ protected:
 	TSharedPtr<IPropertyHandle> bIsFocusedHandle;
 	TSharedPtr<IPropertyHandle> bIsOcclusionEnabledHandle;
 	TSharedPtr<IPropertyHandle> bIsReverbSendEnabledHandle;
+	TSharedPtr<IPropertyHandle> bIsPriorityAttenuationEnabledHandle;
+	TSharedPtr<IPropertyHandle> bIsSubmixSendAttenuationEnabledHandle;
 	TSharedPtr<IPropertyHandle> ReverbSendMethodHandle;
+	TSharedPtr<IPropertyHandle> PriorityAttenuationMethodHandle;
 	TSharedPtr<IPropertyHandle> AbsorptionMethodHandle;
 
 	TAttribute<bool> IsFocusEnabledAttribute;
@@ -63,12 +68,18 @@ protected:
 	TAttribute<bool> GetIsSpatializationEnabledAttribute() const;
 	TAttribute<bool> GetIsAirAbsorptionEnabledAttribute() const;
 	TAttribute<bool> GetIsReverbSendEnabledAttribute() const;
+	TAttribute<bool> GetIsPriorityAttenuationEnabledAttribute() const;
+	TAttribute<bool> GetIsSubmixSendAttenuationEnabledAttribute() const;
 
 	EVisibility IsLinearMethodSelected() const;
 	EVisibility IsCustomReverbSendCurveSelected() const;
 	EVisibility IsLinearOrCustomReverbMethodSelected() const;
 	EVisibility IsManualReverbSendSelected() const;
 	EVisibility IsCustomAirAbsorptionCurveSelected() const;
+	EVisibility IsPriorityAttenuationLinearMethodSelected() const;
+	EVisibility IsCustomPriorityAttenuationCurveSelected() const;
+	EVisibility IsLinearOrCustomPriorityAttenuationSelected() const;
+	EVisibility IsManualPriorityAttenuationSelected() const;
 };
 
 class FForceFeedbackAttenuationSettingsCustomization : public FBaseAttenuationSettingsCustomization

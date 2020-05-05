@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -23,7 +23,8 @@ public:
 	UEdModeInteractiveToolsContext();
 
 
-	virtual void InitializeContextFromEdMode(FEdMode* EditorMode);
+	virtual void InitializeContextFromEdMode(FEdMode* EditorMode, 
+		IToolsContextAssetAPI* UseAssetAPI = nullptr);
 	virtual void ShutdownContext();
 
 	// default behavior is to accept active tool
@@ -72,16 +73,9 @@ public:
 	virtual void StartTool(const FString& ToolTypeIdentifier);
 	virtual void EndTool(EToolShutdownType ShutdownType);
 
+	virtual bool ShouldIgnoreHotkeys() const { return bInFlyMode; }
 
-public:
-	// forwards message to OnToolNotificationMessage delegate
-	virtual void PostToolNotificationMessage(const FText& Message);
-	virtual void PostToolWarningMessage(const FText& Message);
-
-	DECLARE_MULTICAST_DELEGATE_OneParam(FEdModeToolsContextToolNotification, const FText&);
-	FEdModeToolsContextToolNotification OnToolNotificationMessage;
-	FEdModeToolsContextToolNotification OnToolWarningMessage;
-
+	virtual FRay GetLastWorldRay() const;
 
 protected:
 	// we hide these 
@@ -104,6 +98,8 @@ protected:
 	FDelegateHandle PreSaveWorldDelegateHandle;
 	// called when a map is changed
 	FDelegateHandle WorldTearDownDelegateHandle;
+	// called when viewport clients change
+	FDelegateHandle ViewportClientListChangedHandle;
 
 	// EdMode implementation of InteractiveToolFramework APIs - see ToolContextInterfaces.h
 	IToolsContextQueriesAPI* QueriesAPI;
@@ -120,12 +116,18 @@ protected:
 	// Copy-pasted from other Editor code, seems kind of expensive?
 	static FRay GetRayFromMousePos(FEditorViewportClient* ViewportClient, FViewport* Viewport, int MouseX, int MouseY);
 
+	/** This will be set to true if user is in right-mouse "fly mode", which requires special handling to intercept hotkeys/etc */
+	bool bInFlyMode = false;
 
 	// editor UI state that we set before starting tool and when exiting tool
 	// Currently disabling anti-aliasing during active Tools because it causes PDI flickering
 	bool bHaveSavedEditorState = false;
-	bool bSavedAntiAliasingState = false;
 	void SaveEditorStateAndSetForTool();
 	void RestoreEditorState();
 
+	// any actions in this array are executed at the start of the next ::Tick()
+	TArray<TUniqueFunction<void()>> NextTickExecuteActions;
+	// push the input action onto the NextTickExecuteActions list. Use this to defer execution to a "simpler" time, 
+	// eg so we are not kicking off a complicated static mesh rebuild process inside a slate button handler
+	void ScheduleExecuteAction(TUniqueFunction<void()> Action);
 };

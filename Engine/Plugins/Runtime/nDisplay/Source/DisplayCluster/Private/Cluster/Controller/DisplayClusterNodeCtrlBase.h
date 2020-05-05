@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -70,7 +70,7 @@ public:
 	virtual void GetDeltaTime(float& DeltaSeconds) override
 	{ }
 
-	virtual void GetTimecode(FTimecode& Timecode, FFrameRate& FrameRate) override
+	virtual void GetFrameTime(TOptional<FQualifiedFrameTime>& FrameTime) override
 	{ }
 
 	virtual void GetSyncData(FDisplayClusterMessage::DataType& SyncData, EDisplayClusterSyncGroup SyncGroup) override

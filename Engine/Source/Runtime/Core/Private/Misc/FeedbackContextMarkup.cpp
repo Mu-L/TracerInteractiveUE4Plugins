@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Misc/FeedbackContextMarkup.h"
 #include "Misc/AssertionMacros.h"
@@ -68,14 +68,14 @@ bool FFeedbackContextMarkup::PipeProcessOutput(const FText& Description, const F
 			while(BufferedText.FindChar('\n', EndOfLineIdx))
 			{
 				FString Line = BufferedText.Left(EndOfLineIdx);
-				Line.RemoveFromEnd(TEXT("\r"));
+				Line.RemoveFromEnd(TEXT("\r"), ESearchCase::CaseSensitive);
 
 				if(!ParseCommand(Line, Warn))
 				{
 					Warn->Log(*Line);
 				}
 
-				BufferedText = BufferedText.Mid(EndOfLineIdx + 1);
+				BufferedText.MidInline(EndOfLineIdx + 1, MAX_int32, false);
 			}
 
 			FPlatformProcess::Sleep(0.1f);
@@ -146,7 +146,7 @@ bool FFeedbackContextMarkup::ReadInteger(const TCHAR*& Text, uint32& OutInteger)
 	if(FChar::IsDigit(*Text))
 	{
 		TCHAR *End;
-		OutInteger = FCString::Strtoui64(Text, &End, 10);
+		OutInteger = (uint32)FCString::Strtoui64(Text, &End, 10);
 		Text = End;
 		while(FChar::IsWhitespace(*Text)) Text++;
 		return true;
@@ -162,7 +162,7 @@ bool FFeedbackContextMarkup::ReadString(const TCHAR*& Text, FString& OutString)
 		{
 			if(*End == *Text)
 			{
-				OutString = FString(End - (Text + 1), Text + 1);
+				OutString = FString(UE_PTRDIFF_TO_INT32(End - (Text + 1)), Text + 1);
 				do { End++; } while(FChar::IsWhitespace(*End));
 				Text = End;
 				return true;

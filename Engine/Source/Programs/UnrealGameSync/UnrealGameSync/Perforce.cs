@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -218,6 +218,7 @@ namespace UnrealGameSync
 		public string ClientPath;
 		public string Path;
 		public string Action;
+		public long FileSize;
 		public PerforceFileFlags Flags;
 		public int Revision;
 		public bool IsMapped;
@@ -232,6 +233,12 @@ namespace UnrealGameSync
 			if(!Tags.TryGetValue("action", out Action))
 			{
 				Tags.TryGetValue("headAction", out Action);
+			}
+
+			string FileSizeText;
+			if (Tags.TryGetValue("fileSize", out FileSizeText))
+			{
+				FileSize = long.Parse(FileSizeText);
 			}
 
 			string Type;
@@ -318,8 +325,10 @@ namespace UnrealGameSync
 
 	public class PerforceSyncOptions
 	{
+		public const int DefaultNumThreads = 2;
+
 		public int NumRetries;
-		public int NumThreads;
+		public int NumThreads = DefaultNumThreads;
 		public int TcpBufferSize;
 
 		public PerforceSyncOptions Clone()

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MicrosoftSpatialSoundPlugin.h"
 #include "Features/IModularFeatures.h"
@@ -417,7 +417,7 @@ void FMicrosoftSpatialSoundModule::StartupModule()
 #else // WINDOWS_MIXED_REALITY_DEBUG_DLL
 	FString DLLName(TEXT("MixedRealityInterop.dll"));
 #endif // WINDOWS_MIXED_REALITY_DEBUG_DLL
-	FString MRInteropLibraryPath = EngineDir / "Binaries/ThirdParty/MixedRealityInteropLibrary" / BinariesSubDir / DLLName;
+	FString MRInteropLibraryPath = EngineDir / "Binaries/ThirdParty/Windows/x64" / DLLName;
 
 #if PLATFORM_64BITS
 	// Load these dependencies first or MixedRealityInteropLibraryHandle fails to load since it doesn't look in the correct path for its dependencies automatically
@@ -426,6 +426,9 @@ void FMicrosoftSpatialSoundModule::StartupModule()
 	FPlatformProcess::GetDllHandle(_TEXT("PerceptionDevice.dll"));
 	FPlatformProcess::GetDllHandle(_TEXT("Microsoft.Holographic.AppRemoting.dll"));
 	FPlatformProcess::PopDllDirectory(*HoloLensLibraryDir);
+
+	FPlatformProcess::GetDllHandle(*(EngineDir / "Binaries" / BinariesSubDir / "HolographicStreamerDesktop.dll"));
+	FPlatformProcess::GetDllHandle(*(EngineDir / "Binaries" / BinariesSubDir / "Microsoft.Perception.Simulation.dll"));
 #endif // PLATFORM_64BITS && WITH_EDITOR	
 	
 	// Then finally try to load the WMR Interop Library

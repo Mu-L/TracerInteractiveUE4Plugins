@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -190,6 +190,9 @@ public:
 
 	/** True if pin can be edited */
 	bool IsEditingEnabled() const;
+
+	/** True if the pin's default value can be edited, false if it is read only */
+	bool GetDefaultValueIsEditable() const { return !GraphPinObj->bDefaultValueIsReadOnly; }
 	
 	/** 
 	  * Called when ed graph data is cleared, indicating this widget can no longer safely access GraphPinObj 
@@ -199,6 +202,10 @@ public:
 	  * but for added safety we track graph data invalidation here:
 	  */
 	void InvalidateGraphData() { bGraphDataInvalid = true; }
+
+	/** Override the visual look of the pin by providing two custom brushes */
+	void SetCustomPinIcon(const FSlateBrush* InConnectedBrush, const FSlateBrush* InDisconnectedBrush);
+
 protected:
 
 	/** If true the graph pin subclass is responsible for setting the IsEnabled delegates for the aspects it cares about. If false, the default value widget enabling is done by the base class */
@@ -295,13 +302,18 @@ protected:
 	const FSlateBrush* CachedImg_Pin_Disconnected;
 	const FSlateBrush* CachedImg_DelegatePin_Connected;
 	const FSlateBrush* CachedImg_DelegatePin_Disconnected;
+	const FSlateBrush* CachedImg_PosePin_Connected;
+	const FSlateBrush* CachedImg_PosePin_Disconnected;
 	const FSlateBrush* CachedImg_SetPin;
 	const FSlateBrush* CachedImg_MapPinKey;
 	const FSlateBrush* CachedImg_MapPinValue;
 
 	const FSlateBrush* CachedImg_Pin_Background;
 	const FSlateBrush* CachedImg_Pin_BackgroundHovered;
-	
+
+	const FSlateBrush* Custom_Brush_Connected;
+	const FSlateBrush* Custom_Brush_Disconnected;
+
 	/** flag indicating that graph data has been deleted by the user */
 	bool bGraphDataInvalid;
 

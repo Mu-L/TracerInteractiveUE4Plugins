@@ -1,18 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ViewModels/Stack/NiagaraParameterHandle.h"
 #include "NiagaraNodeFunctionCall.h"
 #include "NiagaraScript.h"
 #include "NiagaraTypes.h"
-
-const FName FNiagaraParameterHandle::UserNamespace(TEXT("User"));
-const FName FNiagaraParameterHandle::EngineNamespace(TEXT("Engine"));
-const FName FNiagaraParameterHandle::SystemNamespace(TEXT("System"));
-const FName FNiagaraParameterHandle::EmitterNamespace(TEXT("Emitter"));
-const FName FNiagaraParameterHandle::ParticleAttributeNamespace(TEXT("Particles"));
-const FName FNiagaraParameterHandle::ModuleNamespace(TEXT("Module"));
-const FName FNiagaraParameterHandle::ParameterCollectionNamespace(TEXT("NPC"));
-const FString FNiagaraParameterHandle::InitialPrefix(TEXT("Initial"));
+#include "NiagaraEditorModule.h"
+#include "NiagaraConstants.h"
 
 FNiagaraParameterHandle::FNiagaraParameterHandle() 
 {
@@ -61,22 +54,22 @@ FNiagaraParameterHandle FNiagaraParameterHandle::CreateEngineParameterHandle(con
 FNiagaraParameterHandle FNiagaraParameterHandle::CreateEmitterParameterHandle(const FNiagaraVariable& EmitterVariable)
 {
 
-	return FNiagaraParameterHandle(EmitterNamespace, EmitterVariable.GetName());
+	return FNiagaraParameterHandle(FNiagaraConstants::EmitterNamespace, EmitterVariable.GetName());
 }
 
 FNiagaraParameterHandle FNiagaraParameterHandle::CreateParticleAttributeParameterHandle(const FName InName)
 {
-	return FNiagaraParameterHandle(ParticleAttributeNamespace, InName);
+	return FNiagaraParameterHandle(FNiagaraConstants::ParticleAttributeNamespace, InName);
 }
 
 FNiagaraParameterHandle FNiagaraParameterHandle::CreateModuleParameterHandle(const FName InName)
 {
-	return FNiagaraParameterHandle(ModuleNamespace, InName);
+	return FNiagaraParameterHandle(FNiagaraConstants::ModuleNamespace, InName);
 }
 
 FNiagaraParameterHandle FNiagaraParameterHandle::CreateInitialParameterHandle(const FNiagaraParameterHandle& Handle)
 {
-	return FNiagaraParameterHandle(Handle.GetNamespace(), *FString::Printf(TEXT("%s.%s"), *InitialPrefix, *Handle.GetName().ToString()));
+	return FNiagaraParameterHandle(Handle.GetNamespace(), *FString::Printf(TEXT("%s.%s"), *FNiagaraConstants::InitialPrefix, *Handle.GetName().ToString()));
 }
 
 bool FNiagaraParameterHandle::IsValid() const 
@@ -99,37 +92,82 @@ const FName FNiagaraParameterHandle::GetNamespace() const
 	return Namespace;
 }
 
+const TArray<FName> FNiagaraParameterHandle::GetHandleParts() const
+{
+	if (HandlePartsCache.Num() == 0)
+	{
+		FString HandleString = ParameterHandleName.ToString();
+		TArray<FString> HandlePartStrings;
+		HandleString.ParseIntoArray(HandlePartStrings, TEXT("."));
+		for (const FString& HandlePartString : HandlePartStrings)
+		{
+			HandlePartsCache.Add(*HandlePartString);
+		}
+	}
+	return HandlePartsCache;
+}
+
 bool FNiagaraParameterHandle::IsUserHandle() const
 {
-	return Namespace == UserNamespace;
+	return Namespace == FNiagaraConstants::UserNamespace;
 }
 
 bool FNiagaraParameterHandle::IsEngineHandle() const
 {
-	return Namespace == EngineNamespace;
+	return Namespace == FNiagaraConstants::EngineNamespace;
 }
 
 bool FNiagaraParameterHandle::IsSystemHandle() const
 {
-	return Namespace == SystemNamespace;
+	return Namespace == FNiagaraConstants::SystemNamespace;
 }
 
 bool FNiagaraParameterHandle::IsEmitterHandle() const
 {
-	return Namespace == EmitterNamespace;
+	return Namespace == FNiagaraConstants::EmitterNamespace;
 }
 
 bool FNiagaraParameterHandle::IsParticleAttributeHandle() const
 {
-	return Namespace == ParticleAttributeNamespace;
+	return Namespace == FNiagaraConstants::ParticleAttributeNamespace;
 }
 
 bool FNiagaraParameterHandle::IsModuleHandle() const
 {
-	return Namespace == ModuleNamespace;
+	return Namespace == FNiagaraConstants::ModuleNamespace;
+}
+
+bool FNiagaraParameterHandle::IsOutputHandle() const
+{
+	return Namespace == FNiagaraConstants::OutputNamespace;
+}
+
+bool FNiagaraParameterHandle::IsLocalHandle() const
+{
+	return Namespace == FNiagaraConstants::LocalNamespace;
 }
 
 bool FNiagaraParameterHandle::IsParameterCollectionHandle() const
 {
-	return Namespace == ParameterCollectionNamespace;
+	return Namespace == FNiagaraConstants::ParameterCollectionNamespace;
 }
+
+bool FNiagaraParameterHandle::IsReadOnlyHandle() const
+{
+	return
+		Namespace == FNiagaraConstants::UserNamespace ||
+		Namespace == FNiagaraConstants::EngineNamespace ||
+		Namespace == FNiagaraConstants::ParameterCollectionNamespace ||
+		Namespace == FNiagaraConstants::ModuleNamespace;
+}
+
+bool FNiagaraParameterHandle::IsTransientHandle() const
+{
+	return Namespace == FNiagaraConstants::TransientNamespace;
+}
+
+bool FNiagaraParameterHandle::IsDataInstanceHandle() const
+{
+	return Namespace == FNiagaraConstants::DataInstanceNamespace;
+}
+

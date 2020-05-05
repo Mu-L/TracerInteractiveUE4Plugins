@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "ChaosBreakingEventFilter.h"
 
 void FChaosBreakingEventFilter::FilterEvents(const FTransform& ChaosComponentTransform, const Chaos::FBreakingDataArray& RawBreakingDataArray)
@@ -37,7 +37,6 @@ void FChaosBreakingEventFilter::FilterEvents(const FTransform& ChaosComponentTra
 			NewData.Location = BreakingData.Location;
 			NewData.Velocity = BreakingData.Velocity;
 			NewData.Mass = BreakingData.Mass;
-			NewData.ParticleIndex = BreakingData.ParticleIndex;
 
 			FilteredDataArray.Add(NewData);
 

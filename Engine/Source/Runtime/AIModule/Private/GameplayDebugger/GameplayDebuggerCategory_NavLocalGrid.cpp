@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GameplayDebuggerCategory_NavLocalGrid.h"
 
@@ -288,7 +288,7 @@ protected:
 		FPrimitiveViewRelevance Result;
 		Result.bDrawRelevance = IsShown(View);
 		Result.bDynamicRelevance = true;
-		Result.bNormalTranslucencyRelevance = Result.bSeparateTranslucencyRelevance = IsShown(View);
+		Result.bNormalTranslucency = Result.bSeparateTranslucency = IsShown(View);
 		return Result;
 	}
 

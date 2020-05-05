@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SEditorViewport.h"
 #include "Misc/Paths.h"
@@ -147,7 +147,7 @@ void SEditorViewport::BindCommands()
 	CommandListRef.MapAction( 
 		Commands.ToggleRealTime,
 		FExecuteAction::CreateSP( this, &SEditorViewport::OnToggleRealtime ),
-		FCanExecuteAction(),
+		FCanExecuteAction::CreateSP(this, &SEditorViewport::CanToggleRealtime),
 		FIsActionChecked::CreateSP(this, &SEditorViewport::IsRealtime));
 
 	CommandListRef.MapAction( 
@@ -426,6 +426,11 @@ void SEditorViewport::OnToggleRealtime()
 }
 
 
+bool SEditorViewport::CanToggleRealtime() const
+{
+	return !Client->IsRealtimeOverrideSet();
+}
+
 void SEditorViewport::SetRenderDirectlyToWindow( const bool bInRenderDirectlyToWindow )
 {
 	ViewportWidget->SetRenderDirectlyToWindow( bInRenderDirectlyToWindow );
@@ -629,6 +634,12 @@ bool SEditorViewport::IsCoordSystemActive(ECoordSystem CoordSystem) const
 void SEditorViewport::OnCycleWidgetMode()
 {
 	FWidget::EWidgetMode WidgetMode = Client->GetWidgetMode();
+
+	// Can't cycle the widget mode if we don't currently have a widget
+	if (WidgetMode == FWidget::WM_None)
+	{
+		return;
+	}
 
 	int32 WidgetModeAsInt = WidgetMode;
 

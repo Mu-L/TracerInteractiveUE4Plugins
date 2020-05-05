@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Animation/AnimNode_LinkedAnimGraph.h"
 #include "Animation/AnimClassInterface.h"
@@ -6,6 +6,7 @@
 #include "Animation/AnimNode_Inertialization.h"
 #include "Animation/AnimNode_LinkedInputPose.h"
 #include "Animation/AnimNode_Root.h"
+#include "Animation/AnimTrace.h"
 
 static float GetBlendDuration(const IAnimClassInterface* PriorAnimBPClass, const IAnimClassInterface* NewAnimBPClass, FName Layer)
 {
@@ -32,7 +33,10 @@ FAnimNode_LinkedAnimGraph::FAnimNode_LinkedAnimGraph()
 	: InstanceClass(nullptr)
 	, Tag(NAME_None)
 	, LinkedRoot(nullptr)
+	, NodeIndex(INDEX_NONE)
 	, PendingBlendDuration(-1.0f)
+	, bReceiveNotifiesFromLinkedInstances(false)
+	, bPropagateNotifiesToLinkedInstances(false)
 {
 }
 
@@ -133,6 +137,9 @@ void FAnimNode_LinkedAnimGraph::Update_AnyThread(const FAnimationUpdateContext& 
 
 		PendingBlendDuration = -1.0f;
 	}
+
+	TRACE_ANIM_NODE_VALUE(InContext, TEXT("Name"), GetDynamicLinkFunctionName());
+	TRACE_ANIM_NODE_VALUE(InContext, TEXT("Target Class"), InstanceClass.Get());
 }
 
 void FAnimNode_LinkedAnimGraph::Evaluate_AnyThread(FPoseContext& Output)
@@ -203,6 +210,11 @@ void FAnimNode_LinkedAnimGraph::OnInitializeAnimInstance(const FAnimInstanceProx
 		// We have an instance but no instance class
 		TeardownInstance();
 	}
+
+	if(InstanceToRun)
+	{
+		InstanceToRun->GetProxyOnAnyThread<FAnimInstanceProxy>().InitializeObjects(InstanceToRun);
+	}
 }
 
 void FAnimNode_LinkedAnimGraph::TeardownInstance()
@@ -234,6 +246,8 @@ void FAnimNode_LinkedAnimGraph::ReinitializeLinkedAnimInstance(const UAnimInstan
 			// Never delete the owning animation instance
 			if (InstanceToRun != InOwningAnimInstance)
 			{
+				// Only call UninitializeAnimation if we are not the owning anim instance
+				InstanceToRun->UninitializeAnimation();
 				InstanceToRun->MarkPendingKill();
 			}
 			InstanceToRun = nullptr;
@@ -241,6 +255,16 @@ void FAnimNode_LinkedAnimGraph::ReinitializeLinkedAnimInstance(const UAnimInstan
 
 		// Need an instance to run, so create it now
 		InstanceToRun = InNewAnimInstance ? InNewAnimInstance : NewObject<UAnimInstance>(MeshComp, InstanceClass);
+		if (InNewAnimInstance == nullptr)
+		{
+			// if incoming AnimInstance was null, it was created by this function
+			// we mark them as created by linked anim graph
+			// this is to know who owns memory instance
+			InstanceToRun->bCreatedByLinkedAnimGraph = true;
+			InstanceToRun->bPropagateNotifiesToLinkedInstances = bPropagateNotifiesToLinkedInstances;
+			InstanceToRun->bReceiveNotifiesFromLinkedInstances = bReceiveNotifiesFromLinkedInstances;
+		}
+
 		SetTargetInstance(InstanceToRun);
 
 		// Link before we call InitializeAnimation() so we propgate the call to linked input poses
@@ -331,7 +355,7 @@ void FAnimNode_LinkedAnimGraph::DynamicLink(UAnimInstance* InOwningAnimInstance)
 						{
 							FAnimNode_LinkedInputPose* LinkedInputPoseNode = AnimBlueprintFunction.InputPoseNodeProperties[InputPropertyIndex]->ContainerPtrToValuePtr<FAnimNode_LinkedInputPose>(LinkTargetInstance);
 							check(LinkedInputPoseNode->Name == AnimBlueprintFunction.InputPoseNames[InputPoseIndex]);
-							LinkedInputPoseNode->DynamicLink(NonConstProxy, &InputPoses[InputPoseIndex]);
+							LinkedInputPoseNode->DynamicLink(NonConstProxy, &InputPoses[InputPoseIndex], NodeIndex);
 						}
 						else
 						{

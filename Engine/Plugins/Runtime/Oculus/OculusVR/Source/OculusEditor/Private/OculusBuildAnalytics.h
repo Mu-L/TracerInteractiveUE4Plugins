@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,7 +7,7 @@
 #include "Modules/ModuleManager.h"
 #include "UObject/Class.h"
 #include "AndroidRuntimeSettings.h"
-#include "OVR_Plugin.h"
+#include "OculusPluginWrapper.h"
 
 enum EBuildStage
 {

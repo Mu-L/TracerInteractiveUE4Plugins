@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -66,7 +66,7 @@ public:
 	 *
 	 * @param InObjects	The list of objects to observe
 	 */
-	virtual void SetObjectArray( const TArray< TWeakObjectPtr< UObject > >& InObjects );
+	virtual void SetObjectArray( const TArray<UObject*>& InObjects );
 
 	virtual TSharedRef< FPropertyPath > GetRootPath() const;
 

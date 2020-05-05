@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -50,12 +50,16 @@ public:
 
 		/** Receive buffer size */
 		int32 BufferSize;
+
+		/** Do we allow seeking? */
+		bool bAllowSeekFunction = false;
 	}
 	CurlRequestOptions;
 
 	//~ Begin HttpManager Interface
 	virtual void OnBeforeFork() override;
 	virtual void OnAfterFork() override;
+	virtual void UpdateConfigs() override;
 
 public:
 	virtual bool SupportsDynamicProxy() const override;

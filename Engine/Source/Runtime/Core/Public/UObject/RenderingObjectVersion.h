@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreTypes.h"
@@ -99,6 +99,27 @@ struct CORE_API FRenderingObjectVersion
 
 		// Deterministic ShaderMapID serialization
 		MaterialShaderMapIdSerialization,
+
+		// Add force opaque flag for static mesh
+		StaticMeshSectionForceOpaqueField,
+
+		// Add force opaque flag for static mesh
+		AutoExposureChanges,
+
+		// Removed emulated instancing from instanced static meshes
+		RemovedEmulatedInstancing,
+
+		// Added per instance custom data (for Instanced Static Meshes)
+		PerInstanceCustomData,
+
+		// Added material attributes to shader graph to support anisotropic materials 
+		AnisotropicMaterial,
+
+		// Add if anything has changed in the exposure, override the bias to avoid the new default propagating
+		AutoExposureForceOverrideBiasFlag,
+
+		// Override for a special case for objects that were serialized and deserialized between versions AutoExposureChanges and AutoExposureForceOverrideBiasFlag
+		AutoExposureDefaultFix,
 
 		// -----<new versions can be added above this line>-------------------------------------------------
 		VersionPlusOne,

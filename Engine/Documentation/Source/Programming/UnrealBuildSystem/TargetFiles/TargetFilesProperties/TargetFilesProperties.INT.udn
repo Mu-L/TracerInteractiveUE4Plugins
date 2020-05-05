@@ -2,7 +2,7 @@ Availability: NoPublish
 Title: Build Configuration Properties Page
 Crumbs:
 Description: This is a procedurally generated markdown page.
-Version: 4.24
+Version: 4.25
 
 ### Read-Only Properties
 
@@ -39,6 +39,8 @@ $ UndecoratedConfiguration (UnrealTargetConfiguration): Specifies the configurat
 $ bBuildAllPlugins (Boolean): Build all the plugins that we can find, even if they're not enabled. This is particularly useful for content-only projects, where you're building the UE4Editor target but running it with a game that enables a plugin.
 
 $ bBuildAllModules (Boolean): Build all the modules that are valid for this target type. Used for CIS and making installed engine builds.
+
+$ BuildPlugins (List&lt;String&gt;): Additional plugins that are built for this target type but not enabled.
 
 $ AdditionalPlugins (List&lt;String&gt;): A list of additional plugins which need to be included in this target. This allows referencing non-optional plugin modules which cannot be disabled, and allows building against specific modules in program targets which do not fit the categories in ModuleHostType.
 
@@ -80,6 +82,8 @@ $ bCompileICU (Boolean): Whether to include ICU unicode/i18n support in Core.
 
 $ bCompileCEF3 (Boolean): Whether to compile CEF3 support.
 
+$ bCompileISPC (Boolean): Whether to compile using ISPC.
+
 $ bForceBuildTargetPlatforms (Boolean): Whether to force compiling the target platform modules, even if they wouldn't normally be built.
 
 $ bForceBuildShaderFormats (Boolean): Whether to force compiling shader format modules, even if they wouldn't normally be built.
@@ -103,6 +107,8 @@ $ bUseInlining (Boolean): Enable inlining for all modules.
 $ bForceEnableObjCExceptions (Boolean): Enable exceptions for all modules.
 
 $ bForceEnableRTTI (Boolean): Enable RTTI for all modules.
+
+$ bWithPushModel (Boolean): When enabled, Push Model Networking will be used on the server. This can help reduce CPU overhead of networking, at the cost of more memory.
 
 $ bCompileWithStatsWithoutEngine (Boolean): Whether to include stats support even without the engine.
 
@@ -163,6 +169,8 @@ $ bAdaptiveUnityEnablesEditAndContinue (Boolean): Creates a dedicated PCH for ea
 $ MinGameModuleSourceFilesForUnityBuild (Int32): The number of source files in a game module before unity build will be activated for that module.  This allows small game modules to have faster iterative compile times for single files, at the expense of slower full rebuild times.  This setting can be overridden by the bFasterWithoutUnity option in a module's Build.cs file.
 
 $ ShadowVariableWarningLevel (WarningLevel): Forces shadow variable warnings to be treated as errors on platforms that support it.
+
+$ UnsafeTypeCastWarningLevel (WarningLevel): Indicates what warning/error level to treat unsafe type casts as on platforms that support it (e.g., double->float or int64->int32)
 
 $ bUndefinedIdentifierErrors (Boolean): Forces the use of undefined identifiers in conditional expressions to be treated as errors.
 

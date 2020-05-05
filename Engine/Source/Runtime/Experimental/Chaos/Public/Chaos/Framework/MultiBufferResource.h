@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -239,6 +239,15 @@ namespace Chaos
 			}
 			// Mark the buffer as invalid so we don't use this value again.
 			ConsumerThreadBuffer->bValid = false;
+			return ConsumerThreadBuffer->Value.Get();
+		}
+
+		/**
+		 * Get access to the currently held consumer buffer, ignoring whether
+		 * it's already been consumed.
+		 */
+		const ResourceType* PeekConsumerBuffer() const
+		{
 			return ConsumerThreadBuffer->Value.Get();
 		}
 

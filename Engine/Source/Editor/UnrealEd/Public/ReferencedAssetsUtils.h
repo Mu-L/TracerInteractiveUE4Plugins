@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -129,7 +129,7 @@ public:
 	FArchive& operator<<(class UObject*& Obj);
 };
 
-class UNREALED_VTABLE FFindReferencedAssets : 
+class FFindReferencedAssets : 
 	public FGCObject
 {
 public:

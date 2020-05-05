@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UObject/PackageReload.h"
 #include "UObject/ReferenceChainSearch.h"
@@ -127,12 +127,12 @@ public:
 		return TEXT("FReplaceObjectReferencesArchive");
 	}
 
-	virtual void HandleObjectReference(UObject*& Object, const UObject* ReferencingObject, const UProperty* ReferencingProperty) override
+	virtual void HandleObjectReference(UObject*& Object, const UObject* ReferencingObject, const FProperty* ReferencingProperty) override
 	{
 		(*this) << Object;
 	}
 
-	virtual void HandleObjectReferences(UObject** InObjects, const int32 ObjectNum, const UObject* InReferencingObject, const UProperty* InReferencingProperty) override
+	virtual void HandleObjectReferences(UObject** InObjects, const int32 ObjectNum, const UObject* InReferencingObject, const FProperty* InReferencingProperty) override
 	{
 		for (int32 ObjectIndex = 0; ObjectIndex < ObjectNum; ++ObjectIndex)
 		{
@@ -580,9 +580,16 @@ void ReloadPackages(const TArrayView<FReloadPackageData>& InPackagesToReload, TA
 
 				// Mutating the old versions of classes can result in us replacing the SuperStruct pointer, which results
 				// in class layout change and subsequently crashes because instances will not match this new class layout:
-				if(UClass* AsClass = Cast<UClass>(PotentialReferencer))
+				UClass* AsClass = Cast<UClass>(PotentialReferencer);
+				if (!AsClass)
 				{
-					if(AsClass->HasAnyClassFlags(CLASS_NewerVersionExists) || AsClass->HasAnyFlags(RF_NewerVersionExists))
+					AsClass = PotentialReferencer->GetTypedOuter<UClass>();
+				}
+
+				if(AsClass)
+				{
+					if( AsClass->HasAnyClassFlags(CLASS_NewerVersionExists) || 
+						AsClass->HasAnyFlags(RF_NewerVersionExists))
 					{
 						continue;
 					}

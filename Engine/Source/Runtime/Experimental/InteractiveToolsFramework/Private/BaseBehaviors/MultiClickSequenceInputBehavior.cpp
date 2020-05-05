@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BaseBehaviors/MultiClickSequenceInputBehavior.h"
 
@@ -47,6 +47,13 @@ FInputCaptureUpdate UMultiClickSequenceInputBehavior::BeginCapture(const FInputD
 FInputCaptureUpdate UMultiClickSequenceInputBehavior::UpdateCapture(const FInputDeviceState& input, const FInputCaptureData& data)
 {
 	check(bInActiveSequence == true);   // should always be the case!
+
+	// This is a hack to avoid terminating multi-click sequences if the user does alt+mouse camera navigation.
+	// This entire class should be deprecated and removed, in which case this hack won't be relevant...
+	if (input.bAltKeyDown)
+	{
+		return FInputCaptureUpdate::Continue();
+	}
 
 	Modifiers.UpdateModifiers(input, Target);
 

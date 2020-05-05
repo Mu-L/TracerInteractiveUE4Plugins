@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "CoreMinimal.h"
@@ -34,6 +34,7 @@
 #include "Engine/EngineTypes.h"
 #include "Engine/EngineBaseTypes.h"
 #include "Engine/Level.h"
+#include "Engine/LevelScriptBlueprint.h"
 #include "Components/ActorComponent.h"
 #include "Components/SceneComponent.h"
 #include "GameFramework/Actor.h"
@@ -110,8 +111,6 @@
 #include "PackageTools.h"
 #include "LevelEditor.h"
 #include "Kismet2/BlueprintEditorUtils.h"
-#include "Editor/GeometryMode/Public/GeometryEdMode.h"
-#include "Editor/GeometryMode/Public/EditorGeometry.h"
 #include "LandscapeProxy.h"
 #include "Lightmass/PrecomputedVisibilityOverrideVolume.h"
 #include "Animation/AnimSet.h"
@@ -159,6 +158,11 @@
 #include "HAL/PlatformApplicationMisc.h"
 #include "AssetExportTask.h"
 #include "EditorBuildUtils.h"
+#include "Subsystems/BrushEditingSubsystem.h"
+#include "EdMode.h"
+
+#include "Serialization/StructuredArchive.h"
+#include "Serialization/Formatters/JsonArchiveInputFormatter.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogEditorServer, Log, All);
 
@@ -408,11 +412,11 @@ bool UEditorEngine::SafeExec( UWorld* InWorld, const TCHAR* InStr, FOutputDevice
 				{
 					break;
 				}
-				ObjectName = ObjectName.Mid( i+1 );
+				ObjectName.MidInline( i+1, MAX_int32, false );
 			}
 			if( ObjectName.Find(TEXT("."), ESearchCase::CaseSensitive)>=0 )
 			{
-				ObjectName = ObjectName.Left( ObjectName.Find(TEXT(".")) );
+				ObjectName.LeftInline( ObjectName.Find(TEXT("."), ESearchCase::CaseSensitive), false );
 			}
 		}
 
@@ -1939,11 +1943,11 @@ void UEditorEngine::RebuildAlteredBSP()
 
 void UEditorEngine::BSPIntersectionHelper(UWorld* InWorld, ECsgOper Operation)
 {
-	FEdModeGeometry* Mode = GLevelEditorModeTools().GetActiveModeTyped<FEdModeGeometry>(FBuiltinEditorModes::EM_Geometry);
-	if (Mode)
+	if (UBrushEditingSubsystem* BrushSubsystem = GetEditorSubsystem<UBrushEditingSubsystem>())
 	{
-		Mode->GeometrySelectNone(true, true);
+		BrushSubsystem->DeselectAllEditingGeometry();
 	}
+
 	ABrush* DefaultBrush = InWorld->GetDefaultBrush();
 	if (DefaultBrush != NULL)
 	{
@@ -2058,7 +2062,7 @@ void UEditorEngine::EditorDestroyWorld( FWorldContext & Context, const FText& Cl
 	CloseEditedWorldAssets(ContextWorld);
 
 	// Stop all audio and remove references 
-	if (FAudioDevice* AudioDevice = ContextWorld->GetAudioDevice())
+	if (FAudioDevice* AudioDevice = ContextWorld->GetAudioDeviceRaw())
 	{
 		AudioDevice->Flush(ContextWorld);
 	}
@@ -2077,10 +2081,20 @@ void UEditorEngine::EditorDestroyWorld( FWorldContext & Context, const FText& Cl
 	FEditorSupportDelegates::PrepareToCleanseEditorObject.Broadcast(ContextWorld);
 	for (ULevel* Level : ContextWorld->GetLevels())
 	{
-		UWorld* LevelWorld = Level->GetTypedOuter<UWorld>();
-		if (ensureAlways(LevelWorld) && LevelWorld != ContextWorld && LevelWorld != NewWorld)
+		if (ensureAlways(Level))
 		{
-			FEditorSupportDelegates::PrepareToCleanseEditorObject.Broadcast(LevelWorld);
+			const bool bDontCreate = true;
+			if (ULevelScriptBlueprint* LSBP = Level->GetLevelScriptBlueprint(bDontCreate))
+			{
+				// Signals that the associated LSBP is about to be unloaded.
+				LSBP->ClearEditorReferences();
+			}
+
+			UWorld* LevelWorld = Level->GetTypedOuter<UWorld>();
+			if (ensureAlways(LevelWorld) && LevelWorld != ContextWorld && LevelWorld != NewWorld)
+			{
+				FEditorSupportDelegates::PrepareToCleanseEditorObject.Broadcast(LevelWorld);
+			}
 		}
 	}
 
@@ -2305,7 +2319,21 @@ bool UEditorEngine::PackageIsAMapFile( const TCHAR* PackageFilename, FText& OutN
 	if( CheckMapPackageFile )
 	{
 		FPackageFileSummary Summary;
-		( *CheckMapPackageFile ) << Summary;
+
+#if WITH_TEXT_ARCHIVE_SUPPORT
+		if (FPackageName::IsTextPackageExtension(*FPaths::GetExtension(PackageFilename)))
+		{
+			FJsonArchiveInputFormatter Formatter(*CheckMapPackageFile);
+			FStructuredArchive Archive(Formatter);
+			Archive.Open().EnterRecord() << SA_VALUE(TEXT("Summary"), Summary);
+			Archive.Close();
+		}
+		else
+#endif
+		{
+			(*CheckMapPackageFile) << Summary;
+		}
+
 		delete CheckMapPackageFile;
 
 		// Check flag.
@@ -3614,7 +3642,7 @@ namespace
 	static FString				GPropertyColorationValue;
 
 	/** Property used for property-based coloration. */
-	static UProperty*			GPropertyColorationProperty = NULL;
+	static FProperty*			GPropertyColorationProperty = NULL;
 
 	/** Class of object to which property-based coloration is applied. */
 	static UClass*				GPropertyColorationClass = NULL;
@@ -3633,7 +3661,7 @@ namespace
 }
 
 
-void UEditorEngine::SetPropertyColorationTarget(UWorld* InWorld, const FString& PropertyValue, UProperty* Property, UClass* CommonBaseClass, FEditPropertyChain* PropertyChain)
+void UEditorEngine::SetPropertyColorationTarget(UWorld* InWorld, const FString& PropertyValue, FProperty* Property, UClass* CommonBaseClass, FEditPropertyChain* PropertyChain)
 {
 	if ( GPropertyColorationProperty != Property || 
 		GPropertyColorationClass != CommonBaseClass ||
@@ -3649,7 +3677,7 @@ void UEditorEngine::SetPropertyColorationTarget(UWorld* InWorld, const FString& 
 		GPropertyColorationChain = PropertyChain;
 
 		GbColorationClassIsActor = GPropertyColorationClass->IsChildOf( AActor::StaticClass() );
-		GbColorationPropertyIsObjectProperty = Cast<UObjectPropertyBase>(GPropertyColorationProperty) != NULL;
+		GbColorationPropertyIsObjectProperty = CastField<FObjectPropertyBase>(GPropertyColorationProperty) != NULL;
 
 		InWorld->UpdateWorldComponents( false, false );
 		RedrawLevelEditingViewports();
@@ -3657,7 +3685,7 @@ void UEditorEngine::SetPropertyColorationTarget(UWorld* InWorld, const FString& 
 }
 
 
-void UEditorEngine::GetPropertyColorationTarget(FString& OutPropertyValue, UProperty*& OutProperty, UClass*& OutCommonBaseClass, FEditPropertyChain*& OutPropertyChain)
+void UEditorEngine::GetPropertyColorationTarget(FString& OutPropertyValue, FProperty*& OutProperty, UClass*& OutCommonBaseClass, FEditPropertyChain*& OutPropertyChain)
 {
 	OutPropertyValue	= GPropertyColorationValue;
 	OutProperty			= GPropertyColorationProperty;
@@ -3706,9 +3734,9 @@ bool UEditorEngine::GetPropertyColorationColor(UObject* Object, FColor& OutColor
 			int32 ChainIndex = 0;
 			for ( FEditPropertyChain::TIterator It(GPropertyColorationChain->GetHead()); It; ++It )
 			{
-				UProperty* Prop = *It;
-				UObjectPropertyBase* ObjectPropertyBase = Cast<UObjectPropertyBase>(Prop);
-				if( Cast<UArrayProperty>(Prop) )
+				FProperty* Prop = *It;
+				FObjectPropertyBase* ObjectPropertyBase = CastField<FObjectPropertyBase>(Prop);
+				if( CastField<FArrayProperty>(Prop) )
 				{
 					// @todo DB: property coloration -- add support for array properties.
 					bDontCompareProps = true;
@@ -3847,11 +3875,13 @@ bool UEditorEngine::Map_Check( UWorld* InWorld, const TCHAR* Str, FOutputDevice&
 		if( FPackageName::DoesPackageExist( LevelPackage->GetName(), NULL, &PackageFilename ) && 
 			FPaths::GetBaseFilename(PackageFilename).Len() > MaxFilenameLen )
 		{
+			const FString BaseFilenameOfPackageFilename = FPaths::GetBaseFilename(PackageFilename);
 			FFormatNamedArguments Arguments;
-			Arguments.Add(TEXT("Filename"), FText::FromString(FPaths::GetBaseFilename(PackageFilename)));
+			Arguments.Add(TEXT("Filename"), FText::FromString(BaseFilenameOfPackageFilename));
+			Arguments.Add(TEXT("FilenameLength"), BaseFilenameOfPackageFilename.Len());
 			Arguments.Add(TEXT("MaxFilenameLength"), MaxFilenameLen);
 			FMessageLog("MapCheck").Warning()
-				->AddToken(FTextToken::Create(FText::Format(LOCTEXT( "MapCheck_Message_FilenameIsTooLongForCooking", "Filename '{Filename}' is too long - this may interfere with cooking for consoles.  Unreal filenames should be no longer than {MaxFilenameLength} characters." ), Arguments ) ))
+				->AddToken(FTextToken::Create(FText::Format(LOCTEXT( "MapCheck_Message_FilenameIsTooLongForCooking", "Filename is too long ({FilenameLength} characters) - this may interfere with cooking for consoles. Unreal filenames should be no longer than {MaxFilenameLength} characters. Filename value: {Filename}" ), Arguments ) ))
 				->AddToken(FMapErrorToken::Create(FMapErrors::FilenameIsTooLongForCooking));
 		}
 	}
@@ -5440,10 +5470,10 @@ void ListMapPackageDependencies(const TCHAR* InStr)
 				{
 					// get package name of the import
 					FString ImportPackage = FPackageName::FilenameToLongPackageName(Linker->GetImportPathName(ImportIdx));
-					int32 PeriodIdx = ImportPackage.Find(TEXT("."));
+					int32 PeriodIdx = ImportPackage.Find(TEXT("."), ESearchCase::CaseSensitive);
 					if (PeriodIdx != INDEX_NONE)
 					{
-						ImportPackage = ImportPackage.Left(PeriodIdx);
+						ImportPackage.LeftInline(PeriodIdx, false);
 					}
 					ReferencedPackages.Add(ImportPackage, true);
 				}
@@ -5973,9 +6003,9 @@ bool UEditorEngine::HandleTestPropsCommand( const TCHAR* Str, FOutputDevice& Ar 
 
 		Table->SetObjects( Objects );
 
-		for (TFieldIterator<UProperty> PropertyIter( UPropertyEditorTestObject::StaticClass(), EFieldIteratorFlags::IncludeSuper); PropertyIter; ++PropertyIter)
+		for (TFieldIterator<FProperty> PropertyIter( UPropertyEditorTestObject::StaticClass(), EFieldIteratorFlags::IncludeSuper); PropertyIter; ++PropertyIter)
 		{
-			const TWeakObjectPtr< UProperty >& Property = *PropertyIter;
+			const TWeakFieldPtr< FProperty >& Property = *PropertyIter;
 			Table->AddColumn( Property );
 		}
 
@@ -6120,8 +6150,14 @@ bool UEditorEngine::HandleSelectCommand( const TCHAR* Str, FOutputDevice& Ar, UW
 
 bool UEditorEngine::HandleDeleteCommand( const TCHAR* Str, FOutputDevice& Ar, UWorld* InWorld )
 {
-	// If geometry mode is active, give it a chance to handle this command.  If it does not, use the default handler
-	if( !GLevelEditorModeTools().IsModeActive( FBuiltinEditorModes::EM_Geometry ) || !( (FEdModeGeometry*)GLevelEditorModeTools().GetActiveMode(FBuiltinEditorModes::EM_Geometry) )->ExecDelete() )
+	bool bHandled = false;
+	UBrushEditingSubsystem* BrushSubsystem = GetEditorSubsystem<UBrushEditingSubsystem>();
+	if (BrushSubsystem)
+	{
+		bHandled = BrushSubsystem->HandleActorDelete();
+	}
+
+	if(!bHandled)
 	{
 		return Exec( InWorld, TEXT("ACTOR DELETE") );
 	}

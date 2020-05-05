@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OnlineAuthInterfaceSteam.h"
 #include "OnlineSubsystemSteam.h"
@@ -341,8 +341,8 @@ bool FOnlineAuthSteam::KickPlayer(const FUniqueNetId& InUserId, bool bSuppressFa
 		for (FConstPlayerControllerIterator Itr = World->GetPlayerControllerIterator(); Itr; ++Itr)
 		{
 			APlayerController* PC = Itr->Get();
-			if (PC && PC->PlayerState != nullptr && PC->PlayerState->UniqueId.IsValid() &&
-				*(PC->PlayerState->UniqueId.GetUniqueNetId()) == InUserId)
+			if (PC && PC->PlayerState != nullptr && PC->PlayerState->GetUniqueId().IsValid() &&
+				*(PC->PlayerState->GetUniqueId().GetUniqueNetId()) == InUserId)
 			{
 				const FText AuthKickReason = NSLOCTEXT("NetworkErrors", "HostClosedConnection", "Host closed the connection.");
 				bKickSuccess = GameMode->GameSession->KickPlayer(PC, AuthKickReason);

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Factories/FbxSceneImportFactory.h"
 #include "Misc/MessageDialog.h"
@@ -1293,7 +1293,7 @@ USceneComponent *CreateCameraComponent(AActor *ParentActor, TSharedPtr<FFbxCamer
 	CameraComponent->Filmback.SensorHeight = FUnitConversion::Convert(CameraInfo->ApertureHeight, EUnit::Inches, EUnit::Millimeters);
 	CameraComponent->LensSettings.MaxFocalLength = CameraInfo->FocalLength;
 	CameraComponent->LensSettings.MinFocalLength = CameraInfo->FocalLength;
-	CameraComponent->FocusSettings.FocusMethod = ECameraFocusMethod::None;
+	CameraComponent->FocusSettings.FocusMethod = ECameraFocusMethod::DoNotOverride;
 
 	return CameraComponent;
 }
@@ -1957,14 +1957,10 @@ UObject* UFbxSceneImportFactory::ImportOneSkeletalMesh(void* VoidRootNodeToImpor
 			RootNodeInfo->AttributeInfo->SetOriginalImportPath(PackageName);
 			FName SkeletalMeshFName = FName(*SkeletalMeshName);
 
-			TArray<FbxNode*> SkeletonNodeArray;
-			FbxImporter->FillFbxSkeletonArray(RootNodeToImport, SkeletonNodeArray);
-
 			//Import the skeletal mesh
 			UnFbx::FFbxImporter::FImportSkeletalMeshArgs ImportSkeletalMeshArgs;
 			ImportSkeletalMeshArgs.InParent = Pkg;
 			ImportSkeletalMeshArgs.NodeArray = bUseSkelMeshNodePivotArray ? SkelMeshNodePivotArray : SkelMeshNodeArray;
-			ImportSkeletalMeshArgs.BoneNodeArray = SkeletonNodeArray;
 			ImportSkeletalMeshArgs.Name = SkeletalMeshFName;
 			ImportSkeletalMeshArgs.Flags = Flags;
 			ImportSkeletalMeshArgs.TemplateImportData = SkeletalMeshImportData;

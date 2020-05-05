@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,6 +12,7 @@ enum class EMagicLeapPrivilege : uint8
 	Invalid,
 	BatteryInfo,
 	CameraCapture,
+	ComputerVision,
 	WorldReconstruction,
 	InAppPurchase,
 	AudioCaptureMic,
@@ -31,18 +32,21 @@ enum class EMagicLeapPrivilege : uint8
 	Documents,
 	ConnectBackgroundMusicService,
 	RegisterBackgroundMusicService,
-	PwFoundObjRead,
+	PcfRead,
+	PwFoundObjRead = EMagicLeapPrivilege::PcfRead,
 	NormalNotificationsUsage,
 	MusicService,
 	ControllerPose,
-	ScreensProvider,
 	GesturesSubscribe,
 	GesturesConfig,
 	AddressBookRead,
 	AddressBookWrite,
+	AddressBookBasicAccess,
 	CoarseLocation,
+	FineLocation,
 	HandMesh,
 	WifiStatusRead,
+	SocialConnectionsInvitesAccess,
 };
 
 /**

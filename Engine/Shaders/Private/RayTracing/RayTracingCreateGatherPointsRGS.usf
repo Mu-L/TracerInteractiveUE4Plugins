@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // EDeferredMaterialMode
 #define DEFERRED_MATERIAL_MODE_NONE   0
@@ -35,6 +35,7 @@ uint UpscaleFactor;
 uint RenderTileOffsetX;
 uint RenderTileOffsetY;
 float MaxRayDistanceForGI;
+float MaxShadowDistance;
 float NextEventEstimationSamples;
 float DiffuseThreshold;
 float MaxNormalBias;
@@ -82,9 +83,7 @@ bool ShouldTraceRay(uint2 DispatchThreadId, FGBufferData GBufferData)
 
 	// Cull based on shading model
 	uint ShadingModelID = GBufferData.ShadingModelID;
-	if (ShadingModelID == SHADINGMODELID_UNLIT
-		|| ShadingModelID == SHADINGMODELID_TWOSIDED_FOLIAGE
-		)
+	if (ShadingModelID == SHADINGMODELID_UNLIT)
 	{
 		bTraceRay = false;
 	}
@@ -349,6 +348,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingCreateGatherPointsRGS)
 				{
 					RayDesc LightRay;
 					GenerateLightRay(Ray, LightId, LightUV, LightRay);
+					LightRay.TMax = min(LightRay.TMax, MaxShadowDistance);
 					ApplyPositionBias(LightRay, Payload.WorldNormal, MaxNormalBias);
 
 					// Trace visibility ray

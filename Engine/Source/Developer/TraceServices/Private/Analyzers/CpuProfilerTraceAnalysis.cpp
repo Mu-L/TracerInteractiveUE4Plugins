@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "CpuProfilerTraceAnalysis.h"
 #include "AnalysisServicePrivate.h"
 #include "Common/Utils.h"
@@ -11,13 +11,25 @@ FCpuProfilerAnalyzer::FCpuProfilerAnalyzer(Trace::IAnalysisSession& InSession, T
 
 }
 
+FCpuProfilerAnalyzer::~FCpuProfilerAnalyzer()
+{
+	for (auto& KV : ThreadStatesMap)
+	{
+		FThreadState* ThreadState = KV.Value;
+		delete ThreadState;
+	}
+}
+
 void FCpuProfilerAnalyzer::OnAnalysisBegin(const FOnAnalysisContext& Context)
 {
 	auto& Builder = Context.InterfaceBuilder;
 
 	Builder.RouteEvent(RouteId_EventSpec, "CpuProfiler", "EventSpec");
 	Builder.RouteEvent(RouteId_EventBatch, "CpuProfiler", "EventBatch");
+	Builder.RouteEvent(RouteId_EndThread, "CpuProfiler", "EndThread");
 	Builder.RouteEvent(RouteId_EndCapture, "CpuProfiler", "EndCapture");
+	Builder.RouteEvent(RouteId_ChannelAnnounce, "$Trace", "ChannelAnnounce");
+	Builder.RouteEvent(RouteId_ChannelToggle, "$Trace", "ChannelToggle");
 }
 
 bool FCpuProfilerAnalyzer::OnEvent(uint16 RouteId, const FOnEventContext& Context)
@@ -41,13 +53,26 @@ bool FCpuProfilerAnalyzer::OnEvent(uint16 RouteId, const FOnEventContext& Contex
 		}
 		break;
 	}
+	case RouteId_EndThread:
+	{
+		uint32 ThreadId = EventData.GetValue<uint32>("ThreadId");
+		FThreadState& ThreadState = GetThreadState(ThreadId);
+		const double Timestamp = Context.SessionContext.TimestampFromCycle(ThreadState.LastCycle);
+		Session.UpdateDurationSeconds(Timestamp);
+		while (ThreadState.ScopeStack.Num())
+		{
+			ThreadState.ScopeStack.Pop();
+			ThreadState.Timeline->AppendEndEvent(Timestamp);
+		}
+		ThreadStatesMap.Remove(ThreadId);
+	}
 	case RouteId_EventBatch:
 	case RouteId_EndCapture:
 	{
 		TotalEventSize += EventData.GetAttachmentSize();
 		uint32 ThreadId = EventData.GetValue<uint32>("ThreadId");
-		TSharedRef<FThreadState> ThreadState = GetThreadState(ThreadId);
-		uint64 LastCycle = ThreadState->LastCycle;
+		FThreadState& ThreadState = GetThreadState(ThreadId);
+		uint64 LastCycle = ThreadState.LastCycle;
 		uint64 BufferSize = EventData.GetAttachmentSize();
 		const uint8* BufferPtr = EventData.GetAttachment();
 		const uint8* BufferEnd = BufferPtr + BufferSize;
@@ -58,7 +83,7 @@ bool FCpuProfilerAnalyzer::OnEvent(uint16 RouteId, const FOnEventContext& Contex
 			LastCycle = ActualCycle;
 			if (DecodedCycle & 1ull)
 			{
-				EventScopeState& ScopeState = ThreadState->ScopeStack.AddDefaulted_GetRef();
+				EventScopeState& ScopeState = ThreadState.ScopeStack.AddDefaulted_GetRef();
 				ScopeState.StartCycle = ActualCycle;
 				uint32 SpecId = FTraceAnalyzerUtils::Decode7bit(BufferPtr);
 				uint32* FindIt = ScopeIdToEventIdMap.Find(SpecId);
@@ -72,13 +97,13 @@ bool FCpuProfilerAnalyzer::OnEvent(uint16 RouteId, const FOnEventContext& Contex
 				}
 				Trace::FTimingProfilerEvent Event;
 				Event.TimerIndex = ScopeState.EventTypeId;
-				ThreadState->Timeline->AppendBeginEvent(Context.SessionContext.TimestampFromCycle(ScopeState.StartCycle), Event);
+				ThreadState.Timeline->AppendBeginEvent(Context.SessionContext.TimestampFromCycle(ScopeState.StartCycle), Event);
 				++TotalScopeCount;
 			}
-			else if (ThreadState->ScopeStack.Num())
+			else if (ThreadState.ScopeStack.Num())
 			{
-				ThreadState->ScopeStack.Pop();
-				ThreadState->Timeline->AppendEndEvent(Context.SessionContext.TimestampFromCycle(ActualCycle));
+				ThreadState.ScopeStack.Pop();
+				ThreadState.Timeline->AppendEndEvent(Context.SessionContext.TimestampFromCycle(ActualCycle));
 			}
 		}
 		check(BufferPtr == BufferEnd);
@@ -89,15 +114,50 @@ bool FCpuProfilerAnalyzer::OnEvent(uint16 RouteId, const FOnEventContext& Contex
 			if (RouteId == RouteId_EndCapture)
 			{
 
-				while (ThreadState->ScopeStack.Num())
+				while (ThreadState.ScopeStack.Num())
 				{
-					ThreadState->ScopeStack.Pop();
-					ThreadState->Timeline->AppendEndEvent(LastTimestamp);
+					ThreadState.ScopeStack.Pop();
+					ThreadState.Timeline->AppendEndEvent(LastTimestamp);
 				}
 			}
 		}
-		ThreadState->LastCycle = LastCycle;
+		ThreadState.LastCycle = LastCycle;
 		BytesPerScope = double(TotalEventSize) / double(TotalScopeCount);
+		break;
+	}
+	case RouteId_ChannelAnnounce:
+	{
+		const ANSICHAR* ChannelName = (ANSICHAR*)Context.EventData.GetAttachment();
+		const uint32 ChannelId = Context.EventData.GetValue<uint32>("Id");
+		if (FCStringAnsi::Stricmp(ChannelName, "cpu") == 0)
+		{
+			CpuChannelId = ChannelId;
+		}
+		break;
+	}
+	case RouteId_ChannelToggle:
+	{
+		const uint32 ChannelId = Context.EventData.GetValue<uint32>("Id");
+		const bool bEnabled = Context.EventData.GetValue<bool>("IsEnabled");
+
+		if (ChannelId == CpuChannelId && bCpuChannelState != bEnabled)
+		{
+			bCpuChannelState = bEnabled;
+			if (bEnabled == false)
+			{
+				for (auto ThreadPair : ThreadStatesMap)
+				{
+					FThreadState& ThreadState = *ThreadPair.Value;
+					const double Timestamp = Context.SessionContext.TimestampFromCycle(ThreadState.LastCycle);
+					Session.UpdateDurationSeconds(Timestamp);
+					while (ThreadState.ScopeStack.Num())
+					{
+						ThreadState.ScopeStack.Pop();
+						ThreadState.Timeline->AppendEndEvent(Timestamp);
+					}
+				}
+			}
+		}
 		break;
 	}
 	}
@@ -110,6 +170,7 @@ void FCpuProfilerAnalyzer::DefineScope(uint32 Id, const TCHAR* Name)
 	if (ScopeIdToEventIdMap.Contains(Id))
 	{
 		TimingProfilerProvider.SetTimerName(ScopeIdToEventIdMap[Id], Name);
+		ScopeNameToEventIdMap.Add(Name, Id);
 	}
 	else
 	{
@@ -127,18 +188,15 @@ void FCpuProfilerAnalyzer::DefineScope(uint32 Id, const TCHAR* Name)
 	}
 }
 
-TSharedRef<FCpuProfilerAnalyzer::FThreadState> FCpuProfilerAnalyzer::GetThreadState(uint32 ThreadId)
+FCpuProfilerAnalyzer::FThreadState& FCpuProfilerAnalyzer::GetThreadState(uint32 ThreadId)
 {
-	if (!ThreadStatesMap.Contains(ThreadId))
+	FThreadState* ThreadState = ThreadStatesMap.FindRef(ThreadId);
+	if (!ThreadState)
 	{
-		TSharedRef<FThreadState> ThreadState = MakeShared<FThreadState>();
+		ThreadState = new FThreadState();
 		ThreadState->Timeline = &TimingProfilerProvider.EditCpuThreadTimeline(ThreadId);
 		ThreadStatesMap.Add(ThreadId, ThreadState);
-		return ThreadState;
 	}
-	else
-	{
-		return ThreadStatesMap[ThreadId];
-	}
+	return *ThreadState;
 }
 

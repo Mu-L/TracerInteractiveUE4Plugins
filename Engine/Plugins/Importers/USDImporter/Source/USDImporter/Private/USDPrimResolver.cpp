@@ -1,11 +1,13 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "USDPrimResolver.h"
 
 #include "USDConversionUtils.h"
 #include "USDImportOptions.h"
 #include "USDImporter.h"
+#include "USDLog.h"
 #include "USDTypesConversion.h"
+#include "UnrealUSDWrapper.h"
 
 #include "ActorFactories/ActorFactory.h"
 #include "AssetData.h"
@@ -42,41 +44,45 @@ void UUSDPrimResolver::FindMeshAssetsToImport(FUsdImportContext& ImportContext, 
 	bool bHasUnrealAssetPath = IUsdPrim::GetUnrealAssetPath( StartPrim.Get() ).size() > 0;
 	bool bHasUnrealActorClass = IUsdPrim::GetUnrealActorClass( StartPrim.Get() ).size() > 0;
 
-	if ( !IUsdPrim::IsProxyOrGuide(StartPrim.Get()) )
+	EUsdPurpose EnabledPurposes = EUsdPurpose::Render;
+	if (UUSDSceneImportOptions* SceneImportOptions = Cast<UUSDSceneImportOptions>(ImportContext.ImportOptions))
 	{
-		if (IUsdPrim::HasGeometryDataOrLODVariants(StartPrim.Get()))
+		EnabledPurposes = (EUsdPurpose)SceneImportOptions->PurposesToImport;
+	}
+
+	if (EnumHasAllFlags(EnabledPurposes, IUsdPrim::GetPurpose(StartPrim.Get())) &&
+		IUsdPrim::HasGeometryDataOrLODVariants(StartPrim.Get()))
+	{
+		FUsdAssetPrimToImport NewTopLevelPrim;
+
+		FString FinalPrimName;
+		// if the prim has a path use that as the final name
+		if (bHasUnrealAssetPath)
 		{
-			FUsdAssetPrimToImport NewTopLevelPrim;
-
-			FString FinalPrimName;
-			// if the prim has a path use that as the final name
-			if (bHasUnrealAssetPath)
-			{
-				FinalPrimName = UsdToUnreal::ConvertString( IUsdPrim::GetUnrealAssetPath( StartPrim.Get() ).c_str() );
-			}
-			else
-			{
-				FinalPrimName = PrimName;
-			}
-
-			NewTopLevelPrim.Prim = StartPrim;
-			NewTopLevelPrim.AssetPath = FinalPrimName;
-
-			FindMeshChildren(ImportContext, StartPrim, true, NewTopLevelPrim.MeshPrims);
-
-			for ( const TUsdStore< pxr::UsdPrim >& MeshPrim : NewTopLevelPrim.MeshPrims)
-			{
-				NewTopLevelPrim.NumLODs = FMath::Max(NewTopLevelPrim.NumLODs, IUsdPrim::GetNumLODs( *MeshPrim ));
-			}
-
-			OutAssetsToImport.Add(NewTopLevelPrim);
+			FinalPrimName = UsdToUnreal::ConvertString( IUsdPrim::GetUnrealAssetPath( StartPrim.Get() ).c_str() );
 		}
-		else if(bRecursive)
+		else
 		{
-			for ( pxr::UsdPrim Child : StartPrim.Get().GetChildren() )
-			{
-				FindMeshAssetsToImport(ImportContext, Child, StartPrim, OutAssetsToImport);
-			}
+			FinalPrimName = PrimName;
+		}
+
+		NewTopLevelPrim.Prim = StartPrim;
+		NewTopLevelPrim.AssetPath = FinalPrimName;
+
+		FindMeshChildren(ImportContext, StartPrim, true, NewTopLevelPrim.MeshPrims);
+
+		for ( const TUsdStore< pxr::UsdPrim >& MeshPrim : NewTopLevelPrim.MeshPrims)
+		{
+			NewTopLevelPrim.NumLODs = FMath::Max(NewTopLevelPrim.NumLODs, IUsdPrim::GetNumLODs( *MeshPrim ));
+		}
+
+		OutAssetsToImport.Add(NewTopLevelPrim);
+	}
+	else if(bRecursive)
+	{
+		for ( pxr::UsdPrim Child : StartPrim.Get().GetFilteredChildren( pxr::UsdTraverseInstanceProxies() ) )
+		{
+			FindMeshAssetsToImport(ImportContext, Child, StartPrim, OutAssetsToImport);
 		}
 	}
 }
@@ -89,7 +95,7 @@ void UUSDPrimResolver::FindActorsToSpawn(FUSDSceneImportContext& ImportContext, 
 	}
 	else
 	{
-		for (pxr::UsdPrim Child : ImportContext.RootPrim.Get().GetChildren())
+		for (pxr::UsdPrim Child : ImportContext.RootPrim.Get().GetFilteredChildren( pxr::UsdTraverseInstanceProxies() ))
 		{
 			FindActorsToSpawn_Recursive(ImportContext, Child, pxr::UsdPrim(), OutActorSpawnDatas);
 		}
@@ -180,7 +186,7 @@ AActor* UUSDPrimResolver::SpawnActor(FUSDSceneImportContext& ImportContext, cons
 						FText::FromString(SpawnData.AssetPath),
 						FText::FromString(UsdToUnreal::ConvertString(SpawnData.ActorPrim.Get().GetPath().GetString()))));
 
-				UE_LOG(LogUSDImport, Error, TEXT("Could not find Unreal Asset '%s' for USD prim '%s'"), *SpawnData.AssetPath, *SpawnData.ActorName.ToString());
+				UE_LOG(LogUsd, Error, TEXT("Could not find Unreal Asset '%s' for USD prim '%s'"), *SpawnData.AssetPath, *SpawnData.ActorName.ToString());
 			}
 		}
 
@@ -225,6 +231,8 @@ AActor* UUSDPrimResolver::SpawnActor(FUSDSceneImportContext& ImportContext, cons
 					SpawnedActor = ImportContext.World->SpawnActor( AActor::StaticClass() );
 				}
 
+				const UsdToUnreal::FUsdStageInfo StageInfo( *ImportContext.Stage );
+
 				int32 AssetIndex = 0;
 				for ( UObject* ImportedAsset : ImportedAssets )
 				{
@@ -246,7 +254,7 @@ AActor* UUSDPrimResolver::SpawnActor(FUSDSceneImportContext& ImportContext, cons
 					for ( int32 ParentPrimIndex = ParentPrims.Num() - 1; ParentPrimIndex >= 0; --ParentPrimIndex )
 					{
 						ParentPrim = ParentPrims[ ParentPrimIndex ];
-						LocalTransform = UsdToUnreal::ConvertMatrix( *ImportContext.Stage, IUsdPrim::GetLocalTransform( ParentPrim ) ) * LocalTransform;
+						LocalTransform = UsdToUnreal::ConvertMatrix( StageInfo, IUsdPrim::GetLocalTransform( ParentPrim ) ) * LocalTransform;
 					}
 
 					FName ComponentBaseName = *UsdToUnreal::ConvertString( UsdAssetPrimToImport.Prim.Get().GetName().GetString().c_str() );
@@ -258,7 +266,7 @@ AActor* UUSDPrimResolver::SpawnActor(FUSDSceneImportContext& ImportContext, cons
 					// Don't add the prim transform if its the same prim used for the actor as it's already accounted for in the ActorTransform
 					if ( UsdAssetPrimToImport.Prim.Get() != SpawnData.ActorPrim.Get() )
 					{
-						LocalTransform = UsdToUnreal::ConvertMatrix( *ImportContext.Stage, IUsdPrim::GetLocalTransform( UsdAssetPrimToImport.Prim.Get() ) ) * LocalTransform;
+						LocalTransform = UsdToUnreal::ConvertMatrix( StageInfo, IUsdPrim::GetLocalTransform( UsdAssetPrimToImport.Prim.Get() ) ) * LocalTransform;
 					}
 
 					StaticMeshComponent->SetRelativeTransform( LocalTransform );
@@ -280,9 +288,10 @@ AActor* UUSDPrimResolver::SpawnActor(FUSDSceneImportContext& ImportContext, cons
 			}
 			else
 			{
-				SpawnedActor = ActorFactory->CreateActor(ActorAsset, ImportContext.World->GetCurrentLevel(), FTransform::Identity, RF_Transactional, SpawnData.ActorName);
+				// We'll set the name later by using the ActorLabels cache
+				SpawnedActor = ActorFactory->CreateActor(ActorAsset, ImportContext.World->GetCurrentLevel(), FTransform::Identity, RF_Transactional);
 
-				// For empty group actors set their initial mobility to static 
+				// For empty group actors set their initial mobility to static
 				if ( ActorFactory == ImportContext.EmptyActorFactory )
 				{
 					SpawnedActor->GetRootComponent()->SetMobility(EComponentMobility::Static);
@@ -388,21 +397,28 @@ void UUSDPrimResolver::FindMeshChildren(FUsdImportContext& ImportContext, const 
 
 	const bool bIncludeLODs = bOnlyLODRoots;
 
-	if(bOnlyLODRoots && IUsdPrim::GetNumLODs( ParentPrim.Get() ) > 0)
+	EUsdPurpose EnabledPurposes = EUsdPurpose::Default | EUsdPurpose::Render;
+	if (UUSDSceneImportOptions* SceneImportOptions = Cast<UUSDSceneImportOptions>(ImportContext.ImportOptions))
+	{
+		EnabledPurposes = (EUsdPurpose)SceneImportOptions->PurposesToImport;
+	}
+	bool bValidPurpose = EnumHasAllFlags(EnabledPurposes, IUsdPrim::GetPurpose(ParentPrim.Get()));
+
+	if(bOnlyLODRoots && IUsdPrim::GetNumLODs( ParentPrim.Get() ) > 0 && bValidPurpose)
 	{
 		// We're only looking for lod roots and this prim has LODs so add the prim and dont recurse into children
 		OutMeshChildren.Add(ParentPrim);
 	}
 	else
 	{
-		if (IUsdPrim::HasGeometryData(ParentPrim.Get()))
+		if (IUsdPrim::HasGeometryData(ParentPrim.Get()) && bValidPurpose)
 		{
 			OutMeshChildren.Add(ParentPrim);
 		}
 
-		for ( pxr::UsdPrim Child : ParentPrim.Get().GetChildren() )
+		for ( pxr::UsdPrim Child : ParentPrim.Get().GetFilteredChildren( pxr::UsdTraverseInstanceProxies() ) )
 		{
-			if (!IUsdPrim::IsProxyOrGuide(Child) && !IUsdPrim::IsKindChildOf(Child, USDKindTypes::Component))
+			if (!IUsdPrim::IsKindChildOf(Child, USDKindTypes::Component))
 			{
 				FindMeshChildren(ImportContext, Child, bOnlyLODRoots, OutMeshChildren);
 			}
@@ -436,7 +452,7 @@ void UUSDPrimResolver::FindActorsToSpawn_Recursive(FUSDSceneImportContext& Impor
 
 		FName PrimName = UsdToUnreal::ConvertName(Prim.Get().GetName().GetString());
 		SpawnData.ActorName = PrimName;
-		SpawnData.WorldTransform = UsdToUnreal::ConvertMatrix( *ImportContext.Stage, IUsdPrim::GetLocalTransform( *Prim ) );
+		SpawnData.WorldTransform = UsdToUnreal::ConvertMatrix( UsdToUnreal::FUsdStageInfo( *ImportContext.Stage ), IUsdPrim::GetLocalTransform( *Prim ) );
 		SpawnData.AttachParentPrim = ParentPrim;
 		SpawnData.ActorPrim = Prim;
 
@@ -450,7 +466,7 @@ void UUSDPrimResolver::FindActorsToSpawn_Recursive(FUSDSceneImportContext& Impor
 
 	if (!ImportContext.bFindUnrealAssetReferences || AssetPath.IsEmpty())
 	{
-		for (pxr::UsdPrim Child : Prim.Get().GetChildren())
+		for (pxr::UsdPrim Child : Prim.Get().GetFilteredChildren( pxr::UsdTraverseInstanceProxies() ))
 		{
 			FindActorsToSpawn_Recursive(ImportContext, Child, Prim, *SpawnDataArray);
 		}

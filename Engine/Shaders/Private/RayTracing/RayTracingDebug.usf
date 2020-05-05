@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "../Common.ush"
 #include "../ShadingCommon.ush"
@@ -12,6 +12,7 @@ RaytracingAccelerationStructure TLAS;
 
 uint VisualizationMode;
 uint ShouldUsePreExposure;
+uint OpaqueOnly;
 
 RAY_TRACING_ENTRY_RAYGEN(RayTracingDebugMainRGS)
 {
@@ -24,7 +25,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingDebugMainRGS)
 	RayCone.SpreadAngle = View.EyeToPixelSpreadAngle;
 
 	const uint RayFlags = RAY_FLAG_CULL_BACK_FACING_TRIANGLES;
-	const uint InstanceInclusionMask = RAY_TRACING_MASK_ALL;
+	const uint InstanceInclusionMask = OpaqueOnly ? RAY_TRACING_MASK_OPAQUE : RAY_TRACING_MASK_ALL;
 	const bool bEnableSkyLightContribution = true;
 
 	FMaterialClosestHitPayload Payload = TraceMaterialRay(
@@ -67,7 +68,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingDebugMainRGS)
 			Result = float4(Payload.Specular, Payload.Specular, Payload.Specular, 1.0f);
 			break;
 		case RAY_TRACING_DEBUG_VIZ_ROUGHNESS:
-			Result = float4(Payload.Roughness, Payload.Roughness, Payload.Roughness, 1.0f);
+			Result = float4(pow(Payload.Roughness, 2.2f).xxx, 1.0f); // NOTE: pow 2.2 is used for consistency with BufferVisualization/Roughness shader
 			break;
 		case RAY_TRACING_DEBUG_VIZ_IOR:
 			Result = float4(Payload.Ior, Payload.Ior, Payload.Ior, 1.0f);
@@ -96,6 +97,17 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingDebugMainRGS)
 		case RAY_TRACING_DEBUG_VIZ_HITKIND:
 			Result = Payload.IsFrontFace() ? float4(0.0, 1.0, 0.0, 1.0f) : float4(1.0, 0.0, 0.0, 1.0f);
 			break;
+		case RAY_TRACING_DEBUG_VIZ_WORLD_TANGENT:
+			Result = float4(Payload.WorldTangent * 0.5 + 0.5, 1.0f);
+			break;
+		case RAY_TRACING_DEBUG_VIZ_ANISOTROPY:
+			{	
+			// Follow same mapping than raster buffer visualization (BP located in Engine/Contents/Anisotropy)
+			float AniG = saturate(Payload.Anisotropy);
+			float AniB = saturate(-1.0 * Payload.Anisotropy);
+			Result = float4(0.0, pow(AniG, 2.2), pow(AniB, 2.2), 1.0f);
+			break;
+			}
 		}
 	}
 

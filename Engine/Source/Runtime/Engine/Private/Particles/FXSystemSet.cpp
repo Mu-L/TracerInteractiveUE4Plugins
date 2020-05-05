@@ -1,10 +1,16 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	FXSystemSet.cpp: Internal redirector to several fx systems.
 =============================================================================*/
 
 #include "FXSystemSet.h"
+#include "GPUSortManager.h"
+
+FFXSystemSet::FFXSystemSet(FGPUSortManager* InGPUSortManager)
+	: GPUSortManager(InGPUSortManager)
+{
+}
 
 FFXSystemInterface* FFXSystemSet::GetInterface(const FName& InName)
 {
@@ -96,12 +102,47 @@ void FFXSystemSet::PreInitViews(FRHICommandListImmediate& RHICmdList, bool bAllo
 	}
 }
 
+void FFXSystemSet::PostInitViews(FRHICommandListImmediate& RHICmdList, FRHIUniformBuffer* ViewUniformBuffer, bool bAllowGPUParticleUpdate)
+{
+	for (FFXSystemInterface* FXSystem : FXSystems)
+	{
+		check(FXSystem);
+		FXSystem->PostInitViews(RHICmdList, ViewUniformBuffer, bAllowGPUParticleUpdate);
+	}
+}
+
 bool FFXSystemSet::UsesGlobalDistanceField() const
 {
 	for (FFXSystemInterface* FXSystem : FXSystems)
 	{
 		check(FXSystem);
 		if (FXSystem->UsesGlobalDistanceField())
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool FFXSystemSet::UsesDepthBuffer() const
+{
+	for (FFXSystemInterface* FXSystem : FXSystems)
+	{
+		check(FXSystem);
+		if (FXSystem->UsesDepthBuffer())
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool FFXSystemSet::RequiresEarlyViewUniformBuffer() const
+{
+	for (FFXSystemInterface* FXSystem : FXSystems)
+	{
+		check(FXSystem);
+		if (FXSystem->RequiresEarlyViewUniformBuffer())
 		{
 			return true;
 		}
@@ -149,6 +190,16 @@ void FFXSystemSet::OnDestroy()
 	FFXSystemInterface::OnDestroy();
 }
 
+
+void FFXSystemSet::DestroyGPUSimulation()
+{
+	for (FFXSystemInterface*& FXSystem : FXSystems)
+	{
+		check(FXSystem);
+		FXSystem->DestroyGPUSimulation();
+	}
+}
+
 FFXSystemSet::~FFXSystemSet()
 {
 	for (FFXSystemInterface* FXSystem : FXSystems)
@@ -156,4 +207,9 @@ FFXSystemSet::~FFXSystemSet()
 		check(FXSystem);
 		delete FXSystem;
 	}
+}
+
+FGPUSortManager* FFXSystemSet::GetGPUSortManager() const
+{
+	return GPUSortManager;
 }

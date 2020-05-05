@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -18,6 +18,8 @@
 
 class FAssetEditorModeManager;
 class FMenuBuilder;
+struct FToolMenuContext;
+struct FToolMenuSection;
 class SBorder;
 class SStandaloneAssetEditorToolkitHost;
 
@@ -126,6 +128,9 @@ public:
 	virtual FText GetToolkitToolTipText() const override;
 	virtual FString GetWorldCentricTabPrefix() const override = 0;	// Must implement in derived class!
 	virtual class FEdMode* GetEditorMode() const override;
+	virtual class UEdMode* GetScriptableEditorMode() const override;
+	virtual FText GetEditorModeDisplayName() const override;
+	virtual FSlateIcon GetEditorModeIcon() const override;
 
 	/** IAssetEditorInstance interface */
 	virtual FName GetEditorName() const override;
@@ -133,6 +138,7 @@ public:
 	virtual bool CloseWindow() override;
 	virtual bool IsPrimaryEditor() const override { return true; };
 	virtual void InvokeTab(const FTabId& TabId) override;
+	virtual FName GetToolbarTabId() const override { return ToolbarTabId; }
 	virtual TSharedPtr<FTabManager> GetAssociatedTabManager() override;
 	virtual double GetLastActivationTime() override;
 	virtual void RemoveEditingAsset(UObject* Asset) override;
@@ -142,21 +148,21 @@ public:
 	 *
 	 * @param	MenuBuilder		The menu to add commands to
 	 */
-	void FillDefaultFileMenuCommands( FMenuBuilder& MenuBuilder );
+	void FillDefaultFileMenuCommands(FToolMenuSection& InSection);
 
 	/**
 	 * Fills in the supplied menu with commands for modifying this asset that are generally common to most asset editors
 	 *
 	 * @param	MenuBuilder		The menu to add commands to
 	 */
-	void FillDefaultAssetMenuCommands( FMenuBuilder& MenuBuilder );
+	void FillDefaultAssetMenuCommands(FToolMenuSection& InSection);
 
 	/**
 	 * Fills in the supplied menu with commands for the help menu
 	 *
 	 * @param	MenuBuilder		The menu to add commands to
 	 */
-	void FillDefaultHelpMenuCommands( FMenuBuilder& MenuBuilder );
+	void FillDefaultHelpMenuCommands(FToolMenuSection& InSection);
 
 	/** @return	For standalone asset editing tool-kits, returns the toolkit host that was last hosting this asset editor before it was switched to standalone mode (if it's still valid.)  Returns null if these conditions aren't met. */
 	TSharedPtr< IToolkitHost > GetPreviousWorldCentricToolkitHost();
@@ -178,7 +184,7 @@ public:
 	}
 
 	/** Registers default tool bar */
-	static void RegisterMenus();
+	static void RegisterDefaultToolBar();
 	
 	/** Makes a default asset editing toolbar */
 	void GenerateToolbar();
@@ -187,8 +193,11 @@ public:
 	void RegenerateMenusAndToolbars();
 
 	/** Get name used by tool menu */
+	virtual FName GetToolMenuToolbarName(FName& OutParentName) const;
+	virtual void InitToolMenuContext(FToolMenuContext& MenuContext);
 	FName GetToolMenuToolbarName() const;
 	FName GetToolMenuAppName() const;
+	FName GetToolMenuName() const;
 
 	/** Called at the end of RegenerateMenusAndToolbars() */
 	virtual void PostRegenerateMenusAndToolbars() { }
@@ -219,9 +228,6 @@ public:
 	/** Adds or removes widgets from the default toolbar in this asset editor */
 	void AddToolbarWidget(TSharedRef<SWidget> Widget);
 	void RemoveAllToolbarWidgets();
-
-	/** Gets the toolbar tab id */
-	FName GetToolbarTabId() const {return ToolbarTabId;}
 
 	/** True if this actually is editing an asset */
 	bool IsActuallyAnAsset() const;

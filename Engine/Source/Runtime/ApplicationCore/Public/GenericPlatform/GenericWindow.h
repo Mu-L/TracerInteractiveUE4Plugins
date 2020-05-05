@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -186,6 +186,9 @@ public:
 
 	/** @return true if the window is in the foreground */
 	virtual bool IsForegroundWindow() const;
+
+	/** @return true if the window is in the foreground */
+	virtual bool IsFullscreenSupported() const;
 
 	/**
 	 * Sets the window text - usually the title but can also be text content for things like controls

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -280,6 +280,7 @@ namespace AutomationTool
             this.RunTimeoutSeconds = InParams.RunTimeoutSeconds;
 			this.Clean = InParams.Clean;
 			this.Pak = InParams.Pak;
+			this.IoStore = InParams.IoStore;
 			this.SignPak = InParams.SignPak;
 			this.SignedPak = InParams.SignedPak;
 			this.PakAlignForMemoryMapping = InParams.PakAlignForMemoryMapping;
@@ -454,6 +455,8 @@ namespace AutomationTool
 			bool? NoXGE = null,
 			bool? Package = null,
 			bool? Pak = null,
+			bool? IoStore = null,
+			bool? SkipIoStore = null,
 			bool? Prereqs = null,
 			string AppLocalDirectory = null,
 			bool? NoBootstrapExe = null,
@@ -590,7 +593,7 @@ namespace AutomationTool
 			DLCName = ParseParamValueIfNotSpecified(Command, DLCName, "DLCName", String.Empty);
 			if(!String.IsNullOrEmpty(DLCName))
 			{
-				List<PluginInfo> CandidatePlugins = Plugins.ReadAvailablePlugins(CommandUtils.EngineDirectory, RawProjectPath, null);
+				List<PluginInfo> CandidatePlugins = Plugins.ReadAvailablePlugins(CommandUtils.EngineDirectory, DirectoryReference.FromFile(RawProjectPath), null);
 				PluginInfo DLCPlugin = CandidatePlugins.FirstOrDefault(x => String.Equals(x.Name, DLCName, StringComparison.InvariantCultureIgnoreCase));
 				if(DLCPlugin == null)
 				{
@@ -626,6 +629,8 @@ namespace AutomationTool
 			}
 			this.PakAlignForMemoryMapping = GetParamValueIfNotSpecified(Command, PakAlignForMemoryMapping, this.PakAlignForMemoryMapping, "PakAlignForMemoryMapping");
 			this.Pak = GetParamValueIfNotSpecified(Command, Pak, this.Pak, "pak");
+			this.IoStore = GetParamValueIfNotSpecified(Command, IoStore, this.IoStore, "iostore");
+			this.SkipIoStore = GetParamValueIfNotSpecified(Command, IoStore, this.SkipIoStore, "skipiostore");
 			this.SkipPak = GetParamValueIfNotSpecified(Command, SkipPak, this.SkipPak, "skippak");
 			if (this.SkipPak)
 			{
@@ -689,6 +694,12 @@ namespace AutomationTool
 			}
 
 			this.LogWindow = GetParamValueIfNotSpecified(Command, LogWindow, this.LogWindow, "logwindow");
+			string ExtraTargetsToStageWithClientString = null;
+			ExtraTargetsToStageWithClientString = ParseParamValueIfNotSpecified(Command, ExtraTargetsToStageWithClientString, "ExtraTargetsToStageWithClient", null);
+			if (!string.IsNullOrEmpty(ExtraTargetsToStageWithClientString))
+			{
+				this.ExtraTargetsToStageWithClient = new ParamList<string>(ExtraTargetsToStageWithClientString.Split('+'));
+			}
 			this.Stage = GetParamValueIfNotSpecified(Command, Stage, this.Stage, "stage");
 			this.SkipStage = GetParamValueIfNotSpecified(Command, SkipStage, this.SkipStage, "skipstage");
 			if (this.SkipStage)
@@ -756,7 +767,7 @@ namespace AutomationTool
 			// if the user specified -deploy but no folder, set the default
 			if (this.Deploy && string.IsNullOrEmpty(this.DeployFolder))
 			{
-				this.DeployFolder = this.ShortProjectName;
+				this.DeployFolder = UnrealBuildTool.DeployExports.GetDefaultDeployFolder(this.ShortProjectName);
 			}
 			else if (string.IsNullOrEmpty(this.DeployFolder) == false)
 			{
@@ -1180,6 +1191,12 @@ namespace AutomationTool
 		public bool Pak { private set; get; }
 
 		/// <summary>
+		/// Shared: True if container file(s) should be generated with ZenPak.
+		/// </summary>
+		[Help("iostore", "generate I/O store container file(s)")]
+		public bool IoStore { private set; get; }
+
+		/// <summary>
 		/// 
 		/// </summary>
 		public bool UsePak(Platform PlatformToCheck)
@@ -1235,6 +1252,12 @@ namespace AutomationTool
 		/// </summary>
 		[Help("skippak", "use a pak file, but assume it is already built, implies pak")]
 		public bool SkipPak { private set; get; }
+
+		/// <summary>
+		/// Shared: true if we want to skip iostore, even if -iostore is specified
+		/// </summary>
+		[Help("skipiostore", "override the -iostore commandline option to not run it")]
+		public bool SkipIoStore { private set; get; }
 
 		/// <summary>
 		/// Shared: true if this build is staged, command line: -stage
@@ -1685,6 +1708,11 @@ namespace AutomationTool
 		[Help("bundlename", "string to use as the bundle name when deploying to mobile device")]
         public string BundleName;
 
+		//<summary>
+		/// Stage: Specifies a list of extra targets that should be staged along with a client
+		/// </summary>
+		public ParamList<string> ExtraTargetsToStageWithClient = new ParamList<string>();
+
         /// <summary>
         /// On Windows, adds an executable to the root of the staging directory which checks for prerequisites being 
 		/// installed and launches the game with a path to the .uproject file.
@@ -2103,7 +2131,7 @@ namespace AutomationTool
 				}
 				else if (AvailableGameTargets.Count > 0)
 				{
-					if (AvailableEditorTargets.Count > 1)
+					if (AvailableGameTargets.Count > 1)
 					{
 						throw new AutomationException("There can be only one Game target per project.");
 					}
@@ -2113,12 +2141,26 @@ namespace AutomationTool
 
 				if (AvailableEditorTargets.Count > 0)
 				{
-					if (AvailableEditorTargets.Count > 1)
-					{
-						throw new AutomationException("There can be only one Editor target per project.");
-					}
+					string DefaultEditorTarget;
 
-					EditorTarget = AvailableEditorTargets.First();
+					if (EngineConfigs[BuildHostPlatform.Current.Platform].GetString("/Script/BuildSettings.BuildSettings", "DefaultEditorTarget", out DefaultEditorTarget))
+					{
+						if (!AvailableEditorTargets.Contains(DefaultEditorTarget))
+						{
+							throw new AutomationException(string.Format("A default editor target '{0}' was specified in engine.ini but does not exist", DefaultEditorTarget));
+						}
+
+						EditorTarget = DefaultEditorTarget;
+					}
+					else
+					{
+						if (AvailableEditorTargets.Count > 1)
+						{
+							throw new AutomationException("Project contains multiple editor targets but no default is set in engine.ini");
+						}
+
+						EditorTarget = AvailableEditorTargets.First();
+					}
 				}
 
 				if (AvailableServerTargets.Count > 0 && (DedicatedServer || Cook || CookOnTheFly)) // only if server is needed
@@ -2195,6 +2237,11 @@ namespace AutomationTool
 					}
 
 					ClientCookedTargetsList = new ParamList<string>(GameTarget);
+					
+					if (ExtraTargetsToStageWithClient != null)
+					{
+						ClientCookedTargetsList.AddRange(ExtraTargetsToStageWithClient);
+					}
 				}
 				else
 				{
@@ -2691,6 +2738,11 @@ namespace AutomationTool
 			{
 				throw new AutomationException("DiscVersion is required for generating remaster package.");
 			}*/
+
+			if ((IoStore && !SkipIoStore) && (!Pak || SkipPak))
+			{
+				throw new AutomationException("-iostore can only be used with -pak");
+			}
 		}
 
 		protected bool bLogged = false;
@@ -2766,6 +2818,8 @@ namespace AutomationTool
 				CommandUtils.LogLog("MapsToCook={0}", MapsToCook.ToString());
 				CommandUtils.LogLog("MapIniSectionsToCook={0}", MapIniSectionsToCook.ToString());
 				CommandUtils.LogLog("Pak={0}", Pak);
+				CommandUtils.LogLog("IoStore={0}", IoStore);
+				CommandUtils.LogLog("SkipIoStore={0}", SkipIoStore);
 				CommandUtils.LogLog("Package={0}", Package);
 				CommandUtils.LogLog("ForcePackageData={0}", ForcePackageData);
 				CommandUtils.LogLog("NullRHI={0}", NullRHI);

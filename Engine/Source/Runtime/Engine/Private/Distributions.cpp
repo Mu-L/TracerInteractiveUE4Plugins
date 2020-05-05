@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	Distributions.cpp: Implementation of distribution classes.
@@ -770,12 +770,11 @@ void FRawDistribution::GetValue3Random(float Time, float* InValue, struct FRando
 	const float* Entry1;
 	const float* Entry2;
 	float LerpAlpha = 0.0f;
-	FVector RandValues(
-		DIST_GET_RANDOM_VALUE(InRandomStream),
-		DIST_GET_RANDOM_VALUE(InRandomStream),
-		DIST_GET_RANDOM_VALUE(InRandomStream)
-		);
+	FVector RandValues;
 
+	RandValues[0] = DIST_GET_RANDOM_VALUE(InRandomStream);
+	RandValues[1] = DIST_GET_RANDOM_VALUE(InRandomStream);
+	RandValues[2] = DIST_GET_RANDOM_VALUE(InRandomStream);
 	switch(LookupTable.LockFlag)
 	{
 	case EDVLF_XY:
@@ -848,7 +847,7 @@ void FRawDistribution::GetValue(float Time, float* Value, int32 NumCoords, int32
 	}
 }
 
-UObject* FRawDistribution::TryGetDistributionObjectFromRawDistributionProperty(UStructProperty* Property, uint8* Data)
+UObject* FRawDistribution::TryGetDistributionObjectFromRawDistributionProperty(FStructProperty* Property, uint8* Data)
 {
 	// if the struct in this property is of type FRawDistributionFloat
 	if (Property->Struct->GetFName() == NAME_RawDistributionFloat)
@@ -1002,11 +1001,11 @@ bool HasBakedDistributionDataHelper(const UDistribution* GivenDistribution)
 {
 	if (UObject* Outer = GivenDistribution->GetOuter())
 	{
-		for (TFieldIterator<UProperty> It(Outer->GetClass()); It; ++It)
+		for (TFieldIterator<FProperty> It(Outer->GetClass()); It; ++It)
 		{
-			UProperty* Property = *It;
+			FProperty* Property = *It;
 
-			if (UStructProperty* StructProp = Cast<UStructProperty>(Property))
+			if (FStructProperty* StructProp = CastField<FStructProperty>(Property))
 			{
 				UObject* Distribution = FRawDistribution::TryGetDistributionObjectFromRawDistributionProperty(StructProp, reinterpret_cast<uint8*>(Outer));
 				if (Distribution == GivenDistribution)
@@ -1022,16 +1021,16 @@ bool HasBakedDistributionDataHelper(const UDistribution* GivenDistribution)
 					return false;
 				}
 			}
-			else if (UArrayProperty* ArrayProp = Cast<UArrayProperty>(Property))
+			else if (FArrayProperty* ArrayProp = CastField<FArrayProperty>(Property))
 			{
-				if (UStructProperty* InnerStructProp = Cast<UStructProperty>(ArrayProp->Inner))
+				if (FStructProperty* InnerStructProp = CastField<FStructProperty>(ArrayProp->Inner))
 				{
 					FScriptArrayHelper ArrayHelper(ArrayProp, Property->ContainerPtrToValuePtr<void>(Outer));
 					for (int32 Idx = 0; Idx < ArrayHelper.Num(); ++Idx)
 					{
-						for (UProperty* ArrayProperty = InnerStructProp->Struct->PropertyLink; ArrayProperty; ArrayProperty = ArrayProperty->PropertyLinkNext)
+						for (FProperty* ArrayProperty = InnerStructProp->Struct->PropertyLink; ArrayProperty; ArrayProperty = ArrayProperty->PropertyLinkNext)
 						{
-							if (UStructProperty* ArrayStructProp = Cast<UStructProperty>(ArrayProperty))
+							if (FStructProperty* ArrayStructProp = CastField<FStructProperty>(ArrayProperty))
 							{
 								UObject* Distribution = FRawDistribution::TryGetDistributionObjectFromRawDistributionProperty(ArrayStructProp, ArrayHelper.GetRawPtr(Idx));
 								if (Distribution == GivenDistribution)

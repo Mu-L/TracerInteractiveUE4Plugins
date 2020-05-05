@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /**
  * Commandlet to allow diff in P4V, and expose that functionality to the editor
@@ -33,9 +33,28 @@ bool UDiffAssetsCommandlet::ExportFilesToTextAndDiff(const FString& InParams)
 	TArray<FString> Switches;
 	ParseCommandLine(*Params, Tokens, Switches);
 
-	const FString AssetPackageExtension = FPackageName::GetAssetPackageExtension();
+	const FString EqualStr(TEXT("="));
+	const FString DiffCmdKey(TEXT("DiffCmd"));
+	TArray<FString> PositionalTokens;
 	FString DiffCmd;
-	if (!FParse::Value(*Params, TEXT("DiffCmd="), DiffCmd) || Tokens.Num() < 2)
+	for (FString& Token : Tokens)
+	{
+		FString Key, Value;
+		if (Token.Split(EqualStr, &Key, &Value))
+		{
+			if (DiffCmd.IsEmpty() && Key.Equals(DiffCmdKey, ESearchCase::IgnoreCase))
+			{
+				DiffCmd = Value;
+			}
+		}
+		else
+		{
+			PositionalTokens.Add(MoveTemp(Token));
+		}
+	}
+
+	const FString AssetPackageExtension = FPackageName::GetAssetPackageExtension();
+	if (DiffCmd.IsEmpty() || PositionalTokens.Num() < 2)
 	{
 		UE_LOG(LogDiffAssetsCommandlet, Warning, TEXT("Usage: UDiffAssets File1%s File2%s DiffCmd=\"C:/Program Files/Araxis/Araxis Merge/AraxisP4Diff.exe {1} {2}\""), *AssetPackageExtension, *AssetPackageExtension);
 		return false;
@@ -46,7 +65,7 @@ bool UDiffAssetsCommandlet::ExportFilesToTextAndDiff(const FString& InParams)
 		return false;
 	}
 
-	return ExportFilesToTextAndDiff(Tokens[0], Tokens[1], DiffCmd);
+	return ExportFilesToTextAndDiff(PositionalTokens[0], PositionalTokens[1], DiffCmd);
 }
 
 bool UDiffAssetsCommandlet::CopyFileToTempLocation(FString& InOutFilename)
@@ -180,14 +199,14 @@ bool UDiffAssetsCommandlet::ExportFilesToTextAndDiff(const FString& InFilename1,
 		}
 	}
 
-	FString ReplacedDiffCmd = DiffCommand.Replace(TEXT("{1}"), *TextFilename1).Replace(TEXT("{2}"), *TextFilename2);
+	FString ReplacedDiffCmd = DiffCommand.Replace(TEXT("{1}"), *TextFilename1, ESearchCase::CaseSensitive).Replace(TEXT("{2}"), *TextFilename2, ESearchCase::CaseSensitive);
 
-	int32 ArgsAt = DiffCommand.Find(TEXT("{1}")) - 1;
+	int32 ArgsAt = DiffCommand.Find(TEXT("{1}"), ESearchCase::CaseSensitive) - 1;
 	FString Args;
 	if (ArgsAt > 0)
 	{
 		Args = *ReplacedDiffCmd + ArgsAt + 1;
-		ReplacedDiffCmd = ReplacedDiffCmd.Left(ArgsAt);
+		ReplacedDiffCmd.LeftInline(ArgsAt, false);
 	}
 
 	if (!FPlatformProcess::CreateProc(*ReplacedDiffCmd, *Args, true, false, false, NULL, 0, NULL, NULL).IsValid())

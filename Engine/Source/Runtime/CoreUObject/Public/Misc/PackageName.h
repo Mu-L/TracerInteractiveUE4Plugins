@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	PackageName.h: Unreal package name utility functions.
@@ -7,6 +7,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/StringFwd.h"
 
 struct FFileStatData;
 
@@ -143,6 +144,7 @@ public:
 	 */
 	static bool IsShortPackageName(const FString& PossiblyLongName);
 	static bool IsShortPackageName(const FName PossiblyLongName);
+	static bool IsShortPackageName(FStringView PossiblyLongName);
 
 	/**
 	 * Converts package name to short name.
@@ -312,14 +314,59 @@ public:
 		return TextMapPackageExtension;
 	}
 
+	/**
+	 * Returns whether the passed in extension is a valid text package
+	 * extension. Extensions with and without trailing dots are supported.
+	 *
+	 * @param	Extension to test.
+	 * @return	True if Ext is either an text asset or a text map extension, otherwise false
+	 */
+	static bool IsTextPackageExtension(const TCHAR* Ext);
+
+	/**
+	 * Returns whether the passed in extension is a valid text asset package
+	 * extension. Extensions with and without trailing dots are supported.
+	 *
+	 * @param	Extension to test.
+	 * @return	True if Ext is a text asset extension, otherwise false
+	 */
+	static bool IsTextAssetPackageExtension(const TCHAR* Ext);
+
+	/**
+	 * Returns whether the passed in extension is a valid text map package
+	 * extension. Extensions with and without trailing dots are supported.
+	 *
+	 * @param	Extension to test.
+	 * @return	True if Ext is a text map extension, otherwise false
+	 */
+	static bool IsTextMapPackageExtension(const TCHAR* Ext);
+
 	/** 
-	 * Returns whether the passed in extension is a valid package 
+	 * Returns whether the passed in extension is a valid binary package
 	 * extension. Extensions with and without trailing dots are supported.
 	 *
 	 * @param	Extension to test. 
-	 * @return	True if Ext is either an asset or a map extension, otherwise false
+	 * @return	True if Ext is either a binary  asset or map extension, otherwise false
 	 */
 	static bool IsPackageExtension(const TCHAR* Ext);
+
+	/**
+	 * Returns whether the passed in extension is a valid binary asset package
+	 * extension. Extensions with and without trailing dots are supported.
+	 *
+	 * @param	Extension to test.
+	 * @return	True if Ext is a binary asset extension, otherwise false
+	 */
+	static bool IsAssetPackageExtension(const TCHAR* Ext);
+
+	/**
+	 * Returns whether the passed in extension is a valid binary map package
+	 * extension. Extensions with and without trailing dots are supported.
+	 *
+	 * @param	Extension to test.
+	 * @return	True if Ext is a binary asset extension, otherwise false
+	 */
+	static bool IsMapPackageExtension(const TCHAR* Ext);
 
 	/** 
 	 * Returns whether the passed in filename ends with any of the known
@@ -385,7 +432,10 @@ public:
 	 * @param OutObjectPath The path to the object.
 	 * @return True if the supplied export text path could be parsed
 	 */
-	static bool ParseExportTextPath(const FString& InExportTextPath, FString* OutClassName, FString* OutObjectPath);
+	static bool ParseExportTextPath(FStringView InExportTextPath, FStringView* OutClassName, FStringView* OutObjectPath);
+	static bool ParseExportTextPath(const FString& InExportTextPath, FString* OutClassName, FString* OutObjectPath);	
+	static bool ParseExportTextPath(const TCHAR* InExportTextPath, FStringView* OutClassName, FStringView* OutObjectPath);
+
 
 	/** 
 	 * Returns the path to the object referred to by the supplied export text path, excluding the class name.
@@ -393,7 +443,9 @@ public:
 	 * @param InExportTextPath The export text path for an object. Takes on the form: ClassName'ObjectPath'
 	 * @return The path to the object referred to by the supplied export path.
 	 */
-	static FString ExportTextPathToObjectPath(const FString& InExportTextPath);
+	static FStringView	ExportTextPathToObjectPath(FStringView InExportTextPath);
+	static FString		ExportTextPathToObjectPath(const FString& InExportTextPath);
+	static FString		ExportTextPathToObjectPath(const TCHAR* InExportTextPath);
 
 	/** 
 	 * Returns the name of the package referred to by the specified object path
@@ -403,6 +455,7 @@ public:
 	/** 
 	 * Returns the name of the object referred to by the specified object path
 	 */
+	static FStringView ObjectPathToObjectName(FStringView InObjectPath);
 	static FString ObjectPathToObjectName(const FString& InObjectPath);
 
 	/**
@@ -453,13 +506,20 @@ public:
 	 * @param Extension The extension for this package
 	 * @return True if the long package name was fixed up, false otherwise
 	 */
-	static bool FixPackageNameCase(FString& LongPackageName, const FString& Extension);
+	static bool FixPackageNameCase(FString& LongPackageName, FStringView Extension);
 
 	UE_DEPRECATED(4.17, "Deprecated. Call TryConvertLongPackageNameToFilename instead, which also works on nested paths")
 	static bool ConvertRootPathToContentPath(const FString& RootPath, FString& OutContentPath);
 
 	UE_DEPRECATED(4.17, "Deprecated. Call TryConvertFilenameToLongPackageName instead")
 	static FString PackageFromPath(const TCHAR* InPathName);
+
+	/** Override whether a package exist or not. */
+	DECLARE_DELEGATE_RetVal_OneParam(bool, FDoesPackageExistOverride, FName);
+	static FDoesPackageExistOverride& DoesPackageExistOverride()
+	{
+		return DoesPackageExistOverrideDelegate;
+	}
 
 private:
 
@@ -472,14 +532,17 @@ private:
 	 * Internal function used to rename filename to long package name.
 	 *
 	 * @param InFilename
-	 * @return Long package name.
+	 * @param OutPackageName Long package name.
 	 */
-	static FString InternalFilenameToLongPackageName(const FString& InFilename);
+	static void InternalFilenameToLongPackageName(FStringView InFilename, FStringBuilderBase& OutPackageName);
 
 	/** Event that is triggered when a new content path is mounted */
 	static FOnContentPathMountedEvent OnContentPathMountedEvent;
 
 	/** Event that is triggered when a new content path is removed */
 	static FOnContentPathDismountedEvent OnContentPathDismountedEvent;
+
+	/** Delegate used to check whether a package exist without using the filesystem. */
+	static FDoesPackageExistOverride DoesPackageExistOverrideDelegate;
 };
 

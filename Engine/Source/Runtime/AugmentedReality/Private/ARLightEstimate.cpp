@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ARLightEstimate.h"
 
@@ -19,6 +19,12 @@ void UARBasicLightEstimate::SetLightEstimate(FVector InRGBScaleFactor, float InP
 	AmbientColor = FLinearColor(InRGBScaleFactor);
 	
 	// TODO: Try to convert ambient color to color tempature?
+}
+
+void UARBasicLightEstimate::SetLightEstimate(float InColorTemperatureKelvin, FLinearColor InAmbientColor)
+{
+	AmbientColorTemperatureKelvin = InColorTemperatureKelvin;
+	AmbientColor = InAmbientColor;
 }
 
 float UARBasicLightEstimate::GetAmbientIntensityLumens() const

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -34,6 +34,9 @@ public:
 
 	/** Update the cache for the current thread */
 	void UpdateCache();
+
+	/** Delegate called after releasing the rendering resources used by this font service */
+	FOnReleaseFontResources& OnReleaseResources();
 
 private:
 	/** Constructor - must be called from the game thread */

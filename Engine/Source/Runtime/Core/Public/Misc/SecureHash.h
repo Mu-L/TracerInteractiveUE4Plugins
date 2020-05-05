@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,9 +7,14 @@
 #include "Containers/UnrealString.h"
 #include "Containers/Map.h"
 #include "Containers/StringConv.h"
+#include "Containers/StringFwd.h"
+#include "Containers/StringView.h"
 #include "Stats/Stats.h"
 #include "Async/AsyncWork.h"
 #include "Serialization/BufferReader.h"
+#include "String/BytesToHex.h"
+#include "String/HexToBytes.h"
+#include "Serialization/MemoryLayout.h"
 
 struct FMD5Hash;
 
@@ -204,10 +209,11 @@ public:
 	{
 		return BytesToHex((const uint8*)Hash, sizeof(Hash));
 	}
-	void FromString(const FString& Src)
+
+	inline void FromString(const FStringView& Src)
 	{
 		check(Src.Len() == 40);
-		HexToBytes(Src, Hash);
+		UE::String::HexToBytes(Src, Hash);
 	}
 
 	friend bool operator==(const FSHAHash& X, const FSHAHash& Y)
@@ -220,6 +226,11 @@ public:
 		return FMemory::Memcmp(&X.Hash, &Y.Hash, sizeof(X.Hash)) != 0;
 	}
 
+	friend bool operator<(const FSHAHash& X, const FSHAHash& Y)
+	{
+		return FMemory::Memcmp(&X.Hash, &Y.Hash, sizeof(X.Hash)) < 0;
+	}
+
 	friend CORE_API FArchive& operator<<( FArchive& Ar, FSHAHash& G );
 	
 	friend uint32 GetTypeHash(const FSHAHash& InKey)
@@ -230,6 +241,16 @@ public:
 	friend CORE_API FString LexToString(const FSHAHash&);
 	friend CORE_API void LexFromString(FSHAHash& Hash, const TCHAR*);
 };
+
+namespace Freeze
+{
+	CORE_API void IntrinsicToString(const FSHAHash& Object, const FTypeLayoutDesc& TypeDesc, const FPlatformTypeLayoutParameters& LayoutParams, FMemoryToStringContext& OutContext);
+}
+
+DECLARE_INTRINSIC_TYPE_LAYOUT(FSHAHash);
+
+inline FStringBuilderBase& operator<<(FStringBuilderBase& Builder, const FSHAHash& Hash) { UE::String::BytesToHex(Hash.Hash, Builder); return Builder; }
+inline FAnsiStringBuilderBase& operator<<(FAnsiStringBuilderBase& Builder, const FSHAHash& Hash) { UE::String::BytesToHex(Hash.Hash, Builder); return Builder; }
 
 class CORE_API FSHA1
 {

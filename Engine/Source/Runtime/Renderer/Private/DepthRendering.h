@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	DepthRendering.h: Depth rendering definitions.
@@ -27,6 +27,8 @@ enum EDepthDrawingMode
 	DDM_AllOccluders	= 2,
 	// Full prepass, every object must be drawn and every pixel must match the base pass depth
 	DDM_AllOpaque		= 3,
+	// Masked materials only
+	DDM_MaskedOnly = 4,
 };
 
 extern const TCHAR* GetDepthDrawingModeString(EDepthDrawingMode Mode);
@@ -66,15 +68,15 @@ public:
 		// Only the local vertex factory supports the position-only stream
 		if (bUsePositionOnlyStream)
 		{
-			return Parameters.VertexFactoryType->SupportsPositionOnly() && Parameters.Material->IsSpecialEngineMaterial();
+			return Parameters.VertexFactoryType->SupportsPositionOnly() && Parameters.MaterialParameters.bIsSpecialEngineMaterial;
 		}
 
 		// Only compile for the default material and masked materials
 		return (
-			Parameters.Material->IsSpecialEngineMaterial() ||
-			!Parameters.Material->WritesEveryPixel() ||
-			Parameters.Material->MaterialMayModifyMeshPosition() ||
-			Parameters.Material->IsTranslucencyWritingCustomDepth());
+			Parameters.MaterialParameters.bIsSpecialEngineMaterial ||
+			!Parameters.MaterialParameters.bWritesEveryPixel ||
+			Parameters.MaterialParameters.bMaterialMayModifyMeshPosition ||
+			Parameters.MaterialParameters.bIsTranslucencyWritingCustomDepth);
 	}
 
 	void GetShaderBindings(
@@ -136,6 +138,7 @@ public:
 /**
 * A pixel shader for rendering the depth of a mesh.
 */
+template <bool bUsesMobileColorValue>
 class FDepthOnlyPS : public FMeshMaterialShader
 {
 	DECLARE_SHADER_TYPE(FDepthOnlyPS,MeshMaterial);
@@ -143,11 +146,11 @@ public:
 
 	static bool ShouldCompilePermutation(const FMeshMaterialShaderPermutationParameters& Parameters)
 	{
-		return 
-			// Compile for materials that are masked.
-			(!Parameters.Material->WritesEveryPixel() || Parameters.Material->HasPixelDepthOffsetConnected() || Parameters.Material->IsTranslucencyWritingCustomDepth()) 
+		return
+			// Compile for materials that are masked, avoid generating permutation for other platforms if bUsesMobileColorValue is true
+			((!Parameters.MaterialParameters.bWritesEveryPixel || Parameters.MaterialParameters.bHasPixelDepthOffsetConnected || Parameters.MaterialParameters.bIsTranslucencyWritingCustomDepth) && (!bUsesMobileColorValue || IsMobilePlatform(Parameters.Platform)))
 			// Mobile uses material pixel shader to write custom stencil to color target
-			|| (IsMobilePlatform(Parameters.Platform) && (Parameters.Material->IsDefaultMaterial() || Parameters.Material->MaterialMayModifyMeshPosition()));
+			|| (IsMobilePlatform(Parameters.Platform) && (Parameters.MaterialParameters.bIsDefaultMaterial || Parameters.MaterialParameters.bMaterialMayModifyMeshPosition));
 	}
 
 	FDepthOnlyPS(const ShaderMetaType::CompiledShaderInitializerType& Initializer):
@@ -161,10 +164,17 @@ public:
 	{
 		FMeshMaterialShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 		
+		OutEnvironment.SetDefine(TEXT("ALLOW_DEBUG_VIEW_MODES"), AllowDebugViewmodes(Parameters.Platform));
 		if (IsMobilePlatform(Parameters.Platform))
 		{
 			// No access to scene textures during depth rendering on mobile
 			OutEnvironment.SetDefine(TEXT("SCENE_TEXTURES_DISABLED"), 1u);
+
+			OutEnvironment.SetDefine(TEXT("OUTPUT_MOBILE_COLOR_VALUE"), bUsesMobileColorValue ? 1u : 0u);
+		}
+		else
+		{
+			OutEnvironment.SetDefine(TEXT("OUTPUT_MOBILE_COLOR_VALUE"), 0u);
 		}
 	}
 
@@ -185,27 +195,19 @@ public:
 		ShaderBindings.Add(MobileColorValue, ShaderElementData.MobileColorValue);
 	}
 
-	virtual bool Serialize(FArchive& Ar) override
-	{
-		bool bShaderHasOutdatedParameters = FMeshMaterialShader::Serialize(Ar);
-		Ar << MobileColorValue;
-		return bShaderHasOutdatedParameters;
-	}
-
-	FShaderParameter MobileColorValue;
+	LAYOUT_FIELD(FShaderParameter, MobileColorValue);
 };
 
-template <bool bPositionOnly>
+template <bool bPositionOnly, bool bUsesMobileColorValue>
 void GetDepthPassShaders(
 	const FMaterial& Material,
 	FVertexFactoryType* VertexFactoryType,
 	ERHIFeatureLevel::Type FeatureLevel,
-	FDepthOnlyHS*& HullShader,
-	FDepthOnlyDS*& DomainShader,
-	TDepthOnlyVS<bPositionOnly>*& VertexShader,
-	FDepthOnlyPS*& PixelShader,
-	FShaderPipeline*& ShaderPipeline,
-	bool bUsesMobileColorValue);
+	TShaderRef<FDepthOnlyHS>& HullShader,
+	TShaderRef<FDepthOnlyDS>& DomainShader,
+	TShaderRef<TDepthOnlyVS<bPositionOnly>>& VertexShader,
+	TShaderRef<FDepthOnlyPS<bUsesMobileColorValue>>& PixelShader,
+	FShaderPipelineRef& ShaderPipeline);
 
 extern void CreateDepthPassUniformBuffer(
 	FRHICommandListImmediate& RHICmdList, 

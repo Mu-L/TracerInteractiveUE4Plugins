@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HttpManager.h"
 #include "HttpModule.h"
@@ -108,6 +108,11 @@ void FHttpManager::OnAfterFork()
 
 }
 
+void FHttpManager::UpdateConfigs()
+{
+	// empty
+}
+
 FHttpThread* FHttpManager::CreateHttpThread()
 {
 	return new FHttpThread();
@@ -115,6 +120,8 @@ FHttpThread* FHttpManager::CreateHttpThread()
 
 void FHttpManager::Flush(bool bShutdown)
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_FHttpManager_Flush);
+
 	FScopeLock ScopeLock(&RequestLock);
 	double MaxFlushTimeSeconds = -1.0; // default to no limit
 	GConfig->GetDouble(TEXT("HTTP"), TEXT("MaxFlushTimeSeconds"), MaxFlushTimeSeconds, GEngineIni);

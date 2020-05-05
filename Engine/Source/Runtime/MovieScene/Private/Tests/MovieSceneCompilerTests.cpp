@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MovieSceneTestObjects.h"
 #include "Misc/AutomationTest.h"
@@ -46,7 +46,7 @@ bool FMovieSceneCompilerPerfTest::RunTest(const FString& Parameters)
 	{
 		FMovieSceneRootEvaluationTemplateInstance RootInstance;
 		virtual FMovieSceneRootEvaluationTemplateInstance& GetEvaluationTemplate() override { return RootInstance; }
-		virtual void UpdateCameraCut(UObject* CameraObject, UObject* UnlockIfCameraObject = nullptr, bool bJumpCut = false) override {}
+		virtual void UpdateCameraCut(UObject* CameraObject, const EMovieSceneCameraCutParams& CameraCutParams) override {}
 		virtual void SetViewportSettings(const TMap<FViewportClient*, EMovieSceneViewportParams>& ViewportParamsMap) override {}
 		virtual void GetViewportSettings(TMap<FViewportClient*, EMovieSceneViewportParams>& ViewportParamsMap) const override {}
 		virtual EMovieScenePlayerStatus::Type GetPlaybackStatus() const override { return EMovieScenePlayerStatus::Playing; }
@@ -87,6 +87,40 @@ TRange<FFrameNumber> MakeRange(FFrameNumber LowerBound, FFrameNumber UpperBound,
 		: UpperType == ERangeBoundTypes::Inclusive
 			? TRange<FFrameNumber>(TRangeBound<FFrameNumber>::Exclusive(LowerBound), TRangeBound<FFrameNumber>::Inclusive(UpperBound))
 			: TRange<FFrameNumber>(TRangeBound<FFrameNumber>::Exclusive(LowerBound), TRangeBound<FFrameNumber>::Exclusive(UpperBound));
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMovieSceneCompilerEvaluationRangeTest, "System.Engine.Sequencer.Compiler.EvaluationRange", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FMovieSceneCompilerEvaluationRangeTest::RunTest(const FString& Parameters)
+{
+	double StartSecondTimes   [] = { 400.0f, 400.0f, 400.0f, 400.0f, 400.1f, 400.5f, 400.8f };
+	double DurationSecondTimes[] = { 400.0f, 400.1f, 400.5f, 400.8f, 400.0f, 400.0f, 400.0f };
+
+	FFrameRate TickResolution(1, 1);
+
+	for (int32 Index = 0; Index < 7; ++Index)
+	{
+		double StartSeconds = StartSecondTimes[Index];
+		double DurationSeconds = DurationSecondTimes[Index];
+
+		FFrameTime LowerBound = StartSeconds * TickResolution;
+		FFrameTime UpperBound = (StartSeconds + DurationSeconds) * TickResolution;
+
+		FMovieSceneEvaluationRange EvaluatedRange(TRange<FFrameTime>(LowerBound, UpperBound), TickResolution, EPlayDirection::Forwards);
+
+		TRange<FFrameTime> TimeRange = EvaluatedRange.GetRange();
+		UTEST_EQUAL("Range - Lower Bound", TimeRange.GetLowerBoundValue(), LowerBound);
+		UTEST_EQUAL("Range - Upper Bound", TimeRange.GetUpperBoundValue(), UpperBound);
+
+		TRange<FFrameNumber> FrameNumberRange = EvaluatedRange.GetFrameNumberRange();
+
+		// Subframe evaluation range tests
+		// For example, a range of [400.5, 800.5[ will return a lower bound frame of 401 since the frame is already beyond 400
+		UTEST_EQUAL("FrameNumberRange - Lower Bound Frame", FrameNumberRange.GetLowerBoundValue().Value, FMath::CeilToInt(StartSeconds));
+
+		// For example, a range of [400, 800.5[ will return an upper bound frame of 801 so that a key at 800 will be evaluated
+		UTEST_EQUAL("FrameNumberRange - Upper Bound Frame", FrameNumberRange.GetUpperBoundValue().Value, FMath::CeilToInt(StartSeconds + DurationSeconds));
+	}
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMovieSceneCompilerRangeTest, "System.Engine.Sequencer.Compiler.Ranges", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -331,4 +365,72 @@ bool FMovieSceneCompilerEmptySpaceOnTheFlyTest::RunTest(const FString& Parameter
 
 	return true;
 }
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMovieSceneCompilerSubSequencesTest, "System.Engine.Sequencer.Compiler.SubSequences", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FMovieSceneCompilerSubSequencesTest::RunTest(const FString& Parameters)
+{
+	struct FTest
+	{
+		TArray<TRange<FFrameNumber>> CompileRanges;
+	};
+
+	struct FTemplateStore : public IMovieSceneSequenceTemplateStore
+	{
+		FTemplateStore(const TArray<UTestMovieSceneSequence*>& InExpectedSequences)
+			: ExpectedSequences(InExpectedSequences)
+		{
+			Templates.SetNum(InExpectedSequences.Num());
+		}
+
+		FMovieSceneEvaluationTemplate& AccessTemplate(UMovieSceneSequence& InSequence) override
+		{
+			for (int32 i = 0; i < ExpectedSequences.Num(); ++i)
+			{
+				if (ExpectedSequences[i] == &InSequence)
+				{
+					return Templates[i];
+				}
+			}
+			check(false);
+			return Templates[0];
+		}
+
+	private:
+		TArray<UTestMovieSceneSequence*> ExpectedSequences;
+		TArray<FMovieSceneEvaluationTemplate> Templates;
+	};
+
+	UTestMovieSceneSequence* RootSequence = NewObject<UTestMovieSceneSequence>(GetTransientPackage());
+	UTestMovieSceneSubTrack* RootSubTrack = RootSequence->MovieScene->AddMasterTrack<UTestMovieSceneSubTrack>();
+	
+	UTestMovieSceneSequence* Shot1Sequence = NewObject<UTestMovieSceneSequence>(GetTransientPackage());
+	Shot1Sequence->GetMovieScene()->SetPlaybackRange(0, 100);
+	
+	UTestMovieSceneSubSection* Shot1SubSection = NewObject<UTestMovieSceneSubSection>(RootSubTrack);
+	Shot1SubSection->SetRange(TRange<FFrameNumber>(0, 100));
+	Shot1SubSection->SetSequence(Shot1Sequence);
+	RootSubTrack->SectionArray.Add(Shot1SubSection);
+	
+	UTestMovieSceneTrack* Shot1Track = Shot1Sequence->MovieScene->AddMasterTrack<UTestMovieSceneTrack>();
+	UTestMovieSceneSection* Shot1Section = NewObject<UTestMovieSceneSection>(Shot1Track);
+	Shot1Section->SetRange(TRange<FFrameNumber>(0, 60));
+	Shot1Track->SectionArray.Add(Shot1Section);
+	
+	FMovieSceneSequenceID Shot1SequenceID = Shot1SubSection->GetSequenceID();
+
+	{
+		FTemplateStore Store({ RootSequence, Shot1Sequence });
+		FMovieSceneCompiler::Compile(*RootSequence, Store);
+
+		const FMovieSceneEvaluationTemplate& RootTemplate = Store.AccessTemplate(*RootSequence);
+		UTEST_EQUAL("Ranges count", RootTemplate.EvaluationField.GetRanges().Num(), 3);
+		UTEST_EQUAL("First range", RootTemplate.EvaluationField.GetRange(1), TRange<FFrameNumber>(0, 60));
+		const FMovieSceneEvaluationGroup& EvalGroup = RootTemplate.EvaluationField.GetGroup(1);
+		UTEST_EQUAL("Sequence ID", EvalGroup.SegmentPtrLUT[0].SequenceID, Shot1SequenceID);
+	}
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

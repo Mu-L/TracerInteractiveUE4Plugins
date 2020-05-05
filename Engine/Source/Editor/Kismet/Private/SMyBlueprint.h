@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -188,9 +188,13 @@ private:
 	void OnToggleAlwaysShowInterfacesInOverrides();
 	bool GetAlwaysShowInterfacesInOverrides() const;
 
-	/** Support functions for view options for bShowParentClassInOverrides blueprint editor setting*/
+	/** Support functions for view options for bShowParentClassInOverrides blueprint editor setting */
 	void OnToggleShowParentClassInOverrides();
 	bool GetShowParentClassInOverrides() const;
+
+	/** Support functions for view options for bShowAccessSpecifier blueprint editor setting */
+	void OnToggleShowAccessSpecifier();
+	bool GetShowAccessSpecifier() const;
 
 	/** Helper function to open the selected graph */
 	void OpenGraph(FDocumentTracker::EOpenDocumentCause InCause);

@@ -1,8 +1,8 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MeshRefinerBase.h"
 #include "DynamicMeshAttributeSet.h"
-
+#include "DynamicMeshChangeTracker.h"
 
 
 
@@ -107,7 +107,7 @@ bool FMeshRefinerBase::CheckIfFlipInvertsNormals(int a, int b, int c, int d, int
 bool FMeshRefinerBase::CanCollapseEdge(int eid, int a, int b, int c, int d, int tc, int td, int& collapse_to) const
 {
 	collapse_to = -1;
-	if (Constraints == nullptr)
+	if (!Constraints)
 	{
 		return true;
 	}
@@ -157,7 +157,7 @@ bool FMeshRefinerBase::CanCollapseEdge(int eid, int a, int b, int c, int d, int 
 bool FMeshRefinerBase::CanCollapseVertex(int eid, int a, int b, int& collapse_to) const
 {
 	collapse_to = -1;
-	if (Constraints == nullptr)
+	if (!Constraints)
 	{
 		return true;
 	}
@@ -232,6 +232,44 @@ bool FMeshRefinerBase::CanCollapseVertex(int eid, int a, int b, int& collapse_to
 
 
 
+void FMeshRefinerBase::SetMeshChangeTracker(FDynamicMeshChangeTracker* Tracker)
+{
+	ActiveChangeTracker = Tracker;
+}
+
+
+void FMeshRefinerBase::SaveTriangleBeforeModify(int32 TriangleID)
+{
+	if (ActiveChangeTracker)
+	{
+		ActiveChangeTracker->SaveTriangle(TriangleID, true);
+	}
+}
+
+void FMeshRefinerBase::SaveVertexTrianglesBeforeModify(int32 VertexID)
+{
+	if (ActiveChangeTracker)
+	{
+		for (int32 TriangleID : Mesh->VtxTrianglesItr(VertexID))
+		{
+			ActiveChangeTracker->SaveTriangle(TriangleID, true );
+		}
+	}
+}
+
+
+void FMeshRefinerBase::SaveEdgeBeforeModify(int32 EdgeID)
+{
+	if (ActiveChangeTracker)
+	{
+		FIndex2i EdgeVerts = Mesh->GetEdgeV(EdgeID);
+		SaveVertexTrianglesBeforeModify(EdgeVerts.A);
+		SaveVertexTrianglesBeforeModify(EdgeVerts.B);
+	}
+}
+
+
+
 void FMeshRefinerBase::RuntimeDebugCheck(int eid)
 {
 	if (DebugEdges.Contains(eid))
@@ -247,7 +285,7 @@ void FMeshRefinerBase::DoDebugChecks(bool bEndOfPass)
 
 	if ((DEBUG_CHECK_LEVEL > 2) || (bEndOfPass && DEBUG_CHECK_LEVEL > 1))
 	{
-		Mesh->CheckValidity(true);
+		Mesh->CheckValidity(FDynamicMesh3::FValidityOptions::Permissive());
 		DebugCheckUVSeamConstraints();
 	}
 }
@@ -256,7 +294,7 @@ void FMeshRefinerBase::DoDebugChecks(bool bEndOfPass)
 void FMeshRefinerBase::DebugCheckUVSeamConstraints()
 {
 	// verify UV constraints (temporary?)
-	if (Mesh->HasAttributes() && Mesh->Attributes()->PrimaryUV() != nullptr && Constraints != nullptr)
+	if (Mesh->HasAttributes() && Mesh->Attributes()->PrimaryUV() != nullptr && Constraints)
 	{
 		for (int eid : Mesh->EdgeIndicesItr())
 		{
@@ -280,7 +318,7 @@ void FMeshRefinerBase::DebugCheckUVSeamConstraints()
 
 void FMeshRefinerBase::DebugCheckVertexConstraints()
 {
-	if (Constraints == nullptr)
+	if (!Constraints)
 	{
 		return;
 	}

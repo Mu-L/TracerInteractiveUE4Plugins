@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	OpenGLVertexBuffer.cpp: OpenGL texture RHI implementation.
@@ -307,18 +307,10 @@ FRHITexture* FOpenGLDynamicRHI::CreateOpenGLRHITextureOnly(const uint32 SizeX, c
 		NumSamples = 1;
 	}
 
-	bool bNoSRGBSupport = (GMaxRHIFeatureLevel == ERHIFeatureLevel::ES2);
-
 	if ((Flags & TexCreate_RenderTargetable) && Format == PF_B8G8R8A8 && !FOpenGL::SupportsBGRA8888RenderTarget())
 	{
 		// Some android devices does not support BGRA as a color attachment
 		Format = PF_R8G8B8A8;
-	}
-
-	if (bNoSRGBSupport)
-	{
-		// Remove sRGB read flag when not supported
-		Flags &= ~TexCreate_SRGB;
 	}
 
 	GLenum Target = GL_NONE;
@@ -429,7 +421,7 @@ void FOpenGLDynamicRHI::InitializeGLTexture(FRHITexture* Texture, uint32 SizeX, 
 			}
 		}
 		glTexParameteri(Target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-		glTexParameteri(Target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(Target, GL_TEXTURE_MIN_FILTER, NumMips > 1 ? GL_NEAREST_MIPMAP_NEAREST : GL_NEAREST);
 		if( FOpenGL::SupportsTextureFilterAnisotropic() )
 		{
 			glTexParameteri(Target, GL_TEXTURE_MAX_ANISOTROPY_EXT, 1);
@@ -711,31 +703,6 @@ void FOpenGLDynamicRHI::InitializeGLTexture(FRHITexture* Texture, uint32 SizeX, 
 	// next operation that needs the stage will switch something else in on it.
 }
 
-#if PLATFORM_ANDROIDESDEFERRED // Flithy hack to workaround radr://16011763
-GLuint FOpenGLTextureBase::GetOpenGLFramebuffer(uint32 ArrayIndices, uint32 MipmapLevels)
-{
-	GLuint FBO = 0;
-	switch(Attachment)
-	{
-		case GL_COLOR_ATTACHMENT0:
-		{
-			FOpenGLTextureBase* RenderTarget[] = {this};
-			FBO = OpenGLRHI->GetOpenGLFramebuffer(1, RenderTarget, &ArrayIndices, &MipmapLevels, NULL);
-			break;
-		}
-		case GL_DEPTH_ATTACHMENT:
-		case GL_DEPTH_STENCIL_ATTACHMENT:
-		{
-			FBO = OpenGLRHI->GetOpenGLFramebuffer(1, NULL, &ArrayIndices, &MipmapLevels, this);
-			break;
-		}
-		default:
-			break;
-	}
-	return FBO;
-}
-#endif
-
 template<typename RHIResourceType>
 void TOpenGLTexture<RHIResourceType>::Resolve(uint32 MipIndex,uint32 ArrayIndex)
 {
@@ -757,12 +724,6 @@ void TOpenGLTexture<RHIResourceType>::Resolve(uint32 MipIndex,uint32 ArrayIndex)
 	const uint32 MipSizeY = FMath::Max(this->GetSizeY() >> MipIndex,BlockSizeY);
 	uint32 NumBlocksX = (MipSizeX + BlockSizeX - 1) / BlockSizeX;
 	uint32 NumBlocksY = (MipSizeY + BlockSizeY - 1) / BlockSizeY;
-	if ( PixelFormat == PF_PVRTC2 || PixelFormat == PF_PVRTC4 )
-	{
-		// PVRTC has minimum 2 blocks width and height
-		NumBlocksX = FMath::Max<uint32>(NumBlocksX, 2);
-		NumBlocksY = FMath::Max<uint32>(NumBlocksY, 2);
-	}
 	const uint32 MipBytes = NumBlocksX * NumBlocksY * BlockBytes;
 	
 	const int32 BufferIndex = MipIndex * (bCubemap ? 6 : 1) * this->GetEffectiveSizeZ() + ArrayIndex;
@@ -791,20 +752,6 @@ void TOpenGLTexture<RHIResourceType>::Resolve(uint32 MipIndex,uint32 ArrayIndex)
 	
 	glBindBuffer( GL_PIXEL_PACK_BUFFER, PixelBuffer->Resource );
 
-#if PLATFORM_ANDROIDESDEFERRED // glReadPixels is async with PBOs - glGetTexImage is not: radr://16011763
-	if(Attachment == GL_COLOR_ATTACHMENT0 && !GLFormat.bCompressed)
-	{
-		GLuint SourceFBO = GetOpenGLFramebuffer(ArrayIndex, MipIndex);
-		check(SourceFBO > 0);
-		glBindFramebuffer(UGL_READ_FRAMEBUFFER, SourceFBO);
-		FOpenGL::ReadBuffer(Attachment);
-		glPixelStorei(GL_PACK_ALIGNMENT, 1);
-		glReadPixels(0, 0, MipSizeX, MipSizeY, GLFormat.Format, GLFormat.Type, 0 );
-		glPixelStorei(GL_PACK_ALIGNMENT, 4);
-		ContextState.Framebuffer = (GLuint)-1;
-	}
-	else
-#endif
 	{
 		if( this->GetSizeZ() )
 		{
@@ -854,12 +801,6 @@ uint32 TOpenGLTexture<RHIResourceType>::GetLockSize(uint32 InMipIndex, uint32 Ar
 	const uint32 MipSizeY = FMath::Max(this->GetSizeY() >> InMipIndex, BlockSizeY);
 	uint32 NumBlocksX = (MipSizeX + BlockSizeX - 1) / BlockSizeX;
 	uint32 NumBlocksY = (MipSizeY + BlockSizeY - 1) / BlockSizeY;
-	if (PixelFormat == PF_PVRTC2 || PixelFormat == PF_PVRTC4)
-	{
-		// PVRTC has minimum 2 blocks width and height
-		NumBlocksX = FMath::Max<uint32>(NumBlocksX, 2);
-		NumBlocksY = FMath::Max<uint32>(NumBlocksY, 2);
-	}
 	const uint32 MipBytes = NumBlocksX * NumBlocksY * BlockBytes;
 	DestStride = NumBlocksX * BlockBytes;
 	return MipBytes;
@@ -1223,24 +1164,6 @@ void TOpenGLTexture<RHIResourceType>::Unlock(uint32 MipIndex,uint32 ArrayIndex)
 		
 		bool bIsCompressed = GLFormat.bCompressed;
 		GLint internalFormat = GLFormat.InternalFormat[bSRGB];
-#if PLATFORM_ANDROID
-		uint8* DecompressedPointer = nullptr;
-		if (bIsCompressed)
-		{
-			if (!FOpenGL::SupportsETC2() && this->GetFormat() == PF_ETC2_RGBA)
-			{
-				bIsCompressed = false;
-				internalFormat = GL_RGBA;
-
-				DecompressTexture((uint8_t *)LockedBuffer, FMath::Max<uint32>(1, (this->GetSizeX() >> MipIndex)), FMath::Max<uint32>(1, (this->GetSizeY() >> MipIndex)), GLFormat.InternalFormat[bSRGB], &DecompressedPointer);
-				if (!DecompressedPointer)
-				{
-					UE_LOG(LogRHI, Fatal, TEXT("ETC2 texture compression failed for fallback on ETC1 device."));
-				}
-				LockedBuffer = DecompressedPointer;
-			}
-		}
-#endif // PLATFORM_ANDROID
 
 		if (bIsCompressed)
 		{
@@ -1315,12 +1238,6 @@ void TOpenGLTexture<RHIResourceType>::Unlock(uint32 MipIndex,uint32 ArrayIndex)
 			// Unlock "PixelBuffer" and free the temp memory after the texture upload.
 			PixelBuffer->Unlock();
 		}
-#if PLATFORM_ANDROID
-		if (DecompressedPointer)
-		{
-			free(DecompressedPointer);
-		}
-#endif // PLATFORM_ANDROID
 	}
 
 	// No need to restore texture stage; leave it like this,
@@ -1401,12 +1318,6 @@ void TOpenGLTexture<RHIResourceType>::CloneViaPBO( TOpenGLTexture<RHIResourceTyp
 			const uint32 DataSizeY = FMath::Max(MipSizeY,BlockSizeY);
 			uint32 NumBlocksX = (DataSizeX + BlockSizeX - 1) / BlockSizeX;
 			uint32 NumBlocksY = (DataSizeY + BlockSizeY - 1) / BlockSizeY;
-			if ( PixelFormat == PF_PVRTC2 || PixelFormat == PF_PVRTC4 )
-			{
-				// PVRTC has minimum 2 blocks width and height
-				NumBlocksX = FMath::Max<uint32>(NumBlocksX, 2);
-				NumBlocksY = FMath::Max<uint32>(NumBlocksY, 2);
-			}
 
 			const uint32 MipBytes = NumBlocksX * NumBlocksY * BlockBytes;
 			const int32 BufferIndex = DstMipIndex * (bCubemap ? 6 : 1) * this->GetEffectiveSizeZ() + ArrayIndex;
@@ -1429,20 +1340,6 @@ void TOpenGLTexture<RHIResourceType>::CloneViaPBO( TOpenGLTexture<RHIResourceTyp
 			
 			glBindBuffer( GL_PIXEL_PACK_BUFFER, PixelBuffer->Resource );
 			
-#if PLATFORM_ANDROIDESDEFERRED // glReadPixels is async with PBOs - glGetTexImage is not: radr://16011763
-			if(Attachment == GL_COLOR_ATTACHMENT0 && !GLFormat.bCompressed)
-			{
-				GLuint SourceFBO = Src->GetOpenGLFramebuffer(ArrayIndex, SrcMipIndex);
-				check(SourceFBO > 0);
-				glBindFramebuffer(UGL_READ_FRAMEBUFFER, SourceFBO);
-				FOpenGL::ReadBuffer(Attachment);
-				glPixelStorei(GL_PACK_ALIGNMENT, 1);
-				glReadPixels(0, 0, MipSizeX, MipSizeY, GLFormat.Format, GLFormat.Type, 0 );
-				glPixelStorei(GL_PACK_ALIGNMENT, 4);
-				ContextState.Framebuffer = (GLuint)-1;
-			}
-			else
-#endif
 			if (GLFormat.bCompressed)
 			{
 				FOpenGL::GetCompressedTexImage(Src->bCubemap ? GL_TEXTURE_CUBE_MAP_POSITIVE_X + ArrayIndex : Src->Target,
@@ -1621,12 +1518,6 @@ FTexture2DArrayRHIRef FOpenGLDynamicRHI::RHICreateTexture2DArray(uint32 SizeX,ui
 		NumMips = FindMaxMipmapLevel(SizeX, SizeY);
 	}
 
-	if (GMaxRHIFeatureLevel == ERHIFeatureLevel::ES2)
-	{
-		// Remove sRGB read flag when not supported
-		Flags &= ~TexCreate_SRGB;
-	}
-
 	GLuint TextureID = 0;
 	FOpenGL::GenTextures(1, &TextureID);
 
@@ -1664,7 +1555,7 @@ FTexture2DArrayRHIRef FOpenGLDynamicRHI::RHICreateTexture2DArray(uint32 SizeX,ui
 	uint8* Data = Info.BulkData ? (uint8*)Info.BulkData->GetResourceBulkData() : NULL;
 	uint32 MipOffset = 0;
 
-	FOpenGL::TexStorage3D( Target, NumMips, GLFormat.InternalFormat[bSRGB], SizeX, SizeY, SizeZ, GLFormat.Format, GLFormat.Type );
+	FOpenGL::TexStorage3D( Target, NumMips, GLFormat.SizedInternalFormat[bSRGB], SizeX, SizeY, SizeZ, GLFormat.Format, GLFormat.Type );
 
 	if (Data)
 	{
@@ -1736,12 +1627,6 @@ FTexture3DRHIRef FOpenGLDynamicRHI::RHICreateTexture3D(uint32 SizeX,uint32 SizeY
 		NumMips = FindMaxMipmapLevel(SizeX, SizeY, SizeZ);
 	}
 
-	if (GMaxRHIFeatureLevel == ERHIFeatureLevel::ES2)
-	{
-		// Remove sRGB read flag when not supported
-		Flags &= ~TexCreate_SRGB;
-	}
-
 	GLuint TextureID = 0;
 	FOpenGL::GenTextures(1, &TextureID);
 
@@ -1781,7 +1666,7 @@ FTexture3DRHIRef FOpenGLDynamicRHI::RHICreateTexture3D(uint32 SizeX,uint32 SizeY
 	uint32 DataSize = CreateInfo.BulkData ? CreateInfo.BulkData->GetResourceBulkDataSize() : 0;
 	uint32 MipOffset = 0;
 
-	FOpenGL::TexStorage3D( Target, NumMips, GLFormat.InternalFormat[bSRGB], SizeX, SizeY, SizeZ, GLFormat.Format, GLFormat.Type );
+	FOpenGL::TexStorage3D( Target, NumMips, GLFormat.SizedInternalFormat[bSRGB], SizeX, SizeY, SizeZ, GLFormat.Format, GLFormat.Type );
 
 	if (Data)
 	{
@@ -1929,7 +1814,7 @@ FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(FRHITex
 				FRHITexture2D* DepthStencilTex = nullptr;
 
 				// For stencil sampling we have to use a separate single channel texture to blit stencil data into
-#if PLATFORM_DESKTOP || PLATFORM_ANDROIDESDEFERRED
+#if PLATFORM_DESKTOP
 				if (FOpenGL::GetFeatureLevel() >= ERHIFeatureLevel::SM5 && Format == PF_X24_G8 && FOpenGL::SupportsPixelBuffers())
 				{
 					check(NumMipLevels == 1 && MipLevel == 0);
@@ -2434,7 +2319,7 @@ void FOpenGLDynamicRHI::InvalidateTextureResourceInCache(GLuint Resource)
 
 void FOpenGLDynamicRHI::InvalidateUAVResourceInCache(GLuint Resource)
 {
-	for (int32 UAVIndex = 0; UAVIndex < OGL_MAX_COMPUTE_STAGE_UAV_UNITS; ++UAVIndex)
+	for (int32 UAVIndex = 0; UAVIndex < FOpenGL::GetMaxCombinedUAVUnits(); ++UAVIndex)
 	{
 		if (SharedContextState.UAVs[UAVIndex].Resource == Resource)
 		{
@@ -2574,7 +2459,7 @@ void FOpenGLDynamicRHI::RHICopySubTextureRegion(FRHITexture2D* SourceTextureRHI,
 	ContextState.Framebuffer = (GLuint)-1;
 }
 
-/*
+
 void FOpenGLDynamicRHI::RHICopyTexture(FRHITexture* SourceTextureRHI, FRHITexture* DestTextureRHI, const FRHICopyTextureInfo& CopyInfo)
 {
 	VERIFY_GL_SCOPE();
@@ -2611,7 +2496,12 @@ void FOpenGLDynamicRHI::RHICopyTexture(FRHITexture* SourceTextureRHI, FRHITextur
 	{
 		Width = CopyInfo.Size.X;
 		Height = CopyInfo.Size.Y;
-		Depth = (SourceTexture->Target == GL_TEXTURE_3D) ? CopyInfo.Size.Z : 1;
+		switch (SourceTexture->Target)
+		{
+			case GL_TEXTURE_3D:			Depth = CopyInfo.Size.Z; break;
+			case GL_TEXTURE_CUBE_MAP:	Depth = CopyInfo.NumSlices; break;
+			default:					Depth = 1; break;
+		}
 	}
 
 	GLint SrcMip = CopyInfo.SourceMipIndex;
@@ -2692,22 +2582,28 @@ void FOpenGLDynamicRHI::RHICopyTexture(FRHITexture* SourceTextureRHI, FRHITextur
 
 			switch (DestTexture->Target)
 			{
-			case GL_TEXTURE_1D:
-				FOpenGL::CopyTexSubImage1D(DestTexture->Target, DestMip, XOffset, X, 0, Width);
-				break;
-			case GL_TEXTURE_1D_ARRAY:
-				FOpenGL::CopyTexSubImage2D(DestTexture->Target, DestMip, XOffset, CopyInfo.DestSliceIndex + SliceIndex, X, 0, Width, 1);
-				break;
-			case GL_TEXTURE_2D:
-			case GL_TEXTURE_RECTANGLE:
-				FOpenGL::CopyTexSubImage2D(DestTexture->Target, DestMip, XOffset, YOffset, X, Y, Width, Height);
-				break;
-			case GL_TEXTURE_2D_ARRAY:
-				FOpenGL::CopyTexSubImage3D(DestTexture->Target, DestMip, XOffset, YOffset, CopyInfo.DestSliceIndex + SliceIndex, X, Y, Width, Height);
-				break;
-			case GL_TEXTURE_3D:
-				FOpenGL::CopyTexSubImage3D(DestTexture->Target, DestMip, XOffset, YOffset, ZOffset, X, Y, Width, Height);
-				break;
+				case GL_TEXTURE_1D:
+					FOpenGL::CopyTexSubImage1D(DestTexture->Target, DestMip, XOffset, X, 0, Width);
+					break;
+				case GL_TEXTURE_1D_ARRAY:
+					FOpenGL::CopyTexSubImage2D(DestTexture->Target, DestMip, XOffset, CopyInfo.DestSliceIndex + SliceIndex, X, 0, Width, 1);
+					break;
+				case GL_TEXTURE_2D:
+				case GL_TEXTURE_RECTANGLE:
+					FOpenGL::CopyTexSubImage2D(DestTexture->Target, DestMip, XOffset, YOffset, X, Y, Width, Height);
+					break;
+				case GL_TEXTURE_2D_ARRAY:
+					FOpenGL::CopyTexSubImage3D(DestTexture->Target, DestMip, XOffset, YOffset, CopyInfo.DestSliceIndex + SliceIndex, X, Y, Width, Height);
+					break;
+				case GL_TEXTURE_3D:
+					FOpenGL::CopyTexSubImage3D(DestTexture->Target, DestMip, XOffset, YOffset, ZOffset, X, Y, Width, Height);
+					break;
+				case GL_TEXTURE_CUBE_MAP:
+					for (int32 FaceIndex = FMath::Min((int32)CopyInfo.NumSlices, 6) - 1; FaceIndex >= 0; FaceIndex--)
+					{
+						FOpenGL::CopyTexSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + (uint32)FaceIndex, CopyInfo.DestMipIndex, XOffset, YOffset, X, Y, Width, Height);
+					}					
+					break;
 			}
 		}
 
@@ -2720,7 +2616,7 @@ void FOpenGLDynamicRHI::RHICopyTexture(FRHITexture* SourceTextureRHI, FRHITextur
 
 	ContextState.Framebuffer = (GLuint)-1;
 }
-*/
+
 
 FTexture2DRHIRef FOpenGLDynamicRHI::RHICreateTexture2DFromResource(EPixelFormat Format, uint32 SizeX, uint32 SizeY, uint32 NumMips, uint32 NumSamples, uint32 NumSamplesTileMem, const FClearValueBinding& ClearValueBinding, GLuint Resource, uint32 TexCreateFlags)
 {
@@ -2798,6 +2694,20 @@ FTextureCubeRHIRef FOpenGLDynamicRHI::RHICreateTextureCubeFromResource(EPixelFor
 	TextureCube->SetAliased(true);
 	OpenGLTextureAllocated(TextureCube, TexCreateFlags);
 	return TextureCube;
+}
+
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+
+void FOpenGLDynamicRHI::RHIAliasTextureResources(FTextureRHIRef& DestRHITexture, FTextureRHIRef& SrcRHITexture)
+{
+	// @todo: Move the raw-pointer implementation down here when it's deprecation is completed.
+	RHIAliasTextureResources((FRHITexture*)DestRHITexture, (FRHITexture*)SrcRHITexture);
+}
+
+FTextureRHIRef FOpenGLDynamicRHI::RHICreateAliasedTexture(FTextureRHIRef& SourceTexture)
+{
+	// @todo: Move the raw-pointer implementation down here when it's deprecation is completed.
+	return RHICreateAliasedTexture((FRHITexture*)SourceTexture);
 }
 
 void FOpenGLDynamicRHI::RHIAliasTextureResources(FRHITexture* DestRHITexture, FRHITexture* SrcRHITexture)
@@ -2879,6 +2789,8 @@ FTextureRHIRef FOpenGLDynamicRHI::RHICreateAliasedTexture(FRHITexture* SourceTex
 
 	return AliasedTexture;
 }
+
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 void* FOpenGLDynamicRHI::LockTexture2D_RenderThread(class FRHICommandListImmediate& RHICmdList, FRHITexture2D* Texture, uint32 MipIndex, EResourceLockMode LockMode, uint32& DestStride, bool bLockWithinMiptail, bool bNeedsDefaultRHIFlush)
 {

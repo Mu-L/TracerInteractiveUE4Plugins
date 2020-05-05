@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,7 +12,7 @@ In order to use PropertyEditorModule.CreateSingleProperty we have to give it an 
 and the name of the target property to edit. It will then iterate the object for a property with that
 name and create a property editor widget.
 
-This is very limiting when editing a single entry within an UArrayProperty, as the inner and the
+This is very limiting when editing a single entry within an FArrayProperty, as the inner and the
 array prop will have the same name, leading it to create an array editor. Also, since we have to
 give it an instance, modifying the widget will automatically modify the object, which we may not
 want, we may just want a property editor of a particular type.
@@ -32,14 +32,14 @@ class UPropertyTemplateObject : public UObject
 	GENERATED_UCLASS_BODY()
 
 public:
-	static FName GetPropertyNameFromClass(const UClass* PropertyType)
+	static FName GetPropertyNameFromClass(const FFieldClass* PropertyType)
 	{
 		FString PropName;
-		if (PropertyType == UBoolProperty::StaticClass())
+		if (PropertyType == FBoolProperty::StaticClass())
 		{
 			PropName = TEXT("bCapturedBoolProperty");
 		}
-		else if(PropertyType == UClassProperty::StaticClass())
+		else if(PropertyType == FClassProperty::StaticClass())
 		{
 			PropName = TEXT("CapturedObjectProperty");
 		}
@@ -87,14 +87,14 @@ public:
 	UPROPERTY(Transient, EditAnywhere, Category="Template", meta=(ToolTip="Captured UObject property"))
 	UObject* CapturedObjectProperty;
 
-	//UPROPERTY(Transient, EditAnywhere, Category="Template")
-	//FWeakObjectPtr CapturedWeakObjectProperty;
+	//UPROPERTY(Transient, EditAnywhere, Category="Template", meta=(ToolTip="Captured Weak UObject property"))
+	//TWeakObjectPtr<UObject> CapturedWeakObjectProperty;
 
-	//UPROPERTY(Transient, EditAnywhere, Category="Template")
-	//FLazyObjectPtr CapturedLazyObjectProperty;
+	//UPROPERTY(Transient, EditAnywhere, Category="Template", meta=(ToolTip="Captured Lazy UObject property"))
+	//TLazyObjectPtr<UObject> CapturedLazyObjectProperty;
 
-	//UPROPERTY(Transient, EditAnywhere, Category="Template")
-	//FSoftObjectPtr CapturedSoftObjectProperty;
+	UPROPERTY(Transient, EditAnywhere, Category="Template", meta=(ToolTip="Captured Soft UObject property"))
+	TSoftObjectPtr<UObject> CapturedSoftObjectProperty;
 
 	UPROPERTY(Transient, EditAnywhere, Category="Template", meta=(ToolTip="Captured UInterface property"))
 	FScriptInterface CapturedInterfaceProperty;
@@ -107,12 +107,6 @@ public:
 
 	UPROPERTY(Transient, EditAnywhere, Category="Template", meta=(ToolTip="Captured FText property"))
 	FText CapturedTextProperty;
-
-	//UPROPERTY(Transient, EditAnywhere, Category="Template")
-	//FScriptArray CapturedArrayProperty;
-
-	//UPROPERTY(Transient, EditAnywhere, Category="Template")
-	//FScriptMap CapturedMapProperty;
 
 	UPROPERTY(Transient, EditAnywhere, Category="Template", meta=(ToolTip="Captured FVector property"))
 	FVector CapturedVectorProperty;

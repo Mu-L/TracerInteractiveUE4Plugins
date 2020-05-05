@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Particles/ParticleSystemManager.h"
 #include "Particles/ParticleSystemComponent.h"
@@ -146,6 +146,9 @@ void FParticleSystemWorldManager::OnStartup()
 	FWorldDelegates::OnPostWorldCleanup.AddStatic(&OnWorldCleanup);
 	FWorldDelegates::OnPreWorldFinishDestroy.AddStatic(&OnPreWorldFinishDestroy);
 	FWorldDelegates::OnWorldBeginTearDown.AddStatic(&OnWorldBeginTearDown);
+#if WITH_PARTICLE_PERF_STATS
+	FParticlePerfStats::OnStartup();
+#endif
 }
 
 void FParticleSystemWorldManager::OnShutdown()
@@ -158,6 +161,9 @@ void FParticleSystemWorldManager::OnShutdown()
 		}
 	}
 	WorldManagers.Empty();
+#if WITH_PARTICLE_PERF_STATS
+	FParticlePerfStats::OnShutdown();
+#endif
 }
 
 void FParticleSystemWorldManager::OnWorldInit(UWorld* World, const UWorld::InitializationValues IVS)
@@ -222,6 +228,7 @@ FParticleSystemWorldManager::FParticleSystemWorldManager(UWorld* InWorld)
 		TickFunc.EndTickGroup = TickFunc.TickGroup;
 		TickFunc.bCanEverTick = true;
 		TickFunc.bStartWithTickEnabled = true;
+		TickFunc.bAllowTickOnDedicatedServer = false;
 		TickFunc.bHighPriority = true;
 		TickFunc.Owner = this;
 		TickFunc.RegisterTickFunction(InWorld->PersistentLevel);
@@ -560,17 +567,20 @@ void FParticleSystemWorldManager::ProcessTickList(float DeltaTime, ELevelTick Ti
 				{
 					continue;
 				}
+				
+				AActor* PSCOwner = PSC->GetOwner();
+				const float TimeDilation = (PSCOwner ? PSCOwner->CustomTimeDilation : 1.f);
 
 				//TODO: Replace call to TickComponent with new call that allows us to pull duplicated work up to share across all ticks.
 				if (bAsync)
 				{
-					PSC->TickComponent(DeltaTime, TickType, nullptr);
+					PSC->TickComponent(DeltaTime * TimeDilation, TickType, nullptr);
 					PSC->MarshalParamsForAsyncTick();
 					QueueAsyncTick(Handle, TickGroupCompletionGraphEvent);
 				}
 				else
 				{
-					PSC->TickComponent(DeltaTime, TickType, nullptr);
+					PSC->TickComponent(DeltaTime * TimeDilation, TickType, nullptr);
 					PSC->ComputeTickComponent_Concurrent();
 					PSC->FinalizeTickComponent();
 				}

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	VulkanShaders.cpp: Vulkan shader RHI implementation.
@@ -39,7 +39,7 @@ FVulkanShaderFactory::~FVulkanShaderFactory()
 }
 
 template <typename ShaderType> 
-ShaderType* FVulkanShaderFactory::CreateShader(const TArray<uint8>& Code, FVulkanDevice* Device)
+ShaderType* FVulkanShaderFactory::CreateShader(TArrayView<const uint8> Code, FVulkanDevice* Device)
 {
 	uint32 ShaderCodeLen = Code.Num();
 	uint32 ShaderCodeCRC = FCrc::MemCrc32(Code.GetData(), Code.Num());
@@ -83,14 +83,14 @@ void FVulkanShaderFactory::OnDeleteShader(const FVulkanShader& Shader)
 	ShaderMap[Shader.Frequency].Remove(ShaderKey);
 }
 
-void FVulkanShader::Setup(const TArray<uint8>& InShaderHeaderAndCode, uint64 InShaderKey)
+void FVulkanShader::Setup(TArrayView<const uint8> InShaderHeaderAndCode, uint64 InShaderKey)
 {
 	LLM_SCOPE_VULKAN(ELLMTagVulkan::VulkanShaders);
 	check(Device);
 
 	ShaderKey = InShaderKey;
 
-	FMemoryReader Ar(InShaderHeaderAndCode, true);
+	FMemoryReaderView Ar(InShaderHeaderAndCode, true);
 
 	Ar << CodeHeader;
 
@@ -111,10 +111,24 @@ void FVulkanShader::Setup(const TArray<uint8>& InShaderHeaderAndCode, uint64 InS
 	}
 	check(CodeHeader.GlobalSpirvInfos.Num() == CodeHeader.Globals.Num());
 
+	StaticSlots.Reserve(CodeHeader.UniformBuffers.Num());
+
+	for (const FVulkanShaderHeader::FUniformBufferInfo& UBInfo : CodeHeader.UniformBuffers)
+	{
+		if (const FShaderParametersMetadata* Metadata = FindUniformBufferStructByLayoutHash(UBInfo.LayoutHash))
+		{
+			StaticSlots.Add(Metadata->GetLayout().StaticSlot);
+		}
+		else
+		{
+			StaticSlots.Add(MAX_UNIFORM_BUFFER_STATIC_SLOTS);
+		}
+	}
+
 #if VULKAN_ENABLE_SHADER_DEBUG_NAMES
 	// main_00000000_00000000
 	ANSICHAR EntryPoint[24];
-	GetEntryPoint(EntryPoint);
+	GetEntryPoint(EntryPoint, 24);
 	DebugEntryPoint = EntryPoint;
 #endif
 }
@@ -210,32 +224,32 @@ VkShaderModule FVulkanLayout::CreatePatchedPatchSpirvModule(TArray<uint32>& Spir
 }
 
 
-FVertexShaderRHIRef FVulkanDynamicRHI::RHICreateVertexShader(const TArray<uint8>& Code)
+FVertexShaderRHIRef FVulkanDynamicRHI::RHICreateVertexShader(TArrayView<const uint8> Code, const FSHAHash& Hash)
 {
 	return Device->GetShaderFactory().CreateShader<FVulkanVertexShader>(Code, Device);
 }
 
-FPixelShaderRHIRef FVulkanDynamicRHI::RHICreatePixelShader(const TArray<uint8>& Code)
+FPixelShaderRHIRef FVulkanDynamicRHI::RHICreatePixelShader(TArrayView<const uint8> Code, const FSHAHash& Hash)
 {
 	return Device->GetShaderFactory().CreateShader<FVulkanPixelShader>(Code, Device);
 }
 
-FHullShaderRHIRef FVulkanDynamicRHI::RHICreateHullShader(const TArray<uint8>& Code) 
+FHullShaderRHIRef FVulkanDynamicRHI::RHICreateHullShader(TArrayView<const uint8> Code, const FSHAHash& Hash)
 { 
 	return Device->GetShaderFactory().CreateShader<FVulkanHullShader>(Code, Device);
 }
 
-FDomainShaderRHIRef FVulkanDynamicRHI::RHICreateDomainShader(const TArray<uint8>& Code) 
+FDomainShaderRHIRef FVulkanDynamicRHI::RHICreateDomainShader(TArrayView<const uint8> Code, const FSHAHash& Hash)
 { 
 	return Device->GetShaderFactory().CreateShader<FVulkanDomainShader>(Code, Device);
 }
 
-FGeometryShaderRHIRef FVulkanDynamicRHI::RHICreateGeometryShader(const TArray<uint8>& Code) 
+FGeometryShaderRHIRef FVulkanDynamicRHI::RHICreateGeometryShader(TArrayView<const uint8> Code, const FSHAHash& Hash)
 { 
 	return Device->GetShaderFactory().CreateShader<FVulkanGeometryShader>(Code, Device);
 }
 
-FComputeShaderRHIRef FVulkanDynamicRHI::RHICreateComputeShader(const TArray<uint8>& Code) 
+FComputeShaderRHIRef FVulkanDynamicRHI::RHICreateComputeShader(TArrayView<const uint8> Code, const FSHAHash& Hash)
 { 
 	return Device->GetShaderFactory().CreateShader<FVulkanComputeShader>(Code, Device);
 }
@@ -296,7 +310,6 @@ uint32 FVulkanDescriptorSetWriter::SetupDescriptorWrites(
 	HashableDescriptorInfos = InHashableDescriptorInfos;
 	WriteDescriptors = InWriteDescriptors;
 	NumWrites = Types.Num();
-	checkf(Types.Num() <= 64, TEXT("Out of bits for Dirty Mask! More than 64 resources in one descriptor set!"));
 
 	BindingToDynamicOffsetMap = InBindingToDynamicOffsetMap;
 
@@ -562,14 +575,25 @@ void FVulkanDescriptorSetsLayoutInfo::FinalizeBindings(const FUniformBufferGathe
 	CompileTypesUsageID();
 	GenerateHash(ImmutableSamplers);
 
-	// Validate no empty sets were made
-	for (int32 Index = 0; Index < RemappingInfo.SetInfos.Num(); ++Index)
+	// If we are consolidating and no uniforms are present in the shader, then strip the empty set data
+	if (bConsolidateAllIntoOneSet)
 	{
-		check(RemappingInfo.SetInfos[Index].Types.Num() > 0);
+		for (int32 Index = 0; Index < RemappingInfo.SetInfos.Num(); ++Index)
+		{
+			if (RemappingInfo.SetInfos[Index].Types.Num() == 0)
+			{
+				RemappingInfo.SetInfos.RemoveAt(Index);
+			}
+		}
+		check(RemappingInfo.SetInfos.Num() <= 1);
 	}
-
-	// Consolidated only has to have one Set
-	check(!bConsolidateAllIntoOneSet || RemappingInfo.SetInfos.Num() == 1);
+	else
+	{
+		for (int32 Index = 0; Index < RemappingInfo.SetInfos.Num(); ++Index)
+		{
+			check(RemappingInfo.SetInfos[Index].Types.Num() > 0);
+		}
+	}	
 }
 
 void FVulkanComputePipelineDescriptorInfo::Initialize(const FDescriptorSetRemappingInfo& InRemappingInfo)

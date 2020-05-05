@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -36,9 +36,18 @@ public:
 	FOnSwitchActorSwitch& GetOnSwitchDelegate();
 
 private:
+	// Dedicated function to set our visibility so that we can restore our component
+	// hierarchy to the last-set option, in case e.g. we're overriden by a parent ASwitchActor
+	void SetVisibility(bool bVisible);
+
+	void PostLoad() override;
+
 	FOnSwitchActorSwitch OnSwitchActorSwitch;
 
 	// Exposing our root component like this allows manual Mobility control on the details panel
 	UPROPERTY(Category = SwitchActor, VisibleAnywhere)
 	class USceneComponent* SceneComponent;
+
+	UPROPERTY()
+	int32 LastSelectedOption;
 };

@@ -1,7 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "Chaos/AABB.h"
 #include "Chaos/Sphere.h"
 #include "Chaos/Capsule.h"
+#if INTEL_ISPC
+#include "AABB.ispc.generated.h"
+#endif
 
 namespace Chaos
 {
@@ -173,6 +176,77 @@ bool TAABB<T, d>::Raycast(const TVector<T, d>& StartPoint, const TVector<T, d>& 
 	OutNormal = Normal;
 	OutPosition = BoxIntersection - Thickness * Normal;
 	return true;
+}
+
+template<typename T, int d, class TTRANSFORM>
+inline TAABB<T, d> TransformedAABBHelper(const TAABB<T, d>& AABB, const TTRANSFORM& SpaceTransform)
+{
+	TVector<T, d> CurrentExtents = AABB.Extents();
+	int32 Idx = 0;
+	const TVector<T, d> MinToNewSpace = SpaceTransform.TransformPosition(AABB.Min());
+	TAABB<T, d> NewAABB(MinToNewSpace, MinToNewSpace);
+	NewAABB.GrowToInclude(SpaceTransform.TransformPosition(AABB.Max()));
+
+	for (int32 j = 0; j < d; ++j)
+	{
+		NewAABB.GrowToInclude(SpaceTransform.TransformPosition(AABB.Min() + TVector<T, d>::AxisVector(j) * CurrentExtents));
+		NewAABB.GrowToInclude(SpaceTransform.TransformPosition(AABB.Max() - TVector<T, d>::AxisVector(j) * CurrentExtents));
+	}
+
+	return NewAABB;
+}
+
+inline TAABB<float, 3> TransformedAABBHelperISPC(const TAABB<float, 3>& AABB, const FTransform& SpaceTransform)
+{
+#if INTEL_ISPC
+	TVector<float, 3> NewMin, NewMax;
+	ispc::TransformedAABB((const ispc::FTransform&)SpaceTransform, (const ispc::FVector&)AABB.Min(), (const ispc::FVector&)AABB.Max(), (ispc::FVector&)NewMin, (ispc::FVector&)NewMax);
+
+	TAABB<float, 3> NewAABB(NewMin, NewMax);
+	return NewAABB;
+#else
+	check(false);
+	return TAABB<float, 3>::EmptyAABB();
+#endif
+}
+
+template<typename T, int d>
+TAABB<T, d> TAABB<T, d>::TransformedAABB(const Chaos::TRigidTransform<FReal, 3>& SpaceTransform) const
+{
+	if (INTEL_ISPC)
+	{
+		return TransformedAABBHelperISPC(*this, SpaceTransform);
+	}
+	else
+	{
+		return TransformedAABBHelper<T, d>(*this, SpaceTransform);
+	}
+}
+
+template<typename T, int d>
+TAABB<T, d> TAABB<T, d>::TransformedAABB(const FMatrix& SpaceTransform) const
+{
+	return TransformedAABBHelper<T, d>(*this, SpaceTransform);
+}
+
+
+template<typename T, int d>
+TAABB<T, d> TAABB<T, d>::TransformedAABB(const Chaos::PMatrix<FReal, 4, 4>& SpaceTransform) const
+{
+	return TransformedAABBHelper<T, d>(*this, SpaceTransform);
+}
+
+template<typename T, int d>
+TAABB<T, d> TAABB<T, d>::TransformedAABB(const FTransform& SpaceTransform) const
+{
+	if (INTEL_ISPC)
+	{
+		return TransformedAABBHelperISPC(*this, SpaceTransform);
+	}
+	else
+	{
+		return TransformedAABBHelper<T, d>(*this, SpaceTransform);
+	}
 }
 }
 

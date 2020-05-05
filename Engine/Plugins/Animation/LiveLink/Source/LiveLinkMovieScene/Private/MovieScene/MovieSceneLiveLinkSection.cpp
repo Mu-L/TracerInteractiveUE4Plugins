@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MovieScene/MovieSceneLiveLinkSection.h"
 
@@ -35,7 +35,7 @@ void UMovieSceneLiveLinkSection::SetMask(const TArray<bool>& InChannelMask)
 
 void UMovieSceneLiveLinkSection::RecordFrame(FFrameNumber InFrameNumber, const FLiveLinkFrameDataStruct& InFrameData)
 {
-	ExpandToFrame(GetInclusiveStartFrame() + InFrameNumber);
+	ExpandToFrame(InFrameNumber);
 
 	for (UMovieSceneLiveLinkSubSection* SubSection : SubSections)
 	{

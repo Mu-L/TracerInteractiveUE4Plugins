@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	AsyncLoadingThread.h: Unreal async loading code.
@@ -147,17 +147,8 @@ struct FMaxPackageSummarySize
 /**
  * Async loading thread. Preloads/serializes packages on async loading thread. Postloads objects on the game thread.
  */
-class FAsyncLoadingThread : public FRunnable, public IAsyncPackageLoader
+class FAsyncLoadingThread final : public FRunnable, public IAsyncPackageLoader
 {
-	/** Structure that holds the async loading thread ini settings */
-	struct FAsyncLoadingThreadSettings
-	{
-		bool bAsyncLoadingThreadEnabled;
-		bool bAsyncPostLoadEnabled;
-
-		FAsyncLoadingThreadSettings();
-	};
-
 	IEDLBootNotificationManager& EDLBootNotificationManager;
 
 	/** Thread to run the worker FRunnable on */
@@ -291,7 +282,7 @@ public:
 
 	void NotifyConstructedDuringAsyncLoading(UObject* Object, bool bSubObject) override;
 
-	void FireCompletedCompiledInImport(FGCObject* AsyncPacakge, FPackageIndex Import) override;
+	void FireCompletedCompiledInImport(void* AsyncPacakge, FPackageIndex Import) override;
 
 	/** [EDL] Event queue */
 	FAsyncLoadEventQueue EventQueue;
@@ -328,9 +319,6 @@ public:
 	void QueueEvent_ProcessPostloadWait(FAsyncPackage* Pkg, int32 EventSystemPriority = 0);
 	/** [EDL] Queues StartPostLoad event */
 	void QueueEvent_StartPostLoad(FAsyncPackage* Pkg, int32 EventSystemPriority = 0);
-
-	/** Gets the ALT settigns from ini (or command line). */
-	static FAsyncLoadingThreadSettings& GetAsyncLoadingThreadSettings();
 
 	/** True if multithreaded async loading is currently being used. */
 	FORCEINLINE bool IsMultithreaded() override
@@ -388,10 +376,14 @@ public:
 	}
 
 	/** Returns true if async loading is suspended */
-	FORCEINLINE bool IsAsyncLoadingSuspended() override
+	FORCEINLINE bool IsAsyncLoadingSuspendedInternal() const
 	{
-		FPlatformMisc::MemoryBarrier();
-		return IsLoadingSuspended.GetValue() != 0;
+		return !!IsLoadingSuspended.GetValue();
+	}
+
+	virtual bool IsAsyncLoadingSuspended() override
+	{
+		return IsAsyncLoadingSuspendedInternal();
 	}
 
 	FORCEINLINE int32 GetAsyncLoadingSuspendedCount()
@@ -403,7 +395,6 @@ public:
 	/** Returns the number of async packages that are currently being processed */
 	FORCEINLINE int32 GetNumAsyncPackages() override
 	{
-		FPlatformMisc::MemoryBarrier();
 		return ExistingAsyncPackagesCounter.GetValue();
 	}
 

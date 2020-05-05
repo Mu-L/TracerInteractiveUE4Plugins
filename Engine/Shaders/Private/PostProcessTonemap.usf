@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	PostProcessTonemap.usf: PostProcessing tone mapping  
@@ -12,19 +12,24 @@
 #include "ScreenPass.ush"
 
 /** Values of DIM_OUTPUT_DEVICE (matching C++'s ETonemapperOutputDevice) */
-#define TONEMAPPER_OUTOUT_sRGB 0
-#define TONEMAPPER_OUTOUT_Rec709 1
-#define TONEMAPPER_OUTOUT_ExplicitGammaMapping 2
-#define TONEMAPPER_OUTOUT_ACES1000nitST2084 3
-#define TONEMAPPER_OUTOUT_ACES2000nitST2084 4
-#define TONEMAPPER_OUTOUT_ACES1000nitScRGB 5
-#define TONEMAPPER_OUTOUT_ACES2000nitScRGB 6
-#define TONEMAPPER_OUTOUT_LinearEXR 7
-#define TONEMAPPER_OUTOUT_NoToneCurve 8
+#define TONEMAPPER_OUTPUT_sRGB 0
+#define TONEMAPPER_OUTPUT_Rec709 1
+#define TONEMAPPER_OUTPUT_ExplicitGammaMapping 2
+#define TONEMAPPER_OUTPUT_ACES1000nitST2084 3
+#define TONEMAPPER_OUTPUT_ACES2000nitST2084 4
+#define TONEMAPPER_OUTPUT_ACES1000nitScRGB 5
+#define TONEMAPPER_OUTPUT_ACES2000nitScRGB 6
+#define TONEMAPPER_OUTPUT_LinearEXR 7
+#define TONEMAPPER_OUTPUT_NoToneCurve 8
+#define TONEMAPPER_OUTPUT_WithToneCurve 9
 
 #ifndef DIM_OUTPUT_DEVICE
-	#define DIM_OUTPUT_DEVICE (TONEMAPPER_OUTOUT_sRGB)
+	#define DIM_OUTPUT_DEVICE (TONEMAPPER_OUTPUT_sRGB)
 #endif
+
+
+
+
 
 // 0 / 1(slower, visualize multiple internals side by side for the same image portion, see DebugTile)
 #define DEBUG_TONEMAPPER 0
@@ -32,6 +37,7 @@
 SCREEN_PASS_TEXTURE_VIEWPORT(Color)
 SCREEN_PASS_TEXTURE_VIEWPORT(Bloom)
 SCREEN_PASS_TEXTURE_VIEWPORT(Output)
+SCREEN_PASS_TEXTURE_VIEWPORT_TRANSFORM(ColorToBloom)
 
 // 64x64 tiling noise texture, optimized to have mostly high frequency content
 Texture2D NoiseTexture;
@@ -45,11 +51,12 @@ SamplerState BloomSampler;
 
 // xyz:SceneColorTint.rgb, w:unused
 float4 ColorScale0;
+
 // xyz:Bloom1Tint.rgb, w:unused
 float4 ColorScale1;
 
 // from the postprocess settings, x:VignetteIntensity, y:SharpenDiv6
-float2 TonemapperParams;
+float4 TonemapperParams;
 
 // Fine film grain
 float3 GrainRandomFull;
@@ -68,10 +75,28 @@ float4 BloomDirtMaskTint;
 Texture2D BloomDirtMaskTexture;
 SamplerState BloomDirtMaskSampler;
 
+float4 LensPrincipalPointOffsetScale;
+float4 LensPrincipalPointOffsetScaleInverse;
+
 half GrainFromUV(float2 GrainUV) 
 {
 	half Grain = frac(sin(GrainUV.x + GrainUV.y * 543.31) *  493013.0);
 	return Grain;
+}
+
+// converts from screen [-1,1] space to the lens [-1,1] viewport space
+float2 ConvertScreenViewportSpaceToLensViewportSpace(float2 UV)
+{
+	return LensPrincipalPointOffsetScale.xy + UV * LensPrincipalPointOffsetScale.zw;
+}
+
+float2 ConvertLensViewportSpaceToScreenViewportSpace(float2 UV)
+{
+	// reference version
+	//return (UV - LensPrincipalPointOffsetScale.xy)/LensPrincipalPointOffsetScale.zw;
+
+	// optimized version
+	return LensPrincipalPointOffsetScaleInverse.xy + UV * LensPrincipalPointOffsetScaleInverse.zw;
 }
 
 // LUT for color grading
@@ -88,7 +113,7 @@ half3 ColorLookupTable( half3 LinearColor )
 {
 	float3 LUTEncodedColor;
 	// Encode as ST-2084 (Dolby PQ) values
-	#if (DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES1000nitST2084 || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES2000nitST2084 || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES1000nitScRGB || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES2000nitScRGB || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_LinearEXR || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_NoToneCurve)
+	#if (DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_ACES1000nitST2084 || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_ACES2000nitST2084 || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_ACES1000nitScRGB || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_ACES2000nitScRGB || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_LinearEXR || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_NoToneCurve || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_WithToneCurve)
 		// ST2084 expects to receive linear values 0-10000 in nits.
 		// So the linear value must be multiplied by a scale factor to convert to nits.
 		LUTEncodedColor = LinearToST2084(LinearColor * LinearToNitsScale);
@@ -163,8 +188,12 @@ void TonemapCommonVS(
 #endif
 
 #if EYEADAPTATION_EXPOSURE_FIX == 1
-	// texture can be GWhiteTexture which is 1x1. It's important we don't read outside bounds.
-	OutExposureScaleVignette.x = EyeAdaptation.Load(int3(0, 0, 0)).x;
+	#if FEATURE_LEVEL >= FEATURE_LEVEL_SM5
+		// texture can be GWhiteTexture which is 1x1. It's important we don't read outside bounds.
+		OutExposureScaleVignette.x = EyeAdaptation.Load(int3(0, 0, 0)).x;
+	#else
+		OutExposureScaleVignette.x = EyeAdaptationBuffer[0].x;
+	#endif
 #else
 	// If eye adaptation is disabled (e.g. fixed exposure level ) or  not available.  
 	OutExposureScaleVignette.x = DefaultEyeExposure;
@@ -175,7 +204,8 @@ void TonemapCommonVS(
 	float2 ColorViewportPos = UVToScreenPos(TexCoord, Color_Extent);
 
 	// Scale vignette to always be a circle with consistent corner intensity.
-	OutExposureScaleVignette.yz = VignetteSpace(ColorViewportPos, AspectRatio);
+	float2 LensViewportPos = ConvertScreenViewportSpaceToLensViewportSpace(ColorViewportPos);
+	OutExposureScaleVignette.yz = VignetteSpace(LensViewportPos, AspectRatio);
 
 	// Grain
 	OutGrainUV.xy = TexCoord + Color_ExtentInverse * float2(-0.5,0.5);
@@ -300,7 +330,7 @@ float2 ComputeCounterStepForTileDebugging(float4 SvPosition, int2 TileSize, out 
 
 half3 LookupSceneColor(float2 SceneUV, int2 PixelOffset)
 {
-#if (ES2_PROFILE && COMPILER_GLSL_ES2) || (ES3_1_PROFILE && COMPILER_GLSL_ES3_1)
+#if (ES3_1_PROFILE && COMPILER_GLSL_ES3_1)
 	// slower but always works
 	// to prevent "error: Texture offset not supported on GLSL ES"
 	return Texture2DSample(ColorTexture, ColorSampler, SceneUV + PixelOffset * Color_ExtentInverse).rgb;
@@ -377,9 +407,15 @@ float4 TonemapCommonPS(
 	        float2 CAScale = ChromaticAberrationParams.rg;
 	        float StartOffset = ChromaticAberrationParams.z;
 
+			float2 LensUV = ConvertScreenViewportSpaceToLensViewportSpace(ScreenPos);
+
 	        float4 CAUV;
-	        CAUV = ScreenPos.xyxy - sign(ScreenPos).xyxy * saturate(abs(ScreenPos) - StartOffset).xyxy * CAScale.rrgg;
-	        CAUV.xy = ScreenPosToUV(CAUV.xy, Color_ExtentInverse);
+	        CAUV = LensUV.xyxy - sign(LensUV).xyxy * saturate(abs(LensUV) - StartOffset).xyxy * CAScale.rrgg;
+
+	        CAUV.xy = ConvertLensViewportSpaceToScreenViewportSpace(CAUV.xy);
+	        CAUV.zw = ConvertLensViewportSpaceToScreenViewportSpace(CAUV.zw);
+
+			CAUV.xy = ScreenPosToUV(CAUV.xy, Color_ExtentInverse);
 	        CAUV.zw = ScreenPosToUV(CAUV.zw, Color_ExtentInverse);
 
 		half4 SceneColor = SampleSceneColor(CAUV.xy + SceneUVJitter.xy);
@@ -473,14 +509,14 @@ float4 TonemapCommonPS(
 
 	#if USE_GAMMA_ONLY
 
-		#if FEATURE_LEVEL > FEATURE_LEVEL_ES3_1 // On mobile ExposureScale applied in base pass PS
+		#if FEATURE_LEVEL >= FEATURE_LEVEL_ES3_1 // On mobile ExposureScale applied in base pass PS
 			SceneColor.rgb *= ExposureScale;
 		#endif
 		OutColor.rgb = pow(SceneColor.rgb, InverseGamma.x);
 
 	#else 
 
-		#if USE_MSAA
+		#if METAL_MSAA_HDR_DECODE
 			// look for PreTonemapMSAA 
 			SceneColor.rgb *= rcp(SceneColor.r*(-0.299) + SceneColor.g*(-0.587) + SceneColor.b*(-0.114) + 1.0);
 			// Try to kill negatives and NaNs here
@@ -490,15 +526,19 @@ float4 TonemapCommonPS(
 		half3 LinearColor = SceneColor.rgb * ColorScale0.rgb;
 
 		#if USE_BLOOM
-			float2 BloomUV = clamp(UV, Bloom_UVViewportBilinearMin, Bloom_UVViewportBilinearMax);
-			#if ES2_PROFILE || ES3_1_PROFILE
+			float2 BloomUV = ColorToBloom_Scale * UV + ColorToBloom_Bias;
+			BloomUV = clamp(BloomUV, Bloom_UVViewportBilinearMin, Bloom_UVViewportBilinearMax);
+			#if ES3_1_PROFILE
 				BloomUV = FullViewUV.xy;
 			#endif
 			float4 CombinedBloom = Texture2DSample(BloomTexture, BloomSampler, BloomUV);
 			CombinedBloom.rgb *= OneOverPreExposure; // Standard bloom path, convolution path has bloom already in scene color.
 
-			float2 DirtViewportUV = (SvPosition.xy - float2(Output_ViewportMin)) * Output_ViewportSizeInverse;
-			float3 BloomDirtMaskColor = Texture2DSample(BloomDirtMaskTexture, BloomDirtMaskSampler, DirtViewportUV).rgb * BloomDirtMaskTint.rgb;
+			//float2 DirtViewportUV = (SvPosition.xy - float2(Output_ViewportMin)) * Output_ViewportSizeInverse; 
+
+			float2 DirtLensUV = ConvertScreenViewportSpaceToLensViewportSpace(ScreenPos) * float2(1.0f, -1.0f);
+
+			float3 BloomDirtMaskColor = Texture2DSample(BloomDirtMaskTexture, BloomDirtMaskSampler, DirtLensUV * .5f + .5f).rgb * BloomDirtMaskTint.rgb;
 
 #if DEBUG_TONEMAPPER
 			if (all(DebugTile == int2(-1, -1)))
@@ -539,10 +579,13 @@ float4 TonemapCommonPS(
 		half LuminanceForPostProcessAA  = dot(OutDeviceColor, half3(0.299f, 0.587f, 0.114f));
 
 		#if USE_GRAIN_QUANTIZATION
-			#if DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_NoToneCurve
+			#if DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_NoToneCurve
 				#error LinearNoToneCurve device requires no Grain Quantization
 			#endif
-			// Needs to go after tonemapping. 
+			#if DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_WithToneCurve
+				#error LinearWithToneCurve device requires no Grain Quantization
+			#endif
+		// Needs to go after tonemapping. 
 			#if USE_LINEAR_FLOAT_RT
 				half GrainQuantization = 1.0/1024.0;
 			#else
@@ -560,18 +603,20 @@ float4 TonemapCommonPS(
 			OutColor.rgb = sRGBToLinear( OutColor.rgb );
 		#endif
 
-		#if DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES1000nitScRGB || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_ACES2000nitScRGB
+		#if DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_ACES1000nitScRGB || DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_ACES2000nitScRGB
 			OutColor.xyz = ST2084ToScRGB(OutColor.xyz, DIM_OUTPUT_DEVICE);
 
-		#elif DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_LinearEXR
+		#elif DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_LinearEXR
 			OutColor.xyz = ST2084ToLinear(OutColor.xyz);
-		#elif DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_NoToneCurve
+		#elif DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_NoToneCurve
+			OutColor.xyz = OutDeviceColor;
+		#elif DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_WithToneCurve
 			OutColor.xyz = OutDeviceColor;
 		#endif
 
 	#endif
 	
-	#if POST_PROCESS_ALPHA == 2 || (POST_PROCESS_ALPHA == 1 && DIM_OUTPUT_DEVICE == TONEMAPPER_OUTOUT_NoToneCurve)
+	#if POST_PROCESS_ALPHA == 2 || (POST_PROCESS_ALPHA == 1 && DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_NoToneCurve)  || (POST_PROCESS_ALPHA == 1 && DIM_OUTPUT_DEVICE == TONEMAPPER_OUTPUT_WithToneCurve)
 		OutColor.a = SceneColor.a;
 	#endif
 
@@ -664,7 +709,7 @@ void MainVS_ES2(
 	out float4 OutTexCoord : TEXCOORD0,
 	out float4 OutFineDofGrain : TEXCOORD1,
 	out float4 OutFullViewUV : TEXCOORD2,
-	out float2 OutVignette : TEXCOORD3,
+	out float3 OutVignetteExposureScale : TEXCOORD3,
 	out float2 OutTexCoords[4] : TEXCOORD4,
 	out float4 OutFringeTexCoords : FRINGE_COORDS,
 	out float4 OutPosition : SV_POSITION
@@ -673,6 +718,14 @@ void MainVS_ES2(
 #if NEEDTOSWITCHVERTICLEAXIS
 	// This is currently the last pass, so flip the texture on V to match D3D
 	InTexCoord.y = 1.0-InTexCoord.y;
+#endif
+
+#if EYEADAPTATION_EXPOSURE_FIX == 1
+	// texture can be GWhiteTexture which is 1x1. It's important we don't read outside bounds.
+	OutVignetteExposureScale.z = EyeAdaptationBuffer[0].x;
+#else
+	// If eye adaptation is disabled (e.g. fixed exposure level ) or  not available.  
+	OutVignetteExposureScale.z = DefaultEyeExposure;
 #endif
 
 	DrawRectangle(InPosition, InTexCoord, OutPosition, OutTexCoord.xy);
@@ -698,7 +751,7 @@ void MainVS_ES2(
 	OutTexCoords[3] = OutTexCoord.xy + PostprocessInput0Size.zw * float2( 0, 1);
 
 	// Scale vignette to always be a circle with consistent corner intensity.
-	OutVignette.xy = VignetteSpace(InPosition.xy);
+	OutVignetteExposureScale.xy = VignetteSpace(InPosition.xy);
 
 	// Compute fringe tex coord offsets
 	BRANCH
@@ -724,33 +777,6 @@ void MainVS_ES2(
 	}
 }
 
-// Constants for DOF blend in.
-half CocMaxRadiusInPixelsRcp() 
-{ 
-	half2 MaxOffset = half2(-2.125,-0.50)*2.0; 
-	return rcp(sqrt(dot(MaxOffset, MaxOffset))); 
-}
-
-half2 CocBlendScaleBias() 
-{
-	half Start = 0.25 * CocMaxRadiusInPixelsRcp();
-	half End = 1.0 * CocMaxRadiusInPixelsRcp();
-	half2 ScaleBias;
-	ScaleBias.x = 1.0/(End-Start);
-	ScaleBias.y = (-Start)*ScaleBias.x;
-	return ScaleBias;
-}
-
-half2 CocBlendScaleBiasFine() 
-{
-	half Start = 0.0 * CocMaxRadiusInPixelsRcp();
-	half End = 0.5 * CocMaxRadiusInPixelsRcp();
-	half2 ScaleBias;
-	ScaleBias.x = 1.0/(End-Start);
-	ScaleBias.y = (-Start)*ScaleBias.x;
-	return ScaleBias;
-}
-
 float4 OverlayColor;
 float SRGBAwareTarget;
 
@@ -758,7 +784,7 @@ void MainPS_ES2(
 	in float4 UVAndScreenPos : TEXCOORD0,
 	in float4 FineDofGrain : TEXCOORD1,
 	in float4 FullViewUV : TEXCOORD2,
-	in float2 InVignette : TEXCOORD3,
+	in float3 InVignetteExposureScale : TEXCOORD3,
 	in float2 InTexCoords[4] : TEXCOORD4,
 	in float4 InFringeTexCoords : FRINGE_COORDS,
 	#if USE_32BPP_HDR
@@ -771,6 +797,12 @@ void MainPS_ES2(
 	float2 ScreenSpacePos = UVAndScreenPos.zw;
 
 	half4 SceneColor;
+
+#if USE_PREEXPOSURE
+	const float OneOverPreExposure = View.OneOverPreExposure;
+#else
+	const float OneOverPreExposure = 1.f;
+#endif
 	
 #if !USE_32BPP_HDR
 	BRANCH
@@ -804,8 +836,9 @@ void MainPS_ES2(
 		#if USE_DOF
 			half4 DofFine = Texture2DSample(PostprocessInput0, PostprocessInput0Sampler, FineDofGrain.xy);
 			half4 Dof = Texture2DSample(PostprocessInput2, PostprocessInput2Sampler, FullViewUV.zw);
+			half DofCoc = Texture2DSample(PostprocessInput4, PostprocessInput4Sampler, UV).r;
 			// Convert alpha back into circle of confusion.
-			SceneColor.a = max(Dof.a, abs(SceneColor.a * 2.0 - 1.0));
+			SceneColor.a = max(Dof.a, abs(DofCoc * 2.0 - 1.0));
 			// Convert circle of confusion into blend factors.		
 			half2 ScaleBias = CocBlendScaleBias(); // Constant.
 			half DofAmount = saturate(SceneColor.a * ScaleBias.x + ScaleBias.y);
@@ -832,17 +865,11 @@ void MainPS_ES2(
 			#endif
 		#endif
 
-		#if USE_MSAA
+		#if METAL_MSAA_HDR_DECODE
 			// Do after jitter for grain as an optimization.
 			SceneColor.rgb *= rcp(SceneColor.r*(-0.299) + SceneColor.g*(-0.587) + SceneColor.b*(-0.114) + 1.0);
 			// Try to kill negatives and NaNs here
 			SceneColor.rgb = max(SceneColor.rgb, 0);
-		#endif
-			
-		#if USE_32BPP_HDR
-		{
-			SceneColor = Decode32BPPHDR(SceneColor, SvPosition, PostprocessInput0, PostprocessInput0Sampler, InTexCoords);
-		}
 		#endif
 
 		#if !USE_DOF
@@ -851,14 +878,12 @@ void MainPS_ES2(
 		#endif
 
 		// Match PC naming.
-		half3 LinearColor = SceneColor.rgb;
+		half3 LinearColor = SceneColor.rgb * OneOverPreExposure;
 
-		#if EYEADAPTATION_EXPOSURE_FIX != 1
-			LinearColor *= DefaultEyeExposure;
-		#endif
+		float ExposureScale = InVignetteExposureScale.z;
 		
 		#if USE_32BPP_HDR && USE_VIGNETTE
-			LinearColor.rgb *= ComputeVignetteMask( InVignette, TonemapperParams.x );
+			LinearColor.rgb *= ComputeVignetteMask(InVignetteExposureScale.xy, TonemapperParams.x );
 			LinearColor = max(LinearColor, float3(0, 0, 0));
 		#endif
 
@@ -866,17 +891,11 @@ void MainPS_ES2(
 		#if (USE_BLOOM || USE_LIGHT_SHAFTS || USE_VIGNETTE)
 		{
 			half4 CombinedBloomSunVignette = Texture2DSample(PostprocessInput1, PostprocessInput1Sampler, FullViewUV.xy);
-			#if USE_32BPP_HDR
-				if (GetHDR32bppEncodeMode() == HDR_ENCODE_RGBE)
-				{
-					CombinedBloomSunVignette.rgb = Decode32BPPHDR(CombinedBloomSunVignette).rgb;
-					LinearColor.rgb = LinearColor.rgb + CombinedBloomSunVignette.rgb;
-				}
-			#else
-				LinearColor.rgb = LinearColor.rgb * CombinedBloomSunVignette.a + CombinedBloomSunVignette.rgb;
-			#endif
+			LinearColor.rgb = LinearColor.rgb * CombinedBloomSunVignette.a + CombinedBloomSunVignette.rgb * OneOverPreExposure;
 		}
 		#endif
+
+		LinearColor *= ExposureScale;
 
 		#if USE_GRAIN_INTENSITY
 			// Needs to go before tonemapping.

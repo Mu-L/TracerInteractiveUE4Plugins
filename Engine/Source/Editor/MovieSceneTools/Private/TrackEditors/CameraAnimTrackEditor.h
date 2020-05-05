@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -42,6 +42,8 @@ public:
 	static TSharedRef<ISequencerTrackEditor> CreateTrackEditor( TSharedRef<ISequencer> OwningSequencer );
 
 public:
+
+	static FKeyPropertyResult AddCameraAnimKey(FMovieSceneTrackEditor& TrackEditor, FFrameNumber KeyTime, const TArray<TWeakObjectPtr<UObject>> Objects, UCameraAnim* CameraAnim);
 
 	// ISequencerTrackEditor interface
 	virtual void AddKey(const FGuid& ObjectGuid) override;

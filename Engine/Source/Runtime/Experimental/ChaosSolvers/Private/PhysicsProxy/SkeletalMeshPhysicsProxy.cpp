@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PhysicsProxy/SkeletalMeshPhysicsProxy.h"
 #include "GeometryCollection/GeometryCollectionCollisionStructureManager.h"
@@ -7,7 +7,7 @@
 
 FSkeletalMeshPhysicsProxy::FSkeletalMeshPhysicsProxy(UObject* InOwner, const FInitFunc& InInitFunc)
 	: Base(InOwner)
-	, JointConstraints(Chaos::TPBDJointSolverSettings<float, 3>())
+	, JointConstraints(Chaos::FPBDJointSolverSettings())
 	, JointConstraintsRule(JointConstraints)
 	, NextInputProducerBuffer(nullptr)
 	, CurrentOutputConsumerBuffer(nullptr)
@@ -138,7 +138,7 @@ void FSkeletalMeshPhysicsProxy::CreateRigidBodyCallback(FParticlesType& Particle
 
 			const bool DoCollisionGeom = Parameters.CollisionType == ECollisionTypeEnum::Chaos_Surface_Volumetric;
 			TArray<Chaos::TVector<float, 3>>* SamplePoints = nullptr;
-			Chaos::TBox<float, 3> SamplePointsBBox = Chaos::TBox<float, 3>::EmptyBox();
+			Chaos::TAABB<float, 3> SamplePointsBBox = Chaos::TAABB<float, 3>::EmptyAABB();
 			if (DoCollisionGeom)
 			{
 				SamplePoints =
@@ -152,13 +152,13 @@ void FSkeletalMeshPhysicsProxy::CreateRigidBodyCallback(FParticlesType& Particle
 			//Chaos::TTriangleMesh<T> TriMesh = Chaos::TTriangleMesh<T>::GetConvexHullFromParticles(
 			//	TArrayView<const Chaos::TVector<T, 3>>(SamplePoints));
 
-			TUniquePtr<Chaos::TImplicitObject<float, 3>> ImplicitObject(Group->BuildSimImplicitObject());
+			TUniquePtr<Chaos::FImplicitObject> ImplicitObject(Group->BuildSimImplicitObject());
 			check(ImplicitObject);
 
 			if (SamplePoints)
 			{
 				auto PointVolumeRegistrationCheck = 
-					[&](const TArray<Chaos::TVector<float, 3>> &InSamplePoints, const Chaos::TImplicitObject<float, 3> &InImplicitObject, const float InTolerance) -> bool
+					[&](const TArray<Chaos::TVector<float, 3>> &InSamplePoints, const Chaos::FImplicitObject &InImplicitObject, const float InTolerance) -> bool
 					{
 						for (int32 i = 0; i < InSamplePoints.Num(); i++)
 						{
@@ -174,7 +174,7 @@ void FSkeletalMeshPhysicsProxy::CreateRigidBodyCallback(FParticlesType& Particle
 				// Precision gets worse in opt builds, so only do the phi test in debug.
 				checkSlow(PointVolumeRegistrationCheck(*SamplePoints, *ImplicitObject, 0.01));
 				auto PointBBoxCheck =
-					[&](const auto &InSamplePoints, const Chaos::TBox<float,3> &BBox) -> bool
+					[&](const auto &InSamplePoints, const Chaos::TAABB<float,3> &BBox) -> bool
 					{
 						for (int32 i = 0; i < InSamplePoints.Num(); i++)
 						{
@@ -190,7 +190,7 @@ void FSkeletalMeshPhysicsProxy::CreateRigidBodyCallback(FParticlesType& Particle
 				check(PointBBoxCheck(*SamplePoints, ImplicitObject->BoundingBox()));
 			}
 
-			const Chaos::TBox<float, 3>& BBox = ImplicitObject->BoundingBox();
+			const Chaos::TAABB<float, 3>& BBox = ImplicitObject->BoundingBox();
 
 			const FVector Scale = WorldTransform->GetScale3D();
 			const FVector &CenterOfMass = MassProperties.CenterOfMass;
@@ -237,7 +237,7 @@ void FSkeletalMeshPhysicsProxy::CreateRigidBodyCallback(FParticlesType& Particle
 			Particles.CollisionGroup(RigidBodyId) = Parameters.CollisionGroup;
 			
 			// Set implicit surface
-			const Chaos::ImplicitObjectType ShapeType = ImplicitObject->GetType();
+			const Chaos::EImplicitObjectType ShapeType = ImplicitObject->GetType();
 			if (ShapeType == Chaos::ImplicitObjectType::LevelSet)
 			{
 				FCollisionStructureManager::UpdateImplicitFlags(

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraNodeInput.h"
 #include "UObject/UnrealType.h"
@@ -20,7 +20,7 @@ DECLARE_CYCLE_STAT(TEXT("NiagaraEditor - UNiagaraNodeInput - SortNodes"), STAT_N
 
 UNiagaraNodeInput::UNiagaraNodeInput(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
-	, Usage(ENiagaraInputNodeUsage::Undefined)
+	, Usage(ENiagaraInputNodeUsage::Parameter)
 	, CallSortPriority(0)
 	, DataInterface(nullptr)
 {
@@ -70,6 +70,8 @@ void UNiagaraNodeInput::PostLoad()
 	{
 		DataInterface->OnChanged().AddUObject(this, &UNiagaraNodeInput::DataInterfaceChanged);
 	}
+
+	ValidateDataInterface();
 }
 
 void UNiagaraNodeInput::BuildParameterMapHistory(FNiagaraParameterMapHistoryBuilder& OutHistory, bool bRecursive /*= true*/, bool bFilterForCompilation /*= true*/) const
@@ -453,6 +455,8 @@ void UNiagaraNodeInput::SetDataInterface(UNiagaraDataInterface* InDataInterface)
 	{
 		DataInterface->OnChanged().AddUObject(this, &UNiagaraNodeInput::DataInterfaceChanged);
 	}
+
+	ValidateDataInterface();
 	DataInterfaceChanged();
 }
 
@@ -464,6 +468,17 @@ void UNiagaraNodeInput::DataInterfaceChanged()
 	if (NiagaraGraph != nullptr)
 	{
 		NiagaraGraph->NotifyGraphDataInterfaceChanged();
+	}
+}
+
+void UNiagaraNodeInput::ValidateDataInterface()
+{
+	if (DataInterface != nullptr &&
+		DataInterface->GetClass()->GetMetaData("DevelopmentStatus") == TEXT("Experimental"))
+	{
+		UEdGraphNode::bHasCompilerMessage = true;
+		UEdGraphNode::ErrorType = EMessageSeverity::Info;
+		UEdGraphNode::NodeUpgradeMessage = LOCTEXT("DataInterfaceExperimental", "This data interface is marked as experimental, use with care!");
 	}
 }
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -157,6 +157,8 @@ public:
 	 * @returns A valid render command encoder or nil.
 	 */
     mtlpp::RenderCommandEncoder GetParallelRenderCommandEncoder(uint32 Index, mtlpp::ParallelRenderCommandEncoder& ParallelEncoder);
+	
+	void InsertTextureBarrier();
 	
 private:
 #pragma mark -

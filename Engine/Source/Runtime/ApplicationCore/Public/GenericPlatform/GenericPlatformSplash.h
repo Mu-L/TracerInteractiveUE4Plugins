@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -43,6 +43,14 @@ struct APPLICATIONCORE_API FGenericPlatformSplash
 
 	/** Hide the splash screen. */
 	FORCEINLINE static void Hide() { }
+
+	/**
+	 * Sets a custom splash image to display
+	 * 
+	 * @param SplashFilename Full path to the splash image to display
+	 */
+	static void SetCustomSplashImage(const TCHAR* SplashFilename);
+
 
 	/**
 	 * Sets the text displayed on the splash screen (for startup/loading progress)

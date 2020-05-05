@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System.IO;
@@ -20,6 +20,7 @@ public class Engine : ModuleRules
 				"Developer/DerivedDataCache/Public",
 				"Runtime/SynthBenchmark/Public",
 				"Runtime/Engine/Private",
+				"Runtime/Net/Core/Private/Net/Core/PushModel/Types"
 			}
 		);
 
@@ -35,8 +36,8 @@ public class Engine : ModuleRules
 				"MovieSceneCapture",
 				"AutomationWorker",
 				"MovieSceneCapture",
-				"DesktopPlatform",
-            }
+				"DesktopPlatform"
+			}
 		);
 
 		if (Target.Configuration != UnrealTargetConfiguration.Shipping)
@@ -75,6 +76,7 @@ public class Engine : ModuleRules
 				"Messaging",
 				"MessagingCommon",
 				"RenderCore",
+				"AnalyticsET",
 				"RHI",
 				"Sockets",
 				"AssetRegistry", // Here until FAssetData is moved to engine
@@ -89,8 +91,9 @@ public class Engine : ModuleRules
 				"PakFile",
 				"NetworkReplayStreaming",
 				"PhysicsCore",
-                "SignalProcessing"
-			}
+                "SignalProcessing",
+                "AudioExtensions"
+            }
 		);
 
 		PrivateDependencyModuleNames.AddRange(
@@ -103,11 +106,12 @@ public class Engine : ModuleRules
 				"MaterialShaderQualitySettings",
 				"CinematicCamera",
 				"Analytics",
-				"AnalyticsET",
 				"AudioMixer",
 				"AudioMixerCore",
 				"SignalProcessing",
 				"CrunchCompression",
+				"IntelISPC",
+				"TraceLog",
 			}
 		);
 
@@ -140,7 +144,6 @@ public class Engine : ModuleRules
 		{
 			// for now we depend on this
 			PrivateDependencyModuleNames.Add("RawMesh");
-			PrivateDependencyModuleNames.Add("MeshDescriptionOperations");
 		}
 
 		bool bVariadicTemplatesSupported = true;
@@ -156,10 +159,6 @@ public class Engine : ModuleRules
 					bVariadicTemplatesSupported = false;
 				}
 			}
-
-			AddEngineThirdPartyPrivateStaticDependencies(Target,
-				"libOpus"
-				);
 		}
 
 		if (bVariadicTemplatesSupported)
@@ -187,7 +186,7 @@ public class Engine : ModuleRules
 
 		CircularlyReferencedDependentModules.Add("GameplayTags");
 		CircularlyReferencedDependentModules.Add("Landscape");
-        CircularlyReferencedDependentModules.Add("UMG");
+		CircularlyReferencedDependentModules.Add("UMG");
 		CircularlyReferencedDependentModules.Add("MaterialShaderQualitySettings");
 		CircularlyReferencedDependentModules.Add("CinematicCamera");
 		CircularlyReferencedDependentModules.Add("AudioMixer");
@@ -311,7 +310,7 @@ public class Engine : ModuleRules
 			}
 		);
 
-		if(Target.bWithLiveCoding)
+		if (Target.bWithLiveCoding)
 		{
 			DynamicallyLoadedModuleNames.Add("LiveCoding");
 		}
@@ -375,15 +374,15 @@ public class Engine : ModuleRules
 			DynamicallyLoadedModuleNames.Add("PhysXCooking");
 		}
 
-        PublicDependencyModuleNames.AddRange(
+		PublicDependencyModuleNames.AddRange(
 			new string[] {
 				"PhysicsSQ",
 				"ChaosSolvers"
 			}
 		);
 
-        // Engine public headers need to know about some types (enums etc.)
-        PublicIncludePathModuleNames.Add("ClothingSystemRuntimeInterface");
+		// Engine public headers need to know about some types (enums etc.)
+		PublicIncludePathModuleNames.Add("ClothingSystemRuntimeInterface");
 		PublicDependencyModuleNames.Add("ClothingSystemRuntimeInterface");
 
 		if (Target.bBuildEditor)

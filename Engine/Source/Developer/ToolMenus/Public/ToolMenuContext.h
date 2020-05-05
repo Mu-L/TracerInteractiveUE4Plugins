@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -38,6 +38,20 @@ public:
 	FToolMenuContext(TSharedPtr<FUICommandList> InCommandList, TSharedPtr<FExtender> InExtender = TSharedPtr<FExtender>(), UObject* InContext = nullptr);
 
 	template <typename TContextType>
+	TContextType* FindContext() const
+	{
+		for (UObject* Object : ContextObjects)
+		{
+			if (TContextType* Result = Cast<TContextType>(Object))
+			{
+				return Result;
+			}
+		}
+
+		return nullptr;
+	}
+
+	template <typename TContextType>
 	TContextType* Find() const
 	{
 		for (UObject* Object : ContextObjects)
@@ -59,7 +73,7 @@ public:
 	const FUIAction* GetActionForCommand(TSharedPtr<const FUICommandInfo> Command) const;
 
 	void AddExtender(const TSharedPtr<FExtender>& InExtender);
-	TSharedPtr<FExtender> GetAllExtenders();
+	TSharedPtr<FExtender> GetAllExtenders() const;
 	void ReplaceExtenders(const TSharedPtr<FExtender>& InExtender);
 	void ResetExtenders();
 

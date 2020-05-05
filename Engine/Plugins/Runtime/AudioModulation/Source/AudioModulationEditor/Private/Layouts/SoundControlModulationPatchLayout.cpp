@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "SoundControlModulationPatchLayout.h"
 
 #include "AudioModulationSettings.h"
@@ -7,8 +7,6 @@
 #include "DetailWidgetRow.h"
 #include "EditorStyleSet.h"
 #include "IAudioExtensionPlugin.h"
-#include "IDetailChildrenBuilder.h"
-#include "IDetailPropertyRow.h"
 #include "SoundModulationPatch.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"

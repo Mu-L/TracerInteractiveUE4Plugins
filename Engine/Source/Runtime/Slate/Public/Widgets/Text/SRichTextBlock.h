@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -216,6 +216,9 @@ public:
 	 */
 	void Refresh();
 
+	/** set the scale value at the TextLayout*/
+	void SetTextBlockScale(const float NewTextBlockScale);
+
 protected:
 	//~ SWidget interface
 	virtual FVector2D ComputeDesiredSize(float) const override;
@@ -256,6 +259,9 @@ private:
 
 	/** Prevents the text block from being smaller than desired in certain cases (e.g. when it is empty) */
 	TAttribute<float> MinDesiredWidth;
+
+	/** Use to Scale the entire Text Block*/
+	float TextBlockScale = 1.0f;
 
 	/**  */
 	TSharedPtr<FRichTextLayoutMarshaller> Marshaller;

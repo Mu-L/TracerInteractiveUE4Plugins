@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	OpenGLRenderTarget.cpp: OpenGL render target implementation.
@@ -1178,6 +1178,13 @@ void FOpenGLDynamicRHI::RHIBeginRenderPass(const FRHIRenderPassInfo& InInfo, con
 		extern void BeginOcclusionQueryBatch(uint32);
 		BeginOcclusionQueryBatch(InInfo.NumOcclusionQueries);
 	}
+
+#if PLATFORM_ANDROID && !PLATFORM_LUMIN && !PLATFORM_LUMINGL4
+	if (FAndroidOpenGL::RequiresAdrenoTilingModeHint())
+	{
+		FAndroidOpenGL::EnableAdrenoTilingModeHint(FCString::Strcmp(InName, TEXT("SceneColorRendering")) == 0);
+	}
+#endif
 }
 
 void FOpenGLDynamicRHI::RHIEndRenderPass()

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	VulkanMemory.h: Vulkan Memory RHI definitions.
@@ -18,9 +18,57 @@
 #define VULKAN_MEMORY_HIGHER_PRIORITY 0.75f
 #define VULKAN_MEMORY_HIGHEST_PRIORITY 1.f
 
-
+class FVulkanCommandListContext;
 class FVulkanQueue;
 class FVulkanCmdBuffer;
+
+#if !VULKAN_OBJECT_TRACKING
+#define VULKAN_TRACK_OBJECT_CREATE(Type, Ptr) do{}while(0)
+#define VULKAN_TRACK_OBJECT_DELETE(Type, Ptr) do{}while(0)
+#else
+#define VULKAN_TRACK_OBJECT_CREATE(Type, Ptr) do{TVulkanTrackBase<Type>::Add(Ptr);}while(0)
+#define VULKAN_TRACK_OBJECT_DELETE(Type, Ptr) do{TVulkanTrackBase<Type>::Remove(Ptr);}while(0)
+
+template<typename Type>
+class TVulkanTrackBase
+{
+public:
+
+	static FCriticalSection Lock;
+	static TSet<Type*> Objects;
+	template<typename Callback>
+	static uint32 CollectAll(Callback CB)
+	{
+		uint32 Count = 0;
+		FScopeLock L(&Lock);
+		TArray<Type*> Temp;
+		for(Type* Object : Objects)
+		{
+			Object->DumpMemory(CB);
+			Count++;
+		}
+		return Count;
+	}
+	static void Add(Type* Object)
+	{
+		FScopeLock L(&Lock);
+		Objects.Add(Object);
+
+	}
+	static void Remove(Type* Object)
+	{
+		FScopeLock L(&Lock);
+		Objects.Remove(Object);
+	}
+};
+
+template<typename Type>
+FCriticalSection TVulkanTrackBase<Type>::Lock;
+template<typename Type>
+TSet<Type*> TVulkanTrackBase<Type>::Objects;
+#endif
+
+
 
 enum class EDelayAcquireImageType
 {
@@ -125,6 +173,7 @@ namespace VulkanRHI
 			, bIsCoherent(0)
 			, bIsCached(0)
 			, bFreedBySystem(false)
+			, bDedicatedMemory(0)
 #if VULKAN_MEMORY_TRACK_FILE_LINE
 			, File(nullptr)
 			, Line(0)
@@ -185,6 +234,7 @@ namespace VulkanRHI
 		uint32 bIsCoherent : 1;
 		uint32 bIsCached : 1;
 		uint32 bFreedBySystem : 1;
+		uint32 bDedicatedMemory : 1;
 		uint32 : 0;
 
 #if VULKAN_MEMORY_TRACK_FILE_LINE
@@ -616,7 +666,7 @@ namespace VulkanRHI
 		}
 
 		void Flush(VkDeviceSize Offset, VkDeviceSize AllocationSize);
-		uint32 GetMaxSize(){ return MaxSize; }
+		uint32 GetMaxSize() const { return MaxSize; }
 	protected:
 		FResourceHeapManager* Owner;
 		uint32 MemoryTypeIndex;
@@ -1222,6 +1272,7 @@ namespace VulkanRHI
 			Semaphore,
 			ShaderModule,
 			Event,
+			ResourceAllocation,
 		};
 
 		template <typename T>
@@ -1230,6 +1281,7 @@ namespace VulkanRHI
 			static_assert(sizeof(T) <= sizeof(uint64), "Vulkan resource handle type size too large.");
 			EnqueueGenericResource(Type, (uint64)Handle);
 		}
+		void EnqueueResourceAllocation(TRefCountPtr<VulkanRHI::FOldResourceAllocation> ResourceAllocation);
 
 		void ReleaseResources(bool bDeleteImmediately = false);
 
@@ -1258,11 +1310,13 @@ namespace VulkanRHI
 
 		struct FEntry
 		{
-			uint64 FenceCounter;
-			uint64 Handle;
-			FVulkanCmdBuffer* CmdBuffer;
 			EType StructureType;
 			uint32 FrameNumber;
+			uint64 FenceCounter;
+			FVulkanCmdBuffer* CmdBuffer;
+
+			uint64 Handle;
+			TRefCountPtr<VulkanRHI::FOldResourceAllocation> ResourceAllocation;
 		};
 		FCriticalSection CS;
 		TArray<FEntry> Entries;
@@ -1613,6 +1667,12 @@ namespace VulkanRHI
 			}
 		}
 
+		inline void AddStages(uint32_t sourceStages, uint32_t destStages)
+		{
+			SourceStage |= sourceStages;
+			DestStage |= destStages;
+		}
+
 		// This is only valid while no other ImageBarriers are added/removed
 		inline VkImageSubresourceRange& GetSubresource(int32 BarrierIndex)
 		{
@@ -1634,10 +1694,11 @@ namespace VulkanRHI
 		}
 	};
 
-	class FSemaphore : public FRefCount
+	class VULKANRHI_API FSemaphore : public FRefCount
 	{
 	public:
 		FSemaphore(FVulkanDevice& InDevice);
+		FSemaphore(FVulkanDevice& InDevice, const VkSemaphore& InExternalSemaphore);
 		virtual ~FSemaphore();
 
 		inline VkSemaphore GetHandle() const
@@ -1645,9 +1706,15 @@ namespace VulkanRHI
 			return SemaphoreHandle;
 		}
 
+		inline bool IsExternallyOwned() const
+		{
+			return bExternallyOwned;
+		}
+
 	private:
 		FVulkanDevice& Device;
 		VkSemaphore SemaphoreHandle;
+		bool bExternallyOwned;
 	};
 }
 

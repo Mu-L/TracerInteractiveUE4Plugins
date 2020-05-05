@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	VulkanSwapChain.h: Vulkan viewport RHI definitions.
@@ -12,7 +12,12 @@
 #include "IHeadMountedDisplayVulkanExtensions.h"
 
 
+#if PLATFORM_ANDROID
+// this path crashes within libvulkan during vkDestroySwapchainKHR on some versions of Android. See FORT-250079
+int32 GVulkanKeepSwapChain = 0;
+#else
 int32 GVulkanKeepSwapChain = 1;
+#endif
 static FAutoConsoleVariableRef CVarVulkanKeepSwapChain(
 	TEXT("r.Vulkan.KeepSwapChain"),
 	GVulkanKeepSwapChain,
@@ -50,6 +55,14 @@ static FAutoConsoleVariableRef CVarVulkanExtensionFramePacer(
 	TEXT("r.Vulkan.ExtensionFramePacer"),
 	GVulkanExtensionFramePacer,
 	TEXT("Whether to enable the google extension Framepacer for Vulkan (when available on device)"),
+	ECVF_RenderThreadSafe
+);
+
+int32 GVulkanForcePacingWithoutVSync = 0;
+static FAutoConsoleVariableRef CVarVulkanForcePacingWithoutVSync(
+	TEXT("r.Vulkan.ForcePacingWithoutVSync"),
+	GVulkanForcePacingWithoutVSync,
+	TEXT("Whether to CPU pacers remain enabled even if VSync is off"),
 	ECVF_RenderThreadSafe
 );
 
@@ -116,7 +129,7 @@ VkResult SimulateErrors(VkResult Result)
 extern TAutoConsoleVariable<int32> GAllowPresentOnComputeQueue;
 static TSet<EPixelFormat> GPixelFormatNotSupportedWarning;
 
-FVulkanSwapChain::FVulkanSwapChain(VkInstance InInstance, FVulkanDevice& InDevice, void* WindowHandle, EPixelFormat& InOutPixelFormat, uint32 Width, uint32 Height,
+FVulkanSwapChain::FVulkanSwapChain(VkInstance InInstance, FVulkanDevice& InDevice, void* WindowHandle, EPixelFormat& InOutPixelFormat, uint32 Width, uint32 Height, bool bIsFullScreen,
 	uint32* InOutDesiredNumBackBuffers, TArray<VkImage>& OutImages, int8 InLockToVsync, FVulkanSwapChainRecreateInfo* RecreateInfo)
 	: SwapChain(VK_NULL_HANDLE)
 	, Device(InDevice)
@@ -132,7 +145,7 @@ FVulkanSwapChain::FVulkanSwapChain(VkInstance InInstance, FVulkanDevice& InDevic
 
 	NextPresentTargetTime = (FPlatformTime::Seconds() - GStartTime);
 
-	if(RecreateInfo != nullptr && RecreateInfo->SwapChain != VK_NULL_HANDLE)
+	if (RecreateInfo != nullptr && RecreateInfo->SwapChain != VK_NULL_HANDLE)
 	{
 		check(RecreateInfo->Surface != VK_NULL_HANDLE);
 		Surface = RecreateInfo->Surface;
@@ -412,11 +425,7 @@ FVulkanSwapChain::FVulkanSwapChain(VkInstance InInstance, FVulkanDevice& InDevic
 	SwapChainInfo.imageColorSpace = CurrFormat.colorSpace;
 	SwapChainInfo.imageExtent.width = SizeX;
 	SwapChainInfo.imageExtent.height = SizeY;
-	SwapChainInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-	if (GVulkanDelayAcquireImage == EDelayAcquireImageType::DelayAcquire)
-	{
-		SwapChainInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-	}
+	SwapChainInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 	SwapChainInfo.preTransform = PreTransform;
 	SwapChainInfo.imageArrayLayers = 1;
 	SwapChainInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -427,7 +436,6 @@ FVulkanSwapChain::FVulkanSwapChain(VkInstance InInstance, FVulkanDevice& InDevic
 		SwapChainInfo.oldSwapchain = RecreateInfo->SwapChain;
 	}
 	
-
 	SwapChainInfo.clipped = VK_TRUE;
 	SwapChainInfo.compositeAlpha = CompositeAlpha;
 
@@ -454,13 +462,35 @@ FVulkanSwapChain::FVulkanSwapChain(VkInstance InInstance, FVulkanDevice& InDevic
 	static bool bPrintSwapchainCreationInfo = true;
 	if (bPrintSwapchainCreationInfo)
 	{
-		UE_LOG(LogVulkanRHI, Log, TEXT("Creating new VK swapchain with format %d, color space %d, num images %d"), static_cast<uint32>(SwapChainInfo.imageFormat), static_cast<uint32>(SwapChainInfo.imageColorSpace), static_cast<uint32>(SwapChainInfo.minImageCount));
+		UE_LOG(LogVulkanRHI, Log, TEXT("Creating new VK swapchain with present mode %d, format %d, color space %d, num images %d"), 
+			static_cast<uint32>(SwapChainInfo.presentMode), static_cast<uint32>(SwapChainInfo.imageFormat), static_cast<uint32>(SwapChainInfo.imageColorSpace), static_cast<uint32>(SwapChainInfo.minImageCount));
 #if WITH_EDITOR
 		bPrintSwapchainCreationInfo = false;
 #endif
 	}
 
-	VERIFYVULKANRESULT_EXPANDED(VulkanRHI::vkCreateSwapchainKHR(Device.GetInstanceHandle(), &SwapChainInfo, VULKAN_CPU_ALLOCATOR, &SwapChain));
+#if VULKAN_SUPPORTS_FULLSCREEN_EXCLUSIVE
+	VkSurfaceFullScreenExclusiveInfoEXT FullScreenInfo;
+	ZeroVulkanStruct(FullScreenInfo, VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT);
+	if (Device.GetOptionalExtensions().HasEXTFullscreenExclusive)
+	{
+		FullScreenInfo.fullScreenExclusive = bIsFullScreen ? VK_FULL_SCREEN_EXCLUSIVE_ALLOWED_EXT : VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT;
+		FullScreenInfo.pNext = (void*)SwapChainInfo.pNext;
+		SwapChainInfo.pNext = &FullScreenInfo;
+	}
+#endif
+
+	VkResult Result = VulkanRHI::vkCreateSwapchainKHR(Device.GetInstanceHandle(), &SwapChainInfo, VULKAN_CPU_ALLOCATOR, &SwapChain);
+#if VULKAN_SUPPORTS_FULLSCREEN_EXCLUSIVE
+	if (Device.GetOptionalExtensions().HasEXTFullscreenExclusive && Result == VK_ERROR_INITIALIZATION_FAILED)
+	{
+		// Unlink fullscreen
+		UE_LOG(LogVulkanRHI, Warning, TEXT("Create swapchain failed with Initialization error; removing FullScreen extension..."));
+		SwapChainInfo.pNext = FullScreenInfo.pNext;
+		Result = VulkanRHI::vkCreateSwapchainKHR(Device.GetInstanceHandle(), &SwapChainInfo, VULKAN_CPU_ALLOCATOR, &SwapChain);
+	}
+#endif
+	VERIFYVULKANRESULT_EXPANDED(Result);
 
 	if (RecreateInfo != nullptr)
 	{
@@ -478,6 +508,7 @@ FVulkanSwapChain::FVulkanSwapChain(VkInstance InInstance, FVulkanDevice& InDevic
 
 	InternalWidth = FMath::Min(Width, SwapChainInfo.imageExtent.width);
 	InternalHeight = FMath::Min(Height, SwapChainInfo.imageExtent.height);
+	bInternalFullScreen = bIsFullScreen;
 
 	uint32 NumSwapChainImages;
 	VERIFYVULKANRESULT_EXPANDED(VulkanRHI::vkGetSwapchainImagesKHR(Device.GetInstanceHandle(), SwapChain, &NumSwapChainImages, nullptr));
@@ -804,7 +835,7 @@ void FGDTimingFramePacer::PollPastFrameInfo()
 void FVulkanSwapChain::RenderThreadPacing()
 {
 	check(IsInRenderingThread());
-	const int32 SyncInterval = LockToVsync ? RHIGetSyncInterval() : 0;
+	const int32 SyncInterval = (LockToVsync || GVulkanForcePacingWithoutVSync) ? RHIGetSyncInterval() : 0;
 
 	//very naive CPU side frame pacer.
 	if (GVulkanCPURenderThreadFramePacer && SyncInterval > 0)
@@ -872,7 +903,7 @@ FVulkanSwapChain::EStatus FVulkanSwapChain::Present(FVulkanQueue* GfxQueue, FVul
 	Info.pSwapchains = &SwapChain;
 	Info.pImageIndices = (uint32*)&CurrentImageIndex;
 
-	const int32 SyncInterval = LockToVsync ? RHIGetSyncInterval() : 0;
+	const int32 SyncInterval = (LockToVsync || GVulkanForcePacingWithoutVSync) ? RHIGetSyncInterval() : 0;
 	ensureMsgf(SyncInterval <= 3 && SyncInterval >= 0, TEXT("Unsupported sync interval: %i"), SyncInterval);
 
 #if VULKAN_SUPPORTS_GOOGLE_DISPLAY_TIMING

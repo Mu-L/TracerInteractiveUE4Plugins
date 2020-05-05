@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -65,7 +65,7 @@ public:
  * Class used to reference an FSceneViewStateInterface that allows destruction and recreation of all FSceneViewStateInterface's when needed. 
  * This is used to support reloading the renderer module on the fly.
  */
-class ENGINE_VTABLE FSceneViewStateReference
+class FSceneViewStateReference
 {
 public:
 	FSceneViewStateReference() :
@@ -157,7 +157,9 @@ enum EMaterialProperty
 	MP_Metallic UMETA(DisplayName = "Metallic"),
 	MP_Specular UMETA(DisplayName = "Specular"),
 	MP_Roughness UMETA(DisplayName = "Roughness "),
+	MP_Anisotropy UMETA(DisplayName = "Anisotropy"),
 	MP_Normal UMETA(DisplayName = "Normal"),
+	MP_Tangent UMETA(DisplayName = "Tangent"),
 	MP_WorldPositionOffset UMETA(Hidden),
 	MP_WorldDisplacement UMETA(Hidden),
 	MP_TessellationMultiplier UMETA(Hidden),

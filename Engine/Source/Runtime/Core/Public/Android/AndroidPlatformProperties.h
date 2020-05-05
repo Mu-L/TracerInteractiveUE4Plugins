@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*================================================================================
 	AndroidProperties.h - Basic static properties of a platform 
@@ -71,7 +71,7 @@ struct FAndroidPlatformProperties
 
 	static FORCEINLINE bool SupportsLowQualityLightmaps()
 	{
-#if PLATFORM_ANDROIDESDEFERRED || PLATFORM_ANDROIDGL4
+#if PLATFORM_ANDROIDGL4
 		return false;
 #else
 		return true;

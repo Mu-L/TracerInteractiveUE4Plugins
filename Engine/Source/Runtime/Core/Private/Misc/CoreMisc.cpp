@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // Core includes.
 #include "Misc/CoreMisc.h"
@@ -9,7 +9,10 @@
 #include "HAL/PlatformTime.h"
 #include "Misc/App.h"
 #include "Misc/LazySingleton.h"
+#include "Misc/OutputDeviceError.h"
 #include "Misc/ScopeLock.h"
+#include "CoreGlobals.h"
+#include "Templates/RefCounting.h"
 
 /** For FConfigFile in appInit							*/
 #include "Misc/ConfigCacheIni.h"
@@ -117,7 +120,7 @@ class FDerivedDataCacheInterface& GetDerivedDataCacheRef()
 	return *SingletonInterface;
 }
 
-class ITargetPlatformManagerModule* GetTargetPlatformManager()
+class ITargetPlatformManagerModule* GetTargetPlatformManager(bool bFailOnInitErrors)
 {
 	static class ITargetPlatformManagerModule* SingletonInterface = NULL;
 	if (!FPlatformProperties::RequiresCookedData())
@@ -128,6 +131,12 @@ class ITargetPlatformManagerModule* GetTargetPlatformManager()
 			check(IsInGameThread());
 			bInitialized = true;
 			SingletonInterface = FModuleManager::LoadModulePtr<ITargetPlatformManagerModule>("TargetPlatform");
+
+			FString InitErrors;
+			if (bFailOnInitErrors && SingletonInterface && SingletonInterface->HasInitErrors(&InitErrors))
+			{
+				GError->Log(*InitErrors);
+			}
 		}
 	}
 	return SingletonInterface;

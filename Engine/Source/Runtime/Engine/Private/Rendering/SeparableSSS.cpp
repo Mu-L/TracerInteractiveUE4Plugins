@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 SeparableSSS.cpp: Computing the kernel for the Separable Screen Space Subsurface Scattering, based on SeparableSSS, see copyright below
@@ -166,7 +166,7 @@ void ComputeMirroredSSSKernel(FLinearColor* TargetBuffer, uint32 TargetBufferSiz
 
 	// generate output (remove negative samples)
 	{
-		check(kernel[0].A == 0.0f);
+		check(FMath::IsNearlyZero(kernel[0].A));
 
 		// center sample
 		TargetBuffer[0] = kernel[0];

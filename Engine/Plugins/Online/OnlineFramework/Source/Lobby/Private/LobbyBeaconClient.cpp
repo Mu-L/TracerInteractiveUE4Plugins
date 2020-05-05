@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "LobbyBeaconClient.h"
 #include "GameFramework/PlayerController.h"
@@ -163,7 +163,7 @@ void ALobbyBeaconClient::LoginLocalPlayers()
 	for (FConstPlayerControllerIterator Iterator = World->GetPlayerControllerIterator(); Iterator; ++Iterator)
 	{
 		APlayerController* PC = Iterator->Get();
-		if (PC && PC->PlayerState && PC->PlayerState->UniqueId.IsValid())
+		if (PC && PC->PlayerState && PC->PlayerState->GetUniqueId().IsValid())
 		{
 			ULocalPlayer* LP = Cast<ULocalPlayer>(PC->Player);
 			if (LP)

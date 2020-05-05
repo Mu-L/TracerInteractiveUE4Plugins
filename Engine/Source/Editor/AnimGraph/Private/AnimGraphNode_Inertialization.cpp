@@ -1,8 +1,6 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AnimGraphNode_Inertialization.h"
-
-#include "EditorCategoryUtils.h"
 
 #define LOCTEXT_NAMESPACE "AnimGraphNode_Inertialization"
 

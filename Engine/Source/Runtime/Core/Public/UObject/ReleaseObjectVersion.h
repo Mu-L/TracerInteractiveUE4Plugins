@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreTypes.h"
@@ -26,7 +26,7 @@ struct CORE_API FReleaseObjectVersion
 		// Add Component node templates now use their own unique naming scheme to ensure more reliable archetype lookups.
 		AddComponentNodeTemplateUniqueNames,
 
-		// Fix a serialization issue with static mesh FMeshSectionInfoMap UProperty
+		// Fix a serialization issue with static mesh FMeshSectionInfoMap FProperty
 		UPropertryForMeshSectionSerialize,
 
 		// Existing HLOD settings screen size to screen area conversion
@@ -95,6 +95,12 @@ struct CORE_API FReleaseObjectVersion
 
 		// Upgrade filmback
 		DeprecateFilmbackSettings,
+		
+		// custom collision type
+		CustomImplicitCollisionType,
+
+		// FFieldPath will serialize the owner struct reference and only a short path to its property
+		FFieldPathOwnerSerialization,
 
 		// -----<new versions can be added above this line>-------------------------------------------------
 		VersionPlusOne,

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -57,6 +57,10 @@ public:
 
 	void Reset();
 	void UpdateTableTreeViews();
+	void UpdateEventAggregationTreeView();
+	void UpdateObjectTypeAggregationTreeView();
+	void UpdatePackageDetailsTreeView();
+	void UpdateExportDetailsTreeView();
 
 	/** Constructs this widget. */
 	void Construct(const FArguments& InArgs, const TSharedRef<SDockTab>& ConstructUnderMajorTab, const TSharedPtr<SWindow>& ConstructUnderWindow);

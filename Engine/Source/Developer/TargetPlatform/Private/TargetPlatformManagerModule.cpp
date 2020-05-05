@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "HAL/FileManager.h"
@@ -79,6 +79,7 @@ public:
 	FTargetPlatformManagerModule()
 		: bRestrictFormatsToRuntimeOnly(false)
 		, bForceCacheUpdate(true)
+		, bHasInitErrors(false)
 		, bIgnoreFirstDelegateCall(true)
 	{
 #if AUTOSDKS_ENABLED		
@@ -111,15 +112,9 @@ public:
 			}
 		}
 #endif
-
-		SetupSDKStatus();
-		//GetTargetPlatforms(); redudant with next call
-		GetActiveTargetPlatforms();
-		GetAudioFormats();
-		GetTextureFormats();
-		GetShaderFormats();
-
-		bForceCacheUpdate = false;
+		// Calling a virtual function from a constructor, but with no expectation that a derived implementation of this
+		// method would be called.  This is solely to avoid duplicating code in this implementation, not for polymorphism.
+		FTargetPlatformManagerModule::Invalidate();
 
 		FModuleManager::Get().OnModulesChanged().AddRaw(this, &FTargetPlatformManagerModule::ModulesChangesCallback);
 	}
@@ -134,6 +129,15 @@ public:
 
 	// ITargetPlatformManagerModule interface
 
+	virtual bool HasInitErrors(FString* OutErrorMessages) const
+	{
+		if (OutErrorMessages)
+		{
+			*OutErrorMessages = InitErrorMessages;
+		}
+		return bHasInitErrors;
+	}
+
 	virtual void Invalidate() override
 	{
 		bForceCacheUpdate = true;
@@ -141,9 +145,14 @@ public:
 		SetupSDKStatus();
 		//GetTargetPlatforms(); redudant with next call
 		GetActiveTargetPlatforms();
-		GetAudioFormats();
-		GetTextureFormats();
-		GetShaderFormats();
+
+		// If we've had an error due to an invalid target platform, don't do additional work
+		if (!bHasInitErrors)
+		{
+			GetAudioFormats();
+			GetTextureFormats();
+			GetShaderFormats();
+		}
 
 		bForceCacheUpdate = false;
 	}
@@ -170,16 +179,13 @@ public:
 		return nullptr;
 	}
 
-	virtual ITargetPlatform* FindTargetPlatform(const FString& Name) override
+	virtual ITargetPlatform* FindTargetPlatform(FStringView Name) override
 	{
-		const TArray<ITargetPlatform*>& TargetPlatforms = GetTargetPlatforms();	
-		
-		for (int32 Index = 0; Index < TargetPlatforms.Num(); Index++)
+		GetTargetPlatforms(); // Populates PlatformsByName
+
+		if (ITargetPlatform** Platform = PlatformsByName.Find(FName(Name)))
 		{
-			if (TargetPlatforms[Index]->PlatformName() == Name)
-			{
-				return TargetPlatforms[Index];
-			}
+			return *Platform;
 		}
 
 		return nullptr;
@@ -191,6 +197,14 @@ public:
 
 		for (int32 Index = 0; Index < TargetPlatforms.Num(); Index++)
 		{
+			//@todo-lh:
+			// FAllDesktopPlatformProperties will be removed soon as it's no longer maintained
+			// and will be replaced by the platform specific subclasses eventually, so skip "AllDesktop.
+			// Find platform specific subclass instead.
+			if (TargetPlatforms[Index]->PlatformName() == TEXT("AllDesktop"))
+			{
+				continue;
+			}
 			if (TargetPlatforms[Index]->SupportsValueForType(SupportType, RequiredSupportedValue))
 			{
 				return TargetPlatforms[Index];
@@ -234,6 +248,8 @@ public:
 		if (!bInitialized || bForceCacheUpdate)
 		{
 			bInitialized = true;
+			bHasInitErrors = false; // If we had errors before, reset the flag and see later in this function if there are errors.
+			InitErrorMessages.Empty();
 
 			Results.Empty(Results.Num());
 
@@ -276,9 +292,11 @@ public:
 					if (Results.Num() == 0)
 					{
 						// An invalid platform was specified...
-						// Inform the user and exit.
+						// Inform the user.
+						bHasInitErrors = true;
+						InitErrorMessages.Appendf(TEXT("Invalid target platform specified (%s). Available = { %s } "), *PlatformStr, *AvailablePlatforms);
 						UE_LOG(LogTargetPlatformManager, Error, TEXT("Invalid target platform specified (%s). Available = { %s } "), *PlatformStr, *AvailablePlatforms);
-						UE_LOG(LogTargetPlatformManager, Fatal, TEXT("Invalid target platform specified (%s). Available = { %s } "), *PlatformStr, *AvailablePlatforms);
+						return Results;
 					}
 				}
 			}
@@ -630,6 +648,7 @@ protected:
 		DECLARE_SCOPE_CYCLE_COUNTER(TEXT("FTargetPlatformManagerModule::DiscoverAvailablePlatforms"), STAT_FTargetPlatformManagerModule_DiscoverAvailablePlatforms, STATGROUP_TargetPlatform);
 
 		Platforms.Empty(Platforms.Num());
+		PlatformsByName.Empty(PlatformsByName.Num());
 
 #if !IS_MONOLITHIC
 		// Find all module subdirectories and add them so we can load dependent modules for target platform modules
@@ -713,8 +732,10 @@ protected:
 					RETRY_SETUPANDVALIDATE:
 						if (SetupAndValidateAutoSDK(Platform->GetPlatformInfo().AutoSDKPath))
 						{
-							UE_LOG(LogTargetPlatformManager, Display, TEXT("Loaded TargetPlatform '%s'"), *Platform->PlatformName());
+							const FString& PlatformName = Platform->PlatformName();
+							UE_LOG(LogTargetPlatformManager, Display, TEXT("Loaded TargetPlatform '%s'"), *PlatformName);
 							Platforms.Add(Platform);
+							PlatformsByName.Add(FName(PlatformName), Platform);
 						}
 						else
 						{
@@ -1110,6 +1131,8 @@ private:
 		SDKStatusMessage += Message;
 	}
 
+	FString InitErrorMessages;
+
 	// If true we should build formats that are actually required for use by the runtime. 
 	// This happens for an ordinary editor run and more specifically whenever there is no
 	// TargetPlatform= on the command line.
@@ -1119,11 +1142,17 @@ private:
 	// in case of a module reload of a TargetPlatform-Module.
 	bool bForceCacheUpdate;
 
+	// Flag to indicate that there were errors during initialization
+	bool bHasInitErrors;
+
 	// Flag to avoid redunant reloads
 	bool bIgnoreFirstDelegateCall;
 
 	// Holds the list of discovered platforms.
 	TArray<ITargetPlatform*> Platforms;
+
+	// Map for fast lookup of platforms by name.
+	TMap<FName, ITargetPlatform*> PlatformsByName;
 
 #if AUTOSDKS_ENABLED
 	// holds the list of Platforms that have attempted setup.

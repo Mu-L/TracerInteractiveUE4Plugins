@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SoundCueEditor.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
@@ -256,11 +256,12 @@ void FSoundCueEditor::PostUndo(bool bSuccess)
 	{
 		SoundCueGraphEditor->ClearSelectionSet();
 		SoundCueGraphEditor->NotifyGraphChanged();
+		FSlateApplication::Get().DismissAllMenus();
 	}
 
 }
 
-void FSoundCueEditor::NotifyPostChange( const FPropertyChangedEvent& PropertyChangedEvent, class UProperty* PropertyThatChanged)
+void FSoundCueEditor::NotifyPostChange( const FPropertyChangedEvent& PropertyChangedEvent, class FProperty* PropertyThatChanged)
 {
 	if (SoundCueGraphEditor.IsValid() && PropertyChangedEvent.ChangeType != EPropertyChangeType::Interactive)
 	{

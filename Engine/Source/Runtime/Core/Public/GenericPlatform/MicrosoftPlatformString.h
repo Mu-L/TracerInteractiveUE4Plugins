@@ -1,10 +1,15 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "Misc/Char.h"
 #include "GenericPlatform/GenericPlatformString.h"
 #include "GenericPlatform/GenericPlatformStricmp.h"
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <tchar.h>
 
 /**
 * Microsoft specific implementation 
@@ -56,6 +61,11 @@ struct FMicrosoftPlatformString : public FGenericPlatformString
 		return _tcslen( String );
 	}
 
+	static FORCEINLINE int32 Strnlen( const WIDECHAR* String, SIZE_T StringSize )
+	{
+		return _tcsnlen( String, StringSize );
+	}
+
 	static FORCEINLINE const WIDECHAR* Strstr( const WIDECHAR* String, const WIDECHAR* Find)
 	{
 		return _tcsstr( String, Find );
@@ -83,7 +93,7 @@ struct FMicrosoftPlatformString : public FGenericPlatformString
 
 	static FORCEINLINE float Atof(const WIDECHAR* String)
 	{
-		return _tstof( String );
+		return (float)_tstof( String );
 	}
 
 	static FORCEINLINE double Atod(const WIDECHAR* String)
@@ -163,6 +173,11 @@ struct FMicrosoftPlatformString : public FGenericPlatformString
 		return strlen( String ); 
 	}
 
+	static FORCEINLINE int32 Strnlen( const ANSICHAR* String, SIZE_T StringSize )
+	{
+		return strnlen( String, StringSize );
+	}
+
 	static FORCEINLINE const ANSICHAR* Strstr( const ANSICHAR* String, const ANSICHAR* Find)
 	{
 		return strstr(String, Find);
@@ -238,6 +253,11 @@ struct FMicrosoftPlatformString : public FGenericPlatformString
 	static FORCEINLINE int32 Strlen( const UCS2CHAR* String )
 	{
 		return _tcslen( (const WIDECHAR*)String );
+	}
+
+	static FORCEINLINE int32 Strnlen( const UCS2CHAR* String, SIZE_T StringSize )
+	{
+		return _tcsnlen( (const WIDECHAR*)String, StringSize );
 	}
 };
 

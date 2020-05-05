@@ -1,15 +1,17 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
 #include "UObject/PropertyPortFlags.h"
 #include "UObject/UnrealType.h"
+#include "Misc/StringBuilder.h"
 
 /*-----------------------------------------------------------------------------
-	UNameProperty.
+	FNameProperty.
 -----------------------------------------------------------------------------*/
+IMPLEMENT_FIELD(FNameProperty)
 
-void UNameProperty::ExportTextItem( FString& ValueStr, const void* PropertyValue, const void* DefaultValue, UObject* Parent, int32 PortFlags, UObject* ExportRootScope ) const
+void FNameProperty::ExportTextItem( FString& ValueStr, const void* PropertyValue, const void* DefaultValue, UObject* Parent, int32 PortFlags, UObject* ExportRootScope ) const
 {
 	FName Temp = *(FName*)PropertyValue;
 	if (0 != (PortFlags & PPF_ExportCpp))
@@ -31,28 +33,28 @@ void UNameProperty::ExportTextItem( FString& ValueStr, const void* PropertyValue
 		ValueStr += TEXT("\"\"");
 	}
 }
-const TCHAR* UNameProperty::ImportText_Internal( const TCHAR* Buffer, void* Data, int32 PortFlags, UObject* Parent, FOutputDevice* ErrorText ) const
+const TCHAR* FNameProperty::ImportText_Internal( const TCHAR* Buffer, void* Data, int32 PortFlags, UObject* Parent, FOutputDevice* ErrorText ) const
 {
 	if (!(PortFlags & PPF_Delimited))
 	{
-		*(FName*)Data = FName(Buffer, FNAME_Add);
+		*(FName*)Data = FName(Buffer);
 
 		// in order to indicate that the value was successfully imported, advance the buffer past the last character that was imported
 		Buffer += FCString::Strlen(Buffer);
 	}
 	else
 	{
-		FString Temp;
-		Buffer = UPropertyHelpers::ReadToken(Buffer, Temp, true);
+		TStringBuilder<256> Token;
+		Buffer = FPropertyHelpers::ReadToken(Buffer, /* out */ Token, true);
 		if (!Buffer)
 			return NULL;
 
-		*(FName*)Data = FName(*Temp, FNAME_Add);
+		*(FName*)Data = FName(Token);
 	}
 	return Buffer;
 }
 
-EConvertFromTypeResult UNameProperty::ConvertFromType(const FPropertyTag& Tag, FStructuredArchive::FSlot Slot, uint8* Data, UStruct* DefaultsStruct)
+EConvertFromTypeResult FNameProperty::ConvertFromType(const FPropertyTag& Tag, FStructuredArchive::FSlot Slot, uint8* Data, UStruct* DefaultsStruct)
 {
 	if (Tag.Type == NAME_StrProperty)
 	{
@@ -75,18 +77,12 @@ EConvertFromTypeResult UNameProperty::ConvertFromType(const FPropertyTag& Tag, F
 	return EConvertFromTypeResult::UseSerializeItem;
 }
 
-FString UNameProperty::GetCPPTypeForwardDeclaration() const
+FString FNameProperty::GetCPPTypeForwardDeclaration() const
 {
 	return FString();
 }
 
-uint32 UNameProperty::GetValueTypeHashInternal(const void* Src) const
+uint32 FNameProperty::GetValueTypeHashInternal(const void* Src) const
 {
 	return GetTypeHash(*(const FName*)Src);
 }
-
-IMPLEMENT_CORE_INTRINSIC_CLASS(UNameProperty, UProperty,
-	{
-	}
-);
-

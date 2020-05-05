@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SFrameTrack.h"
 
@@ -10,7 +10,6 @@
 #include "Rendering/DrawElements.h"
 #include "Styling/CoreStyle.h"
 #include "TraceServices/AnalysisService.h"
-#include "TraceServices/SessionService.h"
 #include "Widgets/Layout/SScrollBar.h"
 
 // Insights
@@ -203,19 +202,19 @@ void SFrameTrack::Tick(const FGeometry& AllottedGeometry, const double InCurrent
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-TSharedPtr<FFrameTrackSeries> SFrameTrack::FindOrAddSeries(int32 FrameType)
+TSharedRef<FFrameTrackSeries> SFrameTrack::FindOrAddSeries(int32 FrameType)
 {
 	TSharedPtr<FFrameTrackSeries>* SeriesPtrPtr = SeriesMap.Find(FrameType);
 	if (SeriesPtrPtr)
 	{
 		ensure((**SeriesPtrPtr).FrameType == FrameType);
-		return *SeriesPtrPtr;
+		return (*SeriesPtrPtr).ToSharedRef();
 	}
 	else
 	{
-		TSharedPtr<FFrameTrackSeries> SeriesPtr = MakeShareable(new FFrameTrackSeries(FrameType));
-		SeriesMap.Add(FrameType, SeriesPtr);
-		return SeriesPtr;
+		TSharedRef<FFrameTrackSeries> SeriesRef = MakeShared<FFrameTrackSeries>(FrameType);
+		SeriesMap.Add(FrameType, SeriesRef);
+		return SeriesRef;
 	}
 }
 
@@ -333,7 +332,7 @@ FFrameTrackSampleRef SFrameTrack::GetSampleAtMousePosition(float X, float Y)
 
 							if (Y >= TopY && Y < BottomY)
 							{
-								return FFrameTrackSampleRef(SeriesPtr, MakeShareable(new FFrameTrackSample(Sample)));
+								return FFrameTrackSampleRef(SeriesPtr, MakeShared<FFrameTrackSample>(Sample));
 							}
 						}
 					}
@@ -373,18 +372,6 @@ void SFrameTrack::SelectFrameAtMousePosition(float X, float Y)
 				FSlateApplication::Get().SetKeyboardFocus(TimingView);
 			}
 		}
-	}
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-const TCHAR* FrameTypeToString(int32 FrameType)
-{
-	switch (FrameType)
-	{
-		case TraceFrameType_Game:      return TEXT("Game");
-		case TraceFrameType_Rendering: return TEXT("Rendering");
-		default:                       return TEXT("Misc");
 	}
 }
 
@@ -461,7 +448,7 @@ int32 SFrameTrack::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeom
 
 			const FString Text = FString::Format(TEXT("{0} frame {1} ({2})"),
 				{
-					::FrameTypeToString(HoveredSample.Series->FrameType),
+					FFrameTrackDrawHelper::FrameTypeToString(HoveredSample.Series->FrameType),
 					FText::AsNumber(HoveredSample.Sample->LargestFrameIndex).ToString(),
 					TimeUtils::FormatTimeAuto(HoveredSample.Sample->LargestFrameDuration)
 				});

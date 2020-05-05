@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "FrameRateCustomization.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
@@ -25,28 +25,27 @@ TSharedRef<IPropertyTypeCustomization> FFrameRateCustomization::MakeInstance()
 void FFrameRateCustomization::CustomizeHeader(TSharedRef<IPropertyHandle> InPropertyHandle, FDetailWidgetRow& HeaderRow, IPropertyTypeCustomizationUtils& CustomizationUtils)
 {
 	StructPropertyHandle = InPropertyHandle;
+
+	TSharedPtr<IPropertyUtilities> PropertyUtils = CustomizationUtils.GetPropertyUtilities();
+
+	HeaderRow.NameContent()
+		[
+			StructPropertyHandle->CreatePropertyNameWidget()
+		]
+
+	.ValueContent()
+		[
+			SNew(SFrameRatePicker)
+			.Font(CustomizationUtils.GetRegularFont())
+		.HasMultipleValues(this, &FFrameRateCustomization::HasMultipleValues)
+		.Value(this, &FFrameRateCustomization::GetFirstFrameRate)
+		.OnValueChanged(this, &FFrameRateCustomization::SetFrameRate)
+		].IsEnabled(MakeAttributeLambda([=] { return !InPropertyHandle->IsEditConst() && PropertyUtils->IsPropertyEditingEnabled(); }));
 }
 
 
 void FFrameRateCustomization::CustomizeChildren(TSharedRef<IPropertyHandle> InPropertyHandle, IDetailChildrenBuilder& ChildBuilder, IPropertyTypeCustomizationUtils& CustomizationUtils)
 {
-	TSharedPtr<IPropertyUtilities> PropertyUtils = CustomizationUtils.GetPropertyUtilities();
-
-	FDetailWidgetRow& CustomRow = ChildBuilder.AddCustomRow(StructPropertyHandle->GetPropertyDisplayName());
-
-	CustomRow.NameContent()
-	[
-		StructPropertyHandle->CreatePropertyNameWidget()
-	];
-
-	CustomRow.ValueContent()
-	[
-		SNew(SFrameRatePicker)
-		.Font(CustomizationUtils.GetRegularFont())
-		.HasMultipleValues(this, &FFrameRateCustomization::HasMultipleValues)
-		.Value(this, &FFrameRateCustomization::GetFirstFrameRate)
-		.OnValueChanged(this, &FFrameRateCustomization::SetFrameRate)
-	].IsEnabled(MakeAttributeLambda([=] { return !InPropertyHandle->IsEditConst() && PropertyUtils->IsPropertyEditingEnabled(); }));
 }
 
 
@@ -68,7 +67,7 @@ FFrameRate FFrameRateCustomization::GetFirstFrameRate() const
 
 void FFrameRateCustomization::SetFrameRate(FFrameRate NewFrameRate)
 {
-	if (UStructProperty* StructProperty = Cast<UStructProperty>(StructPropertyHandle->GetProperty()))
+	if (FStructProperty* StructProperty = CastField<FStructProperty>(StructPropertyHandle->GetProperty()))
 	{
 		TArray<void*> RawData;
 		StructPropertyHandle->AccessRawData(RawData);

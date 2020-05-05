@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SConcertSessionRecovery.h"
 
@@ -22,10 +22,15 @@ void SConcertSessionRecovery::Construct(const FArguments& InArgs)
 	IntroductionText = InArgs._IntroductionText;
 	ParentWindow = InArgs._ParentWindow;
 	OnRestoreFn = InArgs._OnRestore;
+	OnCancelFn = InArgs._OnCancel;
+	IsRecoverThroughButtonVisible = InArgs._IsRecoverThroughButtonsVisible;
 
 	ActivityViewOptions = MakeShared<FConcertSessionActivitiesOptions>();
 	ActivityViewOptions->bEnableConnectionActivityFiltering = InArgs._IsConnectionActivityFilteringEnabled;
 	ActivityViewOptions->bEnableLockActivityFiltering = InArgs._IsLockActivityFilteringEnabled;
+	ActivityViewOptions->bEnablePackageActivityFiltering = InArgs._IsPackageActivityFilteringEnabled;
+	ActivityViewOptions->bEnableTransactionActivityFiltering = InArgs._IsTransactionActivityFilteringEnabled;
+	ActivityViewOptions->bEnableIgnoredActivityFiltering = InArgs._IsIgnoredActivityFilteringEnabled;
 
 	SAssignNew(ActivityView, SConcertSessionActivities)
 	.OnFetchActivities(InArgs._OnFetchActivities)
@@ -39,7 +44,11 @@ void SConcertSessionRecovery::Construct(const FArguments& InArgs)
 	.PackageColumnVisibility(InArgs._PackageColumnVisibility)
 	.ConnectionActivitiesVisibility(ActivityViewOptions.Get(), &FConcertSessionActivitiesOptions::GetConnectionActivitiesVisibility)
 	.LockActivitiesVisibility(ActivityViewOptions.Get(), &FConcertSessionActivitiesOptions::GetLockActivitiesVisibility)
-	.DetailsAreaVisibility(InArgs._DetailsAreaVisibility);
+	.PackageActivitiesVisibility(ActivityViewOptions.Get(), &FConcertSessionActivitiesOptions::GetPackageActivitiesVisibility)
+	.TransactionActivitiesVisibility(ActivityViewOptions.Get(), &FConcertSessionActivitiesOptions::GetTransactionActivitiesVisibility)
+	.IgnoredActivitiesVisibility(ActivityViewOptions.Get(), &FConcertSessionActivitiesOptions::GetIgnoredActivitiesVisibility)
+	.DetailsAreaVisibility(InArgs._DetailsAreaVisibility)
+	.NoActivitiesReasonText(InArgs._NoActivitiesReasonText);
 
 	ChildSlot
 	[
@@ -113,13 +122,14 @@ void SConcertSessionRecovery::Construct(const FArguments& InArgs)
 			[
 				SNew(SUniformGridPanel)
 				.SlotPadding(FMargin(2.0f, 0.0f))
+				.Visibility(InArgs._AreRecoverAllAndCancelButtonsVisible.Get() ? EVisibility::Visible : EVisibility::Collapsed)
 
 				+SUniformGridPanel::Slot(0, 0)
 				[
 					SNew(SButton)
 					.ForegroundColor(FLinearColor::White)
 					.ButtonStyle(FEditorStyle::Get(), TEXT("FlatButton.Success"))
-					.ToolTipText(LOCTEXT("RecoverTooltip", "Replay all recorded transactions through the most recent one, including the ones currently filtered out by the view."))
+					.ToolTipText(this, &SConcertSessionRecovery::GetRecoverAllButtonTooltip)
 					.OnClicked(this, &SConcertSessionRecovery::OnRecoverAllClicked)
 					.HAlign(HAlign_Center)
 					.ContentPadding(FMargin(14, 3))
@@ -154,35 +164,91 @@ void SConcertSessionRecovery::Construct(const FArguments& InArgs)
 
 TSharedPtr<SWidget> SConcertSessionRecovery::MakeRecoverThroughWidget(TWeakPtr<FConcertClientSessionActivity> Activity, const FName& ColumnId)
 {
-	if (ActivityView->IsLastColumn(ColumnId)) // The most right cell.
+	if (TSharedPtr<FConcertClientSessionActivity> ActivityPin = Activity.Pin())
 	{
-		// The green 'Recover Through' button that appears in the most right cell if the row is selected.
-		return SNew(SBox)
-		.Padding(FMargin(1, 1))
-		.HAlign(HAlign_Right)
-		.VAlign(VAlign_Center)
-		[
-			SNew(SButton)
-			.ForegroundColor(FLinearColor::White)
-			.ButtonStyle(FEditorStyle::Get(), TEXT("FlatButton.Success"))
-			.Visibility_Lambda([this, Activity](){ return GetRecoverThroughButtonVisibility(Activity.Pin()); })
-			.OnClicked_Lambda([this, Activity](){ RecoverThrough(Activity.Pin()); return FReply::Handled(); })
-			.ToolTipText(LOCTEXT("RecoverThrough", "Replay all prior transactions through this activity, including the ones currently filtered out by the view."))
-			.ContentPadding(FMargin(20, 0))
+		if (ActivityView->IsLastColumn(ColumnId) && !ActivityPin->Activity.bIgnored) // The most right cell and activity will not be ignored on recovery.
+		{
+			// The green 'Recover Through' button that appears in the most right cell if the row is selected.
+			return SNew(SBox)
+			.Padding(FMargin(1, 1))
+			.HAlign(HAlign_Right)
+			.VAlign(VAlign_Center)
 			[
-				SNew(STextBlock)
-				.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.10"))
-				.Text(FEditorFontGlyphs::Arrow_Circle_O_Right)
-			]
-		];
+				SNew(SButton)
+				.ForegroundColor(FLinearColor::White)
+				.ButtonStyle(FEditorStyle::Get(), TEXT("FlatButton.Success"))
+				.Visibility_Lambda([this, Activity](){ return GetRecoverThroughButtonVisibility(Activity.Pin()); })
+				.OnClicked_Lambda([this, Activity](){ RecoverThrough(Activity.Pin()); return FReply::Handled(); })
+				.ToolTipText(this, &SConcertSessionRecovery::GetRecoverThroughButtonTooltip)
+				.ContentPadding(FMargin(20, 0))
+				[
+					SNew(STextBlock)
+					.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.10"))
+					.Text(FEditorFontGlyphs::Arrow_Circle_O_Right)
+				]
+			];
+		}
 	}
 
-	return nullptr; // No overlay for other columns.
+	return nullptr; // No overlay.
+}
+
+void SConcertSessionRecovery::Reset()
+{
+	ActivityView->Reset();
+}
+
+int32 SConcertSessionRecovery::GetTotalActivityNum() const
+{
+	return ActivityView->GetTotalActivityNum();
+}
+
+TSharedPtr<FConcertClientSessionActivity> SConcertSessionRecovery::GetMostRecentActivity() const
+{
+	return ActivityView->GetMostRecentActivity();
 }
 
 EVisibility SConcertSessionRecovery::GetRecoverThroughButtonVisibility(TSharedPtr<FConcertClientSessionActivity> Activity)
 {
-	return Activity == ActivityView->GetSelectedActivity() ? EVisibility::Visible : EVisibility::Hidden;
+	return Activity == ActivityView->GetSelectedActivity() && IsRecoverThroughButtonVisible.Get() ? EVisibility::Visible : EVisibility::Hidden;
+}
+
+FText SConcertSessionRecovery::GetRecoverThroughButtonTooltip() const
+{
+	if ((ActivityView->GetTotalActivityNum() == ActivityView->GetDisplayedActivityNum() && ActivityView->GetIgnoredActivityNum() == 0) ||
+	    (ActivityView->GetTotalActivityNum() - ActivityView->GetDisplayedActivityNum() == ActivityView->GetIgnoredActivityNum()))
+	{
+		return LOCTEXT("RecoverThroughAll_Tooltip", "Recover all prior activities through this activity.");
+	}
+	else if (ActivityView->GetTotalActivityNum() == ActivityView->GetDisplayedActivityNum())
+	{
+		return LOCTEXT("RecoverThroughWithIgnored_Tooltip", "Recover all prior activities through this activity, excluding unrecoverable ones (grayed out).");
+	}
+	else if (ActivityView->GetIgnoredActivityNum() == 0 || !ActivityViewOptions->bDisplayIgnoredActivities)
+	{
+		return LOCTEXT("RecoverThroughWithFilter_Tooltip", "Recover all prior activities through this activity, including the ones currently filtered out by a text search or a view option.");
+	}
+
+	return LOCTEXT("RecoverThroughWithIgnoredAndFilter_Tooltip", "Recover all prior activities through this activity, excluding unrecoverable ones (grayed out), but including the those currently filtered out by a text search or a view option.");
+}
+
+FText SConcertSessionRecovery::GetRecoverAllButtonTooltip() const
+{
+	if ((ActivityView->GetTotalActivityNum() == ActivityView->GetDisplayedActivityNum() && ActivityView->GetIgnoredActivityNum() == 0) ||
+	    (ActivityView->GetTotalActivityNum() - ActivityView->GetDisplayedActivityNum() == ActivityView->GetIgnoredActivityNum()))
+	{
+		return LOCTEXT("RecoverAll_Tooltip", "Recover all activities.");
+	}
+	else if (ActivityView->GetTotalActivityNum() == ActivityView->GetDisplayedActivityNum())
+	{
+		return LOCTEXT("RecoverAllWithIgnored_Tooltip", "Recover all activities, excluding unrecoverable ones (grayed out).");
+	}
+	else if (ActivityView->GetIgnoredActivityNum() == 0 || !ActivityViewOptions->bDisplayIgnoredActivities)
+	{
+		return LOCTEXT("RecoverAllWithFilter_Tooltip", "Recover all activities, including the ones currently filtered out by a text search or a view option.");
+	}
+
+	return LOCTEXT("RecoverAllWithIgnoredAndFilter_Tooltip", "Recover all activities, excluding unrecoverable ones (grayed out), but including those currently filtered out by a text search or a view option.");
 }
 
 void SConcertSessionRecovery::OnSearchTextChanged(const FText& InFilterText)
@@ -208,7 +274,14 @@ FReply SConcertSessionRecovery::OnCancelRecoveryClicked()
 {
 	check(!RecoveryThroughItem.IsValid());
 
-	DismissWindow();
+	if (OnCancelFn) // If a cancel behavior is bound.
+	{
+		OnCancelFn();
+	}
+	else // Default cancel behavior.
+	{
+		DismissWindow();
+	}
 	return FReply::Handled();
 }
 

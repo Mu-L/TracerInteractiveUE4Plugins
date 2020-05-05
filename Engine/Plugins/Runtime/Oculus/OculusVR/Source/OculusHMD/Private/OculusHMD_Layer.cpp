@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OculusHMD_Layer.h"
 
@@ -17,6 +17,7 @@
 #include "Engine/GameEngine.h"
 #include "Engine/Public/SceneUtils.h"
 #include "OculusHMDPrivate.h"
+#include "OculusHMDModule.h"
 
 
 namespace OculusHMD
@@ -38,7 +39,7 @@ FOvrpLayer::~FOvrpLayer()
 	{
 		ExecuteOnRHIThread_DoNotWait([this]()
 		{
-			ovrp_DestroyLayer(OvrpLayerId);
+			FOculusHMDModule::GetPluginWrapper().DestroyLayer(OvrpLayerId);
 		});
 	}
 }
@@ -184,7 +185,7 @@ static void AppendFaceIndices(const int v0, const int v1, const int v2, const in
 
 void FLayer::BuildPokeAHoleMesh(TArray<FVector>& Vertices, TArray<int32>& Triangles, TArray<FVector2D>& UV0)
 {
-	if (Desc.ShapeType == IStereoLayers::QuadLayer)
+	if (Desc.HasShape<FQuadLayer>())
 	{
 		const float QuadScale = 0.99;
 
@@ -209,20 +210,21 @@ void FLayer::BuildPokeAHoleMesh(TArray<FVector>& Vertices, TArray<int32>& Triang
 		Triangles.Reserve(6);
 		AppendFaceIndices(0, 1, 2, 3, Triangles, false);
 	}
-	else if (Desc.ShapeType == IStereoLayers::CylinderLayer)
+	else if (Desc.HasShape<FCylinderLayer>())
 	{
+		const FCylinderLayer& CylinderProps = Desc.GetShape<FCylinderLayer>();
 		const float CylinderScale = 0.99;
 
 		FIntPoint TexSize = Desc.Texture.IsValid() ? Desc.Texture->GetTexture2D()->GetSizeXY() : Desc.LayerSize;
 		float AspectRatio = TexSize.X ? (float)TexSize.Y / (float)TexSize.X : 3.0f / 4.0f;
 
-		float CylinderHeight = (Desc.Flags & IStereoLayers::LAYER_FLAG_QUAD_PRESERVE_TEX_RATIO) ? Desc.CylinderOverlayArc * AspectRatio : Desc.CylinderHeight;
+		float CylinderHeight = (Desc.Flags & IStereoLayers::LAYER_FLAG_QUAD_PRESERVE_TEX_RATIO) ? CylinderProps.OverlayArc * AspectRatio : CylinderProps.Height;
 
 		const FVector XAxis = FVector(1, 0, 0);
 		const FVector YAxis = FVector(0, 1, 0);
 		const FVector HalfHeight = FVector(0, 0, CylinderHeight / 2);
 
-		const float ArcAngle = Desc.CylinderOverlayArc / Desc.CylinderRadius;
+		const float ArcAngle = CylinderProps.OverlayArc / CylinderProps.Radius;
 		const int Sides = (int)( (ArcAngle * 180) / (PI * 5) ); // one triangle every 10 degrees of cylinder for a good-cheap approximation
 		Vertices.Init(FVector::ZeroVector, 2 * (Sides + 1));
 		UV0.Init(FVector2D::ZeroVector, 2 * (Sides + 1));
@@ -234,7 +236,7 @@ void FLayer::BuildPokeAHoleMesh(TArray<FVector>& Vertices, TArray<int32>& Triang
 
 		for (int Side = 0; Side < Sides + 1; Side++)
 		{
-			FVector MidVertex = Desc.CylinderRadius * (FMath::Cos(CurrentAngle) * XAxis + FMath::Sin(CurrentAngle) * YAxis);
+			FVector MidVertex = CylinderProps.Radius * (FMath::Cos(CurrentAngle) * XAxis + FMath::Sin(CurrentAngle) * YAxis);
 			Vertices[2 * Side] = (MidVertex - HalfHeight) * CylinderScale;
 			Vertices[(2 * Side) + 1] = (MidVertex + HalfHeight) * CylinderScale;
 
@@ -254,7 +256,7 @@ void FLayer::BuildPokeAHoleMesh(TArray<FVector>& Vertices, TArray<int32>& Triang
 			}
 		}
 	}
-	else if (Desc.ShapeType == IStereoLayers::CubemapLayer)
+	else if (Desc.HasShape<FCubemapLayer>())
 	{
 		const float CubemapScale = 1000;
 		Vertices.Init(FVector::ZeroVector, 8);
@@ -371,31 +373,31 @@ void FLayer::Initialize_RenderThread(const FSettings* Settings, FCustomPresent* 
 
 		ovrpShape Shape;
 
-		switch (Desc.ShapeType)
+		if (Desc.HasShape<FQuadLayer>())
 		{
-		case IStereoLayers::QuadLayer:
 			Shape = ovrpShape_Quad;
-			break;
-
-		case IStereoLayers::CylinderLayer:
+		}
+		else if (Desc.HasShape<FCylinderLayer>())
+		{
 			Shape = ovrpShape_Cylinder;
-			break;
-
-		case IStereoLayers::CubemapLayer:
+		}
+		else if (Desc.HasShape<FCubemapLayer>())
+		{
 			Shape = ovrpShape_Cubemap;
-			break;
-
-		case IStereoLayers::EquirectLayer:
+		}
+		else if (Desc.HasShape<FEquirectLayer>())
+		{
 			Shape = ovrpShape_Equirect;
-			break;
+		}
+		else
+		{
 
-		default:
 			return;
 		}
 
 		EPixelFormat Format = Desc.Texture.IsValid() ? CustomPresent->GetPixelFormat(Desc.Texture->GetFormat()) : CustomPresent->GetDefaultPixelFormat();
 #if PLATFORM_ANDROID
-		uint32 NumMips = 1;
+		uint32 NumMips = Desc.Texture.IsValid() ? Desc.Texture->GetNumMips() : 1;
 #else
 		uint32 NumMips = 0;
 #endif
@@ -413,7 +415,7 @@ void FLayer::Initialize_RenderThread(const FSettings* Settings, FCustomPresent* 
 		}
 
 		// Calculate layer desc
-		ovrp_CalculateLayerDesc(
+		FOculusHMDModule::GetPluginWrapper().CalculateLayerDesc(
 			Shape,
 			!Desc.LeftTexture.IsValid() ? ovrpLayout_Mono : ovrpLayout_Stereo,
 			ovrpSizei { (int) SizeX, (int) SizeY },
@@ -460,10 +462,10 @@ void FLayer::Initialize_RenderThread(const FSettings* Settings, FCustomPresent* 
 
 		ExecuteOnRHIThread([&]()
 		{
-			// UNDONE Do this in RenderThread once OVRPlugin allows ovrp_SetupLayer to be called asynchronously
+			// UNDONE Do this in RenderThread once OVRPlugin allows FOculusHMDModule::GetPluginWrapper().SetupLayer to be called asynchronously
 			int32 TextureCount;
-			if (OVRP_SUCCESS(ovrp_SetupLayer(CustomPresent->GetOvrpDevice(), OvrpLayerDesc.Base, (int*) &OvrpLayerId)) &&
-				OVRP_SUCCESS(ovrp_GetLayerTextureStageCount(OvrpLayerId, &TextureCount)))
+			if (OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().SetupLayer(CustomPresent->GetOvrpDevice(), OvrpLayerDesc.Base, (int*) &OvrpLayerId)) &&
+				OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().GetLayerTextureStageCount(OvrpLayerId, &TextureCount)))
 			{
 				// Left
 				{
@@ -480,7 +482,7 @@ void FLayer::Initialize_RenderThread(const FSettings* Settings, FCustomPresent* 
 					for (int32 TextureIndex = 0; TextureIndex < TextureCount; TextureIndex++)
 					{
 						ovrpTextureHandle* DepthTexHdlPtr = bHasDepth ? &DepthTextures[TextureIndex] : nullptr;
-						if (!OVRP_SUCCESS(ovrp_GetLayerTexture2(OvrpLayerId, TextureIndex, ovrpEye_Left, &ColorTextures[TextureIndex], DepthTexHdlPtr)))
+						if (!OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().GetLayerTexture2(OvrpLayerId, TextureIndex, ovrpEye_Left, &ColorTextures[TextureIndex], DepthTexHdlPtr)))
 						{
 							UE_LOG(LogHMD, Error, TEXT("Failed to create Oculus layer texture. NOTE: This causes a leak of %d other texture(s), which will go unused."), TextureIndex);
 							// skip setting bLayerCreated and allocating any other textures
@@ -490,7 +492,7 @@ void FLayer::Initialize_RenderThread(const FSettings* Settings, FCustomPresent* 
 						{
 							// Call fails on unsupported platforms and returns null textures for no foveation texture
 							// Since this texture is not required for rendering, don't return on failure
-							if (!OVRP_SUCCESS(ovrp_GetLayerTextureFoveation(OvrpLayerId, TextureIndex, ovrpEye_Left, &FoveationTextures[TextureIndex], &FoveationTextureSize)) || 
+							if (!OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().GetLayerTextureFoveation(OvrpLayerId, TextureIndex, ovrpEye_Left, &FoveationTextures[TextureIndex], &FoveationTextureSize)) || 
 								FoveationTextures[TextureIndex] == (unsigned long long)nullptr)
 							{
 								bValidFoveationTextures = false;
@@ -511,7 +513,7 @@ void FLayer::Initialize_RenderThread(const FSettings* Settings, FCustomPresent* 
 					for (int32 TextureIndex = 0; TextureIndex < TextureCount; TextureIndex++)
 					{
 						ovrpTextureHandle* DepthTexHdlPtr = bHasDepth ? &RightDepthTextures[TextureIndex] : nullptr;
-						if (!OVRP_SUCCESS(ovrp_GetLayerTexture2(OvrpLayerId, TextureIndex, ovrpEye_Right, &RightColorTextures[TextureIndex], DepthTexHdlPtr)))
+						if (!OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().GetLayerTexture2(OvrpLayerId, TextureIndex, ovrpEye_Right, &RightColorTextures[TextureIndex], DepthTexHdlPtr)))
 						{
 							UE_LOG(LogHMD, Error, TEXT("Failed to create Oculus layer texture. NOTE: This causes a leak of %d other texture(s), which will go unused."), TextureCount + TextureIndex);
 							// skip setting bLayerCreated and allocating any other textures
@@ -556,6 +558,11 @@ void FLayer::Initialize_RenderThread(const FSettings* Settings, FCustomPresent* 
 
 			uint32 ColorTexCreateFlags = TexCreate_ShaderResource | TexCreate_RenderTargetable | (bNeedsTexSrgbCreate ? TexCreate_SRGB : 0);
 			uint32 DepthTexCreateFlags = TexCreate_ShaderResource | TexCreate_DepthStencilTargetable;
+
+			if (Desc.Texture.IsValid())
+			{
+				ColorTexCreateFlags |= (Desc.Texture->GetFlags() & TexCreate_SRGB);
+			}
 
 			FClearValueBinding ColorTextureBinding = FClearValueBinding();
 
@@ -609,7 +616,6 @@ void FLayer::UpdateTexture_RenderThread(FCustomPresent* CustomPresent, FRHIComma
 		{
 			bool bAlphaPremultiply = true;
 			bool bNoAlphaWrite = (Desc.Flags & IStereoLayers::LAYER_FLAG_TEX_NO_ALPHA_CHANNEL) != 0;
-			bool bIsCubemap = (Desc.ShapeType == IStereoLayers::ELayerShape::CubemapLayer);
 
 			// Left
 			{
@@ -659,28 +665,30 @@ const ovrpLayerSubmit* FLayer::UpdateLayer_RHIThread(const FSettings* Settings, 
 	OvrpLayerSubmit.ColorScale = injectColorScale ? Settings->ColorScale : ovrpVector4f{ 1, 1, 1, 1};
 
 	if (OvrpLayerDesc.Shape == ovrpShape_Equirect) {
+		const FEquirectLayer& EquirectProps = Desc.GetShape<FEquirectLayer>();
+
 		ovrpTextureRectMatrixf& RectMatrix = OvrpLayerSubmit.TextureRectMatrix;
 		ovrpRectf& LeftUVRect = RectMatrix.LeftRect;
 		ovrpRectf& RightUVRect = RectMatrix.RightRect;
-		LeftUVRect.Pos.x = Desc.EquirectProps.LeftUVRect.Min.X;
-		LeftUVRect.Pos.y = Desc.EquirectProps.LeftUVRect.Min.Y;
-		LeftUVRect.Size.w = Desc.EquirectProps.LeftUVRect.Max.X - Desc.EquirectProps.LeftUVRect.Min.X;
-		LeftUVRect.Size.h = Desc.EquirectProps.LeftUVRect.Max.Y - Desc.EquirectProps.LeftUVRect.Min.Y;
-		RightUVRect.Pos.x = Desc.EquirectProps.RightUVRect.Min.X;
-		RightUVRect.Pos.y = Desc.EquirectProps.RightUVRect.Min.Y;
-		RightUVRect.Size.w = Desc.EquirectProps.RightUVRect.Max.X - Desc.EquirectProps.RightUVRect.Min.X;
-		RightUVRect.Size.h = Desc.EquirectProps.RightUVRect.Max.Y - Desc.EquirectProps.RightUVRect.Min.Y;
+		LeftUVRect.Pos.x = EquirectProps.LeftUVRect.Min.X;
+		LeftUVRect.Pos.y = EquirectProps.LeftUVRect.Min.Y;
+		LeftUVRect.Size.w = EquirectProps.LeftUVRect.Max.X - EquirectProps.LeftUVRect.Min.X;
+		LeftUVRect.Size.h = EquirectProps.LeftUVRect.Max.Y - EquirectProps.LeftUVRect.Min.Y;
+		RightUVRect.Pos.x = EquirectProps.RightUVRect.Min.X;
+		RightUVRect.Pos.y = EquirectProps.RightUVRect.Min.Y;
+		RightUVRect.Size.w = EquirectProps.RightUVRect.Max.X - EquirectProps.RightUVRect.Min.X;
+		RightUVRect.Size.h = EquirectProps.RightUVRect.Max.Y - EquirectProps.RightUVRect.Min.Y;
 
 		ovrpVector4f& LeftScaleBias = RectMatrix.LeftScaleBias;
-		LeftScaleBias.x = Desc.EquirectProps.LeftScale.X;
-		LeftScaleBias.y = Desc.EquirectProps.LeftScale.Y;
-		LeftScaleBias.z = Desc.EquirectProps.LeftBias.X;
-		LeftScaleBias.w = Desc.EquirectProps.LeftBias.Y;
+		LeftScaleBias.x = EquirectProps.LeftScale.X;
+		LeftScaleBias.y = EquirectProps.LeftScale.Y;
+		LeftScaleBias.z = EquirectProps.LeftBias.X;
+		LeftScaleBias.w = EquirectProps.LeftBias.Y;
 		ovrpVector4f& RightScaleBias = RectMatrix.RightScaleBias;
-		RightScaleBias.x = Desc.EquirectProps.RightScale.X;
-		RightScaleBias.y = Desc.EquirectProps.RightScale.Y;
-		RightScaleBias.z = Desc.EquirectProps.RightBias.X;
-		RightScaleBias.w = Desc.EquirectProps.RightBias.Y;
+		RightScaleBias.x = EquirectProps.RightScale.X;
+		RightScaleBias.y = EquirectProps.RightScale.Y;
+		RightScaleBias.z = EquirectProps.RightBias.X;
+		RightScaleBias.w = EquirectProps.RightBias.Y;
 
 		OvrpLayerSubmit.OverrideTextureRectMatrix = ovrpBool_True;
 	}
@@ -705,10 +713,11 @@ const ovrpLayerSubmit* FLayer::UpdateLayer_RHIThread(const FSettings* Settings, 
 			break;
 		case ovrpShape_Cylinder:
 			{
-				float CylinderHeight = (Desc.Flags & IStereoLayers::LAYER_FLAG_QUAD_PRESERVE_TEX_RATIO) ? Desc.CylinderOverlayArc * AspectRatio : Desc.CylinderHeight;
-				OvrpLayerSubmit.Cylinder.ArcWidth = Desc.CylinderOverlayArc * Scale.x;
+				const FCylinderLayer& CylinderProps = Desc.GetShape<FCylinderLayer>();
+				float CylinderHeight = (Desc.Flags & IStereoLayers::LAYER_FLAG_QUAD_PRESERVE_TEX_RATIO) ? CylinderProps.OverlayArc * AspectRatio : CylinderProps.Height;
+				OvrpLayerSubmit.Cylinder.ArcWidth = CylinderProps.OverlayArc * Scale.x;
 				OvrpLayerSubmit.Cylinder.Height = CylinderHeight * Scale.x;
-				OvrpLayerSubmit.Cylinder.Radius = Desc.CylinderRadius * Scale.x;
+				OvrpLayerSubmit.Cylinder.Radius = CylinderProps.Radius * Scale.x;
 			}
 			break;
 		}
@@ -769,6 +778,9 @@ const ovrpLayerSubmit* FLayer::UpdateLayer_RHIThread(const FSettings* Settings, 
 				OvrpLayerSubmit.ViewportRect[eye] = ToOvrpRecti(Settings->EyeRenderViewport[eye]);
 			}
 		}
+
+		OvrpLayerSubmit.EyeFov.Fov[0] = Frame->Fov[0];
+		OvrpLayerSubmit.EyeFov.Fov[1] = Frame->Fov[1];
 
 #if PLATFORM_ANDROID
 		if (LayerIndex != 0)

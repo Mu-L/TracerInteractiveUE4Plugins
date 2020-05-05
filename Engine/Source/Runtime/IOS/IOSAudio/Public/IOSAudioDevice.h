@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	IOSAudioDevice.h: Unreal IOSAudio audio interface object.
@@ -212,10 +212,10 @@ public:
 	
 	virtual bool Exec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar = *GLog ) override;
 
-	static int32& GetSuspendCounter();
-
-
 	virtual void UpdateDeviceDeltaTime() override;
+    
+    static void IncrementSuspendCounter();
+    static void DecrementSuspendCounter();
 
 protected:
 	/** Starts up any platform specific hardware/APIs */

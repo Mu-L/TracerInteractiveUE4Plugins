@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "OculusAudioDllManager.h"
 #include "Misc/Paths.h"
 #include "OculusAudioSettings.h"
@@ -40,7 +40,7 @@ void FOculusAudioLibraryManager::Initialize()
 	{
 		if (!LoadDll())
 		{
-			UE_LOG(LogAudio, Error, TEXT("Failed to load OVR Audio dll"));
+			UE_LOG(LogAudio, Error, TEXT("Oculus Audio: Failed to load OVR Audio dll"));
 			check(false);
 			return;
 		}
@@ -57,7 +57,7 @@ void FOculusAudioLibraryManager::Initialize()
 		const char* OvrVersionString = OVRA_CALL(ovrAudio_GetVersion)(&MajorVersionNumber, &MinorVersionNumber, &PatchNumber);
 		if (MajorVersionNumber != OVR_AUDIO_MAJOR_VERSION || MinorVersionNumber != OVR_AUDIO_MINOR_VERSION)
 		{
-			UE_LOG(LogAudio, Warning, TEXT("Using mismatched OVR Audio SDK Version! %d.%d vs. %d.%d"), OVR_AUDIO_MAJOR_VERSION, OVR_AUDIO_MINOR_VERSION, MajorVersionNumber, MinorVersionNumber);
+			UE_LOG(LogAudio, Warning, TEXT("Oculus Audio: Using mismatched OVR Audio SDK Version! %d.%d vs. %d.%d"), OVR_AUDIO_MAJOR_VERSION, OVR_AUDIO_MINOR_VERSION, MajorVersionNumber, MinorVersionNumber);
 			return;
 		}
 		bInitialized = true;
@@ -85,13 +85,13 @@ void FOculusAudioLibraryManager::Shutdown()
 
 bool FOculusAudioLibraryManager::LoadDll()
 {
-	// PAS TODO: support middleware on android
-#if PLATFORM_WINDOWS
-	if (!OculusAudioDllHandle)
+	if (OculusAudioDllHandle == nullptr)
 	{
 		const TCHAR* WWISE_DLL_NAME = TEXT("OculusSpatializerWwise");
 		const TCHAR* FMOD_DLL_NAME = TEXT("OculusSpatializerFMOD");
-		const TCHAR* UE4_DLL_NAME = TEXT("ovraudio64");
+		const TCHAR* UE4_DLL_NAME = (sizeof(void*) == 4) ? TEXT("ovraudio32") : TEXT("ovraudio64");
+
+#if PLATFORM_WINDOWS 
 
 #if WITH_EDITOR
 		const FString WwisePath = FPaths::ProjectDir() / FString::Printf(TEXT("Binaries/Win64/"));
@@ -110,33 +110,58 @@ bool FOculusAudioLibraryManager::LoadDll()
 			ClientType = OVRA_CLIENT_TYPE_WWISE_UNKNOWN;
 			Path = WwisePath;
 			DLL_NAME = WWISE_DLL_NAME;
-			UE_LOG(LogAudio, Display, TEXT("OculusSpatializerWwise.dll found, using the Wwise version of the Oculus Audio UE4 integration"));
+			UE_LOG(LogAudio, Display, TEXT("Oculus Audio: OculusSpatializerWwise.dll found, using the Wwise version of the Oculus Audio UE4 integration"));
 		}
 		else if (FPaths::FileExists(FMODPath + FMOD_DLL_NAME + ".dll"))
 		{
 			ClientType = OVRA_CLIENT_TYPE_FMOD;
 			Path = FMODPath;
 			DLL_NAME = FMOD_DLL_NAME;
-			UE_LOG(LogAudio, Display, TEXT("OculusSpatializerFMOD.dll found, using the FMOD version of the Oculus Audio UE4 integration"));
+			UE_LOG(LogAudio, Display, TEXT("Oculus Audio: OculusSpatializerFMOD.dll found, using the FMOD version of the Oculus Audio UE4 integration"));
 		}
 		else
 		{
 			ClientType = -1;
 			Path = UE4Path;
 			DLL_NAME = UE4_DLL_NAME;
-			UE_LOG(LogAudio, Display, TEXT("Middleware plugins not found, assuming native UE4 AudioMixer"));
+			UE_LOG(LogAudio, Display, TEXT("Oculus Audio: Middleware plugins not found, assuming native UE4 AudioMixer"));
 		}
 
 
-		UE_LOG(LogAudio, Display, TEXT("Attempting to load Oculus Spatializer DLL: %s (from %s)"), *Path, DLL_NAME);
+		UE_LOG(LogAudio, Display, TEXT("Oculus Audio: Attempting to load Oculus Spatializer DLL: %s (from %s)"), *Path, DLL_NAME);
 
 		FPlatformProcess::PushDllDirectory(*Path);
-		OculusAudioDllHandle = FPlatformProcess::GetDllHandle(*(Path + DLL_NAME)); // FIXME: support win32
+		OculusAudioDllHandle = FPlatformProcess::GetDllHandle(*(Path + DLL_NAME));
 		FPlatformProcess::PopDllDirectory(*Path);
+
+#elif PLATFORM_ANDROID
+		FString Path = TEXT("lib");
+		OculusAudioDllHandle = FPlatformProcess::GetDllHandle(*(Path + WWISE_DLL_NAME + ".so"));
+		if (OculusAudioDllHandle != nullptr)
+		{
+			UE_LOG(LogAudio, Display, TEXT("Oculus Audio: %s found, using the Wwise version of the Oculus Audio UE4 integration"), WWISE_DLL_NAME);
+			return true;
+		}
+		OculusAudioDllHandle = FPlatformProcess::GetDllHandle(*(Path + FMOD_DLL_NAME + ".so"));
+		if (OculusAudioDllHandle != nullptr)
+		{
+			UE_LOG(LogAudio, Display, TEXT("Oculus Audio: %s found, using the FMOD version of the Oculus Audio UE4 integration"), FMOD_DLL_NAME);
+			return true;
+		}
+		OculusAudioDllHandle = FPlatformProcess::GetDllHandle(*(Path + UE4_DLL_NAME + ".so"));
+		if (OculusAudioDllHandle != nullptr)
+		{
+			UE_LOG(LogAudio, Display, TEXT("Oculus Audio: Middleware plugins not found, %s found, assuming native UE4 AudioMixer"), UE4_DLL_NAME);
+			return true;
+		}
+		else
+		{
+			UE_LOG(LogAudio, Error, TEXT("Oculus Audio: Unable to load Oculus Audio UE4 integratiton"), UE4_DLL_NAME);
+		}
+#endif
 
 		return (OculusAudioDllHandle != nullptr);
 	}
-#endif
 	return true;
 }
 
@@ -155,7 +180,7 @@ bool FOculusAudioLibraryManager::UpdatePluginContext(float DeltaTime)
 {
 	ovrAudioContext Context = GetPluginContext();
 	ovrResult Result = OVRA_CALL(ovrAudio_UpdateRoomModel)(Context, 1.0f);
-	check(Result == ovrSuccess);
+	check(Result == ovrSuccess || Result == ovrError_AudioUninitialized);
 
 	UOculusAudioSettings* settings = GetMutableDefault<UOculusAudioSettings>();
 	Result = OVRA_CALL(ovrAudio_SetPropagationQuality)(Context, settings->PropagationQuality);

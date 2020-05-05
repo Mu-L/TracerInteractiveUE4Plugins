@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	IOSTargetPlatform.cpp: Implements the FIOSTargetPlatform class.
@@ -447,6 +447,11 @@ bool FIOSTargetPlatform::HandleTicker(float DeltaTime)
 
 /* ITargetPlatform interface
  *****************************************************************************/
+static bool UsesVirtualTextures()
+{
+	static auto* CVarMobileVirtualTextures = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Mobile.VirtualTextures"));
+	return CVarMobileVirtualTextures->GetValueOnAnyThread() != 0;
+}
 
 static bool SupportsMetal()
 {
@@ -513,6 +518,9 @@ bool FIOSTargetPlatform::SupportsFeature( ETargetPlatformFeatures Feature ) cons
 		case ETargetPlatformFeatures::SoftwareOcclusion:
 			return SupportsSoftwareOcclusion();
 
+		case ETargetPlatformFeatures::VirtualTextureStreaming:
+			return UsesVirtualTextures();
+
 		default:
 			break;
 	}
@@ -523,6 +531,15 @@ bool FIOSTargetPlatform::SupportsFeature( ETargetPlatformFeatures Feature ) cons
 
 #if WITH_ENGINE
 
+void FIOSTargetPlatform::GetReflectionCaptureFormats(TArray<FName>& OutFormats) const
+{
+	if (SupportsMetalMRT())
+	{
+		OutFormats.Add(FName(TEXT("FullHDR")));
+	}
+
+	OutFormats.Add(FName(TEXT("EncodedHDR")));
+}
 
 void FIOSTargetPlatform::GetAllPossibleShaderFormats( TArray<FName>& OutFormats ) const
 {
@@ -714,145 +731,6 @@ void FIOSTargetPlatform::GetAllWaveFormats(TArray<FName>& OutFormat) const
 {
 	static FName NAME_ADPCM(TEXT("ADPCM"));
 	OutFormat.Add(NAME_ADPCM);
-}
-
-namespace IOS
-{
-	void CachePlatformAudioCookOverrides(FPlatformAudioCookOverrides& OutOverrides)
-	{
-		const TCHAR* CategoryName = TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings");
-
-		int32 SoundCueQualityIndex = INDEX_NONE;
-		if (GConfig->GetInt(CategoryName, TEXT("SoundCueCookQualityIndex"), SoundCueQualityIndex, GEngineIni))
-		{
-			OutOverrides.SoundCueCookQualityIndex = SoundCueQualityIndex;
-		}
-
-		int32 RetrievedChunkSizeKB = 256;
-		GConfig->GetInt(CategoryName, TEXT("ChunkSizeKB"), RetrievedChunkSizeKB, GEngineIni);
-		OutOverrides.StreamChunkSizeKB = RetrievedChunkSizeKB;
-
-		GConfig->GetBool(CategoryName, TEXT("bUseAudioStreamCaching"), OutOverrides.bUseStreamCaching, GEngineIni);
-
-		/** Memory Load On Demand Settings */
-		if (OutOverrides.bUseStreamCaching)
-		{
-			// Cache size:
-			int32 RetrievedCacheSize = 32 * 1024;
-			GConfig->GetInt(CategoryName, TEXT("CacheSizeKB"), RetrievedCacheSize, GEngineIni);
-			OutOverrides.StreamCachingSettings.CacheSizeKB = RetrievedCacheSize;
-		}
-
-		GConfig->GetBool(CategoryName, TEXT("bResampleForDevice"), OutOverrides.bResampleForDevice, GEngineIni);
-
-		GConfig->GetFloat(CategoryName, TEXT("CompressionQualityModifier"), OutOverrides.CompressionQualityModifier, GEngineIni);
-
-		GConfig->GetFloat(CategoryName, TEXT("AutoStreamingThreshold"), OutOverrides.AutoStreamingThreshold, GEngineIni);
-
-		//Cache sample rate map:
-		float RetrievedSampleRate = -1.0f;
-
-		GConfig->GetFloat(CategoryName, TEXT("MaxSampleRate"), RetrievedSampleRate, GEngineIni);
-		float* FoundSampleRate = OutOverrides.PlatformSampleRates.Find(ESoundwaveSampleRateSettings::Max);
-
-		if (FoundSampleRate)
-		{
-			if (!FMath::IsNearlyEqual(*FoundSampleRate, RetrievedSampleRate))
-			{
-				*FoundSampleRate = RetrievedSampleRate;
-			}
-
-		}
-		else
-		{
-			OutOverrides.PlatformSampleRates.Add(ESoundwaveSampleRateSettings::Max, RetrievedSampleRate);
-		}
-
-		RetrievedSampleRate = -1.0f;
-
-		GConfig->GetFloat(CategoryName, TEXT("HighSampleRate"), RetrievedSampleRate, GEngineIni);
-		FoundSampleRate = OutOverrides.PlatformSampleRates.Find(ESoundwaveSampleRateSettings::High);
-
-		if (FoundSampleRate)
-		{
-			if (!FMath::IsNearlyEqual(*FoundSampleRate, RetrievedSampleRate))
-			{
-				*FoundSampleRate = RetrievedSampleRate;
-			}
-
-		}
-		else
-		{
-			OutOverrides.PlatformSampleRates.Add(ESoundwaveSampleRateSettings::High, RetrievedSampleRate);
-		}
-
-
-		RetrievedSampleRate = -1.0f;
-
-		GConfig->GetFloat(CategoryName, TEXT("MedSampleRate"), RetrievedSampleRate, GEngineIni);
-		FoundSampleRate = OutOverrides.PlatformSampleRates.Find(ESoundwaveSampleRateSettings::Medium);
-
-		if (FoundSampleRate)
-		{
-			if (!FMath::IsNearlyEqual(*FoundSampleRate, RetrievedSampleRate))
-			{
-				*FoundSampleRate = RetrievedSampleRate;
-			}
-		}
-		else
-		{
-			OutOverrides.PlatformSampleRates.Add(ESoundwaveSampleRateSettings::Medium, RetrievedSampleRate);
-		}
-
-		RetrievedSampleRate = -1.0f;
-
-		GConfig->GetFloat(CategoryName, TEXT("LowSampleRate"), RetrievedSampleRate, GEngineIni);
-		FoundSampleRate = OutOverrides.PlatformSampleRates.Find(ESoundwaveSampleRateSettings::Low);
-
-		if (FoundSampleRate)
-		{
-			if (!FMath::IsNearlyEqual(*FoundSampleRate, RetrievedSampleRate))
-			{
-				*FoundSampleRate = RetrievedSampleRate;
-			}
-		}
-		else
-		{
-			OutOverrides.PlatformSampleRates.Add(ESoundwaveSampleRateSettings::Low, RetrievedSampleRate);
-		}
-
-		RetrievedSampleRate = -1.0f;
-
-		GConfig->GetFloat(CategoryName, TEXT("MinSampleRate"), RetrievedSampleRate, GEngineIni);
-		FoundSampleRate = OutOverrides.PlatformSampleRates.Find(ESoundwaveSampleRateSettings::Min);
-
-		if (FoundSampleRate)
-		{
-			if (!FMath::IsNearlyEqual(*FoundSampleRate, RetrievedSampleRate))
-			{
-				*FoundSampleRate = RetrievedSampleRate;
-			}
-		}
-		else
-		{
-			OutOverrides.PlatformSampleRates.Add(ESoundwaveSampleRateSettings::Min, RetrievedSampleRate);
-		}
-	}
-}
-
-FPlatformAudioCookOverrides* FIOSTargetPlatform::GetAudioCompressionSettings() const
-{
-	static FPlatformAudioCookOverrides Settings;
-
-	static bool bCachedPlatformSettings = false;
-
-	if (!bCachedPlatformSettings)
-	{
-		IOS::CachePlatformAudioCookOverrides(Settings);
-		bCachedPlatformSettings = true;
-	}
-
-	return &Settings;
 }
 
 #endif // WITH_ENGINE

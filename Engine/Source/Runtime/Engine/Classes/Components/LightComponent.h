@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -302,6 +302,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Rendering|Components|Light")
 	void SetForceCachedShadowsForMovablePrimitives(bool bNewValue);
 
+	UFUNCTION(BlueprintCallable, Category = "Rendering|Components|Light")
+	void SetLightingChannels(bool bChannel0, bool bChannel1, bool bChannel2);
+
 public:
 	/** The light's scene info. */
 	class FLightSceneProxy* SceneProxy;
@@ -384,7 +387,7 @@ public:
 	virtual void PostLoad() override;
 #if WITH_EDITOR
 	virtual void PreSave(const class ITargetPlatform* TargetPlatform) override;
-	virtual bool CanEditChange(const UProperty* InProperty) const override;
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void UpdateLightSpriteTexture() override;
 #endif // WITH_EDITOR
@@ -414,7 +417,7 @@ public:
 protected:
 	//~ Begin UActorComponent Interface
 	virtual void OnRegister() override;
-	virtual void CreateRenderState_Concurrent() override;
+	virtual void CreateRenderState_Concurrent(FRegisterComponentContext* Context) override;
 	virtual void SendRenderTransform_Concurrent() override;
 	virtual void DestroyRenderState_Concurrent() override;
 	//~ Begin UActorComponent Interface
@@ -442,7 +445,7 @@ public:
 	 *
 	 * @param PropertyThatChanged	Property that changed
 	 */
-	virtual void PostInterpChange(UProperty* PropertyThatChanged) override;
+	virtual void PostInterpChange(FProperty* PropertyThatChanged) override;
 
 	/** 
 	 * Iterates over ALL stationary light components in the target world and assigns their preview shadowmap channel, and updates light icons accordingly.

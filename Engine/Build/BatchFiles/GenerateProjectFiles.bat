@@ -1,7 +1,7 @@
 @echo off
 
 rem ## Unreal Engine 4 Visual Studio project setup script
-rem ## Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+rem ## Copyright Epic Games, Inc. All Rights Reserved.
 rem ##
 rem ## This script is expecting to exist in the UE4 root directory.  It will not work correctly
 rem ## if you copy it to a different location and run it.
@@ -56,9 +56,6 @@ if not [%MSBUILD_EXE%] == [%MSBUILD_15_EXE%] goto NoVsWhere
 if not [%MSBUILD_EXE%] == [%MSBUILD_15_EXE_WITH_NUGET%] goto Error_RequireNugetPackageManager
 
 :NoVsWhere
-
-rem Find platform extension source files
-call "%~dp0FindPlatformExtensionSources.bat"
 
 rem Check to see if the files in the UBT directory have changed. We conditionally include platform files from the .csproj file, but MSBuild doesn't recognize the dependency when new files are added. 
 md ..\Intermediate\Build >nul 2>nul

@@ -1,5 +1,5 @@
 #!/bin/bash
-## Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+## Copyright Epic Games, Inc. All Rights Reserved.
 ##
 ## Unreal Engine 4 AutomationTool setup script
 ##
@@ -51,7 +51,7 @@ else
 	UATCompileArg=-compile
 fi
 
-if [ -f Build\InstalledBuild.txt ]; then
+if [ -f Build/InstalledBuild.txt ]; then
 	UATCompileArg=
 fi
 
@@ -72,9 +72,6 @@ if [ "$UATCompileArg" = "-compile" ]; then
 		echo No project to compile, attempting to use precompiled AutomationTool
 		UATCompileArg=
 	else
-		# make sure the UBT project has references to auto-discovered platform extension source files
-		"${SCRIPT_DIR}/FindPlatformExtensionSources.sh"
-
 		# mono 5.0 and up include msbuild
 		if [ "$IS_MS_BUILD_AVAILABLE" == "1" ]; then
 			BUILD_TOOL=msbuild

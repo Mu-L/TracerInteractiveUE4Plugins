@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AppleARKitTimecodeProvider.h"
 #include "HAL/PlatformTime.h"
@@ -18,14 +18,11 @@ void UAppleARKitTimecodeProvider::Shutdown(class UEngine*)
 {
 }
 
-FTimecode UAppleARKitTimecodeProvider::GetTimecode() const
+FQualifiedFrameTime UAppleARKitTimecodeProvider::GetQualifiedFrameTime() const
 {
-	return FTimecode(FPlatformTime::Seconds(), FrameRate, FTimecode::IsDropFormatTimecodeSupported(FrameRate), true);
-}
-
-FFrameRate UAppleARKitTimecodeProvider::GetFrameRate() const
-{
-	return FrameRate;
+	// We construct a timecode to not have subframe.
+	FTimecode Timecode = FTimecode(FPlatformTime::Seconds(), FrameRate, true);
+	return FQualifiedFrameTime(Timecode, FrameRate);
 }
 
 ETimecodeProviderSynchronizationState UAppleARKitTimecodeProvider::GetSynchronizationState() const

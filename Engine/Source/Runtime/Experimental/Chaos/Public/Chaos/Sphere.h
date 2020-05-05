@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Chaos/Box.h"
@@ -17,33 +17,30 @@ namespace Chaos
 	};
 
 	template<class T, int d>
-	class TSphere final : public TImplicitObject<T, d>
+	class TSphere final : public FImplicitObject
 	{
 	public:
 
-		using TImplicitObject<T, d>::GetTypeName;
+		using FImplicitObject::GetTypeName;
 
 		TSphere(const TVector<T, d>& InCenter, const T InRadius)
-		    : TImplicitObject<T, d>(EImplicitObject::IsConvex | EImplicitObject::HasBoundingBox, ImplicitObjectType::Sphere)
+		    : FImplicitObject(EImplicitObject::IsConvex | EImplicitObject::HasBoundingBox, ImplicitObjectType::Sphere)
 		    , Center(InCenter)
 		    , Radius(InRadius)
-		    , LocalBoundingBox(Center - Radius, Center + Radius)
 		{
 		}
 
 		TSphere(const TSphere<T, d>& Other)
-		    : TImplicitObject<T, d>(EImplicitObject::IsConvex | EImplicitObject::HasBoundingBox, ImplicitObjectType::Sphere)
+		    : FImplicitObject(EImplicitObject::IsConvex | EImplicitObject::HasBoundingBox, ImplicitObjectType::Sphere)
 		    , Center(Other.Center)
 		    , Radius(Other.Radius)
-		    , LocalBoundingBox(Other.LocalBoundingBox)
 		{
 		}
 
 		TSphere(TSphere<T, d>&& Other)
-		    : TImplicitObject<T, d>(EImplicitObject::IsConvex | EImplicitObject::HasBoundingBox, ImplicitObjectType::Sphere)
+		    : FImplicitObject(EImplicitObject::IsConvex | EImplicitObject::HasBoundingBox, ImplicitObjectType::Sphere)
 		    , Center(MoveTemp(Other.Center))
 		    , Radius(Other.Radius)
-		    , LocalBoundingBox(MoveTemp(Other.LocalBoundingBox))
 		{
 		}
 
@@ -51,18 +48,17 @@ namespace Chaos
 		{
 			this->Type = InSteal.Type;
 			this->bIsConvex = InSteal.bIsConvex;
-			this->bIgnoreAnalyticCollisions = InSteal.bIgnoreAnalyticCollisions;
+			this->bDoCollide = InSteal.bDoCollide;
 			this->bHasBoundingBox = InSteal.bHasBoundingBox;
 			Center = MoveTemp(InSteal.Center);
 			Radius = InSteal.Radius;
-			LocalBoundingBox = MoveTemp(InSteal.LocalBoundingBox);
 
 			return *this;
 		}
 
 		virtual ~TSphere() {}
 
-		static ImplicitObjectType GetType() 
+		static constexpr EImplicitObjectType StaticType()
 		{ 
 			return ImplicitObjectType::Sphere; 
 		}
@@ -177,7 +173,7 @@ namespace Chaos
 			return MakePair(TVector<T, d>(Root2 * Direction + StartPoint), true);
 		}
 
-		virtual TVector<T, d> Support(const TVector<T, d>& Direction, const T Thickness) const override
+		TVector<T, d> Support(const TVector<T, d>& Direction, const T Thickness) const
 		{
 			//We want N / ||N|| and to avoid inf
 			//So we want N / ||N|| < 1 / eps => N eps < ||N||, but this is clearly true for all eps < 1 and N > 0
@@ -191,9 +187,16 @@ namespace Chaos
 			return Center + Normalized * (Radius + Thickness);
 		}
 
-		virtual const TBox<T, d>& BoundingBox() const 
+		FORCEINLINE const TVector<T, d>& Support2(const TVector<T, d>& Direction) const { return Center; }
+
+		FORCEINLINE T GetMargin() const
 		{
-			return LocalBoundingBox; 
+			return Radius;
+		}
+
+		virtual const TAABB<T, d> BoundingBox() const 
+		{
+			return TAABB<T,d>(Center - TVector<T,d>(Radius),Center + TVector<T,d>(Radius));
 		}
 
 		T GetArea() const 
@@ -242,12 +245,8 @@ namespace Chaos
 
 		FORCEINLINE void SerializeImp(FArchive& Ar)
 		{
-			TImplicitObject<T, d>::SerializeImp(Ar);
+			FImplicitObject::SerializeImp(Ar);
 			Ar << Center << Radius;
-			if (Ar.IsLoading())
-			{
-				LocalBoundingBox = TBox<T, d>(Center - Radius, Center + Radius);
-			}
 		}
 
 		virtual void Serialize(FChaosArchive& Ar) override 
@@ -267,8 +266,19 @@ namespace Chaos
 		TArray<TVector<T, d>> ComputeLocalSamplePoints(const int NumPoints) const
 		{
 			TArray<TVector<T, d>> Points;
-			TSphere<T, d> LocalSphere(TVector<T, d>(0.0), Radius);
-			TSphereSpecializeSamplingHelper<T, d>::ComputeSamplePoints(Points, LocalSphere, NumPoints);
+			
+			if(Radius <= KINDA_SMALL_NUMBER)
+			{
+				// If we're too small (and will create NaNs) then just take the centre
+				Points.Add(TVector<T, d>(0.0));
+			}
+			else
+			{
+				Points.Reserve(NumPoints);
+				TSphere<T, d> LocalSphere(TVector<T, d>(0.0), Radius);
+				TSphereSpecializeSamplingHelper<T, d>::ComputeSamplePoints(Points, LocalSphere, NumPoints);
+			}
+
 			return Points;
 		}
 
@@ -314,26 +324,24 @@ namespace Chaos
 		{
 			const uint32 CenterHash = ::GetTypeHash(Center);
 			const uint32 RadiusHash = ::GetTypeHash(Radius);
-			const uint32 BoundsHash = LocalBoundingBox.GetTypeHash();
-			return HashCombine(CenterHash, HashCombine(RadiusHash, BoundsHash));
+			return HashCombine(CenterHash, RadiusHash);
 		}
 
-		virtual TUniquePtr<TImplicitObject<T, d>> Copy() const override
+		virtual TUniquePtr<FImplicitObject> Copy() const override
 		{
-			return TUniquePtr<TImplicitObject<T, d>>(new TSphere<T,d>(Center, Radius));
+			return TUniquePtr<FImplicitObject>(new TSphere<T,d>(Center, Radius));
 		}
 
 	private:
 		TVector<T, d> Center;
 		T Radius;
-		TBox<T, d> LocalBoundingBox;
 
 	private:
 
 		// TImplicitObject requires ability to default construct when deserializing shapes
-		friend TImplicitObject<T, d>;
+		friend FImplicitObject;
 		TSphere()
-		    : TImplicitObject<T, d>(EImplicitObject::IsConvex | EImplicitObject::HasBoundingBox, ImplicitObjectType::Sphere) 
+		    : FImplicitObject(EImplicitObject::IsConvex | EImplicitObject::HasBoundingBox, ImplicitObjectType::Sphere) 
 		{}
 
 	};

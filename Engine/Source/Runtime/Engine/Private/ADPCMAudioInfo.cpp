@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "ADPCMAudioInfo.h"
@@ -23,6 +23,13 @@ FAutoConsoleVariableRef CVarDisableADPCMSeeking(
 	TEXT("Disables seeking with ADPCM.\n"),
 	ECVF_Default);
 
+static int32 ADPCMReadFailiureTimeoutCVar = 64;
+FAutoConsoleVariableRef CVarADPCMReadFailiureTimeout(
+	TEXT("au.adpcm.ADPCMReadFailiureTimeout"),
+	ADPCMReadFailiureTimeoutCVar,
+	TEXT("Sets the number of ADPCM decode attempts we'll try before stopping the sound wave altogether.\n"),
+	ECVF_Default);
+
 #define WAVE_FORMAT_LPCM  1
 #define WAVE_FORMAT_ADPCM 2
 
@@ -33,7 +40,8 @@ namespace ADPCM
 }
 
 FADPCMAudioInfo::FADPCMAudioInfo(void)
-	: UncompressedBlockSize(0)
+	: NumConsecutiveReadFailiures(0)
+	, UncompressedBlockSize(0)
 	, CompressedBlockSize(0)
 	, BlockSize(0)
 	, StreamBufferSize(0)
@@ -721,8 +729,13 @@ bool FADPCMAudioInfo::StreamCompressedData(uint8* Destination, bool bLooping, ui
 					}
 
 					FMemory::Memset(OutData, 0, BufferSize);
-					return false;
+					NumConsecutiveReadFailiures++;
+					const bool bReadAttemptTimedOut = NumConsecutiveReadFailiures > ADPCMReadFailiureTimeoutCVar;
+					UE_CLOG(bReadAttemptTimedOut, LogAudio, Warning, TEXT("ADPCM Audio Decode timed out."), bReadAttemptTimedOut);
+					return NumConsecutiveReadFailiures > ADPCMReadFailiureTimeoutCVar;
 				}
+
+				NumConsecutiveReadFailiures = 0;
 
 				// Set the current buffer offset accounting for the header in the first chunk
 				if (!bSeekPending)
@@ -757,7 +770,7 @@ bool FADPCMAudioInfo::StreamCompressedData(uint8* Destination, bool bLooping, ui
 			if(TotalSamplesStreamed >= TotalSamplesPerChannel)
 			{
 				ReachedEndOfSamples = true;
-				CurrentChunkIndex = 0;
+				CurrentChunkIndex = FirstChunkSampleDataIndex;
 				CurrentChunkBufferOffset = 0;
 				TotalSamplesStreamed = 0;
 				CurCompressedChunkData = nullptr;
@@ -812,19 +825,23 @@ const uint8* FADPCMAudioInfo::GetLoadedChunk(USoundWave* InSoundWave, uint32 Chu
 {
 	if (!InSoundWave || ChunkIndex >= InSoundWave->GetNumChunks())
 	{
-		UE_LOG(LogAudio, Error, TEXT("Error calling GetLoadedChunk for ChunkIndex %d!"), ChunkIndex);
+		if(InSoundWave)
+		{
+			UE_LOG(LogAudio, Verbose, TEXT("Error calling GetLoadedChunk on wave with %d chunks. ChunkIndex: %d. Name: %s"), InSoundWave->GetNumChunks(), ChunkIndex, *InSoundWave->GetFullName());
+		}
+		
 		OutChunkSize = 0;
 		return nullptr;
 	}
 	else if (ChunkIndex == 0)
 	{
-		TArrayView<const uint8> ZerothChunk = InSoundWave->GetZerothChunk();
+		TArrayView<const uint8> ZerothChunk = InSoundWave->GetZerothChunk(true);
 		OutChunkSize = ZerothChunk.Num();
 		return ZerothChunk.GetData();
 	}
 	else
 	{
-		CurCompressedChunkHandle = IStreamingManager::Get().GetAudioStreamingManager().GetLoadedChunk(InSoundWave, ChunkIndex);
+		CurCompressedChunkHandle = IStreamingManager::Get().GetAudioStreamingManager().GetLoadedChunk(InSoundWave, ChunkIndex, false, true);
 		OutChunkSize = CurCompressedChunkHandle.Num();
 		return CurCompressedChunkHandle.GetData();
 	}

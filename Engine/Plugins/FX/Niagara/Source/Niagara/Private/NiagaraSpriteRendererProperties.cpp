@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraSpriteRendererProperties.h"
 #include "NiagaraRenderer.h"
@@ -9,7 +9,14 @@
 #include "Modules/ModuleManager.h"
 #if WITH_EDITOR
 #include "DerivedDataCacheInterface.h"
+#include "Widgets/Images/SImage.h"
+#include "Styling/SlateIconFinder.h"
+#include "Widgets/SWidget.h"
+#include "Styling/SlateBrush.h"
+#include "AssetThumbnail.h"
+#include "Widgets/Text/STextBlock.h"
 #endif
+
 #define LOCTEXT_NAMESPACE "UNiagaraSpriteRendererProperties"
 
 TArray<TWeakObjectPtr<UNiagaraSpriteRendererProperties>> UNiagaraSpriteRendererProperties::SpriteRendererPropertiesToDeferredInit;
@@ -32,7 +39,6 @@ FCookStatsManager::FAutoRegisterCallback NiagaraCutoutCookStats::RegisterCookSta
 UNiagaraSpriteRendererProperties::UNiagaraSpriteRendererProperties()
 	: Alignment(ENiagaraSpriteAlignment::Unaligned)
 	, FacingMode(ENiagaraSpriteFacingMode::FaceCamera)
-	, CustomFacingVectorMask(ForceInitToZero)
 	, PivotInUVSpace(0.5f, 0.5f)
 	, SortMode(ENiagaraSortMode::None)
 	, SubImageSize(1.0f, 1.0f)
@@ -46,6 +52,27 @@ UNiagaraSpriteRendererProperties::UNiagaraSpriteRendererProperties()
 	, AlphaThreshold(0.1f)
 #endif // WITH_EDITORONLY_DATA
 {
+	FNiagaraTypeDefinition MaterialDef(UMaterialInterface::StaticClass());
+	MaterialUserParamBinding.Parameter.SetType(MaterialDef);
+
+	AttributeBindings.Reserve(17);
+	AttributeBindings.Add(&PositionBinding);
+	AttributeBindings.Add(&ColorBinding);
+	AttributeBindings.Add(&VelocityBinding);
+	AttributeBindings.Add(&SpriteRotationBinding);
+	AttributeBindings.Add(&SpriteSizeBinding);
+	AttributeBindings.Add(&SpriteFacingBinding);
+	AttributeBindings.Add(&SpriteAlignmentBinding);
+	AttributeBindings.Add(&SubImageIndexBinding);
+	AttributeBindings.Add(&DynamicMaterialBinding);
+	AttributeBindings.Add(&DynamicMaterial1Binding);
+	AttributeBindings.Add(&DynamicMaterial2Binding);
+	AttributeBindings.Add(&DynamicMaterial3Binding);
+	AttributeBindings.Add(&CameraOffsetBinding);
+	AttributeBindings.Add(&UVScaleBinding);
+	AttributeBindings.Add(&MaterialRandomBinding);
+	AttributeBindings.Add(&CustomSortingBinding);
+	AttributeBindings.Add(&NormalizedAgeBinding);
 }
 
 FNiagaraRenderer* UNiagaraSpriteRendererProperties::CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel, const FNiagaraEmitterInstance* Emitter)
@@ -62,7 +89,16 @@ FNiagaraBoundsCalculator* UNiagaraSpriteRendererProperties::CreateBoundsCalculat
 
 void UNiagaraSpriteRendererProperties::GetUsedMaterials(const FNiagaraEmitterInstance* InEmitter, TArray<UMaterialInterface*>& OutMaterials) const
 {
-	OutMaterials.Add(Material);
+	bool bSet = false;
+	if (InEmitter != nullptr && MaterialUserParamBinding.Parameter.IsValid() && InEmitter->FindBinding(MaterialUserParamBinding, OutMaterials))
+	{
+		bSet = true;
+	}
+
+	if (!bSet)
+	{
+		OutMaterials.Add(Material);
+	}
 }
 
 void UNiagaraSpriteRendererProperties::PostLoad()
@@ -70,6 +106,13 @@ void UNiagaraSpriteRendererProperties::PostLoad()
 	Super::PostLoad();
 
 #if WITH_EDITORONLY_DATA
+
+	if (MaterialUserParamBinding.Parameter.GetType().GetClass() != UMaterialInterface::StaticClass())
+	{
+		FNiagaraTypeDefinition MaterialDef(UMaterialInterface::StaticClass());
+		MaterialUserParamBinding.Parameter.SetType(MaterialDef);
+	}
+
 	if (!FPlatformProperties::RequiresCookedData())
 	{
 		if (CutoutTexture)
@@ -189,17 +232,7 @@ void UNiagaraSpriteRendererProperties::PostEditChangeProperty(struct FPropertyCh
 	}
 	
 	Super::PostEditChangeProperty(PropertyChangedEvent);
-}
 
-const TArray<FNiagaraVariable>& UNiagaraSpriteRendererProperties::GetRequiredAttributes()
-{
-	static TArray<FNiagaraVariable> Attrs;
-
-	if (Attrs.Num() == 0)
-	{
-	}
-
-	return Attrs;
 }
 
 const TArray<FNiagaraVariable>& UNiagaraSpriteRendererProperties::GetOptionalAttributes()
@@ -227,6 +260,62 @@ const TArray<FNiagaraVariable>& UNiagaraSpriteRendererProperties::GetOptionalAtt
 	}
 
 	return Attrs;
+}
+
+void UNiagaraSpriteRendererProperties::GetRendererWidgets(const FNiagaraEmitterInstance* InEmitter, TArray<TSharedPtr<SWidget>>& OutWidgets, TSharedPtr<FAssetThumbnailPool> InThumbnailPool) const
+{
+	TSharedRef<SWidget> ThumbnailWidget = SNullWidget::NullWidget;
+	int32 ThumbnailSize = 32;
+	TArray<UMaterialInterface*> Materials;
+	GetUsedMaterials(InEmitter, Materials);
+	for (UMaterialInterface* PreviewedMaterial : Materials)
+	{
+		TSharedPtr<FAssetThumbnail> AssetThumbnail = MakeShareable(new FAssetThumbnail(PreviewedMaterial, ThumbnailSize, ThumbnailSize, InThumbnailPool));
+		if (AssetThumbnail)
+		{
+			ThumbnailWidget = AssetThumbnail->MakeThumbnailWidget();
+		}
+		OutWidgets.Add(ThumbnailWidget);
+	}
+
+	if (Materials.Num() == 0)
+	{
+		TSharedRef<SWidget> SpriteWidget = SNew(SImage)
+			.Image(FSlateIconFinder::FindIconBrushForClass(GetClass()));
+		OutWidgets.Add(SpriteWidget);
+	}
+}
+
+
+void UNiagaraSpriteRendererProperties::GetRendererFeedback(const UNiagaraEmitter* InEmitter, TArray<FText>& OutErrors, TArray<FText>& OutWarnings, TArray<FText>& OutInfo) const
+{
+	Super::GetRendererFeedback(InEmitter, OutErrors, OutWarnings, OutInfo);
+	if (InEmitter->SpawnScriptProps.Script->GetVMExecutableData().IsValid())
+	{
+		if (bUseMaterialCutoutTexture || CutoutTexture)
+		{
+			if (InEmitter->SpawnScriptProps.Script->GetVMExecutableData().Attributes.Contains(UVScaleBinding.DataSetVariable))
+			{
+				OutInfo.Add(LOCTEXT("SpriteRendererUVScaleWithCutout", "Cutouts will not be sized dynamically with UVScale variable. If scaling above 1.0, geometry may clip."));
+			}			
+		}
+	}
+}
+
+void UNiagaraSpriteRendererProperties::GetRendererTooltipWidgets(const FNiagaraEmitterInstance* InEmitter, TArray<TSharedPtr<SWidget>>& OutWidgets, TSharedPtr<FAssetThumbnailPool> InThumbnailPool) const
+{
+	TArray<UMaterialInterface*> Materials;
+	GetUsedMaterials(InEmitter, Materials);
+	if (Materials.Num() > 0)
+	{
+		GetRendererWidgets(InEmitter, OutWidgets, InThumbnailPool);
+	}
+	else
+	{
+		TSharedRef<SWidget> SpriteTooltip = SNew(STextBlock)
+			.Text(LOCTEXT("SpriteRendererNoMat", "Sprite Renderer (No Material Set)"));
+		OutWidgets.Add(SpriteTooltip);
+	}
 }
 
 bool UNiagaraSpriteRendererProperties::IsMaterialValidForRenderer(UMaterial* InMaterial, FText& InvalidMessage)
@@ -281,7 +370,7 @@ void UNiagaraSpriteRendererProperties::CacheDerivedData()
 		TArray<uint8> Data;
 
 		COOK_STAT(auto Timer = NiagaraCutoutCookStats::UsageStats.TimeSyncWork());
-		if (GetDerivedDataCacheRef().GetSynchronous(*KeyString, Data))
+		if (GetDerivedDataCacheRef().GetSynchronous(*KeyString, Data, GetPathName()))
 		{
 			COOK_STAT(Timer.AddHit(Data.Num()));
 			DerivedData.BoundingGeometry.Empty(Data.Num() / sizeof(FVector2D));
@@ -295,7 +384,7 @@ void UNiagaraSpriteRendererProperties::CacheDerivedData()
 			Data.Empty(DerivedData.BoundingGeometry.Num() * sizeof(FVector2D));
 			Data.AddUninitialized(DerivedData.BoundingGeometry.Num() * sizeof(FVector2D));
 			FPlatformMemory::Memcpy(Data.GetData(), DerivedData.BoundingGeometry.GetData(), DerivedData.BoundingGeometry.Num() * DerivedData.BoundingGeometry.GetTypeSize());
-			GetDerivedDataCacheRef().Put(*KeyString, Data);
+			GetDerivedDataCacheRef().Put(*KeyString, Data, GetPathName());
 			COOK_STAT(Timer.AddMiss(Data.Num()));
 		}
 	}

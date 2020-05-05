@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "IOS/IOSInputInterface.h"
 #include "IOS/IOSAppDelegate.h"
@@ -12,6 +12,37 @@
 
 DECLARE_LOG_CATEGORY_EXTERN(LogIOSInput, Log, All);
 
+#ifndef __IPHONE_OS_VERSION_MAX_ALLOWED
+#define __IPHONE_OS_VERSION_MAX_ALLOWED 0
+#endif
+
+#ifndef __MAC_OS_VERSION_MAX_ALLOWED
+#define __MAC_OS_VERSION_MAX_ALLOWED 0
+#endif
+
+#ifndef __APPLETV_OS_VERSION_MAX_ALLOWED
+#define __APPLETV_OS_VERSION_MAX_ALLOWED 0
+#endif
+
+@interface GCExtendedGamepad()
+#if (__IPHONE_OS_VERSION_MAX_ALLOWED < 121000 || __APPLETV_OS_VERSION_MAX_ALLOWED < 121000 || __MAC_OS_VERSION_MAX_ALLOWED < 1401000)
+@property (nonatomic, readwrite, nullable) GCControllerButtonInput *leftThumbstickButton;
+@property (nonatomic, readwrite, nullable) GCControllerButtonInput *rightThumbstickButton;
+#endif
+
+#if (__IPHONE_OS_VERSION_MAX_ALLOWED < 130000 || __APPLETV_OS_VERSION_MAX_ALLOWED < 130000 || __MAC_OS_VERSION_MAX_ALLOWED < 1500000)
+@property (nonatomic, readwrite, nullable) GCControllerButtonInput *buttonMenu;
+@property (nonatomic, readwrite, nullable) GCControllerButtonInput *buttonOptions;
+#endif
+@end
+
+
+#if (__IPHONE_OS_VERSION_MAX_ALLOWED < 130000)
+// only redefine these values pre-iOS13 SDK
+@interface GCController (capture)
+- (GCController *)capture;
+@end
+#endif
 
 static TAutoConsoleVariable<float> CVarHapticsKickHeavy(TEXT("ios.VibrationHapticsKickHeavyValue"), 0.65f, TEXT("Vibation values higher than this will kick a haptics heavy Impact"));
 static TAutoConsoleVariable<float> CVarHapticsKickMedium(TEXT("ios.VibrationHapticsKickMediumValue"), 0.5f, TEXT("Vibation values higher than this will kick a haptics medium Impact"));
@@ -58,6 +89,7 @@ FIOSInputInterface::FIOSInputInterface( const TSharedRef< FGenericApplicationMes
 	GConfig->GetBool(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("bUseRemoteAsVirtualJoystick"), bUseRemoteAsVirtualJoystick, GEngineIni);
 	GConfig->GetBool(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("bUseRemoteAbsoluteDpadValues"), bUseRemoteAbsoluteDpadValues, GEngineIni);
 	GConfig->GetBool(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("bAllowControllers"), bAllowControllers, GEngineIni);
+	GConfig->GetBool(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("bControllersBlockDeviceFeedback"), bControllersBlockDeviceFeedback, GEngineIni);
 	
 	[[NSNotificationCenter defaultCenter] addObserverForName:GCControllerDidConnectNotification object:nil queue:[NSOperationQueue currentQueue] usingBlock:^(NSNotification* Notification)
 	 {
@@ -76,6 +108,11 @@ FIOSInputInterface::FIOSInputInterface( const TSharedRef< FGenericApplicationMes
 	   });
 	
 	FMemory::Memzero(Controllers, sizeof(Controllers));
+    
+    for (GCController* Cont in [GCController controllers])
+    {
+        HandleConnection(Cont);
+    }
 	
 	FEmbeddedDelegates::GetNativeToEmbeddedParamsDelegateForSubsystem(TEXT("iosinput")).AddLambda([this](const FEmbeddedCallParamsHelper& Message)
 	{
@@ -145,6 +182,8 @@ void FIOSInputInterface::HandleConnection(GCController* Controller)
 			( bIsTreatedAsGamepad && Controllers[ControllerIndex].bIsGamepadConnected == false))
 		{
 			Controller.playerIndex = (GCControllerPlayerIndex)ControllerIndex;
+            
+            Controllers[ControllerIndex].Controller = Controller;
 #if PLATFORM_TVOS
 			if (Controller.microGamepad != nil)
 			{
@@ -341,9 +380,14 @@ void FIOSInputInterface::SendControllerEvents()
 		MessageHandler->OnMotionDetected(Attitude, RotationRate, Gravity, Acceleration, 0);
 	}
 #endif
-		
-	for (GCController* Cont in [GCController controllers])
+    for(int32 i = 0; i < UE_ARRAY_COUNT(Controllers); ++i)
  	{
+		if (!(Controllers[i].bIsGamepadConnected || Controllers[i].bIsRemoteConnected))
+		{
+			continue;
+		}
+        
+        GCController* Cont = Controllers[i].Controller;
 		GCExtendedGamepad* ExtendedGamepad = Cont.extendedGamepad;
 #if PLATFORM_TVOS
 		GCMicroGamepad* MicroGamepad = Cont.microGamepad;
@@ -364,7 +408,10 @@ void FIOSInputInterface::SendControllerEvents()
 
 		FUserController& Controller = Controllers[Cont.playerIndex];
 		
-		if (Controller.bPauseWasPressed)
+        static bool bSystemSupportsMenuButtons = [GCExtendedGamepad instancesRespondToSelector:@selector(buttonOptions)];
+        
+        // If buttonMenu is defined, we will handle it like a regular button.
+		if (Controller.bPauseWasPressed && !bSystemSupportsMenuButtons)
 		{
 			MessageHandler->OnControllerButtonPressed(FGamepadKeyNames::SpecialRight, Cont.playerIndex, false);
 			MessageHandler->OnControllerButtonReleased(FGamepadKeyNames::SpecialRight, Cont.playerIndex, false);
@@ -399,7 +446,7 @@ else \
 		
 #define HANDLE_BUTTON(Gamepad, GCButton, UEButton) \
 { \
-	const bool bWasPressed = Controller.Previous##Gamepad != nil && Controller.Previous##Gamepad.GCButton.pressed; \
+	const bool bWasPressed = Previous##Gamepad != nil && Previous##Gamepad.GCButton.pressed; \
 	const bool bPressed = Gamepad.GCButton.pressed; \
 	HANDLE_BUTTON_INTERNAL(Gamepad, bWasPressed, bPressed, UEButton); \
 }
@@ -408,7 +455,7 @@ else \
         const float RepeatDeadzone = 0.24;
         
 #define HANDLE_ANALOG(Gamepad, GCAxis, UEAxis) \
-if ((Controller.Previous##Gamepad != nil && Gamepad.GCAxis.value != Controller.Previous##Gamepad.GCAxis.value) || (Gamepad.GCAxis.value < -RepeatDeadzone || Gamepad.GCAxis.value > RepeatDeadzone)) \
+if ((Previous##Gamepad != nil && Gamepad.GCAxis.value != Previous##Gamepad.GCAxis.value) || (Gamepad.GCAxis.value < -RepeatDeadzone || Gamepad.GCAxis.value > RepeatDeadzone)) \
 { \
 	NSLog(@"Axis %s is %f", TCHAR_TO_ANSI(*UEAxis.ToString()), Gamepad.GCAxis.value); \
 	MessageHandler->OnControllerAnalog(UEAxis, Cont.playerIndex, Gamepad.GCAxis.value); \
@@ -416,16 +463,18 @@ if ((Controller.Previous##Gamepad != nil && Gamepad.GCAxis.value != Controller.P
 
 #define HANDLE_ANALOG_VIRTUAL_BUTTONS(Gamepad, GCAxis, UEButtonNegative, UEButtonPositive) \
 { \
-	const bool bWasNegativePressed = Controller.Previous##Gamepad != nil && Controller.Previous##Gamepad.GCAxis.value <= -RepeatDeadzone; \
+	const bool bWasNegativePressed = Previous##Gamepad != nil && Previous##Gamepad.GCAxis.value <= -RepeatDeadzone; \
 	const bool bNegativePressed = Gamepad.GCAxis.value <= -RepeatDeadzone; \
 	HANDLE_BUTTON_INTERNAL(Gamepad, bWasNegativePressed, bNegativePressed, UEButtonNegative) \
-	const bool bWasPositivePressed = Controller.Previous##Gamepad != nil && Controller.Previous##Gamepad.GCAxis.value >= RepeatDeadzone; \
+	const bool bWasPositivePressed = Previous##Gamepad != nil && Previous##Gamepad.GCAxis.value >= RepeatDeadzone; \
 	const bool bPositivePressed = Gamepad.GCAxis.value >= RepeatDeadzone; \
 	HANDLE_BUTTON_INTERNAL(Gamepad, bWasPositivePressed, bPositivePressed, UEButtonPositive) \
 }
 		
 		if (ExtendedGamepad != nil)
 		{
+            const GCExtendedGamepad* PreviousExtendedGamepad = Controller.PreviousExtendedGamepad;
+            
 			HANDLE_BUTTON(ExtendedGamepad, buttonA,			FGamepadKeyNames::FaceButtonBottom);
 			HANDLE_BUTTON(ExtendedGamepad, buttonB,			FGamepadKeyNames::FaceButtonRight);
 			HANDLE_BUTTON(ExtendedGamepad, buttonX,			FGamepadKeyNames::FaceButtonLeft);
@@ -450,15 +499,42 @@ if ((Controller.Previous##Gamepad != nil && Gamepad.GCAxis.value != Controller.P
 			HANDLE_ANALOG_VIRTUAL_BUTTONS(ExtendedGamepad, leftThumbstick.yAxis, FGamepadKeyNames::LeftStickDown, FGamepadKeyNames::LeftStickUp);
 			HANDLE_ANALOG_VIRTUAL_BUTTONS(ExtendedGamepad, rightThumbstick.xAxis, FGamepadKeyNames::RightStickLeft, FGamepadKeyNames::RightStickRight);
 			HANDLE_ANALOG_VIRTUAL_BUTTONS(ExtendedGamepad, rightThumbstick.yAxis, FGamepadKeyNames::RightStickDown, FGamepadKeyNames::RightStickUp);
+            
+            if(bSystemSupportsMenuButtons)
+            {
+                HANDLE_BUTTON(ExtendedGamepad, buttonMenu,          FGamepadKeyNames::SpecialRight);
+                HANDLE_BUTTON(ExtendedGamepad, buttonOptions,       FGamepadKeyNames::SpecialLeft);
+            }
+            
+            static bool bSystemSupportsThumbsticks = [GCExtendedGamepad instancesRespondToSelector:@selector(leftThumbstickButton)];
+            
+            if(bSystemSupportsThumbsticks)
+            {
+                HANDLE_BUTTON_INTERNAL(ExtendedGamepad, Controller.bLeftThumbstickWasPressed, ExtendedGamepad.leftThumbstickButton.pressed, FGamepadKeyNames::LeftThumb);
+                Controller.bLeftThumbstickWasPressed = ExtendedGamepad.leftThumbstickButton.pressed;
+                
+                HANDLE_BUTTON_INTERNAL(ExtendedGamepad, Controller.bRightThumbstickWasPressed, ExtendedGamepad.rightThumbstickButton.pressed, FGamepadKeyNames::RightThumb);
+                Controller.bRightThumbstickWasPressed = ExtendedGamepad.rightThumbstickButton.pressed;
+            }
 
-			[Controller.PreviousExtendedGamepad release];
-			Controller.PreviousExtendedGamepad = [ExtendedGamepad saveSnapshot];
-			[Controller.PreviousExtendedGamepad retain];
+            [Controller.PreviousExtendedGamepad release];
+            static bool bSupportsGamepadCapture = [Cont respondsToSelector:@selector(capture)];
+            if (bSupportsGamepadCapture)
+            {
+                Controller.PreviousExtendedGamepad = (GCExtendedGamepadSnapshot*)[ExtendedGamepad.controller capture].extendedGamepad;
+            }
+            else
+            {
+                Controller.PreviousExtendedGamepad = [ExtendedGamepad saveSnapshot];
+            }
+            [Controller.PreviousExtendedGamepad retain];
 		}
 #if PLATFORM_TVOS
         // get micro input (shouldn't have the other two)
         else if (MicroGamepad != nil)
         {
+            const GCMicroGamepad* PreviousMicroGamepad = Controller.PreviousMicroGamepad;
+            
 			// if we want virtual joysticks, then use the dpad values (and drain the touch queue to not leak memory)
 			if (bUseRemoteAsVirtualJoystick)
 			{
@@ -725,6 +801,11 @@ bool FIOSInputInterface::IsGamepadAttached() const
 
 void FIOSInputInterface::SetForceFeedbackChannelValue(int32 ControllerId, FForceFeedbackChannelType ChannelType, float Value)
 {
+	if(IsGamepadAttached() && bControllersBlockDeviceFeedback)
+	{
+		Value = 0.0f;
+	}
+
 	if(HapticFeedbackSupportLevel >= 2)
 	{
 		// if we are at rest, then kick when we are over the Kick cutoff

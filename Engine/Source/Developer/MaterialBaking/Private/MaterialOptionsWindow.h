@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -9,16 +9,6 @@
 
 struct FMaterialData;
 class SButton;
-
-/** Required to ensure desired details view layout */
-class FSimpleRootObjectCustomization : public IDetailRootObjectCustomization
-{
-public:
-	/** IDetailRootObjectCustomization interface */
-	virtual TSharedPtr<SWidget> CustomizeObjectHeader(const UObject* InRootObject) override;
-	virtual bool IsObjectVisible(const UObject* InRootObject) const override { return true; }
-	virtual bool ShouldDisplayHeader(const UObject* InRootObject) const override { return false; }
-};
 
 /** Options window used to populate provided settings objects */
 class SMaterialOptions : public SCompoundWidget

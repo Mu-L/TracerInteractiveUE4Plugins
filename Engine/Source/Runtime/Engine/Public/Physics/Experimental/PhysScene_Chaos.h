@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -16,6 +16,7 @@
 #include "Chaos/Declares.h"
 #include "PhysicsProxy/SingleParticlePhysicsProxyFwd.h"
 #include "Framework/Threading.h"
+#include "Chaos/PBDCollisionConstraints.h"
 
 #ifndef CHAOS_WITH_PAUSABLE_SOLVER
 #define CHAOS_WITH_PAUSABLE_SOLVER 1
@@ -27,6 +28,7 @@
 class UPrimitiveComponent;
 
 class AdvanceOneTimeStepTask;
+class FPhysicsReplication;
 class FPhysInterface_Chaos;
 class FChaosSolversModule;
 struct FForceFieldProxy;
@@ -42,6 +44,8 @@ class IPhysicsProxyBase;
 namespace Chaos
 {
 	class FPhysicsProxy;
+
+	struct FCollisionEventData;
 
 	enum EEventType : int32;
 
@@ -68,9 +72,17 @@ class ENGINE_API FPhysScene_Chaos : public FTickableGameObject, public FGCObject
 public:
 
 #if !WITH_CHAOS_NEEDS_TO_BE_FIXED
-	FPhysScene_Chaos(AActor* InSolverActor);
+	FPhysScene_Chaos(AActor* InSolverActor
+#if CHAOS_CHECKED
+	, const FName& DebugName=NAME_None
+#endif
+);
 #else
-	FPhysScene_Chaos(AActor* InSolverActor=nullptr);
+	FPhysScene_Chaos(AActor* InSolverActor=nullptr
+#if CHAOS_CHECKED
+	, const FName& DebugName=NAME_None
+#endif
+);
 #endif
 
 	virtual ~FPhysScene_Chaos();
@@ -91,7 +103,10 @@ public:
 
 	/** Returns the actor that owns this solver. */
 	AActor* GetSolverActor() const;
-	
+
+	void RegisterForCollisionEvents(UPrimitiveComponent* Component);
+
+	void UnRegisterForCollisionEvents(UPrimitiveComponent* Component);
 
 	/**
 	 * Get the internal Dispatcher object
@@ -107,6 +122,9 @@ public:
 	void AddObject(UPrimitiveComponent* Component, FGeometryCollectionPhysicsProxy* InObject);
 	void AddObject(UPrimitiveComponent* Component, FFieldSystemPhysicsProxy* InObject);
 
+	void AddToComponentMaps(UPrimitiveComponent* Component, IPhysicsProxyBase* InObject);
+	void RemoveFromComponentMaps(IPhysicsProxyBase* InObject);
+
 	/**
 	 * Called during physics state destruction for the game thread to remove objects from the simulation
 	 * #BG TODO - Doesn't actually remove from the evolution at the moment
@@ -118,6 +136,8 @@ public:
 	void RemoveObject(FFieldSystemPhysicsProxy* InObject);	
 
 	void RemoveActorFromAccelerationStructure(FPhysicsActorHandle& Actor);
+	void UpdateActorInAccelerationStructure(const FPhysicsActorHandle& Actor);
+	void UpdateActorsInAccelerationStructure(const TArrayView<FPhysicsActorHandle>& Actors);
 
 #if XGE_FIXED
 	template<typename PayloadType>
@@ -131,12 +151,19 @@ public:
 
 	void Shutdown();
 
+	FPhysicsReplication* GetPhysicsReplication();
+	void SetPhysicsReplication(FPhysicsReplication* InPhysicsReplication);
+
 #if WITH_EDITOR
 	void AddPieModifiedObject(UObject* InObj);
 #endif
 
 	// FGCObject Interface ///////////////////////////////////////////////////
 	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+	virtual FString GetReferencerName() const
+	{
+		return "FPhysScene_Chaos";
+	}
 	//////////////////////////////////////////////////////////////////////////
 	
 	/** Given a solver object, returns its associated component. */
@@ -163,24 +190,57 @@ public:
 	 */
 	void CopySolverAccelerationStructure();
 
+	/**
+	 * Callback when a world ends, to mark updated packages dirty. This can't be done in final
+	 * sync as the editor will ignore packages being dirtied in PIE. Also used to clean up any other references
+	 */
+	void OnWorldEndPlay();
+
 private:
+	UPROPERTY()
+	TArray<UPrimitiveComponent*> CollisionEventRegistrations;
+
+	// contains the set of properties that uniquely identifies a reported collision
+	// Note that order matters, { Body0, Body1 } is not the same as { Body1, Body0 }
+	struct FUniqueContactPairKey
+	{
+		const void* Body0;
+		const void* Body1;
+
+		friend bool operator==(const FUniqueContactPairKey& Lhs, const FUniqueContactPairKey& Rhs)
+		{
+			return Lhs.Body0 == Rhs.Body0 && Lhs.Body1 == Rhs.Body1;
+		}
+
+		friend inline uint32 GetTypeHash(FUniqueContactPairKey const& P)
+		{
+			return (PTRINT)P.Body0 ^ ((PTRINT)P.Body1 << 18);
+		}
+	};
+
+	FCollisionNotifyInfo& GetPendingCollisionForContactPair(const void* P0, const void* P1, bool& bNewEntry);
+	/** Key is the unique pair, value is index into PendingNotifies array */
+	TMap<FUniqueContactPairKey, int32> ContactPairToPendingNotifyMap;
+
+	/** Holds the list of pending legacy notifies that are to be processed */
+	TArray<FCollisionNotifyInfo> PendingCollisionNotifies;
+
+	// Chaos Event Handlers
+	void HandleCollisionEvents(const Chaos::FCollisionEventData& CollisionData);
+
+	void DispatchPendingCollisionNotifies();
+
 	TUniquePtr<Chaos::ISpatialAccelerationCollection<Chaos::TAccelerationStructureHandle<float, 3>, float, 3>> SolverAccelerationStructure;
+
+	/** Replication manager that updates physics bodies towards replicated physics state */
+	FPhysicsReplication* PhysicsReplication;
 
 #if CHAOS_WITH_PAUSABLE_SOLVER
 	/** Callback that checks the status of the world settings for this scene before pausing/unpausing its solver. */
 	void OnUpdateWorldPause();
 #endif
 
-	void AddToComponentMaps(UPrimitiveComponent* Component, IPhysicsProxyBase* InObject);
-	void RemoveFromComponentMaps(IPhysicsProxyBase* InObject);
-
 #if WITH_EDITOR
-	/**
-	 * Callback when a world ends, to mark updated packages dirty. This can't be done in final
-	 * sync as the editor will ignore packages being dirtied in PIE
-	 */
-	void OnWorldEndPlay();
-
 	// List of objects that we modified during a PIE run for physics simulation caching.
 	TArray<UObject*> PieModifiedObjects;
 #endif
@@ -256,7 +316,6 @@ void FPhysScene_Chaos::RegisterEventHandler(const Chaos::EEventType& EventID, Ha
 
 class UWorld;
 class AWorldSettings;
-class FPhysicsReplication;
 class FPhysicsReplicationFactory;
 class FContactModifyCallbackFactory;
 
@@ -268,7 +327,11 @@ public:
 
 	friend class FPhysInterface_Chaos;
 
-	ENGINE_API FPhysScene_ChaosInterface(const AWorldSettings* InSettings = nullptr);
+	ENGINE_API FPhysScene_ChaosInterface(const AWorldSettings* InSettings = nullptr
+#if CHAOS_CHECKED
+		, const FName& DebugName = NAME_None
+#endif
+	);
 
 	// Scene
 	void OnWorldBeginPlay();
@@ -276,8 +339,11 @@ public:
 
 	// In Chaos, this function will update the pointers from actor handles to their proxies.
 	// So the array of handles must be non-const.
-	void ENGINE_API AddActorsToScene_AssumesLocked(TArray<FPhysicsActorHandle>& InActors);
+	void ENGINE_API AddActorsToScene_AssumesLocked(TArray<FPhysicsActorHandle>& InActors, const bool bImmediate=true);
 	void AddAggregateToScene(const FPhysicsAggregateHandle& InAggregate);
+
+	void ENGINE_API AddToComponentMaps(UPrimitiveComponent* Component, IPhysicsProxyBase* InObject);
+	void ENGINE_API RemoveFromComponentMaps(IPhysicsProxyBase* InObject);
 
 	void SetOwningWorld(UWorld* InOwningWorld);
 
@@ -312,17 +378,18 @@ public:
 	ENGINE_API void DeferredAddCollisionDisableTable(uint32 SkelMeshCompID, TMap<struct FRigidBodyIndexPair, bool> * CollisionDisableTable);
 	ENGINE_API void DeferredRemoveCollisionDisableTable(uint32 SkelMeshCompID);
 
-	void MarkForPreSimKinematicUpdate(USkeletalMeshComponent* InSkelComp, ETeleportType InTeleport, bool bNeedsSkinning);
+	bool MarkForPreSimKinematicUpdate(USkeletalMeshComponent* InSkelComp, ETeleportType InTeleport, bool bNeedsSkinning);
 	void ClearPreSimKinematicUpdate(USkeletalMeshComponent* InSkelComp);
 
 	void AddPendingOnConstraintBreak(FConstraintInstance* ConstraintInstance, int32 SceneType);
 	void AddPendingSleepingEvent(FBodyInstance* BI, ESleepEvent SleepEventType, int32 SceneType);
+	int32 DirtyElementCount(Chaos::ISpatialAccelerationCollection<Chaos::TAccelerationStructureHandle<Chaos::FReal, 3>, Chaos::FReal, 3>& Collection);
 
 	TArray<FCollisionNotifyInfo>& GetPendingCollisionNotifies(int32 SceneType);
 
 	ENGINE_API static bool SupportsOriginShifting();
 	void ApplyWorldOffset(FVector InOffset);
-	ENGINE_API void SetUpForFrame(const FVector* NewGrav, float InDeltaSeconds = 0.0f, float InMaxPhysicsDeltaTime = 0.0f);
+	ENGINE_API void SetUpForFrame(const FVector* NewGrav, float InDeltaSeconds = 0.0f, float InMaxPhysicsDeltaTime = 0.0f, float InMaxSubstepDeltaTime = 0.f, int32 InMaxSubsteps = 1);
 	ENGINE_API void StartFrame();
 	ENGINE_API void EndFrame(ULineBatchComponent* InLineBatcher);
 	ENGINE_API void WaitPhysScenes();
@@ -350,6 +417,8 @@ public:
 	ENGINE_API bool ExecPxVis(uint32 SceneType, const TCHAR* Cmd, FOutputDevice* Ar);
 	ENGINE_API bool ExecApexVis(uint32 SceneType, const TCHAR* Cmd, FOutputDevice* Ar);
 
+	ENGINE_API static Chaos::TCollisionModifierCallback<float, 3> CollisionModifierCallback;
+
 #if XGE_FIXED
 	template<typename PayloadType>
 	void RegisterEvent(const Chaos::EEventType& EventID, TFunction<void(const Chaos::FPBDRigidsSolver* Solver, PayloadType& EventData)> InLambda)
@@ -373,6 +442,11 @@ public:
 #endif // XGE_FIXED
 
 private:
+
+
+#if WITH_EDITOR
+	bool IsOwningWorldEditor() const;
+#endif
 
 	void SyncBodies(Chaos::FPhysicsSolver* Solver);
 
@@ -413,6 +487,21 @@ private:
 
 
 	void CompleteSceneSimulation(ENamedThreads::Type CurrentThread, const FGraphEventRef& MyCompletionGraphEvent);
+
+	/** Process kinematic updates on any deferred skeletal meshes */
+	void UpdateKinematicsOnDeferredSkelMeshes();
+
+	/** Information about how to perform kinematic update before physics */
+	struct FDeferredKinematicUpdateInfo
+	{
+		/** Whether to teleport physics bodies or not */
+		ETeleportType	TeleportType;
+		/** Whether to update skinning info */
+		bool			bNeedsSkinning;
+	};
+
+	/** Map of SkeletalMeshComponents that need their bone transforms sent to the physics engine before simulation. */
+	TArray<TPair<USkeletalMeshComponent*, FDeferredKinematicUpdateInfo>>	DeferredKinematicUpdateSkelMeshes;
 
 	FPhysScene_Chaos Scene;
 

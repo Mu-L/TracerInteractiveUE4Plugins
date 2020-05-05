@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	UAnimSequencerInstance.cpp: Single Node Tree Instance 
@@ -33,6 +33,11 @@ void UAnimSequencerInstance::UpdateAnimTrack(UAnimSequenceBase* InAnimSequence, 
 void UAnimSequencerInstance::UpdateAnimTrack(UAnimSequenceBase* InAnimSequence, int32 SequenceId, float InFromPosition, float InToPosition, float Weight, bool bFireNotifies)
 {
 	GetProxyOnGameThread<FAnimSequencerInstanceProxy>().UpdateAnimTrack(InAnimSequence, SequenceId, InFromPosition, InToPosition, Weight, bFireNotifies);
+}
+
+void UAnimSequencerInstance::ConstructNodes()
+{
+	GetProxyOnGameThread<FAnimSequencerInstanceProxy>().ConstructNodes();
 }
 
 void UAnimSequencerInstance::ResetNodes()

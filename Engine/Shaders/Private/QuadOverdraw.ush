@@ -1,11 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	QuadOverdraw.usf: Utils to compute quad coverage
 =============================================================================*/
 
 #pragma once
-  
+
 // Because we use the same UAV for Descritors and Complexity, we have the same clear value.
 // In this case, the invalid descriptor is 0, so we need to add 1 to the primitive ID to prevent clash.
 const static uint QO_DESC_NONE = 0;
@@ -45,12 +45,13 @@ float ComplexityToFloat(uint Complexity)
 	return (float)Complexity / (float)QO_FRACTIONNAL_COMPLEXITY;
 }
 
+#define RWQuadBuffer View.QuadOverdraw
+
 #if OUTPUT_QUAD_OVERDRAW
 
 // The temporary buffer used to synchronize and exchange data between quad sub-pixels.
 // Left half hold QuadDescriptor, right half hold QuadComplexity
 // Both are halfres here.
-RWTexture2D<uint> RWQuadBuffer REGISTER(QUAD_BUFFER_REGISTER);
 
 
 // The QuadComplexity is the same resource as the QuadDescriptor with an offset in X.

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System.IO;
 
@@ -14,7 +14,8 @@ namespace UnrealBuildTool.Rules
 				new string[]
 				{
 					"Core",
-					"CADTools"
+					"CADTools",
+					"DatasmithCore"
 				}
 			);
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "UObject/CoreNet.h"
@@ -18,6 +18,7 @@
 #include "PhysicsReplication.h"
 #include "PhysicsPublic.h"
 #include "DrawDebugHelpers.h"
+#include "Net/Core/PushModel/PushModel.h"
 
 /*-----------------------------------------------------------------------------
 	AActor networking implementation.
@@ -106,7 +107,7 @@ float AActor::GetReplayPriority(const FVector& ViewPos, const FVector& ViewDir, 
 		{
 			Time *= 2.4f;
 		}
-		else if (DistSq < FARSIGHTTHRESHOLD)
+		else if (DistSq < FARSIGHTTHRESHOLDSQUARED)
 		{
 			Time *= 0.8f;
 		}
@@ -144,10 +145,8 @@ void AActor::PostNetReceive()
 		bNetCheckedInitialPhysicsState = true;
 	}
 
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	ExchangeB(bHidden, ActorReplication::SavedbHidden);
 	Exchange(Owner, ActorReplication::SavedOwner);
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 	if (IsHidden() != ActorReplication::SavedbHidden)
 	{
@@ -185,7 +184,7 @@ void AActor::OnRep_ReplicatedMovement()
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 		if (CVarDrawDebugRepMovement->GetInt() > 0)
 		{
-			DrawDebugCapsule(GetWorld(), LocalRepMovement.Location, GetSimpleCollisionHalfHeight(), GetSimpleCollisionRadius(), LocalRepMovement.Rotation.Quaternion(), FColor(100, 255, 100), true, 1.f);
+			DrawDebugCapsule(GetWorld(), LocalRepMovement.Location, GetSimpleCollisionHalfHeight(), GetSimpleCollisionRadius(), LocalRepMovement.Rotation.Quaternion(), FColor(100, 255, 100), false, 1.f);
 		}
 #endif
 
@@ -335,14 +334,13 @@ bool AActor::IsReplayRelevantFor(const AActor* RealViewer, const AActor* ViewTar
 
 void AActor::GatherCurrentMovement()
 {
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	if (IsReplicatingMovement() || (RootComponent && RootComponent->GetAttachParent()))
 	{
 		bool bWasAttachmentModified = false;
 		bool bWasRepMovementModified = false;
 
 		AActor* OldAttachParent = AttachmentReplication.AttachParent;
-		USceneComponent* OldAttachComponent = AttachmentReplication.AttachComponent; 
+		USceneComponent* OldAttachComponent = AttachmentReplication.AttachComponent;
 	
 		AttachmentReplication.AttachParent = nullptr;
 		AttachmentReplication.AttachComponent = nullptr;
@@ -358,6 +356,7 @@ PRAGMA_DISABLE_DEPRECATION_WARNINGS
 			// Their replication will affect our position indirectly since we are attached.
 			ReplicatedMovement.bRepPhysics = !RootPrimComp->IsWelded();
 			
+			// Technically, the values might have stayed the same, but we'll just assume they've changed.
 			bWasRepMovementModified = true;
 		}
 		else if (RootComponent != nullptr)
@@ -391,23 +390,22 @@ PRAGMA_DISABLE_DEPRECATION_WARNINGS
 				bWasRepMovementModified = true;
 			}
 
-			if (bWasRepMovementModified ||
-				ReplicatedMovement.bRepPhysics != false)
-			{
-				// MARK_PROPERTY_DIRTY_FROM_NAME(AActor, ReplicatedMovement, this);
-			}
-
-			if (bWasAttachmentModified ||
-				OldAttachParent != AttachmentReplication.AttachParent ||
-				OldAttachComponent != AttachmentReplication.AttachComponent)
-			{
-				// MARK_PROPERTY_DIRTY_FROM_NAME(AActor, AttachmentReplication, this);
-			}
-
+			bWasRepMovementModified = (bWasRepMovementModified || ReplicatedMovement.bRepPhysics);
 			ReplicatedMovement.bRepPhysics = false;
 		}
+
+		if (bWasRepMovementModified)
+		{
+			MARK_PROPERTY_DIRTY_FROM_NAME(AActor, ReplicatedMovement, this);
+		}
+
+		if (bWasAttachmentModified ||
+			OldAttachParent != AttachmentReplication.AttachParent ||
+			OldAttachComponent != AttachmentReplication.AttachComponent)
+		{
+			MARK_PROPERTY_DIRTY_FROM_NAME(AActor, AttachmentReplication, this);
+		}
 	}
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
 }
 
 void AActor::GetLifetimeReplicatedProps( TArray< FLifetimeProperty > & OutLifetimeProps ) const
@@ -418,29 +416,23 @@ void AActor::GetLifetimeReplicatedProps( TArray< FLifetimeProperty > & OutLifeti
 		BPClass->GetLifetimeBlueprintReplicationList(OutLifetimeProps);
 	}
 
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	DOREPLIFETIME( AActor, bReplicateMovement );
-	DOREPLIFETIME( AActor, Role );
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
-	DOREPLIFETIME( AActor, RemoteRole );
-	DOREPLIFETIME( AActor, Owner );
+	FDoRepLifetimeParams SharedParams;
+	SharedParams.bIsPushBased = true;
 
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	DOREPLIFETIME( AActor, bHidden );
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
+	DOREPLIFETIME_WITH_PARAMS_FAST(AActor, bReplicateMovement, SharedParams);
+	DOREPLIFETIME_WITH_PARAMS_FAST(AActor, Role, SharedParams);
+	DOREPLIFETIME_WITH_PARAMS_FAST(AActor, RemoteRole, SharedParams);
+	DOREPLIFETIME_WITH_PARAMS_FAST(AActor, Owner, SharedParams);
+	DOREPLIFETIME_WITH_PARAMS_FAST(AActor, bHidden, SharedParams);
+	DOREPLIFETIME_WITH_PARAMS_FAST(AActor, bTearOff, SharedParams);
+	DOREPLIFETIME_WITH_PARAMS_FAST(AActor, bCanBeDamaged, SharedParams);
+	DOREPLIFETIME_WITH_PARAMS_FAST(AActor, Instigator, SharedParams);
+	
+	FDoRepLifetimeParams AttachmentReplicationParams{COND_Custom, REPNOTIFY_Always, /*bIsPushBased=*/true};
+	DOREPLIFETIME_WITH_PARAMS_FAST(AActor, AttachmentReplication, AttachmentReplicationParams);
 
-	DOREPLIFETIME( AActor, bTearOff );
-
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	DOREPLIFETIME( AActor, bCanBeDamaged );
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
-
-	DOREPLIFETIME_CONDITION_NOTIFY( AActor, AttachmentReplication, COND_Custom, REPNOTIFY_Always );
-
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	DOREPLIFETIME( AActor, Instigator );
-	DOREPLIFETIME_CONDITION_NOTIFY( AActor, ReplicatedMovement, COND_SimulatedOrPhysics, REPNOTIFY_Always );
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
+	FDoRepLifetimeParams ReplicatedMovementParams{COND_SimulatedOrPhysics, REPNOTIFY_Always, /*bIsPushBased=*/true};
+	DOREPLIFETIME_WITH_PARAMS_FAST(AActor, ReplicatedMovement, ReplicatedMovementParams);
 }
 
 bool AActor::ReplicateSubobjects(UActorChannel *Channel, FOutBunch *Bunch, FReplicationFlags *RepFlags)

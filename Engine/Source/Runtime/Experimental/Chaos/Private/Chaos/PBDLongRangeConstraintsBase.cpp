@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "Chaos/PBDLongRangeConstraintsBase.h"
 
 #include "Chaos/Map.h"
@@ -11,10 +11,28 @@
 using namespace Chaos;
 
 template<class T, int d>
-TPBDLongRangeConstraintsBase<T, d>::TPBDLongRangeConstraintsBase(const TDynamicParticles<T, d>& InParticles, const TMap<int32, TSet<uint32>>& PointToNeighbors, const int32 NumberOfAttachments, const T Stiffness)
+TPBDLongRangeConstraintsBase<T, d>::TPBDLongRangeConstraintsBase(
+	const TDynamicParticles<T, d>& InParticles,
+	const TMap<int32, TSet<uint32>>& PointToNeighbors,
+	const int32 NumberOfAttachments,
+	const T Stiffness,
+	const T LimitScale,
+	const bool bUseGeodesicDistance)
     : MStiffness(Stiffness)
 {
-	ComputeEuclidianConstraints(InParticles, PointToNeighbors, NumberOfAttachments);
+	if (bUseGeodesicDistance)
+	{
+		ComputeGeodesicConstraints(InParticles, PointToNeighbors, NumberOfAttachments);
+	}
+	else
+	{
+		ComputeEuclidianConstraints(InParticles, PointToNeighbors, NumberOfAttachments);
+	}
+	// Scale distance limits
+	for (float& Dist : MDists)
+	{
+		Dist *= LimitScale;
+	}
 }
 
 template<class T, int d>
@@ -110,6 +128,7 @@ void TPBDLongRangeConstraintsBase<T, d>::ComputeEuclidianConstraints(
 		}
 	}
 
+	// Compute the islands of kinematic particles
 	const TArray<TArray<uint32>> IslandElements = ComputeIslands(InParticles, PointToNeighbors, KinematicParticles);
 	int32 NumTotalIslandElements = 0;
 	for(const auto& Elements : IslandElements)
@@ -126,7 +145,7 @@ void TPBDLongRangeConstraintsBase<T, d>::ComputeEuclidianConstraints(
 		if (InParticles.InvM(i) == 0.0)
 			continue;
 
-		// Measure the distance to all particles in all islands...
+		// Measure the distance to all kinematic particles in all islands...
 		ClosestElements.Reset();
 		for (const TArray<uint32>& Elements : IslandElements)
 		{
@@ -175,9 +194,12 @@ void TPBDLongRangeConstraintsBase<T, d>::ComputeGeodesicConstraints(
     const TMap<int32, TSet<uint32>>& PointToNeighbors,
     const int32 NumberOfAttachments)
 {
+	TArray<int32> UsedIndices;
+	PointToNeighbors.GenerateKeyArray(UsedIndices);
+
 	// TODO(mlentine): Support changing which particles are kinematic during simulation
 	TArray<uint32> KinematicParticles;
-	for (uint32 i = 0; i < InParticles.Size(); ++i)
+	for (const uint32 i : UsedIndices)
 	{
 		if (InParticles.InvM(i) == 0)
 		{
@@ -187,57 +209,56 @@ void TPBDLongRangeConstraintsBase<T, d>::ComputeGeodesicConstraints(
 	TArray<TArray<uint32>> IslandElements = ComputeIslands(InParticles, PointToNeighbors, KinematicParticles);
 	// Store distances for all adjacent vertices
 	TMap<TVector<uint32, 2>, T> Distances;
-	for (uint32 i = 0; i < InParticles.Size(); ++i)
+	for (const uint32 i : UsedIndices)
 	{
 		auto Neighbors = PointToNeighbors[i];
 		for (auto Neighbor : Neighbors)
 		{
-			Distances[TVector<uint32, 2>(i, Neighbor)] = ComputeDistance(InParticles, Neighbor, i);
+			Distances.Add(TVector<uint32, 2>(i, Neighbor), ComputeDistance(InParticles, Neighbor, i));
 		}
 	}
 	// Start and End Points to path and geodesic distance
 	TMap<TVector<uint32, 2>, Pair<T, TArray<uint32>>> GeodesicPaths;
 	// Dijkstra for each Kinematic Particle (assume a small number of kinematic points) - note this is N^2 log N with N kinematic points
-	for (auto Element : KinematicParticles)
+	for (const uint32 Element : KinematicParticles)
 	{
-		GeodesicPaths[TVector<uint32, 2>(Element, Element)] = {0, {Element}};
-		for (uint32 i = 0; i < InParticles.Size(); ++i)
+		GeodesicPaths.Add(TVector<uint32, 2>(Element, Element), {0, {Element}});
+		for (const uint32 i : UsedIndices)
 		{
 			if (i != Element)
 			{
-				GeodesicPaths[TVector<uint32, 2>(Element, i)] = {FLT_MAX, {}};
+				GeodesicPaths.Add(TVector<uint32, 2>(Element, i), {FLT_MAX, {}});
 			}
 		}
 	}
-	PhysicsParallelFor(KinematicParticles.Num(), [&](int32 Index) {
-		auto Element = KinematicParticles[Index];
-		std::priority_queue<Pair<T, uint32>, std::vector<Pair<T, uint32>>, std::greater<Pair<T, uint32>>> q;
-		for (uint32 i = 0; i < InParticles.Size(); ++i)
-		{
-			q.push(MakePair(GeodesicPaths[TVector<uint32, 2>(Element, i)].First, i));
-		}
+	PhysicsParallelFor(KinematicParticles.Num(), [&](int32 Index)
+	{
+		const uint32 Element = KinematicParticles[Index];
+		std::priority_queue<Pair<T, uint32>, std::vector<Pair<T, uint32>>, std::greater<Pair<T, uint32>>> q;  // TODO(Kriss.Gossart): Remove use of std container
+		q.push(MakePair((T)0., Element));
 		TSet<uint32> Visited;
 		while (!q.empty())
 		{
-			auto PairElem = q.top();
+			const Pair<T, uint32> PairElem = q.top();
 			q.pop();
 			if (Visited.Contains(PairElem.Second))
 				continue;
 			Visited.Add(PairElem.Second);
-			auto CurrentStartEnd = TVector<uint32, 2>(Element, PairElem.Second);
-			auto Neighbors = PointToNeighbors[PairElem.Second];
-			for (auto Neighbor : Neighbors)
+			const TVector<uint32, 2> CurrentStartEnd(Element, PairElem.Second);
+			const TSet<uint32>& Neighbors = PointToNeighbors[PairElem.Second];
+			for (const uint32 Neighbor : Neighbors)
 			{
+				if (InParticles.InvM(Neighbor) == (T)0.) { continue; }
 				check(Neighbor != PairElem.Second);
-				auto NeighborStartEnd = TVector<uint32, 2>(Element, Neighbor);
-				auto NeighborDistancePath = GeodesicPaths[NeighborStartEnd];
+				const TVector<uint32, 2> NeighborStartEnd(Element, Neighbor);
+				const Pair<T, TArray<uint32>>& NeighborDistancePath = GeodesicPaths[NeighborStartEnd];
 				// Compute a possible distance for NeighborStartEnd
-				T NewDist = PairElem.First + Distances[TVector<uint32, 2>(PairElem.Second, Neighbor)];
+				const T NewDist = PairElem.First + Distances[TVector<uint32, 2>(PairElem.Second, Neighbor)];
 				if (NewDist < NeighborDistancePath.First)
 				{
-					auto NewPath = GeodesicPaths[CurrentStartEnd].Second;
-					check(NewPath.Num() > 0 && NewPath[NewPath.Num() - 1] != Neighbor)
-					    NewPath.Add(Neighbor);
+					TArray<uint32> NewPath = GeodesicPaths[CurrentStartEnd].Second;
+					check(NewPath.Num() > 0 && NewPath[NewPath.Num() - 1] != Neighbor);
+					NewPath.Add(Neighbor);
 					GeodesicPaths[NeighborStartEnd] = {NewDist, NewPath};
 					q.push(MakePair(GeodesicPaths[NeighborStartEnd].First, Neighbor));
 				}
@@ -245,27 +266,33 @@ void TPBDLongRangeConstraintsBase<T, d>::ComputeGeodesicConstraints(
 		}
 	});
 	FCriticalSection CriticalSection;
-	PhysicsParallelFor(InParticles.Size(), [&](int32 i) {
+	PhysicsParallelFor(UsedIndices.Num(), [&](uint32 UsedIndex) {
+		const uint32 i = UsedIndices[UsedIndex];
 		if (InParticles.InvM(i) == 0)
 			return;
 		TArray<Pair<T, int32>> ClosestElements;
-		for (auto Elements : IslandElements)
+		for (const TArray<uint32>& Elements : IslandElements)
 		{
-			int32 ClosestElement = -1;
-			for (auto Element : Elements)
+			if (!Elements.Num()) { continue; }  // Empty island 
+
+			int32 ClosestElement = INDEX_NONE;
+			T ClosestDistance = FLT_MAX;
+
+			for (const uint32 Element : Elements)
 			{
-				if (ClosestElement < 0 || GeodesicPaths[TVector<uint32, 2>(ClosestElement, i)].First > GeodesicPaths[TVector<uint32, 2>(Element, i)].First)
+				const T Distance = GeodesicPaths[TVector<uint32, 2>(Element, i)].First;
+				if (Distance < ClosestDistance)
 				{
+					ClosestDistance = Distance;
 					ClosestElement = Element;
 				}
 			}
-			// Empty Island
-			if (ClosestElement < 0)
-				continue;
-			TVector<uint32, 2> Index(ClosestElement, i);
+			if (ClosestElement == INDEX_NONE) { continue; }  // Not on this island
+
+			const TVector<uint32, 2> Index(ClosestElement, i);
 			check(GeodesicPaths[Index].First != FLT_MAX);
 			check(GeodesicPaths[Index].Second.Num() > 1);
-			ClosestElements.Add(MakePair(GeodesicPaths[Index].First, ClosestElement));
+			ClosestElements.Add(MakePair(ClosestDistance, ClosestElement));
 		}
 		// How to sort based on smalled first value of pair....
 		ClosestElements.Sort();
@@ -273,9 +300,9 @@ void TPBDLongRangeConstraintsBase<T, d>::ComputeGeodesicConstraints(
 		{
 			ClosestElements.SetNum(NumberOfAttachments);
 		}
-		for (auto Element : ClosestElements)
+		for (const Pair<T, int32>& Element : ClosestElements)
 		{
-			TVector<uint32, 2> Index(Element.Second, i);
+			const TVector<uint32, 2> Index(Element.Second, i);
 			check(GeodesicPaths[Index].First == Element.First);
 			check(FGenericPlatformMath::Abs(Element.First - ComputeGeodesicDistance(InParticles, GeodesicPaths[Index].Second)) < 1e-4);
 			CriticalSection.Lock();
@@ -288,15 +315,16 @@ void TPBDLongRangeConstraintsBase<T, d>::ComputeGeodesicConstraints(
 	MConstraints.Sort([](const TArray<uint32>& Elem1, const TArray<uint32>& Elem2) { return Elem1.Num() > Elem2.Num(); });
 	TArray<TArray<uint32>> NewConstraints;
 	TArray<T> NewDists;
-	TMap<uint32, TArray<uint32>> ProcessedPairs;
-	for (uint32 i = 1; i < static_cast<uint32>(MConstraints.Num()); ++i)
+	TMap<TVector<uint32, 2>, TArray<uint32>> ProcessedPairs;
+	for (uint32 i = 0; i < static_cast<uint32>(MConstraints.Num()); ++i)
 	{
-		if (ProcessedPairs.Contains(MConstraints[i].Last()))
+		const TVector<uint32, 2> Traverse(MConstraints[i][0], MConstraints[i].Last());
+		if (const TArray<uint32>* TraversePath = ProcessedPairs.Find(Traverse))
 		{
-			check(MConstraints[i].Num() == ProcessedPairs[MConstraints[i].Last()].Num());
-			for (uint32 j = 0; j < static_cast<uint32>(ProcessedPairs[MConstraints[i].Last()].Num()); ++j)
+			check(MConstraints[i].Num() == TraversePath->Num());
+			for (uint32 j = 0; j < static_cast<uint32>(TraversePath->Num()); ++j)
 			{
-				check(ProcessedPairs[MConstraints[i].Last()][j] == MConstraints[i][j]);
+				check((*TraversePath)[j] == MConstraints[i][j]);
 			}
 			continue;
 		}
@@ -307,48 +335,17 @@ void TPBDLongRangeConstraintsBase<T, d>::ComputeGeodesicConstraints(
 		{
 			Dist += (InParticles.X(MConstraints[i][j]) - InParticles.X(MConstraints[i][j - 1])).Size();
 			Path.Add(MConstraints[i][j]);
-			NewConstraints.Add(Path);
-			NewDists.Add(Dist);
-			ProcessedPairs.Add(MConstraints[i][j], Path);
+			// TODO(Kriss.Gossart): We might want to add a new mode for differentiating between these two cases
+			//NewConstraints.Add(Path);  // This would save the whole geodesic path, which is too expensive
+			//NewDists.Add(Dist);
+			NewConstraints.Add({Path[0], Path[Path.Num() - 1]});  // Use shortest distance instead 
+			NewDists.Add(ComputeDistance(InParticles, Path[0], Path[Path.Num() - 1]));
+			const TVector<uint32, 2> SubTraverse(MConstraints[i][0], MConstraints[i][j]);
+			ProcessedPairs.Add(SubTraverse, Path);
 		}
 	}
 	MDists = NewDists;
 	MConstraints = NewConstraints;
-}
-
-template<class T, int d>
-TVector<T, d> TPBDLongRangeConstraintsBase<T, d>::GetDelta(const TPBDParticles<T, d>& InParticles, const int32 i) const
-{
-	const TArray<uint32>& Constraint = MConstraints[i];
-	check(Constraint.Num() > 1);
-	const uint32 i1 = Constraint[0];
-	const uint32 i2 = Constraint[Constraint.Num() - 1];
-	const uint32 i2m1 = Constraint[Constraint.Num() - 2];
-	check(InParticles.InvM(i1) == 0);
-	check(InParticles.InvM(i2) > 0);
-	const T Distance = ComputeGeodesicDistance(InParticles, Constraint);
-	if (Distance < MDists[i])
-		return TVector<T, d>(0);
-
-	//const TVector<T, d> Direction = (InParticles.P(i2m1) - InParticles.P(i2)).GetSafeNormal();
-	TVector<T, d> Direction = InParticles.P(i2m1) - InParticles.P(i2);
-	const T DirLen = Direction.SafeNormalize();
-
-	const T Offset = Distance - MDists[i];
-	const TVector<T, d> Delta = MStiffness * Offset * Direction;
-
-	/*  // ryan - this currently fails:
-
-	const T NewDirLen = (InParticles.P(i2) + Delta - InParticles.P(i2m1)).Size();
-	//T Correction = (InParticles.P(i2) - InParticles.P(i2m1)).Size() - (InParticles.P(i2) + Delta - InParticles.P(i2m1)).Size();
-	const T Correction = DirLen - NewDirLen;
-	check(Correction >= 0);
-
-	//T NewDist = (Distance - (InParticles.P(i2) - InParticles.P(i2m1)).Size() + (InParticles.P(i2) + Delta - InParticles.P(i2m1)).Size());
-	const T NewDist = Distance - DirLen + NewDirLen;
-	check(FGenericPlatformMath::Abs(NewDist - MDists[i]) < 1e-4);
-*/
-	return Delta;
 }
 
 template class Chaos::TPBDLongRangeConstraintsBase<float, 3>;

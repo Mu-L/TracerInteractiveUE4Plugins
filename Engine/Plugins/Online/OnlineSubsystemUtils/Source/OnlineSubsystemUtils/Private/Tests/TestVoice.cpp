@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Tests/TestVoice.h"
 #include "Components/AudioComponent.h"
@@ -27,8 +27,8 @@ FTestVoice::FTestVoice() :
 	EncodeHint(UVOIPStatics::GetAudioEncodingHint()),
 	InputSampleRate(UVOIPStatics::GetVoiceSampleRate()),
 	OutputSampleRate(UVOIPStatics::GetVoiceSampleRate()),
-	NumInChannels(DEFAULT_NUM_VOICE_CHANNELS),
-	NumOutChannels(DEFAULT_NUM_VOICE_CHANNELS),
+	NumInChannels(UVOIPStatics::GetVoiceNumChannels()),
+	NumOutChannels(UVOIPStatics::GetVoiceNumChannels()),
 	bLastWasPlaying(false),
 	StarvedDataCount(0),
 	MaxRawCaptureDataSize(0),

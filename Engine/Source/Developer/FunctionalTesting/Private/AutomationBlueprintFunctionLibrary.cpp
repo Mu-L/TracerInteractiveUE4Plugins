@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AutomationBlueprintFunctionLibrary.h"
 #include "HAL/IConsoleManager.h"
@@ -44,10 +44,12 @@
 #include "Engine/LevelStreaming.h"
 #include "Templates/UnrealTemplate.h"
 #include "UObject/GCObjectScopeGuard.h"
+#include "Containers/Ticker.h"
 
 #if WITH_EDITOR
 #include "SLevelViewport.h"
 #endif
+
 
 #define LOCTEXT_NAMESPACE "Automation"
 
@@ -82,7 +84,7 @@ bool UAutomationEditorTask::IsTaskDone() const
 	return IsValidTask() && Task->IsDone();
 }
 
-#if (WITH_DEV_AUTOMATION_TESTS || WITH_PERF_AUTOMATION_TESTS)
+#if WITH_AUTOMATION_TESTS
 
 template<typename T>
 FConsoleVariableSwapperTempl<T>::FConsoleVariableSwapperTempl(FString InConsoleVariableName)
@@ -357,6 +359,7 @@ public:
 		, Notes(InNotes)
 		, Options(InOptions)
 		, bNeedsViewportSizeRestore(false)
+		, bDeleteQueued(false)
 	{
 		EnvSetup.Setup(InWorld, Options);
 
@@ -407,14 +410,26 @@ public:
 		{
 			if (GEngine->GameViewport)
 			{
-			FSceneViewport* GameViewport = GEngine->GameViewport->GetGameViewport();
-			GameViewport->SetViewportSize(ViewportRestoreSize.X, ViewportRestoreSize.Y);
-		}
+				FSceneViewport* GameViewport = GEngine->GameViewport->GetGameViewport();
+				GameViewport->SetViewportSize(ViewportRestoreSize.X, ViewportRestoreSize.Y);
+			}
 		}
 
 		EnvSetup.Restore();
 
 		FAutomationTestFramework::Get().NotifyScreenshotTakenAndCompared();
+	}
+
+	void DeleteSelfNextFrame()
+	{
+		if (!bDeleteQueued)
+		{
+			FTicker::GetCoreTicker().AddTicker(TEXT("ScreenshotCleanup"), 0.1, [this](float) {
+				delete this;
+				return false;
+				});
+			bDeleteQueued = true;
+		}
 	}
 
 	void GrabScreenShot(int32 InSizeX, int32 InSizeY, const TArray<FColor>& InImageData)
@@ -443,26 +458,25 @@ public:
 
 			bool bAttemptToCompareShot = FAutomationTestFramework::Get().OnScreenshotCaptured().ExecuteIfBound(InImageData, Data);
 
-			UE_LOG(AutomationFunctionLibrary, Log, TEXT("Screenshot captured as %s"), *Data.Path);
+			UE_LOG(AutomationFunctionLibrary, Log, TEXT("Screenshot captured as %s"), *Data.ScreenshotName);
 
-			if ( GIsAutomationTesting )
+			if (GIsAutomationTesting)
 			{
 				FAutomationTestFramework::Get().OnScreenshotCompared.AddRaw(this, &FAutomationScreenshotTaker::OnComparisonComplete);
 				FScreenshotRequest::OnScreenshotRequestProcessed().RemoveAll(this);
 				return;
 			}
 		}
-		
-		delete this;
-		}
+
+		DeleteSelfNextFrame();
+	}
 
 	void OnScreenshotProcessed()
-		{
+	{
 		UE_LOG(AutomationFunctionLibrary, Log, TEXT("Screenshot processed, but not compared."));
 
-		// If it's done being processed 
-			delete this;
-		}
+		DeleteSelfNextFrame();
+	}
 
 	void OnComparisonComplete(const FAutomationScreenshotCompareResults& CompareResults)
 	{
@@ -473,19 +487,19 @@ public:
 			CurrentTest->AddEvent(CompareResults.ToAutomationEvent(Name));
 		}
 
-		delete this;
-			}
+		DeleteSelfNextFrame();
+	}
 
 	void WorldDestroyed(ULevel* InLevel, UWorld* InWorld)
-			{
+	{
 		// If the InLevel is null, it's a signal that the entire world is about to disappear, so
 		// go ahead and remove this widget from the viewport, it could be holding onto too many
 		// dangerous actor references that won't carry over into the next world.
 		if (InLevel == nullptr && InWorld == World.Get())
-				{
+		{
 			delete this;
-				}
-			}
+		}
+	}
 
 private:
 
@@ -498,6 +512,7 @@ private:
 	FAutomationTestScreenshotEnvSetup EnvSetup;
 	FIntPoint ViewportRestoreSize;
 	bool bNeedsViewportSizeRestore;
+	bool bDeleteQueued;
 };
 
 class FAutomationHighResScreenshotGrabber
@@ -547,7 +562,7 @@ public:
 
 		bool bAttemptToCompareShot = FAutomationTestFramework::Get().OnScreenshotCaptured().ExecuteIfBound(InImageData, Data);
 
-		UE_LOG(AutomationFunctionLibrary, Log, TEXT("Screenshot captured as %s"), *Data.Path);
+		UE_LOG(AutomationFunctionLibrary, Log, TEXT("Screenshot captured as %s"), *Data.ScreenshotName);
 
 		FAutomationTestFramework::Get().OnScreenshotCompared.AddRaw(this, &FAutomationHighResScreenshotGrabber::OnComparisonComplete);
 	}
@@ -582,7 +597,7 @@ private:
 	FAutomationScreenshotOptions Options;
 };
 
-#endif
+#endif // WITH_AUTOMATION_TESTS
 
 class FScreenshotTakenState : public FAutomationTaskStatusBase
 {
@@ -604,7 +619,7 @@ public:
 
 	virtual ~FScreenshotTakenState()
 	{
-#if (WITH_DEV_AUTOMATION_TESTS || WITH_PERF_AUTOMATION_TESTS)
+#if WITH_AUTOMATION_TESTS
 		FAutomationTestFramework::Get().OnScreenshotCompared.RemoveAll(this);
 #endif
 		FScreenshotRequest::OnScreenshotRequestProcessed().RemoveAll(this);
@@ -699,7 +714,7 @@ bool UAutomationBlueprintFunctionLibrary::TakeAutomationScreenshotInternal(UObje
 {
 	UAutomationBlueprintFunctionLibrary::FinishLoadingBeforeScreenshot();
 
-#if (WITH_DEV_AUTOMATION_TESTS || WITH_PERF_AUTOMATION_TESTS)
+#if WITH_AUTOMATION_TESTS
 	FAutomationScreenshotTaker* TempObject = new FAutomationScreenshotTaker(WorldContextObject ? WorldContextObject->GetWorld() : nullptr, Name, Notes, Options);
 #endif
 
@@ -779,7 +794,7 @@ bool UAutomationBlueprintFunctionLibrary::TakeAutomationScreenshotOfUI_Immediate
 				FIntVector OutSize;
 				if (FSlateApplication::Get().TakeScreenshot(Viewport.ToSharedRef(), OutColorData, OutSize))
 				{
-#if (WITH_DEV_AUTOMATION_TESTS || WITH_PERF_AUTOMATION_TESTS)
+#if WITH_AUTOMATION_TESTS
 					// For UI, we only care about what the final image looks like. So don't compare alpha channel.
 					// In editor, scene is rendered into a PF_B8G8R8A8 RT and then copied over to the R10B10G10A2 swapchain back buffer and
 					// this copy ignores alpha. In game, however, scene is directly rendered into the back buffer and the alpha values are
@@ -1079,7 +1094,7 @@ UAutomationEditorTask* UAutomationBlueprintFunctionLibrary::TakeHighResScreensho
 
 			FinishLoadingBeforeScreenshot();
 
-#if (WITH_DEV_AUTOMATION_TESTS || WITH_PERF_AUTOMATION_TESTS)
+#if WITH_AUTOMATION_TESTS
 			if (GIsAutomationTesting)
 			{
 				if (FAutomationTestBase* CurrentTest = FAutomationTestFramework::Get().GetCurrentTest())

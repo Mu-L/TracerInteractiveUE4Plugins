@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -25,6 +25,7 @@ struct FIndexLengthPair
         return Ar;
     }
 };
+template<> struct TCanBulkSerialize<FIndexLengthPair> { enum { Value = true }; };
 
 class FDuplicatedVerticesBuffer : public FRenderResource
 {

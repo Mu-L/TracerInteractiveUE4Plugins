@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MovieSceneToolHelpers.h"
 #include "MovieSceneToolsModule.h"
@@ -60,7 +60,14 @@
 #include "FbxExporter.h"
 #include "Serialization/ObjectWriter.h"
 #include "Serialization/ObjectReader.h"
-
+#include "AnimationRecorder.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "ILiveLinkClient.h"
+#include "LiveLinkPresetTypes.h"
+#include "LiveLinkSourceSettings.h"
+#include "Features/IModularFeatures.h"
+#include "Tracks/MovieSceneSpawnTrack.h"
+#include "Sections/MovieSceneSpawnSection.h"
 
 /* MovieSceneToolHelpers
  *****************************************************************************/
@@ -437,7 +444,7 @@ bool MovieSceneToolHelpers::GetTakeNumber(const UMovieSceneSection* Section, FAs
 	FString ShotPackagePath = ShotData.PackagePath.ToString();
 	int32 ShotLastSlashPos = INDEX_NONE;
 	ShotPackagePath.FindLastChar(TCHAR('/'), ShotLastSlashPos);
-	ShotPackagePath = ShotPackagePath.Left(ShotLastSlashPos);
+	ShotPackagePath.LeftInline(ShotLastSlashPos, false);
 
 	FString ShotPrefix;
 	uint32 ShotNumber = INDEX_NONE;
@@ -464,7 +471,7 @@ bool MovieSceneToolHelpers::GetTakeNumber(const UMovieSceneSection* Section, FAs
 				FString AssetPackagePath = AssetObject.PackagePath.ToString();
 				int32 AssetLastSlashPos = INDEX_NONE;
 				AssetPackagePath.FindLastChar(TCHAR('/'), AssetLastSlashPos);
-				AssetPackagePath = AssetPackagePath.Left(AssetLastSlashPos);
+				AssetPackagePath.LeftInline(AssetLastSlashPos, false);
 
 				if (AssetPackagePath == ShotPackagePath)
 				{
@@ -521,108 +528,13 @@ int32 MovieSceneToolHelpers::FindAvailableRowIndex(UMovieSceneTrack* InTrack, UM
 	return InTrack->GetMaxRowIndex() + 1;
 }
 
-class SEnumCombobox : public SComboBox<TSharedPtr<int32>>
+TSharedRef<SWidget> MovieSceneToolHelpers::MakeEnumComboBox(const UEnum* InEnum, TAttribute<int32> InCurrentValue, SEnumComboBox::FOnEnumSelectionChanged InOnSelectionChanged)
 {
-public:
-	SLATE_BEGIN_ARGS(SEnumCombobox) {}
-
-	SLATE_ATTRIBUTE(int32, CurrentValue)
-	SLATE_ARGUMENT(FOnEnumSelectionChanged, OnEnumSelectionChanged)
-
-	SLATE_END_ARGS()
-
-	void Construct(const FArguments& InArgs, const UEnum* InEnum)
-	{
-		Enum = InEnum;
-		CurrentValue = InArgs._CurrentValue;
-		check(CurrentValue.IsBound());
-		OnEnumSelectionChangedDelegate = InArgs._OnEnumSelectionChanged;
-
-		bUpdatingSelectionInternally = false;
-
-		for (int32 i = 0; i < Enum->NumEnums() - 1; i++)
-		{
-			if (Enum->HasMetaData( TEXT("Hidden"), i ) == false)
-			{
-				VisibleEnumNameIndices.Add(MakeShareable(new int32(i)));
-			}
-		}
-
-		SComboBox::Construct(SComboBox<TSharedPtr<int32>>::FArguments()
-			.ButtonStyle(FEditorStyle::Get(), "FlatButton.Light")
-			.OptionsSource(&VisibleEnumNameIndices)
-			.OnGenerateWidget_Lambda([this](TSharedPtr<int32> InItem)
-			{
-				return SNew(STextBlock)
-					.Text(Enum->GetDisplayNameTextByIndex(*InItem));
-			})
-			.OnSelectionChanged(this, &SEnumCombobox::OnComboSelectionChanged)
-			.OnComboBoxOpening(this, &SEnumCombobox::OnComboMenuOpening)
-			.ContentPadding(FMargin(2, 0))
-			[
-				SNew(STextBlock)
-				.Font(FEditorStyle::GetFontStyle("Sequencer.AnimationOutliner.RegularFont"))
-				.Text(this, &SEnumCombobox::GetCurrentValue)
-			]);
-	}
-
-private:
-	FText GetCurrentValue() const
-	{
-		int32 CurrentNameIndex = Enum->GetIndexByValue(CurrentValue.Get());
-		return Enum->GetDisplayNameTextByIndex(CurrentNameIndex);
-	}
-
-	TSharedRef<SWidget> OnGenerateWidget(TSharedPtr<int32> InItem)
-	{
-		return SNew(STextBlock)
-			.Text(Enum->GetDisplayNameTextByIndex(*InItem));
-	}
-
-	void OnComboSelectionChanged(TSharedPtr<int32> InSelectedItem, ESelectInfo::Type SelectInfo)
-	{
-		if (bUpdatingSelectionInternally == false)
-		{
-			OnEnumSelectionChangedDelegate.ExecuteIfBound(*InSelectedItem, SelectInfo);
-		}
-	}
-
-	void OnComboMenuOpening()
-	{
-		int32 CurrentNameIndex = Enum->GetIndexByValue(CurrentValue.Get());
-		TSharedPtr<int32> FoundNameIndexItem;
-		for ( int32 i = 0; i < VisibleEnumNameIndices.Num(); i++ )
-		{
-			if ( *VisibleEnumNameIndices[i] == CurrentNameIndex )
-			{
-				FoundNameIndexItem = VisibleEnumNameIndices[i];
-				break;
-			}
-		}
-		if ( FoundNameIndexItem.IsValid() )
-		{
-			bUpdatingSelectionInternally = true;
-			SetSelectedItem(FoundNameIndexItem);
-			bUpdatingSelectionInternally = false;
-		}
-	}	
-
-private:
-	const UEnum* Enum;
-
-	TAttribute<int32> CurrentValue;
-
-	TArray<TSharedPtr<int32>> VisibleEnumNameIndices;
-
-	bool bUpdatingSelectionInternally;
-
-	FOnEnumSelectionChanged OnEnumSelectionChangedDelegate;
-};
-
-TSharedRef<SWidget> MovieSceneToolHelpers::MakeEnumComboBox(const UEnum* InEnum, TAttribute<int32> InCurrentValue, FOnEnumSelectionChanged InOnSelectionChanged)
-{
-	return SNew(SEnumCombobox, InEnum)
+	return SNew(SEnumComboBox, InEnum)
 		.CurrentValue(InCurrentValue)
+		.ButtonStyle(FEditorStyle::Get(), "FlatButton.Light")
+		.ContentPadding(FMargin(2, 0))
+		.Font(FEditorStyle::GetFontStyle("Sequencer.AnimationOutliner.RegularFont"))
 		.OnEnumSelectionChanged(InOnSelectionChanged);
 }
 
@@ -976,7 +888,7 @@ bool ImportFBXProperty(FString NodeName, FString AnimatedPropertyName, FGuid Obj
 				const int32 CompositeIndex = 0;
 				FRichCurve Source;
 				const bool bNegative = false;
-				CurveAPI.GetCurveData(NodeName, AnimatedPropertyName, ChannelIndex, CompositeIndex, Source, bNegative);
+				CurveAPI.GetCurveDataForSequencer(NodeName, AnimatedPropertyName, ChannelIndex, CompositeIndex, Source, bNegative);
 
 				FMovieSceneFloatChannel* Channel = FloatSection->GetChannelProxy().GetChannel<FMovieSceneFloatChannel>(0);
 				TMovieSceneChannelData<FMovieSceneFloatValue> ChannelData = Channel->GetData();
@@ -1136,7 +1048,8 @@ bool ImportFBXTransform(FString NodeName, FGuid ObjectBinding, UnFbx::FFbxCurves
 	FRichCurve EulerRotation[3];
 	FRichCurve Scale[3];
 	FTransform DefaultTransform;
-	CurveAPI.GetConvertedTransformCurveData(NodeName, Translation[0], Translation[1], Translation[2], EulerRotation[0], EulerRotation[1], EulerRotation[2], Scale[0], Scale[1], Scale[2], DefaultTransform);
+	const bool bUseSequencerCurve = true;
+	CurveAPI.GetConvertedTransformCurveData(NodeName, Translation[0], Translation[1], Translation[2], EulerRotation[0], EulerRotation[1], EulerRotation[2], Scale[0], Scale[1], Scale[2], DefaultTransform, bUseSequencerCurve);
 
  	UMovieScene3DTransformTrack* TransformTrack = InMovieScene->FindTrack<UMovieScene3DTransformTrack>(ObjectBinding); 
 	if (!TransformTrack)
@@ -1716,7 +1629,7 @@ private:
 		ImportFBXCamera(FbxImporter, MovieScene, *Sequencer, ObjectBindingMap, bMatchByNameOnly, bCreateCameras.IsSet() ? bCreateCameras.GetValue() : ImportFBXSettings->bCreateCameras);
 
 		UWorld* World = Cast<UWorld>(Sequencer->GetPlaybackContext());
-		bool bValid = MovieSceneToolHelpers::ImportFBXIfReady(World, MovieScene, Sequencer, ObjectBindingMap, ImportFBXSettings, InOutParams);
+		bool bValid = MovieSceneToolHelpers::ImportFBXIfReady(World, MovieScene, Sequencer, Sequencer->GetFocusedTemplateID(), ObjectBindingMap, ImportFBXSettings, InOutParams);
 	
 		Sequencer->NotifyMovieSceneDataChanged(EMovieSceneDataChangeType::MovieSceneStructureItemAdded);
 
@@ -1765,7 +1678,7 @@ bool MovieSceneToolHelpers::ReadyFBXForImport(const FString&  ImportFilename, UM
 }
 
 
-bool MovieSceneToolHelpers::ImportFBXIfReady(UWorld* World, UMovieScene* MovieScene, IMovieScenePlayer* Player, TMap<FGuid, FString>& ObjectBindingMap, UMovieSceneUserImportFBXSettings* ImportFBXSettings,
+bool MovieSceneToolHelpers::ImportFBXIfReady(UWorld* World, UMovieScene* MovieScene, IMovieScenePlayer* Player, FMovieSceneSequenceIDRef TemplateID, TMap<FGuid, FString>& ObjectBindingMap, UMovieSceneUserImportFBXSettings* ImportFBXSettings,
 	const FFBXInOutParameters& InParams)
 {
 	UMovieSceneUserImportFBXSettings* CurrentImportFBXSettings = GetMutableDefault<UMovieSceneUserImportFBXSettings>();
@@ -1805,7 +1718,7 @@ bool MovieSceneToolHelpers::ImportFBXIfReady(UWorld* World, UMovieScene* MovieSc
 		{
 			if (FCString::Strcmp(*It.Value().ToUpper(), *NodeName.ToUpper()) == 0)
 			{
-				MovieSceneToolHelpers::ImportFBXNode(NodeName, CurveAPI, MovieScene, Player, MovieSceneSequenceID::Root, It.Key());
+				MovieSceneToolHelpers::ImportFBXNode(NodeName, CurveAPI, MovieScene, Player, TemplateID, It.Key());
 
 				ObjectBindingMap.Remove(It.Key());
 				AllNodeNames.RemoveAt(NodeIndex);
@@ -1838,7 +1751,7 @@ bool MovieSceneToolHelpers::ImportFBXIfReady(UWorld* World, UMovieScene* MovieSc
 			auto It = ObjectBindingMap.CreateConstIterator();
 			if (It)
 			{
-				MovieSceneToolHelpers::ImportFBXNode(NodeName, CurveAPI, MovieScene, Player, MovieSceneSequenceID::Root, It.Key());
+				MovieSceneToolHelpers::ImportFBXNode(NodeName, CurveAPI, MovieScene, Player, TemplateID, It.Key());
 
 				UE_LOG(LogMovieScene, Warning, TEXT("Fbx Import: Failed to find any matching node for (%s). Defaulting to first available (%s)."), *NodeName, *It.Value());
 				ObjectBindingMap.Remove(It.Key());
@@ -2136,10 +2049,199 @@ bool MovieSceneToolHelpers::ExportFBX(UWorld* World, UMovieScene* MovieScene, IM
 	{
 		TArray<UMovieSceneTrack*> Tracks;
 		Tracks.Add(MasterTrack);
-		Exporter->ExportLevelSequenceTracks(MovieScene, Player, nullptr, nullptr, Tracks, RootToLocalTransform);
+		Exporter->ExportLevelSequenceTracks(MovieScene, Player, Template, nullptr, nullptr, Tracks, RootToLocalTransform);
 	}
 	// Save to disk
 	Exporter->WriteToFile(*InFBXFileName);
 
 	return true;
+}
+
+
+
+bool MovieSceneToolHelpers::ExportToAnimSequence(UAnimSequence* AnimSequence, UMovieScene* MovieScene, IMovieScenePlayer* Player,
+	USkeletalMeshComponent* SkelMeshComp, FMovieSceneSequenceIDRef& Template, FMovieSceneSequenceTransform& RootToLocalTransform)
+{
+	//if we have no allocated bone space transforms something wrong so try to recalc them
+	if (SkelMeshComp->GetBoneSpaceTransforms().Num() <= 0)
+	{
+		SkelMeshComp->RecalcRequiredBones(0);
+		if (SkelMeshComp->GetBoneSpaceTransforms().Num() <= 0)
+		{
+
+			UE_LOG(LogMovieScene, Error, TEXT("Error Animation Anim Sequence Export, No Bone Transforms."));
+			return false;
+		}
+	}
+
+	UnFbx::FLevelSequenceAnimTrackAdapter AnimTrackAdapter(Player, MovieScene, RootToLocalTransform);
+	int32 LocalStartFrame = AnimTrackAdapter.GetLocalStartFrame();
+	int32 StartFrame = AnimTrackAdapter.GetStartFrame();
+	int32 AnimationLength = AnimTrackAdapter.GetLength();
+	float FrameRate = AnimTrackAdapter.GetFrameRate();
+	float DeltaTime = 1.0f / FrameRate;
+	FFrameRate SampleRate = MovieScene->GetDisplayRate();
+
+
+	//If we are running with a live link track we need to do a few things.
+	// 1. First test to see if we have one, only way to really do that is to see if we have a source that has the `Sequencer Live Link Track`.  We also evalute the first frame in case we are out of range and the sources aren't created yet.
+	// 2. Make sure Sequencer.AlwaysSendInterpolated.LiveLink is non-zero, and then set it back to zero if it's not.
+	// 3. For each live link sequencer source we need to set the ELiveLinkSourceMode to Latest so that we just get the latest and don't use engine/timecode for any interpolation.
+
+	ILiveLinkClient* LiveLinkClient = nullptr;
+	IModularFeatures& ModularFeatures = IModularFeatures::Get();
+	TOptional<int32> SequencerAlwaysSenedLiveLinkInterpolated;
+	TMap<FGuid, ELiveLinkSourceMode>  SourceAndMode;
+	IConsoleVariable* CVarAlwaysSendInterpolatedLiveLink = IConsoleManager::Get().FindConsoleVariable(TEXT("Sequencer.AlwaysSendInterpolatedLiveLink"));
+	bool bHaveAtLeastOneSource = false;
+	if (ModularFeatures.IsModularFeatureAvailable(ILiveLinkClient::ModularFeatureName))
+	{
+
+		LiveLinkClient = &ModularFeatures.GetModularFeature<ILiveLinkClient>(ILiveLinkClient::ModularFeatureName);
+		if (LiveLinkClient)
+		{
+			//Evaluate the first frame we may be out of range and not have any live link sources created yet.
+			AnimTrackAdapter.UpdateAnimation(StartFrame);
+			TArray<FGuid> Sources = LiveLinkClient->GetSources();
+			for (const FGuid& Guid : Sources)
+			{
+				FText SourceTypeText = LiveLinkClient->GetSourceType(Guid);
+				FString SourceTypeStr = SourceTypeText.ToString();
+				if (SourceTypeStr.Contains(TEXT("Sequencer Live Link")))
+				{
+					bHaveAtLeastOneSource = true;
+					ULiveLinkSourceSettings* Settings = LiveLinkClient->GetSourceSettings(Guid);
+					if (Settings)
+					{
+						if (Settings->Mode != ELiveLinkSourceMode::Latest)
+						{
+							SourceAndMode.Add(Guid, Settings->Mode);
+							Settings->Mode = ELiveLinkSourceMode::Latest;
+						}
+						if (CVarAlwaysSendInterpolatedLiveLink)
+						{
+							SequencerAlwaysSenedLiveLinkInterpolated = CVarAlwaysSendInterpolatedLiveLink->GetInt();
+							CVarAlwaysSendInterpolatedLiveLink->Set(1, ECVF_SetByConsole);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	FAnimRecorderInstance AnimationRecorder;
+	FAnimationRecordingSettings RecordingSettings;
+	RecordingSettings.SampleRate = SampleRate.AsDecimal();
+	RecordingSettings.InterpMode = ERichCurveInterpMode::RCIM_Cubic;
+	RecordingSettings.TangentMode = ERichCurveTangentMode::RCTM_Auto;
+	RecordingSettings.Length = 0;
+	RecordingSettings.bRecordInWorldSpace = true;
+	RecordingSettings.bRemoveRootAnimation = false;
+	RecordingSettings.bCheckDeltaTimeAtBeginning = false;
+	AnimationRecorder.Init(SkelMeshComp, AnimSequence, nullptr, RecordingSettings);
+
+	//need to run first time before start record.
+	AnimTrackAdapter.UpdateAnimation(LocalStartFrame);
+	if (LiveLinkClient && bHaveAtLeastOneSource)
+	{
+		LiveLinkClient->ForceTick();
+	}
+	AnimationRecorder.BeginRecording();
+
+	for (int32 FrameCount = 1; FrameCount <= AnimationLength; ++FrameCount)
+	{
+		int32 LocalFrame = LocalStartFrame + FrameCount;
+
+		// This will call UpdateSkelPose on the skeletal mesh component to move bones based on animations in the matinee group
+		AnimTrackAdapter.UpdateAnimation(LocalFrame);
+
+		if (LiveLinkClient && bHaveAtLeastOneSource)
+		{
+			LiveLinkClient->ForceTick();
+		}
+
+		// Update space bases so new animation position has an effect.
+		// @todo - hack - this will be removed at some point (this comment is all over the place by the way in fbx export code).
+		SkelMeshComp->TickAnimation(0.03f, false);
+
+		SkelMeshComp->RefreshBoneTransforms();
+		SkelMeshComp->RefreshSlaveComponents();
+		SkelMeshComp->UpdateComponentToWorld();
+		SkelMeshComp->FinalizeBoneTransform();
+		SkelMeshComp->MarkRenderTransformDirty();
+		SkelMeshComp->MarkRenderDynamicDataDirty();
+
+		AnimationRecorder.Update(DeltaTime);
+	}
+
+	const bool bShowAnimationAssetCreatedToast = false;
+	AnimationRecorder.FinishRecording(bShowAnimationAssetCreatedToast);
+
+	//now do any sequencer live link cleanup
+	if (LiveLinkClient && bHaveAtLeastOneSource)
+	{
+		for (TPair<FGuid, ELiveLinkSourceMode>& Item: SourceAndMode)
+		{
+			ULiveLinkSourceSettings* Settings = LiveLinkClient->GetSourceSettings(Item.Key);
+			if (Settings)
+			{
+				Settings->Mode = Item.Value;
+			}
+		}
+	}
+
+	if(SequencerAlwaysSenedLiveLinkInterpolated.IsSet() && CVarAlwaysSendInterpolatedLiveLink)
+	{
+		CVarAlwaysSendInterpolatedLiveLink->Set(0, ECVF_SetByConsole);
+	}
+	return true;
+}
+
+FSpawnableRestoreState::FSpawnableRestoreState(UMovieScene* MovieScene) :
+	bWasChanged(false)
+{
+	WeakMovieScene = MovieScene;
+
+	for (int32 SpawnableIndex = 0; SpawnableIndex < WeakMovieScene->GetSpawnableCount(); ++SpawnableIndex)
+	{
+		FMovieSceneSpawnable& Spawnable = WeakMovieScene->GetSpawnable(SpawnableIndex);
+
+		UMovieSceneSpawnTrack* SpawnTrack = WeakMovieScene->FindTrack<UMovieSceneSpawnTrack>(Spawnable.GetGuid());
+
+		if (SpawnTrack)
+		{
+			bWasChanged = true;
+
+			// Spawnable could be in a subscene, so temporarily override it to persist throughout
+			SpawnOwnershipMap.Add(Spawnable.GetGuid(), Spawnable.GetSpawnOwnership());
+			Spawnable.SetSpawnOwnership(ESpawnOwnership::MasterSequence);
+
+			// Spawnable could have animated spawned state, so temporarily override it to spawn infinitely
+			UMovieSceneSpawnSection* SpawnSection = Cast<UMovieSceneSpawnSection>(SpawnTrack->CreateNewSection());
+			SpawnSection->Modify();
+			SpawnSection->GetChannel().Reset();
+			SpawnSection->GetChannel().SetDefault(true);
+		}
+	}
+}
+
+FSpawnableRestoreState::~FSpawnableRestoreState()
+{
+	if (!bWasChanged || !WeakMovieScene.IsValid())
+	{
+		return;
+	}
+
+	// Restore spawnable owners
+	for (int32 SpawnableIndex = 0; SpawnableIndex < WeakMovieScene->GetSpawnableCount(); ++SpawnableIndex)
+	{
+		FMovieSceneSpawnable& Spawnable = WeakMovieScene->GetSpawnable(SpawnableIndex);
+		Spawnable.SetSpawnOwnership(SpawnOwnershipMap[Spawnable.GetGuid()]);
+	}
+
+	// Restore modified spawned sections
+	bool bOrigSquelchTransactionNotification = GEditor->bSquelchTransactionNotification;
+	GEditor->bSquelchTransactionNotification = true;
+	GEditor->UndoTransaction(false);
+	GEditor->bSquelchTransactionNotification = bOrigSquelchTransactionNotification;
 }

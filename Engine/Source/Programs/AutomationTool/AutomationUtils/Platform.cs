@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -377,6 +377,16 @@ namespace AutomationTool
 		{
 			return LocalPath;
 		}
+
+		/// <summary>
+		/// Update the build agenda for this platform
+		/// </summary>
+		/// <param name="Agenda">Agenda to update</param>
+		/// <param name="ExtraBuildProducts">Any additional files that will be created</param>
+		public virtual void MakeAgenda(UE4Build.BuildAgenda Agenda, List<string> ExtraBuildProducts)
+		{
+		}
+
 		/// <summary>
 		/// Returns a list of the compiler produced debug file extensions
 		/// </summary>

@@ -1,14 +1,73 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 #include "Chaos/Vector.h"
 #include "Chaos/Box.h"
 #include "GeometryParticlesfwd.h"
+#include "ChaosCheck.h"
+
 
 namespace Chaos
 {
 
+struct CHAOS_API FQueryFastData
+{
+	FQueryFastData(const FVec3& InDir, const FReal InLength)
+		: Dir(InDir)
+		, InvDir( (InDir[0] == 0) ? 0 : 1 / Dir[0], (InDir[1] == 0) ? 0 : 1 / Dir[1], (InDir[2] == 0) ? 0 : 1 / Dir[2])
+		, bParallel{ InDir[0] == 0, InDir[1] == 0, InDir[2] == 0 }
+	{
+		CHAOS_ENSURE(InLength);
+		SetLength(InLength);
+	}
+
+	const FVec3& Dir;
+	const FVec3 InvDir;
+
+	FReal CurrentLength;
+	FReal InvCurrentLength;
+
+	const bool bParallel[3];
+
+#ifdef _MSC_VER
+	#pragma warning (push)
+	#pragma warning(disable:4723)
+#endif
+	//compiler complaining about divide by 0, but we are guarding against it.
+	//Seems like it's trying to evaluate div independent of the guard?
+
+	void SetLength(const FReal InLength)
+	{
+		CurrentLength = InLength;
+
+		if(InLength)
+		{
+			InvCurrentLength = 1 / InLength;
+		}
+	}
+
+#ifdef _MSC_VER
+	#pragma warning(pop)
+#endif
+
+
+protected:
+	FQueryFastData(const FVec3& InDummyDir)
+		: Dir(InDummyDir)
+		, InvDir()
+		, bParallel{}
+	{}
+};
+
+//dummy struct for templatized paths
+struct CHAOS_API FQueryFastDataVoid : public FQueryFastData
+{
+	FQueryFastDataVoid() : FQueryFastData(DummyDir) {}
+	
+	FVec3 DummyDir;
+};
+
 template <typename T, int d>
-class TBox;
+class TAABB;
 
 template <typename T, int d>
 class TGeometryParticle;
@@ -38,14 +97,14 @@ template <typename TPayloadType>
 struct CHAOS_API TSpatialVisitorData
 {
 	TPayloadType Payload;
-	TSpatialVisitorData(const TPayloadType& InPayload, const bool bInHasBounds = false, const TBox<float, 3>& InBounds = TBox<float, 3>::ZeroBox())
+	TSpatialVisitorData(const TPayloadType& InPayload, const bool bInHasBounds = false, const TAABB<float, 3>& InBounds = TAABB<float, 3>::ZeroAABB())
 		: Payload(InPayload)
 #if !(UE_BUILD_TEST || UE_BUILD_SHIPPING)
 		, bHasBounds(bInHasBounds)
 		, Bounds(InBounds)
 	{ }
 	bool bHasBounds;
-	TBox<float, 3> Bounds;
+	TAABB<float, 3> Bounds;
 #else
 	{ }
 #endif
@@ -69,17 +128,19 @@ public:
 
 	/** Called whenever an instance in the acceleration structure may intersect with a raycast
 		@Instance - the instance we are potentially intersecting with a raycast
-		@CurLength - the length all future intersection tests will use. A blocking intersection should update this
+		@CurData - the current query data. Call SetLength to update the length all future intersection tests will use. A blocking intersection should update this
 		Returns true to continue iterating through the acceleration structure
 	*/
-	virtual bool Raycast(const TSpatialVisitorData<TPayloadType>& Instance, T& CurLength) = 0;
+	virtual bool Raycast(const TSpatialVisitorData<TPayloadType>& Instance, FQueryFastData& CurData) = 0;
 
 	/** Called whenever an instance in the acceleration structure may intersect with a sweep
 		@Instance - the instance we are potentially intersecting with a sweep
 		@CurLength - the length all future intersection tests will use. A blocking intersection should update this
 		Returns true to continue iterating through the acceleration structure
 	*/
-	virtual bool Sweep(const TSpatialVisitorData<TPayloadType>& Instance, T& CurLength) = 0;
+	virtual bool Sweep(const TSpatialVisitorData<TPayloadType>& Instance, FQueryFastData& CurData) = 0;
+
+	virtual const void* GetQueryData() const { return nullptr; }
 };
 
 /**
@@ -96,7 +157,7 @@ public:
 	
 	virtual ~ISpacialDebugDrawInterface() = default;
 
-	virtual void Box(const TBox<T, 3>& InBox, const TVector<T, 3>& InLinearColor, float InThickness) = 0;
+	virtual void Box(const TAABB<T, 3>& InBox, const TVector<T, 3>& InLinearColor, float InThickness) = 0;
 	virtual void Line(const TVector<T, 3>& InBegin, const TVector<T, 3>& InEnd, const TVector<T, 3>& InLinearColor, float InThickness)  = 0;
 
 };
@@ -113,17 +174,45 @@ enum ESpatialAcceleration
 
 using SpatialAccelerationType = uint8;	//see ESpatialAcceleration. Projects can add their own custom types by using enum values higher than ESpatialAcceleration::Unknown
 
+template <typename TPayload>
+typename TEnableIf<!TIsPointer<TPayload>::Value, FUniqueIdx>::Type GetUniqueIdx(const TPayload& Payload)
+{
+	const FUniqueIdx Idx = Payload.UniqueIdx();
+	ensure(Idx.IsValid());
+	return Idx;
+}
+
+template <typename TPayload>
+typename TEnableIf<TIsPointer<TPayload>::Value,FUniqueIdx>::Type GetUniqueIdx(const TPayload& Payload)
+{
+	const FUniqueIdx Idx = Payload->UniqueIdx();
+	ensure(Idx.IsValid());
+	return Idx;
+}
+
+FORCEINLINE FUniqueIdx GetUniqueIdx(const int32 Payload)
+{
+	ensure(Payload >=0);	//-1 idx implies it was never set
+	return FUniqueIdx(Payload);
+}
+
+FORCEINLINE FUniqueIdx GetUniqueIdx(const FUniqueIdx Payload)
+{
+	ensure(Payload.IsValid());
+	return Payload;
+}
+
 
 template <typename TPayloadType, typename T>
 struct TPayloadBoundsElement
 {
 	TPayloadType Payload;
-	TBox<T, 3> Bounds;
+	TAABB<T, 3> Bounds;
 
 	void Serialize(FChaosArchive& Ar)
 	{
 		Ar << Payload;
-		Ar << Bounds;
+		TBox<T,3>::SerializeAsAABB(Ar, Bounds);
 	}
 
 	template <typename TPayloadType2>
@@ -131,7 +220,12 @@ struct TPayloadBoundsElement
 
 	bool HasBoundingBox() const { return true; }
 
-	const TBox<T, 3>& BoundingBox() const { return Bounds; }
+	const TAABB<T, 3>& BoundingBox() const { return Bounds; }
+
+	FUniqueIdx UniqueIdx() const
+	{
+		return ::Chaos::GetUniqueIdx(Payload);
+	}
 };
 
 template <typename TPayloadType, typename T>
@@ -147,23 +241,25 @@ class CHAOS_API ISpatialAcceleration
 public:
 
 	ISpatialAcceleration(SpatialAccelerationType InType = ESpatialAcceleration::Unknown)
-		: Type(InType)
+		: Type(InType), AsyncTimeSlicingComplete(true)
 	{
 	}
 	virtual ~ISpatialAcceleration() = default;
 
-	virtual TArray<TPayloadType> FindAllIntersections(const TBox<T, d>& Box) const { check(false); return TArray<TPayloadType>(); }
+	virtual bool IsAsyncTimeSlicingComplete() { return AsyncTimeSlicingComplete; }
+	virtual void ProgressAsyncTimeSlicing(bool ForceBuildCompletion = false) {}
+	virtual TArray<TPayloadType> FindAllIntersections(const TAABB<T, d>& Box) const { check(false); return TArray<TPayloadType>(); }
 
 	virtual void Raycast(const TVector<T, d>& Start, const TVector<T, d>& Dir, const T Length, ISpatialVisitor<TPayloadType, T>& Visitor) const { check(false); }
 	virtual void Sweep(const TVector<T, d>& Start, const TVector<T, d>& Dir, const T Length, const TVector<T, d> QueryHalfExtents, ISpatialVisitor<TPayloadType, T>& Visitor) const { check(false);}
-	virtual void Overlap(const TBox<T, d>& QueryBounds, ISpatialVisitor<TPayloadType, T>& Visitor) const { check(false); }
+	virtual void Overlap(const TAABB<T, d>& QueryBounds, ISpatialVisitor<TPayloadType, T>& Visitor) const { check(false); }
 
 	virtual void RemoveElement(const TPayloadType& Payload)
 	{
 		check(false);	//not implemented
 	}
 
-	virtual void UpdateElement(const TPayloadType& Payload, const TBox<T, d>& NewBounds, bool bHasBounds)
+	virtual void UpdateElement(const TPayloadType& Payload, const TAABB<T, d>& NewBounds, bool bHasBounds)
 	{
 		check(false);
 	}
@@ -173,7 +269,7 @@ public:
 		RemoveElement(Payload);
 	}
 
-	virtual void UpdateElementIn(const TPayloadType& Payload, const TBox<T, d>& NewBounds, bool bHasBounds, FSpatialAccelerationIdx Idx)
+	virtual void UpdateElementIn(const TPayloadType& Payload, const TAABB<T, d>& NewBounds, bool bHasBounds, FSpatialAccelerationIdx Idx)
 	{
 		UpdateElement(Payload, NewBounds, bHasBounds);
 	}
@@ -223,8 +319,12 @@ public:
 		return static_cast<const TConcrete&>(*this);
 	}
 
+protected:
+	virtual void SetAsyncTimeSlicingComplete(bool InState) { AsyncTimeSlicingComplete = InState; }
+
 private:
 	SpatialAccelerationType Type;
+	bool AsyncTimeSlicingComplete;
 };
 
 template <typename TBase, typename TDerived>
@@ -258,18 +358,191 @@ public:
 		return Visitor.Overlap(Instance);
 	}
 
-	FORCEINLINE bool VisitRaycast(const TSpatialVisitorData<TPayloadType>& Instance, T& CurLength)
+	FORCEINLINE bool VisitRaycast(const TSpatialVisitorData<TPayloadType>& Instance, FQueryFastData& CurData)
 	{
-		return Visitor.Raycast(Instance, CurLength);
+		return Visitor.Raycast(Instance, CurData);
 	}
 
-	FORCEINLINE bool VisitSweep(const TSpatialVisitorData<TPayloadType>& Instance, T& CurLength)
+	FORCEINLINE bool VisitSweep(const TSpatialVisitorData<TPayloadType>& Instance, FQueryFastData& CurData)
 	{
-		return Visitor.Sweep(Instance, CurLength);
+		return Visitor.Sweep(Instance, CurData);
+	}
+
+	FORCEINLINE const void* GetQueryData() const
+	{
+		return Visitor.GetQueryData();
 	}
 
 private:
 	ISpatialVisitor<TPayloadType, T>& Visitor;
 };
+
+#ifndef CHAOS_SERIALIZE_OUT
+#define CHAOS_SERIALIZE_OUT WITH_EDITOR
+#endif
+
+//Provides a TMap like API but backed by a dense array. The keys provided must implement GetUniqueIdx
+template <typename TKey, typename TValue>
+class TArrayAsMap
+{
+public:
+	TValue* Find(const TKey& Key)
+	{
+		const int32 Idx = GetUniqueIdx(Key).Idx;
+		if(Idx < Entries.Num() && Entries[Idx].bSet)
+		{
+			return &Entries[Idx].Value;
+		}
+		return nullptr;
+	}
+
+	TValue& FindChecked(const TKey& Key)
+	{
+		return Entries[GetUniqueIdx(Key).Idx].Value;
+	}
+
+	TValue& FindOrAdd(const TKey& Key)
+	{
+		if(TValue* Elem = Find(Key))
+		{
+			return *Elem;
+		}
+
+		return Add(Key);
+	}
+
+	void Empty()
+	{
+		Entries.Empty();
+	}
+
+	TValue& Add(const TKey& Key)
+	{
+		const int32 Idx = GetUniqueIdx(Key).Idx;
+		if(Idx >= Entries.Num())
+		{
+			const int32 NumToAdd = Idx + 1 - Entries.Num();
+			Entries.AddDefaulted(NumToAdd);
+#if CHAOS_SERIALIZE_OUT
+			KeysToSerializeOut.AddDefaulted(NumToAdd);
+#endif
+		}
+
+		ensure(Entries[Idx].bSet == false);	//element already added
+		Entries[Idx].bSet = true;
+
+#if CHAOS_SERIALIZE_OUT
+		KeysToSerializeOut[Idx] = Key;
+#endif
+
+		return Entries[Idx].Value;
+	}
+
+	void Add(const TKey& Key, const TValue& Value)
+	{
+		Add(Key) = Value;
+	}
+
+	void RemoveChecked(const TKey& Key)
+	{
+		const int32 Idx = GetUniqueIdx(Key).Idx;
+		Entries[Idx] = FEntry();	//Mark as free, also resets default values for next use of value
+#if CHAOS_SERIALIZE_OUT
+		KeysToSerializeOut[Idx] = TKey();
+#endif
+	}
+
+	void Remove(const TKey& Key)
+	{
+		const int32 Idx = GetUniqueIdx(Key).Idx;
+		if(Idx >= 0 && Idx < Entries.Num())
+		{
+			Entries[Idx] = FEntry();	//Mark as free, also resets default values for next use of value
+#if CHAOS_SERIALIZE_OUT
+			KeysToSerializeOut[Idx] = TKey();
+#endif
+		}
+	}
+
+	void Reset()
+	{
+		Entries.Reset();
+#if CHAOS_SERIALIZE_OUT 
+		KeysToSerializeOut.Reset();
+#endif
+	}
+
+	void Serialize(FChaosArchive& Ar)
+	{
+		bool bCanSerialize = Ar.IsLoading();
+#if CHAOS_SERIALIZE_OUT 
+		bCanSerialize = true;
+#endif
+
+		if(bCanSerialize)
+		{
+			TArray<TKey> DirectKeys;
+			Ar << DirectKeys;
+
+			for(auto& Key : DirectKeys)
+			{
+				TValue& Value = Add(Key);
+				Ar << Value;
+			}
+		}
+		else
+		{
+			ensure(false);	//can't serialize out, if you are trying to serialize for perf/debug set CHAOS_SERIALIZE_OUT to 1 
+		}
+	}
+
+private:
+
+	struct FEntry
+	{
+		TValue Value;
+		bool bSet;
+
+		FEntry()
+			: bSet(false)
+		{
+
+		}
+	};
+
+	TArray<FEntry> Entries;
+
+#if CHAOS_SERIALIZE_OUT
+	//The indices are generated at runtime, so there's no way to serialize them directly
+	//Because of that we serialize the actual key which we can find, and then at runtime we use its transient index
+	TArray<TKey> KeysToSerializeOut;
+#endif
+};
+
+template <typename TKey, typename TValue>
+FChaosArchive& operator<< (FChaosArchive& Ar, TArrayAsMap<TKey, TValue>& Map)
+{
+	Map.Serialize(Ar);
+	return Ar;
+}
+
+
+template <typename TPayload>
+typename TEnableIf<!TIsPointer<TPayload>::Value, bool>::Type PrePreFilterHelper(const TPayload& Payload, const void* QueryData)
+{
+	return Payload.PrePreFilter(QueryData);
+}
+
+template <typename TPayload>
+typename TEnableIf<TIsPointer<TPayload>::Value, bool>::Type PrePreFilterHelper(const TPayload& Payload, const void* QueryData)
+{
+	return false;
+}
+
+FORCEINLINE bool PrePreFilterHelper(const int32 Payload, const void* QueryData)
+{
+	return false;
+}
+
 
 }

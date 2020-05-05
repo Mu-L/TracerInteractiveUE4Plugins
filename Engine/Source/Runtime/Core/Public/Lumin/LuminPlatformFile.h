@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 // Copyright 2016 Magic Leap, Inc. All Rights Reserved.
 
 /*=============================================================================================
@@ -109,4 +109,5 @@ private:
 	FDateTime GetAccessTimeStampInternal(const FString& NormalizedFilename) const;
 	FFileStatData GetStatDataInternal(const FString& NormalizedFilename, bool& bFound) const;
 	bool DirectoryExistsInternal(const FString& NormalizedFilename) const;
+	int32 OpenReadInternal(const FString& NormalizedFilename) const;
 };

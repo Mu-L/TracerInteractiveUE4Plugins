@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MovieSceneNiagaraEmitterTrack.h"
 #include "NiagaraEmitterHandle.h"
@@ -7,13 +7,13 @@
 #include "ViewModels/NiagaraSystemViewModel.h"
 #include "ViewModels/NiagaraEmitterHandleViewModel.h"
 #include "ViewModels/NiagaraEmitterViewModel.h"
-#include "MovieSceneNiagaraEmitterTrackInstance.h"
 #include "NiagaraGraph.h"
 #include "NiagaraNodeOutput.h"
 #include "NiagaraNodeFunctionCall.h"
 #include "NiagaraScriptSource.h"
 #include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 #include "NiagaraEditorStyle.h"
+#include "Sections/MovieSceneNiagaraEmitterSection.h"
 
 #include "ISequencerSection.h"
 #include "SequencerSectionPainter.h"
@@ -96,6 +96,11 @@ bool UMovieSceneNiagaraEmitterTrack::CanRename() const
 	return false;
 }
 
+bool UMovieSceneNiagaraEmitterTrack::ValidateDisplayName(const FText& NewDisplayName, FText& OutErrorMessage) const
+{
+	return EmitterHandleViewModel.Pin()->VerifyNameTextChanged(NewDisplayName, OutErrorMessage);
+}
+
 FNiagaraSystemViewModel& UMovieSceneNiagaraEmitterTrack::GetSystemViewModel() const
 {
 	return *SystemViewModel;
@@ -170,6 +175,11 @@ void UMovieSceneNiagaraEmitterTrack::AddSection(UMovieSceneSection& Section)
 {
 	Sections.Add(&Section);
 	bSectionsWereModified = true;
+}
+
+bool UMovieSceneNiagaraEmitterTrack::SupportsType(TSubclassOf<UMovieSceneSection> SectionClass) const
+{
+	return SectionClass == UMovieSceneNiagaraEmitterSection::StaticClass();
 }
 
 void UMovieSceneNiagaraEmitterTrack::RemoveSection(UMovieSceneSection& Section)

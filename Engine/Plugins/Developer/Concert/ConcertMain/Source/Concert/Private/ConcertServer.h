@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -39,6 +39,7 @@ public:
 	virtual TSharedPtr<IConcertServerSession> GetSession(const FGuid& SessionId) const override;
 	virtual TSharedPtr<IConcertServerSession> CreateSession(const FConcertSessionInfo& SessionInfo, FText& OutFailureReason) override;
 	virtual TSharedPtr<IConcertServerSession> RestoreSession(const FGuid& SessionId, const FConcertSessionInfo& SessionInfo, const FConcertSessionFilter& SessionFilter, FText& OutFailureReason) override;
+	virtual TSharedPtr<IConcertServerSession> CopySession(const FGuid& SrcSessionId, const FConcertSessionInfo& NewSessionInfo, const FConcertSessionFilter& SessionFilter, FText& OutFailureReason) override;
 	virtual FGuid ArchiveSession(const FGuid& SessionId, const FString& ArchiveNameOverride, const FConcertSessionFilter& SessionFilter, FText& OutFailureReason) override;
 	virtual bool ExportSession(const FGuid& SessionId, const FConcertSessionFilter& SessionFilter, const FString& DestDir, bool bAnonymizeData, FText& OutFailureReason) override;
 	virtual bool RenameSession(const FGuid& SessionId, const FString& NewName, FText& OutFailureReason) override;
@@ -54,7 +55,7 @@ private:
 	FString GetSessionWorkingDir(const FGuid& SessionId) const;
 
 	EConcertSessionRepositoryMountResponseCode MountSessionRepository(FConcertServerSessionRepository& Repository, bool bCreateIfNotExist, bool bCleanWorkingDir, bool bCleanExpiredSessions, bool bSearchByPaths);
-	bool UnmountSessionRepository(FConcertServerSessionRepository& InOutRepository, bool bDropped);
+	bool UnmountSessionRepository(const FGuid& RepositoryId, bool bDropped);
 
 	/**  */
 	void HandleDiscoverServersEvent(const FConcertMessageContext& Context);
@@ -75,7 +76,7 @@ private:
 	TFuture<FConcertAdmin_SessionInfoResponse> HandleFindSessionRequest(const FConcertMessageContext& Context);
 
 	/**  */
-	TFuture<FConcertAdmin_SessionInfoResponse> HandleRestoreSessionRequest(const FConcertMessageContext& Context);
+	TFuture<FConcertAdmin_SessionInfoResponse> HandleCopySessionRequest(const FConcertMessageContext& Context);
 
 	/**  */
 	TFuture<FConcertAdmin_ArchiveSessionResponse> HandleArchiveSessionRequest(const FConcertMessageContext& Context);

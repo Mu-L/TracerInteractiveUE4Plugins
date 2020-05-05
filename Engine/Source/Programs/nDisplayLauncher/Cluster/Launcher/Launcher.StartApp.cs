@@ -1,4 +1,4 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -67,6 +67,12 @@ namespace nDisplayLauncher.Cluster
 			if (IsUseAllCores)
 			{
 				commandCmd = string.Format("{0} {1}", commandCmd, ArgUseAllAvailableCores);
+			}
+
+			// Set custom GPU selection policy
+			if (Node.GPU != int.MinValue)
+			{
+				commandCmd = string.Format("{0} {1}={2}", commandCmd, ArgGpu, Node.GPU);
 			}
 
 			if (!Config.Windows.ContainsKey(Node.Window))

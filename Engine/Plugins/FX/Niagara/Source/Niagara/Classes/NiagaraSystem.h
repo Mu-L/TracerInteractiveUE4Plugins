@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -6,13 +6,15 @@
 #include "UObject/ObjectMacros.h"
 #include "UObject/Object.h"
 #include "Particles/ParticleSystem.h"
+#include "Particles/ParticlePerfStats.h"
 #include "NiagaraCommon.h"
 #include "NiagaraDataSet.h"
 #include "NiagaraEmitterInstance.h"
 #include "NiagaraEmitterHandle.h"
 #include "NiagaraParameterCollection.h"
 #include "NiagaraUserRedirectionParameterStore.h"
-#include "NiagaraSystemFastPath.h"
+#include "NiagaraEffectType.h"
+
 #include "NiagaraSystem.generated.h"
 
 #if WITH_EDITORONLY_DATA
@@ -60,21 +62,54 @@ struct FNiagaraEmitterCompiledData
 };
 
 USTRUCT()
+struct FNiagaraParameterDataSetBinding
+{
+	GENERATED_USTRUCT_BODY()
+
+	UPROPERTY()
+	int32 ParameterOffset;
+
+	UPROPERTY()
+	int32 DataSetComponentOffset;
+};
+
+USTRUCT()
+struct FNiagaraParameterDataSetBindingCollection
+{
+	GENERATED_USTRUCT_BODY()
+
+	UPROPERTY()
+	TArray<FNiagaraParameterDataSetBinding> FloatOffsets;
+
+	UPROPERTY()
+	TArray<FNiagaraParameterDataSetBinding> Int32Offsets;
+
+#if WITH_EDITORONLY_DATA
+	template<typename BufferType>
+	void Build(const FNiagaraDataSetCompiledData& DataSet)
+	{
+		BuildInternal(BufferType::GetVariables(), DataSet, TEXT(""), TEXT(""));
+	}
+
+	template<typename BufferType>
+	void Build(const FNiagaraDataSetCompiledData& DataSet, const FString& NamespaceBase, const FString& NamespaceReplacement)
+	{
+		BuildInternal(BufferType::GetVariables(), DataSet, NamespaceBase, NamespaceReplacement);
+	}
+
+protected:
+	void BuildInternal(const TArray<FNiagaraVariable>& ParameterVars, const FNiagaraDataSetCompiledData& DataSet, const FString& NamespaceBase, const FString& NamespaceReplacement);
+
+#endif
+};
+
+USTRUCT()
 struct FNiagaraSystemCompiledData
 {
 	GENERATED_USTRUCT_BODY()
 
 	UPROPERTY()
-	TArray<FNiagaraVariable> NumParticleVars;
-
-	UPROPERTY()
-	TArray<FNiagaraVariable> TotalSpawnedParticlesVars;
-
-	UPROPERTY()
 	FNiagaraParameterStore InstanceParamStore;
-
-	UPROPERTY()
-	TArray<FNiagaraVariable> SpawnCountScaleVars;
 
 	UPROPERTY()
 	FNiagaraDataSetCompiledData DataSetCompiledData;
@@ -84,6 +119,24 @@ struct FNiagaraSystemCompiledData
 
 	UPROPERTY()
 	FNiagaraDataSetCompiledData UpdateInstanceParamsDataSetCompiledData;
+
+	UPROPERTY()
+	FNiagaraParameterDataSetBindingCollection SpawnInstanceGlobalBinding;
+	UPROPERTY()
+	FNiagaraParameterDataSetBindingCollection SpawnInstanceSystemBinding;
+	UPROPERTY()
+	FNiagaraParameterDataSetBindingCollection SpawnInstanceOwnerBinding;
+	UPROPERTY()
+	TArray<FNiagaraParameterDataSetBindingCollection> SpawnInstanceEmitterBindings;
+
+	UPROPERTY()
+	FNiagaraParameterDataSetBindingCollection UpdateInstanceGlobalBinding;
+	UPROPERTY()
+	FNiagaraParameterDataSetBindingCollection UpdateInstanceSystemBinding;
+	UPROPERTY()
+	FNiagaraParameterDataSetBindingCollection UpdateInstanceOwnerBinding;
+	UPROPERTY()
+	TArray<FNiagaraParameterDataSetBindingCollection> UpdateInstanceEmitterBindings;
 };
 
 USTRUCT()
@@ -94,7 +147,7 @@ struct FEmitterCompiledScriptPair
 	bool bResultsReady;
 	UNiagaraEmitter* Emitter;
 	UNiagaraScript* CompiledScript;
-	uint32 PendingDDCID;
+	uint32 PendingJobID = INDEX_NONE; // this is the ID for any active shader compiler worker job
 	FNiagaraVMExecutableDataId CompileId;
 	TSharedPtr<FNiagaraVMExecutableData> CompileResults;
 };
@@ -103,6 +156,11 @@ USTRUCT()
 struct FNiagaraSystemCompileRequest
 {
 	GENERATED_USTRUCT_BODY()
+
+	FNiagaraSystemCompileRequest()
+		: bIsValid(true)
+	{
+	}
 		
 	double StartTime;
 
@@ -112,6 +170,8 @@ struct FNiagaraSystemCompileRequest
 	TArray<FEmitterCompiledScriptPair> EmitterCompiledScriptPairs;
 	
 	TMap<UNiagaraScript*, TSharedPtr<FNiagaraCompileRequestDataBase, ESPMode::ThreadSafe> > MappedData;
+
+	bool bIsValid;
 };
 
 /** Container for multiple emitters that combine together to create a particle system effect.*/
@@ -123,15 +183,21 @@ class NIAGARA_API UNiagaraSystem : public UFXSystemAsset
 public:
 #if WITH_EDITOR
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnSystemCompiled, UNiagaraSystem*);
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnSystemPostEditChange, UNiagaraSystem*);
 #endif
+	//TestChange
+
+	UNiagaraSystem(FVTableHelper& Helper);
 
 	//~ UObject interface
 	void PostInitProperties();
 	void Serialize(FArchive& Ar)override;
 	virtual void PostLoad() override; 
 	virtual void BeginDestroy() override;
-	virtual void PreSave(const class ITargetPlatform * TargetPlatform) override;
+	virtual void PreSave(const class ITargetPlatform* TargetPlatform) override;
+	virtual bool NeedsLoadForTargetPlatform(const ITargetPlatform* TargetPlatform) const override;
 #if WITH_EDITOR
+	virtual void PreEditChange(FProperty* PropertyThatWillChange)override;
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override; 
 	virtual void BeginCacheForCookedPlatformData(const ITargetPlatform *TargetPlatform) override;
 #endif
@@ -210,16 +276,22 @@ public:
 	void RemoveSystemParametersForEmitter(const FNiagaraEmitterHandle& EmitterHandle);
 
 	/** Request that any dirty scripts referenced by this system be compiled.*/
-	bool RequestCompile(bool bForce);
+	bool RequestCompile(bool bForce, FNiagaraSystemUpdateContext* OptionalUpdateContext = nullptr);
 
 	/** If we have a pending compile request, is it done with yet? */
 	bool PollForCompilationComplete();
 
-	/** */
+	/** Blocks until all active compile jobs have finished */
 	void WaitForCompilationComplete();
+
+	/** Invalidates any active compilation requests which will ignore their results. */
+	void InvalidateActiveCompiles();
 
 	/** Delegate called when the system's dependencies have all been compiled.*/
 	FOnSystemCompiled& OnSystemCompiled();
+
+	/** Delegate called on PostEditChange.*/
+	FOnSystemPostEditChange& OnSystemPostEditChange();
 
 	/** Gets editor specific data stored with this system. */
 	UNiagaraEditorDataBase* GetEditorData();
@@ -235,14 +307,27 @@ public:
 	UPROPERTY()
 	uint32 ThumbnailImageOutOfDate : 1;
 
+	/* If this system is exposed to the library. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Asset Options", AssetRegistrySearchable)
+	bool bExposeToLibrary;
+
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Asset Options", AssetRegistrySearchable)
 	bool bIsTemplateAsset;
 
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Asset Options", AssetRegistrySearchable)
 	FText TemplateAssetDescription;
 
+	UPROPERTY()
+	TArray<UNiagaraScript*> ScratchPadScripts;
+
+	UPROPERTY(transient)
+	FNiagaraParameterStore EditorOnlyAddedParameters;
+
 	bool GetIsolateEnabled() const;
 	void SetIsolateEnabled(bool bIsolate);
+	
+	UPROPERTY(transient)
+	FNiagaraSystemUpdateContext UpdateContext;
 #endif
 
 	bool ShouldAutoDeactivate() const { return bAutoDeactivate; }
@@ -256,13 +341,14 @@ public:
 #if WITH_EDITORONLY_DATA
 	bool UsesEmitter(const UNiagaraEmitter* Emitter) const;
 	bool UsesScript(const UNiagaraScript* Script)const; 
-	void InvalidateCachedCompileIds();
+	void ForceGraphToRecompileOnNextCheck();
 
 	static void RequestCompileForEmitter(UNiagaraEmitter* InEmitter);
 
 	/** Experimental feature that allows us to bake out rapid iteration parameters during the normal compile process. */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Emitter")
 	uint32 bBakeOutRapidIteration : 1;
+
 #endif
 
 	FORCEINLINE UNiagaraParameterCollectionInstance* GetParameterCollectionOverride(UNiagaraParameterCollection* Collection)
@@ -288,24 +374,37 @@ public:
 
 	FBox GetFixedBounds() const;
 
+	FORCEINLINE int32* GetCycleCounter(bool bGameThread, bool bConcurrent);
+
+#if WITH_EDITOR
+	void SetEffectType(UNiagaraEffectType* EffectType);
+
+	FORCEINLINE bool GetOverrideScalabilitySettings()const { return bOverrideScalabilitySettings; }
+	FORCEINLINE void SetOverrideScalabilitySettings(bool bOverride) { bOverrideScalabilitySettings = bOverride; }
+#endif
+	UNiagaraEffectType* GetEffectType()const;
+	FORCEINLINE const FNiagaraSystemScalabilitySettings& GetScalabilitySettings() { return CurrentScalabilitySettings; }
+	
+	void OnQualityLevelChanged();
+
 	/** Whether or not fixed bounds are enabled. */
 	UPROPERTY(EditAnywhere, Category = "System", meta = (InlineEditConditionToggle))
 	uint32 bFixedBounds : 1;
 
 	TStatId GetStatID(bool bGameThread, bool bConcurrent)const;
-
-	UPROPERTY(EditAnywhere, Category = "Script Fast Path")
-	ENiagaraFastPathMode FastPathMode;
-
-	UPROPERTY(EditAnywhere, Category = "Script Fast Path")
-	FNiagaraFastPath_Module_SystemScalability SystemScalability;
-
-	UPROPERTY(EditAnywhere, Category = "Script Fast Path")
-	FNiagaraFastPath_Module_SystemLifeCycle SystemLifeCycle;
+	void AddToInstanceCountStat(int32 NumInstances, bool bSolo)const;
 
 private:
 #if WITH_EDITORONLY_DATA
+	/** Checks the ddc for vm execution data for the given script. Return true if the data was loaded from the ddc, false otherwise. */
+	bool GetFromDDC(FEmitterCompiledScriptPair& ScriptPair);
+
+	/** Since the shader compilation is done in another process, this is used to check if the result for any ongoing compilations is done.
+	*   If bWait is true then this *blocks* the game thread (and ui) until all running compilations are finished.
+	*/
 	bool QueryCompileComplete(bool bWait, bool bDoPost, bool bDoNotApply = false);
+
+	bool ProcessCompilationResult(FEmitterCompiledScriptPair& ScriptPair, bool bWait, bool bDoNotApply);
 
 	void InitEmitterCompiledData();
 
@@ -321,8 +420,21 @@ private:
 	void InitEmitterDataSetCompiledData(FNiagaraDataSetCompiledData& DataSetToInit, const UNiagaraEmitter* InAssociatedEmitter, const FNiagaraEmitterHandle& InAssociatedEmitterHandle);
 #endif
 
+	void ResolveScalabilitySettings();
 	void UpdatePostCompileDIInfo();
+
 protected:
+	UPROPERTY(EditAnywhere, Category = "System")
+	UNiagaraEffectType* EffectType;
+
+	UPROPERTY(EditAnywhere, Category = "System", meta=(InlineEditConditionToggle))
+	bool bOverrideScalabilitySettings;
+
+	UPROPERTY()
+	TArray<FNiagaraSystemScalabilityOverride> ScalabilityOverrides_DEPRECATED;
+
+	UPROPERTY(EditAnywhere, Category = "System", meta = (EditCondition="bOverrideScalabilitySettings"))
+	FNiagaraSystemScalabilityOverrides SystemScalabilityOverrides;
 
 	/** Handles to the emitter this System will simulate. */
 	UPROPERTY()
@@ -370,6 +482,9 @@ protected:
 
 	/** A multicast delegate which is called whenever the script has been compiled (successfully or not). */
 	FOnSystemCompiled OnSystemCompiledDelegate;
+
+	/** A multicast delegate which is called whenever this system's properties are changed. */
+	FOnSystemPostEditChange OnSystemPostEditChangeDelegate;
 #endif
 
 	/** The fixed bounding box value. bFixedBounds is the condition whether the fixed bounds can be edited. */
@@ -403,5 +518,20 @@ protected:
 	mutable TStatId StatID_GT_CNC;
 	mutable TStatId StatID_RT;
 	mutable TStatId StatID_RT_CNC;
+
+	mutable TStatId StatID_InstanceCount;
+	mutable TStatId StatID_InstanceCountSolo;
 #endif
+
+	FNiagaraSystemScalabilitySettings CurrentScalabilitySettings;
 };
+
+extern int32 GEnableNiagaraRuntimeCycleCounts;
+FORCEINLINE int32* UNiagaraSystem::GetCycleCounter(bool bGameThread, bool bConcurrent)
+{
+	if (GEnableNiagaraRuntimeCycleCounts && EffectType)
+	{
+		return EffectType->GetCycleCounter(bGameThread, bConcurrent);
+	}
+	return nullptr;
+}

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -27,6 +27,7 @@ namespace UnrealBuildTool
 			".csproj",				// Visual Studio C# project files
 			".userprefs",			// MonoDevelop project settings
 			".ds_store",			// Mac Desktop Services Store hidden files
+			".bin",					// Binary files
 			Path.DirectorySeparatorChar + "do_not_delete.txt",		// Perforce placeholder file
 		};
 

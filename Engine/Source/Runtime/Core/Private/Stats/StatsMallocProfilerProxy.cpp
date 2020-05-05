@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Stats/StatsMallocProfilerProxy.h"
 #include "UObject/NameTypes.h"
@@ -193,9 +193,7 @@ void FStatsMallocProfilerProxy::TrackRealloc( void* OldPtr, void* NewPtr, int64 
 		}
 		else if (OldPtr == nullptr)
 		{
-#if !PLATFORM_XBOXONE
 			TrackAlloc( NewPtr, NewSize, SequenceTag );
-#endif
 		}
 		else
 		{

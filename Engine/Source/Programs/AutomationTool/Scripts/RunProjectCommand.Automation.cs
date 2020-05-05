@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -790,10 +790,6 @@ public partial class Project : CommandUtils
 				{
 					TempCmdLine += "-signedpak ";
 				}
-				else
-				{
-					TempCmdLine += "-pak ";
-				}
 			}
 			else if (!Params.Stage)
 			{
@@ -984,10 +980,6 @@ public partial class Project : CommandUtils
 			if (ServerParams.SignedPak)
 			{
 				Args += " -signedpak";
-			}
-			else
-			{
-				Args += " -pak";
 			}
 		}
 		if (IsBuildMachine || Params.Unattended)

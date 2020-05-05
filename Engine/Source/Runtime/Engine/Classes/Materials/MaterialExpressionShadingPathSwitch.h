@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -35,8 +35,4 @@ class UMaterialExpressionShadingPathSwitch : public UMaterialExpression
 	virtual uint32 GetOutputType(int32 InputIndex) override {return MCT_Unknown;}
 #endif // WITH_EDITOR
 	//~ End UMaterialExpression Interface
-
-	//~ Begin UObject Interface
-	virtual bool NeedsLoadForClient() const override;
-	//~ End UObject Interface
 };

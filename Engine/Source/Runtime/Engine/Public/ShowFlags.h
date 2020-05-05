@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	ShowFlags.h: Show Flag Definitions.
@@ -313,6 +313,7 @@ private:
 		SetVisualizeHDR(false);
 		SetVisualizeShadingModels(false);
 		SetOverrideDiffuseAndSpecular(false);
+		SetLightingOnlyOverride(false);
 		SetReflectionOverride(false);
 		SetVisualizeBuffer(false);
 		SetVectorFields(false);
@@ -321,6 +322,7 @@ private:
 		SetTestImage(false);
 		SetVisualizeDOF(false);
 		SetVertexColors(false);
+		SetPhysicalMaterialMasks(false);
 		SetVisualizeMotionBlur(false);
 		SetSelectionOutline(false);
 		SetDebugAI(false);
@@ -396,6 +398,7 @@ private:
 		SetOcclusionMeshes(false);
 		SetPathTracing(false);
 		SetRayTracingDebug(false);
+		SetVisualizeSkyAtmosphere(false);
 	}
 
 

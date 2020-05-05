@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Remesher.h"
 #include "DynamicMeshAttributeSet.h"
@@ -128,7 +128,7 @@ FRemesher::EProcessResult FRemesher::ProcessEdge(int edgeID)
 	RuntimeDebugCheck(edgeID);
 
 	FEdgeConstraint constraint =
-		(Constraints == nullptr) ? FEdgeConstraint::Unconstrained() : Constraints->GetEdgeConstraint(edgeID);
+		(!Constraints) ? FEdgeConstraint::Unconstrained() : Constraints->GetEdgeConstraint(edgeID);
 	if (constraint.NoModifications())
 	{
 		return EProcessResult::Ignored_EdgeIsFullyConstrained;
@@ -205,13 +205,14 @@ FRemesher::EProcessResult FRemesher::ProcessEdge(int edgeID)
 
 		// lots of cases where we cannot collapse, but we should just let
 		// mesh sort that out, right?
+		SaveEdgeBeforeModify(edgeID);
 		COUNT_COLLAPSES++;
 		FDynamicMesh3::FEdgeCollapseInfo collapseInfo;
 		EMeshResult result = Mesh->CollapseEdge(iKeep, iCollapse, collapse_t, collapseInfo);
 		if (result == EMeshResult::Ok) 
 		{
 			Mesh->SetVertex(iKeep, vNewPos);
-			if (Constraints != nullptr) 
+			if (Constraints)
 			{
 				Constraints->ClearEdgeConstraint(edgeID);
 				Constraints->ClearEdgeConstraint(collapseInfo.RemovedEdges.A);
@@ -266,6 +267,7 @@ abort_collapse:
 
 		if (bTryFlip) 
 		{
+			SaveEdgeBeforeModify(edgeID);
 			FDynamicMesh3::FEdgeFlipInfo flipInfo;
 			COUNT_FLIPS++;
 			EMeshResult result = Mesh->FlipEdge(edgeID, flipInfo);
@@ -290,6 +292,7 @@ abort_collapse:
 	bool bTriedSplit = false;
 	if (bEnableSplits && constraint.CanSplit() && edge_len_sqr > MaxEdgeLength*MaxEdgeLength) 
 	{
+		SaveEdgeBeforeModify(edgeID);
 		FDynamicMesh3::FEdgeSplitInfo SplitInfo;
 		COUNT_SPLITS++;
 		EMeshResult result = Mesh->SplitEdge(edgeID, SplitInfo);
@@ -327,7 +330,7 @@ abort_collapse:
 void FRemesher::UpdateAfterSplit(int edgeID, int va, int vb, const FDynamicMesh3::FEdgeSplitInfo& SplitInfo)
 {
 	bool bPositionFixed = false;
-	if (Constraints != nullptr && Constraints->HasEdgeConstraint(edgeID)) 
+	if (Constraints && Constraints->HasEdgeConstraint(edgeID))
 	{
 		// inherit edge constraint
 		Constraints->SetOrUpdateEdgeConstraint(SplitInfo.NewEdges.A, Constraints->GetEdgeConstraint(edgeID));
@@ -403,7 +406,7 @@ void FRemesher::ProjectVertex(int VertexID, IProjectionTarget* UseTarget)
 // used by collapse-edge to get projected position for new vertex
 FVector3d FRemesher::GetProjectedCollapsePosition(int vid, const FVector3d& vNewPos)
 {
-	if (Constraints != nullptr) 
+	if (Constraints)
 	{
 		FVertexConstraint vc = Constraints->GetVertexConstraint(vid);
 		if (vc.Target != nullptr)

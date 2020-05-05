@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -20,7 +20,9 @@ public:
 	void SetLightEstimate(float InAmbientIntensityLumens, float InColorTemperatureKelvin);
 	
 	void SetLightEstimate(FVector InRGBScaleFactor, float InPixelIntensity);
-	
+
+	void SetLightEstimate(float InColorTemperatureKelvin, FLinearColor InAmbientColor);
+
 	UFUNCTION(BlueprintPure, Category = "AR AugmentedReality|Light Estimation")
 	float GetAmbientIntensityLumens() const;
 	

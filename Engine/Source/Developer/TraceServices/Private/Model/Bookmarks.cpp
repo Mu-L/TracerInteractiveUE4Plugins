@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TraceServices/Model/Bookmarks.h"
 #include "Model/BookmarksPrivate.h"
@@ -26,6 +26,8 @@ FBookmarkSpec& FBookmarkProvider::GetSpec(uint64 BookmarkPoint)
 	else
 	{
 		TSharedPtr<FBookmarkSpec> Spec = MakeShared<FBookmarkSpec>();
+		Spec->File = TEXT("<unknown>");
+		Spec->FormatString = TEXT("<unknown>");
 		SpecMap.Add(BookmarkPoint, Spec);
 		return *Spec.Get();
 	}

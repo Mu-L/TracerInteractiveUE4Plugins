@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -130,7 +130,7 @@ DECLARE_DELEGATE_TwoParams( FOnSetInputViewRange, float, float )
 DECLARE_DELEGATE_TwoParams( FOnSetOutputViewRange, float, float )
 DECLARE_DELEGATE_OneParam( FOnSetAreCurvesVisible, bool )
 
-class UNREALED_VTABLE SCurveEditor : 
+class SCurveEditor : 
 	public SCompoundWidget,
 	public FGCObject,
 	public FEditorUndoClient

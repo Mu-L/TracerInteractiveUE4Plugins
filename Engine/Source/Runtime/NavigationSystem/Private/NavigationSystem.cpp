@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NavigationSystem.h"
 #include "NavigationDataHandler.h"
@@ -32,8 +32,6 @@
 #if WITH_EDITOR
 #include "EditorModeManager.h"
 #include "EditorModes.h"
-#include "Editor/GeometryMode/Public/GeometryEdMode.h"
-#include "Editor/GeometryMode/Public/EditorGeometry.h"
 #include "Editor/LevelEditor/Public/LevelEditor.h"
 #endif
 
@@ -84,14 +82,17 @@ DEFINE_STAT(STAT_Navigation_RegisterNavOctreeElement);
 DEFINE_STAT(STAT_Navigation_UnregisterNavOctreeElement);
 DEFINE_STAT(STAT_Navigation_AddingActorsToNavOctree);
 DEFINE_STAT(STAT_Navigation_RecastAddGeneratedTiles);
+DEFINE_STAT(STAT_Navigation_RecastAddGeneratedTileLayer);
 DEFINE_STAT(STAT_Navigation_RecastTick);
 DEFINE_STAT(STAT_Navigation_RecastPathfinding);
 DEFINE_STAT(STAT_Navigation_RecastTestPath);
+DEFINE_STAT(STAT_RecastNavMeshGenerator_StoringCompressedLayers);
 DEFINE_STAT(STAT_Navigation_RecastBuildCompressedLayers);
 DEFINE_STAT(STAT_Navigation_RecastCreateHeightField);
 DEFINE_STAT(STAT_Navigation_RecastRasterizeTriangles);
 DEFINE_STAT(STAT_Navigation_RecastVoxelFilter);
 DEFINE_STAT(STAT_Navigation_RecastFilter);
+DEFINE_STAT(STAT_Navigation_FilterLedgeSpans);
 DEFINE_STAT(STAT_Navigation_RecastBuildCompactHeightField);
 DEFINE_STAT(STAT_Navigation_RecastErodeWalkable);
 DEFINE_STAT(STAT_Navigation_RecastBuildLayers);
@@ -103,6 +104,7 @@ DEFINE_STAT(STAT_Navigation_RecastCreateNavMeshData);
 DEFINE_STAT(STAT_Navigation_RecastMarkAreas);
 DEFINE_STAT(STAT_Navigation_RecastBuildContours);
 DEFINE_STAT(STAT_Navigation_RecastBuildNavigation);
+DEFINE_STAT(STAT_Navigation_GenerateNavigationDataLayer);
 DEFINE_STAT(STAT_Navigation_RecastBuildRegions);
 DEFINE_STAT(STAT_Navigation_UpdateNavOctree);
 DEFINE_STAT(STAT_Navigation_CollisionTreeMemory);
@@ -422,28 +424,12 @@ UNavigationSystemV1::UNavigationSystemV1(const FObjectInitializer& ObjectInitial
 		const FTransform RecastToUnrealTransfrom(Recast2UnrealMatrix());
 		SetCoordTransform(ENavigationCoordSystem::Navigation, ENavigationCoordSystem::Unreal, RecastToUnrealTransfrom);
 	}
-
-#if WITH_EDITOR
-	if (GIsEditor && HasAnyFlags(RF_ClassDefaultObject) == false)
-	{
-		FEditorDelegates::EditorModeIDEnter.AddUObject(this, &UNavigationSystemV1::OnEditorModeIDChanged, true);
-		FEditorDelegates::EditorModeIDExit.AddUObject(this, &UNavigationSystemV1::OnEditorModeIDChanged, false);
-	}
-#endif // WITH_EDITOR
 }
 
 PRAGMA_DISABLE_DEPRECATION_WARNINGS
 UNavigationSystemV1::~UNavigationSystemV1()
 {
 	CleanUp(FNavigationSystem::ECleanupMode::CleanupUnsafe);
-
-#if WITH_EDITOR
-	if (GIsEditor)
-	{
-		FEditorDelegates::EditorModeIDEnter.RemoveAll(this);
-		FEditorDelegates::EditorModeIDExit.RemoveAll(this);
-	}
-#endif // WITH_EDITOR
 
 #if !UE_BUILD_SHIPPING
 	FCoreDelegates::OnGetOnScreenMessages.RemoveAll(this);
@@ -737,6 +723,11 @@ void UNavigationSystemV1::OnWorldInitDone(FNavigationSystemRunMode Mode)
 
 	World->OnBeginTearingDown().AddUObject(this, &UNavigationSystemV1::OnBeginTearingDown);
 
+	// process all queued custom link registration requests
+	// (since it's possible navigation system was not ready by the time
+	// those links were serialized-in or spawned)
+	ProcessCustomLinkPendingRegistration();
+
 	if (IsThereAnywhereToBuildNavigation() == false
 		// Simulation mode is a special case - better not do it in this case
 		&& OperationMode != FNavigationSystemRunMode::SimulationMode)
@@ -785,6 +776,8 @@ void UNavigationSystemV1::OnWorldInitDone(FNavigationSystemRunMode Mode)
 
 			if (GetDefaultNavDataInstance(FNavigationSystem::DontCreate) != NULL)
 			{
+				const bool bIsInGame = World->IsGameWorld();
+
 				// trigger navmesh update
 				for (TActorIterator<ANavigationData> It(World); It; ++It)
 				{
@@ -792,10 +785,11 @@ void UNavigationSystemV1::OnWorldInitDone(FNavigationSystemRunMode Mode)
 					if (NavData != NULL)
 					{
 						const ERegistrationResult Result = RegisterNavData(NavData);
+						LogNavDataRegistrationResult(Result);
 
 						if (Result == RegistrationSuccessful)
 						{
-							if (bAllowRebuild)
+							if (bAllowRebuild && (!bIsInGame || NavData->SupportsRuntimeGeneration()))
 							{
 								NavData->RebuildAll();
 							}
@@ -939,11 +933,6 @@ void UNavigationSystemV1::Tick(float DeltaSeconds)
 		)
 	{
 		return;
-	}
-	
-	if (PendingCustomLinkRegistration.Num())
-	{
-		ProcessCustomLinkPendingRegistration();
 	}
 
 	if (PendingNavBoundsUpdates.Num() > 0)
@@ -1591,7 +1580,11 @@ ANavigationData* UNavigationSystemV1::GetDefaultNavDataInstance(FNavigationSyste
 #endif // WITH_RECAST
 		// either way make sure it's registered. Registration stores unique
 		// navmeshes, so we have nothing to lose
-		RegisterNavData(MainNavData);
+		if (MainNavData != nullptr)
+		{
+			const ERegistrationResult Result = RegisterNavData(MainNavData);
+			LogNavDataRegistrationResult(Result);
+		}
 	}
 
 	return MainNavData;
@@ -1818,6 +1811,7 @@ void UNavigationSystemV1::ProcessRegistrationCandidates()
 		if (OwningLevel && OwningLevel->bIsVisible)
 		{
 			const ERegistrationResult Result = RegisterNavData(NavDataPtr);
+			LogNavDataRegistrationResult(Result);
 
 			if (Result != RegistrationSuccessful && Result != RegistrationFailed_DataPendingKill)
 			{
@@ -1859,7 +1853,17 @@ void UNavigationSystemV1::ProcessCustomLinkPendingRegistration()
 		
 		if (LinkOb.IsValid() && ILink)
 		{
+#if WITH_EDITOR
+			// In Editor multiple NavigationSystems may exist at the same time (i.e. Editor, Client Game, Server Game worlds)
+			// so we want to make sure that any given NavigationSystem instance performs a single flush of the global pending queue
+			// to register the links associated to their outer World.
+			// Following registration requests will be forwarded directly to the NavigationSystem and won't use the queue.
+			// We call RequestCustomLinkRegistering instead of RegisterCustomLink so each link
+			// will register to the navigation system associated to their outer world (if created) or put back in the queue.
+			RequestCustomLinkRegistering(*ILink, LinkOb.Get());
+#else
 			RegisterCustomLink(*ILink);
+#endif // WITH_EDITOR
 		}
 	}
 }
@@ -2006,6 +2010,9 @@ void UNavigationSystemV1::UnregisterNavData(ANavigationData* NavData)
 
 void UNavigationSystemV1::RegisterCustomLink(INavLinkCustomInterface& CustomLink)
 {
+	ensureMsgf(CustomLink.GetLinkOwner() == nullptr || GetWorld() == CustomLink.GetLinkOwner()->GetWorld(), 
+		TEXT("Registering a link from a world different than the navigation system world should not happen."));
+
 	uint32 LinkId = CustomLink.GetLinkId();
 
 	// if there's already a link with that Id registered, assign new Id and mark dirty area
@@ -2013,6 +2020,7 @@ void UNavigationSystemV1::RegisterCustomLink(INavLinkCustomInterface& CustomLink
 	if (CustomLinksMap.Contains(LinkId))
 	{
 		LinkId = INavLinkCustomInterface::GetUniqueId();
+		UE_LOG(LogNavLink, VeryVerbose, TEXT("%s new navlink id %u."), ANSI_TO_TCHAR(__FUNCTION__), LinkId);
 		CustomLink.UpdateLinkId(LinkId);
 
 		UObject* CustomLinkOb = CustomLink.GetLinkOwner();
@@ -2269,8 +2277,8 @@ void UNavigationSystemV1::DescribeFilterFlags(const TArray<FString>& FlagsDesc) 
 #endif
 
 	// setup properties
-	UStructProperty* StructProp1 = FindField<UStructProperty>(UNavigationQueryFilter::StaticClass(), TEXT("IncludeFlags"));
-	UStructProperty* StructProp2 = FindField<UStructProperty>(UNavigationQueryFilter::StaticClass(), TEXT("ExcludeFlags"));
+	FStructProperty* StructProp1 = FindFProperty<FStructProperty>(UNavigationQueryFilter::StaticClass(), TEXT("IncludeFlags"));
+	FStructProperty* StructProp2 = FindFProperty<FStructProperty>(UNavigationQueryFilter::StaticClass(), TEXT("ExcludeFlags"));
 	check(StructProp1);
 	check(StructProp2);
 
@@ -2282,7 +2290,7 @@ void UNavigationSystemV1::DescribeFilterFlags(const TArray<FString>& FlagsDesc) 
 		for (int32 FlagIndex = 0; FlagIndex < MaxFlags; FlagIndex++)
 		{
 			FString PropName = FString::Printf(TEXT("bNavFlag%d"), FlagIndex);
-			UProperty* Prop = FindField<UProperty>(Structs[StructIndex], *PropName);
+			FProperty* Prop = FindFProperty<FProperty>(Structs[StructIndex], *PropName);
 			check(Prop);
 
 			if (UseDesc[FlagIndex].Len())
@@ -2769,47 +2777,6 @@ void UNavigationSystemV1::UpdateLevelCollision(ULevel* InLevel)
 		OnLevelAddedToWorld(InLevel, World);
 	}
 }
-
-void UNavigationSystemV1::OnEditorModeChanged(FEdMode* Mode, bool IsEntering)
-{
-	if (Mode == NULL)
-	{
-		return;
-	}
-
-	if (IsEntering == false && Mode->GetID() == FBuiltinEditorModes::EM_Geometry)
-	{
-		// check if any of modified brushes belongs to an ANavMeshBoundsVolume
-		FEdModeGeometry* GeometryMode = (FEdModeGeometry*)Mode;
-		for (auto GeomObjectIt = GeometryMode->GeomObjectItor(); GeomObjectIt; GeomObjectIt++)
-		{
-			ANavMeshBoundsVolume* Volume = Cast<ANavMeshBoundsVolume>((*GeomObjectIt)->GetActualBrush());
-			if (Volume)
-			{
-				OnNavigationBoundsUpdated(Volume);
-			}
-		}
-	}
-}
-
-void UNavigationSystemV1::OnEditorModeIDChanged(const FEditorModeID& ModeID, bool IsEntering)
-{
-	if (IsEntering == false && ModeID == FBuiltinEditorModes::EM_Geometry)
-	{
-		// check if any of modified brushes belongs to an ANavMeshBoundsVolume
-		FEdMode* Mode = GLevelEditorModeTools().GetActiveMode(ModeID);
-		FEdModeGeometry* GeometryMode = (FEdModeGeometry*)Mode;
-		for (auto GeomObjectIt = GeometryMode->GeomObjectItor(); GeomObjectIt; GeomObjectIt++)
-		{
-			ANavMeshBoundsVolume* Volume = Cast<ANavMeshBoundsVolume>((*GeomObjectIt)->GetActualBrush());
-			if (Volume)
-			{
-				OnNavigationBoundsUpdated(Volume);
-			}
-		}
-	}
-}
-
 #endif
 
 void UNavigationSystemV1::OnNavigationBoundsUpdated(ANavMeshBoundsVolume* NavVolume)
@@ -3019,6 +2986,17 @@ void UNavigationSystemV1::GatherNavigationBounds()
 
 void UNavigationSystemV1::Build()
 {
+	UE_LOG(LogNavigationDataBuild, Display, TEXT("UNavigationSystemV1::Build started..."));
+#if PHYSICS_INTERFACE_PHYSX
+	UE_LOG(LogNavigationDataBuild, Display, TEXT("   Building navigation data using PHYSICS_INTERFACE_PHYSX."));
+#endif
+#if WITH_PHYSX
+	UE_LOG(LogNavigationDataBuild, Display, TEXT("   Building navigation data using WITH_PHYSX."));
+#endif
+#if WITH_CHAOS
+	UE_LOG(LogNavigationDataBuild, Display, TEXT("   Building navigation data using WITH_CHAOS."));
+#endif
+
 	UWorld* World = GetWorld();
 	if (!World)
 	{
@@ -3073,7 +3051,8 @@ void UNavigationSystemV1::Build()
 	DefaultDirtyAreasController.bDirtyAreasReportedWhileAccumulationLocked = false;
 #endif // !UE_BUILD_SHIPPING
 
-	UE_LOG(LogNavigation, Display, TEXT("UNavigationSystemV1::Build total execution time: %.5f"), float(FPlatformTime::Seconds() - BuildStartTime));
+	UE_LOG(LogNavigationDataBuild, Display, TEXT("UNavigationSystemV1::Build total execution time: %.2fs"), float(FPlatformTime::Seconds() - BuildStartTime));
+	UE_LOG(LogNavigation, Display, TEXT("UNavigationSystemV1::Build total execution time: %.5fs"), float(FPlatformTime::Seconds() - BuildStartTime));
 }
 
 void UNavigationSystemV1::CancelBuild()
@@ -3314,6 +3293,8 @@ void UNavigationSystemV1::RebuildAll(bool bIsLoadTime)
 				
 		if (NavData && (!bIsLoadTime || NavData->NeedsRebuildOnLoad()) && (!bIsInGame || NavData->SupportsRuntimeGeneration()))
 		{
+			UE_LOG(LogNavigationDataBuild, Display, TEXT("   Building NavData:  %s."), *NavData->GetConfig().GetDescription());
+
 			NavData->RebuildAll();
 		}
 	}
@@ -3607,6 +3588,7 @@ void UNavigationSystemV1::CleanUp(FNavigationSystem::ECleanupMode Mode)
 
 		if (MyWorld->WorldType == EWorldType::Game || MyWorld->WorldType == EWorldType::Editor)
 		{
+			UE_LOG(LogNavLink, VeryVerbose, TEXT("Reset navlink id on cleanup."));
 			INavLinkCustomInterface::NextUniqueId = 1;
 		}
 	}
@@ -3663,6 +3645,34 @@ ERuntimeGenerationType UNavigationSystemV1::GetRuntimeGenerationType() const
 	}
 	
 	return RuntimeGenerationType;
+}
+
+void UNavigationSystemV1::LogNavDataRegistrationResult(ERegistrationResult InResult)
+{
+	switch (InResult)
+	{
+	case UNavigationSystemV1::RegistrationError:
+		UE_VLOG_UELOG(this, LogNavigation, Warning, TEXT("NavData RegistrationError, could not be registered."));
+		break;
+	case UNavigationSystemV1::RegistrationFailed_DataPendingKill:
+		UE_VLOG_UELOG(this, LogNavigation, Warning, TEXT("NavData RegistrationFailed_DataPendingKill."));
+		break;
+	case UNavigationSystemV1::RegistrationFailed_AgentAlreadySupported:
+		UE_VLOG_UELOG(this, LogNavigation, Warning, TEXT("NavData RegistrationFailed_AgentAlreadySupported, specified agent type already has its navmesh implemented."));
+		break;
+	case UNavigationSystemV1::RegistrationFailed_AgentNotValid:
+		UE_VLOG_UELOG(this, LogNavigation, Warning, TEXT("NavData RegistrationFailed_AgentNotValid, NavData instance contains navmesh that doesn't support any of expected agent types."));
+		break;
+	case UNavigationSystemV1::RegistrationFailed_NotSuitable:
+		UE_VLOG_UELOG(this, LogNavigation, Warning, TEXT("NavData RegistrationFailed_NotSuitable."));
+		break;
+	case UNavigationSystemV1::RegistrationSuccessful:
+		UE_VLOG_UELOG(this, LogNavigation, Verbose, TEXT("NavData RegistrationSuccessful."));
+		break;
+	default:
+		UE_VLOG_UELOG(this, LogNavigation, Warning, TEXT("Registration not successful default warning."));
+		break;
+	}
 }
 
 //----------------------------------------------------------------------//
@@ -4268,8 +4278,7 @@ INavigationDataInterface* UNavigationSystemV1::GetNavDataForActor(const AActor& 
 		NavData = NavSys->GetDefaultNavDataInstance(FNavigationSystem::DontCreate);
 	}
 
-	//  Only RecastNavMesh supported
-	return (INavigationDataInterface*)(Cast<ARecastNavMesh>(NavData));
+	return NavData;
 }
 
 int UNavigationSystemV1::GetNavigationBoundsForNavData(const ANavigationData& NavData, TArray<FBox>& OutBounds, ULevel* InLevel) const

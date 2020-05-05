@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #ifndef PLATFORM_LUMIN
 	#define	PLATFORM_LUMIN	0
@@ -14,11 +14,13 @@
 #include "../VulkanRHIPrivate.h"
 #include <dlfcn.h>
 #include "Android/AndroidWindow.h"
+#include "Android/AndroidPlatformFramePacer.h"
 
 // Vulkan function pointers
 #define DEFINE_VK_ENTRYPOINTS(Type,Func) Type VulkanDynamicAPI::Func = NULL;
 ENUM_VK_ENTRYPOINTS_ALL(DEFINE_VK_ENTRYPOINTS)
 
+#define VULKAN_MALI_LAYER_NAME "VK_LAYER_ARM_AGA"
 
 void* FVulkanAndroidPlatform::VulkanLib = nullptr;
 bool FVulkanAndroidPlatform::bAttemptedLoad = false;
@@ -60,6 +62,9 @@ bool FVulkanAndroidPlatform::LoadVulkanLibrary()
 #endif
 
 #undef GET_VK_ENTRYPOINTS
+
+	// Init frame pacer
+	FPlatformRHIFramePacer::Init(new FAndroidVulkanFramePacer());
 
 	return true;
 }
@@ -152,6 +157,10 @@ void FVulkanAndroidPlatform::GetDeviceExtensions(EGpuVendorId VendorId, TArray<c
 	OutExtensions.Add(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
 	OutExtensions.Add(VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
 	OutExtensions.Add(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME);
+
+#if !UE_BUILD_SHIPPING
+	OutExtensions.Add(VULKAN_MALI_LAYER_NAME);
+#endif
 }
 
 bool FVulkanAndroidPlatform::SupportsStandardSwapchain()
@@ -188,18 +197,32 @@ void FVulkanAndroidPlatform::OverridePlatformHandlers(bool bInit)
 {
 	if (bInit)
 	{
-		// Want to see the actual crash report on Android so unregister signal handlers
-		FPlatformMisc::SetCrashHandler((void(*)(const FGenericCrashContext& Context)) -1);
 		FPlatformMisc::SetOnReInitWindowCallback(FVulkanDynamicRHI::RecreateSwapChain);
 		FPlatformMisc::SetOnReleaseWindowCallback(FVulkanDynamicRHI::DestroySwapChain);
 		FPlatformMisc::SetOnPauseCallback(FVulkanDynamicRHI::SavePipelineCache);
 	}
 	else
 	{
-		FPlatformMisc::SetCrashHandler(nullptr);
 		FPlatformMisc::SetOnReInitWindowCallback(nullptr);
 		FPlatformMisc::SetOnReleaseWindowCallback(nullptr);
 		FPlatformMisc::SetOnPauseCallback(nullptr);
+	}
+}
+
+void FVulkanAndroidPlatform::SetupMaxRHIFeatureLevelAndShaderPlatform(ERHIFeatureLevel::Type InRequestedFeatureLevel)
+{
+	if (!GIsEditor &&
+		(FVulkanPlatform::RequiresMobileRenderer() || 
+		InRequestedFeatureLevel == ERHIFeatureLevel::ES3_1 ||
+		FParse::Param(FCommandLine::Get(), TEXT("featureleveles31"))))
+	{
+		GMaxRHIFeatureLevel = ERHIFeatureLevel::ES3_1;
+		GMaxRHIShaderPlatform = SP_VULKAN_ES3_1_ANDROID;
+	}
+	else
+	{
+		GMaxRHIFeatureLevel = ERHIFeatureLevel::SM5;
+		GMaxRHIShaderPlatform = SP_VULKAN_SM5_ANDROID;
 	}
 }
 

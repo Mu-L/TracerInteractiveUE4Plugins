@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -27,8 +27,126 @@ struct FNiagaraNewAssetDialogConfig
 	}
 };
 
+UENUM()
+enum class ENiagaraNamespaceMetadataOptions
+{
+	HideInScript,
+	HideInSystem,
+	AdvancedInScript,
+	AdvancedInSystem,
+	PreventEditingNamespace,
+	PreventEditingNamespaceModifier,
+	PreventEditingName,
+	PreventCreatingInSystemEditor
+};
+
+USTRUCT()
+struct FNiagaraNamespaceMetadata
+{
+	GENERATED_BODY()
+
+	FNiagaraNamespaceMetadata();
+
+	FNiagaraNamespaceMetadata(TArray<FName> InNamespaces, FName InRequiredNamespaceModifier = NAME_None);
+
+	bool operator==(const FNiagaraNamespaceMetadata& Other) const
+	{
+		return
+			Namespaces == Other.Namespaces &&
+			RequiredNamespaceModifier == Other.RequiredNamespaceModifier &&
+			DisplayName.IdenticalTo(Other.DisplayName) &&
+			DisplayNameLong.IdenticalTo(Other.DisplayNameLong) &&
+			Description.IdenticalTo(Other.Description) &&
+			BackgroundColor == Other.BackgroundColor &&
+			ForegroundStyle == Other.ForegroundStyle &&
+			SortId == Other.SortId &&
+			OptionalNamespaceModifiers == Other.OptionalNamespaceModifiers &&
+			Options == Other.Options;
+	}
+
+	UPROPERTY()
+	TArray<FName> Namespaces;
+
+	UPROPERTY()
+	FName RequiredNamespaceModifier;
+
+	UPROPERTY()
+	FText DisplayName;
+
+	UPROPERTY()
+	FText DisplayNameLong;
+
+	UPROPERTY()
+	FText Description;
+
+	UPROPERTY()
+	FLinearColor BackgroundColor;
+
+	UPROPERTY()
+	FName ForegroundStyle;
+
+	UPROPERTY()
+	int32 SortId;
+
+	UPROPERTY()
+	TArray<FName> OptionalNamespaceModifiers;
+
+	UPROPERTY()
+	TArray<ENiagaraNamespaceMetadataOptions> Options;
+
+	FNiagaraNamespaceMetadata& SetDisplayName(FText InDisplayName)
+	{
+		DisplayName = InDisplayName;
+		return *this;
+	}
+
+	FNiagaraNamespaceMetadata& SetDisplayNameLong(FText InDisplayNameLong)
+	{
+		DisplayNameLong = InDisplayNameLong;
+		return *this;
+	}
+
+	FNiagaraNamespaceMetadata& SetDescription(FText InDescription)
+	{
+		Description = InDescription;
+		return *this;
+	}
+
+	FNiagaraNamespaceMetadata& SetBackgroundColor(FLinearColor InBackgroundColor)
+	{
+		BackgroundColor = InBackgroundColor;
+		return *this;
+	}
+
+	FNiagaraNamespaceMetadata& SetForegroundStyle(FName InForegroundStyle)
+	{
+		ForegroundStyle = InForegroundStyle;
+		return *this;
+	}
+
+	FNiagaraNamespaceMetadata& SetSortId(int32 InSortId)
+	{
+		SortId = InSortId;
+		return *this;
+	}
+
+	FNiagaraNamespaceMetadata& AddOptionalNamespaceModifier(FName InOptionalNamespaceModifier)
+	{
+		OptionalNamespaceModifiers.Add(InOptionalNamespaceModifier);
+		return *this;
+	}
+
+	FNiagaraNamespaceMetadata& AddOption(ENiagaraNamespaceMetadataOptions Option)
+	{
+		Options.Add(Option);
+		return *this;
+	}
+
+	bool IsValid() const { return Namespaces.Num() > 0; }
+};
+
 UCLASS(config = Niagara, defaultconfig, meta=(DisplayName="Niagara"))
-class UNiagaraEditorSettings : public UDeveloperSettings
+class NIAGARAEDITOR_API UNiagaraEditorSettings : public UDeveloperSettings
 {
 public:
 	GENERATED_UCLASS_BODY()
@@ -48,6 +166,10 @@ public:
 	/** Niagara script to duplicate as the base of all new script assets created. */
 	UPROPERTY(config, EditAnywhere, Category = Niagara)
 	FSoftObjectPath DefaultModuleScript;
+
+	/** Niagara script which is required in the system update script to control system state. */
+	UPROPERTY(config, EditAnywhere, Category = Niagara)
+	FSoftObjectPath RequiredSystemUpdateScript;
 
 	/** Shortcut key bindings that if held down while doing a mouse click, will spawn the specified type of Niagara node.*/
 	UPROPERTY(config, EditAnywhere, Category = Niagara)
@@ -83,9 +205,23 @@ public:
 	/** Sets whether or not to reset all components that include the system that is currently being reset */
 	void SetResetDependentSystemsWhenEditingEmitters(bool bInResetDependentSystemsWhenEditingEmitters);
 
+	/** Gets whether or not to display advanced categories for the parameter panel. */
+	bool GetDisplayAdvancedParameterPanelCategories() const;
+
+	/** Sets whether or not to display advanced categories for the parameter panel. */
+	void SetDisplayAdvancedParameterPanelCategories(bool bInDisplayAdvancedParameterPanelCategories);
+
 	FNiagaraNewAssetDialogConfig GetNewAssetDailogConfig(FName InDialogConfigKey) const;
 
 	void SetNewAssetDialogConfig(FName InDialogConfigKey, const FNiagaraNewAssetDialogConfig& InNewAssetDialogConfig);
+
+	FNiagaraNamespaceMetadata GetDefaultNamespaceMetadata() const;
+	FNiagaraNamespaceMetadata GetMetaDataForNamespaces(TArray<FName> Namespaces) const;
+	const TArray<FNiagaraNamespaceMetadata>& GetAllNamespaceMetadata() const;
+
+	FNiagaraNamespaceMetadata GetDefaultNamespaceModifierMetadata() const;
+	FNiagaraNamespaceMetadata GetMetaDataForNamespaceModifier(FName NamespaceModifier) const;
+	const TArray<FNiagaraNamespaceMetadata>& GetAllNamespaceModifierMetadata() const;
 	
 	// Begin UDeveloperSettings Interface
 	virtual FName GetCategoryName() const override;
@@ -100,8 +236,12 @@ public:
 	static FOnNiagaraEditorSettingsChanged& OnSettingsChanged();
 
 	const TMap<FString, FString>& GetHLSLKeywordReplacementsMap()const { return HLSLKeywordReplacements; }
+
+private:
+	void SetupNamespaceMetadata();
+
 protected:
-	static FOnNiagaraEditorSettingsChanged SettingsChangedDelegate;
+	FOnNiagaraEditorSettingsChanged SettingsChangedDelegate;
 
 private:
 	/** Whether or not auto-compile is enabled in the editors. */
@@ -122,11 +262,27 @@ private:
 
 	/** Whether or not to reset all components that include the system currently being reset. */
 	UPROPERTY(config, EditAnywhere, Category = SimulationOptions)
-		bool bResetDependentSystemsWhenEditingEmitters;
+	bool bResetDependentSystemsWhenEditingEmitters;
+
+	/** Whether or not to display advanced categories for the parameter panel. */
+	UPROPERTY(config, EditAnywhere, Category = Niagara)
+	bool bDisplayAdvancedParameterPanelCategories;
 
 	UPROPERTY(config)
 	TMap<FName, FNiagaraNewAssetDialogConfig> NewAssetDialogConfigMap;
 
 	UPROPERTY(config)
 	TMap<FString, FString> HLSLKeywordReplacements;
+
+	UPROPERTY()
+	TArray<FNiagaraNamespaceMetadata> NamespaceMetadata;
+
+	UPROPERTY()
+	TArray<FNiagaraNamespaceMetadata> NamespaceModifierMetadata;
+
+	UPROPERTY()
+	FNiagaraNamespaceMetadata DefaultNamespaceMetadata;
+
+	UPROPERTY()
+	FNiagaraNamespaceMetadata DefaultNamespaceModifierMetadata;
 };

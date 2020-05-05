@@ -1,7 +1,8 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HairStrandsEditor.h"
 #include "GroomActions.h"
+#include "GroomBindingActions.h"
 
 #include "Styling/SlateStyleRegistry.h"
 #include "Styling/SlateTypes.h"
@@ -15,10 +16,13 @@ IMPLEMENT_MODULE(FHairStrandsEditor, HairStrandsEditor);
 void FHairStrandsEditor::StartupModule()
 {
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	TSharedRef<IAssetTypeActions> AssetActions = MakeShareable(new FGroomActions());
+	TSharedRef<IAssetTypeActions> GroomAssetActions = MakeShareable(new FGroomActions());
+	TSharedRef<IAssetTypeActions> BindingAssetActions = MakeShareable(new FGroomBindingActions());
 
-	AssetTools.RegisterAssetTypeActions(AssetActions);
-	RegisteredAssetTypeActions.Add(AssetActions);
+	AssetTools.RegisterAssetTypeActions(GroomAssetActions);
+	AssetTools.RegisterAssetTypeActions(BindingAssetActions);
+	RegisteredAssetTypeActions.Add(GroomAssetActions);
+	RegisteredAssetTypeActions.Add(BindingAssetActions);
 
 	RegisterHairTranslator<FFbxHairTranslator>();
 
@@ -41,7 +45,10 @@ void FHairStrandsEditor::StartupModule()
 
 		StyleSet->Set("ClassIcon.GroomAsset", new FSlateImageBrush(HairStrandsContent + "/Icons/S_Groom_16.png", Icon16x16));
 		StyleSet->Set("ClassThumbnail.GroomAsset", new FSlateImageBrush(HairStrandsContent + "/Icons/S_Groom_64.png", Icon64x64));
-		
+
+		StyleSet->Set("ClassIcon.GroomBindingAsset", new FSlateImageBrush(HairStrandsContent + "/Icons/S_GroomBinding_16.png", Icon16x16));
+		StyleSet->Set("ClassThumbnail.GroomBindingAsset", new FSlateImageBrush(HairStrandsContent + "/Icons/S_GroomBinding_64.png", Icon64x64));
+
 		FSlateStyleRegistry::RegisterSlateStyle(*StyleSet.Get());
 	}
 }

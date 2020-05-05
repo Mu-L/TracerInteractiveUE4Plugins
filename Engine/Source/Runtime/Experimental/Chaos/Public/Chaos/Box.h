@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Templates/UnrealTemplate.h"
@@ -7,21 +7,22 @@
 #include "Chaos/AABB.h"
 #include "Chaos/Transform.h"
 #include "ChaosArchive.h"
+#include "UObject/ExternalPhysicsCustomObjectVersion.h"
 
 namespace Chaos
 {
 	template<class T, int d>
-	class TBox final : public TImplicitObject<T, d>
+	class TBox final : public FImplicitObject
 	{
 	public:
-		using TImplicitObject<T, d>::SignedDistance;
-		using TImplicitObject<T, d>::GetTypeName;
+		using FImplicitObject::SignedDistance;
+		using FImplicitObject::GetTypeName;
 
 		// This should never be used outside of creating a default for arrays
 		FORCEINLINE TBox()
-		    : TImplicitObject<T, d>(EImplicitObject::FiniteConvex, ImplicitObjectType::Box){};
+		    : FImplicitObject(EImplicitObject::FiniteConvex, ImplicitObjectType::Box){};
 		FORCEINLINE TBox(const TVector<T, d>& Min, const TVector<T, d>& Max)
-		    : TImplicitObject<T, d>(EImplicitObject::FiniteConvex, ImplicitObjectType::Box)
+		    : FImplicitObject(EImplicitObject::FiniteConvex, ImplicitObjectType::Box)
 			, AABB(Min, Max)
 		{
 			//todo: turn back on
@@ -32,19 +33,19 @@ namespace Chaos
 		}
 
 		FORCEINLINE TBox(const TBox<T, d>& Other)
-		    : TImplicitObject<T, d>(EImplicitObject::FiniteConvex, ImplicitObjectType::Box)
+		    : FImplicitObject(EImplicitObject::FiniteConvex, ImplicitObjectType::Box)
 			, AABB(Other.AABB)
 		{
 		}
 
 		FORCEINLINE TBox(const TAABB<T, d>& AABB)
-		    : TImplicitObject<T, d>(EImplicitObject::FiniteConvex, ImplicitObjectType::Box)
+		    : FImplicitObject(EImplicitObject::FiniteConvex, ImplicitObjectType::Box)
 			, AABB(AABB)
 		{
 		}
 
 		FORCEINLINE TBox(TBox<T, d>&& Other)
-		    : TImplicitObject<T, d>(EImplicitObject::FiniteConvex, ImplicitObjectType::Box)
+		    : FImplicitObject(EImplicitObject::FiniteConvex, ImplicitObjectType::Box)
 		    , AABB(MoveTemp(Other.AABB))
 		{
 		}
@@ -53,7 +54,7 @@ namespace Chaos
 		{
 			this->Type = Other.Type;
 			this->bIsConvex = Other.bIsConvex;
-			this->bIgnoreAnalyticCollisions = Other.bIgnoreAnalyticCollisions;
+			this->bDoCollide = Other.bDoCollide;
 			this->bHasBoundingBox = Other.bHasBoundingBox;
 
 			AABB = Other.AABB;
@@ -64,7 +65,7 @@ namespace Chaos
 		{
 			this->Type = Other.Type;
 			this->bIsConvex = Other.bIsConvex;
-			this->bIgnoreAnalyticCollisions = Other.bIgnoreAnalyticCollisions;
+			this->bDoCollide = Other.bDoCollide;
 			this->bHasBoundingBox = Other.bHasBoundingBox;
 
 			AABB = MoveTemp(Other.AABB);
@@ -73,9 +74,9 @@ namespace Chaos
 
 		virtual ~TBox() {}
 
-		virtual TUniquePtr<TImplicitObject<T, d>> Copy() const override
+		virtual TUniquePtr<FImplicitObject> Copy() const override
 		{
-			return TUniquePtr<TImplicitObject<T, d>>(new TBox<T,d>(*this));
+			return TUniquePtr<FImplicitObject>(new TBox<T,d>(*this));
 		}
 
 		/**
@@ -95,9 +96,24 @@ namespace Chaos
 		}
 
 		template<class TTRANSFORM>
-		TBox<T, d> TransformedBox(const TTRANSFORM& SpaceTransform) const
+		TAABB<T, d> TransformedBox(const TTRANSFORM& SpaceTransform) const
 		{
-			return TBox<T, d>(AABB.TransformedAABB(SpaceTransform));
+			return TAABB<T, d>(AABB.TransformedAABB(SpaceTransform));
+		}
+
+		static FORCEINLINE bool Intersects(const TBox<T, d>& A, const TBox<T, d>& B)
+		{
+			return A.AABB.Intersects(B.AABB);
+		}
+
+		static FORCEINLINE TAABB<T, d> Intersection(const TAABB<T, d>& A, const TAABB<T, d>& B)
+		{
+			return TAABB<T, d>(A.AABB.GetIntersection(B.AABB));
+		}
+
+		FORCEINLINE bool Intersects(const TAABB<T, d>& Other) const
+		{
+			return AABB.Intersects(Other);
 		}
 
 		FORCEINLINE bool Intersects(const TBox<T, d>& Other) const
@@ -105,9 +121,9 @@ namespace Chaos
 			return AABB.Intersects(Other.AABB);
 		}
 
-		TBox<T, d> GetIntersection(const TBox<T, d>& Other) const
+		TAABB<T, d> GetIntersection(const TAABB<T, d>& Other) const
 		{
-			return TBox<T, d>(AABB.GetIntersection(Other.AABB));
+			return TAABB<T, d>(AABB.GetIntersection(Other.AABB));
 		}
 
 		FORCEINLINE bool Contains(const TVector<T, d>& Point) const
@@ -120,9 +136,9 @@ namespace Chaos
 			return AABB.Contains(Point, Tolerance);
 		}
 
-		FORCEINLINE static ImplicitObjectType GetType() { return ImplicitObjectType::Box; }
+		FORCEINLINE static constexpr EImplicitObjectType StaticType() { return ImplicitObjectType::Box; }
 
-		const TBox<T, d>& BoundingBox() const { return *this; }
+		const TAABB<T, d> BoundingBox() const { return AABB; }
 
 		virtual T PhiWithNormal(const TVector<T, d>& x, TVector<T, d>& Normal) const override
 		{
@@ -156,9 +172,16 @@ namespace Chaos
 			return AABB.FindGeometryOpposingNormal(DenormDir, FaceIndex, OriginalNormal);
 		}
 
-		virtual TVector<T, d> Support(const TVector<T, d>& Direction, const T Thickness) const override
+		FORCEINLINE T GetMargin() const { return 0; }
+
+		FORCEINLINE TVector<T, d> Support(const TVector<T, d>& Direction, const T Thickness) const
 		{
 			return AABB.Support(Direction, Thickness);
+		}
+
+		FORCEINLINE TVector<T, d> Support2(const TVector<T, d>& Direction) const
+		{
+			return AABB.Support2(Direction);
 		}
 
 		FORCEINLINE void GrowToInclude(const TVector<T, d>& V)
@@ -166,12 +189,12 @@ namespace Chaos
 			AABB.GrowToInclude(V);
 		}
 
-		FORCEINLINE void GrowToInclude(const TBox<T, d>& Other)
+		FORCEINLINE void GrowToInclude(const TAABB<T, d>& Other)
 		{
 			AABB.GrowToInclude(Other.AABB);
 		}
 
-		FORCEINLINE void ShrinkToInclude(const TBox<T, d>& Other)
+		FORCEINLINE void ShrinkToInclude(const TAABB<T, d>& Other)
 		{
 			AABB.ShrinkToInclude(Other.AABB);
 		}
@@ -223,15 +246,69 @@ namespace Chaos
 
 		FORCEINLINE static TRotation<T, d> GetRotationOfMass()
 		{
-			return TRotation<T, d>::FromElements(TVector<T, d>(0), 1);
+			return TAABB<T, d>::GetRotationOfMass();
 		}
 
-		virtual FString ToString() const { return FString::Printf(TEXT("TBox Min:%s, Max:%s"), *Min().ToString(), *Max().ToString()); }
+		virtual FString ToString() const { return FString::Printf(TEXT("TAABB Min:%s, Max:%s"), *Min().ToString(), *Max().ToString()); }
 
 		FORCEINLINE void SerializeImp(FArchive& Ar)
 		{
-			TImplicitObject<T, d>::SerializeImp(Ar);
+			FImplicitObject::SerializeImp(Ar);
 			AABB.Serialize(Ar);
+		}
+
+		static void SerializeAsAABB(FArchive& Ar, TAABB<T,d>& AABB)
+		{
+			Ar.UsingCustomVersion(FExternalPhysicsCustomObjectVersion::GUID);
+			if (Ar.CustomVer(FExternalPhysicsCustomObjectVersion::GUID) < FExternalPhysicsCustomObjectVersion::TBoxReplacedWithTAABB)
+			{
+				TBox<T, d> Tmp;
+				Ar << Tmp;
+				AABB = Tmp.AABB;
+			}
+			else
+			{
+				AABB.Serialize(Ar);
+			}
+		}
+
+		static void SerializeAsAABBs(FArchive& Ar, TArray<TAABB<T, d>>& AABBs)
+		{
+			Ar.UsingCustomVersion(FExternalPhysicsCustomObjectVersion::GUID);
+			if (Ar.CustomVer(FExternalPhysicsCustomObjectVersion::GUID) < FExternalPhysicsCustomObjectVersion::TBoxReplacedWithTAABB)
+			{
+				TArray<TBox<T, d>> Tmp;
+				Ar << Tmp;
+				AABBs.Reserve(Tmp.Num());
+				for (const TBox<T, d>& Box : Tmp)
+				{
+					AABBs.Add(Box.AABB);
+				}
+			}
+			else
+			{
+				Ar << AABBs;
+			}
+		}
+
+		template <typename Key>
+		static void SerializeAsAABBs(FArchive& Ar, TMap<Key, TAABB<T, d>>& AABBs)
+		{
+			Ar.UsingCustomVersion(FExternalPhysicsCustomObjectVersion::GUID);
+			if (Ar.CustomVer(FExternalPhysicsCustomObjectVersion::GUID) < FExternalPhysicsCustomObjectVersion::TBoxReplacedWithTAABB)
+			{
+				TMap<Key,TBox<T, d>> Tmp;
+				Ar << Tmp;
+
+				for (const auto Itr : Tmp)
+				{
+					AABBs.Add(Itr.Key, Itr.Value.AABB);
+				}
+			}
+			else
+			{
+				Ar << AABBs;
+			}
 		}
 
 		virtual void Serialize(FChaosArchive& Ar) override
@@ -242,13 +319,15 @@ namespace Chaos
 
 		virtual void Serialize(FArchive& Ar) override { SerializeImp(Ar); }
 
-		static TBox<T, d> EmptyBox() { return TBox<T, d>(TVector<T, d>(TNumericLimits<T>::Max()), TVector<T, d>(-TNumericLimits<T>::Max())); }
-		static TBox<T, d> ZeroBox() { return TBox<T, d>(TVector<T, d>((T)0), TVector<T, d>((T)0)); }
+		static TAABB<T, d> EmptyBox() { return TAABB<T, d>::EmptyAABB(); }
+		static TAABB<T, d> ZeroBox() { return TAABB<T, d>::ZeroAABB(); }
 
 		virtual uint32 GetTypeHash() const override 
 		{
 			return AABB.GetTypeHash();
 		}
+
+		const TAABB<T, d>& GetAABB() const { return AABB; }
 
 	private:
 		TAABB<T, d> AABB;

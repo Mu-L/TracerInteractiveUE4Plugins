@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -133,8 +133,7 @@ public:
 	/** Convenience method to convert a FrameTime and FrameRate to a timecode value. */
 	FORCEINLINE static FTimecode ConvertFrameTimeToTimecode(const FFrameTime& FrameTime, const FFrameRate& FrameRate)
 	{
-		const bool bIsDropFrame = FTimecode::IsDropFormatTimecodeSupported(FrameRate);
-		return FTimecode::FromFrameNumber(FrameTime.GetFrame(), FrameRate, bIsDropFrame);
+		return FTimecode::FromFrameNumber(FrameTime.GetFrame(), FrameRate);
 	}
 
 	/**

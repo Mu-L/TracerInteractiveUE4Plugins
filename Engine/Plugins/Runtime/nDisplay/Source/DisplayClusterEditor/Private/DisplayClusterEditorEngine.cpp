@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DisplayClusterEditorEngine.h"
 #include "DisplayClusterEditorLog.h"
@@ -50,15 +50,18 @@ void UDisplayClusterEditorEngine::PreExit()
 
 ADisplayClusterRootActor* UDisplayClusterEditorEngine::FindDisplayClusterRootActor(UWorld* InWorld)
 {
-	for (AActor* const Actor : InWorld->PersistentLevel->Actors)
+	if (InWorld && InWorld->PersistentLevel)
 	{
-		if (Actor && !Actor->IsPendingKill())
+		for (AActor* const Actor : InWorld->PersistentLevel->Actors)
 		{
-			ADisplayClusterRootActor* RootActor = Cast<ADisplayClusterRootActor>(Actor);
-			if (RootActor)
+			if (Actor && !Actor->IsPendingKill())
 			{
-				UE_LOG(LogDisplayClusterEditorEngine, Log, TEXT("Found root actor - %s"), *RootActor->GetName());
-				return RootActor;
+				ADisplayClusterRootActor* RootActor = Cast<ADisplayClusterRootActor>(Actor);
+				if (RootActor)
+				{
+					UE_LOG(LogDisplayClusterEditorEngine, Log, TEXT("Found root actor - %s"), *RootActor->GetName());
+					return RootActor;
+				}
 			}
 		}
 	}
@@ -66,22 +69,26 @@ ADisplayClusterRootActor* UDisplayClusterEditorEngine::FindDisplayClusterRootAct
 	return nullptr;
 }
 
-void UDisplayClusterEditorEngine::PlayInEditor(UWorld* InWorld, bool bInSimulateInEditor, FPlayInEditorOverrides Overrides)
+void UDisplayClusterEditorEngine::StartPlayInEditorSession(FRequestPlaySessionParams& InRequestParams)
 {
-	UE_LOG(LogDisplayClusterEditorEngine, VeryVerbose, TEXT("UDisplayClusterEditorEngine::PlayInEditor"));
+	UE_LOG(LogDisplayClusterEditorEngine, VeryVerbose, TEXT("UDisplayClusterEditorEngine::StartPlayInEditorSession"));
+
+	UWorld* EditorWorldPreDup = GetEditorWorldContext().World();
 
 	if (DisplayClusterModule)
 	{
 		// Find nDisplay root actor
-		ADisplayClusterRootActor* RootActor = FindDisplayClusterRootActor(InWorld);
-		if (!RootActor)
+		ADisplayClusterRootActor* RootActor = FindDisplayClusterRootActor(EditorWorldPreDup);
+		if (!RootActor && EditorWorldPreDup)
 		{
 			// Also search inside streamed levels
-			const TArray<ULevelStreaming*>& StreamingLevels = InWorld->GetStreamingLevels();
+			const TArray<ULevelStreaming*>& StreamingLevels = EditorWorldPreDup->GetStreamingLevels();
 			for (ULevelStreaming* StreamingLevel : StreamingLevels)
 			{
-				switch (StreamingLevel->GetCurrentState())
+				if (StreamingLevel)
 				{
+					switch (StreamingLevel->GetCurrentState())
+					{
 					case ULevelStreaming::ECurrentState::LoadedVisible:
 					{
 						// Look for the actor in those sub-levels that have been loaded already
@@ -95,6 +102,7 @@ void UDisplayClusterEditorEngine::PlayInEditor(UWorld* InWorld, bool bInSimulate
 
 					default:
 						break;
+					}
 				}
 			}
 		}
@@ -106,17 +114,13 @@ void UDisplayClusterEditorEngine::PlayInEditor(UWorld* InWorld, bool bInSimulate
 
 			if (!DisplayClusterModule->StartSession(RootActor->GetEditorConfigPath(), RootActor->GetEditorNodeId()))
 			{
-				UE_LOG(LogDisplayClusterEditorEngine, Error, TEXT("Couldn't start DisplayCluster session"));
-
-				// Couldn't start a new session
-				RequestEndPlayMap();
-				return;
+				UE_LOG(LogDisplayClusterEditorEngine, Error, TEXT("An error occurred during DisplayCluster session start"));
 			}
 		}
 	}
 
 	// Start PIE
-	Super::PlayInEditor(InWorld, bInSimulateInEditor, Overrides);
+	Super::StartPlayInEditorSession(InRequestParams);
 
 	// Pass PIE world to nDisplay
 	if (bIsNDisplayPIE)
@@ -130,6 +134,31 @@ void UDisplayClusterEditorEngine::PlayInEditor(UWorld* InWorld, bool bInSimulate
 			}
 		}
 	}
+}
+
+bool UDisplayClusterEditorEngine::LoadMap(FWorldContext& WorldContext, FURL URL, class UPendingNetGame* Pending, FString& Error)
+{
+	 
+	if (bIsNDisplayPIE)
+	{
+		// Finish previous scene
+		DisplayClusterModule->EndScene();
+
+		// Perform map loading
+		if (!Super::LoadMap(WorldContext, URL, Pending, Error))
+		{
+			return false;
+		}
+
+		// Start new scene
+		DisplayClusterModule->StartScene(WorldContext.World());
+	}
+	else
+	{
+		return Super::LoadMap(WorldContext, URL, Pending, Error);
+	}
+
+	return true;
 }
 
 void UDisplayClusterEditorEngine::Tick(float DeltaSeconds, bool bIdleMode)

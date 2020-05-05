@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "RenderPassesCustomization.h"
 #include "Layout/Visibility.h"
@@ -83,7 +83,7 @@ public:
 
 			FIterator(TMap<FString, FText>& InRenderPasses) : RenderPasses(InRenderPasses) {}
 
-			void ProcessValue(const FString& InName, UMaterial* Material, const FText& InText)
+			void ProcessValue(const FString& InName, UMaterialInterface* Material, const FText& InText)
 			{
 				RenderPasses.Add(InName, InText);
 			}

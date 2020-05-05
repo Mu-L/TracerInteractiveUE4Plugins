@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -105,12 +105,13 @@ namespace UnrealBuildTool
 			Target.bCompileNvCloth = false;
 
 			Target.bCompileRecast = true;
+			Target.bCompileISPC = false;
 		}
 
 		public override bool CanUseXGE()
 		{
 			// Disable when building on Linux
-			return BuildHostPlatform.Current.Platform != UnrealTargetPlatform.Linux && !(Environment.GetEnvironmentVariable("IsBuildMachine") == "1");
+			return BuildHostPlatform.Current.Platform != UnrealTargetPlatform.Linux;
 		}
 
 		public override bool IsBuildProduct(string FileName, string[] NamePrefixes, string[] NameSuffixes)
@@ -178,7 +179,7 @@ namespace UnrealBuildTool
 		{
 			string[] BoolKeys = new string[] {
 				"bBuildForArmV7", "bBuildForArm64", "bBuildForX86", "bBuildForX8664", 
-				"bBuildForES2", "bBuildForES31", "bBuildWithHiddenSymbolVisibility", "bUseNEONForArmV7", "bSaveSymbols"
+				"bBuildForES31", "bBuildWithHiddenSymbolVisibility", "bUseNEONForArmV7", "bSaveSymbols"
 			};
 			string[] StringKeys = new string[] {
 				"NDKAPILevelOverride"
@@ -222,6 +223,12 @@ namespace UnrealBuildTool
 		/// <param name="Target">The target being build</param>
 		public override void ModifyModuleRulesForOtherPlatform(string ModuleName, ModuleRules Rules, ReadOnlyTargetRules Target)
 		{
+			// don't do any target platform stuff if SDK is not available
+			if (!UEBuildPlatform.IsPlatformAvailable(Platform))
+			{
+				return;
+			}
+
 			if ((Target.Platform == UnrealTargetPlatform.Win32) || (Target.Platform == UnrealTargetPlatform.Win64) || (Target.Platform == UnrealTargetPlatform.Mac) || (Target.Platform == UnrealTargetPlatform.Linux))
 			{
 				bool bBuildShaderFormats = Target.bForceBuildShaderFormats;
@@ -237,10 +244,9 @@ namespace UnrealBuildTool
 					else if (ModuleName == "TargetPlatform")
 					{
 						bBuildShaderFormats = true;
-						Rules.DynamicallyLoadedModuleNames.Add("TextureFormatPVR");
 						Rules.DynamicallyLoadedModuleNames.Add("TextureFormatDXT");
 						Rules.DynamicallyLoadedModuleNames.Add("TextureFormatASTC");
-						Rules.DynamicallyLoadedModuleNames.Add("TextureFormatAndroid");    // ATITC, ETC1 and ETC2
+						Rules.DynamicallyLoadedModuleNames.Add("TextureFormatAndroid");  // ETC2 
 						if (Target.bBuildDeveloperTools)
 						{
 							//Rules.DynamicallyLoadedModuleNames.Add("AudioFormatADPCM");	//@todo android: android audio
@@ -315,7 +321,6 @@ namespace UnrealBuildTool
 
 		public virtual void SetUpSpecificEnvironment(ReadOnlyTargetRules Target, CppCompileEnvironment CompileEnvironment, LinkEnvironment LinkEnvironment)
 		{
-			// we want gcc toolchain 4.9, but fall back to 4.8 or 4.6 for now if it doesn't exist
 			string NDKPath = Environment.GetEnvironmentVariable("NDKROOT");
 			NDKPath = NDKPath.Replace("\"", "");
 
@@ -325,26 +330,15 @@ namespace UnrealBuildTool
 			string NDKToolchainVersion = ToolChain.NDKToolchainVersion;
 			string NDKDefine = ToolChain.NDKDefine;
 
+			string GccVersion = "4.9";
+
 			// PLATFORM_ANDROID_NDK_VERSION is in the form 150100, where 15 is major version, 01 is the letter (1 is 'a'), 00 indicates beta revision if letter is 00
 			Log.TraceInformation("PLATFORM_ANDROID_NDK_VERSION = {0}", NDKDefine);
 			CompileEnvironment.Definitions.Add("PLATFORM_ANDROID_NDK_VERSION=" + NDKDefine);
 
-			string GccVersion = "4.6";
 			int NDKVersionInt = ToolChain.GetNdkApiLevelInt();
-			if (Directory.Exists(Path.Combine(NDKPath, @"sources/cxx-stl/gnu-libstdc++/4.9")))
-			{
-				GccVersion = "4.9";
-			} else
-			if (Directory.Exists(Path.Combine(NDKPath, @"sources/cxx-stl/gnu-libstdc++/4.8")))
-			{
-				GccVersion = "4.8";
-			}
-
 			Log.TraceInformation("NDK toolchain: {0}, NDK version: {1}, GccVersion: {2}, ClangVersion: {3}", NDKToolchainVersion, NDKVersionInt.ToString(), GccVersion, ToolChain.GetClangVersionString());
-
-
-			CompileEnvironment.Definitions.Add("PLATFORM_USED_NDK_VERSION_INTEGER=" + NDKVersionInt);
-
+			ToolChain.ShowNDKWarnings();
 
 			CompileEnvironment.Definitions.Add("PLATFORM_DESKTOP=0");
 			CompileEnvironment.Definitions.Add("PLATFORM_CAN_SUPPORT_EDITORONLY_DATA=0");
@@ -361,18 +355,13 @@ namespace UnrealBuildTool
 			CompileEnvironment.Definitions.Add("USE_NULL_RHI=0");
 
 			DirectoryReference NdkDir = new DirectoryReference(NDKPath);
-			CompileEnvironment.SystemIncludePaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/gnu-libstdc++/" + GccVersion + "/include"));
+			//CompileEnvironment.SystemIncludePaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/llvm-libc++/include"));
 
 			// the toolchain will actually filter these out
-			CompileEnvironment.SystemIncludePaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/gnu-libstdc++/" + GccVersion + "/libs/armeabi-v7a/include"));
-			CompileEnvironment.SystemIncludePaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/gnu-libstdc++/" + GccVersion + "/libs/arm64-v8a/include"));
-			CompileEnvironment.SystemIncludePaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/gnu-libstdc++/" + GccVersion + "/libs/x86/include"));
-			CompileEnvironment.SystemIncludePaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/gnu-libstdc++/" + GccVersion + "/libs/x86_64/include"));
-
-			LinkEnvironment.LibraryPaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/gnu-libstdc++/" + GccVersion + "/libs/armeabi-v7a"));
-			LinkEnvironment.LibraryPaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/gnu-libstdc++/" + GccVersion + "/libs/arm64-v8a"));
-			LinkEnvironment.LibraryPaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/gnu-libstdc++/" + GccVersion + "/libs/x86"));
-			LinkEnvironment.LibraryPaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/gnu-libstdc++/" + GccVersion + "/libs/x86_64"));
+			LinkEnvironment.LibraryPaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/llvm-libc++/libs/armeabi-v7a"));
+			LinkEnvironment.LibraryPaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/llvm-libc++/libs/arm64-v8a"));
+			LinkEnvironment.LibraryPaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/llvm-libc++/libs/x86"));
+			LinkEnvironment.LibraryPaths.Add(DirectoryReference.Combine(NdkDir, "sources/cxx-stl/llvm-libc++/libs/x86_64"));
 
 			CompileEnvironment.SystemIncludePaths.Add(DirectoryReference.Combine(NdkDir, "sources/android/native_app_glue"));
 			CompileEnvironment.SystemIncludePaths.Add(DirectoryReference.Combine(NdkDir, "sources/android/cpufeatures"));
@@ -413,13 +402,14 @@ namespace UnrealBuildTool
 
 			SetUpSpecificEnvironment(Target, CompileEnvironment, LinkEnvironment);
 
-			LinkEnvironment.AdditionalLibraries.Add("gnustl_shared");
-			LinkEnvironment.AdditionalLibraries.Add("gcc");
-			LinkEnvironment.AdditionalLibraries.Add("z");
+//			LinkEnvironment.AdditionalLibraries.Add("libc++_shared");
 			LinkEnvironment.AdditionalLibraries.Add("c");
-			LinkEnvironment.AdditionalLibraries.Add("m");
-			LinkEnvironment.AdditionalLibraries.Add("log");
 			LinkEnvironment.AdditionalLibraries.Add("dl");
+			LinkEnvironment.AdditionalLibraries.Add("log");
+			LinkEnvironment.AdditionalLibraries.Add("m");
+//			LinkEnvironment.AdditionalLibraries.Add("stdc++");
+			LinkEnvironment.AdditionalLibraries.Add("z");
+			LinkEnvironment.AdditionalLibraries.Add("atomic");
 		}
 
 		private bool UseTegraGraphicsDebugger(ReadOnlyTargetRules Target)
@@ -476,12 +466,12 @@ namespace UnrealBuildTool
 
 		protected override string GetRequiredSDKString()
 		{
-			return "-22";
+			return "-23";
 		}
 
 		protected override String GetRequiredScriptVersionString()
 		{
-			return "3.4";
+			return "3.6";
 		}
 
 		// prefer auto sdk on android as correct 'manual' sdk detection isn't great at the moment.
@@ -609,11 +599,7 @@ namespace UnrealBuildTool
 			NDKPath = NDKPath.Replace("\"", "");
 
 			// need a supported llvm
-			if (!Directory.Exists(Path.Combine(NDKPath, @"toolchains/llvm")) &&
-				!Directory.Exists(Path.Combine(NDKPath, @"toolchains/llvm-3.6")) &&
-				!Directory.Exists(Path.Combine(NDKPath, @"toolchains/llvm-3.5")) &&
-				!Directory.Exists(Path.Combine(NDKPath, @"toolchains/llvm-3.3")) &&
-				!Directory.Exists(Path.Combine(NDKPath, @"toolchains/llvm-3.1")))
+			if (!Directory.Exists(Path.Combine(NDKPath, @"toolchains/llvm")))
 			{
 				return false;
 			}
@@ -649,24 +635,9 @@ namespace UnrealBuildTool
 			AndroidPlatformSDK SDK = new AndroidPlatformSDK();
 			SDK.ManageAndValidateSDK();
 
-			if ((ProjectFileGenerator.bGenerateProjectFiles == true) || (SDK.HasRequiredSDKsInstalled() == SDKStatus.Valid) || Environment.GetEnvironmentVariable("IsBuildMachine") == "1")
-			{
-				bool bRegisterBuildPlatform = true;
-
-				FileReference AndroidTargetPlatformFile = FileReference.Combine(UnrealBuildTool.EngineSourceDirectory, "Developer", "Android", "AndroidTargetPlatform", "AndroidTargetPlatform.Build.cs");
-				if (FileReference.Exists(AndroidTargetPlatformFile) == false)
-				{
-					bRegisterBuildPlatform = false;
-				}
-
-				if (bRegisterBuildPlatform == true)
-				{
-					// Register this build platform
-					Log.TraceVerbose("        Registering for {0}", UnrealTargetPlatform.Android.ToString());
-					UEBuildPlatform.RegisterBuildPlatform(new AndroidPlatform(SDK));
-					UEBuildPlatform.RegisterPlatformWithGroup(UnrealTargetPlatform.Android, UnrealPlatformGroup.Android);
-				}
-			}
+			// Register this build platform
+			UEBuildPlatform.RegisterBuildPlatform(new AndroidPlatform(SDK));
+			UEBuildPlatform.RegisterPlatformWithGroup(UnrealTargetPlatform.Android, UnrealPlatformGroup.Android);
 		}
 	}
 }

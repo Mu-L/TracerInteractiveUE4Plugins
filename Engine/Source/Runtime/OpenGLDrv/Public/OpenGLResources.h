@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	OpenGLResources.h: OpenGL resource RHI definitions.
@@ -51,7 +51,7 @@ namespace OpenGLConsoleVariables
 	extern int32 bUseBufferDiscard;
 };
 
-#if PLATFORM_WINDOWS || PLATFORM_ANDROIDESDEFERRED || PLATFORM_LUMINGL4
+#if PLATFORM_WINDOWS || PLATFORM_LUMINGL4
 #define RESTRICT_SUBDATA_SIZE 1
 #else
 #define RESTRICT_SUBDATA_SIZE 0
@@ -1215,6 +1215,7 @@ public:
 		);
 
 	const TBitArray<>& GetTextureNeeds(int32& OutMaxTextureStageUsed);
+	const TBitArray<>& GetUAVNeeds(int32& OutMaxUAVUnitUsed) const;
 	void GetNumUniformBuffers(int32 NumVertexUniformBuffers[SF_Compute]);
 
 	bool NeedsTextureStage(int32 TextureStageIndex);
@@ -1353,10 +1354,6 @@ public:
 	{
 		return bIsAliased != 0;
 	}
-
-#if PLATFORM_ANDROIDESDEFERRED // Flithy hack to workaround radr://16011763
-	GLuint GetOpenGLFramebuffer(uint32 ArrayIndices, uint32 MipmapLevels);
-#endif
 
 	void AliasResources(FOpenGLTextureBase* Texture)
 	{
@@ -1837,7 +1834,8 @@ public:
 	FOpenGLUnorderedAccessView():
 		Resource(0),
 		BufferResource(0),
-		Format(0)
+		Format(0),
+		UnrealFormat(0)
 	{
 
 	}
@@ -1845,6 +1843,7 @@ public:
 	GLuint	Resource;
 	GLuint	BufferResource;
 	GLenum	Format;
+	uint8	UnrealFormat;
 
 	virtual uint32 GetBufferSize()
 	{
@@ -2088,7 +2087,7 @@ private:
 // Fences
 
 // Note that Poll() and WriteInternal() will stall the RHI thread if one is present.
-class FOpenGLGPUFence : public FRHIGPUFence
+class FOpenGLGPUFence final : public FRHIGPUFence
 {
 public:
 	FOpenGLGPUFence(FName InName)
@@ -2096,10 +2095,10 @@ public:
 		, bValidSync(false)
 	{}
 
-	virtual ~FOpenGLGPUFence() final override;
+	~FOpenGLGPUFence() override;
 
-	virtual void Clear() final override;
-	virtual bool Poll() const final override;
+	void Clear() override;
+	bool Poll() const override;
 	
 	void WriteInternal();
 private:
@@ -2108,7 +2107,7 @@ private:
 	bool bValidSync;
 };
 
-class FOpenGLStagingBuffer : public FRHIStagingBuffer
+class FOpenGLStagingBuffer final : public FRHIStagingBuffer
 {
 	friend class FOpenGLDynamicRHI;
 public:
@@ -2117,13 +2116,13 @@ public:
 		Initialize();
 	}
 
-	virtual ~FOpenGLStagingBuffer() final override;
+	~FOpenGLStagingBuffer() override;
 
 	// Locks the shadow of VertexBuffer for read. This will stall the RHI thread.
-	virtual void *Lock(uint32 Offset, uint32 NumBytes) final override;
+	void *Lock(uint32 Offset, uint32 NumBytes) override;
 
 	// Unlocks the shadow. This is an error if it was not locked previously.
-	virtual void Unlock() final override;
+	void Unlock() override;
 private:
 	void Initialize();
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Animation/AnimSequenceBase.h"
 #include "AnimationUtils.h"
@@ -12,7 +12,7 @@
 #include "UObject/FortniteMainBranchObjectVersion.h"
 
 DEFINE_LOG_CATEGORY(LogAnimMarkerSync);
-CSV_DECLARE_CATEGORY_EXTERN(Animation);
+CSV_DECLARE_CATEGORY_MODULE_EXTERN(ENGINE_API, Animation);
 
 #define LOCTEXT_NAMESPACE "AnimSequenceBase"
 /////////////////////////////////////////////////////
@@ -437,31 +437,31 @@ void UAnimSequenceBase::RefreshCacheData()
 		// Handle busted track indices
 		if (!AnimNotifyTracks.IsValidIndex(Notify.TrackIndex))
 		{
-			// This really shouldn't happen, but try to handle it
-			ensureMsgf(0, TEXT("AnimNotifyTrack: Anim (%s) has notify (%s) with track index (%i) that does not exist"), *GetFullName(), *Notify.NotifyName.ToString(), Notify.TrackIndex);
+			// This really shouldn't happen (unless we are a cooked asset), but try to handle it
+			ensureMsgf(GetOutermost()->bIsCookedForEditor, TEXT("AnimNotifyTrack: Anim (%s) has notify (%s) with track index (%i) that does not exist"), *GetFullName(), *Notify.NotifyName.ToString(), Notify.TrackIndex);
 
 			// Don't create lots of extra tracks if we are way off supporting this track
 			if (Notify.TrackIndex < 0 || Notify.TrackIndex > 20)
 			{
 				Notify.TrackIndex = 0;
 			}
-			else
+
+			while (!AnimNotifyTracks.IsValidIndex(Notify.TrackIndex))
 			{
-				while (!AnimNotifyTracks.IsValidIndex(Notify.TrackIndex))
-				{
-					AddNewTrack(AnimNotifyTracks);
-				}
+				AddNewTrack(AnimNotifyTracks);
 			}
 		}
 
 		// Handle overlapping notifies
 		FAnimNotifyTrack* TrackToUse = nullptr;
+		int32 TrackIndexToUse = INDEX_NONE;
 		for (int32 TrackOffset = 0; TrackOffset < AnimNotifyTracks.Num(); ++TrackOffset)
 		{
 			const int32 TrackIndex = (Notify.TrackIndex + TrackOffset) % AnimNotifyTracks.Num();
 			if (CanNotifyUseTrack(AnimNotifyTracks[TrackIndex], Notify))
 			{
 				TrackToUse = &AnimNotifyTracks[TrackIndex];
+				TrackIndexToUse = TrackIndex;
 				break;
 			}
 		}
@@ -469,10 +469,13 @@ void UAnimSequenceBase::RefreshCacheData()
 		if (TrackToUse == nullptr)
 		{
 			TrackToUse = &AddNewTrack(AnimNotifyTracks);
+			TrackIndexToUse = AnimNotifyTracks.Num() - 1;
 		}
 
 		check(TrackToUse);
+		check(TrackIndexToUse != INDEX_NONE);
 
+		Notify.TrackIndex = TrackIndexToUse;
 		TrackToUse->Notifies.Add(&Notify);
 	}
 
@@ -522,7 +525,7 @@ int32 UAnimSequenceBase::GetNumberOfFrames() const
 {
 	static float DefaultSampleRateInterval = 1.f / DEFAULT_SAMPLERATE;
 	// because of float error, add small margin at the end, so it can clamp correctly
-	return (SequenceLength / DefaultSampleRateInterval + KINDA_SMALL_NUMBER);
+	return (int32)(SequenceLength / DefaultSampleRateInterval + KINDA_SMALL_NUMBER) + 1;
 }
 
 #if WITH_EDITOR
@@ -623,7 +626,7 @@ void UAnimSequenceBase::GetAssetRegistryTags(TArray<FAssetRegistryTag>& OutTags)
 	OutTags.Add(FAssetRegistryTag(USkeleton::CurveNameTag, CurveNameList, FAssetRegistryTag::TT_Hidden));
 }
 
-uint8* UAnimSequenceBase::FindNotifyPropertyData(int32 NotifyIndex, UArrayProperty*& ArrayProperty)
+uint8* UAnimSequenceBase::FindNotifyPropertyData(int32 NotifyIndex, FArrayProperty*& ArrayProperty)
 {
 	// initialize to NULL
 	ArrayProperty = NULL;
@@ -635,19 +638,19 @@ uint8* UAnimSequenceBase::FindNotifyPropertyData(int32 NotifyIndex, UArrayProper
 	return NULL;
 }
 
-uint8* UAnimSequenceBase::FindArrayProperty(const TCHAR* PropName, UArrayProperty*& ArrayProperty, int32 ArrayIndex)
+uint8* UAnimSequenceBase::FindArrayProperty(const TCHAR* PropName, FArrayProperty*& ArrayProperty, int32 ArrayIndex)
 {
 	// find Notifies property start point
-	UProperty* Property = FindField<UProperty>(GetClass(), PropName);
+	FProperty* Property = FindFProperty<FProperty>(GetClass(), PropName);
 
 	// found it and if it is array
-	if (Property && Property->IsA(UArrayProperty::StaticClass()))
+	if (Property && Property->IsA(FArrayProperty::StaticClass()))
 	{
 		// find Property Value from UObject we got
 		uint8* PropertyValue = Property->ContainerPtrToValuePtr<uint8>(this);
 
 		// it is array, so now get ArrayHelper and find the raw ptr of the data
-		ArrayProperty = CastChecked<UArrayProperty>(Property);
+		ArrayProperty = CastFieldChecked<FArrayProperty>(Property);
 		FScriptArrayHelper ArrayHelper(ArrayProperty, PropertyValue);
 
 		if (ArrayProperty->Inner && ArrayIndex < ArrayHelper.Num())

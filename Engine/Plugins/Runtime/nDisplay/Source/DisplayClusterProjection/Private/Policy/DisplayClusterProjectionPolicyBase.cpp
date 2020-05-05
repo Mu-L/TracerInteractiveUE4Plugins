@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Policy/DisplayClusterProjectionPolicyBase.h"
 
@@ -25,6 +25,9 @@ FDisplayClusterProjectionPolicyBase::~FDisplayClusterProjectionPolicyBase()
 void FDisplayClusterProjectionPolicyBase::InitializeOriginComponent(const FString& OriginCompId)
 {
 	UE_LOG(LogDisplayClusterProjection, Log, TEXT("Looking for an origin component '%s'..."), *OriginCompId);
+
+	// Reset previous one
+	PolicyOriginComp = nullptr;
 
 	IDisplayClusterGameManager* const GameMgr = IDisplayCluster::Get().GetGameMgr();
 	if (!GameMgr)

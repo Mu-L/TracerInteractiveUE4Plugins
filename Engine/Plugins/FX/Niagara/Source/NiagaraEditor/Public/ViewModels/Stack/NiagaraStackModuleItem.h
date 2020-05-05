@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -13,6 +13,8 @@ class UNiagaraStackModuleItemOutputCollection;
 class UNiagaraScript;
 class INiagaraStackItemGroupAddUtilities;
 struct FAssetData;
+class UNiagaraClipboardFunctionInput;
+class INiagaraMessage;
 
 UCLASS()
 class NIAGARAEDITOR_API UNiagaraStackModuleItem : public UNiagaraStackItem
@@ -20,6 +22,8 @@ class NIAGARAEDITOR_API UNiagaraStackModuleItem : public UNiagaraStackItem
 	GENERATED_BODY()
 
 public:
+	DECLARE_DELEGATE_OneParam(FOnRequestDeprecationRecommended, UNiagaraStackModuleItem*);
+
 	UNiagaraStackModuleItem();
 
 	UNiagaraNodeFunctionCall& GetModuleNode() const;
@@ -36,11 +40,13 @@ public:
 	bool CanRefresh() const;
 	void Refresh();
 
+	virtual bool SupportsRename() const override { return true; }
+
 	virtual bool SupportsChangeEnabled() const override { return true; }
 	virtual bool GetIsEnabled() const override;
 
-	virtual bool SupportsDelete() const override { return true; }
-	virtual bool TestCanDeleteWithMessage(FText& OutCanDeleteMessage) const override;
+	virtual bool SupportsHighlights() const override;
+	virtual const TArray<FNiagaraScriptHighlight>& GetHighlights() const override;
 
 	int32 GetModuleIndex() const;
 	
@@ -64,9 +70,45 @@ public:
 	/** Reassigns the function script for the module without resetting the inputs. */
 	void ReassignModuleScript(UNiagaraScript* ModuleScript);
 
+	void SetInputValuesFromClipboardFunctionInputs(const TArray<const UNiagaraClipboardFunctionInput*>& ClipboardFunctionInputs);
+
+	virtual bool SupportsCut() const override { return true; }
+	virtual bool TestCanCutWithMessage(FText& OutMessage) const override;
+	virtual FText GetCutTransactionText() const override;
+	virtual void CopyForCut(UNiagaraClipboardContent* ClipboardContent) const override;
+	virtual void RemoveForCut() override;
+
+	virtual bool SupportsCopy() const override { return true; }
+	virtual bool TestCanCopyWithMessage(FText& OutMessage) const override;
+	virtual void Copy(UNiagaraClipboardContent* ClipboardContent) const override;
+
+	virtual bool SupportsPaste() const override { return true; }
+	virtual bool TestCanPasteWithMessage(const UNiagaraClipboardContent* ClipboardContent, FText& OutMessage) const override;
+	virtual FText GetPasteTransactionText(const UNiagaraClipboardContent* ClipboardContent) const override;
+	virtual void Paste(const UNiagaraClipboardContent* ClipboardContent, FText& OutPasteWarning) override;
+
+	virtual bool SupportsDelete() const override { return true; }
+	virtual bool TestCanDeleteWithMessage(FText& OutCanDeleteMessage) const override;
+	virtual FText GetDeleteTransactionText() const override;
+	virtual void Delete() override;
+
+	bool IsScratchModule() const;
+
+	void SetOnRequestDeprecationRecommended(FOnRequestDeprecationRecommended InOnRequest)
+	{
+		DeprecationDelegate = InOnRequest;
+	}
+
+	void SetEnabled(bool bEnabled)
+	{
+		SetIsEnabledInternal(bEnabled);
+	}
+
 protected:
+	FOnRequestDeprecationRecommended DeprecationDelegate;
+
+	virtual void FinalizeInternal() override;
 	virtual void RefreshChildrenInternal(const TArray<UNiagaraStackEntry*>& CurrentChildren, TArray<UNiagaraStackEntry*>& NewChildren, TArray<FStackIssue>& NewIssues) override;
-	virtual void DeleteInternal() override;
 	virtual void SetIsEnabledInternal(bool bInIsEnabled) override;
 
 	virtual TOptional<FDropRequestResponse> CanDropInternal(const FDropRequest& DropRequest) override;
@@ -78,9 +120,8 @@ private:
 	bool FilterLinkedInputCollection(const UNiagaraStackEntry& Child) const;
 	bool FilterLinkedInputCollectionChild(const UNiagaraStackEntry& Child) const;
 	void RefreshIssues(TArray<FStackIssue>& NewIssues);
-
-private:
 	void RefreshIsEnabled();
+	void OnMessageManagerRefresh(const FGuid& MessageJobBatchAssetKey, const TArray<TSharedRef<const INiagaraMessage>> NewMessages);
 
 private:
 	UNiagaraNodeOutput* OutputNode;
@@ -99,6 +140,8 @@ private:
 	UNiagaraStackModuleItemOutputCollection* OutputCollection;
 
 	INiagaraStackItemGroupAddUtilities* GroupAddUtilities;
+
+	mutable TOptional<bool> bIsScratchModuleCache;
 
 	bool bIsModuleScriptReassignmentPending;
 };

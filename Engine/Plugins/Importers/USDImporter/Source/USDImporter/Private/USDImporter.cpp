@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "USDImporter.h"
 
@@ -25,10 +25,12 @@
 #include "Widgets/Layout/SUniformGridPanel.h"
 
 #include "PropertySetter.h"
+#include "USDErrorUtils.h"
 #include "USDImportOptions.h"
 #include "USDImporterProjectSettings.h"
-#include "USDPrimResolverKind.h"
+#include "USDLog.h"
 #include "USDMemory.h"
+#include "USDPrimResolverKind.h"
 #include "USDSceneImportFactory.h"
 #include "USDTypesConversion.h"
 
@@ -44,8 +46,6 @@
 #endif // #if USE_USD_SDK
 
 #define LOCTEXT_NAMESPACE "USDImportPlugin"
-
-DEFINE_LOG_CATEGORY(LogUSDImport);
 
 
 class SUSDOptionsWindow : public SCompoundWidget
@@ -300,7 +300,7 @@ TArray<UObject*> UUSDImporter::ImportMeshes(FUsdImportContext& ImportContext, co
 			}
 
 			NewPackageName = UPackageTools::SanitizePackageName(FinalPackagePathName);
-		
+
 			// Once we've already imported it we dont need to import it again
 			if(!ImportContext.PathToImportAssetMap.Contains(NewPackageName))
 			{
@@ -487,13 +487,16 @@ TUsdStore< pxr::UsdStageRefPtr > UUSDImporter::ReadUsdFile(FUsdImportContext& Im
 	FilePath = FPaths::GetPath(FilePath) + TEXT("/");
 	FString CleanFilename = FPaths::GetCleanFilename(Filename);
 
+	UsdUtils::StartMonitoringErrors();
+
 	TUsdStore< pxr::UsdStageRefPtr > Stage = UnrealUSDWrapper::OpenUsdStage(TCHAR_TO_ANSI(*FilePath), TCHAR_TO_ANSI(*CleanFilename));
 
-	const char* Errors = UnrealUSDWrapper::GetErrors();
-	if (Errors)
+	TArray<FString> ErrorStrings = UsdUtils::GetErrorsAndStopMonitoring();
+	FString Error = FString::Join(ErrorStrings, TEXT("\n"));
+
+	if (!Error.IsEmpty())
 	{
-		FString ErrorStr = UsdToUnreal::ConvertString(Errors);
-		ImportContext.AddErrorMessage(EMessageSeverity::Error, FText::Format(LOCTEXT("CouldNotImportUSDFile", "Could not import USD file {0}\n {1}"), FText::FromString(CleanFilename), FText::FromString(ErrorStr)));
+		ImportContext.AddErrorMessage(EMessageSeverity::Error, FText::Format(LOCTEXT("CouldNotImportUSDFile", "Could not import USD file {0}\n {1}"), FText::FromString(CleanFilename), FText::FromString(Error)));
 	}
 	return Stage;
 }
@@ -505,7 +508,7 @@ void UUSDImporter::ImportUsdStage( FUSDSceneImportContext& ImportContext )
 	if ( ImportContext.Stage.Get() && ImportOptions )
 	{
 		UUSDPrimResolver* PrimResolver = ImportContext.PrimResolver;
-		
+
 		EExistingActorPolicy ExistingActorPolicy = ImportOptions->ExistingActorPolicy;
 
 		TArray<FActorSpawnData> SpawnDatas;
@@ -591,7 +594,7 @@ void FUSDSceneImportContext::Init(UObject* InParent, const FString& InName, cons
 void FUsdImportContext::AddErrorMessage(EMessageSeverity::Type MessageSeverity, FText ErrorMessage)
 {
 	TokenizedErrorMessages.Add(FTokenizedMessage::Create(MessageSeverity, ErrorMessage));
-	UE_LOG(LogUSDImport, Error, TEXT("%s"), *ErrorMessage.ToString());
+	UE_LOG(LogUsd, Error, TEXT("%s"), *ErrorMessage.ToString());
 }
 
 void FUsdImportContext::DisplayErrorMessages(bool bAutomated)
@@ -615,7 +618,7 @@ void FUsdImportContext::DisplayErrorMessages(bool bAutomated)
 	{
 		for (const TSharedRef<FTokenizedMessage>& Message : TokenizedErrorMessages)
 		{
-			UE_LOG(LogUSDImport, Error, TEXT("%s"), *Message->ToText().ToString());
+			UE_LOG(LogUsd, Error, TEXT("%s"), *Message->ToText().ToString());
 		}
 	}
 }

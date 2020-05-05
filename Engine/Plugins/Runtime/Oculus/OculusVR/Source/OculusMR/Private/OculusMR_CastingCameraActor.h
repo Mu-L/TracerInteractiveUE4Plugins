@@ -1,10 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "UObject/ObjectMacros.h"
 #include "Engine/SceneCapture2D.h"
 #include "AudioResampler.h"
-#include "OVR_Plugin_Types.h"
+#include "OculusPluginWrapper.h"
 
 #include "OculusMR_CastingCameraActor.generated.h"
 

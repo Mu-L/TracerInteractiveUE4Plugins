@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -160,7 +160,6 @@ public:
 	 * Tell a MeshChangeTracker about the set of triangles that we might modify in the next remesh pass.
 	 * This could include one-rings of either side of an edge in the ROI, if we collapse.
 	 */
-
 	void SaveActiveROI(FDynamicMeshChangeTracker* Change)
 	{
 		for (int tid : TriangleROI)

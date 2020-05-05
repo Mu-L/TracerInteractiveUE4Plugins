@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -12,6 +12,7 @@
 #include "UObject/ObjectKey.h"
 
 struct FAssetData;
+struct FMinimalViewInfo;
 class FCanvas;
 class FDragTool;
 class HModel;
@@ -119,7 +120,6 @@ private:
 	TMap<UPackage*, bool> InitialPackageDirtyStates;
 	
 };
-
 
 /** */
 class UNREALED_API FLevelEditorViewportClient : public FEditorViewportClient
@@ -539,6 +539,8 @@ public:
 	 */
 	static UObject* GetOrCreateMaterialFromTexture( UTexture* UnrealTexture );
 
+	virtual bool UseAppTime() const override { return false; }
+
 protected:
 	/**
 	* Sets the state of creating a preview actor in the viewport.
@@ -748,6 +750,7 @@ public:
 
 	/** When enabled, the Unreal transform widget will become visible after an actor is selected, even if it was turned off via a show flag */
 	bool bAlwaysShowModeWidgetAfterSelectionChanges;
+
 private:
 	/** The actors that are currently being placed in the viewport via dragging */
 	static TArray< TWeakObjectPtr< AActor > > DropPreviewActors;
@@ -789,5 +792,8 @@ private:
 	/** Stores the previous frame's value of bEditorCameraCut in order to reset it back to false on the next frame */
 	bool					bWasEditorCameraCut;
 
-	bool bApplyCameraSpeedScaleByDistance;
+	bool					bApplyCameraSpeedScaleByDistance;
+
+	/** Handle to a timer event raised in ::ReceivedFocus*/
+	FTimerHandle			FocusTimerHandle;
 };

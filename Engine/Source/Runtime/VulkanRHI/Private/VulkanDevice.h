@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved..
+// Copyright Epic Games, Inc. All Rights Reserved..
 
 /*=============================================================================
 	VulkanDevice.h: Private Vulkan RHI definitions.
@@ -44,13 +44,15 @@ struct FOptionalVulkanDeviceExtensions
 			uint32 HasMemoryPriority : 1;
 			uint32 HasDriverProperties : 1;
 			uint32 HasEXTFragmentDensityMap : 1;
+			uint32 HasEXTFullscreenExclusive : 1;
+			uint32 HasKHRImageFormatList : 1;
 		};
 		uint32 Packed;
 	};
 
 	FOptionalVulkanDeviceExtensions()
 	{
-		static_assert(sizeof(Packed) == sizeof(FOptionalVulkanDeviceExtensions), "More bits needed!");
+		static_assert(sizeof(Packed) == sizeof(FOptionalVulkanDeviceExtensions), "More bits needed for Packed!");
 		Packed = 0;
 	}
 
@@ -451,4 +453,5 @@ private:
 
 	class FVulkanPipelineStateCacheManager* PipelineStateCache;
 	friend class FVulkanDynamicRHI;
+	friend class FVulkanRHIGraphicsPipelineState;
 };

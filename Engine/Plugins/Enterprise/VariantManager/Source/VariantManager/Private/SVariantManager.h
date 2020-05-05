@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -146,10 +146,12 @@ public:
 
 	void SwitchOnSelectedVariant();
 	void CreateThumbnail();
+	void LoadThumbnail();
 	void ClearThumbnail();
 
 	bool CanSwitchOnVariant();
 	bool CanCreateThumbnail();
+	bool CanLoadThumbnail();
 	bool CanClearThumbnail();
 
 	void CaptureNewPropertiesFromSelectedActors();
@@ -157,6 +159,9 @@ public:
 
 	void AddFunctionCaller();
 	bool CanAddFunctionCaller();
+
+	void RebindToSelectedActor();
+	bool CanRebindToSelectedActor();
 
 	void RemoveActorBindings();
 	bool CanRemoveActorBindings();
@@ -174,6 +179,8 @@ public:
 	bool CanRemoveDirectorFunctionCaller();
 
 	void SwitchOnVariant(UVariant* Variant);
+
+	void GetSelectedBindingAndEditorActor(UVariantObjectBinding*& OutSelectedBinding, UObject*& OutSelectedObject);
 
 	// Sorts display nodes based on their order on the screen
 	// Can be used to sort selected nodes
@@ -214,6 +221,7 @@ public:
 	virtual void OnFocusChanging( const FWeakWidgetPath& PreviousFocusPath, const FWidgetPath& NewWidgetPath, const FFocusEvent& InFocusEvent ) override;
 
 	FReply OnAddVariantSetClicked();
+	FReply OnSummonAddActorMenu();
 
 	// Callbacks for ColumnSizeData
 	float OnGetLeftColumnWidth() const { return 1.0f - RightPropertyColumnWidth; }
@@ -222,10 +230,13 @@ public:
 
 	void OnObjectTransacted(UObject* Object, const class FTransactionObjectEvent& Event);
 	void OnObjectPropertyChanged(UObject* Object, struct FPropertyChangedEvent& Event);
+	void OnPreObjectPropertyChanged(UObject* Object, const class FEditPropertyChain& PropChain);
 	void OnPieEvent(bool bIsSimulating);
+	void OnEditorSelectionChanged(UObject* NewSelection);
+
+	void ReorderPropertyNodes(const TArray<TSharedPtr<FVariantManagerPropertyNode>>& TheseNodes, TSharedPtr<FVariantManagerPropertyNode> Pivot, EItemDropZone RelativePosition);
 
 private:
-
 	TWeakPtr<FVariantManager> VariantManagerPtr;
 
 	TSharedPtr<SVariantManagerNodeTreeView> NodeTreeView;
@@ -259,12 +270,30 @@ private:
 	FDelegateHandle OnBlueprintCompiledHandle;
 	FDelegateHandle OnMapChangedHandle;
 	FDelegateHandle OnObjectPropertyChangedHandle;
+	FDelegateHandle OnPreObjectPropertyChangedHandle;
 	FDelegateHandle OnBeginPieHandle;
 	FDelegateHandle OnEndPieHandle;
+	FDelegateHandle OnEditorSelectionChangedHandle;
 
 	// We keep track of this to remember splitter values between loads
 	TSharedPtr<SSplitter> MainSplitter;
-	
+
 	// TODO: Make separate VariantManagerStyle
 	TSharedPtr<FSlateImageBrush> RecordButtonBrush;
+
+	struct FCachedPropertyPath
+	{
+		UObject* Object;
+		FProperty* ParentProperty;
+		FProperty* ChildProperty;
+		AActor* TargetActor;
+		FString Path;
+	};
+
+	// Structures used to optimize construction and usage of property paths related to auto-expose,
+	// as we must use the pre- and post-property-changed events in combination
+	TMap<int32, SVariantManager::FCachedPropertyPath> CachedPropertyPaths;
+	TArray<SVariantManager::FCachedPropertyPath> CachedPropertyPathStack;
+
+	bool bRespondToEditorSelectionEvents = true;
 };

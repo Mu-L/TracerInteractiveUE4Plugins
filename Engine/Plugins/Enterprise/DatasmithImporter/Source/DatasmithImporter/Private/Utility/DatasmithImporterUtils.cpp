@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Utility/DatasmithImporterUtils.h"
 
@@ -53,6 +53,7 @@
 #include "LevelSequence.h"
 #include "Lightmass/LightmassPortal.h"
 #include "Logging/TokenizedMessage.h"
+#include "Materials/MaterialInstanceConstant.h"
 #include "MessageLogModule.h"
 #include "Modules/ModuleManager.h"
 #include "Misc/SecureHash.h"
@@ -156,7 +157,7 @@ TArray< ADatasmithSceneActor* > FDatasmithImporterUtils::FindSceneActors( UWorld
 		return TArray< ADatasmithSceneActor* >();
 	}
 
-	auto IsValidSceneActor = [DatasmithScene]( AActor* Actor )
+	auto IsValidSceneActor = [DatasmithScene, World]( AActor* Actor )
 	{
 		ADatasmithSceneActor* NullSceneActor = nullptr;
 
@@ -171,7 +172,8 @@ TArray< ADatasmithSceneActor* > FDatasmithImporterUtils::FindSceneActors( UWorld
 			{
 				if( ADatasmithSceneActor* SceneActor = Cast< ADatasmithSceneActor >( Actor ) )
 				{
-					return SceneActor->Scene == DatasmithScene ? SceneActor : NullSceneActor;
+					// A scene can be used by multiple loaded levels. Only the SceneActors of the current level are valid
+					return (SceneActor->Scene == DatasmithScene && SceneActor->GetLevel() == World->GetCurrentLevel()) ? SceneActor : NullSceneActor;
 				}
 
 				return NullSceneActor;
@@ -403,6 +405,37 @@ void FDatasmithImporterUtils::AddUniqueLayersToWorld(UWorld* World, const TSet< 
 
 bool FDatasmithImporterUtils::CanCreateAsset(const FString& AssetPathName, const UClass* AssetClass, FText& OutFailReason)
 {
+	switch(CanCreateAsset(AssetPathName, AssetClass))
+	{
+		case EAssetCreationStatus::CS_HasRedirector:
+		{
+			OutFailReason = FText::Format(LOCTEXT("FoundRedirectionForAsset", "Found redirection for asset {0}. Skipping this asset ..."), FText::FromString(AssetPathName));
+			return false;
+		}
+
+		case EAssetCreationStatus::CS_ClassMismatch:
+		{
+			IAssetRegistry& AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+			const FAssetData AssetData = AssetRegistry.GetAssetByObjectPath(*AssetPathName);
+
+			const FString FoundClassName(AssetData.GetClass()->GetFName().ToString());
+			const FString ExpectedClassName(AssetClass->GetFName().ToString());
+			OutFailReason = FText::Format(LOCTEXT("AssetClassMismatch", "Found asset {0} of class {1} instead of class {2}. Skipping this asset ..."), FText::FromString(AssetPathName), FText::FromString(FoundClassName), FText::FromString(ExpectedClassName) );
+			return false;
+		}
+
+		case EAssetCreationStatus::CS_CanCreate:
+		default:
+		{
+			break;
+		}
+	}
+
+	return true;
+}
+
+FDatasmithImporterUtils::EAssetCreationStatus FDatasmithImporterUtils::CanCreateAsset(const FString& AssetPathName, const UClass* AssetClass)
+{
 	IAssetRegistry& AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 
 	const FAssetData AssetData = AssetRegistry.GetAssetByObjectPath(*AssetPathName);
@@ -410,25 +443,21 @@ bool FDatasmithImporterUtils::CanCreateAsset(const FString& AssetPathName, const
 	// Asset does not exist yet. Safe to import
 	if (!AssetData.IsValid())
 	{
-		return true;
+		return EAssetCreationStatus::CS_CanCreate;
 	}
 
 	// Warn and skip import of asset since it is an object redirection
 	if (AssetData.IsRedirector())
 	{
-		OutFailReason = FText::Format(LOCTEXT("FoundRedirectionForAsset", "Found redirection for asset {0}. Skipping this asset ..."), FText::FromString(AssetPathName));
-		return false;
+		return EAssetCreationStatus::CS_HasRedirector;
 	}
 	// Warn and skip re-import of asset since it is not of the expected class
 	else if (!AssetData.GetClass()->IsChildOf(AssetClass))
 	{
-		const FString FoundClassName(AssetData.GetClass()->GetFName().ToString());
-		const FString ExpectedClassName(AssetClass->GetFName().ToString());
-		OutFailReason = FText::Format(LOCTEXT("AssetClassMismatch", "Found asset {0} of class {1} instead of class {2}. Skipping this asset ..."), FText::FromString(AssetPathName), FText::FromString(FoundClassName), FText::FromString(ExpectedClassName) );
-		return false;
+		return EAssetCreationStatus::CS_ClassMismatch;
 	}
 
-	return true;
+	return EAssetCreationStatus::CS_CanCreate;
 }
 
 UDatasmithScene* FDatasmithImporterUtils::FindDatasmithSceneForAsset( UObject* Asset )
@@ -1015,6 +1044,153 @@ TArray<TSharedPtr<IDatasmithBaseMaterialElement>> FDatasmithImporterUtils::GetOr
 	return ReferencedMaterials;
 }
 
+FDatasmithImporterUtils::FDatasmithMaterialImportIterator::FDatasmithMaterialImportIterator(const FDatasmithImportContext& InImportContext)
+	: ImportContext(InImportContext),
+	CurrentIndex(0)
+{
+	if (!ImportContext.bIsAReimport)
+	{
+		return;
+	}
+
+	SortedMaterials.Reserve(ImportContext.FilteredScene->GetMaterialsCount());
+	for (int32 MaterialIndex = 0; MaterialIndex < ImportContext.FilteredScene->GetMaterialsCount(); ++MaterialIndex)
+	{
+		SortedMaterials.Add(ImportContext.FilteredScene->GetMaterial(MaterialIndex));
+	}
+
+	SortedMaterials.Sort([this](TSharedPtr<IDatasmithBaseMaterialElement> MatA, TSharedPtr<IDatasmithBaseMaterialElement> MatB)
+	{
+		auto DoesParentWithSameNameExist = [this](TSharedPtr<IDatasmithBaseMaterialElement> Mat)
+		{
+			if (TSoftObjectPtr<UMaterialInterface>* MatInterface = ImportContext.SceneAsset->Materials.Find(Mat->GetName()))
+			{
+				if (UMaterialInstanceConstant* MaterialInstance = Cast< UMaterialInstanceConstant >(MatInterface->Get()))
+				{
+					return MaterialInstance->Parent && MaterialInstance->Parent->GetFName() == Mat->GetName();
+				}
+			}
+
+			return false;
+		};
+
+		//Materials that are already existing in the scene should be imported first otherwise we might create new parent materials instead of reusing the existing ones.
+		bool bMatAExists = DoesParentWithSameNameExist(MatA);
+		bool bMatBExists = DoesParentWithSameNameExist(MatB);
+
+		return bMatAExists && !bMatBExists;
+	});
+}
+
+FDatasmithImporterUtils::FDatasmithMaterialImportIterator& FDatasmithImporterUtils::FDatasmithMaterialImportIterator::operator++()
+{
+	++CurrentIndex;
+	return *this;
+}
+
+FDatasmithImporterUtils::FDatasmithMaterialImportIterator::operator bool() const
+{
+	if (ImportContext.bIsAReimport)
+	{
+		return CurrentIndex < SortedMaterials.Num();
+	}
+	else
+	{
+		return CurrentIndex < ImportContext.FilteredScene->GetMaterialsCount();
+	}
+}
+
+const TSharedPtr<IDatasmithBaseMaterialElement>& FDatasmithImporterUtils::FDatasmithMaterialImportIterator::Value() const
+{
+	if (ImportContext.bIsAReimport)
+	{
+		return SortedMaterials[CurrentIndex];
+	}
+	else
+	{
+		//We need to use a const IDatasmithScene to be able to use the const-ref version on GetMaterial().
+		const TSharedPtr<const IDatasmithScene>& DatasmithScene(ImportContext.FilteredScene);
+		return DatasmithScene->GetMaterial(CurrentIndex);
+	}
+}
+
+UObject* FDatasmithImporterUtils::StaticDuplicateObject(UObject* SourceObject, UObject* Outer, const FName Name)
+{
+	if (UStaticMesh* SourceMesh = Cast< UStaticMesh >(SourceObject))
+	{
+		const bool bIgnoreBulkData = false;
+		return DuplicateStaticMesh(SourceMesh, Outer, Name, bIgnoreBulkData);
+	}
+
+	// Duplicate is used only to move our object from its temporary package into its final package replacing any asset
+	// already at that location. This function also takes care of fixing internal dependencies among the object's children.
+	// Since Duplicate has some rather heavy consequence, like calling PostLoad and doing all kind of stuff on an object
+	// that is not even fully initialized yet, we might want to find an alternative way of moving our objects in future
+	// releases but keep it for the current release cycle.
+	return ::DuplicateObject< UObject >( SourceObject, Outer, Name );
+}
+
+UStaticMesh* FDatasmithImporterUtils::DuplicateStaticMesh(UStaticMesh* SourceStaticMesh, UObject* Outer, const FName Name, bool bIgnoreBulkData)
+{
+	TArray<FStaticMeshSourceModel> SourceModels;
+
+	// Since static mesh can be quite heavy, remove source models for cloning to reduce useless work.
+	// Will be reinserted on the new duplicated asset or restored on the SourceStaticMesh if bIgnoreBulkData is true.
+	SourceModels = MoveTemp(SourceStaticMesh->GetSourceModels());
+
+	// Temporary flag to skip Postload during DuplicateObject
+	SourceStaticMesh->SetFlags(RF_ArchetypeObject);
+
+	// Duplicate is used only to move our object from its temporary package into its final package replacing any asset
+	// already at that location. This function also takes care of fixing internal dependencies among the object's children.
+	// Since Duplicate has some rather heavy consequence, like calling PostLoad and doing all kind of stuff on an object
+	// that is not even fully initialized yet, we might want to find an alternative way of moving our objects in future
+	// releases but keep it for the current release cycle.
+	UStaticMesh* DuplicateMesh = ::DuplicateObject< UStaticMesh >(SourceStaticMesh, Outer, Name);
+
+	// Get rid of our temporary flag
+	SourceStaticMesh->ClearFlags(RF_ArchetypeObject);
+	DuplicateMesh->ClearFlags(RF_ArchetypeObject);
+
+	if (bIgnoreBulkData)
+	{
+		//We are not moving the source model bulk data, so we can simply copy the settings used in the DDC key.
+		//That way we also avoid marking the source mesh as pending kill.
+		for (FStaticMeshSourceModel& SourceModel : SourceModels)
+		{
+			FStaticMeshSourceModel& DuplicateSourceModel = DuplicateMesh->AddSourceModel();
+			DuplicateSourceModel.StaticMeshOwner = DuplicateMesh;
+
+			// Apply the SourceMesh settings to the duplicated SourceModels
+			DuplicateSourceModel.BuildSettings = SourceModel.BuildSettings;
+			DuplicateSourceModel.ReductionSettings = SourceModel.ReductionSettings;
+			DuplicateSourceModel.ScreenSize = SourceModel.ScreenSize;
+			DuplicateSourceModel.bImportWithBaseMesh = SourceModel.bImportWithBaseMesh;
+			DuplicateSourceModel.SourceImportFilename = SourceModel.SourceImportFilename;
+		}
+
+		// Move back the source models to the original mesh
+		SourceStaticMesh->GetSourceModels() = MoveTemp(SourceModels);
+	}
+	else
+	{
+		// The source mesh is stripped from it's source model, it is not buildable anymore.
+		// -> MarkPendingKill to avoid use-after-move crash in the StaticMesh::Build()
+		SourceStaticMesh->MarkPendingKill();
+
+		for (FStaticMeshSourceModel& SourceModel : SourceModels)
+		{
+			// Fixup the new SourceModels owner
+			SourceModel.StaticMeshOwner = DuplicateMesh;
+		}
+
+		// Apply source models to the duplicated mesh
+		DuplicateMesh->GetSourceModels() = MoveTemp(SourceModels);
+	}
+
+	return DuplicateMesh;
+}
+
 FScopedLogger::FScopedLogger(FName LogTitle, const FText& LogLabel)
 	: Title(LogTitle)
 	, MessageLogModule(FModuleManager::LoadModuleChecked<FMessageLogModule>("MessageLog"))
@@ -1031,7 +1207,7 @@ FScopedLogger::~FScopedLogger()
 TSharedRef<FTokenizedMessage> FScopedLogger::Push(EMessageSeverity::Type Severity, const FText& Message)
 {
 	TokenizedMessages.Add(FTokenizedMessage::Create(Severity, Message));
-	
+
 	return TokenizedMessages.Last();
 }
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // Port of geometry3Sharp IntrLine2Line2
 
@@ -126,7 +126,7 @@ public:
 		}
 		else if (Type == EIntersectionType::Line) 
 		{
-			Quantity = std::numeric_limits<int>::max();
+			Quantity = TNumericLimits<int32>::Max();
 		}
 		else 
 		{

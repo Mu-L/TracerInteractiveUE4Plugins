@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -330,9 +330,8 @@ struct FStaticMaterialLayersParameter : public FStaticParameterBase
 	
 	const ID GetID() const;
 
-	UMaterialFunctionInterface* GetParameterAssociatedFunction(const FMaterialParameterInfo& InParameterInfo) const;
-	void GetParameterAssociatedFunctions(const FMaterialParameterInfo& InParameterInfo, TArray<UMaterialFunctionInterface*>& AssociatedFunctions) const;
-	
+	UMaterialFunctionInterface* GetParameterAssociatedFunction(const FHashedMaterialParameterInfo& InParameterInfo) const;
+
 	void AppendKeyString(FString& InKeyString) const
 	{
 		InKeyString += ParameterInfo.ToString() + ExpressionGUID.ToString() + Value.GetStaticPermutationString();

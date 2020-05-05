@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "Misc/ConfigCacheIni.h"
@@ -100,6 +100,7 @@ namespace EditorViewButtonHelper
 				if (!AutomationParameters.ViewportClient->EngineShowFlags.VertexColors)
 				{
 					AutomationParameters.ViewportClient->EngineShowFlags.SetVertexColors(true);
+					AutomationParameters.ViewportClient->EngineShowFlags.SetPhysicalMaterialMasks(false);
 					AutomationParameters.ViewportClient->EngineShowFlags.SetLighting(false);
 					AutomationParameters.ViewportClient->EngineShowFlags.SetIndirectLightingCache(false);
 				}

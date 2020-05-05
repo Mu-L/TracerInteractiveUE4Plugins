@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -28,6 +28,15 @@ public:
 	virtual ~FDynamicMeshOperator()
 	{
 	}
+
+	/**
+	 * Set the output transform
+	 */
+	virtual void SetResultTransform(const FTransform3d& Transform)
+	{
+		ResultTransform = Transform;
+	}
+
 
 	/**
 	 * @return ownership of the internal mesh that CalculateResult() produced
@@ -65,7 +74,7 @@ class IDynamicMeshOperatorFactory
 public:
 	virtual ~IDynamicMeshOperatorFactory() {}
 
-	virtual TSharedPtr<FDynamicMeshOperator> MakeNewOperator() = 0;
+	virtual TUniquePtr<FDynamicMeshOperator> MakeNewOperator() = 0;
 };
 
 

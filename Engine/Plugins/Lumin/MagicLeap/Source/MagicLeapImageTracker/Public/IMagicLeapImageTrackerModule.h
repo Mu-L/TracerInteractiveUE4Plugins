@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -32,4 +32,11 @@ public:
 	{
 		return FModuleManager::Get().IsModuleLoaded("MagicLeapImageTracker");
 	}
+
+	virtual bool GetImageTrackerEnabled() const = 0;
+	virtual void SetImageTrackerEnabled(bool bEnabled) = 0;
+	virtual void SetTargetAsync(const struct FMagicLeapImageTrackerTarget& ImageTarget) = 0;
+	virtual void DestroyTracker() = 0;
+	virtual bool TryGetRelativeTransform(const FString& TargetName, FVector& OutLocation, FRotator& OutRotation) = 0;
+	virtual bool IsTracked(const FString& TargetName) const = 0;
 };

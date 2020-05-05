@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -406,6 +406,9 @@ protected:
 
 	/** The layout and scroll orientation of the list */
 	EOrientation Orientation = Orient_Vertical;
+
+	/** Passing over the clipping to SListPanel */
+	virtual void OnClippingChanged() override;
 
 protected:
 

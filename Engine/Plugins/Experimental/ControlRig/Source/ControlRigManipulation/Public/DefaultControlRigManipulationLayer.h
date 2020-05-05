@@ -1,15 +1,17 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "IControlRigManipulationLayer.h"
 #include "ControlRigGizmoActor.h"
 #include "Units/RigUnitContext.h"
+#include "ScopedTransaction.h"
 #include "DefaultControlRigManipulationLayer.generated.h"
 
 class IControlRigObjectBinding;
 typedef uint32 FControlID;
-
+enum class EControlRigSetKey : uint8;
+	
 // control ID, I should use ID for it
 struct FControlData
 {
@@ -62,16 +64,15 @@ public:
 	USkeletalMeshComponent* GetSkeletalMeshComponent() const;
 	FTransform	GetSkeletalMeshComponentTransform() const;
 
-	// Utility functions
-	void BeginTransaction();
-	void EndTransaction();
-
 	// in this layer, we only care one to one
 	const FControlData* GetControlDataFromGizmo(const AControlRigGizmoActor* GizmoActor) const;
 	// this is slow, and it only finds the first one, and there is no guarantee it will always find the same name if you run this multiple sessions.
 	// for example, if you have 2 control rigs (A and B for example) with same ControlName, it may find A or B
 	AControlRigGizmoActor* GetGizmoFromControlName(const FName& ControlName) const;
 	bool GetGlobalTransform(AControlRigGizmoActor* GizmoActor, const FName& ControlName, FTransform& OutTransform) const;
+
+	// multi delegate for anim system initialized
+	FSimpleMulticastDelegate OnAnimSystemInitialized;
 
 private:
 	// GizmoActor* to ControlData index
@@ -89,7 +90,10 @@ private:
 	UFUNCTION()
 	virtual void PostPoseUpdate();
 
-	void OnControlModified(IControlRigManipulatable* InManipulatable, const FRigControl& InControl);
+	UFUNCTION()
+	virtual void OnPoseInitialized();
+
+	void OnControlModified(IControlRigManipulatable* InManipulatable, const FRigControl& InControl, EControlRigSetKey InSetKey);
 	TArray<FDelegateHandle> ControlModifiedDelegateHandles;
 
 	void OnControlRigAdded(UControlRig* InControlRig);
@@ -100,4 +104,6 @@ private:
 	FDelegateHandle OnWorldCleanupHandle;
 	void OnWorldCleanup(UWorld* World, bool bSessionEnded, bool bCleanupResources);
 	UWorld* WorldPtr = nullptr;
+
+	FScopedTransaction* InteractionTransaction = nullptr;
 };

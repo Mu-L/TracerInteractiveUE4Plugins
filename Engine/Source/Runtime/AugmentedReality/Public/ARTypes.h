@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -169,6 +169,8 @@ enum class EARObjectClassification : uint8
 	World,
 	/** A closed mesh that was identified in the scene */
 	SceneObject,
+	/** A user's hand */
+	HandMesh,
 	// Add other types here...
 };
 
@@ -286,7 +288,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "AR AugmentedReality|Image Detection")
 	EARCandidateImageOrientation GetOrientation() const { return Orientation; }
 
-private:
+protected:
 #if WITH_EDITOR
 	/** Used to enforce physical sizes matching the aspect ratio of the images */
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
@@ -443,6 +445,11 @@ public:
 		, Height(InHeight)
 	{
 		
+	}
+
+	bool operator==(const FARVideoFormat& Other) const
+	{
+		return FPS == Other.FPS && Width == Other.Width && Height == Other.Height;
 	}
 	
 	/** The desired or supported number of frames per second for this video format */

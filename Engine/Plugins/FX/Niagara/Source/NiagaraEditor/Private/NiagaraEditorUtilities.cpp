@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraEditorUtilities.h"
 #include "NiagaraEditorModule.h"
@@ -8,7 +8,6 @@
 #include "NiagaraNodeParameterMapSet.h"
 #include "NiagaraDataInterface.h"
 #include "NiagaraComponent.h"
-#include "Modules/ModuleManager.h"
 #include "UObject/StructOnScope.h"
 #include "NiagaraGraph.h"
 #include "NiagaraSystem.h"
@@ -16,6 +15,7 @@
 #include "NiagaraScriptSource.h"
 #include "NiagaraScript.h"
 #include "NiagaraNodeOutput.h"
+#include "NiagaraOverviewNode.h"
 #include "EdGraphUtilities.h"
 #include "NiagaraConstants.h"
 #include "Widgets/SWidget.h"
@@ -27,6 +27,9 @@
 #include "EditorStyleSet.h"
 #include "ViewModels/NiagaraSystemViewModel.h"
 #include "ViewModels/NiagaraEmitterViewModel.h"
+#include "ViewModels/NiagaraEmitterHandleViewModel.h"
+#include "ViewModels/NiagaraOverviewGraphViewModel.h"
+#include "ViewModels/NiagaraSystemSelectionViewModel.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "AssetRegistryModule.h"
 #include "Misc/FeedbackContext.h"
@@ -41,6 +44,21 @@
 #include "NiagaraParameterMapHistory.h"
 #include "ScopedTransaction.h"
 #include "NiagaraStackEditorData.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "IContentBrowserSingleton.h"
+#include "ContentBrowserModule.h"
+#include "Modules/ModuleManager.h"
+#include "AssetToolsModule.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "Framework/Commands/GenericCommands.h"
+#include "UObject/TextProperty.h"
+#include "Editor/EditorEngine.h"
+#include "Widgets/Notifications/SNotificationList.h"
+#include "Styling/CoreStyle.h"
+#include "Framework/Notifications/NotificationManager.h"
+#include "NiagaraSimulationStageBase.h"
+#include "NiagaraEditorSettings.h"
+#include "Widgets/SNiagaraParameterName.h"
 
 #define LOCTEXT_NAMESPACE "FNiagaraEditorUtilities"
 
@@ -322,6 +340,293 @@ void FNiagaraEditorUtilities::WriteTextFileToDisk(FString SaveDirectory, FString
 	}
 }
 
+
+bool FNiagaraEditorUtilities::PODPropertyAppendCompileHash(const void* Container, FProperty* Property, const FString& PropertyName, FNiagaraCompileHashVisitor* InVisitor) 
+{
+	if (Property->IsA(FFloatProperty::StaticClass()))
+	{
+		FFloatProperty* CastProp = CastFieldChecked<FFloatProperty>(Property);
+		float Value = CastProp->GetPropertyValue_InContainer(Container, 0);
+		InVisitor->UpdatePOD(*PropertyName, Value);
+		return true;
+	}
+	else if (Property->IsA(FIntProperty::StaticClass()))
+	{
+		FIntProperty* CastProp = CastFieldChecked<FIntProperty>(Property);
+		int32 Value = CastProp->GetPropertyValue_InContainer(Container, 0);
+		InVisitor->UpdatePOD(*PropertyName, Value);
+		return true;
+	}
+	else if (Property->IsA(FInt16Property::StaticClass()))
+	{
+		FInt16Property* CastProp = CastFieldChecked<FInt16Property>(Property);
+		int16 Value = CastProp->GetPropertyValue_InContainer(Container, 0);
+		InVisitor->UpdatePOD(*PropertyName, Value);
+		return true;
+	}
+	else if (Property->IsA(FUInt32Property::StaticClass()))
+	{
+		FUInt32Property* CastProp = CastFieldChecked<FUInt32Property>(Property);
+		uint32 Value = CastProp->GetPropertyValue_InContainer(Container, 0);
+		InVisitor->UpdatePOD(*PropertyName, Value);
+		return true;
+	}
+	else if (Property->IsA(FUInt16Property::StaticClass()))
+	{
+		FUInt16Property* CastProp = CastFieldChecked<FUInt16Property>(Property);
+		uint16 Value = CastProp->GetPropertyValue_InContainer(Container, 0);
+		InVisitor->UpdatePOD(*PropertyName, Value);
+		return true;
+	}
+	else if (Property->IsA(FByteProperty::StaticClass()))
+	{
+		FByteProperty* CastProp = CastFieldChecked<FByteProperty>(Property);
+		uint8 Value = CastProp->GetPropertyValue_InContainer(Container, 0);
+		InVisitor->UpdatePOD(*PropertyName, Value);
+		return true;
+	}
+	else if (Property->IsA(FBoolProperty::StaticClass()))
+	{
+		FBoolProperty* CastProp = CastFieldChecked<FBoolProperty>(Property);
+		bool Value = CastProp->GetPropertyValue_InContainer(Container, 0);
+		InVisitor->UpdatePOD(*PropertyName, Value);
+		return true;
+	}
+	else if (Property->IsA(FNameProperty::StaticClass()))
+	{
+		FNameProperty* CastProp = CastFieldChecked<FNameProperty>(Property);
+		FName Value = CastProp->GetPropertyValue_InContainer(Container);
+		InVisitor->UpdateString(*PropertyName, Value.ToString());
+		return true;
+	}
+	else if (Property->IsA(FStrProperty::StaticClass()))
+	{
+		FStrProperty* CastProp = CastFieldChecked<FStrProperty>(Property);
+		FString Value = CastProp->GetPropertyValue_InContainer(Container);
+		InVisitor->UpdateString(*PropertyName, Value);
+		return true;
+	}
+	return false;
+}
+
+bool FNiagaraEditorUtilities::NestedPropertiesAppendCompileHash(const void* Container, const UStruct* Struct, EFieldIteratorFlags::SuperClassFlags IteratorFlags, const FString& BaseName, FNiagaraCompileHashVisitor* InVisitor) 
+{
+	// We special case FNiagaraTypeDefinitions here because they need to write out a lot more than just their standalone uproperties.
+	if (Struct == FNiagaraTypeDefinition::StaticStruct())
+	{
+		FNiagaraTypeDefinition* TypeDef = (FNiagaraTypeDefinition*)Container;
+		if (TypeDef)
+		{
+			TypeDef->AppendCompileHash(InVisitor);
+			return true;
+		}
+	}
+
+	TFieldIterator<FProperty> PropertyCountIt(Struct, IteratorFlags);
+	int32 NumProperties = 0;
+	for (; PropertyCountIt; ++PropertyCountIt)
+	{
+		NumProperties++;
+	}
+
+	for (TFieldIterator<FProperty> PropertyIt(Struct, IteratorFlags); PropertyIt; ++PropertyIt)
+	{
+		FProperty* Property = *PropertyIt;
+
+		static FName SkipMeta = TEXT("SkipForCompileHash");
+		if (Property->HasMetaData(SkipMeta))
+		{
+			continue;
+		}
+
+		FString PropertyName = (NumProperties == 1) ? (BaseName) : (BaseName + "." + Property->GetName());
+
+		if (PODPropertyAppendCompileHash(Container, Property, PropertyName, InVisitor))
+		{
+			continue;
+		}
+		else if (Property->IsA(FMapProperty::StaticClass()))
+		{
+			FMapProperty* CastProp = CastFieldChecked<FMapProperty>(Property);
+			FScriptMapHelper MapHelper(CastProp, CastProp->ContainerPtrToValuePtr<void>(Container));
+			InVisitor->UpdatePOD(*PropertyName, MapHelper.Num());
+			if (MapHelper.GetKeyProperty())
+			{
+				InVisitor->UpdateString(TEXT("KeyPathname"), MapHelper.GetKeyProperty()->GetPathName());
+				InVisitor->UpdateString(TEXT("ValuePathname"), MapHelper.GetValueProperty()->GetPathName());
+
+				// We currently only support maps with keys of FNames. Anything else should generate a warning.
+				if (MapHelper.GetKeyProperty()->GetClass() == FNameProperty::StaticClass())
+				{
+					// To be safe, let's gather up all the keys and sort them lexicographically so that this is stable across application runs.
+					TArray<FName> Names;
+					Names.AddUninitialized(MapHelper.Num());
+					for (int32 i = 0; i < MapHelper.Num(); i++)
+					{
+						FName* KeyPtr = (FName*)(MapHelper.GetKeyPtr(i));
+						if (KeyPtr)
+						{
+							Names[i] = *KeyPtr;
+						}
+						else
+						{
+							Names[i] = FName();
+							UE_LOG(LogNiagaraEditor, Warning, TEXT("Bad key in %s at %d"), *Property->GetName(), i);
+						}
+					}
+					// Sort stably over runs
+					Names.Sort(FNameLexicalLess());
+
+					// Now hash out the values directly.
+					// We support map values of POD types or map values of structs with POD types internally. Anything else we should generate a warning on.
+					if (MapHelper.GetValueProperty()->IsA(FStructProperty::StaticClass()))
+					{
+						bool bPassed = true;
+						FStructProperty* StructProp = CastFieldChecked<FStructProperty>(MapHelper.GetValueProperty());
+
+						for (int32 ArrayIdx = 0; ArrayIdx < MapHelper.Num(); ArrayIdx++)
+						{
+							InVisitor->UpdateString(*FString::Printf(TEXT("Key[%d]"), ArrayIdx), Names[ArrayIdx].ToString());
+							if (!NestedPropertiesAppendCompileHash(MapHelper.GetValuePtr(ArrayIdx), StructProp->Struct, EFieldIteratorFlags::IncludeSuper, FString::Printf(TEXT("Value[%d]"), ArrayIdx), InVisitor))
+							{
+								UE_LOG(LogNiagaraEditor, Warning, TEXT("Skipping %s because it is an map value property of unsupported underlying type, please add \"meta = (SkipForCompileHash=\"true\")\" to avoid this warning in the future or handle it yourself in NestedPropertiesAppendCompileHash!"), *Property->GetName());
+								bPassed = false;
+								continue;
+							}
+						}
+						if (bPassed)
+						{
+							continue;
+						}
+					}
+					else
+					{
+						bool bPassed = true;
+						for (int32 ArrayIdx = 0; ArrayIdx < MapHelper.Num(); ArrayIdx++)
+						{
+							InVisitor->UpdateString(*FString::Printf(TEXT("Key[%d]"), ArrayIdx), Names[ArrayIdx].ToString());
+							if (!PODPropertyAppendCompileHash(MapHelper.GetPairPtr(ArrayIdx), MapHelper.GetValueProperty(), FString::Printf(TEXT("Value[%d]"), ArrayIdx), InVisitor))
+							{
+								UE_LOG(LogNiagaraEditor, Warning, TEXT("Skipping %s because it is an map value property of unsupported underlying type, please add \"meta = (SkipForCompileHash=\"true\")\" to avoid this warning in the future or handle it yourself in PODPropertyAppendCompileHash!"), *Property->GetName());
+								bPassed = false;
+								continue;
+							}
+						}
+						if (bPassed)
+						{
+							continue;
+						}
+					}
+				}
+				else
+				{
+					UE_LOG(LogNiagaraEditor, Warning, TEXT("Skipping %s because it is a map property, please add \"meta = (SkipForCompileHash=\"true\")\" to avoid this warning in the future or handle it yourself in NestedPropertiesAppendCompileHash!"), *Property->GetName());
+				}
+			}
+			continue;
+		}
+		else if (Property->IsA(FArrayProperty::StaticClass()))
+		{
+			FArrayProperty* CastProp = CastFieldChecked<FArrayProperty>(Property);
+
+			FScriptArrayHelper ArrayHelper(CastProp, CastProp->ContainerPtrToValuePtr<void>(Container));
+			InVisitor->UpdatePOD(*PropertyName, ArrayHelper.Num());
+			InVisitor->UpdateString(TEXT("InnerPathname"), CastProp->Inner->GetPathName());
+
+			// We support arrays of POD types or arrays of structs with POD types internally. Anything else we should generate a warning on.
+			if (CastProp->Inner->IsA(FStructProperty::StaticClass()))
+			{
+				bool bPassed = true;
+				FStructProperty* StructProp = CastFieldChecked<FStructProperty>(CastProp->Inner);
+
+				for (int32 ArrayIdx = 0; ArrayIdx < ArrayHelper.Num(); ArrayIdx++)
+				{
+					if (!NestedPropertiesAppendCompileHash(ArrayHelper.GetRawPtr(ArrayIdx), StructProp->Struct, EFieldIteratorFlags::IncludeSuper, PropertyName, InVisitor))
+					{
+						UE_LOG(LogNiagaraEditor, Warning, TEXT("Skipping %s because it is an array property of unsupported underlying type, please add \"meta = (SkipForCompileHash=\"true\")\" to avoid this warning in the future or handle it yourself in NestedPropertiesAppendCompileHash!"), *Property->GetName());
+						bPassed = false;
+						continue;
+					}
+				}
+				if (bPassed)
+				{
+					continue;
+				}
+			}
+			else
+			{
+				bool bPassed = true;
+				for (int32 ArrayIdx = 0; ArrayIdx < ArrayHelper.Num(); ArrayIdx++)
+				{
+					if (!PODPropertyAppendCompileHash(ArrayHelper.GetRawPtr(ArrayIdx), CastProp->Inner, PropertyName, InVisitor))
+					{
+						if (bPassed)
+						{
+							UE_LOG(LogNiagaraEditor, Warning, TEXT("Skipping %s because it is an array property of unsupported underlying type, please add \"meta = (SkipForCompileHash=\"true\")\" to avoid this warning in the future or handle it yourself in NestedPropertiesAppendCompileHash!"), *Property->GetName());
+						}
+						bPassed = false;
+						continue;
+					}
+				}
+				if (bPassed)
+				{
+					continue;
+				}
+			}
+
+			UE_LOG(LogNiagaraEditor, Warning, TEXT("Skipping %s because it is an array property, please add \"meta = (SkipForCompileHash=\"true\")\" to avoid this warning in the future or handle it yourself in NestedPropertiesAppendCompileHash!"), *Property->GetName());
+			continue;
+		}
+		else if (Property->IsA(FTextProperty::StaticClass()))
+		{
+			FTextProperty* CastProp = CastFieldChecked<FTextProperty>(Property);
+			UE_LOG(LogNiagaraEditor, Warning, TEXT("Skipping %s because it is a UText property, please add \"meta = (SkipForCompileHash=\"true\")\" to avoid this warning in the future or handle it yourself in NestedPropertiesAppendCompileHash!"), *Property->GetName());
+			return true;
+		}
+		else if (Property->IsA(FEnumProperty::StaticClass()))
+		{
+			FEnumProperty* CastProp = CastFieldChecked<FEnumProperty>(Property);
+			const void* EnumContainer = Property->ContainerPtrToValuePtr<uint8>(Container);
+			if (PODPropertyAppendCompileHash(EnumContainer, CastProp->GetUnderlyingProperty(), PropertyName, InVisitor))
+			{
+				continue;
+			}
+			check(false);
+			return false;
+		}
+		else if (Property->IsA(FObjectProperty::StaticClass()))
+		{
+			FObjectProperty* CastProp = CastFieldChecked<FObjectProperty>(Property);
+			UObject* Obj = CastProp->GetObjectPropertyValue_InContainer(Container);
+			if (Obj != nullptr)
+			{
+				// We just do name here as sometimes things will be in a transient package or something tricky.
+				// Because we do nested id's for each called graph, it should work out in the end to have a different
+				// value in the compile array if the scripts are the same name but different locations.
+				InVisitor->UpdateString(*PropertyName, Obj->GetName());
+			}
+			else
+			{
+				InVisitor->UpdateString(*PropertyName, TEXT("nullptr"));
+			}
+			continue;
+		}
+		else if (Property->IsA(FStructProperty::StaticClass()))
+		{
+			FStructProperty* StructProp = CastFieldChecked<FStructProperty>(Property);
+			const void* StructContainer = Property->ContainerPtrToValuePtr<uint8>(Container);
+			NestedPropertiesAppendCompileHash(StructContainer, StructProp->Struct, EFieldIteratorFlags::IncludeSuper, PropertyName, InVisitor);
+			continue;
+		}
+		else
+		{
+			check(false);
+			return false;
+		}
+	}
+	return true;
+}
+
 void FNiagaraEditorUtilities::GatherChangeIds(UNiagaraEmitter& Emitter, TMap<FGuid, FGuid>& ChangeIds, const FString& InDebugName, bool bWriteToLogDir)
 {
 	FString ExportText;
@@ -516,6 +821,14 @@ bool FNiagaraEditorUtilities::DataMatches(const FStructOnScope& StructOnScopeA, 
 	return FMemory::Memcmp(StructOnScopeA.GetStructMemory(), StructOnScopeB.GetStructMemory(), StructOnScopeA.GetStruct()->GetStructureSize()) == 0;
 }
 
+void FNiagaraEditorUtilities::CopyDataTo(FStructOnScope& DestinationStructOnScope, const FStructOnScope& SourceStructOnScope, bool bCheckTypes)
+{
+	checkf(DestinationStructOnScope.GetStruct()->GetStructureSize() == SourceStructOnScope.GetStruct()->GetStructureSize() &&
+		(bCheckTypes == false || DestinationStructOnScope.GetStruct() == SourceStructOnScope.GetStruct()),
+		TEXT("Can not copy data from one struct to another if their size is different or if the type is different and type checking is enabled."));
+	FMemory::Memcpy(DestinationStructOnScope.GetStructMemory(), SourceStructOnScope.GetStructMemory(), SourceStructOnScope.GetStruct()->GetStructureSize());
+}
+
 TSharedPtr<SWidget> FNiagaraEditorUtilities::CreateInlineErrorText(TAttribute<FText> ErrorMessage, TAttribute<FText> ErrorTooltip)
 {
 	TSharedPtr<SHorizontalBox> ErrorInternalBox = SNew(SHorizontalBox);
@@ -550,36 +863,42 @@ TSharedPtr<SWidget> FNiagaraEditorUtilities::CreateInlineErrorText(TAttribute<FT
 
 void FNiagaraEditorUtilities::CompileExistingEmitters(const TArray<UNiagaraEmitter*>& AffectedEmitters)
 {
-	TSet<UNiagaraEmitter*> CompiledEmitters;
-	for (UNiagaraEmitter* Emitter : AffectedEmitters)
+	TArray<TSharedPtr<FNiagaraSystemViewModel>> ExistingSystemViewModels;
+
 	{
-		// If we've already compiled this emitter, or it's invalid skip it.
-		if (Emitter == nullptr || CompiledEmitters.Contains(Emitter) || Emitter->IsPendingKillOrUnreachable())
-		{
-			continue;
-		}
+		FNiagaraSystemUpdateContext UpdateCtx;
 
-		// We only need to compile emitters referenced directly as instances by systems since emitters can now only be used in the context 
-		// of a system.
-		for (TObjectIterator<UNiagaraSystem> SystemIterator; SystemIterator; ++SystemIterator)
+		TSet<UNiagaraEmitter*> CompiledEmitters;
+		for (UNiagaraEmitter* Emitter : AffectedEmitters)
 		{
-			if (SystemIterator->ReferencesInstanceEmitter(*Emitter))
+			// If we've already compiled this emitter, or it's invalid skip it.
+			if (Emitter == nullptr || CompiledEmitters.Contains(Emitter) || Emitter->IsPendingKillOrUnreachable())
 			{
-				SystemIterator->RequestCompile(false);
+				continue;
+			}
 
-				TArray<TSharedPtr<FNiagaraSystemViewModel>> ExistingSystemViewModels;
-				FNiagaraSystemViewModel::GetAllViewModelsForObject(*SystemIterator, ExistingSystemViewModels);
-				for (TSharedPtr<FNiagaraSystemViewModel> SystemViewModel : ExistingSystemViewModels)
+			// We only need to compile emitters referenced directly as instances by systems since emitters can now only be used in the context 
+			// of a system.
+			for (TObjectIterator<UNiagaraSystem> SystemIterator; SystemIterator; ++SystemIterator)
+			{
+				if (SystemIterator->ReferencesInstanceEmitter(*Emitter))
 				{
-					SystemViewModel->RefreshAll();
-				}
+					SystemIterator->RequestCompile(false, &UpdateCtx);
 
-				for (const FNiagaraEmitterHandle& EmitterHandle : SystemIterator->GetEmitterHandles())
-				{
-					CompiledEmitters.Add(EmitterHandle.GetInstance());
+					FNiagaraSystemViewModel::GetAllViewModelsForObject(*SystemIterator, ExistingSystemViewModels);
+
+					for (const FNiagaraEmitterHandle& EmitterHandle : SystemIterator->GetEmitterHandles())
+					{
+						CompiledEmitters.Add(EmitterHandle.GetInstance());
+					}
 				}
 			}
 		}
+	}
+
+	for (TSharedPtr<FNiagaraSystemViewModel> SystemViewModel : ExistingSystemViewModels)
+	{
+		SystemViewModel->RefreshAll();
 	}
 }
 
@@ -771,6 +1090,36 @@ bool FNiagaraEditorUtilities::ResolveConstantValue(UEdGraphPin* Pin, int32& Valu
 	return false;
 }
 
+TSharedPtr<FStructOnScope> FNiagaraEditorUtilities::StaticSwitchDefaultIntToStructOnScope(int32 InStaticSwitchDefaultValue, FNiagaraTypeDefinition InSwitchType)
+{
+	if (InSwitchType == FNiagaraTypeDefinition::GetBoolDef())
+	{
+		checkf(FNiagaraBool::StaticStruct()->GetStructureSize() == InSwitchType.GetSize(), TEXT("Value to type def size mismatch."));
+
+		FNiagaraBool BoolValue;
+		BoolValue.SetValue(InStaticSwitchDefaultValue != 0);
+
+		TSharedPtr<FStructOnScope> StructValue = MakeShared<FStructOnScope>(InSwitchType.GetStruct());
+		FMemory::Memcpy(StructValue->GetStructMemory(), (uint8*)(&BoolValue), InSwitchType.GetSize());
+
+		return StructValue;
+	}
+	else if (InSwitchType == FNiagaraTypeDefinition::GetIntDef() || InSwitchType.IsEnum())
+	{
+		checkf(FNiagaraInt32::StaticStruct()->GetStructureSize() == InSwitchType.GetSize(), TEXT("Value to type def size mismatch."));
+
+		FNiagaraInt32 IntValue;
+		IntValue.Value = InStaticSwitchDefaultValue;
+
+		TSharedPtr<FStructOnScope> StructValue = MakeShared<FStructOnScope>(InSwitchType.GetStruct());
+		FMemory::Memcpy(StructValue->GetStructMemory(), (uint8*)(&IntValue), InSwitchType.GetSize());
+
+		return StructValue;
+	}
+
+	return TSharedPtr<FStructOnScope>();
+}
+
 /* Go through the graph and attempt to auto-detect the type of any numeric pins by working back from the leaves of the graph. Only change the types of pins, not FNiagaraVariables.*/
 void PreprocessGraph(const UEdGraphSchema_Niagara* Schema, UNiagaraGraph* Graph, UNiagaraNodeOutput* OutputNode)
 {
@@ -941,6 +1290,10 @@ void FNiagaraEditorUtilities::GetFilteredScriptAssets(FGetFilteredScriptAssetsOp
 
 	for (int i = 0; i < FilteredScriptAssets.Num(); ++i)
 	{
+		// Get the custom version the asset was saved with so it can be used below.
+		int32 NiagaraVersion = INDEX_NONE;
+		FilteredScriptAssets[i].GetTagValue(UNiagaraScript::NiagaraCustomVersionTagName, NiagaraVersion);
+
 		// Check if the script is deprecated
 		if (InFilter.bIncludeDeprecatedScripts == false)
 		{
@@ -966,11 +1319,26 @@ void FNiagaraEditorUtilities::GetFilteredScriptAssets(FGetFilteredScriptAssetsOp
 		// Check if usage bitmask matches
 		if (InFilter.TargetUsageToMatch.IsSet())
 		{
-			FString BitfieldTagValue;
-			int32 BitfieldValue, TargetBit;
-			BitfieldTagValue = FilteredScriptAssets[i].GetTagValueRef<FString>(GET_MEMBER_NAME_CHECKED(UNiagaraScript, ModuleUsageBitmask));
-			BitfieldValue = FCString::Atoi(*BitfieldTagValue);
-			TargetBit = (BitfieldValue >> (int32)InFilter.TargetUsageToMatch.GetValue()) & 1;
+			int32 BitfieldValue = 0;
+			if (NiagaraVersion == INDEX_NONE || NiagaraVersion < FNiagaraCustomVersion::AddSimulationStageUsageEnum)
+			{
+				// If there is no custom version, or it's less than the simulation stage enum fix up, we need to load the 
+				// asset to get the correct bitmask since the shader stage enum broke the old ones.
+				UNiagaraScript* AssetScript = Cast<UNiagaraScript>(FilteredScriptAssets[i].GetAsset());
+				if (AssetScript != nullptr)
+				{
+					BitfieldValue = AssetScript->ModuleUsageBitmask;
+				}
+			}
+			else
+			{
+				// Otherwise the asset is new enough to have a valid bitmask.
+				FString BitfieldTagValue;
+				BitfieldTagValue = FilteredScriptAssets[i].GetTagValueRef<FString>(GET_MEMBER_NAME_CHECKED(UNiagaraScript, ModuleUsageBitmask));
+				BitfieldValue = FCString::Atoi(*BitfieldTagValue);
+			}
+
+			int32 TargetBit = (BitfieldValue >> (int32)InFilter.TargetUsageToMatch.GetValue()) & 1;
 			if (TargetBit != 1)
 			{
 				continue;
@@ -1052,6 +1420,16 @@ UNiagaraScript* FNiagaraEditorUtilities::GetScriptFromSystem(UNiagaraSystem& Sys
 					}
 				}
 			}
+			else if (UNiagaraScript::IsEquivalentUsage(Usage, ENiagaraScriptUsage::ParticleSimulationStageScript))
+			{
+				for (const UNiagaraSimulationStageBase* SimulationStage : ScriptEmitterHandle->GetInstance()->GetSimulationStages())
+				{
+					if (SimulationStage && SimulationStage->Script && SimulationStage->Script->GetUsageId() == UsageId)
+					{
+						return SimulationStage->Script;
+					}
+				}
+			}
 		}
 	}
 	return nullptr;
@@ -1063,11 +1441,52 @@ const FNiagaraEmitterHandle* FNiagaraEditorUtilities::GetEmitterHandleForEmitter
 		[&Emitter](const FNiagaraEmitterHandle& EmitterHandle) { return EmitterHandle.GetInstance() == &Emitter; });
 }
 
-FText FNiagaraEditorUtilities::FormatScriptAssetDescription(FText Description, FName Path)
+bool FNiagaraEditorUtilities::IsScriptAssetInLibrary(const FAssetData& ScriptAssetData)
 {
+	bool bIsInLibrary;
+	bool bIsLibraryTagFound = ScriptAssetData.GetTagValue(GET_MEMBER_NAME_CHECKED(UNiagaraScript, bExposeToLibrary), bIsInLibrary);
+	if (bIsLibraryTagFound == false)
+	{
+		if (ScriptAssetData.IsAssetLoaded())
+		{
+			UNiagaraScript* Script = static_cast<UNiagaraScript*>(ScriptAssetData.GetAsset());
+			if (Script != nullptr)
+			{
+				bIsInLibrary = Script->bExposeToLibrary;
+			}
+		}
+		else
+		{
+			bIsInLibrary = false;
+		}
+	}
+	return bIsInLibrary;
+}
+
+NIAGARAEDITOR_API FText FNiagaraEditorUtilities::FormatScriptName(FName Name, bool bIsInLibrary)
+{
+	return FText::FromString(FName::NameToDisplayString(Name.ToString(), false) + (bIsInLibrary ? TEXT("") : TEXT("*")));
+}
+
+FText FNiagaraEditorUtilities::FormatScriptDescription(FText Description, FName Path, bool bIsInLibrary)
+{
+	FText LibrarySuffix = !bIsInLibrary
+		? LOCTEXT("LibrarySuffix", "\n* Script is not exposed to the library.")
+		: FText();
+
 	return Description.IsEmptyOrWhitespace()
-		? FText::Format(LOCTEXT("ScriptAssetDescriptionFormatPathOnly", "Path: {0}"), FText::FromName(Path))
-		: FText::Format(LOCTEXT("ScriptAssetDescriptionFormat", "Description: {1}\nPath: {0}"), FText::FromName(Path), Description);
+		? FText::Format(LOCTEXT("ScriptAssetDescriptionFormatPathOnly", "Path: {0}{1}"), FText::FromName(Path), LibrarySuffix)
+		: FText::Format(LOCTEXT("ScriptAssetDescriptionFormat", "{1}\nPath: {0}{2}"), FText::FromName(Path), Description, LibrarySuffix);
+}
+
+FText FNiagaraEditorUtilities::FormatVariableDescription(FText Description, FText Name, FText Type)
+{
+	if (Description.IsEmptyOrWhitespace() == false)
+	{
+		return FText::Format(LOCTEXT("VariableDescriptionFormat", "{0}\n\nName: {1}\n\nType: {2}"), Description, Name, Type);
+	}
+
+	return FText::Format(LOCTEXT("VariableDescriptionFormat_NoDesc", "Name: {0}\n\nType: {1}"), Name, Type);
 }
 
 void FNiagaraEditorUtilities::ResetSystemsThatReferenceSystemViewModel(const FNiagaraSystemViewModel& ReferencedSystemViewModel)
@@ -1239,7 +1658,7 @@ bool FNiagaraEditorUtilities::VerifyNameChangeForInputOrOutputNode(const UNiagar
 	return true;
 }
 
-bool FNiagaraEditorUtilities::AddParameter(FNiagaraVariable& NewParameterVariable, FNiagaraParameterStore& TargetParameterStore, UObject& ParameterStoreOwner, UNiagaraStackEditorData& StackEditorData)
+bool FNiagaraEditorUtilities::AddParameter(FNiagaraVariable& NewParameterVariable, FNiagaraParameterStore& TargetParameterStore, UObject& ParameterStoreOwner, UNiagaraStackEditorData* StackEditorData)
 {
 	FScopedTransaction AddTransaction(LOCTEXT("AddParameter", "Add Parameter"));
 	ParameterStoreOwner.Modify();
@@ -1256,11 +1675,1300 @@ bool FNiagaraEditorUtilities::AddParameter(FNiagaraVariable& NewParameterVariabl
 	NewParameterVariable.SetName(FNiagaraUtilities::GetUniqueName(NewParameterVariable.GetName(), ExistingParameterStoreNames));
 
 	bool bSuccess = TargetParameterStore.AddParameter(NewParameterVariable);
-	if (bSuccess)
+	if (bSuccess && StackEditorData != nullptr)
 	{
-		StackEditorData.SetModuleInputIsRenamePending(NewParameterVariable.GetName().ToString(), true);
+		StackEditorData->SetStackEntryIsRenamePending(NewParameterVariable.GetName().ToString(), true);
 	}
 	return bSuccess;
+}
+
+void FNiagaraEditorUtilities::ShowParentEmitterInContentBrowser(TSharedRef<FNiagaraEmitterViewModel> Emitter)
+{
+	FContentBrowserModule& ContentBrowserModule = FModuleManager::Get().LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
+	ContentBrowserModule.Get().SyncBrowserToAssets(TArray<FAssetData> { FAssetData(Emitter->GetParentEmitter()) });
+}
+
+void FNiagaraEditorUtilities::OpenParentEmitterForEdit(TSharedRef<FNiagaraEmitterViewModel> Emitter)
+{
+	UNiagaraEmitter* ParentEmitter = const_cast<UNiagaraEmitter*>(Emitter->GetParentEmitter());
+	if (ParentEmitter != nullptr)
+	{
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(ParentEmitter);
+	}
+}
+
+ECheckBoxState FNiagaraEditorUtilities::GetSelectedEmittersEnabledCheckState(TSharedRef<FNiagaraSystemViewModel> SystemViewModel)
+{
+	bool bFirst = true;
+	ECheckBoxState CurrentState = ECheckBoxState::Undetermined;
+
+	const TArray<FGuid>& SelectedHandleIds = SystemViewModel->GetSelectionViewModel()->GetSelectedEmitterHandleIds();
+	for (const TSharedRef<FNiagaraEmitterHandleViewModel>& EmitterHandle : SystemViewModel->GetEmitterHandleViewModels())
+	{
+		if (SelectedHandleIds.Contains(EmitterHandle->GetId()))
+		{
+			ECheckBoxState EmitterState = EmitterHandle->GetIsEnabled() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+			if (bFirst)
+			{
+				CurrentState = EmitterState;
+				bFirst = false;
+				continue;
+			}
+
+			if (CurrentState != EmitterState)
+			{
+				return ECheckBoxState::Undetermined;
+			}
+		}
+	}
+
+	return CurrentState;
+}
+
+void FNiagaraEditorUtilities::ToggleSelectedEmittersEnabled(TSharedRef<FNiagaraSystemViewModel> SystemViewModel)
+{
+	bool bEnabled = GetSelectedEmittersEnabledCheckState(SystemViewModel) != ECheckBoxState::Checked;
+
+	const TArray<FGuid>& SelectedHandleIds = SystemViewModel->GetSelectionViewModel()->GetSelectedEmitterHandleIds();
+	for (const FGuid& HandleId : SelectedHandleIds)
+	{
+		TSharedPtr<FNiagaraEmitterHandleViewModel> EmitterHandleViewModel = SystemViewModel->GetEmitterHandleViewModelById(HandleId);
+		if (EmitterHandleViewModel.IsValid())
+		{
+			EmitterHandleViewModel->SetIsEnabled(bEnabled);
+		}
+	}
+}
+
+ECheckBoxState FNiagaraEditorUtilities::GetSelectedEmittersIsolatedCheckState(TSharedRef<FNiagaraSystemViewModel> SystemViewModel)
+{
+	bool bFirst = true;
+	ECheckBoxState CurrentState = ECheckBoxState::Undetermined;
+
+	const TArray<FGuid>& SelectedHandleIds = SystemViewModel->GetSelectionViewModel()->GetSelectedEmitterHandleIds();
+	for (const TSharedRef<FNiagaraEmitterHandleViewModel>& EmitterHandle : SystemViewModel->GetEmitterHandleViewModels())
+	{
+		if (SelectedHandleIds.Contains(EmitterHandle->GetId()))
+		{
+			ECheckBoxState EmitterState = EmitterHandle->GetIsIsolated() ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+			if (bFirst)
+			{
+				CurrentState = EmitterState;
+				bFirst = false;
+				continue;
+			}
+
+			if (CurrentState != EmitterState)
+			{
+				return ECheckBoxState::Undetermined;
+			}
+		}
+	}
+
+	return CurrentState;
+}
+
+void FNiagaraEditorUtilities::ToggleSelectedEmittersIsolated(TSharedRef<FNiagaraSystemViewModel> SystemViewModel)
+{
+	bool bIsolated = GetSelectedEmittersIsolatedCheckState(SystemViewModel) != ECheckBoxState::Checked;
+
+	TArray<FGuid> EmittersToIsolate;
+	for (const TSharedRef<FNiagaraEmitterHandleViewModel>& EmitterHandle : SystemViewModel->GetEmitterHandleViewModels())
+	{
+		if (EmitterHandle->GetIsIsolated())
+		{
+			EmittersToIsolate.Add(EmitterHandle->GetId());
+		}
+	}
+
+	const TArray<FGuid>& SelectedHandleIds = SystemViewModel->GetSelectionViewModel()->GetSelectedEmitterHandleIds();
+	for (const FGuid& HandleId : SelectedHandleIds)
+	{
+		if (bIsolated)
+		{
+			EmittersToIsolate.Add(HandleId);
+		}
+		else
+		{
+			EmittersToIsolate.Remove(HandleId);
+		}
+	}
+
+	SystemViewModel->IsolateEmitters(EmittersToIsolate);
+}
+
+
+void FNiagaraEditorUtilities::CreateAssetFromEmitter(TSharedRef<FNiagaraEmitterHandleViewModel> EmitterHandleViewModel)
+{
+	TSharedRef<FNiagaraSystemViewModel> SystemViewModel = EmitterHandleViewModel->GetOwningSystemViewModel();
+	if (SystemViewModel->GetEditMode() != ENiagaraSystemViewModelEditMode::SystemAsset)
+	{
+		return;
+	}
+
+	UNiagaraEmitter* EmitterToCopy = EmitterHandleViewModel->GetEmitterViewModel()->GetEmitter();
+	const FString PackagePath = FPackageName::GetLongPackagePath(EmitterToCopy->GetOutermost()->GetName());
+	const FName EmitterName = EmitterToCopy->GetFName();
+	
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+	UNiagaraEmitter* CreatedAsset = Cast<UNiagaraEmitter>(AssetToolsModule.Get().DuplicateAssetWithDialogAndTitle(EmitterName.GetPlainNameString(), PackagePath, EmitterToCopy, LOCTEXT("CreateEmitterAssetDialogTitle", "Create Emitter As")));
+	if (CreatedAsset != nullptr)
+	{
+		CreatedAsset->SetFlags(RF_Standalone | RF_Public);
+
+		CreatedAsset->SetUniqueEmitterName(CreatedAsset->GetName());
+
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(CreatedAsset);
+
+		// find the existing overview node to store the position
+		UEdGraph* OverviewGraph = SystemViewModel->GetOverviewGraphViewModel()->GetGraph();
+		
+		TArray<UNiagaraOverviewNode*> OverviewNodes;
+		OverviewGraph->GetNodesOfClass<UNiagaraOverviewNode>(OverviewNodes);
+
+		const UNiagaraOverviewNode* CurrentNode = *OverviewNodes.FindByPredicate(
+			[Guid = EmitterHandleViewModel->GetId()](const UNiagaraOverviewNode* Node)
+			{
+				return Node->GetEmitterHandleGuid() == Guid;
+			});
+
+		int32 CurrentX = CurrentNode->NodePosX;
+		int32 CurrentY = CurrentNode->NodePosY;
+		FString CurrentComment = CurrentNode->NodeComment;
+		bool bCommentBubbleVisible = CurrentNode->bCommentBubbleVisible;
+		bool bCommentBubblePinned = CurrentNode->bCommentBubblePinned;
+
+		CurrentNode = nullptr;
+
+		FScopedTransaction ScopedTransaction(LOCTEXT("CreateAssetFromEmitter", "Create asset from emitter"));
+		SystemViewModel->GetSystem().Modify();
+
+		// Replace existing emitter
+		SystemViewModel->DeleteEmitters(TSet<FGuid> { EmitterHandleViewModel->GetId() });
+		TSharedPtr<FNiagaraEmitterHandleViewModel> NewEmitterHandleViewModel = SystemViewModel->AddEmitter(*CreatedAsset);
+
+		NewEmitterHandleViewModel->SetName(EmitterName);
+
+		OverviewGraph->GetNodesOfClass<UNiagaraOverviewNode>(OverviewNodes);
+
+		UNiagaraOverviewNode* NewNode = *OverviewNodes.FindByPredicate(
+			[Guid = NewEmitterHandleViewModel->GetId()](const UNiagaraOverviewNode* Node)
+			{
+				return Node->GetEmitterHandleGuid() == Guid;
+			});
+
+		NewNode->NodePosX = CurrentX;
+		NewNode->NodePosY = CurrentY;
+		NewNode->NodeComment = CurrentComment;
+		NewNode->bCommentBubbleVisible = bCommentBubbleVisible;
+		NewNode->bCommentBubblePinned = bCommentBubblePinned;
+	}
+}
+
+void FNiagaraEditorUtilities::GetScriptRunAndExecutionIndexFromUsage(const ENiagaraScriptUsage& InUsage, int32& OutRunIndex, int32&OutExecutionIndex)
+{
+	switch (InUsage)
+	{
+	case ENiagaraScriptUsage::SystemSpawnScript:
+		OutRunIndex = 0;
+		OutExecutionIndex = 0;
+		break;
+	case ENiagaraScriptUsage::EmitterSpawnScript:
+		OutRunIndex = 0;
+		OutExecutionIndex = 1;
+		break;
+	case ENiagaraScriptUsage::ParticleSpawnScript:
+	case ENiagaraScriptUsage::ParticleSpawnScriptInterpolated:
+		OutRunIndex = 2;
+		OutExecutionIndex = 2;
+		break;
+	case ENiagaraScriptUsage::SystemUpdateScript:
+		OutRunIndex = 1;
+		OutExecutionIndex = 0;
+		break;
+	case ENiagaraScriptUsage::EmitterUpdateScript:
+		OutRunIndex = 1;
+		OutExecutionIndex = 1;
+		break;
+	case ENiagaraScriptUsage::ParticleUpdateScript:
+	case ENiagaraScriptUsage::ParticleGPUComputeScript:
+		OutRunIndex = 2;
+		OutExecutionIndex = 3;
+		break;
+	case ENiagaraScriptUsage::ParticleEventScript:
+		OutRunIndex = 2;
+		OutExecutionIndex = 4;
+		break;
+	case ENiagaraScriptUsage::ParticleSimulationStageScript:
+		//@todo(ng) implement getter for shader stages; for now same as particle update
+		
+		OutRunIndex = 2;
+		OutExecutionIndex = 4;
+		break;
+	case ENiagaraScriptUsage::DynamicInput:
+	case ENiagaraScriptUsage::Function:
+	case ENiagaraScriptUsage::Module:
+		OutRunIndex = INDEX_NONE;
+		OutExecutionIndex = INDEX_NONE;
+		break;
+	default:
+		checkf(false, TEXT("No execution index implemented for usage!"));
+		OutRunIndex = INDEX_NONE;
+		OutExecutionIndex = INDEX_NONE;
+		break;
+	}
+}
+
+bool FNiagaraEditorUtilities::AddEmitterContextMenuActions(FMenuBuilder& MenuBuilder, const TSharedPtr<FNiagaraEmitterHandleViewModel>& EmitterHandleViewModelPtr)
+{
+	if (EmitterHandleViewModelPtr.IsValid())
+	{
+		TSharedRef<FNiagaraEmitterHandleViewModel> EmitterHandleViewModel = EmitterHandleViewModelPtr.ToSharedRef();
+		TSharedRef<FNiagaraSystemViewModel> OwningSystemViewModel = EmitterHandleViewModel->GetOwningSystemViewModel();
+
+		bool bSingleSelection = OwningSystemViewModel->GetSelectionViewModel()->GetSelectedEmitterHandleIds().Num() == 1;
+		TSharedRef<FNiagaraEmitterViewModel> EmitterViewModel = EmitterHandleViewModel->GetEmitterViewModel();
+		MenuBuilder.BeginSection("EmitterActions", LOCTEXT("EmitterActions", "Emitter Actions"));
+		{
+		
+			if (OwningSystemViewModel->GetEditMode() == ENiagaraSystemViewModelEditMode::SystemAsset)
+			{
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("ToggleEmittersEnabled", "Enabled"),
+					LOCTEXT("ToggleEmittersEnabledToolTip", "Toggle whether or not the selected emitters are enabled."),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateStatic(&FNiagaraEditorUtilities::ToggleSelectedEmittersEnabled, OwningSystemViewModel),
+						FCanExecuteAction(),
+						FGetActionCheckState::CreateStatic(&FNiagaraEditorUtilities::GetSelectedEmittersEnabledCheckState, OwningSystemViewModel)
+					),
+					NAME_None,
+					EUserInterfaceActionType::ToggleButton
+				);
+
+				MenuBuilder.AddMenuEntry(
+					LOCTEXT("ToggleEmittersIsolated", "Isolated"),
+					LOCTEXT("ToggleEmittersIsolatedToolTip", "Toggle whether or not the selected emitters are isolated."),
+					FSlateIcon(),
+					FUIAction(
+						FExecuteAction::CreateStatic(&FNiagaraEditorUtilities::ToggleSelectedEmittersIsolated, OwningSystemViewModel),
+						FCanExecuteAction(),
+						FGetActionCheckState::CreateStatic(&FNiagaraEditorUtilities::GetSelectedEmittersIsolatedCheckState, OwningSystemViewModel)
+					),
+					NAME_None,
+					EUserInterfaceActionType::ToggleButton
+				);
+			}
+
+			MenuBuilder.AddMenuEntry(
+				LOCTEXT("CreateAssetFromThisEmitter", "Create Asset From This"),
+				LOCTEXT("CreateAssetFromThisEmitterToolTip", "Create an emitter asset from this emitter."),
+				FSlateIcon(),
+				FUIAction(
+					FExecuteAction::CreateStatic(&FNiagaraEditorUtilities::CreateAssetFromEmitter, EmitterHandleViewModel),
+					FCanExecuteAction::CreateLambda(
+						[bSingleSelection, EmitterHandleViewModel]()
+						{
+							return bSingleSelection && EmitterHandleViewModel->GetOwningSystemEditMode() == ENiagaraSystemViewModelEditMode::SystemAsset;
+						}
+					)
+				)
+			);
+		}
+
+		MenuBuilder.EndSection();
+		MenuBuilder.BeginSection("EmitterActions", LOCTEXT("ParentActions", "Parent Actions"));
+		{
+			MenuBuilder.AddMenuEntry(
+				LOCTEXT("UpdateParentEmitter", "Update Parent Emitter"),
+				LOCTEXT("UpdateParentEmitterToolTip", "Change or add a parent emitter."),
+				FSlateIcon(),
+				FUIAction(
+					FExecuteAction::CreateSP(EmitterViewModel, &FNiagaraEmitterViewModel::CreateNewParentWindow, EmitterHandleViewModel),
+					FCanExecuteAction::CreateLambda(
+						[bSingleSelection]()
+						{
+							return bSingleSelection;
+						}
+					)
+				)
+			);
+
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("RemoveParentEmitter", "Remove Parent Emitter"),
+			LOCTEXT("RemoveParentEmitterToolTip", "Remove this emitter's parent, preventing inheritance of any further changes."),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateSP(EmitterViewModel, &FNiagaraEmitterViewModel::RemoveParentEmitter),
+				FCanExecuteAction::CreateLambda(
+					[bSingleSelection, bHasParent = EmitterViewModel->HasParentEmitter()]()
+					{
+						return bSingleSelection && bHasParent;
+					}
+				)
+			)
+		);
+
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("OpenParentEmitterForEdit", "Open Parent For Edit"),
+			LOCTEXT("OpenParentEmitterForEditToolTip", "Open and Focus Parent Emitter."),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateStatic(&FNiagaraEditorUtilities::OpenParentEmitterForEdit, EmitterViewModel),
+				FCanExecuteAction::CreateLambda(
+					[bSingleSelection, bHasParent = EmitterViewModel->HasParentEmitter()]()
+		{
+			return bSingleSelection && bHasParent;
+		}
+		)
+			)
+		);
+
+		MenuBuilder.AddMenuEntry(
+			LOCTEXT("ShowParentEmitterInContentBrowser", "Show Parent in Content Browser"),
+			LOCTEXT("ShowParentEmitterInContentBrowserToolTip", "Show the selected emitter's parent emitter in the Content Browser."),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateStatic(&FNiagaraEditorUtilities::ShowParentEmitterInContentBrowser, EmitterViewModel),
+				FCanExecuteAction::CreateLambda(
+					[bSingleSelection, bHasParent = EmitterViewModel->HasParentEmitter()]()
+					{
+						return bSingleSelection && bHasParent;
+					}
+				)
+			)
+		);
+
+	
+		}
+		MenuBuilder.EndSection();
+
+		return true;
+	}
+
+	return false;
+}
+
+void FNiagaraEditorUtilities::WarnWithToastAndLog(FText WarningMessage)
+{
+	FNotificationInfo WarningNotification(WarningMessage);
+	WarningNotification.ExpireDuration = 5.0f;
+	WarningNotification.bFireAndForget = true;
+	WarningNotification.bUseLargeFont = false;
+	WarningNotification.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Warning"));
+	FSlateNotificationManager::Get().AddNotification(WarningNotification);
+	UE_LOG(LogNiagaraEditor, Warning, TEXT("%s"), *WarningMessage.ToString());
+}
+
+void FNiagaraEditorUtilities::InfoWithToastAndLog(FText InfoMessage, float ToastDuration)
+{
+	FNotificationInfo WarningNotification(InfoMessage);
+	WarningNotification.ExpireDuration = ToastDuration;
+	WarningNotification.bFireAndForget = true;
+	WarningNotification.bUseLargeFont = false;
+	WarningNotification.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Note"));
+	FSlateNotificationManager::Get().AddNotification(WarningNotification);
+	UE_LOG(LogNiagaraEditor, Log, TEXT("%s"), *InfoMessage.ToString());
+}
+
+FName FNiagaraEditorUtilities::GetUniqueObjectName(UObject* Outer, UClass* ObjectClass, const FString& CandidateName)
+{
+	if (StaticFindObject(ObjectClass, Outer, *CandidateName) == nullptr)
+	{
+		return *CandidateName;
+	}
+	else
+	{
+		FString BaseCandidateName;
+		int32 LastUnderscoreIndex;
+		int32 NameIndex = 0;
+		if (CandidateName.FindLastChar('_', LastUnderscoreIndex) && LexTryParseString(NameIndex, *CandidateName.RightChop(LastUnderscoreIndex + 1)))
+		{
+			BaseCandidateName = CandidateName.Left(LastUnderscoreIndex);
+			NameIndex++;
+		}
+		else
+		{
+			BaseCandidateName = CandidateName;
+			NameIndex = 1;
+		}
+
+		FString UniqueCandidateName = FString::Printf(TEXT("%s_%02i"), *BaseCandidateName, NameIndex);
+		while (StaticFindObject(ObjectClass, Outer, *UniqueCandidateName) != nullptr)
+		{
+			NameIndex++;
+			UniqueCandidateName = FString::Printf(TEXT("%s_%02i"), *BaseCandidateName, NameIndex);
+		}
+		return *UniqueCandidateName;
+	}
+}
+
+bool FNiagaraEditorUtilities::GetVariableMetaDataScope(const FNiagaraVariableMetaData& MetaData, ENiagaraParameterScope& OutScope)
+{
+	if (MetaData.GetIsUsingLegacyNameString())
+	{
+		OutScope = ENiagaraParameterScope::Custom;
+		return false;
+	}
+
+	const FName& MetaDataScopeName = MetaData.GetScopeName();
+	const FNiagaraParameterScopeInfo* ScopeInfo = FNiagaraEditorModule::FindParameterScopeInfo(MetaDataScopeName);
+	if (ensureMsgf(ScopeInfo != nullptr, TEXT("Failed to find registered parameter scope info for scope name %s!"), *MetaDataScopeName.ToString()))
+	{
+		OutScope = ScopeInfo->GetScope();
+		return true;
+	}
+	OutScope = ENiagaraParameterScope::Custom;
+	return false;
+}
+
+bool FNiagaraEditorUtilities::GetVariableMetaDataNamespaceString(const FNiagaraVariableMetaData& MetaData, FString& OutNamespaceString)
+{
+	if (MetaData.GetIsUsingLegacyNameString())
+	{
+		return false;
+	}
+
+	const FName& MetaDataScopeName = MetaData.GetScopeName();
+	const FNiagaraParameterScopeInfo* ScopeInfo = FNiagaraEditorModule::FindParameterScopeInfo(MetaDataScopeName);
+	if (ScopeInfo == nullptr)
+	{
+		ensureMsgf(false, TEXT("Failed to find registered parameter scope info for scope name %s!"), *MetaDataScopeName.ToString());
+		return false;
+	}
+
+	FString NamespaceString = ScopeInfo->GetNamespaceString();
+	if (MetaData.GetUsage() == ENiagaraScriptParameterUsage::InitialValueInput)
+	{
+		NamespaceString.Append(PARAM_MAP_INITIAL_STR);
+	}
+	OutNamespaceString = NamespaceString;
+	return true;
+}
+
+bool FNiagaraEditorUtilities::GetVariableMetaDataNamespaceStringForNewScope(const FNiagaraVariableMetaData& MetaData, const FName& NewScopeName, FString& OutNamespaceString)
+{
+	if (MetaData.GetIsUsingLegacyNameString())
+	{
+		return false;
+	}
+
+	const FNiagaraParameterScopeInfo* ScopeInfo = FNiagaraEditorModule::FindParameterScopeInfo(NewScopeName);
+	if (ScopeInfo == nullptr)
+	{
+		ensureMsgf(false, TEXT("Failed to find registered parameter scope info for scope name %s!"), *NewScopeName.ToString());
+		return false;
+	}
+
+	FString NamespaceString = ScopeInfo->GetNamespaceString();
+	if (MetaData.GetUsage() == ENiagaraScriptParameterUsage::InitialValueInput)
+	{
+		NamespaceString.Append(PARAM_MAP_INITIAL_STR);
+	}
+	OutNamespaceString = NamespaceString;
+
+	return true;
+}
+
+FName FNiagaraEditorUtilities::GetScopeNameForParameterScope(ENiagaraParameterScope InScope)
+{
+	switch (InScope) {
+	case ENiagaraParameterScope::User:
+		return FNiagaraConstants::UserNamespace;
+	case ENiagaraParameterScope::Engine:
+		return FNiagaraConstants::EngineNamespace;
+	case ENiagaraParameterScope::Owner:
+		return FNiagaraConstants::EngineOwnerScopeName;
+	case ENiagaraParameterScope::System:
+		return FNiagaraConstants::SystemNamespace;
+	case ENiagaraParameterScope::Emitter:
+		return FNiagaraConstants::EmitterNamespace;
+	case ENiagaraParameterScope::Particles:
+		return FNiagaraConstants::ParticleAttributeNamespace;
+	case ENiagaraParameterScope::Local:
+		return FNiagaraConstants::LocalNamespace;
+	case ENiagaraParameterScope::Input:
+		return FNiagaraConstants::InputScopeName;
+	case ENiagaraParameterScope::Custom:
+		return FNiagaraConstants::CustomScopeName;
+	case ENiagaraParameterScope::ScriptPersistent:
+		return FNiagaraConstants::ScriptPersistentScopeName;
+	case ENiagaraParameterScope::ScriptTransient:
+		return FNiagaraConstants::ScriptTransientScopeName; 
+	case ENiagaraParameterScope::Output:
+		return FNiagaraConstants::OutputScopeName;
+	default:
+		ensureMsgf(false, TEXT("Tried to get scope name for unknown parameter scope!"));
+	}
+	return FNiagaraConstants::ParticleAttributeNamespace;
+}
+
+
+TArray<FName> FNiagaraEditorUtilities::DecomposeVariableNamespace(const FName& InVarNameToken, FName& OutName)
+{
+	int32 DotIndex;
+	TArray<FName> OutNamespaces;
+	FString VarNameString = InVarNameToken.ToString();
+	while (VarNameString.FindChar(TEXT('.'), DotIndex))
+	{
+		OutNamespaces.Add(FName(*VarNameString.Left(DotIndex)));
+		VarNameString = *VarNameString.RightChop(DotIndex + 1);
+	}
+	OutName = FName(*VarNameString);
+	return OutNamespaces;
+}
+
+void  FNiagaraEditorUtilities::RecomposeVariableNamespace(const FName& InVarNameToken, const TArray<FName>& InParentNamespaces, FName& OutName)
+{
+	FString VarNameString;
+	for (FName Name : InParentNamespaces)
+	{
+		VarNameString += Name.ToString() + TEXT(".");
+	}
+	VarNameString += InVarNameToken.ToString();
+	OutName = FName(*VarNameString);
+}
+
+bool FNiagaraEditorUtilities::IsScopeEditable(const FName& InScopeName)
+{
+	if (InScopeName == FNiagaraConstants::EngineNamespace || InScopeName == FNiagaraConstants::EngineOwnerScopeName || InScopeName == FNiagaraConstants::EngineSystemScopeName || InScopeName == FNiagaraConstants::EngineEmitterScopeName)
+	{
+		return false;
+	}
+	return true;
+}
+
+bool FNiagaraEditorUtilities::IsScopeUserAssignable(const FName& InScopeName)
+{
+	if (InScopeName == FNiagaraConstants::EngineNamespace || InScopeName == FNiagaraConstants::EngineOwnerScopeName || InScopeName == FNiagaraConstants::EngineSystemScopeName || InScopeName == FNiagaraConstants::EngineEmitterScopeName)
+	{
+		return false;
+	}
+	return true;
+}
+
+
+void FNiagaraEditorUtilities::GetParameterMetaDataFromName(const FName& InVarNameToken, FNiagaraVariableMetaData& OutMetaData)
+{
+	auto MarkAsLegacyCustomName = [&OutMetaData]() {
+		OutMetaData.SetScopeName(FNiagaraConstants::CustomScopeName);
+		OutMetaData.SetIsUsingLegacyNameString(true);
+	};
+
+	auto GetMetaDataForFirstNamespace = [MarkAsLegacyCustomName](const FName& Namespace, FNiagaraVariableMetaData& OutMetaData)-> bool /*bNextNamespaceCanBeValid*/ {
+		if (Namespace == FNiagaraConstants::LocalNamespace)
+		{
+			OutMetaData.SetScopeName(Namespace);
+			OutMetaData.SetUsage(ENiagaraScriptParameterUsage::Local);
+			return true;
+		}
+		else if (Namespace == FNiagaraConstants::ModuleNamespace)
+		{
+			OutMetaData.SetScopeName(FNiagaraConstants::InputScopeName);
+			OutMetaData.SetUsage(ENiagaraScriptParameterUsage::Input);
+			return false;
+		}
+		else if (Namespace == FNiagaraConstants::UserNamespace)
+		{
+			OutMetaData.SetScopeName(Namespace);
+			OutMetaData.SetUsage(ENiagaraScriptParameterUsage::Input);
+			return false;
+		}
+		else if (Namespace == FNiagaraConstants::EngineNamespace)
+		{
+			OutMetaData.SetScopeName(Namespace);
+			OutMetaData.SetUsage(ENiagaraScriptParameterUsage::Input);
+			return true;
+		}
+		else if (Namespace == FNiagaraConstants::SystemNamespace)
+		{
+			OutMetaData.SetScopeName(Namespace);
+			OutMetaData.SetUsage(ENiagaraScriptParameterUsage::Input);
+			return true;
+		}
+		else if (Namespace == FNiagaraConstants::EmitterNamespace)
+		{
+			OutMetaData.SetScopeName(Namespace);
+			OutMetaData.SetUsage(ENiagaraScriptParameterUsage::Input);
+			return true;
+		}
+		else if (Namespace == FNiagaraConstants::ParticleAttributeNamespace)
+		{
+			OutMetaData.SetScopeName(Namespace);
+			OutMetaData.SetUsage(ENiagaraScriptParameterUsage::Input);
+			return true;
+		}
+		else if (Namespace == FNiagaraConstants::OutputScopeName)
+		{
+			OutMetaData.SetScopeName(Namespace);
+			OutMetaData.SetUsage(ENiagaraScriptParameterUsage::Output);
+			return true;
+		}
+
+		MarkAsLegacyCustomName();
+		return false;
+	};
+
+	auto GetMetaDataForInitialNamespace = [](const FName& Namespace, FNiagaraVariableMetaData& OutMetaData)-> bool /*bFoundInitialNamespace*/ {
+		if (Namespace == FNiagaraConstants::InitialNamespace)
+		{
+			OutMetaData.SetUsage(ENiagaraScriptParameterUsage::InitialValueInput);
+			return true;
+		}
+		return false;
+	};
+
+	auto GetScopeCanHaveInitialNamespaceSuffix = [](ENiagaraParameterScope InScope)-> bool /*bCanHaveInitialNamespaceSuffix*/ {
+		switch (InScope) {
+		case ENiagaraParameterScope::System:
+		case ENiagaraParameterScope::Emitter:
+		case ENiagaraParameterScope::Particles:
+			return true;
+		default:
+			return false;
+		};
+		return false;
+	};
+
+	auto GetMetaDataForEngineSubNamespace = [](const FName& Namespace, FNiagaraVariableMetaData& OutMetaData)-> bool /*bFoundValidEngineSubNamespace*/ {
+		if (Namespace == FNiagaraConstants::OwnerNamespace)
+		{
+			OutMetaData.SetScopeName(FNiagaraConstants::EngineOwnerScopeName);
+			return true;
+		}
+		else if (Namespace == FNiagaraConstants::SystemNamespace)
+		{
+			OutMetaData.SetScopeName(FNiagaraConstants::EngineSystemScopeName);
+			return true;
+		}
+		else if (Namespace == FNiagaraConstants::EmitterNamespace)
+		{
+			OutMetaData.SetScopeName(FNiagaraConstants::EngineEmitterScopeName);
+			return true;
+		}
+		return false;
+	};
+
+	FName NamespacelessName;
+	TArray<FName> DecomposedNamespaces = FNiagaraEditorUtilities::DecomposeVariableNamespace(InVarNameToken, NamespacelessName);
+	OutMetaData.SetCachedNamespacelessVariableName(NamespacelessName);
+	if (DecomposedNamespaces.Num() == 0)
+	{
+		UE_LOG(LogNiagaraEditor, Display, TEXT("Unexpected parameter encountered without a namespace: %s"), *InVarNameToken.ToString());
+		MarkAsLegacyCustomName();
+		return;
+	}
+	else if (DecomposedNamespaces.Num() == 1)
+	{
+		GetMetaDataForFirstNamespace(DecomposedNamespaces[0], OutMetaData);
+		return;
+	}
+	else if (DecomposedNamespaces.Num() == 2)
+	{
+		bool bNextNamespaceCanBeValid = GetMetaDataForFirstNamespace(DecomposedNamespaces[0], OutMetaData);
+		if (bNextNamespaceCanBeValid)
+		{
+			ENiagaraParameterScope FirstNamespaceScope;
+			FNiagaraEditorUtilities::GetVariableMetaDataScope(OutMetaData, FirstNamespaceScope);
+			if (FirstNamespaceScope == ENiagaraParameterScope::Local)
+			{
+				// "local.module." namespaces may be handled as local scopes and do not need to be marked as legacy namespaces.
+				if (DecomposedNamespaces[1] == FNiagaraConstants::ModuleNamespace)
+				{
+					return;
+				}
+			}
+			else if (FirstNamespaceScope == ENiagaraParameterScope::Engine)
+			{
+				bool bFoundEngineSubNamespace = GetMetaDataForEngineSubNamespace(DecomposedNamespaces[1], OutMetaData);
+				if (bFoundEngineSubNamespace)
+				{
+					return;
+				}
+			}
+			else if (DecomposedNamespaces[0] == FNiagaraConstants::OutputScopeName)
+			{
+				if (DecomposedNamespaces[1] == FNiagaraConstants::ModuleNamespace)
+				{
+					OutMetaData.SetScopeName(FNiagaraConstants::UniqueOutputScopeName);
+					return;
+				}
+			}
+			else if (GetScopeCanHaveInitialNamespaceSuffix(FirstNamespaceScope))
+			{
+				bool bFoundInitialNamespace = GetMetaDataForInitialNamespace(DecomposedNamespaces[1], OutMetaData);
+				if (bFoundInitialNamespace)
+				{
+					return;
+				}
+			}
+		}
+		MarkAsLegacyCustomName();
+		return;
+	}
+
+	MarkAsLegacyCustomName();
+}
+
+FString FNiagaraEditorUtilities::GetNamespacelessVariableNameString(const FName& InVarName)
+{
+	int32 DotIndex;
+	FString VarNameString = InVarName.ToString();
+	if (VarNameString.FindLastChar(TEXT('.'), DotIndex))
+	{
+		return VarNameString.RightChop(DotIndex + 1);
+	}
+	// No dot index, must be a namespaceless variable name (e.g. static switch name) just return the name to string.
+	return VarNameString;
+}
+
+void FNiagaraEditorUtilities::GetReferencingFunctionCallNodes(UNiagaraScript* Script, TArray<UNiagaraNodeFunctionCall*>& OutReferencingFunctionCallNodes)
+{
+	for (TObjectIterator<UNiagaraNodeFunctionCall> It; It; ++It)
+	{
+		UNiagaraNodeFunctionCall* FunctionCallNode = *It;
+		if (FunctionCallNode->FunctionScript == Script)
+		{
+			OutReferencingFunctionCallNodes.Add(FunctionCallNode);
+		}
+	}
+}
+
+bool FNiagaraEditorUtilities::GetVariableSortPriority(const FName& VarNameA, const FName& VarNameB)
+{
+	const FNiagaraNamespaceMetadata& NamespaceMetaDataA = GetNamespaceMetaDataForVariableName(VarNameA);
+	if (NamespaceMetaDataA.IsValid() == false)
+	{
+		return false;
+	}
+
+	const FNiagaraNamespaceMetadata& NamespaceMetaDataB = GetNamespaceMetaDataForVariableName(VarNameB);
+	const int32 NamespaceAPriority = GetNamespaceMetaDataSortPriority(NamespaceMetaDataA, NamespaceMetaDataB);
+	if (NamespaceAPriority == 0)
+	{
+		return VarNameA.LexicalLess(VarNameB);
+	}
+	return NamespaceAPriority > 0;
+}
+
+int32 FNiagaraEditorUtilities::GetNamespaceMetaDataSortPriority(const FNiagaraNamespaceMetadata& A, const FNiagaraNamespaceMetadata& B)
+{
+	if (A.IsValid() == false)
+	{
+		return false;
+	}
+	else if (B.IsValid() == false)
+	{
+		return true;
+	}
+
+	const int32 ANum = A.Namespaces.Num();
+	const int32 BNum = B.Namespaces.Num();
+	for (int32 i = 0; i < FMath::Min(ANum, BNum); ++i)
+	{
+		const int32 ANamespacePriority = GetNamespaceSortPriority(A.Namespaces[i]);
+		const int32 BNamespacePriority = GetNamespaceSortPriority(B.Namespaces[i]);
+		if (ANamespacePriority != BNamespacePriority)
+			return ANamespacePriority < BNamespacePriority ? 1 : -1;
+	}
+	if (ANum == BNum)
+		return 0;
+
+	return ANum < BNum ? 1 : -1;
+}
+
+int32 FNiagaraEditorUtilities::GetNamespaceSortPriority(const FName& Namespace)
+{
+	if (Namespace == FNiagaraConstants::UserNamespace)
+		return 0;
+	else if (Namespace == FNiagaraConstants::ModuleNamespace)
+		return 1;
+	else if (Namespace == FNiagaraConstants::StaticSwitchNamespace)
+		return 2;
+	else if (Namespace == FNiagaraConstants::DataInstanceNamespace)
+		return 3;
+	else if (Namespace == FNiagaraConstants::OutputNamespace)
+		return 4;
+	else if (Namespace == FNiagaraConstants::EngineNamespace)
+		return 5;
+	else if (Namespace == FNiagaraConstants::ParameterCollectionNamespace)
+		return 6;
+	else if (Namespace == FNiagaraConstants::SystemNamespace)
+		return 7;
+	else if (Namespace == FNiagaraConstants::EmitterNamespace)
+		return 8;
+	else if (Namespace == FNiagaraConstants::ParticleAttributeNamespace)
+		return 9;
+	else if (Namespace == FNiagaraConstants::TransientNamespace)
+		return 10;
+
+	return 11;
+}
+
+const FNiagaraNamespaceMetadata FNiagaraEditorUtilities::GetNamespaceMetaDataForVariableName(const FName& VarName)
+{
+	const FNiagaraParameterHandle VarHandle = FNiagaraParameterHandle(VarName);
+	const TArray<FName> VarHandleNameParts = VarHandle.GetHandleParts();
+	return GetDefault<UNiagaraEditorSettings>()->GetMetaDataForNamespaces(VarHandleNameParts);
+}
+
+bool FNiagaraParameterUtilities::DoesParameterNameMatchSearchText(FName ParameterName, const FString& SearchTextString)
+{
+	FNiagaraParameterHandle ParameterHandle(ParameterName);
+	TArray<FName> HandleParts = ParameterHandle.GetHandleParts();
+	FNiagaraNamespaceMetadata NamespaceMetadata = GetDefault<UNiagaraEditorSettings>()->GetMetaDataForNamespaces(HandleParts);
+	if (NamespaceMetadata.IsValid())
+	{
+		// If it's a registered namespace, check the display name of the namespace.
+		if (NamespaceMetadata.DisplayName.ToString().Contains(SearchTextString))
+		{
+			return true;
+		}
+
+		// Check the namespace modifiers if it has them
+		for(int HandlePartIndex = NamespaceMetadata.Namespaces.Num(); HandlePartIndex < HandleParts.Num() - 2; HandlePartIndex++)
+		{
+			FNiagaraNamespaceMetadata NamespaceModifierMetadata = GetDefault<UNiagaraEditorSettings>()->GetMetaDataForNamespaceModifier(HandleParts[HandlePartIndex]);
+			if (NamespaceModifierMetadata.IsValid())
+			{
+				// Check first by modifier metadata display name.
+				if (NamespaceModifierMetadata.DisplayName.ToString().Contains(SearchTextString))
+				{
+					return true;
+				}
+			}
+			else
+			{
+				// Otherwise just check the string.
+				if (HandleParts[HandlePartIndex].ToString().Contains(SearchTextString))
+				{
+					return true;
+				}
+			}
+		}
+
+		// Last check the variable name.
+		if (HandleParts.Last().ToString().Contains(SearchTextString))
+		{
+			return true;
+		}
+	}
+	else if (HandleParts.ContainsByPredicate([&SearchTextString](FName NamePart) { return NamePart.ToString().Contains(SearchTextString); }))
+	{
+		// Otherwise if it's not in a valid namespace, just check all name parts.
+		return true;
+	}
+	return false;
+}
+
+FText FNiagaraParameterUtilities::FormatParameterNameForTextDisplay(FName ParameterName)
+{
+	FNiagaraParameterHandle ParameterHandle(ParameterName);
+	TArray<FName> HandleParts = ParameterHandle.GetHandleParts();
+
+	if (HandleParts.Num() == 0)
+	{
+		return FText();
+	}
+	else if (HandleParts.Num() == 1)
+	{
+		return FText::FromName(HandleParts[0]);
+	}
+
+	FText NamespaceFormat = LOCTEXT("NamespaceFormat", "({0})");
+	TArray<FText> ParameterNameTextParts;
+	FNiagaraNamespaceMetadata NamespaceMetadata = GetDefault<UNiagaraEditorSettings>()->GetMetaDataForNamespaces(HandleParts);
+	if (NamespaceMetadata.IsValid() && NamespaceMetadata.DisplayName.IsEmptyOrWhitespace() == false)
+	{
+		ParameterNameTextParts.Add(FText::Format(NamespaceFormat, NamespaceMetadata.DisplayName.ToUpper()));
+		HandleParts.RemoveAt(0, NamespaceMetadata.Namespaces.Num());
+	}
+	else
+	{
+		ParameterNameTextParts.Add(FText::FromName(HandleParts[0]).ToUpper());
+		HandleParts.RemoveAt(0);
+	}
+
+	for(int32 HandlePartIndex = 0; HandlePartIndex < HandleParts.Num() - 1; HandlePartIndex++)
+	{
+		FNiagaraNamespaceMetadata NamespaceModifierMetadata = GetDefault<UNiagaraEditorSettings>()->GetMetaDataForNamespaceModifier(HandleParts[HandlePartIndex]);
+		if (NamespaceModifierMetadata.IsValid() && NamespaceModifierMetadata.DisplayName.IsEmptyOrWhitespace() == false)
+		{
+			ParameterNameTextParts.Add(FText::Format(NamespaceFormat, NamespaceModifierMetadata.DisplayName.ToUpper()));
+		}
+		else
+		{
+			ParameterNameTextParts.Add(FText::Format(NamespaceFormat, FText::FromName(HandleParts[0]).ToUpper()));
+		}
+	}
+
+	if (HandleParts.Num() == 0)
+	{
+		ParameterNameTextParts.Add(FText::FromName(NAME_None));
+	}
+	else
+	{
+		ParameterNameTextParts.Add(FText::FromName(HandleParts.Last()));
+	}
+
+	return FText::Join(FText::FromString(TEXT(" ")), ParameterNameTextParts);
+}
+
+FName NamePartsToName(const TArray<FName>& NameParts)
+{
+	TArray<FString> NamePartStrings;
+	for (FName NamePart : NameParts)
+	{
+		NamePartStrings.Add(NamePart.ToString());
+	}
+	return *FString::Join(NamePartStrings, TEXT("."));
+}
+
+bool FNiagaraParameterUtilities::GetNamespaceEditData(
+	FName InParameterName, 
+	FNiagaraParameterHandle& OutParameterHandle,
+	FNiagaraNamespaceMetadata& OutNamespaceMetadata,
+	FText& OutErrorMessage)
+{
+	OutParameterHandle = FNiagaraParameterHandle(InParameterName);
+	TArray<FName> NameParts = OutParameterHandle.GetHandleParts();
+	OutNamespaceMetadata = GetDefault<UNiagaraEditorSettings>()->GetMetaDataForNamespaces(NameParts);
+	if (OutNamespaceMetadata.IsValid() == false)
+	{
+		OutErrorMessage = LOCTEXT("NoMetadataForNamespace", "This parameter doesn't support editing.");
+		return false;
+	}
+
+	return true;
+}
+
+bool FNiagaraParameterUtilities::GetNamespaceModifierEditData(
+	FName InParameterName,
+	FNiagaraParameterHandle& OutParameterHandle,
+	FNiagaraNamespaceMetadata& OutNamespaceMetadata,
+	FText& OutErrorMessage)
+{
+	if (GetNamespaceEditData(InParameterName, OutParameterHandle, OutNamespaceMetadata, OutErrorMessage))
+	{
+		if (OutNamespaceMetadata.Options.Contains(ENiagaraNamespaceMetadataOptions::PreventEditingNamespaceModifier))
+		{
+			OutErrorMessage = LOCTEXT("NotSupportedForThisNamespace", "This parameter doesn't support namespace modifiers.");
+			return false;
+		}
+		return true;
+	}
+	else
+	{
+		return false;
+	}
+}
+
+void FNiagaraParameterUtilities::GetChangeNamespaceMenuData(FName InParameterName, EParameterContext InParameterContext, TArray<FChangeNamespaceMenuData>& OutChangeNamespaceMenuData)
+{
+	TArray<FNiagaraNamespaceMetadata> NamespaceMetadata = GetDefault<UNiagaraEditorSettings>()->GetAllNamespaceMetadata();
+	NamespaceMetadata.Sort([](const FNiagaraNamespaceMetadata& MetadataA, const FNiagaraNamespaceMetadata& MetadataB)
+		{ return MetadataA.SortId < MetadataB.SortId; });
+
+	FNiagaraParameterHandle ParameterHandle(InParameterName);
+	FNiagaraNamespaceMetadata CurrentMetadata = GetDefault<UNiagaraEditorSettings>()->GetMetaDataForNamespaces(ParameterHandle.GetHandleParts());
+	for (const FNiagaraNamespaceMetadata& Metadata : NamespaceMetadata)
+	{
+		if (Metadata.IsValid() == false ||
+			Metadata == CurrentMetadata ||
+			Metadata.Options.Contains(ENiagaraNamespaceMetadataOptions::PreventEditingNamespace) ||
+			(InParameterContext == EParameterContext::Script && Metadata.Options.Contains(ENiagaraNamespaceMetadataOptions::HideInScript)) ||
+			(InParameterContext == EParameterContext::System && Metadata.Options.Contains(ENiagaraNamespaceMetadataOptions::HideInSystem)))
+		{
+			continue;
+		}
+
+		FChangeNamespaceMenuData& MenuData = OutChangeNamespaceMenuData.AddDefaulted_GetRef();
+		MenuData.Metadata = Metadata;
+
+		FText CanChangeMessage;
+		MenuData.bCanChange = FNiagaraParameterUtilities::TestCanChangeNamespaceWithMessage(InParameterName, Metadata, CanChangeMessage);
+
+		if (MenuData.bCanChange)
+		{
+			MenuData.CanChangeToolTip = FText::Format(LOCTEXT("ChangeNamespaceToolTipFormat", "{0}\n\nDescription:\n{1}"), CanChangeMessage, Metadata.Description);
+		}
+		else
+		{
+			MenuData.CanChangeToolTip = CanChangeMessage;
+		}
+
+		FString NamespaceNameString = Metadata.Namespaces[0].ToString();
+		for (int32 i = 1; i < Metadata.Namespaces.Num(); i++)
+		{
+			NamespaceNameString += TEXT(".") + Metadata.Namespaces[i].ToString();
+		}
+
+		MenuData.NamespaceParameterName = *NamespaceNameString;
+	}
+}
+
+TSharedRef<SWidget> FNiagaraParameterUtilities::CreateNamespaceMenuItemWidget(FName Namespace, FText ToolTipText)
+{
+	return SNew(SBox)
+		.Padding(FMargin(7, 2, 7, 2))
+		[
+			SNew(SNiagaraParameterName)
+			.ParameterName(Namespace)
+			.IsReadOnly(true)
+			.SingleNameDisplayMode(SNiagaraParameterName::ESingleNameDisplayMode::Namespace)
+			.ToolTipText(ToolTipText)
+		];
+}
+
+bool FNiagaraParameterUtilities::TestCanChangeNamespaceWithMessage(FName ParameterName, const FNiagaraNamespaceMetadata& NewNamespaceMetadata, FText& OutMessage)
+{
+	if (NewNamespaceMetadata.Options.Contains(ENiagaraNamespaceMetadataOptions::PreventEditingNamespace))
+	{
+		OutMessage = LOCTEXT("NewNamespaceNotSupported", "The new namespace does not support editing so it can not be assigned.");
+		return false;
+	}
+
+	FNiagaraParameterHandle ParameterHandle;
+	FNiagaraNamespaceMetadata NamespaceMetadata;
+	if (GetNamespaceEditData(ParameterName, ParameterHandle, NamespaceMetadata, OutMessage))
+	{
+		if (NamespaceMetadata.Options.Contains(ENiagaraNamespaceMetadataOptions::PreventEditingNamespace))
+		{
+			OutMessage = LOCTEXT("ParameterDoesntSupportChangingNamespace", "This parameter doesn't support changing its namespace.");
+			return false;
+		}
+		else
+		{
+			OutMessage = FText::Format(LOCTEXT("ChagneNamespaceFormat", "Change this parameters namespace to {0}"), NewNamespaceMetadata.DisplayName);
+			return true;
+		}
+	}
+	return false;
+}
+
+FName FNiagaraParameterUtilities::ChangeNamespace(FName ParameterName, const FNiagaraNamespaceMetadata& NewNamespaceMetadata)
+{
+	FNiagaraParameterHandle ParameterHandle;
+	FNiagaraNamespaceMetadata NamespaceMetadata;
+	FText Unused;
+	if (NewNamespaceMetadata.IsValid() &&
+		NewNamespaceMetadata.Options.Contains(ENiagaraNamespaceMetadataOptions::PreventEditingNamespace) == false &&
+		GetNamespaceEditData(ParameterName, ParameterHandle, NamespaceMetadata, Unused))
+	{
+		TArray<FName> NameParts = ParameterHandle.GetHandleParts();
+		NameParts.RemoveAt(0, NamespaceMetadata.Namespaces.Num());
+		int32 NumberOfNamespaceModifiers = NameParts.Num() - 1;
+		if (NumberOfNamespaceModifiers > 0)
+		{
+			bool bNewNamespaceCanHaveNamespaceModifier =
+				NewNamespaceMetadata.Options.Contains(ENiagaraNamespaceMetadataOptions::PreventEditingNamespaceModifier) == false;
+			if (bNewNamespaceCanHaveNamespaceModifier == false)
+			{
+				// Remove all modifiers.
+				NameParts.RemoveAt(0, NumberOfNamespaceModifiers);
+			}
+			else 
+			{
+				// Remove all but the last modifier.
+				NameParts.RemoveAt(0, NumberOfNamespaceModifiers - 1);
+			}
+		}
+		if (NewNamespaceMetadata.RequiredNamespaceModifier != NAME_None && NameParts.Num() > 1 && NameParts[0] != NewNamespaceMetadata.RequiredNamespaceModifier)
+		{
+			NameParts.Insert(NewNamespaceMetadata.RequiredNamespaceModifier, 0);
+		}
+		NameParts.Insert(NewNamespaceMetadata.Namespaces, 0);
+		return NamePartsToName(NameParts);
+	}
+	return NAME_None;
+}
+
+int32 FNiagaraParameterUtilities::GetNumberOfNamePartsBeforeEditableModifier(const FNiagaraNamespaceMetadata& NamespaceMetadata)
+{
+	if (NamespaceMetadata.IsValid() && NamespaceMetadata.Options.Contains(ENiagaraNamespaceMetadataOptions::PreventEditingNamespaceModifier) == false)
+	{
+		// If the namespace has a required modifier then we can add and edit a modifier after the required one.
+		return NamespaceMetadata.RequiredNamespaceModifier != NAME_None ? NamespaceMetadata.Namespaces.Num() + 1 : NamespaceMetadata.Namespaces.Num();
+	}
+	else
+	{
+		return INDEX_NONE;
+	}
+}
+
+void FNiagaraParameterUtilities::GetOptionalNamespaceModifiers(FName ParameterName, EParameterContext InParameterContext, TArray<FName>& OutOptionalNamespaceModifiers)
+{
+	FNiagaraParameterHandle ParameterHandle;
+	FNiagaraNamespaceMetadata NamespaceMetadata;
+	FText Unused;
+	if (GetNamespaceModifierEditData(ParameterName, ParameterHandle, NamespaceMetadata, Unused))
+	{
+		for (FName OptionalNamespaceModifier : NamespaceMetadata.OptionalNamespaceModifiers)
+		{
+			FNiagaraNamespaceMetadata NamespaceModifierMetadata = GetDefault<UNiagaraEditorSettings>()->GetMetaDataForNamespaceModifier(OptionalNamespaceModifier);
+			if (NamespaceModifierMetadata.IsValid())
+			{
+				bool bShouldHideInContext =
+					(InParameterContext == EParameterContext::Script && NamespaceModifierMetadata.Options.Contains(ENiagaraNamespaceMetadataOptions::HideInScript)) ||
+					(InParameterContext == EParameterContext::System && NamespaceModifierMetadata.Options.Contains(ENiagaraNamespaceMetadataOptions::HideInSystem));
+
+				if(bShouldHideInContext == false)
+				{
+					OutOptionalNamespaceModifiers.Add(OptionalNamespaceModifier);
+				}
+			}
+		}
+	}
+}
+
+FName FNiagaraParameterUtilities::GetEditableNamespaceModifierForParameter(FName InParameterName)
+{
+	FNiagaraParameterHandle ParameterHandle;
+	FNiagaraNamespaceMetadata NamespaceMetadata;
+	FText Unused;
+	if (GetNamespaceModifierEditData(InParameterName, ParameterHandle, NamespaceMetadata, Unused))
+	{
+		TArray<FName> NameParts = ParameterHandle.GetHandleParts();
+		int32 NumberOfNamePartsBeforeEditableModifier = GetNumberOfNamePartsBeforeEditableModifier(NamespaceMetadata);
+		if (NameParts.Num() - NumberOfNamePartsBeforeEditableModifier == 2)
+		{
+			return NameParts[NumberOfNamePartsBeforeEditableModifier];
+		}
+	}
+	return NAME_None;
+}
+
+bool FNiagaraParameterUtilities::TestCanSetSpecificNamespaceModifierWithMessage(FName InParameterName, FName InNamespaceModifier, FText& OutMessage)
+{
+	FNiagaraParameterHandle ParameterHandle;
+	FNiagaraNamespaceMetadata NamespaceMetadata;
+	if (GetNamespaceModifierEditData(InParameterName, ParameterHandle, NamespaceMetadata, OutMessage))
+	{
+		FNiagaraNamespaceMetadata ModifierMetadata = GetDefault<UNiagaraEditorSettings>()->GetMetaDataForNamespaceModifier(InNamespaceModifier);
+		if (ModifierMetadata.IsValid() && ModifierMetadata.Description.IsEmptyOrWhitespace() == false)
+		{
+			OutMessage = FText::Format(LOCTEXT("SetNamespaceModifierWithDescriptionFormat", "Set the namespace modifier for this parameter to {0}.\n\nDescription: {1}"),
+				FText::FromName(InNamespaceModifier), ModifierMetadata.Description);
+		}
+		else
+		{
+			if(InNamespaceModifier == NAME_None)
+			{ 
+				OutMessage = LOCTEXT("ClearNamespaceModifier", "Clears the namespace modifier on this parameter.");
+			}
+			else 
+			{
+				OutMessage = FText::Format(LOCTEXT("SetNamespaceModifierFormat", "Set the namespace modifier for this parameter to {0}."), FText::FromName(InNamespaceModifier));
+			}
+		}
+		return true;
+	}
+	return false;
+}
+
+FName FNiagaraParameterUtilities::SetSpecificNamespaceModifier(FName InParameterName, FName InNamespaceModifier)
+{
+	FNiagaraParameterHandle ParameterHandle;
+	FNiagaraNamespaceMetadata NamespaceMetadata;
+	FText Unused;
+	if (GetNamespaceModifierEditData(InParameterName, ParameterHandle, NamespaceMetadata, Unused))
+	{
+		TArray<FName> NameParts = ParameterHandle.GetHandleParts();
+		int32 NumberOfNamePartsBeforeEditableModifier = GetNumberOfNamePartsBeforeEditableModifier(NamespaceMetadata);
+		if (NumberOfNamePartsBeforeEditableModifier != INDEX_NONE)
+		{
+			if (NameParts.Num() == NumberOfNamePartsBeforeEditableModifier + 1)
+			{
+				// Doesn't have a modifier.  Insert the supplied modifier if it's not none
+				if (InNamespaceModifier != NAME_None)
+				{
+					NameParts.Insert(InNamespaceModifier, NumberOfNamePartsBeforeEditableModifier);
+				}
+				return NamePartsToName(NameParts);
+			}
+			else if (NameParts.Num() == NumberOfNamePartsBeforeEditableModifier + 2)
+			{
+				// Already has a namespace modifier.
+				if (InNamespaceModifier == NAME_None || InNamespaceModifier.ToString().IsEmpty())
+				{
+					// If the name was none or it was empty, remove the modifier.
+					NameParts.RemoveAt(NumberOfNamePartsBeforeEditableModifier);
+				}
+				else
+				{
+					NameParts[NumberOfNamePartsBeforeEditableModifier] = InNamespaceModifier;
+				}
+				return NamePartsToName(NameParts);
+			}
+		}
+	}
+	return NAME_None;
+}
+
+bool FNiagaraParameterUtilities::TestCanSetCustomNamespaceModifierWithMessage(FName InParameterName, FText& OutMessage)
+{
+	FNiagaraParameterHandle ParameterHandle;
+	FNiagaraNamespaceMetadata NamespaceMetadata;
+	if (GetNamespaceModifierEditData(InParameterName, ParameterHandle, NamespaceMetadata, OutMessage))
+	{
+		FName CurrentModifier = GetEditableNamespaceModifierForParameter(InParameterName);
+		if (CurrentModifier == NAME_None)
+		{
+			OutMessage = LOCTEXT("SetCustomNamespaceModifier", "Add a new custom modifier to this parameter.");
+		}
+		else
+		{
+			OutMessage = LOCTEXT("EditCurrentNamespaceModifier", "Edit the current custom modifier on this parameter.");
+		}
+		return true;
+	}
+	return false;
+}
+
+FName FNiagaraParameterUtilities::SetCustomNamespaceModifier(FName InParameterName)
+{
+	TSet<FName> CurrentParameterNames;
+	return SetCustomNamespaceModifier(InParameterName, CurrentParameterNames);
+}
+
+FName FNiagaraParameterUtilities::SetCustomNamespaceModifier(FName InParameterName, TSet<FName>& CurrentParameterNames)
+{
+	FName CurrentModifier = GetEditableNamespaceModifierForParameter(InParameterName);
+	if (CurrentModifier == NAME_None)
+	{
+		FName ParameterNameWithCustomModifier = SetSpecificNamespaceModifier(InParameterName, "Custom");
+		int32 CustomIndex = 1;
+		while(CurrentParameterNames.Contains(ParameterNameWithCustomModifier))
+		{
+			ParameterNameWithCustomModifier = SetSpecificNamespaceModifier(InParameterName, *FString::Printf(TEXT("Custom%02i"), CustomIndex));
+			CustomIndex++;
+		}
+		return ParameterNameWithCustomModifier;
+	}
+	else
+	{
+		return InParameterName;
+	}
+}
+
+bool FNiagaraParameterUtilities::TestCanRenameWithMessage(FName ParameterName, FText& OutMessage)
+{
+	FNiagaraParameterHandle ParameterHandle;
+	FNiagaraNamespaceMetadata NamespaceMetadata;
+	if (GetNamespaceEditData(ParameterName, ParameterHandle, NamespaceMetadata, OutMessage))
+	{
+		if (NamespaceMetadata.Options.Contains(ENiagaraNamespaceMetadataOptions::PreventEditingName))
+		{
+			OutMessage = LOCTEXT("ParameterDoesntSupportChangingName", "This parameter doesn't support changing its name.");
+			return false;
+		}
+		else
+		{
+			OutMessage = LOCTEXT("ChangeParameterName", "Edit this parameter's name.");
+			return true;
+		}
+	}
+	return false;
 }
 
 #undef LOCTEXT_NAMESPACE

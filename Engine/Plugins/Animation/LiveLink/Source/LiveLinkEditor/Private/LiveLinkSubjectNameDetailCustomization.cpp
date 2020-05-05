@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "LiveLinkSubjectNameDetailCustomization.h"
 
@@ -26,7 +26,7 @@ void FLiveLinkSubjectNameDetailCustomization::CustomizeHeader(TSharedRef<IProper
 	StructPropertyHandle = InPropertyHandle;
 	TSharedPtr<IPropertyUtilities> PropertyUtils = CustomizationUtils.GetPropertyUtilities();
 
-	check(CastChecked<UStructProperty>(StructPropertyHandle->GetProperty())->Struct == FLiveLinkSubjectName::StaticStruct());
+	check(CastFieldChecked<FStructProperty>(StructPropertyHandle->GetProperty())->Struct == FLiveLinkSubjectName::StaticStruct());
 
 	HeaderRow.NameContent()
 	[
@@ -44,7 +44,7 @@ void FLiveLinkSubjectNameDetailCustomization::CustomizeHeader(TSharedRef<IProper
 }
 
 
-FLiveLinkSubjectRepresentation FLiveLinkSubjectNameDetailCustomization::GetValue() const
+SLiveLinkSubjectRepresentationPicker::FLiveLinkSourceSubjectRole FLiveLinkSubjectNameDetailCustomization::GetValue() const
 {
 	TArray<const void*> RawData;
 	StructPropertyHandle->AccessRawData(RawData);
@@ -55,16 +55,16 @@ FLiveLinkSubjectRepresentation FLiveLinkSubjectNameDetailCustomization::GetValue
 		{
 			FLiveLinkSubjectRepresentation Representation;
 			Representation.Subject = *reinterpret_cast<const FLiveLinkSubjectName *>(RawPtr);
-			return Representation;
+			return SLiveLinkSubjectRepresentationPicker::FLiveLinkSourceSubjectRole(Representation);
 		}
 	}
 
-	return FLiveLinkSubjectRepresentation();
+	return SLiveLinkSubjectRepresentationPicker::FLiveLinkSourceSubjectRole();
 }
 
-void FLiveLinkSubjectNameDetailCustomization::SetValue(FLiveLinkSubjectRepresentation NewValue)
+void FLiveLinkSubjectNameDetailCustomization::SetValue(SLiveLinkSubjectRepresentationPicker::FLiveLinkSourceSubjectRole NewValue)
 {
-	UStructProperty* StructProperty = CastChecked<UStructProperty>(StructPropertyHandle->GetProperty());
+	FStructProperty* StructProperty = CastFieldChecked<FStructProperty>(StructPropertyHandle->GetProperty());
 
 	TArray<void*> RawData;
 	StructPropertyHandle->AccessRawData(RawData);

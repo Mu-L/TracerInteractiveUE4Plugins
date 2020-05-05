@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #define MAXIMUM_GATHER_POINTS_PER_PIXEL 32
 
@@ -87,5 +87,10 @@ void CreateRejectionMask(
 		FGatherSample GatherSample = ReadGatherSample(GatherBuffer, BaseIndex, SampleIndex + Index, ElementCount);
 		float3 GPDistance2 = RejectionCriteria.CreationPoint - GatherSample.CreationPoint;
 		bShouldReject[Index] = dot(GPDistance2, GPDistance2) > RejectionCriteria.DistanceThreshold2;
+	}
+
+	for (int Index = SampleCount; Index < MAXIMUM_GATHER_POINTS_PER_PIXEL; ++Index)
+	{
+		bShouldReject[Index] = true;
 	}
 }

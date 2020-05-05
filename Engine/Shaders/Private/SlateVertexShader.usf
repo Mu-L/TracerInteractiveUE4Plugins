@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Common.ush"
 #include "GammaCorrectionCommon.ush"
@@ -63,10 +63,12 @@ VertexToPixelInterpolants Main(
 		float2(0,0)  //uv channel 7
 	};
 
-	UNROLL
-	for( int CoordinateIndex = 0; CoordinateIndex < NUM_MATERIAL_TEXCOORDS_VERTEX; CoordinateIndex++ )
 	{
-		VertexParameters.TexCoords[CoordinateIndex] = UVArrays[CoordinateIndex];
+		UNROLL
+		for( int CoordinateIndex = 0; CoordinateIndex < NUM_MATERIAL_TEXCOORDS_VERTEX; CoordinateIndex++ )
+		{
+			VertexParameters.TexCoords[CoordinateIndex] = UVArrays[CoordinateIndex];
+		}
 	}
 
 	#if HAS_MATERIAL_TEXCOORDS
@@ -99,10 +101,10 @@ VertexToPixelInterpolants Main(
 
 	VOut.Position = mul(WorldPosition, ViewProjection);
 
-#if (ES2_PROFILE && COMPILER_GLSL_ES2) || (ES3_1_PROFILE && COMPILER_GLSL_ES3_1)
+#if (ES3_1_PROFILE && COMPILER_GLSL_ES3_1)
 	// @todo-mobile: Fix this in the projection matrix
 	VOut.Position.y *= SwitchVerticalAxisMultiplier;
-#endif //(ES2_PROFILE && COMPILER_GLSL_ES2) || (ES3_1_PROFILE && COMPILER_GLSL_ES3_1)
+#endif //(ES3_1_PROFILE && COMPILER_GLSL_ES3_1)
 
 	return VOut;
 }

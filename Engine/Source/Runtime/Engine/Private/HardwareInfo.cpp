@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 /*=============================================================================
@@ -11,6 +11,9 @@
 
 static TMap< FName, FString > HardwareDetailsMap;
 
+ENGINE_API const FName NAME_RHI( "RHI" );
+ENGINE_API const FName NAME_TextureFormat( "TextureFormat" );
+ENGINE_API const FName NAME_DeviceType( "DeviceType" );
 
 void FHardwareInfo::RegisterHardwareInfo( const FName SpecIdentifier, const FString& HardwareInfo )
 {

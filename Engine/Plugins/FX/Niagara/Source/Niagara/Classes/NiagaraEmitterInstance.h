@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*==============================================================================
 NiagaraEmitterInstance.h: Niagara emitter simulation class
@@ -15,7 +15,6 @@ NiagaraEmitterInstance.h: Niagara emitter simulation class
 #include "NiagaraEmitter.h"
 #include "NiagaraScriptExecutionContext.h"
 #include "NiagaraBoundsCalculator.h"
-#include "NiagaraSystemFastPath.h"
 
 class FNiagaraSystemInstance;
 struct FNiagaraEmitterHandle;
@@ -38,9 +37,6 @@ public:
 
 	void ResetSimulation(bool bKillExisting = true);
 
-	/** Called after all emitters in an System have been initialized, allows emitters to access information from one another. */
-	void PostInitSimulation();
-
 	void DirtyDataInterfaces();
 
 	/** Replaces the binding for a single parameter colleciton instance. If for example the component begins to override the global instance. */
@@ -55,19 +51,21 @@ public:
 	void PostTick();
 	bool HandleCompletion(bool bForce = false);
 
-	bool RequiredPersistentID()const;
+	bool RequiresPersistentIDs() const;
 
 	FORCEINLINE bool ShouldTick()const { return ExecutionState == ENiagaraExecutionState::Active || GetNumParticles() > 0; }
 
 	uint32 CalculateEventSpawnCount(const FNiagaraEventScriptProperties &EventHandlerProps, TArray<int32, TInlineAllocator<16>>& EventSpawnCounts, FNiagaraDataSet *EventSet);
 
-	/** Generate system bounds, reading back data from the GPU will introduce a stall and should only be used for debug purposes. */
-	FBox CalculateDynamicBounds(const bool bReadGPUSimulation = false);
+#if WITH_EDITOR
+	/** Potentially reads back data from the GPU which will introduce a stall and should only be used for debug purposes. */
 	NIAGARA_API void CalculateFixedBounds(const FTransform& ToWorldSpace);
+#endif
 
 	FNiagaraDataSet& GetData()const { return *ParticleDataSet; }
 
 	FORCEINLINE bool IsDisabled()const { return ExecutionState == ENiagaraExecutionState::Disabled; }
+	FORCEINLINE bool IsInactive()const { return ExecutionState == ENiagaraExecutionState::Inactive; }
 	FORCEINLINE bool IsComplete()const { return ExecutionState == ENiagaraExecutionState::Complete || ExecutionState == ENiagaraExecutionState::Disabled; }
 
 	/** Create a new NiagaraRenderer. The old renderer is not immediately deleted, but instead put in the ToBeRemoved list.*/
@@ -83,7 +81,7 @@ public:
 		return 0;
 	}
 	FORCEINLINE int32 GetTotalSpawnedParticles()const { return TotalSpawnedParticles; }
-	FORCEINLINE float GetSpawnCountScale(int32 EffectsQuality = -1)const { return CachedEmitter->GetSpawnCountScale(EffectsQuality); }
+	FORCEINLINE const FNiagaraEmitterScalabilitySettings& GetScalabilitySettings()const { return CachedEmitter->GetScalabilitySettings(); }
 
 	NIAGARA_API const FNiagaraEmitterHandle& GetEmitterHandle() const;
 
@@ -123,36 +121,24 @@ public:
 
 	bool FindBinding(const FNiagaraUserParameterBinding& InBinding, TArray<UMaterialInterface*>& OutMaterials) const;
 
-	void InitFastPathAttributeBindings();
 
-	void TickFastPathAttributeBindings();
+	bool HasTicked() const { return TickCount > 0;  }
 
-	FNiagaraEmitterFastPath::FParamMap0& GetFastPathMap() { return FastPathMap; }
 private:
 	void CheckForErrors();
 
-	void InitFastPathParameterBindingsInternal(const FNiagaraFastPathAttributeNames& SourceParameterNames, FNiagaraParameterStore& TargetParameterStore);
+	void BuildConstantBufferTable(
+		const FNiagaraScriptExecutionContext& ExecContext,
+		FScriptExecutionConstantBufferTable& ConstantBufferTable) const;
 
-	template<typename TBindingType, typename TVariableType>
-	static void AddBinding(FName ParameterName, TVariableType ParameterType, TBindingType* SourceValuePtr, FNiagaraParameterStore& TargetParameterStore, TArray<TNiagaraFastPathAttributeBinding<TBindingType>>& TargetBindings)
-	{
-		TNiagaraFastPathAttributeBinding<TBindingType> Binding;
-		FNiagaraVariable ParameterVariable = FNiagaraVariable(ParameterType, ParameterName);
-		Binding.ParameterBinding.Init(TargetParameterStore, ParameterVariable);
-		if (Binding.ParameterBinding.ValuePtr != nullptr)
-		{
-			Binding.ParameterValue = SourceValuePtr;
-			TargetBindings.Add(Binding);
-		}
-	}
-
+	/** Generate emitter bounds */
+	FBox InternalCalculateDynamicBounds(int32 ParticleCount) const;
+	
 	/** The index of our emitter in our parent system instance. */
 	int32 EmitterIdx;
 
 	/* The age of the emitter*/
-	float Age;
-	/* how many loops this emitter has gone through */
-	uint32 Loops;
+	float EmitterAge;
 
 	int32 TickCount;
 
@@ -168,6 +154,8 @@ private:
 	/* Emitter bounds */
 	FBox CachedBounds;
 
+	uint32 MaxRuntimeAllocation;
+
 	/** Array of all spawn info driven by our owning emitter script. */
 	TArray<FNiagaraSpawnInfo> SpawnInfos;
 
@@ -180,30 +168,9 @@ private:
 	FNiagaraParameterDirectBinding<float> InterpSpawnStartBinding;
 	FNiagaraParameterDirectBinding<int32> SpawnGroupBinding;
 
-	FNiagaraParameterDirectBinding<float> EmitterAgeBindingGPU;
-
-	FNiagaraParameterDirectBinding<float> SpawnEmitterAgeBinding;
-	FNiagaraParameterDirectBinding<float> UpdateEmitterAgeBinding;
-	TArray<FNiagaraParameterDirectBinding<float>> EventEmitterAgeBindings;
-
 	FNiagaraParameterDirectBinding<int32> SpawnExecCountBinding;
 	FNiagaraParameterDirectBinding<int32> UpdateExecCountBinding;
 	TArray<FNiagaraParameterDirectBinding<int32>> EventExecCountBindings;
-
-	FNiagaraParameterDirectBinding<int32> SpawnTotalSpawnedParticlesBinding;
-	FNiagaraParameterDirectBinding<int32> UpdateTotalSpawnedParticlesBinding;
-	TArray<FNiagaraParameterDirectBinding<int32>> EventTotalSpawnedParticlesBindings;
-
-	FNiagaraParameterDirectBinding<int32> SpawnRandomSeedBinding;
-	FNiagaraParameterDirectBinding<int32> UpdateRandomSeedBinding;
-	FNiagaraParameterDirectBinding<int32> GPURandomSeedBinding;
-	TArray<FNiagaraParameterDirectBinding<int>> EventRandomSeedBindings;
-
-	/*
-	FNiagaraParameterDirectBinding<int32> SpawnDeterminismBinding;
-	FNiagaraParameterDirectBinding<int32> UpdateDeterminismBinding;
-	FNiagaraParameterDirectBinding<int32> GPUDeterminismBinding;
-	*/
 	
 	/** particle simulation data. Must be a shared ref as various things on the RT can have direct ref to it. */
 	FNiagaraDataSet* ParticleDataSet;
@@ -236,13 +203,14 @@ private:
 	TArray<FNiagaraEventHandlingInfo> EventHandlingInfo;
 	int32 EventSpawnTotal;
 
+	int32 MaxAllocationCount = 0;
+	int32 MinOverallocation = -1;
+	int32 ReallocationCount = 0;
+
 	/** Optional list of bounds calculators. */
 	TArray<TUniquePtr<FNiagaraBoundsCalculator>, TInlineAllocator<1>> BoundsCalculators;
 
-	FNiagaraEmitterFastPath::FParamMap0 FastPathMap;
-
-	TArray<TNiagaraFastPathAttributeBinding<int32>> FastPathIntAttributeBindings;
-	TArray<TNiagaraFastPathAttributeBinding<float>> FastPathFloatAttributeBindings;
-
 	TSharedPtr<const FNiagaraEmitterCompiledData> CachedEmitterCompiledData;
+
+	uint32 MaxInstanceCount = 0;
 };

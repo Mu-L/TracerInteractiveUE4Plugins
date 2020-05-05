@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -89,7 +89,7 @@ namespace SceneOutliner
 	};
 
 	/** Default column information for the scene outliner */
-	struct FDefaultColumnInfo : public FColumnInfo
+	struct FDefaultColumnInfo
 	{
 		FDefaultColumnInfo(const FColumnInfo& InColumnInfo, TOptional<ESceneOutlinerMode> InValidMode = TOptional<ESceneOutlinerMode>())
 			: ColumnInfo(InColumnInfo), ValidMode(InValidMode)

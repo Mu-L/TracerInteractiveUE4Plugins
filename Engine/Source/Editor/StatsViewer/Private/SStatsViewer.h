@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -44,6 +44,7 @@ public:
 	virtual void Refresh() override;
 	TSharedPtr< class IPropertyTable > GetPropertyTable() override;
 	int32 GetObjectSetIndex() const override;
+	void SwitchAndFilterPage(int32 Page, const FString& FilterValue, const FString& FilterProperty) override;
 	/** End IStatsViewer interface */
 
 private:

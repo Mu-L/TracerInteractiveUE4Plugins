@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Render/DisplayClusterRenderManager.h"
 #include "Config/IPDisplayClusterConfigManager.h"
@@ -132,6 +132,17 @@ void FDisplayClusterRenderManager::EndSession()
 		RenderDevicePtr = nullptr;
 	}
 #endif
+
+	ConfigPath.Reset();
+	ClusterNodeId.Reset();
+	
+	bWindowAdjusted = false;
+
+	RenderDeviceFactories.Reset();
+	SyncPolicyFactories.Reset();
+	SyncPolicy.Reset();
+	ProjectionPolicyFactories.Reset();
+	PostProcessOperations.Reset();
 }
 
 bool FDisplayClusterRenderManager::StartScene(UWorld* InWorld)
@@ -197,6 +208,11 @@ void FDisplayClusterRenderManager::PreTick(float DeltaSeconds)
 				UE_LOG(LogDisplayClusterRender, Error, TEXT("Wrong window pos/size arguments"));
 			}
 		}
+	}
+
+	if (RenderDevicePtr)
+	{
+		RenderDevicePtr->PreTick(DeltaSeconds);
 	}
 }
 
@@ -749,7 +765,7 @@ void FDisplayClusterRenderManager::OnViewportCreatedHandler_CheckViewportClass()
 		UDisplayClusterViewportClient* const GameViewport = Cast<UDisplayClusterViewportClient>(GEngine->GameViewport);
 		if (!GameViewport)
 		{
-			UE_LOG(LogDisplayClusterRender, Warning, TEXT("DisplayClusterViewportClient is not set as default GameViewport class"));
+			UE_LOG(LogDisplayClusterRender, Warning, TEXT("DisplayClusterViewportClient is not set as a default GameViewport class"));
 		}
 	}
 }

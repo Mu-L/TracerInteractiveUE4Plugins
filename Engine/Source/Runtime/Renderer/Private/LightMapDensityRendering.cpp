@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	LightMapDensityRendering.cpp: Implementation for rendering lightmap density.
@@ -155,11 +155,8 @@ void FLightmapDensityMeshProcessor::Process(
 				IAllocatedVirtualTexture* AllocatedVT = MeshBatch.LCI->GetResourceCluster()->AllocatedVT;
 				if (AllocatedVT)
 				{
-					// We use the total Space size here as the Lightmap Scale/Bias is transformed to VT space
-					// TODO - what should we do about multiple layers, as physical texture backing each layer may be different size
-					const uint32 PhysicalTextureSize = AllocatedVT->GetPhysicalTextureSize(0u);
-					ShaderElementData.LightMapResolutionScale.X = PhysicalTextureSize;
-					ShaderElementData.LightMapResolutionScale.Y = PhysicalTextureSize * 2.0f; // Compensates the VT specific math in GetLightMapCoordinates (used to pack more coefficients per texture)
+					ShaderElementData.LightMapResolutionScale.X = AllocatedVT->GetWidthInPixels();
+					ShaderElementData.LightMapResolutionScale.Y = AllocatedVT->GetHeightInPixels() * 2.0f; // Compensates the VT specific math in GetLightMapCoordinates (used to pack more coefficients per texture)
 				}
 			}
 			else
@@ -243,8 +240,9 @@ void FLightmapDensityMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT Mesh
 		const bool bMaterialMasked = Material->IsMasked();
 		const bool bTranslucentBlendMode = IsTranslucentBlendMode(Material->GetBlendMode());
 		const bool bIsLitMaterial = Material->GetShadingModels().IsLit();
-		const ERasterizerFillMode MeshFillMode = ComputeMeshFillMode(MeshBatch, *Material);
-		const ERasterizerCullMode MeshCullMode = ComputeMeshCullMode(MeshBatch, *Material);
+		const FMeshDrawingPolicyOverrideSettings OverrideSettings = ComputeMeshOverrideSettings(MeshBatch);
+		const ERasterizerFillMode MeshFillMode = ComputeMeshFillMode(MeshBatch, *Material, OverrideSettings);
+		const ERasterizerCullMode MeshCullMode = ComputeMeshCullMode(MeshBatch, *Material, OverrideSettings);
 		const FLightMapInteraction LightMapInteraction = (MeshBatch.LCI && bIsLitMaterial) ? MeshBatch.LCI->GetLightMapInteraction(FeatureLevel) : FLightMapInteraction();
 
 		// Force simple lightmaps based on system settings.

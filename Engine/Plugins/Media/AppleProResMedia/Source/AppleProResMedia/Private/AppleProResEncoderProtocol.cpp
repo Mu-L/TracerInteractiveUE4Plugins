@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AppleProResEncoderProtocol.h"
 
@@ -33,11 +33,6 @@ UAppleProResEncoderProtocol::UAppleProResEncoderProtocol(const FObjectInitialize
 bool UAppleProResEncoderProtocol::SetupImpl()
 {
 	ParseCommandLine();
-
-	if (!CreateFile(GenerateFilenameImpl(FFrameMetrics(), TEXT(".mov"))))
-	{
-		return false;
-	}
 
 	return Super::SetupImpl();
 }
@@ -224,6 +219,15 @@ bool UAppleProResEncoderProtocol::CreateFile(const FString& InFilename)
 
 void UAppleProResEncoderProtocol::ProcessFrame(FCapturedFrameData InFrame)
 {
+	// Defer writer creation until sequence has evaluated so that cached data for format mappings can be generated
+	if (FileWriter == nullptr)
+	{
+		if (!CreateFile(GenerateFilenameImpl(FFrameMetrics(), TEXT(".mov"))))
+		{
+			return;
+		}
+	}
+
 	FIntPoint ImageSize = FIntPoint(Dimensions.width, Dimensions.height);
 
 	FVideoFrameData* Payload = InFrame.GetPayload<FVideoFrameData>();

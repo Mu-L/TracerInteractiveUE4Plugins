@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -32,6 +32,8 @@ struct FWeakObjectPtr;
 
 template <typename ObjectPtrType>
 class FMulticastDelegateBase;
+
+ALIAS_TEMPLATE_TYPE_LAYOUT(template<typename ElementType>, FDelegateAllocatorType::ForElementType<ElementType>, void*);
 
 /**
  * Base class for unicast delegates.
@@ -256,5 +258,5 @@ private:
 
 inline void* operator new(size_t Size, FDelegateBase& Base)
 {
-	return Base.Allocate(Size);
+	return Base.Allocate((int32)Size);
 }

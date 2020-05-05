@@ -1,16 +1,13 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
-#include "CoreMinimal.h"
+#include "DatasmithCADWorker.h"
 
 #include "CADOptions.h"
 #include "DatasmithCommands.h"
 #include "DatasmithDispatcherNetworking.h"
 
 #include "HAL/PlatformTime.h"
-#include "Logging/LogMacros.h"
-
-DECLARE_LOG_CATEGORY_EXTERN(LogDatasmithCADWorker, Log, All);
 
 
 struct FFileStatData;
@@ -19,7 +16,7 @@ struct FImportParameters;
 class FDatasmithCADWorkerImpl
 {
 public:
-	FDatasmithCADWorkerImpl(int32 InServerPID, int32 InServerPort, const FString& KernelIOPath, const FString& InCachePath);
+	FDatasmithCADWorkerImpl(int32 InServerPID, int32 InServerPort, const FString& EnginePluginsPath, const FString& InCachePath);
 	bool Run();
 
 private:
@@ -36,7 +33,7 @@ private:
 
 	int32 ServerPID;
 	int32 ServerPort;
-	FString KernelIOPath;
+	FString EnginePluginsPath;
 	FString CachePath;
 	CADLibrary::FImportParameters ImportParameters;
 	uint64 PingStartCycle;

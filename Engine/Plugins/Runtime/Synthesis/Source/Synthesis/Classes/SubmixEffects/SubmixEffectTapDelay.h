@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -110,7 +110,8 @@ class SYNTHESIS_API FSubmixEffectTapDelay : public FSoundEffectSubmix
 {
 public:
 	FSubmixEffectTapDelay();
-	~FSubmixEffectTapDelay();
+
+	virtual ~FSubmixEffectTapDelay() = default;
 
 	//~ Begin FSoundEffectSubmix
 	virtual void Init(const FSoundEffectSubmixInitData& InData) override;

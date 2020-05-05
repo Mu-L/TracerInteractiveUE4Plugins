@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SSessionHistory.h"
 #include "IConcertSession.h"
@@ -52,7 +52,7 @@ void SSessionHistory::Construct(const FArguments& InArgs, TSharedPtr<IConcertSyn
 	ActivityListViewOptions = MakeShared<FConcertSessionActivitiesOptions>();
 
 	SAssignNew(ActivityListView, SConcertSessionActivities)
-		.OnGetPackageEvent([this](const FConcertClientSessionActivity& Activity) { return GetPackageEvent(Activity); })
+		.OnGetPackageEvent([this](const FConcertClientSessionActivity& Activity, FConcertSyncPackageEventMetaData& OutEvent) { return GetPackageEvent(Activity, OutEvent); })
 		.OnGetTransactionEvent([this](const FConcertClientSessionActivity& Activity) { return GetTransactionEvent(Activity); })
 		.OnMapActivityToClient([this](FGuid ClientId){ return EndpointClientInfoMap.Find(ClientId); })
 		.HighlightText(this, &SSessionHistory::HighlightSearchedText)
@@ -63,6 +63,8 @@ void SSessionHistory::Construct(const FArguments& InArgs, TSharedPtr<IConcertSyn
 		.PackageColumnVisibility(EVisibility::Collapsed)
 		.ConnectionActivitiesVisibility(ActivityListViewOptions.Get(), &FConcertSessionActivitiesOptions::GetConnectionActivitiesVisibility)
 		.LockActivitiesVisibility(ActivityListViewOptions.Get(), &FConcertSessionActivitiesOptions::GetLockActivitiesVisibility)
+		.PackageActivitiesVisibility(ActivityListViewOptions.Get(), &FConcertSessionActivitiesOptions::GetPackageActivitiesVisibility)
+		.TransactionActivitiesVisibility(ActivityListViewOptions.Get(), &FConcertSessionActivitiesOptions::GetTransactionActivitiesVisibility)
 		.DetailsAreaVisibility(EVisibility::Visible)
 		.IsAutoScrollEnabled(true);
 
@@ -218,15 +220,15 @@ void SSessionHistory::RegisterWorkspaceHandler()
 	}
 }
 
-TFuture<TOptional<FConcertSyncPackageEvent>> SSessionHistory::GetPackageEvent(const FConcertClientSessionActivity& Activity) const
+bool SSessionHistory::GetPackageEvent(const FConcertClientSessionActivity& Activity, FConcertSyncPackageEventMetaData& OutPackageEvent) const
 {
 	if (TSharedPtr<IConcertClientWorkspace> WorkspacePtr = Workspace.Pin())
 	{
 		// Don't request the package data, the widget only display the meta-data.
-		return WorkspacePtr->FindOrRequestPackageEvent(Activity.Activity.EventId, /*bMetaDataOnly*/true);
+		return WorkspacePtr->FindPackageEvent(Activity.Activity.EventId, OutPackageEvent);
 	}
 
-	return MakeFulfilledPromise<TOptional<FConcertSyncPackageEvent>>().GetFuture(); // The data is not available.
+	return false; // The data is not available.
 }
 
 TFuture<TOptional<FConcertSyncTransactionEvent>> SSessionHistory::GetTransactionEvent(const FConcertClientSessionActivity& Activity) const

@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "USDLayerUtils.h"
 
 #include "USDTypesConversion.h"
+#include "USDErrorUtils.h"
 
 #include "DesktopPlatformModule.h"
 #include "Framework/Application/SlateApplication.h"
@@ -20,6 +21,26 @@
 #include "USDIncludesEnd.h"
 
 #define LOCTEXT_NAMESPACE "USDLayerUtils"
+
+bool UsdUtils::InsertSubLayer( const TUsdStore< pxr::SdfLayerRefPtr >& ParentLayer, const TCHAR* SubLayerFile )
+{
+	if ( !ParentLayer.Get() )
+	{
+		return false;
+	}
+
+	FScopedUsdAllocs UsdAllocs;
+
+	std::string UsdLayerFilePath = ParentLayer.Get()->GetRealPath();
+	FString LayerFilePath = UsdToUnreal::ConvertString( UsdLayerFilePath );
+
+	FString SubLayerFilePath = FPaths::ConvertRelativePathToFull( SubLayerFile );
+	FPaths::MakePathRelativeTo( SubLayerFilePath, *LayerFilePath );
+
+	ParentLayer.Get()->InsertSubLayerPath( UnrealToUsd::ConvertString( *SubLayerFilePath ).Get() );
+
+	return true;
+}
 
 TOptional< FString > UsdUtils::BrowseUsdFile( EBrowseFileMode Mode, TSharedRef< const SWidget > OriginatingWidget )
 {
@@ -62,7 +83,7 @@ TOptional< FString > UsdUtils::BrowseUsdFile( EBrowseFileMode Mode, TSharedRef< 
 	return {};
 }
 
-TUsdStore< pxr::SdfLayerRefPtr > UsdUtils::CreateNewLayer( TUsdStore< pxr::UsdStageRefPtr > UsdStage, const TCHAR* LayerFilePath )
+TUsdStore< pxr::SdfLayerRefPtr > UsdUtils::CreateNewLayer( TUsdStore< pxr::UsdStageRefPtr > UsdStage, const TUsdStore<pxr::SdfLayerRefPtr>& ParentLayer, const TCHAR* LayerFilePath )
 {
 	FScopedUsdAllocs UsdAllocs;
 
@@ -75,6 +96,10 @@ TUsdStore< pxr::SdfLayerRefPtr > UsdUtils::CreateNewLayer( TUsdStore< pxr::UsdSt
 		return {};
 	}
 
+	// New layer needs to be created and in the stage layer stack before we can edit it
+	UsdUtils::InsertSubLayer( ParentLayer, LayerFilePath );
+
+	UsdUtils::StartMonitoringErrors();
 	pxr::UsdEditContext UsdEditContext( UsdStage.Get(), LayerRef );
 
 	// Create default prim
@@ -89,8 +114,12 @@ TUsdStore< pxr::SdfLayerRefPtr > UsdUtils::CreateNewLayer( TUsdStore< pxr::UsdSt
 		LayerRef->SetDefaultPrim( DefaultPrim.GetPrim().GetName() );
 	}
 
-	// Set up axis
-	UsdUtils::SetUsdStageAxis( UsdStage.Get(), pxr::UsdGeomTokens->z );
+	bool bHadErrors = UsdUtils::ShowErrorsAndStopMonitoring();
+
+	if (bHadErrors)
+	{
+		return {};
+	}
 
 	return TUsdStore< pxr::SdfLayerRefPtr >( LayerRef );
 }

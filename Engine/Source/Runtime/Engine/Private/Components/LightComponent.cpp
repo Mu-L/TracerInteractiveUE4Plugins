@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	LightComponent.cpp: LightComponent implementation.
@@ -231,7 +231,7 @@ void ULightComponentBase::OnRegister()
 	}
 }
 
-bool ULightComponentBase::CanEditChange(const UProperty* InProperty) const
+bool ULightComponentBase::CanEditChange(const FProperty* InProperty) const
 {
 	if (InProperty)
 	{
@@ -526,7 +526,7 @@ void ULightComponent::Serialize(FArchive& Ar)
 			FLightComponentLegacyMapBuildData LegacyLightData;
 			LegacyLightData.Id = LightGuid;
 			LegacyLightData.Data = LegacyData;
-			GLightComponentsWithLegacyBuildData.AddAnnotation(this, LegacyLightData);
+			GLightComponentsWithLegacyBuildData.AddAnnotation(this, MoveTemp(LegacyLightData));
 		}
 	}
 
@@ -571,7 +571,7 @@ void ULightComponent::PreSave(const class ITargetPlatform* TargetPlatform)
 	ValidateLightGUIDs();
 }
 
-bool ULightComponent::CanEditChange(const UProperty* InProperty) const
+bool ULightComponent::CanEditChange(const FProperty* InProperty) const
 {
 	if (InProperty)
 	{
@@ -645,7 +645,7 @@ bool ULightComponent::CanEditChange(const UProperty* InProperty) const
 
 void ULightComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
-	UProperty* PropertyThatChanged = PropertyChangedEvent.MemberProperty;
+	FProperty* PropertyThatChanged = PropertyChangedEvent.MemberProperty;
 	const FString PropertyName = PropertyThatChanged ? PropertyThatChanged->GetName() : TEXT("");
 
 	Intensity = FMath::Max(0.0f, Intensity);
@@ -775,9 +775,9 @@ void ULightComponent::OnRegister()
 	ValidateLightGUIDs();
 }
 
-void ULightComponent::CreateRenderState_Concurrent()
+void ULightComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
 {
-	Super::CreateRenderState_Concurrent();
+	Super::CreateRenderState_Concurrent(Context);
 
 	if (bAffectsWorld)
 	{
@@ -1116,6 +1116,19 @@ void ULightComponent::SetForceCachedShadowsForMovablePrimitives(bool bNewValue)
 	}
 }
 
+void ULightComponent::SetLightingChannels(bool bChannel0, bool bChannel1, bool bChannel2)
+{
+	if (bChannel0 != LightingChannels.bChannel0 ||
+		bChannel1 != LightingChannels.bChannel1 ||
+		bChannel2 != LightingChannels.bChannel2)
+	{
+		LightingChannels.bChannel0 = bChannel0;
+		LightingChannels.bChannel1 = bChannel1;
+		LightingChannels.bChannel2 = bChannel2;
+		MarkRenderStateDirty();
+	}
+}
+
 // GetDirection
 FVector ULightComponent::GetDirection() const 
 { 
@@ -1285,7 +1298,7 @@ void ULightComponent::InitializeStaticShadowDepthMap()
 			});
 
 		BeginInitResource(&StaticShadowDepthMap);
-	}
+			}
 }
 
 FLinearColor ULightComponent::GetColoredLightBrightness() const
@@ -1327,7 +1340,7 @@ void ULightComponent::SetMaterial(int32 ElementIndex, UMaterialInterface* InMate
 *
 * @param PropertyThatChanged	Property that changed
 */
-void ULightComponent::PostInterpChange(UProperty* PropertyThatChanged)
+void ULightComponent::PostInterpChange(FProperty* PropertyThatChanged)
 {
 	static FName LightColorName(TEXT("LightColor"));
 	static FName IntensityName(TEXT("Intensity"));

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TakesUtils.h"
 
@@ -33,12 +33,11 @@ UWorld* GetFirstPIEWorld()
 	return nullptr;
 }
 
-void ClampPlaybackRangeToEncompassAllSections(UMovieScene* InMovieScene)
+void ClampPlaybackRangeToEncompassAllSections(UMovieScene* InMovieScene, bool bUpperBoundOnly)
 {
 	check(InMovieScene);
 
-	TRange<FFrameNumber> OriginalPlayRange = InMovieScene->GetPlaybackRange();
-	TRange<FFrameNumber> PlayRange(OriginalPlayRange.GetLowerBoundValue());
+	TOptional < TRange<FFrameNumber> > PlayRange;
 
 	TArray<UMovieSceneSection*> MovieSceneSections = InMovieScene->GetAllSections();
 	for (UMovieSceneSection* Section : MovieSceneSections)
@@ -46,18 +45,36 @@ void ClampPlaybackRangeToEncompassAllSections(UMovieScene* InMovieScene)
 		TRange<FFrameNumber> SectionRange = Section->GetRange();
 		if (SectionRange.GetLowerBound().IsClosed() && SectionRange.GetUpperBound().IsClosed())
 		{
-			PlayRange = TRange<FFrameNumber>::Hull(PlayRange, SectionRange);
+			if (!PlayRange.IsSet())
+			{
+				PlayRange = SectionRange;
+			}
+			else
+			{
+				PlayRange = TRange<FFrameNumber>::Hull(PlayRange.GetValue(), SectionRange);
+			}
 		}
 	}
 
-	InMovieScene->SetPlaybackRange(TRange<FFrameNumber>(OriginalPlayRange.GetLowerBoundValue(), PlayRange.GetUpperBoundValue()));
+	if (!PlayRange.IsSet())
+	{
+		return;
+	}
+
+	// Extend only the upper bound because the start was set at the beginning of recording
+	if (bUpperBoundOnly)
+	{
+		PlayRange.GetValue().SetLowerBoundValue(InMovieScene->GetPlaybackRange().GetLowerBoundValue());
+	}
+
+	InMovieScene->SetPlaybackRange(PlayRange.GetValue());
 
 	// Initialize the working and view range with a little bit more space
 	FFrameRate  TickResolution = InMovieScene->GetTickResolution();
-	const double OutputViewSize = PlayRange.Size<FFrameNumber>() / TickResolution;
+	const double OutputViewSize = PlayRange.GetValue().Size<FFrameNumber>() / TickResolution;
 	const double OutputChange = OutputViewSize * 0.1;
 
-	TRange<double> NewRange = MovieScene::ExpandRange(PlayRange / TickResolution, OutputChange);
+	TRange<double> NewRange = MovieScene::ExpandRange(PlayRange.GetValue() / TickResolution, OutputChange);
 	FMovieSceneEditorData& EditorData = InMovieScene->GetEditorData();
 	EditorData.ViewStart = EditorData.WorkStart = NewRange.GetLowerBoundValue();
 	EditorData.ViewEnd = EditorData.WorkEnd = NewRange.GetUpperBoundValue();

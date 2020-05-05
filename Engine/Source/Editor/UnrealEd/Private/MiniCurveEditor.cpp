@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "MiniCurveEditor.h"
@@ -77,6 +77,12 @@ bool SMiniCurveEditor::CloseWindow()
 	}
 
 	return true;
+}
+
+FName SMiniCurveEditor::GetToolbarTabId() const
+{
+	//@TODO: This editor should probably derive from FAssetEditorToolkit instead!
+	return NAME_None;
 }
 
 TSharedPtr<class FTabManager> SMiniCurveEditor::GetAssociatedTabManager()

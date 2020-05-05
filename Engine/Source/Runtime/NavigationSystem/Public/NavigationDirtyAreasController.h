@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 #include "AI/Navigation/NavigationTypes.h"
@@ -27,6 +27,9 @@ struct NAVIGATIONSYSTEM_API FNavigationDirtyAreasController
 
 	void Reset();
 	
+	/** sets cumulative time to at least one cycle so next tick will rebuild dirty areas */
+	void ForceRebuildOnNextTick();
+
 	void Tick(float DeltaSeconds, const TArray<ANavigationData*>& NavDataSet, bool bForceRebuilding = false);
 	void AddArea(const FBox& NewArea, int32 Flags);
 	

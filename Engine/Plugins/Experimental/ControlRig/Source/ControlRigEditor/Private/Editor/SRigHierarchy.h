@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,6 +7,8 @@
 #include "Rigs/RigHierarchyContainer.h"
 #include "EditorUndoClient.h"
 #include "DragAndDrop/GraphNodeDragDropOp.h"
+#include "Engine/SkeletalMesh.h"
+#include "SRigHierarchy.generated.h"
 
 class SRigHierarchy;
 class FControlRigEditor;
@@ -92,6 +94,37 @@ private:
 	FText GetName() const;
 };
 
+USTRUCT()
+struct FRigHierarchyImportSettings
+{
+	GENERATED_BODY()
+
+	FRigHierarchyImportSettings()
+	: Mesh(nullptr)
+	{}
+
+	UPROPERTY(EditAnywhere, Category = "Hierachy Import")
+	USkeletalMesh* Mesh;
+};
+
+class SRigHierarchyTreeView : public STreeView<TSharedPtr<FRigTreeElement>>
+{
+public:
+
+	virtual ~SRigHierarchyTreeView() {}
+
+	virtual FReply OnFocusReceived(const FGeometry& MyGeometry, const FFocusEvent& InFocusEvent) override
+	{
+		FReply Reply = STreeView<TSharedPtr<FRigTreeElement>>::OnFocusReceived(MyGeometry, InFocusEvent);
+
+		LastClickCycles = FPlatformTime::Cycles();
+
+		return Reply;
+	}
+
+	uint32 LastClickCycles = 0;
+};
+
 /** Widget allowing editing of a control rig's structure */
 class SRigHierarchy : public SCompoundWidget, public FEditorUndoClient
 {
@@ -151,6 +184,8 @@ private:
 	void OnSelectionChanged(TSharedPtr<FRigTreeElement> Selection, ESelectInfo::Type SelectInfo);
 
 	TSharedPtr< SWidget > CreateContextMenu();
+	void OnItemClicked(TSharedPtr<FRigTreeElement> InItem);
+	void OnItemDoubleClicked(TSharedPtr<FRigTreeElement> InItem);
 
 	// FEditorUndoClient
 	virtual void PostUndo(bool bSuccess) override;
@@ -173,10 +208,13 @@ private:
 	TSharedPtr<SSearchBox> FilterBox;
 	FText FilterText;
 
+	EVisibility IsToolbarVisible() const;
+	EVisibility IsSearchbarVisible() const;
+	FReply OnImportSkeletonClicked();
 	void OnFilterTextChanged(const FText& SearchText);
 
 	/** Tree view widget */
-	TSharedPtr<STreeView<TSharedPtr<FRigTreeElement>>> TreeView;
+	TSharedPtr<SRigHierarchyTreeView> TreeView;
 
 	/** Backing array for tree view */
 	TArray<TSharedPtr<FRigTreeElement>> RootElements;
@@ -194,6 +232,8 @@ private:
 
 	bool IsMultiSelected() const;
 	bool IsSingleSelected() const;
+	bool IsSingleBoneSelected() const;
+	bool IsSingleSpaceSelected() const;
 	bool IsControlSelected() const;
 	bool IsControlOrSpaceSelected() const;
 
@@ -212,6 +252,7 @@ private:
 	void HandleSetInitialTransformFromCurrentTransform();
 	void HandleSetInitialTransformFromClosestBone();
 	void HandleFrameSelection();
+	void HandleControlBoneOrSpaceTransform();
 	bool FindClosestBone(const FVector& Point, FName& OutRigElementName, FTransform& OutGlobalTransform) const;
 
 	FName CreateUniqueName(const FName& InBaseName, ERigElementType InElementType) const;

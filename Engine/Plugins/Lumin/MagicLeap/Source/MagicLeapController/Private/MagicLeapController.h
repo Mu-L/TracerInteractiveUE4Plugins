@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -133,6 +133,8 @@ private:
 	MLInputControllerCallbacks InputControllerCallbacks;
 	TMap<FName, FMagicLeapControllerState> CurrMotionSourceControllerState;
 	TMap<FName, FMagicLeapControllerState> PrevMotionSourceControllerState;
+
+	void EnqueueButton(EControllerHand ControllerHand, MLInputControllerButton Button, bool bIsPressed);
 #endif //WITH_MLSDK
 
 	bool bIsInputStateValid;

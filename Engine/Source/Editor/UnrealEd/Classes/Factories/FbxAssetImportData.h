@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,7 +12,7 @@ class UFbxSceneImportData;
 /**
  * Base class for import data and options used when importing any asset from FBX
  */
-UCLASS(config=EditorPerProjectUserSettings, HideCategories=Object, abstract)
+UCLASS(BlueprintType, config=EditorPerProjectUserSettings, HideCategories=Object, abstract)
 class UNREALED_API UFbxAssetImportData : public UAssetImportData
 {
 	GENERATED_UCLASS_BODY()
@@ -45,11 +45,4 @@ class UNREALED_API UFbxAssetImportData : public UAssetImportData
 	/* Use by the reimport factory to answer CanReimport, if true only factory for scene reimport will return true */
 	UPROPERTY()
 	UFbxSceneImportData* FbxSceneImportDataReference;
-
-	/* We want to change the last dialog state but not the CDO, so we cannot call UObject::SaveConfig here.
-	 * The problem is the class is use to store the import settings with the imported asset and the serialization
-	 * is serializing the diff with the CDO. Data will be lost if the CDO change.
-	*/
-	virtual void SaveOptions();
-	virtual void LoadOptions();
 };

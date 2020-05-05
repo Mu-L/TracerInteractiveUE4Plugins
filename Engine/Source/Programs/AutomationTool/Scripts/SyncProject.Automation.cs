@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -286,6 +286,13 @@ class SyncProject : BuildCommand
 			if (BuildProject && ExitStatus == ExitCode.Success)
 			{
 				Log.TraceVerbose("Building Editor for {0}", ProjectArgForEditor);
+
+				// Invalidate the location of the Target.cs files incase they were synced
+				if (ProjectFile != null)
+				{
+					string TargetSourceDir = CommandUtils.CombinePaths(Path.GetDirectoryName(ProjectFile.FullName), "Source");
+					RulesCompiler.InvalidateRulesFileCache(TargetSourceDir);
+				}
 
 				BuildEditor BuildCmd = new BuildEditor();
 				BuildCmd.Clean = ParseParam("clean");

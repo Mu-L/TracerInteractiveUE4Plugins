@@ -1,13 +1,15 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "ViewModels/Stack/NiagaraStackEntry.h"
+#include "NiagaraScriptHighlight.h"
 #include "Layout/Visibility.h"
 #include "NiagaraStackItem.generated.h"
 
 class UNiagaraStackItemFooter;
 class UNiagaraNode;
+class UNiagaraClipboardContent;
 
 UCLASS()
 class NIAGARAEDITOR_API UNiagaraStackItem : public UNiagaraStackEntry
@@ -16,6 +18,8 @@ class NIAGARAEDITOR_API UNiagaraStackItem : public UNiagaraStackEntry
 
 public:
 	DECLARE_MULTICAST_DELEGATE(FOnModifiedGroupItems);
+	DECLARE_DELEGATE_RetVal_TwoParams(bool, FOnRequestCanPaste, const UNiagaraClipboardContent* /* ClipboardContent */, FText& /* OutCanPasteMessage */);
+	DECLARE_DELEGATE_ThreeParams(FOnRequestPaste, const UNiagaraClipboardContent* /* ClipboardContent */, int32 /* PasteIndex */, FText& /* OutPasteWarning */);
 
 public:
 	void Initialize(FRequiredEntryData InRequiredEntryData, FString InStackEditorDataKey);
@@ -24,12 +28,21 @@ public:
 
 	FOnModifiedGroupItems& OnModifiedGroupItems();
 
+	void SetOnRequestCanPaste(FOnRequestCanPaste InOnRequestCanPaste);
+	void SetOnRequestPaste(FOnRequestPaste InOnRequestCanPaste);
+
 	virtual bool SupportsChangeEnabled() const { return false; }
 	void SetIsEnabled(bool bInIsEnabled);
 
-	virtual bool SupportsDelete() const { return false; }
-	virtual bool TestCanDeleteWithMessage(FText& OutCanDeleteMessage) const { return false; }
-	void Delete();
+	virtual bool SupportsHighlights() const { return false; }
+	virtual const TArray<FNiagaraScriptHighlight>& GetHighlights() const;
+
+	virtual bool SupportsIcon() const { return false; }
+	virtual const FSlateBrush* GetIconBrush() const;
+
+	virtual bool SupportsResetToBase() const { return false; }
+	virtual bool TestCanResetToBaseWithMessage(FText& OutCanResetToBaseMessage) const { return false; }
+	virtual void ResetToBase() { }
 	
 protected:
 	virtual void RefreshChildrenInternal(const TArray<UNiagaraStackEntry*>& CurrentChildren, TArray<UNiagaraStackEntry*>& NewChildren, TArray<FStackIssue>& NewIssues) override;
@@ -39,7 +52,6 @@ protected:
 	virtual int32 GetChildIndentLevel() const override;
 
 	virtual void SetIsEnabledInternal(bool bInIsEnabled) { }
-	virtual void DeleteInternal() { }
 
 private:
 	bool FilterAdvancedChildren(const UNiagaraStackEntry& Child) const;
@@ -48,6 +60,8 @@ private:
 
 protected:
 	FOnModifiedGroupItems ModifiedGroupItemsDelegate;
+	FOnRequestCanPaste RequestCanPasteDelegete;
+	FOnRequestPaste RequestPasteDelegate;
 
 private:
 	UPROPERTY()
@@ -77,4 +91,18 @@ private:
 private:
 	FString OwningStackItemEditorDataKey;
 	bool bIsAdvanced;
+};
+
+UCLASS()
+class NIAGARAEDITOR_API UNiagaraStackItemTextContent : public UNiagaraStackItemContent
+{
+	GENERATED_BODY()
+
+public:
+	void Initialize(FRequiredEntryData InRequiredEntryData, FText InDisplayText, bool bInIsAdvanced, FString InOwningStackItemEditorDataKey);
+
+	virtual FText GetDisplayName() const override;
+
+private:
+	FText DisplayText;
 };

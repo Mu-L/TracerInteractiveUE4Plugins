@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // Implementation of D3D12 Pipelinestate related functions
 
@@ -16,7 +16,9 @@
 #ifndef D3D12RHI_USE_HIGH_LEVEL_PSO_CACHE
 #define D3D12RHI_USE_HIGH_LEVEL_PSO_CACHE 0
 #endif
-#define D3D12_USE_DERIVED_PSO PLATFORM_XBOXONE
+#ifndef D3D12_USE_DERIVED_PSO
+	#define D3D12_USE_DERIVED_PSO 0
+#endif
 
 #if D3D12RHI_USE_HIGH_LEVEL_PSO_CACHE
 DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("Graphics: Num high-level cache entries"), STAT_PSOGraphicsNumHighlevelCacheEntries, STATGROUP_D3D12PipelineState);
@@ -78,6 +80,7 @@ struct FD3D12LowLevelGraphicsPipelineStateDesc
 	ShaderBytecodeHash GSHash;
 	ShaderBytecodeHash PSHash;
 	uint32 InputLayoutHash;
+	bool bFromPSOFileCache;
 
 	SIZE_T CombinedHash;
 
@@ -106,7 +109,7 @@ struct FD3D12LowLevelGraphicsPipelineStateDesc
 
 	FORCEINLINE FString GetName() const { return FString::Printf(TEXT("%llu"), CombinedHash); }
 
-#if PLATFORM_XBOXONE
+#if D3D12_USE_DERIVED_PSO
 	void Destroy();
 #endif
 };
@@ -137,7 +140,7 @@ struct FD3D12ComputePipelineStateDesc
 
 	FORCEINLINE FString GetName() const { return FString::Printf(TEXT("%llu"), CombinedHash); }
 
-#if PLATFORM_XBOXONE
+#if D3D12_USE_DERIVED_PSO
 	void Destroy();
 #endif
 };
@@ -281,8 +284,8 @@ struct FD3D12PipelineStateWorker : public FD3D12AdapterChild, public FNonAbandon
 
 	union PipelineCreationArgs
 	{
-		ComputePipelineCreationArgs_POD ComputeArgs;
-		GraphicsPipelineCreationArgs_POD GraphicsArgs;
+		ComputePipelineCreationArgs_POD* ComputeArgs;
+		GraphicsPipelineCreationArgs_POD* GraphicsArgs;
 	} CreationArgs;
 
 	const bool bIsGraphics;
@@ -298,18 +301,23 @@ public:
 	void Create(const ComputePipelineCreationArgs& InCreationArgs);
 	void CreateAsync(const ComputePipelineCreationArgs& InCreationArgs);
 
-#if PLATFORM_XBOXONE
+#if D3D12_USE_DERIVED_PSO
 	void Create(const FGraphicsPipelineStateInitializer& Initializer, FD3D12PipelineState* BasePSO);
 #endif
 
 	void Create(const GraphicsPipelineCreationArgs& InCreationArgs);
 	void CreateAsync(const GraphicsPipelineCreationArgs& InCreationArgs);
 
+	FORCEINLINE bool IsValid()
+	{
+		return (GetPipelineState() != nullptr);
+	}
+
 	FORCEINLINE ID3D12PipelineState* GetPipelineState()
 	{
-		if (CachedPipelineState)
+		if (bInitialized)
 		{
-			return CachedPipelineState;
+			return PipelineState.GetReference();
 		}
 		else
 		{
@@ -317,24 +325,16 @@ public:
 		}
 	}
 
-	FD3D12PipelineState& operator=(const FD3D12PipelineState& other)
-	{
-		checkSlow(GPUMask == other.GPUMask);
-		checkSlow(VisibilityMask == other.VisibilityMask);
-
-		PipelineState = other.PipelineState;
-		Worker = other.Worker;
-		return *this;
-	}
+	FD3D12PipelineState& operator=(const FD3D12PipelineState& other) = delete;
 
 private:
 	ID3D12PipelineState* InternalGetPipelineState();
 
 protected:
-	ID3D12PipelineState* CachedPipelineState;
 	TRefCountPtr<ID3D12PipelineState> PipelineState;
 	FAsyncTask<FD3D12PipelineStateWorker>* Worker;
 	FRWLock GetPipelineStateMutex;
+	volatile bool bInitialized;
 };
 
 struct FD3D12GraphicsPipelineState : public FRHIGraphicsPipelineState
@@ -342,7 +342,7 @@ struct FD3D12GraphicsPipelineState : public FRHIGraphicsPipelineState
 	explicit FD3D12GraphicsPipelineState(const FGraphicsPipelineStateInitializer& Initializer, const FD3D12RootSignature* InRootSignature, FD3D12PipelineState* InPipelineState);
 	~FD3D12GraphicsPipelineState();
 
-	const FGraphicsPipelineStateInitializer PipelineStateInitializer;
+	FGraphicsPipelineStateInitializer PipelineStateInitializer;
 	const FD3D12RootSignature* RootSignature;
 	uint16 StreamStrides[MaxVertexElementCount];
 	bool bShaderNeedsGlobalConstantBuffer[SF_NumStandardFrequencies];

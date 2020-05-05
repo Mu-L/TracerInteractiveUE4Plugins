@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -94,7 +94,7 @@ public:
 
 	//~ UObject interface
 #if WITH_EDITOR
-	virtual bool CanEditChange(const UProperty* InProperty) const override;
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
 #endif //WITH_EDITOR
 	//~ End UObject interface
 
@@ -111,8 +111,8 @@ class DATASMITHCONTENT_API UDatasmithTranslatedSceneImportData : public UDatasmi
 
 #if WITH_EDITORONLY_DATA
 public:
-	UPROPERTY(EditAnywhere, Category = "Translation", meta = (ShowOnlyInnerProperties))
-	TSubclassOf<UObject> OriginFactory;
+	UPROPERTY(EditAnywhere, Category = "Options", meta = (ShowOnlyInnerProperties))
+	TArray<UDatasmithOptionsBase*> AdditionalOptions;
 #endif // WITH_EDITORONLY_DATA
 };
 

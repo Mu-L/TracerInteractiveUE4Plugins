@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -145,6 +145,11 @@ public:
 	 * Inform that HTTP Manager that we have completed a fork(). Must be called in both the client and parent process
 	 */
 	virtual void OnAfterFork();
+
+	/**
+	 * Update configuration. Called when config has been updated and we need to apply any changes.
+	 */
+	virtual void UpdateConfigs();
 
 protected:
 	/** 

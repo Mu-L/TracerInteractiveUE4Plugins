@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Widgets/Layout/SSplitter.h"
 #include "Layout/ArrangedChildren.h"
@@ -166,6 +166,17 @@ int32 SSplitter::OnPaint( const FPaintArgs& Args, const FGeometry& AllottedGeome
 	// Draw the splitter above any children
 	MaxLayerId += 1;
 
+	// HoveredHandleIndex is an index into our Children array, but some of those may be hidden and missing from ArrangedChildren so we need to update the index for the loop below
+	int32 ArrangedHoveredHandleIndex = HoveredHandleIndex;
+	if (ArrangedHoveredHandleIndex != INDEX_NONE && ArrangedChildren.Num() != Children.Num())
+	{
+		const TSharedRef<SWidget>& HoveredChildToFind = Children[HoveredHandleIndex].GetWidget();
+		ArrangedHoveredHandleIndex = ArrangedChildren.IndexOfByPredicate([&HoveredChildToFind](const FArrangedWidget& InArrangedWidget)
+		{
+			return InArrangedWidget.Widget == HoveredChildToFind;
+		});
+	}
+
 	for( int32 ChildIndex = 0; ChildIndex < ArrangedChildren.Num() - 1; ++ChildIndex )
 	{
 		const FGeometry& GeometryAfterSplitter = ArrangedChildren[ FMath::Clamp(ChildIndex + 1, 0, ArrangedChildren.Num()-1) ].Geometry;
@@ -186,7 +197,7 @@ int32 SSplitter::OnPaint( const FPaintArgs& Args, const FGeometry& AllottedGeome
 			HandlePosition.Set( 0, -PhysicalSplitterHandleSize/*-(HalfHitDetectionSplitterHandleSize + HalfPhysicalSplitterHandleSize) */);
 		}
 
-		if (HoveredHandleIndex != ChildIndex)
+		if (ArrangedHoveredHandleIndex != ChildIndex)
 		{
 			FSlateDrawElement::MakeBox(
 				OutDrawElements,
@@ -503,8 +514,6 @@ void SSplitter::HandleResizingDelta(EOrientation SplitterOrientation, const floa
 	//  - Prev vs. Next refers to the widgets in the order they are laid out (left->right, top->bottom).
 	//  - New vs. Old refers to the Old values for width/height vs. the post-resize values.
 
-	const int32 SlotBeforeDragHandle = FindResizeableSlotBeforeHandle(DraggedHandle, InChildren);
-
 	TArray< int32 > SlotsAfterDragHandleIndicies;
 	if (InResizeMode == ESplitterResizeMode::FixedPosition)
 	{
@@ -520,7 +529,8 @@ void SSplitter::HandleResizingDelta(EOrientation SplitterOrientation, const floa
 		FindAllResizeableSlotsAfterHandle( DraggedHandle, InChildren, /*OUT*/ SlotsAfterDragHandleIndicies );
 	}
 
-	if ( SlotBeforeDragHandle >= 0 && SlotsAfterDragHandleIndicies.Num() > 0 )
+	const int32 NumSlotsAfterDragHandle = SlotsAfterDragHandleIndicies.Num();
+	if ( NumSlotsAfterDragHandle > 0 )
 	{
 		struct FSlotInfo 
 		{
@@ -530,18 +540,19 @@ void SSplitter::HandleResizingDelta(EOrientation SplitterOrientation, const floa
 		};
 
 		TArray< FSlotInfo > SlotsAfterDragHandle;
-		for (int SlotIndex = 0; SlotIndex < SlotsAfterDragHandleIndicies.Num(); SlotIndex++)
+		for (int SlotIndex = 0; SlotIndex < NumSlotsAfterDragHandle; SlotIndex++)
 		{
 			FSlotInfo SlotInfo;
 
 			SlotInfo.Slot = &InChildren[ SlotsAfterDragHandleIndicies[ SlotIndex ] ];
 			SlotInfo.Geometry = &ChildGeometries[ SlotsAfterDragHandleIndicies[ SlotIndex ] ];
-			SlotInfo.NewSize = SlotInfo.Geometry->GetSizeInParentSpace().Component( AxisIndex );
+			SlotInfo.NewSize = ClampChild(SlotInfo.Geometry->GetSizeInParentSpace().Component( AxisIndex ));
 
 			SlotsAfterDragHandle.Add( SlotInfo );
 		}
 
 		// Get references the prev and next children and their layout settings so that we can modify them.
+		const int32 SlotBeforeDragHandle = FindResizeableSlotBeforeHandle(DraggedHandle, InChildren);
 		FSlot& PrevChild = InChildren[SlotBeforeDragHandle];
 		const FLayoutGeometry& PrevChildGeom = ChildGeometries[SlotBeforeDragHandle];
 
@@ -553,24 +564,29 @@ void SSplitter::HandleResizingDelta(EOrientation SplitterOrientation, const floa
 		// Distribute the Delta across the affected slots after the drag handle
 		float UnusedDelta = Delta;
 
-		for (int DistributionCount = 0; DistributionCount < SlotsAfterDragHandle.Num() && UnusedDelta != 0; DistributionCount++)
+		for (int DistributionCount = 0; DistributionCount < NumSlotsAfterDragHandle && UnusedDelta != 0; DistributionCount++)
 		{
-			float DividedDelta = InResizeMode != ESplitterResizeMode::FixedSize ? UnusedDelta / SlotsAfterDragHandle.Num() : UnusedDelta;
+			float DividedDelta = InResizeMode != ESplitterResizeMode::FixedSize ? UnusedDelta / NumSlotsAfterDragHandle : UnusedDelta;
+
+			// Reset the unused delta to keep track of any leftover space to distribute later through stretching.
 			UnusedDelta = 0;
 
-			for (int SlotIndex = 0; SlotIndex < SlotsAfterDragHandle.Num(); SlotIndex++)
+			int SlotIndex = 0;
+			// Resize only the last handle in the case of fixed size
+			if (InResizeMode == ESplitterResizeMode::FixedSize)
 			{
-				FSlotInfo& SlotInfo = SlotsAfterDragHandle[ SlotIndex ];
+				SlotIndex = NumSlotsAfterDragHandle - 1;
+			}
 
-				if (InResizeMode != ESplitterResizeMode::FixedSize || (InResizeMode == ESplitterResizeMode::FixedSize && SlotIndex == SlotsAfterDragHandle.Num() - 1)) // resize only the last handle in the case of fixed size
-				{
-					float CurrentSize = ClampChild(SlotInfo.Geometry->GetSizeInParentSpace().Component(AxisIndex));
-					SlotInfo.NewSize = ClampChild(CurrentSize - DividedDelta);
+			for (/*SlotIndex*/; SlotIndex < NumSlotsAfterDragHandle; SlotIndex++)
+			{
+				FSlotInfo& SlotInfo = SlotsAfterDragHandle[SlotIndex];
+				float CurrentSize = SlotInfo.NewSize;
+				SlotInfo.NewSize = ClampChild(CurrentSize - DividedDelta);
 
-					// If one of the slots couldn't be fully adjusted by the delta due to min/max constraints then
-					// the leftover delta needs to be evenly distributed to all of the other slots
-					UnusedDelta += SlotInfo.NewSize - (CurrentSize - DividedDelta);
-				}
+				// If one of the slots couldn't be fully adjusted by the delta due to min/max constraints then
+				// the leftover delta needs to be evenly distributed to all of the other slots
+				UnusedDelta += SlotInfo.NewSize - (CurrentSize - DividedDelta);
 			}
 		}
 
@@ -585,7 +601,7 @@ void SSplitter::HandleResizingDelta(EOrientation SplitterOrientation, const floa
 			float TotalLength = NewPrevChildLength;
 			float TotalStretchCoefficients = PrevChild.SizeValue.Get();
 
-			for (int SlotIndex = 0; SlotIndex < SlotsAfterDragHandle.Num(); SlotIndex++)
+			for (int SlotIndex = 0; SlotIndex < NumSlotsAfterDragHandle; SlotIndex++)
 			{
 				FSlotInfo SlotInfo = SlotsAfterDragHandle[ SlotIndex ];
 
@@ -604,7 +620,7 @@ void SSplitter::HandleResizingDelta(EOrientation SplitterOrientation, const floa
 				PrevChild.SizeValue = NewPrevChildSize;
 			}
 
-			for (int SlotIndex = 0; SlotIndex < SlotsAfterDragHandle.Num(); SlotIndex++)
+			for (int SlotIndex = 0; SlotIndex < NumSlotsAfterDragHandle; SlotIndex++)
 			{
 				FSlotInfo SlotInfo = SlotsAfterDragHandle[ SlotIndex ];
 

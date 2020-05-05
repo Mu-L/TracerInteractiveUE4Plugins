@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "DatasmithMaxWriter.h"
 
 #include "DatasmithSceneFactory.h"
@@ -427,7 +427,7 @@ FString FDatasmithMaxMatWriter::DumpAutodeskBitmap(TSharedPtr<IDatasmithComposit
 	}
 
 	bool bInvertTexture = false;
-	if (AutodeskBitmapParameters.InvertImage)
+	if (AutodeskBitmapParameters.bInvertImage)
 	{
 		bInvertTexture = true;
 	}

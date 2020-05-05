@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Components/AudioComponent.h"
 #include "Audio.h"
@@ -76,7 +76,7 @@ UAudioComponent::UAudioComponent(const FObjectInitializer& ObjectInitializer)
 	EnvelopeFollowerAttackTime = 10;
 	EnvelopeFollowerReleaseTime = 100;
 
-	AudioDeviceHandle = INDEX_NONE;
+	AudioDeviceID = INDEX_NONE;
 	AudioComponentID = FPlatformAtomics::InterlockedIncrement(reinterpret_cast<volatile int64*>(&AudioComponentIDCounter));
 
 	RandomStream.Initialize(FApp::bUseFixedSeed ? GetFName() : NAME_None);
@@ -554,18 +554,18 @@ FAudioDevice* UAudioComponent::GetAudioDevice() const
 
 	if (GEngine)
 	{
-		if (AudioDeviceHandle != INDEX_NONE)
+		if (AudioDeviceID != INDEX_NONE)
 		{
 			FAudioDeviceManager* AudioDeviceManager = GEngine->GetAudioDeviceManager();
-			AudioDevice = (AudioDeviceManager ? AudioDeviceManager->GetAudioDevice(AudioDeviceHandle) : nullptr);
+			AudioDevice = (AudioDeviceManager ? AudioDeviceManager->GetAudioDeviceRaw(AudioDeviceID) : nullptr);
 		}
 		else if (UWorld* World = GetWorld())
 		{
-			AudioDevice = World->GetAudioDevice();
+			AudioDevice = World->GetAudioDeviceRaw();
 		}
 		else
 		{
-			AudioDevice = GEngine->GetMainAudioDevice();
+			AudioDevice = GEngine->GetMainAudioDeviceRaw();
 		}
 	}
 	return AudioDevice;
@@ -1296,7 +1296,7 @@ void UAudioComponent::AdjustAttenuation(const FSoundAttenuationSettings& InAtten
 	}
 }
 
-void UAudioComponent::SetSubmixSend(USoundSubmix* Submix, float SendLevel)
+void UAudioComponent::SetSubmixSend(USoundSubmixBase* Submix, float SendLevel)
 {
 	if (FAudioDevice* AudioDevice = GetAudioDevice())
 	{

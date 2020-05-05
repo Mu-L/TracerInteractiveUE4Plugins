@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	TextureRenderTarget2D.cpp: UTextureRenderTarget2D implementation
@@ -24,6 +24,8 @@ int32 GTextureRenderTarget2DMaxSizeY = 999999999;
 UTextureRenderTarget2D::UTextureRenderTarget2D(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	SizeX = 1;
+	SizeY = 1;
 	bHDR_DEPRECATED = true;
 	RenderTargetFormat = RTF_RGBA16f;
 	bAutoGenerateMips = false;
@@ -39,16 +41,6 @@ UTextureRenderTarget2D::UTextureRenderTarget2D(const FObjectInitializer& ObjectI
 FTextureResource* UTextureRenderTarget2D::CreateResource()
 {
 	UWorld* World = GetWorld();
-	ERHIFeatureLevel::Type FeatureLevel = World != nullptr ? World->FeatureLevel.GetValue() : GMaxRHIFeatureLevel;
-	if (FeatureLevel <= ERHIFeatureLevel::ES2)
-	{
-		EPixelFormat Format = GetFormat();
-		if ((!GSupportsRenderTargetFormat_PF_FloatRGBA && (Format == PF_FloatRGBA || Format == PF_FloatRGB))
-			|| Format == PF_A16B16G16R16)
-		{
-			OverrideFormat = PF_B8G8R8A8;
-		}
-	}
 
 	if (bAutoGenerateMips)
 	{
@@ -559,7 +551,7 @@ void FTextureRenderTarget2DResource::UpdateDeferredResource( FRHICommandListImme
  	// clear the target surface to green
 	if (bClearRenderTarget)
 	{
-		RHICmdList.SetViewport(0, 0, 0.0f, TargetSizeX, TargetSizeY, 1.0f);
+		RHICmdList.SetViewport(0.0f, 0.0f, 0.0f, (float)TargetSizeX, (float)TargetSizeY, 1.0f);
 		ensure(RenderTargetTextureRHI.IsValid() && (RenderTargetTextureRHI->GetClearColor() == ClearColor));
 
 		FRHIRenderPassInfo RPInfo(RenderTargetTextureRHI, ERenderTargetActions::Clear_Store);
@@ -567,12 +559,12 @@ void FTextureRenderTarget2DResource::UpdateDeferredResource( FRHICommandListImme
 		RHICmdList.EndRenderPass();
 	}
  
-	// #todo-renderpasses must generate mips outside of a renderpass?
+	// #todo-renderpasses must generate mips outside of a renderpass (right now compute only is used; but this is not possible on all platforms) ?
 	if (Owner->bAutoGenerateMips)
 	{
 		/**Convert the input values from the editor to a compatible format for FSamplerStateInitializerRHI. 
 			Ensure default sampler is Bilinear clamp*/
-		FGenerateMips::Execute(RHICmdList, RenderTargetTextureRHI, FGenerateMipsParams{
+		FGenerateMips::Execute(RHICmdList, RenderTargetTextureRHI, CachedMipsGenParams, FGenerateMipsParams{
 			Owner->MipsSamplerFilter == TF_Nearest ? SF_Point : (Owner->MipsSamplerFilter == TF_Trilinear ? SF_Trilinear : SF_Bilinear),
 			Owner->MipsAddressU == TA_Wrap ? AM_Wrap : (Owner->MipsAddressU == TA_Mirror ? AM_Mirror : AM_Clamp),
 			Owner->MipsAddressV == TA_Wrap ? AM_Wrap : (Owner->MipsAddressV == TA_Mirror ? AM_Mirror : AM_Clamp)});

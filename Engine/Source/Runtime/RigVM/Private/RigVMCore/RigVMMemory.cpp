@@ -1,9 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "RigVMCore/RigVMMemory.h"
 #include "UObject/AnimObjectVersion.h"
 #include "UObject/PropertyPortFlags.h"
 #include "UObject/Package.h"
+#include "RigVMModule.h"
 
 bool FRigVMRegister::Serialize(FArchive& Ar)
 {
@@ -24,6 +25,22 @@ bool FRigVMRegister::Serialize(FArchive& Ar)
 	Ar << TrailingBytes;
 	Ar << Name;
 	Ar << ScriptStructIndex;
+
+	if (Ar.IsLoading())
+	{
+		if (Ar.CustomVer(FAnimObjectVersion::GUID) >= FAnimObjectVersion::SerializeRigVMRegisterArrayState)
+		{
+			Ar << bIsArray;
+		}
+		else
+		{
+			bIsArray = false;
+		}
+	}
+	else
+	{
+		Ar << bIsArray;
+	}
 
 	return true;
 }
@@ -64,7 +81,7 @@ FRigVMRegisterOffset::FRigVMRegisterOffset(UScriptStruct* InScriptStruct, const 
 				Left = InPath;
 			}
 
-			UProperty* Property = InStruct->FindPropertyByName(*Left);
+			FProperty* Property = InStruct->FindPropertyByName(*Left);
 			check(Property)
 
 			int32 SegmentIndex = Property->GetOffset_ReplaceWith_ContainerPtrToValuePtr();
@@ -86,11 +103,11 @@ FRigVMRegisterOffset::FRigVMRegisterOffset(UScriptStruct* InScriptStruct, const 
 
 			if (!Right.IsEmpty())
 			{
-				if (UStructProperty* StructProperty = Cast<UStructProperty>(Property))
+				if (FStructProperty* StructProperty = CastField<FStructProperty>(Property))
 				{
 					WalkStruct(StructProperty->Struct, Right, Offset);
 				}
-				else if (UArrayProperty* ArrayProperty = Cast<UArrayProperty>(Property))
+				else if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
 				{
 					WalkArray(ArrayProperty, Right, Offset);
 				}
@@ -100,13 +117,13 @@ FRigVMRegisterOffset::FRigVMRegisterOffset(UScriptStruct* InScriptStruct, const 
 				Offset.CPPType = *Property->GetCPPType();
 				Offset.ElementSize = Property->ElementSize;
 
-				if (UArrayProperty* ArrayProperty = Cast<UArrayProperty>(Property))
+				if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
 				{
 					Offset.Segments.Add(-1);
 					Property = ArrayProperty->Inner;
 				}
 
-				if (UStructProperty* StructProperty = Cast<UStructProperty>(Property))
+				if (FStructProperty* StructProperty = CastField<FStructProperty>(Property))
 				{
 					Offset.ScriptStruct = StructProperty->Struct;
 					Offset.Type = ERigVMRegisterType::Struct;
@@ -118,7 +135,7 @@ FRigVMRegisterOffset::FRigVMRegisterOffset(UScriptStruct* InScriptStruct, const 
 			}
 		}
 
-		static void WalkArray(UArrayProperty* InArrayProperty, const FString& InPath, FRigVMRegisterOffset& Offset)
+		static void WalkArray(FArrayProperty* InArrayProperty, const FString& InPath, FRigVMRegisterOffset& Offset)
 		{
 			FString Left, Right;
 			if (!InPath.Split(TEXT("."), &Left, &Right))
@@ -147,11 +164,11 @@ FRigVMRegisterOffset::FRigVMRegisterOffset(UScriptStruct* InScriptStruct, const 
 
 			if (!Right.IsEmpty())
 			{
-				if (UStructProperty* StructProperty = Cast<UStructProperty>(InArrayProperty->Inner))
+				if (FStructProperty* StructProperty = CastField<FStructProperty>(InArrayProperty->Inner))
 				{
 					WalkStruct(StructProperty->Struct, Right, Offset);
 				}
-				else if (UArrayProperty* ArrayProperty = Cast<UArrayProperty>(InArrayProperty->Inner))
+				else if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(InArrayProperty->Inner))
 				{
 					WalkArray(ArrayProperty, Right, Offset);
 				}
@@ -161,13 +178,13 @@ FRigVMRegisterOffset::FRigVMRegisterOffset(UScriptStruct* InScriptStruct, const 
 				Offset.CPPType = *InArrayProperty->Inner->GetCPPType();
 				Offset.ElementSize = InArrayProperty->Inner->ElementSize;
 
-				if (UArrayProperty* ArrayProperty = Cast<UArrayProperty>(InArrayProperty->Inner))
+				if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(InArrayProperty->Inner))
 				{
 					Offset.Segments.Add(-1);
 					InArrayProperty = ArrayProperty;
 				}
 
-				if (UStructProperty* StructProperty = Cast<UStructProperty>(InArrayProperty->Inner))
+				if (FStructProperty* StructProperty = CastField<FStructProperty>(InArrayProperty->Inner))
 				{
 					Offset.ScriptStruct = StructProperty->Struct;
 					Offset.Type = ERigVMRegisterType::Struct;
@@ -275,6 +292,7 @@ uint16 FRigVMRegisterOffset::GetElementSize() const
 FRigVMMemoryContainer::FRigVMMemoryContainer(bool bInUseNames)
 	: bUseNameMap(bInUseNames)
 	, MemoryType(ERigVMMemoryType::Work)
+	, bEncounteredErrorDuringLoad(false)
 {
 }
 
@@ -293,8 +311,10 @@ FRigVMMemoryContainer& FRigVMMemoryContainer::operator= (const FRigVMMemoryConta
 	Reset();
 
 	bUseNameMap = InOther.bUseNameMap;
+	bEncounteredErrorDuringLoad = false;
 	Data.Append(InOther.Data);
 	Registers.Append(InOther.Registers);
+	RegisterOffsets.Append(InOther.RegisterOffsets);
 	ScriptStructs.Append(InOther.ScriptStructs);
 
 	UpdateRegisters();
@@ -340,6 +360,8 @@ bool FRigVMMemoryContainer::Serialize(FArchive& Ar)
 
 	if (Ar.IsLoading())
 	{
+		bEncounteredErrorDuringLoad = false;
+
 		ScriptStructs.Reset();
 		TArray<FString> ScriptStructPaths;
 		Ar << ScriptStructPaths;
@@ -347,7 +369,16 @@ bool FRigVMMemoryContainer::Serialize(FArchive& Ar)
 		for (const FString& ScriptStructPath : ScriptStructPaths)
 		{
 			UScriptStruct* ScriptStruct = FindObject<UScriptStruct>(nullptr, *ScriptStructPath);
-			ensure(ScriptStruct != nullptr);
+
+			// this might have happened if a given script struct no longer 
+			// exists or cannot be loaded.
+			if (ScriptStruct == nullptr)
+			{
+				FString PackagePath = Ar.GetArchiveName();
+				UE_LOG(LogRigVM, Error, TEXT("Struct '%s' cannot be found. Asset '%s' no longer functional."), *ScriptStructPath, *PackagePath);
+				bEncounteredErrorDuringLoad = true;
+			}
+
 			ScriptStructs.Add(ScriptStruct);
 		}
 
@@ -364,6 +395,11 @@ bool FRigVMMemoryContainer::Serialize(FArchive& Ar)
 
 		for (const FRigVMRegister& Register : Registers)
 		{
+			if (Register.ElementCount == 0)
+			{
+				continue;
+			}
+
 			switch (Register.Type)
 			{
 				case ERigVMRegisterType::Plain:
@@ -403,7 +439,7 @@ bool FRigVMMemoryContainer::Serialize(FArchive& Ar)
 					ensure(View.Num() == Register.GetTotalElementCount());
 
 					uint8* DataPtr = &Data[Register.GetWorkByteIndex()];
-					UScriptStruct* ScriptStruct = ScriptStructs[Register.ScriptStructIndex];
+					UScriptStruct* ScriptStruct = GetScriptStruct(Register);
 					for (uint16 ElementIndex = 0; ElementIndex < Register.GetTotalElementCount(); ElementIndex++)
 					{
 						ScriptStruct->ImportText(*View[ElementIndex], DataPtr, nullptr, PPF_None, nullptr, ScriptStruct->GetName());
@@ -414,7 +450,14 @@ bool FRigVMMemoryContainer::Serialize(FArchive& Ar)
 			}
 		}
 
-		UpdateRegisters();
+		if (bEncounteredErrorDuringLoad)
+		{
+			Reset();
+		}
+		else
+		{
+			UpdateRegisters();
+		}
 	}
 	else
 	{
@@ -430,6 +473,11 @@ bool FRigVMMemoryContainer::Serialize(FArchive& Ar)
 
 		for (FRigVMRegister& Register : Registers)
 		{
+			if (Register.ElementCount == 0)
+			{
+				continue;
+			}
+
 			Register.MoveToFirstSlice();
 
 			switch(Register.Type)
@@ -458,7 +506,7 @@ bool FRigVMMemoryContainer::Serialize(FArchive& Ar)
 				case ERigVMRegisterType::Struct:
 				{
 					uint8* DataPtr = &Data[Register.GetWorkByteIndex()];
-					UScriptStruct* ScriptStruct = ScriptStructs[Register.ScriptStructIndex];
+					UScriptStruct* ScriptStruct = GetScriptStruct(Register);
 
 					TArray<FString> View;
 					for (uint16 ElementIndex = 0; ElementIndex < Register.GetTotalElementCount(); ElementIndex++)
@@ -481,15 +529,28 @@ bool FRigVMMemoryContainer::Serialize(FArchive& Ar)
 
 void FRigVMMemoryContainer::Reset()
 {
-	for (int32 Index = 0; Index < Registers.Num(); Index++)
+	if (Data.Num() > 0)
 	{
-		Destroy(Index);
+		for (int32 Index = 0; Index < Registers.Num(); Index++)
+		{
+			Destroy(Index);
+		}
 	}
 
 	Data.Reset();
 	Registers.Reset();
+	RegisterOffsets.Reset();
 	ScriptStructs.Reset();
 	NameMap.Reset();
+}
+
+void FRigVMMemoryContainer::Empty()
+{
+	Data.Empty();
+	Registers.Empty();
+	RegisterOffsets.Empty();
+	ScriptStructs.Empty();
+	NameMap.Empty();
 }
 
 bool FRigVMMemoryContainer::Copy(
@@ -514,6 +575,11 @@ bool FRigVMMemoryContainer::Copy(
 
 	const FRigVMRegister& Source = InSourceMemory->Registers[InSourceRegisterIndex];
 	const FRigVMRegister& Target = Registers[InTargetRegisterIndex];
+
+	if (Target.GetNumBytesPerSlice() == 0)
+	{
+		return true;
+	}
 
 	const uint8* SourcePtr = InSourceMemory->GetData(InSourceRegisterIndex, InSourceRegisterOffset);
 	uint8* TargetPtr = GetData(InTargetRegisterIndex, InTargetRegisterOffset);
@@ -612,7 +678,7 @@ int32 FRigVMMemoryContainer::Allocate(const FName& InNewName, int32 InElementSiz
 		} while (!IsNameAvailable(Name));
 	}
 
-	ensure(InElementSize > 0 && InElementCount > 0 && InSliceCount > 0);
+	ensure(InElementSize > 0 && InElementCount >= 0 && InSliceCount > 0);
 
 	if (bUseNameMap)
 	{
@@ -666,6 +732,12 @@ bool FRigVMMemoryContainer::Construct(int32 InRegisterIndex, int32 InElementInde
 	ensure(Registers.IsValidIndex(InRegisterIndex));
 
 	const FRigVMRegister& Register = Registers[InRegisterIndex];
+
+	if (Register.ElementCount == 0)
+	{
+		return true;
+	}
+
 	switch (Register.Type)
 	{
 		case ERigVMRegisterType::Struct:
@@ -716,6 +788,11 @@ bool FRigVMMemoryContainer::Destroy(int32 InRegisterIndex, int32 InElementIndex)
 
 	FRigVMRegister& Register = Registers[InRegisterIndex];
 
+	if (Register.ElementCount == 0)
+	{
+		return true;
+	}
+
 	if (InElementIndex == INDEX_NONE)
 	{
 		Register.MoveToFirstSlice();
@@ -729,7 +806,14 @@ bool FRigVMMemoryContainer::Destroy(int32 InRegisterIndex, int32 InElementIndex)
 			int32 Count = InElementIndex == INDEX_NONE ? Register.GetTotalElementCount() : 1;
 
 			UScriptStruct* ScriptStruct = GetScriptStruct(InRegisterIndex);
-			ScriptStruct->DestroyStruct(DataPtr, Count);
+			if (ScriptStruct)
+			{
+				ScriptStruct->DestroyStruct(DataPtr, Count);
+			}
+			else
+			{
+				FMemory::Memzero(DataPtr, Register.GetAllocatedBytes());
+			}
 			break;
 		}
 		case ERigVMRegisterType::String:
@@ -963,6 +1047,131 @@ int32 FRigVMMemoryContainer::GetOrAddRegisterOffset(int32 InRegisterIndex, UScri
 		return RegisterOffsets.Add(Offset);
 	}
 	return ExistingIndex;
+}
+
+void FRigVMMemoryContainer::SetRegisterValueFromString(const FRigVMOperand& InOperand, const FString& InCPPType, const UObject* InCPPTypeObject, const TArray<FString>& InDefaultValues)
+{
+	if (InOperand.GetRegisterIndex() < 0 || InOperand.GetRegisterIndex() >= Registers.Num())
+	{
+		return;
+	}
+
+	FRigVMRegister& Register = Registers[InOperand.GetRegisterIndex()];
+
+	if (Register.ElementCount != InDefaultValues.Num())
+	{
+		return;
+	}
+
+	for (int32 Index = 0; Index < InDefaultValues.Num(); Index++)
+	{
+		FString DefaultValue = InDefaultValues[Index];
+
+		if (Register.ScriptStructIndex != INDEX_NONE)
+		{
+			UScriptStruct* ScriptStruct = GetScriptStruct(Register);
+			if (ScriptStruct == InCPPTypeObject)
+			{
+				uint8* DataPtr = (uint8*)GetData(Register);
+				DataPtr += Index * ScriptStruct->GetStructureSize();
+				ScriptStruct->ImportText(*DefaultValue, DataPtr, nullptr, PPF_None, nullptr, ScriptStruct->GetName());
+			}
+		}
+		else if (const UEnum* Enum = Cast<const UEnum>(InCPPTypeObject))
+		{
+			if (FCString::IsNumeric(*DefaultValue))
+			{
+				GetArray<uint8>(Register)[Index] = (uint8)FCString::Atoi(*DefaultValue);
+			}
+			else
+			{
+				GetArray<uint8>(Register)[Index] = (uint8)Enum->GetValueByNameString(DefaultValue);
+			}
+		}
+		else if (InCPPType == TEXT("bool") && Register.GetNumBytesPerSlice() == sizeof(bool))
+		{
+			GetArray<bool>(Register)[Index] = (DefaultValue == TEXT("True")) || (DefaultValue == TEXT("true")) || (DefaultValue == TEXT("1"));
+		}
+		else if (InCPPType == TEXT("int32") && Register.GetNumBytesPerSlice() == sizeof(int32))
+		{
+			GetArray<int32>(Register)[Index] = FCString::Atoi(*DefaultValue);
+		}
+		else if (InCPPType == TEXT("float") && Register.GetNumBytesPerSlice() == sizeof(float))
+		{
+			GetArray<float>(Register)[Index] = FCString::Atof(*DefaultValue);
+		}
+		else if (InCPPType == TEXT("FName") && Register.GetNumBytesPerSlice() == sizeof(FName))
+		{
+			GetArray<FName>(Register)[Index] = *DefaultValue;
+		}
+		else if (InCPPType == TEXT("FString") && Register.GetNumBytesPerSlice() == sizeof(FString))
+		{
+			GetArray<FString>(Register)[Index] = *DefaultValue;
+		}
+		else
+		{
+			ensure(false);
+		}
+	}
+}
+
+TArray<FString> FRigVMMemoryContainer::GetRegisterValueAsString(const FRigVMOperand& InOperand, const FString& InCPPType, const UObject* InCPPTypeObject)
+{
+	TArray<FString> DefaultValues;
+
+	if (InOperand.GetRegisterIndex() < 0 || InOperand.GetRegisterIndex() >= Registers.Num())
+	{
+		return DefaultValues;
+	}
+
+	FRigVMRegister& Register = Registers[InOperand.GetRegisterIndex()];
+	for (int32 Index = 0; Index < Register.ElementCount; Index++)
+	{
+		FString DefaultValue;
+
+		if (Register.ScriptStructIndex != INDEX_NONE)
+		{
+			UScriptStruct* ScriptStruct = GetScriptStruct(Register);
+			if (ScriptStruct == InCPPTypeObject)
+			{
+				uint8* DataPtr = (uint8*)GetData(Register);
+				DataPtr += Index * ScriptStruct->GetStructureSize();
+				ScriptStruct->ExportText(DefaultValue, DataPtr, nullptr, nullptr, PPF_None, nullptr);
+			}
+		}
+		else if (const UEnum* Enum = Cast<const UEnum>(InCPPTypeObject))
+		{
+			DefaultValue = Enum->GetNameStringByValue((int64)GetArray<int32>(Register)[Index]);
+		}
+		else if (InCPPType == TEXT("bool") && Register.GetNumBytesPerSlice() == sizeof(bool))
+		{
+			DefaultValue = GetArray<bool>(Register)[Index] ? TEXT("True") : TEXT("False");
+		}
+		else if (InCPPType == TEXT("int32") && Register.GetNumBytesPerSlice() == sizeof(int32))
+		{
+			DefaultValue = FString::FromInt(GetArray<int32>(Register)[Index]);
+		}
+		else if (InCPPType == TEXT("float") && Register.GetNumBytesPerSlice() == sizeof(float))
+		{
+			DefaultValue = FString::Printf(TEXT("%f"), GetArray<float>(Register)[Index]);
+		}
+		else if (InCPPType == TEXT("FName") && Register.GetNumBytesPerSlice() == sizeof(FName))
+		{
+			DefaultValue = GetArray<FName>(Register)[Index].ToString();
+		}
+		else if (InCPPType == TEXT("FString") && Register.GetNumBytesPerSlice() == sizeof(FString))
+		{
+			DefaultValue  = GetArray<FString>(Register)[Index];
+		}
+		else
+		{
+			ensure(false);
+		}
+
+		DefaultValues.Add(DefaultValue);
+	}
+
+	return DefaultValues;
 }
 
 void FRigVMMemoryContainer::UpdateRegisters()

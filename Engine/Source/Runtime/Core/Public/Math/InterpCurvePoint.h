@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -206,7 +206,7 @@ inline void ComputeCurveTangent( float PrevTime, const T& PrevPoint,
 
 	AutoCalcTangent( PrevPoint, CurPoint, NextPoint, Tension, OutTangent );
 
-	const float PrevToNextTimeDiff = FMath::Max< double >( KINDA_SMALL_NUMBER, NextTime - PrevTime );
+	const float PrevToNextTimeDiff = FMath::Max< float >( KINDA_SMALL_NUMBER, NextTime - PrevTime );
 
 	OutTangent /= PrevToNextTimeDiff;
 }
@@ -257,7 +257,7 @@ inline void ComputeClampableFloatVectorCurveTangent( float PrevTime, const T& Pr
 		// No clamping needed
 		AutoCalcTangent( PrevPoint, CurPoint, NextPoint, Tension, OutTangent );
 
-		const float PrevToNextTimeDiff = FMath::Max< double >( KINDA_SMALL_NUMBER, NextTime - PrevTime );
+		const float PrevToNextTimeDiff = FMath::Max< float >( KINDA_SMALL_NUMBER, NextTime - PrevTime );
 
 		OutTangent /= PrevToNextTimeDiff;
 	}

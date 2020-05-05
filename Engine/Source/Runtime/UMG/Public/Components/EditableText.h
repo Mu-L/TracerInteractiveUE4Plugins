@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -120,6 +120,9 @@ public:
 	/** Additional options for the virtual keyboard */
 	UPROPERTY(EditAnywhere, Category=Behavior, AdvancedDisplay)
 	FVirtualKeyboardOptions VirtualKeyboardOptions;
+
+	UPROPERTY(EditAnywhere, Category = Behavior, AdvancedDisplay)
+	EVirtualKeyboardTrigger VirtualKeyboardTrigger;
 
 	/** What action should be taken when the virtual keyboard is dismissed? */
 	UPROPERTY(EditAnywhere, Category=Behavior, AdvancedDisplay)

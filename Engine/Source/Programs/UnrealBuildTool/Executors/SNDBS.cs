@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections;
@@ -181,7 +181,7 @@ namespace UnrealBuildTool
 			int NumScriptedActions = 0;
 			List<Action> LocalActions = new List<Action>();
 			ActionThread DummyActionThread = new ActionThread(null, 1, 1);
-			bool PrintDebugInfo = false;
+			bool PrintDebugInfo = true;
 			foreach (Action Action in InActions)
 			{
 				ActionThread ActionProcess = null;
@@ -237,13 +237,15 @@ namespace UnrealBuildTool
 						{
 							// Create a dummy force-included file which references PCH files, so that SN-DBS knows they are dependencies.
 							string AdditionalStubIncludes = "";
-							if (Action.CommandPath.GetFileName().Equals("cl.exe", StringComparison.OrdinalIgnoreCase))
+							if (Action.CommandPath.GetFileName().Equals("cl.exe", StringComparison.OrdinalIgnoreCase) || Action.CommandPath.GetFileName().Equals("cl-filter.exe", StringComparison.OrdinalIgnoreCase))
 							{
-								string ResponseFile = Action.CommandArguments.Replace("\"", "").Replace("@", "").Trim();
+								string DummyPCHIncludeFile = Action.DependencyListFile.AbsolutePath.Replace("\"", "").Replace("@", "").Trim();
+								DummyPCHIncludeFile = Path.ChangeExtension(DummyPCHIncludeFile, null);
+
 								StringBuilder WrapperContents = new StringBuilder();
 								using (StringWriter Writer = new StringWriter(WrapperContents))
 								{
-									Writer.WriteLine("// PCH dependencies for {0}", ResponseFile);
+									Writer.WriteLine("// PCH dependencies for {0}", DummyPCHIncludeFile);
 									Writer.WriteLine("#if 0");
 									foreach (FileItem Preqrequisite in Action.PrerequisiteItems)
 									{
@@ -255,12 +257,13 @@ namespace UnrealBuildTool
 									Writer.WriteLine("#endif");
 								}
 
-								FileItem DummyResponseFileDependency = FileItem.CreateIntermediateTextFile(new FileReference(ResponseFile + ".dummy.h"), WrapperContents.ToString());
-								AdditionalStubIncludes = string.Format("/FI\"{0}\"", DummyResponseFileDependency);
+								FileReference DummyPCHIncludeFileDependency = new FileReference(DummyPCHIncludeFile + ".dummy.h");
+								Utils.WriteFileIfChanged(DummyPCHIncludeFileDependency, WrapperContents.ToString(), StringComparison.OrdinalIgnoreCase);
+								AdditionalStubIncludes = string.Format("/FI\"{0}\"", DummyPCHIncludeFileDependency);
 							}
 
 							// Add to script for execution by SN-DBS
-							string NewCommandArguments = "\"" + Action.CommandPath + "\"" + " " + AdditionalStubIncludes + " " + Action.CommandArguments;
+							string NewCommandArguments = "\"" + Action.CommandPath + "\"" + " " + Action.CommandArguments + " " + AdditionalStubIncludes;
 							ScriptFile.WriteLine(NewCommandArguments);
 							InActionThreadDictionary.Add(Action, DummyActionThread);
 							Action.StartTime = Action.EndTime = DateTimeOffset.Now;
@@ -292,7 +295,7 @@ namespace UnrealBuildTool
 				DirectoryReference TemplatesDir = DirectoryReference.Combine(UnrealBuildTool.EngineDirectory, "Programs", "UnrealBuildTool", "SndbsTemplates");
 				string IncludeRewriteRulesArg = String.Format("--include-rewrite-rules \"{0}\"", IncludeRewriteRulesFile.FullName);
 				string VerbosityLevel = PrintDebugInfo ? "-v" : "-q";
-                ProcessStartInfo PSI = new ProcessStartInfo(SNDBSExecutable, String.Format("{0} -p UE4 -s \"{1}\" -templates \"{2}\" {3}", VerbosityLevel, FileReference.Combine(UnrealBuildTool.EngineDirectory, "Intermediate", "Build", "sndbs.bat").FullName, TemplatesDir.FullName, IncludeRewriteRulesArg));
+                ProcessStartInfo PSI = new ProcessStartInfo(SNDBSExecutable, String.Format("{0} -p UE4Code -s \"{1}\" -templates \"{2}\" {3}", VerbosityLevel, FileReference.Combine(UnrealBuildTool.EngineDirectory, "Intermediate", "Build", "sndbs.bat").FullName, TemplatesDir.FullName, IncludeRewriteRulesArg));
 				PSI.RedirectStandardOutput = true;
 				PSI.RedirectStandardError = true;
 				PSI.UseShellExecute = false;
@@ -309,16 +312,16 @@ namespace UnrealBuildTool
 
 				NewProcess.WaitForExit();
 
-				TimeSpan Duration;
-				DateTimeOffset EndTime = DateTimeOffset.Now;
-				if (EndTime == DateTimeOffset.MinValue)
-				{
-					Duration = DateTimeOffset.Now - StartTime;
-				}
-				else
-				{
-					Duration = EndTime - StartTime;
-				}
+				//TimeSpan Duration;
+				//DateTimeOffset EndTime = DateTimeOffset.Now;
+				//if (EndTime == DateTimeOffset.MinValue)
+				//{
+				//	Duration = DateTimeOffset.Now - StartTime;
+				//}
+				//else
+				//{
+				//	Duration = EndTime - StartTime;
+				//}
 
 				DummyActionThread.bComplete = true;
 				int ExitCode = NewProcess.ExitCode;
@@ -536,6 +539,17 @@ namespace UnrealBuildTool
 				IEnumerable<string> PlatformExpansions = PlatformNames.Select(p => String.Format("$1/{0}/{0}$2|$1/{0}$2", p));
 				IncludeRewriteRulesText.Add(String.Format("expansions2={0}", String.Join("|", PlatformExpansions)));
 			}
+			{
+				IncludeRewriteRulesText.Add(@"pattern3=^[A-Z]{5}_PLATFORM_HEADER_NAME\(\s*([^ ,]+)\)");
+				IEnumerable<string> PlatformExpansions = PlatformNames.Select(p => String.Format("{0}/{0}$1|{0}$1", p));
+				IncludeRewriteRulesText.Add(String.Format("expansions3={0}", String.Join("|", PlatformExpansions)));
+			}
+			{
+				IncludeRewriteRulesText.Add(@"pattern4=^[A-Z]{5}_PLATFORM_HEADER_NAME_WITH_PREFIX\(\s*([^ ,]+)\s*,\s*([^ ,]+)\)");
+				IEnumerable<string> PlatformExpansions = PlatformNames.Select(p => String.Format("$1/{0}/{0}$2|$1/{0}$2", p));
+				IncludeRewriteRulesText.Add(String.Format("expansions4={0}", String.Join("|", PlatformExpansions)));
+			}
+
 			File.WriteAllText(IncludeRewriteRulesFile.FullName, String.Join(Environment.NewLine, IncludeRewriteRulesText));
 		}
 	}

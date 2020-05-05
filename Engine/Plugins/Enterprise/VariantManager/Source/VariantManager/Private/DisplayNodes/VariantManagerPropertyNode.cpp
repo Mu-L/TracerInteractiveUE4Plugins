@@ -1,30 +1,35 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DisplayNodes/VariantManagerPropertyNode.h"
 
-#include "Widgets/DeclarativeSyntaxSupport.h"
-#include "Framework/MultiBox/MultiBoxBuilder.h"
-#include "GameFramework/Actor.h"
-#include "EditorStyleSet.h"
-#include "PropertyEditorModule.h"
-#include "Modules/ModuleManager.h"
+#include "PropertyTemplateObject.h"
+#include "PropertyValue.h"
+#include "PropertyValueSoftObject.h"
+#include "SVariantManager.h"
 #include "VariantManager.h"
+#include "VariantManagerDragDropOp.h"
+#include "VariantManagerEditorCommands.h"
 #include "VariantManagerLog.h"
 #include "VariantObjectBinding.h"
-#include "ISinglePropertyView.h"
-#include "PropertyValue.h"
-#include "PropertyHandle.h"
-#include "PropertyTemplateObject.h"
-#include "VariantManagerEditorCommands.h"
-#include "PropertyCustomizationHelpers.h"
-#include "SVariantManager.h"
-#include "ScopedTransaction.h"
-#include "Widgets/Input/SButton.h"
-#include "Input/Reply.h"
-#include "Widgets/Images/SImage.h"
+
 #include "EditorFontGlyphs.h"
+#include "EditorStyleSet.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "GameFramework/Actor.h"
+#include "ISinglePropertyView.h"
+#include "Input/Reply.h"
+#include "Modules/ModuleManager.h"
+#include "PropertyCustomizationHelpers.h"
+#include "PropertyEditorModule.h"
+#include "PropertyHandle.h"
+#include "ScopedTransaction.h"
+#include "Widgets/DeclarativeSyntaxSupport.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/Input/SButton.h"
 
 #define LOCTEXT_NAMESPACE "FVariantManagerPropertyNode"
+
+using FDisplayNodeRef = TSharedRef<FVariantManagerDisplayNode>;
 
 FVariantManagerPropertyNode::FVariantManagerPropertyNode(TArray<UPropertyValue*> InPropertyValues, TWeakPtr<FVariantManager> InVariantManager)
 	: FVariantManagerDisplayNode(nullptr, nullptr)
@@ -97,6 +102,79 @@ void FVariantManagerPropertyNode::SetDisplayName(const FText& NewDisplayName)
 bool FVariantManagerPropertyNode::IsSelectable() const
 {
 	return true;
+}
+
+TOptional<EItemDropZone> FVariantManagerPropertyNode::CanDrop(const FDragDropEvent& DragDropEvent, EItemDropZone ItemDropZone) const
+{
+	TSharedPtr<FVariantManagerDragDropOp> VarManDragDrop = DragDropEvent.GetOperationAs<FVariantManagerDragDropOp>();
+	if (!VarManDragDrop.IsValid())
+	{
+		return TOptional<EItemDropZone>();
+	}
+
+	TSharedPtr<FVariantManager> VarMan = GetVariantManager().Pin();
+	if (!VarMan.IsValid())
+	{
+		return TOptional<EItemDropZone>();
+	}
+
+	TArray<FDisplayNodeRef> PropOrFuncNodes;
+	for (const TSharedRef<FVariantManagerDisplayNode>& DraggedNode : VarManDragDrop->GetDraggedNodes())
+	{
+		if ((DraggedNode->GetType() == EVariantManagerNodeType::Property ||
+			 DraggedNode->GetType() == EVariantManagerNodeType::Function ) &&
+			DraggedNode != SharedThis(this)) // No point in reordering the node ondo itself
+		{
+			PropOrFuncNodes.Add(DraggedNode);
+		}
+	}
+
+	if (PropOrFuncNodes.Num() > 0)
+	{
+		FText NewHoverText = FText::Format( LOCTEXT("CanDrop_Captures", "Reorder '{0}'"), PropOrFuncNodes[0]->GetDisplayName());
+
+		const FSlateBrush* NewHoverIcon = FEditorStyle::GetBrush(TEXT("Graph.ConnectorFeedback.OK"));
+
+		VarManDragDrop->SetToolTip(NewHoverText, NewHoverIcon);
+
+		return ItemDropZone == EItemDropZone::AboveItem ? ItemDropZone : EItemDropZone::BelowItem;
+	}
+
+	if (VarManDragDrop.IsValid())
+	{
+		VarManDragDrop->ResetToDefaultToolTip();
+	}
+
+	return TOptional<EItemDropZone>();
+}
+
+void FVariantManagerPropertyNode::Drop(const FDragDropEvent& DragDropEvent, EItemDropZone ItemDropZone)
+{
+	TSharedPtr<FVariantManager> VarMan = GetVariantManager().Pin();
+	if (!VarMan.IsValid())
+	{
+		return;
+	}
+
+	TSharedPtr<SVariantManager> VarManWidget = VarMan->GetVariantManagerWidget();
+	if (!VarManWidget.IsValid())
+	{
+		return;
+	}
+
+	TSharedPtr<FVariantManagerDragDropOp> VarManDragDrop = DragDropEvent.GetOperationAs<FVariantManagerDragDropOp>();
+	if (!VarManDragDrop.IsValid())
+	{
+		return;
+	}
+
+	TArray<TSharedPtr<FVariantManagerPropertyNode>> DraggedPropertyNodes;
+	for (const TSharedRef<FVariantManagerDisplayNode>& DraggedNode : VarManDragDrop->GetDraggedNodes())
+	{
+		DraggedPropertyNodes.Add(StaticCastSharedRef<FVariantManagerPropertyNode>(DraggedNode));
+	}
+
+	VarManWidget->ReorderPropertyNodes(DraggedPropertyNodes, SharedThis(this), ItemDropZone);
 }
 
 // Without this, SImages (used for example for the browse and useselected buttons next to
@@ -191,31 +269,7 @@ TSharedPtr<SWidget> FVariantManagerPropertyNode::GetPropertyValueWidget()
 	}
 	if(!bAtLeastOneResolved)
 	{
-		UObject* ActorAsObj = FirstPropertyValue->GetParent()->GetObject();
-		FString ActorName;
-		if (AActor* Actor = Cast<AActor>(ActorAsObj))
-		{
-			ActorName = Actor->GetActorLabel();
-		}
-		else
-		{
-			ActorName = ActorAsObj->GetName();
-		}
-
-		return SNew(SBox)
-		.VAlign(VAlign_Center)
-		.HAlign(HAlign_Left)
-		.Padding(FMargin(3.0f, 0.0f, 0.0f, 0.0f))
-		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("FailedToResolveText", "Failed to resolve!"))
-			.Font(FEditorStyle::GetFontStyle("Sequencer.AnimationOutliner.RegularFont"))
-			.ColorAndOpacity(this, &FVariantManagerDisplayNode::GetDisplayNameColor)
-			.ToolTipText(FText::Format(
-				LOCTEXT("FailedToResolveTooltip", "Make sure actor '{0}' has a property with path '{1}'"),
-				FText::FromString(ActorName),
-				FText::FromString(FirstPropertyValue->GetFullDisplayString())))
-		];
+		return GetFailedToResolveWidget(FirstPropertyValue);
 	}
 
 	if (bSomeFailedToResolve)
@@ -225,16 +279,7 @@ TSharedPtr<SWidget> FVariantManagerPropertyNode::GetPropertyValueWidget()
 
 	if (!PropertiesHaveSameValue())
 	{
-		return SNew(SBox)
-		.VAlign(VAlign_Center)
-		.HAlign(HAlign_Left)
-		[
-			SNew(STextBlock)
-			.Text(LOCTEXT("MultipleValuesLabel", "Multiple Values"))
-			.Font(FEditorStyle::GetFontStyle("Sequencer.AnimationOutliner.RegularFont"))
-			.ColorAndOpacity(this, &FVariantManagerDisplayNode::GetDisplayNameColor)
-			.ToolTipText(LOCTEXT("MultipleValuesTooltip", "The selected actors have different values for this property"))
-		];
+		return GetMultipleValuesWidget();
 	}
 
 	FSinglePropertyParams InitParams;
@@ -243,18 +288,24 @@ TSharedPtr<SWidget> FVariantManagerPropertyNode::GetPropertyValueWidget()
 	UPropertyTemplateObject* Template = NewObject<UPropertyTemplateObject>(GetTransientPackage());
 	SinglePropertyViewTemplate.Reset(Template);
 
-	// Find the property responsible for Template's UObject*
-	// Assumes it has only one
-	UObjectProperty* TemplateObjectProp = nullptr;
-	if (FirstPropertyValue->GetPropertyClass() == UObjectProperty::StaticClass())
+	FFieldClass* PropertyClass = FirstPropertyValue->GetPropertyClass();
+
+	// Find the property responsible for Template's UObjectProperty
+	FObjectPropertyBase* TemplateObjectProp = nullptr;
+	if (PropertyClass && PropertyClass->IsChildOf(FObjectPropertyBase::StaticClass()))
 	{
-		for (TFieldIterator<UObjectProperty> PropertyIterator(Template->GetClass()); PropertyIterator; ++PropertyIterator)
+		for (TFieldIterator<FObjectPropertyBase> PropertyIterator(Template->GetClass()); PropertyIterator; ++PropertyIterator)
 		{
-			TemplateObjectProp = *PropertyIterator;
+			FObjectPropertyBase* ObjectProp = *PropertyIterator;
+			if (ObjectProp->GetClass() == PropertyClass)
+			{
+				TemplateObjectProp = ObjectProp;
+				break;
+			}
 		}
 	}
 
-	// HACK to cause the widget to display an UObjectProperty editor restricted to objects of our desired class
+	// HACK to cause the widget to display an FObjectProperty editor restricted to objects of our desired class
 	// Note that we undo this right aftewards, so that other property value widgets can do the same to different
 	// classes. The template's property itself will then be free to be set with whatever object, but the created
 	// widget is already locked in place
@@ -266,9 +317,10 @@ TSharedPtr<SWidget> FVariantManagerPropertyNode::GetPropertyValueWidget()
 	FPropertyEditorModule& PropertyEditorModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
 	TSharedPtr<ISinglePropertyView> SinglePropView = PropertyEditorModule.CreateSingleProperty(
 		SinglePropertyViewTemplate.Get(),
-		UPropertyTemplateObject::GetPropertyNameFromClass(FirstPropertyValue->GetPropertyClass()),
+		UPropertyTemplateObject::GetPropertyNameFromClass(PropertyClass),
 		InitParams);
 
+	// Reset it back to generic
 	if (TemplateObjectProp)
 	{
 		TemplateObjectProp->PropertyClass = UObject::StaticClass();
@@ -300,7 +352,16 @@ TSharedPtr<SWidget> FVariantManagerPropertyNode::GetPropertyValueWidget()
 	PropHandle->AccessRawData(RawDataForEachObject);
 	void* SinglePropWidgetDataPtr = RawDataForEachObject[0]; // We'll always pass just a single object
 	const TArray<uint8>& FirstRecordedData = FirstPropertyValue->GetRecordedData();
+
+	if (FSoftObjectProperty* Prop = CastField<FSoftObjectProperty>(PropHandle->GetProperty()))
+	{
+		UObject* TargetObject = *((UObject**)FirstRecordedData.GetData());
+		Prop->SetObjectPropertyValue(SinglePropWidgetDataPtr, TargetObject);
+	}
+	else
+	{
 	FMemory::Memcpy((uint8*)SinglePropWidgetDataPtr, FirstRecordedData.GetData(), FirstPropertyValue->GetValueSizeInBytes());
+	}
 
 	// Update recorded data when user modifies the widget (modifying the widget will modify the
 	// property value of the object the widget is looking at e.g. the class metadata object)
@@ -426,6 +487,31 @@ TSharedRef<SWidget> FVariantManagerPropertyNode::GetCustomOutlinerContent(TShare
 	];
 }
 
+uint32 FVariantManagerPropertyNode::GetDisplayOrder() const
+{
+	uint32 DisplayOrder = UINT32_MAX;
+	for (const TWeakObjectPtr<UPropertyValue>& PropertyValue : PropertyValues)
+	{
+		if (PropertyValue.IsValid())
+		{
+			DisplayOrder = FMath::Min(DisplayOrder, PropertyValue->GetDisplayOrder());
+		}
+	}
+
+	return DisplayOrder;
+}
+
+void FVariantManagerPropertyNode::SetDisplayOrder(uint32 InDisplayOrder)
+{
+	for (const TWeakObjectPtr<UPropertyValue>& PropertyValue : PropertyValues)
+	{
+		if (PropertyValue.IsValid())
+		{
+			PropertyValue->SetDisplayOrder(InDisplayOrder);
+		}
+	}
+}
+
 void FVariantManagerPropertyNode::UpdateRecordedDataFromSinglePropView(TSharedPtr<ISinglePropertyView> SinglePropView)
 {
 	// Warning: This also fires after UpdateSinglePropViewFromRecordedData when that fires
@@ -436,11 +522,22 @@ void FVariantManagerPropertyNode::UpdateRecordedDataFromSinglePropView(TSharedPt
 	PropHandle->AccessRawData(RawDataForEachObject);
 	void* SinglePropWidgetDataPtr = RawDataForEachObject[0]; // We'll always pass just a single object
 
-	for (TWeakObjectPtr<UPropertyValue> PropertyValue : PropertyValues)
+	for (TWeakObjectPtr<UPropertyValue> PropertyValuePtr : PropertyValues)
 	{
-		if (PropertyValue.IsValid())
+		UPropertyValue* PropertyValue = PropertyValuePtr.Get();
+		if (!PropertyValue)
 		{
-			PropertyValue.Get()->SetRecordedData((uint8*)SinglePropWidgetDataPtr, PropHandle->GetProperty()->ElementSize);
+			continue;
+		}
+
+		if (FSoftObjectProperty* Prop = CastField<FSoftObjectProperty>(PropHandle->GetProperty()))
+	{
+			UObject* NewObj = Prop->LoadObjectPropertyValue(SinglePropWidgetDataPtr);
+			PropertyValue->SetRecordedData((uint8*)&NewObj, sizeof(UObject*));
+		}
+		else
+		{
+			PropertyValue->SetRecordedData((uint8*)SinglePropWidgetDataPtr, PropHandle->GetProperty()->ElementSize);
 		}
 	}
 
@@ -557,6 +654,53 @@ bool FVariantManagerPropertyNode::PropertiesHaveCurrentValue() const
 	}
 
 	return true;
+}
+
+TSharedRef<SWidget> FVariantManagerPropertyNode::GetMultipleValuesWidget()
+{
+	return SNew(SBox)
+		.VAlign(VAlign_Center)
+		.HAlign(HAlign_Left)
+		.Padding(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("MultipleValuesLabel", "Multiple Values"))
+			.Font(FEditorStyle::GetFontStyle("Sequencer.AnimationOutliner.RegularFont"))
+			.ColorAndOpacity(this, &FVariantManagerDisplayNode::GetDisplayNameColor)
+			.ToolTipText(LOCTEXT("MultipleValuesTooltip", "The selected actors have different values for this property"))
+		];
+}
+
+TSharedRef<SWidget> FVariantManagerPropertyNode::GetFailedToResolveWidget(const UPropertyValue* Property)
+{
+	if (!Property)
+	{
+		return SNullWidget::NullWidget;
+	}
+
+	FString ActorName;
+
+	if (UVariantObjectBinding* Binding = Property->GetParent())
+	{
+		if (AActor* Actor = Cast<AActor>(Binding->GetObject()))
+		{
+			ActorName = Actor->GetActorLabel();
+		}
+	}
+
+	return SNew(SBox)
+		.VAlign(VAlign_Center)
+		.HAlign(HAlign_Left)
+		.Padding(FMargin(4.0f, 0.0f, 0.0f, 0.0f))
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("FailedToResolveText", "Failed to resolve!"))
+			.Font(FEditorStyle::GetFontStyle("Sequencer.AnimationOutliner.RegularFont"))
+			.ColorAndOpacity(this, &FVariantManagerDisplayNode::GetDisplayNameColor)
+			.ToolTipText(FText::Format(
+			LOCTEXT("FailedToResolveTooltip", "Make sure actor '{0}' has a property with path '{1}'"),
+			FText::FromString(ActorName), FText::FromString(Property->GetFullDisplayString())))
+		];
 }
 
 EVisibility FVariantManagerPropertyNode::GetResetButtonVisibility() const

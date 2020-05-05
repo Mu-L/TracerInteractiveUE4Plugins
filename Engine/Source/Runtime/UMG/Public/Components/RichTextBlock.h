@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -156,7 +156,7 @@ protected:
 	virtual TSharedPtr< class IRichTextMarkupWriter > CreateMarkupWriter();
 
 	void BeginDefaultStyleOverride();
-	void ApplyUpdatedDefaultTextStyle();
+	virtual void ApplyUpdatedDefaultTextStyle();
 
 protected:
 	/** The text to display */

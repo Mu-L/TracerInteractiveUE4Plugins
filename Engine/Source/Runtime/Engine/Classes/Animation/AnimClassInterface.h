@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -10,6 +10,7 @@
 #include "UObject/Interface.h"
 #include "Animation/AnimTypes.h"
 #include "Animation/AnimStateMachineTypes.h"
+#include "UObject/FieldPath.h"
 
 #include "AnimClassInterface.generated.h"
 
@@ -64,16 +65,13 @@ struct FAnimBlueprintFunction
 	TArray<int32> InputPoseNodeIndices;
 
 	/** The property of the output node, patched up during link */
-	UPROPERTY(transient)
-	UStructProperty* OutputPoseNodeProperty;
+	FStructProperty* OutputPoseNodeProperty;
 
 	/** The properties of the input nodes, patched up during link */
-	UPROPERTY(transient)
-	TArray<UStructProperty*> InputPoseNodeProperties;
+	TArray< FStructProperty* > InputPoseNodeProperties;
 
 	/** The input properties themselves */
-	UPROPERTY(transient)
-	TArray<UProperty*> InputProperties;
+	TArray< FProperty* > InputProperties;
 
 	/** Whether this function is actually implemented by this class - it could just be a stub */
 	UPROPERTY(transient)
@@ -138,23 +136,25 @@ class ENGINE_API UAnimClassInterface : public UInterface
 	GENERATED_BODY()
 };
 
+typedef TFieldPath<FStructProperty> FStructPropertyPath;
+
 class ENGINE_API IAnimClassInterface
 {
 	GENERATED_BODY()
 public:
 	virtual const TArray<FBakedAnimationStateMachine>& GetBakedStateMachines() const = 0;
 	virtual const TArray<FAnimNotifyEvent>& GetAnimNotifies() const = 0;
-	virtual const TArray<UStructProperty*>& GetAnimNodeProperties() const = 0;
+	virtual const TArray<FStructProperty*>& GetAnimNodeProperties() const = 0;
 	UE_DEPRECATED(4.24, "Function has been renamed, please use GetLinkedAnimGraphNodeProperties")
-	virtual const TArray<UStructProperty*>& GetSubInstanceNodeProperties() const { return GetLinkedAnimGraphNodeProperties(); }
-	virtual const TArray<UStructProperty*>& GetLinkedAnimGraphNodeProperties() const = 0;
+	virtual const TArray<FStructProperty*>& GetSubInstanceNodeProperties() const { return GetLinkedAnimGraphNodeProperties(); }
+	virtual const TArray<FStructProperty*>& GetLinkedAnimGraphNodeProperties() const = 0;
 	UE_DEPRECATED(4.24, "Function has been renamed, please use GetLinkedLayerNodeProperties")
-	virtual const TArray<UStructProperty*>& GetLayerNodeProperties() const { return GetLinkedAnimLayerNodeProperties(); }
-	virtual const TArray<UStructProperty*>& GetLinkedAnimLayerNodeProperties() const = 0;
-	virtual const TArray<UStructProperty*>& GetPreUpdateNodeProperties() const = 0;
-	virtual const TArray<UStructProperty*>& GetDynamicResetNodeProperties() const = 0;
-	virtual const TArray<UStructProperty*>& GetStateMachineNodeProperties() const = 0;
-	virtual const TArray<UStructProperty*>& GetInitializationNodeProperties() const = 0;
+	virtual const TArray<FStructProperty*>& GetLayerNodeProperties() const { return GetLinkedAnimLayerNodeProperties(); }
+	virtual const TArray<FStructProperty*>& GetLinkedAnimLayerNodeProperties() const = 0;
+	virtual const TArray<FStructProperty*>& GetPreUpdateNodeProperties() const = 0;
+	virtual const TArray<FStructProperty*>& GetDynamicResetNodeProperties() const = 0;
+	virtual const TArray<FStructProperty*>& GetStateMachineNodeProperties() const = 0;
+	virtual const TArray<FStructProperty*>& GetInitializationNodeProperties() const = 0;
 	virtual const TArray<FExposedValueHandler>& GetExposedValueHandlers() const = 0;
 	virtual const TArray<FName>& GetSyncGroupNames() const = 0;
 	virtual const TMap<FName, FCachedPoseIndices>& GetOrderedSavedPoseNodeIndicesMap() const = 0;
@@ -230,5 +230,5 @@ public:
 	virtual int32 GetRootAnimNodeIndex() const { return INDEX_NONE; }
 
 	UE_DEPRECATED(4.23, "Please use GetAnimBlueprintFunctions()")
-	virtual UStructProperty* GetRootAnimNodeProperty() const { return nullptr; }
+	virtual FStructProperty* GetRootAnimNodeProperty() const { return nullptr; }
 };

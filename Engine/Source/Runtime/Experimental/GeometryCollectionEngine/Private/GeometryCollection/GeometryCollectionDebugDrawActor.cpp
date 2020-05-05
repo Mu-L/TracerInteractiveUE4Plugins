@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GeometryCollection/GeometryCollectionDebugDrawActor.h"
 
@@ -638,7 +638,7 @@ void AGeometryCollectionDebugDrawActor::PostEditChangeProperty(FPropertyChangedE
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 }
 
-bool AGeometryCollectionDebugDrawActor::CanEditChange(const UProperty* InProperty) const
+bool AGeometryCollectionDebugDrawActor::CanEditChange(const FProperty* InProperty) const
 {
 	const FName PropertyName = InProperty->GetFName();
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(AGeometryCollectionDebugDrawActor, bDebugDrawWholeCollection) ||
@@ -2439,7 +2439,7 @@ void AGeometryCollectionDebugDrawActor::DrawRigidBodyCollisionNoChecks(const UGe
 	const FColor& ActiveColor = (bIsDisabled && !bIsParentUnion) ? FColor::Black: Color;
 
 	// Draw collision volume
-	const Chaos::ImplicitObjectType GeometryType = ParticlesData.GetGeometryType(TransformIndex);
+	const Chaos::EImplicitObjectType GeometryType = ParticlesData.GetGeometryType(TransformIndex);
 	switch (GeometryType)
 	{
 	case Chaos::ImplicitObjectType::Box:

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 namespace UnrealBuildTool.Rules
 {
@@ -11,12 +11,14 @@ namespace UnrealBuildTool.Rules
 				new string[]
 				{
 					"Analytics",
+					"ApplicationCore",
 					"CinematicCamera",
 					"ContentBrowser",
 					"Core",
 					"CoreUObject",
 					"DesktopPlatform",
 					"EditorStyle",
+					"EditorScriptingUtilities",
 					"Engine",
 					"Foliage",
 					"FreeImage",
@@ -29,12 +31,12 @@ namespace UnrealBuildTool.Rules
 					"MainFrame",
 					"MaterialEditor",
 					"MeshDescription",
-					"MeshDescriptionOperations",
 					"MeshUtilities",
 					"MeshUtilitiesCommon",
 					"MessageLog",
 					"MovieScene",
 					"MovieSceneTracks",
+					"PropertyEditor",
 					"RHI",
 					"RawMesh",
 					"Slate",
@@ -55,6 +57,7 @@ namespace UnrealBuildTool.Rules
 					"DataprepCore",
 					"DatasmithContent",
                     "DatasmithCore",
+					"DatasmithTranslator",
                     "DatasmithContentEditor",
 				}
 			);

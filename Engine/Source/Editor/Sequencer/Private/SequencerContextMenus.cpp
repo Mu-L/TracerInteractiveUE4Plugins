@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SequencerContextMenus.h"
 #include "Modules/ModuleManager.h"
@@ -42,6 +42,7 @@
 #include "MovieScene.h"
 #include "Channels/MovieSceneChannel.h"
 #include "Tracks/MovieScenePropertyTrack.h"
+#include "Algo/AnyOf.h"
 
 
 #define LOCTEXT_NAMESPACE "SequencerContextMenus"
@@ -556,7 +557,7 @@ public:
 	}
 
 	//~ FNotifyHook interface
-	virtual void NotifyPostChange(const FPropertyChangedEvent& PropertyChangedEvent, UProperty* PropertyThatChanged) override
+	virtual void NotifyPostChange(const FPropertyChangedEvent& PropertyChangedEvent, FProperty* PropertyThatChanged) override
 	{
 		Sequencer->NotifyMovieSceneDataChanged(EMovieSceneDataChangeType::TrackValueChanged);
 	}
@@ -1713,6 +1714,14 @@ void FEasingContextMenu::BuildMenu(FMenuBuilder& MenuBuilder, const TArray<FEasi
 void FEasingContextMenu::PopulateMenu(FMenuBuilder& MenuBuilder)
 {
 	FText SectionText = Easings.Num() == 1 ? LOCTEXT("EasingCurve", "Easing Curve") : FText::Format(LOCTEXT("EasingCurvesFormat", "Easing Curves ({0} curves)"), FText::AsNumber(Easings.Num()));
+	const bool bReadOnly = Algo::AnyOf(Easings, [](const FEasingAreaHandle& Handle) -> bool
+		{
+			const UMovieSceneSection* Section = Handle.WeakSection.Get();
+			const UMovieSceneTrack* SectionTrack = Section->GetTypedOuter<UMovieSceneTrack>();
+			FMovieSceneSupportsEasingParams Params(Section);
+			return !EnumHasAllFlags(SectionTrack->SupportsEasing(Params), EMovieSceneTrackEasingSupportFlags::ManualEasing);
+		});
+
 	MenuBuilder.BeginSection("SequencerEasingEdit", SectionText);
 	{
 		// Copy a reference to the context menu by value into each lambda handler to ensure the type stays alive until the menu is closed
@@ -1752,6 +1761,7 @@ void FEasingContextMenu::PopulateMenu(FMenuBuilder& MenuBuilder)
 					// Don't update the value when undetermined text changes
 					.OnUndeterminedValueChanged_Lambda([](FText){})
 					.AllowSpin(true)
+					.IsEnabled(!bReadOnly)
 					.MinValue(0.f)
 					.MaxValue(TOptional<double>())
 					.MaxSliderValue(TOptional<double>())
@@ -1779,6 +1789,7 @@ void FEasingContextMenu::PopulateMenu(FMenuBuilder& MenuBuilder)
 			.AutoWidth()
 			[
 				SNew(SCheckBox)
+				.IsEnabled(!bReadOnly)
 				.IsChecked_Lambda([=]{ return Shared->GetAutoEasingCheckState(); })
 				.OnCheckStateChanged_Lambda([=](ECheckBoxState CheckState){ return Shared->SetAutoEasing(CheckState == ECheckBoxState::Checked); })
 				[

@@ -1,29 +1,30 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "Physics/ImmediatePhysics/ImmediatePhysicsChaos/ImmediatePhysicsDeclares_Chaos.h"
 #include "Physics/ImmediatePhysics/ImmediatePhysicsShared/ImmediatePhysicsCore.h"
 
+#include "Chaos/Core.h"
 #include "Chaos/ParticleHandleFwd.h"
 
 namespace Chaos
 {
-	template<typename T, int D> class TImplicitObject;
+	class FImplicitObject;
+	class FPBDJointConstraintHandle;
+	class FPBDJointConstraints;
+	class FPBDRigidsEvolutionGBF;
 	template<typename T, int D> struct TKinematicGeometryParticleParameters;
 	template<typename T, int D> class TKinematicTarget;
-	template<typename P, typename T, int D> class TPBDConstraintIslandRule;
-	template<typename T, int D> class TPBDJointConstraintHandle;
-	template<typename T, int D> class TPBDJointConstraints;
+	template<typename P> class TPBDConstraintIslandRule;
 	template<typename T, int D> struct TPBDRigidParticleParameters;
-	template<typename T, int D> class TPBDRigidsEvolutionGBF;
 	template<typename T, int D> class TPBDRigidsSOAs;
 	template<typename T, int D> class TPerShapeData;
 }
 
 namespace ImmediatePhysics_Chaos
 {
-	using FReal = float;
+	using FReal = Chaos::FReal;
 	const int Dimensions = 3;
 
 	using EActorType = ImmediatePhysics_Shared::EActorType;

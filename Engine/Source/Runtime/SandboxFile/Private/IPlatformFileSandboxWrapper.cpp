@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "IPlatformFileSandboxWrapper.h"
 #include "HAL/PlatformFilemanager.h"
@@ -72,7 +72,7 @@ bool FSandboxPlatformFile::Initialize(IPlatformFile* Inner, const TCHAR* CmdLine
 			if( FPaths::IsDrive(DriveCheck) == false )
 			{
 				FString Command( CommandLineDirectory.Mid( CommandIndex + 1 ) );
-				CommandLineDirectory = CommandLineDirectory.Left( CommandIndex );
+				CommandLineDirectory.LeftInline( CommandIndex, false);
 		
 				if( Command == TEXT("wipe") )
 				{
@@ -118,7 +118,7 @@ bool FSandboxPlatformFile::Initialize(IPlatformFile* Inner, const TCHAR* CmdLine
 			FPaths::MakeStandardFilename(SandboxDirectory);
 
 			// SandboxDirectory should be absolute and have no relative paths in it
-			FPaths::ConvertRelativePathToFull(SandboxDirectory);
+			SandboxDirectory = FPaths::ConvertRelativePathToFull(SandboxDirectory);
 		}
 
 		if( bWipeSandbox )
@@ -162,18 +162,24 @@ FString FSandboxPlatformFile::ConvertToSandboxPath( const TCHAR* Filename ) cons
 		// See whether Filename is relative to root directory.
 		// if it's not inside the root, then just use it
 		FString FullSandboxPath = FPaths::ConvertRelativePathToFull(SandboxPath);
-		FString FullGameDir;
+		FString FullGameDir, FullSandboxedGameDir;
 #if IS_PROGRAM
 		if (FPaths::IsProjectFilePathSet())
 		{
 			FullGameDir = FPaths::ConvertRelativePathToFull(FPaths::GetPath(FPaths::GetProjectFilePath()) + TEXT("/"));
+			FullSandboxedGameDir = FPaths::Combine(*SandboxDirectory, *FPaths::GetBaseFilename(FPaths::GetProjectFilePath()));
 		}
 		else
 #endif
 		{
 			FullGameDir = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+			FullSandboxedGameDir = FPaths::Combine(*SandboxDirectory, FApp::GetProjectName());
 		}
-		if(FullSandboxPath.StartsWith(FullGameDir))
+		if(FullSandboxPath.StartsWith(FullSandboxedGameDir))
+		{
+			return SandboxPath;
+		}
+		else if (FullSandboxPath.StartsWith(FullGameDir))
 		{
 #if IS_PROGRAM
 			SandboxPath = FPaths::Combine(*SandboxDirectory, *FPaths::GetBaseFilename(FPaths::GetProjectFilePath()), *FullSandboxPath + FullGameDir.Len());

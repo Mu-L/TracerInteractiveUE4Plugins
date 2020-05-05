@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -18,6 +18,7 @@
 #include "Internationalization/Internationalization.h"
 #include "Math/IntVector.h"
 #include "Math/Axis.h"
+#include "Serialization/MemoryLayout.h"
 
 #if PLATFORM_VECTOR_CUBIC_INTERP_SSE
 #include "Math/UnrealMathSSE.h"
@@ -1012,6 +1013,9 @@ public:
 	 */
 	CORE_API bool NetSerialize(FArchive& Ar, class UPackageMap* Map, bool& bOutSuccess);
 };
+template<> struct TCanBulkSerialize<FVector> { enum { Value = true }; };
+
+DECLARE_INTRINSIC_TYPE_LAYOUT(FVector);
 
 
 /* FVector inline functions
@@ -1253,13 +1257,13 @@ FORCEINLINE FVector::FVector(const FLinearColor& InColor)
 }
 
 FORCEINLINE FVector::FVector(FIntVector InVector)
-	: X(InVector.X), Y(InVector.Y), Z(InVector.Z)
+	: X((float)InVector.X), Y((float)InVector.Y), Z((float)InVector.Z)
 {
 	DiagnosticCheckNaN();
 }
 
 FORCEINLINE FVector::FVector(FIntPoint A)
-	: X(A.X), Y(A.Y), Z(0.f)
+	: X((float)A.X), Y((float)A.Y), Z(0.f)
 {
 	DiagnosticCheckNaN();
 }

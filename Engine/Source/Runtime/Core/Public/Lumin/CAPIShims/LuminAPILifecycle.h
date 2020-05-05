@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -13,8 +13,8 @@ LUMIN_THIRD_PARTY_INCLUDES_END
 namespace MLSDK_API
 {
 
-CREATE_FUNCTION_SHIM(ml_lifecycle, MLResult, MLLifecycleInitEx)
-#define MLLifecycleInitEx ::MLSDK_API::MLLifecycleInitExShim
+CREATE_DEPRECATED_MSG_SHIM(ml_lifecycle, MLResult, MLLifecycleInit, "Replaced by MLLifecycleInitEx.")
+#define MLLifecycleInit ::MLSDK_API::MLLifecycleInitShim
 CREATE_FUNCTION_SHIM(ml_lifecycle, MLResult, MLLifecycleGetSelfInfo)
 #define MLLifecycleGetSelfInfo ::MLSDK_API::MLLifecycleGetSelfInfoShim
 CREATE_FUNCTION_SHIM(ml_lifecycle, MLResult, MLLifecycleFreeSelfInfo)
@@ -35,6 +35,8 @@ CREATE_FUNCTION_SHIM(ml_lifecycle, MLResult, MLLifecycleFreeInitArgList)
 #define MLLifecycleFreeInitArgList ::MLSDK_API::MLLifecycleFreeInitArgListShim
 CREATE_FUNCTION_SHIM(ml_lifecycle, MLResult, MLLifecycleSetReadyIndication)
 #define MLLifecycleSetReadyIndication ::MLSDK_API::MLLifecycleSetReadyIndicationShim
+CREATE_FUNCTION_SHIM(ml_lifecycle, MLResult, MLLifecycleInitEx)
+#define MLLifecycleInitEx ::MLSDK_API::MLLifecycleInitExShim
 
 }
 

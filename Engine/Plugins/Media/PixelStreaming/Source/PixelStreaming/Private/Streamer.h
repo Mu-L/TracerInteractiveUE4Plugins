@@ -1,9 +1,8 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "PixelStreamingPrivate.h"
-#include "Codecs/PixelStreamingBaseVideoEncoder.h"
 #include "SignallingServerConnection.h"
 #include "ProtocolDefs.h"
 
@@ -33,7 +32,7 @@ public:
 
 	void SendPlayerMessage(PixelStreamingProtocol::EToPlayerMsg Type, const FString& Descriptor);
 
-	void SendFreezeFrame(const TArray<uint8>& JpegBytes);
+	void SendFreezeFrame(const TArray64<uint8>& JpegBytes);
 	void SendUnfreezeFrame();
 
 private:
@@ -73,7 +72,7 @@ private:
 
 	// a single instance of the actual hardware encoder is used for multiple streams/players to provide multicasting functionality
 	// for multi-session unicast implementation each instance of `FVideoEncoder` will have own instance of hardware encoder.
-	TUniquePtr<FPixelStreamingBaseVideoEncoder> HWEncoder;
+	FHWEncoderDetails HWEncoderDetails;
 
 	TUniquePtr<FThread> WebRtcSignallingThread;
 	DWORD WebRtcSignallingThreadId = 0;
@@ -95,7 +94,7 @@ private:
 
 	// When we send a freeze frame we retain the data to handle connection
 	// scenarios.
-	TArray<uint8> CachedJpegBytes;
+	TArray64<uint8> CachedJpegBytes;
 
 	FThreadSafeBool bStreamingStarted = false;
 };

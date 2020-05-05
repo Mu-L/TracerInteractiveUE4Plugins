@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Policy/Simple/DisplayClusterProjectionSimplePolicy.h"
 
@@ -212,8 +212,8 @@ void FDisplayClusterProjectionSimplePolicy::InitializeMeshData()
 
 	if (!ParentComp)
 	{
-		UE_LOG(LogDisplayClusterProjectionSimple, Warning, TEXT("Couldn't find a parent component for the new screen component"));
-		return;
+		UE_LOG(LogDisplayClusterProjectionSimple, Warning, TEXT("Couldn't find parent component <%s>. Default root will be used."), *CfgScreen.ParentId);
+		ParentComp = Root;
 	}
 
 	// Finally, create the component

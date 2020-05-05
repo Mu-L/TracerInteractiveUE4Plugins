@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -84,6 +84,7 @@ public:
 	virtual float GetSurfaceHeight() const override { return GetSizeY(); }
 	virtual FTextureResource* CreateResource() override;
 #if WITH_EDITOR
+	ENGINE_API void SetDefaultSource2DTileSize();
 	ENGINE_API virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif // WITH_EDITOR
 	virtual void UpdateResource() override;
@@ -116,7 +117,7 @@ public:
 
 #endif
 
-	ENGINE_API static bool ShaderPlatformSupportsCompression(EShaderPlatform ShaderPlatform);
+	ENGINE_API static bool ShaderPlatformSupportsCompression(FStaticShaderPlatform ShaderPlatform);
 
 protected:
 

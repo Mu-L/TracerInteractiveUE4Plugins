@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -76,7 +76,7 @@ public:
 private:
 	/**
 	 * Empties the specified struct's Script array, as well as its 
-	 * ScriptObjectReferences container.
+	 * ScriptAndPropertyObjectReferences container.
 	 * 
 	 * @param  ScriptContainer    The struct you want emptied.
 	 */

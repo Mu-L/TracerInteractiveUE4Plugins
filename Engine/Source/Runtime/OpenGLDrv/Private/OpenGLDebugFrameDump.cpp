@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "HAL/FileManager.h"
@@ -44,8 +44,8 @@ void appCreatePNGWithAlpha( const TCHAR* File, int32 Width, int32 Height, FColor
 		if( !Ar )
 			return;
 
-		const TArray<uint8>& CompressedData = ImageWrapper->GetCompressed();
-		int32 CompressedSize = CompressedData.Num();
+		const TArray64<uint8>& CompressedData = ImageWrapper->GetCompressed();
+		int64 CompressedSize = CompressedData.Num();
 		Ar->Serialize( (void*)CompressedData.GetData(), CompressedSize );
 		delete Ar;
 	}

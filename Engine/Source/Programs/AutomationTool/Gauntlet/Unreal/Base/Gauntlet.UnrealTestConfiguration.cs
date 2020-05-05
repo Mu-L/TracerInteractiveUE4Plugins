@@ -1,4 +1,4 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -277,6 +277,12 @@ namespace Gauntlet
 		/// The collection of options which define heartbeat behavior
 		/// </summary>
 		public UnrealHeartbeatOptions HeartbeatOptions { get; set; }
+
+		/// <summary>
+		/// Prevents heartbeats timeouts from being checked so that tests will not fail from missed heartbeats
+		/// </summary>
+		[AutoParam(false)]
+		public bool DisableHeartbeatTimeout { get; set; }
 
 		// Member variables 
 

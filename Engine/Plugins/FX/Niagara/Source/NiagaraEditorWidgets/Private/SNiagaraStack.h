@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -16,7 +16,8 @@ class UNiagaraStackViewModel;
 class SNiagaraStackTableRow;
 class SSearchBox;
 class FReply;
-
+class FNiagaraStackCommandContext;
+class SWidget;
 class SNiagaraStack : public SCompoundWidget
 {
 public:
@@ -26,6 +27,8 @@ public:
 	SLATE_END_ARGS();
 
 	void Construct(const FArguments& InArgs, UNiagaraStackViewModel* InStackViewModel);
+
+	TSharedPtr<SWidget> GenerateStackMenu(TWeakPtr<UNiagaraStackViewModel::FTopLevelViewModel> TopLevelViewModelWeak);
 
 private:
 	struct FRowWidgets
@@ -51,7 +54,7 @@ private:
 
 	TSharedRef<ITableRow> OnGenerateRowForTopLevelObject(TSharedRef<UNiagaraStackViewModel::FTopLevelViewModel> Item, const TSharedRef<STableViewBase>& OwnerTable);
 
-	FReply OnTopLevelRowMouseButtonDown(const FGeometry&, const FPointerEvent& MouseEvent, TWeakPtr<UNiagaraStackViewModel::FTopLevelViewModel> TopLevelViewModelWeak);
+	
 
 	TSharedRef<SNiagaraStackTableRow> ConstructContainerForItem(UNiagaraStackEntry* Item);
 
@@ -60,6 +63,8 @@ private:
 	void OnGetChildren(UNiagaraStackEntry* Item, TArray<UNiagaraStackEntry*>& Children);
 
 	void StackTreeScrolled(double ScrollValue);
+
+	void StackTreeSelectionChanged(UNiagaraStackEntry* InNewSelection, ESelectInfo::Type SelectInfo);
 
 	float GetNameColumnWidth() const;
 	float GetContentColumnWidth() const;
@@ -70,6 +75,8 @@ private:
 
 	EVisibility GetVisibilityForItem(UNiagaraStackEntry* Item) const;
 
+
+	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 
 	TSharedRef<SWidget> ConstructHeaderWidget();
@@ -94,6 +101,7 @@ private:
 	void CollapseAll();
 
 	TSharedRef<SWidget> GetViewOptionsMenu() const;
+	const FSlateBrush* GetViewOptionsIconBrush() const;
 
 	// Drag/Drop
 	FReply OnRowDragDetected(const FGeometry& InGeometry, const FPointerEvent& InPointerEvent, UNiagaraStackEntry* InStackEntry);
@@ -105,6 +113,9 @@ private:
 	FReply OnRowAcceptDrop(const FDragDropEvent& InDragDropEvent, EItemDropZone InDropZone, UNiagaraStackEntry* InTargetEntry);
 
 	EVisibility GetIssueIconVisibility() const;
+
+	FReply OnCycleThroughSystemIssues(TSharedPtr<FNiagaraSystemViewModel> SystemViewModel);
+	void OnCycleThroughIssues();
 
 private:
 	UNiagaraStackViewModel* StackViewModel;
@@ -119,6 +130,6 @@ private:
 
 	// ~ search stuff
 	TSharedPtr<SSearchBox> SearchBox;
-	static const FText OccurencesFormat;
-	bool bNeedsJumpToNextOccurence;
+
+	TSharedPtr<FNiagaraStackCommandContext> StackCommandContext;
 };

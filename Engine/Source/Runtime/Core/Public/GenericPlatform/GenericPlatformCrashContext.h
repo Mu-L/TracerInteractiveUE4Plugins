@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -8,6 +8,26 @@
 #include "Containers/UnrealString.h"
 
 struct FProgramCounterSymbolInfo;
+
+/** Defines special exit codes used to diagnose abnormal terminations. The code values are arbitrary, but easily recongnizable in decimal. They are meant to be
+    used with the out-of-process monitoring/analytics in order to figure out unexpected cases. */
+enum ECrashExitCodes : int32
+{
+	/** Used by out-of-process monitor in analytics report, the application is still running, but out-of-process monitor was requested to exit before the application exit code could be read. */
+	MonitoredApplicationStillRunning = 777001,
+
+	/** Used by out-of-process monitor in analytics report, the application is not running anymore, but the out-of-process monitor could not read the Editor exit code (either is is not supported by the OS or is not available). */
+	MonitoredApplicationExitCodeNotAvailable = 777002,
+
+	/** Used by the application when the crash reporter crashed itself while reporting a crash.*/
+	CrashReporterCrashed = 777003,
+
+	/** Used by the application when the crash handler crashed itself (crash in the __except() clause for example).*/
+	CrashHandlerCrashed = 777004,
+
+	/** Used by the application to flag when it detects that its out-of-process applicate supposed to report the bugs died (ex if CrashReportClientEditor dies before the Editor).*/
+	OutOfProcessReporterExitedUnexpectedly = 777005,
+};
 
 /** 
  * Symbol information associated with a program counter. 
@@ -173,6 +193,7 @@ struct FUserSettingsContext
 	bool					bNoDialog = false;
 	bool					bSendUnattendedBugReports = false;
 	bool					bSendUsageData = false;
+	bool					bImplicitSend = false;
 	TCHAR					LogFilePath[CR_MAX_DIRECTORY_CHARS];
 };
 
@@ -274,13 +295,21 @@ public:
 	 */
 	static bool IsOutOfProcessCrashReporter()
 	{
-		return bIsOutOfProcess;
+		return OutOfProcessCrashReporterPid != 0;
+	}
+
+	/**
+	 * @return a non-zero value if crash reporter process is used to monitor the session or zero for in-process reporting.
+	 */
+	static uint32 GetOutOfProcessCrashReporterProcessId()
+	{
+		return OutOfProcessCrashReporterPid;
 	}
 
 	/** Set whether or not the out-of-process crash reporter is running. */
-	static void SetIsOutOfProcessCrashReporter(bool bInValue)
+	static void SetOutOfProcessCrashReporterPid(uint32 ProcessId)
 	{
-		bIsOutOfProcess = bInValue;
+		OutOfProcessCrashReporterPid = ProcessId;
 	}
 
 	/** Default constructor. Optionally pass a process handle if building a crash context for a process other then current. */
@@ -393,13 +422,16 @@ public:
 	virtual void SetPortableCallStack(const uint64* StackFrames, int32 NumStackFrames);
 
 	/** Gets the portable callstack to a specified stack and puts it into OutCallStack */
-	virtual void GetPortableCallStack(const uint64* StackFrames, int32 NumStackFrames, TArray<FCrashStackFrame>& OutCallStack);
+	virtual void GetPortableCallStack(const uint64* StackFrames, int32 NumStackFrames, TArray<FCrashStackFrame>& OutCallStack) const;
 
 	/** Adds a portable callstack for a thread */
 	virtual void AddPortableThreadCallStack(uint32 ThreadId, const TCHAR* ThreadName, const uint64* StackFrames, int32 NumStackFrames);
 
 	/** Allows platform implementations to copy files to report directory. */
 	virtual void CopyPlatformSpecificFiles(const TCHAR* OutputDirectory, void* Context);
+
+	/** Cleanup platform specific files - called on startup, implemented per platform */
+	static void CleanupPlatformSpecificFiles();
 
 	/**
 	 * @return whether this crash is a non-crash event
@@ -430,6 +462,9 @@ protected:
 	int NumMinidumpFramesToIgnore;
 	TArray<FCrashStackFrame> CallStack;
 	TArray<FThreadStackFrames> ThreadCallStacks;
+
+	/** Allow platform implementations to provide a callstack property. Primarily used when non-native code triggers a crash. */
+	virtual const TCHAR* GetCallstackProperty() const;
 
 private:
 
@@ -476,8 +511,8 @@ private:
 	/**	Whether the Initialize() has been called */
 	static bool bIsInitialized;
 
-	/** Whether or not crash reporting is being handled out-of-process. */
-	static bool bIsOutOfProcess;
+	/** The ID of the external process reporting crashes if the platform supports it and was configured to use it, zero otherwise (0 is a reserved system process ID, invalid for the out of process reporter). */
+	static uint32 OutOfProcessCrashReporterPid;
 
 	/**	Static counter records how many crash contexts have been constructed */
 	static int32 StaticCrashContextIndex;
@@ -498,6 +533,12 @@ struct CORE_API FGenericMemoryWarningContext
 
 namespace RecoveryService
 {
-	/** Generates a name for the disaster recovery service embedded in the CrashReporterClient. */
+	/** Generates a name for the disaster recovery service embedded in the CrashReporterClientEditor. */
 	CORE_API FString GetRecoveryServerName();
+
+	/** Generates a name for the disaster recovery session. */
+	CORE_API FString MakeSessionName();
+
+	/** Tokenize the session name into its components. */
+	CORE_API bool TokenizeSessionName(const FString& SessionName, FString* OutServerName, int32* SeqNum, FString* ProjName, FDateTime* DateTime);
 }

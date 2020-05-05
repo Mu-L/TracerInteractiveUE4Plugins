@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -34,6 +34,12 @@ public:
 	* Called on a scene start to allow a rendering device to initialize any world related content
 	*/
 	virtual void StartScene(UWorld* World)
+	{ }
+
+	/**
+	* Called before scene Tick
+	*/
+	virtual void PreTick(float DeltaSeconds)
 	{ }
 
 	/**

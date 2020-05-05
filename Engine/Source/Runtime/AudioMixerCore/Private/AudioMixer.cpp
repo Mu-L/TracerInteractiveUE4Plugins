@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AudioMixer.h"
 #include "DSP/BufferVectorOperations.h"
@@ -63,6 +63,13 @@ FAutoConsoleVariableRef CVarUnderrunTimeout(
 	TEXT("au.UnderrunTimeoutMSec"),
 	UnderrunTimeoutCVar,
 	TEXT("Amount of time to wait for the render thread to generate the next buffer before submitting an underrun buffer. \n"),
+	ECVF_Default);
+
+static int32 FadeoutTimeoutCVar = 2000;
+FAutoConsoleVariableRef CVarFadeoutTimeout(
+	TEXT("au.FadeOutTimeoutMSec"),
+	FadeoutTimeoutCVar,
+	TEXT("Amount of time to wait for the FadeOut Event to fire. \n"),
 	ECVF_Default);
 
 static float LinearGainScalarForFinalOututCVar = 1.0f;
@@ -316,6 +323,11 @@ namespace Audio
 
 	void IAudioMixerPlatformInterface::FadeIn()
 	{
+		if (IsNonRealtime())
+		{
+			FadeParam.SetValue(1.0f);
+		}
+
 		bPerformingFade = true;
 		bFadedOut = false;
 		FadeVolume = 1.0f;
@@ -323,6 +335,15 @@ namespace Audio
 
 	void IAudioMixerPlatformInterface::FadeOut()
 	{
+		// Non Realtime isn't ticked when fade out is called, and the user can't hear
+		// the output anyways so there's no need to make it pleasant for their ears.
+		if (!FPlatformProcess::SupportsMultithreading() || IsNonRealtime())
+		{
+			bFadedOut = true;
+			FadeVolume = 0.f;
+			return;
+		}
+
 		if (bFadedOut || FadeVolume == 0.0f)
 		{
 			return;
@@ -330,8 +351,11 @@ namespace Audio
 
 		bPerformingFade = true;
 		if (AudioFadeEvent != nullptr)
-		{
-			AudioFadeEvent->Wait();
+		{						
+			if (!AudioFadeEvent->Wait(FadeoutTimeoutCVar))
+			{
+				UE_LOG(LogAudioMixer, Warning, TEXT("FadeOutEvent timed out"));
+			}
 		}
 
 		FadeVolume = 0.0f;
@@ -479,6 +503,7 @@ namespace Audio
 		if (CurrentBufferReadIndex == INDEX_NONE || CurrentBufferWriteIndex == INDEX_NONE)
 		{
 			SubmitBuffer(UnderrunBuffer.GetBufferData());
+			DeviceSwapCriticalSection.Unlock();
 			return;
 		}
 

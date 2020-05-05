@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -34,9 +34,13 @@ class ENGINE_API UMaterialExpressionRuntimeVirtualTextureSample : public UMateri
 {
 	GENERATED_UCLASS_BODY()
 
-	/** UV coordinates input if we want to override standard world position based coordinates. */
-	UPROPERTY()
+	/** Optional UV coordinates input if we want to override standard world position based coordinates. */
+	UPROPERTY(meta = (RequiredInput = "false"))
 	FExpressionInput Coordinates;
+
+	/** Optional world position input to override the default world position. */
+	UPROPERTY(meta = (RequiredInput = "false"))
+	FExpressionInput WorldPosition;
 
 	/** Meaning depends on MipValueMode. A single unit is one mip level.  */
 	UPROPERTY(meta = (RequiredInput = "false"))

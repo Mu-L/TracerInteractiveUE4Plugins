@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "EngineFontServices.h"
 #include "Misc/CoreMisc.h"
@@ -77,4 +77,15 @@ void FEngineFontServices::UpdateCache()
 		TSharedRef<FSlateFontCache> FontCache = SlateFontServices->GetFontCache();
 		FontCache->UpdateCache();
 	}
+}
+
+FOnReleaseFontResources& FEngineFontServices::OnReleaseResources()
+{
+	if (SlateFontServices.IsValid())
+	{
+		return SlateFontServices->OnReleaseResources();
+	}
+
+	static FOnReleaseFontResources DummyDelegate;
+	return DummyDelegate;
 }

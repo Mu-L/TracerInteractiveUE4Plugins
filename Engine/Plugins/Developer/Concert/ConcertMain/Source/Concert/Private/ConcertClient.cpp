@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ConcertClient.h"
 
@@ -29,6 +29,12 @@ namespace ConcertUtil
 		return &LogConcert;
 	#endif
 	}
+
+	// Connection Error code
+	constexpr uint32 CancelCode = 1;
+	constexpr uint32 ConectionAttemptAbortedErrorCode = 2;
+	constexpr uint32 ServerNotRespondingErrorCode = 3;
+	constexpr uint32 ServerErrorCode = 4;
 }
 
 class FConcertAutoConnection
@@ -73,7 +79,7 @@ public:
 private:
 	FText GetAutoConnectionCanceledMessage() const
 	{
-		return FText::Format(LOCTEXT("AutoJoinSessionCanceled", "Auto-Connection to Session '{0}' Canceled."), FText::AsCultureInvariant(Settings->DefaultSessionName));
+		return FText::Format(LOCTEXT("AutoJoinSessionCanceled", "Connection to Session '{0}' Canceled."), FText::AsCultureInvariant(Settings->DefaultSessionName));
 	}
 
 	TUniquePtr<FAsyncTaskNotification> MakeAutoConnectNotification()
@@ -110,7 +116,7 @@ private:
 		}
 
 		// Should cancel request?
-		if (AutoConnectionNotification.IsValid() && AutoConnectionNotification->ShouldCancel())
+		if (AutoConnectionNotification.IsValid() && AutoConnectionNotification->GetPromptAction() == EAsyncTaskNotificationPromptAction::Cancel)
 		{
 			SetAsyncNotificationComplete(GetAutoConnectionCanceledMessage(), false);
 			Client->StopAutoConnect(); // Indirect self-destruct.
@@ -229,12 +235,12 @@ private:
 					// We found the default session to restore, restore and join it.
 					if (DefaultSessionToRestoreId.IsValid())
 					{
-						FConcertRestoreSessionArgs RestoreSessionArgs;
+						FConcertCopySessionArgs RestoreSessionArgs;
 						RestoreSessionArgs.bAutoConnect = true;
 						RestoreSessionArgs.SessionId = DefaultSessionToRestoreId;
 						RestoreSessionArgs.SessionName = Settings->DefaultSessionName;
 						RestoreSessionArgs.ArchiveNameOverride = Settings->DefaultSaveSessionAs;
-						return Client->InternalRestoreSession(ServerEndpoint, RestoreSessionArgs, MoveTemp(AutoConnectionNotification)).Share();
+						return Client->InternalCopySession(ServerEndpoint, RestoreSessionArgs, /*bRestoreOnlyConstraint*/true, MoveTemp(AutoConnectionNotification)).Share();
 					}
 
 					// No session found to join or restore, so create a new one.
@@ -312,7 +318,7 @@ public:
 			ConnectionTasks[0]->Abort();
 
 			// Clear the tasks, set the notification text and fulfill the 'Execute()' promise.
-			SetResult(EConcertResponseCode::Failed, /*bWasCanceled*/true, GetCanceledErrorMessage());
+			SetResult(EConcertResponseCode::Failed, GetCanceledError());
 		}
 	}
 
@@ -348,9 +354,9 @@ public:
 	}
 
 private:
-	static FText GetCanceledErrorMessage()
+	static FConcertConnectionError GetCanceledError()
 	{
-		return LOCTEXT("ConnectionProcessCanceled", "Connection Process Canceled");
+		return FConcertConnectionError{ ConcertUtil::CancelCode, LOCTEXT("ConnectionProcessCanceled", "Connection Process Canceled") };
 	}
 
 	bool CanCancel() const
@@ -360,35 +366,64 @@ private:
 
 	void Tick()
 	{
+		auto GetTaskAction = [](EAsyncTaskNotificationPromptAction InPromptAction) ->EConcertConnectionTaskAction
+		{
+			switch (InPromptAction)
+			{
+			case EAsyncTaskNotificationPromptAction::None:
+				return EConcertConnectionTaskAction::None;
+			case EAsyncTaskNotificationPromptAction::Cancel:
+				return EConcertConnectionTaskAction::Cancel;
+			case EAsyncTaskNotificationPromptAction::Continue:
+				return EConcertConnectionTaskAction::Continue;
+			// unattended case resolve as a continue
+			default:
+				return EConcertConnectionTaskAction::Continue;
+			}
+		};
+
 		// We should only Tick while we have tasks to process
 		check(ConnectionTasks.Num() > 0);
 
-		const bool bCanceled = Notification->ShouldCancel();
+		EAsyncTaskNotificationPromptAction PromptAction = Notification->GetPromptAction();
+		EConcertConnectionTaskAction TaskAction = GetTaskAction(PromptAction);
+		const bool bCanceled = TaskAction == EConcertConnectionTaskAction::Cancel;
+		EConcertResponseCode TaskStatus = ConnectionTasks[0]->GetStatus();
 		if (bCanceled)
 		{
-			if (ConnectionTasks[0]->GetStatus() == EConcertResponseCode::Pending)
+			if (TaskStatus == EConcertResponseCode::Pending)
 			{
-				ConnectionTasks[0]->Tick(bCanceled); // Give it a last tick to give it a chance to cancel cleanly.
+				ConnectionTasks[0]->Tick(TaskAction); // Give it a last tick to give it a chance to cancel cleanly.
 			}
 
-			SetResultAndDelete(EConcertResponseCode::Failed, bCanceled, GetCanceledErrorMessage()); // Cancellation has priority over other possible errors (it could hide some failure)
+			SetResultAndDelete(EConcertResponseCode::Failed, bCanceled, GetCanceledError()); // Cancelation has priority over other possible errors (it could hide some failure)
 			return; // Do not use 'this' anymore, it was deleted above.
 		}
 
 		// Update the current task
-		switch (ConnectionTasks[0]->GetStatus())
+		switch (TaskStatus)
 		{
 			// Pending state - update the task
 		case EConcertResponseCode::Pending:
-			ConnectionTasks[0]->Tick(bCanceled);
+			ConnectionTasks[0]->Tick(TaskAction);
 			return;
-
+			// Prompt state - wait for user action to either proceed (success) or stop (fail)
+		case EConcertResponseCode::InvalidRequest:
+			{
+				FAsyncNotificationStateData StateData(Config.PendingTitleText.Get(FText::GetEmpty()), ConnectionTasks[0]->GetError().ErrorText, EAsyncTaskNotificationState::Prompt);
+				StateData.PromptText = ConnectionTasks[0]->GetPrompt();
+				StateData.HyperlinkText = LOCTEXT("PendingConnectionFailureDetails", "See Details...");
+				StateData.Hyperlink = ConnectionTasks[0]->GetErrorDelegate();
+				Notification->SetNotificationState(StateData);
+				ConnectionTasks[0]->Tick(TaskAction);
+				return;
+			}
 			// Success state - move on to the next task
 		case EConcertResponseCode::Success:
 			ConnectionTasks.RemoveAt(0, 1, /*bAllowShrinking*/false);
 			if (ConnectionTasks.Num() > 0)
 			{
-				Notification->SetProgressText(ConnectionTasks[0]->GetDescription());
+				Notification->SetNotificationState(FAsyncNotificationStateData(Config.PendingTitleText.Get(FText::GetEmpty()), ConnectionTasks[0]->GetDescription(), EAsyncTaskNotificationState::Pending));
 				ConnectionTasks[0]->Execute();
 			}
 			else
@@ -397,16 +432,15 @@ private:
 				SetResultAndDelete(EConcertResponseCode::Success, bCanceled); // do not use 'this' after this call!
 			}
 			return;
-
 			// Error state - fail the connection
 		default:
-			SetResultAndDelete(ConnectionTasks[0]->GetStatus(), bCanceled, ConnectionTasks[0]->GetError()); // do not use 'this' after this call!
+			SetResultAndDelete(TaskStatus, bCanceled, ConnectionTasks[0]->GetError(), ConnectionTasks[0]->GetErrorDelegate()); // do not use 'this' after this call!
 			return;
 		}
 	}
 
 	/** Set the result */
-	void SetResult(const EConcertResponseCode InResult, bool bWasCanceled, const FText InFailureReason = FText())
+	void SetResult(const EConcertResponseCode InResult, const FConcertConnectionError InError = FConcertConnectionError(), const FSimpleDelegate& InErrorDelegate = FSimpleDelegate())
 	{
 		if (InResult == EConcertResponseCode::Success)
 		{
@@ -414,36 +448,31 @@ private:
 		}
 		else
 		{
-			// Disconnect the session -> Prevent the user from successfully connecting if he was just about to connect (in case the 'join session' event was in-flight but the connection was canceled/aborted).
-			if (bWasCanceled)
+			Client->InternalDisconnectSession();
+			if (InResult == EConcertResponseCode::Failed)
 			{
-				// Don't keep the notification open if canceled
-				Notification->SetKeepOpenOnFailure(false);
-				Client->DisconnectSession(); // This also stops auto-connect (it the client was auto-connecting, this will also prevent auto-connect to retry)
+				Notification->SetKeepOpenOnFailure(Config.KeepNotificationOpenOnError);
 			}
-			else
-			{
-				Client->InternalDisconnectSession(); // This doesn't stop auto-connect, so if it was auto-connecting, it will retry on error.
-
-				if (InResult == EConcertResponseCode::Failed)
-				{
-					Notification->SetKeepOpenOnFailure(Config.KeepNotificationOpenOnError);
-				}
-			}
-
-			Notification->SetComplete(Config.FailureTitleText.Get(FText::GetEmpty()), InFailureReason, /*bSuccess*/false);
+			Notification->SetHyperlink(InErrorDelegate, LOCTEXT("PendingConnectionFailureDetails", "See Details..."));
+			Notification->SetComplete(Config.FailureTitleText.Get(FText::GetEmpty()), InError.ErrorText, /*bSuccess*/false);
 		}
 
 		ConnectionTasks.Reset();
 		ConnectionResult.SetValue(InResult);
+		Client->SetLastConnectionError(InError);
 	}
 
 	/** Set the result and delete ourself - 'this' will be garbage after calling this function! */
-	void SetResultAndDelete(const EConcertResponseCode InResult, bool bWasCanceled, const FText InFailureReason = FText())
+	void SetResultAndDelete(const EConcertResponseCode InResult, bool bWasCanceled, const FConcertConnectionError InError = FConcertConnectionError(), const FSimpleDelegate& InErrorDelegate = FSimpleDelegate())
 	{
 		// Set the result and delete ourself
-		SetResult(InResult, bWasCanceled, InFailureReason);
+		SetResult(InResult, InError, InErrorDelegate);
 		check(Client->PendingConnection.Get() == this);
+		// if the connection was canceled, also cancel the auto connection, so it won't retry on failure		
+		if (bWasCanceled)
+		{
+			Client->AutoConnection.Reset();
+		}
 		Client->PendingConnection.Reset();
 	}
 
@@ -472,7 +501,7 @@ public:
 		Result.Reset();
 	}
 
-	virtual void Tick(const bool bShouldCancel) override
+	virtual void Tick(EConcertConnectionTaskAction TaskAction) override
 	{
 	}
 
@@ -500,9 +529,20 @@ public:
 		return EConcertResponseCode::Failed;
 	}
 
-	virtual FText GetError() const override
+	virtual FText GetPrompt() const override
 	{
-		return Result.IsValid() ? ErrorText : LOCTEXT("RemoteConnectionAttemptAborted", "Remote Connection Attempt Aborted.");
+		// client connection task have no prompt
+		return FText::GetEmpty();
+	}
+
+	virtual FConcertConnectionError GetError() const override
+	{
+		return Result.IsValid() ? ConnectionError : FConcertConnectionError{ConcertUtil::ConectionAttemptAbortedErrorCode ,LOCTEXT("RemoteConnectionAttemptAborted", "Remote Connection Attempt Aborted.") };
+	}
+
+	virtual FSimpleDelegate GetErrorDelegate() const override
+	{
+		return FSimpleDelegate();
 	}
 
 	virtual FText GetDescription() const override
@@ -510,9 +550,9 @@ public:
 		return LOCTEXT("AttemptingRemoteConnection", "Attempting Remote Connection...");
 	}
 
-	static FText GetServerNotRespondingErrorMessage()
+	static FConcertConnectionError GetServerNotRespondingErrorMessage()
 	{
-		return LOCTEXT("JoinTask_ServerNotResponding", "Server Not Responding");
+		return FConcertConnectionError{ ConcertUtil::ServerNotRespondingErrorCode, LOCTEXT("JoinTask_ServerNotResponding", "Server Not Responding") };
 	}
 
 protected:
@@ -520,7 +560,7 @@ protected:
 	RequestType Request;
 	FGuid ServerAdminEndpointId;
 	TFuture<TSharedFuture<EConcertResponseCode>> Result;
-	FText ErrorText;
+	FConcertConnectionError ConnectionError;
 	TSharedPtr<uint8> AsyncRequestExecutionGuard;
 };
 
@@ -548,12 +588,13 @@ public:
 				if (SessionInfoResponse.ResponseCode == EConcertResponseCode::Success)
 				{
 					// If CreateClientSession() returns a failure, it is because the server did not reply to the 'join session' event and the endpoint timed out or the connection was canceled/aborted (for which there is a special message already).
-					ErrorText = GetServerNotRespondingErrorMessage();
+					ConnectionError = GetServerNotRespondingErrorMessage();
 					return Client->CreateClientSession(SessionInfoResponse.SessionInfo).Share();
 				}
 				else
 				{
-					ErrorText = SessionInfoResponse.Reason;
+					ConnectionError.ErrorCode = ConcertUtil::ServerErrorCode;
+					ConnectionError.ErrorText = SessionInfoResponse.Reason;
 					return MakeFulfilledPromise<EConcertResponseCode>(SessionInfoResponse.ResponseCode).GetFuture().Share();
 				}
 			});
@@ -583,12 +624,13 @@ public:
 				else if (SessionInfoResponse.ResponseCode == EConcertResponseCode::Success)
 				{
 					// If CreateClientSession() returns a failure, it is because the server did not reply to the 'join session' event and the endpoint timed out or the connection was canceled/aborted (for which there is a special message already).
-					ErrorText = GetServerNotRespondingErrorMessage();
+					ConnectionError = GetServerNotRespondingErrorMessage();
 					return Client->CreateClientSession(SessionInfoResponse.SessionInfo).Share();
 				}
 				else
 				{
-					ErrorText = SessionInfoResponse.Reason;
+					ConnectionError.ErrorCode = ConcertUtil::ServerErrorCode;
+					ConnectionError.ErrorText = SessionInfoResponse.Reason;
 					return MakeFulfilledPromise<EConcertResponseCode>(SessionInfoResponse.ResponseCode).GetFuture().Share();
 				}
 			});
@@ -773,6 +815,11 @@ void FConcertClient::StopAutoConnect()
 	AutoConnection.Reset();
 }
 
+FConcertConnectionError FConcertClient::GetLastConnectionError() const
+{
+	return LastConnectionError;
+}
+
 TArray<FConcertServerInfo> FConcertClient::GetKnownServers() const
 {
 	TArray<FConcertServerInfo> ServerArray;
@@ -828,11 +875,24 @@ TFuture<EConcertResponseCode> FConcertClient::JoinSession(const FGuid& ServerAdm
 	return InternalJoinSession(ServerAdminEndpointId, SessionId);
 }
 
-TFuture<EConcertResponseCode> FConcertClient::RestoreSession(const FGuid& ServerAdminEndpointId, const FConcertRestoreSessionArgs& RestoreSessionArgs)
+TFuture<EConcertResponseCode> FConcertClient::RestoreSession(const FGuid& ServerAdminEndpointId, const FConcertCopySessionArgs& RestoreSessionArgs)
 {
-	// We don't want the client to get automatically reconnected to it's default session if something wrong happens
-	AutoConnection.Reset();
-	return InternalRestoreSession(ServerAdminEndpointId, RestoreSessionArgs);
+	// We don't want the client to get automatically reconnected to the default session if something wrong happens
+	if (RestoreSessionArgs.bAutoConnect)
+	{
+		AutoConnection.Reset();
+	}
+	return InternalCopySession(ServerAdminEndpointId, RestoreSessionArgs, /*bRestoreOnlyConstraint*/true);
+}
+
+TFuture<EConcertResponseCode> FConcertClient::CopySession(const FGuid& ServerAdminEndpointId, const FConcertCopySessionArgs& CopySessionArgs)
+{
+	// We don't want the client to get automatically reconnected to the default session if the copy/connect fails.
+	if (CopySessionArgs.bAutoConnect)
+	{
+		AutoConnection.Reset();
+	}
+	return InternalCopySession(ServerAdminEndpointId, CopySessionArgs, /*bRestoreOnlyConstraint*/false);
 }
 
 TFuture<EConcertResponseCode> FConcertClient::ArchiveSession(const FGuid& ServerAdminEndpointId, const FConcertArchiveSessionArgs& ArchiveSessionArgs)
@@ -939,6 +999,9 @@ void FConcertClient::DisconnectSession()
 	// We don't want the client to get automatically reconnected to it's default session
 	AutoConnection.Reset();
 	InternalDisconnectSession();
+
+	// If async connection tasks were in-flight, cancel them.
+	PendingConnection.Reset();
 }
 
 void FConcertClient::ResumeSession()
@@ -1032,6 +1095,9 @@ TFuture<FConcertAdmin_GetSessionActivitiesResponse> FConcertClient::GetSessionAc
 
 TFuture<EConcertResponseCode> FConcertClient::InternalCreateSession(const FGuid& ServerAdminEndpointId, const FConcertCreateSessionArgs& CreateSessionArgs, TUniquePtr<FAsyncTaskNotification> OngoingNotification)
 {
+	// Reset last connection error
+	LastConnectionError = FConcertConnectionError();
+
 	// Cancel any pending connection (will be aborted)
 	PendingConnection.Reset();
 
@@ -1072,6 +1138,9 @@ TFuture<EConcertResponseCode> FConcertClient::InternalCreateSession(const FGuid&
 
 TFuture<EConcertResponseCode> FConcertClient::InternalJoinSession(const FGuid& ServerAdminEndpointId, const FGuid& SessionId, TUniquePtr<FAsyncTaskNotification> OngoingNotification)
 {
+	// Reset last connection error
+	LastConnectionError = FConcertConnectionError();
+
 	// Cancel any pending connection (will be aborted)
 	PendingConnection.Reset();
 
@@ -1111,18 +1180,19 @@ TFuture<EConcertResponseCode> FConcertClient::InternalJoinSession(const FGuid& S
 	return PendingConnection->Execute(MoveTemp(ConnectionTasks), MoveTemp(OngoingNotification));
 }
 
-TFuture<EConcertResponseCode> FConcertClient::InternalRestoreSession(const FGuid& ServerAdminEndpointId, const FConcertRestoreSessionArgs& RestoreSessionArgs, TUniquePtr<FAsyncTaskNotification> OngoingNotification)
+TFuture<EConcertResponseCode> FConcertClient::InternalCopySession(const FGuid& ServerAdminEndpointId, const FConcertCopySessionArgs& CopySessionArgs, bool bRestoreOnlyConstraint, TUniquePtr<FAsyncTaskNotification> OngoingNotification)
 {
-	FConcertAdmin_RestoreSessionRequest RestoreSessionRequest;
-	RestoreSessionRequest.SessionId = RestoreSessionArgs.SessionId;
-	RestoreSessionRequest.SessionName = RestoreSessionArgs.SessionName;
-	RestoreSessionRequest.SessionFilter = RestoreSessionArgs.SessionFilter;
-	RestoreSessionRequest.OwnerClientInfo = ClientInfo;
-	RestoreSessionRequest.VersionInfo.Initialize();
+	FConcertAdmin_CopySessionRequest CopySessionRequest;
+	CopySessionRequest.SessionId = CopySessionArgs.SessionId;
+	CopySessionRequest.SessionName = CopySessionArgs.SessionName;
+	CopySessionRequest.SessionFilter = CopySessionArgs.SessionFilter;
+	CopySessionRequest.bRestoreOnly = bRestoreOnlyConstraint;
+	CopySessionRequest.OwnerClientInfo = ClientInfo;
+	CopySessionRequest.VersionInfo.Initialize();
 
 	// Session settings
-	RestoreSessionRequest.SessionSettings.Initialize();
-	RestoreSessionRequest.SessionSettings.ArchiveNameOverride = RestoreSessionArgs.ArchiveNameOverride;
+	CopySessionRequest.SessionSettings.Initialize();
+	CopySessionRequest.SessionSettings.ArchiveNameOverride = CopySessionArgs.ArchiveNameOverride;
 
 	TUniquePtr<FAsyncTaskNotification> Notification = MoveTemp(OngoingNotification);
 	if (!Notification.IsValid())
@@ -1130,13 +1200,13 @@ TFuture<EConcertResponseCode> FConcertClient::InternalRestoreSession(const FGuid
 		FAsyncTaskNotificationConfig NotificationConfig;
 		NotificationConfig.bIsHeadless = Settings->bIsHeadless;
 		NotificationConfig.bKeepOpenOnFailure = true;
-		NotificationConfig.TitleText = LOCTEXT("RestoringSession", "Restoring Session...");
+		NotificationConfig.TitleText = bRestoreOnlyConstraint ? LOCTEXT("RestoringSession", "Restoring Session...") : LOCTEXT("CopyingSession", "Copying Session...");
 		NotificationConfig.LogCategory = ConcertUtil::GetLogConcertPtr();
 		Notification = MakeUnique<FAsyncTaskNotification>(NotificationConfig);
 	}
 
-	return ClientAdminEndpoint->SendRequest<FConcertAdmin_RestoreSessionRequest, FConcertAdmin_SessionInfoResponse>(RestoreSessionRequest, ServerAdminEndpointId)
-		.Next([this, Notification = MoveTemp(Notification), bAutoConnect = RestoreSessionArgs.bAutoConnect](const FConcertAdmin_SessionInfoResponse& RequestResponse) mutable
+	return ClientAdminEndpoint->SendRequest<FConcertAdmin_CopySessionRequest, FConcertAdmin_SessionInfoResponse>(CopySessionRequest, ServerAdminEndpointId)
+		.Next([this, Notification = MoveTemp(Notification), bAutoConnect = CopySessionArgs.bAutoConnect, bRestoreOnly = bRestoreOnlyConstraint](const FConcertAdmin_SessionInfoResponse& RequestResponse) mutable
 	{
 		if (RequestResponse.ResponseCode == EConcertResponseCode::Success)
 		{
@@ -1146,12 +1216,12 @@ TFuture<EConcertResponseCode> FConcertClient::InternalRestoreSession(const FGuid
 			}
 			else
 			{
-				Notification->SetComplete(FText::Format(LOCTEXT("RestoredSessionFmt", "Restored Session '{0}'"), FText::FromString(RequestResponse.SessionInfo.SessionName)), FText(), true);
+				Notification->SetComplete(FText::Format(bRestoreOnly ? LOCTEXT("RestoreSessionFmt", "Restored Session '{0}'") : LOCTEXT("CopySessionFmt", "Copied Session '{0}'"), FText::FromString(RequestResponse.SessionInfo.SessionName)), FText(), true);
 			}
 		}
 		else
 		{
-			Notification->SetComplete(LOCTEXT("FailedToRestoreSession", "Failed to Restore Session"), RequestResponse.Reason, false);
+			Notification->SetComplete(bRestoreOnly ? LOCTEXT("FailedToRestoreSession", "Failed to Restore Session") : LOCTEXT("FailedToCopySession", "Failed to Copy Session"), RequestResponse.Reason, false);
 		}
 		return RequestResponse.ResponseCode;
 	});
@@ -1168,6 +1238,11 @@ void FConcertClient::InternalDisconnectSession()
 	}
 
 	bClientSessionPendingDestroy = false;
+}
+
+void FConcertClient::SetLastConnectionError(FConcertConnectionError LastError)
+{
+	LastConnectionError = MoveTemp(LastError);
 }
 
 void FConcertClient::OnEndFrame()
@@ -1210,6 +1285,7 @@ void FConcertClient::SendDiscoverServersEvent()
 	FConcertAdmin_DiscoverServersEvent DiscoverServersEvent;
 	DiscoverServersEvent.RequiredRole = Role;
 	DiscoverServersEvent.RequiredVersion = VERSION_STRINGIFY(ENGINE_MAJOR_VERSION) TEXT(".") VERSION_STRINGIFY(ENGINE_MINOR_VERSION);
+	DiscoverServersEvent.ClientAuthenticationKey = Settings->ClientSettings.ClientAuthenticationKey;
 	ClientAdminEndpoint->PublishEvent(DiscoverServersEvent);
 }
 

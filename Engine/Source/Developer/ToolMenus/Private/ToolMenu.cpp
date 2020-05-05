@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ToolMenu.h"
 #include "ToolMenus.h"
@@ -18,6 +18,8 @@ UToolMenu::UToolMenu() :
 	, bToolBarIsFocusable(false)
 	, bToolBarForceSmallIcons(false)
 	, bRegistered(false)
+	, bIsRegistering(false)
+	, bExtendersEnabled(true)
 	, StyleSet(&FCoreStyle::Get())
 	, MaxHeight(INT_MAX)
 {
@@ -50,6 +52,9 @@ void UToolMenu::InitGeneratedCopy(const UToolMenu* Source, const FName InMenuNam
 
 	SubMenuParent = Source->SubMenuParent;
 	SubMenuSourceEntryName = Source->SubMenuSourceEntryName;
+	MaxHeight = Source->MaxHeight;
+	bExtendersEnabled = Source->bExtendersEnabled;
+
 	MaxHeight = Source->MaxHeight;
 	if (InContext)
 	{
@@ -120,37 +125,83 @@ FToolMenuSection& UToolMenu::AddDynamicSection(const FName SectionName, const FN
 	return Section;
 }
 
+bool UToolMenu::IsRegistering() const
+{
+	return bIsRegistering;
+}
+
 FToolMenuSection& UToolMenu::AddSection(const FName SectionName, const TAttribute< FText >& InLabel, const FToolMenuInsert InPosition)
 {
-	for (FToolMenuSection& Section : Sections)
+	int32 InsertIndex = (SectionName != NAME_None) ? IndexOfSection(SectionName) : INDEX_NONE;
+	if (InsertIndex != INDEX_NONE)
 	{
-		if (Section.Name == SectionName)
+		if (InLabel.IsSet())
 		{
-			if (InLabel.IsSet())
-			{
-				Section.Label = InLabel;
-			}
+			Sections[InsertIndex].Label = InLabel;
+		}
 
-			if (InPosition.Name != NAME_None)
-			{
-				Section.InsertPosition = InPosition;
-			}
+		if (InPosition.Name != NAME_None || InPosition.Position != EToolMenuInsertType::Default)
+		{
+			Sections[InsertIndex].InsertPosition = InPosition;
+		}
 
-			return Section;
+		// Sort registered sections to appear before unregistered
+		if (IsRegistering() && !Sections[InsertIndex].bAddedDuringRegister)
+		{
+			Sections[InsertIndex].bAddedDuringRegister = true;
+
+			for (int32 i = 0; i < InsertIndex; ++i)
+			{
+				if (!Sections[i].bAddedDuringRegister)
+				{
+					FToolMenuSection RemovedSection;
+					Swap(Sections[InsertIndex], RemovedSection);
+					Sections.Insert(MoveTempIfPossible(RemovedSection), i);
+					Sections.RemoveAt(InsertIndex + 1, 1, false);
+					InsertIndex = i;
+				}
+			}
+		}
+
+		return Sections[InsertIndex];
+	}
+	else
+	{
+		InsertIndex = Sections.Num();
+	}
+
+	if (IsRegistering())
+	{
+		for (int32 i=0; i < Sections.Num(); ++i)
+		{
+			if (!Sections[i].bAddedDuringRegister)
+			{
+				InsertIndex = i;
+				break;
+			}
 		}
 	}
 
-	FToolMenuSection& NewSection = Sections.AddDefaulted_GetRef();
+	FToolMenuSection& NewSection = Sections.InsertDefaulted_GetRef(InsertIndex);
 	NewSection.InitSection(SectionName, InLabel, InPosition);
-	//NewSection.OwnerMenu = this;
+	NewSection.bIsRegistering = IsRegistering();
+	NewSection.bAddedDuringRegister = IsRegistering();
 	return NewSection;
 }
 
 void UToolMenu::AddSectionScript(const FName SectionName, const FText& InLabel, const FName InsertName, const EToolMenuInsertType InsertType)
 {
 	FToolMenuSection& Section = FindOrAddSection(SectionName);
-	Section.Label = InLabel;
-	Section.InsertPosition = FToolMenuInsert(InsertName, InsertType);
+
+	if (!InLabel.IsEmpty())
+	{
+		Section.Label = InLabel;
+	}
+
+	if (InsertName != NAME_None || InsertType != EToolMenuInsertType::Default)
+	{
+		Section.InsertPosition = FToolMenuInsert(InsertName, InsertType);
+	}
 }
 
 void UToolMenu::AddDynamicSectionScript(const FName SectionName, UToolMenuSectionDynamic* InObject)
@@ -318,10 +369,14 @@ TArray<FName> UToolMenu::GetMenuHierarchyNames(bool bIncludeSubMenuRoot) const
 {
 	TArray<FName> HierarchyNames;
 
-	TArray<UToolMenu*> Hierarchy = UToolMenus::Get()->CollectHierarchy(GetMenuName());
-	for (int32 i = Hierarchy.Num() - 1; i >= 0; --i)
+	TArray<UToolMenu*> Hierarchy;
+	if (UToolMenus::Get()->FindMenu(GetMenuName()) != nullptr)
 	{
-		HierarchyNames.AddUnique(Hierarchy[i]->GetMenuName());
+		Hierarchy = UToolMenus::Get()->CollectHierarchy(GetMenuName());
+		for (int32 i = Hierarchy.Num() - 1; i >= 0; --i)
+		{
+			HierarchyNames.AddUnique(Hierarchy[i]->GetMenuName());
+		}
 	}
 
 	if (bIncludeSubMenuRoot && SubMenuParent)
@@ -445,4 +500,9 @@ FString UToolMenu::GetSubMenuNamePath() const
 	}
 
 	return SubMenuNamePath;
+}
+
+void UToolMenu::SetExtendersEnabled(bool bEnabled)
+{
+	bExtendersEnabled = bEnabled;
 }

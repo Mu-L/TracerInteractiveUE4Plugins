@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*===================================================================================
 	Scalability.h: Manager class for handling scalability settings
@@ -15,6 +15,8 @@ namespace Scalability
 		EAbsolute,
 		ERelativeToMax,
 	};
+
+	const int32 DefaultQualityLevel = 3;
 
 	/**
 	 * Structure for holding the state of the engine scalability groups
@@ -72,6 +74,10 @@ namespace Scalability
 		// Returns the overall value if all settings are set to the same thing
 		// @param Value -1:custom, 0:low, 1:medium, 2:high, 3:epic, 4:cinematic
 		int32 GetSingleQualityLevel() const;
+
+		// Returns the minimum set quality level from all settings
+		// @param Value -1:custom, 0:low, 1:medium, 2:high, 3:epic, 4:cinematic
+		int32 GetMinQualityLevel() const;
 
 		// Sets view distance quality
 		// @param Value 0:low, 1:medium, 2:high, 3:epic, 4:cinematic (gets clamped if needed)
@@ -166,8 +172,15 @@ namespace Scalability
 	/** Returns the current screen percentage */
 	ENGINE_API float GetResolutionScreenPercentage();
 
+	/** Returns a human readable name for a scalability quality level */
+	ENGINE_API FText GetScalabilityNameFromQualityLevel(int32 QualityLevel);
+
 #if WITH_EDITOR
 	/** Set an Editor preview scalability platform */
 	void ENGINE_API ChangeScalabilityPreviewPlatform(FName NewPlatformScalabilityName);
 #endif
+
+	ENGINE_API FText GetQualityLevelText(int32 Value, int32 NumLevels);
+
+	ENGINE_API FString GetScalabilitySectionString(const TCHAR* InGroupName, int32 InQualityLevel, int32 InNumLevels);
 }

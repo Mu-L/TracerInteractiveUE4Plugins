@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Components/TextBlock.h"
 #include "UObject/ConstructorHelpers.h"
@@ -137,7 +137,7 @@ void UTextBlock::SetAutoWrapText(bool InAutoWrapText)
 
 UMaterialInstanceDynamic* UTextBlock::GetDynamicFontMaterial()
 {
-	if (ensure(Font.FontMaterial))
+	if (Font.FontMaterial)
 	{
 		UMaterialInterface* Material = CastChecked<UMaterialInterface>(Font.FontMaterial);
 
@@ -159,7 +159,7 @@ UMaterialInstanceDynamic* UTextBlock::GetDynamicFontMaterial()
 
 UMaterialInstanceDynamic* UTextBlock::GetDynamicOutlineMaterial()
 {
-	if (ensure(Font.OutlineSettings.OutlineMaterial))
+	if (Font.OutlineSettings.OutlineMaterial)
 	{
 		UMaterialInterface* Material = CastChecked<UMaterialInterface>(Font.OutlineSettings.OutlineMaterial);
 
@@ -339,7 +339,7 @@ void UTextBlock::OnCreationFromPalette()
 	Text = LOCTEXT("TextBlockDefaultValue", "Text Block");
 }
 
-bool UTextBlock::CanEditChange(const UProperty* InProperty) const
+bool UTextBlock::CanEditChange(const FProperty* InProperty) const
 {
 	if (bSimpleTextMode && InProperty)
 	{
@@ -361,7 +361,7 @@ bool UTextBlock::CanEditChange(const UProperty* InProperty) const
 	return Super::CanEditChange(InProperty);
 }
 
-#endif
+#endif //if WITH_EDITOR
 
 /////////////////////////////////////////////////////
 

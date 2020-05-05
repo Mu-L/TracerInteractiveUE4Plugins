@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Factories/FbxFactory.h"
 #include "Misc/Paths.h"
@@ -28,6 +28,8 @@
 #include "HAL/FileManager.h"
 
 #include "LODUtilities.h"
+#include "UObject/UnrealType.h"
+#include "Misc/ConfigCacheIni.h"
 
 #define LOCTEXT_NAMESPACE "FBXFactory"
 
@@ -54,6 +56,7 @@ void UFbxFactory::PostInitProperties()
 	bText = false;
 
 	ImportUI = NewObject<UFbxImportUI>(this, NAME_None, RF_NoFlags);
+	UFbxImportUI::LoadOptions(ImportUI);
 }
 
 
@@ -161,6 +164,7 @@ UObject* UFbxFactory::FactoryCreateFile
  bool& bOutOperationCanceled
  )
 {
+	AdditionalImportedObjects.Empty();
 	FString FileExtension = FPaths::GetExtension(InFilename);
 	const TCHAR* Type = *FileExtension;
 
@@ -193,6 +197,7 @@ UObject* UFbxFactory::FactoryCreateFile
 		{
 			UStaticMesh *ExistingStaticMesh = Cast<UStaticMesh>(ExistingObject);
 			USkeletalMesh *ExistingSkeletalMesh = Cast<USkeletalMesh>(ExistingObject);
+			UAnimSequence* ExistingAnimSequence = Cast<UAnimSequence>(ExistingObject);
 			UObject *ObjectToReimport = nullptr;
 			if (ExistingStaticMesh)
 			{
@@ -201,6 +206,10 @@ UObject* UFbxFactory::FactoryCreateFile
 			else if (ExistingSkeletalMesh)
 			{
 				ObjectToReimport = ExistingSkeletalMesh;
+			}
+			else if (ExistingAnimSequence)
+			{
+				ObjectToReimport = ExistingAnimSequence;
 			}
 
 			if (ObjectToReimport != nullptr)
@@ -277,6 +286,11 @@ UObject* UFbxFactory::FactoryCreateFile
 		}
 		ImportUI = OverrideImportUI;
 	}
+	else if(AssetImportTask && AssetImportTask->Options)
+	{
+		UE_LOG(LogFbx, Warning, TEXT("The options set in the Asset Import Task are not of type UFbxImportUI and will be ignored"));
+	}
+
 	//We are not re-importing
 	ImportUI->bIsReimport = false;
 	ImportUI->ReimportMesh = nullptr;
@@ -507,6 +521,7 @@ UObject* UFbxFactory::FactoryCreateFile
 								Asset->MarkPackageDirty();
 								//Make sure the build is up to date with the latest section info map
 								Asset->PostEditChange();
+								AdditionalImportedObjects.Add(Asset);
 							}
 						}
 
@@ -528,6 +543,7 @@ UObject* UFbxFactory::FactoryCreateFile
 
 					for (int32 i = 0; i < SkelMeshArray.Num(); i++)
 					{
+						USkeletalMesh* BaseSkeletalMesh = nullptr;
 						TArray<FbxNode*> NodeArray = *SkelMeshArray[i];
 					
 						TotalNumNodes += NodeArray.Num();
@@ -593,13 +609,9 @@ UObject* UFbxFactory::FactoryCreateFile
 							{
 								FName OutputName = FbxImporter->MakeNameForMesh(Name.ToString(), SkelMeshNodeArray[0]);
 
-								TArray<FbxNode*> SkeletonNodeArray;
-								FbxImporter->FillFbxSkeletonArray(RootNodeToImport, SkeletonNodeArray);
-
 								UnFbx::FFbxImporter::FImportSkeletalMeshArgs ImportSkeletalMeshArgs;
 								ImportSkeletalMeshArgs.InParent = InParent;
 								ImportSkeletalMeshArgs.NodeArray = SkelMeshNodeArray;
-								ImportSkeletalMeshArgs.BoneNodeArray = SkeletonNodeArray;
 								ImportSkeletalMeshArgs.Name = OutputName;
 								ImportSkeletalMeshArgs.Flags = Flags;
 								ImportSkeletalMeshArgs.TemplateImportData = ImportUI->SkeletalMeshImportData;
@@ -607,8 +619,7 @@ UObject* UFbxFactory::FactoryCreateFile
 								ImportSkeletalMeshArgs.bCancelOperation = &bOperationCanceled;
 								ImportSkeletalMeshArgs.OutData = &OutData;
 
-								USkeletalMesh* NewMesh = FbxImporter->ImportSkeletalMesh( ImportSkeletalMeshArgs );
-								CreatedObject = NewMesh;
+								BaseSkeletalMesh = FbxImporter->ImportSkeletalMesh( ImportSkeletalMeshArgs );
 								
 								if(bOperationCanceled)
 								{
@@ -619,17 +630,17 @@ UObject* UFbxFactory::FactoryCreateFile
 									return nullptr;
 								}
 
-								if ( NewMesh )
+								if (BaseSkeletalMesh)
 								{
 									//Set the base skeletalmesh to the scoped post edit change variable
-									ScopedPostEditChange.SetSkeletalMesh(NewMesh);
+									ScopedPostEditChange.SetSkeletalMesh(BaseSkeletalMesh);
 
 									if (ImportOptions->bImportAnimations)
 									{
 										// We need to remove all scaling from the root node before we set up animation data.
 										// Othewise some of the global transform calculations will be incorrect.
 										FbxImporter->RemoveTransformSettingsFromFbxNode(RootNodeToImport, ImportUI->SkeletalMeshImportData);
-										FbxImporter->SetupAnimationDataFromMesh(NewMesh, InParent, SkelMeshNodeArray, ImportUI->AnimSequenceImportData, OutputName.ToString());
+										FbxImporter->SetupAnimationDataFromMesh(BaseSkeletalMesh, InParent, SkelMeshNodeArray, ImportUI->AnimSequenceImportData, OutputName.ToString());
 
 										// Reapply the transforms for the rest of the import
 										FbxImporter->ApplyTransformSettingsToFbxNode(RootNodeToImport, ImportUI->SkeletalMeshImportData);
@@ -639,9 +650,8 @@ UObject* UFbxFactory::FactoryCreateFile
 									SuccessfulLodIndex++;
 								}
 							}
-							else if (CreatedObject && SkelMeshNodeArray[0]->GetMesh() == nullptr)
+							else if (BaseSkeletalMesh && SkelMeshNodeArray[0]->GetMesh() == nullptr)
 							{
-								USkeletalMesh* BaseSkeletalMesh = Cast<USkeletalMesh>(CreatedObject);
 								FSkeletalMeshUpdateContext UpdateContext;
 								UpdateContext.SkeletalMesh = BaseSkeletalMesh;
 								//Add a autogenerated LOD to the BaseSkeletalMesh
@@ -654,9 +664,8 @@ UObject* UFbxFactory::FactoryCreateFile
 								ImportedSuccessfulLodIndex = SuccessfulLodIndex;
 								SuccessfulLodIndex++;
 							}
-							else if (CreatedObject) // the base skeletal mesh is imported successfully
+							else if (BaseSkeletalMesh) // the base skeletal mesh is imported successfully
 							{
-								USkeletalMesh* BaseSkeletalMesh = Cast<USkeletalMesh>(CreatedObject);
 								FName LODObjectName = NAME_None;
 								UnFbx::FFbxImporter::FImportSkeletalMeshArgs ImportSkeletalMeshArgs;
 								ImportSkeletalMeshArgs.InParent = BaseSkeletalMesh->GetOutermost();
@@ -686,7 +695,7 @@ UObject* UFbxFactory::FactoryCreateFile
 							}
 						
 							// import morph target
-							if (CreatedObject && ImportOptions->bImportMorph && ImportedSuccessfulLodIndex != INDEX_NONE)
+							if (BaseSkeletalMesh && ImportOptions->bImportMorph && ImportedSuccessfulLodIndex != INDEX_NONE)
 							{
 								// Disable material importing when importing morph targets
 								uint32 bImportMaterials = ImportOptions->bImportMaterials;
@@ -694,14 +703,14 @@ UObject* UFbxFactory::FactoryCreateFile
 								uint32 bImportTextures = ImportOptions->bImportTextures;
 								ImportOptions->bImportTextures = 0;
 
-								FbxImporter->ImportFbxMorphTarget(SkelMeshNodeArray, Cast<USkeletalMesh>(CreatedObject), ImportedSuccessfulLodIndex, OutData);
+								FbxImporter->ImportFbxMorphTarget(SkelMeshNodeArray, BaseSkeletalMesh, ImportedSuccessfulLodIndex, OutData);
 							
 								ImportOptions->bImportMaterials = !!bImportMaterials;
 								ImportOptions->bImportTextures = !!bImportTextures;
 							}
 						}
 					
-						if (CreatedObject)
+						if (BaseSkeletalMesh)
 						{
 							NodeIndex++;
 							FFormatNamedArguments Args;
@@ -709,8 +718,16 @@ UObject* UFbxFactory::FactoryCreateFile
 							Args.Add( TEXT("ArrayLength"), SkelMeshArray.Num() );
 							GWarn->StatusUpdate( NodeIndex, SkelMeshArray.Num(), FText::Format( NSLOCTEXT("UnrealEd", "Importingf", "Importing ({NodeIndex} of {ArrayLength})"), Args ) );
 							
-							USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(CreatedObject);
-							UnFbx::FFbxImporter::UpdateSkeletalMeshImportData(SkeletalMesh, ImportUI->SkeletalMeshImportData, INDEX_NONE, nullptr, nullptr);
+							UnFbx::FFbxImporter::UpdateSkeletalMeshImportData(BaseSkeletalMesh, ImportUI->SkeletalMeshImportData, INDEX_NONE, nullptr, nullptr);
+							
+							if (CreatedObject == nullptr)
+							{
+								CreatedObject = BaseSkeletalMesh;
+							}
+							else if(CreatedObject != BaseSkeletalMesh)
+							{
+								AdditionalImportedObjects.Add(BaseSkeletalMesh);
+							}
 						}
 					}
 				
@@ -941,6 +958,8 @@ void UFbxFactory::CleanUp()
 			ImportOptions->PhysicsAsset = NULL;
 		}
 	}
+
+	Super::CleanUp();
 }
 
 bool UFbxFactory::FactoryCanImport(const FString& Filename)
@@ -966,28 +985,29 @@ UFbxImportUI::UFbxImportUI(const FObjectInitializer& ObjectInitializer)
 	ReimportMesh = nullptr;
 	bAllowContentTypeImport = false;
 	bAutomatedImportShouldDetectType = true;
+	bResetToFbxOnMaterialConflict = false;
 	//Make sure we are transactional to allow undo redo
 	this->SetFlags(RF_Transactional);
 	
 	StaticMeshImportData = CreateDefaultSubobject<UFbxStaticMeshImportData>(TEXT("StaticMeshImportData"));
 	StaticMeshImportData->SetFlags(RF_Transactional);
-	StaticMeshImportData->LoadOptions();
+	UFbxImportUI::LoadOptions(StaticMeshImportData);
 	
 	SkeletalMeshImportData = CreateDefaultSubobject<UFbxSkeletalMeshImportData>(TEXT("SkeletalMeshImportData"));
 	SkeletalMeshImportData->SetFlags(RF_Transactional);
-	SkeletalMeshImportData->LoadOptions();
+	UFbxImportUI::LoadOptions(SkeletalMeshImportData);
 	
 	AnimSequenceImportData = CreateDefaultSubobject<UFbxAnimSequenceImportData>(TEXT("AnimSequenceImportData"));
 	AnimSequenceImportData->SetFlags(RF_Transactional);
-	AnimSequenceImportData->LoadOptions();
+	UFbxImportUI::LoadOptions(AnimSequenceImportData);
 	
 	TextureImportData = CreateDefaultSubobject<UFbxTextureImportData>(TEXT("TextureImportData"));
 	TextureImportData->SetFlags(RF_Transactional);
-	TextureImportData->LoadOptions();
+	UFbxImportUI::LoadOptions(TextureImportData);
 }
 
 
-bool UFbxImportUI::CanEditChange( const UProperty* InProperty ) const
+bool UFbxImportUI::CanEditChange( const FProperty* InProperty ) const
 {
 	bool bIsMutable = Super::CanEditChange( InProperty );
 	if( bIsMutable && InProperty != NULL )
@@ -1609,6 +1629,152 @@ void UFbxImportUI::UpdateCompareData(UnFbx::FFbxImporter* FbxImporter)
 	FbxImporter->PartialCleanUp();
 }
 
+/** Load UI settings from ini file */
+void UFbxImportUI::LoadOptions(UObject* ObjectToLoadOptions)
+{
+	check(ObjectToLoadOptions);
+	int32 PortFlags = 0;
+	UClass* Class = ObjectToLoadOptions->GetClass();
+	for (FProperty* Property = Class->PropertyLink; Property; Property = Property->PropertyLinkNext)
+	{
+		if (!Property->HasAnyPropertyFlags(CPF_Config))
+		{
+			continue;
+		}
+		FString Section = TEXT("FBX_Import_UI_Option_") + Class->GetName();
+		FString Key = Property->GetName();
 
+		const bool bIsPropertyInherited = Property->GetOwnerClass() != Class;
+		UObject* SuperClassDefaultObject = Class->GetSuperClass()->GetDefaultObject();
+
+		const FString& PropFileName = GEditorPerProjectIni;
+
+		FArrayProperty* Array = CastField<FArrayProperty>(Property);
+		if (Array)
+		{
+			FConfigSection* Sec = GConfig->GetSectionPrivate(*Section, 0, 1, *GEditorPerProjectIni);
+			if (Sec != nullptr)
+			{
+				TArray<FConfigValue> List;
+				const FName KeyName(*Key, FNAME_Find);
+				Sec->MultiFind(KeyName, List);
+
+				FScriptArrayHelper_InContainer ArrayHelper(Array, ObjectToLoadOptions);
+				// Only override default properties if there is something to override them with.
+				if (List.Num() > 0)
+				{
+					ArrayHelper.EmptyAndAddValues(List.Num());
+					for (int32 i = List.Num() - 1, c = 0; i >= 0; i--, c++)
+					{
+						Array->Inner->ImportText(*List[i].GetValue(), ArrayHelper.GetRawPtr(c), PortFlags, ObjectToLoadOptions);
+					}
+				}
+				else
+				{
+					int32 Index = 0;
+					const FConfigValue* ElementValue = nullptr;
+					do
+					{
+						// Add array index number to end of key
+						FString IndexedKey = FString::Printf(TEXT("%s[%i]"), *Key, Index);
+
+						// Try to find value of key
+						const FName IndexedName(*IndexedKey, FNAME_Find);
+						if (IndexedName == NAME_None)
+						{
+							break;
+						}
+						ElementValue = Sec->Find(IndexedName);
+
+						// If found, import the element
+						if (ElementValue != nullptr)
+						{
+							// expand the array if necessary so that Index is a valid element
+							ArrayHelper.ExpandForIndex(Index);
+							Array->Inner->ImportText(*ElementValue->GetValue(), ArrayHelper.GetRawPtr(Index), PortFlags, ObjectToLoadOptions);
+						}
+
+						Index++;
+					} while (ElementValue || Index < ArrayHelper.Num());
+				}
+			}
+		}
+		else
+		{
+			for (int32 i = 0; i < Property->ArrayDim; i++)
+			{
+				if (Property->ArrayDim != 1)
+				{
+					Key = FString::Printf(TEXT("%s[%i]"), *Property->GetName(), i);
+				}
+
+				FString Value;
+				bool bFoundValue = GConfig->GetString(*Section, *Key, Value, *GEditorPerProjectIni);
+
+				if (bFoundValue)
+				{
+					if (Property->ImportText(*Value, Property->ContainerPtrToValuePtr<uint8>(ObjectToLoadOptions, i), PortFlags, ObjectToLoadOptions) == NULL)
+					{
+						// this should be an error as the properties from the .ini / .int file are not correctly being read in and probably are affecting things in subtle ways
+						UE_LOG(LogFbx, Error, TEXT("FBX Options LoadOptions (%s): import failed for %s in: %s"), *ObjectToLoadOptions->GetPathName(), *Property->GetName(), *Value);
+					}
+				}
+			}
+		}
+	}
+}
+
+/** Save UI settings to ini file */
+void UFbxImportUI::SaveOptions(UObject* ObjectToSaveOptions)
+{
+	check(ObjectToSaveOptions);
+	int32 PortFlags = 0;
+	UClass* Class = ObjectToSaveOptions->GetClass();
+	for (FProperty* Property = Class->PropertyLink; Property; Property = Property->PropertyLinkNext)
+	{
+		if (!Property->HasAnyPropertyFlags(CPF_Config))
+		{
+			continue;
+		}
+		FString Section = TEXT("FBX_Import_UI_Option_") + Class->GetName();
+		FString Key = Property->GetName();
+
+		const bool bIsPropertyInherited = Property->GetOwnerClass() != Class;
+		UObject* SuperClassDefaultObject = Class->GetSuperClass()->GetDefaultObject();
+
+		FArrayProperty* Array = CastField<FArrayProperty>(Property);
+		if (Array)
+		{
+			FConfigSection* Sec = GConfig->GetSectionPrivate(*Section, 1, 0, *GEditorPerProjectIni);
+			check(Sec);
+			Sec->Remove(*Key);
+
+			FScriptArrayHelper_InContainer ArrayHelper(Array, ObjectToSaveOptions);
+			for (int32 i = 0; i < ArrayHelper.Num(); i++)
+			{
+				FString	Buffer;
+				Array->Inner->ExportTextItem(Buffer, ArrayHelper.GetRawPtr(i), ArrayHelper.GetRawPtr(i), ObjectToSaveOptions, PortFlags);
+				Sec->Add(*Key, *Buffer);
+			}
+		}
+		else
+		{
+			TCHAR TempKey[MAX_SPRINTF] = TEXT("");
+			for (int32 Index = 0; Index < Property->ArrayDim; Index++)
+			{
+				if (Property->ArrayDim != 1)
+				{
+					FCString::Sprintf(TempKey, TEXT("%s[%i]"), *Property->GetName(), Index);
+					Key = TempKey;
+				}
+
+				FString	Value;
+				Property->ExportText_InContainer(Index, Value, ObjectToSaveOptions, ObjectToSaveOptions, ObjectToSaveOptions, PortFlags);
+				GConfig->SetString(*Section, *Key, *Value, *GEditorPerProjectIni);
+			}
+		}
+	}
+	GConfig->Flush(0);
+}
 
 #undef LOCTEXT_NAMESPACE

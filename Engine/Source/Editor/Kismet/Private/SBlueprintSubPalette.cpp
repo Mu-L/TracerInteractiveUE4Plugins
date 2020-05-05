@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SBlueprintSubPalette.h"
 #include "Widgets/SOverlay.h"
@@ -84,7 +84,7 @@ static bool CanPaletteItemBePlaced(TSharedPtr<FEdGraphSchemaAction> DropActionIn
 			UClass const* const FuncOwner = CallFuncNode->FunctionReference.GetMemberParentClass(CallFuncNode->GetBlueprintClassFromNode());
 			check(FuncOwner != nullptr);
 
-			UFunction* const Function = FindField<UFunction>(FuncOwner, FuncName);
+			UFunction* const Function = FindUField<UFunction>(FuncOwner, FuncName);
 			UEdGraphSchema_K2 const* const K2Schema = Cast<UEdGraphSchema_K2 const>(GraphSchema);
 
 			if (Function == nullptr)

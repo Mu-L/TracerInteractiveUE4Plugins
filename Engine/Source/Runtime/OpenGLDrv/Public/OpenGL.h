@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	OpenGL.h: Public OpenGL base definitions for non-common functionality
@@ -25,11 +25,8 @@ struct FPlatformOpenGLContext;
 #define UGL_SUPPORTS_PIXELBUFFERS		1
 #define UGL_SUPPORTS_UNIFORMBUFFERS		1
 
-#ifndef OPENGL_ES2
-#define OPENGL_ES2	0
-#endif
-#ifndef OPENGL_ESDEFERRED
-#define OPENGL_ESDEFERRED	0
+#ifndef OPENGL_ES
+#define OPENGL_ES	0
 #endif
 #ifndef OPENGL_GL3
 #define OPENGL_GL3	0
@@ -114,7 +111,6 @@ public:
 	static FORCEINLINE bool SupportsTextureCompare()					{ return true; }
 	static FORCEINLINE bool SupportsTextureBaseLevel()					{ return true; }
 	static FORCEINLINE bool SupportsTextureMaxLevel()					{ return true; }
-	static FORCEINLINE bool SupportsInstancing()						{ return true; }
 	static FORCEINLINE bool SupportsVertexAttribInteger()				{ return true; }
 	static FORCEINLINE bool SupportsVertexAttribShort()					{ return true; }
 	static FORCEINLINE bool SupportsVertexAttribByte()					{ return true; }
@@ -142,10 +138,7 @@ public:
 	static FORCEINLINE bool SupportsSRGB()								{ return true; }
 	static FORCEINLINE bool SupportsRGBA8()								{ return true; }
 	static FORCEINLINE bool SupportsDXT()								{ return true; }
-	static FORCEINLINE bool SupportsPVRTC()								{ return false; }
-	static FORCEINLINE bool SupportsATITC()								{ return false; }
 	static FORCEINLINE bool SupportsASTC()								{ return bSupportsASTC; }
-	static FORCEINLINE bool SupportsETC1()								{ return false; }
 	static FORCEINLINE bool SupportsETC2()								{ return false; }
 	static FORCEINLINE bool SupportsFramebufferSRGBEnable()				{ return true; }
 	static FORCEINLINE bool SupportsCombinedDepthStencilAttachment()	{ return true; }
@@ -178,7 +171,6 @@ public:
 	static FORCEINLINE bool AmdWorkaround()								{ return false; }
 	static FORCEINLINE bool SupportsSeparateShaderObjects()				{ return false; }
 	static FORCEINLINE bool NeedsVertexAttribRemapTable()				{ return false; }
-	static FORCEINLINE bool SupportsHDR32bppEncodeModeIntrinsic()		{ return false; }
 	static FORCEINLINE bool SupportsRGB10A2()							{ return true; }
 	static FORCEINLINE bool SupportsProgramBinary()						{ return false; }
 	
@@ -195,6 +187,7 @@ public:
 	static FORCEINLINE GLint GetMaxDomainTextureImageUnits()	{ check(MaxDomainTextureImageUnits != -1); return MaxDomainTextureImageUnits; }
 	static FORCEINLINE GLint GetMaxComputeTextureImageUnits()	{ return 0; }
 	static FORCEINLINE GLint GetMaxCombinedTextureImageUnits()	{ check(MaxCombinedTextureImageUnits != -1); return MaxCombinedTextureImageUnits; }
+	static FORCEINLINE GLint GetTextureBufferAlignment()		{ return TextureBufferAlignment; }
 
 
 	// Indices per unit are set in this order [Pixel, Vertex, Geometry, Hull, Domain]
@@ -205,8 +198,14 @@ public:
 	static FORCEINLINE GLint GetFirstDomainTextureUnit()		{ return GetFirstHullTextureUnit() + GetMaxHullTextureImageUnits(); }
 
 	static FORCEINLINE GLint GetFirstComputeTextureUnit()		{ return 0; }
+	
+	// Image load/store units
 	static FORCEINLINE GLint GetFirstComputeUAVUnit()			{ return 0; }
-
+	static FORCEINLINE GLint GetMaxComputeUAVUnits()			{ return 0; }
+	static FORCEINLINE GLint GetFirstPixelUAVUnit()				{ return 0; }
+	static FORCEINLINE GLint GetMaxPixelUAVUnits()				{ return 0; }
+	static FORCEINLINE GLint GetMaxCombinedUAVUnits()			{ return 0; }
+	
 	static FORCEINLINE GLint GetMaxVaryingVectors()				{ check(MaxVaryingVectors != -1); return MaxVaryingVectors; }
 	static FORCEINLINE GLint GetMaxPixelUniformComponents()		{ check(MaxPixelUniformComponents != -1); return MaxPixelUniformComponents; }
 	static FORCEINLINE GLint GetMaxVertexUniformComponents()	{ check(MaxVertexUniformComponents != -1); return MaxVertexUniformComponents; }
@@ -305,6 +304,7 @@ public:
 	static FORCEINLINE void CompressedTexImage3D(GLenum Target, GLint Level, GLenum InternalFormat, GLsizei Width, GLsizei Height, GLsizei Depth, GLint Border, GLsizei ImageSize, const GLvoid* PixelData) UGL_REQUIRED_VOID
 	static FORCEINLINE void TexImage2DMultisample(GLenum Target, GLsizei Samples, GLint InternalFormat, GLsizei Width, GLsizei Height, GLboolean FixedSampleLocations) UGL_REQUIRED_VOID
 	static FORCEINLINE void TexBuffer(GLenum Target, GLenum InternalFormat, GLuint Buffer) UGL_REQUIRED_VOID
+	static FORCEINLINE void TexBufferRange(GLenum Target, GLenum InternalFormat, GLuint Buffer, GLintptr Offset, GLsizeiptr Size) UGL_REQUIRED_VOID
 	static FORCEINLINE void TexSubImage3D(GLenum Target, GLint Level, GLint XOffset, GLint YOffset, GLint ZOffset, GLsizei Width, GLsizei Height, GLsizei Depth, GLenum Format, GLenum Type, const GLvoid* PixelData) UGL_REQUIRED_VOID
 	static FORCEINLINE void	CopyTexSubImage2D(GLenum Target, GLint Level, GLint XOffset, GLint YOffset, GLint X, GLint Y, GLsizei Width, GLsizei Height) UGL_REQUIRED_VOID
 	static FORCEINLINE void	CopyTexSubImage3D(GLenum Target, GLint Level, GLint XOffset, GLint YOffset, GLint ZOffset, GLint X, GLint Y, GLsizei Width, GLsizei Height) UGL_REQUIRED_VOID
@@ -315,7 +315,7 @@ public:
 	static FORCEINLINE GLuint GetMajorVersion() UGL_REQUIRED(0)
 	static FORCEINLINE GLuint GetMinorVersion() UGL_REQUIRED(0)
 	static FORCEINLINE ERHIFeatureLevel::Type GetFeatureLevel() UGL_REQUIRED(ERHIFeatureLevel::SM5)
-	static FORCEINLINE EShaderPlatform GetShaderPlatform() UGL_REQUIRED(SP_OPENGL_SM4)
+	static FORCEINLINE EShaderPlatform GetShaderPlatform() UGL_REQUIRED(SP_OPENGL_SM4_REMOVED)
 	static FORCEINLINE FString GetAdapterName() UGL_REQUIRED(TEXT(""))
 	static FORCEINLINE void BlendFuncSeparatei(GLuint Buf, GLenum SrcRGB, GLenum DstRGB, GLenum SrcAlpha, GLenum DstAlpha) UGL_REQUIRED_VOID
 	static FORCEINLINE void BlendEquationSeparatei(GLuint Buf, GLenum ModeRGB, GLenum ModeAlpha) UGL_REQUIRED_VOID
@@ -425,6 +425,7 @@ protected:
 	static GLint MaxHullUniformComponents;
 	static GLint MaxDomainUniformComponents;
 	static GLint MaxVaryingVectors;
+	static GLint TextureBufferAlignment;
 
 	/** GL_ARB_clip_control */
 	static bool bSupportsClipControl;
@@ -471,25 +472,6 @@ protected:
 #define GL_COMPRESSED_RGBA_S3TC_DXT5_EXT		0x83F3
 #endif
 
-// http://www.khronos.org/registry/gles/extensions/IMG/IMG_texture_compression_pvrtc.txt
-#if !defined(GL_IMG_texture_compression_pvrtc)
-#define GL_COMPRESSED_RGB_PVRTC_4BPPV1_IMG		0x8C00
-#define GL_COMPRESSED_RGB_PVRTC_2BPPV1_IMG		0x8C01
-#define GL_COMPRESSED_RGBA_PVRTC_4BPPV1_IMG		0x8C02
-#define GL_COMPRESSED_RGBA_PVRTC_2BPPV1_IMG		0x8C03
-#endif
-
-// http://www.khronos.org/registry/gles/extensions/AMD/AMD_compressed_ATC_texture.txt
-#if !defined(GL_ATI_texture_compression_atitc)
-#define GL_ATC_RGB_AMD							0x8C92
-#define GL_ATC_RGBA_EXPLICIT_ALPHA_AMD			0x8C93
-#define GL_ATC_RGBA_INTERPOLATED_ALPHA_AMD		0x87EE
-#endif
-
-#if !defined(GL_OES_compressed_ETC1_RGB8_texture)
-#define GL_ETC1_RGB8_OES                        0x8D64
-#endif
-
 // http://www.opengl.org/registry/specs/EXT/texture_sRGB.txt
 #if !defined(GL_EXT_texture_sRGB)
 #define GL_SRGB_EXT                       0x8C40
@@ -518,13 +500,6 @@ protected:
 #define GL_COMPRESSED_SIGNED_RG_RGTC2     0x8DBE
 #endif
 
-// http://www.khronos.org/registry/gles/extensions/AMD/AMD_compressed_ATC_texture.txt
-#if !defined(GL_ATI_texture_compression_atitc)
-#define GL_ATC_RGB_AMD							0x8C92
-#define GL_ATC_RGBA_EXPLICIT_ALPHA_AMD			0x8C93
-#define GL_ATC_RGBA_INTERPOLATED_ALPHA_AMD		0x87EE
-#endif
-
 /* http://www.khronos.org/registry/gles/extensions/NV/NV_sRGB_formats.txt */
 #if !defined(GL_NV_sRGB_formats)
 #define GL_SLUMINANCE_NV                                        0x8C46
@@ -536,7 +511,6 @@ protected:
 #define GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_NV                   0x8C4D
 #define GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_NV                   0x8C4E
 #define GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_NV                   0x8C4F
-#define GL_ETC1_SRGB8_NV                                        0x88EE
 #endif
 
 // http://www.opengl.org/registry/specs/KHR/texture_compression_astc_ldr.txt

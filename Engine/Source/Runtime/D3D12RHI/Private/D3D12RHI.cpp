@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	D3D12RHI.cpp: Unreal D3D RHI library implementation.
@@ -16,6 +16,10 @@
 
 #if !UE_BUILD_SHIPPING
 #include "STaskGraph.h"
+#endif
+
+#if !defined(D3D12_PLATFORM_NEEDS_DISPLAY_MODE_ENUMERATION)
+	#define D3D12_PLATFORM_NEEDS_DISPLAY_MODE_ENUMERATION 1
 #endif
 
 DEFINE_LOG_CATEGORY(LogD3D12RHI);
@@ -43,7 +47,9 @@ using namespace D3D12RHI;
 FD3D12DynamicRHI::FD3D12DynamicRHI(const TArray<TSharedPtr<FD3D12Adapter>>& ChosenAdaptersIn) :
 	ChosenAdapters(ChosenAdaptersIn),
 	AmdAgsContext(nullptr),
-	FlipEvent(INVALID_HANDLE_VALUE)
+	AmdSupportedExtensionFlags(0),
+	FlipEvent(INVALID_HANDLE_VALUE),
+	bAllowVendorDevice(!FParse::Param(FCommandLine::Get(), TEXT("novendordevice")))
 {
 	// The FD3D12DynamicRHI must be a singleton
 	check(SingleD3DRHI == nullptr);
@@ -67,6 +73,8 @@ FD3D12DynamicRHI::FD3D12DynamicRHI(const TArray<TSharedPtr<FD3D12Adapter>>& Chos
 	ZeroBufferSize = 0;
 	ZeroBuffer = nullptr;
 #endif // PLATFORM_WINDOWS
+
+	GRHISupportsMultithreading = true;
 
 	GPoolSizeVRAMPercentage = 0;
 	GTexturePoolSize = 0;
@@ -166,9 +174,6 @@ FD3D12DynamicRHI::FD3D12DynamicRHI(const TArray<TSharedPtr<FD3D12Adapter>>& Chos
 	GRHISupportsCopyToTextureMultipleMips = true;
 
 	GRHISupportsRHIThread = true;
-#if PLATFORM_XBOXONE
-	GRHISupportsRHIOnTaskThread = true;
-#endif
 
 	GRHISupportsParallelRHIExecute = D3D12_SUPPORTS_PARALLEL_RHI_EXECUTE;
 
@@ -189,7 +194,7 @@ FD3D12DynamicRHI::FD3D12DynamicRHI(const TArray<TSharedPtr<FD3D12Adapter>>& Chos
 	GEnableAsyncCompute = true;
 
 	// Manually enable Async BVH build for D3D12 RHI
-	GSupportAsyncComputeRaytracingBuildBVH = true;
+	GRHISupportsRayTracingAsyncBuildAccelerationStructure = true;
 }
 
 FD3D12DynamicRHI::~FD3D12DynamicRHI()
@@ -207,7 +212,6 @@ void FD3D12DynamicRHI::Shutdown()
 	if (AmdAgsContext)
 	{
 		// Clean up the AMD extensions and shut down the AMD AGS utility library
-		agsDriverExtensionsDX12_DeInit(AmdAgsContext);
 		agsDeInit(AmdAgsContext);
 		AmdAgsContext = nullptr;
 	}
@@ -377,7 +381,7 @@ void FD3D12DynamicRHI::RHIGetSupportedResolution(uint32& Width, uint32& Height)
 		DXGI_ADAPTER_DESC AdapterDesc;
 		VERIFYD3D12RESULT(Adapter->GetDesc(&AdapterDesc));
 
-#ifndef PLATFORM_XBOXONE // No need for display mode enumeration on console
+#if D3D12_PLATFORM_NEEDS_DISPLAY_MODE_ENUMERATION
 		// Enumerate outputs for this adapter
 		// TODO: Cap at 1 for default output
 		for (uint32 o = 0; o < 1; o++)
@@ -429,7 +433,7 @@ void FD3D12DynamicRHI::RHIGetSupportedResolution(uint32& Width, uint32& Height)
 
 			delete[] ModeList;
 		}
-#endif // PLATFORM_XBOXONE
+#endif // D3D12_PLATFORM_NEEDS_DISPLAY_MODE_ENUMERATION
 	}
 
 	check(InitializedMode);

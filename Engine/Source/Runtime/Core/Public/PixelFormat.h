@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -51,12 +51,12 @@ enum EPixelFormat
 	PF_R8G8B8A8             =37,
 	PF_A8R8G8B8				=38,	// Only used for legacy loading; do NOT use!
 	PF_BC4					=39,
-	PF_R8G8                 =40,
-	PF_ATC_RGB				=41,
-	PF_ATC_RGBA_E			=42,
-	PF_ATC_RGBA_I			=43,
+	PF_R8G8                 =40,	
+	PF_ATC_RGB				=41,	// Unsupported Format
+	PF_ATC_RGBA_E			=42,	// Unsupported Format
+	PF_ATC_RGBA_I			=43,	// Unsupported Format
 	PF_X24_G8				=44,	// Used for creating SRVs to alias a DepthStencil buffer to read Stencil. Don't use for creating textures.
-	PF_ETC1					=45,
+	PF_ETC1					=45,	// Unsupported Format
 	PF_ETC2_RGB				=46,
 	PF_ETC2_RGBA			=47,
 	PF_R32G32B32A32_UINT	=48,
@@ -80,7 +80,9 @@ enum EPixelFormat
 	PF_PLATFORM_HDR_2		=66,	// Reserved.
 	PF_NV12					=67,
 	PF_R32G32_UINT          =68,
-	PF_MAX					=69,
+	PF_ETC2_R11_EAC			=69,
+	PF_ETC2_RG11_EAC		=70,
+	PF_MAX					=71,
 };
 #define FOREACH_ENUM_EPIXELFORMAT(op) \
 	op(PF_Unknown) \

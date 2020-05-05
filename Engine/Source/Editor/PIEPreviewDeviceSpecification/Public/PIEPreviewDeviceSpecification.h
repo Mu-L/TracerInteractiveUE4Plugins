@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -67,8 +67,6 @@ public:
 	bool SupportsRenderTargetFormat_PF_FloatRGBA;
 	UPROPERTY()
 	bool SupportsMultipleRenderTargets;
-	UPROPERTY()
-	bool SupportsInstancing;
 };
 
 USTRUCT()
@@ -101,9 +99,6 @@ public:
 	FString Chipset;
 
 	UPROPERTY()
-	FPIERHIOverrideState GLES2RHIState;
-
-	UPROPERTY()
 	FPIERHIOverrideState GLES31RHIState;
 
 // 	UPROPERTY()
@@ -121,9 +116,6 @@ public:
 
 	UPROPERTY()
 	float NativeScaleFactor = 0.0f;
-
-	UPROPERTY()
-	FPIERHIOverrideState GLES2RHIState;
 
 	UPROPERTY()
 	FPIERHIOverrideState MetalRHIState;

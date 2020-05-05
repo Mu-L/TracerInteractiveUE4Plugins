@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ConcertVersion.h"
 #include "Misc/EngineVersion.h"
@@ -116,7 +116,7 @@ void FConcertSessionVersionInfo::Initialize()
 			}
 		}
 	}
-	
+
 	FCustomVersionContainer AllCurrentVersions = FCurrentCustomVersions::GetAll();
 	for (const FCustomVersion& EngineCustomVersion : AllCurrentVersions.GetAllVersions())
 	{

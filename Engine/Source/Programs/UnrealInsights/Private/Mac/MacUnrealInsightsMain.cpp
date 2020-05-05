@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UnrealInsightsMain.h"
 #include "HAL/ExceptionHandling.h"
 #include "LaunchEngineLoop.h"
+#include "Misc/CommandLine.h"
 #include "Mac/CocoaThread.h"
 
 

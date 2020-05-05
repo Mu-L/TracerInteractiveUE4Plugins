@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraCoreModule.h"
 #include "Modules/ModuleManager.h"
@@ -6,6 +6,9 @@
 
 IMPLEMENT_MODULE(INiagaraCoreModule, NiagaraCore);
 
+IMPLEMENT_TYPE_LAYOUT(FNiagaraDataInterfaceParametersCS);
+
+IMPLEMENT_EXPORTED_INTRINSIC_TYPE_LAYOUT(TIndexedPtr<UNiagaraDataInterfaceBase>);
 
 UNiagaraDataInterfaceBase::UNiagaraDataInterfaceBase(class FObjectInitializer const & Initializer)
 {

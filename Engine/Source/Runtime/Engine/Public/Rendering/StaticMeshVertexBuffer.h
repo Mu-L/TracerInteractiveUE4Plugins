@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -393,6 +393,9 @@ public:
 	FVertexBufferRHIRef CreateTangentsRHIBuffer_Async();
 	FVertexBufferRHIRef CreateTexCoordRHIBuffer_RenderThread();
 	FVertexBufferRHIRef CreateTexCoordRHIBuffer_Async();
+
+	/** Copy everything, keeping reference to the same RHI resources. */
+	void CopyRHIForStreaming(const FStaticMeshVertexBuffer& Other, bool InAllowCPUAccess);
 
 	/** Similar to Init/ReleaseRHI but only update existing SRV so references to the SRV stays valid */
 	template <uint32 MaxNumUpdates>

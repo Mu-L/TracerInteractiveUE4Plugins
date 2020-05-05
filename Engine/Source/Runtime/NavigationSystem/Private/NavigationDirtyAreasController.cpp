@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NavigationDirtyAreasController.h"
 #include "NavigationData.h"
@@ -13,6 +13,12 @@ FNavigationDirtyAreasController::FNavigationDirtyAreasController()
 #endif // !UE_BUILD_SHIPPING
 {
 
+}
+
+void FNavigationDirtyAreasController::ForceRebuildOnNextTick()
+{
+	float MinTimeForUpdate = (DirtyAreasUpdateFreq != 0.f ? (1.0f / DirtyAreasUpdateFreq) : 0.f);
+	DirtyAreasUpdateTime = FMath::Max(DirtyAreasUpdateTime, MinTimeForUpdate);
 }
 
 void FNavigationDirtyAreasController::Tick(const float DeltaSeconds, const TArray<ANavigationData*>& NavDataSet, bool bForceRebuilding)

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -43,13 +43,13 @@ namespace Audio
 		AsynchronousSkipFirstFrame
 	};
 
-	using FMixerSourceBufferPtr = TSharedPtr<class FMixerSourceBuffer>;
+	using FMixerSourceBufferPtr = TSharedPtr<class FMixerSourceBuffer, ESPMode::ThreadSafe>;
 
 	/** Class which handles decoding audio for a particular source buffer. */
 	class FMixerSourceBuffer : public ISoundWaveClient
 	{
 	public:		
-		static FMixerSourceBufferPtr Create(FMixerBuffer& InBuffer, USoundWave& InWave, ELoopingMode InLoopingMode, bool bInIsSeeking);
+		static FMixerSourceBufferPtr Create(FMixerBuffer& InBuffer, USoundWave& InWave, ELoopingMode InLoopingMode, bool bInIsSeeking, bool bInForceSyncDecode = false);
 
 		~FMixerSourceBuffer();
 
@@ -68,10 +68,10 @@ namespace Audio
 		void OnBufferEnd();
 
 		// Return the number of buffers enqueued on the mixer source buffer
-		int32 GetNumBuffersQueued() const { return NumBuffersQeueued; }
-		
+		int32 GetNumBuffersQueued() const;
+
 		// Returns the next enqueued buffer, returns nullptr if no buffers enqueued
-		TSharedPtr<FMixerSourceVoiceBuffer> GetNextBuffer();
+		TSharedPtr<FMixerSourceVoiceBuffer, ESPMode::ThreadSafe> GetNextBuffer();
 
 		// Returns if buffer looped
 		bool DidBufferLoop() const { return bLoopCallback; }
@@ -94,22 +94,23 @@ namespace Audio
 		// Begin and end generation on the audio render thread (audio mixer only)
 		void OnBeginGenerate();
 		void OnEndGenerate();
-
+		void ClearWave() { SoundWave = nullptr; }
 	private:
-		FMixerSourceBuffer(FMixerBuffer& InBuffer, USoundWave& InWave, ELoopingMode InLoopingMode, bool bInIsSeeking);
+		FMixerSourceBuffer(FMixerBuffer& InBuffer, USoundWave& InWave, ELoopingMode InLoopingMode, bool bInIsSeeking, bool bInForceSyncDecode = false);
 
 		void SubmitInitialPCMBuffers();
 		void SubmitInitialRealtimeBuffers();
 		void SubmitRealTimeSourceData(const bool bLooped);
 		void ProcessRealTimeSource();
-		void SubmitBuffer(TSharedPtr<FMixerSourceVoiceBuffer> InSourceVoiceBuffer);
+		void SubmitBuffer(TSharedPtr<FMixerSourceVoiceBuffer, ESPMode::ThreadSafe> InSourceVoiceBuffer);
+		void DeleteDecoder();
 
 
 		int32 NumBuffersQeueued;
 		FRawPCMDataBuffer RawPCMDataBuffer;
 
-		TArray<TSharedPtr<FMixerSourceVoiceBuffer>> SourceVoiceBuffers;
-		TQueue<TSharedPtr<FMixerSourceVoiceBuffer>> BufferQueue;
+		TArray<TSharedPtr<FMixerSourceVoiceBuffer, ESPMode::ThreadSafe>> SourceVoiceBuffers;
+		TQueue<TSharedPtr<FMixerSourceVoiceBuffer, ESPMode::ThreadSafe>> BufferQueue;
 		int32 CurrentBuffer;
 		// SoundWaves are only set for procedural sound waves
 		USoundWave* SoundWave;
@@ -121,6 +122,9 @@ namespace Audio
 		int32 NumPrecacheFrames;
 		TArray<uint8> CachedRealtimeFirstBuffer;
 
+		mutable FCriticalSection SoundWaveCritSec;
+		mutable FCriticalSection DecodeTaskCritSec;
+
 		uint32 bInitialized : 1;
 		uint32 bBufferFinished : 1;
 		uint32 bPlayedCachedBuffer : 1;
@@ -128,8 +132,9 @@ namespace Audio
 		uint32 bLoopCallback : 1;
 		uint32 bProcedural : 1;
 		uint32 bIsBus : 1;
+		uint32 bForceSyncDecode : 1;
 	
-		virtual void OnBeginDestroy(class USoundWave* Wave) override;
+		virtual bool OnBeginDestroy(class USoundWave* Wave) override;
 		virtual bool OnIsReadyForFinishDestroy(class USoundWave* Wave) const override;
 		virtual void OnFinishDestroy(class USoundWave* Wave) override;
 	};

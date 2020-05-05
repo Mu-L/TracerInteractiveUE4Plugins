@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MRMeshComponent.h"
 #include "PrimitiveSceneProxy.h"
@@ -347,6 +347,11 @@ public:
 #endif
 	}
 
+	void SetEnableMeshOcclusion(bool bEnable)
+	{
+		bEnableOcclusion = bEnable;
+	}
+
 private:
 	//~ FPrimitiveSceneProxy
 
@@ -468,8 +473,8 @@ private:
 		Result.bRenderInDepthPass = bEnableOcclusion;
 		Result.bUsesLightingChannels = GetLightingChannelMask() != GetDefaultLightingChannelMask();
 		Result.bRenderCustomDepth = ShouldRenderCustomDepth();
-		UMaterialInterface::TMicRecursionGuard RecursionGuard;
-		Result.bSeparateTranslucencyRelevance = MaterialToUse->GetMaterial_Concurrent(RecursionGuard)->bEnableSeparateTranslucency;
+		TMicRecursionGuard RecursionGuard;
+		Result.bSeparateTranslucency = MaterialToUse->GetMaterial_Concurrent(RecursionGuard)->bEnableSeparateTranslucency;
 		//MaterialRelevance.SetPrimitiveViewRelevance(Result);
 		return Result;
 	}
@@ -556,7 +561,7 @@ void UMRMeshComponent::SetCollisionEnabled(ECollisionEnabled::Type NewType)
 	Super::SetCollisionEnabled(NewType);
 }
 
-void UMRMeshComponent::SetCollisionProfileName(FName InCollisionProfileName)
+void UMRMeshComponent::SetCollisionProfileName(FName InCollisionProfileName, bool bUpdateOverlaps)
 {
 	SCOPE_CYCLE_COUNTER(STAT_MrMesh_SetCollisionProfileName);
 
@@ -577,7 +582,7 @@ void UMRMeshComponent::SetCollisionProfileName(FName InCollisionProfileName)
 		}
 	}
 
-	Super::SetCollisionProfileName(InCollisionProfileName);
+	Super::SetCollisionProfileName(InCollisionProfileName, bUpdateOverlaps);
 }
 
 void UMRMeshComponent::SetCollisionObjectType(ECollisionChannel Channel)
@@ -991,3 +996,23 @@ void UMRMeshComponent::UpdateMesh(const FVector& InLocation, const FQuat& InRota
 	);
 }
 
+void UMRMeshComponent::SetEnableMeshOcclusion(bool bEnable)
+{
+	bEnableOcclusion = bEnable;
+
+	// Update bEnableOcclusion on the SceneProxy, as well.
+	if (SceneProxy)
+	{
+		UMRMeshComponent* This = this;
+		ENQUEUE_RENDER_COMMAND(FSetEnableMeshOcclusionLambda)(
+			[This,bEnable](FRHICommandListImmediate& RHICmdList)
+			{
+				FMRMeshProxy* MRMeshProxy = static_cast<FMRMeshProxy*>(This->SceneProxy);
+				if (MRMeshProxy)
+				{
+					MRMeshProxy->SetEnableMeshOcclusion(bEnable);
+				}
+			}
+		);
+	}
+}

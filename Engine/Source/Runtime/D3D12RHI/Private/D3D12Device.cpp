@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 D3D12Device.cpp: D3D device RHI implementation.
@@ -203,7 +203,7 @@ void FD3D12Device::SetupAfterDeviceCreation()
 	}
 #if USE_PIX
 	// PIX (note that DXGIGetDebugInterface1 requires Windows 8.1 and up)
-	if (FWindowsPlatformMisc::VerifyWindowsVersion(6, 3))
+	if (FPlatformMisc::VerifyWindowsVersion(6, 3))
 	{
 		FDXGIGetDebugInterface1 DXGIGetDebugInterface1FnPtr = nullptr;
 
@@ -329,6 +329,30 @@ void FD3D12Device::UpdateMSAASettings()
 
 void FD3D12Device::Cleanup()
 {
+	const auto ValidateCommandQueue = [this](ED3D12CommandQueueType QueueType, const TCHAR* Name)
+	{
+		ID3D12CommandQueue* CommandQueue = GetD3DCommandQueue(QueueType);
+		if (CommandQueue)
+		{
+			CommandQueue->AddRef();
+			int RefCount = CommandQueue->Release();
+			if (RefCount < 0)
+			{
+				UE_LOG(LogD3D12RHI, Error, TEXT("%s CommandQueue is already destroyed!"), Name);
+			}
+			else if (RefCount > 2)
+			{
+				UE_LOG(LogD3D12RHI, Warning, TEXT("%s CommandQueue is leaking (Refcount %d)"), Name, RefCount);
+			}
+			check(RefCount >= 1);
+		}
+	};
+
+	// Validate that all the D3D command queues are still valid (temp code to check for a shutdown crash)
+	ValidateCommandQueue(ED3D12CommandQueueType::Default, TEXT("Direct"));
+	ValidateCommandQueue(ED3D12CommandQueueType::Copy, TEXT("Copy"));
+	ValidateCommandQueue(ED3D12CommandQueueType::Async, TEXT("Async"));
+
 	// Wait for the command queues to flush
 	CommandListManager->WaitForCommandQueueFlush();
 	CopyCommandListManager->WaitForCommandQueueFlush();
@@ -370,19 +394,19 @@ void FD3D12Device::Cleanup()
 	D3DX12Residency::DestroyResidencyManager(ResidencyManager);
 }
 
-ID3D12CommandQueue* FD3D12Device::GetD3DCommandQueue(ED3D12CommandQueueType InQueueType) const
+FD3D12CommandListManager* FD3D12Device::GetCommandListManager(ED3D12CommandQueueType InQueueType) const
 {
 	switch (InQueueType)
 	{
 	case ED3D12CommandQueueType::Default:
 		check(CommandListManager->GetQueueType() == InQueueType);
-		return CommandListManager->GetD3DCommandQueue();
+		return CommandListManager;
 	case ED3D12CommandQueueType::Async:
 		check(AsyncCommandListManager->GetQueueType() == InQueueType);
-		return AsyncCommandListManager->GetD3DCommandQueue();
+		return AsyncCommandListManager;
 	case ED3D12CommandQueueType::Copy:
 		check(CopyCommandListManager->GetQueueType() == InQueueType);
-		return CopyCommandListManager->GetD3DCommandQueue();
+		return CopyCommandListManager;
 	default:
 		check(false);
 		return nullptr;
@@ -397,23 +421,6 @@ void FD3D12Device::RegisterGPUWork(uint32 NumPrimitives, uint32 NumVertices)
 void FD3D12Device::RegisterGPUDispatch(FIntVector GroupCount)
 {
 	GetParentAdapter()->GetGPUProfiler().RegisterGPUDispatch(GroupCount);
-}
-
-void FD3D12Device::PushGPUEvent(const TCHAR* Name, FColor Color)
-{
-	GetParentAdapter()->GetGPUProfiler().PushEvent(Name, Color);
-}
-
-#if NV_AFTERMATH
-void FD3D12Device::PushGPUEvent(const TCHAR* Name, FColor Color, GFSDK_Aftermath_ContextHandle Context)
-{
-	GetParentAdapter()->GetGPUProfiler().PushEvent(Name, Color, Context);
-}
-#endif
-
-void FD3D12Device::PopGPUEvent()
-{
-	GetParentAdapter()->GetGPUProfiler().PopEvent();
 }
 
 void FD3D12Device::BlockUntilIdle()

@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ChaosCloth/ChaosClothModule.h"
 #include "ChaosCloth/ChaosClothPrivate.h"
 #include "ChaosCloth/ChaosClothingSimulationFactory.h"
+#include "Features/IModularFeatures.h"
 #include "Modules/ModuleManager.h"
 
 //////////////////////////////////////////////////////////////////////////
@@ -26,7 +27,7 @@ class FChaosClothModule : public IChaosClothModuleInterface, public IClothingSim
 #endif
     }
 
-	UClass* GetDefaultSimulationFactoryClass()
+	TSubclassOf<UClothingSimulationFactory> GetClothingSimulationFactoryClass() const override
 	{
 #if WITH_CHAOS
 		return UChaosClothingSimulationFactory::StaticClass();

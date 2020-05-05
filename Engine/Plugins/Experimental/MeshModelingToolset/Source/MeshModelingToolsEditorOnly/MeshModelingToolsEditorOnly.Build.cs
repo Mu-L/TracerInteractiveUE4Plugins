@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 
@@ -55,7 +55,6 @@ public class MeshModelingToolsEditorOnly : ModuleRules
 				"MeshUtilities",    // temp for saving mesh asset
 				"UnrealEd",
 				"MeshBuilder",
-                "MeshDescriptionOperations",
 				"MeshUtilitiesCommon",  
 				"MeshReductionInterface", // for UE4 standard simplification 
                 "ProxyLODMeshReduction", // for mesh merging voxel-based csg

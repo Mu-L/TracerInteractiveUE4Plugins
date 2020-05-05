@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "CoreTechHelper.h"
 
 
@@ -68,8 +68,18 @@ bool IsTriangleDegenerated(const int32_t* Indices, const TArray<FVertexID>& Rema
 	return (VertexIDs[0] == VertexIDs[1] || VertexIDs[0] == VertexIDs[2] || VertexIDs[1] == VertexIDs[2]);
 }
 
-void FillVertexPosition(const FImportParameters& ImportParams, const FMeshParameters& MeshParameters, int32 TriangleCount, TArray<FTessellationData>& FaceTessellationSet, FMeshDescription& MeshDescription)
+void FillVertexPosition(const FImportParameters& ImportParams, const FMeshParameters& MeshParameters, FBodyMesh& Body, FMeshDescription& MeshDescription)
 {
+	int32 TriangleCount = Body.TriangleCount;
+	TArray<FTessellationData>& FaceTessellationSet = Body.Faces;
+
+	// Add offset to the bounding box to avoid to remove good vertex
+	FVector Size = Body.BBox.GetSize();
+	FBox BBox = Body.BBox.ExpandBy(Size.Size());
+	BBox.IsValid = Body.BBox.IsValid;
+	BBox.Min *= ImportParams.ScaleFactor;
+	BBox.Max *= ImportParams.ScaleFactor;
+
 	TVertexAttributesRef<FVector> VertexPositions = MeshDescription.VertexAttributes().GetAttributesRef<FVector>(MeshAttribute::Vertex::Position);
 
 	// Create a list of vertex Z/index pairs
@@ -81,11 +91,10 @@ void FillVertexPosition(const FImportParameters& ImportParams, const FMeshParame
 	for (FTessellationData& CTTessellation : FaceTessellationSet)
 	{
 		CTTessellation.StartVertexIndex = GlobalVertexCount;
-		for (uint32 VertexIndex = 0; VertexIndex < CTTessellation.VertexCount; ++VertexIndex, ++GlobalVertexCount)
+		for (const FVector& Vertex : CTTessellation.VertexArray)
 		{
-			CopyValue(CTTessellation.VertexArray.GetData(), VertexIndex * 3, CTTessellation.SizeOfVertexType, true, Position);
-			Position *= ImportParams.ScaleFactor;  // convert Position unit into cm according to scaleFactor
-			VertexDataSet.Emplace(GlobalVertexCount, Position);
+			VertexDataSet.Emplace(GlobalVertexCount, Vertex * ImportParams.ScaleFactor);
+			++GlobalVertexCount;
 		}
 	}
 	VertexDataSet.SetNum(GlobalVertexCount);
@@ -93,7 +102,7 @@ void FillVertexPosition(const FImportParameters& ImportParams, const FMeshParame
 	// Sort the vertices by z value
 	VertexDataSet.Sort(FCompareVertexZ());
 
-	TArray<uint32> NewIndexOf;
+	TArray<int32> NewIndexOf;
 	NewIndexOf.SetNumZeroed(GlobalVertexCount);
 
 	TArray<int32> IndexOfCoincidentNode;
@@ -113,6 +122,14 @@ void FillVertexPosition(const FImportParameters& ImportParams, const FMeshParame
 		int32 Index_i = VertexDataSet[i].Index;
 		IndexOfCoincidentNode[Index_i] = Index_i;
 
+		// Check if mesh vertex is not outside body bbox
+		const FVector& PositionA = VertexDataSet[i].Coordinates;
+		if (BBox.IsValid && !BBox.IsInside(PositionA))
+		{
+			VertexDataSet[i].Index = -1;
+			continue;
+		}
+
 		// only need to search forward, since we add pairs both ways
 		for (int32 j = i + 1; j < VertexDataSet.Num(); j++)
 		{
@@ -121,9 +138,7 @@ void FillVertexPosition(const FImportParameters& ImportParams, const FMeshParame
 				break; // can't be any more duplicated
 			}
 
-			const FVector& PositionA = VertexDataSet[i].Coordinates;
 			const FVector& PositionB = VertexDataSet[j].Coordinates;
-
 			if (PositionA.Equals(PositionB, KINDA_SMALL_NUMBER))
 			{
 				VertexDataSet[j].bIsMerged = true;
@@ -149,7 +164,14 @@ void FillVertexPosition(const FImportParameters& ImportParams, const FMeshParame
 
 	for (uint32 VertexIndex = 0; VertexIndex < GlobalVertexCount; ++VertexIndex)
 	{
-		uint32 RealIndex = VertexDataSet[VertexIndex].Index;
+		int32 RealIndex = VertexDataSet[VertexIndex].Index;
+
+		// Vertex is outside bbox
+		if (RealIndex < 0)
+		{
+			continue;
+		}
+
 		if (IndexOfCoincidentNode[RealIndex] != RealIndex)
 		{
 			continue;
@@ -164,7 +186,14 @@ void FillVertexPosition(const FImportParameters& ImportParams, const FMeshParame
 	{
 		for (uint32 VertexIndex = 0; VertexIndex < GlobalVertexCount; ++VertexIndex)
 		{
-			uint32 RealIndex = VertexDataSet[VertexIndex].Index;
+			int32 RealIndex = VertexDataSet[VertexIndex].Index;
+
+			// Vertex is outside bbox
+			if (RealIndex < 0)
+			{
+				continue;
+			}
+
 			if (IndexOfCoincidentNode[RealIndex] != RealIndex)
 			{
 				continue;
@@ -182,10 +211,10 @@ void FillVertexPosition(const FImportParameters& ImportParams, const FMeshParame
 	GlobalVertexIndex = 0;
 	for (FTessellationData& CTTessellation : FaceTessellationSet)
 	{
-		CTTessellation.VertexIdSet.SetNum(CTTessellation.VertexCount);
-		for (uint32 VertexIndex = 0; VertexIndex < CTTessellation.VertexCount; ++VertexIndex, ++GlobalVertexIndex)
+		CTTessellation.VertexIdSet.SetNum(CTTessellation.VertexArray.Num());
+		for (int32 VertexIndex = 0; VertexIndex < CTTessellation.VertexArray.Num(); ++VertexIndex, ++GlobalVertexIndex)
 		{
-			uint32 NewIndex = NewIndexOf[IndexOfCoincidentNode[GlobalVertexIndex]];
+			int32 NewIndex = NewIndexOf[IndexOfCoincidentNode[GlobalVertexIndex]];
 			CTTessellation.VertexIdSet[VertexIndex] = VertexDataSet[NewIndex].VertexID.GetValue();
 		}
 	}
@@ -196,48 +225,40 @@ void FillVertexPosition(const FImportParameters& ImportParams, const FMeshParame
 		GlobalVertexIndex = 0;
 		for (FTessellationData& CTTessellation : FaceTessellationSet)
 		{
-			CTTessellation.SymVertexIdSet.SetNum(CTTessellation.VertexCount);
-			for (uint32 VertexIndex = 0; VertexIndex < CTTessellation.VertexCount; ++VertexIndex, ++GlobalVertexIndex)
+			CTTessellation.SymVertexIdSet.SetNum(CTTessellation.VertexArray.Num());
+			for (int32 VertexIndex = 0; VertexIndex < CTTessellation.VertexArray.Num(); ++VertexIndex, ++GlobalVertexIndex)
 			{
 				uint32 NewIndex = NewIndexOf[IndexOfCoincidentNode[GlobalVertexIndex]];
-				CTTessellation.SymVertexIdSet[VertexIndex] = VertexDataSet[NewIndex].SymVertexID.GetValue();;
+				CTTessellation.SymVertexIdSet[VertexIndex] = VertexDataSet[NewIndex].SymVertexID.GetValue();
 			}
 		}
 	}
 }
 
-void UpdatePolygonGroup(TMap<uint32, FPolygonGroupID>& MaterialToPolygonGroupMapping, TPolygonGroupAttributesRef<FName>& PolygonGroupImportedMaterialSlotNames, FMeshDescription& MeshDescription)
+
+// PolygonAttributes name used into modeling tools (ExtendedMeshAttribute::PolyTriGroups)
+const FName PolyTriGroups("PolyTriGroups");
+
+// Copy of FMeshDescriptionBuilder::EnablePolyGroups()
+TPolygonAttributesRef<int32> EnableCADPatchGroups(FMeshDescription& MeshDescription)
 {
-	if (MeshDescription.PolygonGroups().Num() > 0)
+	TPolygonAttributesRef<int32> PatchGroups = MeshDescription.PolygonAttributes().GetAttributesRef<int32>(PolyTriGroups);
+	if (PatchGroups.IsValid() == false)
 	{
-		for (FPolygonGroupID PolygonGroupID : MeshDescription.PolygonGroups().GetElementIDs())
-		{
-			FName initialSlotName = PolygonGroupImportedMaterialSlotNames[PolygonGroupID];
-			uint32 MaterialHash = StaticCast<uint32>(FCString::Atoi64(*initialSlotName.ToString()));
-			MaterialToPolygonGroupMapping.Add(MaterialHash, PolygonGroupID);
-		}
+		MeshDescription.PolygonAttributes().RegisterAttribute<int32>(PolyTriGroups, 1, 0, EMeshAttributeFlags::AutoGenerated);
+		PatchGroups = MeshDescription.PolygonAttributes().GetAttributesRef<int32>(PolyTriGroups);
+		check(PatchGroups.IsValid());
 	}
-
-	for (auto& Material : MaterialToPolygonGroupMapping)
-	{
-		if (Material.Value == FPolygonGroupID::Invalid)
-		{
-			uint32 MaterialHash = Material.Key;
-			FName ImportedSlotName = *LexToString<uint32>(MaterialHash);
-
-			FPolygonGroupID PolyGroupID = MeshDescription.CreatePolygonGroup();
-			PolygonGroupImportedMaterialSlotNames[PolyGroupID] = ImportedSlotName;
-			Material.Value = PolyGroupID;
-		}
-	}
+	return PatchGroups;
 }
 
-bool FillMesh(const FMeshParameters& MeshParameters, const FImportParameters& ImportParams, TArray<FTessellationData>& FaceTessellations, TMap<uint32, FPolygonGroupID> MaterialToPolygonGroupMapping, FMeshDescription& MeshDescription)
+bool FillMesh(const FMeshParameters& MeshParameters, const FImportParameters& ImportParams, TArray<FTessellationData>& FaceTessellations, FMeshDescription& MeshDescription)
 {
 	const int32 UVChannel = 0;
 	const int32 TriangleCount = 3;
 	const TriangleIndex Clockwise = { 0, 1, 2 };
 	const TriangleIndex CounterClockwise = { 0, 2, 1 };
+    const int32 InvalidID = FVertexID::Invalid.GetValue();
 
 
 	TArray<FVertexInstanceID> TriangleVertexInstanceIDs;
@@ -260,6 +281,25 @@ bool FillMesh(const FMeshParameters& MeshParameters, const FImportParameters& Im
 		return false;
 	}
 
+	// Find all the materials used
+	TMap<uint32, FPolygonGroupID> MaterialToPolygonGroupMapping;
+	for (const FTessellationData& FaceTessellation : FaceTessellations)
+	{
+		// we assume that face has only color
+		MaterialToPolygonGroupMapping.Add(FaceTessellation.ColorName, FPolygonGroupID::Invalid);
+	}
+
+	// Add to the mesh, a polygon groups per material
+	for (auto& Material : MaterialToPolygonGroupMapping)
+	{
+		uint32 MaterialHash = Material.Key;
+		FName ImportedSlotName = *LexToString<uint32>(MaterialHash);
+
+		FPolygonGroupID PolyGroupID = MeshDescription.CreatePolygonGroup();
+		PolygonGroupImportedMaterialSlotNames[PolyGroupID] = ImportedSlotName;
+		Material.Value = PolyGroupID;
+	}
+
 	VertexInstanceUVs.SetNumIndices(1);
 
 	int32 NbStep = 1;
@@ -268,6 +308,8 @@ bool FillMesh(const FMeshParameters& MeshParameters, const FImportParameters& Im
 		NbStep = 2;
 	}
 
+	TPolygonAttributesRef<int32> PatchGroups = EnableCADPatchGroups(MeshDescription);
+	int32 PatchIndex = 0;
 	for (int32 Step = 0; Step < NbStep; ++Step)
 	{
 		// Swap mesh if needed
@@ -275,6 +317,7 @@ bool FillMesh(const FMeshParameters& MeshParameters, const FImportParameters& Im
 
 		for (FTessellationData& Tessellation : FaceTessellations)
 		{
+			PatchIndex++;
 			// Get the polygonGroup
 			const FPolygonGroupID* PolygonGroupID = MaterialToPolygonGroupMapping.Find(Tessellation.ColorName);
 			if (PolygonGroupID == nullptr)
@@ -286,21 +329,24 @@ bool FillMesh(const FMeshParameters& MeshParameters, const FImportParameters& Im
 			int32 VertexIDs[3];
 			FVector Temp3D = { 0, 0, 0 };
 			FVector2D TexCoord2D = { 0, 0 };
-			int32_t IndicesVertex[3];
 
-			MeshVertexInstanceIDs.SetNum(Tessellation.IndexCount);
-			CTFaceIndex.Reserve(Tessellation.IndexCount);
+			MeshVertexInstanceIDs.SetNum(Tessellation.IndexArray.Num());
+			CTFaceIndex.Reserve(Tessellation.IndexArray.Num());
 			CTFaceIndex.SetNum(0);
 
 			TArray<int32>& VertexIdSet = (Step == 0) ? Tessellation.VertexIdSet : Tessellation.SymVertexIdSet;
 
 			// build each valid face i.e. 3 different indexes
-			for (uint32 Index = 0, NewIndex = 0; Index < Tessellation.IndexCount; Index += 3)
+			for (int32 Index = 0, NewIndex = 0; Index < Tessellation.IndexArray.Num(); Index += 3)
 			{
-				CopyValue(Tessellation.IndexArray.GetData(), Index, Tessellation.SizeOfIndexType, IndicesVertex);
-				VertexIDs[Orientation[0]] = VertexIdSet[IndicesVertex[0]];
-				VertexIDs[Orientation[1]] = VertexIdSet[IndicesVertex[1]];
-				VertexIDs[Orientation[2]] = VertexIdSet[IndicesVertex[2]];
+				VertexIDs[Orientation[0]] = VertexIdSet[Tessellation.IndexArray[Index + 0]];
+				VertexIDs[Orientation[1]] = VertexIdSet[Tessellation.IndexArray[Index + 1]];
+				VertexIDs[Orientation[2]] = VertexIdSet[Tessellation.IndexArray[Index + 2]];
+
+				if (VertexIDs[0] == InvalidID || VertexIDs[1] == InvalidID || VertexIDs[2] == InvalidID)
+				{
+					continue;
+				}
 
 				// Verify the 3 input indices are not defining a degenerated triangle
 				if (VertexIDs[0] == VertexIDs[1] || VertexIDs[0] == VertexIDs[2] || VertexIDs[1] == VertexIDs[2])
@@ -308,21 +354,21 @@ bool FillMesh(const FMeshParameters& MeshParameters, const FImportParameters& Im
 					continue;
 				}
 
-				CTFaceIndex.Add(IndicesVertex[0]);
-				CTFaceIndex.Add(IndicesVertex[1]);
-				CTFaceIndex.Add(IndicesVertex[2]);
+				CTFaceIndex.Add(Tessellation.IndexArray[Index + 0]);
+				CTFaceIndex.Add(Tessellation.IndexArray[Index + 1]);
+				CTFaceIndex.Add(Tessellation.IndexArray[Index + 2]);
 
 				TriangleVertexInstanceIDs[0] = MeshVertexInstanceIDs[NewIndex++] = MeshDescription.CreateVertexInstance((FVertexID) VertexIDs[0]);
 				TriangleVertexInstanceIDs[1] = MeshVertexInstanceIDs[NewIndex++] = MeshDescription.CreateVertexInstance((FVertexID) VertexIDs[1]);
 				TriangleVertexInstanceIDs[2] = MeshVertexInstanceIDs[NewIndex++] = MeshDescription.CreateVertexInstance((FVertexID) VertexIDs[2]);
 
 				// Add the triangle as a polygon to the mesh description
-				const FPolygonID NewPolygonID = MeshDescription.CreatePolygon(*PolygonGroupID, TriangleVertexInstanceIDs);
+				const FPolygonID PolygonID = MeshDescription.CreatePolygon(*PolygonGroupID, TriangleVertexInstanceIDs);
+				// Set patch id attribute
+				PatchGroups[PolygonID] = PatchIndex;
 			}
 
 			// finalization of the mesh by setting colors, tangents, bi-normals, UV
-			// for (uint32 Index = 0; Index <: CTFaceIndex)  // pour toutes les index des faces non degeneres de CT
-
 			for (int32 IndexFace = 0; IndexFace < CTFaceIndex.Num(); IndexFace += 3)
 			{
 				for (int32 Index = 0; Index < TriangleCount; Index++)
@@ -342,16 +388,23 @@ bool FillMesh(const FMeshParameters& MeshParameters, const FImportParameters& Im
 					for (int32 Index = 0; Index < TriangleCount; Index++)
 					{
 						FVertexInstanceID VertexInstanceID = MeshVertexInstanceIDs[IndexFace + Orientation[Index]];
-						CopyValue(Tessellation.TexCoordArray.GetData(), CTFaceIndex[IndexFace + Index] * 2, Tessellation.SizeOfTexCoordType, false, Temp3D);
-						VertexInstanceUVs.Set(VertexInstanceID, UVChannel, FVector2D(Temp3D));
+						VertexInstanceUVs.Set(VertexInstanceID, UVChannel, Tessellation.TexCoordArray[CTFaceIndex[IndexFace + Index]]);
 					}
 				}
 			}
 
-			if (Tessellation.NormalCount == 1)
+			if (!Step)
 			{
-				CopyValue(Tessellation.NormalArray.GetData(), 0, Tessellation.SizeOfNormalType, true, Temp3D);
-				Temp3D = FDatasmithUtils::ConvertVector((FDatasmithUtils::EModelCoordSystem) ImportParams.ModelCoordSys, Temp3D).GetSafeNormal();
+				FDatasmithUtils::ConvertVectorArray((FDatasmithUtils::EModelCoordSystem) ImportParams.ModelCoordSys, Tessellation.NormalArray);
+				for (FVector& Normal : Tessellation.NormalArray)
+				{
+					Normal = Normal.GetSafeNormal();
+				}
+			}
+
+			if (Tessellation.NormalArray.Num() == 1)
+			{
+				Temp3D = Tessellation.NormalArray[0];
 				for (int32 Index = 0; Index < CTFaceIndex.Num(); Index++)
 				{
 					FVertexInstanceID VertexInstanceID = MeshVertexInstanceIDs[Index];
@@ -360,13 +413,17 @@ bool FillMesh(const FMeshParameters& MeshParameters, const FImportParameters& Im
 			}
 			else
 			{
+				for (FVector& Normal : Tessellation.NormalArray)
+				{
+					Normal = Normal.GetSafeNormal();
+				}
+
 				for (int32 IndexFace = 0; IndexFace < CTFaceIndex.Num(); IndexFace += 3)
 				{
 					for (int32 Index = 0; Index < 3; Index++)
 					{
 						FVertexInstanceID VertexInstanceID = MeshVertexInstanceIDs[IndexFace + Orientation[Index]];
-						CopyValue(Tessellation.NormalArray.GetData(), CTFaceIndex[IndexFace + Index] * 3, Tessellation.SizeOfNormalType, true, Temp3D);
-						VertexInstanceNormals[VertexInstanceID] = FDatasmithUtils::ConvertVector((FDatasmithUtils::EModelCoordSystem) ImportParams.ModelCoordSys, Temp3D).GetSafeNormal();
+						VertexInstanceNormals[VertexInstanceID] = Tessellation.NormalArray[CTFaceIndex[IndexFace + Index]];
 					}
 				}
 			}
@@ -406,20 +463,9 @@ bool ConvertCTBodySetToMeshDescription(const FImportParameters& ImportParams, co
 
 	// CoreTech is generating position duplicates. make sure to remove them before filling the mesh description
 	TArray<FVertexID> RemapVertexPosition;
-	FillVertexPosition(ImportParams, MeshParameters, Body.TriangleCount, Body.Faces, MeshDescription);
+	FillVertexPosition(ImportParams, MeshParameters, Body, MeshDescription);
 
-	TMap<uint32, FPolygonGroupID> MaterialToPolygonGroupMapping;
-	for (const FTessellationData& FaceTessellation : Body.Faces)
-	{
-		// we assume that face has only color
-		MaterialToPolygonGroupMapping.Add(FaceTessellation.ColorName, FPolygonGroupID::Invalid);
-	}
-
-	// Add the mesh's materials as polygon groups
-	TPolygonGroupAttributesRef<FName> PolygonGroupImportedMaterialSlotNames = MeshDescription.PolygonGroupAttributes().GetAttributesRef<FName>(MeshAttribute::PolygonGroup::ImportedMaterialSlotName);
-	UpdatePolygonGroup(MaterialToPolygonGroupMapping, PolygonGroupImportedMaterialSlotNames, MeshDescription);
-
-	if (!FillMesh(MeshParameters, ImportParams, Body.Faces, MaterialToPolygonGroupMapping, MeshDescription))
+	if (!FillMesh(MeshParameters, ImportParams, Body.Faces, MeshDescription))
 	{
 		return false;
 	}
@@ -431,136 +477,6 @@ bool ConvertCTBodySetToMeshDescription(const FImportParameters& ImportParams, co
 	FStaticMeshOperations::DetermineEdgeHardnessesFromVertexInstanceNormals(MeshDescription);
 
 	return MeshDescription.Polygons().Num() > 0;
-}
-
-double Distance(CT_COORDINATE Point1, CT_COORDINATE Point2)
-{
-	return sqrt((Point2.xyz[0] - Point1.xyz[0]) * (Point2.xyz[0] - Point1.xyz[0]) + (Point2.xyz[1] - Point1.xyz[1]) * (Point2.xyz[1] - Point1.xyz[1]) + (Point2.xyz[2] - Point1.xyz[2]) * (Point2.xyz[2] - Point1.xyz[2]));
-}
-
-template<typename UVType>
-void ScaleUV(CT_OBJECT_ID FaceID, FTessellationData& Tessellation, UVType Scale)
-{
-	UVType VMin, VMax, UMin, UMax;
-	VMin = UMin = HUGE_VALF;
-	VMax = UMax = -HUGE_VALF;
-	UVType* UVSet = (UVType*)Tessellation.TexCoordArray;
-	for (uint32 Index = 0, UVCoord = 0; Index < Tessellation.VertexCount; ++Index, UVCoord += 2)
-	{
-		UMin = FMath::Min(UVSet[UVCoord + 0], UMin);
-		UMax = FMath::Max(UVSet[UVCoord + 0], UMax);
-		VMin = FMath::Min(UVSet[UVCoord + 1], VMin);
-		VMax = FMath::Max(UVSet[UVCoord + 1], VMax);
-	}
-
-	double PuMin, PuMax, PvMin, PvMax;
-	PuMin = PvMin = HUGE_VALF;
-	PuMax = PvMax = -HUGE_VALF;
-
-	// fast UV min max
-	CT_FACE_IO::AskUVminmax(FaceID, PuMin, PuMax, PvMin, PvMax);
-
-	const uint32 NbIsoCurves = 7;
-
-	// Compute Point grid on the restricted surface defined by [PuMin, PuMax], [PvMin, PvMax]
-	CT_OBJECT_ID SurfaceID;
-	CT_ORIENTATION Orientation;
-	CT_FACE_IO::AskSurface(FaceID, SurfaceID, Orientation);
-
-	CT_OBJECT_TYPE SurfaceType;
-	CT_SURFACE_IO::AskType(SurfaceID, SurfaceType);
-
-	UVType DeltaU = (PuMax - PuMin) / (NbIsoCurves - 1);
-	UVType DeltaV = (PvMax - PvMin) / (NbIsoCurves - 1);
-	UVType U = PuMin, V = PvMin;
-
-	CT_COORDINATE NodeMatrix[121];
-
-	for (int32 IndexI = 0; IndexI < NbIsoCurves; IndexI++)
-	{
-		for (int32 IndexJ = 0; IndexJ < NbIsoCurves; IndexJ++)
-		{
-			CT_SURFACE_IO::Evaluate(SurfaceID, U, V, NodeMatrix[IndexI*NbIsoCurves +IndexJ]);
-			V += DeltaV;
-		}
-		U += DeltaU;
-		V = PvMin;
-	}
-
-	// Compute length of 7 iso V line
-	UVType LengthU[NbIsoCurves];
-	UVType LengthUMin = HUGE_VAL;
-	UVType LengthUMax = 0;
-	UVType LengthUMed = 0;
-
-	for (int32 IndexJ = 0; IndexJ < NbIsoCurves; IndexJ++)
-	{
-		LengthU[IndexJ] = 0;
-		for (int32 IndexI = 0; IndexI < (NbIsoCurves - 1); IndexI++)
-		{
-			LengthU[IndexJ] += Distance(NodeMatrix[IndexI * NbIsoCurves + IndexJ], NodeMatrix[(IndexI + 1) * NbIsoCurves + IndexJ]);
-		}
-		LengthUMed += LengthU[IndexJ];
-		LengthUMin = FMath::Min(LengthU[IndexJ], LengthUMin);
-		LengthUMax = FMath::Max(LengthU[IndexJ], LengthUMax);
-	}
-	LengthUMed /= NbIsoCurves;
-	LengthUMed = LengthUMed * 2 / 3 + LengthUMax / 3;
-
-	// Compute length of 7 iso U line
-	UVType LengthV[NbIsoCurves];
-	UVType LengthVMin = HUGE_VAL;
-	UVType LengthVMax = 0;
-	UVType LengthVMed = 0;
-
-	for (int32 IndexI = 0; IndexI < NbIsoCurves; IndexI++)
-	{
-		LengthV[IndexI] = 0;
-		for (int32 IndexJ = 0; IndexJ < (NbIsoCurves - 1); IndexJ++)
-		{
-			LengthV[IndexI] += Distance(NodeMatrix[IndexI * NbIsoCurves + IndexJ], NodeMatrix[IndexI * NbIsoCurves + IndexJ + 1]);
-		}
-		LengthVMed += LengthV[IndexI];
-		LengthVMin = FMath::Min(LengthV[IndexI], LengthVMin);
-		LengthVMax = FMath::Max(LengthV[IndexI], LengthVMax);
-	}
-	LengthVMed /= NbIsoCurves;
-	LengthVMed = LengthVMed * 2 / 3 + LengthVMax / 3;
-
-	switch (SurfaceType)
-	{
-	case CT_CONE_TYPE:
-	case CT_CYLINDER_TYPE:
-	case CT_SPHERE_TYPE:
-		Swap(LengthUMed, LengthVMed);
-		break;
-	case CT_S_REVOL_TYPE:
-	case CT_TORUS_TYPE:
-		// Need swap ?
-		// Swap(LengthUMed, LengthVMed);
-		break;
-	case CT_S_NURBS_TYPE:
-	case CT_PLANE_TYPE:
-	case CT_S_OFFSET_TYPE:
-	case CT_S_RULED_TYPE:
-	case CT_TABULATED_RULED_TYPE:
-	case CT_S_LINEARTRANSFO_TYPE:
-	case CT_S_NONLINEARTRANSFO_TYPE:
-	case CT_S_BLEND_TYPE:
-	default:
-		break;
-	}
-
-	// scale the UV map
-	// 0.1 define UV in cm and not in mm
-	UVType VScale = Scale * LengthVMed * 1 / (VMax - VMin) / 100;
-	UVType UScale = Scale * LengthUMed * 1 / (UMax - UMin) / 100;
-
-	for (uint32 Index = 0, UVCoord = 0; Index < Tessellation.VertexCount; ++Index, UVCoord += 2)
-	{
-		UVSet[UVCoord + 0] *= UScale;
-		UVSet[UVCoord + 1] *= VScale;
-	}
 }
 
 TSharedPtr<IDatasmithUEPbrMaterialElement> CreateDefaultUEPbrMaterial()
@@ -657,36 +573,6 @@ TSharedPtr<IDatasmithUEPbrMaterialElement> CreateUEPbrMaterialFromMaterial(FCADM
 	return MaterialElement;
 }
 
-uint32 GetSize(CT_TESS_DATA_TYPE type)
-{
-	switch (type)
-	{
-	case CT_TESS_USE_DEFAULT:
-		return sizeof(uint32);
-	case CT_TESS_UBYTE:
-		return sizeof(uint8_t);
-	case CT_TESS_BYTE:
-		return sizeof(int8_t);
-	case CT_TESS_USHORT:
-		return sizeof(int16_t);
-	case CT_TESS_SHORT:
-		return sizeof(uint16_t);
-	case CT_TESS_UINT:
-		return sizeof(uint32);
-	case CT_TESS_INT:
-		return sizeof(int32);
-	case CT_TESS_ULONG:
-		return sizeof(uint64);
-	case CT_TESS_LONG:
-		return sizeof(int64);
-	case CT_TESS_FLOAT:
-		return sizeof(float);
-	case CT_TESS_DOUBLE:
-		return sizeof(double);
-	}
-	return 0;
-}
-
 CT_IO_ERROR Tessellate(CT_OBJECT_ID MainObjectId, const FImportParameters& ImportParams, FMeshDescription& MeshDesc, FMeshParameters& MeshParameters)
 {
 	CheckedCTError Result;
@@ -698,16 +584,14 @@ CT_IO_ERROR Tessellate(CT_OBJECT_ID MainObjectId, const FImportParameters& Impor
 
 	SetCoreTechTessellationState(ImportParams);
 
-	FString FullPath;
-	FString CachePath;
-	FCoreTechFileParser Parser = FCoreTechFileParser(FullPath, CachePath, ImportParams);
+	FCoreTechFileParser Parser = FCoreTechFileParser(ImportParams);
 
 	FBodyMesh BodyMesh;
 	BodyMesh.BodyID = 1;
 
 	while (CT_OBJECT_ID BodyId = Objects.IteratorIter())
 	{
-		Parser.GetBodyTessellation(BodyId, BodyMesh, ImportParams, 0);
+		Parser.GetBodyTessellation(BodyId, MainObjectId, BodyMesh, 0, /*bNeedRepair*/ true);
 	}
 
 	bool bTessellated = ConvertCTBodySetToMeshDescription(ImportParams, MeshParameters, BodyMesh, MeshDesc);

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Config/Parser/DisplayClusterConfigParserText.h"
 #include "Misc/FileHelper.h"
@@ -86,6 +86,10 @@ void FDisplayClusterConfigParserText::ParseLine(const FString& line)
 	else if (line.StartsWith(FString(DisplayClusterStrings::cfg::data::render::Header)))
 	{
 		AddRender(impl_parse<FDisplayClusterConfigRender>(line));
+	}
+	else if (line.StartsWith(FString(DisplayClusterStrings::cfg::data::nvidia::Header)))
+	{
+		AddNvidia(impl_parse<FDisplayClusterConfigNvidia>(line));
 	}
 	else if (line.StartsWith(FString(DisplayClusterStrings::cfg::data::stereo::Header)))
 	{

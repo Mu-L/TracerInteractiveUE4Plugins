@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -8,9 +8,11 @@
 #include "Misc/Attribute.h"
 #include "AssetData.h"
 #include "NiagaraGraph.h"
+#include "NiagaraEditorSettings.h"
 
 class UNiagaraNodeInput;
 class UNiagaraNodeOutput;
+class UNiagaraNodeFunctionCall;
 struct FNiagaraVariable;
 struct FNiagaraTypeDefinition;
 class UNiagaraGraph;
@@ -28,6 +30,12 @@ class UEdGraphSchema_Niagara;
 class UEdGraphPin;
 class FCompileConstantResolver;
 class UNiagaraStackEditorData;
+class FMenuBuilder;
+class FNiagaraEmitterViewModel;
+class FNiagaraEmitterHandleViewModel;
+enum class ECheckBoxState : uint8;
+struct FNiagaraNamespaceMetadata;
+class FNiagaraParameterHandle;
 
 namespace FNiagaraEditorUtilities
 {
@@ -126,6 +134,8 @@ namespace FNiagaraEditorUtilities
 	/** Returns whether the data in two structs on scope matches. */
 	bool DataMatches(const FStructOnScope& StructOnScopeA, const FStructOnScope& StructOnScopeB);
 
+	void NIAGARAEDITOR_API CopyDataTo(FStructOnScope& DestinationStructOnScope, const FStructOnScope& SourceStructOnScope, bool bCheckTypes = true);
+
 	TSharedPtr<SWidget> CreateInlineErrorText(TAttribute<FText> ErrorMessage, TAttribute<FText> ErrorTooltip);
 
 	void CompileExistingEmitters(const TArray<UNiagaraEmitter*>& AffectedEmitters);
@@ -144,7 +154,12 @@ namespace FNiagaraEditorUtilities
 
 	bool ResolveConstantValue(UEdGraphPin* Pin, int32& Value);
 
+	TSharedPtr<FStructOnScope> StaticSwitchDefaultIntToStructOnScope(int32 InStaticSwitchDefaultValue, FNiagaraTypeDefinition InSwitchType);
+
 	void PreprocessFunctionGraph(const UEdGraphSchema_Niagara* Schema, UNiagaraGraph* Graph, const TArray<UEdGraphPin*>& CallInputs, const TArray<UEdGraphPin*>& CallOutputs, ENiagaraScriptUsage ScriptUsage, const FCompileConstantResolver& ConstantResolver);
+
+	bool PODPropertyAppendCompileHash(const void* Container, FProperty* Property, const FString& PropertyName, struct FNiagaraCompileHashVisitor* InVisitor);
+	bool NestedPropertiesAppendCompileHash(const void* Container, const UStruct* Struct, EFieldIteratorFlags::SuperClassFlags IteratorFlags, const FString& BaseName, struct FNiagaraCompileHashVisitor* InVisitor);
 
 	/** Options for the GetScriptsByFilter function. 
 	** @Param ScriptUsageToInclude Only return Scripts that have this usage
@@ -183,7 +198,13 @@ namespace FNiagaraEditorUtilities
 	 */
 	const FNiagaraEmitterHandle* GetEmitterHandleForEmitter(UNiagaraSystem& System, UNiagaraEmitter& Emitter);
 
-	NIAGARAEDITOR_API FText FormatScriptAssetDescription(FText Description, FName Path);
+	NIAGARAEDITOR_API bool IsScriptAssetInLibrary(const FAssetData& ScriptAssetData);
+
+	NIAGARAEDITOR_API FText FormatScriptName(FName Name, bool bIsInLibrary);
+
+	NIAGARAEDITOR_API FText FormatScriptDescription(FText Description, FName Path, bool bIsInLibrary);
+
+	NIAGARAEDITOR_API FText FormatVariableDescription(FText Description, FText Name, FText Type);
 
 	void ResetSystemsThatReferenceSystemViewModel(const FNiagaraSystemViewModel& ReferencedSystemViewModel);
 
@@ -209,5 +230,138 @@ namespace FNiagaraEditorUtilities
 	 * @param StackEditorData The editor data used to mark the newly added FNiagaraVariable in the Stack for renaming.
 	 * @returns Bool for whether adding the parameter succeeded.
 	 */
-	bool AddParameter(FNiagaraVariable& NewParameterVariable, FNiagaraParameterStore& TargetParameterStore, UObject& ParameterStoreOwner, UNiagaraStackEditorData& StackEditorData);
+	bool AddParameter(FNiagaraVariable& NewParameterVariable, FNiagaraParameterStore& TargetParameterStore, UObject& ParameterStoreOwner, UNiagaraStackEditorData* StackEditorData);
+
+	NIAGARAEDITOR_API bool AddEmitterContextMenuActions(FMenuBuilder& MenuBuilder, const TSharedPtr<FNiagaraEmitterHandleViewModel>& EmitterHandleViewModel);
+
+	void ShowParentEmitterInContentBrowser(TSharedRef<FNiagaraEmitterViewModel> EmitterViewModel);
+
+	void OpenParentEmitterForEdit(TSharedRef<FNiagaraEmitterViewModel> Emitter);
+	ECheckBoxState GetSelectedEmittersEnabledCheckState(TSharedRef<FNiagaraSystemViewModel> SystemViewModel);
+	void ToggleSelectedEmittersEnabled(TSharedRef<FNiagaraSystemViewModel> SystemViewModel);
+
+	ECheckBoxState GetSelectedEmittersIsolatedCheckState(TSharedRef<FNiagaraSystemViewModel> SystemViewModel);
+	void ToggleSelectedEmittersIsolated(TSharedRef<FNiagaraSystemViewModel> SystemViewModel);
+
+	void CreateAssetFromEmitter(TSharedRef<FNiagaraEmitterHandleViewModel> EmitterHandleViewModel);
+
+	NIAGARAEDITOR_API void WarnWithToastAndLog(FText WarningMessage);
+	NIAGARAEDITOR_API void InfoWithToastAndLog(FText WarningMessage, float ToastDuration = 5.0f);
+
+	void GetScriptRunAndExecutionIndexFromUsage(const ENiagaraScriptUsage& InUsage, int32& OutRunIndex, int32&OutExecutionIndex);
+
+	FName GetUniqueObjectName(UObject* Outer, UClass* ObjectClass, const FString& CandidateName);
+
+	template<typename T>
+	FName GetUniqueObjectName(UObject* Outer, const FString& CandidateName)
+	{
+		return GetUniqueObjectName(Outer, T::StaticClass(), CandidateName);
+	}
+
+	/** Gets the Scope and notifies if it does not apply due to an override being set.
+	 * @params MetaData				The MetaData to get the namespace string for.
+	 * @params OutScope		The Scope to return.
+	 * @return bool			Whether the returned scope is not overridden. Is false if bUseLegacyNameString is set.
+	 */
+	bool GetVariableMetaDataScope(const FNiagaraVariableMetaData& MetaData, ENiagaraParameterScope& OutScope);
+
+	/** Gets the Namespace string and notifies if it does not apply due to an override being set.
+	 * @params MetaData				The MetaData to get the namespace string for.
+	 * @params OutNamespaceString	The Namespace string to return.
+	 * @return bool					Whether the returned Namespace string is valid. Is false if bUseLegacyNameString is set.
+	 */
+	bool GetVariableMetaDataNamespaceString(const FNiagaraVariableMetaData& MetaData, FString& OutNamespaceString);
+
+	/** Gets the Namespace string and notifies if it does not apply due to an override being set.
+	 * @params MetaData				The MetaData to get the namespace string for.
+	 * @params NewScopeName			The NewScopeName to consider when getting the namespace string.
+	 * @params OutNamespaceString	The Namespace string to return.
+	 * @return bool					Whether the returned Namespace string is valid. Is false if bUseLegacyNameString is set.
+	 */
+	bool GetVariableMetaDataNamespaceStringForNewScope(const FNiagaraVariableMetaData& MetaData, const FName& NewScopeName, FString& OutNamespaceString);
+
+	FName GetScopeNameForParameterScope(ENiagaraParameterScope InScope);
+
+	bool IsScopeEditable(const FName& InScopeName);
+	bool IsScopeUserAssignable(const FName& InScopeName);
+
+	TArray<FName> DecomposeVariableNamespace(const FName& InVarNameToken, FName& OutName);
+
+	void  RecomposeVariableNamespace(const FName& InVarNameToken, const TArray<FName>& InParentNamespaces, FName& OutName);
+
+	void GetParameterMetaDataFromName(const FName& InVarNameToken, FNiagaraVariableMetaData& OutMetaData);
+
+	FString GetNamespacelessVariableNameString(const FName& InVarName);
+
+	void GetReferencingFunctionCallNodes(UNiagaraScript* Script, TArray<UNiagaraNodeFunctionCall*>& OutReferencingFunctionCallNodes);
+
+	// Compare two FNiagaraVariable names for the sort priority relative to the first argument VarNameA. Sorting is ordered by namespace and then alphabetized. 
+	bool GetVariableSortPriority(const FName& VarNameA, const FName& VarNameB);
+
+	// Compare two FNiagaraNamespaceMetadata for the sort priority relative to the first argument A, where a lower number represents a higher priority.
+	int32 GetNamespaceMetaDataSortPriority(const FNiagaraNamespaceMetadata& A, const FNiagaraNamespaceMetadata& B);
+
+	// Get the sort priority of a registered namespace FName, where a lower number represents a higher priority.
+	int32 GetNamespaceSortPriority(const FName& Namespace);
+
+	const FNiagaraNamespaceMetadata GetNamespaceMetaDataForVariableName(const FName& VarName);
+};
+
+namespace FNiagaraParameterUtilities
+{
+	bool DoesParameterNameMatchSearchText(FName ParameterName, const FString& SearchTextString);
+
+	FText FormatParameterNameForTextDisplay(FName ParameterName);
+
+	bool GetNamespaceEditData(
+		FName InParameterName,
+		FNiagaraParameterHandle& OutParameterHandle,
+		FNiagaraNamespaceMetadata& OutNamespaceMetadata,
+		FText& OutErrorMessage);
+
+	bool GetNamespaceModifierEditData(
+		FName InParameterName,
+		FNiagaraParameterHandle& OutParameterHandle,
+		FNiagaraNamespaceMetadata& OutNamespaceMetadata,
+		FText& OutErrorMessage);
+
+	enum class EParameterContext
+	{
+		Script,
+		System
+	};
+
+	struct FChangeNamespaceMenuData
+	{
+		bool bCanChange;
+		FText CanChangeToolTip;
+		FName NamespaceParameterName;
+		FNiagaraNamespaceMetadata Metadata;
+	};
+
+	NIAGARAEDITOR_API void GetChangeNamespaceMenuData(FName InParameterName, EParameterContext InParameterContext, TArray<FChangeNamespaceMenuData>& OutChangeNamespaceMenuData);
+
+	NIAGARAEDITOR_API TSharedRef<SWidget> CreateNamespaceMenuItemWidget(FName Namespace, FText ToolTip);
+
+	NIAGARAEDITOR_API bool TestCanChangeNamespaceWithMessage(FName ParameterName, const FNiagaraNamespaceMetadata& NewNamespaceMetadata, FText& OutMessage);
+
+	NIAGARAEDITOR_API FName ChangeNamespace(FName ParameterName, const FNiagaraNamespaceMetadata& NewNamespaceMetadata);
+
+	NIAGARAEDITOR_API int32 GetNumberOfNamePartsBeforeEditableModifier(const FNiagaraNamespaceMetadata& NamespaceMetadata);
+
+	NIAGARAEDITOR_API void GetOptionalNamespaceModifiers(FName ParameterName, EParameterContext InParameterContext, TArray<FName>& OutOptionalNamespaceModifiers);
+
+	NIAGARAEDITOR_API FName GetEditableNamespaceModifierForParameter(FName ParameterName);
+
+	NIAGARAEDITOR_API bool TestCanSetSpecificNamespaceModifierWithMessage(FName InParameterName, FName InNamespaceModifier, FText& OutMessage);
+
+	NIAGARAEDITOR_API FName SetSpecificNamespaceModifier(FName InParameterName, FName InNamespaceModifier);
+
+	NIAGARAEDITOR_API bool TestCanSetCustomNamespaceModifierWithMessage(FName InParameterName, FText& OutMessage);
+
+	NIAGARAEDITOR_API FName SetCustomNamespaceModifier(FName InParameterName);
+
+	NIAGARAEDITOR_API FName SetCustomNamespaceModifier(FName InParameterName, TSet<FName>& CurrentParameterNames);
+
+	NIAGARAEDITOR_API bool TestCanRenameWithMessage(FName ParameterName, FText& OutMessage);
 };

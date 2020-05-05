@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "LevelSequence.h"
 #include "ILevelSequenceMetaData.h"
@@ -81,6 +81,16 @@ UObject* ULevelSequence::MakeSpawnableTemplateFromInstance(UObject& InSourceObje
 		// We don't support spawnables and attachments right now
 		// @todo: map to attach track?
 		Actor->DetachFromActor(FDetachmentTransformRules(FAttachmentTransformRules(EAttachmentRule::KeepRelative, false), false));
+	}
+
+	// The spawnable source object was created with RF_Transient. The object generated from that needs its 
+	// component flags cleared of RF_Transient so that the template object can be saved to the level sequence.
+	for (UActorComponent* Component : Actor->GetComponents())
+	{
+		if (Component)
+		{
+			Component->ClearFlags(RF_Transient);
+		}
 	}
 
 	return NewInstance;
@@ -288,6 +298,20 @@ void ULevelSequence::PostLoad()
 #endif
 }
 
+bool ULevelSequence::Rename(const TCHAR* NewName, UObject* NewOuter, ERenameFlags Flags)
+{
+	bool bRetVal = Super::Rename(NewName, NewOuter, Flags);
+
+#if WITH_EDITOR
+	if (DirectorBlueprint)
+	{
+		DirectorBlueprint->Rename(*DirectorBlueprint->GetName(), this, Flags);
+	}
+#endif
+
+	return bRetVal;
+}
+
 void ULevelSequence::ConvertPersistentBindingsToDefault(UObject* FixupContext)
 {
 	if (PossessedObjects_DEPRECATED.Num() == 0)
@@ -484,7 +508,7 @@ FGuid ULevelSequence::FindOrAddBinding(UObject* InObject)
 		public:
 			FMovieSceneRootEvaluationTemplateInstance Template;
 			virtual FMovieSceneRootEvaluationTemplateInstance& GetEvaluationTemplate() override { check(false); return Template; }
-			virtual void UpdateCameraCut(UObject* CameraObject, UObject* UnlockIfCameraObject, bool bJumpCut) override {}
+			virtual void UpdateCameraCut(UObject* CameraObject, const EMovieSceneCameraCutParams& CameraCutParams) override {}
 			virtual void SetViewportSettings(const TMap<FViewportClient*, EMovieSceneViewportParams>& ViewportParamsMap) override {}
 			virtual void GetViewportSettings(TMap<FViewportClient*, EMovieSceneViewportParams>& ViewportParamsMap) const override {}
 			virtual EMovieScenePlayerStatus::Type GetPlaybackStatus() const { return EMovieScenePlayerStatus::Stopped; }

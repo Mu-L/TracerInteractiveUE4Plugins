@@ -1,10 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreTypes.h"
 #include "Misc/AssertionMacros.h"
 #include "HAL/PlatformMath.h"
+#include "Templates/IsFloatingPoint.h"
 
 
 //#define IMPLEMENT_ASSIGNMENT_OPERATOR_MANUALLY
@@ -35,6 +36,8 @@ struct  FTransform;
 class  FSphere;
 struct FVector2D;
 struct FLinearColor;
+template<typename ElementType>
+class TRange;
 
 /*-----------------------------------------------------------------------------
 	Floating point constants.
@@ -47,6 +50,7 @@ struct FLinearColor;
 #define BIG_NUMBER			(3.4e+38f)
 #define EULERS_NUMBER       (2.71828182845904523536f)
 #define UE_GOLDEN_RATIO		(1.6180339887498948482045868343656381f)	/* Also known as divine proportion, golden mean, or golden section - related to the Fibonacci Sequence = (1 + sqrt(5)) / 2 */
+#define FLOAT_NON_FRACTIONAL (8388608.f) /* All single-precision floating point numbers greater than or equal to this have no fractional value. */
 
 // Copied from float.h
 #define MAX_FLT 3.402823466e+38F
@@ -246,6 +250,101 @@ struct FMath : public FPlatformMath
 		return Abs<double>( Value ) <= ErrorTolerance;
 	}
 
+private:
+	template<typename FloatType, typename IntegralType, IntegralType SignedBit>
+	static inline bool TIsNearlyEqualByULP(FloatType A, FloatType B, int32 MaxUlps)
+	{
+		// Any comparison with NaN always fails.
+		if (FMath::IsNaN(A) || FMath::IsNaN(B))
+		{
+			return false;
+		}
+
+		// If either number is infinite, then ignore ULP and do a simple equality test. 
+		// The rationale being that two infinities, of the same sign, should compare the same 
+		// no matter the ULP, but FLT_MAX and Inf should not, even if they're neighbors in
+		// their bit representation.
+		if (!FMath::IsFinite(A) || !FMath::IsFinite(B))
+		{
+			return A == B;
+		}
+
+		// Convert the integer representation of the float from sign + magnitude to
+		// a signed number representation where 0 is 1 << 31. This allows us to compare
+		// ULP differences around zero values.
+		auto FloatToSignedNumber = [](IntegralType V) {
+			if (V & SignedBit)
+			{
+				return ~V + 1;
+			}
+			else
+			{
+				return SignedBit | V;
+			}
+		};
+
+		union FFloatToInt { FloatType F; IntegralType I; };
+		FFloatToInt FloatA;
+		FFloatToInt FloatB;
+
+		FloatA.F = A;
+		FloatB.F = B;
+
+		IntegralType SNA = FloatToSignedNumber(FloatA.I);
+		IntegralType SNB = FloatToSignedNumber(FloatB.I);
+		IntegralType Distance = (SNA >= SNB) ? (SNA - SNB) : (SNB - SNA);
+		return Distance <= IntegralType(MaxUlps);
+	}
+
+public:
+
+	/**
+	 *	Check if two floating point numbers are nearly equal to within specific number of 
+	 *	units of last place (ULP). A single ULP difference between two floating point numbers
+	 *	means that they have an adjacent representation and that no other floating point number
+	 *	can be constructed to fit between them. This enables making consistent comparisons 
+	 *	based on representational distance between floating point numbers, regardless of 
+	 *	their magnitude. 
+	 *
+	 *	Use when the two numbers vary greatly in range. Otherwise, if absolute tolerance is
+	 *	required, use IsNearlyEqual instead.
+	 *  
+	 *	Note: Since IEEE 754 floating point operations are guaranteed to be exact to 0.5 ULP,
+	 *	a value of 4 ought to be sufficient for all but the most complex float operations.
+	 * 
+	 *	@param A				First number to compare
+	 *	@param B				Second number to compare
+	 *	@param MaxUlps          The maximum ULP distance by which neighboring floating point 
+	 *	                        numbers are allowed to differ.
+	 *	@return					true if the two values are nearly equal.
+	 */
+	static FORCEINLINE bool IsNearlyEqualByULP(float A, float B, int32 MaxUlps = 4)
+	{
+		return TIsNearlyEqualByULP<float, uint32, uint32(1U << 31)>(A, B, MaxUlps);
+	}
+
+	/**
+	 *	Check if two floating point numbers are nearly equal to within specific number of
+	 *	units of last place (ULP). A single ULP difference between two floating point numbers
+	 *	means that they have an adjacent representation and that no other floating point number
+	 *	can be constructed to fit between them. This enables making consistent comparisons
+	 *	based on representational distance between floating point numbers, regardless of
+	 *	their magnitude.
+	 *
+	 *	Note: Since IEEE 754 floating point operations are guaranteed to be exact to 0.5 ULP,
+	 *	a value of 4 ought to be sufficient for all but the most complex float operations.
+	 *
+	 *	@param A				First number to compare
+	 *	@param B				Second number to compare
+	 *	@param MaxUlps          The maximum ULP distance by which neighboring floating point
+	 *	                        numbers are allowed to differ.
+	 *	@return					true if the two values are nearly equal.
+	 */
+	static FORCEINLINE bool IsNearlyEqualByULP(double A, double B, int32 MaxUlps = 4)
+	{
+		return TIsNearlyEqualByULP<double, uint64, uint64(1ULL << 63)>(A, B, MaxUlps);
+	}
+
 	/**
 	 *	Checks whether a number is a power of two.
 	 *	@param Value	Number to check
@@ -294,7 +393,7 @@ struct FMath : public FPlatformMath
 		if( Grid==0.f )	return Location;
 		else			
 		{
-			return FloorToFloat((Location + 0.5*Grid)/Grid)*Grid;
+			return FloorToFloat((Location + 0.5f*Grid)/Grid)*Grid;
 		}
 	}
 
@@ -620,14 +719,15 @@ struct FMath : public FPlatformMath
 	// Interpolation Functions
 
 	/** Calculates the percentage along a line from MinValue to MaxValue that Value is. */
-	static FORCEINLINE float GetRangePct(float MinValue, float MaxValue, float Value)
+	template<typename T>
+	static FORCEINLINE typename TEnableIf<TIsFloatingPoint<T>::Value, T>::Type GetRangePct(T MinValue, T MaxValue, T Value)
 	{
 		// Avoid Divide by Zero.
 		// But also if our range is a point, output whether Value is before or after.
-		const float Divisor = MaxValue - MinValue;
+		const T Divisor = MaxValue - MinValue;
 		if (FMath::IsNearlyZero(Divisor))
 		{
-			return (Value >= MaxValue) ? 1.f : 0.f;
+			return (Value >= MaxValue) ? (T)1 : (T)0;
 		}
 
 		return (Value - MinValue) / Divisor;
@@ -650,6 +750,25 @@ struct FMath : public FPlatformMath
 	static FORCEINLINE float GetMappedRangeValueUnclamped(const FVector2D& InputRange, const FVector2D& OutputRange, const float Value)
 	{
 		return GetRangeValue(OutputRange, GetRangePct(InputRange, Value));
+	}
+
+	template<class T>
+	static FORCEINLINE double GetRangePct(TRange<T> const& Range, T Value)
+	{
+		return GetRangePct(Range.GetLowerBoundValue(), Range.GetUpperBoundValue(), Value);
+	}
+
+	template<class T>
+	static FORCEINLINE T GetRangeValue(TRange<T> const& Range, T Pct)
+	{
+		return FMath::Lerp<T>(Range.GetLowerBoundValue(), Range.GetUpperBoundValue(), Pct);
+	}
+
+	template<class T>
+	static FORCEINLINE T GetMappedRangeValueClamped(const TRange<T>& InputRange, const TRange<T>& OutputRange, const T Value)
+	{
+		const T ClampedPct = FMath::Clamp<T>(GetRangePct(InputRange, Value), 0, 1);
+		return GetRangeValue(OutputRange, ClampedPct);
 	}
 
 	/** Performs a linear interpolation between two values, Alpha ranges from 0-1 */
@@ -987,7 +1106,7 @@ struct FMath : public FPlatformMath
 	 */
 	static float MakePulsatingValue( const double InCurrentTime, const float InPulsesPerSecond, const float InPhase = 0.0f )
 	{
-		return 0.5f + 0.5f * FMath::Sin( ( ( 0.25f + InPhase ) * PI * 2.0 ) + ( InCurrentTime * PI * 2.0 ) * InPulsesPerSecond );
+		return 0.5f + 0.5f * FMath::Sin( ( ( 0.25f + InPhase ) * (float)PI * 2.0f ) + ( (float)InCurrentTime * (float)PI * 2.0f ) * InPulsesPerSecond );
 	}
 
 	// Geometry intersection 
@@ -1506,7 +1625,7 @@ struct FMath : public FPlatformMath
 	static inline bool ExtractBoolFromBitfield(uint8* Ptr, uint32 Index)
 	{
 		uint8* BytePtr = Ptr + Index / 8;
-		uint8 Mask = 1 << (Index & 0x7);
+		uint8 Mask = (uint8)(1 << (Index & 0x7));
 
 		return (*BytePtr & Mask) != 0;
 	}
@@ -1518,7 +1637,7 @@ struct FMath : public FPlatformMath
 	static inline void SetBoolInBitField(uint8* Ptr, uint32 Index, bool bSet)
 	{
 		uint8* BytePtr = Ptr + Index / 8;
-		uint8 Mask = 1 << (Index & 0x7);
+		uint8 Mask = (uint8)(1 << (Index & 0x7));
 
 		if(bSet)
 		{
@@ -1546,7 +1665,7 @@ struct FMath : public FPlatformMath
 		check(Ret >= 0);
 		check(Ret <= 255);
 
-		return Ret;
+		return (uint8)Ret;
 	}
 	
 	// @param x assumed to be in this range: -1..1

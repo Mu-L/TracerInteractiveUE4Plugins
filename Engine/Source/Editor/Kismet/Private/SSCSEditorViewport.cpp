@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SSCSEditorViewport.h"
 #include "Framework/Application/SlateApplication.h"
@@ -395,12 +395,13 @@ void SSCSEditorViewport::EnablePreview(bool bEnable)
 	if(bEnable)
 	{
 		// Restore the previously-saved realtime setting
-		ViewportClient->RestoreRealtime();
+		ViewportClient->RemoveRealtimeOverride();
 	}
 	else
 	{
 		// Disable and store the current realtime setting. This will bypass real-time rendering in the preview viewport (see UEditorEngine::UpdateSingleViewportClient).
-		ViewportClient->SetRealtime(false, true);
+		const bool bShouldBeRealtime = false;
+		ViewportClient->SetRealtimeOverride(bShouldBeRealtime, NSLOCTEXT("BlueprintEditor", "RealtimeOverrideMessage_Blueprints", "the active blueprint mode"));
 	}
 }
 

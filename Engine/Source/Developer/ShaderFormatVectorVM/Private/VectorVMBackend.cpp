@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "VectorVMBackend.h"
 #include "ShaderFormatVectorVM.h"
@@ -179,6 +179,10 @@ char* FVectorVMCodeBackend::GenerateCode(exec_list* ir, _mesa_glsl_parse_state* 
 	ir_make_external_funcs_builtin::run(ir, state);
 
 	FlattenUniformBufferStructures(ir, state);
+
+	// The vector VM doesn't support dynamic loops, and the codegen panics if it sees loops. We'll just set the unroll threshold
+	// to a very large value, to make sure loops are always unrolled.
+	state->maxunrollcount = 16384;
 
 	state->conservative_propagation = false;
 	{

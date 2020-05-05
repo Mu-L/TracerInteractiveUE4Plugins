@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "USDListener.h"
 
@@ -6,6 +6,12 @@
 #include "USDTypesConversion.h"
 
 #if USE_USD_SDK
+
+#include "USDIncludesStart.h"
+
+#include "pxr/usd/usdGeom/tokens.h"
+
+#include "USDIncludesEnd.h"
 
 FUsdListener::FUsdListener( const pxr::UsdStageRefPtr& Stage )
 {
@@ -29,6 +35,13 @@ void FUsdListener::Register( const pxr::UsdStageRefPtr& Stage )
 	}
 
 	RegisteredStageEditTargetChangedKey = pxr::TfNotice::Register( pxr::TfWeakPtr< FUsdListener >( this ), &FUsdListener::HandleStageEditTargetChangedNotice, Stage );
+
+	if (RegisteredLayersChangedKey.IsValid())
+	{
+		pxr::TfNotice::Revoke(RegisteredLayersChangedKey);
+	}
+
+	RegisteredLayersChangedKey = pxr::TfNotice::Register(pxr::TfWeakPtr< FUsdListener >( this ), &FUsdListener::HandleLayersChangedNotice );
 }
 
 FUsdListener::~FUsdListener()
@@ -36,6 +49,7 @@ FUsdListener::~FUsdListener()
 	FScopedUsdAllocs UsdAllocs;
 	pxr::TfNotice::Revoke( RegisteredObjectsChangedKey );
 	pxr::TfNotice::Revoke( RegisteredStageEditTargetChangedKey );
+	pxr::TfNotice::Revoke( RegisteredLayersChangedKey );
 }
 
 void FUsdListener::HandleUsdNotice( const pxr::UsdNotice::ObjectsChanged& Notice, const pxr::UsdStageWeakPtr& Sender )
@@ -43,18 +57,12 @@ void FUsdListener::HandleUsdNotice( const pxr::UsdNotice::ObjectsChanged& Notice
 	using namespace pxr;
 	using PathRange = UsdNotice::ObjectsChanged::PathRange;
 
-	if ( !OnPrimChanged.IsBound() || IsBlocked.GetValue() > 0 )
+	if ( !OnPrimsChanged.IsBound() || IsBlocked.GetValue() > 0 )
 	{
 		return;
 	}
 
-	auto BroadcastPrimUpdate = [ this ]( const pxr::SdfPath& PrimPath, bool bResync )
-	{
-		FScopedUnrealAllocs UnrealAllocs;
-
-		//FPlatformMisc::LowLevelOutputDebugStringf( TEXT("Prim %s changed (%s)\n"), *UsdToUnreal::ConvertPath( *It ), bResync ? TEXT("resync") : TEXT("update") );
-		OnPrimChanged.Broadcast( UsdToUnreal::ConvertPath( PrimPath ), bResync );
-	};
+	TMap< FString, bool > PrimsChangedList;
 
 	FScopedUsdAllocs UsdAllocs;
 
@@ -63,15 +71,41 @@ void FUsdListener::HandleUsdNotice( const pxr::UsdNotice::ObjectsChanged& Notice
 	for ( PathRange::const_iterator It = PathsToUpdate.begin(); It != PathsToUpdate.end(); ++It )
 	{
 		constexpr bool bResync = true;
-		BroadcastPrimUpdate( It->GetAbsoluteRootOrPrimPath(), bResync );
+		PrimsChangedList.Add( UsdToUnreal::ConvertPath( It->GetAbsoluteRootOrPrimPath() ), bResync );
 	}
 
 	PathsToUpdate = Notice.GetChangedInfoOnlyPaths();
 
-	for ( PathRange::const_iterator It = PathsToUpdate.begin(); It != PathsToUpdate.end(); ++It )
+	for ( PathRange::const_iterator  PathToUpdateIt = PathsToUpdate.begin(); PathToUpdateIt != PathsToUpdate.end(); ++PathToUpdateIt )
 	{
-		constexpr bool bResync = false;
-		BroadcastPrimUpdate( It->GetAbsoluteRootOrPrimPath(), bResync );
+		const FString PrimPath = UsdToUnreal::ConvertPath( PathToUpdateIt->GetAbsoluteRootOrPrimPath() );
+
+		if ( !PrimsChangedList.Contains( PrimPath ) )
+		{
+			bool bResync = false;
+
+			if ( PathToUpdateIt->GetAbsoluteRootOrPrimPath() == pxr::SdfPath::AbsoluteRootPath() )
+			{
+				pxr::TfTokenVector ChangedFields = PathToUpdateIt.GetChangedFields();
+
+				for ( const pxr::TfToken& ChangeField : ChangedFields )
+				{
+					if ( ChangeField == UsdGeomTokens->metersPerUnit )
+					{
+						bResync = true; // Force a resync when changing the metersPerUnit since it affects all coordinates
+						break;
+					}
+				}
+			}
+
+			PrimsChangedList.Add( PrimPath, bResync );
+		}
+	}
+
+	if ( PrimsChangedList.Num() > 0 )
+	{
+		FScopedUnrealAllocs UnrealAllocs;
+		OnPrimsChanged.Broadcast( PrimsChangedList );
 	}
 }
 
@@ -79,6 +113,16 @@ void FUsdListener::HandleStageEditTargetChangedNotice( const pxr::UsdNotice::Sta
 {
 	FScopedUnrealAllocs UnrealAllocs;
 	OnStageEditTargetChanged.Broadcast();
+}
+
+void FUsdListener::HandleLayersChangedNotice(const pxr::SdfNotice::LayersDidChange& Notice)
+{
+	if ( !OnLayersChanged.IsBound() || IsBlocked.GetValue() > 0 )
+	{
+		return;
+	}
+
+	OnLayersChanged.Broadcast(Notice.GetChangeListVec());
 }
 
 #endif // #if USE_USD_SDK

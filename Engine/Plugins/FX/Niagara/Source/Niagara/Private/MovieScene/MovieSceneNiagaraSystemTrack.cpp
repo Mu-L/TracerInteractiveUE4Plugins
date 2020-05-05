@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MovieScene/MovieSceneNiagaraSystemTrack.h"
 #include "CoreMinimal.h"
@@ -34,7 +34,10 @@ void UMovieSceneNiagaraSystemTrack::PostCompile(FMovieSceneEvaluationTrack& OutT
 	{
 		UMovieSceneNiagaraSystemSpawnSection* SpawnSection = CastChecked<UMovieSceneNiagaraSystemSpawnSection>(*SpawnSectionPtr);
 		UMovieScene* ParentMovieScene = GetTypedOuter<UMovieScene>();
-		OutTrack.SetTrackImplementation(FMovieSceneNiagaraSystemTrackImplementation(SpawnSection->GetInclusiveStartFrame(), SpawnSection->GetExclusiveEndFrame()));
+		OutTrack.SetTrackImplementation(FMovieSceneNiagaraSystemTrackImplementation(
+			SpawnSection->GetInclusiveStartFrame(), SpawnSection->GetExclusiveEndFrame(),
+			SpawnSection->GetSectionStartBehavior(), SpawnSection->GetSectionEvaluateBehavior(),
+			SpawnSection->GetSectionEndBehavior(), SpawnSection->GetAgeUpdateMode()));
 	}
 }
 

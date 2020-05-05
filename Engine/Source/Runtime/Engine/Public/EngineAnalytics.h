@@ -1,12 +1,14 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "IAnalyticsProviderET.h" // NOTE: Consider changing the code to replace IAnalyticProvider.h by IAnalyticProviderET.h
 
 class FEngineSessionManager;
 class IAnalyticsProvider;
 class IAnalyticsProviderET;
+struct FAnalyticsEventAttribute;
 
 /**
  * The public interface for the editor's analytics provider singleton.
@@ -25,15 +27,23 @@ public:
 	 * Return the provider instance. Not valid outside of Initialize/Shutdown calls.
 	 * Note: must check IsAvailable() first else this code will assert if the provider is not valid.
 	 */
-	static ENGINE_API IAnalyticsProvider& GetProvider();
+	static ENGINE_API IAnalyticsProviderET& GetProvider();
+
 	/** Helper function to determine if the provider is valid. */
 	static ENGINE_API bool IsAvailable() { return Analytics.IsValid(); }
+
 	/** Called to initialize the singleton. */
 	static ENGINE_API void Initialize();
+
 	/** Called to shut down the singleton */
 	static ENGINE_API void Shutdown(bool bIsEngineShutdown = false);
 
+	/** General report event function. */
+	static ENGINE_API void ReportEvent(const FString& EventName, const TArray<FAnalyticsEventAttribute>& Attributes);
+
 	static ENGINE_API void Tick(float DeltaTime);
+
+	static ENGINE_API void LowDriveSpaceDetected();
 
 private:
 	static bool bIsInitialized;

@@ -1,9 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
-#include "Trace/Trace.h"
-#include "Trace/Detail/EventDef.h"
+#include "Trace/Trace.h" // should be Config.h :(
 
 #if UE_TRACE_ENABLED
+
+#include "Trace/Detail/EventDef.h"
 
 namespace Trace
 {
@@ -12,9 +13,8 @@ namespace Private
 {
 
 ////////////////////////////////////////////////////////////////////////////////
-bool	Writer_SendTo(const ANSICHAR*);
+bool	Writer_SendTo(const ANSICHAR*, uint32);
 bool	Writer_WriteTo(const ANSICHAR*);
-uint32	Writer_EventToggle(const ANSICHAR*, bool);
 
 } // namespace Private
 
@@ -32,14 +32,22 @@ static void ToAnsiCheap(ANSICHAR (&Dest)[DestSize], const WIDECHAR* Src)
 			break;
 		}
 	}
+	Dest[DestSize - 1] = '\0';
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-bool SendTo(const TCHAR* InHost)
+bool Initialize()
+{
+	FChannel::ToggleAll(false);
+	return true;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+bool SendTo(const TCHAR* InHost, uint32 Port)
 {
 	char Host[32];
 	ToAnsiCheap(Host, InHost);
-	return Private::Writer_SendTo(Host);
+	return Private::Writer_SendTo(Host, Port);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -51,12 +59,18 @@ bool WriteTo(const TCHAR* InPath)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-uint32 ToggleEvent(const TCHAR* Wildcard, bool bState)
+bool ToggleChannel(const TCHAR* ChannelName, bool bEnabled)
 {
-	ANSICHAR WildcardA[64];
-	ToAnsiCheap(WildcardA, Wildcard);
+	ANSICHAR ChannelNameA[64];
+	ToAnsiCheap(ChannelNameA, ChannelName);
 
-	return Private::Writer_EventToggle(WildcardA, bState);
+	return FChannel::Toggle(ChannelNameA, bEnabled);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+bool ToggleChannel(struct FChannel& Channel, bool bEnabled)
+{
+	return FChannel::Toggle(&Channel, bEnabled);
 }
 
 } // namespace Trace

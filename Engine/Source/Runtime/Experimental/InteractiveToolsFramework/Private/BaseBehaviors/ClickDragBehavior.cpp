@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BaseBehaviors/ClickDragBehavior.h"
 
@@ -18,6 +18,8 @@ void UClickDragInputBehavior::Initialize(IClickDragBehaviorTarget* TargetIn)
 
 FInputCaptureRequest UClickDragInputBehavior::WantsCapture(const FInputDeviceState& Input)
 {
+	bInClickDrag = false;	// should never be true here, but weird things can happen w/ focus
+
 	if (IsPressed(Input) && (ModifierCheckFunc == nullptr || ModifierCheckFunc(Input)) )
 	{
 		FInputRayHit HitResult = Target->CanBeginClickDragSequence(GetDeviceRay(Input));
@@ -33,23 +35,28 @@ FInputCaptureRequest UClickDragInputBehavior::WantsCapture(const FInputDeviceSta
 FInputCaptureUpdate UClickDragInputBehavior::BeginCapture(const FInputDeviceState& Input, EInputCaptureSide Side)
 {
 	Modifiers.UpdateModifiers(Input, Target);
-	OnClickPress(Input, Side);
+	OnClickPressInternal(Input, Side);
+	bInClickDrag = true;
 	return FInputCaptureUpdate::Begin(this, EInputCaptureSide::Any);
 }
 
 
 FInputCaptureUpdate UClickDragInputBehavior::UpdateCapture(const FInputDeviceState& Input, const FInputCaptureData& Data)
 {
-	Modifiers.UpdateModifiers(Input, Target);
+	if (bUpdateModifiersDuringDrag)
+	{
+		Modifiers.UpdateModifiers(Input, Target);
+	}
 
 	if (IsReleased(Input)) 
 	{
-		OnClickRelease(Input, Data);
+		OnClickReleaseInternal(Input, Data);
+		bInClickDrag = false;
 		return FInputCaptureUpdate::End();
 	}
 	else
 	{
-		OnClickDrag(Input, Data);
+		OnClickDragInternal(Input, Data);
 		return FInputCaptureUpdate::Continue();
 	}
 }
@@ -58,21 +65,22 @@ FInputCaptureUpdate UClickDragInputBehavior::UpdateCapture(const FInputDeviceSta
 void UClickDragInputBehavior::ForceEndCapture(const FInputCaptureData& Data)
 {
 	Target->OnTerminateDragSequence();
+	bInClickDrag = false;
 }
 
 
 
-void UClickDragInputBehavior::OnClickPress(const FInputDeviceState& Input, EInputCaptureSide Side)
+void UClickDragInputBehavior::OnClickPressInternal(const FInputDeviceState& Input, EInputCaptureSide Side)
 {
 	Target->OnClickPress(GetDeviceRay(Input));
 }
 
-void UClickDragInputBehavior::OnClickDrag(const FInputDeviceState& Input, const FInputCaptureData& Data)
+void UClickDragInputBehavior::OnClickDragInternal(const FInputDeviceState& Input, const FInputCaptureData& Data)
 {
 	Target->OnClickDrag(GetDeviceRay(Input));
 }
 
-void UClickDragInputBehavior::OnClickRelease(const FInputDeviceState& Input, const FInputCaptureData& Data)
+void UClickDragInputBehavior::OnClickReleaseInternal(const FInputDeviceState& Input, const FInputCaptureData& Data)
 {
 	Target->OnClickRelease(GetDeviceRay(Input));
 }

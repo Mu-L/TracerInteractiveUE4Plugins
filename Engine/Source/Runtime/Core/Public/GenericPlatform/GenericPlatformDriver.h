@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -265,6 +265,8 @@ struct FGPUDriverInfo
 	FString UserDriverVersion;
 	// e.g. 3-13-2015
 	FString DriverDate;
+	// e.g. D3D11, D3D12
+	FString RHIName;
 
 	bool IsValid() const
 	{
@@ -328,6 +330,8 @@ struct FBlackListEntry
 	FString DriverVersionString;
 	// optional, e.g. "<=MM-DD-YYYY"
 	FString DriverDateString;
+	// optional, e.g. "D3D11", "D3D12"
+	FString RHIName;
 	// required
 	FString Reason;
 
@@ -339,6 +343,8 @@ struct FBlackListEntry
 		FParse::Value(In, TEXT("DriverDate="), DriverDateString);
 		ensure(!DriverVersionString.IsEmpty() || !DriverDateString.IsEmpty());
 
+		FParse::Value(In, TEXT("RHI="), RHIName);
+		
 		// later:
 //		FParse::Value(In, TEXT("DeviceId="), DeviceId);
 //		FParse::Value(In, TEXT("OS="), OS);
@@ -355,6 +361,12 @@ struct FBlackListEntry
 	{
 		if (IsValid())
 		{
+			// If RHI specified, ignore if mismatched
+			if (!RHIName.IsEmpty() && RHIName != Info.RHIName)
+			{
+				return false;
+			}
+
 			if (!DriverVersionString.IsEmpty())
 			{
 				return CompareStringOp(*DriverVersionString, *Info.GetUnifiedDriverVersion());
@@ -375,13 +387,13 @@ struct FBlackListEntry
 
 				FString DriverDateComparisonOp = DriverDateString.Left(OpLength);
 				FString TrimmedDriverDateString = DriverDateString.RightChop(OpLength);
-				TrimmedDriverDateString.Split(TEXT("-"), &TempMonthDay, &TempYear, ESearchCase::IgnoreCase, ESearchDir::FromEnd);
-				TempMonthDay.Split(TEXT("-"), &TempMonth, &TempDay, ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+				TrimmedDriverDateString.Split(TEXT("-"), &TempMonthDay, &TempYear, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+				TempMonthDay.Split(TEXT("-"), &TempMonth, &TempDay, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
 				
 				FDateTime TestDate(FCString::Atoi(*TempYear), FCString::Atoi(*TempMonth), FCString::Atoi(*TempDay));
 
-				Info.DriverDate.Split(TEXT("-"), &TempMonthDay, &TempYear, ESearchCase::IgnoreCase, ESearchDir::FromEnd);
-				TempMonthDay.Split(TEXT("-"), &TempMonth, &TempDay, ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+				Info.DriverDate.Split(TEXT("-"), &TempMonthDay, &TempYear, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+				TempMonthDay.Split(TEXT("-"), &TempMonth, &TempDay, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
 
 				FDateTime InfoDate(FCString::Atoi(*TempYear), FCString::Atoi(*TempMonth), FCString::Atoi(*TempDay));
 
@@ -505,7 +517,7 @@ struct FGPUHardware
 	}	
 	
 	// @return a driver version intended to be shown to the user e.g. "15.30.1025.1001 12/17/2015 (Crimson Edition 15.12)"
-	FString GetSuggestedDriverVersion() const
+	FString GetSuggestedDriverVersion(const FString& InRHIName) const
 	{
 		const TCHAR* Section = GetVendorSectionName();
 
@@ -513,7 +525,32 @@ struct FGPUHardware
 
 		if(Section)
 		{
-			GConfig->GetString(Section, TEXT("SuggestedDriverVersion"), Ret, GHardwareIni);
+			TArray<FString> SuggestedDriverVersions;
+			GConfig->GetArray(Section, TEXT("SuggestedDriverVersion"), SuggestedDriverVersions, GHardwareIni);
+
+			// Find specific RHI version first
+			if (InRHIName.Len() > 0)
+			{
+				for (const FString& SuggestedVersion : SuggestedDriverVersions)
+				{
+					int32 Found = SuggestedVersion.Find(InRHIName);
+					if (Found != INDEX_NONE && Found > 0 && SuggestedVersion[Found - 1] == ';')
+					{
+						Ret = SuggestedVersion.Left(Found - 1);
+						return Ret;
+					}
+				}
+			}
+
+			// Return the first generic one
+			for (const FString& SuggestedVersion : SuggestedDriverVersions)
+			{
+				int32 Found = 0;
+				if (!SuggestedVersion.FindChar(';', Found))
+				{
+					return SuggestedVersion;
+				}
+			}
 		}
 
 		return Ret;

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Engine/PostProcessVolume.h"
 #include "Engine/CollisionProfile.h"
@@ -76,7 +76,7 @@ void APostProcessVolume::PostEditChangeProperty(FPropertyChangedEvent& PropertyC
 	}
 }
 
-bool APostProcessVolume::CanEditChange(const UProperty* InProperty) const
+bool APostProcessVolume::CanEditChange(const FProperty* InProperty) const
 {
 	if (InProperty)
 	{
@@ -145,12 +145,6 @@ bool APostProcessVolume::CanEditChange(const UProperty* InProperty) const
 				PropertyName == GET_MEMBER_NAME_STRING_CHECKED(FPostProcessSettings, HistogramLogMax) )
 			{
 				return Settings.AutoExposureMethod == EAutoExposureMethod::AEM_Histogram;
-			}
-
-			// Parameters supported by only the histogram AutoExposure
-			if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(FPostProcessSettings, AutoExposureCalibrationConstant))
-			{
-				return Settings.AutoExposureMethod == EAutoExposureMethod::AEM_Basic;
 			}
 
 			// Parameters that are only used for the Sum of Gaussian bloom / not the texture based fft bloom

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MovieSceneGeometryCacheTemplate.h"
 #include "Compilation/MovieSceneCompilerRules.h"
@@ -85,14 +85,21 @@ struct FGeometryCacheExecutionToken
 				if (UObject* Obj = WeakObj.Get())
 				{
 					UGeometryCacheComponent* GeometryComp = GeometryMeshComponentFromObject(Obj);
-					if (GeometryComp)
+					if (GeometryComp && GeometryComp->IsRegistered())
 					{
-						if (Params.GeometryCacheAsset != GeometryComp->GetGeometryCache())
+						// Set the GeometryCache on the component only if it's set and valid in the Params
+						if (Params.GeometryCacheAsset && Params.GeometryCacheAsset != GeometryComp->GetGeometryCache())
 						{
 							UGeometryCache* GeomCache = Params.GeometryCacheAsset;
 							{
 								GeometryComp->SetGeometryCache(GeomCache);
 							}
+						}
+						else
+						{
+							// It could be unset if the Params was referencing a transient GeometryCache
+							// In that case, use the GeometryCache that is set on the component
+							Params.GeometryCacheAsset = GeometryComp->GetGeometryCache();
 						}
 						Player.SavePreAnimatedState(*GeometryComp, FPreAnimatedGeometryCacheTokenProducer::GetAnimTypeID(), FPreAnimatedGeometryCacheTokenProducer());
 						GeometryComp->SetManualTick(true);

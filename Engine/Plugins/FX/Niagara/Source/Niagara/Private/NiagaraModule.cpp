@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraModule.h"
 #include "Modules/ModuleManager.h"
@@ -23,14 +23,23 @@
 #include "DeviceProfiles/DeviceProfileManager.h"
 #include "Interfaces/ITargetPlatform.h"
 #include "DeviceProfiles/DeviceProfile.h"
+#include "Scalability.h"
 
 IMPLEMENT_MODULE(INiagaraModule, Niagara);
 
 #define LOCTEXT_NAMESPACE "NiagaraModule"
 
+int32 FNiagaraCompileHashVisitor::LogCompileIdGeneration = 0;
+static FAutoConsoleVariableRef CVarLogCompileIdGeneration(
+	TEXT("fx.LogCompileIdGeneration"),
+	FNiagaraCompileHashVisitor::LogCompileIdGeneration,
+	TEXT("If > 0 all compile id generation will be logged. If 2 or greater, log detailed info. \n"),
+	ECVF_Default
+);
+
+
 float INiagaraModule::EngineGlobalSpawnCountScale = 1.0f;
 float INiagaraModule::EngineGlobalSystemCountScale = 1.0f;
-int32 INiagaraModule::EngineDetailLevel = 4;
 
 int32 GEnableVerboseNiagaraChangeIdLogging = 0;
 static FAutoConsoleVariableRef CVarEnableVerboseNiagaraChangeIdLogging(
@@ -38,48 +47,6 @@ static FAutoConsoleVariableRef CVarEnableVerboseNiagaraChangeIdLogging(
 	GEnableVerboseNiagaraChangeIdLogging,
 	TEXT("If > 0 Verbose change id logging info will be printed. \n"),
 	ECVF_Default
-);
-
-#if WITH_EDITORONLY_DATA
-FNiagaraParameterStore INiagaraModule::FixedSystemInstanceParameters = FNiagaraParameterStore();
-#endif
-
-/**
-Use Shader Stages CVar.
-Enable the custom dispatch for multiple shader stages 
-*/
-static TAutoConsoleVariable<int32> CVarUseShaderStages(
-	TEXT("fx.UseShaderStages"), 
-	0, 
-	TEXT("Enable or not the shader stages within Niagara (WIP feature only there for temporary testing)."),
-	ECVF_Default);
-
-/**
-Detail Level CVar.
-Effectively replaces the DetaiMode feature but allows for a rolling range of new hardware and emitters to target them.
-TODO: Possible that this might be more broadly useful across the engine as a replacement for DetailMode so placing in "r." rather than "fx."
-*/
-static TAutoConsoleVariable<float> CVarDetailLevel(
-	TEXT("r.DetailLevel"),
-	4,
-	TEXT("The detail level for use with Niagara.\n")
-	TEXT("If this value does not fall within an Emitter's MinDetailLevel and MaxDetailLevel range, then it will be disabled. \n")
-	TEXT("\n")
-	TEXT("Default = 4"),
-	ECVF_Scalability);
-
-static TAutoConsoleVariable<float> CVarPruneEmittersOnCookByDetailLevel(
-	TEXT("fx.NiagaraPruneEmittersOnCookByDetailLevel"),
-	0,
-	TEXT("Whether to eliminate all emitters that don't match the detail level.\n")
-	TEXT("This will only work if scalability settings affecting detail level can not be changed at runtime (depends on platform).\n"),
-	ECVF_ReadOnly);
-
-static FAutoConsoleVariableRef CVarNiaraGlobalSpawnCountScale(
-	TEXT("fx.NiagaraGlobalSpawnCountScale"),
-	INiagaraModule::EngineGlobalSpawnCountScale,
-	TEXT("A global scale on spawn counts in Niagara. \n"),
-	ECVF_Scalability
 );
 
 static FAutoConsoleVariableRef CVarNiaraGlobalSystemCountScale(
@@ -111,6 +78,7 @@ FNiagaraVariable INiagaraModule::Engine_Owner_SystemWorldToLocalNoScale;
 
 FNiagaraVariable INiagaraModule::Engine_Owner_TimeSinceRendered;
 FNiagaraVariable INiagaraModule::Engine_Owner_LODDistance;
+FNiagaraVariable INiagaraModule::Engine_Owner_LODDistanceFraction;
 
 FNiagaraVariable INiagaraModule::Engine_Owner_ExecutionState;
 
@@ -188,9 +156,6 @@ void INiagaraModule::StartupModule()
 	FModuleManager::Get().LoadModule(TEXT("NiagaraEditor"));
 #endif
 
-	CVarDetailLevel.AsVariable()->SetOnChangedCallback(FConsoleVariableDelegate::CreateRaw(this, &INiagaraModule::OnChangeDetailLevel));
-	EngineDetailLevel = CVarDetailLevel.GetValueOnGameThread();
-
 	//Init commonly used FNiagaraVariables
 
 	Engine_DeltaTime = FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("Engine.DeltaTime"));
@@ -216,6 +181,7 @@ void INiagaraModule::StartupModule()
 
 	Engine_Owner_TimeSinceRendered = FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("Engine.Owner.TimeSinceRendered"));
 	Engine_Owner_LODDistance = FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("Engine.Owner.LODDistance"));
+	Engine_Owner_LODDistanceFraction = FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("Engine.Owner.LODDistanceFraction"));
 
 	Engine_Owner_ExecutionState = FNiagaraVariable(FNiagaraTypeDefinition::GetExecutionStateEnum(), TEXT("Engine.Owner.ExecutionState"));
 	
@@ -292,14 +258,15 @@ void INiagaraModule::StartupModule()
 		return FNiagaraTypeRegistry::GetDefaultDataInterfaceByName(DIClassName);
 	}));
 
-	FFXSystemInterface::RegisterCustomFXSystem(NiagaraEmitterInstanceBatcher::Name, FCreateCustomFXSystemDelegate::CreateLambda([](ERHIFeatureLevel::Type InFeatureLevel, EShaderPlatform InShaderPlatform) -> FFXSystemInterface*
+	FFXSystemInterface::RegisterCustomFXSystem(
+		NiagaraEmitterInstanceBatcher::Name, 
+		FCreateCustomFXSystemDelegate::CreateLambda([](ERHIFeatureLevel::Type InFeatureLevel, EShaderPlatform InShaderPlatform, FGPUSortManager* InGPUSortManager) -> FFXSystemInterface*
 	{
-		return new NiagaraEmitterInstanceBatcher(InFeatureLevel, InShaderPlatform);
+		return new NiagaraEmitterInstanceBatcher(InFeatureLevel, InShaderPlatform, InGPUSortManager);
 	}));
 
-#if WITH_EDITORONLY_DATA
-	InitFixedSystemInstanceParameterStore();
-#endif
+	// Needed for NiagaraDataInterfaceAudioSpectrum
+	FModuleManager::Get().LoadModule(TEXT("SignalProcessing"));
 }
 
 void INiagaraModule::ShutdownRenderingResources()
@@ -317,7 +284,6 @@ void INiagaraModule::ShutdownModule()
 	INiagaraShaderModule& NiagaraShaderModule = FModuleManager::LoadModuleChecked<INiagaraShaderModule>("NiagaraShader");
 	NiagaraShaderModule.ResetOnRequestDefaultDataInterfaceHandler();
 
-	CVarDetailLevel.AsVariable()->SetOnChangedCallback(FConsoleVariableDelegate());
 	ShutdownRenderingResources();
 }
 
@@ -360,10 +326,16 @@ void INiagaraModule::UnregisterEditorOnlyDataUtilities(TSharedRef<INiagaraEditor
 	EditorOnlyDataUtilities.Reset();
 }
 
-TSharedPtr<FNiagaraVMExecutableData> INiagaraModule::CompileScript(const FNiagaraCompileRequestDataBase* InCompileData, const FNiagaraCompileOptions& InCompileOptions)
+int32 INiagaraModule::StartScriptCompileJob(const FNiagaraCompileRequestDataBase* InCompileData, const FNiagaraCompileOptions& InCompileOptions)
 {
 	checkf(ScriptCompilerDelegate.IsBound(), TEXT("Create default script compiler delegate not bound."));
 	return ScriptCompilerDelegate.Execute(InCompileData, InCompileOptions);
+}
+
+TSharedPtr<FNiagaraVMExecutableData> INiagaraModule::GetCompileJobResult(int32 JobID, bool bWait)
+{
+	checkf(ScriptCompilerDelegate.IsBound(), TEXT("Script compilation result delegate not bound."));
+	return CompilationResultDelegate.Execute(JobID, bWait);
 }
 
 FDelegateHandle INiagaraModule::RegisterScriptCompiler(FScriptCompiler ScriptCompiler)
@@ -380,6 +352,20 @@ void INiagaraModule::UnregisterScriptCompiler(FDelegateHandle DelegateHandle)
 	ScriptCompilerDelegate.Unbind();
 }
 
+
+FDelegateHandle INiagaraModule::RegisterCompileResultDelegate(FCheckCompilationResult ResultDelegate)
+{
+	checkf(CompilationResultDelegate.IsBound() == false, TEXT("Only one handler is allowed for the CompilationResultDelegate"));
+	CompilationResultDelegate = ResultDelegate;
+	return CompilationResultDelegate.GetHandle();
+}
+
+void INiagaraModule::UnregisterCompileResultDelegate(FDelegateHandle DelegateHandle)
+{
+	checkf(CompilationResultDelegate.IsBound(), TEXT("CompilationResultDelegate is not registered"));
+	checkf(CompilationResultDelegate.GetHandle() == DelegateHandle, TEXT("Can only unregister the CompilationResultDelegate with the handle it was registered with."));
+	CompilationResultDelegate.Unbind();
+}
 
 TSharedPtr<FNiagaraCompileRequestDataBase, ESPMode::ThreadSafe> INiagaraModule::Precompile(UObject* Obj)
 {
@@ -403,91 +389,6 @@ void INiagaraModule::UnregisterPrecompiler(FDelegateHandle DelegateHandle)
 
 #endif
 
-
-bool INiagaraModule::IsTargetPlatformIncludedInLevelRangeForCook(const ITargetPlatform* InTargetPlatform, const UNiagaraEmitter* InEmitter)
-{
-#if WITH_EDITORONLY_DATA
-	if (UDeviceProfile* DeviceProfile = UDeviceProfileManager::Get().FindProfile(InTargetPlatform->IniPlatformName()))
-	{
-		// get local scalability CVars that could cull this actor
-		int32 CVarCullBasedOnDetailLevel;
-		if (DeviceProfile->GetConsolidatedCVarValue(TEXT("fx.NiagaraPruneEmittersOnCookByDetailLevel"), CVarCullBasedOnDetailLevel) && CVarCullBasedOnDetailLevel == 1)
-		{
-			int32 CVarDetailLevelFoundValue;
-			if (InEmitter && DeviceProfile->GetConsolidatedCVarValue(TEXT("r.DetailLevel"), CVarDetailLevelFoundValue))
-			{
-				// Check emitter's detail level range contains the platform's level
-				// If e.g. the emitter's detail level range is between 0 and 2  and the platform detail is 3 only,
-				// then we should cull it.
-				if (InEmitter->IsAllowedByDetailLevel(CVarDetailLevelFoundValue))
-				{
-					return true;
-				}
-				return false;
-			}
-		}
-	}
-#endif
-	return true;
-}
-
-#if WITH_EDITORONLY_DATA
-void INiagaraModule::InitFixedSystemInstanceParameterStore()
-{
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_POSITION, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_ROTATION, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_SCALE, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_VELOCITY, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_X_AXIS, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_Y_AXIS, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_Z_AXIS, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_LOCAL_TO_WORLD, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_WORLD_TO_LOCAL, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_LOCAL_TO_WORLD_TRANSPOSED, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_WORLD_TO_LOCAL_TRANSPOSED, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_LOCAL_TO_WORLD_NO_SCALE, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_WORLD_TO_LOCAL_NO_SCALE, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_DELTA_TIME, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_TIME, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_REAL_TIME, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_INV_DELTA_TIME, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_TIME_SINCE_RENDERED, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_EXECUTION_STATE, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_LOD_DISTANCE, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_SYSTEM_NUM_EMITTERS, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_SYSTEM_NUM_EMITTERS_ALIVE, true, false);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_SYSTEM_AGE);
-	FixedSystemInstanceParameters.AddParameter(SYS_PARAM_ENGINE_SYSTEM_TICK_COUNT);
-}
-#endif
-
-void INiagaraModule::OnChangeDetailLevel(class IConsoleVariable* CVar)
-{
-	//Can only change the detail level at runtime on when not cooked.
-#if WITH_EDITORONLY_DATA
-	int32 NewDetailLevel = CVar->GetInt();
-	if (EngineDetailLevel != NewDetailLevel)
-	{
-		EngineDetailLevel = NewDetailLevel;
-
-		// If the detail level has changed we have to reset all systems,
-		// and only activate ones that were previously active
-		for (TObjectIterator<UNiagaraComponent> It; It; ++It)
-		{
-			UNiagaraComponent* Comp = *It;
-			check(Comp);
-
-			const bool bWasActive = Comp->IsActive();
-			Comp->DestroyInstance();
-			if ( bWasActive )
-			{
-				Comp->Activate(true);
-			}
-		}
-	}
-#endif
-}
-
 //////////////////////////////////////////////////////////////////////////
 
 UScriptStruct* FNiagaraTypeDefinition::ParameterMapStruct;
@@ -510,6 +411,9 @@ UEnum* FNiagaraTypeDefinition::ExecutionStateEnum;
 UEnum* FNiagaraTypeDefinition::SimulationTargetEnum;
 UEnum* FNiagaraTypeDefinition::ExecutionStateSourceEnum;
 UEnum* FNiagaraTypeDefinition::ScriptUsageEnum;
+
+UEnum* FNiagaraTypeDefinition::ParameterScopeEnum;
+UEnum* FNiagaraTypeDefinition::ParameterPanelCategoryEnum;
 
 FNiagaraTypeDefinition FNiagaraTypeDefinition::ParameterMapDef;
 FNiagaraTypeDefinition FNiagaraTypeDefinition::IDDef;
@@ -548,7 +452,7 @@ TArray<FNiagaraTypeDefinition> FNiagaraTypeRegistry::RegisteredNumericTypes;
 
 bool FNiagaraTypeDefinition::IsDataInterface()const
 {
-	return Struct->IsChildOf(UNiagaraDataInterface::StaticClass());
+	return GetStruct()->IsChildOf(UNiagaraDataInterface::StaticClass());
 }
 
 void FNiagaraTypeDefinition::Init()
@@ -627,6 +531,9 @@ void FNiagaraTypeDefinition::Init()
 	ExecutionStateSourceEnum = StaticEnum<ENiagaraExecutionStateSource>();
 	SimulationTargetEnum = StaticEnum<ENiagaraSimTarget>();
 	ScriptUsageEnum = StaticEnum<ENiagaraScriptUsage>();
+
+	ParameterScopeEnum = StaticEnum<ENiagaraParameterScope>();
+	ParameterPanelCategoryEnum = StaticEnum<ENiagaraParameterPanelCategory>();
 	
 	RecreateUserDefinedTypeRegistry();
 }
@@ -638,6 +545,71 @@ bool FNiagaraTypeDefinition::IsValidNumericInput(const FNiagaraTypeDefinition& T
 		return true;
 	}
 	return false;
+}
+
+
+bool FNiagaraTypeDefinition::AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor) const
+{
+#if WITH_EDITORONLY_DATA
+	UStruct* TDStruct = GetStruct();
+	UClass* TDClass = GetClass();
+	UEnum* TDEnum = GetEnum();
+
+	if (TDEnum)
+	{
+		// Do we need to enumerate all the enum values and rebuild if that changes or are we ok with just knowing that there are the same  count of enum entries?
+		// For now, am just going to be ok with the number of entries. The actual string values don't matter so much.
+		FString CppType = TDEnum->CppType;
+		FString PathName = TDEnum->GetPathName();
+		InVisitor->UpdateString(TEXT("\tEnumPath"), PathName);
+		InVisitor->UpdateString(TEXT("\tEnumCppType"), CppType);
+		InVisitor->UpdatePOD(TEXT("\t\tNumEnums"),TDEnum->NumEnums());
+	}
+	else if (TDClass)
+	{
+		// For data interfaces, get the default object and the compile version so that we can properly update when code changes.
+		check(IsInGameThread());
+		UObject* TempObj = TDClass->GetDefaultObject(false);
+		check(TempObj);
+
+		FString ClassName = TDClass->GetPathName();
+		InVisitor->UpdateString(TEXT("\tClassName"), ClassName);
+
+		UNiagaraDataInterface* TempDI = Cast< UNiagaraDataInterface>(TempObj);
+		if (TempDI)
+		{
+			if (!TempDI->AppendCompileHash(InVisitor))
+			{
+				UE_LOG(LogNiagara, Warning, TEXT("Unable to generate AppendCompileHash for DI %s"), *TempDI->GetPathName());
+			}
+		}
+	}
+	else if (TDStruct)
+	{
+		FString ClassName = TDStruct->GetPathName();
+		InVisitor->UpdateString(TEXT("\tStructName"), ClassName);
+		// Structs are potentially changed, so we will want to register their actual types and variable names.
+		for (TFieldIterator<FProperty> PropertyIt(TDStruct, EFieldIteratorFlags::IncludeSuper, EFieldIteratorFlags::IncludeDeprecated); PropertyIt; ++PropertyIt)
+		{
+			FProperty* Property = *PropertyIt;
+			if (Property->HasMetaData(TEXT("SkipForCompileHash")))
+			{
+				continue;
+			}
+			InVisitor->UpdateString(TEXT("\t\tPropertyName"), Property->GetName());
+			InVisitor->UpdateString(TEXT("\t\tPropertyClass"), Property->GetClass()->GetName());
+		}
+	}
+	else
+	{
+		FString InvalidStr = TEXT("Invalid");
+		InVisitor->UpdateString(TEXT("\tTDName"), InvalidStr);
+	}
+
+	return true;
+#else
+	return false;
+#endif
 }
 
 void FNiagaraTypeDefinition::RecreateUserDefinedTypeRegistry()
@@ -869,6 +841,35 @@ FNiagaraTypeDefinition FNiagaraTypeDefinition::GetNumericOutputType(const TArray
 	return FNiagaraTypeDefinition::GetGenericNumericDef();
 }
 
+bool FNiagaraTypeDefinition::Serialize(FArchive& Ar)
+{
+	Ar.UsingCustomVersion(FNiagaraCustomVersion::GUID);
+	return false;
+}
+
+void FNiagaraTypeDefinition::PostSerialize(const FArchive& Ar)
+{
+#if WITH_EDITORONLY_DATA
+	if (Ar.IsLoading() && Ar.CustomVer(FNiagaraCustomVersion::GUID) < FNiagaraCustomVersion::MemorySaving)
+	{
+		if (Enum_DEPRECATED != nullptr)
+		{
+			UnderlyingType = UT_Enum;
+			ClassStructOrEnum = Enum_DEPRECATED;
+		}
+		else if (Struct_DEPRECATED != nullptr)
+		{
+			UnderlyingType = Struct_DEPRECATED->IsA<UClass>() ? UT_Class : UT_Struct;
+			ClassStructOrEnum = Struct_DEPRECATED;
+		}
+		else
+		{
+			UnderlyingType = UT_None;
+			ClassStructOrEnum = nullptr;
+		}
+	}
+#endif
+}
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -927,6 +928,80 @@ void INiagaraModule::ProcessShaderCompilationQueue()
 	return OnProcessQueue.Execute();
 }
 
+#if WITH_EDITOR
+const TArray<FNiagaraVariable>& FNiagaraGlobalParameters::GetVariables()
+{
+	static const TArray<FNiagaraVariable> Variables =
+	{
+		SYS_PARAM_ENGINE_DELTA_TIME,
+		SYS_PARAM_ENGINE_INV_DELTA_TIME,
+		SYS_PARAM_ENGINE_TIME,
+		SYS_PARAM_ENGINE_REAL_TIME,
+	};
+
+	return Variables;
+}
+
+const TArray<FNiagaraVariable>& FNiagaraSystemParameters::GetVariables()
+{
+	static const TArray<FNiagaraVariable> Variables =
+	{
+		SYS_PARAM_ENGINE_TIME_SINCE_RENDERED,
+		SYS_PARAM_ENGINE_LOD_DISTANCE,
+		SYS_PARAM_ENGINE_LOD_DISTANCE_FRACTION,
+		SYS_PARAM_ENGINE_SYSTEM_AGE,
+		SYS_PARAM_ENGINE_EXECUTION_STATE,
+		SYS_PARAM_ENGINE_SYSTEM_TICK_COUNT,
+		SYS_PARAM_ENGINE_SYSTEM_NUM_EMITTERS,
+		SYS_PARAM_ENGINE_SYSTEM_NUM_EMITTERS_ALIVE,
+	};
+
+	return Variables;
+}
+
+const TArray<FNiagaraVariable>& FNiagaraOwnerParameters::GetVariables()
+{
+	static const TArray<FNiagaraVariable> Variables =
+	{
+		SYS_PARAM_ENGINE_LOCAL_TO_WORLD,
+		SYS_PARAM_ENGINE_WORLD_TO_LOCAL,
+		SYS_PARAM_ENGINE_LOCAL_TO_WORLD_TRANSPOSED,
+		SYS_PARAM_ENGINE_WORLD_TO_LOCAL_TRANSPOSED,
+		SYS_PARAM_ENGINE_LOCAL_TO_WORLD_NO_SCALE,
+		SYS_PARAM_ENGINE_WORLD_TO_LOCAL_NO_SCALE,
+		SYS_PARAM_ENGINE_ROTATION,
+		SYS_PARAM_ENGINE_POSITION,
+		SYS_PARAM_ENGINE_VELOCITY,
+		SYS_PARAM_ENGINE_X_AXIS,
+		SYS_PARAM_ENGINE_Y_AXIS,
+		SYS_PARAM_ENGINE_Z_AXIS,
+		SYS_PARAM_ENGINE_SCALE,
+	};
+
+	return Variables;
+}
+
+const TArray<FNiagaraVariable>& FNiagaraEmitterParameters::GetVariables()
+{
+	static const FName NAME_NiagaraStructPadding0 = "Engine.Emitter.PaddingInt32_0";
+	static const FName NAME_NiagaraStructPadding1 = "Engine.Emitter.PaddingInt32_1";
+	static const FName NAME_NiagaraStructPadding2 = "Engine.Emitter.PaddingInt32_2";
+
+	static const TArray<FNiagaraVariable> Variables =
+	{
+		SYS_PARAM_ENGINE_EMITTER_NUM_PARTICLES,
+		SYS_PARAM_ENGINE_EMITTER_TOTAL_SPAWNED_PARTICLES,
+		SYS_PARAM_ENGINE_EMITTER_SPAWN_COUNT_SCALE,
+		SYS_PARAM_EMITTER_AGE,
+
+		SYS_PARAM_EMITTER_RANDOM_SEED,
+		FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), NAME_NiagaraStructPadding0),
+		FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), NAME_NiagaraStructPadding1),
+		FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), NAME_NiagaraStructPadding2),
+	};
+
+	return Variables;
+}
+#endif
+
 #undef LOCTEXT_NAMESPACE
-
-

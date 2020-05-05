@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ViewModels/Stack/NiagaraStackParameterStoreEntry.h"
 #include "NiagaraScriptSource.h"
@@ -23,6 +23,7 @@
 #include "AssetRegistryModule.h"
 #include "ARFilter.h"
 #include "EdGraph/EdGraphPin.h"
+#include "NiagaraConstants.h"
 
 
 #define LOCTEXT_NAMESPACE "UNiagaraStackParameterStoreEntry"
@@ -58,12 +59,12 @@ void UNiagaraStackParameterStoreEntry::RefreshChildrenInternal(const TArray<UNia
 {
 	RefreshValueAndHandle();
 
-	if (ValueObject != nullptr)
+	if (ValueObject.IsValid() && ValueObject->IsA<UNiagaraDataInterface>())
 	{
 		if(ValueObjectEntry == nullptr || ValueObjectEntry->GetObject() != ValueObject)
 		{
 			ValueObjectEntry = NewObject<UNiagaraStackObject>(this);
-			ValueObjectEntry->Initialize(CreateDefaultChildRequiredData(), ValueObject, GetOwnerStackItemEditorDataKey());
+			ValueObjectEntry->Initialize(CreateDefaultChildRequiredData(), ValueObject.Get(), GetOwnerStackItemEditorDataKey());
 		}
 		NewChildren.Add(ValueObjectEntry);
 	}
@@ -106,7 +107,7 @@ TSharedPtr<FStructOnScope> UNiagaraStackParameterStoreEntry::GetValueStruct()
 
 UObject* UNiagaraStackParameterStoreEntry::GetValueObject()
 {
-	return ValueObject;
+	return ValueObject.Get();
 }
 
 void UNiagaraStackParameterStoreEntry::NotifyBeginValueChange()
@@ -170,24 +171,6 @@ void UNiagaraStackParameterStoreEntry::Reset()
 	GetSystemViewModel()->ResetSystem();
 }
 
-bool UNiagaraStackParameterStoreEntry::CanRenameInput() const
-{
-	return true; 
-}
-
-bool UNiagaraStackParameterStoreEntry::GetIsRenamePending() const
-{
-	return CanRenameInput() && GetStackEditorData().GetModuleInputIsRenamePending(ParameterName.ToString());
-}
-
-void UNiagaraStackParameterStoreEntry::SetIsRenamePending(bool bIsRenamePending)
-{
-	if (CanRenameInput())
-	{
-		GetStackEditorData().SetModuleInputIsRenamePending(ParameterName.ToString(), bIsRenamePending);
-	}
-}
-
 TArray<UEdGraphPin*> UNiagaraStackParameterStoreEntry::GetOwningPins()
 {
 	TArray<UNiagaraGraph*> GraphsToCheck;
@@ -233,22 +216,20 @@ TArray<UEdGraphPin*> UNiagaraStackParameterStoreEntry::GetOwningPins()
 	return OwningPins;
 }
 
-void UNiagaraStackParameterStoreEntry::RenameInput(FString NewName)
+void UNiagaraStackParameterStoreEntry::OnRenamed(FText NewName)
 {
-	FName NewFName = FName(*NewName);
-	FString ActualNameString = NewName;
-	FString NamespacePrefix = FNiagaraParameterHandle::UserNamespace.ToString() + ".";
-	if (NewName.Contains(NamespacePrefix))
+	FString ActualNameString = NewName.ToString();
+	FString NamespacePrefix = FNiagaraConstants::UserNamespace.ToString() + ".";
+	if (ActualNameString.Contains(NamespacePrefix))
 	{
-		ActualNameString = NewName.Replace(*NamespacePrefix, TEXT(""));
+		ActualNameString = ActualNameString.Replace(*NamespacePrefix, TEXT(""));
 	}
 	FName ActualName = FName(*ActualNameString);
 	// what if it's not user namespace? dehardcode.
-	FNiagaraParameterHandle ParameterHandle(FNiagaraParameterHandle::UserNamespace, ActualName); 
+	FNiagaraParameterHandle ParameterHandle(FNiagaraConstants::UserNamespace, ActualName); 
 	FName VariableName = ParameterHandle.GetParameterHandleString();
 	if (VariableName != ParameterName)
 	{
-
 		// destroy links, rename parameter and rebuild links
 		TArray<UEdGraphPin*> OwningPins = GetOwningPins();
 		TArray<UEdGraphPin*> LinkedPins;
@@ -305,19 +286,19 @@ void UNiagaraStackParameterStoreEntry::Delete()
 	TArray<UEdGraphPin*> OwningPins = GetOwningPins();
 	RemovePins(OwningPins);
 
+	// Cache these here since the entry will be finalized when the owning parameter store changes.
+	TSharedPtr<FNiagaraSystemViewModel> CachedSystemViewModel = GetSystemViewModel();
+	UNiagaraDataInterface* DataInterface = Cast<UNiagaraDataInterface>(ValueObject.Get());
+
 	//remove from store
 	Owner->Modify();
 	ParameterStore->RemoveParameter(FNiagaraVariable(InputType, ParameterName));
-	if (InputType.IsDataInterface())
-	{
-		UNiagaraDataInterface* DataInterface = NewObject<UNiagaraDataInterface>(this, const_cast<UClass*>(InputType.GetClass()));
-		if (DataInterface != nullptr)
-		{
-			GetSystemViewModel()->NotifyDataObjectChanged(DataInterface);
-		}
-	}
 
-	ParameterDeletedDelegate.Broadcast();
+	// Notify the system view model that the DI has been modifier.
+	if (CachedSystemViewModel.IsValid() && DataInterface != nullptr)
+	{
+		CachedSystemViewModel->NotifyDataObjectChanged(DataInterface);
+	}
 }
 
 void UNiagaraStackParameterStoreEntry::RemovePins(TArray<UEdGraphPin*> OwningPins /*, bool bSetPreviousValue*/)
@@ -351,8 +332,8 @@ void UNiagaraStackParameterStoreEntry::RemovePins(TArray<UEdGraphPin*> OwningPin
 					UNiagaraDataInterface* CurrentValueDataInterface = Cast<UNiagaraDataInterface>(GetCurrentValueObject());
 					if (CurrentValueDataInterface != nullptr)
 					{
-						UNiagaraDataInterface* OverrideObj = NewObject<UNiagaraDataInterface>(this, const_cast<UClass*>(InputType.GetClass()));
-						FNiagaraStackGraphUtilities::SetDataValueObjectForFunctionInput(*OverridePin, const_cast<UClass*>(InputType.GetClass()), CurrentValueDataInterface->GetName(), OverrideObj);
+						UNiagaraDataInterface* OverrideObj;
+						FNiagaraStackGraphUtilities::SetDataValueObjectForFunctionInput(*OverridePin, const_cast<UClass*>(InputType.GetClass()), InputType.GetClass()->GetName(), OverrideObj);
 						CurrentValueDataInterface->CopyTo(OverrideObj);
 					}
 				}
@@ -367,11 +348,6 @@ void UNiagaraStackParameterStoreEntry::RemovePins(TArray<UEdGraphPin*> OwningPin
 UNiagaraStackParameterStoreEntry::FOnValueChanged& UNiagaraStackParameterStoreEntry::OnValueChanged()
 {
 	return ValueChangedDelegate;
-}
-
-UNiagaraStackParameterStoreEntry::FOnParameterDeleted& UNiagaraStackParameterStoreEntry::OnParameterDeleted()
-{
-	return ParameterDeletedDelegate;
 }
 
 TSharedPtr<FNiagaraVariable> UNiagaraStackParameterStoreEntry::GetCurrentValueVariable()
@@ -407,7 +383,7 @@ UObject* UNiagaraStackParameterStoreEntry::GetCurrentValueObject()
 
 bool UNiagaraStackParameterStoreEntry::IsUniqueName(FString NewName)
 {
-	FString NamespacePrefix = FNiagaraParameterHandle::UserNamespace.ToString() + "."; // correcting name of variable for comparison, all user variables start with "User."
+	FString NamespacePrefix = FNiagaraConstants::UserNamespace.ToString() + "."; // correcting name of variable for comparison, all user variables start with "User."
 	if (!NewName.Contains(NamespacePrefix))
 	{
 		NewName = NamespacePrefix + NewName;

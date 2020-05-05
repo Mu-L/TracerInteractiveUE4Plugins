@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	StaticMeshBuild.cpp: Static mesh building.
@@ -145,14 +145,28 @@ void UStaticMesh::BatchBuild(const TArray<UStaticMesh*>& InStaticMeshes, bool bI
 
 	if (StaticMeshesToProcess.Num())
 	{
-		// Ensure those modules are loaded on the main thread - we'll need them in async tasks
-		FModuleManager::Get().LoadModuleChecked<IMeshBuilderModule>(TEXT("MeshBuilder"));
-		FModuleManager::Get().LoadModuleChecked<IMeshReductionManagerModule>(TEXT("MeshReductionInterface"));
-
 		// Make sure the target platform is properly initialized before accessing it from multiple threads
 		ITargetPlatformManagerModule& TargetPlatformManager = GetTargetPlatformManagerRef();
 		ITargetPlatform* RunningPlatform = TargetPlatformManager.GetRunningTargetPlatform();
 		check(RunningPlatform);
+
+		// Ensure those modules are loaded on the main thread - we'll need them in async tasks
+		FModuleManager::Get().LoadModuleChecked<IMeshReductionManagerModule>(TEXT("MeshReductionInterface"));
+		IMeshBuilderModule::GetForRunningPlatform();
+		for (const ITargetPlatform* TargetPlatform : TargetPlatformManager.GetActiveTargetPlatforms())
+		{
+			IMeshBuilderModule::GetForPlatform(TargetPlatform);
+		}
+
+		for (UStaticMesh* StaticMesh : StaticMeshesToProcess)
+		{
+			if (StaticMesh->RenderData)
+			{
+				// Finish any previous async builds before modifying RenderData
+				// This can happen during import as the mesh is rebuilt redundantly
+				GDistanceFieldAsyncQueue->BlockUntilBuildComplete(StaticMesh, true);
+			}
+		}
 
 		// Detach all instances of those static meshes from the scene.
 		FStaticMeshComponentRecreateRenderStateContext RecreateRenderStateContext(StaticMeshesToProcess, false);
@@ -251,13 +265,6 @@ void UStaticMesh::PreBuildInternal()
 	// Flush the resource release commands to the rendering thread to ensure that the build doesn't occur while a resource is still
 	// allocated, and potentially accessing the UStaticMesh.
 	ReleaseResourcesFence.Wait();
-
-	if (RenderData)
-	{
-		// Finish any previous async builds before modifying RenderData
-		// This can happen during import as the mesh is rebuilt redundantly
-		GDistanceFieldAsyncQueue->BlockUntilBuildComplete(this, true);
-	}
 }
 
 bool UStaticMesh::BuildInternal(bool bInSilent, TArray<FText> * OutErrors)

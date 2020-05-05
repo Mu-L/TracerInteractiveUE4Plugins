@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DisplaceMeshTool.h"
 #include "InteractiveToolManager.h"
@@ -58,7 +58,8 @@ namespace {
 		}
 	}
 
-	namespace ComputeDisplacement {
+	namespace ComputeDisplacement 
+	{
 		void Constant(const FDynamicMesh3& Mesh,
 				const TArray<FVector3d>& Positions, const FMeshNormals& Normals, double Intensity,
 				TArray<FVector3d>& DisplacedPositions)
@@ -72,7 +73,7 @@ namespace {
 
 		void RandomNoise(const FDynamicMesh3& Mesh,
 				const TArray<FVector3d>& Positions, const FMeshNormals& Normals,
-				double Intensity, int RandomSeed,
+				double Intensity, int RandomSeed, 
 				TArray<FVector3d>& DisplacedPositions)
 		{
 			FMath::SRandInit(RandomSeed);
@@ -80,6 +81,23 @@ namespace {
 			{
 				double RandVal = 2.0 * (FMath::SRand() - 0.5);
 				DisplacedPositions[vid] = Positions[vid] + (Normals[vid] * RandVal * Intensity);
+			}
+		}
+
+		void PerlinNoise(const FDynamicMesh3& Mesh,
+			const TArray<FVector3d>& Positions,
+			const FMeshNormals& Normals,
+			double Intensity,
+			int RandomSeed,
+			double Frequency,
+			TArray<FVector3d>& DisplacedPositions)
+		{
+			FMath::SRandInit(RandomSeed);
+			float RandomOffset = 10000.0f * FMath::SRand();
+			for (int vid : Mesh.VertexIndicesItr())
+			{
+				float NoiseValue = FMath::PerlinNoise3D(Frequency * FVector(Positions[vid] + RandomOffset));
+				DisplacedPositions[vid] = Positions[vid] + (NoiseValue * Intensity * Normals[vid]);
 			}
 		}
 
@@ -101,9 +119,25 @@ namespace {
 					DisplacedPositions[vid] = Positions[vid] + (Offset * Intensity * Normals[vid]);
 				}
 			}
+		}
+		
+		void Sine(const FDynamicMesh3& Mesh,
+			const TArray<FVector3d>& Positions,
+			double Amplitude,
+			double Frequency,
+			double PhaseShift,
+			TArray<FVector3d>& DisplacedPositions)
+		{
+			for (int vid : Mesh.VertexIndicesItr())
+			{
+				DisplacedPositions[vid].X = Positions[vid].X;
+				DisplacedPositions[vid].Y = Positions[vid].Y;
+				double DistXY = FMath::Sqrt(Positions[vid].X*Positions[vid].X + Positions[vid].Y*Positions[vid].Y);
+				DisplacedPositions[vid].Z = Positions[vid].Z + Amplitude * FMath::Sin(Frequency*DistXY + PhaseShift);
+			}
+		}
 
 		}
-	}
 	class FTextureAccess
 	{
 	public:
@@ -123,7 +157,7 @@ namespace {
 #endif
 			DisplacementMap->UpdateResource();
 
-			FormattedImageData = static_cast<const FColor*>(DisplacementMap->PlatformData->Mips[0].BulkData.LockReadOnly());
+			FormattedImageData = reinterpret_cast<const FColor*>(DisplacementMap->PlatformData->Mips[0].BulkData.LockReadOnly());
 		}
 		FTextureAccess(const FTextureAccess&) = delete;
 		FTextureAccess(FTextureAccess&&) = delete;
@@ -196,9 +230,9 @@ namespace {
 		void SetSubdivisionsCount(int SubdivisionsCountIn);
 		int  GetSubdivisionsCount();
 
-		TSharedPtr<FDynamicMeshOperator> MakeNewOperator() final
+		TUniquePtr<FDynamicMeshOperator> MakeNewOperator() final
 		{
-			return MakeShared<FSubdivideMeshOp>(SourceMesh, SubdivisionsCount);
+			return MakeUnique<FSubdivideMeshOp>(SourceMesh, SubdivisionsCount);
 		}
 	private:
 		const FDynamicMesh3& SourceMesh;
@@ -219,7 +253,8 @@ namespace {
 	{
 	public:
 		FDisplaceMeshOp(TSharedPtr<FDynamicMesh3> SourceMeshIn, const FSampledScalarField2f& DisplaceFieldIn,
-			float DisplaceIntensityIn, int RandomSeedIn, EDisplaceMeshToolDisplaceType DisplacementTypeIn);
+			float DisplaceIntensityIn, int RandomSeedIn, float DisplaceFrequencyIn,  float DisplacePhaseShiftIn,
+			EDisplaceMeshToolDisplaceType DisplacementTypeIn);
 		void CalculateResult(FProgressCancel* Progress) final;
 
 	private:
@@ -228,6 +263,8 @@ namespace {
 		int RandomSeed;
 		EDisplaceMeshToolDisplaceType DisplacementType;
 		const FSampledScalarField2f& DisplaceField;
+		float DisplaceFrequency;
+		float DisplacePhaseShift;
 
 		TArray<FVector3d> SourcePositions;
 		FMeshNormals SourceNormals;
@@ -235,9 +272,11 @@ namespace {
 	};
 
 	FDisplaceMeshOp::FDisplaceMeshOp(TSharedPtr<FDynamicMesh3> SourceMeshIn, const FSampledScalarField2f& DisplaceFieldIn,
-		float DisplaceIntensityIn, int RandomSeedIn, EDisplaceMeshToolDisplaceType DisplacementTypeIn)
+		float DisplaceIntensityIn, int RandomSeedIn, float DisplaceFrequencyIn, float DisplacePhaseShiftIn, 
+		EDisplaceMeshToolDisplaceType DisplacementTypeIn)
 		: SourceMesh(MoveTemp(SourceMeshIn)), DisplaceIntensity(DisplaceIntensityIn), RandomSeed(RandomSeedIn),
-		DisplacementType(DisplacementTypeIn),DisplaceField(DisplaceFieldIn)
+		DisplacementType(DisplacementTypeIn), DisplaceField(DisplaceFieldIn), DisplaceFrequency(DisplaceFrequencyIn),
+		DisplacePhaseShift(DisplacePhaseShiftIn)
 	{
 	}
 
@@ -277,10 +316,29 @@ namespace {
 				DisplaceIntensity, RandomSeed,
 				DisplacedPositions);
 			break;
+			
+		case EDisplaceMeshToolDisplaceType::PerlinNoise:
+			ComputeDisplacement::PerlinNoise(*SourceMesh,
+				SourcePositions,
+				SourceNormals,
+				DisplaceIntensity,
+				RandomSeed,
+				DisplaceFrequency,
+				DisplacedPositions);
+			break;
 
 		case EDisplaceMeshToolDisplaceType::DisplacementMap:
 			ComputeDisplacement::Map(*SourceMesh, SourcePositions, SourceNormals,
 				DisplaceIntensity, DisplaceField,
+				DisplacedPositions);
+			break;
+
+		case EDisplaceMeshToolDisplaceType::SineWave:
+			double Amplitude = DisplaceIntensity;
+			double Frequency = DisplaceFrequency;
+			double Phase = DisplacePhaseShift;
+			ComputeDisplacement::Sine(*SourceMesh, SourcePositions, 
+				Amplitude, Frequency, Phase,
 				DisplacedPositions);
 			break;
 		}
@@ -310,23 +368,27 @@ namespace {
 	public:
 		FDisplaceMeshOpFactory(TSharedPtr<FDynamicMesh3>& SourceMeshIn,
 			float DisplaceIntensityIn, int RandomSeedIn, UTexture2D* DisplacementMapIn,
-			EDisplaceMeshToolDisplaceType DisplacementTypeIn)
+			float DisplaceFrequencyIn, float DisplacePhaseShiftIn,
+			EDisplaceMeshToolDisplaceType DisplacementTypeIn )
 			: SourceMesh(SourceMeshIn)
 		{
 			SetIntensity(DisplaceIntensityIn);
 			SetRandomSeed(RandomSeed);
 			SetDisplacementMap(DisplacementMapIn);
 			SetDisplacementType(DisplacementTypeIn);
-
+			SetFrequency(DisplaceFrequencyIn);
+			SetPhaseShift(DisplacePhaseShiftIn);
 		}
 		void SetIntensity(float IntensityIn);
 		void SetRandomSeed(int RandomSeedIn);
 		void SetDisplacementMap(UTexture2D* DisplacementMapIn);
+		void SetFrequency(float FrequencyIn);
+		void SetPhaseShift(float PhaseShiftIn);
 		void SetDisplacementType(EDisplaceMeshToolDisplaceType TypeIn);
 
-		TSharedPtr<FDynamicMeshOperator> MakeNewOperator() final
+		TUniquePtr<FDynamicMeshOperator> MakeNewOperator() final
 		{
-			return MakeShared<FDisplaceMeshOp>(SourceMesh, DisplaceField, DisplaceIntensity, RandomSeed, DisplacementType);
+			return MakeUnique<FDisplaceMeshOp>(SourceMesh, DisplaceField, DisplaceIntensity, RandomSeed, DisplaceFrequency, DisplacePhaseShift, DisplacementType);
 		}
 	private:
 		void UpdateMap();
@@ -334,6 +396,8 @@ namespace {
 		float DisplaceIntensity;
 		int RandomSeed;
 		UTexture2D* DisplacementMap;
+		float DisplaceFrequency;
+		float DisplacePhaseShift;
 		EDisplaceMeshToolDisplaceType DisplacementType;
 
 		TSharedPtr<FDynamicMesh3>& SourceMesh;
@@ -357,6 +421,16 @@ namespace {
 			DisplacementMap = DisplacementMapIn;
 			UpdateMap();
 		}
+	}
+
+	void FDisplaceMeshOpFactory::SetFrequency(float FrequencyIn)
+	{
+		DisplaceFrequency = FrequencyIn;
+	}
+
+	void FDisplaceMeshOpFactory::SetPhaseShift(float PhaseShiftIn)
+	{
+		DisplacePhaseShift = PhaseShiftIn;
 	}
 
 	void FDisplaceMeshOpFactory::SetDisplacementType(EDisplaceMeshToolDisplaceType TypeIn)
@@ -391,9 +465,9 @@ namespace {
 			{
 				for (int x = 0; x < TextureWidth; ++x)
 				{
-					FColor PixelColor = FormattedData[y*TextureWidth + x];
+					FColor PixelColor = FormattedData[y * TextureWidth + x];
 					float Value = PixelColor.R / 255.0;
-					DisplaceField.GridValues[y*TextureWidth + x] = Value;
+					DisplaceField.GridValues[y * TextureWidth + x] = Value;
 				}
 			}
 		}
@@ -428,6 +502,8 @@ UDisplaceMeshTool::UDisplaceMeshTool()
 {
 	DisplacementType = EDisplaceMeshToolDisplaceType::Constant;
 	DisplaceIntensity = 10.0f;
+	DisplaceFrequency = 0.1f;
+	DisplacePhaseShift = 0.0f;
 	RandomSeed = 31337;
 	Subdivisions = 4;
 }
@@ -442,19 +518,20 @@ void UDisplaceMeshTool::Setup()
 	DynamicMeshComponent->RegisterComponent();
 	DynamicMeshComponent->SetWorldTransform(ComponentTarget->GetWorldTransform());
 
-	// copy material if there is one
-	auto Material = ComponentTarget->GetMaterial(0);
-	if (Material != nullptr)
+	// transfer materials
+	FComponentMaterialSet MaterialSet;
+	ComponentTarget->GetMaterialSet(MaterialSet);
+	for (int k = 0; k < MaterialSet.Materials.Num(); ++k)
 	{
-		DynamicMeshComponent->SetMaterial(0, Material);
+		DynamicMeshComponent->SetMaterial(k, MaterialSet.Materials[k]);
 	}
 
+	DynamicMeshComponent->TangentsType = EDynamicMeshTangentCalcType::AutoCalculated;
 	DynamicMeshComponent->InitializeMesh(ComponentTarget->GetMesh());
 	OriginalMesh.Copy(*DynamicMeshComponent->GetMesh());
 
 	Subdivider = MakeUnique<FSubdivideMeshOpFactory>(OriginalMesh, Subdivisions);
-	Displacer = MakeUnique<FDisplaceMeshOpFactory>(SubdividedMesh,
-		DisplaceIntensity, RandomSeed, DisplacementMap, DisplacementType);
+	Displacer = MakeUnique<FDisplaceMeshOpFactory>(SubdividedMesh, DisplaceIntensity, RandomSeed, DisplacementMap, DisplaceFrequency, DisplacePhaseShift, DisplacementType);
 		
 	// hide input StaticMeshComponent
 	ComponentTarget->SetOwnerVisibility(false);
@@ -475,9 +552,9 @@ void UDisplaceMeshTool::Shutdown(EToolShutdownType ShutdownType)
 		{
 			// this block bakes the modified DynamicMeshComponent back into the StaticMeshComponent inside an undo transaction
 			GetToolManager()->BeginUndoTransaction(LOCTEXT("DisplaceMeshToolTransactionName", "Displace Mesh"));
-			ComponentTarget->CommitMesh([=](FMeshDescription* MeshDescription)
+			ComponentTarget->CommitMesh([=](const FPrimitiveComponentTarget::FCommitParams& CommitParams)
 			{
-				DynamicMeshComponent->Bake(MeshDescription, Subdivisions > 0);
+				DynamicMeshComponent->Bake(CommitParams.MeshDescription, Subdivisions > 0);
 			});
 			GetToolManager()->EndUndoTransaction();
 		}
@@ -513,7 +590,7 @@ void UDisplaceMeshTool::ValidateSubdivisions()
 #if WITH_EDITOR
 void UDisplaceMeshTool::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
-	UProperty* PropertyThatChanged = PropertyChangedEvent.Property;
+	FProperty* PropertyThatChanged = PropertyChangedEvent.Property;
 	if (PropertyThatChanged)
 	{
 		FSubdivideMeshOpFactory*  SubdividerDownCast = static_cast<FSubdivideMeshOpFactory*>(Subdivider.Get());
@@ -545,6 +622,14 @@ void UDisplaceMeshTool::PostEditChangeProperty(FPropertyChangedEvent& PropertyCh
 		{
 			DisplacerDownCast->SetIntensity(DisplaceIntensity);
 		}
+		else if (PropName == GET_MEMBER_NAME_CHECKED(UDisplaceMeshTool, DisplaceFrequency))
+		{
+			DisplacerDownCast->SetFrequency(DisplaceFrequency);
+		}
+		else if (PropName == GET_MEMBER_NAME_CHECKED(UDisplaceMeshTool, DisplacePhaseShift))
+		{
+			DisplacerDownCast->SetPhaseShift(DisplacePhaseShift);
+		}
 		else if (PropName == GET_MEMBER_NAME_CHECKED(UDisplaceMeshTool, DisplacementMap))
 		{
 			DisplacerDownCast->SetDisplacementMap(DisplacementMap);
@@ -567,19 +652,18 @@ void UDisplaceMeshTool::StartComputation()
 		if (SubdivideTask)
 		{
 			SubdivideTask->CancelAndDelete();
-			SubdividedMesh = nullptr;
 		}
-		auto SubdivideMeshOp = Subdivider->MakeNewOperator();
+		SubdividedMesh = nullptr;
 		SubdivideTask = new FAsyncTaskExecuterWithAbort<TModelingOpTask<FDynamicMeshOperator>>(Subdivider->MakeNewOperator());
 		SubdivideTask->StartBackgroundTask();
 		bNeedsSubdivided = false;
-		DynamicMeshComponent->SetMaterial(0, ToolSetupUtil::GetDefaultWorkingMaterial(GetToolManager()));
+		DynamicMeshComponent->SetOverrideRenderMaterial(ToolSetupUtil::GetDefaultWorkingMaterial(GetToolManager()));
 	}
 	if (bNeedsDisplaced && DisplaceTask)
 	{
 		DisplaceTask->CancelAndDelete();
 		DisplaceTask = nullptr;
-		DynamicMeshComponent->SetMaterial(0, ToolSetupUtil::GetDefaultWorkingMaterial(GetToolManager()));
+		DynamicMeshComponent->SetOverrideRenderMaterial(ToolSetupUtil::GetDefaultWorkingMaterial(GetToolManager()));
 	}
 	AdvanceComputation();
 }
@@ -603,7 +687,7 @@ void UDisplaceMeshTool::AdvanceComputation()
 		TUniquePtr<FDynamicMesh3> DisplacedMesh = DisplaceTask->GetTask().ExtractOperator()->ExtractResult();
 		delete DisplaceTask;
 		DisplaceTask = nullptr;
-		DynamicMeshComponent->SetMaterial(0,ToolSetupUtil::GetDefaultMaterial(GetToolManager(), ComponentTarget->GetMaterial(0)));
+		DynamicMeshComponent->ClearOverrideRenderMaterial();
 		DynamicMeshComponent->GetMesh()->Copy(*DisplacedMesh);
 		DynamicMeshComponent->NotifyMeshUpdated();
 		GetToolManager()->PostInvalidation();

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -38,17 +38,6 @@ private:
 
 	/** The painter containing the paint settings we are customizing */
 	FClothPainter* Painter;
-};
-
-
-class FClothPaintSettingsRootObjectCustomization : public IDetailRootObjectCustomization
-{
-public:
-
-	/** IDetailRootObjectCustomization interface */
-	virtual TSharedPtr<SWidget> CustomizeObjectHeader(const UObject* InRootObject) override { return SNullWidget::NullWidget; }
-	virtual bool IsObjectVisible(const UObject* InRootObject) const override { return true; }
-	virtual bool ShouldDisplayHeader(const UObject* InRootObject) const override { return false; }
 };
 
 

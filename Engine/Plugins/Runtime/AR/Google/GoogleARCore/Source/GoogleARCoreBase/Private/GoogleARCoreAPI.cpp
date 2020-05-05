@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GoogleARCoreAPI.h"
 #include "GoogleARCoreCameraImage.h"
@@ -1151,7 +1151,7 @@ void FGoogleARCoreFrame::TransformDisplayUvCoords(const TArray<float>& UvCoords,
 	}
 
 	OutUvCoords.SetNumZeroed(8);
-	ArFrame_transformCoordinates2d(SessionHandle, FrameHandle, AR_COORDINATES_2D_VIEW_NORMALIZED,  8, UvCoords.GetData(), AR_COORDINATES_2D_TEXTURE_NORMALIZED, OutUvCoords.GetData());
+	ArFrame_transformCoordinates2d(SessionHandle, FrameHandle, AR_COORDINATES_2D_VIEW_NORMALIZED, 4, UvCoords.GetData(), AR_COORDINATES_2D_TEXTURE_NORMALIZED, OutUvCoords.GetData());
 #endif
 }
 

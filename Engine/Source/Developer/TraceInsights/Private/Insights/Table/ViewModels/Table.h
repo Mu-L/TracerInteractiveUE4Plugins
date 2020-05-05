@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -6,6 +6,7 @@
 
 namespace Trace
 {
+	class ITableLayout;
 	class IUntypedTable;
 	class IUntypedTableReader;
 }
@@ -56,18 +57,22 @@ public:
 
 	bool IsValid() const { return Columns.Num() > 0; }
 
-	const TArray<TSharedPtr<FTableColumn>>& GetColumns() const { return Columns; }
-	void SetColumns(const TArray<TSharedPtr<Insights::FTableColumn>>& InColumns);
+	const TArray<TSharedRef<FTableColumn>>& GetColumns() const { return Columns; }
+	void SetColumns(const TArray<TSharedRef<Insights::FTableColumn>>& InColumns);
 
-	TSharedPtr<FTableColumn> FindColumnChecked(const FName& ColumnId) const
+	TSharedRef<FTableColumn> FindColumnChecked(const FName& ColumnId) const
 	{
 		return ColumnIdToPtrMapping.FindChecked(ColumnId);
 	}
 
 	TSharedPtr<FTableColumn> FindColumn(const FName& ColumnId) const
 	{
-		const TSharedPtr<FTableColumn>* const ColumnPtrPtr = ColumnIdToPtrMapping.Find(ColumnId);
-		return (ColumnPtrPtr != nullptr) ? *ColumnPtrPtr : nullptr;
+		const TSharedRef<FTableColumn>* const ColumnRefPtr = ColumnIdToPtrMapping.Find(ColumnId);
+		if (ColumnRefPtr != nullptr)
+		{
+			return *ColumnRefPtr;
+		}
+		return nullptr;
 	}
 
 	int32 GetColumnPositionIndex(const FName& ColumnId) const;
@@ -75,24 +80,23 @@ public:
 	TSharedPtr<Trace::IUntypedTable> GetSourceTable() const { return SourceTable; }
 	TSharedPtr<Trace::IUntypedTableReader> GetTableReader() const { return TableReader; }
 
-	/* Init this table to use the IUntypedTable source table. It will create new Columns array based on table layout. */
-	void Init(TSharedPtr<Trace::IUntypedTable> InSourceTable);
-	void UpdateSourceTable(TSharedPtr<Trace::IUntypedTable> InSourceTable);
+	/* Update table content. Returns true if the table layout has changed. */
+	bool UpdateSourceTable(TSharedPtr<Trace::IUntypedTable> InSourceTable);
 
 private:
-	void AddColumn(TSharedPtr<FTableColumn> ColumnPtr);
+	void AddColumn(TSharedRef<FTableColumn> Column);
 	void CreateHierarchyColumn(int32 ColumnIndex, const TCHAR* ColumnName);
-	void CreateColumnsFromTableLayout();
+	void CreateColumns(const Trace::ITableLayout& TableLayout);
 
 private:
 	FName Name;
 	FText Description;
 
 	/** All available columns. */
-	TArray<TSharedPtr<FTableColumn>> Columns;
+	TArray<TSharedRef<FTableColumn>> Columns;
 
-	/** Mapping between column Ids and FTableColumn shared pointers. */
-	TMap<FName, TSharedPtr<FTableColumn>> ColumnIdToPtrMapping;
+	/** Mapping between column Ids and FTableColumn shared refs. */
+	TMap<FName, TSharedRef<FTableColumn>> ColumnIdToPtrMapping;
 
 	TSharedPtr<Trace::IUntypedTable> SourceTable;
 	TSharedPtr<Trace::IUntypedTableReader> TableReader;

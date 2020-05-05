@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved..
+// Copyright Epic Games, Inc. All Rights Reserved..
 
 /*=============================================================================
 	VulkanCommandBuffer.h: Private Vulkan RHI definitions.
@@ -15,6 +15,7 @@ class FVulkanCommandBufferManager;
 class FVulkanRenderTargetLayout;
 class FVulkanQueue;
 class FVulkanDescriptorPoolSetContainer;
+class FVulkanGPUTiming;
 
 namespace VulkanRHI
 {
@@ -139,7 +140,7 @@ public:
 		return (Timing != nullptr) && (FMath::Abs((int64)FenceSignaledCounter - (int64)LastValidTiming) < 3);
 	}
 
-	void AddWaitSemaphore(VkPipelineStageFlags InWaitFlags, VulkanRHI::FSemaphore* InWaitSemaphore);
+	void VULKANRHI_API AddWaitSemaphore(VkPipelineStageFlags InWaitFlags, VulkanRHI::FSemaphore* InWaitSemaphore);
 
 	void Begin();
 	void End();
@@ -316,6 +317,9 @@ public:
 
 	void SubmitActiveCmdBuffer(VulkanRHI::FSemaphore* SignalSemaphore = nullptr);
 
+	/** Regular SACB() expects not-ended and would rotate the command buffer immediately, but Present has a special logic */
+	void SubmitActiveCmdBufferFromPresent(VulkanRHI::FSemaphore* SignalSemaphore = nullptr);
+
 	void WaitForCmdBuffer(FVulkanCmdBuffer* CmdBuffer, float TimeInSecondsToWait = 10.0f);
 
 
@@ -352,4 +356,16 @@ private:
 	FVulkanCmdBuffer* ActiveCmdBuffer;
 	FVulkanCmdBuffer* UploadCmdBuffer;
 	TArray<FQueryPoolReset> PoolResets;
+
+	/** This semaphore is used to prevent overlaps between the (current) graphics cmdbuf and next upload cmdbuf. */
+	VulkanRHI::FSemaphore* ActiveCmdBufferSemaphore;
+
+	/** Holds semaphores associated with the recent upload cmdbuf(s) - waiting to be added to the next graphics cmdbuf as WaitSemaphores. */
+	TArray<VulkanRHI::FSemaphore*> RenderingCompletedSemaphores;
+	
+	/** This semaphore is used to prevent overlaps between (current) upload cmdbuf and next graphics cmdbuf. */
+	VulkanRHI::FSemaphore* UploadCmdBufferSemaphore;
+	
+	/** Holds semaphores associated with the recent upload cmdbuf(s) - waiting to be added to the next graphics cmdbuf as WaitSemaphores. */
+	TArray<VulkanRHI::FSemaphore*> UploadCompletedSemaphores;
 };

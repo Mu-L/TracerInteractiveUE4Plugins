@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MovieSceneNiagaraBoolParameterSectionTemplate.h"
 #include "NiagaraComponent.h"
@@ -27,5 +27,5 @@ void FMovieSceneNiagaraBoolParameterSectionTemplate::GetParameterValue(FFrameTim
 	}
 	
 	OutAnimatedValueData.AddUninitialized(sizeof(FNiagaraBool));
-	FMemory::Memcpy(OutAnimatedValueData.GetData(), (uint8*)&AnimatedValue, sizeof(FNiagaraBool));
+	FMemory::Memcpy(OutAnimatedValueData.GetData(), (uint8*)&AnimatedNiagaraValue, sizeof(FNiagaraBool));
 }

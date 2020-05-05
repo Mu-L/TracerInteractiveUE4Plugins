@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Linux/LinuxPlatformSplash.h"
 
@@ -411,7 +411,7 @@ SDL_Surface* FLinuxSplashState::LoadImage(const FString &ImagePath)
 
 		if (ImageWrapper.IsValid() && ImageWrapper->SetCompressed(RawFileData.GetData(), RawFileData.Num()))
 		{
-			const TArray<uint8>* RawData = nullptr;
+			TArray<uint8> RawData;
 			if (ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, RawData))
 			{
 				SDL_Surface *Surface = SDL_CreateRGBSurfaceWithFormat(0, ImageWrapper->GetWidth(), ImageWrapper->GetHeight(), 32, SDL_PIXELFORMAT_BGRA32);
@@ -420,7 +420,7 @@ SDL_Surface* FLinuxSplashState::LoadImage(const FString &ImagePath)
 					const int Width = Surface->w;
 					const int Height =  Surface->h;
 					const int BytesPerPixel = Surface->format->BytesPerPixel;
-					FMemory::Memcpy(Surface->pixels, (void*)RawData->GetData(), Width * Height * BytesPerPixel);
+					FMemory::Memcpy(Surface->pixels, (void*)RawData.GetData(), Width * Height * BytesPerPixel);
 					return Surface;
 				}
 			}
@@ -766,7 +766,7 @@ void FLinuxPlatformSplash::Show( )
 
 		// Display copyright information in editor splash screen
 		{
-			const FText CopyrightInfo = NSLOCTEXT( "UnrealEd", "SplashScreen_CopyrightInfo", "Copyright \x00a9 1998-2019   Epic Games, Inc.   All rights reserved." );
+			const FText CopyrightInfo = NSLOCTEXT( "UnrealEd", "SplashScreen_CopyrightInfo", "Copyright \x00a9   Epic Games, Inc.   All rights reserved." );
 			GSplashState->SetSplashText( SplashTextType::CopyrightInfo, CopyrightInfo );
 		}
 	}

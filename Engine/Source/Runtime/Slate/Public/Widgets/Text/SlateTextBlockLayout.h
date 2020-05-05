@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -67,6 +67,13 @@ public:
 	 * Gets the last computed desired size.
 	 */
 	FVector2D GetDesiredSize() const;
+
+
+	/**
+	 * Get the TextLayout scale.
+	 */
+	float GetLayoutScale() const;
+
 
 	/**
 	 * Paint this layout, updating the internal cache as required

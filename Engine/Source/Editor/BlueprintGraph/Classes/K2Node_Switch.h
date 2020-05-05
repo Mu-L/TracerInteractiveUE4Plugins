@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -12,7 +12,7 @@
 #include "K2Node_Switch.generated.h"
 
 UCLASS(MinimalAPI, abstract)
-class BLUEPRINTGRAPH_VTABLE UK2Node_Switch : public UK2Node
+class UK2Node_Switch : public UK2Node
 {
 	GENERATED_UCLASS_BODY()
 

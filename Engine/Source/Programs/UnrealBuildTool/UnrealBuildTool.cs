@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -14,6 +14,12 @@ namespace UnrealBuildTool
 {
 	static class UnrealBuildTool
 	{
+		/// <summary>
+		/// Save the application startup time. This can be used as the timestamp for build makefiles, to determine a base time after which any
+		/// modifications should invalidate it.
+		/// </summary>
+		static public DateTime StartTimeUtc { get; } = DateTime.UtcNow;
+
 		/// <summary>
 		/// The environment at boot time.
 		/// </summary>
@@ -38,6 +44,11 @@ namespace UnrealBuildTool
 		/// If we are running with an installed project, specifies the path to it
 		/// </summary>
 		static FileReference InstalledProjectFile;
+
+		/// <summary>
+		/// Directory for saved application settings (typically Engine/Programs)
+		/// </summary>
+		static DirectoryReference CachedEngineProgramSavedDirectory;
 
 		/// <summary>
 		/// The path to UBT
@@ -108,6 +119,28 @@ namespace UnrealBuildTool
 		/// The full name of the Enterprise/Intermediate directory
 		/// </summary>
 		public static readonly DirectoryReference EnterpriseIntermediateDirectory = DirectoryReference.Combine(EnterpriseDirectory, "Intermediate");
+
+		/// <summary>
+		/// The engine programs directory
+		/// </summary>
+		public static DirectoryReference EngineProgramSavedDirectory
+		{
+			get
+			{
+				if (CachedEngineProgramSavedDirectory == null)
+				{
+					if (IsEngineInstalled())
+					{
+						CachedEngineProgramSavedDirectory = Utils.GetUserSettingDirectory() ?? DirectoryReference.Combine(EngineDirectory, "Programs");
+					}
+					else
+					{
+						CachedEngineProgramSavedDirectory = DirectoryReference.Combine(EngineDirectory, "Programs");
+					}
+				}
+				return CachedEngineProgramSavedDirectory;
+			}
+		}
 
 		/// <summary>
 		/// Returns the root location of platform extensions within the given project

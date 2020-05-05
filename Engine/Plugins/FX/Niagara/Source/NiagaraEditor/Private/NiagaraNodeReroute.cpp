@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraNodeReroute.h"
 #include "NiagaraEditorUtilities.h"
 #include "NiagaraHlslTranslator.h"
+#include "NiagaraConstants.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraNodeReroute"
 
@@ -37,12 +38,10 @@ void UNiagaraNodeReroute::PostLoad()
 
 void UNiagaraNodeReroute::AllocateDefaultPins()
 {
-	const FName InputPinName(TEXT("InputPin"));
-	UEdGraphPin* MyInputPin = CreatePin(EGPD_Input, PC_Wildcard_Niagara, InputPinName);
+	UEdGraphPin* MyInputPin = CreatePin(EGPD_Input, PC_Wildcard_Niagara, FNiagaraConstants::InputPinName);
 	MyInputPin->bDefaultValueIsIgnored = true;
 
-	const FName OutputPinName(TEXT("OutputPin"));
-	CreatePin(EGPD_Output, PC_Wildcard_Niagara, OutputPinName);
+	CreatePin(EGPD_Output, PC_Wildcard_Niagara, FNiagaraConstants::OutputPinName);
 }
 
 FText UNiagaraNodeReroute::GetTooltipText() const

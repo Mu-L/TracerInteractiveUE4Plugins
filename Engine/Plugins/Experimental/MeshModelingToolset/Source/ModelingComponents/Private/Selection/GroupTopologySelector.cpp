@@ -1,19 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "Selection/GroupTopologySelector.h"
 #include "MeshQueries.h"
-#include "Drawing/ToolDataVisualizer.h"
+#include "ToolDataVisualizer.h"
 #include "ToolSceneQueriesUtil.h"
 
-
-
-void FGroupTopologySelection::Clear()
-{
-	SelectedGroupIDs.Reset();
-	SelectedCornerIDs.Reset();
-	SelectedEdgeIDs.Reset();
-}
 
 
 
@@ -211,7 +203,7 @@ bool FGroupTopologySelector::FindSelectedElement(const FRay3d& Ray, FGroupTopolo
 	}
 	else if (bHitSurface)
 	{
-		ResultOut.SelectedGroupIDs.Add(Mesh->GetTriangleGroup(HitTriangleID));
+		ResultOut.SelectedGroupIDs.Add(Topology->GetGroupID(HitTriangleID));
 		SelectedPositionOut = TriangleHitPos;
 		SelectedNormalOut = Mesh->GetTriNormal(HitTriangleID);
 		return true;

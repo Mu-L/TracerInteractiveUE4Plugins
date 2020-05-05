@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -14,6 +14,7 @@ class SNiagaraParameterEditor;
 class SBox;
 class IStructureDetailsView;
 class SComboButton;
+struct FGraphActionListBuilderBase;
 
 class SNiagaraStackFunctionInputValue: public SCompoundWidget
 {
@@ -28,10 +29,9 @@ public:
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 
 private:
+	TSharedRef<SWidget> ConstructValueWidgets();
 
 	bool GetInputEnabled() const;
-
-	EVisibility GetValueWidgetVisibility(UNiagaraStackFunctionInput::EValueMode ValidMode) const;
 
 	TSharedRef<SWidget> ConstructLocalValueStructWidget();
 
@@ -45,19 +45,15 @@ private:
 
 	void ParameterPropertyValueChanged(const FPropertyChangedEvent& PropertyChangedEvent);
 
-	FText GetLinkedValueHandleText() const;
+	FName GetLinkedValueHandleName() const;
 
 	FText GetDataValueText() const;
 
 	FText GetDynamicValueText() const;
 
-	FText GetExpressionValueText() const;
+	FText GetDefaultFunctionText() const;
 
 	void OnExpressionTextCommitted(const FText& Name, ETextCommit::Type CommitInfo);
-
-	FText GetInvalidValueText() const;
-
-	FText GetInvalidValueToolTipText() const;
 
 	FReply DynamicInputTextDoubleClicked(const FGeometry& MyGeometry, const FPointerEvent& PointerEvent);
 	FReply OnLinkedInputDoubleClicked(const FGeometry& MyGeometry, const FPointerEvent& PointerEvent);
@@ -111,6 +107,8 @@ private:
 
 	void CustomExpressionSelected();
 
+	void CreateScratchSelected();
+
 	void ParameterHandleSelected(FNiagaraParameterHandle Handle);
 
 	EVisibility GetResetButtonVisibility() const;
@@ -135,22 +133,27 @@ private:
 
 	bool OnFunctionInputAllowDrop(TSharedPtr<FDragDropOperation> DragDropOperation);
 
+	void CollectDynamicInputActionsForReassign(FGraphActionListBuilderBase& DynamicInputActions) const;
+
 	void ShowReassignDynamicInputScriptMenu();
 
-	void OnLibraryToggleChanged(ECheckBoxState CheckState);
+	bool GetLibraryOnly() const;
 
-	ECheckBoxState LibraryToggleIsChecked() const;
+	void SetLibraryOnly(bool bInIsLibraryOnly);
+
+	FReply ScratchButtonPressed() const;
 
 private:
 	UNiagaraStackFunctionInput* FunctionInput;
 
-	TSharedPtr<FStructOnScope> DisplayedLocalValueStruct;
+	TSharedPtr<SBox> ValueContainer;
+	UNiagaraStackFunctionInput::EValueMode ValueModeForGeneratedWidgets;
 
-	TSharedPtr<SBox> LocalValueStructContainer;
+	TSharedPtr<FStructOnScope> DisplayedLocalValueStruct;
 	TSharedPtr<SNiagaraParameterEditor> LocalValueStructParameterEditor;
 	TSharedPtr<IStructureDetailsView> LocalValueStructDetailsView;
-	TSharedPtr<SComboButton> SetFunctionInputButton;
-	TSharedPtr<SGraphActionMenu> SelectInputFunctionMenu;
 
-	static bool bIncludeNonLibraryInputs;
+	TSharedPtr<SComboButton> SetFunctionInputButton;
+
+	static bool bLibraryOnly;
 };

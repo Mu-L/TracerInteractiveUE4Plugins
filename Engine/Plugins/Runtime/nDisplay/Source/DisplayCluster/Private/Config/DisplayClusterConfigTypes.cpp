@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Config/DisplayClusterConfigTypes.h"
 
@@ -98,7 +98,7 @@ bool FDisplayClusterConfigWindow::DeserializeFromString(const FString& line)
 //////////////////////////////////////////////////////////////////////////////////////////////
 FString FDisplayClusterConfigViewport::ToString() const
 {
-	return FString::Printf(TEXT("[%s + %s=%s, %s=%s, %s=%s, %s=%d, %s=%d, %s=%d, %s=%d, %s=%s, %s=%d]"),
+	return FString::Printf(TEXT("[%s + %s=%s, %s=%s, %s=%s, %s=%d, %s=%d, %s=%d, %s=%d, %s=%s, %s=%f]"),
 		*FDisplayClusterConfigBase::ToString(),
 		DisplayClusterStrings::cfg::data::Id, *Id,
 		DisplayClusterStrings::cfg::data::viewport::Projection,  *ProjectionId,
@@ -290,6 +290,25 @@ FString FDisplayClusterConfigRender::ToString() const
 
 bool FDisplayClusterConfigRender::DeserializeFromString(const FString& line)
 {
+	return FDisplayClusterConfigBase::DeserializeFromString(line);
+}
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+// FDisplayClusterConfigNvidia
+//////////////////////////////////////////////////////////////////////////////////////////////
+FString FDisplayClusterConfigNvidia::ToString() const
+{
+	return FString::Printf(TEXT("[%s + %s=%d, %s=%d]"),
+		*FDisplayClusterConfigBase::ToString(),
+		DisplayClusterStrings::cfg::data::nvidia::SyncGroup,   SyncGroup,
+		DisplayClusterStrings::cfg::data::nvidia::SyncBarrier, SyncBarrier);
+}
+
+bool FDisplayClusterConfigNvidia::DeserializeFromString(const FString& line)
+{
+	DisplayClusterHelpers::str::ExtractValue(line, FString(DisplayClusterStrings::cfg::data::nvidia::SyncGroup),   SyncGroup);
+	DisplayClusterHelpers::str::ExtractValue(line, FString(DisplayClusterStrings::cfg::data::nvidia::SyncBarrier), SyncBarrier);
 	return FDisplayClusterConfigBase::DeserializeFromString(line);
 }
 

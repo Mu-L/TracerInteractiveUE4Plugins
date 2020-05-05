@@ -1,10 +1,12 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 #include "CoreMinimal.h"
 #include "PixelFormat.h"
 #include "Containers/ArrayView.h"
 #include "RHI.h"	// for GShaderPlatformForFeatureLevel and its friends
+
+#include "VulkanLoader.h"
 
 struct FOptionalVulkanDeviceExtensions;
 class FVulkanDevice;
@@ -13,6 +15,8 @@ class FVulkanDevice;
 class FVulkanGenericPlatform 
 {
 public:
+	static void SetupMaxRHIFeatureLevelAndShaderPlatform(ERHIFeatureLevel::Type InRequestedFeatureLevel);
+
 	static bool IsSupported() { return true; }
 	static void CheckDeviceDriver(uint32 DeviceIndex, EGpuVendorId VendorId, const VkPhysicalDeviceProperties& Props) {}
 
@@ -91,6 +95,8 @@ public:
 	/** The status quo is false, so the default is chosen to not change it. As platforms opt in it may be better to flip the default. */
 	static bool SupportsDynamicResolution() { return false; }
 
+	static bool SupportsVolumeTextureRendering() { return true; }
+
 	// Allow platforms to add extension features to the DeviceInfo pNext chain
 	static void EnablePhysicalDeviceFeatureExtensions(VkDeviceCreateInfo& DeviceInfo) {}
 
@@ -107,6 +113,9 @@ public:
 
 	// Does the platform require resolve attachments in its MSAA renderpasses
 	static bool RequiresRenderPassResolveAttachments() { return false; }
+
+	// Does the platform require depth to be written on stencil clear
+	static bool RequiresDepthWriteOnStencilClear() { return false; }
 
 	// Checks if the PSO cache matches the expected vulkan device properties
 	static bool PSOBinaryCacheMatches(FVulkanDevice* Device, const TArray<uint8>& DeviceCache);

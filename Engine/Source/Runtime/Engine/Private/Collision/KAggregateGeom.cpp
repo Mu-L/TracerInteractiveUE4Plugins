@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	PhysCollision.cpp: Skeletal mesh collision code
@@ -14,6 +14,10 @@
 #include "PhysicsEngine/AggregateGeom.h"
 #include "Engine/Polys.h"
 #include "PhysXIncludes.h"
+#include "Chaos/Convex.h"
+#if INTEL_ISPC
+#include "KAggregateGeom.ispc.generated.h"
+#endif
 
 #if WITH_CHAOS
 #include "Chaos/ImplicitObject.h"
@@ -140,23 +144,28 @@ void FKAggregateGeom::CalcBoxSphereBounds(FBoxSphereBounds& Output, const FTrans
 }
 
 
-static void AddVertexIfNotPresent(TArray<FVector> &Vertices, const FVector& NewVertex)
+static int32 AddVertexIfNotPresent(TArray<FVector> &Vertices, const FVector& NewVertex)
 {
 	bool bIsPresent = 0;
+	int32 Index = INDEX_NONE;
 
-	for(int32 i=0; i<Vertices.Num() && !bIsPresent; i++)
+	for(int32 i = 0; i < Vertices.Num() && !bIsPresent; i++)
 	{
 		const float DiffSqr = (NewVertex - Vertices[i]).SizeSquared();
 		if(DiffSqr < MIN_HULL_VERT_DISTANCE * MIN_HULL_VERT_DISTANCE)
 		{
 			bIsPresent = true;
+			Index = i;
 		}
 	}
 
 	if(!bIsPresent)
 	{
 		Vertices.Add(NewVertex);
+		Index = Vertices.Num() - 1;
 	}
+
+	return Index;
 }
 
 static void RemoveDuplicateVerts(TArray<FVector>& InVerts)
@@ -303,14 +312,34 @@ EAggCollisionShape::Type FKBoxElem::StaticShapeType = EAggCollisionShape::Box;
 
 FBox FKBoxElem::CalcAABB(const FTransform& BoneTM, float Scale) const
 {
-	FTransform ElemTM = GetTransform();
-	ElemTM.ScaleTranslation( FVector(Scale) );
-	ElemTM *= BoneTM;
+	if (INTEL_ISPC)
+	{
+#if INTEL_ISPC
+		FBox LocalBox(ForceInit);
+		ispc::BoxCalcAABB(
+			(ispc::FBox&)LocalBox,
+			(ispc::FTransform&)BoneTM,
+			Scale,
+			(ispc::FRotator&)Rotation,
+			(ispc::FVector&)Center,
+			X,
+			Y,
+			Z);
 
-	FVector Extent(0.5f * Scale * X, 0.5f * Scale * Y, 0.5f * Scale * Z);
-	FBox LocalBox(-Extent, Extent);
+		return LocalBox;
+#endif
+	}
+	else
+	{
+		FTransform ElemTM = GetTransform();
+		ElemTM.ScaleTranslation(FVector(Scale));
+		ElemTM *= BoneTM;
 
-	return LocalBox.TransformBy(ElemTM);
+		FVector Extent(0.5f * Scale * X, 0.5f * Scale * Y, 0.5f * Scale * Z);
+		FBox LocalBox(-Extent, Extent);
+
+		return LocalBox.TransformBy(ElemTM);
+	}
 }
 
 
@@ -322,26 +351,45 @@ EAggCollisionShape::Type FKSphylElem::StaticShapeType = EAggCollisionShape::Sphy
 
 FBox FKSphylElem::CalcAABB(const FTransform& BoneTM, float Scale) const
 {
-	FTransform ElemTM = GetTransform();
-	ElemTM.ScaleTranslation( FVector(Scale) );
-	ElemTM *= BoneTM;
+	if (INTEL_ISPC)
+	{
+#if INTEL_ISPC
+		FBox Result(ForceInit);
+		ispc::SPhylCalcAABB(
+			(ispc::FBox&)Result,
+			(ispc::FTransform&)BoneTM,
+			Scale,
+			(ispc::FRotator&)Rotation,
+			(ispc::FVector&)Center,
+			Radius,
+			Length);
 
-	const FVector SphylCenter = ElemTM.GetLocation();
+		return Result;
+#endif
+	}
+	else
+	{
+		FTransform ElemTM = GetTransform();
+		ElemTM.ScaleTranslation( FVector(Scale) );
+		ElemTM *= BoneTM;
 
-	// Get sphyl axis direction
-	const FVector Axis = ElemTM.GetScaledAxis( EAxis::Z );
-	// Get abs of that vector
-	const FVector AbsAxis(FMath::Abs(Axis.X), FMath::Abs(Axis.Y), FMath::Abs(Axis.Z));
-	// Scale by length of sphyl
-	const FVector AbsDist = (Scale * 0.5f * Length) * AbsAxis;
+		const FVector SphylCenter = ElemTM.GetLocation();
 
-	const FVector MaxPos = SphylCenter + AbsDist;
-	const FVector MinPos = SphylCenter - AbsDist;
-	const FVector Extent(Scale * Radius);
+		// Get sphyl axis direction
+		const FVector Axis = ElemTM.GetScaledAxis( EAxis::Z );
+		// Get abs of that vector
+		const FVector AbsAxis(FMath::Abs(Axis.X), FMath::Abs(Axis.Y), FMath::Abs(Axis.Z));
+		// Scale by length of sphyl
+		const FVector AbsDist = (Scale * 0.5f * Length) * AbsAxis;
 
-	FBox Result(MinPos - Extent, MaxPos + Extent);
+		const FVector MaxPos = SphylCenter + AbsDist;
+		const FVector MinPos = SphylCenter - AbsDist;
+		const FVector Extent(Scale * Radius);
 
-	return Result;
+		FBox Result(MinPos - Extent, MaxPos + Extent);
+
+		return Result;
+	}
 }
 
 
@@ -491,6 +539,14 @@ static void AddEdgeIfNotPresent(TArray<int32>& Edges, int32 Edge0, int32 Edge1)
 
 void FKConvexElem::UpdateElemBox()
 {
+#if WITH_CHAOS
+	// Fixup indices in case an operation has invalidated them
+	{
+		IndexData.Reset();
+		ComputeChaosConvexIndices();
+	}
+#endif
+
 	ElemBox.Init();
 	for(int32 j=0; j<VertexData.Num(); j++)
 	{
@@ -535,16 +591,19 @@ bool FKConvexElem::HullFromPlanes(const TArray<FPlane>& InPlanes, const TArray<F
 		// Do nothing if poly was completely clipped away.
 		if(Polygon.Vertices.Num() > 0)
 		{
+			TArray<int32> Remap;
+			Remap.AddUninitialized(Polygon.Vertices.Num());
+
 			TotalPolyArea += Polygon.Area();
 
 			// Add vertices of polygon to convex primitive.
-			for(int32 j=0; j<Polygon.Vertices.Num(); j++)
+			for(int32 j = 0; j < Polygon.Vertices.Num() ; j++)
 			{
 				// We try and snap the vert to on of the ones supplied.
 				int32 NearestVert = INDEX_NONE;
 				float NearestDistSqr = BIG_NUMBER;
 
-				for(int32 k=0; k<SnapVerts.Num(); k++)
+				for(int32 k = 0; k < SnapVerts.Num(); k++)
 				{
 					const float DistSquared = (Polygon.Vertices[j] - SnapVerts[k]).SizeSquared();
 
@@ -559,13 +618,22 @@ bool FKConvexElem::HullFromPlanes(const TArray<FPlane>& InPlanes, const TArray<F
 				if( NearestVert != INDEX_NONE && NearestDistSqr < LOCAL_EPS )
 				{
 					const FVector localVert = SnapVerts[NearestVert];
-					AddVertexIfNotPresent(VertexData, localVert);
+					Remap[j] = AddVertexIfNotPresent(VertexData, localVert);
 				}
 				else
 				{
 					const FVector localVert = Polygon.Vertices[j];
-					AddVertexIfNotPresent(VertexData, localVert);
+					Remap[j] = AddVertexIfNotPresent(VertexData, localVert);
 				}
+			}
+
+			const int32 NumTriangles = Polygon.Vertices.Num() - 2;
+			const int32 BaseIndex = Remap[0];
+			for(int32 Index = 0; Index < NumTriangles; ++Index)
+			{
+				IndexData.Add(BaseIndex);
+				IndexData.Add(Remap[Index + 1]);
+				IndexData.Add(Remap[Index + 2]);
 			}
 		}
 	}
@@ -659,6 +727,12 @@ void FKConvexElem::ConvexFromBoxElem(const FKBoxElem& InBox)
 	{
 		for (int32 j = 0; j < 2; j++)
 		{
+			const int32 Base = VertexData.Num();
+			for(int32 k = 0; k < 6; ++k)
+			{
+				IndexData.Add(Base + k);
+			}
+
 			P.X = B[i].X; Q.X = B[i].X;
 			P.Y = B[j].Y; Q.Y = B[j].Y;
 			P.Z = B[0].Z; Q.Z = B[1].Z;

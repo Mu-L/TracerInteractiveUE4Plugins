@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -18,8 +18,11 @@ namespace AutomationTool
 	[Help("platform=PS4+XboxOne", "Platforms to build, join multiple platforms using +")]
 	[Help("configuration=Development+Test", "Configurations to build, join multiple configurations using +")]
 	[Help("target=Editor+Game", "Targets to build, join multiple targets using +")]
-	[Help("notools", "Don't build any tools (UHT, ShaderCompiler, CrashReporter")]
-	class BuildTarget : BuildCommand
+	[Help("notools", "Don't build any tools (UnrealPak, Lightmass, ShaderCompiler, CrashReporter")]
+	[Help("clean", "Do a clean build")]
+	[Help("NoXGE", "Toggle to disable the distributed build process")]
+	[Help("DisableUnity", "Toggle to disable the unity build system")]
+	public class BuildTarget : BuildCommand
 	{
 		// exposed as a property so projects can derive and set this directly
 		public string ProjectName { get; set; }
@@ -32,14 +35,17 @@ namespace AutomationTool
 
 		public bool	  Clean { get; set; }
 
-		protected Dictionary<string, string> TargetNames { get; set; }
+		public bool	  NoTools { get; set; }
+
+		public string UBTArgs { get; set; }
+
+		public bool Preview { get; set; }
 
 		public BuildTarget()
 		{
 			Platforms = HostPlatform.Current.HostEditorPlatform.ToString();
 			Configurations = "Development";
-
-			TargetNames = new Dictionary<string, string>();
+			UBTArgs = "";
 		}
 
 		public override ExitCode Execute()
@@ -51,13 +57,14 @@ namespace AutomationTool
 			Platforms = ParseParamValue("platform", Platforms);
 			Configurations = ParseParamValue("configuration", Configurations);
 			Clean = ParseParam("clean") || Clean;
+			NoTools = ParseParam("NoTools") || NoTools;
+			UBTArgs = ParseParamValue("ubtargs", UBTArgs);
+			Preview = ParseParam("preview") || Preview;
 
 			if (string.IsNullOrEmpty(Targets))
 			{
 				throw new AutomationException("No target specified with -target. Use -help to see all options");
 			}
-
-			bool NoTools = ParseParam("notools");
 
 			IEnumerable<string> TargetList = Targets.Split(new char[] { '+' }, StringSplitOptions.RemoveEmptyEntries);
 			IEnumerable<UnrealTargetConfiguration> ConfigurationList = null;
@@ -97,120 +104,174 @@ namespace AutomationTool
 
 			if (!string.IsNullOrEmpty(ProjectName))
 			{
-				ProjectFile = ProjectUtils.FindProjectFileFromName(ProjectName);
+				// find the project
+				ProjectFile = ProjectUtils.FindProjectFileFromName(ProjectName);				
 
 				if (ProjectFile == null)
 				{
 					throw new AutomationException("Unable to find uproject file for {0}", ProjectName);
 				}
+			}
 
-				string SourceDirectoryName = Path.Combine(ProjectFile.Directory.FullName, "Source");
+			IEnumerable<string> BuildTargets = TargetList.Select(T => ProjectTargetFromTarget(T, ProjectFile)).ToArray();			
 
-				if (Directory.Exists(SourceDirectoryName))
+			bool ContainsEditor = BuildTargets.Where(T => T.EndsWith("Editor", StringComparison.OrdinalIgnoreCase)).Any();
+			bool SingleBuild = BuildTargets.Count() == 1 && PlatformList.Count() == 1 && ConfigurationList.Count() == 1;
+
+			if (!SingleBuild || (ContainsEditor && !NoTools))
+			{
+				UE4Build Build = new UE4Build(this);
+				Build.AlwaysBuildUHT = true;
+
+				UE4Build.BuildAgenda Agenda = new UE4Build.BuildAgenda();
+
+				string EditorTarget = BuildTargets.Where(T => T.EndsWith("Editor", StringComparison.OrdinalIgnoreCase)).FirstOrDefault();
+
+				IEnumerable<string> OtherTargets = BuildTargets.Where(T => T != EditorTarget);
+
+				UnrealTargetPlatform CurrentPlatform = HostPlatform.Current.HostEditorPlatform;
+
+				if (string.IsNullOrEmpty(EditorTarget) == false)
 				{
-					IEnumerable<string> TargetScripts = Directory.EnumerateFiles(SourceDirectoryName, "*.Target.cs");
+					Agenda.AddTarget(EditorTarget, CurrentPlatform, UnrealTargetConfiguration.Development, ProjectFile, UBTArgs);
 
-					foreach (string TargetName in TargetList)
+					if (!NoTools)
 					{
-						string TargetScript = TargetScripts.Where(S => S.IndexOf(TargetName, StringComparison.OrdinalIgnoreCase) >= 0).FirstOrDefault();
+						Agenda.AddTarget("UnrealPak", CurrentPlatform, UnrealTargetConfiguration.Development, ProjectFile, UBTArgs);
+						Agenda.AddTarget("ShaderCompileWorker", CurrentPlatform, UnrealTargetConfiguration.Development, ProjectFile, UBTArgs);
+						Agenda.AddTarget("UnrealLightmass", CurrentPlatform, UnrealTargetConfiguration.Development, ProjectFile, UBTArgs);
+						Agenda.AddTarget("CrashReportClient", CurrentPlatform, UnrealTargetConfiguration.Shipping, ProjectFile, UBTArgs);
+						Agenda.AddTarget("CrashReportClientEditor", CurrentPlatform, UnrealTargetConfiguration.Shipping, ProjectFile, UBTArgs);
+					}
+				}
 
-						if (TargetScript == null && (
-								TargetName.Equals("Client", StringComparison.OrdinalIgnoreCase) ||
-								TargetName.Equals("Game", StringComparison.OrdinalIgnoreCase)
-								)
-							)
+				foreach (string Target in OtherTargets)
+				{
+					bool IsServer = Target.EndsWith("Server", StringComparison.OrdinalIgnoreCase);
+
+					IEnumerable<UnrealTargetPlatform> PlatformsToBuild = IsServer ? new UnrealTargetPlatform[] { CurrentPlatform } : PlatformList;
+
+					foreach (UnrealTargetPlatform Platform in PlatformsToBuild)
+					{
+						foreach (UnrealTargetConfiguration Config in ConfigurationList)
 						{
-							// if there's no ProjectGame.Target.cs or ProjectClient.Target.cs then
-							// fallback to Project.Target.cs
-							TargetScript = TargetScripts.Where(S => S.IndexOf(ProjectName + ".", StringComparison.OrdinalIgnoreCase) >= 0).FirstOrDefault();
+							Agenda.AddTarget(Target, Platform, Config, ProjectFile, UBTArgs);
 						}
+					}
+				}
 
-						if (TargetScript == null)
+				foreach (var Target in Agenda.Targets)
+				{
+					Log.TraceInformation("Will {0}build {1}", Clean ? "clean and " : "", Target);
+					if (Clean)
+					{
+						Target.Clean = Clean;
+					}
+				}
+
+				if (!Preview)
+				{
+					Build.Build(Agenda, InUpdateVersionFiles: false);
+				}
+			}
+			else
+			{
+				// Get the path to UBT
+				FileReference InstalledUBT = FileReference.Combine(CommandUtils.EngineDirectory, "Binaries", "DotNET", "UnrealBuildTool.exe");
+
+				UnrealTargetPlatform PlatformToBuild = PlatformList.First();
+				UnrealTargetConfiguration ConfigToBuild = ConfigurationList.First();
+				string TargetToBuild = BuildTargets.First();
+
+				if (!Preview)
+				{
+					// Compile the editor
+					string CommandLine = CommandUtils.UBTCommandline(ProjectFile, TargetToBuild, PlatformToBuild, ConfigToBuild, UBTArgs);
+
+					if (Clean)
+					{
+						CommandUtils.RunUBT(CommandUtils.CmdEnv, InstalledUBT.FullName, CommandLine + " -clean");
+					}
+					CommandUtils.RunUBT(CommandUtils.CmdEnv, InstalledUBT.FullName, CommandLine);
+				}
+				else
+				{ 
+					Log.TraceInformation("Will {0}build {1} {2} {3}", Clean ? "clean and " : "", TargetToBuild, PlatformToBuild, ConfigToBuild);
+				}
+				
+			}
+
+			return ExitCode.Success;
+		}
+
+		public string ProjectTargetFromTarget(string InTargetName, FileReference InProjectFile)
+		{
+			ProjectProperties Properties = InProjectFile != null ? ProjectUtils.GetProjectProperties(InProjectFile) : null;
+
+			string ProjectTarget = null;
+
+			if (Properties!= null && Properties.bIsCodeBasedProject)
+			{
+				var AvailableTargets = Properties.Targets.Select(T => T.Rules.Type.ToString());
+
+				// go through the list of targets such as Editor, Client, Server etc and replace them with their real target names
+				List<string> ActualTargets = new List<string>();
+
+				// If they asked for ShooterClient etc and that's there, just return that.
+				if (Properties.Targets.Any(T => T.TargetName.Equals(InTargetName, StringComparison.OrdinalIgnoreCase)))
+				{
+					ProjectTarget = InTargetName;
+				}
+				else
+				{
+					// find targets that match (and there may be multiple...)
+					IEnumerable<string> MatchingTargetTypes = Properties.Targets.Where(T => T.Rules.Type.ToString().Equals(InTargetName, StringComparison.OrdinalIgnoreCase)).Select(T => T.TargetName);
+
+					if (MatchingTargetTypes.Any())
+					{
+						if (MatchingTargetTypes.Count() == 1)
 						{
-							throw new AutomationException("No Target.cs file for target {0} in project {1}", TargetName, ProjectName);
+							ProjectTarget = MatchingTargetTypes.First();
 						}
-
-						string FullName = Path.GetFileName(TargetScript);
-						TargetNames[TargetName] = Regex.Replace(FullName, ".Target.cs", "", RegexOptions.IgnoreCase);
+						else
+						{
+							// if multiple targets, pick the one with our name (FN specific!)
+							ProjectTarget = MatchingTargetTypes.Where(T => string.CompareOrdinal(T, 0, ProjectName, 0, 1) == 0).FirstOrDefault();
+						}
 					}
 				}
 			}
 			else
 			{
-				Log.TraceWarning("No project specified, will build vanilla UE4 binaries");
-			}
+				// default UE4 targets
+				IEnumerable<string> UE4Targets = new[] { "Editor", "Game", "Client", "Server" };
 
-			// Handle content-only projects or when no project was specified
-			if (TargetNames.Keys.Count == 0)
-			{ 
-				foreach (string TargetName in TargetList)
+				string ShortTargetName = InTargetName;
+				if (ShortTargetName.StartsWith("UE4", StringComparison.OrdinalIgnoreCase))
 				{
-					TargetNames[TargetName] = string.Format("UE4{0}", TargetName);
+					ShortTargetName = ShortTargetName.Substring(3);
+				}
+
+				string UE4Target = UE4Targets.Where(S => S.Equals(ShortTargetName, StringComparison.OrdinalIgnoreCase)).FirstOrDefault();
+	
+				// If they asked for editor, client etc then give them the UE version
+				if (!string.IsNullOrEmpty(UE4Target))
+				{
+					ProjectTarget = "UE4" + UE4Target;
+				}
+				else
+				{
+					// or just build what they want and let later code figure out if that's valid. E.g. "UnrealPak"
+					ProjectTarget = InTargetName;
 				}
 			}
 
-			UE4Build Build = new UE4Build(this);
-
-			UE4Build.BuildAgenda Agenda = new UE4Build.BuildAgenda();
-
-			string EditorTarget = TargetList.Where(T => T.EndsWith("Editor", StringComparison.OrdinalIgnoreCase)).FirstOrDefault();
-
-			IEnumerable<string> OtherTargets = TargetList.Where(T => T != EditorTarget);
-
-			UnrealTargetPlatform CurrentPlatform = HostPlatform.Current.HostEditorPlatform;
-
-			if (!NoTools)
+			if (string.IsNullOrEmpty(ProjectTarget))
 			{
-				Agenda.AddTarget("UnrealHeaderTool", CurrentPlatform, UnrealTargetConfiguration.Development, ProjectFile);
+				throw new AutomationException("{0} is not a valid target in {1}", InTargetName, InProjectFile);
 			}
-
-			if (string.IsNullOrEmpty(EditorTarget) == false)
-			{
-				string TargetName = TargetNames[EditorTarget];
-
-				Agenda.AddTarget(TargetName, CurrentPlatform, UnrealTargetConfiguration.Development, ProjectFile);
-
-				if (!NoTools)
-				{
-					Agenda.AddTarget("UnrealPak", CurrentPlatform, UnrealTargetConfiguration.Development, ProjectFile);
-					Agenda.AddTarget("ShaderCompileWorker", CurrentPlatform, UnrealTargetConfiguration.Development);
-					Agenda.AddTarget("UnrealLightmass", CurrentPlatform, UnrealTargetConfiguration.Development);
-					Agenda.AddTarget("CrashReportClient", CurrentPlatform, UnrealTargetConfiguration.Shipping);
-					Agenda.AddTarget("CrashReportClientEditor", CurrentPlatform, UnrealTargetConfiguration.Shipping);
-				}
-			}
-
-			foreach (string Target in OtherTargets)
-			{
-				string TargetName = TargetNames[Target];
-
-				bool IsServer = Target.EndsWith("Server", StringComparison.OrdinalIgnoreCase);
-
-				IEnumerable<UnrealTargetPlatform> PlatformsToBuild = IsServer ? new UnrealTargetPlatform[] { CurrentPlatform } : PlatformList;
-
-				foreach (UnrealTargetPlatform Platform in PlatformsToBuild)
-				{
-					foreach (UnrealTargetConfiguration Config in ConfigurationList)
-					{
-						Agenda.AddTarget(TargetName, Platform, Config);
-					}
-				}
-			}
-
-			// Set clean and log
-			foreach (var Target in Agenda.Targets)
-			{
-				if (Clean)
-				{
-					Target.Clean = Clean;
-				}
-
-				Log.TraceInformation("Will {0}build {1}", Clean ? "clean and " : "", Target);
-			}
-
-			Build.Build(Agenda, InUpdateVersionFiles: false);
-
-			return ExitCode.Success;
+		
+			return ProjectTarget;
 		}
 	}
 

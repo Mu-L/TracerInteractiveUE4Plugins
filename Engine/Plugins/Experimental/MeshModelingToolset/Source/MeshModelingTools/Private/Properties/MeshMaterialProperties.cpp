@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Properties/MeshMaterialProperties.h"
 
@@ -59,34 +59,45 @@ void UExistingMeshMaterialProperties::UpdateMaterials()
 	}
 }
 
-void UExistingMeshMaterialProperties::SetMaterialIfChanged(UMaterialInterface* OriginalMaterial, UMaterialInterface* CurrentMaterial, TFunctionRef<void(UMaterialInterface* Material)> SetMaterialFn)
+
+UMaterialInterface* UExistingMeshMaterialProperties::GetActiveOverrideMaterial() const
 {
-	UMaterialInterface *Material = OriginalMaterial;
 	if (MaterialMode == ESetMeshMaterialMode::Checkerboard && CheckerMaterial != nullptr)
 	{
-		Material = CheckerMaterial;
+		return CheckerMaterial;
 	}
-	else if (MaterialMode == ESetMeshMaterialMode::Override && OverrideMaterial != nullptr)
+	if (MaterialMode == ESetMeshMaterialMode::Override && OverrideMaterial != nullptr)
 	{
-		Material = OverrideMaterial;
+		return OverrideMaterial;
 	}
-	if (CurrentMaterial != Material)
-	{
-		SetMaterialFn(Material);
-	}
+	return nullptr;
 }
 
+void UExistingMeshMaterialProperties::SaveProperties(UInteractiveTool* SaveFromTool)
+{
+	UExistingMeshMaterialProperties* PropertyCache = GetPropertyCache<UExistingMeshMaterialProperties>();
+	PropertyCache->MaterialMode = this->MaterialMode;
+	PropertyCache->CheckerDensity = this->CheckerDensity;
+	PropertyCache->OverrideMaterial = this->OverrideMaterial;
+}
 
-
-
-
-
+void UExistingMeshMaterialProperties::RestoreProperties(UInteractiveTool* RestoreToTool)
+{
+	UExistingMeshMaterialProperties* PropertyCache = GetPropertyCache<UExistingMeshMaterialProperties>();
+	this->MaterialMode = PropertyCache->MaterialMode;
+	this->CheckerDensity = PropertyCache->CheckerDensity;
+	this->OverrideMaterial = PropertyCache->OverrideMaterial;
+	this->Setup();
+}
 
 void UMeshEditingViewProperties::SaveProperties(UInteractiveTool* SaveFromTool)
 {
 	UMeshEditingViewProperties* PropertyCache = GetPropertyCache<UMeshEditingViewProperties>();
 	PropertyCache->bShowWireframe = this->bShowWireframe;
 	PropertyCache->MaterialMode = this->MaterialMode;
+	PropertyCache->bFlatShading = this->bFlatShading;
+	PropertyCache->Color = this->Color;
+	PropertyCache->Image = this->Image;
 }
 
 void UMeshEditingViewProperties::RestoreProperties(UInteractiveTool* RestoreToTool)
@@ -94,9 +105,10 @@ void UMeshEditingViewProperties::RestoreProperties(UInteractiveTool* RestoreToTo
 	UMeshEditingViewProperties* PropertyCache = GetPropertyCache<UMeshEditingViewProperties>();
 	this->bShowWireframe = PropertyCache->bShowWireframe;
 	this->MaterialMode = PropertyCache->MaterialMode;
+	this->bFlatShading = PropertyCache->bFlatShading;
+	this->Color = PropertyCache->Color;
+	this->Image = PropertyCache->Image;
 }
-
-
 
 
 #undef LOCTEXT_NAMESPACE

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -108,6 +108,12 @@ public:
 	bool bAutoArchiveOnReboot = false;
 
 	/**
+	 * If true, instruct the server to auto-archive live sessions on shutdown.
+	 */
+	UPROPERTY(config)
+	bool bAutoArchiveOnShutdown = true;
+
+	/**
 	 * Clean server sessions working directory when booting
 	 * Can be specified on the server cmd with `-CONCERTCLEAN`
 	 */
@@ -133,6 +139,12 @@ public:
 	 */
 	UPROPERTY(config, EditAnywhere, Category="Session Settings")
 	FString DefaultSessionName;
+
+	/** 
+	 * A set of keys identifying the clients that can discover and access the server. If empty, the server can be discovered and used by any clients.
+	 */
+	UPROPERTY(config)
+	TSet<FString> AuthorizedClientKeys;
 
 	/**
 	 * Name of the default session to restore on the server.
@@ -182,6 +194,7 @@ struct FConcertClientSettings
 		, AvatarColor(1.0f, 1.0f, 1.0f, 1.0f)
 		, DesktopAvatarActorClass(TEXT("/ConcertSyncClient/DesktopPresence.DesktopPresence_C"))
 		, VRAvatarActorClass(TEXT("/ConcertSyncClient/VRPresence.VRPresence_C"))
+		, ServerPort(0)
 		, DiscoveryTimeoutSeconds(5)
 		, SessionTickFrequencySeconds(1)
 		, LatencyCompensationMs(0)
@@ -206,7 +219,11 @@ struct FConcertClientSettings
 	UPROPERTY(config, EditAnywhere, NoClear, Category = "Client Settings", meta = (MetaClass = "ConcertClientVRPresenceActor", DisplayName = "VR Avatar Actor Class"))
 	FSoftClassPath VRAvatarActorClass;
 
-	/** The timespan at which discovered Concert server are considered stale if they haven't answered back */
+	/** The port to use to reach the server with static endpoints when launched through the editor. This port will be used over the unicast endpoint port in the UDP Messagging settings if non 0 when transferring the editor settings to the launched server. */
+	UPROPERTY(config, EditAnywhere, AdvancedDisplay, Category = "Client Settings")
+	uint16 ServerPort;
+
+	/** The timespan at which discovered Multi-User server are considered stale if they haven't answered back */
 	UPROPERTY(config, EditAnywhere, DisplayName="Discovery Timeout", AdvancedDisplay, Category="Client Settings", meta=(ForceUnits=s))
 	int32 DiscoveryTimeoutSeconds;
 
@@ -221,6 +238,38 @@ struct FConcertClientSettings
 	/** Array of tags that can be used for grouping and categorizing. */
 	UPROPERTY(config, EditAnywhere, AdvancedDisplay, Category = "Client Settings")
 	TArray<FName> Tags;
+
+	/** A key used to identify the clients during server discovery. If the server was configured to restrict access, the client key must be know of the server. Can be left empty. */
+	UPROPERTY(config)
+	FString ClientAuthenticationKey;
+};
+
+UENUM()
+enum class EConcertSourceValidationMode : uint8
+{
+	/** Source control validation will fail on any changes when connecting to a Multi-User Session. */
+	Hard = 0,
+	/** 
+	 * Source control validation will warn and prompt on any changes when connecting to a Multi-User session. 
+	 * In Memory changes will be hot-reloaded.
+	 * Source control changes aren't affected but will be stashed/shelved in the future.
+	 */
+	Soft,
+	/** Soft validation mode with auto proceed on prompts. */
+	SoftAutoProceed
+};
+
+USTRUCT()
+struct FConcertSourceControlSettings
+{
+	GENERATED_BODY()
+
+	FConcertSourceControlSettings()
+		: ValidationMode(EConcertSourceValidationMode::Hard)
+	{}
+
+	UPROPERTY(config, EditAnywhere, Category="Source Control Settings")
+	EConcertSourceValidationMode ValidationMode;
 };
 
 UCLASS(config=Engine)
@@ -234,7 +283,7 @@ public:
 	 * Mark this setting object as editor only.
 	 * This so soft object path reference made by this setting object won't be automatically grabbed by the cooker.
 	 * @see UPackage::Save, FSoftObjectPathThreadContext::GetSerializationOptions, FSoftObjectPath::ImportTextItem
-	 * @todo: cooker should have a better way to filter editor only objects for 'unsollicited' references.
+	 * @todo: cooker should have a better way to filter editor only objects for 'unsolicited' references.
 	 */
 	virtual bool IsEditorOnly() const
 	{
@@ -302,6 +351,9 @@ public:
 	/** Client & client session settings */
 	UPROPERTY(config, EditAnywhere, Category="Client Settings", meta=(ShowOnlyInnerProperties))
 	FConcertClientSettings ClientSettings;
+
+	UPROPERTY(config, EditAnywhere, Category = "Source Control Settings", meta=(ShowOnlyInnerProperties))
+	FConcertSourceControlSettings SourceControlSettings;
 
 	/** Endpoint settings passed down to endpoints on creation */
 	UPROPERTY(config, EditAnywhere, AdvancedDisplay, Category="Endpoint Settings", meta=(ShowOnlyInnerProperties))

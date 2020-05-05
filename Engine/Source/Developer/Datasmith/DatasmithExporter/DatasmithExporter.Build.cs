@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 using System.IO;
 
 namespace UnrealBuildTool.Rules
@@ -25,8 +25,7 @@ namespace UnrealBuildTool.Rules
 					"Projects",
                     "RawMesh",
                     "MeshDescription",
-					"MeshDescriptionOperations",
-					"StaticMeshDescription"
+					"StaticMeshDescription",
                 }
             );
 

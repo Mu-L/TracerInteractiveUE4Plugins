@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Components/DetailsView.h"
 
@@ -115,12 +115,12 @@ void UDetailsView::OnObjectChanged()
 	}
 	else
 	{
-		AsynBuildContentWidget();
+		BuildContentWidget();
 	}
 }
 
 
-void UDetailsView::NotifyPostChange(const FPropertyChangedEvent& PropertyChangedEvent, UProperty* PropertyThatChanged)
+void UDetailsView::NotifyPostChange(const FPropertyChangedEvent& PropertyChangedEvent, FProperty* PropertyThatChanged)
 {
 	FNotifyHook::NotifyPostChange(PropertyChangedEvent, PropertyThatChanged);
 

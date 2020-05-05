@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraNodeFunctionCall.h"
 #include "UObject/UnrealType.h"
@@ -73,6 +73,20 @@ void UNiagaraNodeFunctionCall::PostLoad()
 		}
 	}
 
+	// Allow data interfaces an opportunity to intercept changes
+	if (Signature.IsValid() && Signature.bMemberFunction)
+	{
+		if ((Signature.Inputs.Num() > 0) && Signature.Inputs[0].GetType().IsDataInterface())
+		{
+			UNiagaraDataInterface* CDO = CastChecked<UNiagaraDataInterface>(Signature.Inputs[0].GetType().GetClass()->GetDefaultObject());
+			if (CDO->UpgradeFunctionCall(Signature))
+			{
+				FunctionDisplayName.Empty();
+				ReallocatePins();
+			}
+		}
+	}
+
 	// Clean up invalid old references to propagated parameters
 	CleanupPropagatedSwitchValues();
 	
@@ -84,6 +98,8 @@ void UNiagaraNodeFunctionCall::PostLoad()
 
 void UNiagaraNodeFunctionCall::UpgradeDIFunctionCalls()
 {
+	// We no longer use this upgrade path, but leaving here for convience in case we need to use this route again for other things
+#if 0
 	UClass* InterfaceClass = nullptr;
 	UNiagaraDataInterface* InterfaceCDO = nullptr;
 	if (Signature.IsValid() && FunctionScript == nullptr)
@@ -99,25 +115,6 @@ void UNiagaraNodeFunctionCall::UpgradeDIFunctionCalls()
 	}
 
 	FString UpgradeNote;
-
-	//TODO: Move this out into DI specific functions or helper classes?
-	if (InterfaceClass && InterfaceCDO)
-	{		
-		if (InterfaceClass == UNiagaraDataInterfaceSkeletalMesh::StaticClass())
-		{
-			if (Signature.Name == TEXT("RandomTriCoord"))
-			{
-				if (Signature.Inputs.Num() == 1)//If this is before we added the additional seed inputs. TODO: Add a per DI version number to make this simpler and clearer. In this case we can detect old data easy enough but a version number is better.
-				{
-					UpgradeNote = TEXT("Adding RandomInfo parameter to support deterministic random sampling.");
-
-					Signature.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition(FNiagaraRandInfo::StaticStruct()), TEXT("RandomInfo")));
-					ReallocatePins();
-				}
-			}
-		}
-	}
-
 	if (!UpgradeNote.IsEmpty())
 	{
 		UE_LOG(LogNiagaraEditor, Log, TEXT("Upgradeing Niagara Data Interface fuction call node. This may cause unnessessary recompiles. Please resave these assets if this occurs. Or use fx.UpgradeAllNiagaraAssets."));
@@ -129,6 +126,7 @@ void UNiagaraNodeFunctionCall::UpgradeDIFunctionCalls()
 		UE_LOG(LogNiagaraEditor, Log, TEXT("Function: %s"), *Signature.GetName());
 		UE_LOG(LogNiagaraEditor, Log, TEXT("Upgrade Note: %s"),* UpgradeNote);
 	}
+#endif
 }
 
 TSharedPtr<SGraphNode> UNiagaraNodeFunctionCall::CreateVisualWidget()
@@ -237,7 +235,7 @@ void UNiagaraNodeFunctionCall::AllocateDefaultPins()
 			TOptional<FNiagaraVariableMetaData> MetaData = Graph->GetMetaData(Input);
 			if (MetaData.IsSet())
 			{
-				int32 DefaultValue = MetaData->StaticSwitchDefaultValue;
+				int32 DefaultValue = MetaData->GetStaticSwitchDefaultValue();
 				Input.AllocateData();
 				Input.SetValue<FNiagaraInt32>({ DefaultValue });
 				
@@ -294,6 +292,7 @@ void UNiagaraNodeFunctionCall::AllocateDefaultPins()
 		ComputeNodeName();
 	}
 
+	UpdateNodeErrorMessage();
 }
 
 // Returns true if this node is deprecated
@@ -416,6 +415,39 @@ ENiagaraScriptUsage UNiagaraNodeFunctionCall::GetCalledUsage() const
 	return ENiagaraScriptUsage::Function;
 }
 
+static FText GetFormattedDeprecationMessage(const UNiagaraScript* FunctionScript, const FString& FunctionDisplayName)
+{
+	FFormatNamedArguments Args;
+	Args.Add(TEXT("NodeName"), FText::FromString(FunctionDisplayName));
+
+	if (FunctionScript->DeprecationRecommendation != nullptr)
+	{
+		Args.Add(TEXT("Recommendation"), FText::FromString(FunctionScript->DeprecationRecommendation->GetPathName()));
+	}
+
+	if (FunctionScript->DeprecationMessage.IsEmptyOrWhitespace() == false)
+	{
+		Args.Add(TEXT("Message"), FunctionScript->DeprecationMessage);
+	}
+
+	FText FormatString = LOCTEXT("DeprecationErrorFmtUnknown", "Function call \"{NodeName}\" is deprecated. No recommendation was provided.");
+
+	if (FunctionScript->DeprecationRecommendation != nullptr && FunctionScript->DeprecationMessage.IsEmptyOrWhitespace() == false)
+	{
+		FormatString = LOCTEXT("DeprecationErrorFmtMessageAndRecommendation", "Function call \"{NodeName}\" is deprecated. Reason:\n{Message}.\nPlease use {Recommendation} instead.");
+	}
+	else if (FunctionScript->DeprecationRecommendation != nullptr)
+	{
+		FormatString = LOCTEXT("DeprecationErrorFmtRecommendation", "Function call \"{NodeName}\" is deprecated. Please use {Recommendation} instead.");
+	}
+	else if (FunctionScript->DeprecationMessage.IsEmptyOrWhitespace() == false)
+	{
+		FormatString = LOCTEXT("DeprecationErrorFmtMessage", "Function call \"{NodeName}\" is deprecated. Reason:\n{Message} ");
+	}
+
+	return FText::Format(FormatString, Args);
+}
+
 void UNiagaraNodeFunctionCall::Compile(class FHlslNiagaraTranslator* Translator, TArray<int32>& Outputs)
 {
 	TArray<int32> Inputs;
@@ -428,17 +460,9 @@ void UNiagaraNodeFunctionCall::Compile(class FHlslNiagaraTranslator* Translator,
 	{
 		if (FunctionScript->bDeprecated && IsNodeEnabled())
 		{
-			if (FunctionScript->DeprecationRecommendation)
-			{
-				Translator->Warning(FText::Format(LOCTEXT("DeprecationErrorFmtRecommendation", "Function call \"{0}\" is deprecated. Please use {1} instead."), FText::FromString(FunctionDisplayName),
-					FText::FromString(FunctionScript->DeprecationRecommendation->GetPathName())),
-					this, nullptr);
-			}
-			else
-			{
-				Translator->Warning(FText::Format(LOCTEXT("DeprecationErrorFmtUnknown", "Function call \"{0}\" is deprecated. No recommendation was provided."), FText::FromString(FunctionDisplayName)),
-					this, nullptr);
-			}
+			FText DeprecationMessage = GetFormattedDeprecationMessage(FunctionScript, FunctionDisplayName);
+
+			Translator->Warning(DeprecationMessage, this, nullptr);
 		}
 
 		TArray<UEdGraphPin*> CallerInputPins;
@@ -551,7 +575,7 @@ void UNiagaraNodeFunctionCall::Compile(class FHlslNiagaraTranslator* Translator,
 	{
 		if (Signature.Inputs.Num() > 0)
 		{
-			if (Signature.Inputs[0].GetType().IsDataInterface())
+			if (Signature.Inputs[0].GetType().IsDataInterface() && GetValidateDataInterfaces())
 			{
 				UClass* DIClass = Signature.Inputs[0].GetType().GetClass();
 				if (UNiagaraDataInterface* DataInterfaceCDO = Cast<UNiagaraDataInterface>(DIClass->GetDefaultObject()))
@@ -590,11 +614,6 @@ void UNiagaraNodeFunctionCall::Compile(class FHlslNiagaraTranslator* Translator,
 	}
 }
 
-bool UNiagaraNodeFunctionCall::IsValidPinToCompile(UEdGraphPin* Pin) const
-{
-	return !IsAddPin(Pin);
-}
-
 UObject*  UNiagaraNodeFunctionCall::GetReferencedAsset() const
 {
 	if (FunctionScript && FunctionScript->GetOutermost() != GetOutermost())
@@ -607,6 +626,60 @@ UObject*  UNiagaraNodeFunctionCall::GetReferencedAsset() const
 	}
 }
 
+void UNiagaraNodeFunctionCall::UpdateNodeErrorMessage()
+{
+	if (FunctionScript)
+	{
+		if (FunctionScript->bDeprecated)
+		{
+			UEdGraphNode::bHasCompilerMessage = true;
+			ErrorType = EMessageSeverity::Warning;
+			
+			UEdGraphNode::ErrorMsg = GetFormattedDeprecationMessage(FunctionScript, FunctionDisplayName).ToString();
+		}
+		else if (FunctionScript->bExperimental)
+		{
+			UEdGraphNode::bHasCompilerMessage = true;
+			UEdGraphNode::ErrorType = EMessageSeverity::Info;
+
+			if (FunctionScript->ExperimentalMessage.IsEmptyOrWhitespace())
+			{
+				UEdGraphNode::NodeUpgradeMessage = LOCTEXT("FunctionExperimental", "This function is marked as experimental, use with care!");
+			}
+			else
+			{
+				FFormatNamedArguments Args;
+				Args.Add(TEXT("Message"), FunctionScript->ExperimentalMessage);
+				UEdGraphNode::NodeUpgradeMessage = FText::Format(LOCTEXT("FunctionExperimentalReason", "This function is marked as experimental, reason:\n{Message}."), Args);
+			}
+		}
+		else
+		{
+			UEdGraphNode::bHasCompilerMessage = false;
+			UEdGraphNode::ErrorMsg = FString();
+		}
+	}
+	else if (Signature.IsValid())
+	{
+		if (Signature.bExperimental)
+		{
+			UEdGraphNode::bHasCompilerMessage = true;
+			UEdGraphNode::ErrorType = EMessageSeverity::Info;
+
+			if (Signature.ExperimentalMessage.IsEmptyOrWhitespace())
+			{
+				UEdGraphNode::NodeUpgradeMessage = LOCTEXT("FunctionExperimental", "This function is marked as experimental, use with care!");
+			}
+			else
+			{
+				FFormatNamedArguments Args;
+				Args.Add(TEXT("Message"), Signature.ExperimentalMessage);
+				UEdGraphNode::NodeUpgradeMessage = FText::Format(LOCTEXT("FunctionExperimentalReason", "This function is marked as experimental, reason:\n{Message}."), Args);
+			}
+		}
+	}
+}
+
 bool UNiagaraNodeFunctionCall::RefreshFromExternalChanges()
 {
 	bool bReload = false;
@@ -616,35 +689,14 @@ bool UNiagaraNodeFunctionCall::RefreshFromExternalChanges()
 		if (Source != nullptr)
 		{
 			bReload = CachedChangeId != Source->NodeGraph->GetChangeID();
-			if (bReload)
-			{
-				bReload = true;
-			}
 		}
-
-		if (FunctionScript->bDeprecated)
-		{
-			bHasCompilerMessage = true;
-			ErrorType = EMessageSeverity::Warning;
-			FFormatNamedArguments Args;
-			Args.Add(TEXT("NodeName"), GetNodeTitle(ENodeTitleType::ListView));
-			Args.Add(TEXT("Recommendation"), FunctionScript->DeprecationRecommendation != nullptr ? FText::FromString(FunctionScript->DeprecationRecommendation->GetPathName()) : LOCTEXT("UnspecifiedName","Unspecified"));
-			ErrorMsg = FText::Format(LOCTEXT("DeprecationWarning", "{NodeName} is deprecated. Suggested replacement: {Recommendation}"), Args).ToString();
-		}
-		else
-		{
-			bHasCompilerMessage = false;
-			ErrorMsg = FString();
-		}
-
 	}
-	else
+	else if (Signature.IsValid())
 	{
-		if (Signature.IsValid())
-		{
-			bReload = true;
-		}
+		bReload = true;		
 	}
+
+	UpdateNodeErrorMessage();
 
 	// Go over the static switch parameters to set their propagation status on the pins
 	UNiagaraGraph* CalledGraph = GetCalledGraph();
@@ -695,9 +747,9 @@ void UNiagaraNodeFunctionCall::SubsumeExternalDependencies(TMap<const UObject*, 
 	}
 }
 
-void UNiagaraNodeFunctionCall::GatherExternalDependencyData(ENiagaraScriptUsage InMasterUsage, const FGuid& InMasterUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<UObject*>& InReferencedObjs) const
+void UNiagaraNodeFunctionCall::GatherExternalDependencyData(ENiagaraScriptUsage InMasterUsage, const FGuid& InMasterUsageId, TArray<FNiagaraCompileHash>& InReferencedCompileHashes, TArray<FString>& InReferencedObjs) const
 {
-	if (FunctionScript && FunctionScript->GetOutermost() != this->GetOutermost())
+	if (FunctionScript)
 	{
 		UNiagaraScriptSource* Source = CastChecked<UNiagaraScriptSource>(FunctionScript->GetSource());
 		UNiagaraGraph* FunctionGraph = CastChecked<UNiagaraGraph>(Source->NodeGraph);
@@ -713,7 +765,7 @@ void UNiagaraNodeFunctionCall::GatherExternalDependencyData(ENiagaraScriptUsage 
 				if (FoundGuid.IsValid() && FoundCompileHash.IsValid())
 				{
 					InReferencedCompileHashes.Add(FoundCompileHash);
-					InReferencedObjs.Add(FunctionGraph);
+					InReferencedObjs.Add(FunctionGraph->GetPathName());
 					FunctionGraph->GatherExternalDependencyData((ENiagaraScriptUsage)i, FGuid(0, 0, 0, 0), InReferencedCompileHashes, InReferencedObjs);
 				}
 			}
@@ -780,7 +832,7 @@ void UNiagaraNodeFunctionCall::BuildParameterMapHistory(FNiagaraParameterMapHist
 			}
 		}
 
-		OutHistory.EnterFunction(GetFunctionName(), FunctionScript, this);
+		OutHistory.EnterFunction(GetFunctionName(), FunctionScript, FunctionGraph, this);
 		if (ParamMapIdx != INDEX_NONE)
 		{
 			NodeIdx = OutHistory.BeginNodeVisitation(ParamMapIdx, this);
@@ -871,9 +923,9 @@ UEdGraphPin* UNiagaraNodeFunctionCall::FindStaticSwitchInputPin(const FName& Var
 	return nullptr;
 }
 
-void UNiagaraNodeFunctionCall::SuggestName(FString SuggestedName)
+void UNiagaraNodeFunctionCall::SuggestName(FString SuggestedName, bool bForceSuggestion)
 {
-	ComputeNodeName(SuggestedName);
+	ComputeNodeName(SuggestedName, bForceSuggestion);
 }
 
 UNiagaraNodeFunctionCall::FOnInputsChanged& UNiagaraNodeFunctionCall::OnInputsChanged()
@@ -920,7 +972,7 @@ void UNiagaraNodeFunctionCall::AutowireNewNode(UEdGraphPin* FromPin)
 	ComputeNodeName();
 }
 
-void UNiagaraNodeFunctionCall::ComputeNodeName(FString SuggestedName)
+void UNiagaraNodeFunctionCall::ComputeNodeName(FString SuggestedName, bool bForceSuggestion)
 {
 	FString FunctionName = FunctionScript ? FunctionScript->GetName() : Signature.GetName();
 	FName ProposedName;
@@ -928,7 +980,7 @@ void UNiagaraNodeFunctionCall::ComputeNodeName(FString SuggestedName)
 	{ 
 		// If we have a suggested name and and either there is no function name, or it is a permutation of the function name
 		// it can be used as the proposed name.
-		if (FunctionName.IsEmpty() || SuggestedName == FunctionName || (SuggestedName.StartsWith(FunctionName) && SuggestedName.RightChop(FunctionName.Len()).IsNumeric()))
+		if (bForceSuggestion || FunctionName.IsEmpty() || SuggestedName == FunctionName || (SuggestedName.StartsWith(FunctionName) && SuggestedName.RightChop(FunctionName.Len()).IsNumeric()))
 		{
 			ProposedName = *SuggestedName;
 		}

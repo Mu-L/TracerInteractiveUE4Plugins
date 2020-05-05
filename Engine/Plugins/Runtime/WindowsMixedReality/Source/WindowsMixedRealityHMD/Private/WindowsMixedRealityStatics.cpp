@@ -5,6 +5,10 @@
 #include "Engine/Engine.h"
 #include "WindowsMixedRealityHMD.h"
 
+#if WITH_EDITOR
+#include "WindowsMixedRealityRuntimeSettings.h"
+#endif
+
 namespace WindowsMixedReality
 {
 	FWindowsMixedRealityHMD* GetWindowsMixedRealityHMD() noexcept
@@ -153,13 +157,24 @@ namespace WindowsMixedReality
 		{
 			if (!GEngine->XRSystem.IsValid())
 			{
-				UE_LOG(LogWmrHmd, Warning, TEXT("ConnectToRemoteHoloLens XRSystem is not valid. Perhaps it failed to start up?  Cannot Connect."));
+#if WITH_EDITOR
+				UWindowsMixedRealityRuntimeSettings::Get()->OnRemotingStatusChanged.ExecuteIfBound(FString(TEXT("Cannot Connect, see log for Errors.")), FLinearColor::Red);
+#endif
+				UE_LOG(LogWmrHmd, Error, TEXT("ConnectToRemoteHoloLens XRSystem is not valid. Perhaps it failed to start up?  Cannot Connect."));
 			}
 			else if (GEngine->XRSystem->GetSystemName() != FName("WindowsMixedRealityHMD"))
 			{
-				UE_LOG(LogWmrHmd, Warning, TEXT("ConnectToRemoteHoloLens XRSystem SystemName is %s, not WindowsMixedRealityHMD.  Cannot Connect.  Perhaps you want to disable other XR plugins, adjust the priorities of XR plugins, deactivate other XR hardware, or run with -hmd=WindowsMixedRealityHMD in your editor commandline?"), *GEngine->XRSystem->GetSystemName().ToString());
+#if WITH_EDITOR
+				UWindowsMixedRealityRuntimeSettings::Get()->OnRemotingStatusChanged.ExecuteIfBound(FString(TEXT("Cannot Connect, see log for Errors.")), FLinearColor::Red);
+#endif
+				UE_LOG(LogWmrHmd, Error, TEXT("ConnectToRemoteHoloLens XRSystem SystemName is %s, not WindowsMixedRealityHMD.  Cannot Connect.  Perhaps you want to disable other XR plugins, adjust the priorities of XR plugins, deactivate other XR hardware, or run with -hmd=WindowsMixedRealityHMD in your editor commandline?"), *GEngine->XRSystem->GetSystemName().ToString());
 			}
 		}
+#else
+#if WITH_EDITOR
+		UWindowsMixedRealityRuntimeSettings::Get()->OnRemotingStatusChanged.ExecuteIfBound(FString(TEXT("Cannot Connect, see log for Errors.")), FLinearColor::Red);
+#endif
+		UE_LOG(LogWmrHmd, Error, TEXT("FWindowsMixedRealityStatics::ConnectToRemoteHoloLens() is doing nothing because PLATFORM_HOLOLENS. (You don't 'remote' when running on device or emulated device.)"));
 #endif
 	}
 
@@ -175,13 +190,13 @@ namespace WindowsMixedReality
 #endif
 	}
 #if WITH_WINDOWS_MIXED_REALITY
-	bool FWindowsMixedRealityStatics::GetHandJointOrientationAndPosition(HMDHand hand, HMDHandJoint joint, FRotator& OutOrientation, FVector& OutPosition)
+	bool FWindowsMixedRealityStatics::GetHandJointOrientationAndPosition(HMDHand hand, HMDHandJoint joint, FRotator& OutOrientation, FVector& OutPosition, float& OutRadius)
 	{
 		FWindowsMixedRealityHMD* hmd = GetWindowsMixedRealityHMD();
 
 		if (hmd != nullptr)
 		{
-			return hmd->GetHandJointOrientationAndPosition(hand, joint, OutOrientation, OutPosition);
+			return hmd->GetHandJointOrientationAndPosition(hand, joint, OutOrientation, OutPosition, OutRadius);
 		}
 
 		return false;

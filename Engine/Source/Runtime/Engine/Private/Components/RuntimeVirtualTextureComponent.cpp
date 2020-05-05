@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Components/RuntimeVirtualTextureComponent.h"
 
@@ -19,7 +19,7 @@ bool URuntimeVirtualTextureComponent::IsVisible() const
 	return Super::IsVisible() && UseVirtualTexturing(GetScene()->GetFeatureLevel());
 }
 
-void URuntimeVirtualTextureComponent::CreateRenderState_Concurrent()
+void URuntimeVirtualTextureComponent::CreateRenderState_Concurrent(FRegisterComponentContext* Context)
 {
 	if (ShouldRender() && VirtualTexture != nullptr)
 	{
@@ -27,7 +27,7 @@ void URuntimeVirtualTextureComponent::CreateRenderState_Concurrent()
 		GetScene()->AddRuntimeVirtualTexture(this);
 	}
 
-	Super::CreateRenderState_Concurrent();
+	Super::CreateRenderState_Concurrent(Context);
 }
 
 void URuntimeVirtualTextureComponent::SendRenderTransform_Concurrent()
@@ -47,6 +47,12 @@ void URuntimeVirtualTextureComponent::DestroyRenderState_Concurrent()
 	GetScene()->RemoveRuntimeVirtualTexture(this);
 
 	Super::DestroyRenderState_Concurrent();
+}
+
+FBoxSphereBounds URuntimeVirtualTextureComponent::CalcBounds(const FTransform& LocalToWorld) const
+{
+	// Bounds are based on the unit box centered on the origin
+	return FBoxSphereBounds(FBox(FVector(-.5f, -.5f, -1.f), FVector(.5f, .5f, 1.f))).TransformBy(LocalToWorld);
 }
 
 FTransform URuntimeVirtualTextureComponent::GetVirtualTextureTransform() const
@@ -97,7 +103,10 @@ void URuntimeVirtualTextureComponent::SetTransformToBounds()
 			{
 				const FTransform ComponentToActor = PrimitiveComponent->GetComponentTransform() * WorldToLocal;
 				FBoxSphereBounds LocalSpaceComponentBounds = PrimitiveComponent->CalcBounds(ComponentToActor);
-				BoundBox += LocalSpaceComponentBounds.GetBox();
+				if (LocalSpaceComponentBounds.GetBox().GetVolume() > 0.f)
+				{
+					BoundBox += LocalSpaceComponentBounds.GetBox();
+				}
 			}
 		}
 

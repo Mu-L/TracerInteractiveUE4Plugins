@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
  
 #pragma once
@@ -35,6 +35,8 @@ public:
 	virtual int32 GetMaxChildNodes() const override;
 	virtual int32 GetMinChildNodes() const override;
 	virtual void PrimeChildWavePlayers(bool bRecurse) override;
+	virtual void RetainChildWavePlayers(bool bRecurse) override;
+	virtual void ReleaseRetainerOnChildWavePlayers(bool bRecurse) override;
 
 #if WITH_EDITOR
 	virtual FText GetInputPinName(int32 PinIndex) const override;
@@ -44,6 +46,5 @@ public:
 #if WITH_EDITOR
 	void ReconcileNode(bool bReconstructNode);
 #endif
-
 };
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	D3D11Query.cpp: D3D query RHI implementation.
@@ -203,7 +203,7 @@ FRenderQueryRHIRef FD3D11DynamicRHI::RHICreateRenderQuery(ERenderQueryType Query
 	return new FD3D11RenderQuery(Query, QueryType);
 }
 
-bool FD3D11DynamicRHI::RHIGetRenderQueryResult(FRHIRenderQuery* QueryRHI,uint64& OutResult,bool bWait)
+bool FD3D11DynamicRHI::RHIGetRenderQueryResult(FRHIRenderQuery* QueryRHI, uint64& OutResult, bool bWait, uint32 GPUIndex)
 {
 	check(IsInRenderingThread());
 	FD3D11RenderQuery* Query = ResourceCast(QueryRHI);
@@ -616,8 +616,10 @@ void FD3D11BufferedGPUTiming::InitDynamicRHI()
 			QueryDesc.Query = D3D11_QUERY_TIMESTAMP;
 			QueryDesc.MiscFlags = 0;
 
+			CA_SUPPRESS(6385);	// Doesn't like COM
 			D3DResult = D3DRHI->GetDevice()->CreateQuery(&QueryDesc,StartTimestamps[TimestampIndex].GetInitReference());
 			GIsSupported = GIsSupported && (D3DResult == S_OK);
+			CA_SUPPRESS(6385);	// Doesn't like COM
 			D3DResult = D3DRHI->GetDevice()->CreateQuery(&QueryDesc,EndTimestamps[TimestampIndex].GetInitReference());
 			GIsSupported = GIsSupported && (D3DResult == S_OK);
 		}

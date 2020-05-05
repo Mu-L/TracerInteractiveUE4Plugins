@@ -1,5 +1,7 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
+
+#include "Containers/ArrayView.h"
 
 #include "Chaos/Array.h"
 #include "Chaos/ArrayCollectionArrayBase.h"
@@ -34,6 +36,14 @@ class TArrayCollectionArray : public TArrayCollectionArrayBase, public TArray<T>
 	}
 
 	virtual ~TArrayCollectionArray() {}
+
+	void Fill(const T& Value)
+	{
+		for (int32 Idx = 0; Idx < TArray<T>::Num(); ++Idx)
+		{
+			TArray<T>::operator[](Idx) = Value;
+		}
+	}
 
 	TArrayCollectionArray<T> Clone()
 	{

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Android/AndroidPlatformMisc.h"
 #include "Android/AndroidJavaEnv.h"
@@ -41,6 +41,12 @@
 #include "Async/TaskGraphInterfaces.h"
 
 #include "FramePro/FrameProProfiler.h"
+#include <sys/mman.h>
+#include "Templates/AlignmentTemplates.h"
+#include "GenericPlatform/GenericPlatformOutputDevices.h"
+
+#include "Android/AndroidPlatformStackWalk.h"
+#include "Android/AndroidSignals.h"
 
 #if USE_ANDROID_JNI
 extern AAssetManager * AndroidThunkCpp_GetAssetManager();
@@ -63,6 +69,15 @@ static FAutoConsoleVariableRef CAndroidLowPowerBatteryThreshold(
 	GAndroidLowPowerBatteryThreshold,
 	TEXT("The battery level below which the device is considered in a low power state."),
 	ECVF_Default
+);
+
+static TAutoConsoleVariable<int32> CVarMaliMidgardIndexingBug(
+	TEXT("r.Android.MaliMidgardIndexingBug"),
+	0,
+	TEXT("For an indexed instance draw, the OpenGL ES driver does not handle attributes correctly. This issue only happens on Mali T8xx GPU when the difference between two adjacent index values are larger than 16.\n")
+	TEXT("  0 = off\n")
+	TEXT("  1 = on."),
+	ECVF_ReadOnly
 );
 
 #if STATS || ENABLE_STATNAMEDEVENTS
@@ -171,6 +186,7 @@ namespace FAndroidAppEntry
 
 void FAndroidMisc::PlatformPreInit()
 {
+	FAndroidCrashContext::Initialize();
 	FGenericPlatformMisc::PlatformPreInit();
 	EstablishVulkanDeviceSupport();
 	FAndroidAppEntry::PlatformInit();
@@ -720,31 +736,14 @@ int32 FAndroidMisc::NumberOfCores()
 	int32 NumberOfCores = android_getCpuCount();
 
 	static int CalculatedNumberOfCores = 0;
-
-#ifndef CPU_SETSIZE
-#if PLATFORM_64BITS
-	#define CPU_SETSIZE 1024
-#else
-	#define CPU_SETSIZE 32
-#endif 
-#endif
-
-	char cpuset[CPU_SETSIZE / 8] = { 0 };
-
 	if (CalculatedNumberOfCores == 0)
 	{
 		pid_t ThreadId = gettid();
-		syscall(__NR_sched_getaffinity, ThreadId, sizeof(cpuset), &cpuset);
-
-		char *coreptr = cpuset;
-		int32 CoreSets = CPU_SETSIZE / 8;
-		while (CoreSets--)
+		cpu_set_t cpuset;
+		CPU_ZERO(&cpuset);
+		if (sched_getaffinity(ThreadId, sizeof(cpuset), &cpuset) != -1)
 		{
-			char coremask = *coreptr++;
-			for (int i = 0; i < 8; i++)
-			{
-				CalculatedNumberOfCores += ((coremask & (1 << i)) != 0);
-			}
+			CalculatedNumberOfCores = CPU_COUNT(&cpuset);
 		}
 
 		UE_LOG(LogTemp, Log, TEXT("%d cores and %d assignable cores"), NumberOfCores, CalculatedNumberOfCores);
@@ -887,7 +886,7 @@ void DefaultCrashHandler(const FAndroidCrashContext& Context)
 /** Global pointer to crash handler */
 void (* GCrashHandlerPointer)(const FGenericCrashContext& Context) = NULL;
 
-const int32 TargetSignals[] =
+static constexpr int32 TargetSignals[] =
 {
 	SIGQUIT, // SIGQUIT is a user-initiated "crash".
 	SIGILL,
@@ -896,37 +895,351 @@ const int32 TargetSignals[] =
 	SIGSEGV,
 	SIGSYS
 };
+static constexpr int32 NumTargetSignals = UE_ARRAY_COUNT(TargetSignals);
 
-const int32 NumTargetSignals = UE_ARRAY_COUNT(TargetSignals);
-
-struct sigaction PrevActions[NumTargetSignals];
-static bool PreviousSignalHandlersValid = false;
-
-static void RestorePreviousSignalHandlers()
+static const char* SignalToString(int32 Signal)
 {
-	if (PreviousSignalHandlersValid)
+	switch (Signal)
 	{
-		for (int32 i = 0; i < NumTargetSignals; ++i)
-		{
-			sigaction(TargetSignals[i], &PrevActions[i], NULL);
-		}
-		PreviousSignalHandlersValid = false;
+		case SIGQUIT:
+			return "SIGQUIT";
+		case SIGILL:
+			return "SIGILL";
+		case SIGFPE:
+			return "SIGFPE";
+		case SIGBUS:
+			return "SIGBUS";
+		case SIGSEGV:
+			return "SIGSEGV";
+		case SIGSYS:
+			return "SIGSYS";
+		default:
+			return FAndroidCrashContext::ItoANSI(Signal,16, 16);
 	}
 }
 
-/** True system-specific crash handler that gets called first */
-void PlatformCrashHandler(int32 Signal, siginfo* Info, void* Context)
+#if ANDROID_HAS_RTSIGNALS
+
+float GAndroidSignalTimeOut = 20.0f;
+static FAutoConsoleVariableRef CAndroidSignalTimeout(
+	TEXT("android.SignalTimeout"),
+	GAndroidSignalTimeOut,
+	TEXT("Time in seconds to wait for the signal handler to complete before timing out and terminating the process."),
+	ECVF_Default
+);
+
+template<typename Derived >
+typename FSignalHandler< Derived >::FSignalParams FSignalHandler< Derived >::SignalParams;
+template<typename Derived >
+int32 FSignalHandler< Derived >::SignalThreadStatus = (int32)FSignalHandler< Derived >::ESignalThreadStatus::NotInitialized;
+template<typename Derived >
+uint32 FSignalHandler< Derived >::ForwardingThreadID = 0xffffffff;
+template<typename Derived >
+int32 FSignalHandler< Derived >::ForwardingSignalType = -1;
+template<typename Derived >
+struct sigaction FSignalHandler< Derived >::PreviousActionForForwardSignal;
+
+
+class FThreadCallstackSignalHandler : FSignalHandler<FThreadCallstackSignalHandler>
 {
-	// Switch to malloc crash.
-	//FGenericPlatformMallocCrash::Get().SetAsGMalloc(); @todo uncomment after verification
+	friend class FSignalHandler<FThreadCallstackSignalHandler>;
+public:
+	static void Init()
+	{
+		FSignalHandler<FThreadCallstackSignalHandler>::Init(THREADBACKTRACE_SIGNAL_FWD);
+		HookTargetSignal();
+	}
 
-	FPlatformMisc::LowLevelOutputDebugStringf(TEXT("Signal %d caught!"), Signal);
+	static void Release()
+	{
+		RestorePreviousTargetSignalHandler();
+		FSignalHandler<FThreadCallstackSignalHandler>::Release();
+	}
 
-	// Restore system handlers so Android could catch this signal after we are done with crashreport
-	RestorePreviousSignalHandlers();
+private:
+	static void OnTargetSignal(int Signal, siginfo* Info, void* Context)
+	{
+		while (FPlatformAtomics::InterlockedCompareExchange(&handling_signal, 1, 0) != 0)
+		{
+			FPlatformProcess::SleepNoStats(0.0f);
+		}
+		FSignalHandler<FThreadCallstackSignalHandler>::ForwardSignal(Signal, Info, Context);
+		FPlatformAtomics::AtomicStore(&handling_signal, 0);
+	}
 
-	FAndroidCrashContext CrashContext(ECrashContextType::Crash, TEXT("Caught signal"));
-	CrashContext.InitFromSignal(Signal, Info, Context);
+	static void HandleTargetSignal(int Signal, siginfo* Info, void* Context)
+	{
+		FPlatformStackWalk::HandleBackTraceSignal(Info, Context);
+	}
+
+	static void HookTargetSignal()
+	{
+		check(bSignalHooked == false);
+		struct sigaction ActionForThread;
+		FMemory::Memzero(ActionForThread);
+		sigfillset(&ActionForThread.sa_mask);
+		ActionForThread.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
+		ActionForThread.sa_sigaction = &OnTargetSignal;
+		sigaction(THREAD_CALLSTACK_GENERATOR, &ActionForThread, &PreviousActionForThreadGenerator);
+		bSignalHooked = true;
+	}
+
+	static void RestorePreviousTargetSignalHandler()
+	{
+		if (bSignalHooked)
+		{
+			bSignalHooked = false;
+			sigaction(THREAD_CALLSTACK_GENERATOR, &PreviousActionForThreadGenerator, nullptr);
+		}
+	}
+
+	static bool bSignalHooked;
+	static volatile sig_atomic_t handling_signal;
+	static struct sigaction PreviousActionForThreadGenerator;
+};
+
+volatile sig_atomic_t FThreadCallstackSignalHandler::handling_signal = 0;
+bool FThreadCallstackSignalHandler::bSignalHooked = false;
+struct sigaction FThreadCallstackSignalHandler::PreviousActionForThreadGenerator;
+
+class FFatalSignalHandler : public FSignalHandler<FFatalSignalHandler>
+{
+	friend class FSignalHandler<FFatalSignalHandler>;
+public:
+	static void Init()
+	{
+		FSignalHandler<FFatalSignalHandler>::Init(FATAL_SIGNAL_FWD);
+		HookTargetSignals();
+	}
+
+	static void Release()
+	{
+		RestorePreviousTargetSignalHandlers();
+		FSignalHandler<FFatalSignalHandler>::Release();
+	}
+
+	static bool IsInFatalSignalHandler()
+	{
+		return FPlatformAtomics::AtomicRead(&handling_fatal_signal) > 0;
+	}
+
+protected:
+
+	static void EnterFatalCrash()
+	{
+		// we are a fatal signal, we can only handle one at a time. So avoid allow multiple fatal signals going through
+		if (FPlatformAtomics::InterlockedIncrement(&handling_fatal_signal) != 1)
+		{
+			FPlatformProcess::SleepNoStats(60.0f);
+			exit(0);
+		}
+	}
+
+	static void OnTargetSignal(int Signal, siginfo* Info, void* Context)
+	{
+		EnterFatalCrash();
+		FSignalHandler<FFatalSignalHandler>::ForwardSignal(Signal, Info, Context);
+		RestorePreviousTargetSignalHandlers();
+	}
+
+	static const ANSICHAR* CodeToString(int Signal, int si_code)
+	{
+		switch (Signal)
+		{
+			case SIGILL:
+			{
+				switch (si_code)
+				{
+					// SIGILL
+					case ILL_ILLOPC: return "ILL_ILLOPC";
+					case ILL_ILLOPN: return "ILL_ILLOPN";
+					case ILL_ILLADR: return "ILL_ILLADR";
+					case ILL_ILLTRP: return "ILL_ILLTRP";
+					case ILL_PRVOPC: return "ILL_PRVOPC";
+					case ILL_PRVREG: return "ILL_PRVREG";
+					case ILL_COPROC: return "ILL_COPROC";
+					case ILL_BADSTK: return "ILL_BADSTK";
+				}
+			}
+			break;
+			case SIGFPE:
+			{
+				switch (si_code)
+				{
+					// SIGFPE
+					case FPE_INTDIV: return "FPE_INTDIV";
+					case FPE_INTOVF: return "FPE_INTOVF";
+					case FPE_FLTDIV: return "FPE_FLTDIV";
+					case FPE_FLTOVF: return "FPE_FLTOVF";
+					case FPE_FLTUND: return "FPE_FLTUND";
+					case FPE_FLTRES: return "FPE_FLTRES";
+					case FPE_FLTINV: return "FPE_FLTINV";
+					case FPE_FLTSUB: return "FPE_FLTSUB";
+				}
+			}
+			break;
+			case SIGBUS:
+			{
+				switch (si_code)
+				{
+					// SIGBUS
+					case BUS_ADRALN: return "BUS_ADRALN";
+					case BUS_ADRERR: return "BUS_ADRERR";
+					case BUS_OBJERR: return "BUS_OBJERR";
+				}
+			}
+			break;
+			case SIGSEGV:
+			{
+				switch (si_code)
+				{
+					// SIGSEGV
+					case SEGV_MAPERR: return "SEGV_MAPERR";
+					case SEGV_ACCERR: return "SEGV_ACCERR";
+				}
+			}
+			break;
+		}
+		return FAndroidCrashContext::ItoANSI(si_code, 10, 0);
+	}
+
+	static FString GetFatalSignalMessage(int Signal, siginfo* Info)
+	{
+		const int MessageSize = 255;
+		char AnsiMessage[MessageSize];
+		FCStringAnsi::Strncpy(AnsiMessage, "Caught signal : ", MessageSize);
+		FCStringAnsi::Strcat(AnsiMessage, SignalToString(Signal));
+		FCStringAnsi::Strcat(AnsiMessage, " (");
+		FCStringAnsi::Strcat(AnsiMessage, CodeToString(Signal, Info->si_code));
+		FCStringAnsi::Strcat(AnsiMessage, ")");
+		switch (Signal)
+		{
+			case SIGILL:
+			case SIGFPE:
+			case SIGSEGV:
+			case SIGBUS:
+			case SIGTRAP:
+			{
+				FCStringAnsi::Strcat(AnsiMessage, " fault address 0x");
+				FCStringAnsi::Strcat(AnsiMessage, FAndroidCrashContext::ItoANSI((uintptr_t)Info->si_addr, 16, 16));
+				break;
+			}
+		}
+
+		return ANSI_TO_TCHAR(AnsiMessage);
+	}
+
+	static void HandleTargetSignal(int Signal, siginfo* Info, void* Context)
+	{
+		// Switch to malloc crash.
+		FPlatformMallocCrash::Get().SetAsGMalloc();
+
+		FString Message = GetFatalSignalMessage(Signal, Info);
+		FAndroidCrashContext CrashContext(ECrashContextType::Crash, *Message);
+
+		CrashContext.InitFromSignal(Signal, Info, Context);
+		CrashContext.CaptureCrashInfo();
+		if (GCrashHandlerPointer)
+		{
+			GCrashHandlerPointer(CrashContext);
+		}
+		else
+		{
+			// call default one
+			DefaultCrashHandler(CrashContext);
+		}
+	}
+	static void HookTargetSignals()
+	{
+		check(PreviousSignalHandlersValid == false);
+		// hook our signals and record current set.
+		struct sigaction Action;
+		FMemory::Memzero(&Action, sizeof(struct sigaction));
+		Action.sa_sigaction = &OnTargetSignal;
+		// sigfillset will block all other signals whilst the signal handler is processing.
+		sigfillset(&Action.sa_mask);
+		Action.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
+
+		for (int32 i = 0; i < NumTargetSignals; ++i)
+		{
+			sigaction(TargetSignals[i], &Action, &PrevActions[i]);
+		}
+		PreviousSignalHandlersValid = true;
+	}
+
+	static void RestorePreviousTargetSignalHandlers()
+	{
+		if (PreviousSignalHandlersValid)
+		{
+			for (int32 i = 0; i < NumTargetSignals; ++i)
+			{
+				sigaction(TargetSignals[i], &PrevActions[i], NULL);
+			}
+			PreviousSignalHandlersValid = false;
+		}
+	}
+
+	static volatile sig_atomic_t handling_fatal_signal;
+	static struct sigaction PrevActions[NumTargetSignals];
+	static bool PreviousSignalHandlersValid;
+};
+
+volatile sig_atomic_t FFatalSignalHandler::handling_fatal_signal = 0;
+struct sigaction FFatalSignalHandler::PrevActions[NumTargetSignals];
+bool FFatalSignalHandler::PreviousSignalHandlersValid = false;
+#endif// ANDROID_HAS_RTSIGNALS
+
+static void SetDefaultSignalHandlers()
+{
+	struct sigaction Action;
+	FMemory::Memzero(&Action, sizeof(struct sigaction));
+	Action.sa_handler = SIG_DFL;
+	sigemptyset(&Action.sa_mask);
+
+	for (int32 i = 0; i < NumTargetSignals; ++i)
+	{
+		sigaction(TargetSignals[i], &Action, NULL);
+	}
+}
+
+bool FAndroidMisc::IsInSignalHandler()
+{
+#if ANDROID_HAS_RTSIGNALS
+	return FFatalSignalHandler::IsInFatalSignalHandler();
+#else
+	return false;
+#endif
+}
+
+void FAndroidMisc::TriggerNonFatalCrashHandler(ECrashContextType InType, const FString& Message)
+{
+	check(InType == ECrashContextType::Ensure);
+
+	FAndroidCrashContext CrashContext(InType, *Message);
+
+	CrashContext.CaptureCrashInfo();
+	if (GCrashHandlerPointer)
+	{
+		GCrashHandlerPointer(CrashContext);
+	}
+	else
+	{
+		// call default one
+		DefaultCrashHandler(CrashContext);
+	}
+}
+
+void FAndroidMisc::TriggerCrashHandler(const TCHAR* InErrorMessage, const TCHAR* OverrideCallstack)
+{
+	FAndroidCrashContext CrashContext(ECrashContextType::Crash, InErrorMessage);
+	if(OverrideCallstack)
+	{
+		CrashContext.SetOverrideCallstack(OverrideCallstack);
+	}
+	else
+	{
+		CrashContext.CaptureCrashInfo();
+	}
 
 	if (GCrashHandlerPointer)
 	{
@@ -939,30 +1252,24 @@ void PlatformCrashHandler(int32 Signal, siginfo* Info, void* Context)
 	}
 }
 
-void FAndroidMisc::SetCrashHandler(void (* CrashHandler)(const FGenericCrashContext& Context))
+void FAndroidMisc::SetCrashHandler(void(*CrashHandler)(const FGenericCrashContext& Context))
 {
+#if ANDROID_HAS_RTSIGNALS
+	UE_LOG(LogAndroid, Log, TEXT("Setting Crash Handler = %p"), CrashHandler);
+
 	GCrashHandlerPointer = CrashHandler;
 
-	RestorePreviousSignalHandlers();
-	FMemory::Memzero(&PrevActions, sizeof(PrevActions));
-
+	FFatalSignalHandler::Release();
+	FThreadCallstackSignalHandler::Release();
 	// Passing -1 will leave these restored and won't trap them
 	if ((PTRINT)CrashHandler == -1)
 	{
 		return;
 	}
 
-	struct sigaction Action;
-	FMemory::Memzero(&Action, sizeof(struct sigaction));
-	Action.sa_sigaction = PlatformCrashHandler;
-	sigemptyset(&Action.sa_mask);
-	Action.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
-
-	for (int32 i = 0; i < NumTargetSignals; ++i)
-	{
-		sigaction(TargetSignals[i],	&Action, &PrevActions[i]);
-	}
-	PreviousSignalHandlersValid = true;
+	FFatalSignalHandler::Init();
+	FThreadCallstackSignalHandler::Init();
+#endif
 }
 
 bool FAndroidMisc::GetUseVirtualJoysticks()
@@ -1024,6 +1331,7 @@ bool FAndroidMisc::IsStandaloneStereoOnlyDevice()
 
 extern void AndroidThunkCpp_RegisterForRemoteNotifications();
 extern void AndroidThunkCpp_UnregisterForRemoteNotifications();
+extern bool AndroidThunkCpp_IsAllowedRemoteNotifications();
 
 void FAndroidMisc::RegisterForRemoteNotifications()
 {
@@ -1036,6 +1344,15 @@ void FAndroidMisc::UnregisterForRemoteNotifications()
 {
 #if USE_ANDROID_JNI
 	AndroidThunkCpp_UnregisterForRemoteNotifications();
+#endif
+}
+
+bool FAndroidMisc::IsAllowedRemoteNotifications()
+{
+#if USE_ANDROID_JNI
+	return AndroidThunkCpp_IsAllowedRemoteNotifications();
+#else
+	return false;
 #endif
 }
 
@@ -1229,6 +1546,40 @@ int32 FAndroidMisc::GetAndroidBuildVersion()
 		}
 	}
 	return AndroidBuildVersion;
+}
+#endif
+
+#if USE_ANDROID_JNI
+bool FAndroidMisc::IsSupportedAndroidDevice()
+{
+	static bool bChecked = false;
+	static bool bSupported = true;
+
+	if (!bChecked)
+	{
+		bChecked = true;
+
+		JNIEnv* JEnv = AndroidJavaEnv::GetJavaEnv();
+		if (nullptr != JEnv)
+		{
+			jclass Class = AndroidJavaEnv::FindJavaClassGlobalRef("com/epicgames/ue4/GameActivity");
+			if (nullptr != Class)
+			{
+				jfieldID Field = JEnv->GetStaticFieldID(Class, "bSupportedDevice", "Z");
+				if (nullptr != Field)
+				{
+					bSupported = (bool)JEnv->GetStaticBooleanField(Class, Field);
+				}
+				JEnv->DeleteGlobalRef(Class);
+			}
+		}
+	}
+	return bSupported;
+}
+#else
+bool FAndroidMisc::IsSupportedAndroidDevice()
+{
+	return true;
 }
 #endif
 
@@ -1739,7 +2090,7 @@ bool FAndroidMisc::IsVulkanAvailable()
 			// @todo Lumin: Double check all this stuff after merging general android Vulkan SM5 from main
 			const bool bSupportsVulkanSM5 = ShouldUseDesktopVulkan();
 
-			const bool bVulkanDisabledCmdLine = FParse::Param(FCommandLine::Get(), TEXT("GL")) || FParse::Param(FCommandLine::Get(), TEXT("OpenGL")) || FParse::Param(FCommandLine::Get(), TEXT("ES2"));
+			const bool bVulkanDisabledCmdLine = FParse::Param(FCommandLine::Get(), TEXT("GL")) || FParse::Param(FCommandLine::Get(), TEXT("OpenGL"));
 
 			if (!FModuleManager::Get().ModuleExists(TEXT("VulkanRHI")))
 			{
@@ -1807,11 +2158,36 @@ bool FAndroidMisc::ShouldUseVulkan()
 
 bool FAndroidMisc::ShouldUseDesktopVulkan()
 {
-	// @todo Lumin: Double check all this stuff after merging general android Vulkan SM5 from main
-	bool bSupportsVulkanSM5 = false;
-	GConfig->GetBool(TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings"), TEXT("bSupportsVulkanSM5"), bSupportsVulkanSM5, GEngineIni);
+	static int CachedShouldUseDesktopVulkan = -1;
 
-	return bSupportsVulkanSM5;
+	if (CachedShouldUseDesktopVulkan == -1)
+	{
+		CachedShouldUseDesktopVulkan = 0;
+
+		bool bSupportsVulkanSM5 = false;
+		GConfig->GetBool(TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings"), TEXT("bSupportsVulkanSM5"), bSupportsVulkanSM5, GEngineIni);
+
+		const bool bVulkanSM5Enabled = bSupportsVulkanSM5;
+
+		static const auto CVarDisableVulkanSM5 = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Android.DisableVulkanSM5Support"));
+		const bool bVulkanSM5Disabled = CVarDisableVulkanSM5->GetValueOnAnyThread() == 1;
+
+		if (bVulkanSM5Enabled && !bVulkanSM5Disabled)
+		{
+			CachedShouldUseDesktopVulkan = 1;
+			UE_LOG(LogAndroid, Log, TEXT("Vulkan SM5 RHI will be used!"));
+		}
+		else if(bVulkanSM5Disabled)
+		{
+			UE_LOG(LogAndroid, Log, TEXT("Vulkan SM5 is available but disabled for this device."));
+		}
+		else if (!bVulkanSM5Enabled)
+		{
+			UE_LOG(LogAndroid, Log, TEXT("** Vulkan SM5 support is not available (Driver, RHI or shaders are missing, or disabled by cmdline, see above logging for details)"));
+		}
+	}
+
+	return CachedShouldUseDesktopVulkan;
 }
 
 FString FAndroidMisc::GetVulkanVersion()
@@ -1952,6 +2328,12 @@ void FAndroidMisc::BeginNamedEvent(const struct FColor& Color, const TCHAR* Text
 #if FRAMEPRO_ENABLED
 	FFrameProProfiler::PushEvent(Text);
 #endif // FRAMEPRO_ENABLED
+#if CPUPROFILERTRACE_ENABLED
+	if (CpuChannel)
+	{
+		FCpuProfilerTrace::OutputBeginDynamicEvent(Text);
+	}
+#endif
 	if (bUseNativeSystrace ? !ATrace_isEnabled() : TraceMarkerFileDescriptor == -1)
 	{
 		return;
@@ -1979,6 +2361,12 @@ void FAndroidMisc::BeginNamedEvent(const struct FColor& Color, const ANSICHAR* T
 #if FRAMEPRO_ENABLED
 	FFrameProProfiler::PushEvent(Text);
 #endif // FRAMEPRO_ENABLED
+#if CPUPROFILERTRACE_ENABLED
+	if (CpuChannel)
+	{
+		FCpuProfilerTrace::OutputBeginDynamicEvent(Text);
+	}
+#endif
 	if (bUseNativeSystrace ? !ATrace_isEnabled() : TraceMarkerFileDescriptor == -1)
 	{
 		return;
@@ -1992,6 +2380,12 @@ void FAndroidMisc::EndNamedEvent()
 #if FRAMEPRO_ENABLED
 	FFrameProProfiler::PopEvent();
 #endif // FRAMEPRO_ENABLED
+#if CPUPROFILERTRACE_ENABLED
+	if (CpuChannel)
+	{
+		FCpuProfilerTrace::OutputEndEvent();
+	}
+#endif
 	if (bUseNativeSystrace ? !ATrace_isEnabled() : TraceMarkerFileDescriptor == -1)
 	{
 		return;
@@ -2308,4 +2702,9 @@ uint32 FAndroidMisc::GetCoreFrequency(int32 CoreIndex, ECoreFrequencyProperty Co
 		fclose(CoreFreqStateFile);
 	}
 	return ReturnFrequency;
+}
+
+bool FAndroidMisc::Expand16BitIndicesTo32BitOnLoad()
+{
+	return  (CVarMaliMidgardIndexingBug.GetValueOnAnyThread() > 0);
 }

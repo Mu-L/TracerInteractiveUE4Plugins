@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -11,6 +11,26 @@ class Error;
 class FJsonObject;
 class ILauncherProfile;
 class ILauncherSimpleProfile;
+
+namespace ELauncherProfileBuildModes
+{
+	/**
+	 * Enumerates modes in which the launcher cooks builds.
+	 */
+	enum Type
+	{
+		/** Build if there is not already an existing pre-built target available. */
+		Auto,
+
+		/** Always build. */
+		Build,
+
+		/** Do not build. */
+		DoNotBuild,
+	};
+}
+
+
 
 namespace ELauncherProfileCookModes
 {
@@ -201,6 +221,9 @@ namespace ELauncherProfileValidationErrors
 
 		/** Device is unauthorized or is locked */
 		LaunchDeviceIsUnauthorized,
+ 
+		/** Using I/O store container file(s) requires using UnrealPak */
+		IoStoreRequiresPakFiles,
 
 		Count
 	};
@@ -717,13 +740,21 @@ public:
 	virtual bool ShouldStageBaseReleasePaks() const = 0;
 
 	/**
-	 * Checks whether the game should be built.
+	 * Gets the current build mode.
 	 *
-	 * @return true if building the game, false otherwise.
-	 * @see SetBuildGame
+	 * @return The current build mode.
+	 * @see SetBuildMode
 	 */
-	virtual bool IsBuilding() const = 0;
-    
+	virtual ELauncherProfileBuildModes::Type GetBuildMode() const = 0;
+
+	/**
+	 * Determines whether the current profile requires building
+	 *
+	 * @return The current build mode.
+	 * @see SetBuildMode
+	 */
+	virtual bool ShouldBuild() = 0;
+
 	/**
 	 * Checks whether UAT should be built.
 	 *
@@ -962,12 +993,12 @@ public:
 	virtual void RemoveLaunchRole( const ILauncherProfileLaunchRoleRef& Role ) = 0;
 
 	/**
-	 * Sets whether to build the game.
+	 * Sets the current build mode
 	 *
-	 * @param Build Whether the game should be built.
-	 * @see IsBuilding
+	 * @param Mode Whether the game should be built.
+	 * @see GetBuildMode
 	 */
-	virtual void SetBuildGame( bool Build ) = 0;
+	virtual void SetBuildMode(ELauncherProfileBuildModes::Type Mode) = 0;
 
 	/**
 	 * Sets whether to build UAT.
@@ -1258,6 +1289,19 @@ public:
 	 * @return The delegate.
 	 */
 	virtual FOnProfileProjectChanged& OnProjectChanged() = 0;
+
+	/**
+	 * Sets whether to use I/O store for optimized loading.
+	 * @param bUseIoStore Whether to use I/O store
+	 */
+	virtual void SetUseIoStore(bool bUseIoStore) = 0;
+
+	/**
+	 * Using I/O store or not.
+	 *
+	 * @return true if using I/O store
+	 */
+	virtual bool IsUsingIoStore() const = 0;
 
 public:
 

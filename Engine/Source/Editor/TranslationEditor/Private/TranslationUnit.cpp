@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "TranslationUnit.h"
 #include "UObject/UnrealType.h"
 
@@ -13,6 +13,12 @@ void UTranslationUnit::PostEditChangeProperty(struct FPropertyChangedEvent& Prop
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 
 	const FName Name = (PropertyChangedEvent.Property != nullptr) ? PropertyChangedEvent.Property->GetFName() : NAME_None;
+
+	if (Name == GET_MEMBER_NAME_CHECKED(UTranslationUnit, Translation))
+	{
+		// Consider modifying the translation to be an implicit review
+		HasBeenReviewed = true;
+	}
 
 	TranslationUnitPropertyChangedEvent.Broadcast(Name);
 }

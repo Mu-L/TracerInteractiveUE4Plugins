@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 
@@ -8,9 +8,6 @@ public class Text3D : ModuleRules
 	{
 		bEnableExceptions = true;
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
-
-		PrivateDefinitions.Add("TEXT3D_WITH_FREETYPE=1");
-		PrivateDefinitions.Add("TEXT3D_WITH_INTERSECTION=0");
 
 		PublicDependencyModuleNames.AddRange(new string[] {
 			"Core",
@@ -22,13 +19,14 @@ public class Text3D : ModuleRules
 			"SlateCore",
 			"RenderCore",
 			"RHI",
+			"MeshDescription",
+			"StaticMeshDescription",
+			"GeometricObjects",
+			"GeometryAlgorithms",
 
 			// 3rd party libraries
 			"FreeType2",
-			"OpenGL",   // only for include purposes
-			"FTGL",
 			"HarfBuzz",
-			"GLUtesselator"
 		});
 	}
 }

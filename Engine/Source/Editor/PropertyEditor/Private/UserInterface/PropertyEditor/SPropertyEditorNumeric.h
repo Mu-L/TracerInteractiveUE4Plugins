@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -52,11 +52,11 @@ public:
 		PropertyEditor = InPropertyEditor;
 
 		const TSharedRef< FPropertyNode > PropertyNode = InPropertyEditor->GetPropertyNode();
-		const UProperty* Property = InPropertyEditor->GetProperty();
+		const FProperty* Property = InPropertyEditor->GetProperty();
 
-		if(!Property->IsA(UFloatProperty::StaticClass()) && !Property->IsA(UDoubleProperty::StaticClass()) && Property->HasMetaData(PropertyEditorConstants::MD_Bitmask))
+		if(!Property->IsA(FFloatProperty::StaticClass()) && !Property->IsA(FDoubleProperty::StaticClass()) && Property->HasMetaData(PropertyEditorConstants::MD_Bitmask))
 		{
-			auto CreateBitmaskFlagsArray = [](const UProperty* Prop)
+			auto CreateBitmaskFlagsArray = [](const FProperty* Prop)
 			{
 				const int32 BitmaskBitCount = sizeof(NumericType) << 3;
 
@@ -67,7 +67,7 @@ public:
 				const FString& BitmaskEnumName = Prop->GetMetaData(PropertyEditorConstants::MD_BitmaskEnum);
 				if (!BitmaskEnumName.IsEmpty())
 				{
-					// @TODO: Potentially replace this with a parameter passed in from a member variable on the UProperty (e.g. UByteProperty::Enum)
+					// @TODO: Potentially replace this with a parameter passed in from a member variable on the FProperty (e.g. FByteProperty::Enum)
 					BitmaskEnum = FindObject<UEnum>(ANY_PACKAGE, *BitmaskEnumName);
 				}
 
@@ -92,7 +92,8 @@ public:
 					for (int32 BitmaskEnumIndex = 0; BitmaskEnumIndex < BitmaskEnum->NumEnums() - 1; ++BitmaskEnumIndex)
 					{
 						const int64 EnumValue = BitmaskEnum->GetValueByIndex(BitmaskEnumIndex);
-						if (EnumValue >= 0)
+						const bool bIsHidden = BitmaskEnum->HasMetaData(TEXT("Hidden"), BitmaskEnumIndex);
+						if (EnumValue >= 0 && !bIsHidden)
 						{
 							if (bUseEnumValuessAsMaskValues)
 							{
@@ -163,6 +164,29 @@ public:
 			SAssignNew(PrimaryWidget, SComboButton)
 			.ComboButtonStyle(&ComboBoxStyle.ComboButtonStyle)
 			.ContentPadding(FMargin(4.0, 2.0))
+			.ToolTipText_Lambda([this, CreateBitmaskFlagsArray, Property]
+			{
+				TOptional<NumericType> Value = OnGetValue();
+				if (Value.IsSet())
+				{
+					TArray<FBitmaskFlagInfo> BitmaskFlags = CreateBitmaskFlagsArray(Property);
+
+					TArray<FText> SetFlags;
+					SetFlags.Reserve(BitmaskFlags.Num());
+
+					for (const FBitmaskFlagInfo& FlagInfo : BitmaskFlags)
+					{
+						if (TBitmaskValueHelpers<NumericType>::BitwiseAND(Value.GetValue(), FlagInfo.Value))
+						{
+							SetFlags.Add(FlagInfo.DisplayName);
+						}
+					}
+
+					return FText::Join(FText::FromString(" | "), SetFlags);
+				}
+
+				return FText::GetEmpty();
+			})
 			.ButtonContent()
 			[
 				SNew(STextBlock)
@@ -364,9 +388,9 @@ public:
 	
 	void GetDesiredWidth( float& OutMinDesiredWidth, float& OutMaxDesiredWidth )
 	{
-		const UProperty* Property = PropertyEditor->GetProperty();
-		const bool bIsBitmask = (!Property->IsA(UFloatProperty::StaticClass()) && Property->HasMetaData(PropertyEditorConstants::MD_Bitmask));
-		const bool bIsNonEnumByte = (Property->IsA(UByteProperty::StaticClass()) && Cast<const UByteProperty>(Property)->Enum == NULL);
+		const FProperty* Property = PropertyEditor->GetProperty();
+		const bool bIsBitmask = (!Property->IsA(FFloatProperty::StaticClass()) && Property->HasMetaData(PropertyEditorConstants::MD_Bitmask));
+		const bool bIsNonEnumByte = (Property->IsA(FByteProperty::StaticClass()) && CastField<const FByteProperty>(Property)->Enum == NULL);
 
 		if( bIsNonEnumByte && !bIsBitmask )
 		{
@@ -394,72 +418,72 @@ public:
 
 private:
 	/**
-	 *	Helper to provide mapping for a given UProperty object to a property editor type
+	 *	Helper to provide mapping for a given FProperty object to a property editor type
 	 */ 
 	template<typename T, typename U = void> 
 	struct TTypeToProperty 
 	{ 
-		static bool Match(const UProperty* InProperty) { return false; } 
+		static bool Match(const FProperty* InProperty) { return false; } 
 	};
 	
 	template<typename U> 
 	struct TTypeToProperty<float, U> 
 	{	
-		static bool Match(const UProperty* InProperty) { return InProperty->IsA(UFloatProperty::StaticClass()); } 
+		static bool Match(const FProperty* InProperty) { return InProperty->IsA(FFloatProperty::StaticClass()); } 
 	};
 
 	template<typename U>
 	struct TTypeToProperty<double, U>
 	{
-		static bool Match(const UProperty* InProperty) { return InProperty->IsA(UDoubleProperty::StaticClass()); }
+		static bool Match(const FProperty* InProperty) { return InProperty->IsA(FDoubleProperty::StaticClass()); }
 	};
 
 	template<typename U>
 	struct TTypeToProperty<int8, U>
 	{
-		static bool Match(const UProperty* InProperty) { return InProperty->IsA(UInt8Property::StaticClass()); }
+		static bool Match(const FProperty* InProperty) { return InProperty->IsA(FInt8Property::StaticClass()); }
 	};
 
 	template<typename U>
 	struct TTypeToProperty<int16, U>
 	{
-		static bool Match(const UProperty* InProperty) { return InProperty->IsA(UInt16Property::StaticClass()); }
+		static bool Match(const FProperty* InProperty) { return InProperty->IsA(FInt16Property::StaticClass()); }
 	};
 
 	template<typename U>
 	struct TTypeToProperty<int32, U>
 	{
-		static bool Match(const UProperty* InProperty) { return InProperty->IsA(UIntProperty::StaticClass()); }
+		static bool Match(const FProperty* InProperty) { return InProperty->IsA(FIntProperty::StaticClass()); }
 	};
 
 	template<typename U>
 	struct TTypeToProperty<int64, U>
 	{
-		static bool Match(const UProperty* InProperty) { return InProperty->IsA(UInt64Property::StaticClass()); }
+		static bool Match(const FProperty* InProperty) { return InProperty->IsA(FInt64Property::StaticClass()); }
 	};
 
 	template<typename U>
 	struct TTypeToProperty<uint8, U>
 	{
-		static bool Match(const UProperty* InProperty) { return (InProperty->IsA(UByteProperty::StaticClass()) && Cast<const UByteProperty>(InProperty)->Enum == NULL); }
+		static bool Match(const FProperty* InProperty) { return (InProperty->IsA(FByteProperty::StaticClass()) && CastField<const FByteProperty>(InProperty)->Enum == NULL); }
 	};
 
 	template<typename U>
 	struct TTypeToProperty<uint16, U>
 	{
-		static bool Match(const UProperty* InProperty) { return InProperty->IsA(UUInt16Property::StaticClass()); }
+		static bool Match(const FProperty* InProperty) { return InProperty->IsA(FUInt16Property::StaticClass()); }
 	};
 
 	template<typename U>
 	struct TTypeToProperty<uint32, U>
 	{
-		static bool Match(const UProperty* InProperty) { return InProperty->IsA(UUInt32Property::StaticClass()); }
+		static bool Match(const FProperty* InProperty) { return InProperty->IsA(FUInt32Property::StaticClass()); }
 	};
 
 	template<typename U>
 	struct TTypeToProperty<uint64, U>
 	{
-		static bool Match(const UProperty* InProperty) { return InProperty->IsA(UUInt64Property::StaticClass()); }
+		static bool Match(const FProperty* InProperty) { return InProperty->IsA(FUInt64Property::StaticClass()); }
 	};
 		
 	
@@ -508,7 +532,12 @@ private:
 	void OnValueCommitted( NumericType NewValue, ETextCommit::Type CommitInfo )
 	{
 		const TSharedRef< IPropertyHandle > PropertyHandle = PropertyEditor->GetPropertyHandle();
-		PropertyHandle->SetValue( NewValue );
+		NumericType OrgValue(0);
+		if (PropertyHandle->GetValue(OrgValue) == FPropertyAccess::Fail || OrgValue != NewValue)
+		{
+			PropertyHandle->SetValue(NewValue);
+			LastSliderCommittedValue = NewValue;
+		}
 
 		if (TypeInterface.IsValid() && !TypeInterface->FixedDisplayUnits.IsSet())
 		{
@@ -547,7 +576,10 @@ private:
 	{
 		bIsUsingSlider = true;
 
-		GEditor->BeginTransaction( TEXT("PropertyEditor"), FText::Format( NSLOCTEXT("PropertyEditor", "SetNumericPropertyTransaction", "Edit {0}"), PropertyEditor->GetDisplayName() ), PropertyEditor->GetPropertyHandle()->GetProperty() );
+		const TSharedRef<IPropertyHandle> PropertyHandle = PropertyEditor->GetPropertyHandle();
+		PropertyHandle->GetValue(LastSliderCommittedValue);
+		
+		GEditor->BeginTransaction(TEXT("PropertyEditor"), FText::Format(NSLOCTEXT("PropertyEditor", "SetNumericPropertyTransaction", "Edit {0}"), PropertyEditor->GetDisplayName()), nullptr /** PropertyEditor->GetPropertyHandle()->GetProperty() */ );
 	}
 
 
@@ -558,7 +590,17 @@ private:
 	{
 		bIsUsingSlider = false;
 
-		GEditor->EndTransaction();
+		// When the slider end, we may have not called SetValue(NewValue) without the InteractiveChange|NotTransactable flags.
+		//That prevents some transaction and callback to be triggered like the NotifyHook.
+		if (LastSliderCommittedValue != NewValue)
+		{
+			const TSharedRef<IPropertyHandle> PropertyHandle = PropertyEditor->GetPropertyHandle();
+			PropertyHandle->SetValue(NewValue);
+		}
+		else
+		{
+			GEditor->EndTransaction();
+		}
 	}
 
 	/** @return True if the property can be edited */
@@ -612,6 +654,9 @@ private:
 
 	/** True if the slider is being used to change the value of the property */
 	bool bIsUsingSlider;
+
+	/** When using the slider, what was the last committed value */
+	NumericType LastSliderCommittedValue;
 };
 
 #undef LOCTEXT_NAMESPACE

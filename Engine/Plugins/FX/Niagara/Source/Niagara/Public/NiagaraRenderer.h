@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*==============================================================================
 NiagaraRenderer.h: Base class for Niagara render modules
@@ -106,19 +106,24 @@ public:
 	void SortIndices(const struct FNiagaraGPUSortInfo& SortInfo, int32 SortVarIdx, const FNiagaraDataBuffer& Buffer, FGlobalDynamicReadBuffer::FAllocation& OutIndices)const;
 
 	void SetDynamicData_RenderThread(FNiagaraDynamicDataBase* NewDynamicData);
-	FORCEINLINE FNiagaraDynamicDataBase *GetDynamicData()const { return DynamicDataRender; }
-	FORCEINLINE bool HasDynamicData()const { return DynamicDataRender != nullptr; }
-	FORCEINLINE bool HasLights()const { return bHasLights; }
+	FORCEINLINE FNiagaraDynamicDataBase *GetDynamicData() const { return DynamicDataRender; }
+	FORCEINLINE bool HasDynamicData() const { return DynamicDataRender != nullptr; }
+	FORCEINLINE bool HasLights() const { return bHasLights; }
+	FORCEINLINE bool IsMotionBlurEnabled() const { return bMotionBlurEnabled; }
 
 #if RHI_RAYTRACING
 	virtual void GetDynamicRayTracingInstances(FRayTracingMaterialGatheringContext& Context, TArray<FRayTracingInstance>& OutRayTracingInstances, const FNiagaraSceneProxy* Proxy) {}
 #endif
 
-	NIAGARA_API static FRWBuffer& GetDummyFloatBuffer();
-	NIAGARA_API static FRWBuffer& GetDummyFloat4Buffer();
-	NIAGARA_API static FRWBuffer& GetDummyIntBuffer();
-	NIAGARA_API static FRWBuffer& GetDummyUIntBuffer();
-	
+	NIAGARA_API static FRHIShaderResourceView* GetDummyFloatBuffer();
+	NIAGARA_API static FRHIShaderResourceView* GetDummyFloat2Buffer();
+	NIAGARA_API static FRHIShaderResourceView* GetDummyFloat4Buffer();
+	NIAGARA_API static FRHIShaderResourceView* GetDummyWhiteColorBuffer();
+	NIAGARA_API static FRHIShaderResourceView* GetDummyIntBuffer();
+	NIAGARA_API static FRHIShaderResourceView* GetDummyUIntBuffer();
+	NIAGARA_API static FRHIShaderResourceView* GetDummyUInt4Buffer();
+	NIAGARA_API static FRHIShaderResourceView* GetDummyTextureReadBuffer2D();
+
 	FORCEINLINE ENiagaraSimTarget GetSimTarget() const { return SimTarget; }
 
 protected:
@@ -132,6 +137,7 @@ protected:
 
 	uint32 bLocalSpace : 1;
 	uint32 bHasLights : 1;
+	uint32 bMotionBlurEnabled : 1;
 	const ENiagaraSimTarget SimTarget;
 	uint32 NumIndicesPerInstance;
 
@@ -140,6 +146,8 @@ protected:
 #if STATS
 	TStatId EmitterStatID;
 #endif
+
+	virtual int32 GetMaxIndirectArgs() const { return 1; }
 
 	bool SetVertexFactoryVariable(const FNiagaraDataSet& DataSet, const FNiagaraVariable& Var, int32 VFVarOffset);
 	FGlobalDynamicReadBuffer::FAllocation TransferDataToGPU(FGlobalDynamicReadBuffer& DynamicReadBuffer, FNiagaraDataBuffer* SrcData)const;

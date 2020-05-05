@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -28,14 +28,16 @@ SOCKETS_API DECLARE_LOG_CATEGORY_EXTERN(LogSockets, Log, All);
 		#define PLATFORM_SOCKETSUBSYSTEM FName(TEXT("ANDROID"))
 	#elif PLATFORM_PS4
 		#define PLATFORM_SOCKETSUBSYSTEM FName(TEXT("PS4"))
-	#elif PLATFORM_XBOXONE
-		#define PLATFORM_SOCKETSUBSYSTEM FName(TEXT("XBOXONE"))
 	#elif PLATFORM_SWITCH
 		#define PLATFORM_SOCKETSUBSYSTEM FName(TEXT("SWITCH"))
 	#else
 		#define PLATFORM_SOCKETSUBSYSTEM FName(TEXT(""))
 	#endif
 #endif
+
+/** A unique pointer that will automatically call ISocketSubsystem::DestroySocket on its owned socket. */
+class FSocketDeleter;
+using FUniqueSocket = TUniquePtr<FSocket, FSocketDeleter>;
 
 /**
  * This is the base interface to abstract platform specific sockets API
@@ -112,6 +114,30 @@ public:
 	 * @return the new socket or NULL if failed
 	 */
 	virtual FSocket* CreateSocket(const FName& SocketType, const FString& SocketDescription, const FName& ProtocolName) = 0;
+
+	/**
+	 * Creates a socket wrapped in a unique pointer that will call DestroySocket automatically - do not call it explicitly!
+	 * This SocketSubsystem must also outlive the sockets it creates.
+	 *
+	 * @Param SocketType type of socket to create (DGram, Stream, etc)
+	 * @param SocketDescription debug description
+	 * @param bForceUDP overrides any platform specific protocol with UDP instead
+	 *
+	 * @return the new socket or NULL if failed
+	 */
+	FUniqueSocket CreateUniqueSocket(const FName& SocketType, const FString& SocketDescription, bool bForceUDP = false);
+
+	/**
+	 * Creates a socket using the given protocol name,  wrapped in a unique pointer that will call DestroySocket automatically - do not call it explicitly!
+	 * This SocketSubsystem must also outlive the sockets it creates.
+	 *
+	 * @Param SocketType type of socket to create (DGram, Stream, etc)
+	 * @param SocketDescription debug description
+	 * @param ProtocolName the name of the internet protocol to use for this socket. None should be handled.
+	 *
+	 * @return the new socket or NULL if failed
+	 */
+	FUniqueSocket CreateUniqueSocket(const FName& SocketType, const FString& SocketDescription, const FName& ProtocolName);
 
 	/**
 	 * Creates a resolve info cached struct to hold the resolved address
@@ -292,6 +318,15 @@ public:
 	virtual TSharedRef<FInternetAddr> CreateInternetAddr() = 0;
 
 	/**
+	 * Create a FInternetAddr of the desired protocol
+	 */
+	virtual TSharedRef<FInternetAddr> CreateInternetAddr(const FName ProtocolType)
+	{
+		// If not implemented, returns the base version
+		return CreateInternetAddr();
+	}
+
+	/**
 	 * Create a platform specific FRecvMulti representation
 	 *
 	 * @param MaxNumPackets			The maximum number of packet receives supported
@@ -335,17 +370,31 @@ public:
 
 	/**
 	 * Gets the list of addresses associated with the adapters on the local computer.
+	 * Unlike GetLocalHostAddr, this function does not give preferential treatment to multihome options in results.
+	 * It's encouraged that users check for multihome before using the results of this function.
 	 *
-	 * @param OutAdresses - Will hold the address list.
+	 * @param OutAddresses - Will hold the address list.
 	 *
 	 * @return true on success, false otherwise.
 	 */
-	virtual bool GetLocalAdapterAddresses( TArray<TSharedPtr<FInternetAddr> >& OutAdresses ) = 0;
+	virtual bool GetLocalAdapterAddresses(TArray<TSharedPtr<FInternetAddr>>& OutAddresses);
 
 	/**
-	 *	Get local IP to bind to
+	 * Get a local IP to bind to.
+	 *
+	 * Typically, it is better to use GetLocalBindAddresses as it better supports hybrid network functionality
+	 * and less chances for connections to fail due to mismatched protocols.
 	 */
 	virtual TSharedRef<FInternetAddr> GetLocalBindAddr(FOutputDevice& Out);
+
+	/**
+	 * Get bindable addresses that this machine can use as reported by GetAddressInfo with the BindableAddress flag.
+	 * This will return the various any address for usage. If multihome has been specified, only the multihome address
+	 * will be returned in the array.
+	 *
+	 * @return If GetAddressInfo succeeded or multihome is specified, an array of addresses that can be binded on. Failure returns an empty array.
+	 */
+	virtual TArray<TSharedRef<FInternetAddr>> GetLocalBindAddresses();
 
 	/**
 	 * Bind to next available port.
@@ -361,6 +410,10 @@ public:
 
 	/**
 	 * Uses the platform specific look up to determine the host address
+	 *
+	 * To better support multiple network interfaces and remove ambiguity between address protocols, 
+	 * it is encouraged to use GetLocalAdapterAddresses to determine machine addresses. 
+	 * Be sure to check GetMultihomeAddress ahead of time.
 	 *
 	 * @param Out the output device to log messages to
 	 * @param bCanBindAll true if all can be bound (no primarynet), false otherwise
@@ -442,6 +495,32 @@ private:
 
 	/** Stores a resolved IP address for a given host name */
 	TMap<FString, TSharedPtr<FInternetAddr> > HostNameCache;
+};
+
+/** Deleter object that can be used with unique & shared pointers that store FSockets. The SocketSubsystem must be valid when the call operator is invoked! */
+class FSocketDeleter
+{
+public:
+	FSocketDeleter()
+		: Subsystem(nullptr)
+	{
+	}
+
+	FSocketDeleter(ISocketSubsystem* InSubsystem)
+		: Subsystem(InSubsystem)
+	{
+	}
+
+	void operator()(FSocket* Socket) const
+	{
+		if (Subsystem && Socket)
+		{
+			Subsystem->DestroySocket(Socket);
+		}
+	}
+
+private:
+	ISocketSubsystem* Subsystem;
 };
 
 typedef TSharedPtr<ISocketSubsystem> IOnlineSocketPtr;

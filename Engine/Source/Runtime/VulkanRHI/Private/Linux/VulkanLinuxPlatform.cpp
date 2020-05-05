@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "VulkanLinuxPlatform.h"
 #include "../VulkanRHIPrivate.h"
@@ -13,28 +13,33 @@
 #define DEFINE_VK_ENTRYPOINTS(Type,Func) Type VulkanDynamicAPI::Func = NULL;
 ENUM_VK_ENTRYPOINTS_ALL(DEFINE_VK_ENTRYPOINTS)
 
+static bool GRenderOffScreen = false;
+static bool GForceEnableDebugMarkers = false;
 
 void* FVulkanLinuxPlatform::VulkanLib = nullptr;
 bool FVulkanLinuxPlatform::bAttemptedLoad = false;
 
 bool FVulkanLinuxPlatform::IsSupported()
 {
-	// right now we do not provide an offscreen initialization path, so
-	// report as not supported if we're running without X11 or Wayland
-	bool bHasX11Display = getenv("DISPLAY") != nullptr;
-	bool bHasWaylandSession = false;
-	if (!bHasX11Display)
+	if (!FParse::Param(FCommandLine::Get(), TEXT("RenderOffScreen")))
 	{
-		// check Wayland
-		bHasWaylandSession = getenv("WAYLAND_DISPLAY") != nullptr;
+		// If we're not running offscreen mode, make sure we have a display envvar set
+		bool bHasX11Display = (getenv("DISPLAY") != nullptr);
+
+		if (!bHasX11Display)
+		{
+			// check Wayland
+			bool bHasWaylandSession = (getenv("WAYLAND_DISPLAY") != nullptr);
+
+			if (!bHasWaylandSession)
+			{
+				UE_LOG(LogRHI, Warning, TEXT("Could not detect DISPLAY or WAYLAND_DISPLAY environment variables"));
+				return false;
+			}
+		}
 	}
 
-	if (!bHasX11Display && !bHasWaylandSession)
-	{
-		return false;
-	}
-
-	// just attempt to load the library
+	// Attempt to load the library
 	return LoadVulkanLibrary();
 }
 
@@ -78,7 +83,16 @@ bool FVulkanLinuxPlatform::LoadVulkanLibrary()
 
 #undef GET_VK_ENTRYPOINTS
 
+	// Check for force enabling debug markers
+	GForceEnableDebugMarkers = FParse::Param(FCommandLine::Get(), TEXT("vulkandebugmarkers"));
+
+	GRenderOffScreen = FParse::Param(FCommandLine::Get(), TEXT("RenderOffScreen"));
 	return true;
+}
+
+bool FVulkanLinuxPlatform::ForceEnableDebugMarkers()
+{
+	return GForceEnableDebugMarkers;
 }
 
 bool FVulkanLinuxPlatform::LoadVulkanInstanceFunctions(VkInstance inInstance)
@@ -92,10 +106,11 @@ bool FVulkanLinuxPlatform::LoadVulkanInstanceFunctions(VkInstance inInstance)
 	ENUM_VK_ENTRYPOINTS_SURFACE_INSTANCE(GETINSTANCE_VK_ENTRYPOINTS);
 	ENUM_VK_ENTRYPOINTS_SURFACE_INSTANCE(CHECK_VK_ENTRYPOINTS);
 
-	if (!bFoundAllEntryPoints)
+	if (!bFoundAllEntryPoints && !GRenderOffScreen)
 	{
 		return false;
 	}
+
 	ENUM_VK_ENTRYPOINTS_OPTIONAL_INSTANCE(GETINSTANCE_VK_ENTRYPOINTS);
 	ENUM_VK_ENTRYPOINTS_OPTIONAL_PLATFORM_INSTANCE(GETINSTANCE_VK_ENTRYPOINTS);
 #if UE_BUILD_DEBUG
@@ -155,6 +170,8 @@ void FVulkanLinuxPlatform::GetInstanceExtensions(TArray<const ANSICHAR*>& OutExt
 
 void FVulkanLinuxPlatform::GetDeviceExtensions(EGpuVendorId VendorId, TArray<const ANSICHAR*>& OutExtensions)
 {
+	const bool bAllowVendorDevice = !FParse::Param(FCommandLine::Get(), TEXT("novendordevice"));
+
 #if VULKAN_SUPPORTS_DEDICATED_ALLOCATION
 	OutExtensions.Add(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME);
 	OutExtensions.Add(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME);
@@ -163,7 +180,7 @@ void FVulkanLinuxPlatform::GetDeviceExtensions(EGpuVendorId VendorId, TArray<con
 	if (GGPUCrashDebuggingEnabled)
 	{
 #if VULKAN_SUPPORTS_AMD_BUFFER_MARKER
-		if (VendorId == EGpuVendorId::Amd)
+		if (VendorId == EGpuVendorId::Amd && bAllowVendorDevice)
 		{
 			OutExtensions.Add(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
 		}
@@ -180,6 +197,18 @@ void FVulkanLinuxPlatform::CreateSurface(void* WindowHandle, VkInstance Instance
 		UE_LOG(LogInit, Error, TEXT("Error initializing SDL Vulkan Surface: %s"), SDL_GetError());
 		check(0);
 	}
+}
+
+bool FVulkanLinuxPlatform::SupportsStandardSwapchain()
+{
+	return GRenderOffScreen ?
+		false : FVulkanGenericPlatform::SupportsStandardSwapchain();
+}
+
+EPixelFormat FVulkanLinuxPlatform::GetPixelFormatForNonDefaultSwapchain()
+{
+	return GRenderOffScreen ?
+		PF_R8G8B8A8 : FVulkanGenericPlatform::GetPixelFormatForNonDefaultSwapchain();
 }
 
 void FVulkanLinuxPlatform::WriteCrashMarker(const FOptionalVulkanDeviceExtensions& OptionalExtensions, VkCommandBuffer CmdBuffer, VkBuffer DestBuffer, const TArrayView<uint32>& Entries, bool bAdding)

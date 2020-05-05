@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -102,6 +102,9 @@ public:
 	TSharedPtr<SWidget> GetWidgetToFocusOnOpen();
 
 private:
+
+	/* Filters the tree view based on the current filter text. */
+	void FilterTagTree();
 
 	/* string that sets the section of the ini file to use for this class*/ 
 	static const FString SettingsIniSection;

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SLoadingProfilerWindow.h"
 
@@ -99,41 +99,108 @@ void SLoadingProfilerWindow::Reset()
 
 void SLoadingProfilerWindow::UpdateTableTreeViews()
 {
-	TSharedPtr<const Trace::IAnalysisSession> Session = FInsightsManager::Get()->GetSession();
-	if (Session.IsValid() && Trace::ReadLoadTimeProfilerProvider(*Session.Get()))
+	UpdateEventAggregationTreeView();
+	UpdateObjectTypeAggregationTreeView();
+	UpdatePackageDetailsTreeView();
+	UpdateExportDetailsTreeView();
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void SLoadingProfilerWindow::UpdateEventAggregationTreeView()
+{
+	if (EventAggregationTreeView)
 	{
-		Trace::FAnalysisSessionReadScope SessionReadScope(*Session.Get());
-		const Trace::ILoadTimeProfilerProvider& LoadTimeProfilerProvider = *Trace::ReadLoadTimeProfilerProvider(*Session.Get());
-
-		const double SelectionStartTime = TimingView ? TimingView->GetSelectionStartTime() : 0.0;
-		const double SelectionEndTime = TimingView ? TimingView->GetSelectionEndTime() : 0.0;
-
-		if (EventAggregationTreeView)
+		TSharedPtr<const Trace::IAnalysisSession> Session = FInsightsManager::Get()->GetSession();
+		if (Session.IsValid() && Trace::ReadLoadTimeProfilerProvider(*Session.Get()))
 		{
+			Trace::FAnalysisSessionReadScope SessionReadScope(*Session.Get());
+			const Trace::ILoadTimeProfilerProvider& LoadTimeProfilerProvider = *Trace::ReadLoadTimeProfilerProvider(*Session.Get());
+
+			const double SelectionStartTime = TimingView ? TimingView->GetSelectionStartTime() : 0.0;
+			const double SelectionEndTime = TimingView ? TimingView->GetSelectionEndTime() : 0.0;
+
 			Trace::ITable<Trace::FLoadTimeProfilerAggregatedStats>* EventAggregationTable = LoadTimeProfilerProvider.CreateEventAggregation(SelectionStartTime, SelectionEndTime);
-			EventAggregationTreeView->GetTable()->UpdateSourceTable(MakeShareable(EventAggregationTable));
-			EventAggregationTreeView->RebuildTree(true);
+			EventAggregationTreeView->UpdateSourceTable(MakeShareable(EventAggregationTable));
 		}
-
-		if (ObjectTypeAggregationTreeView)
+		else
 		{
+			EventAggregationTreeView->UpdateSourceTable(nullptr);
+		}
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void SLoadingProfilerWindow::UpdateObjectTypeAggregationTreeView()
+{
+	if (ObjectTypeAggregationTreeView)
+	{
+		TSharedPtr<const Trace::IAnalysisSession> Session = FInsightsManager::Get()->GetSession();
+		if (Session.IsValid() && Trace::ReadLoadTimeProfilerProvider(*Session.Get()))
+		{
+			Trace::FAnalysisSessionReadScope SessionReadScope(*Session.Get());
+			const Trace::ILoadTimeProfilerProvider& LoadTimeProfilerProvider = *Trace::ReadLoadTimeProfilerProvider(*Session.Get());
+
+			const double SelectionStartTime = TimingView ? TimingView->GetSelectionStartTime() : 0.0;
+			const double SelectionEndTime = TimingView ? TimingView->GetSelectionEndTime() : 0.0;
+
 			Trace::ITable<Trace::FLoadTimeProfilerAggregatedStats>* ObjectTypeAggregationTable = LoadTimeProfilerProvider.CreateObjectTypeAggregation(SelectionStartTime, SelectionEndTime);
-			ObjectTypeAggregationTreeView->GetTable()->UpdateSourceTable(MakeShareable(ObjectTypeAggregationTable));
-			ObjectTypeAggregationTreeView->RebuildTree(true);
+			ObjectTypeAggregationTreeView->UpdateSourceTable(MakeShareable(ObjectTypeAggregationTable));
 		}
-
-		if (PackageDetailsTreeView)
+		else
 		{
+			ObjectTypeAggregationTreeView->UpdateSourceTable(nullptr);
+		}
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void SLoadingProfilerWindow::UpdatePackageDetailsTreeView()
+{
+	if (PackageDetailsTreeView)
+	{
+		TSharedPtr<const Trace::IAnalysisSession> Session = FInsightsManager::Get()->GetSession();
+		if (Session.IsValid() && Trace::ReadLoadTimeProfilerProvider(*Session.Get()))
+		{
+			Trace::FAnalysisSessionReadScope SessionReadScope(*Session.Get());
+			const Trace::ILoadTimeProfilerProvider& LoadTimeProfilerProvider = *Trace::ReadLoadTimeProfilerProvider(*Session.Get());
+
+			const double SelectionStartTime = TimingView ? TimingView->GetSelectionStartTime() : 0.0;
+			const double SelectionEndTime = TimingView ? TimingView->GetSelectionEndTime() : 0.0;
+
 			Trace::ITable<Trace::FPackagesTableRow>* PackageDetailsTable = LoadTimeProfilerProvider.CreatePackageDetailsTable(SelectionStartTime, SelectionEndTime);
-			PackageDetailsTreeView->GetTable()->UpdateSourceTable(MakeShareable(PackageDetailsTable));
-			PackageDetailsTreeView->RebuildTree(true);
+			PackageDetailsTreeView->UpdateSourceTable(MakeShareable(PackageDetailsTable));
 		}
-
-		if (ExportDetailsTreeView)
+		else
 		{
+			PackageDetailsTreeView->UpdateSourceTable(nullptr);
+		}
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void SLoadingProfilerWindow::UpdateExportDetailsTreeView()
+{
+	if (ExportDetailsTreeView)
+	{
+		TSharedPtr<const Trace::IAnalysisSession> Session = FInsightsManager::Get()->GetSession();
+		if (Session.IsValid() && Trace::ReadLoadTimeProfilerProvider(*Session.Get()))
+		{
+			Trace::FAnalysisSessionReadScope SessionReadScope(*Session.Get());
+			const Trace::ILoadTimeProfilerProvider& LoadTimeProfilerProvider = *Trace::ReadLoadTimeProfilerProvider(*Session.Get());
+
+			const double SelectionStartTime = TimingView ? TimingView->GetSelectionStartTime() : 0.0;
+			const double SelectionEndTime = TimingView ? TimingView->GetSelectionEndTime() : 0.0;
+
 			Trace::ITable<Trace::FExportsTableRow>* ExportDetailsTable = LoadTimeProfilerProvider.CreateExportDetailsTable(SelectionStartTime, SelectionEndTime);
-			ExportDetailsTreeView->GetTable()->UpdateSourceTable(MakeShareable(ExportDetailsTable));
-			ExportDetailsTreeView->RebuildTree(true);
+			ExportDetailsTreeView->UpdateSourceTable(MakeShareable(ExportDetailsTable));
+		}
+		else
+		{
+			ExportDetailsTreeView->UpdateSourceTable(nullptr);
 		}
 	}
 }
@@ -196,26 +263,16 @@ TSharedRef<SDockTab> SLoadingProfilerWindow::SpawnTab_EventAggregationTreeView(c
 {
 	FLoadingProfilerManager::Get()->SetEventAggregationTreeViewVisible(true);
 
-	TSharedPtr<Insights::FTable> TablePtr = MakeShareable(new Insights::FTable());
-	TSharedPtr<const Trace::IAnalysisSession> Session = FInsightsManager::Get()->GetSession();
-	if (Session.IsValid() && Trace::ReadLoadTimeProfilerProvider(*Session.Get()))
-	{
-		Trace::FAnalysisSessionReadScope SessionReadScope(*Session.Get());
-		const Trace::ILoadTimeProfilerProvider& LoadTimeProfilerProvider = *Trace::ReadLoadTimeProfilerProvider(*Session.Get());
-		const double SelectionStartTime = TimingView ? TimingView->GetSelectionStartTime() : 0.0;
-		const double SelectionEndTime = TimingView ? TimingView->GetSelectionEndTime() : 0.0;
-		TSharedPtr<Trace::ITable<Trace::FLoadTimeProfilerAggregatedStats>> SourceTable = MakeShareable(LoadTimeProfilerProvider.CreateEventAggregation(SelectionStartTime, SelectionEndTime));
-		TablePtr->Init(SourceTable);
-	}
+	TSharedRef<Insights::FTable> Table = MakeShared<Insights::FTable>();
 
 	const TSharedRef<SDockTab> DockTab = SNew(SDockTab)
 		.ShouldAutosize(false)
 		.TabRole(ETabRole::PanelTab)
 		[
-			SAssignNew(EventAggregationTreeView, Insights::STableTreeView, TablePtr)
+			SAssignNew(EventAggregationTreeView, Insights::STableTreeView, Table)
 		];
 
-	EventAggregationTreeView->Reset();
+	UpdateEventAggregationTreeView();
 
 	DockTab->SetOnTabClosed(SDockTab::FOnTabClosedCallback::CreateRaw(this, &SLoadingProfilerWindow::OnEventAggregationTreeViewTabClosed));
 
@@ -236,26 +293,16 @@ TSharedRef<SDockTab> SLoadingProfilerWindow::SpawnTab_ObjectTypeAggregationTreeV
 {
 	FLoadingProfilerManager::Get()->SetObjectTypeAggregationTreeViewVisible(true);
 
-	TSharedPtr<Insights::FTable> TablePtr = MakeShareable(new Insights::FTable());
-	TSharedPtr<const Trace::IAnalysisSession> Session = FInsightsManager::Get()->GetSession();
-	if (Session.IsValid() && Trace::ReadLoadTimeProfilerProvider(*Session.Get()))
-	{
-		Trace::FAnalysisSessionReadScope SessionReadScope(*Session.Get());
-		const Trace::ILoadTimeProfilerProvider& LoadTimeProfilerProvider = *Trace::ReadLoadTimeProfilerProvider(*Session.Get());
-		const double SelectionStartTime = TimingView ? TimingView->GetSelectionStartTime() : 0.0;
-		const double SelectionEndTime = TimingView ? TimingView->GetSelectionEndTime() : 0.0;
-		TSharedPtr<Trace::ITable<Trace::FLoadTimeProfilerAggregatedStats>> SourceTable = MakeShareable(LoadTimeProfilerProvider.CreateObjectTypeAggregation(SelectionStartTime, SelectionEndTime));
-		TablePtr->Init(SourceTable);
-	}
+	TSharedRef<Insights::FTable> Table = MakeShared<Insights::FTable>();
 
 	const TSharedRef<SDockTab> DockTab = SNew(SDockTab)
 		.ShouldAutosize(false)
 		.TabRole(ETabRole::PanelTab)
 		[
-			SAssignNew(ObjectTypeAggregationTreeView, Insights::STableTreeView, TablePtr)
+			SAssignNew(ObjectTypeAggregationTreeView, Insights::STableTreeView, Table)
 		];
 
-	ObjectTypeAggregationTreeView->Reset();
+	UpdateObjectTypeAggregationTreeView();
 
 	DockTab->SetOnTabClosed(SDockTab::FOnTabClosedCallback::CreateRaw(this, &SLoadingProfilerWindow::OnObjectTypeAggregationTreeViewTabClosed));
 
@@ -276,26 +323,16 @@ TSharedRef<SDockTab> SLoadingProfilerWindow::SpawnTab_PackageDetailsTreeView(con
 {
 	FLoadingProfilerManager::Get()->SetPackageDetailsTreeViewVisible(true);
 
-	TSharedPtr<Insights::FTable> TablePtr = MakeShareable(new Insights::FTable());
-	TSharedPtr<const Trace::IAnalysisSession> Session = FInsightsManager::Get()->GetSession();
-	if (Session.IsValid() && Trace::ReadLoadTimeProfilerProvider(*Session.Get()))
-	{
-		Trace::FAnalysisSessionReadScope SessionReadScope(*Session.Get());
-		const Trace::ILoadTimeProfilerProvider& LoadTimeProfilerProvider = *Trace::ReadLoadTimeProfilerProvider(*Session.Get());
-		const double SelectionStartTime = TimingView ? TimingView->GetSelectionStartTime() : 0.0;
-		const double SelectionEndTime = TimingView ? TimingView->GetSelectionEndTime() : 0.0;
-		TSharedPtr<Trace::ITable<Trace::FPackagesTableRow>> SourceTable = MakeShareable(LoadTimeProfilerProvider.CreatePackageDetailsTable(SelectionStartTime, SelectionEndTime));
-		TablePtr->Init(SourceTable);
-	}
+	TSharedRef<Insights::FTable> Table = MakeShared<Insights::FTable>();
 
 	const TSharedRef<SDockTab> DockTab = SNew(SDockTab)
 		.ShouldAutosize(false)
 		.TabRole(ETabRole::PanelTab)
 		[
-			SAssignNew(PackageDetailsTreeView, Insights::STableTreeView, TablePtr)
+			SAssignNew(PackageDetailsTreeView, Insights::STableTreeView, Table)
 		];
 
-	PackageDetailsTreeView->Reset();
+	UpdatePackageDetailsTreeView();
 
 	DockTab->SetOnTabClosed(SDockTab::FOnTabClosedCallback::CreateRaw(this, &SLoadingProfilerWindow::OnPackageDetailsTreeViewTabClosed));
 
@@ -316,26 +353,16 @@ TSharedRef<SDockTab> SLoadingProfilerWindow::SpawnTab_ExportDetailsTreeView(cons
 {
 	FLoadingProfilerManager::Get()->SetExportDetailsTreeViewVisible(true);
 
-	TSharedPtr<Insights::FTable> TablePtr = MakeShareable(new Insights::FTable());
-	TSharedPtr<const Trace::IAnalysisSession> Session = FInsightsManager::Get()->GetSession();
-	if (Session.IsValid() && Trace::ReadLoadTimeProfilerProvider(*Session.Get()))
-	{
-		Trace::FAnalysisSessionReadScope SessionReadScope(*Session.Get());
-		const Trace::ILoadTimeProfilerProvider& LoadTimeProfilerProvider = *Trace::ReadLoadTimeProfilerProvider(*Session.Get());
-		const double SelectionStartTime = TimingView ? TimingView->GetSelectionStartTime() : 0.0;
-		const double SelectionEndTime = TimingView ? TimingView->GetSelectionEndTime() : 0.0;
-		TSharedPtr<Trace::ITable<Trace::FExportsTableRow>> SourceTable = MakeShareable(LoadTimeProfilerProvider.CreateExportDetailsTable(SelectionStartTime, SelectionEndTime));
-		TablePtr->Init(SourceTable);
-	}
+	TSharedRef<Insights::FTable> Table = MakeShared<Insights::FTable>();
 
 	const TSharedRef<SDockTab> DockTab = SNew(SDockTab)
 		.ShouldAutosize(false)
 		.TabRole(ETabRole::PanelTab)
 		[
-			SAssignNew(ExportDetailsTreeView, Insights::STableTreeView, TablePtr)
+			SAssignNew(ExportDetailsTreeView, Insights::STableTreeView, Table)
 		];
 
-	ExportDetailsTreeView->Reset();
+	UpdateExportDetailsTreeView();
 
 	DockTab->SetOnTabClosed(SDockTab::FOnTabClosedCallback::CreateRaw(this, &SLoadingProfilerWindow::OnExportDetailsTreeViewTabClosed));
 

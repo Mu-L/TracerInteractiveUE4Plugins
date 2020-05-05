@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "Math/Vector.h"
+#include "Templates/TypeHash.h"
 
 namespace CADLibrary
 {
@@ -48,6 +49,7 @@ namespace CADLibrary
 		EDisplayDataPropagationMode Propagation = EDisplayDataPropagationMode::TopDown;
 		EDisplayPreference DisplayPreference = EDisplayPreference::MaterialPrefered;
 		bool bScaleUVMap = true;
+		bool bEnableCacheUsage = true;
 
 		uint32 GetHash() const
 		{

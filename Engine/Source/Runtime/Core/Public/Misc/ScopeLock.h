@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -42,9 +42,18 @@ public:
 	/** Destructor that performs a release on the synchronization object. */
 	~FScopeLock()
 	{
-		check(SynchObject);
-		SynchObject->Unlock();
+		Unlock();
 	}
+
+	void Unlock()
+	{
+		if(SynchObject)
+		{
+			SynchObject->Unlock();
+			SynchObject = nullptr;
+		}
+	}
+
 private:
 
 	/** Default constructor (hidden on purpose). */

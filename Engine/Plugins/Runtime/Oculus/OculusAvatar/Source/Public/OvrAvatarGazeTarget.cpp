@@ -1,9 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "OvrAvatarGazeTarget.h"
 #include "HAL/IConsoleManager.h"
 #include "OvrAvatarHelpers.h"
 #include "OvrAvatarManager.h"
 #include "GameFramework/Actor.h"
+#include "CoreGlobals.h"
 
 static int32 GOvrAvatarGazeTargetDebugDraw = 0;
 static FAutoConsoleVariableRef CVarOvrAvatarGazeTargetDebugDraw(
@@ -118,7 +119,7 @@ const FTransform& UOvrAvatarGazeTarget::GetGazeTransform() const
 
 void UOvrAvatarGazeTarget::EnableGazeTarget(bool DoEnable)
 {
-	if (!DoEnable && bIsEnabled && !bShuttingDown && UOvrAvatarManager::Get().IsOVRPluginValid())
+	if (!IsEngineExitRequested() && !DoEnable && bIsEnabled && !bShuttingDown && UOvrAvatarManager::Get().IsOVRPluginValid())
 	{
 		ovrAvatar_RemoveGazeTargets(1, &NativeTarget.targets[0].id);
 	}

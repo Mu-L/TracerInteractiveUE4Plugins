@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -65,6 +65,7 @@ protected:
 	virtual void SynchronizeProperties() override;
 	virtual void AddEntryChild(UUserWidget& ChildWidget);
 
+	bool IsEntryClassValid(TSubclassOf<UUserWidget> InEntryClass) const;
 	UUserWidget* CreateEntryInternal(TSubclassOf<UUserWidget> InEntryClass);
 	void RemoveEntryInternal(UUserWidget* EntryWidget);
 	FMargin BuildEntryPadding(const FVector2D& DesiredSpacing);

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SStatsView.h"
 
@@ -16,6 +16,7 @@
 #include "Widgets/Views/STableViewBase.h"
 
 // Insights
+#include "Insights/Common/Stopwatch.h"
 #include "Insights/TimingProfilerCommon.h"
 #include "Insights/TimingProfilerManager.h"
 #include "Insights/ViewModels/TimingGraphTrack.h"
@@ -242,8 +243,8 @@ void SStatsView::Construct(const FArguments& InArgs)
 	//BindCommands();
 
 	// Create the search filters: text based, type based etc.
-	TextFilter = MakeShareable(new FStatsNodeTextFilter(FStatsNodeTextFilter::FItemToStringArray::CreateSP(this, &SStatsView::HandleItemToStringArray)));
-	Filters = MakeShareable(new FStatsNodeFilterCollection());
+	TextFilter = MakeShared<FStatsNodeTextFilter>(FStatsNodeTextFilter::FItemToStringArray::CreateSP(this, &SStatsView::HandleItemToStringArray));
+	Filters = MakeShared<FStatsNodeFilterCollection>();
 	Filters->Add(TextFilter);
 
 	CreateGroupByOptionsSources();
@@ -918,6 +919,7 @@ void SStatsView::TreeView_OnMouseButtonDoubleClick(FStatsNodePtr StatsNode)
 					}
 					else
 					{
+						GraphTrack->Show();
 						GraphTrack->AddStatsCounterSeries(StatsCounterId, StatsNode->GetColor());
 						GraphTrack->SetDirtyFlag();
 						StatsNode->SetAddedToGraphFlag(true);
@@ -1064,7 +1066,7 @@ void SStatsView::CreateGroups()
 		FStatsNodePtr* GroupPtr = GroupNodeSet.Find(GroupName);
 		if (!GroupPtr)
 		{
-			GroupPtr = &GroupNodeSet.Add(GroupName, MakeShareable(new FStatsNode(GroupName)));
+			GroupPtr = &GroupNodeSet.Add(GroupName, MakeShared<FStatsNode>(GroupName));
 		}
 
 		for (const FStatsNodePtr& StatsNodePtr : StatsNodes)
@@ -1084,7 +1086,7 @@ void SStatsView::CreateGroups()
 			FStatsNodePtr* GroupPtr = GroupNodeSet.Find(GroupName);
 			if (!GroupPtr)
 			{
-				GroupPtr = &GroupNodeSet.Add(GroupName, MakeShareable(new FStatsNode(GroupName)));
+				GroupPtr = &GroupNodeSet.Add(GroupName, MakeShared<FStatsNode>(GroupName));
 			}
 
 			(*GroupPtr)->AddChildAndSetGroupPtr(StatsNodePtr);
@@ -1101,7 +1103,7 @@ void SStatsView::CreateGroups()
 			FStatsNodePtr* GroupPtr = GroupNodeSet.Find(GroupName);
 			if (!GroupPtr)
 			{
-				GroupPtr = &GroupNodeSet.Add(GroupName, MakeShareable(new FStatsNode(GroupName)));
+				GroupPtr = &GroupNodeSet.Add(GroupName, MakeShared<FStatsNode>(GroupName));
 			}
 
 			(*GroupPtr)->AddChildAndSetGroupPtr(StatsNodePtr);
@@ -1118,7 +1120,7 @@ void SStatsView::CreateGroups()
 			FStatsNodePtr* GroupPtr = GroupNodeSet.Find(GroupName);
 			if (!GroupPtr)
 			{
-				GroupPtr = &GroupNodeSet.Add(GroupName, MakeShareable(new FStatsNode(GroupName)));
+				GroupPtr = &GroupNodeSet.Add(GroupName, MakeShared<FStatsNode>(GroupName));
 			}
 
 			(*GroupPtr)->AddChildAndSetGroupPtr(StatsNodePtr);
@@ -1138,10 +1140,10 @@ void SStatsView::CreateGroupByOptionsSources()
 	GroupByOptionsSource.Reset(3);
 
 	// Must be added in order of elements in the EStatsGroupingMode.
-	GroupByOptionsSource.Add(MakeShareable(new EStatsGroupingMode(EStatsGroupingMode::Flat)));
-	GroupByOptionsSource.Add(MakeShareable(new EStatsGroupingMode(EStatsGroupingMode::ByName)));
-	GroupByOptionsSource.Add(MakeShareable(new EStatsGroupingMode(EStatsGroupingMode::ByMetaGroupName)));
-	GroupByOptionsSource.Add(MakeShareable(new EStatsGroupingMode(EStatsGroupingMode::ByType)));
+	GroupByOptionsSource.Add(MakeShared<EStatsGroupingMode>(EStatsGroupingMode::Flat));
+	GroupByOptionsSource.Add(MakeShared<EStatsGroupingMode>(EStatsGroupingMode::ByName));
+	GroupByOptionsSource.Add(MakeShared<EStatsGroupingMode>(EStatsGroupingMode::ByMetaGroupName));
+	GroupByOptionsSource.Add(MakeShared<EStatsGroupingMode>(EStatsGroupingMode::ByType));
 
 	EStatsGroupingModePtr* GroupingModePtrPtr = GroupByOptionsSource.FindByPredicate([&](const EStatsGroupingModePtr InGroupingModePtr) { return *InGroupingModePtr == GroupingMode; });
 	if (GroupingModePtrPtr != nullptr)
@@ -1547,17 +1549,17 @@ void SStatsView::RebuildTree(bool bResync)
 			StatsNodesIdMap.Empty(PreviousNodeCount);
 			bListHasChanged = true;
 
-			CountersProvider.EnumerateCounters([this](const Trace::ICounter& Counter)
+			CountersProvider.EnumerateCounters([this](uint32 CounterId, const Trace::ICounter& Counter)
 			{
 				FName Name(Counter.GetName());
 				FName Group(Counter.GetDisplayHint() == Trace::CounterDisplayHint_Memory ? TEXT("Memory") :
 							Counter.IsFloatingPoint() ? TEXT("float") : TEXT("int64"));
 				EStatsNodeType Type = Counter.IsFloatingPoint() ? EStatsNodeType::Float : EStatsNodeType::Int64;
-				FStatsNodePtr StatsNodePtr = MakeShareable(new FStatsNode(Counter.GetId(), Name, Group, Type));
+				FStatsNodePtr StatsNodePtr = MakeShared<FStatsNode>(CounterId, Name, Group, Type);
 				UpdateStatsNode(StatsNodePtr);
 				StatsNodes.Add(StatsNodePtr);
 				//StatsNodesMap.Add(Name, StatsNodePtr);
-				StatsNodesIdMap.Add(Counter.GetId(), StatsNodePtr);
+				StatsNodesIdMap.Add(CounterId, StatsNodePtr);
 			});
 		}
 	}
@@ -1603,23 +1605,23 @@ public:
 	{
 	}
 
-	void Update(const Trace::ICounter& Counter)
+	void Update(uint32 CounterId, const Trace::ICounter& Counter)
 	{
-		EnumerateValues(Counter, UpdateMinMax);
+		EnumerateValues(CounterId, Counter, UpdateMinMax);
 	}
 
 	void PrecomputeHistograms();
 
-	void UpdateHistograms(const Trace::ICounter& Counter)
+	void UpdateHistograms(uint32 CounterId, const Trace::ICounter& Counter)
 	{
-		EnumerateValues(Counter, UpdateHistogram);
+		EnumerateValues(CounterId, Counter, UpdateHistogram);
 	}
 
 	void PostProcess(TMap<uint64, FStatsNodePtr>& StatsNodesIdMap, bool bComputeMedian);
 
 private:
 	template<typename CallbackType>
-	void EnumerateValues(const Trace::ICounter& Counter, CallbackType Callback);
+	void EnumerateValues(uint32 CounterId, const Trace::ICounter& Counter, CallbackType Callback);
 
 	static void UpdateMinMax(TAggregatedStatsEx<Type>& Stats, Type Value);
 	static void UpdateHistogram(TAggregatedStatsEx<Type>& StatsEx, Type Value);
@@ -1635,23 +1637,20 @@ private:
 
 template<>
 template<typename CallbackType>
-void TTimeCalculationHelper<double>::EnumerateValues(const Trace::ICounter& Counter, CallbackType Callback)
+void TTimeCalculationHelper<double>::EnumerateValues(uint32 CounterId, const Trace::ICounter& Counter, CallbackType Callback)
 {
-	TAggregatedStatsEx<double>* StatsExPtr = StatsMap.Find(Counter.GetId());
+	TAggregatedStatsEx<double>* StatsExPtr = StatsMap.Find(CounterId);
 	if (!StatsExPtr)
 	{
-		StatsExPtr = &StatsMap.Add(Counter.GetId());
+		StatsExPtr = &StatsMap.Add(CounterId);
 		StatsExPtr->BaseStats.Min = +MAX_dbl;
 		StatsExPtr->BaseStats.Max = -MAX_dbl;
 	}
 	TAggregatedStatsEx<double>& StatsEx = *StatsExPtr;
 
-	Counter.EnumerateFloatValues(IntervalStartTime, IntervalEndTime, [this, &StatsEx, Callback](double Time, double Value)
+	Counter.EnumerateFloatValues(IntervalStartTime, IntervalEndTime, false, [this, &StatsEx, Callback](double Time, double Value)
 	{
-		if (Time >= IntervalStartTime && Time < IntervalEndTime)
-		{
-			Callback(StatsEx, Value);
-		}
+		Callback(StatsEx, Value);
 	});
 }
 
@@ -1660,23 +1659,20 @@ void TTimeCalculationHelper<double>::EnumerateValues(const Trace::ICounter& Coun
 
 template<>
 template<typename CallbackType>
-void TTimeCalculationHelper<int64>::EnumerateValues(const Trace::ICounter& Counter, CallbackType Callback)
+void TTimeCalculationHelper<int64>::EnumerateValues(uint32 CounterId, const Trace::ICounter& Counter, CallbackType Callback)
 {
-	TAggregatedStatsEx<int64>* StatsExPtr = StatsMap.Find(Counter.GetId());
+	TAggregatedStatsEx<int64>* StatsExPtr = StatsMap.Find(CounterId);
 	if (!StatsExPtr)
 	{
-		StatsExPtr = &StatsMap.Add(Counter.GetId());
+		StatsExPtr = &StatsMap.Add(CounterId);
 		StatsExPtr->BaseStats.Min = +MAX_int64;
 		StatsExPtr->BaseStats.Max = -MAX_int64;
 	}
 	TAggregatedStatsEx<int64>& StatsEx = *StatsExPtr;
 
-	Counter.EnumerateValues(IntervalStartTime, IntervalEndTime, [this, &StatsEx, Callback](double Time, int64 Value)
+	Counter.EnumerateValues(IntervalStartTime, IntervalEndTime, false, [this, &StatsEx, Callback](double Time, int64 Value)
 	{
-		if (Time >= IntervalStartTime && Time < IntervalEndTime)
-		{
-			Callback(StatsEx, Value);
-		}
+		Callback(StatsEx, Value);
 	});
 }
 
@@ -1869,6 +1865,10 @@ void TTimeCalculationHelper<int64>::PostProcess(TMap<uint64, FStatsNodePtr>& Sta
 
 void SStatsView::UpdateStats(double StartTime, double EndTime)
 {
+	FStopwatch AggregationStopwatch;
+	FStopwatch Stopwatch;
+	Stopwatch.Start();
+
 	StatsStartTime = StartTime;
 	StatsEndTime = EndTime;
 
@@ -1890,6 +1890,7 @@ void SStatsView::UpdateStats(double StartTime, double EndTime)
 		TTimeCalculationHelper<double> CalculationHelperDbl(StartTime, EndTime);
 		TTimeCalculationHelper<int64>  CalculationHelperInt(StartTime, EndTime);
 
+		AggregationStopwatch.Start();
 		{
 			Trace::FAnalysisSessionReadScope SessionReadScope(*Session.Get());
 
@@ -1897,15 +1898,15 @@ void SStatsView::UpdateStats(double StartTime, double EndTime)
 
 			// Compute instance count and total/min/max inclusive/exclusive times for each counter.
 			// Iterate through all counters.
-			CountersProvider.EnumerateCounters([&CalculationHelperDbl, &CalculationHelperInt](const Trace::ICounter& Counter)
+			CountersProvider.EnumerateCounters([&CalculationHelperDbl, &CalculationHelperInt](uint32 CounterId, const Trace::ICounter& Counter)
 			{
 				if (Counter.IsFloatingPoint())
 				{
-					CalculationHelperDbl.Update(Counter);
+					CalculationHelperDbl.Update(CounterId, Counter);
 				}
 				else
 				{
-					CalculationHelperInt.Update(Counter);
+					CalculationHelperInt.Update(CounterId, Counter);
 				}
 			});
 
@@ -1918,19 +1919,20 @@ void SStatsView::UpdateStats(double StartTime, double EndTime)
 
 				// Compute histogram.
 				// Iterate again through all counters.
-				CountersProvider.EnumerateCounters([&CalculationHelperDbl, &CalculationHelperInt](const Trace::ICounter& Counter)
+				CountersProvider.EnumerateCounters([&CalculationHelperDbl, &CalculationHelperInt](uint32 CounterId, const Trace::ICounter& Counter)
 				{
 					if (Counter.IsFloatingPoint())
 					{
-						CalculationHelperDbl.UpdateHistograms(Counter);
+						CalculationHelperDbl.UpdateHistograms(CounterId, Counter);
 					}
 					else
 					{
-						CalculationHelperInt.UpdateHistograms(Counter);
+						CalculationHelperInt.UpdateHistograms(CounterId, Counter);
 					}
 				});
 			}
 		}
+		AggregationStopwatch.Stop();
 
 		// Compute average and median inclusive/exclusive times.
 		CalculationHelperDbl.PostProcess(StatsNodesIdMap, bComputeMedian);
@@ -1949,6 +1951,9 @@ void SStatsView::UpdateStats(double StartTime, double EndTime)
 	}
 
 	UpdateTree();
+
+	Stopwatch.Stop();
+	UE_LOG(TimingProfiler, Log, TEXT("Counters updated in %.3fs (%.3fs)"), Stopwatch.GetAccumulatedTime(), AggregationStopwatch.GetAccumulatedTime());
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

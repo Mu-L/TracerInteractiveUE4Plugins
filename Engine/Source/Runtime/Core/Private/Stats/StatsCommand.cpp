@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreTypes.h"
 #include "Misc/AssertionMacros.h"
@@ -175,7 +175,7 @@ struct FBudgetData
 };
 
 FCriticalSection BudgetStatMapCS;
-TMap<FString, FBudgetData> BudgetStatMapping;
+TMap<FName, FBudgetData> BudgetStatMapping;
 
 /** Holds parameters used by the 'stat hier' or 'stat group ##' command. */
 struct FStatParams
@@ -209,7 +209,7 @@ struct FStatParams
 	/** -root=[name]. */
 	TParsedValueWithDefault<FName> Root;
 
-	FString BudgetSection;
+	FName BudgetSection;
 
 	/**
 	 *	Maximum number of frames to be included in the history. 
@@ -656,7 +656,7 @@ void DumpCPUSummary(FStatsThreadState const& StatsData, int64 TargetFrame)
 }
 
 static int32 HitchIndex = 0;
-static float TotalHitchTime = 0.0f;
+static double TotalHitchTime = 0.0;
 
 static void DumpHitch(int64 Frame)
 {
@@ -674,14 +674,14 @@ static void DumpHitch(int64 Frame)
 	FStatsThreadState& Stats = FStatsThreadState::GetLocalState();
 	SCOPE_CYCLE_COUNTER(STAT_HitchScan);
 
-	const float GameThreadTime = FPlatformTime::ToSeconds(Stats.GetFastThreadFrameTime(Frame, EThreadType::Game));
-	const float RenderThreadTime = FPlatformTime::ToSeconds(Stats.GetFastThreadFrameTime(Frame, EThreadType::Renderer));
+	const double GameThreadTime = FPlatformTime::ToSeconds64(Stats.GetFastThreadFrameTime(Frame, EThreadType::Game));
+	const double RenderThreadTime = FPlatformTime::ToSeconds64(Stats.GetFastThreadFrameTime(Frame, EThreadType::Renderer));
 	const float HitchThresholdSecs = GHitchThresholdMS * 0.001f;
 
 	if ((GameThreadTime > HitchThresholdSecs) || (RenderThreadTime > HitchThresholdSecs))
 	{
 		HitchIndex++;
-		float ThisHitch = FMath::Max<float>(GameThreadTime, RenderThreadTime) * 1000.0f;
+		double ThisHitch = FMath::Max<double>(GameThreadTime, RenderThreadTime) * 1000.0;
 		TotalHitchTime += ThisHitch;
 		UE_LOG(LogStats, Log, TEXT("------------------Thread Hitch %d, Frame %lld  %6.1fms ---------------"), HitchIndex, Frame, ThisHitch);
 		FRawStatStackNode Stack;
@@ -1005,7 +1005,7 @@ struct FHUDGroupManager
 					EnabledGroups.Add( MaybeGroupFName, FInternalGroup( MaybeGroupFName, NAME_None, EStatDisplayMode::Hierarchical, false, EmptySet, TEXT( "Hierarchy for game and render" ) ) );
 				}			
 			}
-			else if(!Params.BudgetSection.IsEmpty())
+			else if(Params.BudgetSection != NAME_None)
 			{
 				const bool bEnabledBudgetMode = EnabledGroups.Num() > 0;
 				if (bEnabledBudgetMode)
@@ -1038,10 +1038,9 @@ struct FHUDGroupManager
 					}
 					
 					{
-						TSet<FName> StatSet;
-						GetStatsForNames(StatSet, StatShortNames);
-						FName BudgetGroupName(*Params.BudgetSection);
-						EnabledGroups.Add(BudgetGroupName, FInternalGroup(*Params.BudgetSection, NAME_None, EStatDisplayMode::Flat, false, StatSet, TEXT("Budget"), &ThreadBudgetMap, &NonAccumulatingStats));
+						TSet<FName> EmptyStatSet; // see LazyInitBudgetGroup
+						FName BudgetGroupName(Params.BudgetSection);
+						EnabledGroups.Add(BudgetGroupName, FInternalGroup(Params.BudgetSection, NAME_None, EStatDisplayMode::Flat, false, EmptyStatSet, TEXT("Budget"), &ThreadBudgetMap, &NonAccumulatingStats));
 						HandleToggleCommandBroadcast( BudgetGroupName, bCurrentEnabled, bOthersEnabled );
 					}
 				}
@@ -1069,6 +1068,30 @@ struct FHUDGroupManager
 				FSimpleDelegateGraphTask::FDelegate::CreateRaw(&FLatestGameThreadStatsData::Get(), &FLatestGameThreadStatsData::NewData, (FGameThreadStatsData*)nullptr),
 				GET_STATID(STAT_FSimpleDelegateGraphTask_StatsToGame), nullptr, ENamedThreads::GameThread
 			);
+		}
+	}
+
+	/** Convert short name stats to long name. Delayed so the ShortNameToLongName map gets populated with more stats. */
+	void LazyInitBudgetGroup()
+	{
+		FName BudgetGroupName(Params.BudgetSection);
+		if (FInternalGroup* InternalGroup = EnabledGroups.Find(BudgetGroupName))
+		{
+			if (InternalGroup->EnabledItems.Num() > 0)
+			{				
+				return; // skip if already initialized
+			}
+
+			TArray<FName> StatShortNames;
+			FScopeLock BudgetLock(&BudgetStatMapCS);
+			if (FBudgetData* BudgetData = BudgetStatMapping.Find(Params.BudgetSection))
+			{
+				for (const FString& StatEntry : BudgetData->Stats)
+				{
+					StatShortNames.Add(FName(*StatEntry));
+				}
+			}
+			GetStatsForNames(InternalGroup->EnabledItems, StatShortNames);
 		}
 	}
 
@@ -1122,7 +1145,7 @@ struct FHUDGroupManager
 		FString RootString = RootName == NAME_None ? FString() : RootName.ToString();
 
 		const bool bUseSlowMode = Params.bSlowMode;
-		const bool bUseBudgetMode = !Params.BudgetSection.IsEmpty();
+		const bool bUseBudgetMode = Params.BudgetSection != NAME_None;
 
 		if (bUseSlowMode)
 		{
@@ -1148,6 +1171,11 @@ struct FHUDGroupManager
 		}
 		else
 		{
+			if (bUseBudgetMode)
+			{
+				LazyInitBudgetGroup();
+			}
+
 			TSet<FName> HierEnabledItems;
 			for( auto It = EnabledGroups.CreateIterator(); It; ++It )
 			{
@@ -1960,7 +1988,7 @@ static void StatCmd(FString InCmd, bool bStatCommand, FOutputDevice* Ar /*= null
 			{
 				StatsMasterEnableAdd();
 				HitchIndex = 0;
-				TotalHitchTime = 0.0f;
+				TotalHitchTime = 0.0;
 				DumpHitchDelegateHandle = Stats.NewFrameDelegate.AddStatic(&DumpHitch);
 			}
 			else
@@ -2125,7 +2153,7 @@ static void StatCmd(FString InCmd, bool bStatCommand, FOutputDevice* Ar /*= null
 #if STATS
 			// Try to parse.
 			FStatParams Params(Cmd);
-			Params.BudgetSection = MaybeBudget;
+			Params.BudgetSection = *MaybeBudget;
 			Params.Group.Set(FName("Budget"));
 			FStatsThreadState& Stats = FStatsThreadState::GetLocalState();
 			FHUDGroupManager::Get(Stats).HandleCommand(Params, false);
@@ -2279,7 +2307,7 @@ bool DirectStatsCommand(const TCHAR* Cmd, bool bBlockForCompletion /*= false*/, 
 			{
 				FScopeLock BudgetINILock(&BudgetStatMapCS);   //Make sure stats thread isn't currently reading from this data
 				{
-					FBudgetData& BudgetData = BudgetStatMapping.FindOrAdd(BudgetSection);
+					FBudgetData& BudgetData = BudgetStatMapping.FindOrAdd(*BudgetSection);
 					BudgetData = FBudgetData();
 					GConfig->GetArray(*BudgetSection, TEXT("Stats"), BudgetData.Stats, GEngineIni);
 					

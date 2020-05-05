@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	SystemTextures.h: System textures definitions.
@@ -73,6 +73,7 @@ public:
 	/** Hair BSDF LUT texture */
 	TRefCountPtr<IPooledRenderTarget> HairLUT0;
 	TRefCountPtr<IPooledRenderTarget> HairLUT1;
+	TRefCountPtr<IPooledRenderTarget> HairLUT2;
 	/** Linearly Transformed Cosines LUTs */
 	TRefCountPtr<IPooledRenderTarget> LTCMat;
 	TRefCountPtr<IPooledRenderTarget> LTCAmp;
@@ -92,6 +93,7 @@ public:
 	/** float4(0,0,0,0) volumetric texture. */
 	TRefCountPtr<IPooledRenderTarget> VolumetricBlackDummy;
 	
+
 	// Dummy 0 Uint texture for RHIs that need explicit overloads
 	TRefCountPtr<IPooledRenderTarget> ZeroUIntDummy;
 

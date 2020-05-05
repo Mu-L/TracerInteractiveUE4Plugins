@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Curl/CurlHttpManager.h"
 
@@ -25,6 +25,8 @@
 
 #include "SocketSubsystem.h"
 #include "IPAddress.h"
+
+#include "Http.h"
 
 #ifndef DISABLE_UNVERIFIED_CERTIFICATE_LOADING
 #define DISABLE_UNVERIFIED_CERTIFICATE_LOADING 0
@@ -238,6 +240,8 @@ void FCurlHttpManager::InitCurl()
 		CurlRequestOptions.BufferSize = ConfigBufferSize;
 	}
 
+	GConfig->GetBool(TEXT("HTTP.Curl"), TEXT("bAllowSeekFunction"), CurlRequestOptions.bAllowSeekFunction, GEngineIni);
+
 	CurlRequestOptions.MaxHostConnections = FHttpModule::Get().GetHttpMaxConnectionsPerServer();
 	if (CurlRequestOptions.MaxHostConnections > 0)
 	{
@@ -259,17 +263,9 @@ void FCurlHttpManager::InitCurl()
 	if (FParse::Value(FCommandLine::Get(), TEXT("MULTIHOMEHTTP="), Home, UE_ARRAY_COUNT(Home)))
 	{
 		ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
-		if (SocketSubsystem)
+		if (SocketSubsystem && SocketSubsystem->GetAddressFromString(Home).IsValid())
 		{
-			TSharedRef<FInternetAddr> HostAddr = SocketSubsystem->CreateInternetAddr();
-			HostAddr->SetAnyAddress();
-
-			bool bIsValid = false;
-			HostAddr->SetIp(Home, bIsValid);
-			if (bIsValid)
-			{
-				CurlRequestOptions.LocalHostAddr = FString(Home);
-			}
+			CurlRequestOptions.LocalHostAddr = FString(Home);
 		}
 	}
 
@@ -353,6 +349,48 @@ void FCurlHttpManager::OnAfterFork()
 	Thread->StartThread();
 
 	FHttpManager::OnAfterFork();
+}
+
+void FCurlHttpManager::UpdateConfigs()
+{
+	// Update configs - update settings that are safe to update after initialize 
+	FHttpManager::UpdateConfigs();
+
+	{
+		bool bAcceptCompressedContent = true;
+		if (GConfig->GetBool(TEXT("HTTP"), TEXT("AcceptCompressedContent"), bAcceptCompressedContent, GEngineIni))
+		{
+			if (CurlRequestOptions.bAcceptCompressedContent != bAcceptCompressedContent)
+			{
+				UE_LOG(LogHttp, Log, TEXT("AcceptCompressedContent changed from %s to %s"), *LexToString(CurlRequestOptions.bAcceptCompressedContent), *LexToString(bAcceptCompressedContent));
+				CurlRequestOptions.bAcceptCompressedContent = bAcceptCompressedContent;
+			}
+		}
+	}
+
+	{
+		int32 ConfigBufferSize = 0;
+		if (GConfig->GetInt(TEXT("HTTP.Curl"), TEXT("BufferSize"), ConfigBufferSize, GEngineIni) && ConfigBufferSize > 0)
+		{
+			if (CurlRequestOptions.BufferSize != ConfigBufferSize)
+			{
+				UE_LOG(LogHttp, Log, TEXT("BufferSize changed from %d to %d"), CurlRequestOptions.BufferSize, ConfigBufferSize);
+				CurlRequestOptions.BufferSize = ConfigBufferSize;
+			}
+		}
+	}
+
+	{
+		bool bConfigAllowSeekFunction = false;
+		if (GConfig->GetBool(TEXT("HTTP.Curl"), TEXT("bAllowSeekFunction"), bConfigAllowSeekFunction, GEngineIni))
+		{
+			if (CurlRequestOptions.bAllowSeekFunction != bConfigAllowSeekFunction)
+			{
+				UE_LOG(LogHttp, Log, TEXT("bAllowSeekFunction changed from %s to %s"), *LexToString(CurlRequestOptions.bAllowSeekFunction), *LexToString(bConfigAllowSeekFunction));
+				CurlRequestOptions.bAllowSeekFunction = bConfigAllowSeekFunction;
+			}
+		}
+	}
 }
 
 FHttpThread* FCurlHttpManager::CreateHttpThread()

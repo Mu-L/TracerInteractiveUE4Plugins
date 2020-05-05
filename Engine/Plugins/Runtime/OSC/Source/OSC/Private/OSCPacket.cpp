@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "OSCPacket.h"
 
 #include "OSCMessagePacket.h"
@@ -6,24 +6,18 @@
 #include "OSCLog.h"
 
 
-IOSCPacket::IOSCPacket()
+TSharedPtr<IOSCPacket> IOSCPacket::CreatePacket(const uint8* InPacketType, const FString& InIPAddress, uint16 InPort)
 {
-}
-
-IOSCPacket::~IOSCPacket()
-{
-}
-
-TSharedPtr<IOSCPacket> IOSCPacket::CreatePacket(const uint8* PacketType)
-{
-	const FString PacketIdentifier(ANSI_TO_TCHAR((const ANSICHAR*)&PacketType[0]));
+	const FString PacketIdentifier(ANSI_TO_TCHAR((const ANSICHAR*)&InPacketType[0]));
+	
+	TSharedPtr<IOSCPacket> Packet;
 	if (PacketIdentifier.StartsWith(OSC::PathSeparator))
 	{
-		return MakeShareable(new FOSCMessagePacket());
+		Packet = MakeShared<FOSCMessagePacket>();
 	}
 	else if (PacketIdentifier == OSC::BundleTag)
 	{
-		return MakeShareable(new FOSCBundlePacket());
+		Packet = MakeShared<FOSCBundlePacket>();
 	}
 	else
 	{
@@ -31,4 +25,18 @@ TSharedPtr<IOSCPacket> IOSCPacket::CreatePacket(const uint8* PacketType)
 			"Lead identifier of '%c' not valid bundle tag ('%s') or message ('%s') identifier."), *PacketIdentifier, *OSC::BundleTag, *OSC::PathSeparator);
 		return nullptr;
 	}
+
+	Packet->IPAddress = InIPAddress;
+	Packet->Port = InPort;
+	return Packet;
+}
+
+const FString& IOSCPacket::GetIPAddress() const
+{
+	return IPAddress;
+}
+
+uint16 IOSCPacket::GetPort() const
+{
+	return Port;
 }

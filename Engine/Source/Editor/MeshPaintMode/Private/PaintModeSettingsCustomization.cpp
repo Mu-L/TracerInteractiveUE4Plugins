@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PaintModeSettingsCustomization.h"
 
@@ -451,11 +451,6 @@ void FPaintModeSettingsCustomization::CustomizeDetails(IDetailLayoutBuilder& Det
 void FPaintModeSettingsCustomization::OnPaintTypeChanged(IDetailLayoutBuilder* LayoutBuilder)
 {
 	LayoutBuilder->ForceRefreshDetails();
-}
-
-TSharedPtr<SWidget> FPaintModeSettingsRootObjectCustomization::CustomizeObjectHeader(const UObject* InRootObject)
-{
-	return SNullWidget::NullWidget;
 }
 
 TSharedRef<SHorizontalBox> CreateColorChannelWidget(TSharedRef<IPropertyHandle> ChannelProperty)

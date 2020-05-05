@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -13,16 +13,16 @@
 
 namespace Chaos
 {
-	template<typename T, int d>
-	class TImplicitObjectUnion;
+	class FImplicitObjectUnion;
 
-	template<typename T, int d>
-	class TImplicitObject;
+	class FImplicitObject;
 
-	template <typename T>
-	class TTriangleMeshImplicitObject;
+	class FTriangleMeshImplicitObject;
 }
 #endif
+
+class UPhysicalMaterialMask;
+class UMaterialInterface;
 
 // Defines for enabling hitch repeating (see ScopedSQHitchRepeater.h)
 #if !UE_BUILD_SHIPPING
@@ -41,6 +41,15 @@ namespace physx
 	class PxTriangleMesh;
 }
 
+struct FPhysicalMaterialMaskParams
+{
+	/** Physical materials mask */
+	UPhysicalMaterialMask* PhysicalMaterialMask;
+
+	/** Pointer to material which contains the physical material map */
+	UMaterialInterface* PhysicalMaterialMap;
+};
+
 struct FGeometryAddParams
 {
 	bool bDoubleSided;
@@ -49,14 +58,18 @@ struct FGeometryAddParams
 	FVector Scale;
 	UPhysicalMaterial* SimpleMaterial;
 	TArrayView<UPhysicalMaterial*> ComplexMaterials;
+#if WITH_CHAOS
+	TArrayView<FPhysicalMaterialMaskParams> ComplexMaterialMasks;
+#endif
 	FTransform LocalTransform;
+	FTransform WorldTransform;
 	FKAggregateGeom* Geometry;
 	// FPhysicsInterfaceTriMesh - Per implementation
 #if WITH_PHYSX
 	TArrayView<physx::PxTriangleMesh*> TriMeshes;
 #endif
 #if WITH_CHAOS
-	TArrayView<TUniquePtr<Chaos::TTriangleMeshImplicitObject<float>>> ChaosTriMeshes;
+	TArrayView<TSharedPtr<Chaos::FTriangleMeshImplicitObject, ESPMode::ThreadSafe>> ChaosTriMeshes;
 #endif
 };
 

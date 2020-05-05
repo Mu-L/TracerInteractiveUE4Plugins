@@ -1,18 +1,19 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "StaticMeshBuilder.h"
-#include "Engine/StaticMesh.h"
-#include "StaticMeshResources.h"
-#include "PhysicsEngine/BodySetup.h"
-#include "StaticMeshAttributes.h"
-#include "MeshDescriptionOperations.h"
-#include "MeshDescriptionHelper.h"
+
 #include "BuildOptimizationHelper.h"
 #include "Components.h"
+#include "Engine/StaticMesh.h"
+#include "IMeshReductionInterfaces.h"
 #include "IMeshReductionManagerModule.h"
 #include "MeshBuild.h"
+#include "MeshDescriptionHelper.h"
 #include "Modules/ModuleManager.h"
-#include "IMeshReductionInterfaces.h"
+#include "PhysicsEngine/BodySetup.h"
+#include "StaticMeshAttributes.h"
+#include "StaticMeshOperations.h"
+#include "StaticMeshResources.h"
 
 DEFINE_LOG_CATEGORY(LogStaticMeshBuilder);
 
@@ -154,7 +155,7 @@ bool FStaticMeshBuilder::Build(FStaticMeshRenderData& StaticMeshRenderData, USta
 		{
 			float OverlappingThreshold = LODBuildSettings.bRemoveDegenerates ? THRESH_POINTS_ARE_SAME : 0.0f;
 			FOverlappingCorners OverlappingCorners;
-			FMeshDescriptionOperations::FindOverlappingCorners(OverlappingCorners, MeshDescriptions[BaseReduceLodIndex], OverlappingThreshold);
+			FStaticMeshOperations::FindOverlappingCorners(OverlappingCorners, MeshDescriptions[BaseReduceLodIndex], OverlappingThreshold);
 
 			int32 OldSectionInfoMapCount = StaticMesh->GetSectionInfoMap().GetSectionNumber(LodIndex);
 
@@ -262,8 +263,9 @@ bool FStaticMeshBuilder::Build(FStaticMeshRenderData& StaticMeshRenderData, USta
 		StaticMeshLOD.Sections.Empty(PolygonGroups.Num());
 		TArray<int32> RemapVerts; //Because we will remove MeshVertex that are redundant, we need a remap
 								  //Render data Wedge map is only set for LOD 0???
-		TArray<int32> TempWedgeMap;
-		TArray<int32> &WedgeMap = (LodIndex == 0) ? StaticMeshRenderData.WedgeMap : TempWedgeMap;
+
+		TArray<int32>& WedgeMap = StaticMeshLOD.WedgeMap;
+		WedgeMap.Reset();
 
 		//Prepare the PerSectionIndices array so we can optimize the index buffer for the GPU
 		TArray<TArray<uint32> > PerSectionIndices;

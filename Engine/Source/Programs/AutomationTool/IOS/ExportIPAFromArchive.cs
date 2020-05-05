@@ -1,4 +1,4 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -44,6 +44,7 @@ public class ExportIPAFromArchive : BuildCommand
 	protected void CreateExportPlist(string OutputPath)
 	{
 		XmlDocument Doc = new XmlDocument();
+		Doc.XmlResolver = null;
 		Doc.Load(OptionsFile);
 
 		// select all entries via xpath

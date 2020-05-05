@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -95,8 +95,9 @@ private:
 
 	TMap<FString, AvatarPacketQueue*> AvatarPacketQueues;
 
+	static void* OVRAvatarHandle;
+
 	void* OVRPluginHandle = nullptr;
-	void* OVRAvatarHandle = nullptr;
 	FAvatarShutdownEvent ShutdownEvent;
 
 	ovrAvatarLogLevel LogLevel = ovrAvatarLogLevel::ovrAvatarLogLevel_Silent;

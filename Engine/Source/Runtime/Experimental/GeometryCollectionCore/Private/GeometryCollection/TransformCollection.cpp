@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	GeometryCollection.cpp: FTransformCollection methods.
@@ -11,6 +11,7 @@ const FName FTransformCollection::TransformGroup = "Transform";
 const FName FTransformCollection::TransformAttribute = "Transform";
 const FName FTransformCollection::ParentAttribute = "Parent";
 const FName FTransformCollection::ChildrenAttribute = "Children";
+const FName FTransformCollection::ParticlesAttribute = "Particles";
 
 
 FTransformCollection::FTransformCollection()
@@ -52,6 +53,16 @@ void FTransformCollection::Serialize(Chaos::FChaosArchive& Ar)
 	}
 
 }
+
+FTransformCollection FTransformCollection::SingleTransform(const FTransform& TransformRoot)
+{
+	FTransformCollection TransformCollection;
+	TransformCollection.AddElements(1, FTransformCollection::TransformGroup);
+	TransformCollection.Transform[0] = TransformRoot;
+	TransformCollection.Parent[0] = Invalid;
+	return TransformCollection;
+}
+
 
 int32 FTransformCollection::AppendTransform(const FTransformCollection & Element, const FTransform& TransformRoot)
 {
@@ -107,6 +118,12 @@ void FTransformCollection::ParentTransforms(const int32 TransformIndex, const TA
 {
 	GeometryCollectionAlgo::ParentTransforms(this, TransformIndex, SelectedBones);
 }
+
+void FTransformCollection::UnparentTransform(const int32 ChildIndex)
+{
+	GeometryCollectionAlgo::UnparentTransform(this, ChildIndex);
+}
+
 
 
 void FTransformCollection::RelativeTransformation(const int32& Index, const FTransform& LocalOffset)

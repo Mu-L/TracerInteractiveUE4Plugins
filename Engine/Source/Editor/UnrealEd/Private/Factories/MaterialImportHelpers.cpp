@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Factories/MaterialImportHelpers.h"
 #include "AssetRegistryModule.h"
@@ -9,6 +9,11 @@
 
 UMaterialInterface* UMaterialImportHelpers::FindExistingMaterialFromSearchLocation(const FString& MaterialFullName, const FString& BasePackagePath, EMaterialSearchLocation SearchLocation, FText& OutError)
 {
+	if (SearchLocation == EMaterialSearchLocation::DoNotSearch)
+	{
+		return nullptr;
+	}
+
 	//Search in memory
 	constexpr bool bExactClass = false;
 	UMaterialInterface* FoundMaterial = FindObject<UMaterialInterface>(nullptr, *MaterialFullName, bExactClass);

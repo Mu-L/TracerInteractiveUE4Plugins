@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,13 +12,13 @@
 #include "GameplayPrediction.h"
 #include "GameplayAbilitySpec.h"
 #include "UObject/Package.h"
+#include "Animation/AnimInstance.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Abilities/GameplayAbilityTargetTypes.h"
 #include "GameplayAbilityTypes.generated.h"
 
 class APlayerController;
 class UAbilitySystemComponent;
-class UAnimInstance;
 class UAnimMontage;
 class UGameplayAbility;
 class UMovementComponent;
@@ -53,7 +53,7 @@ namespace EGameplayAbilityInstancingPolicy
 UENUM(BlueprintType)
 namespace EGameplayAbilityNetExecutionPolicy
 {
-	/** How does an ability execute on the network. Does a client "ask and predict", "ask and wait", "don't ask (just do it)" */
+	/** Where does an ability execute on the network. Does a client "ask and predict", "ask and wait", "don't ask (just do it)" */
 	enum Type
 	{
 		// Part of this ability runs predictively on the local client if there is one
@@ -67,6 +67,26 @@ namespace EGameplayAbilityNetExecutionPolicy
 
 		// This ability will only run on the server
 		ServerOnly			UMETA(DisplayName = "Server Only"),
+	};
+}
+
+UENUM(BlueprintType)
+namespace EGameplayAbilityNetSecurityPolicy
+{
+	/** What protections does this ability have? Should the client be allowed to request changes to the execution of the ability? */
+	enum Type
+	{
+		// No security requirements. Client or server can trigger execution and termination of this ability freely.
+		ClientOrServer			UMETA(DisplayName = "Client Or Server"),
+
+		// A client requesting execution of this ability will be ignored by the server. Clients can still request that the server cancel or end this ability.
+		ServerOnlyExecution		UMETA(DisplayName = "Server Only Execution"),
+
+		// A client requesting cancellation or ending of this ability will be ignored by the server. Clients can still request execution of the ability.
+		ServerOnlyTermination	UMETA(DisplayName = "Server Only Termination"),
+
+		// Server controls both execution and termination of this ability. A client making any requests will be ignored.
+		ServerOnly				UMETA(DisplayName = "Server Only"),
 	};
 }
 
@@ -146,12 +166,30 @@ struct GAMEPLAYABILITIES_API FGameplayAbilityActorInfo
 	/** Movement component of the avatar actor. Often null */
 	UPROPERTY(BlueprintReadOnly, Category = "ActorInfo")
 	TWeakObjectPtr<UMovementComponent>	MovementComponent;
-
-	/** Accessor to get the current anim instance from the SkeletalMeshComponent */
+	
+	/** The linked Anim Instance that this component will play montages in. Use NAME_None for the main anim instance. */
+	UPROPERTY(BlueprintReadOnly, Category = "ActorInfo")
+	FName AffectedAnimInstanceTag; 
+	
+	/** Accessor to get the affected anim instance from the SkeletalMeshComponent */
 	UAnimInstance* GetAnimInstance() const
 	{ 
 		const USkeletalMeshComponent* SKMC = SkeletalMeshComponent.Get();
-		return (SKMC ? SKMC->GetAnimInstance() : nullptr);
+
+		if (SKMC)
+		{
+			if (AffectedAnimInstanceTag != NAME_None)
+			{
+				if(UAnimInstance* Instance = SKMC->GetAnimInstance())
+				{
+					return Instance->GetLinkedAnimGraphInstanceByTag(AffectedAnimInstanceTag);
+				}
+			}
+
+			return SKMC->GetAnimInstance();
+		}
+
+		return nullptr;
 	}
 
 	/** Returns true if this actor is locally controlled. Only true for players on the client that owns them */
@@ -172,6 +210,14 @@ struct GAMEPLAYABILITIES_API FGameplayAbilityActorInfo
 	virtual void ClearActorInfo();
 };
 
+/** Enum used by the Ability Rep Anim Montage struct to rep the quantized position or the current section id */
+UENUM()
+enum class ERepAnimPositionMethod
+{
+	Position = 0,			// reps the position in the montage to keep the client in sync (heavier, quantized, more precise)
+	CurrentSectionId = 1,	// reps the current section id we want to play on the client (compact, less precise)
+};
+
 /** Data about montages that is replicated to simulated clients */
 USTRUCT()
 struct GAMEPLAYABILITIES_API FGameplayAbilityRepAnimMontage
@@ -187,7 +233,7 @@ struct GAMEPLAYABILITIES_API FGameplayAbilityRepAnimMontage
 	float PlayRate;
 
 	/** Montage position */
-	UPROPERTY()
+	UPROPERTY(NotReplicated)
 	float Position;
 
 	/** Montage current blend time */
@@ -197,6 +243,10 @@ struct GAMEPLAYABILITIES_API FGameplayAbilityRepAnimMontage
 	/** NextSectionID */
 	UPROPERTY()
 	uint8 NextSectionID;
+
+	/** flag indicating we should serialize the position or the current section id */
+	UPROPERTY()
+	uint8 bRepPosition : 1;
 
 	/** Bit set when montage has been stopped. */
 	UPROPERTY()
@@ -214,21 +264,40 @@ struct GAMEPLAYABILITIES_API FGameplayAbilityRepAnimMontage
 	UPROPERTY()
 	uint8 bSkipPlayRate : 1;
 
+	UPROPERTY()
+	FPredictionKey PredictionKey;
+
+	/** The current section Id used by the montage. Will only be valid if bRepPosition is false */
+	UPROPERTY(NotReplicated)
+	uint8 SectionIdToPlay;
+
 	FGameplayAbilityRepAnimMontage()
-		: AnimMontage(nullptr),
-		PlayRate(0.f),
-		Position(0.f),
-		BlendTime(0.f),
-		NextSectionID(0),
-		IsStopped(true),
-		ForcePlayBit(0),
-		SkipPositionCorrection(false),
-		bSkipPlayRate(false)
+	: AnimMontage(nullptr),
+	PlayRate(0.f),
+	Position(0.f),
+	BlendTime(0.f),
+	NextSectionID(0),
+	bRepPosition(true),
+	IsStopped(true),
+	ForcePlayBit(0),
+	SkipPositionCorrection(false),
+	bSkipPlayRate(false),
+	SectionIdToPlay(0)
 	{
 	}
 
-	UPROPERTY()
-	FPredictionKey PredictionKey;
+	bool NetSerialize(FArchive& Ar, class UPackageMap* Map, bool& bOutSuccess);
+
+	void SetRepAnimPositionMethod(ERepAnimPositionMethod InMethod);
+};
+
+template<>
+struct TStructOpsTypeTraits<FGameplayAbilityRepAnimMontage> : public TStructOpsTypeTraitsBase2<FGameplayAbilityRepAnimMontage>
+{
+	enum
+	{
+		WithNetSerializer = true,
+	};
 };
 
 

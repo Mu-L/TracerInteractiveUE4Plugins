@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DesktopPlatformWindows.h"
 #include "DesktopPlatformPrivate.h"
@@ -257,7 +257,7 @@ bool FDesktopPlatformWindows::FileDialogShared(bool bSave, const void* ParentWin
 								int32 WildCardIndex = INDEX_NONE;
 								if (CleanExtension.FindChar(TEXT('*'), WildCardIndex))
 								{
-									CleanExtension = CleanExtension.RightChop(WildCardIndex + 1);
+									CleanExtension.RightChopInline(WildCardIndex + 1, false);
 								}
 							}
 
@@ -458,8 +458,10 @@ bool FDesktopPlatformWindows::OpenProject(const FString &ProjectFileName)
 	return ::ShellExecuteExW(&Info) != 0;
 }
 
-bool FDesktopPlatformWindows::RunUnrealBuildTool(const FText& Description, const FString& RootDir, const FString& Arguments, FFeedbackContext* Warn)
+bool FDesktopPlatformWindows::RunUnrealBuildTool(const FText& Description, const FString& RootDir, const FString& Arguments, FFeedbackContext* Warn, int32& OutExitCode)
 {
+	OutExitCode = 1;
+
 	// Get the path to UBT
 	FString UnrealBuildToolPath = RootDir / TEXT("Engine/Binaries/DotNET/UnrealBuildTool.exe");
 	if(IFileManager::Get().FileSize(*UnrealBuildToolPath) < 0)
@@ -472,8 +474,7 @@ bool FDesktopPlatformWindows::RunUnrealBuildTool(const FText& Description, const
 	Warn->Logf(TEXT("Running %s %s"), *UnrealBuildToolPath, *Arguments);
 
 	// Spawn UBT
-	int32 ExitCode = 0;
-	return FFeedbackContextMarkup::PipeProcessOutput(Description, UnrealBuildToolPath, Arguments, Warn, &ExitCode) && ExitCode == 0;
+	return FFeedbackContextMarkup::PipeProcessOutput(Description, UnrealBuildToolPath, Arguments, Warn, &OutExitCode) && OutExitCode == 0;
 }
 
 bool FDesktopPlatformWindows::IsUnrealBuildToolRunning()

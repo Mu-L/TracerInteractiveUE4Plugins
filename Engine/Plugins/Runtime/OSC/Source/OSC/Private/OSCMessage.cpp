@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "OSCMessage.h"
 
 #include "OSCMessagePacket.h"
@@ -6,7 +6,7 @@
 
 
 FOSCMessage::FOSCMessage()
-	: Packet(MakeShareable(new FOSCMessagePacket()))
+	: Packet(MakeShared<FOSCMessagePacket>())
 {
 }
 

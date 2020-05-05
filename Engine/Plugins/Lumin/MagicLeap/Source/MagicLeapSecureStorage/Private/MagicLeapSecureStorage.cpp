@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MagicLeapSecureStorage.h"
 #include "IMagicLeapSecureStoragePlugin.h"
@@ -166,7 +166,13 @@ bool UMagicLeapSecureStorage::PutSecureSaveGame(const FString& Key, USaveGame* O
 	return PutSecureBlobImpl(Key, Bytes.GetData(), Bytes.Num());
 }
 
-bool UMagicLeapSecureStorage::GenericPutSecureArray(const FString& Key, const UArrayProperty* ArrayProperty, void* TargetArray)
+bool UMagicLeapSecureStorage::PutSecureArray(const FString& Key, const TArray<int32>& DataToStore)
+{
+	checkf(0, TEXT("'PutSecureArray' has a CustomThunk, so this should never execute"));
+	return false;
+}
+
+bool UMagicLeapSecureStorage::GenericPutSecureArray(const FString& Key, const FArrayProperty* ArrayProperty, void* TargetArray)
 {
 
 	FScriptArrayHelper ArrayHelper(ArrayProperty, TargetArray);
@@ -177,7 +183,7 @@ bool UMagicLeapSecureStorage::GenericPutSecureArray(const FString& Key, const UA
 	TArray<uint8> Bytes;
 	Bytes.SetNum(ByteNum);
 
-	// Generate the contiguous array from the UArrayProperty
+	// Generate the contiguous array from the FArrayProperty
 	for (int32 i = 0; i < ArrayHelper.Num(); ++i)
 	{
 		ArrayProperty->Inner->CopySingleValueFromScriptVM(Bytes.GetData() + i * ElementSize, ArrayHelper.GetRawPtr(i));
@@ -211,7 +217,13 @@ bool UMagicLeapSecureStorage::GetSecureSaveGame(const FString& Key, USaveGame*& 
 	return bSuccess;
 }
 
-bool UMagicLeapSecureStorage::GenericGetSecureArray(const FString& Key, UArrayProperty* ArrayProperty, void* TargetArray)
+bool UMagicLeapSecureStorage::GetSecureArray(const FString& Key, TArray<int32>& DataToRetrieve)
+{
+	checkf(0, TEXT("'GetSecureArray' has a CustomThunk, so this should never execute"));
+	return false;
+}
+
+bool UMagicLeapSecureStorage::GenericGetSecureArray(const FString& Key, FArrayProperty* ArrayProperty, void* TargetArray)
 {
 
 	FScriptArrayHelper ArrayHelper(ArrayProperty, TargetArray);

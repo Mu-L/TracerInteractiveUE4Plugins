@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /**
  * Shader Pipeline Precompilation Cache
@@ -121,7 +121,7 @@ static TAutoConsoleVariable<int32> CVarPSOFileCachePreCompileMask(
 static TAutoConsoleVariable<int32> CVarPSOFileCacheAutoSaveTimeBoundPSO(
 	TEXT("r.ShaderPipelineCache.AutoSaveTimeBoundPSO"),
 	10,
-	TEXT("Set the time where any logged PSO's will be saved when -logpso is on th ecommand line."),
+	TEXT("Set the time where any logged PSO's will be saved when -logpso is on the command line."),
 	ECVF_Default | ECVF_RenderThreadSafe
 );
 
@@ -138,6 +138,12 @@ static TAutoConsoleVariable<int32> CVarPSOFileCacheGameFileMaskEnabled(
 																TEXT("Set non zero to use GameFileMask during PSO precompile - recording should always save out the usage masks to make that data availble when needed."),
 																ECVF_ReadOnly | ECVF_RenderThreadSafe);
 
+static TAutoConsoleVariable<int32> CVarPSOFileCachePreOptimizeEnabled(
+																TEXT("r.ShaderPipelineCache.PreOptimizeEnabled"),
+																(int32)0,
+																TEXT("Set non zero to PreOptimize PSOs - this allows some PSOs to be compiled in the foreground before going in to game"),
+																ECVF_ReadOnly | ECVF_RenderThreadSafe);
+
 
 static TAutoConsoleVariable<int32> CVarPSOFileCacheMinBindCount(
                                                                 TEXT("r.ShaderPipelineCache.MinBindCount"),
@@ -145,6 +151,13 @@ static TAutoConsoleVariable<int32> CVarPSOFileCacheMinBindCount(
                                                                 TEXT("The minimum bind count to allow a PSO to be precompiled.  Changes to this value will not affect PSOs that have already been removed from consideration."),
                                                                 ECVF_Default | ECVF_RenderThreadSafe
                                                                 );
+
+static TAutoConsoleVariable<float> CVarPSOFileCacheMaxPrecompileTime(
+																TEXT("r.ShaderPipelineCache.MaxPrecompileTime"),
+																(float)0.f,
+																TEXT("The maximum time to allow a PSO to be precompiled.  if greather than 0, the amount of wall time we will allow pre-compile of PSOs and then switch to background processing."),
+																ECVF_Default | ECVF_RenderThreadSafe
+																);
 
 static bool GetShaderPipelineCacheSaveBoundPSOLog()
 {
@@ -325,65 +338,80 @@ bool FShaderPipelineCache::SetGameUsageMaskWithComparison(uint64 InMask, FPSOMas
 {
 	bool bMaskChanged = false;
 	
-	if (ShaderPipelineCache != nullptr && CVarPSOFileCacheGameFileMaskEnabled.GetValueOnAnyThread())
+	if (ShaderPipelineCache != nullptr && CVarPSOFileCacheGameFileMaskEnabled.GetValueOnAnyThread() && !ShaderPipelineCache->bPreOptimizing)
 	{
 		FScopeLock Lock(&ShaderPipelineCache->Mutex);
 		
-		uint64 OldMask = FPipelineFileCache::SetGameUsageMaskWithComparison(InMask, InComparisonFnPtr);
-		bMaskChanged = OldMask != InMask;
-		
-		ShaderPipelineCache->bReady = true;
-		
-		if(bMaskChanged && ShaderPipelineCache->bOpened)
+		if (ShaderPipelineCache->bOpened)
 		{
-			// Mask has changed and we have an open file refetch PSO's for this Mask - leave the FPipelineFileCache file open - no need to close - just pull out the relevant PSOs.
-			// If this PSO compile run has completed for this Mask in which case don't refetch + compile for that mask
-			
-			// Don't clear already compiled PSOHash list - this is not a full reset
-			ShaderPipelineCache->Flush(false);
-			
-			if(!ShaderPipelineCache->CompletedMasks.Contains(InMask))
+			uint64 OldMask = FPipelineFileCache::SetGameUsageMaskWithComparison(InMask, InComparisonFnPtr);
+			bMaskChanged = OldMask != InMask;
+		
+			ShaderPipelineCache->bReady = true;
+		
+			if(bMaskChanged)
 			{
-				int32 Order = (int32)FPipelineFileCache::PSOOrder::Default;
-				
-				if(!GConfig->GetInt(FShaderPipelineCacheConstants::SectionHeading, FShaderPipelineCacheConstants::SortOrderKey, Order, *GGameUserSettingsIni))
+				// Mask has changed and we have an open file refetch PSO's for this Mask - leave the FPipelineFileCache file open - no need to close - just pull out the relevant PSOs.
+				// If this PSO compile run has completed for this Mask in which case don't refetch + compile for that mask
+			
+				// Don't clear already compiled PSOHash list - this is not a full reset
+				ShaderPipelineCache->Flush(false);
+			
+				if(!ShaderPipelineCache->CompletedMasks.Contains(InMask))
 				{
-					GConfig->GetInt(FShaderPipelineCacheConstants::SectionHeading, FShaderPipelineCacheConstants::SortOrderKey, Order, *GGameIni);
-				}
+					int32 Order = (int32)FPipelineFileCache::PSOOrder::Default;
 				
-				TArray<FPipelineCachePSOHeader> LocalPreFetchedTasks;
-				FPipelineFileCache::GetOrderedPSOHashes(LocalPreFetchedTasks, (FPipelineFileCache::PSOOrder)Order, (int64)CVarPSOFileCacheMinBindCount.GetValueOnAnyThread(), ShaderPipelineCache->CompiledHashes);
-				// Iterate over all the tasks we haven't yet begun to read data for - these are the 'waiting' tasks
-				int64 Count = 0;
-				for (auto const& Task : LocalPreFetchedTasks)
-				{
-					bool bHasShaders = true;
-					for (FSHAHash const& Hash : Task.Shaders)
+					if(!GConfig->GetInt(FShaderPipelineCacheConstants::SectionHeading, FShaderPipelineCacheConstants::SortOrderKey, Order, *GGameUserSettingsIni))
 					{
-						bHasShaders &= FShaderCodeLibrary::ContainsShaderCode(Hash);
+						GConfig->GetInt(FShaderPipelineCacheConstants::SectionHeading, FShaderPipelineCacheConstants::SortOrderKey, Order, *GGameIni);
 					}
-					if (bHasShaders)
+				
+					TArray<FPipelineCachePSOHeader> LocalPreFetchedTasks;
+					FPipelineFileCache::GetOrderedPSOHashes(LocalPreFetchedTasks, (FPipelineFileCache::PSOOrder)Order, (int64)CVarPSOFileCacheMinBindCount.GetValueOnAnyThread(), ShaderPipelineCache->CompiledHashes);
+					// Iterate over all the tasks we haven't yet begun to read data for - these are the 'waiting' tasks
+					int64 Count = 0;
+					for (auto const& Task : LocalPreFetchedTasks)
 					{
-						Count++;
+						bool bHasShaders = true;
+						for (FSHAHash const& Hash : Task.Shaders)
+						{
+							bHasShaders &= FShaderCodeLibrary::ContainsShaderCode(Hash);
+						}
+						if (bHasShaders)
+						{
+							Count++;
+						}
 					}
+				
+					FPlatformAtomics::InterlockedAdd(&ShaderPipelineCache->TotalWaitingTasks, Count);
+				
+					if (OnCachedOpened.IsBound())
+					{
+						OnCachedOpened.Broadcast(ShaderPipelineCache->FileName, ShaderPipelineCache->CurrentPlatform, LocalPreFetchedTasks.Num(), ShaderPipelineCache->CacheFileGuid, ShaderPipelineCache->ShaderCachePrecompileContext);
+					}
+				
+					ShaderPipelineCache->PreFetchedTasks = LocalPreFetchedTasks;
+				
+					UE_LOG(LogRHI, Display, TEXT("New ShaderPipelineCache GameUsageMask [%llu=>%llu], Enqueued %d of %d tasks for precompile."), OldMask, InMask, Count, ShaderPipelineCache->PreFetchedTasks.Num());
 				}
-				
-				FPlatformAtomics::InterlockedAdd(&ShaderPipelineCache->TotalWaitingTasks, Count);
-				
-				if (OnCachedOpened.IsBound())
+				else
 				{
-					OnCachedOpened.Broadcast(ShaderPipelineCache->FileName, ShaderPipelineCache->CurrentPlatform, LocalPreFetchedTasks.Num(), ShaderPipelineCache->CacheFileGuid, ShaderPipelineCache->ShaderCachePrecompileContext);
+					UE_LOG(LogRHI, Display, TEXT("New ShaderPipelineCache GameUsageMask [%llu=>%llu], Target mask already precompiled."), OldMask, InMask);
 				}
-				
-				ShaderPipelineCache->PreFetchedTasks = LocalPreFetchedTasks;
-				
-				UE_LOG(LogRHI, Display, TEXT("New ShaderPipelineCache GameUsageMask [%llu=>%llu], Enqueued %d of %d tasks for precompile."), OldMask, InMask, Count, ShaderPipelineCache->PreFetchedTasks.Num());
 			}
 			else
 			{
-				UE_LOG(LogRHI, Display, TEXT("New ShaderPipelineCache GameUsageMask [%llu=>%llu], Target mask already precompiled."), OldMask, InMask);
+				UE_LOG(LogRHI, Display, TEXT("ShaderPipelineCache::SetGameUsageMaskWithComparison failed to set a new mask because the game mask was not different"));
 			}
 		}
+		else
+		{
+			UE_LOG(LogRHI, Display, TEXT("ShaderPipelineCache::SetGameUsageMaskWithComparison failed to set a new mask because the cache was not open"));
+		}
+	}
+	else
+	{
+		UE_LOG(LogRHI, Display, TEXT("ShaderPipelineCache::SetGameUsageMaskWithComparison failed to set a new mask because the cache was not open or game mask is not enabled"));
 	}
 	
 	return bMaskChanged;
@@ -481,9 +509,17 @@ uint32 FShaderPipelineCache::NumPrecompilesRemaining()
 	
 	if (ShaderPipelineCache)
 	{
-        int64 NumActiveTasksRemaining = FMath::Max(0ll, FPlatformAtomics::AtomicRead(&ShaderPipelineCache->TotalActiveTasks));
-        int64 NumWaitingTasksRemaining = FMath::Max(0ll, FPlatformAtomics::AtomicRead(&ShaderPipelineCache->TotalWaitingTasks));
-		NumRemaining = (uint32)(NumActiveTasksRemaining + NumWaitingTasksRemaining);
+		if (CVarPSOFileCacheMaxPrecompileTime.GetValueOnAnyThread() > 0.0 && FPlatformAtomics::AtomicRead(&ShaderPipelineCache->TotalPrecompileTasks) > 0)
+		{
+			float Mult = ShaderPipelineCache->TotalPrecompileWallTime / CVarPSOFileCacheMaxPrecompileTime.GetValueOnAnyThread();
+			NumRemaining = FMath::Max(0.f, 1.f - Mult) * FPlatformAtomics::AtomicRead(&ShaderPipelineCache->TotalPrecompileTasks);
+		}
+		else
+		{
+        	int64 NumActiveTasksRemaining = FMath::Max(0ll, FPlatformAtomics::AtomicRead(&ShaderPipelineCache->TotalActiveTasks));
+        	int64 NumWaitingTasksRemaining = FMath::Max(0ll, FPlatformAtomics::AtomicRead(&ShaderPipelineCache->TotalWaitingTasks));
+			NumRemaining = (uint32)(NumActiveTasksRemaining + NumWaitingTasksRemaining);
+		}
 	}
 
 	return NumRemaining;
@@ -500,6 +536,11 @@ uint32 FShaderPipelineCache::NumPrecompilesActive()
         {
             NumRemaining = (uint32) NumTasksRemaining;
         }
+		if (CVarPSOFileCacheMaxPrecompileTime.GetValueOnAnyThread() > 0.0 && FPlatformAtomics::AtomicRead(&ShaderPipelineCache->TotalPrecompileTasks) > 0)
+		{
+			float Mult = ShaderPipelineCache->TotalPrecompileWallTime / CVarPSOFileCacheMaxPrecompileTime.GetValueOnAnyThread();
+			NumRemaining = FMath::Max(0.f, 1.f - Mult) * FPlatformAtomics::AtomicRead(&ShaderPipelineCache->TotalPrecompileTasks);
+		}
     }
     
     return NumRemaining;
@@ -564,8 +605,6 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 	
 	if(PSO.Verify())
 	{
-		TArray<uint8> DummyCode;
-		
 		if(FPipelineCacheFileFormatPSO::DescriptorType::Graphics == PSO.Type)
 		{
 			FGraphicsPipelineStateInitializer GraphicsInitializer;
@@ -576,7 +615,7 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 			FVertexShaderRHIRef VertexShader;
 			if (PSO.GraphicsDesc.VertexShader != FSHAHash())
 			{
-				VertexShader = FShaderCodeLibrary::CreateVertexShader(Platform, PSO.GraphicsDesc.VertexShader, DummyCode);
+				VertexShader = FShaderCodeLibrary::CreateVertexShader(Platform, PSO.GraphicsDesc.VertexShader);
 				GraphicsInitializer.BoundShaderState.VertexShaderRHI = VertexShader;
 			}
 
@@ -584,21 +623,21 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 			FHullShaderRHIRef HullShader;
 			if (PSO.GraphicsDesc.HullShader != FSHAHash())
 			{
-				HullShader = FShaderCodeLibrary::CreateHullShader(Platform, PSO.GraphicsDesc.HullShader, DummyCode);
+				HullShader = FShaderCodeLibrary::CreateHullShader(Platform, PSO.GraphicsDesc.HullShader);
 				GraphicsInitializer.BoundShaderState.HullShaderRHI = HullShader;
 			}
 
 			FDomainShaderRHIRef DomainShader;
 			if (PSO.GraphicsDesc.DomainShader != FSHAHash())
 			{
-				DomainShader = FShaderCodeLibrary::CreateDomainShader(Platform, PSO.GraphicsDesc.DomainShader, DummyCode);
+				DomainShader = FShaderCodeLibrary::CreateDomainShader(Platform, PSO.GraphicsDesc.DomainShader);
 				GraphicsInitializer.BoundShaderState.DomainShaderRHI = DomainShader;
 			}
 	#endif
 			FPixelShaderRHIRef FragmentShader;
 			if (PSO.GraphicsDesc.FragmentShader != FSHAHash())
 			{
-				FragmentShader = FShaderCodeLibrary::CreatePixelShader(Platform, PSO.GraphicsDesc.FragmentShader, DummyCode);
+				FragmentShader = FShaderCodeLibrary::CreatePixelShader(Platform, PSO.GraphicsDesc.FragmentShader);
 				GraphicsInitializer.BoundShaderState.PixelShaderRHI = FragmentShader;
 			}
 
@@ -606,7 +645,7 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 			FGeometryShaderRHIRef GeometryShader;
 			if (PSO.GraphicsDesc.GeometryShader != FSHAHash())
 			{
-				GeometryShader = FShaderCodeLibrary::CreateGeometryShader(Platform, PSO.GraphicsDesc.GeometryShader, DummyCode);
+				GeometryShader = FShaderCodeLibrary::CreateGeometryShader(Platform, PSO.GraphicsDesc.GeometryShader);
 				GraphicsInitializer.BoundShaderState.GeometryShaderRHI = GeometryShader;
 			}
 	#endif
@@ -651,7 +690,7 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 		}
 		else if(FPipelineCacheFileFormatPSO::DescriptorType::Compute == PSO.Type)
 		{
-			FComputeShaderRHIRef ComputeInitializer = FShaderCodeLibrary::CreateComputeShader(GMaxRHIShaderPlatform, PSO.ComputeDesc.ComputeShader, DummyCode);
+			FComputeShaderRHIRef ComputeInitializer = FShaderCodeLibrary::CreateComputeShader(GMaxRHIShaderPlatform, PSO.ComputeDesc.ComputeShader);
 			if(ComputeInitializer.IsValid())
 			{
 				FComputePipelineState* ComputeResult = PipelineStateCache::GetAndOrCreateComputePipelineState(RHICmdList, ComputeInitializer);
@@ -679,16 +718,6 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
     }
 	
 	return bOk;
-}
-
-inline bool InternalRequestShaderCode(FSHAHash Shader, FShaderPipelineCacheArchive* ReadRequest, TSet<FSHAHash>& ShaderCodeRequests)
-{
-	const bool bResult = FShaderCodeLibrary::RequestShaderCode(Shader, ReadRequest);
-	if(bResult)
-	{
-		ShaderCodeRequests.Add(Shader);
-	}
-	return bResult;
 }
 
 void FShaderPipelineCache::PreparePipelineBatch(TDoubleLinkedList<FPipelineCacheFileFormatPSORead*>& PipelineBatch)
@@ -771,31 +800,31 @@ void FShaderPipelineCache::PreparePipelineBatch(TDoubleLinkedList<FPipelineCache
                 // If everything is OK then we can issue reads of the actual shader code
 				if (bOK && PSO.GraphicsDesc.VertexShader != FSHAHash())
 				{
-					bOK &= InternalRequestShaderCode(PSO.GraphicsDesc.VertexShader, AsyncJob.ReadRequests, AsyncJob.ShaderCodeReads);
+					bOK &= FShaderCodeLibrary::PreloadShader(PSO.GraphicsDesc.VertexShader, AsyncJob.ReadRequests);
                     UE_CLOG(!bOK, LogRHI, Verbose, TEXT("Failed to read VertexShader shader: %s"), *(PSO.GraphicsDesc.VertexShader.ToString()));
 				}
 		
 				if (bOK && PSO.GraphicsDesc.HullShader != EmptySHA)
 				{
-					bOK &= InternalRequestShaderCode(PSO.GraphicsDesc.HullShader, AsyncJob.ReadRequests, AsyncJob.ShaderCodeReads);
+					bOK &= FShaderCodeLibrary::PreloadShader(PSO.GraphicsDesc.HullShader, AsyncJob.ReadRequests);
                     UE_CLOG(!bOK, LogRHI, Verbose, TEXT("Failed to read HullShader shader: %s"), *(PSO.GraphicsDesc.HullShader.ToString()));
 				}
 		
 				if (bOK && PSO.GraphicsDesc.DomainShader != EmptySHA)
 				{
-					bOK &= InternalRequestShaderCode(PSO.GraphicsDesc.DomainShader, AsyncJob.ReadRequests, AsyncJob.ShaderCodeReads);
+					bOK &= FShaderCodeLibrary::PreloadShader(PSO.GraphicsDesc.DomainShader, AsyncJob.ReadRequests);
                     UE_CLOG(!bOK, LogRHI, Verbose, TEXT("Failed to read DomainShader shader: %s"), *(PSO.GraphicsDesc.DomainShader.ToString()));
 				}
 		
 				if (bOK && PSO.GraphicsDesc.FragmentShader != EmptySHA)
 				{
-					bOK &= InternalRequestShaderCode(PSO.GraphicsDesc.FragmentShader, AsyncJob.ReadRequests, AsyncJob.ShaderCodeReads);
+					bOK &= FShaderCodeLibrary::PreloadShader(PSO.GraphicsDesc.FragmentShader, AsyncJob.ReadRequests);
                     UE_CLOG(!bOK, LogRHI, Verbose, TEXT("Failed to read FragmentShader shader: %s"), *(PSO.GraphicsDesc.FragmentShader.ToString()));
 				}
 		
 				if (bOK && PSO.GraphicsDesc.GeometryShader != EmptySHA)
 				{
-					bOK &= InternalRequestShaderCode(PSO.GraphicsDesc.GeometryShader, AsyncJob.ReadRequests, AsyncJob.ShaderCodeReads);
+					bOK &= FShaderCodeLibrary::PreloadShader(PSO.GraphicsDesc.GeometryShader, AsyncJob.ReadRequests);
                     UE_CLOG(!bOK, LogRHI, Verbose, TEXT("Failed to read GeometryShader shader: %s"), *(PSO.GraphicsDesc.GeometryShader.ToString()));
 				}
 			}
@@ -804,7 +833,7 @@ void FShaderPipelineCache::PreparePipelineBatch(TDoubleLinkedList<FPipelineCache
 				if (PSO.ComputeDesc.ComputeShader != EmptySHA)
 				{
                     RequiredShaders.Add(PSO.ComputeDesc.ComputeShader);
-					bOK &= InternalRequestShaderCode(PSO.ComputeDesc.ComputeShader, AsyncJob.ReadRequests, AsyncJob.ShaderCodeReads);
+					bOK &= FShaderCodeLibrary::PreloadShader(PSO.ComputeDesc.ComputeShader, AsyncJob.ReadRequests);
                     UE_CLOG(!bOK, LogRHI, Verbose, TEXT("Failed to find ComputeShader shader: %s"), *(PSO.ComputeDesc.ComputeShader.ToString()));
 				}
 				else
@@ -907,29 +936,6 @@ void FShaderPipelineCache::PrecompilePipelineBatch()
 		Precompile(RHICmdList, GMaxRHIShaderPlatform, CompileTask.PSO);
 		CompiledHashes.Add(GetTypeHash(CompileTask.PSO));
 		
-		// Free our code references that were actually made
-		if(CompileTask.ShaderCodeReads.Num())
-		{
-			if(GRHILazyShaderCodeLoading && IsRunningRHIInSeparateThread())
-			{
-				TSet<FSHAHash> ShaderCodeReads = CompileTask.ShaderCodeReads;
-				RHICmdList.EnqueueLambda([ShaderCodeReads](FRHICommandListImmediate&)
-				{
-					for (const FSHAHash& DelHash : ShaderCodeReads)
-					{
-						FShaderCodeLibrary::ReleaseShaderCode(DelHash);
-					}
-				});
-			}
-			else
-			{
-				for (const FSHAHash& DelHash : CompileTask.ShaderCodeReads)
-				{
-					FShaderCodeLibrary::ReleaseShaderCode(DelHash);
-				}
-			}
-		}
-		
 		delete CompileTask.ReadRequests;
 		CompileTask.ReadRequests = nullptr;
 		
@@ -1002,12 +1008,6 @@ void FShaderPipelineCache::PollShutdownItems()
 			check(ShutdownReadCompileTasks[i].ReadRequests);
 			if (ShutdownReadCompileTasks[i].ReadRequests->PollExternalReadDependencies())
 			{
-				// Free our code references that were actually made - maybe not all were
-				for (const FSHAHash& DelHash : ShutdownReadCompileTasks[i].ShaderCodeReads)
-				{
-					FShaderCodeLibrary::ReleaseShaderCode(DelHash);
-				}
-				
                 delete ShutdownReadCompileTasks[i].ReadRequests;
 				ShutdownReadCompileTasks[i].ReadRequests = nullptr;
 				
@@ -1096,6 +1096,7 @@ FShaderPipelineCache::FShaderPipelineCache(EShaderPlatform Platform)
 , bPaused(false)
 , bOpened(false)
 , bReady(false)
+, bPreOptimizing(false)
 , PausedCount(0)
 , TotalActiveTasks(0)
 , TotalWaitingTasks(0)
@@ -1105,6 +1106,8 @@ FShaderPipelineCache::FShaderPipelineCache(EShaderPlatform Platform)
 , LastAutoSaveTime(0)
 , LastAutoSaveTimeLogBoundPSO(0)
 , LastAutoSaveNum(-1)
+, TotalPrecompileWallTime(0.0)
+, TotalPrecompileTasks(0)
 {
 	SET_DWORD_STAT(STAT_ShaderPipelineTaskCount, 0);
     SET_DWORD_STAT(STAT_ShaderPipelineWaitingTaskCount, 0);
@@ -1134,7 +1137,7 @@ FShaderPipelineCache::FShaderPipelineCache(EShaderPlatform Platform)
 	
 	FCoreDelegates::ApplicationWillDeactivateDelegate.AddStatic(&PipelineStateCacheOnAppDeactivate);
 	
-	bReady = !CVarPSOFileCacheGameFileMaskEnabled.GetValueOnAnyThread();
+	bReady = !CVarPSOFileCacheGameFileMaskEnabled.GetValueOnAnyThread() || CVarPSOFileCachePreOptimizeEnabled.GetValueOnAnyThread();
 }
 
 FShaderPipelineCache::~FShaderPipelineCache()
@@ -1190,22 +1193,33 @@ void FShaderPipelineCache::Tick( float DeltaTime )
 		LastPrecompileRHIFence = nullptr;
 	}
 
-    if (FPlatformAtomics::AtomicRead(&TotalWaitingTasks) == 0 && FPlatformAtomics::AtomicRead(&TotalActiveTasks) == 0 && FPlatformAtomics::AtomicRead(&TotalCompleteTasks) != 0 && !LastPrecompileRHIFence.GetReference())
+	if (PrecompileStartTime > 0.0)
+	{
+		TotalPrecompileWallTime = float(FPlatformTime::Seconds() - PrecompileStartTime);
+	}
+
+	// HACK: note for the time being until the code further upstream properly uses the OnPrecompilationComplete delegate, we need to provide some delays to make sure it gets the messaging properly (the -10.0f and the -20.0f below).
+	if (((FPlatformAtomics::AtomicRead(&TotalWaitingTasks) == 0 && FPlatformAtomics::AtomicRead(&TotalActiveTasks) == 0 && FPlatformAtomics::AtomicRead(&TotalCompleteTasks) != 0) || (CVarPSOFileCacheMaxPrecompileTime.GetValueOnAnyThread() > 0.0 && TotalPrecompileWallTime - 10.0f > CVarPSOFileCacheMaxPrecompileTime.GetValueOnAnyThread() && TotalPrecompileTasks > 0)) && !LastPrecompileRHIFence.GetReference())
     {
-		float WallTime = 0.0f;
-		if (PrecompileStartTime > 0.0)
-		{
-			WallTime = float(FPlatformTime::Seconds() - PrecompileStartTime);
-		}
-		UE_LOG(LogRHI, Warning, TEXT("FShaderPipelineCache completed %u tasks in %.2fs (%.2fs wall time since intial open)."), (uint32)TotalCompleteTasks, FPlatformTime::ToSeconds64(TotalPrecompileTime), WallTime);
+		UE_LOG(LogRHI, Warning, TEXT("FShaderPipelineCache completed %u tasks in %.2fs (%.2fs wall time since intial open)."), (uint32)TotalCompleteTasks, FPlatformTime::ToSeconds64(TotalPrecompileTime), TotalPrecompileWallTime);
         if (OnPrecompilationComplete.IsBound())
         {
             OnPrecompilationComplete.Broadcast((uint32)TotalCompleteTasks, FPlatformTime::ToSeconds64(TotalPrecompileTime), ShaderCachePrecompileContext);
         }
-		FPipelineFileCache::PreCompileComplete();
+		if (CVarPSOFileCacheMaxPrecompileTime.GetValueOnAnyThread() > 0.0 && TotalPrecompileWallTime - 20.0f > CVarPSOFileCacheMaxPrecompileTime.GetValueOnAnyThread() && TotalPrecompileTasks > 0)
+		{
+			PrecompileStartTime = 0.0;
+			SetBatchMode(BatchMode::Background);
+			TotalPrecompileTasks = 0;
+		}
+		else
+		{
+			FPipelineFileCache::PreCompileComplete();
 		
-        FPlatformAtomics::InterlockedExchange(&TotalCompleteTasks, 0);
-        FPlatformAtomics::InterlockedExchange(&TotalPrecompileTime, 0);
+        	FPlatformAtomics::InterlockedExchange(&TotalCompleteTasks, 0);
+        	FPlatformAtomics::InterlockedExchange(&TotalPrecompileTime, 0);
+			bPreOptimizing = false;
+		}
     }
 	
 	if (ReadyForAutoSave())
@@ -1385,11 +1399,12 @@ TStatId FShaderPipelineCache::GetStatId() const
 // Not sure where the define is for this but most seem to be low, medium, high, epic, cinema, auto, except material quality but that's less anyway
 static const int32 MaxQualityCount = 6;
 static const int32 MaxPlaylistCount = 3;
+static const int32 MaxUserCount = 16;
 
 static bool PreCompileMaskComparison(uint64 ReferenceGameMask, uint64 PSOMask)
 {
 	uint64 UsageMask = (ReferenceGameMask & PSOMask);
-	return (UsageMask & (7 << (MaxQualityCount*2+MaxPlaylistCount))) && (UsageMask & (63 << MaxQualityCount*2)) && (UsageMask & (63 << MaxQualityCount)) && (UsageMask & 63);
+	return (UsageMask & (7l << (MaxQualityCount*3+MaxPlaylistCount))) && (UsageMask & (7 << (MaxQualityCount*3))) && (UsageMask & (63 << MaxQualityCount*2)) && (UsageMask & (63 << MaxQualityCount)) && (UsageMask & 63);
 }
 
 bool FShaderPipelineCache::Open(FString const& Name, EShaderPlatform Platform)
@@ -1446,15 +1461,13 @@ bool FShaderPipelineCache::Open(FString const& Name, EShaderPlatform Platform)
 			}
 
 			PreFetchedTasks = LocalPreFetchedTasks;
-
+			TotalPrecompileTasks = PreFetchedTasks.Num();
+			
+			bPreOptimizing = TotalPrecompileTasks > 0;
 			UE_LOG(LogRHI, Display, TEXT("Opened pipeline cache and enqueued %d of %d tasks for precompile with BatchSize %d and BatchTime %f."), Count, PreFetchedTasks.Num(), BatchSize, BatchTime);
 		}
 		else
 		{
-			if (CVarPSOFileCacheGameFileMaskEnabled.GetValueOnAnyThread() == 0)
-			{
-				CVarPSOFileCacheGameFileMaskEnabled->Set(1);
-			}
 			UE_LOG(LogRHI, Display, TEXT("Opened pipeline cache - precompile deferred on UsageMask."));
 		}
 	}

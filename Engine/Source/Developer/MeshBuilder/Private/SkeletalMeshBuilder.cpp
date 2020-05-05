@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SkeletalMeshBuilder.h"
 #include "Modules/ModuleManager.h"
@@ -7,7 +7,6 @@
 #include "Engine/SkeletalMesh.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "MeshDescription.h"
-#include "MeshDescriptionOperations.h"
 #include "MeshAttributes.h"
 #include "MeshDescriptionHelper.h"
 #include "MeshBuild.h"
@@ -54,9 +53,10 @@ struct FSkeletalMeshVertInstanceIDAndZ
 //or simply add parameter to FSkeletalMeshImportData::CopyLODImportData to do the job inside the function.
 namespace SkeletalMeshBuilderHelperNS
 {
-	void FixFaceMaterial(USkeletalMesh* SkeletalMesh, TArray<SkeletalMeshImportData::FMaterial>& RawMeshMaterials, TArray<SkeletalMeshImportData::FMeshFace>& LODFaces)
+	//Base LOD (index 0), which is not using LODMaterialMap, we want to adjust the source face material index data to fit with the SkeletalMesh material list
+	void AdjustSourceFaceMaterialIndex(USkeletalMesh* SkeletalMesh, TArray<SkeletalMeshImportData::FMaterial>& RawMeshMaterials, TArray<SkeletalMeshImportData::FMeshFace>& LODFaces, int32 LODIndex)
 	{
-		if (RawMeshMaterials.Num() <= 1)
+		if (RawMeshMaterials.Num() <= 1 || LODIndex > 0)
 		{
 			//Nothing to fix if we have 1 or less material
 			return;
@@ -76,10 +76,7 @@ namespace SkeletalMeshBuilderHelperNS
 				FName MeshMaterialName = SkeletalMesh->Materials[MeshMaterialIndex].ImportedMaterialSlotName;
 				if (MaterialImportName == MeshMaterialName)
 				{
-					if (MaterialRemap[MaterialIndex] != MeshMaterialIndex)
-					{
-						bNeedRemapping = true;
-					}
+					bNeedRemapping |= (MaterialRemap[MaterialIndex] != MeshMaterialIndex);
 					MaterialRemap[MaterialIndex] = MeshMaterialIndex;
 					break;
 				}
@@ -124,7 +121,7 @@ bool FSkeletalMeshBuilder::Build(USkeletalMesh* SkeletalMesh, const int32 LODInd
 
 	const FReferenceSkeleton& RefSkeleton = SkeletalMesh->RefSkeleton;
 
-	FScopedSlowTask SlowTask(6.0f, NSLOCTEXT("SkeltalMeshBuilder", "BuildingSkeletalMeshLOD", "Building skeletal mesh LOD"));
+	FScopedSlowTask SlowTask(6.01f, NSLOCTEXT("SkeltalMeshBuilder", "BuildingSkeletalMeshLOD", "Building skeletal mesh LOD"));
 	SlowTask.MakeDialog();
 
 	//Prevent any PostEdit change during the build
@@ -134,14 +131,14 @@ bool FSkeletalMeshBuilder::Build(USkeletalMesh* SkeletalMesh, const int32 LODInd
 	FLODUtilities::UnbindClothingAndBackup(SkeletalMesh, ClothingBindings, LODIndex);
 
 	FSkeletalMeshImportData SkeletalMeshImportData;
-	float ProgressStepSize = SkeletalMesh->IsReductionActive(LODIndex) ? 0.5f : 1.0f;
 	int32 NumTextCoord = 1; //We need to send rendering at least one tex coord buffer
 
 	//This scope define where we can use the LODModel, after a reduction the LODModel must be requery since it is a new instance
 	{
 		FSkeletalMeshLODModel& BuildLODModel = SkeletalMesh->GetImportedModel()->LODModels[LODIndex];
-		
-		BuildLODModel.RawSkeletalMeshBulkData.LoadRawMesh(SkeletalMeshImportData);
+
+		//Load the imported data
+		SkeletalMesh->LoadLODImportedData(LODIndex, SkeletalMeshImportData);
 
 		TArray<FVector> LODPoints;
 		TArray<SkeletalMeshImportData::FMeshWedge> LODWedges;
@@ -152,12 +149,19 @@ bool FSkeletalMeshBuilder::Build(USkeletalMesh* SkeletalMesh, const int32 LODInd
 
 		//Use the max because we need to have at least one texture coordinnate
 		NumTextCoord = FMath::Max<int32>(NumTextCoord, SkeletalMeshImportData.NumTexCoords);
-
-		SkeletalMeshBuilderHelperNS::FixFaceMaterial(SkeletalMesh, SkeletalMeshImportData.Materials, LODFaces);
+		
+		if (LODIndex == 0)
+		{
+			//BaseLOD should not use LODMaterialMap (except if user has change the material), so we have to make sure the source data fit with the skeletalmesh materials array
+			SkeletalMeshBuilderHelperNS::AdjustSourceFaceMaterialIndex(SkeletalMesh, SkeletalMeshImportData.Materials, LODFaces, LODIndex);
+		}
 
 		//Build the skeletalmesh using mesh utilities module
 		IMeshUtilities::MeshBuildOptions Options;
 		Options.FillOptions(LODInfo->BuildSettings);
+		//Force the normals or tangent in case the data is missing
+		Options.bComputeNormals |= !SkeletalMeshImportData.bHasNormals;
+		Options.bComputeTangents |= !SkeletalMeshImportData.bHasTangents;
 		IMeshUtilities& MeshUtilities = FModuleManager::Get().LoadModuleChecked<IMeshUtilities>("MeshUtilities");
 
 		// Create skinning streams for NewModel.
@@ -183,7 +187,7 @@ bool FSkeletalMeshBuilder::Build(USkeletalMesh* SkeletalMesh, const int32 LODInd
 		SlowTask.EnterProgressFrame(1.0f, NSLOCTEXT("SkeltalMeshBuilder", "RebuildMorphTarget", "Rebuilding morph targets..."));
 		if (SkeletalMeshImportData.MorphTargetNames.Num() > 0)
 		{
-			FLODUtilities::BuildMorphTargets(SkeletalMesh, SkeletalMeshImportData, LODIndex, !Options.bComputeNormals, !Options.bComputeTangents, Options.bUseMikkTSpace);
+			FLODUtilities::BuildMorphTargets(SkeletalMesh, SkeletalMeshImportData, LODIndex, !Options.bComputeNormals, !Options.bComputeTangents, Options.bUseMikkTSpace, Options.OverlappingThresholds);
 		}
 
 		//Re-apply the alternate skinning it must be after the inline reduction
@@ -201,7 +205,7 @@ bool FSkeletalMeshBuilder::Build(USkeletalMesh* SkeletalMesh, const int32 LODInd
 		//We are reduce ourself in this case we reduce ourself from the original data and return true.
 		if (SkeletalMesh->IsReductionActive(LODIndex))
 		{
-			SlowTask.EnterProgressFrame(ProgressStepSize, NSLOCTEXT("SkeltalMeshBuilder", "RegenerateLOD", "Regenerate LOD..."));
+			SlowTask.EnterProgressFrame(1.0f, NSLOCTEXT("SkeltalMeshBuilder", "RegenerateLOD", "Regenerate LOD..."));
 			//Update the original reduction data since we just build a new LODModel.
 			if (LODInfo->ReductionSettings.BaseLOD == LODIndex && SkeletalMesh->GetImportedModel()->OriginalReductionSourceMeshData.IsValidIndex(LODIndex))
 			{
@@ -258,14 +262,11 @@ bool FSkeletalMeshBuilder::Build(USkeletalMesh* SkeletalMesh, const int32 LODInd
 	LODModelAfterReduction.NumTexCoords = NumTextCoord;
 	LODModelAfterReduction.BuildStringID = BackupBuildStringID;
 
-	SlowTask.EnterProgressFrame(ProgressStepSize, NSLOCTEXT("SkeltalMeshBuilder", "RegenerateDependentLODs", "Regenerate Dependent LODs..."));
+	SlowTask.EnterProgressFrame(1.0f, NSLOCTEXT("SkeltalMeshBuilder", "RegenerateDependentLODs", "Regenerate Dependent LODs..."));
 	if (bRegenDepLODs)
 	{
 		//Regenerate dependent LODs
 		FLODUtilities::RegenerateDependentLODs(SkeletalMesh, LODIndex);
 	}
-
-	SlowTask.EnterProgressFrame();
-
 	return true;
 }

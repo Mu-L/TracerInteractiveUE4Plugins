@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OnlineSubsystemTencent.h"
 #include "OnlineSubsystemTencentPCH.h"
@@ -103,11 +103,6 @@ IOnlineIdentityPtr FOnlineSubsystemTencent::GetIdentityInterface() const
 }
 
 IOnlineTitleFilePtr FOnlineSubsystemTencent:: GetTitleFileInterface() const
-{
-	return nullptr;
-}
-
-IOnlineStorePtr FOnlineSubsystemTencent::GetStoreInterface() const
 {
 	return nullptr;
 }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*==============================================================================
 NiagaraDrawIndirect.h: Niagara shader to generate the draw indirect args for Niagara renderers.
@@ -9,12 +9,39 @@ NiagaraDrawIndirect.h: Niagara shader to generate the draw indirect args for Nia
 #include "CoreMinimal.h"
 #include "GlobalShader.h"
 #include "ShaderPermutation.h"
+#include "ShaderParameterUtils.h"
 
 #define NIAGARA_DRAW_INDIRECT_ARGS_GEN_THREAD_COUNT 64
 #define NIAGARA_DRAW_INDIRECT_ARGS_SIZE 5
+#define NIAGARA_DRAW_INDIRECT_TASK_INFO_SIZE 3
 
 // #define NIAGARA_COPY_BUFFER_THREAD_COUNT 64
 // #define NIAGARA_COPY_BUFFER_BUFFER_COUNT 3
+
+/**
+* Task info when generating draw indirect frame buffer.
+* Task is either about generate Niagara renderers drawindirect buffer,
+* or about resetting released instance counters.
+*/
+struct FNiagaraDrawIndirectArgGenTaskInfo
+{
+	FNiagaraDrawIndirectArgGenTaskInfo(uint32 InInstanceCountBufferOffset, uint32 InNumIndicesPerInstance, uint32 InStartIndexLocation)
+		: InstanceCountBufferOffset(InInstanceCountBufferOffset)
+		, NumIndicesPerInstance(InNumIndicesPerInstance)
+		, StartIndexLocation(InStartIndexLocation)
+	{}
+
+	uint32 InstanceCountBufferOffset;
+	uint32 NumIndicesPerInstance; // When -1 the counter needs to be reset to 0.
+	uint32 StartIndexLocation;
+
+	bool operator==(const FNiagaraDrawIndirectArgGenTaskInfo& Rhs) const
+	{
+		return InstanceCountBufferOffset == Rhs.InstanceCountBufferOffset
+			&& NumIndicesPerInstance == Rhs.NumIndicesPerInstance
+			&& StartIndexLocation == Rhs.StartIndexLocation;
+	}
+};
 
 /**
  * Compute shader used to generate GPU emitter draw indirect args.
@@ -25,33 +52,12 @@ class NIAGARAVERTEXFACTORIES_API FNiagaraDrawIndirectArgsGenCS : public FGlobalS
 	DECLARE_GLOBAL_SHADER(FNiagaraDrawIndirectArgsGenCS);
 
 public:
-
-	/** 
-	 * Task info when generating draw indirect frame buffer.
-	 * Task is either about generate Niagara renderers drawindirect buffer,
-	 * or about resetting released instance counters.
-	 */
-	struct FArgGenTaskInfo
-	{
-		FArgGenTaskInfo(uint32 InInstanceCountBufferOffset, uint32 InNumIndicesPerInstance) 
-			: InstanceCountBufferOffset(InInstanceCountBufferOffset)
-			, NumIndicesPerInstance(InNumIndicesPerInstance)
-		{}
-
-		uint32 InstanceCountBufferOffset;
-		uint32 NumIndicesPerInstance; // When -1 the counter needs to be reset to 0.
-
-		bool operator==(const FArgGenTaskInfo& Rhs) const
-		{
-			return InstanceCountBufferOffset == Rhs.InstanceCountBufferOffset && NumIndicesPerInstance == Rhs.NumIndicesPerInstance;
-		}
-	};
-
-	using FPermutationDomain = TShaderPermutationDomain<>;
+	class FSupportsTextureRW : SHADER_PERMUTATION_INT("SUPPORTS_TEXTURE_RW", 2);
+	using FPermutationDomain = TShaderPermutationDomain<FSupportsTextureRW>;
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
-		return (RHISupportsComputeShaders(Parameters.Platform) && !(Parameters.Platform == EShaderPlatform::SP_METAL || Parameters.Platform == EShaderPlatform::SP_METAL_TVOS));
+		return RHISupportsComputeShaders(Parameters.Platform);
 	}
 
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment);
@@ -59,15 +65,47 @@ public:
 	FNiagaraDrawIndirectArgsGenCS() {}
 	FNiagaraDrawIndirectArgsGenCS(const ShaderMetaType::CompiledShaderInitializerType& Initializer);
 
-	bool Serialize(FArchive& Ar);
+	//bool Serialize(FArchive& Ar);
 	void SetOutput(FRHICommandList& RHICmdList, FRHIUnorderedAccessView* DrawIndirectArgsUAV, FRHIUnorderedAccessView* InstanceCountsUAV);
 	void SetParameters(FRHICommandList& RHICmdList, FRHIShaderResourceView* TaskInfosBuffer, int32 NumArgGenTasks, int32 NumInstanceCountClearTasks);
 	void UnbindBuffers(FRHICommandList& RHICmdList);
 
 protected:
 	
-	FShaderResourceParameter TaskInfosParam;
-	FRWShaderParameter InstanceCountsParam;
-	FRWShaderParameter DrawIndirectArgsParam;
-	FShaderParameter TaskCountParam;
+	LAYOUT_FIELD(FShaderResourceParameter, TaskInfosParam)
+	LAYOUT_FIELD(FRWShaderParameter, InstanceCountsParam)
+	LAYOUT_FIELD(FRWShaderParameter, DrawIndirectArgsParam)
+	LAYOUT_FIELD(FShaderParameter, TaskCountParam)
+};
+
+/**
+ * Compute shader used to reset unused instance count entries. Used if the platform doesn't support RW texture buffers
+ */
+class NIAGARAVERTEXFACTORIES_API FNiagaraDrawIndirectResetCountsCS : public FGlobalShader
+{
+	DECLARE_GLOBAL_SHADER(FNiagaraDrawIndirectResetCountsCS);
+
+public:
+	using FPermutationDomain = TShaderPermutationDomain<>;
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return RHISupportsComputeShaders(Parameters.Platform);
+	}
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment);
+
+	FNiagaraDrawIndirectResetCountsCS() {}
+	FNiagaraDrawIndirectResetCountsCS(const ShaderMetaType::CompiledShaderInitializerType& Initializer);
+
+	//bool Serialize(FArchive& Ar);
+	void SetOutput(FRHICommandList& RHICmdList, FRHIUnorderedAccessView* InstanceCountsUAV);
+	void SetParameters(FRHICommandList& RHICmdList, FRHIShaderResourceView* TaskInfosBuffer, int32 NumArgGenTasks, int32 NumInstanceCountClearTasks);
+	void UnbindBuffers(FRHICommandList& RHICmdList);
+
+protected:
+
+	LAYOUT_FIELD(FShaderResourceParameter, TaskInfosParam)
+	LAYOUT_FIELD(FRWShaderParameter, InstanceCountsParam)
+	LAYOUT_FIELD(FShaderParameter, TaskCountParam)
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "KismetPins/SGraphPinText.h"
@@ -116,6 +116,7 @@ TSharedRef<SWidget>	SGraphPinText::GetDefaultValueWidget()
 		.Style(FEditorStyle::Get(), "Graph.EditableTextBox")
 		.Visibility(this, &SGraphPin::GetDefaultValueVisibility)
 		.ForegroundColor(FSlateColor::UseForeground())
+		.IsEnabled(this, &SGraphPin::GetDefaultValueIsEditable)
 		.WrapTextAt(400)
 		.MinDesiredWidth(18.0f)
 		.MaxDesiredHeight(200);

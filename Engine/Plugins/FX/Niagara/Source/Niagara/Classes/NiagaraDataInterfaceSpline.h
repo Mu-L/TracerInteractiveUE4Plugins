@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "NiagaraDataInterface.h"
@@ -27,7 +27,7 @@ class NIAGARA_API UNiagaraDataInterfaceSpline : public UNiagaraDataInterface
 
 public:
 	
-	/** The source actor from which to sample.  */
+	/** The source actor from which to sample.  Note that this can only be set when used as a user variable on a component in the world.*/
 	UPROPERTY(EditAnywhere, Category = "Spline")
 	AActor* Source;
 	

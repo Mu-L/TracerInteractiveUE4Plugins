@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // Port of geometry3cpp TMeshAABBTree3
 
@@ -19,7 +19,7 @@ class TMeshAABBTree3 : public IMeshSpatial
 	friend class TFastWindingTree<TriangleMeshType>;
 
 protected:
-	TriangleMeshType* Mesh;
+	const TriangleMeshType* Mesh;
 	int MeshTimestamp = -1;
 	int TopDownLeafMaxTriCount = 4;
 
@@ -36,12 +36,12 @@ public:
 		Mesh = nullptr;
 	}
 
-	TMeshAABBTree3(TriangleMeshType* SourceMesh, bool bAutoBuild = true)
+	TMeshAABBTree3(const TriangleMeshType* SourceMesh, bool bAutoBuild = true)
 	{
 		SetMesh(SourceMesh, bAutoBuild);
 	}
 
-	void SetMesh(TriangleMeshType* SourceMesh, bool bAutoBuild = true)
+	void SetMesh(const TriangleMeshType* SourceMesh, bool bAutoBuild = true)
 	{
 		Mesh = SourceMesh;
 		MeshTimestamp = -1;
@@ -98,6 +98,24 @@ public:
 		find_nearest_tri(RootIndex, P, NearestDistSqr, tNearID);
 		return tNearID;
 	}
+
+	/**
+	 * Convenience function that calls FindNearestTriangle and then finds nearest point
+	 * @return nearest point to Point, or Point itself if a nearest point was not found
+	 */
+	virtual FVector3d FindNearestPoint(const FVector3d& Point, double MaxDist = TNumericLimits<double>::Max())
+	{
+		double NearestDistSqr;
+		int32 NearTriID = FindNearestTriangle(Point, NearestDistSqr, MaxDist);
+		if (NearTriID >= 0)
+		{
+			FDistPoint3Triangle3d Query = TMeshQueries<TriangleMeshType>::TriangleDistance(*Mesh, NearTriID, Point);
+			return Query.ClosestTrianglePoint;
+		}
+		return Point;
+	}
+
+protected:
 	void find_nearest_tri(int IBox, const FVector3d& P, double& NearestDistSqr, int& TID)
 	{
 		int idx = BoxToIndex[IBox];
@@ -164,12 +182,14 @@ public:
 		}
 	}
 
-	virtual bool SupportsTriangleRayIntersection() override
-	{
-		return true;
-	}
 
-	virtual int FindNearestHitTriangle(const FRay3d& Ray, double MaxDist = TNumericLimits<double>::Max()) override
+
+
+public:
+	/**
+	 * Find the Vertex closest to P, and distance to it, within distance MaxDist, or return InvalidID
+	 */
+	virtual int FindNearestVertex(const FVector3d& P, double& NearestDistSqr, double MaxDist = TNumericLimits<double>::Max())
 	{
 		check(MeshTimestamp == Mesh->GetShapeTimestamp());
 		check(RootIndex >= 0);
@@ -177,15 +197,121 @@ public:
 		{
 			return IndexConstants::InvalidID;
 		}
+
+		NearestDistSqr = (MaxDist < DOUBLE_MAX) ? MaxDist * MaxDist : DOUBLE_MAX;
+		int NearestVertexID = IndexConstants::InvalidID;
+		find_nearest_vertex(RootIndex, P, NearestDistSqr, NearestVertexID);
+		return NearestVertexID;
+	}
+
+
+protected:
+	void find_nearest_vertex(int IBox, const FVector3d& P, double& NearestDistSqr, int& NearestVertexID)
+	{
+		int idx = BoxToIndex[IBox];
+		if (idx < TrianglesEnd)
+		{ // triangle-list case, array is [N t1 t2 ... tN]
+			int num_tris = IndexList[idx];
+			for (int i = 1; i <= num_tris; ++i)
+			{
+				int ti = IndexList[idx + i];
+				if (TriangleFilterF != nullptr && TriangleFilterF(ti) == false)
+				{
+					continue;
+				}
+				FIndex3i Triangle = Mesh->GetTriangle(ti);
+				for (int j = 0; j < 3; ++j) 
+				{
+					double VertexDistSqr = Mesh->GetVertex(Triangle[j]).DistanceSquared(P);
+					if (VertexDistSqr < NearestDistSqr) 
+					{
+						NearestDistSqr = VertexDistSqr;
+						NearestVertexID = Triangle[j];
+					}
+				}
+			}
+		}
+		else
+		{ // internal node, either 1 or 2 child boxes
+			int iChild1 = IndexList[idx];
+			if (iChild1 < 0)
+			{ // 1 child, descend if nearer than cur min-dist
+				iChild1 = (-iChild1) - 1;
+				double fChild1DistSqr = BoxDistanceSqr(iChild1, P);
+				if (fChild1DistSqr <= NearestDistSqr)
+				{
+					find_nearest_vertex(iChild1, P, NearestDistSqr, NearestVertexID);
+				}
+			}
+			else
+			{ // 2 children, descend closest first
+				iChild1 = iChild1 - 1;
+				int iChild2 = IndexList[idx + 1] - 1;
+
+				double fChild1DistSqr = BoxDistanceSqr(iChild1, P);
+				double fChild2DistSqr = BoxDistanceSqr(iChild2, P);
+				if (fChild1DistSqr < fChild2DistSqr)
+				{
+					if (fChild1DistSqr < NearestDistSqr)
+					{
+						find_nearest_vertex(iChild1, P, NearestDistSqr, NearestVertexID);
+						if (fChild2DistSqr < NearestDistSqr)
+						{
+							find_nearest_vertex(iChild2, P, NearestDistSqr, NearestVertexID);
+						}
+					}
+				}
+				else
+				{
+					if (fChild2DistSqr < NearestDistSqr)
+					{
+						find_nearest_vertex(iChild2, P, NearestDistSqr, NearestVertexID);
+						if (fChild1DistSqr < NearestDistSqr)
+						{
+							find_nearest_vertex(iChild1, P, NearestDistSqr, NearestVertexID);
+						}
+					}
+				}
+			}
+		}
+	}
+
+
+
+
+
+public:
+	virtual bool SupportsTriangleRayIntersection() override
+	{
+		return true;
+	}
+
+	inline virtual int FindNearestHitTriangle(const FRay3d& Ray, double MaxDistance = TNumericLimits<double>::Max()) override
+	{
+		double NearestT;
+		int TID;
+		FindNearestHitTriangle(Ray, NearestT, TID, MaxDistance);
+		return TID;
+	}
+
+	virtual bool FindNearestHitTriangle(const FRay3d& Ray, double& NearestT, int& TID, double MaxDist = TNumericLimits<double>::Max()) override
+	{
+		TID = IndexConstants::InvalidID;
+		NearestT = (MaxDist < TNumericLimits<double>::Max()) ? MaxDist : TNumericLimits<float>::Max();
+
+		check(MeshTimestamp == Mesh->GetShapeTimestamp());
+		check(RootIndex >= 0);
+		if (RootIndex < 0)
+		{
+			return false;
+		}
 		// TODO: check( ray_is_normalized)
 
 		// [RMS] note: using float.MaxValue here because we need to use <= to compare Box hit
 		//   to NearestT, and Box hit returns double.MaxValue on no-hit. So, if we set
 		//   nearestT to double.MaxValue, then we will test all boxes (!)
-		double NearestT = (MaxDist < TNumericLimits<double>::Max()) ? MaxDist : TNumericLimits<float>::Max();
-		int tNearID = IndexConstants::InvalidID;
-		FindHitTriangle(RootIndex, Ray, NearestT, tNearID);
-		return tNearID;
+		FindHitTriangle(RootIndex, Ray, NearestT, TID);
+		return TID != IndexConstants::InvalidID;
 	}
 
 	void FindHitTriangle(int IBox, const FRay3d& Ray, double& NearestT, int& TID)

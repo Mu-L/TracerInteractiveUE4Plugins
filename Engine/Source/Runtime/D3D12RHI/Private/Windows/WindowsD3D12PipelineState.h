@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // Implementation of D3D12 Pipelinestate related functions
 
@@ -50,92 +50,75 @@ struct FD3D12_COMPUTE_PIPELINE_STATE_STREAM
 	CD3DX12_PIPELINE_STATE_STREAM_CACHED_PSO CachedPSO;
 };
 
+struct ComputePipelineCreationArgs_POD;
+struct GraphicsPipelineCreationArgs_POD;
+
+#include "../D3D12PipelineState.h"
+
+void SaveByteCode(D3D12_SHADER_BYTECODE& ByteCode);
+
 struct ComputePipelineCreationArgs_POD
 {
-	const FD3D12ComputePipelineStateDesc* Desc;
+	FD3D12ComputePipelineStateDesc Desc;
 	ID3D12PipelineLibrary* Library;
 
-	void Init(ComputePipelineCreationArgs_POD InArgs)
+	void Init(const ComputePipelineCreationArgs_POD& InArgs)
 	{
 		Desc = InArgs.Desc;
 		Library = InArgs.Library;
+
+		SaveByteCode(Desc.Desc.CS);
 	}
+
+	void Destroy();
 };
 
 struct GraphicsPipelineCreationArgs_POD
 {
-	const FD3D12LowLevelGraphicsPipelineStateDesc* Desc;
+	FD3D12LowLevelGraphicsPipelineStateDesc Desc;
 	ID3D12PipelineLibrary* Library;
 
-	void Init(GraphicsPipelineCreationArgs_POD InArgs)
+	void Init(const GraphicsPipelineCreationArgs_POD& InArgs)
 	{
 		Desc = InArgs.Desc;
 		Library = InArgs.Library;
-	}
-};
 
-#include "D3D12PipelineState.h"
+		SaveByteCode(Desc.Desc.VS);
+		SaveByteCode(Desc.Desc.PS);
+		SaveByteCode(Desc.Desc.GS);
+		SaveByteCode(Desc.Desc.HS);
+		SaveByteCode(Desc.Desc.DS);
+	}
+
+	void Destroy();
+};
 
 struct ComputePipelineCreationArgs
 {
-	ComputePipelineCreationArgs()
-	{
-		Args.Desc = nullptr;
-		Args.Library = nullptr;
-	}
-
 	ComputePipelineCreationArgs(const FD3D12ComputePipelineStateDesc* InDesc, ID3D12PipelineLibrary* InLibrary)
 	{
-		Args.Desc = InDesc;
+		Args.Desc = *InDesc;
 		Args.Library = InLibrary;
 	}
 
 	ComputePipelineCreationArgs(const ComputePipelineCreationArgs& InArgs)
-		: ComputePipelineCreationArgs(InArgs.Args.Desc, InArgs.Args.Library)
+		: ComputePipelineCreationArgs(&InArgs.Args.Desc, InArgs.Args.Library)
 	{}
-
-	ComputePipelineCreationArgs& operator=(const ComputePipelineCreationArgs& Other)
-	{
-		if (this != &Other)
-		{
-			Args.Desc = Other.Args.Desc;
-			Args.Library = Other.Args.Library;
-		}
-
-		return *this;
-	}
 
 	ComputePipelineCreationArgs_POD Args;
 };
 
 struct GraphicsPipelineCreationArgs
 {
-	GraphicsPipelineCreationArgs()
-	{
-		Args.Desc = nullptr;
-		Args.Library = nullptr;
-	}
-
 	GraphicsPipelineCreationArgs(const FD3D12LowLevelGraphicsPipelineStateDesc* InDesc, ID3D12PipelineLibrary* InLibrary)
 	{
-		Args.Desc = InDesc;
+		Args.Desc = *InDesc;
 		Args.Library = InLibrary;
 	}
 
 	GraphicsPipelineCreationArgs(const GraphicsPipelineCreationArgs& InArgs)
-		: GraphicsPipelineCreationArgs(InArgs.Args.Desc, InArgs.Args.Library)
+		: GraphicsPipelineCreationArgs(&InArgs.Args.Desc, InArgs.Args.Library)
 	{}
-
-	GraphicsPipelineCreationArgs& operator=(const GraphicsPipelineCreationArgs& Other)
-	{
-		if (this != &Other)
-		{
-			Args.Desc = Other.Args.Desc;
-			Args.Library = Other.Args.Library;
-		}
-
-		return *this;
-	}
 
 	GraphicsPipelineCreationArgs_POD Args;
 };
@@ -208,32 +191,4 @@ public:
 
 	FD3D12PipelineStateCache(FD3D12Adapter* InParent);
 	virtual ~FD3D12PipelineStateCache();
-};
-
-template <typename TDesc> struct TPSOFunctionMap;
-template<> struct TPSOFunctionMap < D3D12_GRAPHICS_PIPELINE_STATE_DESC >
-{
-	static decltype(&ID3D12Device::CreateGraphicsPipelineState) GetCreatePipelineState() { return &ID3D12Device::CreateGraphicsPipelineState; }
-	static decltype(&ID3D12PipelineLibrary::LoadGraphicsPipeline) GetLoadPipeline() { return &ID3D12PipelineLibrary::LoadGraphicsPipeline; }
-};
-template<> struct TPSOFunctionMap < D3D12_COMPUTE_PIPELINE_STATE_DESC >
-{
-	static decltype(&ID3D12Device::CreateComputePipelineState) GetCreatePipelineState() { return &ID3D12Device::CreateComputePipelineState; }
-	static decltype(&ID3D12PipelineLibrary::LoadComputePipeline) GetLoadPipeline() { return &ID3D12PipelineLibrary::LoadComputePipeline; }
-};
-
-template <typename TDesc> struct TPSOStreamFunctionMap;
-template<> struct TPSOStreamFunctionMap < GraphicsPipelineCreationArgs_POD >
-{
-	static decltype(&FD3D12_GRAPHICS_PIPELINE_STATE_DESC::GraphicsDescV0) GetPipelineStateDescV0() { return &FD3D12_GRAPHICS_PIPELINE_STATE_DESC::GraphicsDescV0; }
-	typedef D3D12_GRAPHICS_PIPELINE_STATE_DESC D3D12PipelineStateDescV0Type;
-	typedef FD3D12_GRAPHICS_PIPELINE_STATE_STREAM D3D12PipelineStateStreamType;
-	static const TCHAR* GetString() { return TEXT("Graphics"); }
-};
-template<> struct TPSOStreamFunctionMap < ComputePipelineCreationArgs_POD >
-{
-	static decltype(&FD3D12_COMPUTE_PIPELINE_STATE_DESC::ComputeDescV0) GetPipelineStateDescV0() { return &FD3D12_COMPUTE_PIPELINE_STATE_DESC::ComputeDescV0; }
-	typedef D3D12_COMPUTE_PIPELINE_STATE_DESC D3D12PipelineStateDescV0Type;
-	typedef FD3D12_COMPUTE_PIPELINE_STATE_STREAM D3D12PipelineStateStreamType;
-	static const TCHAR* GetString() { return TEXT("Compute"); }
 };

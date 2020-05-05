@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System.IO;
@@ -76,7 +76,6 @@ public class UnrealEd : ModuleRules
 		PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
-				"BspMode",
 				"Core",
 				"CoreUObject",
 				"ApplicationCore",
@@ -104,7 +103,6 @@ public class UnrealEd : ModuleRules
 				"NavigationSystem",
 				"MeshDescription",
                 "StaticMeshDescription",
-                "MeshDescriptionOperations",
                 "MeshBuilder",
                 "MaterialShaderQualitySettings",
                 "EditorSubsystem",
@@ -185,6 +183,7 @@ public class UnrealEd : ModuleRules
 				"ScriptDisassembler",
 				"ToolMenus",
 				"FreeImage",
+				"IoStoreUtilities",
             }
 		);
 
@@ -219,8 +218,6 @@ public class UnrealEd : ModuleRules
 				"SettingsEditor",
 				"SessionFrontend",
 				"StringTableEditor",
-				"GeometryMode",
-				"TextureAlignMode",
 				"FoliageEdit",
 				"ImageWrapper",
 				"Blutility",
@@ -248,7 +245,8 @@ public class UnrealEd : ModuleRules
 				"Media",
 				"TimeManagementEditor",
 				"VirtualTexturingEditor",
-				"EditorInteractiveToolsFramework"
+				"EditorInteractiveToolsFramework",
+				"TraceInsights",
 			}
 		);
 
@@ -327,6 +325,11 @@ public class UnrealEd : ModuleRules
 		);
 
 		SetupModulePhysicsSupport(Target);
+
+		if(Target.bCompileChaos && Target.bUseChaos)
+        {
+			PrivateDependencyModuleNames.Add("ChaosSolvers");
+        }
 
 		if (Target.bCompileRecast)
 		{

@@ -1,12 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "OVR_Avatar.h"
 #include "Containers/Set.h"
 #include "Components/ActorComponent.h"
-#include "OVR_Plugin.h"
-#include "OVR_Plugin_Types.h"
+#include "OculusPluginWrapper.h"
 #include "HAL/CriticalSection.h"
 
 #include "OvrAvatar.generated.h"

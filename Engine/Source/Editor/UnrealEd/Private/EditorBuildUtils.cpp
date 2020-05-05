@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	EditorBuildUtils.cpp: Utilities for building in the editor
@@ -315,7 +315,7 @@ bool FEditorBuildUtils::EditorBuild( UWorld* InWorld, FName Id, const bool bAllo
 		BuildProgressWidget.Pin()->SetBuildType(BuildType);
 	}
 
-	bool bShouldMapCheck = true;
+	bool bShouldMapCheck = !FParse::Param(FCommandLine::Get(), TEXT("SkipMapCheck"));
 	if (Id == FBuildOptions::BuildGeometry)
 	{
 		// We can't set the busy cursor for all windows, because lighting
@@ -1104,6 +1104,8 @@ EDebugViewShaderMode ViewModeIndexToDebugViewShaderMode(EViewModeIndex SelectedV
 		return DVSM_RequiredTextureResolution;
 	case VMI_RayTracingDebug:
 		return DVSM_RayTracingDebug;
+	case VMI_LODColoration:
+		return DVSM_LODColoration;
 	case VMI_Unknown:
 	default :
 		return DVSM_None;
@@ -1496,10 +1498,10 @@ void FMaterialOfflineCompilation::CopyPlatformSpecificStats()
 		return;
 	}
 
-	TMap<FName, FShader*> SrcShaders;
+	TMap<FHashedName, TShaderRef<FShader>> SrcShaders;
 	SrcShaderMap->GetShaderList(SrcShaders);
 
-	TMap<FName, FShader*> DstShaders;
+	TMap<FHashedName, TShaderRef<FShader>> DstShaders;
 	DstShaderMap->GetShaderList(DstShaders);
 
 	for (auto Pair : SrcShaders)
@@ -1507,11 +1509,8 @@ void FMaterialOfflineCompilation::CopyPlatformSpecificStats()
 		auto *DestinationShaderPtr = DstShaders.Find(Pair.Key);
 		if (DestinationShaderPtr != nullptr)
 		{
-			FShader *DestinationShader = *DestinationShaderPtr;
-			FShader *SourceShader = Pair.Value;
-
-			auto NumInstructions = SourceShader->GetNumInstructions();
-			DestinationShader->SetNumInstructions(NumInstructions);
+			auto NumInstructions = Pair.Value->GetNumInstructions();
+			(*DestinationShaderPtr)->SetNumInstructions(NumInstructions);
 		}
 	}
 }

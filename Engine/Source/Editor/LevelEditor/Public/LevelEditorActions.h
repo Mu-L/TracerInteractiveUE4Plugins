@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 
@@ -266,6 +266,7 @@ public:
 	TSharedPtr< FUICommandInfo > CreateNewOutlinerFolder;
 
 	TSharedPtr< FUICommandInfo > HoldToEnableVertexSnapping;
+	TSharedPtr< FUICommandInfo > HoldToEnablePivotVertexSnapping;
 
 	/**
 	 * Brush Commands                   
@@ -554,8 +555,7 @@ public:
 	TSharedPtr< FUICommandInfo > OpenLevelBlueprint;
 	TSharedPtr< FUICommandInfo > CheckOutProjectSettingsConfig;
 	TSharedPtr< FUICommandInfo > CreateBlankBlueprintClass;
-	TSharedPtr< FUICommandInfo > ConvertSelectionToBlueprintViaHarvest;
-	TSharedPtr< FUICommandInfo > ConvertSelectionToBlueprintViaSubclass;
+	TSharedPtr< FUICommandInfo > ConvertSelectionToBlueprint;
 
 	/** Editor mode commands */
 	TArray< TSharedPtr< FUICommandInfo > > EditorModeCommands;
@@ -591,9 +591,9 @@ public:
 	TSharedPtr< FUICommandInfo > ToggleFeatureLevelPreview;
 
 	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_SM5;
-	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_AndroidGLES2;
 	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_AndroidGLES31;
 	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_AndroidVulkanES31;
+	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_AndroidVulkanSM5;
 	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_IOSMetalES31;
 	
 	///**
@@ -950,7 +950,7 @@ public:
 	 * @param bUsePlacement		Whether to use the placement editor. If not, the actor will be placed at the last click.
 	 * @param ActorLocation		[opt] If NULL, positions the actor at the mouse location, otherwise the location specified. Default is true.
 	 */
-	static void AddActor_Clicked( UActorFactory* ActorFactory, FAssetData AssetData, bool bUsePlacement );
+	static void AddActor_Clicked( UActorFactory* ActorFactory, FAssetData AssetData);
 	static AActor* AddActor( UActorFactory* ActorFactory, const FAssetData& AssetData, const FTransform* ActorLocation );
 
 	/**
@@ -1177,17 +1177,11 @@ public:
 	/** Helps the user create a Blueprint class */
 	static void CreateBlankBlueprintClass();
 
-	/** Can call HarvestSelectedActorsIntoBlueprintClass right now?  (is anything selected) */
-	static bool CanHarvestSelectedActorsIntoBlueprintClass();
+	/** Can the selected actors be converted to a blueprint class in any of the supported ways? */
+	static bool CanConvertSelectedActorsIntoBlueprintClass();
 
-	/** Harvest all of the components in the selected actors into a Blueprint, and replace the instances with one new actor */
-	static void HarvestSelectedActorsIntoBlueprintClass();
-
-	/** Can call SubclassSelectedActorIntoBlueprintClass right now?  (is exactly one thing selected) */
-	static bool CanSubclassSelectedActorIntoBlueprintClass();
-
-	/** Convert the selected actor into a Blueprint (via subclassing) */
-	static void SubclassSelectedActorIntoBlueprintClass();
+	/** Bring up the convert actors to blueprint UI */
+	static void ConvertSelectedActorsIntoBlueprintClass();
 
 	/** Shows only selected actors, hiding any unselected actors and unhiding any selected hidden actors. */
 	static void OnShowOnlySelectedActors();

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*================================================================================
 	MacPlatformProperties.h - Basic static properties of a platform 
@@ -131,6 +131,11 @@ struct FMacPlatformProperties
 	static FORCEINLINE bool SupportsAudioStreaming()
 	{
 		return !IsServerOnly();
+	}
+
+	static FORCEINLINE bool SupportsVirtualTextureStreaming()
+	{
+		return true;
 	}
 };
 

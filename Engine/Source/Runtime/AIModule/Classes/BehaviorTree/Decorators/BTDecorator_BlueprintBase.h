@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -77,7 +77,12 @@ protected:
 	TArray<FName> ObservedKeyNames;
 
 	/** properties with runtime values, stored only in class default object */
-	TArray<UProperty*> PropertyData;
+	TArray<FProperty*> PropertyData;
+
+#if WITH_EDITORONLY_DATA
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = Description)
+	FString CustomDescription;
+#endif // WITH_EDITORONLY_DATA
 
 	/** show detailed information about properties */
 	UPROPERTY(EditInstanceOnly, Category=Description)

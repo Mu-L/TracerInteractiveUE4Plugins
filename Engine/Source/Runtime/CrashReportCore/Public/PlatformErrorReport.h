@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -27,6 +27,12 @@ typedef FMacErrorReport FPlatformErrorReport;
 #include "IOS/IOSErrorReport.h"
 
 typedef FIOSErrorReport FPlatformErrorReport;
+
+#elif PLATFORM_ANDROID
+
+#include "Android/AndroidErrorReport.h"
+
+typedef FAndroidErrorReport FPlatformErrorReport;
 
 #else
 

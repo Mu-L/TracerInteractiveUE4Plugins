@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -14,6 +14,7 @@
 
 // Insights
 #include "Insights/InsightsManager.h"
+#include "Insights/IUnrealInsightsModule.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -21,29 +22,12 @@ class FActiveTimerHandle;
 class FMenuBuilder;
 
 class SFrameTrack;
-class SGraphTrack;
 class SLogView;
 class SStatsView;
 class STimersView;
 class STimerTreeView;
 class STimingView;
 class SVerticalBox;
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-struct FTimingProfilerTabs
-{
-	// Tab identifiers
-	static const FName ToolbarID;
-	static const FName FramesTrackID;
-	static const FName GraphTrackID;
-	static const FName TimingViewID;
-	static const FName TimersID;
-	static const FName CallersID;
-	static const FName CalleesID;
-	static const FName StatsCountersID;
-	static const FName LogViewID;
-};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -84,9 +68,6 @@ private:
 
 	TSharedRef<SDockTab> SpawnTab_FramesTrack(const FSpawnTabArgs& Args);
 	void OnFramesTrackTabClosed(TSharedRef<SDockTab> TabBeingClosed);
-
-	TSharedRef<SDockTab> SpawnTab_GraphTrack(const FSpawnTabArgs& Args);
-	void OnGraphTrackTabClosed(TSharedRef<SDockTab> TabBeingClosed);
 
 	TSharedRef<SDockTab> SpawnTab_TimingView(const FSpawnTabArgs& Args);
 	void OnTimingViewTabClosed(TSharedRef<SDockTab> TabBeingClosed);
@@ -181,9 +162,6 @@ private:
 	/** The Frame track widget */
 	TSharedPtr<SFrameTrack> FrameTrack;
 
-	/** The graph track widget */
-	TSharedPtr<SGraphTrack> GraphTrack;
-
 	/** The Timing view (multi-track) widget */
 	TSharedPtr<STimingView> TimingView;
 
@@ -210,4 +188,7 @@ private:
 
 	/** The number of seconds the profiler has been active */
 	float DurationActive;
+
+	/** Tab specific slate extender structure, has the lifetime of this widget */
+	TSharedPtr<FInsightsMajorTabExtender> Extension;
 };

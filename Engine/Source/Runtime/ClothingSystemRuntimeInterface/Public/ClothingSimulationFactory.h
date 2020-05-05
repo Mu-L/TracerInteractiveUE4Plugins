@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -6,11 +6,13 @@
 
 #include "UObject/Object.h"
 #include "Features/IModularFeature.h"
+#include "Templates/SubclassOf.h"
 
 #include "ClothingSimulationFactory.generated.h"
 
 class UClothingAssetBase;
 class UClothingSimulationInteractor;
+class UClothConfigBase;
 
 // An interface for a class that will provide default simulation factory classes
 // Used by modules wanting to override clothing simulation to provide their own implementation
@@ -24,7 +26,13 @@ public:
 	// Called by the engine to get the default clothing simulation factory to use
 	// for skeletal mesh components (see USkeletalMeshComponent constructor).
 	// Returns Factory class for simulations or nullptr to disable clothing simulation
-	virtual UClass* GetDefaultSimulationFactoryClass() = 0;
+	UE_DEPRECATED(4.25, "GetDefaultSimulationFactoryClass() has been deprecated. Use IClothingSimulationFactoryClassProvider::GetSimulationFactoryClass() or UClothingSimulationFactory::GetDefaultClothingSimulationFactoryClass() instead.")
+	virtual UClass* GetDefaultSimulationFactoryClass() { return nullptr; }
+
+	// Called by the engine to get the clothing simulation factory associated with this
+	// provider for skeletal mesh components (see USkeletalMeshComponent constructor).
+	// Returns Factory class for simulations or nullptr to disable clothing simulation
+	virtual TSubclassOf<class UClothingSimulationFactory> GetClothingSimulationFactoryClass() const = 0;
 };
 
 // Any clothing simulation factory should derive from this interface object to interact with the engine
@@ -34,6 +42,10 @@ class CLOTHINGSYSTEMRUNTIMEINTERFACE_API UClothingSimulationFactory : public UOb
 	GENERATED_BODY()
 
 public:
+	// Return the default clothing simulation factory class as set by the build or by
+	// the p.Cloth.DefaultClothingSimulationFactoryClass console variable if any available.
+	// Otherwise return the last registered factory.
+	static TSubclassOf<class UClothingSimulationFactory> GetDefaultClothingSimulationFactoryClass();
 
 	// Create a simulation object for a skeletal mesh to use (see IClothingSimulation)
 	virtual IClothingSimulation* CreateSimulation()
@@ -56,7 +68,13 @@ public:
 	// Creates the runtime interactor object for a clothing simulation. This object will
 	// receive events allowing it to write data to the simulation context in a safe manner
 	virtual UClothingSimulationInteractor* CreateInteractor()
-	{
-		return nullptr;
-	}
+	PURE_VIRTUAL(UClothingSimulationFactory::CreateInteractor, return nullptr;);
+
+	// Return the cloth config type for this cloth factory
+	virtual TArrayView<const TSubclassOf<UClothConfigBase>> GetClothConfigClasses() const
+	PURE_VIRTUAL(UClothingSimulationFactory::GetClothConfigClasses, return TArrayView<const TSubclassOf<UClothConfigBase>>(););
+
+	// Return an enum of the weight map targets that can be used with this simulation.
+	virtual const UEnum* GetWeightMapTargetEnum() const
+	PURE_VIRTUAL(UClothingSimulationFactory::GetWeightMapTargetEnum, return nullptr;);
 };

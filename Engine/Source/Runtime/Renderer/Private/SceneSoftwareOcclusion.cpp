@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	SceneSoftwareOcclusion.cpp 
@@ -1046,8 +1046,8 @@ static FGraphEventRef SubmitScene(const FScene* Scene, FViewInfo& View, FOcclusi
 
 			// Relevance requirements
 			FPrimitiveViewRelevance ViewRelevance = Proxy->GetViewRelevance(&View);
-			const bool bNonOpaqueRelevance = (ViewRelevance.bMaskedRelevance || ViewRelevance.HasTranslucency()); // TODO: opaque sections
-			bool bCanBeOccluder = ViewRelevance.bDrawRelevance && (ViewRelevance.bOpaqueRelevance && !bNonOpaqueRelevance);
+			const bool bNonOpaqueRelevance = (ViewRelevance.bMasked || ViewRelevance.HasTranslucency()); // TODO: opaque sections
+			bool bCanBeOccluder = ViewRelevance.bDrawRelevance && (ViewRelevance.bOpaque && !bNonOpaqueRelevance);
 
 			if (bCanBeOccluder)
 			{
@@ -1141,7 +1141,7 @@ void FSceneSoftwareOcclusion::DebugDraw(FRHICommandListImmediate& RHICmdList, co
 	}
 
 	FCanvas Canvas(&TempRenderTarget, NULL, View.Family->CurrentRealTime, View.Family->CurrentWorldTime, View.Family->DeltaWorldTime, View.GetFeatureLevel());
-	Canvas.SetAllowSwitchVerticalAxis(false);
+	Canvas.SetAllowSwitchVerticalAxis(true);
 	FBatchedElements* BatchedElements = Canvas.GetBatchedElements(FCanvas::ET_Line);
 						
 	for (int32 i = 0; i < BIN_NUM; ++i)

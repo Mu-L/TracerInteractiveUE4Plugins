@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "SPropertyTreeViewImpl.h"
@@ -546,7 +546,7 @@ void SPropertyTreeViewImpl::SetFromExistingTree( TSharedPtr<FObjectPropertyNode>
 	RootPropertyNode = RootNode;
 
 	TSharedPtr<FPropertyNode> ParentPropertyNode = PropertyToView->GetParentNodeSharedPtr();
-	if( ParentPropertyNode.IsValid() && ParentPropertyNode->GetProperty() && ParentPropertyNode->GetProperty()->IsA( UArrayProperty::StaticClass() ) )
+	if( ParentPropertyNode.IsValid() && ParentPropertyNode->GetProperty() && ParentPropertyNode->GetProperty()->IsA( FArrayProperty::StaticClass() ) )
 	{
 		// Force arrays to display so that deletion,insertion and removal work correctly.
 		UpdateTopLevelPropertyNodes( ParentPropertyNode );
@@ -683,7 +683,7 @@ void SPropertyTreeViewImpl::OnGetChildrenForPropertyNode( TSharedPtr<FPropertyNo
 		FObjectPropertyNode* ObjNode = ChildNode->AsObjectNode();
 
 		bool bPropertyVisible = true;
-		UProperty* Property = ChildNode->GetProperty();
+		FProperty* Property = ChildNode->GetProperty();
 		if(Property != NULL && IsPropertyVisible.IsBound())
 		{
 			TArray< TWeakObjectPtr<UObject> > Objects;
@@ -760,16 +760,19 @@ void SPropertyTreeViewImpl::RequestRefresh()
 	FavoritesTree->RequestTreeRefresh();
 }
 
-void SPropertyTreeViewImpl::SetObjectArray( const TArray< TWeakObjectPtr< UObject > >& InObjects )
+void SPropertyTreeViewImpl::SetObjectArray( const TArray<UObject*>& InObjects )
 {
 	check( RootPropertyNode.IsValid() );
 
 	PreSetObject();
 
+	TArray<UObject*> SetObjects;
+	SetObjects.Reserve(InObjects.Num());
+
 	bool bOwnedByLockedLevel = false;
-	for( int32 ObjectIndex = 0 ; ObjectIndex < InObjects.Num() ; ++ObjectIndex )
+	for(UObject* Object : InObjects)
 	{
-		RootPropertyNode->AddObject( InObjects[ObjectIndex].Get() );
+		RootPropertyNode->AddObject(Object);
 	}
 
 	// @todo Slate Property Window
@@ -809,7 +812,7 @@ void SPropertyTreeViewImpl::SetObjectArray( const TArray< TWeakObjectPtr< UObjec
 		Title = FText::Format( NSLOCTEXT("PropertyView", "MultipleSelectedFmt", "{0} ({1} selected)"), FText::FromString(RootPropertyNode->GetObjectBaseClass()->GetName()), RootPropertyNode->GetNumObjects() ).ToString();
 	}
 
-	OnObjectArrayChanged.ExecuteIfBound(Title, InObjects);
+	OnObjectArrayChanged.ExecuteIfBound(Title, SetObjects);
 }
 
 TSharedRef< FPropertyPath > SPropertyTreeViewImpl::GetRootPath() const
@@ -841,7 +844,7 @@ void SPropertyTreeViewImpl::SetRootPath( const TSharedPtr< FPropertyPath >& Path
 void SPropertyTreeViewImpl::ReplaceObjects( const TMap<UObject*, UObject*>& OldToNewObjectMap )
 {
 
-	TArray< TWeakObjectPtr< UObject > > NewObjectList;
+	TArray<UObject*> NewObjectList;
 	bool bObjectsReplaced = false;
 
 	TArray< FObjectPropertyNode* > ObjectNodes;
@@ -880,7 +883,7 @@ void SPropertyTreeViewImpl::ReplaceObjects( const TMap<UObject*, UObject*>& OldT
 
 void SPropertyTreeViewImpl::RemoveDeletedObjects( const TArray<UObject*>& DeletedObjects )
 {
-	TArray< TWeakObjectPtr< UObject > > NewObjectList;
+	TArray<UObject*> NewObjectList;
 	bool bObjectsRemoved = false;
 
 	// Scan all objects and look for objects which need to be replaced
@@ -912,7 +915,7 @@ void SPropertyTreeViewImpl::RemoveDeletedObjects( const TArray<UObject*>& Delete
  */
 void SPropertyTreeViewImpl::RemoveInvalidActors( const TSet<AActor*>& ValidActors )
 {
-	TArray< TWeakObjectPtr< UObject > > ResetArray;
+	TArray<UObject*> ResetArray;
 
 	bool bAllFound = true;
 	for ( TPropObjectIterator Itor( RootPropertyNode->ObjectIterator() ); Itor; ++Itor )
@@ -1039,7 +1042,7 @@ void SPropertyTreeViewImpl::Tick( const FGeometry& AllottedGeometry, const doubl
 	}
 	else if( Result == EPropertyDataValidationResult::ObjectInvalid && !bNodeTreeExternallyManaged )
 	{
-		TArray< TWeakObjectPtr< UObject > > ResetArray;
+		TArray<UObject*> ResetArray;
 		for ( TPropObjectIterator Itor( RootPropertyNode->ObjectIterator() ) ; Itor ; ++Itor )
 		{
 			TWeakObjectPtr<UObject> Object = *Itor;
@@ -1208,7 +1211,7 @@ void SPropertyTreeViewImpl::CreateColorPickerWindow(const TSharedRef< class FPro
 	ColorPropertyNode = &PropertyNode.Get();
 
 	check(ColorPropertyNode);
-	UProperty* Property = ColorPropertyNode->GetProperty();
+	FProperty* Property = ColorPropertyNode->GetProperty();
 	check(Property);
 
 	FReadAddressList ReadAddresses;
@@ -1221,13 +1224,13 @@ void SPropertyTreeViewImpl::CreateColorPickerWindow(const TSharedRef< class FPro
 		const uint8* Addr = ReadAddresses.GetAddress(0);
 		if( Addr )
 		{
-			if( Cast<UStructProperty>(Property)->Struct->GetFName() == NAME_Color )
+			if( CastField<FStructProperty>(Property)->Struct->GetFName() == NAME_Color )
 			{
 				DWORDColor.Add((FColor*)Addr);
 			}
 			else
 			{
-				check( Cast<UStructProperty>(Property)->Struct->GetFName() == NAME_LinearColor );
+				check( CastField<FStructProperty>(Property)->Struct->GetFName() == NAME_LinearColor );
 				LinearColor.Add((FLinearColor*)Addr);
 			}
 		}
@@ -1258,7 +1261,7 @@ void SPropertyTreeViewImpl::SetIsPropertyVisible(FIsPropertyVisible IsPropertyVi
 
 	if( RootPropertyNode.IsValid() )
 	{
-		TArray< TWeakObjectPtr< UObject > > Objects;
+		TArray<UObject*> Objects;
 		for( int32 ObjIndex = 0; ObjIndex < RootPropertyNode->GetNumObjects(); ++ObjIndex )
 		{
 			Objects.Add( RootPropertyNode->GetUObject( ObjIndex ) );
@@ -1273,7 +1276,7 @@ void SPropertyTreeViewImpl::SetIsPropertyVisible(FIsPropertyVisible IsPropertyVi
 void SPropertyTreeViewImpl::SetColor(FLinearColor NewColor)
 {
 	check(ColorPropertyNode);
-	UProperty* NodeProperty = ColorPropertyNode->GetProperty();
+	FProperty* NodeProperty = ColorPropertyNode->GetProperty();
 	check(NodeProperty);
 	FObjectPropertyNode* ObjectNode = ColorPropertyNode->FindObjectItemParent();
 	
@@ -1333,7 +1336,7 @@ bool SPropertyTreeViewImpl::IsPropertyOrChildrenSelected( const FString& InName,
 	{
 		bool bMatch = true;
 
-		UProperty *Prop = PropNode->GetProperty();
+		FProperty *Prop = PropNode->GetProperty();
 		int32 Index = PropNode->GetArrayIndex();
 		if( Prop )
 		{
@@ -1343,7 +1346,7 @@ bool SPropertyTreeViewImpl::IsPropertyOrChildrenSelected( const FString& InName,
 				FPropertyNode* ParentPropNode = PropNode->GetParentNode();
 				if( ParentPropNode )
 				{
-					UProperty* ParentProp = ParentPropNode->GetProperty();
+					FProperty* ParentProp = ParentPropNode->GetProperty();
 					if( ParentProp )
 					{
 						Name = ParentProp->GetName();

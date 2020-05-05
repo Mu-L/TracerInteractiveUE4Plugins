@@ -1,11 +1,15 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithCADWorker.h"
 #include "DatasmithCADWorkerImpl.h"
 
 #include "RequiredProgramMainCPPInclude.h"
+#include "CADToolsModule.h"
 
 IMPLEMENT_APPLICATION(DatasmithCADWorker, "DatasmithCADWorker");
+DEFINE_LOG_CATEGORY(LogDatasmithCADWorker);
+
+#define EXIT_MISSING_CORETECH_MODULE 2
 
 
 void GetParameter(int32 Argc, TCHAR* Argv[], const FString& InParam, FString& OutValue)
@@ -37,16 +41,33 @@ bool HasParameter(int32 Argc, TCHAR* Argv[], const FString& InParam)
 
 int32 Main(int32 Argc, TCHAR * Argv[])
 {
-	FString ServerPID, ServerPort, CacheDirectory, KernelIOPath;
+	UE_SET_LOG_VERBOSITY(LogDatasmithCADWorker, Verbose);
+
+#ifndef CAD_INTERFACE
+	UE_LOG(LogDatasmithCADWorker, Error, TEXT("Missing CoreTech module. DatasmithCADWorker is not functional."));
+	return EXIT_MISSING_CORETECH_MODULE;
+#endif // CAD_INTERFACE
+
+
+	FString ServerPID, ServerPort, CacheDirectory, CacheVersion, EnginePluginsPath;
 	GetParameter(Argc, Argv, "-ServerPID", ServerPID);
 	GetParameter(Argc, Argv, "-ServerPort", ServerPort);
 	GetParameter(Argc, Argv, "-CacheDir", CacheDirectory);
-	GetParameter(Argc, Argv, "-KernelIOPath", KernelIOPath);
+	GetParameter(Argc, Argv, "-CacheVersion", CacheVersion);
+	GetParameter(Argc, Argv, "-EnginePluginsDir", EnginePluginsPath);
 
-	FDatasmithCADWorkerImpl Worker(FCString::Atoi(*ServerPID), FCString::Atoi(*ServerPort), KernelIOPath, CacheDirectory);
+	int32 EditorCacheVersion = FCString::Atoi(*CacheVersion);
+	int32 WorkerCacheVersion = FCADToolsModule::Get().GetCacheVersion();
+	if (EditorCacheVersion != 0 && EditorCacheVersion != WorkerCacheVersion)
+	{
+		UE_LOG(LogDatasmithCADWorker, Error, TEXT("Incompatible cache systems. Please recompile DatasmithCADWorker target."));
+		return EXIT_FAILURE;
+	}
+
+	FDatasmithCADWorkerImpl Worker(FCString::Atoi(*ServerPID), FCString::Atoi(*ServerPort), EnginePluginsPath, CacheDirectory);
 	Worker.Run();
 
-	return 0;
+	return EXIT_SUCCESS;
 }
 
 int32 Filter(uint32 Code, struct _EXCEPTION_POINTERS *Ep)
@@ -56,7 +77,6 @@ int32 Filter(uint32 Code, struct _EXCEPTION_POINTERS *Ep)
 
 INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 {
-#ifdef CAD_INTERFACE
 	GEngineLoop.PreInit(ArgC, ArgV);
 
 	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -70,7 +90,4 @@ INT32_MAIN_INT32_ARGC_TCHAR_ARGV()
 		return EXIT_FAILURE;
 	}
 	return EXIT_SUCCESS;
-#else
-	return EXIT_FAILURE;
-#endif // CAD_INTERFACE
 }

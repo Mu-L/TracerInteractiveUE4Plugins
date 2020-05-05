@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "HAL/FileManager.h"
@@ -16,6 +16,7 @@
 #include "AssetEditorMessages.h"
 #include "ImageComparer.h"
 #include "AutomationControllerManager.h"
+#include "AutomationControllerSettings.h"
 #include "Interfaces/IScreenShotToolsModule.h"
 #include "Serialization/JsonSerializer.h"
 #include "JsonObjectConverter.h"
@@ -42,6 +43,19 @@ DEFINE_LOG_CATEGORY_STATIC(LogAutomationController, Log, All)
 
 FAutomationControllerManager::FAutomationControllerManager()
 {
+
+	UAutomationControllerSettings* Settings = UAutomationControllerSettings::StaticClass()->GetDefaultObject<UAutomationControllerSettings>();
+
+	if (Settings->CheckTestIntervalSeconds > 0.0f)
+	{
+		CheckTestIntervalSeconds = Settings->CheckTestIntervalSeconds;
+	}
+	
+	if (Settings->GameInstanceLostTimerSeconds > 0.0f)
+	{
+		GameInstanceLostTimerSeconds = Settings->GameInstanceLostTimerSeconds;
+	}
+	
 	CheckpointFile = nullptr;
 
 	if ( !FParse::Value(FCommandLine::Get(), TEXT("ReportOutputPath="), ReportOutputPath, false) )
@@ -894,18 +908,15 @@ void FAutomationControllerManager::AddPingResult(const FMessageAddress& Responde
 
 void FAutomationControllerManager::UpdateTests()
 {
-	static const float CheckTestInterval = 1.0f;
-	static const float GameInstanceLostTimer = 300.0f;
-
 	CheckTestTimer += FPlatformTime::Seconds() - LastTimeUpdateTicked;
 	LastTimeUpdateTicked = FPlatformTime::Seconds();
-	if ( CheckTestTimer > CheckTestInterval )
+	if (CheckTestTimer > CheckTestIntervalSeconds)
 	{
 		for ( int32 Index = 0; Index < TestRunningArray.Num(); Index++ )
 		{
 			TestRunningArray[Index].LastPingTime += CheckTestTimer;
 
-			if ( TestRunningArray[Index].LastPingTime > GameInstanceLostTimer )
+			if (TestRunningArray[Index].LastPingTime > GameInstanceLostTimerSeconds)
 			{
 				// Find the game session instance info
 				int32 ClusterIndex;
@@ -1025,8 +1036,35 @@ void FAutomationControllerManager::HandleReceivedScreenShot(const FAutomationWor
 
 	bool bTree = true;
 	FString FileName = ScreenshotIncomingFolder / Message.ScreenShotName;
-	IFileManager::Get().MakeDirectory(*FPaths::GetPath(FileName), bTree);
-	FFileHelper::SaveArrayToFile(Message.ScreenImage, *FileName);
+	FString TraceFileName = FPaths::ChangeExtension(ScreenshotIncomingFolder / Message.ScreenShotName, TEXT(".rdc"));
+
+	FString DirectoryPath = FPaths::GetPath(FileName);
+
+	if (!IFileManager::Get().MakeDirectory(*DirectoryPath, bTree))
+	{
+		UE_LOG(LogAutomationController, Error, TEXT("Failed to create directory %s for incoming screenshot"), *DirectoryPath);
+		return;
+	}
+	
+	if (!FFileHelper::SaveArrayToFile(Message.ScreenImage, *FileName))
+	{
+		uint32 WriteErrorCode = FPlatformMisc::GetLastError();
+		TCHAR WriteErrorBuffer[2048];
+		FPlatformMisc::GetSystemErrorMessage(WriteErrorBuffer, 2048, WriteErrorCode);
+		UE_LOG(LogAutomationController, Warning, TEXT("Fail to save screenshot to %s. WriteError: %u (%s)"), *FileName, WriteErrorCode, WriteErrorBuffer);
+		return;
+	}
+
+	if (Message.FrameTrace.Num() > 0)
+	{
+		if (!FFileHelper::SaveArrayToFile(Message.FrameTrace, *TraceFileName))
+		{
+			uint32 WriteErrorCode = FPlatformMisc::GetLastError();
+			TCHAR WriteErrorBuffer[2048];
+			FPlatformMisc::GetSystemErrorMessage(WriteErrorBuffer, 2048, WriteErrorCode);
+			UE_LOG(LogAutomationController, Warning, TEXT("Faild to save frame trace to %s. WriteError: %u (%s)"), *TraceFileName, WriteErrorCode, WriteErrorBuffer);
+		}
+	}
 
 	// TODO Automation There is identical code in, Engine\Source\Runtime\AutomationWorker\Private\AutomationWorkerModule.cpp,
 	// need to move this code into common area.

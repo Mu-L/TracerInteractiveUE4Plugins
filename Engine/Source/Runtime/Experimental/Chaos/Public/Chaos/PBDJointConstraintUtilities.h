@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -9,19 +9,76 @@
 
 namespace Chaos
 {
-	template<typename T, int d>
-	class TPBDJointUtilities
+	class FPBDJointUtilities
 	{
 	public:
+		static void DecomposeSwingTwistLocal(
+			const FRotation3& R0, 
+			const FRotation3& R1, 
+			FRotation3& R01Swing, 
+			FRotation3& R01Twist);
+		
+		static void GetSwingTwistAngles(
+			const FRotation3& R0, 
+			const FRotation3& R1, 
+			FReal& TwistAngle, 
+			FReal& Swing1Angle, 
+			FReal& Swing2Angle);
+
+		static FReal GetTwistAngle(
+			const FRotation3& InTwist);
+		
+		static void GetTwistAxisAngle(
+			const FRotation3& R0,
+			const FRotation3& R1,
+			FVec3& Axis,
+			FReal& Angle);
+
+		static void GetConeAxisAngleLocal(
+			const FRotation3& R0,
+			const FRotation3& R1,
+			const FReal AngleTolerance,
+			FVec3& AxisLocal,
+			FReal& Angle);
+
+		static void GetLockedSwingAxisAngle(
+			const FRotation3& R0,
+			const FRotation3& R1,
+			const EJointAngularConstraintIndex SwingConstraintIndex,
+			FVec3& Axis,
+			FReal& Angle);
+
+		static void GetDualConeSwingAxisAngle(
+			const FRotation3& R0,
+			const FRotation3& R1,
+			const EJointAngularConstraintIndex SwingConstraintIndex,
+			FVec3& Axis,
+			FReal& Angle);
+
+		static void GetSwingAxisAngle(
+			const FRotation3& R0,
+			const FRotation3& R1,
+			const FReal AngleTolerance,
+			const EJointAngularConstraintIndex SwingConstraintIndex,
+			FVec3& Axis,
+			FReal& Angle);
+
+		static void GetLockedAxes(
+			const FRotation3& R0, 
+			const FRotation3& R1, 
+			FVec3& Axis0, 
+			FVec3& Axis1, 
+			FVec3& Axis2);
+
 		/**
 		 * Increase the lower inertia components to ensure that the maximum ratio between any pair of elements is MaxRatio.
 		 *
 		 * @param InI The input inertia.
 		 * @return An altered inertia so that the minimum element is at least MaxElement/MaxRatio.
 		 */
-		static CHAOS_API TVector<T, d> ConditionInertia(
-			const TVector<T, d>& InI, 
-			const T MaxRatio);
+		static CHAOS_API FVec3 ConditionInertia(
+			const FVec3& InI, 
+			const FReal MaxRatio);
 
 		/**
 		 * Increase the IParent inertia so that its largest component is at least MinRatio times the largest IChild component.
@@ -33,166 +90,119 @@ namespace Chaos
 		 * @param MinRatio Parent inertia will be at least this multiple of child inertia
 		 * @return The max/min ratio of InI elements.
 		 */
-		static CHAOS_API TVector<T, d> ConditionParentInertia(
-			const TVector<T, d>& IParent, 
-			const TVector<T, d>& IChild, 
-			const T MinRatio);
+		static CHAOS_API FVec3 ConditionParentInertia(
+			const FVec3& IParent, 
+			const FVec3& IChild, 
+			const FReal MinRatio);
 
-		static CHAOS_API T ConditionParentMass(
-			const T MParent, 
-			const T MChild, 
-			const T MinRatio);
+		static CHAOS_API FReal ConditionParentMass(
+			const FReal MParent, 
+			const FReal MChild, 
+			const FReal MinRatio);
 
-		static CHAOS_API void GetConditionedInverseMass(
-			const TPBDRigidParticleHandle<T, d>* PParent, 
-			const TPBDRigidParticleHandle<T, d>* PChild, 
-			T& OutInvMParent, 
-			T& OutInvMChild, 
-			PMatrix<T, d, d>& OutInvIParent, 
-			PMatrix<T, d, d>& OutInvIChild, 
-			const T MinParentMassRatio, 
-			const T MaxInertiaRatio);
+		static CHAOS_API void ConditionInverseMassAndInertia(
+			FReal& InOutInvMParent,
+			FReal& InOutInvMChild,
+			FVec3& InOutInvIParent,
+			FVec3& InOutInvIChild,
+			const FReal MinParentMassRatio,
+			const FReal MaxInertiaRatio);
 
-		static CHAOS_API void GetConditionedInverseMass(
-			const TPBDRigidParticleHandle<T, d>* P0, 
-			T& OutInvM0, 
-			PMatrix<T, d, d>& OutInvI0, 
-			const T MaxInertiaRatio);
+		static FReal GetLinearStiffness(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
 
-		static CHAOS_API void CalculateSwingConstraintSpace(
-			const TPBDJointSolverSettings<T, d>& SolverSettings,
-			const TPBDJointSettings<T, d>& JointSettings,
-			const int32 Index0,
-			const int32 Index1,
-			TVector<T, d>& P0,
-			TRotation<T, d>& Q0,
-			TVector<T, d>& P1,
-			TRotation<T, d>& Q1,
-			TVector<T, d>& OutX0,
-			PMatrix<T, d, d>& OutR0,
-			TVector<T, d>& OutX1,
-			PMatrix<T, d, d>& OutR1,
-			TVector<T, d>& OutCR);
+		static FReal GetSoftLinearStiffness(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
 
-		static CHAOS_API void CalculateConeConstraintSpace(
-			const TPBDJointSolverSettings<T, d>& SolverSettings,
-			const TPBDJointSettings<T, d>& JointSettings,
-			const int32 Index0,
-			const int32 Index1,
-			TVector<T, d>& P0,
-			TRotation<T, d>& Q0,
-			TVector<T, d>& P1,
-			TRotation<T, d>& Q1,
-			TVector<T, d>& OutX0,
-			PMatrix<T, d, d>& OutR0,
-			TVector<T, d>& OutX1,
-			PMatrix<T, d, d>& OutR1,
-			TVector<T, d>& OutCR);
+		static FReal GetSoftLinearDamping(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
 
-		static CHAOS_API void ApplyJointPositionConstraint(
-			const T Dt,
-			const TPBDJointSolverSettings<T, d>& SolverSettings,
-			const TPBDJointSettings<T, d>& JointSettings,
-			const int32 Index0,
-			const int32 Index1,
-			TVector<T, d>& P0,
-			TRotation<T, d>& Q0,
-			TVector<T, d>& P1,
-			TRotation<T, d>& Q1,
-			float InvM0,
-			const PMatrix<T, d, d>& InvIL0,
-			float InvM1,
-			const PMatrix<T, d, d>& InvIL1);
+		static FReal GetTwistStiffness(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
 
-		static CHAOS_API void ApplyJointTwistConstraint(
-			const T Dt,
-			const TPBDJointSolverSettings<T, d>& SolverSettings,
-			const TPBDJointSettings<T, d>& JointSettings,
-			const int32 Index0,
-			const int32 Index1,
-			TVector<T, d>& P0,
-			TRotation<T, d>& Q0,
-			TVector<T, d>& P1,
-			TRotation<T, d>& Q1,
-			float InvM0,
-			const PMatrix<T, d, d>& InvIL0,
-			float InvM1,
-			const PMatrix<T, d, d>& InvIL1);
+		static FReal GetSoftTwistStiffness(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
 
-		static CHAOS_API void ApplyJointConeConstraint(
-			const T Dt,
-			const TPBDJointSolverSettings<T, d>& SolverSettings,
-			const TPBDJointSettings<T, d>& JointSettings,
-			const int32 Index0,
-			const int32 Index1,
-			TVector<T, d>& P0,
-			TRotation<T, d>& Q0,
-			TVector<T, d>& P1,
-			TRotation<T, d>& Q1,
-			float InvM0,
-			const PMatrix<T, d, d>& InvIL0,
-			float InvM1,
-			const PMatrix<T, d, d>& InvIL1);
+		static FReal GetSoftTwistDamping(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
 
-		static CHAOS_API void ApplyJointSwingConstraint(
-			const T Dt,
-			const TPBDJointSolverSettings<T, d>& SolverSettings,
-			const TPBDJointSettings<T, d>& JointSettings,
-			const int32 Index0,
-			const int32 Index1,
-			const EJointAngularConstraintIndex SwingConstraint,
-			TVector<T, d>& P0,
-			TRotation<T, d>& Q0,
-			TVector<T, d>& P1,
-			TRotation<T, d>& Q1,
-			float InvM0,
-			const PMatrix<T, d, d>& InvIL0,
-			float InvM1,
-			const PMatrix<T, d, d>& InvIL1);
+		static FReal GetSwingStiffness(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
 
-		static CHAOS_API void ApplyJointTwistDrive(
-			const T Dt,
-			const TPBDJointSolverSettings<T, d>& SolverSettings,
-			const TPBDJointSettings<T, d>& JointSettings,
-			const int32 Index0,
-			const int32 Index1,
-			TVector<T, d>& P0,
-			TRotation<T, d>& Q0,
-			TVector<T, d>& P1,
-			TRotation<T, d>& Q1,
-			float InvM0,
-			const PMatrix<T, d, d>& InvIL0,
-			float InvM1,
-			const PMatrix<T, d, d>& InvIL1);
+		static FReal GetSoftSwingStiffness(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
 
-		static CHAOS_API void ApplyJointConeDrive(
-			const T Dt,
-			const TPBDJointSolverSettings<T, d>& SolverSettings,
-			const TPBDJointSettings<T, d>& JointSettings,
-			const int32 Index0,
-			const int32 Index1,
-			TVector<T, d>& P0,
-			TRotation<T, d>& Q0,
-			TVector<T, d>& P1,
-			TRotation<T, d>& Q1,
-			float InvM0,
-			const PMatrix<T, d, d>& InvIL0,
-			float InvM1,
-			const PMatrix<T, d, d>& InvIL1);
+		static FReal GetSoftSwingDamping(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
 
-		static CHAOS_API void ApplyJointSLerpDrive(
-			const T Dt,
-			const TPBDJointSolverSettings<T, d>& SolverSettings,
-			const TPBDJointSettings<T, d>& JointSettings,
-			const int32 Index0,
-			const int32 Index1,
-			TVector<T, d>& P0,
-			TRotation<T, d>& Q0,
-			TVector<T, d>& P1,
-			TRotation<T, d>& Q1,
-			float InvM0,
-			const PMatrix<T, d, d>& InvIL0,
-			float InvM1,
-			const PMatrix<T, d, d>& InvIL1);
+		static FReal GetLinearDriveStiffness(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static FReal GetLinearDriveDamping(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static FReal GetAngularTwistDriveStiffness(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static FReal GetAngularTwistDriveDamping(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static FReal GetAngularSwingDriveStiffness(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static FReal GetAngularSwingDriveDamping(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static FReal GetAngularSLerpDriveStiffness(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static FReal GetAngularSLerpDriveDamping(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static FReal GetLinearProjection(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static FReal GetAngularProjection(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static bool GetLinearSoftAccelerationMode(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static bool GetAngularSoftAccelerationMode(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static bool GetDriveAccelerationMode(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static FReal GetAngularPositionCorrection(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static FVec3 GetSphereLimitedPositionError(const FVec3& CX, const FReal Radius);
+		static FVec3 GetCylinderLimitedPositionError(const FVec3& CX, const FVec3& Axis, const FReal Limit, const EJointMotionType AxisMotion);
+		static FVec3 GetLineLimitedPositionError(const FVec3& CX, const FVec3& Axis, const FReal Limit, const EJointMotionType AxisMotion);
+		static FVec3 GetLimitedPositionError(const FPBDJointSettings& JointSettings, const FRotation3& R0, const FVec3& CX);
 	};
 }

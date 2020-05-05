@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	DistanceFieldAtlas.h
@@ -18,6 +18,7 @@
 
 class FDistanceFieldVolumeData;
 class UStaticMesh;
+class UTexture2D;
 
 template <class T> class TLockFreePointerListLIFO;
 
@@ -28,6 +29,7 @@ public:
 	FDistanceFieldVolumeTexture(const class FDistanceFieldVolumeData& InVolumeData) :
 		VolumeData(InVolumeData),
 		AtlasAllocationMin(FIntVector(-1, -1, -1)),
+		SizeInAtlas(FIntVector::ZeroValue),
 		bReferencedByAtlas(false),
 		bThrottled(false),
 		StaticMesh(NULL)
@@ -44,6 +46,11 @@ public:
 	FIntVector GetAllocationMin() const
 	{
 		return AtlasAllocationMin;
+	}
+
+	FIntVector GetAllocationSizeInAtlas() const
+	{
+		return SizeInAtlas;
 	}
 
 	FIntVector GetAllocationSize() const;
@@ -68,6 +75,8 @@ public:
 private:
 	const FDistanceFieldVolumeData& VolumeData;
 	FIntVector AtlasAllocationMin;
+	FIntVector SizeInAtlas;
+
 	bool bReferencedByAtlas : 1;
 	/** bThrottled prevents any objects using the texture from being uploaded to the scene buffer until upload of the texture to distance field atlas is complete */
 	bool bThrottled         : 1;
@@ -86,6 +95,7 @@ public:
 
 	virtual void ReleaseRHI() override
 	{
+		VolumeTextureUAVRHI.SafeRelease();
 		VolumeTextureRHI.SafeRelease();
 	}
 
@@ -104,12 +114,13 @@ public:
 	void RemoveAllocation(FDistanceFieldVolumeTexture* Texture);
 
 	/** Reallocates the volume texture if necessary and uploads new allocations. */
-	void UpdateAllocations();
+	void UpdateAllocations(FRHICommandListImmediate& RHICmdList, ERHIFeatureLevel::Type InFeatureLevel);
 
 	int32 GetGeneration() const { return Generation; }
 
 	EPixelFormat Format;
 	FTexture3DRHIRef VolumeTextureRHI;
+	FUnorderedAccessViewRHIRef VolumeTextureUAVRHI;
 
 private:
 	/** Manages the atlas layout. */
@@ -121,13 +132,172 @@ private:
 	/** Allocations that have already been added, stored in case we need to realloc. */
 	TArray<FDistanceFieldVolumeTexture*> CurrentAllocations;
 
+	/** Allocations that have failed, stored in case they could fit next time a mesh is evicted from atlas. */
+	TArray<FDistanceFieldVolumeTexture*> FailedAllocations;
+		
 	/** Incremented when the atlas is reallocated, so dependencies know to update. */
 	int32 Generation;
 
 	bool bInitialized;
+
+	/** Number of pixel used in atlas distance field */
+	uint32 AllocatedPixels;
+	
+	/** Number of pixel that have failed to be allocated in atlas */
+	uint32 FailedAllocatedPixels;
+
+	/** Max position used in distance field */
+	uint32 MaxUsedAtlasX;
+	uint32 MaxUsedAtlasY;
+	uint32 MaxUsedAtlasZ;
 };
 
 extern ENGINE_API TGlobalResource<FDistanceFieldVolumeTextureAtlas> GDistanceFieldVolumeTextureAtlas;
+
+class ENGINE_API FLandscapeTextureAtlas : public FRenderResource
+{
+public:
+	enum ESubAllocType
+	{
+		SAT_Height,
+		SAT_Visibility,
+		SAT_Num
+	};
+
+	FLandscapeTextureAtlas(ESubAllocType InSubAllocType);
+
+	void InitializeIfNeeded();
+
+	void AddAllocation(UTexture2D* Texture, uint32 VisibilityChannel = 0);
+
+	void RemoveAllocation(UTexture2D* Texture);
+
+	void UpdateAllocations(FRHICommandListImmediate& RHICmdList, ERHIFeatureLevel::Type InFeatureLevel);
+
+	uint32 GetAllocationHandle(UTexture2D* Texture) const;
+
+	FVector4 GetAllocationScaleBias(uint32 Handle) const;
+
+	FRHITexture2D* GetAtlasTexture() const
+	{
+		return AtlasTextureRHI;
+	}
+
+	uint32 GetSizeX() const
+	{
+		return AddrSpaceAllocator.DimInTexels;
+	}
+
+	uint32 GetSizeY() const
+	{
+		return AddrSpaceAllocator.DimInTexels;
+	}
+
+	uint32 GetGeneration() const
+	{
+		return Generation;
+	}
+
+private:
+	uint32 CalculateDownSampleLevel(uint32 SizeX, uint32 SizeY) const;
+
+	class FSubAllocator
+	{
+	public:
+		void Init(uint32 InTileSize, uint32 InBorderSize, uint32 InDimInTiles);
+
+		uint32 Alloc(uint32 SizeX, uint32 SizeY);
+
+		void Free(uint32 Handle);
+
+		FVector4 GetScaleBias(uint32 Handle) const;
+
+		FIntPoint GetStartOffset(uint32 Handle) const;
+
+	private:
+		struct FSubAllocInfo
+		{
+			uint32 Level;
+			uint32 QuadIdx;
+			FVector4 UVScaleBias;
+		};
+		
+		uint32 TileSize;
+		uint32 BorderSize;
+		uint32 TileSizeWithBorder;
+		uint32 DimInTiles;
+		uint32 DimInTilesShift;
+		uint32 DimInTilesMask;
+		uint32 DimInTexels;
+		uint32 MaxNumTiles;
+
+		float TexelSize;
+		float TileScale;
+
+		// 0: Free, 1: Allocated
+		TBitArray<> MarkerQuadTree;
+		TArray<uint32, TInlineAllocator<8>> LevelOffsets;
+
+		TSparseArray<FSubAllocInfo> SubAllocInfos;
+
+		friend class FLandscapeTextureAtlas;
+	};
+
+	struct FAllocation
+	{
+		UTexture2D* SourceTexture;
+		uint32 Handle;
+		uint32 VisibilityChannel : 2;
+		uint32 RefCount : 30;
+
+		FAllocation();
+
+		FAllocation(UTexture2D* InTexture, uint32 InVisibilityChannel = 0);
+
+		bool operator==(const FAllocation& Other) const
+		{
+			return SourceTexture == Other.SourceTexture;
+		}
+
+		friend uint32 GetTypeHash(const FAllocation& Key)
+		{
+			return GetTypeHash(Key.SourceTexture);
+		}
+	};
+
+	struct FPendingUpload
+	{
+		FRHITexture* SourceTexture;
+		FIntVector SizesAndMipBias;
+		uint32 VisibilityChannel : 2;
+		uint32 Handle : 30;
+
+		FPendingUpload(UTexture2D* Texture, uint32 SizeX, uint32 SizeY, uint32 MipBias, uint32 InHandle, uint32 Channel);
+
+		FIntPoint SetShaderParameters(void* ParamsPtr, const FLandscapeTextureAtlas& Atlas) const;
+
+	private:
+		FIntPoint SetCommonShaderParameters(void* ParamsPtr, const FLandscapeTextureAtlas& Atlas) const;
+	};
+
+	FSubAllocator AddrSpaceAllocator;
+
+	TSet<FAllocation> PendingAllocations;
+	TSet<FAllocation> FailedAllocations;
+	TSet<FAllocation> CurrentAllocations;
+	TArray<UTexture2D*> PendingStreamingTextures;
+
+	FTexture2DRHIRef AtlasTextureRHI;
+	FUnorderedAccessViewRHIRef AtlasUAVRHI;
+
+	uint32 MaxDownSampleLevel;
+	uint32 Generation;
+
+	const ESubAllocType SubAllocType;
+};
+
+extern ENGINE_API TGlobalResource<FLandscapeTextureAtlas> GHeightFieldTextureAtlas;
+extern ENGINE_API TGlobalResource<FLandscapeTextureAtlas> GHFVisibilityTextureAtlas;
 
 /** Distance field data payload and output of the mesh build process. */
 class ENGINE_API FDistanceFieldVolumeData : public FDeferredCleanupInterface

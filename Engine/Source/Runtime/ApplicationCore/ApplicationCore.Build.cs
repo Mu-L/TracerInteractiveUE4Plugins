@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 
@@ -26,8 +26,7 @@ public class ApplicationCore : ModuleRules
 			}
 		);
 
-		if ((Target.Platform == UnrealTargetPlatform.Win64) ||
-			(Target.Platform == UnrealTargetPlatform.Win32))
+		if ((Target.IsInPlatformGroup(UnrealPlatformGroup.Windows)))
 		{
 			AddEngineThirdPartyPrivateStaticDependencies(Target,
 				"XInput"

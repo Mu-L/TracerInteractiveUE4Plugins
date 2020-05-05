@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,7 +12,13 @@
 class CBOR_API FCborWriter
 {
 public:
-	FCborWriter(FArchive* InStream);
+	/*
+	 * Construct a CBOR writer.
+	 * @param InStream The stream used to write the CBOR data.
+	 * @param InWriterEndianness Specify which endianness should be use to write the archive.
+	 * @note CBOR standard endianness is big endian. For interoperability with external tools, the standard endianness should be used. For internal usage, the platform endianness is faster.
+	 */
+	FCborWriter(FArchive* InStream, ECborEndianness InWriterEndianness = ECborEndianness::Platform);
 	~FCborWriter();
 
 public:
@@ -39,6 +45,7 @@ public:
 	void WriteValue(double Value);
 	void WriteValue(const FString& Value);
 	void WriteValue(const char* CString, uint64 Length);
+	void WriteValue(const uint8* Bytes, uint64 Length);
 
 private:
 	/** Write a uint Value for Header in Ar and return the final generated cbor Header. */
@@ -51,5 +58,7 @@ private:
 	FArchive* Stream;
 	/** The writer context stack. */
 	TArray<FCborContext> ContextStack;
+	/** Write the CBOR data using the specified endianness. */
+	ECborEndianness Endianness;
 };
 

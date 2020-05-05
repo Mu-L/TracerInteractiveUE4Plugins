@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -525,11 +525,11 @@ public:
 	TEnumAsByte<enum EBlueprintStatus> Status;
 
 	/** Overrides the BP's display name in the editor UI */
-	UPROPERTY(EditAnywhere, Category=BlueprintOptions)
+	UPROPERTY(EditAnywhere, Category=BlueprintOptions, DuplicateTransient)
 	FString BlueprintDisplayName;
 
-	/** Shows up in the content browser when the blueprint is hovered, exported as Hidden in GetAssetRegistryTags */
-	UPROPERTY(EditAnywhere, Category=BlueprintOptions, meta=(MultiLine=true))
+	/** Shows up in the content browser tooltip when the blueprint is hovered */
+	UPROPERTY(EditAnywhere, Category=BlueprintOptions, meta=(MultiLine=true), DuplicateTransient)
 	FString BlueprintDescription;
 
 	/** The category of the Blueprint, used to organize this Blueprint class when displayed in palette windows */
@@ -539,10 +539,6 @@ public:
 	/** Additional HideCategories. These are added to HideCategories from parent. */
 	UPROPERTY(EditAnywhere, Category=BlueprintOptions)
 	TArray<FString> HideCategories;
-	 
-	/** Guid key for finding searchable data for Blueprint in the DDC */
-	UPROPERTY()
-	FGuid SearchGuid;
 
 #endif //WITH_EDITORONLY_DATA
 
@@ -697,7 +693,18 @@ public:
 	uint32 CrcLastCompiledSignature;
 
 	bool bCachedDependenciesUpToDate;
+	/**
+	 * Set of blueprints that we reference - i.e. blueprints that we have
+	 * some kind of reference to (variable of that blueprints type or function 
+	 * call
+	 */
 	TSet<TWeakObjectPtr<UBlueprint>> CachedDependencies;
+
+	/** 
+	 * Transient cache of dependent blueprints - i.e. blueprints that call
+	 * functions declared in this blueprint. Used to speed up compilation checks 
+	 */
+	TSet<TWeakObjectPtr<UBlueprint>> CachedDependents;
 
 	// User Defined Structures, the blueprint depends on
 	TSet<TWeakObjectPtr<UStruct>> CachedUDSDependencies;
@@ -914,7 +921,7 @@ public:
 	template<class TFieldType>
 	static FName GetFieldNameFromClassByGuid(const UClass* InClass, const FGuid VarGuid)
 	{
-		UProperty* AssertPropertyType = (TFieldType*)0;
+		FProperty* AssertPropertyType = (TFieldType*)0;
 
 		TArray<UBlueprint*> Blueprints;
 		UBlueprint::GetBlueprintHierarchyFromClass(InClass, Blueprints);
@@ -938,7 +945,7 @@ public:
 	template<class TFieldType>
 	static bool GetGuidFromClassByFieldName(const UClass* InClass, const FName VarName, FGuid& VarGuid)
 	{
-		UProperty* AssertPropertyType = (TFieldType*)0;
+		FProperty* AssertPropertyType = (TFieldType*)0;
 
 		TArray<UBlueprint*> Blueprints;
 		UBlueprint::GetBlueprintHierarchyFromClass(InClass, Blueprints);
@@ -1006,12 +1013,9 @@ public:
 	virtual void GetInstanceActions(FBlueprintActionDatabaseRegistrar& ActionRegistrar) const {}
 
 	/**
-	 * Allows child classes to override the undo behaviour on undo / redo.
-	 * Normally blueprints are marked as dirty / structurally modified on undo,
-	 * which might not be required for specialized classes.
-	 * @return True if the blueprint should be marked as structurally modified on undo redo.
+	 * Returns true if this blueprint should be marked dirty upon a transaction
 	 */
-	virtual bool RequiresMarkAsStructurallyModifiedOnUndo() const { return true; }
+	virtual bool ShouldBeMarkedDirtyUponTransaction() const { return true; }
 
 #if WITH_EDITOR
 private:

@@ -1,7 +1,8 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -51,6 +52,11 @@ namespace UnrealGameSync
 
 		public void LaunchEditor()
 		{
+		}
+
+		public Color? TintColor
+		{
+			get { return null; }
 		}
 
 		public Tuple<TaskbarState, float> DesiredTaskbarState

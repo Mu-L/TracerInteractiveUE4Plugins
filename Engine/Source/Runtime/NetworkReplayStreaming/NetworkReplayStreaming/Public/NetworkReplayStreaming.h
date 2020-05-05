@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -485,12 +485,6 @@ class NETWORKREPLAYSTREAMING_API INetworkReplayStreamer
 public:
 	virtual ~INetworkReplayStreamer() {}
 
-	UE_DEPRECATED(4.23, "StartStreaming now takes a FStartStreamingParameters argument")
-	virtual void StartStreaming(const FString& CustomName, const FString& FriendlyName, const TArray<FString>& UserNames, bool bRecord, const FNetworkReplayVersion& ReplayVersion, const FStartStreamingCallback& Delegate);
-
-	UE_DEPRECATED(4.23, "StartStreaming now takes a FStartStreamingParameters argument")
-	virtual void StartStreaming(const FString& CustomName, const FString& FriendlyName, const TArray<int32>& UserIndices, bool bRecord, const FNetworkReplayVersion& ReplayVersion, const FStartStreamingCallback& Delegate);
-
 	virtual void StartStreaming(const FStartStreamingParameters& Params, const FStartStreamingCallback& Delegate) = 0;
 
 	virtual void StopStreaming() = 0;
@@ -499,12 +493,8 @@ public:
 	virtual FArchive* GetCheckpointArchive() = 0;
 	virtual void FlushCheckpoint(const uint32 TimeInMS) = 0;
 
-	UE_DEPRECATED(4.23, "Please use the version of GotoCheckpointIndex that accepts a FGotoCallback delegate and an EReplayCheckpointType")
-	virtual void GotoCheckpointIndex(const int32 CheckpointIndex, const FGotoCallback& Delegate) { GotoCheckpointIndex(CheckpointIndex, Delegate, EReplayCheckpointType::Full);	}
 	virtual void GotoCheckpointIndex(const int32 CheckpointIndex, const FGotoCallback& Delegate, EReplayCheckpointType CheckpointType) = 0;
 
-	UE_DEPRECATED(4.23, "Please use the version of GotoCheckpointIndex that accepts a FGotoCallback delegate and an EReplayCheckpointType.")
-	virtual void GotoTimeInMS(const uint32 TimeInMS, const FGotoCallback& Delegate) { GotoTimeInMS(TimeInMS, Delegate, EReplayCheckpointType::Full); }
 	virtual void GotoTimeInMS(const uint32 TimeInMS, const FGotoCallback& Delegate, EReplayCheckpointType CheckpointType) = 0;
 
 	virtual bool IsCheckpointTypeSupported(EReplayCheckpointType CheckpointType) const = 0;
@@ -583,19 +573,9 @@ public:
 	virtual void DeleteFinishedStream(const FString& StreamName, const int32 UserIndex, const FDeleteFinishedStreamCallback& Delegate) = 0;
 
 	/**
-	 * Retrieves the streams that are available for viewing. May execute asynchronously.
-	 *
-	 * @param Delegate A delegate that will be executed if bound when the list of streams is available
-	 */
-	UE_DEPRECATED(4.23, "UserString is deprecated in favor of UserIndex")
-	virtual void EnumerateStreams(const FNetworkReplayVersion& ReplayVersion, const FString& UserString, const FString& MetaString, const FEnumerateStreamsCallback& Delegate);
-
-	/**
 	* Retrieves the streams that are available for viewing. May execute asynchronously.
 	* Allows the caller to pass in a custom list of query parameters
 	*/
-	UE_DEPRECATED(4.23, "UserString is deprecated in favor of UserIndex")
-	virtual void EnumerateStreams(const FNetworkReplayVersion& ReplayVersion, const FString& UserString, const FString& MetaString, const TArray<FString>& ExtraParms, const FEnumerateStreamsCallback& Delegate);
 	virtual void EnumerateStreams(const FNetworkReplayVersion& ReplayVersion, const int32 UserIndex, const FString& MetaString, const TArray< FString >& ExtraParms, const FEnumerateStreamsCallback& Delegate) = 0;
 
 	/**
@@ -603,8 +583,6 @@ public:
 	 *
 	 * @param Delegate A delegate that will be executed if bound when the list of streams is available
 	 */
-	UE_DEPRECATED(4.23, "RecentViewer is deprecated in favor of UserIndex")
-	virtual void EnumerateRecentStreams(const FNetworkReplayVersion& ReplayVersion, const FString& RecentViewer, const FEnumerateStreamsCallback& Delegate);
 	virtual void EnumerateRecentStreams(const FNetworkReplayVersion& ReplayVersion, const int32 UserIndex, const FEnumerateStreamsCallback& Delegate) = 0;
 
 	/** Returns the last error that occurred while streaming replays */
@@ -644,13 +622,6 @@ public:
 	virtual void SetAnalyticsProvider(TSharedPtr<IAnalyticsProvider>& InProvider) {}
 
 	virtual void Exec(const TCHAR* Cmd, FOutputDevice& Ar) {}
-
-protected:
-	/** Temporary to assist with deprecation of user string apis */
-	virtual const int32 GetUserIndexFromUserString(const FString& UserString) = 0;
-
-private:
-	const void GetUserIndicesFromUserStrings(const TArray<FString>& UserStrings, TArray<int32>& OutUserIndices);
 };
 
 /** Replay streamer factory */
@@ -692,6 +663,10 @@ public:
 	// Gets the configured value for whether or not we should use FDateTime::Now as the automatic replay postfix.
 	// If false, it's up to the streamer to determine a proper postfix.
 	static NETWORKREPLAYSTREAMING_API bool UseDateTimeAsAutomaticReplayPostfix();
+
+	// Gets the file extension for replay streamers to use when recording replay files to the local file system.
+	// Includes the "." prefix
+	static NETWORKREPLAYSTREAMING_API FString GetReplayFileExtension();
 
 	// FSelfRegisteringExec interface
 	virtual bool Exec(UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar) override;

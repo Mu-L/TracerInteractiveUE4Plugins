@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -8,6 +8,7 @@
 
 class FLiveLinkHeartbeatEmitter;
 class FLiveLinkMessageBusDiscoveryManager;
+class FSlateStyleSet;
 
 /**
  * Interface for messaging modules.
@@ -25,13 +26,14 @@ public:
 	static ILiveLinkModule& Get()
 	{
 #if PLATFORM_IOS
-        static ILiveLinkModule& LiveLinkModule = FModuleManager::LoadModuleChecked<ILiveLinkModule>("LiveLink");
-        return LiveLinkModule;
+		static ILiveLinkModule& LiveLinkModule = FModuleManager::LoadModuleChecked<ILiveLinkModule>("LiveLink");
+		return LiveLinkModule;
 #else
-        return FModuleManager::LoadModuleChecked<ILiveLinkModule>("LiveLink");
+		return FModuleManager::LoadModuleChecked<ILiveLinkModule>("LiveLink");
 #endif
 	}
 
+	virtual TSharedPtr<FSlateStyleSet> GetStyle() = 0;
 	virtual FLiveLinkHeartbeatEmitter& GetHeartbeatEmitter() = 0;
 	virtual FLiveLinkMessageBusDiscoveryManager& GetMessageBusDiscoveryManager() = 0;
 

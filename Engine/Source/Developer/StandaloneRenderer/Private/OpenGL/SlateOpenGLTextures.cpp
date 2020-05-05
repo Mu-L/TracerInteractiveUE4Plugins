@@ -1,11 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OpenGL/SlateOpenGLTextures.h"
 #include "OpenGL/SlateOpenGLRenderer.h"
 #if PLATFORM_MAC
 #include "Mac/OpenGL/SlateOpenGLMac.h"
 #endif
-#define USE_DEPRECATED_OPENGL_FUNCTIONALITY			(!PLATFORM_USES_ES2 && !PLATFORM_LINUX)
+#define USE_DEPRECATED_OPENGL_FUNCTIONALITY			(!PLATFORM_USES_GLES && !PLATFORM_LINUX)
 
 GLuint FSlateOpenGLTexture::NullTexture = 0;
 
@@ -87,11 +87,11 @@ void FSlateOpenGLTexture::UpdateTextureRaw(const void* Buffer, const FIntRect& D
 #endif // USE_DEPRECATED_OPENGL_FUNCTIONALITY
 	
 	// Upload the texture data
-#if !PLATFORM_USES_ES2
+#if !PLATFORM_USES_GLES
 
 	if (bHasPendingResize || Dirty.Area() == 0)
 	{
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, SizeX, SizeY, 0, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV, Buffer);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SizeX, SizeY, 0, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV, Buffer);
 		bHasPendingResize = false;
 	}
 	else
@@ -101,7 +101,7 @@ void FSlateOpenGLTexture::UpdateTextureRaw(const void* Buffer, const FIntRect& D
 		glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 	}
 #else
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8_EXT, SizeX, SizeY, 0, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV, Buffer);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SizeX, SizeY, 0, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV, Buffer);
 #endif
 	CHECK_GL_ERRORS;
 #if PLATFORM_MAC
@@ -183,7 +183,7 @@ GLint FSlateFontTextureOpenGL::GetGLTextureInternalFormat() const
 		return GL_RED;
 #endif // USE_DEPRECATED_OPENGL_FUNCTIONALITY
 	}
-#if !PLATFORM_USES_ES2
+#if !PLATFORM_USES_GLES
 	return GL_SRGB8_ALPHA8;
 #else
 	return GL_SRGB8_ALPHA8_EXT;

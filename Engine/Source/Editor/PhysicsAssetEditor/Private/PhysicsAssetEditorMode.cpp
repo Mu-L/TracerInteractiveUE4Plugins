@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PhysicsAssetEditorMode.h"
 #include "PhysicsAssetEditor.h"
@@ -84,6 +84,8 @@ FPhysicsAssetEditorMode::FPhysicsAssetEditorMode(TSharedRef<FWorkflowCentricAppl
 					InSubMenuBuilder.BeginSection("PhysicsAssetEditorCollisionRenderSettings", LOCTEXT("CollisionRenderSettingsHeader", "Body Drawing"));
 					{
 						InSubMenuBuilder.AddMenuEntry(Commands.RenderOnlySelectedSolid);
+						InSubMenuBuilder.AddMenuEntry(Commands.HideSimulatedBodies);
+						InSubMenuBuilder.AddMenuEntry(Commands.HideKinematicBodies);
 						InSubMenuBuilder.AddWidget(PhysicsAssetEditorPtr.Pin()->MakeCollisionOpacityWidget(), LOCTEXT("CollisionOpacityLabel", "Collision Opacity"));
 					}
 					InSubMenuBuilder.EndSection();

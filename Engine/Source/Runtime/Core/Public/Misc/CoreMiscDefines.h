@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -56,9 +56,9 @@
 #define RETURN_VAL_IF_EXIT_REQUESTED(x)
 
 #if CHECK_PUREVIRTUALS
-#define PURE_VIRTUAL(func,extra) =0;
+#define PURE_VIRTUAL(func,...) =0;
 #else
-#define PURE_VIRTUAL(func,extra) { LowLevelFatalError(TEXT("Pure virtual not implemented (%s)"), TEXT(#func)); extra }
+#define PURE_VIRTUAL(func,...) { LowLevelFatalError(TEXT("Pure virtual not implemented (%s)"), TEXT(#func)); __VA_ARGS__ }
 #endif
 
 
@@ -245,6 +245,12 @@ struct TStaticDeprecateExpression
 		static constexpr int condition(TStaticDeprecateExpression<false>) { return 1; } \
 	}; \
 	enum class PREPROCESSOR_JOIN(EDeprecationMsg_, __LINE__) { Value = PREPROCESSOR_JOIN(FDeprecationMsg_, __LINE__)::condition(TStaticDeprecateExpression<!!(bExpression)>()) }
+
+// These defines are used to mark a difference between two pointers as expected to fit into the specified range
+// while still leaving something searchable if the surrounding code is updated to work with a 64 bit count/range
+// in the future
+#define UE_PTRDIFF_TO_INT32(argument) static_cast<int32>(argument)
+#define UE_PTRDIFF_TO_UINT32(argument) static_cast<uint32>(argument)
 
 /**
 * Makes a type non-copyable and non-movable by deleting copy/move constructors and assignment/move operators.

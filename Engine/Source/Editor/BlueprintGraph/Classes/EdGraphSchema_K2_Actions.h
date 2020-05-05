@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -335,7 +335,7 @@ struct FEdGraphSchemaAction_K2AddCallOnActor : public FEdGraphSchemaAction_K2New
 
 /** Action to add a 'comment' node to the graph */
 USTRUCT()
-struct BLUEPRINTGRAPH_VTABLE FEdGraphSchemaAction_K2AddComment : public FEdGraphSchemaAction
+struct FEdGraphSchemaAction_K2AddComment : public FEdGraphSchemaAction
 {
 	GENERATED_USTRUCT_BODY()
 
@@ -515,9 +515,9 @@ public:
 		return VariableSource.Get();
 	}
 
-	UProperty* GetProperty() const
+	FProperty* GetProperty() const
 	{
-		return FindField<UProperty>(GetVariableScope(), VarName);
+		return FindFProperty<FProperty>(GetVariableScope(), VarName);
 	}
 	
 	// FEdGraphSchemaAction interface
@@ -779,9 +779,9 @@ public:
 		return GetVariableClass();
 	}
 
-	UMulticastDelegateProperty* GetDelegateProperty() const
+	FMulticastDelegateProperty* GetDelegateProperty() const
 	{
-		return FindField<UMulticastDelegateProperty>(GetVariableClass(), GetVariableName());
+		return FindFProperty<FMulticastDelegateProperty>(GetVariableClass(), GetVariableName());
 	}
 };
 

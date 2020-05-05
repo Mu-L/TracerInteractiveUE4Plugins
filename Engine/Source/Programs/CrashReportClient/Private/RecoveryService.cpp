@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "RecoveryService.h"
 
@@ -16,6 +16,7 @@
 #include "IConcertSyncServerModule.h"
 #include "ConcertMessageData.h"
 #include "Runtime/Launch/Resources/Version.h"
+#include "ConcertLocalFileSharingService.h"
 
 static const TCHAR RecoveryServiceName[] = TEXT("Disaster Recovery Service");
 
@@ -83,15 +84,18 @@ bool FRecoveryService::Startup()
 
 	// Setup the disaster recovery server configuration
 	UConcertServerConfig* ServerConfig = IConcertSyncServerModule::Get().ParseServerSettings(FCommandLine::Get());
-	ServerConfig->bAutoArchiveOnReboot = true; // If server crashed, was killed, etc, ensure the recovery session is archived (expected by recovery flow).
-	ServerConfig->EndpointSettings.RemoteEndpointTimeoutSeconds = 0;
+	ServerConfig->bAutoArchiveOnReboot = false; // Skip archiving, disaster recovery restore a live session by copying it, this saves the step of archiving.
+	ServerConfig->bAutoArchiveOnShutdown = false; // Skip archiving, this can takes several minutes. It is more efficient to let the session 'live' and 'copy' it when restoring.
+	ServerConfig->EndpointSettings.RemoteEndpointTimeoutSeconds = 0; // Ensure the endpoints never time out (and are kept alive automatically by Concert).
 	ServerConfig->bMountDefaultSessionRepository = false; // Let the client mount its own repository to support concurrent recovery server and prevent them from concurrently accessing non-sharable database files.
+	ServerConfig->AuthorizedClientKeys.Add(ServerConfig->ServerName); // The disaster recovery client is configured to use the unique server name as key to identify itself.
 
 	FConcertSessionFilter AutoArchiveSessionFilter;
 	AutoArchiveSessionFilter.bIncludeIgnoredActivities = true;
 
 	// Start disaster recovery server.
 	Server = IConcertSyncServerModule::Get().CreateServer(TEXT("DisasterRecovery"), AutoArchiveSessionFilter);
+	Server->SetFileSharingService(MakeShared<FConcertLocalFileSharingService>(Server->GetConcertServer()->GetRole()));
 	Server->Startup(ServerConfig, EConcertSyncSessionFlags::Default_DisasterRecoverySession);
 
 	UE_LOG(CrashReportClientLog, Display, TEXT("%s Initialized (Name: %s, Version: %d.%d, Role: %s)"), RecoveryServiceName, *Server->GetConcertServer()->GetServerInfo().ServerName, ENGINE_MAJOR_VERSION, ENGINE_MINOR_VERSION, *Server->GetConcertServer()->GetRole());
@@ -110,17 +114,27 @@ void FRecoveryService::Shutdown()
 
 FGuid FRecoveryService::GetRecoverySessionId() const
 {
+	FGuid SessionId;
+	int32 SessionSeqNum = -1;
+
 	// As long as the Concert server is up, the session would remain live (it's going to be archived when the server shutdown or reboot).
 	for (TSharedPtr<IConcertServerSession>& Session : Server->GetConcertServer()->GetSessions())
 	{
-		// As convention, the disaster recovery session names starts with the server name, followed by the project name, and date time.
+		// As convention, the disaster recovery session names starts with the server name, followed by a sequence number, the project name and date time. (See RecoveryService::MakeSessionName())
 		if (Session->GetName().StartsWith(Server->GetConcertServer()->GetServerInfo().ServerName))
 		{
-			return Session->GetId();
+			// The user may have enabled/disabled the recovery service few times and as result, several live sessions will be available. Need to pick the last one. The highest sequence number
+			// in the session name corresponds to the last session created.
+			int32 SeqNum = 0;
+			RecoveryService::TokenizeSessionName(Session->GetName(), nullptr, &SeqNum, nullptr, nullptr);
+			if (SeqNum > SessionSeqNum)
+			{
+				SessionId = Session->GetId();
+			}
 		}
 	}
 
-	return FGuid();// Not found.
+	return SessionId; // Uninitialized Guid (invalid) means not found.
 }
 
 #endif

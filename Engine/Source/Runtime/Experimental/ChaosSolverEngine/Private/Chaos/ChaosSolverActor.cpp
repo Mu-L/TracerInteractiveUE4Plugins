@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Chaos/ChaosSolverActor.h"
 #include "UObject/ConstructorHelpers.h"
@@ -201,11 +201,17 @@ AChaosSolverActor::AChaosSolverActor(const FObjectInitializer& ObjectInitializer
 	, bHasFloor(true)
 	, FloorHeight(0.f)
 	, MassScale(1.f)
+	, bGenerateContactGraph(true)
 	, ChaosDebugSubstepControl()
 {
 	// @question(Benn) : Does this need to be created on the Physics thread using a queued command?
-	PhysScene = MakeShareable(new FPhysScene_Chaos(this));
+	PhysScene = MakeShareable(new FPhysScene_Chaos(this
+#if CHAOS_CHECKED
+		, TEXT("Solver Actor Physics")
+#endif
+	));
 	Solver = PhysScene->GetSolver();
+
 	// Ticking setup for collision/breaking notifies
 	PrimaryActorTick.TickGroup = TG_PostPhysics;
 	PrimaryActorTick.bCanEverTick = true;
@@ -257,6 +263,11 @@ AChaosSolverActor::AChaosSolverActor(const FObjectInitializer& ObjectInitializer
 	GameplayEventDispatcherComponent = ObjectInitializer.CreateDefaultSubobject<UChaosGameplayEventDispatcher>(this, TEXT("GameplayEventDispatcher"));
 }
 
+void AChaosSolverActor::PreInitializeComponents()
+{
+	Super::PreInitializeComponents();
+}
+
 void AChaosSolverActor::BeginPlay()
 {
 	Super::BeginPlay();
@@ -279,25 +290,26 @@ void AChaosSolverActor::BeginPlay()
 			, InTrailingFilterSettings = TrailingFilterSettings
 			, InHasFloor = bHasFloor
 			, InFloorHeight = FloorHeight
-			, InMassScale = MassScale]
+			, InMassScale = MassScale
+			, InGenerateContactGraph = bGenerateContactGraph]
 		(Chaos::FPhysicsSolver* InSolver)
 		{
 #if TODO_REIMPLEMENT_SOLVER_SETTINGS_ACCESSORS
 			InSolver->SetTimeStepMultiplier(InTimeStepMultiplier);
-			InSolver->SetIterations(InCollisionIterations);
-			InSolver->SetPushOutIterations(InPushOutIterations);
-			InSolver->SetPushOutPairIterations(InPushOutPairIterations);
 			InSolver->SetClusterConnectionFactor(InClusterConnectionFactor);
 			InSolver->SetClusterUnionConnectionType((Chaos::FClusterCreationParameters<float>::EConnectionMethod)InClusterUnionConnectionType);
 #endif
+			InSolver->SetIterations(InCollisionIterations);
+			InSolver->SetPushOutPairIterations(InPushOutPairIterations);
+			InSolver->SetPushOutIterations(InPushOutIterations);
 			InSolver->SetGenerateCollisionData(InDoGenerateCollisionData);
 			InSolver->SetGenerateBreakingData(InDoGenerateBreakingData);
 			InSolver->SetGenerateTrailingData(InDoGenerateTrailingData);
 			InSolver->SetCollisionFilterSettings(InCollisionFilterSettings);
 			InSolver->SetBreakingFilterSettings(InBreakingFilterSettings);
 			InSolver->SetTrailingFilterSettings(InTrailingFilterSettings);
-			InSolver->SetHasFloor(InHasFloor);
-			InSolver->SetFloorHeight(InFloorHeight);
+			InSolver->SetUseContactGraph(InGenerateContactGraph);
+
 #if TODO_REIMPLEMENT_SOLVER_SETTINGS_ACCESSORS
 			InSolver->SetMassScale(InMassScale);
 #endif
@@ -307,6 +319,20 @@ void AChaosSolverActor::BeginPlay()
 			InSolver->SetPaused(false);
 #endif  // #if CHAOS_WITH_PAUSABLE_SOLVER
 #endif  // #if TODO_REIMPLEMENT_SOLVER_SETTINGS_ACCESSORS
+
+			// Add a floor if specified on the actor
+			if(InHasFloor)
+			{
+				Chaos::TGeometryParticle<float, 3>* Particle = Chaos::TGeometryParticle<float, 3>::CreateParticle().Release();
+				Particle->SetGeometry(TUniquePtr<Chaos::TPlane<float, 3>>(new Chaos::TPlane<float, 3>(FVector(0), FVector(0, 0, 1))));
+				Particle->SetObjectState(Chaos::EObjectStateType::Static);
+				Particle->SetX(Chaos::TVector<float, 3>(0.f, 0.f, InFloorHeight));
+				FCollisionFilterData FilterData;
+				FilterData.Word1 = 0xFFFF;
+				FilterData.Word3 = 0xFFFF;
+				Particle->SetShapeSimData(0, FilterData);
+				InSolver->RegisterObject(Particle);
+			}
 		});
 	}
 
@@ -357,6 +383,16 @@ void AChaosSolverActor::PostRegisterAllComponents()
 		SetAsCurrentWorldSolver();
 	}
 #endif
+}
+
+void AChaosSolverActor::PostDuplicate(EDuplicateMode::Type DuplicateMode)
+{
+	Super::PostDuplicate(DuplicateMode);
+
+	if(FChaosSolversModule* Module = FChaosSolversModule::GetModule())
+	{
+		Module->MigrateSolver(GetSolver(), GetWorld());
+	}
 }
 
 void AChaosSolverActor::SetAsCurrentWorldSolver()
@@ -484,7 +520,6 @@ void AChaosSolverActor::PostEditChangeProperty(struct FPropertyChangedEvent& Pro
 				PhysDispatcher->EnqueueCommandImmediate(Solver, [InHasFloor = bHasFloor]
 				(Chaos::FPhysicsSolver* InSolver)
 				{
-					InSolver->SetHasFloor(InHasFloor);
 				});
 			}
 			else if (PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(AChaosSolverActor, FloorHeight))
@@ -492,9 +527,16 @@ void AChaosSolverActor::PostEditChangeProperty(struct FPropertyChangedEvent& Pro
 				PhysDispatcher->EnqueueCommandImmediate(Solver, [InFloorHeight = FloorHeight]
 				(Chaos::FPhysicsSolver* InSolver)
 				{
-					InSolver->SetFloorHeight(InFloorHeight);
 				});
 			}
+			else if (PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(AChaosSolverActor, bGenerateContactGraph))
+			{
+				PhysDispatcher->EnqueueCommandImmediate(Solver, [InGenerateContactGraph = bGenerateContactGraph]
+				(Chaos::FPhysicsSolver* InSolver)
+				{
+				});
+			}
+
 #if TODO_REIMPLEMENT_TIMESTEP_MULTIPLIER
 			else if (PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(AChaosSolverActor, MassScale))
 			{

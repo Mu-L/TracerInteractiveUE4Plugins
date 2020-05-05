@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MeshOpPreviewHelpers.h"
 
@@ -12,20 +12,20 @@ void UMeshOpPreviewWithBackgroundCompute::Setup(UWorld* InWorld, IDynamicMeshOpe
 	bResultValid = false;
 }
 
-TUniquePtr<FDynamicMeshOpResult> UMeshOpPreviewWithBackgroundCompute::Shutdown()
+FDynamicMeshOpResult UMeshOpPreviewWithBackgroundCompute::Shutdown()
 {
 	BackgroundCompute->CancelActiveCompute();
 
 
-	TUniquePtr<FDynamicMeshOpResult> Result = MakeUnique<FDynamicMeshOpResult>();
-	Result->Mesh = PreviewMesh->ExtractPreviewMesh();
-	Result->Transform = FTransform3d(PreviewMesh->GetTransform());
+	FDynamicMeshOpResult Result{};
+	Result.Mesh = PreviewMesh->ExtractPreviewMesh();
+	Result.Transform = FTransform3d(PreviewMesh->GetTransform());
 
 	PreviewMesh->SetVisible(false);
 	PreviewMesh->Disconnect();
 	PreviewMesh = nullptr;
 
-	return MoveTemp(Result);
+	return Result;
 }
 
 
@@ -41,22 +41,27 @@ void UMeshOpPreviewWithBackgroundCompute::Cancel()
 
 void UMeshOpPreviewWithBackgroundCompute::Tick(float DeltaTime)
 {
-	bool bIsLongDelay = false;
 	if (BackgroundCompute)
 	{
 		BackgroundCompute->Tick(DeltaTime);
-		bIsLongDelay = BackgroundCompute->GetElapsedComputeTime() > 2.0;
 	}
 
 	UpdateResults();
 
-	if (bResultValid || WorkingMaterial == nullptr || bIsLongDelay == false)
+	if (!IsUsingWorkingMaterial())
 	{
-		PreviewMesh->SetMaterial(StandardMaterial);
+		if (OverrideMaterial != nullptr)
+		{
+			PreviewMesh->SetOverrideRenderMaterial(OverrideMaterial);
+		}
+		else
+		{
+			PreviewMesh->ClearOverrideRenderMaterial();
+		}
 	}
 	else
 	{
-		PreviewMesh->SetMaterial(WorkingMaterial);
+		PreviewMesh->SetOverrideRenderMaterial(WorkingMaterial);
 	}
 }
 
@@ -66,9 +71,7 @@ void UMeshOpPreviewWithBackgroundCompute::UpdateResults()
 	EBackgroundComputeTaskStatus Status = BackgroundCompute->CheckStatus();
 	if (Status == EBackgroundComputeTaskStatus::NewResultAvailable)
 	{
-		TSharedPtr<FDynamicMeshOperator> MeshOp =
-			StaticCastSharedPtr<FDynamicMeshOperator>(BackgroundCompute->ExtractResult());
-
+		TUniquePtr<FDynamicMeshOperator> MeshOp  = BackgroundCompute->ExtractResult();
 		TUniquePtr<FDynamicMesh3> ResultMesh = MeshOp->ExtractResult();
 		PreviewMesh->SetTransform((FTransform)MeshOp->GetResultTransform());
 		PreviewMesh->UpdatePreview(ResultMesh.Get());  // copies the mesh @todo we could just give ownership to the Preview!
@@ -89,12 +92,20 @@ void UMeshOpPreviewWithBackgroundCompute::InvalidateResult()
 
 void UMeshOpPreviewWithBackgroundCompute::ConfigureMaterials(UMaterialInterface* StandardMaterialIn, UMaterialInterface* WorkingMaterialIn)
 {
-	this->StandardMaterial = StandardMaterialIn;
+	TArray<UMaterialInterface*> Materials;
+	Materials.Add(StandardMaterialIn);
+	ConfigureMaterials(Materials, WorkingMaterialIn);
+}
+
+
+void UMeshOpPreviewWithBackgroundCompute::ConfigureMaterials(TArray<UMaterialInterface*> StandardMaterialsIn, UMaterialInterface* WorkingMaterialIn)
+{
+	this->StandardMaterials = StandardMaterialsIn;
 	this->WorkingMaterial = WorkingMaterialIn;
 
 	if (PreviewMesh != nullptr)
 	{
-		PreviewMesh->SetMaterial(this->StandardMaterial);
+		PreviewMesh->SetMaterials(this->StandardMaterials);
 	}
 }
 
@@ -103,4 +114,11 @@ void UMeshOpPreviewWithBackgroundCompute::SetVisibility(bool bVisibleIn)
 {
 	bVisible = bVisibleIn;
 	PreviewMesh->SetVisible(bVisible);
+}
+
+
+bool UMeshOpPreviewWithBackgroundCompute::IsUsingWorkingMaterial()
+{
+	bool bIsLongDelay = BackgroundCompute && BackgroundCompute->GetElapsedComputeTime() > SecondsBeforeWorkingMaterial;
+	return !(bResultValid || WorkingMaterial == nullptr || bIsLongDelay == false);
 }

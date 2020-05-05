@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -114,8 +114,6 @@ public:
 	virtual EStreamingOperationResult GetDemoPath(FString& DemoPath) const override;
 
 	virtual bool IsCheckpointTypeSupported(EReplayCheckpointType CheckpointType) const override { return (CheckpointType == EReplayCheckpointType::Full); }
-
-	virtual const int32 GetUserIndexFromUserString(const FString& UserString) override;
 
 private:
 	bool IsNamedStreamLive( const FString& StreamName ) const;

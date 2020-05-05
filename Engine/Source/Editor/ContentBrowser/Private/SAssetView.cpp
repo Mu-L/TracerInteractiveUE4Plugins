@@ -1,6 +1,7 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SAssetView.h"
+#include "Algo/Transform.h"
 #include "HAL/FileManager.h"
 #include "UObject/UnrealType.h"
 #include "Widgets/SOverlay.h"
@@ -48,8 +49,11 @@
 #include "DesktopPlatformModule.h"
 #include "Misc/FileHelper.h"
 #include "Misc/TextFilterUtils.h"
+#include "Misc/BlacklistNames.h"
 #include "AssetRegistryState.h"
 #include "Materials/Material.h"
+#include "ContentBrowserMenuContexts.h"
+#include "ToolMenus.h"
 
 #define LOCTEXT_NAMESPACE "ContentBrowser"
 #define MAX_THUMBNAIL_SIZE 4096
@@ -115,24 +119,48 @@ namespace AssetViewUtils
 		return false;
 	}
 
+	/** Expands blacklist of class names to include subclasses */
+	void ExpandClassesBlacklist(const FBlacklistNames& InBlacklist, FBlacklistNames& ExpandedBlacklist)
+	{
+		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+		if (InBlacklist.GetBlacklist().Num() > 0)
+		{
+			TArray<FName> BlacklistKeys;
+			InBlacklist.GetBlacklist().GetKeys(BlacklistKeys);
+			const TSet<FName> EmptySet;
+			TSet<FName> BlacklistSubClassNames;
+			AssetRegistryModule.Get().GetDerivedClassNames(BlacklistKeys, EmptySet, BlacklistSubClassNames);
+			for (const FName ClassName : BlacklistSubClassNames)
+			{
+				ExpandedBlacklist.AddBlacklistItem(NAME_None, ClassName);
+			}
+		}
+
+		if (InBlacklist.GetWhitelist().Num() > 0)
+		{
+			TArray<FName> WhitelistKeys;
+			InBlacklist.GetWhitelist().GetKeys(WhitelistKeys);
+			const TSet<FName> EmptySet;
+			TSet<FName> WhitelistSubClassNames;
+			AssetRegistryModule.Get().GetDerivedClassNames(WhitelistKeys, EmptySet, WhitelistSubClassNames);
+			for (const FName ClassName : WhitelistSubClassNames)
+			{
+				ExpandedBlacklist.AddWhitelistItem(NAME_None, ClassName);
+			}
+		}
+	}
+
 	class FInitialAssetFilter
 	{
 	public:
-		FInitialAssetFilter(bool InDisplayL10N, bool InDisplayEngine, bool InDisplayPlugins) :
+		FInitialAssetFilter(bool InDisplayL10N, bool InDisplayEngine, bool InDisplayPlugins, const FBlacklistPaths* InFolderBlacklist, const FBlacklistNames* InClassBlacklist) :
 			bDisplayL10N(InDisplayL10N),
 			bDisplayEngine(InDisplayEngine),
-			bDisplayPlugins(InDisplayPlugins)
-		{
-			Init(InDisplayL10N, InDisplayEngine, InDisplayPlugins);
-		}
-
-		void Init(bool InDisplayL10N, bool InDisplayEngine, bool InDisplayPlugins)
+			bDisplayPlugins(InDisplayPlugins),
+			FolderBlacklist(InFolderBlacklist),
+			AssetClassBlacklist(nullptr)
 		{
 			ObjectRedirectorClassName = UObjectRedirector::StaticClass()->GetFName();
-
-			bDisplayL10N = InDisplayL10N;
-			bDisplayEngine = InDisplayEngine;
-			bDisplayPlugins = InDisplayPlugins;
 
 			Plugins = IPluginManager::Get().GetEnabledPluginsWithContent();
 			PluginNamesUpperWide.Reset(Plugins.Num());
@@ -144,11 +172,22 @@ namespace AssetViewUtils
 				TextFilterUtils::TryConvertWideToAnsi(PluginNameUpperWide, PluginNamesUpperAnsi.AddDefaulted_GetRef());
 				PluginLoadedFromEngine.Add(PluginRef->GetLoadedFrom() == EPluginLoadedFrom::Engine);
 			}
+
+			if (InClassBlacklist && InClassBlacklist->HasFiltering())
+			{
+				ExpandClassesBlacklist(*InClassBlacklist, ExpandedClassesBlacklist);
+				AssetClassBlacklist = &ExpandedClassesBlacklist;
+			}
 		}
 
 		FORCEINLINE bool PassesFilter(const FAssetData& Item) const
 		{
 			if (!PassesRedirectorMainAssetFilter(Item))
+			{
+				return false;
+			}
+
+			if (AssetClassBlacklist && !AssetClassBlacklist->PassesFilter(Item.AssetClass))
 			{
 				return false;
 			}
@@ -172,12 +211,25 @@ namespace AssetViewUtils
 			TextFilterUtils::FNameBufferWithNumber ObjectPathBuffer(PackagePath);
 			if (ObjectPathBuffer.IsWide())
 			{
-				return PassesPackagePathFilter(ObjectPathBuffer.GetWideNamePtr());
+				if (!PassesPackagePathFilter(ObjectPathBuffer.GetWideNamePtr()))
+				{
+					return false;
+				}
 			}
 			else
 			{
-				return PassesPackagePathFilter(ObjectPathBuffer.GetAnsiNamePtr());
+				if (!PassesPackagePathFilter(ObjectPathBuffer.GetAnsiNamePtr()))
+				{
+					return false;
+				}
 			}
+			
+			if (FolderBlacklist && !FolderBlacklist->PassesStartsWithFilter(PackagePath))
+			{
+				return false;
+			}
+
+			return true;
 		}
 
 		template <typename CharType>
@@ -242,6 +294,8 @@ namespace AssetViewUtils
 			return true;
 		}
 
+		
+
 	private:
 		FName ObjectRedirectorClassName;
 		bool bDisplayL10N;
@@ -251,6 +305,9 @@ namespace AssetViewUtils
 		TArray<FString> PluginNamesUpperWide;
 		TArray<bool> PluginLoadedFromEngine;
 		TArray<TSharedRef<IPlugin>> Plugins;
+		const FBlacklistPaths* FolderBlacklist;
+		const FBlacklistNames* AssetClassBlacklist;
+		FBlacklistNames ExpandedClassesBlacklist;
 
 		FORCEINLINE int32 FindPluginNameUpper(const WIDECHAR* PluginNameUpper, int32 Length) const
 		{
@@ -420,6 +477,7 @@ void SAssetView::Construct( const FArguments& InArgs )
 	bCanShowDevelopersFolder = InArgs._CanShowDevelopersFolder;
 
 	bCanShowFavorites = InArgs._CanShowFavorites;
+	bCanDockCollections = InArgs._CanDockCollections;
 	bPreloadAssetsForContextMenu = InArgs._PreloadAssetsForContextMenu;
 
 	SelectionMode = InArgs._SelectionMode;
@@ -427,6 +485,7 @@ void SAssetView::Construct( const FArguments& InArgs )
 	bShowPathInColumnView = InArgs._ShowPathInColumnView;
 	bShowTypeInColumnView = InArgs._ShowTypeInColumnView;
 	bSortByPathInColumnView = bShowPathInColumnView & InArgs._SortByPathInColumnView;
+	bForceShowEngineContent = InArgs._ForceShowEngineContent;
 
 	bPendingUpdateThumbnails = false;
 	bShouldNotifyNextAssetSync = true;
@@ -492,6 +551,10 @@ void SAssetView::Construct( const FArguments& InArgs )
 	bWereItemsRecursivelyFiltered = false;
 
 	NumVisibleColumns = 0;
+
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+	AssetClassBlacklist = AssetToolsModule.Get().GetAssetClassBlacklist();
+	FolderBlacklist = AssetToolsModule.Get().GetFolderBlacklist();
 
 	FEditorWidgetsModule& EditorWidgetsModule = FModuleManager::LoadModuleChecked<FEditorWidgetsModule>("EditorWidgets");
 	TSharedRef<SWidget> AssetDiscoveryIndicator = EditorWidgetsModule.CreateAssetDiscoveryIndicator(EAssetDiscoveryIndicatorScaleMode::Scale_Vertical);
@@ -721,6 +784,12 @@ void SAssetView::SetBackendFilter(const FARFilter& InBackendFilter)
 	RequestSlowFullListRefresh();
 }
 
+void SAssetView::AppendBackendFilter(FARFilter& FilterToAppendTo) const
+{
+	FilterToAppendTo.Append(BackendFilter);
+
+}
+
 void SAssetView::OnCreateNewFolder(const FString& FolderName, const FString& FolderPath)
 {
 	// we should only be creating one deferred folder per tick
@@ -743,7 +812,7 @@ void SAssetView::OnCreateNewFolder(const FString& FolderName, const FString& Fol
 
 void SAssetView::DeferredCreateNewFolder()
 {
-	if(DeferredFolderToCreate.IsValid())
+	if (DeferredFolderToCreate.IsValid())
 	{
 		TSharedPtr<FAssetViewFolder> NewItem = MakeShareable(new FAssetViewFolder(DeferredFolderToCreate->FolderPath / DeferredFolderToCreate->FolderName));
 		NewItem->bNewFolder = true;
@@ -1208,7 +1277,7 @@ void SAssetView::Tick( const FGeometry& AllottedGeometry, const double InCurrent
 		AssetThumbnailPool->Tick(InDeltaTime);
 	}
 
-	if ( bPendingUpdateThumbnails )
+	if (bPendingUpdateThumbnails)
 	{
 		UpdateThumbnails();
 		bPendingUpdateThumbnails = false;
@@ -1442,45 +1511,38 @@ void SAssetView::CalculateThumbnailHintColorAndOpacity()
 	ThumbnailHintColorAndOpacity = FLinearColor( 1.0, 1.0, 1.0, Opacity );
 }
 
-void SAssetView::ProcessQueriedItems( const double TickStartTime )
+void SAssetView::ProcessQueriedItems(const double TickStartTime)
 {
 	const bool bFlushFullBuffer = TickStartTime < 0;
 
 	bool ListNeedsRefresh = false;
-	int32 AssetIndex = 0;
-	for ( AssetIndex = QueriedAssetItems.Num() - 1; AssetIndex >= 0 ; AssetIndex--)
-	{
-		if ( !OnShouldFilterAsset.Execute( QueriedAssetItems[AssetIndex] ) )
-		{
-			AssetItems.Add( QueriedAssetItems[AssetIndex] );
 
-			if ( !IsFrontendFilterActive() || PassesCurrentFrontendFilter(QueriedAssetItems[AssetIndex]))
+	for (auto AssetIter = QueriedAssetItems.CreateIterator(); AssetIter; ++AssetIter)
+	{
+		const FAssetData& AssetData = *AssetIter;
+
+		if (!OnShouldFilterAsset.Execute(AssetData))
+		{
+			AssetItems.Add(AssetData);
+
+			if (!IsFrontendFilterActive() || PassesCurrentFrontendFilter(AssetData))
 			{
-				const FAssetData& AssetData = QueriedAssetItems[AssetIndex];
 				FilteredAssetItems.Add(MakeShareable(new FAssetViewAsset(AssetData)));
 				ListNeedsRefresh = true;
 				bPendingSortFilteredItems = true;
 			}
 		}
 
+		AssetIter.RemoveCurrent();
+
 		// Check to see if we have run out of time in this tick
-		if ( !bFlushFullBuffer && (FPlatformTime::Seconds() - TickStartTime) > MaxSecondsPerFrame)
+		if (!bFlushFullBuffer && (FPlatformTime::Seconds() - TickStartTime) > MaxSecondsPerFrame)
 		{
 			break;
 		}
 	}
 
-	// Trim the results array
-	if (AssetIndex > 0)
-	{
-		QueriedAssetItems.RemoveAt( AssetIndex, QueriedAssetItems.Num() - AssetIndex );
-	}
-	else
-	{
-		QueriedAssetItems.Reset();
-	}
-
-	if ( ListNeedsRefresh )
+	if (ListNeedsRefresh)
 	{
 		RefreshList();
 	}
@@ -1600,6 +1662,13 @@ FReply SAssetView::OnDrop( const FGeometry& MyGeometry, const FDragDropEvent& Dr
 	{
 		// Note: We don't test IsAssetPathSelected here as we need to prevent dropping assets on class paths
 		const FString DestPath = SourcesData.PackagePaths[0].ToString();
+
+		FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+		if (!AssetToolsModule.Get().GetWritableFolderBlacklist()->PassesStartsWithFilter(DestPath))
+		{
+			AssetToolsModule.Get().NotifyBlockedByWritableFolderFilter();
+			return FReply::Handled();
+		}
 
 		// If the DragDrop event is validated, continue trying to dock it to the Widget
 		bool bUnused = false;
@@ -1923,13 +1992,22 @@ void SAssetView::RefreshSourceItems()
 	RelevantThumbnails.Reset();
 	Folders.Reset();
 
-	TArray<FAssetData>& Items = OnShouldFilterAsset.IsBound() ? QueriedAssetItems : AssetItems;
+	FAssetDataSet& Items = OnShouldFilterAsset.IsBound() ? QueriedAssetItems : AssetItems;
 
-	const bool bShowAll = SourcesData.IsEmpty() && BackendFilter.IsEmpty();
+	const FBlacklistPaths* FolderBlacklistToUse = (FolderBlacklist.IsValid() && FolderBlacklist->HasFiltering()) ? FolderBlacklist.Get() : nullptr;
+	const FBlacklistNames* AssetClassBlacklistToUse = (AssetClassBlacklist.IsValid() && AssetClassBlacklist->HasFiltering()) ? AssetClassBlacklist.Get() : nullptr;
+	const bool bShowAll = SourcesData.IsEmpty() && BackendFilter.IsEmpty() && !FolderBlacklistToUse && !AssetClassBlacklistToUse;
+
+	bool bOriginalRegistryTemporaryCachingMode = AssetRegistryModule.Get().GetTemporaryCachingMode();
+	if (AssetClassBlacklistToUse && !bOriginalRegistryTemporaryCachingMode)
+	{
+		// Optimization to reduce number of times class tree is generated
+		AssetRegistryModule.Get().SetTemporaryCachingMode(true);
+	}
 
 	bool bShowClasses = false;
 	TArray<FName> ClassPathsToShow;
-	AssetViewUtils::FInitialAssetFilter InitialAssetFilter(IsShowingLocalizedContent(), IsShowingEngineContent(), IsShowingPluginContent());
+	AssetViewUtils::FInitialAssetFilter InitialAssetFilter(IsShowingLocalizedContent(), IsShowingEngineContent(), IsShowingPluginContent(), FolderBlacklistToUse, AssetClassBlacklistToUse);
 
 	if ( bShowAll )
 	{
@@ -1944,11 +2022,11 @@ void SAssetView::RefreshSourceItems()
 					continue;
 				}
 
-				int32 Index = Items.Emplace(*ObjIt);
+				FSetElementId Index = Items.Emplace(*ObjIt);
 				const FAssetData& AssetData = Items[Index];
 				if (!InitialAssetFilter.PassesRedirectorMainAssetFilter(AssetData))
 				{
-					Items.RemoveAtSwap(Index, 1, false);
+					Items.Remove(Index);
 					continue;
 				}
 
@@ -1992,9 +2070,8 @@ void SAssetView::RefreshSourceItems()
 		const bool bIsDynamicCollection = SourcesData.IsDynamicCollection();
 		FARFilter Filter = SourcesData.MakeFilter(bRecurse, bUsingFolders);
 
-		// Add the backend filters from the filter list
-		Filter.Append(BackendFilter);
-
+		AppendBackendFilter(Filter);
+		
 		bWereItemsRecursivelyFiltered = bRecurse;
 
 		// Move any class paths into their own array
@@ -2023,7 +2100,9 @@ void SAssetView::RefreshSourceItems()
 		else
 		{
 			// Add assets found in the asset registry
-			AssetRegistryModule.Get().GetAssets(Filter, Items);
+			TArray<FAssetData> Assets;
+			AssetRegistryModule.Get().GetAssets(Filter, Assets);
+			Items.Append(Assets);
 		}
 
 		if ( bFilterAllowsClasses )
@@ -2053,14 +2132,16 @@ void SAssetView::RefreshSourceItems()
 		// Add any custom assets 
 		if (OnGetCustomSourceAssets.IsBound())
 		{
-			OnGetCustomSourceAssets.Execute(Filter, Items);
+			TArray<FAssetData> Assets;
+			OnGetCustomSourceAssets.Execute(Filter, Assets);
+			Items.Append(Assets);
 		}
 
-		for (int32 AssetIdx = Items.Num() - 1; AssetIdx >= 0; --AssetIdx)
+		for (auto AssetIter = Items.CreateIterator(); AssetIter; ++AssetIter)
 		{
-			if (!InitialAssetFilter.PassesFilter(Items[AssetIdx]))
+			if (!InitialAssetFilter.PassesFilter(*AssetIter))
 			{
-				Items.RemoveAtSwap(AssetIdx);
+				AssetIter.RemoveCurrent();
 			}
 		}
 	}
@@ -2083,6 +2164,8 @@ void SAssetView::RefreshSourceItems()
 			Items.Add(FAssetData(CurrentClass));
 		}
 	}
+
+	AssetRegistryModule.Get().SetTemporaryCachingMode(bOriginalRegistryTemporaryCachingMode);
 }
 
 bool SAssetView::IsFilteringRecursively() const
@@ -2139,19 +2222,19 @@ bool SAssetView::ShouldFilterRecursively() const
 
 void SAssetView::RefreshFilteredItems()
 {
-	//Build up a map of the existing AssetItems so we can preserve them while filtering
+	// Build up a map of the existing AssetItems so we can preserve them while filtering
 	TMap< FName, TSharedPtr< FAssetViewAsset > > ItemToObjectPath;
-	for (int Index = 0; Index < FilteredAssetItems.Num(); Index++)
+	for (const TSharedPtr<FAssetViewItem>& AssetItem : FilteredAssetItems)
 	{
-		if(FilteredAssetItems[Index].IsValid() && FilteredAssetItems[Index]->GetType() != EAssetItemType::Folder)
+		if (AssetItem.IsValid() && AssetItem->GetType() != EAssetItemType::Folder)
 		{
-			TSharedPtr<FAssetViewAsset> Item = StaticCastSharedPtr<FAssetViewAsset>(FilteredAssetItems[Index]);
+			TSharedPtr<FAssetViewAsset> Item = StaticCastSharedPtr<FAssetViewAsset>(AssetItem);
 
 			// Clear custom column data
 			Item->CustomColumnData.Reset();
 			Item->CustomColumnDisplayText.Reset();
 
-			ItemToObjectPath.Add( Item->Data.ObjectPath, Item );
+			ItemToObjectPath.Add(Item->Data.ObjectPath, Item);
 		}
 	}
 
@@ -2168,86 +2251,33 @@ void SAssetView::RefreshFilteredItems()
 	const bool bGatherAssetTypeCount = CurrentViewType == EAssetViewType::Column;
 	TMap<FName, int32> AssetTypeCount;
 
-	if ( bIsFrontendFilterActive && FrontendFilters.IsValid() )
+	if (bIsFrontendFilterActive && FrontendFilters.IsValid())
 	{
 		const bool bRecurse = ShouldFilterRecursively();
 		const bool bUsingFolders = IsShowingFolders();
 		FARFilter CombinedFilter = SourcesData.MakeFilter(bRecurse, bUsingFolders);
-		CombinedFilter.Append(BackendFilter);
+		AppendBackendFilter(CombinedFilter);
 
 		// Let the frontend filters know the currently used filter in case it is necessary to conditionally filter based on path or class filters
-		for ( int32 FilterIdx = 0; FilterIdx < FrontendFilters->Num(); ++FilterIdx )
+		for (int32 FilterIdx = 0; FilterIdx < FrontendFilters->Num(); ++FilterIdx)
 		{
 			// There are only FFrontendFilters in this collection
-			const TSharedPtr<FFrontendFilter>& Filter = StaticCastSharedPtr<FFrontendFilter>( FrontendFilters->GetFilterAtIndex(FilterIdx) );
-			if ( Filter.IsValid() )
+			const TSharedPtr<FFrontendFilter>& Filter = StaticCastSharedPtr<FFrontendFilter>(FrontendFilters->GetFilterAtIndex(FilterIdx));
+			if (Filter.IsValid())
 			{
 				Filter->SetCurrentFilter(CombinedFilter);
 			}
 		}
 	}
 
-	if ( bIsFrontendFilterActive && bGatherAssetTypeCount )
+	// Check the frontend filter for every asset and keep track of how many assets were found of each type
+	for (const FAssetData& AssetData : AssetItems)
 	{
-		// Check the frontend filter for every asset and keep track of how many assets were found of each type
-		for (int32 AssetIdx = 0; AssetIdx < AssetItems.Num(); ++AssetIdx)
+		if (bIsFrontendFilterActive == false ||
+			PassesCurrentFrontendFilter(AssetData) )
 		{
-			const FAssetData& AssetData = AssetItems[AssetIdx];
-			if ( PassesCurrentFrontendFilter(AssetData) )
-			{
-				const TSharedPtr< FAssetViewAsset >* AssetItem = ItemToObjectPath.Find( AssetData.ObjectPath );
-
-				if ( AssetItem != NULL )
-				{
-					FilteredAssetItems.Add(*AssetItem);
-				}
-				else
-				{
-					FilteredAssetItems.Add(MakeShareable(new FAssetViewAsset(AssetData)));
-				}
-
-				int32* TypeCount = AssetTypeCount.Find(AssetData.AssetClass);
-				if ( TypeCount )
-				{
-					(*TypeCount)++;
-				}
-				else
-				{
-					AssetTypeCount.Add(AssetData.AssetClass, 1);
-				}
-			}
-		}
-	}
-	else if ( bIsFrontendFilterActive && !bGatherAssetTypeCount )
-	{
-		// Check the frontend filter for every asset and don't worry about asset type counts
-		for (int32 AssetIdx = 0; AssetIdx < AssetItems.Num(); ++AssetIdx)
-		{
-			const FAssetData& AssetData = AssetItems[AssetIdx];
-			if ( PassesCurrentFrontendFilter(AssetData) )
-			{
-				const TSharedPtr< FAssetViewAsset >* AssetItem = ItemToObjectPath.Find( AssetData.ObjectPath );
-
-				if ( AssetItem != NULL )
-				{
-					FilteredAssetItems.Add(*AssetItem);
-				}
-				else
-				{
-					FilteredAssetItems.Add(MakeShareable(new FAssetViewAsset(AssetData)));
-				}
-			}
-		}
-	}
-	else if ( !bIsFrontendFilterActive && bGatherAssetTypeCount )
-	{
-		// Don't need to check the frontend filter for every asset but keep track of how many assets were found of each type
-		for (int32 AssetIdx = 0; AssetIdx < AssetItems.Num(); ++AssetIdx)
-		{
-			const FAssetData& AssetData = AssetItems[AssetIdx];
 			const TSharedPtr< FAssetViewAsset >* AssetItem = ItemToObjectPath.Find( AssetData.ObjectPath );
-
-			if ( AssetItem != NULL )
+			if (AssetItem != nullptr)
 			{
 				FilteredAssetItems.Add(*AssetItem);
 			}
@@ -2256,48 +2286,20 @@ void SAssetView::RefreshFilteredItems()
 				FilteredAssetItems.Add(MakeShareable(new FAssetViewAsset(AssetData)));
 			}
 
-			int32* TypeCount = AssetTypeCount.Find(AssetData.AssetClass);
-			if ( TypeCount )
+			if (bGatherAssetTypeCount)
 			{
-				(*TypeCount)++;
-			}
-			else
-			{
-				AssetTypeCount.Add(AssetData.AssetClass, 1);
+				AssetTypeCount.FindOrAdd(AssetData.AssetClass)++;
 			}
 		}
 	}
-	else if ( !bIsFrontendFilterActive && !bGatherAssetTypeCount )
-	{
-		// Don't check the frontend filter and don't count the number of assets of each type. Just add all assets.
-		for (int32 AssetIdx = 0; AssetIdx < AssetItems.Num(); ++AssetIdx)
-		{
-			const FAssetData& AssetData = AssetItems[AssetIdx];
-			const TSharedPtr< FAssetViewAsset >* AssetItem = ItemToObjectPath.Find( AssetData.ObjectPath );
 
-			if ( AssetItem != NULL )
-			{
-				FilteredAssetItems.Add(*AssetItem);
-			}
-			else
-			{
-				FilteredAssetItems.Add(MakeShareable(new FAssetViewAsset(AssetData)));
-			}
-		}
-	}
-	else
-	{
-		// The above cases should handle all combinations of bIsFrontendFilterActive and bGatherAssetTypeCount
-		ensure(0);
-	}
-
-	if ( bGatherAssetTypeCount )
+	if (bGatherAssetTypeCount)
 	{
 		int32 HighestCount = 0;
 		FName HighestType;
-		for ( auto TypeIt = AssetTypeCount.CreateConstIterator(); TypeIt; ++TypeIt )
+		for (auto TypeIt = AssetTypeCount.CreateConstIterator(); TypeIt; ++TypeIt)
 		{
-			if ( TypeIt.Value() > HighestCount )
+			if (TypeIt.Value() > HighestCount)
 			{
 				HighestType = TypeIt.Key();
 				HighestCount = TypeIt.Value();
@@ -2362,6 +2364,11 @@ void SAssetView::RefreshFolders()
 					continue;
 				}
 
+				if (FolderBlacklist.IsValid() && !FolderBlacklist->PassesStartsWithFilter(SubPath))
+				{
+					continue;
+				}
+
 				if(!Folders.Contains(SubPath))
 				{
 					FoldersToAdd.Add(SubPath);
@@ -2387,7 +2394,7 @@ void SAssetView::RefreshFolders()
 	}
 
 	// Add folders for any child collections of the currently selected collections
-	if(SourcesData.HasCollections())
+	if (SourcesData.HasCollections())
 	{
 		FCollectionManagerModule& CollectionManagerModule = FCollectionManagerModule::GetModule();
 		
@@ -2397,7 +2404,7 @@ void SAssetView::RefreshFolders()
 			ChildCollections.Reset();
 			CollectionManagerModule.Get().GetChildCollections(Collection.Name, Collection.Type, ChildCollections);
 
-			for(const FCollectionNameType& ChildCollection : ChildCollections)
+			for (const FCollectionNameType& ChildCollection : ChildCollections)
 			{
 				// Use "Collections" as the root of the path to avoid this being confused with other asset view folders - see ContentBrowserUtils::IsCollectionPath
 				FoldersToAdd.Add(FString::Printf(TEXT("/Collections/%s/%s"), ECollectionShareType::ToString(ChildCollection.Type), *ChildCollection.Name.ToString()));
@@ -2405,9 +2412,9 @@ void SAssetView::RefreshFolders()
 		}
 	}
 
-	if(FoldersToAdd.Num() > 0)
+	if (FoldersToAdd.Num() > 0)
 	{
-		for(const FString& FolderPath : FoldersToAdd)
+		for (const FString& FolderPath : FoldersToAdd)
 		{
 			FilteredAssetItems.Add(MakeShareable(new FAssetViewFolder(FolderPath)));
 			Folders.Add(FolderPath);
@@ -2564,7 +2571,7 @@ void SAssetView::SetMajorityAssetType(FName NewMajorityAssetType)
 								else
 								{
 									// If the tag name corresponds to a property name, use the property tooltip
-									UProperty* Property = FindField<UProperty>(TypeClass, TagName);
+									FProperty* Property = FindFProperty<FProperty>(TypeClass, TagName);
 									TooltipText = (Property != nullptr) ? Property->GetToolTipText() : FText::FromString(FName::NameToDisplayString(TagName.ToString(), false));
 								}
 
@@ -2671,30 +2678,23 @@ void SAssetView::ProcessRecentlyAddedAssets()
 		double TickStartTime = FPlatformTime::Seconds();
 		bool bNeedsRefresh = false;
 
-		TSet<FName> ExistingObjectPaths;
-		for ( auto AssetIt = AssetItems.CreateConstIterator(); AssetIt; ++AssetIt )
-		{
-			ExistingObjectPaths.Add((*AssetIt).ObjectPath);
-		}
-
-		for ( auto AssetIt = QueriedAssetItems.CreateConstIterator(); AssetIt; ++AssetIt )
-		{
-			ExistingObjectPaths.Add((*AssetIt).ObjectPath);
-		}
-
 		int32 AssetIdx = 0;
 		for ( ; AssetIdx < FilteredRecentlyAddedAssets.Num(); ++AssetIdx )
 		{
+			if ((FPlatformTime::Seconds() - TickStartTime) > MaxSecondsPerFrame)
+			{
+				break;
+			}
+
 			const FAssetData& AssetData = FilteredRecentlyAddedAssets[AssetIdx];
-			if ( !ExistingObjectPaths.Contains(AssetData.ObjectPath) )
+			if ( !AssetItems.Find(AssetData.ObjectPath) )
 			{
 				if ( AssetData.AssetClass != UObjectRedirector::StaticClass()->GetFName() || AssetData.IsUAsset() )
 				{
 					if ( !OnShouldFilterAsset.IsBound() || !OnShouldFilterAsset.Execute(AssetData) )
 					{
 						// Add the asset to the list
-						int32 AddedAssetIdx = AssetItems.Add(AssetData);
-						ExistingObjectPaths.Add(AssetData.ObjectPath);
+						AssetItems.Add(AssetData);
 						if (!IsFrontendFilterActive() || PassesCurrentFrontendFilter(AssetData))
 						{
 							FilteredAssetItems.Add(MakeShareable(new FAssetViewAsset(AssetData)));
@@ -2703,13 +2703,6 @@ void SAssetView::ProcessRecentlyAddedAssets()
 						}
 					}
 				}
-			}
-
-			if ( (FPlatformTime::Seconds() - TickStartTime) > MaxSecondsPerFrame)
-			{
-				// Increment the index to properly trim the buffer below
-				++AssetIdx;
-				break;
 			}
 		}
 
@@ -2758,7 +2751,8 @@ void SAssetView::OnAssetRegistryPathAdded(const FString& Path)
 		const bool bDisplayL10N = IsShowingLocalizedContent();
 		if ((bDisplayEmpty || EmptyFolderVisibilityManager->ShouldShowPath(Path)) &&  
 			(bDisplayDev || !ContentBrowserUtils::IsDevelopersFolder(Path)) && 
-			(bDisplayL10N || !ContentBrowserUtils::IsLocalizationFolder(Path))
+			(bDisplayL10N || !ContentBrowserUtils::IsLocalizationFolder(Path)) &&
+			(!FolderBlacklist.IsValid() || FolderBlacklist->PassesStartsWithFilter(Path))
 			)
 		{
 			for (const FName& SourcePathName : SourcesData.PackagePaths)
@@ -2792,13 +2786,13 @@ void SAssetView::OnAssetRegistryPathAdded(const FString& Path)
 void SAssetView::OnAssetRegistryPathRemoved(const FString& Path)
 {
 	FString* Folder = Folders.Find(Path);
-	if(Folder != NULL)
+	if (Folder != nullptr)
 	{
 		Folders.Remove(Path);
 
 		for (int32 AssetIdx = 0; AssetIdx < FilteredAssetItems.Num(); ++AssetIdx)
 		{
-			if(FilteredAssetItems[AssetIdx]->GetType() == EAssetItemType::Folder)
+			if (FilteredAssetItems[AssetIdx]->GetType() == EAssetItemType::Folder)
 			{
 				if ( StaticCastSharedPtr<FAssetViewFolder>(FilteredAssetItems[AssetIdx])->FolderPath == Path )
 				{
@@ -2819,17 +2813,7 @@ void SAssetView::OnFolderPopulated(const FString& Path)
 
 void SAssetView::RemoveAssetByPath( const FName& ObjectPath )
 {
-	bool bFoundAsset = false;
-	for (int32 AssetIdx = 0; AssetIdx < AssetItems.Num(); ++AssetIdx)
-	{
-		if ( AssetItems[AssetIdx].ObjectPath == ObjectPath )
-		{
-			// Found the asset in the cached list, remove it
-			AssetItems.RemoveAt(AssetIdx);
-			bFoundAsset = true;
-			break;
-		}
-	}
+	bool bFoundAsset = AssetItems.Remove(ObjectPath) > 0;
 
 	if ( bFoundAsset )
 	{
@@ -2850,17 +2834,8 @@ void SAssetView::RemoveAssetByPath( const FName& ObjectPath )
 	}
 	else
 	{
-		//Make sure we don't have the item still queued up for processing
-		for (int32 AssetIdx = 0; AssetIdx < QueriedAssetItems.Num(); ++AssetIdx)
-		{
-			if ( QueriedAssetItems[AssetIdx].ObjectPath == ObjectPath )
-			{
-				// Found the asset in the cached list, remove it
-				QueriedAssetItems.RemoveAt(AssetIdx);
-				bFoundAsset = true;
-				break;
-			}
-		}
+		// Make sure we don't have the item still queued up for processing
+		QueriedAssetItems.Remove(ObjectPath);
 	}
 }
 
@@ -2988,12 +2963,42 @@ bool SAssetView::PassesCurrentFrontendFilter(const FAssetData& Item) const
 	return true;
 }
 
-bool SAssetView::PassesCurrentBackendFilter(const FAssetData& Item) const
+void SAssetView::RunAssetsThroughBlacklists(TArray<FAssetData>& InOutAssetDataList) const
 {
-	TArray<FAssetData> AssetDataList;
-	AssetDataList.Add(Item);
-	RunAssetsThroughBackendFilter(AssetDataList);
-	return AssetDataList.Num() == 1;
+	if (InOutAssetDataList.Num() == 0)
+	{
+		return;
+	}
+
+	const bool bClassFiltering = AssetClassBlacklist.IsValid() && AssetClassBlacklist->HasFiltering();
+	if ((FolderBlacklist.IsValid() && FolderBlacklist->HasFiltering()) || bClassFiltering)
+	{
+		if ((FolderBlacklist.IsValid() && FolderBlacklist->IsBlacklistAll()) || (bClassFiltering && AssetClassBlacklist->IsBlacklistAll()))
+		{
+			InOutAssetDataList.Reset();
+			return;
+		}
+
+		// Expand filter to include subclasses so an exact FName comparison can occur
+		FBlacklistNames ExpandedClassesBlacklist;
+		if (bClassFiltering)
+		{
+			AssetViewUtils::ExpandClassesBlacklist(*AssetClassBlacklist.Get(), ExpandedClassesBlacklist);
+		}
+
+		InOutAssetDataList.RemoveAll([this, &ExpandedClassesBlacklist](const FAssetData& AssetData)
+		{
+			if (!ExpandedClassesBlacklist.PassesFilter(AssetData.AssetClass))
+			{
+				return true;
+			}
+			else if (FolderBlacklist.IsValid() && !FolderBlacklist->PassesStartsWithFilter(AssetData.PackagePath))
+			{
+				return true;
+			}
+			return false;
+		});
+	}
 }
 
 void SAssetView::RunAssetsThroughBackendFilter(TArray<FAssetData>& InOutAssetDataList) const
@@ -3002,21 +3007,22 @@ void SAssetView::RunAssetsThroughBackendFilter(TArray<FAssetData>& InOutAssetDat
 	const bool bUsingFolders = IsShowingFolders();
 	const bool bIsDynamicCollection = SourcesData.IsDynamicCollection();
 	FARFilter Filter = SourcesData.MakeFilter(bRecurse, bUsingFolders);
-	
-	if ( SourcesData.HasCollections() && Filter.ObjectPaths.Num() == 0 && !bIsDynamicCollection )
+
+	if (SourcesData.HasCollections() && Filter.ObjectPaths.Num() == 0 && !bIsDynamicCollection)
 	{
 		// This is an empty collection, no asset will pass the check
 		InOutAssetDataList.Reset();
 	}
 	else
 	{
-		// Actually append the backend filter
-		Filter.Append(BackendFilter);
+		AppendBackendFilter(Filter);
 
 		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
 		AssetRegistryModule.Get().RunAssetsThroughFilter(InOutAssetDataList, Filter);
 
-		if ( SourcesData.HasCollections() && !bIsDynamicCollection )
+		RunAssetsThroughBlacklists(InOutAssetDataList);
+
+		if (SourcesData.HasCollections() && !bIsDynamicCollection)
 		{
 			// Include objects from child collections if we're recursing
 			const ECollectionRecursionFlags::Flags CollectionRecursionMode = (Filter.bRecursivePaths) ? ECollectionRecursionFlags::SelfAndChildren : ECollectionRecursionFlags::Self;
@@ -3028,11 +3034,11 @@ void SAssetView::RunAssetsThroughBackendFilter(TArray<FAssetData>& InOutAssetDat
 				CollectionManagerModule.Get().GetObjectsInCollection(Collection.Name, Collection.Type, CollectionObjectPaths, CollectionRecursionMode);
 			}
 
-			for ( int32 AssetDataIdx = InOutAssetDataList.Num() - 1; AssetDataIdx >= 0; --AssetDataIdx )
+			for (int32 AssetDataIdx = InOutAssetDataList.Num() - 1; AssetDataIdx >= 0; --AssetDataIdx)
 			{
 				const FAssetData& AssetData = InOutAssetDataList[AssetDataIdx];
 
-				if ( !CollectionObjectPaths.Contains( AssetData.ObjectPath ) )
+				if (!CollectionObjectPaths.Contains(AssetData.ObjectPath))
 				{
 					InOutAssetDataList.RemoveAtSwap(AssetDataIdx);
 				}
@@ -3083,6 +3089,8 @@ FSlateColor SAssetView::GetViewButtonForegroundColor() const
 
 TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 {
+	SAssetView::RegisterGetViewButtonMenu();
+
 	// Get all menu extenders for this context menu from the content browser module
 	FContentBrowserModule& ContentBrowserModule = FModuleManager::GetModuleChecked<FContentBrowserModule>( TEXT("ContentBrowser") );
 	TArray<FContentBrowserMenuExtender> MenuExtenderDelegates = ContentBrowserModule.GetAllAssetViewViewMenuExtenders();
@@ -3097,11 +3105,37 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 	}
 	TSharedPtr<FExtender> MenuExtender = FExtender::Combine(Extenders);
 
-	FMenuBuilder MenuBuilder(/*bInShouldCloseWindowAfterMenuSelection=*/true, NULL, MenuExtender, /*bCloseSelfOnly=*/ true);
+	UContentBrowserAssetViewContextMenuContext* Context = NewObject<UContentBrowserAssetViewContextMenuContext>();
+	Context->AssetView = SharedThis(this);
+	FToolMenuContext MenuContext(nullptr, MenuExtender, Context);
+	return UToolMenus::Get()->GenerateWidget("ContentBrowser.AssetViewOptions", MenuContext);
+}
 
-	MenuBuilder.BeginSection("AssetViewType", LOCTEXT("ViewTypeHeading", "View Type"));
+void SAssetView::RegisterGetViewButtonMenu()
+{
+	if (!UToolMenus::Get()->IsMenuRegistered("ContentBrowser.AssetViewOptions"))
 	{
-		MenuBuilder.AddMenuEntry(
+		UToolMenu* Menu = UToolMenus::Get()->RegisterMenu("ContentBrowser.AssetViewOptions");
+		Menu->bCloseSelfOnly = true;
+		Menu->AddDynamicSection("DynamicContent", FNewToolMenuDelegate::CreateLambda([](UToolMenu* InMenu)
+		{
+			if (UContentBrowserAssetViewContextMenuContext* Context = InMenu->FindContext<UContentBrowserAssetViewContextMenuContext>())
+			{
+				if (Context->AssetView.IsValid())
+				{
+					Context->AssetView.Pin()->PopulateViewButtonMenu(InMenu);
+				}
+			}
+		}));
+	}
+}
+
+void SAssetView::PopulateViewButtonMenu(UToolMenu* Menu)
+{
+	{
+		FToolMenuSection& Section = Menu->AddSection("AssetViewType", LOCTEXT("ViewTypeHeading", "View Type"));
+		Section.AddMenuEntry(
+			"TileView",
 			LOCTEXT("TileViewOption", "Tiles"),
 			LOCTEXT("TileViewOptionToolTip", "View assets as tiles in a grid."),
 			FSlateIcon(),
@@ -3110,11 +3144,11 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction(),
 				FIsActionChecked::CreateSP( this, &SAssetView::IsCurrentViewType, EAssetViewType::Tile )
 				),
-			NAME_None,
 			EUserInterfaceActionType::RadioButton
 			);
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"ListView",
 			LOCTEXT("ListViewOption", "List"),
 			LOCTEXT("ListViewOptionToolTip", "View assets in a list with thumbnails."),
 			FSlateIcon(),
@@ -3123,11 +3157,11 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction(),
 				FIsActionChecked::CreateSP( this, &SAssetView::IsCurrentViewType, EAssetViewType::List )
 				),
-			NAME_None,
 			EUserInterfaceActionType::RadioButton
 			);
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"ColumnView",
 			LOCTEXT("ColumnViewOption", "Columns"),
 			LOCTEXT("ColumnViewOptionToolTip", "View assets in a list with columns of details."),
 			FSlateIcon(),
@@ -3136,17 +3170,17 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction(),
 				FIsActionChecked::CreateSP( this, &SAssetView::IsCurrentViewType, EAssetViewType::Column )
 				),
-			NAME_None,
 			EUserInterfaceActionType::RadioButton
 			);
 	}
-	MenuBuilder.EndSection();
 
-	MenuBuilder.BeginSection("View", LOCTEXT("ViewHeading", "View"));
 	{
-		auto CreateShowFoldersSubMenu = [this](FMenuBuilder& SubMenuBuilder)
+		FToolMenuSection& Section = Menu->AddSection("View", LOCTEXT("ViewHeading", "View"));
+		auto CreateShowFoldersSubMenu = [this](UToolMenu* SubMenu)
 		{
-			SubMenuBuilder.AddMenuEntry(
+			FToolMenuSection& ShowEmptyFoldersSection = SubMenu->AddSection("ShowEmptyFolders");
+			ShowEmptyFoldersSection.AddMenuEntry(
+				"ShowEmptyFolders",
 				LOCTEXT("ShowEmptyFoldersOption", "Show Empty Folders"),
 				LOCTEXT("ShowEmptyFoldersOptionToolTip", "Show empty folders in the view as well as assets?"),
 				FSlateIcon(),
@@ -3155,25 +3189,25 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 					FCanExecuteAction::CreateSP( this, &SAssetView::IsToggleShowEmptyFoldersAllowed ),
 					FIsActionChecked::CreateSP( this, &SAssetView::IsShowingEmptyFolders )
 				),
-				NAME_None,
 				EUserInterfaceActionType::ToggleButton
 			);
 		};
 
-		MenuBuilder.AddSubMenu(
+		Section.AddEntry(FToolMenuEntry::InitSubMenu(
+			"ShowFolders",
 			LOCTEXT("ShowFoldersOption", "Show Folders"),
 			LOCTEXT("ShowFoldersOptionToolTip", "Show folders in the view as well as assets?"),
-			FNewMenuDelegate::CreateLambda(CreateShowFoldersSubMenu),
+			FNewToolMenuDelegate::CreateLambda(CreateShowFoldersSubMenu),
 			FUIAction(
 				FExecuteAction::CreateSP( this, &SAssetView::ToggleShowFolders ),
 				FCanExecuteAction::CreateSP( this, &SAssetView::IsToggleShowFoldersAllowed ),
 				FIsActionChecked::CreateSP( this, &SAssetView::IsShowingFolders )
 			),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
-		);
+		));
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"ShowFavorite",
 			LOCTEXT("ShowFavoriteOptions", "Show Favorites"),
 			LOCTEXT("ShowFavoriteOptionToolTip", "Show the favorite folders in the view?"),
 			FSlateIcon(),
@@ -3182,11 +3216,24 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction::CreateSP(this, &SAssetView::IsToggleShowFavoritesAllowed),
 				FIsActionChecked::CreateSP(this, &SAssetView::IsShowingFavorites)
 			),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 		);
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"DockCollections",
+			LOCTEXT("DockCollectionsOptions", "Dock Collections"),
+			LOCTEXT("DockCollectionsOptionToolTip", "Dock the collections view under the path view?"),
+			FSlateIcon(),
+			FUIAction(
+				FExecuteAction::CreateSP(this, &SAssetView::ToggleDockCollections),
+				FCanExecuteAction::CreateSP(this, &SAssetView::IsToggleDockCollectionsAllowed),
+				FIsActionChecked::CreateSP(this, &SAssetView::HasDockedCollections)
+			),
+			EUserInterfaceActionType::ToggleButton
+		);
+
+		Section.AddMenuEntry(
+			"FilterRecursively",
 			LOCTEXT("FilterRecursivelyOption", "Filter Recursively"),
 			LOCTEXT("FilterRecursivelyOptionToolTip", "Should filters apply recursively in the view?"),
 			FSlateIcon(),
@@ -3195,15 +3242,14 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction::CreateSP(this, &SAssetView::IsToggleFilteringRecursivelyAllowed),
 				FIsActionChecked::CreateSP(this, &SAssetView::IsFilteringRecursively)
 			),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 		);
 	}
-	MenuBuilder.EndSection();
 
-	MenuBuilder.BeginSection("Content", LOCTEXT("ContentHeading", "Content"));
 	{
-		MenuBuilder.AddMenuEntry(
+		FToolMenuSection& Section = Menu->AddSection("Content", LOCTEXT("ContentHeading", "Content"));
+		Section.AddMenuEntry(
+			"ShowCppClasses",
 			LOCTEXT("ShowCppClassesOption", "Show C++ Classes"),
 			LOCTEXT("ShowCppClassesOptionToolTip", "Show C++ classes in the view?"),
 			FSlateIcon(),
@@ -3212,11 +3258,11 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction::CreateSP( this, &SAssetView::IsToggleShowCppContentAllowed ),
 				FIsActionChecked::CreateSP( this, &SAssetView::IsShowingCppContent )
 			),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 		);
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"ShowDevelopersContent",
 			LOCTEXT("ShowDevelopersContentOption", "Show Developers Content"),
 			LOCTEXT("ShowDevelopersContentOptionToolTip", "Show developers content in the view?"),
 			FSlateIcon(),
@@ -3225,24 +3271,24 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction::CreateSP( this, &SAssetView::IsToggleShowDevelopersContentAllowed ),
 				FIsActionChecked::CreateSP( this, &SAssetView::IsShowingDevelopersContent )
 				),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 		);
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"ShowEngineFolder",
 			LOCTEXT("ShowEngineFolderOption", "Show Engine Content"),
 			LOCTEXT("ShowEngineFolderOptionToolTip", "Show engine content in the view?"),
 			FSlateIcon(),
 			FUIAction(
 				FExecuteAction::CreateSP( this, &SAssetView::ToggleShowEngineContent ),
-				FCanExecuteAction(),
+				FCanExecuteAction::CreateSP( this, &SAssetView::IsToggleShowEngineContentAllowed),
 				FIsActionChecked::CreateSP( this, &SAssetView::IsShowingEngineContent )
 			),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 		);
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"ShowPluginFolder",
 			LOCTEXT("ShowPluginFolderOption", "Show Plugin Content"),
 			LOCTEXT("ShowPluginFolderOptionToolTip", "Show plugin content in the view?"),
 			FSlateIcon(),
@@ -3251,11 +3297,11 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction(),
 				FIsActionChecked::CreateSP( this, &SAssetView::IsShowingPluginContent )
 			),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 		);
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"ShowLocalizedContent",
 			LOCTEXT("ShowLocalizedContentOption", "Show Localized Content"),
 			LOCTEXT("ShowLocalizedContentOptionToolTip", "Show localized content in the view?"),
 			FSlateIcon(),
@@ -3264,15 +3310,14 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction::CreateSP(this, &SAssetView::IsToggleShowLocalizedContentAllowed),
 				FIsActionChecked::CreateSP(this, &SAssetView::IsShowingLocalizedContent)
 				),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 			);
 	}
-	MenuBuilder.EndSection();
 
-	MenuBuilder.BeginSection("Search", LOCTEXT("SearchHeading", "Search"));
 	{
-		MenuBuilder.AddMenuEntry(
+		FToolMenuSection& Section = Menu->AddSection("Search", LOCTEXT("SearchHeading", "Search"));
+		Section.AddMenuEntry(
+			"IncludeClassName",
 			LOCTEXT("IncludeClassNameOption", "Search Asset Class Names"),
 			LOCTEXT("IncludeClassesNameOptionTooltip", "Include asset type names in search criteria?  (e.g. Blueprint, Texture, Sound)"),
 			FSlateIcon(),
@@ -3281,11 +3326,11 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction::CreateSP(this, &SAssetView::IsToggleIncludeClassNamesAllowed),
 				FIsActionChecked::CreateSP(this, &SAssetView::IsIncludingClassNames)
 			),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 		);
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"IncludeAssetPath",
 			LOCTEXT("IncludeAssetPathOption", "Search Asset Path"),
 			LOCTEXT("IncludeAssetPathOptionTooltip", "Include entire asset path in search criteria?"),
 			FSlateIcon(),
@@ -3294,11 +3339,11 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction::CreateSP(this, &SAssetView::IsToggleIncludeAssetPathsAllowed),
 				FIsActionChecked::CreateSP(this, &SAssetView::IsIncludingAssetPaths)
 			),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 		);
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"IncludeCollectionName",
 			LOCTEXT("IncludeCollectionNameOption", "Search Collection Names"),
 			LOCTEXT("IncludeCollectionNameOptionTooltip", "Include Collection names in search criteria?"),
 			FSlateIcon(),
@@ -3307,15 +3352,14 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction::CreateSP(this, &SAssetView::IsToggleIncludeCollectionNamesAllowed),
 				FIsActionChecked::CreateSP(this, &SAssetView::IsIncludingCollectionNames)
 			),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 		);
 	}
-	MenuBuilder.EndSection();
 
-	MenuBuilder.BeginSection("AssetThumbnails", LOCTEXT("ThumbnailsHeading", "Thumbnails"));
 	{
-		MenuBuilder.AddWidget(
+		FToolMenuSection& Section = Menu->AddSection("AssetThumbnails", LOCTEXT("ThumbnailsHeading", "Thumbnails"));
+		Section.AddEntry(FToolMenuEntry::InitWidget(
+			"ThumbnailScale",
 			SNew(SSlider)
 				.ToolTipText( LOCTEXT("ThumbnailScaleToolTip", "Adjust the size of thumbnails.") )
 				.Value( this, &SAssetView::GetThumbnailScale )
@@ -3323,9 +3367,10 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				.Locked( this, &SAssetView::IsThumbnailScalingLocked ),
 			LOCTEXT("ThumbnailScaleLabel", "Scale"),
 			/*bNoIndent=*/true
-			);
+			));
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"ThumbnailEditMode",
 			LOCTEXT("ThumbnailEditModeOption", "Thumbnail Edit Mode"),
 			LOCTEXT("ThumbnailEditModeOptionToolTip", "Toggle thumbnail editing mode. When in this mode you can rotate the camera on 3D thumbnails by dragging them."),
 			FSlateIcon(),
@@ -3334,11 +3379,11 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction::CreateSP( this, &SAssetView::IsThumbnailEditModeAllowed ),
 				FIsActionChecked::CreateSP( this, &SAssetView::IsThumbnailEditMode )
 				),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 			);
 
-		MenuBuilder.AddMenuEntry(
+		Section.AddMenuEntry(
+			"RealTimeThumbnails",
 			LOCTEXT("RealTimeThumbnailsOption", "Real-Time Thumbnails"),
 			LOCTEXT("RealTimeThumbnailsOptionToolTip", "Renders the assets thumbnails in real-time"),
 			FSlateIcon(),
@@ -3347,17 +3392,16 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				FCanExecuteAction::CreateSP( this, &SAssetView::CanShowRealTimeThumbnails ),
 				FIsActionChecked::CreateSP( this, &SAssetView::IsShowingRealTimeThumbnails )
 			),
-			NAME_None,
 			EUserInterfaceActionType::ToggleButton
 			);
 	}
-	MenuBuilder.EndSection();
 
 	if (GetColumnViewVisibility() == EVisibility::Visible)
 	{
-		MenuBuilder.BeginSection("AssetColumns", LOCTEXT("ToggleColumnsHeading", "Columns"));
 		{
-			MenuBuilder.AddSubMenu(
+			FToolMenuSection& Section = Menu->AddSection("AssetColumns", LOCTEXT("ToggleColumnsHeading", "Columns"));
+			Section.AddSubMenu(
+				"ToggleColumns",
 				LOCTEXT("ToggleColumnsMenu", "Toggle columns"),
 				LOCTEXT("ToggleColumnsMenuTooltip", "Show or hide specific columns."),
 				FNewMenuDelegate::CreateSP(this, &SAssetView::FillToggleColumnsMenu),
@@ -3366,28 +3410,25 @@ TSharedRef<SWidget> SAssetView::GetViewButtonContent()
 				false
 				);
 
-			MenuBuilder.AddMenuEntry(
+			Section.AddMenuEntry(
+				"ResetColumns",
 				LOCTEXT("ResetColumns", "Reset Columns"),
 				LOCTEXT("ResetColumnsToolTip", "Reset all columns to be visible again."),
 				FSlateIcon(),
 				FUIAction(FExecuteAction::CreateSP(this, &SAssetView::ResetColumns)),
-				NAME_None,
 				EUserInterfaceActionType::Button
 				);
 
-			MenuBuilder.AddMenuEntry(
+			Section.AddMenuEntry(
+				"ExportColumns",
 				LOCTEXT("ExportColumns", "Export to CSV"),
 				LOCTEXT("ExportColumnsToolTip", "Export column data to CSV."),
 				FSlateIcon(),
 				FUIAction(FExecuteAction::CreateSP(this, &SAssetView::ExportColumns)),
-				NAME_None,
 				EUserInterfaceActionType::Button
 			);
 		}
-		MenuBuilder.EndSection();
 	}
-
-	return MenuBuilder.MakeWidget();
 }
 
 void SAssetView::ToggleShowFolders()
@@ -3484,7 +3525,7 @@ void SAssetView::ToggleShowEngineContent()
 
 bool SAssetView::IsShowingEngineContent() const
 {
-	return GetDefault<UContentBrowserSettings>()->GetDisplayEngineFolder();
+	return bForceShowEngineContent || GetDefault<UContentBrowserSettings>()->GetDisplayEngineFolder();
 }
 
 void SAssetView::ToggleShowDevelopersContent()
@@ -3508,6 +3549,11 @@ void SAssetView::ToggleShowDevelopersContent()
 bool SAssetView::IsToggleShowDevelopersContentAllowed() const
 {
 	return bCanShowDevelopersFolder;
+}
+
+bool SAssetView::IsToggleShowEngineContentAllowed() const
+{
+	return !bForceShowEngineContent;
 }
 
 bool SAssetView::IsShowingDevelopersContent() const
@@ -3546,6 +3592,23 @@ bool SAssetView::IsToggleShowFavoritesAllowed() const
 bool SAssetView::IsShowingFavorites() const
 {
 	return IsToggleShowFavoritesAllowed() && GetDefault<UContentBrowserSettings>()->GetDisplayFavorites();
+}
+
+void SAssetView::ToggleDockCollections()
+{
+	const bool bDockCollections = GetDefault<UContentBrowserSettings>()->GetDockCollections();
+	GetMutableDefault<UContentBrowserSettings>()->SetDockCollections(!bDockCollections);
+	GetMutableDefault<UContentBrowserSettings>()->PostEditChange();
+}
+
+bool SAssetView::IsToggleDockCollectionsAllowed() const
+{
+	return bCanDockCollections;
+}
+
+bool SAssetView::HasDockedCollections() const
+{
+	return IsToggleDockCollectionsAllowed() && GetDefault<UContentBrowserSettings>()->GetDockCollections();
 }
 
 void SAssetView::ToggleShowCppContent()

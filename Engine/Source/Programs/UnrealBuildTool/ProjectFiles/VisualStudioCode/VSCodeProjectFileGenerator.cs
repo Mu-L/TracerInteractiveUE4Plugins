@@ -1,4 +1,4 @@
-﻿// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -280,9 +280,16 @@ namespace UnrealBuildTool
 			WriteTasksFile(ProjectData);
 			WriteLaunchFile(ProjectData);
 			WriteWorkspaceSettingsFile(Projects);
-			WriteCppPropertiesFile(ProjectData);
+			WriteCppPropertiesFile(VSCodeDir, false, ProjectData);
 			WriteWorkspaceFile(ProjectData);
 			//WriteProjectDataFile(ProjectData);
+
+			if (bForeignProject && bIncludeEngineSource)
+			{
+				// for installed builds we need to write the cpp properties file under the installed engine as well for intellisense to work
+				DirectoryReference Ue4CodeDirectory = DirectoryReference.Combine(UnrealBuildTool.RootDirectory, ".vscode");
+				WriteCppPropertiesFile(Ue4CodeDirectory, true, ProjectData);
+			}
 
 			return true;
 		}
@@ -591,8 +598,10 @@ namespace UnrealBuildTool
 			OutFile.Write(FileReference.Combine(VSCodeDir, "unreal.json"));
 		}
 
-		private void WriteCppPropertiesFile(ProjectData Projects)
+		private void WriteCppPropertiesFile(DirectoryReference OutputDirectory, bool RewriteIncludePaths, ProjectData Projects)
 		{
+			DirectoryReference.CreateDirectory(OutputDirectory);
+
 			JsonFile OutFile = new JsonFile();
 
 			OutFile.BeginRootObject();
@@ -605,9 +614,16 @@ namespace UnrealBuildTool
 
 						OutFile.BeginArray("includePath");
 						{
-							foreach (var Path in Projects.CombinedIncludePaths)
+							if (!RewriteIncludePaths)
 							{
-								OutFile.AddUnnamedField(Path);
+								foreach (var Path in Projects.CombinedIncludePaths)
+								{
+									OutFile.AddUnnamedField(Path);
+								}
+							}
+							else
+							{
+								OutFile.AddUnnamedField("${workspaceFolder}/**");
 							}
 						}
 						OutFile.EndArray();
@@ -646,7 +662,7 @@ namespace UnrealBuildTool
 			}
 			OutFile.EndRootObject();
 
-			OutFile.Write(FileReference.Combine(VSCodeDir, "c_cpp_properties.json"));
+			OutFile.Write(FileReference.Combine(OutputDirectory, "c_cpp_properties.json"));
 		}
 
 		private void WriteNativeTask(ProjectData.Project InProject, JsonFile OutFile)
@@ -662,7 +678,7 @@ namespace UnrealBuildTool
 						string Command = BaseCommand == "Rebuild" ? "Build" : BaseCommand;
 						string TaskName = String.Format("{0} {1} {2} {3}", Target.Name, BuildProduct.Platform.ToString(), BuildProduct.Config, BaseCommand);
 						string CleanTaskName = String.Format("{0} {1} {2} {3}", Target.Name, BuildProduct.Platform.ToString(), BuildProduct.Config, "Clean");
-						List<string> ExtraParams = new List<string>();
+						//List<string> ExtraParams = new List<string>();
 
 						OutFile.BeginObject();
 						{
@@ -885,9 +901,9 @@ namespace UnrealBuildTool
 			FileReference TargetFilePath = Target.TargetFilePath;
 			string TargetName = TargetFilePath == null ? Project.ProjectFilePath.GetFileNameWithoutExtension() : TargetFilePath.GetFileNameWithoutAnyExtensions();
 			string UBTPlatformName = Platform.ToString();
-			string UBTConfigurationName = Configuration.ToString();
+			//string UBTConfigurationName = Configuration.ToString();
 
-			string ProjectName = Project.ProjectFilePath.GetFileNameWithoutExtension();
+			//string ProjectName = Project.ProjectFilePath.GetFileNameWithoutExtension();
 
 			// Setup output path
 			UEBuildPlatform BuildPlatform = UEBuildPlatform.GetBuildPlatform(Platform);
@@ -1289,7 +1305,7 @@ namespace UnrealBuildTool
 				WorkspaceFile.BeginArray("recommendations");
 				{
 					WorkspaceFile.AddUnnamedField("ms-vscode.cpptools");
-					WorkspaceFile.AddUnnamedField("ms-vscode.csharp");
+					WorkspaceFile.AddUnnamedField("ms-dotnettools.csharp");
 
 					// If the platform we run the generator on uses mono, there are additional debugging extensions to add.
 					if (Utils.IsRunningOnMono)

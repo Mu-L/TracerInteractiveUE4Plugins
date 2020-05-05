@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SPlacementModeTools.h"
 #include "Application/SlateApplicationBase.h"
@@ -298,7 +298,10 @@ void SPlacementModeTools::Construct( const FArguments& InArgs )
 	bNeedsUpdate = true;
 
 	FPlacementMode* PlacementEditMode = (FPlacementMode*)GLevelEditorModeTools().GetActiveMode( FBuiltinEditorModes::EM_Placement );
-	PlacementEditMode->AddValidFocusTargetForPlacement( SharedThis( this ) );
+	if (PlacementEditMode)
+	{
+		PlacementEditMode->AddValidFocusTargetForPlacement(SharedThis(this));
+	}
 
 	SearchTextFilter = MakeShareable(new FPlacementAssetEntryTextFilter(
 		FPlacementAssetEntryTextFilter::FItemToStringArray::CreateStatic(&PlacementViewFilter::GetBasicStrings)
@@ -599,7 +602,11 @@ FReply SPlacementModeTools::OnKeyDown( const FGeometry& MyGeometry, const FKeyEv
 	if ( InKeyEvent.GetKey() == EKeys::Escape )
 	{
 		FPlacementMode* PlacementEditMode = (FPlacementMode*)GLevelEditorModeTools().GetActiveMode( FBuiltinEditorModes::EM_Placement );
-		PlacementEditMode->StopPlacing();
+		// Catch potential nullptr
+		if (ensureMsgf(PlacementEditMode, TEXT("PlacementEditMode was null, but SPlacementModeTools is still accepting KeyDown events")))
+		{
+			PlacementEditMode->StopPlacing();
+		}
 		Reply = FReply::Handled();
 	}
 

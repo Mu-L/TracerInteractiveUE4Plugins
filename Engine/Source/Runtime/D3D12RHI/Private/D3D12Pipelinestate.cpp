@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // Implementation of D3D12 Pipelinestate related functions
 
@@ -96,6 +96,8 @@ FD3D12LowLevelGraphicsPipelineStateDesc GetLowLevelGraphicsPipelineStateDesc(con
 	Desc.Desc.DepthStencilState.DepthBoundsTestEnable = GSupportsDepthBoundsTest && Initializer.bDepthBounds;
 #endif
 
+	Desc.bFromPSOFileCache = Initializer.bFromPSOFileCache;
+
 	return Desc;
 }
 
@@ -123,14 +125,16 @@ FD3D12PipelineStateWorker::FD3D12PipelineStateWorker(FD3D12Adapter* Adapter, con
 	: FD3D12AdapterChild(Adapter)
 	, bIsGraphics(false)
 {
-	CreationArgs.ComputeArgs.Init(InArgs.Args);
+	CreationArgs.ComputeArgs = new ComputePipelineCreationArgs_POD();
+	CreationArgs.ComputeArgs->Init(InArgs.Args);
 };
 
 FD3D12PipelineStateWorker::FD3D12PipelineStateWorker(FD3D12Adapter* Adapter, const GraphicsPipelineCreationArgs& InArgs)
 	: FD3D12AdapterChild(Adapter)
 	, bIsGraphics(true)
 {
-	CreationArgs.GraphicsArgs.Init(InArgs.Args);
+	CreationArgs.GraphicsArgs = new GraphicsPipelineCreationArgs_POD();
+	CreationArgs.GraphicsArgs->Init(InArgs.Args);
 };
 
 /// @endcond
@@ -253,8 +257,8 @@ FD3D12PipelineStateCacheBase::~FD3D12PipelineStateCacheBase()
 FD3D12PipelineState::FD3D12PipelineState(FD3D12Adapter* Parent)
 	: FD3D12AdapterChild(Parent)
 	, FD3D12MultiNodeGPUObject(FRHIGPUMask::All(), FRHIGPUMask::All()) //Create on all, visible on all
-	, CachedPipelineState(nullptr)
 	, Worker(nullptr)
+	, bInitialized(false)
 {
 	INC_DWORD_STAT(STAT_D3D12NumPSOs);
 }
@@ -279,34 +283,40 @@ ID3D12PipelineState* FD3D12PipelineState::InternalGetPipelineState()
 
 	if (Worker)
 	{
+		check(!bInitialized);
+
 		Worker->EnsureCompletion(true);
 		check(Worker->IsWorkDone());
 
 		PipelineState = Worker->GetTask().PSO.GetReference();
-		CachedPipelineState = PipelineState.GetReference();
 
 		// Cleanup the worker.
 		delete Worker;
 		Worker = nullptr;
-	}
 
-	// Busy-wait for the PSO. This avoids giving up our time slice.
-	if (CachedPipelineState == nullptr)
+		bInitialized = true;
+	}
+	else
 	{
-		const double StartTime = FPlatformTime::Seconds();
-		static const float BusyWaitTimeoutInMs = CVarPSOStallTimeoutInMs.GetValueOnAnyThread();
-		while (PipelineState.GetReference() == nullptr)
+		// Busy-wait for the PSO. This avoids giving up our time slice.
+		if (!bInitialized)
 		{
-			if (((FPlatformTime::Seconds() - StartTime) * 1000) > BusyWaitTimeoutInMs)
+			const double StartTime = FPlatformTime::Seconds();
+			static const float BusyWaitTimeoutInMs = CVarPSOStallTimeoutInMs.GetValueOnAnyThread();
+			while (!bInitialized)
 			{
-				UE_LOG(LogD3D12RHI, Fatal, TEXT("Waiting for PSO creation failed to complete within the timeout interval (%.3f ms)."), BusyWaitTimeoutInMs);
+				const double Time = (FPlatformTime::Seconds() - StartTime) * 1000.0;
+
+				if (Time > BusyWaitTimeoutInMs)
+				{
+					UE_LOG(LogD3D12RHI, Fatal, TEXT("Waiting for PSO creation failed to complete within the timeout interval (%.3f ms)."), BusyWaitTimeoutInMs);
+					break;
+				}
 			}
 		}
-
-		CachedPipelineState = PipelineState.GetReference();
 	}
 
-	return CachedPipelineState;
+	return PipelineState.GetReference();
 }
 
 FD3D12GraphicsPipelineState::FD3D12GraphicsPipelineState(
@@ -317,6 +327,9 @@ FD3D12GraphicsPipelineState::FD3D12GraphicsPipelineState(
 	, RootSignature(InRootSignature)
 	, PipelineState(InPipelineState)
 {
+	// hold on to bound RHI resources
+	PipelineStateInitializer.BoundShaderState.AddRefResources();
+
 	if (Initializer.BoundShaderState.VertexDeclarationRHI)
 		FMemory::Memcpy(StreamStrides, ((FD3D12VertexDeclaration*) Initializer.BoundShaderState.VertexDeclarationRHI)->StreamStrides, sizeof(StreamStrides));
 	else
@@ -339,6 +352,9 @@ FD3D12GraphicsPipelineState::~FD3D12GraphicsPipelineState()
 	delete PipelineState;
 	PipelineState = nullptr;
 #endif // D3D12_USE_DERIVED_PSO
+
+	// release bound RHI resources
+	PipelineStateInitializer.BoundShaderState.ReleaseResources();
 }
 
 FD3D12ComputePipelineState::~FD3D12ComputePipelineState()
@@ -442,18 +458,6 @@ FD3D12PipelineState* FD3D12PipelineStateCacheBase::CreateAndAddToLowLevelCache(c
 	AddToLowLevelCache(Desc, &PipelineState, [this](FD3D12PipelineState** PipelineState, const FD3D12LowLevelGraphicsPipelineStateDesc& Desc)
 	{ 
 		OnPSOCreated(*PipelineState, Desc);
-
-		// The lock will be held at this point so we can modify the cache.
-		// Clean ourselves up if the compilation failed.
-		// Note: This check is called here instead of in AddToLowLevelCache
-		// because GetPipelineState will force a synchronization. This
-		// path is always synchronous anyway.
-		if ((*PipelineState)->GetPipelineState() == nullptr)
-		{
-			this->LowLevelGraphicsPipelineStateCache.Remove(Desc);
-			delete *PipelineState;
-			*PipelineState = nullptr;
-		}
 	});
 
 	return PipelineState;
@@ -616,14 +620,12 @@ FD3D12GraphicsPipelineState* FD3D12PipelineStateCacheBase::FindInLoadedCache(
 
 	return nullptr;
 #else
-	if (PipelineState)
+	if (PipelineState && PipelineState->IsValid())
 	{
 		return new FD3D12GraphicsPipelineState(Initializer, RootSignature, PipelineState);
 	}
-	else
-	{
-		return nullptr;
-	}
+
+	return nullptr;
 #endif
 }
 
@@ -645,14 +647,12 @@ FD3D12GraphicsPipelineState* FD3D12PipelineStateCacheBase::CreateAndAdd(
 	// Add the PSO to the runtime cache for better performance next time.
 	return AddToRuntimeCache(Initializer, InitializerHash, RootSignature, PipelineState);
 #else
-	if (PipelineState)
+	if (PipelineState && PipelineState->IsValid())
 	{
 		return new FD3D12GraphicsPipelineState(Initializer, RootSignature, PipelineState);
 	}
-	else
-	{
-		return nullptr;
-	}
+
+	return nullptr;
 #endif
 }
 
@@ -694,14 +694,12 @@ FD3D12ComputePipelineState* FD3D12PipelineStateCacheBase::FindInLoadedCache(FD3D
 
 	return nullptr;
 #else
-	if (PipelineState)
+	if (PipelineState && PipelineState->IsValid())
 	{
 		return new FD3D12ComputePipelineState(ComputeShader, PipelineState);
 	}
-	else
-	{
-		return nullptr;
-	}
+
+	return nullptr;
 #endif
 }
 
@@ -712,13 +710,11 @@ FD3D12ComputePipelineState* FD3D12PipelineStateCacheBase::CreateAndAdd(FD3D12Com
 	// Add the PSO to the runtime cache for better performance next time.
 	return AddToRuntimeCache(ComputeShader, PipelineState);
 #else
-	if (PipelineState)
+	if (PipelineState && PipelineState->IsValid())
 	{
 		return new FD3D12ComputePipelineState(ComputeShader, PipelineState);
 	}
-	else
-	{
-		return nullptr;
-	}
+
+	return nullptr;
 #endif
 }

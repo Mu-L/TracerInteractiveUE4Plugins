@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -26,7 +26,7 @@ class AIMODULE_API ANavLinkProxy : public AActor, public INavLinkHostInterface, 
 	GENERATED_UCLASS_BODY()
 
 	/** Navigation links (point to point) added to navigation data */
-	UPROPERTY(EditAnywhere, Category=SimpleLink)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=SimpleLink)
 	TArray<FNavigationLink> PointLinks;
 	
 	/** Navigation links (segment to segment) added to navigation data
@@ -81,7 +81,7 @@ protected:
 public:
 #endif // ENABLE_VISUAL_LOG
 
-	virtual FBox GetComponentsBoundingBox(bool bNonColliding = false) const override;
+	virtual FBox GetComponentsBoundingBox(bool bNonColliding = false, bool bIncludeFromChildActors = false) const override;
 
 	//////////////////////////////////////////////////////////////////////////
 	// Blueprint interface for smart links
@@ -105,6 +105,14 @@ public:
 	/** check if any agent is moving through smart link right now */
 	UFUNCTION(BlueprintCallable, Category="AI|Navigation")
 	bool HasMovingAgents() const;
+
+#if WITH_EDITOR
+	/** Copies navlink end points from the first entry in PointLinks array. This 
+	 *	function is a helper function making up for smart links not drawing
+	 *	the FVector widgets in the editor. */
+	UFUNCTION(CallInEditor, Category = SmartLink, meta = (DisplayName="CopyEndPointsFromSimpleLink"))
+	void CopyEndPointsFromSimpleLinkToSmartLink();
+#endif // WITH_EDITOR
 
 protected:
 

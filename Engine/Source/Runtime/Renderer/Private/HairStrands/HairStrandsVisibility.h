@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	HairVisibilityRendering.h: Hair strands visibility buffer implementation.
@@ -23,11 +23,25 @@ struct FHairStrandsVisibilityData
 	TRefCountPtr<IPooledRenderTarget> VelocityTexture;
 	TRefCountPtr<IPooledRenderTarget> CategorizationTexture;
 	TRefCountPtr<IPooledRenderTarget> ViewHairCountTexture;
+	TRefCountPtr<IPooledRenderTarget> ViewHairCountUintTexture;
+	TRefCountPtr<IPooledRenderTarget> DepthTextureUint;
+	TRefCountPtr<IPooledRenderTarget> LightChannelMaskTexture;
 
 	TRefCountPtr<IPooledRenderTarget> PPLLNodeCounterTexture;
 	TRefCountPtr<IPooledRenderTarget> PPLLNodeIndexTexture;
 	TRefCountPtr<FPooledRDGBuffer>	  PPLLNodeDataBuffer;
+	uint32							  MaxPPLLNodePerPixelCount = 0;
+	uint32							  MaxPPLLNodeCount = 0;
 
+	TRefCountPtr<IPooledRenderTarget> TileIndexTexture;
+	TRefCountPtr<FPooledRDGBuffer>	  TileBuffer;
+	TRefCountPtr<FPooledRDGBuffer>	  TileIndirectArgs;
+	const uint32					  TileSize = 8;
+	const uint32					  TileThreadGroupSize = 32;
+
+	uint32							  MaxSampleCount = 8;
+	uint32							  MaxNodeCount = 0;
+	TRefCountPtr<IPooledRenderTarget> NodeCount;
 	TRefCountPtr<IPooledRenderTarget> NodeIndex;
 	TRefCountPtr<FPooledRDGBuffer>	  NodeData;
 	FShaderResourceViewRHIRef		  NodeDataSRV;
@@ -35,6 +49,14 @@ struct FHairStrandsVisibilityData
 	FShaderResourceViewRHIRef		  NodeCoordSRV;
 	TRefCountPtr<FPooledRDGBuffer>	  NodeIndirectArg;
 	uint32							  NodeGroupSize = 0;
+
+	// Hair lighting is accumulated within this buffer
+	// Allocated conservatively
+	// User indirect dispatch for accumulating contribution
+	FIntPoint SampleLightingViewportResolution;
+	TRefCountPtr<IPooledRenderTarget> SampleLightingBuffer;
+//	TRefCountPtr<IPooledRenderTarget> PixelLightingBuffer;
+
 };
 
 struct FHairStrandsVisibilityViews
@@ -50,11 +72,7 @@ FHairStrandsVisibilityViews RenderHairStrandsVisibilityBuffer(
 	TRefCountPtr<IPooledRenderTarget> ColorTexture,
 	TRefCountPtr<IPooledRenderTarget> DepthTexture,
 	TRefCountPtr<IPooledRenderTarget> VelocityTexture,
-	const struct FHairStrandsClusterViews& ClusterViews);
+	const struct FHairStrandsMacroGroupViews& MacroGroupViews);
 
-void SetUpViewHairRenderInfo(const FViewInfo& ViewInfo, bool bEnableMSAA, FVector4& OutHairRenderInfo);
-
-
-uint32 GetPPLLMeanListElementCountPerPixel();
-uint32 GetPPLLMaxTotalListElementCount(FIntPoint Resolution);
+void SetUpViewHairRenderInfo(const FViewInfo& ViewInfo, FVector4& OutHairRenderInfo, uint32& OutHairRenderInfoBits);
 

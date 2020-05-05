@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 // ActorComponent.cpp: Actor component implementation.
 
 #include "CoreMinimal.h"
@@ -31,6 +31,8 @@
 #include "TickableAttributeSetInterface.h"
 #include "GameplayTagResponseTable.h"
 #include "ProfilingDebugging/CsvProfiler.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 #define LOCTEXT_NAMESPACE "AbilitySystemComponent"
 
@@ -51,6 +53,15 @@ void UAbilitySystemComponent::InitializeComponent()
 	// Look for DSO AttributeSets (note we are currently requiring all attribute sets to be subobjects of the same owner. This doesn't *have* to be the case forever.
 	AActor *Owner = GetOwner();
 	InitAbilityActorInfo(Owner, Owner);	// Default init to our outer owner
+
+	// cleanup any bad data that may have gotten into SpawnedAttributes
+	for (int32 Idx = SpawnedAttributes.Num()-1; Idx >= 0; --Idx)
+	{
+		if (SpawnedAttributes[Idx] == nullptr)
+		{
+			SpawnedAttributes.RemoveAt(Idx);
+		}
+	}
 
 	TArray<UObject*> ChildObjects;
 	GetObjectsWithOuter(Owner, ChildObjects, false, RF_NoFlags, EInternalObjectFlags::PendingKill);
@@ -255,7 +266,7 @@ FGameplayAbilitySpecHandle UAbilitySystemComponent::GiveAbility(const FGameplayA
 	return OwnedSpec.Handle;
 }
 
-FGameplayAbilitySpecHandle UAbilitySystemComponent::GiveAbilityAndActivateOnce(const FGameplayAbilitySpec& Spec)
+FGameplayAbilitySpecHandle UAbilitySystemComponent::GiveAbilityAndActivateOnce(FGameplayAbilitySpec& Spec)
 {
 	check(Spec.Ability);
 
@@ -272,6 +283,8 @@ FGameplayAbilitySpecHandle UAbilitySystemComponent::GiveAbilityAndActivateOnce(c
 
 		return FGameplayAbilitySpecHandle();
 	}
+
+	Spec.bActivateOnce = true;
 
 	FGameplayAbilitySpecHandle AddedAbilityHandle = GiveAbility(Spec);
 
@@ -481,6 +494,18 @@ void UAbilitySystemComponent::OnRemoveAbility(FGameplayAbilitySpec& Spec)
 			}
 		}
 	}
+
+	// Notify the ability that it has been removed.  It follows the same pattern as OnGiveAbility() and is only called on the primary instance of the ability or the CDO.
+	UGameplayAbility* PrimaryInstance = Spec.GetPrimaryInstance();
+	if (PrimaryInstance)
+	{
+		PrimaryInstance->OnRemoveAbility(AbilityActorInfo.Get(), Spec);
+	}
+	else
+	{
+		Spec.Ability->OnRemoveAbility(AbilityActorInfo.Get(), Spec);
+	}
+
 	Spec.ReplicatedInstances.Empty();
 	Spec.NonReplicatedInstances.Empty();
 }
@@ -570,7 +595,14 @@ void UAbilitySystemComponent::DecrementAbilityListLock()
 		TArray<FGameplayAbilitySpec, TInlineAllocator<2> > LocalPendingAdds(MoveTemp(AbilityPendingAdds));
 		for (FGameplayAbilitySpec& Spec : LocalPendingAdds)
 		{
-			GiveAbility(Spec);
+			if (Spec.bActivateOnce)
+			{
+				GiveAbilityAndActivateOnce(Spec);
+			}
+			else
+			{
+				GiveAbility(Spec);
+			}
 		}
 
 		TArray<FGameplayAbilitySpecHandle, TInlineAllocator<2> > LocalPendingRemoves(MoveTemp(AbilityPendingRemoves));
@@ -1339,6 +1371,21 @@ bool UAbilitySystemComponent::InternalTryActivateAbility(FGameplayAbilitySpecHan
 	}
 	else if (Ability->GetNetExecutionPolicy() == EGameplayAbilityNetExecutionPolicy::LocalPredicted)
 	{
+		// Flush server moves that occurred before this ability activation so that the server receives the RPCs in the correct order
+		// Necessary to prevent abilities that trigger animation root motion or impact movement from causing network corrections
+		if (!ActorInfo->IsNetAuthority())
+		{
+			ACharacter* AvatarCharacter = Cast<ACharacter>(ActorInfo->AvatarActor.Get());
+			if (AvatarCharacter)
+			{
+				UCharacterMovementComponent* AvatarCharMoveComp = Cast<UCharacterMovementComponent>(AvatarCharacter->GetMovementComponent());
+				if (AvatarCharMoveComp)
+				{
+					AvatarCharMoveComp->FlushServerMoves();
+				}
+			}
+		}
+
 		// This execution is now officially EGameplayAbilityActivationMode:Predicting and has a PredictionKey
 		FScopedPredictionWindow ScopedPredictionWindow(this, true);
 
@@ -1402,7 +1449,7 @@ bool UAbilitySystemComponent::InternalTryActivateAbility(FGameplayAbilitySpecHan
 
 void UAbilitySystemComponent::ServerTryActivateAbility_Implementation(FGameplayAbilitySpecHandle Handle, bool InputPressed, FPredictionKey PredictionKey)
 {
-	InternalServerTryActiveAbility(Handle, InputPressed, PredictionKey, nullptr);
+	InternalServerTryActivateAbility(Handle, InputPressed, PredictionKey, nullptr);
 }
 
 bool UAbilitySystemComponent::ServerTryActivateAbility_Validate(FGameplayAbilitySpecHandle Handle, bool InputPressed, FPredictionKey PredictionKey)
@@ -1412,7 +1459,7 @@ bool UAbilitySystemComponent::ServerTryActivateAbility_Validate(FGameplayAbility
 
 void UAbilitySystemComponent::ServerTryActivateAbilityWithEventData_Implementation(FGameplayAbilitySpecHandle Handle, bool InputPressed, FPredictionKey PredictionKey, FGameplayEventData TriggerEventData)
 {
-	InternalServerTryActiveAbility(Handle, InputPressed, PredictionKey, &TriggerEventData);
+	InternalServerTryActivateAbility(Handle, InputPressed, PredictionKey, &TriggerEventData);
 }
 
 bool UAbilitySystemComponent::ServerTryActivateAbilityWithEventData_Validate(FGameplayAbilitySpecHandle Handle, bool InputPressed, FPredictionKey PredictionKey, FGameplayEventData TriggerEventData)
@@ -1438,7 +1485,7 @@ void UAbilitySystemComponent::ClientTryActivateAbility_Implementation(FGameplayA
 	InternalTryActivateAbility(Handle);
 }
 
-void UAbilitySystemComponent::InternalServerTryActiveAbility(FGameplayAbilitySpecHandle Handle, bool InputPressed, const FPredictionKey& PredictionKey, const FGameplayEventData* TriggerEventData)
+void UAbilitySystemComponent::InternalServerTryActivateAbility(FGameplayAbilitySpecHandle Handle, bool InputPressed, const FPredictionKey& PredictionKey, const FGameplayEventData* TriggerEventData)
 {
 #if WITH_SERVER_CODE
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
@@ -1456,7 +1503,7 @@ void UAbilitySystemComponent::InternalServerTryActiveAbility(FGameplayAbilitySpe
 	if (!Spec)
 	{
 		// Can potentially happen in race conditions where client tries to activate ability that is removed server side before it is received.
-		ABILITY_LOG(Display, TEXT("InternalServerTryActiveAbility. Rejecting ClientActivation of ability with invalid SpecHandle!"));
+		ABILITY_LOG(Display, TEXT("InternalServerTryActivateAbility. Rejecting ClientActivation of ability with invalid SpecHandle!"));
 		ClientActivateAbilityFailed(Handle, PredictionKey.Current);
 		return;
 	}
@@ -1484,7 +1531,7 @@ void UAbilitySystemComponent::InternalServerTryActiveAbility(FGameplayAbilitySpe
 	}
 	else
 	{
-		ABILITY_LOG(Display, TEXT("InternalServerTryActiveAbility. Rejecting ClientActivation of %s. InternalTryActivateAbility failed: %s"), *GetNameSafe(Spec->Ability), *InternalTryActivateAbilityFailureTags.ToStringSimple() );
+		ABILITY_LOG(Display, TEXT("InternalServerTryActivateAbility. Rejecting ClientActivation of %s. InternalTryActivateAbility failed: %s"), *GetNameSafe(Spec->Ability), *InternalTryActivateAbilityFailureTags.ToStringSimple() );
 		ClientActivateAbilityFailed(Handle, PredictionKey.Current);
 		Spec->InputPressed = false;
 
@@ -1897,10 +1944,10 @@ int32 UAbilitySystemComponent::HandleGameplayEvent(FGameplayTag EventTag, const 
 		Delegate->Broadcast(Payload);
 	}
 
-	// Iterate with integers in case it changes due to callbacks
-	for (int32 Index = 0; Index < GameplayEventTagContainerDelegates.Num(); Index++)
+	// Make a copy in case it changes due to callbacks
+	TArray<TPair<FGameplayTagContainer, FGameplayEventTagMulticastDelegate>> LocalGameplayEventTagContainerDelegates = GameplayEventTagContainerDelegates;
+	for (TPair<FGameplayTagContainer, FGameplayEventTagMulticastDelegate>& SearchPair : LocalGameplayEventTagContainerDelegates)
 	{
-		TPair<FGameplayTagContainer, FGameplayEventTagMulticastDelegate>& SearchPair = GameplayEventTagContainerDelegates[Index];
 		if (SearchPair.Key.IsEmpty() || EventTag.MatchesAny(SearchPair.Key))
 		{
 			SearchPair.Value.Broadcast(EventTag, Payload);
@@ -1951,6 +1998,8 @@ void UAbilitySystemComponent::RemoveGameplayEventTagContainerDelegate(const FGam
 
 void UAbilitySystemComponent::MonitoredTagChanged(const FGameplayTag Tag, int32 NewCount)
 {
+	ABILITYLIST_SCOPE_LOCK();
+
 	int32 TriggeredCount = 0;
 	if (OwnedTagTriggeredAbilities.Contains(Tag))
 	{
@@ -1965,29 +2014,33 @@ void UAbilitySystemComponent::MonitoredTagChanged(const FGameplayTag Tag, int32 
 				return;
 			}
 
-			for (const FAbilityTriggerData& TriggerData : Spec->Ability->AbilityTriggers)
+			if (Spec->Ability)
 			{
-				FGameplayTag EventTag = TriggerData.TriggerTag;
-
-				if (EventTag == Tag)
+				TArray<FAbilityTriggerData> AbilityTriggers = Spec->Ability->AbilityTriggers;
+				for (const FAbilityTriggerData& TriggerData : AbilityTriggers)
 				{
-					if (NewCount > 0)
-					{
-						// Populate event data so this will use the same blueprint node to activate as gameplay triggers
-						FGameplayEventData EventData;
-						EventData.EventMagnitude = NewCount;
-						EventData.EventTag = EventTag;
-						EventData.Instigator = OwnerActor;
-						EventData.Target = OwnerActor;
-						// Try to activate it
-						InternalTryActivateAbility(Spec->Handle, FPredictionKey(), nullptr, nullptr, &EventData);
+					FGameplayTag EventTag = TriggerData.TriggerTag;
 
-						// TODO: Check client/server type
-					}
-					else if (NewCount == 0 && TriggerData.TriggerSource == EGameplayAbilityTriggerSource::OwnedTagPresent)
+					if (EventTag == Tag)
 					{
-						// Try to cancel, but only if the type is right
-						CancelAbilitySpec(*Spec, nullptr);
+						if (NewCount > 0)
+						{
+							// Populate event data so this will use the same blueprint node to activate as gameplay triggers
+							FGameplayEventData EventData;
+							EventData.EventMagnitude = NewCount;
+							EventData.EventTag = EventTag;
+							EventData.Instigator = OwnerActor;
+							EventData.Target = OwnerActor;
+							// Try to activate it
+							InternalTryActivateAbility(Spec->Handle, FPredictionKey(), nullptr, nullptr, &EventData);
+
+							// TODO: Check client/server type
+						}
+						else if (NewCount == 0 && TriggerData.TriggerSource == EGameplayAbilityTriggerSource::OwnedTagPresent)
+						{
+							// Try to cancel, but only if the type is right
+							CancelAbilitySpec(*Spec, nullptr);
+						}
 					}
 				}
 			}
@@ -2247,8 +2300,10 @@ void UAbilitySystemComponent::LocalInputCancel()
 
 void UAbilitySystemComponent::TargetConfirm()
 {
-	TArray<AGameplayAbilityTargetActor*> LeftoverTargetActors;
-	for (AGameplayAbilityTargetActor* TargetActor : SpawnedTargetActors)
+	// Callbacks may modify the spawned target actor array so iterate over a copy instead
+	TArray<AGameplayAbilityTargetActor*> LocalTargetActors = SpawnedTargetActors;
+	SpawnedTargetActors.Reset();
+	for (AGameplayAbilityTargetActor* TargetActor : LocalTargetActors)
 	{
 		if (TargetActor)
 		{
@@ -2257,30 +2312,30 @@ void UAbilitySystemComponent::TargetConfirm()
 				//TODO: There might not be any cases where this bool is false
 				if (!TargetActor->bDestroyOnConfirmation)
 				{
-					LeftoverTargetActors.Add(TargetActor);
+					SpawnedTargetActors.Add(TargetActor);
 				}
 				TargetActor->ConfirmTargeting();
 			}
 			else
 			{
-				LeftoverTargetActors.Add(TargetActor);
+				SpawnedTargetActors.Add(TargetActor);
 			}
 		}
 	}
-	SpawnedTargetActors = LeftoverTargetActors;		//These actors declined to confirm targeting, or are allowed to fire multiple times, so keep contact with them.
 }
 
 void UAbilitySystemComponent::TargetCancel()
 {
-	for (AGameplayAbilityTargetActor* TargetActor : SpawnedTargetActors)
+	// Callbacks may modify the spawned target actor array so iterate over a copy instead
+	TArray<AGameplayAbilityTargetActor*> LocalTargetActors = SpawnedTargetActors;
+	SpawnedTargetActors.Reset();
+	for (AGameplayAbilityTargetActor* TargetActor : LocalTargetActors)
 	{
 		if (TargetActor)
 		{
 			TargetActor->CancelTargeting();
 		}
 	}
-
-	SpawnedTargetActors.Empty();
 }
 
 // --------------------------------------------------------------------------
@@ -2341,6 +2396,13 @@ float UAbilitySystemComponent::PlayMontage(UGameplayAbility* InAnimatingAbility,
 				// Those are static parameters, they are only set when the montage is played. They are not changed after that.
 				RepAnimMontageInfo.AnimMontage = NewAnimMontage;
 				RepAnimMontageInfo.ForcePlayBit = !bool(RepAnimMontageInfo.ForcePlayBit);
+
+				RepAnimMontageInfo.SectionIdToPlay = 0;
+				if (RepAnimMontageInfo.AnimMontage && StartSectionName != NAME_None)
+				{
+					// we add one so INDEX_NONE can be used in the on rep
+					RepAnimMontageInfo.SectionIdToPlay = RepAnimMontageInfo.AnimMontage->GetSectionIndex(StartSectionName) + 1;
+				}
 
 				// Update parameters that change during Montage life time.
 				AnimMontage_UpdateReplicatedData();
@@ -2532,6 +2594,16 @@ void UAbilitySystemComponent::OnRep_ReplicatedAnimMontage()
 				AnimInstance->Montage_SetPlayRate(LocalAnimMontageInfo.AnimMontage, RepAnimMontageInfo.PlayRate);
 			}
 
+			const int32 SectionIdToPlay = (static_cast<int32>(RepAnimMontageInfo.SectionIdToPlay) - 1);
+			if (SectionIdToPlay != INDEX_NONE)
+			{
+				FName SectionNameToJumpTo = LocalAnimMontageInfo.AnimMontage->GetSectionName(SectionIdToPlay);
+				if (SectionNameToJumpTo != NAME_None)
+				{
+					AnimInstance->Montage_JumpToSection(SectionNameToJumpTo);
+				}
+			}
+
 			// Compressed Flags
 			const bool bIsStopped = AnimInstance->Montage_GetIsStopped(LocalAnimMontageInfo.AnimMontage);
 			const bool bReplicatedIsStopped = bool(RepAnimMontageInfo.IsStopped);
@@ -2642,6 +2714,13 @@ void UAbilitySystemComponent::CurrentMontageJumpToSection(FName SectionName)
 		AnimInstance->Montage_JumpToSection(SectionName, LocalAnimMontageInfo.AnimMontage);
 		if (IsOwnerActorAuthoritative())
 		{
+			RepAnimMontageInfo.SectionIdToPlay = 0;
+			if (RepAnimMontageInfo.AnimMontage)
+			{
+				// we add one so INDEX_NONE can be used in the on rep
+				RepAnimMontageInfo.SectionIdToPlay = RepAnimMontageInfo.AnimMontage->GetSectionIndex(SectionName) + 1;
+			}
+
 			AnimMontage_UpdateReplicatedData();
 		}
 		else
@@ -2715,7 +2794,7 @@ void UAbilitySystemComponent::ServerCurrentMontageSetNextSectionName_Implementat
 
 			int32 ClientSectionID = CurrentAnimMontage->GetSectionIndexFromPosition(ClientPosition);
 			FName ClientCurrentSectionName = CurrentAnimMontage->GetSectionName(ClientSectionID);
-			if ((CurrentSectionName != ClientCurrentSectionName) || (CurrentSectionName != SectionName) || (CurrentSectionName != NextSectionName))
+			if ((CurrentSectionName != ClientCurrentSectionName) || (CurrentSectionName != SectionName))
 			{
 				// We are in an invalid section, jump to client's position.
 				AnimInstance->Montage_SetPosition(CurrentAnimMontage, ClientPosition);
@@ -2749,6 +2828,13 @@ void UAbilitySystemComponent::ServerCurrentMontageJumpToSectionName_Implementati
 			// Update replicated version for Simulated Proxies if we are on the server.
 			if (IsOwnerActorAuthoritative())
 			{
+				RepAnimMontageInfo.SectionIdToPlay = 0;
+				if (RepAnimMontageInfo.AnimMontage && SectionName != NAME_None)
+				{
+					// we add one so INDEX_NONE can be used in the on rep
+					RepAnimMontageInfo.SectionIdToPlay = RepAnimMontageInfo.AnimMontage->GetSectionIndex(SectionName) + 1;
+				}
+
 				AnimMontage_UpdateReplicatedData();
 			}
 		}
@@ -2862,6 +2948,11 @@ float UAbilitySystemComponent::GetCurrentMontageSectionTimeLeft() const
 	}
 
 	return -1.f;
+}
+
+void UAbilitySystemComponent::SetMontageRepAnimPositionMethod(ERepAnimPositionMethod InMethod)
+{
+	RepAnimMontageInfo.SetRepAnimPositionMethod(InMethod);
 }
 
 bool UAbilitySystemComponent::IsAnimatingAbility(UGameplayAbility* InAbility) const
@@ -3037,6 +3128,15 @@ void UAbilitySystemComponent::ServerSetReplicatedTargetData_Implementation(FGame
 
 bool UAbilitySystemComponent::ServerSetReplicatedTargetData_Validate(FGameplayAbilitySpecHandle AbilityHandle, FPredictionKey AbilityOriginalPredictionKey, const FGameplayAbilityTargetDataHandle& ReplicatedTargetDataHandle, FGameplayTag ApplicationTag, FPredictionKey CurrentPredictionKey)
 {
+	// check the data coming from the client to ensure it's valid
+	for (const TSharedPtr<FGameplayAbilityTargetData>& TgtData : ReplicatedTargetDataHandle.Data)
+	{
+		if (!ensure(TgtData.IsValid()))
+		{
+			return false;
+		}
+	}
+
 	return true;
 }
 

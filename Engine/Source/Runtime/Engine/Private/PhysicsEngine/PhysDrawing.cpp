@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "EngineDefines.h"
@@ -637,7 +637,7 @@ void FKTaperedCapsuleElem::DrawElemSolid(FPrimitiveDrawInterface* PDI, const FTr
 
 void FKConvexElem::DrawElemWire(FPrimitiveDrawInterface* PDI, const FTransform& ElemTM, const float Scale, const FColor Color) const
 {
-#if WITH_PHYSX
+#if WITH_PHYSX && PHYSICS_INTERFACE_PHYSX
 
 	PxConvexMesh* Mesh = ConvexMesh;
 
@@ -688,12 +688,43 @@ void FKConvexElem::DrawElemWire(FPrimitiveDrawInterface* PDI, const FTransform& 
 	{
 		UE_LOG(LogPhysics, Log, TEXT("FKConvexElem::DrawElemWire : No ConvexMesh, so unable to draw."));
 	}
+#elif WITH_CHAOS
+	const int32 NumIndices = IndexData.Num();
+	if(NumIndices > 0 && ensure(NumIndices % 3 == 0))
+	{
+		// NOTE: With chaos, instead of using a mesh with transformed verts, we use the 
+		// VertexData directly, so we don't need to remove the body->elem transform like
+		// we did with physx.
+		const int32 NumVerts = VertexData.Num();
+		TArray<FVector> TransformedVerts;
+		TransformedVerts.Reserve(NumVerts);
+		for(const FVector& Vert : VertexData)
+		{
+			TransformedVerts.Add(ElemTM.TransformPosition(Vert));
+		}
+
+		for(int32 Base = 0; Base < NumIndices; Base += 3)
+		{
+			if (IndexData[Base] >= NumVerts || IndexData[Base + 1] >= NumVerts || IndexData[Base + 2] >= NumVerts)
+			{
+				continue;
+			}
+
+			PDI->DrawLine(TransformedVerts[IndexData[Base]], TransformedVerts[IndexData[Base + 1]], Color, SDPG_World);
+			PDI->DrawLine(TransformedVerts[IndexData[Base + 1]], TransformedVerts[IndexData[Base + 2]], Color, SDPG_World);
+			PDI->DrawLine(TransformedVerts[IndexData[Base + 2]], TransformedVerts[IndexData[Base]], Color, SDPG_World);
+		}
+	}
+	else
+	{
+		UE_LOG(LogPhysics, Log, TEXT("FKConvexElem::AddCachedSolidConvexGeom : No ConvexMesh, so unable to draw."));
+	}
 #endif // WITH_PHYSX
 }
 
 void FKConvexElem::AddCachedSolidConvexGeom(TArray<FDynamicMeshVertex>& VertexBuffer, TArray<uint32>& IndexBuffer, const FColor VertexColor) const
 {
-#if WITH_PHYSX
+#if WITH_PHYSX && PHYSICS_INTERFACE_PHYSX
 	// We always want to generate 'non-mirrored geometry', so if all we have is flipped, we have to un-flip it in this function
 	bool bIsMirrored = false;
 	const PxConvexMesh* ConvexMeshToUse = nullptr; 
@@ -766,6 +797,62 @@ void FKConvexElem::AddCachedSolidConvexGeom(TArray<FDynamicMeshVertex>& VertexBu
 			}
 
 			StartVertOffset += Data.mNbVerts;
+		}
+	}
+	else
+	{
+		UE_LOG(LogPhysics, Log, TEXT("FKConvexElem::AddCachedSolidConvexGeom : No ConvexMesh, so unable to draw."));
+	}
+#elif WITH_CHAOS
+	const int32 NumIndices = IndexData.Num();
+	if(NumIndices > 0 && ensure(NumIndices % 3 == 0))
+	{
+		int32 BeginOffset = VertexBuffer.Num();
+
+		const int32 NumVerts = VertexData.Num();
+		const int32 NumTriangles = NumIndices / 3;
+
+		// Generate Tangents
+		struct LocalTangents
+		{
+			FVector T[3];
+		};
+
+		TArray<LocalTangents> VertTangents;
+		VertTangents.Init({ { FVector::ZeroVector, FVector::ZeroVector, FVector::ZeroVector } }, VertexData.Num());
+		for(int32 TriIndex = 0; TriIndex < NumTriangles; ++TriIndex)
+		{
+			const int32 Base = TriIndex * 3;
+
+			const int32 I0 = IndexData[Base];
+			const int32 I1 = IndexData[Base + 1];
+			const int32 I2 = IndexData[Base + 2];
+
+			const FVector TangentX = (VertexData[I1] - VertexData[I0]).GetSafeNormal();
+			const FVector TangentZ = FPlane(VertexData[I0], VertexData[I1], VertexData[I2]).GetSafeNormal();
+			const FVector TangentY = FVector::CrossProduct(TangentX, TangentZ).GetSafeNormal();
+
+			for(int32 TriVertIndex = 0; TriVertIndex < 3; ++TriVertIndex)
+			{
+				const int32 Index = IndexData[Base + TriVertIndex];
+				VertTangents[IndexData[Base + TriVertIndex]].T[0] = TangentX;
+				VertTangents[IndexData[Base + TriVertIndex]].T[1] = TangentX;
+				VertTangents[IndexData[Base + TriVertIndex]].T[2] = TangentX;
+			}
+		}
+
+		for(int32 VertIndex = 0; VertIndex < VertexData.Num(); ++VertIndex)
+		{
+			FDynamicMeshVertex Vert;
+			Vert.Position = VertexData[VertIndex];
+			Vert.Color = VertexColor;
+			Vert.SetTangents(VertTangents[VertIndex].T[0], VertTangents[VertIndex].T[1], VertTangents[VertIndex].T[2]);
+			VertexBuffer.Add(Vert);
+		}
+
+		for(int32 Index : IndexData)
+		{
+			IndexBuffer.Add(BeginOffset + Index);
 		}
 	}
 	else
@@ -934,44 +1021,46 @@ void FKAggregateGeom::GetAggGeom(const FTransform& Transform, const FColor Color
 	}
 }
 
-/** Release the RenderInfo (if its there) and safely clean up any resources. Call on the game thread. */
+/** Release the RenderInfo (if its there) and safely clean up any resources. Not thread safe, but can be called from any thread (conditionally safe). */
 void FKAggregateGeom::FreeRenderInfo()
 {
 	// See if we have rendering resources to free
-	if(RenderInfo)
+	if (RenderInfo)
 	{
 		// Should always have these if RenderInfo exists
 		check(RenderInfo->VertexBuffers);
 		check(RenderInfo->IndexBuffer);
 
-		// Fire off commands to free these resources
-		BeginReleaseResource(&RenderInfo->VertexBuffers->ColorVertexBuffer);
-		BeginReleaseResource(&RenderInfo->VertexBuffers->StaticMeshVertexBuffer);
-		BeginReleaseResource(&RenderInfo->VertexBuffers->PositionVertexBuffer);
-		BeginReleaseResource(RenderInfo->IndexBuffer);
+		// Fire off a render command to free these resources
+		ENQUEUE_RENDER_COMMAND(FKAggregateGeomFreeRenderInfo)(
+			[RenderInfoToRelease = RenderInfo](FRHICommandList& RHICmdList)
+			{
+				RenderInfoToRelease->VertexBuffers->ColorVertexBuffer.ReleaseResource();
+				RenderInfoToRelease->VertexBuffers->StaticMeshVertexBuffer.ReleaseResource();
+				RenderInfoToRelease->VertexBuffers->PositionVertexBuffer.ReleaseResource();
+				RenderInfoToRelease->IndexBuffer->ReleaseResource();
 
-		// May not exist if no geometry was available
-		if(RenderInfo->CollisionVertexFactory != NULL)
-		{
-			BeginReleaseResource(RenderInfo->CollisionVertexFactory);
-		}
+				// May not exist if no geometry was available
+				if (RenderInfoToRelease->CollisionVertexFactory != nullptr)
+				{
+					RenderInfoToRelease->CollisionVertexFactory->ReleaseResource();
+				}
 
-		// Wait until those commands have been processed
-		FRenderCommandFence Fence;
-		Fence.BeginFence();
-		Fence.Wait();
+				// Free memory.
+				delete RenderInfoToRelease->VertexBuffers;
+				delete RenderInfoToRelease->IndexBuffer;
 
-		// Release memory.
-		delete RenderInfo->VertexBuffers;
-		delete RenderInfo->IndexBuffer;
+				if (RenderInfoToRelease->CollisionVertexFactory != nullptr)
+				{
+					delete RenderInfoToRelease->CollisionVertexFactory;
+				}
 
-		if (RenderInfo->CollisionVertexFactory != NULL)
-		{
-			delete RenderInfo->CollisionVertexFactory;
-		}
+				delete RenderInfoToRelease;
+			}
+		);
 
-		delete RenderInfo;
-		RenderInfo = NULL;
+		// Reset the pointer as it's been given to the render thread
+		RenderInfo = nullptr;
 	}
 }
 

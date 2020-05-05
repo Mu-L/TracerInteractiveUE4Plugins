@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 #include "IOculusInputModule.h"
@@ -13,7 +13,7 @@
 	#pragma pack (push,8)
 #endif
 
-#include <OVR_Plugin.h>
+#include "OculusPluginWrapper.h"
 
 #if PLATFORM_SUPPORTS_PRAGMA_PACK
 	#pragma pack (pop)
@@ -103,6 +103,8 @@ private:
 	static float ButtonRepeatDelay;
 
 	ovrpHapticsDesc OvrpHapticsDesc;
+
+	int LocalTrackingSpaceRecenterCount;
 };
 
 

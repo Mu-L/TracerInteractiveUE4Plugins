@@ -1,11 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Rendering/ColorVertexBuffer.h"
 #include "CoreMinimal.h"
 #include "RHI.h"
 #include "Components.h"
 #include "EngineUtils.h"
-#include "StaticMeshVertexData.h"
+#include "ProfilingDebugging/LoadTimeTracker.h"
 
 /*-----------------------------------------------------------------------------
 FColorVertexBuffer
@@ -16,8 +16,8 @@ class FColorVertexData :
 	public TStaticMeshVertexData<FColor>
 {
 public:
-	FColorVertexData( bool InNeedsCPUAccess=false )
-		: TStaticMeshVertexData<FColor>( InNeedsCPUAccess )
+	FColorVertexData(bool InNeedsCPUAccess = false)
+		: TStaticMeshVertexData<FColor>(InNeedsCPUAccess)
 	{
 	}
 };
@@ -330,6 +330,7 @@ void FColorVertexBuffer::ImportText(const TCHAR* SourceText)
 void FColorVertexBuffer::operator=(const FColorVertexBuffer &Other)
 {
 	//VertexData doesn't need to be allocated here because Build will be called next,
+	delete VertexData;
 	VertexData = NULL;
 }
 
@@ -416,8 +417,32 @@ FVertexBufferRHIRef FColorVertexBuffer::CreateRHIBuffer_Async()
 	return CreateRHIBuffer_Internal<false>();
 }
 
+void FColorVertexBuffer::CopyRHIForStreaming(const FColorVertexBuffer& Other, bool InAllowCPUAccess)
+{
+	// Copy serialized properties.
+	Stride = Other.Stride;
+	NumVertices = Other.NumVertices;
+
+	// Handle CPU access.
+	if (InAllowCPUAccess)
+	{
+		NeedsCPUAccess = Other.NeedsCPUAccess;
+		AllocateData(NeedsCPUAccess);
+	}
+	else
+	{
+		NeedsCPUAccess = false;
+	}
+
+	// Copy resource references.
+	VertexBufferRHI = Other.VertexBufferRHI;
+	ColorComponentsSRV = Other.ColorComponentsSRV;
+}
+
 void FColorVertexBuffer::InitRHI()
 {
+	SCOPED_LOADTIMER(FColorVertexBuffer_InitRHI);
+
 	VertexBufferRHI = CreateRHIBuffer_RenderThread();
 
 	if (VertexBufferRHI && RHISupportsManualVertexFetch(GMaxRHIShaderPlatform))

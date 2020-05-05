@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Linux/LinuxWindow.h"
 
@@ -454,6 +454,11 @@ void FLinuxWindow::Restore()
 /** Native window should make itself visible */
 void FLinuxWindow::Show()
 {
+	if ( IsMinimized() )
+	{
+		Restore();
+	}
+
 	if ( !bIsVisible )
 	{
 		bIsVisible = true;

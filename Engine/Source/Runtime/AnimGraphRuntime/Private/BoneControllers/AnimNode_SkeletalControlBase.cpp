@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BoneControllers/AnimNode_SkeletalControlBase.h"
 #include "Animation/AnimInstanceProxy.h"
@@ -113,6 +113,8 @@ void FAnimNode_SkeletalControlBase::Update_AnyThread(const FAnimationUpdateConte
 			UpdateInternal(Context);
 		}
 	}
+
+	TRACE_ANIM_NODE_VALUE(Context, TEXT("Alpha"), ActualAlpha);
 }
 
 bool ContainsNaN(const TArray<FBoneTransform> & BoneTransforms)
@@ -142,6 +144,12 @@ void FAnimNode_SkeletalControlBase::EvaluateComponentSpaceInternal(FComponentSpa
 void FAnimNode_SkeletalControlBase::EvaluateComponentSpace_AnyThread(FComponentSpacePoseContext& Output)
 {
 	DECLARE_SCOPE_HIERARCHICAL_COUNTER_ANIMNODE(EvaluateComponentSpace_AnyThread)
+
+#if ANIM_NODE_IDS_AVAILABLE
+	// Cache the incoming node IDs in a base context
+	FAnimationBaseContext CachedContext(Output);
+#endif
+
 	EvaluateComponentPose_AnyThread(Output);
 
 #if WITH_EDITORONLY_DATA
@@ -157,6 +165,10 @@ void FAnimNode_SkeletalControlBase::EvaluateComponentSpace_AnyThread(FComponentS
 	// Apply the skeletal control if it's valid
 	if (FAnimWeight::IsRelevant(ActualAlpha) && IsValidToEvaluate(Output.AnimInstanceProxy->GetSkeleton(), Output.AnimInstanceProxy->GetRequiredBones()))
 	{
+#if ANIM_NODE_IDS_AVAILABLE
+		Output.SetNodeIds(CachedContext);
+#endif
+
 		EvaluateComponentSpaceInternal(Output);
 
 		BoneTransforms.Reset(BoneTransforms.Num());

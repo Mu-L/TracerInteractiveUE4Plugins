@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "SoundModulationValue.h"
 
 #include "SoundModulationProxy.h"
@@ -25,6 +25,11 @@ FSoundModulationValue::FSoundModulationValue(float InValue, float InAttackTime, 
 	, ReleaseTime(InReleaseTime)
 	, Value(InValue)
 {
+}
+
+void FSoundModulationValue::SetCurrentValue(float InValue)
+{
+	Value = InValue;
 }
 
 float FSoundModulationValue::GetCurrentValue() const

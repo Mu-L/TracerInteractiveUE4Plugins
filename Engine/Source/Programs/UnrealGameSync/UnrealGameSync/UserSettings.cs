@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -51,7 +51,59 @@ namespace UnrealGameSync
 	{
 		Initial = 0,
 		DefaultServerSettings = 1,
-		Latest = DefaultServerSettings
+		XgeShaderCompilation = 2,
+		DefaultNumberOfThreads = 3,
+		Latest = DefaultNumberOfThreads
+	}
+
+	class ArchiveSettings
+	{
+		public bool bEnabled;
+		public string Type;
+		public List<string> Order;
+
+		public ArchiveSettings(bool bEnabled, string Type, IEnumerable<string> Order)
+		{
+			this.bEnabled = bEnabled;
+			this.Type = Type;
+			this.Order = new List<string>(Order);
+		}
+
+		public static bool TryParseConfigEntry(string Text, out ArchiveSettings Settings)
+		{
+			ConfigObject Object = new ConfigObject(Text);
+
+			string Type = Object.GetValue("Type", null);
+			if (Type == null)
+			{
+				Settings = null;
+				return false;
+			}
+			else
+			{
+				string[] Order = Object.GetValue("Order", "").Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+				bool bEnabled = Object.GetValue("Enabled", 0) != 0;
+
+				Settings = new ArchiveSettings(bEnabled, Type, Order);
+				return true;
+			}
+		}
+
+		public string ToConfigEntry()
+		{
+			ConfigObject Object = new ConfigObject();
+
+			Object.SetValue("Enabled", bEnabled ? 1 : 0);
+			Object.SetValue("Type", Type);
+			Object.SetValue("Order", String.Join(";", Order));
+
+			return Object.ToString();
+		}
+
+		public override string ToString()
+		{
+			return ToConfigEntry();
+		}
 	}
 
 	class UserSelectedProjectSettings
@@ -178,8 +230,7 @@ namespace UnrealGameSync
 
 		// Workspace specific SyncFilters
 		public string[] SyncView;
-		public Guid[] SyncIncludedCategories;
-		public Guid[] SyncExcludedCategories;
+		public Dictionary<Guid, bool> SyncCategories;
 		public bool? bSyncAllProjects;
 		public bool? bIncludeAllProjectsInSolution;
 	}
@@ -200,11 +251,9 @@ namespace UnrealGameSync
 		public UserSettingsVersion Version = UserSettingsVersion.Latest;
 		public bool bBuildAfterSync;
 		public bool bRunAfterSync;
-		public bool bSyncPrecompiledEditor;
 		public bool bOpenSolutionAfterSync;
 		public bool bShowLogWindow;
 		public bool bAutoResolveConflicts;
-		public bool bUseIncrementalBuilds;
 		public bool bShowUnreviewedChanges;
 		public bool bShowAutomatedChanges;
 		public bool bShowLocalTimes;
@@ -214,12 +263,15 @@ namespace UnrealGameSync
 		public List<UserSelectedProjectSettings> OpenProjects;
 		public List<UserSelectedProjectSettings> RecentProjects;
 		public string[] SyncView;
-		public Guid[] SyncExcludedCategories;
+		public Dictionary<Guid, bool> SyncCategories;
 		public bool bSyncAllProjects;
 		public bool bIncludeAllProjectsInSolution;
 		public LatestChangeType SyncType;
 		public BuildConfig CompiledEditorBuildConfig; // NB: This assumes not using precompiled editor. See CurrentBuildConfig.
 		public TabLabels TabLabels;
+
+		// Precompiled binaries
+		public List<ArchiveSettings> Archives = new List<ArchiveSettings>();
 
 		// Window settings
 		public bool bWindowVisible;
@@ -295,11 +347,10 @@ namespace UnrealGameSync
 			Version = (UserSettingsVersion)ConfigFile.GetValue("General.Version", (int)UserSettingsVersion.Initial);
 			bBuildAfterSync = (ConfigFile.GetValue("General.BuildAfterSync", "1") != "0");
 			bRunAfterSync = (ConfigFile.GetValue("General.RunAfterSync", "1") != "0");
-			bSyncPrecompiledEditor = (ConfigFile.GetValue("General.SyncPrecompiledEditor", "0") != "0");
+			bool bSyncPrecompiledEditor = (ConfigFile.GetValue("General.SyncPrecompiledEditor", "0") != "0");
 			bOpenSolutionAfterSync = (ConfigFile.GetValue("General.OpenSolutionAfterSync", "0") != "0");
 			bShowLogWindow = (ConfigFile.GetValue("General.ShowLogWindow", false));
 			bAutoResolveConflicts = (ConfigFile.GetValue("General.AutoResolveConflicts", "1") != "0");
-			bUseIncrementalBuilds = ConfigFile.GetValue("General.IncrementalBuilds", true);
 			bShowUnreviewedChanges = ConfigFile.GetValue("General.ShowUnreviewed", true);
 			bShowAutomatedChanges = ConfigFile.GetValue("General.ShowAutomated", false);
 			bShowLocalTimes = ConfigFile.GetValue("General.ShowLocalTimes", false);
@@ -322,9 +373,9 @@ namespace UnrealGameSync
 
 			OpenProjects = ReadProjectList("General.OpenProjects", "General.OpenProjectFileNames");
 			RecentProjects = ReadProjectList("General.RecentProjects", "General.OtherProjectFileNames");
-
 			SyncView = ConfigFile.GetValues("General.SyncFilter", new string[0]);
-			SyncExcludedCategories = ConfigFile.GetGuidValues("General.SyncExcludedCategories", new Guid[0]);
+			SyncCategories = GetCategorySettings(ConfigFile.FindSection("General"), "SyncIncludedCategories", "SyncExcludedCategories");
+
 			bSyncAllProjects = ConfigFile.GetValue("General.SyncAllProjects", false);
 			bIncludeAllProjectsInSolution = ConfigFile.GetValue("General.IncludeAllProjectsInSolution", false);
 			if(!Enum.TryParse(ConfigFile.GetValue("General.SyncType", ""), out SyncType))
@@ -348,6 +399,10 @@ namespace UnrealGameSync
 
 			// Editor arguments
 			string[] Arguments = ConfigFile.GetValues("General.EditorArguments", new string[]{ "0:-log", "0:-fastload" });
+			if (Version < UserSettingsVersion.XgeShaderCompilation)
+			{
+				Arguments = Enumerable.Concat(Arguments, new string[] { "0:-noxgeshadercompile" }).ToArray();
+			}
 			foreach(string Argument in Arguments)
 			{
 				if(Argument.StartsWith("0:"))
@@ -364,6 +419,22 @@ namespace UnrealGameSync
 				}
 			}
 			bEditorArgumentsPrompt = ConfigFile.GetValue("General.EditorArgumentsPrompt", false);
+
+			// Precompiled binaries
+			string[] ArchiveValues = ConfigFile.GetValues("PrecompiledBinaries.Archives", new string[0]);
+			foreach (string ArchiveValue in ArchiveValues)
+			{
+				ArchiveSettings Settings;
+				if (ArchiveSettings.TryParseConfigEntry(ArchiveValue, out Settings))
+				{
+					Archives.Add(Settings);
+				}
+			}
+
+			if (bSyncPrecompiledEditor)
+			{
+				Archives.Add(new ArchiveSettings(true, "Editor", new string[0]));
+			}
 
 			// Window settings
 			bWindowVisible = ConfigFile.GetValue("Window.Visible", true);
@@ -396,13 +467,51 @@ namespace UnrealGameSync
 			{
 				SyncOptions.NumRetries = 0;
 			}
-			if(!int.TryParse(ConfigFile.GetValue("Perforce.NumThreads", "0"), out SyncOptions.NumThreads))
+
+			int NumThreads;
+			if(int.TryParse(ConfigFile.GetValue("Perforce.NumThreads", "0"), out NumThreads) && NumThreads > 0)
 			{
-				SyncOptions.NumThreads = 0;
+				if(Version >= UserSettingsVersion.DefaultNumberOfThreads || NumThreads > 1)
+				{
+					SyncOptions.NumThreads = NumThreads;
+				}
 			}
+
 			if(!int.TryParse(ConfigFile.GetValue("Perforce.TcpBufferSize", "0"), out SyncOptions.TcpBufferSize))
 			{
 				SyncOptions.TcpBufferSize = 0;
+			}
+		}
+
+		static Dictionary<Guid, bool> GetCategorySettings(ConfigSection Section, string IncludedKey, string ExcludedKey)
+		{
+			Dictionary<Guid, bool> Result = new Dictionary<Guid, bool>();
+			if (Section != null)
+			{
+				foreach (Guid UniqueId in Section.GetValues(IncludedKey, new Guid[0]))
+				{
+					Result[UniqueId] = true;
+				}
+				foreach (Guid UniqueId in Section.GetValues(ExcludedKey, new Guid[0]))
+				{
+					Result[UniqueId] = false;
+				}
+			}
+			return Result;
+		}
+
+		static void SetCategorySettings(ConfigSection Section, string IncludedKey, string ExcludedKey, Dictionary<Guid, bool> Categories)
+		{
+			Guid[] IncludedCategories = Categories.Where(x => x.Value).Select(x => x.Key).ToArray();
+			if (IncludedCategories.Length > 0)
+			{
+				Section.SetValues(IncludedKey, IncludedCategories);
+			}
+
+			Guid[] ExcludedCategories = Categories.Where(x => !x.Value).Select(x => x.Key).ToArray();
+			if (ExcludedCategories.Length > 0)
+			{
+				Section.SetValues(ExcludedKey, ExcludedCategories);
 			}
 		}
 
@@ -496,8 +605,7 @@ namespace UnrealGameSync
 					}
 
 					CurrentWorkspace.SyncView = new string[0];
-					CurrentWorkspace.SyncIncludedCategories = new Guid[0];
-					CurrentWorkspace.SyncExcludedCategories = new Guid[0];
+					CurrentWorkspace.SyncCategories = new Dictionary<Guid, bool>();
 					CurrentWorkspace.bSyncAllProjects = null;
 					CurrentWorkspace.bIncludeAllProjectsInSolution = null;
 				}
@@ -529,8 +637,7 @@ namespace UnrealGameSync
 					CurrentWorkspace.ExpandedArchiveTypes = WorkspaceSection.GetValues("ExpandedArchiveName", new string[0]);
 
 					CurrentWorkspace.SyncView = WorkspaceSection.GetValues("SyncFilter", new string[0]);
-					CurrentWorkspace.SyncIncludedCategories = WorkspaceSection.GetValues("SyncIncludedCategories", new Guid[0]);
-					CurrentWorkspace.SyncExcludedCategories = WorkspaceSection.GetValues("SyncExcludedCategories", new Guid[0]);
+					CurrentWorkspace.SyncCategories = GetCategorySettings(WorkspaceSection, "SyncIncludedCategories", "SyncExcludedCategories");
 
 					int SyncAllProjects = WorkspaceSection.GetValue("SyncAllProjects", -1);
 					CurrentWorkspace.bSyncAllProjects = (SyncAllProjects == 0)? (bool?)false : (SyncAllProjects == 1)? (bool?)true : (bool?)null;
@@ -586,11 +693,9 @@ namespace UnrealGameSync
 			GeneralSection.SetValue("Version", (int)Version);
 			GeneralSection.SetValue("BuildAfterSync", bBuildAfterSync);
 			GeneralSection.SetValue("RunAfterSync", bRunAfterSync);
-			GeneralSection.SetValue("SyncPrecompiledEditor", bSyncPrecompiledEditor);
 			GeneralSection.SetValue("OpenSolutionAfterSync", bOpenSolutionAfterSync);
 			GeneralSection.SetValue("ShowLogWindow", bShowLogWindow);
 			GeneralSection.SetValue("AutoResolveConflicts", bAutoResolveConflicts);
-			GeneralSection.SetValue("IncrementalBuilds", bUseIncrementalBuilds);
 			GeneralSection.SetValue("ShowUnreviewed", bShowUnreviewedChanges);
 			GeneralSection.SetValue("ShowAutomated", bShowAutomatedChanges);
 			GeneralSection.SetValue("ShowLocalTimes", bShowLocalTimes);
@@ -603,7 +708,7 @@ namespace UnrealGameSync
 			GeneralSection.SetValue("FilterIndex", FilterIndex);
 			GeneralSection.SetValues("RecentProjects", RecentProjects.Select(x => x.ToConfigEntry()).ToArray());
 			GeneralSection.SetValues("SyncFilter", SyncView);
-			GeneralSection.SetValues("SyncExcludedCategories", SyncExcludedCategories);
+			SetCategorySettings(GeneralSection, "SyncIncludedCategories", "SyncExcludedCategories", SyncCategories);
 			GeneralSection.SetValue("SyncAllProjects", bSyncAllProjects);
 			GeneralSection.SetValue("IncludeAllProjectsInSolution", bIncludeAllProjectsInSolution);
 			GeneralSection.SetValue("SyncType", SyncType.ToString());
@@ -631,6 +736,10 @@ namespace UnrealGameSync
 			ScheduleSection.SetValue("Change", ScheduleChange.ToString());
 			ScheduleSection.SetValue("AnyOpenProject", ScheduleAnyOpenProject);
 			ScheduleSection.SetValues("Projects", ScheduleProjects.Select(x => x.ToConfigEntry()).ToArray());
+
+			// Precompiled binaries
+			ConfigSection ArchivesSection = ConfigFile.FindOrAddSection("PrecompiledBinaries");
+			ArchivesSection.SetValues("Archives", Archives.Select(x => x.ToConfigEntry()).ToArray());
 
 			// Window settings
 			ConfigSection WindowSection = ConfigFile.FindOrAddSection("Window");
@@ -687,8 +796,7 @@ namespace UnrealGameSync
 				WorkspaceSection.SetValue("LastBuiltChangeNumber", CurrentWorkspace.LastBuiltChangeNumber);
 				WorkspaceSection.SetValues("ExpandedArchiveName", CurrentWorkspace.ExpandedArchiveTypes);
 				WorkspaceSection.SetValues("SyncFilter", CurrentWorkspace.SyncView);
-				WorkspaceSection.SetValues("SyncIncludedCategories", CurrentWorkspace.SyncIncludedCategories);
-				WorkspaceSection.SetValues("SyncExcludedCategories", CurrentWorkspace.SyncExcludedCategories);
+				SetCategorySettings(WorkspaceSection, "SyncIncludedCategories", "SyncExcludedCategories", CurrentWorkspace.SyncCategories);
 				if(CurrentWorkspace.bSyncAllProjects.HasValue)
 				{
 					WorkspaceSection.SetValue("SyncAllProjects", CurrentWorkspace.bSyncAllProjects.Value);
@@ -732,7 +840,7 @@ namespace UnrealGameSync
 			{
 				PerforceSection.SetValue("NumRetries", SyncOptions.NumRetries);
 			}
-			if(SyncOptions.NumThreads > 0)
+			if(SyncOptions.NumThreads != PerforceSyncOptions.DefaultNumThreads)
 			{
 				PerforceSection.SetValue("NumThreads", SyncOptions.NumThreads);
 			}
@@ -745,12 +853,7 @@ namespace UnrealGameSync
 			ConfigFile.Save(FileName);
 		}
 
-		public static Guid[] GetEffectiveExcludedCategories(Guid[] GlobalExcludedCategories, Guid[] WorkspaceIncludedCategories, Guid[] WorkspaceExcludedCategories)
-		{
-			return GlobalExcludedCategories.Except(WorkspaceIncludedCategories).Union(WorkspaceExcludedCategories).ToArray();
-		}
-
-		public static string[] GetCombinedSyncFilter(Dictionary<Guid, WorkspaceSyncCategory> UniqueIdToFilter, string[] GlobalView, Guid[] GlobalExcludedCategories, string[] WorkspaceView, Guid[] WorkspaceIncludedCategories, Guid[] WorkspaceExcludedCategories)
+		public static string[] GetCombinedSyncFilter(Dictionary<Guid, WorkspaceSyncCategory> UniqueIdToFilter, string[] GlobalView, Dictionary<Guid, bool> GlobalCategoryIdToSetting, string[] WorkspaceView, Dictionary<Guid, bool> WorkspaceCategoryIdToSetting)
 		{
 			List<string> Lines = new List<string>();
 			foreach(string ViewLine in Enumerable.Concat(GlobalView, WorkspaceView).Select(x => x.Trim()).Where(x => x.Length > 0 && !x.StartsWith(";")))
@@ -758,10 +861,26 @@ namespace UnrealGameSync
 				Lines.Add(ViewLine);
 			}
 
-			HashSet<Guid> ExcludedCategories = new HashSet<Guid>(GetEffectiveExcludedCategories(GlobalExcludedCategories, WorkspaceIncludedCategories, WorkspaceExcludedCategories));
-			foreach(WorkspaceSyncCategory Filter in UniqueIdToFilter.Values.Where(x => x.bEnable && ExcludedCategories.Contains(x.UniqueId)).OrderBy(x => x.Name))
+			foreach(WorkspaceSyncCategory Filter in UniqueIdToFilter.Values.OrderBy(x => x.Name))
 			{
-				Lines.AddRange(Filter.Paths.Select(x => "-" + x.Trim()));
+				bool bEnable = Filter.bEnable;
+
+				bool bGlobalEnable;
+				if (GlobalCategoryIdToSetting.TryGetValue(Filter.UniqueId, out bGlobalEnable))
+				{
+					bEnable = bGlobalEnable;
+				}
+
+				bool bWorkspaceEnable;
+				if (WorkspaceCategoryIdToSetting.TryGetValue(Filter.UniqueId, out bWorkspaceEnable))
+				{
+					bEnable = bWorkspaceEnable;
+				}
+
+				if (!bEnable)
+				{
+					Lines.AddRange(Filter.Paths.Select(x => "-" + x.Trim()));
+				}
 			}
 
 			return Lines.ToArray();

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
@@ -9,8 +9,7 @@
 
 namespace Chaos
 {
-template <typename T, int d>
-class CHAOS_API TImplicitObject; //needed for legacy serializer
+class CHAOS_API FImplicitObject; //needed for legacy serializer
 
 
 #if CHAOS_MEMORY_TRACKING
@@ -257,7 +256,7 @@ private:
 		check(false);
 	}
 
-	void SerializeLegacy(TUniquePtr<TImplicitObject<float, 3>>& Obj);
+	void SerializeLegacy(TUniquePtr<FImplicitObject>& Obj);
 
 	template <typename T>
 	void StaticSerialize(TSerializablePtr<T>& Serializable)
@@ -329,6 +328,7 @@ FChaosArchive& operator<<(FChaosArchive& Ar, TArray<T, TAllocator>& Array)
 {
 	int32 ArrayNum = Array.Num();
 	Ar << ArrayNum;
+	Array.Reserve(ArrayNum);
 	Array.SetNum(ArrayNum);
 
 	for (int32 Idx = 0; Idx < ArrayNum; ++Idx)
@@ -377,6 +377,7 @@ typename TEnableIf<IsSerializablePtr<T>(), FChaosArchive& > ::Type operator<<(FC
 {
 	int32 ArrayNum = Array.Num();
 	Ar << ArrayNum;
+	Array.Reserve(ArrayNum);
 	Array.SetNum(ArrayNum);
 
 	for (int32 Idx = 0; Idx < ArrayNum; ++Idx)
@@ -399,6 +400,7 @@ typename TEnableIf<IsSerializablePtr<T>(), FChaosArchive& > ::Type operator<<(FC
 {
 	int32 ArrayNum = Array.Num();
 	Ar << ArrayNum;
+	Array.Reserve(ArrayNum);
 	Array.SetNum(ArrayNum);
 
 	for (int32 Idx = 0; Idx < ArrayNum; ++Idx)
@@ -414,6 +416,7 @@ typename TEnableIf<IsSerializablePtr<T>(), FChaosArchive& > ::Type operator<<(FC
 {
 	int32 ArrayNum = Array.Num();
 	Ar << ArrayNum;
+	Array.Reserve(ArrayNum);
 	Array.SetNum(ArrayNum);
 
 	for (int32 Idx = 0; Idx < ArrayNum; ++Idx)
@@ -429,6 +432,7 @@ typename TEnableIf<IsSerializablePtr<T>(), FChaosArchive& > ::Type operator<<(FC
 {
 	int32 ArrayNum = Array.Num();
 	Ar << ArrayNum;
+	Array.Reserve(ArrayNum);
 	Array.SetNum(ArrayNum);
 
 	for (int32 Idx = 0; Idx < ArrayNum; ++Idx)
@@ -444,6 +448,7 @@ typename TEnableIf<IsSerializablePtr<T>(), FChaosArchive& > ::Type operator<<(FC
 {
 	int32 ArrayNum = Array.Num();
 	Ar << ArrayNum;
+	Array.Reserve(ArrayNum);
 	Array.SetNum(ArrayNum);
 
 	for (int32 Idx = 0; Idx < ArrayNum; ++Idx)

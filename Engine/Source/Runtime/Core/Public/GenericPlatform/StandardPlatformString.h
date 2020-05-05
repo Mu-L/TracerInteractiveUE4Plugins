@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -62,7 +62,12 @@ public:
 
 	static FORCEINLINE int32 Strlen( const WIDECHAR* String )
 	{
-		return wcslen( String );
+		return (int32)wcslen( String );
+	}
+
+	static FORCEINLINE int32 Strnlen( const WIDECHAR* String, SIZE_T StringSize )
+	{
+		return (int32)wcsnlen_s( String, StringSize );
 	}
 
 	static FORCEINLINE const WIDECHAR* Strstr( const WIDECHAR* String, const WIDECHAR* Find)
@@ -82,7 +87,7 @@ public:
 
 	static FORCEINLINE int32 Atoi(const WIDECHAR* String)
 	{
-		return wcstol( String, NULL, 10 );
+		return (int32)wcstol( String, NULL, 10 );
 	}
 
 	static FORCEINLINE int64 Atoi64(const WIDECHAR* String)
@@ -102,7 +107,7 @@ public:
 
 	static FORCEINLINE int32 Strtoi( const WIDECHAR* Start, WIDECHAR** End, int32 Base )
 	{
-		return wcstol( Start, End, Base );
+		return (int32)wcstol( Start, End, Base );
 	}
 
 	static FORCEINLINE int64 Strtoi64( const WIDECHAR* Start, WIDECHAR** End, int32 Base )
@@ -223,7 +228,12 @@ public:
 
 	static FORCEINLINE int32 Strlen( const ANSICHAR* String )
 	{
-		return strlen( String );
+		return (int32)strlen( String );
+	}
+
+	static FORCEINLINE int32 Strnlen( const ANSICHAR* String, SIZE_T StringSize )
+	{
+		return (int32)strnlen_s( String, StringSize );
 	}
 
 	static FORCEINLINE const ANSICHAR* Strstr( const ANSICHAR* String, const ANSICHAR* Find)
@@ -263,7 +273,7 @@ public:
 
 	static FORCEINLINE int32 Strtoi( const ANSICHAR* Start, ANSICHAR** End, int32 Base )
 	{
-		return strtol( Start, End, Base );
+		return (int32)strtol( Start, End, Base );
 	}
 
 	static FORCEINLINE int64 Strtoi64( const ANSICHAR* Start, ANSICHAR** End, int32 Base )
@@ -302,6 +312,17 @@ public:
 	{
 		int32 Result = 0;
 		while (*String++)
+		{
+			++Result;
+		}
+
+		return Result;
+	}
+
+	static FORCEINLINE int32 Strnlen( const UCS2CHAR* String, SIZE_T StringSize )
+	{
+		int32 Result = 0;
+		while (StringSize-- > 0 && *String++)
 		{
 			++Result;
 		}

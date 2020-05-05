@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using Microsoft.Win32;
 using System;
@@ -79,6 +79,8 @@ namespace UnrealGameSync
 			this.UserNameTextBox.Text = InitialUserName;
 			this.UserNameTextBox.Select(UserNameTextBox.TextLength, 0);
 			this.UserNameTextBox.CueBanner = (DefaultUserName == null)? "Default" : String.Format("Default ({0})", DefaultUserName);
+
+			this.ParallelSyncThreadsSpinner.Value = Math.Max(Math.Min(Settings.SyncOptions.NumThreads, ParallelSyncThreadsSpinner.Maximum), ParallelSyncThreadsSpinner.Minimum);
 
 			this.DepotPathTextBox.Text = InitialDepotPath;
 			this.DepotPathTextBox.Select(DepotPathTextBox.TextLength, 0);
@@ -186,8 +188,9 @@ namespace UnrealGameSync
 				Key.SetValue("UnrealGameSync", String.Format("\"{0}\" -RestoreState", OriginalExecutableFileName));
 			}
 
-			if(Settings.bKeepInTray != KeepInTrayCheckBox.Checked)
+			if (Settings.bKeepInTray != KeepInTrayCheckBox.Checked || Settings.SyncOptions.NumThreads != ParallelSyncThreadsSpinner.Value)
 			{
+				Settings.SyncOptions.NumThreads = (int)ParallelSyncThreadsSpinner.Value;
 				Settings.bKeepInTray = KeepInTrayCheckBox.Checked;
 				Settings.Save();
 			}
@@ -205,6 +208,12 @@ namespace UnrealGameSync
 		private void EnableAutomationCheckBox_CheckedChanged(object sender, EventArgs e)
 		{
 			AutomationPortTextBox.Enabled = EnableAutomationCheckBox.Checked;
+		}
+
+		private void AdvancedBtn_Click(object sender, EventArgs e)
+		{
+			PerforceSyncSettingsWindow Window = new PerforceSyncSettingsWindow(Settings);
+			Window.ShowDialog();
 		}
 	}
 }

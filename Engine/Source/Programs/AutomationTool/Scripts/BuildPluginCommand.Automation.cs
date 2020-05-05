@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -20,6 +20,7 @@ using System.Text;
 class BuildPlugin : BuildCommand
 {
 	const string AndroidArchitectures = "armv7+arm64";
+	const string HoloLensArchitecture = "arm64+x64";
 
 	public override void ExecuteBuild()
 	{
@@ -203,7 +204,12 @@ class BuildPlugin : BuildCommand
 			{
 				Arguments += String.Format(" -architectures={0}", AndroidArchitectures);
 			}
-			if(!String.IsNullOrEmpty(InAdditionalArgs))
+			else if (Platform == UnrealTargetPlatform.HoloLens)
+			{
+				Arguments += String.Format(" -Architecture={0}", HoloLensArchitecture);
+			}
+
+			if (!String.IsNullOrEmpty(InAdditionalArgs))
 			{
 				Arguments += InAdditionalArgs;
 			}
@@ -311,7 +317,7 @@ class BuildPlugin : BuildCommand
 					UnrealTargetPlatform TargetPlatform;
 					if (!UnrealTargetPlatform.TryParse(TargetPlatformName, out TargetPlatform))
 					{
-						throw new AutomationException("Unknown target platform '{0}' specified on command line");
+						throw new AutomationException("Unknown target platform '{0}' specified on command line", TargetPlatformName);
 					}
 					if(TargetPlatforms.Contains(TargetPlatform))
 					{

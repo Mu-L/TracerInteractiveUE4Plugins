@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	OpenGLUtil.h: OpenGL RHI utility definitions.
@@ -18,7 +18,7 @@
 #define ENABLE_VERIFY_GL_THREAD (UE_BUILD_DEBUG)
 
 /** Set to 1 to verify that the the engine side uniform buffer layout matches the driver side of the GLSL shader*/
-#define ENABLE_UNIFORM_BUFFER_LAYOUT_VERIFICATION ( 0 & UE_BUILD_DEBUG & (OPENGL_ESDEFERRED | OPENGL_GL3 | OPENGL_GL4))
+#define ENABLE_UNIFORM_BUFFER_LAYOUT_VERIFICATION ( 0 & UE_BUILD_DEBUG & (OPENGL_GL3 | OPENGL_GL4))
 
 /** Set to 1 to additinally dump uniform buffer layout at shader link time, this assumes ENABLE_UNIFORM_BUFFER_LAYOUT_VERIFICATION == 1 */
 #define ENABLE_UNIFORM_BUFFER_LAYOUT_DUMP 0
@@ -39,25 +39,7 @@
 * @param Face - ECubeFace type to convert
 * @return OpenGL cube face enum value
 */
-FORCEINLINE GLenum GetOpenGLCubeFace(ECubeFace Face)
-{
-	switch(Face)
-	{
-	case CubeFace_PosX:
-	default:
-		return GL_TEXTURE_CUBE_MAP_POSITIVE_X;
-	case CubeFace_NegX:
-		return GL_TEXTURE_CUBE_MAP_NEGATIVE_X;
-	case CubeFace_PosY:
-		return GL_TEXTURE_CUBE_MAP_POSITIVE_Y;
-	case CubeFace_NegY:
-		return GL_TEXTURE_CUBE_MAP_NEGATIVE_Y;
-	case CubeFace_PosZ:
-		return GL_TEXTURE_CUBE_MAP_POSITIVE_Z;
-	case CubeFace_NegZ:
-		return GL_TEXTURE_CUBE_MAP_NEGATIVE_Z;
-	};
-}
+GLenum GetOpenGLCubeFace(ECubeFace Face);
 
 extern bool PlatformOpenGLContextValid();
 
@@ -184,7 +166,11 @@ extern bool PlatformOpenGLContextValid();
 	#define INITIATE_GL_FRAME_DUMP_EVERY_X_CALLS( a )
 #endif
 
-struct FRHICommandGLCommand final : public FRHICommand<FRHICommandGLCommand>
+struct FRHICommandGLCommandString
+{
+	static const TCHAR* TStr() { return TEXT("FRHICommandGLCommand"); }
+};
+struct FRHICommandGLCommand final : public FRHICommand<FRHICommandGLCommand, FRHICommandGLCommandString>
 {
 	TFunction<void()> GLFunction;
 

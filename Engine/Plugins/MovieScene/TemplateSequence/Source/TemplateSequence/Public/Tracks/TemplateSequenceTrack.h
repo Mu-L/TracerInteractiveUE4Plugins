@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -17,8 +17,9 @@ UCLASS(MinimalAPI)
 class UTemplateSequenceTrack : public UMovieSceneSubTrack
 {
 public:
-
 	GENERATED_BODY()
+
+	UTemplateSequenceTrack(const FObjectInitializer& ObjectInitializer);
 
 	virtual UMovieSceneSection* AddNewTemplateSequenceSection(FFrameNumber KeyTime, UTemplateSequence* InSequence);
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SNiagaraGraphPinAdd.h"
 #include "NiagaraNodeWithDynamicPins.h"
@@ -11,8 +11,11 @@
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Text/SInlineEditableTextBlock.h"
 #include "Widgets/Layout/SBox.h"
-#include "SNiagaraParameterMapView.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Widgets/SNiagaraParameterPanel.h"
+#include "NiagaraNodeParameterMapBase.h"
+#include "NiagaraNodeCustomHlsl.h"
+#include "NiagaraConstants.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraGraphPinAdd"
 
@@ -66,22 +69,46 @@ TSharedRef<SWidget> SNiagaraGraphPinAdd::OnGetAddButtonMenuContent()
 {
 	if (OwningNode != nullptr)
 	{
-		TArray<TWeakObjectPtr<UNiagaraGraph>> Graphs;
-		Graphs.Add(OwningNode->GetNiagaraGraph());
-		TSharedRef<SNiagaraAddParameterMenu> MenuWidget = SNew(SNiagaraAddParameterMenu, Graphs)
-			.OnAddParameter_UObject(OwningNode, &UNiagaraNodeWithDynamicPins::AddParameter, GetPinObj()) // For non custom actions
-			.OnCollectCustomActions_UObject(OwningNode, &UNiagaraNodeWithDynamicPins::CollectAddPinActions, GetPinObj())
-			.OnAllowMakeType_UObject(OwningNode, &UNiagaraNodeWithDynamicPins::AllowNiagaraTypeForAddPin)
-			.IsParameterRead(GraphPinObj ? GraphPinObj->Direction == EGPD_Output : true);
-		
-		AddButton->SetMenuContentWidgetToFocus(MenuWidget->GetSearchBox());
-		return MenuWidget;
+		if (OwningNode->IsA<UNiagaraNodeParameterMapBase>())
+		{
+			TArray<TWeakObjectPtr<UNiagaraGraph>> Graphs;
+			Graphs.Add(OwningNode->GetNiagaraGraph());
+
+
+			// Creating a new parameter from a graph pin always defaults to Particles scope.
+			TSharedRef<SNiagaraAddParameterMenu2> MenuWidget = SNew(SNiagaraAddParameterMenu2, Graphs)
+				.NewParameterScope(ENiagaraParameterScope::Local)
+				.NewParameterNamespace(Cast<UNiagaraNodeParameterMapBase>(OwningNode)->GetNewPinDefaultNamespace().ToString())
+				.ShowKnownConstantParametersFilter(ENiagaraParameterPanelCategory::Attributes)
+				.OnAddParameter_UObject(OwningNode, &UNiagaraNodeWithDynamicPins::AddParameter, (const UEdGraphPin*)GetPinObj())
+				.OnCollectCustomActions_UObject(OwningNode, &UNiagaraNodeWithDynamicPins::CollectAddPinActions, GetPinObj())
+				.OnAllowMakeType_UObject(OwningNode, &UNiagaraNodeWithDynamicPins::AllowNiagaraTypeForAddPin)
+				.IsParameterRead(GraphPinObj ? GraphPinObj->Direction == EGPD_Output : true);
+
+			AddButton->SetMenuContentWidgetToFocus(MenuWidget->GetSearchBox());
+			return MenuWidget;
+		}
+		else 
+		{
+			// Skip binding the add parameter delegate for custom HLSL as it does not interact with graph's UNiagaraScriptVariables.
+
+			TArray<TWeakObjectPtr<UNiagaraGraph>> Graphs;
+			Graphs.Add(OwningNode->GetNiagaraGraph());
+
+			// Creating a new parameter from a graph pin always defaults to Particles scope.
+			TSharedRef<SNiagaraAddParameterMenu2> MenuWidget = SNew(SNiagaraAddParameterMenu2, Graphs)
+				.OnCollectCustomActions_UObject(OwningNode, &UNiagaraNodeWithDynamicPins::CollectAddPinActions, GetPinObj())
+				.OnAllowMakeType_UObject(OwningNode, &UNiagaraNodeWithDynamicPins::AllowNiagaraTypeForAddPin)
+				.IsParameterRead(GraphPinObj ? GraphPinObj->Direction == EGPD_Output : true);
+
+			AddButton->SetMenuContentWidgetToFocus(MenuWidget->GetSearchBox());
+			return MenuWidget;
+		}
 	}
 	else
 	{
 		return SNullWidget::NullWidget;
 	}
-
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -470,7 +470,7 @@ public:
 	ENGINE_API void DeferredRemoveCollisionDisableTable(uint32 SkelMeshCompID);
 
 	/** Add this SkeletalMeshComponent to the list needing kinematic bodies updated before simulating physics */
-	void MarkForPreSimKinematicUpdate(USkeletalMeshComponent* InSkelComp, ETeleportType InTeleport, bool bNeedsSkinning);
+	bool MarkForPreSimKinematicUpdate(USkeletalMeshComponent* InSkelComp, ETeleportType InTeleport, bool bNeedsSkinning);
 
 	/** Remove this SkeletalMeshComponent from set needing kinematic update before simulating physics*/
 	void ClearPreSimKinematicUpdate(USkeletalMeshComponent* InSkelComp);

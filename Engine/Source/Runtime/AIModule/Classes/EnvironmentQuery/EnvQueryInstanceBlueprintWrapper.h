@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -76,6 +76,8 @@ public:
 	void SetNamedParam(FName ParamName, float Value);
 
 	void SetInstigator(const UObject* Object);
+
+	FEQSQueryDoneSignature& GetOnQueryFinishedEvent() { return OnQueryFinishedEvent; }
 
 protected:
 	void OnQueryFinished(TSharedPtr<FEnvQueryResult> Result);

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Evaluation/MovieScenePlayback.h"
 
@@ -81,12 +81,12 @@ TRange<FFrameNumber> FMovieSceneEvaluationRange::TimeRangeToNumberRange(const TR
 	if (!InFrameTimeRange.GetUpperBound().IsOpen())
 	{
 		UpperTime = InFrameTimeRange.GetUpperBoundValue();
-
-		FrameNumberRange.SetUpperBound(
-			InFrameTimeRange.GetUpperBound().IsExclusive()
-			? TRangeBound<FFrameNumber>::Exclusive(UpperTime.GetValue().FrameNumber)
-			: TRangeBound<FFrameNumber>::Inclusive(UpperTime.GetValue().FrameNumber)
-		);
+		// Similar to adjusting the lower bound, if there's a subframe on the upper bound, the frame number needs incrementing in order to evaluate keys in the subframe
+		if (UpperTime.GetValue().GetSubFrame() != 0.f || InFrameTimeRange.GetUpperBound().IsInclusive())
+		{
+			UpperTime.GetValue().FrameNumber = UpperTime.GetValue().FrameNumber + 1;
+		}
+		FrameNumberRange.SetUpperBound(TRangeBound<FFrameNumber>::Exclusive(UpperTime.GetValue().FrameNumber));
 	}
 
 	if (!InFrameTimeRange.GetLowerBound().IsOpen())

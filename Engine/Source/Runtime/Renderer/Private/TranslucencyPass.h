@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 TranslucencyPass.h: Translucency pass enum.
@@ -13,6 +13,7 @@ namespace ETranslucencyPass
 	{
 		TPT_StandardTranslucency,
 		TPT_TranslucencyAfterDOF,
+		TPT_TranslucencyAfterDOFModulate,
 
 		/** Drawing all translucency, regardless of separate or standard.  Used when drawing translucency outside of the main renderer, eg FRendererModule::DrawTile. */
 		TPT_AllTranslucency,

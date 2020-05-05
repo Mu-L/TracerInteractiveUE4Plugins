@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Engine/EngineTypes.h"
@@ -97,7 +97,7 @@ public:
 	 * 
 	 * @param InCompletionDelegate delegate called after the rejoin attempt is complete
 	 */
-	void RejoinLastSession(FOnRejoinLastSessionComplete& InCompletionDelegate);
+	void RejoinLastSession(const FOnRejoinLastSessionComplete& InCompletionDelegate);
 
 	/**
 	 * Manually set the status of rejoins.  Used when entering/leaving a map as a hint for future check requirements

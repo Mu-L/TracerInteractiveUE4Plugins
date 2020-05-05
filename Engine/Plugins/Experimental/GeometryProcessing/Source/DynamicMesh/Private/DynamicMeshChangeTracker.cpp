@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DynamicMeshChangeTracker.h"
 
@@ -393,6 +393,17 @@ void FDynamicMeshAttributeSetChangeTracker::BeginChange()
 			State.StartElements[ElemID] = true;
 		}
 	}
+
+	if (Attribs->HasMaterialID())
+	{
+		Change->MaterialIDAttribChange.Emplace();
+	}
+
+	for (int k = 0, NumRegAttrib = Attribs->NumRegisteredAttributes(); k < NumRegAttrib; k++)
+	{
+		Change->RegisteredAttributeChanges.Add(Attribs->GetRegisteredAttribute(k)->NewBlankChange());
+	}
+
 }
 
 
@@ -411,11 +422,14 @@ void FDynamicMeshAttributeSetChangeTracker::SaveInitialTriangle(int TriangleID)
 	{
 		FDynamicMeshUVChange& UVChange = Change->UVChanges[k];
 		const FDynamicMeshUVOverlay* UVLayer = Attribs->GetUVLayer(k);
-		FIndex3i UVTriangle = UVLayer->GetTriangle(TriangleID);
-		SaveElement(UVTriangle.A, UVStates[k], UVLayer, UVChange);
-		SaveElement(UVTriangle.B, UVStates[k], UVLayer, UVChange);
-		SaveElement(UVTriangle.C, UVStates[k], UVLayer, UVChange);
-		UVChange.SaveInitialTriangle(UVLayer, TriangleID);
+		if (UVLayer->IsSetTriangle(TriangleID))
+		{
+			FIndex3i UVTriangle = UVLayer->GetTriangle(TriangleID);
+			SaveElement(UVTriangle.A, UVStates[k], UVLayer, UVChange);
+			SaveElement(UVTriangle.B, UVStates[k], UVLayer, UVChange);
+			SaveElement(UVTriangle.C, UVStates[k], UVLayer, UVChange);
+			UVChange.SaveInitialTriangle(UVLayer, TriangleID);
+		}
 	}
 
 	int NumNormalLayers = Attribs->NumNormalLayers();
@@ -423,11 +437,33 @@ void FDynamicMeshAttributeSetChangeTracker::SaveInitialTriangle(int TriangleID)
 	{
 		FDynamicMeshNormalChange& NormalChange = Change->NormalChanges[k];
 		const FDynamicMeshNormalOverlay* NormalLayer = Attribs->GetNormalLayer(k);
-		FIndex3i NormTriangle = NormalLayer->GetTriangle(TriangleID);
-		SaveElement(NormTriangle.A, NormalStates[k], NormalLayer, NormalChange);
-		SaveElement(NormTriangle.B, NormalStates[k], NormalLayer, NormalChange);
-		SaveElement(NormTriangle.C, NormalStates[k], NormalLayer, NormalChange);
-		NormalChange.SaveInitialTriangle(NormalLayer, TriangleID);
+		if (NormalLayer->IsSetTriangle(TriangleID))
+		{
+			FIndex3i NormTriangle = NormalLayer->GetTriangle(TriangleID);
+			SaveElement(NormTriangle.A, NormalStates[k], NormalLayer, NormalChange);
+			SaveElement(NormTriangle.B, NormalStates[k], NormalLayer, NormalChange);
+			SaveElement(NormTriangle.C, NormalStates[k], NormalLayer, NormalChange);
+			NormalChange.SaveInitialTriangle(NormalLayer, TriangleID);
+		}
+	}
+
+	if (Change->MaterialIDAttribChange.IsSet())
+	{
+		Change->MaterialIDAttribChange->SaveInitialTriangle(Attribs->GetMaterialID(), TriangleID);
+	}
+
+	for (int k = 0, NumRegAttrib = Attribs->NumRegisteredAttributes(); k < NumRegAttrib; k++)
+	{
+		Change->RegisteredAttributeChanges[k]->SaveInitialTriangle(Attribs->GetRegisteredAttribute(k), TriangleID);
+	}
+}
+
+
+void FDynamicMeshAttributeSetChangeTracker::SaveInitialVertex(int VertexID)
+{
+	for (int k = 0, NumRegAttrib = Attribs->NumRegisteredAttributes(); k < NumRegAttrib; k++)
+	{
+		Change->RegisteredAttributeChanges[k]->SaveInitialVertex(Attribs->GetRegisteredAttribute(k), VertexID);
 	}
 }
 
@@ -446,16 +482,19 @@ void FDynamicMeshAttributeSetChangeTracker::StoreAllFinalTriangles(const TArray<
 
 		for (int tid : TriangleIDs)
 		{
-			FIndex3i Tri = UVLayer->GetTriangle(tid);
-			for (int j = 0; j < 3; ++j)
+			if (UVLayer->IsSetTriangle(tid))
 			{
-				if (StoredVertices.Contains(Tri[j]) == false)
+				FIndex3i Tri = UVLayer->GetTriangle(tid);
+				for (int j = 0; j < 3; ++j)
 				{
-					UVChange.StoreFinalElement(UVLayer, Tri[j]);
-					StoredVertices.Add(Tri[j]);
+					if (StoredVertices.Contains(Tri[j]) == false)
+					{
+						UVChange.StoreFinalElement(UVLayer, Tri[j]);
+						StoredVertices.Add(Tri[j]);
+					}
 				}
+				UVChange.StoreFinalTriangle(UVLayer, tid);
 			}
-			UVChange.StoreFinalTriangle(UVLayer, tid);
 		}
 	}
 
@@ -470,19 +509,40 @@ void FDynamicMeshAttributeSetChangeTracker::StoreAllFinalTriangles(const TArray<
 
 		for (int tid : TriangleIDs)
 		{
-			FIndex3i Tri = NormalLayer->GetTriangle(tid);
-			for (int j = 0; j < 3; ++j)
+			if (NormalLayer->IsSetTriangle(tid))
 			{
-				if (StoredVertices.Contains(Tri[j]) == false)
+				FIndex3i Tri = NormalLayer->GetTriangle(tid);
+				for (int j = 0; j < 3; ++j)
 				{
-					NormalChange.StoreFinalElement(NormalLayer, Tri[j]);
-					StoredVertices.Add(Tri[j]);
+					if (StoredVertices.Contains(Tri[j]) == false)
+					{
+						NormalChange.StoreFinalElement(NormalLayer, Tri[j]);
+						StoredVertices.Add(Tri[j]);
+					}
 				}
+				NormalChange.StoreFinalTriangle(NormalLayer, tid);
 			}
-			NormalChange.StoreFinalTriangle(NormalLayer, tid);
 		}
 	}
 
+	if (Change->MaterialIDAttribChange.IsSet())
+	{
+		Change->MaterialIDAttribChange->StoreAllFinalTriangles(Attribs->GetMaterialID(), TriangleIDs);
+	}
+
+	for (int k = 0, NumRegAttrib = Attribs->NumRegisteredAttributes(); k < NumRegAttrib; k++)
+	{
+		Change->RegisteredAttributeChanges[k]->StoreAllFinalTriangles(Attribs->GetRegisteredAttribute(k), TriangleIDs);
+	}
+}
+
+
+void FDynamicMeshAttributeSetChangeTracker::StoreAllFinalVertices(const TArray<int>& VertexIDs)
+{
+	for (int k = 0, NumRegAttrib = Attribs->NumRegisteredAttributes(); k < NumRegAttrib; k++)
+	{
+		Change->RegisteredAttributeChanges[k]->StoreAllFinalVertices(Attribs->GetRegisteredAttribute(k), VertexIDs);
+	}
 }
 
 
@@ -502,6 +562,16 @@ bool FDynamicMeshAttributeChangeSet::Apply(FDynamicMeshAttributeSet* Attributes,
 	{
 		FDynamicMeshNormalOverlay* NormalLayer = Attributes->GetNormalLayer(k);
 		NormalChanges[k].Apply(NormalLayer, bRevert);
+	}
+
+	for (int k = 0, NumRegAttrib = Attributes->NumRegisteredAttributes(); k < NumRegAttrib; k++)
+	{
+		RegisteredAttributeChanges[k]->Apply(Attributes->GetRegisteredAttribute(k), bRevert);
+	}
+
+	if (MaterialIDAttribChange.IsSet())
+	{
+		MaterialIDAttribChange->Apply(Attributes->GetMaterialID(), bRevert);
 	}
 
 	return true;
@@ -591,6 +661,11 @@ void FDynamicMeshChangeTracker::SaveVertex(int VertexID)
 	Change->SaveInitialVertex(Mesh, VertexID);
 
 	ChangedVertices[VertexID] = true;
+
+	if (AttribChangeTracker != nullptr)
+	{
+		AttribChangeTracker->SaveInitialVertex(VertexID);
+	}
 }
 
 

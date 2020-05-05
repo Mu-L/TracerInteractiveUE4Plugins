@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "EngineSessionManager.h"
 #include "Misc/Guid.h"
@@ -26,6 +26,10 @@
 #define LOCTEXT_NAMESPACE "SessionManager"
 
 DEFINE_LOG_CATEGORY(LogEngineSessionManager);
+
+#if !defined(IGNORE_SESSION_SHUTDOWN_IN_BACKGROUND_STATE)
+	#define IGNORE_SESSION_SHUTDOWN_IN_BACKGROUND_STATE 0
+#endif
 
 namespace SessionManagerDefs
 {
@@ -242,6 +246,8 @@ void FEngineSessionManager::Shutdown()
 	FCoreDelegates::ApplicationHasEnteredForegroundDelegate.RemoveAll(this);
 	FCoreDelegates::ApplicationWillTerminateDelegate.RemoveAll(this);
 	FCoreDelegates::IsVanillaProductChanged.RemoveAll(this);
+
+	FUserActivityTracking::OnActivityChanged.RemoveAll(this);
 
 	if (!CurrentSession.bIsTerminating) // Skip Slate if terminating, since we can't guarantee which thread called us.
 	{
@@ -471,7 +477,7 @@ void FEngineSessionManager::SendAbnormalShutdownReport(const FSessionRecord& Rec
 		// Shutting down in deactivated state on PS4 is normal - don't report it
 		return;
 	}
-#elif PLATFORM_XBOXONE
+#elif IGNORE_SESSION_SHUTDOWN_IN_BACKGROUND_STATE
 	if (Record.bIsInBackground && !Record.bCrashed)
 	{
 		// Shutting down in background state on XB1 is normal - don't report it

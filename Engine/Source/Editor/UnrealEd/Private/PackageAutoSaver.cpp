@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PackageAutoSaver.h"
 #include "UObject/Package.h"
@@ -290,7 +290,7 @@ void FPackageAutoSaver::OfferToRestorePackages()
 {
 	bool bRemoveRestoreFile = true;
 
-	if(HasPackagesToRestore() && !bAutoDeclineRecovery) // if bAutoDeclineRecovery is true, do like the user selected to decline. (then remove the restore files)
+	if(HasPackagesToRestore() && !bAutoDeclineRecovery && !FApp::IsUnattended()) // if bAutoDeclineRecovery is true, do like the user selected to decline. (then remove the restore files)
 	{
 		// If we failed to restore, keep the restore information around
 		if(PackageRestore::PromptToRestorePackages(PackagesThatCanBeRestored) == FEditorFileUtils::PR_Failure)

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreTypes.h"
@@ -38,7 +38,9 @@ public:
 	bool IsCultureRemapped(const FString& Name, FString* OutMappedCulture);
 	bool IsCultureAllowed(const FString& Name);
 
-	void HandleLanguageChanged(const FString& Name);
+	void RefreshCultureDisplayNames(const TArray<FString>& InPrioritizedDisplayCultureNames);
+
+	void HandleLanguageChanged(const FCultureRef InNewLanguage);
 	void GetCultureNames(TArray<FString>& CultureNames) const;
 	TArray<FString> GetPrioritizedCultureNames(const FString& Name);
 	FCulturePtr GetCulture(const FString& Name);
@@ -104,6 +106,8 @@ private:
 	TUniquePtr<icu::GregorianCalendar> InvariantGregorianCalendar;
 	FCriticalSection InvariantGregorianCalendarCS;
 
+	TArray<FString> CachedPrioritizedDisplayCultureNames;
+
 	static UBool OpenDataFile(const void* InContext, void** OutFileContext, void** OutContents, const char* InPath);
 	static void CloseDataFile(const void* InContext, void* const InFileContext, void* const InContents);
 
@@ -111,6 +115,7 @@ private:
 	struct FICUCachedFileData
 	{
 		FICUCachedFileData(const int64 FileSize);
+		FICUCachedFileData(void* ExistingBuffer);
 		FICUCachedFileData(FICUCachedFileData&& Source);
 		~FICUCachedFileData();
 

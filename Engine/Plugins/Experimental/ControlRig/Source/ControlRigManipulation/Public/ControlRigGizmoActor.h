@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -58,6 +58,10 @@ public:
 	UPROPERTY(Category = StaticMesh, VisibleAnywhere, BlueprintReadOnly, meta = (ExposeFunctionCategories = "Mesh,Rendering,Physics,Components|StaticMesh", AllowPrivateAccess = "true"))
 	class UStaticMeshComponent* StaticMeshComponent;
 
+	// the name of the color parameter on the material
+	UPROPERTY()
+	FName ColorParameterName;
+
 	UFUNCTION(BlueprintSetter)
 	/** Set the control to be enabled/disabled */
 	virtual void SetEnabled(bool bInEnabled);
@@ -82,16 +86,11 @@ public:
 	/** Get whether the control is hovered */
 	virtual bool IsHovered() const;
 
-	UFUNCTION(BlueprintSetter)
-	/** Set whether the control is being manipulated */
-	virtual void SetManipulating(bool bInManipulating);
-
-	UFUNCTION(BlueprintGetter)
-	/** Get whether the control is being manipulated */
-	virtual bool IsManipulating() const;
-
 	/** Called from the edit mode each tick */
 	virtual void TickControl() {};
+
+	/** changes the gizmo color */
+	virtual void SetGizmoColor(const FLinearColor& InColor);
 
 	/** Event called when the transform of this control has changed */
 	UFUNCTION(BlueprintImplementableEvent)
@@ -133,9 +132,6 @@ private:
 	UPROPERTY(BlueprintGetter = IsHovered, BlueprintSetter = SetHovered, Category = "ControlRig|Gizmo")
 	uint8 bHovered : 1;
 
-	/** Whether this control is being manipulated */
-	UPROPERTY(BlueprintGetter = IsManipulating, BlueprintSetter = SetManipulating, Category = "ControlRig|Gizmo")
-	uint8 bManipulating : 1;
 };
 
 /**

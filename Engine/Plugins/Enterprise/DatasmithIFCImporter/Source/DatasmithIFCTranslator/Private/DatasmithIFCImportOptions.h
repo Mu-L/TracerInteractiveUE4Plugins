@@ -1,6 +1,8 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
+
+#include "DatasmithImportOptions.h"
 
 #include "CoreMinimal.h"
 #include "Engine/EngineTypes.h"
@@ -10,7 +12,7 @@
 #include "DatasmithIFCImportOptions.generated.h"
 
 UCLASS(config = EditorPerProjectUserSettings, HideCategories = (DebugProperty))
-class UDatasmithIFCImportOptions : public UObject
+class UDatasmithIFCImportOptions : public UDatasmithOptionsBase
 {
 	GENERATED_BODY()
 

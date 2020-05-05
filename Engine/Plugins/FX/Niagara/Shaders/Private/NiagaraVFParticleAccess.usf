@@ -15,19 +15,18 @@
 #if (!RAYHITGROUPSHADER && !COMPUTESHADER) || NIAGARA_KEYGEN
 
 Buffer<float> NiagaraParticleDataFloat;
-uint NiagaraFloatDataOffset;
 uint NiagaraFloatDataStride;
 
 float GetFloat(int RegisterIdx, uint InstanceID)
 {
-	return NiagaraParticleDataFloat[NiagaraFloatDataOffset + (RegisterIdx * NiagaraFloatDataStride + InstanceID)];
+	return NiagaraParticleDataFloat[(RegisterIdx * NiagaraFloatDataStride + InstanceID)];
 }
 
 #else
 
 float GetFloat(int RegisterIdx, uint InstanceID)
 {
-	return NiagaraVFLooseParameters.NiagaraParticleDataFloat[NiagaraVFLooseParameters.NiagaraFloatDataOffset + (RegisterIdx * NiagaraVFLooseParameters.NiagaraFloatDataStride + InstanceID)];
+	return NiagaraVFLooseParameters.NiagaraParticleDataFloat[(RegisterIdx * NiagaraVFLooseParameters.NiagaraFloatDataStride + InstanceID)];
 }
 
 #endif

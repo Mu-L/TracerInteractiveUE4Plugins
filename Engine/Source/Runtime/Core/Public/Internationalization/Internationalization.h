@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreTypes.h"
@@ -173,6 +173,9 @@ public:
 
 	/** Is the given culture enabled or disabled in this build? */
 	CORE_API bool IsCultureAllowed(const FString& Name);
+
+	/** Refresh the display names of the cached cultures */
+	CORE_API void RefreshCultureDisplayNames(const TArray<FString>& InPrioritizedDisplayCultureNames);
 
 #if ENABLE_LOC_TESTING
 	static CORE_API FString& Leetify(FString& SourceString);

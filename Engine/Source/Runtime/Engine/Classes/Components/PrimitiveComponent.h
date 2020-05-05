@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -20,6 +20,7 @@
 #include "Engine/TextureStreamingTypes.h"
 #include "AI/Navigation/NavRelevantInterface.h"
 #include "VT/RuntimeVirtualTextureEnum.h"
+#include "HitProxies.h"
 #include "PrimitiveComponent.generated.h"
 
 class AController;
@@ -169,7 +170,7 @@ DECLARE_DYNAMIC_MULTICAST_SPARSE_DELEGATE_TwoParams( FComponentEndTouchOverSigna
  * There are several subclasses for the various types of geometry, but the most common by far are the ShapeComponents (Capsule, Sphere, Box), StaticMeshComponent, and SkeletalMeshComponent.
  * ShapeComponents generate geometry that is used for collision detection but are not rendered, while StaticMeshComponents and SkeletalMeshComponents contain pre-built geometry that is rendered, but can also be used for collision detection.
  */
-UCLASS(abstract, HideCategories=(Mobility), ShowCategories=(PhysicsVolume))
+UCLASS(abstract, HideCategories=(Mobility, VirtualTexture), ShowCategories=(PhysicsVolume))
 class ENGINE_API UPrimitiveComponent : public USceneComponent, public INavRelevantInterface
 {
 	GENERATED_BODY()
@@ -273,6 +274,9 @@ public:
 	/** Modifies value returned by GetGenerateOverlapEvents() */
 	UFUNCTION(BlueprintSetter)
 	void SetGenerateOverlapEvents(bool bInGenerateOverlapEvents);
+
+	UFUNCTION(BlueprintCallable, Category = "Rendering|Components")
+	void SetLightingChannels(bool bChannel0, bool bChannel1, bool bChannel2);
 
 private:
 	UPROPERTY(EditAnywhere, BlueprintGetter = GetGenerateOverlapEvents, BlueprintSetter = SetGenerateOverlapEvents, Category = Collision)
@@ -487,6 +491,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Physics)
 	uint8 bReplicatePhysicsToAutonomousProxy : 1;
 
+	// Navigation
+
+	/** If set, navmesh will not be generated under the surface of the geometry */
+	UPROPERTY(EditAnywhere, Category = Navigation)
+	uint8 bFillCollisionUnderneathForNavmesh:1;
+
 	// General flags.
 	
 	/** If this is True, this component must always be loaded on clients, even if Hidden and CollisionEnabled is NoCollision. */
@@ -513,6 +523,12 @@ public:
 	/** If true then DoCustomNavigableGeometryExport will be called to collect navigable geometry of this component. */
 	UPROPERTY()
 	TEnumAsByte<EHasCustomNavigableGeometry::Type> bHasCustomNavigableGeometry;
+
+public:
+#if WITH_EDITORONLY_DATA
+		UPROPERTY()
+			TEnumAsByte<enum EHitProxyPriority> HitProxyPriority;
+#endif
 
 private:
 #if WITH_EDITORONLY_DATA
@@ -547,10 +563,13 @@ public:
 	int32 CustomDepthStencilValue;
 
 private:
-	/** Custom data that can be read by a material through a material parameter expression. Set data using SetCustomPrimitiveData* functions */
-	UPROPERTY(EditAnywhere, AdvancedDisplay, Category=Rendering)
+	/** Optional user defined default values for the custom primitive data of this primitive */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category=Rendering, meta = (DisplayName = "Custom Primitive Data Defaults"))
 	FCustomPrimitiveData CustomPrimitiveData;
 
+	/** Custom data that can be read by a material through a material parameter expression. Set data using SetCustomPrimitiveData* functions */
+	UPROPERTY(Transient)
+	FCustomPrimitiveData CustomPrimitiveDataInternal;
 public:
 
 	/**
@@ -573,7 +592,7 @@ public:
 	 * Array of runtime virtual textures into which we render the mesh for this actor. 
 	 * The material also needs to be set up to output to a virtual texture. 
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = VirtualTexture, meta = (DisplayName = "Render to Virtual Textures"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = VirtualTexture, meta = (DisplayName = "Render to Virtual Textures"))
 	TArray<URuntimeVirtualTexture*> RuntimeVirtualTextures;
 
 	/** Bias to the LOD selected for rendering to runtime virtual textures. */
@@ -679,6 +698,16 @@ private:
 	friend class FPrimitiveSceneInfo;
 
 public:
+
+	/**
+	 * Returns true if this component has been rendered "recently", with a tolerance in seconds to define what "recent" means.
+	 * e.g.: If a tolerance of 0.1 is used, this function will return true only if the actor was rendered in the last 0.1 seconds of game time.
+	 *
+	 * @param Tolerance  How many seconds ago the actor last render time can be and still count as having been "recently" rendered.
+	 * @return Whether this actor was recently rendered.
+	 */
+	UFUNCTION(Category = "Rendering", BlueprintCallable, meta=(DisplayName="WasComponentRecentlyRendered", Keywords="scene visible"))
+	bool WasRecentlyRendered(float Tolerance = 0.2) const;
 
 	void SetLastRenderTime(float InLastRenderTime);
 	float GetLastRenderTime() const { return LastRenderTime; }
@@ -786,7 +815,7 @@ public:
 	 * Get the custom primitive data for this primitive component.
 	 * @return The payload of custom data that will be set on the primitive and accessible in the material through a material expression.
 	 */
-	const FCustomPrimitiveData& GetCustomPrimitiveData() const { return CustomPrimitiveData; }
+	const FCustomPrimitiveData& GetCustomPrimitiveData() const { return CustomPrimitiveDataInternal; }
 
 #if WITH_EDITOR
 	/** Override delegate used for checking the selection state of a component */
@@ -795,6 +824,9 @@ public:
 #endif
 
 protected:
+
+	/** Reset the custom primitive data of this primitive to the optional user defined default */
+	void ResetCustomPrimitiveData();
 
 	/** Insert an array of floats into the CustomPrimitiveData, starting at the given index */
 	void SetCustomPrimitiveDataInternal(int32 DataIndex, const TArray<float>& Values);
@@ -1096,9 +1128,9 @@ public:
 	virtual bool CanEditSimulatePhysics();
 
 	/**
-	 * Sets the constraint mode of the component.
-	 * @param ConstraintMode	The type of constraint to use.
-	 */
+	* Sets the constraint mode of the component.
+	* @param ConstraintMode	The type of constraint to use.
+	*/
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Constraint Mode", Keywords = "set locked axis constraint physics"), Category = Physics)
 	virtual void SetConstraintMode(EDOFMode::Type ConstraintMode);
 
@@ -1473,7 +1505,7 @@ public:
 	 * @param InCollisionProfileName : New Profile Name
 	 */
 	UFUNCTION(BlueprintCallable, Category="Collision")	
-	virtual void SetCollisionProfileName(FName InCollisionProfileName);
+	virtual void SetCollisionProfileName(FName InCollisionProfileName, bool bUpdateOverlaps=true);
 
 	/** Get the collision profile name */
 	UFUNCTION(BlueprintPure, Category="Collision")
@@ -1702,12 +1734,12 @@ public:
 	
 	/**
 	 * Returns BodyInstance of the component.
-	 *
-	 * @param BoneName		Used to get body associated with specific bone. NAME_None automatically gets the root most body
-	 * @param bGetWelded	If the component has been welded to another component and bGetWelded is true we return the single welded BodyInstance that is used in the simulation
-	 *
-	 * @return		Returns the BodyInstance based on various states (does component have multiple bodies? Is the body welded to another body?)
-	 */
+	*
+	* @param BoneName				Used to get body associated with specific bone. NAME_None automatically gets the root most body
+	* @param bGetWelded				If the component has been welded to another component and bGetWelded is true we return the single welded BodyInstance that is used in the simulation
+	*
+	* @return		Returns the BodyInstance based on various states (does component have multiple bodies? Is the body welded to another body?)
+	*/
 	virtual FBodyInstance* GetBodyInstance(FName BoneName = NAME_None, bool bGetWelded = true) const;
 
 	/** 
@@ -1723,13 +1755,13 @@ public:
 
 	/** 
 	 * Returns Distance to closest Body Instance surface. 
-	 *
-	 * @param Point				World 3D vector
-	 * @param OutPointOnBody	Point on the surface of collision closest to Point
-	 * 
-	 * @return		Success if returns > 0.f, if returns 0.f, point is inside the geometry
-	 *				If returns < 0.f, this primitive does not have collsion or if geometry is not supported
-	 */	
+	*
+	* @param Point				World 3D vector
+	* @param OutPointOnBody	Point on the surface of collision closest to Point
+	* 
+	* @return		Success if returns > 0.f, if returns 0.f, point is inside the geometry
+	*				If returns < 0.f, this primitive does not have collsion or if geometry is not supported
+	*/	
 	float GetDistanceToCollision(const FVector& Point, FVector& ClosestPointOnCollision) const 
 	{
 		float DistanceSqr = -1.f;
@@ -1869,7 +1901,7 @@ public:
 #endif
 
 	//~ Begin UActorComponent Interface
-	virtual void CreateRenderState_Concurrent() override;
+	virtual void CreateRenderState_Concurrent(FRegisterComponentContext* Context) override;
 	virtual void SendRenderTransform_Concurrent() override;
 	virtual void OnRegister()  override;
 	virtual void OnUnregister()  override;
@@ -1897,6 +1929,9 @@ protected:
 
 	/** Ensure physics state created **/
 	void EnsurePhysicsStateCreated();
+
+	/**  Go through attached primitive components and call MarkRenderStateDirty */
+	void MarkChildPrimitiveComponentRenderStateDirty();
 public:
 
 	//~ Begin UObject Interface.
@@ -1913,7 +1948,7 @@ public:
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChangedEvent) override;
-	virtual bool CanEditChange(const UProperty* InProperty) const override;
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
 	virtual void UpdateCollisionProfile();
 	virtual void PostEditImport() override;
 #endif // WITH_EDITOR
@@ -2178,7 +2213,7 @@ public:
 	
 protected:
 	/** Called when the BodyInstance ResponseToChannels, CollisionEnabled or bNotifyRigidBodyCollision changes, in case subclasses want to use that information. */
-	virtual void OnComponentCollisionSettingsChanged(bool bDeferUpdateOverlaps = false);
+	virtual void OnComponentCollisionSettingsChanged(bool bUpdateOverlaps=true);
 
 	/** Ends all current component overlaps. Generally used when destroying this component or when it can no longer generate overlaps. */
 	void ClearComponentOverlaps(bool bDoNotifies, bool bSkipNotifySelf);
@@ -2314,6 +2349,7 @@ public:
 	virtual bool CanCharacterStepUp(class APawn* Pawn) const;
 
 	//~ Begin INavRelevantInterface Interface
+	virtual void GetNavigationData(FNavigationRelevantData& OutData) const override;
 	virtual FBox GetNavigationBounds() const override;
 	virtual bool IsNavigationRelevant() const override;
 	//~ End INavRelevantInterface Interface

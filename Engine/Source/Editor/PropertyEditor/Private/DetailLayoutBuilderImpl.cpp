@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DetailLayoutBuilderImpl.h"
 #include "ObjectPropertyNode.h"
@@ -18,8 +18,8 @@ FDetailLayoutBuilderImpl::FDetailLayoutBuilderImpl(TSharedPtr<FComplexPropertyNo
 	, PropertyGenerationUtilities( InPropertyGenerationUtilities )
 	, DetailsView( InDetailsView.Get() )
 	, CurrentCustomizationClass( nullptr )
+	, bLayoutForExternalRoot(bIsExternal)
 {
-	bLayoutForExternalRoot = bIsExternal;
 }
 
 
@@ -94,8 +94,8 @@ void FDetailLayoutBuilderImpl::GetCategoryNames(TArray<FName>& OutCategoryNames)
 
 IDetailPropertyRow& FDetailLayoutBuilderImpl::AddPropertyToCategory(TSharedPtr<IPropertyHandle> InPropertyHandle)
 {
-	// Get the UProperty itself
-	UProperty* Property = InPropertyHandle->GetProperty();
+	// Get the FProperty itself
+	FProperty* Property = InPropertyHandle->GetProperty();
 
 	// Get the property's category name
 	FName CategoryFName = FObjectEditorUtils::GetCategoryFName(Property);
@@ -109,8 +109,8 @@ IDetailPropertyRow& FDetailLayoutBuilderImpl::AddPropertyToCategory(TSharedPtr<I
 
 FDetailWidgetRow& FDetailLayoutBuilderImpl::AddCustomRowToCategory(TSharedPtr<IPropertyHandle> InPropertyHandle, const FText& CustomSearchString, bool bForAdvanced)
 {
-	// Get the UProperty itself
-	UProperty* Property = InPropertyHandle->GetProperty();
+	// Get the FProperty itself
+	FProperty* Property = InPropertyHandle->GetProperty();
 
 	// Get the property's category name
 	FName CategoryFName = FObjectEditorUtils::GetCategoryFName(Property);
@@ -129,7 +129,7 @@ IDetailPropertyRow* FDetailLayoutBuilderImpl::EditDefaultProperty(TSharedPtr<IPr
 		TSharedPtr<FPropertyNode> PropertyNode = GetPropertyNode(InPropertyHandle);
 		if (PropertyNode.IsValid())
 		{
-			UProperty* Property = InPropertyHandle->GetProperty();
+			FProperty* Property = InPropertyHandle->GetProperty();
 
 			// Get the property's category name
 			FName CategoryFName = FObjectEditorUtils::GetCategoryFName(Property);
@@ -326,16 +326,15 @@ void FDetailLayoutBuilderImpl::GenerateDetailLayout()
 		CategoryNodes.AddUnique(AdvancedOnlyCategories[CategoryIndex]);
 	}
 
-	if(DetailsView && DetailsView->ContainsMultipleTopLevelObjects())
+	TSharedPtr<FComplexPropertyNode> RootNodePinned = RootNode.Pin();
+	if(DetailsView && DetailsView->GetRootObjectCustomization() && RootNodePinned->GetInstancesNum())
 	{
-		// This should always exist here
-		UObject* RootObject = RootNode.Pin()->AsObjectNode()->GetUObject(0);
-		check(RootObject);
+		FObjectPropertyNode* ObjectNode = RootNodePinned->AsObjectNode();
 
 		TSharedPtr<IDetailRootObjectCustomization> RootObjectCustomization = DetailsView->GetRootObjectCustomization();
 
 		// there are multiple objects in the details panel.  Separate each one with a unique object name node to differentiate them
-		AllRootTreeNodes.Add( MakeShareable( new FDetailMultiTopLevelObjectRootNode( CategoryNodes, RootObjectCustomization, DetailsView, *RootObject) ) );
+		AllRootTreeNodes.Add(MakeShared<FDetailMultiTopLevelObjectRootNode>(CategoryNodes, RootObjectCustomization, DetailsView, ObjectNode));
 	}
 	else
 	{
@@ -415,7 +414,7 @@ static TSharedPtr<FPropertyNode> FindChildPropertyNode( FPropertyNode& InParentN
 	for( int32 ChildIndex = 0; ChildIndex < InParentNode.GetNumChildNodes(); ++ChildIndex )
 	{
 		TSharedPtr<FPropertyNode>& ChildNode = InParentNode.GetChildNode(ChildIndex);
-		UProperty* Property = ChildNode->GetProperty();
+		FProperty* Property = ChildNode->GetProperty();
 		if( Property && Property->GetFName() == *PropertyName )
 		{
 			FoundNode = ChildNode;

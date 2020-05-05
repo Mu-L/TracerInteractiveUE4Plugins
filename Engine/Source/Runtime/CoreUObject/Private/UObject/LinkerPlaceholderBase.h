@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -7,6 +7,16 @@
 #include "UObject/ObjectRedirector.h"
 #include "UObject/ObjectResource.h"
 #include "UObject/LinkerLoad.h"
+#include "UObject/Field.h"
+
+FORCEINLINE bool UseCircularDependencyLoadDeferring()
+{
+#if USE_CIRCULAR_DEPENDENCY_LOAD_DEFERRING
+	return !GEventDrivenLoaderEnabled;
+#else
+	return false;
+#endif
+}
 
 /*******************************************************************************
  * FPlaceholderContainerTracker / FScopedPlaceholderPropertyTracker
@@ -16,17 +26,34 @@
  * To track placeholder property values, we need to know the root container 
  * instance that is set with the placeholder value (so we can reset it later). 
  * This here is designed to track objects that are actively being preloaded
- * (serialized in); so we have the container on hand, when a UObjectProperty 
+ * (serialized in); so we have the container on hand, when a FObjectProperty 
  * value is set with a placeholder.
  */
 struct FScopedPlaceholderContainerTracker
 {
 public:
-	FScopedPlaceholderContainerTracker(UObject* PerspectivePlaceholderReferencer);
-	~FScopedPlaceholderContainerTracker();
+	FScopedPlaceholderContainerTracker(UObject* InPlaceholderContainerCandidate)
+	: bEnabled(UseCircularDependencyLoadDeferring())
+	{
+		if (bEnabled)
+		{
+			Push(InPlaceholderContainerCandidate);
+		}
+	}
+	~FScopedPlaceholderContainerTracker()
+	{
+		if (bEnabled)
+		{
+			Pop();
+		}
+	}
 
 private:
+	const bool bEnabled;
 	UObject* PlaceholderReferencerCandidate;
+
+	void Push(UObject* InIntermediateProperty);
+	void Pop();
 };
 
 /** 
@@ -39,11 +66,29 @@ private:
 struct FScopedPlaceholderPropertyTracker
 {
 public:
-	 FScopedPlaceholderPropertyTracker(const UStructProperty* IntermediateProperty);
-	~FScopedPlaceholderPropertyTracker();
+	 FScopedPlaceholderPropertyTracker(FFieldVariant InIntermediateProperty)
+		 : bEnabled(UseCircularDependencyLoadDeferring())
+	 {
+		if (bEnabled)
+		{
+			Push(InIntermediateProperty);
+		}
+	 }
+	
+	~FScopedPlaceholderPropertyTracker()
+	{
+		if (bEnabled)
+		{
+			Pop();
+		}
+	}
 
 private:
-	const UStructProperty* IntermediateProperty;
+	const bool bEnabled;
+	FFieldVariant IntermediateProperty;
+	
+	void Push(FFieldVariant InIntermediateProperty);
+	void Pop();
 };
 
 /*******************************************************************************
@@ -68,7 +113,7 @@ public:
 	 * @param  DataPtr				Not saved off (as it can change), but used to verify that we pick the correct container.
 	 * @return True if we successfully found a container object and are now tracking it, otherwise false.
 	 */
-	bool AddReferencingPropertyValue(const UObjectProperty* ReferencingProperty, void* DataPtr);
+	bool AddReferencingPropertyValue(FFieldVariant ReferencingProperty, void* DataPtr);
 
 	/**
 	 * A query method that let's us check to see if this class is currently 
@@ -156,10 +201,10 @@ private:
 	 */
 	struct FPlaceholderValuePropertyPath
 	{
-		FPlaceholderValuePropertyPath(const UProperty* ReferencingProperty);
+		FPlaceholderValuePropertyPath(FFieldVariant ReferencingProperty);
 
 		/** 
-		 * Validates that the internal property path points to a UObjectProperty, 
+		 * Validates that the internal property path points to a FObjectProperty, 
 		 * and that the whole thing has a class owner. 
 		 */
 		bool IsValid() const;
@@ -184,16 +229,16 @@ private:
 
 	private:
 		/** Denotes the property hierarchy used to reach this leaf property that is referencing a placeholder*/
-		TArray<const UProperty*> PropertyChain;
+		TArray<FFieldVariant> PropertyChain;
 
 	public:
 		/** Support comparison functions that make this usable as a KeyValue for a TSet<> */
 		friend uint32 GetTypeHash(const FPlaceholderValuePropertyPath& PlaceholderPropertyRef)
 		{
 			uint32 Hash = 0;
-			for (const UProperty* Propererty : PlaceholderPropertyRef.PropertyChain)
+			for (const FFieldVariant& Property : PlaceholderPropertyRef.PropertyChain)
 			{
-				Hash = HashCombine(Hash, GetTypeHash(Propererty));
+				Hash = HashCombine(Hash, GetTypeHash(Property.GetRawPointer()));
 			}
 			return Hash;
 		}
@@ -246,7 +291,7 @@ public:
 	 * 
 	 * @param  ReferencingProperty	A property that references this placeholder.
 	 */
-	void AddReferencingProperty(UProperty* ReferencingProperty);
+	void AddReferencingProperty(FFieldVariant ReferencingProperty);
 
 	/**
 	 * Removes the specified property from this class's internal tracking list 
@@ -254,7 +299,7 @@ public:
 	 * 
 	 * @param  ReferencingProperty	A property that used to use this placeholder and now no longer does.
 	 */
-	void RemoveReferencingProperty(UProperty* ReferencingProperty);
+	void RemoveReferencingProperty(FFieldVariant ReferencingProperty);
 
 	/**
 	 * Records a raw pointer, directly to the UObject* script expression (so 
@@ -303,7 +348,7 @@ private:
 	int32 ResolveScriptReferences(PlaceholderType* ReplacementObj);
 
 	/** Links to UProperties that are currently directly using this placeholder */
-	TSet<UProperty*> ReferencingProperties;
+	TSet<FFieldVariant> ReferencingProperties;
 
 	/** Points directly at UObject* refs that were serialized in as part of script bytecode */
 	TSet<PlaceholderType**> ReferencingScriptExpressions;

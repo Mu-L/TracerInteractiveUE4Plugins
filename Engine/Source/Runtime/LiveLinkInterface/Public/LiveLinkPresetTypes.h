@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -24,6 +24,10 @@ struct FLiveLinkSourcePreset
 
 	UPROPERTY()
 	ULiveLinkSourceSettings* Settings = nullptr;
+
+	/** The SourceType when the source was saved to a Preset. */
+	UPROPERTY()
+	FText SourceType;
 };
 
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Toolkits/AssetEditorToolkit.h"
 #include "Widgets/Layout/SBorder.h"
@@ -30,8 +30,11 @@
 #include "Toolkits/AssetEditorToolkitMenuContext.h"
 #include "ToolMenus.h"
 #include "Subsystems/AssetEditorSubsystem.h"
+#include "Logging/LogMacros.h"
 
 #define LOCTEXT_NAMESPACE "AssetEditorToolkit"
+
+DEFINE_LOG_CATEGORY_STATIC(LogAssetEditorToolkit, Log, All);
 
 TWeakPtr< IToolkitHost > FAssetEditorToolkit::PreviousWorldCentricToolkitHostForNewAssetEditor;
 TSharedPtr<FExtensibilityManager> FAssetEditorToolkit::SharedMenuExtensibilityManager;
@@ -400,7 +403,22 @@ FText FAssetEditorToolkit::GetToolTipTextForObject(const UObject* InObject)
 
 class FEdMode* FAssetEditorToolkit::GetEditorMode() const
 {
-	return NULL;
+	return nullptr;
+}
+
+class UEdMode* FAssetEditorToolkit::GetScriptableEditorMode() const
+{
+	return nullptr;
+}
+
+FText FAssetEditorToolkit::GetEditorModeDisplayName() const
+{
+	return FText::GetEmpty();
+}
+
+FSlateIcon FAssetEditorToolkit::GetEditorModeIcon() const
+{
+	return FSlateIcon();
 }
 
 const TArray< UObject* >* FAssetEditorToolkit::GetObjectsCurrentlyBeingEdited() const
@@ -532,8 +550,15 @@ void FAssetEditorToolkit::SaveAsset_Execute()
 
 	for (UObject* Object : ObjectsToSave)
 	{
-		checkf(((Object != nullptr) && Object->IsAsset()), TEXT("Invalid object to save: %s"), (Object != nullptr) ? *Object->GetFullName() : TEXT("Null Object"));
-		PackagesToSave.Add(Object->GetOutermost());
+		if ((Object == nullptr) || !Object->IsAsset())
+		{
+			// Log an invalid object but don't try to save it
+			UE_LOG(LogAssetEditorToolkit, Log, TEXT("Invalid object to save: %s"), (Object != nullptr) ? *Object->GetFullName() : TEXT("Null Object"));
+		}
+		else
+		{
+			PackagesToSave.Add(Object->GetOutermost());
+		}
 	}
 
 	FEditorFileUtils::PromptForCheckoutAndSave(PackagesToSave, bCheckDirtyOnAssetSave, /*bPromptToSave=*/ false);
@@ -894,20 +919,22 @@ TSharedRef<SDockTab> FAssetEditorToolkit::SpawnTab_Toolbar( const FSpawnTabArgs&
 
 
 
-void FAssetEditorToolkit::FillDefaultFileMenuCommands( FMenuBuilder& MenuBuilder )
+void FAssetEditorToolkit::FillDefaultFileMenuCommands(FToolMenuSection& InSection)
 {
-	MenuBuilder.AddMenuEntry(FAssetEditorCommonCommands::Get().SaveAsset, "SaveAsset", TAttribute<FText>(), TAttribute<FText>(), FSlateIcon(FEditorStyle::GetStyleSetName(), "AssetEditor.SaveAsset.Greyscale"));
+	const FToolMenuInsert InsertPosition(NAME_None, EToolMenuInsertType::First);
+
+	InSection.AddMenuEntry(FAssetEditorCommonCommands::Get().SaveAsset, TAttribute<FText>(), TAttribute<FText>(), FSlateIcon(FEditorStyle::GetStyleSetName(), "AssetEditor.SaveAsset.Greyscale")).InsertPosition = InsertPosition;
 	if( IsActuallyAnAsset() )
 	{
-		MenuBuilder.AddMenuEntry(FAssetEditorCommonCommands::Get().SaveAssetAs, "SaveAssetAs", TAttribute<FText>(), TAttribute<FText>(), FSlateIcon(FEditorStyle::GetStyleSetName(), "AssetEditor.SaveAssetAs.Small"));
+		InSection.AddMenuEntry(FAssetEditorCommonCommands::Get().SaveAssetAs, TAttribute<FText>(), TAttribute<FText>(), FSlateIcon(FEditorStyle::GetStyleSetName(), "AssetEditor.SaveAssetAs.Small")).InsertPosition = InsertPosition;
 	}
-	MenuBuilder.AddMenuSeparator();
+	InSection.AddMenuSeparator("DefaultFileMenuCommandsSeparator").InsertPosition = InsertPosition;;
 
 	if( IsWorldCentricAssetEditor() )
 	{
 		// @todo toolkit minor: It would be awesome if the user could just "tear off" the SToolkitDisplay to do SwitchToStandaloneEditor
 		//			Would need to probably drop at mouseup location though instead of using saved layout pos.
-		MenuBuilder.AddMenuEntry( FAssetEditorCommonCommands::Get().SwitchToStandaloneEditor );
+		InSection.AddMenuEntry( FAssetEditorCommonCommands::Get().SwitchToStandaloneEditor ).InsertPosition = InsertPosition;;
 	}
 	else
 	{
@@ -916,16 +943,16 @@ void FAssetEditorToolkit::FillDefaultFileMenuCommands( FMenuBuilder& MenuBuilder
 			// @todo toolkit checkin: Disabled temporarily until we have world-centric "ready to use"!
 			if( 0 )
 			{
-				MenuBuilder.AddMenuEntry( FAssetEditorCommonCommands::Get().SwitchToWorldCentricEditor );
+				InSection.AddMenuEntry( FAssetEditorCommonCommands::Get().SwitchToWorldCentricEditor ).InsertPosition = InsertPosition;;
 			}
 		}
 	}
 }
 
 
-void FAssetEditorToolkit::FillDefaultAssetMenuCommands( FMenuBuilder& MenuBuilder )
+void FAssetEditorToolkit::FillDefaultAssetMenuCommands(FToolMenuSection& InSection)
 {
-	MenuBuilder.AddMenuEntry(FGlobalEditorCommonCommands::Get().FindInContentBrowser, "FindInContentBrowser", LOCTEXT("FindInContentBrowser", "Find in Content Browser..."));
+	InSection.AddMenuEntry(FGlobalEditorCommonCommands::Get().FindInContentBrowser, LOCTEXT("FindInContentBrowser", "Find in Content Browser..."));
 
 	// Commands we only want to be accessible when editing an asset should go here 
 	if( IsActuallyAnAsset() )
@@ -947,20 +974,20 @@ void FAssetEditorToolkit::FillDefaultAssetMenuCommands( FMenuBuilder& MenuBuilde
 					const FName IconName = TEXT( "AssetEditor.Reimport" );
 					FUIAction UIAction;
 					UIAction.ExecuteAction.BindRaw( this, &FAssetEditorToolkit::Reimport_Execute, EditingObject );
-					MenuBuilder.AddMenuEntry( LabelText, ToolTipText, FSlateIcon(FEditorStyle::GetStyleSetName(), IconName), UIAction );
+					InSection.AddMenuEntry( NAME_None, LabelText, ToolTipText, FSlateIcon(FEditorStyle::GetStyleSetName(), IconName), UIAction );
 				}
 			}
 		}		
 	}
 }
 
-void FAssetEditorToolkit::FillDefaultHelpMenuCommands( FMenuBuilder& MenuBuilder )
+void FAssetEditorToolkit::FillDefaultHelpMenuCommands(FToolMenuSection& InSection)
 {
 	FFormatNamedArguments Args;
 	Args.Add(TEXT("Editor"), GetBaseToolkitName());
 	const FText ToolTip = FText::Format(LOCTEXT("BrowseDocumentationTooltip", "Browse {Editor} documentation..."), Args);
 
-	MenuBuilder.AddMenuEntry(FGlobalEditorCommonCommands::Get().OpenDocumentation, NAME_None, ToolTip);
+	InSection.AddMenuEntry(FGlobalEditorCommonCommands::Get().OpenDocumentation, ToolTip);
 }
 
 FName FAssetEditorToolkit::GetToolMenuAppName() const
@@ -973,12 +1000,25 @@ FName FAssetEditorToolkit::GetToolMenuAppName() const
 	return GetToolkitFName();
 }
 
+FName FAssetEditorToolkit::GetToolMenuName() const
+{
+	return *(TEXT("AssetEditor.") + GetToolMenuAppName().ToString() + TEXT(".MainMenu"));
+}
+
 FName FAssetEditorToolkit::GetToolMenuToolbarName() const
 {
+	FName ParentName;
+	return GetToolMenuToolbarName(ParentName);
+}
+
+FName FAssetEditorToolkit::GetToolMenuToolbarName(FName& OutParentName) const
+{
+	static const FName DefaultToolbarName = "AssetEditor.DefaultToolBar";
+	OutParentName = DefaultToolbarName;
 	return *(TEXT("AssetEditor.") + GetToolMenuAppName().ToString() + TEXT(".ToolBar"));
 }
 
-void FAssetEditorToolkit::RegisterMenus()
+void FAssetEditorToolkit::RegisterDefaultToolBar()
 {
 	static const FName DefaultToolBarName("AssetEditor.DefaultToolBar");
 	UToolMenus* ToolMenus = UToolMenus::Get();
@@ -993,18 +1033,24 @@ void FAssetEditorToolkit::RegisterMenus()
 	}
 }
 
+void FAssetEditorToolkit::InitToolMenuContext(FToolMenuContext& MenuContext)
+{
+
+}
+
 void FAssetEditorToolkit::GenerateToolbar()
 {
 	TSharedPtr<FExtender> Extender = FExtender::Combine(ToolbarExtenders);
 
-	RegisterMenus();
+	RegisterDefaultToolBar();
 
-	const FName ToolBarName = GetToolMenuToolbarName();
+	FName ParentToolbarName;
+	const FName ToolBarName = GetToolMenuToolbarName(ParentToolbarName);
 	UToolMenus* ToolMenus = UToolMenus::Get();
 	UToolMenu* FoundMenu = ToolMenus->FindMenu(ToolBarName);
 	if (!FoundMenu || !FoundMenu->IsRegistered())
 	{
-		FoundMenu = ToolMenus->RegisterMenu(ToolBarName, "AssetEditor.DefaultToolBar", EMultiBoxType::ToolBar);
+		FoundMenu = ToolMenus->RegisterMenu(ToolBarName, ParentToolbarName, EMultiBoxType::ToolBar);
 	}
 
 	FToolMenuContext MenuContext(GetToolkitCommands(), Extender);
@@ -1012,6 +1058,8 @@ void FAssetEditorToolkit::GenerateToolbar()
 	UAssetEditorToolkitMenuContext* ToolkitMenuContext = NewObject<UAssetEditorToolkitMenuContext>(FoundMenu);
 	ToolkitMenuContext->Toolkit = AsShared();
 	MenuContext.AddObject(ToolkitMenuContext);
+
+	InitToolMenuContext(MenuContext);
 
 	UToolMenu* GeneratedToolbar = ToolMenus->GenerateMenu(ToolBarName, MenuContext);
 	GeneratedToolbar->bToolBarIsFocusable = bIsToolbarFocusable;

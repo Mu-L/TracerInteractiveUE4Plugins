@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once 
 
@@ -41,6 +41,16 @@ enum PropertyEditorTestEnum
 	PropertyEditorTest_MAX,
 };
 
+UENUM(meta = (Bitflags))
+enum class PropertyEditorTestBitflags : uint8
+{
+	First,
+	Second,
+	Third,
+	Hidden UMETA(Hidden, ToolTip = "This value shouldn't be used or even visible in the editor")
+};
+ENUM_CLASS_FLAGS(PropertyEditorTestBitflags)
+
 UENUM()
 enum ArrayLabelEnum
 {
@@ -67,6 +77,15 @@ enum class EditColor : uint8
 	Pink,
 	Magenta,
 	Cyan
+};
+
+UENUM()
+enum class ETestEnumFlags : uint8
+{
+	None = 0,
+	One = 1 << 0,
+	Two = 1 << 1,
+	Four = 1 << 2
 };
 
 USTRUCT()
@@ -215,6 +234,9 @@ class UPropertyEditorTestObject : public UObject
 	UPROPERTY(EditAnywhere, Category=BasicProperties, meta=(DisallowedClasses = "Texture2D"))
 	TSubclassOf<UTexture> SubclassOfWithDisallowed;
 
+	UPROPERTY(EditAnywhere, Category=BasicProperties, meta=(AllowedClasses="StaticMesh,  SkeletalMesh	"))
+	TAssetPtr<UObject> AssetPointerWithAllowedAndWhitespace;
+
 	UPROPERTY(EditAnywhere, Category=BasicProperties)
 	FLinearColor LinearColorProperty;
 
@@ -311,6 +333,9 @@ class UPropertyEditorTestObject : public UObject
 	UPROPERTY(VisibleAnywhere, Category=AdvancedProperties)
 	UPrimitiveComponent* ObjectThatCannotBeChanged;
 
+	UPROPERTY(EditAnywhere, Category = AdvancedProperties, meta = (Bitmask, BitmaskEnum = "PropertyEditorTestBitflags"))
+	int32 EnumBitflags = 0;
+
 	UPROPERTY(EditAnywhere, Category=AdvancedProperties, meta=(PasswordField=true))
 	FString StringPasswordProperty;
 
@@ -326,7 +351,7 @@ class UPropertyEditorTestObject : public UObject
 	UPROPERTY(EditAnywhere, Category = StructTests, meta = (InlineEditConditionToggle))
 	bool bEditConditionStructWithMultipleInstances2;
 
-	UPROPERTY(EditAnywhere, Category=StructTests, meta=(editcondition = "bEditConditionStructWithMultipleInstances2"))
+	UPROPERTY(EditAnywhere, Category=StructTests, meta=(EditCondition = "bEditConditionStructWithMultipleInstances2"))
 	FPropertyEditorTestBasicStruct StructWithMultipleInstances2;
 
 	UPROPERTY(EditAnywhere, Category=StructTests)
@@ -355,6 +380,9 @@ class UPropertyEditorTestObject : public UObject
 
 	UPROPERTY(EditAnywhere, Category=StructTests, meta=(AllowedClasses="Material,Texture"))
 	FSoftObjectPath MaterialOrTextureAssetReference;
+
+	UPROPERTY(EditAnywhere, Category=StructTests)
+	FSoftObjectPath DisabledByCanEditChange;
 
 	UPROPERTY(EditAnywhere, Category=StructTests, meta=(InlineEditConditionToggle))
 	bool bEditCondition;
@@ -442,6 +470,15 @@ class UPropertyEditorTestObject : public UObject
 
 	UPROPERTY(EditAnywhere, Category="TMap Tests")
 	TMap<FName, FName> NameToNameMap;
+
+	UPROPERTY(EditAnywhere, Category="TMap Tests")
+	TMap<FName, UObject*> NameToObjectMap;
+
+	UPROPERTY(EditAnywhere, Category="TMap Tests")
+	TMap<FName, FPropertyEditorTestBasicStruct> NameToCustomMap;
+
+	UPROPERTY(EditAnywhere, Category="TMap Tests")
+	TMap<FName, FLinearColor> NameToColorMap;
 
 	UPROPERTY(EditAnywhere, Category = "TMap Tests")
 	TMap<int, FPropertyEditorTestBasicStruct> IntToCustomMap;
@@ -551,6 +588,15 @@ class UPropertyEditorTestObject : public UObject
 	UPROPERTY(EditAnywhere, Category = EditCondition, meta = (EditCondition = "bEditConditionForArrays"))
 	TArray<FPropertyEditorTestBasicStruct> ArrayOfStructsWithEditCondition;
 
+	UPROPERTY(EditAnywhere, Category = EditCondition)
+	int64 EditConditionFlags;
+
+	UPROPERTY(EditAnywhere, Category = EditCondition, meta = (EditCondition = "EditConditionFlags & ETestEnumFlags::Two || EditConditionFlags & ETestEnumFlags::Four"))
+	bool bEnabledWhenFlagsHasTwoOrFour;
+
+	UPROPERTY(EditAnywhere, Category = EditCondition, meta = (EditCondition = "EditConditionFlags & ETestEnumFlags::One == false"))
+	bool bDisabledWhenFlagsIsOdd;
+
 	UPROPERTY(EditAnywhere, Category = OnlyInlineProperty, meta = (InlineCategoryProperty))
 	TEnumAsByte<EComponentMobility::Type> InlineProperty;
 
@@ -565,4 +611,54 @@ class UPropertyEditorTestObject : public UObject
 
 	UPROPERTY(EditAnywhere, Category = DateTime)
 	FDateTime DateTime;
+
+	UPROPERTY()
+	bool bInlineEditConditionWithoutMetaToggle;
+
+	UPROPERTY(EditAnywhere, Category = "Inline Edit Conditions", meta = (EditCondition = "bInlineEditConditionWithoutMetaToggle"))
+	float InlineEditConditionWithoutMeta;
+
+	UPROPERTY(EditAnywhere, Category = "Inline Edit Conditions", meta = (InlineEditConditionToggle))
+	bool bInlineEditConditionWithMetaToggle;
+
+	UPROPERTY(EditAnywhere, Category = "Inline Edit Conditions", meta = (EditCondition = "bInlineEditConditionWithMetaToggle"))
+	float InlineEditConditionWithMeta;
+
+	UPROPERTY(meta = (InlineEditConditionToggle))
+	bool bInlineEditConditionNotEditable;
+
+	UPROPERTY(EditAnywhere, Category = "Inline Edit Conditions", meta = (EditCondition = "bInlineEditConditionNotEditable"))
+	float HasNonEditableInlineCondition;
+
+	UPROPERTY(EditAnywhere, Category = "Inline Edit Conditions")
+	bool bSharedEditCondition;
+
+	UPROPERTY(EditAnywhere, Category = "Inline Edit Conditions", meta = (EditCondition = "bSharedEditCondition"))
+	float UsesSharedEditCondition1;
+
+	UPROPERTY(EditAnywhere, Category = "Inline Edit Conditions", meta = (EditCondition = "bSharedEditCondition"))
+	float UsesSharedEditCondition2;
+
+	bool CanEditChange(const FProperty* InProperty) const;
+};
+
+UCLASS(EditInlineNew, Blueprintable)
+class UBlueprintPropertyTestObject : public UObject
+{
+	GENERATED_BODY()
+public:
+	UPROPERTY(EditAnywhere, Category="Hidden")
+	int32 ShouldBeHidden;
+
+	UPROPERTY(EditAnywhere, Category="Visible")
+	int32 ShouldBeVisible;
+};
+
+UCLASS(Blueprintable)
+class UBlueprintPropertyContainerTestObject : public UObject
+{
+	GENERATED_BODY()
+public:
+	UPROPERTY(Instanced, EditAnywhere, Category="Default", meta=(ShowOnlyInnerProperties))
+	TArray<UBlueprintPropertyTestObject*> Array;
 };

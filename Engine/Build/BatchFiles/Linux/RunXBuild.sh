@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ## Unreal Engine 4 XBuild setup script
-## Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+## Copyright Epic Games, Inc. All Rights Reserved.
 
 ## This script is expecting to exist in the UE4/Engine/Build/BatchFiles directory.  It will not work correctly
 ## if you copy it to a different location and run it.
@@ -20,7 +20,7 @@ if [ ! -f Build/BatchFiles/Linux/RunXBuild.sh ]; then
 	exit 1
 fi
 
-xbuild /verbosity:quiet /nologo "$@" |grep -i error
+xbuild /verbosity:quiet /nologo "$@" |grep -wi error
 if [ $? -ne 1 ]; then
 	exit 1
 else

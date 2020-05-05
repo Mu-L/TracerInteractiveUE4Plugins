@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TakeRecorderActorSource.h"
 #include "Styling/SlateIconFinder.h"
@@ -436,7 +436,7 @@ void UTakeRecorderActorSource::CreateSectionRecordersRecursive(UObject* ObjectTo
 			TArray<FString> PropertyNames;
 			Property.PropertyName.ToString().ParseIntoArray(PropertyNames, TEXT("."));
 
-			UProperty* PropertyInstance = nullptr;
+			FProperty* PropertyInstance = nullptr;
 			UStruct* SearchStruct = ObjectToRecord->GetClass();
 			for (auto PropertyStringName : PropertyNames)
 			{
@@ -444,7 +444,7 @@ void UTakeRecorderActorSource::CreateSectionRecordersRecursive(UObject* ObjectTo
 				SearchStruct = nullptr;
 				if (PropertyInstance)
 				{
-					if (UStructProperty* AsStructProperty = Cast<UStructProperty>(PropertyInstance))
+					if (FStructProperty* AsStructProperty = CastField<FStructProperty>(PropertyInstance))
 					{
 						SearchStruct = AsStructProperty->Struct;
 					}
@@ -720,11 +720,10 @@ bool UTakeRecorderActorSource::EnsureObjectTemplateHasComponent(UActorComponent*
 {
 	check(InComponent);
 
-	//If it's native it will be caught below as a component so might as well bail here.
 	//If it's coming from a component that is created from a template defined in the Components section of the Blueprint
 	//it will NOT be found as a Component in AllChildren below but it will exist when created so we also exit here.
 	//So we only do the check if UserConstructionScript or Instance, with the latter may not be needed.. not sure
-	if (InComponent->CreationMethod == EComponentCreationMethod::Native || InComponent->CreationMethod == EComponentCreationMethod::SimpleConstructionScript)
+	if (InComponent->CreationMethod == EComponentCreationMethod::SimpleConstructionScript)
 	{
 		return false;
 	}
@@ -854,7 +853,7 @@ void UTakeRecorderActorSource::PostEditChangeChainProperty(struct FPropertyChang
 {
 	if (PropertyChangedEvent.PropertyChain.Num() > 0)
 	{
-		UProperty* MemberProperty = PropertyChangedEvent.PropertyChain.GetTail()->GetValue();
+		FProperty* MemberProperty = PropertyChangedEvent.PropertyChain.GetTail()->GetValue();
 		if (MemberProperty != NULL)
 		{
 			if (MemberProperty->GetFName() == GET_MEMBER_NAME_CHECKED(FActorRecordedProperty, bEnabled))
@@ -899,17 +898,17 @@ void UTakeRecorderActorSource::RebuildRecordedPropertyMap()
 	UpdateCachedNumberOfRecordedProperties();
 }
 
-void UTakeRecorderActorSource::RebuildRecordedPropertyMapRecursive(UObject* InObject, UActorRecorderPropertyMap* PropertyMap, const FString& OuterStructPath)
+void UTakeRecorderActorSource::RebuildRecordedPropertyMapRecursive(const FFieldVariant& InObject, UActorRecorderPropertyMap* PropertyMap, const FString& OuterStructPath)
 {
 	ensure(InObject);
 	ensure(PropertyMap);
 
 	// // Iterate through our recorders and find any that can record this object that aren't tied to a specific property. Some things
-	// we wish to record (such as Transforms) don't have a specific UProperty or UActorComponent associated with them.
+	// we wish to record (such as Transforms) don't have a specific FProperty or UActorComponent associated with them.
 	TArray<IMovieSceneTrackRecorderFactory*> ModularFactories = IModularFeatures::Get().GetModularFeatureImplementations<IMovieSceneTrackRecorderFactory>(MovieSceneSectionRecorderFactoryName);
 	for (IMovieSceneTrackRecorderFactory* Factory : ModularFactories)
 	{
-	 	if (Factory->CanRecordObject(InObject))
+	 	if (InObject.IsUObject() && Factory->CanRecordObject(InObject.ToUObject()))
 	 	{
 	 		// @sequencer-todo: Instead of defaulting to true this should copy from the global settings
 	 		FName PropertyName = FName(*Factory->GetDisplayName().ToString());
@@ -928,12 +927,13 @@ void UTakeRecorderActorSource::RebuildRecordedPropertyMapRecursive(UObject* InOb
 	// Iterate through the properties on this object and look for ones marked with CPF_Interp ("Expose for Cinematics") or that have metadata
 	// that explicitly specifies a sequence track metadata.
 
-	UStruct* ObjectClass = InObject->GetClass();
-	if (UStructProperty* AsStructProperty = Cast<UStructProperty>(InObject)) 
+	UStruct* ObjectClass = InObject.IsUObject() ? InObject.ToUObject()->GetClass() : nullptr;
+	if (FStructProperty* AsStructProperty = InObject.Get<FStructProperty>())
 	{
 		ObjectClass = AsStructProperty->Struct;
 	}
-	for (TFieldIterator<UProperty> It(ObjectClass); It; ++It)
+	check(ObjectClass); // With FProperties ObjectClass can only be obtained from AsStructProperty. If we hit this we need to change this check to an 'if (ObjectClass)'
+	for (TFieldIterator<FProperty> It(ObjectClass); It; ++It)
 	{
 		const bool bIsInterpField = It->HasAllPropertyFlags(CPF_Interp);
 		const bool bHasTrackMetadata = It->HasMetaData(SequencerTrackClassMetadataName);
@@ -953,7 +953,7 @@ void UTakeRecorderActorSource::RebuildRecordedPropertyMapRecursive(UObject* InOb
 			// shown there do actually have something trying to record them).
 			for (IMovieSceneTrackRecorderFactory* Factory : ModularFactories)
 			{
-				if (Factory->CanRecordProperty(InObject, *It))
+				if (InObject.IsUObject() && Factory->CanRecordProperty(InObject.ToUObject(), *It))
 				{
 			 		DebugDisplayName = Factory->GetDisplayName();
 
@@ -990,7 +990,7 @@ void UTakeRecorderActorSource::RebuildRecordedPropertyMapRecursive(UObject* InOb
 
 			if (!bFoundRecorder)
 			{
-				if (UStructProperty* StructProperty = Cast<UStructProperty>(*It)) 
+				if (FStructProperty* StructProperty = CastField<FStructProperty>(*It)) 
 				{
 					FString NewOuterStructPath = OuterStructPath + PropertyName + TEXT(".");
 					RebuildRecordedPropertyMapRecursive(StructProperty, PropertyMap, NewOuterStructPath);
@@ -1005,7 +1005,7 @@ void UTakeRecorderActorSource::RebuildRecordedPropertyMapRecursive(UObject* InOb
 			}
 		}
 
-		else if (UStructProperty* StructProperty = Cast<UStructProperty>(*It))
+		else if (FStructProperty* StructProperty = CastField<FStructProperty>(*It))
 		{
 			FString NewOuterStructPath = OuterStructPath + PropertyName + TEXT(".");
 			RebuildRecordedPropertyMapRecursive(StructProperty, PropertyMap, NewOuterStructPath);
@@ -1017,9 +1017,9 @@ void UTakeRecorderActorSource::RebuildRecordedPropertyMapRecursive(UObject* InOb
 	TSet<UActorComponent*> PossibleComponents;
 	TSet<AActor*> ExternalActorsReferenced;
 
-	if (InObject->IsA<AActor>())
+	if (InObject.IsA<AActor>())
 	{
-		AActor* Actor = Cast<AActor>(InObject);
+		AActor* Actor = InObject.Get<AActor>();
 		
 		// Actors only have their Root Component plus any Actor Components (which have no hierarchy)
 		// After that the structure is recursive down from the Root Component.
@@ -1029,9 +1029,9 @@ void UTakeRecorderActorSource::RebuildRecordedPropertyMapRecursive(UObject* InOb
 		}
 		GetActorComponents(Actor, PossibleComponents);
 	}
-	else if (InObject->IsA<USceneComponent>())
+	else if (InObject.IsA<USceneComponent>())
 	{
-		USceneComponent* SceneComponent = Cast<USceneComponent>(InObject);
+		USceneComponent* SceneComponent = InObject.Get<USceneComponent>();
 		GetChildSceneComponents(SceneComponent, PossibleComponents, true);
 	}
 
@@ -1358,7 +1358,13 @@ void UTakeRecorderActorSource::GetActorComponents(AActor* OnActor, TSet<UActorCo
 
 		for (UActorComponent* ActorComponent : ActorComponents)
 		{
-			if (!ActorComponent->IsA<USceneComponent>())
+			USceneComponent* SceneComponent = Cast<USceneComponent>(ActorComponent);
+
+			// Child of the root component are gathered in GetSceneComponents(). 
+			// Here we gather the rest of the components - either non scene components or 
+			// scene components that are not directly attached to the root component. This 
+			// includes spawned particle systems
+			if (!SceneComponent || !SceneComponent->GetAttachParent())
 			{
 				if (ActorComponent->GetOwner() != Target.Get())
 				{

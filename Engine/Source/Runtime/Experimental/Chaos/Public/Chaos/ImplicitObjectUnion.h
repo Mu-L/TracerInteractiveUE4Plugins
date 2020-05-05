@@ -1,82 +1,38 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "Chaos/Array.h"
 #include "Chaos/ImplicitObject.h"
+#include "Chaos/ISpatialAcceleration.h"
+#include "Chaos/GeometryParticles.h"
 
-#include <memory>
-#include "BoundingVolumeHierarchy.h"
 #include "ImplicitObjectTransformed.h"
 #include "ChaosArchive.h"
 
 namespace Chaos
 {
-template<class T, int d>
-class TImplicitObjectUnion : public TImplicitObject<T, d>
+
+struct FLargeImplicitObjectUnionData;
+
+class CHAOS_API FImplicitObjectUnion : public FImplicitObject
 {
   public:
 
-	using TImplicitObject<T, d>::GetTypeName;
+	using FImplicitObject::GetTypeName;
 
-	TImplicitObjectUnion(TArray<TUniquePtr<TImplicitObject<T, d>>>&& Objects, const TArray<int32>& OriginalParticleLookupHack = TArray<int32>())
-	    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::Union)
-	    , MObjects(MoveTemp(Objects))
-		, Hierarchy(GeomParticles)
-	    , MLocalBoundingBox()
-		, bHierarchyBuilt(false)
-		, MOriginalParticleLookupHack(OriginalParticleLookupHack)
-	{
-		ensure(MObjects.Num());
-		for (int32 i = 0; i < MObjects.Num(); ++i)
-		{
-			if (i > 0)
-			{
-				MLocalBoundingBox.GrowToInclude(MObjects[i]->BoundingBox());
-			}
-			else
-			{
-				MLocalBoundingBox = MObjects[i]->BoundingBox();
-			}
-			check(MOriginalParticleLookupHack.Num() == 0 || MOriginalParticleLookupHack.Num() == MObjects.Num());
-			if (MOriginalParticleLookupHack.Num() > 0)
-			{
-				//this whole part sucks, only needed because of how we get union children. Need to refactor and enforce no unions of unions
-				if (const TImplicitObjectTransformed<T, d>* Transformed = MObjects[i]->template GetObject<const TImplicitObjectTransformed<T, d>>())
-				{
-					MCollisionParticleLookupHack.Add(Transformed->GetTransformedObject(), MOriginalParticleLookupHack[i]);
-				}
-				else
-				{
-					ensure(false);	//shouldn't be here
-				}
-			}
-		}
+	FImplicitObjectUnion(TArray<TUniquePtr<FImplicitObject>>&& Objects);
+	FImplicitObjectUnion(const FImplicitObjectUnion& Other) = delete;
+	FImplicitObjectUnion(FImplicitObjectUnion&& Other);
+	virtual ~FImplicitObjectUnion();
 
-		CacheAllImplicitObjects();
-
-	}
-	TImplicitObjectUnion(const TImplicitObjectUnion<T, d>& Other) = delete;
-	TImplicitObjectUnion(TImplicitObjectUnion<T, d>&& Other)
-	    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox)
-	    , MObjects(MoveTemp(Other.MObjects))
-		, GeomParticles(MoveTemp(Other.GeomParticles))
-		, Hierarchy(MoveTemp(Other.Hierarchy))
-	    , MLocalBoundingBox(MoveTemp(Other.MLocalBoundingBox))
-		, bHierarchyBuilt(Other.bHierarchyBuilt)
-		, MOriginalParticleLookupHack(MoveTemp(Other.MOriginalParticleLookupHack))
-		, MCollisionParticleLookupHack(MoveTemp(Other.MCollisionParticleLookupHack))
-	{
-	}
-	virtual ~TImplicitObjectUnion() {}
-
-	FORCEINLINE static ImplicitObjectType GetType()
+	FORCEINLINE static constexpr EImplicitObjectType StaticType()
 	{
 		return ImplicitObjectType::Union;
 	}
 
-	virtual T PhiWithNormal(const TVector<T, d>& x, TVector<T, d>& Normal) const override
+	virtual FReal PhiWithNormal(const FVec3& x, FVec3& Normal) const override
 	{
-		T Phi = TNumericLimits<T>::Max();
+		FReal Phi = TNumericLimits<FReal>::Max();
 		bool NeedsNormalize = false;
 		for (int32 i = 0; i < MObjects.Num(); ++i)
 		{
@@ -84,8 +40,8 @@ class TImplicitObjectUnion : public TImplicitObject<T, d>
 			{
 				continue;
 			}
-			TVector<T, d> NextNormal;
-			T NextPhi = MObjects[i]->PhiWithNormal(x, NextNormal);
+			FVec3 NextNormal;
+			FReal NextPhi = MObjects[i]->PhiWithNormal(x, NextNormal);
 			if (NextPhi < Phi)
 			{
 				Phi = NextPhi;
@@ -105,148 +61,42 @@ class TImplicitObjectUnion : public TImplicitObject<T, d>
 		return Phi;
 	}
 
-	virtual const TBox<T, d>& BoundingBox() const override { return MLocalBoundingBox; }
+	virtual const TAABB<FReal, 3> BoundingBox() const override { return MLocalBoundingBox; }
 
-	virtual void AccumulateAllImplicitObjects(TArray<Pair<const TImplicitObject<T, d>*, TRigidTransform<T, d>>>& Out, const TRigidTransform<T, d>& ParentTM) const
+	virtual void AccumulateAllImplicitObjects(TArray<Pair<const FImplicitObject*, FRigidTransform3>>& Out, const FRigidTransform3& ParentTM) const
 	{
-		for (const TUniquePtr<TImplicitObject<T, d>>& Object : MObjects)
+		for (const TUniquePtr<FImplicitObject>& Object : MObjects)
 		{
 			Object->AccumulateAllImplicitObjects(Out, ParentTM);
 		}
 	}
 
-	virtual void AccumulateAllSerializableImplicitObjects(TArray<Pair<TSerializablePtr<TImplicitObject<T, d>>, TRigidTransform<T, d>>>& Out, const TRigidTransform<T, d>& ParentTM, TSerializablePtr<TImplicitObject<T,d>> This) const
+	virtual void AccumulateAllSerializableImplicitObjects(TArray<Pair<TSerializablePtr<FImplicitObject>, FRigidTransform3>>& Out, const FRigidTransform3& ParentTM, TSerializablePtr<FImplicitObject> This) const
 	{
 		AccumulateAllSerializableImplicitObjectsHelper(Out, ParentTM);
 	}
 
-	void AccumulateAllSerializableImplicitObjectsHelper(TArray<Pair<TSerializablePtr<TImplicitObject<T, d>>, TRigidTransform<T, d>>>& Out, const TRigidTransform<T, d>& ParentTM) const
+	void AccumulateAllSerializableImplicitObjectsHelper(TArray<Pair<TSerializablePtr<FImplicitObject>, FRigidTransform3>>& Out, const FRigidTransform3& ParentTM) const
 	{
-		for (const TUniquePtr<TImplicitObject<T, d>>& Object : MObjects)
+		for (const TUniquePtr<FImplicitObject>& Object : MObjects)
 		{
 			Object->AccumulateAllSerializableImplicitObjects(Out, ParentTM, MakeSerializable(Object));
 		}
 	}
 
-	virtual void FindAllIntersectingObjects(TArray < Pair<const TImplicitObject<T, d>*, TRigidTransform<T, d>>>& Out, const TBox<T, d>& LocalBounds) const
+	virtual void FindAllIntersectingObjects(TArray < Pair<const FImplicitObject*, FRigidTransform3>>& Out, const TAABB<FReal,3>& LocalBounds) const;
+	virtual void CacheAllImplicitObjects();
+
+	virtual bool Raycast(const FVec3& StartPoint, const FVec3& Dir, const FReal Length, const FReal Thickness, FReal& OutTime, FVec3& OutPosition, FVec3& OutNormal, int32& OutFaceIndex) const override
 	{
-		if (bHierarchyBuilt)
-		{
-			TArray<int32> Overlaps = Hierarchy.FindAllIntersections(LocalBounds);
-			Out.Reserve(Out.Num() + Overlaps.Num());
-			for (int32 Idx : Overlaps)
-			{
-				const TImplicitObject<T, d>* Obj = GeomParticles.Geometry(Idx).Get();
-				Out.Add(MakePair(Obj, TRigidTransform<T, d>(GeomParticles.X(Idx), GeomParticles.R(Idx))));
-			}
-		}
-		else
-		{
-			for (const TUniquePtr<TImplicitObject<T, d>>& Object : MObjects)
-			{
-				Object->FindAllIntersectingObjects(Out, LocalBounds);
-			}
-		}
-	}
-
-	TArray<int32> FindAllIntersectingChildren(const TBox<T, d>& LocalBounds) const
-	{
-		TArray<int32> IntersectingChildren;
-		if (bHierarchyBuilt) //todo: make this work when hierarchy is not built
-		{
-			IntersectingChildren = Hierarchy.FindAllIntersections(LocalBounds);
-			for (int32 i = IntersectingChildren.Num() - 1; i >= 0; --i)
-			{
-				const int32 Idx = IntersectingChildren[i];
-				if (Idx < MOriginalParticleLookupHack.Num())
-				{
-					IntersectingChildren[i] = MOriginalParticleLookupHack[Idx];
-				}
-				else
-				{
-					IntersectingChildren.RemoveAtSwap(i);
-				}
-			}
-			/*for (int32& Idx : IntersectingChildren)
-			{
-				Idx = MOriginalParticleLookupHack[Idx];
-			}*/
-		}
-		else
-		{
-			IntersectingChildren = MOriginalParticleLookupHack;
-		}
-
-		return IntersectingChildren;
-	}
-
-	TArray<int32> FindAllIntersectingChildren(const TSpatialRay<T, d>& LocalRay) const
-	{
-		TArray<int32> IntersectingChildren;
-		if (bHierarchyBuilt) //todo: make this work when hierarchy is not built
-		{
-			IntersectingChildren = Hierarchy.FindAllIntersections(LocalRay);
-			for (int32 i = IntersectingChildren.Num() - 1; i >= 0; --i)
-			{
-				const int32 Idx = IntersectingChildren[i];
-				if (Idx < MOriginalParticleLookupHack.Num())
-				{
-					IntersectingChildren[i] = MOriginalParticleLookupHack[Idx];
-				}
-				else
-				{
-					IntersectingChildren.RemoveAtSwap(i);
-				}
-			}
-			/*for (int32& Idx : IntersectingChildren)
-			{
-				Idx = MOriginalParticleLookupHack[Idx];
-			}*/
-		}
-		else
-		{
-			IntersectingChildren = MOriginalParticleLookupHack;
-		}
-
-		return IntersectingChildren;
-	}
-
-	virtual void CacheAllImplicitObjects()
-	{
-		TArray < Pair<TSerializablePtr<TImplicitObject<T, d>>, TRigidTransform<T, d>>> SubObjects;
-		AccumulateAllSerializableImplicitObjectsHelper(SubObjects, TRigidTransform<T, d>::Identity);
-		//build hierarchy
-		{
-			const int32 NumObjects = SubObjects.Num();
-			constexpr int32 MinSubObjectsToCache = 8;	//todo(make this tunable?)
-			if (NumObjects > MinSubObjectsToCache)
-			{
-				GeomParticles.Resize(NumObjects);
-				for (int32 i = 0; i < NumObjects; ++i)
-				{
-					GeomParticles.X(i) = SubObjects[i].Second.GetLocation();
-					GeomParticles.R(i) = SubObjects[i].Second.GetRotation();
-					GeomParticles.SetGeometry(i, SubObjects[i].First);
-					//check(!SubObjects[i].First->IsUnderlyingUnion());	//we don't support union of unions
-				}
-
-				TBoundingVolumeHierarchy<TGeometryParticles<T, d>, TArray<int32>, T, d> NewHierarchy(GeomParticles, 1);
-				Hierarchy = MoveTemp(NewHierarchy);
-				bHierarchyBuilt = true;
-			}
-		}
-	}
-
-	virtual bool Raycast(const TVector<T, d>& StartPoint, const TVector<T, d>& Dir, const T Length, const T Thickness, T& OutTime, TVector<T, d>& OutPosition, TVector<T, d>& OutNormal, int32& OutFaceIndex) const override
-	{
-		T MinTime = 0;	//initialization not needed, but doing it to avoid warning
+		FReal MinTime = 0;	//initialization not needed, but doing it to avoid warning
 		bool bFound = false;
 
-		for (const TUniquePtr<TImplicitObject<T, d>>& Obj : MObjects)
+		for (const TUniquePtr<FImplicitObject>& Obj : MObjects)
 		{
-			TVector<T, d> Position;
-			TVector<T, d> Normal;
-			T Time;
+			FVec3 Position;
+			FVec3 Normal;
+			FReal Time;
 			int32 FaceIdx;
 			if (Obj->Raycast(StartPoint, Dir, Length, Thickness, Time, Position, Normal, FaceIdx))
 			{
@@ -265,9 +115,9 @@ class TImplicitObjectUnion : public TImplicitObject<T, d>
 		return bFound;
 	}
 
-	virtual bool Overlap(const TVector<T, d>& Point, const T Thickness) const override
+	virtual bool Overlap(const FVec3& Point, const FReal Thickness) const override
 	{
-		for (const TUniquePtr<TImplicitObject<T, d>>& Obj : MObjects)
+		for (const TUniquePtr<FImplicitObject>& Obj : MObjects)
 		{
 			if (Obj->Overlap(Point, Thickness))
 			{
@@ -278,28 +128,23 @@ class TImplicitObjectUnion : public TImplicitObject<T, d>
 		return false;
 	}
 
-	virtual void Serialize(FChaosArchive& Ar) override
-	{
-		FChaosArchiveScopedMemory ScopedMemory(Ar, GetTypeName(), false);
-		TImplicitObject<T, d>::SerializeImp(Ar);
-		Ar << MObjects << MLocalBoundingBox << GeomParticles << Hierarchy << bHierarchyBuilt;
-	}
+	virtual void Serialize(FChaosArchive& Ar) override;
 
 	virtual bool IsValidGeometry() const
 	{
-		bool bValid = TImplicitObject<T, d>::IsValidGeometry();
+		bool bValid = FImplicitObject::IsValidGeometry();
 		bValid = bValid && MObjects.Num();
 		return bValid;
 	}
 
-	const TArray<TUniquePtr<TImplicitObject<T, d>>>& GetObjects() const { return MObjects; }
+	const TArray<TUniquePtr<FImplicitObject>>& GetObjects() const { return MObjects; }
 
 	virtual uint32 GetTypeHash() const override
 	{
 		uint32 Result = 0;
 
 		// Union hash is just the hash of all internal objects
-		for(const TUniquePtr<TImplicitObject<T, d>>& InnerObj : MObjects)
+		for(const TUniquePtr<FImplicitObject>& InnerObj : MObjects)
 		{
 			Result = HashCombine(Result, InnerObj->GetTypeHash());
 		}
@@ -307,18 +152,18 @@ class TImplicitObjectUnion : public TImplicitObject<T, d>
 		return Result;
 	}
 
-private:
-	virtual Pair<TVector<T, d>, bool> FindClosestIntersectionImp(const TVector<T, d>& StartPoint, const TVector<T, d>& EndPoint, const T Thickness) const override
+protected:
+	virtual Pair<FVec3, bool> FindClosestIntersectionImp(const FVec3& StartPoint, const FVec3& EndPoint, const FReal Thickness) const override
 	{
 		check(MObjects.Num());
 		auto ClosestIntersection = MObjects[0]->FindClosestIntersection(StartPoint, EndPoint, Thickness);
-		T Length = ClosestIntersection.Second ? (ClosestIntersection.First - StartPoint).Size() : 0;
+		FReal Length = ClosestIntersection.Second ? (ClosestIntersection.First - StartPoint).Size() : 0;
 		for (int32 i = 1; i < MObjects.Num(); ++i)
 		{
 			auto NextClosestIntersection = MObjects[i]->FindClosestIntersection(StartPoint, EndPoint, Thickness);
 			if (!NextClosestIntersection.Second)
 				continue;
-			T NewLength = (NextClosestIntersection.First - StartPoint).Size();
+			FReal NewLength = (NextClosestIntersection.First - StartPoint).Size();
 			if (!ClosestIntersection.Second || NewLength < Length)
 			{
 				Length = NewLength;
@@ -328,19 +173,75 @@ private:
 		return ClosestIntersection;
 	}
 
-  private:
-	TArray<TUniquePtr<TImplicitObject<T, d>>> MObjects;
-	TGeometryParticles<T, d> GeomParticles;
-	TBoundingVolumeHierarchy<TGeometryParticles<T, d>, TArray<int32>, T, d> Hierarchy;
-	TBox<T, d> MLocalBoundingBox;
-	bool bHierarchyBuilt;
-	TArray<int32> MOriginalParticleLookupHack;	//temp hack for finding original particles
-
-
+  protected:
 	//needed for serialization
-	TImplicitObjectUnion() : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::Union), Hierarchy(GeomParticles, 1){}
-	friend TImplicitObject<T, d>;	//needed for serialization
+	FImplicitObjectUnion();
+	friend FImplicitObject;	//needed for serialization
+
+	TArray<TUniquePtr<FImplicitObject>> MObjects;
+	TAABB<FReal,3> MLocalBoundingBox;
+	TUniquePtr<FLargeImplicitObjectUnionData> LargeUnionData;	//only needed when there are many objects
+};
+
+class CHAOS_API FImplicitObjectUnionClustered: public FImplicitObjectUnion
+{
 public:
-	TMap<const TImplicitObject<T,d>*, int32> MCollisionParticleLookupHack;	//temp hack for finding collision particles
+	FImplicitObjectUnionClustered();
+	FImplicitObjectUnionClustered(TArray<TUniquePtr<FImplicitObject>>&& Objects, const TArray<TPBDRigidParticleHandle<FReal, 3>*>& OriginalParticleLookupHack = TArray<TPBDRigidParticleHandle<FReal, 3>*>());
+	FImplicitObjectUnionClustered(const FImplicitObjectUnionClustered& Other) = delete;
+	FImplicitObjectUnionClustered(FImplicitObjectUnionClustered&& Other);
+	virtual ~FImplicitObjectUnionClustered() = default;
+
+	FORCEINLINE static constexpr EImplicitObjectType StaticType()
+	{
+		return ImplicitObjectType::UnionClustered;
+	}
+
+	TArray<TPBDRigidParticleHandle<FReal, 3>*> FindAllIntersectingChildren(const TAABB<FReal, 3>& LocalBounds) const;
+
+#if CHAOS_PARTICLEHANDLE_TODO
+	TArray<int32> FindAllIntersectingChildren(const TSpatialRay<FReal,3>& LocalRay) const;
+	{
+		TArray<int32> IntersectingChildren;
+		if (LargeUnionData) //todo: make this work when hierarchy is not built
+		{
+			IntersectingChildren = LargeUnionData->Hierarchy.FindAllIntersections(LocalRay);
+			for (int32 i = IntersectingChildren.Num() - 1; i >= 0; --i)
+			{
+				const int32 Idx = IntersectingChildren[i];
+				if (Idx < MOriginalParticleLookupHack.Num())
+				{
+					IntersectingChildren[i] = MOriginalParticleLookupHack[Idx];
+				}
+				else
+				{
+					IntersectingChildren.RemoveAtSwap(i);
+				}
+			}
+			/*for (int32& Idx : IntersectingChildren)
+			{
+				Idx = MOriginalParticleLookupHack[Idx];
+			}*/
+		}
+		else
+		{
+			IntersectingChildren = MOriginalParticleLookupHack;
+		}
+
+		return IntersectingChildren;
+	}
+#endif
+
+	const TPBDRigidParticleHandle<FReal, 3>* FindParticleForImplicitObject(const FImplicitObject* Object) const
+	{ 
+		typedef TPBDRigidParticleHandle<FReal, 3>* ValueType;
+		const ValueType* Handle = MCollisionParticleLookupHack.Find(Object);
+		return Handle ? *Handle : nullptr;
+	}
+
+private:
+	// Temp hack for finding original particles
+	TArray<TPBDRigidParticleHandle<FReal, 3>*> MOriginalParticleLookupHack;	
+	TMap<const FImplicitObject*,TPBDRigidParticleHandle<FReal, 3>*> MCollisionParticleLookupHack;	//temp hack for finding collision particles
 };
 }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #if !COMPILE_WITHOUT_UNREAL_SUPPORT
@@ -12,7 +12,7 @@
 namespace Chaos
 {
 template<class T, int d>
-class TPBDCollisionSpringConstraints : public PBDCollisionSpringConstraintsBase<T, d>, public TPBDConstraintContainer<T, d>
+class TPBDCollisionSpringConstraints : public PBDCollisionSpringConstraintsBase<T, d>, public FPBDConstraintContainer
 {
 	typedef PBDCollisionSpringConstraintsBase<T, d> Base;
 	using Base::MBarys;

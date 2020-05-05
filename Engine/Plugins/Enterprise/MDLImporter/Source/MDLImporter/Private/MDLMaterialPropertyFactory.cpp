@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MDLMaterialPropertyFactory.h"
 
@@ -369,10 +369,6 @@ Mat::FParameterMap FMDLMaterialPropertyFactory::CreateProperties(EObjectFlags Fl
 				break;
 		}
 	}
-
-	Material.MarkPackageDirty();
-	Material.PostEditChange();
-	ParentPackage->MarkPackageDirty();
 
 	return ParameterMap;
 }

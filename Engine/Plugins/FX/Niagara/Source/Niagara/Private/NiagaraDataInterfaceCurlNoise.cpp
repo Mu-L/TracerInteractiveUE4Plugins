@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraDataInterfaceCurlNoise.h"
 #include "NiagaraShader.h"
@@ -309,7 +309,7 @@ UNiagaraDataInterfaceCurlNoise::UNiagaraDataInterfaceCurlNoise(FObjectInitialize
 {
 	OffsetFromSeed = FNiagaraUIntVectorToFVector(Rand3DPCG16(FIntVector(Seed, Seed, Seed))) / 100.0;
 
-	Proxy = MakeShared<FNiagaraDataInterfaceProxyCurlNoise, ESPMode::ThreadSafe>(OffsetFromSeed);
+	Proxy.Reset(new FNiagaraDataInterfaceProxyCurlNoise(OffsetFromSeed));
 }
 
 void UNiagaraDataInterfaceCurlNoise::PostInitProperties()
@@ -332,7 +332,7 @@ void UNiagaraDataInterfaceCurlNoise::PostLoad()
 
 #if WITH_EDITOR
 
-void UNiagaraDataInterfaceCurlNoise::PreEditChange(UProperty* PropertyAboutToChange)
+void UNiagaraDataInterfaceCurlNoise::PreEditChange(FProperty* PropertyAboutToChange)
 {
 	Super::PreEditChange(PropertyAboutToChange);
 	
@@ -423,7 +423,7 @@ void UNiagaraDataInterfaceCurlNoise::SampleNoiseField(FVectorVMContext& Context)
 	}
 }
 
-bool UNiagaraDataInterfaceCurlNoise::GetFunctionHLSL(const FName& DefinitionFunctionName, FString InstanceFunctionName, FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL)
+bool UNiagaraDataInterfaceCurlNoise::GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL)
 {
 	static const TCHAR *FormatSample = TEXT(R"(
 		void {FunctionName}(float3 In_XYZ, out float3 Out_Value)
@@ -434,13 +434,13 @@ bool UNiagaraDataInterfaceCurlNoise::GetFunctionHLSL(const FName& DefinitionFunc
 		}
 	)");
 	TMap<FString, FStringFormatArg> ArgsSample;
-	ArgsSample.Add(TEXT("FunctionName"), InstanceFunctionName);
+	ArgsSample.Add(TEXT("FunctionName"), FunctionInfo.InstanceName);
 	ArgsSample.Add(TEXT("OffsetFromSeedName"), OffsetFromSeedBaseName + ParamInfo.DataInterfaceHLSLSymbol);
 	OutHLSL += FString::Format(FormatSample, ArgsSample);
 	return true;
 }
 
-void UNiagaraDataInterfaceCurlNoise::GetParameterDefinitionHLSL(FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL)
+void UNiagaraDataInterfaceCurlNoise::GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL)
 {
 	static const TCHAR *FormatDeclarations = TEXT(R"(
 		float3 {OffsetFromSeedName};
@@ -467,22 +467,19 @@ void UNiagaraDataInterfaceCurlNoise::PushToRenderThread()
 
 struct FNiagaraDataInterfaceParametersCS_CurlNoise : public FNiagaraDataInterfaceParametersCS
 {
-	virtual void Bind(const FNiagaraDataInterfaceParamRef& ParamRef, const class FShaderParameterMap& ParameterMap) override
+	DECLARE_TYPE_LAYOUT(FNiagaraDataInterfaceParametersCS_CurlNoise, NonVirtual);
+public:
+	void Bind(const FNiagaraDataInterfaceGPUParamInfo& ParameterInfo, const class FShaderParameterMap& ParameterMap)
 	{
-		OffsetFromSeed.Bind(ParameterMap, *(OffsetFromSeedBaseName + ParamRef.ParameterInfo.DataInterfaceHLSLSymbol));
+		OffsetFromSeed.Bind(ParameterMap, *(OffsetFromSeedBaseName + ParameterInfo.DataInterfaceHLSLSymbol));
 	}
 
-	virtual void Serialize(FArchive& Ar)override
-	{
-		Ar << OffsetFromSeed;
-	}
-
-	virtual void Set(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) const override
+	void Set(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) const
 	{
 		check(IsInRenderingThread());
 
 		// Get shader and DI
-		FRHIComputeShader* ComputeShaderRHI = Context.Shader->GetComputeShader();
+		FRHIComputeShader* ComputeShaderRHI = Context.Shader.GetComputeShader();
 		FNiagaraDataInterfaceProxyCurlNoise* CNDI = static_cast<FNiagaraDataInterfaceProxyCurlNoise*>(Context.DataInterface);
 
 		// Set parameters
@@ -490,10 +487,9 @@ struct FNiagaraDataInterfaceParametersCS_CurlNoise : public FNiagaraDataInterfac
 	}
 
 private:
-	FShaderParameter OffsetFromSeed;
+	LAYOUT_FIELD(FShaderParameter, OffsetFromSeed);
 };
 
-FNiagaraDataInterfaceParametersCS* UNiagaraDataInterfaceCurlNoise::ConstructComputeParameters()const
-{
-	return new FNiagaraDataInterfaceParametersCS_CurlNoise();
-}
+IMPLEMENT_TYPE_LAYOUT(FNiagaraDataInterfaceParametersCS_CurlNoise);
+
+IMPLEMENT_NIAGARA_DI_PARAMETER(UNiagaraDataInterfaceCurlNoise, FNiagaraDataInterfaceParametersCS_CurlNoise);

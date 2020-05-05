@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 
@@ -29,6 +29,7 @@ public class D3D11RHI : ModuleRules
 			AddEngineThirdPartyPrivateStaticDependencies(Target, "AMD_AGS");
         	AddEngineThirdPartyPrivateStaticDependencies(Target, "NVAftermath");
 			AddEngineThirdPartyPrivateStaticDependencies(Target, "IntelMetricsDiscovery");
+			AddEngineThirdPartyPrivateStaticDependencies(Target, "IntelExtensionsFramework");
 		}
 
 

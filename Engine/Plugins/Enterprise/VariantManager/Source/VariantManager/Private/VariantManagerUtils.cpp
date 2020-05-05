@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "VariantManagerUtils.h"
 
@@ -8,14 +8,20 @@
 #include "Components/MeshComponent.h"
 #include "Components/LightComponent.h"
 #include "Atmosphere/AtmosphericFogComponent.h"
+#include "Engine/Scene.h"  // So we can check FPostProcessSettings exists
+#include "CineCameraComponent.h"  // So we can check the CineCamera structs exist
+#include "CineCameraActor.h"	  // So we can check the CineCamera structs exist
 
-UArrayProperty* FVariantManagerUtils::OverrideMaterialsProperty = nullptr;
-UStructProperty* FVariantManagerUtils::RelativeLocationProperty = nullptr;
-UStructProperty* FVariantManagerUtils::RelativeRotationProperty = nullptr;
-UStructProperty* FVariantManagerUtils::RelativeScale3DProperty = nullptr;
-UBoolProperty* FVariantManagerUtils::VisiblityProperty = nullptr;
-UStructProperty* FVariantManagerUtils::LightColorProperty = nullptr;
-UStructProperty* FVariantManagerUtils::DefaultLightColorProperty = nullptr;
+#define GET_STRUCT_NAME_CHECKED(StructName) \
+	((void)sizeof(F##StructName), TEXT(#StructName))
+
+FArrayProperty* FVariantManagerUtils::OverrideMaterialsProperty = nullptr;
+FStructProperty* FVariantManagerUtils::RelativeLocationProperty = nullptr;
+FStructProperty* FVariantManagerUtils::RelativeRotationProperty = nullptr;
+FStructProperty* FVariantManagerUtils::RelativeScale3DProperty = nullptr;
+FBoolProperty* FVariantManagerUtils::VisiblityProperty = nullptr;
+FStructProperty* FVariantManagerUtils::LightColorProperty = nullptr;
+FStructProperty* FVariantManagerUtils::DefaultLightColorProperty = nullptr;
 FDelegateHandle FVariantManagerUtils::OnHotReloadHandle;
 
 void FVariantManagerUtils::RegisterForHotReload()
@@ -29,11 +35,11 @@ void FVariantManagerUtils::UnregisterForHotReload()
 	OnHotReloadHandle.Reset();
 }
 
-bool FVariantManagerUtils::IsBuiltInStructProperty(const UProperty* Property)
+bool FVariantManagerUtils::IsBuiltInStructProperty(const FProperty* Property)
 {
 	bool bIsBuiltIn = false;
 
-	const UStructProperty* StructProp = Cast<const UStructProperty>(Property);
+		const FStructProperty* StructProp = CastField<const FStructProperty>(Property);
 	if (StructProp && StructProp->Struct)
 	{
 		FName StructName = StructProp->Struct->GetFName();
@@ -52,71 +58,96 @@ bool FVariantManagerUtils::IsBuiltInStructProperty(const UProperty* Property)
 	return bIsBuiltIn;
 }
 
-UArrayProperty* FVariantManagerUtils::GetOverrideMaterialsProperty()
+bool FVariantManagerUtils::IsWalkableStructProperty(const FProperty* Property)
+{
+	const static TSet<FName> WalkableStructNames
+	{
+		GET_STRUCT_NAME_CHECKED(PostProcessSettings),
+		GET_STRUCT_NAME_CHECKED(CameraLookatTrackingSettings),
+		GET_STRUCT_NAME_CHECKED(CameraFilmbackSettings),
+		GET_STRUCT_NAME_CHECKED(CameraLensSettings),
+		GET_STRUCT_NAME_CHECKED(CameraFocusSettings),
+		GET_STRUCT_NAME_CHECKED(CameraTrackingFocusSettings)
+	};
+
+	bool bIsWalkable = false;
+
+	const FStructProperty* StructProp = CastField<const FStructProperty>(Property);
+	if (StructProp && StructProp->Struct)
+	{
+		FName StructName = StructProp->Struct->GetFName();
+
+		bIsWalkable = WalkableStructNames.Contains(StructName);
+	}
+
+	return bIsWalkable;
+}
+
+FArrayProperty* FVariantManagerUtils::GetOverrideMaterialsProperty()
 {
 	if (!OverrideMaterialsProperty)
 	{
-		OverrideMaterialsProperty = FindField<UArrayProperty>( UMeshComponent::StaticClass(), GET_MEMBER_NAME_CHECKED( UMeshComponent, OverrideMaterials ) );
+		OverrideMaterialsProperty = FindFProperty<FArrayProperty>( UMeshComponent::StaticClass(), GET_MEMBER_NAME_CHECKED( UMeshComponent, OverrideMaterials ) );
 	}
 
 	return OverrideMaterialsProperty;
 }
 
-UStructProperty* FVariantManagerUtils::GetRelativeLocationProperty()
+FStructProperty* FVariantManagerUtils::GetRelativeLocationProperty()
 {
 	if (!RelativeLocationProperty)
 	{
-		RelativeLocationProperty = FindField<UStructProperty>(USceneComponent::StaticClass(), *USceneComponent::GetRelativeLocationPropertyName().ToString());
+		RelativeLocationProperty = FindFProperty<FStructProperty>( USceneComponent::StaticClass(), USceneComponent::GetRelativeLocationPropertyName() );
 	}
 
 	return RelativeLocationProperty;
 }
 
-UStructProperty* FVariantManagerUtils::GetRelativeRotationProperty()
+FStructProperty* FVariantManagerUtils::GetRelativeRotationProperty()
 {
 	if (!RelativeRotationProperty)
 	{
-		RelativeRotationProperty = FindField<UStructProperty>(USceneComponent::StaticClass(), *USceneComponent::GetRelativeRotationPropertyName().ToString());
+		RelativeRotationProperty = FindFProperty<FStructProperty>( USceneComponent::StaticClass(), USceneComponent::GetRelativeRotationPropertyName() );
 	}
 
 	return RelativeRotationProperty;
 }
 
-UStructProperty* FVariantManagerUtils::GetRelativeScale3DProperty()
+FStructProperty* FVariantManagerUtils::GetRelativeScale3DProperty()
 {
 	if (!RelativeScale3DProperty)
 	{
-		RelativeScale3DProperty = FindField<UStructProperty>(USceneComponent::StaticClass(), *USceneComponent::GetRelativeScale3DPropertyName().ToString());
+		RelativeScale3DProperty = FindFProperty<FStructProperty>( USceneComponent::StaticClass(), USceneComponent::GetRelativeScale3DPropertyName() );
 	}
 
 	return RelativeScale3DProperty;
 }
 
-UBoolProperty* FVariantManagerUtils::GetVisibilityProperty()
+FBoolProperty* FVariantManagerUtils::GetVisibilityProperty()
 {
 	if (!VisiblityProperty)
 	{
-		VisiblityProperty = FindField<UBoolProperty>(USceneComponent::StaticClass(), *USceneComponent::GetVisiblePropertyName().ToString());
+		VisiblityProperty = FindFProperty<FBoolProperty>( USceneComponent::StaticClass(), USceneComponent::GetVisiblePropertyName() );
 	}
 
 	return VisiblityProperty;
 }
 
-UStructProperty* FVariantManagerUtils::GetLightColorProperty()
+FStructProperty* FVariantManagerUtils::GetLightColorProperty()
 {
 	if (!LightColorProperty)
 	{
-		LightColorProperty = FindField<UStructProperty>( ULightComponent::StaticClass(), GET_MEMBER_NAME_CHECKED( ULightComponent, LightColor ) );
+		LightColorProperty = FindFProperty<FStructProperty>( ULightComponent::StaticClass(), GET_MEMBER_NAME_CHECKED( ULightComponent, LightColor ) );
 	}
 
 	return LightColorProperty;
 }
 
-UStructProperty* FVariantManagerUtils::GetDefaultLightColorProperty()
+FStructProperty* FVariantManagerUtils::GetDefaultLightColorProperty()
 {
 	if (!DefaultLightColorProperty)
 	{
-		DefaultLightColorProperty = FindField<UStructProperty>( UAtmosphericFogComponent::StaticClass(), GET_MEMBER_NAME_CHECKED( UAtmosphericFogComponent, DefaultLightColor) );
+		DefaultLightColorProperty = FindFProperty<FStructProperty>( UAtmosphericFogComponent::StaticClass(), GET_MEMBER_NAME_CHECKED( UAtmosphericFogComponent, DefaultLightColor) );
 	}
 
 	return DefaultLightColorProperty;
@@ -132,3 +163,4 @@ void FVariantManagerUtils::InvalidateCache(UClass* OldClass, UClass* NewClass, E
 	LightColorProperty = nullptr;
 	DefaultLightColorProperty = nullptr;
 }
+#undef GET_MEMBER_NAME_CHECKED

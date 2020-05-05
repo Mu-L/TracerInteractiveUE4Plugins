@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Tests/TestFriendsInterface.h"
 #include "OnlineSubsystemNames.h"
@@ -41,7 +41,8 @@ void FTestFriendsInterface::Test(UWorld* InWorld, const TArray<FString>& Invites
 			}
 		}
 
-		// kick off next test
+		UE_LOG_ONLINE_FRIEND(Log, TEXT("Starting friends interface tests for %s"), *SubsystemName);
+
 		StartNextTest();
 	}
 	else
@@ -67,54 +68,73 @@ void FTestFriendsInterface::StartNextTest()
 {
 	if (bReadFriendsList)
 	{
+		UE_LOG_ONLINE_FRIEND(Log, TEXT("Reading friends list"));
+
 		IOnlineSharingPtr SharingInt = OnlineSub->GetSharingInterface();
 		if (SharingInt.IsValid())
 		{
+			UE_LOG_ONLINE_FRIEND(Log, TEXT("Sharing interface valid. Requesting permissions"));
+
 			FOnRequestNewReadPermissionsCompleteDelegate Delegate = FOnRequestNewReadPermissionsCompleteDelegate::CreateRaw(this, &FTestFriendsInterface::OnRequestNewPermissionsComplete);
 			OnRequestNewReadPermissionsDelegateHandle = SharingInt->AddOnRequestNewReadPermissionsCompleteDelegate_Handle(0, Delegate);
 			SharingInt->RequestNewReadPermissions(0, EOnlineSharingCategory::Friends);
 		}
 		else
 		{
+			UE_LOG_ONLINE_FRIEND(Log, TEXT("Sharing interface invalid. Skipping permission request"));
+
 			OnRequestNewPermissionsComplete(0, true);
 		}
 	}
 	else if (bQueryRecentPlayers)
 	{
+		UE_LOG_ONLINE_FRIEND(Log, TEXT("Querying recent players"));
+
 		if (OnlineSub->GetIdentityInterface().IsValid() &&
 			OnlineSub->GetIdentityInterface()->GetUniquePlayerId(0).IsValid())
 		{
 			OnlineSub->GetFriendsInterface()->QueryRecentPlayers(*OnlineSub->GetIdentityInterface()->GetUniquePlayerId(0), RecentPlayersNamespace);
 		}
-		bQueryRecentPlayers = false;
 	}
 	else if (bAcceptInvites && InvitesToAccept.Num() > 0)
 	{
+		UE_LOG_ONLINE_FRIEND(Log, TEXT("Accepting invites"));
+
 		FOnAcceptInviteComplete Delegate = FOnAcceptInviteComplete::CreateRaw(this, &FTestFriendsInterface::OnAcceptInviteComplete);
 		OnlineSub->GetFriendsInterface()->AcceptInvite(0, *InvitesToAccept[0], FriendsListName, Delegate);
 	}
 	else if (bSendInvites && InvitesToSend.Num() > 0)
 	{
+		UE_LOG_ONLINE_FRIEND(Log, TEXT("Sending invites"));
+
 		FOnSendInviteComplete OnSendInviteCompleteDelegate = FOnSendInviteComplete::CreateRaw(this, &FTestFriendsInterface::OnSendInviteComplete);
 		OnlineSub->GetFriendsInterface()->SendInvite(0, *InvitesToSend[0], FriendsListName, OnSendInviteCompleteDelegate);
 	}
 	else if (bDeleteFriends && FriendsToDelete.Num() > 0)
 	{
+		UE_LOG_ONLINE_FRIEND(Log, TEXT("Deleting friends"));
+
 		OnlineSub->GetFriendsInterface()->DeleteFriend(0, *FriendsToDelete[0], FriendsListName);
 	}
 	else if (bDeleteFriendsList)
 	{
+		UE_LOG_ONLINE_FRIEND(Log, TEXT("Deleting friends list"));
+
 		FOnDeleteFriendsListComplete Delegate = FOnDeleteFriendsListComplete::CreateRaw(this, &FTestFriendsInterface::OnDeleteFriendsListComplete);
 		OnlineSub->GetFriendsInterface()->DeleteFriendsList(0, FriendsListName, Delegate);
 	}
 	else if (bQueryBlockedPlayers)
 	{
+		UE_LOG_ONLINE_FRIEND(Log, TEXT("Querying blocked players"));
+
 		if (OnlineSub->GetIdentityInterface()->GetUniquePlayerId(0).IsValid())
 		{
 			OnlineSub->GetFriendsInterface()->QueryBlockedPlayers(*OnlineSub->GetIdentityInterface()->GetUniquePlayerId(0));
 		}
 		else
 		{
+			UE_LOG_ONLINE_FRIEND(Log, TEXT("Player unique id invalid. Skipping Test"));
+
 			bQueryBlockedPlayers = false;
 			StartNextTest();
 		}
@@ -127,6 +147,8 @@ void FTestFriendsInterface::StartNextTest()
 
 void FTestFriendsInterface::FinishTest()
 {
+	UE_LOG_ONLINE_FRIEND(Log, TEXT("All tests finished"));
+
 	if (OnlineSub != NULL &&
 		OnlineSub->GetFriendsInterface().IsValid())
 	{
@@ -140,8 +162,7 @@ void FTestFriendsInterface::FinishTest()
 
 void FTestFriendsInterface::OnReadFriendsComplete(int32 LocalPlayer, bool bWasSuccessful, const FString& ListName, const FString& ErrorStr)
 {
-	UE_LOG_ONLINE_FRIEND(Log,
-		TEXT("ReadFriendsList() for player (%d) was success=%d error=%s"), LocalPlayer, bWasSuccessful, *ErrorStr);
+	UE_LOG_ONLINE_FRIEND(Log, TEXT("ReadFriendsList() for player (%d) was success=%d error=%s"), LocalPlayer, bWasSuccessful, *ErrorStr);
 
 	if (bWasSuccessful)
 	{
@@ -306,7 +327,7 @@ void FTestFriendsInterface::OnDeleteFriendsListComplete(int32 LocalPlayer, bool 
 
 void FTestFriendsInterface::OnQueryBlockedPlayersComplete(const FUniqueNetId& UserId, bool bWasSuccessful, const FString& Error)
 {
-	UE_LOG_ONLINE_FRIEND(Log, TEXT("QueryBlockedPlayers() for player (%s) was success=%d"), *UserId.ToDebugString(), bWasSuccessful);
+	UE_LOG_ONLINE_FRIEND(Log, TEXT("QueryBlockedPlayers() for player (%s) was success=%d error=%s"), *UserId.ToDebugString(), bWasSuccessful, *Error);
 	bQueryBlockedPlayers = false;
 
 	if (bWasSuccessful)

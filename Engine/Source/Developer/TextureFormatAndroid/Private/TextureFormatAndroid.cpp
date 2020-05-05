@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "GenericPlatform/GenericPlatformStackWalk.h"
@@ -19,13 +19,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogTextureFormatAndroid, Log, All);
  * Macro trickery for supported format names.
  */
 #define ENUM_SUPPORTED_FORMATS(op) \
-	op(ATC_RGB) \
-	op(ATC_RGBA_E) \
-	op(ATC_RGBA_I) \
-	op(AutoATC) \
-	op(ETC1) \
-	op(AutoETC1) \
-	op(AutoETC1a) \
 	op(ETC2_RGB) \
 	op(ETC2_RGBA) \
 	op(AutoETC2)
@@ -57,20 +50,28 @@ static bool CompressImageUsingQonvert(
 	EPixelFormat PixelFormat,
 	int32 SizeX,
 	int32 SizeY,
-	TArray<uint8>& OutCompressedData
+	TArray64<uint8>& OutCompressedData
 	)
 {
 	// Avoid dependency on GPixelFormats in RenderCore.
 	// If block size changes, please update in AndroidETC.cpp in DecompressTexture
 	const int32 BlockSizeX = 4;
 	const int32 BlockSizeY = 4;
-	const int32 BlockBytes = (PixelFormat == PF_ATC_RGBA_E || PixelFormat == PF_ATC_RGBA_I || PixelFormat == PF_ETC2_RGBA) ? 16 : 8;
+	const int32 BlockBytes = (PixelFormat == PF_ETC2_RGBA) ? 16 : 8;
 	const int32 ImageBlocksX = FMath::Max(SizeX / BlockSizeX, 1);
 	const int32 ImageBlocksY = FMath::Max(SizeY / BlockSizeY, 1);
 
+	// The converter doesn't support 64-bit sizes.
+	const int64 SourceDataSize = (int64)SizeX * SizeY * 4;
+	const int64 OutDataSize = (int64)ImageBlocksX * ImageBlocksY * BlockBytes;
+	if (SourceDataSize != (uint32)SourceDataSize || OutDataSize != (uint32)OutDataSize)
+	{
+		return false;
+	}
+
 	// Allocate space to store compressed data.
-	OutCompressedData.Empty(ImageBlocksX * ImageBlocksY * BlockBytes);
-	OutCompressedData.AddUninitialized(ImageBlocksX * ImageBlocksY * BlockBytes);
+	OutCompressedData.Empty(OutDataSize);
+	OutCompressedData.AddUninitialized(OutDataSize);
 
 	TQonvertImage SrcImg;
 	TQonvertImage DstImg;
@@ -81,33 +82,21 @@ static bool CompressImageUsingQonvert(
 	SrcImg.nWidth    = SizeX;
 	SrcImg.nHeight   = SizeY;
 	SrcImg.nFormat   = Q_FORMAT_BGRA_8888;
-	SrcImg.nDataSize = SizeX * SizeY * 4;
+	SrcImg.nDataSize = (uint32)SourceDataSize;
 	SrcImg.pData     = (unsigned char*)SourceData;
 
 	DstImg.nWidth    = SizeX;
 	DstImg.nHeight   = SizeY;
-	DstImg.nDataSize = ImageBlocksX * ImageBlocksY * BlockBytes;
+	DstImg.nDataSize = (uint32)OutDataSize;
 	DstImg.pData     = OutCompressedData.GetData();
 
 	switch (PixelFormat)
 	{
-	case PF_ETC1:
-		DstImg.nFormat = Q_FORMAT_ETC1_RGB8;
-		break;
 	case PF_ETC2_RGB:
 		DstImg.nFormat = Q_FORMAT_ETC2_RGB8;
 		break;
 	case PF_ETC2_RGBA:
 		DstImg.nFormat = Q_FORMAT_ETC2_RGBA8;
-		break;
-	case PF_ATC_RGB:
-		DstImg.nFormat = Q_FORMAT_ATC_RGB;
-		break;
-	case PF_ATC_RGBA_E:
-		DstImg.nFormat = Q_FORMAT_ATC_RGBA_EXPLICIT_ALPHA;
-		break;
-	case PF_ATC_RGBA_I:
-		DstImg.nFormat = Q_FORMAT_ATC_RGBA_INTERPOLATED_ALPHA;
 		break;
 	default:
 		UE_LOG(LogTextureFormatAndroid, Fatal, TEXT("Unsupported EPixelFormat for compression: %u"), (uint32)PixelFormat);
@@ -124,7 +113,7 @@ static bool CompressImageUsingQonvert(
 
 
 /**
- * ATITC and ETC1/2 texture format handler.
+ * ETC2 texture format handler.
  */
 class FTextureFormatAndroid : public ITextureFormat
 {
@@ -166,39 +155,6 @@ class FTextureFormatAndroid : public ITextureFormat
 
 		EPixelFormat CompressedPixelFormat = PF_Unknown;
 
-		if (BuildSettings.TextureFormatName == GTextureFormatNameAutoETC1)
-		{
-			if (bImageHasAlphaChannel)
-			{
-				// ETC1 can't support an alpha channel, store uncompressed
-				OutCompressedImage.SizeX = Image.SizeX;
-				OutCompressedImage.SizeY = Image.SizeY;
-				OutCompressedImage.SizeZ = (BuildSettings.bVolume || BuildSettings.bTextureArray) ? Image.NumSlices : 1;
-				OutCompressedImage.PixelFormat = PF_B8G8R8A8;
-				OutCompressedImage.RawData = Image.RawData;
-				return true;
-			}
-			else
-			{
-				CompressedPixelFormat = PF_ETC1;
-			}
-		}
-		else		
-		if (BuildSettings.TextureFormatName == GTextureFormatNameETC1)
-		{
-			CompressedPixelFormat = PF_ETC1;
-		}
-		else
-		if (BuildSettings.TextureFormatName == GTextureFormatNameAutoETC1a && !bImageHasAlphaChannel)
-		{
-			CompressedPixelFormat = PF_ETC1;
-		}
-		else
-		if (BuildSettings.TextureFormatName == GTextureFormatNameAutoETC1a && bImageHasAlphaChannel)
-		{
-			CompressedPixelFormat = PF_ETC2_RGBA;
-		}
-		else
 		if (BuildSettings.TextureFormatName == GTextureFormatNameETC2_RGB ||
 		   (BuildSettings.TextureFormatName == GTextureFormatNameAutoETC2 && !bImageHasAlphaChannel))
 		{
@@ -210,23 +166,6 @@ class FTextureFormatAndroid : public ITextureFormat
 		{
 			CompressedPixelFormat = PF_ETC2_RGBA;
 		}
-		else
-		if (BuildSettings.TextureFormatName == GTextureFormatNameATC_RGB || 
-		   (BuildSettings.TextureFormatName == GTextureFormatNameAutoATC && !bImageHasAlphaChannel))
-		{
-			CompressedPixelFormat = PF_ATC_RGB;
-		}
-		else
-		if (BuildSettings.TextureFormatName == GTextureFormatNameATC_RGBA_I ||
-		   (BuildSettings.TextureFormatName == GTextureFormatNameAutoATC && bImageHasAlphaChannel) )
-		{
-			CompressedPixelFormat = PF_ATC_RGBA_I;
-		}
-		else
-		if (BuildSettings.TextureFormatName == GTextureFormatNameATC_RGBA_E)
-		{
-			CompressedPixelFormat = PF_ATC_RGBA_E;
-		}
 
 		check(CompressedPixelFormat != PF_Unknown);
 
@@ -234,7 +173,7 @@ class FTextureFormatAndroid : public ITextureFormat
 		int32 SliceSize = Image.SizeX * Image.SizeY;
 		for (int32 SliceIndex = 0; SliceIndex < Image.NumSlices && bCompressionSucceeded; ++SliceIndex)
 		{
-			TArray<uint8> CompressedSliceData;
+			TArray64<uint8> CompressedSliceData;
 			bCompressionSucceeded = CompressImageUsingQonvert(
 				Image.AsBGRA8() + SliceIndex * SliceSize,
 				CompressedPixelFormat,
@@ -257,9 +196,6 @@ class FTextureFormatAndroid : public ITextureFormat
 	}
 };
 
-/**
- * Module for ATITC and ETC1/2 texture compression.
- */
 static ITextureFormat* Singleton = NULL;
 
 

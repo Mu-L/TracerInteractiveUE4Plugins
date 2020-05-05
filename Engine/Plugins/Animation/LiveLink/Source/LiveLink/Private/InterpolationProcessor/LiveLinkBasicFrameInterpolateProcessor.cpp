@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "InterpolationProcessor/LiveLinkBasicFrameInterpolateProcessor.h"
 #include "Roles/LiveLinkBasicRole.h"
@@ -35,7 +35,7 @@ TSubclassOf<ULiveLinkRole> ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkB
 namespace LiveLinkInterpolation
 {
 	void Interpolate(const UStruct* InStruct, bool bCheckForInterpFlag, float InBlendWeight, const void* InFrameDataA, const void* InFrameDataB, void* OutFrameData);
-	void InterpolateProperty(UProperty* Property, float InBlendWeight, const void* InFrameDataA, const void* InFrameDataB, void* OutFrameData);
+	void InterpolateProperty(FProperty* Property, float InBlendWeight, const void* InFrameDataA, const void* InFrameDataB, void* OutFrameData);
 
 	template<class T>
 	T BlendValue(const T& A, const T& B, float InBlendWeight)
@@ -56,7 +56,7 @@ namespace LiveLinkInterpolation
 	}
 
 	template<class T>
-	void Interpolate(const UStructProperty* StructProperty, float InBlendWeight, const void* DataA, const void* DataB, void* DataResult)
+	void Interpolate(const FStructProperty* StructProperty, float InBlendWeight, const void* DataA, const void* DataB, void* DataResult)
 	{
 		for (int32 ArrayIndex = 0; ArrayIndex < StructProperty->ArrayDim; ++ArrayIndex)
 		{
@@ -71,12 +71,12 @@ namespace LiveLinkInterpolation
 
 	void Interpolate(const UStruct* InStruct, bool bCheckForInterpFlag, float InBlendWeight, const void* InFrameDataA, const void* InFrameDataB, void* OutFrameData)
 	{
-		for (TFieldIterator<UProperty> Itt(InStruct); Itt; ++Itt)
+		for (TFieldIterator<FProperty> Itt(InStruct); Itt; ++Itt)
 		{
-			UProperty* Property = *Itt;
+			FProperty* Property = *Itt;
 			if (!bCheckForInterpFlag || Property->HasAnyPropertyFlags(CPF_Interp))
 			{
-				if (UArrayProperty* ArrayProperty = Cast<UArrayProperty>(Property))
+				if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
 				{
 					for (int32 DimIndex = 0; DimIndex < ArrayProperty->ArrayDim; ++DimIndex)
 					{
@@ -103,9 +103,9 @@ namespace LiveLinkInterpolation
 		}
 	}
 
-	void InterpolateProperty(UProperty* Property, float InBlendWeight, const void* InFrameDataA, const void* InFrameDataB, void* OutFrameData)
+	void InterpolateProperty(FProperty* Property, float InBlendWeight, const void* InFrameDataA, const void* InFrameDataB, void* OutFrameData)
 	{
-		if (UStructProperty* StructProperty = Cast<UStructProperty>(Property))
+		if (FStructProperty* StructProperty = CastField<FStructProperty>(Property))
 		{
 			if (StructProperty->Struct->GetFName() == NAME_Vector)
 			{
@@ -142,7 +142,7 @@ namespace LiveLinkInterpolation
 				}
 			}
 		}
-		else if (UNumericProperty* NumericProperty = Cast<UNumericProperty>(Property))
+		else if (FNumericProperty* NumericProperty = CastField<FNumericProperty>(Property))
 		{
 			if (NumericProperty->IsFloatingPoint())
 			{
@@ -178,11 +178,11 @@ namespace LiveLinkInterpolation
 	}
 
 	template<class TTimeType>
-	void Interpolate(TTimeType InTime, const FLiveLinkStaticDataStruct& InStaticData, const TArray<FLiveLinkFrameDataStruct>& InSourceFrames, FLiveLinkSubjectFrameData& OutBlendedFrame, bool bInInterpolatePropertyValues)
+	void Interpolate(TTimeType InTime, const FLiveLinkStaticDataStruct& InStaticData, const TArray<FLiveLinkFrameDataStruct>& InSourceFrames, FLiveLinkSubjectFrameData& OutBlendedFrame, bool bInInterpolatePropertyValues, FLiveLinkInterpolationInfo& OutInterpolationInfo)
 	{
 		int32 FrameDataIndexA = INDEX_NONE;
 		int32 FrameDataIndexB = INDEX_NONE;
-		if (ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::FindInterpolateIndex(InTime, InSourceFrames, FrameDataIndexA, FrameDataIndexB))
+		if (ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::FindInterpolateIndex(InTime, InSourceFrames, FrameDataIndexA, FrameDataIndexB, OutInterpolationInfo))
 		{
 			if (FrameDataIndexA == FrameDataIndexB)
 			{
@@ -212,21 +212,22 @@ namespace LiveLinkInterpolation
 				}
 			}
 		}
-		else if (InSourceFrames.Num())
+		else
 		{
-			OutBlendedFrame.FrameData.InitializeWith(InSourceFrames[0].GetStruct(), InSourceFrames[0].GetBaseData());
+			//If we could not find a sample, tag it as an overflow. i.e Asking for the future
+			OutInterpolationInfo.bOverflowDetected = true;
 		}
 	}
 }
 
-void ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::Interpolate(double InTime, const FLiveLinkStaticDataStruct& InStaticData, const TArray<FLiveLinkFrameDataStruct>& InSourceFrames, FLiveLinkSubjectFrameData& OutBlendedFrame)
+void ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::Interpolate(double InTime, const FLiveLinkStaticDataStruct& InStaticData, const TArray<FLiveLinkFrameDataStruct>& InSourceFrames, FLiveLinkSubjectFrameData& OutBlendedFrame, FLiveLinkInterpolationInfo& OutInterpolationInfo)
 {
-	LiveLinkInterpolation::Interpolate(InTime, InStaticData, InSourceFrames, OutBlendedFrame, bInterpolatePropertyValues);
+	LiveLinkInterpolation::Interpolate(InTime, InStaticData, InSourceFrames, OutBlendedFrame, bInterpolatePropertyValues, OutInterpolationInfo);
 }
 
-void ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::Interpolate(const FQualifiedFrameTime& InTime, const FLiveLinkStaticDataStruct& InStaticData, const TArray<FLiveLinkFrameDataStruct>& InSourceFrames, FLiveLinkSubjectFrameData& OutBlendedFrame)
+void ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::Interpolate(const FQualifiedFrameTime& InTime, const FLiveLinkStaticDataStruct& InStaticData, const TArray<FLiveLinkFrameDataStruct>& InSourceFrames, FLiveLinkSubjectFrameData& OutBlendedFrame, FLiveLinkInterpolationInfo& OutInterpolationInfo)
 {
-	LiveLinkInterpolation::Interpolate(InTime, InStaticData, InSourceFrames, OutBlendedFrame, bInterpolatePropertyValues);
+	LiveLinkInterpolation::Interpolate(InTime, InStaticData, InSourceFrames, OutBlendedFrame, bInterpolatePropertyValues, OutInterpolationInfo);
 }
 
 void ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::GenericInterpolate(double InBlendWeight, const FGenericInterpolateOptions& Options, const FLiveLinkFrameDataStruct& FrameDataA, const FLiveLinkFrameDataStruct& FrameDataB, FLiveLinkFrameDataStruct& OutBlendedFrameData)
@@ -235,6 +236,7 @@ void ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolation
 
 	const FLiveLinkFrameDataStruct& FrameWhenCanNotBlend = (InBlendWeight > 0.5f) ? FrameDataB : FrameDataA;
 
+	// Initialize the data (copy all properties, including those that will be interpolate later).
 	if (Options.bCopyClosestFrame)
 	{
 		OutBlendedFrameData.InitializeWith(FrameDataA.GetStruct(), FrameWhenCanNotBlend.GetBaseData());
@@ -248,8 +250,13 @@ void ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolation
 		}
 	}
 
-	OutBlendedFrameData.GetBaseData()->WorldTime = FLiveLinkWorldTime(FMath::Lerp(FrameDataA.GetBaseData()->WorldTime.GetOffsettedTime(), FrameDataB.GetBaseData()->WorldTime.GetOffsettedTime(), InBlendWeight), 0.0);
+	// Interpolate Time data
+	OutBlendedFrameData.GetBaseData()->WorldTime = FLiveLinkWorldTime(FMath::Lerp(FrameDataA.GetBaseData()->WorldTime.GetSourceTime(), FrameDataB.GetBaseData()->WorldTime.GetSourceTime(), InBlendWeight), 0.0);
+	OutBlendedFrameData.GetBaseData()->MetaData.SceneTime.Time = FFrameTime(FMath::Lerp(FrameDataA.GetBaseData()->MetaData.SceneTime.Time, FrameDataB.GetBaseData()->MetaData.SceneTime.Time, InBlendWeight));
+	OutBlendedFrameData.GetBaseData()->ArrivalTime.WorldTime = FMath::Lerp(FrameDataA.GetBaseData()->ArrivalTime.WorldTime, FrameDataB.GetBaseData()->ArrivalTime.WorldTime, InBlendWeight);
+	OutBlendedFrameData.GetBaseData()->ArrivalTime.SceneTime.Time = FFrameTime(FMath::Lerp(FrameDataA.GetBaseData()->ArrivalTime.SceneTime.Time, FrameDataB.GetBaseData()->ArrivalTime.SceneTime.Time, InBlendWeight));
 
+	// Interpolate Property Values
 	if (Options.bInterpolatePropertyValues)
 	{
 		const TArray<float>& PropertiesA = FrameDataA.GetBaseData()->PropertyValues;
@@ -264,11 +271,13 @@ void ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolation
 			PropertiesResult[PropertyIndex] = FMath::Lerp(PropertiesA[PropertyIndex], PropertiesB[PropertyIndex], InBlendWeight);
 		}
 	}
-	else
+	// Copy the Property Values if they were not copied previously
+	else if (!Options.bCopyClosestFrame)
 	{
 		OutBlendedFrameData.GetBaseData()->PropertyValues = FrameWhenCanNotBlend.GetBaseData()->PropertyValues;
 	}
 
+	// Interpolate all properties with the tag "interp"
 	if (Options.bInterpolateInterpProperties)
 	{
 		LiveLinkInterpolation::Interpolate(FrameDataA.GetStruct(), true, InBlendWeight, FrameDataA.GetBaseData(), FrameDataB.GetBaseData(), OutBlendedFrameData.GetBaseData());
@@ -277,39 +286,60 @@ void ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolation
 
 double ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::GetBlendFactor(double InTime, const FLiveLinkFrameDataStruct& FrameDataA, const FLiveLinkFrameDataStruct& FrameDataB)
 {
-	const double FrameATime = FrameDataA.GetBaseData()->WorldTime.GetOffsettedTime();
-	const double FrameBTime = FrameDataB.GetBaseData()->WorldTime.GetOffsettedTime();
-	return (InTime - FrameATime) / (FrameBTime - FrameATime);
+	const double FrameATime = FrameDataA.GetBaseData()->WorldTime.GetSourceTime();
+	const double FrameBTime = FrameDataB.GetBaseData()->WorldTime.GetSourceTime();
+	
+	const double Divider = FrameBTime - FrameATime;
+	if (!FMath::IsNearlyZero(Divider))
+	{
+		return (InTime - FrameATime) / Divider;
+	}
+	else
+	{
+		return 1.0;
+	}
 }
 
 double ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::GetBlendFactor(FQualifiedFrameTime InTime, const FLiveLinkFrameDataStruct& FrameDataA, const FLiveLinkFrameDataStruct& FrameDataB)
 {
 	const double FrameASeconds = FrameDataA.GetBaseData()->MetaData.SceneTime.AsSeconds();
 	const double FrameBSeconds = FrameDataB.GetBaseData()->MetaData.SceneTime.AsSeconds();
-	return (InTime.AsSeconds() - FrameASeconds) / (FrameBSeconds - FrameASeconds);
+
+	const double Divider = FrameBSeconds - FrameASeconds;
+	if (!FMath::IsNearlyZero(Divider))
+	{
+		return (InTime.AsSeconds() - FrameASeconds) / Divider;
+	}
+	else
+	{
+		return 1.0;
+	}
 }
 
- bool ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::FindInterpolateIndex(double InTime, const TArray<FLiveLinkFrameDataStruct>& InSourceFrames, int32& OutFrameIndexA, int32& OutFrameIndexB)
+ bool ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::FindInterpolateIndex(double InTime, const TArray<FLiveLinkFrameDataStruct>& InSourceFrames, int32& OutFrameIndexA, int32& OutFrameIndexB, FLiveLinkInterpolationInfo& OutInterpolationInfo)
  {
 	if (InSourceFrames.Num() == 0)
 	{
 		return false;
 	}
 
+	OutInterpolationInfo.ExpectedEvaluationDistanceFromNewestSeconds = InSourceFrames.Last().GetBaseData()->WorldTime.GetSourceTime() - InTime;
+	OutInterpolationInfo.ExpectedEvaluationDistanceFromOldestSeconds = InTime - InSourceFrames[0].GetBaseData()->WorldTime.GetSourceTime();
+
 	for (int32 FrameIndex = InSourceFrames.Num() - 1; FrameIndex >= 0; --FrameIndex)
 	{
 		const FLiveLinkFrameDataStruct& SourceFrameData = InSourceFrames[FrameIndex];
-		if (SourceFrameData.GetBaseData()->WorldTime.GetOffsettedTime() <= InTime)
+		if (SourceFrameData.GetBaseData()->WorldTime.GetSourceTime() <= InTime)
 		{
 			if (FrameIndex == InSourceFrames.Num() - 1)
 			{
 				OutFrameIndexA = FrameIndex;
 				OutFrameIndexB = FrameIndex;
+				OutInterpolationInfo.bOverflowDetected = !FMath::IsNearlyEqual(InTime, SourceFrameData.GetBaseData()->WorldTime.GetSourceTime());
 				return true;
 			}
 			else
 			{
-
 				OutFrameIndexA = FrameIndex;
 				OutFrameIndexB = FrameIndex + 1;
 				return true;
@@ -317,15 +347,21 @@ double ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolati
 		}
 	}
 
-	return false;
+	OutFrameIndexA = 0;
+	OutFrameIndexB = 0;
+	OutInterpolationInfo.bUnderflowDetected = true;
+	return true;
 }
 
- bool ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::FindInterpolateIndex(FQualifiedFrameTime InTime, const TArray<FLiveLinkFrameDataStruct>& InSourceFrames, int32& OutFrameIndexA, int32& OutFrameIndexB)
- {
-	 if (InSourceFrames.Num() == 0)
-	 {
-		 return false;
-	 }
+bool ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolationProcessorWorker::FindInterpolateIndex(FQualifiedFrameTime InTime, const TArray<FLiveLinkFrameDataStruct>& InSourceFrames, int32& OutFrameIndexA, int32& OutFrameIndexB, FLiveLinkInterpolationInfo& OutInterpolationInfo)
+{
+	if (InSourceFrames.Num() == 0)
+	{
+		return false;
+	}
+	
+	OutInterpolationInfo.ExpectedEvaluationDistanceFromNewestSeconds = InSourceFrames.Last().GetBaseData()->MetaData.SceneTime.AsSeconds() - InTime.AsSeconds();
+	OutInterpolationInfo.ExpectedEvaluationDistanceFromOldestSeconds = InTime.AsSeconds() - InSourceFrames[0].GetBaseData()->MetaData.SceneTime.AsSeconds();
 
 	const double InTimeInSeconds = InTime.AsSeconds();
 	for (int32 FrameIndex = InSourceFrames.Num() - 1; FrameIndex >= 0; --FrameIndex)
@@ -337,6 +373,8 @@ double ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolati
 			{
 				OutFrameIndexA = FrameIndex;
 				OutFrameIndexB = FrameIndex;
+
+				OutInterpolationInfo.bOverflowDetected = !FMath::IsNearlyEqual(InTimeInSeconds, SourceFrameData.GetBaseData()->MetaData.SceneTime.AsSeconds());
 				return true;
 			}
 			else
@@ -348,5 +386,8 @@ double ULiveLinkBasicFrameInterpolationProcessor::FLiveLinkBasicFrameInterpolati
 		}
 	}
 
-	return false;
- }
+	OutFrameIndexA = 0;
+	OutFrameIndexB = 0;
+	OutInterpolationInfo.bUnderflowDetected = true;
+	return true;
+}

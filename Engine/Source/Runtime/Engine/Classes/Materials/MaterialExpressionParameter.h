@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -50,10 +50,6 @@ class UMaterialExpressionParameter : public UMaterialExpression
 	virtual void ValidateParameterName(const bool bAllowDuplicateName) override;
 #endif
 	//~ End UMaterialExpression Interface
-
-	//~ Begin UObject Interface
-	virtual bool NeedsLoadForClient() const override;
-	//~ End UObject Interface
 
 	ENGINE_API virtual FGuid& GetParameterExpressionId() override
 	{

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Render/Device/DisplayClusterDeviceBase.h"
 
@@ -163,6 +163,28 @@ void FDisplayClusterDeviceBase::StartScene(UWorld* InWorld)
 void FDisplayClusterDeviceBase::EndScene()
 {
 	bIsSceneOpen = false;
+}
+
+void FDisplayClusterDeviceBase::PreTick(float DeltaSeconds)
+{
+	if (!bIsCustomPresentSet)
+	{
+		// Set up our new present handler
+		if (MainViewport)
+		{
+			// Current sync policy
+			TSharedPtr<IDisplayClusterRenderSyncPolicy> SyncPolicy = GDisplayCluster->GetRenderMgr()->GetCurrentSynchronizationPolicy();
+			check(SyncPolicy.IsValid());
+
+			// Create present handler
+			FDisplayClusterPresentationBase* const CustomPresentHandler = CreatePresentationObject(MainViewport, SyncPolicy);
+			check(CustomPresentHandler);
+
+			MainViewport->GetViewportRHI()->SetCustomPresent(CustomPresentHandler);
+		}
+
+		bIsCustomPresentSet = true;
+	}
 }
 
 void FDisplayClusterDeviceBase::SetViewportCamera(const FString& InCameraId /* = FString() */, const FString& InViewportId /* = FString() */)

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MovieSceneComposureExportSectionTemplate.h"
 #include "MovieScene/MovieSceneComposureExportTrack.h"
@@ -31,7 +31,7 @@ struct FBufferVisualizationIterator
 	/** Reference to the post processing settings to add vialization materials to */
 	FFinalPostProcessSettings& FinalPostProcessSettings;
 
-	void ProcessValue(const FString& InName, UMaterial* Material, const FText& InText)
+	void ProcessValue(const FString& InName, UMaterialInterface* Material, const FText& InText)
 	{
 		if (BuffersToCapture.Contains(InName) || BuffersToCapture.Contains(InText.ToString()))
 		{

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Chaos/BoundingVolume.h"
 #include "Chaos/AABBTree.h"
@@ -7,16 +7,22 @@
 int FBoundingVolumeCVars::FilterFarBodies = 0;
 
 FAutoConsoleVariableRef FBoundingVolumeCVars::CVarFilterFarBodies(
-	TEXT("p.RemoveFarBodiesFromBVH"),
-	FBoundingVolumeCVars::FilterFarBodies,
-	TEXT("Removes bodies far from the scene from the bvh\n")
-	TEXT("0: Kept, 1: Removed"),
-	ECVF_Default);
+    TEXT("p.RemoveFarBodiesFromBVH"),
+    FBoundingVolumeCVars::FilterFarBodies,
+    TEXT("Removes bodies far from the scene from the bvh\n")
+        TEXT("0: Kept, 1: Removed"),
+    ECVF_Default);
 
 namespace Chaos
 {
-	template <typename TPayloadType, typename T, int d>
-	ISpatialAcceleration<TPayloadType, T, d>* ISpatialAcceleration<TPayloadType, T, d>::SerializationFactory(FChaosArchive& Ar, ISpatialAcceleration<TPayloadType, T, d>* Accel)
+	CHAOS_API int32 MaxDirtyElements = 10000;
+	FAutoConsoleVariableRef CVarMaxDirtyElements(
+	    TEXT("p.MaxDirtyElements"),
+	    MaxDirtyElements,
+	    TEXT("The max number of dirty elements. This forces a flush which is very expensive"));
+
+	    template<typename TPayloadType, typename T, int d>
+	    ISpatialAcceleration<TPayloadType, T, d>* ISpatialAcceleration<TPayloadType, T, d>::SerializationFactory(FChaosArchive& Ar, ISpatialAcceleration<TPayloadType, T, d>* Accel)
 	{
 		if (Ar.CustomVer(FExternalPhysicsCustomObjectVersion::GUID) < FExternalPhysicsCustomObjectVersion::SerializeEvolutionGenericAcceleration)
 		{
@@ -36,5 +42,8 @@ namespace Chaos
 	}
 
 	template class CHAOS_API Chaos::ISpatialAcceleration<int32, float, 3>;
-	template class CHAOS_API Chaos::ISpatialAcceleration<TAccelerationStructureHandle<float,3>, float, 3>;
+	template class CHAOS_API Chaos::ISpatialAcceleration<TAccelerationStructureHandle<float, 3>, float, 3>;
+
+	template class CHAOS_API Chaos::TBoundingVolume<int32, float, 3>;
+	template class CHAOS_API Chaos::TBoundingVolume<TAccelerationStructureHandle<float, 3>, float, 3>;
 }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -16,16 +16,6 @@ public:
 
 	virtual ~FGenericPlatformSoftwareCursor()
 	{
-	}
-
-	virtual void* CreateCursorFromFile(const FString& InPathToCursorWithoutExtension, FVector2D HotSpot) override
-	{
-		return nullptr;
-	}
-
-	virtual void* CreateCursorFromRGBABuffer(const FColor* Pixels, int32 Width, int32 Height, FVector2D InHotSpot) override
-	{
-		return nullptr;
 	}
 
 	virtual FVector2D GetPosition() const override

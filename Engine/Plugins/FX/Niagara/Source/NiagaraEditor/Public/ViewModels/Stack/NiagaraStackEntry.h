@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -11,13 +11,15 @@ class FNiagaraEmitterViewModel;
 class FNiagaraScriptViewModel;
 class UNiagaraStackEditorData;
 class UNiagaraStackErrorItem;
+class UNiagaraClipboardContent;
 
 UENUM()
 enum class EStackIssueSeverity : uint8
 {
 	Error = 0,
 	Warning, 
-	Info
+	Info,
+	None
 };
 
 class FNiagaraStackEntryDragDropOp : public FDecoratedDragDropOp
@@ -93,6 +95,7 @@ public:
 	DECLARE_DELEGATE_RetVal_TwoParams(TOptional<FDropRequestResponse>, FOnRequestDrop, const UNiagaraStackEntry& /*TargetEntry*/, const FDropRequest& /*DropRequest*/);
 	DECLARE_DELEGATE_RetVal_OneParam(bool, FOnFilterChild, const UNiagaraStackEntry&);
 	DECLARE_DELEGATE(FStackIssueFixDelegate);
+	DECLARE_MULTICAST_DELEGATE(FOnAlternateDisplayNameChanged);
 
 public:
 	struct NIAGARAEDITOR_API FExecutionCategoryNames
@@ -109,6 +112,7 @@ public:
 		static const FName Spawn;
 		static const FName Update;
 		static const FName Event;
+		static const FName SimulationStage;
 		static const FName Render;
 	};
 
@@ -155,11 +159,18 @@ public:
 	};
 
 	// stack issue stuff
-	struct FStackIssueFix
+
+	enum class EStackIssueFixStyle
+	{
+		Fix,
+		Link
+	};
+
+	struct NIAGARAEDITOR_API FStackIssueFix
 	{
 		FStackIssueFix();
 
-		FStackIssueFix(FText InDescription, FStackIssueFixDelegate InFixDelegate);
+		FStackIssueFix(FText InDescription, FStackIssueFixDelegate InFixDelegate, EStackIssueFixStyle FixStyle = EStackIssueFixStyle::Fix);
 
 		bool IsValid() const;
 
@@ -169,11 +180,14 @@ public:
 
 		const FStackIssueFixDelegate& GetFixDelegate() const;
 
+		EStackIssueFixStyle GetStyle() const;
+
 		const FString& GetUniqueIdentifier() const;
 
 	private:
 		FText Description;
 		FStackIssueFixDelegate FixDelegate;
+		EStackIssueFixStyle Style;
 		FString UniqueIdentifier;
 	};
 
@@ -223,6 +237,8 @@ public:
 
 	virtual FText GetDisplayName() const;
 
+	TOptional<FText> GetAlternateDisplayName() const;
+
 	virtual UObject* GetDisplayedObject() const;
 
 	UNiagaraStackEditorData& GetStackEditorData() const;
@@ -240,6 +256,8 @@ public:
 	// Calling this doesn't broadcast structure change automatically due to the expense of synchronizing
 	// expanded state with the tree which is done to prevent items being expanded on tick.
 	void SetIsExpanded(bool bInExpanded);
+
+	void SetIsExpanded_Recursive(bool bInExpanded);
 
 	virtual bool GetIsEnabled() const;
 
@@ -261,6 +279,21 @@ public:
 
 	void GetUnfilteredChildren(TArray<UNiagaraStackEntry*>& OutUnfilteredChildren) const;
 
+	template<typename T>
+	void GetUnfilteredChildrenOfType(TArray<T*>& OutUnfilteredChldrenOfType) const
+	{
+		TArray<UNiagaraStackEntry*> UnfilteredChildren;
+		GetUnfilteredChildren(UnfilteredChildren);
+		for (UNiagaraStackEntry* UnfilteredChild : UnfilteredChildren)
+		{
+			T* UnfilteredChildOfType = Cast<T>(UnfilteredChild);
+			if (UnfilteredChildOfType != nullptr)
+			{
+				OutUnfilteredChldrenOfType.Add(UnfilteredChildOfType);
+			}
+		}
+	}
+
 	FOnStructureChanged& OnStructureChanged();
 
 	FOnDataObjectModified& OnDataObjectModified();
@@ -270,6 +303,8 @@ public:
 	const FOnRequestFullRefresh& OnRequestFullRefreshDeferred() const;
 
 	FOnRequestFullRefresh& OnRequestFullRefreshDeferred();
+
+	FOnAlternateDisplayNameChanged& OnAlternateDisplayNameChanged();
 
 	void RefreshChildren();
 
@@ -323,9 +358,54 @@ public:
 
 	int32 GetTotalNumberOfErrorIssues() const;
 
+	virtual EStackIssueSeverity GetIssueSeverity() const { return EStackIssueSeverity::None; }
+
 	const TArray<FStackIssue>& GetIssues() const;
 
 	const TArray<UNiagaraStackEntry*>& GetAllChildrenWithIssues() const;
+
+	virtual bool SupportsCut() const { return false; }
+
+	virtual bool TestCanCutWithMessage(FText& OutMessage) const { return false; }
+
+	virtual FText GetCutTransactionText() const { return FText(); }
+
+	virtual void CopyForCut(UNiagaraClipboardContent* ClipboardContent) const { }
+	virtual void RemoveForCut() { }
+
+	virtual bool SupportsCopy() const { return false; }
+
+	virtual bool TestCanCopyWithMessage(FText& OutMessage) const { return false; }
+
+	virtual void Copy(UNiagaraClipboardContent* ClipboardContent) const { }
+
+	virtual bool SupportsPaste() const { return false; }
+
+	virtual bool TestCanPasteWithMessage(const UNiagaraClipboardContent* ClipboardContent, FText& OutMessage) const { return false; }
+
+	virtual FText GetPasteTransactionText(const UNiagaraClipboardContent* ClipboardContent) const { return FText(); }
+
+	virtual void Paste(const UNiagaraClipboardContent* ClipboardContent, FText& OutPasteWarning) { }
+
+	virtual bool SupportsDelete() const { return false; }
+
+	virtual bool TestCanDeleteWithMessage(FText& OutCanDeleteMessage) const { return false; }
+
+	virtual FText GetDeleteTransactionText() const { return FText(); }
+
+	virtual void Delete() { }
+
+	/** Returns whether or not this entry can be renamed. */
+	virtual bool SupportsRename() const { return false; }
+
+	/** Gets whether this entry has a rename pending. */
+	virtual bool GetIsRenamePending() const;
+
+	/** Sets whether this entry has a rename pending. */
+	virtual void SetIsRenamePending(bool bIsRenamePending);
+
+	/** Handler for when a rename is committed for this stack entry. */
+	virtual void OnRenamed(FText NewName);
 
 protected:
 	virtual void BeginDestroy() override;
@@ -383,6 +463,8 @@ private:
 
 	FOnRequestFullRefresh RequestFullRefreshDeferredDelegate;
 
+	FOnAlternateDisplayNameChanged AlternateDisplayNameChangedDelegate;
+
 	TArray<FOnFilterChild> ChildFilters;
 
 	UPROPERTY()
@@ -412,6 +494,8 @@ private:
 	mutable TOptional<bool> bHasBaseEmitterCache;
 
 	bool bOwnerIsEnabled;
+
+	TOptional<FText> AlternateDisplayName;
 
 	int32 TotalNumberOfInfoIssues;
 	int32 TotalNumberOfWarningIssues;

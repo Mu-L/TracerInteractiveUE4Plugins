@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -17,8 +17,7 @@ public:
 		uint32 PrimitiveId 
 	);
 
-	template<typename CmdListType>
-	void DispatchUpdates(CmdListType& RHICmdList);
+	void DispatchUpdates(FRHIComputeCommandList& RHICmdList);
 
 	void Clear();
 

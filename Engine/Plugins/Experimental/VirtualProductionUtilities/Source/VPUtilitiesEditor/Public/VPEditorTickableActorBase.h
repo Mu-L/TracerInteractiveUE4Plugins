@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -17,7 +17,5 @@ class VPUTILITIESEDITOR_API AVPEditorTickableActorBase : public AVPViewportTicka
 
 public:
 
-	/** Sets the LockLocation variable to disable movement from the translation gizmo */
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Editor")
-	void LockLocation(bool bSetLockLocation);
+	
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "HoloLensARSystem.h"
 
@@ -17,11 +17,16 @@ UWMRARPin* FHoloLensARSystem::CreateNamedARPin(FName Name, const FTransform& Pin
 	const FTransform& TrackingToAlignedTracking = ARSupportInterface->GetAlignmentTransform();
 	const FTransform PinToTrackingTransform = PinToWorldTransform.GetRelativeTransform(TrackingSystem->GetTrackingToWorldTransform()).GetRelativeTransform(TrackingToAlignedTracking);
 
+	if (Name == NAME_None)
+	{
+		UE_LOG(LogHoloLensAR, Warning, TEXT("CreateNamedARPin: Creating anchor with illegal name 'None' (aka NAME_None). This can result from casting an empty string to a Name."));
+	}
+
 	FString WMRAnchorId = Name.ToString();
 
 	if (AnchorIdToPinMap.Contains(WMRAnchorId))
 	{
-		UE_LOG(LogHoloLensAR, Warning, TEXT("CreateWMRAnchorStoreARPin: Creation of Anchor %s failed because that anchorID is already in use!  No pin created."), *WMRAnchorId);
+		UE_LOG(LogHoloLensAR, Warning, TEXT("CreateNamedARPin: Creation of Anchor %s failed because that anchorID is already in use!  No pin created."), *WMRAnchorId);
 		return nullptr;
 	}
 
@@ -29,7 +34,7 @@ UWMRARPin* FHoloLensARSystem::CreateNamedARPin(FName Name, const FTransform& Pin
 		bool bSuccess = WMRCreateAnchor(*WMRAnchorId, PinToTrackingTransform.GetLocation(), PinToTrackingTransform.GetRotation());
 		if (!bSuccess)
 		{
-			UE_LOG(LogHoloLensAR, Warning, TEXT("CreateWMRAnchorStoreARPin: Creation of Anchor %s failed!  No anchor or pin created."), *WMRAnchorId);
+			UE_LOG(LogHoloLensAR, Warning, TEXT("CreateNamedARPin: Creation of Anchor %s failed!  No anchor or pin created."), *WMRAnchorId);
 			return nullptr;
 		}
 	}
@@ -45,16 +50,36 @@ UWMRARPin* FHoloLensARSystem::CreateNamedARPin(FName Name, const FTransform& Pin
 	return NewPin;
 }
 
+UWMRARPin* FHoloLensARSystem::CreateNamedARPinAroundAnchor(FName Name, FString AnchorId)
+{
+	TSharedPtr<FARSupportInterface, ESPMode::ThreadSafe> ARSupportInterface = TrackingSystem->GetARCompositionComponent();
+
+	FTransform Transform;
+	const bool bTracked = WMRGetAnchorTransform(*AnchorId, Transform);
+
+	UWMRARPin* NewPin = NewObject<UWMRARPin>();
+	NewPin->InitARPin(ARSupportInterface.ToSharedRef(), nullptr, Transform, nullptr, Name);
+
+	AnchorIdToPinMap.Add(AnchorId, NewPin);
+	NewPin->SetAnchorId(AnchorId);
+
+	Pins.Add(NewPin);
+
+	NewPin->OnTrackingStateChanged(bTracked ? EARTrackingState::Tracking : EARTrackingState::NotTracking);
+
+	return NewPin;
+}
+
 bool FHoloLensARSystem::PinComponentToARPin(USceneComponent* ComponentToPin, UWMRARPin* Pin)
 {
 	if (Pin == nullptr)
 	{
-		UE_LOG(LogHoloLensAR, Warning, TEXT("PinComponentToWMRAnchorStoreARPin: Pin was null.  Doing nothing."));
+		UE_LOG(LogHoloLensAR, Warning, TEXT("PinComponentToARPin: Pin was null.  Doing nothing."));
 		return false;
 	}
 	if (ComponentToPin == nullptr)
 	{
-		UE_LOG(LogHoloLensAR, Warning, TEXT("PinComponentToWMRAnchorStoreARPin: Tried to pin null component to pin %s.  Doing nothing."), *Pin->GetDebugName().ToString());
+		UE_LOG(LogHoloLensAR, Warning, TEXT("PinComponentToARPin: Tried to pin null component to pin %s.  Doing nothing."), *Pin->GetDebugName().ToString());
 		return false;
 	}
 
@@ -63,12 +88,12 @@ bool FHoloLensARSystem::PinComponentToARPin(USceneComponent* ComponentToPin, UWM
 		{
 			if (FindResult == Pin)
 			{
-				UE_LOG(LogHoloLensAR, Warning, TEXT("PinComponentToWMRAnchorStoreARPin: Component %s is already pinned to pin %s.  Doing nothing."), *ComponentToPin->GetReadableName(), *Pin->GetDebugName().ToString());
+				UE_LOG(LogHoloLensAR, Warning, TEXT("PinComponentToARPin: Component %s is already pinned to pin %s.  Doing nothing."), *ComponentToPin->GetReadableName(), *Pin->GetDebugName().ToString());
 				return true;
 			}
 			else
 			{
-				UE_LOG(LogHoloLensAR, Warning, TEXT("PinComponentToWMRAnchorStoreARPin: Component %s is pinned to pin %s. Unpinning it from that pin first.  The pin will not be destroyed."), *ComponentToPin->GetReadableName(), *Pin->GetDebugName().ToString());
+				UE_LOG(LogHoloLensAR, Warning, TEXT("PinComponentToARPin: Component %s is pinned to pin %s. Unpinning it from that pin first.  The pin will not be destroyed."), *ComponentToPin->GetReadableName(), *Pin->GetDebugName().ToString());
 				FindResult->SetPinnedComponent(nullptr);
 			}
 		}

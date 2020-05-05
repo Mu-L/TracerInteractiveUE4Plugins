@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PakFileUtilities.h"
 #include "IPlatformFilePak.h"
@@ -23,6 +23,7 @@
 #include "DerivedDataCacheInterface.h"
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
+#include "Misc/DataDrivenPlatformInfoRegistry.h"
 
 IMPLEMENT_MODULE(FDefaultModuleImpl, PakFileUtilities);
 
@@ -319,7 +320,7 @@ public:
 				if (Lines[EntryIndex].FindLastChar('"', OpenOrderNumber))
 				{
 					FString ReadNum = Lines[EntryIndex].RightChop(OpenOrderNumber + 1);
-					Lines[EntryIndex] = Lines[EntryIndex].Left(OpenOrderNumber + 1);
+					Lines[EntryIndex].LeftInline(OpenOrderNumber + 1, false);
 					ReadNum.TrimStartInline();
 					if (ReadNum.IsNumeric())
 					{
@@ -482,6 +483,8 @@ struct FPakCommandLineParameters
 		, bFallbackOrderForNonUassetFiles(false)
 		, bAsyncCompression(false)
 		, bAlignFilesLargerThanBlock(false)
+		, bForceCompress(false)
+		, bAllowForIndexUnload(false)
 	{
 	}
 
@@ -504,6 +507,9 @@ struct FPakCommandLineParameters
 	bool bFallbackOrderForNonUassetFiles;
 	bool bAsyncCompression;
 	bool bAlignFilesLargerThanBlock;	// Align files that are larger than block size
+	bool bForceCompress; // Force all files that request compression to be compressed, even if that results in a larger file size
+	bool bAllowForIndexUnload;
+	FString DataDrivenPlatformName;
 };
 
 struct FPakEntryPair
@@ -726,7 +732,7 @@ FString GetCommonRootPath(TArray<FPakInputPair>& FilesToAdd)
 		}
 		if ((CommonSeparatorIndex + 1) < Root.Len())
 		{
-			Root = Root.Mid(0, CommonSeparatorIndex + 1);
+			Root.MidInline(0, CommonSeparatorIndex + 1, false);
 		}
 	}
 	return Root;
@@ -794,7 +800,7 @@ bool FCompressedFileBuffer::CompressFileToWorkingBuffer(const FPakInputPair& InF
 
 		if (GetDerivedDataCacheRef().CachedDataProbablyExists(*DDCKey))
 		{
-			int32 AsyncHandle = GetDerivedDataCacheRef().GetAsynchronous(*DDCKey);
+			int32 AsyncHandle = GetDerivedDataCacheRef().GetAsynchronous(*DDCKey, InFile.Dest);
 			GetDerivedDataCacheRef().WaitAsynchronousCompletion(AsyncHandle);
 			GetData.Empty(GetData.Max());
 			bool Result = false;
@@ -867,7 +873,7 @@ bool FCompressedFileBuffer::CompressFileToWorkingBuffer(const FPakInputPair& InF
 		GetData.Empty(GetData.Max());
 		FMemoryWriter Ar(GetData, true);
 		SerializeDDCData(Ar);
-		GetDerivedDataCacheRef().Put(*DDCKey, GetData);
+		GetDerivedDataCacheRef().Put(*DDCKey, GetData, InFile.Dest);
 	}
 
 
@@ -1082,6 +1088,11 @@ void ProcessCommandLine(const TCHAR* CmdLine, const TArray<FString>& NonOptionAr
 		CmdLineParameters.bAlignFilesLargerThanBlock = true;
 	}
 
+	if (FParse::Param(CmdLine, TEXT("ForceCompress")))
+	{
+		CmdLineParameters.bForceCompress = true;
+	}
+
 	FString DesiredCompressionFormats;
 	// look for -compressionformats or -compressionformat on the commandline
 	if (FParse::Value(CmdLine, TEXT("-compressionformats="), DesiredCompressionFormats) || FParse::Value(CmdLine, TEXT("-compressionformat="), DesiredCompressionFormats))
@@ -1106,8 +1117,10 @@ void ProcessCommandLine(const TCHAR* CmdLine, const TArray<FString>& NonOptionAr
 
 	if (FParse::Value(CmdLine, TEXT("-create="), ResponseFile))
 	{
+		CmdLineParameters.bAllowForIndexUnload = FParse::Param(CmdLine, TEXT("allowforindexunload"));
 		CmdLineParameters.GeneratePatch = FParse::Value(CmdLine, TEXT("-generatepatch="), CmdLineParameters.SourcePatchPakFilename);
 		FParse::Value(CmdLine, TEXT("-outputchangedfiles="), CmdLineParameters.ChangedFilesOutputFilename);
+		FParse::Value(CmdLine, TEXT("-platform="), CmdLineParameters.DataDrivenPlatformName);
 
 		bool bCompress = FParse::Param(CmdLine, TEXT("compress"));
 		bool bEncrypt = FParse::Param(CmdLine, TEXT("encrypt"));
@@ -1744,7 +1757,7 @@ void LoadKeyChain(const TCHAR* CmdLine, FKeyChain& OutCryptoSettings)
 			if (EncryptionKeyString.Len() > RequiredKeyLength)
 			{
 				UE_LOG(LogPakFile, Warning, TEXT("AES encryption key is more than %d characters long, so will be truncated!"), RequiredKeyLength);
-				EncryptionKeyString = EncryptionKeyString.Left(RequiredKeyLength);
+				EncryptionKeyString.LeftInline(RequiredKeyLength);
 			}
 
 			if (!FCString::IsPureAnsi(*EncryptionKeyString))
@@ -1809,6 +1822,8 @@ FArchive* CreatePakWriter(const TCHAR* Filename, const FKeyChain& InKeyChain, bo
 	return Writer;
 }
 
+TAtomic<int64> GTotalFilesWithPoorForcedCompression(0);
+TAtomic<int64> GTotalExtraMemoryForPoorForcedCompression(0);
 
 bool CreatePakFile(const TCHAR* Filename, TArray<FPakInputPair>& FilesToAdd, const FPakCommandLineParameters& CmdLineParameters, const FKeyChain& InKeyChain)
 {
@@ -1898,9 +1913,10 @@ bool CreatePakFile(const TCHAR* Filename, TArray<FPakInputPair>& FilesToAdd, con
 		int32 CompressionBlockSize;
 		int64 RealFileSize;
 		int64 OriginalFileSize;
+		bool bForceCompress = false;
 		volatile bool bIsComplete;
 		
-		void Init(FPakInputPair* InFileToAdd, const TArray<FName>* InCompressionFormats, int32 InCompressionBlockSize, const TSet<FString>* InNoPluginCompressionExtensions) 
+		void Init(FPakInputPair* InFileToAdd, const FPakCommandLineParameters& InParams, const TSet<FString>* InNoPluginCompressionExtensions)
 		{
 			CompressionMethod = NAME_None;
 			if (InFileToAdd->bIsDeleteRecord)
@@ -1909,10 +1925,11 @@ bool CreatePakFile(const TCHAR* Filename, TArray<FPakInputPair>& FilesToAdd, con
 				bIsComplete = true;
 				return;
 			}
+			bForceCompress = InParams.bForceCompress;
 			FileToAdd = InFileToAdd;
 			NoPluginCompressionExtensions = InNoPluginCompressionExtensions;
-			CompressionFormats= InCompressionFormats;
-			CompressionBlockSize = InCompressionBlockSize;	
+			CompressionFormats = &InParams.CompressionFormats;
+			CompressionBlockSize = InParams.CompressionBlockSize;
 			bIsComplete = false;
 		}
 		
@@ -1964,7 +1981,9 @@ bool CreatePakFile(const TCHAR* Filename, TArray<FPakInputPair>& FilesToAdd, con
 					// if we still save 64KB it's probably worthwhile compressing, as that saves a file read operation in the runtime.
 								// TODO: drive this threshold from the command line
 					float PercentLess = ((float)CompressedFileBuffer.TotalCompressedSize / (OriginalFileSize / 100.f));
-					if (PercentLess > 90.f && (OriginalFileSize - CompressedFileBuffer.TotalCompressedSize) < 65536)
+					const bool bNotEnoughCompression = (PercentLess > 90.f) && ((OriginalFileSize - CompressedFileBuffer.TotalCompressedSize) < 65536);
+					const bool bIsLastCompressionFormat = MethodIndex == CompressionFormats->Num() - 1;
+					if (bNotEnoughCompression && (!bForceCompress || !bIsLastCompressionFormat))
 					{
 						// compression did not succeed, we can try the next format, so do nothing here
 					}
@@ -1976,6 +1995,15 @@ bool CreatePakFile(const TCHAR* Filename, TArray<FPakInputPair>& FilesToAdd, con
 
 						// at this point, we have successfully compressed the file, no need to continue
 						bSomeCompressionSucceeded = true;
+
+						if (bNotEnoughCompression)
+						{
+							// None of the compression formats were good enough, but we were under instructions to use some form of compression
+							// This was likely to aid with runtime error checking on mobile devices. Record how many cases of this we encountered and
+							// How much the size difference was
+							GTotalFilesWithPoorForcedCompression++;
+							GTotalExtraMemoryForPoorForcedCompression += FMath::Max(CompressedFileBuffer.TotalCompressedSize - OriginalFileSize, (int64)0);
+						}
 					}
 				}
 
@@ -2033,7 +2061,7 @@ bool CreatePakFile(const TCHAR* Filename, TArray<FPakInputPair>& FilesToAdd, con
 
 	for (int32 FileIndex = 0; FileIndex < FilesToAdd.Num(); FileIndex++)
 	{
-			AsyncCompressors[FileIndex].Init(&FilesToAdd[FileIndex], &CmdLineParameters.CompressionFormats, CmdLineParameters.CompressionBlockSize, &NoPluginCompressionExtensions);
+			AsyncCompressors[FileIndex].Init(&FilesToAdd[FileIndex], CmdLineParameters, &NoPluginCompressionExtensions);
 			if (bRunAsync)
 			{
 			if (FilesToAdd[FileIndex].bNeedsCompression)
@@ -2322,60 +2350,170 @@ bool CreatePakFile(const TCHAR* Filename, TArray<FPakInputPair>& FilesToAdd, con
 	// Remember IndexOffset
 	Info.IndexOffset = PakFileHandle->Tell();
 
-	// Serialize Pak Index at the end of Pak File
-	TArray<uint8> IndexData;
-	FMemoryWriter IndexWriter(IndexData);
-	IndexWriter.SetByteSwapping(PakFileHandle->ForceByteSwapping());
-	int32 NumEntries = Index.Num();
-	IndexWriter << MountPoint;
-	IndexWriter << NumEntries;
+	FPakFileData Data;
+	FPakFile::MakeDirectoryFromPath(MountPoint);
+	Data.MountPoint = MountPoint;
+
+	// process each entry similar to how loading was working
 	for (int32 EntryIndex = 0; EntryIndex < Index.Num(); EntryIndex++)
 	{
 		FPakEntryPair& Entry = Index[EntryIndex];
-		IndexWriter << Entry.Filename;
-		Entry.Info.Serialize(IndexWriter, Info.Version);
+		// add raw entry
+		Data.Files.Add(Entry.Info);
 
-		if (RequiredPatchPadding > 0)
+		// make index entry
+		FString Path = FPaths::GetPath(Entry.Filename);
+		FPakFile::MakeDirectoryFromPath(Path);
+		FPakDirectory* Directory = Data.Index.Find(Path);
+		if (Directory != nullptr)
 		{
-			int64 EntrySize = Entry.Info.GetSerializedSize(FPakInfo::PakFile_Version_Latest);
-			int64 TotalSizeToWrite = Entry.Info.Size + EntrySize;
-			if (TotalSizeToWrite >= RequiredPatchPadding)
+			Directory->Add(FPaths::GetCleanFilename(Entry.Filename), EntryIndex);
+		}
+		else
+		{
+			FPakDirectory& NewDirectory = Data.Index.Add(Path);
+			NewDirectory.Add(FPaths::GetCleanFilename(Entry.Filename), EntryIndex);
+
+			// add the parent directories up to the mount point
+			while (MountPoint != Path)
 			{
-				int64 RealStart = Entry.Info.Offset;
-				if ((RealStart % RequiredPatchPadding) != 0 &&
-					!Entry.Filename.EndsWith(TEXT("uexp")) && // these are export sections of larger files and may be packed with uasset/umap and so we don't need a warning here
-					!(Entry.Filename.EndsWith(TEXT(".m.ubulk")) && CmdLineParameters.AlignForMemoryMapping > 0)) // Bulk padding unaligns patch padding and so we don't need a warning here
+				Path = Path.Left(Path.Len() - 1);
+				int32 Offset = 0;
+				if (Path.FindLastChar('/', Offset))
 				{
-					UE_LOG(LogPakFile, Warning, TEXT("File at offset %lld of size %lld not aligned to patch size %i"), RealStart, Entry.Info.Size, RequiredPatchPadding);
+					Path = Path.Left(Offset);
+					FPakFile::MakeDirectoryFromPath(Path);
+					if (Data.Index.Find(Path) == nullptr)
+					{
+						Data.Index.Add(Path);
+					}
+				}
+				else
+				{
+					Path = MountPoint;
 				}
 			}
 		}
 	}
 
-	if (Info.bEncryptedIndex)
+	// look up platform info via DataDrivenPlatformInfo.ini (null here means that there was no platform specified, and we cannot freeze)
+	const FDataDrivenPlatformInfoRegistry::FPlatformInfo* PlatformInfo = nullptr;
+	if (CmdLineParameters.DataDrivenPlatformName.Len() > 0)
 	{
-		int32 OriginalSize = IndexData.Num();
-		int32 AlignedSize = Align(OriginalSize, FAES::AESBlockSize);
-
-		for (int32 PaddingIndex = IndexData.Num(); PaddingIndex < AlignedSize; ++PaddingIndex)
+		const TMap<FString, FDataDrivenPlatformInfoRegistry::FPlatformInfo>& Infos = FDataDrivenPlatformInfoRegistry::GetAllPlatformInfos();
+		PlatformInfo = Infos.Find(CmdLineParameters.DataDrivenPlatformName);
+		if (PlatformInfo == nullptr)
 		{
-			uint8 Byte = IndexData[PaddingIndex % OriginalSize];
-			IndexData.Add(Byte);
+			UE_LOG(LogPakFile, Fatal, TEXT("Unable to find DataDrivenPlatform '%s', unable to continue safely"), *CmdLineParameters.DataDrivenPlatformName);
 		}
 	}
 
-	FSHA1::HashBuffer(IndexData.GetData(), IndexData.Num(), Info.IndexHash.Hash);
+	// check to make sure freezing of the index is okay (target specified, it's 64-bit, and we don't want to modify it at runtime)
+	bool bAllowFreezing = PlatformInfo != nullptr && PlatformInfo->Freezing_b32Bit == false && CmdLineParameters.bAllowForIndexUnload == false;
 
-	if (Info.bEncryptedIndex)
+	// disable freezing on Windows because the 32/64 bit issue causes an error too early (and it's being replaced in a future engine version)
+	bAllowFreezing = bAllowFreezing && CmdLineParameters.DataDrivenPlatformName != TEXT("Windows");
+
+	// Disable encrypted freezing until frozen decryption is implemented in FPakFile::LoadIndex()
+	bAllowFreezing = bAllowFreezing && !Info.bEncryptedIndex;
+
+	// if the want to allow for unloading of indices, then 
+	if (bAllowFreezing)
 	{
-		check(InKeyChain.MasterEncryptionKey);
-		FAES::EncryptData(IndexData.GetData(), IndexData.Num(), InKeyChain.MasterEncryptionKey->Key);
-		TotalEncryptedDataSize += IndexData.Num();
+		UE_LOG(LogPakFile, Display, TEXT("ENABLING pak file index freezing"));
+
+		FMemoryImage MemoryImage;
+		// we don't have any editor only data while freezing, so pass false
+		MemoryImage.TargetLayoutParameters.InitializeForPlatform(CmdLineParameters.DataDrivenPlatformName, false);
+
+		FMemoryImageWriter Writer(MemoryImage);
+		Writer.WriteObject(Data);
+
+		FMemoryImageResult Result;
+		MemoryImage.Flatten(Result);
+
+		if (Info.bEncryptedIndex)
+		{
+			check(InKeyChain.MasterEncryptionKey);
+			Result.Bytes.AddZeroed(Align(Result.Bytes.Num(), FAES::AESBlockSize) - Result.Bytes.Num());
+			FSHA1::HashBuffer(Result.Bytes.GetData(), Result.Bytes.Num(), Info.IndexHash.Hash);
+			FAES::EncryptData(Result.Bytes.GetData(), Result.Bytes.Num(), InKeyChain.MasterEncryptionKey->Key);
+			TotalEncryptedDataSize += Result.Bytes.Num();
+		}
+
+		int32 Size = Result.Bytes.Num();
+		PakFileHandle->Serialize(Result.Bytes.GetData(), Size);
+		Result.SaveToArchive(*PakFileHandle);
+
+		// use this to store the frozen data size
+		Info.IndexSize = Size;
+		Info.bIndexIsFrozen = true;
 	}
+	else
+	{
+		UE_LOG(LogPakFile, Display, TEXT("DISABLING pak file index freezing (all must be true: HasPlatformInfo? %s - TargetIs64Bit? %s - NoRuntimeUnloading? %s - Unencrypted? %s, '%s' != 'Windows')"),
+			PlatformInfo == nullptr ? TEXT("false") : TEXT("true"),
+			PlatformInfo == nullptr ? TEXT("unknown") : PlatformInfo->Freezing_b32Bit ? TEXT("false") : TEXT("true"),
+			CmdLineParameters.bAllowForIndexUnload ? TEXT("false") : TEXT("true"),
+			Info.bEncryptedIndex ? TEXT("false") : TEXT("true"),
+			* CmdLineParameters.DataDrivenPlatformName);
 
-	PakFileHandle->Serialize(IndexData.GetData(), IndexData.Num());
+		// Serialize Pak Index at the end of Pak File
+		TArray<uint8> IndexData;
+		FMemoryWriter IndexWriter(IndexData);
+		IndexWriter.SetByteSwapping(PakFileHandle->ForceByteSwapping());
+		int32 NumEntries = Index.Num();
+		IndexWriter << MountPoint;
+		IndexWriter << NumEntries;
+		for (int32 EntryIndex = 0; EntryIndex < Index.Num(); EntryIndex++)
+		{
+			FPakEntryPair& Entry = Index[EntryIndex];
+			IndexWriter << Entry.Filename;
+			Entry.Info.Serialize(IndexWriter, Info.Version);
 
-	Info.IndexSize = IndexData.Num();
+			// @todo loadtime: can't this be done when writing the fileentry itself?
+			if (RequiredPatchPadding > 0)
+			{
+				int64 EntrySize = Entry.Info.GetSerializedSize(FPakInfo::PakFile_Version_Latest);
+				int64 TotalSizeToWrite = Entry.Info.Size + EntrySize;
+				if (TotalSizeToWrite >= RequiredPatchPadding)
+				{
+					int64 RealStart = Entry.Info.Offset;
+					if ((RealStart % RequiredPatchPadding) != 0 &&
+						!Entry.Filename.EndsWith(TEXT("uexp")) && // these are export sections of larger files and may be packed with uasset/umap and so we don't need a warning here
+						!(Entry.Filename.EndsWith(TEXT(".m.ubulk")) && CmdLineParameters.AlignForMemoryMapping > 0)) // Bulk padding unaligns patch padding and so we don't need a warning here
+					{
+						UE_LOG(LogPakFile, Warning, TEXT("File at offset %lld of size %lld not aligned to patch size %i"), RealStart, Entry.Info.Size, RequiredPatchPadding);
+					}
+				}
+			}
+		}
+
+		if (Info.bEncryptedIndex)
+		{
+			int32 OriginalSize = IndexData.Num();
+			int32 AlignedSize = Align(OriginalSize, FAES::AESBlockSize);
+
+			for (int32 PaddingIndex = IndexData.Num(); PaddingIndex < AlignedSize; ++PaddingIndex)
+			{
+				uint8 Byte = IndexData[PaddingIndex % OriginalSize];
+				IndexData.Add(Byte);
+			}
+		}
+
+		FSHA1::HashBuffer(IndexData.GetData(), IndexData.Num(), Info.IndexHash.Hash);
+
+		if (Info.bEncryptedIndex)
+		{
+			check(InKeyChain.MasterEncryptionKey);
+			FAES::EncryptData(IndexData.GetData(), IndexData.Num(), InKeyChain.MasterEncryptionKey->Key);
+			TotalEncryptedDataSize += IndexData.Num();
+		}
+
+		PakFileHandle->Serialize(IndexData.GetData(), IndexData.Num());
+
+		Info.IndexSize = IndexData.Num();
+	}
 
 	// Save trailer (offset, size, hash value)
 	Info.Serialize(*PakFileHandle, FPakInfo::PakFile_Version_Latest);
@@ -2393,6 +2531,11 @@ bool CreatePakFile(const TCHAR* Filename, TArray<FPakInputPair>& FilesToAdd, con
 		}
 
 		UE_LOG(LogPakFile, Display, TEXT("Used compression formats (in priority order) '%s'"), *UsedCompressionFormatsString);
+
+		if (GTotalFilesWithPoorForcedCompression > 0)
+		{
+			UE_LOG(LogPakFile, Display, TEXT("Num files forcibly compressed due to -forcecompress option: %i, using %i bytes extra"), (int64)GTotalFilesWithPoorForcedCompression, (int64)GTotalExtraMemoryForPoorForcedCompression);
+		}
 	}
 
 	if (TotalEncryptedDataSize)
@@ -2610,7 +2753,7 @@ int32 GetPakPriorityFromFilename( const FString& PakFilename )
 		PakIndexFromFilename.FindLastChar('_', PakIndexStart);
 		if (PakIndexStart != INDEX_NONE)
 		{
-			PakIndexFromFilename = PakIndexFromFilename.RightChop(PakIndexStart + 1);
+			PakIndexFromFilename.RightChopInline(PakIndexStart + 1, false);
 			if (PakIndexFromFilename.IsNumeric())
 			{
 				PakPriority = FCString::Atoi(*PakIndexFromFilename);
@@ -4828,12 +4971,6 @@ bool ExecuteUnrealPak(const TCHAR* CmdLine)
 		FString SecondaryResponseFile;
 		if (FParse::Value(CmdLine, TEXT("-secondaryOrder="), SecondaryResponseFile) && !OrderMap.ProcessOrderFile(*SecondaryResponseFile, true))
 		{
-			return false;
-		}
-
-		if (Entries.Num() == 0)
-		{
-			UE_LOG(LogPakFile, Error, TEXT("No files specified to add to pak file."));
 			return false;
 		}
 

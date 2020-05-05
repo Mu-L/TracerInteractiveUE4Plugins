@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "RenderGraphBuilder.h"
 #include "RenderCore.h"
@@ -539,16 +539,19 @@ void FRDGBuilder::AllocateRHITextureSRVIfNeeded(FRDGTextureSRV* SRV)
 		return;
 	}
 
-	if (RenderTarget.SRVs.Contains(SRV->Desc))
+	for (int32 Idx = 0; Idx < RenderTarget.SRVs.Num(); ++Idx)
 	{
-		SRV->ResourceRHI = RenderTarget.SRVs[SRV->Desc];
-		return;
+		if (RenderTarget.SRVs[Idx].Key == SRV->Desc)
+		{
+			SRV->ResourceRHI = RenderTarget.SRVs[Idx].Value;
+			return;
+		}
 	}
 
 	FShaderResourceViewRHIRef RHIShaderResourceView = RHICreateShaderResourceView(RenderTarget.ShaderResourceTexture, SRV->Desc);
 
 	SRV->ResourceRHI = RHIShaderResourceView;
-	RenderTarget.SRVs.Add(SRV->Desc, RHIShaderResourceView);
+	RenderTarget.SRVs.Emplace(SRV->Desc, MoveTemp(RHIShaderResourceView));
 }
 
 void FRDGBuilder::AllocateRHITextureUAVIfNeeded(FRDGTextureUAV* UAV)
@@ -596,6 +599,19 @@ void FRDGBuilder::AllocateRHIBufferIfNeeded(FRDGBuffer* Buffer)
 	GRenderGraphResourcePool.FindFreeBuffer(RHICmdList, Buffer->Desc, AllocatedBuffer, Buffer->Name);
 	check(AllocatedBuffer);
 	Buffer->PooledBuffer = AllocatedBuffer;
+
+	switch (Buffer->Desc.UnderlyingType)
+	{
+	case FRDGBufferDesc::EUnderlyingType::VertexBuffer:
+		Buffer->ResourceRHI = AllocatedBuffer->VertexBuffer;
+		break;
+	case FRDGBufferDesc::EUnderlyingType::IndexBuffer:
+		Buffer->ResourceRHI = AllocatedBuffer->IndexBuffer;
+		break;
+	case FRDGBufferDesc::EUnderlyingType::StructuredBuffer:
+		Buffer->ResourceRHI = AllocatedBuffer->StructuredBuffer;
+		break;
+	}
 }
 
 void FRDGBuilder::AllocateRHIBufferSRVIfNeeded(FRDGBufferSRV* SRV)
@@ -683,21 +699,20 @@ void FRDGBuilder::ExecutePass(const FRDGPass* Pass)
 	IF_RDG_ENABLE_DEBUG(Validation.ValidateExecutePassBegin(Pass));
 
 	FRHIRenderPassInfo RPInfo;
-	bool bOutHasGraphicsOutputs = false;
-
-	PrepareResourcesForExecute(Pass, &RPInfo, &bOutHasGraphicsOutputs);
+	PrepareResourcesForExecute(Pass, &RPInfo);
 	
 	EventScopeStack.BeginExecutePass(Pass);
 	StatScopeStack.BeginExecutePass(Pass);
 
 	if (Pass->IsRaster())
 	{
-		check(bOutHasGraphicsOutputs);
-		RHICmdList.BeginRenderPass( RPInfo, Pass->GetName() );
+		RHICmdList.BeginRenderPass(RPInfo, Pass->GetName());
 	}
 	else
 	{
+		PRAGMA_DISABLE_DEPRECATION_WARNINGS
 		UnbindRenderTargets(RHICmdList);
+		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 	}
 
 	Pass->Execute(RHICmdList);
@@ -718,12 +733,9 @@ void FRDGBuilder::ExecutePass(const FRDGPass* Pass)
 	}
 }
 
-void FRDGBuilder::PrepareResourcesForExecute(const FRDGPass* Pass, struct FRHIRenderPassInfo* OutRPInfo, bool* bOutHasGraphicsOutputs)
+void FRDGBuilder::PrepareResourcesForExecute(const FRDGPass* Pass, struct FRHIRenderPassInfo* OutRPInfo)
 {
 	check(Pass);
-
-	OutRPInfo->NumUAVs = 0;
-	OutRPInfo->UAVIndex = 0;
 
 	const bool bIsCompute = Pass->IsCompute();
 
@@ -856,11 +868,6 @@ void FRDGBuilder::PrepareResourcesForExecute(const FRDGPass* Pass, struct FRHIRe
 
 				FRHIUnorderedAccessView* UAVRHI = UAV->GetRHI();
 
-				if (!bIsCompute)
-				{
-					OutRPInfo->UAVs[OutRPInfo->NumUAVs++] = UAVRHI;	// Bind UAVs in declaration order
-				}
-
 				bool bGeneratingMips = ReadTextures.Contains(Texture);
 
 				BarrierBatcher.QueueTransitionUAV(UAVRHI, Texture, FRDGResourceState::EAccess::Write, bGeneratingMips);
@@ -922,11 +929,6 @@ void FRDGBuilder::PrepareResourcesForExecute(const FRDGPass* Pass, struct FRHIRe
 
 				FRHIUnorderedAccessView* UAVRHI = UAV->GetRHI();
 
-				if (!bIsCompute)
-				{
-					OutRPInfo->UAVs[OutRPInfo->NumUAVs++] = UAVRHI;	// Bind UAVs in declaration order
-				}
-
 				BarrierBatcher.QueueTransitionUAV(UAVRHI, Buffer, FRDGResourceState::EAccess::Write);
 			}
 		}
@@ -971,6 +973,11 @@ void FRDGBuilder::PrepareResourcesForExecute(const FRDGPass* Pass, struct FRHIRe
 					FRHITexture* TargetableTexture = Texture->PooledRenderTarget->GetRenderTargetItem().TargetableTexture;
 					FRHITexture* ShaderResourceTexture = Texture->PooledRenderTarget->GetRenderTargetItem().ShaderResourceTexture;
 
+					if (RenderTarget.GetMsaaPlane() == ERenderTargetMsaaPlane::Resolved)
+					{
+						TargetableTexture = ShaderResourceTexture;
+					}
+
 					// TODO(RDG): The load store action could actually be optimised by render graph for tile hardware when there is multiple
 					// consecutive rasterizer passes that have RDG resource as render target, a bit like resource transitions.
 					ERenderTargetStoreAction StoreAction = ERenderTargetStoreAction::EStore;
@@ -984,7 +991,7 @@ void FRDGBuilder::PrepareResourcesForExecute(const FRDGPass* Pass, struct FRHIRe
 					// TODO(RDG): should force TargetableTexture == ShaderResourceTexture with MSAA, and instead have an explicit MSAA resolve pass.
 					OutRenderTarget.RenderTarget = TargetableTexture;
 					OutRenderTarget.ResolveTarget = ShaderResourceTexture != TargetableTexture ? ShaderResourceTexture : nullptr;
-					OutRenderTarget.ArraySlice = -1;
+					OutRenderTarget.ArraySlice = RenderTarget.GetArraySlice();
 					OutRenderTarget.MipIndex = RenderTarget.GetMipIndex();
 					OutRenderTarget.Action = MakeRenderTargetActions(RenderTarget.GetLoadAction(), StoreAction);
 
@@ -999,8 +1006,6 @@ void FRDGBuilder::PrepareResourcesForExecute(const FRDGPass* Pass, struct FRHIRe
 				}
 			}
 
-			OutRPInfo->UAVIndex = ValidRenderTargetCount;
-
 			if (FRDGTextureRef Texture = DepthStencil.GetTexture())
 			{
 				AllocateRHITextureIfNeeded(Texture);
@@ -1012,7 +1017,9 @@ void FRDGBuilder::PrepareResourcesForExecute(const FRDGPass* Pass, struct FRHIRe
 				ERenderTargetStoreAction DepthStoreAction = ExclusiveDepthStencil.IsDepthWrite() ? ERenderTargetStoreAction::EStore : ERenderTargetStoreAction::ENoAction;
 				ERenderTargetStoreAction StencilStoreAction = ExclusiveDepthStencil.IsStencilWrite() ? ERenderTargetStoreAction::EStore : ERenderTargetStoreAction::ENoAction;
 
-				OutDepthStencil.DepthStencilTarget = Texture->PooledRenderTarget->GetRenderTargetItem().TargetableTexture;
+				const FSceneRenderTargetItem& RenderTargetItem = Texture->PooledRenderTarget->GetRenderTargetItem();
+
+				OutDepthStencil.DepthStencilTarget = DepthStencil.GetMsaaPlane() == ERenderTargetMsaaPlane::Unresolved ? RenderTargetItem.TargetableTexture : RenderTargetItem.ShaderResourceTexture;
 				OutDepthStencil.ResolveTarget = nullptr;
 				OutDepthStencil.Action = MakeDepthStencilTargetActions(
 					MakeRenderTargetActions(DepthStencil.GetDepthLoadAction(), DepthStoreAction),
@@ -1029,9 +1036,6 @@ void FRDGBuilder::PrepareResourcesForExecute(const FRDGPass* Pass, struct FRHIRe
 			}
 
 			OutRPInfo->bIsMSAA = SampleCount > 1;
-
-			// Note: relying on UBMT_RENDER_TARGET_BINDING_SLOTS case being handled last here by reading from OutRPInfo->NumUAVs
-			*bOutHasGraphicsOutputs = ValidRenderTargetCount + ValidDepthStencilCount + OutRPInfo->NumUAVs > 0;
 		}
 		break;
 		default:

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved. 
+// Copyright Epic Games, Inc. All Rights Reserved. 
 
 #include "SimpleDynamicMeshComponent.h"
 #include "RenderingThread.h"
@@ -50,7 +50,6 @@ USimpleDynamicMeshComponent::USimpleDynamicMeshComponent(const FObjectInitialize
 void USimpleDynamicMeshComponent::InitializeMesh(FMeshDescription* MeshDescription)
 {
 	FMeshDescriptionToDynamicMesh Converter;
-	Converter.bPrintDebugMessages = true;
 	Mesh->Clear();
 	Converter.Convert(MeshDescription, *Mesh);
 	if (TangentsType == EDynamicMeshTangentCalcType::ExternallyCalculated)
@@ -86,14 +85,20 @@ void USimpleDynamicMeshComponent::InitializeNewMesh()
 
 void USimpleDynamicMeshComponent::Bake(FMeshDescription* MeshDescription, bool bHaveModifiedTopology, const FConversionToMeshDescriptionOptions& ConversionOptions)
 {
-	if (bHaveModifiedTopology == false && Mesh.Get()->VertexCount() == MeshDescription->Vertices().Num())
+	FDynamicMeshToMeshDescription Converter(ConversionOptions);
+	if (bHaveModifiedTopology == false && Converter.HaveMatchingElementCounts(Mesh.Get(), MeshDescription))
 	{
-		FDynamicMeshToMeshDescription Converter(ConversionOptions);
-		Converter.Update(Mesh.Get(), *MeshDescription);
+		if (ConversionOptions.bUpdatePositions)
+		{
+			Converter.Update(Mesh.Get(), *MeshDescription, ConversionOptions.bUpdateNormals, ConversionOptions.bUpdateUVs);
+		}
+		else
+		{
+			Converter.UpdateAttributes(Mesh.Get(), *MeshDescription, ConversionOptions.bUpdateNormals, ConversionOptions.bUpdateUVs);
+		}
 	}
 	else
 	{
-		FDynamicMeshToMeshDescription Converter(ConversionOptions);
 		Converter.Convert(Mesh.Get(), *MeshDescription);
 
 		//UE_LOG(LogTemp, Warning, TEXT("MeshDescription has %d instances"), MeshDescription->VertexInstances().Num());
@@ -129,6 +134,12 @@ FMeshTangentsf* USimpleDynamicMeshComponent::GetTangents()
 
 	// in this mode we assume the tangents are valid
 	check(TangentsType == EDynamicMeshTangentCalcType::ExternallyCalculated);
+	if (TangentsType == EDynamicMeshTangentCalcType::ExternallyCalculated)
+	{
+		// if you hit this, you did not request ExternallyCalculated tangents before initializing this PreviewMesh
+		check(Tangents.GetTangents().Num() > 0)
+	}
+
 	return &Tangents;
 }
 
@@ -145,8 +156,8 @@ void USimpleDynamicMeshComponent::NotifyMeshUpdated()
 {
 	// Need to recreate scene proxy to send it over
 	MarkRenderStateDirty();
+	LocalBounds = Mesh->GetCachedBounds();
 	UpdateBounds();
-	CurrentProxy = nullptr;
 
 	if (TangentsType != EDynamicMeshTangentCalcType::ExternallyCalculated)
 	{
@@ -157,9 +168,22 @@ void USimpleDynamicMeshComponent::NotifyMeshUpdated()
 
 void USimpleDynamicMeshComponent::FastNotifyColorsUpdated()
 {
-	if (CurrentProxy != nullptr)
+	FSimpleDynamicMeshSceneProxy* Proxy = GetCurrentSceneProxy();
+	if (Proxy != nullptr)
 	{
-		CurrentProxy->FastUpdateColors();
+		if (TriangleColorFunc != nullptr &&  Proxy->bUsePerTriangleColor == false )
+		{
+			Proxy->bUsePerTriangleColor = true;
+			Proxy->PerTriangleColorFunc = [this](const FDynamicMesh3* MeshIn, int TriangleID) { return GetTriangleColor(MeshIn, TriangleID); };
+		} 
+		else if (TriangleColorFunc == nullptr && Proxy->bUsePerTriangleColor == true)
+		{
+			Proxy->bUsePerTriangleColor = false;
+			Proxy->PerTriangleColorFunc = nullptr;
+		}
+
+		Proxy->FastUpdateVertices(false, false, true, false);
+		//MarkRenderDynamicDataDirty();
 	}
 	else
 	{
@@ -169,12 +193,15 @@ void USimpleDynamicMeshComponent::FastNotifyColorsUpdated()
 
 
 
-void USimpleDynamicMeshComponent::FastNotifyPositionsUpdated()
+void USimpleDynamicMeshComponent::FastNotifyPositionsUpdated(bool bNormals, bool bColors, bool bUVs)
 {
-	if (CurrentProxy != nullptr)
+	if (GetCurrentSceneProxy() != nullptr)
 	{
-		bTangentsValid = false;
-		CurrentProxy->FastUpdatePositions(false);
+		GetCurrentSceneProxy()->FastUpdateVertices(true, bNormals, bColors, bUVs);
+		//MarkRenderDynamicDataDirty();
+		MarkRenderTransformDirty();
+		LocalBounds = Mesh->GetCachedBounds();
+		UpdateBounds();
 	}
 	else
 	{
@@ -182,38 +209,99 @@ void USimpleDynamicMeshComponent::FastNotifyPositionsUpdated()
 	}
 }
 
+
+void USimpleDynamicMeshComponent::FastNotifyUVsUpdated()
+{
+	if (GetCurrentSceneProxy() != nullptr)
+	{
+		GetCurrentSceneProxy()->FastUpdateVertices(false, false, false, true);
+		//MarkRenderDynamicDataDirty();
+		MarkRenderTransformDirty();
+		LocalBounds = Mesh->GetCachedBounds();
+		UpdateBounds();
+	}
+	else
+	{
+		NotifyMeshUpdated();
+	}
+}
+
+
+
+void USimpleDynamicMeshComponent::FastNotifySecondaryTrianglesChanged()
+{
+	if (GetCurrentSceneProxy() != nullptr)
+	{
+		GetCurrentSceneProxy()->FastUpdateAllIndexBuffers();
+	}
+	else
+	{
+		NotifyMeshUpdated();
+	}
+}
 
 
 
 FPrimitiveSceneProxy* USimpleDynamicMeshComponent::CreateSceneProxy()
 {
-	CurrentProxy = nullptr;
+	check(GetCurrentSceneProxy() == nullptr);
+
+	FSimpleDynamicMeshSceneProxy* NewProxy = nullptr;
 	if (Mesh->TriangleCount() > 0)
 	{
-		CurrentProxy = new FSimpleDynamicMeshSceneProxy(this);
+		NewProxy = new FSimpleDynamicMeshSceneProxy(this);
 
 		if (TriangleColorFunc)
 		{
-			CurrentProxy->bUsePerTriangleColor = true;
-			CurrentProxy->PerTriangleColorFunc = [this](int TriangleID) { return GetTriangleColor(TriangleID); };
+			NewProxy->bUsePerTriangleColor = true;
+			NewProxy->PerTriangleColorFunc = [this](const FDynamicMesh3* MeshIn, int TriangleID) { return GetTriangleColor(MeshIn, TriangleID); };
 		}
 
-		CurrentProxy->Initialize();
+		if (SecondaryTriFilterFunc)
+		{
+			NewProxy->bUseSecondaryTriBuffers = true;
+			NewProxy->SecondaryTriFilterFunc = [this](const FDynamicMesh3* MeshIn, int32 TriangleID) 
+			{ 
+				return (SecondaryTriFilterFunc) ? SecondaryTriFilterFunc(MeshIn, TriangleID) : false;
+			};
+		}
+
+		NewProxy->Initialize();
 	}
-	return CurrentProxy;
+	return NewProxy;
 }
 
-int32 USimpleDynamicMeshComponent::GetNumMaterials() const
+
+void USimpleDynamicMeshComponent::NotifyMaterialSetUpdated()
 {
-	return 1;
+	if (GetCurrentSceneProxy() != nullptr)
+	{
+		GetCurrentSceneProxy()->UpdatedReferencedMaterials();
+	}
 }
 
 
-FColor USimpleDynamicMeshComponent::GetTriangleColor(int TriangleID)
+
+
+void USimpleDynamicMeshComponent::EnableSecondaryTriangleBuffers(TUniqueFunction<bool(const FDynamicMesh3*, int32)> SecondaryTriFilterFuncIn)
+{
+	SecondaryTriFilterFunc = MoveTemp(SecondaryTriFilterFuncIn);
+	NotifyMeshUpdated();
+}
+
+void USimpleDynamicMeshComponent::DisableSecondaryTriangleBuffers()
+{
+	SecondaryTriFilterFunc = nullptr;
+	NotifyMeshUpdated();
+}
+
+
+
+FColor USimpleDynamicMeshComponent::GetTriangleColor(const FDynamicMesh3* MeshIn, int TriangleID)
 {
 	if (TriangleColorFunc)
 	{
-		return TriangleColorFunc(TriangleID);
+		return TriangleColorFunc(MeshIn, TriangleID);
 	}
 	else
 	{
@@ -225,32 +313,41 @@ FColor USimpleDynamicMeshComponent::GetTriangleColor(int TriangleID)
 
 FBoxSphereBounds USimpleDynamicMeshComponent::CalcBounds(const FTransform& LocalToWorld) const
 {
-	// Bounds are tighter if the box is generated from pre-transformed vertices.
-	FBox BoundingBox(ForceInit);
-	for ( FVector3d Vertex : Mesh->VerticesItr() ) 
-	{
-		BoundingBox += LocalToWorld.TransformPosition(Vertex);
-	}
-
-	FBoxSphereBounds NewBounds;
-	NewBounds.BoxExtent = BoundingBox.GetExtent();
-	NewBounds.Origin = BoundingBox.GetCenter();
-	NewBounds.SphereRadius = NewBounds.BoxExtent.Size();
-
-	return NewBounds;
+	// can get a tighter box by calculating in world space, but we care more about performance
+	FBox LocalBoundingBox = (FBox)LocalBounds;
+	FBoxSphereBounds Ret(LocalBoundingBox.TransformBy(LocalToWorld));
+	Ret.BoxExtent *= BoundsScale;
+	Ret.SphereRadius *= BoundsScale;
+	return Ret;
 }
-
 
 
 void USimpleDynamicMeshComponent::ApplyChange(const FMeshVertexChange* Change, bool bRevert)
 {
-	int NV = Change->Vertices.Num();
+	int32 NV = Change->Vertices.Num();
 	const TArray<FVector3d>& Positions = (bRevert) ? Change->OldPositions : Change->NewPositions;
-	
-	for (int k = 0; k < NV; ++k)
+	for (int32 k = 0; k < NV; ++k)
 	{
-		int vid = Change->Vertices[k];
-		Mesh->SetVertex(vid, Positions[k]);
+		int32 vid = Change->Vertices[k];
+		if (Mesh->IsVertex(vid))
+		{
+			Mesh->SetVertex(vid, Positions[k]);
+		}
+	}
+
+	if (Change->bHaveOverlayNormals && Mesh->HasAttributes() && Mesh->Attributes()->PrimaryNormals() )
+	{
+		FDynamicMeshNormalOverlay* Overlay = Mesh->Attributes()->PrimaryNormals();
+		int32 NumNormals = Change->Normals.Num();
+		const TArray<FVector3f>& UseNormals = (bRevert) ? Change->OldNormals : Change->NewNormals;
+		for (int32 k = 0; k < NumNormals; ++k)
+		{
+			int32 elemid = Change->Normals[k];
+			if (Overlay->IsElement(elemid))
+			{
+				Overlay->SetElement(elemid, UseNormals[k]);
+			}
+		}
 	}
 
 	NotifyMeshUpdated();
@@ -267,3 +364,13 @@ void USimpleDynamicMeshComponent::ApplyChange(const FMeshChange* Change, bool bR
 	NotifyMeshUpdated();
 	OnMeshChanged.Broadcast();
 }
+
+
+void USimpleDynamicMeshComponent::ApplyChange(const FMeshReplacementChange* Change, bool bRevert)
+{
+	Mesh->Copy(*Change->GetMesh(bRevert));
+
+	NotifyMeshUpdated();
+	OnMeshChanged.Broadcast();
+}
+

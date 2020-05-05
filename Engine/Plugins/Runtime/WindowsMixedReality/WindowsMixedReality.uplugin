@@ -12,7 +12,7 @@
 	"SupportURL" : "",
 	"EnabledByDefault" : false,
 	"CanContainContent" : false,
-	"IsBetaVersion" : true,
+	"IsBetaVersion" : false,
 	"Installed" : false,
 	"SupportedTargetPlatforms": [
 		"Win64",
@@ -79,6 +79,14 @@
 			"LoadingPhase": "Default",
 			"WhitelistPlatforms": [
 				"HoloLens"
+			]
+		},
+		{
+			"Name": "WindowsMixedRealityInputSimulation",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit",
+			"WhitelistPlatforms": [
+				"Win64"
 			]
 		}
 	],

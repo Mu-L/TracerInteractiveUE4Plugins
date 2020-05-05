@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "IntroTutorials.h"
 #include "Templates/SubclassOf.h"
@@ -532,11 +532,19 @@ TSharedRef<SDockTab> FIntroTutorials::SpawnTutorialsBrowserTab(const FSpawnTabAr
 		.ToolTip(IDocumentation::Get()->CreateToolTip(Label, nullptr, "Shared/TutorialsBrowser", "Tab"));	
 
 	TSharedRef<STutorialsBrowser> TutorialsBrowser = SNew(STutorialsBrowser)
+		.ExternalCategories(ExternalCategories)
 		.OnLaunchTutorial(FOnLaunchTutorial::CreateRaw(this, &FIntroTutorials::LaunchTutorial));
 
 	NewTab->SetContent(TutorialsBrowser);
 
 	return NewTab;
 }
+
+void FIntroTutorials::RegisterCategory(FTutorialCategory NewCategory)
+{
+	ExternalCategories.Add(NewCategory);
+}
+
+
 
 #undef LOCTEXT_NAMESPACE

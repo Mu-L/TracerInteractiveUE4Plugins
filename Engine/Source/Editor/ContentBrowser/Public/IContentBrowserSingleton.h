@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -261,6 +261,9 @@ struct FAssetPickerConfig
 	/** Indicates if the 'Show Developers' option should be enabled or disabled */
 	bool bCanShowDevelopersFolder;
 
+	/** Indicates if engine content should always be shown */
+	bool bForceShowEngineContent;
+
 	/** Indicates if the context menu is going to load the assets, and if so to preload before the context menu is shown, and warn about the pending load. */
 	bool bPreloadAssetsForContextMenu;
 
@@ -291,6 +294,7 @@ struct FAssetPickerConfig
 		, bCanShowFolders(false)
 		, bCanShowRealTimeThumbnails(false)
 		, bCanShowDevelopersFolder(true)
+		, bForceShowEngineContent(false)
 		, bPreloadAssetsForContextMenu(true)
 		, bAddFilterUI(false)
 		, bShowPathInColumnView(false)
@@ -562,6 +566,9 @@ public:
 
 	/** Returns the folders that are selected in the path view */
 	virtual void GetSelectedPathViewFolders(TArray<FString>& SelectedFolders) = 0;
+
+	/** Gets the current path if one exists, otherwise returns empty string. */
+	virtual FString GetCurrentPath() = 0;
 
 	/**
 	 * Capture active viewport to thumbnail and assigns that thumbnail to incoming assets

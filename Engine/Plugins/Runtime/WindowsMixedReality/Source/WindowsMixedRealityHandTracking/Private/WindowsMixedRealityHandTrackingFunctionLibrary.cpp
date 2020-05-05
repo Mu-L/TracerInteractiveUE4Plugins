@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "WindowsMixedRealityHandTrackingFunctionLibrary.h"
 #include "IWindowsMixedRealityHandTrackingPlugin.h"
@@ -9,7 +9,7 @@
 #include "ILiveLinkClient.h"
 #include "ILiveLinkSource.h"
 
-bool UWindowsMixedRealityHandTrackingFunctionLibrary::GetHandJointTransform(EControllerHand Hand, EWMRHandKeypoint Keypoint, FTransform& OutTransform)
+bool UWindowsMixedRealityHandTrackingFunctionLibrary::GetHandJointTransform(EControllerHand Hand, EWMRHandKeypoint Keypoint, FTransform& OutTransform, float& OutRadius)
 {
 	TSharedPtr<FWindowsMixedRealityHandTracking> HandTracking = StaticCastSharedPtr<FWindowsMixedRealityHandTracking>(IWindowsMixedRealityHandTrackingModule::Get().GetInputDevice());
 
@@ -22,10 +22,16 @@ bool UWindowsMixedRealityHandTrackingFunctionLibrary::GetHandJointTransform(ECon
 
 		if (bSuccess)
 		{
-			OutTransform = KeyPointTransform * UHeadMountedDisplayFunctionLibrary::GetTrackingToWorldTransform(GWorld);
+			OutTransform = KeyPointTransform;
+			HandTracking->GetKeypointRadius(Hand, Keypoint, OutRadius);
 			return true;
 		}
 	}
 
 	return false;
+}
+
+bool UWindowsMixedRealityHandTrackingFunctionLibrary::SupportsHandTracking()
+{
+	return WindowsMixedReality::FWindowsMixedRealityStatics::SupportsHandTracking();
 }

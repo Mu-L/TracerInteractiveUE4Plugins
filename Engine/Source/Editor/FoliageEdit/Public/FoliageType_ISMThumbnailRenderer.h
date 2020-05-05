@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /**
  * This thumbnail renderer displays the static mesh used by this foliage type
@@ -25,7 +25,7 @@ class UFoliageType_ISMThumbnailRenderer : public UDefaultSizedThumbnailRenderer
 	{}
 
 	// UThumbnailRenderer implementation
-	virtual void Draw(UObject* Object, int32 X, int32 Y, uint32 Width, uint32 Height, FRenderTarget*, FCanvas* Canvas) override;
+	virtual void Draw(UObject* Object, int32 X, int32 Y, uint32 Width, uint32 Height, FRenderTarget*, FCanvas* Canvas, bool bAdditionalViewFamily) override;
 	virtual bool CanVisualizeAsset(UObject* Object) override;
 	// UObject implementation
 	virtual void BeginDestroy() override;

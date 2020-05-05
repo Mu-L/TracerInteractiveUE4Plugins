@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -27,6 +27,11 @@ namespace UnrealGameSync
 		void SyncLatestChange();
 		bool CanLaunchEditor();
 		void LaunchEditor();
+
+		Color? TintColor
+		{
+			get;
+		}
 
 		Tuple<TaskbarState, float> DesiredTaskbarState
 		{
@@ -369,7 +374,7 @@ namespace UnrealGameSync
 
 				foreach(UserSelectedProjectSettings RecentProject in Settings.RecentProjects)
 				{
-					ToolStripMenuItem Item = new ToolStripMenuItem(RecentProject.ToString(), null, new EventHandler((o, e) => TryOpenProject(RecentProject, TabMenu_TabIdx)));
+					ToolStripMenuItem Item = new ToolStripMenuItem(RecentProject.ToString(), null, new EventHandler((o, e) => TabMenu_OpenRecentProject_Click(RecentProject, TabMenu_TabIdx)));
 					TabMenu_RecentProjects.DropDownItems.Insert(InsertIdx, Item);
 					InsertIdx++;
 				}
@@ -593,12 +598,12 @@ namespace UnrealGameSync
 			string NewTabName = String.Format("Error: {0}", NewProjectName);
 			if (ReplaceTabIdx == -1)
 			{
-				int TabIdx = TabControl.InsertTab(-1, NewTabName, ErrorPanel);
+				int TabIdx = TabControl.InsertTab(-1, NewTabName, ErrorPanel, ErrorPanel.TintColor);
 				TabControl.SelectTab(TabIdx);
 			}
 			else
 			{
-				TabControl.InsertTab(ReplaceTabIdx + 1, NewTabName, ErrorPanel);
+				TabControl.InsertTab(ReplaceTabIdx + 1, NewTabName, ErrorPanel, ErrorPanel.TintColor);
 				TabControl.RemoveTab(ReplaceTabIdx);
 				TabControl.SelectTab(ReplaceTabIdx);
 			}
@@ -714,9 +719,16 @@ namespace UnrealGameSync
 			if(Settings.bScheduleEnabled)
 			{
 				DateTime CurrentTime = DateTime.Now;
-				DateTime NextScheduleTime = new DateTime(CurrentTime.Year, CurrentTime.Month, CurrentTime.Day, Settings.ScheduleTime.Hours, Settings.ScheduleTime.Minutes, Settings.ScheduleTime.Seconds);
+				Random Rnd = new Random();
 
-				if(NextScheduleTime < CurrentTime)
+				// add or subtract from the schedule time to distribute scheduled syncs over a little bit more time
+				// this avoids everyone hitting the p4 server at exactly the same time.
+				const int FudgeMinutes = 10;
+				TimeSpan FudgeTime = TimeSpan.FromMinutes(Rnd.Next(FudgeMinutes * -100, FudgeMinutes * 100) / 100.0);
+				DateTime NextScheduleTime = new DateTime(CurrentTime.Year, CurrentTime.Month, CurrentTime.Day, Settings.ScheduleTime.Hours, Settings.ScheduleTime.Minutes, Settings.ScheduleTime.Seconds);
+				NextScheduleTime += FudgeTime;
+
+				if (NextScheduleTime < CurrentTime)
 				{
 					NextScheduleTime = NextScheduleTime.AddDays(1.0);
 				}
@@ -870,13 +882,24 @@ namespace UnrealGameSync
 				{
 					TabControl.SelectTab(NewTabIdx);
 					SaveTabSettings();
-
-					Settings.RecentProjects.RemoveAll(x => x.LocalPath == DetectedProjectSettings.NewSelectedFileName);
-					Settings.RecentProjects.Insert(0, DetectedProjectSettings.SelectedProject);
-					Settings.Save();
+					UpdateRecentProjectsList(DetectedProjectSettings);
 				}
 				DetectedProjectSettings.Dispose();
 			}
+		}
+
+		void UpdateRecentProjectsList(DetectProjectSettingsTask DetectedProjectSettings)
+		{
+			Settings.RecentProjects.RemoveAll(x => x.LocalPath == DetectedProjectSettings.NewSelectedFileName);
+			Settings.RecentProjects.Insert(0, DetectedProjectSettings.SelectedProject);
+
+			const int MaxRecentProjects = 10;
+			if (Settings.RecentProjects.Count > MaxRecentProjects)
+			{
+				Settings.RecentProjects.RemoveRange(MaxRecentProjects, Settings.RecentProjects.Count - MaxRecentProjects);
+			}
+
+			Settings.Save();
 		}
 
 		public void EditSelectedProject(int TabIdx)
@@ -922,10 +945,7 @@ namespace UnrealGameSync
 				{
 					TabControl.SelectTab(NewTabIdx);
 					SaveTabSettings();
-
-					Settings.RecentProjects.RemoveAll(x => x.LocalPath == DetectedProjectSettings.NewSelectedFileName);
-					Settings.RecentProjects.Insert(0, DetectedProjectSettings.SelectedProject);
-					Settings.Save();
+					UpdateRecentProjectsList(DetectedProjectSettings);
 				}
 			}
 		}
@@ -1031,14 +1051,14 @@ namespace UnrealGameSync
 			string NewTabName = GetTabName(NewWorkspace);
 			if(ReplaceTabIdx == -1)
 			{
-				int NewTabIdx = TabControl.InsertTab(-1, NewTabName, NewWorkspace);
+				int NewTabIdx = TabControl.InsertTab(-1, NewTabName, NewWorkspace, NewWorkspace.TintColor);
 				Log.WriteLine("  Inserted tab {0}", NewTabIdx);
 				return NewTabIdx;
 			}
 			else
 			{
 				Log.WriteLine("  Replacing tab {0}", ReplaceTabIdx);
-				TabControl.InsertTab(ReplaceTabIdx + 1, NewTabName, NewWorkspace);
+				TabControl.InsertTab(ReplaceTabIdx + 1, NewTabName, NewWorkspace, NewWorkspace.TintColor);
 				TabControl.RemoveTab(ReplaceTabIdx);
 				return ReplaceTabIdx;
 			}
@@ -1130,6 +1150,12 @@ namespace UnrealGameSync
 			EditSelectedProject(TabMenu_TabIdx);
 		}
 
+		private void TabMenu_OpenRecentProject_Click(UserSelectedProjectSettings RecentProject, int TabIdx)
+		{
+			TryOpenProject(RecentProject, TabIdx);
+			SaveTabSettings();
+		}
+
 		private void TabMenu_TabNames_Stream_Click(object sender, EventArgs e)
 		{
 			SetTabNames(TabLabels.Stream);
@@ -1213,6 +1239,15 @@ namespace UnrealGameSync
 			}
 		}
 
+		public void UpdateTintColors()
+		{
+			for (int Idx = 0; Idx < TabControl.GetTabCount(); Idx++)
+			{
+				IMainWindowTabPanel TabPanel = (IMainWindowTabPanel)TabControl.GetTabData(Idx);
+				TabControl.SetTint(Idx, TabPanel.TintColor);
+			}
+		}
+
 		public void ModifyApplicationSettings()
 		{
 			bool? bRelaunchUnstable = ApplicationSettingsWindow.ShowModal(this, DefaultConnection, bUnstable, OriginalExecutableFileName, Settings, Log);
@@ -1252,7 +1287,7 @@ namespace UnrealGameSync
 				foreach(IssueData Issue in Issues)
 				{
 					IssueAlertReason Reason = 0;
-					if(Issue.FixChange <= 0 && !Issue.ResolvedAt.HasValue)
+					if(Issue.FixChange == 0 && !Issue.ResolvedAt.HasValue)
 					{
 						if(Issue.Owner == null)
 						{

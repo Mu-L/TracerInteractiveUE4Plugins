@@ -1,8 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "RtAudio.h"
 
-#if PLATFORM_WINDOWS || PLATFORM_MAC || PLATFORM_XBOXONE
+#if WITH_RTAUDIO
+
+#if PLATFORM_MICROSOFT || PLATFORM_MAC
 /************************************************************************/
 /*! \class RtAudio
     \brief Realtime audio i/o C++ classes.
@@ -96,6 +98,25 @@ static void throw_wrapper(const RtAudioError& Error)
     std::string s( length-1, '\0' );
     WideCharToMultiByte(CP_UTF8, 0, text, -1, &s[0], length, NULL, NULL);
     return s;
+  }
+
+  static std::string convertGuidToStdString(LPGUID guid)
+  {
+	char result[39]; // 32 hex chars + 4 hyphens + 2 braces + null
+	if (guid)
+	{
+		snprintf(
+			result, sizeof(result), "{%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
+			guid->Data1, guid->Data2, guid->Data3,
+			guid->Data4[0], guid->Data4[1], guid->Data4[2], guid->Data4[3],
+			guid->Data4[4], guid->Data4[5], guid->Data4[6], guid->Data4[7]);
+	}
+	else
+	{
+		result[0] = '\0';
+	}
+
+	return result;
   }
 
 #elif defined(__LINUX_ALSA__) || defined(__LINUX_PULSE__) || defined(__UNIX_JACK__) || defined(__LINUX_OSS__) || defined(__MACOSX_CORE__)
@@ -662,19 +683,6 @@ RtAudio::DeviceInfo RtApiCore :: getDeviceInfo( unsigned int device )
     return info;
   }
 
-  //const char *mname = CFStringGetCStringPtr( cfname, CFStringGetSystemEncoding() );
-  int length = CFStringGetLength(cfname);
-  char *mname = (char *)malloc(length * 3 + 1);
-#if defined( UNICODE ) || defined( _UNICODE )
-  CFStringGetCString(cfname, mname, length * 3 + 1, kCFStringEncodingUTF8);
-#else
-  CFStringGetCString(cfname, mname, length * 3 + 1, CFStringGetSystemEncoding());
-#endif
-  info.name.append( (const char *)mname, strlen(mname) );
-  info.name.append( ": " );
-  CFRelease( cfname );
-  free(mname);
-
   property.mSelector = kAudioObjectPropertyName;
   result = AudioObjectGetPropertyData( id, &property, 0, NULL, &dataSize, &cfname );
   if ( result != noErr ) {
@@ -685,7 +693,7 @@ RtAudio::DeviceInfo RtApiCore :: getDeviceInfo( unsigned int device )
   }
 
   //const char *name = CFStringGetCStringPtr( cfname, CFStringGetSystemEncoding() );
-  length = CFStringGetLength(cfname);
+  int length = CFStringGetLength(cfname);
   char *name = (char *)malloc(length * 3 + 1);
 #if defined( UNICODE ) || defined( _UNICODE )
   CFStringGetCString(cfname, name, length * 3 + 1, kCFStringEncodingUTF8);
@@ -3188,7 +3196,7 @@ bool RtApiAsio :: probeDeviceOpen( unsigned int device, StreamMode mode, unsigne
   if ( result != ASE_OK ) {
     // Standard method failed. This can happen with strict/misbehaving drivers that return valid buffer size ranges
     // but only accept the preferred buffer size as parameter for ASIOCreateBuffers. eg. Creatives ASIO driver
-    // in that case, let's be naïve and try that instead
+    // in that case, let's be naÃƒÂ¯ve and try that instead
     *bufferSize = preferSize;
     stream_.bufferSize = *bufferSize;
     result = ASIOCreateBuffers( handle->bufferInfos, nChannels, stream_.bufferSize, &asioCallbacks );
@@ -4007,11 +4015,12 @@ RtAudio::DeviceInfo RtApiWasapi::getDeviceInfo( unsigned int device )
   RtAudio::DeviceInfo info;
   unsigned int captureDeviceCount = 0;
   unsigned int renderDeviceCount = 0;
-  std::string defaultDeviceName;
   bool isCaptureDevice = false;
+  std::string defaultDeviceId;
+  LPWSTR strDefaultDeviceId;
+  LPWSTR strDeviceId;
 
   PROPVARIANT deviceNameProp;
-  PROPVARIANT defaultDeviceNameProp;
 
   IMMDeviceCollection* captureDevices = NULL;
   IMMDeviceCollection* renderDevices = NULL;
@@ -4096,22 +4105,27 @@ RtAudio::DeviceInfo RtApiWasapi::getDeviceInfo( unsigned int device )
     }
   }
 
+  hr = defaultDevicePtr->GetId(&strDefaultDeviceId);
+  if (FAILED(hr)) {
+	  errorText_ = "RtApiWasapi::getDeviceInfo: Unable to get default device Id.";
+	  goto Exit;
+  }
+  defaultDeviceId = convertCharPointerToStdString(strDefaultDeviceId);
+
+  hr = devicePtr->GetId(&strDeviceId);
+  if (FAILED(hr)) {
+	  errorText_ = "RtApiWasapi::getDeviceInfo: Unable to get device Id.";
+	  goto Exit;
+  }
+  info.deviceId = convertCharPointerToStdString(strDeviceId);
+
 #if PLATFORM_WINDOWS
   hr = defaultDevicePtr->OpenPropertyStore( STGM_READ, &defaultDevicePropStore );
   if ( FAILED( hr ) ) {
     errorText_ = "RtApiWasapi::getDeviceInfo: Unable to open default device property store.";
     goto Exit;
   }
-  PropVariantInit( &defaultDeviceNameProp );
-
-  hr = defaultDevicePropStore->GetValue( PKEY_Device_FriendlyName, &defaultDeviceNameProp );
-  if ( FAILED( hr ) ) {
-    errorText_ = "RtApiWasapi::getDeviceInfo: Unable to retrieve default device property: PKEY_Device_FriendlyName.";
-    goto Exit;
-  }
-
-  defaultDeviceName = convertCharPointerToStdString(defaultDeviceNameProp.pwszVal);
-
+ 
   // name
   hr = devicePtr->OpenPropertyStore( STGM_READ, &devicePropStore );
   if ( FAILED( hr ) ) {
@@ -4127,20 +4141,19 @@ RtAudio::DeviceInfo RtApiWasapi::getDeviceInfo( unsigned int device )
     goto Exit;
   }
 
-  info.name =convertCharPointerToStdString(deviceNameProp.pwszVal);
+  info.name = convertCharPointerToStdString(deviceNameProp.pwszVal);
 #else // On Xbox One, we hardcode out defaults.
-  defaultDeviceName = "Xbox One Input";
-  info.name = "Xbox One Input";
-#endif // PLATFORM_WINDOWS 
+  info.name = std::string("Xbox Audio Input ");
+#endif
 
   // is default
   if ( isCaptureDevice ) {
-    info.isDefaultInput = info.name == defaultDeviceName;
+    info.isDefaultInput = info.deviceId == defaultDeviceId;
     info.isDefaultOutput = false;
   }
   else {
     info.isDefaultInput = false;
-    info.isDefaultOutput = info.name == defaultDeviceName;
+    info.isDefaultOutput = info.deviceId == defaultDeviceId;;
   }
 
   // channel count
@@ -4211,7 +4224,6 @@ RtAudio::DeviceInfo RtApiWasapi::getDeviceInfo( unsigned int device )
 Exit:
   // release all references
   PropVariantClear( &deviceNameProp );
-  PropVariantClear( &defaultDeviceNameProp );
 
   SAFE_RELEASE( captureDevices );
   SAFE_RELEASE( renderDevices );
@@ -5371,6 +5383,7 @@ RtAudio::DeviceInfo RtApiDs :: getDeviceInfo( unsigned int device )
 
   if ( dsDevices[ device ].validId[1] == false ) {
     info.name = dsDevices[ device ].name;
+	info.deviceId = convertGuidToStdString(dsDevices[device].id[0]);
     info.probed = true;
     return info;
   }
@@ -5410,18 +5423,21 @@ RtAudio::DeviceInfo RtApiDs :: getDeviceInfo( unsigned int device )
     if ( inCaps.dwFormats & WAVE_FORMAT_1S08 ) info.nativeFormats |= RTAUDIO_SINT8;
     if ( inCaps.dwFormats & WAVE_FORMAT_2S08 ) info.nativeFormats |= RTAUDIO_SINT8;
     if ( inCaps.dwFormats & WAVE_FORMAT_4S08 ) info.nativeFormats |= RTAUDIO_SINT8;
+	if ( inCaps.dwFormats & WAVE_FORMAT_48S08 ) info.nativeFormats |= RTAUDIO_SINT8;
     if ( inCaps.dwFormats & WAVE_FORMAT_96S08 ) info.nativeFormats |= RTAUDIO_SINT8;
 
     if ( info.nativeFormats & RTAUDIO_SINT16 ) {
       if ( inCaps.dwFormats & WAVE_FORMAT_1S16 ) rates.push_back( 11025 );
       if ( inCaps.dwFormats & WAVE_FORMAT_2S16 ) rates.push_back( 22050 );
       if ( inCaps.dwFormats & WAVE_FORMAT_4S16 ) rates.push_back( 44100 );
+	  if ( inCaps.dwFormats & WAVE_FORMAT_48S16 ) rates.push_back( 48000 );
       if ( inCaps.dwFormats & WAVE_FORMAT_96S16 ) rates.push_back( 96000 );
     }
     else if ( info.nativeFormats & RTAUDIO_SINT8 ) {
       if ( inCaps.dwFormats & WAVE_FORMAT_1S08 ) rates.push_back( 11025 );
       if ( inCaps.dwFormats & WAVE_FORMAT_2S08 ) rates.push_back( 22050 );
       if ( inCaps.dwFormats & WAVE_FORMAT_4S08 ) rates.push_back( 44100 );
+	  if ( inCaps.dwFormats & WAVE_FORMAT_48S08 ) rates.push_back( 48000 );
       if ( inCaps.dwFormats & WAVE_FORMAT_96S08 ) rates.push_back( 96000 );
     }
   }
@@ -5433,18 +5449,21 @@ RtAudio::DeviceInfo RtApiDs :: getDeviceInfo( unsigned int device )
     if ( inCaps.dwFormats & WAVE_FORMAT_1M08 ) info.nativeFormats |= RTAUDIO_SINT8;
     if ( inCaps.dwFormats & WAVE_FORMAT_2M08 ) info.nativeFormats |= RTAUDIO_SINT8;
     if ( inCaps.dwFormats & WAVE_FORMAT_4M08 ) info.nativeFormats |= RTAUDIO_SINT8;
+	if ( inCaps.dwFormats & WAVE_FORMAT_48M08 ) info.nativeFormats |= RTAUDIO_SINT8;
     if ( inCaps.dwFormats & WAVE_FORMAT_96M08 ) info.nativeFormats |= RTAUDIO_SINT8;
 
     if ( info.nativeFormats & RTAUDIO_SINT16 ) {
       if ( inCaps.dwFormats & WAVE_FORMAT_1M16 ) rates.push_back( 11025 );
       if ( inCaps.dwFormats & WAVE_FORMAT_2M16 ) rates.push_back( 22050 );
       if ( inCaps.dwFormats & WAVE_FORMAT_4M16 ) rates.push_back( 44100 );
+	  if ( inCaps.dwFormats & WAVE_FORMAT_48M16 ) rates.push_back( 48000 );
       if ( inCaps.dwFormats & WAVE_FORMAT_96M16 ) rates.push_back( 96000 );
     }
     else if ( info.nativeFormats & RTAUDIO_SINT8 ) {
       if ( inCaps.dwFormats & WAVE_FORMAT_1M08 ) rates.push_back( 11025 );
       if ( inCaps.dwFormats & WAVE_FORMAT_2M08 ) rates.push_back( 22050 );
       if ( inCaps.dwFormats & WAVE_FORMAT_4M08 ) rates.push_back( 44100 );
+	  if ( inCaps.dwFormats & WAVE_FORMAT_48M08) rates.push_back( 48000 );
       if ( inCaps.dwFormats & WAVE_FORMAT_96M08 ) rates.push_back( 96000 );
     }
   }
@@ -5467,6 +5486,13 @@ RtAudio::DeviceInfo RtApiDs :: getDeviceInfo( unsigned int device )
     if ( found == false ) info.sampleRates.push_back( rates[i] );
   }
   std::sort( info.sampleRates.begin(), info.sampleRates.end() );
+  
+  // Get preferred sample rate
+  for (unsigned int i = 0; i < info.sampleRates.size(); i++) {
+	  if (info.sampleRates[i] > info.preferredSampleRate && info.preferredSampleRate < 48000) {
+		  info.preferredSampleRate = info.sampleRates[i];
+	  }
+  }
 
   // If device opens for both playback and capture, we determine the channels.
   if ( info.outputChannels > 0 && info.inputChannels > 0 )
@@ -5476,6 +5502,7 @@ RtAudio::DeviceInfo RtApiDs :: getDeviceInfo( unsigned int device )
 
   // Copy name and return.
   info.name = dsDevices[ device ].name;
+  info.deviceId = convertGuidToStdString(dsDevices[device].id[1]);
   info.probed = true;
   return info;
 }
@@ -6205,6 +6232,9 @@ void RtApiDs :: abortStream()
   stopStream();
 }
 
+#pragma warning ( push )
+#pragma warning ( disable : 6385 ) // MSVC has issue with memcpy https://developercommunity.visualstudio.com/content/problem/841208/false-c6385-warning-when-using-memcpy.html
+
 void RtApiDs :: callbackEvent()
 {
   if ( stream_.state == STREAM_STOPPED || stream_.state == STREAM_STOPPING ) {
@@ -6618,6 +6648,7 @@ void RtApiDs :: callbackEvent()
   MUTEX_UNLOCK( &stream_.mutex );
   RtApi::tickStreamTime();
 }
+#pragma warning ( pop )
 
 // Definitions for utility functions and callbacks
 // specific to the DirectSound implementation.
@@ -10201,3 +10232,5 @@ void RtApi :: byteSwapBuffer( char *buffer, unsigned int samples, RtAudioFormat 
   // vim: et sts=2 sw=2
 
 #endif // PLATFORM_WINDOWS
+
+#endif // WITH_RTAUDIO

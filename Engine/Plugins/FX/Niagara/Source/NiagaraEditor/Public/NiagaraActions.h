@@ -1,13 +1,14 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
-#include "NiagaraTypes.h"
 #include "NiagaraGraph.h"
 #include "EdGraph/EdGraphSchema.h"
 #include "GraphEditorDragDropAction.h"
 #include "DragAndDrop/DecoratedDragDropOp.h"
+#include "NiagaraEditorCommon.h"
+#include "ViewModels/Stack/NiagaraParameterHandle.h"
 #include "NiagaraActions.generated.h"
 
 USTRUCT()
@@ -18,10 +19,7 @@ struct NIAGARAEDITOR_API FNiagaraMenuAction : public FEdGraphSchemaAction
 	DECLARE_DELEGATE(FOnExecuteStackAction);
 	DECLARE_DELEGATE_RetVal(bool, FCanExecuteStackAction);
 
-	FNiagaraMenuAction()
-	{
-	}
-
+	FNiagaraMenuAction() {}
 	FNiagaraMenuAction(FText InNodeCategory, FText InMenuDesc, FText InToolTip, const int32 InGrouping, FText InKeywords, FOnExecuteStackAction InAction, int32 InSectionID = 0);
 	FNiagaraMenuAction(FText InNodeCategory, FText InMenuDesc, FText InToolTip, const int32 InGrouping, FText InKeywords, FOnExecuteStackAction InAction, FCanExecuteStackAction InCanPerformAction, int32 InSectionID = 0);
 
@@ -39,23 +37,65 @@ struct NIAGARAEDITOR_API FNiagaraMenuAction : public FEdGraphSchemaAction
 		return CanPerformAction.IsBound() ? CanPerformAction.Execute() : true;
 	}
 
+	bool IsExperimental = false;
+
+	TOptional<FNiagaraVariable> GetParameterVariable() const;
+	void SetParamterVariable(const FNiagaraVariable& InParameterVariable);
+
 private:
+	TOptional<FNiagaraVariable> ParameterVariable;
 	FOnExecuteStackAction Action;
 	FCanExecuteStackAction CanPerformAction;
 };
 
-struct NIAGARAEDITOR_API FNiagaraParameterAction : public FEdGraphSchemaAction
+struct NIAGARAEDITOR_API FNiagaraScriptVarAndViewInfoAction : public FEdGraphSchemaAction
 {
-	FNiagaraParameterAction() {}
-	FNiagaraParameterAction(const FNiagaraVariable& InParameter,
-		const TArray<FNiagaraGraphParameterReferenceCollection>& InReferenceCollection,
+	FNiagaraScriptVarAndViewInfoAction(const FNiagaraScriptVariableAndViewInfo& InScriptVariableAndViewInfo,
 		FText InNodeCategory, FText InMenuDesc, FText InToolTip, const int32 InGrouping, FText InKeywords, int32 InSectionID = 0);
 
+	const FNiagaraTypeDefinition GetScriptVarType() const { return ScriptVariableAndViewInfo.ScriptVariable.GetType(); };
+
+	FNiagaraScriptVariableAndViewInfo ScriptVariableAndViewInfo;
+};
+
+struct NIAGARAEDITOR_API FNiagaraParameterAction : public FEdGraphSchemaAction
+{
+	FNiagaraParameterAction()
+		: bIsExternallyReferenced(false)
+	{
+	}
+
+	FNiagaraParameterAction(const FNiagaraVariable& InParameter,
+		const TArray<FNiagaraGraphParameterReferenceCollection>& InReferenceCollection,
+		FText InNodeCategory, FText InMenuDesc, FText InToolTip, const int32 InGrouping, FText InKeywords,
+		TSharedPtr<TArray<FName>> ParameterWithNamespaceModifierRenamePending,
+		int32 InSectionID = 0);
+
+	FNiagaraParameterAction(const FNiagaraVariable& InParameter, 
+		FText InNodeCategory, FText InMenuDesc, FText InToolTip, const int32 InGrouping, FText InKeywords,
+		TSharedPtr<TArray<FName>> ParameterWithNamespaceModifierRenamePending,
+		int32 InSectionID = 0);
+
 	const FNiagaraVariable& GetParameter() const { return Parameter; }
+
+	bool GetIsNamespaceModifierRenamePending() const;
+
+	void SetIsNamespaceModifierRenamePending(bool bIsNamespaceModifierRenamePending);
 
 	FNiagaraVariable Parameter;
 
 	TArray<FNiagaraGraphParameterReferenceCollection> ReferenceCollection;
+
+	bool bIsExternallyReferenced;
+
+private:
+	TWeakPtr<TArray<FName>> ParameterWithNamespaceModifierRenamePendingWeak;
+};
+
+struct NIAGARAEDITOR_API FNiagaraScriptParameterAction : public FEdGraphSchemaAction
+{
+	FNiagaraScriptParameterAction() {}
+	FNiagaraScriptParameterAction(const FNiagaraVariable& InVariable, const FNiagaraVariableMetaData& InVariableMetaData);
 };
 
 class NIAGARAEDITOR_API FNiagaraParameterGraphDragOperation : public FGraphSchemaActionDragDropAction
@@ -76,6 +116,9 @@ public:
 
 	/** Set if operation is modified by the ctrl key */
 	void SetCtrlDrag(bool InIsCtrlDrag) { bControlDrag = InIsCtrlDrag; }
+
+	/** Returns true if the drag operation is currently hovering over the supplied node */
+	bool IsCurrentlyHoveringNode(const UEdGraphNode* TestNode) const;
 
 protected:
 	/** Constructor */

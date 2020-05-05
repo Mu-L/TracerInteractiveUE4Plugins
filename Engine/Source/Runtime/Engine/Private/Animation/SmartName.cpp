@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Animation/SmartName.h"
 #include "UObject/FrameworkObjectVersion.h"
@@ -291,9 +291,26 @@ const FSmartNameMapping* FSmartNameContainer::GetContainer(FName ContainerName) 
 	return NameMappings.Find(ContainerName);
 }
 
-void FSmartNameContainer::Serialize(FArchive& Ar)
+void FSmartNameContainer::Serialize(FArchive& Ar, bool bIsTemplate)
 {
-	Ar << NameMappings;
+#if WITH_EDITORONLY_DATA
+	if (Ar.IsCooking() && !bIsTemplate)
+	{
+		Ar << LoadedNameMappings;
+	}
+	else
+#endif
+	{
+		Ar << NameMappings;
+	}
+}
+
+void FSmartNameContainer::PostLoad()
+{
+#if WITH_EDITORONLY_DATA
+	// Preserve Load state for deterministic cooking
+	LoadedNameMappings = NameMappings;
+#endif
 }
 
 FSmartNameMapping* FSmartNameContainer::GetContainerInternal(const FName& ContainerName)

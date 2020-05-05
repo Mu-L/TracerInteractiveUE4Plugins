@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OculusMR_CastingCameraActor.h"
 
@@ -54,7 +54,7 @@ namespace
 			ovrpPoseStatef cameraPoseState;
 			ovrpNode deviceNode = ToOvrpNode(TrackedCamera.AttachedTrackedDevice);
 			ovrpBool nodePresent = ovrpBool_False;
-			result = ovrp_GetNodePresent2(deviceNode, &nodePresent);
+			result = FOculusHMDModule::GetPluginWrapper().GetNodePresent2(deviceNode, &nodePresent);
 			if (!OVRP_SUCCESS(result))
 			{
 				UE_LOG(LogMR, Warning, TEXT("Unable to check if AttachedTrackedDevice is present"));
@@ -76,7 +76,7 @@ namespace
 				CurrentFrame = OculusHMD->GetFrame_RenderThread();
 			}
 
-			result = CurrentFrame ? ovrp_GetNodePoseState3(ovrpStep_Render, CurrentFrame->FrameNumber, deviceNode, &cameraPoseState) : ovrpFailure;
+			result = CurrentFrame ? FOculusHMDModule::GetPluginWrapper().GetNodePoseState3(ovrpStep_Render, CurrentFrame->FrameNumber, deviceNode, &cameraPoseState) : ovrpFailure;
 			if (!OVRP_SUCCESS(result))
 			{
 				UE_LOG(LogMR, Warning, TEXT("Unable to retrieve AttachedTrackedDevice pose state"));
@@ -159,12 +159,12 @@ AOculusMR_CastingCameraActor::AOculusMR_CastingCameraActor(const FObjectInitiali
 	ForegroundRenderTargets.SetNum(1);
 
 	BackgroundRenderTargets[0] = NewObject<UTextureRenderTarget2D>();
-	BackgroundRenderTargets[0]->RenderTargetFormat = RTF_RGB10A2;
-	BackgroundRenderTargets[0]->TargetGamma = 2.2;
+	BackgroundRenderTargets[0]->RenderTargetFormat = RTF_RGBA8;
+	BackgroundRenderTargets[0]->TargetGamma = 1.001;
 
 	ForegroundRenderTargets[0] = NewObject<UTextureRenderTarget2D>();
-	ForegroundRenderTargets[0]->RenderTargetFormat = RTF_RGB10A2;
-	ForegroundRenderTargets[0]->TargetGamma = 2.2;
+	ForegroundRenderTargets[0]->RenderTargetFormat = RTF_RGBA8;
+	ForegroundRenderTargets[0]->TargetGamma = 1.001;
 #elif PLATFORM_ANDROID
 	BackgroundRenderTargets.SetNum(NumRTs);
 	ForegroundRenderTargets.SetNum(NumRTs);
@@ -175,11 +175,9 @@ AOculusMR_CastingCameraActor::AOculusMR_CastingCameraActor(const FObjectInitiali
 	{
 		BackgroundRenderTargets[i] = NewObject<UTextureRenderTarget2D>();
 		BackgroundRenderTargets[i]->RenderTargetFormat = RTF_RGBA8;
-		BackgroundRenderTargets[i]->TargetGamma = 2.2;
 
 		ForegroundRenderTargets[i] = NewObject<UTextureRenderTarget2D>();
 		ForegroundRenderTargets[i]->RenderTargetFormat = RTF_RGBA8;
-		ForegroundRenderTargets[i]->TargetGamma = 2.2;
 
 		AudioTimes[i] = 0.0;
 	}
@@ -202,7 +200,7 @@ bool AOculusMR_CastingCameraActor::RefreshExternalCamera()
 	if (MRState->TrackedCamera.Index >= 0)
 	{
 		int cameraCount;
-		if (OVRP_FAILURE(ovrp_GetExternalCameraCount(&cameraCount)))
+		if (OVRP_FAILURE(FOculusHMDModule::GetPluginWrapper().GetExternalCameraCount(&cameraCount)))
 		{
 			cameraCount = 0;
 		}
@@ -219,10 +217,10 @@ bool AOculusMR_CastingCameraActor::RefreshExternalCamera()
 		}
 		ovrpResult result = ovrpSuccess;
 		ovrpCameraExtrinsics cameraExtrinsics;
-		result = ovrp_GetExternalCameraExtrinsics(MRState->TrackedCamera.Index, &cameraExtrinsics);
+		result = FOculusHMDModule::GetPluginWrapper().GetExternalCameraExtrinsics(MRState->TrackedCamera.Index, &cameraExtrinsics);
 		if (OVRP_FAILURE(result))
 		{
-			UE_LOG(LogMR, Error, TEXT("ovrp_GetExternalCameraExtrinsics failed"));
+			UE_LOG(LogMR, Error, TEXT("FOculusHMDModule::GetPluginWrapper().GetExternalCameraExtrinsics failed"));
 			return false;
 		}
 		MRState->TrackedCamera.AttachedTrackedDevice = OculusHMD::ToETrackedDeviceType(cameraExtrinsics.AttachedToNode);
@@ -274,7 +272,7 @@ void AOculusMR_CastingCameraActor::BeginPlay()
 	VRNotificationComponent->HMDRecenteredDelegate.Add(Delegate);
 
 #if PLATFORM_ANDROID
-	FAudioDevice* AudioDevice = FAudioDevice::GetMainAudioDevice();
+	FAudioDeviceHandle AudioDevice = FAudioDevice::GetMainAudioDevice();
 	AudioDevice->StartRecording(nullptr, 0.1);
 #endif
 }
@@ -282,7 +280,7 @@ void AOculusMR_CastingCameraActor::BeginPlay()
 void AOculusMR_CastingCameraActor::EndPlay(EEndPlayReason::Type Reason)
 {
 #if PLATFORM_ANDROID
-	FAudioDevice* AudioDevice = FAudioDevice::GetMainAudioDevice();
+	FAudioDeviceHandle AudioDevice = FAudioDevice::GetMainAudioDevice();
 	float NumChannels = 2;
 	float SampleRate = AudioDevice->GetSampleRate();
 	AudioDevice->StopRecording(nullptr, NumChannels, SampleRate);
@@ -393,9 +391,9 @@ void AOculusMR_CastingCameraActor::Tick(float DeltaTime)
 		const ovrpByte* colorFrameData = nullptr;
 		int colorRowPitch = 0;
 
-		if (OVRP_SUCCESS(ovrp_IsCameraDeviceColorFrameAvailable2(MRState->CurrentCapturingCamera, &colorFrameAvailable)) && colorFrameAvailable &&
-			OVRP_SUCCESS(ovrp_GetCameraDeviceColorFrameSize(MRState->CurrentCapturingCamera, &colorFrameSize)) &&
-			OVRP_SUCCESS(ovrp_GetCameraDeviceColorFrameBgraPixels(MRState->CurrentCapturingCamera, &colorFrameData, &colorRowPitch)))
+		if (OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().IsCameraDeviceColorFrameAvailable2(MRState->CurrentCapturingCamera, &colorFrameAvailable)) && colorFrameAvailable &&
+			OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().GetCameraDeviceColorFrameSize(MRState->CurrentCapturingCamera, &colorFrameSize)) &&
+			OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().GetCameraDeviceColorFrameBgraPixels(MRState->CurrentCapturingCamera, &colorFrameData, &colorRowPitch)))
 		{
 			UpdateCameraColorTexture(colorFrameSize, colorFrameData, colorRowPitch);
 		}
@@ -406,10 +404,10 @@ void AOculusMR_CastingCameraActor::Tick(float DeltaTime)
 		const float* depthFrameData = nullptr;
 		int depthRowPitch = 0;
 		if (MRSettings->GetUseDynamicLighting() &&
-			OVRP_SUCCESS(ovrp_DoesCameraDeviceSupportDepth(MRState->CurrentCapturingCamera, &supportDepth)) && supportDepth &&
-			OVRP_SUCCESS(ovrp_IsCameraDeviceDepthFrameAvailable(MRState->CurrentCapturingCamera, &depthFrameAvailable)) && depthFrameAvailable &&
-			OVRP_SUCCESS(ovrp_GetCameraDeviceDepthFrameSize(MRState->CurrentCapturingCamera, &depthFrameSize)) &&
-			OVRP_SUCCESS(ovrp_GetCameraDeviceDepthFramePixels(MRState->CurrentCapturingCamera, &depthFrameData, &depthRowPitch))
+			OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().DoesCameraDeviceSupportDepth(MRState->CurrentCapturingCamera, &supportDepth)) && supportDepth &&
+			OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().IsCameraDeviceDepthFrameAvailable(MRState->CurrentCapturingCamera, &depthFrameAvailable)) && depthFrameAvailable &&
+			OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().GetCameraDeviceDepthFrameSize(MRState->CurrentCapturingCamera, &depthFrameSize)) &&
+			OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().GetCameraDeviceDepthFramePixels(MRState->CurrentCapturingCamera, &depthFrameData, &depthRowPitch))
 			)
 		{
 			UpdateCameraDepthTexture(depthFrameSize, depthFrameData, depthRowPitch);
@@ -432,10 +430,10 @@ void AOculusMR_CastingCameraActor::Tick(float DeltaTime)
 	RepositionPlaneMesh();
 
 	double HandPoseStateLatencyToSet = (double)MRSettings->HandPoseStateLatency;
-	ovrpResult result = ovrp_SetHandNodePoseStateLatency(HandPoseStateLatencyToSet);
+	ovrpResult result = FOculusHMDModule::GetPluginWrapper().SetHandNodePoseStateLatency(HandPoseStateLatencyToSet);
 	if (OVRP_FAILURE(result))
 	{
-		UE_LOG(LogMR, Warning, TEXT("ovrp_SetHandNodePoseStateLatency(%f) failed, result %d"), HandPoseStateLatencyToSet, (int)result);
+		UE_LOG(LogMR, Warning, TEXT("FOculusHMDModule::GetPluginWrapper().SetHandNodePoseStateLatency(%f) failed, result %d"), HandPoseStateLatencyToSet, (int)result);
 	}
 #endif
 
@@ -453,7 +451,7 @@ void AOculusMR_CastingCameraActor::Tick(float DeltaTime)
 		// Skip encoding for the first few frames before they have completed rendering
 		if (RenderedRTs > EncodeIndex)
 		{
-			ovrp_Media_SyncMrcFrame(SyncId);
+			FOculusHMDModule::GetPluginWrapper().Media_SyncMrcFrame(SyncId);
 
 			int NumChannels = 2;
 			double AudioTime = AudioTimes[EncodeIndex];
@@ -462,17 +460,29 @@ void AOculusMR_CastingCameraActor::Tick(float DeltaTime)
 
 			if (IsVulkanPlatform(GMaxRHIShaderPlatform))
 			{
-				// The Vulkan RHI's implementation of GetNativeResource is different and returns the VkImage cast
-				// as a void* instead of a pointer to the VkImage, so we need this workaround
-				BackgroundTexture = (void*)BackgroundRenderTargets[EncodeIndex]->Resource->TextureRHI->GetNativeResource();
-				ForegroundTexture = (void*)ForegroundRenderTargets[EncodeIndex]->Resource->TextureRHI->GetNativeResource();
+				ExecuteOnRenderThread([this, EncodeIndex, &BackgroundTexture, &ForegroundTexture]()
+				{
+					ExecuteOnRHIThread([this, EncodeIndex, &BackgroundTexture, &ForegroundTexture]()
+					{
+						// The Vulkan RHI's implementation of GetNativeResource is different and returns the VkImage cast
+						// as a void* instead of a pointer to the VkImage, so we need this workaround
+						BackgroundTexture = (void*)BackgroundRenderTargets[EncodeIndex]->Resource->TextureRHI->GetNativeResource();
+						ForegroundTexture = (void*)ForegroundRenderTargets[EncodeIndex]->Resource->TextureRHI->GetNativeResource();
+					});
+				});
 			}
 			else
 			{
-				BackgroundTexture = *((void**)BackgroundRenderTargets[EncodeIndex]->Resource->TextureRHI->GetNativeResource());
-				ForegroundTexture = *((void**)ForegroundRenderTargets[EncodeIndex]->Resource->TextureRHI->GetNativeResource());
+				ExecuteOnRenderThread([this, EncodeIndex, &BackgroundTexture, &ForegroundTexture]()
+				{
+					ExecuteOnRHIThread([this, EncodeIndex, &BackgroundTexture, &ForegroundTexture]()
+					{
+						BackgroundTexture = *((void**)BackgroundRenderTargets[EncodeIndex]->Resource->TextureRHI->GetNativeResource());
+						ForegroundTexture = *((void**)ForegroundRenderTargets[EncodeIndex]->Resource->TextureRHI->GetNativeResource());
+					});
+				});
 			}
-			ovrp_Media_EncodeMrcFrameWithDualTextures(BackgroundTexture, ForegroundTexture, AudioBuffers[EncodeIndex].GetData(), AudioBuffers[EncodeIndex].Num() * sizeof(float), NumChannels, AudioTime, &SyncId);
+			FOculusHMDModule::GetPluginWrapper().Media_EncodeMrcFrameWithDualTextures(BackgroundTexture, ForegroundTexture, AudioBuffers[EncodeIndex].GetData(), AudioBuffers[EncodeIndex].Num() * sizeof(float), NumChannels, AudioTime, &SyncId);
 		}
 		ForegroundCaptureActor->GetCaptureComponent2D()->SetVisibility(true);
 	}
@@ -486,7 +496,7 @@ void AOculusMR_CastingCameraActor::Tick(float DeltaTime)
 		ForegroundCaptureActor->GetCaptureComponent2D()->TextureTarget = ForegroundRenderTargets[CaptureIndex];
 		GetCaptureComponent2D()->SetVisibility(true);
 
-		FAudioDevice* AudioDevice = FAudioDevice::GetMainAudioDevice();
+		FAudioDeviceHandle AudioDevice = FAudioDevice::GetMainAudioDevice();
 		float NumChannels, SampleRate;
 		NumChannels = 2;
 		SampleRate = AudioDevice->GetSampleRate();
@@ -587,7 +597,7 @@ void AOculusMR_CastingCameraActor::UpdateCameraColorTexture(const ovrpSizei &fra
 		{
 			CameraFrameMaterialInstance->SetTextureParameterValue(FName(TEXT("CameraCaptureTexture")), CameraColorTexture);
 			CameraFrameMaterialInstance->SetVectorParameterValue(FName(TEXT("CameraCaptureTextureSize")),
-				FLinearColor((float)CameraColorTexture->GetSizeX(), (float)CameraColorTexture->GetSizeY(), 1.0f / CameraColorTexture->GetSizeX(), 1.0f / CameraColorTexture->GetSizeY()));
+				FLinearColor((float)CameraColorTexture->GetSizeX(), (float)CameraColorTexture->GetSizeY(), 1.0f / FMath::Max<int32>(1, CameraColorTexture->GetSizeX()), 1.0f / FMath::Max<int32>(1, CameraColorTexture->GetSizeY())));
 		}
 	}
 	uint32 Pitch = rowPitch;
@@ -846,7 +856,7 @@ void AOculusMR_CastingCameraActor::UpdateTrackedCameraPosition()
 	FPose CameraTrackingSpacePose = FPose(MRState->TrackedCamera.CalibratedRotation.Quaternion(), MRState->TrackedCamera.CalibratedOffset);
 #if PLATFORM_ANDROID
 	ovrpPosef OvrpPose;
-	ovrp_GetTrackingTransformRawPose(&OvrpPose);
+	FOculusHMDModule::GetPluginWrapper().GetTrackingTransformRawPose(&OvrpPose);
 	FPose RawPose;
 	OculusHMD->ConvertPose(OvrpPose, RawPose);
 	FPose CalibrationRawPose = FPose(MRState->TrackedCamera.RawRotation.Quaternion(), MRState->TrackedCamera.RawOffset);
@@ -854,6 +864,7 @@ void AOculusMR_CastingCameraActor::UpdateTrackedCameraPosition()
 #endif
 	FPose CameraPose = CameraTrackedObjectPose * CameraTrackingSpacePose;
 	CameraPose = CameraPose * FPose(MRState->TrackedCamera.UserRotation.Quaternion(), MRState->TrackedCamera.UserOffset);
+	CameraPose.Position = CameraPose.Position * MRState->ScalingFactor;
 
 	float Distance = 0.0f;
 	if (MRSettings->ClippingReference == EOculusMR_ClippingReference::CR_TrackingReference)
@@ -924,7 +935,7 @@ void AOculusMR_CastingCameraActor::SetupTrackedCamera()
 	if (MRSettings->GetCompositionMethod() == EOculusMR_CompositionMethod::DirectComposition)
 	{
 		ovrpBool cameraOpen;
-		if (OVRP_SUCCESS(ovrp_HasCameraDeviceOpened2(MRState->CurrentCapturingCamera, &cameraOpen)) && cameraOpen)
+		if (OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().HasCameraDeviceOpened2(MRState->CurrentCapturingCamera, &cameraOpen)) && cameraOpen)
 		{
 			UE_LOG(LogMR, Log, TEXT("Create CameraColorTexture (1280x720)"));
 			CameraColorTexture = UTexture2D::CreateTransient(1280, 720);
@@ -974,7 +985,7 @@ void AOculusMR_CastingCameraActor::SetupCameraFrameMaterialInstance()
 	{
 		CameraFrameMaterialInstance->SetTextureParameterValue(FName(TEXT("CameraCaptureTexture")), CameraColorTexture);
 		CameraFrameMaterialInstance->SetVectorParameterValue(FName(TEXT("CameraCaptureTextureSize")),
-			FLinearColor((float)CameraColorTexture->GetSizeX(), (float)CameraColorTexture->GetSizeY(), 1.0f / CameraColorTexture->GetSizeX(), 1.0f / CameraColorTexture->GetSizeY()));
+			FLinearColor((float)CameraColorTexture->GetSizeX(), (float)CameraColorTexture->GetSizeY(), 1.0f / FMath::Max<int32>(1, CameraColorTexture->GetSizeX()), 1.0f / FMath::Max<int32>(1, CameraColorTexture->GetSizeY())));
 		if (MRSettings->GetUseDynamicLighting())
 		{
 			CameraFrameMaterialInstance->SetTextureParameterValue(FName(TEXT("CameraDepthTexture")), CameraDepthTexture);
@@ -1082,7 +1093,7 @@ void AOculusMR_CastingCameraActor::UpdateRenderTargetSize()
 	FIntPoint CameraTargetSize = FIntPoint(ViewWidth, ViewHeight);
 	float FOV = GetCaptureComponent2D()->FOVAngle * (float)PI / 360.0f;
 
-	if (OVRP_SUCCESS(ovrp_Media_GetMrcFrameSize(&ViewWidth, &ViewHeight)))
+	if (OVRP_SUCCESS(FOculusHMDModule::GetPluginWrapper().Media_GetMrcFrameSize(&ViewWidth, &ViewHeight)))
 	{
 		// Frame size is doublewide, so divide by 2
 		ViewWidth /= 2;
@@ -1122,6 +1133,7 @@ void AOculusMR_CastingCameraActor::SetupMRCScreen()
 #endif
 		UpdateRenderTargetSize();
 
+		GetCaptureComponent2D()->bDisableFlipCopyGLES = true;
 		// LDR for gamma correction and post process
 		GetCaptureComponent2D()->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
 
@@ -1134,6 +1146,7 @@ void AOculusMR_CastingCameraActor::SetupMRCScreen()
 		{
 			ForegroundCaptureActor = GetWorld()->SpawnActor<ASceneCapture2D>();
 
+			ForegroundCaptureActor->GetCaptureComponent2D()->bDisableFlipCopyGLES = true;
 			// LDR for gamma correction and post process
 			ForegroundCaptureActor->GetCaptureComponent2D()->CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
 #if PLATFORM_ANDROID

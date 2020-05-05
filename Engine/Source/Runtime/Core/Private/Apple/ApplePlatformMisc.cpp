@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	ApplePlatformMisc.mm: iOS implementations of misc functions
@@ -56,9 +56,15 @@ void FApplePlatformMisc::LocalPrint(const TCHAR* Message)
 
 const TCHAR* FApplePlatformMisc::GetSystemErrorMessage(TCHAR* OutBuffer, int32 BufferCount, int32 Error)
 {
-	// There's no iOS equivalent for GetLastError()
 	check(OutBuffer && BufferCount);
 	*OutBuffer = TEXT('\0');
+	if (Error == 0)
+	{
+		Error = errno;
+	}
+	char* ErrorBuffer = (char*)alloca(BufferCount);
+	strerror_r(Error, ErrorBuffer, BufferCount);
+	FCString::Strcpy(OutBuffer, BufferCount, UTF8_TO_TCHAR((const ANSICHAR*)ErrorBuffer));
 	return OutBuffer;
 }
 
@@ -328,6 +334,12 @@ void FApplePlatformMisc::BeginNamedEvent(const struct FColor& Color, const TCHAR
 #elif APPLE_PROFILING_ENABLED
 	FApplePlatformDebugEvents::BeginNamedEvent(Color, Text);
 #endif // FRAMEPRO_ENABLED
+#if CPUPROFILERTRACE_ENABLED
+	if (CpuChannel)
+	{
+		FCpuProfilerTrace::OutputBeginDynamicEvent(Text);
+	}
+#endif
 }
 
 void FApplePlatformMisc::BeginNamedEvent(const struct FColor& Color, const ANSICHAR* Text)
@@ -337,6 +349,12 @@ void FApplePlatformMisc::BeginNamedEvent(const struct FColor& Color, const ANSIC
 #elif APPLE_PROFILING_ENABLED
 	FApplePlatformDebugEvents::BeginNamedEvent(Color, Text);
 #endif // FRAMEPRO_ENABLED
+#if CPUPROFILERTRACE_ENABLED
+	if (CpuChannel)
+	{
+		FCpuProfilerTrace::OutputBeginDynamicEvent(Text);
+	}
+#endif
 }
 
 void FApplePlatformMisc::EndNamedEvent()
@@ -346,6 +364,12 @@ void FApplePlatformMisc::EndNamedEvent()
 #elif APPLE_PROFILING_ENABLED
 	FApplePlatformDebugEvents::EndNamedEvent();
 #endif // FRAMEPRO_ENABLED
+#if CPUPROFILERTRACE_ENABLED
+	if (CpuChannel)
+	{
+		FCpuProfilerTrace::OutputEndEvent();
+	}
+#endif
 }
 
 void FApplePlatformMisc::CustomNamedStat(const TCHAR* Text, float Value, const TCHAR* Graph, const TCHAR* Unit)

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -26,6 +26,9 @@ public:
 	~FPakFileDerivedDataBackend();
 
 	void Close();
+
+	/** Return a name for this interface */
+	virtual FString GetName() const override { return Filename; }
 
 	/** return true if this cache is writable **/
 	virtual bool IsWritable() override;

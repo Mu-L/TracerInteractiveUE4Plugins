@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreTypes.h"
+#include "LC_Platform.h"
 #include "LC_Memory.h"
 #include <string>
 
@@ -27,7 +28,7 @@ public:
 
 	struct Hasher
 	{
-		__forceinline size_t operator()(const ImmutableString& key) const
+		LC_ALWAYS_INLINE size_t operator()(const ImmutableString& key) const
 		{
 			return key.GetHash();
 		}
@@ -35,7 +36,7 @@ public:
 
 	struct Comparator
 	{
-		__forceinline bool operator()(const ImmutableString& lhs, const ImmutableString& rhs) const
+		LC_ALWAYS_INLINE bool operator()(const ImmutableString& lhs, const ImmutableString& rhs) const
 		{
 			return (lhs == rhs);
 		}

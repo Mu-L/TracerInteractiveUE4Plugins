@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	HairRendering.h: Hair strands LUT generation.
@@ -13,6 +13,7 @@ enum FHairLUTType
 {
 	HairLUTType_DualScattering,
 	HairLUTType_MeanEnergy,
+	HairLUTType_Coverage,
 	HairLUTTypeCount
 };
 

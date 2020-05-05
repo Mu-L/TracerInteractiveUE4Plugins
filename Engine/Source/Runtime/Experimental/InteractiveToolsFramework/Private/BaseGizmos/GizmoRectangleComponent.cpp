@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BaseGizmos/GizmoRectangleComponent.h"
 #include "BaseGizmos/GizmoRenderingUtil.h"
@@ -24,7 +24,8 @@ public:
 		LengthX(InComponent->LengthX),
 		LengthY(InComponent->LengthY),
 		Thickness(InComponent->Thickness),
-		HoverThicknessMultiplier(InComponent->HoverSizeMultiplier)
+		HoverThicknessMultiplier(InComponent->HoverSizeMultiplier),
+		SegmentFlags(InComponent->SegmentFlags)
 	{
 	}
 
@@ -100,8 +101,22 @@ public:
 				FVector Point11 = Origin + UseOffsetLengthX*UseDirectionX + UseOffsetLengthY*UseDirectionY;
 				FVector Point01 = Origin + UseOffsetX*UseDirectionX + UseOffsetLengthY*UseDirectionY;
 
-				PDI->DrawLine(Point10, Point11, Color, SDPG_Foreground, UseThickness, 0.0f, true);
-				PDI->DrawLine(Point11, Point01, Color, SDPG_Foreground, UseThickness, 0.0f, true);
+				if (SegmentFlags & 0x1)
+				{
+					PDI->DrawLine(Point00, Point10, Color, SDPG_Foreground, UseThickness, 0.0f, true);
+				}
+				if (SegmentFlags & 0x2)
+				{
+					PDI->DrawLine(Point10, Point11, Color, SDPG_Foreground, UseThickness, 0.0f, true);
+				}
+				if (SegmentFlags & 0x4)
+				{
+					PDI->DrawLine(Point11, Point01, Color, SDPG_Foreground, UseThickness, 0.0f, true);
+				}
+				if (SegmentFlags & 0x8)
+				{
+					PDI->DrawLine(Point01, Point00, Color, SDPG_Foreground, UseThickness, 0.0f, true);
+				}
 
 
 				/* 
@@ -179,6 +194,7 @@ private:
 	float LengthX, LengthY;
 	float Thickness;
 	float HoverThicknessMultiplier;
+	uint8 SegmentFlags;
 
 	bool* bFlippedXExternal = nullptr;
 	bool* bFlippedYExternal = nullptr;
@@ -220,7 +236,7 @@ bool UGizmoRectangleComponent::LineTraceComponent(FHitResult& OutHit, const FVec
 	FVector UseDirectionX = (bFlippedX) ? -DirectionX : DirectionX;
 	UseDirectionX = (bWorld) ? UseDirectionX : Transform.TransformVector(UseDirectionX);
 	FVector UseDirectionY = (bFlippedY) ? -DirectionY : DirectionY;
-	UseDirectionY = (bWorld) ? DirectionY : Transform.TransformVector(UseDirectionY);
+	UseDirectionY = (bWorld) ? UseDirectionY : Transform.TransformVector(UseDirectionY);
 	FVector UseOrigin = Transform.TransformPosition(FVector::ZeroVector);
 
 	float LengthScale = DynamicPixelToWorldScale;

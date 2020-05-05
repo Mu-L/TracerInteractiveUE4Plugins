@@ -1,11 +1,13 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 
-class IDatasmithIFCTranslatorModule : public IModuleInterface
+DECLARE_LOG_CATEGORY_EXTERN(LogIFCTranslator, Log, All);
+
+class DATASMITHIFCTRANSLATOR_API IDatasmithIFCTranslatorModule : public IModuleInterface
 {
 public:
 	static const TCHAR* ModuleName;

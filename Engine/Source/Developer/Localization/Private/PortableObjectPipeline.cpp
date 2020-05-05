@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PortableObjectPipeline.h"
 #include "Misc/FileHelper.h"
@@ -49,6 +49,18 @@ namespace
 
 		/** Mapping between a collapsed namespace (First) and source string/native translation (Second), to an expanded namespace (First) and key (Second) */
 		FLocKeyPairMultiMap CollapsedNSSourceStringToExpandedNSKey;
+	};
+
+	struct FLocComments
+	{
+		FLocComments(TArray<FString> InExtracted, TArray<FString> InTranslator)
+			: ExtractedComments(MoveTemp(InExtracted))
+			, TranslatorComments(MoveTemp(InTranslator))
+		{
+		}
+
+		TArray<FString> ExtractedComments;
+		TArray<FString> TranslatorComments;
 	};
 
 	void BuildCollapsedManifest(FLocTextHelper& InLocTextHelper, const ELocalizedTextCollapseMode InTextCollapseMode, FCollapsedData& OutCollapsedData, TSharedPtr<FInternationalizationManifest>& OutPlatformAgnosticManifest, TMap<FName, TSharedRef<FInternationalizationManifest>>& OutPerPlatformManifests)
@@ -154,9 +166,9 @@ namespace
 		}, true);
 	}
 
-	TMap<FPortableObjectEntryKey, TArray<FString>> ExtractPreservedPOComments(const FPortableObjectFormatDOM& InPortableObject)
+	TMap<FPortableObjectEntryKey, FLocComments> ExtractPreservedPOComments(const FPortableObjectFormatDOM& InPortableObject)
 	{
-		TMap<FPortableObjectEntryKey, TArray<FString>> POEntryToCommentMap;
+		TMap<FPortableObjectEntryKey, FLocComments> POEntryToCommentMap;
 		for (auto EntryPairIterator = InPortableObject.GetEntriesIterator(); EntryPairIterator; ++EntryPairIterator)
 		{
 			const TSharedPtr< FPortableObjectEntry >& Entry = EntryPairIterator->Value;
@@ -167,9 +179,9 @@ namespace
 				return !ExtractedComment.StartsWith(TEXT("Key:"), ESearchCase::CaseSensitive) && !ExtractedComment.StartsWith(TEXT("SourceLocation:"), ESearchCase::CaseSensitive) && !ExtractedComment.StartsWith(TEXT("InfoMetaData:"), ESearchCase::CaseSensitive);
 			});
 
-			if (CommentsToPreserve.Num())
+			if (CommentsToPreserve.Num() || Entry->TranslatorComments.Num())
 			{
-				POEntryToCommentMap.Add(FPortableObjectEntryKey(Entry->MsgId, Entry->MsgIdPlural, Entry->MsgCtxt), CommentsToPreserve);
+				POEntryToCommentMap.Add(FPortableObjectEntryKey(Entry->MsgId, Entry->MsgIdPlural, Entry->MsgCtxt), FLocComments(CommentsToPreserve, Entry->TranslatorComments));
 			}
 		}
 		return POEntryToCommentMap;
@@ -376,7 +388,7 @@ namespace
 		if (bShouldPersistComments)
 		{
 			// Preserve comments from the specified file now
-			TMap<FPortableObjectEntryKey, TArray<FString>> POEntryToCommentMap;
+			TMap<FPortableObjectEntryKey, FLocComments> POEntryToCommentMap;
 			{
 				FPortableObjectFormatDOM ExistingPortableObject;
 				if (LoadPOFile(InPOFilePath, ExistingPortableObject))
@@ -391,7 +403,8 @@ namespace
 				const TSharedPtr<FPortableObjectEntry> FoundEntry = NewPortableObject.FindEntry(Pair.Key.MsgId, Pair.Key.MsgIdPlural, Pair.Key.MsgCtxt);
 				if (FoundEntry.IsValid())
 				{
-					FoundEntry->AddExtractedComments(Pair.Value);
+					FoundEntry->AddExtractedComments(Pair.Value.ExtractedComments);
+					FoundEntry->AddTranslatorComments(Pair.Value.TranslatorComments);
 				}
 			}
 		}

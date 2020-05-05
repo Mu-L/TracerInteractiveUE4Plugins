@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TransformMeshesTool.h"
 #include "InteractiveToolManager.h"
@@ -82,7 +82,7 @@ void UTransformMeshesTool::Setup()
 	UpdateTransformMode(TransformProps->TransformMode);
 
 	GetToolManager()->DisplayMessage(
-		LOCTEXT("OnStartTransformMeshesTool", "To transform Objects around points, reposition the Gizmo using Set Pivot mode (S). To quickly position Objects, enable Snap Drag mode (D). A cycles through Transform modes, W and E through SnapDrag Source and Rotation types."),
+		LOCTEXT("OnStartTransformMeshesTool", "Translate/Rotate/Scale the selected objects. [A] cycles through Transform modes. Reposition the Gizmo using Set Pivot Mode [S]. Toggle Snap Drag Mode [D] to move the object by click-draging. [W] and [E] cycle through SnapDrag Source and Rotation types."),
 		EToolMessageLevel::UserNotification);
 }
 
@@ -126,7 +126,7 @@ void UTransformMeshesTool::Render(IToolsContextRenderAPI* RenderAPI)
 	FPrimitiveDrawInterface* PDI = RenderAPI->GetPrimitiveDrawInterface();
 }
 
-void UTransformMeshesTool::OnPropertyModified(UObject* PropertySet, UProperty* Property)
+void UTransformMeshesTool::OnPropertyModified(UObject* PropertySet, FProperty* Property)
 {
 }
 
@@ -223,7 +223,12 @@ void UTransformMeshesTool::SetActiveGizmos_Single(bool bLocalRotations)
 	{
 		Transformable.TransformProxy->AddComponent(Target->GetOwnerComponent());
 	}
-	Transformable.TransformGizmo = GizmoManager->Create3AxisTransformGizmo(this);
+
+	// leave out nonuniform scale if we have multiple objects in non-local mode
+	bool bCanNonUniformScale = ComponentTargets.Num() == 1 || bLocalRotations;
+	ETransformGizmoSubElements GizmoElements = (bCanNonUniformScale) ?
+		ETransformGizmoSubElements::FullTranslateRotateScale : ETransformGizmoSubElements::TranslateRotateUniformScale;
+	Transformable.TransformGizmo = GizmoManager->CreateCustomTransformGizmo(GizmoElements, this);
 	Transformable.TransformGizmo->SetActiveTarget(Transformable.TransformProxy);
 
 	ActiveGizmos.Add(Transformable);
@@ -372,11 +377,11 @@ void UTransformMeshesTool::OnClickDrag(const FInputDeviceRay& DragPos)
 		FVector3d AlignTranslate = ToFrameWorld.Origin - FromFrameWorld.Origin;
 
 		FTransform NewTransform = StartDragTransform;
-		NewTransform.Accumulate( FTransform(CenterShift) );
-		NewTransform.Accumulate( FTransform(AlignRotation) );
-		NewTransform.Accumulate( FTransform(AlignTranslate) );
+		NewTransform.Accumulate( FTransform((FVector)CenterShift) );
+		NewTransform.Accumulate( FTransform((FQuat)AlignRotation) );
+		NewTransform.Accumulate( FTransform((FVector)AlignTranslate) );
 		CenterShift = AlignRotation * CenterShift;
-		NewTransform.Accumulate( FTransform(-CenterShift) );
+		NewTransform.Accumulate( FTransform((FVector)-CenterShift) );
 
 		FTransformMeshesTarget& ActiveTarget =
 			(TransformProps->TransformMode == ETransformMeshesTransformMode::PerObjectGizmo) ?

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "AppleHTTP.h"
@@ -424,6 +424,7 @@ void FAppleHttpRequest::CleanupRequest()
 
 void FAppleHttpRequest::CancelRequest()
 {
+	
 	UE_LOG(LogHttp, Verbose, TEXT("FAppleHttpRequest::CancelRequest()"));
 	if(Connection != nullptr)
 	{

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CoreMinimal.h"
 #include "LightingSystem.h"
@@ -644,7 +644,7 @@ void FStaticLightingSystem::SetupPrecomputedVisibility()
 		}
 	}
 	
-	const SIZE_T NumVisDataBytes = AllPrecomputedVisibilityCells.Num() * VisibilityMeshes.Num() / 8;
+	const SIZE_T NumVisDataBytes = static_cast<SIZE_T>(AllPrecomputedVisibilityCells.Num()) * VisibilityMeshes.Num() / 8;
 	Stats.NumPrecomputedVisibilityCellsTotal = AllPrecomputedVisibilityCells.Num();
 	Stats.NumPrecomputedVisibilityCellsCamaraTracks = AllPrecomputedVisibilityCells.Num() - NumCellsPlacedOnSurfaces;
 	Stats.NumPrecomputedVisibilityMeshes = VisibilityMeshes.Num();

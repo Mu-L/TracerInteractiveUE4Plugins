@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -39,6 +39,21 @@ struct FFrameNumberInterface : public INumericTypeInterface<double>
 		check(InTickResolutionAttr.IsSet());
 		check(InDisplayRateAttr.IsSet());
 	}
+
+	/** Gets the minimum and maximum fractional digits. */
+	virtual int32 GetMinFractionalDigits() const override
+	{
+		return 0;
+	}
+	virtual int32 GetMaxFractionalDigits() const override
+	{
+		return 0;
+	}
+
+	/** Sets the minimum and maximum fractional digits - A minimum greater than 0 will always have that many trailing zeros */
+	virtual void SetMinFractionalDigits(const TAttribute<TOptional<int32>>& NewValue) override {}
+
+	virtual void SetMaxFractionalDigits(const TAttribute<TOptional<int32>>& NewValue) override {}
 
 	/** Check whether the typed character is valid */
 	virtual bool IsCharacterValid(TCHAR InChar) const override

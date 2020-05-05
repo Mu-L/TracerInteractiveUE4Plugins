@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,7 +12,7 @@
 
 struct FImportImage
 {
-	TArray<uint8> RawData;
+	TArray64<uint8> RawData;
 	ETextureSourceFormat Format = TSF_Invalid;
 	TextureCompressionSettings CompressionSettings = TC_Default;
 	int32 NumMips;
@@ -20,10 +20,11 @@ struct FImportImage
 	int32 SizeY = 0;
 	bool SRGB = true;
 
-	void Init2D(int32 InSizeX, int32 InSizeY, ETextureSourceFormat InFormat, const void* InData = nullptr);
+	void Init2DWithParams(int32 InSizeX, int32 InSizeY, ETextureSourceFormat InFormat, bool InSRGB);
+	void Init2DWithOneMip(int32 InSizeX, int32 InSizeY, ETextureSourceFormat InFormat, const void* InData = nullptr);
 	void Init2DWithMips(int32 InSizeX, int32 InSizeY, int32 InNumMips, ETextureSourceFormat InFormat, const void* InData = nullptr);
 
-	int32 GetMipSize(int32 InMipIndex) const;
+	int64 GetMipSize(int32 InMipIndex) const;
 	void* GetMipData(int32 InMipIndex);
 };
 
@@ -119,8 +120,18 @@ class UNREALED_API UTextureFactory : public UFactory, public IImportSettingsPars
 	/** If enabled, we are using the existing settings for a texture that already existed. */
 	UPROPERTY(Transient)
 	uint32 bUsingExistingSettings:1;
-	
-	
+
+	/** If enabled, we are using the texture content hash as the guid. */
+	UPROPERTY(Transient)
+	uint32 bUseHashAsGuid:1;
+
+	/**
+	 * The pattern to use to match UDIM files to indices. Defaults to match a filename that ends with either .1001 or _1001
+	 * This 1st and 3rd (optional) capture groups are used as the texture name. The 2nd capture group is considered to be the UDIM index.
+	 * ie: (Capture Group 1)(\d{4})( Capture Group 3)
+	 */
+	UPROPERTY(Transient)
+	FString UdimRegexPattern;
 
 public:
 	UTextureFactory(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());

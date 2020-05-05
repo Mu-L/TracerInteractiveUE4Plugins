@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	VolumeLighting.h
@@ -14,6 +14,7 @@
 
 class FVolumeShadowingParameters
 {
+	DECLARE_TYPE_LAYOUT(FVolumeShadowingParameters, NonVirtual);
 public:
 
 	void Bind(const FShaderParameterMap& ParameterMap)
@@ -57,11 +58,12 @@ public:
 		// .zw:DistanceFadeMAD to use MAD for efficiency in the shader, default to ignore the plane
 		FVector4 ShadowInjectParamValue(1, 1, 0, 0);
 
-		if (InnerSplitIndex >= 0)
+		if (InnerSplitIndex != INDEX_NONE)
 		{
 			FShadowCascadeSettings ShadowCascadeSettings;
 
-			LightSceneInfo->Proxy->GetShadowSplitBounds(View, (uint32)InnerSplitIndex, LightSceneInfo->IsPrecomputedLightingValid(), &ShadowCascadeSettings);
+			LightSceneInfo->Proxy->GetShadowSplitBounds(View, InnerSplitIndex, LightSceneInfo->IsPrecomputedLightingValid(), &ShadowCascadeSettings);
+			ensureMsgf(ShadowCascadeSettings.ShadowSplitIndex != INDEX_NONE, TEXT("FLightSceneProxy::GetShadowSplitBounds did not return an initialized ShadowCascadeSettings"));
 
 			// near cascade plane
 			{
@@ -142,7 +144,7 @@ public:
 	}
 
 	/** Serializer. */ 
-	friend FArchive& operator<<(FArchive& Ar,FVolumeShadowingParameters& P)
+	/*friend FArchive& operator<<(FArchive& Ar,FVolumeShadowingParameters& P)
 	{
 		Ar << P.WorldToShadowMatrix;
 		Ar << P.ShadowmapMinMax;
@@ -158,21 +160,22 @@ public:
 		Ar << P.WorldToStaticShadowMatrix;
 		Ar << P.StaticShadowBufferSize;
 		return Ar;
-	}
+	}*/
 
 private:
-
-	FShaderParameter WorldToShadowMatrix;
-	FShaderParameter ShadowmapMinMax;
-	FShaderParameter DepthBiasParameters;
-	FShaderParameter ShadowInjectParams;
-	FShaderParameter ClippingPlanes;
-	FShaderResourceParameter ShadowDepthTexture;
-	FShaderResourceParameter ShadowDepthTextureSampler;
-	FOnePassPointShadowProjectionShaderParameters OnePassShadowParameters;
-	FShaderParameter bStaticallyShadowed;
-	FShaderResourceParameter StaticShadowDepthTexture;
-	FShaderResourceParameter StaticShadowDepthTextureSampler;
-	FShaderParameter WorldToStaticShadowMatrix;
-	FShaderParameter StaticShadowBufferSize;
+	
+		LAYOUT_FIELD(FShaderParameter, WorldToShadowMatrix)
+		LAYOUT_FIELD(FShaderParameter, ShadowmapMinMax)
+		LAYOUT_FIELD(FShaderParameter, DepthBiasParameters)
+		LAYOUT_FIELD(FShaderParameter, ShadowInjectParams)
+		LAYOUT_FIELD(FShaderParameter, ClippingPlanes)
+		LAYOUT_FIELD(FShaderResourceParameter, ShadowDepthTexture)
+		LAYOUT_FIELD(FShaderResourceParameter, ShadowDepthTextureSampler)
+		LAYOUT_FIELD(FOnePassPointShadowProjectionShaderParameters, OnePassShadowParameters)
+		LAYOUT_FIELD(FShaderParameter, bStaticallyShadowed)
+		LAYOUT_FIELD(FShaderResourceParameter, StaticShadowDepthTexture)
+		LAYOUT_FIELD(FShaderResourceParameter, StaticShadowDepthTextureSampler)
+		LAYOUT_FIELD(FShaderParameter, WorldToStaticShadowMatrix)
+		LAYOUT_FIELD(FShaderParameter, StaticShadowBufferSize)
+	
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Config/Parser/DisplayClusterConfigParser.h"
 
@@ -72,6 +72,11 @@ void FDisplayClusterConfigParser::AddGeneral(const FDisplayClusterConfigGeneral&
 void FDisplayClusterConfigParser::AddRender(const FDisplayClusterConfigRender& InCfgRender)
 {
 	ConfigParserListener->AddRender(InCfgRender);
+}
+
+void FDisplayClusterConfigParser::AddNvidia(const FDisplayClusterConfigNvidia& InCfgNvidia)
+{
+	ConfigParserListener->AddNvidia(InCfgNvidia);
 }
 
 void FDisplayClusterConfigParser::AddNetwork(const FDisplayClusterConfigNetwork& InCfgNetwork)

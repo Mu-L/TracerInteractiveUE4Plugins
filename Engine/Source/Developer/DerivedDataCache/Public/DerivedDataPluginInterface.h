@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -40,7 +40,7 @@ public:
 	/** Indicated that this plugin generates deterministic data. This is used for DDC verification */
 	virtual bool IsDeterministic() const { return false; }
 
-	/** Indicated that this plugin generates deterministic data. This is used for DDC verification */
+	/** A string used to describe the data being generated. Typically the path to the object that it is generated from is sufficient. */
 	virtual FString GetDebugContextString() const { return TEXT("Unknown Context"); }
 
 	/** 

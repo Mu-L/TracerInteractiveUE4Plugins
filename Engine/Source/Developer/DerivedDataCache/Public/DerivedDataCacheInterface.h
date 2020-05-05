@@ -1,23 +1,13 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/StringView.h"
 #include "Modules/ModuleInterface.h"
 
 class FDerivedDataCacheUsageStats;
-
-/** 
- * Opaque class for rollup handling
-**/
-class IDerivedDataRollup
-{
-public:
-	virtual ~IDerivedDataRollup()
-	{
-	}
-};
 
 /** 
  * Interface for the derived data cache
@@ -136,38 +126,61 @@ public:
 	//--------------------
 
 	/** 
-	 * Starts a rollup. Use this for GetAsynchronous calls, then call close on it
-	 * @return	a pointer to a rollup
-	**/
-	virtual IDerivedDataRollup* StartRollup() = 0;
-
-	/** 
-	 * Ends a rollup. Use this for GetAsynchronous calls, then call close on it
-	 * @param Rollup	reference to a pointer to the rollup to close...also sets the pointer to NULL
-	**/
-	virtual void EndRollup(IDerivedDataRollup*& Rollup) = 0;
-
-	/** 
 	 * Synchronously checks the cache and if the item is present, it returns the cached results, otherwise it returns false
 	 * @param	CacheKey	Key to identify the data
 	 * @return	true if the data was retrieved from the cache
 	**/
-	virtual bool GetSynchronous(const TCHAR* CacheKey, TArray<uint8>& OutData) = 0; 
+	UE_DEPRECATED(4.25, "'GetSynchronous' without a DebugContext is deprecated. Please provide a DebugContext!")
+	bool GetSynchronous(const TCHAR* CacheKey, TArray<uint8>& OutData) { return GetSynchronous(CacheKey, OutData, TEXT("Unknown Context")); }
 
 	/** 
 	 * Starts the async process of checking the cache and if the item is present, retrieving the cached results
-	 * @param	CacheKey	Key to identify the data
-	 * @param	Rollup		Rollup pointer, if this is part of a rollup
+	 * @param	CacheKey		Key to identify the data
 	 * @return	a handle that can be used for PollAsynchronousCompletion, WaitAsynchronousCompletion and GetAsynchronousResults
 	**/
-	virtual uint32 GetAsynchronous(const TCHAR* CacheKey, IDerivedDataRollup* Rollup = NULL) = 0;
+	UE_DEPRECATED(4.25, "'GetAsynchronous' without a DebugContext is deprecated. Please provide a DebugContext!")
+	uint32 GetAsynchronous(const TCHAR* CacheKey) { return GetAsynchronous(CacheKey, TEXT("Unknown Context")); }
 
 	/** 
 	 * Puts data into the cache. This is fire-and-forget and typically asynchronous.
 	 * @param	CacheKey	Key to identify the data
 	 * @param	Data		Data to put in the cache under this key
 	**/
-	virtual void Put(const TCHAR* CacheKey, TArray<uint8>& Data, bool bPutEvenIfExists = false) = 0;
+	UE_DEPRECATED(4.25, "'Put' without a DebugContext is deprecated. Please provide a DebugContext!")
+	void Put(const TCHAR* CacheKey, TArray<uint8>& Data, bool bPutEvenIfExists = false) { Put(CacheKey, Data, TEXT("Unknown Context"), bPutEvenIfExists); }
+
+	/** 
+	 * Synchronously checks the cache and if the item is present, it returns the cached results, otherwise it returns false.
+	 *
+	 * Prefer to use a FDerivedDataPluginInterface instead of generating the key directly.
+	 *
+	 * @param	CacheKey		Key to identify the data.
+	 * @param	DebugContext	A string used to describe the data being generated. Typically the path to the object that it is generated from is sufficient.
+	 * @return	true if the data was retrieved from the cache.
+	**/
+	virtual bool GetSynchronous(const TCHAR* CacheKey, TArray<uint8>& OutData, FStringView DebugContext) = 0; 
+
+	/** 
+	 * Starts the async process of checking the cache and if the item is present, retrieving the cached results.
+	 *
+	 * Prefer to use a FDerivedDataPluginInterface instead of generating the key directly.
+	 *
+	 * @param	CacheKey		Key to identify the data.
+	 * @param	DebugContext	A string used to describe the data being generated. Typically the path to the object that it is generated from is sufficient.
+	 * @return	A handle that can be used for PollAsynchronousCompletion, WaitAsynchronousCompletion, and GetAsynchronousResults.
+	**/
+	virtual uint32 GetAsynchronous(const TCHAR* CacheKey, FStringView DebugContext) = 0;
+
+	/** 
+	 * Puts data into the cache. This is fire-and-forget and typically asynchronous.
+	 *
+	 * Prefer to use a FDerivedDataPluginInterface instead of generating the key directly.
+	 *
+	 * @param	CacheKey	Key to identify the data
+	 * @param	Data		Data to put in the cache under this key
+	 * @param	DataContext	A string used to describe the data being generated. Typically the path to the object that it is generated from is sufficient.
+	**/
+	virtual void Put(const TCHAR* CacheKey, TArray<uint8>& Data, FStringView DataContext, bool bPutEvenIfExists = false) = 0;
 
 	/**
 	 * Hint that the data associated with the key is transient and may be optionally purged from the cache.

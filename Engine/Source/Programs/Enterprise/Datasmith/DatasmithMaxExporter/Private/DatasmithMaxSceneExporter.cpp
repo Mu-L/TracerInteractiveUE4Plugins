@@ -1,14 +1,15 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "DatasmithMaxSceneExporter.h"
 
 #include "DatasmithMaxAttributes.h"
-#include "DatasmithMaxExporterDefines.h"
-#include "DatasmithSceneFactory.h"
-#include "DatasmithSceneExporter.h"
 #include "DatasmithMaxCameraExporter.h"
+#include "DatasmithMaxExporterDefines.h"
+#include "DatasmithMaxHelper.h"
+#include "DatasmithMaxLogger.h"
 #include "DatasmithMaxSceneParser.h"
 #include "DatasmithMaxWriter.h"
-#include "DatasmithMaxLogger.h"
+#include "DatasmithSceneExporter.h"
+#include "DatasmithSceneFactory.h"
 #include "VRayLights.h"
 
 #include "GenericPlatform/GenericPlatformFile.h"
@@ -197,6 +198,7 @@ int FDatasmithMaxSceneExporter::GetSeedFromMaterial(Mtl* Material)
 				Seed = ParamBlock2->GetInt(ParamDefinition.ID);
 			}
 		}
+		ParamBlock2->ReleaseDesc();
 	}
 	return Seed;
 }
@@ -331,28 +333,57 @@ void FDatasmithMaxSceneExporter::ExportMeshActor(TSharedRef< IDatasmithScene > D
 }
 
 TSharedRef< IDatasmithActorElement > FDatasmithMaxSceneExporter::ExportHierarchicalInstanceStaticMeshActor(TSharedRef< IDatasmithScene > DatasmithScene, INode* Node, INode* CustomMeshNode, const TCHAR* Label, TSet<uint16>& SupportedChannels, Mtl* StaticMeshMtl, const TArray<Matrix3>* Instances,
-	const TCHAR* MeshName, float UnitMultiplier, const EStaticMeshExportMode& ExportMode)
+	const TCHAR* MeshName, float UnitMultiplier, const EStaticMeshExportMode& ExportMode, TSharedPtr< IDatasmithActorElement >& OutInversedHISMActor)
 {
 	check( Node && Instances && MeshName);
 
 	TSharedPtr< IDatasmithMeshActorElement > MeshActor;
+	FVector Pos, Scale;
+	FQuat Rotation;
+
+	const FVector RandomSeed(FMath::Rand(), FMath::Rand(), FMath::Rand());
+	auto FinalizeHISMActor = [&](TSharedPtr< IDatasmithMeshActorElement >& FinalizingActor, FVector Seed, const TCHAR* ActorLabel)
+	{
+		FinalizingActor->SetStaticMeshPathName(MeshName);
+
+		INode* MeshNode = CustomMeshNode ? CustomMeshNode : Node;
+
+		if (ExportMode == EStaticMeshExportMode::Default && StaticMeshMtl != MeshNode->GetMtl())
+		{
+			TSharedRef< IDatasmithMeshActorElement > MeshActorRef = FinalizingActor.ToSharedRef();
+			ParseMaterialForMeshActor(StaticMeshMtl, MeshActorRef, SupportedChannels, Seed);
+		}
+
+		if (ActorLabel)
+		{
+			FinalizingActor->SetLabel(ActorLabel);
+		}
+
+		FinalizingActor->SetIsAComponent(true);
+
+		switch (ExportMode)
+		{
+		case EStaticMeshExportMode::BoundingBox:
+			FinalizingActor->AddTag(TEXT("Datasmith.Attributes.Geometry: BoundingBox"));
+			break;
+		default:
+			break;
+		}
+	};
+
+	if (Node->GetWSMDerivedObject() != nullptr)
+	{
+		MaxToUnrealCoordinates(Node->GetObjTMAfterWSM(GetCOREInterface()->GetTime()), Pos, Rotation, Scale, UnitMultiplier);
+	}
+	else
+	{
+		MaxToUnrealCoordinates(Node->GetObjectTM(GetCOREInterface()->GetTime()), Pos, Rotation, Scale, UnitMultiplier);
+	}
 
 	const int32 InstancesCount = Instances->Num();
-	if (InstancesCount == 1)
+	if ( InstancesCount == 1 )
 	{
 		// Export the the hism as a normal static mesh
-		FVector Pos, Scale;
-		FQuat Rotation;
-
-		if (Node->GetWSMDerivedObject() != nullptr)
-		{
-			MaxToUnrealCoordinates(Node->GetObjTMAfterWSM(GetCOREInterface()->GetTime()), Pos, Rotation, Scale, UnitMultiplier);
-		}
-		else
-		{
-			MaxToUnrealCoordinates(Node->GetObjectTM(GetCOREInterface()->GetTime()), Pos, Rotation, Scale, UnitMultiplier);
-		}
-
 		MeshActor = FDatasmithSceneFactory::CreateMeshActor(MeshName);
 
 		// Apply the relative transfrom of the instance to the forest world transform
@@ -361,71 +392,70 @@ TSharedRef< IDatasmithActorElement > FDatasmithMaxSceneExporter::ExportHierarchi
 		FQuat InstanceRotation;
 		MaxToUnrealCoordinates((*Instances)[0], InstancePos, InstanceRotation, InstanceScale, UnitMultiplier);
 		FTransform WithInstance(WithoutInstance * FTransform(InstanceRotation, InstancePos, InstanceScale));
-		Pos = WithInstance.GetLocation();
-		Scale = WithInstance.GetScale3D();
-		Rotation = WithInstance.GetRotation();
 
-		MeshActor->SetTranslation(Pos);
-		MeshActor->SetScale(Scale);
-		MeshActor->SetRotation(Rotation);
+		MeshActor->SetTranslation(WithInstance.GetLocation());
+		MeshActor->SetScale(WithInstance.GetScale3D());
+		MeshActor->SetRotation(WithInstance.GetRotation());
 	}
-	else 
+	else
 	{
-		TSharedRef< IDatasmithHierarchicalInstancedStaticMeshActorElement > HierarchicalInstanceStaticMeshActor = FDatasmithSceneFactory::CreateHierarchicalInstanceStaticMeshActor( MeshName );
-
+		TSharedRef< IDatasmithHierarchicalInstancedStaticMeshActorElement > HierarchicalInstanceStaticMeshActor = FDatasmithSceneFactory::CreateHierarchicalInstanceStaticMeshActor(MeshName);
 		MeshActor = HierarchicalInstanceStaticMeshActor;
 
-		FVector Pos, Scale;
-		FQuat Rotation;
-		if (Node->GetWSMDerivedObject() != nullptr)
-		{
-			MaxToUnrealCoordinates(Node->GetObjTMAfterWSM(GetCOREInterface()->GetTime()), Pos, Rotation, Scale, UnitMultiplier);
-		}
-		else
-		{
-			MaxToUnrealCoordinates(Node->GetObjectTM(GetCOREInterface()->GetTime()), Pos, Rotation, Scale, UnitMultiplier);
-		}
-
+		FTransform HISMActorTransform(Rotation, Pos, Scale);
 		MeshActor->SetTranslation(Pos);
 		MeshActor->SetScale(Scale);
 		MeshActor->SetRotation(Rotation);
 
-
-		HierarchicalInstanceStaticMeshActor->ReserveSpaceForInstances( InstancesCount );
-
-		for ( int32 i = 0; i < InstancesCount; i++ )
+		TArray< FTransform > InstancesTransform;
+		InstancesTransform.Reserve(InstancesCount);
+		for (int32 i = 0; i < InstancesCount; i++)
 		{
-			MaxToUnrealCoordinates( (*Instances)[i], Pos, Rotation, Scale, UnitMultiplier );
+			MaxToUnrealCoordinates((*Instances)[i], Pos, Rotation, Scale, UnitMultiplier);
+			InstancesTransform.Emplace(Rotation, Pos, Scale);
+		}
 
-			HierarchicalInstanceStaticMeshActor->AddInstance( FTransform(Rotation, Pos, Scale) );
+		TArray< FTransform > NonInvertedTransforms, InvertedTransforms;
+		DatasmithMaxHelper::FilterInvertedScaleTransforms(InstancesTransform, NonInvertedTransforms, InvertedTransforms);
+
+		HierarchicalInstanceStaticMeshActor->ReserveSpaceForInstances(NonInvertedTransforms.Num());
+		for (const FTransform& InstanceTransform : NonInvertedTransforms)
+		{
+			HierarchicalInstanceStaticMeshActor->AddInstance(InstanceTransform);
+		}
+
+		//Adding an inverted HierarchicalInstancedStaticMeshActorElement for the instances with an inverted mesh due to negative scaling.
+		if (InvertedTransforms.Num() > 0)
+		{
+			FString InvertedHISMName = FString(MeshName).Append("_inv");
+			TSharedPtr< IDatasmithHierarchicalInstancedStaticMeshActorElement > InvertedHierarchicalInstanceStaticMeshActor = FDatasmithSceneFactory::CreateHierarchicalInstanceStaticMeshActor(*InvertedHISMName);
+			OutInversedHISMActor = InvertedHierarchicalInstanceStaticMeshActor;
+
+			OutInversedHISMActor->SetTranslation( HISMActorTransform.GetTranslation() );
+			OutInversedHISMActor->SetScale( -1 * HISMActorTransform.GetScale3D() );
+			OutInversedHISMActor->SetRotation( HISMActorTransform.GetRotation() );
+			
+			InvertedHierarchicalInstanceStaticMeshActor->ReserveSpaceForInstances(InvertedTransforms.Num());
+			for (const FTransform& InstanceTransform : InvertedTransforms)
+			{
+				//Correcting the instance transform to reverse the negative scaling of the parent.
+				InvertedHierarchicalInstanceStaticMeshActor->AddInstance( FTransform( InstanceTransform.GetRotation(), -1 * InstanceTransform.GetTranslation(), -1 * InstanceTransform.GetScale3D() ) );
+			}
+
+			TSharedPtr< IDatasmithMeshActorElement > InvertedMeshActor = InvertedHierarchicalInstanceStaticMeshActor;
+			if (Label)
+			{
+				FString InversedLabelString = FString(Label).Append("_inv");
+				FinalizeHISMActor(InvertedMeshActor, RandomSeed, *InversedLabelString);
+			}
+			else
+			{
+				FinalizeHISMActor(InvertedMeshActor, RandomSeed, nullptr);
+			}
 		}
 	}
-	
-	MeshActor->SetStaticMeshPathName( MeshName );
 
-	INode* MeshNode = CustomMeshNode ? CustomMeshNode : Node;
-
-	if (ExportMode == EStaticMeshExportMode::Default && StaticMeshMtl != MeshNode->GetMtl())
-	{
-		TSharedRef< IDatasmithMeshActorElement > MeshActorRef = MeshActor.ToSharedRef();
-		ParseMaterialForMeshActor( StaticMeshMtl, MeshActorRef, SupportedChannels, FVector( FMath::Rand(), FMath::Rand(), FMath::Rand() ) );
-	}
-
-	if (Label)
-	{
-		MeshActor->SetLabel( Label );
-	}
-
-	MeshActor->SetIsAComponent( true );
-
-	switch ( ExportMode )
-	{
-	case EStaticMeshExportMode::BoundingBox:
-		MeshActor->AddTag(TEXT("Datasmith.Attributes.Geometry: BoundingBox"));
-		break;
-	default:
-		break;
-	}
+	FinalizeHISMActor(MeshActor, RandomSeed, Label);
 
 	return MeshActor.ToSharedRef();
 }
@@ -480,7 +510,7 @@ void FDatasmithMaxSceneExporter::ParseMaterialForMeshActor(Mtl* Material, TShare
 		}
 		else
 		{
-			int ActualSubObj = 0;
+			int ActualSubObj = 1;
 			SupportedChannels.Sort([](const uint16& A, const uint16& B) { return (A < B); });
 			for (const uint16 Mid : SupportedChannels)
 			{
@@ -505,11 +535,12 @@ void FDatasmithMaxSceneExporter::ParseMaterialForMeshActor(Mtl* Material, TShare
 					{
 						if (FDatasmithMaxMatHelper::GetMaterialClass(SubMaterial) != EDSMaterialType::TheaRandom)
 						{
-							MeshActor->AddMaterialOverride(SubMaterial->GetName().data(), Mid);
+							//Material slots in Max are not zero-based, so we serialize our SlotID starting from 1 for better visual consistency.
+							MeshActor->AddMaterialOverride(SubMaterial->GetName().data(), Mid + 1);
 						}
 						else
 						{
-							MeshActor->AddMaterialOverride( *GetRandomSubMaterial(SubMaterial, RandomSeed), MaterialIndex );
+							MeshActor->AddMaterialOverride( *GetRandomSubMaterial(SubMaterial, RandomSeed), MaterialIndex + 1 );
 						}
 					}
 				}
@@ -677,6 +708,8 @@ TSharedPtr< IDatasmithLightActorElement > FDatasmithMaxSceneExporter::CreateLigh
 				}
 			}
 		}
+
+		ParamBlock2->ReleaseDesc();
 	}
 
 	TSharedPtr< IDatasmithElement > Element = FDatasmithSceneFactory::CreateElement( LightType, Name );
@@ -1183,6 +1216,8 @@ bool FDatasmithMaxSceneExporter::ParseCoronaLight(LightObject& Light, TSharedRef
 				}
 			}
 		}
+
+		ParamBlock2->ReleaseDesc();
 	}
 
 	if ( !bLightShapeVisible)
@@ -1614,6 +1649,8 @@ bool FDatasmithMaxSceneExporter::ParseVRayLightIES(LightObject& Light, TSharedRe
 				PointLightElement->SetTemperature( ParamBlock2->GetFloat( ParamDefinition.ID, GetCOREInterface()->GetTime() ) );
 			}
 		}
+
+		ParamBlock2->ReleaseDesc();
 	}
 
 	if ( PointLightElement->GetUseTemperature() )
@@ -1689,6 +1726,8 @@ bool FDatasmithMaxSceneExporter::ParseVRayLightIES(LightObject& Light, TSharedRe
 					}
 				}
 			}
+
+			ParamBlock2->ReleaseDesc();
 		}
 
 		if ( bUseLightShape  )
@@ -1817,6 +1856,8 @@ bool FDatasmithMaxSceneExporter::ParseLightParameters(EMaxLightClass LightClass,
 				}
 			}
 		}
+
+		ParamBlock2->ReleaseDesc();
 	}
 
 	if ( LightElement->GetUseTemperature() )

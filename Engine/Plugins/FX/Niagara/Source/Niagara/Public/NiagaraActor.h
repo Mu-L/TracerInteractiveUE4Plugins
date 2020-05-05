@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -11,6 +11,14 @@ UCLASS(MinimalAPI, hideCategories = (Activation, "Components|Activation", Input,
 class ANiagaraActor : public AActor
 {
 	GENERATED_UCLASS_BODY()
+
+public:
+
+	virtual void PostRegisterAllComponents() override;
+
+	/** Set true for this actor to self-destruct when the Niagara system finishes, false otherwise */
+	UFUNCTION(BlueprintCallable, Category=NiagaraActor)
+	NIAGARA_API void SetDestroyOnSystemFinish(bool bShouldDestroyOnSystemFinish);
 
 private:
 	/** Pointer to System component */
@@ -27,6 +35,14 @@ private:
 	class UArrowComponent* ArrowComponent;
 
 #endif
+
+	/** True for this actor to self-destruct when the Niagara system finishes, false otherwise */
+	UPROPERTY()
+	uint32 bDestroyOnSystemFinish : 1;
+
+	/** Callback when Niagara system finishes. */
+	UFUNCTION(CallInEditor)
+	void OnNiagaraSystemFinished(UNiagaraComponent* FinishedComponent);
 
 public:
 	/** Returns NiagaraComponent subobject **/

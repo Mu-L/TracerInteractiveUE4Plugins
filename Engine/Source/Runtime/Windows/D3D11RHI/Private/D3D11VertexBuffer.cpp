@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	D3D11VertexBuffer.cpp: D3D vertex buffer RHI implementation.
@@ -81,11 +81,18 @@ FVertexBufferRHIRef FD3D11DynamicRHI::RHICreateVertexBuffer(uint32 Size,uint32 I
 	}
 
 	TRefCountPtr<ID3D11Buffer> VertexBufferResource;
+	check(Desc.ByteWidth != 0); //tracking down an elusive bug.
 	HRESULT Result = Direct3DDevice->CreateBuffer(&Desc, pInitData, VertexBufferResource.GetInitReference());
+	check(Desc.ByteWidth != 0); //tracking down an elusive bug.
 	if (FAILED(Result))
 	{
 		UE_LOG(LogD3D11RHI, Error, TEXT("D3DDevice failed CreateBuffer VB with ByteWidth=%d, BindFlags=0x%x Usage=%d, CPUAccess=0x%x, MiscFlags=0x%x"), Desc.ByteWidth, (uint32)Desc.BindFlags, (uint32)Desc.Usage, Desc.CPUAccessFlags, Desc.MiscFlags);
 		VERIFYD3D11RESULT_EX(Result, Direct3DDevice);
+	}
+
+	if (CreateInfo.DebugName)
+	{
+		VertexBufferResource->SetPrivateData(WKPDID_D3DDebugObjectName, FCString::Strlen(CreateInfo.DebugName) + 1, TCHAR_TO_ANSI(CreateInfo.DebugName));
 	}
 
 	UpdateBufferStats(VertexBufferResource, true);

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -58,7 +58,12 @@ protected:
 	mutable TEnumAsByte<EBTNodeResult::Type> CurrentCallResult;
 
 	/** properties that should be copied */
-	TArray<UProperty*> PropertyData;
+	TArray<FProperty*> PropertyData;
+
+#if WITH_EDITORONLY_DATA
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = Description)
+	FString CustomDescription;
+#endif // WITH_EDITORONLY_DATA
 
 	/** show detailed information about properties */
 	UPROPERTY(EditInstanceOnly, Category=Description)

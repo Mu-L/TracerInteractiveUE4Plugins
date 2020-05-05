@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -36,6 +36,10 @@ class UEditorPerformanceSettings : public UDeveloperSettings
 	/** When enabled, Shared Data Cache performance notifications may be displayed when not connected to a shared cache */
 	UPROPERTY(EditAnywhere, config, Category = EditorPerformance, meta = (DisplayName = "Enable Shared Data Cache Performance Notifications"))
 	uint32 bEnableSharedDDCPerformanceNotifications : 1;
+
+	/** When enabled, a warning will appear in the viewport when your editors scalability settings are non-default and you may be viewing a low quality scene */
+	UPROPERTY(EditAnywhere, config, Category = EditorPerformance, meta = (DisplayName = "Enable Scalability Warning Indicator"))
+	uint32 bEnableScalabilityWarningIndicator : 1;
 
 public:
 	/** UObject interface */

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SynthesisModule.h"
 #include "CoreMinimal.h"
@@ -14,6 +14,8 @@ IMPLEMENT_MODULE(FSynthesisModule, Synthesis)
 void FSynthesisModule::StartupModule()
 {
 	FSynthSlateStyleSet::Initialize();
+
+	FModuleManager::Get().LoadModuleChecked(TEXT("SignalProcessing"));
 }
 
 void FSynthesisModule::ShutdownModule()

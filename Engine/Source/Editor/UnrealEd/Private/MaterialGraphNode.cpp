@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	MaterialGraphNode.cpp
@@ -363,8 +363,7 @@ void UMaterialGraphNode::GetNodeContextMenuActions(UToolMenu* Menu, UGraphNodeCo
 				|| (MaterialExpression->IsA(UMaterialExpressionTextureSample::StaticClass()) && !MaterialExpression->HasAParameterName())
 				|| (MaterialExpression->IsA(UMaterialExpressionRuntimeVirtualTextureSample::StaticClass()) && !MaterialExpression->HasAParameterName())
 				|| MaterialExpression->IsA(UMaterialExpressionTextureObject::StaticClass())
-				|| MaterialExpression->IsA(UMaterialExpressionComponentMask::StaticClass())
-				|| MaterialExpression->IsA(UMaterialExpressionMaterialFunctionCall::StaticClass()))
+				|| MaterialExpression->IsA(UMaterialExpressionComponentMask::StaticClass()))
 			{
 				{
 					FToolMenuSection& Section = Menu->AddSection("MaterialEditorMenu1");
@@ -715,18 +714,18 @@ void UMaterialGraphNode::OnRenameNode(const FString& NewName)
 	SetParameterName(NewName);
 	MaterialExpression->MarkPackageDirty();
 	MaterialExpression->ValidateParameterName();
-	UProperty* NameProperty = nullptr;
+	FProperty* NameProperty = nullptr;
 	if (Cast<UMaterialExpressionParameter>(MaterialExpression))
 	{
-		NameProperty = FindFieldChecked<UProperty>(UMaterialExpressionParameter::StaticClass(), GET_MEMBER_NAME_CHECKED(UMaterialExpressionParameter, ParameterName));
+		NameProperty = FindFieldChecked<FProperty>(UMaterialExpressionParameter::StaticClass(), GET_MEMBER_NAME_CHECKED(UMaterialExpressionParameter, ParameterName));
 	}
 	else if (Cast<UMaterialExpressionFontSampleParameter>(MaterialExpression))
 	{
-		NameProperty = FindFieldChecked<UProperty>(UMaterialExpressionFontSampleParameter::StaticClass(), GET_MEMBER_NAME_CHECKED(UMaterialExpressionFontSampleParameter, ParameterName));
+		NameProperty = FindFieldChecked<FProperty>(UMaterialExpressionFontSampleParameter::StaticClass(), GET_MEMBER_NAME_CHECKED(UMaterialExpressionFontSampleParameter, ParameterName));
 	}
 	else if (Cast<UMaterialExpressionTextureSampleParameter>(MaterialExpression))
 	{
-		NameProperty = FindFieldChecked<UProperty>(UMaterialExpressionTextureSampleParameter::StaticClass(), GET_MEMBER_NAME_CHECKED(UMaterialExpressionTextureSampleParameter, ParameterName));
+		NameProperty = FindFieldChecked<FProperty>(UMaterialExpressionTextureSampleParameter::StaticClass(), GET_MEMBER_NAME_CHECKED(UMaterialExpressionTextureSampleParameter, ParameterName));
 	}
 	if(NameProperty)
 	{

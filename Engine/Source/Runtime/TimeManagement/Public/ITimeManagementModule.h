@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -9,6 +9,7 @@
 
 #define TIMEMANAGEMENT_MODULE_NAME TEXT("TimeManagement")
 
+class FTimedDataInputCollection;
 
 class TIMEMANAGEMENT_API ITimeManagementModule : public IModuleInterface
 {
@@ -31,4 +32,7 @@ public:
 	{
 		return FModuleManager::Get().IsModuleLoaded(TIMEMANAGEMENT_MODULE_NAME);
 	}
+
+	/** Get the collection of the ITimedDataInput and ITimedDataInputGroups. */
+	virtual FTimedDataInputCollection& GetTimedDataInputCollection() = 0;
 };

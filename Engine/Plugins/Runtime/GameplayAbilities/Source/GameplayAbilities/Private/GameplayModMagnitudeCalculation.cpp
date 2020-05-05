@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GameplayModMagnitudeCalculation.h"
 
@@ -34,7 +34,7 @@ bool UGameplayModMagnitudeCalculation::GetCapturedAttributeMagnitude(const FGame
 	}
 	if (CaptureSpec->AttemptCalculateAttributeMagnitude(EvaluationParameters, Magnitude) == false)
 	{
-		ABILITY_LOG(Error, TEXT("GetCapturedAttributeMagnitude unable to calculate Health attribute magnitude."));
+		ABILITY_LOG(Error, TEXT("GetCapturedAttributeMagnitude unable to calculate attribute magnitude."));
 		return false;
 	}
 

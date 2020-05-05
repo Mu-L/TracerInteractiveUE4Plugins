@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -36,7 +36,7 @@ enum class ECurveTableMode : uint8
  * Imported spreadsheet table as curves.
  */
 UCLASS(MinimalAPI)
-class ENGINE_VTABLE UCurveTable
+class UCurveTable
 	: public UObject
 	, public FCurveOwnerInterface
 {
@@ -162,7 +162,8 @@ public:
 	ENGINE_API FString GetTableAsJSON() const;
 
 	/** Output entire contents of table as JSON. bAsArray true will write is as a JSON array, false will write it as a series of named objects*/
-	ENGINE_API bool WriteTableAsJSON(const TSharedRef< TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR> > >& JsonWriter,bool bAsArray = true) const;
+	template <typename CharType = TCHAR>
+	ENGINE_API bool WriteTableAsJSON(const TSharedRef< TJsonWriter<CharType, TPrettyJsonPrintPolicy<CharType> > >& JsonWriter,bool bAsArray = true) const;
 
 	/** 
 	 *	Create table from CSV style comma-separated string. 
@@ -236,7 +237,7 @@ struct ENGINE_API FCurveTableRowHandle
 	{ }
 
 	/** Pointer to table we want a row from */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=CurveTableRowHandle)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=CurveTableRowHandle, meta=(DisplayThumbnail="false"))
 	const class UCurveTable*	CurveTable;
 
 	/** Name of row in the table that we want */

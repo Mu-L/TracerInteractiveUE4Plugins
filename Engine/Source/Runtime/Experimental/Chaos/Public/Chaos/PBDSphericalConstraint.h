@@ -1,7 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "ParticleRule.h"
+#include "ChaosStats.h"
+
+DECLARE_CYCLE_STAT(TEXT("Chaos PBD Spherical Constraints"), STAT_PBD_Spherical, STATGROUP_Chaos);
 
 namespace Chaos
 {
@@ -11,14 +14,21 @@ class PBDSphericalConstraint : public TParticleRule<T, d>
 {
 public:
 	PBDSphericalConstraint(
-		const uint32 InFirstParticleIndex,
-		const uint32 InParticleCount,
-		bool bInside,
-		const TArray<TVector<T, d>>* const InSpherePositions,
-		const TArray<T>* const InSphereRadii,
-		const TArray <T>* const InSphereOffsetDistances = nullptr,
-		const TArray<TVector<T, d>>* const InSphereOffsetDirections = nullptr)
-		: FirstParticleIndex(InFirstParticleIndex), ParticleCount(InParticleCount), bConstraintInsideOfSphere(bInside), SpherePositions(InSpherePositions), SphereRadii(InSphereRadii), SphereOffsetDistances(InSphereOffsetDistances), SphereOffsetDirections(InSphereOffsetDirections)
+		const uint32 InFirstParticleIndex
+		, const uint32 InParticleCount
+		, bool bInside
+		, const TArray<TVector<T, d>>* const InSpherePositions
+		, const TArray<T>* const InSphereRadii
+		, const TArray <T>* const InSphereOffsetDistances = nullptr
+		, const TArray<TVector<T, d>>* const InSphereOffsetDirections = nullptr
+	)
+		: FirstParticleIndex(InFirstParticleIndex), ParticleCount(InParticleCount)
+		, bConstraintInsideOfSphere(bInside)
+		, SpherePositions(InSpherePositions)
+		, SphereRadii(InSphereRadii)
+		, SphereOffsetDistances(InSphereOffsetDistances)
+		, SphereOffsetDirections(InSphereOffsetDirections)
+		, SphereRadiiMultiplier(1.f)
 	{
 		check(SphereRadii);
 		check(SpherePositions);
@@ -27,6 +37,7 @@ public:
 
 	inline void Apply(TPBDParticles<T, d>& InParticles, const T Dt) const override
 	{
+		SCOPE_CYCLE_COUNTER(STAT_PBD_Spherical);
 		const T CenterDeadZoneRadius = KINDA_SMALL_NUMBER; // We will not push the particle away in the dead zone
 
 		PhysicsParallelFor(ParticleCount, [&](int32 Index)
@@ -36,7 +47,7 @@ public:
 				return;
 			}
 			
-			const T Radius = (*SphereRadii)[Index];
+			const T Radius = (*SphereRadii)[Index] * SphereRadiiMultiplier;
 			TVector<T, d> Centre = (*SpherePositions)[Index + FirstParticleIndex];
 			if (SphereOffsetDistances && SphereOffsetDirections)
 			{
@@ -56,6 +67,11 @@ public:
 		});
 	}
 
+	inline void SetSphereRadiiMultiplier(const T InSphereRadiiMultiplier)
+	{
+		SphereRadiiMultiplier = InSphereRadiiMultiplier;
+	}
+
 private:	
 	const uint32 FirstParticleIndex; // TODO: Get rid of this member variable (this is specific to a temporary cloth instancing implementation)
 	const uint32 ParticleCount;
@@ -66,6 +82,8 @@ private:
 
 	const TArray<T>* const SphereOffsetDistances;  // Optional Sphere position offsets // start at index 0
 	const TArray<TVector<T, d>>* const SphereOffsetDirections; //	Optional Sphere offset directions (TBD: This is really implementation specific to backstop constraints, consider creating a specialized constraint instead).
+
+	T SphereRadiiMultiplier;
 };
 
 }

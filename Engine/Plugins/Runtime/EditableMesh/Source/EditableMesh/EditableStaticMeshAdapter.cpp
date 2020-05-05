@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "EditableStaticMeshAdapter.h"
 #include "EditableMesh.h"
@@ -624,7 +624,6 @@ void UEditableStaticMeshAdapter::OnRebuildRenderMesh( const UEditableMesh* Edita
 
 			StaticMeshSection.FirstIndex = IndexBuffer.Num();
 			StaticMeshSection.NumTriangles = RenderingPolygonGroup.Triangles.GetArraySize();
-			check( RenderingPolygonGroup.Triangles.GetArraySize() <= RenderingPolygonGroup.MaxTriangles );
 
 			const int32 MaterialIndex = StaticMesh->GetMaterialIndexFromImportedMaterialSlotName( PolygonGroupImportedMaterialSlotNames[ PolygonGroupID ] );
 			//check( MaterialIndex != INDEX_NONE );
@@ -682,6 +681,10 @@ void UEditableStaticMeshAdapter::OnRebuildRenderMesh( const UEditableMesh* Edita
 				// No triangles in this section
 				StaticMeshSection.MinVertexIndex = 0;
 				StaticMeshSection.MaxVertexIndex = 0;
+				StaticMeshSection.NumTriangles = 0;
+
+				// Setting this to 0 allows the adapter to allocate more index buffer in OnRetriangulatePolygons (for example, when undoing delete polygons)
+				RenderingPolygonGroup.MaxTriangles = 0;
 			}
 		}
 	}
@@ -1424,6 +1427,7 @@ void UEditableStaticMeshAdapter::OnRetriangulatePolygons( const UEditableMesh* E
 					}
 				}
 
+				// Add triangles to rendering section
 				if( !EditableMesh->IsPreviewingSubdivisions() )
 				{
 					for( int32 TriangleToAddNumber = 0; TriangleToAddNumber < NumNewTriangles; ++TriangleToAddNumber )
@@ -1445,6 +1449,7 @@ void UEditableStaticMeshAdapter::OnRetriangulatePolygons( const UEditableMesh* E
 
 					RenderingSection.MinVertexIndex = MinVertexIndex;
 					RenderingSection.MaxVertexIndex = MaxVertexIndex;
+					check(RenderingSection.NumTriangles <=  (uint32) RenderingPolygonGroup.MaxTriangles);
 				}
 			}
 		}

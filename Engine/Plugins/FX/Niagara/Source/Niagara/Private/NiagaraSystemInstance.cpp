@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraSystemInstance.h"
 #include "NiagaraConstants.h"
@@ -13,6 +13,8 @@
 #include "Templates/AlignmentTemplates.h"
 #include "NiagaraEmitterInstanceBatcher.h"
 #include "GameFramework/PlayerController.h"
+#include "NiagaraCrashReporterHandler.h"
+#include "Async/Async.h"
 
 
 DECLARE_CYCLE_STAT(TEXT("System Activate [GT]"), STAT_NiagaraSystemActivate, STATGROUP_Niagara);
@@ -40,7 +42,7 @@ static FAutoConsoleVariableRef CVarWaitForAsyncStallWarnThresholdMS(
 );
 
 /** Safety time to allow for the LastRenderTime coming back from the RT. This is overkill but that's ok.*/
-static float GLastRenderTimeSafetyBias = 0.1f;
+float GLastRenderTimeSafetyBias = 0.1f;
 static FAutoConsoleVariableRef CVarLastRenderTimeSafetyBias(
 	TEXT("fx.LastRenderTimeSafetyBias"),
 	GLastRenderTimeSafetyBias,
@@ -71,26 +73,31 @@ FNiagaraSystemInstance::FNiagaraSystemInstance(UNiagaraComponent* InComponent)
 	, TickBehavior(InComponent ? InComponent->GetTickBehavior() : ENiagaraTickBehavior::UsePrereqs)
 	, Age(0.0f)
 	, TickCount(0)
-	, InstanceParameters(Component)
+	, CurrentFrameIndex(1)
+	, ParametersValid(false)
 	, bSolo(false)
 	, bForceSolo(false)
 	, bPendingSpawn(false)
-	, bHasTickingEmitters(true)
 	, bPaused(false)
 	, bDataInterfacesHaveTickPrereqs(false)
 	, bIsTransformDirty(true)
 	, bNeedsFinalize(false)
 	, bDataInterfacesInitialized(false)
 	, bAlreadyBound(false)
+	, bLODDistanceIsValid(false)
 	, bAsyncWorkInProgress(false)
 	, CachedDeltaSeconds(0.0f)
 	, RequestedExecutionState(ENiagaraExecutionState::Complete)
 	, ActualExecutionState(ENiagaraExecutionState::Complete)
+	, FeatureLevel(GMaxRHIFeatureLevel)
 {
 	static TAtomic<uint64> IDCounter(1);
 	ID = IDCounter.IncrementExchange();
 
 	LocalBounds = FBox(FVector::ZeroVector, FVector::ZeroVector);
+	InstanceParameters.SetOwner(Component);
+
+	LODDistance = 0.0f;
 
 	if (Component)
 	{
@@ -102,6 +109,7 @@ FNiagaraSystemInstance::FNiagaraSystemInstance(UNiagaraComponent* InComponent)
 			{
 				Batcher = static_cast<NiagaraEmitterInstanceBatcher*>(FXSystemInterface->GetInterface(NiagaraEmitterInstanceBatcher::Name));
 			}
+			FeatureLevel = World->FeatureLevel;
 		}
 	}
 }
@@ -109,8 +117,13 @@ FNiagaraSystemInstance::FNiagaraSystemInstance(UNiagaraComponent* InComponent)
 
 void FNiagaraSystemInstance::SetEmitterEnable(FName EmitterName, bool bNewEnableState)
 {
-	WaitForAsyncTick();
+	WaitForAsyncTickAndFinalize();
 
+
+	UE_LOG(LogNiagara, Warning, TEXT("SetEmitterEnable: Emitter \"%s\" is not currently implemented."), *EmitterName.ToString());
+	return;
+
+	/*
 	UNiagaraSystem* System = GetSystem();
 	if (System != nullptr)
 	{
@@ -151,13 +164,13 @@ void FNiagaraSystemInstance::SetEmitterEnable(FName EmitterName, bool bNewEnable
 		{
 			UE_LOG(LogNiagara, Log, TEXT("SetEmitterEnable: Emitter \"%s\" was not found in the system's list of emitters!"), *EmitterName.ToString());
 		}
-	}
+	}*/
 }
 
 
 void FNiagaraSystemInstance::Init(bool bInForceSolo)
 {
-	WaitForAsyncTick(true);
+	WaitForAsyncTickAndFinalize(true);
 
 	bForceSolo = bInForceSolo;
 	ActualExecutionState = ENiagaraExecutionState::Inactive;
@@ -237,7 +250,7 @@ void FNiagaraSystemInstance::Dump()const
 
 void FNiagaraSystemInstance::DumpTickInfo(FOutputDevice& Ar)
 {
-	WaitForAsyncTick();
+	WaitForAsyncTickAndFinalize();
 
 	static const UEnum* TickingGroupEnum = FindObjectChecked<UEnum>(ANY_PACKAGE, TEXT("ETickingGroup"));
 
@@ -271,7 +284,7 @@ bool FNiagaraSystemInstance::RequestCapture(const FGuid& RequestId)
 		return false;
 	}
 
-	WaitForAsyncTick();
+	WaitForAsyncTickAndFinalize();
 
 	UE_LOG(LogNiagara, Warning, TEXT("Capture requested!"));
 
@@ -309,7 +322,7 @@ bool FNiagaraSystemInstance::RequestCapture(const FGuid& RequestId)
 
 void FNiagaraSystemInstance::FinishCapture()
 {
-	WaitForAsyncTick();
+	WaitForAsyncTickAndFinalize();
 
 	if (!CurrentCapture.IsValid())
 	{
@@ -323,7 +336,7 @@ void FNiagaraSystemInstance::FinishCapture()
 
 bool FNiagaraSystemInstance::QueryCaptureResults(const FGuid& RequestId, TArray<TSharedPtr<struct FNiagaraScriptDebuggerInfo, ESPMode::ThreadSafe>>& OutCaptureResults)
 {
-	WaitForAsyncTick();
+	WaitForAsyncTickAndFinalize();
 
 	if (CurrentCaptureGuid.IsValid() && RequestId == *CurrentCaptureGuid.Get())
 	{
@@ -405,7 +418,7 @@ void FNiagaraSystemInstance::SetSolo(bool bInSolo)
 		return;
 	}
 
-	WaitForAsyncTick();
+	WaitForAsyncTickAndFinalize();
 
 	UNiagaraSystem* System = GetSystem();
 	if (bInSolo)
@@ -440,7 +453,7 @@ void FNiagaraSystemInstance::Activate(EResetMode InResetMode)
 {
 	SCOPE_CYCLE_COUNTER(STAT_NiagaraSystemActivate);
 
-	WaitForAsyncTick();
+	WaitForAsyncTickAndFinalize();
 
 	UNiagaraSystem* System = GetSystem();
 	if (System && System->IsValid() && IsReadyToRun())
@@ -457,7 +470,7 @@ void FNiagaraSystemInstance::Deactivate(bool bImmediate)
 {
 	SCOPE_CYCLE_COUNTER(STAT_NiagaraSystemDeactivate);
 
-	WaitForAsyncTick();
+	WaitForAsyncTickAndFinalize();
 
 	if (IsComplete())
 	{
@@ -490,9 +503,22 @@ bool FNiagaraSystemInstance::DeallocateSystemInstance(TUniquePtr< FNiagaraSystem
 		if (SystemInstanceAllocation->SystemInstanceIndex != INDEX_NONE)
 		{
 			SystemSim->RemoveInstance(SystemInstanceAllocation.Get());
-			SystemInstanceAllocation->UnbindParameters();
 		}
+		SystemInstanceAllocation->UnbindParameters();
 
+		// If we have active GPU emitters make sure we remove any pending ticks from the RT
+		NiagaraEmitterInstanceBatcher* InstanceBatcher = SystemInstanceAllocation->GetBatcher();
+		if (SystemInstanceAllocation->bHasGPUEmitters)
+		{
+			ENQUEUE_RENDER_COMMAND(NiagaraRemoveGPUSystem)
+			(
+				[InstanceBatcher, InstanceID=SystemInstanceAllocation->GetId()](FRHICommandListImmediate& RHICmdList) mutable
+				{
+					InstanceBatcher->InstanceDeallocated_RenderThread(InstanceID);
+				}
+			);
+		}
+		
 		// Queue deferred deletion from the WorldManager
 		FNiagaraWorldManager* WorldManager = SystemInstanceAllocation->GetWorldManager();
 		check(WorldManager != nullptr);
@@ -563,7 +589,7 @@ void FNiagaraSystemInstance::SetPaused(bool bInPaused)
 		return;
 	}
 
-	WaitForAsyncTick();
+	WaitForAsyncTickAndFinalize();
 	
 	if (SystemInstanceIndex != INDEX_NONE)
 	{
@@ -584,6 +610,181 @@ void FNiagaraSystemInstance::SetPaused(bool bInPaused)
 	bPaused = bInPaused;
 }
 
+bool FNiagaraSystemInstance::ComputeEmitterPriority(int32 EmitterIdx, TArray<int32, TInlineAllocator<32>>& EmitterPriorities, const TBitArray<TInlineAllocator<32>>& EmitterDependencyGraph)
+{
+	// Mark this node as being evaluated.
+	EmitterPriorities[EmitterIdx] = 0;
+
+	int32 MaxPriority = 0;
+
+	// Examine all the nodes we depend on. We must run after all of them, so our priority
+	// will be 1 higher than the maximum priority of all our dependencies.
+	const int32 NumEmitters = Emitters.Num();
+	int32 DepStartIndex = EmitterIdx * NumEmitters;
+	TConstSetBitIterator<TInlineAllocator<32>> DepIt(EmitterDependencyGraph, DepStartIndex);
+	while (DepIt.GetIndex() < DepStartIndex + NumEmitters)
+	{
+		int32 OtherEmitterIdx = DepIt.GetIndex() - DepStartIndex;
+
+		// This can't happen, because we explicitly skip self-dependencies when building the edge table.
+		checkSlow(OtherEmitterIdx != EmitterIdx);
+
+		if (EmitterPriorities[OtherEmitterIdx] == 0)
+		{
+			// This node is currently being evaluated, which means we've found a cycle.
+			return false;
+		}
+
+		if (EmitterPriorities[OtherEmitterIdx] < 0)
+		{
+			// Node not evaluated yet, recurse.
+			if (!ComputeEmitterPriority(OtherEmitterIdx, EmitterPriorities, EmitterDependencyGraph))
+			{
+				return false;
+			}
+		}
+
+		if (MaxPriority < EmitterPriorities[OtherEmitterIdx])
+		{
+			MaxPriority = EmitterPriorities[OtherEmitterIdx];
+		}
+
+		++DepIt;
+	}
+
+	EmitterPriorities[EmitterIdx] = MaxPriority + 1;
+	return true;
+}
+
+void FNiagaraSystemInstance::FindDataInterfaceDependencies(const TArray<UNiagaraDataInterface*>& DataInterfaces, TArray<FNiagaraEmitterInstance*>& Dependencies)
+{
+	for (UNiagaraDataInterface* DI : DataInterfaces)
+	{
+		void* InterfaceInstanceData = FindDataInterfaceInstanceData(DI);
+		int32 NumDepsBefore = Dependencies.Num();
+		DI->GetEmitterDependencies(InterfaceInstanceData, this, Dependencies);
+		// Make sure the DI appended to the array, instead of resetting it.
+		check(Dependencies.Num() >= NumDepsBefore);
+	}
+}
+
+void FNiagaraSystemInstance::FindEventDependencies(FNiagaraEmitterInstance& EmitterInst, TArray<FNiagaraEmitterInstance*>& Dependencies)
+{
+	UNiagaraEmitter* Emitter = EmitterInst.GetCachedEmitter();
+	if (!Emitter)
+	{
+		return;
+	}
+
+	const TArray<FNiagaraEmitterHandle>& EmitterHandles = GetSystem()->GetEmitterHandles();
+
+	const TArray<FNiagaraEventScriptProperties>& EventHandlers = Emitter->GetEventHandlers();
+	for (const FNiagaraEventScriptProperties& Handler : EventHandlers)
+	{
+		// An empty ID means the event reads from the same emitter, so we don't need to record a dependency.
+		if (!Handler.SourceEmitterID.IsValid())
+		{
+			continue;
+		}
+
+		// Look for the ID in the list of emitter handles from the system object.
+		FString SourceEmitterIDName = Handler.SourceEmitterID.ToString();
+		for (int EmitterIdx = 0; EmitterIdx < EmitterHandles.Num(); ++EmitterIdx)
+		{
+			FName EmitterIDName = EmitterHandles[EmitterIdx].GetIdName();
+			if (EmitterIDName.ToString() == SourceEmitterIDName)
+			{
+				// The Emitters array is in the same order as the EmitterHandles array.
+				FNiagaraEmitterInstance* Sender = &Emitters[EmitterIdx].Get();
+				Dependencies.Add(Sender);
+				break;
+			}
+		}
+	}
+}
+
+void FNiagaraSystemInstance::ComputeEmittersExecutionOrder()
+{
+	const int32 NumEmitters = Emitters.Num();
+
+	TArray<int32, TInlineAllocator<32>> EmitterPriorities;
+	TBitArray<TInlineAllocator<32>> EmitterDependencyGraph;
+
+	EmitterExecutionOrder.SetNum(NumEmitters);
+	EmitterPriorities.SetNum(NumEmitters);
+	EmitterDependencyGraph.Init(false, NumEmitters * NumEmitters);
+
+	TArray<FNiagaraEmitterInstance*> EmitterDependencies;
+	EmitterDependencies.Reserve(3 * NumEmitters);
+
+	bool bHasEmitterDependencies = false;
+	for (int32 EmitterIdx = 0; EmitterIdx < NumEmitters; ++EmitterIdx)
+	{
+		FNiagaraEmitterInstance& Inst = Emitters[EmitterIdx].Get();
+		EmitterExecutionOrder[EmitterIdx] = EmitterIdx;
+		EmitterPriorities[EmitterIdx] = -1;
+
+		EmitterDependencies.SetNum(0, false);
+
+		if (Inst.GetCachedEmitter() && Inst.GetCachedEmitter()->SimTarget == ENiagaraSimTarget::GPUComputeSim && Inst.GetGPUContext())
+		{
+			// GPU emitters have a combined execution context for spawn and update.
+			FindDataInterfaceDependencies(Inst.GetGPUContext()->GetDataInterfaces(), EmitterDependencies);
+		}
+		else
+		{
+			// CPU emitters have separate contexts for spawn and update, so we need to gather DIs from both. They also support events,
+			// so we need to look at the event sources for extra dependencies.
+			FindDataInterfaceDependencies(Inst.GetSpawnExecutionContext().GetDataInterfaces(), EmitterDependencies);
+			FindDataInterfaceDependencies(Inst.GetUpdateExecutionContext().GetDataInterfaces(), EmitterDependencies);
+			FindEventDependencies(Inst, EmitterDependencies);
+		}
+
+		// Map the pointers returned by the emitter to indices inside the Emitters array. This is O(N^2), but we expect
+		// to have few dependencies, so in practice it should be faster than a TMap. If it gets out of hand, we can also
+		// ask the DIs to give us indices directly, since they probably got the pointers by scanning the array we gave them
+		// through GetEmitters() anyway.
+		for (int32 DepIdx = 0; DepIdx < EmitterDependencies.Num(); ++DepIdx)
+		{
+			for (int32 OtherEmitterIdx = 0; OtherEmitterIdx < NumEmitters; ++OtherEmitterIdx)
+			{
+				if (EmitterDependencies[DepIdx] == &Emitters[OtherEmitterIdx].Get())
+				{
+					// Some DIs might read from the same emitter they're applied to. We don't care about dependencies on self.
+					if (EmitterIdx != OtherEmitterIdx)
+					{
+						EmitterDependencyGraph.SetRange(EmitterIdx * NumEmitters + OtherEmitterIdx, 1, true);
+						bHasEmitterDependencies = true;
+					}
+					break;
+				}
+			}
+		}
+	}
+
+	if (!bHasEmitterDependencies)
+	{
+		return;
+	}
+
+	for (int32 EmitterIdx = 0; EmitterIdx < NumEmitters; ++EmitterIdx)
+	{
+		if (EmitterPriorities[EmitterIdx] < 0)
+		{
+			if (!ComputeEmitterPriority(EmitterIdx, EmitterPriorities, EmitterDependencyGraph))
+			{
+				FName EmitterName = GetSystem()->GetEmitterHandles()[EmitterIdx].GetName();
+				UE_LOG(LogNiagara, Error, TEXT("Found circular dependency involving emitter '%s' in system '%s'. The execution order will be undefined."), *EmitterName.ToString(), *GetSystem()->GetName());
+				break;
+			}
+		}
+	}
+
+	// Sort the emitter indices in the execution order array so that dependencies are satisfied. Also, emitters with the same priority value don't have any
+	// inter-dependencies, so we can use that if we ever want to parallelize emitter execution.
+	Algo::Sort(EmitterExecutionOrder, [&EmitterPriorities](int32 IdxA, int32 IdxB) { return EmitterPriorities[IdxA] < EmitterPriorities[IdxB]; });
+}
+
 void FNiagaraSystemInstance::Reset(FNiagaraSystemInstance::EResetMode Mode)
 {
 	SCOPE_CYCLE_COUNTER(STAT_NiagaraSystemReset);
@@ -599,7 +800,7 @@ void FNiagaraSystemInstance::Reset(FNiagaraSystemInstance::EResetMode Mode)
 		return;
 	}
 
-	WaitForAsyncTick();
+	WaitForAsyncTickAndFinalize();
 
 	if (Component)
 	{
@@ -645,44 +846,66 @@ void FNiagaraSystemInstance::Reset(FNiagaraSystemInstance::EResetMode Mode)
 		bBindParams = !IsDisabled();
 	}
 	
-	if (bBindParams)
+	//If none of our emitters actually made it out of the init process we can just bail here before we ever tick.
+	bool bHasActiveEmitters = false;
+	for (auto& Inst : Emitters)
 	{
-		BindParameters();
-	}
-
-	SetRequestedExecutionState(ENiagaraExecutionState::Active);
-	SetActualExecutionState(ENiagaraExecutionState::Active);
-
-	if (bBindParams)
-	{
-		InitDataInterfaces();
-	}
-
-	//Interface init can disable the system.
-	if (!IsComplete())
-	{
-		bPendingSpawn = true;
-		SystemSimulation->AddInstance(this);
-
-		UNiagaraSystem* System = GetSystem();
-		if (System->NeedsWarmup())
+		if (!Inst->IsComplete())
 		{
-			int32 WarmupTicks = System->GetWarmupTickCount();
-			float WarmupDt = System->GetWarmupTickDelta();
-			
-			AdvanceSimulation(WarmupTicks, WarmupDt);
-
-			//Reset age to zero.
-			Age = 0.0f;
-			TickCount = 0;
+			bHasActiveEmitters = true;
+			break;
 		}
 	}
 
-	if (Component)
+	SetRequestedExecutionState(ENiagaraExecutionState::Active);
+	if (bHasActiveEmitters)
 	{
-		// This system may not tick again immediately so we mark the render state dirty here so that
-		// the renderers will be reset this frame.
-		Component->MarkRenderDynamicDataDirty();
+		if (bBindParams)
+		{
+			ResetParameters();
+			BindParameters();
+		}
+
+		SetActualExecutionState(ENiagaraExecutionState::Active);
+
+		if (bBindParams)
+		{
+			InitDataInterfaces();
+		}
+
+		//Interface init can disable the system.
+		if (!IsComplete())
+		{
+			ComputeEmittersExecutionOrder();
+
+			bPendingSpawn = true;
+			SystemSimulation->AddInstance(this);
+
+			UNiagaraSystem* System = GetSystem();
+			if (System->NeedsWarmup())
+			{
+				int32 WarmupTicks = System->GetWarmupTickCount();
+				float WarmupDt = System->GetWarmupTickDelta();
+
+				AdvanceSimulation(WarmupTicks, WarmupDt);
+
+				//Reset age to zero.
+				Age = 0.0f;
+				TickCount = 0;
+			}
+		}
+
+		if (Component)
+		{
+			// This system may not tick again immediately so we mark the render state dirty here so that
+			// the renderers will be reset this frame.
+			Component->MarkRenderDynamicDataDirty();
+		}
+	}
+	else
+	{
+		SetActualExecutionState(ENiagaraExecutionState::Complete);
+		Complete();
 	}
 }
 
@@ -696,8 +919,11 @@ void FNiagaraSystemInstance::ResetInternal(bool bResetSimulations)
 
 	Age = 0;
 	TickCount = 0;
-	bHasTickingEmitters = true;
 	CachedDeltaSeconds = 0.0f;
+	bLODDistanceIsValid = false;
+	TotalGPUParamSize = 0;
+	ActiveGPUEmitterCount = 0;
+	GPUParamIncludeInterpolation = false;
 	// Note: We do not need to update our bounds here as they are still valid
 
 	UNiagaraSystem* System = GetSystem();
@@ -723,7 +949,7 @@ void FNiagaraSystemInstance::ResetInternal(bool bResetSimulations)
 	if (!System->IsValid())
 	{
 		SetRequestedExecutionState(ENiagaraExecutionState::Disabled);
-		UE_LOG(LogNiagara, Warning, TEXT("Failed to activate Niagara System due to invalid asset!"));
+		UE_LOG(LogNiagara, Warning, TEXT("Failed to activate Niagara System due to invalid asset! System(%s) Component(%s)"), *System->GetName(), *Component->GetFullName());
 		return;
 	}
 
@@ -747,7 +973,7 @@ void FNiagaraSystemInstance::AdvanceSimulation(int32 TickCountToSimulate, float 
 {
 	if (TickCountToSimulate > 0 && !IsPaused())
 	{
-		WaitForAsyncTick();
+		WaitForAsyncTickAndFinalize();
 
 		SCOPE_CYCLE_COUNTER(STAT_NiagaraSystemAdvanceSim);
 		bool bWasSolo = bSolo;
@@ -824,18 +1050,12 @@ void FNiagaraSystemInstance::ReInitInternal()
 
 	Age = 0;
 	TickCount = 0;
-	bHasTickingEmitters = true;
 	bIsTransformDirty = true;
 	TimeSinceLastForceUpdateTransform = 0.0f;
 	LocalBounds = FBox(FVector::ZeroVector, FVector::ZeroVector);
 	CachedDeltaSeconds = 0.0f;
 
 	bAlreadyBound = false;
-
-	FastPathIntUserParameterInputBindings.Empty();
-	FastPathFloatUserParameterInputBindings.Empty();
-	FastPathIntUpdateRangedInputBindings.Empty();
-	FastPathFloatUpdateRangedInputBindings.Empty();
 
 	UNiagaraSystem* System = GetSystem();
 	if (System == nullptr || Component == nullptr)
@@ -857,7 +1077,7 @@ void FNiagaraSystemInstance::ReInitInternal()
 	if (!System->IsValid())
 	{
 		SetRequestedExecutionState(ENiagaraExecutionState::Disabled);
-		UE_LOG(LogNiagara, Warning, TEXT("Failed to activate Niagara System due to invalid asset!"));
+		UE_LOG(LogNiagara, Warning, TEXT("Failed to activate Niagara System due to invalid asset! System(%s) Component(%s)"), *System->GetName(), *Component->GetFullName());
 		return;
 	}
 
@@ -884,60 +1104,6 @@ void FNiagaraSystemInstance::ReInitInternal()
 	
 	const FNiagaraSystemCompiledData& SystemCompiledData = System->GetSystemCompiledData();
 	InstanceParameters = SystemCompiledData.InstanceParamStore;
-	const TArray<FNiagaraVariable>& NumParticleVars = SystemCompiledData.NumParticleVars;
-	const TArray<FNiagaraVariable>& TotalSpawnedParticlesVars = SystemCompiledData.TotalSpawnedParticlesVars;
-	const TArray<FNiagaraVariable>& SpawnCountScaleVars = SystemCompiledData.SpawnCountScaleVars;
-
-	// Make sure all parameters are added before initializing the bindings, otherwise parameter store layout changes might invalidate the bindings.
-	OwnerPositionParam.Init(InstanceParameters, SYS_PARAM_ENGINE_POSITION);
-	OwnerScaleParam.Init(InstanceParameters, SYS_PARAM_ENGINE_SCALE);
-	OwnerVelocityParam.Init(InstanceParameters, SYS_PARAM_ENGINE_VELOCITY);
-	OwnerXAxisParam.Init(InstanceParameters, SYS_PARAM_ENGINE_X_AXIS);
-	OwnerYAxisParam.Init(InstanceParameters, SYS_PARAM_ENGINE_Y_AXIS);
-	OwnerZAxisParam.Init(InstanceParameters, SYS_PARAM_ENGINE_Z_AXIS);
-
-	OwnerRotationParam.Init(InstanceParameters, SYS_PARAM_ENGINE_ROTATION);
-
-	OwnerTransformParam.Init(InstanceParameters, SYS_PARAM_ENGINE_LOCAL_TO_WORLD);
-	OwnerInverseParam.Init(InstanceParameters, SYS_PARAM_ENGINE_WORLD_TO_LOCAL);
-	OwnerTransposeParam.Init(InstanceParameters, SYS_PARAM_ENGINE_LOCAL_TO_WORLD_TRANSPOSED);
-	OwnerInverseTransposeParam.Init(InstanceParameters, SYS_PARAM_ENGINE_WORLD_TO_LOCAL_TRANSPOSED);
-	OwnerTransformNoScaleParam.Init(InstanceParameters, SYS_PARAM_ENGINE_LOCAL_TO_WORLD_NO_SCALE);
-	OwnerInverseNoScaleParam.Init(InstanceParameters, SYS_PARAM_ENGINE_WORLD_TO_LOCAL_NO_SCALE);
-
-	OwnerDeltaSecondsParam.Init(InstanceParameters, SYS_PARAM_ENGINE_DELTA_TIME);
-	OwnerInverseDeltaSecondsParam.Init(InstanceParameters, SYS_PARAM_ENGINE_INV_DELTA_TIME);
-
-	SystemAgeParam.Init(InstanceParameters, SYS_PARAM_ENGINE_SYSTEM_AGE);
-	SystemTickCountParam.Init(InstanceParameters, SYS_PARAM_ENGINE_SYSTEM_TICK_COUNT);
-	OwnerEngineTimeParam.Init(InstanceParameters, SYS_PARAM_ENGINE_TIME);
-	OwnerEngineRealtimeParam.Init(InstanceParameters, SYS_PARAM_ENGINE_REAL_TIME);
-
-	OwnerLODDistanceParam.Init(InstanceParameters, SYS_PARAM_ENGINE_LOD_DISTANCE);
-	SystemNumEmittersParam.Init(InstanceParameters, SYS_PARAM_ENGINE_SYSTEM_NUM_EMITTERS);
-	SystemNumEmittersAliveParam.Init(InstanceParameters, SYS_PARAM_ENGINE_SYSTEM_NUM_EMITTERS_ALIVE);
-
-	SystemTimeSinceRenderedParam.Init(InstanceParameters, SYS_PARAM_ENGINE_TIME_SINCE_RENDERED);
-
-	OwnerExecutionStateParam.Init(InstanceParameters, SYS_PARAM_ENGINE_EXECUTION_STATE);
-
-	ParameterNumParticleBindings.SetNum(NumParticleVars.Num());
-	for (int32 i = 0; i < NumParticleVars.Num(); i++)
-	{
-		ParameterNumParticleBindings[i].Init(InstanceParameters, NumParticleVars[i]);
-	}
-
-	ParameterTotalSpawnedParticlesBindings.SetNum(TotalSpawnedParticlesVars.Num());
-	for (int32 i = 0; i < TotalSpawnedParticlesVars.Num(); i++)
-	{
-		ParameterTotalSpawnedParticlesBindings[i].Init(InstanceParameters, TotalSpawnedParticlesVars[i]);
-	}
-
-	ParameterSpawnCountScaleBindings.SetNum(SpawnCountScaleVars.Num());
-	for (int32 i = 0; i < SpawnCountScaleVars.Num(); i++)
-	{
-		ParameterSpawnCountScaleBindings[i].Init(InstanceParameters, SpawnCountScaleVars[i]);
-	}
 
 	// rebind now after all parameters have been added
 	InstanceParameters.Rebind();
@@ -955,6 +1121,29 @@ void FNiagaraSystemInstance::ReInitInternal()
 
 }
 
+void FNiagaraSystemInstance::ResetParameters()
+{
+	UNiagaraSystem* System = GetSystem();
+	if (!System)
+	{
+		return;
+	}
+
+	CurrentFrameIndex = 1;
+	ParametersValid = false;
+
+	GlobalParameters[0] = FNiagaraGlobalParameters();
+	GlobalParameters[1] = FNiagaraGlobalParameters();
+	SystemParameters[0] = FNiagaraSystemParameters();
+	SystemParameters[1] = FNiagaraSystemParameters();
+	OwnerParameters[0] = FNiagaraOwnerParameters();
+	OwnerParameters[1] = FNiagaraOwnerParameters();
+
+	EmitterParameters.Reset(Emitters.Num() * 2);
+	EmitterParameters.AddDefaulted(Emitters.Num() * 2);
+	GatheredInstanceParameters.Init(Emitters.Num());
+}
+
 FNiagaraSystemInstance::~FNiagaraSystemInstance()
 {
 	//UE_LOG(LogNiagara, Log, TEXT("~FNiagaraSystemInstance %p"), this);
@@ -970,7 +1159,7 @@ FNiagaraSystemInstance::~FNiagaraSystemInstance()
 
 void FNiagaraSystemInstance::Cleanup()
 {
-	WaitForAsyncTick(true);
+	WaitForAsyncTickAndFinalize(true);
 
 	if (SystemInstanceIndex != INDEX_NONE)
 	{
@@ -984,6 +1173,9 @@ void FNiagaraSystemInstance::Cleanup()
 
 	// Clear out the emitters.
 	Emitters.Empty(0);
+
+	// clean up any event datasets that we're holding onto for our child emitters
+	ClearEventDataSets();
 }
 
 //Unsure on usage of this atm. Possibly useful in future.
@@ -1088,6 +1280,56 @@ bool FNiagaraSystemInstance::RequiresDistanceFieldData() const
 	return false;
 }
 
+bool FNiagaraSystemInstance::RequiresDepthBuffer() const
+{
+	if (!bHasGPUEmitters)
+	{
+		return false;
+	}
+
+	for (const TSharedRef<FNiagaraEmitterInstance, ESPMode::ThreadSafe>& Emitter : Emitters)
+	{
+		FNiagaraComputeExecutionContext* GPUContext = Emitter->GetGPUContext();
+		if (GPUContext)
+		{
+			for (UNiagaraDataInterface* DataInterface : GPUContext->CombinedParamStore.GetDataInterfaces())
+			{
+				if (DataInterface && DataInterface->RequiresDepthBuffer())
+				{
+					return true;
+				}
+			}
+		}
+	}
+
+	return false;
+}
+
+bool FNiagaraSystemInstance::RequiresEarlyViewData() const
+{
+	if (!bHasGPUEmitters)
+	{
+		return false;
+	}
+
+	for (const TSharedRef<FNiagaraEmitterInstance, ESPMode::ThreadSafe>& Emitter : Emitters)
+	{
+		FNiagaraComputeExecutionContext* GPUContext = Emitter->GetGPUContext();
+		if (GPUContext)
+		{
+			for (UNiagaraDataInterface* DataInterface : GPUContext->CombinedParamStore.GetDataInterfaces())
+			{
+				if (DataInterface && DataInterface->RequiresEarlyViewData())
+				{
+					return true;
+				}
+			}
+		}
+	}
+
+	return false;
+}
+
 void FNiagaraSystemInstance::InitDataInterfaces()
 {
 	bDataInterfacesHaveTickPrereqs = false;
@@ -1105,10 +1347,11 @@ void FNiagaraSystemInstance::InitDataInterfaces()
 		return;
 	}
 
-	WaitForAsyncTick(true);
+	WaitForAsyncTickAndFinalize(true);
 
 	Component->GetOverrideParameters().Tick();
 	
+	//-TODO: Validate that any queued ticks have been executed
 	DestroyDataInterfaceInstanceData();
 
 	GPUDataInterfaceInstanceDataSize = 0;
@@ -1130,6 +1373,7 @@ void FNiagaraSystemInstance::InitDataInterfaces()
 				int32* ExistingInstanceDataOffset = DataInterfaceInstanceDataOffsets.Find(Interface);
 				if (!ExistingInstanceDataOffset)//Don't add instance data for interfaces we've seen before.
 				{
+					//UE_LOG(LogNiagara, Log, TEXT("Adding DI %p %s %s"), Interface, *Interface->GetClass()->GetName(), *Interface->GetPathName());
 					DataInterfaceInstanceDataOffsets.Add(Interface) = InstanceDataSize;
 					// Assume that some of our data is going to be 16 byte aligned, so enforce that 
 					// all per-instance data is aligned that way.
@@ -1159,12 +1403,23 @@ void FNiagaraSystemInstance::InitDataInterfaces()
 	for (TSharedRef<FNiagaraEmitterInstance, ESPMode::ThreadSafe> Simulation : Emitters)
 	{
 		FNiagaraEmitterInstance& Sim = Simulation.Get();
+		if (Sim.IsDisabled())
+		{
+			continue;
+		}
+
 		CalcInstDataSize(Sim.GetSpawnExecutionContext().GetDataInterfaces());
 		CalcInstDataSize(Sim.GetUpdateExecutionContext().GetDataInterfaces());
 		for (int32 i = 0; i < Sim.GetEventExecutionContexts().Num(); i++)
 		{
 			CalcInstDataSize(Sim.GetEventExecutionContexts()[i].GetDataInterfaces());
 		}
+
+		if (Sim.GetCachedEmitter() && Sim.GetCachedEmitter()->SimTarget == ENiagaraSimTarget::GPUComputeSim && Sim.GetCachedEmitter()->bSimulationStagesEnabled && Sim.GetGPUContext())
+		{
+			CalcInstDataSize(Sim.GetGPUContext()->GetDataInterfaces());
+		}
+
 
 		//Also force a rebind while we're here.
 		Sim.DirtyDataInterfaces();
@@ -1214,18 +1469,6 @@ bool FNiagaraSystemInstance::GetPerInstanceDataAndOffsets(void*& OutData, uint32
 	return DataInterfaceInstanceDataOffsets.Num() != 0;
 }
 
-int32 FNiagaraSystemInstance::GetDetailLevel()const
-{
-	int32 DetailLevel = INiagaraModule::GetDetailLevel();
-#if WITH_EDITOR
-	if (Component && Component->bEnablePreviewDetailLevel)
-	{
-		DetailLevel = Component->PreviewDetailLevel;
-	}
-#endif
-	return DetailLevel;
-}
-
 void FNiagaraSystemInstance::TickDataInterfaces(float DeltaSeconds, bool bPostSimulate)
 {
 	if (!GetSystem() || !Component || IsDisabled())
@@ -1273,6 +1516,12 @@ float FNiagaraSystemInstance::GetLODDistance()
 	}
 #endif
 
+	//In most cases this will have been set externally by the scalability manager.
+	if (bLODDistanceIsValid)
+	{
+		return LODDistance;
+	}
+	
 	constexpr float DefaultLODDistance = 0.0f;
 
 	FNiagaraWorldManager* WorldManager = GetWorldManager();
@@ -1280,8 +1529,11 @@ float FNiagaraSystemInstance::GetLODDistance()
 	{
 		return DefaultLODDistance;
 	}
-
+	
+	UWorld* World = Component->GetWorld();
+	check(World);
 	const FVector EffectLocation = Component->GetComponentLocation();
+	LODDistance = DefaultLODDistance;
 
 	// If we are inside the WorldManager tick we will use the cache player view locations as we can be ticked on different threads
 	if (WorldManager->CachedPlayerViewLocationsValid())
@@ -1289,24 +1541,25 @@ float FNiagaraSystemInstance::GetLODDistance()
 		TArrayView<const FVector> PlayerViewLocations = WorldManager->GetCachedPlayerViewLocations();
 		if (PlayerViewLocations.Num() == 0)
 		{
-			return DefaultLODDistance;
+			LODDistance = DefaultLODDistance;
 		}
-
-		// We are being ticked inside the WorldManager and can safely use the list of cached player view locations
-		float LODDistanceSqr = FMath::Square(WORLD_MAX);
-		for (const FVector& ViewLocation : PlayerViewLocations)
+		else
 		{
-			const float DistanceToEffectSqr = FVector(ViewLocation - EffectLocation).SizeSquared();
-			LODDistanceSqr = FMath::Min(LODDistanceSqr, DistanceToEffectSqr);
+			// We are being ticked inside the WorldManager and can safely use the list of cached player view locations
+			float LODDistanceSqr = FMath::Square(WORLD_MAX);
+			for (const FVector& ViewLocation : PlayerViewLocations)
+			{
+				const float DistanceToEffectSqr = FVector(ViewLocation - EffectLocation).SizeSquared();
+				LODDistanceSqr = FMath::Min(LODDistanceSqr, DistanceToEffectSqr);
+			}
+			LODDistance = FMath::Sqrt(LODDistanceSqr);
 		}
-		return FMath::Sqrt(LODDistanceSqr);
 	}
-
-	// If we are not inside the WorldManager tick (solo tick) we must look over the player view locations manually
-	ensureMsgf(IsInGameThread(), TEXT("FNiagaraSystemInstance::GetLODDistance called in potentially thread unsafe way"));
-
-	if ( UWorld* World = Component->GetWorld() )
+	else
 	{
+		// If we are not inside the WorldManager tick (solo tick) we must look over the player view locations manually
+		ensureMsgf(IsInGameThread(), TEXT("FNiagaraSystemInstance::GetLODDistance called in potentially thread unsafe way"));
+
 		TArray<FVector, TInlineAllocator<8> > PlayerViewLocations;
 		if (World->GetPlayerControllerIterator())
 		{
@@ -1334,10 +1587,12 @@ float FNiagaraSystemInstance::GetLODDistance()
 				const float DistanceToEffectSqr = FVector(ViewLocation - EffectLocation).SizeSquared();
 				LODDistanceSqr = FMath::Min(LODDistanceSqr, DistanceToEffectSqr);
 			}
-			return FMath::Sqrt(LODDistanceSqr);
+			LODDistance = FMath::Sqrt(LODDistanceSqr);
 		}
 	}
-	return DefaultLODDistance;
+
+	bLODDistanceIsValid = true;
+	return LODDistance;
 }
 
 ETickingGroup FNiagaraSystemInstance::CalculateTickGroup()
@@ -1405,50 +1660,66 @@ void FNiagaraSystemInstance::TickInstanceParameters_GameThread(float DeltaSecond
 		return;
 	}
 
-	GatheredInstanceParameters.DeltaSeconds = DeltaSeconds;
+	const int EffectsQualityLevel = EffectsQualityLevelCVar->GetInt();
 
-	GatheredInstanceParameters.ComponentTrans = Component->GetComponentTransform();
-	GatheredInstanceParameters.OldPos = OwnerPositionParam.GetValue();
-
-	UWorld* World = Component->GetWorld();
-	if (World != NULL)
+	const FTransform& ComponentTransform = Component->GetComponentTransform();
+	const bool TransformMatches = GatheredInstanceParameters.ComponentTrans.Equals(ComponentTransform);
+	if (TransformMatches)
 	{
-		GatheredInstanceParameters.LODDistance = GetLODDistance();
+		GatheredInstanceParameters.TransformMatchCount = FMath::Min(ParameterBufferCount, GatheredInstanceParameters.TransformMatchCount + 1);
+	}
+	else
+	{
+		GatheredInstanceParameters.ComponentTrans = ComponentTransform;
+		GatheredInstanceParameters.TransformMatchCount = 0;
+	}
+
+	GatheredInstanceParameters.EmitterCount = Emitters.Num();
+	GatheredInstanceParameters.DeltaSeconds = DeltaSeconds;
+	GatheredInstanceParameters.NumAlive = 0;
+
+	//Bias the LastRenderTime slightly to account for any delay as it's written by the RT.
+	if (const UWorld* World = Component->GetWorld())
+	{
 		GatheredInstanceParameters.TimeSeconds = World->TimeSeconds;
 		GatheredInstanceParameters.RealTimeSeconds = World->RealTimeSeconds;
 	}
 	else
 	{
-		GatheredInstanceParameters.LODDistance = 0;
 		GatheredInstanceParameters.TimeSeconds = Age;
 		GatheredInstanceParameters.RealTimeSeconds = Age;
 	}
 
-	GatheredInstanceParameters.Age = Age;
-	GatheredInstanceParameters.TickCount = TickCount;
+	// flip our buffered parameters
+	FlipParameterBuffers();
+	uint32 ParameterIndex = GetParameterIndex();
 
-	int EffectsQualityLevel = EffectsQualityLevelCVar->GetInt();
-
-	GatheredInstanceParameters.NumAlive = 0;
-	for (int32 i = 0; i < Emitters.Num(); ++i)
+	for (int32 i = 0; i < GatheredInstanceParameters.EmitterCount; ++i)
 	{
+		auto& CurrentEmitterParameters = EditEmitterParameters(i);
+
 		const TSharedRef<FNiagaraEmitterInstance, ESPMode::ThreadSafe>& Emitter = Emitters[i];
 		if (Emitter->GetExecutionState() != ENiagaraExecutionState::Disabled)
 		{
-			GatheredInstanceParameters.EmitterNumParticles[i] = Emitter->GetNumParticles();
-			GatheredInstanceParameters.EmitterTotalSpawnedParticles[i] = Emitter->GetTotalSpawnedParticles();
-			GatheredInstanceParameters.EmitterSpawnCountScale[i] = Emitter->GetSpawnCountScale(EffectsQualityLevel);
-			if (!Emitter->IsComplete())
-			{
-				GatheredInstanceParameters.NumAlive++;
-			}
+			CurrentEmitterParameters.EmitterNumParticles = Emitter->GetNumParticles();
+			CurrentEmitterParameters.EmitterTotalSpawnedParticles = Emitter->GetTotalSpawnedParticles();
+			const FNiagaraEmitterScalabilitySettings& ScalabilitySettings = Emitter->GetScalabilitySettings();
+			CurrentEmitterParameters.EmitterSpawnCountScale = ScalabilitySettings.bScaleSpawnCount ? ScalabilitySettings.SpawnCountScale : 1.0f;
+			++GatheredInstanceParameters.NumAlive;
+		}
+		else
+		{
+			CurrentEmitterParameters.EmitterNumParticles = 0;
 		}
 	}
 
-	//Bias the LastRenderTime slightly to account for any delay as it's written by the RT.
-	GatheredInstanceParameters.SafeTimeSinceRendererd = FMath::Max(0.0f, GatheredInstanceParameters.TimeSeconds - Component->GetLastRenderTime() - GLastRenderTimeSafetyBias);
-
-	GatheredInstanceParameters.RequestedExecutionState = RequestedExecutionState;
+	FNiagaraSystemParameters& CurrentSystemParameters = SystemParameters[ParameterIndex];
+	CurrentSystemParameters.EngineSystemAge = Age;
+	CurrentSystemParameters.EngineTickCount = TickCount;
+	CurrentSystemParameters.EngineTimeSinceRendered = FMath::Max(0.0f, GatheredInstanceParameters.TimeSeconds - Component->GetLastRenderTime() - GLastRenderTimeSafetyBias);
+	CurrentSystemParameters.EngineExecutionState = static_cast<uint32>(RequestedExecutionState);
+	CurrentSystemParameters.EngineLodDistance = GetLODDistance();
+	CurrentSystemParameters.EngineLodDistanceFraction = CurrentSystemParameters.EngineLodDistance / MaxLODDistance;
 
 	Component->GetOverrideParameters().Tick();
 }
@@ -1456,95 +1727,78 @@ void FNiagaraSystemInstance::TickInstanceParameters_GameThread(float DeltaSecond
 
 void FNiagaraSystemInstance::TickInstanceParameters_Concurrent()
 {
-	FVector CurrPos = GatheredInstanceParameters.ComponentTrans.GetLocation();
-	FVector OldPos = FMath::IsNearlyZero(Age) ? CurrPos : GatheredInstanceParameters.OldPos; // The first frame the value in OwnerPositionParam is uninitialized memory, we need to make sure that we don't use it
+	uint32 ParameterIndex = GetParameterIndex();
+	FNiagaraSystemParameters& CurrentSystemParameters = SystemParameters[ParameterIndex];
+	FNiagaraOwnerParameters& CurrentOwnerParameters = OwnerParameters[ParameterIndex];
 
-	OwnerPositionParam.SetValue(CurrPos);
-	OwnerScaleParam.SetValue(GatheredInstanceParameters.ComponentTrans.GetScale3D());
-	OwnerVelocityParam.SetValue((CurrPos - OldPos) / GatheredInstanceParameters.DeltaSeconds);
-
-	FQuat Rotation = GatheredInstanceParameters.ComponentTrans.GetRotation();
-	OwnerXAxisParam.SetValue(Rotation.GetAxisX());
-	OwnerYAxisParam.SetValue(Rotation.GetAxisY());
-	OwnerZAxisParam.SetValue(Rotation.GetAxisZ());
-
-	OwnerRotationParam.SetValue(Rotation);
-
-	FMatrix Transform = GatheredInstanceParameters.ComponentTrans.ToMatrixWithScale();
-	FMatrix Inverse = Transform.Inverse();
-	FMatrix Transpose = Transform.GetTransposed();
-	FMatrix InverseTranspose = Inverse.GetTransposed();
-	OwnerTransformParam.SetValue(Transform);
-	OwnerInverseParam.SetValue(Inverse);
-	OwnerTransposeParam.SetValue(Transpose);
-	OwnerInverseTransposeParam.SetValue(InverseTranspose);
-
-	FMatrix TransformNoScale = GatheredInstanceParameters.ComponentTrans.ToMatrixNoScale();
-	FMatrix InverseNoScale = TransformNoScale.Inverse();
-	OwnerTransformNoScaleParam.SetValue(TransformNoScale);
-	OwnerInverseNoScaleParam.SetValue(InverseNoScale);
-
-	OwnerDeltaSecondsParam.SetValue(GatheredInstanceParameters.DeltaSeconds);
-	OwnerInverseDeltaSecondsParam.SetValue(1.0f / GatheredInstanceParameters.DeltaSeconds);
-
-	OwnerLODDistanceParam.SetValue(GatheredInstanceParameters.LODDistance);
-	OwnerEngineTimeParam.SetValue(GatheredInstanceParameters.TimeSeconds);
-	OwnerEngineRealtimeParam.SetValue(GatheredInstanceParameters.RealTimeSeconds);
-
-	SystemAgeParam.SetValue(GatheredInstanceParameters.Age);
-	SystemTickCountParam.SetValue(GatheredInstanceParameters.TickCount);
-
-	for (int32 i = 0; i < Emitters.Num(); i++)
+	if (GatheredInstanceParameters.TransformMatchCount < ParameterBufferCount)
 	{
-		const TSharedRef<FNiagaraEmitterInstance, ESPMode::ThreadSafe>& Emitter = Emitters[i];
-		if (Emitter->GetExecutionState() != ENiagaraExecutionState::Disabled)
-		{
-			ParameterNumParticleBindings[i].SetValue(GatheredInstanceParameters.EmitterNumParticles[i]);
-			ParameterTotalSpawnedParticlesBindings[i].SetValue(GatheredInstanceParameters.EmitterTotalSpawnedParticles[i]);
-			ParameterSpawnCountScaleBindings[i].SetValue(GatheredInstanceParameters.EmitterSpawnCountScale[i]);
-		}
+		const FMatrix LocalToWorld = GatheredInstanceParameters.ComponentTrans.ToMatrixWithScale();
+		const FMatrix LocalToWorldNoScale = GatheredInstanceParameters.ComponentTrans.ToMatrixNoScale();
+
+		const FVector Location = GatheredInstanceParameters.ComponentTrans.GetLocation();
+		const FVector LastLocation = FMath::IsNearlyZero(CurrentSystemParameters.EngineSystemAge) ? Location : FVector(OwnerParameters[GetParameterIndex(true)].EnginePosition);
+
+		CurrentOwnerParameters.EngineLocalToWorld = LocalToWorld;
+		CurrentOwnerParameters.EngineWorldToLocal = LocalToWorld.Inverse();
+		CurrentOwnerParameters.EngineLocalToWorldTransposed = LocalToWorld.GetTransposed();
+		CurrentOwnerParameters.EngineWorldToLocalTransposed = CurrentOwnerParameters.EngineWorldToLocal.GetTransposed();
+		CurrentOwnerParameters.EngineLocalToWorldNoScale = LocalToWorldNoScale;
+		CurrentOwnerParameters.EngineWorldToLocalNoScale = LocalToWorldNoScale.Inverse();
+		CurrentOwnerParameters.EngineRotation = GatheredInstanceParameters.ComponentTrans.GetRotation();
+		CurrentOwnerParameters.EnginePosition = GatheredInstanceParameters.ComponentTrans.GetLocation();
+		CurrentOwnerParameters.EngineVelocity = (Location - LastLocation) / GatheredInstanceParameters.DeltaSeconds;
+		CurrentOwnerParameters.EngineXAxis = CurrentOwnerParameters.EngineRotation.GetAxisX();
+		CurrentOwnerParameters.EngineYAxis = CurrentOwnerParameters.EngineRotation.GetAxisY();
+		CurrentOwnerParameters.EngineZAxis = CurrentOwnerParameters.EngineRotation.GetAxisZ();
+		CurrentOwnerParameters.EngineScale = GatheredInstanceParameters.ComponentTrans.GetScale3D();
 	}
 
-	SystemNumEmittersParam.SetValue(Emitters.Num());
-	SystemNumEmittersAliveParam.SetValue(GatheredInstanceParameters.NumAlive);
+	CurrentSystemParameters.EngineEmitterCount = GatheredInstanceParameters.EmitterCount;
+	CurrentSystemParameters.EngineAliveEmitterCount = GatheredInstanceParameters.NumAlive;
 
-	SystemTimeSinceRenderedParam.SetValue(GatheredInstanceParameters.SafeTimeSinceRendererd);
+	FNiagaraGlobalParameters& CurrentGlobalParameter = GlobalParameters[ParameterIndex];
+	CurrentGlobalParameter.EngineDeltaTime = GatheredInstanceParameters.DeltaSeconds;
+	CurrentGlobalParameter.EngineInvDeltaTime = 1.0f / GatheredInstanceParameters.DeltaSeconds;
+	CurrentGlobalParameter.EngineRealTime = GatheredInstanceParameters.RealTimeSeconds;
+	CurrentGlobalParameter.EngineTime = GatheredInstanceParameters.TimeSeconds;
 
-	OwnerExecutionStateParam.SetValue((int32)GatheredInstanceParameters.RequestedExecutionState);
-	
 	InstanceParameters.Tick();
 	InstanceParameters.MarkParametersDirty();
 }
 
-void FNiagaraSystemInstance::TickFastPathBindings()
+void
+FNiagaraSystemInstance::ClearEventDataSets()
 {
-	for (TNiagaraFastPathUserParameterInputBinding<int32>& IntUserParameterInputBinding : FastPathIntUserParameterInputBindings)
+	for (auto& EventDataSetIt : EmitterEventDataSetMap)
 	{
-		IntUserParameterInputBinding.Tick();
+		delete EventDataSetIt.Value;
 	}
 
-	for (TNiagaraFastPathUserParameterInputBinding<float>& FloatUserParameterInputBinding : FastPathFloatUserParameterInputBindings)
-	{
-		FloatUserParameterInputBinding.Tick();
-	}
-
-	for (TNiagaraFastPathRangedInputBinding<int32>& IntUpdateRangedInputBinding : FastPathIntUpdateRangedInputBindings)
-	{
-		IntUpdateRangedInputBinding.Tick();
-	}
-
-	for (TNiagaraFastPathRangedInputBinding<float>& FloatUpdateRangedInputBinding : FastPathFloatUpdateRangedInputBindings)
-	{
-		FloatUpdateRangedInputBinding.Tick();
-	}
+	EmitterEventDataSetMap.Empty();
 }
 
-void FNiagaraSystemInstance::ResetFastPathBindings()
+FNiagaraDataSet*
+FNiagaraSystemInstance::CreateEventDataSet(FName EmitterName, FName EventName)
 {
-	FastPathIntUserParameterInputBindings.Empty();
-	FastPathFloatUserParameterInputBindings.Empty();
-	FastPathIntUpdateRangedInputBindings.Empty();
-	FastPathFloatUpdateRangedInputBindings.Empty();
+	// TODO: find a better way of multiple events trying to write to the same data set; 
+	// for example, if two analytical collision primitives want to send collision events, they need to push to the same data set
+	FNiagaraDataSet*& OutSet = EmitterEventDataSetMap.FindOrAdd(EmitterEventKey(EmitterName, EventName));
+
+	if (!OutSet)
+	{
+		OutSet = new FNiagaraDataSet();
+	}
+
+	return OutSet;
+}
+
+FNiagaraDataSet*
+FNiagaraSystemInstance::GetEventDataSet(FName EmitterName, FName EventName) const
+{
+	FNiagaraDataSet* const* OutDataSet = EmitterEventDataSetMap.Find(EmitterEventKey(EmitterName, EventName));
+
+	return OutDataSet ? *OutDataSet : nullptr;
 }
 
 #if WITH_EDITORONLY_DATA
@@ -1609,8 +1863,10 @@ void FNiagaraSystemInstance::InitEmitters()
 	if (System != nullptr)
 	{
 		const TArray<FNiagaraEmitterHandle>& EmitterHandles = System->GetEmitterHandles();
-		Emitters.Reserve(EmitterHandles.Num());
-		for (int32 EmitterIdx = 0; EmitterIdx < System->GetEmitterHandles().Num(); ++EmitterIdx)
+
+		const int32 NumEmitters = EmitterHandles.Num();
+		Emitters.Reserve(NumEmitters);
+		for (int32 EmitterIdx = 0; EmitterIdx < NumEmitters; ++EmitterIdx)
 		{
 			TSharedRef<FNiagaraEmitterInstance, ESPMode::ThreadSafe> Sim = MakeShared<FNiagaraEmitterInstance, ESPMode::ThreadSafe>(this);
 			Sim->Init(EmitterIdx, ID);
@@ -1623,11 +1879,9 @@ void FNiagaraSystemInstance::InitEmitters()
 
 		for (TSharedRef<FNiagaraEmitterInstance, ESPMode::ThreadSafe>& Simulation : Emitters)
 		{
-			FNiagaraEmitterInstance& Inst = Simulation.Get();
-			if (Inst.GetCachedEmitter() != nullptr)
+			if (const UNiagaraEmitter* Emitter = Simulation->GetCachedEmitter())
 			{
-				bHasGPUEmitters |= Inst.GetCachedEmitter()->SimTarget == ENiagaraSimTarget::GPUComputeSim;
-				Inst.PostInitSimulation();
+				bHasGPUEmitters |= Emitter->SimTarget == ENiagaraSimTarget::GPUComputeSim;
 			}
 		}
 
@@ -1637,7 +1891,7 @@ void FNiagaraSystemInstance::InitEmitters()
 		}
 	}
 
-	GatheredInstanceParameters.Init(Emitters.Num());
+	ResetParameters();
 }
 
 void FNiagaraSystemInstance::ComponentTick(float DeltaSeconds, const FGraphEventRef& MyCompletionGraphEvent)
@@ -1659,30 +1913,49 @@ void FNiagaraSystemInstance::ComponentTick(float DeltaSeconds, const FGraphEvent
 	check(Component);
 
 	SystemSim->Tick_GameThread(DeltaSeconds, MyCompletionGraphEvent);
+
 }
 
-void FNiagaraSystemInstance::WaitForAsyncTick(bool bEnsureComplete)
+void FNiagaraSystemInstance::WaitForAsyncTickDoNotFinalize(bool bEnsureComplete)
+{
+	if (bAsyncWorkInProgress == false)
+	{
+		return;
+	}
+
+	ensureAlwaysMsgf(!bEnsureComplete, TEXT("Niagara System Async Task should be complete by now. %s"), *GetSystem()->GetPathName());
+	ensureAlwaysMsgf(IsInGameThread(), TEXT("NiagaraSystemInstance::WaitForAsyncTick() call is assuming execution on GT but is not on GT. %s"), *GetSystem()->GetPathName());
+
+	SCOPE_CYCLE_COUNTER(STAT_NiagaraSystemWaitForAsyncTick);
+
+	const uint64 StartCycles = FPlatformTime::Cycles64();
+	const double WarnSeconds = 5.0;
+	const uint64 WarnCycles = StartCycles + uint64(WarnSeconds / FPlatformTime::GetSecondsPerCycle64());
+	bool bDoWarning = true;
+
+	while ( bAsyncWorkInProgress )
+	{
+		FPlatformProcess::SleepNoStats(0.001f);
+		if ( bDoWarning && (FPlatformTime::Cycles64() > WarnCycles) )
+		{
+			bDoWarning = false;
+			UE_LOG(LogNiagara, Warning, TEXT("Niagara Effect has stalled GT for %g seconds and is not complete, this may result in a deadlock.\nComponent: %s \nSystem: %s"), WarnSeconds, *GetFullNameSafe(Component), *GetFullNameSafe(GetSystem()));
+		}
+	}
+
+	const double StallTimeMS = FPlatformTime::ToMilliseconds64(FPlatformTime::Cycles64() - StartCycles);
+	if (StallTimeMS > GWaitForAsyncStallWarnThresholdMS)
+	{
+		//-TODO: This should be put back to a warning once EngineTests no longer cause it show up.  The reason it's triggered is because we pause in latent actions right after a TG running Niagara sims.
+		UE_LOG(LogNiagara, Log, TEXT("Niagara Effect stalled GT for %g ms.\nComponent: %s \nSystem: %s"), StallTimeMS, *GetFullNameSafe(Component), *GetFullNameSafe(GetSystem()));
+	}
+}
+
+void FNiagaraSystemInstance::WaitForAsyncTickAndFinalize(bool bEnsureComplete)
 {
 	if (bAsyncWorkInProgress)
 	{
-		ensureAlwaysMsgf(!bEnsureComplete, TEXT("Niagara System Async Task should be complete by now. %s"), *GetSystem()->GetPathName());
-		ensureAlwaysMsgf(IsInGameThread(), TEXT("NiagaraSystemInstance::WaitForAsyncTick() call is assuming execution on GT but is not on GT. %s"), *GetSystem()->GetPathName());
-
-		SCOPE_CYCLE_COUNTER(STAT_NiagaraSystemWaitForAsyncTick);
-
-		const uint64 StartCycles = FPlatformTime::Cycles64();
-		while (bAsyncWorkInProgress)
-		{
-			FPlatformProcess::SleepNoStats(0.0f);
-		}
-
-		const double StallTimeMS = FPlatformTime::ToMilliseconds64(FPlatformTime::Cycles64() - StartCycles);
-		if (StallTimeMS > GWaitForAsyncStallWarnThresholdMS)
-		{
-			//-TODO: This should be put back to a warning once EngineTests no longer cause it show up.  The reason it's triggered is because we pause in latent actions right after a TG running Niagara sims.
-			UE_LOG(LogNiagara, Log, TEXT("Niagara Effect stalled GT for %g ms.\nComponent: %s \nSystem: %s"), StallTimeMS, *GetFullNameSafe(Component), *GetFullNameSafe(GetSystem()));
-		}
-
+		WaitForAsyncTickDoNotFinalize(bEnsureComplete);
 		FinalizeTick_GameThread();
 	}
 }
@@ -1690,12 +1963,10 @@ void FNiagaraSystemInstance::WaitForAsyncTick(bool bEnsureComplete)
 bool FNiagaraSystemInstance::HandleCompletion()
 {
 	bool bEmittersCompleteOrDisabled = true;
-	bHasTickingEmitters = false;
 	for (TSharedRef<FNiagaraEmitterInstance, ESPMode::ThreadSafe>&it : Emitters)
 	{
 		FNiagaraEmitterInstance& Inst = *it;
 		bEmittersCompleteOrDisabled &= Inst.HandleCompletion();
-		bHasTickingEmitters |= Inst.ShouldTick();
 	}
 
 	bool bCompletedAlready = IsComplete();
@@ -1717,10 +1988,12 @@ void FNiagaraSystemInstance::Tick_GameThread(float DeltaSeconds)
 	CSV_SCOPED_TIMING_STAT_EXCLUSIVE(Niagara);
 	LLM_SCOPE(ELLMTag::Niagara);
 
+	FNiagaraCrashReporterScope CRScope(this);
+
 	UNiagaraSystem* System = GetSystem();
 	FScopeCycleCounter SystemStat(System->GetStatID(true, false));
 
-	WaitForAsyncTick(true);
+	WaitForAsyncTickAndFinalize(true);
 
 	CachedDeltaSeconds = DeltaSeconds;
 	bNeedsFinalize = true;
@@ -1732,7 +2005,10 @@ void FNiagaraSystemInstance::Tick_GameThread(float DeltaSeconds)
 	Age += DeltaSeconds;
 	TickCount += 1;
 	
-	BeginAsyncWork();
+	if ( !IsComplete() )
+	{
+		BeginAsyncWork();
+	}
 }
 
 void FNiagaraSystemInstance::Tick_Concurrent()
@@ -1743,12 +2019,33 @@ void FNiagaraSystemInstance::Tick_Concurrent()
 	LLM_SCOPE(ELLMTag::Niagara);
 	FScopeCycleCounterUObject AdditionalScope(GetSystem(), GET_STATID(STAT_NiagaraOverview_GT_CNC));
 
+	FNiagaraCrashReporterScope CRScope(this);
+
 	// Reset values that will be accumulated during emitter tick.
-	TotalParamSize = 0;
+	TotalGPUParamSize = 0;
 	ActiveGPUEmitterCount = 0;
+	GPUParamIncludeInterpolation = false;
 	UNiagaraSystem* System = GetSystem();
 
-	if (IsComplete() || !bHasTickingEmitters || GetSystem() == nullptr || Component == nullptr || CachedDeltaSeconds < SMALL_NUMBER)
+	const int32 NumEmitters = Emitters.Num();
+	checkSlow(EmitterExecutionOrder.Num() == NumEmitters);
+
+	//Determine if any of our emitters should be ticking.
+	TBitArray<TInlineAllocator<8>> EmittersShouldTick;
+	EmittersShouldTick.Init(false, NumEmitters);
+
+	bool bHasTickingEmitters = false;
+	for (int32 EmitterIdx : EmitterExecutionOrder)
+	{
+		FNiagaraEmitterInstance& Inst = Emitters[EmitterIdx].Get();
+		if (Inst.ShouldTick())
+		{
+			bHasTickingEmitters = true;
+			EmittersShouldTick.SetRange(EmitterIdx, 1, true);
+		}
+	}
+
+	if (IsComplete() || !bHasTickingEmitters || System == nullptr || Component == nullptr || CachedDeltaSeconds < SMALL_NUMBER)
 	{
 		bAsyncWorkInProgress = false;
 		return;
@@ -1756,23 +2053,44 @@ void FNiagaraSystemInstance::Tick_Concurrent()
 
 	FScopeCycleCounter SystemStat(System->GetStatID(true, true));
 
-	for (int32 EmitterIdx = 0; EmitterIdx < Emitters.Num(); EmitterIdx++)
+	for (int32 EmitterIdx : EmitterExecutionOrder)
 	{
-		FNiagaraEmitterInstance& Inst = Emitters[EmitterIdx].Get();
-		Inst.PreTick();
+		if (EmittersShouldTick[EmitterIdx])
+		{
+			FNiagaraEmitterInstance& Inst = Emitters[EmitterIdx].Get();
+			Inst.PreTick();
+		}
 	}
 
+	int32 TotalCombinedParamStoreSize = 0;
+
 	// now tick all emitters
-	for (int32 EmitterIdx = 0; EmitterIdx < Emitters.Num(); EmitterIdx++)
+	for (int32 EmitterIdx : EmitterExecutionOrder)
 	{
 		FNiagaraEmitterInstance& Inst = Emitters[EmitterIdx].Get();
-		Inst.Tick(CachedDeltaSeconds);
-
-		if (Inst.GetCachedEmitter() && Inst.GetCachedEmitter()->SimTarget == ENiagaraSimTarget::GPUComputeSim && Inst.GetGPUContext() != nullptr && (Inst.GetExecutionState() != ENiagaraExecutionState::Complete))
+		if (EmittersShouldTick[EmitterIdx])
 		{
-			TotalParamSize += Inst.GetGPUContext()->CombinedParamStore.GetPaddedParameterSizeInBytes();
-			ActiveGPUEmitterCount++;
+			Inst.Tick(CachedDeltaSeconds);
 		}
+
+		if (Inst.GetCachedEmitter() && Inst.GetCachedEmitter()->SimTarget == ENiagaraSimTarget::GPUComputeSim && !Inst.IsComplete())
+		{
+			if (const FNiagaraComputeExecutionContext* GPUContext = Inst.GetGPUContext())
+			{
+				TotalCombinedParamStoreSize += GPUContext->CombinedParamStore.GetPaddedParameterSizeInBytes();
+				GPUParamIncludeInterpolation = GPUContext->HasInterpolationParameters || GPUParamIncludeInterpolation;
+				ActiveGPUEmitterCount++;
+			}
+		}
+	}
+
+	if (ActiveGPUEmitterCount)
+	{
+		const int32 InterpFactor = GPUParamIncludeInterpolation ? 2 : 1;
+
+		TotalGPUParamSize = InterpFactor * (sizeof(FNiagaraGlobalParameters) + sizeof(FNiagaraSystemParameters) + sizeof(FNiagaraOwnerParameters));
+		TotalGPUParamSize += InterpFactor * ActiveGPUEmitterCount * sizeof(FNiagaraEmitterParameters);
+		TotalGPUParamSize += TotalCombinedParamStoreSize;
 	}
 
 	// Update local bounds
@@ -1811,10 +2129,16 @@ void FNiagaraSystemInstance::FinalizeTick_GameThread()
 {
 	if (bNeedsFinalize)//We can come in here twice in one tick if the GT calls WaitForAsync() while there is a GT finalize task in the queue.
 	{
+		FNiagaraCrashReporterScope CRScope(this);
+
 		SCOPE_CYCLE_COUNTER(STAT_NiagaraOverview_GT);
 		SCOPE_CYCLE_COUNTER(STAT_NiagaraSystemInst_FinalizeGT);
 		CSV_SCOPED_TIMING_STAT_EXCLUSIVE(Niagara);
 		LLM_SCOPE(ELLMTag::Niagara);
+
+		//Temporarily force FX to update their own LODDistance on frames where it is not provided by the scalability manager.
+		//TODO: Lots of FX wont need an accurate per frame value so implement a good way for FX to opt into this. FORT-248457
+		bLODDistanceIsValid = false;
 
 		bNeedsFinalize = false;
 		if (!HandleCompletion())
@@ -1822,7 +2146,6 @@ void FNiagaraSystemInstance::FinalizeTick_GameThread()
 			//Post tick our interfaces.
 			TickDataInterfaces(CachedDeltaSeconds, true);
 
-			bool bIsRegistered = true;
 			if (Component)
 			{
 				if ( bIsTransformDirty )
@@ -1831,43 +2154,59 @@ void FNiagaraSystemInstance::FinalizeTick_GameThread()
 					Component->UpdateComponentToWorld();
 				}
 				Component->MarkRenderDynamicDataDirty();
-				bIsRegistered = Component->IsRegistered();
-			}
 
-			// Push any GPU ticks for this system instance.
-			if (ActiveGPUEmitterCount > 0 && NiagaraSupportsComputeShaders(GetBatcher()->GetShaderPlatform()) && bIsRegistered)
-			{
-				ensure(!IsComplete());
-				FNiagaraGPUSystemTick GPUTick;
-				GPUTick.Init(this);
-
-				//if (GPUTick.DIInstanceData)
-				//{
-				//	uint8* BasePointer = (uint8*)GPUTick.DIInstanceData->PerInstanceDataForRT;
-
-				//	//UE_LOG(LogNiagara, Log, TEXT("GT Testing (dipacket) %p (baseptr) %p"), GPUTick.DIInstanceData, BasePointer);
-				//	for (auto& Pair : GPUTick.DIInstanceData->InterfaceProxiesToOffsets)
-				//	{
-				//		FNiagaraDataInterfaceProxy* Proxy = Pair.Key;
-				//		UE_LOG(LogNiagara, Log, TEXT("\tGT (proxy) %p (size) %u"), Proxy, Proxy->PerInstanceDataPassedToRenderThreadSize());
-				//	}
-				//}
-
-				// We will give the data over to the render thread. It is responsible for freeing it.
-				// We no longer own it and cannot modify it after this point.
-				// @todo We are taking a copy of the object here. This object is small so this overhead should
-				// not be very high. And we avoid making a bunch of small allocations here.
-				NiagaraEmitterInstanceBatcher* TheBatcher = GetBatcher();
-				ENQUEUE_RENDER_COMMAND(FGiveSystemInstanceTickToRT)(
-					[TheBatcher, GPUTick](FRHICommandListImmediate& RHICmdList) mutable
+				// Push any GPU ticks for this system instance.
+				if (ActiveGPUEmitterCount > 0 && Batcher && FNiagaraUtilities::AllowGPUParticles(Batcher->GetShaderPlatform()) && Component->IsRegistered())
 				{
-					TheBatcher->GiveSystemTick_RenderThread(GPUTick);
+					ensure(!IsComplete());
+					FNiagaraGPUSystemTick GPUTick;
+					GPUTick.Init(this);
+
+					//if (GPUTick.DIInstanceData)
+					//{
+					//	uint8* BasePointer = (uint8*)GPUTick.DIInstanceData->PerInstanceDataForRT;
+
+					//	//UE_LOG(LogNiagara, Log, TEXT("GT Testing (dipacket) %p (baseptr) %p"), GPUTick.DIInstanceData, BasePointer);
+					//	for (auto& Pair : GPUTick.DIInstanceData->InterfaceProxiesToOffsets)
+					//	{
+					//		FNiagaraDataInterfaceProxy* Proxy = Pair.Key;
+					//		UE_LOG(LogNiagara, Log, TEXT("\tGT (proxy) %p (size) %u"), Proxy, Proxy->PerInstanceDataPassedToRenderThreadSize());
+					//	}
+					//}
+
+					// We will give the data over to the render thread. It is responsible for freeing it.
+					// We no longer own it and cannot modify it after this point.
+					// @todo We are taking a copy of the object here. This object is small so this overhead should
+					// not be very high. And we avoid making a bunch of small allocations here.
+					NiagaraEmitterInstanceBatcher* TheBatcher = GetBatcher();
+					ENQUEUE_RENDER_COMMAND(FNiagaraGiveSystemInstanceTickToRT)(
+						[TheBatcher, GPUTick](FRHICommandListImmediate& RHICmdList) mutable
+						{
+							TheBatcher->GiveSystemTick_RenderThread(GPUTick);
+						}
+					);
 				}
-				);
 			}
 		}
 	}
 }
+
+#if WITH_EDITOR
+void FNiagaraSystemInstance::RaiseNeedsUIResync()
+{
+	AsyncTask(
+		ENamedThreads::GameThread,
+		[WeakComponent = TWeakObjectPtr<UNiagaraComponent>(Component)]() mutable
+	{
+		UNiagaraComponent* NiagaraComponent = WeakComponent.Get();
+		if (NiagaraComponent != nullptr )
+		{
+			NiagaraComponent->OnSynchronizedWithAssetParameters().Broadcast();
+		}
+	}
+	);
+}
+#endif
 
 #if WITH_EDITORONLY_DATA
 bool FNiagaraSystemInstance::GetIsolateEnabled() const
@@ -1883,6 +2222,19 @@ bool FNiagaraSystemInstance::GetIsolateEnabled() const
 
 void FNiagaraSystemInstance::DestroyDataInterfaceInstanceData()
 {
+	NiagaraEmitterInstanceBatcher* InstanceBatcher = GetBatcher();
+	if (bHasGPUEmitters && FNiagaraUtilities::AllowGPUParticles(InstanceBatcher->GetShaderPlatform()))
+	{
+		ENQUEUE_RENDER_COMMAND(NiagaraRemoveGPUSystem)
+		(
+			[InstanceBatcher, InstanceID=GetId()](FRHICommandListImmediate& RHICmdList) mutable
+			{
+				InstanceBatcher->InstanceDeallocated_RenderThread(InstanceID);
+			}
+		);
+	}
+
+	//
 	for (TPair<TWeakObjectPtr<UNiagaraDataInterface>, int32>& Pair : DataInterfaceInstanceDataOffsets)
 	{
 		if (UNiagaraDataInterface* Interface = Pair.Key.Get())
@@ -1975,3 +2327,19 @@ FNiagaraSystemInstance::FOnDestroyed& FNiagaraSystemInstance::OnDestroyed()
 	return OnDestroyedDelegate;
 }
 #endif
+
+const FString& FNiagaraSystemInstance::GetCrashReporterTag()const
+{
+	if(CrashReporterTag.IsEmpty())
+	{
+		UNiagaraSystem* Sys = Component ? Component->GetAsset() : nullptr;
+		USceneComponent* AttachParent = Component ? Component->GetAttachParent() : nullptr;
+
+		const FString& CompName = Component ? Component->GetFullName() : TEXT("nullptr");
+		const FString& AssetName = Sys ? Sys->GetFullName() : TEXT("nullptr");
+		const FString& AttachName = AttachParent ? AttachParent->GetFullName() : TEXT("nullptr");
+
+		CrashReporterTag = FString::Printf(TEXT("SystemInstance | System: %s | bSolo: %s | Component: %s | AttachedTo: %s |"), *AssetName, IsSolo() ? TEXT("true") : TEXT("false"), *CompName, *AttachName);
+	}
+	return CrashReporterTag;
+}

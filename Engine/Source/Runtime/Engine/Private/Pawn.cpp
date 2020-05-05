@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	Pawn.cpp: APawn AI implementation
@@ -213,12 +213,12 @@ bool APawn::IsLocallyControlled() const
 }
 bool APawn::IsPlayerControlled() const
 {
-	return PlayerState && !PlayerState->bIsABot;
+	return PlayerState && !PlayerState->IsABot();
 }
 
 bool APawn::IsBotControlled() const
 {
-	return PlayerState && PlayerState->bIsABot;
+	return PlayerState && PlayerState->IsABot();
 }
 
 bool APawn::ReachedDesiredRotation()

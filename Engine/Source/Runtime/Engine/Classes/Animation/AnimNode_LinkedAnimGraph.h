@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -48,6 +48,22 @@ public:
 	// The root node of the dynamically-linked graph
 	FAnimNode_Base* LinkedRoot;
 
+	// Our node index
+	int32 NodeIndex;
+
+protected:
+	// Inertial blending duration to request next update
+	float PendingBlendDuration;
+
+public:
+	/** Whether named notifies will be received by this linked instance from other instances (outer or other linked instances) */
+	UPROPERTY(EditAnywhere, Category = Settings)
+	uint8 bReceiveNotifiesFromLinkedInstances : 1;
+
+	/** Whether named notifies will be propagated from this linked instance to other instances (outer or other linked instances) */
+	UPROPERTY(EditAnywhere, Category = Settings)
+	uint8 bPropagateNotifiesToLinkedInstances : 1;
+
 	/** Dynamically set the anim class of this linked instance */
 	void SetAnimClass(TSubclassOf<UAnimInstance> InClass, const UAnimInstance* InOwningAnimInstance);
 
@@ -75,9 +91,6 @@ protected:
 	virtual void OnInitializeAnimInstance(const FAnimInstanceProxy* InProxy, const UAnimInstance* InAnimInstance) override;
 	virtual bool NeedsOnInitializeAnimInstance() const override { return true; }
 	// End of FAnimNode_Base interface
-
-	// Inertial blending duration to request next update
-	float PendingBlendDuration;
 
 	// Re-create the linked instances for this node
 	void ReinitializeLinkedAnimInstance(const UAnimInstance* InOwningAnimInstance, UAnimInstance* InNewAnimInstance = nullptr);

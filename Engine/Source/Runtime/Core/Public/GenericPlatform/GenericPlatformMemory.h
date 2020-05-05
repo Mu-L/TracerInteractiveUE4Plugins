@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 /*=============================================================================================
@@ -207,6 +207,7 @@ struct CORE_API FGenericPlatformMemory
 		Binned2, // Newer binned malloc
 		Binned3, // Newer VM-based binned malloc, 64 bit only
 		Platform, // Custom platform specific allocator
+		Mimalloc, // mimalloc
 	};
 
 	/** Current allocator */
@@ -629,9 +630,15 @@ public:
 
 	/**
 	* Returns true if debug memory has been assigned to the title for general use.
-	* Only applies to consoles with fixed memory and no paging.
+	* Only applies to platforms with fixed memory and no paging.
 	*/
 	static bool IsExtraDevelopmentMemoryAvailable();
+
+	/**
+	* Returns >0 if debug memory has been assigned to the title for general use.
+	* Only applies to platforms with fixed memory and no paging.
+	*/
+	static uint64 GetExtraDevelopmentMemorySize();
 
 	/**
 	* This function sets AllocFunction and FreeFunction and returns true, or just returns false.

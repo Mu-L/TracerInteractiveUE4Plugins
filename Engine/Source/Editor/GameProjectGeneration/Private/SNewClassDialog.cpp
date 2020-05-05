@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "SNewClassDialog.h"
@@ -24,7 +24,7 @@
 #include "ClassViewerFilter.h"
 #include "IContentBrowserSingleton.h"
 #include "ContentBrowserModule.h"
-#include "Editor/ClassViewer/Private/SClassViewer.h"
+#include "SClassViewer.h"
 #include "DesktopPlatformModule.h"
 #include "IDocumentation.h"
 #include "EditorClassUtils.h"

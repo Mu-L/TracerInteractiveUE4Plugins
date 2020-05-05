@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -15,6 +15,39 @@ class IConcertClientConnectionTask;
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnConcertClientSessionStartupOrShutdown, TSharedRef<IConcertClientSession>);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FOnConcertClientSessionGetPreConnectionTasks, const IConcertClient&, TArray<TUniquePtr<IConcertClientConnectionTask>>&);
+
+/**
+ * Enum to indicate if any action were taken for the connection task
+ */
+enum class EConcertConnectionTaskAction : uint8
+{
+	None = 0,
+	Cancel,
+	Continue
+};
+
+/**
+ * Struct to contain connection error
+ * Code is an integer instead of an enum since connection task can be extended, range under 10000 is reserved.
+ * Currently used code and their meaning are as follow
+ *	No Error								= 0:	Success
+ *	Pre Connection Canceled					= 1:	Pre connection validation was canceled by the user
+ *	Connection Attempt Aborted				= 2:	Ongoing connection attempt was canceled by the user
+ *	Server Not Responding					= 3:	Connection request to server timed out
+ *	Server Request Failure					= 4:	Server refused the session connection request
+ *	Workspace Validation Unknown Error		= 100:	Workspace validation unknown error
+ *	Source Control Validation Unknown Error	= 110:	Unknown source control validation error
+ *	Source Control Validation Canceled		= 111:	Source control validation was canceled by the user
+ *	Source Control Validation Error			= 112:	Modified files not yet submitted were found in the workspace
+ *	Dirty Packages Validation Error			= 113:	Dirty Packages were found before connecting to a session
+ */
+struct FConcertConnectionError
+{
+	/** Code for the last connection error. */
+	uint32 ErrorCode = 0;
+	/** Localized text associated with the error. */
+	FText ErrorText;
+};
 
 /** Interface for tasks executed during the Concert client connection flow (eg, validation, creation, connection) */
 class IConcertClientConnectionTask
@@ -37,10 +70,10 @@ public:
 	/**
 	 * Tick this task, optionally requesting that it should gracefully cancel.
 	 */
-	virtual void Tick(const bool bShouldCancel) = 0;
+	virtual void Tick(EConcertConnectionTaskAction TaskAction) = 0;
 
 	/**
-	 * Get whether this task can be gracefully cancelled.
+	 * Get whether this task can be gracefully canceled.
 	 */
 	virtual bool CanCancel() const = 0;
 
@@ -51,14 +84,24 @@ public:
 	virtual EConcertResponseCode GetStatus() const = 0;
 
 	/**
-	 * Get the extended error status of this task that can be used in the error notification (if any).
-	 */
-	virtual FText GetError() const = 0;
-
-	/**
 	 * Get a description of this task that can be used in the progress notification (if any).
 	 */
 	virtual FText GetDescription() const = 0;
+
+	/**
+	 * Get the prompt message of this task to be displayed on prompt button if the task require action.
+	 */
+	virtual FText GetPrompt() const = 0;
+
+	/**
+	 * Get the extended error status of this task that can be used in the error notification (if any).
+	 */
+	virtual FConcertConnectionError GetError() const = 0;
+
+	/**
+	 * Get the delegate to gather more error details for this task error notification (if any).
+	 */
+	virtual FSimpleDelegate GetErrorDelegate() const = 0;
 };
 
 struct FConcertCreateSessionArgs
@@ -70,21 +113,21 @@ struct FConcertCreateSessionArgs
 	FString ArchiveNameOverride;
 };
 
-struct FConcertRestoreSessionArgs
+struct FConcertCopySessionArgs
 {
-	/** True to auto-connect to the session after restoring it */
+	/** True to auto-connect to the session after copying/restoring it */
 	bool bAutoConnect = true;
 
-	/** The ID of the archived session to restore */
+	/** The ID of the session to copy or restore */
 	FGuid SessionId;
 
 	/** The desired name for new session */
 	FString SessionName;
 
-	/** The override for the name used when archiving this session */
+	/** The override for the name used when archiving the copied/restored session */
 	FString ArchiveNameOverride;
 
-	/** The filter controlling which activities from the session should be restored */
+	/** The filter controlling which activities should be copied from the source session. */
 	FConcertSessionFilter SessionFilter;
 };
 
@@ -189,6 +232,12 @@ public:
 	virtual void StopAutoConnect() = 0;
 
 	/**
+	 * Get the last connection error
+	 * @return an error code along with a text description of the last connection error.
+	 */
+	virtual FConcertConnectionError GetLastConnectionError() const = 0;
+
+	/**
 	 * Get the list of discovered server information
 	 */
 	virtual TArray<FConcertServerInfo> GetKnownServers() const = 0;
@@ -243,13 +292,23 @@ public:
 	virtual TFuture<EConcertResponseCode> JoinSession(const FGuid& ServerAdminEndpointId, const FGuid& SessionId) = 0;
 
 	/**
-	 * Restore an archived session on the server, matching the client configured settings.
+	 * Copy an archived session into a new live session on the server, matching the client configured settings.
 	 * This also initiates the connection handshake for that session with the client when bAutoConnect is true in the RestoreSessionArgs.
 	 * @param ServerAdminEndpointId	The Id of the Concert Server query endpoint
 	 * @param RestoreSessionArgs	The arguments that will be use for the restoration of the session
 	 * @return A future that will contains the final response code of the request
 	 */
-	virtual TFuture<EConcertResponseCode> RestoreSession(const FGuid& ServerAdminEndpointId, const FConcertRestoreSessionArgs& RestoreSessionArgs) = 0;
+	virtual TFuture<EConcertResponseCode> RestoreSession(const FGuid& ServerAdminEndpointId, const FConcertCopySessionArgs& RestoreSessionArgs) = 0;
+
+	/**
+	 * Copy a live or and archived session into a new live session on server, matching the configured settings. If the session is archived,
+	 * this is equivalent to restoring it (because copying an archive into another archive is not useful).
+	 * This also initiates the connection handshake for that session with the server when bAutoConnect is true in the CopySessionArgs.
+	 * @param ServerAdminEndpointId	The Id of the Concert Server query endpoint
+	 * @param CopySessionArgs	The arguments that will be use to copy the session
+	 * @return A future that will contains the final response code of the request
+	 */
+	virtual TFuture<EConcertResponseCode> CopySession(const FGuid& ServerAdminEndpointId, const FConcertCopySessionArgs& CopySessionArgs) = 0;
 
 	/**
 	 * Archive a live session on the server hosting the session.

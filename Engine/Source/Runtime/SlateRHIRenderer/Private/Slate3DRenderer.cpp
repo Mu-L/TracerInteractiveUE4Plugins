@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Slate3DRenderer.h"
 #include "Fonts/FontCache.h"
@@ -189,6 +189,7 @@ void FSlate3DRenderer::DrawWindowToTarget_RenderThread(FRHICommandListImmediate&
 				RenderTargetPolicy->DrawElements(
 					InRHICmdList,
 					BackBufferTarget,
+					ColorTarget,
 					ColorTarget,
 					DepthStencil,
 					BatchData.GetFirstRenderBatchIndex(),

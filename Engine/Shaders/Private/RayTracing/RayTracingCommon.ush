@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	RayTracingCommon.ush: common header used in multiple ray generation shaders
@@ -15,9 +15,9 @@
 #include "../ShadingCommon.ush"
 #include "/Engine/Shared/RayTracingDefinitions.h"
 
-#ifdef PLATFORM_RAY_TRACING_USH
+#ifdef OVERRIDE_RAYTRACING_USH
 #include "/Platform/Private/RayTracing.ush"
-#endif // PLATFORM_RAY_TRACING_USH
+#endif // OVERRIDE_RAYTRACING_USH
 
 // Define generic wrappers for ray tracing shader entry points, if not already overriden
 
@@ -187,7 +187,9 @@ struct FMaterialClosestHitPayload : FMinimalPayload
 	// It is not packed in FRayHitInfoPacked
 	float3 WorldPos;					// 136       0       (derived)
 	uint Flags;							// 148       4       32bits
-										// 152 total
+	float3 WorldTangent;				// 152       6       48bits
+	float Anisotropy;					// 164       2       16bits (packed with WorldTangent)
+										// 166 total
 
 	void SetMinimalPayloadMode() { Flags |= RAY_TRACING_PAYLOAD_FLAG_MINIMAL_PAYLOAD; }
 	bool IsMinimalPayloadMode() { return (Flags & RAY_TRACING_PAYLOAD_FLAG_MINIMAL_PAYLOAD) != 0; }
@@ -226,9 +228,10 @@ struct FPackedMaterialClosestHitPayload : FMinimalPayload
 	uint BaseColorAndOpacity[2];                         // 8  bytes
 	uint MetallicAndSpecularAndRoughness;                // 4  bytes
 	uint IorAndShadingModelIDAndBlendingModeAndFlags;    // 4  bytes
-	uint IndirectIrradiance[2];                          // 8  bytes
-	uint CustomData;                                     // 4  bytes
-	                                                     // 52 bytes total
+	uint PackedIndirectIrradiance[2];                    // 8  bytes
+	uint PackedCustomData;                               // 4  bytes
+	uint WorldTangentAndAnisotropy[2];					 // 8  bytes
+	                                                     // 60 bytes total
 
 	void SetMinimalPayloadMode() { IorAndShadingModelIDAndBlendingModeAndFlags |= RAY_TRACING_PAYLOAD_FLAG_MINIMAL_PAYLOAD << 24; }
 	bool IsMinimalPayloadMode() { return ((IorAndShadingModelIDAndBlendingModeAndFlags >> 24) & RAY_TRACING_PAYLOAD_FLAG_MINIMAL_PAYLOAD) != 0; }
@@ -256,17 +259,17 @@ struct FPackedMaterialClosestHitPayload : FMinimalPayload
 
 	void SetIndirectIrradiance(float3 InIndirectIrradiance)
 	{
-		IndirectIrradiance[0] = f32tof16(InIndirectIrradiance.x);
-		IndirectIrradiance[0] |= f32tof16(InIndirectIrradiance.y) << 16;
-		IndirectIrradiance[1] = f32tof16(InIndirectIrradiance.z);
+		PackedIndirectIrradiance[0] = f32tof16(InIndirectIrradiance.x);
+		PackedIndirectIrradiance[0] |= f32tof16(InIndirectIrradiance.y) << 16;
+		PackedIndirectIrradiance[1] = f32tof16(InIndirectIrradiance.z);
 	}
 
 	float3 GetIndirectIrradiance()
 	{
 		float3 Result;
-		Result.x = f16tof32(IndirectIrradiance[0]);
-		Result.y = f16tof32(IndirectIrradiance[0] >> 16);
-		Result.z = f16tof32(IndirectIrradiance[1]);
+		Result.x = f16tof32(PackedIndirectIrradiance[0]);
+		Result.y = f16tof32(PackedIndirectIrradiance[0] >> 16);
+		Result.z = f16tof32(PackedIndirectIrradiance[1]);
 		return Result;
 	}
 
@@ -282,14 +285,13 @@ struct FPackedMaterialClosestHitPayload : FMinimalPayload
 	float4 GetCustomData()
 	{
 		float4 Result;
-		Result.x = CustomData & 0xFF;
-		Result.y = (CustomData >> 8) & 0xFF;
-		Result.z = (CustomData >> 16) & 0xFF;
-		Result.w = (CustomData >> 24) & 0xFF;
+		Result.x = PackedCustomData & 0xFF;
+		Result.y = (PackedCustomData >> 8) & 0xFF;
+		Result.z = (PackedCustomData >> 16) & 0xFF;
+		Result.w = (PackedCustomData >> 24) & 0xFF;
 		Result /= 255.0;
 		return Result;
-	}
-	
+	}	
 
 	float3 GetBaseColor()
 	{
@@ -297,6 +299,15 @@ struct FPackedMaterialClosestHitPayload : FMinimalPayload
 		Result.x = f16tof32(BaseColorAndOpacity[0]);
 		Result.y = f16tof32(BaseColorAndOpacity[0] >> 16);
 		Result.z = f16tof32(BaseColorAndOpacity[1]);
+		return Result;
+	}
+	
+	float3 GetWorldTangent()
+	{
+		float3 Result;
+		Result.x = f16tof32(WorldTangentAndAnisotropy[0]);
+		Result.y = f16tof32(WorldTangentAndAnisotropy[0] >> 16);
+		Result.z = f16tof32(WorldTangentAndAnisotropy[1]);
 		return Result;
 	}
 
@@ -308,6 +319,7 @@ struct FPackedMaterialClosestHitPayload : FMinimalPayload
 	uint GetBlendingMode()   { return (IorAndShadingModelIDAndBlendingModeAndFlags >> 20) & 0xF;  }
 	uint GetFlags()          { return (IorAndShadingModelIDAndBlendingModeAndFlags >> 24) & 0xFF; }
 	uint GetShadingModelID() { return (IorAndShadingModelIDAndBlendingModeAndFlags >> 16) & 0xF; }
+	float GetAnisotropy()    { return f16tof32(WorldTangentAndAnisotropy[1] >> 16); }
 
 	float3 GetDiffuseColor() { return GetBaseColor() - GetBaseColor() * GetMetallic(); }
 	float3 GetSpecularColor() { return ComputeF0(GetSpecular(), GetBaseColor(), GetMetallic()); }
@@ -336,11 +348,15 @@ FPackedMaterialClosestHitPayload PackRayTracingPayload(FMaterialClosestHitPayloa
 	Output.IorAndShadingModelIDAndBlendingModeAndFlags |= (Input.ShadingModelID & 0xF) << 16; // 4 bits
 	Output.IorAndShadingModelIDAndBlendingModeAndFlags |= (Input.BlendingMode & 0xF) << 20;   // 4 bits
 	Output.IorAndShadingModelIDAndBlendingModeAndFlags |= (Input.Flags & 0xF) << 24;          // 8 bits
-	Output.IndirectIrradiance[0] = f32tof16(Input.IndirectIrradiance.x);
-	Output.IndirectIrradiance[0] |= f32tof16(Input.IndirectIrradiance.y) << 16;
-	Output.IndirectIrradiance[1] = f32tof16(Input.IndirectIrradiance.z);
+	Output.PackedIndirectIrradiance[0] = f32tof16(Input.IndirectIrradiance.x);
+	Output.PackedIndirectIrradiance[0] |= f32tof16(Input.IndirectIrradiance.y) << 16;
+	Output.PackedIndirectIrradiance[1] = f32tof16(Input.IndirectIrradiance.z);
 	int4 CustomData = round(Input.CustomData * 255);
-	Output.CustomData = CustomData.x | (CustomData.y << 8) | (CustomData.z << 16) | (CustomData.w << 24);
+	Output.PackedCustomData = CustomData.x | (CustomData.y << 8) | (CustomData.z << 16) | (CustomData.w << 24);
+	Output.WorldTangentAndAnisotropy[0]  = f32tof16(Input.WorldTangent.x);
+	Output.WorldTangentAndAnisotropy[0] |= f32tof16(Input.WorldTangent.y) << 16;
+	Output.WorldTangentAndAnisotropy[1]  = f32tof16(Input.WorldTangent.z);
+	Output.WorldTangentAndAnisotropy[1] |= f32tof16(Input.Anisotropy) << 16;
 
 	return Output;
 }
@@ -349,8 +365,8 @@ FMaterialClosestHitPayload UnpackRayTracingPayload(FPackedMaterialClosestHitPayl
 {
 	FMaterialClosestHitPayload Output = (FMaterialClosestHitPayload)0;
 
-	Output.HitT               = Input.HitT;
-	Output.RayCone            = Input.RayCone;
+	Output.HitT = Input.HitT;
+	Output.RayCone = Input.RayCone; 
 	Output.Radiance           = Input.GetRadiance();
 	Output.WorldNormal        = Input.GetWorldNormal();
 	Output.BaseColor          = Input.GetBaseColor();
@@ -364,6 +380,8 @@ FMaterialClosestHitPayload UnpackRayTracingPayload(FPackedMaterialClosestHitPayl
 	Output.Flags              = Input.GetFlags();
 	Output.IndirectIrradiance = Input.GetIndirectIrradiance();
 	Output.CustomData         = Input.GetCustomData();
+	Output.WorldTangent		  = Input.GetWorldTangent();
+	Output.Anisotropy         = Input.GetAnisotropy();
 
 	Output.DiffuseColor  = Output.BaseColor - Output.BaseColor * Output.Metallic;
 	Output.SpecularColor = ComputeF0(Output.Specular, Output.BaseColor, Output.Metallic);

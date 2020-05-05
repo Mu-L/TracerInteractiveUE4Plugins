@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Customizations/TextureDetailsCustomization.h"
 #include "Misc/MessageDialog.h"
@@ -32,6 +32,7 @@ void FTextureDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
 
 	MaxTextureSizePropertyHandle = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(UTexture, MaxTextureSize));
 	PowerOfTwoModePropertyHandle = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(UTexture, PowerOfTwoMode));
+	VirtualTextureStreamingPropertyHandle = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(UTexture, VirtualTextureStreaming));
 
 	// Customize MaxTextureSize
 	if( MaxTextureSizePropertyHandle->IsValidHandle() )
@@ -116,6 +117,17 @@ void FTextureDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuilder)
 				.InitiallySelectedItem(PowerOfTwoModeComboBoxList[PowerOfTwoMode])
 				.OnSelectionChanged(this, &FTextureDetails::OnPowerOfTwoModeChanged)
 			];
+	}
+
+	// Hide the option to enable VT streaming, if VT is disabled for the project
+	if (VirtualTextureStreamingPropertyHandle.IsValid())
+	{
+		static const auto CVarVirtualTexturesEnabled = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.VirtualTextures")); check(CVarVirtualTexturesEnabled);
+		const bool bVirtualTextureEnabled = CVarVirtualTexturesEnabled->GetValueOnAnyThread() != 0;
+		if (!bVirtualTextureEnabled)
+		{
+			DetailBuilder.HideProperty(VirtualTextureStreamingPropertyHandle);
+		}
 	}
 }
 
@@ -202,7 +214,7 @@ void FTextureDetails::OnBeginSliderMovement()
 
 	bIsUsingSlider = true;
 
-	GEditor->BeginTransaction(TEXT("TextureDetails"), LOCTEXT("SetMaximumTextureSize", "Edit Maximum Texture Size"), MaxTextureSizePropertyHandle->GetProperty());
+	GEditor->BeginTransaction(TEXT("TextureDetails"), LOCTEXT("SetMaximumTextureSize", "Edit Maximum Texture Size"), nullptr /* MaxTextureSizePropertyHandle->GetProperty() */ );
 }
 
 

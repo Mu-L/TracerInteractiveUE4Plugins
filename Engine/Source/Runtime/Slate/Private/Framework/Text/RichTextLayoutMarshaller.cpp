@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Framework/Text/RichTextLayoutMarshaller.h"
 #include "Styling/ISlateStyle.h"
@@ -83,6 +83,14 @@ void FRichTextLayoutMarshaller::GetText(FString& TargetString, const FTextLayout
 	}
 
 	Writer->Write(WriterLines, TargetString);
+}
+
+void FRichTextLayoutMarshaller::SetFontSizeMultiplier(const float NewFontSizeMultiplier)
+{
+	if (ensure(NewFontSizeMultiplier != 0.0f))
+	{
+		FontSizeMultiplier = NewFontSizeMultiplier;
+	}
 }
 
 FRichTextLayoutMarshaller::FRichTextLayoutMarshaller(TArray< TSharedRef< ITextDecorator > > InDecorators, const ISlateStyle* const InDecoratorStyleSet)
@@ -170,7 +178,14 @@ void FRichTextLayoutMarshaller::AppendRunsForText(
 		ModelRange.EndIndex = InOutModelText->Len();
 
 		// Create run.
-		Run = FSlateTextRun::Create(RunInfo, InOutModelText, *TextBlockStyle, ModelRange);
+		TSharedPtr< FSlateTextRun > SlateTextRun = FSlateTextRun::Create(RunInfo, InOutModelText, *TextBlockStyle, ModelRange);
+
+		if (SlateTextRun)
+		{
+			// Apply the FontSizeMultiplier at the style use by the IRun
+			SlateTextRun->ApplyFontSizeMultiplierOnTextStyle(FontSizeMultiplier);
+		}
+		Run = SlateTextRun;
 
 		if (!TextBlockStyle->UnderlineBrush.GetResourceName().IsNone())
 		{

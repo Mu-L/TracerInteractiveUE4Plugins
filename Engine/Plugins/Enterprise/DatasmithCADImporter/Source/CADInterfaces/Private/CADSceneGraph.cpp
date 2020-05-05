@@ -1,11 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CADSceneGraph.h"
 
 #include "Misc/FileHelper.h"
 #include "Serialization/Archive.h"
-#include "Serialization/MemoryWriter.h"
-#include "Serialization/MemoryReader.h"
+#include "HAL/FileManager.h"
 
 namespace CADLibrary
 {
@@ -64,45 +63,44 @@ FArchive& operator<<(FArchive& Ar, FArchiveMaterial& Material)
 	return Ar;
 }
 
-FArchive& operator<<(FArchive& Ar, FArchiveMockUp& MockUp)
+FArchive& operator<<(FArchive& Ar, FArchiveSceneGraph& SceneGraph)
 {
-	Ar << MockUp.CADFile;
-	Ar << MockUp.SceneGraphArchive;
-	Ar << MockUp.FullPath;
-	Ar << MockUp.ExternalRefSet;
+	Ar << SceneGraph.CADFileName;
+	Ar << SceneGraph.ArchiveFileName;
+	Ar << SceneGraph.FullPath;
+	Ar << SceneGraph.ExternalRefSet;
 
-	Ar << MockUp.ColorHIdToColor;
-	Ar << MockUp.MaterialHIdToMaterial;
+	Ar << SceneGraph.ColorHIdToColor;
+	Ar << SceneGraph.MaterialHIdToMaterial;
 
-	Ar << MockUp.Instances;
-	Ar << MockUp.ComponentSet;
-	Ar << MockUp.UnloadedComponentSet;
-	Ar << MockUp.BodySet;
+	Ar << SceneGraph.Instances;
+	Ar << SceneGraph.ComponentSet;
+	Ar << SceneGraph.UnloadedComponentSet;
+	Ar << SceneGraph.BodySet;
 
-	Ar << MockUp.CADIdToInstanceIndex;
-	Ar << MockUp.CADIdToComponentIndex;
-	Ar << MockUp.CADIdToUnloadedComponentIndex;
-	Ar << MockUp.CADIdToBodyIndex;
+	Ar << SceneGraph.CADIdToInstanceIndex;
+	Ar << SceneGraph.CADIdToComponentIndex;
+	Ar << SceneGraph.CADIdToUnloadedComponentIndex;
+	Ar << SceneGraph.CADIdToBodyIndex;
 
 	return Ar;
 }
 
-void SerializeMockUp(FArchiveMockUp& MockUp, const TCHAR* Filename)
+void FArchiveSceneGraph::SerializeMockUp(const TCHAR* Filename)
 {
-	TArray<uint8> OutBuffer;
-	FMemoryWriter ArWriter(OutBuffer);
-	ArWriter << MockUp;
-
-	FFileHelper::SaveArrayToFile(OutBuffer, Filename);
+	TUniquePtr<FArchive> Archive(IFileManager::Get().CreateFileWriter(Filename));
+	*Archive << *this;
+	Archive->Close();
 }
 
-void DeserializeMockUpFile(const TCHAR* Filename, FArchiveMockUp& MockUp)
+void FArchiveSceneGraph::DeserializeMockUpFile(const TCHAR* Filename)
 {
-	TArray<uint8> Buffer;
-	FFileHelper::LoadFileToArray(Buffer, Filename);
-
-	FMemoryReader ArReader(Buffer);
-	ArReader << MockUp;
+	TUniquePtr<FArchive> Archive(IFileManager::Get().CreateFileReader(Filename));
+	if (Archive.IsValid())
+	{
+		*Archive << *this;
+		Archive->Close();
+	}
 }
 
 }

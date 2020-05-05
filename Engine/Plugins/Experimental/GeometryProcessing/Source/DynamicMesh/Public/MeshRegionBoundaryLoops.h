@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // Port of geometry3cpp MeshRegionBoundaryLoops
 
@@ -15,15 +15,25 @@
 class DYNAMICMESH_API FMeshRegionBoundaryLoops
 {
 public:
+
+	// INPUTS
+
 	/** Mesh we are finding loops on */
 	const FDynamicMesh3* Mesh = nullptr;
 	/** Resulting set of loops filled by Compute() */
 	TArray<FEdgeLoop> Loops;
 
+	// OUTPUTS
+
+	/** If true, we did not completely succeed in extracting all loops */
+	bool bFailed = false;
+
 public:
 	FMeshRegionBoundaryLoops() {}
 
 	FMeshRegionBoundaryLoops(const FDynamicMesh3* MeshIn, const TArray<int>& RegionTris, bool bAutoCompute = true);
+
+	void SetMesh(const FDynamicMesh3* MeshIn, const TArray<int>& RegionTris);
 
 	/**
 	 * Find set of FEdgeLoops on the border of the input triangle set
@@ -33,7 +43,13 @@ public:
 
 
 	/** @return number of loops found by Compute() */
-	int GetLoopCount() const
+	int32 GetLoopCount() const
+	{
+		return Num();
+	}
+
+	/** @return number of loops found by Compute() */
+	int32 Num() const
 	{
 		return Loops.Num();
 	}
@@ -44,6 +60,11 @@ public:
 		return Loops[Index];
 	}
 
+	const TArray<FEdgeLoop>& GetLoops() const
+	{
+		return Loops;
+	}
+
 	/** @return index of loop with maximum number of vertices */
 	int GetMaxVerticesLoopIndex() const;
 	
@@ -51,9 +72,7 @@ public:
 
 protected:
 
-
-	// TODO: C# code used IndexFlagSet here, which is sparse if region size << mesh size
-	// list of included triangles and edges
+	// sets of included triangles and edges
 	FIndexFlagSet Triangles;
 	FIndexFlagSet Edges;
 	TArray<int> edges_roi;
@@ -65,7 +84,7 @@ protected:
 	bool IsEdgeOnBoundary(int eid, int& tid_in, int& tid_out) const;
 
 	// return same indices as GetEdgeV, but oriented based on attached triangle
-	FIndex2i GetOrientedEdgeVerts(int eID, int tid_in, int tid_out);
+	FIndex2i GetOrientedEdgeVerts(int eID, int tid_in);
 
 	// returns first two boundary edges, and count of total boundary edges
 	int GetVertexBoundaryEdges(int vID, int& e0, int& e1);
@@ -88,7 +107,7 @@ protected:
 	// This is called when loopV contains one or more "bowtie" vertices.
 	// These vertices *might* be duplicated : loopV (but not necessarily)
 	// If they are, we have to break loopV into subloops that don't contain duplicates.
-	TArray<FEdgeLoop> ExtractSubloops(TArray<int>& loopV, const TArray<int>& loopE, const TArray<int>& bowties);
+	bool TryExtractSubloops(TArray<int>& loopV, const TArray<int>& loopE, const TArray<int>& bowties, TArray<FEdgeLoop>& SubLoopsOut);
 
 
 };

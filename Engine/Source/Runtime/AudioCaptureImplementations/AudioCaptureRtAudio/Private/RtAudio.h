@@ -1,9 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "AudioCaptureCore.h"
 
-#if PLATFORM_WINDOWS || PLATFORM_MAC || PLATFORM_XBOXONE
+#if PLATFORM_MICROSOFT || PLATFORM_MAC
 /************************************************************************/
 /*! \class RtAudio
     \brief Realtime audio i/o C++ classes.
@@ -63,7 +63,7 @@
 #undef __WINDOWS_WASAPI__
 #endif
 
-#elif PLATFORM_XBOXONE
+#elif PLATFORM_MICROSOFT
 
 // On Xbox, we use WASAPI.
 #include "Windows/WindowsHWrapper.h"
@@ -330,7 +330,8 @@ class AUDIOCAPTURERTAUDIO_API RtAudio
   //! The public device information structure for returning queried values.
   struct DeviceInfo {
     bool probed;                  /*!< true if the device capabilities were successfully probed. */
-    std::string name;             /*!< Character string device identifier. */
+	std::string name;             /*!< Character string device display name. */
+	std::string deviceId;               /*!< Character string device identifier. */
     unsigned int outputChannels;  /*!< Maximum output channels supported by device. */
     unsigned int inputChannels;   /*!< Maximum input channels supported by device. */
     unsigned int duplexChannels;  /*!< Maximum simultaneous input/output channels supported by device. */

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -42,9 +42,6 @@ class SWidget;
 struct FSlateBrush;
 struct FSlatePaintElementLists;
 
-
-
-DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("STAT_SlateVeryVerboseStatGroupTester"), STAT_SlateVeryVerboseStatGroupTester, STATGROUP_SlateVeryVerbose, SLATECORE_API);
 DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("Widgets Created (Per Frame)"), STAT_SlateTotalWidgetsPerFrame, STATGROUP_Slate, SLATECORE_API);
 DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("SWidget::Paint (Count)"), STAT_SlateNumPaintedWidgets, STATGROUP_Slate, SLATECORE_API);
 DECLARE_DWORD_COUNTER_STAT_EXTERN(TEXT("SWidget::Tick (Count)"), STAT_SlateNumTickedWidgets, STATGROUP_Slate, SLATECORE_API);
@@ -54,7 +51,6 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("SlatePrepass"), STAT_SlatePrepass, STATGROUP_Sla
 
 DECLARE_DWORD_ACCUMULATOR_STAT_EXTERN(TEXT("Total Widgets"), STAT_SlateTotalWidgets, STATGROUP_SlateMemory, SLATECORE_API);
 DECLARE_MEMORY_STAT_EXTERN(TEXT("SWidget Total Allocated Size"), STAT_SlateSWidgetAllocSize, STATGROUP_SlateMemory, SLATECORE_API);
-
 
 /** Delegate type for handling mouse events */
 DECLARE_DELEGATE_RetVal_TwoParams(
@@ -730,7 +726,9 @@ private:
 		DesiredSize = InDesiredSize;
 	}
 
+#if STATS || ENABLE_STATNAMEDEVENTS
 	void CreateStatID() const;
+#endif
 
 	void AddUpdateFlags(EWidgetUpdateFlags FlagsToAdd)
 	{
@@ -757,7 +755,7 @@ private:
 #endif
 	}
 
-	void UpdateWidgetProxy(int32 NewLayerId, FSlateCachedElementListNode* CacheNode);
+	void UpdateWidgetProxy(int32 NewLayerId, FSlateCachedElementsHandle& CacheHandle);
 
 #if WITH_SLATE_DEBUGGING
 	uint32 Debug_GetLastPaintFrame() const { return LastPaintFrame; }
@@ -770,7 +768,7 @@ public:
 	{
 #if STATS
 		// this is done to avoid even registering stats for a disabled group (unless we plan on using it later)
-		if (FThreadStats::IsCollectingData(GET_STATID(STAT_SlateVeryVerboseStatGroupTester)))
+		if (FThreadStats::IsCollectingData())
 		{
 			if (!StatID.IsValidStat())
 			{
@@ -778,12 +776,21 @@ public:
 			}
 			return StatID;
 		}
+#elif ENABLE_STATNAMEDEVENTS
+		if (!StatID.IsValidStat() && GCycleStatsShouldEmitNamedEvents)
+		{
+			CreateStatID();
+		}
+		return StatID;
 #endif
 		return TStatId(); // not doing stats at the moment, or ever
 	}
 
+	UE_DEPRECATED(4.24, "GetRelativeLayoutScale(int32 ChildIndex, float LayoutScaleMultiplier), your widget will also need to set bHasRelativeLayoutScale in their Construct/ctor.")
+	virtual float GetRelativeLayoutScale(const FSlotBase& Child, float LayoutScaleMultiplier) const { return 1.0f; }
+
 	/** What is the Child's scale relative to this widget. */
-	virtual float GetRelativeLayoutScale(const FSlotBase& Child, float LayoutScaleMultiplier) const;
+	virtual float GetRelativeLayoutScale(const int32 ChildIndex, float LayoutScaleMultiplier) const;
 
 	/**
 	 * Non-virtual entry point for arrange children. ensures common work is executed before calling the virtual
@@ -1556,6 +1563,8 @@ private:
 
 protected:
 	uint8 bHasCustomPrepass : 1;
+
+	uint8 bHasRelativeLayoutScale : 1;
 	
 	/** if this widget should always invalidate the prepass step when volatile */
 	uint8 bVolatilityAlwaysInvalidatesPrepass : 1;
@@ -1673,8 +1682,16 @@ private:
 	FNoReplyPointerEventHandler MouseEnterHandler;
 	FSimpleNoReplyPointerEventHandler MouseLeaveHandler;
 
-	STAT(mutable TStatId StatID;)
 	STAT(size_t AllocSize;)
+
+#if STATS || ENABLE_STATNAMEDEVENTS
+	/** Stat id of this object, 0 if nobody asked for it yet */
+	mutable TStatId				StatID;
+#endif
+
+#if ENABLE_STATNAMEDEVENTS
+	mutable PROFILER_CHAR* StatIDStringStorage;
+#endif
 };
 
 //=================================================================

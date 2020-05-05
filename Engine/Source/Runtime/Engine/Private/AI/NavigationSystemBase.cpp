@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AI/NavigationSystemBase.h"
 #include "Engine/Engine.h"
@@ -12,6 +12,8 @@
 #include "AI/Navigation/NavigationDataChunk.h"
 
 DEFINE_LOG_CATEGORY(LogNavigation);
+DEFINE_LOG_CATEGORY(LogNavigationDataBuild);
+DEFINE_LOG_CATEGORY(LogNavLink);
 
 #if !UE_BUILD_SHIPPING
 #include "CoreGlobals.h"

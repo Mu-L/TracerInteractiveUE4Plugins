@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -61,7 +61,7 @@ struct IMAGEPLATE_API FImagePlateSourceFrame
 	/** Default constructor */
 	FImagePlateSourceFrame();
 	/** Construction from an array of data, and a given width/height/bitdepth */
-	FImagePlateSourceFrame(const TArray<uint8>& InData, uint32 InWidth, uint32 InHeight, uint32 InBitDepth);
+	FImagePlateSourceFrame(const TArray64<uint8>& InData, uint32 InWidth, uint32 InHeight, uint32 InBitDepth);
 
 	/** Check whether this source frame has valid data */
 	bool IsValid() const;

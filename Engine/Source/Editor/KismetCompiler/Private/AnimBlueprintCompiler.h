@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -28,7 +28,7 @@ class UAnimGraphNode_LinkedAnimGraphBase;
 class UAnimGraphNode_LinkedAnimGraph;
 class UAnimGraphNode_Root;
 
-class UStructProperty;
+class FStructProperty;
 class UBlueprintGeneratedClass;
 struct FPoseLinkMappingRecord;
 
@@ -70,7 +70,7 @@ protected:
 	/** Record of a single copy operation */
 	struct FPropertyCopyRecord
 	{
-		FPropertyCopyRecord(UEdGraphPin* InDestPin, UProperty* InDestProperty, int32 InDestArrayIndex)
+		FPropertyCopyRecord(UEdGraphPin* InDestPin, FProperty* InDestProperty, int32 InDestArrayIndex)
 			: DestPin(InDestPin)
 			, DestProperty(InDestProperty)
 			, DestArrayIndex(InDestArrayIndex)
@@ -96,7 +96,7 @@ protected:
 		UEdGraphPin* DestPin;
 
 		/** The destination property we are copying to (on an animation node) */
-		UProperty* DestProperty;
+		FProperty* DestProperty;
 
 		/** The array index we use if the destination property is an array */
 		int32 DestArrayIndex;
@@ -131,10 +131,10 @@ protected:
 	{
 	public:
 		// The node variable that the handler is in
-		class UStructProperty* NodeVariableProperty;
+		class FStructProperty* NodeVariableProperty;
 
 		// The property within the struct to set
-		class UProperty* ConstantProperty;
+		class FProperty* ConstantProperty;
 
 		// The array index if ConstantProperty is an array property, or INDEX_NONE otherwise
 		int32 ArrayIndex;
@@ -150,7 +150,7 @@ protected:
 		{
 		}
 
-		FEffectiveConstantRecord(UStructProperty* ContainingNodeProperty, UEdGraphPin* SourcePin, UProperty* SourcePinProperty, int32 SourceArrayIndex)
+		FEffectiveConstantRecord(FStructProperty* ContainingNodeProperty, UEdGraphPin* SourcePin, FProperty* SourcePinProperty, int32 SourceArrayIndex)
 			: NodeVariableProperty(ContainingNodeProperty)
 			, ConstantProperty(SourcePinProperty)
 			, ArrayIndex(SourceArrayIndex)
@@ -167,7 +167,7 @@ protected:
 	public:
 
 		// The node variable that the handler is in
-		UStructProperty* NodeVariableProperty;
+		FStructProperty* NodeVariableProperty;
 
 		// The specific evaluation handler inside the specified node
 		int32 EvaluationHandlerIdx;
@@ -218,9 +218,9 @@ protected:
 
 		void PatchFunctionNameAndCopyRecordsInto(FExposedValueHandler& Handler) const;
 
-		void RegisterPin(UEdGraphPin* DestPin, UProperty* AssociatedProperty, int32 AssociatedPropertyArrayIndex);
+		void RegisterPin(UEdGraphPin* DestPin, FProperty* AssociatedProperty, int32 AssociatedPropertyArrayIndex);
 
-		UStructProperty* GetHandlerNodeProperty() const { return NodeVariableProperty; }
+		FStructProperty* GetHandlerNodeProperty() const { return NodeVariableProperty; }
 
 		void BuildFastPathCopyRecords();
 
@@ -262,9 +262,9 @@ protected:
 	UAnimationGraphSchema* AnimSchema;
 
 	// Map of allocated v3 nodes that are members of the class
-	TMap<class UAnimGraphNode_Base*, UProperty*> AllocatedAnimNodes;
-	TMap<UProperty*, class UAnimGraphNode_Base*> AllocatedNodePropertiesToNodes;
-	TMap<int32, UProperty*> AllocatedPropertiesByIndex;
+	TMap<class UAnimGraphNode_Base*, FProperty*> AllocatedAnimNodes;
+	TMap<FProperty*, class UAnimGraphNode_Base*> AllocatedNodePropertiesToNodes;
+	TMap<int32, FProperty*> AllocatedPropertiesByIndex;
 
 	// Map of true source objects (user edited ones) to the cloned ones that are actually compiled
 	TMap<class UAnimGraphNode_Base*, UAnimGraphNode_Base*> SourceNodeToProcessedNodeMap;
@@ -329,6 +329,9 @@ private:
 	// Compiles one root node
 	void ProcessRoot(UAnimGraphNode_Root* Root);
 
+	// Compiles one state result node
+	void ProcessStateResult(UAnimGraphNode_StateResult* StateResult);
+
 	// Traverses linked anim graph links looking for slot names and state machine names, returning their count in a name map
 	typedef TMap<FName, int32> NameToCountMap;
 	void GetDuplicatedSlotAndStateNames(UAnimGraphNode_LinkedAnimGraphBase* InLinkedAnimGraph, NameToCountMap& OutStateMachineNameToCountMap, NameToCountMap& OutSlotNameToCountMap);
@@ -375,5 +378,8 @@ private:
 
 	// Clean up transient stub functions
 	void DestroyAnimGraphStubFunctions();
+
+	// Expands split pins for a graph
+	void ExpandSplitPins(UEdGraph* InGraph);
 };
 

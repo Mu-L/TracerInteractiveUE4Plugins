@@ -1,12 +1,14 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "Containers/UnrealString.h"
 #include "HAL/Platform.h"
+#include "Misc/Optional.h"
+#include "Containers/Map.h"
 
 struct FEditorAnalyticsSession;
-class IAnalyticsProvider;
+class IAnalyticsProviderET;
 
 /**
   * Sender of SessionSummary events from all editor sessions in-between runs.
@@ -15,14 +17,13 @@ class IAnalyticsProvider;
 class EDITORANALYTICSSESSION_API FEditorSessionSummarySender
 {
 public:
-	FEditorSessionSummarySender(IAnalyticsProvider& InAnalyticsProvider, const FString& InSenderName, const int32 InCurrentSessionProcessId);
+	FEditorSessionSummarySender(IAnalyticsProviderET& InAnalyticsProvider, const FString& InSenderName, const uint32 InCurrentSessionProcessId);
 	~FEditorSessionSummarySender();
 
 	void Tick(float DeltaTime);
 	void Shutdown();
 
-	void SetCurrentSessionExitCode(const int32 InCurrentSessionProcessId, const int32 InExitCode);
-	bool FindCurrentSession(FEditorAnalyticsSession& OutSession) const;
+	void SetMonitorDiagnosticLogs(TMap<uint32, FString>&& Logs);
 
 private:
 	/** Send any stored Sessions. */
@@ -31,9 +32,8 @@ private:
 
 private:
 	float HeartbeatTimeElapsed;
-	IAnalyticsProvider& AnalyticsProvider;
+	IAnalyticsProviderET& AnalyticsProvider;
 	FString Sender;
-
-	int32 CurrentSessionProcessId;
-	TOptional<int32> CurrentSessionExitCode;
+	uint32 CurrentSessionProcessId;
+	TMap<uint32, FString> MonitorMiniLogs; // Maps Monitor Process ID/Monitor Log
 };

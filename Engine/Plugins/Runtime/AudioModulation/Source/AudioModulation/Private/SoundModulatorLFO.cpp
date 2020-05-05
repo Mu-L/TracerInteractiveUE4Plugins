@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "SoundModulatorLFO.h"
 
 #include "AudioDevice.h"
@@ -30,7 +30,7 @@ void USoundBusModulatorLFO::BeginDestroy()
 		return;
 	}
 
-	if (FAudioDevice* AudioDevice = World->GetAudioDevice())
+	if (FAudioDeviceHandle AudioDevice = World->GetAudioDevice())
 	{
 		check(AudioDevice->IsModulationPluginEnabled());
 		if (IAudioModulation* ModulationInterface = AudioDevice->ModulationInterface.Get())
@@ -54,8 +54,8 @@ namespace AudioModulation
 		LFO.Start();
 	}
 
-	FModulatorLFOProxy::FModulatorLFOProxy(const USoundBusModulatorLFO& InLFO)
-		: TModulatorProxyRefType(InLFO.GetName(), InLFO.GetUniqueID())
+	FModulatorLFOProxy::FModulatorLFOProxy(const USoundBusModulatorLFO& InLFO, FAudioModulationImpl& InModulationImpl)
+		: TModulatorProxyRefType(InLFO.GetName(), InLFO.GetUniqueID(), InModulationImpl)
 		, Offset(InLFO.Offset)
 		, Value(1.0f)
 		, bBypass(InLFO.bBypass)

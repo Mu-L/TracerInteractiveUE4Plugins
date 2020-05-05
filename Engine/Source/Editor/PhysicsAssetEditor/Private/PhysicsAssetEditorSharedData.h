@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -12,7 +12,7 @@ class UBodySetup;
 class UPhysicsAssetEditorSkeletalMeshComponent;
 class UPhysicsAsset;
 class UPhysicsConstraintTemplate;
-class UPhysicsHandleComponent;
+class UPhysicsAssetEditorPhysicsHandleComponent;
 class USkeletalMesh;
 class UStaticMeshComponent;
 struct FBoneVertInfo;
@@ -144,6 +144,7 @@ public:
 	void SetSelectedBody(const FSelection& Body, bool bSelected);
 	bool IsBodySelected(const FSelection& Body) const;
 	void ToggleSelectionType();
+	void ToggleShowSelected();
 	void SetSelectedBodyAnyPrim(int32 BodyIndex, bool bSelected);
 	void DeleteCurrentPrim();
 	void DeleteBody(int32 DelBodyIndex, bool bRefreshComponent=true);
@@ -246,7 +247,7 @@ public:
 	EAppReturnType::Type NewBodyResponse;
 
 	/** Helps define how the asset behaves given user interaction in simulation mode*/
-	UPhysicsHandleComponent* MouseHandle;
+	UPhysicsAssetEditorPhysicsHandleComponent* MouseHandle;
 
 	/** Draw color for center of mass debug strings */
 	const FColor COMRenderColor;
@@ -259,6 +260,9 @@ public:
 	TArray<FBoneVertInfo> AnyWeightBoneInfos;
 
 	TArray<FSelection> SelectedBodies;
+
+	TArray<int32> HiddenBodies;
+	TArray<int32> HiddenConstraints;
 	FSelection * GetSelectedBody()
 	{
 		int32 Count = SelectedBodies.Num();

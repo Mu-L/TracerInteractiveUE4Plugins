@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -6,24 +6,42 @@
 #include "HAL/CriticalSection.h"
 #include "Misc/DateTime.h"
 #include "Modules/ModuleInterface.h"
+#include "Templates/Atomic.h"
 
 struct EDITORANALYTICSSESSION_API FEditorAnalyticsSession
 {
+	enum class EEventType
+	{
+		Crashed = 0,
+		GpuCrashed,
+		Terminated,
+		Shutdown,
+	};
+
 	FString SessionId;
+
+	FString AppId;
+	FString AppVersion;
+	FString UserId;
 
 	FString ProjectName;
 	FString ProjectID;
 	FString ProjectDescription;
 	FString ProjectVersion;
 	FString EngineVersion;
-	int32 PlatformProcessID;
+	uint32 PlatformProcessID;
+	uint32 MonitorProcessID; // Set to the CrashReportClientEditor PID when out-of-process reporting is used.
+	TOptional<int32> ExitCode; // Set by CrashReportClientEditor after the Editor process exit when out-of-process reporting is used and reading the exit code is supported.
+	TOptional<int32> MonitorExceptCode; // Set by CrashReportClientEditor if an exception is caught by monitoring the Editor. This is to detect if CRC crashes itself.
 
 	FDateTime StartupTimestamp;
 	FDateTime Timestamp;
-	int32 SessionDuration;
-	int32 Idle1Min;
-	int32 Idle5Min;
-	int32 Idle30Min;
+	volatile int32 IdleSeconds = 0; // Can be updated from concurrent threads.
+	volatile int32 Idle1Min = 0;
+	volatile int32 Idle5Min = 0;
+	volatile int32 Idle30Min = 0;
+	volatile int32 TotalUserInactivitySeconds = 0; // If time elapsed between two user interaction is greater than a threshold, consider it inactivity and sum it up.
+	volatile int32 TotalEditorInactivitySeconds = 0; // Account for user input and Editor process CPU usage. Add up gaps where the CPU was not used intensively and the user did not interact.
 	FString CurrentUserActivity;
 	TArray<FString> Plugins;
 	float AverageFPS;
@@ -45,8 +63,8 @@ struct EDITORANALYTICSSESSION_API FEditorAnalyticsSession
 	FString OSMajor;
 	FString OSMinor;
 	FString OSVersion;
-	bool bIs64BitOS : 1;
 
+	bool bIs64BitOS : 1;
 	bool bCrashed : 1;
 	bool bGPUCrashed : 1;
 	bool bIsDebugger : 1;
@@ -57,6 +75,7 @@ struct EDITORANALYTICSSESSION_API FEditorAnalyticsSession
 	bool bIsInPIE : 1;
 	bool bIsInEnterprise : 1;
 	bool bIsInVRMode : 1;
+	bool bIsLowDriveSpace : 1;
 
 	FEditorAnalyticsSession();
 
@@ -65,12 +84,6 @@ struct EDITORANALYTICSSESSION_API FEditorAnalyticsSession
 	 * @returns true if the session was successfully saved.
 	 */
 	bool Save();
-
-	/**
-	 * Save only the bare minimum of fields that may have changed during a crash.
-	 * @returns true if the session was successfully saved.
-	 */
-	bool SaveForCrash();
 
 	/**
 	 *  Load a session with the given session ID from stored values.
@@ -104,6 +117,12 @@ struct EDITORANALYTICSSESSION_API FEditorAnalyticsSession
 	static bool SaveStoredSessionIDs(const TArray<FString>& InSessions);
 
 	/**
+	 * Try to acquire the local storage lock without blocking.
+	 * @return true if the lock was acquired successfully.
+	 */
+	static bool TryLock() { return Lock(FTimespan::Zero()); }
+
+	/**
 	 * Acquire a lock for local storage.
 	 * @returns true if the lock was acquired successfully.
 	 */
@@ -117,8 +136,41 @@ struct EDITORANALYTICSSESSION_API FEditorAnalyticsSession
 	/** Is the local storage already locked? */
 	static bool IsLocked();
 
-private:
+	/**
+	 * Append an event to the session log. The function is meant to record concurrent events, especially during a crash
+	 * with minimum contention. The logger appends and persists the events of interest locklessly on spot as opposed to
+	 * overriding existing values in the key-store. Appending is better because it prevent dealing with event ordering
+	 * on the spot (no synchronization needed) and will preserve more information.
+	 *
+	 * @note They key-store is not easily usable in a 'lockless' fashion. On Windows, the OS provides thread safe API
+	 *       to modify the registry (add/update). On Mac/Linux, the key-store is a simple file and without synchronization,
+	 *       concurrent writes will likely corrupt the file.
+	 */
+	void LogEvent(EEventType EventTpe, const FDateTime& Timestamp);
 
+	/**
+	 * Find the sessions for which the PlatformProcessID matches the specified session process id.
+	 * @param InSessionProcessId The session with this process ID.
+	 * @param[out] The found session if any (undefined if not found)
+	 * @return True if a session for the specified process id was found, false otherwise.
+	 */
+	static bool FindSession(const uint32 InSessionProcessId, FEditorAnalyticsSession& OutSession);
+
+	/**
+	 * Persist the Editor exit code corresponding of this session in the key-store value.
+	 * @node This function should only be called by the out of process monitor when the process exit value is known.
+	 */
+	void SaveExitCode(int32 ExitCode);
+
+	/**
+	 * Set the exception code that caused the monitor application to crash. When the monitoring application raises
+	 * and catches an unexpected exception, it tries to save the exception code it in the session before dying.
+	 * @note This is to diagnose the cases where CrashReportClientEditor send the summary event delayed and without
+	 *       the Editor exit code.
+	 */
+	void SaveMonitorExceptCode(int32 ExceptCode);
+
+private:
 	static FSystemWideCriticalSection* StoredValuesLock;
 
 	/** 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	D3D12Viewport.cpp: D3D viewport RHI implementation.
@@ -161,6 +161,7 @@ void FD3D12FramePacing::PrePresentQueued(ID3D12CommandQueue* Queue)
 	const float Alpha = FMath::Clamp(Delta / 1000.0f / FramePacingAvgTimePeriod, 0.0f, 1.0f);
 
 	/** Number of milliseconds the GPU was busy last frame. */
+	// Multi-GPU support : Should be updated to use GPUIndex for AFR.
 	const uint32 GPUCycles = RHIGetGPUFrameCycles();
 	const float GPUMsForFrame = FPlatformTime::ToMilliseconds(GPUCycles);
 
@@ -185,7 +186,7 @@ bool bNeedSwapChain = true;
 /**
  * Creates a FD3D12Surface to represent a swap chain's back buffer.
  */
-FD3D12Texture2D* GetSwapChainSurface(FD3D12Device* Parent, EPixelFormat PixelFormat, uint32 SizeX, uint32 SizeY, IDXGISwapChain* SwapChain, uint32 BackBufferIndex)
+FD3D12Texture2D* GetSwapChainSurface(FD3D12Device* Parent, EPixelFormat PixelFormat, uint32 SizeX, uint32 SizeY, IDXGISwapChain* SwapChain, uint32 BackBufferIndex, TRefCountPtr<ID3D12Resource> BackBufferResourceOverride)
 {
 	FD3D12Adapter* Adapter = Parent->GetParentAdapter();
 
@@ -194,6 +195,10 @@ FD3D12Texture2D* GetSwapChainSurface(FD3D12Device* Parent, EPixelFormat PixelFor
 	if (SwapChain)
 	{
 		VERIFYD3D12RESULT_EX(SwapChain->GetBuffer(BackBufferIndex, IID_PPV_ARGS(BackBufferResource.GetInitReference())), Parent->GetDevice());
+	}
+	else if (BackBufferResourceOverride.IsValid())
+	{
+		BackBufferResource = BackBufferResourceOverride;
 	}
 	else
 	{
@@ -318,6 +323,9 @@ FD3D12Texture2D* GetSwapChainSurface(FD3D12Device* Parent, EPixelFormat PixelFor
 		return NewTexture;
 	});
 
+	FString Name = FString::Printf(TEXT("BackBuffer%d"), BackBufferIndex);
+	SetName(SwapChainTexture->GetResource(), *Name);
+
 	FD3D12TextureStats::D3D12TextureAllocated2D(*SwapChainTexture);
 	return SwapChainTexture;
 }
@@ -325,6 +333,15 @@ FD3D12Texture2D* GetSwapChainSurface(FD3D12Device* Parent, EPixelFormat PixelFor
 FD3D12Viewport::~FD3D12Viewport()
 {
 	check(IsInRenderingThread());
+
+	// If the swap chain was in fullscreen mode, switch back to windowed before releasing the swap chain.
+	// DXGI throws an error otherwise.
+#if !PLATFORM_HOLOLENS
+	if (SwapChain1)
+	{
+		SwapChain1->SetFullscreenState(0, nullptr);
+	}
+#endif
 
 	GetParentAdapter()->GetViewports().Remove(this);
 
@@ -335,6 +352,8 @@ FD3D12Viewport::~FD3D12Viewport()
 		FramePacerRunnable = nullptr;
 	}
 #endif //WITH_MGPU
+
+	FinalDestroyInternal();
 }
 
 DXGI_MODE_DESC FD3D12Viewport::SetupDXGI_MODE_DESC() const
@@ -367,11 +386,10 @@ void FD3D12Viewport::CalculateSwapChainDepth(int32 DefaultSwapChainDepth)
 		{
 			BackbufferMultiGPUBinding = FMath::Clamp<int32>(BackbufferMultiGPUBinding, INDEX_NONE, (int32)GNumExplicitGPUsForRendering - 1) ;
 		}
-		else if (FParse::Param(FCommandLine::Get(), TEXT("AFR")))
+		else if (GNumAlternateFrameRenderingGroups > 1)
 		{
 			BackbufferMultiGPUBinding = INDEX_NONE;
 			NumBackBuffers = GNumExplicitGPUsForRendering > 2 ? GNumExplicitGPUsForRendering : 4;
-			check(GNumAlternateFrameRenderingGroups == GNumExplicitGPUsForRendering);
 		}
 	}
 #endif // WITH_MGPU
@@ -513,6 +531,28 @@ static bool IsCompositionEnabled()
 /** Presents the swap chain checking the return result. */
 bool FD3D12Viewport::PresentChecked(int32 SyncInterval)
 {
+#if PLATFORM_WINDOWS
+	// We can't call Present if !bIsValid, as it waits a window message to be processed, but the main thread may not be pumping the message handler.
+	if (bIsValid && SwapChain1.IsValid())
+	{
+		// Check if the viewport's swap chain has been invalidated by DXGI.
+		BOOL bSwapChainFullscreenState;
+		TRefCountPtr<IDXGIOutput> SwapChainOutput;
+		SwapChain1->GetFullscreenState(&bSwapChainFullscreenState, SwapChainOutput.GetInitReference());
+		// Can't compare BOOL with bool...
+		if ( (!!bSwapChainFullscreenState)  != bIsFullscreen )
+		{
+			bFullscreenLost = true;
+			bIsValid = false;
+		}
+	}
+
+	if (!bIsValid)
+	{
+		return false;
+	}
+#endif
+
 	HRESULT Result = S_OK;
 	bool bNeedNativePresent = true;
 
@@ -861,7 +901,7 @@ void FD3D12CommandContextBase::RHIBeginDrawingViewport(FRHIViewport* ViewportRHI
 
 	// Set the render target.
 	const FRHIRenderTargetView RTView(RenderTargetRHI, ERenderTargetLoadAction::ELoad);
-	RHISetRenderTargets(1, &RTView, nullptr, 0, nullptr);
+	RHISetRenderTargets(1, &RTView, nullptr);
 }
 
 void FD3D12CommandContextBase::RHIEndDrawingViewport(FRHIViewport* ViewportRHI, bool bPresent, bool bLockToVsync)
@@ -911,7 +951,11 @@ void FD3D12CommandContextBase::RHIEndDrawingViewport(FRHIViewport* ViewportRHI, 
 	}
 }
 
-struct FRHICommandSignalFrameFence final : public FRHICommand<FRHICommandSignalFrameFence>
+struct FRHICommandSignalFrameFenceString
+{
+	static const TCHAR* TStr() { return TEXT("FRHICommandSignalFrameFence"); }
+};
+struct FRHICommandSignalFrameFence final : public FRHICommand<FRHICommandSignalFrameFence, FRHICommandSignalFrameFenceString>
 {
 	ED3D12CommandQueueType QueueType;
 	FD3D12ManualFence* const Fence;
@@ -938,15 +982,17 @@ void FD3D12DynamicRHI::RHIAdvanceFrameFence()
 	FD3D12ManualFence* FrameFence = &GetAdapter().GetFrameFence();
 	const uint64 PreviousFence = FrameFence->IncrementCurrentFence();
 
-	// Queue a command to signal on RHI thread that the current frame is a complete on the GPU.
 	FRHICommandListImmediate& RHICmdList = FRHICommandListExecutor::GetImmediateCommandList();
-	if (RHICmdList.Bypass() || !IsRunningRHIInSeparateThread())
+	if (RHICmdList.Bypass())
 	{
+		// In bypass mode, we should execute this directly
 		FRHICommandSignalFrameFence Cmd(ED3D12CommandQueueType::Default, FrameFence, PreviousFence);
 		Cmd.Execute(RHICmdList);
 	}
 	else
 	{
+		// Queue a command to signal on RHI thread that the current frame is a complete on the GPU.
+		// This must be done in a deferred way even if RHI thread is disabled, just for correct ordering of operations.
 		ALLOC_COMMAND_CL(RHICmdList, FRHICommandSignalFrameFence)(ED3D12CommandQueueType::Default, FrameFence, PreviousFence);
 	}
 }

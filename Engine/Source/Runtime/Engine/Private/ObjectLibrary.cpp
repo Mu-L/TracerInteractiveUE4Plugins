@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Engine/ObjectLibrary.h"
 #include "Modules/ModuleManager.h"
@@ -498,7 +498,7 @@ int32 UObjectLibrary::LoadAssetsFromAssetData()
 		for (int32 AssetIdx = 0; AssetIdx < AssetDataList.Num(); AssetIdx++)
 		{
 			FAssetData& Data = AssetDataList[AssetIdx];
-			AssetsToStream.AddUnique(Data.PackageName.ToString());
+			AssetsToStream.AddUnique(FSoftObjectPath(Data.PackageName));
 		}
 
 		if (AssetsToStream.Num())

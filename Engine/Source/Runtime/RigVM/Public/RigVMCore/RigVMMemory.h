@@ -1,9 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
+#include "RigVMStatistics.h"
 #include "RigVMMemory.generated.h"
 
 /**
@@ -26,8 +27,11 @@ enum class ERigVMMemoryType: uint8
  * The FRigVMOperand is a light weight address for a register in
  * a FRigVMMemoryContainer.
  */
+USTRUCT()
 struct RIGVM_API FRigVMOperand
 {
+	GENERATED_BODY()
+
 public:
 
 	FRigVMOperand()
@@ -44,6 +48,21 @@ public:
 	{
 	}
 
+	FORCEINLINE bool operator == (const FRigVMOperand& InOther) const
+	{
+		return MemoryType == InOther.MemoryType &&
+			RegisterIndex == InOther.RegisterIndex &&
+			RegisterOffset == InOther.RegisterOffset;
+	}
+
+	FORCEINLINE bool operator != (const FRigVMOperand& InOther) const
+	{
+		return !(*this == InOther);
+	}
+
+	// returns the memory type of this argument
+	FORCEINLINE bool IsValid() const { return RegisterIndex != UINT16_MAX; }
+
 	// returns the memory type of this argument
 	FORCEINLINE ERigVMMemoryType GetMemoryType() const { return MemoryType; }
 
@@ -58,8 +77,13 @@ public:
 
 private:
 
+	UPROPERTY()
 	ERigVMMemoryType MemoryType;
+
+	UPROPERTY()
 	uint16 RegisterIndex;
+	
+	UPROPERTY()
 	uint16 RegisterOffset;
 };
 
@@ -104,6 +128,7 @@ struct RIGVM_API FRigVMRegister
 		, TrailingBytes(0)
 		, Name(NAME_None)
 		, ScriptStructIndex(INDEX_NONE)
+		, bIsArray(false)
 	{
 	}
 
@@ -149,6 +174,10 @@ struct RIGVM_API FRigVMRegister
 	UPROPERTY()
 	int32 ScriptStructIndex;
 
+	// If true defines this register as an array
+	UPROPERTY()
+	bool bIsArray;
+
 	bool Serialize(FArchive& Ar);
 	FORCEINLINE friend FArchive& operator<<(FArchive& Ar, FRigVMRegister& P)
 	{
@@ -162,13 +191,13 @@ struct RIGVM_API FRigVMRegister
 	FORCEINLINE uint64 GetWorkByteIndex() const { return ByteIndex; }
 
 	// returns the first allocated byte in the data byte array
-	FORCEINLINE uint64 GetFirstAllocatedByte() const { return ByteIndex - (uint64)AlignmentBytes - (uint64)(SliceIndex * GetNumBytesPerSlice()); }
+	FORCEINLINE uint64 GetFirstAllocatedByte() const { return ByteIndex - (uint64)AlignmentBytes - ((uint64)SliceIndex * GetNumBytesPerSlice()); }
 
 	// Returns the leading alignment bytes
 	FORCEINLINE uint8 GetAlignmentBytes() const { return AlignmentBytes; }
 
 	// Returns true if the register stores more than one element
-	FORCEINLINE bool IsArray() const { return ElementCount > 1; }
+	FORCEINLINE bool IsArray() const { return bIsArray || (ElementCount > 1); }
 
 	// Returns true if the register stores plain / shallow memory
 	FORCEINLINE bool IsPlain() const { return ScriptStructIndex == INDEX_NONE; }
@@ -330,31 +359,52 @@ public:
 	// returns the number of registers in this container
 	FORCEINLINE int32 Num() const { return Registers.Num(); }
 
-	// resets the container and removes all storage.
+	// resets the container but maintains storage.
 	void Reset();
 
+	// resets the container and removes all storage.
+	void Empty();
+
 	// const accessor for a register based on index
-	FORCEINLINE const FRigVMRegister& operator[](int32 InIndex) const { return Registers[InIndex]; }
+	FORCEINLINE const FRigVMRegister& operator[](int32 InIndex) const { return GetRegister(InIndex); }
 
 	// accessor for a register based on index
-	FORCEINLINE FRigVMRegister& operator[](int32 InIndex) { return Registers[InIndex]; }
+	FORCEINLINE FRigVMRegister& operator[](int32 InIndex) { return GetRegister(InIndex); }
 
 	// const accessor for a register based on an argument
-	FORCEINLINE const FRigVMRegister& operator[](const FRigVMOperand& InArg) const { return Registers[InArg.GetRegisterIndex()]; }
+	FORCEINLINE const FRigVMRegister& operator[](const FRigVMOperand& InArg) const { return GetRegister(InArg); }
 
 	// accessor for a register based on an argument
-	FORCEINLINE FRigVMRegister& operator[](const FRigVMOperand& InArg) { return Registers[InArg.GetRegisterIndex()]; }
+	FORCEINLINE FRigVMRegister& operator[](const FRigVMOperand& InArg) { return GetRegister(InArg); }
 
 	// const accessor for a register based on a a name. note: only works if SupportsNames() == true
-	FORCEINLINE const FRigVMRegister& operator[](const FName& InName) const { return Registers[GetIndex(InName)]; }
+	FORCEINLINE const FRigVMRegister& operator[](const FName& InName) const { return GetRegister(InName); }
 
 	// accessor for a register based on a a name. note: only works if SupportsNames() == true
-	FORCEINLINE FRigVMRegister& operator[](const FName& InName) { return Registers[GetIndex(InName)]; }
+	FORCEINLINE FRigVMRegister& operator[](const FName& InName) { return GetRegister(InName); }
 
 	FORCEINLINE TArray<FRigVMRegister>::RangedForIteratorType      begin() { return Registers.begin(); }
 	FORCEINLINE TArray<FRigVMRegister>::RangedForConstIteratorType begin() const { return Registers.begin(); }
 	FORCEINLINE TArray<FRigVMRegister>::RangedForIteratorType      end() { return Registers.end(); }
 	FORCEINLINE TArray<FRigVMRegister>::RangedForConstIteratorType end() const { return Registers.end(); }
+
+	// const accessor for a register based on index
+	FORCEINLINE const FRigVMRegister& GetRegister(int32 InIndex) const { return Registers[InIndex]; }
+
+	// accessor for a register based on index
+	FORCEINLINE FRigVMRegister& GetRegister(int32 InIndex) { return Registers[InIndex]; }
+
+	// const accessor for a register based on an argument
+	FORCEINLINE const FRigVMRegister& GetRegister(const FRigVMOperand& InArg) const { return Registers[InArg.GetRegisterIndex()]; }
+
+	// accessor for a register based on an argument
+	FORCEINLINE FRigVMRegister& GetRegister(const FRigVMOperand& InArg) { return Registers[InArg.GetRegisterIndex()]; }
+
+	// const accessor for a register based on a a name. note: only works if SupportsNames() == true
+	FORCEINLINE const FRigVMRegister& GetRegister(const FName& InName) const { return Registers[GetIndex(InName)]; }
+
+	// accessor for a register based on a a name. note: only works if SupportsNames() == true
+	FORCEINLINE FRigVMRegister& GetRegister(const FName& InName) { return Registers[GetIndex(InName)]; }
 
 	bool Serialize(FArchive& Ar);
 	FORCEINLINE friend FArchive& operator<<(FArchive& Ar, FRigVMMemoryContainer& P)
@@ -397,7 +447,6 @@ public:
 	// Note: This refers to the active slice - and can change over time.
 	FORCEINLINE const uint8* GetData(const FRigVMRegister& Register, int32 InRegisterOffset = INDEX_NONE) const
 	{
-		ensure(Register.ElementCount > 0);
 		uint8* Ptr = (uint8*)&Data[Register.GetWorkByteIndex()];
 		if (InRegisterOffset != INDEX_NONE)
 		{
@@ -419,7 +468,11 @@ public:
 	// Note: This refers to the active slice - and can change over time.
 	FORCEINLINE uint8* GetData(FRigVMRegister& Register, int32 InRegisterOffset = INDEX_NONE, bool bMoveToNextSlice = false)
 	{
-		ensure(Register.ElementCount > 0);
+		if (Register.ElementCount <= 0)
+		{
+			return nullptr;
+		}
+
 		if(bMoveToNextSlice)
 		{
 			Register.MoveToNextSlice();
@@ -446,7 +499,6 @@ public:
 	template<class T>
 	FORCEINLINE const T* Get(const FRigVMRegister& InRegister, int32 InRegisterOffset = INDEX_NONE) const
 	{
-		ensure(InRegister.ElementCount > 0);
 		return (const T*)GetData(InRegister, InRegisterOffset);
 	}
 
@@ -497,7 +549,6 @@ public:
 	template<class T>
 	FORCEINLINE T* Get(FRigVMRegister& InRegister, int32 InRegisterOffset = INDEX_NONE, bool bMoveToNextSlice = false)
 	{
-		ensure(InRegister.ElementCount > 0);
 		if(bMoveToNextSlice)
 		{
 			InRegister.MoveToNextSlice();
@@ -551,7 +602,6 @@ public:
 	template<class T>
 	FORCEINLINE TArrayView<T> GetArray(FRigVMRegister& InRegister, int32 InRegisterOffset = INDEX_NONE, bool bMoveToNextSlice = false)
 	{
-		ensure(InRegister.ElementCount > 0);
 		if (InRegisterOffset == INDEX_NONE)
 		{
 			return TArrayView<T>((T*)GetData(InRegister, INDEX_NONE, bMoveToNextSlice), InRegister.ElementCount);
@@ -770,6 +820,19 @@ public:
 	// Adds a register path and returns its index
 	int32 GetOrAddRegisterOffset(int32 InRegisterIndex, UScriptStruct* InScriptStruct, const FString& InSegmentPath, int32 InInitialOffset = 0, int32 InElementSize = 0);
 
+	void SetRegisterValueFromString(const FRigVMOperand& InOperand, const FString& InCPPType, const UObject* InCPPTypeObject, const TArray<FString>& InDefaultValues);
+	TArray<FString> GetRegisterValueAsString(const FRigVMOperand& InOperand, const FString& InCPPType, const UObject* InCPPTypeObject);
+
+	// returns the statistics information
+	FRigVMMemoryStatistics GetStatistics() const
+	{
+		FRigVMMemoryStatistics Statistics;
+		Statistics.RegisterCount = Registers.Num();
+		Statistics.DataBytes = Data.GetAllocatedSize();
+		Statistics.TotalBytes = Data.GetAllocatedSize() + Registers.GetAllocatedSize() + RegisterOffsets.GetAllocatedSize();
+		return Statistics;
+	}
+
 private:
 
 	// Adds a new named register for a plain array from a data pointer (used by compiler)
@@ -851,6 +914,9 @@ private:
 
 	UPROPERTY(transient)
 	TMap<FName, int32> NameMap;
+
+	UPROPERTY(transient)
+	bool bEncounteredErrorDuringLoad;
 
 	friend class URigVM;
 	friend class URigVMCompiler;

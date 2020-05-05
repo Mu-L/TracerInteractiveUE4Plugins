@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -133,6 +133,14 @@ class UNREALED_API UPhysicsAssetEditorOptions : public UObject
 	/** When set, turns opacity of solid rendering for unselected bodies to zero */
 	UPROPERTY(config)
 	bool bSolidRenderingForSelectedOnly;
+
+	/** When set, disables rendering for simulated bodies */
+	UPROPERTY(config)
+	bool bHideSimulatedBodies;
+
+	/** When set, disables rendering for kinematic bodies */
+	UPROPERTY(config)
+	bool bHideKinematicBodies;
 
 	/** When set, cloth will reset each time simulation is toggled */
 	UPROPERTY(EditAnywhere, config, Category=Clothing)

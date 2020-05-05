@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Components/InputComponent.h"
 #include "GameFramework/PlayerController.h"
@@ -314,6 +314,19 @@ void UInputComponent::RemoveActionBinding(const FInputActionBinding &BindingToRe
 	for (FCachedKeyToActionInfo& CachedInfo : CachedKeyToActionInfo)
 	{
 		CachedInfo.KeyMapBuiltForIndex = 0;
+	}
+}
+
+void UInputComponent::RemoveActionBinding(FName InActionName, EInputEvent InKeyEvent)
+{
+	for (int32 ActionIdx = 0; ActionIdx < ActionBindings.Num(); ++ActionIdx)
+	{
+		const TSharedPtr<FInputActionBinding>& Binding = ActionBindings[ActionIdx];
+		if (Binding->GetActionName() == InActionName && Binding->KeyEvent == InKeyEvent)
+		{
+			RemoveActionBinding(ActionIdx);
+			break;
+		}
 	}
 }
 

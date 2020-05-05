@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 /*=============================================================================================
@@ -143,6 +143,16 @@ struct FAndroidPlatformString : public FGenericPlatformString
 			++Len;
 		}
 
+		return Len;
+	}
+
+	static FORCEINLINE int32 Strnlen( const WIDECHAR* String, SIZE_T StringSize )
+	{
+		int Len = 0;
+		while (StringSize-- > 0 && *String++)
+		{
+			++Len;
+		}
 		return Len;
 	}
 
@@ -499,6 +509,11 @@ struct FAndroidPlatformString : public FGenericPlatformString
 		return strlen( String ); 
 	}
 
+	static FORCEINLINE int32 Strnlen( const ANSICHAR* String, SIZE_T StringSize )
+	{
+		return strnlen_s( String, StringSize );
+	}
+
 	static FORCEINLINE const ANSICHAR* Strstr( const ANSICHAR* String, const ANSICHAR* Find)
 	{
 		return strstr(String, Find);
@@ -575,6 +590,17 @@ struct FAndroidPlatformString : public FGenericPlatformString
 	{
 		int32 Result = 0;
 		while (*String++)
+		{
+			++Result;
+		}
+
+		return Result;
+	}
+
+	static FORCEINLINE int32 Strnlen( const UCS2CHAR* String, SIZE_T StringSize )
+	{
+		int32 Result = 0;
+		while (StringSize-- > 0 && *String++)
 		{
 			++Result;
 		}

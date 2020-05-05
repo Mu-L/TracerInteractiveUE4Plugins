@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Evaluation/MovieSceneActorReferenceTemplate.h"
 
@@ -58,6 +58,7 @@ void FMovieSceneActorReferenceSectionTemplate::Evaluate(const FMovieSceneEvaluat
 {
 	using namespace PropertyTemplate;
 
-	FMovieSceneActorReferenceKey ObjectBinding = ActorReferenceData.Evaluate(Context.GetTime());
+	FMovieSceneActorReferenceKey ObjectBinding;
+	ActorReferenceData.Evaluate(Context.GetTime(), ObjectBinding);
 	ExecutionTokens.Add(TPropertyTrackExecutionToken<UObject*, FMovieSceneObjectBindingID>(ObjectBinding.Object));
 }

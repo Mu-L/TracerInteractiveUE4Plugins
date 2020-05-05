@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -59,7 +59,7 @@ struct HLandscapeSplineProxy_ControlPoint : public HLandscapeSplineProxy
 	}
 };
 
-struct LANDSCAPE_VTABLE HLandscapeSplineProxy_Tangent : public HLandscapeSplineProxy
+struct HLandscapeSplineProxy_Tangent : public HLandscapeSplineProxy
 {
 	DECLARE_HIT_PROXY( LANDSCAPE_API );
 

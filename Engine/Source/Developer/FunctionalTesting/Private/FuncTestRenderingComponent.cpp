@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "FuncTestRenderingComponent.h"
 #include "PrimitiveViewRelevance.h"
@@ -47,7 +47,7 @@ public:
 		Result.bDrawRelevance = IsShown(View) && IsSelected();
 		Result.bDynamicRelevance = true;
 		// ideally the TranslucencyRelevance should be filled out by the material, here we do it conservative
-		Result.bSeparateTranslucencyRelevance = Result.bNormalTranslucencyRelevance = IsShown(View);
+		Result.bSeparateTranslucency = Result.bNormalTranslucency = IsShown(View);
 		return Result;
 	}
 

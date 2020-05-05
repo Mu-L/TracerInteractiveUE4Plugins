@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DatasmithCommands.h"
 
@@ -46,7 +46,7 @@ namespace DatasmithDispatcher
 
 	void FRunTaskCommand::SerializeImpl(FArchive& Ar)
 	{
-		Ar << JobFilePath;
+		Ar << JobFileDescription;
 		Ar << JobIndex;
 	}
 
@@ -56,6 +56,7 @@ namespace DatasmithDispatcher
 		Ar << ProcessResult;
 		Ar << SceneGraphFileName;
 		Ar << GeomFileName;
+		Ar << WarningMessages;
 	}
 
 	void FImportParametersCommand::SerializeImpl(FArchive& Ar)

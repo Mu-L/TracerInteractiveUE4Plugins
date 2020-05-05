@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "K2Node_GetSequenceBinding.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -22,6 +22,7 @@
 #include "Widgets/Input/SComboBox.h"
 #include "Editor.h"
 #include "Compilation/MovieSceneCompiler.h"
+#include "ScopedTransaction.h"
 
 static const FName OutputPinName(TEXT("Output"));
 static const FName SequencePinName(TEXT("Sequence"));
@@ -281,6 +282,10 @@ void UK2Node_GetSequenceBinding::GetNodeContextMenuActions(UToolMenu* Menu, UGra
 void UK2Node_GetSequenceBinding::SetSequence(const FAssetData& InAssetData)
 {
 	FSlateApplication::Get().DismissAllMenus();
+
+	const FScopedTransaction Transaction(LOCTEXT("SetSequence", "Set Sequence"));
+	Modify();
+
 	SourceSequence = Cast<UMovieSceneSequence>(InAssetData.GetAsset());
 }
 
@@ -509,6 +514,9 @@ TSharedPtr<SGraphNode> UK2Node_GetSequenceBinding::CreateVisualWidget()
 
 		virtual void SetCurrentValue(const FMovieSceneObjectBindingID& InBindingId) override
 		{
+			const FScopedTransaction Transaction(LOCTEXT("SetBindng", "Set Binding"));
+			GraphNode->Modify();
+
 			CastChecked<UK2Node_GetSequenceBinding>(GraphNode)->Binding = InBindingId;
 			bNeedsUpdate = true;
 		}

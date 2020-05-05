@@ -1,11 +1,14 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "USDPrimConversion.h"
 
+#include "UnrealUSDWrapper.h"
 #include "USDConversionUtils.h"
 #include "USDTypesConversion.h"
 
+#include "CineCameraActor.h"
 #include "CineCameraComponent.h"
+#include "Components/MeshComponent.h"
 #include "Components/SceneComponent.h"
 
 #if USE_USD_SDK
@@ -20,6 +23,43 @@
 
 #include "USDIncludesEnd.h"
 
+bool UsdToUnreal::ConvertXformable( const pxr::UsdStageRefPtr& Stage, const pxr::UsdGeomXformable& Xformable, FTransform& OutTransform, pxr::UsdTimeCode EvalTime )
+{
+	if ( !Xformable )
+	{
+		return false;
+	}
+
+	FScopedUsdAllocs UsdAllocs;
+
+	// Transform
+	pxr::GfMatrix4d UsdMatrix;
+	bool bResetXFormStack = false;
+	Xformable.GetLocalTransformation( &UsdMatrix, &bResetXFormStack, EvalTime );
+
+	UsdToUnreal::FUsdStageInfo StageInfo( Stage );
+
+	// Extra rotation to match different camera facing direction convention
+	// Note: The camera space is always Y-up, yes, but this is not what this is: This is the camera's transform wrt the stage,
+	// which follows the stage up axis
+	FRotator AdditionalRotation( ForceInit );
+	if ( Xformable.GetPrim().IsA< pxr::UsdGeomCamera >() )
+	{
+		if (StageInfo.UpAxis == pxr::UsdGeomTokens->y)
+		{
+			AdditionalRotation = FRotator(0.0f, -90.f, 0.0f);
+		}
+		else
+		{
+			AdditionalRotation = FRotator(-90.0f, -90.f, 0.0f);
+		}
+	}
+
+	OutTransform = FTransform( AdditionalRotation ) * UsdToUnreal::ConvertMatrix( StageInfo, UsdMatrix );
+
+	return true;
+}
+
 bool UsdToUnreal::ConvertXformable( const pxr::UsdStageRefPtr& Stage, const pxr::UsdGeomXformable& Xformable, USceneComponent& SceneComponent, pxr::UsdTimeCode EvalTime )
 {
 	if ( !Xformable )
@@ -27,25 +67,21 @@ bool UsdToUnreal::ConvertXformable( const pxr::UsdStageRefPtr& Stage, const pxr:
 		return false;
 	}
 
-	pxr::TfToken UpAxis = UsdUtils::GetUsdStageAxis( Stage );
+	TRACE_CPUPROFILER_EVENT_SCOPE( UsdToUnreal::ConvertXformable );
+
+	FScopedUsdAllocs UsdAllocs;
 
 	// Transform
-	pxr::GfMatrix4d UsdMatrix;
-	bool bResetXFormStack = false;
-	Xformable.GetLocalTransformation( &UsdMatrix, &bResetXFormStack, EvalTime );
+	FTransform Transform;
+	UsdToUnreal::ConvertXformable( Stage, Xformable, Transform, EvalTime );
 
-	FRotator AdditionalRotation( ForceInit );
-
-	if ( Xformable.GetPrim().IsA< pxr::UsdGeomCamera >() )
-	{
-		AdditionalRotation = FRotator( -90.f, 0.f, 0.f );
-		AdditionalRotation = AdditionalRotation + FRotator( 0.f, -90.f, 0.f );
-
-		UpAxis = pxr::UsdGeomTokens->y; // Cameras are always Y up in USD
-	}
-
-	FTransform Transform = UsdToUnreal::ConvertMatrix( UpAxis, UsdMatrix ) * FTransform( AdditionalRotation );
 	SceneComponent.SetRelativeTransform( Transform );
+
+	// Visibility
+	const bool bIsHidden = ( Xformable.ComputeVisibility( EvalTime ) == pxr::UsdGeomTokens->invisible );
+
+	SceneComponent.Modify();
+	SceneComponent.SetVisibility( !bIsHidden );
 
 	return true;
 }
@@ -58,7 +94,7 @@ bool UsdToUnreal::ConvertGeomCamera( const pxr::UsdStageRefPtr& Stage, const pxr
 
 	if ( FMath::IsNearlyZero( CameraComponent.FocusSettings.ManualFocusDistance ) )
 	{
-		CameraComponent.FocusSettings.FocusMethod = ECameraFocusMethod::None;
+		CameraComponent.FocusSettings.FocusMethod = ECameraFocusMethod::DoNotOverride;
 	}
 
 	CameraComponent.CurrentAperture = UsdUtils::GetUsdValue< float >( GeomCamera.GetFStopAttr(), EvalTime );
@@ -80,22 +116,36 @@ bool UnrealToUsd::ConvertSceneComponent( const pxr::UsdStageRefPtr& Stage, const
 
 	// Transform
 	pxr::UsdGeomXformable XForm( UsdPrim );
-	if ( XForm )
+	if ( !XForm )
 	{
-		pxr::GfMatrix4d UsdMatrix;
-		bool bResetXFormStack = false;
-		XForm.GetLocalTransformation( &UsdMatrix, &bResetXFormStack );
+		return false;
+	}
 
-		pxr::GfMatrix4d UsdTransform = UnrealToUsd::ConvertTransform( Stage, SceneComponent->GetRelativeTransform() );
+	FTransform RelativeTransform = SceneComponent->GetRelativeTransform();
 
-		if ( GfIsClose( UsdMatrix, UsdTransform, THRESH_VECTORS_ARE_NEAR ) )
+	FTransform AdditionalRotation;
+	if ( ACineCameraActor* CineCameraActor = Cast< ACineCameraActor >( SceneComponent->GetOwner() ) )
+	{
+		AdditionalRotation = FTransform( FRotator( 0.0f, 90.f, 0.0f ) );
+
+		if ( UsdUtils::GetUsdStageAxis( Stage ) == pxr::UsdGeomTokens->z )
 		{
-			return false;
+			AdditionalRotation *= FTransform( FRotator( 90.0f, 0.f, 0.0f ) );
 		}
+	}
 
+	RelativeTransform = AdditionalRotation * RelativeTransform;
+	pxr::GfMatrix4d UsdTransform = UnrealToUsd::ConvertTransform( Stage, RelativeTransform );
+
+	pxr::GfMatrix4d UsdMatrix;
+	bool bResetXFormStack = false;
+	XForm.GetLocalTransformation( &UsdMatrix, &bResetXFormStack );
+
+	if ( !GfIsClose( UsdMatrix, UsdTransform, THRESH_VECTORS_ARE_NEAR ) )
+	{
 		bResetXFormStack = false;
 		bool bFoundTransformOp = false;
-	
+
 		std::vector< pxr::UsdGeomXformOp > XFormOps = XForm.GetOrderedXformOps( &bResetXFormStack );
 		for ( const pxr::UsdGeomXformOp& XFormOp : XFormOps )
 		{
@@ -119,6 +169,71 @@ bool UnrealToUsd::ConvertSceneComponent( const pxr::UsdStageRefPtr& Stage, const
 		}
 	}
 
+	// Visibility
+	bool bVisible = SceneComponent->GetVisibleFlag();
+	if ( bVisible )
+	{
+		XForm.MakeVisible();
+	}
+	else
+	{
+		XForm.MakeInvisible();
+	}
+
 	return true;
 }
+
+bool UnrealToUsd::ConvertMeshComponent( const pxr::UsdStageRefPtr& Stage, const UMeshComponent* MeshComponent, pxr::UsdPrim& UsdPrim )
+{
+	if ( !UsdPrim || !MeshComponent )
+	{
+		return false;
+	}
+
+	if ( !ConvertSceneComponent( Stage, MeshComponent, UsdPrim ) )
+	{
+		return false;
+	}
+
+	const bool bHasMaterialAttribute = UsdPrim.HasAttribute( UnrealIdentifiers::MaterialAssignments );
+
+	if ( MeshComponent->GetNumMaterials() > 0 || bHasMaterialAttribute )
+	{
+		FScopedUsdAllocs UsdAllocs;
+
+		pxr::VtArray< std::string > UEMaterials;
+
+		bool bHasUEMaterialAssignements = false;
+
+		for ( int32 MaterialIndex = 0; MaterialIndex < MeshComponent->GetNumMaterials(); ++MaterialIndex )
+		{
+			if ( UMaterialInterface* AssignedMaterial = MeshComponent->GetMaterial( MaterialIndex ) )
+			{
+				FString AssignedMaterialPathName;
+				if ( AssignedMaterial->GetOutermost() != GetTransientPackage() )
+				{
+					AssignedMaterialPathName = AssignedMaterial->GetPathName();
+					bHasUEMaterialAssignements = true;
+				}
+
+				UEMaterials.push_back( UnrealToUsd::ConvertString( *AssignedMaterialPathName ).Get() );
+			}
+		}
+
+		if ( bHasUEMaterialAssignements )
+		{
+			if ( pxr::UsdAttribute UEMaterialsAttribute = UsdPrim.CreateAttribute( UnrealIdentifiers::MaterialAssignments, pxr::SdfValueTypeNames->StringArray ) )
+			{
+				UEMaterialsAttribute.Set( UEMaterials );
+			}
+		}
+		else if ( bHasMaterialAttribute )
+		{
+			UsdPrim.GetAttribute( UnrealIdentifiers::MaterialAssignments ).Clear();
+		}
+	}
+
+	return true;
+}
+
 #endif // #if USE_USD_SDK

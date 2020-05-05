@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -405,7 +405,7 @@ namespace AutomationScripts.Automation
 					}
 					else
 					{
-						var Branch = new BranchInfo(new List<UnrealTargetPlatform> { UnrealBuildTool.BuildHostPlatform.Current.Platform });
+						var Branch = new BranchInfo();
 						var GameProj = Branch.FindGame(OriginalProjectName);
 						if (GameProj != null)
 						{

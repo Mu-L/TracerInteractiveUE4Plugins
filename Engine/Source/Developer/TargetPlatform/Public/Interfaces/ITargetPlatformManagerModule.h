@@ -1,8 +1,9 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/StringView.h"
 #include "Interfaces/ITargetDevice.h"
 #include "Modules/ModuleInterface.h"
 
@@ -63,7 +64,7 @@ public:
 	 * @param Name The target platform's short or long name.
 	 * @return The target platform, or nullptr if not found.
 	 */
-	virtual ITargetPlatform* FindTargetPlatform( const FString& Name ) = 0;
+	virtual ITargetPlatform* FindTargetPlatform( FStringView Name ) = 0;
 
 	/**
 	 * Finds a target platform by looking for one that supports a given value for a generic type of support
@@ -131,6 +132,14 @@ public:
 	 * @return Collection of texture formats.
 	 */
 	virtual const TArray<const class ITextureFormat*>& GetTextureFormats() = 0;
+
+	/**
+	 * Determine if there were errors during the initialization of the platform manager.
+	 *
+	 * @param OutErrorMessages Optional pointer to an FString that will have the error messages appended to it.
+	 * @return True if there were errors during the initialization of the platform manager, False otherwise.
+	 */
+	virtual bool HasInitErrors(FString* OutErrorMessages) const = 0;
 	
 	/**
 	 * Invalidates the target platform module.

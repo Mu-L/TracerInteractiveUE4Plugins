@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -213,6 +213,22 @@ public:
 	/** Exit VR Mode  */
 	UFUNCTION(BlueprintCallable, Category = "Virtual Production")
 	static void ExitVRMode();
+
+	/** Whether location grid snapping is enabled */
+	UFUNCTION(BlueprintCallable, Category = "Virtual Production")
+	static bool IsLocationGridSnappingEnabled();
+
+	/** Toggle location grid snapping */
+	UFUNCTION(BlueprintCallable, Category = "Virtual Production")
+	static void ToggleLocationGridSnapping();
+
+	/** Whether rotation grid snapping is enabled */
+	UFUNCTION(BlueprintCallable, Category = "Virtual Production")
+		static bool IsRotationGridSnappingEnabled();
+
+	/** Toggle rotation grid snapping */
+	UFUNCTION(BlueprintCallable, Category = "Virtual Production")
+		static void ToggleRotationGridSnapping();
 
 private:
 

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DisplayNodes/SequencerObjectBindingNode.h"
 #include "Modules/ModuleManager.h"
@@ -22,7 +22,6 @@
 #include "MovieScene.h"
 #include "Sequencer.h"
 #include "SSequencer.h"
-#include "SSequencerLabelEditor.h"
 #include "MovieSceneSequence.h"
 #include "SequencerTrackNode.h"
 #include "ObjectEditorUtils.h"
@@ -62,9 +61,9 @@ void GetKeyablePropertyPaths(UClass* Class, void* ValuePtr, UStruct* PropertySou
 	//@todo need to resolve this between UMG and the level editor sequencer
 	const bool bRecurseAllProperties = Sequencer.IsLevelEditorSequencer();
 
-	for (TFieldIterator<UProperty> PropertyIterator(PropertySource); PropertyIterator; ++PropertyIterator)
+	for (TFieldIterator<FProperty> PropertyIterator(PropertySource); PropertyIterator; ++PropertyIterator)
 	{
-		UProperty* Property = *PropertyIterator;
+		FProperty* Property = *PropertyIterator;
 
 		if (Property && !Property->HasAnyPropertyFlags(CPF_Deprecated))
 		{
@@ -76,7 +75,7 @@ void GetKeyablePropertyPaths(UClass* Class, void* ValuePtr, UStruct* PropertySou
 				KeyablePropertyPaths.Add(PropertyPath);
 			}
 
-			UArrayProperty* ArrayProperty = Cast<UArrayProperty>(Property);
+			FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property);
 			if (!bIsPropertyKeyable && ArrayProperty)
 			{
 				FScriptArrayHelper ArrayHelper(ArrayProperty, ArrayProperty->ContainerPtrToValuePtr<void>(ValuePtr));
@@ -89,7 +88,7 @@ void GetKeyablePropertyPaths(UClass* Class, void* ValuePtr, UStruct* PropertySou
 						KeyablePropertyPaths.Add(PropertyPath);
 						bIsPropertyKeyable = true;
 					}
-					else if (UStructProperty* StructProperty = Cast<UStructProperty>(ArrayProperty->Inner))
+					else if (FStructProperty* StructProperty = CastField<FStructProperty>(ArrayProperty->Inner))
 					{
 						GetKeyablePropertyPaths(Class, ArrayHelper.GetRawPtr(Index), StructProperty->Struct, PropertyPath, Sequencer, KeyablePropertyPaths);
 					}
@@ -100,7 +99,7 @@ void GetKeyablePropertyPaths(UClass* Class, void* ValuePtr, UStruct* PropertySou
 
 			if (!bIsPropertyKeyable || bRecurseAllProperties)
 			{
-				if (UStructProperty* StructProperty = Cast<UStructProperty>(Property))
+				if (FStructProperty* StructProperty = CastField<FStructProperty>(Property))
 				{
 					GetKeyablePropertyPaths(Class, StructProperty->ContainerPtrToValuePtr<void>(ValuePtr), StructProperty->Struct, PropertyPath, Sequencer, KeyablePropertyPaths);
 				}
@@ -150,6 +149,7 @@ void FSequencerObjectBindingNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 	ISequencerModule& SequencerModule = FModuleManager::GetModuleChecked<ISequencerModule>("Sequencer");
 
 	UObject* BoundObject = GetSequencer().FindSpawnedObjectOrTemplate(ObjectBinding);
+	const UClass* ObjectClass = GetClassForObjectBinding();
 
 	TSharedRef<FUICommandList> CommandList(new FUICommandList);
 	TSharedPtr<FExtender> Extender = SequencerModule.GetObjectBindingContextMenuExtensibilityManager()->GetAllExtenders(CommandList, TArrayBuilder<UObject*>().Add(BoundObject));
@@ -237,7 +237,6 @@ void FSequencerObjectBindingNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 		}
 		else
 		{
-			const UClass* ObjectClass = GetClassForObjectBinding();
 			
 			if (ObjectClass->IsChildOf(AActor::StaticClass()))
 			{
@@ -283,12 +282,6 @@ void FSequencerObjectBindingNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 	MenuBuilder.BeginSection("Organize", LOCTEXT("OrganizeContextMenuSectionName", "Organize"));
 	{
 		MenuBuilder.AddSubMenu(
-			LOCTEXT("LabelsSubMenuText", "Labels"),
-			LOCTEXT("LabelsSubMenuTip", "Add or remove labels on this track"),
-			FNewMenuDelegate::CreateSP(this, &FSequencerObjectBindingNode::HandleLabelsSubMenuCreate)
-		);
-
-		MenuBuilder.AddSubMenu(
 			LOCTEXT("TagsLabel", "Tags"),
 			LOCTEXT("TagsTooltip", "Show this object binding's tags"),
 			FNewMenuDelegate::CreateSP(this, &FSequencerObjectBindingNode::AddTagMenu)
@@ -297,6 +290,12 @@ void FSequencerObjectBindingNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 	MenuBuilder.EndSection();
 
 	GetSequencer().BuildCustomContextMenuForGuid(MenuBuilder, ObjectBinding);
+	TArray<FGuid> ObjectBindings;
+	ObjectBindings.Add(ObjectBinding);
+	for (const TSharedPtr<ISequencerTrackEditor>& TrackEditor : GetSequencer().GetTrackEditors())
+	{
+		TrackEditor->BuildObjectBindingContextMenu(MenuBuilder, ObjectBindings, ObjectClass);
+	}
 
 	FSequencerDisplayNode::BuildContextMenu(MenuBuilder);
 }
@@ -919,7 +918,15 @@ TOptional<EItemDropZone> FSequencerObjectBindingNode::CanDrop(FSequencerDisplayN
 	// This removes a confusing "above" -> "blocked" -> "above/below" transition.
 	if (ItemDropZone == EItemDropZone::OntoItem || ItemDropZone == EItemDropZone::BelowItem)
 	{
-		ItemDropZone = EItemDropZone::AboveItem;
+		// Except when dropping onto the last item so that we can drop to the end of the tree
+		if (ParentTree.GetRootNode()->GetNumChildren() > 0 && this == &ParentTree.GetRootNode()->GetChildNodes().Last().Get())
+		{
+			ItemDropZone = EItemDropZone::BelowItem;
+		}
+		else
+		{
+			ItemDropZone = EItemDropZone::AboveItem;
+		}
 	}
 
 	if (GetParent().IsValid() && GetParent()->GetType() != ESequencerNode::Folder)
@@ -1127,10 +1134,13 @@ TSharedRef<SWidget> FSequencerObjectBindingNode::HandleAddTrackComboButtonGetMen
 	const bool bUseSubMenus = Sequencer.IsLevelEditorSequencer();
 
 	UObject* BoundObject = GetSequencer().FindSpawnedObjectOrTemplate(ObjectBinding);
-	const UClass* ObjectClass = GetClassForObjectBinding();
+	const UClass* MainSelectionObjectClass = GetClassForObjectBinding();
 
 	TArray<FGuid> ObjectBindings;
 	ObjectBindings.Add(ObjectBinding);
+
+	TArray<UClass*> ObjectClasses;
+	ObjectClasses.Add(const_cast<UClass*>(MainSelectionObjectClass));
 
 	// Only include other selected object bindings if this binding is selected. Otherwise, this will lead to 
 	// confusion with multiple tracks being added to possibly unrelated objects
@@ -1148,8 +1158,12 @@ TSharedRef<SWidget> FSequencerObjectBindingNode::HandleAddTrackComboButtonGetMen
 			FGuid Guid = ObjectBindingNode->GetObjectBinding();
 			for (auto RuntimeObject : Sequencer.FindBoundObjects(Guid, Sequencer.GetFocusedTemplateID()))
 			{
-				ObjectBindings.AddUnique(Guid);
-				continue;
+				if (RuntimeObject != nullptr)
+				{
+					ObjectBindings.AddUnique(Guid);
+					ObjectClasses.Add(RuntimeObject->GetClass());
+					continue;
+				}
 			}
 		}
 	}
@@ -1158,6 +1172,8 @@ TSharedRef<SWidget> FSequencerObjectBindingNode::HandleAddTrackComboButtonGetMen
 	TSharedRef<FUICommandList> CommandList(new FUICommandList);
 
 	TSharedRef<FExtender> Extender = SequencerModule.GetAddTrackMenuExtensibilityManager()->GetAllExtenders(CommandList, TArrayBuilder<UObject*>().Add(BoundObject)).ToSharedRef();
+
+	const UClass* ObjectClass = UClass::FindCommonBase(ObjectClasses);
 
 	for (const TSharedPtr<ISequencerTrackEditor>& TrackEditor : GetSequencer().GetTrackEditors())
 	{
@@ -1190,7 +1206,7 @@ TSharedRef<SWidget> FSequencerObjectBindingNode::HandleAddTrackComboButtonGetMen
 	TArray<PropertyMenuData> KeyablePropertyMenuData;
 	for (const FPropertyPath& KeyablePropertyPath : KeyablePropertyPaths)
 	{
-		UProperty* Property = KeyablePropertyPath.GetRootProperty().Property.Get();
+		FProperty* Property = KeyablePropertyPath.GetRootProperty().Property.Get();
 		if (Property)
 		{
 			PropertyMenuData KeyableMenuData;
@@ -1279,7 +1295,7 @@ void FSequencerObjectBindingNode::HandleAddTrackSubMenuNew(FMenuBuilder& AddTrac
 	// [PostProcessSettings] [ColorGrading]
 
 	// Create property menu data based on keyable property paths
-	TArray<UProperty*> PropertiesTraversed;
+	TArray<FProperty*> PropertiesTraversed;
 	TArray<int32> ArrayIndicesTraversed;
 	TArray<PropertyMenuData> KeyablePropertyMenuData;
 	for (const FPropertyPath& KeyablePropertyPath : KeyablePropertyPaths)
@@ -1291,7 +1307,7 @@ void FSequencerObjectBindingNode::HandleAddTrackSubMenuNew(FMenuBuilder& AddTrac
 		if (KeyablePropertyPath.GetNumProperties() > 1) //@todo
 		{
 			const FPropertyInfo& PropertyInfo = KeyablePropertyPath.GetPropertyInfo(1);
-			UProperty* Property = PropertyInfo.Property.Get();
+			FProperty* Property = PropertyInfo.Property.Get();
 
 			// Search for any array elements
 			int32 ArrayIndex = INDEX_NONE;
@@ -1373,27 +1389,6 @@ void FSequencerObjectBindingNode::HandleAddTrackSubMenuNew(FMenuBuilder& AddTrac
 
 		++MenuDataIndex;
 	}
-}
-
-
-void FSequencerObjectBindingNode::HandleLabelsSubMenuCreate(FMenuBuilder& MenuBuilder)
-{
-	const TSet< TSharedRef<FSequencerDisplayNode> >& SelectedNodes = GetSequencer().GetSelection().GetSelectedOutlinerNodes();
-	TArray<FGuid> ObjectBindingIds;
-	for (TSharedRef<const FSequencerDisplayNode> SelectedNode : SelectedNodes )
-	{
-		if (SelectedNode->GetType() == ESequencerNode::Object)
-		{
-			TSharedRef<const FSequencerObjectBindingNode> ObjectBindingNode = StaticCastSharedRef<const FSequencerObjectBindingNode>(SelectedNode);
-			FGuid ObjectBindingId = ObjectBindingNode->GetObjectBinding();
-			if (ObjectBindingId.IsValid())
-			{
-				ObjectBindingIds.Add(ObjectBindingId);
-			}
-		}
-	}
-
-	MenuBuilder.AddWidget(SNew(SSequencerLabelEditor, GetSequencer(), ObjectBindingIds), FText::GetEmpty(), true);
 }
 
 

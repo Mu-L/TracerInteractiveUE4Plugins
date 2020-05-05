@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ComposurePostProcessPass.h"
 #include "ComposurePostProcessBlendable.h"
@@ -93,6 +93,7 @@ void UComposurePostProcessPass::Activate(bool bReset)
 			// Avoid capturing every frame and on movement.
 			SceneCapture->bCaptureEveryFrame = false;
 			SceneCapture->bCaptureOnMovement = false;
+			SceneCapture->bUseRayTracingIfEnabled = true;
 			// Sets the capture source to final color to enable post processing.
 			SceneCapture->CaptureSource = SCS_FinalColorLDR;
 

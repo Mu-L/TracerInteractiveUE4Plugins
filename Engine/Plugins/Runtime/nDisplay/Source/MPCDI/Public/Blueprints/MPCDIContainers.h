@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -45,31 +45,3 @@ public:
 
 	void PostAddFace(int f0, int f1, int f2);
 };
-
-
-//////////////////////////////////////////////////////////////////////////////////////////////
-// Blend inputs
-//////////////////////////////////////////////////////////////////////////////////////////////
-/*
-USTRUCT(BlueprintType)
-struct FMPCDIRegionGeometry
-{
-	GENERATED_BODY()
-
-public:
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MPCDI")
-	FString Id;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MPCDI")
-	TArray<FVector> Points;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MPCDI")
-	TArray<FVector> UV;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MPCDI")
-	TArray<> UV;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MPCDI")
-	ECameraOverlayRenderMode OverlayBlendMode;
-};
-*/

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -46,6 +46,7 @@ class MESHMODELINGTOOLSEDITORONLY_API UParameterizeMeshToolBuilder : public UInt
 public:
 
 	IToolsContextAssetAPI* AssetAPI;
+	bool bDoAutomaticGlobalUnwrap = false;
 
 	UParameterizeMeshToolBuilder()
 	{
@@ -54,6 +55,77 @@ public:
 
 	virtual bool CanBuildTool(const FToolBuilderState& SceneState) const override;
 	virtual UInteractiveTool* BuildTool(const FToolBuilderState& SceneState) const override;
+};
+
+
+
+
+UENUM()
+enum class EUVUnwrapType
+{
+	/**  */
+	MinStretch = 0,
+	/** */
+	ExpMap = 1
+};
+
+
+
+UENUM()
+enum class EUVIslandMode
+{
+	/**  */
+	Auto = 0,
+	/** */
+	PolyGroups = 1
+};
+
+
+
+UENUM()
+enum class EParameterizeMeshToolUVScaleMode
+{
+	/** No scaling is applied to UV islands */
+	NoScaling,
+	/** Scale UV islands such that they have constant relative area, relative to object bounds */
+	NormalizeToBounds,
+	/** Scale UV islands such that they have constant relative area, relative to world space */
+	NormalizeToWorld
+};
+
+
+
+
+UCLASS()
+class MESHMODELINGTOOLSEDITORONLY_API UParameterizeMeshToolProperties : public UInteractiveToolPropertySet
+{
+	GENERATED_BODY()
+public:
+
+	//UPROPERTY(EditAnywhere, Category = Options)
+	UPROPERTY()
+	EUVIslandMode IslandMode = EUVIslandMode::PolyGroups;
+
+	UPROPERTY(EditAnywhere, Category = Options, meta = (EditConditionHides, HideEditConditionToggle, EditCondition = "bIsGlobalMode == false"))
+	EUVUnwrapType UnwrapType = EUVUnwrapType::ExpMap;
+
+	/** Maximum amount of stretch, from none to any.  If zero stretch is specified each triangle will likey be its own chart */
+	UPROPERTY(EditAnywhere, Category = Options, meta = (Default = "0.166", UIMin = "0", UIMax = "1", ClampMin = "0", ClampMax = "1", EditCondition = "bIsGlobalMode || UnwrapType == EUVUnwrapType::MinStretch"))
+	float ChartStretch = 0.11f;
+
+	/** Scaling applied to UV islands */
+	UPROPERTY(EditAnywhere, Category = Options)
+	EParameterizeMeshToolUVScaleMode UVScaleMode = EParameterizeMeshToolUVScaleMode::NormalizeToBounds;
+
+	/** Scaling factor used for UV island normalization/scaling */
+	UPROPERTY(EditAnywhere, Category = Options, meta = (EditCondition = "UVScaleMode!=EParameterizeMeshToolUVScaleMode::NoScaling", UIMin = "0.001", UIMax = "10", ClampMin = "0.00001", ClampMax = "1000000.0") )
+	float UVScale = 1.0;
+
+	UPROPERTY()
+	bool bIsGlobalMode = false;
+
+	virtual void SaveProperties(UInteractiveTool* SaveFromTool) override;
+	virtual void RestoreProperties(UInteractiveTool* RestoreToTool) override;
 };
 
 
@@ -73,6 +145,7 @@ public:
 
 	virtual void SetWorld(UWorld* World);
 	virtual void SetAssetAPI(IToolsContextAssetAPI* AssetAPI);
+	virtual void SetUseAutoGlobalParameterizationMode(bool bEnable);
 
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
@@ -84,22 +157,15 @@ public:
 	virtual bool HasAccept() const override;
 	virtual bool CanAccept() const override;
 
-#if WITH_EDITOR
-	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
-#endif
 
-	virtual void OnPropertyModified(UObject* PropertySet, UProperty* Property) override;
+	virtual void OnPropertyModified(UObject* PropertySet, FProperty* Property) override;
 
 	// IDynamicMeshOperatorFactory API
-	virtual TSharedPtr<FDynamicMeshOperator> MakeNewOperator() override;
+	virtual TUniquePtr<FDynamicMeshOperator> MakeNewOperator() override;
 
 protected:
-	// need to update bResultValid if these are modified, so we don't publicly expose them. 
-	// @todo setters/getters for these
-
-	/** Maximum amount of stretch, from none to any.  If zero stretch is specified each triangle will likey be its own chart */
-	UPROPERTY(EditAnywhere, Category = Options, meta = (Default = "0.166", UIMin = "0", UIMax = "1", ClampMin = "0", ClampMax= "1"))
-	float ChartStretch = 0.11f;
+	UPROPERTY()
+	UParameterizeMeshToolProperties* Settings = nullptr;
 
 	UPROPERTY()
 	UExistingMeshMaterialProperties* MaterialSettings = nullptr;
@@ -117,6 +183,8 @@ protected:
 	UPROPERTY()
 	UMeshOpPreviewWithBackgroundCompute* Preview = nullptr;
 
+	UPROPERTY()
+	bool bDoAutomaticGlobalUnwrap = false;
 
 protected:
 	UWorld* TargetWorld;

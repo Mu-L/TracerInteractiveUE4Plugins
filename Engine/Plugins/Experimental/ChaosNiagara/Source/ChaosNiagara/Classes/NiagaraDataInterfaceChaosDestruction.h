@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -86,7 +86,7 @@ struct FSolverData
 		: Solver(nullptr)
 	{}
 
-	TSharedPtr<FPhysScene_Chaos> PhysScene;
+	FPhysScene_Chaos* PhysScene;
 	Chaos::FPhysicsSolver* Solver;
 };
 
@@ -352,6 +352,9 @@ class CHAOSNIAGARA_API UNiagaraDataInterfaceChaosDestruction : public UNiagaraDa
 	GENERATED_UCLASS_BODY()
 
 public:
+
+	DECLARE_NIAGARA_DI_PARAMETER();
+
 	/* Chaos Solver */
 	UPROPERTY(EditAnywhere, Category = "Solver", meta = (DisplayName = "Chaos Solver"))
 	TSet<AChaosSolverActor*> ChaosSolverActorSet;
@@ -554,9 +557,8 @@ public:
 
 	//----------------------------------------------------------------------------
 	// GPU sim functionality
-	virtual void GetParameterDefinitionHLSL(FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override; 
-	virtual bool GetFunctionHLSL(const FName&  DefinitionFunctionName, FString InstanceFunctionName, FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual FNiagaraDataInterfaceParametersCS* ConstructComputeParameters() const override;
+	virtual void GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
+	virtual bool GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL) override;
 
 	//----------------------------------------------------------------------------
 	// EXPOSED FUNCTIONS
@@ -677,6 +679,9 @@ public:
 
 	virtual void ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, void* PerInstanceData, const FNiagaraSystemInstanceID& SystemInstance) override;
 protected:
+#if INCLUDE_CHAOS
+	void RegisterWithSolverEventManager(Chaos::FPhysicsSolver* Solver);
+#endif
 	virtual bool CopyToInternal(UNiagaraDataInterface* Destination) const override;
 
 	void ResetInstData(FNDIChaosDestruction_InstanceData* InstData);
@@ -764,19 +769,8 @@ struct FNiagaraDataInterfaceProxyChaosDestruction : public FNiagaraDataInterface
 
 	void DestroyInstanceData(NiagaraEmitterInstanceBatcher* Batcher, const FNiagaraSystemInstanceID& SystemInstance);
 
-	virtual void DeferredDestroy()
-	{
-		for (const FNiagaraSystemInstanceID& SystemInstance : InstancesToDestroy)
-		{
-			SystemsToGPUInstanceData.Remove(SystemInstance);
-		}
-
-		InstancesToDestroy.Empty();
-	}
-
 	float SolverTime;
 	int32 LastSpawnedPointID;
 
 	TMap<FNiagaraSystemInstanceID, FNiagaraDIChaosDestruction_GPUData> SystemsToGPUInstanceData;
-	TSet<FNiagaraSystemInstanceID> InstancesToDestroy;
 };

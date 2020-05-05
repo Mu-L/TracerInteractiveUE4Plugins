@@ -1,16 +1,19 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
+#include "Containers/UnrealString.h"
+
+#include "Containers/StringView.h"
+#include "CoreGlobals.h"
 #include "CoreTypes.h"
-#include "Misc/AssertionMacros.h"
-#include "Misc/VarArgs.h"
+#include "HAL/UnrealMemory.h"
+#include "Logging/LogMacros.h"
 #include "Math/NumericLimits.h"
 #include "Math/UnrealMathUtility.h"
-#include "HAL/UnrealMemory.h"
-#include "Templates/UnrealTemplate.h"
-#include "Containers/UnrealString.h"
-#include "Logging/LogMacros.h"
-#include "CoreGlobals.h"
+#include "Misc/AssertionMacros.h"
 #include "Misc/ByteSwap.h"
+#include "Misc/VarArgs.h"
+#include "String/HexToBytes.h"
+#include "Templates/UnrealTemplate.h"
 
 /* FString implementation
  *****************************************************************************/
@@ -116,6 +119,89 @@ namespace UE4String_Private
 	}
 }
 
+FString::FString(const FStringView& Other)
+{
+	if (const FStringView::SizeType OtherLen = Other.Len())
+	{
+		Reserve(OtherLen);
+		Append(Other.GetData(), OtherLen);
+		AppendChar(TEXT('\0'));
+	}
+}
+
+FString& FString::operator=(const FStringView& Other)
+{
+	const TCHAR* const OtherData = Other.GetData();
+	const FStringView::SizeType OtherLen = Other.Len();
+	if (OtherLen == 0)
+	{
+		Data.Empty();
+	}
+	else if (OtherData < Data.GetData() + Data.Num() && Data.GetData() < OtherData + OtherLen)
+	{
+		*this = FString(Other);
+	}
+	else
+	{
+		Data.Empty(OtherLen + 1);
+		Data.AddUninitialized(OtherLen + 1);
+		TCHAR* DataPtr = Data.GetData();
+		CopyAssignItems(DataPtr, OtherData, OtherLen);
+		DataPtr[OtherLen] = TEXT('\0');
+	}
+	return *this;
+}
+
+
+template<typename CharType>
+void AppendCharacters(TArray<TCHAR>& Out, const CharType* Str, int32 Count)
+{
+	check(Count >= 0);
+
+	if (!Count)
+	{
+		return;
+	}
+
+	checkSlow(Str);
+
+	const int32 OldNum = Out.Num();
+
+	// Reserve enough space - including an extra gap for a null terminator if we don't already have a string allocated
+	Out.AddUninitialized(Count + (OldNum ? 0 : 1));
+
+	TCHAR* Dest = Out.GetData() + OldNum - (OldNum ? 1 : 0);
+
+	// Copy characters to end of string, overwriting null terminator if we already have one
+	FPlatformString::Convert(Dest, Count, Str, Count);
+
+	// (Re-)establish the null terminator
+	Dest[Count] = '\0';
+}
+
+void FString::AppendChars(const ANSICHAR* Str, int32 Count)
+{
+	CheckInvariants();
+	AppendCharacters(Data, Str, Count);
+}
+
+void FString::AppendChars(const WIDECHAR* Str, int32 Count)
+{
+	CheckInvariants();
+	AppendCharacters(Data, Str, Count);
+}
+
+void FString::AppendChars(const UCS2CHAR* Str, int32 Count)
+{
+	CheckInvariants();
+	AppendCharacters(Data, Str, Count);
+}
+
+FString::operator FStringView() const
+{
+	return FStringView(Data.GetData(), Len());
+}
+
 void FString::TrimToNullTerminator()
 {
 	if( Data.Num() )
@@ -147,7 +233,7 @@ int32 FString::Find(const TCHAR* SubStr, ESearchCase::Type SearchCase, ESearchDi
 			? FCString::Stristr(Start, SubStr)
 			: FCString::Strstr(Start, SubStr);
 
-		return Tmp ? (Tmp-**this) : INDEX_NONE;
+		return Tmp ? UE_PTRDIFF_TO_INT32(Tmp-**this) : INDEX_NONE;
 	}
 	else
 	{
@@ -444,44 +530,6 @@ void FString::ReplaceCharInlineIgnoreCase(const TCHAR SearchChar, const TCHAR Re
 	ReplaceCharInlineCaseSensitive(SearchChar, ReplacementChar);
 }
 
-FString FString::Trim()
-{
-	int32 Pos = 0;
-	while(Pos < Len())
-	{
-		if( FChar::IsWhitespace( (*this)[Pos] ) )
-		{
-			Pos++;
-		}
-		else
-		{
-			break;
-		}
-	}
-
-	*this = Right( Len()-Pos );
-
-	return *this;
-}
-
-FString FString::TrimTrailing( void )
-{
-	int32 Pos = Len() - 1;
-	while( Pos >= 0 )
-	{
-		if( !FChar::IsWhitespace( ( *this )[Pos] ) )
-		{
-			break;
-		}
-
-		Pos--;
-	}
-
-	*this = Left( Pos + 1 );
-
-	return( *this );
-}
-
 void FString::TrimStartAndEndInline()
 {
 	TrimEndInline();
@@ -497,9 +545,8 @@ FString FString::TrimStartAndEnd() const &
 
 FString FString::TrimStartAndEnd() &&
 {
-	FString Result(MoveTemp(*this));
-	Result.TrimStartAndEndInline();
-	return Result;
+	TrimStartAndEndInline();
+	return MoveTemp(*this);
 }
 
 void FString::TrimStartInline()
@@ -521,9 +568,8 @@ FString FString::TrimStart() const &
 
 FString FString::TrimStart() &&
 {
-	FString Result(MoveTemp(*this));
-	Result.TrimStartInline();
-	return Result;
+	TrimStartInline();
+	return MoveTemp(*this);
 }
 
 void FString::TrimEndInline()
@@ -545,12 +591,11 @@ FString FString::TrimEnd() const &
 
 FString FString::TrimEnd() &&
 {
-	FString Result(MoveTemp(*this));
-	Result.TrimEndInline();
-	return Result;
+	TrimEndInline();
+	return MoveTemp(*this);
 }
 
-FString FString::TrimQuotes( bool* bQuotesRemoved ) const
+void FString::TrimQuotesInline(bool* bQuotesRemoved)
 {
 	bool bQuotesWereRemoved=false;
 	int32 Start = 0, Count = Len();
@@ -574,7 +619,20 @@ FString FString::TrimQuotes( bool* bQuotesRemoved ) const
 	{
 		*bQuotesRemoved = bQuotesWereRemoved;
 	}
-	return Mid(Start, Count);
+	MidInline(Start, Count, false);
+}
+
+FString FString::TrimQuotes(bool* bQuotesRemoved) const &
+{
+	FString Result(*this);
+	Result.TrimQuotesInline(bQuotesRemoved);
+	return Result;
+}
+
+FString FString::TrimQuotes(bool* bQuotesRemoved) &&
+{
+	TrimQuotesInline(bQuotesRemoved);
+	return MoveTemp(*this);
 }
 
 int32 FString::CullArray( TArray<FString>* InArray )
@@ -718,7 +776,7 @@ bool FString::ToBlob(const FString& Source,uint8* DestBuffer,const uint32 DestSi
 			ConvBuffer[0] = Source[Index];
 			ConvBuffer[1] = Source[Index + 1];
 			ConvBuffer[2] = Source[Index + 2];
-			DestBuffer[WriteIndex] = FCString::Atoi(ConvBuffer);
+			DestBuffer[WriteIndex] = (uint8)FCString::Atoi(ConvBuffer);
 		}
 		return true;
 	}
@@ -753,7 +811,7 @@ bool FString::ToHexBlob( const FString& Source, uint8* DestBuffer, const uint32 
 		{
 			ConvBuffer[0] = Source[Index];
 			ConvBuffer[1] = Source[Index + 1];
-			DestBuffer[WriteIndex] = FCString::Strtoi( ConvBuffer, &End, 16 );
+			DestBuffer[WriteIndex] = (uint8)FCString::Strtoi( ConvBuffer, &End, 16 );
 		}
 		return true;
 	}
@@ -900,7 +958,7 @@ int32 FString::ParseIntoArray( TArray<FString>& OutArray, const TCHAR* pchDelim,
 		{
 			if (!InCullEmpty || At-Start)
 			{
-				OutArray.Emplace(At-Start,Start);
+				OutArray.Emplace(UE_PTRDIFF_TO_INT32(At-Start),Start);
 			}
 			Start = At + DelimLength;
 		}
@@ -970,7 +1028,7 @@ int32 FString::ParseIntoArrayLines(TArray<FString>& OutArray, bool InCullEmpty) 
 	return ParseIntoArray(OutArray, LineEndings, NumLineEndings, InCullEmpty);
 }
 
-int32 FString::ParseIntoArray(TArray<FString>& OutArray, const TCHAR** DelimArray, int32 NumDelims, bool InCullEmpty) const
+int32 FString::ParseIntoArray(TArray<FString>& OutArray, const TCHAR* const * DelimArray, int32 NumDelims, bool InCullEmpty) const
 {
 	// Make sure the delimit string is not null or empty
 	check(DelimArray);
@@ -1056,10 +1114,12 @@ FString FString::Replace(const TCHAR* From, const TCHAR* To, ESearchCase::Type S
 		// look for From in the remaining string
 		const TCHAR* FromLocation = SearchCase == ESearchCase::IgnoreCase ? FCString::Stristr(Travel, From) : FCString::Strstr(Travel, From);
 		if (!FromLocation)
+		{
 			break;
+		}
 
 		// copy everything up to FromLocation
-		Result.AppendChars(Travel, FromLocation - Travel);
+		Result.AppendChars(Travel, UE_PTRDIFF_TO_INT32(FromLocation - Travel));
 
 		// copy over the To
 		Result.AppendChars(To, ToLength);
@@ -1248,36 +1308,32 @@ FString FString::ReplaceEscapedCharWithChar( const TArray<TCHAR>* Chars/*=nullpt
  * Replaces all instances of '\t' with TabWidth number of spaces
  * @param InSpacesPerTab - Number of spaces that a tab represents
  */
-FString FString::ConvertTabsToSpaces (const int32 InSpacesPerTab)
+void FString::ConvertTabsToSpacesInline(const int32 InSpacesPerTab)
 {
 	//must call this with at least 1 space so the modulus operation works
 	check(InSpacesPerTab > 0);
 
-	FString FinalString = *this;
 	int32 TabIndex;
-	while ((TabIndex = FinalString.Find(TEXT("\t"))) != INDEX_NONE )
+	while ((TabIndex = Find(TEXT("\t"), ESearchCase::CaseSensitive)) != INDEX_NONE )
 	{
-		FString LeftSide = FinalString.Left(TabIndex);
-		FString RightSide = FinalString.Mid(TabIndex+1);
+		FString RightSide = Mid(TabIndex+1);
+		LeftInline(TabIndex, false);
 
-		FinalString = LeftSide;
 		//for a tab size of 4, 
-		int32 LineBegin = LeftSide.Find(TEXT("\n"), ESearchCase::IgnoreCase, ESearchDir::FromEnd, TabIndex);
+		int32 LineBegin = Find(TEXT("\n"), ESearchCase::CaseSensitive, ESearchDir::FromEnd, TabIndex);
 		if (LineBegin == INDEX_NONE)
 		{
 			LineBegin = 0;
 		}
-		int32 CharactersOnLine = (LeftSide.Len()-LineBegin);
+		const int32 CharactersOnLine = (Len()-LineBegin);
 
 		int32 NumSpacesForTab = InSpacesPerTab - (CharactersOnLine % InSpacesPerTab);
 		for (int32 i = 0; i < NumSpacesForTab; ++i)
 		{
-			FinalString.AppendChar(' ');
+			AppendChar(' ');
 		}
-		FinalString += RightSide;
+		Append(RightSide);
 	}
-
-	return FinalString;
 }
 
 // This starting size catches 99.97% of printf calls - there are about 700k printf calls per level
@@ -1376,7 +1432,7 @@ FArchive& operator<<( FArchive& Ar, FString& A )
 			SaveNum = -SaveNum;
 		}
 
-		int32 MaxSerializeSize = Ar.GetMaxSerializeSize();
+		int64 MaxSerializeSize = Ar.GetMaxSerializeSize();
 		// Protect against network packets allocating too much memory
 		if ((MaxSerializeSize > 0) && (SaveNum > MaxSerializeSize))
 		{
@@ -1397,6 +1453,13 @@ FArchive& operator<<( FArchive& Ar, FString& A )
 				// read in the unicode string
 				auto Passthru = StringMemoryPassthru<UCS2CHAR>(A.Data.GetData(), SaveNum, SaveNum);
 				Ar.Serialize(Passthru.Get(), SaveNum * sizeof(UCS2CHAR));
+				if (Ar.IsByteSwapping())
+				{
+					for (int32 CharIndex = 0; CharIndex < SaveNum; ++CharIndex)
+					{
+						Passthru.Get()[CharIndex] = ByteSwap(Passthru.Get()[CharIndex]);
+					}
+				}
 				// Ensure the string has a null terminator
 				Passthru.Get()[SaveNum-1] = '\0';
 				Passthru.Apply();
@@ -1411,7 +1474,7 @@ FArchive& operator<<( FArchive& Ar, FString& A )
 				if(A.FindChar(0xffff, Index))
 				{
 					A[Index] = '\0';
-					A.TrimToNullTerminator();		
+					A.TrimToNullTerminator();
 				}
 			}
 			else
@@ -1446,7 +1509,19 @@ FArchive& operator<<( FArchive& Ar, FString& A )
 
 			if (Num)
 			{
-				Ar.Serialize((void*)UTF16String.Get(), sizeof(UTF16CHAR) * Num);
+				if (!Ar.IsByteSwapping())
+				{
+					Ar.Serialize((void*)UTF16String.Get(), sizeof(UTF16CHAR) * Num);
+				}
+				else
+				{
+					TArray<UTF16CHAR> Swapped(UTF16String.Get(), Num);
+					for (int32 CharIndex = 0; CharIndex < Num; ++CharIndex)
+					{
+						Swapped[CharIndex] = ByteSwap(Swapped[CharIndex]);
+					}
+					Ar.Serialize((void*)Swapped.GetData(), sizeof(UTF16CHAR) * Num);
+				}
 			}
 		}
 		else
@@ -1462,6 +1537,11 @@ FArchive& operator<<( FArchive& Ar, FString& A )
 	}
 
 	return Ar;
+}
+
+int32 HexToBytes(const FString& HexString, uint8* OutBytes)
+{
+	return UE::String::HexToBytes(HexString, OutBytes);
 }
 
 int32 FindMatchingClosingParenthesis(const FString& TargetString, const int32 StartSearch)
@@ -1500,7 +1580,7 @@ int32 FindMatchingClosingParenthesis(const FString& TargetString, const int32 St
 		// Did we find the matching close parenthesis
 		if (ParenthesisCount == 0 && *(CurrPosition - 1) == TEXT(')'))
 		{
-			return StartSearch + ((CurrPosition - 1) - StartPosition);
+			return StartSearch + UE_PTRDIFF_TO_INT32((CurrPosition - 1) - StartPosition);
 		}
 	}
 
@@ -1536,7 +1616,7 @@ void FTextRange::CalculateLineRangesFromString(const FString& Input, TArray<FTex
 		const bool bIsWindowsNewLine = (*CurrentChar == '\r' && *(CurrentChar + 1) == '\n');
 		if (bIsWindowsNewLine || FChar::IsLinebreak(*CurrentChar))
 		{
-			const int32 LineEndIndex = (CurrentChar - InputStart);
+			const int32 LineEndIndex = UE_PTRDIFF_TO_INT32(CurrentChar - InputStart);
 			check(LineEndIndex >= LineBeginIndex);
 			LineRanges.Emplace(FTextRange(LineBeginIndex, LineEndIndex));
 
@@ -1544,7 +1624,7 @@ void FTextRange::CalculateLineRangesFromString(const FString& Input, TArray<FTex
 			{
 				++CurrentChar; // skip the \n of the \r\n chain
 			}
-			LineBeginIndex = (CurrentChar - InputStart) + 1; // The next line begins after the end of the current line
+			LineBeginIndex = UE_PTRDIFF_TO_INT32(CurrentChar - InputStart) + 1; // The next line begins after the end of the current line
 		}
 	}
 

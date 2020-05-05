@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Materials/MaterialExpressionLandscapeLayerSample.h"
 #include "Engine/Engine.h"
@@ -95,11 +95,6 @@ void UMaterialExpressionLandscapeLayerSample::GetAllParameterInfo(TArray<FMateri
 	{
 		OutParameterIds.Add(ExpressionGUID);
 	}
-}
-
-bool UMaterialExpressionLandscapeLayerSample::NeedsLoadForClient() const
-{
-	return ParameterName != NAME_None;
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -112,6 +112,14 @@ namespace GeometryCollectionAlgo
 	void 
 	GEOMETRYCOLLECTIONCORE_API 
 	ParentTransforms(FTransformCollection* GeometryCollection, const int32 TransformIndex, const TArray<int32>& SelectedBones);
+
+
+	/*
+	*  Unparent the child index from its parent
+	*/
+	void
+	GEOMETRYCOLLECTIONCORE_API
+	UnparentTransform(FManagedArrayCollection* Collection, const int32 ChildIndex);
 
 	/*
 	*  Find the average position of the transforms.

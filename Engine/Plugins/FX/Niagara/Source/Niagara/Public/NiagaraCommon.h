@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -25,11 +25,10 @@ struct FNiagaraParameterStore;
 const uint32 NIAGARA_COMPUTE_THREADGROUP_SIZE = 64;
 const uint32 NIAGARA_MAX_COMPUTE_THREADGROUPS = 65535;
 
-const FString INTERPOLATED_PARAMETER_PREFIX = TEXT("PREV_");
+#define INTERPOLATED_PARAMETER_PREFIX TEXT("PREV_")
 
 /** The maximum number of spawn infos we can run on the GPU, modifying this will require a version update as it is used in the shader compiler  */
 constexpr uint32 NIAGARA_MAX_GPU_SPAWN_INFOS = 8;
-constexpr uint32 NIAGARA_MAX_GPU_SPAWN_INFOS_V4 = (NIAGARA_MAX_GPU_SPAWN_INFOS + 3) / 4;
 
 /** TickGroup information for Niagara.  */
 constexpr ETickingGroup NiagaraFirstTickGroup = TG_PrePhysics;
@@ -58,6 +57,19 @@ enum ENiagaraBaseTypes
 	NBT_Max,
 };
 
+// TODO: Custom will eventually mean that the default value or binding will be overridden by a subgraph default, i.e. expose it to a "Initialize variable" node. 
+// TODO: Should we add an "Uninitialized" entry, or is that too much friction? 
+UENUM()
+enum class ENiagaraDefaultMode : uint8
+{
+	// Default initialize using a value widget in the Selected Details panel. 
+	Value = 0, 
+	// Default initialize using a dropdown widget in the Selected Details panel. 
+	Binding,   
+	// Default initialization is done using a sub-graph.
+	Custom,    
+};
+
 UENUM()
 enum class ENiagaraSimTarget : uint8
 {
@@ -70,10 +82,14 @@ enum class ENiagaraSimTarget : uint8
 UENUM()
 enum class ENiagaraAgeUpdateMode : uint8
 {
-	/** Update the age using the delta time supplied to the tick function. */
+	/** Update the age using the delta time supplied to the component tick function. */
 	TickDeltaTime,
 	/** Update the age by seeking to the DesiredAge. To prevent major perf loss, we clamp to MaxClampTime*/
-	DesiredAge
+	DesiredAge,
+	/** Update the age by tracking changes to the desired age, but when the desired age goes backwards in time,
+	or jumps forwards in time by more than a few steps, the system is reset and simulated forward by a single step.
+	This mode is useful for continuous effects controlled by sequencer. */
+	DesiredAgeNoSeek
 };
 
 
@@ -89,7 +105,7 @@ enum class ENiagaraDataSetType : uint8
 UENUM()
 enum class ENiagaraInputNodeUsage : uint8
 {
-	Undefined = 0,
+	Undefined = 0 UMETA(Hidden),
 	Parameter,
 	Attribute,
 	SystemConstant,
@@ -119,12 +135,6 @@ enum class ENiagaraScriptCompileStatus : uint8
 	NCS_ComputeUpToDateWithWarnings,
 	NCS_MAX,
 };
-
-FORCEINLINE bool NiagaraSupportsComputeShaders(EShaderPlatform ShaderPlatform)
-{
-	// Change to RHISupportsComputeShaders(ShaderPlatform) to support ES3_1
-	return IsFeatureLevelSupported(ShaderPlatform, ERHIFeatureLevel::SM5);
-}
 
 USTRUCT()
 struct FNiagaraDataSetID
@@ -240,23 +250,52 @@ struct NIAGARA_API FNiagaraFunctionSignature
 	UPROPERTY()
 	FName OwnerName;
 	UPROPERTY()
-	bool bRequiresContext;
+	uint32 bRequiresContext : 1;
 	/** True if this is the signature for a "member" function of a data interface. If this is true, the first input is the owner. */
 	UPROPERTY()
-	bool bMemberFunction;
+	uint32 bMemberFunction : 1;
+	/** Is this function experimental? */
+	UPROPERTY()
+	uint32 bExperimental : 1;
+
+#if WITH_EDITORONLY_DATA
+	/** The message to display when a function is marked experimental. */
+	UPROPERTY(EditAnywhere, Category = Script, meta = (EditCondition = "bExperimental", MultiLine = true, SkipForCompileHash = true))
+	FText ExperimentalMessage;
+
+	/** Per function version, it is up to the discretion of the function as to what the version means. */
+	UPROPERTY()
+	uint32 FunctionVersion = 0;
+#endif
+
+	/** Support running on the CPU. */
+	UPROPERTY()
+	uint32 bSupportsCPU : 1;
+	/** Support running on the GPU. */
+	UPROPERTY()
+	uint32 bSupportsGPU : 1;
+
+	/** Writes to the variable this is bound to */
+	UPROPERTY()
+	uint32 bWriteFunction : 1;
+
 	/** Function specifiers verified at bind time. */
 	UPROPERTY()
 	TMap<FName, FName> FunctionSpecifiers;
 
 	/** Localized description of this node. Note that this is *not* used during the operator == below since it may vary from culture to culture.*/
 #if WITH_EDITORONLY_DATA
-	UPROPERTY()
+	UPROPERTY(meta = (SkipForCompileHash = true))
 	FText Description;
 #endif
 
 	FNiagaraFunctionSignature() 
 		: bRequiresContext(false)
 		, bMemberFunction(false)
+		, bExperimental(false)
+		, bSupportsCPU(true)
+		, bSupportsGPU(true)
+		, bWriteFunction(false)
 	{
 	}
 
@@ -266,7 +305,10 @@ struct NIAGARA_API FNiagaraFunctionSignature
 		, Outputs(InOutputs)
 		, bRequiresContext(bInRequiresContext)
 		, bMemberFunction(bInMemberFunction)
-		, FunctionSpecifiers()
+		, bExperimental(false)
+		, bSupportsCPU(true)
+		, bSupportsGPU(true)
+		, bWriteFunction(false)
 	{
 
 	}
@@ -277,6 +319,10 @@ struct NIAGARA_API FNiagaraFunctionSignature
 		, Outputs(InOutputs)
 		, bRequiresContext(bInRequiresContext)
 		, bMemberFunction(bInMemberFunction)
+		, bExperimental(false)
+		, bSupportsCPU(true)
+		, bSupportsGPU(true)
+		, bWriteFunction(false)
 		, FunctionSpecifiers(InFunctionSpecifiers)
 	{
 
@@ -304,13 +350,13 @@ struct NIAGARA_API FNiagaraFunctionSignature
 
 	bool EqualsIgnoringSpecifiers(const FNiagaraFunctionSignature& Other) const
 	{
-		bool bNamesEqual = Name.ToString().Equals(Other.Name.ToString());
-		bool bInputsEqual = Inputs == Other.Inputs;
-		bool bOutputsEqual = Outputs == Other.Outputs;
-		bool bContextsEqual = bRequiresContext == Other.bRequiresContext;
-		bool bMemberFunctionsEqual = bMemberFunction == Other.bMemberFunction;
-		bool bOwnerNamesEqual = OwnerName == Other.OwnerName;
-		return bNamesEqual && bInputsEqual && bOutputsEqual && bContextsEqual && bMemberFunctionsEqual && bOwnerNamesEqual;
+		bool bMatches = Name.ToString().Equals(Other.Name.ToString());
+		bMatches &= Inputs == Other.Inputs;
+		bMatches &= Outputs == Other.Outputs;
+		bMatches &= bRequiresContext == Other.bRequiresContext;
+		bMatches &= bMemberFunction == Other.bMemberFunction;
+		bMatches &= OwnerName == Other.OwnerName;
+		return bMatches;
 	}
 
 	FString GetName()const { return Name.ToString(); }
@@ -393,8 +439,11 @@ public:
 	UPROPERTY()
 	FNiagaraTypeDefinition Type;
 
+	// Removed from cooked builds, if we need to add this back the TMap<FName, FName> FunctionSpecifiers should be replaced with an array
+#if WITH_EDITORONLY_DATA
 	UPROPERTY()
 	TArray<FNiagaraFunctionSignature> RegisteredFunctions;
+#endif
 
 	UPROPERTY()
 	FName RegisteredParameterMapRead;
@@ -430,6 +479,21 @@ struct FNiagaraStatScope
 };
 
 USTRUCT()
+struct FVMFunctionSpecifier
+{
+	GENERATED_USTRUCT_BODY();
+
+	FVMFunctionSpecifier() {}
+	explicit FVMFunctionSpecifier(FName InKey, FName InValue) : Key(InKey), Value(InValue) {}
+
+	UPROPERTY()
+	FName Key;
+
+	UPROPERTY()
+	FName Value;
+};
+
+USTRUCT()
 struct FVMExternalFunctionBindingInfo
 {
 	GENERATED_USTRUCT_BODY();
@@ -447,24 +511,58 @@ struct FVMExternalFunctionBindingInfo
 	int32 NumOutputs;
 
 	UPROPERTY()
-	TMap<FName, FName> Specifiers;
+	TArray<FVMFunctionSpecifier> FunctionSpecifiers;
 
-	FORCEINLINE int32 GetNumInputs()const { return InputParamLocations.Num(); }
-	FORCEINLINE int32 GetNumOutputs()const { return NumOutputs; }
+	FORCEINLINE int32 GetNumInputs() const { return InputParamLocations.Num(); }
+	FORCEINLINE int32 GetNumOutputs() const { return NumOutputs; }
+
+	const FVMFunctionSpecifier* FindSpecifier(const FName& Key) const
+	{
+		return FunctionSpecifiers.FindByPredicate([&](const FVMFunctionSpecifier& v) -> bool { return v.Key == Key; });
+	}
+
+	bool Serialize(FArchive& Ar);
+
+#if WITH_EDITORONLY_DATA
+private:
+	UPROPERTY()
+	TMap<FName, FName> Specifiers_DEPRECATED;
+#endif
 };
 
+template<>
+struct TStructOpsTypeTraits<FVMExternalFunctionBindingInfo> : public TStructOpsTypeTraitsBase2<FVMExternalFunctionBindingInfo>
+{
+	enum
+	{
+		WithSerializer = true,
+	};
+};
+
+/**
+Helper for reseting/reinitializing Niagara systems currently active when they are being edited. 
+Can be used inside a scope with Systems being reinitialized on destruction or you can store the context and use CommitUpdate() to trigger reinitialization.
+For example, this can be split between PreEditChange and PostEditChange to ensure problematic data is not modified during execution of a system.
+This can be made a UPROPERTY() to ensure safey in cases where a GC could be possible between Add() and CommitUpdate().
+*/
+USTRUCT()
 struct NIAGARA_API FNiagaraSystemUpdateContext
 {
-	FNiagaraSystemUpdateContext(const UNiagaraSystem* System, bool bReInit) { Add(System, bReInit); }
+	GENERATED_BODY()
+
+	FNiagaraSystemUpdateContext(const UNiagaraSystem* System, bool bReInit, bool bInDestroyOnAdd = false, bool bInOnlyActive = false) :bDestroyOnAdd(bInDestroyOnAdd), bOnlyActive(bInOnlyActive) { Add(System, bReInit); }
 #if WITH_EDITORONLY_DATA
-	FNiagaraSystemUpdateContext(const UNiagaraEmitter* Emitter, bool bReInit) { Add(Emitter, bReInit); }
-	FNiagaraSystemUpdateContext(const UNiagaraScript* Script, bool bReInit) { Add(Script, bReInit); }
+	FNiagaraSystemUpdateContext(const UNiagaraEmitter* Emitter, bool bReInit, bool bInDestroyOnAdd = false, bool bInOnlyActive = false) :bDestroyOnAdd(bInDestroyOnAdd), bOnlyActive(bInOnlyActive)  { Add(Emitter, bReInit); }
+	FNiagaraSystemUpdateContext(const UNiagaraScript* Script, bool bReInit, bool bInDestroyOnAdd = false, bool bInOnlyActive = false) :bDestroyOnAdd(bInDestroyOnAdd), bOnlyActive(bInOnlyActive)  { Add(Script, bReInit); }
 	//FNiagaraSystemUpdateContext(UNiagaraDataInterface* Interface, bool bReinit) : Add(Interface, bReinit) {}
-	FNiagaraSystemUpdateContext(const UNiagaraParameterCollection* Collection, bool bReInit) { Add(Collection, bReInit); }
+	FNiagaraSystemUpdateContext(const UNiagaraParameterCollection* Collection, bool bReInit, bool bInDestroyOnAdd = false, bool bInOnlyActive = false) :bDestroyOnAdd(bInDestroyOnAdd), bOnlyActive(bInOnlyActive) { Add(Collection, bReInit); }
 #endif
-	FNiagaraSystemUpdateContext() { }
+	FNiagaraSystemUpdateContext():bDestroyOnAdd(false), bOnlyActive(false){ }
 
 	~FNiagaraSystemUpdateContext();
+
+	void SetDestroyOnAdd(bool bInDestroyOnAdd) { bDestroyOnAdd = bInDestroyOnAdd; }
+	void SetOnlyActive(bool bInOnlyActive) { bOnlyActive = bInOnlyActive; }
 
 	void Add(const UNiagaraSystem* System, bool bReInit);
 #if WITH_EDITORONLY_DATA
@@ -477,15 +575,22 @@ struct NIAGARA_API FNiagaraSystemUpdateContext
 	/** Adds all currently active systems.*/
 	void AddAll(bool bReInit);
 
+	/** Handles any pending reinits or resets of system instances in this update context. */
+	void CommitUpdate();
+
 private:
 	void AddInternal(class UNiagaraComponent* Comp, bool bReInit);
-	FNiagaraSystemUpdateContext(FNiagaraSystemUpdateContext& Other) { }
+	FNiagaraSystemUpdateContext(FNiagaraSystemUpdateContext& Other) :bDestroyOnAdd(false) { }
 
+	UPROPERTY(transient)
 	TArray<UNiagaraComponent*> ComponentsToReset;
+	UPROPERTY(transient)
 	TArray<UNiagaraComponent*> ComponentsToReInit;
-
+	UPROPERTY(transient)
 	TArray<UNiagaraSystem*> SystemSimsToDestroy;
 
+	bool bDestroyOnAdd;
+	bool bOnlyActive;
 	//TODO: When we allow component less systems we'll also want to find and reset those.
 };
 
@@ -504,23 +609,25 @@ enum class ENiagaraScriptUsage : uint8
 	/** The script defines a dynamic input for use in particle, emitter, or system scripts. */
 	DynamicInput,
 	/** The script is called when spawning particles. */
-	ParticleSpawnScript UMETA(Hidden),
+	ParticleSpawnScript,
 	/** Particle spawn script that handles intra-frame spawning and also pulls in the update script. */
 	ParticleSpawnScriptInterpolated UMETA(Hidden),
 	/** The script is called to update particles every frame. */
-	ParticleUpdateScript UMETA(Hidden),
+	ParticleUpdateScript,
 	/** The script is called to update particles in response to an event. */
-	ParticleEventScript UMETA(Hidden),
+	ParticleEventScript ,
+	/** The script is called as a particle simulation stage. */
+	ParticleSimulationStageScript,
 	/** The script is called to update particles on the GPU. */
 	ParticleGPUComputeScript UMETA(Hidden),
 	/** The script is called once when the emitter spawns. */
-	EmitterSpawnScript UMETA(Hidden),
+	EmitterSpawnScript,
 	/** The script is called every frame to tick the emitter. */
-	EmitterUpdateScript UMETA(Hidden),
+	EmitterUpdateScript ,
 	/** The script is called once when the system spawns. */
-	SystemSpawnScript UMETA(Hidden),
+	SystemSpawnScript ,
 	/** The script is called every frame to tick the system. */
-	SystemUpdateScript UMETA(Hidden),
+	SystemUpdateScript,
 };
 
 UENUM()
@@ -530,6 +637,14 @@ enum class ENiagaraScriptGroup : uint8
 	Emitter,
 	System,
 	Max
+};
+
+
+UENUM()
+enum class ENiagaraIterationSource : uint8
+{
+	Particles = 0,
+	DataInterface
 };
 
 
@@ -585,13 +700,39 @@ struct FNiagaraVariableDataInterfaceBinding
 	FNiagaraVariableDataInterfaceBinding() {}
 	FNiagaraVariableDataInterfaceBinding(const FNiagaraVariable& InVar) : BoundVariable(InVar)
 	{
-		check(InVar.IsDataInterface() == true);
+		ensure(InVar.IsDataInterface() == true);
 	}
 
 	UPROPERTY()
 	FNiagaraVariable BoundVariable;
+
 };
 
+/** Primarily a wrapper around an FName to be used for customizations in the Selected Details panel 
+    to select a default binding to initialize module inputs. The customization implementation
+    is FNiagaraScriptVariableBindingCustomization. */
+USTRUCT()
+struct FNiagaraScriptVariableBinding
+{
+	GENERATED_USTRUCT_BODY();
+
+	FNiagaraScriptVariableBinding() {}
+	FNiagaraScriptVariableBinding(const FNiagaraVariable& InVar) : Name(InVar.GetName())
+	{
+		
+	}
+	FNiagaraScriptVariableBinding(const FName& InName) : Name(InName)
+	{
+		
+	}
+
+	UPROPERTY(EditAnywhere, Category = "Variable")
+	FName Name;
+
+	FName GetName() const { return Name; }
+	void SetName(FName InName) { Name = InName; }
+	bool IsValid() const { return Name != NAME_None; }
+};
 
 namespace FNiagaraUtilities
 {
@@ -615,17 +756,18 @@ namespace FNiagaraUtilities
 		return IsFeatureLevelSupported(ShaderPlatform, ERHIFeatureLevel::SM5) || IsFeatureLevelSupported(ShaderPlatform, ERHIFeatureLevel::ES3_1);
 	}
 
-	inline bool SupportsGPUParticles(ERHIFeatureLevel::Type FeatureLevel)
-	{
-		EShaderPlatform ShaderPlatform = GShaderPlatformForFeatureLevel[FeatureLevel];
-		return NiagaraSupportsComputeShaders(ShaderPlatform);
-	}
-
+	// Whether the platform supports GPU particles. A static function that doesn't not rely on any runtime switches.
 	inline bool SupportsGPUParticles(EShaderPlatform ShaderPlatform)
 	{
-		return NiagaraSupportsComputeShaders(ShaderPlatform);
+		return RHISupportsComputeShaders(ShaderPlatform);
 	}
 
+	// Whether GPU particles are currently allowed. Could change depending on config and runtime switches.
+	bool AllowGPUParticles(EShaderPlatform ShaderPlatform);
+
+	// Whether compute shaders are allowed. Could change depending on config and runtime switches.
+	bool AllowComputeShaders(EShaderPlatform ShaderPlatform);
+	
 #if WITH_EDITORONLY_DATA
 	/**
 	 * Prepares rapid iteration parameter stores for simulation by removing old parameters no longer used by functions, by initializing new parameters

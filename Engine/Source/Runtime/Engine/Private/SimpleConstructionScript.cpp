@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/Blueprint.h"
@@ -17,7 +17,7 @@
 //////////////////////////////////////////////////////////////////////////
 // USimpleConstructionScript
 
-// We append this suffix to template object names because the UObjectProperty we create at compile time will also be outered to the generated Blueprint class, and because we need cooking to be deterministic with respect to template object names.
+// We append this suffix to template object names because the FObjectProperty we create at compile time will also be outered to the generated Blueprint class, and because we need cooking to be deterministic with respect to template object names.
 const FString USimpleConstructionScript::ComponentTemplateNameSuffix(TEXT("_GEN_VARIABLE"));
 
 USimpleConstructionScript::USimpleConstructionScript(const FObjectInitializer& ObjectInitializer)
@@ -296,7 +296,7 @@ void USimpleConstructionScript::FixupSceneNodeHierarchy()
 	// by this SCS; it could be from a super SCS, or (if SceneRootNode and 
 	// SceneRootComponentTemplate is not) it could be a native component
 	USCS_Node* SceneRootNode = nullptr;
-	USceneComponent* SceneRootComponentTemplate = GetSceneRootComponentTemplate(&SceneRootNode);
+	USceneComponent* SceneRootComponentTemplate = GetSceneRootComponentTemplate(true, &SceneRootNode);
 
 	if (SceneRootComponentTemplate == nullptr)
 	{
@@ -666,7 +666,7 @@ void USimpleConstructionScript::ExecuteScriptOnActor(AActor* Actor, const TInlin
 					else
 					{
 						// In the non-native case, the SCS node's variable name property is used as the parent identifier
-						UObjectPropertyBase* Property = FindField<UObjectPropertyBase>(ActorClass, RootNode->ParentComponentOrVariableName);
+						FObjectPropertyBase* Property = FindFProperty<FObjectPropertyBase>(ActorClass, RootNode->ParentComponentOrVariableName);
 						if(Property != nullptr)
 						{
 							// If we found a matching property, grab its value and use that as the parent for this node
@@ -985,7 +985,7 @@ USCS_Node* USimpleConstructionScript::FindSCSNodeByGuid(const FGuid Guid) const
 }
 
 #if WITH_EDITOR
-USceneComponent* USimpleConstructionScript::GetSceneRootComponentTemplate(USCS_Node** OutSCSNode) const
+USceneComponent* USimpleConstructionScript::GetSceneRootComponentTemplate(bool bShouldUseDefautRoot, USCS_Node** OutSCSNode) const
 {
 	UClass* GeneratedClass = GetOwnerClass();
 	UClass* ParentClass = GetParentClass();
@@ -1059,7 +1059,7 @@ USceneComponent* USimpleConstructionScript::GetSceneRootComponentTemplate(USCS_N
 		{
 			const TArray<USCS_Node*>& SCSRootNodes = SCSStack[StackIndex]->GetRootNodes();
 
-			const bool bCanUseDefaultSceneRoot = DefaultSceneRootNode && DefaultSceneRootNode->ComponentTemplate && SCSRootNodes.Contains(DefaultSceneRootNode);
+			const bool bCanUseDefaultSceneRoot = bShouldUseDefautRoot && DefaultSceneRootNode && DefaultSceneRootNode->ComponentTemplate && SCSRootNodes.Contains(DefaultSceneRootNode);
 			// Check for any scene component nodes in the root set that are not the default scene root
 			for (int32 RootNodeIndex = 0; RootNodeIndex < SCSRootNodes.Num() && RootComponentTemplate == nullptr; ++RootNodeIndex)
 			{

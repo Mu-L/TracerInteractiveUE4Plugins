@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System;
@@ -200,6 +200,7 @@ public class APEX : ModuleRules
 					string LibraryPath = PhysXBinariesDir + String.Format(RuntimeDependency, LibrarySuffix);
 					PublicAdditionalLibraries.Add(LibraryPath);
 					RuntimeDependencies.Add(LibraryPath);
+					RuntimeDependencies.Add(Path.ChangeExtension(LibraryPath, ".debug"), StagedFileType.DebugNonUFS);
 				}
 			}
 		}
@@ -219,18 +220,6 @@ public class APEX : ModuleRules
 			ApexLibraries.Add("RenderDebug{0}");
 
 			LibraryFormatString = "{0}.lib";
-		}
-		else if (Target.Platform == UnrealTargetPlatform.Switch)
-		{
-			bIsApexStaticallyLinked = true;
-			bHasApexLegacy = false;
-
-			ApexLibDir = Path.Combine(ApexLibDir, "Switch");
-
-			ApexLibraries.Add("NvParameterized{0}");
-			ApexLibraries.Add("RenderDebug{0}");
-
-			LibraryFormatString = "lib{0}.a";
 		}
 
 		PublicDefinitions.Add("APEX_UE4=1");

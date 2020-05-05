@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ClothingAssetFactory.h"
 
@@ -6,11 +6,10 @@
 #include "PhysXPublic.h"
 #include "PhysicsPublic.h"
 #include "ClothingAsset.h"
-#include "ClothPhysicalMeshDataNv.h" // for MaskTarget_PhysMesh
 #if WITH_APEX_CLOTHING
 #include "ClothingAssetAuthoring.h"
-#include "Assets/ClothingAssetNv.h"
 #include "ApexClothingUtils.h"
+#include "ClothConfigNv.h"
 #endif // WITH_APEX_CLOTHING
 #include "ContentBrowserModule.h"
 #include "Misc/FileHelper.h"
@@ -25,6 +24,7 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "Utils/ClothingMeshUtils.h"
 #include "Rendering/SkeletalMeshModel.h"
+#include "ClothPhysicalMeshData.h"
 
 #define LOCTEXT_NAMESPACE "ClothingAssetFactory"
 DEFINE_LOG_CATEGORY(LogClothingAssetFactory)
@@ -238,20 +238,17 @@ UClothingAssetBase* UClothingAssetFactory::CreateFromSkeletalMesh(USkeletalMesh*
 
 	FString SanitizedName = ObjectTools::SanitizeObjectName(Params.AssetName);
 	FName ObjectName = MakeUniqueObjectName(TargetMesh, UClothingAssetCommon::StaticClass(), FName(*SanitizedName));
-#if WITH_APEX_CLOTHING
-	UClothingAssetCommon* NewAsset = NewObject<UClothingAssetNv>(TargetMesh, ObjectName);
-#else
-	check(false); // TODO: Implement Chaos ClothingAsset, and have the factory get the correct object
+
 	UClothingAssetCommon* NewAsset = NewObject<UClothingAssetCommon>(TargetMesh, ObjectName);
-#endif
 	NewAsset->SetFlags(RF_Transactional);
 
 	// Adding a new LOD from this skeletal mesh
 	NewAsset->AddNewLod();
-	UClothLODDataBase* LodData = NewAsset->ClothLodData.Last();
+	FClothLODDataCommon& LodData = NewAsset->LodData.Last();
 
 	if(ImportToLodInternal(TargetMesh, Params.LodIndex, Params.SourceSection, NewAsset, LodData))
 	{
+		FScopedSkeletalMeshPostEditChange ScopedSkeletalMeshPostEditChange(TargetMesh);
 		if(Params.bRemoveFromMesh)
 		{
 			// User doesn't want the section anymore as a renderable, get rid of it
@@ -327,20 +324,20 @@ UClothingAssetBase* UClothingAssetFactory::ImportLodToClothing(USkeletalMesh* Ta
 			// Everything looks good, continue to actual import
 			UClothingAssetCommon* ConcreteTarget = CastChecked<UClothingAssetCommon>(TargetClothing);
 
-			UClothLODDataBase* RemapSource = nullptr;
+			const FClothLODDataCommon* RemapSource = nullptr;
 
 			if(Params.bRemapParameters)
 			{
 				if(Params.TargetLod == ConcreteTarget->GetNumLods())
 				{
 					// New LOD, remap from previous
-					RemapSource = ConcreteTarget->ClothLodData.Last();
+					RemapSource = &ConcreteTarget->LodData.Last();
 				}
 				else
 				{
 					// This is a replacement, remap from current LOD
-					check(ConcreteTarget->ClothLodData.IsValidIndex(Params.TargetLod));
-					RemapSource = ConcreteTarget->ClothLodData[Params.TargetLod];
+					check(ConcreteTarget->LodData.IsValidIndex(Params.TargetLod));
+					RemapSource = &ConcreteTarget->LodData[Params.TargetLod];
 				}
 			}
 
@@ -348,17 +345,17 @@ UClothingAssetBase* UClothingAssetFactory::ImportLodToClothing(USkeletalMesh* Ta
 			{
 				ConcreteTarget->AddNewLod();
 			}
-			else if(!ConcreteTarget->ClothLodData.IsValidIndex(Params.TargetLod))
+			else if(!ConcreteTarget->LodData.IsValidIndex(Params.TargetLod))
 			{
 				LogAndToastWarning(LOCTEXT("Warning_InvalidLodTarget", "Failed to import clothing LOD, invalid target LOD."));
 				return nullptr;
 			}
 
-			UClothLODDataBase* NewLod = ConcreteTarget->ClothLodData[Params.TargetLod];
+			FClothLODDataCommon& NewLod = ConcreteTarget->LodData[Params.TargetLod];
 
 			if(Params.TargetLod > 0 && Params.bRemapParameters)
 			{
-				RemapSource = ConcreteTarget->ClothLodData[Params.TargetLod - 1];
+				RemapSource = &ConcreteTarget->LodData[Params.TargetLod - 1];
 			}
 
 			if(ImportToLodInternal(TargetMesh, Params.LodIndex, Params.SourceSection, ConcreteTarget, NewLod, RemapSource))
@@ -389,8 +386,9 @@ UClothingAssetBase* UClothingAssetFactory::ImportLodToClothing(USkeletalMesh* Ta
 UClothingAssetBase* UClothingAssetFactory::CreateFromApexAsset(nvidia::apex::ClothingAsset* InApexAsset, USkeletalMesh* TargetMesh, FName InName)
 {
 #if WITH_APEX_CLOTHING
-	UClothingAssetNv* NewClothingAsset = NewObject<UClothingAssetNv>(TargetMesh, InName);
+	UClothingAssetCommon* NewClothingAsset = NewObject<UClothingAssetCommon>(TargetMesh, InName);
 	NewClothingAsset->SetFlags(RF_Transactional);
+	NewClothingAsset->PostUpdateAllAssets();  // Ensure that the required configs, including shared configs, are created
 
 	const NvParameterized::Interface* AssetParams = InApexAsset->getAssetNvParameterized();
 	NvParameterized::Handle GraphicalLodArrayHandle(*AssetParams, "graphicalLods");
@@ -403,12 +401,7 @@ UClothingAssetBase* UClothingAssetFactory::CreateFromApexAsset(nvidia::apex::Clo
 	for(int32 CurrLodIdx = 0; CurrLodIdx < NumLodsToBuild; ++CurrLodIdx)
 	{
 		NewClothingAsset->AddNewLod();
-		UClothLODDataNv* CurrentLodDataPtr = Cast<UClothLODDataNv>(NewClothingAsset->ClothLodData[CurrLodIdx]);
-		if (!ensure(CurrentLodDataPtr))
-		{
-			continue;
-		}
-		UClothLODDataNv& CurrentLodData = *CurrentLodDataPtr;
+		FClothLODDataCommon& CurrentLodData = NewClothingAsset->LodData[CurrLodIdx];
 
 		TArray<FApexVertData> ApexVertData;
 
@@ -417,19 +410,19 @@ UClothingAssetBase* UClothingAssetFactory::CreateFromApexAsset(nvidia::apex::Clo
 		ExtractMaterialParameters(NewClothingAsset, *InApexAsset);
 
 		// Set to use legacy wind calculations, which is what APEX would normally have used
-		UClothConfigNv* ConfigNv = Cast<UClothConfigNv>(NewClothingAsset->ClothSimConfig);
+		UClothConfigNv* const ConfigNv = NewClothingAsset->GetClothConfig<UClothConfigNv>();
 		if (!ensure(ConfigNv))
 		{
 			continue;
 		}
-		ConfigNv->WindMethod = EClothingWindMethod::Legacy;
+		ConfigNv->ClothingWindMethod = EClothingWindMethodNv::Legacy;
 
 		// Fixup unreal-side bone indices
-		const int32 NumBoneDatas = CurrentLodData.PhysicalMeshData->BoneData.Num();
+		const int32 NumBoneDatas = CurrentLodData.PhysicalMeshData.BoneData.Num();
 		check(NumBoneDatas == ApexVertData.Num());
 		for(int32 BoneDataIndex = 0; BoneDataIndex < NumBoneDatas; ++BoneDataIndex)
 		{
-			FClothVertBoneData& BoneData = CurrentLodData.PhysicalMeshData->BoneData[BoneDataIndex];
+			FClothVertBoneData& BoneData = CurrentLodData.PhysicalMeshData.BoneData[BoneDataIndex];
 			FApexVertData& CurrentVertData = ApexVertData[BoneDataIndex];
 		
 			for(int32 BoneInfluenceIdx = 0; BoneInfluenceIdx < MAX_TOTAL_INFLUENCES; ++BoneInfluenceIdx)
@@ -476,39 +469,33 @@ UClothingAssetBase* UClothingAssetFactory::CreateFromApexAsset(nvidia::apex::Clo
 	NewClothingAsset->CalculateReferenceBoneIndex();
 
 	// Add masks for parameters
-	for (UClothLODDataBase* LodPtr : NewClothingAsset->ClothLodData)
+	for (FClothLODDataCommon& LodData : NewClothingAsset->LodData)
 	{
-		check(LodPtr);
-		UClothPhysicalMeshDataNv* PhysMeshPtr = Cast<UClothPhysicalMeshDataNv>(LodPtr->PhysicalMeshData);
-		if (!ensure(PhysMeshPtr))
-		{
-			continue;
-		}
-		UClothPhysicalMeshDataNv& PhysMesh = *PhysMeshPtr;
+		const FClothPhysicalMeshData& PhysMesh = LodData.PhysicalMeshData;
 
-		// Didn't do anything previously - clear out incase there's something in there
+		// Didn't do anything previously - clear out in case there's something in there
 		// so we can use it correctly now.
-		LodPtr->ParameterMasks.Reset(3);
+		LodData.PointWeightMaps.Reset(3);
 
 		// Max distances
-		LodPtr->ParameterMasks.AddDefaulted();
-		FPointWeightMap& MaxDistanceMask = LodPtr->ParameterMasks.Last();
-		MaxDistanceMask.CopyFrom(PhysMesh.GetFloatArray((int32)MaskTarget_PhysMesh::MaxDistance), (uint8)MaskTarget_PhysMesh::MaxDistance);
-		MaxDistanceMask.bEnabled = true;
+		LodData.PointWeightMaps.AddDefaulted();
+		FPointWeightMap& MaxDistanceMask = LodData.PointWeightMaps.Last();
+		const FPointWeightMap& MaxDistances = PhysMesh.GetWeightMap(EWeightMapTargetCommon::MaxDistance);
+		MaxDistanceMask.Initialize(MaxDistances, EWeightMapTargetCommon::MaxDistance);
 
-		if(PhysMesh.BackstopRadiuses.FindByPredicate([](const float& A) {return A != 0.0f; }))
+		const FPointWeightMap* const BackstopRadiuses = PhysMesh.FindWeightMap(EWeightMapTargetCommon::BackstopRadius);
+		if (BackstopRadiuses && !BackstopRadiuses->IsZeroed())
 		{
 			// Backstop radii
-			LodPtr->ParameterMasks.AddDefaulted();
-			FPointWeightMap& BackstopRadiusMask = LodPtr->ParameterMasks.Last();
-			BackstopRadiusMask.CopyFrom(PhysMesh.GetFloatArray((int32)MaskTarget_PhysMesh::BackstopRadius), (uint8)MaskTarget_PhysMesh::BackstopRadius);
-			BackstopRadiusMask.bEnabled = true;
+			LodData.PointWeightMaps.AddDefaulted();
+			FPointWeightMap& BackstopRadiusMask = LodData.PointWeightMaps.Last();
+			BackstopRadiusMask.Initialize(*BackstopRadiuses, EWeightMapTargetCommon::BackstopRadius);
 
 			// Backstop distances
-			LodPtr->ParameterMasks.AddDefaulted();
-			FPointWeightMap& BackstopDistanceMask = LodPtr->ParameterMasks.Last();
-			BackstopDistanceMask.CopyFrom(PhysMesh.GetFloatArray((int32)MaskTarget_PhysMesh::BackstopDistance), (uint8)MaskTarget_PhysMesh::BackstopDistance);
-			BackstopDistanceMask.bEnabled = true;
+			LodData.PointWeightMaps.AddDefaulted();
+			FPointWeightMap& BackstopDistanceMask = LodData.PointWeightMaps.Last();
+			const FPointWeightMap& BackstopDistances = PhysMesh.GetWeightMap(EWeightMapTargetCommon::BackstopDistance);
+			BackstopDistanceMask.Initialize(BackstopDistances, EWeightMapTargetCommon::BackstopDistance);
 		}
 	}
 
@@ -856,7 +843,7 @@ void UClothingAssetFactory::ExtractBoneData(UClothingAssetCommon* NewAsset, Clot
 	}
 }
 
-void UClothingAssetFactory::ExtractSphereCollisions(UClothingAssetCommon* NewAsset, nvidia::apex::ClothingAsset &InApexAsset, int32 InLodIdx, UClothLODDataNv &InLodData)
+void UClothingAssetFactory::ExtractSphereCollisions(UClothingAssetCommon* NewAsset, nvidia::apex::ClothingAsset &InApexAsset, int32 InLodIdx, FClothLODDataCommon& InLodData)
 {
 	const NvParameterized::Interface* AssetParams = InApexAsset.getAssetNvParameterized();
 
@@ -1008,7 +995,7 @@ void UClothingAssetFactory::ExtractMaterialParameters(UClothingAssetCommon* NewA
 
 	MaterialArrayHandle.set(MaterialIndex);
 
-	if(UClothConfigNv* ConfigPtr = Cast<UClothConfigNv>(NewAsset->ClothSimConfig))
+	if(UClothConfigNv* const ConfigPtr = NewAsset->GetClothConfig<UClothConfigNv>())
 	{
 		UClothConfigNv& Config = *ConfigPtr;
 		NvParameterized::Handle ChildHandle(MaterialArrayHandle);
@@ -1062,71 +1049,71 @@ void UClothingAssetFactory::ExtractMaterialParameters(UClothingAssetCommon* NewA
 		// Vertical constraint params
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "verticalStretchingStiffness", ChildHandle);
-		ChildHandle.getParamF32(Config.VerticalConstraintConfig.Stiffness);
+		ChildHandle.getParamF32(Config.VerticalConstraint.Stiffness);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "verticalStiffnessScaling.compressionRange", ChildHandle);
-		ChildHandle.getParamF32(Config.VerticalConstraintConfig.CompressionLimit);
+		ChildHandle.getParamF32(Config.VerticalConstraint.CompressionLimit);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "verticalStiffnessScaling.stretchRange", ChildHandle);
-		ChildHandle.getParamF32(Config.VerticalConstraintConfig.StretchLimit);
+		ChildHandle.getParamF32(Config.VerticalConstraint.StretchLimit);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "verticalStiffnessScaling.scale", ChildHandle);
-		ChildHandle.getParamF32(Config.VerticalConstraintConfig.StiffnessMultiplier);
+		ChildHandle.getParamF32(Config.VerticalConstraint.StiffnessMultiplier);
 
 		// Horizontal constraint params
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "horizontalStretchingStiffness", ChildHandle);
-		ChildHandle.getParamF32(Config.HorizontalConstraintConfig.Stiffness);
+		ChildHandle.getParamF32(Config.HorizontalConstraint.Stiffness);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "horizontalStiffnessScaling.compressionRange", ChildHandle);
-		ChildHandle.getParamF32(Config.HorizontalConstraintConfig.CompressionLimit);
+		ChildHandle.getParamF32(Config.HorizontalConstraint.CompressionLimit);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "horizontalStiffnessScaling.stretchRange", ChildHandle);
-		ChildHandle.getParamF32(Config.HorizontalConstraintConfig.StretchLimit);
+		ChildHandle.getParamF32(Config.HorizontalConstraint.StretchLimit);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "horizontalStiffnessScaling.scale", ChildHandle);
-		ChildHandle.getParamF32(Config.HorizontalConstraintConfig.StiffnessMultiplier);
+		ChildHandle.getParamF32(Config.HorizontalConstraint.StiffnessMultiplier);
 
 		// Bend constraint params
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "bendingStiffness", ChildHandle);
-		ChildHandle.getParamF32(Config.BendConstraintConfig.Stiffness);
+		ChildHandle.getParamF32(Config.BendConstraint.Stiffness);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "bendingStiffnessScaling.compressionRange", ChildHandle);
-		ChildHandle.getParamF32(Config.BendConstraintConfig.CompressionLimit);
+		ChildHandle.getParamF32(Config.BendConstraint.CompressionLimit);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "bendingStiffnessScaling.stretchRange", ChildHandle);
-		ChildHandle.getParamF32(Config.BendConstraintConfig.StretchLimit);
+		ChildHandle.getParamF32(Config.BendConstraint.StretchLimit);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "bendingStiffnessScaling.scale", ChildHandle);
-		ChildHandle.getParamF32(Config.BendConstraintConfig.StiffnessMultiplier);
+		ChildHandle.getParamF32(Config.BendConstraint.StiffnessMultiplier);
 
 		// Shear constraint params
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "shearingStiffness", ChildHandle);
-		ChildHandle.getParamF32(Config.ShearConstraintConfig.Stiffness);
+		ChildHandle.getParamF32(Config.ShearConstraint.Stiffness);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "shearingStiffnessScaling.compressionRange", ChildHandle);
-		ChildHandle.getParamF32(Config.ShearConstraintConfig.CompressionLimit);
+		ChildHandle.getParamF32(Config.ShearConstraint.CompressionLimit);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "shearingStiffnessScaling.stretchRange", ChildHandle);
-		ChildHandle.getParamF32(Config.ShearConstraintConfig.StretchLimit);
+		ChildHandle.getParamF32(Config.ShearConstraint.StretchLimit);
 
 		MaterialArrayHandle.getChildHandle(MaterialArrayHandle.getInterface(), "shearingStiffnessScaling.scale", ChildHandle);
-		ChildHandle.getParamF32(Config.ShearConstraintConfig.StiffnessMultiplier);
+		ChildHandle.getParamF32(Config.ShearConstraint.StiffnessMultiplier);
 
 		// UE just used the vertical config for everything, so stomp the other configs
-		Config.HorizontalConstraintConfig.CompressionLimit = Config.VerticalConstraintConfig.CompressionLimit;
-		Config.HorizontalConstraintConfig.StretchLimit = Config.VerticalConstraintConfig.StretchLimit;
-		Config.HorizontalConstraintConfig.StiffnessMultiplier = Config.VerticalConstraintConfig.StiffnessMultiplier;
+		Config.HorizontalConstraint.CompressionLimit = Config.VerticalConstraint.CompressionLimit;
+		Config.HorizontalConstraint.StretchLimit = Config.VerticalConstraint.StretchLimit;
+		Config.HorizontalConstraint.StiffnessMultiplier = Config.VerticalConstraint.StiffnessMultiplier;
 
-		Config.BendConstraintConfig.CompressionLimit = Config.VerticalConstraintConfig.CompressionLimit;
-		Config.BendConstraintConfig.StretchLimit = Config.VerticalConstraintConfig.StretchLimit;
-		Config.BendConstraintConfig.StiffnessMultiplier = Config.VerticalConstraintConfig.StiffnessMultiplier;
+		Config.BendConstraint.CompressionLimit = Config.VerticalConstraint.CompressionLimit;
+		Config.BendConstraint.StretchLimit = Config.VerticalConstraint.StretchLimit;
+		Config.BendConstraint.StiffnessMultiplier = Config.VerticalConstraint.StiffnessMultiplier;
 
-		Config.ShearConstraintConfig.CompressionLimit = Config.VerticalConstraintConfig.CompressionLimit;
-		Config.ShearConstraintConfig.StretchLimit = Config.VerticalConstraintConfig.StretchLimit;
-		Config.ShearConstraintConfig.StiffnessMultiplier = Config.VerticalConstraintConfig.StiffnessMultiplier;
+		Config.ShearConstraint.CompressionLimit = Config.VerticalConstraint.CompressionLimit;
+		Config.ShearConstraint.StretchLimit = Config.VerticalConstraint.StretchLimit;
+		Config.ShearConstraint.StiffnessMultiplier = Config.VerticalConstraint.StiffnessMultiplier;
 
 	}
 }
@@ -1139,8 +1126,8 @@ bool UClothingAssetFactory::ImportToLodInternal(
 	int32 SourceLodIndex, 
 	int32 SourceSectionIndex, 
 	UClothingAssetCommon* DestAsset, 
-	UClothLODDataBase* DestLod, 
-	UClothLODDataBase* InParameterRemapSource)
+	FClothLODDataCommon& DestLod, 
+	const FClothLODDataCommon* InParameterRemapSource)
 {
 	if(!SourceMesh || !SourceMesh->GetImportedModel())
 	{
@@ -1230,24 +1217,18 @@ bool UClothingAssetFactory::ImportToLodInternal(
 
 	if(InParameterRemapSource)
 	{
-		check(InParameterRemapSource->PhysicalMeshData);
-		UClothPhysicalMeshDataBase& RemapPhysMesh = *InParameterRemapSource->PhysicalMeshData;
+		const FClothPhysicalMeshData& RemapPhysMesh = InParameterRemapSource->PhysicalMeshData;
 		CachedPositions = RemapPhysMesh.Vertices;
 		CachedNormals = RemapPhysMesh.Normals;
 		CachedIndices = RemapPhysMesh.Indices;
-		SourceMaskCopy = InParameterRemapSource->ParameterMasks;
+		SourceMaskCopy = InParameterRemapSource->PointWeightMaps;
 		NumSourceMasks = SourceMaskCopy.Num();
 
 		bPerformParamterRemap = true;
 	}
 
-	check(DestLod->PhysicalMeshData);
-	UClothPhysicalMeshDataBase& PhysMesh = *DestLod->PhysicalMeshData;
-	PhysMesh.Reset(NumUniqueVerts);
-	PhysMesh.Indices.Reset(NumIndices);
-	PhysMesh.Indices.AddZeroed(NumIndices);
-
-	TArray<TArray<float>*> WeightArrays = PhysMesh.GetFloatArrays();
+	FClothPhysicalMeshData& PhysMesh = DestLod.PhysicalMeshData;
+	PhysMesh.Reset(NumUniqueVerts, NumIndices);
 
 	for(int32 VertexIndex = 0; VertexIndex < NumUniqueVerts; ++VertexIndex)
 	{
@@ -1256,15 +1237,6 @@ bool UClothingAssetFactory::ImportToLodInternal(
 		PhysMesh.Vertices[VertexIndex] = SourceVert.Position;
 		PhysMesh.Normals[VertexIndex] = SourceVert.TangentZ;
 		PhysMesh.VertexColors[VertexIndex] = SourceVert.Color;
-
-		for (int32 WeightArrayIndex = 0; WeightArrayIndex < WeightArrays.Num(); ++WeightArrayIndex)
-		{
-			TArray<float>* Weights = WeightArrays[WeightArrayIndex];
-			if (Weights && Weights->IsValidIndex(VertexIndex))
-			{
-				(*Weights)[VertexIndex] = 0.0f;
-			}
-		}
 
 		FClothVertBoneData& BoneData = PhysMesh.BoneData[VertexIndex];
 		for(int32 InfluenceIndex = 0; InfluenceIndex < MAX_TOTAL_INFLUENCES; ++InfluenceIndex)
@@ -1280,10 +1252,10 @@ bool UClothingAssetFactory::ImportToLodInternal(
 	}
 
 	// Add a max distance parameter mask to begin with
-	DestLod->ParameterMasks.AddDefaulted();
-	FPointWeightMap& Mask = DestLod->ParameterMasks.Last();
-	Mask.CopyFrom(PhysMesh.GetFloatArray((uint32)MaskTarget_PhysMesh::MaxDistance), (uint8)MaskTarget_PhysMesh::MaxDistance);
-	Mask.bEnabled = true;
+	DestLod.PointWeightMaps.AddDefaulted();
+	FPointWeightMap& Mask = DestLod.PointWeightMaps.Last();
+	const FPointWeightMap& MaxDistances = PhysMesh.GetWeightMap(EWeightMapTargetCommon::MaxDistance);
+	Mask.Initialize(MaxDistances, EWeightMapTargetCommon::MaxDistance);
 
 	PhysMesh.MaxBoneWeights = SourceSection.MaxBoneInfluences;
 
@@ -1315,20 +1287,20 @@ bool UClothingAssetFactory::ImportToLodInternal(
 	{
 		ClothingMeshUtils::FVertexParameterMapper ParameterRemapper(PhysMesh.Vertices, PhysMesh.Normals, CachedPositions, CachedNormals, CachedIndices);
 
-		DestLod->ParameterMasks.Reset(NumSourceMasks);
+		DestLod.PointWeightMaps.Reset(NumSourceMasks);
 
 		for(int32 MaskIndex = 0; MaskIndex < NumSourceMasks; ++MaskIndex)
 		{
-			FPointWeightMap& SourceMask = SourceMaskCopy[MaskIndex];
+			const FPointWeightMap& SourceMask = SourceMaskCopy[MaskIndex];
 
-			DestLod->ParameterMasks.AddDefaulted();
-			FPointWeightMap& DestMask = DestLod->ParameterMasks.Last();
+			DestLod.PointWeightMaps.AddDefaulted();
+			FPointWeightMap& DestMask = DestLod.PointWeightMaps.Last();
 
 			DestMask.Initialize(PhysMesh.Vertices.Num());
 			DestMask.CurrentTarget = SourceMask.CurrentTarget;
 			DestMask.bEnabled = SourceMask.bEnabled;
 
-			ParameterRemapper.Map(SourceMask.GetValueArray(), DestMask.Values);
+			ParameterRemapper.Map(SourceMask.Values, DestMask.Values);
 		}
 
 		DestAsset->ApplyParameterMasks();
@@ -1339,17 +1311,11 @@ bool UClothingAssetFactory::ImportToLodInternal(
 
 #if WITH_APEX_CLOTHING
 
-void UClothingAssetFactory::ExtractLodPhysicalData(UClothingAssetCommon* NewAsset, ClothingAsset &InApexAsset, int32 InLodIdx, UClothLODDataNv &InLodData, TArray<FApexVertData>& OutApexVertData)
+void UClothingAssetFactory::ExtractLodPhysicalData(UClothingAssetCommon* NewAsset, ClothingAsset &InApexAsset, int32 InLodIdx, FClothLODDataCommon& InLodData, TArray<FApexVertData>& OutApexVertData)
 {
 	const NvParameterized::Interface* AssetParams = InApexAsset.getAssetNvParameterized();
 
-	UClothPhysicalMeshDataNv* PhysDataPtr = Cast<UClothPhysicalMeshDataNv>(InLodData.PhysicalMeshData);
-	if (!ensure(PhysDataPtr))
-	{
-		return;
-	}
-	UClothPhysicalMeshDataNv& PhysData = *PhysDataPtr;
-
+	FClothPhysicalMeshData& PhysData = InLodData.PhysicalMeshData;
 	NvParameterized::Handle GraphicalMeshArrayHandle(*AssetParams, "graphicalLods");
 
 	int32 NumGraphicalLods = 0;
@@ -1518,9 +1484,15 @@ void UClothingAssetFactory::ExtractLodPhysicalData(UClothingAssetCommon* NewAsse
 
 		check(CoeffArraySize == NumVertices);
 
-		PhysData.MaxDistances.AddZeroed(CoeffArraySize);
-		PhysData.BackstopDistances.AddZeroed(CoeffArraySize);
-		PhysData.BackstopRadiuses.AddZeroed(CoeffArraySize);
+		TArray<float>& MaxDistances = PhysData.FindOrAddWeightMap(EWeightMapTargetCommon::MaxDistance).Values;
+		TArray<float>& BackstopDistances = PhysData.FindOrAddWeightMap(EWeightMapTargetCommon::BackstopDistance).Values;
+		TArray<float>& BackstopRadiuses = PhysData.FindOrAddWeightMap(EWeightMapTargetCommon::BackstopRadius).Values;
+		MaxDistances.Reset(CoeffArraySize);
+		MaxDistances.AddZeroed(CoeffArraySize);
+		BackstopDistances.Reset(CoeffArraySize);
+		BackstopDistances.AddZeroed(CoeffArraySize);
+		BackstopRadiuses.Reset(CoeffArraySize);
+		BackstopRadiuses.AddZeroed(CoeffArraySize);
 
 		IterHandle = NvParameterized::Handle(TempHandle);
 		NvParameterized::Handle ChildHandle(PhysicalMeshRef);
@@ -1529,20 +1501,20 @@ void UClothingAssetFactory::ExtractLodPhysicalData(UClothingAssetCommon* NewAsse
 			TempHandle.getChildHandle(Idx, IterHandle);
 
 			IterHandle.getChildHandle(PhysicalMeshRef, "maxDistance", ChildHandle);
-			ChildHandle.getParamF32(PhysData.MaxDistances[Idx]);
+			ChildHandle.getParamF32(MaxDistances[Idx]);
 
 			IterHandle.getChildHandle(AssetParams, "collisionSphereDistance", ChildHandle);
-			ChildHandle.getParamF32(PhysData.BackstopDistances[Idx]);
+			ChildHandle.getParamF32(BackstopDistances[Idx]);
 
 			IterHandle.getChildHandle(AssetParams, "collisionSphereRadius", ChildHandle);
-			ChildHandle.getParamF32(PhysData.BackstopRadiuses[Idx]);
+			ChildHandle.getParamF32(BackstopRadiuses[Idx]);
 
-			PhysData.BackstopDistances[Idx] += PhysData.BackstopRadiuses[Idx];
+			BackstopDistances[Idx] += BackstopRadiuses[Idx];
 		}
 
 		// Calculate how many fixed verts we have
 		PhysData.NumFixedVerts = 0;
-		for(float Distance : PhysData.MaxDistances)
+		for(float Distance : MaxDistances)
 		{
 			if(Distance == 0.0f)
 			{

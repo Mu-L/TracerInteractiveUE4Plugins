@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AbcImportLogger.h"
 #include "Logging/MessageLog.h"
@@ -25,4 +25,9 @@ void FAbcImportLogger::OutputMessages(const FString& PageName)
 	MessageLock.Unlock();
 
 	MessageLog.Open();
+}
+
+TArray<TSharedRef<FTokenizedMessage>> FAbcImportLogger::RetrieveMessages()
+{	
+	return MoveTemp(TokenizedErrorMessages);
 }

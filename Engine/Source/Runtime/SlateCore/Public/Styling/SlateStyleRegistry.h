@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -57,6 +57,15 @@ public:
 	 * @param OutResources Array of slate brushes to populate.
 	 */
 	static void GetAllResources( TArray<const FSlateBrush*>& OutResources );
+
+	/**
+	 * Gets the names of every style entry using a brush
+	 * Note: this function is expensive and is not designed to be used in performance critical situations
+	 * 
+	 * @param BrushName The name of the brush to find style entries from
+	 * @return Array of style names using the brush
+	 */
+	static TArray<FName> GetSylesUsingBrush(const FName BrushName);
 
 private:
 

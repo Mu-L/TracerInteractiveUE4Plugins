@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -41,7 +41,7 @@ public:
 	FSkeletalMeshRenderData();
 
 #if WITH_EDITOR
-	void Cache(USkeletalMesh* Owner);
+	void Cache(const ITargetPlatform* TargetPlatform, USkeletalMesh* Owner);
 
 	void SyncUVChannelData(const TArray<FSkeletalMaterial>& ObjectData);
 #endif
@@ -61,13 +61,22 @@ public:
 	/** Returns true if this resource must be skinned on the CPU for the given feature level. */
 	ENGINE_API bool RequiresCPUSkinning(ERHIFeatureLevel::Type FeatureLevel) const;
 
-	/** Returns true if there are more than MAX_INFLUENCES_PER_STREAM influences per vertex. */
-	bool HasExtraBoneInfluences() const;
+	/** Returns the number of bone influences per vertex. */
+	uint32 GetNumBoneInfluences() const;
 
 	/**
 	* Computes the maximum number of bones per section used to render this mesh.
 	*/
 	ENGINE_API int32 GetMaxBonesPerSection() const;
+
+	/** Return first valid LOD index starting at MinLODIdx. */
+	ENGINE_API int32 GetFirstValidLODIdx(int32 MinLODIdx) const;
+
+	/** Return the current first LODIdx that can be used. */
+	FORCEINLINE int32 GetCurrentFirstLODIdx(int32 MinLODIdx) const
+	{
+		return GetFirstValidLODIdx(FMath::Max<int32>(CurrentFirstLODIdx, MinLODIdx));
+	}
 
 private:
 	/** True if the resource has been initialized. */

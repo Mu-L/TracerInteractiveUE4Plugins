@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "EdGraphSchema_K2_Actions.h"
 #include "Components/ActorComponent.h"
@@ -87,7 +87,7 @@ bool FEdGraphSchemaAction_BlueprintVariableBase::ReorderToBeforeAction(TSharedRe
 FEdGraphSchemaActionDefiningObject FEdGraphSchemaAction_BlueprintVariableBase::GetPersistentItemDefiningObject() const
 {
 	UObject* DefiningObject = GetSourceBlueprint();
-	if (UProperty* Prop = GetProperty())
+	if (FProperty* Prop = GetProperty())
 	{
 		DefiningObject = Prop->GetOwnerStruct();
 	}
@@ -189,7 +189,7 @@ UFunction* FEdGraphSchemaAction_K2Graph::GetFunction() const
 		{
 			if (FuncName != NAME_None)
 			{
-				return FindField<UFunction>(SourceBlueprint->SkeletonGeneratedClass, FuncName);
+				return FindUField<UFunction>(SourceBlueprint->SkeletonGeneratedClass, FuncName);
 			}
 		}
 	}
@@ -254,7 +254,10 @@ UEdGraphNode* FEdGraphSchemaAction_K2NewNode::CreateNode(
 	// Duplicate template node to create new node
 	UK2Node* ResultNode = ConstructionFn(ParentGraph);
 	InitializerFn(ResultNode);
-	ResultNode->SetFlags(RF_Transactional);
+	if (ParentGraph->HasAnyFlags(RF_Transactional))
+	{
+		ResultNode->SetFlags(RF_Transactional);
+	}
 
 	ParentGraph->AddNode(ResultNode, true, bSelectNewNode);
 
@@ -390,7 +393,7 @@ UEdGraphNode* FEdGraphSchemaAction_K2AssignDelegate::AssignDelegate(class UK2Nod
 		}
 
 		BindNode = Cast<UK2Node_AddDelegate>(CreateNode(ParentGraph, MakeArrayView(&FromPin, 1), Location, NodeTemplate, bSelectNewNode ? EK2NewNodeFlags::SelectNewNode : EK2NewNodeFlags::None));
-		UMulticastDelegateProperty* DelegateProperty = BindNode ? Cast<UMulticastDelegateProperty>(BindNode->GetProperty()) : nullptr;
+		FMulticastDelegateProperty* DelegateProperty = BindNode ? CastField<FMulticastDelegateProperty>(BindNode->GetProperty()) : nullptr;
 		if(DelegateProperty)
 		{
 			const FString FunctionName = FString::Printf(TEXT("%s_Event"), *DelegateProperty->GetName());

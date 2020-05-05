@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -260,6 +260,12 @@ public:
 	/** Enables adding command to open edit menu dialog to each menu */
 	void SetEditMenusMode(bool bEnable);
 
+	/* Substitute one menu for another during generate but not during find or extend */
+	void AddMenuSubstitutionDuringGenerate(const FName OriginalMenu, const FName NewMenu);
+
+	/* Remove substitute one menu for another during generate */
+	void RemoveSubstitutionDuringGenerate(const FName InMenu);
+
 	/** Displaying extension points is for debugging menus */
 	DECLARE_DELEGATE_RetVal(bool, FShouldDisplayExtensionPoints);
 	FShouldDisplayExtensionPoints ShouldDisplayExtensionPoints;
@@ -317,14 +323,13 @@ private:
 
 	UToolMenu* FindSubMenuToGenerateWith(const FName InParentName, const FName InChildName);
 
-	void FillMenuBarDropDown(FMenuBuilder& MenuBuilder, FName InParentName, FName InChildName, FToolMenuContext InMenuContext);
 	void PopulateMenuBuilder(FMenuBuilder& MenuBuilder, UToolMenu* MenuData);
 	void PopulateMenuBarBuilder(FMenuBarBuilder& MenuBarBuilder, UToolMenu* MenuData);
 	void PopulateToolBarBuilder(FToolBarBuilder& ToolBarBuilder, UToolMenu* MenuData);
 
-	TSharedRef<SWidget> GenerateToolbarComboButtonMenu(const FName SubMenuFullName, FToolMenuContext InContext);
+	TSharedRef<SWidget> GenerateToolbarComboButtonMenu(TWeakObjectPtr<UToolMenu> InParent, const FName InBlockName);
 
-	FOnGetContent ConvertWidgetChoice(const FNewToolMenuWidgetChoice& Choice, const FToolMenuContext& Context) const;
+	FOnGetContent ConvertWidgetChoice(const FNewToolMenuChoice& Choice, const FToolMenuContext& Context) const;
 
 	/** Converts a string command to a FUIAction */
 	static FUIAction ConvertUIAction(const FToolMenuEntry& Block, const FToolMenuContext& Context);
@@ -337,6 +342,7 @@ private:
 
 	void PopulateSubMenu(FMenuBuilder& Builder, TWeakObjectPtr<UToolMenu> InParent, const FName InBlockName);
 	void PopulateSubMenuWithoutName(FMenuBuilder& MenuBuilder, TWeakObjectPtr<UToolMenu> InParent, const FNewToolMenuDelegate InNewToolMenuDelegate);
+	TArray<UToolMenu*> CollectHierarchy(const FName Name, const TMap<FName, FName>& UnregisteredParentNames);
 
 	void ListAllParents(const FName Name, TArray<FName>& AllParents);
 
@@ -359,6 +365,10 @@ private:
 
 	UPROPERTY(config, EditAnywhere, Category = Misc)
 	TArray<FCustomizedToolMenu> CustomizedMenus;
+
+	/* Allow substituting one menu for another during generate but not during find or extend */
+	UPROPERTY(config, EditAnywhere, Category = Misc)
+	TMap<FName, FName> MenuSubstitutionsDuringGenerate;
 
 	UPROPERTY()
 	TMap<FName, UToolMenu*> Menus;

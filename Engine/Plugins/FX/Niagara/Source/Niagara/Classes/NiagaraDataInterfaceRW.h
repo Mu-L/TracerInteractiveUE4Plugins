@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "NiagaraDataInterface.h"
@@ -7,30 +7,31 @@
 class FNiagaraSystemInstance;
 
 // Global HLSL variable base names, used by HLSL.
-static const FString NumVoxelsName(TEXT("NumVoxels_"));
-static const FString VoxelSizeName(TEXT("VoxelSize_"));
-static const FString WorldBBoxMinName(TEXT("WorldBBoxMin_"));
-static const FString WorldBBoxSizeName(TEXT("WorldBBoxSize_"));
+extern NIAGARA_API const FString NumVoxelsName;
+extern NIAGARA_API const FString VoxelSizeName;
+extern NIAGARA_API const FString WorldBBoxSizeName;
 
-static const FString NumCellsName(TEXT("NumCells_"));
-static const FString CellSizeName(TEXT("CellSize_"));
+extern NIAGARA_API const FString NumCellsName;
+extern NIAGARA_API const FString CellSizeName;
 
 // Global VM function names, also used by the shaders code generation methods.
-static const FName NumVoxelsFunctionName("GetNumVoxels");
-static const FName VoxelSizeFunctionName("GetVoxelSize");
+extern NIAGARA_API const FName NumVoxelsFunctionName;
+extern NIAGARA_API const FName VoxelSizeFunctionName;
 
-static const FName NumCellsFunctionName("GetNumCells");
-static const FName CellSizeFunctionName("GetCellSize");
+extern NIAGARA_API const FName NumCellsFunctionName;
+extern NIAGARA_API const FName CellSizeFunctionName;
 
-static const FName WorldToUnitFunctionName("WorldToUnit");
-static const FName UnitToWorldFunctionName("UnitToWorld");
-static const FName UnitToIndexFunctionName("UnitToIndex");
-static const FName IndexToUnitFunctionName("IndexToUnit");
-static const FName IndexToUnitStaggeredXFunctionName("IndexToUnitStaggeredX");
-static const FName IndexToUnitStaggeredYFunctionName("IndexToUnitStaggeredY");
+extern NIAGARA_API const FName WorldBBoxSizeFunctionName;
 
-static const FName IndexToLinearFunctionName("IndexToLinear");
-static const FName LinearToIndexFunctionName("LinearToIndex");
+extern NIAGARA_API const FName SimulationToUnitFunctionName;
+extern NIAGARA_API const FName UnitToSimulationFunctionName;
+extern NIAGARA_API const FName UnitToIndexFunctionName;
+extern NIAGARA_API const FName IndexToUnitFunctionName;
+extern NIAGARA_API const FName IndexToUnitStaggeredXFunctionName;
+extern NIAGARA_API const FName IndexToUnitStaggeredYFunctionName;
+
+extern NIAGARA_API const FName IndexToLinearFunctionName;
+extern NIAGARA_API const FName LinearToIndexFunctionName;
 
 
 
@@ -79,7 +80,7 @@ public:
 		PushToRenderThread();
 	}	
 	
-	virtual void PreEditChange(UProperty* PropertyAboutToChange) override
+	virtual void PreEditChange(FProperty* PropertyAboutToChange) override
 	{
 		Super::PreEditChange(PropertyAboutToChange);
 
@@ -117,7 +118,6 @@ protected:
 	virtual bool CopyToInternal(UNiagaraDataInterface* Destination) const override;
 	virtual void PushToRenderThread() {};
 
-	FNiagaraDataInterfaceProxyRW* RWProxy;
 };
 
 
@@ -134,27 +134,25 @@ public:
 	float VoxelSize;
 
 	UPROPERTY(EditAnywhere, Category = "Grid")
-	bool SetGridFromVoxelSize;	
-
-	UPROPERTY(EditAnywhere, Category = "Grid")
-	FVector WorldBBoxMin;
+	bool SetGridFromVoxelSize;		
 
 	UPROPERTY(EditAnywhere, Category = "Grid")
 	FVector WorldBBoxSize;
 
 
 public:
+
 	//~ UNiagaraDataInterface interface
 	// VM functionality
 	virtual void GetFunctions(TArray<FNiagaraFunctionSignature>& OutFunctions) override;
-	virtual void GetVMExternalFunction(const FVMExternalFunctionBindingInfo& BindingInfo, void* InstanceData, FVMExternalFunction &OutFunc) override;
+	virtual void GetVMExternalFunction(const FVMExternalFunctionBindingInfo& BindingInfo, void* InstanceData, FVMExternalFunction &OutFunc) override;	
+
 
 	virtual bool Equals(const UNiagaraDataInterface* Other) const override;
 
 	// GPU sim functionality
-	virtual void GetParameterDefinitionHLSL(FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual bool GetFunctionHLSL(const FName&  DefinitionFunctionName, FString InstanceFunctionName, FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual FNiagaraDataInterfaceParametersCS* ConstructComputeParameters() const override;
+	virtual void GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
+	virtual bool GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL) override;
 	//~ UNiagaraDataInterface interface END
 
 
@@ -173,23 +171,20 @@ class NIAGARA_API UNiagaraDataInterfaceGrid2D : public UNiagaraDataInterfaceRWBa
 	GENERATED_UCLASS_BODY()
 
 public:
-	UPROPERTY(EditAnywhere, Category = "Grid", meta = (EditCondition = "!SetGridFromCellSize"))
+	UPROPERTY(EditAnywhere, Category = "Grid", meta = (EditCondition = "!SetGridFromMaxAxis"))
 	int32 NumCellsX;
 
-	UPROPERTY(EditAnywhere, Category = "Grid", meta = (EditCondition = "!SetGridFromCellSize"))
+	UPROPERTY(EditAnywhere, Category = "Grid", meta = (EditCondition = "!SetGridFromMaxAxis"))
 	int32 NumCellsY;
 	
-	UPROPERTY(EditAnywhere, Category = "Grid", meta = (EditCondition = "SetGridFromCellSize"))
-	float CellSize;
+	UPROPERTY(EditAnywhere, Category = "Grid", meta = (EditCondition = "SetGridFromMaxAxis"))
+	int32 NumCellsMaxAxis;
 
 	UPROPERTY(EditAnywhere, Category = "Grid")
 	int32 NumAttributes;
 
 	UPROPERTY(EditAnywhere, Category = "Grid")
-	bool SetGridFromCellSize;
-
-	UPROPERTY(EditAnywhere, Category = "Grid")
-	FVector WorldBBoxMin;
+	bool SetGridFromMaxAxis;	
 
 	UPROPERTY(EditAnywhere, Category = "Grid")
 	FVector2D WorldBBoxSize;
@@ -204,9 +199,8 @@ public:
 	virtual bool Equals(const UNiagaraDataInterface* Other) const override;
 
 	// GPU sim functionality
-	virtual void GetParameterDefinitionHLSL(FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual bool GetFunctionHLSL(const FName&  DefinitionFunctionName, FString InstanceFunctionName, FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
-	virtual FNiagaraDataInterfaceParametersCS* ConstructComputeParameters() const override;
+	virtual void GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
+	virtual bool GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL) override;
 	//~ UNiagaraDataInterface interface END
 
 

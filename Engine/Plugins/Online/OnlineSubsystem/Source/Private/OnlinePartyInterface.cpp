@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Interfaces/OnlinePartyInterface.h"
 #include "OnlineSubsystem.h"
@@ -213,6 +213,30 @@ FDelegateHandle IOnlinePartySystem::AddOnPartyMemberDataReceivedDelegate_Handle(
 	return OnPartyMemberDataReceivedDelegates.Add(FOnPartyMemberDataReceivedConstDelegate::CreateLambda(DeprecationHelperLambda));
 }
 
+FDelegateHandle IOnlinePartySystem::AddOnPartyJoinRequestReceivedDelegate_Handle(const FOnPartyJoinRequestReceivedDelegate& Delegate)
+{
+	auto DeprecationHelperLambda = [Delegate](const FUniqueNetId& LocalUserId, const FOnlinePartyId& PartyId, const IOnlinePartyPendingJoinRequestInfo& JoiningUsers)
+	{
+		TArray<IOnlinePartyUserPendingJoinRequestInfoConstRef> Users;
+		JoiningUsers.GetUsers(Users);
+		check(Users.Num() > 0);
+		Delegate.ExecuteIfBound(LocalUserId, PartyId, *Users[0]->GetUserId(), Users[0]->GetPlatform(), *Users[0]->GetJoinData());
+	};
+	return OnPartyJoinRequestReceivedDelegates.Add(FOnPartyGroupJoinRequestReceivedDelegate::CreateLambda(DeprecationHelperLambda));
+}
+
+FDelegateHandle IOnlinePartySystem::AddOnQueryPartyJoinabilityReceivedDelegate_Handle(const FOnQueryPartyJoinabilityReceivedDelegate& Delegate)
+{
+	auto DeprecationHelperLambda = [Delegate](const FUniqueNetId& LocalUserId, const FOnlinePartyId& PartyId, const IOnlinePartyPendingJoinRequestInfo& JoiningUsers)
+	{
+		TArray<IOnlinePartyUserPendingJoinRequestInfoConstRef> Users;
+		JoiningUsers.GetUsers(Users);
+		check(Users.Num() > 0);
+		Delegate.ExecuteIfBound(LocalUserId, PartyId, *Users[0]->GetUserId(), Users[0]->GetPlatform(), *Users[0]->GetJoinData());
+	};
+	return OnQueryPartyJoinabilityReceivedDelegates.Add(FOnQueryPartyJoinabilityGroupReceivedDelegate::CreateLambda(DeprecationHelperLambda));
+}
+
 bool FPartyConfiguration::operator==(const FPartyConfiguration& Other) const
 {
 	return JoinRequestAction == Other.JoinRequestAction &&
@@ -380,6 +404,10 @@ const TCHAR* ToString(const ECreatePartyCompletionResult Value)
 	case ECreatePartyCompletionResult::LoggedOut:
 	{
 		return TEXT("LoggedOut");
+	}
+	case ECreatePartyCompletionResult::NotPrimaryUser:
+	{
+		return TEXT("NotPrimaryUser");
 	}
 	case ECreatePartyCompletionResult::UnknownInternalFailure:
 	{
@@ -838,15 +866,7 @@ FString ToDebugString(const FPartyConfiguration& PartyConfiguration)
 
 FString ToDebugString(const IOnlinePartyJoinInfo& JoinInfo)
 {
-	return FString::Printf(TEXT("SourceUserId(%s) SourceDisplayName(%s) PartyId(%s) HasKey(%d) HasPassword(%d) IsAcceptingMembers(%d) NotAcceptingReason(%d)"),
-			*(JoinInfo.GetSourceUserId()->ToDebugString()),
-			*(JoinInfo.GetSourceDisplayName()),
-			*(JoinInfo.GetPartyId()->ToDebugString()),
-			JoinInfo.HasKey() ? 1 : 0,
-			JoinInfo.HasPassword() ? 1 : 0,
-			JoinInfo.IsAcceptingMembers() ? 1 : 0,
-			JoinInfo.GetNotAcceptingReason()
-		);
+	return JoinInfo.ToDebugString();
 }
 
 /**
@@ -886,3 +906,14 @@ FString ToDebugString(const FOnlinePartyData& PartyData)
 	Result += ToDebugString(PartyData.GetKeyValAttrs());
 	return Result;
 }
+
+FString IOnlinePartyJoinInfo::ToDebugString() const 
+{
+	return FString::Printf(TEXT("SourceUserId(%s) SourceDisplayName(%s) PartyId(%s) HasKey(%d) HasPassword(%d) IsAcceptingMembers(%d) NotAcceptingReason(%d)"),
+		*(GetSourceUserId()->ToDebugString()),
+		*(GetSourceDisplayName()),
+		*(GetPartyId()->ToDebugString()),
+		HasKey() ? 1 : 0, HasPassword() ? 1 : 0,
+		IsAcceptingMembers() ? 1 : 0,
+		GetNotAcceptingReason());
+};

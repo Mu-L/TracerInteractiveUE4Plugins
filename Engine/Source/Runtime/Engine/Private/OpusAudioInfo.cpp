@@ -1,11 +1,13 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "OpusAudioInfo.h"
 #include "ContentStreaming.h"
 #include "Interfaces/IAudioFormat.h"
 
-#define WITH_OPUS (PLATFORM_WINDOWS || PLATFORM_MAC || PLATFORM_UNIX || PLATFORM_XBOXONE)
+#if !defined(WITH_OPUS)
+	#define WITH_OPUS (PLATFORM_WINDOWS || PLATFORM_MAC || PLATFORM_UNIX)
+#endif
 
 #if WITH_OPUS
 THIRD_PARTY_INCLUDES_START

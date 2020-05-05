@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SAddNewGameplayTagWidget.h"
 #include "DetailLayoutBuilder.h"
@@ -144,7 +144,7 @@ void SAddNewGameplayTagWidget::Construct(const FArguments& InArgs)
 		]
 	];
 
-	Reset();
+	Reset(EResetType::ResetAll);
 }
 
 void SAddNewGameplayTagWidget::Tick( const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime )
@@ -176,12 +176,21 @@ void SAddNewGameplayTagWidget::PopulateTagSources()
 			TagSources.Add(MakeShareable(new FName(Source->SourceName)));
 		}
 	}
+
+	//Set selection to the latest added source
+	if (TagSourcesComboBox != nullptr)
+	{
+		TagSourcesComboBox->SetSelectedItem(TagSources.Last());
+	}	
 }
 
-void SAddNewGameplayTagWidget::Reset()
+void SAddNewGameplayTagWidget::Reset(EResetType ResetType)
 {
 	SetTagName();
-	SelectTagSource();
+	if (ResetType != EResetType::DoNotResetSource)
+	{
+		SelectTagSource();
+	}
 	TagCommentTextBox->SetText(FText());
 }
 
@@ -246,6 +255,11 @@ void SAddNewGameplayTagWidget::CreateNewGameplayTag()
 		return;
 	}
 
+	if (TagSourcesComboBox->GetSelectedItem().Get() == nullptr)
+	{
+		return;
+	}
+
 	FText TagNameAsText = TagNameTextBox->GetText();
 	FString TagName = TagNameAsText.ToString();
 	FString TagComment = TagCommentTextBox->GetText().ToString();
@@ -275,7 +289,7 @@ void SAddNewGameplayTagWidget::CreateNewGameplayTag()
 
 	OnGameplayTagAdded.ExecuteIfBound(TagName, TagComment, TagSource);
 
-	Reset();
+	Reset(EResetType::DoNotResetSource);
 }
 
 TSharedRef<SWidget> SAddNewGameplayTagWidget::OnGenerateTagSourcesComboBox(TSharedPtr<FName> InItem)

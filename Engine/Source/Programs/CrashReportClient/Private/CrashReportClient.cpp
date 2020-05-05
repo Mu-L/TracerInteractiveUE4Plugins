@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CrashReportClient.h"
 #include "Misc/CommandLine.h"
@@ -29,8 +29,6 @@ struct FCrashReportUtil
 #include "PlatformHttp.h"
 #include "Framework/Application/SlateApplication.h"
 
-FDelegateHandle CrashReportClientTickHandle;
-
 FCrashReportClient::FCrashReportClient(const FPlatformErrorReport& InErrorReport)
 	: DiagnosticText( LOCTEXT("ProcessingReport", "Processing crash report ...") )
 	, DiagnoseReportTask(nullptr)
@@ -42,8 +40,6 @@ FCrashReportClient::FCrashReportClient(const FPlatformErrorReport& InErrorReport
 	, bIsSuccesfullRestart(false)
 	, bIsUploadComplete(false)
 {
-	checkf(!CrashReportClientTickHandle.IsValid(), TEXT("FCrashReportClient assumes a single instance at a time"));
-
 	if (FPrimaryCrashProperties::Get()->IsValid())
 	{
 		bool bUsePrimaryData = false;
@@ -76,13 +72,12 @@ FCrashReportClient::FCrashReportClient(const FPlatformErrorReport& InErrorReport
 	}
 }
 
-
 FCrashReportClient::~FCrashReportClient()
 {
-	if (CrashReportClientTickHandle.IsValid())
+	if (TickHandle.IsValid())
 	{
-		FTicker::GetCoreTicker().RemoveTicker(CrashReportClientTickHandle);
-		CrashReportClientTickHandle.Reset();
+		FTicker::GetCoreTicker().RemoveTicker(TickHandle);
+		TickHandle.Reset();
 	}
 	StopBackgroundThread();
 }
@@ -232,9 +227,9 @@ void FCrashReportClient::SendLogFile_OnCheckStateChanged( ECheckBoxState NewRadi
 
 void FCrashReportClient::StartTicker()
 {
-	if (!CrashReportClientTickHandle.IsValid())
+	if (!TickHandle.IsValid())
 	{
-		CrashReportClientTickHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateRaw(this, &FCrashReportClient::Tick), 1.f);
+		TickHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateRaw(this, &FCrashReportClient::Tick), 1.f);
 	}
 }
 

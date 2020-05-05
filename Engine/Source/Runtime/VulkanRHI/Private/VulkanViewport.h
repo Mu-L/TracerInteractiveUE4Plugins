@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	VulkanViewport.h: Vulkan viewport RHI definitions.
@@ -78,6 +78,11 @@ public:
 	inline uint32 GetPresentCount() const
 	{
 		return PresentCount;
+	}
+
+	inline bool IsFullscreen() const
+	{
+		return bIsFullscreen;
 	}
 
 protected:

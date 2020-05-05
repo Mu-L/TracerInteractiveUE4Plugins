@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OvrAvatarManager.h"
 #include "OvrAvatar.h"
@@ -15,6 +15,7 @@
 DEFINE_LOG_CATEGORY(LogAvatars);
 
 UOvrAvatarManager* UOvrAvatarManager::sAvatarManager = nullptr;
+void* UOvrAvatarManager::OVRAvatarHandle = nullptr;
 
 FSoftObjectPath UOvrAvatarManager::AssetList[] =
 {
@@ -129,23 +130,27 @@ void UOvrAvatarManager::Destroy()
 {
 	if (sAvatarManager)
 	{
-		sAvatarManager->RemoveFromRoot();
+		sAvatarManager->ShutdownSDK();
+		UOvrAvatarManager* temp_avatar_manager = sAvatarManager;
 		sAvatarManager = nullptr;
-	}
-}
-
-UOvrAvatarManager::~UOvrAvatarManager()
-{
-	if (OVRPluginHandle)
-	{
-		FPlatformProcess::FreeDllHandle(OVRPluginHandle);
-		OVRPluginHandle = nullptr;
+		temp_avatar_manager->RemoveFromRoot();
 	}
 
 	if (OVRAvatarHandle)
 	{
 		FPlatformProcess::FreeDllHandle(OVRAvatarHandle);
 		OVRAvatarHandle = nullptr;
+	}
+}
+
+UOvrAvatarManager::~UOvrAvatarManager()
+{
+	if (sAvatarManager != nullptr)
+	{
+		UE_LOG(LogAvatars, Log, TEXT("Shutdown ordering error closing down OVRAvatar module."));
+		sAvatarManager = nullptr;
+
+		ShutdownSDK();
 	}
 }
 

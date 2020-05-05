@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -36,4 +36,11 @@ public:
 	*/
 	UFUNCTION(BlueprintCallable, Category = "HandMeshing Function Library | MagicLeap")
 	bool DisconnectMRMesh(class UMRMeshComponent* InMRMeshPtr);
+
+	/**
+		Specifies whether to use weighted triangle normals when calculating the normals for each vertex of the hand mesh.
+		@param bInUseWeightedNormals False is the default, True may impact performance but could give better looking results.
+	*/
+	UFUNCTION(BlueprintCallable, Category = "HandMeshing Function Library | MagicLeap")
+	void SetUseWeightedNormals(const bool bInUseWeightedNormals);
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -79,6 +79,8 @@ public:
 	int32 Num() const { return KeyHandlesToIndices.Num(); }
 	TArray<FKeyHandle>::TConstIterator CreateConstIterator() const { return KeyHandles.CreateConstIterator(); }
 	const TMap<FKeyHandle, int32>& GetMap() const { return KeyHandlesToIndices; }
+
+	void SetKeyHandles(int32 Num);
 
 	/** ICPPStructOps implementation */
 	bool Serialize(FArchive& Ar);

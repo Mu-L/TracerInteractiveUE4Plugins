@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GenericPlatform/HttpRequestPayload.h"
 #include "GenericPlatform/GenericPlatformFile.h"
@@ -79,6 +79,10 @@ size_t FRequestPayloadInFileStream::FillOutputBuffer(void* OutputBuffer, size_t 
 }
 
 FRequestPayloadInMemory::FRequestPayloadInMemory(const TArray<uint8>& Array) : Buffer(Array)
+{
+}
+
+FRequestPayloadInMemory::FRequestPayloadInMemory(TArray<uint8>&& Array) : Buffer(MoveTemp(Array))
 {
 }
 

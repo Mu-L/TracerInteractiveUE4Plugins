@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // Implementation of Memory Allocation Strategies
 
@@ -908,7 +908,7 @@ void* FD3D12DynamicHeapAllocator::AllocUploadResource(uint32 Size, uint32 Alignm
 	//clean up as we go as it can even run out of memory before the first frame.
 	if (Adapter->GetDeferredDeletionQueue().QueueSize() > 128)
 	{
-		Adapter->GetDeferredDeletionQueue().ReleaseResources(true);
+		Adapter->GetDeferredDeletionQueue().ReleaseResources(true, false);
 		Allocator.CleanUpAllocations();
 	}
 	
@@ -1190,7 +1190,7 @@ HRESULT FD3D12TextureAllocatorPool::AllocateTexture(
 
 	const D3D12_HEAP_PROPERTIES HeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT, GetGPUMask().GetNative(), GetVisibilityMask().GetNative());
 	Desc.Alignment = 0;
-	RetCode = Adapter->CreateCommittedResource(Desc, GetGPUMask(), HeapProps, InitialState, ClearValue, &NewResource, Name, false);
+	VERIFYD3D12RESULT(RetCode = Adapter->CreateCommittedResource(Desc, GetGPUMask(), HeapProps, InitialState, ClearValue, &NewResource, Name, false));
 
 	TextureLocation.SetType(FD3D12ResourceLocation::ResourceLocationType::eStandAlone);
 	TextureLocation.SetResource(NewResource);

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -184,7 +184,10 @@ struct ENGINE_API FSmartNameContainer
 	const FSmartNameMapping* GetContainer(FName ContainerName) const;
 
 	// Serialize this to the provided archive; required for TMap serialization
-	void Serialize(FArchive& Ar);
+	void Serialize(FArchive& Ar, bool bIsTemplate);
+
+	// Called after load (serialize itself may not be called if the USkeleton we are on is old enough)
+	void PostLoad();
 
 	friend FArchive& operator<<(FArchive& Ar, FSmartNameContainer& Elem);
 
@@ -196,6 +199,11 @@ protected:
 
 private:
 	TMap<FName, FSmartNameMapping> NameMappings;	// List of smartname mappings
+
+#if WITH_EDITORONLY_DATA
+	// Editor copy of the data we loaded, used to preserve determinism during cooking
+	TMap<FName, FSmartNameMapping> LoadedNameMappings;
+#endif
 };
 
 USTRUCT()

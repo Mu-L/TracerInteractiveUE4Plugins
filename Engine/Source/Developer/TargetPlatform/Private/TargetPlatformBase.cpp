@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Common/TargetPlatformBase.h"
 #include "HAL/IConsoleManager.h"
@@ -31,6 +31,12 @@ bool FTargetPlatformBase::UsesBasePassVelocity() const
 	return CVar ? (CVar->GetInt() != 0) : false;
 }
 
+bool FTargetPlatformBase::UsesAnisotropicBRDF() const
+{
+	static IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.AnisotropicBRDF"));
+	return CVar && CVar->GetInt();
+}
+
 bool FTargetPlatformBase::UsesSelectiveBasePassOutputs() const
 {
 	static IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.SelectiveBasePassOutputs"));
@@ -40,6 +46,12 @@ bool FTargetPlatformBase::UsesSelectiveBasePassOutputs() const
 bool FTargetPlatformBase::UsesDistanceFields() const
 {
 	return true;
+}
+
+bool FTargetPlatformBase::UsesRayTracing() const
+{
+	static IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.RayTracing"));
+	return CVar ? (CVar->GetInt() != 0) : false;
 }
 
 float FTargetPlatformBase::GetDownSampleMeshDistanceFieldDivider() const
@@ -54,7 +66,8 @@ static bool IsPluginEnabledForTarget(const IPlugin& Plugin, const FProjectDescri
 		return false;
 	}
 
-	bool bEnabledForProject = Plugin.IsEnabledByDefault();
+	const bool bAllowEnginePluginsEnabledByDefault = (Project == nullptr || !Project->bDisableEnginePluginsByDefault);
+	bool bEnabledForProject = Plugin.IsEnabledByDefault(bAllowEnginePluginsEnabledByDefault);
 	if (Project != nullptr)
 	{
 		for(const FPluginReferenceDescriptor& PluginReference : Project->Plugins)

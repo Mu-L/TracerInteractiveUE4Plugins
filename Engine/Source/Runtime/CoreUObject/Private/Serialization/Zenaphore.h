@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -18,9 +18,6 @@ public:
 	FZenaphoreWaiter(FZenaphore& Outer, const TCHAR* WaitCpuScopeName)
 		: Outer(Outer)
 	{
-#if CPUPROFILERTRACE_ENABLED
-		WaitCpuScopeId = FCpuProfilerTrace::OutputEventType(WaitCpuScopeName, CpuProfilerGroup_Default);
-#endif
 	}
 
 	void Wait();
@@ -31,9 +28,6 @@ private:
 	FZenaphore& Outer;
 	FZenaphoreWaiterNode WaiterNode;
 	int32 SpinCount = 0;
-#if CPUPROFILERTRACE_ENABLED
-	uint16 WaitCpuScopeId;
-#endif
 };
 
 class FZenaphore

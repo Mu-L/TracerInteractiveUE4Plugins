@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	PackFactory.cpp: Factory for importing asset and feature packs
@@ -186,8 +186,8 @@ namespace PackFactoryHelper
 		PackConfig.ProcessInputFileContents(ConfigString);
 
 		// Input Settings
-		static UArrayProperty* ActionMappingsProp = FindFieldChecked<UArrayProperty>(UInputSettings::StaticClass(), UInputSettings::GetActionMappingsPropertyName());
-		static UArrayProperty* AxisMappingsProp = FindFieldChecked<UArrayProperty>(UInputSettings::StaticClass(), UInputSettings::GetAxisMappingsPropertyName());
+		static FArrayProperty* ActionMappingsProp = FindFieldChecked<FArrayProperty>(UInputSettings::StaticClass(), UInputSettings::GetActionMappingsPropertyName());
+		static FArrayProperty* AxisMappingsProp = FindFieldChecked<FArrayProperty>(UInputSettings::StaticClass(), UInputSettings::GetAxisMappingsPropertyName());
 
 		UInputSettings* InputSettingsCDO = GetMutableDefault<UInputSettings>();
 		bool bCheckedOut = false;
@@ -483,14 +483,14 @@ UObject* UPackFactory::FactoryCreateBinary
 					FString DestFilename = It.Filename();
 					if (DestFilename.StartsWith(TEXT("Source/")))
 					{
-						DestFilename = DestFilename.RightChop(7);
+						DestFilename.RightChopInline(7, false);
 					}
 					else 
 					{
 						const int32 SourceIndex = DestFilename.Find(TEXT("/Source/"));
 						if (SourceIndex != INDEX_NONE)
 						{
-							DestFilename = DestFilename.RightChop(SourceIndex + 8);
+							DestFilename.RightChopInline(SourceIndex + 8, false);
 						}
 					}
 
@@ -525,14 +525,14 @@ UObject* UPackFactory::FactoryCreateBinary
 					FString DestFilename = It.Filename();
 					if (DestFilename.StartsWith(TEXT("Content/")))
 					{
-						DestFilename = DestFilename.RightChop(8);
+						DestFilename.RightChopInline(8, false);
 					}
 					else
 					{
 						const int32 ContentIndex = DestFilename.Find(ContentFolder);
 						if (ContentIndex != INDEX_NONE)
 						{
-							DestFilename = DestFilename.RightChop(ContentIndex + 9);
+							DestFilename.RightChopInline(ContentIndex + 9, false);
 						}
 					}
 					DestFilename = ContentDestinationRoot / DestFilename;
@@ -572,14 +572,14 @@ UObject* UPackFactory::FactoryCreateBinary
 					FString DestFilename = FileToCopy;
 					if (DestFilename.StartsWith(TEXT("Source/")))
 					{
-						DestFilename = DestFilename.RightChop(7);
+						DestFilename.RightChopInline(7, false);
 					}
 					else 
 					{
 						const int32 SourceIndex = DestFilename.Find(TEXT("/Source/"));
 						if (SourceIndex != INDEX_NONE)
 						{
-							DestFilename = DestFilename.RightChop(SourceIndex + 8);
+							DestFilename.RightChopInline(SourceIndex + 8, false);
 						}
 					}
 					DestFilename = SourceModuleInfo.ModuleSourcePath / DestFilename;
@@ -624,14 +624,14 @@ UObject* UPackFactory::FactoryCreateBinary
 					FString DestFilename = FileToCopy;
 					if (DestFilename.StartsWith(TEXT("Content/")))
 					{
-						DestFilename = DestFilename.RightChop(8);
+						DestFilename.RightChopInline(8, false);
 					}
 					else
 					{
 						const int32 ContentIndex = DestFilename.Find(ContentFolder);
 						if (ContentIndex != INDEX_NONE)
 						{
-							DestFilename = DestFilename.RightChop(ContentIndex + 9);
+							DestFilename.RightChopInline(ContentIndex + 9, false);
 						}
 					}
 					DestFilename = ContentDestinationRoot / DestFilename;
@@ -697,6 +697,10 @@ UObject* UPackFactory::FactoryCreateBinary
 					}
 					else
 					{
+						// We didn't previously have source, so the UBT target name will be UE4Editor, and attempts to recompile will end up building the wrong target. Now that we have source,
+						// we need to change the UBT target to be the newly created editor module
+						FPlatformMisc::SetUBTTargetName(*(FString(FApp::GetProjectName()) + TEXT("Editor")));
+
 						if (!HotReloadSupport.RecompileModule(FApp::GetProjectName(), *GWarn, ERecompileModuleFlags::ReloadAfterRecompile | ERecompileModuleFlags::ForceCodeProject))
 						{
 							FMessageDialog::Open(EAppMsgType::Ok, NSLOCTEXT("PackFactory", "FailedToCompileNewGameModule", "Failed to compile newly created game module."));

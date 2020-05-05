@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 #include "CoreMinimal.h"
 #include "AudioCompressionSettings.generated.h"
@@ -30,8 +30,15 @@ struct FAudioStreamCachingSettings
 	// CacheSizeKB / 256.
 	int32 CacheSizeKB;
 
+	// Bool flag for keeping sounds flagged for streaming chunked in the style of the legacy streaming manager.
+	bool bForceLegacyStreamChunking;
+
+	int32 ZerothChunkSizeForLegacyStreamChunkingKB;
+
 	FAudioStreamCachingSettings()
 		: CacheSizeKB(DefaultCacheSize)
+		, bForceLegacyStreamChunking(false)
+		, ZerothChunkSizeForLegacyStreamChunkingKB(256)
 	{
 	}
 };
@@ -59,8 +66,6 @@ struct FPlatformAudioCookOverrides
 	// If set, the cooker will keep only this level of quality
 	int32 SoundCueCookQualityIndex = INDEX_NONE;
 
-	int32 StreamChunkSizeKB;
-	
 	// When set to any platform > 0.0, this will automatically set any USoundWave beyond this value to be streamed from disk.
 	// If StreamCaching is set to true, this will be used 
 	float AutoStreamingThreshold;
@@ -74,7 +79,6 @@ struct FPlatformAudioCookOverrides
 	FPlatformAudioCookOverrides()
 		: bResampleForDevice(false)
 		, CompressionQualityModifier(1.0f)
-		, StreamChunkSizeKB(256)
 		, AutoStreamingThreshold(0.0f)
 		, bUseStreamCaching(false)
 	{
@@ -96,8 +100,6 @@ struct FPlatformAudioCookOverrides
 		int32 CompressionQualityHash = FMath::FloorToInt(InOverrides->CompressionQualityModifier * 100.0f);
 		OutSuffix.AppendInt(CompressionQualityHash);
 
-		OutSuffix.AppendInt(InOverrides->StreamChunkSizeKB);
-
 		int32 AutoStreamingThresholdHash = FMath::FloorToInt(InOverrides->AutoStreamingThreshold * 100.0f);
 		OutSuffix.AppendInt(AutoStreamingThresholdHash);
 
@@ -110,6 +112,12 @@ struct FPlatformAudioCookOverrides
 			// cache info:
 			OutSuffix.Append(TEXT("MEM_"));
 			OutSuffix.AppendInt(InOverrides->StreamCachingSettings.CacheSizeKB);
+
+			if (InOverrides->StreamCachingSettings.bForceLegacyStreamChunking)
+			{
+				OutSuffix.Append(TEXT("_LegacyChunking_"));
+				OutSuffix.AppendInt(InOverrides->StreamCachingSettings.ZerothChunkSizeForLegacyStreamChunkingKB);
+			}
 		}
 		
 

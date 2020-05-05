@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -73,4 +73,8 @@ enum ESceneTextureId
 	PPI_StoredSpecular UMETA(DisplayName="Specular (as stored in GBuffer)"),
 	/** Scene Velocity */
 	PPI_Velocity UMETA(DisplayName="Velocity"),
+	/** Tangent, RGB in -1..1 range, not normalized (GBuffer) */
+	PPI_WorldTangent UMETA(DisplayName = "WorldTangent"),
+	/** Material anisotropy, single channel (GBuffer) */
+	PPI_Anisotropy UMETA(DisplayName = "Anisotropy"),
 };

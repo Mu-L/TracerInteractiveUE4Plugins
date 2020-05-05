@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 using UnrealBuildTool;
 
 namespace UnrealBuildTool.Rules
@@ -22,7 +22,6 @@ namespace UnrealBuildTool.Rules
 					"EditorStyle",
 					"MainFrame",
 					"MeshDescription",
-					"MeshDescriptionOperations",
 					"RawMesh",
 					"Slate",
 					"SlateCore",

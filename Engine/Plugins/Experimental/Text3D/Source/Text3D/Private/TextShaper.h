@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 #include "Text3DPrivate.h"
@@ -14,19 +14,32 @@ struct FShapedGlyphLine
 	TArray<FShapedGlyphEntry> GlyphsToRender;
 	float Width;
 
-	void AddKerning(const float InKerning, const float InWordSpacing)
+	float GetAdvanced(const int32 Index, const float Kerning, const float WordSpacing) const
 	{
-		for (int32 Index = 0; Index < GlyphsToRender.Num() - 1; Index++)
+		check(Index >= 0 && Index < GlyphsToRender.Num());
+
+		const FShapedGlyphEntry& Glyph = GlyphsToRender[Index];
+		float Advance = Glyph.XOffset + Glyph.XAdvance;
+
+		if (Index < GlyphsToRender.Num() - 1)
 		{
-			FShapedGlyphEntry& Glyph = GlyphsToRender[Index];
-			float Offset = InKerning;
+			Advance += Glyph.Kerning + Kerning;
+
 			if (!Glyph.bIsVisible)
 			{
-				Offset += InWordSpacing;
+				Advance += WordSpacing;
 			}
+		}
 
-			Glyph.XAdvance += Offset;
-			Width += Offset;
+		return Advance;
+	}
+
+	void CalculateWidth(const float Kerning, const float WordSpacing)
+	{
+		Width = 0.0f;
+		for (int32 Index = 0; Index < GlyphsToRender.Num(); Index++)
+		{
+			Width += GetAdvanced(Index, Kerning, WordSpacing);
 		}
 	}
 
@@ -36,10 +49,10 @@ struct FShapedGlyphLine
 	}
 };
 
-class FTextShaper
+class FTextShaper final
 {
 public:
-	static FTextShaper * Get()							{ return Instance; }
+	static FTextShaper* Get()							{ return Instance; }
 
 	void ShapeBidirectionalText(const FT_Face Face, const FString& Text, TArray<FShapedGlyphLine>& OutShapedLines);
 

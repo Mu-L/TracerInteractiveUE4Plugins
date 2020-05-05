@@ -1,17 +1,18 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/StringView.h"
 #include "HAL/ThreadSafeCounter.h"
-#include "UObject/Class.h"
 #include "HAL/ThreadSingleton.h"
+#include "UObject/Class.h"
 
 /**
  * A struct that contains a string reference to an object, either a top level asset or a subobject.
  * This can be used to make soft references to assets that are loaded on demand.
  * This is stored internally as an FName pointing to the top level asset (/package/path.assetname) and an option a string subobject path.
- * If the MetaClass metadata is applied to a UProperty with this the UI will restrict to that type of asset.
+ * If the MetaClass metadata is applied to a FProperty with this the UI will restrict to that type of asset.
  */
 struct COREUOBJECT_API FSoftObjectPath
 {
@@ -31,12 +32,15 @@ struct COREUOBJECT_API FSoftObjectPath
 	{
 	}
 
-	/** Construct from a path string */
-	FSoftObjectPath(FString PathString)
-	{
-		SetPath(MoveTemp(PathString));
-	}
-
+	/** Construct from a path string. Non-explicit for backwards compatibility. */
+	FSoftObjectPath(const FString& Path)						{ SetPath(FStringView(Path)); }
+	explicit FSoftObjectPath(FWideStringView Path)				{ SetPath(Path); }
+	explicit FSoftObjectPath(FAnsiStringView Path)				{ SetPath(Path); }
+	explicit FSoftObjectPath(FName Path)						{ SetPath(Path); }
+	explicit FSoftObjectPath(const WIDECHAR* Path)				{ SetPath(FWideStringView(Path)); }
+	explicit FSoftObjectPath(const ANSICHAR* Path)				{ SetPath(FAnsiStringView(Path)); }
+	explicit FSoftObjectPath(TYPE_OF_NULLPTR)					{}
+	
 	/** Construct from an asset FName and subobject pair */
 	FSoftObjectPath(FName InAssetPathName, FString InSubPathString)
 		: AssetPathName(InAssetPathName)
@@ -47,9 +51,22 @@ struct COREUOBJECT_API FSoftObjectPath
 	FSoftObjectPath(const UObject* InObject);
 
 	~FSoftObjectPath() {}
+	
+	FSoftObjectPath& operator=(const FSoftObjectPath& Path)	= default;
+	FSoftObjectPath& operator=(FSoftObjectPath&& Path) = default;
+	FSoftObjectPath& operator=(const FString& Path)						{ SetPath(FStringView(Path)); return *this; }
+	FSoftObjectPath& operator=(FWideStringView Path)					{ SetPath(Path); return *this; }
+	FSoftObjectPath& operator=(FAnsiStringView Path)					{ SetPath(Path); return *this; }
+	FSoftObjectPath& operator=(FName Path)								{ SetPath(Path); return *this; }
+	FSoftObjectPath& operator=(const WIDECHAR* Path)					{ SetPath(FWideStringView(Path)); return *this; }
+	FSoftObjectPath& operator=(const ANSICHAR* Path)					{ SetPath(FAnsiStringView(Path)); return *this; }
+	FSoftObjectPath& operator=(TYPE_OF_NULLPTR)							{ Reset(); return *this; }
 
 	/** Returns string representation of reference, in form /package/path.assetname[:subpath] */
 	FString ToString() const;
+
+	/** Append string representation of reference, in form /package/path.assetname[:subpath] */
+	void ToString(FStringBuilderBase& Builder) const;
 
 	/** Returns the entire asset path as an FName, including both package and asset but not sub object */
 	FORCEINLINE FName GetAssetPathName() const
@@ -60,7 +77,7 @@ struct COREUOBJECT_API FSoftObjectPath
 	/** Returns string version of asset path, including both package and asset but not sub object */
 	FORCEINLINE FString GetAssetPathString() const
 	{
-		if (AssetPathName == NAME_None)
+		if (AssetPathName.IsNone())
 		{
 			return FString();
 		}
@@ -91,7 +108,12 @@ struct COREUOBJECT_API FSoftObjectPath
 	}
 
 	/** Sets asset path of this reference based on a string path */
-	void SetPath(FString Path);
+	void SetPath(FWideStringView Path);
+	void SetPath(FAnsiStringView Path);
+	void SetPath(FName Path);
+	void SetPath(const WIDECHAR* Path)			{ SetPath(FWideStringView(Path)); }
+	void SetPath(const ANSICHAR* Path)			{ SetPath(FAnsiStringView(Path)); }
+	void SetPath(const FString& Path)			{ SetPath(FStringView(Path)); }
 
 	/**
 	 * Attempts to load the asset, this will call LoadObject which can be very slow
@@ -146,7 +168,7 @@ struct COREUOBJECT_API FSoftObjectPath
 	{
 		return !(*this == Other);
 	}
-	FSoftObjectPath& operator=(FSoftObjectPath Other);
+
 	bool ExportTextItem(FString& ValueStr, FSoftObjectPath const& DefaultValue, UObject* Parent, int32 PortFlags, UObject* ExportRootScope) const;
 	bool ImportTextItem( const TCHAR*& Buffer, int32 PortFlags, UObject* Parent, FOutputDevice* ErrorText, FArchive* InSerializingArchive = nullptr );
 	bool SerializeFromMismatchedTag(struct FPropertyTag const& Tag, FStructuredArchive::FSlot Slot);
@@ -216,6 +238,40 @@ private:
 
 	friend struct Z_Construct_UScriptStruct_FSoftObjectPath_Statics;
 };
+
+/** Fast non-alphabetical order that is only stable during this process' lifetime. */
+struct FSoftObjectPathFastLess
+{
+	bool operator()(const FSoftObjectPath& Lhs, const FSoftObjectPath& Rhs) const
+	{
+		int32 Comp = Lhs.GetAssetPathName().CompareIndexes(Rhs.GetAssetPathName());
+		if (Comp < 0)
+		{
+			return true;
+		}
+		return Comp == 0 && Lhs.GetSubPathString() < Rhs.GetSubPathString();
+	}
+};
+
+/** Slow alphabetical order that is stable / deterministic over process runs. */
+struct FSoftObjectPathLexicalLess
+{
+	bool operator()(const FSoftObjectPath& Lhs, const FSoftObjectPath& Rhs) const
+	{
+		int32 Comp = Lhs.GetAssetPathName().Compare(Rhs.GetAssetPathName());
+		if (Comp < 0)
+		{
+			return true;
+		}
+		return Comp == 0 && Lhs.GetSubPathString() < Rhs.GetSubPathString();
+	}
+};
+
+inline FStringBuilderBase& operator<<(FStringBuilderBase& Builder, const FSoftObjectPath& Path)
+{
+	Path.ToString(Builder);
+	return Builder;
+}
 
 /**
  * A struct that contains a string reference to a class, can be used to make soft references to classes

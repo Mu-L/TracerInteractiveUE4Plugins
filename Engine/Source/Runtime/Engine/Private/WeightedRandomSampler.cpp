@@ -1,6 +1,8 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "WeightedRandomSampler.h"
+
+IMPLEMENT_ABSTRACT_TYPE_LAYOUT(FWeightedRandomSampler);
 
 FWeightedRandomSampler::FWeightedRandomSampler()
 	: TotalWeight(0.0f)

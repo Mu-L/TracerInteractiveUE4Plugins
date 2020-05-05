@@ -1,13 +1,22 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
 #include "CoreMinimal.h"
-#include "UObject/ObjectMacros.h"
+
+#include "AudioDefines.h"
+#include "IAudioExtensionPlugin.h"
 #include "Sound/SoundEffectPreset.h"
 #include "Sound/SoundEffectBase.h"
+#include "Templates/SharedPointer.h"
+#include "UObject/ObjectMacros.h"
+
 #include "SoundEffectSubmix.generated.h"
 
+// Forward Declarations
+class FAudioDevice;
 class FSoundEffectSubmix;
+
+struct FAudioEffectParameters;
 
 
 /** Preset of a submix effect that can be shared between sounds. */
@@ -23,8 +32,16 @@ class ENGINE_API USoundEffectSubmixPreset : public USoundEffectPreset
 /** Struct which has data needed to initialize the submix effect. */
 struct FSoundEffectSubmixInitData
 {
+	uint32 DeviceID;
 	void* PresetSettings;
 	float SampleRate;
+
+	FSoundEffectSubmixInitData()
+		: DeviceID(INDEX_NONE)
+		, PresetSettings(nullptr)
+		, SampleRate(0)
+	{
+	}
 };
 
 /** Struct which supplies audio data to submix effects on game thread. */
@@ -73,14 +90,30 @@ struct FSoundEffectSubmixOutputData
 class ENGINE_API FSoundEffectSubmix : public FSoundEffectBase
 {
 public:
-	FSoundEffectSubmix() {}
-	virtual ~FSoundEffectSubmix() {}
+	virtual ~FSoundEffectSubmix() = default;
 
-	/** Called on an audio effect at initialization on main thread before audio processing begins. */
-	virtual void Init(const FSoundEffectSubmixInitData& InSampleRate) {};
+	/**  Provided for interpolating parameters from audio volume system, enabling transition between various settings */
+	virtual bool SetParameters(const FAudioEffectParameters& InParameters)
+	{
+		return false;
+	}
+
+	// Whether or not effect supports default reverb system
+	virtual bool SupportsDefaultReverb() const
+	{
+		return false;
+	}
+
+	// Whether or not effect supports default EQ system
+	virtual bool SupportsDefaultEQ() const
+	{
+		return false;
+	}
 
 	/** Called on game thread to allow submix effect to query game data if needed. */
-	virtual void Tick() {}
+	virtual void Tick()
+	{
+	}
 
 	/** Override to down mix input audio to a desired channel count. */
 	virtual uint32 GetDesiredInputChannelCountOverride() const
@@ -89,11 +122,25 @@ public:
 	}
 
 	/** Process the input block of audio. Called on audio thread. */
-	virtual void OnProcessAudio(const FSoundEffectSubmixInputData& InData, FSoundEffectSubmixOutputData& OutData) {};
+	virtual void OnProcessAudio(const FSoundEffectSubmixInputData& InData, FSoundEffectSubmixOutputData& OutData)
+	{
+	}
 
 	/** Allow effects to supply a drylevel. */
 	virtual float GetDryLevel() const { return 0.0f; }
 
 	/** Processes audio in the submix effect. */
 	void ProcessAudio(FSoundEffectSubmixInputData& InData, FSoundEffectSubmixOutputData& OutData);
+
+	friend class USoundEffectPreset;
+
+protected:
+	FSoundEffectSubmix()
+	{
+	}
+
+	/** Called on an audio effect at initialization on main thread before audio processing begins. */
+	virtual void Init(const FSoundEffectSubmixInitData& InInitData)
+	{
+	}
 };

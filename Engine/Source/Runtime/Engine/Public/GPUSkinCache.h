@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 // Copyright (C) Microsoft. All rights reserved.
 
 /*=============================================================================
@@ -85,6 +85,28 @@ struct FGPUSkinBatchElementUserData
 	int32 Section;
 };
 
+struct FCachedGeometry
+{
+	struct Section
+	{
+		FRHIShaderResourceView* PositionBuffer = nullptr;
+		FRHIShaderResourceView* UVsBuffer = nullptr;
+		FRHIShaderResourceView* IndexBuffer = nullptr;
+		uint32 UVsChannelOffset = 0;
+		uint32 UVsChannelCount = 0;
+		uint32 NumPrimitives = 0;
+		uint32 VertexBaseIndex = 0;
+		uint32 IndexBaseIndex = 0;
+		uint32 TotalVertexCount = 0;
+		uint32 TotalIndexCount = 0;
+		uint32 SectionIndex = 0;
+		int32 LODIndex = 0;
+	};
+
+	int32 LODIndex = 0;
+	TArray<Section> Sections;
+};
+
 class FGPUSkinCache
 {
 public:
@@ -104,7 +126,9 @@ public:
 	ENGINE_API FGPUSkinCache(bool bInRequiresMemoryLimit);
 	ENGINE_API ~FGPUSkinCache();
 
-	struct FCachedGeometrySection GetCachedGeometry(FGPUSkinCacheEntry* InOutEntry, uint32 SectionId);
+	ENGINE_API FCachedGeometry GetCachedGeometry(uint32 ComponentId) const;
+	FCachedGeometry::Section GetCachedGeometry(FGPUSkinCacheEntry* InOutEntry, uint32 SectionId);
+	void UpdateSkinWeightBuffer(FGPUSkinCacheEntry* Entry);
 
 	void ProcessEntry(FRHICommandListImmediate& RHICmdList, FGPUBaseSkinVertexFactory* VertexFactory,
 		FGPUSkinPassthroughVertexFactory* TargetVertexFactory, const FSkelMeshRenderSection& BatchElement, FSkeletalMeshObjectGPUSkin* Skin,
@@ -112,7 +136,7 @@ public:
 		const FMatrix& ClothLocalToWorld, float ClothBlendWeight, uint32 RevisionNumber, int32 Section, FGPUSkinCacheEntry*& InOutEntry);
 
 	static void SetVertexStreams(FGPUSkinCacheEntry* Entry, int32 Section, FRHICommandList& RHICmdList,
-		class FShader* Shader, const FGPUSkinPassthroughVertexFactory* VertexFactory,
+		class FRHIVertexShader* ShaderRHI, const FGPUSkinPassthroughVertexFactory* VertexFactory,
 		uint32 BaseVertexIndex, FShaderResourceParameter PreviousStreamBuffer);
 
 	static void GetShaderBindings(
@@ -143,6 +167,8 @@ public:
 
 	static bool IsEntryValid(FGPUSkinCacheEntry* SkinCacheEntry, int32 Section);
 
+	static bool UseIntermediateTangents();
+
 	inline uint64 GetExtraRequiredMemoryAndReset()
 	{
 		uint64 OriginalValue = ExtraRequiredMemory;
@@ -169,6 +195,10 @@ public:
 			if (WithTangents)
 			{
 				Tangents.Initialize(8, NumVertices * 2, PF_R16G16B16A16_SNORM, BUF_Static, TEXT("SkinCacheTangents"));
+				if (FGPUSkinCache::UseIntermediateTangents())
+				{
+					IntermediateTangents.Initialize(8, NumVertices * 2, PF_R16G16B16A16_SNORM, BUF_Static, TEXT("SkinCacheIntermediateTangents"));
+				}
 			}
 		}
 
@@ -181,6 +211,7 @@ public:
 			if (WithTangents)
 			{
 				Tangents.Release();
+				IntermediateTangents.Release();
 			}
 		}
 
@@ -188,7 +219,12 @@ public:
 		{
 			uint64 PositionBufferSize = 4 * 3 * NumVertices * NUM_BUFFERS;
 			uint64 TangentBufferSize = WithTangents ? 2 * 4 * NumVertices : 0;
-			return TangentBufferSize + PositionBufferSize;
+			uint64 IntermediateTangentBufferSize = 0;
+			if (FGPUSkinCache::UseIntermediateTangents())
+			{
+				IntermediateTangentBufferSize = WithTangents ? 2 * 4 * NumVertices : 0;
+			}
+			return TangentBufferSize + IntermediateTangentBufferSize + PositionBufferSize;
 		}
 
 		uint64 GetNumBytes() const
@@ -201,6 +237,11 @@ public:
 			return WithTangents ? &Tangents : nullptr;
 		}
 
+		FRWBuffer* GetIntermediateTangentBuffer()
+		{
+			return WithTangents ? &IntermediateTangents : nullptr;
+		}
+
 		void RemoveAllFromTransitionArray(TArray<FRHIUnorderedAccessView*>& BuffersToTransition);
 
 	private:
@@ -208,6 +249,7 @@ public:
 		FRWBuffer RWBuffers[NUM_BUFFERS];
 
 		FRWBuffer Tangents;
+		FRWBuffer IntermediateTangents;
 		const uint32 NumVertices;
 		const bool WithTangents;
 	};
@@ -254,6 +296,11 @@ public:
 			return Allocation->GetTangentBuffer();
 		}
 
+		FRWBuffer* GetIntermediateTangentBuffer()
+		{
+			return Allocation->GetIntermediateTangentBuffer();
+		}
+
 		void Advance(const FVertexBufferAndSRV& BoneBuffer1, uint32 Revision1, const FVertexBufferAndSRV& BoneBuffer2, uint32 Revision2)
 		{
 			const FVertexBufferAndSRV* InBoneBuffers[2] = { &BoneBuffer1 , &BoneBuffer2 };
@@ -284,7 +331,7 @@ public:
 		const FVertexBufferAndSRV* BoneBuffers[NUM_BUFFERS];
 	};
 
-	ENGINE_API void TransitionAllToReadable(FRHICommandList& RHICmdList);
+	ENGINE_API void TransitionAllToReadable(FRHICommandList& RHICmdList, EResourceTransitionPipeline Pipeline = EResourceTransitionPipeline::EComputeToGfx);
 
 #if RHI_RAYTRACING
 	void AddRayTracingGeometryToUpdate(FRayTracingGeometry* RayTracingGeometry)

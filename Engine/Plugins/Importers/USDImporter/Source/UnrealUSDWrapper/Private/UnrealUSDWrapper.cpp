@@ -1,41 +1,48 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "UnrealUSDWrapper.h"
 
+#include "USDLog.h"
 #include "USDMemory.h"
 
+#include "Internationalization/Regex.h"
 #include "Modules/ModuleManager.h"
+
+#define LOCTEXT_NAMESPACE "UnrealUSDWrapper"
 
 #if USE_USD_SDK
 
 #include "USDIncludesStart.h"
 
-#include "pxr/usd/usd/usdFileFormat.h"
-#include "pxr/usd/usd/common.h"
-#include "pxr/usd/usd/stage.h"
-#include "pxr/base/tf/errorMark.h"
-#include "pxr/base/plug/registry.h"
+#include "pxr/base/gf/rotation.h"
 #include "pxr/base/plug/plugin.h"
-#include "pxr/usd/sdf/schema.h"
-#include "pxr/usd/usd/attribute.h"
-#include "pxr/usd/usd/modelAPI.h"
-#include "pxr/usd/usd/relationship.h"
-#include "pxr/usd/usd/references.h"
-#include "pxr/usd/usd/stageCacheContext.h"
-#include "pxr/usd/usdGeom/modelAPI.h"
-#include "pxr/usd/usdGeom/mesh.h"
-#include "pxr/usd/usdGeom/xformCommonAPI.h"
-#include "pxr/usd/usdGeom/faceSetAPI.h"
-#include "pxr/usd/usdGeom/metrics.h"
-#include "pxr/usd/usdShade/materialBindingAPI.h"
+#include "pxr/base/plug/registry.h"
+#include "pxr/base/tf/diagnosticMgr.h"
+#include "pxr/base/tf/errorMark.h"
 #include "pxr/base/tf/getenv.h"
 #include "pxr/base/tf/setenv.h"
 #include "pxr/usd/ar/defaultResolver.h"
 #include "pxr/usd/ar/defineResolver.h"
-#include "pxr/base/gf/rotation.h"
-#include "pxr/usd/usd/variantSets.h"
-#include "pxr/usd/usd/debugCodes.h"
 #include "pxr/usd/kind/registry.h"
+#include "pxr/usd/sdf/schema.h"
+#include "pxr/usd/usd/attribute.h"
+#include "pxr/usd/usd/common.h"
+#include "pxr/usd/usd/debugCodes.h"
+#include "pxr/usd/usd/modelAPI.h"
+#include "pxr/usd/usd/references.h"
+#include "pxr/usd/usd/relationship.h"
+#include "pxr/usd/usd/stage.h"
+#include "pxr/usd/usd/stageCacheContext.h"
+#include "pxr/usd/usd/usdFileFormat.h"
+#include "pxr/usd/usd/variantSets.h"
+#include "pxr/usd/usdGeom/mesh.h"
+#include "pxr/usd/usdGeom/metrics.h"
+#include "pxr/usd/usdGeom/modelAPI.h"
+#include "pxr/usd/usdGeom/tokens.h"
+#include "pxr/usd/usdGeom/xformCommonAPI.h"
+#include "pxr/usd/usdLux/light.h"
+#include "pxr/usd/usdShade/materialBindingAPI.h"
+#include "pxr/usd/usdUtils/stageCache.h"
 
 #include "USDIncludesEnd.h"
 
@@ -59,9 +66,9 @@ static TUsdStore< UsdGeomXformCache > XFormCache;
 namespace UnrealIdentifiers
 {
 	/**
-	* Identifies the LOD variant set on a primitive which means this primitive has child prims that LOD meshes
-	* named LOD0, LOD1, LOD2, etc
-	*/
+	 * Identifies the LOD variant set on a primitive which means this primitive has child prims that LOD meshes
+	 * named LOD0, LOD1, LOD2, etc
+	 */
 	static const TfToken LOD("LOD");
 
 	static const TfToken AssetPath("unrealAssetPath");
@@ -70,13 +77,10 @@ namespace UnrealIdentifiers
 
 	static const TfToken PropertyPath("unrealPropertyPath");
 
-	static const TfToken ProxyPurpose("proxy");
-
-	static const TfToken GuidePurpose("guide");
-
 	static const TfToken MaterialRelationship("material:binding");
-}
 
+	const TfToken MaterialAssignments = TfToken("unrealMaterials");
+}
 
 void Log(const char* Format, ...)
 {
@@ -251,6 +255,17 @@ template<typename T>
 bool IsHolding(const VtValue& Value)
 {
 	return Value.IsHolding<T>() || Value.IsHolding<VtArray<T>>();
+}
+
+// Only used to make sure we link against UsdLux so that it's available to Python on Linux
+float GetLightIntensity(const pxr::UsdPrim& Prim)
+{
+	pxr::UsdLuxLight UsdLuxLight( Prim );
+
+	float Value;
+	UsdLuxLight.GetIntensityAttr().Get( &Value );
+
+	return Value;
 }
 
 bool FUsdAttribute::AsInt(int64_t& OutVal, const pxr::UsdAttribute& Attribute, int ArrayIndex, double Time)
@@ -439,20 +454,72 @@ int FUsdAttribute::GetArraySize( const pxr::UsdAttribute& Attribute )
 	return Value.IsArrayValued() ? (int)Value.GetArraySize() : -1;
 
 }
-bool IUsdPrim::IsProxyOrGuide( const UsdPrim& Prim )
+
+bool IUsdPrim::IsValidPrimName(const FString& Name, FText& OutReason)
+{
+	if (Name.IsEmpty())
+	{
+		OutReason = LOCTEXT("EmptyStringInvalid", "Empty string is not a valid name!");
+		return false;
+	}
+
+	const FString InvalidCharacters = TEXT("\\W");
+	FRegexPattern RegexPattern( InvalidCharacters );
+	FRegexMatcher RegexMatcher( RegexPattern, Name );
+	if (RegexMatcher.FindNext())
+	{
+		OutReason = LOCTEXT("InvalidCharacter", "Can only use letters, numbers and underscore!");
+		return false;
+	}
+
+	if (Name.Left(1).IsNumeric())
+	{
+		OutReason = LOCTEXT("InvalidFirstCharacter", "First character cannot be a number!");
+		return false;
+	}
+
+	return true;
+}
+
+EUsdPurpose IUsdPrim::GetPurpose( const UsdPrim& Prim, bool bComputed )
 {
 	UsdGeomImageable Geom(Prim);
 	if (Geom)
 	{
-		UsdAttribute PurposeAttr = Geom.GetPurposeAttr();
-
+		// Use compute purpose because it depends on the hierarchy:
+		// "If the purpose of </RootPrim> is set to "render", then the effective purpose
+		// of </RootPrim/ChildPrim> will be "render" even if that prim has a different
+		// authored value for purpose."
 		TfToken Purpose;
-		PurposeAttr.Get(&Purpose);
+		if (bComputed)
+		{
+			Purpose = Geom.ComputePurpose();
+		}
+		else
+		{
+			pxr::UsdAttribute PurposeAttr = Prim.GetAttribute(pxr::UsdGeomTokens->purpose);
 
-		return Purpose == UnrealIdentifiers::ProxyPurpose || Purpose == UnrealIdentifiers::GuidePurpose;
+			pxr::VtValue Value;
+			PurposeAttr.Get(&Value);
+
+			Purpose = Value.Get<pxr::TfToken>();
+		}
+
+		if (Purpose == pxr::UsdGeomTokens->proxy)
+		{
+			return EUsdPurpose::Proxy;
+		}
+		else if (Purpose == pxr::UsdGeomTokens->render)
+		{
+			return EUsdPurpose::Render;
+		}
+		else if (Purpose == pxr::UsdGeomTokens->guide)
+		{
+			return EUsdPurpose::Guide;
+		}
 	}
 
-	return false;
+	return EUsdPurpose::Default;
 }
 
 bool IUsdPrim::HasGeometryData(const UsdPrim& Prim)
@@ -469,7 +536,7 @@ int IUsdPrim::GetNumLODs(const UsdPrim& Prim)
 {
 	FScopedUsdAllocs UsdAllocs;
 
-	// 0 indicates no variant or no lods in variant. 
+	// 0 indicates no variant or no lods in variant.
 	int NumLODs = 0;
 	if (Prim.HasVariantSets())
 	{
@@ -487,7 +554,7 @@ int IUsdPrim::GetNumLODs(const UsdPrim& Prim)
 bool IUsdPrim::IsKindChildOf(const UsdPrim& Prim, const std::string& InBaseKind)
 {
 	TfToken BaseKind(InBaseKind);
-	
+
 	KindRegistry& Registry = KindRegistry::GetInstance();
 
 	TfToken PrimKind( GetKind(Prim) );
@@ -508,11 +575,28 @@ TfToken IUsdPrim::GetKind(const pxr::UsdPrim& Prim)
 	else
 	{
 		// Prim is not a model, read kind directly from metadata
-		static TfToken KindMetaDataToken("kind");
+		const TfToken KindMetaDataToken("kind");
 		Prim.GetMetadata(KindMetaDataToken, &KindType);
 	}
-	
+
 	return KindType;
+}
+
+bool IUsdPrim::SetKind(const pxr::UsdPrim& Prim, const pxr::TfToken& Kind)
+{
+	UsdModelAPI Model(Prim);
+	if (Model)
+	{
+		if (!Model.SetKind(Kind))
+		{
+			const TfToken KindMetaDataToken("kind");
+			return Prim.SetMetadata(KindMetaDataToken, Kind);
+		}
+
+		return true;
+	}
+
+	return false;
 }
 
 pxr::GfMatrix4d IUsdPrim::GetLocalTransform(const pxr::UsdPrim& Prim)
@@ -632,9 +716,9 @@ namespace Internal
 	{
 		TArray< FString > MaterialNames;
 
-		// load each material at the material path; 
+		// load each material at the material path;
 		UsdPrim MaterialPrim = Stage->Load(Path);
-		
+
 		if(MaterialPrim)
 		{
 			// Default to using the prim path name as the path for this material in Unreal
@@ -690,14 +774,11 @@ TTuple< TArray< FString >, TArray< int32 > > IUsdPrim::GetGeometryMaterials(doub
 		return MakeTuple( MaterialNames, FaceMaterialIndices );
 	}
 
-	// If the gprim does not have a material faceSet which represents per-face 
+	// If the gprim does not have a material faceSet which represents per-face
 	// shader assignments, assign the shading engine to the entire gprim.
 	std::vector<UsdGeomSubset> FaceSubsets = UsdShadeMaterialBindingAPI(Prim).GetMaterialBindSubsets();
-	std::vector<UsdGeomFaceSetAPI> FaceSets = UsdGeomFaceSetAPI::GetFaceSets(Prim);
 
-	bool bHasOldStyleFaceSets = UsdShadeMaterial::HasMaterialFaceSet(Prim);
-
-	if (FaceSubsets.empty() && !bHasOldStyleFaceSets && FaceSets.size() == 0)
+	if (FaceSubsets.empty())
 	{
 		return {};
 	}
@@ -737,7 +818,7 @@ TTuple< TArray< FString >, TArray< int32 > > IUsdPrim::GetGeometryMaterials(doub
 			UsdShadeMaterialBindingAPI SubsetBindingAPI(Subset.GetPrim());
 			UsdShadeMaterial BoundMaterial = SubsetBindingAPI.ComputeBoundMaterial();
 
-			// Only transfer the first timeSample or default Indices, if 
+			// Only transfer the first timeSample or default Indices, if
 			// there are no time-samples.
 			VtIntArray Indices;
 			Subset.GetIndicesAttr().Get(&Indices, UsdTimeCode::EarliestTime());
@@ -764,15 +845,6 @@ TTuple< TArray< FString >, TArray< int32 > > IUsdPrim::GetGeometryMaterials(doub
 		}
 	}
 
-	// Import per-face-set shader bindings.
-	if (bHasOldStyleFaceSets)
-	{
-		UsdGeomFaceSetAPI MaterialFaceSet = UsdShadeMaterial::GetMaterialFaceSet(Prim);
-
-		SdfPathVector BindingTargets;
-		// TODO: ...
-	}
-
 	// TODO: ...
 
 /////////////////////////////////////////////
@@ -792,57 +864,8 @@ TTuple< TArray< FString >, TArray< int32 > > IUsdPrim::GetGeometryMaterials(doub
 	// @todo USD/Unreal.  This is probably wrong for multiple face sets.  They don't make a ton of sense for unreal as there can only be one "set" of materials at once and there is no construct in the engine for material sets
 
 	//MaterialNames.Resize(FaceSets)
-	if (FaceSets.size() > 0)
 	{
-		for (int FaceSetIdx = 0; FaceSetIdx < FaceSets.size(); ++FaceSetIdx)
-		{
-			const UsdGeomFaceSetAPI& FaceSet = FaceSets[FaceSetIdx];
-
-			SdfPathVector BindingTargets;
-			FaceSet.GetBindingTargets(&BindingTargets);
-
-
-			UsdStageWeakPtr Stage = Prim.GetStage();
-			for (const SdfPath& Path : BindingTargets)
-			{
-				MaterialNames.Append( Internal::FillMaterialInfo(Path, Stage) );
-			}
-			// Faces must be mutually exclusive
-			if (FaceSet.GetIsPartition())
-			{
-				// Get the list of faces in the face set.  The size of this list determines the number of materials in this set
-				VtIntArray FaceCounts;
-				FaceSet.GetFaceCounts(&FaceCounts, Time);
-
-				// Get the list of global face Indices mapped in this set
-				VtIntArray FaceIndices;
-				FaceSet.GetFaceIndices(&FaceIndices, Time);
-
-				// How far we are into the face Indices list
-				int Offset = 0;
-
-				// Walk each face group in the set
-				for (int FaceCountIdx = 0; FaceCountIdx < FaceCounts.size(); ++FaceCountIdx)
-				{
-					int MaterialIdx = FaceSetIdx * FaceSets.size() + FaceCountIdx;
-
-					// Number of faces with the material index
-					int FaceCount = FaceCounts[FaceCountIdx];
-
-					// Walk each face and map it to the computed material index
-					for (int FaceNum = 0; FaceNum < FaceCount; ++FaceNum)
-					{
-						int Face = FaceIndices[FaceNum + Offset];
-						FaceMaterialIndices[Face] = MaterialIdx;
-					}
-					Offset += FaceCount;
-				}
-			}
-		}
-	}
-	else
-	{
-		// No face sets, find a relationship that defines the material 
+		// No face sets, find a relationship that defines the material
 		UsdRelationship Relationship = Prim.GetRelationship(UnrealIdentifiers::MaterialRelationship);
 		if (Relationship)
 		{
@@ -887,7 +910,7 @@ bool IUsdPrim::SetActiveLODIndex(const pxr::UsdPrim& Prim, int LODIndex)
 			}
 		}
 	}
-		
+
 	return false;
 }
 
@@ -904,7 +927,7 @@ EUsdGeomOrientation IUsdPrim::GetGeometryOrientation(const pxr::UsdGeomMesh& Mes
 	{
 		UsdAttribute Orientation = Mesh.GetOrientationAttr();
 		if(Orientation)
-		{ 
+		{
 			static TfToken RightHanded("rightHanded");
 			static TfToken LeftHanded("leftHanded");
 
@@ -917,16 +940,82 @@ EUsdGeomOrientation IUsdPrim::GetGeometryOrientation(const pxr::UsdGeomMesh& Mes
 
 	return GeomOrientation;
 }
+#endif // USE_USD_SDK
 
+
+
+DEFINE_LOG_CATEGORY( LogUsd );
+
+#if USE_USD_SDK
+class FUsdDiagnosticDelegate : public pxr::TfDiagnosticMgr::Delegate
+{
+public:
+	virtual ~FUsdDiagnosticDelegate() override {};
+	virtual void IssueError(const pxr::TfError& Error) override
+	{
+		FScopedUsdAllocs Allocs;
+
+		std::string Msg = Error.GetErrorCodeAsString();
+		Msg += ": ";
+		Msg += Error.GetCommentary();
+
+		UE_LOG(LogUsd, Error, TEXT("%s"), ANSI_TO_TCHAR( Msg.c_str() ));
+	}
+	virtual void IssueFatalError(const pxr::TfCallContext& Context, const std::string& Msg) override
+	{
+		UE_LOG(LogUsd, Error, TEXT("%s"), ANSI_TO_TCHAR( Msg.c_str() ));
+	}
+	virtual void IssueStatus(const pxr::TfStatus& Status) override
+	{
+		FScopedUsdAllocs Allocs;
+
+		std::string Msg = Status.GetDiagnosticCodeAsString();
+		Msg += ": ";
+		Msg += Status.GetCommentary();
+
+		UE_LOG(LogUsd, Log, TEXT("%s"), ANSI_TO_TCHAR( Msg.c_str() ));
+	}
+	virtual void IssueWarning(const pxr::TfWarning& Warning) override
+	{
+		FScopedUsdAllocs Allocs;
+
+		std::string Msg = Warning.GetDiagnosticCodeAsString();
+		Msg += ": ";
+		Msg += Warning.GetCommentary();
+
+		UE_LOG(LogUsd, Warning, TEXT("%s"), ANSI_TO_TCHAR( Msg.c_str() ));
+	}
+};
+#else
+class FUsdDiagnosticDelegate { };
+#endif // USE_USD_SDK
+
+TUniquePtr<FUsdDiagnosticDelegate> UnrealUSDWrapper::Delegate = nullptr;
+#if USE_USD_SDK
 bool UnrealUSDWrapper::bInitialized = false;
-std::string UnrealUSDWrapper::Errors;
 
-
-void UnrealUSDWrapper::Initialize(const std::vector<std::string>& InPluginDirectories)
+void UnrealUSDWrapper::Initialize( const TArray< FString >& InPluginDirectories )
 {
 	{
-		FScopedUsdAllocs UsdAllocs;
-		PlugRegistry::GetInstance().RegisterPlugins(InPluginDirectories);
+		TArray< FTCHARToUTF8 > ConvertedStrings;
+
+		for ( const FString& PluginDirectory : InPluginDirectories )
+		{
+			ConvertedStrings.Emplace( *PluginDirectory, PluginDirectory.Len() );
+		}
+
+		{
+			FScopedUsdAllocs UsdAllocs;
+
+			std::vector< std::string > UsdPluginDirectories;
+
+			for ( const FTCHARToUTF8& ConvertedString : ConvertedStrings )
+			{
+				UsdPluginDirectories.emplace_back( ConvertedString.Get(), ConvertedString.Length() );
+			}
+
+			PlugRegistry::GetInstance().RegisterPlugins( UsdPluginDirectories );
+		}
 	}
 
 	bInitialized = true;
@@ -934,8 +1023,6 @@ void UnrealUSDWrapper::Initialize(const std::vector<std::string>& InPluginDirect
 
 TUsdStore< pxr::UsdStageRefPtr > UnrealUSDWrapper::OpenUsdStage(const char* Path, const char* Filename)
 {
-	Errors.clear();
-
 	if (!bInitialized)
 	{
 		return {};
@@ -943,28 +1030,14 @@ TUsdStore< pxr::UsdStageRefPtr > UnrealUSDWrapper::OpenUsdStage(const char* Path
 
 	bool bImportedSuccessfully = false;
 
-	TfErrorMark ErrorMark;
-
 	string PathAndFilename = string(Path) + string(Filename);
 
 	bool bIsSupported = UsdStage::IsSupportedFile(PathAndFilename);
-	
+
 	FScopedUsdAllocs UsdAllocs;
 
 	pxr::UsdStageCacheContext UsdStageCacheContext( GetUsdStageCache() );
 	UsdStageRefPtr Stage = UsdStage::Open(PathAndFilename);
-
-	if (!ErrorMark.IsClean())
-	{
-		TfErrorMark::Iterator i;
-		for (i = ErrorMark.GetBegin(); i != ErrorMark.GetEnd(); ++i)
-		{
-			Errors += i->GetErrorCodeAsString();
-			Errors += " ";
-			Errors += i->GetCommentary();
-			Errors += "\n";
-		}
-	}
 
 	return Stage;
 }
@@ -974,17 +1047,43 @@ double UnrealUSDWrapper::GetDefaultTimeCode()
 	return UsdTimeCode::Default().GetValue();
 }
 
-const char* UnrealUSDWrapper::GetErrors()
-{
-	return Errors.length() > 0 ? Errors.c_str() : nullptr;
-}
-
 pxr::UsdStageCache& UnrealUSDWrapper::GetUsdStageCache()
 {
-	static TUsdStore< pxr::UsdStageCache > UsdStageCache;
-	return UsdStageCache.Get();
+	return pxr::UsdUtilsStageCache::Get();
 }
 #endif // USE_USD_SDK
+
+void UnrealUSDWrapper::SetupDiagnosticDelegate()
+{
+#if USE_USD_SDK
+	if (Delegate.IsValid())
+	{
+		UnrealUSDWrapper::ClearDiagnosticDelegate();
+	}
+
+	Delegate = MakeUnique<FUsdDiagnosticDelegate>();
+
+	pxr::TfDiagnosticMgr& DiagMgr = pxr::TfDiagnosticMgr::GetInstance();
+	DiagMgr.AddDelegate(Delegate.Get());
+#endif // USE_USD_SDK
+}
+
+void UnrealUSDWrapper::ClearDiagnosticDelegate()
+{
+#if USE_USD_SDK
+	if (!Delegate.IsValid())
+	{
+		return;
+	}
+
+	pxr::TfDiagnosticMgr& DiagMgr = pxr::TfDiagnosticMgr::GetInstance();
+	DiagMgr.RemoveDelegate(Delegate.Get());
+
+	Delegate = nullptr;
+#endif // USE_USD_SDK
+}
+
+
 
 class FUnrealUSDWrapperModule : public IUnrealUSDWrapperModule
 {
@@ -992,19 +1091,23 @@ public:
 	virtual void StartupModule() override
 	{
 		FUsdMemoryManager::Initialize();
+		UnrealUSDWrapper::SetupDiagnosticDelegate();
 	}
 
 	virtual void ShutdownModule() override
 	{
+		UnrealUSDWrapper::ClearDiagnosticDelegate();
 		FUsdMemoryManager::Shutdown();
 	}
 
-	virtual void Initialize(const std::vector<std::string>& InPluginDirectories) override
+	virtual void Initialize( const TArray< FString >& InPluginDirectories ) override
 	{
 #if USE_USD_SDK
 		UnrealUSDWrapper::Initialize( InPluginDirectories );
-#endif
+#endif // USE_USD_SDK
 	}
 };
 
 IMPLEMENT_MODULE_USD(FUnrealUSDWrapperModule, UnrealUSDWrapper);
+
+#undef LOCTEXT_NAMESPACE

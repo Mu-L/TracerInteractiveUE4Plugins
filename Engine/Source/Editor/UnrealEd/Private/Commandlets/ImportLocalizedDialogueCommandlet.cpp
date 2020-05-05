@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Commandlets/ImportLocalizedDialogueCommandlet.h"
 #include "Modules/ModuleManager.h"
@@ -15,6 +15,7 @@
 #include "Interfaces/ITargetPlatform.h"
 #include "Interfaces/ITargetPlatformManagerModule.h"
 #include "AudioEditorModule.h"
+#include "AudioCompressionSettingsUtils.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogImportLocalizedDialogueCommandlet, Log, All);
 
@@ -513,7 +514,7 @@ USoundWave* UImportLocalizedDialogueCommandlet::ImportSoundWave(const FString& I
 			const TArray<ITargetPlatform*>& Platforms = TPM->GetActiveTargetPlatforms();
 			for (ITargetPlatform* Platform : Platforms)
 			{
-				SoundWave->GetCompressedData(Platform->GetWaveFormat(SoundWave), Platform->GetAudioCompressionSettings());
+				SoundWave->GetCompressedData(Platform->GetWaveFormat(SoundWave), FPlatformCompressionUtilities::GetCookOverrides(*Platform->IniPlatformName()));
 			}
 		}
 	}

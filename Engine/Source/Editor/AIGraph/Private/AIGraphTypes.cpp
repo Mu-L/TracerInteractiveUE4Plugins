@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "AIGraphTypes.h"
 #include "UObject/Object.h"
@@ -12,6 +12,7 @@
 #include "Engine/Blueprint.h"
 #include "AssetData.h"
 #include "Editor.h"
+#include "ObjectEditorUtils.h"
 #include "Logging/MessageLog.h"
 #include "ARFilter.h"
 #include "AssetRegistryModule.h"
@@ -62,10 +63,10 @@ FString FGraphNodeClassData::ToString() const
 			return ClassDesc.LeftChop(2);
 		}
 
-		const int32 ShortNameIdx = ClassDesc.Find(TEXT("_"));
+		const int32 ShortNameIdx = ClassDesc.Find(TEXT("_"), ESearchCase::CaseSensitive);
 		if (ShortNameIdx != INDEX_NONE)
 		{
-			ClassDesc = ClassDesc.Mid(ShortNameIdx + 1);
+			ClassDesc.MidInline(ShortNameIdx + 1, MAX_int32, false);
 		}
 
 		return ClassDesc;
@@ -86,7 +87,7 @@ FString FGraphNodeClassData::GetDisplayName() const
 
 FText FGraphNodeClassData::GetCategory() const
 {
-	return Class.IsValid() ? Class->GetMetaDataText(TEXT("Category"), TEXT("UObjectCategory"), Class->GetFullGroupName(false)) : Category;
+	return Class.IsValid() ? FObjectEditorUtils::GetCategoryText(Class.Get()) : Category;
 }
 
 bool FGraphNodeClassData::IsAbstract() const
@@ -304,7 +305,7 @@ void FGraphNodeClassHelper::OnAssetRemoved(const struct FAssetData& AssetData)
 	if (AssetData.GetTagValue(FBlueprintTags::GeneratedClassPath, AssetClassName))
 	{
 		ConstructorHelpers::StripObjectClass(AssetClassName);
-		AssetClassName = FPackageName::ObjectPathToObjectName(*AssetClassName);
+		AssetClassName = FPackageName::ObjectPathToObjectName(AssetClassName);
 
 		TSharedPtr<FGraphNodeClassNode> Node = FindBaseClassNode(RootNode, AssetClassName);
 		if (Node.IsValid() && Node->ParentNode.IsValid())

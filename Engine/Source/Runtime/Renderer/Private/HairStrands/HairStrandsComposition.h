@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	HairStrandsComposition.h: Hair strands pixel composition implementation.
@@ -9,7 +9,7 @@
 #include "CoreMinimal.h"
 #include "RendererInterface.h"
 
-void RenderHairComposeSubPixel(
+void RenderHairComposition(
 	FRHICommandListImmediate& RHICmdList, 
 	const TArray<FViewInfo>& Views,
 	const struct FHairStrandsDatas* HairDatas);

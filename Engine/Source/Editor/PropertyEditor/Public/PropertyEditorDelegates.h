@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -14,10 +14,10 @@ struct FPropertyAndParent
 	FPropertyAndParent(const TSharedRef<IPropertyHandle>& InPropertyHandle, const TArray< TWeakObjectPtr< UObject > >& InObjects);
 
 	/** The property always exists */
-	const UProperty& Property;
+	const FProperty& Property;
 
 	/** The entire chain of parent properties, all the way to the property root. ParentProperties[0] is the immediate parent.*/
-	TArray< const UProperty* > ParentProperties;
+	TArray< const FProperty* > ParentProperties;
 
 	/** The objects for these properties */
 	TArray< TWeakObjectPtr< UObject > > Objects;
@@ -45,16 +45,16 @@ DECLARE_DELEGATE_RetVal( TSharedRef<class IDetailCustomization>, FOnGetDetailCus
 DECLARE_DELEGATE_RetVal( TSharedRef<class IPropertyTypeCustomization>, FOnGetPropertyTypeCustomizationInstance );
 
 /** Notification for when a property view changes */
-DECLARE_DELEGATE_TwoParams( FOnObjectArrayChanged, const FString&, const TArray< TWeakObjectPtr< UObject > >& );
+DECLARE_DELEGATE_TwoParams( FOnObjectArrayChanged, const FString&, const TArray<UObject*>& );
 
 /** Notification for when displayed properties changes (for instance, because the user has filtered some properties */
 DECLARE_DELEGATE( FOnDisplayedPropertiesChanged );
 
 /** Notification for when a property selection changes. */
-DECLARE_DELEGATE_OneParam( FOnPropertySelectionChanged, UProperty* )
+DECLARE_DELEGATE_OneParam( FOnPropertySelectionChanged, FProperty* )
 
 /** Notification for when a property is double clicked by the user*/
-DECLARE_DELEGATE_OneParam( FOnPropertyDoubleClicked, UProperty* )
+DECLARE_DELEGATE_OneParam( FOnPropertyDoubleClicked, FProperty* )
 
 /** Notification for when a property is clicked by the user*/
 DECLARE_DELEGATE_OneParam( FOnPropertyClicked, const TSharedPtr< class FPropertyPath >& )

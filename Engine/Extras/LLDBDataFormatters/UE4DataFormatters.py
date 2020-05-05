@@ -1,4 +1,4 @@
-# Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+# Copyright Epic Games, Inc. All Rights Reserved.
 
 # /*=============================================================================
 #	LLDB Data Formatters for Unreal Types
@@ -81,13 +81,21 @@ def UE4FMinimalNameSummaryProvider(valobj,dict):
         FNameRef = valobj.CreateValueFromExpression(str(IndexVal), Expr)
         assert FNameRef != None
         Val = FNameRef.GetSummary()
-        if IndexVal == 0:
+        if IndexVal != 0:
             return 'name=' + Val + '_' + str(IndexVal-1)
         else:
             return 'name=' + Val
 
 def UE4UObjectBaseSummaryProvider(valobj,dict):
     Name = valobj.GetChildMemberWithName('Name')
+    return Name.GetSummary()
+
+def UE4FFieldClassSummaryProvider(valobj,dict):
+    Name = valobj.GetChildMemberWithName('Name')
+    return Name.GetSummary()
+
+def UE4FFieldSummaryProvider(valobj,dict):
+    Name = valobj.GetChildMemberWithName('NamePrivate')
     return Name.GetSummary()
 
 class UE4TWeakObjectPtrSynthProvider:
@@ -652,6 +660,8 @@ def __lldb_init_module(debugger,dict):
     debugger.HandleCommand('type summary add -F UE4DataFormatters.UE4UObjectBaseSummaryProvider -e UObject -w UE4DataFormatters')
     debugger.HandleCommand('type summary add -F UE4DataFormatters.UE4UObjectBaseSummaryProvider -e UObjectBase -w UE4DataFormatters')
     debugger.HandleCommand('type summary add -F UE4DataFormatters.UE4UObjectBaseSummaryProvider -e UObjectBaseUtility -w UE4DataFormatters')
+    debugger.HandleCommand('type summary add -F UE4DataFormatters.UE4FFieldClassSummaryProvider -e FFieldClass -w UE4DataFormatters')
+    debugger.HandleCommand('type summary add -F UE4DataFormatters.UE4FFieldSummaryProvider -e FField -w UE4DataFormatters')
     debugger.HandleCommand('type summary add -F UE4DataFormatters.UE4FWeakObjectPtrSummaryProvider -e FWeakObjectPtr -w UE4DataFormatters')
     debugger.HandleCommand('type synthetic add -l UE4DataFormatters.UE4TWeakObjectPtrSynthProvider -x "TWeakObjectPtr<.+>$" -w UE4DataFormatters')
     debugger.HandleCommand('type synthetic add -l UE4DataFormatters.UE4TWeakObjectPtrSynthProvider -x "TAutoWeakObjectPtr<.+>$" -w UE4DataFormatters')

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -141,34 +141,34 @@ public:
 	static FString GetDDCKeyString(const FGuid& StateId);
 
 	/** Loads the platform data from DDC */
-	bool LoadFromDDC(const FGuid& StateId);
+	bool LoadFromDDC(const FGuid& StateId, UObject* Component);
 
 	/** Saves the compressed platform data to the DDC */
-	void SaveToDDC(const FGuid& StateId);
+	void SaveToDDC(const FGuid& StateId, UObject* Component);
 
 	/* Serializer */
 	friend FArchive& operator<<(FArchive& Ar, FLandscapeComponentDerivedData& Data);
 };
 
-/* Used to uniquely reference a landscape vertex in a component, and generate a key suitable for a TMap. */
+/* Used to uniquely reference a landscape vertex in a component. */
 struct FLandscapeVertexRef
 {
 	FLandscapeVertexRef(int16 InX, int16 InY, int8 InSubX, int8 InSubY)
-	: X(InX)
-	, Y(InY)
-	, SubX(InSubX)
-	, SubY(InSubY)
+		: X(InX)
+		, Y(InY)
+		, SubX(InSubX)
+		, SubY(InSubY)
 	{}
-	int16 X;
-	int16 Y;
-	int8 SubX;
-	int8 SubY;
 
-	uint64 MakeKey() const
+	uint32 X : 8;
+	uint32 Y : 8;
+	uint32 SubX : 8;
+	uint32 SubY : 8;
+
+	/** Helper to provide a standard ordering for vertex arrays. */
+	static int32 GetVertexIndex(FLandscapeVertexRef Vert, int32 SubsectionCount, int32 SubsectionVerts)
 	{
-		// this is very bad for TMap
-		//return (uint64)X << 32 | (uint64)Y << 16 | (uint64)SubX << 8 | (uint64)SubY;
-		return HashCombine((uint32(X) << 8) | uint32(SubY), (uint32(SubX) << 24) | uint32(Y));
+		return (Vert.SubY * SubsectionVerts + Vert.Y) * SubsectionVerts * SubsectionCount + Vert.SubX * SubsectionVerts + Vert.X;
 	}
 };
 
@@ -205,6 +205,14 @@ struct FWeightmapLayerAllocationInfo
 	FName GetLayerName() const;
 
 	uint32 GetHash() const;
+
+	void Free()
+	{
+		WeightmapTextureChannel = 255;
+		WeightmapTextureIndex = 255;
+	}
+
+	bool IsAllocated() const { return (WeightmapTextureChannel != 255 && WeightmapTextureIndex != 255); }
 };
 
 struct FLandscapeComponentGrassData
@@ -333,9 +341,9 @@ enum ELandscapeLayerUpdateMode : uint32
 	Update_All_Editing = Update_Weightmap_Editing | Update_Heightmap_Editing,
 	Update_All_Editing_NoCollision = Update_Weightmap_Editing_NoCollision | Update_Heightmap_Editing_NoCollision,
 	// In cases where we couldn't update the clients right away this flag will be set in RegenerateLayersContent
-	Update_Client_Deferred = 1 << 4,
+	Update_Client_Deferred = 1 << 6,
 	// Update landscape component clients while editing
-	Update_Client_Editing = 1 << 5
+	Update_Client_Editing = 1 << 7
 };
 
 static const uint32 DefaultSplineHash = 0xFFFFFFFF;
@@ -592,7 +600,7 @@ public:
 	virtual void BeginCacheForCookedPlatformData(const ITargetPlatform* TargetPlatform) override;
 	virtual void PostLoad() override;
 	virtual void PostEditUndo() override;
-	virtual void PreEditChange(UProperty* PropertyThatWillChange) override;
+	virtual void PreEditChange(FProperty* PropertyThatWillChange) override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	//~ End UObject Interface
 
@@ -743,7 +751,7 @@ public:
 	LANDSCAPE_API float EditorGetPaintLayerWeightByNameAtLocation(const FVector& InLocation, const FName InPaintLayerName);
 		
 	/** Get the landscape actor associated with this component. */
-	ALandscape* GetLandscapeActor() const;
+	LANDSCAPE_API ALandscape* GetLandscapeActor() const;
 
 	/** Get the level in which the owning actor resides */
 	ULevel* GetLevel() const;
@@ -757,10 +765,17 @@ public:
 	LANDSCAPE_API ALandscapeProxy* GetLandscapeProxy() const;
 
 	/** @return Component section base as FIntPoint */
-	LANDSCAPE_API FIntPoint GetSectionBase() const; 
+	LANDSCAPE_API FIntPoint GetSectionBase() const
+	{
+		return FIntPoint(SectionBaseX, SectionBaseY);
+	}
 
 	/** @param InSectionBase new section base for a component */
-	LANDSCAPE_API void SetSectionBase(FIntPoint InSectionBase);
+	LANDSCAPE_API void SetSectionBase(FIntPoint InSectionBase)
+	{
+		SectionBaseX = InSectionBase.X;
+		SectionBaseY = InSectionBase.Y;
+	}
 
 	/** @todo document */
 	const FGuid& GetLightingGuid() const
@@ -897,11 +912,14 @@ public:
 	 */
 	LANDSCAPE_API void ReallocateWeightmaps(FLandscapeEditDataInterface* DataInterface = nullptr, bool InCanUseEditingWeightmap = true, bool InSaveToTransactionBuffer = true, bool InInitPlatformDataAsync = false, bool InForceReallocate = false, ALandscapeProxy* InTargetProxy = nullptr, TArray<UTexture2D*>* OutNewCreatedTextures = nullptr);
 
-	/** Returns the actor's LandscapeMaterial, or the Component's OverrideLandscapeMaterial if set */
+	/** Returns the component's LandscapeMaterial, or the Component's OverrideLandscapeMaterial if set */
 	LANDSCAPE_API UMaterialInterface* GetLandscapeMaterial(int8 InLODIndex = INDEX_NONE) const;
 
-	/** Returns the actor's LandscapeHoleMaterial, or the Component's OverrideLandscapeHoleMaterial if set */
+	/** Returns the components's LandscapeHoleMaterial, or the Component's OverrideLandscapeHoleMaterial if set */
 	LANDSCAPE_API UMaterialInterface* GetLandscapeHoleMaterial() const;
+
+	/** Returns true if the component has a valid LandscapeHoleMaterial */
+	LANDSCAPE_API bool IsLandscapeHoleMaterialValid() const;
 
 	/** Returns true if this component has visibility painted */
 	LANDSCAPE_API bool ComponentHasVisibilityPainted() const;
@@ -930,13 +948,16 @@ public:
 	LANDSCAPE_API void InitWeightmapData(TArray<ULandscapeLayerInfoObject*>& LayerInfos, TArray<TArray<uint8> >& Weights);
 
 	/** @todo document */
-	LANDSCAPE_API float GetLayerWeightAtLocation( const FVector& InLocation, ULandscapeLayerInfoObject* LayerInfo, TArray<uint8>* LayerCache=NULL );
+	LANDSCAPE_API float GetLayerWeightAtLocation( const FVector& InLocation, ULandscapeLayerInfoObject* LayerInfo, TArray<uint8>* LayerCache = NULL, bool bUseEditingWeightmap = false);
 
 	/** Extends passed region with this component section size */
 	LANDSCAPE_API void GetComponentExtent(int32& MinX, int32& MinY, int32& MaxX, int32& MaxY) const;
 
 	/** Updates navigation properties to match landscape's master switch */
 	void UpdateNavigationRelevance();
+
+	/** Updates the reject navmesh underneath flag in the collision component */
+	void UpdateRejectNavmeshUnderneath();
 	
 	/** Updates the values of component-level properties exposed by the Landscape Actor */
 	LANDSCAPE_API void UpdatedSharedPropertiesFromActor();
@@ -963,7 +984,7 @@ protected:
 	void UpdateCollisionHeightBuffer(int32 InComponentX1, int32 InComponentY1, int32 InComponentX2, int32 InComponentY2, int32 InCollisionMipLevel, int32 InHeightmapSizeU, int32 InHeightmapSizeV,
 		const FColor* const InHeightmapTextureMipData, uint16* CollisionHeightData, uint16* GrassHeightData,
 		const FColor* const InXYOffsetTextureMipData, uint16* CollisionXYOffsetData);
-	void UpdateDominantLayerBuffer(int32 InComponentX1, int32 InComponentY1, int32 InComponentX2, int32 InComponentY2, int32 InCollisionMipLevel, int32 InWeightmapSizeU, int32 InDataLayerIdx, const TArray<uint8*>& InCollisionDataPtrs, uint8* DominantLayerData);
+	void UpdateDominantLayerBuffer(int32 InComponentX1, int32 InComponentY1, int32 InComponentX2, int32 InComponentY2, int32 InCollisionMipLevel, int32 InWeightmapSizeU, int32 InDataLayerIdx, const TArray<uint8*>& InCollisionDataPtrs, const TArray<ULandscapeLayerInfoObject*>& InLayerInfos, uint8* DominantLayerData);
 #endif
 
 	/** Whether the component type supports static lighting. */

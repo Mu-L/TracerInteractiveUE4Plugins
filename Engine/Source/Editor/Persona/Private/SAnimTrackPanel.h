@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #pragma once
@@ -89,12 +89,6 @@ public:
 
 	void Construct(const FArguments& InArgs);
 
-	// SWidget interface
-	virtual FReply OnMouseWheel( const FGeometry& MyGeometry, const FPointerEvent& MouseEvent ) override;
-	virtual FReply OnMouseButtonDown( const FGeometry& MyGeometry, const FPointerEvent& MouseEvent ) override;
-	virtual FReply OnMouseButtonUp( const FGeometry& MyGeometry, const FPointerEvent& MouseEvent ) override;
-	virtual FReply OnMouseMove( const FGeometry& MyGeometry, const FPointerEvent& MouseEvent ) override;
-
 	void PanInputViewRange(int32 ScreenDelta, FVector2D ScreenViewSize);
 
 	virtual float GetSequenceLength() const {return 0.0f;}
@@ -116,8 +110,4 @@ protected:
 
 	/** Controls the width of the tracks column */
 	float WidgetWidth;
-
-	/** If we are currently panning the panel*/
-	bool bPanning;
-	float PanningDistance;
 };

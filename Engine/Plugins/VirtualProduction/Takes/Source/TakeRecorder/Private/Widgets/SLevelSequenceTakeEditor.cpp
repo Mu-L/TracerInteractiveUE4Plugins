@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Widgets/SLevelSequenceTakeEditor.h"
 #include "Widgets/TakeRecorderWidgetConstants.h"
@@ -735,7 +735,7 @@ class FRecorderSourceObjectCustomization : public IDetailCustomization
 			UClass* BaseClass = DetailBuilder.GetBaseClass();
 			while (BaseClass)
 			{
-				for (UProperty* Property : TFieldRange<UProperty>(BaseClass, EFieldIteratorFlags::ExcludeSuper))
+				for (FProperty* Property : TFieldRange<FProperty>(BaseClass, EFieldIteratorFlags::ExcludeSuper))
 				{
 					CategoryBuilder.AddProperty(Property->GetFName(), BaseClass);
 				}
@@ -772,17 +772,64 @@ class FRecorderSourceObjectCustomization : public IDetailCustomization
 };
 
 
-void SLevelSequenceTakeEditor::UpdateDetails()
+void SLevelSequenceTakeEditor::AddDetails(const TPair<const UClass*, TArray<UObject*> >& Pair, TArray<FObjectKey>& PreviousClasses)
 {
 	FPropertyEditorModule& PropertyEditorModule = FModuleManager::Get().LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 	FDetailsViewArgs DetailsViewArgs(false, false, false, FDetailsViewArgs::HideNameArea, true);
 	DetailsViewArgs.bShowScrollBar = false;
 
+	PreviousClasses.Remove(Pair.Key);
+
+	TSharedPtr<IDetailsView> ExistingDetails = ClassToDetailsView.FindRef(Pair.Key);
+	if (ExistingDetails.IsValid())
+	{
+		ExistingDetails->SetObjects(Pair.Value);
+	}
+	else
+	{
+		TSharedRef<IDetailsView> Details = PropertyEditorModule.CreateDetailView(DetailsViewArgs);
+
+		// Register the custom property layout for all object types to rename the category to the object type
+		// @note: this is registered as a base for all objects on the details panel that
+		// overrides the category name for *all* properties in the object. This makes property categories irrelevant for recorder sources,
+		// And may also interfere with any other detail customizations for sources as a whole if any are added in future (property type customizations will still work fine)
+		// We may want to change this in future but it seems like the neatest way to make top level categories have helpful names.
+		Details->RegisterInstancedCustomPropertyLayout(UTakeRecorderSource::StaticClass(), FOnGetDetailCustomizationInstance::CreateLambda(&MakeShared<FRecorderSourceObjectCustomization>));
+
+		Details->RegisterInstancedCustomPropertyTypeLayout(FName(TEXT("ActorRecorderPropertyMap")), FOnGetPropertyTypeCustomizationInstance::CreateLambda(&MakeShared<FRecorderPropertyMapCustomization >));
+		Details->RegisterInstancedCustomPropertyTypeLayout(FName(TEXT("ActorRecordedProperty")), FOnGetPropertyTypeCustomizationInstance::CreateLambda(&MakeShared<FRecordedPropertyCustomization >));
+		Details->SetObjects(Pair.Value);
+
+		Details->SetEnabled(LevelSequenceAttribute.IsSet() && LevelSequenceAttribute.Get()->FindMetaData<UTakeMetaData>() ? !LevelSequenceAttribute.Get()->FindMetaData<UTakeMetaData>()->Recorded() : true);
+
+		DetailsBox->AddSlot()
+			[
+				Details
+			];
+
+		ClassToDetailsView.Add(Pair.Key, Details);
+	}
+}
+
+void SLevelSequenceTakeEditor::UpdateDetails()
+{
+	TMap<const UClass*, TArray<UObject*>> ExternalClassToSources;
+
+	for (TWeakObjectPtr<> WeakExternalObj : ExternalSettingsObjects)
+	{
+		UObject* Object = WeakExternalObj.Get();
+		if (Object)
+		{
+			ExternalClassToSources.FindOrAdd(Object->GetClass()).Add(Object);
+		}
+	}
+
+	TMap<const UClass*, TArray<UObject*>> ClassToSources;
+
 	TArray<UTakeRecorderSource*> SelectedSources;
 	SourcesWidget->GetSelectedSources(SelectedSources);
 
 	// Create 1 details panel per source class type
-	TSortedMap<const UClass*, TArray<UObject*>> ClassToSources;
 	for (UTakeRecorderSource* Source : SelectedSources)
 	{
 		ClassToSources.FindOrAdd(Source->GetClass()).Add(Source);
@@ -796,53 +843,32 @@ void SLevelSequenceTakeEditor::UpdateDetails()
 		}
 	}
 
-	for (TWeakObjectPtr<> WeakExternalObj : ExternalSettingsObjects)
-	{
-		UObject* Object = WeakExternalObj.Get();
-		if (Object)
-		{
-			ClassToSources.FindOrAdd(Object->GetClass()).Add(Object);
-		}
-	}
-
 	TArray<FObjectKey> PreviousClasses;
 	ClassToDetailsView.GenerateKeyArray(PreviousClasses);
 
-	for (auto& Pair : ClassToSources)
+	// Clear all existing details views if there are external settings objects, so that they can be displayed last
+	if (ExternalSettingsObjects.Num())
 	{
-		PreviousClasses.Remove(Pair.Key);
-
-		TSharedPtr<IDetailsView> ExistingDetails = ClassToDetailsView.FindRef(Pair.Key);
-		if (ExistingDetails.IsValid())
+		for (FObjectKey StaleClass : PreviousClasses)
 		{
-			ExistingDetails->SetObjects(Pair.Value);
+			TSharedPtr<IDetailsView> Details = ClassToDetailsView.FindRef(StaleClass);
+			DetailsBox->RemoveSlot(Details.ToSharedRef());
+			ClassToDetailsView.Remove(StaleClass);
 		}
-		else
-		{
-			TSharedRef<IDetailsView> Details = PropertyEditorModule.CreateDetailView(DetailsViewArgs);
 
-			// Register the custom property layout for all object types to rename the category to the object type
-			// @note: this is registered as a base for all objects on the details panel that
-			// overrides the category name for *all* properties in the object. This makes property categories irrelevant for recorder sources,
-			// And may also interfere with any other detail customizations for sources as a whole if any are added in future (property type customizations will still work fine)
-			// We may want to change this in future but it seems like the neatest way to make top level categories have helpful names.
-			Details->RegisterInstancedCustomPropertyLayout(UTakeRecorderSource::StaticClass(), FOnGetDetailCustomizationInstance::CreateLambda(&MakeShared<FRecorderSourceObjectCustomization>));
-
-			Details->RegisterInstancedCustomPropertyTypeLayout(FName(TEXT("ActorRecorderPropertyMap")), FOnGetPropertyTypeCustomizationInstance::CreateLambda(&MakeShared<FRecorderPropertyMapCustomization >));
-			Details->RegisterInstancedCustomPropertyTypeLayout(FName(TEXT("ActorRecordedProperty")), FOnGetPropertyTypeCustomizationInstance::CreateLambda(&MakeShared<FRecordedPropertyCustomization >));
-			Details->SetObjects(Pair.Value);
-
-			Details->SetEnabled( LevelSequenceAttribute.IsSet() && LevelSequenceAttribute.Get()->FindMetaData<UTakeMetaData>() ? !LevelSequenceAttribute.Get()->FindMetaData<UTakeMetaData>()->Recorded() : true );
-
-			DetailsBox->AddSlot()
-			[
-				Details
-			];
-
-			ClassToDetailsView.Add(Pair.Key, Details);
-		}
+		PreviousClasses.Empty();
 	}
 
+	for (auto& Pair : ClassToSources)
+	{
+		AddDetails(Pair, PreviousClasses);
+	}
+
+	for (auto& Pair : ExternalClassToSources)
+	{
+		AddDetails(Pair, PreviousClasses);
+	}
+	
 	for (FObjectKey StaleClass : PreviousClasses)
 	{
 		TSharedPtr<IDetailsView> Details = ClassToDetailsView.FindRef(StaleClass);

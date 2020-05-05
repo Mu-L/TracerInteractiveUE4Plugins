@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	ShaderParameterMacros.h: Macros to builds shader parameter structures and
@@ -137,6 +137,11 @@ private:
 	friend class TUniformBuffer;
 };
 
+enum class ERenderTargetMsaaPlane : uint8
+{
+	Unresolved,
+	Resolved
+};
 
 /** Render graph information about how to bind a render target. */
 struct alignas(SHADER_PARAMETER_STRUCT_ALIGNMENT) FRenderTargetBinding
@@ -150,10 +155,12 @@ struct alignas(SHADER_PARAMETER_STRUCT_ALIGNMENT) FRenderTargetBinding
 	 *
 	 * Notes: Load and store action are on purpose without default values, to force the user to not forget one of these.
 	 */
-	FRenderTargetBinding(FRDGTexture* InTexture, ERenderTargetLoadAction InLoadAction, uint8 InMipIndex = 0)
+	FRenderTargetBinding(FRDGTexture* InTexture, ERenderTargetLoadAction InLoadAction, uint8 InMipIndex = 0, int32 InArraySlice = -1, ERenderTargetMsaaPlane InMsaaPlane = ERenderTargetMsaaPlane::Unresolved)
 		: Texture(InTexture)
 		, LoadAction(InLoadAction)
+		, MsaaPlane(InMsaaPlane)
 		, MipIndex(InMipIndex)
+		, ArraySlice(InArraySlice)
 	{
 		check(Validate());
 	}
@@ -170,6 +177,14 @@ struct alignas(SHADER_PARAMETER_STRUCT_ALIGNMENT) FRenderTargetBinding
 	{
 		return MipIndex;
 	}
+	FORCEINLINE int32 GetArraySlice() const
+	{
+		return ArraySlice;
+	}
+	FORCEINLINE ERenderTargetMsaaPlane GetMsaaPlane() const
+	{
+		return MsaaPlane;
+	}
 
 private:
 	/** All parameters required to bind a render target deferred. This are purposefully private to
@@ -177,7 +192,9 @@ private:
 	 */
 	TAlignedShaderParameterPtr<FRDGTexture*> Texture;
 	ERenderTargetLoadAction		LoadAction		= ERenderTargetLoadAction::ENoAction;
+	ERenderTargetMsaaPlane		MsaaPlane		= ERenderTargetMsaaPlane::Unresolved;
 	uint8						MipIndex		= 0;
+	int32						ArraySlice		= -1;
 
 	RENDERCORE_API bool Validate() const;
 };
@@ -198,10 +215,12 @@ struct alignas(SHADER_PARAMETER_STRUCT_ALIGNMENT) FDepthStencilBinding
 		FRDGTexture* InTexture,
 		ERenderTargetLoadAction InDepthLoadAction,
 		ERenderTargetLoadAction InStencilLoadAction,
-		FExclusiveDepthStencil InDepthStencilAccess)
+		FExclusiveDepthStencil InDepthStencilAccess,
+		ERenderTargetMsaaPlane InMsaaPlane = ERenderTargetMsaaPlane::Unresolved)
 		: Texture(InTexture)
 		, DepthLoadAction(InDepthLoadAction)
 		, StencilLoadAction(InStencilLoadAction)
+		, MsaaPlane(InMsaaPlane)
 		, DepthStencilAccess(InDepthStencilAccess)
 	{
 		check(Validate());
@@ -210,9 +229,11 @@ struct alignas(SHADER_PARAMETER_STRUCT_ALIGNMENT) FDepthStencilBinding
 	FORCEINLINE FDepthStencilBinding(
 		FRDGTexture* InTexture,
 		ERenderTargetLoadAction InDepthLoadAction,
-		FExclusiveDepthStencil InDepthStencilAccess)
+		FExclusiveDepthStencil InDepthStencilAccess,
+		ERenderTargetMsaaPlane InMsaaPlane = ERenderTargetMsaaPlane::Unresolved)
 		: Texture(InTexture)
 		, DepthLoadAction(InDepthLoadAction)
+		, MsaaPlane(InMsaaPlane)
 		, DepthStencilAccess(InDepthStencilAccess)
 	{
 		check(Validate());
@@ -234,6 +255,10 @@ struct alignas(SHADER_PARAMETER_STRUCT_ALIGNMENT) FDepthStencilBinding
 	{
 		return DepthStencilAccess;
 	}
+	FORCEINLINE ERenderTargetMsaaPlane GetMsaaPlane() const
+	{
+		return MsaaPlane;
+	}
 
 private:
 	/** 
@@ -243,6 +268,7 @@ private:
 	TAlignedShaderParameterPtr<FRDGTexture*> Texture = nullptr;
 	ERenderTargetLoadAction		DepthLoadAction		= ERenderTargetLoadAction::ENoAction;
 	ERenderTargetLoadAction		StencilLoadAction	= ERenderTargetLoadAction::ENoAction;
+	ERenderTargetMsaaPlane		MsaaPlane			= ERenderTargetMsaaPlane::Unresolved;
 	FExclusiveDepthStencil		DepthStencilAccess	= FExclusiveDepthStencil::DepthNop_StencilNop;
 
 	RENDERCORE_API bool Validate() const;
@@ -649,26 +675,26 @@ struct TShaderParameterStructTypeInfo<StructType[InNumElements]>
 	static const FShaderParametersMetadata* GetStructMetadata() { return StructType::FTypeInfo::GetStructMetadata(); }
 };
 
+#define INTERNAL_BEGIN_UNIFORM_BUFFER_STRUCT \
+	static FShaderParametersMetadata StaticStructMetadata;
 
-#define INTERNAL_BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT \
-	static FShaderParametersMetadata StaticStructMetadata; \
-
-#define INTERNAL_GLOBAL_SHADER_PARAMETER_GET_STRUCT_METADATA(StructTypeName) \
+#define INTERNAL_UNIFORM_BUFFER_STRUCT_GET_STRUCT_METADATA(StructTypeName) \
 	return &StructTypeName::StaticStructMetadata;
 
-#define INTERNAL_LOCAL_SHADER_PARAMETER_GET_STRUCT_METADATA(StructTypeName) \
+#define INTERNAL_SHADER_PARAMETER_GET_STRUCT_METADATA(StructTypeName) \
 	static FShaderParametersMetadata StaticStructMetadata(\
 		FShaderParametersMetadata::EUseCase::ShaderParameterStruct, \
-		FName(TEXT(#StructTypeName)), \
 		TEXT(#StructTypeName), \
+		TEXT(#StructTypeName), \
+		nullptr, \
 		nullptr, \
 		sizeof(StructTypeName), \
 		StructTypeName::zzGetMembers()); \
 	return &StaticStructMetadata;
 
-#define INTERNAL_LOCAL_SHADER_PARAMETER_CREATE_UNIFORM_BUFFER return nullptr;
+#define INTERNAL_SHADER_PARAMETER_STRUCT_CREATE_UNIFORM_BUFFER return nullptr;
 
-#define INTERNAL_GLOBAL_SHADER_PARAMETER_CREATE_UNIFORM_BUFFER return RHICreateUniformBuffer(&InContents, StaticStructMetadata.GetLayout(), InUsage);
+#define INTERNAL_UNIFORM_BUFFER_STRUCT_CREATE_UNIFORM_BUFFER return RHICreateUniformBuffer(&InContents, StaticStructMetadata.GetLayout(), InUsage);
 
 /** Begins a uniform buffer struct declaration. */
 #define INTERNAL_SHADER_PARAMETER_STRUCT_BEGIN(StructTypeName,PrefixKeywords,ConstructorSuffix,GetStructMetadataScope,CreateUniformBufferImpl) \
@@ -735,6 +761,10 @@ struct TShaderParameterStructTypeInfo<StructType[InNumElements]>
 extern RENDERCORE_API FShaderParametersMetadata* FindUniformBufferStructByName(const TCHAR* StructName);
 extern RENDERCORE_API FShaderParametersMetadata* FindUniformBufferStructByFName(FName StructName);
 
+/** Finds the FShaderParameterMetadata corresponding to the given uniform buffer layout hash, or null if not found. */
+extern RENDERCORE_API FShaderParametersMetadata* FindUniformBufferStructByLayoutHash(uint32 Hash);
+
+extern RENDERCORE_API FShaderParametersMetadata* FindUniformBufferStructByShaderVariableName(const FHashedName& Name);
 
 /** Begins & ends a shader parameter structure.
  *
@@ -743,7 +773,7 @@ extern RENDERCORE_API FShaderParametersMetadata* FindUniformBufferStructByFName(
  *	END_SHADER_PARAMETER_STRUCT()
  */
 #define BEGIN_SHADER_PARAMETER_STRUCT(StructTypeName, PrefixKeywords) \
-	INTERNAL_SHADER_PARAMETER_STRUCT_BEGIN(StructTypeName, PrefixKeywords, {}, INTERNAL_LOCAL_SHADER_PARAMETER_GET_STRUCT_METADATA(StructTypeName), INTERNAL_LOCAL_SHADER_PARAMETER_CREATE_UNIFORM_BUFFER)
+	INTERNAL_SHADER_PARAMETER_STRUCT_BEGIN(StructTypeName, PrefixKeywords, {}, INTERNAL_SHADER_PARAMETER_GET_STRUCT_METADATA(StructTypeName), INTERNAL_SHADER_PARAMETER_STRUCT_CREATE_UNIFORM_BUFFER)
 
 #define END_SHADER_PARAMETER_STRUCT() \
 		zzLastMemberId; \
@@ -765,30 +795,73 @@ extern RENDERCORE_API FShaderParametersMetadata* FindUniformBufferStructByFName(
  *
  * Example:
  *	// header
- *	BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FMyParameterStruct, RENDERER_API)
- *	END_GLOBAL_SHADER_PARAMETER_STRUCT()
+ *	BEGIN_UNIFORM_BUFFER_STRUCT(FMyParameterStruct, RENDERER_API)
+ *	END_UNIFORM_BUFFER_STRUCT()
  *
  *	// C++ file
- *	IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT(FMyParameterStruct, "MyShaderBindingName");
+ *	IMPLEMENT_UNIFORM_BUFFER_STRUCT(FMyParameterStruct, "MyShaderBindingName");
  */
-#define BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(StructTypeName, PrefixKeywords) \
-	INTERNAL_SHADER_PARAMETER_STRUCT_BEGIN(StructTypeName,PrefixKeywords,{} INTERNAL_BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT, INTERNAL_GLOBAL_SHADER_PARAMETER_GET_STRUCT_METADATA(StructTypeName), INTERNAL_GLOBAL_SHADER_PARAMETER_CREATE_UNIFORM_BUFFER)
+#define BEGIN_UNIFORM_BUFFER_STRUCT(StructTypeName, PrefixKeywords) \
+	INTERNAL_SHADER_PARAMETER_STRUCT_BEGIN(StructTypeName,PrefixKeywords,{} INTERNAL_BEGIN_UNIFORM_BUFFER_STRUCT, INTERNAL_UNIFORM_BUFFER_STRUCT_GET_STRUCT_METADATA(StructTypeName), INTERNAL_UNIFORM_BUFFER_STRUCT_CREATE_UNIFORM_BUFFER)
 
-#define BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT_WITH_CONSTRUCTOR(StructTypeName, PrefixKeywords) \
-	INTERNAL_SHADER_PARAMETER_STRUCT_BEGIN(StructTypeName,PrefixKeywords,; INTERNAL_BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT, INTERNAL_GLOBAL_SHADER_PARAMETER_GET_STRUCT_METADATA(StructTypeName), INTERNAL_GLOBAL_SHADER_PARAMETER_CREATE_UNIFORM_BUFFER)
+#define BEGIN_UNIFORM_BUFFER_STRUCT_WITH_CONSTRUCTOR(StructTypeName, PrefixKeywords) \
+	INTERNAL_SHADER_PARAMETER_STRUCT_BEGIN(StructTypeName,PrefixKeywords,; INTERNAL_BEGIN_UNIFORM_BUFFER_STRUCT, INTERNAL_UNIFORM_BUFFER_STRUCT_GET_STRUCT_METADATA(StructTypeName), INTERNAL_UNIFORM_BUFFER_STRUCT_CREATE_UNIFORM_BUFFER)
 
-#define END_GLOBAL_SHADER_PARAMETER_STRUCT() \
+#define END_UNIFORM_BUFFER_STRUCT() \
 	END_SHADER_PARAMETER_STRUCT()
 
-#define IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT(StructTypeName,ShaderVariableName) \
+#define IMPLEMENT_UNIFORM_BUFFER_STRUCT(StructTypeName,ShaderVariableName) \
 	FShaderParametersMetadata StructTypeName::StaticStructMetadata( \
-	FShaderParametersMetadata::EUseCase::GlobalShaderParameterStruct, \
-	FName(TEXT(#StructTypeName)), \
+	FShaderParametersMetadata::EUseCase::UniformBuffer, \
+	TEXT(#StructTypeName), \
 	TEXT(#StructTypeName), \
 	TEXT(ShaderVariableName), \
+	nullptr, \
 	sizeof(StructTypeName), \
 	StructTypeName::zzGetMembers())
 
+/** Implements a uniform buffer tied to a static binding slot. The third parameter is the name of the slot.
+ *  Multiple uniform buffers can be associated to a slot; only one uniform buffer can be bound to a slot
+ *  at one time.
+ *
+ * Example:
+ *	BEGIN_UNIFORM_BUFFER_STRUCT(FMyParameterStruct, RENDERER_API)
+ *	END_UNIFORM_BUFFER_STRUCT()
+ *
+ *	// C++ file
+ *
+ *	// Define uniform buffer slot.
+ *	IMPLEMENT_STATIC_UNIFORM_BUFFER_SLOT(MySlot)
+ *
+ *	// Associate uniform buffer with slot.
+ *	IMPLEMENT_STATIC_UNIFORM_BUFFER_STRUCT(FMyParameterStruct, "MyShaderBindingName", MySlot);
+ */
+#define IMPLEMENT_STATIC_UNIFORM_BUFFER_STRUCT(StructTypeName,ShaderVariableName,StaticSlotName) \
+	FShaderParametersMetadata StructTypeName::StaticStructMetadata( \
+	FShaderParametersMetadata::EUseCase::UniformBuffer, \
+	TEXT(#StructTypeName), \
+	TEXT(#StructTypeName), \
+	TEXT(ShaderVariableName), \
+	TEXT(#StaticSlotName), \
+	sizeof(StructTypeName), \
+	StructTypeName::zzGetMembers())
+
+/** Implements a uniform buffer static binding slot. */
+#define IMPLEMENT_STATIC_UNIFORM_BUFFER_SLOT(SlotName) \
+	static FUniformBufferStaticSlotRegistrar UniformBufferStaticSlot_##SlotName(TEXT(#SlotName));
+
+ /** Legacy macro definitions. */
+#define BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT \
+	 BEGIN_UNIFORM_BUFFER_STRUCT
+
+#define BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT_WITH_CONSTRUCTOR \
+	BEGIN_UNIFORM_BUFFER_STRUCT_WITH_CONSTRUCTOR
+
+#define END_GLOBAL_SHADER_PARAMETER_STRUCT \
+	END_UNIFORM_BUFFER_STRUCT
+
+#define IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT \
+	IMPLEMENT_UNIFORM_BUFFER_STRUCT
 
 /** Adds a constant-buffer stored value.
  *
@@ -1015,10 +1088,10 @@ extern RENDERCORE_API FShaderParametersMetadata* FindUniformBufferStructByFName(
 /** Include a binding slot for a globally named shader parameter structure
  *
  * Example:
- *	BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FGlobalViewParameters,)
+ *	BEGIN_UNIFORM_BUFFER_STRUCT(FGlobalViewParameters,)
  *		SHADER_PARAMETER(FVector4, ViewSizeAndInvSize)
  *		// ...
- *	END_GLOBAL_SHADER_PARAMETER_STRUCT()
+ *	END_UNIFORM_BUFFER_STRUCT()
  *
  *	BEGIN_SHADER_PARAMETER_STRUCT(FOtherStruct)
  *		SHADER_PARAMETER_STRUCT_REF(FMyNestedStruct, MyStruct)

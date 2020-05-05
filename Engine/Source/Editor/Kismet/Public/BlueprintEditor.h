@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -45,8 +45,11 @@ class UUserDefinedEnum;
 class UUserDefinedStruct;
 class UBlueprintEditorOptions;
 struct Rect;
+class UToolMenu;
+struct FToolMenuContext;
 class UK2Node_FunctionEntry;
 class UK2Node_Event;
+class UToolMenu;
 
 /* Enums to use when grouping the blueprint members in the list panel. The order here will determine the order in the list */
 namespace NodeSectionID
@@ -238,6 +241,9 @@ public:
 
 	virtual ~FBlueprintEditor();
 
+	/** Add context objects for menus and toolbars */
+	virtual void InitToolMenuContext(FToolMenuContext& MenuContext) override;
+
 	/** Check the Node Title is visible */
 	bool IsNodeTitleVisible(const UEdGraphNode* Node, bool bRequestRename);
 
@@ -311,7 +317,7 @@ public:
 	bool InDebuggingMode() const;
 
 	/** Get the currently selected set of nodes */
-	TSet<UObject*> GetSelectedNodes() const;
+	FGraphPanelSelectionSet GetSelectedNodes() const;
 
 	/** Returns the currently selected node if there is a single node selected (if there are multiple nodes selected or none selected, it will return nullptr) */
 	UEdGraphNode* GetSingleSelectedNode() const;
@@ -568,6 +574,12 @@ public:
 
 	/** Can generate native code for current blueprint */
 	bool CanGenerateNativeCode() const;
+
+	/** Dumps the current blueprint search index to a JSON file for debugging purposes */
+	void OnGenerateSearchIndexForDebugging();
+
+	/** Dumps the currently-cached index data for the blueprint to a file for debugging */
+	void OnDumpCachedIndexDataForBlueprint();
 
 	/**
 	 * Check to see if we can customize the SCS editor for the passed-in scene component
@@ -865,7 +877,7 @@ protected:
 	bool CanSelectAllNodes() const;
 
 	virtual void DeleteSelectedNodes();
-	bool CanDeleteNodes() const;
+	virtual bool CanDeleteNodes() const;
 
 	/**
 	* Given a node, make connections from anything connected to it's input pin to
@@ -877,16 +889,16 @@ protected:
 
 	void DeleteSelectedDuplicatableNodes();
 
-	void CutSelectedNodes();
-	bool CanCutNodes() const;
+	virtual void CutSelectedNodes();
+	virtual bool CanCutNodes() const;
 
-	void CopySelectedNodes();
-	bool CanCopyNodes() const;
+	virtual void CopySelectedNodes();
+	virtual bool CanCopyNodes() const;
 
 	/** Paste on graph at specific location */
 	virtual void PasteNodesHere(class UEdGraph* DestinationGraph, const FVector2D& GraphLocation) override;
 
-	void PasteNodes();
+	virtual void PasteNodes();
 	virtual bool CanPasteNodes() const override;
 
 	void DuplicateNodes();
@@ -898,11 +910,11 @@ protected:
 	void OnAssignReferencedActor();
 	bool CanAssignReferencedActor() const;
 
-	void OnStartWatchingPin();
-	bool CanStartWatchingPin() const;
+	virtual void OnStartWatchingPin();
+	virtual bool CanStartWatchingPin() const;
 
-	void OnStopWatchingPin();
-	bool CanStopWatchingPin() const;
+	virtual void OnStopWatchingPin();
+	virtual bool CanStopWatchingPin() const;
 
 	/**  BEGIN PERSONA related callback functions */
 	virtual void OnSelectBone() {};
@@ -1027,8 +1039,8 @@ protected:
 	void FindInBlueprints_OnClicked();
 
 	//~ Begin FNotifyHook Interface
-	virtual void NotifyPreChange( UProperty* PropertyAboutToChange ) override;
-	virtual void NotifyPostChange( const FPropertyChangedEvent& PropertyChangedEvent, UProperty* PropertyThatChanged) override;
+	virtual void NotifyPreChange( FProperty* PropertyAboutToChange ) override;
+	virtual void NotifyPostChange( const FPropertyChangedEvent& PropertyChangedEvent, FProperty* PropertyThatChanged) override;
 	//~ End FNotifyHook Interface
 
 	/** Callback when properties have finished being handled */
@@ -1165,6 +1177,9 @@ private:
 	void HandleUndoTransaction(const class FTransaction* Transaction);
 
 public://@TODO
+
+	virtual bool TransactionObjectAffectsBlueprint(UObject* InTransactedObject);
+
 	TSharedPtr<FDocumentTracker> DocumentManager;
 	
 	/** Update all nodes' unrelated states when the graph has changed */
@@ -1286,6 +1301,9 @@ protected:
 	void CollectPureDownstreamNodes(UEdGraphNode* CurrentNode, TArray<UEdGraphNode*>& CollectedNodes);
 	void CollectPureUpstreamNodes(UEdGraphNode* CurrentNode, TArray<UEdGraphNode*>& CollectedNodes);
 	void HideUnrelatedNodes();
+
+	/** Register Menus */
+	void RegisterMenus();
 
 public:
 	/** Make nodes which are unrelated to the selected nodes fade out */

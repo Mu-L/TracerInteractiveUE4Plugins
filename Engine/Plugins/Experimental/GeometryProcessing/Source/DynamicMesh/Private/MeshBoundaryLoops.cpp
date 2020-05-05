@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "MeshBoundaryLoops.h"
@@ -385,7 +385,7 @@ int FMeshBoundaryLoops::FindLeftTurnEdge(int incoming_e, int bowtie_v, TArray<in
 
 		// compute projected angle
 		FVector3d bc = Mesh->GetVertex(bdry_ev.B) - Mesh->GetVertex(bowtie_v);
-		double fAngleS = VectorUtil::PlaneAngleSignedD(ab, bc, n);
+		double fAngleS = -VectorUtil::PlaneAngleSignedD(ab, bc, n);
 
 		// turn left!
 		if (best_angle == TNumericLimits<double>::Max() || fAngleS < best_angle)
@@ -490,6 +490,7 @@ bool FMeshBoundaryLoops::ExtractSubloops(TArray<int>& loopV, TArray<int>& loopE,
 			FEdgeSpan& NewSpan = subs.Spans[subs.Spans.Emplace()];
 			NewSpan.InitializeFromVertices(Mesh, VerticesTemp, false);
 			NewSpan.SetBowtieVertices(bowties);
+			return false;
 		}
 
 		if (bv != bv_shortest)

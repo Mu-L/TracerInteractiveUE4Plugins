@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -19,6 +19,7 @@
 #include "SMaterialEditorViewport.h"
 #include "Materials/Material.h"
 #include "Tickable.h"
+#include "UObject/WeakFieldPtr.h"
 
 struct FAssetData;
 class FCanvas;
@@ -62,7 +63,7 @@ public:
 		FPlatformMisc::CreateGuid(Id);
 
 		check(InExpression->Material && InExpression->Material->Expressions.Contains(InExpression));
-		InExpression->Material->AppendReferencedTextures(ReferencedTextures);
+		ReferencedTextures = InExpression->Material->GetReferencedTextures();
 		SetQualityLevelProperties(EMaterialQualityLevel::High, false, GMaxRHIFeatureLevel);
 	}
 
@@ -92,9 +93,9 @@ public:
 	 */
 	virtual bool ShouldCache(EShaderPlatform Platform, const FShaderType* ShaderType, const FVertexFactoryType* VertexFactoryType) const override;
 
-	virtual const TArray<UObject*>& GetReferencedTextures() const override
+	virtual TArrayView<UObject* const> GetReferencedTextures() const override
 	{
-		return ReferencedTextures;
+		return MakeArrayView(ReferencedTextures);
 	}
 
 	////////////////
@@ -113,7 +114,7 @@ public:
 		}
 	}
 
-	virtual bool GetVectorValue(const FMaterialParameterInfo& ParameterInfo, FLinearColor* OutValue, const FMaterialRenderContext& Context) const override
+	virtual bool GetVectorValue(const FHashedMaterialParameterInfo& ParameterInfo, FLinearColor* OutValue, const FMaterialRenderContext& Context) const override
 	{
 		if (Expression.IsValid() && Expression->Material)
 		{
@@ -122,7 +123,7 @@ public:
 		return false;
 	}
 
-	virtual bool GetScalarValue(const FMaterialParameterInfo& ParameterInfo, float* OutValue, const FMaterialRenderContext& Context) const override
+	virtual bool GetScalarValue(const FHashedMaterialParameterInfo& ParameterInfo, float* OutValue, const FMaterialRenderContext& Context) const override
 	{
 		if (Expression.IsValid() && Expression->Material)
 		{
@@ -131,7 +132,7 @@ public:
 		return false;
 	}
 
-	virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo,const UTexture** OutValue, const FMaterialRenderContext& Context) const override
+	virtual bool GetTextureValue(const FHashedMaterialParameterInfo& ParameterInfo,const UTexture** OutValue, const FMaterialRenderContext& Context) const override
 	{
 		if (Expression.IsValid() && Expression->Material)
 		{
@@ -140,7 +141,7 @@ public:
 		return false;
 	}
 
-	virtual bool GetTextureValue(const FMaterialParameterInfo& ParameterInfo, const URuntimeVirtualTexture** OutValue, const FMaterialRenderContext& Context) const override
+	virtual bool GetTextureValue(const FHashedMaterialParameterInfo& ParameterInfo, const URuntimeVirtualTexture** OutValue, const FMaterialRenderContext& Context) const override
 	{
 		if (Expression.IsValid() && Expression->Material)
 		{
@@ -695,8 +696,8 @@ private:
 	virtual void PostRedo(bool bSuccess) override { PostUndo(bSuccess); }
 
 	// FNotifyHook interface
-	virtual void NotifyPreChange(UProperty* PropertyAboutToChange) override;
-	virtual void NotifyPostChange( const FPropertyChangedEvent& PropertyChangedEvent, UProperty* PropertyThatChanged) override;
+	virtual void NotifyPreChange(FProperty* PropertyAboutToChange) override;
+	virtual void NotifyPostChange( const FPropertyChangedEvent& PropertyChangedEvent, FProperty* PropertyThatChanged) override;
 
 	/** Flags the material as dirty */
 	void SetMaterialDirty() {bMaterialDirty = true;}
@@ -725,7 +726,7 @@ private:
 
 	/** Pointer to the object that the current color picker is working on. Can be NULL and stale. */
 	TWeakObjectPtr<UObject> ColorPickerObject;
-	TWeakObjectPtr<UProperty> ColorPickerProperty;
+	TWeakFieldPtr<FProperty> ColorPickerProperty;
 
 	/** Called before the color picker commits a change. */
 	void PreColorPickerCommit(FLinearColor LinearColor);
@@ -766,10 +767,13 @@ private:
 	TSharedRef<SDockTab> SpawnTab_Find(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_PreviewSettings(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_ParameterDefaults(const FSpawnTabArgs& Args);
+	TSharedRef<SDockTab> SpawnTab_CustomPrimitiveData(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnTab_LayerProperties(const FSpawnTabArgs& Args);
 
 	void OnFinishedChangingProperties(const FPropertyChangedEvent& PropertyChangedEvent);
 	void OnFinishedChangingParametersFromOverview(const FPropertyChangedEvent& PropertyChangedEvent);
+	void GeneratorRowsRefreshed();
+	void UpdateGenerator();
 private:
 	/** List of open tool panels; used to ensure only one exists at any one time */
 	TMap< FName, TWeakPtr<class SDockableTab> > SpawnedToolPanels;
@@ -801,6 +805,8 @@ private:
 
 	/** Parameter overview list View */
 	TSharedPtr<class SMaterialParametersOverviewPanel> MaterialParametersOverviewWidget;
+
+	TSharedPtr<class SMaterialCustomPrimitiveDataPanel> MaterialCustomPrimitiveDataWidget;
 
 	/** Layer Properties View */
 	TSharedPtr<class SMaterialLayersFunctionsMaterialWrapper> MaterialLayersFunctionsInstance;
@@ -858,6 +864,7 @@ private:
 	static const FName FindTabId;
 	static const FName PreviewSettingsTabId;
 	static const FName ParameterDefaultsTabId;
+	static const FName CustomPrimitiveTabId;
 	static const FName LayerPropertiesTabId;
 
 	/** Object that stores all of the possible parameters we can edit. */
@@ -883,4 +890,6 @@ private:
 
 	/** List of children used to populate the inheritance list chain. */
 	TArray< FAssetData > FunctionChildList;
+
+	TSharedPtr<class IPropertyRowGenerator> Generator;
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SSceneOutliner.h"
 
@@ -28,6 +28,7 @@
 #include "Textures/SlateIcon.h"
 #include "ToolMenus.h"
 #include "UnrealEdGlobals.h"
+#include "UObject/PackageReload.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SComboButton.h"
@@ -782,18 +783,19 @@ namespace SceneOutliner
 					EUserInterfaceActionType::ToggleButton
 				);
 
-				MenuBuilder.AddMenuEntry(
-					LOCTEXT("ToggleHideFoldersContainingHiddenActors", "Hide Folders with Only Hidden Actors"),
-					LOCTEXT("ToggleHideFoldersContainingHiddenActorsToolTip", "When enabled, only shows Folders containing non-hidden Actors."),
-					FSlateIcon(),
-					FUIAction(
-						FExecuteAction::CreateSP(this, &SSceneOutliner::ToggleHideFoldersContainingOnlyHiddenActors),
-						FCanExecuteAction(),
-						FIsActionChecked::CreateSP(this, &SSceneOutliner::IsHidingFoldersContainingOnlyHiddenActors)
-					),
-					NAME_None,
-					EUserInterfaceActionType::ToggleButton
-				);
+				// Temporarily disable this feature until it can be redesigned.
+				//MenuBuilder.AddMenuEntry(
+				//	LOCTEXT("ToggleHideFoldersContainingHiddenActors", "Hide Folders with Only Hidden Actors"),
+				//	LOCTEXT("ToggleHideFoldersContainingHiddenActorsToolTip", "When enabled, only shows Folders containing non-hidden Actors."),
+				//	FSlateIcon(),
+				//	FUIAction(
+				//		FExecuteAction::CreateSP(this, &SSceneOutliner::ToggleHideFoldersContainingOnlyHiddenActors),
+				//		FCanExecuteAction(),
+				//		FIsActionChecked::CreateSP(this, &SSceneOutliner::IsHidingFoldersContainingOnlyHiddenActors)
+				//	),
+				//	NAME_None,
+				//	EUserInterfaceActionType::ToggleButton
+				//);
 
 				MenuBuilder.AddMenuEntry(
 					LOCTEXT("ToggleShowActorComponents", "Show Actor Components"),
@@ -1086,7 +1088,9 @@ namespace SceneOutliner
 
 	bool SSceneOutliner::IsHidingFoldersContainingOnlyHiddenActors() const
 	{
-		return GetDefault<USceneOutlinerSettings>()->bHideFoldersContainingHiddenActors;
+		// Temporarily disable this feature until it can be redesigned.
+		return false;
+		//return GetDefault<USceneOutlinerSettings>()->bHideFoldersContainingHiddenActors;
 	}
 
 	/** END FILTERS */
@@ -1909,14 +1913,20 @@ namespace SceneOutliner
 
 	void SSceneOutliner::AddColumn(FName ColumId, const SceneOutliner::FColumnInfo& ColumInfo)
 	{
-		SharedData->ColumnMap.Add(ColumId, ColumInfo);
-		RefreshColums();
+		if (!SharedData->ColumnMap.Contains(ColumId))
+		{
+			SharedData->ColumnMap.Add(ColumId, ColumInfo);
+			RefreshColums();
+		}
 	}
 
 	void SSceneOutliner::RemoveColumn(FName ColumId)
 	{
-		SharedData->ColumnMap.Remove(ColumId);
-		RefreshColums();
+		if (SharedData->ColumnMap.Contains(ColumId))
+		{
+			SharedData->ColumnMap.Remove(ColumId);
+			RefreshColums();
+		}
 	}
 
 	TArray<FName> SSceneOutliner::GetColumnIds() const
@@ -2548,7 +2558,7 @@ namespace SceneOutliner
 				}
 			}
 
-			GEditor->GetSelectedActors()->EndBatchSelectOperation();
+			GEditor->GetSelectedActors()->EndBatchSelectOperation(/*bNotify*/false);
 			GEditor->NoteSelectionChange();
 		}
 
@@ -3308,7 +3318,7 @@ namespace SceneOutliner
 					}
 
 					// Commit selection changes
-					GEditor->GetSelectedActors()->EndBatchSelectOperation();
+					GEditor->GetSelectedActors()->EndBatchSelectOperation(/*bNotify*/false);
 
 					// Fire selection changed event
 					GEditor->NoteSelectionChange();
@@ -3725,7 +3735,7 @@ namespace SceneOutliner
 					}
 
 					// Commit selection changes
-					GEditor->GetSelectedActors()->EndBatchSelectOperation();
+					GEditor->GetSelectedActors()->EndBatchSelectOperation(/*bNotify*/false);
 
 					// Fire selection changed event
 					GEditor->NoteSelectionChange();

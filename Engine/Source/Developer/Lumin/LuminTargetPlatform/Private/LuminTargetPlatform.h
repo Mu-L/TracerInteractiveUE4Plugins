@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	LuminTargetPlatform.h: Declares the FLuminTargetPlatform class.
@@ -76,11 +76,6 @@ public:
 		OutFormats.Add(FName(TEXT("FullHDR")));
 	}
 
-	virtual FPlatformAudioCookOverrides* GetAudioCompressionSettings() const override
-	{
-		return nullptr;
-	}
-	
 	// True if the project requires encoded HDR reflection captures
 	bool bRequiresEncodedHDRReflectionCaptures;
 #endif //WITH_ENGINE

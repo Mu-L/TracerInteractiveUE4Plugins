@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -13,7 +13,6 @@
 #include "IMovieScenePlayer.h"
 
 class FSlateWindowElementList;
-class USequencerSettings;
 
 /** Enum specifying how to interpolate to a new view range */
 enum class EViewRangeInterpolation
@@ -29,7 +28,8 @@ DECLARE_DELEGATE_TwoParams( FOnViewRangeChanged, TRange<double>, EViewRangeInter
 DECLARE_DELEGATE_OneParam( FOnTimeRangeChanged, TRange<double> )
 DECLARE_DELEGATE_OneParam( FOnFrameRangeChanged, TRange<FFrameNumber> )
 DECLARE_DELEGATE_TwoParams(FOnSetMarkedFrame, int32, FFrameNumber)
-DECLARE_DELEGATE_TwoParams(FOnMarkedFrameChanged, FFrameNumber, bool)
+DECLARE_DELEGATE_OneParam(FOnAddMarkedFrame, FFrameNumber)
+DECLARE_DELEGATE_OneParam(FOnDeleteMarkedFrame, int32)
 DECLARE_DELEGATE_RetVal_TwoParams( FFrameNumber, FOnGetNearestKey, FFrameTime, bool )
 
 /** Structure used to wrap up a range, and an optional animation target */
@@ -73,7 +73,6 @@ struct FTimeSliderArgs
 		, ViewRange( FAnimatedRange(0.0f, 5.0f) )
 		, ClampRange( FAnimatedRange(-FLT_MAX/2.f, FLT_MAX/2.f) )
 		, AllowZoom(true)
-		, Settings(nullptr)
 	{}
 
 	/** The scrub position */
@@ -151,11 +150,14 @@ struct FTimeSliderArgs
 	/** Called when the marked frame needs to be set */
 	FOnSetMarkedFrame OnSetMarkedFrame;
 
-	/** Called when a marked frame is added/removed */
-	FOnMarkedFrameChanged OnMarkedFrameChanged;
+	/** Called when a marked frame is added */
+	FOnAddMarkedFrame OnAddMarkedFrame;
 
-	/** Called when all marked frames should be cleared */
-	FSimpleDelegate OnClearAllMarkedFrames;
+	/** Called when a marked frame is deleted */
+	FOnDeleteMarkedFrame OnDeleteMarkedFrame;
+
+	/** Called when all marked frames should be deleted */
+	FSimpleDelegate OnDeleteAllMarkedFrames;
 
 	/** Round the scrub position to an integer during playback */
 	TAttribute<EMovieScenePlayerStatus::Type> PlaybackStatus;
@@ -171,9 +173,6 @@ struct FTimeSliderArgs
 
 	/** If we are allowed to zoom */
 	bool AllowZoom;
-
-	/** User-supplied settings object */
-	USequencerSettings* Settings;
 
 	/** Numeric Type interface for converting between frame numbers and display formats. */
 	TSharedPtr<INumericTypeInterface<double>> NumericTypeInterface;

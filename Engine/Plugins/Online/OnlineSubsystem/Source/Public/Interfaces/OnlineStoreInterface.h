@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -6,6 +6,7 @@
 #include "UObject/ObjectMacros.h"
 #include "OnlineSubsystemTypes.h"
 #include "OnlineDelegateMacros.h"
+//#include "InAppPurchaseCallbackProxy2.h"
 #include "OnlineStoreInterface.generated.h"
 
 ONLINESUBSYSTEM_API DECLARE_LOG_CATEGORY_EXTERN(LogOnlineStore, Log, All);

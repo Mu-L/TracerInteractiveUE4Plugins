@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "SkeletalSimplifierMeshManager.h"
 
@@ -22,10 +22,11 @@ SkeletalSimplifier::FSimplifierMeshManager::FSimplifierMeshManager(const MeshVer
 	EdgeVertIdHashMap(1 << FMath::Min(16u, FMath::FloorLog2(InNumSrcVerts)))
 {
 	// Allocate verts and tris
+	VertArray.Empty();
+	VertArray.AddDefaulted(NumSrcVerts);
 
-	VertArray = new SimpVertType[NumSrcVerts];
-	TriArray  = new SimpTriType[NumSrcTris];
-
+	TriArray.Empty();
+	TriArray.AddDefaulted(NumSrcTris);
 
 	// Deep copy the verts
 
@@ -68,11 +69,11 @@ SkeletalSimplifier::FSimplifierMeshManager::FSimplifierMeshManager(const MeshVer
 
 	// Group the verts that share the same location.
 
-	GroupVerts(VertArray, NumSrcVerts);
+	GroupVerts(VertArray);
 
 	// Populate EdgeArray
 
-	MakeEdges(VertArray, NumSrcVerts, NumSrcTris, EdgeArray);
+	MakeEdges(VertArray, NumSrcTris, EdgeArray);
 
 	// Links all the edges together
 	GroupEdges(EdgeArray);
@@ -100,8 +101,10 @@ SkeletalSimplifier::FSimplifierMeshManager::FSimplifierMeshManager(const MeshVer
 
 }
 
-void SkeletalSimplifier::FSimplifierMeshManager::GroupVerts(SimpVertType* Verts, const int32 NumVerts)
+void SkeletalSimplifier::FSimplifierMeshManager::GroupVerts(TArray<SimpVertType>& Verts)
 {
+	const int32 NumVerts = Verts.Num();
+
 	// group verts that share a point
 	FHashTable HashTable(1 << FMath::Min(16u, FMath::FloorLog2(NumVerts / 2)), NumVerts);
 
@@ -164,10 +167,11 @@ void SkeletalSimplifier::FSimplifierMeshManager::GroupVerts(SimpVertType* Verts,
 }
 
 
-void SkeletalSimplifier::FSimplifierMeshManager::MakeEdges(const SimpVertType* Verts, const int32 NumVerts, const int32 NumTris, TArray<SimpEdgeType>& Edges)
+void SkeletalSimplifier::FSimplifierMeshManager::MakeEdges(const TArray<SimpVertType>& Verts, const int32 NumTris, TArray<SimpEdgeType>& Edges)
 {
 
 	// Populate the TArray of edges.
+	const int32 NumVerts = Verts.Num();
 
 	int32 maxEdgeSize = FMath::Min(3 * NumTris, 3 * NumVerts - 6);
 	Edges.Empty(maxEdgeSize);
@@ -505,12 +509,13 @@ void SkeletalSimplifier::FSimplifierMeshManager::FlagBoxCorners(const ESimpEleme
 {
 
 
-	uint32* VisitedMask = new uint32[NumSrcVerts](); // initializes to zeros.
+	TArray<int32> VisitedMask;
+	VisitedMask.AddZeroed(NumSrcVerts);
 
 	for (int32 i = 0; i < NumSrcVerts; i++)
 	{
 
-		if (VisitedMask[i])
+		if (VisitedMask[i] != 0)
 		{
 			continue;
 		}
@@ -591,7 +596,62 @@ void SkeletalSimplifier::FSimplifierMeshManager::FlagBoxCorners(const ESimpEleme
 	
 	}
 
-	if (VisitedMask) delete[] VisitedMask;
+}
+
+void SkeletalSimplifier::FSimplifierMeshManager::FlagEdges(const TFunction<bool(const SimpVertType*, const SimpVertType*)> IsDifferent, const ESimpElementFlags Flag)
+{
+	int32 NumEdges = EdgeArray.Num();
+
+	for (int32 i = 0; i < NumEdges; ++i)
+	{
+		SimpEdgeType& Edge = EdgeArray[i];
+		if (IsDifferent(Edge.v0, Edge.v1))
+		{
+			Edge.EnableFlags(Flag);
+			Edge.v0->EnableFlags(Flag);
+			Edge.v1->EnableFlags(Flag);
+		}
+	}
+
+	for (int i = 0; i < NumSrcVerts; i++)
+	{
+		SimpVertType* v = &VertArray[i];
+		SimpVertType* v1 = v;
+
+		if (v1 == nullptr || v1->TestFlags(Flag))
+		{
+			continue;
+		}
+		// only one vert in this group
+		if (v1->next == v1)
+		{
+			continue;
+		}
+		
+		bool bAddedFlag = false;
+		do {
+
+			if (IsDifferent(v, v->next))
+			{
+				// we only need to mark one of the vertices in this vertex group since the lock state will be propagated to the others.
+				v->EnableFlags(Flag);
+				bAddedFlag = true;
+			}
+			v = v->next;
+		} while (v != v1);
+
+		// add the locked state to all the vertices in this group.
+		if (bAddedFlag)
+		{
+			v = v1;
+			do {
+				v->EnableFlags(Flag);
+				v = v->next;
+			} while (v != v1);
+
+		}
+		
+	}
 }
 
 void SkeletalSimplifier::FSimplifierMeshManager::GetAdjacentTopology(const SimpVertType* VertPtr,
@@ -1211,7 +1271,7 @@ int32 SkeletalSimplifier::FSimplifierMeshManager::CountDegeneratesTris() const
 	// not sure why this happens
 	for (int i = 0; i < NumSrcTris; i++)
 	{
-		SimpTriType* tri = &TriArray[i];
+		const SimpTriType* tri = &TriArray[i];
 
 		if (tri->TestFlags(SIMP_REMOVED))
 			continue;

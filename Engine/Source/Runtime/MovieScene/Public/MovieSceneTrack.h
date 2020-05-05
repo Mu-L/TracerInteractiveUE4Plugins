@@ -1,11 +1,10 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Misc/EnumClassFlags.h"
 #include "UObject/ObjectMacros.h"
-#include "IMovieSceneTrackInstance.h"
 #include "Misc/Guid.h"
 #include "MovieSceneSignedObject.h"
 #include "MovieSceneSection.h"
@@ -107,11 +106,45 @@ struct FMovieSceneTrackDisplayOptions
 	uint32 bShowVerticalFrames : 1;
 };
 
+/** Returns what kind of section easing we support in the editor */
+enum class EMovieSceneTrackEasingSupportFlags
+{
+	None = 0,
+	AutomaticEaseIn = 1 << 0,
+	AutomaticEaseOut = 1 << 1,
+	ManualEaseIn = 1 << 2,
+	ManualEaseOut = 1 << 3,
+	AutomaticEasing = AutomaticEaseIn | AutomaticEaseOut,
+	ManualEasing = ManualEaseIn | ManualEaseOut,
+	All = AutomaticEasing | ManualEasing
+};
+ENUM_CLASS_FLAGS(EMovieSceneTrackEasingSupportFlags)
+
+/** Parameters for the `SupportsEasing` method */
+struct FMovieSceneSupportsEasingParams
+{
+	// Non-null if we are asking for a specific section.
+	const UMovieSceneSection* ForSection;
+
+	FMovieSceneSupportsEasingParams() : ForSection(nullptr) {}
+	FMovieSceneSupportsEasingParams(const UMovieSceneSection* InSection) : ForSection(InSection) {}
+};
+
+#if WITH_EDITOR
+/** Parameters for sections moving in the editor */
+struct FMovieSceneSectionMovedParams
+{
+	EPropertyChangeType::Type MoveType;
+
+	FMovieSceneSectionMovedParams(EPropertyChangeType::Type InMoveType) : MoveType(InMoveType) {}
+};
+#endif
+
 /**
  * Base class for a track in a Movie Scene
  */
 UCLASS(abstract, DefaultToInstanced, MinimalAPI, BlueprintType)
-class MOVIESCENE_VTABLE UMovieSceneTrack
+class UMovieSceneTrack
 	: public UMovieSceneSignedObject
 {
 	GENERATED_BODY()
@@ -248,6 +281,11 @@ public:
 	virtual bool SupportsMultipleRows() const
 	{
 		return SupportedBlendTypes.Num() != 0;
+	}
+
+	virtual EMovieSceneTrackEasingSupportFlags SupportsEasing(FMovieSceneSupportsEasingParams& Params) const
+	{
+		return SupportedBlendTypes.Num() > 0 ? EMovieSceneTrackEasingSupportFlags::All : EMovieSceneTrackEasingSupportFlags::None;
 	}
 
 	/** Set This Section as the one to key. If track doesn't support layered blends then don't implement
@@ -420,7 +458,6 @@ public:
 	 *
 	 * @param Section The section that moved.
 	 */
-	virtual void OnSectionMoved(UMovieSceneSection& Section) { }
-
+	virtual void OnSectionMoved(UMovieSceneSection& Section, const FMovieSceneSectionMovedParams& Params) {}
 #endif
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -18,8 +18,12 @@ public:
 	/** Is the instance component is editable */
 	static bool CanEditComponentInstance(const UActorComponent* ActorComp, const UActorComponent* ParentSceneComp, bool bAllowUserContructionScript);
 
-	/** Tests whether the native component is editable */
-	static bool CanEditNativeComponent(const UActorComponent* NativeComponent);
+	/** 
+	* Test if the native component is editable. If it is, return a valid pointer to it's FProperty
+	* Otherwise, return nullptr. A native component is editable if it is marked as EditAnywhere
+	* via meta data tags or is within an editable property container 
+	*/
+	static FProperty* GetPropertyForEditableNativeComponent(const UActorComponent* NativeComponent);
 
 	/** Test whether or not the given string is a valid variable name string for the given component instance */
 	static bool IsValidVariableNameString(const UActorComponent* InComponent, const FString& InString);
@@ -129,7 +133,7 @@ public:
 
 	// Given a template and a property, propagates a default value change to all instances (only if applicable)
 	template<typename T>
-	static void PropagateDefaultValueChange(class USceneComponent* InSceneComponentTemplate, const class UProperty* InProperty, const T& OldDefaultValue, const T& NewDefaultValue, TSet<class USceneComponent*>& UpdatedInstances, int32 PropertyOffset = INDEX_NONE)
+	static void PropagateDefaultValueChange(class USceneComponent* InSceneComponentTemplate, const class FProperty* InProperty, const T& OldDefaultValue, const T& NewDefaultValue, TSet<class USceneComponent*>& UpdatedInstances, int32 PropertyOffset = INDEX_NONE)
 	{
 		TArray<UObject*> ArchetypeInstances;
 		if(InSceneComponentTemplate->HasAnyFlags(RF_ArchetypeObject))
@@ -160,12 +164,12 @@ public:
 
 	// Given an instance of a template and a property, set a default value change to the instance (only if applicable)
 	template<typename T>
-	static bool ApplyDefaultValueChange(class USceneComponent* InSceneComponent, const class UProperty* InProperty, const T& OldDefaultValue, const T& NewDefaultValue, int32 PropertyOffset)
+	static bool ApplyDefaultValueChange(class USceneComponent* InSceneComponent, const class FProperty* InProperty, const T& OldDefaultValue, const T& NewDefaultValue, int32 PropertyOffset)
 	{
 		check(InProperty != nullptr);
 		check(InSceneComponent != nullptr);
 
-		ensureMsgf(Cast<UBoolProperty>(InProperty) == nullptr, TEXT("ApplyDefaultValueChange cannot be safely called on a bool property with a non-bool value, becuase of bitfields"));
+		ensureMsgf(CastField<FBoolProperty>(InProperty) == nullptr, TEXT("ApplyDefaultValueChange cannot be safely called on a bool property with a non-bool value, becuase of bitfields"));
 
 		T* CurrentValue = PropertyOffset == INDEX_NONE ? InProperty->ContainerPtrToValuePtr<T>(InSceneComponent) : (T*)((uint8*)InSceneComponent + PropertyOffset);
 		check(CurrentValue);
@@ -174,13 +178,13 @@ public:
 	}
 
 	// Bool specialization so it can properly handle bitfields
-	static bool ApplyDefaultValueChange(class USceneComponent* InSceneComponent, const class UProperty* InProperty, const bool& OldDefaultValue, const bool& NewDefaultValue, int32 PropertyOffset)
+	static bool ApplyDefaultValueChange(class USceneComponent* InSceneComponent, const class FProperty* InProperty, const bool& OldDefaultValue, const bool& NewDefaultValue, int32 PropertyOffset)
 	{
 		check(InProperty != nullptr);
 		check(InSceneComponent != nullptr);
 		
 		// Only bool properties can have bool values
-		const UBoolProperty* BoolProperty = Cast<UBoolProperty>(InProperty);
+		const FBoolProperty* BoolProperty = CastField<FBoolProperty>(InProperty);
 		check(BoolProperty);
 
 		uint8* CurrentValue = PropertyOffset == INDEX_NONE ? InProperty->ContainerPtrToValuePtr<uint8>(InSceneComponent) : ((uint8*)InSceneComponent + PropertyOffset);

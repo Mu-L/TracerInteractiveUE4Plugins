@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System;
@@ -6,33 +6,32 @@ using System.IO;
 
 namespace UnrealBuildTool.Rules
 {
-    public class DatasmithIFCTranslator : ModuleRules
-    {
-        public DatasmithIFCTranslator(ReadOnlyTargetRules Target) : base(Target)
-        {
-            PrivateDependencyModuleNames.AddRange(
-                new string[]
-                {
-                    "Analytics",
-                    "Core",
-                    "CoreUObject",
-                    "DatasmithCore",
+	public class DatasmithIFCTranslator : ModuleRules
+	{
+		public DatasmithIFCTranslator(ReadOnlyTargetRules Target) : base(Target)
+		{
+			PrivateDependencyModuleNames.AddRange(
+				new string[]
+				{
+					"Analytics",
+					"CoreUObject",
+					"DatasmithCore",
 					"Engine",
 					"Json",
-                    "MainFrame",
-					"MaterialEditor",
-					"MeshUtilities",
-                    "MeshDescription",
-                    "MessageLog",
+					"MeshDescription",
 					"Projects",
 					"RawMesh",
-                    "Slate",
-                    "SlateCore",
+					"Slate",
+					"SlateCore",
 					"StaticMeshDescription",
-                    "UnrealEd",
-                    "XmlParser",
-                }
-            );
+					"XmlParser",
+				}
+			);
+
+			if (Target.Type == TargetType.Editor)
+			{
+				PrivateDependencyModuleNames.Add("MessageLog");
+			}
 
 			string IfcEngineDir = Path.Combine(PluginDirectory, "Source", "ThirdParty", "NotForLicensees", "ifcengine");
 			if (Directory.Exists(IfcEngineDir))
@@ -46,17 +45,26 @@ namespace UnrealBuildTool.Rules
 			}
 
 			PublicDependencyModuleNames.AddRange(
-                new string[]
-                {
-                    "DatasmithContent",
-                    "DatasmithImporter"
-                }
-            );
+				new string[]
+				{
+					"Core",
+					"DatasmithContent",
+					"DatasmithTranslator"
+				}
+			);
 
 			if (Target.Platform == UnrealTargetPlatform.Win64)
 			{
 				RuntimeDependencies.Add("$(EngineDir)/Plugins/Enterprise/DatasmithIFCImporter/Binaries/Win64/ifcengine.dll");
+				PublicDelayLoadDLLs.Add("ifcengine.dll");
 			}
+
+			RuntimeDependencies.Add(@"$(EngineDir)\Plugins\Enterprise\DatasmithIFCImporter\Resources\IFC\IFC2X3_TC1.exp");
+			RuntimeDependencies.Add(@"$(EngineDir)\Plugins\Enterprise\DatasmithIFCImporter\Resources\IFC\IFC2X3-Settings.xml");
+			RuntimeDependencies.Add(@"$(EngineDir)\Plugins\Enterprise\DatasmithIFCImporter\Resources\IFC\IFC4.exp");
+			RuntimeDependencies.Add(@"$(EngineDir)\Plugins\Enterprise\DatasmithIFCImporter\Resources\IFC\IFC4_ADD2.exp");
+			RuntimeDependencies.Add(@"$(EngineDir)\Plugins\Enterprise\DatasmithIFCImporter\Resources\IFC\IFC4-Settings.xml");
+			RuntimeDependencies.Add(@"$(EngineDir)\Plugins\Enterprise\DatasmithIFCImporter\Resources\IFC\IFC4x1_FINAL.exp");
 		}
 	}
 }

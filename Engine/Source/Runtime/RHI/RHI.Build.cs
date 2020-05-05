@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
 using System;
@@ -8,8 +8,8 @@ public class RHI : ModuleRules
 	public RHI(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PrivateDependencyModuleNames.Add("Core");
-		PrivateDependencyModuleNames.Add("ApplicationCore");
 		PrivateDependencyModuleNames.Add("TraceLog");
+		PrivateDependencyModuleNames.Add("ApplicationCore");
 
 		if (Target.bCompileAgainstEngine)
 		{
@@ -18,10 +18,14 @@ public class RHI : ModuleRules
 			if (Target.Type != TargetRules.TargetType.Server)   // Dedicated servers should skip loading everything but NullDrv
 			{
 				// UEBuildAndroid.cs adds VulkanRHI for Android builds if it is enabled
-				if ((Target.Platform == UnrealTargetPlatform.Win32) || (Target.Platform == UnrealTargetPlatform.Win64))
+				if (Target.Platform == UnrealTargetPlatform.Win64 ||
+					Target.Platform == UnrealTargetPlatform.Win32)
 				{
 					DynamicallyLoadedModuleNames.Add("D3D11RHI");
+				}
 
+				if (Target.Platform.IsInGroup(UnrealPlatformGroup.Windows))
+				{
 					//#todo-rco: D3D12 requires different SDK headers not compatible with WinXP
 					DynamicallyLoadedModuleNames.Add("D3D12RHI");
 				}

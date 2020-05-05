@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 
 #include "KismetPins/SGraphPinBool.h"
@@ -15,6 +15,7 @@ TSharedRef<SWidget>	SGraphPinBool::GetDefaultValueWidget()
 	return SNew(SCheckBox)
 		.Style(FEditorStyle::Get(), "Graph.Checkbox")
 		.IsChecked(this, &SGraphPinBool::IsDefaultValueChecked)
+		.IsEnabled(this, &SGraphPin::GetDefaultValueIsEditable)
 		.OnCheckStateChanged(this, &SGraphPinBool::OnDefaultValueCheckBoxChanged)
 		.Visibility( this, &SGraphPin::GetDefaultValueVisibility );
 }

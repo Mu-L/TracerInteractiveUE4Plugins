@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -133,6 +133,8 @@ protected:
 	USocialGroupChannel& FindOrCreateGroupChannel(IOnlineGroupsPtr InGroupInterface, const FUniqueNetId& GroupId);
 
 	void OnGroupUpdated(const FUniqueNetId& GroupId);
+
+	bool IsUniqueIdOfOwner(const FUniqueNetId& LocalUserId) const;
 
 	// END KIAROS GROUP MANAGEMENT
 	//----------------------------------------------------------------------

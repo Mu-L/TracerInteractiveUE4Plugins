@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NavMesh/RecastNavMesh.h"
 #include "Misc/Paths.h"
@@ -932,6 +932,24 @@ void ARecastNavMesh::AddTileCacheLayers(int32 TileX, int32 TileY, const TArray<F
 	}
 }
 
+#if RECAST_INTERNAL_DEBUG_DATA
+void ARecastNavMesh::RemoveTileDebugData(int32 TileX, int32 TileY)
+{
+	if (RecastNavMeshImpl)
+	{
+		RecastNavMeshImpl->DebugDataMap.Remove(FIntPoint(TileX, TileY));
+	}
+}
+
+void ARecastNavMesh::AddTileDebugData(int32 TileX, int32 TileY, const FRecastInternalDebugData& InTileDebugData)
+{
+	if (RecastNavMeshImpl)
+	{
+		RecastNavMeshImpl->DebugDataMap.Add(FIntPoint(TileX, TileY), InTileDebugData);
+	}
+}
+#endif //RECAST_INTERNAL_DEBUG_DATA
+
 void ARecastNavMesh::MarkEmptyTileCacheLayers(int32 TileX, int32 TileY)
 {
 	if (RecastNavMeshImpl && bStoreEmptyTileLayers)
@@ -1310,7 +1328,8 @@ ENavigationQueryResult::Type ARecastNavMesh::CalcPathLengthAndCost(const FVector
 			Path->SetWantsStringPulling(false);
 			Path->SetWantsPathCorridor(true);
 			
-			Result = RecastNavMeshImpl->FindPath(PathStart, PathEnd, Path.Get(), GetRightFilterRef(QueryFilter), QueryOwner);
+			const float CostLimit = FLT_MAX;
+			Result = RecastNavMeshImpl->FindPath(PathStart, PathEnd, CostLimit, Path.Get(), GetRightFilterRef(QueryFilter), QueryOwner);
 
 			if (Result == ENavigationQueryResult::Success || (Result == ENavigationQueryResult::Fail && Path->IsPartial()))
 			{
@@ -1410,6 +1429,10 @@ void ARecastNavMesh::UpdateCustomLink(const INavLinkCustomInterface* CustomLink)
 
 		RecastNavMeshImpl->UpdateNavigationLinkArea(UserId, AreaId, PolyFlags);
 		RecastNavMeshImpl->UpdateSegmentLinkArea(UserId, AreaId, PolyFlags);
+
+#if !UE_BUILD_SHIPPING
+		RequestDrawingUpdate(false);
+#endif
 	}
 }
 
@@ -1506,7 +1529,7 @@ int32 ARecastNavMesh::ReplaceAreaInTileBounds(const FBox& Bounds, TSubclassOf<UN
 
 		const int32 OldAreaID = GetAreaID(OldArea);
 		ensure(OldAreaID != INDEX_NONE);
-		const int32 NewAreaID = 34;// GetAreaID(NewArea);
+		const int32 NewAreaID = GetAreaID(NewArea);
 		ensure(NewAreaID != INDEX_NONE);
 		ensure(NewAreaID != OldAreaID);
 
@@ -2094,7 +2117,7 @@ FPathFindingResult ARecastNavMesh::FindPath(const FNavAgentProperties& AgentProp
 		}
 		else
 		{
-			Result.Result = RecastNavMesh->RecastNavMeshImpl->FindPath(Query.StartLocation, AdjustedEndLocation, *NavMeshPath, *NavFilter, Query.Owner.Get());
+			Result.Result = RecastNavMesh->RecastNavMeshImpl->FindPath(Query.StartLocation, AdjustedEndLocation, Query.CostLimit, *NavMeshPath, *NavFilter, Query.Owner.Get());
 
 			const bool bPartialPath = Result.IsPartial();
 			if (bPartialPath)
@@ -2308,7 +2331,7 @@ int32 ARecastNavMesh::DebugPathfinding(const FPathFindingQuery& Query, TArray<FR
 
 	if ((Query.StartLocation - Query.EndLocation).IsNearlyZero() == false)
 	{
-		NumSteps = RecastNavMesh->RecastNavMeshImpl->DebugPathfinding(Query.StartLocation, Query.EndLocation, *(Query.QueryFilter.Get()), Query.Owner.Get(), Steps);
+		NumSteps = RecastNavMesh->RecastNavMeshImpl->DebugPathfinding(Query.StartLocation, Query.EndLocation, Query.CostLimit, *(Query.QueryFilter.Get()), Query.Owner.Get(), Steps);
 	}
 
 	return NumSteps;
@@ -2439,7 +2462,7 @@ void ARecastNavMesh::ConditionalConstructGenerator()
 		FRecastNavMeshGenerator* Generator = CreateGeneratorInstance();
 		if (Generator)
 		{
-			NavDataGenerator = MakeShareable(Generator);
+			NavDataGenerator = MakeShareable((FNavDataGenerator*)Generator);
 			Generator->Init();
 		}
 
@@ -2682,6 +2705,17 @@ void ARecastNavMesh::RebuildTile(const TArray<FIntPoint>& Tiles)
 		}
 	}
 }
+
+#if RECAST_INTERNAL_DEBUG_DATA
+const TMap<FIntPoint, struct FRecastInternalDebugData>* ARecastNavMesh::GetDebugDataMap() const
+{
+	if (RecastNavMeshImpl)
+	{
+		return &RecastNavMeshImpl->DebugDataMap;
+	}
+	return nullptr;
+}
+#endif //RECAST_INTERNAL_DEBUG_DATA
 
 //----------------------------------------------------------------------//
 // FRecastNavMeshCachedData

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Factories/Texture2dArrayThumbnailRenderer.h"
 #include "Engine/Texture2DArray.h"
@@ -23,11 +23,11 @@ void UTexture2DArrayThumbnailRenderer::GetThumbnailSize(UObject* Object, float Z
 
 }
 
-void UTexture2DArrayThumbnailRenderer::Draw(UObject* Object, int32 X, int32 Y, uint32 Width, uint32 Height, FRenderTarget*, FCanvas* Canvas)
+void UTexture2DArrayThumbnailRenderer::Draw(UObject* Object, int32 X, int32 Y, uint32 Width, uint32 Height, FRenderTarget*, FCanvas* Canvas, bool bAdditionalViewFamily)
 {
 	UTexture2DArray* TextureArray = Cast<UTexture2DArray>(Object);
 	if (TextureArray != nullptr)
 	{
-		Super::Draw(TextureArray, X, Y, Width, Height, nullptr, Canvas);
+		Super::Draw(TextureArray, X, Y, Width, Height, nullptr, Canvas, bAdditionalViewFamily);
 	}
 }

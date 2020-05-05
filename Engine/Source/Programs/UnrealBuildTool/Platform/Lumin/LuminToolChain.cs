@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -13,12 +13,12 @@ namespace UnrealBuildTool
 {
 	class LuminToolChain : AndroidToolChain
 	{
-		static private Dictionary<string, string[]> AllArchNames = new Dictionary<string, string[]> {
-			{ "-armv7", new string[] { "armv7", "armeabi-v7a", "android-kk-egl-t124-a32" } },
-			{ "-arm64", new string[] { "arm64", "arm64-v8a", "android-L-egl-t132-a64" } },
-		};
+		//static private Dictionary<string, string[]> AllArchNames = new Dictionary<string, string[]> {
+		//	{ "-armv7", new string[] { "armv7", "armeabi-v7a", "android-kk-egl-t124-a32" } },
+		//	{ "-arm64", new string[] { "arm64", "arm64-v8a", "android-L-egl-t132-a64" } },
+		//};
 
-		static private string[] LibrariesToSkip = new string[] { "nvToolsExt", "nvToolsExtStub", "oculus", "vrapi", "ovrkernel", "systemutils", "openglloader", "gpg", };
+		//static private string[] LibrariesToSkip = new string[] { "nvToolsExt", "nvToolsExtStub", "oculus", "vrapi", "ovrkernel", "systemutils", "openglloader", "gpg", };
 
 		private List<string> AdditionalGPUArches;
 
@@ -79,7 +79,7 @@ namespace UnrealBuildTool
 
 			MLSDKPath = MLSDKPath.Replace("\"", "");
 
-			string MabuSpec = RunMabuAndReadOutput("-t device --print-spec -q");
+			string MabuSpec = RunMabuAndReadOutput("-t lumin_clang-8.0 --print-spec -q");
 
 			// parse clange version
 			Regex SpecRegex = new Regex("\\s*(?:[a-z]+_lumin_clang-)(\\d)[.](\\d)\\s*");
@@ -91,11 +91,11 @@ namespace UnrealBuildTool
 				throw new BuildException("Could not parse clang version from mabu spec '{0}'", MabuSpec);
 			}
 
-			string ClangVersion = string.Format("{0}.{1}", SpecMatch.Groups[1].Value, SpecMatch.Groups[2].Value);
+			//string ClangVersion = string.Format("{0}.{1}", SpecMatch.Groups[1].Value, SpecMatch.Groups[2].Value);
 
 			SetClangVersion(int.Parse(SpecMatch.Groups[1].Value), int.Parse(SpecMatch.Groups[2].Value), 0);
 
-			string MabuTools = RunMabuAndReadOutput("-t device --print-tools -q");
+			string MabuTools = RunMabuAndReadOutput("-t lumin_clang-8.0 --print-tools -q");
 
 			Dictionary<string, string> ToolsDict = new Dictionary<string, string>();
 			using (StringReader Reader = new StringReader(MabuTools))
@@ -361,7 +361,13 @@ namespace UnrealBuildTool
 			{
 				QuotedCommandPath = "'" + CommandPath + "'";
 			}
-			if (BuildHostPlatform.Current.ShellType != ShellType.Cmd)
+			if (BuildHostPlatform.Current.ShellType == ShellType.Cmd)
+			{
+				// Workaround for UE-91990: The first argument is sensitive to whitespaces even when
+				// properly quoted, so make it something trivial as a workaround.
+				CompileOrLinkAction.CommandArguments = String.Format("/c \"{0} -DLUMIN_CLANG_CMD_WORKAROUND=1 {1}\"", QuotedCommandPath, CommandArguments);
+			}
+			else
 			{
 				// When quoting the command for the shell, we also need to escape any quotes. Otherwise
 				// they inadvertently unquote the interior arguments. For example it would unquote the

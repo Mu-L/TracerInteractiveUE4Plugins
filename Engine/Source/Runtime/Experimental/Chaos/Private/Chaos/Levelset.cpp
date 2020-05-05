@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "Chaos/Levelset.h"
 #include "Containers/Queue.h"
 #include "Misc/FileHelper.h"
@@ -10,6 +10,11 @@
 #include "Chaos/ErrorReporter.h"
 #include "Chaos/MassProperties.h"
 #include "Chaos/TriangleMesh.h"
+#include "Chaos/Sphere.h"
+#include "Chaos/Box.h"
+#include "Chaos/Capsule.h"
+#include "Chaos/Convex.h"
+#include "Chaos/GeometryQueries.h"
 
 int32 OutputFailedLevelSetDebugData = 0;
 FAutoConsoleVariableRef CVarOutputFailedLevelSetDebugData(TEXT("p.LevelSetOutputFailedDebugData"), OutputFailedLevelSetDebugData, TEXT("Output debug obj files for level set and mesh when error tolerances are too high"));
@@ -17,14 +22,20 @@ FAutoConsoleVariableRef CVarOutputFailedLevelSetDebugData(TEXT("p.LevelSetOutput
 int32 FailureOnHighError = 0;
 FAutoConsoleVariableRef CVarFailureOnHighError(TEXT("p.LevelSetFailureOnHighError"), FailureOnHighError, TEXT("Set level sets with high error to null in the solver"));
 
-float AvgDistErrorTolerance = .05;
+float AvgDistErrorTolerance = 1.f;
 FAutoConsoleVariableRef CVarAvgDistErrorTolerance(TEXT("p.LevelSetAvgDistErrorTolerance"), AvgDistErrorTolerance, TEXT("Error tolerance for average distance between the triangles and generated levelset.  Note this is a fraction of the average bounding box dimensions."));
 
-float MaxDistErrorTolerance = .1;
+float MaxDistErrorTolerance = 1.f;
 FAutoConsoleVariableRef CVarMaxDistErrorTolerance(TEXT("p.LevelSetMaxDistErrorTolerance"), MaxDistErrorTolerance, TEXT("Max error for the highest error triangle generated from a levelset.  Note this is a fraction of the average bounding box dimensions."));
 
 float AvgAngleErrorTolerance = 1.;
 FAutoConsoleVariableRef CVarAvgAngleErrorTolerance(TEXT("p.LevelSetAvgAngleErrorTolerance"), AvgAngleErrorTolerance, TEXT("Average error in of the mesh normal and computed normal on the level set."));
+
+int32 NumOverlapSphereSamples = 16;
+FAutoConsoleVariableRef CVarNumOverlapSphereSamples(TEXT("p.LevelsetOverlapSphereSamples"), NumOverlapSphereSamples, TEXT("Number of spiral points to generate for levelset-sphere overlaps"));
+
+int32 NumOverlapCapsuleSamples = 24;
+FAutoConsoleVariableRef CVarNumOverlapCapsuleSamples(TEXT("p.LevelsetOverlapCapsuleSamples"), NumOverlapCapsuleSamples, TEXT("Number of spiral points to generate for levelset-capsule overlaps"));
 
 using namespace Chaos;
 
@@ -34,7 +45,7 @@ using namespace Chaos;
 
 template<class T, int d>
 TLevelSet<T, d>::TLevelSet(FErrorReporter& ErrorReporter, const TUniformGrid<T, d>& InGrid, const TParticles<T, d>& InParticles, const TTriangleMesh<T>& Mesh, const int32 BandWidth)
-    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::LevelSet)
+    : FImplicitObject(EImplicitObject::HasBoundingBox, ImplicitObjectType::LevelSet)
     , MGrid(InGrid)
     , MPhi(MGrid)
     , MNormals(MGrid)
@@ -45,11 +56,13 @@ TLevelSet<T, d>::TLevelSet(FErrorReporter& ErrorReporter, const TUniformGrid<T, 
 	check(MGrid.Counts()[0] > 1 && MGrid.Counts()[1] > 1 && MGrid.Counts()[2] > 1);
 	check(Mesh.GetSurfaceElements().Num());
 
-	const TArray<TVector<T, 3>> Normals = Mesh.GetFaceNormals(InParticles);
-
+	const TArray<TVector<T, 3>> Normals = 
+		Mesh.GetFaceNormals(
+			InParticles, 
+			false);			// Don't fail if the mesh has small faces
 	if (Normals.Num() == 0)
 	{
-		ErrorReporter.ReportError(TEXT("Normals came back empty. Does mesh contain coincident points?"));
+		ErrorReporter.ReportError(TEXT("Normals came back empty."));
 		return;
 	}
 
@@ -91,8 +104,8 @@ TLevelSet<T, d>::TLevelSet(FErrorReporter& ErrorReporter, const TUniformGrid<T, 
 }
 
 template<class T, int d>
-TLevelSet<T, d>::TLevelSet(FErrorReporter& ErrorReporter, const TUniformGrid<T, d>& InGrid, const TImplicitObject<T, d>& InObject, const int32 BandWidth, const bool bUseObjectPhi)
-    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::LevelSet)
+TLevelSet<T, d>::TLevelSet(FErrorReporter& ErrorReporter, const TUniformGrid<T, d>& InGrid, const FImplicitObject& InObject, const int32 BandWidth, const bool bUseObjectPhi)
+    : FImplicitObject(EImplicitObject::HasBoundingBox, ImplicitObjectType::LevelSet)
     , MGrid(InGrid)
     , MPhi(MGrid)
     , MNormals(MGrid)
@@ -149,7 +162,7 @@ TLevelSet<T, d>::TLevelSet(FErrorReporter& ErrorReporter, const TUniformGrid<T, 
 
 template<class T, int d>
 TLevelSet<T, d>::TLevelSet(std::istream& Stream)
-    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::LevelSet)
+    : FImplicitObject(EImplicitObject::HasBoundingBox, ImplicitObjectType::LevelSet)
     , MGrid(Stream)
     , MPhi(Stream)
     , MLocalBoundingBox(MGrid.MinCorner(), MGrid.MaxCorner())
@@ -160,7 +173,7 @@ TLevelSet<T, d>::TLevelSet(std::istream& Stream)
 
 template<class T, int d>
 TLevelSet<T, d>::TLevelSet(TLevelSet<T, d>&& Other)
-    : TImplicitObject<T, d>(EImplicitObject::HasBoundingBox, ImplicitObjectType::LevelSet)
+    : FImplicitObject(EImplicitObject::HasBoundingBox, ImplicitObjectType::LevelSet)
     , MGrid(MoveTemp(Other.MGrid))
     , MPhi(MoveTemp(Other.MPhi))
     , MLocalBoundingBox(MoveTemp(Other.MLocalBoundingBox))
@@ -171,6 +184,19 @@ TLevelSet<T, d>::TLevelSet(TLevelSet<T, d>&& Other)
 template<class T, int d>
 TLevelSet<T, d>::~TLevelSet()
 {
+}
+
+template<typename T, int d>
+TUniquePtr<FImplicitObject> TLevelSet<T, d>::DeepCopy() const
+{
+	TLevelSet<T, d>* Copy = new TLevelSet<T, d>();
+	Copy->MGrid = MGrid;
+	Copy->MPhi.Copy(MPhi);
+	Copy->MNormals.Copy(MNormals);
+	Copy->MLocalBoundingBox = MLocalBoundingBox;
+	Copy->MOriginalLocalBoundingBox = MOriginalLocalBoundingBox;
+	Copy->MBandWidth = MBandWidth;
+	return TUniquePtr<FImplicitObject>(Copy);
 }
 
 template<typename T, int d>
@@ -233,8 +259,18 @@ T TLevelSet<T, d>::ComputeLevelSetError(const TParticles<T, d>& InParticles, con
 	TArray<T> DistErrorValues;
 	DistErrorValues.AddDefaulted(Mesh.GetNumElements());
 
-	TArray<T> AngleErrorValues;
-	AngleErrorValues.AddDefaulted(Mesh.GetNumElements());
+	// Testing that the grid normal points generally in the same direction as the face normal
+	// depends on the geometry being very clean.  It's entirely reasonable that the geometry may
+	// have geometry on the interior that gets filled in on the grid, at which point the gradient
+	// should no longer be beholden to the direction of the surface normals.  So this test only 
+	// really makes sense for points on the zero isocontour.  But even then, I think this is more
+	// of a test that the geometry is well formed and consistent than whether the grid normals
+	// point the right direction.  And so, until we have time to formulate a better test, we 
+	// simply test that the level set normals point rougly in the same directions as the bounding 
+	// box normals, at the corners of the bounding box.  See below...
+
+	//TArray<T> AngleErrorValues;
+	//AngleErrorValues.AddDefaulted(Mesh.GetNumElements());
 
 	TArray<T> TriangleArea;
 	TriangleArea.AddDefaulted(Mesh.GetNumElements());
@@ -245,8 +281,9 @@ T TLevelSet<T, d>::ComputeLevelSetError(const TParticles<T, d>& InParticles, con
 		const TVector<int32, 3> CurrMeshFace = Faces[i];
 		const TVector<T, 3> MeshFaceCenter = (InParticles.X(CurrMeshFace[0]) + InParticles.X(CurrMeshFace[1]) + InParticles.X(CurrMeshFace[2])) / 3.f;
 
-		TVector<T, 3> GridNormal;
-		T phi = PhiWithNormal(MeshFaceCenter, GridNormal);
+		//TVector<T, 3> GridNormal;
+		//T phi = PhiWithNormal(MeshFaceCenter, GridNormal);
+		const T phi = SignedDistance(MeshFaceCenter);
 
 		// ignore triangles where the the center is more than 2 voxels inside
 		// #note: this biases the statistics since what we really want to do is preprocess for interior triangles, but
@@ -257,20 +294,17 @@ T TLevelSet<T, d>::ComputeLevelSetError(const TParticles<T, d>& InParticles, con
 
 			for (int j = 0; j < d; ++j)
 			{
-				TVector<T, 3> UnusedGridNormal;
-
-				DistErrorValues[i] += FMath::Abs(PhiWithNormal(InParticles.X(CurrMeshFace[j]), UnusedGridNormal));
+				DistErrorValues[i] += FMath::Abs(SignedDistance(InParticles.X(CurrMeshFace[j])));
 			}
 
 			// per triangle error average of 3 corners and center distance to surface according to MPhi
 			DistErrorValues[i] /= 4.f;
 
 			// angle error computed by angle between mesh face normal and level set gradient
-			TVector<T, 3> MeshFaceNormal = Normals[i];
-			MeshFaceNormal.SafeNormalize();
-
-			GridNormal.SafeNormalize();
-			AngleErrorValues[i] = FMath::Acos(TVector<T, 3>::DotProduct(MeshFaceNormal, GridNormal));
+			//TVector<T, 3> MeshFaceNormal = Normals[i];
+			//MeshFaceNormal.SafeNormalize();
+			//GridNormal.SafeNormalize();
+			//AngleErrorValues[i] = FMath::Acos(TVector<T, 3>::DotProduct(MeshFaceNormal, GridNormal));
 
 			// triangle area used for weighted average
 			TriangleArea[i] = .5 * sqrt(TVector<T, d>::CrossProduct(InParticles.X(CurrMeshFace[1]) - InParticles.X(CurrMeshFace[0]), InParticles.X(CurrMeshFace[2]) - InParticles.X(CurrMeshFace[0])).SizeSquared());
@@ -278,7 +312,7 @@ T TLevelSet<T, d>::ComputeLevelSetError(const TParticles<T, d>& InParticles, con
 	});
 
 	float TotalDistError = 0.f;
-	float TotalAngleError = 0.f;
+	//float TotalAngleError = 0.f;
 	float TotalTriangleArea = 0.f;
 	float MaxError = -1. * FLT_MAX;
 	for (int i = 0; i < Mesh.GetNumElements(); ++i)
@@ -290,7 +324,7 @@ T TLevelSet<T, d>::ComputeLevelSetError(const TParticles<T, d>& InParticles, con
 
 		// weight the error values by the area
 		TotalDistError += DistErrorValues[i] * TriangleArea[i];
-		TotalAngleError += AngleErrorValues[i] * TriangleArea[i];
+		//TotalAngleError += AngleErrorValues[i] * TriangleArea[i];
 		TotalTriangleArea += TriangleArea[i];
 	}
 
@@ -298,7 +332,7 @@ T TLevelSet<T, d>::ComputeLevelSetError(const TParticles<T, d>& InParticles, con
 	if (TotalTriangleArea < 1e-5)
 	{
 		MaxDistError = MAX_flt;
-		AngleError = MAX_flt;
+		//AngleError = MAX_flt;
 		return MAX_flt;
 	}
 
@@ -313,14 +347,60 @@ T TLevelSet<T, d>::ComputeLevelSetError(const TParticles<T, d>& InParticles, con
 	if (AvgExtents < 1e-5)
 	{
 		MaxDistError = MAX_flt;
-		AngleError = MAX_flt;
+		//AngleError = MAX_flt;
 		return MAX_flt;
 	}
 
 	AvgDistError /= AvgExtents;
 	MaxDistError = MaxError / AvgExtents;
 
-	AngleError = TotalAngleError / TotalTriangleArea;
+	//AngleError = TotalAngleError / TotalTriangleArea;
+
+	// Test the normal directions at the corners of the bounding box that they
+	// point outward.
+	const TAABB<T, d> BBox = BoundingBox();
+	const TVector<T, 3>& MinPt = BBox.Min();
+	const TVector<T, 3>& MaxPt = BBox.Max();
+	
+	bool Fail = false;
+	TVector<T, 3> Pt = MinPt;
+	TVector<T, d> BoxNorm, LSNorm;
+	for (int i = 0; i < 8; i++)
+	{
+		// i
+		// 0 - (min, min, min) MinPt
+		// 1 - (max, min, min)
+		// 2 - (min, max, min)
+		// 3 - (min, min, max)
+
+		// 4 - (max, max, max) MaxPt
+		// 5 - (min, max, max)
+		// 6 - (max, min, max)
+		// 7 - (max, max, min)
+
+		if (i <= 3)
+		{
+			Pt = MinPt;
+			if (i == 1) Pt[0] = MaxPt[0];
+			else if (i == 2) Pt[1] = MaxPt[1];
+			else if (i == 3) Pt[2] = MaxPt[2];
+		}
+		else
+		{
+			Pt = MaxPt;
+			if (i == 5) Pt[0] = MinPt[0];
+			else if (i == 6) Pt[1] = MinPt[1];
+			else if (i == 7) Pt[2] = MinPt[2];
+		}
+
+		BBox.PhiWithNormal(Pt, BoxNorm);
+		PhiWithNormal(Pt, LSNorm);
+		const float Dot = Chaos::TVector<T, 3>::DotProduct(BoxNorm, LSNorm);
+		if (Dot < 0)
+		{
+			AngleError += FMath::Abs(FMath::Acos(Dot));
+		}
+	}
 
 	return AvgDistError;
 }
@@ -488,7 +568,7 @@ bool TLevelSet<T, d>::CheckData(FErrorReporter& ErrorReporter, const TParticles<
 	float AvgDistError = ComputeLevelSetError(InParticles, Normals, Mesh, AvgAngleError, MaxDistError);
 
 	// Report high error, but don't report it as an invalid level set
-	if (AvgDistError > AvgDistErrorTolerance || AvgAngleError > AvgAngleErrorTolerance || MaxDistError > MaxDistErrorTolerance)
+	if (AvgDistError > AvgDistErrorTolerance*MGrid.Dx().Size() || AvgAngleError > AvgAngleErrorTolerance || MaxDistError > MaxDistErrorTolerance*MGrid.Dx().Size())
 	{
 		if (OutputFailedLevelSetDebugData)
 		{
@@ -498,13 +578,20 @@ bool TLevelSet<T, d>::CheckData(FErrorReporter& ErrorReporter, const TParticles<
 
 		if (FailureOnHighError)
 		{
-			FString ErrorStr = FString::Printf(TEXT("High error for level set: AvgDistError: %f, MaxDistError: %f, AvgAngleError: %f"), AvgDistError, MaxDistError, AvgAngleError);
+			FString ErrorStr = FString::Printf(TEXT("High error for level set: AvgDistError: %f (Max: %f*%f), MaxDistError: %f (Max: %f*%f), AvgAngleError: %f (Max: %f)"), 
+				AvgDistError, AvgDistErrorTolerance, MGrid.Dx().Size(),
+				MaxDistError, MaxDistErrorTolerance, MGrid.Dx().Size(),
+				AvgAngleError, AvgAngleErrorTolerance);
 			ErrorReporter.ReportError(*ErrorStr);
 			return false;
 		}
 		else
 		{
-			UE_LOG(LogChaos, Log, TEXT("%s: High error for level set: AvgDistError: %f, MaxDistError: %f, AvgAngleError: %f"), *ErrorReporter.GetPrefix(), AvgDistError, MaxDistError, AvgAngleError);
+			UE_LOG(LogChaos, Log, TEXT("%s: High error for level set: AvgDistError: %f (Max: %f*%f), MaxDistError: %f (Max: %f*%f), AvgAngleError: %f (Max: %f)"), 
+				*ErrorReporter.GetPrefix(), 
+				AvgDistError, AvgDistErrorTolerance, MGrid.Dx().Size(),
+				MaxDistError, MaxDistErrorTolerance, MGrid.Dx().Size(),
+				AvgAngleError, AvgAngleErrorTolerance);
 		}
 	}
 
@@ -571,7 +658,7 @@ bool TLevelSet<T, d>::ComputeDistancesNearZeroIsocontour(FErrorReporter& ErrorRe
 	const TArray<TVector<int32, 3>>& Elements = Mesh.GetSurfaceElements();
 	if (Elements.Num() > 0)
 	{
-		MOriginalLocalBoundingBox = TBox<T, d>(InParticles.X(Elements[0][0]), InParticles.X(Elements[0][0]));
+		MOriginalLocalBoundingBox = TAABB<T, d>(InParticles.X(Elements[0][0]), InParticles.X(Elements[0][0]));
 	}
 	else
 	{
@@ -583,7 +670,7 @@ bool TLevelSet<T, d>::ComputeDistancesNearZeroIsocontour(FErrorReporter& ErrorRe
 	{
 		const auto& Element = Elements[Index];
 		TPlane<T, d> TrianglePlane(InParticles.X(Element[0]), Normals[Index]);
-		TBox<T, d> TriangleBounds(InParticles.X(Element[0]), InParticles.X(Element[0]));
+		TAABB<T, d> TriangleBounds(InParticles.X(Element[0]), InParticles.X(Element[0]));
 		TriangleBounds.GrowToInclude(InParticles.X(Element[1]));
 		TriangleBounds.GrowToInclude(InParticles.X(Element[2]));
 		MOriginalLocalBoundingBox.GrowToInclude(TriangleBounds); //also save the original bounding box
@@ -637,7 +724,7 @@ bool TLevelSet<T, d>::ComputeDistancesNearZeroIsocontour(FErrorReporter& ErrorRe
 }
 
 template<class T, int d>
-void TLevelSet<T, d>::ComputeDistancesNearZeroIsocontour(const TImplicitObject<T, d>& Object, const TArrayND<T, d>& ObjectPhi, TArray<TVector<int32, d>>& InterfaceIndices)
+void TLevelSet<T, d>::ComputeDistancesNearZeroIsocontour(const FImplicitObject& Object, const TArrayND<T, d>& ObjectPhi, TArray<TVector<int32, d>>& InterfaceIndices)
 {
 	MPhi.Fill(FLT_MAX);
 	const auto& Counts = MGrid.Counts();
@@ -1208,7 +1295,7 @@ void TLevelSet<T, d>::ComputeNormals(const TParticles<T, d>& InParticles, const 
 	const TArray<TVector<int32, 3>>& Elements = Mesh.GetSurfaceElements();
 	if (Elements.Num() > 0)
 	{
-		MOriginalLocalBoundingBox = TBox<T, d>(InParticles.X(Elements[0][0]), InParticles.X(Elements[0][0]));
+		MOriginalLocalBoundingBox = TAABB<T, d>(InParticles.X(Elements[0][0]), InParticles.X(Elements[0][0]));
 	}
 	else
 	{
@@ -1218,7 +1305,7 @@ void TLevelSet<T, d>::ComputeNormals(const TParticles<T, d>& InParticles, const 
 	{
 		const auto& Element = Elements[Index];
 		TPlane<T, d> TrianglePlane(InParticles.X(Element[0]), Normals[Index]);
-		TBox<T, d> TriangleBounds(InParticles.X(Element[0]), InParticles.X(Element[0]));
+		TAABB<T, d> TriangleBounds(InParticles.X(Element[0]), InParticles.X(Element[0]));
 		TriangleBounds.GrowToInclude(InParticles.X(Element[1]));
 		TriangleBounds.GrowToInclude(InParticles.X(Element[2]));
 		MOriginalLocalBoundingBox.GrowToInclude(TriangleBounds); //also save the original bounding box
@@ -1329,7 +1416,7 @@ T TLevelSet<T, d>::PhiWithNormal(const TVector<T, d>& x, TVector<T, d>& Normal) 
 	T SizeSquared = (Location - x).SizeSquared();
 	if (SizeSquared)
 	{
-		Normal = MLocalBoundingBox.Normal(x);
+		MLocalBoundingBox.PhiWithNormal(x, Normal);
 	}
 	else
 	{
@@ -1347,6 +1434,310 @@ T TLevelSet<T, d>::PhiWithNormal(const TVector<T, d>& x, TVector<T, d>& Normal) 
 	}
 	T Phi = MGrid.LinearlyInterpolate(MPhi, Location);
 	return SizeSquared ? (sqrt(SizeSquared) + Phi) : Phi;
+}
+
+void GetGeomSurfaceSamples(const TSphere<FReal, 3>& InGeom, TArray<FVec3>& OutSamples)
+{
+	OutSamples.Reset();
+	OutSamples.AddUninitialized(6);
+
+	const FReal Radius = InGeom.GetRadius();
+
+	OutSamples[0] = FVec3(Radius, 0, 0);
+	OutSamples[1] = FVec3(-Radius, 0, 0);
+	OutSamples[2] = FVec3(0, Radius, Radius);
+	OutSamples[3] = FVec3(0, -Radius, Radius);
+	OutSamples[4] = FVec3(0, -Radius, -Radius);
+	OutSamples[5] = FVec3(0, Radius, -Radius);
+}
+
+void GetGeomSurfaceSamples(const TBox<FReal, 3>& InGeom, TArray<FVec3>& OutSamples)
+{
+	OutSamples.Reset();
+	OutSamples.AddUninitialized(8);
+
+	const FVec3& Min = InGeom.Min();
+	const FVec3& Max = InGeom.Max();
+
+	OutSamples[0] = FVec3(Min.X, Min.Y, Min.Z);
+	OutSamples[1] = FVec3(Min.X, Min.Y, Max.Z);
+	OutSamples[2] = FVec3(Min.X, Max.Y, Min.Z);
+	OutSamples[3] = FVec3(Max.X, Min.Y, Min.Z);
+	OutSamples[4] = FVec3(Max.X, Max.Y, Max.Z);
+	OutSamples[5] = FVec3(Max.X, Max.Y, Min.Z);
+	OutSamples[6] = FVec3(Max.X, Min.Y, Max.Z);
+	OutSamples[7] = FVec3(Min.X, Max.Y, Max.Z);
+}
+
+void GetGeomSurfaceSamples(const TCapsule<FReal>& InGeom, TArray<FVec3>& OutSamples)
+{
+	OutSamples.Reset();
+	OutSamples.AddUninitialized(14);
+
+	FReal Radius = InGeom.GetRadius();
+	FReal HalfHeight = InGeom.GetHeight() * 0.5f;
+
+	OutSamples[0]	= FVec3(HalfHeight + Radius, 0, 0);
+	OutSamples[1]	= FVec3(-HalfHeight - Radius, 0, 0);
+	OutSamples[2]	= FVec3(HalfHeight, Radius, Radius);
+	OutSamples[3]	= FVec3(HalfHeight, -Radius, Radius);
+	OutSamples[4]	= FVec3(HalfHeight, -Radius, -Radius);
+	OutSamples[5]	= FVec3(HalfHeight, Radius, -Radius);
+	OutSamples[6]	= FVec3(0, Radius, Radius);
+	OutSamples[7]	= FVec3(0, -Radius, Radius);
+	OutSamples[8]	= FVec3(0, -Radius, -Radius);
+	OutSamples[9]	= FVec3(0, Radius, -Radius);
+	OutSamples[10]	= FVec3(-HalfHeight, Radius, Radius);
+	OutSamples[11]	= FVec3(-HalfHeight, -Radius, Radius);
+	OutSamples[12]	= FVec3(-HalfHeight, -Radius, -Radius);
+	OutSamples[13]	= FVec3(-HalfHeight, Radius, -Radius);
+}
+
+void GetGeomSurfaceSamples(const FConvex& InGeom, TArray<FVec3>& OutSamples)
+{
+	const TParticles<FReal, 3>& Particles = InGeom.GetSurfaceParticles();
+
+	const int32 NumParticles = Particles.Size();
+
+	OutSamples.Reset();
+	OutSamples.AddUninitialized(NumParticles);
+
+	for(int32 Index = 0; Index < NumParticles; ++Index)
+	{
+		OutSamples[Index] = Particles.X(Index);
+	}
+}
+
+template<typename InnerT>
+void GetGeomSurfaceSamples(const TImplicitObjectScaled<InnerT>& InScaledGeom, TArray<FVec3>& OutSamples)
+{
+	const InnerT* InnerObject = InScaledGeom.Object().Get();
+
+	if(InnerObject)
+	{
+		GetGeomSurfaceSamples(*InnerObject, OutSamples);
+
+		const FVec3 Scale = InScaledGeom.GetScale();
+
+		for(FVec3& Sample : OutSamples)
+		{
+			Sample *= Scale;
+		}
+	}
+}
+
+template<class T, int d>
+template <typename QueryGeomType>
+bool TLevelSet<T, d>::SweepGeomImp(const QueryGeomType& QueryGeom, const FRigidTransform3& StartTM, const FVec3& Dir, const FReal Length,
+	FReal& OutTime, FVec3& OutPosition, FVec3& OutNormal, int32& OutFaceIndex, const FReal Thickness, const bool bComputeMTD) const
+{
+	TArray<FVec3> Samples;
+	GetGeomSurfaceSamples(QueryGeom, Samples);
+
+	OutTime = TNumericLimits<FReal>::Max();
+	FReal TempTime = TNumericLimits<FReal>::Max();
+	FVec3 TempNormal(0);
+	FVec3 TempPosition(0);
+	int32 FaceIndex;
+
+	bool bHit = false;
+
+	for(const FVec3& Sample : Samples)
+	{
+		FVec3 Transformed = StartTM.TransformPosition(Sample);
+		Raycast(Transformed, Dir, Length, 0, TempTime, TempPosition, TempNormal, FaceIndex);
+
+		if(TempTime < OutTime)
+		{
+			OutTime = TempTime;
+			OutPosition = TempPosition;
+			OutNormal = TempNormal;
+			bHit = true;
+		}
+	}
+
+	return bHit;
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::SweepGeom(const TSphere<FReal, 3>& QueryGeom, const FRigidTransform3& StartTM, const FVec3& Dir, const FReal Length, FReal& OutTime, FVec3& OutPosition, FVec3& OutNormal, int32& OutFaceIndex, const FReal Thickness, const bool bComputeMTD) const
+{
+	return SweepGeomImp(QueryGeom, StartTM, Dir, Length, OutTime, OutPosition, OutNormal, OutFaceIndex, Thickness, bComputeMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::SweepGeom(const TBox<FReal, 3>& QueryGeom, const FRigidTransform3& StartTM, const FVec3& Dir, const FReal Length, FReal& OutTime, FVec3& OutPosition, FVec3& OutNormal, int32& OutFaceIndex, const FReal Thickness, const bool bComputeMTD) const
+{
+	return SweepGeomImp(QueryGeom, StartTM, Dir, Length, OutTime, OutPosition, OutNormal, OutFaceIndex, Thickness, bComputeMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::SweepGeom(const TCapsule<FReal>& QueryGeom, const FRigidTransform3& StartTM, const FVec3& Dir, const FReal Length, FReal& OutTime, FVec3& OutPosition, FVec3& OutNormal, int32& OutFaceIndex, const FReal Thickness, const bool bComputeMTD) const
+{
+	return SweepGeomImp(QueryGeom, StartTM, Dir, Length, OutTime, OutPosition, OutNormal, OutFaceIndex, Thickness, bComputeMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::SweepGeom(const FConvex& QueryGeom, const FRigidTransform3& StartTM, const FVec3& Dir, const FReal Length, FReal& OutTime, FVec3& OutPosition, FVec3& OutNormal, int32& OutFaceIndex, const FReal Thickness, const bool bComputeMTD) const
+{
+	return SweepGeomImp(QueryGeom, StartTM, Dir, Length, OutTime, OutPosition, OutNormal, OutFaceIndex, Thickness, bComputeMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::SweepGeom(const TImplicitObjectScaled<TSphere<FReal, 3>>& QueryGeom, const FRigidTransform3& StartTM, const FVec3& Dir, const FReal Length, FReal& OutTime, FVec3& OutPosition, FVec3& OutNormal, int32& OutFaceIndex, const FReal Thickness, const bool bComputeMTD) const
+{
+	return SweepGeomImp(QueryGeom, StartTM, Dir, Length, OutTime, OutPosition, OutNormal, OutFaceIndex, Thickness, bComputeMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::SweepGeom(const TImplicitObjectScaled<TBox<FReal, 3>>& QueryGeom, const FRigidTransform3& StartTM, const FVec3& Dir, const FReal Length, FReal& OutTime, FVec3& OutPosition, FVec3& OutNormal, int32& OutFaceIndex, const FReal Thickness, const bool bComputeMTD) const
+{
+	return SweepGeomImp(QueryGeom, StartTM, Dir, Length, OutTime, OutPosition, OutNormal, OutFaceIndex, Thickness, bComputeMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::SweepGeom(const TImplicitObjectScaled<TCapsule<FReal>>& QueryGeom, const FRigidTransform3& StartTM, const FVec3& Dir, const FReal Length, FReal& OutTime, FVec3& OutPosition, FVec3& OutNormal, int32& OutFaceIndex, const FReal Thickness, const bool bComputeMTD) const
+{
+	return SweepGeomImp(QueryGeom, StartTM, Dir, Length, OutTime, OutPosition, OutNormal, OutFaceIndex, Thickness, bComputeMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::SweepGeom(const TImplicitObjectScaled<FConvex>& QueryGeom, const FRigidTransform3& StartTM, const FVec3& Dir, const FReal Length, FReal& OutTime, FVec3& OutPosition, FVec3& OutNormal, int32& OutFaceIndex, const FReal Thickness, const bool bComputeMTD) const
+{
+	return SweepGeomImp(QueryGeom, StartTM, Dir, Length, OutTime, OutPosition, OutNormal, OutFaceIndex, Thickness, bComputeMTD);
+}
+
+void GetGeomSurfaceSamplesExtended(const TSphere<FReal, 3>& InGeom, TArray<FVec3>& OutSamples)
+{
+	OutSamples = InGeom.ComputeLocalSamplePoints(NumOverlapSphereSamples);
+}
+
+void GetGeomSurfaceSamplesExtended(const TBox<FReal, 3>& InGeom, TArray<FVec3>& OutSamples)
+{
+	OutSamples = InGeom.ComputeLocalSamplePoints();
+}
+
+void GetGeomSurfaceSamplesExtended(const TCapsule<FReal>& InGeom, TArray<FVec3>& OutSamples)
+{
+	OutSamples = InGeom.ComputeLocalSamplePoints(NumOverlapCapsuleSamples);
+}
+
+void GetGeomSurfaceSamplesExtended(const FConvex& InGeom, TArray<FVec3>& OutSamples)
+{
+	// Convex doesn't have extended samples
+	GetGeomSurfaceSamples(InGeom, OutSamples);
+}
+
+template<typename InnerT>
+void GetGeomSurfaceSamplesExtended(const TImplicitObjectScaled<InnerT>& InScaledGeom, TArray<FVec3>& OutSamples)
+{
+	const InnerT* InnerObject = InScaledGeom.Object().Get();
+
+	if(InnerObject)
+	{
+		GetGeomSurfaceSamplesExtended(*InnerObject, OutSamples);
+
+		const FVec3 Scale = InScaledGeom.GetScale();
+
+		for(FVec3& Sample : OutSamples)
+		{
+			Sample *= Scale;
+		}
+	}
+}
+
+template<class T, int d>
+template <typename QueryGeomType>
+bool TLevelSet<T, d>::OverlapGeomImp(const QueryGeomType& QueryGeom, const FRigidTransform3& QueryTM, const FReal Thickness, FMTDInfo* OutMTD) const
+{
+	// NOTE: This isn't a perfect overlap implementation. It takes particle samples from the query
+	// geoemetry and looks for intersections, often this means that we're only detecting on the surface
+	// of the query geometry.
+	// #BGTODO better sampling of levelset, then invert the check for levelset point inside querygeom
+	bool bResult = false;
+
+	if(OutMTD)
+	{
+		OutMTD->Normal = FVec3(0);
+		OutMTD->Penetration = 0;
+	}
+
+	TArray<FVec3> SamplePoints;
+	FVec3 TempNormal;
+	FReal TempPhi;
+
+	// Use an extended set of points here to attempt to get a better overlap
+	GetGeomSurfaceSamplesExtended(QueryGeom, SamplePoints);
+
+	for(const FVec3& Sample : SamplePoints)
+	{
+		const FVec3 Transformed = QueryTM.TransformPosition(Sample);
+		TempPhi = PhiWithNormal(Transformed, TempNormal);
+
+		if(OutMTD && (-TempPhi) > OutMTD->Penetration)
+		{
+			OutMTD->Penetration = -TempPhi;
+			OutMTD->Normal = TempNormal;
+			bResult = true;
+		}
+		else
+		{
+			if(TempPhi <= 0)
+			{
+				return true;
+			}
+		}
+	}
+
+	return bResult;
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::OverlapGeom(const TSphere<FReal, 3>& QueryGeom, const FRigidTransform3& QueryTM, const FReal Thickness, FMTDInfo* OutMTD) const
+{
+	return OverlapGeomImp(QueryGeom, QueryTM, Thickness, OutMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::OverlapGeom(const TBox<FReal, 3>& QueryGeom, const FRigidTransform3& QueryTM, const FReal Thickness, FMTDInfo* OutMTD) const
+{
+	return OverlapGeomImp(QueryGeom, QueryTM, Thickness, OutMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::OverlapGeom(const TCapsule<FReal>& QueryGeom, const FRigidTransform3& QueryTM, const FReal Thickness, FMTDInfo* OutMTD) const
+{
+	return OverlapGeomImp(QueryGeom, QueryTM, Thickness, OutMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::OverlapGeom(const FConvex& QueryGeom, const FRigidTransform3& QueryTM, const FReal Thickness, FMTDInfo* OutMTD) const
+{
+	return OverlapGeomImp(QueryGeom, QueryTM, Thickness, OutMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::OverlapGeom(const TImplicitObjectScaled<TSphere<FReal, 3>>& QueryGeom, const FRigidTransform3& QueryTM, const FReal Thickness, FMTDInfo* OutMTD) const
+{
+	return OverlapGeomImp(QueryGeom, QueryTM, Thickness, OutMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::OverlapGeom(const TImplicitObjectScaled<TBox<FReal, 3>>& QueryGeom, const FRigidTransform3& QueryTM, const FReal Thickness, FMTDInfo* OutMTD) const
+{
+	return OverlapGeomImp(QueryGeom, QueryTM, Thickness, OutMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::OverlapGeom(const TImplicitObjectScaled<TCapsule<FReal>>& QueryGeom, const FRigidTransform3& QueryTM, const FReal Thickness, FMTDInfo* OutMTD) const
+{
+	return OverlapGeomImp(QueryGeom, QueryTM, Thickness, OutMTD);
+}
+
+template<class T, int d>
+bool TLevelSet<T, d>::OverlapGeom(const TImplicitObjectScaled<FConvex>& QueryGeom, const FRigidTransform3& QueryTM, const FReal Thickness, FMTDInfo* OutMTD) const
+{
+	return OverlapGeomImp(QueryGeom, QueryTM, Thickness, OutMTD);
 }
 
 template class Chaos::TLevelSet<float, 3>;

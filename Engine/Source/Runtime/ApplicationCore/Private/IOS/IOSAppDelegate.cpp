@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "IOS/IOSAppDelegate.h"
 #include "IOS/IOSCommandLineHelper.h"
@@ -60,6 +60,7 @@ extern bool GShowSplashScreen;
 
 FIOSCoreDelegates::FOnOpenURL FIOSCoreDelegates::OnOpenURL;
 FIOSCoreDelegates::FOnWillResignActive FIOSCoreDelegates::OnWillResignActive;
+FIOSCoreDelegates::FOnDidBecomeActive FIOSCoreDelegates::OnDidBecomeActive;
 TArray<FIOSCoreDelegates::FFilterDelegateAndHandle> FIOSCoreDelegates::PushNotificationFilters;
 
 static uint GEnabledAudioFeatures[(uint8)EAudioFeature::NumFeatures];
@@ -313,6 +314,11 @@ static IOSAppDelegate* CachedDelegate = nil;
 
 	FAppEntry::Init();
 
+	// check for update on app store if cvar is enabled
+/*	dispatch_async(dispatch_get_main_queue(), ^{
+		[[IOSAppDelegate GetDelegate] DoUpdateCheck];
+	});*/
+	
 	// now that GConfig has been loaded, load the EnabledAudioFeatures from ini
 	TArray<FString> EnabledAudioFeatures;
 	GConfig->GetArray(TEXT("Audio"), TEXT("EnabledAudioFeatures"), EnabledAudioFeatures, GEngineIni);
@@ -327,7 +333,9 @@ static IOSAppDelegate* CachedDelegate = nil;
 	}
 	[self ToggleAudioSession:true];
 
+#if !BUILD_EMBEDDED_APP
 	[self InitIdleTimerSettings];
+#endif
 
 	bEngineInit = true;
     
@@ -603,17 +611,6 @@ static IOSAppDelegate* CachedDelegate = nil;
 		return;
 	}
 	
-	// set the AVAudioSession active if necessary
-	NSError* ActiveError = nil;
-	if (bActive)
-	{
-		[[AVAudioSession sharedInstance] setActive:bActive error:&ActiveError];
-		if (ActiveError)
-		{
-			UE_LOG(LogIOSAudioSession, Error, TEXT("Failed to set audio session to active = %d [Error = %s]"), bActive, *FString([ActiveError description]));
-		}
-	}
-
 	self.bAudioActive = bActive;
 	
 	// get the category and settings to use
@@ -689,6 +686,7 @@ static IOSAppDelegate* CachedDelegate = nil;
 		TestOptions |= AVAudioSessionCategoryOptionMixWithOthers;
 	}
 	// set the category if anything has changed
+	NSError* ActiveError = nil;
 	if ([[[AVAudioSession sharedInstance] category] compare:Category] != NSOrderedSame ||
 		[[[AVAudioSession sharedInstance] mode] compare:Mode] != NSOrderedSame ||
 		[[AVAudioSession sharedInstance] categoryOptions] != TestOptions)
@@ -699,6 +697,16 @@ static IOSAppDelegate* CachedDelegate = nil;
 		if (ActiveError)
 		{
 			UE_LOG(LogIOSAudioSession, Error, TEXT("Failed to set AVAudioSession category to Category:%s Mode:%s Options:%x! [Error = %s]"), *FString(Category), *FString(Mode), Options, *FString([ActiveError description]));
+		}
+	}
+	
+	// set the AVAudioSession active if necessary
+	if (bActive)
+	{
+		[[AVAudioSession sharedInstance] setActive:bActive error:&ActiveError];
+		if (ActiveError)
+		{
+			UE_LOG(LogIOSAudioSession, Error, TEXT("Failed to set audio session to active = %d [Error = %s]"), bActive, *FString([ActiveError description]));
 		}
 	}
 }
@@ -939,197 +947,30 @@ static FAutoConsoleVariableRef CVarGEnableThermalsReport(
 	self.PeakMemoryTimer = [NSTimer scheduledTimerWithTimeInterval:0.1f target:self selector:@selector(RecordPeakMemory) userInfo:nil repeats:YES];
 
 #if !BUILD_EMBEDDED_APP
-	// create the main landscape window object
-	CGRect MainFrame = [[UIScreen mainScreen] bounds];
-	self.Window = [[UIWindow alloc] initWithFrame:MainFrame];
-	self.Window.screen = [UIScreen mainScreen];
+    
+    
+    CGRect MainFrame = [[UIScreen mainScreen] bounds];
+    self.Window = [[UIWindow alloc] initWithFrame:MainFrame];
+    self.Window.screen = [UIScreen mainScreen];
     
     // get the native scale
     const float NativeScale = [[UIScreen mainScreen] scale];
     
-	//Make this the primary window, and show it.
-	[self.Window makeKeyAndVisible];
+    [self.Window makeKeyAndVisible];
 
-	FAppEntry::PreInit(self, application);
+    FAppEntry::PreInit(self, application);
+
+    UIStoryboard *storyboard = [UIStoryboard storyboardWithName:@"LaunchScreen" bundle:nil];
+    if (storyboard != nil)
+    {
+        UIViewController *viewController = [storyboard instantiateViewControllerWithIdentifier:@"LaunchScreen"];
+        viewController.view.tag = 200;
+        [self.Window addSubview: viewController.view];
+        GShowSplashScreen = true;
+    }
     
-    // add the default image as a subview
-    NSMutableString* path = [[NSMutableString alloc]init];
-    [path setString: [[NSBundle mainBundle] resourcePath]];
-    UIImageOrientation orient = UIImageOrientationUp;
-    NSMutableString* ImageString = [[NSMutableString alloc]init];
-	NSMutableString* PngString = [[NSMutableString alloc] init];
-    [ImageString appendString:@"Default"];
 
-
-	FPlatformMisc::EIOSDevice Device = FPlatformMisc::GetIOSDeviceType();
-
-	// iphone6 has specially named files, this seems to be needed for every iphone since, so let's see if we can find a better way to do this which isn't device specific
-    if (Device == FPlatformMisc::IOS_IPhone6 || Device == FPlatformMisc::IOS_IPhone6S || Device == FPlatformMisc::IOS_IPhone7 || Device == FPlatformMisc::IOS_IPhone8)
-	{
-		[ImageString appendString:@"-IPhone6"];
-		if (!self.bDeviceInPortraitMode)
-		{
-			[ImageString appendString : @"-Landscape"];
-		}
-	}
-    else if (Device == FPlatformMisc::IOS_IPhone6Plus || Device == FPlatformMisc::IOS_IPhone6SPlus || Device == FPlatformMisc::IOS_IPhone7Plus || Device == FPlatformMisc::IOS_IPhone8Plus)
-	{
-		[ImageString appendString : @"-IPhone6Plus"];
-		if (!self.bDeviceInPortraitMode)
-		{
-			[ImageString appendString : @"-Landscape"];
-		}
-		else
-		{
-			[ImageString appendString : @"-Portrait"];
-		}
-	}
-	else if (Device == FPlatformMisc::IOS_IPhoneX || Device == FPlatformMisc::IOS_IPhoneXS || Device == FPlatformMisc::IOS_IPhone11Pro)
-	{
-		[ImageString appendString : @"-IPhoneXS"];
-		if (!self.bDeviceInPortraitMode)
-		{
-			[ImageString appendString : @"-Landscape"];
-		}
-		else
-		{
-			[ImageString appendString : @"-Portrait"];
-		}
-	}
-	else if (Device == FPlatformMisc::IOS_IPhoneXSMax || Device == FPlatformMisc::IOS_IPhone11ProMax)
-    {
-        [ImageString appendString : @"-IPhoneXSMax"];
-        if (!self.bDeviceInPortraitMode)
-        {
-            [ImageString appendString : @"-Landscape"];
-        }
-        else
-        {
-            [ImageString appendString : @"-Portrait"];
-        }
-    }
-	else if (Device == FPlatformMisc::IOS_IPhoneXR || Device == FPlatformMisc::IOS_IPhone11)
-    {
-        [ImageString appendString : @"-IPhoneXR"];
-        if (!self.bDeviceInPortraitMode)
-        {
-            [ImageString appendString : @"-Landscape"];
-        }
-        else
-        {
-            [ImageString appendString : @"-Portrait"];
-        }
-    }
-	else if (Device == FPlatformMisc::IOS_AppleTV)
-	{
-		// @todo tvos: Make an AppleTV one?
-		// use IPhone6 image for now
-		[ImageString appendString : @"-IPhone6Plus-Landscape"];
-	}
-	else if (Device == FPlatformMisc::IOS_IPadPro_129 || Device == FPlatformMisc::IOS_IPadPro2_129 || Device == FPlatformMisc::IOS_IPadPro3_129)
-	{
-		if (!self.bDeviceInPortraitMode)
-		{
-			[ImageString appendString : @"-Landscape-1336"];
-		}
-		else
-		{
-			[ImageString appendString : @"-Portrait-1336"];
-		}
-        
-        if (NativeScale > 1.0f)
-        {
-            [ImageString appendString:@"@2x"];
-        }
-	}
-	else if (Device == FPlatformMisc::IOS_IPadPro_105)
-	{
-		if (!self.bDeviceInPortraitMode)
-		{
-			[ImageString appendString : @"-Landscape-1112"];
-		}
-		else
-		{
-			[ImageString appendString : @"-Portrait-1112"];
-		}
-
-		if (NativeScale > 1.0f)
-		{
-			[ImageString appendString : @"@2x"];
-		}
-	}
-	else if (Device == FPlatformMisc::IOS_IPadPro_11)
-	{
-		if (!self.bDeviceInPortraitMode)
-		{
-			[ImageString appendString : @"-Landscape-1194"];
-		}
-		else
-		{
-			[ImageString appendString : @"-Portrait-1194"];
-		}
-
-		if (NativeScale > 1.0f)
-		{
-			[ImageString appendString : @"@2x"];
-		}
-	}
-	else
-	{
-		if (MainFrame.size.height == 320 && MainFrame.size.width != 480 && !self.bDeviceInPortraitMode)
-		{
-			[ImageString appendString:@"-568h"];
-			orient = UIImageOrientationRight;
-		}
-		else if (MainFrame.size.height == 320 && MainFrame.size.width == 480 && !self.bDeviceInPortraitMode)
-		{
-			orient = UIImageOrientationRight;
-		}
-		else if (MainFrame.size.height == 568 || Device == FPlatformMisc::IOS_IPodTouch6 || Device == FPlatformMisc::IOS_IPodTouch7)
-		{
-			[ImageString appendString:@"-568h"];
-		}
-		else if (MainFrame.size.height == 1024 && !self.bDeviceInPortraitMode)
-		{
-			[ImageString appendString:@"-Landscape"];
-			orient = UIImageOrientationRight;
-		}
-		else if (MainFrame.size.height == 1024)
-		{
-			[ImageString appendString:@"-Portrait"];
-		}
-		else if (MainFrame.size.height == 768 && !self.bDeviceInPortraitMode)
-		{
-			[ImageString appendString:@"-Landscape"];
-		}
-        
-        if (NativeScale > 1.0f)
-        {
-            [ImageString appendString:@"@2x"];
-        }
-	}
-
-	[PngString appendString : ImageString];
-	[PngString appendString : @".png"];
-	[ImageString appendString : @".jpg"];
-    [path setString: [path stringByAppendingPathComponent:ImageString]];
-    UIImage* image = [[UIImage alloc] initWithContentsOfFile: path];
-	if (image == nil)
-	{
-        [path setString: [[NSBundle mainBundle] resourcePath]];
-		[path setString : [path stringByAppendingPathComponent : PngString]];
-		image = [[UIImage alloc] initWithContentsOfFile:path];
-	}
-	[path release];
-	
-    UIImage* imageToDisplay = [UIImage imageWithCGImage: [image CGImage] scale: 1.0 orientation: orient];
-    UIImageView* imageView = [[UIImageView alloc] initWithImage: imageToDisplay];
-    imageView.frame = MainFrame;
-    imageView.tag = 200;
-    [self.Window addSubview: imageView];
-    GShowSplashScreen = true;
-
-	timer = [NSTimer scheduledTimerWithTimeInterval: 0.05f target:self selector:@selector(timerForSplashScreen) userInfo:nil repeats:YES];
+    timer = [NSTimer scheduledTimerWithTimeInterval: 0.05f target:self selector:@selector(timerForSplashScreen) userInfo:nil repeats:YES];
 
 	[self StartGameThread];
 
@@ -1282,6 +1123,69 @@ static FAutoConsoleVariableRef CVarGEnableThermalsReport(
 }
 #endif
 
+// checking for update on the app store
+-(void)DoUpdateCheck
+{
+	static bool bInit = false;
+	static NSString* CurrentVersion = [[NSBundle mainBundle] infoDictionary][@"CFBundleShortVersionString"];
+	static NSString* BundleID = [[NSBundle mainBundle] infoDictionary][@"CFBundleIdentifier"];
+	bool bEnableUpdateCheck = NO;
+	if (!bInit)
+	{
+		bool bReadData = GConfig->GetBool(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("bEnableUpdateCheck"), bEnableUpdateCheck, GEngineIni);
+		self.bUpdateAvailable = false;
+		bInit = bReadData;
+	}
+	if (bEnableUpdateCheck && bInit)
+	{
+		// kick off a check on the app store for an update
+		NSLocale* Locale = [NSLocale autoupdatingCurrentLocale];
+		NSURL* StoreURL = [NSURL URLWithString: [NSString stringWithFormat: @"http://itunes.apple.com/%@/lookup?bundleId=%@", Locale.countryCode, BundleID]];
+		
+		// kick off an NSURLSession to read the data
+		NSURLSession* Session = [NSURLSession sharedSession];
+		NSURLSessionDataTask* SessionTask = [Session dataTaskWithRequest: [NSURLRequest requestWithURL: StoreURL cachePolicy: NSURLRequestReloadIgnoringLocalCacheData timeoutInterval: Session.configuration.timeoutIntervalForRequest] completionHandler:^(NSData* _Nullable data, NSURLResponse* _Nullable response, NSError* _Nullable error) {
+			
+			if (error == nil && data != nil)
+			{
+				NSDictionary* StoreDictionary = [NSJSONSerialization JSONObjectWithData: data options: 0 error: nil];
+			
+				if ([StoreDictionary[@"resultCount"] integerValue] == 1)
+				{
+					// get the store version
+					NSString* StoreVersion = StoreDictionary[@"results"][0][@"version"];
+					if ([StoreVersion compare: CurrentVersion options: NSNumericSearch] == NSOrderedDescending)
+					{
+						self.bUpdateAvailable = true;
+					}
+					else
+					{
+						self.bUpdateAvailable = false;
+					}
+				}
+				else
+				{
+					self.bUpdateAvailable = false;
+				}
+			}
+			else
+			{
+				self.bUpdateAvailable = false;
+			}
+		}];
+		
+		[SessionTask resume];
+	}
+}
+
+-(bool)IsUpdateAvailable
+{
+	dispatch_async(dispatch_get_main_queue(), ^{
+		[[IOSAppDelegate GetDelegate] DoUpdateCheck];
+	});
+	return self.bUpdateAvailable;
+}
+
 - (void) StartGameThread
 {
 	// create a new thread (the pointer will be retained forever)
@@ -1337,6 +1241,8 @@ extern EDeviceScreenOrientation ConvertFromUIInterfaceOrientation(UIInterfaceOri
     {
 		FFunctionGraphTask::CreateAndDispatchWhenReady([Orientation]()
 		{
+			FIOSApplication* Application = [IOSAppDelegate GetDelegate].IOSApplication;
+			Application->OrientationChanged(Orientation);
 			FCoreDelegates::ApplicationReceivedScreenOrientationChangedNotificationDelegate.Broadcast((int32)ConvertFromUIInterfaceOrientation(Orientation));
 
 			//we also want to fire off the safe frame event
@@ -1360,10 +1266,10 @@ extern EDeviceScreenOrientation ConvertFromUIInterfaceOrientation(UIInterfaceOri
 	// "MyGame://arg1 arg2 arg3 ..."
 	// So, we're going to make it look like:
 	// "arg1 arg2 arg3 ..."
-	int32 URLTerminator = CommandLineParameters.Find( TEXT("://"));
+	int32 URLTerminator = CommandLineParameters.Find( TEXT("://"), ESearchCase::CaseSensitive);
 	if ( URLTerminator > -1 )
 	{
-		CommandLineParameters = CommandLineParameters.RightChop(URLTerminator + 3);
+		CommandLineParameters.RightChopInline(URLTerminator + 3, false);
 	}
 
 	FIOSCommandLineHelper::InitCommandArgs(CommandLineParameters);
@@ -1398,8 +1304,6 @@ extern EDeviceScreenOrientation ConvertFromUIInterfaceOrientation(UIInterfaceOri
 FCriticalSection RenderSuspend;
 - (void)applicationWillResignActive:(UIApplication *)application
 {
-	FIOSCoreDelegates::OnWillResignActive.Broadcast();
-	
     FIOSPlatformMisc::ResetBrightness();
     
     /*
@@ -1458,6 +1362,8 @@ FCriticalSection RenderSuspend;
             }, TStatId(), NULL, ENamedThreads::ActualRenderingThread);
         }
     }
+	
+	FIOSCoreDelegates::OnWillResignActive.Broadcast();
 }
 
 - (void)applicationDidEnterBackground:(UIApplication *)application
@@ -1506,7 +1412,9 @@ FCriticalSection RenderSuspend;
 extern double GCStartTime;
 - (void)applicationDidBecomeActive:(UIApplication *)application
 {
-    // make sure a GC will not timeout because it was started before entering background
+	FIOSCoreDelegates::OnDidBecomeActive.Broadcast();
+
+	// make sure a GC will not timeout because it was started before entering background
     GCStartTime = FPlatformTime::Seconds();
 	/*
 	 Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
@@ -1873,7 +1781,11 @@ CORE_API bool IOSShowAchievementsUI()
     
     // Battery level is from 0.0 to 1.0, get it in terms of 0-100
     self.BatteryLevel = ((int)([Device batteryLevel] * 100));
-    UE_LOG(LogIOS, Display, TEXT("Battery Level Changed: %d"), self.BatteryLevel);
+	[FIOSAsyncTask CreateTaskWithBlock : ^ bool(void)
+	{
+		UE_LOG(LogIOS, Display, TEXT("Battery Level Changed: %d"), self.BatteryLevel);
+		return true;
+	}];
 #endif
 }
 
@@ -1883,7 +1795,11 @@ CORE_API bool IOSShowAchievementsUI()
     UIDevice* Device = [UIDevice currentDevice];
     UIDeviceBatteryState State = Device.batteryState;
     self.bBatteryState = State == UIDeviceBatteryStateUnplugged || State == UIDeviceBatteryStateUnknown;
-    UE_LOG(LogIOS, Display, TEXT("Battery State Changed: %d"), self.bBatteryState);
+	[FIOSAsyncTask CreateTaskWithBlock : ^ bool(void)
+	{
+		UE_LOG(LogIOS, Display, TEXT("Battery State Changed: %d"), self.bBatteryState);
+		return true;
+	}];
 #endif
 }
 
@@ -1904,8 +1820,12 @@ CORE_API bool IOSShowAchievementsUI()
 			case NSProcessInfoThermalStateCritical:	Severity = FCoreDelegates::ETemperatureSeverity::Critical; Level = TEXT("Critical"); break;
 		}
 
-        UE_LOG(LogIOS, Display, TEXT("Temperaure Changed: %s"), *Level);
-		FCoreDelegates::OnTemperatureChange.Broadcast(Severity);
+		[FIOSAsyncTask CreateTaskWithBlock : ^ bool(void)
+		{
+			UE_LOG(LogIOS, Display, TEXT("Temperature Changed: %s"), *Level);
+			FCoreDelegates::OnTemperatureChange.Broadcast(Severity);
+			return true;
+		}];
 	}
 #endif
 }

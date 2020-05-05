@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	LevelTick.cpp: Level timer tick function
@@ -98,6 +98,7 @@ DEFINE_STAT(STAT_TeleportToTime);
 DEFINE_STAT(STAT_MoveComponentTime);
 DEFINE_STAT(STAT_MoveComponentSceneComponentTime);
 DEFINE_STAT(STAT_UpdateOverlaps);
+DEFINE_STAT(STAT_PerformOverlapQuery);
 DEFINE_STAT(STAT_UpdatePhysicsVolume);
 DEFINE_STAT(STAT_EndScopedMovementUpdate);
 
@@ -929,7 +930,7 @@ struct FSendAllEndOfFrameUpdates
 {
 	FGPUSkinCache* GPUSkinCache;
 #if WANTS_DRAW_MESH_EVENTS
-	TDrawEvent<FRHICommandList> DrawEvent;
+	FDrawEvent DrawEvent;
 #endif
 };
 
@@ -958,12 +959,16 @@ void EndSendEndOfFrameUpdatesDrawEvent(FSendAllEndOfFrameUpdates* SendAllEndOfFr
 	ENQUEUE_RENDER_COMMAND(EndDrawEventCommand)(
 		[SendAllEndOfFrameUpdates](FRHICommandList& RHICmdList)
 	{
-#if RHI_RAYTRACING
 		if (SendAllEndOfFrameUpdates->GPUSkinCache)
 		{
+			// Flush any remaining pending resource barriers.
+			SendAllEndOfFrameUpdates->GPUSkinCache->TransitionAllToReadable(RHICmdList);
+
+		#if RHI_RAYTRACING
 			SendAllEndOfFrameUpdates->GPUSkinCache->CommitRayTracingGeometryUpdates(RHICmdList);
+		#endif
 		}
-#endif
+
 		delete SendAllEndOfFrameUpdates;
 	});
 }
@@ -1322,10 +1327,10 @@ DECLARE_CYCLE_STAT(TEXT("TG_LastDemotable"), STAT_TG_LastDemotable, STATGROUP_Ti
 
 #include "GameFramework/SpawnActorTimer.h"
 
-TDrawEvent<FRHICommandList>* BeginTickDrawEvent()
+FDrawEvent* BeginTickDrawEvent()
 {
-	TDrawEvent<FRHICommandList>* TickDrawEvent = new TDrawEvent<FRHICommandList>();
-	TDrawEvent<FRHICommandList>* InTickDrawEvent = TickDrawEvent;
+	FDrawEvent* TickDrawEvent = new FDrawEvent();
+	FDrawEvent* InTickDrawEvent = TickDrawEvent;
 	ENQUEUE_RENDER_COMMAND(BeginDrawEventCommand)(
 		[InTickDrawEvent](FRHICommandList& RHICmdList)
 		{
@@ -1339,9 +1344,9 @@ TDrawEvent<FRHICommandList>* BeginTickDrawEvent()
 	return TickDrawEvent;
 }
 
-void EndTickDrawEvent(TDrawEvent<FRHICommandList>* TickDrawEvent)
+void EndTickDrawEvent(FDrawEvent* TickDrawEvent)
 {
-	TDrawEvent<FRHICommandList>* InTickDrawEvent = TickDrawEvent;
+	FDrawEvent* InTickDrawEvent = TickDrawEvent;
 	ENQUEUE_RENDER_COMMAND(EndDrawEventCommand)(
 		[InTickDrawEvent](FRHICommandList& RHICmdList)
 		{
@@ -1366,7 +1371,7 @@ void UWorld::Tick( ELevelTick TickType, float DeltaSeconds )
 		return;
 	}
 
-	TDrawEvent<FRHICommandList>* TickDrawEvent = BeginTickDrawEvent();
+	FDrawEvent* TickDrawEvent = BeginTickDrawEvent();
 
 	FWorldDelegates::OnWorldTickStart.Broadcast(this, TickType, DeltaSeconds);
 
@@ -1548,6 +1553,7 @@ void UWorld::Tick( ELevelTick TickType, float DeltaSeconds )
 			{
 				SCOPE_TIME_GUARD_MS(TEXT("UWorld::Tick - TG_PrePhysics"), 10);
 				SCOPE_CYCLE_COUNTER(STAT_TG_PrePhysics);
+				CSV_SCOPED_TIMING_STAT_EXCLUSIVE(PrePhysicsMisc);
 				CSV_SCOPED_SET_WAIT_STAT(PrePhysics);
 				RunTickGroup(TG_PrePhysics);
 			}
@@ -1557,12 +1563,14 @@ void UWorld::Tick( ELevelTick TickType, float DeltaSeconds )
 			{
 				SCOPE_CYCLE_COUNTER(STAT_TG_StartPhysics);
 				SCOPE_TIME_GUARD_MS(TEXT("UWorld::Tick - TG_StartPhysics"), 10);
+				CSV_SCOPED_TIMING_STAT_EXCLUSIVE(StartPhysicsMisc);
 				CSV_SCOPED_SET_WAIT_STAT(StartPhysics);
 				RunTickGroup(TG_StartPhysics);
 			}
 			{
 				SCOPE_CYCLE_COUNTER(STAT_TG_DuringPhysics);
 				SCOPE_TIME_GUARD_MS(TEXT("UWorld::Tick - TG_DuringPhysics"), 10);
+				CSV_SCOPED_TIMING_STAT_EXCLUSIVE(DuringPhysicsMisc);
 				CSV_SCOPED_SET_WAIT_STAT(DuringPhysics);
 				RunTickGroup(TG_DuringPhysics, false); // No wait here, we should run until idle though. We don't care if all of the async ticks are done before we start running post-phys stuff
 			}
@@ -1570,12 +1578,14 @@ void UWorld::Tick( ELevelTick TickType, float DeltaSeconds )
 			{
 				SCOPE_CYCLE_COUNTER(STAT_TG_EndPhysics);
 				SCOPE_TIME_GUARD_MS(TEXT("UWorld::Tick - TG_EndPhysics"), 10);
+				CSV_SCOPED_TIMING_STAT_EXCLUSIVE(EndPhysicsMisc);
 				CSV_SCOPED_SET_WAIT_STAT(EndPhysics);
 				RunTickGroup(TG_EndPhysics);
 			}
 			{
 				SCOPE_CYCLE_COUNTER(STAT_TG_PostPhysics);
 				SCOPE_TIME_GUARD_MS(TEXT("UWorld::Tick - TG_PostPhysics"), 10);
+				CSV_SCOPED_TIMING_STAT_EXCLUSIVE(PostPhysicsMisc);
 				CSV_SCOPED_SET_WAIT_STAT(PostPhysics);
 				RunTickGroup(TG_PostPhysics);
 			}

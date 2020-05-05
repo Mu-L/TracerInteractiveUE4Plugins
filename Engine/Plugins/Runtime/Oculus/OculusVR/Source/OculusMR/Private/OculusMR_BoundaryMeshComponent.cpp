@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "OculusMR_BoundaryMeshComponent.h"
 
@@ -186,7 +186,7 @@ public:
 		Result.bUsesLightingChannels = false;
 		Result.bRenderCustomDepth = false;
 		MaterialRelevance.SetPrimitiveViewRelevance(Result);
-		Result.bOpaqueRelevance = true;
+		Result.bOpaque = true;
 		Result.bUsesSceneDepth = false;
 		Result.bUsesSkyMaterial = false;
 		Result.bUsesSingleLayerWaterMaterial = false;

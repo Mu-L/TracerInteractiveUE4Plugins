@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NiagaraSystemScriptViewModel.h"
 #include "NiagaraSystem.h"
@@ -6,7 +6,7 @@
 #include "NiagaraGraph.h"
 #include "NiagaraTypes.h"
 #include "NiagaraScriptSource.h"
-#include "NiagaraScriptViewModel.h"
+#include "ViewModels/NiagaraScriptViewModel.h"
 #include "NiagaraScriptGraphViewModel.h"
 #include "NiagaraScriptInputCollectionViewModel.h"
 #include "NiagaraNodeEmitter.h"

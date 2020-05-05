@@ -1,12 +1,16 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "FunctionCaller.h"
 
 #if WITH_EDITORONLY_DATA
 
+#include "LevelVariantSets.h"
+#include "Variant.h"
+#include "VariantSet.h"
+
 #include "EdGraph/EdGraph.h"
-#include "K2Node_FunctionEntry.h"
 #include "EdGraphSchema_K2.h"
+#include "K2Node_FunctionEntry.h"
 #include "UObject/PropertyPortFlags.h"
 
 // This file is based on MovieSceneEvent.cpp
@@ -29,7 +33,6 @@ bool FFunctionCaller::IsBoundToBlueprint() const
 
 bool FFunctionCaller::IsValidFunction(UK2Node_FunctionEntry* Function)
 {
-	// Must have a single non-reference parameter on the function
 	if (!Function || Function->IsPendingKill() || Function->GetGraph()->IsPendingKill())
 	{
 		return false;
@@ -38,14 +41,62 @@ bool FFunctionCaller::IsValidFunction(UK2Node_FunctionEntry* Function)
 	{
 		return true;
 	}
-	else if (Function->UserDefinedPins.Num() != 1 || Function->UserDefinedPins[0]->PinType.bIsReference)
+	else if (Function->UserDefinedPins.Num() == 1)
 	{
-		return false;
+		TSharedPtr<FUserPinInfo> TargetPin = Function->UserDefinedPins[0];
+		if (TargetPin->PinType.bIsReference ||
+			TargetPin->PinType.PinCategory != UEdGraphSchema_K2::PC_Object)
+		{
+			return false;
+		}
+
+		return true;
+	}
+	else if (Function->UserDefinedPins.Num() == 4)
+	{
+		TSharedPtr<FUserPinInfo> TargetPin			 = Function->UserDefinedPins[0];
+		TSharedPtr<FUserPinInfo> LevelVariantSetsPin = Function->UserDefinedPins[1];
+		TSharedPtr<FUserPinInfo> VariantSetPin		 = Function->UserDefinedPins[2];
+		TSharedPtr<FUserPinInfo> VariantPin			 = Function->UserDefinedPins[3];
+
+		if (TargetPin->PinType.bIsReference ||
+			TargetPin->PinType.PinCategory != UEdGraphSchema_K2::PC_Object)
+		{
+			return false;
+		}
+		if (LevelVariantSetsPin->PinType.bIsReference ||
+			LevelVariantSetsPin->PinType.PinCategory != UEdGraphSchema_K2::PC_Object ||
+			LevelVariantSetsPin->PinType.PinSubCategoryObject != ULevelVariantSets::StaticClass())
+		{
+			return false;
+		}
+		if (VariantSetPin->PinType.bIsReference ||
+			VariantSetPin->PinType.PinCategory != UEdGraphSchema_K2::PC_Object ||
+			VariantSetPin->PinType.PinSubCategoryObject != UVariantSet::StaticClass())
+		{
+			return false;
+		}
+		if (VariantPin->PinType.bIsReference ||
+			VariantPin->PinType.PinCategory != UEdGraphSchema_K2::PC_Object ||
+			VariantPin->PinType.PinSubCategoryObject != UVariant::StaticClass())
+		{
+			return false;
+		}
+
+		return true;
 	}
 
-	// Pin must be an object or interface property
-	FName PinCategory = Function->UserDefinedPins[0]->PinType.PinCategory;
-	return PinCategory == UEdGraphSchema_K2::PC_Object || PinCategory == UEdGraphSchema_K2::PC_Interface;
+	return false;
+}
+
+uint32 FFunctionCaller::GetDisplayOrder() const
+{
+	return DisplayOrder;
+}
+
+void FFunctionCaller::SetDisplayOrder(uint32 InDisplayOrder)
+{
+	DisplayOrder = InDisplayOrder;
 }
 
 void FFunctionCaller::CacheFunctionName()
@@ -77,22 +128,4 @@ void FFunctionCaller::PostSerialize(const FArchive& Ar)
 #endif
 }
 
-bool FFunctionCaller::IsValidFunction(UFunction* Function)
-{
-	// Must have a single non-reference parameter on the function
-	if (!Function)
-	{
-		return false;
-	}
-	else if (Function->NumParms == 0)
-	{
-		return true;
-	}
-	else if (Function->NumParms != 1 || !Function->PropertyLink || (Function->PropertyLink->GetPropertyFlags() & CPF_ReferenceParm))
-	{
-		return false;
-	}
 
-	// Parameter must be an object or interface property
-	return Function->PropertyLink->IsA<UObjectProperty>() || Function->PropertyLink->IsA<UInterfaceProperty>();
-}

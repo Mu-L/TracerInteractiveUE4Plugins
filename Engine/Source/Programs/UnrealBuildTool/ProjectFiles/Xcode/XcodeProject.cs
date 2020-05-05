@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
 using System.Collections.Generic;
@@ -124,7 +124,7 @@ namespace UnrealBuildTool
 
 	class XcodeProjectFile : ProjectFile
 	{
-		FileReference OnlyGameProject;
+		//FileReference OnlyGameProject;
 
 		Dictionary<string, XcodeFileGroup> Groups = new Dictionary<string, XcodeFileGroup>();
 
@@ -135,12 +135,14 @@ namespace UnrealBuildTool
 		/// <param name="InOnlyGameProject"></param>
 		/// <param name="IsForDistribution">True for distribution builds</param>
 		/// <param name="BundleID">Override option for bundle identifier</param>
-		public XcodeProjectFile(FileReference InitFilePath, FileReference InOnlyGameProject, bool IsForDistribution, string BundleID)
+		/// <param name="InAppName"></param>
+		public XcodeProjectFile(FileReference InitFilePath, FileReference InOnlyGameProject, bool IsForDistribution, string BundleID, string InAppName)
 			: base(InitFilePath)
 		{
-			OnlyGameProject = InOnlyGameProject;
+			//OnlyGameProject = InOnlyGameProject;
 			bForDistribution = IsForDistribution;
 			BundleIdentifier = BundleID;
+			AppName = InAppName;
 		}
 
 		public override string ToString()
@@ -157,6 +159,11 @@ namespace UnrealBuildTool
 		/// Override for bundle identifier
 		/// </summary>
 		string BundleIdentifier = "";
+
+		/// <summary>
+		/// Override AppName
+		/// </summary>
+		string AppName = "";
 
 		/// <summary>
 		/// Gets Xcode file category based on its extension
@@ -355,7 +362,7 @@ namespace UnrealBuildTool
 			if (UProjectPath != null)
 			{
 				string ProjectExtensionsDir = Path.Combine(Path.GetDirectoryName(UProjectPath.FullName), "Build/IOS/Extensions");
-				string ProjectIntermediateDir = Path.Combine(Path.GetDirectoryName(UProjectPath.FullName), "Intermediate/IOS/Extensions");
+				//string ProjectIntermediateDir = Path.Combine(Path.GetDirectoryName(UProjectPath.FullName), "Intermediate/IOS/Extensions");
 
 				if (Directory.Exists(ProjectExtensionsDir))
 				{
@@ -742,7 +749,7 @@ namespace UnrealBuildTool
 			
 			// @todo: look also in Project/Build/Frameworks directory!
 			ProjectDescriptor Project = ProjectDescriptor.FromFile(UProjectPath);
-			List<PluginInfo> AvailablePlugins = Plugins.ReadAvailablePlugins(UnrealBuildTool.EngineDirectory, UProjectPath, Project.AdditionalPluginDirectories);
+			List<PluginInfo> AvailablePlugins = Plugins.ReadAvailablePlugins(UnrealBuildTool.EngineDirectory, DirectoryReference.FromFile(UProjectPath), Project.AdditionalPluginDirectories);
 
 			// look in each plugin for frameworks
 			// @todo: Cache this kind of things since every target will re-do this work!
@@ -764,11 +771,11 @@ namespace UnrealBuildTool
 					// look at each zip
 					foreach (FileInfo FI in new System.IO.DirectoryInfo(FrameworkDir.FullName).EnumerateFiles("*.framework.zip"))
 					{
-						string Guid = XcodeProjectFileGenerator.MakeXcodeGuid();
-						string RefGuid = XcodeProjectFileGenerator.MakeXcodeGuid();
+						//string Guid = XcodeProjectFileGenerator.MakeXcodeGuid();
+						//string RefGuid = XcodeProjectFileGenerator.MakeXcodeGuid();
 
 						// for FI of foo.framework.zip, this will give us foo.framework
-						string Framework = Path.GetFileNameWithoutExtension(FI.FullName);
+						//string Framework = Path.GetFileNameWithoutExtension(FI.FullName);
 
 						// unzip the framework right into the .app
 						FrameworkScript.AppendFormat("\\techo Unzipping {0}...\\n", FI.FullName);
@@ -842,7 +849,7 @@ namespace UnrealBuildTool
 			{
 				TVOSPlatform TVOSPlatform = ((TVOSPlatform)UEBuildPlatform.GetBuildPlatform(UnrealTargetPlatform.TVOS));
 				TVOSProjectSettings ProjectSettings = TVOSPlatform.ReadProjectSettings(ProjectFile);
-				TVOSProvisioningData ProvisioningData = TVOSPlatform.ReadProvisioningData(ProjectSettings, bForDistribution);
+				//TVOSProvisioningData ProvisioningData = TVOSPlatform.ReadProvisioningData(ProjectSettings, bForDistribution);
 				bAutomaticSigning = ProjectSettings.bAutomaticSigning;
 			}
 
@@ -1136,7 +1143,7 @@ namespace UnrealBuildTool
 			Content.Append("\t\t\tbuildSettings = {" + ProjectFileGenerator.NewLine);
 
 			string UE4Dir = ConvertPath(Path.GetFullPath(Directory.GetCurrentDirectory() + "../../.."));
-			string MacExecutableDir = ConvertPath(Config.MacExecutablePath.Directory.FullName);
+			//string MacExecutableDir = ConvertPath(Config.MacExecutablePath.Directory.FullName);
 			string MacExecutableFileName = Config.MacExecutablePath.GetFileName();
 
 			string IOSRunTimeVersion, TVOSRunTimeVersion;
@@ -1232,6 +1239,7 @@ namespace UnrealBuildTool
 						DirectoryReference ProjectPath = GameDir;
 						DirectoryReference EngineDir = DirectoryReference.Combine(new DirectoryReference(UE4Dir), "Engine");
 						string GameName = Config.BuildTarget;
+						bool bIsClient = false;
 						if (ProjectPath == null)
 						{
 							ProjectPath = EngineDir;
@@ -1240,6 +1248,7 @@ namespace UnrealBuildTool
 						{
 							ProjectPath = EngineDir;
 							GameName = "UE4Game";
+							bIsClient = (AppName == "UE4Client");
 						}
 
 						if (bCreateMacInfoPlist)
@@ -1264,12 +1273,13 @@ namespace UnrealBuildTool
 							TargetReceipt Receipt;
 							TargetReceipt.TryRead(ReceiptFilename, out Receipt);
 							VersionNumber SdkVersion = UEDeployIOS.GetSdkVersion(Receipt);
-							UEDeployIOS.GenerateIOSPList(ProjectFile, Config.BuildConfig, ProjectPath.FullName, bIsUE4Game, GameName, Config.BuildTarget, EngineDir.FullName, ProjectPath + "/Binaries/IOS/Payload", SdkVersion, null, BundleIdentifier, out bSupportPortrait, out bSupportLandscape, out bSkipIcons);
+							bool bBuildAsFramework = UEDeployIOS.GetCompileAsDll(Receipt);
+							UEDeployIOS.GenerateIOSPList(ProjectFile, Config.BuildConfig, ProjectPath.FullName, bIsUE4Game, GameName, bIsClient, Config.BuildTarget, EngineDir.FullName, ProjectPath + "/Binaries/IOS/Payload", SdkVersion, null, BundleIdentifier, bBuildAsFramework, out bSupportPortrait, out bSupportLandscape, out bSkipIcons);
 						}
 						if (bCreateTVOSInfoPlist)
 						{
 							Directory.CreateDirectory(Path.GetDirectoryName(TVOSInfoPlistPath));
-							UEDeployTVOS.GenerateTVOSPList(ProjectPath.FullName, bIsUE4Game, GameName, Config.BuildTarget, EngineDir.FullName, ProjectPath + "/Binaries/TVOS/Payload", null, BundleIdentifier);
+							UEDeployTVOS.GenerateTVOSPList(ProjectPath.FullName, bIsUE4Game, GameName, bIsClient, Config.BuildTarget, EngineDir.FullName, ProjectPath + "/Binaries/TVOS/Payload", null, BundleIdentifier);
 						}
 					}
 				}
@@ -1423,7 +1433,7 @@ namespace UnrealBuildTool
 		{
 			List<XcodeBuildConfig> BuildConfigs = new List<XcodeBuildConfig>();
 
-			string ProjectName = ProjectFilePath.GetFileNameWithoutExtension();
+			//string ProjectName = ProjectFilePath.GetFileNameWithoutExtension();
 
 			foreach (UnrealTargetConfiguration Configuration in Configurations)
 			{
@@ -1499,7 +1509,7 @@ namespace UnrealBuildTool
                                             {
                                                 string IOSExecutableName = MakeExecutableFileName(ExeName, UnrealTargetPlatform.IOS, Configuration, ProjectTarget.TargetRules.Architecture, ProjectTarget.TargetRules.UndecoratedConfiguration);
                                                 string TVOSExecutableName = IOSExecutableName.Replace("-IOS-", "-TVOS-");
-                                                string MacExecutableName = IOSExecutableName.Replace("-IOS-", "-Mac-");
+                                                //string MacExecutableName = IOSExecutableName.Replace("-IOS-", "-Mac-");
                                                 BuildConfigs.Add(new XcodeBuildConfig(ConfigName, TargetName, FileReference.Combine(OutputDirectory, "Mac", IOSExecutableName), FileReference.Combine(OutputDirectory, "IOS", IOSExecutableName), FileReference.Combine(OutputDirectory, "TVOS", TVOSExecutableName), ProjectTarget, Configuration));
                                             }
                                         }

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "Tiles/WorldTileCollectionModel.h"
 #include "Misc/PackageName.h"
 #include "Components/PrimitiveComponent.h"
@@ -1608,7 +1608,7 @@ void FWorldTileCollectionModel::ImportTiledLandscape_Executed()
 		// Extract tile prefix
 		FString FolderName = FPaths::GetBaseFilename(ImportSettings.HeightmapFileList[0]);
 		int32 PrefixEnd = FolderName.Find(TEXT("_x"), ESearchCase::IgnoreCase, ESearchDir::FromEnd);
-		FolderName = FolderName.Left(PrefixEnd);
+		FolderName.LeftInline(PrefixEnd, false);
 		WorldRootPath+= FolderName;
 		WorldRootPath+= TEXT("/");
 
@@ -1904,8 +1904,12 @@ void FWorldTileCollectionModel::OnPostSaveWorld(uint32 SaveFlags, UWorld* World,
 void FWorldTileCollectionModel::OnNewCurrentLevel()
 {
 	TSharedPtr<FLevelModel> CurrentLevelModel = FindLevelModel(CurrentWorld->GetCurrentLevel());
-	// Make sure level will be in focus
-	Focus(CurrentLevelModel->GetLevelBounds(), FWorldTileCollectionModel::OriginAtCenter);
+	// it's possible the level model has not been registered yet because the RefreshLevelBrowser event hasn't been broadcasted yet : 
+	if (CurrentLevelModel.IsValid())
+	{
+		// Make sure level will be in focus
+		Focus(CurrentLevelModel->GetLevelBounds(), FWorldTileCollectionModel::OriginAtCenter);
+	}
 }
 
 bool FWorldTileCollectionModel::HasMeshProxySupport() const
@@ -2097,7 +2101,8 @@ bool FWorldTileCollectionModel::GenerateLODLevels(FLevelModelList InLevelList, i
 				/* Flush existing grass components, but not grass maps */
 				Landscape->FlushGrassComponents(nullptr, false);
 				TArray<FVector> Cameras;
-				Landscape->UpdateGrass(Cameras, true);
+				int32 NumCompsCreated = 0;
+				Landscape->UpdateGrass(Cameras, NumCompsCreated, true);
 			}
 								
 			// This is texture resolution for a landscape mesh, probably needs to be calculated using landscape size
@@ -2215,6 +2220,7 @@ bool FWorldTileCollectionModel::GenerateLODLevels(FLevelModelList InLevelList, i
 			{
 				LODWorld->ClearFlags(RF_Public | RF_Standalone);
 				LODWorld->DestroyWorld(false);
+				LODWorld->Rename(nullptr, GetTransientPackage());
 			}
 			
 			// Create a new world

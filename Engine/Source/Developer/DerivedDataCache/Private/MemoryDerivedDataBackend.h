@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -17,8 +17,11 @@ class Error;
 class FMemoryDerivedDataBackend : public FDerivedDataBackendInterface
 {
 public:
-	explicit FMemoryDerivedDataBackend(int64 InMaxCacheSize = -1);
+	explicit FMemoryDerivedDataBackend(const TCHAR* InName, int64 InMaxCacheSize = -1);
 	~FMemoryDerivedDataBackend();
+
+	/** Return a name for this interface */
+	virtual FString GetName() const override { return Name; }
 
 	/** return true if this cache is writable **/
 	virtual bool IsWritable() override;
@@ -61,7 +64,7 @@ public:
 	/**
 	 * Load the cache from disk
 	 * @param	Filename	Filename to load
-	 * @return	true if file was loaded sucessfully
+	 * @return	true if file was loaded successfully
 	 */
 	bool LoadCache(const TCHAR* Filename);
 
@@ -92,6 +95,9 @@ private:
 	{
 		return (Key.Len() + 1) * sizeof(TCHAR) + sizeof(Val.Age) + Val.Data.Num();
 	}
+
+	/** Name of this cache (used for debugging) */
+	FString Name;
 
 	/** Set of files that are being written to disk asynchronously. */
 	TMap<FString, FCacheValue*> CacheItems;

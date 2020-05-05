@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -79,19 +79,19 @@ public:
 //private:
 	/** Activated when the target image is successfully set. */
 	UPROPERTY(BlueprintAssignable, Category = "ImageTracking | MagicLeap", meta = (AllowPrivateAccess = true))
-	FSetImageTargetSucceededMulti OnSetImageTargetSucceeded;
+	FMagicLeapSetImageTargetSucceededMulti OnSetImageTargetSucceeded;
 
 	/** Activated when the target image fails to be set. */
 	UPROPERTY(BlueprintAssignable, Category = "ImageTracking | MagicLeap", meta = (AllowPrivateAccess = true))
-	FSetImageTargetFailedMulti OnSetImageTargetFailed;
+	FMagicLeapSetImageTargetFailedMulti OnSetImageTargetFailed;
 
 	/** Activated when the target image becomes visible to the camera */
 	UPROPERTY(BlueprintAssignable, Category = "ImageTracking | MagicLeap", meta = (AllowPrivateAccess = true))
-	FImageTargetFoundMulti OnImageTargetFound;
+	FMagicLeapImageTargetFoundMulti OnImageTargetFound;
 
 	/** Activated the target image becomes invisible to the camera */
 	UPROPERTY(BlueprintAssignable, Category = "ImageTracking | MagicLeap", meta = (AllowPrivateAccess = true))
-	FImageTargetLostMulti OnImageTargetLost;
+	FMagicLeapImageTargetLostMulti OnImageTargetLost;
 
 	/**
 	  Activated when the target image is tracked with low confidence.
@@ -103,14 +103,14 @@ public:
 	  status will change to NotTracked.
 	*/
 	UPROPERTY(BlueprintAssignable, Category = "ImageTracking | MagicLeap", meta = (AllowPrivateAccess = true))
-	FImageTargetUnreliableTrackingMulti OnImageTargetUnreliableTracking;
+	FMagicLeapImageTargetUnreliableTrackingMulti OnImageTargetUnreliableTracking;
 
 private:
 	bool bIsTracking;
 #if WITH_EDITOR
 	UTexture2D* TextureBeforeEdit;
 public:
-	void PreEditChange(UProperty* PropertyAboutToChange) override;
+	void PreEditChange(FProperty* PropertyAboutToChange) override;
 	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 };

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ViewModels/ContentSourceViewModel.h"
 
@@ -113,11 +113,8 @@ TSharedPtr<FSlateDynamicImageBrush> FContentSourceViewModel::CreateBrushFromRawD
 		Width = ImageWrapper->GetWidth();
 		Height = ImageWrapper->GetHeight();
 
-		const TArray<uint8>* RawImageData = NULL;
-		if (ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, RawImageData))
+		if (ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, DecodedImage))
 		{
-			DecodedImage.AddUninitialized(Width * Height * BytesPerPixel);
-			DecodedImage = *RawImageData;
 			bSucceeded = true;
 		}
 	}

@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	FXSystem.h: Interface to the effects system.
@@ -16,6 +16,7 @@ class UVectorFieldComponent;
 struct FGPUSpriteEmitterInfo;
 struct FGPUSpriteResourceData;
 struct FParticleEmitterInstance;
+class FGPUSortManager;
 
 /*-----------------------------------------------------------------------------
 	Forward declarations.
@@ -88,9 +89,7 @@ namespace FXConsoleVariables
  */
 inline bool SupportsGPUParticles(EShaderPlatform Platform)
 {
-	return IsFeatureLevelSupported(Platform, ERHIFeatureLevel::ES3_1)
-		|| IsPCPlatform(Platform) // For editor mobile preview 
-		|| Platform == SP_OPENGL_ES2_ANDROID; // Android device might support it (ex. Adreno 420)
+	return IsFeatureLevelSupported(Platform, ERHIFeatureLevel::ES3_1) || IsPCPlatform(Platform); // For editor mobile preview 
 }
 
 /*
@@ -106,12 +105,12 @@ inline bool RHISupportsGPUParticles()
 		&& GSupportsWideMRT
 		&& GPixelFormats[PF_G32R32F].Supported 
 		&& GSupportsTexture3D 
-		&& GSupportsResourceView 
-		&& GRHISupportsInstancing;
+		&& GSupportsResourceView;
 }
 
 class FFXSystemInterface;
-DECLARE_DELEGATE_RetVal_TwoParams(FFXSystemInterface*, FCreateCustomFXSystemDelegate, ERHIFeatureLevel::Type, EShaderPlatform);
+class FGPUSortManager;
+DECLARE_DELEGATE_RetVal_ThreeParams(FFXSystemInterface*, FCreateCustomFXSystemDelegate, ERHIFeatureLevel::Type, EShaderPlatform, FGPUSortManager*);
 
 /*-----------------------------------------------------------------------------
 	The interface to the FX system runtime.
@@ -120,7 +119,7 @@ DECLARE_DELEGATE_RetVal_TwoParams(FFXSystemInterface*, FCreateCustomFXSystemDele
 /**
  * The interface to an effects system.
  */
-class ENGINE_VTABLE FFXSystemInterface
+class FFXSystemInterface
 {
 public:
 
@@ -133,6 +132,11 @@ public:
 	 * Destroy an effects system instance.
 	 */
 	ENGINE_API static void Destroy(FFXSystemInterface* FXSystem);
+
+	/**
+	 * Queue Destroy the gpu simulation on the render thread
+	 */
+	ENGINE_API static void QueueDestroyGPUSimulation(FFXSystemInterface* FXSystem);
 
 	/**
 	 * Register a custom FX system implementation.
@@ -153,6 +157,11 @@ public:
 	 * Gamethread callback when destroy gets called, allows to clean up references.
 	 */
 	ENGINE_API virtual void OnDestroy() { bIsPendingKill = true; }
+
+	/**
+	 * Gamethread callback when destroy gets called, allows to clean up references.
+	 */
+	ENGINE_API virtual void DestroyGPUSimulation() { }
 
 
 	/**
@@ -205,7 +214,13 @@ public:
 	 */
 	virtual void PreInitViews(FRHICommandListImmediate& RHICmdList, bool bAllowGPUParticleUpdate) = 0;
 
+	virtual void PostInitViews(FRHICommandListImmediate& RHICmdList, FRHIUniformBuffer* ViewUniformBuffer, bool bAllowGPUParticleUpdate) = 0;
+
 	virtual bool UsesGlobalDistanceField() const = 0;
+
+	virtual bool UsesDepthBuffer() const = 0;
+
+	virtual bool RequiresEarlyViewUniformBuffer() const = 0;
 
 	/**
 	 * Notification from the renderer that it is about to draw FX belonging to
@@ -224,6 +239,9 @@ public:
 		bool bAllowGPUParticleUpdate) = 0;
 
 	bool IsPendingKill() const { return bIsPendingKill; }
+
+	/** Get the shared SortManager, used in the rendering loop to call FGPUSortManager::OnPreRender() and FGPUSortManager::OnPostRenderOpaque() */
+	virtual FGPUSortManager* GetGPUSortManager() const = 0;
 
 protected:
 	

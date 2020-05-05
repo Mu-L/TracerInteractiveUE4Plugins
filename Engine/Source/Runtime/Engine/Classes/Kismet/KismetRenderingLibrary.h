@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #pragma once
 
@@ -28,7 +28,7 @@ struct FDrawToRenderTargetContext
 	UPROPERTY()
 	UTextureRenderTarget2D* RenderTarget;
 
-	TDrawEvent<FRHICommandList>* DrawEvent;
+	FDrawEvent* DrawEvent;
 };
 
 UCLASS(MinimalAPI, meta=(ScriptName="RenderingLibrary"))

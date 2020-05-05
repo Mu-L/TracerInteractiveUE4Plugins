@@ -1,9 +1,11 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 namespace UnrealBuildTool.Rules
 {
 	public class PlatformCrypto : ModuleRules
 	{
+		protected virtual bool DefaultToSSL { get { return true; } }
+
 		public PlatformCrypto(ReadOnlyTargetRules Target) : base(Target)
 		{
 			PublicDependencyModuleNames.AddRange(
@@ -14,25 +16,7 @@ namespace UnrealBuildTool.Rules
 				}
 				);
 
-			if (Target.Platform == UnrealTargetPlatform.XboxOne)
-			{
-				PublicDependencyModuleNames.AddRange(
-					new string[]
-					{
-						"PlatformCryptoBCrypt",
-					}
-					);
-			}
-			else if (Target.Platform == UnrealTargetPlatform.Switch)
-			{
-				PublicDependencyModuleNames.AddRange(
-					new string[]
-					{
-						"PlatformCryptoSwitch",
-					}
-					);
-			}
-			else
+			if (DefaultToSSL)
 			{
 				PublicDependencyModuleNames.AddRange(
 					new string[]

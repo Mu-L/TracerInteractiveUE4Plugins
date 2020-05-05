@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 #include "DatasmithMaxCameraExporter.h"
 
 #include "DatasmithMaxExporterDefines.h"
@@ -535,6 +535,8 @@ bool FDatasmithMaxCameraExporter::ExportPhysicalExposureControl( ToneOperator& T
 				GlobalEV = ParamBlock2->GetFloat( ParamDefinition.ID, GetCOREInterface()->GetTime(), ValidInterval );
 			}
 		}
+
+		ParamBlock2->ReleaseDesc();
 	}
 
 	// Compute the shutter speed based on the EV, F-Stop and ISO

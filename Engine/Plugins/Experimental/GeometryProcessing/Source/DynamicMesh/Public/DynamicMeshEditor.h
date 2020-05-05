@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 // Port of geometry3Sharp MeshEditor
 
@@ -7,6 +7,9 @@
 #include "DynamicMesh3.h"
 #include "DynamicMeshAttributeSet.h"
 #include "EdgeLoop.h"
+#include "Util/SparseIndexCollectionTypes.h"
+
+struct FDynamicSubmesh3;
 
 /**
  * FMeshIndexMappings stores a set of integer IndexMaps for a mesh
@@ -28,7 +31,7 @@ public:
 	void Initialize(FDynamicMesh3* Mesh);
 
 	/** @return the value used to indicate "invalid" in the mapping */
-	int InvalidID() { return VertexMap.GetInvalidID(); }
+	constexpr int InvalidID() const { return VertexMap.UnmappedID(); }
 
 	void Reset()
 	{
@@ -45,12 +48,19 @@ public:
 		}
 	}
 
+	void ResetTriangleMap()
+	{
+		TriangleMap.Reset();
+	}
+
 	FIndexMapi& GetVertexMap() { return VertexMap; }
+	const FIndexMapi& GetVertexMap() const { return VertexMap; }
 	inline void SetVertex(int FromID, int ToID) { VertexMap.Add(FromID, ToID); }
 	inline int GetNewVertex(int FromID) const { return VertexMap.GetTo(FromID); }
 	inline bool ContainsVertex(int FromID) const { return VertexMap.ContainsFrom(FromID); }
 
 	FIndexMapi& GetTriangleMap() { return TriangleMap; }
+	const FIndexMapi& GetTriangleMap() const { return TriangleMap; }
 	void SetTriangle(int FromID, int ToID) { TriangleMap.Add(FromID, ToID); }
 	int GetNewTriangle(int FromID) const { return TriangleMap.GetTo(FromID); }
 	inline bool ContainsTriangle(int FromID) const { return TriangleMap.ContainsFrom(FromID); }
@@ -175,23 +185,88 @@ public:
 
 
 	/**
-	 * Pair of associated edge loops.
+	 * Pair of associated vertex and edge loops. Assumption is that loop sizes are the same and have a 1-1 correspondence.
+	 * OuterVertices may include unreferenced vertices, and OuterEdges may include InvalidID edges in that case.
 	 */
 	struct FLoopPairSet
 	{
-		FEdgeLoop LoopA;
-		FEdgeLoop LoopB;
+		TArray<int32> OuterVertices;
+		TArray<int32> OuterEdges;
+
+		TArray<int32> InnerVertices;
+		TArray<int32> InnerEdges;
+
+		/** If true, some OuterVertices are not referenced by any triangles, and the pair of OuterEdges that would touch that vertex are InvalidID */
+		bool bOuterIncludesIsolatedVertices;
 	};
 
 	/**
 	 * Finds boundary loops of connected components of a set of triangles, and duplicates the vertices
 	 * along the boundary, such that the triangles become disconnected.
+	 * If the triangle set includes boundary vertices, they cannot be disconnected as they will become unreferenced.
+	 * The function returns false if boundary vertices are found, unless bHandleBoundaryVertices = true.
+	 * In that case, the boundary vertex is duplicated, and the original vertex is kept with the "Inner" loop.
+	 * The new unreferenced vertex is left on the "Outer" loop, and the attached edges do not exist so are set as InvalidID.
+	 * The FLoopPairSet.bOuterIncludesIsolatedVertices flag is set to true if boundary vertices are encountered.
+	 * Note: This function can create a mesh with bowties if you pass in a subset of triangles that would have bowtie connectivity.
+	 *		 (it is impossible to create the paired LoopSetOut with 1:1 vertex pairs without leaving in the bowties?)
 	 * @param Triangles set of triangles
 	 * @param LoopSetOut set of boundary loops. LoopA is original loop which remains with "outer" triangles, and LoopB is new boundary loop of triangle set
+	 * @param bHandleBoundaryVertices if true, boundary vertices are handled as described above, otherwise function aborts and returns false if a boundary vertex is encountered
 	 * @return true on success
 	 */
-	bool DisconnectTriangles(const TArray<int>& Triangles, TArray<FLoopPairSet>& LoopSetOut);
+	bool DisconnectTriangles(const TArray<int>& Triangles, TArray<FLoopPairSet>& LoopSetOut, bool bHandleBoundaryVertices);
 
+	/**
+	* Disconnects triangles (without constructing boundary loops) such that the input Triangles are not connected to any other triangles in the mesh
+	* @param Triangles set of triangles
+	* @param bPreventBowties do some additional processing and vertex splitting as needed to prevent the creation of any new bowties
+	*/
+	void DisconnectTriangles(const TArray<int>& Triangles, bool bPreventBowties = true);
+
+
+	/**
+	 * Splits all bowties across the whole mesh
+	 */
+	void SplitBowties(FDynamicMeshEditResult& ResultOut);
+
+	/**
+	 * Splits any bowties specifically on the given vertex, and updates (does not reset!) ResultOut with any added vertices
+	 */
+	void SplitBowties(int VertexID, FDynamicMeshEditResult& ResultOut);
+
+	/**
+	 * In ReinsertSubmesh, a problem can arise where the mesh we are 
+	 * inserting has duplicate triangles of the base mesh.
+	 *
+	 * This can lead to problematic behavior later. We can do various things,
+	 * like delete and replace that existing triangle, or just use it instead
+	 * of adding a new one. Or fail, or ignore it.
+	 * 
+	 * This enum/argument controls the behavior. 
+	 * However, fundamentally this kind of problem should be handled upstream!!
+	 * For example by not trying to remesh areas that contain nonmanifold geometry...
+	 */
+	enum class EDuplicateTriBehavior : uint8
+	{
+		EnsureContinue,         
+		EnsureAbort, UseExisting, Replace
+	};
+
+	/**
+	 * Update a Base Mesh from a Submesh; See FMeshRegionOperator::BackPropropagate for a usage example.
+	 * 
+	 * Assumes that Submesh has been modified, but boundary loop has been preserved, and that old submesh has already been removed from this mesh.
+	 * Just appends new vertices and rewrites triangles.
+	 *
+	 * @param Submesh The mesh to insert back into its BaseMesh.  The original submesh triangles should have already been removed when this function is called
+	 * @param SubToNewV Mapping from submesh to vertices in the updated base mesh
+	 * @param NewTris If not null, will be filled with IDs of triangles added to the base mesh
+	 * @param DuplicateBehavior Choice of what to do if inserting a triangle from the submesh would duplicate a triangle in the base mesh
+	 * @return true if submesh successfully inserted, false if any triangles failed (which happens if triangle would result in non-manifold mesh)
+	 */
+	bool ReinsertSubmesh(const FDynamicSubmesh3& Submesh, FOptionallySparseIndexMap& SubToNewV, TArray<int>* NewTris = nullptr,
+						 EDuplicateTriBehavior DuplicateBehavior = EDuplicateTriBehavior::EnsureAbort);
 
 	/**
 	 * Remove a list of triangles from the mesh, and optionally any vertices that are now orphaned
@@ -254,6 +329,19 @@ public:
 	 */
 	void SetTriangleNormals(const TArray<int>& Triangles, const FVector3f& Normal);
 
+	/**
+	 * Create and set new shared per-triangle normals for a list of triangles. 
+	 * Normal at each vertex is calculated based only on average of triangles in set
+	 * @param Triangles list of triangle IDs
+	 */
+	void SetTriangleNormals(const TArray<int>& Triangles);
+
+
+	/**
+	 * For a 'tube' of triangles connecting loops of corresponded vertices, set smooth normals such that corresponding vertices have corresponding normals
+	 */
+	void SetTubeNormals(const TArray<int>& Triangles, const TArray<int>& VertexIDs1, const TArray<int>& MatchedIndices1, const TArray<int>& VertexIDs2, const TArray<int>& MatchedIndices2);
+
 
 	//////////////////////////////////////////////////////////////////////////
 	// UV utility functions
@@ -280,8 +368,14 @@ public:
 	* @param UVTranslation UVs are translated after scaling
 	* @param UVLayerIndex which UV layer to operate on (must exist)
 	*/
-	void SetTriangleUVsFromProjection(const TArray<int>& Triangles, const FFrame3d& ProjectionFrame, float UVScaleFactor = 1.0f, const FVector2f& UVTranslation = FVector2f::Zero(), int UVLayerIndex = 0);
+	void SetTriangleUVsFromProjection(const TArray<int32>& Triangles, const FFrame3d& ProjectionFrame, float UVScaleFactor = 1.0f, const FVector2f& UVTranslation = FVector2f::Zero(), bool bShiftToOrigin = true, int32 UVLayerIndex = 0);
 
+
+	/**
+	 * For triangles connecting loops of corresponded vertices, set UVs in a cylindrical pattern so that the U coordinate starts at 0 for the first corresponded pair of vertices, and cycles around to 1
+	 * Assumes Triangles array stores indices of triangles in progressively filling the tube, starting with VertexIDs*[0].  (This is used to set the UVs correctly at the seam joining the start & end of the loop)
+	 */
+	void SetGeneralTubeUVs(const TArray<int>& Triangles, const TArray<int>& VertexIDs1, const TArray<int>& MatchedIndices1, const TArray<int>& VertexIDs2, const TArray<int>& MatchedIndices2, const TArray<float>& UValues, const FVector3f& VDir, float UVScaleFactor = 1.0f, const FVector2f& UVTranslation = FVector2f::Zero(), int UVLayerIndex = 0);
 
 	/**
 	 * Rescale UVs for the whole mesh, for the given UV attribute layer
@@ -403,9 +497,20 @@ public:
 	 * @param SourceTriangles the triangles to copy
 	 * @param IndexMaps returned mappings from old to new triangles/vertices/etc (you may initialize to optimize memory usage, etc)
 	 * @param ResultOut lists of newly created triangles/vertices/etc
+	 * @param bComputeTriangleMap if true, computes the triangle map section of IndexMaps (which is not needed for the append to work, so is optional)
 	 */
-	void AppendTriangles(const FDynamicMesh3* SourceMesh, const TArray<int>& SourceTriangles, FMeshIndexMappings& IndexMaps, FDynamicMeshEditResult& ResultOut);
+	void AppendTriangles(const FDynamicMesh3* SourceMesh, const TArrayView<const int>& SourceTriangles, FMeshIndexMappings& IndexMaps, FDynamicMeshEditResult& ResultOut, bool bComputeTriangleMap = true);
 
+	/**
+	 * Create multiple meshes out of the source mesh by splitting triangles out.
+	 * Static because it creates multiple output meshes, so doesn't quite fit in the FDynamicMeshEditor model of operating on a single mesh
+	 *
+	 * @param SourceMesh
+	 * @param SplitMeshes
+	 * @param TriIDToMeshID
+	 * @return true if needed split, false if there were not multiple mesh ids so no split was needed
+	 */
+	static bool SplitMesh(const FDynamicMesh3* SourceMesh, TArray<FDynamicMesh3>& SplitMeshes, TFunctionRef<int(int)> TriIDToMeshID, int DeleteMeshID = -1);
 
 };
 

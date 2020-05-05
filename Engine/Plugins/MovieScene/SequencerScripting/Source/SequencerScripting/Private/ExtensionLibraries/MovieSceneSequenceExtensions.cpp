@@ -1,6 +1,7 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "ExtensionLibraries/MovieSceneSequenceExtensions.h"
+#include "Tracks/MovieSceneCameraCutTrack.h"
 #include "MovieSceneSequence.h"
 #include "MovieScene.h"
 #include "MovieSceneFolder.h"
@@ -37,11 +38,11 @@ TArray<UMovieSceneTrack*> UMovieSceneSequenceExtensions::GetMasterTracks(UMovieS
 	if (MovieScene)
 	{
 		Tracks = MovieScene->GetMasterTracks();
-	}
 
-	if (UMovieSceneTrack* CameraCutTrack = MovieScene->GetCameraCutTrack())
-	{
-		Tracks.Add(CameraCutTrack);
+		if (UMovieSceneTrack* CameraCutTrack = MovieScene->GetCameraCutTrack())
+		{
+			Tracks.Add(CameraCutTrack);
+		}
 	}
 
 	return Tracks;
@@ -99,10 +100,13 @@ UMovieSceneTrack* UMovieSceneSequenceExtensions::AddMasterTrack(UMovieSceneSeque
 	UMovieScene* MovieScene = GetMovieScene(Sequence);
 	if (MovieScene)
 	{
-		UMovieSceneTrack* NewTrack = MovieScene->AddMasterTrack(TrackType);
-		if (NewTrack)
+		if (TrackType->IsChildOf(UMovieSceneCameraCutTrack::StaticClass()))
 		{
-			return NewTrack;
+			return MovieScene->AddCameraCutTrack(TrackType);
+		}
+		else
+		{
+			return MovieScene->AddMasterTrack(TrackType);
 		}
 	}
 
@@ -470,7 +474,7 @@ TArray<UObject*> UMovieSceneSequenceExtensions::LocateBoundObjects(UMovieSceneSe
 	return Result;
 }
 
-FMovieSceneObjectBindingID UMovieSceneSequenceExtensions::MakeBindingID(UMovieSceneSequence* MasterSequence, const FSequencerBindingProxy& InBinding)
+FMovieSceneObjectBindingID UMovieSceneSequenceExtensions::MakeBindingID(UMovieSceneSequence* MasterSequence, const FSequencerBindingProxy& InBinding, EMovieSceneObjectBindingSpace Space)
 {
 	FMovieSceneSequenceID SequenceID = MovieSceneSequenceID::Root;
 
@@ -489,7 +493,7 @@ FMovieSceneObjectBindingID UMovieSceneSequenceExtensions::MakeBindingID(UMovieSc
 		}
 	}
 
-	return FMovieSceneObjectBindingID(InBinding.BindingID, SequenceID);
+	return FMovieSceneObjectBindingID(InBinding.BindingID, SequenceID, Space);
 }
 
 TArray<UMovieSceneFolder*> UMovieSceneSequenceExtensions::GetRootFoldersInSequence(UMovieSceneSequence* Sequence)
@@ -547,21 +551,21 @@ int32 UMovieSceneSequenceExtensions::AddMarkedFrame(UMovieSceneSequence* Sequenc
 	return INDEX_NONE;
 }
 
-void UMovieSceneSequenceExtensions::RemoveMarkedFrame(UMovieSceneSequence* Sequence, int32 RemoveIndex)
+void UMovieSceneSequenceExtensions::DeleteMarkedFrame(UMovieSceneSequence* Sequence, int32 DeleteIndex)
 {
 	UMovieScene* MovieScene = Sequence->GetMovieScene();
 	if (MovieScene)
 	{
-		MovieScene->RemoveMarkedFrame(RemoveIndex);
+		MovieScene->DeleteMarkedFrame(DeleteIndex);
 	}
 }
 
-void UMovieSceneSequenceExtensions::ClearMarkedFrames(UMovieSceneSequence* Sequence)
+void UMovieSceneSequenceExtensions::DeleteMarkedFrames(UMovieSceneSequence* Sequence)
 {
 	UMovieScene* MovieScene = Sequence->GetMovieScene();
 	if (MovieScene)
 	{
-		MovieScene->ClearMarkedFrames();
+		MovieScene->DeleteMarkedFrames();
 	}
 }
 
@@ -593,4 +597,24 @@ int32 UMovieSceneSequenceExtensions::FindNextMarkedFrame(UMovieSceneSequence* Se
 		return MovieScene->FindNextMarkedFrame(InFrameNumber, bForward);
 	}
 	return INDEX_NONE;
+}
+
+void UMovieSceneSequenceExtensions::SetReadOnly(UMovieSceneSequence* Sequence, bool bInReadOnly)
+{
+	UMovieScene* MovieScene = Sequence->GetMovieScene();
+	if (MovieScene)
+	{
+		MovieScene->SetReadOnly(bInReadOnly);
+	}
+}
+
+bool UMovieSceneSequenceExtensions::IsReadOnly(UMovieSceneSequence* Sequence)
+{
+	UMovieScene* MovieScene = Sequence->GetMovieScene();
+	if (MovieScene)
+	{
+		return MovieScene->IsReadOnly();
+	}
+
+	return false;
 }

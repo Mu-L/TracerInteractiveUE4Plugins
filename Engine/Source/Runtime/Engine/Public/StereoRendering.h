@@ -1,4 +1,4 @@
-// Copyright 1998-2019 Epic Games, Inc. All Rights Reserved.
+// Copyright Epic Games, Inc. All Rights Reserved.
 
 /*=============================================================================
 	StereoRendering.h: Abstract stereoscopic rendering interface
@@ -176,6 +176,16 @@ public:
 	* Return true if additional view
 	*/
 	virtual bool DeviceIsAnAdditionalView(const FSceneView& View);
+
+	/**
+	 * Static helper. Passes request to the current stereo device
+	 */
+	static uint32 GetLODViewIndex();
+
+	/**
+	 * Return the index of the view that is used for selecting LODs
+	 */
+	virtual uint32 DeviceGetLODViewIndex() const;
 
 	/**
 	 * Adjusts the viewport rectangle for stereo, based on which eye pass is being rendered.
