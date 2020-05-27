@@ -23,6 +23,7 @@ class WEBUI_API UWebInterface : public UWidget
 public:
 
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam( FOnUrlChangedEvent, const FText&, URL );
+	DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FOnPopupEvent, const FString&, URL, const FString&, Frame );
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams( FOnInterfaceEvent, const FName, Name, FJsonLibraryValue, Data, FWebInterfaceCallback, Callback );
 
 	// Load HTML in the browser.
@@ -65,6 +66,20 @@ public:
 	// Reset cursor to center of the viewport.
 	UFUNCTION(BlueprintCallable, Category = "Web UI|Helpers")
 	void ResetMousePosition();
+	
+	// Check if mouse transparency is enabled.
+	UFUNCTION(BlueprintPure, Category = "Web UI|Transparency")
+	bool IsMouseTransparencyEnabled() const;
+	// Check if virtual pointer transparency is enabled.
+	UFUNCTION(BlueprintPure, Category = "Web UI|Transparency")
+	bool IsVirtualPointerTransparencyEnabled() const;
+
+	// Get the transparency delay of the browser texture.
+	UFUNCTION(BlueprintPure, Category = "Web UI|Transparency")
+	float GetTransparencyDelay() const;
+	// Get the transparency threshold of the browser texture.
+	UFUNCTION(BlueprintPure, Category = "Web UI|Transparency")
+	float GetTransparencyThreshold() const;
 
 	// Get the width of the browser texture.
 	UFUNCTION(BlueprintPure, Category = "Web UI|Textures")
@@ -83,6 +98,9 @@ public:
 	// Called when the URL has changed.
 	UPROPERTY(BlueprintAssignable, Category = "Web UI|Events")
 	FOnUrlChangedEvent OnUrlChangedEvent;
+	// Called when a popup is requested.
+	UPROPERTY(BlueprintAssignable, Category = "Web UI|Events")
+	FOnPopupEvent OnPopupEvent;
 	
 	// Called with ue.interface.broadcast(name, data) in the browser context.
 	UPROPERTY(BlueprintAssignable, Category = "Web UI|Events")
@@ -100,7 +118,9 @@ private:
 
 	UPROPERTY()
 	class UWebInterfaceObject* MyObject;
+
 	void HandleUrlChanged( const FText& URL );
+	bool HandleBeforePopup( FString URL, FString Frame );
 
 protected:
 	
@@ -115,6 +135,11 @@ protected:
 	float MouseTransparencyThreshold;
 	UPROPERTY(EditAnywhere, meta = (DisplayName = "Transparency Delay", UIMin = 0, UIMax = 1), Category = "Behavior|Mouse")
 	float MouseTransparencyDelay;
+
+	UPROPERTY(EditAnywhere, meta = (DisplayName = "Enable Transparency"), Category = "Behavior|Virtual Pointer")
+	bool bEnableVirtualPointerTransparency;
+	UPROPERTY(EditAnywhere, meta = (DisplayName = "Transparency Threshold", UIMin = 0, UIMax = 1), Category = "Behavior|Virtual Pointer")
+	float VirtualPointerTransparencyThreshold;
 	
 #if !UE_SERVER
 	TSharedPtr<class SWebInterface> WebInterfaceWidget;

@@ -30,8 +30,9 @@ public:
 		, _InitialURL( TEXT( "http://tracerinteractive.com" ) )
 		, _BackgroundColor( 255, 255, 255, 255 )
 		, _EnableMouseTransparency( false )
-		, _MouseTransparencyDelay( 0.1f )
-		, _MouseTransparencyThreshold( 0.333f )
+		, _EnableVirtualPointerTransparency( false )
+		, _TransparencyDelay( 0.1f )
+		, _TransparencyThreshold( 0.333f )
 		, _ViewportSize( FVector2D::ZeroVector )
 	{
 		_Visibility = EVisibility::SelfHitTestInvisible;
@@ -42,8 +43,9 @@ public:
 		SLATE_ARGUMENT( TOptional<FString>, ContentsToLoad )
 		SLATE_ARGUMENT( FColor, BackgroundColor )
 		SLATE_ARGUMENT( bool, EnableMouseTransparency )
-		SLATE_ARGUMENT( float, MouseTransparencyDelay )
-		SLATE_ARGUMENT( float, MouseTransparencyThreshold )
+		SLATE_ARGUMENT( bool, EnableVirtualPointerTransparency )
+		SLATE_ARGUMENT( float, TransparencyDelay )
+		SLATE_ARGUMENT( float, TransparencyThreshold )
 		SLATE_ARGUMENT( TOptional<EPopupMethod>, PopupMenuMethod )
 
 		SLATE_ATTRIBUTE( FVector2D, ViewportSize );
@@ -93,7 +95,9 @@ protected:
 	TMap<TWeakPtr<IWebBrowserWindow>, TWeakPtr<SWindow>> BrowserWindowWidgets;
 #endif
 
-	bool  bMouseTransparency;
+	bool bMouseTransparency;
+	bool bVirtualPointerTransparency;
+
 	float TransparencyDelay;
 	float TransparencyThreadshold;
 
@@ -116,6 +120,12 @@ protected:
 	FSimpleDelegate OnDismissAllDialogs;
 
 public:
+
+	bool HasMouseTransparency() const;
+	bool HasVirtualPointerTransparency() const;
+
+	float GetTransparencyDelay() const;
+	float GetTransparencyThreshold() const;
 
 	int32 GetTextureWidth() const;
 	int32 GetTextureHeight() const;

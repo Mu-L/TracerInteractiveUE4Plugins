@@ -47,6 +47,9 @@ UWebInterface::UWebInterface( const FObjectInitializer& ObjectInitializer )
 	MouseTransparencyThreshold = 0.333f;
 	MouseTransparencyDelay     = 0.1f;
 
+	bEnableVirtualPointerTransparency   = false;
+	VirtualPointerTransparencyThreshold = 0.333f;
+
 #if WITH_EDITOR || PLATFORM_ANDROID
 	struct FConstructorStatics
 	{
@@ -319,6 +322,42 @@ void UWebInterface::ResetMousePosition()
 	}
 }
 
+bool UWebInterface::IsMouseTransparencyEnabled() const
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		return WebInterfaceWidget->HasMouseTransparency();
+#endif
+	return false;
+}
+
+bool UWebInterface::IsVirtualPointerTransparencyEnabled() const
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		return WebInterfaceWidget->HasVirtualPointerTransparency();
+#endif
+	return false;
+}
+
+float UWebInterface::GetTransparencyDelay() const
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		return WebInterfaceWidget->GetTransparencyDelay();
+#endif
+	return 0.0f;
+}
+
+float UWebInterface::GetTransparencyThreshold() const
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		return WebInterfaceWidget->GetTransparencyThreshold();
+#endif
+	return 0.0f;
+}
+
 int32 UWebInterface::GetTextureWidth() const
 {
 #if !UE_SERVER
@@ -379,9 +418,13 @@ TSharedRef<SWidget> UWebInterface::RebuildWidget()
 		.FrameRate( FrameRate )
 		.InitialURL( InitialURL )
 		.EnableMouseTransparency( bEnableMouseTransparency )
-		.MouseTransparencyDelay( MouseTransparencyDelay )
-		.MouseTransparencyThreshold( MouseTransparencyThreshold )
-		.OnUrlChanged( BIND_UOBJECT_DELEGATE( FOnTextChanged, HandleUrlChanged ) );
+		.EnableVirtualPointerTransparency( bEnableVirtualPointerTransparency )
+		.TransparencyDelay( MouseTransparencyDelay )
+		.TransparencyThreshold( bEnableVirtualPointerTransparency ?
+								VirtualPointerTransparencyThreshold :
+								MouseTransparencyThreshold )
+		.OnUrlChanged( BIND_UOBJECT_DELEGATE( FOnTextChanged, HandleUrlChanged ) )
+		.OnBeforePopup( BIND_UOBJECT_DELEGATE( FOnBeforePopupDelegate, HandleBeforePopup ) );
 
 #if WITH_CEF3
 	MyObject = NewObject<UWebInterfaceObject>();
@@ -446,6 +489,12 @@ void UWebInterface::HandleUrlChanged( const FText& URL )
 	}
 
 	OnUrlChangedEvent.Broadcast( URL );
+}
+
+bool UWebInterface::HandleBeforePopup( FString URL, FString Frame )
+{
+	OnPopupEvent.Broadcast( URL, Frame );
+	return true;
 }
 
 #if WITH_EDITOR
