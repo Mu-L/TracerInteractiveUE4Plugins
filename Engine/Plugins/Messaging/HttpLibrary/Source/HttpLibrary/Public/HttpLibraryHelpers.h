@@ -50,7 +50,11 @@ public:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set HTTP Timeout"), Category = "HTTP Library|Settings")
 	static void SetHttpTimeout( float Timeout );
 
+#if UE_EDITOR
 protected:
+#else
+public:
+#endif
 	
 	// Construct a HTTP request object.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Construct HTTP", CompactNodeTitle = "HTTP", AutoCreateRefTerm = "Response"), Category = "HTTP Library|Request")

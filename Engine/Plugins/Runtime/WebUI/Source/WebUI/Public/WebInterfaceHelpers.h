@@ -11,7 +11,11 @@ class WEBUI_API UWebInterfaceHelpers : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
 
+#if UE_EDITOR
 protected:
+#else
+public:
+#endif
 
 	// Check if this callback is valid.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Valid"), Category = "Web UI|Callback")
