@@ -150,6 +150,9 @@ void UWebInterface::Call( const FString& Function, const FJsonLibraryValue& Data
 		return;
 
 #if !UE_SERVER
+	if ( !WebInterfaceWidget.IsValid() )
+		return;
+
 	if ( Data.GetType() != EJsonLibraryType::Invalid )
 		WebInterfaceWidget->ExecuteJavascript( FString::Printf( TEXT( "ue.interface[%s](%s)" ),
 			*FJsonLibraryValue( Function ).Stringify(),
