@@ -15,7 +15,7 @@ class WEBUI_API UWebInterfaceObject : public UObject
 public:
 	
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
-	void Broadcast( const FString& Name, const FString& Data );
+	void Broadcast( const FString& Name, const FString& Data, const FString& Callback );
 
 private:
 

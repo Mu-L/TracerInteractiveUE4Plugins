@@ -3,6 +3,7 @@
 #include "Components/Widget.h"
 #include "Engine/EngineBaseTypes.h"
 #include "JsonLibrary.h"
+#include "WebInterfaceCallback.h"
 #include "WebInterface.generated.h"
 
 class UMaterial;
@@ -22,7 +23,7 @@ class WEBUI_API UWebInterface : public UWidget
 public:
 
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam( FOnUrlChangedEvent, const FText&, URL );
-	DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FOnInterfaceEvent, const FName, Name, FJsonLibraryValue, Data );
+	DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams( FOnInterfaceEvent, const FName, Name, FJsonLibraryValue, Data, FWebInterfaceCallback, Callback );
 
 	// Load HTML in the browser.
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
@@ -45,7 +46,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
 	void Execute( const FString& Script );
 	// Call ue.interface.function(data) in the browser context.
-	UFUNCTION(BlueprintCallable, Category = "Web UI")
+	UFUNCTION(BlueprintCallable, Category = "Web UI", meta = (AdvancedDisplay = "Data", AutoCreateRefTerm = "Data"))
 	void Call( const FString& Function, const FJsonLibraryValue& Data );
 	
 	// Bind an object to ue.name in the browser context.
