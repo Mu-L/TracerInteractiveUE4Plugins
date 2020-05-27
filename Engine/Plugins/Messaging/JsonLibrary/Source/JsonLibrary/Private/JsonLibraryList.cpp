@@ -45,7 +45,7 @@ FJsonLibraryList::FJsonLibraryList( const TArray<bool>& Value )
 	if ( Json )
 	{
 		for ( int32 i = 0; i < Value.Num(); i++ )
-			Json->Add( MakeShareable( new FJsonValueBoolean( Value[ i ] ) ) );
+			Json->Add( FJsonLibraryValue( Value[ i ] ).JsonValue );
 	}
 }
 
@@ -56,7 +56,7 @@ FJsonLibraryList::FJsonLibraryList( const TArray<float>& Value )
 	if ( Json )
 	{
 		for ( int32 i = 0; i < Value.Num(); i++ )
-			Json->Add( MakeShareable( new FJsonValueNumber( Value[ i ] ) ) );
+			Json->Add( FJsonLibraryValue( Value[ i ] ).JsonValue );
 	}
 }
 
@@ -67,7 +67,7 @@ FJsonLibraryList::FJsonLibraryList( const TArray<double>& Value )
 	if ( Json )
 	{
 		for ( int32 i = 0; i < Value.Num(); i++ )
-			Json->Add( MakeShareable( new FJsonValueNumber( Value[ i ] ) ) );
+			Json->Add( FJsonLibraryValue( Value[ i ] ).JsonValue );
 	}
 }
 
@@ -78,7 +78,7 @@ FJsonLibraryList::FJsonLibraryList( const TArray<int32>& Value )
 	if ( Json )
 	{
 		for ( int32 i = 0; i < Value.Num(); i++ )
-			Json->Add( MakeShareable( new FJsonValueNumber( (double)Value[ i ] ) ) );
+			Json->Add( FJsonLibraryValue( Value[ i ] ).JsonValue );
 	}
 }
 
@@ -89,7 +89,40 @@ FJsonLibraryList::FJsonLibraryList( const TArray<FString>& Value )
 	if ( Json )
 	{
 		for ( int32 i = 0; i < Value.Num(); i++ )
-			Json->Add( MakeShareable( new FJsonValueString( Value[ i ] ) ) );
+			Json->Add( FJsonLibraryValue( Value[ i ] ).JsonValue );
+	}
+}
+
+FJsonLibraryList::FJsonLibraryList( const TArray<FRotator>& Value )
+	: FJsonLibraryList()
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( Json )
+	{
+		for ( int32 i = 0; i < Value.Num(); i++ )
+			Json->Add( FJsonLibraryObject( Value[ i ] ).JsonObject );
+	}
+}
+
+FJsonLibraryList::FJsonLibraryList( const TArray<FTransform>& Value )
+	: FJsonLibraryList()
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( Json )
+	{
+		for ( int32 i = 0; i < Value.Num(); i++ )
+			Json->Add( FJsonLibraryObject( Value[ i ] ).JsonObject );
+	}
+}
+
+FJsonLibraryList::FJsonLibraryList( const TArray<FVector>& Value )
+	: FJsonLibraryList()
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( Json )
+	{
+		for ( int32 i = 0; i < Value.Num(); i++ )
+			Json->Add( FJsonLibraryObject( Value[ i ] ).JsonObject );
 	}
 }
 
@@ -215,6 +248,24 @@ void FJsonLibraryList::AppendStringArray( const TArray<FString>& Array )
 		AddValue( FJsonLibraryValue( Array[ i ] ) );
 }
 
+void FJsonLibraryList::AppendRotatorArray( const TArray<FRotator>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		AddValue( FJsonLibraryValue( Array[ i ] ) );
+}
+
+void FJsonLibraryList::AppendTransformArray( const TArray<FTransform>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		AddValue( FJsonLibraryValue( Array[ i ] ) );
+}
+
+void FJsonLibraryList::AppendVectorArray( const TArray<FVector>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		AddValue( FJsonLibraryValue( Array[ i ] ) );
+}
+
 void FJsonLibraryList::AppendObjectArray( const TArray<FJsonLibraryObject>& Array )
 {
 	for ( int32 i = 0; i < Array.Num(); i++ )
@@ -270,6 +321,24 @@ void FJsonLibraryList::InjectStringArray( int32 Index, const TArray<FString>& Ar
 		InsertValue( Index + i, FJsonLibraryValue( Array[ i ] ) );
 }
 
+void FJsonLibraryList::InjectRotatorArray( int32 Index, const TArray<FRotator>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		InsertValue( Index + i, FJsonLibraryValue( Array[ i ] ) );
+}
+
+void FJsonLibraryList::InjectTransformArray( int32 Index, const TArray<FTransform>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		InsertValue( Index + i, FJsonLibraryValue( Array[ i ] ) );
+}
+
+void FJsonLibraryList::InjectVectorArray( int32 Index, const TArray<FVector>& Array )
+{
+	for ( int32 i = 0; i < Array.Num(); i++ )
+		InsertValue( Index + i, FJsonLibraryValue( Array[ i ] ) );
+}
+
 void FJsonLibraryList::InjectObjectArray( int32 Index, const TArray<FJsonLibraryObject>& Array )
 {
 	for ( int32 i = 0; i < Array.Num(); i++ )
@@ -297,6 +366,21 @@ void FJsonLibraryList::AddNumber( double Value )
 }
 
 void FJsonLibraryList::AddString( const FString& Value )
+{
+	AddValue( FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::AddRotator( const FRotator& Value )
+{
+	AddValue( FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::AddTransform( const FTransform& Value )
+{
+	AddValue( FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::AddVector( const FVector& Value )
 {
 	AddValue( FJsonLibraryValue( Value ) );
 }
@@ -357,6 +441,21 @@ void FJsonLibraryList::InsertString( int32 Index, const FString& Value )
 	InsertValue( Index, FJsonLibraryValue( Value ) );
 }
 
+void FJsonLibraryList::InsertRotator( int32 Index, const FRotator& Value )
+{
+	InsertValue( Index, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::InsertTransform( int32 Index, const FTransform& Value )
+{
+	InsertValue( Index, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::InsertVector( int32 Index, const FVector& Value )
+{
+	InsertValue( Index, FJsonLibraryValue( Value ) );
+}
+
 void FJsonLibraryList::InsertValue( int32 Index, const FJsonLibraryValue& Value )
 {
 	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
@@ -412,6 +511,21 @@ FString FJsonLibraryList::GetString( int32 Index ) const
 	return GetValue( Index ).GetString();
 }
 
+FRotator FJsonLibraryList::GetRotator( int32 Index ) const
+{
+	return GetValue( Index ).GetRotator();
+}
+
+FTransform FJsonLibraryList::GetTransform( int32 Index ) const
+{
+	return GetValue( Index ).GetTransform();
+}
+
+FVector FJsonLibraryList::GetVector( int32 Index ) const
+{
+	return GetValue( Index ).GetVector();
+}
+
 FJsonLibraryValue FJsonLibraryList::GetValue( int32 Index ) const
 {
 	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
@@ -462,6 +576,21 @@ void FJsonLibraryList::SetNumber( int32 Index, double Value )
 }
 
 void FJsonLibraryList::SetString( int32 Index, const FString& Value )
+{
+	SetValue( Index, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::SetRotator( int32 Index, const FRotator& Value )
+{
+	SetValue( Index, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::SetTransform( int32 Index, const FTransform& Value )
+{
+	SetValue( Index, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryList::SetVector( int32 Index, const FVector& Value )
 {
 	SetValue( Index, FJsonLibraryValue( Value ) );
 }
@@ -572,6 +701,60 @@ void FJsonLibraryList::RemoveString( const FString& Value )
 	}
 }
 
+void FJsonLibraryList::RemoveRotator( const FRotator& Value )
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( !Json )
+		return;
+
+	for ( int32 i = Json->Num() - 1; i >= 0; i-- )
+	{
+		const FJsonLibraryValue Item = ( *Json )[ i ];
+		if ( Item.IsRotator() && Item.GetRotator().Equals( Value ) )
+		{
+			NotifyCheck( i );
+			Json->RemoveAt( i );
+			NotifyRemove( i );
+		}
+	}
+}
+
+void FJsonLibraryList::RemoveTransform( const FTransform& Value )
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( !Json )
+		return;
+
+	for ( int32 i = Json->Num() - 1; i >= 0; i-- )
+	{
+		const FJsonLibraryValue Item = ( *Json )[ i ];
+		if ( Item.IsTransform() && Item.GetTransform().Equals( Value ) )
+		{
+			NotifyCheck( i );
+			Json->RemoveAt( i );
+			NotifyRemove( i );
+		}
+	}
+}
+
+void FJsonLibraryList::RemoveVector( const FVector& Value )
+{
+	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
+	if ( !Json )
+		return;
+
+	for ( int32 i = Json->Num() - 1; i >= 0; i-- )
+	{
+		const FJsonLibraryValue Item = ( *Json )[ i ];
+		if ( Item.IsVector() && Item.GetVector().Equals( Value ) )
+		{
+			NotifyCheck( i );
+			Json->RemoveAt( i );
+			NotifyRemove( i );
+		}
+	}
+}
+
 void FJsonLibraryList::RemoveValue( const FJsonLibraryValue& Value )
 {
 	TArray<TSharedPtr<FJsonValue>>* Json = SetJsonArray();
@@ -651,6 +834,54 @@ int32 FJsonLibraryList::FindString( const FString& Value, int32 Index ) const
 	{
 		const TSharedPtr<FJsonValue>& Item = ( *Json )[ i ];
 		if ( Item.IsValid() && Item->Type == EJson::String && Item->AsString() == Value )
+			return i;
+	}
+
+	return -1;
+}
+
+int32 FJsonLibraryList::FindRotator( const FRotator& Value, int32 Index ) const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+	if ( !Json )
+		return -1;
+
+	for ( int32 i = Index; i < Json->Num(); i++ )
+	{
+		const FJsonLibraryValue Item = ( *Json )[ i ];
+		if ( Item.IsRotator() && Item.GetRotator().Equals( Value ) )
+			return i;
+	}
+
+	return -1;
+}
+
+int32 FJsonLibraryList::FindTransform( const FTransform& Value, int32 Index ) const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+	if ( !Json )
+		return -1;
+
+	for ( int32 i = Index; i < Json->Num(); i++ )
+	{
+		const FJsonLibraryValue Item = ( *Json )[ i ];
+		if ( Item.IsTransform() && Item.GetTransform().Equals( Value ) )
+			return i;
+	}
+
+	return -1;
+}
+
+int32 FJsonLibraryList::FindVector( const FVector& Value, int32 Index ) const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+	if ( !Json )
+		return -1;
+
+	for ( int32 i = Index; i < Json->Num(); i++ )
+	{
+		const FJsonLibraryValue Item = ( *Json )[ i ];
+		if ( Item.IsVector() && Item.GetVector().Equals( Value ) )
 			return i;
 	}
 
@@ -983,6 +1214,48 @@ TArray<FString> FJsonLibraryList::ToStringArray() const
 
 	for ( int32 i = 0; i < Json->Num(); i++ )
 		Array.Add( FJsonLibraryValue( ( *Json )[ i ] ).GetString() );
+
+	return Array;
+}
+
+TArray<FRotator> FJsonLibraryList::ToRotatorArray() const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+
+	TArray<FRotator> Array;
+	if ( !Json )
+		return Array;
+
+	for ( int32 i = 0; i < Json->Num(); i++ )
+		Array.Add( FJsonLibraryValue( ( *Json )[ i ] ).GetRotator() );
+
+	return Array;
+}
+
+TArray<FTransform> FJsonLibraryList::ToTransformArray() const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+
+	TArray<FTransform> Array;
+	if ( !Json )
+		return Array;
+
+	for ( int32 i = 0; i < Json->Num(); i++ )
+		Array.Add( FJsonLibraryValue( ( *Json )[ i ] ).GetTransform() );
+
+	return Array;
+}
+
+TArray<FVector> FJsonLibraryList::ToVectorArray() const
+{
+	const TArray<TSharedPtr<FJsonValue>>* Json = GetJsonArray();
+
+	TArray<FVector> Array;
+	if ( !Json )
+		return Array;
+
+	for ( int32 i = 0; i < Json->Num(); i++ )
+		Array.Add( FJsonLibraryValue( ( *Json )[ i ] ).GetVector() );
 
 	return Array;
 }

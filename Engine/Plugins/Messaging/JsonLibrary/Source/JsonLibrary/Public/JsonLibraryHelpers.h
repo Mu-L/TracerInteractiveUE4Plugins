@@ -55,6 +55,16 @@ protected:
 	// Convert a string to a JSON value.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert From String", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library")
 	static FJsonLibraryValue FromString( const FString& Value );
+	
+	// Convert a rotator to a JSON value.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert From Rotator", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FJsonLibraryValue FromRotator( const FRotator& Value );
+	// Convert a transform to a JSON value.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert From Transform", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FJsonLibraryValue FromTransform( const FTransform& Value );
+	// Convert a vector to a JSON value.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert From Vector", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FJsonLibraryValue FromVector( const FVector& Value );
 
 	// Convert a JSON object to a JSON value.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert From Object", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library")
@@ -83,6 +93,16 @@ protected:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From String Array"), Category = "JSON Library|Array")
 	static FJsonLibraryValue FromStringArray( const TArray<FString>& Value );
 
+	// Copy an array of rotators to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Rotator Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryValue FromRotatorArray( const TArray<FRotator>& Value );
+	// Copy an array of transforms to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Transform Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryValue FromTransformArray( const TArray<FTransform>& Value );
+	// Copy an array of vectors to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Vector Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryValue FromVectorArray( const TArray<FVector>& Value );
+
 	// Copy an array of JSON objects to a JSON value.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Object Array"), Category = "JSON Library|Array")
 	static FJsonLibraryValue FromObjectArray( const TArray<FJsonLibraryObject>& Value );
@@ -100,6 +120,16 @@ protected:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From String Map"), Category = "JSON Library|Map")
 	static FJsonLibraryValue FromStringMap( const TMap<FString, FString>& Value );
 
+	// Copy a map of rotators to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Rotator Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryValue FromRotatorMap( const TMap<FString, FRotator>& Value );
+	// Copy a map of transforms to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Transform Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryValue FromTransformMap( const TMap<FString, FTransform>& Value );
+	// Copy a map of vectors to a JSON value.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy From Vector Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryValue FromVectorMap( const TMap<FString, FVector>& Value );
+
 	// Convert a JSON value to a boolean.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To Boolean", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library")
 	static bool ToBoolean( UPARAM(ref) const FJsonLibraryValue& Value );
@@ -112,6 +142,16 @@ protected:
 	// Convert a JSON value to a string.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To String", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library")
 	static FString ToString( UPARAM(ref) const FJsonLibraryValue& Value );
+
+	// Convert a JSON value to a rotator.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To Rotator", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FRotator ToRotator( UPARAM(ref) const FJsonLibraryValue& Value );
+	// Convert a JSON value to a transform.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To Transform", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FTransform ToTransform( UPARAM(ref) const FJsonLibraryValue& Value );
+	// Convert a JSON value to a vector.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To Vector", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FVector ToVector( UPARAM(ref) const FJsonLibraryValue& Value );
 
 	// Convert a JSON value to a JSON object.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert To Object", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library")
@@ -140,22 +180,62 @@ protected:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To String Array"), Category = "JSON Library|Array")
 	static TArray<FString> ToStringArray( UPARAM(ref) const FJsonLibraryValue& Target );
 
+	// Copy this value to an array of rotators.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Rotator Array"), Category = "JSON Library|Array|Engine")
+	static TArray<FRotator> ToRotatorArray( UPARAM(ref) const FJsonLibraryValue& Target );
+	// Copy this value to an array of transforms.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Transform Array"), Category = "JSON Library|Array|Engine")
+	static TArray<FTransform> ToTransformArray( UPARAM(ref) const FJsonLibraryValue& Target );
+	// Copy this value to an array of vectors.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Vector Array"), Category = "JSON Library|Array|Engine")
+	static TArray<FVector> ToVectorArray( UPARAM(ref) const FJsonLibraryValue& Target );
+
 	// Copy this value to an array of JSON objects.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Object Array"), Category = "JSON Library|Array")
 	static TArray<FJsonLibraryObject> ToObjectArray( UPARAM(ref) const FJsonLibraryValue& Target );
 
-	// Copy this value to an array of booleans.
+	// Copy this value to a map of booleans.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Boolean Map"), Category = "JSON Library|Map")
 	static TMap<FString, bool> ToBooleanMap( UPARAM(ref) const FJsonLibraryValue& Target );
-	// Copy this value to an array of floats.
+	// Copy this value to a map of floats.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Float Map"), Category = "JSON Library|Map")
 	static TMap<FString, float> ToFloatMap( UPARAM(ref) const FJsonLibraryValue& Target );
-	// Copy this value to an array of integers.
+	// Copy this value to a map of integers.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Integer Map"), Category = "JSON Library|Map")
 	static TMap<FString, int32> ToIntegerMap( UPARAM(ref) const FJsonLibraryValue& Target );
-	// Copy this value to an array of strings.
+	// Copy this value to a map of strings.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To String Map"), Category = "JSON Library|Map")
 	static TMap<FString, FString> ToStringMap( UPARAM(ref) const FJsonLibraryValue& Target );
+
+	// Copy this value to a map of rotators.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Rotator Map"), Category = "JSON Library|Map|Engine")
+	static TMap<FString, FRotator> ToRotatorMap( UPARAM(ref) const FJsonLibraryValue& Target );
+	// Copy this value to a map of transforms.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Transform Map"), Category = "JSON Library|Map|Engine")
+	static TMap<FString, FTransform> ToTransformMap( UPARAM(ref) const FJsonLibraryValue& Target );
+	// Copy this value to a map of vectors.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy To Vector Map"), Category = "JSON Library|Map|Engine")
+	static TMap<FString, FVector> ToVectorMap( UPARAM(ref) const FJsonLibraryValue& Target );
+
+	// Convert a rotator to a JSON object.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert Rotator To Object", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FJsonLibraryObject ConvertRotatorToObject( const FRotator& Value );
+	// Convert a transform to a JSON object.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert Transform To Object", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FJsonLibraryObject ConvertTransformToObject( const FTransform& Value );
+	// Convert a vector to a JSON object.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert Vector To Object", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FJsonLibraryObject ConvertVectorToObject( const FVector& Value );
+
+	// Convert a JSON object to a rotator.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert Object To Rotator", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FRotator ConvertObjectToRotator( UPARAM(ref) const FJsonLibraryObject& Object );
+	// Convert a JSON object to a transform.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert Object To Transform", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FTransform ConvertObjectToTransform( UPARAM(ref) const FJsonLibraryObject& Object );
+	// Convert a JSON object to a vector.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Convert Object To Vector", CompactNodeTitle = "->", BlueprintAutocast), Category = "JSON Library|Engine")
+	static FVector ConvertObjectToVector( UPARAM(ref) const FJsonLibraryObject& Object );
 
 	// Copy a map of JSON values to a JSON object.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Map To Object"), Category = "JSON Library|Map")
@@ -177,6 +257,16 @@ protected:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy String Map To Object"), Category = "JSON Library|Map")
 	static FJsonLibraryObject ConvertStringMapToObject( const TMap<FString, FString>& Value );
 
+	// Copy a map of rotators to a JSON object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Rotator Map To Object"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject ConvertRotatorMapToObject( const TMap<FString, FRotator>& Value );
+	// Copy a map of transforms to a JSON object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Transform Map To Object"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject ConvertTransformMapToObject( const TMap<FString, FTransform>& Value );
+	// Copy a map of vectors to a JSON object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Vector Map To Object"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject ConvertVectorMapToObject( const TMap<FString, FVector>& Value );
+
 	// Copy an array of JSON values to a JSON array.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Array To List"), Category = "JSON Library|Array")
 	static FJsonLibraryList ConvertArrayToList( const TArray<FJsonLibraryValue>& Value );
@@ -197,6 +287,16 @@ protected:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy String Array To List"), Category = "JSON Library|Array")
 	static FJsonLibraryList ConvertStringArrayToList( const TArray<FString>& Value );
 
+	// Copy an array of rotators to a JSON array.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Rotator Array To List"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList ConvertRotatorArrayToList( const TArray<FRotator>& Value );
+	// Copy an array of transforms to a JSON array.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Transform Array To List"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList ConvertTransformArrayToList( const TArray<FTransform>& Value );
+	// Copy an array of vectors to a JSON array.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Vector Array To List"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList ConvertVectorArrayToList( const TArray<FVector>& Value );
+
 	// Copy an array of JSON objects to a JSON array.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Copy Object Array To List"), Category = "JSON Library|Array")
 	static FJsonLibraryList ConvertObjectArrayToList( const TArray<FJsonLibraryObject>& Value );
@@ -211,6 +311,17 @@ protected:
 	// Check if this value is valid.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Valid"), Category = "JSON Library|Value")
 	static bool JsonValue_IsValid( UPARAM(ref) const FJsonLibraryValue& Target );
+
+	// Check if this value is a rotator.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Rotator"), Category = "JSON Library|Value|Engine")
+	static bool JsonValue_IsRotator( UPARAM(ref) const FJsonLibraryValue& Target );
+	// Check if this value is a transform.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Transform"), Category = "JSON Library|Value|Engine")
+	static bool JsonValue_IsTransform( UPARAM(ref) const FJsonLibraryValue& Target );
+	// Check if this value is a vector.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Vector"), Category = "JSON Library|Value|Engine")
+	static bool JsonValue_IsVector( UPARAM(ref) const FJsonLibraryValue& Target );
+
 	// Stringify this value.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify"), Category = "JSON Library|Value")
 	static FString JsonValue_Stringify( UPARAM(ref) const FJsonLibraryValue& Target );
@@ -251,6 +362,16 @@ protected:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add String Map"), Category = "JSON Library|Map")
 	static FJsonLibraryObject& JsonObject_AddStringMap( UPARAM(ref) FJsonLibraryObject& Target, const TMap<FString, FString>& Map );
 
+	// Add a map of rotators to this object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Rotator Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject& JsonObject_AddRotatorMap( UPARAM(ref) FJsonLibraryObject& Target, const TMap<FString, FRotator>& Map );
+	// Add a map of transforms to this object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Transform Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject& JsonObject_AddTransformMap( UPARAM(ref) FJsonLibraryObject& Target, const TMap<FString, FTransform>& Map );
+	// Add a map of vectors to this object.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Vector Map"), Category = "JSON Library|Map|Engine")
+	static FJsonLibraryObject& JsonObject_AddVectorMap( UPARAM(ref) FJsonLibraryObject& Target, const TMap<FString, FVector>& Map );
+
 	// Get the keys of this object as an array of strings.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get Keys"), Category = "JSON Library|Object")
 	static TArray<FString> JsonObject_GetKeys( UPARAM(ref) const FJsonLibraryObject& Target );
@@ -270,6 +391,16 @@ protected:
 	// Get a property as a string.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get String"), Category = "JSON Library|Object")
 	static FString JsonObject_GetString( UPARAM(ref) const FJsonLibraryObject& Target, const FString& Key );
+
+	// Get a property as a rotator.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Rotator"), Category = "JSON Library|Object|Engine")
+	static FRotator JsonObject_GetRotator( UPARAM(ref) const FJsonLibraryObject& Target, const FString& Key );
+	// Get a property as a transform.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Transform"), Category = "JSON Library|Object|Engine")
+	static FTransform JsonObject_GetTransform( UPARAM(ref) const FJsonLibraryObject& Target, const FString& Key );
+	// Get a property as a vector.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Vector"), Category = "JSON Library|Object|Engine")
+	static FVector JsonObject_GetVector( UPARAM(ref) const FJsonLibraryObject& Target, const FString& Key );
 
 	// Get a property as a JSON value.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get Value"), Category = "JSON Library|Object")
@@ -301,6 +432,16 @@ protected:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set String"), Category = "JSON Library|Object")
 	static FJsonLibraryObject& JsonObject_SetString( UPARAM(ref) FJsonLibraryObject& Target, const FString& Key, const FString& Value );
 
+	// Set a property as a rotator.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Rotator"), Category = "JSON Library|Object|Engine")
+	static FJsonLibraryObject& JsonObject_SetRotator( UPARAM(ref) FJsonLibraryObject& Target, const FString& Key, const FRotator& Value );
+	// Set a property as a transform.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Transform"), Category = "JSON Library|Object|Engine")
+	static FJsonLibraryObject& JsonObject_SetTransform( UPARAM(ref) FJsonLibraryObject& Target, const FString& Key, const FTransform& Value );
+	// Set a property as a vector.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Vector"), Category = "JSON Library|Object|Engine")
+	static FJsonLibraryObject& JsonObject_SetVector( UPARAM(ref) FJsonLibraryObject& Target, const FString& Key, const FVector& Value );
+
 	// Set a property as a JSON value.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Value"), Category = "JSON Library|Object")
 	static FJsonLibraryObject& JsonObject_SetValue( UPARAM(ref) FJsonLibraryObject& Target, const FString& Key, const FJsonLibraryValue& Value );
@@ -324,6 +465,16 @@ protected:
 	// Check if this object is empty.
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Empty"), Category = "JSON Library|Object")
 	static bool JsonObject_IsEmpty( UPARAM(ref) const FJsonLibraryObject& Target );
+
+	// Check if this object is a rotator.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Rotator"), Category = "JSON Library|Object|Engine")
+	static bool JsonObject_IsRotator( UPARAM(ref) const FJsonLibraryObject& Target );
+	// Check if this object is a transform.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Transform"), Category = "JSON Library|Object|Engine")
+	static bool JsonObject_IsTransform( UPARAM(ref) const FJsonLibraryObject& Target );
+	// Check if this object is a vector.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Vector"), Category = "JSON Library|Object|Engine")
+	static bool JsonObject_IsVector( UPARAM(ref) const FJsonLibraryObject& Target );
 
 	// Stringify this object.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Stringify"), Category = "JSON Library|Object")
@@ -360,6 +511,17 @@ protected:
 	// Append an array of strings to this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Append String Array"), Category = "JSON Library|Array")
 	static FJsonLibraryList& JsonList_AppendStringArray( UPARAM(ref) FJsonLibraryList& Target, const TArray<FString>& Array );
+
+	// Append an array of rotators to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Append Rotator Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_AppendRotatorArray( UPARAM(ref) FJsonLibraryList& Target, const TArray<FRotator>& Array );
+	// Append an array of transforms to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Append Transform Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_AppendTransformArray( UPARAM(ref) FJsonLibraryList& Target, const TArray<FTransform>& Array );
+	// Append an array of vectors to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Append Vector Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_AppendVectorArray( UPARAM(ref) FJsonLibraryList& Target, const TArray<FVector>& Array );
+
 	// Append an array of JSON objects to this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Append Object Array"), Category = "JSON Library|Array")
 	static FJsonLibraryList& JsonList_AppendObjectArray( UPARAM(ref) FJsonLibraryList& Target, const TArray<FJsonLibraryObject>& Array );
@@ -380,6 +542,17 @@ protected:
 	// Inject the items of a string array into this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Inject String Array"), Category = "JSON Library|Array")
 	static FJsonLibraryList& JsonList_InjectStringArray( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const TArray<FString>& Array );
+
+	// Inject the items of a rotator array into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Inject Rotator Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_InjectRotatorArray( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const TArray<FRotator>& Array );
+	// Inject the items of a transform array into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Inject Transform Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_InjectTransformArray( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const TArray<FTransform>& Array );
+	// Inject the items of a vector array into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Inject Vector Array"), Category = "JSON Library|Array|Engine")
+	static FJsonLibraryList& JsonList_InjectVectorArray( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const TArray<FVector>& Array );
+
 	// Inject the items of an array of JSON objects into this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Inject Object Array"), Category = "JSON Library|Array")
 	static FJsonLibraryList& JsonList_InjectObjectArray( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const TArray<FJsonLibraryObject>& Array );
@@ -396,6 +569,16 @@ protected:
 	// Add a string to this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add String"), Category = "JSON Library|List")
 	static FJsonLibraryList& JsonList_AddString( UPARAM(ref) FJsonLibraryList& Target, const FString& Value );
+	
+	// Add a rotator to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Rotator"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_AddRotator( UPARAM(ref) FJsonLibraryList& Target, const FRotator& Value );
+	// Add a transform to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Transform"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_AddTransform( UPARAM(ref) FJsonLibraryList& Target, const FTransform& Value );
+	// Add a vector to this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Vector"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_AddVector( UPARAM(ref) FJsonLibraryList& Target, const FVector& Value );
 
 	// Add a JSON value to this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add Value"), Category = "JSON Library|List")
@@ -427,6 +610,16 @@ protected:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Insert String"), Category = "JSON Library|List")
 	static FJsonLibraryList& JsonList_InsertString( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FString& Value );
 
+	// Insert a rotator into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Insert Rotator"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_InsertRotator( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FRotator& Value );
+	// Insert a transform into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Insert Transform"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_InsertTransform( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FTransform& Value );
+	// Insert a vector into this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Insert Vector"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_InsertVector( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FVector& Value );
+
 	// Insert a JSON value into this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Insert Value"), Category = "JSON Library|List")
 	static FJsonLibraryList& JsonList_InsertValue( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FJsonLibraryValue& Value );
@@ -457,6 +650,16 @@ protected:
 	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get String"), Category = "JSON Library|List")
 	static FString JsonList_GetString( UPARAM(ref) const FJsonLibraryList& Target, int32 Index );
 
+	// Get an item as a rotator.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Rotator"), Category = "JSON Library|List|Engine")
+	static FRotator JsonList_GetRotator( UPARAM(ref) const FJsonLibraryList& Target, int32 Index );
+	// Get an item as a transform.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Transform"), Category = "JSON Library|List|Engine")
+	static FTransform JsonList_GetTransform( UPARAM(ref) const FJsonLibraryList& Target, int32 Index );
+	// Get an item as a vector.
+	UFUNCTION(BlueprintPure, meta = (DisplayName = "Get Vector"), Category = "JSON Library|List|Engine")
+	static FVector JsonList_GetVector( UPARAM(ref) const FJsonLibraryList& Target, int32 Index );
+
 	// Get an item as a JSON value.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get Value"), Category = "JSON Library|List")
 	static FJsonLibraryValue JsonList_GetValue( UPARAM(ref) const FJsonLibraryList& Target, int32 Index );
@@ -486,6 +689,16 @@ protected:
 	// Set an item as a string.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set String"), Category = "JSON Library|List")
 	static FJsonLibraryList& JsonList_SetString( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FString& Value );
+
+	// Set an item as a rotator.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Rotator"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_SetRotator( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FRotator& Value );
+	// Set an item as a transform.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Transform"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_SetTransform( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FTransform& Value );
+	// Set an item as a vector.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Vector"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_SetVector( UPARAM(ref) FJsonLibraryList& Target, int32 Index, const FVector& Value );
 
 	// Set an item as a JSON value.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set Value"), Category = "JSON Library|List")
@@ -521,6 +734,16 @@ protected:
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove String"), Category = "JSON Library|List")
 	static FJsonLibraryList& JsonList_RemoveString( UPARAM(ref) FJsonLibraryList& Target, const FString& Value );
 
+	// Remove a rotator from this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove Rotator"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_RemoveRotator( UPARAM(ref) FJsonLibraryList& Target, const FRotator& Value );
+	// Remove a transform from this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove Transform"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_RemoveTransform( UPARAM(ref) FJsonLibraryList& Target, const FTransform& Value );
+	// Remove a vector from this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove Vector"), Category = "JSON Library|List|Engine")
+	static FJsonLibraryList& JsonList_RemoveVector( UPARAM(ref) FJsonLibraryList& Target, const FVector& Value );
+
 	// Remove a JSON value from this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove Value"), Category = "JSON Library|List")
 	static FJsonLibraryList& JsonList_RemoveValue( UPARAM(ref) FJsonLibraryList& Target, const FJsonLibraryValue& Value );
@@ -543,6 +766,16 @@ protected:
 	// Find a string in this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Find String"), Category = "JSON Library|List")
 	static int32 JsonList_FindString( UPARAM(ref) const FJsonLibraryList& Target, const FString& Value, int32 Index = 0 );
+
+	// Find a rotator in this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Find Rotator"), Category = "JSON Library|List|Engine")
+	static int32 JsonList_FindRotator( UPARAM(ref) const FJsonLibraryList& Target, const FRotator& Value, int32 Index = 0 );
+	// Find a transform in this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Find Transform"), Category = "JSON Library|List|Engine")
+	static int32 JsonList_FindTransform( UPARAM(ref) const FJsonLibraryList& Target, const FTransform& Value, int32 Index = 0 );
+	// Find a vector in this list.
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Find Vector"), Category = "JSON Library|List|Engine")
+	static int32 JsonList_FindVector( UPARAM(ref) const FJsonLibraryList& Target, const FVector& Value, int32 Index = 0 );
 
 	// Find a JSON value in this list.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Find Value"), Category = "JSON Library|List")

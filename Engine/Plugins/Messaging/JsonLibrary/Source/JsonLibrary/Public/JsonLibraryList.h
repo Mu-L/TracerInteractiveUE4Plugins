@@ -37,6 +37,11 @@ public:
 	FJsonLibraryList( const TArray<double>& Value );
 	FJsonLibraryList( const TArray<int32>& Value );
 	FJsonLibraryList( const TArray<FString>& Value );
+
+	FJsonLibraryList( const TArray<FRotator>& Value );
+	FJsonLibraryList( const TArray<FTransform>& Value );
+	FJsonLibraryList( const TArray<FVector>& Value );
+
 	FJsonLibraryList( const TArray<FJsonLibraryObject>& Value );
 
 	// Check if this list equals another JSON array.
@@ -65,6 +70,13 @@ public:
 	// Append an array of JSON objects to this list.
 	void AppendObjectArray( const TArray<FJsonLibraryObject>& Array );
 
+	// Append an array of rotators to this list.
+	void AppendRotatorArray( const TArray<FRotator>& Array );
+	// Append an array of transforms to this list.
+	void AppendTransformArray( const TArray<FTransform>& Array );
+	// Append an array of vectors to this list.
+	void AppendVectorArray( const TArray<FVector>& Array );
+
 	// Inject the items of a JSON array into this list.
 	void Inject( int32 Index, const FJsonLibraryList& List );
 
@@ -81,6 +93,13 @@ public:
 	// Inject the items of an array of JSON objects into this list.
 	void InjectObjectArray( int32 Index, const TArray<FJsonLibraryObject>& Array );
 
+	// Inject the items of a rotator array into this list.
+	void InjectRotatorArray( int32 Index, const TArray<FRotator>& Array );
+	// Inject the items of a transform array into this list.
+	void InjectTransformArray( int32 Index, const TArray<FTransform>& Array );
+	// Inject the items of a vector array into this list.
+	void InjectVectorArray( int32 Index, const TArray<FVector>& Array );
+
 	// Add a boolean to this list.
 	void AddBoolean( bool Value );
 	// Add a float to this list.
@@ -91,6 +110,13 @@ public:
 	void AddNumber( double Value );
 	// Add a string to this list.
 	void AddString( const FString& Value );
+
+	// Add a rotator to this list.
+	void AddRotator( const FRotator& Value );
+	// Add a transform to this list.
+	void AddTransform( const FTransform& Value );
+	// Add a vector to this list.
+	void AddVector( const FVector& Value );
 
 	// Add a JSON value to this list.
 	void AddValue( const FJsonLibraryValue& Value );
@@ -115,6 +141,13 @@ public:
 	// Insert a string into this list.
 	void InsertString( int32 Index, const FString& Value );
 
+	// Insert a rotator into this list.
+	void InsertRotator( int32 Index, const FRotator& Value );
+	// Insert a transform into this list.
+	void InsertTransform( int32 Index, const FTransform& Value );
+	// Insert a vector into this list.
+	void InsertVector( int32 Index, const FVector& Value );
+
 	// Insert a JSON value into this list.
 	void InsertValue( int32 Index, const FJsonLibraryValue& Value );
 	// Insert a JSON object into this list.
@@ -138,6 +171,13 @@ public:
 	// Get an item as a string.
 	FString GetString( int32 Index ) const;
 
+	// Get an item as a rotator.
+	FRotator GetRotator( int32 Index ) const;
+	// Get an item as a transform.
+	FTransform GetTransform( int32 Index ) const;
+	// Get an item as a vector.
+	FVector GetVector( int32 Index ) const;
+
 	// Get an item as a JSON value.
 	FJsonLibraryValue GetValue( int32 Index ) const;
 	// Get an item as a JSON object.
@@ -160,6 +200,13 @@ public:
 	void SetNumber( int32 Index, double Value );
 	// Set an item as a string.
 	void SetString( int32 Index, const FString& Value );
+
+	// Set an item as a rotator.
+	void SetRotator( int32 Index, const FRotator& Value );
+	// Set an item as a transform.
+	void SetTransform( int32 Index, const FTransform& Value );
+	// Set an item as a vector.
+	void SetVector( int32 Index, const FVector& Value );
 
 	// Set an item as a JSON value.
 	void SetValue( int32 Index, const FJsonLibraryValue& Value );
@@ -187,6 +234,13 @@ public:
 	// Remove a string from this list.
 	void RemoveString( const FString& Value );
 
+	// Remove a rotator from this list.
+	void RemoveRotator( const FRotator& Value );
+	// Remove a transform from this list.
+	void RemoveTransform( const FTransform& Value );
+	// Remove a vector from this list.
+	void RemoveVector( const FVector& Value );
+
 	// Remove a JSON value from this list.
 	void RemoveValue( const FJsonLibraryValue& Value );
 	// Remove a JSON object from this list.
@@ -204,6 +258,13 @@ public:
 	int32 FindNumber( double Value, int32 Index = 0 ) const;
 	// Find a string in this list.
 	int32 FindString( const FString& Value, int32 Index = 0 ) const;
+
+	// Find a rotator in this list.
+	int32 FindRotator( const FRotator& Value, int32 Index = 0 ) const;
+	// Find a transform in this list.
+	int32 FindTransform( const FTransform& Value, int32 Index = 0 ) const;
+	// Find a vector in this list.
+	int32 FindVector( const FVector& Value, int32 Index = 0 ) const;
 
 	// Find a JSON value in this list.
 	int32 FindValue( const FJsonLibraryValue& Value, int32 Index = 0 ) const;
@@ -265,6 +326,13 @@ public:
 	TArray<double> ToNumberArray() const;
 	// Copy this list to an array of strings.
 	TArray<FString> ToStringArray() const;
+
+	// Copy this list to an array of rotators.
+	TArray<FRotator> ToRotatorArray() const;
+	// Copy this list to an array of transforms.
+	TArray<FTransform> ToTransformArray() const;
+	// Copy this list to an array of vectors.
+	TArray<FVector> ToVectorArray() const;
 
 	// Copy this list to an array of JSON objects.
 	TArray<FJsonLibraryObject> ToObjectArray() const;

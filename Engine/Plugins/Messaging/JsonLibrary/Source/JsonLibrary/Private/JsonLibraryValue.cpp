@@ -85,6 +85,21 @@ FJsonLibraryValue::FJsonLibraryValue( const FString& Value )
 	JsonValue = MakeShareable( new FJsonValueString( Value ) );
 }
 
+FJsonLibraryValue::FJsonLibraryValue( const FRotator& Value )
+{
+	JsonValue = FJsonLibraryObject( Value ).JsonObject;
+}
+
+FJsonLibraryValue::FJsonLibraryValue( const FTransform& Value )
+{
+	JsonValue = FJsonLibraryObject( Value ).JsonObject;
+}
+
+FJsonLibraryValue::FJsonLibraryValue( const FVector& Value )
+{
+	JsonValue = FJsonLibraryObject( Value ).JsonObject;
+}
+
 FJsonLibraryValue::FJsonLibraryValue( const FJsonLibraryObject& Value )
 {
 	JsonValue = Value.JsonObject;
@@ -97,20 +112,12 @@ FJsonLibraryValue::FJsonLibraryValue( const FJsonLibraryList& Value )
 
 FJsonLibraryValue::FJsonLibraryValue( const TArray<FJsonLibraryValue>& Value )
 {
-	TArray<TSharedPtr<FJsonValue>> Array;
-	for ( int32 i = 0; i < Value.Num(); i++ )
-		Array.Add( Value[ i ].JsonValue );
-
-	JsonValue = MakeShareable( new FJsonValueArray( Array ) );
+	JsonValue = FJsonLibraryList( Value ).JsonArray;
 }
 
 FJsonLibraryValue::FJsonLibraryValue( const TMap<FString, FJsonLibraryValue>& Value )
 {
-	TSharedPtr<FJsonObject> Object = MakeShareable( new FJsonObject() );
-	for ( const TPair<FString, FJsonLibraryValue>& Temp : Value )
-		Object->SetField( Temp.Key, Temp.Value.JsonValue );
-
-	JsonValue = MakeShareable( new FJsonValueObject( Object ) );
+	JsonValue = FJsonLibraryObject( Value ).JsonObject;
 }
 
 EJsonLibraryType FJsonLibraryValue::GetType() const
@@ -220,6 +227,16 @@ bool FJsonLibraryValue::Equals( const FJsonLibraryValue& Value, bool bStrict /*=
 		if ( TypeA == EJson::String )
 			return GetNumber() == Value.GetNumber();
 	}
+
+	if ( TypeA == EJson::Object && TypeB == EJson::Object )
+	{
+		if ( IsRotator() && Value.IsRotator() )
+			return GetRotator().Equals( Value.GetRotator() );
+		if ( IsTransform() && Value.IsTransform() )
+			return GetTransform().Equals( Value.GetTransform() );
+		if ( IsVector() && Value.IsVector() )
+			return GetVector().Equals( Value.GetVector() );
+	}
 	
 	return false;
 }
@@ -281,6 +298,30 @@ FString FJsonLibraryValue::GetString() const
 	}
 
 	return FString();
+}
+
+FRotator FJsonLibraryValue::GetRotator() const
+{
+	if ( GetType() == EJsonLibraryType::Object )
+		return GetObject().ToRotator();
+	
+	return FRotator::ZeroRotator;
+}
+
+FTransform FJsonLibraryValue::GetTransform() const
+{
+	if ( GetType() == EJsonLibraryType::Object )
+		return GetObject().ToTransform();
+	
+	return FTransform::Identity;
+}
+
+FVector FJsonLibraryValue::GetVector() const
+{
+	if ( GetType() == EJsonLibraryType::Object )
+		return GetObject().ToVector();
+	
+	return FVector::ZeroVector;
 }
 
 FJsonLibraryObject FJsonLibraryValue::GetObject() const
@@ -464,6 +505,30 @@ bool FJsonLibraryValue::TryStringify( FString& Text, bool bCondensed /*= true*/ 
 bool FJsonLibraryValue::IsValid() const
 {
 	return GetType() != EJsonLibraryType::Invalid;
+}
+
+bool FJsonLibraryValue::IsRotator() const
+{
+	if ( GetType() == EJsonLibraryType::Object )
+		return GetObject().IsRotator();
+
+	return false;
+}
+
+bool FJsonLibraryValue::IsTransform() const
+{
+	if ( GetType() == EJsonLibraryType::Object )
+		return GetObject().IsTransform();
+
+	return false;
+}
+
+bool FJsonLibraryValue::IsVector() const
+{
+	if ( GetType() == EJsonLibraryType::Object )
+		return GetObject().IsVector();
+
+	return false;
 }
 
 FJsonLibraryValue FJsonLibraryValue::Parse( const FString& Text )
