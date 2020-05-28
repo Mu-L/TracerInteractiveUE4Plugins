@@ -1,4 +1,4 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
 #include "JsonLibraryObject.h"
 #include "JsonLibraryList.h"
 #include "JsonLibraryHelpers.h"
@@ -25,6 +25,50 @@ FJsonLibraryObject::FJsonLibraryObject( const FJsonLibraryObjectNotify& Notify )
 	: FJsonLibraryObject()
 {
 	OnNotify = Notify;
+}
+
+FJsonLibraryObject::FJsonLibraryObject( const FRotator& Value )
+	: FJsonLibraryObject()
+{
+	TSharedPtr<FJsonObject> Json = SetJsonObject();
+	if ( Json.IsValid() )
+	{
+		Json->SetNumberField( "pitch", Value.Pitch );
+		Json->SetNumberField( "yaw",   Value.Yaw );
+		Json->SetNumberField( "roll",  Value.Roll );
+	}
+}
+
+FJsonLibraryObject::FJsonLibraryObject( const FTransform& Value )
+	: FJsonLibraryObject()
+{
+	TSharedPtr<FJsonObject> Json = SetJsonObject();
+	if ( Json.IsValid() )
+	{
+		Json->SetField( "rotation", FJsonLibraryObject( Value.GetRotation().Rotator() ).JsonObject );
+		Json->SetField( "translation", FJsonLibraryObject( Value.GetTranslation() ).JsonObject );
+
+		const FVector Scale = Value.GetScale3D();
+		if ( Scale != FVector::OneVector )
+		{
+			if ( Scale.IsUniform() )
+				Json->SetNumberField( "scale", Scale.X );
+			else
+				Json->SetField( "scale", FJsonLibraryObject( Scale ).JsonObject );
+		}
+	}
+}
+
+FJsonLibraryObject::FJsonLibraryObject( const FVector& Value )
+	: FJsonLibraryObject()
+{
+	TSharedPtr<FJsonObject> Json = SetJsonObject();
+	if ( Json.IsValid() )
+	{
+		Json->SetNumberField( "x", Value.X );
+		Json->SetNumberField( "y", Value.Y );
+		Json->SetNumberField( "z", Value.Z );
+	}
 }
 
 FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FJsonLibraryValue>& Value )
@@ -90,6 +134,39 @@ FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FString>& Value )
 	{
 		for ( const TPair<FString, FString>& Temp : Value )
 			Json->SetStringField( Temp.Key, Temp.Value );
+	}
+}
+
+FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FRotator>& Value )
+	: FJsonLibraryObject()
+{
+	TSharedPtr<FJsonObject> Json = SetJsonObject();
+	if ( Json.IsValid() )
+	{
+		for ( const TPair<FString, FRotator>& Temp : Value )
+			Json->SetField( Temp.Key, FJsonLibraryObject( Temp.Value ).JsonObject );
+	}
+}
+
+FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FTransform>& Value )
+	: FJsonLibraryObject()
+{
+	TSharedPtr<FJsonObject> Json = SetJsonObject();
+	if ( Json.IsValid() )
+	{
+		for ( const TPair<FString, FTransform>& Temp : Value )
+			Json->SetField( Temp.Key, FJsonLibraryObject( Temp.Value ).JsonObject );
+	}
+}
+
+FJsonLibraryObject::FJsonLibraryObject( const TMap<FString, FVector>& Value )
+	: FJsonLibraryObject()
+{
+	TSharedPtr<FJsonObject> Json = SetJsonObject();
+	if ( Json.IsValid() )
+	{
+		for ( const TPair<FString, FVector>& Temp : Value )
+			Json->SetField( Temp.Key, FJsonLibraryObject( Temp.Value ).JsonObject );
 	}
 }
 
@@ -189,6 +266,24 @@ void FJsonLibraryObject::AddStringMap( const TMap<FString, FString>& Map )
 		SetValue( Temp.Key, FJsonLibraryValue( Temp.Value ) );
 }
 
+void FJsonLibraryObject::AddRotatorMap( const TMap<FString, FRotator>& Map )
+{
+	for ( const TPair<FString, FRotator>& Temp : Map )
+		SetValue( Temp.Key, FJsonLibraryValue( Temp.Value ) );
+}
+
+void FJsonLibraryObject::AddTransformMap( const TMap<FString, FTransform>& Map )
+{
+	for ( const TPair<FString, FTransform>& Temp : Map )
+		SetValue( Temp.Key, FJsonLibraryValue( Temp.Value ) );
+}
+
+void FJsonLibraryObject::AddVectorMap( const TMap<FString, FVector>& Map )
+{
+	for ( const TPair<FString, FVector>& Temp : Map )
+		SetValue( Temp.Key, FJsonLibraryValue( Temp.Value ) );
+}
+
 TArray<FString> FJsonLibraryObject::GetKeys() const
 {
 	const TSharedPtr<FJsonObject> Json = GetJsonObject();
@@ -238,6 +333,21 @@ double FJsonLibraryObject::GetNumber( const FString& Key ) const
 FString FJsonLibraryObject::GetString( const FString& Key ) const
 {
 	return GetValue( Key ).GetString();
+}
+
+FRotator FJsonLibraryObject::GetRotator( const FString& Key ) const
+{
+	return GetValue( Key ).GetRotator();
+}
+
+FTransform FJsonLibraryObject::GetTransform( const FString& Key ) const
+{
+	return GetValue( Key ).GetTransform();
+}
+
+FVector FJsonLibraryObject::GetVector( const FString& Key ) const
+{
+	return GetValue( Key ).GetVector();
 }
 
 FJsonLibraryValue FJsonLibraryObject::GetValue( const FString& Key ) const
@@ -290,6 +400,21 @@ void FJsonLibraryObject::SetNumber( const FString& Key, double Value )
 }
 
 void FJsonLibraryObject::SetString( const FString& Key, const FString& Value )
+{
+	SetValue( Key, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryObject::SetRotator( const FString& Key, const FRotator& Value )
+{
+	SetValue( Key, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryObject::SetTransform( const FString& Key, const FTransform& Value )
+{
+	SetValue( Key, FJsonLibraryValue( Value ) );
+}
+
+void FJsonLibraryObject::SetVector( const FString& Key, const FVector& Value )
 {
 	SetValue( Key, FJsonLibraryValue( Value ) );
 }
@@ -503,6 +628,68 @@ bool FJsonLibraryObject::IsEmpty() const
 	return Json->Values.Num() == 0;
 }
 
+bool FJsonLibraryObject::IsRotator() const
+{
+	if ( Count() != 3 )
+		return false;
+	
+	if ( HasKey( "pitch" )
+	  && HasKey( "yaw" )
+	  && HasKey( "roll" ) )
+		return true;
+
+	return false;
+}
+
+bool FJsonLibraryObject::IsTransform() const
+{
+	int32 Keys = Count();
+	if ( Keys == 0 || Keys > 3 )
+		return false;
+
+	if ( !HasKey( "rotation" )
+	  || !HasKey( "translation" ) )
+		return false;
+
+	if ( !GetValue( "rotation" ).IsRotator() )
+		return false;
+	if ( !GetValue( "translation" ).IsVector() )
+		return false;
+	
+	if ( Keys == 2 )
+		return true;
+
+	if ( Keys == 3 && HasKey( "scale" ) )
+	{
+		FJsonLibraryValue Scale = GetValue( "scale" );
+		switch ( Scale.GetType() )
+		{
+			case EJsonLibraryType::Number:
+			case EJsonLibraryType::String:
+				return true;
+
+			case EJsonLibraryType::Object:
+				if ( Scale.IsVector() )
+					return true;
+		}
+	}
+
+	return false;
+}
+
+bool FJsonLibraryObject::IsVector() const
+{
+	if ( Count() != 3 )
+		return false;
+	
+	if ( HasKey( "x" )
+	  && HasKey( "y" )
+	  && HasKey( "z" ) )
+		return true;
+
+	return false;
+}
+
 FJsonLibraryObject FJsonLibraryObject::Parse( const FString& Text )
 {
 	FJsonLibraryObject Object = TSharedPtr<FJsonValueObject>();
@@ -527,6 +714,51 @@ FString FJsonLibraryObject::Stringify() const
 		return Text;
 
 	return FString();
+}
+
+FRotator FJsonLibraryObject::ToRotator() const
+{
+	if ( !IsRotator() )
+		return FRotator::ZeroRotator;
+	
+	return FRotator( GetFloat( "pitch" ),
+					 GetFloat( "yaw" ),
+					 GetFloat( "roll" ) );
+}
+
+FTransform FJsonLibraryObject::ToTransform() const
+{
+	if ( !IsTransform() )
+		return FTransform::Identity;
+	
+	const FRotator Rotation    = GetRotator( "rotation" );
+	const FVector  Translation = GetVector( "translation" );
+	if ( !HasKey( "scale" ) )
+		return FTransform( Rotation, Translation );
+
+	FJsonLibraryValue Scale = GetValue( "scale" );
+	switch ( Scale.GetType() )
+	{
+		case EJsonLibraryType::Number:
+		case EJsonLibraryType::String:
+			return FTransform( Rotation, Translation, FVector( Scale.GetNumber() ) );
+
+		case EJsonLibraryType::Object:
+			if ( Scale.IsVector() )
+				return FTransform( Rotation, Translation, Scale.GetVector() );
+	}
+	
+	return FTransform( Rotation, Translation );
+}
+
+FVector FJsonLibraryObject::ToVector() const
+{
+	if ( !IsVector() )
+		return FVector::ZeroVector;
+
+	return FVector( GetFloat( "x" ),
+					GetFloat( "y" ),
+					GetFloat( "z" ) );
 }
 
 TMap<FString, FJsonLibraryValue> FJsonLibraryObject::ToMap() const
@@ -609,6 +841,48 @@ TMap<FString, FString> FJsonLibraryObject::ToStringMap() const
 
 	for ( const TPair<FString, TSharedPtr<FJsonValue>>& Temp : Json->Values )
 		Map.Add( Temp.Key, FJsonLibraryValue( Temp.Value ).GetString() );
+
+	return Map;
+}
+
+TMap<FString, FRotator> FJsonLibraryObject::ToRotatorMap() const
+{
+	const TSharedPtr<FJsonObject> Json = GetJsonObject();
+
+	TMap<FString, FRotator> Map;
+	if ( !Json.IsValid() )
+		return Map;
+
+	for ( const TPair<FString, TSharedPtr<FJsonValue>>& Temp : Json->Values )
+		Map.Add( Temp.Key, FJsonLibraryValue( Temp.Value ).GetRotator() );
+
+	return Map;
+}
+
+TMap<FString, FTransform> FJsonLibraryObject::ToTransformMap() const
+{
+	const TSharedPtr<FJsonObject> Json = GetJsonObject();
+
+	TMap<FString, FTransform> Map;
+	if ( !Json.IsValid() )
+		return Map;
+
+	for ( const TPair<FString, TSharedPtr<FJsonValue>>& Temp : Json->Values )
+		Map.Add( Temp.Key, FJsonLibraryValue( Temp.Value ).GetTransform() );
+
+	return Map;
+}
+
+TMap<FString, FVector> FJsonLibraryObject::ToVectorMap() const
+{
+	const TSharedPtr<FJsonObject> Json = GetJsonObject();
+
+	TMap<FString, FVector> Map;
+	if ( !Json.IsValid() )
+		return Map;
+
+	for ( const TPair<FString, TSharedPtr<FJsonValue>>& Temp : Json->Values )
+		Map.Add( Temp.Key, FJsonLibraryValue( Temp.Value ).GetVector() );
 
 	return Map;
 }

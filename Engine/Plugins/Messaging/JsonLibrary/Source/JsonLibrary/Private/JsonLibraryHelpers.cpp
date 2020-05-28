@@ -1,4 +1,4 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
 #include "JsonLibraryHelpers.h"
 
 FJsonLibraryValue UJsonLibraryHelpers::Parse( const FString& Text )
@@ -61,6 +61,21 @@ FJsonLibraryValue UJsonLibraryHelpers::FromString( const FString& Value )
 	return FJsonLibraryValue( Value );
 }
 
+FJsonLibraryValue UJsonLibraryHelpers::FromRotator( const FRotator& Value )
+{
+	return FJsonLibraryValue( Value );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromTransform( const FTransform& Value )
+{
+	return FJsonLibraryValue( Value );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromVector( const FVector& Value )
+{
+	return FJsonLibraryValue( Value );
+}
+
 FJsonLibraryValue UJsonLibraryHelpers::FromObject( const FJsonLibraryObject& Value )
 {
 	return FJsonLibraryValue( Value );
@@ -101,6 +116,21 @@ FJsonLibraryValue UJsonLibraryHelpers::FromStringArray( const TArray<FString>& V
 	return FromList( FJsonLibraryList( Value ) );
 }
 
+FJsonLibraryValue UJsonLibraryHelpers::FromRotatorArray( const TArray<FRotator>& Value )
+{
+	return FromList( FJsonLibraryList( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromTransformArray( const TArray<FTransform>& Value )
+{
+	return FromList( FJsonLibraryList( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromVectorArray( const TArray<FVector>& Value )
+{
+	return FromList( FJsonLibraryList( Value ) );
+}
+
 FJsonLibraryValue UJsonLibraryHelpers::FromObjectArray( const TArray<FJsonLibraryObject>& Value )
 {
 	return FromList( FJsonLibraryList( Value ) );
@@ -126,6 +156,21 @@ FJsonLibraryValue UJsonLibraryHelpers::FromStringMap( const TMap<FString, FStrin
 	return FromObject( FJsonLibraryObject( Value ) );
 }
 
+FJsonLibraryValue UJsonLibraryHelpers::FromRotatorMap( const TMap<FString, FRotator>& Value )
+{
+	return FromObject( FJsonLibraryObject( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromTransformMap( const TMap<FString, FTransform>& Value )
+{
+	return FromObject( FJsonLibraryObject( Value ) );
+}
+
+FJsonLibraryValue UJsonLibraryHelpers::FromVectorMap( const TMap<FString, FVector>& Value )
+{
+	return FromObject( FJsonLibraryObject( Value ) );
+}
+
 bool UJsonLibraryHelpers::ToBoolean( const FJsonLibraryValue& Value )
 {
 	return Value.GetBoolean();
@@ -144,6 +189,21 @@ int32 UJsonLibraryHelpers::ToInteger( const FJsonLibraryValue& Value )
 FString UJsonLibraryHelpers::ToString( const FJsonLibraryValue& Value )
 {
 	return Value.GetString();
+}
+
+FRotator UJsonLibraryHelpers::ToRotator( const FJsonLibraryValue& Value )
+{
+	return Value.GetRotator();
+}
+
+FTransform UJsonLibraryHelpers::ToTransform( const FJsonLibraryValue& Value )
+{
+	return Value.GetTransform();
+}
+
+FVector UJsonLibraryHelpers::ToVector( const FJsonLibraryValue& Value )
+{
+	return Value.GetVector();
 }
 
 FJsonLibraryObject UJsonLibraryHelpers::ToObject( const FJsonLibraryValue& Value )
@@ -186,6 +246,21 @@ TArray<FString> UJsonLibraryHelpers::ToStringArray( const FJsonLibraryValue& Tar
 	return Target.GetList().ToStringArray();
 }
 
+TArray<FRotator> UJsonLibraryHelpers::ToRotatorArray( const FJsonLibraryValue& Target )
+{
+	return Target.GetList().ToRotatorArray();
+}
+
+TArray<FTransform> UJsonLibraryHelpers::ToTransformArray( const FJsonLibraryValue& Target )
+{
+	return Target.GetList().ToTransformArray();
+}
+
+TArray<FVector> UJsonLibraryHelpers::ToVectorArray( const FJsonLibraryValue& Target )
+{
+	return Target.GetList().ToVectorArray();
+}
+
 TArray<FJsonLibraryObject> UJsonLibraryHelpers::ToObjectArray( const FJsonLibraryValue& Target )
 {
 	return Target.GetList().ToObjectArray();
@@ -209,6 +284,51 @@ TMap<FString, int32> UJsonLibraryHelpers::ToIntegerMap( const FJsonLibraryValue&
 TMap<FString, FString> UJsonLibraryHelpers::ToStringMap( const FJsonLibraryValue& Target )
 {
 	return Target.GetObject().ToStringMap();
+}
+
+TMap<FString, FRotator> UJsonLibraryHelpers::ToRotatorMap( const FJsonLibraryValue& Target )
+{
+	return Target.GetObject().ToRotatorMap();
+}
+
+TMap<FString, FTransform> UJsonLibraryHelpers::ToTransformMap( const FJsonLibraryValue& Target )
+{
+	return Target.GetObject().ToTransformMap();
+}
+
+TMap<FString, FVector> UJsonLibraryHelpers::ToVectorMap( const FJsonLibraryValue& Target )
+{
+	return Target.GetObject().ToVectorMap();
+}
+
+FJsonLibraryObject UJsonLibraryHelpers::ConvertRotatorToObject( const FRotator& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+FJsonLibraryObject UJsonLibraryHelpers::ConvertTransformToObject( const FTransform& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+FJsonLibraryObject UJsonLibraryHelpers::ConvertVectorToObject( const FVector& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+FRotator UJsonLibraryHelpers::ConvertObjectToRotator( const FJsonLibraryObject& Object )
+{
+	return Object.ToRotator();
+}
+
+FTransform UJsonLibraryHelpers::ConvertObjectToTransform( const FJsonLibraryObject& Object )
+{
+	return Object.ToTransform();
+}
+
+FVector UJsonLibraryHelpers::ConvertObjectToVector( const FJsonLibraryObject& Object )
+{
+	return Object.ToVector();
 }
 
 FJsonLibraryObject UJsonLibraryHelpers::ConvertMapToObject( const TMap<FString, FJsonLibraryValue>& Value )
@@ -237,6 +357,21 @@ FJsonLibraryObject UJsonLibraryHelpers::ConvertIntegerMapToObject( const TMap<FS
 }
 
 FJsonLibraryObject UJsonLibraryHelpers::ConvertStringMapToObject( const TMap<FString, FString>& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+FJsonLibraryObject UJsonLibraryHelpers::ConvertRotatorMapToObject( const TMap<FString, FRotator>& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+FJsonLibraryObject UJsonLibraryHelpers::ConvertTransformMapToObject( const TMap<FString, FTransform>& Value )
+{
+	return FJsonLibraryObject( Value );
+}
+
+FJsonLibraryObject UJsonLibraryHelpers::ConvertVectorMapToObject( const TMap<FString, FVector>& Value )
 {
 	return FJsonLibraryObject( Value );
 }
@@ -271,6 +406,21 @@ FJsonLibraryList UJsonLibraryHelpers::ConvertStringArrayToList( const TArray<FSt
 	return FJsonLibraryList( Value );
 }
 
+FJsonLibraryList UJsonLibraryHelpers::ConvertRotatorArrayToList( const TArray<FRotator>& Value )
+{
+	return FJsonLibraryList( Value );
+}
+
+FJsonLibraryList UJsonLibraryHelpers::ConvertTransformArrayToList( const TArray<FTransform>& Value )
+{
+	return FJsonLibraryList( Value );
+}
+
+FJsonLibraryList UJsonLibraryHelpers::ConvertVectorArrayToList( const TArray<FVector>& Value )
+{
+	return FJsonLibraryList( Value );
+}
+
 FJsonLibraryList UJsonLibraryHelpers::ConvertObjectArrayToList( const TArray<FJsonLibraryObject>& Value )
 {
 	return FJsonLibraryList( Value );
@@ -290,6 +440,21 @@ bool UJsonLibraryHelpers::JsonValue_Equals( const FJsonLibraryValue& Target, con
 bool UJsonLibraryHelpers::JsonValue_IsValid( const FJsonLibraryValue& Target )
 {
 	return Target.IsValid();
+}
+
+bool UJsonLibraryHelpers::JsonValue_IsRotator( const FJsonLibraryValue& Target )
+{
+	return Target.IsRotator();
+}
+
+bool UJsonLibraryHelpers::JsonValue_IsTransform( const FJsonLibraryValue& Target )
+{
+	return Target.IsTransform();
+}
+
+bool UJsonLibraryHelpers::JsonValue_IsVector( const FJsonLibraryValue& Target )
+{
+	return Target.IsVector();
 }
 
 FString UJsonLibraryHelpers::JsonValue_Stringify( const FJsonLibraryValue& Target )
@@ -355,6 +520,24 @@ FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddStringMap( FJsonLibraryOb
 	return Target;
 }
 
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddRotatorMap( FJsonLibraryObject& Target, const TMap<FString, FRotator>& Map )
+{
+	Target.AddRotatorMap( Map );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddTransformMap( FJsonLibraryObject& Target, const TMap<FString, FTransform>& Map )
+{
+	Target.AddTransformMap( Map );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_AddVectorMap( FJsonLibraryObject& Target, const TMap<FString, FVector>& Map )
+{
+	Target.AddVectorMap( Map );
+	return Target;
+}
+
 TArray<FString> UJsonLibraryHelpers::JsonObject_GetKeys( const FJsonLibraryObject& Target )
 {
 	return Target.GetKeys();
@@ -383,6 +566,21 @@ int32 UJsonLibraryHelpers::JsonObject_GetInteger( const FJsonLibraryObject& Targ
 FString UJsonLibraryHelpers::JsonObject_GetString( const FJsonLibraryObject& Target, const FString& Key )
 {
 	return Target.GetString( Key );
+}
+
+FRotator UJsonLibraryHelpers::JsonObject_GetRotator( const FJsonLibraryObject& Target, const FString& Key )
+{
+	return Target.GetRotator( Key );
+}
+
+FTransform UJsonLibraryHelpers::JsonObject_GetTransform( const FJsonLibraryObject& Target, const FString& Key )
+{
+	return Target.GetTransform( Key );
+}
+
+FVector UJsonLibraryHelpers::JsonObject_GetVector( const FJsonLibraryObject& Target, const FString& Key )
+{
+	return Target.GetVector( Key );
 }
 
 FJsonLibraryValue UJsonLibraryHelpers::JsonObject_GetValue( const FJsonLibraryObject& Target, const FString& Key )
@@ -434,6 +632,24 @@ FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetString( FJsonLibraryObjec
 	return Target;
 }
 
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetRotator( FJsonLibraryObject& Target, const FString& Key, const FRotator& Value )
+{
+	Target.SetRotator( Key, Value );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetTransform( FJsonLibraryObject& Target, const FString& Key, const FTransform& Value )
+{
+	Target.SetTransform( Key, Value );
+	return Target;
+}
+
+FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetVector( FJsonLibraryObject& Target, const FString& Key, const FVector& Value )
+{
+	Target.SetVector( Key, Value );
+	return Target;
+}
+
 FJsonLibraryObject& UJsonLibraryHelpers::JsonObject_SetValue( FJsonLibraryObject& Target, const FString& Key, const FJsonLibraryValue& Value )
 {
 	Target.SetValue( Key, Value );
@@ -472,6 +688,21 @@ bool UJsonLibraryHelpers::JsonObject_IsValid( const FJsonLibraryObject& Target )
 bool UJsonLibraryHelpers::JsonObject_IsEmpty( const FJsonLibraryObject& Target )
 {
 	return Target.IsEmpty();
+}
+
+bool UJsonLibraryHelpers::JsonObject_IsRotator( const FJsonLibraryObject& Target )
+{
+	return Target.IsRotator();
+}
+
+bool UJsonLibraryHelpers::JsonObject_IsTransform( const FJsonLibraryObject& Target )
+{
+	return Target.IsTransform();
+}
+
+bool UJsonLibraryHelpers::JsonObject_IsVector( const FJsonLibraryObject& Target )
+{
+	return Target.IsVector();
 }
 
 FString UJsonLibraryHelpers::JsonObject_Stringify( const FJsonLibraryObject& Target )
@@ -532,6 +763,24 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendStringArray( FJsonLibraryL
 	return Target;
 }
 
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendRotatorArray( FJsonLibraryList& Target, const TArray<FRotator>& Array )
+{
+	Target.AppendRotatorArray( Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendTransformArray( FJsonLibraryList& Target, const TArray<FTransform>& Array )
+{
+	Target.AppendTransformArray( Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendVectorArray( FJsonLibraryList& Target, const TArray<FVector>& Array )
+{
+	Target.AppendVectorArray( Array );
+	return Target;
+}
+
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_AppendObjectArray( FJsonLibraryList& Target, const TArray<FJsonLibraryObject>& Array )
 {
 	Target.AppendObjectArray( Array );
@@ -568,6 +817,24 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectStringArray( FJsonLibraryL
 	return Target;
 }
 
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectRotatorArray( FJsonLibraryList& Target, int32 Index, const TArray<FRotator>& Array )
+{
+	Target.InjectRotatorArray( Index, Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectTransformArray( FJsonLibraryList& Target, int32 Index, const TArray<FTransform>& Array )
+{
+	Target.InjectTransformArray( Index, Array );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectVectorArray( FJsonLibraryList& Target, int32 Index, const TArray<FVector>& Array )
+{
+	Target.InjectVectorArray( Index, Array );
+	return Target;
+}
+
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_InjectObjectArray( FJsonLibraryList& Target, int32 Index, const TArray<FJsonLibraryObject>& Array )
 {
 	Target.InjectObjectArray( Index, Array );
@@ -595,6 +862,24 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddInteger( FJsonLibraryList& Ta
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddString( FJsonLibraryList& Target, const FString& Value )
 {
 	Target.AddString( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddRotator( FJsonLibraryList& Target, const FRotator& Value )
+{
+	Target.AddRotator( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddTransform( FJsonLibraryList& Target, const FTransform& Value )
+{
+	Target.AddTransform( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_AddVector( FJsonLibraryList& Target, const FVector& Value )
+{
+	Target.AddVector( Value );
 	return Target;
 }
 
@@ -652,6 +937,24 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertString( FJsonLibraryList& 
 	return Target;
 }
 
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertRotator( FJsonLibraryList& Target, int32 Index, const FRotator& Value )
+{
+	Target.InsertRotator( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertTransform( FJsonLibraryList& Target, int32 Index, const FTransform& Value )
+{
+	Target.InsertTransform( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertVector( FJsonLibraryList& Target, int32 Index, const FVector& Value )
+{
+	Target.InsertVector( Index, Value );
+	return Target;
+}
+
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_InsertValue( FJsonLibraryList& Target, int32 Index, const FJsonLibraryValue& Value )
 {
 	Target.InsertValue( Index, Value );
@@ -702,6 +1005,21 @@ FString UJsonLibraryHelpers::JsonList_GetString( const FJsonLibraryList& Target,
 	return Target.GetString( Index );
 }
 
+FRotator UJsonLibraryHelpers::JsonList_GetRotator( const FJsonLibraryList& Target, int32 Index )
+{
+	return Target.GetRotator( Index );
+}
+
+FTransform UJsonLibraryHelpers::JsonList_GetTransform( const FJsonLibraryList& Target, int32 Index )
+{
+	return Target.GetTransform( Index );
+}
+
+FVector UJsonLibraryHelpers::JsonList_GetVector( const FJsonLibraryList& Target, int32 Index )
+{
+	return Target.GetVector( Index );
+}
+
 FJsonLibraryValue UJsonLibraryHelpers::JsonList_GetValue( const FJsonLibraryList& Target, int32 Index )
 {
 	return Target.GetValue( Index );
@@ -748,6 +1066,24 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetInteger( FJsonLibraryList& Ta
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetString( FJsonLibraryList& Target, int32 Index, const FString& Value )
 {
 	Target.SetString( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetRotator( FJsonLibraryList& Target, int32 Index, const FRotator& Value )
+{
+	Target.SetRotator( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetTransform( FJsonLibraryList& Target, int32 Index, const FTransform& Value )
+{
+	Target.SetTransform( Index, Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_SetVector( FJsonLibraryList& Target, int32 Index, const FVector& Value )
+{
+	Target.SetVector( Index, Value );
 	return Target;
 }
 
@@ -811,6 +1147,24 @@ FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveString( FJsonLibraryList& 
 	return Target;
 }
 
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveRotator( FJsonLibraryList& Target, const FRotator& Value )
+{
+	Target.RemoveRotator( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveTransform( FJsonLibraryList& Target, const FTransform& Value )
+{
+	Target.RemoveTransform( Value );
+	return Target;
+}
+
+FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveVector( FJsonLibraryList& Target, const FVector& Value )
+{
+	Target.RemoveVector( Value );
+	return Target;
+}
+
 FJsonLibraryList& UJsonLibraryHelpers::JsonList_RemoveValue( FJsonLibraryList& Target, const FJsonLibraryValue& Value )
 {
 	Target.RemoveValue( Value );
@@ -847,6 +1201,21 @@ int32 UJsonLibraryHelpers::JsonList_FindInteger( const FJsonLibraryList& Target,
 int32 UJsonLibraryHelpers::JsonList_FindString( const FJsonLibraryList& Target, const FString& Value, int32 Index /*= 0*/ )
 {
 	return Target.FindString( Value, Index );
+}
+
+int32 UJsonLibraryHelpers::JsonList_FindRotator( const FJsonLibraryList& Target, const FRotator& Value, int32 Index /*= 0*/ )
+{
+	return Target.FindRotator( Value, Index );
+}
+
+int32 UJsonLibraryHelpers::JsonList_FindTransform( const FJsonLibraryList& Target, const FTransform& Value, int32 Index /*= 0*/ )
+{
+	return Target.FindTransform( Value, Index );
+}
+
+int32 UJsonLibraryHelpers::JsonList_FindVector( const FJsonLibraryList& Target, const FVector& Value, int32 Index /*= 0*/ )
+{
+	return Target.FindVector( Value, Index );
 }
 
 int32 UJsonLibraryHelpers::JsonList_FindValue( const FJsonLibraryList& Target, const FJsonLibraryValue& Value, int32 Index /*= 0*/ )

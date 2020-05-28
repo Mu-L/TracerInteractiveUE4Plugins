@@ -1,4 +1,4 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "Dom/JsonValue.h"
 #include "Dom/JsonObject.h"
@@ -40,6 +40,10 @@ public:
 	FJsonLibraryValue( uint64 Value );
 	FJsonLibraryValue( const FString& Value );
 
+	FJsonLibraryValue( const FRotator& Value );
+	FJsonLibraryValue( const FTransform& Value );
+	FJsonLibraryValue( const FVector& Value );
+
 	FJsonLibraryValue( const FJsonLibraryObject& Value );
 	FJsonLibraryValue( const FJsonLibraryList& Value );
 
@@ -62,6 +66,13 @@ public:
 	double GetNumber() const;
 	// Convert this value to a string.
 	FString GetString() const;
+
+	// Convert this value to a rotator.
+	FRotator GetRotator() const;
+	// Convert this value to a transform.
+	FTransform GetTransform() const;
+	// Convert this value to a vector.
+	FVector GetVector() const;
 
 	// Convert this value to a JSON object.
 	FJsonLibraryObject GetObject() const;
@@ -96,6 +107,13 @@ public:
 
 	// Check if this value is valid.
 	bool IsValid() const;
+
+	// Check if this value is a rotator.
+	bool IsRotator() const;
+	// Check if this value is a transform.
+	bool IsTransform() const;
+	// Check if this value is a vector.
+	bool IsVector() const;
 
 	// Parse a JSON string.
 	static FJsonLibraryValue Parse( const FString& Text );

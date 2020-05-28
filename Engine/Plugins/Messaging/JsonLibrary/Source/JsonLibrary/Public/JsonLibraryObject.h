@@ -1,4 +1,4 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "Dom/JsonValue.h"
 #include "Dom/JsonObject.h"
@@ -31,12 +31,20 @@ public:
 	FJsonLibraryObject();
 	FJsonLibraryObject( const FJsonLibraryObjectNotify& Notify );
 
+	FJsonLibraryObject( const FRotator& Value );
+	FJsonLibraryObject( const FTransform& Value );
+	FJsonLibraryObject( const FVector& Value );
+
 	FJsonLibraryObject( const TMap<FString, FJsonLibraryValue>& Value );
 	FJsonLibraryObject( const TMap<FString, bool>& Value );
 	FJsonLibraryObject( const TMap<FString, float>& Value );
 	FJsonLibraryObject( const TMap<FString, double>& Value );
 	FJsonLibraryObject( const TMap<FString, int32>& Value );
 	FJsonLibraryObject( const TMap<FString, FString>& Value );
+
+	FJsonLibraryObject( const TMap<FString, FRotator>& Value );
+	FJsonLibraryObject( const TMap<FString, FTransform>& Value );
+	FJsonLibraryObject( const TMap<FString, FVector>& Value );
 
 	// Check if this object equals another JSON object.
 	bool Equals( const FJsonLibraryObject& Object ) const;
@@ -65,6 +73,13 @@ public:
 	// Add a map of strings to this object.
 	void AddStringMap( const TMap<FString, FString>& Map );
 
+	// Add a map of rotators to this object.
+	void AddRotatorMap( const TMap<FString, FRotator>& Map );
+	// Add a map of transforms to this object.
+	void AddTransformMap( const TMap<FString, FTransform>& Map );
+	// Add a map of vectors to this object.
+	void AddVectorMap( const TMap<FString, FVector>& Map );
+
 	// Get the keys of this object as an array of strings.
 	TArray<FString> GetKeys() const;
 	// Get the values of this object as an array of JSON values.
@@ -80,6 +95,13 @@ public:
 	double GetNumber( const FString& Key ) const;
 	// Get a property as a string.
 	FString GetString( const FString& Key ) const;
+
+	// Get a property as a rotator.
+	FRotator GetRotator( const FString& Key ) const;
+	// Get a property as a transform.
+	FTransform GetTransform( const FString& Key ) const;
+	// Get a property as a vector.
+	FVector GetVector( const FString& Key ) const;
 	
 	// Get a property as a JSON value.
 	FJsonLibraryValue GetValue( const FString& Key ) const;
@@ -103,6 +125,13 @@ public:
 	void SetNumber( const FString& Key, double Value );
 	// Set a property as a string.
 	void SetString( const FString& Key, const FString& Value );
+
+	// Set a property as a rotator.
+	void SetRotator( const FString& Key, const FRotator& Value );
+	// Set a property as a transform.
+	void SetTransform( const FString& Key, const FTransform& Value );
+	// Set a property as a vector.
+	void SetVector( const FString& Key, const FVector& Value );
 
 	// Set a property as a JSON value.
 	void SetValue( const FString& Key, const FJsonLibraryValue& Value );
@@ -146,6 +175,13 @@ public:
 	bool IsValid() const;
 	// Check if this object is empty.
 	bool IsEmpty() const;
+
+	// Check if this object is a rotator.
+	bool IsRotator() const;
+	// Check if this object is a transform.
+	bool IsTransform() const;
+	// Check if this object is a vector.
+	bool IsVector() const;
 	
 	// Parse a JSON string.
 	static FJsonLibraryObject Parse( const FString& Text );
@@ -154,6 +190,13 @@ public:
 
 	// Stringify this object as a JSON string.
 	FString Stringify() const;
+
+	// Convert this object to a rotator.
+	FRotator ToRotator() const;
+	// Convert this object to a transform.
+	FTransform ToTransform() const;
+	// Convert this object to a vector.
+	FVector ToVector() const;
 
 	// Copy a JSON object to a map of JSON values.
 	TMap<FString, FJsonLibraryValue> ToMap() const;
@@ -168,6 +211,13 @@ public:
 	TMap<FString, double> ToNumberMap() const;
 	// Copy a JSON object to a map of strings.
 	TMap<FString, FString> ToStringMap() const;
+
+	// Copy a JSON object to a map of rotators.
+	TMap<FString, FRotator> ToRotatorMap() const;
+	// Copy a JSON object to a map of transforms.
+	TMap<FString, FTransform> ToTransformMap() const;
+	// Copy a JSON object to a map of vectors.
+	TMap<FString, FVector> ToVectorMap() const;
 
 	bool operator==( const FJsonLibraryObject& Object ) const;
 	bool operator!=( const FJsonLibraryObject& Object ) const;
