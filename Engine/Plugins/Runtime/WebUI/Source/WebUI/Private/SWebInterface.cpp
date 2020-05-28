@@ -14,7 +14,10 @@
 
 SWebInterface::SWebInterface()
 {
-	bMouseTransparency      = false;
+	bMouseTransparency          = false;
+	bVirtualPointerTransparency = false;
+
+	TransparencyDelay       = 0.0f;
 	TransparencyThreadshold = 0.333f;
 
 	LastMousePixel = FLinearColor::White;
@@ -58,9 +61,11 @@ void SWebInterface::Construct( const FArguments& InArgs )
 	OnCreateWindow      = InArgs._OnCreateWindow;
 	OnCloseWindow       = InArgs._OnCloseWindow;
 
-	bMouseTransparency      = InArgs._EnableMouseTransparency;
-	TransparencyDelay       = FMath::Max( 0.0f, InArgs._MouseTransparencyDelay );
-	TransparencyThreadshold = FMath::Clamp( InArgs._MouseTransparencyThreshold, 0.0f, 1.0f );
+	bMouseTransparency          = InArgs._EnableMouseTransparency;
+	bVirtualPointerTransparency = InArgs._EnableVirtualPointerTransparency;
+
+	TransparencyDelay       = FMath::Max( 0.0f, InArgs._TransparencyDelay );
+	TransparencyThreadshold = FMath::Clamp( InArgs._TransparencyThreshold, 0.0f, 1.0f );
 	
 	FCreateBrowserWindowSettings Settings;
 	Settings.BrowserFrameRate  = FMath::Clamp( InArgs._FrameRate, 1, 60 );
@@ -115,7 +120,7 @@ void SWebInterface::Tick( const FGeometry& AllottedGeometry, const double InCurr
 {
 	SWidget::Tick( AllottedGeometry, InCurrentTime, InDeltaTime );
 	
-	if ( bMouseTransparency && FSlateApplication::IsInitialized() )
+	if ( HasMouseTransparency() && FSlateApplication::IsInitialized() )
 	{
 		LastMousePixel = FLinearColor::Transparent;
 		LastMouseTime  = LastMouseTime + InDeltaTime;
@@ -159,7 +164,7 @@ EVisibility SWebInterface::GetViewportVisibility() const
 	if ( !BrowserView.IsValid() || !BrowserView->IsInitialized() )
 		return EVisibility::Hidden;
 
-	if ( bMouseTransparency && LastMousePixel.A < TransparencyThreadshold && LastMouseTime >= TransparencyDelay )
+	if ( HasMouseTransparency() && LastMousePixel.A < TransparencyThreadshold && LastMouseTime >= TransparencyDelay )
 		return EVisibility::HitTestInvisible;
 
 	return EVisibility::Visible;
@@ -173,7 +178,7 @@ bool SWebInterface::HandleBeforePopup( FString URL, FString Frame )
 #endif
 
 	if ( OnBeforePopup.IsBound() )
-		OnBeforePopup.Execute( URL, Frame );
+		return OnBeforePopup.Execute( URL, Frame );
 
 	return true;
 }
@@ -301,6 +306,26 @@ bool SWebInterface::HandleCloseWindow( const TWeakPtr<IWebBrowserWindow>& Browse
 #else
 	return false;
 #endif
+}
+
+bool SWebInterface::HasMouseTransparency() const
+{
+	return bMouseTransparency && !bVirtualPointerTransparency;
+}
+
+bool SWebInterface::HasVirtualPointerTransparency() const
+{
+	return bVirtualPointerTransparency;
+}
+
+float SWebInterface::GetTransparencyDelay() const
+{
+	return TransparencyDelay;
+}
+
+float SWebInterface::GetTransparencyThreshold() const
+{
+	return TransparencyThreadshold;
 }
 
 int32 SWebInterface::GetTextureWidth() const
