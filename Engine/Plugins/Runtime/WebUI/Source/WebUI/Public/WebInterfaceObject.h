@@ -1,4 +1,4 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "JsonLibrary.h"
 #include "WebInterfaceObject.generated.h"
@@ -15,7 +15,7 @@ class WEBUI_API UWebInterfaceObject : public UObject
 public:
 	
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
-	void Broadcast( const FString& Name, const FString& Data );
+	void Broadcast( const FString& Name, const FString& Data, const FString& Callback );
 
 private:
 

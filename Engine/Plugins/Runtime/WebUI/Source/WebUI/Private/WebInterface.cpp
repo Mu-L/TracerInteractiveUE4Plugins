@@ -1,4 +1,4 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
 #include "WebInterface.h"
 #include "WebInterfaceObject.h"
 #include "PlatformHttp.h"
@@ -415,14 +415,32 @@ void UWebInterface::HandleUrlChanged( const FText& URL )
 		if ( Value.GetType() == EJsonLibraryType::Array )
 		{
 			TArray<FJsonLibraryValue> Array = Value.ToArray();
-			if ( Array.Num() == 2 )
+			if ( Array.Num() == 2 || Array.Num() == 3 )
 			{
 				FJsonLibraryValue Name = Array[ 0 ];
 				FJsonLibraryValue Data = Array[ 1 ];
 				if ( Name.GetType() == EJsonLibraryType::String )
-					OnInterfaceEvent.Broadcast( FName( *Name.GetString() ), Data );
+				{
+					FName BroadcastName = *Name.GetString();
+					if ( Array.Num() > 2 )
+					{
+						FJsonLibraryValue Callback = Array[ 2 ];
+						if ( Callback.GetType() == EJsonLibraryType::String )
+						{
+							FString BroadcastCallback = Callback.GetString();
+							if ( !BroadcastCallback.IsEmpty() )
+							{
+								OnInterfaceEvent.Broadcast( BroadcastName, Data, FWebInterfaceCallback( this, BroadcastCallback ) );
+								return;
+							}
+						}
+					}
+					
+					OnInterfaceEvent.Broadcast( BroadcastName, Data, FWebInterfaceCallback() );
+					return;
+				}
 			}
-
+			
 			return;
 		}
 	}
