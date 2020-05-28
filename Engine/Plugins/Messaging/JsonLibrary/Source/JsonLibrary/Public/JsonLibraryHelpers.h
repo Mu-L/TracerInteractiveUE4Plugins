@@ -12,7 +12,11 @@ class JSONLIBRARY_API UJsonLibraryHelpers : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
 
+#if UE_EDITOR
 protected:
+#else
+public:
+#endif
 
 	// Parse a JSON string.
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Parse"), Category = "JSON Library")

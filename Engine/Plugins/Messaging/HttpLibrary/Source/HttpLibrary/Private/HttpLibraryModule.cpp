@@ -1,4 +1,4 @@
-// Copyright 2019 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
 #include "HttpLibraryModule.h"
 #include "Modules/ModuleManager.h"
 
