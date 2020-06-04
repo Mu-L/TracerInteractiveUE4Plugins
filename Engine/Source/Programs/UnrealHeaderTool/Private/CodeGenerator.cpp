@@ -5733,110 +5733,136 @@ FNativeClassHeaderGenerator::FNativeClassHeaderGenerator(
 	const FManifestModule* ConstPackageManifest = GetPackageManifest(PackageName);
 	const FNativeClassHeaderGenerator* ConstThis = this;
 
-	ParallelFor(Exported.Num(), [&Exported, Package=Package, ConstPackageManifest, &GeneratedCPPs, ConstThis](int32 Index)
+	FString ExceptionMessage;
+
+	ParallelFor(Exported.Num(), [&Exported, Package=Package, ConstPackageManifest, &GeneratedCPPs, &ExceptionMessage, ConstThis](int32 Index)	
 	{
-		FUnrealSourceFile* SourceFile = Exported[Index];
-
-		/** Forward declarations that we need for this sourcefile. */
-		TSet<FString> ForwardDeclarations;
-
-		FString ModuleRelativeFilename = SourceFile->GetFilename();
-		ConvertToBuildIncludePath(Package, ModuleRelativeFilename);
-
-		FString StrippedName       = FPaths::GetBaseFilename(ModuleRelativeFilename);
-		FString BaseSourceFilename = ConstPackageManifest->GeneratedIncludeDirectory / StrippedName;
-
-		FUHTStringBuilder GeneratedHeaderText;
-		FGeneratedCPP& GeneratedCPP = GeneratedCPPs.FindChecked(SourceFile);
-		FUHTStringBuilder& GeneratedFunctionDeclarations = GeneratedCPP.GeneratedFunctionDeclarations;
-
-		FReferenceGatherers ReferenceGatherers(&GeneratedCPP.CrossModuleReferences, GeneratedCPP.PackageHeaderPaths, GeneratedCPP.TempHeaderPaths);
-
-		FUHTStringBuilderLineCounter& OutText = GeneratedCPP.GeneratedText;
-
-		TArray<UEnum*> Enums;
-		TArray<UScriptStruct*> Structs;
-		TArray<UDelegateFunction*> DelegateFunctions;
-		SourceFile->GetScope()->SplitTypesIntoArrays(Enums, Structs, DelegateFunctions);
-
-		RecordPackageSingletons(*SourceFile->GetPackage(), Structs, DelegateFunctions);
-
-		// Reverse the containers as they come out in the reverse order of declaration
-		Algo::Reverse(Enums);
-		Algo::Reverse(Structs);
-		Algo::Reverse(DelegateFunctions);
-
-		GeneratedHeaderText.Logf(
-			TEXT("#ifdef %s")																	LINE_TERMINATOR
-			TEXT("#error \"%s.generated.h already included, missing '#pragma once' in %s.h\"")	LINE_TERMINATOR
-			TEXT("#endif")																		LINE_TERMINATOR
-			TEXT("#define %s")																	LINE_TERMINATOR
-			LINE_TERMINATOR,
-			*SourceFile->GetFileDefineName(), *SourceFile->GetStrippedFilename(), *SourceFile->GetStrippedFilename(), *SourceFile->GetFileDefineName());
-
-		// export delegate definitions
-		for (UDelegateFunction* Func : DelegateFunctions)
+#if !PLATFORM_EXCEPTIONS_DISABLED
+		try
 		{
-			GeneratedFunctionDeclarations.Log(FTypeSingletonCache::Get(Func).GetExternDecl());
-			ConstThis->ExportDelegateDeclaration(OutText, ReferenceGatherers, *SourceFile, Func);
-		}
+#endif		
+			FUnrealSourceFile* SourceFile = Exported[Index];
 
-		// Export enums declared in non-UClass headers.
-		for (UEnum* Enum : Enums)
-		{
-			// Is this ever not the case?
-			if (Enum->GetOuter()->IsA(UPackage::StaticClass()))
+			/** Forward declarations that we need for this sourcefile. */
+			TSet<FString> ForwardDeclarations;
+
+			FString ModuleRelativeFilename = SourceFile->GetFilename();
+			ConvertToBuildIncludePath(Package, ModuleRelativeFilename);
+
+			FString StrippedName       = FPaths::GetBaseFilename(ModuleRelativeFilename);
+			FString BaseSourceFilename = ConstPackageManifest->GeneratedIncludeDirectory / StrippedName;
+
+			FUHTStringBuilder GeneratedHeaderText;
+			FGeneratedCPP& GeneratedCPP = GeneratedCPPs.FindChecked(SourceFile);
+			FUHTStringBuilder& GeneratedFunctionDeclarations = GeneratedCPP.GeneratedFunctionDeclarations;
+
+			FReferenceGatherers ReferenceGatherers(&GeneratedCPP.CrossModuleReferences, GeneratedCPP.PackageHeaderPaths, GeneratedCPP.TempHeaderPaths);
+
+			FUHTStringBuilderLineCounter& OutText = GeneratedCPP.GeneratedText;
+
+			TArray<UEnum*> Enums;
+			TArray<UScriptStruct*> Structs;
+			TArray<UDelegateFunction*> DelegateFunctions;
+			SourceFile->GetScope()->SplitTypesIntoArrays(Enums, Structs, DelegateFunctions);
+
+			RecordPackageSingletons(*SourceFile->GetPackage(), Structs, DelegateFunctions);
+
+			// Reverse the containers as they come out in the reverse order of declaration
+			Algo::Reverse(Enums);
+			Algo::Reverse(Structs);
+			Algo::Reverse(DelegateFunctions);
+
+			GeneratedHeaderText.Logf(
+				TEXT("#ifdef %s")																	LINE_TERMINATOR
+				TEXT("#error \"%s.generated.h already included, missing '#pragma once' in %s.h\"")	LINE_TERMINATOR
+				TEXT("#endif")																		LINE_TERMINATOR
+				TEXT("#define %s")																	LINE_TERMINATOR
+				LINE_TERMINATOR,
+				*SourceFile->GetFileDefineName(), *SourceFile->GetStrippedFilename(), *SourceFile->GetStrippedFilename(), *SourceFile->GetFileDefineName());
+
+			// export delegate definitions
+			for (UDelegateFunction* Func : DelegateFunctions)
 			{
-				GeneratedFunctionDeclarations.Log(FTypeSingletonCache::Get(Enum).GetExternDecl());
-				ConstThis->ExportGeneratedEnumInitCode(OutText, ReferenceGatherers, *SourceFile, Enum);
+				GeneratedFunctionDeclarations.Log(FTypeSingletonCache::Get(Func).GetExternDecl());
+				ConstThis->ExportDelegateDeclaration(OutText, ReferenceGatherers, *SourceFile, Func);
+			}
+
+			// Export enums declared in non-UClass headers.
+			for (UEnum* Enum : Enums)
+			{
+				// Is this ever not the case?
+				if (Enum->GetOuter()->IsA(UPackage::StaticClass()))
+				{
+					GeneratedFunctionDeclarations.Log(FTypeSingletonCache::Get(Enum).GetExternDecl());
+					ConstThis->ExportGeneratedEnumInitCode(OutText, ReferenceGatherers, *SourceFile, Enum);
+				}
+			}
+
+			// export boilerplate macros for structs
+			// reverse the order.
+			for (UScriptStruct* Struct : Structs)
+			{
+				GeneratedFunctionDeclarations.Log(FTypeSingletonCache::Get(Struct).GetExternDecl());
+				ConstThis->ExportGeneratedStructBodyMacros(GeneratedHeaderText, OutText, ReferenceGatherers, *SourceFile, Struct);
+			}
+
+			// export delegate wrapper function implementations
+			for (UDelegateFunction* Func : DelegateFunctions)
+			{
+				ConstThis->ExportDelegateDefinition(GeneratedHeaderText, ReferenceGatherers, *SourceFile, Func);
+			}
+
+			EExportClassOutFlags ExportFlags = EExportClassOutFlags::None;
+			TSet<FString> AdditionalHeaders;
+			TArray<UClass*>	DefinedClasses;
+			SourceFile->AppendDefinedClasses(DefinedClasses);
+			for (UClass* Class : DefinedClasses)
+			{
+				if (!(Class->ClassFlags & CLASS_Intrinsic))
+				{
+					ConstThis->ExportClassFromSourceFileInner(GeneratedHeaderText, OutText, GeneratedFunctionDeclarations, ReferenceGatherers, (FClass*)Class, *SourceFile, ExportFlags);
+				}
+			}
+
+			if (EnumHasAnyFlags(ExportFlags, EExportClassOutFlags::NeedsPushModelHeaders))
+			{
+				AdditionalHeaders.Add(FString(TEXT("Net/Core/PushModel/PushModelMacros.h")));
+			}
+
+			GeneratedHeaderText.Log(TEXT("#undef CURRENT_FILE_ID\r\n"));
+			GeneratedHeaderText.Logf(TEXT("#define CURRENT_FILE_ID %s\r\n\r\n\r\n"), *SourceFile->GetFileId());
+
+			for (UEnum* Enum : Enums)
+			{
+				ConstThis->ExportEnum(GeneratedHeaderText, Enum);
+			}
+
+			FString HeaderPath = BaseSourceFilename + TEXT(".generated.h");
+			bool bHasChanged = ConstThis->WriteHeader(*HeaderPath, GeneratedHeaderText, AdditionalHeaders, ReferenceGatherers);
+
+			SourceFile->SetGeneratedFilename(MoveTemp(HeaderPath));
+			SourceFile->SetHasChanged(bHasChanged);
+#if !PLATFORM_EXCEPTIONS_DISABLED
+		}
+		catch (const TCHAR* Ex)
+		{
+			// Capture the first exception message from the loop and issue it out on the gamethread after the loop completes
+
+			static FCriticalSection ExceptionCS;
+			FScopeLock Lock(&ExceptionCS);
+			
+			if (ExceptionMessage.Len() == 0)
+			{
+				ExceptionMessage = FString(Ex);
 			}
 		}
-
-		// export boilerplate macros for structs
-		// reverse the order.
-		for (UScriptStruct* Struct : Structs)
-		{
-			GeneratedFunctionDeclarations.Log(FTypeSingletonCache::Get(Struct).GetExternDecl());
-			ConstThis->ExportGeneratedStructBodyMacros(GeneratedHeaderText, OutText, ReferenceGatherers, *SourceFile, Struct);
-		}
-
-		// export delegate wrapper function implementations
-		for (UDelegateFunction* Func : DelegateFunctions)
-		{
-			ConstThis->ExportDelegateDefinition(GeneratedHeaderText, ReferenceGatherers, *SourceFile, Func);
-		}
-
-		EExportClassOutFlags ExportFlags = EExportClassOutFlags::None;
-		TSet<FString> AdditionalHeaders;
-		TArray<UClass*>	DefinedClasses;
-		SourceFile->AppendDefinedClasses(DefinedClasses);
-		for (UClass* Class : DefinedClasses)
-		{
-			if (!(Class->ClassFlags & CLASS_Intrinsic))
-			{
-				ConstThis->ExportClassFromSourceFileInner(GeneratedHeaderText, OutText, GeneratedFunctionDeclarations, ReferenceGatherers, (FClass*)Class, *SourceFile, ExportFlags);
-			}
-		}
-
-		if (EnumHasAnyFlags(ExportFlags, EExportClassOutFlags::NeedsPushModelHeaders))
-		{
-			AdditionalHeaders.Add(FString(TEXT("Net/Core/PushModel/PushModelMacros.h")));
-		}
-
-		GeneratedHeaderText.Log(TEXT("#undef CURRENT_FILE_ID\r\n"));
-		GeneratedHeaderText.Logf(TEXT("#define CURRENT_FILE_ID %s\r\n\r\n\r\n"), *SourceFile->GetFileId());
-
-		for (UEnum* Enum : Enums)
-		{
-			ConstThis->ExportEnum(GeneratedHeaderText, Enum);
-		}
-
-		FString HeaderPath = BaseSourceFilename + TEXT(".generated.h");
-		bool bHasChanged = ConstThis->WriteHeader(*HeaderPath, GeneratedHeaderText, AdditionalHeaders, ReferenceGatherers);
-
-		SourceFile->SetGeneratedFilename(MoveTemp(HeaderPath));
-		SourceFile->SetHasChanged(bHasChanged);
+#endif
 	});
+
+	if (ExceptionMessage.Len() > 0)
+	{
+		FError::Throwf(*ExceptionMessage);
+	}
 
 	// Export an include line for each header
 	TSet<FUnrealSourceFile*> PublicHeaderGroupIncludes;

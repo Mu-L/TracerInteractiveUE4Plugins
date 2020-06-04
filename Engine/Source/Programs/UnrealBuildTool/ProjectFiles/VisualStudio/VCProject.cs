@@ -261,6 +261,7 @@ namespace UnrealBuildTool
 		bool bEditorDependsOnShaderCompileWorker;
 		bool bBuildLiveCodingConsole;
 		string BuildToolOverride;
+		string ExcludedIncludePaths;
 		Dictionary<DirectoryReference, string> ModuleDirToForceIncludePaths = new Dictionary<DirectoryReference, string>();
 
 		/// This is the platform name that Visual Studio is always guaranteed to support.  We'll use this as
@@ -286,7 +287,8 @@ namespace UnrealBuildTool
 		/// <param name="bEditorDependsOnShaderCompileWorker">Whether editor targets should also build ShaderCompileWorker</param>
 		/// <param name="bBuildLiveCodingConsole">Whether targets using live coding should also build LiveCodingConsole</param>
 		/// <param name="BuildToolOverride">Optional arguments to pass to UBT when building</param>
-		public VCProjectFile(FileReference InFilePath, FileReference InOnlyGameProject, VCProjectFileFormat InProjectFileFormat, bool bUseFastPDB, bool bUsePerFileIntellisense, bool bUsePrecompiled, bool bEditorDependsOnShaderCompileWorker, bool bBuildLiveCodingConsole, string BuildToolOverride)
+		/// <param name="ExcludedIncludePaths)">Include paths to exclude in the interest of reducing Visual Studio memory use.</param>
+		public VCProjectFile(FileReference InFilePath, FileReference InOnlyGameProject, VCProjectFileFormat InProjectFileFormat, bool bUseFastPDB, bool bUsePerFileIntellisense, bool bUsePrecompiled, bool bEditorDependsOnShaderCompileWorker, bool bBuildLiveCodingConsole, string BuildToolOverride, string ExcludedIncludePaths)
 			: base(InFilePath)
 		{
 			//OnlyGameProject = InOnlyGameProject;
@@ -297,6 +299,7 @@ namespace UnrealBuildTool
 			this.bEditorDependsOnShaderCompileWorker = bEditorDependsOnShaderCompileWorker;
 			this.bBuildLiveCodingConsole = bBuildLiveCodingConsole;
 			this.BuildToolOverride = BuildToolOverride;
+			this.ExcludedIncludePaths = ExcludedIncludePaths;
 		}
 
 		/// <summary>
@@ -718,6 +721,35 @@ namespace UnrealBuildTool
 			return ProjectFiles;
 		}
 
+		private string[] FilteredList = null;
+
+		bool IncludePathIsFilteredOut(DirectoryReference IncludePath)
+		{			
+			// Turn the filter string into an array, remove whitespace, and normalize any path statements the first time
+			// we are asked to check a path.
+			if (FilteredList == null)
+			{
+				IEnumerable<string> CleanPaths = ExcludedIncludePaths.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+					.Select(P => P.Trim())
+					.Select(P => P.Replace('/', Path.DirectorySeparatorChar));
+
+				FilteredList = CleanPaths.ToArray();
+			}
+
+			if (FilteredList.Length > 0)
+			{
+				foreach (string Entry in FilteredList)
+				{
+					if (IncludePath.FullName.Contains(Entry))
+					{
+						return true;
+					}
+				}
+			}
+
+			return false;
+		}
+
 		/// <summary>
 		/// Append a list of include paths to a property list
 		/// </summary>
@@ -725,7 +757,7 @@ namespace UnrealBuildTool
 		/// <param name="BaseDir">Directory containing the source file</param>
 		/// <param name="BaseDirToIncludePaths">Map of base directory to set of include paths</param>
 		/// <param name="IgnorePaths">Set of paths to ignore</param>
-		static void AppendIncludePaths(StringBuilder Builder, DirectoryReference BaseDir, Dictionary<DirectoryReference, IncludePathsCollection> BaseDirToIncludePaths, HashSet<DirectoryReference> IgnorePaths)
+		void AppendIncludePaths(StringBuilder Builder, DirectoryReference BaseDir, Dictionary<DirectoryReference, IncludePathsCollection> BaseDirToIncludePaths, HashSet<DirectoryReference> IgnorePaths)
 		{
 			for (DirectoryReference CurrentDir = BaseDir; CurrentDir != null; CurrentDir = CurrentDir.ParentDirectory)
 			{
@@ -734,7 +766,7 @@ namespace UnrealBuildTool
 				{
 					foreach(DirectoryReference IncludePath in Collection.AbsolutePaths)
 					{
-						if (!IgnorePaths.Contains(IncludePath))
+						if (!IgnorePaths.Contains(IncludePath) && !IncludePathIsFilteredOut(IncludePath))
 						{
 							Builder.Append(NormalizeProjectPath(IncludePath.FullName));
 							Builder.Append(';');
@@ -795,12 +827,16 @@ namespace UnrealBuildTool
 				// Append the most common include paths to the search list.
 				const int MaxSharedIncludePathsLength = 24 * 1024;
 				foreach (DirectoryReference IncludePath in IncludePathToCount.OrderByDescending(x => x.Value).Select(x => x.Key))
-				{
+				{	
 					string RelativePath = NormalizeProjectPath(IncludePath);
 					if (SharedIncludeSearchPaths.Length + RelativePath.Length < MaxSharedIncludePathsLength)
 					{
-						SharedIncludeSearchPaths.AppendFormat("{0};", RelativePath);
-						SharedIncludeSearchPathsSet.Add(IncludePath);
+
+						if (!IncludePathIsFilteredOut(IncludePath))
+						{
+							SharedIncludeSearchPathsSet.Add(IncludePath);
+							SharedIncludeSearchPaths.AppendFormat("{0};", RelativePath);
+						}						
 					}
 					else
 					{
@@ -1096,7 +1132,10 @@ namespace UnrealBuildTool
 					string VCFileType = GetVCFileType(AliasedFile.FileSystemPath);
 					if (VCFileType != "ClCompile")
 					{
-						VCProjectFileContent.AppendLine("    <{0} Include=\"{1}\"/>", VCFileType, EscapeFileName(AliasedFile.FileSystemPath));
+						if (!IncludePathIsFilteredOut(new DirectoryReference(AliasedFile.FileSystemPath)))
+						{
+							VCProjectFileContent.AppendLine("    <{0} Include=\"{1}\"/>", VCFileType, EscapeFileName(AliasedFile.FileSystemPath));
+						}
 					}
 					else
 					{
@@ -1113,7 +1152,16 @@ namespace UnrealBuildTool
 									break;
 								}
 							}
-							DirectoryToForceIncludePaths[Directory] = ForceIncludePaths;
+
+							// filter here. It's a little more graceful to do it where this info is built but easier to follow if we filter 
+							// things our right before they're written.
+							if (!string.IsNullOrEmpty(ForceIncludePaths))
+							{
+								IEnumerable<string> PathList = ForceIncludePaths.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+								ForceIncludePaths = string.Join(";", PathList.Where(P => !IncludePathIsFilteredOut(new DirectoryReference(P))));
+							}
+
+							DirectoryToForceIncludePaths[Directory] = ForceIncludePaths;							
 						}
 
 						// Find the include search paths

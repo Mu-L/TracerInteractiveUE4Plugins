@@ -833,7 +833,6 @@ void FRDGBuilder::PrepareResourcesForExecute(const FRDGPass* Pass, struct FRHIRe
 				check(Texture->PooledRenderTarget);
 				check(Texture->ResourceRHI);
 
-				check(!ModifiedTextures.Contains(Texture));
 				BarrierBatcher.QueueTransitionTexture(Texture, FRDGResourceState::EAccess::Read);
 			}
 		}

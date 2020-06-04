@@ -1028,6 +1028,10 @@ void FDeferredShadingSceneRenderer::RenderTranslucencyInner(FRHICommandListImmed
 				SceneContext.ResolveSeparateTranslucencyModulate(RHICmdList, View);
 				EndTimingSeparateTranslucencyModulatePass(RHICmdList, View);
 			}
+			else
+			{
+				SceneContext.ResolveSeparateTranslucency(RHICmdList, View);
+			}
 
 			if (TranslucencyPass != ETranslucencyPass::TPT_TranslucencyAfterDOF && TranslucencyPass != ETranslucencyPass::TPT_TranslucencyAfterDOFModulate)
 			{

@@ -446,6 +446,8 @@ $ bMasterProjectNameFromFolder : If true, sets the master project name according
 
 $ Version : The version of Visual Studio to generate project files for.
 
+$ ExcludedIncludePaths : Semi-colon separated list of paths that should not be added to the projects include paths. Useful for omitting third-party headers (e.g ThirdParty/WebRTC) from intellisense suggestions and reducing memory footprints.
+
 $ bBuildUBTInDebug : Forces UBT to be built in debug configuration, regardless of the solution configuration
 
 $ bBuildLiveCodingConsole : Whether to include a dependency on LiveCodingConsole when building targets that support live coding.

@@ -394,10 +394,18 @@ void UChildActorComponent::ApplyComponentInstanceData(FChildActorComponentInstan
 		ChildActorName = ChildActorInstanceData->ChildActorName;
 	}
 
+	if (!ChildActor ||
+		ChildActor->GetClass() != ChildActorClass)
+	{
+		CreateChildActor(); 
+	}
+
 	if (ChildActor)
 	{
-		// Only rename if it is safe to
-		if(ChildActorName != NAME_None)
+		// Only rename if it is safe to, and it is needed
+		if(ChildActorName != NAME_None &&
+		   ChildActor != nullptr &&
+		   ChildActor->GetFName() != ChildActorName)
 		{
 			const FString ChildActorNameString = ChildActorName.ToString();
 			if (ChildActor->Rename(*ChildActorNameString, nullptr, REN_Test))

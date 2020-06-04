@@ -2681,13 +2681,6 @@ void UStaticMesh::InitResources()
 		LinkStreaming();
 	}
 	
-	// Make sure the first LOD is actually the lowest LOD.
-	if (RenderData)
-	{
-		RenderData->CurrentFirstLODIdx = RenderData->GetFirstValidLODIdx(0);
-		SetCachedNumResidentLODs(RenderData->LODResources.Num() - RenderData->CurrentFirstLODIdx);
-	}
-
 #if	STATS
 	UStaticMesh* This = this;
 	ENQUEUE_RENDER_COMMAND(UpdateMemoryStats)(
@@ -3057,6 +3050,16 @@ void UStaticMesh::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedE
 			BodySetup->CreatePhysicsMeshes();
 		}
 	}
+
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UStaticMesh, bSupportPhysicalMaterialMasks))
+	{
+		if (BodySetup)
+		{
+			BodySetup->bSupportUVsAndFaceRemap = bSupportPhysicalMaterialMasks;
+			BodySetup->InvalidatePhysicsData();
+			BodySetup->CreatePhysicsMeshes();
+		}
+	}
 #endif
 
 	LightMapResolution = FMath::Max(LightMapResolution, 0);
@@ -3406,7 +3409,7 @@ void UStaticMesh::BeginDestroy()
 	// Remove from the list of tracked assets if necessary
 	TrackRenderAssetEvent(nullptr, this, false, nullptr);
 
-	if (FApp::CanEverRender() && !HasAnyFlags(RF_ClassDefaultObject))
+	if (bRenderingResourcesInitialized)
 	{
 		ReleaseResources();
 	}
@@ -4085,7 +4088,8 @@ void UStaticMesh::ClearMeshDescriptions()
 
 void UStaticMesh::FixupMaterialSlotName()
 {
-	TArray<FName> UniqueMaterialSlotName;
+	TSet<FName> UniqueMaterialSlotName;
+	int32 UniqueIndex = 1;
 	//Make sure we have non empty imported material slot names
 	for (FStaticMaterial& Material : StaticMaterials)
 	{
@@ -4105,14 +4109,20 @@ void UStaticMesh::FixupMaterialSlotName()
 			}
 		}
 
-		FString UniqueName = Material.ImportedMaterialSlotName.ToString();
-		int32 UniqueIndex = 1;
-		while (UniqueMaterialSlotName.Contains(FName(*UniqueName)))
+		FName UniqueName = Material.ImportedMaterialSlotName;
+		if (UniqueMaterialSlotName.Contains(UniqueName))
 		{
-			UniqueName = FString::Printf(TEXT("%s_%d"), *UniqueName, UniqueIndex);
-			UniqueIndex++;
+			if (UniqueName.GetStringLength() < NAME_SIZE)
+			{
+				UniqueName = *FString::Printf(TEXT("%s_%d"), *UniqueName.ToString(), UniqueIndex);
+			}
+
+			while (UniqueMaterialSlotName.Contains(UniqueName) && UniqueIndex < MAX_int32)
+		{
+				UniqueName.SetNumber(++UniqueIndex);
+			}
 		}
-		Material.ImportedMaterialSlotName = FName(*UniqueName);
+		Material.ImportedMaterialSlotName = UniqueName;
 		UniqueMaterialSlotName.Add(Material.ImportedMaterialSlotName);
 		if (Material.MaterialSlotName == NAME_None)
 		{
@@ -5779,8 +5789,7 @@ bool UStaticMesh::GetPhysicsTriMeshData(struct FTriMeshCollisionData* CollisionD
 	TMap<int32, int32> MeshToCollisionVertMap; // map of static mesh verts to collision verts
 
 	// If the mesh enables physical material masks, override the physics setting since UVs are always required 
-	// bool bCopyUVs = GetEnablePhysicalMaterialMask() || UPhysicsSettings::Get()->bSupportUVFromHitResults; // See if we should copy UVs
-	bool bCopyUVs = UPhysicsSettings::Get()->bSupportUVFromHitResults; // See if we should copy UVs
+	bool bCopyUVs = bSupportPhysicalMaterialMasks || UPhysicsSettings::Get()->bSupportUVFromHitResults; // See if we should copy UVs
 
 	// If copying UVs, allocate array for storing them
 	if (bCopyUVs)
@@ -5925,6 +5934,7 @@ void UStaticMesh::CreateBodySetup()
 	{
 		BodySetup = NewObject<UBodySetup>(this);
 		BodySetup->DefaultInstance.SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+		BodySetup->bSupportUVsAndFaceRemap = bSupportPhysicalMaterialMasks;
 	}
 }
 

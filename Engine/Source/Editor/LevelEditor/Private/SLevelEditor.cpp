@@ -165,17 +165,29 @@ void SLevelEditor::Construct( const SLevelEditor::FArguments& InArgs)
 	GLevelEditorModeTools().OnEditorModeIDChanged().AddSP(this, &SLevelEditor::OnEditorModeIdChanged);
 
 	// @todo This is a hack to get this working for now. This won't work with multiple worlds
-	GEditor->GetEditorWorldContext(true).AddRef(World);
+	if (GEditor != nullptr)
+	{
+		GEditor->GetEditorWorldContext(true).AddRef(World);
+	}
 
 	// Set the initial preview feature level.
 	UEditorEngine* Editor = (UEditorEngine*)GEngine;
 	World->ChangeFeatureLevel(Editor->GetActiveFeatureLevelPreviewType());
 
-	LevelActorOuterChangedHandle = GEditor->OnLevelActorOuterChanged().AddSP(this, &SLevelEditor::OnLevelActorOuterChanged);
+	if (GEditor != nullptr)
+	{
+		LevelActorOuterChangedHandle = GEditor->OnLevelActorOuterChanged().AddSP(this, &SLevelEditor::OnLevelActorOuterChanged);
+	}
 
 	// Patch into the OnPreviewFeatureLevelChanged() delegate to swap out the current feature level with a user selection.
 	PreviewFeatureLevelChangedHandle = Editor->OnPreviewFeatureLevelChanged().AddLambda([this](ERHIFeatureLevel::Type NewFeatureLevel)
 		{
+			// Do one recapture if atleast one ReflectionComponent is dirty
+			// BuildReflectionCapturesOnly_Execute in LevelEditorActions relies on this happening on toggle between SM5->ES31. If you remove this, update that code!
+			if (World->NumUnbuiltReflectionCaptures >= 1 && NewFeatureLevel == ERHIFeatureLevel::ES3_1 && GEditor != nullptr)
+			{
+				GEditor->BuildReflectionCaptures();
+			}
 			World->ChangeFeatureLevel(NewFeatureLevel);
 		});
 
@@ -1286,8 +1298,7 @@ TSharedRef<SWidget> SLevelEditor::RestoreContentArea( const TSharedRef<SDockTab>
 	// 9. Move and rename the new file (Engine\Saved\Config\Layouts\Default_Editor_Layout.ini) into Engine\Config\Layouts\DefaultLayout.ini
 	// 10. Push the new "DefaultLayout.ini" together with your new code.
 	// 11. Also update these instructions if you change the version number (e.g., from "UnrealEd_Layout_v1.4" to "UnrealEd_Layout_v1.5").
-	const TSharedRef<FTabManager::FLayout> Layout = FLayoutSaveRestore::LoadFromConfig(GEditorLayoutIni,
-		FTabManager::NewLayout( "LevelEditor_Layout_v1.2" )
+	const TSharedRef<FTabManager::FLayout> DefaultLayout = FTabManager::NewLayout("LevelEditor_Layout_v1.2")
 		->AddArea
 		(
 			FTabManager::NewPrimaryArea()
@@ -1366,9 +1377,9 @@ TSharedRef<SWidget> SLevelEditor::RestoreContentArea( const TSharedRef<SDockTab>
 					->SetForegroundTab(LevelEditorTabIds::LevelEditorSelectionDetails)
 				)
 			)
-			
-		));
-	
+		);
+	const TSharedRef<FTabManager::FLayout> Layout = FLayoutSaveRestore::LoadFromConfig(GEditorLayoutIni, DefaultLayout);
+
 	FLayoutExtender LayoutExtender;
 
 	LevelEditorModule.OnRegisterLayoutExtensions().Broadcast(LayoutExtender);
@@ -1376,7 +1387,20 @@ TSharedRef<SWidget> SLevelEditor::RestoreContentArea( const TSharedRef<SDockTab>
 
 	const bool bEmbedTitleAreaContent = false;
 	const EOutputCanBeNullptr OutputCanBeNullptr = EOutputCanBeNullptr::IfNoTabValid;
-	return LevelEditorTabManager->RestoreFrom(Layout, OwnerWindow, bEmbedTitleAreaContent, OutputCanBeNullptr).ToSharedRef();
+	TSharedPtr<SWidget> ContentAreaWidget = LevelEditorTabManager->RestoreFrom(Layout, OwnerWindow, bEmbedTitleAreaContent, OutputCanBeNullptr);
+	// ContentAreaWidget will only be nullptr if its main area contains invalid tabs (probably some layout bug). If so, reset layout to avoid potential crashes
+	if (!ContentAreaWidget.IsValid())
+	{
+		// Try to load default layout to avoid nullptr.ToSharedRef() crash
+		ContentAreaWidget = LevelEditorTabManager->RestoreFrom(DefaultLayout, OwnerWindow, bEmbedTitleAreaContent, EOutputCanBeNullptr::Never);
+		// Warn user/developer
+		const FString WarningMessage = FString::Format(TEXT("Level editor layout could not be loaded from the config file {0}, trying to reset this config file to the"
+			" default one."), { *GEditorLayoutIni });
+		UE_LOG(LogTemp, Warning, TEXT("%s"), *WarningMessage);
+		ensureMsgf(false, TEXT("%s Some additional testing of that layout file should be done."));
+	}
+	check(ContentAreaWidget.IsValid());
+	return ContentAreaWidget.ToSharedRef();
 }
 
 void SLevelEditor::HandleExperimentalSettingChanged(FName PropertyName)

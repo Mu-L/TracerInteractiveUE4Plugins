@@ -766,6 +766,12 @@ void FSequencer::Tick(float InDeltaTime)
 		}
 	}
 
+	// Reset to the root sequence if the focused sequence no longer exists. This can happen if either the subsequence has been deleted or the hierarchy has changed.
+	if (!GetFocusedMovieSceneSequence())
+	{
+		PopToSequenceInstance(MovieSceneSequenceID::Root);
+	}
+
 	ISequenceRecorder& SequenceRecorder = FModuleManager::LoadModuleChecked<ISequenceRecorder>("SequenceRecorder");
 	if(SequenceRecorder.IsRecording())
 	{
@@ -4338,7 +4344,7 @@ FReply FSequencer::SetPlaybackEnd()
 		TRange<FFrameNumber> CurrentRange = FocusedSequence->GetMovieScene()->GetPlaybackRange();
 		if (CurrentFrame >= MovieScene::DiscreteInclusiveLower(CurrentRange))
 		{
-			CurrentRange.SetUpperBound(CurrentFrame);
+			CurrentRange.SetUpperBoundValue(CurrentFrame);
 			SetPlaybackRange(CurrentRange);
 		}
 	}
@@ -8075,6 +8081,12 @@ void GetSupportedTracks(TSharedRef<FSequencerDisplayNode> DisplayNode, const TAr
 	}
 
 	TSharedRef<FSequencerTrackNode> TrackNode = StaticCastSharedRef<FSequencerTrackNode>(DisplayNode);
+
+	if (TracksToPasteOnto.Contains(TrackNode))
+	{
+		return;
+	}
+
 	UMovieSceneTrack* Track = TrackNode->GetTrack();
 	if (Track)
 	{
@@ -8085,6 +8097,7 @@ void GetSupportedTracks(TSharedRef<FSequencerDisplayNode> DisplayNode, const TAr
 			if (Track->SupportsType(Section->GetClass()))
 			{
 				TracksToPasteOnto.Add(TrackNode);
+				return;
 			}
 		}
 	}

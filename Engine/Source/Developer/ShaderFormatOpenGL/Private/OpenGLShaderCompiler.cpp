@@ -1225,8 +1225,18 @@ FGlslCodeBackend* FOpenGLFrontend::CreateBackend(GLSLVersion Version, uint32 CCF
 	return new FGlslCodeBackend(CCFlags, HlslCompilerTarget);
 }
 
+class FGlsl430LanguageSpec : public FGlslLanguageSpec
+{
+public:
+	virtual bool EmulateStructuredWithTypedBuffers() const override { return false; }
+};
+
 FGlslLanguageSpec* FOpenGLFrontend::CreateLanguageSpec(GLSLVersion Version)
 {	
+	if (Version == GLSL_430)
+	{
+		return new FGlsl430LanguageSpec();
+	}
 	return new FGlslLanguageSpec();
 }
 

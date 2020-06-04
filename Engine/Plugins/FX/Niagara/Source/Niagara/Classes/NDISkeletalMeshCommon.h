@@ -123,22 +123,36 @@ struct FSkinnedPositionAccessorHelper<TNDISkelMesh_SkinningModeInvalid>
 	// The bone accessor functions are valid if a mesh is present, so don't stub them entirely
 	FORCEINLINE_DEBUGGABLE FVector GetSkinnedBonePosition(FSkeletalMeshAccessorHelper& Accessor, int32 BoneIndex)
 	{
-		return Accessor.Mesh ? Accessor.Mesh->GetComposedRefPoseMatrix(BoneIndex).GetOrigin() : FVector::ZeroVector;
+		const int32 NumRealBones = Accessor.Mesh->RefSkeleton.GetRawBoneNum();
+		if (BoneIndex < NumRealBones)
+		{
+			return Accessor.Mesh->GetComposedRefPoseMatrix(BoneIndex).GetOrigin();
+		}
+
+		const FTransform& RefTransform = Accessor.Mesh->RefSkeleton.GetRefBonePose()[BoneIndex];
+		return RefTransform.GetLocation();
 	}
 
 	FORCEINLINE_DEBUGGABLE FVector GetSkinnedBonePreviousPosition(FSkeletalMeshAccessorHelper& Accessor, int32 BoneIndex)
 	{
-		return Accessor.Mesh ? Accessor.Mesh->GetComposedRefPoseMatrix(BoneIndex).GetOrigin() : FVector::ZeroVector;
+		return GetSkinnedBonePosition(Accessor, BoneIndex);
 	}
 
 	FORCEINLINE_DEBUGGABLE FQuat GetSkinnedBoneRotation(FSkeletalMeshAccessorHelper& Accessor, int32 BoneIndex)
 	{
-		return Accessor.Mesh ? Accessor.Mesh->GetComposedRefPoseMatrix(BoneIndex).ToQuat() : FQuat::Identity;
+		const int32 NumRealBones = Accessor.Mesh->RefSkeleton.GetRawBoneNum();
+		if (BoneIndex < NumRealBones)
+		{
+			return Accessor.Mesh->GetComposedRefPoseMatrix(BoneIndex).GetMatrixWithoutScale().ToQuat();
+		}
+
+		const FTransform& RefTransform = Accessor.Mesh->RefSkeleton.GetRefBonePose()[BoneIndex];
+		return RefTransform.GetRotation();
 	}
 
 	FORCEINLINE_DEBUGGABLE FQuat GetSkinnedBonePreviousRotation(FSkeletalMeshAccessorHelper& Accessor, int32 BoneIndex)
 	{
-		return Accessor.Mesh ? Accessor.Mesh->GetComposedRefPoseMatrix(BoneIndex).ToQuat() : FQuat::Identity;
+		return GetSkinnedBoneRotation(Accessor, BoneIndex);
 	}
 };
 
@@ -516,16 +530,12 @@ template<typename NextBinder>
 struct TSkinningModeBinder
 {
 	template<typename... ParamTypes>
-	static void Bind(UNiagaraDataInterface* Interface, const FVMExternalFunctionBindingInfo& BindingInfo, void* InstanceData, FVMExternalFunction &OutFunc)
+	static void BindIgnoreCPUAccess(UNiagaraDataInterface* Interface, const FVMExternalFunctionBindingInfo& BindingInfo, void* InstanceData, FVMExternalFunction& OutFunc)
 	{
 		FNDISkeletalMesh_InstanceData* InstData = (FNDISkeletalMesh_InstanceData*)InstanceData;
 		UNiagaraDataInterfaceSkeletalMesh* MeshInterface = CastChecked<UNiagaraDataInterfaceSkeletalMesh>(Interface);
 		USkeletalMeshComponent* Component = Cast<USkeletalMeshComponent>(InstData->Component.Get());
-		if (!InstData->bAllowCPUMeshDataAccess) // No-op when we can't access the mesh on CPU
-		{
-			NextBinder::template Bind<ParamTypes..., FSkinnedPositionAccessorHelper<TNDISkelMesh_SkinningModeInvalid>>(Interface, BindingInfo, InstanceData, OutFunc);
-		}
-		else if (MeshInterface->SkinningMode == ENDISkeletalMesh_SkinningMode::None || !Component) // Can't skin if we have no component.
+		if (MeshInterface->SkinningMode == ENDISkeletalMesh_SkinningMode::None || !Component) // Can't skin if we have no component.
 		{
 			NextBinder::template Bind<ParamTypes..., FSkinnedPositionAccessorHelper<TNDISkelMesh_SkinningModeNone>>(Interface, BindingInfo, InstanceData, OutFunc);
 		}
@@ -542,6 +552,20 @@ struct TSkinningModeBinder
 		else
 		{
 			checkf(false, TEXT("Invalid skinning mode in %s"), *Interface->GetPathName());
+		}
+	}
+
+	template<typename... ParamTypes>
+	static void BindCheckCPUAccess(UNiagaraDataInterface* Interface, const FVMExternalFunctionBindingInfo& BindingInfo, void* InstanceData, FVMExternalFunction& OutFunc)
+	{
+		FNDISkeletalMesh_InstanceData* InstData = (FNDISkeletalMesh_InstanceData*)InstanceData;
+		if (!InstData->bAllowCPUMeshDataAccess) // No-op when we can't access the mesh on CPU
+		{
+			NextBinder::template Bind<ParamTypes..., FSkinnedPositionAccessorHelper<TNDISkelMesh_SkinningModeInvalid>>(Interface, BindingInfo, InstanceData, OutFunc);
+		}
+		else
+		{
+			BindIgnoreCPUAccess(Interface, BindingInfo, InstanceData, OutFunc);
 		}
 	}
 };
