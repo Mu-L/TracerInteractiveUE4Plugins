@@ -1666,7 +1666,9 @@ void FNiagaraSystemInstance::TickInstanceParameters_GameThread(float DeltaSecond
 	const bool TransformMatches = GatheredInstanceParameters.ComponentTrans.Equals(ComponentTransform);
 	if (TransformMatches)
 	{
-		GatheredInstanceParameters.TransformMatchCount = FMath::Min(ParameterBufferCount, GatheredInstanceParameters.TransformMatchCount + 1);
+		// we want to update the transforms one more time than the buffer count because even if the transform buffers didn't change,
+		// their derivatives (like velocity) also need to be updated correctly which happens a frame later.
+		GatheredInstanceParameters.TransformMatchCount = FMath::Min(ParameterBufferCount + 1, GatheredInstanceParameters.TransformMatchCount + 1);
 	}
 	else
 	{
@@ -1724,14 +1726,13 @@ void FNiagaraSystemInstance::TickInstanceParameters_GameThread(float DeltaSecond
 	Component->GetOverrideParameters().Tick();
 }
 
-
 void FNiagaraSystemInstance::TickInstanceParameters_Concurrent()
 {
 	uint32 ParameterIndex = GetParameterIndex();
 	FNiagaraSystemParameters& CurrentSystemParameters = SystemParameters[ParameterIndex];
 	FNiagaraOwnerParameters& CurrentOwnerParameters = OwnerParameters[ParameterIndex];
 
-	if (GatheredInstanceParameters.TransformMatchCount < ParameterBufferCount)
+	if (GatheredInstanceParameters.TransformMatchCount <= ParameterBufferCount)
 	{
 		const FMatrix LocalToWorld = GatheredInstanceParameters.ComponentTrans.ToMatrixWithScale();
 		const FMatrix LocalToWorldNoScale = GatheredInstanceParameters.ComponentTrans.ToMatrixNoScale();
@@ -1746,7 +1747,7 @@ void FNiagaraSystemInstance::TickInstanceParameters_Concurrent()
 		CurrentOwnerParameters.EngineLocalToWorldNoScale = LocalToWorldNoScale;
 		CurrentOwnerParameters.EngineWorldToLocalNoScale = LocalToWorldNoScale.Inverse();
 		CurrentOwnerParameters.EngineRotation = GatheredInstanceParameters.ComponentTrans.GetRotation();
-		CurrentOwnerParameters.EnginePosition = GatheredInstanceParameters.ComponentTrans.GetLocation();
+		CurrentOwnerParameters.EnginePosition = Location;
 		CurrentOwnerParameters.EngineVelocity = (Location - LastLocation) / GatheredInstanceParameters.DeltaSeconds;
 		CurrentOwnerParameters.EngineXAxis = CurrentOwnerParameters.EngineRotation.GetAxisX();
 		CurrentOwnerParameters.EngineYAxis = CurrentOwnerParameters.EngineRotation.GetAxisY();
@@ -1767,8 +1768,7 @@ void FNiagaraSystemInstance::TickInstanceParameters_Concurrent()
 	InstanceParameters.MarkParametersDirty();
 }
 
-void
-FNiagaraSystemInstance::ClearEventDataSets()
+void FNiagaraSystemInstance::ClearEventDataSets()
 {
 	for (auto& EventDataSetIt : EmitterEventDataSetMap)
 	{

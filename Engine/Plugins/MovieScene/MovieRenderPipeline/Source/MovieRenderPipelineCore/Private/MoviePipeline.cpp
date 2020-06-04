@@ -835,7 +835,7 @@ void UMoviePipeline::BuildShotListFromSequence()
 			// If the user has manually marked a section as inactive we don't produce a shot for it.
 			if (!Section->IsActive())
 			{
-				UE_LOG(LogMovieRenderPipeline, Verbose, TEXT("Skipped adding Shot %s to Shot List due to being inactive."), *ShotSection->GetShotDisplayName());
+				UE_LOG(LogMovieRenderPipeline, Log, TEXT("Skipped adding Shot %s to Shot List due to being inactive."), *ShotSection->GetShotDisplayName());
 				continue;
 			}
 
@@ -849,7 +849,7 @@ void UMoviePipeline::BuildShotListFromSequence()
 			TRange<FFrameNumber> MasterPlaybackBounds = GetCurrentJob()->GetConfiguration()->GetEffectivePlaybackRange(TargetSequence);
 			if (!ShotSection->GetRange().Overlaps(MasterPlaybackBounds))
 			{
-				UE_LOG(LogMovieRenderPipeline, Verbose, TEXT("Skipped adding Shot %s to Shot List due to not overlapping playback bounds."), *ShotSection->GetShotDisplayName());
+				UE_LOG(LogMovieRenderPipeline, Log, TEXT("Skipped adding Shot %s to Shot List due to not overlapping playback bounds."), *ShotSection->GetShotDisplayName());
 				continue;
 			}
 			
@@ -897,10 +897,15 @@ void UMoviePipeline::BuildShotListFromSequence()
 	{
 		UE_LOG(LogMovieRenderPipeline, Warning, TEXT("No Cinematic Shot Tracks found, and no Camera Cut Tracks found. Playback Range will be used but camera will render from Pawns perspective."));
 		FMoviePipelineShotInfo NewShot;
-		// NewShot.ShotConfig = GetPipelineMasterConfig()->DefaultShotConfig;
+		NewShot.OriginalRange = TargetSequence->GetMovieScene()->GetPlaybackRange();
+		NewShot.TotalOutputRange = NewShot.OriginalRange;
 
 		FMoviePipelineCameraCutInfo& CameraCut = NewShot.CameraCuts.AddDefaulted_GetRef();
+		CameraCut.CameraCutSection = nullptr;
 		CameraCut.OriginalRange = TargetSequence->GetMovieScene()->GetPlaybackRange();
+		CameraCut.TotalOutputRange = CameraCut.OriginalRange;
+
+		ShotList.Add(MoveTemp(NewShot));
 	}
 
 	// Now that we've gathered at least one or more shots with one or more cuts, we can apply settings. It's easier to

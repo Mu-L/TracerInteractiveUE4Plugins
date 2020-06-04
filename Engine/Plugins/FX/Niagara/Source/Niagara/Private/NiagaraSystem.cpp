@@ -21,6 +21,7 @@
 #include "NiagaraEmitterInstanceBatcher.h"
 #include "NiagaraSettings.h"
 #include "Interfaces/ITargetPlatform.h"
+#include "NiagaraPrecompileContainer.h"
 
 
 #if WITH_EDITOR
@@ -40,6 +41,14 @@ static FAutoConsoleVariableRef CVarNiagaraForceSystemsToCookOutRapidIterationOnL
 	TEXT("fx.NiagaraForceSystemsToCookOutRapidIterationOnLoad"),
 	GNiagaraForceSystemsToCookOutRapidIterationOnLoad,
 	TEXT("When enabled UNiagaraSystem's bBakeOutRapidIteration will be forced to true on PostLoad of the system."),
+	ECVF_Default
+);
+
+static int GNiagaraLogDDCStatusForSystems = 0;
+static FAutoConsoleVariableRef CVarLogDDCStatusForSystems(
+	TEXT("fx.NiagaraLogDDCStatusForSystems"),
+	GNiagaraLogDDCStatusForSystems,
+	TEXT("When enabled UNiagaraSystems will log out when their subscripts are pulled from the DDC or not."),
 	ECVF_Default
 );
 
@@ -490,6 +499,9 @@ void UNiagaraSystem::PostLoad()
 
 		if (bSystemScriptsAreSynchronized == false || bEmitterScriptsAreSynchronized == false)
 		{
+			// Call modify here so that the system will resave the compile ids and script vm when running the resave
+			// commandlet.  In normal post load, it will be ignored.
+			Modify();
 			RequestCompile(false);
 		}
 
@@ -1064,7 +1076,7 @@ bool UNiagaraSystem::GetFromDDC(FEmitterCompiledScriptPair& ScriptPair)
 	ScriptPair.CompileId = NewID;
 
 	TArray<uint8> Data;
-	if (GetDerivedDataCacheRef().GetSynchronous(*ScriptPair.CompiledScript->GetNiagaraDDCKeyString(), Data, GetPathName()))
+	if (ScriptPair.CompiledScript->IsCompilable() && GetDerivedDataCacheRef().GetSynchronous(*ScriptPair.CompiledScript->GetNiagaraDDCKeyString(), Data, GetPathName()))
 	{
 		TSharedPtr<FNiagaraVMExecutableData> ExeData = MakeShared<FNiagaraVMExecutableData>();
 		if (ScriptPair.CompiledScript->BinaryToExecData(Data, *ExeData))
@@ -1072,8 +1084,17 @@ bool UNiagaraSystem::GetFromDDC(FEmitterCompiledScriptPair& ScriptPair)
 			ExeData->CompileTime = 0; // since we didn't actually compile anything
 			ScriptPair.CompileResults = ExeData;
 			ScriptPair.bResultsReady = true;
+			if (GNiagaraLogDDCStatusForSystems != 0)
+			{
+				UE_LOG(LogNiagara, Log, TEXT("Niagara Script pulled from DDC ... %s"), *ScriptPair.CompiledScript->GetPathName());
+			}
 			return true;
 		}
+	}
+	
+	if (GNiagaraLogDDCStatusForSystems != 0 && ScriptPair.CompiledScript->IsCompilable())
+	{
+	    UE_LOG(LogNiagara, Log, TEXT("Need Compile! Niagara Script GotFromDDC could not find ... %s"), *ScriptPair.CompiledScript->GetPathName());
 	}
 	return false;
 }
@@ -1143,108 +1164,170 @@ bool UNiagaraSystem::RequestCompile(bool bForce, FNiagaraSystemUpdateContext* Op
 	GetExposedParameters().GetParameters(OriginalExposedParams);
 
 	INiagaraModule& NiagaraModule = FModuleManager::Get().LoadModuleChecked<INiagaraModule>(TEXT("Niagara"));
-	TSharedPtr<FNiagaraCompileRequestDataBase, ESPMode::ThreadSafe> SystemPrecompiledData = NiagaraModule.Precompile(this);
 
-	if (SystemPrecompiledData.IsValid() == false)
-	{
-		UE_LOG(LogNiagara, Error, TEXT("Failed to precompile %s.  This is due to unexpected invalid or broken data.  Additional details should be in the log."), *GetPathName());
-		return false;
-	}
-
-	SystemPrecompiledData->GetReferencedObjects(ActiveCompilations[ActiveCompileIdx].RootObjects);
 
 	//Compile all emitters
 	bool bTrulyAsync = true;
 	bool bAnyUnsynchronized = false;	
 
-	ActiveCompilations[ActiveCompileIdx].MappedData.Add(SystemSpawnScript, SystemPrecompiledData);
-	ActiveCompilations[ActiveCompileIdx].MappedData.Add(SystemUpdateScript, SystemPrecompiledData);
-
-	check(EmitterHandles.Num() == SystemPrecompiledData->GetDependentRequestCount());
-
-	// Grab the list of user variables that were actually encountered so that we can add to them later.
-	TArray<FNiagaraVariable> EncounteredExposedVars;
-	SystemPrecompiledData->GatherPreCompiledVariables(TEXT("User"), EncounteredExposedVars);
-
-	for (int32 i = 0; i < EmitterHandles.Num(); i++)
+	// Pass one... determine if any need to be compiled.
+	bool bForceSystems = false;
+	bool bAnyCompiled = false;
+	TArray<UNiagaraScript*> ScriptsNeedingCompile;
 	{
-		FNiagaraEmitterHandle Handle = EmitterHandles[i];
-		if (Handle.GetInstance() && Handle.GetIsEnabled())
+
+		for (int32 i = 0; i < EmitterHandles.Num(); i++)
 		{
-			UNiagaraScriptSourceBase* GraphSource = Handle.GetInstance()->GraphSource;
-			TSharedPtr<FNiagaraCompileRequestDataBase, ESPMode::ThreadSafe> EmitterPrecompiledData = SystemPrecompiledData->GetDependentRequest(i);
-			EmitterPrecompiledData->GetReferencedObjects(ActiveCompilations[ActiveCompileIdx].RootObjects);
-
-			TArray<UNiagaraScript*> EmitterScripts;
-			Handle.GetInstance()->GetScripts(EmitterScripts, false);
-			check(EmitterScripts.Num() > 0);
-			for (UNiagaraScript* EmitterScript : EmitterScripts)
+			FNiagaraEmitterHandle Handle = EmitterHandles[i];
+			if (Handle.GetInstance() && Handle.GetIsEnabled())
 			{
-				ActiveCompilations[ActiveCompileIdx].MappedData.Add(EmitterScript, EmitterPrecompiledData);
+				UNiagaraScriptSourceBase* GraphSource = Handle.GetInstance()->GraphSource;
 
-				FEmitterCompiledScriptPair Pair;
-				Pair.bResultsReady = false;
-				Pair.Emitter = Handle.GetInstance();
-				Pair.CompiledScript = EmitterScript;
-				if (!GetFromDDC(Pair))
+				TArray<UNiagaraScript*> EmitterScripts;
+				Handle.GetInstance()->GetScripts(EmitterScripts, false);
+				check(EmitterScripts.Num() > 0);
+				for (UNiagaraScript* EmitterScript : EmitterScripts)
 				{
-					if (EmitterScript->RequestExternallyManagedAsyncCompile(EmitterPrecompiledData, Pair.CompileId, Pair.PendingJobID))
+
+					FEmitterCompiledScriptPair Pair;
+					Pair.bResultsReady = false;
+					Pair.Emitter = Handle.GetInstance();
+					Pair.CompiledScript = EmitterScript;
+					if (!GetFromDDC(Pair) && EmitterScript->IsCompilable() && !EmitterScript->AreScriptAndSourceSynchronized())
 					{
+						ScriptsNeedingCompile.Add(EmitterScript);
 						bAnyUnsynchronized = true;
 					}
-				}				
-				ActiveCompilations[ActiveCompileIdx].EmitterCompiledScriptPairs.Add(Pair);
+					ActiveCompilations[ActiveCompileIdx].EmitterCompiledScriptPairs.Add(Pair);
+				}
+
 			}
-
-			// Add the emitter's User variables to the encountered list to expose for later.
-			EmitterPrecompiledData->GatherPreCompiledVariables(TEXT("User"), EncounteredExposedVars);
 		}
-	}
 
-	bool bForceSystems = bForce || bAnyUnsynchronized;
-	bool bAnyCompiled = bAnyUnsynchronized || bForce;
+		bForceSystems = bForce || bAnyUnsynchronized;
+		bAnyCompiled = bAnyUnsynchronized || bForce;
 
-	// Now add the system scripts for compilation...
-	{
-		FEmitterCompiledScriptPair Pair;
-		Pair.bResultsReady = false;
-		Pair.Emitter = nullptr;
-		Pair.CompiledScript = SystemSpawnScript;
-		if (!GetFromDDC(Pair))
+		// Now add the system scripts for compilation...
 		{
-			if (SystemSpawnScript->RequestExternallyManagedAsyncCompile(SystemPrecompiledData, Pair.CompileId, Pair.PendingJobID))
+			FEmitterCompiledScriptPair Pair;
+			Pair.bResultsReady = false;
+			Pair.Emitter = nullptr;
+			Pair.CompiledScript = SystemSpawnScript;
+			if (!GetFromDDC(Pair) && !SystemSpawnScript->AreScriptAndSourceSynchronized())
 			{
+				ScriptsNeedingCompile.Add(SystemSpawnScript);
 				bAnyCompiled = true;
 			}
+			ActiveCompilations[ActiveCompileIdx].EmitterCompiledScriptPairs.Add(Pair);
 		}
-		ActiveCompilations[ActiveCompileIdx].EmitterCompiledScriptPairs.Add(Pair);
-	}
 
-	{
-		FEmitterCompiledScriptPair Pair;
-		Pair.bResultsReady = false;
-		Pair.Emitter = nullptr;
-		Pair.CompiledScript = SystemUpdateScript;
-		if (!GetFromDDC(Pair))
 		{
-			if (SystemUpdateScript->RequestExternallyManagedAsyncCompile(SystemPrecompiledData, Pair.CompileId, Pair.PendingJobID))
+			FEmitterCompiledScriptPair Pair;
+			Pair.bResultsReady = false;
+			Pair.Emitter = nullptr;
+			Pair.CompiledScript = SystemUpdateScript;
+			if (!GetFromDDC(Pair) && !SystemUpdateScript->AreScriptAndSourceSynchronized())
 			{
+				ScriptsNeedingCompile.Add(SystemUpdateScript);
 				bAnyCompiled = true;
 			}
+			ActiveCompilations[ActiveCompileIdx].EmitterCompiledScriptPairs.Add(Pair);
 		}
-		ActiveCompilations[ActiveCompileIdx].EmitterCompiledScriptPairs.Add(Pair);
 	}
 
-	// Now let's synchronize the variables that we actually encountered during compile so that we can expose them to the end user.
-	for (int32 i = 0; i < EncounteredExposedVars.Num(); i++)
+
+	
 	{
-		if (OriginalExposedParams.Contains(EncounteredExposedVars[i]) == false)
+
+		// We found things needing compilation, now we have to go through an static duplicate everything that will be translated...
 		{
-			// Just in case it wasn't added previously..
-			ExposedParameters.AddParameter(EncounteredExposedVars[i]);
+			UNiagaraPrecompileContainer* Container =  NewObject<UNiagaraPrecompileContainer>(GetTransientPackage());
+			Container->System = this;
+			Container->Scripts = ScriptsNeedingCompile;
+			TSharedPtr<FNiagaraCompileRequestDataBase, ESPMode::ThreadSafe> SystemPrecompiledData = NiagaraModule.Precompile(Container);
+
+			if (SystemPrecompiledData.IsValid() == false)
+			{
+				UE_LOG(LogNiagara, Error, TEXT("Failed to precompile %s.  This is due to unexpected invalid or broken data.  Additional details should be in the log."), *GetPathName());
+				return false;
+			}
+
+			SystemPrecompiledData->GetReferencedObjects(ActiveCompilations[ActiveCompileIdx].RootObjects);
+			ActiveCompilations[ActiveCompileIdx].MappedData.Add(SystemSpawnScript, SystemPrecompiledData);
+			ActiveCompilations[ActiveCompileIdx].MappedData.Add(SystemUpdateScript, SystemPrecompiledData);
+
+			check(EmitterHandles.Num() == SystemPrecompiledData->GetDependentRequestCount());
+
+
+			// Grab the list of user variables that were actually encountered so that we can add to them later.
+			TArray<FNiagaraVariable> EncounteredExposedVars;
+			SystemPrecompiledData->GatherPreCompiledVariables(TEXT("User"), EncounteredExposedVars);
+
+			for (int32 i = 0; i < EmitterHandles.Num(); i++)
+			{
+				FNiagaraEmitterHandle Handle = EmitterHandles[i];
+				if (Handle.GetInstance() && Handle.GetIsEnabled())
+				{
+					UNiagaraScriptSourceBase* GraphSource = Handle.GetInstance()->GraphSource;
+					TSharedPtr<FNiagaraCompileRequestDataBase, ESPMode::ThreadSafe> EmitterPrecompiledData = SystemPrecompiledData->GetDependentRequest(i);
+					EmitterPrecompiledData->GetReferencedObjects(ActiveCompilations[ActiveCompileIdx].RootObjects);
+
+					TArray<UNiagaraScript*> EmitterScripts;
+					Handle.GetInstance()->GetScripts(EmitterScripts, false);
+					check(EmitterScripts.Num() > 0);
+					for (UNiagaraScript* EmitterScript : EmitterScripts)
+					{
+						ActiveCompilations[ActiveCompileIdx].MappedData.Add(EmitterScript, EmitterPrecompiledData);
+					}
+
+
+					// Add the emitter's User variables to the encountered list to expose for later.
+					EmitterPrecompiledData->GatherPreCompiledVariables(TEXT("User"), EncounteredExposedVars);
+
+				}
+			}
+
+
+			// Now let's synchronize the variables that we actually encountered during precompile so that we can expose them to the end user.
+			for (int32 i = 0; i < EncounteredExposedVars.Num(); i++)
+			{
+				if (OriginalExposedParams.Contains(EncounteredExposedVars[i]) == false)
+				{
+					// Just in case it wasn't added previously..
+					ExposedParameters.AddParameter(EncounteredExposedVars[i]);
+				}
+			}
 		}
+		
+
+		// We have previously duplicated all that is needed for compilation, so let's now issue the compile requests!
+		for (UNiagaraScript* CompiledScript : ScriptsNeedingCompile)
+		{
+
+			const auto InPairs = [&CompiledScript](const FEmitterCompiledScriptPair& Other) -> bool
+			{
+				return CompiledScript == Other.CompiledScript;
+			};
+
+			TSharedPtr<FNiagaraCompileRequestDataBase, ESPMode::ThreadSafe> EmitterPrecompiledData = ActiveCompilations[ActiveCompileIdx].MappedData.FindChecked(CompiledScript);
+			FEmitterCompiledScriptPair* Pair = ActiveCompilations[ActiveCompileIdx].EmitterCompiledScriptPairs.FindByPredicate(InPairs);
+			check(Pair);
+			if (!CompiledScript->RequestExternallyManagedAsyncCompile(EmitterPrecompiledData, Pair->CompileId, Pair->PendingJobID))
+			{
+				UE_LOG(LogNiagara, Warning, TEXT("For some reason we are reporting that %s is in sync even though AreScriptAndSourceSynchronized returned false!"), *CompiledScript->GetPathName())
+			}
+		}
+
 	}
 
+
+	// We might be able to just complete compilation right now if nothing needed compilation.
+	if (ScriptsNeedingCompile.Num() == 0)
+	{
+		PollForCompilationComplete();
+	}
+
+	
 	if (OptionalUpdateContext)
 	{
 		OptionalUpdateContext->Add(this, true);

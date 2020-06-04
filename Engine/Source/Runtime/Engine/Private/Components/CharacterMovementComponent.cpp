@@ -8585,7 +8585,7 @@ void UCharacterMovementComponent::ProcessClientTimeStampForTimeDiscrepancy(float
 
 bool UCharacterMovementComponent::IsClientTimeStampValid(float TimeStamp, const FNetworkPredictionData_Server_Character& ServerData, bool& bTimeStampResetDetected) const
 {
-	if (TimeStamp <= 0.f)
+	if (TimeStamp <= 0.f || !FMath::IsFinite(TimeStamp))
 	{
 		return false;
 	}

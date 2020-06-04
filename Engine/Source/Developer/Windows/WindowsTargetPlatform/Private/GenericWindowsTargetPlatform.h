@@ -486,7 +486,7 @@ public:
 		bool bEnableRayTracing = false;
 		GConfig->GetBool(TEXT("/Script/WindowsTargetPlatform.WindowsTargetSettings"), TEXT("bEnableRayTracing"), bEnableRayTracing, GEngineIni);
 
-		return bEnableRayTracing;
+		return bEnableRayTracing && TSuper::UsesRayTracing();
 	}
 
 	//~ End ITargetPlatform Interface

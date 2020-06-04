@@ -58,6 +58,16 @@ void UAnimNotifyState_TimedNiagaraEffect::NotifyEnd(USkeletalMeshComponent * Mes
 			bTemplateMatch |= PreviousTemplates.Contains(FXSystemComponent->GetFXSystemAsset());
 #endif
 
+			// we want to special case NiagaraComponent behavior based on it's current execution state.  It should be
+			// no longer marked as active because we triggered a Deactivate, but it still hasn't deactivated yet
+			if (const UNiagaraComponent* NiagaraComponent = Cast<const UNiagaraComponent>(Component))
+			{
+				if (NiagaraComponent->GetExecutionState() != ENiagaraExecutionState::Active)
+				{
+					continue;
+				}
+			}
+
 			if (bSocketMatch && bTemplateMatch && FXSystemComponent->IsActive())
 			{
 				// Either destroy the component or deactivate it to have it's active FXSystems finish.

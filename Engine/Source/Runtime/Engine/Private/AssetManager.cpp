@@ -76,6 +76,9 @@ struct FPrimaryAssetData
 
 	/** Pending state of this asset, will be copied to CurrentState when load finishes */
 	FPrimaryAssetLoadState PendingState;
+
+	/** The set of primary asset names used to initiate the request */
+	TSharedPtr<const TArray<FName>> PendingPrimaryAssetNames;
 	
 	/** Asset is considered loaded at all if there is an active handle for it */
 	bool IsLoaded() const { return CurrentState.IsValid(); }
@@ -86,6 +89,8 @@ struct FPrimaryAssetData
 		Swap(PendingState.Handle, CurrentState.Handle);
 
 		PendingState.Reset(/* don't cancel handle */ false);	
+
+		PendingPrimaryAssetNames = nullptr;
 	}
 };
 
@@ -1131,6 +1136,19 @@ void UAssetManager::GetPrimaryAssetTypeInfoList(TArray<FPrimaryAssetTypeInfo>& A
 	}
 }
 
+static TArray<FName>* ExtractNames(const TArray<FPrimaryAssetId>& Ids)
+{
+	TArray<FName>* Out = new TArray<FName>();
+	Out->Reserve(Ids.Num());
+	for (const FPrimaryAssetId& Id : Ids)
+	{
+		Out->Add(Id.PrimaryAssetName);
+	}
+	Out->Sort(FNameFastLess());
+
+	return Out;
+}
+
 TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(const TArray<FPrimaryAssetId>& AssetsToChange, const TArray<FName>& AddBundles, const TArray<FName>& RemoveBundles, bool bRemoveAllBundles, FStreamableDelegate DelegateToCall, TAsyncLoadPriority Priority)
 {
 	// ExistingHandles are both primary and secondary assets who are already being loaded.
@@ -1152,6 +1170,8 @@ TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(c
 	TArray<FPrimaryAssetData*> NameDatasToLoad;
 	NameDatasToLoad.Reserve(AssetsToChange.Num());
 	TBitArray<> IdsToLoad(false, AssetsToChange.Num());
+
+	TSharedPtr<const TArray<FName>> PrimaryAssetNames(ExtractNames(AssetsToChange));
 
 	for (const FPrimaryAssetId& PrimaryAssetId : AssetsToChange)
 	{
@@ -1205,8 +1225,23 @@ TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(c
 					ExistingHandles.Add(NameData->PendingState.Handle);
 					continue;
 				}
+				// Only cancel previous handle if the same set of assets was requested
+				bool bCancelPreviousHandle = true;
+				if (PrimaryAssetNames.Get() != NameData->PendingPrimaryAssetNames.Get())
+				{
+					if (*PrimaryAssetNames.Get() != *NameData->PendingPrimaryAssetNames.Get())
+					{
+						bCancelPreviousHandle = false;
+					}
+					else
+					{
+						// Re-use old array to avoid O(N^2) comparisons
+						PrimaryAssetNames = NameData->PendingPrimaryAssetNames;
+					}
+				}
+
 				// Clear pending state
-				NameData->PendingState.Reset(true);
+				NameData->PendingState.Reset(bCancelPreviousHandle);
 			}
 			else if (NameData->CurrentState.IsValid() && NameData->CurrentState.BundleNames == *NewBundles)
 			{
@@ -1248,6 +1283,7 @@ TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(c
 
 			NameDatasToLoad.Add(NameData);
 			NameData->PendingState.BundleNames = *NewBundles;
+			NameData->PendingPrimaryAssetNames = PrimaryAssetNames;
 			IdsToLoad[&PrimaryAssetId - &AssetsToChange[0]] = true;
 		}
 	}

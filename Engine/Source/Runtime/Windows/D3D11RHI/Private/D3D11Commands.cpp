@@ -1942,7 +1942,14 @@ void FD3D11DynamicRHI::EnableDepthBoundsTest(bool bEnable,float MinDepth,float M
 				bOnce = true;
 				if (bRenderDoc)
 				{
-					UE_LOG(LogD3D11RHI, Error, TEXT("NvAPI is not available under RenderDoc"));
+					if (FApp::IsUnattended())
+					{
+						UE_LOG(LogD3D11RHI, Display, TEXT("NvAPI is not available under RenderDoc"));
+					}
+					else
+					{
+						UE_LOG(LogD3D11RHI, Warning, TEXT("NvAPI is not available under RenderDoc"));
+					}
 				}
 				else
 				{
@@ -1962,7 +1969,14 @@ void FD3D11DynamicRHI::EnableDepthBoundsTest(bool bEnable,float MinDepth,float M
 				bOnce = true;
 				if (bRenderDoc)
 				{
-					UE_LOG(LogD3D11RHI, Error, TEXT("AGS is not available under RenderDoc"));
+					if (FApp::IsUnattended())
+					{
+						UE_LOG(LogD3D11RHI, Display, TEXT("AGS is not available under RenderDoc"));
+					}
+					else
+					{
+						UE_LOG(LogD3D11RHI, Warning, TEXT("AGS is not available under RenderDoc"));
+					}
 				}
 				else
 				{

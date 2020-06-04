@@ -549,7 +549,8 @@ struct FNDISkeletalMesh_InstanceData
 			Ret = &Mesh->GetResourceForRendering()->LODRenderData[GetLODIndex()];
 			if (bAllowCPUMeshDataAccess)
 			{
-				if (USkeletalMeshComponent* SkelComp = Cast<USkeletalMeshComponent>(Component.Get()))
+				USkeletalMeshComponent* SkelComp = Cast<USkeletalMeshComponent>(Component.Get());
+				if (SkelComp != nullptr && SkelComp->SkeletalMesh != nullptr)
 				{
 					OutSkinWeightBuffer = SkelComp->GetSkinWeightBuffer(GetLODIndex());
 				}
@@ -564,7 +565,8 @@ struct FNDISkeletalMesh_InstanceData
 
 	FORCEINLINE_DEBUGGABLE FSkinWeightVertexBuffer* GetSkinWeights()
 	{
-		if (USkeletalMeshComponent* SkelComp = Cast<USkeletalMeshComponent>(Component.Get()))
+		USkeletalMeshComponent* SkelComp = Cast<USkeletalMeshComponent>(Component.Get());
+		if (SkelComp != nullptr && SkelComp->SkeletalMesh != nullptr)
 		{
 			return SkelComp->GetSkinWeightBuffer(GetLODIndex());
 		}

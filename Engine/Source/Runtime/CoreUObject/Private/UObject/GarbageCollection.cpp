@@ -1396,26 +1396,30 @@ void IncrementalPurgeGarbage(bool bUseTimeLimit, float TimeLimit)
 		}
 
 	} ResetPurgeProgress(bCompleted);
-
-	// Keep track of start time to enforce time limit unless bForceFullPurge is true;
-	GCStartTime = FPlatformTime::Seconds();
-
-	bool bTimeLimitReached = false;
-	if (GUnrechableObjectIndex < GUnreachableObjects.Num())
+	
 	{
+		// Lock before settting GCStartTime as it could be slow to lock if async loading is in progress
+		// but we still want to perform some GC work otherwise we'd be keeping objects in memory for a long time
+		FConditionalGCLock ScopedGCLock;
+
+		// Keep track of start time to enforce time limit unless bForceFullPurge is true;
+		GCStartTime = FPlatformTime::Seconds();
+		bool bTimeLimitReached = false;
+
+		if (GUnrechableObjectIndex < GUnreachableObjects.Num())
 		{
-			FConditionalGCLock ScopedGCLock;
 			bTimeLimitReached = UnhashUnreachableObjects(bUseTimeLimit, TimeLimit);
-		}
-		if (GUnrechableObjectIndex >= GUnreachableObjects.Num())
-		{
-			FScopedCBDProfile::DumpProfile();
-		}
-	}
 
-	if (!bTimeLimitReached)
-	{
-		bCompleted = IncrementalDestroyGarbage(bUseTimeLimit, TimeLimit);
+			if (GUnrechableObjectIndex >= GUnreachableObjects.Num())
+			{
+				FScopedCBDProfile::DumpProfile();
+			}
+		}
+
+		if (!bTimeLimitReached)
+		{
+			bCompleted = IncrementalDestroyGarbage(bUseTimeLimit, TimeLimit);
+		}
 	}
 }
 
@@ -2600,7 +2604,7 @@ void UClass::AssembleReferenceTokenStream(bool bForce)
 		{
 			check(ClassAddReferencedObjects != NULL);
 			const bool bKeepOuter = GetFName() != NAME_Package;
-			const bool bKeepClass = !(GetClassFlags() & CLASS_Native) || IsA(UDynamicClass::StaticClass());
+			const bool bKeepClass = !HasAnyInternalFlags(EInternalObjectFlags::Native) || IsA(UDynamicClass::StaticClass());
 
 			ClassAddReferencedObjectsType AddReferencedObjectsFn = nullptr;
 #if !WITH_EDITOR

@@ -602,6 +602,14 @@ void UClothingAssetCommon::CalculateReferenceBoneIndex()
 	// Starts at root
 	ReferenceBoneIndex = 0;
 
+#if WITH_APEX_CLOTHING
+	const TSubclassOf<class UClothingSimulationFactory> ClothingSimulationFactory = UClothingSimulationFactory::GetDefaultClothingSimulationFactoryClass();
+	if (ClothingSimulationFactory->GetName() == TEXT("ClothingSimulationFactoryNv"))
+	{
+		return;
+	}
+#endif
+
 	// Find the root bone for this clothing asset (common bone for all used bones)
 	typedef TArray<int32> BoneIndexArray;
 
@@ -821,6 +829,18 @@ void UClothingAssetCommon::PostLoad()
 		{
 			ClothConfig.Value->ConditionalPostLoad();  // PostLoad configs before adding new ones
 		}
+	}
+	if (ClothSimConfig_DEPRECATED)
+	{
+		ClothSimConfig_DEPRECATED->ConditionalPostLoad();  // PostLoad old configs before replacing them
+	}
+	if (ChaosClothSimConfig_DEPRECATED)
+	{
+		ChaosClothSimConfig_DEPRECATED->ConditionalPostLoad();  // PostLoad old configs before replacing them
+	}
+	if (ClothSharedSimConfig_DEPRECATED)
+	{
+		ClothSharedSimConfig_DEPRECATED->ConditionalPostLoad();  // PostLoad old configs before replacing them
 	}
 	AddClothConfigs();
 

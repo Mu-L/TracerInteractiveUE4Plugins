@@ -251,13 +251,13 @@ void NiagaraEmitterInstanceBatcher::GiveSystemTick_RenderThread(FNiagaraGPUSyste
 		return;
 	}
 
-
 	// @todo REMOVE THIS HACK
+
 	if (GFrameNumberRenderThread > LastFrameThatDrainedData + GNiagaraGpuMaxQueuedRenderFrames)
-	{
-		Tick.Destroy();
-		return;
-	}
+				{
+					Tick.Destroy();
+					return;
+				}
 
 	// Now we consume DataInterface instance data.
 	if (Tick.DIInstanceData)
@@ -278,9 +278,7 @@ void NiagaraEmitterInstanceBatcher::GiveSystemTick_RenderThread(FNiagaraGPUSyste
 	// A note:
 	// This is making a copy of Tick. That structure is small now and we take a copy to avoid
 	// making a bunch of small allocations on the game thread. We may need to revisit this.
-	FNiagaraGPUSystemTick& AddedTick = Ticks_RT.Add_GetRef(Tick);
-
-	BuildConstantBuffers(AddedTick);
+	Ticks_RT.Add(Tick);
 }
 
 void NiagaraEmitterInstanceBatcher::ReleaseInstanceCounts_RenderThread(FNiagaraComputeExecutionContext* ExecContext, FNiagaraDataSet* DataSet)
@@ -887,6 +885,8 @@ void NiagaraEmitterInstanceBatcher::ExecuteAll(FRHICommandList& RHICmdList, FRHI
 			{
 				continue;
 			}
+
+			BuildConstantBuffers(Tick);
 
 			Tick.bIsFinalTick = false; // @todo : this is true sometimes, needs investigation
 

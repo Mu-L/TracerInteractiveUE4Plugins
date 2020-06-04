@@ -463,6 +463,8 @@ void UNiagaraEmitter::PostLoad()
 		}
 		if (IsSynchronizedWithParent() == false)
 		{
+			// Modify here so that the asset will be marked dirty when using the resave commandlet.  This will be ignored during regular post load.
+			Modify();
 			MergeChangesFromParent();
 		}
 
@@ -493,21 +495,6 @@ void UNiagaraEmitter::PostLoad()
 			if (GEnableVerboseNiagaraChangeIdLogging)
 			{
 				UE_LOG(LogNiagara, Log, TEXT("Change ID updated for emitter %s because the ID was invalid."), *GetPathName());
-			}
-		}
-		else
-		{
-			for (UNiagaraScript* Script : AllScripts)
-			{
-				if (Script->AreScriptAndSourceSynchronized() == false)
-				{
-					bGenerateNewChangeId = true;
-					GenerateNewChangeIdReason = TEXT("PostLoad - Script out of sync");
-					if (GEnableVerboseNiagaraChangeIdLogging)
-					{
-						UE_LOG(LogNiagara, Log, TEXT("Change ID updated for emitter %s because of a change to its script %s"), *GetPathName(), *Script->GetPathName());
-					}
-				}
 			}
 		}
 
@@ -946,7 +933,7 @@ bool UNiagaraEmitter::AreAllScriptAndSourcesSynchronized() const
 		}
 	}
 
-	if (GPUComputeScript->IsCompilable() && !GPUComputeScript->AreScriptAndSourceSynchronized())
+	if (SimTarget == ENiagaraSimTarget::GPUComputeSim && GPUComputeScript->IsCompilable() && !GPUComputeScript->AreScriptAndSourceSynchronized())
 	{
 		return false;
 	}
