@@ -706,7 +706,7 @@ void FControlRigParameterTrackEditor::OnSelectionChanged(TArray<UMovieSceneTrack
 		}
 		for (const FName Name : Pair.Value)
 		{
-			//Pair.Key->SelectControl(Name, true);
+			Pair.Key->SelectControl(Name, true);
 		}
 	}
 }
@@ -818,13 +818,16 @@ void FControlRigParameterTrackEditor::OnPropagateObjectChanges(UObject* InChange
 				{
 					if (UControlRig* ControlRig = Track->GetControlRig())
 					{
-						if (USceneComponent* SceneComponent = Cast<USceneComponent>(ControlRig->GetObjectBinding()->GetBoundObject()))
+						if (ControlRig->GetObjectBinding())
 						{
-							if (SceneComponent->GetOwner() == Actor)
+							if (USceneComponent* SceneComponent = Cast<USceneComponent>(ControlRig->GetObjectBinding()->GetBoundObject()))
 							{
-								if (GetSequencer().IsValid())
+								if (SceneComponent->GetOwner() == Actor)
 								{
-									GetSequencer()->NotifyMovieSceneDataChanged(EMovieSceneDataChangeType::Unknown);
+									if (GetSequencer().IsValid())
+									{
+										GetSequencer()->NotifyMovieSceneDataChanged(EMovieSceneDataChangeType::Unknown);
+									}
 								}
 							}
 						}

@@ -1473,7 +1473,7 @@ void SLevelEditor::OnEditorModeIdChanged(const FEditorModeID& ModeChangedID, boo
 		FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>("LevelEditor");
 		TSharedPtr<FTabManager> LevelEditorTabManager = LevelEditorModule.GetLevelEditorTabManager();
 
-		if (!GLevelEditorModeTools().ShouldShowModeToolbox() && !GetDefault<UEditorStyleSettings>()->bEnableLegacyEditorModeUI)
+		if (!GLevelEditorModeTools().ShouldShowModeToolbox())
 		{
 			TSharedPtr<SDockTab> ToolboxTab = LevelEditorTabManager->FindExistingLiveTab(LevelEditorTabIds::LevelEditorToolBox);
 			if (ToolboxTab.IsValid())
@@ -1481,7 +1481,7 @@ void SLevelEditor::OnEditorModeIdChanged(const FEditorModeID& ModeChangedID, boo
 				ToolboxTab->RequestCloseTab();
 			}
 		}
-		else
+		else if (!GetDefault<UEditorStyleSettings>()->bEnableLegacyEditorModeUI)
 		{
 			LevelEditorTabManager->InvokeTab(LevelEditorTabIds::LevelEditorToolBox);
 		}

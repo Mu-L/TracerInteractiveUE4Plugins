@@ -33,7 +33,9 @@ public:
 
 	bool operator==(const FMeshDrawShaderBindingsLayout& Rhs) const
 	{
-		return ParameterMapInfo == Rhs.ParameterMapInfo;
+		// Since 4.25, FShader (the owner of this memory) is no longer shared across the shadermaps and gets deleted at the same time as the owning shadermap.
+		// To prevent crashes when a singe mesh draw command is shared across multiple MICs with compatible shaders, consider shader bindings belonging to different FShaders different.
+		return &ParameterMapInfo == &Rhs.ParameterMapInfo;
 	}
 
 	inline uint32 GetLooseDataSizeBytes() const

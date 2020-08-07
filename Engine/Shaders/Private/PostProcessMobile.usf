@@ -106,7 +106,7 @@ void SunMaskPS_ES2(
 	half4 SceneColor = PostprocessInput0.Sample(PostprocessInput0Sampler, InUVPos.xy);
 
 	#if ES2_USE_DEPTHTEXTURE
-		half InDepth = CalcSceneDepth(InUVPos.xy);
+		half InDepth = ConvertFromDeviceZ(Texture2DSampleLevel(MobileSceneTextures.SceneDepthTexture, MobileSceneTextures.SceneDepthTextureSampler, InUVPos.xy, 0).r);
 	#else
 		half InDepth = SceneColor.a;
 	#endif
@@ -626,6 +626,11 @@ void DofDownPS_ES2(
 	float4 B = PostprocessInput0.Sample(PostprocessInput0Sampler, InUVs[2]);
 	float4 C = PostprocessInput0.Sample(PostprocessInput0Sampler, InUVs[3]);
 	float4 D = PostprocessInput0.Sample(PostprocessInput0Sampler, InUVs[4]);
+
+	A.a = PostprocessInput2.Sample(PostprocessInput2Sampler, InUVs[1]).r;
+	B.a = PostprocessInput2.Sample(PostprocessInput2Sampler, InUVs[2]).r;
+	C.a = PostprocessInput2.Sample(PostprocessInput2Sampler, InUVs[3]).r;
+	D.a = PostprocessInput2.Sample(PostprocessInput2Sampler, InUVs[4]).r;
 
 	#if ES2_USE_SUN
 		// The {0.0 to 1.0} range is focus.

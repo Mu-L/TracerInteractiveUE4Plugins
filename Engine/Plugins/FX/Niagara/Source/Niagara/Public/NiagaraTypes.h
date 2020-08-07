@@ -866,7 +866,7 @@ public:
 		if (Size == INDEX_NONE)
 		{
 			checkfSlow(IsValid(), TEXT("Type definition is not valid."));
-			if (GetClass())
+			if (ClassStructOrEnum == nullptr || GetClass())
 			{
 				Size = 0;//TODO: sizeof(void*);//If we're a class then we allocate space for the user to instantiate it. This and stopping it being GCd is up to the user.
 			}
@@ -883,7 +883,7 @@ public:
 		if (Alignment == INDEX_NONE)
 		{
 			checkfSlow(IsValid(), TEXT("Type definition is not valid."));
-			if (GetClass())
+			if (ClassStructOrEnum == nullptr || GetClass())
 			{
 				Alignment = 0;//TODO: sizeof(void*);//If we're a class then we allocate space for the user to instantiate it. This and stopping it being GCd is up to the user.
 			}
@@ -1272,7 +1272,7 @@ struct FNiagaraVariable : public FNiagaraVariableBase
 	FNiagaraVariable(const FNiagaraVariable &Other)
 		: FNiagaraVariableBase(Other)
 	{
-		if (Other.IsDataAllocated())
+		if (Other.TypeDef.IsValid() && Other.IsDataAllocated())
 		{
 			SetData(Other.GetData());
 		}

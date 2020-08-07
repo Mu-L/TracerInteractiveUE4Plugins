@@ -66,6 +66,7 @@ float2 ComputeDOFFocalMask(float SceneDepth, float SkyWithoutHorizonMask)
 float4 ReadFullResAndDepth(float2 UV, in out float Depth)
 {
 	float4 Color = Texture2DSampleLevel(PostprocessInput0, PostprocessInput0Sampler, UV, 0);
+	Color.a = Texture2DSampleLevel(PostprocessInput2, PostprocessInput2Sampler, UV, 0).r;
 #if MOBILE_SHADING
 	Depth = Color.a;
 #endif
@@ -198,6 +199,7 @@ void MainRecombinePS(
 
 #if MOBILE_SHADING
 	float4 SceneColorAndDepth = Texture2DSample(PostprocessInput0, PostprocessInput0Sampler, FullResUV);
+	SceneColorAndDepth.a = Texture2DSample(PostprocessInput4, PostprocessInput4Sampler, FullResUV).r;
 #else
 	float4 SceneColorAndDepth = float4(Texture2DSample(PostprocessInput0, PostprocessInput0Sampler, FullResUV).rgb, CalcSceneDepth(FullResUV));
 #endif

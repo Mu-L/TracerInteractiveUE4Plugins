@@ -12748,7 +12748,7 @@ bool FMaterialLayersFunctions::ResolveParent(const FMaterialLayersFunctions& Par
 		if (LayerIndex == INDEX_NONE)
 		{
 			// Check to see if we have any layers with parents that haven't been initialized yet, that match this parent layer
-			for (int32 CheckLayerIndex = 1; CheckLayerIndex < Layers.Num(); ++CheckLayerIndex)
+			for (int32 CheckLayerIndex = 1; CheckLayerIndex < Layers.Num() && CheckLayerIndex < Parent.Layers.Num(); ++CheckLayerIndex)
 			{
 				if (Layers[CheckLayerIndex] == Parent.Layers[ParentLayerIndex] &&
 					Blends[CheckLayerIndex - 1] && Parent.Blends[CheckLayerIndex - 1] &&
@@ -12781,7 +12781,7 @@ bool FMaterialLayersFunctions::ResolveParent(const FMaterialLayersFunctions& Par
 	for (int32 LayerIndex = 1; LayerIndex < Layers.Num(); ++LayerIndex)
 	{
 		const FGuid& ParentGuid = ParentLayerGuids[LayerIndex];
-		if (ParentGuid != NoParentGuid)
+		if (ParentGuid != NoParentGuid && ParentGuid != UninitializedParentGuid)
 		{
 			continue;
 		}
@@ -12929,12 +12929,20 @@ void UMaterialExpressionMaterialFunctionCall::PostEditChangeProperty(FPropertyCh
 void UMaterialExpressionMaterialFunctionCall::LinkFunctionIntoCaller(FMaterialCompiler* Compiler)
 {
 	MaterialFunction->LinkIntoCaller(FunctionInputs);
-	Compiler->PushParameterOwner(FunctionParameterInfo);
+	// Update parameter owner when stepping into layer functions
+	if (MaterialFunction->GetMaterialFunctionUsage() != EMaterialFunctionUsage::Default)
+	{
+		Compiler->PushParameterOwner(FunctionParameterInfo);
+	}
 }
 
 void UMaterialExpressionMaterialFunctionCall::UnlinkFunctionFromCaller(FMaterialCompiler* Compiler)
 {
-	verify(Compiler->PopParameterOwner() == FunctionParameterInfo);
+	if (MaterialFunction->GetMaterialFunctionUsage() != EMaterialFunctionUsage::Default)
+	{
+		const FMaterialParameterInfo PoppedParameterInfo = Compiler->PopParameterOwner();
+		check(PoppedParameterInfo == FunctionParameterInfo);
+	}
 	MaterialFunction->UnlinkFromCaller();
 }
 

@@ -180,7 +180,9 @@ bool SMoviePipelineQueuePanel::IsRenderLocalEnabled() const
 	const bool bHasExecutor = ProjectSettings->DefaultLocalExecutor != nullptr;
 	const bool bNotRendering = !Subsystem->IsRendering();
 	const bool bHasJobs = Subsystem->GetQueue()->GetJobs().Num() > 0;
-	return bHasExecutor && bNotRendering && bHasJobs;
+
+	const bool bWorldIsActive = GEditor->IsPlaySessionInProgress();
+	return bHasExecutor && bNotRendering && bHasJobs && !bWorldIsActive;
 }
 
 FReply SMoviePipelineQueuePanel::OnRenderRemoteRequested()

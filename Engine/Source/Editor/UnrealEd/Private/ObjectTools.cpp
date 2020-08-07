@@ -95,6 +95,15 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogObjectTools, Log, All);
 
+static TAutoConsoleVariable<bool> CVarUseLegacyGetReferencersForDeletion(
+	TEXT("Editor.UseLegacyGetReferencersForDeletion"),
+	false,
+	TEXT("Choose the algorithm to be used when detecting referencers of any assets/objects being deleted.\n\n")
+	TEXT("0: Use the most optimized version (default)\n")
+	TEXT("1: Use the slower legacy version (for debug/comparison)"),
+	ECVF_Default
+	);
+
 // This function should ONLY be needed by ConsolidateObjects and ForceDeleteObjects
 // Use anywhere else could be dangerous as this involves a map transition and GC
 void ReloadEditorWorldForReferenceReplacementIfNecessary(TArray< TWeakObjectPtr<UObject> >& InOutObjectsToReplace)

@@ -2107,6 +2107,10 @@ bool UMaterialInstance::IterateDependentFunctions(TFunctionRef<bool(UMaterialFun
 			{
 				if (Layer)
 				{
+					if (!Layer->IterateDependentFunctions(Predicate))
+					{
+						return false;
+					}
 					if (!Predicate(Layer))
 					{
 						return false;
@@ -2118,6 +2122,10 @@ bool UMaterialInstance::IterateDependentFunctions(TFunctionRef<bool(UMaterialFun
 			{
 				if (Blend)
 				{
+					if (!Blend->IterateDependentFunctions(Predicate))
+					{
+						return false;
+					}
 					if (!Predicate(Blend))
 					{
 						return false;
@@ -2170,7 +2178,7 @@ bool UMaterialInstance::GetScalarParameterDefaultValue(const FHashedMaterialPara
 		if (ParameterIndex != INDEX_NONE)
 		{
 			OutValue = CachedLayerParameters.ScalarValues[ParameterIndex];
-			return CachedLayerParameters.IsDefaultParameterValid(EMaterialParameterType::Scalar, ParameterIndex, bOveriddenOnly, bCheckOwnedGlobalOverrides);
+			return true;
 		}
 	}
 
@@ -2215,7 +2223,7 @@ bool UMaterialInstance::GetVectorParameterDefaultValue(const FHashedMaterialPara
 		if (ParameterIndex != INDEX_NONE)
 		{
 			OutValue = CachedLayerParameters.VectorValues[ParameterIndex];
-			return CachedLayerParameters.IsDefaultParameterValid(EMaterialParameterType::Vector, ParameterIndex, bOveriddenOnly, bCheckOwnedGlobalOverrides);
+			return true;
 		}
 	}
 
@@ -2260,7 +2268,7 @@ bool UMaterialInstance::GetTextureParameterDefaultValue(const FHashedMaterialPar
 		if (ParameterIndex != INDEX_NONE)
 		{
 			OutValue = CachedLayerParameters.TextureValues[ParameterIndex];
-			return CachedLayerParameters.IsDefaultParameterValid(EMaterialParameterType::Texture, ParameterIndex, false, bCheckOwnedGlobalOverrides);
+			return true;
 		}
 	}
 
@@ -2305,7 +2313,7 @@ bool UMaterialInstance::GetRuntimeVirtualTextureParameterDefaultValue(const FHas
 		if (ParameterIndex != INDEX_NONE)
 		{
 			OutValue = CachedLayerParameters.RuntimeVirtualTextureValues[ParameterIndex];
-			return CachedLayerParameters.IsDefaultParameterValid(EMaterialParameterType::RuntimeVirtualTexture, ParameterIndex, false, bCheckOwnedGlobalOverrides);
+			return true;
 		}
 	}
 
@@ -2352,7 +2360,7 @@ bool UMaterialInstance::GetFontParameterDefaultValue(const FHashedMaterialParame
 		{
 			OutFontValue = CachedLayerParameters.FontValues[ParameterIndex];
 			OutFontPage = CachedLayerParameters.FontPageValues[ParameterIndex];
-			return CachedLayerParameters.IsDefaultParameterValid(EMaterialParameterType::RuntimeVirtualTexture, ParameterIndex, false, bCheckOwnedGlobalOverrides);
+			return true;
 		}
 	}
 
@@ -3934,19 +3942,29 @@ void UMaterialInstance::UpdateStaticPermutation(const FStaticParameterSet& NewPa
 	}
 }
 
+// From MaterialCachedData.cpp
+extern void FMaterialCachedParameters_UpdateForLayerParameters(FMaterialCachedParameters& Parameters, const FMaterialCachedExpressionContext& Context, UMaterialInstance* ParentMaterialInstance, const FStaticMaterialLayersParameter& LayerParameters);
+
 void UMaterialInstance::UpdateCachedLayerParameters()
 {
+	UMaterialInstance* ParentInstance = nullptr;
 	FMaterialCachedExpressionData CachedExpressionData;
 	CachedExpressionData.Reset();
 	if (Parent)
 	{
 		CachedExpressionData.ReferencedTextures = Parent->GetReferencedTextures();
+		ParentInstance = Cast<UMaterialInstance>(Parent);
 	}
 	
 	bool bCachedDataValid = true;
 	for (FStaticMaterialLayersParameter& LayerParameters : StaticParameters.MaterialLayersParameters)
 	{
 		FMaterialCachedExpressionContext Context(Parent);
+		if (ParentInstance)
+		{
+			FMaterialCachedParameters_UpdateForLayerParameters(CachedExpressionData.Parameters, Context, ParentInstance, LayerParameters);
+		}
+
 		if (!CachedExpressionData.UpdateForLayerFunctions(Context, LayerParameters.Value))
 		{
 			bCachedDataValid = false;
@@ -3957,15 +3975,6 @@ void UMaterialInstance::UpdateCachedLayerParameters()
 	{
 		CachedLayerParameters = MoveTemp(CachedExpressionData.Parameters);
 		CachedReferencedTextures = MoveTemp(CachedExpressionData.ReferencedTextures);
-	}
-
-	// Add the instance texture overrides.
-	for (const FTextureParameterValue& TextureParam : TextureParameterValues)
-	{
-		if (TextureParam.ParameterValue)
-		{
-			CachedReferencedTextures.AddUnique(TextureParam.ParameterValue);
-		}
 	}
 }
 
@@ -4011,7 +4020,9 @@ void UMaterialInstance::PostEditChangeProperty(FPropertyChangedEvent& PropertyCh
 
 	InitResources();
 
-	UpdateStaticPermutation();
+	// Force UpdateStaticPermutation when change type is Redirected as this probably means a Material or MaterialInstance parent asset was deleted.
+	const bool bForceStaticPermutationUpdate = PropertyChangedEvent.ChangeType == EPropertyChangeType::Redirected;
+	UpdateStaticPermutation(StaticParameters, BasePropertyOverrides, bForceStaticPermutationUpdate);
 
 	if (PropertyChangedEvent.ChangeType == EPropertyChangeType::ValueSet || PropertyChangedEvent.ChangeType == EPropertyChangeType::ArrayClear || PropertyChangedEvent.ChangeType == EPropertyChangeType::ArrayRemove || PropertyChangedEvent.ChangeType == EPropertyChangeType::Unspecified || PropertyChangedEvent.ChangeType == EPropertyChangeType::Duplicate)
 	{

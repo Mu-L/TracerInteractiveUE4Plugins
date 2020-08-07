@@ -1008,6 +1008,7 @@ FPooledRenderTargetDesc FRCPassPostProcessSunMaskES2::ComputeOutputDesc(EPassOut
 	Ret.NumMips = 1;
 	Ret.TargetableFlags = TexCreate_RenderTargetable | TexCreate_ShaderResource;
 	Ret.bForceSeparateTargetAndShaderResource = false;
+	// Keep the depth in alpha channel for Depth Of Field Gaussian
 	Ret.Format = InPassOutputId == ePId_Output1 ? PF_FloatR11G11B10 : PF_R16F;
 	Ret.NumSamples = 1;
 	Ret.Extent.X = FMath::Max(1, PrePostSourceViewportSize.X);
@@ -2232,13 +2233,10 @@ void FRCPassIntegrateDofES2::Process(FRenderingCompositePassContext& Context)
 {
 	SCOPED_DRAW_EVENT(Context.RHICmdList, PostProcessIntegrateDof);
 
-	FIntRect DstRect;
-	DstRect.Min.X = 0;
-	DstRect.Min.Y = 0;
-	DstRect.Max.X = PrePostSourceViewportSize.X;
-	DstRect.Max.Y = PrePostSourceViewportSize.Y;
-
 	const FSceneRenderTargetItem& DestRenderTarget = PassOutputs[0].RequestSurface(Context);
+
+	const FIntPoint &SrcSize = PrePostSourceViewportSize;
+	const FIntPoint &DstSize = PassOutputs[0].RenderTargetDesc.Extent;
 
 	ERenderTargetLoadAction LoadAction = ERenderTargetLoadAction::EClear;
 	FRHIRenderPassInfo RPInfo(DestRenderTarget.TargetableTexture, MakeRenderTargetActions(LoadAction, ERenderTargetStoreAction::EStore));
@@ -2269,11 +2267,11 @@ void FRCPassIntegrateDofES2::Process(FRenderingCompositePassContext& Context)
 		DrawRectangle(
 			Context.RHICmdList,
 			0, 0,
-			PrePostSourceViewportSize.X, PrePostSourceViewportSize.Y,
+			DstSize.X, DstSize.Y,
 			0, 0,
-			PrePostSourceViewportSize.X, PrePostSourceViewportSize.Y,
-			PrePostSourceViewportSize,
-			PrePostSourceViewportSize,
+			SrcSize.X, SrcSize.Y,
+			DstSize,
+			DstSize,
 			VertexShader,
 			EDRF_UseTriangleOptimization);
 	}

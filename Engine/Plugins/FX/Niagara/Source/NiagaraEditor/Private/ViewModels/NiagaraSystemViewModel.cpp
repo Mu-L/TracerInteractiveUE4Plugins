@@ -27,6 +27,7 @@
 #include "NiagaraEditorModule.h"
 #include "NiagaraNodeFunctionCall.h"
 #include "EdGraphSchema_NiagaraSystemOverview.h"
+#include "ViewModels/NiagaraScratchPadUtilities.h"
 
 #include "Editor.h"
 
@@ -390,6 +391,7 @@ void FNiagaraSystemViewModel::DuplicateEmitters(TArray<FEmitterHandleToDuplicate
 	GetSystem().Modify();
 	for (FEmitterHandleToDuplicate& EmitterHandleToDuplicate : EmitterHandlesToDuplicate)
 	{
+		UNiagaraSystem* SourceSystem = nullptr;
 		FNiagaraEmitterHandle HandleToDuplicate;
 		for (TObjectIterator<UNiagaraSystem> OtherSystemIt; OtherSystemIt; ++OtherSystemIt)
 		{
@@ -400,21 +402,23 @@ void FNiagaraSystemViewModel::DuplicateEmitters(TArray<FEmitterHandleToDuplicate
 				{
 					if (EmitterHandle.GetId() == EmitterHandleToDuplicate.EmitterHandleId)
 					{
+						SourceSystem = OtherSystem;
 						HandleToDuplicate = EmitterHandle;
 						break;
 					}
 				}
 			}
 
-			if (HandleToDuplicate.IsValid())
+			if (SourceSystem != nullptr && HandleToDuplicate.IsValid())
 			{
 				break;
 			}
 		}
 
-		if (HandleToDuplicate.IsValid())
+		if (SourceSystem != nullptr && HandleToDuplicate.IsValid())
 		{
 			const FNiagaraEmitterHandle& EmitterHandle = GetSystem().DuplicateEmitterHandle(HandleToDuplicate, FNiagaraUtilities::GetUniqueName(HandleToDuplicate.GetName(), EmitterHandleNames));
+			FNiagaraScratchPadUtilities::FixExternalScratchPadScriptsForEmitter(*SourceSystem, *EmitterHandle.GetInstance());
 			EmitterHandleNames.Add(EmitterHandle.GetName());
 		}
 	}

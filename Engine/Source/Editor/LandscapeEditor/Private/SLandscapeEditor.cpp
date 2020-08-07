@@ -208,6 +208,7 @@ void FLandscapeToolKit::BuildToolPalette(FName PaletteName, class FToolBarBuilde
 		ToolBarBuilder.AddToolBarButton(Commands.AddComponentTool);
 		ToolBarBuilder.AddToolBarButton(Commands.DeleteComponentTool);
 		ToolBarBuilder.AddToolBarButton(Commands.MoveToLevelTool);
+		ToolBarBuilder.AddToolBarButton(Commands.ResizeLandscape);
 
 		ToolBarBuilder.AddSeparator();	
 		ToolBarBuilder.AddToolBarButton(Commands.SplineTool);
@@ -292,13 +293,21 @@ void FLandscapeToolKit::OnToolPaletteChanged(FName PaletteName)
 FText FLandscapeToolKit::GetActiveToolDisplayName() const
 {
 	FEdModeLandscape* LandscapeEdMode = GetEditorMode();
-	return LandscapeEdMode->CurrentTool->GetDisplayName();
+	if (LandscapeEdMode && LandscapeEdMode->CurrentTool)
+	{
+		return LandscapeEdMode->CurrentTool->GetDisplayName();
+	}
+	return FText::GetEmpty();
 }
 
 FText FLandscapeToolKit::GetActiveToolMessage() const
 {
 	FEdModeLandscape* LandscapeEdMode = GetEditorMode();
-	return LandscapeEdMode->CurrentTool->GetDisplayMessage();
+	if (LandscapeEdMode && LandscapeEdMode->CurrentTool)
+	{
+		return LandscapeEdMode->CurrentTool->GetDisplayMessage();
+	}
+	return FText::GetEmpty();
 }
 
 void FLandscapeToolKit::NotifyToolChanged()

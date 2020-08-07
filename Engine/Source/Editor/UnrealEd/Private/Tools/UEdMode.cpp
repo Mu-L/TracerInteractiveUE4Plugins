@@ -520,6 +520,18 @@ bool UEdMode::InputKey(FEditorViewportClient* ViewportClient, FViewport* Viewpor
 {
 	
 	bool bHandled = false;
+	if (!Viewport)
+	{
+		return false;
+	}
+
+	// save this view
+	// Check against GCurrentLevelEditingViewportClient is temporary and should be removed in future.
+	// Current issue is that this ::Tick() is called *per viewport*, so once for each view in a 4-up view.
+	if (ViewportClient == GCurrentLevelEditingViewportClient)
+	{
+		((FEdModeQueriesImpl*)QueriesAPI)->CacheCurrentViewState(ViewportClient);
+	}
 
 	// escape key cancels current tool
 	if (Key == EKeys::Escape && Event == IE_Released)

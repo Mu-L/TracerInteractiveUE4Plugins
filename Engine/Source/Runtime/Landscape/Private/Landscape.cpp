@@ -1905,7 +1905,7 @@ void ALandscapeProxy::PostRegisterAllComponents()
 				FixupWeightmaps();
 
 				const bool bNeedOldDataMigration = !bHasLayersContentBefore && CanHaveLayersContent();
-				if (bNeedOldDataMigration && LandscapeInfo->LandscapeActor.IsValid())
+				if (bNeedOldDataMigration && LandscapeInfo->LandscapeActor.IsValid() && LandscapeInfo->LandscapeActor.Get()->HasLayersContent())
 				{
 					LandscapeInfo->LandscapeActor.Get()->CopyOldDataToDefaultLayer(this);
 				}
@@ -2644,22 +2644,35 @@ void ALandscapeProxy::FixupSharedData(ALandscape* Landscape)
 	}
 }
 
+namespace LandscapeProxyUtils
+{
+	void RecreateComponentsRenderState(const TArray<ULandscapeComponent*>& LandscapeComponents, TFunctionRef<void(ULandscapeComponent*)> Fn)
+	{
+		// Batch component render state recreation
+		TArray<FComponentRecreateRenderStateContext> ComponentRecreateRenderStates;
+		ComponentRecreateRenderStates.Reserve(LandscapeComponents.Num());
+		for (int32 ComponentIndex = 0; ComponentIndex < LandscapeComponents.Num(); ComponentIndex++)
+		{
+			ULandscapeComponent* Comp = LandscapeComponents[ComponentIndex];
+			if (Comp)
+			{
+				Fn(Comp);
+				ComponentRecreateRenderStates.Emplace(Comp);
+			}
+		}
+	}
+}
 
 void ALandscapeProxy::SetAbsoluteSectionBase(FIntPoint InSectionBase)
 {
 	FIntPoint Difference = InSectionBase - LandscapeSectionOffset;
 	LandscapeSectionOffset = InSectionBase;
 
-	for (int32 CompIdx = 0; CompIdx < LandscapeComponents.Num(); CompIdx++)
+	LandscapeProxyUtils::RecreateComponentsRenderState(LandscapeComponents, [Difference](ULandscapeComponent* Comp)
 	{
-		ULandscapeComponent* Comp = LandscapeComponents[CompIdx];
-		if (Comp)
-		{
-			FIntPoint AbsoluteSectionBase = Comp->GetSectionBase() + Difference;
-			Comp->SetSectionBase(AbsoluteSectionBase);
-			Comp->RecreateRenderState_Concurrent();
-		}
-	}
+		FIntPoint AbsoluteSectionBase = Comp->GetSectionBase() + Difference;
+		Comp->SetSectionBase(AbsoluteSectionBase);
+	});
 
 	for (int32 CompIdx = 0; CompIdx < CollisionComponents.Num(); CompIdx++)
 	{
@@ -2674,17 +2687,12 @@ void ALandscapeProxy::SetAbsoluteSectionBase(FIntPoint InSectionBase)
 
 void ALandscapeProxy::RecreateComponentsState()
 {
-	for (int32 ComponentIndex = 0; ComponentIndex < LandscapeComponents.Num(); ComponentIndex++)
+	LandscapeProxyUtils::RecreateComponentsRenderState(LandscapeComponents, [](ULandscapeComponent* Comp)
 	{
-		ULandscapeComponent* Comp = LandscapeComponents[ComponentIndex];
-		if (Comp)
-		{
-			Comp->UpdateComponentToWorld();
-			Comp->UpdateCachedBounds();
-			Comp->UpdateBounds();
-			Comp->RecreateRenderState_Concurrent(); // @todo UE4 jackp just render state needs update?
-		}
-	}
+		Comp->UpdateComponentToWorld();
+		Comp->UpdateCachedBounds();
+		Comp->UpdateBounds();
+	});
 
 	for (int32 ComponentIndex = 0; ComponentIndex < CollisionComponents.Num(); ComponentIndex++)
 	{

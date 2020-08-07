@@ -16,7 +16,7 @@ FVector4 GetDepthOfFieldParameters(const FPostProcessSettings& PostProcessSettin
 // ePId_Input0: SceneColor
 // ePId_Input1: SceneDepth
 // derives from TRenderingCompositePassBase<InputCount, OutputCount> 
-class FRCPassPostProcessDOFSetup : public TRenderingCompositePassBase<2, 2>
+class FRCPassPostProcessDOFSetup : public TRenderingCompositePassBase<3, 2>
 {
 public:
 	FRCPassPostProcessDOFSetup(bool bInFarBlur, bool bInNearBlur) 
@@ -41,7 +41,7 @@ private:
 // ePId_Input1: FarBlur from the DOFSetup (possibly further blurred)
 // ePId_Input2: NearBlur from the DOFSetup (possibly further blurred)
 // ePId_Input3: optional SeparateTransluceny
-class FRCPassPostProcessDOFRecombine : public TRenderingCompositePassBase<4, 1>
+class FRCPassPostProcessDOFRecombine : public TRenderingCompositePassBase<5, 1>
 {
 public:
 	// interface FRenderingCompositePass ---------

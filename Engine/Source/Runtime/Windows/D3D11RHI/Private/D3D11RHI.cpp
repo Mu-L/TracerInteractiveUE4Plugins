@@ -593,7 +593,7 @@ FD3DGPUProfiler::FD3DGPUProfiler(class FD3D11DynamicRHI* InD3DRHI) :
 void FD3DGPUProfiler::PushEvent(const TCHAR* Name, FColor Color)
 {
 #if NV_AFTERMATH
-	if(GDX11NVAfterMathEnabled && bTrackingGPUCrashData && GDX11NVAfterMathMarkers)
+	if(GDX11NVAfterMathEnabled && bTrackingGPUCrashData)
 	{
 		uint32 CRC = 0;
 		if (GPUCrashDataDepth < 0 || PushPopStack.Num() < GPUCrashDataDepth)
@@ -633,7 +633,7 @@ void FD3DGPUProfiler::PushEvent(const TCHAR* Name, FColor Color)
 void FD3DGPUProfiler::PopEvent()
 {
 #if NV_AFTERMATH
-	if (GDX11NVAfterMathEnabled && bTrackingGPUCrashData && GDX11NVAfterMathMarkers)
+	if (GDX11NVAfterMathEnabled && bTrackingGPUCrashData)
 	{
 		PushPopStack.Pop(false);
 	}
@@ -663,9 +663,15 @@ bool FD3DGPUProfiler::CheckGpuHeartbeat() const
 			if (Status != GFSDK_Aftermath_Device_Status_Active)
 			{
 				GIsGPUCrashed = true;
-				const TCHAR* AftermathReason[] = { TEXT("Active"), TEXT("Timeout"), TEXT("OutOfMemory"), TEXT("PageFault"), TEXT("Unknown") };
-				check(Status < ARRAYSIZE(AftermathReason));
-				UE_LOG(LogRHI, Error, TEXT("[Aftermath] Status: %s"), AftermathReason[Status]);
+				const TCHAR* AftermathReason[] = { TEXT("Active"), TEXT("Timeout"), TEXT("OutOfMemory"), TEXT("PageFault"), TEXT("Stopped"), TEXT("Reset"), TEXT("Unknown"), TEXT("DmaFault") };
+				if (Status < UE_ARRAY_COUNT(AftermathReason))
+				{
+					UE_LOG(LogRHI, Error, TEXT("[Aftermath] Status: %s"), AftermathReason[Status]);
+				}
+				else
+				{
+					UE_LOG(LogRHI, Error, TEXT("[Aftermath] Invalid Status result value: %u"), Status);
+				}
 				GFSDK_Aftermath_ContextHandle AftermathContext = D3D11RHI->GetNVAftermathContext();
 
 				if (AftermathContext)

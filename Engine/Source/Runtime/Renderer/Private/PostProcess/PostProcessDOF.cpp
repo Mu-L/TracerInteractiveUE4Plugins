@@ -176,7 +176,7 @@ void FRCPassPostProcessDOFSetup::Process(FRenderingCompositePassContext& Context
 	uint32 ScaleFactor = FSceneRenderTargets::Get(Context.RHICmdList).GetBufferSizeXY().X / SrcSize.X;
 
 	FIntRect SrcRect = View.ViewRect / ScaleFactor;
-	FIntRect DestRect = SrcRect / 2;
+	FIntRect DestRect = SrcRect / 4;
 
 	const FSceneRenderTargetItem& DestRenderTarget0 = PassOutputs[0].RequestSurface(Context);
 	const FSceneRenderTargetItem& DestRenderTarget1 = (NumRenderTargets == 2) ? PassOutputs[1].RequestSurface(Context) : FSceneRenderTargetItem();
@@ -282,7 +282,7 @@ FPooledRenderTargetDesc FRCPassPostProcessDOFSetup::ComputeOutputDesc(EPassOutpu
 	FPooledRenderTargetDesc Ret = GetInput(ePId_Input0)->GetOutput()->RenderTargetDesc;
 
 //	Ret.Extent = FIntPoint::DivideAndRoundUp(ret.Extent, 2);
-	Ret.Extent /= 2;
+	Ret.Extent /= 4;
 	Ret.Extent.X = FMath::Max(1, Ret.Extent.X);
 	Ret.Extent.Y = FMath::Max(1, Ret.Extent.Y);
 

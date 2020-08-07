@@ -273,7 +273,10 @@ namespace Gauntlet
 		{
 			if (ECSuspendCount++ == 0)
 			{
-				OutputMessage("<-- Suspend Log Parsing -->");
+				if (CommandUtils.IsBuildMachine)
+				{
+					OutputMessage("<-- Suspend Log Parsing -->");
+				}
 			}
 		}
 
@@ -281,7 +284,10 @@ namespace Gauntlet
 		{
 			if (--ECSuspendCount == 0)
 			{
-				OutputMessage("<-- Resume Log Parsing -->");
+				if (CommandUtils.IsBuildMachine)
+				{
+					OutputMessage("<-- Resume Log Parsing -->");
+				}
 			}
 		}
 
@@ -1222,6 +1228,18 @@ namespace Gauntlet
 				}
 
 				return false;
+			}
+
+			public static bool IsNetworkPath(string InPath)
+			{
+				if (InPath.StartsWith("//") || InPath.StartsWith(@"\\"))
+				{
+					return true;
+				}
+				
+				string RootPath = Path.GetPathRoot(InPath); // get drive's letter
+				DriveInfo driveInfo = new System.IO.DriveInfo(RootPath); // get info about the drive
+				return driveInfo.DriveType == DriveType.Network; // return true if a network drive
 			}
 
 			/// <summary>

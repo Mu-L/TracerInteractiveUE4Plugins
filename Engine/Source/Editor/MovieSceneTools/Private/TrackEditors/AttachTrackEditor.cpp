@@ -534,8 +534,10 @@ struct FLocalTransformEvaluator : ITransformEvaluator
 			if (ActorTransformTrack)
 			{
 				FMovieSceneEvaluationTrack* EvalTrack = MovieSceneToolHelpers::GetEvaluationTrack(Sequencer.Get(), ActorTransformTrack->GetSignature());
-				check(EvalTrack)
-				TransformEval.SetSubtype<TTuple<FMovieSceneEvaluationTrack*, UObject*>>(TTuple<FMovieSceneEvaluationTrack*, UObject*>(EvalTrack, Actor));
+				if (EvalTrack)
+				{
+					TransformEval.SetSubtype<TTuple<FMovieSceneEvaluationTrack*, UObject*>>(TTuple<FMovieSceneEvaluationTrack*, UObject*>(EvalTrack, Actor));
+				}
 			}
 		}
 	}
@@ -632,8 +634,10 @@ struct FWorldTransformEvaluator : ITransformEvaluator
 				if (ActorTransformTrack)
 				{
 					FMovieSceneEvaluationTrack* EvalTrack = MovieSceneToolHelpers::GetEvaluationTrack(Sequencer.Get(), ActorTransformTrack->GetSignature());
-					check(EvalTrack)
-					ActorEval.SetSubtype<TTuple<FMovieSceneEvaluationTrack*, UObject*>>(TTuple<FMovieSceneEvaluationTrack*, UObject*>(EvalTrack, Actor));
+					if (EvalTrack)
+					{
+						ActorEval.SetSubtype<TTuple<FMovieSceneEvaluationTrack*, UObject*>>(TTuple<FMovieSceneEvaluationTrack*, UObject*>(EvalTrack, Actor));
+					}
 				}
 			}
 
