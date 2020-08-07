@@ -126,10 +126,10 @@ public:
 	/** Called once when all files have been finalized. */
 	virtual void BeginExportImpl() { }
 	
-private:
+protected:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UMoviePipeline> CachedPipeline;
-
+private:
 	/** Is this setting currently enabled? Disabled settings are like they never existed. */
 	UPROPERTY()
 	bool bEnabled;

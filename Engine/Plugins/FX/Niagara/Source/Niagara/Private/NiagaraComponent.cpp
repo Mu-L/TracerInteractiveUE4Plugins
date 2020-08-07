@@ -23,6 +23,7 @@
 #include "Engine/CollisionProfile.h"
 #include "PrimitiveSceneInfo.h"
 #include "NiagaraEmitterInstanceBatcher.h"
+#include "NiagaraComponentRemoveFromPool.h"
 
 DECLARE_CYCLE_STAT(TEXT("Sceneproxy create (GT)"), STAT_NiagaraCreateSceneProxy, STATGROUP_Niagara);
 DECLARE_CYCLE_STAT(TEXT("Component Tick (GT)"), STAT_NiagaraComponentTick, STATGROUP_Niagara);
@@ -515,10 +516,15 @@ void UNiagaraComponent::SetEmitterEnable(FName EmitterName, bool bNewEnableState
 void UNiagaraComponent::ReleaseToPool()
 {
 	if (PoolingMethod != ENCPoolMethod::ManualRelease)
-	{
-		UE_LOG(LogNiagara, Warning, TEXT("Manually releasing a PSC to the pool that was not spawned with ENCPoolMethod::ManualRelease. Asset=%s Component=%s"),
-			Asset ? *Asset->GetPathName() : TEXT("NULL"), *GetPathName()
-		);
+	{		
+		static auto CvarPoolEnabled = IConsoleManager::Get().FindConsoleVariable(TEXT("FX.NiagaraComponentPool.Enable"));
+
+		if (CvarPoolEnabled && CvarPoolEnabled->GetInt() != 0)//Only emit this warning if pooling is enabled. If it's not, all components will have PoolingMethod none.
+		{	
+			UE_LOG(LogNiagara, Warning, TEXT("Manually releasing a PSC to the pool that was not spawned with ENCPoolMethod::ManualRelease. Asset=%s Component=%s"),
+				Asset ? *Asset->GetPathName() : TEXT("NULL"), *GetPathName()
+			);
+		}
 		return;
 	}
 
@@ -987,7 +993,8 @@ void UNiagaraComponent::DeactivateInternal(bool bIsScalabilityCull /* = false */
 		SystemInstance->Deactivate();
 
 		// We are considered active until we are complete
-		SetActiveFlag(!SystemInstance->IsComplete());
+		// Note: Deactivate call can finalize -> complete the system -> release to pool -> unregister which will result in a nullptr for the SystemInstance
+		SetActiveFlag(SystemInstance ? !SystemInstance->IsComplete() : false);
 	}
 	else
 	{
@@ -1161,6 +1168,13 @@ void UNiagaraComponent::DestroyInstance()
 
 void UNiagaraComponent::OnRegister()
 {
+	if (IsActive() && SystemInstance.IsValid() == false)
+	{
+		// If we're active but don't have an active system instance clear the active flag so that the component
+		// gets activated.
+		SetActiveFlag(false);
+	}
+
 	if (bAutoManageAttachment && !IsActive())
 	{
 		// Detach from current parent, we are supposed to wait for activation.
@@ -1211,6 +1225,28 @@ void UNiagaraComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
 	//UE_LOG(LogNiagara, Log, TEXT("OnComponentDestroyed %p %p"), this, SystemInstance.Get());
 	//DestroyInstance();//Can't do this here as we can call this from inside the system instance currently during completion 
 
+	if (PoolingMethod != ENCPoolMethod::None)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			UE_LOG(LogNiagara, Warning, TEXT("UNiagaraComponent::OnComponentDestroyed: Component (%p - %s) Asset (%s) is still pooled (%d) while destroying!\n"), this, *GetFullNameSafe(this), *GetFullNameSafe(Asset), PoolingMethod);
+			if (FNiagaraWorldManager* WorldManager = FNiagaraWorldManager::Get(World))
+			{
+				if (UNiagaraComponentPool* ComponentPool = WorldManager->GetComponentPool())
+				{
+					GNiagaraComponentRemoveFromPool.ExecuteIfBound(ComponentPool, this);
+				}
+			}
+		}
+		else
+		{
+			UE_LOG(LogNiagara, Warning, TEXT("UNiagaraComponent::OnComponentDestroyed: Component (%p - %s) Asset (%s) is still pooled (%d) while destroying and world it nullptr!\n"), this, *GetFullNameSafe(this), *GetFullNameSafe(Asset), PoolingMethod);
+		}
+
+		// Set pooling method to none as we are destroyed and can not go into the pool after this point
+		PoolingMethod = ENCPoolMethod::None;
+	}
+
 	UnregisterWithScalabilityManager();
 
 	Super::OnComponentDestroyed(bDestroyingHierarchy);
@@ -1243,6 +1279,28 @@ void UNiagaraComponent::OnUnregister()
 void UNiagaraComponent::BeginDestroy()
 {
 	//UE_LOG(LogNiagara, Log, TEXT("UNiagaraComponent::BeginDestroy(): %0xP - %d - %s\n"), this, ScalabilityManagerHandle, *GetAsset()->GetFullName());
+
+	if (PoolingMethod != ENCPoolMethod::None)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			UE_LOG(LogNiagara, Warning, TEXT("UNiagaraComponent::BeginDestroy: Component (%p - %s) Asset (%s) is still pooled (%d) while destroying!\n"), this, *GetFullNameSafe(this), *GetFullNameSafe(Asset), PoolingMethod);
+			if (FNiagaraWorldManager* WorldManager = FNiagaraWorldManager::Get(World))
+			{
+				if (UNiagaraComponentPool* ComponentPool = WorldManager->GetComponentPool())
+				{
+					GNiagaraComponentRemoveFromPool.ExecuteIfBound(ComponentPool, this);
+				}
+			}
+		}
+		else
+		{
+			UE_LOG(LogNiagara, Warning, TEXT("UNiagaraComponent::BeginDestroy: Component (%p - %s) Asset (%s) is still pooled (%d) while destroying and world it nullptr!\n"), this, *GetFullNameSafe(this), *GetFullNameSafe(Asset), PoolingMethod);
+		}
+
+		// Set pooling method to none as we are destroyed and can not go into the pool after this point
+		PoolingMethod = ENCPoolMethod::None;
+	}
 
 	//By now we will have already unregisted with the scalability manger. Either directly in OnComponentDestroyed, or via the post GC callbacks in the manager it's self in the case of someone calling MarkPendingKill() directly on a component.
 	ScalabilityManagerHandle = INDEX_NONE;

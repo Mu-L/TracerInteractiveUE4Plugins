@@ -442,7 +442,7 @@ void FOculusInput::SendControllerEvents()
 								MessageHandler->OnControllerAnalog(bIsLeft ? EKeys::OculusTouch_Left_Thumbstick_X.GetFName() : EKeys::OculusTouch_Right_Thumbstick_X.GetFName(), ControllerPair.UnrealControllerIndex, State.ThumbstickAxes.X);
 								if (bGoKeysMappedToTouch)
 								{
-									MessageHandler->OnControllerAnalog(bIsLeft ? EKeys::OculusGo_Left_Trackpad_X.GetFName() : EKeys::OculusGo_Right_Trackpad_X.GetFName(), ControllerPair.UnrealControllerIndex, State.ThumbstickAxes.Y);
+									MessageHandler->OnControllerAnalog(bIsLeft ? EKeys::OculusGo_Left_Trackpad_X.GetFName() : EKeys::OculusGo_Right_Trackpad_X.GetFName(), ControllerPair.UnrealControllerIndex, State.ThumbstickAxes.X);
 								}
 							}
 
@@ -459,13 +459,13 @@ void FOculusInput::SendControllerEvents()
 							if (TouchpadValue.x != State.TouchpadAxes.X)
 							{
 								State.TouchpadAxes.X = TouchpadValue.x;
-								MessageHandler->OnControllerAnalog(bIsLeft ? EKeys::OculusGo_Left_Trackpad_X.GetFName() : EKeys::OculusGo_Right_Trackpad_X.GetFName(), ControllerPair.UnrealControllerIndex, State.ThumbstickAxes.X);
+								MessageHandler->OnControllerAnalog(bIsLeft ? EKeys::OculusGo_Left_Trackpad_X.GetFName() : EKeys::OculusGo_Right_Trackpad_X.GetFName(), ControllerPair.UnrealControllerIndex, State.TouchpadAxes.X);
 							}
 
 							if (TouchpadValue.y != State.TouchpadAxes.Y)
 							{
 								State.TouchpadAxes.Y = TouchpadValue.y;
-								MessageHandler->OnControllerAnalog(bIsLeft ? EKeys::OculusGo_Left_Trackpad_Y.GetFName() : EKeys::OculusGo_Right_Trackpad_Y.GetFName(), ControllerPair.UnrealControllerIndex, State.ThumbstickAxes.Y);
+								MessageHandler->OnControllerAnalog(bIsLeft ? EKeys::OculusGo_Left_Trackpad_Y.GetFName() : EKeys::OculusGo_Right_Trackpad_Y.GetFName(), ControllerPair.UnrealControllerIndex, State.TouchpadAxes.Y);
 							}
 
 							for (int32 ButtonIndex = 0; ButtonIndex < (int32)EOculusTouchControllerButton::TotalButtonCount; ++ButtonIndex)

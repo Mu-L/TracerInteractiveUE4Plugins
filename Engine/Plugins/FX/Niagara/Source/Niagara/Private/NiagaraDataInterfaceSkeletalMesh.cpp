@@ -1324,6 +1324,7 @@ void UNiagaraDataInterfaceSkeletalMesh::ProvidePerInstanceDataForRenderThread(vo
 
 USkeletalMesh* UNiagaraDataInterfaceSkeletalMesh::GetSkeletalMesh(UNiagaraComponent* OwningComponent, TWeakObjectPtr<USceneComponent>& SceneComponent, USkeletalMeshComponent*& FoundSkelComp, FNDISkeletalMesh_InstanceData* InstData)
 {
+	FoundSkelComp = nullptr;
 	USkeletalMesh* Mesh = nullptr;
 	if (MeshUserParameter.Parameter.IsValid() && InstData)
 	{
@@ -1445,7 +1446,8 @@ USkeletalMesh* UNiagaraDataInterfaceSkeletalMesh::GetSkeletalMesh(UNiagaraCompon
 	}
 
 #if WITH_EDITORONLY_DATA
-	if (!Mesh && PreviewMesh)
+	// Don't fall back on the preview mesh if we have a valid skeletal mesh component referenced
+	if (!Mesh && !FoundSkelComp && PreviewMesh)
 	{
 		Mesh = PreviewMesh;
 	}

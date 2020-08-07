@@ -1097,10 +1097,10 @@ static bool IsGaussianActive(FPostprocessContext& Context)
 	return true;
 }
 
-static bool AddPostProcessDepthOfFieldGaussian(FPostprocessContext& Context, FRenderingCompositeOutputRef& VelocityInput, FRenderingCompositeOutputRef& SeparateTranslucencyRef)
+static bool AddPostProcessDepthOfFieldGaussian(FPostprocessContext& Context, FRenderingCompositeOutputRef& VelocityInput, FRenderingCompositeOutputRef& SeparateTranslucencyRef, FRenderingCompositeOutputRef& SunShaftAndDof)
 {
 	// GaussianDOFPass performs Gaussian setup, blur and recombine.
-	auto GaussianDOFPass = [&Context, &VelocityInput](FRenderingCompositeOutputRef& SeparateTranslucency, float FarSize, float NearSize)
+	auto GaussianDOFPass = [&Context, &VelocityInput, &SunShaftAndDof](FRenderingCompositeOutputRef& SeparateTranslucency, float FarSize, float NearSize)
 	{
 		// GenerateGaussianDOFBlur produces a blurred image from setup or potentially from taa result.
 		auto GenerateGaussianDOFBlur = [&Context, &VelocityInput](FRenderingCompositeOutputRef& DOFSetup, bool bFarPass, float BlurSize)
@@ -1116,19 +1116,13 @@ static bool AddPostProcessDepthOfFieldGaussian(FPostprocessContext& Context, FRe
 		const bool bFar = FarSize > 0.0f;
 		const bool bNear = NearSize > 0.0f;
 		const bool bCombinedNearFarPass = bFar && bNear;
-		const bool bMobileQuality = Context.View.FeatureLevel < ERHIFeatureLevel::SM5;
 
 		FRenderingCompositeOutputRef SetupInput(Context.FinalOutput);
-		if (bMobileQuality)
-		{
-			const uint32 SetupInputDownsampleFactor = 1;
-
-			SetupInput = AddDownsamplePass(Context.Graph, TEXT("GaussianSetupHalfRes"), SetupInput, SetupInputDownsampleFactor, EDownsampleQuality::High, EDownsampleFlags::ForceRaster, PF_FloatRGBA);
-		}
 
 		FRenderingCompositePass* DOFSetupPass = Context.Graph.RegisterPass(new(FMemStack::Get()) FRCPassPostProcessDOFSetup(bFar, bNear));
 		DOFSetupPass->SetInput(ePId_Input0, FRenderingCompositeOutputRef(SetupInput));
 		DOFSetupPass->SetInput(ePId_Input1, FRenderingCompositeOutputRef(Context.SceneDepth));
+		DOFSetupPass->SetInput(ePId_Input2, SunShaftAndDof);
 		FRenderingCompositeOutputRef DOFSetupFar(DOFSetupPass);
 		FRenderingCompositeOutputRef DOFSetupNear(DOFSetupPass, bCombinedNearFarPass ? ePId_Output1 : ePId_Output0);
 
@@ -1148,6 +1142,7 @@ static bool AddPostProcessDepthOfFieldGaussian(FPostprocessContext& Context, FRe
 		GaussianDOFRecombined->SetInput(ePId_Input1, DOFFarBlur);
 		GaussianDOFRecombined->SetInput(ePId_Input2, DOFNearBlur);
 		GaussianDOFRecombined->SetInput(ePId_Input3, SeparateTranslucency);
+		GaussianDOFRecombined->SetInput(ePId_Input4, SunShaftAndDof);
 
 		Context.FinalOutput = FRenderingCompositeOutputRef(GaussianDOFRecombined);
 	};
@@ -1413,7 +1408,7 @@ void FPostProcessing::ProcessES2(FRHICommandListImmediate& RHICmdList, FScene* S
 					Pass->SetInput(ePId_Input0, Context.FinalOutput);
 					Pass->SetInput(ePId_Input1, PostProcessSunShaftAndDof);
 
-					bool bIsValidVariation = IsValidBloomSetupVariation(bUseBloom, bUseSun, bUseDof, bHasEyeAdaptationPass);
+					bool bIsValidVariation = IsValidBloomSetupVariation(bUseBloom, bUseSun, bUseMobileDof, bHasEyeAdaptationPass);
 
 					if (!bIsValidVariation || bUseBloom)
 					{
@@ -1462,6 +1457,7 @@ void FPostProcessing::ProcessES2(FRHICommandListImmediate& RHICmdList, FScene* S
 							FRenderingCompositePass* Pass = Context.Graph.RegisterPass(new(FMemStack::Get()) FRCPassPostProcessDofDownES2(FinalOutputViewRect, bViewRectSource));
 							Pass->SetInput(ePId_Input0, Context.FinalOutput);
 							Pass->SetInput(ePId_Input1, PostProcessNear);
+							Pass->SetInput(ePId_Input2, PostProcessSunShaftAndDof);
 							PostProcessDofDown = FRenderingCompositeOutputRef(Pass);
 						}
 
@@ -1501,7 +1497,7 @@ void FPostProcessing::ProcessES2(FRHICommandListImmediate& RHICmdList, FScene* S
 						if(bDepthOfField)
 						{
 							FRenderingCompositeOutputRef DummySeparateTranslucency;
-							AddPostProcessDepthOfFieldGaussian(Context, NoVelocityRef, DummySeparateTranslucency);
+							AddPostProcessDepthOfFieldGaussian(Context, NoVelocityRef, DummySeparateTranslucency, PostProcessSunShaftAndDof);
 						}
 					}
 				}

@@ -140,6 +140,7 @@ FDatasmithMaterialIDElementImpl::FDatasmithMaterialIDElementImpl(const TCHAR* In
 	: FDatasmithElementImpl( InName, EDatasmithElementType::MaterialId )
 	, Id( 0 )
 {
+	FDatasmithMaterialIDElementImpl::SetName(InName); // no virtual call from ctr
 }
 
 FDatasmithHierarchicalInstancedStaticMeshActorElementImpl::FDatasmithHierarchicalInstancedStaticMeshActorElementImpl(const TCHAR* InName)

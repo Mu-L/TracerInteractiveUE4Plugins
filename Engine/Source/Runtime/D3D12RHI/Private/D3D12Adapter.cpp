@@ -168,14 +168,6 @@ void FD3D12Adapter::Initialize(FD3D12DynamicRHI* RHI)
 }
 
 
-/** Callback function called when the GPU crashes, when Aftermath is enabled */
-static void D3D12AftermathCrashCallback(const void* InGPUCrashDump, const size_t InGPUCrashDumpSize, void* InUserData)
-{
-	// Forward to shared function which is also called when DEVICE_LOST return value is given
-	D3D12RHI::TerminateOnGPUCrash(nullptr, InGPUCrashDump, InGPUCrashDumpSize);
-}
-
-
 void FD3D12Adapter::CreateRootDevice(bool bWithDebug)
 {
 	const bool bAllowVendorDevice = !FParse::Param(FCommandLine::Get(), TEXT("novendordevice"));
@@ -213,40 +205,6 @@ void FD3D12Adapter::CreateRootDevice(bool bWithDebug)
 				GPUCrashDebuggingMode = (ED3D12GPUCrashDebugginMode)GPUCrashDebuggingModeValue;
 		}
 	}
-
-#if NV_AFTERMATH
-	if (IsRHIDeviceNVIDIA())
-	{
-		// GPUcrash dump handler must be attached prior to device creation
-		static IConsoleVariable* GPUCrashDump = IConsoleManager::Get().FindConsoleVariable(TEXT("r.GPUCrashDump"));
-		if (GPUCrashDebuggingMode == ED3D12GPUCrashDebugginMode::Full || FParse::Param(FCommandLine::Get(), TEXT("gpucrashdump")) || (GPUCrashDump && GPUCrashDump->GetInt()))
-		{
-			HANDLE CurrentThread = ::GetCurrentThread();
-
-			GFSDK_Aftermath_Result Result = GFSDK_Aftermath_EnableGpuCrashDumps(
-				GFSDK_Aftermath_Version_API,
-				GFSDK_Aftermath_GpuCrashDumpFeatureFlags_Default,
-				D3D12AftermathCrashCallback,
-				nullptr, //Shader debug callback
-				nullptr, // description callback
-				CurrentThread); // user data
-
-			if (Result == GFSDK_Aftermath_Result_Success)
-			{
-				UE_LOG(LogD3D12RHI, Log, TEXT("[Aftermath] Aftermath crash dumping enabled"));
-
-				// enable core Aftermath to set the init flags
-				GDX12NVAfterMathEnabled = 1;
-			}
-			else
-			{
-				UE_LOG(LogD3D12RHI, Log, TEXT("[Aftermath] Aftermath crash dumping failed to initialize (%x)"), Result);
-
-				GDX12NVAfterMathEnabled = 0;
-			}
-		}
-	}
-#endif
 
 	if (bWithDebug)
 	{
@@ -424,44 +382,17 @@ void FD3D12Adapter::CreateRootDevice(bool bWithDebug)
 	{
 		if (IsRHIDeviceNVIDIA() && bAllowVendorDevice)
 		{
-			static IConsoleVariable* MarkersCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.GPUCrashDebugging.Aftermath.Markers"));
-			static IConsoleVariable* CallstackCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.GPUCrashDebugging.Aftermath.Callstack"));
-			static IConsoleVariable* ResourcesCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.GPUCrashDebugging.Aftermath.ResourceTracking"));
-			static IConsoleVariable* TrackAllCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.GPUCrashDebugging.Aftermath.TrackAll"));
-
-			const bool bEnableMarkers = FParse::Param(FCommandLine::Get(), TEXT("aftermathmarkers")) || (MarkersCVar && MarkersCVar->GetInt());
-			const bool bEnableCallstack = FParse::Param(FCommandLine::Get(), TEXT("aftermathcallstack")) || (CallstackCVar && CallstackCVar->GetInt());
-			const bool bEnableResources = FParse::Param(FCommandLine::Get(), TEXT("aftermathresources")) || (ResourcesCVar && ResourcesCVar->GetInt());
-			const bool bEnableAll = FParse::Param(FCommandLine::Get(), TEXT("aftermathall")) || (TrackAllCVar && TrackAllCVar->GetInt());
-
-			uint32 Flags = GFSDK_Aftermath_FeatureFlags_Minimum;
-
-			Flags |= bEnableMarkers ? GFSDK_Aftermath_FeatureFlags_EnableMarkers : 0;
-			Flags |= bEnableCallstack ? GFSDK_Aftermath_FeatureFlags_CallStackCapturing : 0;
-			Flags |= bEnableResources ? GFSDK_Aftermath_FeatureFlags_EnableResourceTracking : 0;
-			Flags |= bEnableAll ? GFSDK_Aftermath_FeatureFlags_Maximum : 0;
-
-			GFSDK_Aftermath_Result Result = GFSDK_Aftermath_DX12_Initialize(GFSDK_Aftermath_Version_API, (GFSDK_Aftermath_FeatureFlags)Flags, RootDevice);
+			GFSDK_Aftermath_Result Result = GFSDK_Aftermath_DX12_Initialize(GFSDK_Aftermath_Version_API, GFSDK_Aftermath_FeatureFlags_Maximum, RootDevice);
 			if (Result == GFSDK_Aftermath_Result_Success)
 			{
 				UE_LOG(LogD3D12RHI, Log, TEXT("[Aftermath] Aftermath enabled and primed"));
+				SetEmitDrawEvents(true);
+				GDX12NVAfterMathEnabled = 1;
 			}
 			else
 			{
 				UE_LOG(LogD3D12RHI, Log, TEXT("[Aftermath] Aftermath enabled but failed to initialize (%x)"), Result);
 				GDX12NVAfterMathEnabled = 0;
-			}
-
-			if (GDX12NVAfterMathEnabled && (bEnableMarkers || bEnableAll))
-			{
-				SetEmitDrawEvents(true);
-				GDX12NVAfterMathMarkers = 1;
-			}
-
-			GDX12NVAfterMathTrackResources = bEnableResources || bEnableAll;
-			if (GDX12NVAfterMathEnabled && GDX12NVAfterMathTrackResources)
-			{
-				UE_LOG(LogD3D12RHI, Log, TEXT("[Aftermath] Aftermath resource tracking enabled"));
 			}
 		}
 		else
@@ -718,6 +649,15 @@ void FD3D12Adapter::InitializeDevices()
 		ResourceHeapTier = D3D12Caps.ResourceHeapTier;
 		ResourceBindingTier = D3D12Caps.ResourceBindingTier;
 
+#if D3D12_RHI_RAYTRACING
+		if (RootRayTracingDevice)
+		{
+			// Make sure we have at least tier 2 bindings - required for static samplers used by DXR root signatures
+			// See: UE-93879 for a better fix
+			check(ResourceBindingTier > D3D12_RESOURCE_BINDING_TIER_1);
+		}
+#endif
+
 #if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 		D3D12_FEATURE_DATA_D3D12_OPTIONS2 D3D12Caps2 = {};
 		if (FAILED(RootDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS2, &D3D12Caps2, sizeof(D3D12Caps2))))
@@ -933,6 +873,28 @@ void FD3D12Adapter::Cleanup()
 	DispatchIndirectCommandSignature.SafeRelease();
 
 	FenceCorePool.Destroy();
+}
+
+void FD3D12Adapter::CreateDXGIFactory(bool bWithDebug)
+{
+	typedef HRESULT(WINAPI *FCreateDXGIFactory2)(UINT, REFIID, void **);
+	FCreateDXGIFactory2 CreateDXGIFactory2FnPtr = nullptr;
+
+#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
+	// Dynamically load this otherwise Win7 fails to boot as it's missing on that DLL
+	HMODULE DxgiDLL = (HMODULE)FPlatformProcess::GetDllHandle(TEXT("dxgi.dll"));
+	check(DxgiDLL);
+#pragma warning(push)
+#pragma warning(disable: 4191) // disable the "unsafe conversion from 'FARPROC' to 'blah'" warning
+	CreateDXGIFactory2FnPtr = (FCreateDXGIFactory2)(GetProcAddress(DxgiDLL, "CreateDXGIFactory2"));
+	check(CreateDXGIFactory2FnPtr);
+#pragma warning(pop)
+	FPlatformProcess::FreeDllHandle(DxgiDLL);
+
+	uint32 Flags = bWithDebug ? DXGI_CREATE_FACTORY_DEBUG : 0;
+	VERIFYD3D12RESULT(CreateDXGIFactory2FnPtr(Flags, IID_PPV_ARGS(DxgiFactory.GetInitReference())));
+	VERIFYD3D12RESULT(DxgiFactory->QueryInterface(IID_PPV_ARGS(DxgiFactory2.GetInitReference())));
+#endif
 }
 
 void FD3D12Adapter::EndFrame()

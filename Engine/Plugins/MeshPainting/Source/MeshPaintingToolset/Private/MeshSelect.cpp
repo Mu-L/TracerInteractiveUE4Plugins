@@ -91,7 +91,7 @@ void UMeshClickTool::OnClicked(const FInputDeviceRay& ClickPos)
 		for (UMeshComponent* MeshComponent : CachedClickedComponents)
 		{
 			TSharedPtr<IMeshPaintComponentAdapter> MeshAdapter = MeshToolManager->GetAdapterForComponent(MeshComponent);
-			if (MeshComponent->IsVisible() && MeshAdapter.IsValid() && MeshAdapter->IsValid() && IsMeshAdapterSupported(MeshAdapter))
+			if (MeshComponent && MeshComponent->IsVisible() && MeshAdapter.IsValid() && MeshAdapter->IsValid() && IsMeshAdapterSupported(MeshAdapter))
 			{
 				MeshToolManager->AddPaintableMeshComponent(MeshComponent);
 				MeshAdapter->OnAdded();

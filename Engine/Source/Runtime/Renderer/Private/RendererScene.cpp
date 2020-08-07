@@ -1062,6 +1062,11 @@ void FPersistentUniformBuffers::UpdateViewUniformBufferImmediate(const FViewUnif
 	CachedView = nullptr;
 }
 
+void FPersistentUniformBuffers::InvalidateCachedView()
+{
+	CachedView = nullptr;
+}
+
 class FAsyncCreateLightPrimitiveInteractionsTask : public FNonAbandonableTask
 {
 	TSet<FPrimitiveSceneInfo*> PendingPrimitives;

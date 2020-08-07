@@ -465,7 +465,7 @@ void UMoviePipelineDeferredPassBase::OnBackbufferSampleReady(TArray<FFloat16Colo
 
 	MoviePipeline::FSampleRenderThreadParams AccumulationParams;
 	{
-		AccumulationParams.OutputMerger = GetPipeline()->OutputBuilder;
+		AccumulationParams.OutputMerger = CachedPipeline.GetEvenIfUnreachable()->OutputBuilder;
 		AccumulationParams.ImageAccumulator = ImageTileAccumulator[0];
 		AccumulationParams.SampleState = InSampleState;
 		AccumulationParams.bAccumulateAlpha = bAccumulateAlpha;

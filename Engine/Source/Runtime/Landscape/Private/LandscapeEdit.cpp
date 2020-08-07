@@ -4918,7 +4918,7 @@ void ALandscape::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEv
 		}
 
 		// Update normals if DrawScale3D is changed
-		if (PropertyName == FName(TEXT("RelativeScale3D")))
+		if (MemberPropertyName == FName(TEXT("RelativeScale3D")))
 		{
 			FLandscapeEditDataInterface LandscapeEdit(Info);
 			LandscapeEdit.RecalculateNormals();
@@ -6969,6 +6969,13 @@ bool ALandscapeProxy::LandscapeImportHeightmapFromRenderTarget(UTextureRenderTar
 		return false;
 	}
 
+	if (Landscape->HasLayersContent())
+	{
+		//todo: Support an edit layer name input parameter to support import to edit layers.
+		FMessageLog("Blueprint").Error(LOCTEXT("LandscapeImportHeightmapFromRenderTarget_LandscapeLayersNotSupported", "LandscapeImportHeightmapFromRenderTarget: Cannot import to landscape with Edit Layers enabled."));
+		return false;
+	}
+
 	int32 MinX, MinY, MaxX, MaxY;
 	ULandscapeInfo* LandscapeInfo = Landscape->GetLandscapeInfo();
 
@@ -7192,6 +7199,13 @@ bool ALandscapeProxy::LandscapeImportWeightmapFromRenderTarget(UTextureRenderTar
 	ALandscape* Landscape = GetLandscapeActor();
 	if (Landscape != nullptr)
 	{
+		if (Landscape->HasLayersContent())
+		{
+			//todo: Support an edit layer name input parameter to support import to edit layers.
+			FMessageLog("Blueprint").Error(LOCTEXT("LandscapeImportWeightmapFromRenderTarget_LandscapeLayersNotSupported", "LandscapeImportWeightmapFromRenderTarget: Cannot import to landscape with Edit Layers enabled."));
+			return false;
+		}
+
 		ULandscapeInfo* LandscapeInfo = Landscape->GetLandscapeInfo();
 
 		int32 MinX, MinY, MaxX, MaxY;

@@ -866,7 +866,13 @@ bool FLevelEditorViewportClient::AttemptApplyObjAsMaterialToSurface( UObject* Ob
 
 
 		UModel* Model = ModelHitProxy->GetModel();
-	
+		
+		// If our model doesn't exist or is part of a level that is being destroyed
+		if( !Model || (Model && Model->GetOuter()->IsPendingKillOrUnreachable()))
+		{
+			return false;
+		}
+
 		TArray<uint32> SelectedSurfaces;
 
 		bool bDropedOntoSelectedSurface = false;
@@ -1430,7 +1436,7 @@ bool FLevelEditorViewportClient::DropObjectsAtCoordinates(int32 MouseX, int32 Mo
 				TargetMaterialSlot = -1;
 			}
 
-			if (TargetActor != NULL)
+			if (TargetActor != nullptr && !TargetActor->GetWorld()->IsPendingKillOrUnreachable())
 			{
 				FNavigationLockContext LockNavigationUpdates(TargetActor->GetWorld(), ENavigationLockReason::SpawnOnDragEnter, bCreateDropPreview);
 
@@ -4577,6 +4583,8 @@ void FLevelEditorViewportClient::DrawBrushDetails(const FSceneView* View, FPrimi
 	{
 		// Draw translucent polygons on brushes and volumes
 
+		PDI->SetHitProxy(nullptr);
+
 		for (TActorIterator<ABrush> It(GetWorld()); It; ++It)
 		{
 			ABrush* Brush = *It;
@@ -4618,7 +4626,7 @@ void FLevelEditorViewportClient::DrawBrushDetails(const FSceneView* View, FPrimi
 				PDI->RegisterDynamicResource(MaterialProxy);
 
 				// Flush the mesh triangles.
-				MeshBuilder.Draw(PDI, Brush->ActorToWorld().ToMatrixWithScale(), MaterialProxy, SDPG_World, 0.f);
+				MeshBuilder.Draw(PDI, Brush->ActorToWorld().ToMatrixWithScale(), MaterialProxy, SDPG_World);
 			}
 		}
 	}
@@ -4672,6 +4680,7 @@ void FLevelEditorViewportClient::UpdateAudioListener(const FSceneView& View)
 		if (FAudioDevice* AudioDevice = ViewportWorld->GetAudioDeviceRaw())
 		{
 			FVector ViewLocation = GetViewLocation();
+			FRotator ViewRotation = GetViewRotation();
 
 			const bool bStereoRendering = GEngine->XRSystem.IsValid() && GEngine->IsStereoscopic3D( Viewport );
 			if( bStereoRendering && GEngine->XRSystem->IsHeadTrackingAllowed() )
@@ -4683,9 +4692,9 @@ void FLevelEditorViewportClient::UpdateAudioListener(const FSceneView& View)
 				// NOTE: The RoomSpaceHeadLocation has already been adjusted for WorldToMetersScale
 				const FVector WorldSpaceHeadLocation = GetViewLocation() + GetViewRotation().RotateVector( RoomSpaceHeadLocation );
 				ViewLocation = WorldSpaceHeadLocation;
-			}
 
-			const FRotator& ViewRotation = GetViewRotation();
+				ViewRotation = (ViewRotation.Quaternion() * RoomSpaceHeadOrientation).Rotator();
+			}
 
 			FTransform ListenerTransform(ViewRotation);
 			ListenerTransform.SetLocation(ViewLocation);

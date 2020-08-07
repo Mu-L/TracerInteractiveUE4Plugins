@@ -39,10 +39,8 @@ DECLARE_LOG_CATEGORY_EXTERN(LogD3D11RHI, Log, All);
 #if NV_AFTERMATH
 #define GFSDK_Aftermath_WITH_DX11 1
 #include "GFSDK_Aftermath.h"
-#include "GFSDK_Aftermath_GpuCrashdump.h"
 #undef GFSDK_Aftermath_WITH_DX11
 extern bool GDX11NVAfterMathEnabled;
-extern bool GDX11NVAfterMathMarkers;
 #endif
 
 #if INTEL_METRICSDISCOVERY
@@ -863,6 +861,8 @@ protected:
 	uint32 UAVBindFirst;
 	uint32 UAVBindCount;
 	uint32 UAVSChanged;
+	uint32 CurrentRTVOverlapMask;
+	uint32 CurrentUAVMask;
 
 	TRefCountPtr<ID3D11DepthStencilView> CurrentDepthStencilTarget;
 	TRefCountPtr<FD3D11TextureBase> CurrentDepthTexture;
@@ -1000,7 +1000,7 @@ protected:
 	virtual void CommitComputeShaderConstants();
 
 	template <class ShaderType> void SetResourcesFromTables(const ShaderType* RESTRICT);
-	template <class ShaderType> int32 SetUAVPSResourcesFromTables(const ShaderType* RESTRICT);
+	template <class ShaderType> int32 SetUAVPSResourcesFromTables(const ShaderType* RESTRICT, bool bForceInvalidate);
 	void CommitGraphicsResourceTables();
 	void CommitComputeResourceTables(FD3D11ComputeShader* ComputeShader);
 
