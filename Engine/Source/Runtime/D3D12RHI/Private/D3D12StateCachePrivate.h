@@ -473,7 +473,7 @@ protected:
 			PipelineState.Common.CurrentShaderUAVCounts[Traits::Frequency]     = (Shader) ? Shader->ResourceCounts.NumUAVs     : 0;
 		
 			// Shader changed so its resource table is dirty
-			this->CmdContext->DirtyUniformBuffers[Traits::Frequency] = 0xffff;
+			SetDirtyUniformBuffers(this->CmdContext, Traits::Frequency);
 		}
 	}
 
@@ -507,11 +507,28 @@ protected:
 		if (bNeedSetPSO)
 		{
 			check(CurrentPSO);
-			this->CmdContext->CommandListHandle->SetPipelineState(CurrentPSO);
+			SetPipelineState(this->CmdContext, CurrentPSO);
 			PipelineState.Common.bNeedSetPSO = false;
 		}
 	}
 
+private:
+
+	// SetDirtyUniformBuffers and SetPipelineState helper functions are required
+	// to allow using FD3D12CommandContext type which is not defined at this point.
+	// Making ContextType a template parameter delays instantiation of these functions.
+
+	template <typename ContextType>
+	static void SetDirtyUniformBuffers(ContextType* Context, EShaderFrequency Frequency)
+	{
+		Context->DirtyUniformBuffers[Frequency] = 0xffff;
+	}
+
+	template <typename ContextType>
+	static void SetPipelineState(ContextType* Context, ID3D12PipelineState* State)
+	{
+		Context->CommandListHandle->SetPipelineState(State);
+	}
 
 public:
 

@@ -229,6 +229,25 @@ namespace AutomationTool
 		}
 
 		/// <summary>
+		/// Get properties to include in tracing info
+		/// </summary>
+		/// <param name="Span">The span to add metadata to</param>
+		/// <param name="Prefix">Prefix for all metadata keys</param>
+		public override void GetTraceMetadata(ITraceSpan Span, string Prefix)
+		{
+			base.GetTraceMetadata(Span, Prefix);
+
+			Span.AddMetadata(Prefix + "target.name", Parameters.Target);
+			Span.AddMetadata(Prefix + "target.config", Parameters.Configuration.ToString());
+			Span.AddMetadata(Prefix + "target.platform", Parameters.Platform.ToString());
+
+			if (Parameters.Project != null)
+			{
+				Span.AddMetadata(Prefix + "target.project", Parameters.Project);
+			}
+		}
+
+		/// <summary>
 		/// Output this task out to an XML writer.
 		/// </summary>
 		public override void Write(XmlWriter Writer)

@@ -1342,7 +1342,6 @@ void FPostProcessing::ProcessES2(FRHICommandListImmediate& RHICmdList, FScene* S
 			bool bUseSun = View.bLightShaftUse;
 			
 			bool bUseBloom = View.FinalPostProcessSettings.BloomIntensity > 0.0f;
-			bool bUseVignette = View.FinalPostProcessSettings.VignetteIntensity > 0.0f;
 
 			bool bUseBasicEyeAdaptation = bUseEyeAdaptation && (AutoExposureMethod == EAutoExposureMethod::AEM_Basic) &&
 				// Skip if we don't have any exposure range to generate (eye adaptation will clamp).
@@ -1376,7 +1375,7 @@ void FPostProcessing::ProcessES2(FRHICommandListImmediate& RHICmdList, FScene* S
 			}
 
 			// Optional fixed pass processes
-			if (bUsePost && (bUseSun | bUseDof | bUseBloom | bUseVignette | bUseBasicEyeAdaptation | bUseHistogramEyeAdaptation))
+			if (bUsePost && (bUseSun | bUseDof | bUseBloom | bUseBasicEyeAdaptation | bUseHistogramEyeAdaptation))
 			{
 				if (bUseSun || bUseDof)
 				{
@@ -1617,7 +1616,7 @@ void FPostProcessing::ProcessES2(FRHICommandListImmediate& RHICmdList, FScene* S
 					}
 				}
 
-				if(bUseSun | bUseVignette | bUseBloom)
+				if(bUseSun | bUseBloom)
 				{
 					FRenderingCompositeOutputRef PostProcessSunMerge;
 					{

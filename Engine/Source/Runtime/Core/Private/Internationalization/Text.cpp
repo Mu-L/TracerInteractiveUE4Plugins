@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Internationalization/Text.h"
+#include "CoreTypes.h"
 #include "Algo/Transform.h"
 #include "Misc/Parse.h"
 #include "UObject/ObjectVersion.h"
@@ -31,6 +32,15 @@ DEFINE_LOG_CATEGORY(LogText);
 
 
 #define LOCTEXT_NAMESPACE "Core.Text"
+
+namespace FastDecimalFormat
+{
+	/**
+	 * Return the value of 10^exp for the given exponent value.
+	 * @note The maximum exponent supported is 10^18.
+	 */
+	CORE_API uint64 Pow10(const int32 InExponent);
+}
 
 bool FTextInspector::ShouldGatherForLocalization(const FText& Text)
 {
@@ -608,7 +618,7 @@ FText FText::AsCurrencyBase(int64 BaseVal, const FString& CurrencyCode, const FC
 
 	const FDecimalNumberFormattingRules& FormattingRules = Culture.GetCurrencyFormattingRules(CurrencyCode);
 	const FNumberFormattingOptions& FormattingOptions = FormattingRules.CultureDefaultFormattingOptions;
-	double Val = static_cast<double>(BaseVal) / FMath::Pow(10.0f, (float)FormattingOptions.MaximumFractionalDigits);
+	double Val = static_cast<double>(BaseVal) / FastDecimalFormat::Pow10(FormattingOptions.MaximumFractionalDigits);
 	FString NativeString = FastDecimalFormat::NumberToString(Val, FormattingRules, FormattingOptions);
 
 	FText Result = FText(MakeShared<TGeneratedTextData<FTextHistory_AsCurrency>, ESPMode::ThreadSafe>(MoveTemp(NativeString), FTextHistory_AsCurrency(Val, CurrencyCode, nullptr, TargetCulture)));

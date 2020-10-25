@@ -158,12 +158,17 @@ namespace AutomationTool
 		/// <summary>
 		/// Mapping of aggregate names to their respective nodes
 		/// </summary>
-		public Dictionary<string, Node[]> AggregateNameToNodes = new Dictionary<string,Node[]>(StringComparer.InvariantCultureIgnoreCase);
+		public Dictionary<string, Aggregate> NameToAggregate = new Dictionary<string, Aggregate>(StringComparer.InvariantCultureIgnoreCase);
 
 		/// <summary>
 		/// List of badges that can be displayed for this build
 		/// </summary>
 		public List<Badge> Badges = new List<Badge>();
+
+		/// <summary>
+		/// List of labels that can be displayed for this build
+		/// </summary>
+		public List<Label> Labels = new List<Label>();
 
 		/// <summary>
 		/// Diagnostic messages for this graph
@@ -184,7 +189,7 @@ namespace AutomationTool
 		/// <returns>True if the name exists, false otherwise.</returns>
 		public bool ContainsName(string Name)
 		{
-			return NameToNode.ContainsKey(Name) || NameToReport.ContainsKey(Name) || AggregateNameToNodes.ContainsKey(Name);
+			return NameToNode.ContainsKey(Name) || NameToReport.ContainsKey(Name) || NameToAggregate.ContainsKey(Name);
 		}
 
 		/// <summary>
@@ -217,10 +222,10 @@ namespace AutomationTool
 				}
 
 				// Check if it's an aggregate name
-				Node[] Nodes;
-				if(AggregateNameToNodes.TryGetValue(Name, out Nodes))
+				Aggregate Aggregate;
+				if(NameToAggregate.TryGetValue(Name, out Aggregate))
 				{
-					OutNodes = Nodes;
+					OutNodes = Aggregate.RequiredNodes.ToArray();
 					return true;
 				}
 
@@ -268,10 +273,10 @@ namespace AutomationTool
 				}
 
 				// Check if it's an aggregate name
-				Node[] Nodes;
-				if(AggregateNameToNodes.TryGetValue(Name, out Nodes))
+				Aggregate Aggregate;
+				if(NameToAggregate.TryGetValue(Name, out Aggregate))
 				{
-					OutOutputs = Nodes.SelectMany(x => x.Outputs.Union(x.Inputs)).Distinct().ToArray();
+					OutOutputs = Aggregate.RequiredNodes.SelectMany(x => x.Outputs.Union(x.Inputs)).Distinct().ToArray();
 					return true;
 				}
 			}
@@ -322,7 +327,23 @@ namespace AutomationTool
 			NameToTrigger = RetainNodes.Where(x => x.ControllingTrigger != null).Select(x => x.ControllingTrigger).Distinct().ToDictionary(x => x.Name, x => x, StringComparer.InvariantCultureIgnoreCase);
 
 			// Create a new list of aggregates for everything that's left
-			AggregateNameToNodes = AggregateNameToNodes.Where(x => x.Value.All(y => RetainNodes.Contains(y))).ToDictionary(Pair => Pair.Key, Pair => Pair.Value, StringComparer.InvariantCultureIgnoreCase);
+			Dictionary<string, Aggregate> NewNameToAggregate = new Dictionary<string, Aggregate>(NameToAggregate.Comparer);
+			foreach(Aggregate Aggregate in NameToAggregate.Values)
+			{
+				if (Aggregate.RequiredNodes.All(x => RetainNodes.Contains(x)))
+				{
+					NewNameToAggregate[Aggregate.Name] = Aggregate;
+				}
+			}
+			NameToAggregate = NewNameToAggregate;
+
+			// Remove any labels that are no longer value
+			foreach (Label Label in Labels)
+			{
+				Label.RequiredNodes.RemoveWhere(x => !RetainNodes.Contains(x));
+				Label.IncludedNodes.RemoveWhere(x => !RetainNodes.Contains(x));
+			}
+			Labels.RemoveAll(x => x.RequiredNodes.Count == 0);
 
 			// Remove any badges which do not have all their dependencies
 			Badges.RemoveAll(x => x.Nodes.Any(y => !RetainNodes.Contains(y)));
@@ -393,17 +414,46 @@ namespace AutomationTool
 					Writer.WriteEndElement();
 				}
 
-				foreach (KeyValuePair<string, Node[]> Aggregate in AggregateNameToNodes)
+				foreach (Aggregate Aggregate in NameToAggregate.Values)
 				{
 					// If the aggregate has no required elements, skip it.
-					if (!Aggregate.Value.Any())
+					if (Aggregate.RequiredNodes.Count == 0)
 					{
 						continue;
 					}
 
 					Writer.WriteStartElement("Aggregate");
-					Writer.WriteAttributeString("Name", Aggregate.Key);
-					Writer.WriteAttributeString("Requires", String.Join(";", Aggregate.Value.Select(x => x.Name)));
+					Writer.WriteAttributeString("Name", Aggregate.Name);
+					Writer.WriteAttributeString("Requires", String.Join(";", Aggregate.RequiredNodes.Select(x => x.Name)));
+					Writer.WriteEndElement();
+				}
+
+				foreach(Label Label in Labels)
+				{
+					Writer.WriteStartElement("Label");
+					if (Label.DashboardCategory != null)
+					{
+						Writer.WriteAttributeString("Category", Label.DashboardCategory);
+					}
+					Writer.WriteAttributeString("Name", Label.DashboardName);
+					Writer.WriteAttributeString("Requires", String.Join(";", Label.RequiredNodes.Select(x => x.Name)));
+
+					HashSet<Node> IncludedNodes = new HashSet<Node>(Label.IncludedNodes);
+					IncludedNodes.ExceptWith(Label.IncludedNodes.SelectMany(x => x.InputDependencies));
+					IncludedNodes.ExceptWith(Label.RequiredNodes);
+					if (IncludedNodes.Count > 0)
+					{
+						Writer.WriteAttributeString("Include", String.Join(";", IncludedNodes.Select(x => x.Name)));
+					}
+
+					HashSet<Node> ExcludedNodes = new HashSet<Node>(Label.IncludedNodes);
+					ExcludedNodes.UnionWith(Label.IncludedNodes.SelectMany(x => x.InputDependencies));
+					ExcludedNodes.ExceptWith(Label.IncludedNodes);
+					ExcludedNodes.ExceptWith(ExcludedNodes.ToArray().SelectMany(x => x.InputDependencies));
+					if (ExcludedNodes.Count > 0)
+					{
+						Writer.WriteAttributeString("Exclude", String.Join(";", ExcludedNodes.Select(x => x.Name)));
+					}
 					Writer.WriteEndElement();
 				}
 
@@ -598,14 +648,18 @@ namespace AutomationTool
 				foreach (Agent Agent in Agents)
 				{
 					JsonWriter.WriteObjectStart();
+					JsonWriter.WriteArrayStart("Types");
+					foreach(string PossibleType in Agent.PossibleTypes)
+					{
+						JsonWriter.WriteValue(PossibleType);
+					}
+					JsonWriter.WriteArrayEnd();
 					JsonWriter.WriteArrayStart("Nodes");
 					foreach (Node Node in Agent.Nodes)
 					{
 						JsonWriter.WriteObjectStart();
 						JsonWriter.WriteValue("Name", Node.Name);
-						JsonWriter.WriteValue("Group", Agent.Name);
 						JsonWriter.WriteValue("RunEarly", Node.bRunEarly);
-						JsonWriter.WriteValue("Exclusive", true);
 
 						JsonWriter.WriteArrayStart("InputDependencies");
 						foreach (string InputDependency in Node.GetDirectInputDependencies().Select(x => x.Name))
@@ -627,6 +681,92 @@ namespace AutomationTool
 					JsonWriter.WriteObjectEnd();
 				}
 				JsonWriter.WriteArrayEnd();
+
+				JsonWriter.WriteArrayStart("Aggregates");
+				foreach (Aggregate Aggregate in NameToAggregate.Values)
+				{
+					JsonWriter.WriteObjectStart();
+					JsonWriter.WriteValue("Name", Aggregate.Name);
+					JsonWriter.WriteArrayStart("Nodes");
+					foreach (Node RequiredNode in Aggregate.RequiredNodes.OrderBy(x => x.Name))
+					{
+						JsonWriter.WriteValue(RequiredNode.Name);
+					}
+					JsonWriter.WriteArrayEnd();
+					JsonWriter.WriteObjectEnd();
+				}
+				JsonWriter.WriteArrayEnd();
+
+				JsonWriter.WriteArrayStart("Labels");
+				foreach (Label Label in Labels)
+				{
+					JsonWriter.WriteObjectStart();
+					if (!String.IsNullOrEmpty(Label.DashboardName))
+					{
+						JsonWriter.WriteValue("Name", Label.DashboardName);
+					}
+					if (!String.IsNullOrEmpty(Label.DashboardCategory))
+					{
+						JsonWriter.WriteValue("Category", Label.DashboardCategory);
+					}
+					if (!String.IsNullOrEmpty(Label.UgsBadge))
+					{
+						JsonWriter.WriteValue("UgsBadge", Label.UgsBadge);
+					}
+					if (!String.IsNullOrEmpty(Label.UgsProject))
+					{
+						JsonWriter.WriteValue("UgsProject", Label.UgsProject);
+					}
+					if (Label.Change != LabelChange.Current)
+					{
+						JsonWriter.WriteValue("Change", Label.Change.ToString());
+					}
+
+					JsonWriter.WriteArrayStart("RequiredNodes");
+					foreach (Node RequiredNode in Label.RequiredNodes.OrderBy(x => x.Name))
+					{
+						JsonWriter.WriteValue(RequiredNode.Name);
+					}
+					JsonWriter.WriteArrayEnd();
+					JsonWriter.WriteArrayStart("IncludedNodes");
+					foreach (Node IncludedNode in Label.IncludedNodes.OrderBy(x => x.Name))
+					{
+						JsonWriter.WriteValue(IncludedNode.Name);
+					}
+					JsonWriter.WriteArrayEnd();
+					JsonWriter.WriteObjectEnd();
+				}
+				JsonWriter.WriteArrayEnd();
+
+				JsonWriter.WriteArrayStart("Badges");
+				foreach (Badge Badge in Badges)
+				{
+					HashSet<Node> Dependencies = Badge.Nodes;
+					if (Dependencies.Count > 0)
+					{
+						// Reduce that list to the smallest subset of direct dependencies
+						HashSet<Node> DirectDependencies = new HashSet<Node>(Dependencies);
+						foreach (Node Dependency in Dependencies)
+						{
+							DirectDependencies.ExceptWith(Dependency.OrderDependencies);
+						}
+
+						JsonWriter.WriteObjectStart();
+						JsonWriter.WriteValue("Name", Badge.Name);
+						if (!String.IsNullOrEmpty(Badge.Project))
+						{
+							JsonWriter.WriteValue("Project", Badge.Project);
+						}
+						if (Badge.Change != 0)
+						{
+							JsonWriter.WriteValue("Change", Badge.Change);
+						}
+						JsonWriter.WriteValue("Dependencies", String.Join(";", DirectDependencies.Select(x => x.Name)));
+						JsonWriter.WriteObjectEnd();
+					}
+				}
+				JsonWriter.WriteArrayEnd();
+
 				JsonWriter.WriteObjectEnd();
 			}
 		}
@@ -745,11 +885,11 @@ namespace AutomationTool
 			CommandUtils.LogInformation("");
 
 			// Print out all the non-empty aggregates
-			string[] AggregateNames = AggregateNameToNodes.Where(x => x.Value.Length > 0).Select(x => x.Key).OrderBy(x => x).ToArray();
-			if(AggregateNames.Length > 0)
+			Aggregate[] Aggregates = NameToAggregate.Values.OrderBy(x => x.Name).ToArray();
+			if(Aggregates.Length > 0)
 			{
 				CommandUtils.LogInformation("Aggregates:");
-				foreach(string AggregateName in AggregateNames)
+				foreach(string AggregateName in Aggregates.Select(x => x.Name))
 				{
 					CommandUtils.LogInformation("    {0}", AggregateName);
 				}

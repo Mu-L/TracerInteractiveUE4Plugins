@@ -838,7 +838,7 @@ private:
 		}
 		static FORCEINLINE bool Matches(const FName& A, const FName& B)
 		{
-			return A.GetDisplayIndex() == B.GetDisplayIndex();
+			return A.GetDisplayIndex() == B.GetDisplayIndex() && A.GetNumber() == B.GetNumber();
 		}
 		static FORCEINLINE uint32 GetKeyHash(const FName& Key)
 		{

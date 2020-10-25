@@ -1370,8 +1370,9 @@ bool FSteamVRHMD::EnableStereo(bool bStereo)
 					Width = WindowMirrorBoundsWidth;
 					Height = WindowMirrorBoundsHeight;
 				}
-				SceneVP->SetViewportSize(Width, Height);
+
 				bStereoEnabled = bStereoDesired;
+				SceneVP->SetViewportSize(Width, Height);
 			}
 			else
 			{
