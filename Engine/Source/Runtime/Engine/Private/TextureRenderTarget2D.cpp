@@ -531,7 +531,8 @@ void FTextureRenderTarget2DResource::ReleaseDynamicRHI()
 
 	RHIUpdateTextureReference(Owner->TextureReference.TextureReferenceRHI, nullptr);
 	Texture2DRHI.SafeRelease();
-	RenderTargetTextureRHI.SafeRelease();	
+	RenderTargetTextureRHI.SafeRelease();
+	CachedMipsGenParams = nullptr;
 
 	// remove grom global list of deferred clears
 	RemoveFromDeferredUpdateList();

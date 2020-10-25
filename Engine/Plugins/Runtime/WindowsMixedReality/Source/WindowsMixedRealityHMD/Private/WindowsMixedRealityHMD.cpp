@@ -1050,6 +1050,8 @@ namespace WindowsMixedReality
 					int Width, Height;
 					if (HMD->GetDisplayDimensions(Width, Height))
 					{
+						bIsStereoEnabled = HMD->IsStereoEnabled();
+
 						SceneVP->SetViewportSize(
 #if PLATFORM_HOLOLENS
 							Width,
@@ -1060,7 +1062,6 @@ namespace WindowsMixedReality
 
 						Window->SetViewportSizeDrivenByWindow(false);
 
-						bIsStereoEnabled = HMD->IsStereoEnabled();
 						if (bIsStereoEnabled)
 						{
 							HMD->CreateHiddenVisibleAreaMesh();

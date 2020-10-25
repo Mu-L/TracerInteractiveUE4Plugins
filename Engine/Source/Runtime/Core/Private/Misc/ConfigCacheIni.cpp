@@ -1481,7 +1481,7 @@ bool FConfigFile::Write(const FString& Filename, bool bDoRemoteWrite, TMap<FStri
 		return true;
 
 	bool bAcquiredIniCombineThreshold = false;	// avoids extra work when writing multiple properties
-	int32 IniCombineThreshold = -1;
+	int32 IniCombineThreshold = MAX_int32;
 
 	TStringBuilder<128> Text;
 	FStringView BlankLine(LINE_TERMINATOR LINE_TERMINATOR);

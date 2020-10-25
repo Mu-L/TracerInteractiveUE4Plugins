@@ -3,17 +3,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Xml;
-using System.Xml.Linq;
-using UnrealBuildTool;
-using AutomationTool;
 using System.Reflection;
-using System.Diagnostics;
-using System.Xml.Schema;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml;
+using System.Xml.Schema;
 using Tools.DotNETCommon;
+using UnrealBuildTool;
 
 namespace AutomationTool
 {
@@ -380,6 +376,9 @@ namespace AutomationTool
 						break;
 					case "Badge":
 						ReadBadge(ChildElement);
+						break;
+					case "Label":
+						ReadLabel(ChildElement);
 						break;
 					case "Notify":
 						ReadNotifier(ChildElement);
@@ -954,7 +953,54 @@ namespace AutomationTool
 			if (EvaluateCondition(Element) && TryReadObjectName(Element, out Name) && CheckNameIsUnique(Element, Name))
 			{
 				string[] RequiredNames = ReadListAttribute(Element, "Requires");
-				Graph.AggregateNameToNodes.Add(Name, ResolveReferences(Element, RequiredNames).ToArray());
+
+				Aggregate NewAggregate = new Aggregate(Name);
+				foreach (Node ReferencedNode in ResolveReferences(Element, RequiredNames))
+				{
+					NewAggregate.RequiredNodes.Add(ReferencedNode);
+				}
+				Graph.NameToAggregate[Name] = NewAggregate;
+
+				string LabelCategoryName = ReadAttribute(Element, "Label");
+				if (!String.IsNullOrEmpty(LabelCategoryName))
+				{
+					Label Label;
+
+					// Create the label
+					int SlashIdx = LabelCategoryName.IndexOf('/');
+					if (SlashIdx != -1)
+					{
+						Label = new Label(LabelCategoryName.Substring(SlashIdx + 1), LabelCategoryName.Substring(0, SlashIdx), null, null, LabelChange.Current);
+					}
+					else
+					{
+						Label = new Label(LabelCategoryName, "Other", null, null, LabelChange.Current);
+					}
+
+					// Find all the included nodes
+					foreach (Node RequiredNode in NewAggregate.RequiredNodes)
+					{
+						Label.RequiredNodes.Add(RequiredNode);
+						Label.IncludedNodes.Add(RequiredNode);
+						Label.IncludedNodes.UnionWith(RequiredNode.OrderDependencies);
+					}
+
+					string[] IncludedNames = ReadListAttribute(Element, "Include");
+					foreach (Node IncludedNode in ResolveReferences(Element, IncludedNames))
+					{
+						Label.IncludedNodes.Add(IncludedNode);
+						Label.IncludedNodes.UnionWith(IncludedNode.OrderDependencies);
+					}
+
+					string[] ExcludedNames = ReadListAttribute(Element, "Exclude");
+					foreach (Node ExcludedNode in ResolveReferences(Element, ExcludedNames))
+					{
+						Label.IncludedNodes.Remove(ExcludedNode);
+						Label.IncludedNodes.ExceptWith(ExcludedNode.OrderDependencies);
+					}
+
+					Graph.Labels.Add(Label);
+				}
 			}
 		}
 
@@ -1004,6 +1050,52 @@ namespace AutomationTool
 					NewBadge.Nodes.UnionWith(ReferencedNode.OrderDependencies);
 				}
 				Graph.Badges.Add(NewBadge);
+			}
+		}
+
+		/// <summary>
+		/// Reads the definition for a label
+		/// </summary>
+		/// <param name="Element">Xml element to read the definition from</param>
+		void ReadLabel(ScriptElement Element)
+		{
+			if (EvaluateCondition(Element))
+			{
+				string Name = ReadAttribute(Element, "Name");
+				if (!String.IsNullOrEmpty(Name))
+				{
+					ValidateName(Element, Name);
+				}
+
+				string Category = ReadAttribute(Element, "Category");
+
+				string[] RequiredNames = ReadListAttribute(Element, "Requires");
+				string[] IncludedNames = ReadListAttribute(Element, "Include");
+				string[] ExcludedNames = ReadListAttribute(Element, "Exclude");
+
+				string UgsBadge = ReadAttribute(Element, "UgsBadge");
+				string UgsProject = ReadAttribute(Element, "UgsProject");
+
+				LabelChange Change = ReadEnumAttribute<LabelChange>(Element, "Change", LabelChange.Current);
+
+				Label NewLabel = new Label(Name, Category, UgsBadge, UgsProject, Change);
+				foreach (Node ReferencedNode in ResolveReferences(Element, RequiredNames))
+				{
+					NewLabel.RequiredNodes.Add(ReferencedNode);
+					NewLabel.IncludedNodes.Add(ReferencedNode);
+					NewLabel.IncludedNodes.UnionWith(ReferencedNode.OrderDependencies);
+				}
+				foreach (Node IncludedNode in ResolveReferences(Element, IncludedNames))
+				{
+					NewLabel.IncludedNodes.Add(IncludedNode);
+					NewLabel.IncludedNodes.UnionWith(IncludedNode.OrderDependencies);
+				}
+				foreach (Node ExcludedNode in ResolveReferences(Element, ExcludedNames))
+				{
+					NewLabel.IncludedNodes.Remove(ExcludedNode);
+					NewLabel.IncludedNodes.ExceptWith(ExcludedNode.OrderDependencies);
+				}
+				Graph.Labels.Add(NewLabel);
 			}
 		}
 

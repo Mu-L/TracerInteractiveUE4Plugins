@@ -1021,6 +1021,10 @@ void SunMergeVS_ES2(
 float4 SunColorVignetteIntensity;
 float3 BloomColor;
 
+Texture2D BloomDirtMaskTexture;
+SamplerState BloomDirtMaskSampler;
+float4 BloomDirtMaskTint;
+
 void SunMergePS_ES2(
 	float4 InUVVignette : TEXCOORD0,
 	float4 InUVs[7] : TEXCOORD1,
@@ -1044,14 +1048,16 @@ void SunMergePS_ES2(
 
 		OutColor.rgb = PostprocessInput2.Sample(PostprocessInput2Sampler, InUVVignette.xy);
 
+		half3 BloomDirtMaskColor = BloomDirtMaskTexture.Sample(BloomDirtMaskSampler, InUVVignette.xy).rgb * BloomDirtMaskTint.rgb;
+
 		// Have 5 layers on mobile.
-		float Scale3 = 1.0/5.0;	
+		half Scale3 = 1.0/5.0;	
 
 		// scale existing color first
 		OutColor.rgb *= Scale3;		
 
 		// add scaled bloom separately to prevent overflow before scaling
-		OutColor.rgb += (Bloom2 * Scale3 * BloomColor);
+		OutColor.rgb += (Bloom2 * Scale3 * (BloomColor + BloomDirtMaskColor));
 
 	#else
 		OutColor.rgb = half3(0.0, 0.0, 0.0);
@@ -1071,10 +1077,7 @@ void SunMergePS_ES2(
 		OutColor.rgb += SunColorVignetteIntensity.rgb * Sun;
 	#endif
 
-	half Vignette = ComputeVignetteMask(InUVVignette.zw, SunColorVignetteIntensity.a);
-
-	OutColor.a = Vignette;
-	OutColor.rgb *= OutColor.a;
+		OutColor.a = 1.0f;
 }
 
 #undef SUN_P0

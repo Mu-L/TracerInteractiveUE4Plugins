@@ -903,7 +903,7 @@ void FRCPassPostProcessTonemap::Process(FRenderingCompositePassContext& Context)
 	FRDGTextureRef SceneColorTexture = CreateRDGTextureForRequiredInput(GraphBuilder, ePId_Input0, TEXT("SceneColor"));
 	const FIntRect SceneColorViewRect = Context.SceneColorViewRect;
 
-	FRDGTextureRef BloomTexture = CreateRDGTextureForInputWithFallback(GraphBuilder, ePId_Input1, TEXT("Bloom"), eFC_0000);
+	FRDGTextureRef BloomTexture = CreateRDGTextureForInputWithFallback(GraphBuilder, ePId_Input1, TEXT("Bloom"), eFC_0001);
 	const FIntRect BloomViewRect = Context.GetDownsampledSceneColorViewRectFromInputExtent(BloomTexture->Desc.Extent);
 
 	FRDGTextureRef ColorGradingTexture = CreateRDGTextureForOptionalInput(GraphBuilder, ePId_Input3, TEXT("ColorGrading"));
@@ -1352,6 +1352,7 @@ public:
 	LAYOUT_FIELD(FShaderParameter, ScreenPosToViewportBias);
 	LAYOUT_FIELD(FShaderParameter, ScreenPosToViewportScale);
 	LAYOUT_FIELD(FShaderParameter, DefaultEyeExposure);
+	LAYOUT_FIELD(FShaderParameter, LensPrincipalPointOffsetScale);
 	LAYOUT_FIELD(FShaderResourceParameter, EyeAdaptationBuffer);
 	LAYOUT_FIELD(bool, bUsedFramebufferFetch);
 
@@ -1365,6 +1366,7 @@ public:
 		ScreenPosToViewportScale.Bind(Initializer.ParameterMap, TEXT("Color_ScreenPosToViewportScale"));
 		DefaultEyeExposure.Bind(Initializer.ParameterMap, TEXT("DefaultEyeExposure"));
 		EyeAdaptationBuffer.Bind(Initializer.ParameterMap, TEXT("EyeAdaptationBuffer"));
+		LensPrincipalPointOffsetScale.Bind(Initializer.ParameterMap, TEXT("LensPrincipalPointOffsetScale"));
 	}
 
 	void SetVS(const FRenderingCompositePassContext& Context, bool bEyeAdaptation)
@@ -1398,8 +1400,8 @@ public:
 			FVector4 ScreenPosToScenePixelValue(
 				ViewportExtent.X * 0.5f,
 				-ViewportExtent.Y * 0.5f,
-				ViewportExtent.X * 0.5f - 0.5f + ViewportOffset.X,
-				ViewportExtent.Y * 0.5f - 0.5f + ViewportOffset.Y);
+				ViewportExtent.X * 0.5f + ViewportOffset.X,
+				ViewportExtent.Y * 0.5f + ViewportOffset.Y);
 			SetShaderValue(Context.RHICmdList, ShaderRHI, ScreenPosToViewportScale, FVector2D(ScreenPosToScenePixelValue.X, ScreenPosToScenePixelValue.Y));
 			SetShaderValue(Context.RHICmdList, ShaderRHI, ScreenPosToViewportBias, FVector2D(ScreenPosToScenePixelValue.Z, ScreenPosToScenePixelValue.W));
 		}
@@ -1408,6 +1410,8 @@ public:
 		SetShaderValue(Context.RHICmdList, ShaderRHI, DefaultEyeExposure, FixedExposure);
 
 		SetSRVParameter(Context.RHICmdList, ShaderRHI, EyeAdaptationBuffer, bEyeAdaptation && Context.View.GetEyeAdaptationBuffer() ? Context.View.GetEyeAdaptationBuffer()->SRV : nullptr);
+
+		SetShaderValue(Context.RHICmdList, ShaderRHI, LensPrincipalPointOffsetScale, Context.View.LensPrincipalPointOffsetScale);
 	}
 };
 

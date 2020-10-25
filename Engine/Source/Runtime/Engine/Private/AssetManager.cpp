@@ -1167,9 +1167,8 @@ TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(c
 	AddBundlesSorted.Sort(FNameLexicalLess());
 	TArray<FName> TempBundles;
 
-	TArray<FPrimaryAssetData*> NameDatasToLoad;
-	NameDatasToLoad.Reserve(AssetsToChange.Num());
-	TBitArray<> IdsToLoad(false, AssetsToChange.Num());
+	TArray<FPrimaryAssetId> IdsToLoad;
+	IdsToLoad.Reserve(AssetsToChange.Num());
 
 	TSharedPtr<const TArray<FName>> PrimaryAssetNames(ExtractNames(AssetsToChange));
 
@@ -1281,10 +1280,9 @@ TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(c
 				continue;
 			}
 
-			NameDatasToLoad.Add(NameData);
 			NameData->PendingState.BundleNames = *NewBundles;
 			NameData->PendingPrimaryAssetNames = PrimaryAssetNames;
-			IdsToLoad[&PrimaryAssetId - &AssetsToChange[0]] = true;
+			IdsToLoad.Add(PrimaryAssetId);
 		}
 	}
 
@@ -1294,9 +1292,9 @@ TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(c
 	{
 		DebugName << *PathsToLoad.CreateConstIterator();
 
-		if (NameDatasToLoad.Num() > 1)
+		if (IdsToLoad.Num() > 1)
 		{
-			DebugName << " and " << NameDatasToLoad.Num() - 1 << " more";
+			DebugName << " and " << IdsToLoad.Num() - 1 << " more";
 		}
 			
 		DebugName << TEXT(" (");
@@ -1327,9 +1325,12 @@ TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(c
 		ReturnHandle = LoadAssetList(PathsToLoad.Array(), FStreamableDelegate(), Priority, FString(DebugName));
 
 		// Update FPrimaryAssetData pending handle
-		for (FPrimaryAssetData* NameData : NameDatasToLoad)
+		for (const FPrimaryAssetId& PrimaryAssetId : IdsToLoad)
 		{
-			NameData->PendingState.Handle = ReturnHandle;
+			if (FPrimaryAssetData* NameData = GetNameData(PrimaryAssetId))
+			{
+				NameData->PendingState.Handle = ReturnHandle;
+			}
 		}
 	}
 		
@@ -1355,29 +1356,19 @@ TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(c
 	// Call delegate and update NameDatasToLoad when done
 	if (!ReturnHandle.IsValid() || ReturnHandle->HasLoadCompleted())
 	{
-		for (FPrimaryAssetData* NameData : NameDatasToLoad)
+		for (const FPrimaryAssetId& PrimaryAssetId : IdsToLoad)
 		{
-			NameData->MovePendingToCurrent();
+			if (FPrimaryAssetData* NameData = GetNameData(PrimaryAssetId))
+			{
+				NameData->MovePendingToCurrent();
+			}
 		}
 
 		DelegateToCall.ExecuteIfBound();
 	}
 	else
 	{
-		// NameDatasToLoad need updating on completion but they can be deleted. 
-		// Create id array instead and redo Id -> NameData lookup on completion. 
-		TArray<FPrimaryAssetId> NameDataIds;
-		NameDataIds.Reserve(NameDatasToLoad.Num());
-		for (const FPrimaryAssetId& PrimaryAssetId : AssetsToChange)
-		{
-			if (IdsToLoad[&PrimaryAssetId - &AssetsToChange[0]])
-			{
-				NameDataIds.Add(PrimaryAssetId);
-			}
-		}
-		check(NameDatasToLoad.Num() == NameDataIds.Num())
-
-		ReturnHandle->BindCompleteDelegate(FStreamableDelegate::CreateUObject(this, &UAssetManager::OnAssetStateChangeCompleted, MoveTemp(NameDataIds), ReturnHandle, DelegateToCall));
+		ReturnHandle->BindCompleteDelegate(FStreamableDelegate::CreateUObject(this, &UAssetManager::OnAssetStateChangeCompleted, MoveTemp(IdsToLoad), ReturnHandle, DelegateToCall));
 	}
 
 	return ReturnHandle;

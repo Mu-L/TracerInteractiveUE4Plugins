@@ -163,7 +163,7 @@ float2 VignetteSpace(float2 Pos, float AspectRatio)
 
 float2 VignetteSpace(float2 Pos)
 {
-	return VignetteSpace(Pos, ViewportSize.x * ViewportSize.z);
+	return VignetteSpace(Pos, ViewportSize.y * ViewportSize.z);
 }
 
 // gets 4 nearby SceneDepth values for one UV value, useful for depth downsample, uses Gather() if possible

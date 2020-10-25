@@ -487,7 +487,7 @@ NIAGARASHADER_API  FNiagaraShaderRef FNiagaraShaderScript::GetShader() const
 
 NIAGARASHADER_API  FNiagaraShaderRef FNiagaraShaderScript::GetShaderGameThread() const
 {
-	if (GameThreadShaderMap)
+	if (GameThreadShaderMap && GameThreadShaderMap->IsValid())
 	{
 		return GameThreadShaderMap->GetShader<FNiagaraShader>();
 	}

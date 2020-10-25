@@ -173,10 +173,13 @@ void USoundSubmix::StartEnvelopeFollowing(const UObject* WorldContextObject)
 	}
 
 	// Find device for this specific audio recording thing.
-	UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
-	FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw();
-
-	StartEnvelopeFollowing(AudioDevice);
+	if (UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull))
+	{
+		if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw())
+		{
+			StartEnvelopeFollowing(AudioDevice);
+		}
+	}
 }
 
 void USoundSubmix::StartEnvelopeFollowing(FAudioDevice* InAudioDevice)
@@ -195,10 +198,13 @@ void USoundSubmix::StopEnvelopeFollowing(const UObject* WorldContextObject)
 	}
 
 	// Find device for this specific audio recording thing.
-	UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
-	FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw();
-
-	StopEnvelopeFollowing(AudioDevice);
+	if (UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull))
+	{
+		if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw())
+		{
+			StopEnvelopeFollowing(AudioDevice);
+		}
+	}
 }
 
 void USoundSubmix::StopEnvelopeFollowing(FAudioDevice* InAudioDevice)
@@ -217,11 +223,12 @@ void USoundSubmix::AddEnvelopeFollowerDelegate(const UObject* WorldContextObject
 	}
 
 	// Find device for this specific audio recording thing.
-	UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
-	FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw();
-	if (AudioDevice)
+	if (UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull))
 	{
-		AudioDevice->AddEnvelopeFollowerDelegate(this, OnSubmixEnvelopeBP);
+		if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw())
+		{
+			AudioDevice->AddEnvelopeFollowerDelegate(this, OnSubmixEnvelopeBP);
+		}
 	}
 }
 
@@ -232,11 +239,12 @@ void USoundSubmix::SetSubmixOutputVolume(const UObject* WorldContextObject, floa
 		return;
 	}
 
-	UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
-	FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw();
-	if (AudioDevice)
+	if (UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull))
 	{
-		AudioDevice->SetSubmixOutputVolume(this, InOutputVolume);
+		if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw())
+		{
+			AudioDevice->SetSubmixOutputVolume(this, InOutputVolume);
+		}
 	}
 }
 #if WITH_EDITOR
@@ -252,6 +260,15 @@ void USoundSubmix::PostEditChangeProperty(struct FPropertyChangedEvent& Property
 			if (AudioDeviceManager)
 			{
 				AudioDeviceManager->UpdateSubmix(this);
+			}
+		}
+
+		if (PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(USoundSubmix, SubmixEffectChain))
+		{
+			// Force the properties to be initialized for this SoundSubmix on all active audio devices
+			if (FAudioDeviceManager* AudioDeviceManager = GEngine->GetAudioDeviceManager())
+			{
+				AudioDeviceManager->RegisterSoundSubmix(this);
 			}
 		}
 	}
@@ -435,7 +452,7 @@ void USoundSubmixWithParentBase::SetParentSubmix(USoundSubmixBase* InParentSubmi
 {
 	if (ParentSubmix != InParentSubmix)
 	{
-		if (ParentSubmix != nullptr)
+		if (ParentSubmix)
 		{
 			ParentSubmix->Modify();
 			ParentSubmix->ChildSubmixes.Remove(this);
@@ -443,17 +460,25 @@ void USoundSubmixWithParentBase::SetParentSubmix(USoundSubmixBase* InParentSubmi
 
 		Modify();
 		ParentSubmix = InParentSubmix;
-		ParentSubmix->ChildSubmixes.AddUnique(this);
+		if (ParentSubmix)
+		{
+			ParentSubmix->ChildSubmixes.AddUnique(this);
 		}
+	}
 }
 
 void USoundSubmixWithParentBase::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent)
 {
+	if (!GEngine)
+	{
+		return;
+	}
+
 	if (PropertyChangedEvent.Property != nullptr)
 	{
-		static const FName NAME_ParentSubmix(TEXT("ParentSubmix"));
+		FName ChangedPropName = PropertyChangedEvent.Property->GetFName();
 
-		if (PropertyChangedEvent.Property->GetFName() == NAME_ParentSubmix)
+		if (ChangedPropName == GET_MEMBER_NAME_CHECKED(USoundSubmixWithParentBase, ParentSubmix))
 		{
 			// Add this sound class to the parent class if it's not already added
 			if (ParentSubmix)
@@ -477,15 +502,12 @@ void USoundSubmixWithParentBase::PostEditChangeProperty(struct FPropertyChangedE
 			}
 
 			Modify();
-		}
-	}
 
-	if (GEngine)
-	{
-		// Force the properties to be initialized for this SoundSubmix on all active audio devices
-		if (FAudioDeviceManager* AudioDeviceManager = GEngine->GetAudioDeviceManager())
-		{
-			AudioDeviceManager->RegisterSoundSubmix(this);
+			// Force the properties to be initialized for this SoundSubmix on all active audio devices
+			if (FAudioDeviceManager* AudioDeviceManager = GEngine->GetAudioDeviceManager())
+			{
+				AudioDeviceManager->RegisterSoundSubmix(this);
+			}
 		}
 	}
 

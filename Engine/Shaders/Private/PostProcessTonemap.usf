@@ -509,9 +509,8 @@ float4 TonemapCommonPS(
 
 	#if USE_GAMMA_ONLY
 
-		#if FEATURE_LEVEL >= FEATURE_LEVEL_ES3_1 // On mobile ExposureScale applied in base pass PS
-			SceneColor.rgb *= ExposureScale;
-		#endif
+		SceneColor.rgb *= ExposureScale;
+
 		OutColor.rgb = pow(SceneColor.rgb, InverseGamma.x);
 
 	#else 
@@ -536,10 +535,6 @@ float4 TonemapCommonPS(
 
 			//float2 DirtViewportUV = (SvPosition.xy - float2(Output_ViewportMin)) * Output_ViewportSizeInverse; 
 
-			float2 DirtLensUV = ConvertScreenViewportSpaceToLensViewportSpace(ScreenPos) * float2(1.0f, -1.0f);
-
-			float3 BloomDirtMaskColor = Texture2DSample(BloomDirtMaskTexture, BloomDirtMaskSampler, DirtLensUV * .5f + .5f).rgb * BloomDirtMaskTint.rgb;
-
 #if DEBUG_TONEMAPPER
 			if (all(DebugTile == int2(-1, -1)))
 			{
@@ -555,7 +550,16 @@ float4 TonemapCommonPS(
 			}
 #endif //DEBUG_TONEMAPPER
 
-			LinearColor += CombinedBloom.rgb * (ColorScale1.rgb + BloomDirtMaskColor); 
+			#if FEATURE_LEVEL == FEATURE_LEVEL_ES3_1
+				// Support sunshaft and vignette for mobile, and we have applied the BloomIntensity and the BloomDirtMask at the sun merge pass.
+				LinearColor = LinearColor.rgb * CombinedBloom.a + CombinedBloom.rgb;
+			#else
+				float2 DirtLensUV = ConvertScreenViewportSpaceToLensViewportSpace(ScreenPos) * float2(1.0f, -1.0f);
+
+				float3 BloomDirtMaskColor = Texture2DSample(BloomDirtMaskTexture, BloomDirtMaskSampler, DirtLensUV * .5f + .5f).rgb * BloomDirtMaskTint.rgb;
+
+				LinearColor += CombinedBloom.rgb * (ColorScale1.rgb + BloomDirtMaskColor); 
+			#endif
 		#endif
 
 		#if NO_EYEADAPTATION_EXPOSURE_FIX == 1
@@ -751,7 +755,11 @@ void MainVS_ES2(
 	OutTexCoords[3] = OutTexCoord.xy + PostprocessInput0Size.zw * float2( 0, 1);
 
 	// Scale vignette to always be a circle with consistent corner intensity.
-	OutVignetteExposureScale.xy = VignetteSpace(InPosition.xy);
+	float2 ColorViewportPos = UVToScreenPos(OutTexCoord.xy, PostprocessInput0Size.xy);
+
+	// Scale vignette to always be a circle with consistent corner intensity.
+	float2 LensViewportPos = ConvertScreenViewportSpaceToLensViewportSpace(ColorViewportPos);
+	OutVignetteExposureScale.xy = VignetteSpace(LensViewportPos);
 
 	// Compute fringe tex coord offsets
 	BRANCH
@@ -882,9 +890,8 @@ void MainPS_ES2(
 
 		float ExposureScale = InVignetteExposureScale.z;
 		
-		#if USE_32BPP_HDR && USE_VIGNETTE
+		#if USE_VIGNETTE
 			LinearColor.rgb *= ComputeVignetteMask(InVignetteExposureScale.xy, TonemapperParams.x );
-			LinearColor = max(LinearColor, float3(0, 0, 0));
 		#endif
 
 		// It is faster to do vignette as a texture lookup + mad because this is an ALU bound shader.

@@ -868,6 +868,12 @@ namespace ObjectTools
 
 				UObject* CurReplaceObj = ReferencingPropertiesMapKeys[Index];
 
+				// This is a hack, permanent fix is to pick up the notification from PreEditChange():
+				if (UBlueprint* BP = CurReplaceObj->GetTypedOuter<UBlueprint>())
+				{
+					BP->Status = BS_Dirty;
+				}
+
 				FArchiveReplaceObjectRef<UObject> ReplaceAr( CurReplaceObj, ReplacementMap, false, true, false );
 			}
 		}
@@ -4098,6 +4104,11 @@ namespace ThumbnailTools
 	/** Renders a thumbnail for the specified object */
 	void RenderThumbnail( UObject* InObject, const uint32 InImageWidth, const uint32 InImageHeight, EThumbnailTextureFlushMode::Type InFlushMode, FTextureRenderTargetResource* InTextureRenderTargetResource, FObjectThumbnail* OutThumbnail )
 	{
+		if (!FApp::CanEverRender())
+		{
+			return;
+		}
+
 		// Renderer must be initialized before generating thumbnails
 		check( GIsRHIInitialized );
 

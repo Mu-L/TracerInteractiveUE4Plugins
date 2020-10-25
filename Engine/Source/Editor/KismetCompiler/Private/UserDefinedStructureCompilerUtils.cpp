@@ -26,6 +26,172 @@
 
 #define LOCTEXT_NAMESPACE "StructureCompiler"
 
+template <class T>
+class TAllPropertiesIterator
+{
+private:
+	TObjectIterator<UStruct> StructIterator;
+	TFieldIterator<FProperty> PropertyIterator;
+	FProperty* CurrentProperty;
+
+public:
+	TAllPropertiesIterator(EObjectFlags AdditionalExclusionFlags = RF_ClassDefaultObject, EInternalObjectFlags InternalExclusionFlags = EInternalObjectFlags::None)
+		: StructIterator(AdditionalExclusionFlags, /*bIncludeDerivedClasses =*/ true, InternalExclusionFlags)
+		, PropertyIterator(nullptr)
+		, CurrentProperty(nullptr)
+	{
+		InitPropertyIterator();
+	}
+
+	/** conversion to "bool" returning true if the iterator is valid. */
+	FORCEINLINE explicit operator bool() const
+	{
+		return (bool)PropertyIterator || (bool)StructIterator;
+	}
+	/** inverse of the "bool" operator */
+	FORCEINLINE bool operator !() const
+	{
+		return !(bool)*this;
+	}
+
+	inline friend bool operator==(const TAllPropertiesIterator<T>& Lhs, const TAllPropertiesIterator<T>& Rhs) { return *Lhs.FieldIterator == *Rhs.FieldIterator; }
+	inline friend bool operator!=(const TAllPropertiesIterator<T>& Lhs, const TAllPropertiesIterator<T>& Rhs) { return *Lhs.FieldIterator != *Rhs.FieldIterator; }
+
+	inline void operator++()
+	{
+		IterateToNextProperty();
+		ConditionallyIterateToNextStruct();
+	}
+	inline T* operator*()
+	{
+		T* Property = CastField<T>(CurrentProperty);
+		check(Property || !CurrentProperty);
+		return Property;
+	}
+	inline T* operator->()
+	{
+		T* Property = CastField<T>(CurrentProperty);
+		check(Property || !CurrentProperty);
+		return Property;
+	}
+protected:
+	inline void IterateToNextProperty()
+	{
+		while (PropertyIterator)
+		{
+			do
+			{
+				FProperty* IteratedProperty = *PropertyIterator;
+				if (FArrayProperty* ArrayProp = CastField<FArrayProperty>(IteratedProperty))
+				{
+					if (CurrentProperty == IteratedProperty)
+					{
+						CurrentProperty = ArrayProp->Inner;
+					}
+					else
+					{
+						CurrentProperty = nullptr;
+					}
+				}
+				else if (FMapProperty* MapProp = CastField<FMapProperty>(IteratedProperty))
+				{
+					if (CurrentProperty == MapProp)
+					{
+						CurrentProperty = MapProp->KeyProp;
+					}
+					else if (CurrentProperty == MapProp->KeyProp)
+					{
+						CurrentProperty = MapProp->ValueProp;
+					}
+					else
+					{
+						CurrentProperty = nullptr;
+					}
+				}
+				else if (FSetProperty* SetProp = CastField<FSetProperty>(IteratedProperty))
+				{
+					if (CurrentProperty != SetProp->ElementProp)
+					{
+						CurrentProperty = SetProp->ElementProp;
+					}
+					else
+					{
+						CurrentProperty = nullptr;
+					}
+				}
+				else if (FEnumProperty* EnumProp = CastField<FEnumProperty>(IteratedProperty))
+				{
+					if (CurrentProperty == IteratedProperty)
+					{
+						CurrentProperty = EnumProp->GetUnderlyingProperty();
+					}
+					else
+					{
+						CurrentProperty = nullptr;
+					}
+				}
+				else
+				{
+					CurrentProperty = nullptr;
+				}
+			} while (CurrentProperty && !CurrentProperty->IsA<T>());
+
+			if (!CurrentProperty)
+			{
+				++PropertyIterator;
+				if (PropertyIterator)
+				{
+					CurrentProperty = *PropertyIterator;
+					if (CastField<T>(CurrentProperty))
+					{
+						break;
+					}
+				}
+			}
+			else
+			{
+				break;
+			}
+		}
+	}
+	inline void InitPropertyIterator()
+	{
+		while (StructIterator)
+		{
+			PropertyIterator.~TFieldIterator<FProperty>();
+			new (&PropertyIterator) TFieldIterator<FProperty>(*StructIterator, EFieldIteratorFlags::ExcludeSuper, EFieldIteratorFlags::IncludeDeprecated, EFieldIteratorFlags::IncludeInterfaces);
+			if (!PropertyIterator)
+			{
+				++StructIterator;
+			}
+			else
+			{
+				CurrentProperty = *PropertyIterator;
+				if (CurrentProperty && !CurrentProperty->IsA<T>())
+				{
+					IterateToNextProperty();
+				}
+				if (!CurrentProperty)
+				{
+					++StructIterator;
+				}
+				else
+				{
+					break;
+				}
+			}
+		}
+	}
+	inline void ConditionallyIterateToNextStruct()
+	{
+		if (!PropertyIterator)
+		{
+			++StructIterator;
+			InitPropertyIterator();
+		}
+	}
+};
+
 struct FUserDefinedStructureCompilerInner
 {
 	struct FBlueprintUserStructData
@@ -78,7 +244,7 @@ struct FUserDefinedStructureCompilerInner
 
 			CastChecked<UUserDefinedStructEditorData>(DuplicatedStruct->EditorData)->RecreateDefaultInstance();
 
-			for (TAllFieldsIterator<FStructProperty> FieldIt(RF_NoFlags, EInternalObjectFlags::PendingKill); FieldIt; ++FieldIt)
+			for (TAllPropertiesIterator<FStructProperty> FieldIt(RF_NoFlags, EInternalObjectFlags::PendingKill); FieldIt; ++FieldIt)
 			{
 				FStructProperty* StructProperty = *FieldIt;
 				if (StructProperty && (StructureToReinstance == StructProperty->Struct))
