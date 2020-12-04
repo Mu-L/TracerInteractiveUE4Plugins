@@ -2,15 +2,15 @@ Tracer Interactive
 =============
 
 *  [Web UI](https://tracerinteractive.com/plugins/webui) - Create a web-based user interface using the Chromium Embedded Framework
-	*  Downloads: [4.25](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.25.0/WebUI-4.25.zip), [4.24](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.24.0/WebUI-4.24.zip), [4.23](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.23.0/WebUI-4.23.zip)
-	*  [Source](https://github.com/tracerinteractive/UnrealEngine/tree/4.25/Engine/Plugins/Runtime/WebUI)
+	*  Downloads: [4.26](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.26.0/WebUI-4.26.zip), [4.25](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.25.0/WebUI-4.25.zip), [4.24](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.24.0/WebUI-4.24.zip)
+	*  [Source](https://github.com/tracerinteractive/UnrealEngine/tree/4.26/Engine/Plugins/Runtime/WebUI)
 	*  [Documentation](https://cdn.tracerinteractive.com/webui/documentation.pdf)
 *  [JSON Library](https://tracerinteractive.com/plugins/jsonlibrary) - Manage objects, arrays, and primitive data types using JSON
-	*  Downloads: [4.25](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.25.0/JsonLibrary-4.25.zip), [4.24](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.24.0/JsonLibrary-4.24.zip), [4.23](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.23.0/JsonLibrary-4.23.zip)
-	*  [Source](https://github.com/tracerinteractive/UnrealEngine/tree/4.25/Engine/Plugins/Messaging/JsonLibrary)
+	*  Downloads: [4.26](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.26.0/JsonLibrary-4.26.zip), [4.25](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.25.0/JsonLibrary-4.25.zip), [4.24](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.24.0/JsonLibrary-4.24.zip)
+	*  [Source](https://github.com/tracerinteractive/UnrealEngine/tree/4.26/Engine/Plugins/Messaging/JsonLibrary)
 	*  [Documentation](https://cdn.tracerinteractive.com/jsonlibrary/documentation.pdf)
 *  [HTTP Library](https://tracerinteractive.com/plugins/httplibrary) - Send HTTP requests using blueprints
-	*  Downloads: [4.25](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.25.0/HttpLibrary-4.25.zip), [4.24](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.24.0/HttpLibrary-4.24.zip), [4.23](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.23.0/HttpLibrary-4.23.zip)
-	*  [Source](https://github.com/tracerinteractive/UnrealEngine/tree/4.25/Engine/Plugins/Messaging/HttpLibrary)
+	*  Downloads: [4.26](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.26.0/HttpLibrary-4.26.zip), [4.25](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.25.0/HttpLibrary-4.25.zip), [4.24](https://github.com/tracerinteractive/UnrealEngine/releases/download/4.24.0/HttpLibrary-4.24.zip)
+	*  [Source](https://github.com/tracerinteractive/UnrealEngine/tree/4.26/Engine/Plugins/Messaging/HttpLibrary)
 	*  [Documentation](https://cdn.tracerinteractive.com/httplibrary/documentation.pdf)
 
