@@ -11,6 +11,7 @@
 #include "Components/MeshComponent.h"
 #include "MeshPaintHelpers.h"
 #include "MeshPaintingToolsetTypes.h"
+#include "MeshPaintInteractions.h"
 #include "MeshVertexPaintingTool.generated.h"
 
 
@@ -103,10 +104,6 @@ public:
 	/** Size of vertex points drawn when mesh painting is active. */
 	UPROPERTY(EditAnywhere, Category = "VertexPainting|Visualization")
 	float VertexPreviewSize;
-
-	virtual void SaveProperties(UInteractiveTool* SaveFromTool) override;
-	virtual void RestoreProperties(UInteractiveTool* RestoreToTool) override;
-
 };
 
 
@@ -136,15 +133,12 @@ public:
 	bool bWriteAlpha;
 
 	/** When unchecked the painting on the base LOD will be propagate automatically to all other LODs when exiting the mode or changing the selection */
-	UPROPERTY(EditAnywhere, Category = Painting)
+	UPROPERTY(EditAnywhere, Category = Painting, meta = (TransientToolProperty))
 	bool bPaintOnSpecificLOD;
 
 	/** LOD Index to which should specifically be painted */
-	UPROPERTY(EditAnywhere, Category = Painting, meta = (UIMin = "0", ClampMin = "0", EditCondition = "bPaintOnSpecificLOD"))
+	UPROPERTY(EditAnywhere, Category = Painting, meta = (UIMin = "0", ClampMin = "0", EditCondition = "bPaintOnSpecificLOD", TransientToolProperty))
 	int32 LODIndex;
-
-	virtual void SaveProperties(UInteractiveTool* SaveFromTool) override;
-	virtual void RestoreProperties(UInteractiveTool* RestoreToTool) override;
 };
 
 UCLASS()
@@ -166,13 +160,10 @@ public:
 	/** Texture Blend Weight index which should be erased during Painting */
 	UPROPERTY(EditAnywhere, Category = WeightPainting, meta = (EnumCondition = 1))
 	EMeshPaintTextureIndex EraseTextureWeightIndex;
-
-	virtual void SaveProperties(UInteractiveTool* SaveFromTool) override;
-	virtual void RestoreProperties(UInteractiveTool* RestoreToTool) override;
 };
 
 UCLASS(Abstract)
-class MESHPAINTINGTOOLSET_API UMeshVertexPaintingTool : public UBaseBrushTool
+class MESHPAINTINGTOOLSET_API UMeshVertexPaintingTool : public UBaseBrushTool, public IMeshPaintSelectionInterface
 {
 	GENERATED_BODY()
 
@@ -182,10 +173,12 @@ public:
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
-	virtual void Tick(float DeltaTime) override;
+	virtual void OnTick(float DeltaTime) override;
 	virtual bool HasCancel() const override { return false; }
 	virtual bool HasAccept() const override;
 	virtual bool CanAccept() const override;
+	virtual FInputRayHit CanBeginClickDragSequence(const FInputDeviceRay& PressPos) override;
+	virtual	void OnUpdateModifierState(int ModifierID, bool bIsOn) override;
 	virtual void OnBeginDrag(const FRay& Ray) override;
 	virtual void OnUpdateDrag(const FRay& Ray) override;
 	virtual void OnEndDrag(const FRay& Ray) override;
@@ -197,11 +190,15 @@ public:
 	}
 	virtual double EstimateMaximumTargetDimension() override;
 
-	FSimpleDelegate OnPaintingFinished()
+	FSimpleDelegate& OnPaintingFinished()
 	{
 		return OnPaintingFinishedDelegate;
 	}
-
+	virtual bool IsMeshAdapterSupported(TSharedPtr<IMeshPaintComponentAdapter> MeshAdapter) const override;
+	virtual bool AllowsMultiselect() const override
+	{
+		return true;
+	}
 
 protected:
 	virtual void SetAdditionalPaintParameters(FMeshPaintParameters& InPaintParameters) {};
@@ -221,6 +218,12 @@ protected:
 	bool bStampPending;
 	bool bInDrag;
 	FRay PendingStampRay;
+	FRay PendingClickRay;
+	FVector2D PendingClickScreenPosition;
+	bool bCachedClickRay;
+
+	UPROPERTY(Transient)
+	UMeshPaintSelectionMechanic* SelectionMechanic;
 
 private:
 	bool PaintInternal(const TArrayView<TPair<FVector, FVector>>& Rays, EMeshPaintModeAction PaintAction, float PaintStrength);

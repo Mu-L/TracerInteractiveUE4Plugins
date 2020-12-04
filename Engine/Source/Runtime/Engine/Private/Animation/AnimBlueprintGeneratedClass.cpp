@@ -20,6 +20,7 @@
 #include "Animation/AnimNode_AssetPlayerBase.h"
 #include "Animation/AnimNode_StateMachine.h"
 #include "EdGraph/EdGraphNode.h"
+#include "Algo/Reverse.h"
 
 /////////////////////////////////////////////////////
 // FStateMachineDebugData
@@ -326,33 +327,6 @@ void UAnimBlueprintGeneratedClass::Link(FArchive& Ar, bool bRelinkExistingProper
 			}
 		}
 	}
-
-	// Pull info down from root anim class
-	UAnimBlueprintGeneratedClass* RootClass = this;
-	while(UAnimBlueprintGeneratedClass* NextClass = Cast<UAnimBlueprintGeneratedClass>(RootClass->GetSuperClass()))
-	{
-		RootClass = NextClass;
-	}
-
-	if(RootClass != this)
-	{
-		// State notifies and baked machines and asset player information from the root class
-		check(RootClass);
-		AnimNotifies = RootClass->AnimNotifies;
-		BakedStateMachines = RootClass->BakedStateMachines;
-		GraphAssetPlayerInformation = RootClass->GraphAssetPlayerInformation;
-	}
-
-	if(RootClass != this)
-	{
-		check(RootClass);
-
-		if(OrderedSavedPoseIndicesMap.Num() != RootClass->OrderedSavedPoseIndicesMap.Num() || !OrderedSavedPoseIndicesMap.OrderIndependentCompareEqual(RootClass->OrderedSavedPoseIndicesMap))
-		{
-			// Derived and our parent has a new ordered pose order, copy over.
-			OrderedSavedPoseIndicesMap = RootClass->OrderedSavedPoseIndicesMap;
-		}
-	}
 }
 
 void UAnimBlueprintGeneratedClass::PurgeClass(bool bRecompilingOnLoad)
@@ -386,7 +360,7 @@ void UAnimBlueprintGeneratedClass::PostLoadDefaultObject(UObject* Object)
 	UAnimBlueprintGeneratedClass* Iter = this;
 	while(Iter)
 	{
-		FExposedValueHandler::Initialize(Iter->EvaluateGraphExposedInputs, Object);
+		FExposedValueHandler::ClassInitialization(Iter->EvaluateGraphExposedInputs, Object);
 		Iter = Cast<UAnimBlueprintGeneratedClass>(Iter->GetSuperClass());
 	}
 
@@ -397,6 +371,9 @@ void UAnimBlueprintGeneratedClass::PostLoad()
 {
 	Super::PostLoad();
 	GenerateAnimationBlueprintFunctions();
+
+	// Post-load property access library
+	PropertyAccess::PostLoadLibrary(PropertyAccessLibrary);
 }
 
 void UAnimBlueprintGeneratedClass::GenerateAnimationBlueprintFunctions()

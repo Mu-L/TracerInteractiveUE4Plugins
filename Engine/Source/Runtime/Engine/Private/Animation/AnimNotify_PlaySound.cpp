@@ -22,13 +22,14 @@ UAnimNotify_PlaySound::UAnimNotify_PlaySound()
 
 #if WITH_EDITORONLY_DATA
 	NotifyColor = FColor(196, 142, 255, 255);
+	bPreviewIgnoreAttenuation = false;
 #endif // WITH_EDITORONLY_DATA
 }
 
 void UAnimNotify_PlaySound::Notify(class USkeletalMeshComponent* MeshComp, class UAnimSequenceBase* Animation)
 {
 	// Don't call super to avoid call back in to blueprints
-	if (Sound)
+	if (Sound && MeshComp)
 	{
 		if (Sound->IsLooping())
 		{
@@ -36,13 +37,23 @@ void UAnimNotify_PlaySound::Notify(class USkeletalMeshComponent* MeshComp, class
 			return;
 		}
 
-		if (bFollow)
+#if WITH_EDITORONLY_DATA
+		UWorld* World = MeshComp->GetWorld();
+		if (bPreviewIgnoreAttenuation && World && World->WorldType == EWorldType::EditorPreview)
 		{
-			UGameplayStatics::SpawnSoundAttached(Sound, MeshComp, AttachName, FVector(ForceInit), EAttachLocation::SnapToTarget, false, VolumeMultiplier, PitchMultiplier);
+			UGameplayStatics::PlaySound2D(World, Sound, VolumeMultiplier, PitchMultiplier);
 		}
 		else
+#endif
 		{
-			UGameplayStatics::PlaySoundAtLocation(MeshComp->GetWorld(), Sound, MeshComp->GetComponentLocation(), VolumeMultiplier, PitchMultiplier);
+			if (bFollow)
+			{
+				UGameplayStatics::SpawnSoundAttached(Sound, MeshComp, AttachName, FVector(ForceInit), EAttachLocation::SnapToTarget, false, VolumeMultiplier, PitchMultiplier);
+			}
+			else
+			{
+				UGameplayStatics::PlaySoundAtLocation(MeshComp->GetWorld(), Sound, MeshComp->GetComponentLocation(), VolumeMultiplier, PitchMultiplier);
+			}
 		}
 	}
 }

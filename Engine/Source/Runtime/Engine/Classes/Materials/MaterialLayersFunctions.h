@@ -53,6 +53,8 @@ struct ENGINE_API FMaterialParameterInfo
 	{
 	}
 
+	explicit FMaterialParameterInfo(const struct FMemoryImageMaterialParameterInfo& Rhs);
+
 	FString ToString() const
 	{
 		return *Name.ToString() + FString::FromInt(Association) + FString::FromInt(Index);
@@ -65,53 +67,56 @@ struct ENGINE_API FMaterialParameterInfo
 	}
 };
 
-struct FHashedMaterialParameterInfo
+struct FMemoryImageMaterialParameterInfo
 {
-	DECLARE_TYPE_LAYOUT(FHashedMaterialParameterInfo, NonVirtual);
+	DECLARE_TYPE_LAYOUT(FMemoryImageMaterialParameterInfo, NonVirtual);
 public:
-	FHashedMaterialParameterInfo(const FHashedName& InName = FHashedName(), EMaterialParameterAssociation InAssociation = EMaterialParameterAssociation::GlobalParameter, int32 InIndex = INDEX_NONE)
+	FMemoryImageMaterialParameterInfo(const TCHAR* InName, EMaterialParameterAssociation InAssociation = EMaterialParameterAssociation::GlobalParameter, int32 InIndex = INDEX_NONE)
+		: Name(NameToScriptName(FName(InName)))
+		, Index(InIndex)
+		, Association(InAssociation)
+	{}
+
+	FMemoryImageMaterialParameterInfo(const FName& InName, EMaterialParameterAssociation InAssociation = EMaterialParameterAssociation::GlobalParameter, int32 InIndex = INDEX_NONE)
+		: Name(NameToScriptName(InName))
+		, Index(InIndex)
+		, Association(InAssociation)
+	{}
+
+	FMemoryImageMaterialParameterInfo(const FScriptName& InName = FScriptName(), EMaterialParameterAssociation InAssociation = EMaterialParameterAssociation::GlobalParameter, int32 InIndex = INDEX_NONE)
 		: Name(InName)
 		, Index(InIndex)
 		, Association(InAssociation)
 	{}
 
-	FHashedMaterialParameterInfo(const TCHAR* InName, EMaterialParameterAssociation InAssociation = EMaterialParameterAssociation::GlobalParameter, int32 InIndex = INDEX_NONE)
-		: Name(InName)
-		, Index(InIndex)
-		, Association(InAssociation)
-	{}
-
-	FHashedMaterialParameterInfo(const FName& InName, EMaterialParameterAssociation InAssociation = EMaterialParameterAssociation::GlobalParameter, int32 InIndex = INDEX_NONE)
-		: Name(InName)
-		, Index(InIndex)
-		, Association(InAssociation)
-	{}
-
-	FHashedMaterialParameterInfo(const FMaterialParameterInfo& Rhs)
-		: Name(Rhs.Name)
+	FMemoryImageMaterialParameterInfo(const FMaterialParameterInfo& Rhs)
+		: Name(NameToScriptName(Rhs.Name))
 		, Index(Rhs.Index)
 		, Association(Rhs.Association)
 	{}
 
-	FHashedMaterialParameterInfo(const FHashedMaterialParameterInfo& Rhs) = default;
+	FMemoryImageMaterialParameterInfo(const FMemoryImageMaterialParameterInfo& Rhs) = default;
 
-	friend FArchive& operator<<(FArchive& Ar, FHashedMaterialParameterInfo& Ref)
+	FORCEINLINE FName GetName() const { return ScriptNameToName(Name); }
+
+	friend FArchive& operator<<(FArchive& Ar, FMemoryImageMaterialParameterInfo& Ref)
 	{
-		Ar << Ref.Name << Ref.Association << Ref.Index;
+		FName RefName = ScriptNameToName(Ref.Name);
+		Ar << RefName << Ref.Association << Ref.Index;
+		Ref.Name = NameToScriptName(RefName);
 		return Ar;
 	}
 
-	LAYOUT_FIELD(FHashedName, Name);
+	LAYOUT_FIELD(FScriptName, Name);
 	LAYOUT_FIELD(int32, Index);
 	LAYOUT_FIELD(TEnumAsByte<EMaterialParameterAssociation>, Association);
 };
 
-// For sorting/searching
-FORCEINLINE bool operator<(const FHashedMaterialParameterInfo& Lhs, const FHashedMaterialParameterInfo& Rhs)
+FORCEINLINE FMaterialParameterInfo::FMaterialParameterInfo(const struct FMemoryImageMaterialParameterInfo& Rhs)
+	: Name(ScriptNameToName(Rhs.Name))
+	, Association(Rhs.Association)
+	, Index(Rhs.Index)
 {
-	if (Lhs.Association != Rhs.Association) return Lhs.Association < Rhs.Association;
-	else if (Lhs.Index != Rhs.Index) return Lhs.Index < Rhs.Index;
-	return Lhs.Name < Rhs.Name;
 }
 
 FORCEINLINE bool operator==(const FMaterialParameterInfo& Lhs, const FMaterialParameterInfo& Rhs)
@@ -124,25 +129,52 @@ FORCEINLINE bool operator!=(const FMaterialParameterInfo& Lhs, const FMaterialPa
 	return !operator==(Lhs, Rhs);
 }
 
-FORCEINLINE bool operator==(const FHashedMaterialParameterInfo& Lhs, const FHashedMaterialParameterInfo& Rhs)
+FORCEINLINE bool operator==(const FMemoryImageMaterialParameterInfo& Lhs, const FMemoryImageMaterialParameterInfo& Rhs)
 {
 	return Lhs.Name == Rhs.Name && Lhs.Association == Rhs.Association && Lhs.Index == Rhs.Index;
 }
 
-FORCEINLINE bool operator!=(const FHashedMaterialParameterInfo& Lhs, const FHashedMaterialParameterInfo& Rhs)
+FORCEINLINE bool operator!=(const FMemoryImageMaterialParameterInfo& Lhs, const FMemoryImageMaterialParameterInfo& Rhs)
 {
 	return !operator==(Lhs, Rhs);
 }
 
-FORCEINLINE bool operator==(const FMaterialParameterInfo& Lhs, const FHashedMaterialParameterInfo& Rhs)
+FORCEINLINE bool operator==(const FMaterialParameterInfo& Lhs, const FMemoryImageMaterialParameterInfo& Rhs)
 {
-	return FHashedName(Lhs.Name) == Rhs.Name && Lhs.Index == Rhs.Index && Lhs.Association == Rhs.Association;
+	return Lhs.Name == Rhs.Name && Lhs.Index == Rhs.Index && Lhs.Association == Rhs.Association;
 }
 
-FORCEINLINE bool operator!=(const FMaterialParameterInfo& Lhs, const FHashedMaterialParameterInfo& Rhs)
+FORCEINLINE bool operator!=(const FMaterialParameterInfo& Lhs, const FMemoryImageMaterialParameterInfo& Rhs)
 {
 	return !operator==(Lhs, Rhs);
 }
+
+FORCEINLINE bool operator==(const FMemoryImageMaterialParameterInfo& Lhs, const FMaterialParameterInfo& Rhs)
+{
+	return Lhs.Name == Rhs.Name && Lhs.Index == Rhs.Index && Lhs.Association == Rhs.Association;
+}
+
+FORCEINLINE bool operator!=(const FMemoryImageMaterialParameterInfo& Lhs, const FMaterialParameterInfo& Rhs)
+{
+	return !operator==(Lhs, Rhs);
+}
+
+FORCEINLINE uint32 GetTypeHash(const FMemoryImageMaterialParameterInfo& Value)
+{
+	return HashCombine(HashCombine(GetTypeHash(Value.Name), Value.Index), (uint32)Value.Association);
+}
+
+// Backwards compat
+using FHashedMaterialParameterInfo = FMemoryImageMaterialParameterInfo;
+
+UENUM()
+enum class EMaterialLayerLinkState : uint8
+{
+	Uninitialized = 0u, // Saved with previous engine version
+	LinkedToParent, // Layer should mirror changes from parent material
+	UnlinkedFromParent, // Layer is based on parent material, but should not mirror changes
+	NotFromParent, // Layer was created locally in this material, not in parent
+};
 
 USTRUCT()
 struct ENGINE_API FMaterialLayersFunctions
@@ -166,8 +198,6 @@ struct ENGINE_API FMaterialLayersFunctions
 		void AppendKeyString(FString& KeyString) const;
 	};
 
-	static const FGuid UninitializedParentGuid;
-	static const FGuid NoParentGuid;
 	static const FGuid BackgroundGuid;
 		
 	FMaterialLayersFunctions()
@@ -180,10 +210,9 @@ struct ENGINE_API FMaterialLayersFunctions
 		LayerNames.Add(LayerName);
 		RestrictToLayerRelatives.Add(false);
 		// Use a consistent Guid for the background layer
-		// This layer never needs to resolve, so doesn't need to be unique
 		// Default constructor assigning different guids will break FStructUtils::AttemptToFindUninitializedScriptStructMembers
 		LayerGuids.Add(BackgroundGuid);
-		ParentLayerGuids.Add(NoParentGuid);
+		LayerLinkStates.Add(EMaterialLayerLinkState::NotFromParent);
 #endif
 	}
 
@@ -197,7 +226,7 @@ struct ENGINE_API FMaterialLayersFunctions
 		RestrictToLayerRelatives.Empty();
 		RestrictToBlendRelatives.Empty();
 		LayerGuids.Empty();
-		ParentLayerGuids.Empty();
+		LayerLinkStates.Empty();
 #endif
 	}
 
@@ -225,12 +254,10 @@ struct ENGINE_API FMaterialLayersFunctions
 	TArray<FGuid> LayerGuids;
 
 	/**
-	 * Refers to the layer in the parent's LayerGuids list used to initialize this layer
-	 * - Special value of 'NoParentGuid' means this layer was created in this material, not based on any layer in the parent
-	 * - Special value of 'UninitializedParentGuid' means this data was serialized before these guids existed...layers with this value will attempt to match a parent layer with the same resources assigned
+	 * State of each layer's link to parent material
 	 */
 	UPROPERTY(EditAnywhere, Category = MaterialLayers)
-	TArray<FGuid> ParentLayerGuids;
+	TArray<EMaterialLayerLinkState> LayerLinkStates;
 
 	/**
 	 * List of Guids that exist in the parent material that have been explicitly deleted
@@ -243,11 +270,11 @@ struct ENGINE_API FMaterialLayersFunctions
 	UPROPERTY()
 	FString KeyString_DEPRECATED;
 
-	void AppendBlendedLayer();
+	int32 AppendBlendedLayer();
 
-	void AddLayerCopy(const FMaterialLayersFunctions& Source, int32 SourceLayerIndex, const FGuid& ParentGuid);
+	int32 AddLayerCopy(const FMaterialLayersFunctions& Source, int32 SourceLayerIndex, EMaterialLayerLinkState LinkState);
 
-	void InsertLayerCopy(const FMaterialLayersFunctions& Source, int32 SourceLayerIndex, const FGuid& ParentGuid, int32 LayerIndex);
+	void InsertLayerCopy(const FMaterialLayersFunctions& Source, int32 SourceLayerIndex, EMaterialLayerLinkState LinkState, int32 LayerIndex);
 
 	void RemoveBlendedLayerAt(int32 Index);
 
@@ -289,7 +316,7 @@ struct ENGINE_API FMaterialLayersFunctions
 		return LayerName;
 	}
 
-	void CopyGuidsToParent();
+	void LinkAllLayersToParent();
 
 	bool ResolveParent(const FMaterialLayersFunctions& Parent, TArray<int32>& OutRemapLayerIndices);
 
@@ -311,7 +338,7 @@ struct ENGINE_API FMaterialLayersFunctions
 			return false;
 		}
 #if WITH_EDITORONLY_DATA
-		if (ParentLayerGuids != Other.ParentLayerGuids || DeletedParentLayerGuids != Other.DeletedParentLayerGuids)
+		if (LayerLinkStates != Other.LayerLinkStates || DeletedParentLayerGuids != Other.DeletedParentLayerGuids)
 		{
 			return false;
 		}

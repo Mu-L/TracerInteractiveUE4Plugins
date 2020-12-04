@@ -7,7 +7,6 @@
 #include "HttpServerConfig.h"
 
 #include "Sockets.h"
-#include "SocketSubsystem.h"
 #include "IPAddress.h"
 
 DEFINE_LOG_CATEGORY(LogHttpListener)
@@ -21,7 +20,7 @@ FHttpListener::FHttpListener(uint32 InListenPort)
 
 FHttpListener::~FHttpListener() 
 { 
-	check(nullptr == ListenSocket);
+	check(!ListenSocket);
 	check(!bIsListening);
 
 	const bool bRequestGracefulExit = false;
@@ -37,9 +36,8 @@ FHttpListener::~FHttpListener()
 // --------------------------------------------------------------------------------------------
 bool FHttpListener::StartListening()
 {
-	check(nullptr == ListenSocket);
+	check(!ListenSocket);
 	check(!bIsListening);
-	bIsListening = true;
 
 	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
 	if (nullptr == SocketSubsystem)
@@ -49,14 +47,15 @@ bool FHttpListener::StartListening()
 		return false;
 	}
 
-	ListenSocket = SocketSubsystem->CreateSocket(NAME_Stream, TEXT("HttpListenerSocket"));
-	if (nullptr == ListenSocket)
+	FUniqueSocket NewSocket = SocketSubsystem->CreateUniqueSocket(NAME_Stream, TEXT("HttpListenerSocket"));
+	if (!NewSocket)
 	{
 		UE_LOG(LogHttpListener, Error, 
 			TEXT("HttpListener - Unable to allocate stream socket"));
 		return false;
 	}
-	ListenSocket->SetNonBlocking(true);
+
+	NewSocket->SetNonBlocking(true);
 
 	// Bind to config-driven address
 	TSharedRef<FInternetAddr> BindAddress = SocketSubsystem->CreateInternetAddr();
@@ -79,33 +78,35 @@ bool FHttpListener::StartListening()
 	}
 
 	BindAddress->SetPort(ListenPort);
-	if (!ListenSocket->Bind(*BindAddress))
+	if (!NewSocket->Bind(*BindAddress))
 	{
 		UE_LOG(LogHttpListener, Error, 
-			TEXT("HttpListener unable to bind to %s:%u"),
-			*BindAddress->ToString(true), ListenPort);
+		TEXT("HttpListener unable to bind to %s"),
+			*BindAddress->ToString(true));
 		return false;
 	}
 
 	int32 ActualBufferSize;
-	ListenSocket->SetSendBufferSize(Config.BufferSize, ActualBufferSize);
-	if (ActualBufferSize != Config.BufferSize)
+	NewSocket->SetSendBufferSize(Config.BufferSize, ActualBufferSize);
+	if (ActualBufferSize < Config.BufferSize)
 	{
 		UE_LOG(LogHttpListener, Warning, 
 			TEXT("HttpListener unable to set desired buffer size (%d): Limited to %d"),
 			Config.BufferSize, ActualBufferSize);
 	}
 
-	if (!ListenSocket->Listen(Config.ConnectionsBacklogSize))
+	if (!NewSocket->Listen(Config.ConnectionsBacklogSize))
 	{
 		UE_LOG(LogHttpListener, Error, 
 			TEXT("HttpListener unable to listen on socket"));
 		return false;
 	}
 
+	bIsListening = true;
+	ListenSocket = MoveTemp(NewSocket);
 	UE_LOG(LogHttpListener, Log, 
-		TEXT("Created new HttpListener on %s:%u"), 
-		*BindAddress->ToString(true), ListenPort);
+		TEXT("Created new HttpListener on %s"), 
+		*BindAddress->ToString(true));
 	return true;
 }
 
@@ -119,12 +120,7 @@ void FHttpListener::StopListening()
 		UE_LOG(LogHttpListener, Log,
 			TEXT("HttListener stopping listening on Port %u"), ListenPort);
 
-		ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
-		if (SocketSubsystem)
-		{
-			SocketSubsystem->DestroySocket(ListenSocket);
-		}
-		ListenSocket = nullptr;
+		ListenSocket.Reset();
 	}
 	bIsListening = false;
 
@@ -137,14 +133,17 @@ void FHttpListener::StopListening()
 
 void FHttpListener::Tick(float DeltaTime)
 {
-	// Accept new connections
-	AcceptConnections();
+	if (bIsListening)
+	{
+		// Accept new connections
+		AcceptConnections();
 
-	// Tick Connections
-	TickConnections(DeltaTime);
+		// Tick Connections
+		TickConnections(DeltaTime);
 
-	// Remove any destroyed connections
-	RemoveDestroyedConnections();
+		// Remove any destroyed connections
+		RemoveDestroyedConnections();
+	}
 }
 
 bool FHttpListener::HasPendingConnections() const 
@@ -202,7 +201,7 @@ void FHttpListener::AcceptConnections()
 
 			IncomingConnection->SetNonBlocking(true);
 			TSharedPtr<FHttpConnection> Connection = 
-				MakeShared<FHttpConnection>(IncomingConnection, Router, ListenPort, NumConnectionsAccepted++);
+				MakeShared<FHttpConnection>(IncomingConnection, Router, ListenPort, NumConnectionsAccepted++, Config.ConnectionSelectWaitTime);
 			Connections.Add(Connection);
 		}
 	}

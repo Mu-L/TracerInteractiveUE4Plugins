@@ -125,6 +125,16 @@ struct FExportMaterialCompiler : public FProxyMaterialCompiler
 		return Compiler->VertexColor();
 	}
 
+	virtual int32 PreSkinVertexOffset() override
+	{
+		return Compiler->PreSkinVertexOffset();
+	}
+
+	virtual int32 PostSkinVertexOffset() override
+	{
+		return Compiler->PostSkinVertexOffset();
+	}
+
 	virtual int32 PreSkinnedPosition() override
 	{
 		return Compiler->PreSkinnedPosition();
@@ -227,7 +237,7 @@ public:
 		, PropertyToCompile(InPropertyToCompile)
 		, bSynchronousCompilation(bInSynchronousCompilation)
 	{
-		SetQualityLevelProperties(EMaterialQualityLevel::High, false, GMaxRHIFeatureLevel);
+		SetQualityLevelProperties(GMaxRHIFeatureLevel);
 		Material = InMaterialInterface->GetMaterial();
 		ReferencedTextures = InMaterialInterface->GetReferencedTextures();
 

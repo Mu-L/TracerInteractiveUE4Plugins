@@ -75,11 +75,15 @@ struct dtNavMeshCreateParams
 	int polyCount;							///< Number of polygons in the mesh. [Limit: >= 1]
 	int nvp;								///< Number maximum number of vertices per polygon. [Limit: >= 3]
 
+	// @UE4 BEGIN
+#if WITH_NAVMESH_CLUSTER_LINKS
 	/// @}
 	/// @name Cluster Attributes
 	/// @{
 	unsigned short* polyClusters;			///< Cluster Id for each polygon [Size: #polyCount]
 	unsigned short clusterCount;			///< Number of unique clusters
+#endif // WITH_NAVMESH_CLUSTER_LINKS
+	// @UE4 END
 
 	/// @}
 	/// @name Height Detail Attributes (Optional)
@@ -161,6 +165,28 @@ NAVMESH_API bool dtNavMeshHeaderSwapEndian(unsigned char* data, const int dataSi
 ///  @param[in,out]	data		The tile data array.
 ///  @param[in]		dataSize	The size of the data array.
 NAVMESH_API bool dtNavMeshDataSwapEndian(unsigned char* data, const int dataSize);
+
+// @UE4 BEGIN
+/// Offset and rotate around center the data in the tile
+///  @param[in,out]	data			Data of the tile mesh. (See: #dtCreateNavMeshData)
+///  @param[in]		dataSize		Data size of the tile mesh.
+///  @param[in]		offsetX			X offset in tile coordinates.
+///  @param[in]		offsetY			Y offset in tile coordinates.
+///  @param[in]		tileWidth		Tile width.
+///  @param[in]		tileHeight		Tile height.
+///  @param[in]		rotationDeg		Rotation in degrees.
+NAVMESH_API bool dtTransformTileData(unsigned char* data, const int dataSize, const int offsetX, const int offsetY, const float tileWidth, const float tileHeight, const float rotationDeg);
+
+/// Compute XY offset caused by the given rotation
+///  @param[in]		position		Position to rotate. [(x, y, z)]
+///  @param[in]		rotationCenter	Rotation center. [(x, y, z)]
+///  @param[in]		rotationDeg		Rotation in degrees.
+///  @param[in]		tileWidth		Tile width.
+///  @param[in]		tileHeight		Tile height.
+///  @param[out]	deltaX			Offset X in tile coordinates.
+///  @param[out]	deltaY			Offset Y in tile coordinates.
+NAVMESH_API void dtComputeTileOffsetFromRotation(const float* position, const float* rotationCenter, const float rotationDeg, const float tileWidth, const float tileHeight, int& deltaX, int& deltaY);
+// @UE4 END
 
 #endif // DETOURNAVMESHBUILDER_H
 

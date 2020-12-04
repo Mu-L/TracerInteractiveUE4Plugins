@@ -39,6 +39,7 @@
 #include "Misc/UObjectToken.h"
 #include "AnimGraphNode_Base.h"
 #include "UObject/UnrealType.h"
+#include "AnimationGraphSchema.h"
 
 #define LOCTEXT_NAMESPACE "BlueprintDebugging"
 
@@ -118,42 +119,35 @@ public:
 //////////////////////////////////////////////////////////////////////////
 // FKismetDebugUtilities
 
-void FKismetDebugUtilities::EndOfScriptExecution()
+void FKismetDebugUtilities::EndOfScriptExecution(const FBlueprintContextTracker& BlueprintContext)
 {
-#if DO_BLUEPRINT_GUARD
-	FBlueprintExceptionTracker& BlueprintExceptionTracker = FBlueprintExceptionTracker::Get();
-	if(BlueprintExceptionTracker.ScriptEntryTag == 1)
+	if(BlueprintContext.GetScriptEntryTag() == 1)
 	{
 		// if this is our last VM frame, then clear stepping data:
 		FKismetDebugUtilitiesData& Data = FKismetDebugUtilitiesData::Get();
 
 		Data.Reset();
 	}
-#endif // DO_BLUEPRINT_GUARD
 }
 
 void FKismetDebugUtilities::RequestSingleStepIn()
 {
-#if DO_BLUEPRINT_GUARD
 	FKismetDebugUtilitiesData& Data = FKismetDebugUtilitiesData::Get();
-	FBlueprintExceptionTracker& BlueprintExceptionTracker = FBlueprintExceptionTracker::Get();
 
 	Data.bIsSingleStepping = true;
-#endif // DO_BLUEPRINT_GUARD
 }
 
 void FKismetDebugUtilities::RequestStepOver()
 {
-#if DO_BLUEPRINT_GUARD
 	FKismetDebugUtilitiesData& Data = FKismetDebugUtilitiesData::Get();
-	FBlueprintExceptionTracker& BlueprintExceptionTracker = FBlueprintExceptionTracker::Get();
+	const TArray<const FFrame*>& ScriptStack = FBlueprintContextTracker::Get().GetScriptStack();
 
-	if(BlueprintExceptionTracker.ScriptStack.Num() > 0)
+	if(ScriptStack.Num() > 0)
 	{
-		Data.TargetGraphStackDepth = BlueprintExceptionTracker.ScriptStack.Num();
+		Data.TargetGraphStackDepth = ScriptStack.Num();
 		
 		// get the current graph that we're stopped at:
-		const FFrame* CurrentFrame = BlueprintExceptionTracker.ScriptStack.Last();
+		const FFrame* CurrentFrame = ScriptStack.Last();
 		if(CurrentFrame->Object)
 		{
 			if(UBlueprintGeneratedClass* BPGC = Cast<UBlueprintGeneratedClass>(CurrentFrame->Object->GetClass()))
@@ -187,22 +181,19 @@ void FKismetDebugUtilities::RequestStepOver()
 			}
 		}
 	}
-#endif // DO_BLUEPRINT_GUARD
 }
 
 void FKismetDebugUtilities::RequestStepOut()
 {
-#if DO_BLUEPRINT_GUARD
 	FKismetDebugUtilitiesData& Data = FKismetDebugUtilitiesData::Get();
-	FBlueprintExceptionTracker& BlueprintExceptionTracker = FBlueprintExceptionTracker::Get();
+	const TArray<const FFrame*>& ScriptStack = FBlueprintContextTracker::Get().GetScriptStack();
 
 	Data.bIsSingleStepping = false;
-	if (BlueprintExceptionTracker.ScriptStack.Num() > 1)
+	if (ScriptStack.Num() > 1)
 	{
 		Data.bIsSteppingOut = true;
-		Data.TargetGraphStackDepth = BlueprintExceptionTracker.ScriptStack.Num() - 1;
+		Data.TargetGraphStackDepth = ScriptStack.Num() - 1;
 	}
-#endif // DO_BLUEPRINT_GUARD
 }
 
 void FKismetDebugUtilities::OnScriptException(const UObject* ActiveObject, const FFrame& StackFrame, const FBlueprintExceptionInfo& Info)
@@ -224,7 +215,7 @@ void FKismetDebugUtilities::OnScriptException(const UObject* ActiveObject, const
 		}
 	};
 
-	checkSlow(ActiveObject != NULL);
+	checkSlow(ActiveObject != nullptr);
 
 	// Ignore script exceptions for preview actors
 	if(FActorEditorUtils::IsAPreviewOrInactiveActor(Cast<const AActor>(ActiveObject)))
@@ -233,7 +224,7 @@ void FKismetDebugUtilities::OnScriptException(const UObject* ActiveObject, const
 	}
 	
 	UClass* ClassContainingCode = FindClassForNode(ActiveObject, StackFrame.Node);
-	UBlueprint* BlueprintObj = (ClassContainingCode ? Cast<UBlueprint>(ClassContainingCode->ClassGeneratedBy) : NULL);
+	UBlueprint* BlueprintObj = (ClassContainingCode ? Cast<UBlueprint>(ClassContainingCode->ClassGeneratedBy) : nullptr);
 	if (BlueprintObj)
 	{
 		const FBlueprintExceptionInfo* ExceptionInfo = &Info;
@@ -241,11 +232,25 @@ void FKismetDebugUtilities::OnScriptException(const UObject* ActiveObject, const
 		UObject* ObjectBeingDebugged = BlueprintObj->GetObjectBeingDebugged();
 		UObject* SavedObjectBeingDebugged = ObjectBeingDebugged;
 		UWorld* WorldBeingDebugged = BlueprintObj->GetWorldBeingDebugged();
+		const FString& PathToDebug = BlueprintObj->GetObjectPathToDebug();
+		
+		if (ObjectBeingDebugged == nullptr)
+		{
+			// Check if we need to update the object being debugged
+			UObject* ObjectToDebug = FindObjectSafe<UObject>(nullptr, *PathToDebug);
+			if (ObjectToDebug)
+			{
+				// If the path to debug matches a newly-spawned object, set the hard reference now
+				ObjectBeingDebugged = ObjectToDebug;
+				BlueprintObj->SetObjectBeingDebugged(ObjectBeingDebugged);
+			}
+		}
 
 		const int32 BreakpointOffset = StackFrame.Code - StackFrame.Node->Script.GetData() - 1;
 
 		bool bShouldBreakExecution = false;
 		bool bForceToCurrentObject = false;
+		bool bIsStepping = Data.bIsSingleStepping || Data.TargetGraphStackDepth != INDEX_NONE;
 
 		switch (Info.GetType())
 		{
@@ -253,7 +258,7 @@ void FKismetDebugUtilities::OnScriptException(const UObject* ActiveObject, const
 			bShouldBreakExecution = true;
 			break;
 		case EBlueprintExceptionType::Tracepoint:
-			bShouldBreakExecution = Data.bIsSingleStepping || Data.TargetGraphStackDepth != INDEX_NONE;
+			bShouldBreakExecution = bIsStepping;
 			break;
 		case EBlueprintExceptionType::WireTracepoint:
 			break;
@@ -278,11 +283,11 @@ void FKismetDebugUtilities::OnScriptException(const UObject* ActiveObject, const
 
 #if WITH_EDITORONLY_DATA // to protect access to GeneratedClass->DebugData
 				UBlueprintGeneratedClass* GeneratedClass = Cast<UBlueprintGeneratedClass>(ClassContainingCode);
-				if ((GeneratedClass != NULL) && GeneratedClass->DebugData.IsValid())
+				if ((GeneratedClass != nullptr) && GeneratedClass->DebugData.IsValid())
 				{
 					UEdGraphNode* BlueprintNode = GeneratedClass->DebugData.FindSourceNodeFromCodeLocation(StackFrame.Node, BreakpointOffset, true);
 					// if instead, there is a node we can point to...
-					if (BlueprintNode != NULL)
+					if (BlueprintNode != nullptr)
 					{
 						Message->AddToken(FTextToken::Create(LOCTEXT("RuntimeErrorBlueprintGraphLabel", "Graph: ")));
 						Message->AddToken(FUObjectToken::Create(BlueprintNode->GetGraph(), FText::FromString(GetNameSafe(BlueprintNode->GetGraph())))
@@ -311,14 +316,20 @@ void FKismetDebugUtilities::OnScriptException(const UObject* ActiveObject, const
 			break;
 		}
 
+		if (!bForceToCurrentObject && bIsStepping)
+		{
+			// If we're stepping, temporarily override the selected debug object so step into always works)
+			bForceToCurrentObject = true;
+		}
+
 		// If we are debugging a specific world, the object needs to be in it
-		if (WorldBeingDebugged != NULL && !ActiveObject->IsIn(WorldBeingDebugged))
+		if (WorldBeingDebugged != nullptr && !ActiveObject->IsIn(WorldBeingDebugged))
 		{
 			// Might be a streaming level case, so find the real world to see
 			const UObject *ObjOuter = ActiveObject;
-			const UWorld *ObjWorld = NULL;
+			const UWorld *ObjWorld = nullptr;
 			bool FailedWorldCheck = true;
-			while(ObjWorld == NULL && ObjOuter != NULL)
+			while(ObjWorld == nullptr && ObjOuter != nullptr)
 			{
 				ObjOuter = ObjOuter->GetOuter();
 				ObjWorld = Cast<const UWorld>(ObjOuter);
@@ -341,16 +352,17 @@ void FKismetDebugUtilities::OnScriptException(const UObject* ActiveObject, const
 
 		if (bShouldBreakExecution)
 		{
-			if ((ObjectBeingDebugged == NULL) || (bForceToCurrentObject))
+			if ((PathToDebug.IsEmpty()) || (bForceToCurrentObject))
 			{
 				// If there was nothing being debugged, treat this as a one-shot, temporarily set this object as being debugged,
 				// and continue allowing any breakpoint to hit later on
 				bResetObjectBeingDebuggedWhenFinished = true;
-				BlueprintObj->SetObjectBeingDebugged(const_cast<UObject*>(ActiveObject));
+				ObjectBeingDebugged = const_cast<UObject*>(ActiveObject);
+				BlueprintObj->SetObjectBeingDebugged(ObjectBeingDebugged);
 			}
 		}
 
-		if (BlueprintObj->GetObjectBeingDebugged() == ActiveObject)
+		if (ObjectBeingDebugged == ActiveObject)
 		{
 			// Record into the trace log
 			FKismetTraceSample& Tracer = Data.TraceStackSamples.WriteNewElementUninitialized();
@@ -383,12 +395,16 @@ void FKismetDebugUtilities::OnScriptException(const UObject* ActiveObject, const
 		// Reset the object being debugged if we forced it to be something different
 		if (bResetObjectBeingDebuggedWhenFinished)
 		{
-			BlueprintObj->SetObjectBeingDebugged(SavedObjectBeingDebugged);
+			if (BlueprintObj->GetObjectBeingDebugged() == ObjectBeingDebugged)
+			{
+				// Only reset if it's still what we expected, if the user picked a new object from the UI we want to respect that
+				BlueprintObj->SetObjectBeingDebugged(SavedObjectBeingDebugged);
+			}
 		}
 
 		const auto ShowScriptExceptionError = [&](const FText& InExceptionErrorMsg)
 		{
-			if (GUnrealEd->PlayWorld != NULL)
+			if (GUnrealEd->PlayWorld != nullptr)
 			{
 				GEditor->RequestEndPlayMap();
 				FSlateApplication::Get().LeaveDebuggingMode();
@@ -520,9 +536,8 @@ UEdGraphNode* FKismetDebugUtilities::FindSourceNodeForCodeLocation(const UObject
 
 void FKismetDebugUtilities::CheckBreakConditions(UEdGraphNode* NodeStoppedAt, bool bHitBreakpoint, int32 BreakpointOffset, bool& InOutBreakExecution)
 {
-#if DO_BLUEPRINT_GUARD
 	FKismetDebugUtilitiesData& Data = FKismetDebugUtilitiesData::Get();
-	FBlueprintExceptionTracker& BlueprintExceptionTracker = FBlueprintExceptionTracker::Get();
+	const TArray<const FFrame*>& ScriptStack = FBlueprintContextTracker::Get().GetScriptStack();
 
 	if (NodeStoppedAt)
 	{
@@ -535,7 +550,7 @@ void FKismetDebugUtilities::CheckBreakConditions(UEdGraphNode* NodeStoppedAt, bo
 			// Update the TargetGraphStackDepth if we're on the same node - this handles things like
 			// event nodes in the Event Graph, which will push another frame on to the stack:
 			if(NodeStoppedAt == Data.MostRecentStoppedNode &&
-				Data.MostRecentBreakpointGraphStackDepth < BlueprintExceptionTracker.ScriptStack.Num() &&
+				Data.MostRecentBreakpointGraphStackDepth < ScriptStack.Num() &&
 				Data.TargetGraphStackDepth != INDEX_NONE)
 			{
 				// when we recurse, when a node increases stack depth itself we want to increase our 
@@ -552,7 +567,7 @@ void FKismetDebugUtilities::CheckBreakConditions(UEdGraphNode* NodeStoppedAt, bo
 			InOutBreakExecution = 
 				NodeStoppedAt != Data.MostRecentStoppedNode ||
 				(
-					Data.MostRecentBreakpointGraphStackDepth < BlueprintExceptionTracker.ScriptStack.Num() &&
+					Data.MostRecentBreakpointGraphStackDepth < ScriptStack.Num() &&
 					Data.MostRecentBreakpointInstructionOffset >= BreakpointOffset
 				);
 
@@ -560,12 +575,12 @@ void FKismetDebugUtilities::CheckBreakConditions(UEdGraphNode* NodeStoppedAt, bo
 			// in to a collapsed graph/macro instance:
 			if(InOutBreakExecution && Data.TargetGraphStackDepth != INDEX_NONE && !bHitBreakpoint)
 			{
-				InOutBreakExecution = Data.TargetGraphStackDepth >= BlueprintExceptionTracker.ScriptStack.Num();
-				if(InOutBreakExecution && Data.TargetGraphStackDepth == BlueprintExceptionTracker.ScriptStack.Num())
+				InOutBreakExecution = Data.TargetGraphStackDepth >= ScriptStack.Num();
+				if(InOutBreakExecution && Data.TargetGraphStackDepth == ScriptStack.Num())
 				{
 					// we're at the same stack depth, don't break if we've entered a different graph, but do break if we left the 
 					// graph that we were trying to step over..
-					const FFrame* CurrentFrame = BlueprintExceptionTracker.ScriptStack.Last();
+					const FFrame* CurrentFrame = ScriptStack.Last();
 					if(CurrentFrame->Object)
 					{
 						if(UBlueprintGeneratedClass* BPGC = Cast<UBlueprintGeneratedClass>(CurrentFrame->Object->GetClass()))
@@ -597,7 +612,7 @@ void FKismetDebugUtilities::CheckBreakConditions(UEdGraphNode* NodeStoppedAt, bo
 	if (InOutBreakExecution)
 	{
 		Data.MostRecentStoppedNode = NodeStoppedAt;
-		Data.MostRecentBreakpointGraphStackDepth = BlueprintExceptionTracker.ScriptStack.Num();
+		Data.MostRecentBreakpointGraphStackDepth = ScriptStack.Num();
 		Data.MostRecentBreakpointInstructionOffset = BreakpointOffset;
 		Data.TargetGraphStackDepth = INDEX_NONE;
 		Data.TargetGraphNodes.Empty();
@@ -619,12 +634,10 @@ void FKismetDebugUtilities::CheckBreakConditions(UEdGraphNode* NodeStoppedAt, bo
 			}
 		}
 	}
-#endif // DO_BLUEPRINT_GUARD
 }
 
 void FKismetDebugUtilities::AttemptToBreakExecution(UBlueprint* BlueprintObj, const UObject* ActiveObject, const FFrame& StackFrame, const FBlueprintExceptionInfo& Info, UEdGraphNode* NodeStoppedAt, int32 DebugOpcodeOffset)
 {
-#if DO_BLUEPRINT_GUARD
 	checkSlow(BlueprintObj->GetObjectBeingDebugged() == ActiveObject);
 
 	FKismetDebugUtilitiesData& Data = FKismetDebugUtilitiesData::Get();
@@ -715,14 +728,13 @@ void FKismetDebugUtilities::AttemptToBreakExecution(UBlueprint* BlueprintObj, co
 	if (bShouldInStackDebug)
 	{
 		TGuardValue<int32> GuardDisablePIE(GPlayInEditorID, INDEX_NONE);
-		const TArray<const FFrame*>& ScriptStack = FBlueprintExceptionTracker::Get().ScriptStack;
+		const TArray<const FFrame*>& ScriptStack = FBlueprintContextTracker::Get().GetScriptStack();
 		Data.LastExceptionMessage = Info.GetDescription();
 		FKismetEditorUtilities::BringKismetToFocusAttentionOnObject(NodeStoppedAt);
 		CallStackViewer::UpdateDisplayedCallstack(ScriptStack);
 		WatchViewer::UpdateInstancedWatchDisplay();
 		FSlateApplication::Get().EnterDebuggingMode();
 	}
-#endif // DO_BLUEPRINT_GUARD
 }
 
 UEdGraphNode* FKismetDebugUtilities::GetCurrentInstruction()
@@ -1061,18 +1073,49 @@ FKismetDebugUtilities::FOnWatchedPinsListChanged FKismetDebugUtilities::WatchedP
 
 bool FKismetDebugUtilities::CanWatchPin(const UBlueprint* Blueprint, const UEdGraphPin* Pin)
 {
-	//@TODO: This function belongs in the schema
-	const UEdGraphSchema_K2* K2Schema = GetDefault<UEdGraphSchema_K2>();
+	// Forward to schema
+	if(const UEdGraphNode* Node = Pin->GetOwningNode())
+	{
+		if(const UAnimationGraphSchema* AnimationGraphSchema = Cast<UAnimationGraphSchema>(Node->GetSchema()))
+		{
+			// Anim graphs need to respect whether they have a binding as they are effectively unlinked
+			bool bHasBinding = false; 
 
-	UEdGraph* Graph = Pin->GetOwningNode()->GetGraph();
+			if(UAnimGraphNode_Base* AnimGraphNode = Cast<UAnimGraphNode_Base>(Pin->GetOwningNode()))
+			{
+				// Compare FName without number to make sure we catch array properties that are split into multiple pins
+				FName ComparisonName = Pin->GetFName();
+				ComparisonName.SetNumber(0);
 
-	// Inputs should always be followed to their corresponding output in the world above
-	const bool bNotAnInput = (Pin->Direction != EGPD_Input);
+				if (FAnimGraphNodePropertyBinding* BindingPtr = AnimGraphNode->PropertyBindings.Find(ComparisonName))
+				{
+					bHasBinding = true;
+				}
+			}
 
-	//@TODO: Make watching a schema-allowable/denyable thing
-	const bool bCanWatchThisGraph = true;
+			UEdGraph* Graph = Pin->GetOwningNode()->GetGraph();
 
-	return bCanWatchThisGraph && !K2Schema->IsMetaPin(*Pin) && bNotAnInput && !IsPinBeingWatched(Blueprint, Pin);
+			// We allow input pins to be watched only if they have bindings, otherwise we need to follow to output pins
+			const bool bNotAnInputOrBound = (Pin->Direction != EGPD_Input) || bHasBinding;
+
+			return !AnimationGraphSchema->IsMetaPin(*Pin) && bNotAnInputOrBound && !IsPinBeingWatched(Blueprint, Pin);
+		}
+		else if(const UEdGraphSchema_K2* K2Schema = Cast<UEdGraphSchema_K2>(Node->GetSchema()))
+		{
+			UEdGraph* Graph = Pin->GetOwningNode()->GetGraph();
+
+			// Inputs should always be followed to their corresponding output in the world above
+			const bool bNotAnInput = (Pin->Direction != EGPD_Input);
+
+			//@TODO: Make watching a schema-allowable/denyable thing
+			const bool bCanWatchThisGraph = true;
+
+			return bCanWatchThisGraph && !K2Schema->IsMetaPin(*Pin) && bNotAnInput && !IsPinBeingWatched(Blueprint, Pin);
+		}
+	}
+
+	return false;
+	
 }
 
 bool FKismetDebugUtilities::IsPinBeingWatched(const UBlueprint* Blueprint, const UEdGraphPin* Pin)
@@ -1297,7 +1340,7 @@ FKismetDebugUtilities::EWatchTextResult FKismetDebugUtilities::FindDebuggingData
 					FStructProperty* NodeStructProperty = CastField<FStructProperty>(FKismetDebugUtilities::FindClassPropertyForNode(Blueprint, Node));
 					if (NodeStructProperty)
 					{
-						for (const FStructPropertyPath& NodeProperty : AnimBlueprintGeneratedClass->AnimNodeProperties)
+						for (const FStructPropertyPath& NodeProperty : AnimBlueprintGeneratedClass->GetAnimNodeProperties())
 						{
 							if (NodeProperty.Get() == NodeStructProperty)
 							{

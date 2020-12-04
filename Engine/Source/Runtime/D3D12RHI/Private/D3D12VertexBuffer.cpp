@@ -44,83 +44,36 @@ FD3D12VertexBuffer::~FD3D12VertexBuffer()
 	}
 }
 
-void FD3D12VertexBuffer::Rename(FD3D12ResourceLocation& NewLocation)
-{
-	FD3D12ResourceLocation::TransferOwnership(ResourceLocation, NewLocation);
-
-	FScopeLock Lock(&DynamicSRVsCS);
-	for (FD3D12BaseShaderResourceView* DynamicSRVBase : DynamicSRVs)
-	{
-		FD3D12ShaderResourceView* DynamicSRV = static_cast<FD3D12ShaderResourceView*>(DynamicSRVBase);
-		if (DynamicSRV->IsValid())
-		{
-			DynamicSRV->Rename(ResourceLocation);
-		}
-	}
-}
-
-void FD3D12VertexBuffer::RenameLDAChain(FD3D12ResourceLocation& NewLocation)
-{
-	ensure(GetUsage() & BUF_AnyDynamic);
-	Rename(NewLocation);
-
-	if (GNumExplicitGPUsForRendering > 1)
-	{
-		// Mutli-GPU support : renaming the LDA only works if we start we the head link. Otherwise Rename() must be used per GPU.
-		ensure(IsHeadLink());
-		ensure(GetParentDevice() == NewLocation.GetParentDevice());
-
-		// Update all of the resources in the LDA chain to reference this cross-node resource
-		for (FD3D12VertexBuffer* NextBuffer = GetNextObject(); NextBuffer; NextBuffer = NextBuffer->GetNextObject())
-		{
-			FD3D12ResourceLocation::ReferenceNode(NextBuffer->GetParentDevice(), NextBuffer->ResourceLocation, ResourceLocation);
-
-			FScopeLock Lock(&NextBuffer->DynamicSRVsCS);
-			for (FD3D12BaseShaderResourceView* DynamicSRVBase : NextBuffer->DynamicSRVs)
-			{
-				FD3D12ShaderResourceView* DynamicSRV = static_cast<FD3D12ShaderResourceView*>(DynamicSRVBase);
-				if (DynamicSRV->IsValid())
-				{
-					DynamicSRV->Rename(NextBuffer->ResourceLocation);
-				}
-			}
-		}
-	}
-}
-
 void FD3D12VertexBuffer::Swap(FD3D12VertexBuffer& Other)
 {
 	check(!LockedData.bLocked && !Other.LockedData.bLocked);
 	FRHIVertexBuffer::Swap(Other);
 	FD3D12BaseShaderResource::Swap(Other);
 	FD3D12TransientResource::Swap(Other);
-	FD3D12LinkedAdapterObject<FD3D12VertexBuffer>::Swap(Other);
+	FD3D12LinkedAdapterObject<FD3D12Buffer>::Swap(Other);
 }
 
 void FD3D12VertexBuffer::ReleaseUnderlyingResource()
 {
-	check(!LockedData.bLocked && ResourceLocation.IsValid());
 	UpdateBufferStats<FD3D12VertexBuffer>(&ResourceLocation, false);
-	ResourceLocation.Clear();
 	FRHIVertexBuffer::ReleaseUnderlyingResource();
-	FD3D12VertexBuffer* NextVB = GetNextObject();
-	if (NextVB)
-	{
-		NextVB->ReleaseUnderlyingResource();
-	}
+	FD3D12Buffer::ReleaseUnderlyingResource();
 }
 
-FVertexBufferRHIRef FD3D12DynamicRHI::RHICreateVertexBuffer(uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
+FVertexBufferRHIRef FD3D12DynamicRHI::RHICreateVertexBuffer(uint32 Size, uint32 InUsage, ERHIAccess InResourceState, FRHIResourceCreateInfo& CreateInfo)
 {
 	if (CreateInfo.bWithoutNativeResource)
 	{
-		return new FD3D12VertexBuffer();
+		return GetAdapter().CreateLinkedObject<FD3D12VertexBuffer>(CreateInfo.GPUMask, [](FD3D12Device* Device)
+			{
+				return new FD3D12VertexBuffer();
+			});
 	}
 
 	const D3D12_RESOURCE_DESC Desc = CreateVertexBufferResourceDesc(Size, InUsage);
 	const uint32 Alignment = 4;
 
-	FD3D12VertexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12VertexBuffer>(nullptr, Desc, Alignment, 0, Size, InUsage, CreateInfo);
+	FD3D12VertexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12VertexBuffer>(nullptr, Desc, Alignment, 0, Size, InUsage, ED3D12ResourceStateMode::Default, CreateInfo);
 	if (Buffer->ResourceLocation.IsTransient() )
 	{
 		// TODO: this should ideally be set in platform-independent code, since this tracking is for the high level
@@ -132,25 +85,30 @@ FVertexBufferRHIRef FD3D12DynamicRHI::RHICreateVertexBuffer(uint32 Size, uint32 
 
 void* FD3D12DynamicRHI::RHILockVertexBuffer(FRHICommandListImmediate& RHICmdList, FRHIVertexBuffer* VertexBufferRHI, uint32 Offset, uint32 Size, EResourceLockMode LockMode)
 {
-	return LockBuffer(&RHICmdList, FD3D12DynamicRHI::ResourceCast(VertexBufferRHI), Offset, Size, LockMode);
+	FD3D12VertexBuffer* Buffer = FD3D12DynamicRHI::ResourceCast(VertexBufferRHI);
+	return LockBuffer(&RHICmdList, Buffer, Buffer->GetSize(), Buffer->GetUsage(), Offset, Size, LockMode);
 }
 
 void FD3D12DynamicRHI::RHIUnlockVertexBuffer(FRHICommandListImmediate& RHICmdList, FRHIVertexBuffer* VertexBufferRHI)
 {
-	UnlockBuffer(&RHICmdList, FD3D12DynamicRHI::ResourceCast(VertexBufferRHI));
+	FD3D12VertexBuffer* Buffer = FD3D12DynamicRHI::ResourceCast(VertexBufferRHI);
+	UnlockBuffer(&RHICmdList, Buffer, Buffer->GetUsage());
 }
 
-FVertexBufferRHIRef FD3D12DynamicRHI::CreateVertexBuffer_RenderThread(FRHICommandListImmediate& RHICmdList, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
+FVertexBufferRHIRef FD3D12DynamicRHI::CreateVertexBuffer_RenderThread(FRHICommandListImmediate& RHICmdList, uint32 Size, uint32 InUsage, ERHIAccess InResourceState, FRHIResourceCreateInfo& CreateInfo)
 {	
 	if (CreateInfo.bWithoutNativeResource)
 	{
-		return new FD3D12VertexBuffer();
+		return GetAdapter().CreateLinkedObject<FD3D12VertexBuffer>(CreateInfo.GPUMask, [](FD3D12Device* Device)
+			{
+				return new FD3D12VertexBuffer();
+			});
 	}
 
 	const D3D12_RESOURCE_DESC Desc = CreateVertexBufferResourceDesc(Size, InUsage);
 	const uint32 Alignment = 4;
 
-	FD3D12VertexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12VertexBuffer>(&RHICmdList, Desc, Alignment, 0, Size, InUsage, CreateInfo);
+	FD3D12VertexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12VertexBuffer>(&RHICmdList, Desc, Alignment, 0, Size, InUsage, ED3D12ResourceStateMode::Default, CreateInfo);
 	if (Buffer->ResourceLocation.IsTransient())
 	{
 		// TODO: this should ideally be set in platform-independent code, since this tracking is for the high level
@@ -162,11 +120,18 @@ FVertexBufferRHIRef FD3D12DynamicRHI::CreateVertexBuffer_RenderThread(FRHIComman
 
 void FD3D12DynamicRHI::RHICopyVertexBuffer(FRHIVertexBuffer* SourceBufferRHI, FRHIVertexBuffer* DestBufferRHI)
 {
-	FD3D12VertexBuffer*  SourceBuffer = FD3D12DynamicRHI::ResourceCast(SourceBufferRHI);
-	FD3D12VertexBuffer*  DestBuffer = FD3D12DynamicRHI::ResourceCast(DestBufferRHI);
+	FD3D12VertexBuffer* SrcBuffer = FD3D12DynamicRHI::ResourceCast(SourceBufferRHI);
+	FD3D12VertexBuffer* DstBuffer = FD3D12DynamicRHI::ResourceCast(DestBufferRHI);
+	check(SrcBuffer->GetSize() == DstBuffer->GetSize());
 
-	while (SourceBuffer && DestBuffer)
+	FD3D12Buffer* SourceBuffer = SrcBuffer;
+	FD3D12Buffer* DestBuffer = DstBuffer;
+
+	for (FD3D12Buffer::FDualLinkedObjectIterator It(SourceBuffer, DestBuffer); It; ++It)
 	{
+		SourceBuffer = It.GetFirst();
+		DestBuffer = It.GetSecond();
+
 		FD3D12Device* Device = SourceBuffer->GetParentDevice();
 		check(Device == DestBuffer->GetParentDevice());
 
@@ -177,7 +142,6 @@ void FD3D12DynamicRHI::RHICopyVertexBuffer(FRHIVertexBuffer* SourceBufferRHI, FR
 		D3D12_RESOURCE_DESC const& DestBufferDesc = pDestResource->GetDesc();
 
 		check(SourceBufferDesc.Width == DestBufferDesc.Width);
-		check(SourceBuffer->GetSize() == DestBuffer->GetSize());
 
 		FD3D12CommandContext& Context = Device->GetDefaultCommandContext();
 		Context.numCopies++;
@@ -188,9 +152,6 @@ void FD3D12DynamicRHI::RHICopyVertexBuffer(FRHIVertexBuffer* SourceBufferRHI, FR
 		DEBUG_EXECUTE_COMMAND_CONTEXT(Device->GetDefaultCommandContext());
 
 		Device->RegisterGPUWork(1);
-
-		SourceBuffer = SourceBuffer->GetNextObject();
-		DestBuffer = DestBuffer->GetNextObject();
 	}
 }
 
@@ -212,8 +173,8 @@ void FD3D12DynamicRHI::RHITransferVertexBufferUnderlyingResource(FRHIVertexBuffe
 #if D3D12_RHI_RAYTRACING
 void FD3D12CommandContext::RHICopyBufferRegion(FRHIVertexBuffer* DestBufferRHI, uint64 DstOffset, FRHIVertexBuffer* SourceBufferRHI, uint64 SrcOffset, uint64 NumBytes)
 {
-	FD3D12VertexBuffer*  SourceBuffer = RetrieveObject<FD3D12VertexBuffer>(SourceBufferRHI);
-	FD3D12VertexBuffer*  DestBuffer = RetrieveObject<FD3D12VertexBuffer>(DestBufferRHI);
+	FD3D12Buffer* SourceBuffer = RetrieveObject<FD3D12Buffer>(SourceBufferRHI);
+	FD3D12Buffer* DestBuffer = RetrieveObject<FD3D12Buffer>(DestBufferRHI);
 
 	FD3D12Device* Device = SourceBuffer->GetParentDevice();
 	check(Device == DestBuffer->GetParentDevice());
@@ -258,8 +219,8 @@ void FD3D12CommandContext::RHICopyBufferRegions(const TArrayView<const FCopyBuff
 	// Transition buffers to copy states
 	for (auto& Param : Params)
 	{
-		FD3D12VertexBuffer*  SourceBuffer = RetrieveObject<FD3D12VertexBuffer>(Param.SourceBuffer);
-		FD3D12VertexBuffer*  DestBuffer = RetrieveObject<FD3D12VertexBuffer>(Param.DestBuffer);
+		FD3D12Buffer* SourceBuffer = RetrieveObject<FD3D12Buffer>(Param.SourceBuffer);
+		FD3D12Buffer* DestBuffer = RetrieveObject<FD3D12Buffer>(Param.DestBuffer);
 		check(SourceBuffer);
 		check(DestBuffer);
 
@@ -348,8 +309,8 @@ void FD3D12CommandContext::RHICopyBufferRegions(const TArrayView<const FCopyBuff
 
 	for (auto& Param : Params)
 	{
-		FD3D12VertexBuffer*  SourceBuffer = RetrieveObject<FD3D12VertexBuffer>(Param.SourceBuffer);
-		FD3D12VertexBuffer*  DestBuffer = RetrieveObject<FD3D12VertexBuffer>(Param.DestBuffer);
+		FD3D12Buffer* SourceBuffer = RetrieveObject<FD3D12Buffer>(Param.SourceBuffer);
+		FD3D12Buffer* DestBuffer = RetrieveObject<FD3D12Buffer>(Param.DestBuffer);
 		uint64 SrcOffset = Param.SrcOffset;
 		uint64 DstOffset = Param.DstOffset;
 		uint64 NumBytes = Param.NumBytes;
@@ -382,18 +343,18 @@ void FD3D12CommandContext::RHICopyBufferRegions(const TArrayView<const FCopyBuff
 }
 #endif // D3D12_RHI_RAYTRACING
 
-FVertexBufferRHIRef FD3D12DynamicRHI::CreateAndLockVertexBuffer_RenderThread(FRHICommandListImmediate& RHICmdList, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo, void*& OutDataBuffer)
+FVertexBufferRHIRef FD3D12DynamicRHI::CreateAndLockVertexBuffer_RenderThread(FRHICommandListImmediate& RHICmdList, uint32 Size, uint32 InUsage, ERHIAccess InResourceState, FRHIResourceCreateInfo& CreateInfo, void*& OutDataBuffer)
 {
 	const D3D12_RESOURCE_DESC Desc = CreateVertexBufferResourceDesc(Size, InUsage);
 	const uint32 Alignment = 4;
 
-	FD3D12VertexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12VertexBuffer>(nullptr, Desc, Alignment, 0, Size, InUsage, CreateInfo);
+	FD3D12VertexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12VertexBuffer>(nullptr, Desc, Alignment, 0, Size, InUsage, ED3D12ResourceStateMode::Default, CreateInfo);
 	if (Buffer->ResourceLocation.IsTransient())
 	{
 		// TODO: this should ideally be set in platform-independent code, since this tracking is for the high level
 		Buffer->SetCommitted(false);
 	}
-	OutDataBuffer = LockBuffer(&RHICmdList, Buffer, 0, Size, RLM_WriteOnly);
+	OutDataBuffer = LockBuffer(&RHICmdList, Buffer, Buffer->GetSize(), Buffer->GetUsage(), 0, Size, RLM_WriteOnly);
 
 	return Buffer;
 }

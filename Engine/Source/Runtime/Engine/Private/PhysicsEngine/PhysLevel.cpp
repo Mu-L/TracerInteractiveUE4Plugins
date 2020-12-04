@@ -15,9 +15,10 @@
 #include "Modules/ModuleManager.h"
 #include "PhysicsInitialization.h"
 #include "PhysicsEngine/PhysicsSettings.h"
+
 #include "ChaosSolversModule.h"
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	#include "PhysicsEngine/PhysXSupport.h"
 #endif
 
@@ -32,7 +33,6 @@
 FPhysCommandHandler * GPhysCommandHandler = NULL;
 FDelegateHandle GPreGarbageCollectDelegateHandle;
 
-FPhysicsDelegates::FOnUpdatePhysXMaterial FPhysicsDelegates::OnUpdatePhysXMaterial;
 FPhysicsDelegates::FOnPhysicsAssetChanged FPhysicsDelegates::OnPhysicsAssetChanged;
 FPhysicsDelegates::FOnPhysSceneInit FPhysicsDelegates::OnPhysSceneInit;
 FPhysicsDelegates::FOnPhysSceneTerm FPhysicsDelegates::OnPhysSceneTerm;
@@ -52,22 +52,10 @@ public:
 	{
 
 	}
-
-	virtual Chaos::EThreadingMode GetDefaultThreadingMode() const override
+	virtual float GetMinDeltaVelocityForHitEvents() const override
 	{
-		return GetChaosSettings().DefaultThreadingModel;
+		return GetSettings()->MinDeltaVelocityForHitEvents;
 	}
-
-	virtual EChaosSolverTickMode GetDedicatedThreadTickMode() const override
-	{
-		return GetChaosSettings().DedicatedThreadTickMode;
-	}
-
-	virtual EChaosBufferMode GetDedicatedThreadBufferMode() const override
-	{
-		return GetChaosSettings().DedicatedThreadBufferMode;
-	}
-
 private:
 
 	const UPhysicsSettings* GetSettings() const
@@ -147,17 +135,16 @@ void UWorld::SetupPhysicsTickFunctions(float DeltaSeconds)
 		return;
 	}
 
-#if WITH_PHYSX
 	
 	// When ticking the main scene, clean up any physics engine resources (once a frame)
 	DeferredPhysResourceCleanup();
-#endif
 
 	// Update gravity in case it changed
 	FVector DefaultGravity( 0.f, 0.f, GetGravityZ() );
 
 	static const auto CVar_MaxPhysicsDeltaTime = IConsoleManager::Get().FindTConsoleVariableDataFloat(TEXT("p.MaxPhysicsDeltaTime"));
-	PhysScene->SetUpForFrame(&DefaultGravity, DeltaSeconds, UPhysicsSettings::Get()->MaxPhysicsDeltaTime, UPhysicsSettings::Get()->MaxSubstepDeltaTime, UPhysicsSettings::Get()->MaxSubsteps);
+	PhysScene->SetUpForFrame(&DefaultGravity, DeltaSeconds, UPhysicsSettings::Get()->MaxPhysicsDeltaTime,
+		UPhysicsSettings::Get()->MaxSubstepDeltaTime, UPhysicsSettings::Get()->MaxSubsteps, UPhysicsSettings::Get()->bSubstepping);
 }
 
 void UWorld::StartPhysicsSim()
@@ -179,7 +166,11 @@ void UWorld::FinishPhysicsSim()
 		return;
 	}
 
+#if WITH_CHAOS
+	PhysScene->EndFrame();
+#else
 	PhysScene->EndFrame(LineBatcher);
+#endif
 }
 
 // the physics tick functions
@@ -214,19 +205,18 @@ void FEndPhysicsTickFunction::ExecuteTick(float DeltaTime, enum ELevelTick TickT
 		return;
 	}
 
-	FGraphEventRef PhysicsComplete = PhysScene->GetCompletionEvent();
-	if (PhysicsComplete.GetReference() && !PhysicsComplete->IsComplete())
+	FGraphEventArray PhysicsComplete = PhysScene->GetCompletionEvents();
+	if (!PhysScene->IsCompletionEventComplete())
 	{
 		// don't release the next tick group until the physics has completed and we have run FinishPhysicsSim
 		DECLARE_CYCLE_STAT(TEXT("FSimpleDelegateGraphTask.FinishPhysicsSim"),
 			STAT_FSimpleDelegateGraphTask_FinishPhysicsSim,
 			STATGROUP_TaskGraphTasks);
 
-		MyCompletionGraphEvent->SetGatherThreadForDontCompleteUntil(ENamedThreads::GameThread);
 		MyCompletionGraphEvent->DontCompleteUntil(
 			FSimpleDelegateGraphTask::CreateAndDispatchWhenReady(
 				FSimpleDelegateGraphTask::FDelegate::CreateUObject(Target, &UWorld::FinishPhysicsSim),
-				GET_STATID(STAT_FSimpleDelegateGraphTask_FinishPhysicsSim), PhysicsComplete, ENamedThreads::GameThread
+				GET_STATID(STAT_FSimpleDelegateGraphTask_FinishPhysicsSim), &PhysicsComplete, ENamedThreads::GameThread
 			)
 		);
 	}
@@ -236,7 +226,7 @@ void FEndPhysicsTickFunction::ExecuteTick(float DeltaTime, enum ELevelTick TickT
 		Target->FinishPhysicsSim();
 	}
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 #if PHYSX_MEMORY_VALIDATION
 	static int32 Frequency = 0;
 	if (Frequency++ > 10)
@@ -268,7 +258,6 @@ void PostEngineInitialize()
 		// If the solver module is available, pass along our settings provider
 		// #BG - Collect all chaos modules settings into one provider?
 		ChaosModule->SetSettingsProvider(&GEngineChaosSettingsProvider);
-		ChaosModule->OnSettingsChanged();
 	}
 }
 
@@ -288,7 +277,6 @@ bool InitGamePhys()
 		PostEngineInitialize();
 	});
 
-#if WITH_PHYSX
 	
 	GPhysCommandHandler = new FPhysCommandHandler();
 	GPreGarbageCollectDelegateHandle = FCoreUObjectDelegates::GetPreGarbageCollectDelegate().AddRaw(GPhysCommandHandler, &FPhysCommandHandler::Flush);
@@ -299,7 +287,6 @@ bool InitGamePhys()
 		DeferredPhysResourceCleanup();
 	});
 	
-#endif // WITH_PHYSX
 
 	// Message to the log that physics is initialised and which interface we are using.
 	UE_LOG(LogInit, Log, TEXT("Physics initialised using underlying interface: %s"), *FPhysicsInterface::GetInterfaceDescription());
@@ -315,14 +302,14 @@ void TermGamePhys()
 		GPostInitHandle.Reset();
 	}
 
-#if WITH_PHYSX
-
+#if PHYSICS_INTERFACE_PHYSX
 	// Do nothing if they were never initialized
 	if(GPhysXFoundation == NULL)
 	{
 		FPhysxSharedData::Terminate();	//early out before TermGamePhysCore so kill this - not sure if this is a real case we even care about
 		return;
 	}
+#endif
 
 	if (GPhysCommandHandler != NULL)
 	{
@@ -331,7 +318,6 @@ void TermGamePhys()
 		delete GPhysCommandHandler;
 		GPhysCommandHandler = NULL;
 	}
-#endif
 
 	TermGamePhysCore();
 }
@@ -342,7 +328,7 @@ void TermGamePhys()
 */
 void DeferredPhysResourceCleanup()
 {
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 
 	// Release all tri meshes and reset array
 	for(int32 MeshIdx=0; MeshIdx<GPhysXPendingKillTriMesh.Num(); MeshIdx++)

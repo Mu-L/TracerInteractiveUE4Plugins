@@ -16,12 +16,6 @@ UClass* FAssetTypeActions_AudioImpulseResponse::GetSupportedClass() const
 	return UAudioImpulseResponse::StaticClass();
 }
 
-const TArray<FText>& FAssetTypeActions_AudioImpulseResponse::GetSubMenus() const
-{
-	static const TArray<FText> SubMenus;
-	return SubMenus;
-}
-
 void FAudioImpulseResponseExtension::RegisterMenus()
 {
 	if (!UToolMenus::IsToolMenuUIEnabled())
@@ -33,7 +27,7 @@ void FAudioImpulseResponseExtension::RegisterMenus()
 	UToolMenu* Menu = UToolMenus::Get()->ExtendMenu("ContentBrowser.AssetContextMenu.SoundWave");
 	FToolMenuSection& Section = Menu->FindOrAddSection("GetAssetActions");
 
-	Section.AddDynamicEntry("SoundWaveAssetConversion", FNewToolMenuSectionDelegate::CreateLambda([](FToolMenuSection& InSection)
+	Section.AddDynamicEntry("SoundWaveAssetConversion_CreateImpulseResponse", FNewToolMenuSectionDelegate::CreateLambda([](FToolMenuSection& InSection)
 	{
 		const TAttribute<FText> Label = LOCTEXT("SoundWave_CreateImpulseResponse", "Create Impulse Response");
 		const TAttribute<FText> ToolTip = LOCTEXT("SoundWave_CreateImpulseResponseTooltip", "Creates an impulse response asset using the selected sound wave.");

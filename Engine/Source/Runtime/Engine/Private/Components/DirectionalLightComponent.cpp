@@ -123,6 +123,11 @@ public:
 	 * The atmosphere transmittance to apply on the illuminance
 	 */
 	FLinearColor AtmosphereTransmittanceFactor;
+	/**
+	 * Whether or not the light should apply the simple transmittance computed on CPU during lighting pass. 
+	 * If per pixel transmittance is enabled, it should not be done to avoid double transmittance contribution.
+	 */
+	bool bApplyAtmosphereTransmittanceToLightShaderParam;
 
 	/**
 	 * The luminance of the sun disk in space (function of the sun illuminance and solid angle)
@@ -163,8 +168,24 @@ public:
 	/** Light source angle in degrees. */
 	float LightSourceSoftAngle;
 
+	/** Shadow source angle factor. */
+	float ShadowSourceAngleFactor;
+
 	/** Determines how far shadows can be cast, in world units.  Larger values increase the shadowing cost. */
 	float TraceDistance;
+
+	uint32 bCastShadowsOnClouds : 1;
+	uint32 bCastShadowsOnAtmosphere : 1;
+	uint32 bCastCloudShadows : 1;
+	float CloudShadowExtent;
+	float CloudShadowStrength;
+	float CloudShadowOnAtmosphereStrength;
+	float CloudShadowOnSurfaceStrength;
+	float CloudShadowDepthBias;
+	float CloudShadowMapResolutionScale;
+	float CloudShadowRaySampleCountScale;
+	FLinearColor CloudScatteredLuminanceScale;
+	uint32 bPerPixelAtmosphereTransmittance : 1;
 
 	/** Initialization constructor. */
 	FDirectionalLightSceneProxy(const UDirectionalLightComponent* Component) :
@@ -176,6 +197,7 @@ public:
 		OcclusionDepthRange(Component->OcclusionDepthRange),
 		LightShaftOverrideDirection(Component->LightShaftOverrideDirection),
 		AtmosphereTransmittanceFactor(FLinearColor::White),
+		bApplyAtmosphereTransmittanceToLightShaderParam(true),
 		SunDiscOuterSpaceLuminance(FLinearColor::White),
 		DynamicShadowCascades(Component->DynamicShadowCascades > 0 ? Component->DynamicShadowCascades : 0),
 		CascadeDistributionExponent(Component->CascadeDistributionExponent),
@@ -184,7 +206,20 @@ public:
 		DistanceFieldShadowDistance(Component->bUseRayTracedDistanceFieldShadows ? Component->DistanceFieldShadowDistance : 0),
 		LightSourceAngle(Component->LightSourceAngle),
 		LightSourceSoftAngle(Component->LightSourceSoftAngle),
-		TraceDistance(FMath::Clamp(Component->TraceDistance, 1000.0f, 1000000.0f))
+		ShadowSourceAngleFactor(Component->ShadowSourceAngleFactor),
+		TraceDistance(FMath::Clamp(Component->TraceDistance, 1000.0f, 1000000.0f)),
+		bCastShadowsOnClouds(Component->bCastShadowsOnClouds),
+		bCastShadowsOnAtmosphere(Component->bCastShadowsOnAtmosphere),
+		bCastCloudShadows(Component->bCastCloudShadows),
+		CloudShadowExtent(Component->CloudShadowExtent),
+		CloudShadowStrength(Component->CloudShadowStrength),
+		CloudShadowOnAtmosphereStrength(Component->CloudShadowOnAtmosphereStrength),
+		CloudShadowOnSurfaceStrength(Component->CloudShadowOnSurfaceStrength),
+		CloudShadowDepthBias(Component->CloudShadowDepthBias),
+		CloudShadowMapResolutionScale(Component->CloudShadowMapResolutionScale),
+		CloudShadowRaySampleCountScale(Component->CloudShadowRaySampleCountScale),
+		CloudScatteredLuminanceScale(Component->CloudScatteredLuminanceScale),
+		bPerPixelAtmosphereTransmittance(Component->bPerPixelAtmosphereTransmittance)
 	{
 		LightShaftOverrideDirection.Normalize();
 
@@ -234,8 +269,10 @@ public:
 	{
 		LightParameters.Position = FVector::ZeroVector;
 		LightParameters.InvRadius = 0.0f;
-		LightParameters.Color = FVector(GetColor() * AtmosphereTransmittanceFactor); 
 		LightParameters.FalloffExponent = 0.0f;
+
+		// We only apply transmittance in some cases. For instance if transmittance is evaluated per pixel, no apply it to the light illuminance.
+		LightParameters.Color = FVector(GetColor() * (bApplyAtmosphereTransmittanceToLightShaderParam ? AtmosphereTransmittanceFactor : FLinearColor::White));
 
 		LightParameters.Direction = -GetDirection();
 		LightParameters.Tangent = -GetDirection();
@@ -251,6 +288,11 @@ public:
 	virtual float GetLightSourceAngle() const override
 	{
 		return LightSourceAngle;
+	}
+
+	virtual float GetShadowSourceAngleFactor() const override
+	{
+		return ShadowSourceAngleFactor;
 	}
 
 	virtual float GetTraceDistance() const override
@@ -325,10 +367,12 @@ public:
 		OutInitializer.FaceDirection = FVector(1,0,0);
 		OutInitializer.SubjectBounds = FBoxSphereBounds(FVector::ZeroVector,SubjectBounds.BoxExtent,SubjectBounds.SphereRadius);
 		OutInitializer.WAxis = FVector4(0,0,0,1);
-		OutInitializer.MinLightW = -HALF_WORLD_MAX;
-		// Reduce casting distance on a directional light
-		// This is necessary to improve floating point precision in several places, especially when deriving frustum verts from InvReceiverMatrix
-		OutInitializer.MaxDistanceToCastInLightW = HALF_WORLD_MAX / 32.0f;
+		// Use the minimum of half the world, things further away do not cast shadows,
+		// However, if the cascade bounds are larger, then extend the casting distance far enough to encompass the cascade.
+		OutInitializer.MinLightW = FMath::Min<float>(-HALF_WORLD_MAX, -SubjectBounds.SphereRadius);
+		// Range must extend to end of cascade bounds
+		const float MaxLightW = SubjectBounds.SphereRadius;
+		OutInitializer.MaxDistanceToCastInLightW = MaxLightW - OutInitializer.MinLightW;
 		OutInitializer.bRayTracedDistanceField = bRayTracedCascade;
 		OutInitializer.CascadeSettings.bFarShadowCascade = !bRayTracedCascade && OutInitializer.CascadeSettings.ShadowSplitIndex >= (int32)NumNearCascades;
 		return true;
@@ -348,10 +392,12 @@ public:
 		OutInitializer.FaceDirection = FVector(1,0,0);
 		OutInitializer.SubjectBounds = FBoxSphereBounds( FVector::ZeroVector, LightPropagationVolumeBounds.GetExtent(), FMath::Sqrt( LpvExtent * LpvExtent * 3.0f ) );
 		OutInitializer.WAxis = FVector4(0,0,0,1);
-		OutInitializer.MinLightW = -HALF_WORLD_MAX;
-		// Reduce casting distance on a directional light
-		// This is necessary to improve floating point precision in several places, especially when deriving frustum verts from InvReceiverMatrix
-		OutInitializer.MaxDistanceToCastInLightW = HALF_WORLD_MAX / 32.0f;
+		// Use the minimum of half the world, things further away do not cast shadows,
+		// However, if the cascade bounds are larger, then extend the casting distance far enough to encompass the cascade.
+		OutInitializer.MinLightW = FMath::Min<float>(-HALF_WORLD_MAX, -OutInitializer.SubjectBounds.SphereRadius);
+		// Range must extend to end of cascade bounds
+		const float MaxLightW = OutInitializer.SubjectBounds.SphereRadius;
+		OutInitializer.MaxDistanceToCastInLightW = MaxLightW - OutInitializer.MinLightW;
 
 		// Compute the RSM bounds
 		{
@@ -426,10 +472,11 @@ public:
 		return DoesPlatformSupportDistanceFieldShadowing(GShaderPlatformForFeatureLevel[InFeatureLevel]) && (bCreateWithCSM || bCreateWithoutCSM);
 	}
 
-	virtual void SetAtmosphereRelatedProperties(FLinearColor TransmittanceFactor, FLinearColor SunOuterSpaceLuminance) override
+	virtual void SetAtmosphereRelatedProperties(FLinearColor TransmittanceFactor, FLinearColor SunOuterSpaceLuminance, bool bApplyAtmosphereTransmittanceToLightShaderParamIn) override
 	{
 		AtmosphereTransmittanceFactor = TransmittanceFactor;
 		SunDiscOuterSpaceLuminance = SunOuterSpaceLuminance;
+		bApplyAtmosphereTransmittanceToLightShaderParam = bApplyAtmosphereTransmittanceToLightShaderParamIn;
 	}
 
 	virtual FLinearColor GetOuterSpaceLuminance() const override
@@ -445,6 +492,56 @@ public:
 	virtual float GetSunLightHalfApexAngleRadian() const override
 	{
 		return 0.5f * LightSourceAngle * PI / 180.0f; // LightSourceAngle is apex angle (angular diameter) in degree
+	}
+
+
+	virtual bool GetCastShadowsOnClouds()  const override 
+	{ 
+		return bCastShadowsOnClouds; 
+	}
+	virtual bool GetCastShadowsOnAtmosphere()  const override
+	{
+		return bCastShadowsOnAtmosphere;
+	}
+	virtual bool GetCastCloudShadows()  const override
+	{
+		return bCastCloudShadows;
+	}
+	virtual float GetCloudShadowExtent()  const override
+	{
+		return CloudShadowExtent;
+	}
+	virtual float GetCloudShadowMapResolutionScale()  const override
+	{
+		return CloudShadowMapResolutionScale;
+	}
+	virtual float GetCloudShadowRaySampleCountScale()  const override
+	{
+		return CloudShadowRaySampleCountScale;
+	}
+	virtual float GetCloudShadowStrength()  const override
+	{
+		return CloudShadowStrength;
+	}
+	virtual float GetCloudShadowOnAtmosphereStrength()  const override
+	{
+		return CloudShadowOnAtmosphereStrength;
+	}
+	virtual float GetCloudShadowDepthBias()  const override
+	{
+		return CloudShadowDepthBias;
+	}
+	virtual float GetCloudShadowOnSurfaceStrength()  const override
+	{
+		return CloudShadowOnSurfaceStrength;
+	}
+	virtual FLinearColor GetCloudScatteredLuminanceScale()  const override
+	{
+		return CloudScatteredLuminanceScale;
+	}
+	virtual bool GetUsePerPixelAtmosphereTransmittance()  const override
+	{
+		return bPerPixelAtmosphereTransmittance;
 	}
 
 private:
@@ -795,7 +892,7 @@ private:
 				FadeExtension *= FMath::Clamp(CVarRtdfFarTransitionScale.GetValueOnAnyThread(), 0.0f, 1.0f);
 			}
 			// For the last cascade, we want to fade out to avoid a hard line, since there is no further cascade to overlap with, 
-			// extending the far makes little sensse as extending the shadow range would be counter intuitive and affect performance. 
+			// extending the far makes little sense as extending the shadow range would be counter intuitive and affect performance. 
 			// Thus, move the fade plane closer:
 			FadePlane -= FadeExtension;
 		}
@@ -825,7 +922,19 @@ private:
 			OutCascadeSettings->ShadowSplitIndex = (int32)ShadowSplitIndex;
 		}
 
-		const FSphere CascadeSphere = FDirectionalLightSceneProxy::GetShadowSplitBoundsDepthRange(View, View.ViewMatrices.GetViewOrigin(), SplitNear, SplitFar, OutCascadeSettings);
+
+		// TODO: Move this into a flag in some shadow-system cofiguration struct and set based on this cvar outside setup.
+		static const auto CVarSkyAtmosphereSampleLightShadowmap = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.SkyAtmosphere.SampleLightShadowmap"));
+
+		// If enabled & this is the last cascade, then override the near plane used to construct the bounds using the
+		// near plane of the first cacade (AKA the near plane of the view), to ensure the last cascade is inclusive.
+		// We don't set any of the near/far planes etc as that would conflict with the fading.
+		bool bUseNearOverride = (bCastShadowsOnClouds || bCastShadowsOnAtmosphere) 
+			&& (ShadowSplitIndex + 1U) == NumNearAndFarCascades 
+			&& CVarSkyAtmosphereSampleLightShadowmap && CVarSkyAtmosphereSampleLightShadowmap->GetValueOnAnyThread() != 0;
+		
+		const float BoundsCalcNear = bUseNearOverride ? GetSplitDistance(View, 0, bPrecomputedLightingIsValid, bIsRayTracedCascade) : SplitNear;
+		const FSphere CascadeSphere = FDirectionalLightSceneProxy::GetShadowSplitBoundsDepthRange(View, View.ViewMatrices.GetViewOrigin(), BoundsCalcNear, SplitFar, OutCascadeSettings);
 
 		return CascadeSphere;
 	}
@@ -863,6 +972,7 @@ UDirectionalLightComponent::UDirectionalLightComponent(const FObjectInitializer&
 	FarShadowDistance = 300000.0f;
 	LightSourceAngle = 0.5357f;		// Angle of earth's sun
 	LightSourceSoftAngle = 0.0f;
+	ShadowSourceAngleFactor = 1.0f;
 
 	DynamicShadowCascades = 3;
 	CascadeDistributionExponent = 3.0f;
@@ -875,6 +985,23 @@ UDirectionalLightComponent::UDirectionalLightComponent(const FObjectInitializer&
 
 	ModulatedShadowColor = FColor(128, 128, 128);
 	ShadowAmount = 1.0f;
+
+	bUsedAsAtmosphereSunLight = false;
+	AtmosphereSunLightIndex = 0;
+	AtmosphereSunDiskColorScale = FLinearColor::White;
+
+	bCastShadowsOnClouds = 0;
+	bCastShadowsOnAtmosphere = 0;
+	bCastCloudShadows = 0;
+	CloudShadowExtent = 150.0f;
+	CloudShadowMapResolutionScale = 1.0f;
+	CloudShadowRaySampleCountScale = 1.0f;
+	CloudShadowStrength = 1.0f;
+	CloudShadowOnAtmosphereStrength = 1.0f;
+	CloudShadowOnSurfaceStrength = 1.0f;
+	CloudShadowDepthBias = 0.0f;
+	CloudScatteredLuminanceScale = FLinearColor::White;
+	bPerPixelAtmosphereTransmittance = 0;
 }
 
 #if WITH_EDITOR
@@ -965,6 +1092,31 @@ bool UDirectionalLightComponent::CanEditChange(const FProperty* InProperty) cons
 		{
 			return bUseInsetShadowsForMovableObjects && bCastModulatedShadows;
 		}
+
+		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, CloudShadowExtent)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, CloudShadowMapResolutionScale)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, CloudShadowRaySampleCountScale)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, CloudShadowStrength)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, CloudShadowOnAtmosphereStrength)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, CloudShadowOnSurfaceStrength)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, CloudShadowDepthBias))
+		{
+			return bCastCloudShadows && bUsedAsAtmosphereSunLight;
+		}
+		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, bCastCloudShadows)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, bCastShadowsOnAtmosphere)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, CloudScatteredLuminanceScale)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, bPerPixelAtmosphereTransmittance)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, AtmosphereSunLightIndex)
+			|| PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, AtmosphereSunDiskColorScale))
+		{
+			return bUsedAsAtmosphereSunLight;
+		}
+		if (PropertyName == GET_MEMBER_NAME_STRING_CHECKED(UDirectionalLightComponent, bCastShadowsOnClouds))
+		{
+			return bUsedAsAtmosphereSunLight && AtmosphereSunLightIndex == 0;	// AtmosphereLight1 has opaque shadow on cloud disabled.
+		}
+
 
 	}
 
@@ -1099,6 +1251,26 @@ void UDirectionalLightComponent::SetShadowAmount(float NewValue)
 		&& ShadowAmount != NewValue)
 	{
 		ShadowAmount = NewValue;
+		MarkRenderStateDirty();
+	}
+}
+
+void UDirectionalLightComponent::SetAtmosphereSunLight(bool bNewValue)
+{
+	if (AreDynamicDataChangesAllowed()
+		&& bUsedAsAtmosphereSunLight != bNewValue)
+	{
+		bUsedAsAtmosphereSunLight = bNewValue;
+		MarkRenderStateDirty();
+	}
+}
+
+void UDirectionalLightComponent::SetAtmosphereSunLightIndex(int32 NewValue)
+{
+	if (AreDynamicDataChangesAllowed()
+		&& AtmosphereSunLightIndex != NewValue)
+	{
+		AtmosphereSunLightIndex = FMath::Max(0, NewValue);
 		MarkRenderStateDirty();
 	}
 }

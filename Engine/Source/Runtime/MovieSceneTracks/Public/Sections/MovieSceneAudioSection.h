@@ -81,6 +81,14 @@ public:
 	}
 
 	/**
+	 * @return Whether to allow looping if the section length is greater than the sound duration
+	 */
+	bool GetLooping() const
+	{
+		return bLooping;
+	}
+
+	/**
 	 * @return Whether subtitles should be suppressed
 	 */
 	bool GetSuppressSubtitles() const
@@ -151,8 +159,6 @@ public:
 		return OnAudioPlaybackPercent;
 	}
 
-	void UpdateChannelProxy();
-
 public:
 
 	//~ UMovieSceneSection interface
@@ -160,12 +166,8 @@ public:
 	virtual void TrimSection(FQualifiedFrameTime TrimTime, bool bTrimLeft, bool bDeleteKeys) override;
 	virtual UMovieSceneSection* SplitSection(FQualifiedFrameTime SplitTime, bool bDeleteKeys) override;
 	virtual TOptional<FFrameTime> GetOffsetTime() const override;
-	virtual FMovieSceneEvalTemplatePtr GenerateTemplate() const override;
 
-protected:
-
-	virtual void Serialize(FArchive& Ar) override;
-	virtual void PostEditImport() override;
+	virtual EMovieSceneChannelProxyType CacheChannelProxy() override;
 
 private:
 
@@ -204,7 +206,11 @@ private:
 	UPROPERTY()
 	FMovieSceneActorReferenceData AttachActorData;
 
-	UPROPERTY( EditAnywhere, Category="Audio" )
+	/* Allow looping if the section length is greater than the sound duration */
+	UPROPERTY(EditAnywhere, Category = "Audio")
+	bool bLooping;
+
+	UPROPERTY(EditAnywhere, Category = "Audio")
 	bool bSuppressSubtitles;
 
 	/** Should the attenuation settings on this section be used. */

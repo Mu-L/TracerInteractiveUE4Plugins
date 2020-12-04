@@ -16,6 +16,7 @@ DECLARE_LOG_CATEGORY_EXTERN(LogShaderLibrary, Log, All);
 class FShaderPipeline;
 class FShaderMapResource;
 class FShaderMapResourceCode;
+using FShaderMapAssetPaths = TSet<FString>;
 
 struct RENDERCORE_API FShaderCodeLibraryPipeline
 {
@@ -172,6 +173,7 @@ struct RENDERCORE_API FShaderCodeLibrary
 	static FDomainShaderRHIRef CreateDomainShader(EShaderPlatform Platform, const FSHAHash& Hash);
 	static FGeometryShaderRHIRef CreateGeometryShader(EShaderPlatform Platform, const FSHAHash& Hash);
 	static FComputeShaderRHIRef CreateComputeShader(EShaderPlatform Platform, const FSHAHash& Hash);
+	static FRayTracingShaderRHIRef CreateRayTracingShader(EShaderPlatform Platform, const FSHAHash& Hash, EShaderFrequency Frequency);
 
 	// Total number of shader entries in the library
 	static uint32 GetShaderCount(void);
@@ -186,12 +188,18 @@ struct RENDERCORE_API FShaderCodeLibrary
 	// Clean the cook directories
 	static void CleanDirectories(TArray<FName> const& ShaderFormats);
     
-    // Specify the shader formats to cook and which ones needs stable keys. Provide an array of tuples
-	// with names and whether the format needs stable keys.
-    static void CookShaderFormats(TArray<TTuple<FName,bool>> const& ShaderFormats);
-	
+	struct FShaderFormatDescriptor
+	{
+		FName ShaderFormat;
+		bool bNeedsStableKeys;
+		bool bNeedsDeterministicOrder;
+	};
+
+	// Specify the shader formats to cook and which ones needs stable keys. Provide an array of FShaderFormatDescriptors
+    static void CookShaderFormats(TArray<FShaderFormatDescriptor> const& ShaderFormats);
+
 	// At cook time, add shader code to collection
-	static bool AddShaderCode(EShaderPlatform ShaderPlatform, const FShaderMapResourceCode* Code);
+	static bool AddShaderCode(EShaderPlatform ShaderPlatform, const FShaderMapResourceCode* Code, const FShaderMapAssetPaths& AssociatedAssets);
 
 	// We check this early in the callstack to avoid creating a bunch of FName and keys and things we will never save anyway. 
 	// Pass the shader platform to check or EShaderPlatform::SP_NumPlatforms to check if any of the registered types require
@@ -201,11 +209,8 @@ struct RENDERCORE_API FShaderCodeLibrary
 	// At cook time, add the human readable key value information
 	static void AddShaderStableKeyValue(EShaderPlatform ShaderPlatform, FStableShaderKeyAndValue& StableKeyValue);
 
-	// Save collected shader code to a file for each specified shader platform, collating all child cooker results.
-	static bool SaveShaderCodeMaster(const FString& OutputDir, const FString& MetaOutputDir, const TArray<FName>& ShaderFormats, TArray<FString>& OutSCLCSVPath);
-	
-	// Save collected shader code to a file for each specified shader platform, handles only this instances intermediate results.
-	static bool SaveShaderCodeChild(const FString& OutputDir, const FString& MetaOutputDir, const TArray<FName>& ShaderFormats);
+	// Save collected shader code to a file for each specified shader platform
+	static bool SaveShaderCode(const FString& OutputDir, const FString& MetaOutputDir, const TArray<FName>& ShaderFormats, TArray<FString>& OutSCLCSVPath, const TArray<TSet<FName>>* ChunkAssignments);
 	
 	// Package the separate shader bytecode files into a single native shader library. Must be called by the master process.
 	static bool PackageNativeShaderLibrary(const FString& ShaderCodeDir, const TArray<FName>& ShaderFormats);
@@ -214,7 +219,7 @@ struct RENDERCORE_API FShaderCodeLibrary
 	static void DumpShaderCodeStats();
 	
 	// Create a smaller 'patch' library that only contains data from 'NewMetaDataDir' not contained in any of 'OldMetaDataDirs'
-	static bool CreatePatchLibrary(TArray<FString> const& OldMetaDataDirs, FString const& NewMetaDataDir, FString const& OutDir, bool bNativeFormat);
+	static bool CreatePatchLibrary(TArray<FString> const& OldMetaDataDirs, FString const& NewMetaDataDir, FString const& OutDir, bool bNativeFormat, bool bNeedsDeterministicOrder);
 #endif
 	
 	// Safely assign the hash to a shader object

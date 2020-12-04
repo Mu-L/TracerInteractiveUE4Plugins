@@ -2,6 +2,7 @@
 
 #include "Framework/Application/SlateUser.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Framework/Application/NavigationConfig.h"
 #include "Widgets/SWindow.h"
 #include "Widgets/SWeakWidget.h"
 
@@ -83,6 +84,7 @@ void FSlateUser::FActiveTooltipInfo::Reset()
 
 	Tooltip.Reset();
 	SourceWidget.Reset();
+	TooltipVisualizer.Reset();
 	OffsetDirection = ETooltipOffsetDirection::Undetermined;
 }
 
@@ -252,7 +254,7 @@ void FSlateUser::ReleaseCapture(uint32 PointerIndex)
 		if (PointerIndex == FSlateApplication::CursorPointerIndex)
 		{
 			// If cursor capture changes, we should refresh the cursor state.
-			bQueryCursorRequested = true;
+			RequestCursorQuery();
 		}
 	}
 }
@@ -532,6 +534,21 @@ void FSlateUser::CloseTooltip()
 	}
 }
 
+void FSlateUser::SetUserNavigationConfig(TSharedPtr<FNavigationConfig> InNavigationConfig)
+{
+	if (UserNavigationConfig)
+	{
+		UserNavigationConfig->OnUnregister();
+	}
+
+	UserNavigationConfig = InNavigationConfig;
+	
+	if (InNavigationConfig)
+	{
+		InNavigationConfig->OnRegister();
+	}
+}
+
 bool FSlateUser::IsTouchPointerActive(int32 TouchPointerIndex) const
 {
 	return TouchPointerIndex < (int32)ETouchIndex::CursorPointerIndex && PointerPositionsByIndex.Contains(TouchPointerIndex);
@@ -690,7 +707,7 @@ void FSlateUser::QueryCursor()
 		{
 			const bool bHasHardwareCursor = SlateApp.GetPlatformCursor() == Cursor;
 			const FVector2D CurrentCursorPosition = GetCursorPosition();
-			const FVector2D LastCursorPosition = GetPreviousCursorPosition();
+			const FVector2D LastCursorPosition = GetPreviousCursorPosition();			
 			
 			const TSet<FKey> EmptySet;
 			const FPointerEvent CursorEvent(
@@ -736,6 +753,10 @@ void FSlateUser::QueryCursor()
 					CursorReply = ArrangedWidget.Widget->OnCursorQuery(ArrangedWidget.Geometry, CursorEvent);
 					if (CursorReply.IsEventHandled())
 					{
+#if WITH_SLATE_DEBUGGING
+						FSlateDebugging::BroadcastCursorQuery(ArrangedWidget.Widget, CursorReply);
+#endif
+
 						if (!CursorReply.GetCursorWidget().IsValid())
 						{
 							for (; WidgetIndex >= 0; --WidgetIndex)
@@ -756,12 +777,20 @@ void FSlateUser::QueryCursor()
 				{
 					// Query was NOT handled, and we are still over a slate window.
 					CursorReply = FCursorReply::Cursor(EMouseCursor::Default);
+					
+#if WITH_SLATE_DEBUGGING
+					FSlateDebugging::BroadcastCursorQuery(TSharedPtr<SWidget>(), CursorReply);
+#endif
 				}
 			}
 			else
 			{
 				// Set the default cursor when there isn't an active window under the cursor and the mouse isn't captured
 				CursorReply = FCursorReply::Cursor(EMouseCursor::Default);
+
+#if WITH_SLATE_DEBUGGING
+				FSlateDebugging::BroadcastCursorQuery(TSharedPtr<SWidget>(), CursorReply);
+#endif
 			}
 		}
 		ProcessCursorReply(CursorReply);
@@ -1105,10 +1134,12 @@ void FSlateUser::UpdateTooltip(const FMenuStack& MenuStack, bool bCanSpawnNewToo
 		IsInGameThread() &&					// We should never allow the slate loading thread to create new windows or interact with the hittest grid
 		!SlateApp.IsUsingHighPrecisionMouseMovment() && // If we are using HighPrecision movement then we can't rely on the OS cursor to be accurate
 		!IsDragDropping() &&				// We must not currently be in the middle of a drag-drop action
-		
-		//@todo DanH: We need to check if OUR cursor is over a slate window, not just the platform cursor. 
-		//		See about adding FPlatformApplication::GetSlateWindowUnderPoint(FVector2D) or something.
-		SlateApp.GetPlatformApplication()->IsCursorDirectlyOverSlateWindow(); // The cursor must be over a Slate window
+		(
+			SlateApp.IsActive() || // Assume we need update if app is active
+			//@todo DanH: We need to check if OUR cursor is over a slate window, not just the platform cursor. 
+			//		See about adding FPlatformApplication::GetSlateWindowUnderPoint(FVector2D) or something.
+			SlateApp.GetPlatformApplication()->IsCursorDirectlyOverSlateWindow() // The cursor must be over a Slate window
+		);
 
 	if (bCheckForTooltipChanges)
 	{
@@ -1168,21 +1199,24 @@ void FSlateUser::UpdateTooltip(const FMenuStack& MenuStack, bool bCanSpawnNewToo
 		}
 
 		// Notify the new tooltip that it's about to be opened.
-		if (NewTooltip)
+		if (NewTooltip && bCanSpawnNewTooltip)
 		{
 			NewTooltip->OnOpening();
 		}
 
 		// Some widgets might want to provide an alternative Tooltip Handler.
-		TSharedPtr<SWidget> NewTooltipWidget = NewTooltip ? NewTooltip->AsWidget() : TSharedPtr<SWidget>();
-		for (int32 WidgetIndex = WidgetsToQueryForTooltip.Widgets.Num() - 1; WidgetIndex >= 0; --WidgetIndex)
+		if (bCanSpawnNewTooltip || !NewTooltip)
 		{
-			const TSharedRef<SWidget>& CurWidget = WidgetsToQueryForTooltip.Widgets[WidgetIndex].Widget;
-			if (CurWidget->OnVisualizeTooltip(NewTooltipWidget))
+			TSharedPtr<SWidget> NewTooltipWidget = NewTooltip ? NewTooltip->AsWidget() : TSharedPtr<SWidget>();
+			for (int32 WidgetIndex = WidgetsToQueryForTooltip.Widgets.Num() - 1; WidgetIndex >= 0; --WidgetIndex)
 			{
-				// Someone is taking care of visualizing this tooltip
-				NewTooltipVisualizer = CurWidget;
-				break;
+				const TSharedRef<SWidget>& CurWidget = WidgetsToQueryForTooltip.Widgets[WidgetIndex].Widget;
+				if (CurWidget->OnVisualizeTooltip(NewTooltipWidget))
+				{
+					// Someone is taking care of visualizing this tooltip
+					NewTooltipVisualizer = CurWidget;
+					break;
+				}
 			}
 		}
 	}
@@ -1252,16 +1286,19 @@ void FSlateUser::UpdateTooltip(const FMenuStack& MenuStack, bool bCanSpawnNewToo
 		{
 			CloseTooltip();
 
-			if (NewTooltipVisualizer)
+			if (NewTooltip && bCanSpawnNewTooltip)
 			{
-				ActiveTooltipInfo.TooltipVisualizer = NewTooltipVisualizer;
-				ActiveTooltipInfo.Tooltip = NewTooltip;
+				if (NewTooltipVisualizer)
+				{
+					ActiveTooltipInfo.TooltipVisualizer = NewTooltipVisualizer;
+					ActiveTooltipInfo.Tooltip = NewTooltip;
+				}
+				else
+				{
+					ShowTooltip(NewTooltip.ToSharedRef(), DesiredLocation);
+					ActiveTooltipInfo.SourceWidget = WidgetProvidingNewTooltip;
+				}	
 			}
-			else if (bCanSpawnNewTooltip && NewTooltip)
-			{
-				ShowTooltip(NewTooltip.ToSharedRef(), DesiredLocation);
-				ActiveTooltipInfo.SourceWidget = WidgetProvidingNewTooltip;
-			}	
 		}
 	}
 

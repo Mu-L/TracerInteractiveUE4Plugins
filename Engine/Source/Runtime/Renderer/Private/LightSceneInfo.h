@@ -143,7 +143,7 @@ struct TUseBitwiseSwap<FSortedLightSceneInfo>
 };
 
 /** The type of the octree used by FScene to find lights. */
-typedef TOctree<FLightSceneInfoCompact,struct FLightOctreeSemantics> FSceneLightOctree;
+typedef TOctree2<FLightSceneInfoCompact,struct FLightOctreeSemantics> FSceneLightOctree;
 
 /**
  * The information used to render a light.  This is the rendering thread's mirror of the game thread's ULightComponent.
@@ -152,6 +152,9 @@ typedef TOctree<FLightSceneInfoCompact,struct FLightOctreeSemantics> FSceneLight
 class FLightSceneInfo : public FRenderResource
 {
 	friend class FLightPrimitiveInteraction;
+
+	bool bRecordInteractionShadowPrimitives;
+	TArray<FLightPrimitiveInteraction*> InteractionShadowPrimitives;
 
 	/** The list of dynamic primitives affected by the light. */
 	FLightPrimitiveInteraction* DynamicInteractionOftenMovingPrimitiveList;
@@ -166,7 +169,7 @@ public:
 	int32 Id;
 
 	/** The identifier for the primitive in Scene->PrimitiveOctree. */
-	FOctreeElementId OctreeId;
+	FOctreeElementId2 OctreeId;
 
 	/** Tile intersection buffer for distance field shadowing, stored on the light to avoid reallocating each frame. */
 	mutable TUniquePtr<class FLightTileIntersectionResources> TileIntersectionResources;
@@ -302,6 +305,8 @@ public:
 		return DynamicShadowMapChannel;
 	}
 
+	const TArray<FLightPrimitiveInteraction*>* GetInteractionShadowPrimitives(bool bSync = true) const;
+
 	FLightPrimitiveInteraction* GetDynamicInteractionOftenMovingPrimitiveList(bool bSync = true) const;
 
 	FLightPrimitiveInteraction* GetDynamicInteractionStaticPrimitiveList(bool bSync = true) const;
@@ -314,6 +319,9 @@ public:
 
 	// FRenderResource interface.
 	virtual void ReleaseRHI();
+
+	// Update the mobile movable point light uniform buffer before it is used for mobile base pass rendering.
+	void ConditionalUpdateMobileMovablePointLightUniformBuffer(const class FSceneRenderer* SceneRenderer);
 };
 
 /** Defines how the light is stored in the scene's light octree. */
@@ -335,7 +343,7 @@ struct FLightOctreeSemantics
 		return A.LightSceneInfo == B.LightSceneInfo;
 	}
 	
-	FORCEINLINE static void SetElementId(const FLightSceneInfoCompact& Element,FOctreeElementId Id)
+	FORCEINLINE static void SetElementId(const FLightSceneInfoCompact& Element,FOctreeElementId2 Id)
 	{
 		Element.LightSceneInfo->OctreeId = Id;
 	}

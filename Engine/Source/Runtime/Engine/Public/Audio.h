@@ -11,11 +11,13 @@
 #include "Stats/Stats.h"
 #include "HAL/ThreadSafeBool.h"
 #include "Sound/AudioOutputTarget.h"
+#include "Sound/QuartzQuantizationUtilities.h"
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundEffectSource.h"
 #include "Sound/SoundSubmixSend.h"
 #include "Sound/SoundSourceBusSend.h"
 #include "IAudioExtensionPlugin.h"
+#include "IAudioModulation.h"
 
 ENGINE_API DECLARE_LOG_CATEGORY_EXTERN(LogAudio, Display, All);
 
@@ -57,7 +59,6 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("Buffer Creation"), STAT_AudioResourceCreationTim
 
 class FAudioDevice;
 class USoundNode;
-struct FSoundModulationControls;
 class USoundWave;
 class USoundClass;
 class USoundSubmix;
@@ -147,6 +148,9 @@ private:
 ENGINE_API bool IsAudioPluginEnabled(EAudioPlugin PluginType);
 ENGINE_API UClass* GetAudioPluginCustomSettingsClass(EAudioPlugin PluginType);
 
+/** accessor for our Spatialization enabled CVar. */
+ENGINE_API bool IsSpatializationCVarEnabled();
+
 /** Bus send types */
 enum class EBusSendType : uint8
 {
@@ -170,17 +174,14 @@ struct ENGINE_API FWaveInstance
 	/** Sound class */
 	USoundClass* SoundClass;
 
-	/** Modulation controls */
-	FSoundModulationControls SoundModulationControls;
-
 	/** Sound submix object to send audio to for mixing in audio mixer.  */
 	USoundSubmixBase* SoundSubmix;
 
 	/** Sound submix sends */
 	TArray<FSoundSubmixSendInfo> SoundSubmixSends;
 
-	/** The sound source bus sends. */
-	TArray<FSoundSourceBusSendInfo> SoundSourceBusSends[(int32)EBusSendType::Count];
+	/** The source bus and/or audio bus sends. */
+	TArray<FSoundSourceBusSendInfo> BusSends[(int32)EBusSendType::Count];
 
 	/** Sound effect chain */
 	USoundEffectSourcePresetChain* SourceEffectChain;
@@ -190,6 +191,9 @@ struct ENGINE_API FWaveInstance
 
 	/** Active Sound this wave instance belongs to */
 	FActiveSound* ActiveSound;
+
+	/** Quantized Request data */
+	TUniquePtr<Audio::FQuartzQuantizedRequestData> QuantizedRequestData;
 
 private:
 
@@ -298,9 +302,6 @@ public:
 
 	/** The occlusion plugin settings to use for the wave instance. */
 	UReverbPluginSourceSettingsBase* ReverbPluginSettings;
-
-	/** The modulation plugin settings to use for the wave instance. */
-	USoundModulationPluginSourceSettingsBase* ModulationPluginSettings;
 
 	/** Which output target the sound should play on. */
 	EAudioOutputTarget::Type OutputTarget;

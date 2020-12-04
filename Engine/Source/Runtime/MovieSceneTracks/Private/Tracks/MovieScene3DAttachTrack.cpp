@@ -2,7 +2,6 @@
 
 #include "Tracks/MovieScene3DAttachTrack.h"
 #include "Sections/MovieScene3DAttachSection.h"
-#include "Evaluation/MovieScene3DAttachTemplate.h"
 #include "Evaluation/MovieSceneEvaluationTrack.h"
 #include "Templates/Casts.h"
 
@@ -14,12 +13,7 @@ UMovieScene3DAttachTrack::UMovieScene3DAttachTrack( const FObjectInitializer& Ob
 	: Super( ObjectInitializer )
 { }
 
-FMovieSceneEvalTemplatePtr UMovieScene3DAttachTrack::CreateTemplateForSection(const UMovieSceneSection& InSection) const
-{
-	return FMovieScene3DAttachSectionTemplate(*CastChecked<UMovieScene3DAttachSection>(&InSection));
-}
-
-void UMovieScene3DAttachTrack::AddConstraint(FFrameNumber KeyTime, int32 Duration, const FName SocketName, const FName ComponentName, const FMovieSceneObjectBindingID& ConstraintBindingID)
+UMovieSceneSection* UMovieScene3DAttachTrack::AddConstraint(FFrameNumber KeyTime, int32 Duration, const FName SocketName, const FName ComponentName, const FMovieSceneObjectBindingID& ConstraintBindingID)
 {
 	// add the section
 	UMovieScene3DAttachSection* NewSection = NewObject<UMovieScene3DAttachSection>(this, NAME_None, RF_Transactional);
@@ -29,6 +23,8 @@ void UMovieScene3DAttachTrack::AddConstraint(FFrameNumber KeyTime, int32 Duratio
 	NewSection->AttachComponentName = ComponentName;
 
 	ConstraintSections.Add(NewSection);
+
+	return NewSection;
 }
 
 bool UMovieScene3DAttachTrack::SupportsType(TSubclassOf<UMovieSceneSection> SectionClass) const

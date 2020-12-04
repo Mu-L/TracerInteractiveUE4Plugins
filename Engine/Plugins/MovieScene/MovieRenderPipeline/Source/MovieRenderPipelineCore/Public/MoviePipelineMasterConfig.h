@@ -35,26 +35,28 @@ public:
 
 public:
 	TArray<UMoviePipelineOutputBase*> GetOutputContainers() const;
+	
+	// UMoviePipelineConfigBase interface
 	virtual TArray<UMoviePipelineSetting*> GetUserSettings() const override;
 	virtual void CopyFrom(UMoviePipelineConfigBase* InConfig) override;
+	// ~UMoviePipelineConfigBase interface
+
 
 	/** Initializes a single instance of every setting so that even non-user-configured settings have a chance to apply their default values. Does nothing if they're already instanced for this configuration. */
+	UFUNCTION(BlueprintCallable, Category = "Movie Render Pipeline")
 	void InitializeTransientSettings();
 
+	UFUNCTION(BlueprintCallable, Category = "Movie Render Pipeline")
 	TArray<UMoviePipelineSetting*> GetTransientSettings() const { return TransientSettings; }
-	TArray<UMoviePipelineSetting*> GetAllSettings() const
-	{
-		TArray<UMoviePipelineSetting*> CombinedSettings;
-		CombinedSettings.Append(GetUserSettings());
-		CombinedSettings.Append(GetTransientSettings());
-		return CombinedSettings;
-	}
+
+	UFUNCTION(BlueprintCallable, Category = "Movie Render Pipeline")
+	TArray<UMoviePipelineSetting*> GetAllSettings(const bool bIncludeDisabledSettings = false, const bool bIncludeTransientSettings = false) const;
 public:
 
 	/** Returns a pointer to the config specified for the shot, otherwise the default for this pipeline. */
 	UMoviePipelineShotConfig* GetConfigForShot(const FString& ShotName) const;
 
-	void GetFilenameFormatArguments(FMoviePipelineFormatArgs& InOutFormatArgs) const;
+	void GetFormatArguments(FMoviePipelineFormatArgs& InOutFormatArgs, const bool bIncludeAllSettings = false) const;
 
 
 	/**

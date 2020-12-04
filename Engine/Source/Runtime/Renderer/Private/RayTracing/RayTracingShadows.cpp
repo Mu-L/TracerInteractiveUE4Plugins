@@ -1,13 +1,13 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DeferredShadingRenderer.h"
+#include "SceneRenderTargets.h"
 
 #if RHI_RAYTRACING
 
 #include "ClearQuad.h"
 #include "PathTracingUniformBuffers.h"
 #include "SceneRendering.h"
-#include "SceneRenderTargets.h"
 #include "RenderGraphBuilder.h"
 #include "RenderTargetPool.h"
 #include "RHIResources.h"
@@ -41,10 +41,46 @@ static TAutoConsoleVariable<int32> CVarRayTracingShadowsEnableTwoSidedGeometry(
 	ECVF_RenderThreadSafe
 );
 
+static TAutoConsoleVariable<int32> CVarRayTracingTransmissionSamplingDistanceCulling(
+	TEXT("r.RayTracing.Transmission.TransmissionSamplingDistanceCulling"),
+	0,
+	TEXT("Enables visibility testing to cull transmission sampling distance (default = 0)"),
+	ECVF_RenderThreadSafe
+);
+
+static TAutoConsoleVariable<int32> CVarRayTracingTransmissionSamplingTechnique(
+	TEXT("r.RayTracing.Transmission.SamplingTechnique"),
+	0,
+	TEXT("0: Uses constant tracking of an infinite homogeneous medium (default)\n")
+	TEXT("1: Uses constant tracking of a finite homogeneous medium whose extent is determined by transmission sampling distance"),
+	ECVF_RenderThreadSafe
+);
+
+static TAutoConsoleVariable<int32> CVarRayTracingTransmissionRejectionSamplingTrials(
+	TEXT("r.RayTracing.Transmission.RejectionSamplingTrials"),
+	0,
+	TEXT("Determines the number of rejection-sampling trials (default = 0)"),
+	ECVF_RenderThreadSafe
+);
+
 static TAutoConsoleVariable<int32> CVarRayTracingShadowsEnableHairVoxel(
 	TEXT("r.RayTracing.Shadows.EnableHairVoxel"),
 	1,
 	TEXT("Enables use of hair voxel data for tracing shadow (default = 1)"),
+	ECVF_RenderThreadSafe
+);
+
+static TAutoConsoleVariable<int32> CVarRayTracingShadowsLODTransitionStart(
+	TEXT("r.RayTracing.Shadows.LODTransitionStart"),
+	4000.0, // 40 m
+	TEXT("The start of an LOD transition range (default = 4000)"),
+	ECVF_RenderThreadSafe
+);
+
+static TAutoConsoleVariable<int32> CVarRayTracingShadowsLODTransitionEnd(
+	TEXT("r.RayTracing.Shadows.LODTransitionEnd"),
+	5000.0f, // 50 m
+	TEXT("The end of an LOD transition range (default = 5000)"),
 	ECVF_RenderThreadSafe
 );
 
@@ -100,9 +136,16 @@ class FOcclusionRGS : public FGlobalShader
 		SHADER_PARAMETER(FIntRect, LightScissor)
 		SHADER_PARAMETER(FIntPoint, PixelOffset)
 		SHADER_PARAMETER(uint32, bUseHairVoxel)
+		SHADER_PARAMETER(float, TraceDistance)
+		SHADER_PARAMETER(float, LODTransitionStart)
+		SHADER_PARAMETER(float, LODTransitionEnd)
+		SHADER_PARAMETER(uint32, bTransmissionSamplingDistanceCulling)
+		SHADER_PARAMETER(uint32, TransmissionSamplingTechnique)
+		SHADER_PARAMETER(uint32, RejectionSamplingTrials)
 
 		SHADER_PARAMETER_STRUCT(FLightShaderParameters, Light)
 		SHADER_PARAMETER_STRUCT_INCLUDE(FSceneTextureParameters, SceneTextures)
+		SHADER_PARAMETER_STRUCT_INCLUDE(FSceneLightingChannelParameters, SceneLightingChannels)
 
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, HairCategorizationTexture)
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, HairLightChannelMaskTexture)
@@ -112,7 +155,7 @@ class FOcclusionRGS : public FGlobalShader
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float>, RWRayDistanceUAV)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, RWSubPixelOcclusionMaskUAV)
 		SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, ViewUniformBuffer)
-		SHADER_PARAMETER_STRUCT_REF(FVirtualVoxelParameters, VirtualVoxel)
+		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FVirtualVoxelParameters, VirtualVoxel)
 	END_SHADER_PARAMETER_STRUCT()
 };
 
@@ -126,6 +169,14 @@ float GetRaytracingMaxNormalBias()
 void FDeferredShadingSceneRenderer::PrepareRayTracingShadows(const FViewInfo& View, TArray<FRHIRayTracingShader*>& OutRayGenShaders)
 {
 	// Declare all RayGen shaders that require material closest hit shaders to be bound
+
+	static auto CVarRayTracingShadows = IConsoleManager::Get().FindConsoleVariable(TEXT("r.RayTracing.Shadows"));
+	const bool bRayTracingShadows = CVarRayTracingShadows != nullptr && CVarRayTracingShadows->GetInt() > 0;
+
+	if (!bRayTracingShadows)
+	{
+		return;
+	}
 
 	const IScreenSpaceDenoiser::EShadowRequirements DenoiserRequirements[] =
 	{
@@ -171,6 +222,7 @@ void FDeferredShadingSceneRenderer::RenderRayTracingShadows(
 	const IScreenSpaceDenoiser::FShadowRayTracingConfig& RayTracingConfig,
 	const IScreenSpaceDenoiser::EShadowRequirements DenoiserRequirements,
 	const FHairStrandsOcclusionResources* HairResources,
+	FRDGTextureRef LightingChannelsTexture,
 	FRDGTextureUAV* OutShadowMaskUAV,
 	FRDGTextureUAV* OutRayHitDistanceUAV,
 	FRDGTextureUAV* SubPixelRayTracingShadowMaskUAV)
@@ -182,11 +234,8 @@ void FDeferredShadingSceneRenderer::RenderRayTracingShadows(
 	FIntRect ScissorRect = View.ViewRect;
 	FIntPoint PixelOffset = { 0, 0 };
 
-	// whether to clip the dispatch to a subrect, requires that denoising doesn't need the whole buffer
-	
-	//#dxr_todo: reenable Clip Dispatch with multiview support
-	//const bool bClipDispatch = DenoiserRequirements == IScreenSpaceDenoiser::EShadowRequirements::Bailout;
-	const bool bClipDispatch = false;//  DenoiserRequirements == IScreenSpaceDenoiser::EShadowRequirements::Bailout;
+	//#UE-95409: Implement support for scissor in multi-view 
+	const bool bClipDispatch = View.Family->Views.Num() == 1;
 
 	if (LightSceneProxy->GetScissorRect(ScissorRect, View, View.ViewRect))
 	{
@@ -220,16 +269,25 @@ void FDeferredShadingSceneRenderer::RenderRayTracingShadows(
 		PassParameters->NormalBias = GetRaytracingMaxNormalBias();
 		PassParameters->LightingChannelMask = LightSceneProxy->GetLightingChannelMask();
 		LightSceneProxy->GetLightShaderParameters(PassParameters->Light);
+		PassParameters->Light.SourceRadius *= LightSceneProxy->GetShadowSourceAngleFactor();
+
+		PassParameters->TraceDistance = LightSceneProxy->GetTraceDistance();
+		PassParameters->LODTransitionStart = CVarRayTracingShadowsLODTransitionStart.GetValueOnRenderThread();
+		PassParameters->LODTransitionEnd = CVarRayTracingShadowsLODTransitionEnd.GetValueOnRenderThread();
 		PassParameters->TLAS = View.RayTracingScene.RayTracingSceneRHI->GetShaderResourceView();
 		PassParameters->ViewUniformBuffer = View.ViewUniformBuffer;
 		PassParameters->SceneTextures = SceneTextures;
+		PassParameters->SceneLightingChannels = GetSceneLightingChannelParameters(GraphBuilder, LightingChannelsTexture);
 		PassParameters->LightScissor = ScissorRect;
 		PassParameters->PixelOffset = PixelOffset;
 		PassParameters->SSProfilesTexture = GraphBuilder.RegisterExternalTexture(View.RayTracingSubSurfaceProfileTexture);
+		PassParameters->bTransmissionSamplingDistanceCulling = CVarRayTracingTransmissionSamplingDistanceCulling.GetValueOnRenderThread();
+		PassParameters->TransmissionSamplingTechnique = CVarRayTracingTransmissionSamplingTechnique.GetValueOnRenderThread();
+		PassParameters->RejectionSamplingTrials = CVarRayTracingTransmissionRejectionSamplingTrials.GetValueOnRenderThread();
 		if (bUseHairLighting)
 		{
 			const bool bUseHairVoxel = CVarRayTracingShadowsEnableHairVoxel.GetValueOnRenderThread() > 0;
-			PassParameters->bUseHairVoxel = (HairResources->bUseHairVoxel && bUseHairVoxel && !IsHairRayTracingEnabled()) ? 1 : 0;
+			PassParameters->bUseHairVoxel = (HairResources->bUseHairVoxel && bUseHairVoxel) ? 1 : 0;
 			PassParameters->HairCategorizationTexture = HairResources->CategorizationTexture;
 			PassParameters->HairLightChannelMaskTexture = HairResources->LightChannelMaskTexture;
 			PassParameters->VirtualVoxel = HairResources->VoxelResources->UniformBuffer;
@@ -289,7 +347,7 @@ void FDeferredShadingSceneRenderer::RenderRayTracingShadows(
 			{
 				FRayTracingPipelineStateInitializer Initializer;
 
-				Initializer.MaxPayloadSizeInBytes = 60; // sizeof(FPackedMaterialClosestHitPayload)
+				Initializer.MaxPayloadSizeInBytes = 64; // sizeof(FPackedMaterialClosestHitPayload)
 
 				FRHIRayTracingShader* RayGenShaderTable[] = { RayGenerationShader.GetRayTracingShader() };
 				Initializer.SetRayGenShaderTable(RayGenShaderTable);
@@ -310,3 +368,20 @@ void FDeferredShadingSceneRenderer::RenderRayTracingShadows(
 	unimplemented();
 }
 #endif
+
+void FDeferredShadingSceneRenderer::RenderDitheredLODFadingOutMask(FRDGBuilder& GraphBuilder, const FViewInfo& View, FRDGTextureRef SceneDepthTexture)
+{
+	auto* PassParameters = GraphBuilder.AllocParameters<FRenderTargetParameters>();
+	PassParameters->RenderTargets.DepthStencil = FDepthStencilBinding(SceneDepthTexture, ERenderTargetLoadAction::ELoad, ERenderTargetLoadAction::ELoad, FExclusiveDepthStencil::DepthWrite_StencilWrite);
+
+	GraphBuilder.AddPass(
+		RDG_EVENT_NAME("DitheredLODFadingOutMask"),
+		PassParameters,
+		ERDGPassFlags::Raster,
+		[this, &View](FRHICommandListImmediate& RHICmdList)
+	{
+		RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
+		RHICmdList.SetViewport(View.ViewRect.Min.X, View.ViewRect.Min.Y, 0.0f, View.ViewRect.Max.X, View.ViewRect.Max.Y, 1.0f);
+		View.ParallelMeshDrawCommandPasses[EMeshPass::DitheredLODFadingOutMaskPass].DispatchDraw(nullptr, RHICmdList);
+	});
+}

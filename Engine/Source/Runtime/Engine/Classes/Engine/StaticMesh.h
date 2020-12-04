@@ -19,7 +19,6 @@
 #include "Templates/UniquePtr.h"
 #include "StaticMeshResources.h"
 #include "PerPlatformProperties.h"
-#include "RenderAssetUpdate.h"
 #include "MeshTypes.h"
 
 #include "StaticMesh.generated.h"
@@ -275,6 +274,10 @@ struct FMeshSectionInfo
 	UPROPERTY()
 	bool bCastShadow;
 
+	/** If true, this section will be visible in ray tracing Geometry. */
+	UPROPERTY()
+	bool bVisibleInRayTracing;
+
 	/** If true, this section will always considered opaque in ray tracing Geometry. */
 	UPROPERTY()
 	bool bForceOpaque;
@@ -284,6 +287,7 @@ struct FMeshSectionInfo
 		: MaterialIndex(0)
 		, bEnableCollision(true)
 		, bCastShadow(true)
+		, bVisibleInRayTracing(true)
 		, bForceOpaque(false)
 	{
 	}
@@ -293,6 +297,7 @@ struct FMeshSectionInfo
 		: MaterialIndex(InMaterialIndex)
 		, bEnableCollision(true)
 		, bCastShadow(true)
+		, bVisibleInRayTracing(true)
 		, bForceOpaque(false)
 	{
 	}
@@ -435,11 +440,11 @@ struct FStaticMaterial
 	ENGINE_API friend bool operator==(const FStaticMaterial& LHS, const UMaterialInterface& RHS);
 	ENGINE_API friend bool operator==(const UMaterialInterface& LHS, const FStaticMaterial& RHS);
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = StaticMesh)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = StaticMesh)
 	class UMaterialInterface* MaterialInterface;
 
 	/*This name should be use by the gameplay to avoid error if the skeletal mesh Materials array topology change*/
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = StaticMesh)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = StaticMesh)
 	FName MaterialSlotName;
 
 	/*This name should be use when we re-import a skeletal mesh so we can order the Materials array like it should be*/
@@ -610,7 +615,7 @@ class UStaticMesh : public UStreamableRenderAsset, public IInterface_CollisionDa
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=StaticMesh, meta=(UIMin = "0.0", UIMax = "3.0"))
 	float LpvBiasMultiplier;
 
-	UPROPERTY()
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = StaticMesh)
 	TArray<FStaticMaterial> StaticMaterials;
 
 	UPROPERTY()
@@ -777,8 +782,6 @@ protected:
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Instanced, Category = StaticMesh)
 	TArray<UAssetUserData*> AssetUserData;
 
-	TRefCountPtr<FRenderAssetUpdate> PendingUpdate;
-
 	friend struct FStaticMeshUpdateContext;
 	friend class FStaticMeshUpdate;
 
@@ -850,11 +853,6 @@ public:
 	ENGINE_API void ClearMeshDescriptions();
 
 	/**
-	 * Internal function use to make sure all imported material slot name are unique and non empty.
-	 */
-	void FixupMaterialSlotName();
-
-	/**
 	 * Adds an empty UV channel at the end of the existing channels on the given LOD of a StaticMesh.
 	 * @param	LODIndex			Index of the StaticMesh LOD.
 	 * @return true if a UV channel was added.
@@ -896,11 +894,45 @@ public:
 	UFUNCTION(BlueprintCallable, Category="StaticMesh")
 	ENGINE_API void BuildFromStaticMeshDescriptions(const TArray<UStaticMeshDescription*>& StaticMeshDescriptions, bool bBuildSimpleCollision = false);
 
+
+	 /** Structure that defines parameters passed into the build mesh description function */
+	struct FBuildMeshDescriptionsParams
+	{
+		FBuildMeshDescriptionsParams()
+			: bMarkPackageDirty(true)
+			, bUseHashAsGuid(false)
+			, bBuildSimpleCollision(false)
+			, bCommitMeshDescription(true)
+		{}
+
+		/**
+		 * If set to false, the caller can be from any thread but will have the
+		 * responsibility to call MarkPackageDirty() from the main thread.
+		 */
+		bool bMarkPackageDirty;
+
+		/**
+		 * Uses a hash as the GUID, useful to prevent recomputing content already in cache.
+		 * Set to false by default.
+		 */
+		bool bUseHashAsGuid;
+
+		/**
+		 * Builds simple collision as part of the building process. Set to false by default.
+		 */
+		bool bBuildSimpleCollision;
+	
+		/**
+		 * Commits the MeshDescription as part of the building process. Set to true by default.
+		 */
+		bool bCommitMeshDescription;
+	};
+
 	/**
 	 * Builds static mesh render buffers from a list of MeshDescriptions, one per LOD.
 	 */
-	ENGINE_API bool BuildFromMeshDescriptions(const TArray<const FMeshDescription*>& MeshDescriptions, bool bBuildSimpleCollision = false);
-
+	ENGINE_API bool BuildFromMeshDescriptions(const TArray<const FMeshDescription*>& MeshDescriptions, const FBuildMeshDescriptionsParams& Params = FBuildMeshDescriptionsParams());
+	
 	/** Builds a LOD resource from a MeshDescription */
 	void BuildFromMeshDescription(const FMeshDescription& MeshDescription, FStaticMeshLODResources& LODResources);
 
@@ -926,7 +958,10 @@ public:
 	ENGINE_API virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	ENGINE_API virtual void PostEditUndo() override;
 	ENGINE_API virtual void GetAssetRegistryTagMetadata(TMap<FName, FAssetRegistryTagMetadata>& OutMetadata) const override;
+	
+	UFUNCTION(BlueprintCallable, Category = "StaticMesh")
 	ENGINE_API void SetLODGroup(FName NewGroup, bool bRebuildImmediately = true);
+	
 	ENGINE_API void BroadcastNavCollisionChange();
 
 	FOnExtendedBoundsChanged& GetOnExtendedBoundsChanged() { return OnExtendedBoundsChanged; }
@@ -982,26 +1017,18 @@ public:
 	//~ End UObject Interface.
 
 	//~ Begin UStreamableRenderAsset Interface
-	virtual int32 GetLODGroupForStreaming() const final override;
-	virtual int32 GetNumMipsForStreaming() const final override;
-	virtual int32 GetNumNonStreamingMips() const final override;
-	virtual int32 CalcNumOptionalMips() const final override;
 	virtual int32 CalcCumulativeLODSize(int32 NumLODs) const final override;
-	virtual bool GetMipDataFilename(const int32 MipIndex, FString& BulkDataFilename) const final override;
+	virtual FIoFilenameHash GetMipIoFilenameHash(const int32 MipIndex) const final override;
 	virtual bool DoesMipDataExist(const int32 MipIndex) const final override;
-	virtual bool IsReadyForStreaming() const final override;
-	virtual int32 GetNumResidentMips() const final override;
-	virtual int32 GetNumRequestedMips() const final override;
-	virtual bool CancelPendingMipChangeRequest() final override;
-	virtual bool HasPendingUpdate() const final override;
-	virtual bool IsPendingUpdateLocked() const final override;
+	virtual bool HasPendingRenderResourceInitialization() const final override;
 	virtual bool StreamOut(int32 NewMipCount) final override;
 	virtual bool StreamIn(int32 NewMipCount, bool bHighPrio) final override;
-	virtual bool UpdateStreamingStatus(bool bWaitForMipFading = false) final override;
+	virtual EStreamableRenderAssetType GetRenderAssetType() const final override { return EStreamableRenderAssetType::StaticMesh; }
 	//~ End UStreamableRenderAsset Interface
 
-	void LinkStreaming();
-	void UnlinkStreaming();
+#if USE_BULKDATA_STREAMING_TOKEN
+	bool GetMipDataFilename(const int32 MipIndex, FString& BulkDataFilename) const;
+#endif
 
 	/**
 	* Cancels any pending static mesh streaming actions if possible.
@@ -1137,6 +1164,11 @@ public:
 	//~ Begin Interface_CollisionDataProvider Interface
 	ENGINE_API virtual bool GetPhysicsTriMeshData(struct FTriMeshCollisionData* CollisionData, bool InUseAllTriData) override;
 	ENGINE_API virtual bool ContainsPhysicsTriMeshData(bool InUseAllTriData) const override;
+private:
+		bool GetPhysicsTriMeshDataCheckComplex(struct FTriMeshCollisionData* CollisionData, bool bInUseAllTriData, bool bInCheckComplexCollisionMesh);
+		bool ContainsPhysicsTriMeshDataCheckComplex(bool InUseAllTriData, bool bInCheckComplexCollisionMesh) const;
+public:
+
 	virtual bool WantsNegXTriMesh() override
 	{
 		return true;
@@ -1245,7 +1277,7 @@ public:
 	/**
 	 * Returns true if LODs of this static mesh may share texture lightmaps.
 	 */
-	bool CanLODsShareStaticLighting() const;
+	ENGINE_API bool CanLODsShareStaticLighting() const;
 
 	/**
 	 * Retrieves the names of all LOD groups.

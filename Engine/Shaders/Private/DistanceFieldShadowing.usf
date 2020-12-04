@@ -146,8 +146,8 @@ void CullObjectsForShadowCS(
 #if (DISTANCEFIELD_PRIMITIVE_TYPE == DFPT_SignedDistanceField)
 		float4 ObjectBoundingSphere = LoadFloat4(SceneObjectBounds, SourceIndex);
         
-        if (ShadowBoundingSphere.w == 0 && ShadowConvexHullIntersectSphere(ObjectBoundingSphere.xyz, ObjectBoundingSphere.w)
-			|| ShadowBoundingSphere.w > 0 && dot(ShadowBoundingSphere.xyz - ObjectBoundingSphere.xyz, ShadowBoundingSphere.xyz - ObjectBoundingSphere.xyz) < Square(ShadowBoundingSphere.w + ObjectBoundingSphere.w))
+        if ((ShadowBoundingSphere.w == 0 && ShadowConvexHullIntersectSphere(ObjectBoundingSphere.xyz, ObjectBoundingSphere.w))
+			|| (ShadowBoundingSphere.w > 0 && dot(ShadowBoundingSphere.xyz - ObjectBoundingSphere.xyz, ShadowBoundingSphere.xyz - ObjectBoundingSphere.xyz) < Square(ShadowBoundingSphere.w + ObjectBoundingSphere.w)))
 		{
 			// Assume ObjectBoundingSphere is located at (0, 0, 0) in local space
             float ViewDist2 = length2(ObjectBoundingSphere.xyz - View.WorldViewOrigin);
@@ -737,6 +737,10 @@ void DistanceFieldShadowingCS(
 	Result = NumIntersectingObjects / 500.0f;
 #endif
 
+	#if METAL_PROFILE 
+		// clamp max depth to avoid #inf
+		SceneDepth = min(SceneDepth, 65500.0f);
+	#endif
 	RWShadowFactors[DispatchThreadId.xy] = float2(Result, SceneDepth);
 }
 

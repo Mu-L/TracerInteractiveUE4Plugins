@@ -9,7 +9,7 @@
 #include "MeshBuild.h"
 #include "FbxSceneImportOptionsSkeletalMesh.generated.h"
 
-UCLASS(config=EditorPerProjectUserSettings, HideCategories=Object, MinimalAPI)
+UCLASS(BlueprintType, config=EditorPerProjectUserSettings, HideCategories=Object, MinimalAPI)
 class UFbxSceneImportOptionsSkeletalMesh : public UObject
 {
 	GENERATED_UCLASS_BODY()
@@ -88,6 +88,10 @@ class UFbxSceneImportOptionsSkeletalMesh : public UObject
 	/** If true, all previous custom attribute curves will be deleted when doing a re-import. */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, config, Category = Animation)
 	bool bDeleteExistingCustomAttributeCurves;
+
+	/** If true, all previous non-curve custom attributes will be deleted when doing a re-import. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, config, Category = ImportSettings)
+	bool bDeleteExistingNonCurveCustomAttributes;
 
 	/** Type of asset to import from the FBX file */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, config, Category = Animation)

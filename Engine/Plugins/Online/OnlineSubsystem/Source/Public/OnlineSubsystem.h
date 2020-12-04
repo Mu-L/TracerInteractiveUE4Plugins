@@ -41,6 +41,7 @@ class IOnlineVoice;
 class IOnlineStats;
 class IOnlineGameActivity;
 class IOnlineGameItemStats;
+class IOnlineGameMatches;
 
 ONLINESUBSYSTEM_API DECLARE_LOG_CATEGORY_EXTERN(LogOnline, Log, All);
 ONLINESUBSYSTEM_API DECLARE_LOG_CATEGORY_EXTERN(LogOnlineGame, Log, All);
@@ -85,7 +86,9 @@ typedef TSharedPtr<class IOnlineExternalUI, ESPMode::ThreadSafe> IOnlineExternal
 typedef TSharedPtr<class IOnlineTime, ESPMode::ThreadSafe> IOnlineTimePtr;
 typedef TSharedPtr<class IOnlineIdentity, ESPMode::ThreadSafe> IOnlineIdentityPtr;
 typedef TSharedPtr<class IOnlineTitleFile, ESPMode::ThreadSafe> IOnlineTitleFilePtr;
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 typedef TSharedPtr<class IOnlineStore, ESPMode::ThreadSafe> IOnlineStorePtr;
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 typedef TSharedPtr<class IOnlineStoreV2, ESPMode::ThreadSafe> IOnlineStoreV2Ptr;
 typedef TSharedPtr<class IOnlinePurchase, ESPMode::ThreadSafe> IOnlinePurchasePtr;
 typedef TSharedPtr<class IOnlineEvents, ESPMode::ThreadSafe> IOnlineEventsPtr;
@@ -102,6 +105,8 @@ typedef TSharedPtr<class FOnlineNotificationTransportManager, ESPMode::ThreadSaf
 typedef TSharedPtr<class IOnlineStats, ESPMode::ThreadSafe> IOnlineStatsPtr;
 typedef TSharedPtr<IOnlineGameActivity, ESPMode::ThreadSafe> IOnlineGameActivityPtr;
 typedef TSharedPtr<IOnlineGameItemStats, ESPMode::ThreadSafe> IOnlineGameItemStatsPtr;
+typedef TSharedPtr<IOnlineGameMatches, ESPMode::ThreadSafe> IOnlineGameMatchesPtr;
+
 /**
  * Called when the connection state as reported by the online platform changes
  *
@@ -122,7 +127,7 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(FOnOnlineEnvironmentChanged, EOnlineEnviron
 typedef FOnOnlineEnvironmentChanged::FDelegate FOnOnlineEnvironmentChangedDelegate;
 
 /**
-* Delegate fired when the "Play Together" event is sent from the PS4 system
+* Delegate fired when the "Play Together" event is sent from the PS4 system (Deprecated)
 *
 * @param UserIndex - User index of the player the event is for
 * @param UserIdList - list of other users in the PS4 party to send invites to
@@ -373,8 +378,7 @@ public:
 	 * Get the interface for accessing an online store
 	 * @return Interface pointer for the appropriate online store service
 	 */
-	// @todo samz
-	//	UE_DEPRECATED(4.26, "Move to OnlineStoreInterfaceV2 and OnlinePurchaseInterface.")
+	UE_DEPRECATED(4.26, "GetStoreInterface() is deprecated, please use GetStoreV2Interface() and GetPurchaseInterface() instead.")
 	virtual IOnlineStorePtr GetStoreInterface() const { return nullptr; }
 
 	/** 
@@ -448,6 +452,13 @@ public:
 	 * @return Interface pointer for the game item stats interface
 	 */
 	virtual IOnlineGameItemStatsPtr GetGameItemStatsInterface() const = 0;
+
+	/**
+	 * Get interface for accessing game matches
+	 * @return Interface pointer for the game matches interface
+	 */
+	virtual IOnlineGameMatchesPtr GetGameMatchesInterface() const = 0;
+
 	/**
 	 * Get the notification handler instance for this subsystem
 	 * @return Pointer for the appropriate notification handler
@@ -594,12 +605,12 @@ public:
 	DEFINE_ONLINE_DELEGATE_TWO_PARAM(OnOnlineEnvironmentChanged, EOnlineEnvironment::Type /*LastEnvironment*/, EOnlineEnvironment::Type /*Environment*/);
 
 	/**
-	* Delegate fired when the "Play Together" event is sent from the PS4 system
+	* Delegate fired when the "Play Together" event is sent from the PS4 system (Deprecated)
 	*
 	* @param UserIndex - User index of the player the event is for
 	* @param UserIdList - list of other users in the PS4 party to send invites to
 	*/
-	DEFINE_ONLINE_DELEGATE_TWO_PARAM(OnPlayTogetherEventReceived, int32, TArray<TSharedPtr<const FUniqueNetId>>);
+ 	DEFINE_ONLINE_DELEGATE_TWO_PARAM(OnPlayTogetherEventReceived, int32, TArray<TSharedPtr<const FUniqueNetId>>);
 
 	/**
 	 * @return The name of the online service this platform uses

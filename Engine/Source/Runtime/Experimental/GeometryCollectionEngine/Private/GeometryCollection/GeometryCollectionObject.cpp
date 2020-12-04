@@ -12,6 +12,7 @@
 #include "HAL/IConsoleManager.h"
 #include "UObject/Package.h"
 #include "Materials/MaterialInstance.h"
+#include "ProfilingDebugging/CookStats.h"
 
 #if WITH_EDITOR
 #include "GeometryCollection/DerivedDataGeometryCollectionCooker.h"
@@ -23,11 +24,25 @@
 #include "Chaos/ChaosArchive.h"
 #include "GeometryCollectionProxyData.h"
 
-DEFINE_LOG_CATEGORY_STATIC(UGeometryCollectionLogging, NoLogging, All);
+DEFINE_LOG_CATEGORY_STATIC(LogGeometryCollectionInternal, Log, All);
+
+#if ENABLE_COOK_STATS
+namespace GeometryCollectionCookStats
+{
+	static FCookStats::FDDCResourceUsageStats UsageStats;
+	static FCookStatsManager::FAutoRegisterCallback RegisterCookStats([](FCookStatsManager::AddStatFuncRef AddStat)
+	{
+		UsageStats.LogStats(AddStat, TEXT("GeometryCollection.Usage"), TEXT(""));
+	});
+}
+#endif
 
 UGeometryCollection::UGeometryCollection(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
-	, CollisionType(ECollisionTypeEnum::Chaos_Surface_Volumetric)
+#if WITH_EDITOR
+	, bManualDataCreate(false)
+#endif
+	, CollisionType(ECollisionTypeEnum::Chaos_Volumetric)
 	, ImplicitType(EImplicitTypeEnum::Chaos_Implicit_Box)
 	, MinLevelSetResolution(10)
 	, MaxLevelSetResolution(10)
@@ -44,11 +59,14 @@ UGeometryCollection::UGeometryCollection(const FObjectInitializer& ObjectInitial
 {
 	PersistentGuid = FGuid::NewGuid();
 	InvalidateCollection();
+#if WITH_EDITOR
+	SimulationDataGuid = StateGuid;
+#endif
 }
 
 FGeometryCollectionSizeSpecificData::FGeometryCollectionSizeSpecificData()
 	: MaxSize(0.0f)
-	, CollisionType(ECollisionTypeEnum::Chaos_Surface_Volumetric)
+	, CollisionType(ECollisionTypeEnum::Chaos_Volumetric)
 	, ImplicitType(EImplicitTypeEnum::Chaos_Implicit_Box)
 	, MinLevelSetResolution(5)
 	, MaxLevelSetResolution(10)
@@ -92,9 +110,17 @@ void UGeometryCollection::GetSharedSimulationParams(FSharedSimulationParameters&
 	OutParams.MinimumMassClamp = MinimumMassClamp;
 	OutParams.MaximumCollisionParticleCount = MaximumCollisionParticles;
 
+	ECollisionTypeEnum SelectedCollisionType = CollisionType;
+
+	if(SelectedCollisionType == ECollisionTypeEnum::Chaos_Volumetric && ImplicitType == EImplicitTypeEnum::Chaos_Implicit_LevelSet)
+	{
+		UE_LOG(LogGeometryCollectionInternal, Verbose, TEXT("LevelSet geometry selected but non-particle collisions selected. Forcing particle-implicit collisions for %s"), *GetPathName());
+		SelectedCollisionType = ECollisionTypeEnum::Chaos_Surface_Volumetric;
+	}
+
 	FGeometryCollectionSizeSpecificData InfSize;
 	InfSize.MaxSize = FLT_MAX;
-	InfSize.CollisionType = CollisionType;
+	InfSize.CollisionType = SelectedCollisionType;
 	InfSize.ImplicitType = ImplicitType;
 	InfSize.MinLevelSetResolution = MinLevelSetResolution;
 	InfSize.MaxLevelSetResolution = MaxLevelSetResolution;
@@ -138,6 +164,17 @@ void UGeometryCollection::FixupRemoveOnFractureMaterials(FSharedSimulationParame
 			}
 		}
 
+	}
+}
+
+void UGeometryCollection::Reset()
+{
+	if (GeometryCollection.IsValid())
+	{
+		Modify();
+		GeometryCollection->Empty();
+		Materials.Empty();
+		InvalidateCollection();
 	}
 }
 
@@ -357,6 +394,8 @@ void UGeometryCollection::Serialize(FArchive& Ar)
 #if WITH_EDITOR
 void UGeometryCollection::CreateSimulationDataImp(bool bCopyFromDDC, const TCHAR* OverrideVersion)
 {
+	COOK_STAT(auto Timer = GeometryCollectionCookStats::UsageStats.TimeSyncWork());
+
 	// Skips the DDC fetch entirely for testing the builder without adding to the DDC
 	const static bool bSkipDDC = false;
 
@@ -367,16 +406,19 @@ void UGeometryCollection::CreateSimulationDataImp(bool bCopyFromDDC, const TCHAR
 
 	if (GeometryCollectionCooker->CanBuild())
 	{
-		if(bSkipDDC)
+		if (bSkipDDC)
 		{
 			GeometryCollectionCooker->Build(DDCData);
+			COOK_STAT(Timer.AddMiss(DDCData.Num()));
 		}
 		else
 		{
-			GetDerivedDataCacheRef().GetSynchronous(GeometryCollectionCooker, DDCData);
+			bool bBuilt = false;
+			const bool bSuccess = GetDerivedDataCacheRef().GetSynchronous(GeometryCollectionCooker, DDCData, &bBuilt);
+			COOK_STAT(Timer.AddHitOrMiss(!bSuccess || bBuilt ? FCookStats::CallStats::EHitOrMiss::Miss : FCookStats::CallStats::EHitOrMiss::Hit, DDCData.Num()));
 		}
 
-		if(bCopyFromDDC)
+		if (bCopyFromDDC)
 		{
 			FMemoryReader Ar(DDCData);
 			Chaos::FChaosArchive ChaosAr(Ar);
@@ -388,12 +430,22 @@ void UGeometryCollection::CreateSimulationDataImp(bool bCopyFromDDC, const TCHAR
 void UGeometryCollection::CreateSimulationData()
 {
 	CreateSimulationDataImp(/*bCopyFromDDC=*/false);
+	SimulationDataGuid = StateGuid;
 }
 #endif
 
 void UGeometryCollection::InvalidateCollection()
 {
 	StateGuid = FGuid::NewGuid();
+}
+
+bool UGeometryCollection::IsSimulationDataDirty() const
+{
+#if WITH_EDITOR
+	return StateGuid != SimulationDataGuid;
+#else
+	return false;
+#endif
 }
 
 FGuid UGeometryCollection::GetIdGuid() const
@@ -412,7 +464,11 @@ void UGeometryCollection::PostEditChangeProperty(struct FPropertyChangedEvent& P
 	if (PropertyChangedEvent.Property && PropertyChangedEvent.Property->GetFName() != GET_MEMBER_NAME_CHECKED(UGeometryCollection, Materials))
 	{
 		InvalidateCollection();
-		CreateSimulationData();
+
+		if (!bManualDataCreate)
+		{
+			CreateSimulationData();
+		}
 	}
 }
 

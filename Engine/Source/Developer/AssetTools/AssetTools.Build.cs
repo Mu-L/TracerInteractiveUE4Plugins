@@ -8,10 +8,12 @@ public class AssetTools : ModuleRules
 	{
 		PrivateIncludePaths.Add("Developer/AssetTools/Private");
 
-		PrivateDependencyModuleNames.AddRange(
+		PublicDependencyModuleNames.AddRange(
 			new string[] {
 				"Core",
 				"CoreUObject",
+				"SlateCore",
+				"UnrealEd",
 			}
 		);
 
@@ -22,11 +24,9 @@ public class AssetTools : ModuleRules
                 "InputCore",
 				"ApplicationCore",
 				"Slate",
-				"SlateCore",
                 "EditorStyle",
 				"SourceControl",
 				"TextureEditor",
-				"UnrealEd",
 				"PropertyEditor",
 				"Kismet",
 				"Landscape",
@@ -35,7 +35,9 @@ public class AssetTools : ModuleRules
 				"RHI",
 				"MaterialEditor",
 				"ToolMenus",
-            }
+				"PhysicsCore",
+				"DeveloperSettings"
+			}
 		);
 
 		PrivateIncludePathModuleNames.AddRange(
@@ -54,6 +56,7 @@ public class AssetTools : ModuleRules
 				"MainFrame",
 				"MaterialEditor",
 				"MessageLog",
+				"PackagesDialog",
 				"Persona",
 				"FontEditor",
                 "AudioEditor",
@@ -64,7 +67,7 @@ public class AssetTools : ModuleRules
                 "AnimationEditor",
                 "AnimationBlueprintEditor",
                 "AnimationModifiers"
-            }
+			}
 		);
 
 		DynamicallyLoadedModuleNames.AddRange(
@@ -80,6 +83,7 @@ public class AssetTools : ModuleRules
                 "ActorPickerMode",
 				"MainFrame",
 				"MessageLog",
+				"PackagesDialog",
 				"Persona",
 				"FontEditor",
                 "AudioEditor",

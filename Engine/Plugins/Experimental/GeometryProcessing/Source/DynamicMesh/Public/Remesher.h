@@ -54,6 +54,19 @@ public:
 	 */
 	bool bPreventNormalFlips = false;
 
+	/** Available Edge Flip metrics */
+	enum class EFlipMetric
+	{
+		OptimalValence = 0,		/** Flip towards Valence=6 */
+		MinEdgeLength = 1		/** Flip towards minimum edge lengths */
+	};
+
+	/** Type of flip metric that will be applied */
+	EFlipMetric FlipMetric = EFlipMetric::OptimalValence;
+
+	/** For MinEdgeLength metric, only flip if NewLength < (MinLengthFlipThresh * CurLength) */
+	double MinLengthFlipThresh = 0.9;
+
 	/** Minimum target edge length. Edges shorter than this will be collapsed if possible. */
 	double MinEdgeLength = 1.0;
 	/** Maximum target edge length. Edges longer than this will be split if possible. */
@@ -106,6 +119,7 @@ public:
 	{
 	}
 
+	virtual ~FRemesher() {}
 
 	/** Set min/max edge-lengths to sane values for given target edge length */
 	void SetTargetEdgeLength(double fLength);
@@ -226,8 +240,6 @@ protected:
 	// want to also constrain this new vertex, possibly project to constraint target. 
 	virtual void UpdateAfterSplit(int edgeID, int va, int vb, const FDynamicMesh3::FEdgeSplitInfo& splitInfo);
 
-
-
 	TDynamicVector<FVector3d> TempPosBuffer;	// this is a temporary buffer used by smoothing and projection
 	TArray<bool> TempFlagBuffer;				// list of which indices in TempPosBuffer were modified
 
@@ -251,16 +263,22 @@ protected:
 	virtual TFunction<FVector3d(const FDynamicMesh3&, int, double)> GetSmoothFunction();
 
 
-
 	// Project vertices onto projection target.
-	virtual void FullProjectionPass();
+	virtual void FullProjectionPass(bool bParallel);
 
+	// Project a single vertex using the given target
 	virtual void ProjectVertex(int VertexID, IProjectionTarget* UseTarget);
 
 	// used by collapse-edge to get projected position for new vertex
 	virtual FVector3d GetProjectedCollapsePosition(int VertexID, const FVector3d& vNewPos);
 
+	// Apply the given projection function to all vertices in the mesh
 	virtual void ApplyToProjectVertices(const TFunction<void(int)>& VertexProjectFunc);
+
+	// Move all vertices in parallel. Update the timestamps.
+	// The NewVertexPosition function accepts a vertex index and returns a new vertex position, as well as setting the 
+	// bool out-param to indicate that the vertex has moved.
+	void MoveVerticesParallel(TFunction<FVector3d(int, bool&)> NewVertexPosition);
 
 
 	/*

@@ -17,7 +17,7 @@ class APlayerController;
 class Error;
 struct FUniqueNetIdRepl;
 
-DECLARE_LOG_CATEGORY_EXTERN(LogGameSession, Log, All);
+ENGINE_API DECLARE_LOG_CATEGORY_EXTERN(LogGameSession, Log, All);
 
 /**
 Acts as a game-specific wrapper around the session interface. The game code makes calls to this when it needs to interact with the session interface.
@@ -53,7 +53,7 @@ class ENGINE_API AGameSession : public AInfo
 	FName SessionName;
 
 	/** Initialize options based on passed in options string */
-	virtual void InitOptions( const FString& Options );
+	virtual void InitOptions(const FString& Options);
 
 	/** @return A new unique player ID */
 	int32 GetNextPlayerID();

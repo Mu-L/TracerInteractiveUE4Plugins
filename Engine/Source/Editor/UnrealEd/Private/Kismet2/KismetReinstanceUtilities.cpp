@@ -354,7 +354,6 @@ FBlueprintCompileReinstancer::FBlueprintCompileReinstancer(UClass* InClassToRein
 
 		// Pull the blueprint that generated this reinstance target, and gather the blueprints that are dependent on it
 		UBlueprint* GeneratingBP = Cast<UBlueprint>(ClassToReinstance->ClassGeneratedBy);
-		check(GeneratingBP || GIsAutomationTesting);
 		if(!IsReinstancingSkeleton() && GeneratingBP)
 		{
 			ClassToReinstanceDefaultValuesCRC = GeneratingBP->CrcLastCompiledCDO;
@@ -1514,7 +1513,7 @@ void FBlueprintCompileReinstancer::BatchReplaceInstancesOfClass(TMap<UClass*, UC
 		return;
 	}
 
-	ReplaceInstancesOfClass_Inner(InOldToNewClassMap, nullptr, Options.ObjectsThatShouldUseOldStuff, false /*bClassObjectReplaced*/, true /*bPreserveRootComponent*/, Options.bArchetypesAreUpToDate, Options.InstancesThatShouldUseOldClass);
+	ReplaceInstancesOfClass_Inner(InOldToNewClassMap, nullptr, Options.ObjectsThatShouldUseOldStuff, false /*bClassObjectReplaced*/, true /*bPreserveRootComponent*/, Options.bArchetypesAreUpToDate, Options.InstancesThatShouldUseOldClass, Options.bReplaceReferencesToOldClasses);
 }
 
 UClass* FBlueprintCompileReinstancer::MoveCDOToNewClass(UClass* OwnerClass, const TMap<UClass*, UClass*>& OldToNewMap, bool bAvoidCDODuplication)
@@ -1817,14 +1816,15 @@ static void ReplaceActorHelper(AActor* OldActor, UClass* OldClass, UObject*& New
 	SpawnInfo.bDeferConstruction = true;
 	SpawnInfo.Name = OldActor->GetFName();
 
-#if WITH_EDITOR
 	if (!OldActor->IsListedInSceneOutliner())
 	{
 		SpawnInfo.bHideFromSceneOutliner = true;
 	}
-#endif
 
-	OldActor->UObject::Rename(nullptr, OldActor->GetOuter(), REN_DoNotDirty | REN_DontCreateRedirectors | REN_ForceNoResetLoaders);
+	SpawnInfo.OverridePackage = OldActor->GetExternalPackage();
+	SpawnInfo.OverrideActorGuid = OldActor->GetActorGuid();
+
+	OldActor->Rename(nullptr, OldActor->GetOuter(), REN_DoNotDirty | REN_DontCreateRedirectors | REN_ForceNoResetLoaders);
 
 	AActor* NewActor = nullptr;
 	{
@@ -1892,7 +1892,7 @@ static void ReplaceActorHelper(AActor* OldActor, UClass* OldClass, UObject*& New
 	OldToNewInstanceMap.Add(OldActor, NewActor);
 }
 
-void FBlueprintCompileReinstancer::ReplaceInstancesOfClass_Inner(TMap<UClass*, UClass*>& InOldToNewClassMap, UObject* InOriginalCDO, TSet<UObject*>* ObjectsThatShouldUseOldStuff, bool bClassObjectReplaced, bool bPreserveRootComponent, bool bArchetypesAreUpToDate, const TSet<UObject*>* InstancesThatShouldUseOldClass )
+void FBlueprintCompileReinstancer::ReplaceInstancesOfClass_Inner(TMap<UClass*, UClass*>& InOldToNewClassMap, UObject* InOriginalCDO, TSet<UObject*>* ObjectsThatShouldUseOldStuff, bool bClassObjectReplaced, bool bPreserveRootComponent, bool bArchetypesAreUpToDate, const TSet<UObject*>* InstancesThatShouldUseOldClass, bool bReplaceReferencesToOldClasses)
 {
 	// If there is an original CDO, we are only reinstancing a single class
 	check((InOriginalCDO != nullptr && InOldToNewClassMap.Num() == 1) || InOriginalCDO == nullptr); // (InOldToNewClassMap.Num() > 1 && InOriginalCDO == nullptr) || (InOldToNewClassMap.Num() == 1 && InOriginalCDO != nullptr));
@@ -2202,6 +2202,23 @@ void FBlueprintCompileReinstancer::ReplaceInstancesOfClass_Inner(TMap<UClass*, U
 		}
 
 		OldToNewInstanceMap.Append(ObjectRemappingHelper.ReplacedObjects);
+	}
+
+	if(bReplaceReferencesToOldClasses)
+	{
+		check(ObjectsThatShouldUseOldStuff);
+
+		for (TPair<UClass*, UClass*> OldToNew : InOldToNewClassMap)
+		{
+			ObjectsThatShouldUseOldStuff->Add(OldToNew.Key);
+
+			TArray<UObject*> OldFunctions;
+			GetObjectsWithOuter(OldToNew.Key, OldFunctions);
+			ObjectsThatShouldUseOldStuff->Append(OldFunctions);
+			
+			OldToNewInstanceMap.Add(OldToNew.Key, OldToNew.Value);
+			SourceObjects.Add(OldToNew.Key);
+		}
 	}
 
 	FReplaceReferenceHelper::FindAndReplaceReferences(SourceObjects, ObjectsThatShouldUseOldStuff, ObjectsReplaced, OldToNewInstanceMap, ReinstancedObjectsWeakReferenceMap);

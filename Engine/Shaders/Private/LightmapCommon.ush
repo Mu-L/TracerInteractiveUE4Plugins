@@ -34,10 +34,8 @@ VTPageTableResult LightmapGetVTSampleInfo(float2 UV, uint LightmapDataIndex, flo
 	UV *= float2(1.0f, 2.0f); // Undo transform used to pack 2 lightmap coeffs in 1 texture for the non-VT default case
 
 	return TextureLoadVirtualPageTable(LightmapResourceCluster.LightmapVirtualTexturePageTable0, LightmapResourceCluster.LightmapVirtualTexturePageTable1,
-		UV, 0.0f,
-		SvPositionXY,
 		VTPageTableUniform_Unpack(GetLightmapData(LightmapDataIndex).LightmapVTPackedPageTableUniform[0], GetLightmapData(LightmapDataIndex).LightmapVTPackedPageTableUniform[1]),
-		LIGHTMAP_VTADDRESSMODE, LIGHTMAP_VTADDRESSMODE);
+		UV, LIGHTMAP_VTADDRESSMODE, LIGHTMAP_VTADDRESSMODE, 0, SvPositionXY);
 }
 
 half4 SampleLightmapVT(VTPageTableResult LightmapVTPageTableResult, uint LayerIndex, uint LightmapDataIndex, Texture2D CacheTexture, SamplerState CacheSampler)
@@ -86,8 +84,8 @@ void GetLightMapColorHQ( VTPageTableResult LightmapVTPageTableResult, float2 Lig
 	half4 Lightmap0;
 	half4 Lightmap1;
 #if LIGHTMAP_VT_ENABLED
-	Lightmap0 = SampleLightmapVT( LightmapVTPageTableResult, 0u, LightmapDataIndex, LightmapResourceCluster.LightMapTexture, LightmapResourceCluster.LightMapSampler); 
-	Lightmap1 = SampleLightmapVT( LightmapVTPageTableResult, 1u, LightmapDataIndex, LightmapResourceCluster.LightMapTexture, LightmapResourceCluster.LightMapSampler); 
+	Lightmap0 = SampleLightmapVT( LightmapVTPageTableResult, 0u, LightmapDataIndex, LightmapResourceCluster.VTLightMapTexture, LightmapResourceCluster.LightMapSampler); 
+	Lightmap1 = SampleLightmapVT( LightmapVTPageTableResult, 1u, LightmapDataIndex, LightmapResourceCluster.VTLightMapTexture_1, LightmapResourceCluster.LightMapSampler); 
 #else
 	Lightmap0 = Texture2DSample( LightmapResourceCluster.LightMapTexture, LightmapResourceCluster.LightMapSampler, LightmapUV0 );
 	Lightmap1 = Texture2DSample( LightmapResourceCluster.LightMapTexture, LightmapResourceCluster.LightMapSampler, LightmapUV1 );
@@ -149,7 +147,7 @@ float4 GetSkyBentNormalAndOcclusion(VTPageTableResult LightmapVTPageTableResult,
 {
 	float4 TextureValue;
 #if LIGHTMAP_VT_ENABLED
-	TextureValue = SampleLightmapVT( LightmapVTPageTableResult, 3u, LightmapDataIndex, LightmapResourceCluster.SkyOcclusionTexture, LIGHTMAP_SHARED_SAMPLER(SkyOcclusionSampler)); 
+	TextureValue = SampleLightmapVT( LightmapVTPageTableResult, 3u, LightmapDataIndex, LightmapResourceCluster.VTSkyOcclusionTexture, LIGHTMAP_SHARED_SAMPLER(SkyOcclusionSampler)); 
 #else
 	TextureValue = Texture2DSample( LightmapResourceCluster.SkyOcclusionTexture, LIGHTMAP_SHARED_SAMPLER(SkyOcclusionSampler), LightmapUV );
 #endif
@@ -165,7 +163,7 @@ float GetAOMaterialMask(VTPageTableResult LightmapVTPageTableResult, float2 Ligh
 {
 	float TextureValue;
 #if LIGHTMAP_VT_ENABLED
-	TextureValue = SampleLightmapVT( LightmapVTPageTableResult, 4u, LightmapDataIndex, LightmapResourceCluster.AOMaterialMaskTexture, LIGHTMAP_SHARED_SAMPLER(AOMaterialMaskSampler)).x; 
+	TextureValue = SampleLightmapVT( LightmapVTPageTableResult, 4u, LightmapDataIndex, LightmapResourceCluster.VTAOMaterialMaskTexture, LIGHTMAP_SHARED_SAMPLER(AOMaterialMaskSampler)).x; 
 #else
 	TextureValue = Texture2DSample( LightmapResourceCluster.AOMaterialMaskTexture, LIGHTMAP_SHARED_SAMPLER(AOMaterialMaskSampler), LightmapUV ).x;
 #endif
@@ -190,7 +188,7 @@ half4 GetPrecomputedShadowMasks(VTPageTableResult LightmapVTPageTableResult, FVe
 		// Fetch the 4 channels of distance field data
 		half4 DistanceField;
 		#if LIGHTMAP_VT_ENABLED
-			DistanceField = SampleLightmapVT( LightmapVTPageTableResult, 2u, LightmapDataIndex, LightmapResourceCluster.StaticShadowTexture, LIGHTMAP_SHARED_SAMPLER(StaticShadowTextureSampler));
+			DistanceField = SampleLightmapVT( LightmapVTPageTableResult, 2u, LightmapDataIndex, LightmapResourceCluster.VTStaticShadowTexture, LIGHTMAP_SHARED_SAMPLER(StaticShadowTextureSampler));
 		#else
 			DistanceField = Texture2DSample(LightmapResourceCluster.StaticShadowTexture, LIGHTMAP_SHARED_SAMPLER(StaticShadowTextureSampler), ShadowMapCoordinate);
 		#endif
@@ -208,7 +206,7 @@ half4 GetPrecomputedShadowMasks(VTPageTableResult LightmapVTPageTableResult, FVe
 		// This is necessary because objects inside a light's influence that were determined to be completely shadowed won't be rendered with STATICLIGHTING_TEXTUREMASK==1
 		return 0;
 
-	#else
+	#elif ALLOW_STATIC_LIGHTING
 
 		float DirectionalLightShadowing = 1.0f;
 
@@ -232,6 +230,10 @@ half4 GetPrecomputedShadowMasks(VTPageTableResult LightmapVTPageTableResult, FVe
 
 		// Directional light is always packed into the first static shadowmap channel, so output the per-primitive directional light shadowing there if requested
 		return half4(DirectionalLightShadowing, 1, 1, 1);
+
+	#else
+
+		return half4(1, 1, 1, 1);
 
 	#endif
 }
@@ -263,8 +265,11 @@ half GetPrimaryPrecomputedShadowMask(FVertexFactoryInterpolantsVSToPS Interpolan
 
 		// Mark as shadowed for lightmapped objects with no shadowmap
 		// This is necessary because objects inside a light's influence that were determined to be completely shadowed won't be rendered with STATICLIGHTING_TEXTUREMASK==1
+		#if MOBILE_DEFERRED_SHADING
+		return 1;
+		#else
 		return 0;
-
+		#endif
 	#else
 		#if CACHED_POINT_INDIRECT_LIGHTING || CACHED_VOLUME_INDIRECT_LIGHTING
 			// output per-primitive directional light shadowing if requested

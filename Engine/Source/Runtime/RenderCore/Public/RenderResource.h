@@ -425,6 +425,9 @@ public:
 		DeferredPassSamplerStateRHI.SafeRelease();
 	}
 	virtual FString GetFriendlyName() const override { return TEXT("FTexture"); }
+
+protected:
+	RENDERCORE_API static FRHISamplerState* GetOrCreateSamplerState(const FSamplerStateInitializerRHI& Initializer);
 };
 
 /** A textures resource that includes an SRV. */
@@ -563,6 +566,42 @@ public:
 /** The global null color vertex buffer, which is set with a stride of 0 on meshes without a color component. */
 extern RENDERCORE_API TGlobalResource<FNullColorVertexBuffer> GNullColorVertexBuffer;
 
+/**
+* A vertex buffer with a single zero float3 component.
+*/
+class FNullVertexBuffer : public FVertexBuffer
+{
+public:
+	/**
+	* Initialize the RHI for this rendering resource
+	*/
+	virtual void InitRHI() override
+	{
+		// create a static vertex buffer
+		FRHIResourceCreateInfo CreateInfo;
+
+		void* LockedData = nullptr;
+		VertexBufferRHI = RHICreateAndLockVertexBuffer(sizeof(float) * 3, BUF_Static | BUF_ZeroStride | BUF_ShaderResource, CreateInfo, LockedData);
+
+		*reinterpret_cast<FVector*>(LockedData) = FVector(0.0f);
+
+		RHIUnlockVertexBuffer(VertexBufferRHI);
+
+		VertexBufferSRV = RHICreateShaderResourceView(VertexBufferRHI, sizeof(FColor), PF_R8G8B8A8);
+	}
+
+	virtual void ReleaseRHI() override
+	{
+		VertexBufferSRV.SafeRelease();
+		FVertexBuffer::ReleaseRHI();
+	}
+
+	FShaderResourceViewRHIRef VertexBufferSRV;
+};
+
+/** The global null vertex buffer, which is set with a stride of 0 on meshes */
+extern RENDERCORE_API TGlobalResource<FNullVertexBuffer> GNullVertexBuffer;
+
 /** An index buffer resource. */
 class FIndexBuffer : public FRenderResource
 {
@@ -594,19 +633,9 @@ FORCEINLINE bool ShouldCompileRayTracingShadersForProject(EShaderPlatform Shader
 	}
 }
 
-// Returns `true` when running on RT-capable machine and RT support is enabled for the project.
-// This function is a runtime only function!
-FORCEINLINE bool IsRayTracingEnabled()
-{
-	if (GRHISupportsRayTracing)
-	{
-		return ShouldCompileRayTracingShadersForProject(GMaxRHIShaderPlatform);
-	}
-	else
-	{
-		return false;
-	}
-}
+// Returns `true` when running on RT-capable machine, RT support is enabled for the project and by game graphics options.
+// This function may only be called at runtime, never during cooking.
+extern RENDERCORE_API bool IsRayTracingEnabled();
 
 /** A ray tracing geometry resource */
 class RENDERCORE_API FRayTracingGeometry : public FRenderResource
@@ -624,6 +653,16 @@ public:
 #if RHI_RAYTRACING
 	FRayTracingGeometryRHIRef RayTracingGeometryRHI;
 	FRayTracingGeometryInitializer Initializer;
+
+	/** When set to NonSharedVertexBuffers, then shared vertex buffers are not used  */
+	static constexpr int64 NonSharedVertexBuffers = -1;
+
+	/** 
+	Vertex buffers for dynamic geometries may be sub-allocated from a shared pool, which is periodically reset and its generation ID is incremented.
+	Geometries that use the shared buffer must be updated (rebuilt or refit) before they are used for rendering after the pool is reset.
+	This is validated by comparing the current shared pool generation ID against generation IDs stored in FRayTracingGeometry during latest update.
+	*/
+	int64 DynamicGeometrySharedBufferGenerationID = NonSharedVertexBuffers;
 
 	// FRenderResource interface.
 	virtual void ReleaseRHI() override
@@ -663,7 +702,14 @@ public:
 			RayTracingGeometryRHI = RHICreateRayTracingGeometry(Initializer);
 			if (Initializer.OfflineData == nullptr)
 			{
+				// If offline data is not available, then acceleration structure must be built at run-time.
 				FRHICommandListExecutor::GetImmediateCommandList().BuildAccelerationStructure(RayTracingGeometryRHI);
+			}
+			else
+			{
+				// Offline data ownership is transferred to the RHI, which discards it after use.
+				// It is no longer valid to use it after this point.
+				Initializer.OfflineData = nullptr;
 			}
 		}
 	}

@@ -9,11 +9,12 @@
 #include "EngineDefines.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "Serialization/BulkData.h"
-#include "PhysicsEngine/BodySetupEnums.h"
+#include "BodySetupEnums.h"
 #include "PhysicsEngine/AggregateGeom.h"
 #include "Interfaces/Interface_CollisionDataProvider.h"
 #include "HAL/ThreadSafeBool.h"
 #include "Async/TaskGraphInterfaces.h"
+#include "BodySetupCore.h"
 #include "BodySetup.generated.h"
 
 
@@ -26,6 +27,7 @@ enum class EPhysXMeshCookFlags : uint8;
 
 DECLARE_DELEGATE_OneParam(FOnAsyncPhysicsCookFinished, bool);
 
+#if PHYSICS_INTERFACE_PHYSX
 namespace physx
 {
 	class PxTriangleMesh;
@@ -39,6 +41,7 @@ namespace physx
 	class PxTriangleMesh;
 	class PxTriangleMeshGeometry;
 }
+#endif
 
 #if WITH_CHAOS
 namespace Chaos
@@ -140,7 +143,7 @@ struct FPhysXCookHelper;
  */
 
 UCLASS(collapseCategories, MinimalAPI)
-class UBodySetup : public UObject
+class UBodySetup : public UBodySetupCore
 {
 	GENERATED_UCLASS_BODY()
 
@@ -151,16 +154,6 @@ class UBodySetup : public UObject
 	/** Simplified collision representation of this  */
 	UPROPERTY(EditAnywhere, Category = BodySetup, meta=(DisplayName = "Primitives", NoResetToDefault))
 	struct FKAggregateGeom AggGeom;
-
-	/** Used in the PhysicsAsset case. Associates this Body with Bone in a skeletal mesh. */
-	UPROPERTY(Category=BodySetup, VisibleAnywhere)
-	FName BoneName;
-
-	/** 
-	 *	If simulated it will use physics, if kinematic it will not be affected by physics, but can interact with physically simulated bodies. Default will inherit from OwnerComponent's behavior.
-	 */
-	UPROPERTY(EditAnywhere, Category=Physics)
-	TEnumAsByte<EPhysicsType> PhysicsType;
 
 	/** 
 	 *	If true (and bEnableFullAnimWeightBodies in SkelMeshComp is true), the physics of this bone will always be blended into the skeletal mesh, regardless of what PhysicsWeight of the SkelMeshComp is. 
@@ -223,17 +216,7 @@ class UBodySetup : public UObject
 
 	/** Indicates that we will never use convex or trimesh shapes. This is an optimization to skip checking for binary data. */
 	uint8 bNeverNeedsCookedCollisionData:1;
-
-	/** Collision Type for this body. This eventually changes response to collision to others **/
-	UPROPERTY(EditAnywhere, Category=Collision)
-	TEnumAsByte<enum EBodyCollisionResponse::Type> CollisionReponse;
-
-	/** Collision Trace behavior - by default, it will keep simple(convex)/complex(per-poly) separate **/
-	UPROPERTY(EditAnywhere, Category=Collision, meta=(DisplayName = "Collision Complexity"))
-	TEnumAsByte<enum ECollisionTraceFlag> CollisionTraceFlag;
-
-	ENGINE_API TEnumAsByte<enum ECollisionTraceFlag> GetCollisionTraceFlag() const;
-
+	
 	/** Physical material to use for simple collision on this body. Encodes information about density, friction etc. */
 	UPROPERTY(EditAnywhere, Category=Physics, meta=(DisplayName="Simple Collision Physical Material"))
 	class UPhysicalMaterial* PhysMaterial;
@@ -266,11 +249,6 @@ private:
 
 public:
 
-#if WITH_PHYSX
-	/** Physics triangle mesh, created from cooked data in CreatePhysicsMeshes */
-	TArray<physx::PxTriangleMesh*> TriMeshes;
-#endif
-
 #if WITH_CHAOS
 	//FBodySetupTriMeshes* TriMeshWrapper;
 	TArray<TSharedPtr<Chaos::FTriangleMeshImplicitObject, ESPMode::ThreadSafe>> ChaosTriMeshes;
@@ -293,7 +271,7 @@ public:
 	UPROPERTY()
 	FVector BuildScale3D;
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	/** References the current async cook helper. Used to be able to abort a cook task */
 	FPhysXCookHelper* CurrentCookHelper;
 #endif
@@ -308,6 +286,7 @@ public:
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void PostEditUndo() override;
+	virtual EDataValidationResult IsDataValid(TArray<FText>& ValidationErrors) override;
 #endif // WITH_EDITOR
 	virtual void GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize) override;
 	//~ End UObject Interface.
@@ -345,6 +324,8 @@ private:
 	/** Finalize game thread data before calling back user's delegate */
 	void FinishCreatePhysicsMeshesAsync(FPhysXCookHelper* AsyncPhysicsCookHelper, FOnAsyncPhysicsCookFinished OnAsyncPhysicsCookFinished);
 #elif WITH_CHAOS
+	// TODO: ProcessFormatData_Chaos is calling ProcessFormatData_Chaos directly - it's better if CreatePhysicsMeshes can be used but that code path requires WITH_EDITOR
+	friend class UMRMeshComponent;
 	bool ProcessFormatData_Chaos(FByteBulkData* FormatData);
 	bool RuntimeCookPhysics_Chaos();
 	void FinishCreatingPhysicsMeshes_Chaos(FChaosDerivedDataReader<float, 3>& InReader);

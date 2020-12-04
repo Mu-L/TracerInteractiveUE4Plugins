@@ -280,10 +280,10 @@ static bool UpdateScissorRect(
 	check(RHICmdList.IsInsideRenderPass());
 	bool bDidRestartRenderpass = false;
 
-	QUICK_SCOPE_CYCLE_COUNTER(STAT_Slate_UpdateScissorRect);
-
 	if (RenderBatch.ClippingState != LastClippingState || bForceStateChange)
 	{
+		QUICK_SCOPE_CYCLE_COUNTER(STAT_Slate_UpdateScissorRect);
+
 		if (RenderBatch.ClippingState)
 		{
 			const FSlateClippingState& ClipState = *RenderBatch.ClippingState;
@@ -298,9 +298,10 @@ static bool UpdateScissorRect(
 					// #todo-renderpasses this is very gross. If/when this gets refactored we can detect a simple clear or batch up elements by rendertarget (and other stuff)
 					RHICmdList.EndRenderPass();
 					bDidRestartRenderpass = true;
+					ERenderTargetActions StencilAction = IsMemorylessTexture(DepthStencilTarget) ? ERenderTargetActions::DontLoad_DontStore : ERenderTargetActions::Load_Store;
 
 					FRHIRenderPassInfo RPInfo(ColorTarget, ERenderTargetActions::Load_Store);
-					RPInfo.DepthStencilRenderTarget.Action = MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, ERenderTargetActions::Load_Store);
+					RPInfo.DepthStencilRenderTarget.Action = MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, StencilAction);
 					RPInfo.DepthStencilRenderTarget.DepthStencilTarget = DepthStencilTarget;
 					RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil = FExclusiveDepthStencil::DepthNop_StencilWrite;
 
@@ -370,21 +371,27 @@ static bool UpdateScissorRect(
 					const FSlateClippingZone& MaskQuad = StencilQuads.Last();
 					const FSlateRect LastStencilBoundingBox = MaskQuad.GetBoundingBox().Round();
 
-					const FIntPoint SizeXY = BackBuffer.GetSizeXY();
-					const FVector2D ViewSize((float)SizeXY.X, (float)SizeXY.Y);
+					FSlateRect ScissorRect = LastStencilBoundingBox.OffsetBy(ViewTranslation2D);
 
-					const FVector2D TopLeft = FMath::Min(FMath::Max(LastStencilBoundingBox.GetTopLeft() + ViewTranslation2D, FVector2D(0.0f, 0.0f)), ViewSize);
-					const FVector2D BottomRight = FMath::Min(FMath::Max(LastStencilBoundingBox.GetBottomRight() + ViewTranslation2D, FVector2D(0.0f, 0.0f)), ViewSize);
+					// Chosen stencil quad might have some coordinates outside the viewport.
+					// After turning it into a bounding box, this box must be clamped to the current viewport,
+					// as scissors outside the viewport don't make sense (and cause assertions to fail).
+					const FIntPoint BackBufferSize = BackBuffer.GetSizeXY();
+					ScissorRect.Left = FMath::Clamp(ScissorRect.Left, 0.0f, static_cast<float>(BackBufferSize.X));
+					ScissorRect.Top = FMath::Clamp(ScissorRect.Top, 0.0f, static_cast<float>(BackBufferSize.Y));
+					ScissorRect.Right = FMath::Clamp(ScissorRect.Right, ScissorRect.Left, static_cast<float>(BackBufferSize.X));
+					ScissorRect.Bottom = FMath::Clamp(ScissorRect.Bottom, ScissorRect.Top, static_cast<float>(BackBufferSize.Y));
 
 					if (bSwitchVerticalAxis)
 					{
-						const int32 MinY = (ViewSize.Y - BottomRight.Y);
-						const int32 MaxY = (ViewSize.Y - TopLeft.Y);
-						RHICmdList.SetScissorRect(true, TopLeft.X, MinY, BottomRight.X, MaxY);
+						const FIntPoint ViewSize = BackBuffer.GetSizeXY();
+						const int32 MinY = (ViewSize.Y - ScissorRect.Bottom);
+						const int32 MaxY = (ViewSize.Y - ScissorRect.Top);
+						RHICmdList.SetScissorRect(true, ScissorRect.Left, MinY, ScissorRect.Right, MaxY);
 					}
 					else
 					{
-						RHICmdList.SetScissorRect(true, TopLeft.X, TopLeft.Y, BottomRight.X, BottomRight.Y);
+						RHICmdList.SetScissorRect(true, ScissorRect.Left, ScissorRect.Top, ScissorRect.Right, ScissorRect.Bottom);
 					}
 				}
 
@@ -397,9 +404,15 @@ static bool UpdateScissorRect(
 
 					// Clear current stencil buffer, we use ELoad/EStore, because we need to keep the stencil around.
 					ERenderTargetLoadAction StencilLoadAction = bClearStencil ? ERenderTargetLoadAction::EClear : ERenderTargetLoadAction::ELoad;
+					ERenderTargetActions StencilAction = MakeRenderTargetActions(StencilLoadAction, ERenderTargetStoreAction::EStore);
+					if (IsMemorylessTexture(DepthStencilTarget))
+					{
+						// We can't preserve content for memoryless targets
+						StencilAction = bClearStencil ? ERenderTargetActions::Clear_DontStore : ERenderTargetActions::DontLoad_DontStore;
+					}
 
 					FRHIRenderPassInfo RPInfo(ColorTarget, ERenderTargetActions::Load_Store);
-					RPInfo.DepthStencilRenderTarget.Action = MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, MakeRenderTargetActions(StencilLoadAction, ERenderTargetStoreAction::EStore));
+					RPInfo.DepthStencilRenderTarget.Action = MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, StencilAction);
 					RPInfo.DepthStencilRenderTarget.DepthStencilTarget = DepthStencilTarget;
 					RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil = FExclusiveDepthStencil::DepthNop_StencilWrite;
 					RHICmdList.BeginRenderPass(RPInfo, TEXT("SlateUpdateScissorRect_ClearStencil"));
@@ -700,7 +713,7 @@ void FSlateRHIRenderingPolicy::DrawElements(
 			RPInfo.DepthStencilRenderTarget.DepthStencilTarget = DepthStencilTarget;
 			if (DepthStencilTarget)
 			{
-				RPInfo.DepthStencilRenderTarget.Action = EDepthStencilTargetActions::LoadDepthStencil_StoreDepthStencil;
+				RPInfo.DepthStencilRenderTarget.Action = IsMemorylessTexture(DepthStencilTarget) ? EDepthStencilTargetActions::DontLoad_DontStore : EDepthStencilTargetActions::LoadDepthStencil_StoreDepthStencil;
 				RPInfo.DepthStencilRenderTarget.ExclusiveDepthStencil = FExclusiveDepthStencil::DepthWrite_StencilWrite;
 			}
 			else
@@ -859,6 +872,16 @@ void FSlateRHIRenderingPolicy::DrawElements(
 
 							TextureRHI = TextureObjectResource->AccessRHIResource();
 
+							// This can upset some RHIs, so use transparent black texture until it's valid.
+							// these can be temporarily invalid when recreating them / invalidating their streaming
+							// state.
+							if (TextureRHI == nullptr)
+							{
+								// We use transparent black here, because it's about to become valid - probably, and flashing white
+								// wouldn't be ideal.
+								TextureRHI = GTransparentBlackTexture->TextureRHI;
+							}
+
 							Filter = GetSamplerFilter(TextureObj);
 						}
 					}
@@ -1013,11 +1036,9 @@ void FSlateRHIRenderingPolicy::DrawElements(
 				const FSceneView& ActiveSceneView = *SceneViews[ActiveSceneIndex];
 
 				FSlateMaterialResource* MaterialShaderResource = (FSlateMaterialResource*)ShaderResource;
-				if (MaterialShaderResource->GetMaterialObject() != nullptr)
+				if (FMaterialRenderProxy* MaterialRenderProxy = MaterialShaderResource->GetRenderProxy())
 				{
 					MaterialShaderResource->CheckForStaleResources();
-
-					FMaterialRenderProxy* MaterialRenderProxy = MaterialShaderResource->GetRenderProxy();
 
 					const FMaterial* Material = MaterialRenderProxy->GetMaterial(ActiveSceneView.GetFeatureLevel());
 
@@ -1026,7 +1047,7 @@ void FSlateRHIRenderingPolicy::DrawElements(
 					const bool bUseInstancing = RenderBatch.InstanceCount > 0 && RenderBatch.InstanceData != nullptr;
 					TShaderRef<FSlateMaterialShaderVS> VertexShader = GetMaterialVertexShader(Material, bUseInstancing);
 
-					if (VertexShader.IsValid() && PixelShader.IsValid())
+					if (VertexShader.IsValid() && PixelShader.IsValid() && IsSceneTexturesValid(RHICmdList))
 					{
 #if WITH_SLATE_VISUALIZERS
 						if (CVarShowSlateBatching.GetValueOnRenderThread() != 0)
@@ -1055,8 +1076,9 @@ void FSlateRHIRenderingPolicy::DrawElements(
 						{
 							PixelShader->SetBlendState(GraphicsPSOInit, Material);
 							FSlateShaderResource* MaskResource = MaterialShaderResource->GetTextureMaskResource();
-							if (MaskResource)
+							if (MaskResource && (Material->GetBlendMode() == EBlendMode::BLEND_Opaque || Material->GetBlendMode() == EBlendMode::BLEND_Masked))
 							{
+								// Font materials require some form of translucent blending
 								GraphicsPSOInit.BlendState = TStaticBlendState<CW_RGBA, BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha, BO_Add, BF_InverseDestAlpha, BF_One>::GetRHI();
 							}
 

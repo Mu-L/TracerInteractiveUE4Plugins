@@ -2,9 +2,9 @@
 	"FileVersion": 3,
 	"Version": 1,
 	"VersionName": "1.0",
-	"FriendlyName": "Movie Render Pipeline",
+	"FriendlyName": "Movie Render Queue",
 	"Description": "Advanced movie rendering pipeline for use in creating rendered cinematics or other multi-media creation.",
-	"Category": "Scripting",
+	"Category": "Rendering",
 	"CreatedBy": "Epic Games Inc.",
 	"CreatedByURL": "",
 	"DocsURL": "",
@@ -13,7 +13,7 @@
 	"CanContainContent": true,
 	"IsBetaVersion": true,
 	"Installed": false,
-	"EnabledByDefault": true,
+	"EnabledByDefault": false,
 	"Plugins": [
 		{
 			"Name": "EditorScriptingUtilities",
@@ -23,28 +23,47 @@
 			"Name": "LevelSequenceEditor",
 			"Enabled": true,
 			"Optional": true
+		},
+		{
+			"Name": "OpenColorIO",
+			"Enabled": true,
+			"Optional": false
+		},
+		{
+			"Name": "ActorLayerUtilities",
+			"Enabled": true,
+			"Optional": false
 		}
 	],
 	"Modules": [
 		{
 			"Name": "MovieRenderPipelineCore",
-			"Type": "UncookedOnly",
-			"LoadingPhase": "Default"
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"WhitelistPlatforms": [ "Mac", "Win32", "Win64", "Linux" ]
 		},
 		{
 			"Name": "MovieRenderPipelineSettings",
-			"Type": "UncookedOnly",
-			"LoadingPhase": "Default"
-		}, 
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"WhitelistPlatforms": [ "Mac", "Win32", "Win64", "Linux" ]
+		},
 		{
-			"Name" : "MovieRenderPipelineRenderPasses",
-			"Type": "UncookedOnly",
-			"LoadingPhase": "Default"
+			"Name": "MovieRenderPipelineRenderPasses",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"WhitelistPlatforms": [ "Mac", "Win32", "Win64", "Linux" ]
 		},
 		{
 			"Name": "MovieRenderPipelineEditor",
 			"Type": "Editor",
 			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "UEOpenExrRTTI",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"WhitelistPlatforms": [ "Mac", "Win32", "Win64", "Linux" ]
 		}
 	]
 }

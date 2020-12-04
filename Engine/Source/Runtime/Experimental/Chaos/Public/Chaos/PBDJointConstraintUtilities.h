@@ -12,6 +12,30 @@ namespace Chaos
 	class FPBDJointUtilities
 	{
 	public:
+		static void GetSphericalAxisDelta(
+			const FVec3& X0,
+			const FVec3& X1,
+			FVec3& Axis,
+			FReal& Delta);
+
+		static void GetCylindricalAxesDeltas(
+			const FRotation3& R0,
+			const FVec3& X0,
+			const FVec3& X1,
+			const int32 CylinderAxisIndex,
+			FVec3& CylinderAxis,
+			FReal& CylinderDelta,
+			FVec3& RadialAxis,
+			FReal& RadialDelta);
+
+		static void GetPlanarAxisDelta(
+			const FRotation3& R0,
+			const FVec3& X0,
+			const FVec3& X1,
+			const int32 PlaneAxisIndex,
+			FVec3& Axis,
+			FReal& Delta);
+
 		static void DecomposeSwingTwistLocal(
 			const FRotation3& R0, 
 			const FRotation3& R1, 
@@ -41,6 +65,21 @@ namespace Chaos
 			FVec3& AxisLocal,
 			FReal& Angle);
 
+		static void GetCircularConeAxisErrorLocal(
+			const FRotation3& R0,
+			const FRotation3& R1,
+			const FReal SwingLimit,
+			FVec3& AxisLocal,
+			FReal& Error);
+
+		static void GetEllipticalConeAxisErrorLocal(
+			const FRotation3& R0,
+			const FRotation3& R1,
+			const FReal SwingLimitY,
+			const FReal SwingLimitZ,
+			FVec3& AxisLocal,
+			FReal& Error);
+
 		static void GetLockedSwingAxisAngle(
 			const FRotation3& R0,
 			const FRotation3& R1,
@@ -63,12 +102,17 @@ namespace Chaos
 			FVec3& Axis,
 			FReal& Angle);
 
-		static void GetLockedAxes(
+		static void GetLockedRotationAxes(
 			const FRotation3& R0, 
 			const FRotation3& R1, 
 			FVec3& Axis0, 
 			FVec3& Axis1, 
 			FVec3& Axis2);
+
+		static FReal GetConeAngleLimit(
+			const FPBDJointSettings& JointSettings,
+			const FVec3& SwingAxisLocal,
+			const FReal SwingAngle);
 
 		/**
 		 * Increase the lower inertia components to ensure that the maximum ratio between any pair of elements is MaxRatio.
@@ -108,6 +152,18 @@ namespace Chaos
 			const FReal MinParentMassRatio,
 			const FReal MaxInertiaRatio);
 
+		static bool GetSoftLinearLimitEnabled(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static bool GetSoftTwistLimitEnabled(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
+		static bool GetSoftSwingLimitEnabled(
+			const FPBDJointSolverSettings& SolverSettings,
+			const FPBDJointSettings& JointSettings);
+
 		static FReal GetLinearStiffness(
 			const FPBDJointSolverSettings& SolverSettings,
 			const FPBDJointSettings& JointSettings);
@@ -146,11 +202,13 @@ namespace Chaos
 
 		static FReal GetLinearDriveStiffness(
 			const FPBDJointSolverSettings& SolverSettings,
-			const FPBDJointSettings& JointSettings);
+			const FPBDJointSettings& JointSettings,
+			const int32 AxisIndex);
 
 		static FReal GetLinearDriveDamping(
 			const FPBDJointSolverSettings& SolverSettings,
-			const FPBDJointSettings& JointSettings);
+			const FPBDJointSettings& JointSettings,
+			const int32 AxisIndex);
 
 		static FReal GetAngularTwistDriveStiffness(
 			const FPBDJointSolverSettings& SolverSettings,
@@ -196,13 +254,10 @@ namespace Chaos
 			const FPBDJointSolverSettings& SolverSettings,
 			const FPBDJointSettings& JointSettings);
 
-		static FReal GetAngularPositionCorrection(
-			const FPBDJointSolverSettings& SolverSettings,
-			const FPBDJointSettings& JointSettings);
-
 		static FVec3 GetSphereLimitedPositionError(const FVec3& CX, const FReal Radius);
 		static FVec3 GetCylinderLimitedPositionError(const FVec3& CX, const FVec3& Axis, const FReal Limit, const EJointMotionType AxisMotion);
 		static FVec3 GetLineLimitedPositionError(const FVec3& CX, const FVec3& Axis, const FReal Limit, const EJointMotionType AxisMotion);
 		static FVec3 GetLimitedPositionError(const FPBDJointSettings& JointSettings, const FRotation3& R0, const FVec3& CX);
 	};
 }
+

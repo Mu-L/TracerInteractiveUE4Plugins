@@ -51,23 +51,21 @@ FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(const F
 				GLuint TextureID = 0;
 				if (FOpenGL::SupportsResourceView())
 				{
-					UE_CLOG(!GPixelFormats[Format].Supported, LogRHI, Error, TEXT("Unsupported EPixelFormat %d"), Format);
-
-					FOpenGLVertexBuffer* VertexBuffer = FOpenGLDynamicRHI::ResourceCast(VertexBufferRHI);
-
-					const uint32 FormatBPP = GPixelFormats[Format].BlockBytes;
-
-					const FOpenGLTextureFormat& GLFormat = GOpenGLTextureFormats[Format];
 					FOpenGL::GenTextures(1, &TextureID);
-
-					// Use a texture stage that's not likely to be used for draws, to avoid waiting
-					if (VertexBuffer)
+					UE_CLOG(!GPixelFormats[Format].Supported, LogRHI, Error, TEXT("Unsupported EPixelFormat %d"), Format);
+					if (VertexBufferRHI)
 					{
+						FOpenGLVertexBuffer* VertexBuffer = FOpenGLDynamicRHI::ResourceCast(VertexBufferRHI);
+
+						const uint32 FormatBPP = GPixelFormats[Format].BlockBytes;
+
+						const FOpenGLTextureFormat& GLFormat = GOpenGLTextureFormats[Format];
+
+						// Use a texture stage that's not likely to be used for draws, to avoid waiting
 						OGLRHI->CachedSetupTextureStage(OGLRHI->GetContextStateForCurrentContext(), FOpenGL::GetMaxCombinedTextureImageUnits() - 1, GL_TEXTURE_BUFFER, TextureID, -1, 1);
 						BindGLTexBufferRange(GL_TEXTURE_BUFFER, GLFormat.InternalFormat[0], VertexBuffer->Resource, Desc.StartOffsetBytes, Desc.NumElements, FormatBPP);
 					}
 				}
-
 				// No need to restore texture stage; leave it like this,
 				// and the next draw will take care of cleaning it up; or
 				// next operation that needs the stage will switch something else in on it.
@@ -112,15 +110,17 @@ FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(const F
 				GLuint TextureID = 0;
 				if (FOpenGL::SupportsResourceView())
 				{
-					FOpenGLIndexBuffer* IndexBuffer = ResourceCast(IndexBufferRHI);
 					FOpenGL::GenTextures(1, &TextureID);
-					CachedSetupTextureStage(GetContextStateForCurrentContext(), FOpenGL::GetMaxCombinedTextureImageUnits() - 1, GL_TEXTURE_BUFFER, TextureID, -1, 1);
-					uint32 Stride = IndexBufferRHI->GetStride();
-					GLenum Format = (Stride == 2) ? GL_R16UI : GL_R32UI;
-					BindGLTexBufferRange(GL_TEXTURE_BUFFER, Format, IndexBuffer->Resource, Desc.StartOffsetBytes, Desc.NumElements, Stride);
+					if (IndexBufferRHI)
+					{
+						FOpenGLIndexBuffer* IndexBuffer = ResourceCast(IndexBufferRHI);
+						CachedSetupTextureStage(GetContextStateForCurrentContext(), FOpenGL::GetMaxCombinedTextureImageUnits() - 1, GL_TEXTURE_BUFFER, TextureID, -1, 1);
+						uint32 Stride = IndexBufferRHI->GetStride();
+						GLenum Format = (Stride == 2) ? GL_R16UI : GL_R32UI;
+						BindGLTexBufferRange(GL_TEXTURE_BUFFER, Format, IndexBuffer->Resource, Desc.StartOffsetBytes, Desc.NumElements, Stride);
+					}
 				}
-
-				return new FOpenGLShaderResourceView(this, TextureID, GL_TEXTURE_BUFFER);
+				return new FOpenGLShaderResourceView(this, TextureID, GL_TEXTURE_BUFFER, IndexBufferRHI);
 			});
 		}
 
@@ -132,18 +132,55 @@ FShaderResourceViewRHIRef FOpenGLDynamicRHI::RHICreateShaderResourceView(const F
 	}
 }
 
+void FOpenGLDynamicRHI::RHIUpdateShaderResourceView(FRHIShaderResourceView* SRV, FRHIIndexBuffer* IndexBuffer)
+{
+	if (!FOpenGL::SupportsResourceView())
+	{
+		return;
+	}
+	VERIFY_GL_SCOPE();
+
+	FOpenGLShaderResourceView* SRVGL = FOpenGLDynamicRHI::ResourceCast(SRV);
+	FOpenGLIndexBuffer* IBGL = FOpenGLDynamicRHI::ResourceCast(IndexBuffer);
+
+	check(SRVGL);
+	check(!SRVGL->VertexBuffer);
+	GLuint TextureID = SRVGL->Resource;
+	CachedSetupTextureStage(GetContextStateForCurrentContext(), FOpenGL::GetMaxCombinedTextureImageUnits() - 1, GL_TEXTURE_BUFFER, TextureID, -1, 1);
+
+	if (!IBGL)
+	{
+		FOpenGL::TexBuffer(GL_TEXTURE_BUFFER, GL_R16UI, 0); // format ignored here since we're detaching.
+		SRVGL->IndexBuffer = nullptr;
+		SRVGL->ModificationVersion = 0;
+	}
+	else
+	{
+		uint32 Stride = IndexBuffer->GetStride();
+		GLenum Format = (Stride == 2) ? GL_R16UI : GL_R32UI;
+		check(SRVGL->Target == GL_TEXTURE_BUFFER);
+
+		uint32 NumElements = IndexBuffer->GetSize() / Stride;
+		BindGLTexBufferRange(GL_TEXTURE_BUFFER, Format, IBGL->Resource, 0, NumElements, Stride);
+		SRVGL->IndexBuffer = IndexBuffer;
+		SRVGL->ModificationVersion = IBGL->ModificationCount;
+	}
+}
+
 void FOpenGLDynamicRHI::RHIUpdateShaderResourceView(FRHIShaderResourceView* SRV, FRHIVertexBuffer* VertexBuffer, uint32 Stride, uint8 Format)
 {
 	if (!FOpenGL::SupportsResourceView())
 	{
 		return;
 	}
-	
+	VERIFY_GL_SCOPE();
+
 	FOpenGLShaderResourceView* SRVGL = FOpenGLDynamicRHI::ResourceCast(SRV);
 	FOpenGLVertexBuffer* VBGL = FOpenGLDynamicRHI::ResourceCast(VertexBuffer);
 	const FOpenGLTextureFormat& GLFormat = GOpenGLTextureFormats[Format];
 	
 	check(SRVGL);
+	check(!SRVGL->IndexBuffer);
 	GLuint TextureID = SRVGL->Resource;
 	CachedSetupTextureStage(GetContextStateForCurrentContext(), FOpenGL::GetMaxCombinedTextureImageUnits() - 1, GL_TEXTURE_BUFFER, TextureID, -1, 1);
 	
@@ -171,9 +208,12 @@ FOpenGLShaderResourceView::~FOpenGLShaderResourceView()
 {
 	if (Resource && OwnsResource)
 	{
-		VERIFY_GL_SCOPE();
-		OpenGLRHI->InvalidateTextureResourceInCache(Resource);
-		FOpenGL::DeleteTextures(1, &Resource);
+		RunOnGLRenderContextThread([OpenGLRHI= OpenGLRHI, Resource = Resource]()
+		{
+			VERIFY_GL_SCOPE();
+			OpenGLRHI->InvalidateTextureResourceInCache(Resource);
+			FOpenGL::DeleteTextures(1, &Resource);
+		});
 	}
 }
 
@@ -261,8 +301,12 @@ FOpenGLVertexBufferUnorderedAccessView::~FOpenGLVertexBufferUnorderedAccessView(
 {
 	if (Resource)
 	{
-		OpenGLRHI->InvalidateTextureResourceInCache( Resource );
-		FOpenGL::DeleteTextures(1, &Resource);
+		RunOnGLRenderContextThread([OpenGLRHI= OpenGLRHI, Resource = Resource]()
+		{
+			VERIFY_GL_SCOPE();
+			OpenGLRHI->InvalidateTextureResourceInCache(Resource);
+			FOpenGL::DeleteTextures(1, &Resource);
+		});
 	}
 }
 
@@ -296,26 +340,55 @@ void FOpenGLDynamicRHI::RHIClearUAVFloat(FRHIUnorderedAccessView* UnorderedAcces
 		GPUProfilingData.RegisterGPUWork(1);
 		return;
 	}
+#elif defined(OPENGL_ESDEFERRED)
+	glBindBuffer(GL_TEXTURE_BUFFER, Texture->BufferResource);
+	uint32 BufferSize = Texture->GetBufferSize();
+	if (BufferSize > 0)
+	{
+		void* BufferData = FOpenGL::MapBufferRange(GL_TEXTURE_BUFFER, 0, BufferSize, FOpenGLBase::RLM_WriteOnly);
+		uint8 ClearValue = uint8(Values[0] & 0xff);
+		FPlatformMemory::Memset(BufferData, ClearValue, BufferSize);
+		FOpenGL::UnmapBufferRange(GL_TEXTURE_BUFFER, 0, BufferSize);
+		GPUProfilingData.RegisterGPUWork(1);
+	}
 #endif
 	// Use compute on ES3.1
-	check(Texture->BufferResource);
+	TRHICommandList_RecursiveHazardous<FOpenGLDynamicRHI> RHICmdList(this);
+
+	if (Texture->GetBufferSize() == 0)
 	{
-		TRHICommandList_RecursiveHazardous<FOpenGLDynamicRHI> RHICmdList(this);
-		
-		int32 NumComponents = GPixelFormats[Texture->UnrealFormat].NumComponents;
-		uint32 NumElements = Texture->GetBufferSize() / GPixelFormats[Texture->UnrealFormat].BlockBytes;
-					
-		switch (NumComponents)
+		FOpenGLTextureUnorderedAccessView* Texture2D = static_cast<FOpenGLTextureUnorderedAccessView*>(Texture);
+
+		FIntVector Size = Texture2D->TextureRHI->GetSizeXYZ();
+
+		if (Texture->IsLayered())
 		{
-		case 1:
-			ClearUAVShader_T<EClearReplacementResourceType::Buffer, EClearReplacementValueType::Float, 1, false>(RHICmdList, UnorderedAccessViewRHI, NumElements, 1, 1, *reinterpret_cast<const float(*)[1]>(&Values));
-			break;
-		case 4:
-			ClearUAVShader_T<EClearReplacementResourceType::Buffer, EClearReplacementValueType::Float, 4, false>(RHICmdList, UnorderedAccessViewRHI, NumElements, 1, 1, *reinterpret_cast<const float(*)[4]>(&Values));
-			break;
-		default:
-			check(false);
-		};
+			ClearUAVShader_T<EClearReplacementResourceType::Texture3D, EClearReplacementValueType::Float, 4, false>(RHICmdList, UnorderedAccessViewRHI, Size.X, Size.Y, Size.Z, *reinterpret_cast<const float(*)[4]>(&Values));
+		}
+		else
+		{
+			ClearUAVShader_T<EClearReplacementResourceType::Texture2D, EClearReplacementValueType::Float, 4, false>(RHICmdList, UnorderedAccessViewRHI, Size.X, Size.Y, Size.Z, *reinterpret_cast<const float(*)[4]>(&Values));
+		}
+	}
+	else
+	{
+		check(Texture->BufferResource);
+		{
+			int32 NumComponents = GPixelFormats[Texture->UnrealFormat].NumComponents;
+			uint32 NumElements = Texture->GetBufferSize() / GPixelFormats[Texture->UnrealFormat].BlockBytes;
+					
+			switch (NumComponents)
+			{
+			case 1:
+				ClearUAVShader_T<EClearReplacementResourceType::Buffer, EClearReplacementValueType::Float, 1, false>(RHICmdList, UnorderedAccessViewRHI, NumElements, 1, 1, *reinterpret_cast<const float(*)[1]>(&Values));
+				break;
+			case 4:
+				ClearUAVShader_T<EClearReplacementResourceType::Buffer, EClearReplacementValueType::Float, 4, false>(RHICmdList, UnorderedAccessViewRHI, NumElements, 1, 1, *reinterpret_cast<const float(*)[4]>(&Values));
+				break;
+			default:
+				check(false);
+			};
+		}
 	}
 }
 
@@ -332,24 +405,42 @@ void FOpenGLDynamicRHI::RHIClearUAVUint(FRHIUnorderedAccessView* UnorderedAccess
 	}
 #endif
 	// Use compute on ES3.1
-	check(Texture->BufferResource);
-	{
-		TRHICommandList_RecursiveHazardous<FOpenGLDynamicRHI> RHICmdList(this);
+	TRHICommandList_RecursiveHazardous<FOpenGLDynamicRHI> RHICmdList(this);
 
-		int32 NumComponents = GPixelFormats[Texture->UnrealFormat].NumComponents;
-		uint32 NumElements = Texture->GetBufferSize() / GPixelFormats[Texture->UnrealFormat].BlockBytes;
-				
-		switch (NumComponents)
+	if (Texture->GetBufferSize() == 0)
+	{
+		FOpenGLTextureUnorderedAccessView* Texture2D = static_cast<FOpenGLTextureUnorderedAccessView*>(Texture);
+
+		FIntVector Size = Texture2D->TextureRHI->GetSizeXYZ();
+		
+		if (Texture->IsLayered())
 		{
-		case 1:
-			ClearUAVShader_T<EClearReplacementResourceType::Buffer, EClearReplacementValueType::Uint32, 1, false>(RHICmdList, UnorderedAccessViewRHI, NumElements, 1, 1, *reinterpret_cast<const uint32(*)[1]>(&Values));
-			break;
-		case 4:
-			ClearUAVShader_T<EClearReplacementResourceType::Buffer, EClearReplacementValueType::Uint32, 4, false>(RHICmdList, UnorderedAccessViewRHI, NumElements, 1, 1, *reinterpret_cast<const uint32(*)[4]>(&Values));
-			break;
-		default:
-			check(false);
-		};
+			ClearUAVShader_T<EClearReplacementResourceType::Texture3D, EClearReplacementValueType::Uint32, 4, false>(RHICmdList, UnorderedAccessViewRHI, Size.X, Size.Y, Size.Z, *reinterpret_cast<const uint32(*)[4]>(&Values));
+		}
+		else
+		{
+			ClearUAVShader_T<EClearReplacementResourceType::Texture2D, EClearReplacementValueType::Uint32, 4, false>(RHICmdList, UnorderedAccessViewRHI, Size.X, Size.Y, Size.Z, *reinterpret_cast<const uint32(*)[4]>(&Values));
+		}
+	}
+	else
+	{
+		check(Texture->BufferResource);
+		{
+			int32 NumComponents = GPixelFormats[Texture->UnrealFormat].NumComponents;
+			uint32 NumElements = Texture->GetBufferSize() / GPixelFormats[Texture->UnrealFormat].BlockBytes;
+
+			switch (NumComponents)
+			{
+			case 1:
+				ClearUAVShader_T<EClearReplacementResourceType::Buffer, EClearReplacementValueType::Uint32, 1, false>(RHICmdList, UnorderedAccessViewRHI, NumElements, 1, 1, *reinterpret_cast<const uint32(*)[1]>(&Values));
+				break;
+			case 4:
+				ClearUAVShader_T<EClearReplacementResourceType::Buffer, EClearReplacementValueType::Uint32, 4, false>(RHICmdList, UnorderedAccessViewRHI, NumElements, 1, 1, *reinterpret_cast<const uint32(*)[4]>(&Values));
+				break;
+			default:
+				check(false);
+			};
+		}
 	}
 }
 
@@ -375,7 +466,7 @@ FOpenGLStructuredBufferUnorderedAccessView::FOpenGLStructuredBufferUnorderedAcce
 	this->Resource = TextureID;
 	this->BufferResource = InStructuredBuffer->Resource;
 	this->Format = GLFormat.InternalFormat[0];
-	this->UnrealFormat = Format;
+	this->UnrealFormat = InFormat;
 }
 
 uint32 FOpenGLStructuredBufferUnorderedAccessView::GetBufferSize()
@@ -388,7 +479,11 @@ FOpenGLStructuredBufferUnorderedAccessView::~FOpenGLStructuredBufferUnorderedAcc
 {
 	if (Resource)
 	{
-		OpenGLRHI->InvalidateTextureResourceInCache( Resource );
-		FOpenGL::DeleteTextures(1, &Resource);
+		RunOnGLRenderContextThread([OpenGLRHI= OpenGLRHI, Resource = Resource]()
+		{
+			VERIFY_GL_SCOPE();
+			OpenGLRHI->InvalidateTextureResourceInCache(Resource);
+			FOpenGL::DeleteTextures(1, &Resource);
+		});
 	}
 }

@@ -138,9 +138,6 @@ private:
 	/** Called to get the visibility of the actor name area */
 	EVisibility GetActorNameAreaVisibility() const;
 
-	/** Called to get the visibility of the scrollbar */
-	EVisibility GetScrollBarVisibility() const;
-
 	/** Returns the name of the image used for the icon on the locked button */
 	const FSlateBrush* OnGetLockButtonImageResource() const;
 
@@ -165,7 +162,10 @@ private:
 	/** Information about the current set of selected actors */
 	FSelectedActorInfo SelectedActorInfo;
 
-	/** Final set of selected objects for this detail view.  It may be different from the set passed in through SetObjects if there is an active filter */
+	/** Set of selected objects for this detail view that were passed in through SetObjects (before the object filter is applied). */
+	TArray<TWeakObjectPtr<UObject>> UnfilteredSelectedObjects;
+
+	/** Final set of selected objects for this detail view after applying the object filter. It may be different from the set passed in through SetObjects. */
 	TArray<TWeakObjectPtr<UObject>> SelectedObjects;
 
 	/** 

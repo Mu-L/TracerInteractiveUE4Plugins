@@ -16,6 +16,11 @@ TAutoConsoleVariable<int32> FAndroidPlatformRHIFramePacer::CVarUseSwappyForFrame
 	0,
 	TEXT("True to use Swappy for frame pacing."));
 
+TAutoConsoleVariable<int32> FAndroidPlatformRHIFramePacer::CVarSupportNonVSyncMultipleFrameRates(
+	TEXT("a.SupportNonVSyncMultipleFrameRates"),
+	0,
+	TEXT("Set to True to support frame rates we cannot vsync at. Requires a.UseSwappyForFramePacing=1 for OpenGL ES."));
+
 TAutoConsoleVariable<int32> FAndroidPlatformRHIFramePacer::CVarAllowFrameTimestamps(
 	TEXT("a.AllowFrameTimestamps"),
 	1,
@@ -55,6 +60,13 @@ int32 FAndroidPlatformRHIFramePacer::InternalFramePace = 0;
 
 void FAndroidPlatformRHIFramePacer::Init(IAndroidFramePacer* InFramePacer)
 {
+	TArray<int> RefreshRates = FAndroidMisc::GetSupportedNativeDisplayRefreshRates();
+	FString RefreshRatesString;
+	for (int Rate : RefreshRates)
+	{
+		RefreshRatesString += FString::Printf(TEXT("%d "), Rate);
+	}
+	FPlatformMisc::LowLevelOutputDebugStringf(TEXT("Device supports the following refresh rates %s\n"), *RefreshRatesString);
 	FramePacer = InFramePacer;
 	FramePacer->Init();
 }

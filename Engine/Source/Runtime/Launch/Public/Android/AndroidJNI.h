@@ -72,6 +72,10 @@ public:
 	static jmethodID AndroidThunkJava_SetSustainedPerformanceMode;
 	static jmethodID AndroidThunkJava_PushSensorEvents;
 
+	// Screen capture/recording permission
+	static jmethodID AndroidThunkJava_IsScreenCaptureDisabled;
+	static jmethodID AndroidThunkJava_DisableScreenCapture;
+
 	static jmethodID AndroidThunkCpp_VirtualInputIgnoreClick;
 	static jmethodID AndroidThunkCpp_IsVirtuaKeyboardShown;
 	static jmethodID AndroidThunkCpp_IsWebViewShown;
@@ -120,6 +124,11 @@ public:
 	static jmethodID AndroidThunkJava_VirtualInputIgnoreClick;
 	static jmethodID AndroidThunkJava_RestartApplication;
 	
+	// Screen refresh rate
+	static jmethodID AndroidThunkJava_GetNativeDisplayRefreshRate;
+	static jmethodID AndroidThunkJava_SetNativeDisplayRefreshRate;
+	static jmethodID AndroidThunkJava_GetSupportedNativeDisplayRefreshRates;
+
 	// member fields for getting the launch notification
 	static jclass LaunchNotificationClass;
 	static jfieldID LaunchNotificationUsed;

@@ -104,6 +104,24 @@ public:
 	* Initialize the RHI for this rendering resource 
 	*/
 	virtual void InitRHI() override;
+
+	static LANDSCAPE_API void UpdateMemoryStat(int32 Delta);
+};
+
+/**
+ * Container for FLandscapeVertexBufferMobile that we can reference from a thread-safe shared pointer
+ * while ensuring the vertex buffer is always destroyed on the render thread.
+ **/
+struct FLandscapeMobileRenderData
+{
+	FLandscapeVertexBufferMobile* VertexBuffer = nullptr;
+	struct FLandscapeMobileHoleData* HoleData = nullptr;
+	FOccluderVertexArraySP OccluderVerticesSP;
+	uint8 CurrentFirstLODIdx;
+	bool bReadyForStreaming = false;
+
+	FLandscapeMobileRenderData(const TArray<uint8>& InPlatformData, uint8 InCurFirstLODIdx);
+	~FLandscapeMobileRenderData();
 };
 
 //
@@ -126,6 +144,10 @@ public:
 	friend class FLandscapeVertexBufferMobile;
 
 	virtual void ApplyMeshElementModifier(FMeshBatchElement& InOutMeshElement, int32 InLodIndex) const override;
+
+#if PLATFORM_SUPPORTS_LANDSCAPE_VISUAL_MESH_LOD_STREAMING
+	virtual uint8 GetCurrentFirstLODIdx_RenderThread() const override;
+#endif
 };
 
 

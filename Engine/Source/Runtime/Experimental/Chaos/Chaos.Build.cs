@@ -14,11 +14,13 @@ namespace UnrealBuildTool.Rules
                 "CoreUObject",
 				"ChaosCore",
                 "IntelISPC",
+				"TraceLog",
                 "Voronoi"
                 }
             );
 
             PublicDefinitions.Add("COMPILE_WITHOUT_UNREAL_SUPPORT=0");
+			PrivateDefinitions.Add("CHAOS_INCLUDE_LEVEL_1=1");
 
             if (Target.bCompileChaos == true || Target.bUseChaos == true)
             {

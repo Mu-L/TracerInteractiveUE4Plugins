@@ -94,12 +94,17 @@ enum class ERigVMOpCode : uint8
 	JumpBackwardIf, // jump backwards given a relative instruction index offset based on a condition register
 	ChangeType, // change the type of a register
 	Exit, // exit the execution loop
+	BeginBlock, // begins a new memory slice / block
+	EndBlock, // ends the last memory slice / block
 	Invalid
 };
 
 // Base class for all VM operations
+USTRUCT()
 struct RIGVM_API FRigVMBaseOp
 {
+	GENERATED_USTRUCT_BODY()
+
 	FRigVMBaseOp(ERigVMOpCode InOpCode = ERigVMOpCode::Invalid)
 	: OpCode(InOpCode)
 	{
@@ -110,8 +115,11 @@ struct RIGVM_API FRigVMBaseOp
 
 
 // execute a function
+USTRUCT()
 struct RIGVM_API FRigVMExecuteOp : public FRigVMBaseOp
 {
+	GENERATED_USTRUCT_BODY()
+
 	FRigVMExecuteOp()
 	: FRigVMBaseOp()
 	, FunctionIndex(INDEX_NONE)
@@ -127,11 +135,21 @@ struct RIGVM_API FRigVMExecuteOp : public FRigVMBaseOp
 	uint16 FunctionIndex;
 
 	FORCEINLINE uint8 GetOperandCount() const { return uint8(OpCode) - uint8(ERigVMOpCode::Execute_0_Operands); }
+
+	bool Serialize(FArchive& Ar);
+	FORCEINLINE friend FArchive& operator<<(FArchive& Ar, FRigVMExecuteOp& P)
+	{
+		P.Serialize(Ar);
+		return Ar;
+	}
 };
 
 // operator used for zero, false, true, increment, decrement
+USTRUCT()
 struct RIGVM_API FRigVMUnaryOp : public FRigVMBaseOp
 {
+	GENERATED_USTRUCT_BODY()
+
 	FRigVMUnaryOp()
 		: FRigVMBaseOp(ERigVMOpCode::Invalid)
 		, Arg()
@@ -156,11 +174,55 @@ struct RIGVM_API FRigVMUnaryOp : public FRigVMBaseOp
 	}
 
 	FRigVMOperand Arg;
+
+	bool Serialize(FArchive& Ar);
+	FORCEINLINE friend FArchive& operator<<(FArchive& Ar, FRigVMUnaryOp& P)
+	{
+		P.Serialize(Ar);
+		return Ar;
+	}
+};
+
+// operator used for beginblock
+USTRUCT()
+struct RIGVM_API FRigVMBinaryOp : public FRigVMBaseOp
+{
+	GENERATED_USTRUCT_BODY()
+
+	FRigVMBinaryOp()
+		: FRigVMBaseOp(ERigVMOpCode::Invalid)
+		, ArgA()
+		, ArgB()
+	{
+	}
+
+	FRigVMBinaryOp(ERigVMOpCode InOpCode, FRigVMOperand InArgA, FRigVMOperand InArgB)
+		: FRigVMBaseOp(InOpCode)
+		, ArgA(InArgA)
+		, ArgB(InArgB)
+	{
+		ensure(
+			uint8(InOpCode) == uint8(ERigVMOpCode::BeginBlock)
+		);
+	}
+
+	FRigVMOperand ArgA;
+	FRigVMOperand ArgB;
+
+	bool Serialize(FArchive& Ar);
+	FORCEINLINE friend FArchive& operator<<(FArchive& Ar, FRigVMBinaryOp& P)
+	{
+		P.Serialize(Ar);
+		return Ar;
+	}
 };
 
 // copy the content of one register to another
+USTRUCT()
 struct RIGVM_API FRigVMCopyOp : public FRigVMBaseOp
 {
+	GENERATED_USTRUCT_BODY()
+
 	FRigVMCopyOp()
 	: FRigVMBaseOp(ERigVMOpCode::Copy)
 	, Source()
@@ -180,11 +242,21 @@ struct RIGVM_API FRigVMCopyOp : public FRigVMBaseOp
 
 	FRigVMOperand Source;
 	FRigVMOperand Target;
+
+	bool Serialize(FArchive& Ar);
+	FORCEINLINE friend FArchive& operator<<(FArchive& Ar, FRigVMCopyOp& P)
+	{
+		P.Serialize(Ar);
+		return Ar;
+	}
 };
 
 // used for equals and not equals comparisons
+USTRUCT()
 struct RIGVM_API FRigVMComparisonOp : public FRigVMBaseOp
 {
+	GENERATED_USTRUCT_BODY()
+
 	FRigVMComparisonOp()
 		: FRigVMBaseOp(ERigVMOpCode::Invalid)
 		, A()
@@ -213,13 +285,23 @@ struct RIGVM_API FRigVMComparisonOp : public FRigVMBaseOp
 	FRigVMOperand A;
 	FRigVMOperand B;
 	FRigVMOperand Result;
+
+	bool Serialize(FArchive& Ar);
+	FORCEINLINE friend FArchive& operator<<(FArchive& Ar, FRigVMComparisonOp& P)
+	{
+		P.Serialize(Ar);
+		return Ar;
+	}
 };
 
 // jump to a new instruction index.
 // the instruction can be absolute, relative forward or relative backward
 // based on the opcode 
+USTRUCT()
 struct RIGVM_API FRigVMJumpOp : public FRigVMBaseOp
 {
+	GENERATED_USTRUCT_BODY()
+
 	FRigVMJumpOp()
 	: FRigVMBaseOp(ERigVMOpCode::Invalid)
 	, InstructionIndex(INDEX_NONE)
@@ -235,13 +317,23 @@ struct RIGVM_API FRigVMJumpOp : public FRigVMBaseOp
 	}
 
 	int32 InstructionIndex;
+
+	bool Serialize(FArchive& Ar);
+	FORCEINLINE friend FArchive& operator<<(FArchive& Ar, FRigVMJumpOp& P)
+	{
+		P.Serialize(Ar);
+		return Ar;
+	}
 };
 
 // jump to a new instruction index based on a condition.
 // the instruction can be absolute, relative forward or relative backward
 // based on the opcode 
+USTRUCT()
 struct RIGVM_API FRigVMJumpIfOp : public FRigVMUnaryOp
 {
+	GENERATED_USTRUCT_BODY()
+
 	FRigVMJumpIfOp()
 		: FRigVMUnaryOp()
 		, InstructionIndex(INDEX_NONE)
@@ -260,11 +352,21 @@ struct RIGVM_API FRigVMJumpIfOp : public FRigVMUnaryOp
 
 	int32 InstructionIndex;
 	bool Condition;
+
+	bool Serialize(FArchive& Ar);
+	FORCEINLINE friend FArchive& operator<<(FArchive& Ar, FRigVMJumpIfOp& P)
+	{
+		P.Serialize(Ar);
+		return Ar;
+	}
 };
 
 // change the type of a register
+USTRUCT()
 struct RIGVM_API FRigVMChangeTypeOp : public FRigVMUnaryOp
 {
+	GENERATED_USTRUCT_BODY()
+
 	FRigVMChangeTypeOp()
 		: FRigVMUnaryOp()
 		, Type(ERigVMRegisterType::Invalid)
@@ -287,6 +389,13 @@ struct RIGVM_API FRigVMChangeTypeOp : public FRigVMUnaryOp
 	uint16 ElementSize;
 	uint16 ElementCount;
 	uint16 SliceCount;
+
+	bool Serialize(FArchive& Ar);
+	FORCEINLINE friend FArchive& operator<<(FArchive& Ar, FRigVMChangeTypeOp& P)
+	{
+		P.Serialize(Ar);
+		return Ar;
+	}
 };
 
 /**
@@ -298,17 +407,21 @@ struct RIGVM_API FRigVMInstruction
 {
 	GENERATED_USTRUCT_BODY()
 
-	FRigVMInstruction(ERigVMOpCode InOpCode = ERigVMOpCode::Invalid, uint64 InByteCodeIndex = UINT64_MAX)
-		: OpCode(InOpCode)
-		, ByteCodeIndex(InByteCodeIndex)
+	FRigVMInstruction(ERigVMOpCode InOpCode = ERigVMOpCode::Invalid, uint64 InByteCodeIndex = UINT64_MAX, uint8 InOperandAlignment = 0)
+		: ByteCodeIndex(InByteCodeIndex)
+		, OpCode(InOpCode)
+		, OperandAlignment(InOperandAlignment)
 	{
 	}
+
+	UPROPERTY()
+	uint64 ByteCodeIndex;
 
 	UPROPERTY()
 	ERigVMOpCode OpCode;
 
 	UPROPERTY()
-	uint64 ByteCodeIndex;
+	uint8 OperandAlignment;
 };
 
 /**
@@ -343,12 +456,29 @@ public:
 private:
 
 	// hide utility constructor
-	FRigVMInstructionArray(const FRigVMByteCode& InByteCode);
+	FRigVMInstructionArray(const FRigVMByteCode& InByteCode, bool bByteCodeIsAligned = true);
 
 	UPROPERTY()
 	TArray<FRigVMInstruction> Instructions;
 
 	friend struct FRigVMByteCode;
+};
+
+USTRUCT()
+struct RIGVM_API FRigVMByteCodeEntry
+{
+	GENERATED_USTRUCT_BODY()
+
+	FRigVMByteCodeEntry()
+		: Name(NAME_None)
+		, InstructionIndex(0)
+	{}
+
+	UPROPERTY()
+	FName Name;
+
+	UPROPERTY()
+	int32 InstructionIndex;
 };
 
 /**
@@ -382,8 +512,20 @@ public:
 	// returns the number of instructions in this container
 	uint64 Num() const;
 
+	// const accessor for a byte given its index
+	FORCEINLINE const uint8& operator[](int32 InIndex) const { return ByteCode[InIndex]; }
+
+	// returns the number of entries
+	uint64 NumEntries() const;
+
+	// returns the entry with a given index
+	const FRigVMByteCodeEntry& GetEntry(int32 InEntryIndex) const;
+
+	// returns the index of an entry given a name or INDEX_NONE
+	int32 FindEntryIndex(const FName& InEntryName) const;
+
 	// adds an execute operator given its function index operands
-	uint64 AddExecuteOp(uint16 InFunctionIndex, const TArrayView<FRigVMOperand>& InOperands);
+	uint64 AddExecuteOp(uint16 InFunctionIndex, const FRigVMOperandArray& InOperands);
 
 	// adds a zero operator to zero the memory of a given argument
 	uint64 AddZeroOp(const FRigVMOperand& InArg);
@@ -421,10 +563,16 @@ public:
 	// adds an exit operator to exit the execution loop
 	uint64 AddExitOp();
 
+	// adds an operator to end the last memory slice
+	uint64 AddBeginBlockOp(FRigVMOperand InCountArg, FRigVMOperand InIndexArg);
+
+	// adds an operator to end the last memory slice
+	uint64 AddEndBlockOp();
+
 	// returns an instruction array for iterating over all operators
 	FORCEINLINE FRigVMInstructionArray GetInstructions() const
 	{
-		return FRigVMInstructionArray(*this);
+		return FRigVMInstructionArray(*this, bByteCodeIsAligned);
 	}
 
 	// returns the opcode at a given byte index
@@ -435,7 +583,7 @@ public:
 	}
 
 	// returns the size of the operator in bytes at a given byte index
-	uint64 GetOpNumBytesAt(uint64 InByteCodeIndex, bool bIncludeOperands = true) const;
+	uint64 GetOpNumBytesAt(uint64 InByteCodeIndex, bool bIncludeOperands) const;
 
 	// returns an operator at a given byte code index
 	template<class OpType>
@@ -452,32 +600,44 @@ public:
 		return GetOpAt<OpType>(InInstruction.ByteCodeIndex);
 	}
 
-	// returns a list of operands at a given byte code index
-	FORCEINLINE TArrayView<FRigVMOperand> GetOperandsAt(uint64 InByteCodeIndex, uint16 InArgumentCount) const
+	// returns an operator at a given byte code index
+	template<class OpType>
+	FORCEINLINE OpType& GetOpAt(uint64 InByteCodeIndex)
 	{
-		ensure(InByteCodeIndex >= 0 && InByteCodeIndex <= ByteCode.Num() - sizeof(FRigVMOperand) * InArgumentCount);
-		return TArrayView<FRigVMOperand>((FRigVMOperand*)(ByteCode.GetData() + InByteCodeIndex), InArgumentCount);
+		ensure(InByteCodeIndex >= 0 && InByteCodeIndex <= ByteCode.Num() - sizeof(OpType));
+		return *(OpType*)(ByteCode.GetData() + InByteCodeIndex);
 	}
 
-	// returns the operands for an execute operator / instruction at a given byte code index
-	FORCEINLINE TArrayView<FRigVMOperand> GetOperandsForExecuteOp(uint64 InByteCodeIndex) const
+	// returns an operator for a given instruction
+	template<class OpType>
+	FORCEINLINE OpType& GetOpAt(const FRigVMInstruction& InInstruction)
 	{
-		const FRigVMExecuteOp& ExecuteOp = GetOpAt<FRigVMExecuteOp>(InByteCodeIndex);
-		return GetOperandsAt(InByteCodeIndex + sizeof(FRigVMExecuteOp), ExecuteOp.GetOperandCount());
+		return GetOpAt<OpType>(InInstruction.ByteCodeIndex);
+	}
+
+	// returns a list of operands at a given byte code index
+	FORCEINLINE FRigVMOperandArray GetOperandsAt(uint64 InByteCodeIndex, uint16 InArgumentCount) const
+	{
+		ensure(InByteCodeIndex >= 0 && InByteCodeIndex <= ByteCode.Num() - sizeof(FRigVMOperand) * InArgumentCount);
+		return FRigVMOperandArray((FRigVMOperand*)(ByteCode.GetData() + InByteCodeIndex), InArgumentCount);
 	}
 
 	// returns the operands for a given execute instruction
-	FORCEINLINE TArrayView<FRigVMOperand> GetOperandsForExecuteOp(const FRigVMInstruction& InInstruction) const
+	FORCEINLINE_DEBUGGABLE FRigVMOperandArray GetOperandsForExecuteOp(const FRigVMInstruction& InInstruction) const
 	{
-		const FRigVMExecuteOp& ExecuteOp = GetOpAt<FRigVMExecuteOp>(InInstruction);
-		return GetOperandsAt(InInstruction.ByteCodeIndex + sizeof(FRigVMExecuteOp), ExecuteOp.GetOperandCount());
+		uint64 ByteCodeIndex = InInstruction.ByteCodeIndex;
+		const FRigVMExecuteOp& ExecuteOp = GetOpAt<FRigVMExecuteOp>(ByteCodeIndex);
+		// if the bytecode is not aligned the OperandAlignment needs to be 0
+		ensure(bByteCodeIsAligned || InInstruction.OperandAlignment == 0);
+		ByteCodeIndex += sizeof(FRigVMExecuteOp) + (uint64)InInstruction.OperandAlignment;
+		return GetOperandsAt(ByteCodeIndex, ExecuteOp.GetOperandCount());
 	}
 
 	// returns the raw data of the byte code
-	FORCEINLINE const TArrayView<uint8> GetByteCode() const
+	FORCEINLINE const FRigVMFixedArray<uint8> GetByteCode() const
 	{
 		const uint8* Data = ByteCode.GetData();
-		return TArrayView<uint8>((uint8*)Data, ByteCode.Num());
+		return FRigVMFixedArray<uint8>((uint8*)Data, ByteCode.Num());
 	}
 
 	// returns the statistics information
@@ -489,17 +649,47 @@ public:
 		return Statistics;
 	}
 
+	// returns the number of instructions within this byte code
+	int32 GetNumInstructions() const { return NumInstructions; }
+
+	// returns the alignment for an operator given its opcode
+	uint64 GetOpAlignment(ERigVMOpCode InOpCode) const;
+
+	// returns the alignment for an operand
+	uint64 GetOperandAlignment() const;
+
+	FString DumpToText() const;
+
 private:
 
 	template<class OpType>
-	FORCEINLINE uint64 AddOp(const OpType& InOp)
+	FORCEINLINE_DEBUGGABLE uint64 AddOp(const OpType& InOp)
 	{
-		uint64 ByteIndex = (uint64)ByteCode.AddUninitialized(sizeof(OpType));
-		FMemory::Memcpy(ByteCode.GetData() + ByteIndex, &InOp, sizeof(OpType));
+		uint64 ByteIndex = (uint64)ByteCode.AddZeroed(sizeof(OpType));
+		uint8* Pointer = &ByteCode[ByteIndex];
+		FMemory::Memcpy(Pointer, &InOp, sizeof(OpType));
+		NumInstructions++;
 		return ByteIndex;
 	}
 
-	// memory for all functions
+	void AlignByteCode();
+
+	// memory for all instructions
 	UPROPERTY()
 	TArray<uint8> ByteCode;
+
+	// number of instructions stored here
+	UPROPERTY()
+	int32 NumInstructions;
+
+	// a look up table from entry name to instruction index
+	UPROPERTY()
+	TArray<FRigVMByteCodeEntry> Entries;
+
+	// if this is set to true the stored bytecode is aligned / padded
+	bool bByteCodeIsAligned;
+
+	friend class URigVMCompiler;
+	friend class FRigVMByteCodeTest;
+	friend class URigVM;
 };

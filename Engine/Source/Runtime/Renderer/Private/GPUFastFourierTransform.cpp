@@ -4,7 +4,7 @@
 #include "SceneUtils.h"
 #include "GlobalShader.h"
 #include "RenderTargetPool.h" // used for on-the-fly acquisition of 
-
+#include "ShaderCompilerCore.h"
 
 uint32 GPUFFT::MaxScanLineLength() 
 {
@@ -936,7 +936,6 @@ namespace GPUFFT
 			FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 			OutEnvironment.SetDefine(TEXT("INCLUDE_GROUP_SHARED_CONVOLUTION_WITH_TEXTURE"), 1);
 			OutEnvironment.SetDefine(TEXT("SCAN_LINE_LENGTH"), PowRadixSignalLength);
-			OutEnvironment.CompilerFlags.Add(CFLAG_ForceOptimization);
 		}
 
 		/** Default constructor **/
@@ -1181,10 +1180,6 @@ namespace
 
 		// Get pointer to the shader
 		TShaderRef<FCopyWindowCS> ComputeShader = GetCopyWindowCS(ShaderMap);
-
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		UnbindRenderTargets(RHICmdList);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		RHICmdList.SetComputeShader(ComputeShader.GetComputeShader());
 
 		// Bind output
@@ -1243,10 +1238,6 @@ namespace
 
 		// Get pointer to the shader
 		TShaderRef<FComplexMultiplyImagesCS> ComputeShader = GetComplexMultiplyImagesCS(ShaderMap);
-
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		UnbindRenderTargets(RHICmdList);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		RHICmdList.SetComputeShader(ComputeShader.GetComputeShader());
 
 		// Bind output
@@ -1313,10 +1304,6 @@ namespace
 
 		// Get pointer to the shader
 		TShaderRef<FPackTwoForOneFFTPassCS> ComputeShader = GetPackTwoForOneFFTPassCS(ShaderMap, TransformLength);
-
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		UnbindRenderTargets(RHICmdList);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		RHICmdList.SetComputeShader(ComputeShader.GetComputeShader());
 
 		// Bind output
@@ -1364,11 +1351,6 @@ namespace
 		
 		// Get a base pointer to the shader
 		TShaderRef<FComplexFFTPassCS> ComputeShader = GetComplexFFTPassCS(ShaderMap, TransformLength);
-
-
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		UnbindRenderTargets(RHICmdList);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		RHICmdList.SetComputeShader(ComputeShader.GetComputeShader());
 
 		// Bind output
@@ -1418,10 +1400,6 @@ namespace
 
 		// Get a base pointer to the shader
 		TShaderRef<FReorderFFTPassCS> ComputeShader = GetReorderFFTPassCS(ShaderMap);
-
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		UnbindRenderTargets(RHICmdList);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		RHICmdList.SetComputeShader(ComputeShader.GetComputeShader());
 
 		// Bind output
@@ -1481,10 +1459,6 @@ namespace
 
 		// Get a base pointer to the shader
 		TShaderRef<FGroupShardSubFFTPassCS> ComputeShader = GetGroupSharedSubFFTPassCS(ShaderMap, TransformLength);
-
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		UnbindRenderTargets(RHICmdList);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		RHICmdList.SetComputeShader(ComputeShader.GetComputeShader());
 
 		// Bind output
@@ -1529,10 +1503,6 @@ namespace
 
 		// Get a base pointer to the shader
 		TShaderRef<FGSComplexTransformBaseCS> ComputeShader = GetComplexFFTCS(ShaderMap, TransformLength);
-
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		UnbindRenderTargets(RHICmdList);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		RHICmdList.SetComputeShader(ComputeShader.GetComputeShader());
 
 		// Bind output
@@ -1581,10 +1551,6 @@ namespace
 
 		// Get a base pointer to the shader
 		TShaderRef<FGSComplexTransformBaseCS> ComputeShader = GetTwoForOneFFTCS(ShaderMap, TransformLength);
-
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		UnbindRenderTargets(RHICmdList);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		RHICmdList.SetComputeShader(ComputeShader.GetComputeShader());
 
 
@@ -1639,10 +1605,6 @@ namespace
 
 		// Get a base pointer to the shader
 		TShaderRef<FGSConvolutionWithTextureKernelBaseCS> ComputeShader = GetConvolutionWithTextureKernelCS(ShaderMap, SignalLength);
-
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		UnbindRenderTargets(RHICmdList);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		RHICmdList.SetComputeShader(ComputeShader.GetComputeShader());
 		
 		FScopedUAVBind ScopedBind = FScopedUAVBind::BindOutput(RHICmdList, ComputeShader, DstUAV);
@@ -1731,7 +1693,7 @@ bool GPUFFT::ComplexFFTImage1D::MultiPass(FGPUFFTShaderContext& Context, const F
 		for (uint32 Ns = 2; Ns < TransformLength; Ns *= 2)
 		{
 			// Make it safe to read from the buffer we just wrote to.
-			RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, Targets.DstTarget().UAV);
+			RHICmdList.Transition(FRHITransitionInfo(Targets.DstTarget().UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 			Targets.Swap();
 
 			auto HasValidTargets = [&Targets, &DstExtent]()->bool
@@ -1762,7 +1724,7 @@ bool GPUFFT::ComplexFFTImage1D::MultiPass(FGPUFFTShaderContext& Context, const F
 	{
 		// Re-order the data so we can do a pass of group-shared transforms
 		DispatchReorderFFTPassCS(Context, FFTDesc, Window, SrcTexture, XFormWindow, Targets.DstTarget().UAV);
-		RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, Targets.DstTarget().UAV);
+		RHICmdList.Transition(FRHITransitionInfo(Targets.DstTarget().UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 		Targets.Swap();
 
 		DispatchGSSubComplexFFTPassCS(Context, FFTDesc, Targets.SrcTarget().ShaderResourceTexture, XFormWindow, Targets.DstTarget().UAV);
@@ -1770,7 +1732,7 @@ bool GPUFFT::ComplexFFTImage1D::MultiPass(FGPUFFTShaderContext& Context, const F
 		for (uint32 Ns = FGroupShardSubFFTPassCS::SubPassLength(); Ns < TransformLength; Ns *= 2)
 		{
 			// Make it safe to read from the buffer we just wrote to.
-			RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, Targets.DstTarget().UAV);
+			RHICmdList.Transition(FRHITransitionInfo(Targets.DstTarget().UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 			Targets.Swap();
 
 			auto HasValidTargets = [&Targets, &DstExtent]()->bool
@@ -1848,7 +1810,7 @@ bool GPUFFT::TwoForOneRealFFTImage1D::MultiPass(FGPUFFTShaderContext& Context, c
 			// Copy data into DstBuffer
 			CopyImage2D(Context, SrcWindow, SrcTexture, SrcWindow, DstBuffer.UAV, PreFilter);
 
-			Context.GetRHICmdList().TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, DstBuffer.UAV);
+			Context.GetRHICmdList().Transition(FRHITransitionInfo(DstBuffer.UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 
 			// Transform as 2 sets of complex data, putting the result in the DstBuffer.  This performs multiple dispatches.
 			// Transform into DstBuffer.
@@ -1865,7 +1827,7 @@ bool GPUFFT::TwoForOneRealFFTImage1D::MultiPass(FGPUFFTShaderContext& Context, c
 			SwapContents(DstBuffer, TmpBuffer);
 		}
 
-		Context.GetRHICmdList().TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, TmpBuffer.UAV);
+		Context.GetRHICmdList().Transition(FRHITransitionInfo(TmpBuffer.UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 
 		// Unpack the complex transform into transform of real data
 		DispatchPackTwoForOneFFTPassCS(Context, FFTDesc, TmpBuffer.ShaderResourceTexture, DstBuffer.UAV);
@@ -1876,7 +1838,7 @@ bool GPUFFT::TwoForOneRealFFTImage1D::MultiPass(FGPUFFTShaderContext& Context, c
 		// Pack the 4 transforms of real data as 2 transforms of complex data 
 		DispatchPackTwoForOneFFTPassCS(Context, FFTDesc, SrcTexture, DstBuffer.UAV);
 
-		Context.GetRHICmdList().TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, DstBuffer.UAV);
+		Context.GetRHICmdList().Transition(FRHITransitionInfo(DstBuffer.UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 
 		// Transform as complex data
 		SuccessValue = SuccessValue &&
@@ -1942,8 +1904,8 @@ bool GPUFFT::FFTImage2D(FGPUFFTShaderContext& Context, const FIntPoint& Frequenc
 
 	}
 
-	RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, DstBuffer.UAV);
-	RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, TmpBuffer.UAV);
+	Context.GetRHICmdList().Transition(FRHITransitionInfo(DstBuffer.UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
+	Context.GetRHICmdList().Transition(FRHITransitionInfo(TmpBuffer.UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 
 	// Complex transform in the other direction: TmpBuffer fills DstBuffer
 	if (FitsInGroupSharedMemory(ComplexFFTDesc))
@@ -2007,12 +1969,12 @@ bool GPUFFT::ConvolutionWithTextureImage1D::MultiPass(FGPUFFTShaderContext& Cont
 	// Forward transform: Results in DstBuffer
 	SuccessValue = SuccessValue &&
 		ComplexFFTImage1D::MultiPass(Context, FFTDesc, SrcWindow, SrcTexture, DstBuffer, TmpBuffer);
-	Context.GetRHICmdList().TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, DstBuffer.UAV);
+	Context.GetRHICmdList().Transition(FRHITransitionInfo(DstBuffer.UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 
 
 	// Convolution: Results in TmpBuffer
 	DispatchComplexMultiplyImagesCS(Context, FFTDesc.IsHorizontal(), TargetRect, DstBuffer.ShaderResourceTexture, TransformedKernel,  TmpBuffer.UAV);
-	Context.GetRHICmdList().TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, TmpBuffer.UAV);
+	Context.GetRHICmdList().Transition(FRHITransitionInfo(TmpBuffer.UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 
 	// Inverse Transform: Results in DstBuffer
 	
@@ -2023,8 +1985,7 @@ bool GPUFFT::ConvolutionWithTextureImage1D::MultiPass(FGPUFFTShaderContext& Cont
 	SuccessValue = SuccessValue &&
 		ComplexFFTImage1D::MultiPass(Context, InvFFTDesc, TargetRect, TmpBuffer.ShaderResourceTexture, DstBuffer, TmpBuffer);
 	
-	
-	Context.GetRHICmdList().TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, DstBuffer.UAV);
+	Context.GetRHICmdList().Transition(FRHITransitionInfo(DstBuffer.UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 
 	// Copy back to the correct sized sub-window
 	DispatchCopyWindowCS(Context, TargetRect, DstBuffer.ShaderResourceTexture, SrcWindow, TmpBuffer.UAV);
@@ -2130,7 +2091,7 @@ bool GPUFFT::ConvolutionWithTextureImage2D(FGPUFFTShaderContext& Context, const 
 		SuccessValue = SuccessValue &&
 			TwoForOneRealFFTImage1D::MultiPass(Context, TwoForOneFFTDesc, ROIRect, SrcTexture, TmpBuffer0, TmpBuffer1, PreFilter);
 	}
-	RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, TmpBuffer0.UAV);
+	RHICmdList.Transition(FRHITransitionInfo(TmpBuffer0.UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 	
 	// ---- 1 D Convolution --- 
 
@@ -2146,7 +2107,7 @@ bool GPUFFT::ConvolutionWithTextureImage2D(FGPUFFTShaderContext& Context, const 
 		SuccessValue = SuccessValue &&
 			ConvolutionWithTextureImage1D::MultiPass(Context, ConvolutionFFTDesc, TransformedKernel, TwoForOneOutputRect, TmpBuffer0.ShaderResourceTexture, TmpBuffer1, TmpBuffer0);
 	}
-	RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, TmpBuffer1.UAV);
+	RHICmdList.Transition(FRHITransitionInfo(TmpBuffer1.UAV, ERHIAccess::Unknown, ERHIAccess::ERWBarrier));
 
 
 	// ---- Inverse Two For One ---
@@ -2164,7 +2125,7 @@ bool GPUFFT::ConvolutionWithTextureImage2D(FGPUFFTShaderContext& Context, const 
 		SuccessValue = SuccessValue &&
 			TwoForOneRealFFTImage1D::MultiPass(Context, TwoForOneIvnFFTDesc, TwoForOneOutputRect, TmpBuffer1.ShaderResourceTexture, TmpBuffer0, TmpBuffer1);
 		
-		RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToCompute, TmpBuffer0.UAV);
+		RHICmdList.Transition(FRHITransitionInfo(TmpBuffer0.UAV, ERHIAccess::Unknown, ERHIAccess::SRVCompute));
 
 		DispatchCopyWindowCS(Context, TwoForOneOutputRect, TmpBuffer0.ShaderResourceTexture, ROIRect, ResultUAV);
 	}

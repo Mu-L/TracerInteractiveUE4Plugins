@@ -35,12 +35,20 @@ FAutoConsoleVariableRef CVarCookOverrideCachingIntervalCVar(
  * The trade off is that when this is increased, we add more elements to our cache, thus linearly increasing the CPU complexity of finding a chunk.
  * A minimum cache usage of 1.0f is impossible, because it would require an infinite amount of chunks.
  */
-static float MinimumCacheUsageCvar = 0.75f;
+static float MinimumCacheUsageCvar = 0.9f;
 FAutoConsoleVariableRef CVarMinimumCacheUsage(
 	TEXT("au.streamcaching.MinimumCacheUsage"),
 	MinimumCacheUsageCvar,
 	TEXT("This value is the minimum potential usage of the stream cache we feasibly want to support. Setting this to 0.25, for example, cause us to potentially be using 25% of our cache size when we start evicting chunks, worst cast scenario.\n")
 	TEXT("0.0: limit the number of chunks to our (Cache Size / Max Chunk Size) [0.01-0.99]: Increase our number of chunks to limit disk IO when we have lots of small sounds playing."),
+	ECVF_Default);
+
+static float ChunkSlotNumScalarCvar = 1.0f;
+FAutoConsoleVariableRef CVarChunkSlotNumScalar(
+	TEXT("au.streamcaching.ChunkSlotNumScalar"),
+	ChunkSlotNumScalarCvar,
+	TEXT("This allows scaling the number of chunk slots pre-allocated.\n")
+	TEXT("1.0: is the lower limit"),
 	ECVF_Default);
 
 const FPlatformRuntimeAudioCompressionOverrides* FPlatformCompressionUtilities::GetRuntimeCompressionOverridesForCurrentPlatform()
@@ -78,7 +86,8 @@ void CacheAudioCookOverrides(FPlatformAudioCookOverrides& OutOverrides, const TC
 	FString PlatformName = InPlatformName ? FString(InPlatformName) : FString(FPlatformProperties::IniPlatformName());
 	
 	// now use that platform name to get the ini section out of DDPI
-	FString CategoryName = FDataDrivenPlatformInfoRegistry::GetPlatformInfo(PlatformName).AudioCompressionSettingsIniSectionName;
+	const FDataDrivenPlatformInfoRegistry::FPlatformInfo& PlatformInfo = FDataDrivenPlatformInfoRegistry::GetPlatformInfo(PlatformName);
+	const FString& CategoryName = PlatformInfo.AudioCompressionSettingsIniSectionName;
 
 	// if we don't support platform overrides, then return 
 	if (CategoryName.Len() == 0)
@@ -99,13 +108,19 @@ void CacheAudioCookOverrides(FPlatformAudioCookOverrides& OutOverrides, const TC
 
 	PlatformFile.GetBool(*CategoryName, TEXT("bUseAudioStreamCaching"), OutOverrides.bUseStreamCaching);
 
+	GConfig->GetBool(*CategoryName, TEXT("bInlineStreamedAudioChunks"), OutOverrides.bInlineStreamedAudioChunks, GEngineIni);
+
 	/** Memory Load On Demand Settings */
 	if (OutOverrides.bUseStreamCaching)
 	{
 		// Cache size:
 		int32 RetrievedCacheSize = 32 * 1024;
+		int32 RetrievedChunkSizeOverride = INDEX_NONE;
 		PlatformFile.GetInt(*CategoryName, TEXT("CacheSizeKB"), RetrievedCacheSize);
 		OutOverrides.StreamCachingSettings.CacheSizeKB = RetrievedCacheSize;
+
+		PlatformFile.GetInt(*CategoryName, TEXT("MaxChunkSizeOverrideKB"), RetrievedChunkSizeOverride);
+		OutOverrides.StreamCachingSettings.MaxChunkSizeOverrideKB = RetrievedChunkSizeOverride;
 
 		bool bForceLegacyStreamChunking = false;
 		PlatformFile.GetBool(*CategoryName, TEXT("bForceLegacyStreamChunking"), bForceLegacyStreamChunking);
@@ -306,15 +321,18 @@ const FPlatformAudioCookOverrides* FPlatformCompressionUtilities::GetCookOverrid
 
 #if WITH_EDITOR
 	// In editor situations, the settings can change at any time, so we need to retrieve them.
-	
-	static double LastCacheTime = 0.0;
-	double CurrentTime = FPlatformTime::Seconds();
-	double TimeSinceLastCache = CurrentTime - LastCacheTime;
 
-	if (bForceRecache || TimeSinceLastCache > CookOverrideCachingIntervalCvar)
+	if (GIsEditor && !IsRunningCommandlet())
 	{
-		bNeedsToBeInitialized = true;
-		LastCacheTime = CurrentTime;
+		static double LastCacheTime = 0.0;
+		double CurrentTime = FPlatformTime::Seconds();
+		double TimeSinceLastCache = CurrentTime - LastCacheTime;
+
+		if (bForceRecache || TimeSinceLastCache > CookOverrideCachingIntervalCvar)
+		{
+			bNeedsToBeInitialized = true;
+			LastCacheTime = CurrentTime;
+		}
 	}
 #endif
 	
@@ -345,16 +363,24 @@ FCachedAudioStreamingManagerParams FPlatformCompressionUtilities::BuildCachedStr
 	const FAudioStreamCachingSettings& CacheSettings = GetStreamCachingSettingsForCurrentPlatform();
 	int32 MaxChunkSize = GetMaxChunkSizeForCookOverrides(GetCookOverrides());
 
+	const int32 MaxChunkSizeOverrideBytes = CacheSettings.MaxChunkSizeOverrideKB * 1024;
+	if (MaxChunkSizeOverrideBytes > 0)
+	{
+		MaxChunkSize = FMath::Min(MaxChunkSizeOverrideBytes, MaxChunkSize);
+	}
+
 	// Our number of elements is tweakable based on the minimum cache usage we want to support.
-	const float MinimumCacheUsage = FMath::Clamp(MinimumCacheUsageCvar, 0.0f, 0.95f);
+	const float MinimumCacheUsage = FMath::Clamp(MinimumCacheUsageCvar, 0.0f, (1.0f - KINDA_SMALL_NUMBER));
 	int32 MinChunkSize = (1.0f - MinimumCacheUsage) * MaxChunkSize;
-	int32 NumElements = (CacheSettings.CacheSizeKB * 1024) / MinChunkSize;
+	
+	uint64 TempNumElements = ((CacheSettings.CacheSizeKB * 1024) / MinChunkSize) * FMath::Max(ChunkSlotNumScalarCvar, 1.0f);
+	int32 NumElements = FMath::Min(TempNumElements, static_cast<uint64>(TNumericLimits< int32 >::Max()));
 
 	FCachedAudioStreamingManagerParams Params;
 	FCachedAudioStreamingManagerParams::FCacheDimensions CacheDimensions;
 
 	// Primary cache defined here:
-	CacheDimensions.MaxChunkSize = MaxChunkSize;
+	CacheDimensions.MaxChunkSize = 256 * 1024; // max possible chunk size (hard coded for legacy streaming path)
 	CacheDimensions.MaxMemoryInBytes = CacheSettings.CacheSizeKB * 1024;
 	CacheDimensions.NumElements = NumElements;
 	Params.Caches.Add(CacheDimensions);
@@ -372,25 +398,18 @@ uint32 FPlatformCompressionUtilities::GetMaxChunkSizeForCookOverrides(const FPla
 	// If the game runs with higher than 32 voices, that means we will potentially have a larger cache than what was set in the target settings.
 	// In that case we log a warning on application launch.
 	const int32 MinimumNumChunks = 32;
-	const int32 DefaultMaxChunkSizeKB = 256;
-	
 	int32 CacheSizeKB = InCompressionOverrides->StreamCachingSettings.CacheSizeKB;
-	
-	if (CacheSizeKB == 0)
-	{
-		CacheSizeKB = FAudioStreamCachingSettings::DefaultCacheSize;
-	}
 
-	// If we won't have a large enough cache size to fit enough chunks to play 32 different sources at once, 
-	// we truncate the chunk size to fit at least that many 
+	const int32 DefaultMaxChunkSizeKB = 256;
+	const int32 MaxChunkSizeOverrideKB = InCompressionOverrides->StreamCachingSettings.MaxChunkSizeOverrideKB;
+	int32 ChunkSizeBasedOnUtilization = 0;
+
 	if (CacheSizeKB / DefaultMaxChunkSizeKB < MinimumNumChunks)
 	{
-		return (CacheSizeKB / MinimumNumChunks) * 1024;
+		ChunkSizeBasedOnUtilization = (CacheSizeKB / MinimumNumChunks);
 	}
-	else
-	{
-		return DefaultMaxChunkSizeKB * 1024;
-	}
+
+	return FMath::Max(FMath::Max(DefaultMaxChunkSizeKB, MaxChunkSizeOverrideKB), ChunkSizeBasedOnUtilization) * 1024;
 }
 
 float FPlatformCompressionUtilities::GetCompressionDurationForCurrentPlatform()

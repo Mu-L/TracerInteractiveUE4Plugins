@@ -15,8 +15,8 @@ public class SourceFilteringTrace : ModuleRules
                     "SourceFilteringCore",
 					"PropertyPath",
 					"AssetRegistry",
-					"MessagingCommon"
-                }
+					"DeveloperSettings"
+				}
             );
 
         if (Target.Type == TargetType.Editor)

@@ -5,13 +5,13 @@
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
 #include "PhysicsEngine/ShapeElem.h"
-#include "Chaos/Convex.h"
 
 #if WITH_CHAOS
 #include "Chaos/Serializable.h"
 #endif
 
 #include "ConvexElem.generated.h"
+
 
 struct FDynamicMeshVertex;
 struct FKBoxElem;
@@ -25,8 +25,7 @@ namespace Chaos
 {
 	class FImplicitObject;
 
-	template <typename T, int d>
-	class TConvex;
+	class FConvex;
 }
 
 /** One convex hull, used for simplified collision. */
@@ -51,11 +50,13 @@ private:
 	UPROPERTY()
 	FTransform Transform;
 
+#if PHYSICS_INTERFACE_PHYSX
 	/** Convex mesh for this body, created from cooked data in CreatePhysicsMeshes */
 	physx::PxConvexMesh*   ConvexMesh;
 
 	/** Convex mesh for this body, flipped across X, created from cooked data in CreatePhysicsMeshes */
 	physx::PxConvexMesh*   ConvexMeshNegX;
+#endif
 
 #if WITH_CHAOS
 	TSharedPtr<Chaos::FConvex, ESPMode::ThreadSafe> ChaosConvex;
@@ -97,6 +98,7 @@ public:
 	/** Returns the volume of this element */
 	float GetVolume(const FVector& Scale) const;
 
+#if PHYSICS_INTERFACE_PHYSX
 	/** Get the PhysX convex mesh (defined in BODY space) for this element */
 	ENGINE_API physx::PxConvexMesh* GetConvexMesh() const;
 
@@ -108,6 +110,7 @@ public:
 
 	/** Set the PhysX convex mesh to use for this element */
 	ENGINE_API void SetMirroredConvexMesh(physx::PxConvexMesh* InMesh);
+#endif
 
 #if WITH_CHAOS
 	ENGINE_API const auto& GetChaosConvexMesh() const

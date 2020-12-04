@@ -108,7 +108,6 @@
 #include "Factories/SoundCueFactoryNew.h"
 #include "Factories/ReimportSoundFactory.h"
 #include "Factories/SoundMixFactory.h"
-#include "Factories/ReimportSoundSurroundFactory.h"
 #include "Factories/StructureFactory.h"
 #include "Factories/StringTableFactory.h"
 #include "Factories/SubsurfaceProfileFactory.h"
@@ -116,7 +115,9 @@
 #include "Engine/Texture.h"
 #include "Factories/TextureFactory.h"
 #include "Factories/ReimportTextureFactory.h"
+#include "Factories/TextureRenderTarget2DArrayFactoryNew.h"
 #include "Factories/TextureRenderTargetCubeFactoryNew.h"
+#include "Factories/TextureRenderTargetVolumeFactoryNew.h"
 #include "Factories/TextureRenderTargetFactoryNew.h"
 #include "Factories/TouchInterfaceFactory.h"
 #include "Factories/FbxAssetImportData.h"
@@ -164,12 +165,15 @@
 #include "Sound/SoundCue.h"
 #include "Sound/SoundMix.h"
 #include "Engine/TextureCube.h"
+#include "Engine/VolumeTexture.h"
 #include "Engine/Texture2DArray.h"
 #include "Engine/VolumeTexture.h"
 #include "Engine/TextureRenderTarget.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "Engine/TextureRenderTarget2DArray.h"
 #include "Engine/CanvasRenderTarget2D.h"
 #include "Engine/TextureRenderTargetCube.h"
+#include "Engine/TextureRenderTargetVolume.h"
 #include "GameFramework/TouchInterface.h"
 #include "Engine/UserDefinedEnum.h"
 #include "Engine/UserDefinedStruct.h"
@@ -196,8 +200,8 @@
 
 #include "DDSLoader.h"
 #include "HDRLoader.h"
-#include "Factories/IESLoader.h"
 #include "Factories/TIFFLoader.h"
+#include "IESConverter.h"
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
 
@@ -218,8 +222,8 @@
 
 #include "Animation/DebugSkelMeshComponent.h"
 
-#include "VT/RuntimeVirtualTexture.h"
-#include "VT/RuntimeVirtualTextureStreamingProxy.h"
+#include "VT/VirtualTexture.h"
+#include "VT/VirtualTextureBuilder.h"
 
 #if PLATFORM_WINDOWS
 	// Needed for DDS support.
@@ -532,12 +536,6 @@ UMaterialFunctionMaterialLayerFactory::UMaterialFunctionMaterialLayerFactory(con
 	bEditAfterNew = true;
 }
 
-bool UMaterialFunctionMaterialLayerFactory::CanCreateNew() const
-{
-	IMaterialEditorModule& MaterialEditorModule = FModuleManager::LoadModuleChecked<IMaterialEditorModule>( "MaterialEditor" );
-	return MaterialEditorModule.MaterialLayersEnabled();
-}
-
 UObject* UMaterialFunctionMaterialLayerFactory::FactoryCreateNew(UClass* Class,UObject* InParent,FName Name,EObjectFlags Flags,UObject* Context,FFeedbackContext* Warn)
 {
 	UMaterialFunctionMaterialLayer* Function = NewObject<UMaterialFunctionMaterialLayer>(InParent, UMaterialFunctionMaterialLayer::StaticClass(), Name, Flags);
@@ -557,12 +555,6 @@ UMaterialFunctionMaterialLayerBlendFactory::UMaterialFunctionMaterialLayerBlendF
 	SupportedClass = UMaterialFunctionMaterialLayerBlend::StaticClass();
 	bCreateNew = true;
 	bEditAfterNew = true;
-}
-
-bool UMaterialFunctionMaterialLayerBlendFactory::CanCreateNew() const
-{
-	IMaterialEditorModule& MaterialEditorModule = FModuleManager::LoadModuleChecked<IMaterialEditorModule>( "MaterialEditor" );
-	return MaterialEditorModule.MaterialLayersEnabled();
 }
 
 UObject* UMaterialFunctionMaterialLayerBlendFactory::FactoryCreateNew(UClass* Class,UObject* InParent,FName Name,EObjectFlags Flags,UObject* Context,FFeedbackContext* Warn)
@@ -971,6 +963,7 @@ UObject* ULevelFactory::FactoryCreateText
 						SpawnInfo.Name = ActorUniqueName;
 						SpawnInfo.Template = Archetype;
 						SpawnInfo.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+						SpawnInfo.bCreateActorPackage = true;
 						AActor* NewActor = World->SpawnActor( TempClass, nullptr, nullptr, SpawnInfo );
 						
 						if( NewActor )
@@ -1428,7 +1421,7 @@ UObject* UPackageFactory::FactoryCreateText( UClass* Class, UObject* InParent, F
 					UE_LOG(LogEditorFactories, Warning, TEXT("Package factory can only handle the map package or new packages!"));
 					return nullptr;
 				}
-				TopLevelPackage = CreatePackage(nullptr, *(PackageName.ToString()));
+				TopLevelPackage = CreatePackage( *(PackageName.ToString()));
 				TopLevelPackage->SetFlags(RF_Standalone|RF_Public);
 				MapPackages.Add(TopLevelPackage->GetName(), TopLevelPackage);
 
@@ -1982,16 +1975,15 @@ bool UPhysicalMaterialFactoryNew::ConfigureProperties()
 }
 UObject* UPhysicalMaterialFactoryNew::FactoryCreateNew(UClass* Class, UObject* InParent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn)
 {
-	if (PhysicalMaterialClass != nullptr)
-	{
-		return NewObject<UPhysicalMaterial>(InParent, PhysicalMaterialClass, Name, Flags | RF_Transactional);
-	}
-	else
-	{
-		// if we have no data asset class, use the passed-in class instead
-		check(Class->IsChildOf(UPhysicalMaterial::StaticClass()));
-		return NewObject<UPhysicalMaterial>(InParent, Class, Name, Flags);
-	}
+	EObjectFlags MaterialFlags = PhysicalMaterialClass.Get() ? Flags | RF_Transactional : Flags;
+	UClass* ClassToUse = PhysicalMaterialClass.Get() ? PhysicalMaterialClass.Get() : Class;
+	
+	check(ClassToUse->IsChildOf(UPhysicalMaterial::StaticClass()));
+
+	UPhysicalMaterial* NewMaterial = NewObject<UPhysicalMaterial>(InParent, ClassToUse, Name, MaterialFlags);
+	// A call to get will ensure any physics-engine specific data is built
+	NewMaterial->GetPhysicsMaterial();
+	return NewMaterial;
 }
 
 /*------------------------------------------------------------------------------
@@ -2233,6 +2225,34 @@ UObject* UCurveLinearColorAtlasFactory::FactoryCreateNew(UClass* Class, UObject*
 	return Object;
 }
 
+/*-----------------------------------------------------------------------------
+	UTextureRenderTarget2DArrayFactoryNew
+-----------------------------------------------------------------------------*/
+UTextureRenderTarget2DArrayFactoryNew::UTextureRenderTarget2DArrayFactoryNew(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{
+
+	SupportedClass = UTextureRenderTarget2DArray::StaticClass();
+	bCreateNew = true;
+	bEditAfterNew = true;
+	bEditorImport = false;
+
+	Width = 256;
+	Height = 256;
+	Slices = 1;
+	Format = 0;
+}
+
+UObject* UTextureRenderTarget2DArrayFactoryNew::FactoryCreateNew(UClass* Class, UObject* InParent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn)
+{
+	// create the new object
+	UTextureRenderTarget2DArray* Result = NewObject<UTextureRenderTarget2DArray>(InParent, Class, Name, Flags);
+
+	// initialize the resource
+	Result->InitAutoFormat(Width, Height, Slices);
+
+	return (Result);
+}
 
 /*-----------------------------------------------------------------------------
 	UTextureRenderTargetCubeFactoryNew
@@ -2261,6 +2281,34 @@ UObject* UTextureRenderTargetCubeFactoryNew::FactoryCreateNew(UClass* Class, UOb
 	return (Result);
 }
 
+/*-----------------------------------------------------------------------------
+	UTextureRenderTargetVolumeFactoryNew
+-----------------------------------------------------------------------------*/
+UTextureRenderTargetVolumeFactoryNew::UTextureRenderTargetVolumeFactoryNew(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{
+
+	SupportedClass = UTextureRenderTargetVolume::StaticClass();
+	bCreateNew = true;
+	bEditAfterNew = true;
+	bEditorImport = false;
+
+	Width = 64;
+	Height = 64;
+	Depth = 64;
+	Format = 0;
+}
+
+UObject* UTextureRenderTargetVolumeFactoryNew::FactoryCreateNew(UClass* Class, UObject* InParent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn)
+{
+	// create the new object
+	UTextureRenderTargetVolume* Result = NewObject<UTextureRenderTargetVolume>(InParent, Class, Name, Flags);
+
+	// initialize the resource
+	Result->InitAutoFormat(Width, Height, Depth);
+
+	return Result;
+}
 
 /*-----------------------------------------------------------------------------
 	UTextureFactory.
@@ -4089,31 +4137,28 @@ UTexture* UTextureFactory::ImportTexture(UClass* Class, UObject* InParent, FName
 	if(!FCString::Stricmp(Type, TEXT("ies")))
 	{
 		// checks for .IES extension to avoid wasting loading large assets just to reject them during header parsing
-		FIESLoadHelper IESLoadHelper(Buffer, Length);
+		FIESConverter IESConverter(Buffer, Length);
 
-		if(IESLoadHelper.IsValid())
+		if(IESConverter.IsValid())
 		{
-			TArray<uint8> RAWData;
-			float Multiplier = IESLoadHelper.ExtractInRGBA16F(RAWData);
-
 			UTextureLightProfile* Texture = Cast<UTextureLightProfile>( CreateOrOverwriteAsset(UTextureLightProfile::StaticClass(), InParent, Name, Flags) );
 			if ( Texture )
 			{
 				Texture->Source.Init(
-					IESLoadHelper.GetWidth(),
-					IESLoadHelper.GetHeight(),
+					IESConverter.GetWidth(),
+					IESConverter.GetHeight(),
 					/*NumSlices=*/ 1,
 					1,
 					TSF_RGBA16F,
-					RAWData.GetData()
+					IESConverter.GetRawData().GetData()
 					);
 
 				Texture->AddressX = TA_Clamp;
 				Texture->AddressY = TA_Clamp;
 				Texture->CompressionSettings = TC_HDR;
 				MipGenSettings = TMGS_NoMipmaps;
-				Texture->Brightness = IESLoadHelper.GetBrightness();
-				Texture->TextureMultiplier = Multiplier;
+				Texture->Brightness = IESConverter.GetBrightness();
+				Texture->TextureMultiplier = IESConverter.GetMultiplier();
 			}
 
 			return Texture;
@@ -4403,6 +4448,12 @@ UObject* UTextureFactory::FactoryCreateBinary
 		// Update with new settings, which should disable streaming...
 		ExistingTexture2D->UpdateResource();
 	}
+	if(ExistingTexture)
+	{
+		// Wait for InitRHI() to complete before the FTextureReferenceReplacer calls ReleaseRHI() to follow the workflow.
+		// Static texture needs to avoid having pending InitRHI() before enqueuing ReleaseRHI() to safely track access of the PlatformData on the renderthread.
+		ExistingTexture->WaitForPendingInitOrStreaming();
+	}
 	
 	FTextureReferenceReplacer RefReplacer(ExistingTexture);
 
@@ -4632,7 +4683,7 @@ UObject* UTextureFactory::FactoryCreateBinary
 		// Create the package for the material
 		const FString MaterialName = FString::Printf( TEXT("%s_Mat"), *TextureName.ToString() );
 		const FString MaterialPackageName = FPackageName::GetLongPackagePath(InParent->GetName()) + TEXT("/") + MaterialName;
-		UPackage* MaterialPackage = CreatePackage(nullptr, *MaterialPackageName);
+		UPackage* MaterialPackage = CreatePackage( *MaterialPackageName);
 
 		// Create the material
 		UMaterialFactoryNew* Factory = NewObject<UMaterialFactoryNew>();
@@ -4770,16 +4821,20 @@ bool UTextureFactory::IsImportResolutionValid(int32 Width, int32 Height, bool bA
 	// Check if the texture is above the supported resolution and prompt the user if they wish to continue if it is
 	if ( Width > MaximumSupportedResolution || Height > MaximumSupportedResolution )
 	{
-		if ( EAppReturnType::Yes != FMessageDialog::Open( EAppMsgType::YesNo, FText::Format(
-				NSLOCTEXT("UnrealEd", "Warning_LargeTextureImport", "Attempting to import {0} x {1} texture, proceed?\nLargest supported texture size: {2} x {3}"),
-				FText::AsNumber(Width), FText::AsNumber(Height), FText::AsNumber(MaximumSupportedResolution), FText::AsNumber(MaximumSupportedResolution)) ) )
+		if ((Width * Height) > FMath::Square(MaximumSupportedVirtualTextureResolution))
 		{
+			Warn->Log(ELogVerbosity::Error, *FText::Format(
+				NSLOCTEXT("UnrealEd", "Warning_TextureSizeTooLarge", "Texture is too large to import. The current maximun is {0} pixels"),
+				FText::AsNumber(FMath::Square(MaximumSupportedVirtualTextureResolution))
+				).ToString());
+
 			bValid = false;
 		}
 
-		if (bValid && (Width * Height) > FMath::Square(MaximumSupportedVirtualTextureResolution))
+		if ( bValid && EAppReturnType::Yes != FMessageDialog::Open( EAppMsgType::YesNo, FText::Format(
+				NSLOCTEXT("UnrealEd", "Warning_LargeTextureImport", "Attempting to import {0} x {1} texture, proceed?\nLargest supported texture size: {2} x {3}"),
+				FText::AsNumber(Width), FText::AsNumber(Height), FText::AsNumber(MaximumSupportedResolution), FText::AsNumber(MaximumSupportedResolution)) ) )
 		{
-			Warn->Log(ELogVerbosity::Error, *NSLOCTEXT("UnrealEd", "Warning_TextureSizeTooLarge", "Texture is too large to import").ToString());
 			bValid = false;
 		}
 	}
@@ -4907,10 +4962,10 @@ UTextureExporterBMP::UTextureExporterBMP(const FObjectInitializer& ObjectInitial
 
 UTexture2D* UTextureExporterBMP::GetExportTexture(UObject* Object) const
 {
-	URuntimeVirtualTexture* RuntimeVirtualTexture = Cast<URuntimeVirtualTexture>(Object);
-	if (RuntimeVirtualTexture != nullptr && RuntimeVirtualTexture->GetStreamingTexture() != nullptr)
+	UVirtualTextureBuilder* VirtualTextureBuilder = Cast<UVirtualTextureBuilder>(Object);
+	if (VirtualTextureBuilder != nullptr)
 	{
-		return RuntimeVirtualTexture->GetStreamingTexture();
+		return VirtualTextureBuilder->Texture;
 	}
 	return Cast<UTexture2D>(Object);
 }
@@ -4921,7 +4976,7 @@ bool UTextureExporterBMP::SupportsObject(UObject* Object) const
 	if (Super::SupportsObject(Object))
 	{
 		UTexture2D* Texture = GetExportTexture(Object);
-		bSupportsObject = Texture != nullptr && (Texture->Source.GetFormat() == TSF_BGRA8 || Texture->Source.GetFormat() == TSF_RGBA16 || Texture->Source.GetFormat() == TSF_G8);
+		bSupportsObject = Texture != nullptr && (Texture->Source.GetFormat() == TSF_BGRA8 || Texture->Source.GetFormat() == TSF_RGBA16 || Texture->Source.GetFormat() == TSF_G8 || Texture->Source.GetFormat() == TSF_G16);
 	}
 	return bSupportsObject;
 }
@@ -4946,14 +5001,16 @@ bool UTextureExporterBMP::ExportBinary( UObject* Object, const TCHAR* Type, FArc
 	}
 
 	const int32 LayerIndex = FileIndex;
-	if( !Texture->Source.IsValid() || ( Texture->Source.GetFormat(LayerIndex) != TSF_BGRA8 && Texture->Source.GetFormat(LayerIndex) != TSF_RGBA16 && Texture->Source.GetFormat() != TSF_G8) )
+	ETextureSourceFormat Format = Texture->Source.IsValid() ? Texture->Source.GetFormat(LayerIndex) : TSF_Invalid;
+	if (Format != TSF_BGRA8 && Format != TSF_RGBA16 && Format != TSF_G16 && Format != TSF_G8)
 	{
 		return false;
 	}
 
-	const bool bIsRGBA16 = Texture->Source.GetFormat(LayerIndex) == TSF_RGBA16;
-	const bool bIsG8 = Texture->Source.GetFormat(LayerIndex) == TSF_G8;
-	const int32 SourceBytesPerPixel = bIsRGBA16 ? 8 : (bIsG8 ? 1 : 4);
+	const bool bIsRGBA16 = Format == TSF_RGBA16;
+	const bool bIsG16 = Format == TSF_G16;
+	const bool bIsG8 = Format == TSF_G8;
+	const int32 SourceBytesPerPixel = bIsRGBA16 ? 8 : (bIsG16 ? 2 : (bIsG8 ? 1 : 4));
 
 	if (bIsRGBA16)
 	{
@@ -4964,10 +5021,19 @@ bool UTextureExporterBMP::ExportBinary( UObject* Object, const TCHAR* Type, FArc
 		ExportWarning.Open(EMessageSeverity::Warning);
 	}
 
+	if (bIsG16)
+	{
+		FMessageLog ExportWarning("EditorErrors");
+		FFormatNamedArguments Arguments;
+		Arguments.Add(TEXT("Name"), FText::FromString(Texture->GetName()));
+		ExportWarning.Warning(FText::Format(LOCTEXT("BitDepthBMPWarningG16", "{Name}: Texture is G16 and cannot be represented at such high bit depth in .bmp. Color will be split across two channels of RGBA8."), Arguments));
+		ExportWarning.Open(EMessageSeverity::Warning);
+	}
+
 	int32 SizeX = Texture->Source.GetSizeX();
 	int32 SizeY = Texture->Source.GetSizeY();
 	TArray64<uint8> RawData;
-	Texture->Source.GetMipData(RawData, LayerIndex, 0);
+	Texture->Source.GetMipData(RawData, 0, LayerIndex, 0);
 
 	FBitmapFileHeader bmf;
 	FBitmapInfoHeader bmhdr;
@@ -5010,6 +5076,14 @@ bool UTextureExporterBMP::ExportBinary( UObject* Object, const TCHAR* Type, FArc
 				Ar << ScreenPtr[5];
 				ScreenPtr += 8;
 			}
+			if (bIsG16)
+			{
+				uint8 DummyZero = 0;
+				Ar << DummyZero;
+				Ar << ScreenPtr[0];
+				Ar << ScreenPtr[1];
+				ScreenPtr += 2;
+			}
 			else if (bIsG8)
 			{
 				Ar << ScreenPtr[0];
@@ -5029,14 +5103,13 @@ bool UTextureExporterBMP::ExportBinary( UObject* Object, const TCHAR* Type, FArc
 	return true;
 }
 
-URuntimeVirtualTextureExporterBMP::URuntimeVirtualTextureExporterBMP(const FObjectInitializer& ObjectInitializer)
+UVirtualTextureBuilderExporterBMP::UVirtualTextureBuilderExporterBMP(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
-	SupportedClass = URuntimeVirtualTexture::StaticClass();
+	SupportedClass = UVirtualTextureBuilder::StaticClass();
 	PreferredFormatIndex = 0;
 	FormatExtension.Add(TEXT("BMP"));
 	FormatDescription.Add(TEXT("Windows Bitmap"));
-
 }
 
 /*------------------------------------------------------------------------------
@@ -5394,7 +5467,7 @@ UObject* UFontFileImportFactory::FactoryCreateBinary(UClass* InClass, UObject* I
 		UFontFactory* FontFactory = NewObject<UFontFactory>();
 		FontFactory->bEditAfterNew = false;
 
-		UPackage* FontPackage = CreatePackage(nullptr, *FontPackageName);
+		UPackage* FontPackage = CreatePackage( *FontPackageName);
 		UFont* Font = Cast<UFont>(FontFactory->FactoryCreateNew(UFont::StaticClass(), FontPackage, *FontAssetName, InFlags, InContext, InWarn));
 		if (Font)
 		{
@@ -5782,7 +5855,7 @@ EReimportResult::Type UReimportTextureFactory::Reimport( UObject* Obj )
 	UTexture2D* pTex2D = Cast<UTexture2D>(Obj);
 	// Check if this texture has been modified by the paint tool.
 	// If so, prompt the user to see if they'll continue with reimporting, returning if they decline.
-	if( pTex2D && pTex2D->bHasBeenPaintedInEditor && EAppReturnType::Yes != FMessageDialog::Open( EAppMsgType::YesNo,
+	if( pTex2D && pTex2D->bHasBeenPaintedInEditor && !IsAutomatedImport() && EAppReturnType::Yes != FMessageDialog::Open( EAppMsgType::YesNo,
 		FText::Format(NSLOCTEXT("UnrealEd", "Import_TextureHasBeenPaintedInEditor", "The texture '{0}' has been painted on by the Mesh Paint tool.\nReimporting it will override any changes.\nWould you like to continue?"),
 			FText::FromString(pTex2D->GetName()))) )
 	{
@@ -5867,6 +5940,11 @@ int32 UReimportTextureFactory::GetPriority() const
 	return ImportPriority;
 }
 
+bool UReimportTextureFactory::IsAutomatedImport() const
+{
+	return Super::IsAutomatedImport() || IsAutomatedReimport();
+}
+
 
 /*-----------------------------------------------------------------------------
 UReimportFbxStaticMeshFactory.
@@ -5880,6 +5958,7 @@ UReimportFbxStaticMeshFactory::UReimportFbxStaticMeshFactory(const FObjectInitia
 
 	bCreateNew = false;
 	bText = false;
+	bShowOption = true;
 
 	// Required to allow other StaticMesh re importers to do their CanReimport checks first, and if they fail the FBX will catch it
 	ImportPriority = DefaultImportPriority - 1;
@@ -5953,7 +6032,21 @@ EReimportResult::Type UReimportFbxStaticMeshFactory::Reimport( UObject* Obj )
 
 	UFbxStaticMeshImportData* ImportData = Cast<UFbxStaticMeshImportData>(Mesh->AssetImportData);
 	
-	UFbxImportUI* ReimportUI = NewObject<UFbxImportUI>();
+	UFbxImportUI* ReimportUI;
+	UFbxImportUI* OverrideImportUI = AssetImportTask ? Cast<UFbxImportUI>(AssetImportTask->Options) : nullptr;
+	if (OverrideImportUI)
+	{
+		ReimportUI = OverrideImportUI;
+	}
+	else
+	{
+		if (AssetImportTask && AssetImportTask->Options)
+		{
+			UE_LOG(LogFbx, Display, TEXT("The options set in the Asset Import Task are not of type UFbxImportUI and will be ignored"));
+		}
+		ReimportUI = NewObject<UFbxImportUI>();
+	}
+
 	ReimportUI->MeshTypeToImport = FBXIT_StaticMesh;
 	ReimportUI->StaticMeshImportData->bCombineMeshes = true;
 
@@ -5962,7 +6055,7 @@ EReimportResult::Type UReimportFbxStaticMeshFactory::Reimport( UObject* Obj )
 		ImportUI = NewObject<UFbxImportUI>(this, NAME_None, RF_Public);
 	}
 	//Prevent any UI for automation, unattended and commandlet
-	const bool IsUnattended = GIsAutomationTesting || FApp::IsUnattended() || IsRunningCommandlet() || GIsRunningUnattendedScript;
+	const bool IsUnattended = IsAutomatedImport() || FApp::IsUnattended() || IsRunningCommandlet() || GIsRunningUnattendedScript;
 	const bool ShowImportDialogAtReimport = GetDefault<UEditorPerProjectUserSettings>()->bShowImportDialogAtReimport && !IsUnattended;
 
 	if (ImportData == nullptr)
@@ -6170,6 +6263,10 @@ int32 UReimportFbxStaticMeshFactory::GetPriority() const
 	return ImportPriority;
 }
 
+bool UReimportFbxStaticMeshFactory::IsAutomatedImport() const
+{
+	return Super::IsAutomatedImport() || IsAutomatedReimport();
+}
 
 
 /*-----------------------------------------------------------------------------
@@ -6184,6 +6281,7 @@ UReimportFbxSkeletalMeshFactory::UReimportFbxSkeletalMeshFactory(const FObjectIn
 
 	bCreateNew = false;
 	bText = false;
+	bShowOption = true;
 }
 
 bool UReimportFbxSkeletalMeshFactory::FactoryCanImport(const FString& Filename)
@@ -6268,7 +6366,21 @@ EReimportResult::Type UReimportFbxSkeletalMeshFactory::Reimport( UObject* Obj, i
 	UFbxSkeletalMeshImportData* ImportData = Cast<UFbxSkeletalMeshImportData>(SkeletalMesh->AssetImportData);
 	
 	// Prepare the import options
-	UFbxImportUI* ReimportUI = NewObject<UFbxImportUI>();
+	UFbxImportUI* ReimportUI;
+	UFbxImportUI* OverrideImportUI = AssetImportTask ? Cast<UFbxImportUI>(AssetImportTask->Options) : nullptr;
+	if (OverrideImportUI)
+	{
+		ReimportUI = OverrideImportUI;
+	}
+	else
+	{
+		if (AssetImportTask && AssetImportTask->Options)
+		{
+			UE_LOG(LogFbx, Display, TEXT("The options set in the Asset Import Task are not of type UFbxImportUI and will be ignored"));
+		}
+		ReimportUI = NewObject<UFbxImportUI>();
+	}
+
 	ReimportUI->MeshTypeToImport = FBXIT_SkeletalMesh;
 	ReimportUI->Skeleton = SkeletalMesh->Skeleton;
 	ReimportUI->bCreatePhysicsAsset = false;
@@ -6284,7 +6396,7 @@ EReimportResult::Type UReimportFbxSkeletalMeshFactory::Reimport( UObject* Obj, i
 
 	bool bSuccess = false;
 	//Prevent any UI for automation, unattended and commandlet
-	const bool IsUnattended = GIsAutomationTesting || FApp::IsUnattended() || IsRunningCommandlet() || GIsRunningUnattendedScript;
+	const bool IsUnattended = IsAutomatedImport() || FApp::IsUnattended() || IsRunningCommandlet() || GIsRunningUnattendedScript;
 	const bool ShowImportDialogAtReimport = GetDefault<UEditorPerProjectUserSettings>()->bShowImportDialogAtReimport && !IsUnattended;
 
 	if (ImportData == nullptr)
@@ -6451,8 +6563,24 @@ EReimportResult::Type UReimportFbxSkeletalMeshFactory::Reimport( UObject* Obj, i
 		ImportOptions->bCreatePhysicsAsset = false;
 		ImportOptions->PhysicsAsset = SkeletalMesh->PhysicsAsset;
 		
-
+		EFBXImportContentType BeforeUIContentType = ReimportUI->SkeletalMeshImportData->ImportContentType;
 		ImportOptions = GetImportOptions( FFbxImporter, ReimportUI, bShowOptionDialog, bIsAutomated, Obj->GetPathName(), bOperationCanceled, bOutImportAll, bIsObjFormat, Filename, bForceImportType, FBXIT_SkeletalMesh);
+		
+		//If the import type has change from the UI, assign the filename to the file source index
+		if (bShowOptionDialog && ReimportUI->SkeletalMeshImportData->ImportContentType != BeforeUIContentType && ReimportUI->SkeletalMeshImportData->ImportContentType != EFBXImportContentType::FBXICT_All)
+		{
+			TArray<FString> ExtractedFilenames;
+			SkeletalMesh->AssetImportData->ExtractFilenames(ExtractedFilenames);
+			//By default add the original file
+			if (!ExtractedFilenames.IsValidIndex(1))
+			{
+				SkeletalMesh->AssetImportData->AddFileName(ExtractedFilenames[0], 1, NSSkeletalMeshSourceFileLabels::GeometryText().ToString());
+			}
+			if (!ExtractedFilenames.IsValidIndex(2))
+			{
+				SkeletalMesh->AssetImportData->AddFileName(ExtractedFilenames[0], 2, NSSkeletalMeshSourceFileLabels::SkinningText().ToString());
+			}
+		}
 
 		if (!GetSourceFileName(ImportData, Filename, false))
 		{
@@ -6575,6 +6703,11 @@ int32 UReimportFbxSkeletalMeshFactory::GetPriority() const
 	return ImportPriority;
 }
 
+bool UReimportFbxSkeletalMeshFactory::IsAutomatedImport() const
+{
+	return Super::IsAutomatedImport() || IsAutomatedReimport();
+}
+
 /*-----------------------------------------------------------------------------
 UReimportFbxAnimSequenceFactory
 -----------------------------------------------------------------------------*/ 
@@ -6602,6 +6735,7 @@ UReimportFbxAnimSequenceFactory::UReimportFbxAnimSequenceFactory(const FObjectIn
 
 	bCreateNew = false;
 	bText = false;
+	bShowOption = true;
 }
 
 bool UReimportFbxAnimSequenceFactory::FactoryCanImport(const FString& Filename)
@@ -6674,13 +6808,6 @@ EReimportResult::Type UReimportFbxAnimSequenceFactory::Reimport( UObject* Obj )
 	{
 		return EReimportResult::Failed;
 	}
-	// If there is no file path provided, can't reimport from source
-// 	if ( !Filename.Len() )
-// 	{
-// 		// Since this is a new system most skeletal meshes don't have paths, so logging has been commented out
-// 		//UE_LOG(LogEditorFactories, Warning, TEXT("-- cannot reimport: skeletal mesh resource does not have path stored."));
-// 		return false;
-// 	}
 
 	UE_LOG(LogEditorFactories, Log, TEXT("Performing atomic reimport of [%s]"), *Filename);
 
@@ -6702,7 +6829,7 @@ EReimportResult::Type UReimportFbxAnimSequenceFactory::Reimport( UObject* Obj )
 	if (!Skeleton)
 	{
 		// if it does not exist, ask for one
-		Skeleton = ChooseSkeleton();
+		Skeleton = !IsAutomatedImport() ? ChooseSkeleton() : nullptr;
 		if (!Skeleton)
 		{
 			// If skeleton wasn't found or the user canceled out of the dialog, we cannot proceed, but this reimport factory 
@@ -6716,10 +6843,21 @@ EReimportResult::Type UReimportFbxAnimSequenceFactory::Reimport( UObject* Obj )
 		AnimSequence->SetSkeleton(Skeleton);
 	}
 
-	if ( UEditorEngine::ReimportFbxAnimation(Skeleton, AnimSequence, ImportData, *Filename) )
+	UFbxImportUI* OverrideImportUI = AssetImportTask ? Cast<UFbxImportUI>(AssetImportTask->Options) : nullptr;
+	if (!OverrideImportUI && AssetImportTask && AssetImportTask->Options)
 	{
-		UE_LOG(LogEditorFactories, Log, TEXT("-- imported successfully") );
+		UE_LOG(LogFbx, Display, TEXT("The options set in the Asset Import Task are not of type UFbxImportUI and will be ignored"));
+	}
 
+	bool bOutImportAll = false;
+	if ( UEditorEngine::ReimportFbxAnimation(Skeleton, AnimSequence, ImportData, *Filename, bOutImportAll, bShowOption && !IsAutomatedImport(), OverrideImportUI) )
+	{
+		if (bOutImportAll)
+		{
+			// If the user chose to import all, we don't show the dialog again and use the same settings for each object until importing another set of files
+			bShowOption = false;
+		}
+		UE_LOG(LogEditorFactories, Log, TEXT("-- imported successfully") );
 		// update the data in case the file source has changed
 		ImportData->Update(UFactory::CurrentFilename);
 		AnimSequence->ImportFileFramerate = Importer->GetOriginalFbxFramerate();
@@ -6750,6 +6888,11 @@ EReimportResult::Type UReimportFbxAnimSequenceFactory::Reimport( UObject* Obj )
 int32 UReimportFbxAnimSequenceFactory::GetPriority() const
 {
 	return ImportPriority;
+}
+
+bool UReimportFbxAnimSequenceFactory::IsAutomatedImport() const
+{
+	return Super::IsAutomatedImport() || IsAutomatedReimport();
 }
 
 

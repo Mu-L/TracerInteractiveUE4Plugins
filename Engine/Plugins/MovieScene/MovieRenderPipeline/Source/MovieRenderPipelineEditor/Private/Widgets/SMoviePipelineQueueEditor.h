@@ -6,6 +6,8 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Views/STableRow.h"
 #include "Widgets/Views/SListView.h"
+#include "Widgets/Views/STreeView.h"
+#include "Types/SlateEnums.h"
 
 struct FAssetData;
 struct IMoviePipelineQueueTreeItem;
@@ -14,13 +16,15 @@ class FUICommandList;
 class ITableRow;
 class STableViewBase;
 class UMoviePipelineExecutorJob;
+class UMoviePipelineExecutorShot;
 class SWindow;
 class UMoviePipelineQueue;
 class SMoviePipelineQueueEditor;
 class UMovieSceneCinematicShotSection;
 struct FMoviePipelineQueueJobTreeItem;
 
-DECLARE_DELEGATE_TwoParams(FOnMoviePipelineEditConfig, TWeakObjectPtr<UMoviePipelineExecutorJob>, TWeakObjectPtr<UMovieSceneCinematicShotSection>)
+DECLARE_DELEGATE_TwoParams(FOnMoviePipelineEditConfig, TWeakObjectPtr<UMoviePipelineExecutorJob>, TWeakObjectPtr<UMoviePipelineExecutorShot>)
+DECLARE_DELEGATE_OneParam(FOnMoviePipelineJobSelection, const TArray<UMoviePipelineExecutorJob*>&)
 
 /**
  * Widget used to edit a Movie Pipeline Queue
@@ -34,6 +38,7 @@ public:
 		{}
 		SLATE_EVENT(FOnMoviePipelineEditConfig, OnEditConfigRequested)
 		SLATE_EVENT(FOnMoviePipelineEditConfig, OnPresetChosen)
+		SLATE_EVENT(FOnMoviePipelineJobSelection, OnJobSelectionChanged)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -41,6 +46,8 @@ public:
 	TSharedRef<SWidget> MakeAddSequenceJobButton();
 	TSharedRef<SWidget> RemoveSelectedJobButton();
 	TSharedRef<SWidget> OnGenerateNewJobFromAssetMenu();
+
+	TArray<TSharedPtr<IMoviePipelineQueueTreeItem>> GetSelectedItems() const { return TreeView->GetSelectedItems(); }
 
 private:
 	// SWidget Interface
@@ -67,8 +74,11 @@ private:
 	void OnDuplicateSelected();
 	bool CanDuplicateSelected() const;
 
+	void OnResetStatus();
+
 	void ReconstructTree();
 	void SetSelectedJobs_Impl(const TArray<UMoviePipelineExecutorJob*>& InJobs);
+	void OnJobSelectionChanged_Impl(TSharedPtr<IMoviePipelineQueueTreeItem> TreeItem, ESelectInfo::Type SelectInfo);
 
 private:
 	TArray<TSharedPtr<IMoviePipelineQueueTreeItem>> RootNodes;
@@ -78,4 +88,5 @@ private:
 	TArray<UMoviePipelineExecutorJob*> PendingJobsToSelect;
 	FOnMoviePipelineEditConfig OnEditConfigRequested;
 	FOnMoviePipelineEditConfig OnPresetChosen;
+	FOnMoviePipelineJobSelection OnJobSelectionChanged;
 };

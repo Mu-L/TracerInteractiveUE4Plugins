@@ -257,7 +257,7 @@ void FUnrealEdMisc::OnInit()
 
 	/** Delegate that gets called when a script exception occurs */
 	FBlueprintCoreDelegates::OnScriptException.AddStatic(&FKismetDebugUtilities::OnScriptException);
-	FBlueprintCoreDelegates::OnScriptExecutionEnd.AddStatic(&FKismetDebugUtilities::EndOfScriptExecution);
+	FBlueprintContextTracker::OnExitScriptContext.AddStatic(&FKismetDebugUtilities::EndOfScriptExecution);
 	
 	FEditorDelegates::ChangeEditorMode.AddRaw(this, &FUnrealEdMisc::OnEditorChangeMode);
 	FCoreDelegates::PreModal.AddRaw(this, &FUnrealEdMisc::OnEditorPreModal);
@@ -284,8 +284,6 @@ void FUnrealEdMisc::OnInit()
 	OnActiveTabChangedDelegateHandle = FGlobalTabmanager::Get()->OnActiveTabChanged_Subscribe(FOnActiveTabChanged::FDelegate::CreateRaw(this, &FUnrealEdMisc::OnActiveTabChanged));
 	OnTabForegroundedDelegateHandle = FGlobalTabmanager::Get()->OnTabForegrounded_Subscribe(FOnActiveTabChanged::FDelegate::CreateRaw(this, &FUnrealEdMisc::OnTabForegrounded));
 	FUserActivityTracking::SetActivity(FUserActivity(TEXT("EditorInit"), EUserActivityContext::Editor));
-
-	FEditorModeRegistry::Initialize();
 
 	// Are we in immersive mode?
 	const TCHAR* ParsedCmdLine = FCommandLine::Get();
@@ -486,6 +484,13 @@ void FUnrealEdMisc::OnInit()
 		InitOptions.bShowFilters = true;
 		MessageLogModule.RegisterLogListing("SlateStyleLog", LOCTEXT("SlateStyleLog", "Slate Style Log"), InitOptions );
 	}
+
+	{
+		FMessageLogInitializationOptions InitOptions;
+		InitOptions.bShowFilters = true;
+		MessageLogModule.RegisterLogListing("HLODResults", LOCTEXT("HLODResults", "HLOD Results"), InitOptions);
+	}
+
 	FCompilerResultsLog::Register();
 	{
 		FMessageLogInitializationOptions InitOptions;
@@ -558,12 +563,17 @@ void FUnrealEdMisc::InitEngineAnalytics()
 
 			FGameProjectGenerationModule& GameProjectModule = FModuleManager::LoadModuleChecked<FGameProjectGenerationModule>(TEXT("GameProjectGeneration"));
 			
-			int32 SourceFileCount = 0;
-			int64 SourceFileDirectorySize = 0;
-			GameProjectModule.Get().GetProjectSourceDirectoryInfo(SourceFileCount, SourceFileDirectorySize);
+			bool bShouldIncludeSourceFileCountAndSize = true;
+			GConfig->GetBool(TEXT("EngineAnalytics"), TEXT("IncludeSourceFileCountAndSize"), bShouldIncludeSourceFileCountAndSize, GEditorIni);
+			if (bShouldIncludeSourceFileCountAndSize)
+			{
+				int32 SourceFileCount = 0;
+				int64 SourceFileDirectorySize = 0;
+				GameProjectModule.Get().GetProjectSourceDirectoryInfo(SourceFileCount, SourceFileDirectorySize);
 
-			ProjectAttributes.Add( FAnalyticsEventAttribute( FString( "SourceFileCount" ), SourceFileCount ));
-			ProjectAttributes.Add(FAnalyticsEventAttribute(FString("SourceFileDirectorySize"), SourceFileDirectorySize));
+				ProjectAttributes.Add( FAnalyticsEventAttribute( FString( "SourceFileCount" ), SourceFileCount ));
+				ProjectAttributes.Add(FAnalyticsEventAttribute(FString("SourceFileDirectorySize"), SourceFileDirectorySize));
+			}
 			ProjectAttributes.Add( FAnalyticsEventAttribute( FString( "ModuleCount" ), FModuleManager::Get().GetModuleCount() ));
 
 			// UObject class count
@@ -926,6 +936,7 @@ void FUnrealEdMisc::OnExit()
 	MessageLogModule.UnregisterLogListing("LightingResults");
 	MessageLogModule.UnregisterLogListing("PackagingResults");
 	MessageLogModule.UnregisterLogListing("MapCheck");
+	MessageLogModule.UnregisterLogListing("HLODResults");
 	FCompilerResultsLog::Unregister();
 	MessageLogModule.UnregisterLogListing("PIE");
 
@@ -1093,6 +1104,10 @@ void FUnrealEdMisc::CB_MapChange( uint32 InFlags )
 			// CleanupWorld should only be called before destroying the world
 			// So bCleanupResources is being passed as false
 			World->CleanupWorld(true, false);
+
+			// CleanupWorld will have nulled the FXSystem, create a new one or else the dependent
+			// FXSystemComponents will be left unregistered and/or fail to activate.
+			World->CreateFXSystem();
 		}
 
 		GEditor->EditorUpdateComponents();

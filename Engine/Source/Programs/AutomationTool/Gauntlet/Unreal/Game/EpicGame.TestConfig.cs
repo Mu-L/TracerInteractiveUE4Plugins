@@ -67,10 +67,17 @@ namespace EpicGame
 		[AutoParam]
         public bool LogPSO = false;
 
-        /// <summary>
-        /// Should this test assign a random test account?
-        /// </summary>
-        [AutoParam]
+		/// <summary>
+		/// Which Mempro tags we want to track if we need them. Note, should only be used in short runs.
+		/// </summary>
+		[AutoParam]
+		public string MemPro;
+
+
+		/// <summary>
+		/// Should this test assign a random test account?
+		/// </summary>
+		[AutoParam]
         public bool PreAssignAccount = true;
 
 
@@ -227,6 +234,15 @@ namespace EpicGame
                     AppConfig.CommandLine += " -logpso";
                 }
 
+				if (!string.IsNullOrEmpty(MemPro))
+				{
+					AppConfig.CommandLineParams.AddOrAppendParamValue("memprotags", MemPro);
+					AppConfig.CommandLineParams.AddUnique("mempro");
+					AppConfig.CommandLineParams.AddUnique("llm");
+					AppConfig.CommandLineParams.AddUnique("llmcsv");
+					AppConfig.CommandLineParams.AddUnique("nothreadtimeout");
+				}
+
                 if (ConfigRole.Platform == UnrealTargetPlatform.Win64)
 				{
 					// turn off skill-based matchmaking, turn off porta;
@@ -254,11 +270,12 @@ namespace EpicGame
 			}
 		}		
 	}
-	
+
 	/// <summary>
-	/// Test that just boots the client and server and does nothing
+	/// Generic TestNode class for Epic Games internal projects.
 	/// </summary>
-	public abstract class EpicGameTestNode : UnrealTestNode<EpicGameTestConfig>
+	public abstract class EpicGameTestNode<TConfigClass> : UnrealTestNode<TConfigClass>
+		where TConfigClass : EpicGameTestConfig, new()
 	{
 		public EpicGameTestNode(UnrealTestContext InContext) : base(InContext)
 		{

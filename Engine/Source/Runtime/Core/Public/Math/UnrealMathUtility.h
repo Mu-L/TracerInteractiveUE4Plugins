@@ -6,6 +6,7 @@
 #include "Misc/AssertionMacros.h"
 #include "HAL/PlatformMath.h"
 #include "Templates/IsFloatingPoint.h"
+#include "Templates/IsIntegral.h"
 
 
 //#define IMPLEMENT_ASSIGNMENT_OPERATOR_MANUALLY
@@ -115,14 +116,14 @@ struct FMath : public FPlatformMath
 	{
 		// Note that on some platforms RAND_MAX is a large number so we cannot do ((rand()/(RAND_MAX+1)) * A)
 		// or else we may include the upper bound results, which should be excluded.
-		return A > 0 ? Min(TruncToInt(FRand() * A), A - 1) : 0;
+		return A > 0 ? Min(TruncToInt(FRand() * (float)A), A - 1) : 0;
 	}
 
 	static FORCEINLINE int64 RandHelper64(int64 A)
 	{
 		// Note that on some platforms RAND_MAX is a large number so we cannot do ((rand()/(RAND_MAX+1)) * A)
 		// or else we may include the upper bound results, which should be excluded.
-		return A > 0 ? Min<int64>(TruncToInt(FRand() * A), A - 1) : 0;
+		return A > 0 ? Min<int64>(TruncToInt(FRand() * (float)A), A - 1) : 0;
 	}
 
 	/** Helper function for rand implementations. Returns a random number >= Min and <= Max */
@@ -356,6 +357,31 @@ public:
 		return ((Value & (Value - 1)) == (T)0);
 	}
 
+	/** Converts a float to a nearest less or equal integer. */
+	static FORCEINLINE float Floor(float F)
+	{
+		return FloorToFloat(F);
+	}
+
+	/** Converts a double to a nearest less or equal integer. */
+	static FORCEINLINE double Floor(double F)
+	{
+		return FloorToDouble(F);
+	}
+
+	/**
+	 * Converts an integral type to a nearest less or equal integer.
+	 * Unlike std::floor, it returns an IntegralType.
+	 */
+	template <
+	    typename IntegralType,
+	    typename TEnableIf<TIsIntegral<IntegralType>::Value>::Type* = nullptr
+	>
+	static FORCEINLINE IntegralType Floor(IntegralType I)
+	{
+	    return I;
+	}
+
 
 	// Math Operations
 
@@ -382,29 +408,34 @@ public:
 
 	/** Clamps X to be between Min and Max, inclusive */
 	template< class T > 
-	static FORCEINLINE T Clamp( const T X, const T Min, const T Max )
+	UE_NODISCARD static FORCEINLINE T Clamp( const T X, const T Min, const T Max )
 	{
 		return X<Min ? Min : X<Max ? X : Max;
 	}
 
-	/** Snaps a value to the nearest grid multiple */
-	static FORCEINLINE float GridSnap( float Location, float Grid )
+	/** Wraps X to be between Min and Max, inclusive */
+	template< class T >
+	static FORCEINLINE T Wrap(const T X, const T Min, const T Max)
 	{
-		if( Grid==0.f )	return Location;
-		else			
+		T Size = Max - Min;
+		T EndVal = X;
+		while (EndVal < Min)
 		{
-			return FloorToFloat((Location + 0.5f*Grid)/Grid)*Grid;
+			EndVal += Size;
 		}
+
+		while (EndVal > Max)
+		{
+			EndVal -= Size;
+		}
+		return EndVal;
 	}
 
 	/** Snaps a value to the nearest grid multiple */
-	static FORCEINLINE double GridSnap( double Location, double Grid )
+	template< class T >
+	static FORCEINLINE T GridSnap(T Location, T Grid)
 	{
-		if( Grid==0.0 )	return Location;
-		else			
-		{
-			return FloorToDouble((Location + 0.5*Grid)/Grid)*Grid;
-		}
+		return (Grid == T{}) ? Location : (Floor((Location + (Grid/(T)2)) / Grid) * Grid);
 	}
 
 	/** Divides two integers and rounds up */
@@ -557,7 +588,7 @@ public:
 	 * @param MaxAngleDegrees	"to" angle that defines the end of the range of valid angles
 	 * @return Returns clamped angle in the range -180..180.
 	 */
-	static float CORE_API ClampAngle(float AngleDegrees, float MinAngleDegrees, float MaxAngleDegrees);
+	static CORE_API float ClampAngle(float AngleDegrees, float MinAngleDegrees, float MaxAngleDegrees);
 
 	/** Find the smallest angle between two headings (in degrees) */
 	static float FindDeltaAngleDegrees(float A1, float A2)

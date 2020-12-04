@@ -9,6 +9,15 @@
 #include "ResonanceAudioSettings.h"
 #include "Sound/SoundSubmix.h"
 
+static int32 IgnoreUserResonanceSubmixCVar = 0;
+FAutoConsoleVariableRef CVarIgnoreUserResonanceSubmix(
+	TEXT("au.IgnoreUserResonanceSubmix"),
+	IgnoreUserResonanceSubmixCVar,
+	TEXT("When set to 1, the resonance project setting will be bypassed.\n")
+	TEXT("1: Submix Effects are disabled."),
+	ECVF_Default);
+
+
 namespace ResonanceAudio
 {
 	/*********************************************/
@@ -63,13 +72,16 @@ namespace ResonanceAudio
 		UpdateRoomEffects();
 
 		// This is where we trigger Resonance Audio processing.
-		if (OutData.NumChannels == 2) {
+		if (OutData.NumChannels == 2)
+		{
 			ResonanceAudioApi->FillInterleavedOutputBuffer(2 /*num. output channels */, InData.NumFrames, OutData.AudioBuffer->GetData());
 		}
 		else if (OutData.NumChannels > 2)
 		{
-			// If the output buffer has more than 2 channels we copy the interleaved stereo into it.
-			TemporaryStereoBuffer.SetNum(2 * InData.NumFrames, false /* allow shrinking */);
+			// FillInterleavedOutputBuffer (below) can fail if the graph does not have any sources to process, so the temp buffer must be zeroed
+			TemporaryStereoBuffer.Reset();
+			TemporaryStereoBuffer.AddZeroed(2 * InData.NumFrames);
+
 			ResonanceAudioApi->FillInterleavedOutputBuffer(2 /*num. output channels */, InData.NumFrames, TemporaryStereoBuffer.GetData());
 			float* OutputBufferPtr = OutData.AudioBuffer->GetData();
 			for (int32 i = 0; i < InData.NumFrames; ++i)
@@ -83,7 +95,11 @@ namespace ResonanceAudio
 		else if (OutData.NumChannels == 1)
 		{
 			UE_LOG(LogResonanceAudio, Warning, TEXT("Resonance Audio Reverb connected to 1-channel output, down-mixing spatialized audio"));
-			TemporaryStereoBuffer.SetNum(2 * InData.NumFrames, false /* allow shrinking */);
+
+			// FillInterleavedOutputBuffer (below) can fail if the graph does not have any sources to process, so the temp buffer must be zeroed
+			TemporaryStereoBuffer.Reset();
+			TemporaryStereoBuffer.AddZeroed(2 * InData.NumFrames);
+
 			ResonanceAudioApi->FillInterleavedOutputBuffer(2 /*num. output channels */, InData.NumFrames, TemporaryStereoBuffer.GetData());
 			float* OutputBufferPtr = OutData.AudioBuffer->GetData();
 			for (int32 i = 0; i < InData.NumFrames; ++i)
@@ -155,7 +171,13 @@ namespace ResonanceAudio
 		const UResonanceAudioSettings* Settings = GetDefault<UResonanceAudioSettings>();
 		check(Settings);
 
-		USoundSubmix* ReverbSubmix = Cast<USoundSubmix>(Settings->OutputSubmix.TryLoad());
+		USoundSubmix* ReverbSubmix = nullptr;
+		
+		if (!IgnoreUserResonanceSubmixCVar)
+		{
+			ReverbSubmix = Cast<USoundSubmix>(Settings->OutputSubmix.TryLoad());
+		}
+
 		if (!ReverbSubmix)
 		{
 			static const FString DefaultSubmixName = TEXT("Resonance Reverb Submix");

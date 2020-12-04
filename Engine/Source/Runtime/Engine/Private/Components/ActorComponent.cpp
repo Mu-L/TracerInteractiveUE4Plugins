@@ -79,15 +79,37 @@ FUObjectAnnotationSparseBool GSelectedComponentAnnotation;
 /** Static var indicating activity of reregister context */
 int32 FGlobalComponentReregisterContext::ActiveGlobalReregisterContextCount = 0;
 
+#if WITH_CHAOS
+// Allows for CreatePhysicsState to be deferred, to batch work and parallelize.
+int32 GEnableDeferredPhysicsCreation = 0;
+FAutoConsoleVariableRef CVarEnableDeferredPhysicsCreation(
+	TEXT("p.EnableDeferredPhysicsCreation"), 
+	GEnableDeferredPhysicsCreation,
+	TEXT("Enables/Disables deferred physics creation.")
+);
+#else
+int32 GEnableDeferredPhysicsCreation = 0;
+#endif
+
 void FRegisterComponentContext::Process()
 {
 	FSceneInterface* Scene = World->Scene;
+	const bool bAppCanEverRender = FApp::CanEverRender();
+
 	ParallelFor(AddPrimitiveBatches.Num(),
 		[&](int32 Index)
 		{
-			if (!AddPrimitiveBatches[Index]->IsPendingKill())
+			UPrimitiveComponent* Component = AddPrimitiveBatches[Index];
+			if (!Component->IsPendingKill())
 			{
-				Scene->AddPrimitive(AddPrimitiveBatches[Index]);
+				if (Component->IsRenderStateCreated() || !bAppCanEverRender)
+				{
+					Scene->AddPrimitive(Component);
+				}
+				else // Fallback for some edge case where the component renderstate are missing
+				{
+					Component->CreateRenderState_Concurrent(nullptr);
+				}
 			}
 		},
 		!FApp::ShouldUseThreadingForPerformance()
@@ -253,6 +275,8 @@ UActorComponent::UActorComponent(const FObjectInitializer& ObjectInitializer /*=
 
 	bCanEverAffectNavigation = false;
 	bNavigationRelevant = false;
+
+	bMarkedForPreEndOfFrameSync = false;
 }
 
 void UActorComponent::PostInitProperties()
@@ -663,6 +687,12 @@ bool UActorComponent::NeedsLoadForEditorGame() const
 
 int32 UActorComponent::GetFunctionCallspace( UFunction* Function, FFrame* Stack )
 {
+	if ((Function->FunctionFlags & FUNC_Static))
+	{
+		// Try to use the same logic as function libraries for static functions, will try to use the global context to check authority only/cosmetic
+		return GEngine->GetGlobalFunctionCallspace(Function, this, Stack);
+	}
+
 	AActor* MyOwner = GetOwner();
 	return (MyOwner ? MyOwner->GetFunctionCallspace(Function, Stack) : FunctionCallspace::Local);
 }
@@ -719,7 +749,11 @@ void UActorComponent::PreEditChange(FProperty* PropertyThatWillChange)
 		if( !IsPendingKill() )
 		{
 			// One way this check can fail is that component subclass does not call Super::PostEditChangeProperty
-			check(!EditReregisterContexts.Find(this));
+			checkf(!EditReregisterContexts.Find(this),
+				TEXT("UActorComponent::PreEditChange(this=%s, owner actor class=%s) already had PreEditChange called on it with no matching PostEditChange; You might be missing a call to Super::PostEditChangeProperty in your PostEditChangeProperty implementation"),
+				*GetFullNameSafe(this),
+				(GetOwner() != nullptr) ? *GetOwner()->GetClass()->GetName() : TEXT("no owner"));
+
 			EditReregisterContexts.Add(this,new FComponentReregisterContext(this));
 		}
 		else
@@ -1044,6 +1078,11 @@ bool UActorComponent::IsComponentTickEnabled() const
 void UActorComponent::SetComponentTickInterval(float TickInterval)
 {
 	PrimaryComponentTick.TickInterval = TickInterval;
+}
+
+void UActorComponent::SetComponentTickIntervalAndCooldown(float TickInterval)
+{
+	PrimaryComponentTick.UpdateTickIntervalAndCoolDown(TickInterval);
 }
 
 float UActorComponent::GetComponentTickInterval() const
@@ -1378,6 +1417,13 @@ void UActorComponent::DestroyRenderState_Concurrent()
 	check(bRenderStateCreated);
 	bRenderStateCreated = false;
 
+	// Also reset other dirty states
+	// There is a path in the engine that immediately unregisters the component after registration (AActor::RerunConstructionScripts())
+	// so that the component can be left in a state where its transform is marked for update while render state destroyed
+	bRenderStateDirty = false;
+	bRenderTransformDirty = false;
+	bRenderDynamicDataDirty = false;
+
 #if LOG_RENDER_STATE
 	UE_LOG(LogActorComponent, Log, TEXT("DestroyRenderState_Concurrent: %s"), *GetPathName());
 #endif
@@ -1399,7 +1445,7 @@ void UActorComponent::OnDestroyPhysicsState()
 }
 
 
-void UActorComponent::CreatePhysicsState()
+void UActorComponent::CreatePhysicsState(bool bAllowDeferral)
 {
 #if WITH_CHAOS
 	LLM_SCOPE(ELLMTag::Chaos);
@@ -1411,14 +1457,27 @@ void UActorComponent::CreatePhysicsState()
 
 	if (!bPhysicsStateCreated && WorldPrivate->GetPhysicsScene() && ShouldCreatePhysicsState())
 	{
-		// Call virtual
-		OnCreatePhysicsState();
+		UPrimitiveComponent* Primitive = Cast<UPrimitiveComponent>(this);
+		if (GEnableDeferredPhysicsCreation && bAllowDeferral && Primitive && Primitive->GetBodySetup() && !Primitive->GetGenerateOverlapEvents())
+		{
+#if WITH_CHAOS
+			WorldPrivate->GetPhysicsScene()->DeferPhysicsStateCreation(Primitive);
+#else
+			check(false);
+#endif
+		}
+		else
+		{
+			// Call virtual
+			OnCreatePhysicsState();
 
-		checkf(bPhysicsStateCreated, TEXT("Failed to route OnCreatePhysicsState (%s)"), *GetFullName());
+			checkf(bPhysicsStateCreated, TEXT("Failed to route OnCreatePhysicsState (%s)"), *GetFullName());
 
-		// Broadcast delegate
-		GlobalCreatePhysicsDelegate.Broadcast(this);
+			// Broadcast delegate
+			GlobalCreatePhysicsDelegate.Broadcast(this);
+		}
 	}
+
 }
 
 void UActorComponent::DestroyPhysicsState()
@@ -1437,6 +1496,19 @@ void UActorComponent::DestroyPhysicsState()
 
 		checkf(!bPhysicsStateCreated, TEXT("Failed to route OnDestroyPhysicsState (%s)"), *GetFullName());
 		checkf(!HasValidPhysicsState(), TEXT("Failed to destroy physics state (%s)"), *GetFullName());
+	}
+	else if(GEnableDeferredPhysicsCreation)
+	{
+#if WITH_CHAOS
+		UPrimitiveComponent* PrimitiveComponent = Cast<UPrimitiveComponent>(this);
+		if (PrimitiveComponent && PrimitiveComponent->DeferredCreatePhysicsStateScene != nullptr)
+		{
+			// We had to cache this scene because World ptr is null as we have unregistered already.
+			PrimitiveComponent->DeferredCreatePhysicsStateScene->RemoveDeferredPhysicsStateCreation(PrimitiveComponent);
+		}
+#else
+		check(false);
+#endif
 	}
 }
 
@@ -1457,7 +1529,7 @@ void UActorComponent::ExecuteRegisterEvents(FRegisterComponentContext* Context)
 		checkf(bRenderStateCreated, TEXT("Failed to route CreateRenderState_Concurrent (%s)"), *GetFullName());
 	}
 
-	CreatePhysicsState();
+	CreatePhysicsState(/*bAllowDeferral=*/true);
 }
 
 
@@ -1568,6 +1640,7 @@ void UActorComponent::DoDeferredRenderUpdates_Concurrent()
 	checkf(!IsPendingKill(), TEXT("%s"), *GetFullName());
 
 	FScopeCycleCounterUObject ContextScope(this);
+	FScopeCycleCounterUObject AdditionalScope(STATS ? AdditionalStatObject() : nullptr);
 
 	if(!IsRegistered())
 	{
@@ -1688,6 +1761,11 @@ bool UActorComponent::RequiresGameThreadEndOfFrameUpdates() const
 bool UActorComponent::RequiresGameThreadEndOfFrameRecreate() const
 {
 	return true;
+}
+
+bool UActorComponent::RequiresPreEndOfFrameSync() const
+{
+	return false;
 }
 
 void UActorComponent::Activate(bool bReset)
@@ -1970,7 +2048,7 @@ void UActorComponent::DetermineUCSModifiedProperties()
 				{
 					uint8* DataPtr      = Property->ContainerPtrToValuePtr           <uint8>((uint8*)this, Idx);
 					uint8* DefaultValue = Property->ContainerPtrToValuePtrForDefaults<uint8>(ComponentClass, (uint8*)ComponentArchetype, Idx);
-					if (!Property->Identical( DataPtr, DefaultValue))
+					if (!Property->Identical( DataPtr, DefaultValue, PPF_DeepCompareInstances))
 					{
 						UCSModifiedProperties.Add(FSimpleMemberReference());
 						FMemberReference::FillSimpleMemberReference<FProperty>(Property, UCSModifiedProperties.Last());

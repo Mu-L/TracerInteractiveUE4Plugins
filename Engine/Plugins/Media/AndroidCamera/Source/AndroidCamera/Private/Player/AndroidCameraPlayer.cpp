@@ -170,10 +170,10 @@ FString FAndroidCameraPlayer::GetInfo() const
 }
 
 
-FName FAndroidCameraPlayer::GetPlayerName() const
+FGuid FAndroidCameraPlayer::GetPlayerPluginGUID() const
 {
-	static FName PlayerName(TEXT("AndroidCamera"));
-	return PlayerName;
+	static FGuid PlayerPluginGUID(0x94f59418, 0xb93d4f40, 0xa441b4fd, 0x2ac7c313);
+	return PlayerPluginGUID;
 }
 
 
@@ -302,7 +302,7 @@ static void DoUpdateExternalCameraSampleExecute(TWeakPtr<FJavaAndroidCameraPlaye
 	if (VideoTexture == nullptr)
 	{
 		FRHIResourceCreateInfo CreateInfo;
-		VideoTexture = GDynamicRHI->RHICreateTextureExternal2D(1, 1, PF_R8G8B8A8, 1, 1, 0, CreateInfo);
+		VideoTexture = GDynamicRHI->RHICreateTextureExternal2D(1, 1, PF_R8G8B8A8, 1, 1, TexCreate_None, ERHIAccess::Unknown, CreateInfo);
 		PinnedJavaCameraPlayer->SetVideoTexture(VideoTexture);
 
 		if (VideoTexture == nullptr)

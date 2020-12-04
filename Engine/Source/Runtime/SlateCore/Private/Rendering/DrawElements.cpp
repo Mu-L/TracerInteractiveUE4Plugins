@@ -186,7 +186,7 @@ void FSlateDrawElement::ApplyPositionOffset(const FVector2D& InOffset)
 	const FSlateLayoutTransform InverseLayoutTransform(Inverse(FSlateLayoutTransform(Scale, Position)));
 }
 
-void FSlateDrawElement::MakeDebugQuad( FSlateWindowElementList& ElementList, uint32 InLayer, const FPaintGeometry& PaintGeometry)
+void FSlateDrawElement::MakeDebugQuad( FSlateWindowElementList& ElementList, uint32 InLayer, const FPaintGeometry& PaintGeometry, const FLinearColor& InTint )
 {
 	PaintGeometry.CommitTransformsIfUsingLegacyConstructor();
 
@@ -196,7 +196,9 @@ void FSlateDrawElement::MakeDebugQuad( FSlateWindowElementList& ElementList, uin
 	}
 
 	FSlateDrawElement& Element = ElementList.AddUninitialized();
-	ElementList.CreatePayload<FSlateBoxPayload>(Element);
+	FSlateBoxPayload& BoxPayload = ElementList.CreatePayload<FSlateBoxPayload>(Element);
+
+	BoxPayload.SetTint(InTint);
 
 	Element.Init(ElementList, EElementType::ET_DebugQuad, InLayer, PaintGeometry, ESlateDrawEffect::None);
 }
@@ -213,14 +215,12 @@ FSlateDrawElement& FSlateDrawElement::MakeBoxInternal(
 	EElementType ElementType = (InBrush->DrawAs == ESlateBrushDrawType::Border) ? EElementType::ET_Border : EElementType::ET_Box;
 
 	FSlateDrawElement& Element = ElementList.AddUninitialized();
-
-	const FMargin& Margin = InBrush->GetMargin();
 	FSlateBoxPayload& BoxPayload = ElementList.CreatePayload<FSlateBoxPayload>(Element);
-
-	Element.Init(ElementList, ElementType, InLayer, PaintGeometry, InDrawEffects);
 
 	BoxPayload.SetTint(InTint);
 	BoxPayload.SetBrush(InBrush);
+
+	Element.Init(ElementList, ElementType, InLayer, PaintGeometry, InDrawEffects);
 
 	return Element;
 }
@@ -334,6 +334,43 @@ void FSlateDrawElement::MakeText( FSlateWindowElementList& ElementList, uint32 I
 	Element.Init(ElementList, EElementType::ET_Text, InLayer, PaintGeometry, InDrawEffects);
 }
 
+namespace SlateDrawElement
+{
+#if SLATE_CHECK_UOBJECT_RENDER_RESOURCES
+	const FName MaterialInterfaceClassName = "MaterialInterface";
+	void CheckInvalidUMaterial(const UObject* InMaterialResource, const TCHAR* MaterialMessage)
+	{
+		if (InMaterialResource && GSlateCheckUObjectRenderResources)
+		{
+			bool bIsValidLowLevel = InMaterialResource->IsValidLowLevelFast(false);
+			if (!bIsValidLowLevel || InMaterialResource->IsPendingKill() || InMaterialResource->GetClass()->GetFName() == MaterialInterfaceClassName)
+			{
+				UE_LOG(LogSlate, Error, TEXT("Material '%s' is not valid. PendingKill:'%d'. ValidLowLevelFast:'%d'. InvalidClass:'%d'")
+					, MaterialMessage
+					, (bIsValidLowLevel ? InMaterialResource->IsPendingKill() : false)
+					, bIsValidLowLevel
+					, (bIsValidLowLevel ? InMaterialResource->GetClass()->GetFName() == MaterialInterfaceClassName : false));
+
+				if (bIsValidLowLevel)
+				{
+					UE_LOG(LogSlate, Error, TEXT("Material name: '%s'"), *InMaterialResource->GetFullName());
+				}
+
+				const TCHAR* Message = TEXT("We detected an invalid resource in FSlateDrawElement. Check the log for more detail.");
+				if (GSlateCheckUObjectRenderResourcesShouldLogFatal)
+				{
+					UE_LOG(LogSlate, Fatal, TEXT("%s"), Message);
+				}
+				else
+				{
+					ensureAlwaysMsgf(false, TEXT("%s"), Message);
+				}
+			}
+		}
+	}
+#endif
+}
+
 void FSlateDrawElement::MakeShapedText(FSlateWindowElementList& ElementList, uint32 InLayer, const FPaintGeometry& PaintGeometry, const FShapedGlyphSequenceRef& InShapedGlyphSequence, ESlateDrawEffect InDrawEffects, const FLinearColor& BaseTint, const FLinearColor& OutlineTint)
 {
 	SCOPE_CYCLE_COUNTER(STAT_SlateDrawElementMakeTime)
@@ -355,6 +392,11 @@ void FSlateDrawElement::MakeShapedText(FSlateWindowElementList& ElementList, uin
 	{
 		return;
 	}
+
+#if SLATE_CHECK_UOBJECT_RENDER_RESOURCES
+	SlateDrawElement::CheckInvalidUMaterial(InShapedGlyphSequence->GetFontMaterial(), TEXT("Font Material"));
+	SlateDrawElement::CheckInvalidUMaterial(InShapedGlyphSequence->GetFontOutlineSettings().OutlineMaterial, TEXT("Outline Material"));
+#endif
 
 	FSlateDrawElement& Element = ElementList.AddUninitialized();
 
@@ -462,7 +504,7 @@ void FSlateDrawElement::MakeLines(FSlateWindowElementList& ElementList, uint32 I
 {
 	PaintGeometry.CommitTransformsIfUsingLegacyConstructor();
 
-	if (ShouldCull(ElementList))
+	if (ShouldCull(ElementList) || Points.Num() < 2)
 	{
 		return;
 	}
@@ -490,7 +532,7 @@ void FSlateDrawElement::MakeLines( FSlateWindowElementList& ElementList, uint32 
 {
 	PaintGeometry.CommitTransformsIfUsingLegacyConstructor();
 
-	if (ShouldCull(ElementList))
+	if (ShouldCull(ElementList) || Points.Num() < 2)
 	{
 		return;
 	}
@@ -990,7 +1032,7 @@ FSlateRenderBatch& FSlateCachedElementData::AddCachedRenderBatch(FSlateRenderBat
 {
 	// Check perf against add.  AddAtLowest makes it generally re-add elements at the same index it just removed which is nicer on the cache
 	int32 LowestFreedIndex = 0;
-	OutIndex = CachedBatches.AddAtLowestFreeIndex(NewBatch, LowestFreedIndex);
+	OutIndex = CachedBatches.EmplaceAtLowestFreeIndex(LowestFreedIndex, NewBatch);
 	return CachedBatches[OutIndex];
 }
 

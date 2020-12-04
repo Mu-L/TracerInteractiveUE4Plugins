@@ -40,26 +40,12 @@ UInteractiveTool* UConvertToPolygonsToolBuilder::BuildTool(const FToolBuilderSta
 	return NewTool;
 }
 
-
-
-void UConvertToPolygonsToolProperties::SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving)
-{
-	UConvertToPolygonsToolProperties* PropertyCache = GetPropertyCache<UConvertToPolygonsToolProperties>();
-	SaveRestoreProperty(PropertyCache->ConversionMode, this->ConversionMode, bSaving);
-	SaveRestoreProperty(PropertyCache->AngleTolerance, this->AngleTolerance, bSaving);
-	SaveRestoreProperty(PropertyCache->bCalculateNormals, this->bCalculateNormals, bSaving);
-	SaveRestoreProperty(PropertyCache->bShowGroupColors, this->bShowGroupColors, bSaving);
-}
-
-
-
 /*
  * Tool
  */
-
 UConvertToPolygonsTool::UConvertToPolygonsTool()
 {
-	SetToolDisplayName(LOCTEXT("ConvertToPolygonsToolName", "Find PolyGroups"));
+	SetToolDisplayName(LOCTEXT("ConvertToPolygonsToolName", "Find PolyGroups Tool"));
 }
 
 void UConvertToPolygonsTool::Setup()
@@ -92,17 +78,19 @@ void UConvertToPolygonsTool::Setup()
 	ComponentTarget->GetMaterialSet(MaterialSet);
 	PreviewMesh->SetMaterials(MaterialSet.Materials);
 
-	ConvertModeWatcher.Initialize(
-		[this]() { return Settings->ConversionMode; },
-		[this](EConvertToPolygonsMode NewMode) { bPolygonsValid = false; }, Settings->ConversionMode);
-
-	ShowGroupsWatcher.Initialize(
-		[this]() { return Settings->bShowGroupColors; },
-		[this](bool bNewValue) { UpdateVisualization(); }, Settings->bShowGroupColors );
+	Settings->WatchProperty(Settings->ConversionMode,
+							[this](EConvertToPolygonsMode NewMode)
+							{ bPolygonsValid = false; });
+	Settings->WatchProperty(Settings->bShowGroupColors,
+							[this](bool bNewValue) { UpdateVisualization(); });
 	if (Settings->bShowGroupColors)
 	{
 		UpdateVisualization();
 	}
+
+	GetToolManager()->DisplayMessage(
+		LOCTEXT("OnStartTool", "Cluster triangles of the Mesh into PolyGroups using various strategies"),
+		EToolMessageLevel::UserNotification);
 
 	UpdatePolygons();
 }
@@ -137,11 +125,8 @@ void UConvertToPolygonsTool::OnPropertyModified(UObject* PropertySet, FProperty*
 }
 
 
-void UConvertToPolygonsTool::Tick(float DeltaTime)
+void UConvertToPolygonsTool::OnTick(float DeltaTime)
 {
-	ConvertModeWatcher.CheckAndUpdate();
-	ShowGroupsWatcher.CheckAndUpdate();
-
 	if (bPolygonsValid == false)
 	{
 		UpdatePolygons();
@@ -155,6 +140,7 @@ void UConvertToPolygonsTool::Render(IToolsContextRenderAPI* RenderAPI)
 	if (true)
 	{
 		FPrimitiveDrawInterface* PDI = RenderAPI->GetPrimitiveDrawInterface();
+		float PDIScale = RenderAPI->GetCameraState().GetPDIScalingFactor();
 		FTransform Transform = ComponentTarget->GetWorldTransform(); //Actor->GetTransform();
 
 		TArray<int>& Edges = Polygons.PolygonEdges;
@@ -163,20 +149,9 @@ void UConvertToPolygonsTool::Render(IToolsContextRenderAPI* RenderAPI)
 			FVector3d A, B;
 			Polygons.Mesh->GetEdgeV(eid, A, B);
 			PDI->DrawLine(Transform.TransformPosition((FVector)A), Transform.TransformPosition((FVector)B),
-				LineColor, 0, 2.0, 1.0f, true);
+				LineColor, 0, 2.0*PDIScale, 1.0f, true);
 		}
 	}
-}
-
-
-bool UConvertToPolygonsTool::HasAccept() const
-{
-	return true;
-}
-
-bool UConvertToPolygonsTool::CanAccept() const
-{
-	return true;
 }
 
 

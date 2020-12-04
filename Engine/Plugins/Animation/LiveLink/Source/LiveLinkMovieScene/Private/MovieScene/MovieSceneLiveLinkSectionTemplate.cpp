@@ -13,6 +13,7 @@
 #include "MovieScene/MovieSceneLiveLinkSubSection.h"
 #include "MovieScene/MovieSceneLiveLinkTrack.h"
 #include "Roles/LiveLinkAnimationTypes.h"
+#include "Misc/App.h"
 
 static TAutoConsoleVariable<int32> CVarSequencerAlwaysSendInterpolatedLiveLink(
 	TEXT("Sequencer.AlwaysSendInterpolatedLiveLink"),
@@ -76,7 +77,7 @@ FMovieSceneLiveLinkSectionTemplate::FMovieSceneLiveLinkSectionTemplate()
 }
 
 FMovieSceneLiveLinkSectionTemplate::FMovieSceneLiveLinkSectionTemplate(const UMovieSceneLiveLinkSection& Section, const UMovieScenePropertyTrack& Track)
-	: FMovieScenePropertySectionTemplate(Track.GetPropertyName(), Track.GetPropertyPath())
+	: FMovieScenePropertySectionTemplate(Track.GetPropertyName(), Track.GetPropertyPath().ToString())
 	, SubjectPreset(Section.SubjectPreset)
 	, ChannelMask(Section.ChannelMask)
 	, StaticData(Section.StaticData)

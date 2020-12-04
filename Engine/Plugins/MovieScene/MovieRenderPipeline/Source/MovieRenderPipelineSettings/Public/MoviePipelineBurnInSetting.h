@@ -14,18 +14,19 @@ class UMoviePipelineBurnInWidget;
 namespace MoviePipeline { struct FMoviePipelineRenderPassInitSettings; }
 
 UCLASS(Blueprintable)
-class UMoviePipelineBurnInSetting : public UMoviePipelineRenderPass
+class MOVIERENDERPIPELINESETTINGS_API UMoviePipelineBurnInSetting : public UMoviePipelineRenderPass
 {
 	GENERATED_BODY()
 
 	UMoviePipelineBurnInSetting()
 		: BurnInClass(TEXT("/MovieRenderPipeline/Blueprints/DefaultBurnIn.DefaultBurnIn_C"))
+		, bCompositeOntoFinalImage(true)
 	{
 	}
 
 protected:
 	// UMoviePipelineRenderPass Interface
-	virtual void SetupImpl(TArray<TSharedPtr<MoviePipeline::FMoviePipelineEnginePass>>& InEnginePasses, const MoviePipeline::FMoviePipelineRenderPassInitSettings& InPassInitSettings) override;
+	virtual void SetupImpl(const MoviePipeline::FMoviePipelineRenderPassInitSettings& InPassInitSettings) override;
 	virtual void TeardownImpl() override;
 	virtual void GatherOutputPassesImpl(TArray<FMoviePipelinePassIdentifier>& ExpectedRenderPasses) override;
 	virtual void RenderSample_GameThreadImpl(const FMoviePipelineRenderPassMetrics& InSampleState) override;
@@ -40,8 +41,10 @@ public:
 	virtual bool IsValidOnShots() const override { return false; }
 	virtual bool IsValidOnMaster() const override { return true; }
 public:
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(MetaClass="MoviePipelineBurnInWidget"), Category = "Movie Pipeline")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(MetaClass="MoviePipelineBurnInWidget"), Category = "Widget Settings")
 	FSoftClassPath BurnInClass;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (MetaClass = "MoviePipelineBurnInWidget"), Category = "Widget Settings")
+	bool bCompositeOntoFinalImage;
 
 private:
 	FIntPoint OutputResolution;

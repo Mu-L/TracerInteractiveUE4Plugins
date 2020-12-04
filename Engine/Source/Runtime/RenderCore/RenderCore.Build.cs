@@ -11,7 +11,11 @@ public class RenderCore : ModuleRules
         if (Target.bBuildEditor == true)
         {
             PrivateDependencyModuleNames.Add("TargetPlatform");
-        }
+			// PakFileUtitilities due to file open order usage by the shader library
+			PrivateDependencyModuleNames.Add("PakFileUtilities");
+			// JSON is used for the asset info in the shader library
+			PrivateDependencyModuleNames.Add("Json");
+		}
 		else
         {
 

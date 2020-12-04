@@ -28,8 +28,22 @@ FIOSApplication::FIOSApplication()
 	: GenericApplication(MakeShareable(new FIOSCursor()))
 	, InputInterface( FIOSInputInterface::Create( MessageHandler ) )
 	, bHasLoadedInputPlugins(false)
+#if WITH_ACCESSIBILITY
+	, AccessibilityAnnouncementDelayTimer(Nil)
+#endif
 {
 	[IOSAppDelegate GetDelegate].IOSApplication = this;
+}
+
+FIOSApplication::~FIOSApplication()
+{
+#if WITH_ACCESSIBILITY
+	if (AccessibilityAnnouncementDelayTimer)
+	{
+		[AccessibilityAnnouncementDelayTimer invalidate ];
+		[AccessibilityAnnouncementDelayTimer release ];
+	}
+#endif
 }
 
 void FIOSApplication::InitializeWindow( const TSharedRef< FGenericWindow >& InWindow, const TSharedRef< FGenericWindowDefinition >& InDefinition, const TSharedPtr< FGenericWindow >& InParent, const bool bShowImmediately )
@@ -73,7 +87,7 @@ void FIOSApplication::AddExternalInputDevice(TSharedPtr<IInputDevice> InputDevic
 void FIOSApplication::PollGameDeviceState( const float TimeDelta )
 {
 	// initialize any externally-implemented input devices (we delay load initialize the array so any plugins have had time to load)
-	if (!bHasLoadedInputPlugins)
+	if (!bHasLoadedInputPlugins && GIsRunning)
 	{
 		TArray<IInputDeviceModule*> PluginImplementations = IModularFeatures::Get().GetModularFeatureImplementations<IInputDeviceModule>(IInputDeviceModule::GetModularFeatureName());
 		for (auto InputPluginIt = PluginImplementations.CreateIterator(); InputPluginIt; ++InputPluginIt)
@@ -117,7 +131,7 @@ static TAutoConsoleVariable<float> CVarSafeZone_Landscape_Right(TEXT("SafeZone.L
 static TAutoConsoleVariable<float> CVarSafeZone_Landscape_Bottom(TEXT("SafeZone.Landscape.Bottom"), -1.0f, TEXT("Safe Zone - Landscape - Bottom"));
 
 #if !PLATFORM_TVOS
-UIInterfaceOrientation CachedOrientation = UIInterfaceOrientationPortrait;
+UIInterfaceOrientation FIOSApplication::CachedOrientation = UIInterfaceOrientationPortrait;
 UIEdgeInsets CachedInsets;
 #endif
 
@@ -146,14 +160,14 @@ void FDisplayMetrics::RebuildDisplayMetrics(FDisplayMetrics& OutDisplayMetrics)
 		TAutoConsoleVariable<float>* CVar_Bottom = nullptr;
 
 		//making an assumption that the "normal" landscape mode is Landscape right
-		if (CachedOrientation == UIInterfaceOrientationLandscapeLeft)
+		if (FIOSApplication::CachedOrientation == UIInterfaceOrientationLandscapeLeft)
 		{
 			CVar_Left = &CVarSafeZone_Landscape_Left;
 			CVar_Right = &CVarSafeZone_Landscape_Right;
             CVar_Top = &CVarSafeZone_Landscape_Top;
             CVar_Bottom = &CVarSafeZone_Landscape_Bottom;
 		}
-		else if (CachedOrientation == UIInterfaceOrientationLandscapeRight)
+		else if (FIOSApplication::CachedOrientation == UIInterfaceOrientationLandscapeRight)
 		{
 			CVar_Left = &CVarSafeZone_Landscape_Right;
 			CVar_Right = &CVarSafeZone_Landscape_Left;
@@ -255,6 +269,14 @@ TSharedRef<FIOSWindow> FIOSApplication::FindWindowByAppDelegateView()
 }
 
 #if WITH_ACCESSIBILITY
+
+float GIOSAccessibleAnnouncementDelay = 0.1f;
+FAutoConsoleVariableRef IOSAccessibleAnnouncementDealyRef(
+	TEXT("ios.AccessibleAnnouncementDelay"),
+	GIOSAccessibleAnnouncementDelay,
+	TEXT("We need to introduce a small delay to avoid iOS system accessibility announcements from stomping on our requested user announcement. Delays <= 0.05f are too short and result in the announcement being dropped. Dellays ~0.075f result in unstable delivery")
+);
+
 void FIOSApplication::OnAccessibleEventRaised(TSharedRef<IAccessibleWidget> Widget, EAccessibleEvent Event, FVariant OldValue, FVariant NewValue)
 {
 	// This should only be triggered by the accessible message handler which initiates from the Slate thread.
@@ -276,8 +298,27 @@ void FIOSApplication::OnAccessibleEventRaised(TSharedRef<IAccessibleWidget> Widg
 	}
 	case EAccessibleEvent::WidgetRemoved:
 		dispatch_async(dispatch_get_main_queue(), ^{
+			// There is an ensure() in FSlateAccessibleMessageHandler::OnWidgetRemoved that makes sure the Slate Accessibility Tree
+			// is up to date and the removed widget doesn't have an invalid parent.
+			// Also, since we update the children of each FIOSAccessibilityLeaf in [FIOSAccessibilityCache  UpdateAllProperties], we don't need to
+			// handle reparenting/orphaned accessibility children here
+			FIOSAccessibilityLeaf* Element = [[FIOSAccessibilityCache AccessibilityElementCache] GetAccessibilityElement:Id];
+			[Element SetParent: IAccessibleWidget::InvalidAccessibleWidgetId];
 			[[FIOSAccessibilityCache AccessibilityElementCache] RemoveAccessibilityElement:Id];
 		});
+		break;
+	case EAccessibleEvent::Notification:
+		{
+			NSString* Announcement = [NSString stringWithFString: NewValue.GetValue<FString>()];
+			dispatch_async(dispatch_get_main_queue(), ^{
+				// If we don't sleep for a small period of time, system accessibility
+				// announcements can stomp on this announcement and so it's never made
+				AccessibilityAnnouncementDelayTimer = [NSTimer scheduledTimerWithTimeInterval:GIOSAccessibleAnnouncementDelay repeats:NO block:^(NSTimer* _Nonnull timer){
+					UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, Announcement);
+					AccessibilityAnnouncementDelayTimer = Nil;
+				}];
+			});
+		}
 		break;
 	}
 }

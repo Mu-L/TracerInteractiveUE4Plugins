@@ -39,6 +39,12 @@ public:
 		return InnerBackend->IsWritable();
 	}
 
+	/** Returns a class of speed for this interface **/
+	virtual ESpeedClass GetSpeedClass() override
+	{
+		return InnerBackend->GetSpeedClass();
+	}
+
 	/**
 	 * Synchronous test for the existence of a cache item
 	 *
@@ -57,6 +63,39 @@ public:
 		}
 		return Result;
 	}
+
+	/**
+	 * Attempts to make sure the cached data will be available as optimally as possible. This is left up to the implementation to do
+	 * @param	CacheKey	Alphanumeric+underscore key of this cache item
+	 * @return				true if any steps were performed to optimize future retrieval
+	 */
+	virtual bool TryToPrefetch(const TCHAR* CacheKey) override
+	{
+		COOK_STAT(auto Timer = UsageStats.TimePrefetch());
+		FString NewKey;
+		ShortenKey(CacheKey, NewKey);
+		bool Result = InnerBackend->TryToPrefetch(*NewKey);
+		if (Result)
+		{
+			COOK_STAT(Timer.AddHit(0));
+		}
+
+		return Result;
+	}
+
+	/*
+		Determines if we have any interest in caching this data
+	*/
+	virtual bool WouldCache(const TCHAR* CacheKey, TArrayView<const uint8> InData) override
+	{
+		return InnerBackend->WouldCache(CacheKey, InData);
+	}
+
+	virtual bool ApplyDebugOptions(FBackendDebugOptions& InOptions) override 
+	{ 
+		return InnerBackend->ApplyDebugOptions(InOptions);
+	}
+
 	/**
 	 * Synchronous retrieve of a cache item
 	 *
@@ -75,20 +114,6 @@ public:
 		{
 			// no shortening needed
 			bOk = InnerBackend->GetCachedData(CacheKey, OutData);
-			// look for old bug
-			if (FString(CacheKey).StartsWith(TEXT("TEXTURE2D_0002")))
-			{
-				int32 KeyLen = FCString::Strlen(CacheKey) + 1;
-				if (OutData.Num() > KeyLen && OutData.Last() == 0)
-				{
-					int32 Compare = FCStringAnsi::Strcmp(TCHAR_TO_ANSI(CacheKey), (char*)&OutData[OutData.Num() - KeyLen]);
-					if (Compare == 0)
-					{
-						UE_LOG(LogDerivedDataCache, Warning, TEXT("FDerivedDataLimitKeyLengthWrapper: Fixed old bug %s."), CacheKey);
-						OutData.RemoveAt(OutData.Num() - KeyLen, KeyLen);
-					}
-				}
-			}
 		}
 		else
 		{
@@ -139,7 +164,7 @@ public:
 	 * @param	InData		Buffer containing the data to cache, can be destroyed after the call returns, immediately
 	 * @param	bPutEvenIfExists	If true, then do not attempt skip the put even if CachedDataProbablyExists returns true
 	 */
-	virtual void PutCachedData(const TCHAR* CacheKey, TArray<uint8>& InData, bool bPutEvenIfExists) override
+	virtual void PutCachedData(const TCHAR* CacheKey, TArrayView<const uint8> InData, bool bPutEvenIfExists) override
 	{
 		COOK_STAT(auto Timer = UsageStats.TimePut());
 		if (!InnerBackend->IsWritable())
@@ -153,7 +178,7 @@ public:
 			InnerBackend->PutCachedData(CacheKey, InData, bPutEvenIfExists);
 			return;
 		}
-		TArray<uint8> Data(InData);
+		TArray<uint8> Data(InData.GetData(), InData.Num());
 		check(Data.Num());
 		int32 KeyLen = FCString::Strlen(CacheKey) + 1;
 		Data.AddUninitialized(KeyLen);

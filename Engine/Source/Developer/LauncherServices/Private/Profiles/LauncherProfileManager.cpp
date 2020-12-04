@@ -332,7 +332,7 @@ void FLauncherProfileManager::RemoveSimpleProfile(const ILauncherSimpleProfileRe
 	if (SimpleProfiles.Remove(SimpleProfile) > 0)
 	{
 		// delete the persisted simple profile on disk
-		FString SimpleProfileFileName = FLauncherProfile::GetProfileFolder() / SimpleProfile->GetDeviceName() + TEXT(".uslp");
+		FString SimpleProfileFileName = FLauncherProfile::GetProfileFolder(false) / SimpleProfile->GetDeviceName() + TEXT(".uslp");
 		IFileManager::Get().Delete(*SimpleProfileFileName);
 	}
 }
@@ -515,9 +515,11 @@ void FLauncherProfileManager::LoadProfiles( )
 		}
 	}
 
-	//load and re-save legacy profiles
+	// 0 = normal, 1 = NotForLicensees
+	for (int32 Pass = 0; Pass < 2; Pass++)
 	{
-		IFileManager::Get().FindFilesRecursive(ProfileFileNames, *FLauncherProfile::GetProfileFolder(), TEXT("*.ulp"), true, false);
+		//load and re-save legacy profiles
+		IFileManager::Get().FindFilesRecursive(ProfileFileNames, *FLauncherProfile::GetProfileFolder(Pass == 1), TEXT("*.ulp"), true, false);
 		for (TArray<FString>::TConstIterator It(ProfileFileNames); It; ++It)
 		{
 			FString ProfileFilePath = *It;
@@ -531,7 +533,7 @@ void FLauncherProfileManager::LoadProfiles( )
 				//re-save profile to the new format
 				if (LoadedProfile.IsValid())
 				{
-					if (ProfileFilePath.Contains("NotForLicensees"))
+					if (Pass == 1)
 					{
 						LoadedProfile->SetNotForLicensees();
 					}
@@ -544,25 +546,29 @@ void FLauncherProfileManager::LoadProfiles( )
 		}
 	}
 
-	ProfileFileNames.Reset();
-	IFileManager::Get().FindFilesRecursive(ProfileFileNames, *FLauncherProfile::GetProfileFolder(), TEXT("*.ulp2"), true, false);
-	
-	for (TArray<FString>::TConstIterator It(ProfileFileNames); It; ++It)
+	// 0 = normal, 1 = NotForLicensees
+	for (int32 Pass = 0; Pass < 2; Pass++)
 	{
-		FString ProfileFilePath = *It;
-		ILauncherProfilePtr LoadedProfile = LoadJSONProfile(*ProfileFilePath);
+		ProfileFileNames.Reset();
+		IFileManager::Get().FindFilesRecursive(ProfileFileNames, *FLauncherProfile::GetProfileFolder(Pass == 1), TEXT("*.ulp2"), true, false);
 
-		if (LoadedProfile.IsValid())
+		for (TArray<FString>::TConstIterator It(ProfileFileNames); It; ++It)
 		{
-			if (ProfileFilePath.Contains("NotForLicensees"))
+			FString ProfileFilePath = *It;
+			ILauncherProfilePtr LoadedProfile = LoadJSONProfile(*ProfileFilePath);
+
+			if (LoadedProfile.IsValid())
 			{
-				LoadedProfile->SetNotForLicensees();
+				if (Pass == 1)
+				{
+					LoadedProfile->SetNotForLicensees();
+				}
+				AddProfile(LoadedProfile.ToSharedRef());
 			}
-			AddProfile(LoadedProfile.ToSharedRef());
-		}
-		else
-		{
-			IFileManager::Get().Delete(*ProfileFilePath);
+			else
+			{
+				IFileManager::Get().Delete(*ProfileFilePath);
+			}
 		}
 	}
 }
@@ -646,7 +652,7 @@ void FLauncherProfileManager::SaveSimpleProfiles()
 {
 	for (TArray<ILauncherSimpleProfilePtr>::TIterator It(SimpleProfiles); It; ++It)
 	{
-		FString SimpleProfileFileName = FLauncherProfile::GetProfileFolder() / (*It)->GetDeviceName() + TEXT(".uslp");
+		FString SimpleProfileFileName = FLauncherProfile::GetProfileFolder(false) / (*It)->GetDeviceName() + TEXT(".uslp");
 		FString Text;
 		TSharedRef< TJsonWriter<> > Writer = TJsonWriterFactory<>::Create(&Text);
 		(*It)->Save(Writer.Get());

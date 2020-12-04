@@ -76,29 +76,6 @@ UUVProjectionToolProperties::UUVProjectionToolProperties()
 	UVOffset = FVector2D::ZeroVector;
 }
 
-void UUVProjectionToolProperties::SaveProperties(UInteractiveTool* SaveFromTool)
-{
-	UUVProjectionToolProperties* PropertyCache = GetPropertyCache<UUVProjectionToolProperties>();
-	PropertyCache->UVProjectionMethod = this->UVProjectionMethod;
-	PropertyCache->ProjectionPrimitiveScale = this->ProjectionPrimitiveScale;
-	PropertyCache->UVScale = this->UVScale;
-	PropertyCache->UVOffset = this->UVOffset;
-	PropertyCache->bWorldSpaceUVScale = this->bWorldSpaceUVScale;
-	PropertyCache->CylinderProjectToTopOrBottomAngleThreshold = this->CylinderProjectToTopOrBottomAngleThreshold;
-}
-
-void UUVProjectionToolProperties::RestoreProperties(UInteractiveTool* RestoreToTool)
-{
-	UUVProjectionToolProperties* PropertyCache = GetPropertyCache<UUVProjectionToolProperties>();
-	this->UVProjectionMethod = PropertyCache->UVProjectionMethod;
-	this->ProjectionPrimitiveScale = PropertyCache->ProjectionPrimitiveScale;
-	this->UVScale = PropertyCache->UVScale;
-	this->UVOffset = PropertyCache->UVOffset;
-	this->bWorldSpaceUVScale = PropertyCache->bWorldSpaceUVScale;
-	this->CylinderProjectToTopOrBottomAngleThreshold = PropertyCache->CylinderProjectToTopOrBottomAngleThreshold;
-}
-
-
 UUVProjectionAdvancedProperties::UUVProjectionAdvancedProperties()
 {
 }
@@ -150,6 +127,10 @@ void UUVProjectionTool::Setup()
 		Preview->InvalidateResult();
 	}
 	UpdateVisualization();
+
+	GetToolManager()->DisplayMessage(
+		LOCTEXT("UVProjectionToolDescription", "Generate UVs for a Mesh by projecting onto simple geometric shapes."),
+		EToolMessageLevel::UserNotification);
 }
 
 
@@ -206,7 +187,7 @@ void UUVProjectionTool::UpdateNumPreviews()
 			TransformProxy->OnTransformChanged.AddUObject(this, &UUVProjectionTool::TransformChanged);
 
 			UTransformGizmo* TransformGizmo = TransformGizmos.Add_GetRef(GizmoManager->Create3AxisTransformGizmo(this));
-			TransformGizmo->SetActiveTarget(TransformProxy);
+			TransformGizmo->SetActiveTarget(TransformProxy, GetToolManager());
 		}
 		check(TransformProxies.Num() == TargetNumPreview);
 		check(TransformGizmos.Num() == TargetNumPreview);
@@ -295,7 +276,7 @@ void UUVProjectionTool::Render(IToolsContextRenderAPI* RenderAPI)
 	ProjectionShapeVisualizer.EndFrame();
 }
 
-void UUVProjectionTool::Tick(float DeltaTime)
+void UUVProjectionTool::OnTick(float DeltaTime)
 {
 	for (UMeshOpPreviewWithBackgroundCompute* Preview : Previews)
 	{
@@ -348,11 +329,6 @@ void UUVProjectionTool::TransformChanged(UTransformProxy* Proxy, FTransform Tran
 }
 
 
-bool UUVProjectionTool::HasAccept() const
-{
-	return true;
-}
-
 bool UUVProjectionTool::CanAccept() const
 {
 	for (UMeshOpPreviewWithBackgroundCompute* Preview : Previews)
@@ -362,7 +338,7 @@ bool UUVProjectionTool::CanAccept() const
 			return false;
 		}
 	}
-	return true;
+	return Super::CanAccept();
 }
 
 

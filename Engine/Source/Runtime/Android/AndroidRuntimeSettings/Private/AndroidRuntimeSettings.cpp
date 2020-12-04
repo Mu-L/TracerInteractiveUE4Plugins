@@ -34,6 +34,7 @@ UAndroidRuntimeSettings::UAndroidRuntimeSettings(const FObjectInitializer& Objec
 	, TextureFormatPriority_ETC2(0.2f)
 	, TextureFormatPriority_DXT(0.6f)
 	, TextureFormatPriority_ASTC(0.9f)
+	, bStreamLandscapeMeshLODs(false)
 {
 	bBuildForES31 = bBuildForES31 || !bSupportsVulkan;
 }
@@ -198,17 +199,6 @@ void UAndroidRuntimeSettings::PostInitProperties()
 		}
 
 		// Save changes to the ini file.
-		UpdateDefaultConfigFile();
-	}
-
-	// Upgrade old Oculus packaging settings as necessary.
-	const TCHAR* AndroidSettings = TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings");
-	bool bPackageForGearVR = false;
-	GConfig->GetBool(AndroidSettings, TEXT("bPackageForGearVR"), bPackageForGearVR, GEngineIni);
-	if (bPackageForGearVR)
-	{
-		// Update default config
-		PackageForOculusMobile.Add(EOculusMobileDevice::GearGo);
 		UpdateDefaultConfigFile();
 	}
 

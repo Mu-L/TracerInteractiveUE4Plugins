@@ -54,7 +54,6 @@ public:
 		: FGlobalShader(Initializer)
 	{
 		PostprocessParameter.Bind(Initializer.ParameterMap);
-		SceneTextureParameters.Bind(Initializer);
 		for ( int i=0; i<7; i++ )
 		{
 			LpvBufferSRVParameters[i].Bind( Initializer.ParameterMap, LpvVolumeTextureSRVNames[i] );
@@ -94,7 +93,6 @@ public:
 		}
 		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, ShaderRHI, Context.View.ViewUniformBuffer);
 		PostprocessParameter.SetPS(RHICmdList, ShaderRHI, Context, TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI());
-		SceneTextureParameters.Set(RHICmdList, ShaderRHI, Context.View.FeatureLevel, ESceneTextureSetupMode::All);
 		SetTextureParameter(RHICmdList, ShaderRHI, PreIntegratedGF, PreIntegratedGFSampler, TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI(), GSystemTextures.PreintegratedGF->GetRenderTargetItem().ShaderResourceTexture);
 	}
 
@@ -102,7 +100,6 @@ public:
 	LAYOUT_ARRAY(FShaderResourceParameter, LpvBufferSRVParameters, 7);
 	LAYOUT_FIELD(FShaderResourceParameter, LpvVolumeTextureSampler);
 	LAYOUT_FIELD(FShaderResourceParameter, AOVolumeTextureSRVParameter);
-	LAYOUT_FIELD(FSceneTextureShaderParameters, SceneTextureParameters);
 	LAYOUT_FIELD(FShaderResourceParameter, PreIntegratedGF);
 	LAYOUT_FIELD(FShaderResourceParameter, PreIntegratedGFSampler);
 };
@@ -146,14 +143,11 @@ public:
 	LAYOUT_FIELD(FShaderResourceParameter, LpvVolumeTextureSampler);
 	LAYOUT_FIELD(FShaderResourceParameter, AOVolumeTextureSRVParameter);
 
-	LAYOUT_FIELD(FSceneTextureShaderParameters, SceneTextureParameters);
-
 	/** Initialization constructor. */
 	FPostProcessLpvDirectionalOcclusionPS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
 		: FGlobalShader(Initializer)
 	{
 		PostprocessParameter.Bind(Initializer.ParameterMap);
-		SceneTextureParameters.Bind(Initializer);
 		LpvVolumeTextureSampler.Bind(Initializer.ParameterMap, TEXT("gLpv3DTextureSampler"));
 		AOVolumeTextureSRVParameter.Bind( Initializer.ParameterMap, TEXT("gAOVolumeTexture") );
 	}
@@ -175,7 +169,6 @@ public:
 
 		FGlobalShader::SetParameters<FViewUniformShaderParameters>(Context.RHICmdList, ShaderRHI, Context.View.ViewUniformBuffer);
 		PostprocessParameter.SetPS(Context.RHICmdList, ShaderRHI, Context, TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI());
-		SceneTextureParameters.Set(Context.RHICmdList, ShaderRHI, Context.View.FeatureLevel, ESceneTextureSetupMode::All);
 	}
 };
 
@@ -240,9 +233,10 @@ void FRCPassPostProcessLpvIndirect::Process(FRenderingCompositePassContext& Cont
 		DoDirectionalOcclusionPass(Context);
 	}
 
-	FRHITexture* RenderTargets[2];
-	RenderTargets[0] = DestColorRenderTarget.TargetableTexture;
-	RenderTargets[1] = DestSpecularRenderTarget.TargetableTexture;
+	FRHITexture* RenderTargets[2] = {
+		DestColorRenderTarget.TargetableTexture,
+		DestSpecularRenderTarget.TargetableTexture
+	};
 
 	// Set the view family's render target/viewport.
 	// If specular not applied: set only color target
@@ -253,6 +247,7 @@ void FRCPassPostProcessLpvIndirect::Process(FRenderingCompositePassContext& Cont
 	}
 
 	FRHIRenderPassInfo RPInfo(NumRenderTargets, RenderTargets, ERenderTargetActions::Load_Store);
+	TransitionRenderPassTargets(Context.RHICmdList, RPInfo);
 
 	Context.RHICmdList.BeginRenderPass(RPInfo, TEXT("LPVIndirect"));
 	{
@@ -317,11 +312,16 @@ void FRCPassPostProcessLpvIndirect::Process(FRenderingCompositePassContext& Cont
 		}
 	}
 	Context.RHICmdList.EndRenderPass();
-	Context.RHICmdList.CopyToResolveTarget(DestColorRenderTarget.TargetableTexture, DestColorRenderTarget.ShaderResourceTexture, FResolveParams());
+
+	FResolveParams ResolveParams;
+	ResolveParams.SourceAccessFinal = ERHIAccess::RTV;
+	ResolveParams.DestAccessFinal = ERHIAccess::SRVMask;
+
+	Context.RHICmdList.CopyToResolveTarget(DestColorRenderTarget.TargetableTexture, DestColorRenderTarget.ShaderResourceTexture, ResolveParams);
 
 	if (bApplySeparateSpecularRT)
 	{
-		Context.RHICmdList.CopyToResolveTarget(DestSpecularRenderTarget.TargetableTexture, DestSpecularRenderTarget.ShaderResourceTexture, FResolveParams());
+		Context.RHICmdList.CopyToResolveTarget(DestSpecularRenderTarget.TargetableTexture, DestSpecularRenderTarget.ShaderResourceTexture, ResolveParams);
 	}
 
 	if ( LPVSettings.LPVDirectionalOcclusionIntensity > 0.0001f )

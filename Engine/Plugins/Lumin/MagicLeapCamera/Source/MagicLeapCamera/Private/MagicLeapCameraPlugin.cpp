@@ -3,6 +3,7 @@
 #include "MagicLeapCameraPlugin.h"
 #include "Async/Async.h"
 #include "Lumin/CAPIShims/LuminAPI.h"
+#include "Stats/Stats.h"
 
 DEFINE_LOG_CATEGORY(LogMagicLeapCamera);
 
@@ -42,6 +43,8 @@ void FMagicLeapCameraPlugin::ShutdownModule()
 
 bool FMagicLeapCameraPlugin::Tick(float DeltaTime)
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_FMagicLeapCameraPlugin_Tick);
+
 	MinVidCaptureTimer -= DeltaTime;
 	FCameraTask CompletedTask;
 	if (Runnable->TryGetCompletedTask(CompletedTask))
@@ -279,4 +282,20 @@ void FMagicLeapCameraPlugin::OnAppPause()
 		CaptureState = ECaptureState::Idle;
 		// The runnable will take care of terminating the video on it's own.
 	}
+}
+
+const TCHAR* FMagicLeapCameraPlugin::CaptureStateToString(ECaptureState InCaptureState)
+{
+	const TCHAR* CaptureStateString = TEXT("Invalid");
+	switch (InCaptureState)
+	{
+		case ECaptureState::Idle: CaptureStateString = TEXT("Idle"); break;
+		case ECaptureState::Connecting: CaptureStateString = TEXT("Connecting"); break;
+		case ECaptureState::Disconnecting: CaptureStateString = TEXT("Disconnecting"); break;
+		case ECaptureState::BeginningCapture: CaptureStateString = TEXT("BeginningCapture"); break;
+		case ECaptureState::Capturing: CaptureStateString = TEXT("Capturing"); break;
+		case ECaptureState::EndingCapture: CaptureStateString = TEXT("EndingCapture"); break;
+	}
+
+	return CaptureStateString;
 }

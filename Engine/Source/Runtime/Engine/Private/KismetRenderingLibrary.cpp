@@ -14,6 +14,8 @@
 #include "SceneUtils.h"
 #include "Logging/MessageLog.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "Engine/TextureRenderTarget2DArray.h"
+#include "Engine/TextureRenderTargetVolume.h"
 #include "ImageUtils.h"
 #include "OneColorShader.h"
 #include "PipelineStateCache.h"
@@ -56,6 +58,8 @@ void UKismetRenderingLibrary::ClearRenderTarget2D(UObject* WorldContextObject, U
 			RHICmdList.BeginRenderPass(RPInfo, TEXT("ClearRT"));
 			DrawClearQuad(RHICmdList, ClearColor);
 			RHICmdList.EndRenderPass();
+
+			RHICmdList.Transition(FRHITransitionInfo(RenderTargetResource->GetRenderTargetTexture(), ERHIAccess::RTV, ERHIAccess::SRVMask));
 		});
 	}
 }
@@ -80,6 +84,40 @@ UTextureRenderTarget2D* UKismetRenderingLibrary::CreateRenderTarget2D(UObject* W
 	return nullptr;
 }
 
+UTextureRenderTarget2DArray* UKismetRenderingLibrary::CreateRenderTarget2DArray(UObject* WorldContextObject, int32 Width, int32 Height, int32 Slices, ETextureRenderTargetFormat Format, FLinearColor ClearColor, bool bAutoGenerateMipMaps)
+{
+	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+
+	if (Width > 0 && Height > 0 && Slices > 0 && World)
+	{
+		UTextureRenderTarget2DArray* NewRenderTarget = NewObject<UTextureRenderTarget2DArray>(WorldContextObject);
+		check(NewRenderTarget);
+		NewRenderTarget->ClearColor = ClearColor;
+		NewRenderTarget->Init(Width, Height, Slices, GetPixelFormatFromRenderTargetFormat(Format));
+		NewRenderTarget->UpdateResourceImmediate(true);
+		return NewRenderTarget;
+	}
+
+	return nullptr;
+}
+
+UTextureRenderTargetVolume* UKismetRenderingLibrary::CreateRenderTargetVolume(UObject* WorldContextObject, int32 Width, int32 Height, int32 Depth, ETextureRenderTargetFormat Format, FLinearColor ClearColor, bool bAutoGenerateMipMaps)
+{
+	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
+
+	if (Width > 0 && Height > 0 && Depth > 0 && World)
+	{
+		UTextureRenderTargetVolume* NewRenderTarget = NewObject<UTextureRenderTargetVolume>(WorldContextObject);
+		check(NewRenderTarget);
+		NewRenderTarget->ClearColor = ClearColor;
+		NewRenderTarget->Init(Width, Height, Depth, GetPixelFormatFromRenderTargetFormat(Format));
+		NewRenderTarget->UpdateResourceImmediate(true);
+		return NewRenderTarget;
+	}
+
+	return nullptr;
+}
+
 // static 
 void UKismetRenderingLibrary::ReleaseRenderTarget2D(UTextureRenderTarget2D* TextureRenderTarget)
 {
@@ -93,6 +131,12 @@ void UKismetRenderingLibrary::ReleaseRenderTarget2D(UTextureRenderTarget2D* Text
 
 void UKismetRenderingLibrary::DrawMaterialToRenderTarget(UObject* WorldContextObject, UTextureRenderTarget2D* TextureRenderTarget, UMaterialInterface* Material)
 {
+	if (!FApp::CanEverRender())
+	{
+		// Returning early to avoid warnings about missing resources that are expected when CanEverRender is false.
+		return;
+	}
+
 	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
 
 	if (!World)
@@ -417,7 +461,7 @@ UTexture2D* UKismetRenderingLibrary::RenderTargetCreateStaticTexture2DEditorOnly
 		UObject* NewObj = nullptr;
 
 		// create a static 2d texture
-		NewObj = RenderTarget->ConstructTexture2D(CreatePackage(NULL, *PackageName), Name, RenderTarget->GetMaskedFlags() | RF_Public | RF_Standalone, CTF_Default | CTF_AllowMips, NULL);
+		NewObj = RenderTarget->ConstructTexture2D(CreatePackage( *PackageName), Name, RenderTarget->GetMaskedFlags() | RF_Public | RF_Standalone, CTF_Default | CTF_AllowMips, NULL);
 		UTexture2D* NewTex = Cast<UTexture2D>(NewObj);
 
 		if (NewTex != nullptr)
@@ -530,11 +574,17 @@ UTexture2D* UKismetRenderingLibrary::ImportBufferAsTexture2D(UObject* WorldConte
 
 void UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(UObject* WorldContextObject, UTextureRenderTarget2D* TextureRenderTarget, UCanvas*& Canvas, FVector2D& Size, FDrawToRenderTargetContext& Context)
 {
-	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
-
 	Canvas = NULL;
 	Size = FVector2D(0, 0);
 	Context = FDrawToRenderTargetContext();
+	
+	if (!FApp::CanEverRender())
+	{
+		// Returning early to avoid warnings about missing resources that are expected when CanEverRender is false.
+		return;
+	}
+
+	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
 
 	if (!World)
 	{
@@ -589,6 +639,12 @@ void UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(UObject* WorldContex
 
 void UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(UObject* WorldContextObject, const FDrawToRenderTargetContext& Context)
 {
+	if (!FApp::CanEverRender())
+	{
+		// Returning early to avoid warnings about missing resources that are expected when CanEverRender is false.
+		return;
+	}
+
 	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
 
 	if (World)

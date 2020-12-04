@@ -2,7 +2,6 @@
 
 #pragma once
 
-#include "CoreMinimal.h"
 #include "Cluster/Controller/DisplayClusterNodeCtrlBase.h"
 
 
@@ -13,15 +12,8 @@ class FDisplayClusterClusterNodeCtrlBase
 	: public FDisplayClusterNodeCtrlBase
 {
 public:
-	FDisplayClusterClusterNodeCtrlBase(const FString& ctrlName, const FString& nodeName);
+	FDisplayClusterClusterNodeCtrlBase(const FString& CtrlName, const FString& NodeName);
 	virtual ~FDisplayClusterClusterNodeCtrlBase() = 0;
-
-public:
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	// IPDisplayClusterNodeController
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	virtual bool IsStandalone() const override final
-	{ return false; }
 
 protected:
 	virtual void OverrideMasterAddr(FString& Addr)

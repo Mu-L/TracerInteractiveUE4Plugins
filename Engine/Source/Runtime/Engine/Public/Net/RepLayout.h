@@ -144,10 +144,10 @@ public:
  * TODO: This class (and arguably IRepChangedPropertyTracker) should be renamed to reflect
  *			what they actually do now.
  */
+PRAGMA_DISABLE_DEPRECATION_WARNINGS	// IsReplay()
 class FRepChangedPropertyTracker : public IRepChangedPropertyTracker
 {
 public:
-
 	FRepChangedPropertyTracker(const bool InbIsReplay, const bool InbIsClientReplayRecording);
 
 	virtual ~FRepChangedPropertyTracker();
@@ -179,7 +179,7 @@ public:
 	virtual void SetExternalData(const uint8* Src, const int32 NumBits) override;
 
 	/** Whether or not this is being used for a replay (may be recording or playback). */
-	virtual bool IsReplay() const override;
+	virtual bool IsReplay() const override { return bIsReplay; }
 
 	virtual void CountBytes(FArchive& Ar) const override;
 	//~ End IRepChangedPropertyTracker Interface
@@ -188,14 +188,17 @@ public:
 	TArray<FRepChangedParent>	Parents;
 
 	/** Whether or not this is being used for a replay (may be recording or playback). */
+	UE_DEPRECATED(4.26, "Will be removed in a future release.")
 	bool bIsReplay;
 
 	/** Whether or not this is being used for a client replay recording. */
+	UE_DEPRECATED(4.26, "Will be removed in a future release.")
 	bool bIsClientReplayRecording;
 
 	TArray<uint8> ExternalData;
 	uint32 ExternalDataNumBits;
 };
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 class FRepLayout;
 class FRepLayoutCmd;
@@ -701,21 +704,25 @@ enum class ERepLayoutCmdType : uint8
 	PropertyNativeBool		= 21,
 	PropertySoftObject		= 22,
 	PropertyWeakObject		= 23,
+	NetSerializeStructWithObjectReferences = 24,
 };
 
 /** Various flags that describe how a Top Level Property should be handled. */
 enum class ERepParentFlags : uint32
 {
-	None				= 0,
-	IsLifetime			= (1 << 0),	//! This property is valid for the lifetime of the object (almost always set).
-	IsConditional		= (1 << 1),	//! This property has a secondary condition to check
-	IsConfig			= (1 << 2),	//! This property is defaulted from a config file
-	IsCustomDelta		= (1 << 3),	//! This property uses custom delta compression. Mutually exclusive with IsNetSerialize.
-	IsNetSerialize		= (1 << 4), //! This property uses a custom net serializer. Mutually exclusive with IsCustomDelta.
-	IsStructProperty	= (1 << 5),	//! This property is a FStructProperty.
-	IsZeroConstructible	= (1 << 6),	//! This property is ZeroConstructible.
-	IsFastArray			= (1 << 7),	//! This property is a FastArraySerializer. This can't be a ERepLayoutCmdType, because
-									//! these Custom Delta structs will have their inner properties tracked.
+	None						= 0,
+	IsLifetime					= (1 << 0),	 //! This property is valid for the lifetime of the object (almost always set).
+	IsConditional				= (1 << 1),	 //! This property has a secondary condition to check
+	IsConfig					= (1 << 2),	 //! This property is defaulted from a config file
+	IsCustomDelta				= (1 << 3),	 //! This property uses custom delta compression. Mutually exclusive with IsNetSerialize.
+	IsNetSerialize				= (1 << 4),  //! This property uses a custom net serializer. Mutually exclusive with IsCustomDelta.
+	IsStructProperty			= (1 << 5),	 //! This property is a FStructProperty.
+	IsZeroConstructible			= (1 << 6),	 //! This property is ZeroConstructible.
+	IsFastArray					= (1 << 7),	 //! This property is a FastArraySerializer. This can't be a ERepLayoutCmdType, because
+											 //! these Custom Delta structs will have their inner properties tracked.
+	HasObjectProperties			= (1 << 8),  //! This property is tracking UObjects (may be through nested properties).
+	HasNetSerializeProperties	= (1 << 9),  //! This property contains Net Serialize properties (may be through nested properties).
+	HasDynamicArrayProperties   = (1 << 10), //! This property contains Dynamic Array properties (may be through nested properties).
 };
 
 ENUM_CLASS_FLAGS(ERepParentFlags)
@@ -1007,13 +1014,21 @@ ENUM_CLASS_FLAGS(ECreateRepLayoutFlags);
 
 enum class ERepLayoutFlags : uint8
 {
-	None				= 0,
-	IsActor 			= 1 << 0,	//! This RepLayout is for AActor or a subclass of AActor.
-	PartialPushSupport	= 1 << 1,	//! This RepLayout has some properties that use Push Model and some that don't.
-	FullPushSupport		= 1 << 2,	//! All properties in this RepLayout use Push Model.
+	None								= 0,
+	IsActor 							= (1 << 0),	//! This RepLayout is for AActor or a subclass of AActor.
+	PartialPushSupport					= (1 << 1),	//! This RepLayout has some properties that use Push Model and some that don't.
+	FullPushSupport						= (1 << 2),	//! All properties in this RepLayout use Push Model.
+	HasObjectOrNetSerializeProperties	= (1 << 3),	//! Will be set for any RepLayout that contains Object or Net Serialize property commands.
 };
 ENUM_CLASS_FLAGS(ERepLayoutFlags);
 
+enum class ERepLayoutResult
+{
+	Success,	// Operation succeeded
+	Empty,		// Operation succeeded, but didn't generate (or consume) any data.
+	Error,		// Operation failed, but may succeed later.
+	FatalError	// Operation failed, and connection should be terminated.
+};
 
 /**
  * This class holds all replicated properties for a given type (either a UClass, UStruct, or UFunction).
@@ -1457,7 +1472,7 @@ private:
 	 * @param Data					The newest Property Data available.
 	 * @param RepFlags				Flags that will be used if the object is replicated.
 	 */
-	bool CompareProperties(
+	ERepLayoutResult CompareProperties(
 		FSendingRepState* RESTRICT RepState,
 		FRepChangelistState* RESTRICT RepChangelistState,
 		const FConstRepObjectDataBuffer Data,
@@ -1599,7 +1614,10 @@ private:
 		TSet<FNetworkGUID>& OutReferencedGuids,
 		int32& OutTrackedGuidMemoryBytes) const;
 
-	bool MoveMappedObjectToUnmapped_r(FGuidReferencesMap* GuidReferencesMap, const FNetworkGUID& GUID) const;
+	bool MoveMappedObjectToUnmapped_r(
+		FGuidReferencesMap* GuidReferencesMap,
+		const FNetworkGUID& GUID,
+		const UObject* const OwningObject) const;
 
 	void UpdateUnmappedObjects_r(
 		FReceivingRepState* RESTRICT RepState, 
@@ -1696,7 +1714,7 @@ private:
 		const int32 CmdEnd,
 		TArray<FHandleToCmdIndex>& HandleToCmdIndex);
 
-	void UpdateChangelistMgr(
+	ERepLayoutResult UpdateChangelistMgr(
 		FSendingRepState* RESTRICT RepState,
 		FReplicationChangelistMgr& InChangelistMgr,
 		const UObject* InObject,
@@ -1733,7 +1751,7 @@ private:
 		FNetDeltaSerializeInfo& Params,
 		FStructProperty* Property) const;
 
-	bool DeltaSerializeFastArrayProperty(struct FFastArrayDeltaSerializeParams& Params, FReplicationChangelistMgr* ChangelistMgr) const;
+	ERepLayoutResult DeltaSerializeFastArrayProperty(struct FFastArrayDeltaSerializeParams& Params, FReplicationChangelistMgr* ChangelistMgr) const;
 
 	void GatherGuidReferencesForFastArray(struct FFastArrayDeltaSerializeParams& Params) const;
 
@@ -1792,4 +1810,6 @@ private:
 	/** Properties that have push model enabled. */
 	TBitArray<> PushModelProperties;
 #endif
+
+	TMap<FRepLayoutCmd*, TArray<FRepLayoutCmd>> NetSerializeLayouts;
 };

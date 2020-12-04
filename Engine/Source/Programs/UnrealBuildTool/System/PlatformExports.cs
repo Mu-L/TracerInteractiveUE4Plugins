@@ -100,13 +100,23 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
+		/// Returns the respective platform sdk version string
+		/// </summary>
+		/// <param name="Platform">The target platform to query</param>
+		public static string GetRequiredSDKString(UnrealTargetPlatform Platform)
+		{
+			UEBuildPlatform BuildPlatform = UEBuildPlatform.GetBuildPlatform(Platform, false);
+			return BuildPlatform.GetRequiredSDKString();
+		}
+
+		/// <summary>
 		/// Check whether the given platform supports XGE
 		/// </summary>
 		/// <param name="Platform">Platform to check</param>
 		/// <returns>True if the platform supports XGE</returns>
 		public static bool CanUseXGE(UnrealTargetPlatform Platform)
 		{
-			return UEBuildPlatform.IsPlatformAvailable(Platform) && UEBuildPlatform.GetBuildPlatform(Platform).CanUseXGE();
+			return UEBuildPlatform.IsPlatformAvailable(Platform) && UEBuildPlatform.GetBuildPlatform(Platform).CanUseXGE() && XGE.IsAvailable();
 		}
 
 		/// <summary>

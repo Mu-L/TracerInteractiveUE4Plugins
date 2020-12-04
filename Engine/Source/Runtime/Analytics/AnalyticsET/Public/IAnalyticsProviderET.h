@@ -7,12 +7,37 @@
 #include "AnalyticsET.h"
 #include "Interfaces/IAnalyticsProvider.h"
 
-/** ET specific analytics provider instance. Exposes additional APIs to support Json-based events. */
+/** ET specific analytics provider instance. Exposes additional APIs to support Json-based events, default attributes, and allowing events to be disabled (generally via hotfixing). */
 class IAnalyticsProviderET : public IAnalyticsProvider
 {
 public:
-	using IAnalyticsProvider::RecordEvent;
 	using IAnalyticsProvider::StartSession;
+	using IAnalyticsProvider::RecordEvent;
+
+	////////////////////////////////////////////////////////////////////////////////////
+	// IAnalyticsProvider overrides
+
+	/**
+	 * This class augments RecordEvent with a version that takes the EventName by rvalue reference to save a string copy. Implement the base version in terms of this one.
+	 */
+	virtual void RecordEvent(const FString& EventName, const TArray<FAnalyticsEventAttribute>& Attributes) override
+	{
+		return RecordEvent(CopyTemp(EventName), Attributes);
+	}
+
+	/**
+	 * This class augments StartSession with a version that takes the SessionID instead of always generating it. Implement the base version in terms of this one.
+	 */
+	virtual bool StartSession(const TArray<FAnalyticsEventAttribute>& Attributes) override
+	{
+		FGuid SessionGUID;
+		FPlatformMisc::CreateGuid(SessionGUID);
+		return StartSession(SessionGUID.ToString(EGuidFormats::DigitsWithHyphensInBraces), Attributes);
+	}
+
+	// IAnalyticsProvider overrides
+	////////////////////////////////////////////////////////////////////////////////////
+
 
 	/**
 	 * Special setter to set the AppID, something that is not normally allowed for third party analytics providers.
@@ -21,13 +46,12 @@ public:
 	 */
 	virtual void SetAppID(FString&& AppID) = 0;
 
-	
 	/**
 	 * Method to get the AppID (APIKey)
 	 *
 	 * @return the AppID (APIKey)
 	 */
-	virtual const FString& GetAppID() const = 0;
+	const FString& GetAppID() const { return GetConfig().APIKeyET; }
 
 	/**
 	 * Sets the AppVersion.
@@ -41,79 +65,65 @@ public:
 	*
 	* @return the AppVersion
 	*/
-	virtual const FString& GetAppVersion() const = 0;
+	const FString& GetAppVersion() const { return GetConfig().AppVersionET; }
 
 	/**
-	* Optimization for StartSession that avoids the array copy using rvalue references.
-	*
-	* @param AttributesJson	array of key/value attribute pairs
-	*/
-	virtual bool StartSession(TArray<FAnalyticsEventAttribute>&& Attributes) = 0;
+	 * Primary StartSession API. Allow move semantics to capture the attributes.
+	 */
+	virtual bool StartSession(FString InSessionID, const TArray<FAnalyticsEventAttribute>& Attributes) = 0;
 
 	/**
-	* Optimization for RecordEvent that avoids the array copy using rvalue references.
+	* Allows higher level code to abort logic to set up for a RecordEvent call by checking the filter that will be used to send the event first.
 	*
-	* @param EventName			The name of the event.
-	* @param AttributesJson	array of key/value attribute pairs
+	* @param EventName The name of the event.
+	* @return true if the event will be recorded using the currently installed ShouldRecordEvent function
 	*/
-	virtual void RecordEvent(FString EventName, TArray<FAnalyticsEventAttribute>&& Attributes) = 0;
+	virtual bool ShouldRecordEvent(const FString& EventName) const = 0;
 
 	/**
-	* Sends an event where each attribute value is expected to be a string-ified Json value.
-	* Meaning, each attribute value can be an integer, float, bool, string,
-	* arbitrarily complex Json array, or arbitrarily complex Json object.
-	*
-	* The main thing to remember is that if you pass a Json string as an attribute value, it is up to you to
-	* quote the string, as the string you pass is expected to be able to be pasted directly into a Json value. ie:
-	*
-	* {
-	*     "EventName": "MyStringEvent",
-	*     "IntAttr": 42                 <--- You simply pass this in as "42"
-	*     "StringAttr": "SomeString"    <--- You must pass SomeString as "\"SomeString\""
-	* }
-	*
-	* @param EventName			The name of the event.
-	* @param AttributesJson	array of key/value attribute pairs where each value is a Json value (pure Json strings mustbe quoted by the caller).
-	*/
-	virtual void RecordEventJson(FString EventName, TArray<FAnalyticsEventAttribute>&& AttributesJson) = 0;
+	 * Primary RecordEvent API. Allow move semantics to capture the attributes.
+	 */
+	virtual void RecordEvent(FString&& EventName, const TArray<FAnalyticsEventAttribute>& Attributes) = 0;
 
 	/**
-	* Helper for RecordEventJson when the array is not an rvalue reference.
-	*
-	* @param EventName			The name of the event.
-	* @param AttributesJson	array of key/value attribute pairs where each value is a Json value (pure Json strings mustbe quoted by the caller).
-	*/
-	void RecordEventJson(FString EventName, const TArray<FAnalyticsEventAttribute>& AttributesJson)
-	{
-		// make a copy of the array if it's not an rvalue reference
-		RecordEventJson(MoveTemp(EventName), TArray<FAnalyticsEventAttribute>(AttributesJson));
-	}
-
-	/**
-	* When set, all events recorded will have these attributes appended to them.
-	*
-	* @param Attributes array of attributes that should be appended to every event.
-	*/
+	 * Sets an array of attributes that will automatically be appended to any event that is sent.
+	 * Logical effect is like adding them to all events before calling RecordEvent.
+	 * Practically, it is implemented much more efficiently from a storage and allocation perspective.
+	 */
 	virtual void SetDefaultEventAttributes(TArray<FAnalyticsEventAttribute>&& Attributes) = 0;
 
+	/** 
+	 * @return the current array of default attributes.
+	 */ 
+	virtual TArray<FAnalyticsEventAttribute> GetDefaultEventAttributesSafe() const = 0;
+
 	/**
-	* returns the current set of default event attributes set on the provider.
-	*
-	* @param Attributes array of attributes that should be appended to every event.
-	*/
-	virtual const TArray<FAnalyticsEventAttribute>& GetDefaultEventAttributes() const = 0;
+	 * Used with GetDefaultAttribute to iterate over the default attributes.
+	 * 
+	 * @return the number of default attributes are currently being applied.
+	 */
+	virtual int32 GetDefaultEventAttributeCount() const = 0;
+
+	/**
+	 * Used with GetDefaultEventAttributeCount to iterate over the default attributes.
+	 *
+	 * Range checking is not done, similar to TArray. Use GetDefaultAttributeCount() first!
+	 * @return one attribute of the default attributes so we don't have to copy the entire attribute array.
+	 */
+	virtual FAnalyticsEventAttribute GetDefaultEventAttribute(int AttributeIndex) const = 0;
 
 	/**
 	 * Updates the default URL endpoint and AltDomains.
 	 */
 	virtual void SetURLEndpoint(const FString& UrlEndpoint, const TArray<FString>& AltDomains) = 0;
 
+	typedef TFunction<void(const FString& EventName, const TArray<FAnalyticsEventAttribute>& Attrs, bool bJson)> OnEventRecorded;
+
 	/**
 	* Set a callback to be invoked any time an event is queued.
-	* 
+	*
 	* @param the callback
 	*/
-	typedef TFunction<void(const FString& EventName, const TArray<FAnalyticsEventAttribute>& Attrs, bool bJson)> OnEventRecorded;
 	virtual void SetEventCallback(const OnEventRecorded& Callback) = 0;
 
 	/**
@@ -125,4 +135,14 @@ public:
 	 * Return the current provider configuration.
 	 */
 	virtual const FAnalyticsET::Config& GetConfig() const = 0;
+
+	/** Callback used before any event is actually sent. Allows higher level code to disable events. */
+	typedef TFunction<bool(const IAnalyticsProviderET& ThisProvider, const FString& EventName)> ShouldRecordEventFunction;
+
+	/** Set an event filter to dynamically control whether an event should be sent. */
+	virtual void SetShouldRecordEventFunc(const ShouldRecordEventFunction& ShouldRecordEventFunc) = 0;
+
+private:
+	/** Needed to support the old, unsafe GetDefaultAttributes() API. */
+	mutable TArray<FAnalyticsEventAttribute> UnsafeDefaultAttributes;
 };

@@ -24,6 +24,10 @@ namespace
 	// How large to make the constraint arrows.
 	// The factor of 60 was found experimentally, to look reasonable in comparison with the rest of the constraint visuals.
 	constexpr float ConstraintArrowScale = 60.0f;
+
+	bool bDebugViewportClicks = false;
+	FAutoConsoleVariableRef CVarChaosImmPhysStepTime(TEXT("p.PhAT.DebugViewportClicks"), bDebugViewportClicks, TEXT("Set to 1 to show mouse click results in PhAT"));
+
 }
 
 UPhysicsAssetEditorSkeletalMeshComponent::UPhysicsAssetEditorSkeletalMeshComponent(const FObjectInitializer& ObjectInitializer)
@@ -39,34 +43,36 @@ UPhysicsAssetEditorSkeletalMeshComponent::UPhysicsAssetEditorSkeletalMeshCompone
 	, InfluenceLineLength(2.0f)
 	, InfluenceLineColor(0, 255, 0)
 {
+	if (!HasAnyFlags(RF_DefaultSubObject | RF_ArchetypeObject | RF_ClassDefaultObject))
+	{
+		// Body materials
+		UMaterialInterface* BaseElemSelectedMaterial = LoadObject<UMaterialInterface>(NULL, TEXT("/Engine/EditorMaterials/PhAT_ElemSelectedMaterial.PhAT_ElemSelectedMaterial"), NULL, LOAD_None, NULL);
+		ElemSelectedMaterial = UMaterialInstanceDynamic::Create(BaseElemSelectedMaterial, GetTransientPackage());
+		check(ElemSelectedMaterial);
 
-	// Body materials
-	UMaterialInterface* BaseElemSelectedMaterial = LoadObject<UMaterialInterface>(NULL, TEXT("/Engine/EditorMaterials/PhAT_ElemSelectedMaterial.PhAT_ElemSelectedMaterial"), NULL, LOAD_None, NULL);
-	ElemSelectedMaterial = UMaterialInstanceDynamic::Create(BaseElemSelectedMaterial, GetTransientPackage());
-	check(ElemSelectedMaterial);
+		UMaterialInterface* BaseBoneSelectedMaterial = LoadObject<UMaterialInterface>(NULL, TEXT("/Engine/EditorMaterials/PhAT_BoneSelectedMaterial.PhAT_BoneSelectedMaterial"), NULL, LOAD_None, NULL);
+		BoneSelectedMaterial = UMaterialInstanceDynamic::Create(BaseBoneSelectedMaterial, GetTransientPackage());
+		check(BoneSelectedMaterial);
 
-	UMaterialInterface* BaseBoneSelectedMaterial = LoadObject<UMaterialInterface>(NULL, TEXT("/Engine/EditorMaterials/PhAT_BoneSelectedMaterial.PhAT_BoneSelectedMaterial"), NULL, LOAD_None, NULL);
-	BoneSelectedMaterial = UMaterialInstanceDynamic::Create(BaseBoneSelectedMaterial, GetTransientPackage());
-	check(BoneSelectedMaterial);
+		BoneMaterialHit = UMaterial::GetDefaultMaterial(MD_Surface);
+		check(BoneMaterialHit);
 
-	BoneMaterialHit = UMaterial::GetDefaultMaterial(MD_Surface);
-	check(BoneMaterialHit);
+		UMaterialInterface* BaseBoneUnselectedMaterial = LoadObject<UMaterialInterface>(NULL, TEXT("/Engine/EditorMaterials/PhAT_UnselectedMaterial.PhAT_UnselectedMaterial"), NULL, LOAD_None, NULL);
+		BoneUnselectedMaterial = UMaterialInstanceDynamic::Create(BaseBoneUnselectedMaterial, GetTransientPackage());
+		check(BoneUnselectedMaterial);
 
-	UMaterialInterface* BaseBoneUnselectedMaterial = LoadObject<UMaterialInterface>(NULL, TEXT("/Engine/EditorMaterials/PhAT_UnselectedMaterial.PhAT_UnselectedMaterial"), NULL, LOAD_None, NULL);
-	BoneUnselectedMaterial = UMaterialInstanceDynamic::Create(BaseBoneUnselectedMaterial, GetTransientPackage());
-	check(BoneUnselectedMaterial);
+		UMaterialInterface* BaseBoneNoCollisionMaterial = LoadObject<UMaterialInterface>(NULL, TEXT("/Engine/EditorMaterials/PhAT_NoCollisionMaterial.PhAT_NoCollisionMaterial"), NULL, LOAD_None, NULL);
+		BoneNoCollisionMaterial = UMaterialInstanceDynamic::Create(BaseBoneNoCollisionMaterial, GetTransientPackage());
+		check(BoneNoCollisionMaterial);
 
-	UMaterialInterface* BaseBoneNoCollisionMaterial = LoadObject<UMaterialInterface>(NULL, TEXT("/Engine/EditorMaterials/PhAT_NoCollisionMaterial.PhAT_NoCollisionMaterial"), NULL, LOAD_None, NULL);
-	BoneNoCollisionMaterial = UMaterialInstanceDynamic::Create(BaseBoneNoCollisionMaterial, GetTransientPackage());
-	check(BoneNoCollisionMaterial);
+		// this is because in phat editor, you'd like to see fixed bones to be fixed without animation force update
+		KinematicBonesUpdateType = EKinematicBonesUpdateToPhysics::SkipSimulatingBones;
+		bUpdateJointsFromAnimation = false;
+		SetForcedLOD(1);
 
-	// this is because in phat editor, you'd like to see fixed bones to be fixed without animation force update
-	KinematicBonesUpdateType = EKinematicBonesUpdateToPhysics::SkipSimulatingBones;
-	bUpdateJointsFromAnimation = false;
-	SetForcedLOD(1);
-
-	static FName CollisionProfileName(TEXT("PhysicsActor"));
-	SetCollisionProfileName(CollisionProfileName);
+		static FName CollisionProfileName(TEXT("PhysicsActor"));
+		SetCollisionProfileName(CollisionProfileName);
+	}
 
 	bSelectable = false;
 }
@@ -85,10 +91,13 @@ void UPhysicsAssetEditorSkeletalMeshComponent::RenderAssetTools(const FSceneView
 
 	EPhysicsAssetEditorRenderMode CollisionViewMode = SharedData->GetCurrentCollisionViewMode(SharedData->bRunningSimulation);
 
-#if DEBUG_CLICK_VIEWPORT
-	PDI->DrawLine(SharedData->LastClickOrigin, SharedData->LastClickOrigin + SharedData->LastClickDirection * 5000.0f, FLinearColor(1, 1, 0, 1), SDPG_Foreground);
-	PDI->DrawPoint(SharedData->LastClickOrigin, FLinearColor(1, 0, 0), 5, SDPG_Foreground);
-#endif
+	if (bDebugViewportClicks)
+	{
+		PDI->DrawLine(SharedData->LastClickOrigin, SharedData->LastClickOrigin + SharedData->LastClickDirection * 5000.0f, FLinearColor(1, 1, 0, 1), SDPG_Foreground);
+		PDI->DrawPoint(SharedData->LastClickOrigin, FLinearColor(1, 1, 0), 5, SDPG_Foreground);
+		PDI->DrawLine(SharedData->LastClickHitPos, SharedData->LastClickHitPos + SharedData->LastClickHitNormal * 10.0f, FLinearColor(1, 0, 0, 1), SDPG_Foreground);
+		PDI->DrawPoint(SharedData->LastClickHitPos, FLinearColor(1, 0, 0), 5, SDPG_Foreground);
+	}
 
 	// set opacity of our materials
 	static FName OpacityName(TEXT("Opacity"));
@@ -512,6 +521,16 @@ void UPhysicsAssetEditorSkeletalMeshComponent::AddImpulseAtLocation(FVector Impu
 	}
 #endif
 }
+
+bool UPhysicsAssetEditorSkeletalMeshComponent::ShouldCreatePhysicsState() const
+{
+	// @todo(chaos): the main physics scene is not running (and never runs) in the physics editor,
+	// and currently this means it will accumulate body create/destroy commands every time
+	// we hit "Simulate". Fix this!  However, we still need physics state for mouse ray hit detection 
+	// on the bodies so we can't just avoid creating physics state...
+	return Super::ShouldCreatePhysicsState();
+}
+
 
 void UPhysicsAssetEditorSkeletalMeshComponent::Grab(FName InBoneName, const FVector& Location, const FRotator& Rotation, bool bRotationConstrained)
 {

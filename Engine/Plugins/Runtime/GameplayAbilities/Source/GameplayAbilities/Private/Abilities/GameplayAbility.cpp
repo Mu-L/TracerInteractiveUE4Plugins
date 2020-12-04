@@ -72,6 +72,8 @@ UGameplayAbility::UGameplayAbility(const FObjectInitializer& ObjectInitializer)
 
 	InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerExecution;
 
+	NetSecurityPolicy = EGameplayAbilityNetSecurityPolicy::ClientOrServer;
+
 	ScopeLockCount = 0;
 
 	bMarkPendingKillOnAbilityEnd = false;
@@ -91,7 +93,8 @@ int32 UGameplayAbility::GetFunctionCallspace(UFunction* Function, FFrame* Stack)
 {
 	if (HasAnyFlags(RF_ClassDefaultObject) || !IsSupportedForNetworking())
 	{
-		return FunctionCallspace::Local;
+		// This handles absorbing authority/cosmetic
+		return GEngine->GetGlobalFunctionCallspace(Function, this, Stack);
 	}
 	check(GetOuter() != nullptr);
 	return GetOuter()->GetFunctionCallspace(Function, Stack);
@@ -273,7 +276,8 @@ bool UGameplayAbility::DoesAbilitySatisfyTagRequirements(const UAbilitySystemCom
 
 bool UGameplayAbility::ShouldActivateAbility(ENetRole Role) const
 {
-	return Role != ROLE_SimulatedProxy;
+	return Role != ROLE_SimulatedProxy && 		
+		(Role == ROLE_Authority || (NetSecurityPolicy != EGameplayAbilityNetSecurityPolicy::ServerOnly && NetSecurityPolicy != EGameplayAbilityNetSecurityPolicy::ServerOnlyExecution));	// Don't violate security policy if we're not the server
 }
 
 void UGameplayAbility::K2_CancelAbility()
@@ -377,10 +381,10 @@ bool UGameplayAbility::ShouldAbilityRespondToEvent(const FGameplayAbilityActorIn
 	return true;
 }
 
-bool UGameplayAbility::CommitAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo)
+bool UGameplayAbility::CommitAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo, OUT FGameplayTagContainer* OptionalRelevantTags)
 {
 	// Last chance to fail (maybe we no longer have resources to commit since we after we started this ability activation)
-	if (!CommitCheck(Handle, ActorInfo, ActivationInfo))
+	if (!CommitCheck(Handle, ActorInfo, ActivationInfo, OptionalRelevantTags))
 	{
 		return false;
 	}
@@ -396,7 +400,7 @@ bool UGameplayAbility::CommitAbility(const FGameplayAbilitySpecHandle Handle, co
 	return true;
 }
 
-bool UGameplayAbility::CommitAbilityCooldown(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo, const bool ForceCooldown)
+bool UGameplayAbility::CommitAbilityCooldown(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo, const bool ForceCooldown, OUT FGameplayTagContainer* OptionalRelevantTags)
 {
 	if (UAbilitySystemGlobals::Get().ShouldIgnoreCooldowns())
 	{
@@ -406,7 +410,7 @@ bool UGameplayAbility::CommitAbilityCooldown(const FGameplayAbilitySpecHandle Ha
 	if (!ForceCooldown)
 	{
 		// Last chance to fail (maybe we no longer have resources to commit since we after we started this ability activation)
-		if (!CheckCooldown(Handle, ActorInfo))
+		if (!CheckCooldown(Handle, ActorInfo, OptionalRelevantTags))
 		{
 			return false;
 		}
@@ -416,7 +420,7 @@ bool UGameplayAbility::CommitAbilityCooldown(const FGameplayAbilitySpecHandle Ha
 	return true;
 }
 
-bool UGameplayAbility::CommitAbilityCost(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo)
+bool UGameplayAbility::CommitAbilityCost(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo, OUT FGameplayTagContainer* OptionalRelevantTags)
 {
 	if (UAbilitySystemGlobals::Get().ShouldIgnoreCosts())
 	{
@@ -424,7 +428,7 @@ bool UGameplayAbility::CommitAbilityCost(const FGameplayAbilitySpecHandle Handle
 	}
 
 	// Last chance to fail (maybe we no longer have resources to commit since we after we started this ability activation)
-	if (!CheckCost(Handle, ActorInfo))
+	if (!CheckCost(Handle, ActorInfo, OptionalRelevantTags))
 	{
 		return false;
 	}
@@ -433,7 +437,7 @@ bool UGameplayAbility::CommitAbilityCost(const FGameplayAbilitySpecHandle Handle
 	return true;
 }
 
-bool UGameplayAbility::CommitCheck(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo)
+bool UGameplayAbility::CommitCheck(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo, OUT FGameplayTagContainer* OptionalRelevantTags)
 {
 	/**
 	 *	Checks if we can (still) commit this ability. There are some subtleties here.
@@ -456,12 +460,12 @@ bool UGameplayAbility::CommitCheck(const FGameplayAbilitySpecHandle Handle, cons
 
 	UAbilitySystemGlobals& AbilitySystemGlobals = UAbilitySystemGlobals::Get();
 
-	if (!AbilitySystemGlobals.ShouldIgnoreCooldowns() && !CheckCooldown(Handle, ActorInfo))
+	if (!AbilitySystemGlobals.ShouldIgnoreCooldowns() && !CheckCooldown(Handle, ActorInfo, OptionalRelevantTags))
 	{
 		return false;
 	}
 
-	if (!AbilitySystemGlobals.ShouldIgnoreCosts() && !CheckCost(Handle, ActorInfo))
+	if (!AbilitySystemGlobals.ShouldIgnoreCosts() && !CheckCost(Handle, ActorInfo, OptionalRelevantTags))
 	{
 		return false;
 	}
@@ -538,7 +542,7 @@ void UGameplayAbility::CancelAbility(const FGameplayAbilitySpecHandle Handle, co
 		}
 
 		// Replicate the the server/client if needed
-		if (bReplicateCancelAbility)
+		if (bReplicateCancelAbility && ActorInfo && ActorInfo->AbilitySystemComponent.IsValid())
 		{
 			ActorInfo->AbilitySystemComponent->ReplicateEndOrCancelAbility(Handle, ActivationInfo, this, true);
 		}
@@ -1055,18 +1059,22 @@ FGameplayEffectSpecHandle UGameplayAbility::MakeOutgoingGameplayEffectSpec(const
 
 void UGameplayAbility::ApplyAbilityTagsToGameplayEffectSpec(FGameplayEffectSpec& Spec, FGameplayAbilitySpec* AbilitySpec) const
 {
-	Spec.CapturedSourceTags.GetSpecTags().AppendTags(AbilityTags);
+	FGameplayTagContainer& CapturedSourceTags = Spec.CapturedSourceTags.GetSpecTags();
+
+	CapturedSourceTags.AppendTags(AbilityTags);
 
 	// Allow the source object of the ability to propagate tags along as well
 	if (AbilitySpec)
 	{
+		CapturedSourceTags.AppendTags(AbilitySpec->DynamicAbilityTags);
+
 		const IGameplayTagAssetInterface* SourceObjAsTagInterface = Cast<IGameplayTagAssetInterface>(AbilitySpec->SourceObject);
 		if (SourceObjAsTagInterface)
 		{
 			FGameplayTagContainer SourceObjTags;
 			SourceObjAsTagInterface->GetOwnedGameplayTags(SourceObjTags);
 
-			Spec.CapturedSourceTags.GetSpecTags().AppendTags(SourceObjTags);
+			CapturedSourceTags.AppendTags(SourceObjTags);
 		}
 
 		// Copy SetByCallerMagnitudes 
@@ -1212,9 +1220,11 @@ AActor* UGameplayAbility::GetGameplayTaskAvatar(const UGameplayTask* Task) const
 void UGameplayAbility::OnGameplayTaskInitialized(UGameplayTask& Task)
 {
 	UAbilityTask* AbilityTask = Cast<UAbilityTask>(&Task);
-	if (AbilityTask)
+	const FGameplayAbilityActorInfo* ActorInfo = GetCurrentActorInfo();
+
+	if (AbilityTask && ActorInfo)
 	{
-		AbilityTask->SetAbilitySystemComponent(GetCurrentActorInfo()->AbilitySystemComponent.Get());
+		AbilityTask->SetAbilitySystemComponent(ActorInfo->AbilitySystemComponent.Get());
 		AbilityTask->Ability = this;
 	}
 }
@@ -1605,6 +1615,11 @@ bool UGameplayAbility::IsLocallyControlled() const
 bool UGameplayAbility::HasAuthority(const FGameplayAbilityActivationInfo* ActivationInfo) const
 {
 	return (ActivationInfo->ActivationMode == EGameplayAbilityActivationMode::Authority);
+}
+
+bool UGameplayAbility::K2_HasAuthority() const
+{
+	return HasAuthority(&CurrentActivationInfo);
 }
 
 bool UGameplayAbility::HasAuthorityOrPredictionKey(const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo* ActivationInfo) const

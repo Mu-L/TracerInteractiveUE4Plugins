@@ -155,6 +155,8 @@ UConsole::~UConsole()
 	{
 		GLog->RemoveOutputDevice(this);
 	}
+
+	FEngineShowFlags::OnCustomShowFlagRegistered.RemoveAll(this);
 }
 
 void UConsole::PostInitProperties()
@@ -169,10 +171,19 @@ void UConsole::PostInitProperties()
 	}
 #endif
 	Super::PostInitProperties();
+
+	FEngineShowFlags::OnCustomShowFlagRegistered.AddUObject(this, &UConsole::InvalidateAutocomplete);
+}
+
+void UConsole::InvalidateAutocomplete()
+{
+	bIsRuntimeAutoCompleteUpToDate = false;
 }
 
 void UConsole::BuildRuntimeAutoCompleteList(bool bForce)
 {
+	LLM_SCOPE(ELLMTag::EngineMisc);
+
 #if ALLOW_CONSOLE
 	if (!bForce)
 	{
@@ -241,7 +252,7 @@ void UConsole::BuildRuntimeAutoCompleteList(bool bForce)
 			int32 Idx = 0;
 			for (; Idx < AutoCompleteList.Num(); ++Idx)
 			{
-				if (AutoCompleteList[Idx].Command.ToLower() == FuncName)
+				if (AutoCompleteList[Idx].Command == FuncName)
 				{
 					break;
 				}
@@ -353,12 +364,11 @@ void UConsole::BuildRuntimeAutoCompleteList(bool bForce)
 		{
 			FString Command = FString(TEXT("Stat "));
 			Command += StatGroupName.ToString().RightChop(sizeof("STATGROUP_") - 1);
-			const FString CommandLower = Command.ToLower();
 
 			int32 Idx = 0;
 			for (; Idx < AutoCompleteList.Num(); ++Idx)
 			{
-				if (AutoCompleteList[Idx].Command.ToLower() == CommandLower)
+				if (AutoCompleteList[Idx].Command == Command)
 				{
 					break;
 				}
@@ -380,7 +390,7 @@ void UConsole::BuildRuntimeAutoCompleteList(bool bForce)
 			{
 			}
 
-			bool OnEngineShowFlag(uint32 InIndex, const FString& InName)
+			bool HandleShowFlag(uint32 InIndex, const FString& InName)
 			{
 				// Get localized name.
 				FText LocName;
@@ -392,6 +402,16 @@ void UConsole::BuildRuntimeAutoCompleteList(bool bForce)
 				AutoCompleteList[NewIdx].Color = GetDefault<UConsoleSettings>()->AutoCompleteCommandColor;
 
 				return true;
+			}
+			
+			bool OnEngineShowFlag(uint32 InIndex, const FString& InName)
+			{
+				return HandleShowFlag(InIndex, InName);
+			}
+
+			bool OnCustomShowFlag(uint32 InIndex, const FString& InName)
+			{
+				return HandleShowFlag(InIndex, InName);
 			}
 
 			TArray<FAutoCompleteCommand>& AutoCompleteList;

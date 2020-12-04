@@ -615,6 +615,7 @@ public:
 	void Rename(const FName& NewName);
 
 	FString GetPathName(const UObject* StopOuter = nullptr) const;
+	void GetPathName(const UObject* StopOuter, FStringBuilderBase& ResultString) const;
 	FString GetFullName() const;
 
 	/**
@@ -624,9 +625,15 @@ public:
 	 */
 	FString GetAuthoredName() const;
 
+	/** Returns an inner field by name if the field has any */
 	virtual FField* GetInnerFieldByName(const FName& InName)
 	{
 		return nullptr;
+	}
+
+	/** Fills the provided array with all inner fields this field owns (recursively) */
+	virtual void GetInnerFields(TArray<FField*>& OutFields)
+	{
 	}
 
 #if WITH_EDITORONLY_DATA
@@ -667,8 +674,17 @@ public:
 	* @param Key The key to lookup in the metadata
 	* @return true if there is a (possibly blank) value associated with this key
 	*/
-	bool HasMetaData(const TCHAR* Key) const;
-	bool HasMetaData(const FName& Key) const;
+	bool HasMetaData(const TCHAR* Key) const { return FindMetaData(Key) != nullptr; }
+	bool HasMetaData(const FName& Key) const { return FindMetaData(Key) != nullptr; }
+
+	/**
+	* Find the metadata value associated with the key
+	*
+	* @param Key The key to lookup in the metadata
+	* @return The value associated with the key if it exists, null otherwise
+	*/
+	const FString* FindMetaData(const TCHAR* Key) const;
+	const FString* FindMetaData(const FName& Key) const;
 
 	/**
 	* Find the metadata value associated with the key
@@ -698,6 +714,9 @@ public:
 	*/
 	void SetMetaData(const TCHAR* Key, const TCHAR* InValue);
 	void SetMetaData(const FName& Key, const TCHAR* InValue);
+
+	void SetMetaData(const TCHAR* Key, FString&& InValue);
+	void SetMetaData(const FName& Key, FString&& InValue);
 
 	/**
 	* Find the metadata value associated with the key
@@ -779,6 +798,11 @@ public:
 
 	/** Creates a new FField from existing UField */
 	static FField* CreateFromUField(UField* InField);
+	
+	DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnConvertCustomUFieldToFField, FFieldClass*, UField*, FField*&);
+	/** Gets a delegate to convert custom UField types to FFields */
+	static FOnConvertCustomUFieldToFField& GetConvertCustomUFieldToFFieldDelegate();
+
 #endif // WITH_EDITORONLY_DATA
 
 	/** Duplicates an FField */

@@ -33,6 +33,8 @@
 #include "GeometryCollection/GeometryCollectionComponent.h"
 #include "GeometryCollection/GeometryCollectionActor.h"
 #include "GeometryCollection/GeometryCollection.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/SkeletalMesh.h"
 
 #include "EditorStyleSet.h"
 #include "FractureEditor.h"
@@ -282,6 +284,7 @@ void FFractureEditorModeToolkit::BuildToolPalette(FName PaletteIndex, class FToo
 	if (PaletteIndex == PaletteNames[0])
 	{
 		ToolbarBuilder.AddToolBarButton(Commands.GenerateAsset);
+		ToolbarBuilder.AddToolBarButton(Commands.ResetAsset);
 
 		ToolbarBuilder.AddSeparator();
 		ToolbarBuilder.AddToolBarButton(Commands.SelectAll);
@@ -311,6 +314,7 @@ void FFractureEditorModeToolkit::BuildToolPalette(FName PaletteIndex, class FToo
 	{
 		ToolbarBuilder.AddWidget(SNew(SBox).WidthOverride(4));
 		ToolbarBuilder.AddToolBarButton(Commands.GenerateAsset);
+		ToolbarBuilder.AddToolBarButton(Commands.ResetAsset);
 		ToolbarBuilder.AddSeparator();
 
 		ToolbarBuilder.AddToolBarButton(Commands.SelectAll);
@@ -448,6 +452,12 @@ void FFractureEditorModeToolkit::BindCommands()
 		FExecuteAction::CreateSP(this, &FFractureEditorModeToolkit::GenerateAsset),
 		FCanExecuteAction::CreateLambda([] { return IsStaticMeshSelected(); })
 		);
+
+	ToolkitCommands->MapAction(
+		Commands.ResetAsset,
+		FExecuteAction::CreateSP(this, &FFractureEditorModeToolkit::ResetAsset),
+		FCanExecuteAction::CreateStatic(&FFractureEditorModeToolkit::IsGeometryCollectionSelected)
+	);
 
 
 	TArray<UClass*> SourceClasses = FindFractureToolClasses();
@@ -1437,8 +1447,16 @@ class AGeometryCollectionActor* FFractureEditorModeToolkit::CreateNewGeometryAct
 	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
 	AssetToolsModule.Get().CreateUniqueAssetName(UniquePackageName, TEXT(""), UniquePackageName, UniqueAssetName);
 
-	UPackage* Package = CreatePackage(NULL, *UniquePackageName);
+	UPackage* Package = CreatePackage(*UniquePackageName);
 	UGeometryCollection* InGeometryCollection = static_cast<UGeometryCollection*>(NewObject<UGeometryCollection>(Package, UGeometryCollection::StaticClass(), FName(*UniqueAssetName), RF_Transactional | RF_Public | RF_Standalone));
+
+	// Set default collision type here in the factory instead of the geometry collection constructor to only
+	// affect new geometry collections and not update the default for previously created objects.
+	if(InGeometryCollection)
+	{
+		InGeometryCollection->CollisionType = ECollisionTypeEnum::Chaos_Surface_Volumetric;
+		InGeometryCollection->ImplicitType = EImplicitTypeEnum::Chaos_Implicit_LevelSet;
+	}
 
 	// Create the new Geometry Collection actor
 	AGeometryCollectionActor* NewActor = Cast<AGeometryCollectionActor>(AddActor(GetSelectedLevel(), AGeometryCollectionActor::StaticClass()));
@@ -1459,6 +1477,48 @@ class AGeometryCollectionActor* FFractureEditorModeToolkit::CreateNewGeometryAct
 	return NewActor;
 }
 
+
+void FFractureEditorModeToolkit::ResetAsset()
+{
+	TSet<UGeometryCollectionComponent*> GeomCompSelection;
+	GetSelectedGeometryCollectionComponents(GeomCompSelection);
+	for (UGeometryCollectionComponent* GeometryCollectionComponent : GeomCompSelection)
+	{
+		FGeometryCollectionEdit GeometryCollectionEdit = GeometryCollectionComponent->EditRestCollection();
+		if (UGeometryCollection* GeometryCollectionObject = GeometryCollectionEdit.GetRestCollection())
+		{
+			
+			TSharedPtr<FGeometryCollection, ESPMode::ThreadSafe> GeometryCollectionPtr = GeometryCollectionObject->GetGeometryCollection();
+			if (FGeometryCollection* GeometryCollection = GeometryCollectionPtr.Get())
+			{
+				GeometryCollectionObject->Reset();			
+
+				// Rebuild Collection from recorded source assets.
+				for (const FGeometryCollectionSource& Source : GeometryCollectionObject->GeometrySource)
+				{
+					const UObject* SourceMesh = Source.SourceGeometryObject.TryLoad();
+					if (const UStaticMesh* SourceStaticMesh = Cast<UStaticMesh>(SourceMesh))
+					{
+						FGeometryCollectionConversion::AppendStaticMesh(SourceStaticMesh, Source.SourceMaterial, Source.LocalTransform, GeometryCollectionObject, true);
+					}
+					else if (const USkeletalMesh* SourceSkeletalMesh = Cast<USkeletalMesh>(SourceMesh))
+					{
+						// #todo (bmiller) Once we've settled on the right approach with static meshes, we'll need to apply the same strategy to skeletal mesh reconstruction.
+						// FGeometryCollectionConversion::AppendSkeletalMesh(SourceSkeletalMesh, Source.SourceMaterial, Source.LocalTransform, GeometryCollectionObject, true);
+					}
+				}
+
+				GeometryCollectionObject->InitializeMaterials();
+				FGeometryCollectionClusteringUtility::UpdateHierarchyLevelOfChildren(GeometryCollection, -1);
+				
+				GeometryCollectionComponent->MarkRenderDynamicDataDirty();
+				GeometryCollectionComponent->MarkRenderStateDirty();
+			}
+			GeometryCollectionObject->MarkPackageDirty();
+		}
+	}
+	SetOutlinerComponents(GeomCompSelection.Array());
+}
 
 
 void FFractureEditorModeToolkit::ExecuteFracture(FFractureContext& FractureContext)
@@ -1713,9 +1773,15 @@ AGeometryCollectionActor*  FFractureEditorModeToolkit::ConvertStaticMeshToGeomet
 			if (StaticMeshComponent != nullptr)
 			{
 				UStaticMesh* ComponentStaticMesh = StaticMeshComponent->GetStaticMesh();
-				FTransform ComponentTranform(StaticMeshComponent->GetComponentTransform());
-				ComponentTranform.SetTranslation((ComponentTranform.GetTranslation() - ActorTransform.GetTranslation()) + ActorOffset);
-				FGeometryCollectionConversion::AppendStaticMesh(ComponentStaticMesh, StaticMeshComponent, ComponentTranform, FracturedGeometryCollection, true);
+				FTransform ComponentTransform(StaticMeshComponent->GetComponentTransform());
+				ComponentTransform.SetTranslation((ComponentTransform.GetTranslation() - ActorTransform.GetTranslation()) + ActorOffset);
+				
+				// Record the contributing source on the asset.
+				FSoftObjectPath SourceSoftObjectPath(ComponentStaticMesh);			
+				TArray<UMaterialInterface*> SourceMaterials = StaticMeshComponent->GetMaterials();
+				FracturedGeometryCollection->GeometrySource.Add({ SourceSoftObjectPath, ComponentTransform, SourceMaterials });
+
+				FGeometryCollectionConversion::AppendStaticMesh(ComponentStaticMesh, SourceMaterials, ComponentTransform, FracturedGeometryCollection, true);
 			}
 		}
 

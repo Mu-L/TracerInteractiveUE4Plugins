@@ -37,6 +37,9 @@ struct FSkelMeshRenderSection
 	/** This section will cast shadow */
 	bool bCastShadow;
 
+	/** Which channel for masking the recompute tangents */
+	ESkinVertexColorChannel RecomputeTangentsVertexMaskChannel;
+
 	/** The offset into the LOD's vertex buffer of this section's vertices. */
 	uint32 BaseVertexIndex;
 
@@ -71,6 +74,7 @@ struct FSkelMeshRenderSection
 		, NumTriangles(0)
 		, bRecomputeTangent(false)
 		, bCastShadow(true)
+		, RecomputeTangentsVertexMaskChannel(ESkinVertexColorChannel::Green)
 		, BaseVertexIndex(0)
 		, NumVertices(0)
 		, MaxBoneInfluences(4)
@@ -96,7 +100,7 @@ struct FSkelMeshRenderSection
 	friend FArchive& operator<<(FArchive& Ar, FSkelMeshRenderSection& S);
 };
 
-class FSkeletalMeshLODRenderData
+class FSkeletalMeshLODRenderData : public FRefCountBase
 {
 public:
 
@@ -159,11 +163,20 @@ public:
 	void ReleaseCPUResources(bool bForStreaming = false);
 
 	/** Constructor (default) */
-	FSkeletalMeshLODRenderData()
+	ENGINE_API FSkeletalMeshLODRenderData(bool bAddRef = true)
 		: BuffersSize(0)
 		, bStreamedDataInlined(true)
 		, bIsLODOptional(false)
 	{
+		if (bAddRef)
+		{
+			AddRef();
+		}
+	}
+
+	FORCEINLINE ~FSkeletalMeshLODRenderData()
+	{
+		check(GetRefCount() == 0);
 	}
 
 	/**
@@ -191,7 +204,7 @@ public:
 	 * Initialize render data (e.g. vertex buffers) from model info
 	 * @param BuildFlags See ESkeletalMeshVertexFlags.
 	 */
-	void BuildFromLODModel(const FSkeletalMeshLODModel* LODModel, uint32 BuildFlags);
+	void ENGINE_API BuildFromLODModel(const FSkeletalMeshLODModel* LODModel, uint32 BuildFlags);
 #endif // WITH_EDITOR
 
 	uint32 GetNumVertices() const
@@ -242,7 +255,7 @@ public:
 	/**
 	* Get Resource Size
 	*/
-	void GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize) const;
+	ENGINE_API void GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize) const;
 
 	// O(1)
 	// @return -1 if not found

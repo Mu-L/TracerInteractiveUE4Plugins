@@ -14,41 +14,23 @@
 #include "VariantManager.h"
 
 class FExtender;
+class FTransactionObjectEvent;
 class FVariantManager;
-class UVariant;
 class FVariantManagerDisplayNode;
-class SVariantManagerNodeTreeView;
 class FVariantManagerDisplayNode;
-class SVariantManagerActorListView;
 class FVariantManagerPropertyNameNode;
 class FVariantManagerPropertyNode;
 class ITableRow;
-class STableViewBase;
 class SSplitter;
-class FTransactionObjectEvent;
-struct FSlateImageBrush;
+class STableViewBase;
+class SVariantManagerActorListView;
+class SVariantManagerNodeTreeView;
+class UVariant;
 enum class EMapChangeType : uint8;
-
-namespace VariantManagerLayoutConstants
-{
-	/** The amount to indent child nodes of the layout tree */
-	const float IndentAmount = 10.0f;
-
-	/** Height of each folder node */
-	const float FolderNodeHeight = 20.0f;
-
-	/** Height of each object node */
-	const float ObjectNodeHeight = 20.0f;
-
-	/** Height of each section area if there are no sections (note: section areas may be larger than this if they have children. This is the height of a section area with no children or all children hidden) */
-	const float SectionAreaDefaultHeight = 15.0f;
-
-	/** Height of each key area */
-	const float KeyAreaHeight = 15.0f;
-
-	/** Height of each category node */
-	const float CategoryNodeHeight = 15.0f;
-}
+struct FSlateImageBrush;
+struct FVariantDependency;
+struct FVariantDependencyModel;
+using FVariantDependencyModelPtr = TSharedPtr<FVariantDependencyModel>;
 
 // Convenience struct to save/load how the user configured the main splitters
 struct FSplitterValues
@@ -56,21 +38,23 @@ struct FSplitterValues
 	float VariantColumn = 0.25f;
 	float ActorColumn = 0.25f;
 	float PropertyNameColumn = 0.25f;
-	float PropertyValueColumn = 0.25f;
+	float DependenciesVariantSetsColumn = 0.33f;
+	float DependenciesVariantColumn = 0.33f;
 
 	FSplitterValues(){};
 	FSplitterValues(FString& InSerialized);
 	FString ToString();
 };
 
-// Replica of FDetailColumnSizeData used by DetailViews
-struct FPropertyColumnSizeData
+struct FColumnSizeData
 {
 	TAttribute<float> LeftColumnWidth;
+	TAttribute<float> MiddleColumnWidth;
 	TAttribute<float> RightColumnWidth;
-	SSplitter::FOnSlotResized OnWidthChanged;
 
-	void SetColumnWidth(float InWidth) { OnWidthChanged.ExecuteIfBound(InWidth); }
+	// There are three columns, but only two splitters
+	SSplitter::FOnSlotResized OnFirstSplitterChanged;
+	SSplitter::FOnSlotResized OnSecondSplitterChanged;
 };
 
 class SVariantManager
@@ -187,20 +171,27 @@ public:
 	void SortDisplayNodes(TArray<TSharedRef<FVariantManagerDisplayNode>>& DisplayNodes);
 
 	TSharedRef<SWidget> MakeAddButton();
-	FPropertyColumnSizeData& GetPropertyColumnSizeData()
+	FColumnSizeData& GetPropertiesColumnSizeData()
 	{
-		return ColumnSizeData;
+		return PropertiesColumnSizeData;
+	}
+	FColumnSizeData& GetDependenciesColumnSizeData()
+	{
+		return DependenciesColumnSizeData;
 	}
 
 	TSharedRef<ITableRow> MakeCapturedPropertyRow(TSharedPtr<FVariantManagerPropertyNode> Item, const TSharedRef<STableViewBase>& OwnerTable);
 	TSharedPtr<SWidget> OnPropertyListContextMenuOpening();
 
+	void OnOutlinerNodeSelectionChanged();
 	void OnActorNodeSelectionChanged();
+	void OnVariantDependenciesUpdated(UVariant* ParentVariant);
 
 	// These completely refresh the data and the view for each display
 	void RefreshVariantTree();
 	void RefreshActorList();
 	void RefreshPropertyList();
+	void RefreshDependencyLists();
 	void UpdatePropertyDefaults();
 
 	void OnBlueprintCompiled();
@@ -222,11 +213,21 @@ public:
 
 	FReply OnAddVariantSetClicked();
 	FReply OnSummonAddActorMenu();
+	FReply OnAddDependencyClicked();
 
-	// Callbacks for ColumnSizeData
-	float OnGetLeftColumnWidth() const { return 1.0f - RightPropertyColumnWidth; }
-	float OnGetRightColumnWidth() const { return RightPropertyColumnWidth; }
-	void OnSetColumnWidth(float InWidth) { RightPropertyColumnWidth = InWidth; }
+	// Callbacks for property ColumnSizeData
+	float OnGetPropertiesActorColumnWidth() const { return 1.0f - PropertiesNameColumnWidth - PropertiesValueColumnWidth; }
+	float OnGetPropertiesNameColumnWidth() const { return PropertiesNameColumnWidth; }
+	float OnGetPropertiesValueColumnWidth() const { return PropertiesValueColumnWidth; }
+	void OnSetPropertiesNameColumnWidth( float InWidth ) { PropertiesNameColumnWidth = InWidth; }
+	void OnSetPropertiesValueColumnWidth( float InWidth ) { PropertiesValueColumnWidth = InWidth; }
+
+	// Callbacks for dependencies ColumnSizeData
+	float OnGetDependenciesVariantSetColumnWidth() const { return 1.0f - DependenciesVariantColumnWidth - DependenciesControlColumnWidth; }
+	float OnGetDependenciesVariantColumnWidth() const { return DependenciesVariantColumnWidth; }
+	float OnGetDependenciesControlColumnWidth() const { return DependenciesControlColumnWidth; }
+	void OnSetDependenciesVariantColumnWidth( float InWidth ) { DependenciesVariantColumnWidth = InWidth; }
+	void OnSetDependenciesControlColumnWidth( float InWidth ) { DependenciesControlColumnWidth = InWidth; }
 
 	void OnObjectTransacted(UObject* Object, const class FTransactionObjectEvent& Event);
 	void OnObjectPropertyChanged(UObject* Object, struct FPropertyChangedEvent& Event);
@@ -234,7 +235,24 @@ public:
 	void OnPieEvent(bool bIsSimulating);
 	void OnEditorSelectionChanged(UObject* NewSelection);
 
+	void OnThumbnailChanged(UObject* VariantOrVariantSet);
+
 	void ReorderPropertyNodes(const TArray<TSharedPtr<FVariantManagerPropertyNode>>& TheseNodes, TSharedPtr<FVariantManagerPropertyNode> Pivot, EItemDropZone RelativePosition);
+
+private:
+	enum class ERightTreeRowType
+	{
+		PropertiesHeader,
+		PropertiesContent,
+		DependenciesHeader,
+		DependenciesContent
+	};
+
+	TSharedRef<ITableRow> GenerateRightTreeRow( TSharedRef<ERightTreeRowType> RowType, const TSharedRef<STableViewBase>& OwnerTable );
+	TSharedRef<SWidget> GenerateRightTreeHeaderRowContent( ERightTreeRowType RowType, TSharedRef<STableRow<TSharedRef<ERightTreeRowType>>> InTableRow );
+	TSharedRef<SWidget> GenerateRightTreePropertiesRowContent();
+	TSharedRef<SWidget> GenerateRightTreeDependenciesRowContent();
+	TSharedRef<ITableRow> GenerateDependencyRow( FVariantDependencyModelPtr Dependency, const TSharedRef<STableViewBase>& OwnerTable, bool bInteractionEnabled );
 
 private:
 	TWeakPtr<FVariantManager> VariantManagerPtr;
@@ -246,6 +264,12 @@ private:
 
 	TSharedPtr<SListView<TSharedPtr<FVariantManagerPropertyNode>>> CapturedPropertyListView;
 	TArray<TSharedPtr<FVariantManagerPropertyNode>> DisplayedPropertyNodes;
+
+	TSharedPtr<SListView<FVariantDependencyModelPtr>> DependenciesList;
+	TArray<FVariantDependencyModelPtr> DisplayedDependencies;
+
+	TSharedPtr<SListView<FVariantDependencyModelPtr>> DependentsList;
+	TArray<FVariantDependencyModelPtr> DisplayedDependents;
 
 	// We use paths here to avoid having to check if the bindings are resolved
 	TSet<FString> CachedSelectedActorPaths;
@@ -262,9 +286,15 @@ private:
 
 	bool bAutoCaptureProperties = false;
 
-	// Mirrors detailview, its used by all splitters in the column, so that they move in sync
-	FPropertyColumnSizeData ColumnSizeData;
-	float RightPropertyColumnWidth;
+	FColumnSizeData PropertiesColumnSizeData;
+	float PropertiesNameColumnWidth;
+	float PropertiesValueColumnWidth;
+
+	FColumnSizeData DependenciesColumnSizeData;
+	float DependenciesVariantColumnWidth;
+	float DependenciesControlColumnWidth;
+
+	FSplitterValues SplitterValues;
 
 	FDelegateHandle OnObjectTransactedHandle;
 	FDelegateHandle OnBlueprintCompiledHandle;
@@ -274,9 +304,15 @@ private:
 	FDelegateHandle OnBeginPieHandle;
 	FDelegateHandle OnEndPieHandle;
 	FDelegateHandle OnEditorSelectionChangedHandle;
+	FDelegateHandle OnVariantThumbnailUpdatedHandle;
+	FDelegateHandle OnVariantSetThumbnailUpdatedHandle;
 
 	// We keep track of this to remember splitter values between loads
 	TSharedPtr<SSplitter> MainSplitter;
+	TSharedPtr<SSplitter> PropertiesSplitter;
+	TSharedPtr<SSplitter> DependenciesSplitter;
+
+	TArray<TSharedRef<ERightTreeRowType>> RightTreeRootItems;
 
 	// TODO: Make separate VariantManagerStyle
 	TSharedPtr<FSlateImageBrush> RecordButtonBrush;

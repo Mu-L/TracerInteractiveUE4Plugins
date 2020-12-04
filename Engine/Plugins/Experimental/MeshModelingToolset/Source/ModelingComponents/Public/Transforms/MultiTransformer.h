@@ -21,7 +21,7 @@ enum class EMultiTransformerMode
 
 
 /**
-
+ * UMultiTransformer abstracts both a default TRS Gizmo, and the "Quick" translate/rotate Gizmos.
  */
 UCLASS()
 class MODELINGCOMPONENTS_API UMultiTransformer : public UObject
@@ -29,13 +29,13 @@ class MODELINGCOMPONENTS_API UMultiTransformer : public UObject
 	GENERATED_BODY()
 public:
 	
-	virtual void Setup(UInteractiveGizmoManager* GizmoManager);
+	virtual void Setup(UInteractiveGizmoManager* GizmoManager, IToolContextTransactionProvider* TransactionProviderIn);
 	virtual void Shutdown();
 
 	virtual void Tick(float DeltaTime);
 
-	virtual void SetGizmoPositionFromWorldFrame(const FFrame3d& Frame, bool bResetScale = true);
-	virtual void SetGizmoPositionFromWorldPos(const FVector& Position, const FVector& Normal, bool bResetScale = true);
+	virtual void InitializeGizmoPositionFromWorldFrame(const FFrame3d& Frame, bool bResetScale = true);
+	virtual void UpdateGizmoPositionFromWorldFrame(const FFrame3d& Frame, bool bResetScale = true);
 
 	virtual void ResetScale();
 
@@ -68,7 +68,10 @@ public:
 
 
 public:
+	UPROPERTY()
 	UInteractiveGizmoManager* GizmoManager;
+
+	IToolContextTransactionProvider* TransactionProvider;
 
 	EMultiTransformerMode ActiveMode;
 

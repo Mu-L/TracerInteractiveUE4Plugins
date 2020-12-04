@@ -3,6 +3,8 @@
 
 #include "CoreTypes.h"
 #include "Containers/Map.h"
+#include "Delegates/Delegate.h"
+#include "Delegates/DelegateCombinations.h" // for DECLARE_DELEGATE_OneParam
 #include "HAL/CriticalSection.h"
 #include "HAL/ThreadSafeCounter.h"
 #include "HAL/Runnable.h"
@@ -11,6 +13,9 @@
 #if PLATFORM_UNIX
 #include "Unix/UnixSignalHeartBeat.h"
 #endif
+
+DECLARE_DELEGATE_OneParam(FOnThreadStuck, uint32);
+DECLARE_DELEGATE_OneParam(FOnThreadUnstuck, uint32);
 
 /**
  * Our own local clock.
@@ -50,6 +55,8 @@ class CORE_API FThreadHeartBeat : public FRunnable
 			, LastHangTime(0.0)
 			, SuspendedCount(0)
 			, HangDuration(0)
+			, LastStuckTime(0.0)
+			, StuckDuration(0.0)
 		{}
 
 		/** Time we last received a heartbeat for the current thread */
@@ -60,6 +67,11 @@ class CORE_API FThreadHeartBeat : public FRunnable
 		int32 SuspendedCount;
 		/** The timeout for this thread */
 		double HangDuration;
+
+		/** Time we last detected thread stuck due to lack of heartbeats for the current thread */
+		double LastStuckTime;
+		/** How long it's benn stuck thread */
+		double StuckDuration;
 
 		/** Suspends this thread's heartbeat */
 		void Suspend()
@@ -86,6 +98,12 @@ class CORE_API FThreadHeartBeat : public FRunnable
 	TMap<uint32, FHeartBeatInfo> ThreadHeartBeat;
 	/** The last heartbeat time for the rendering or RHI thread frame present. */
 	FHeartBeatInfo PresentHeartBeat;
+
+	/** Synch object for the function heartbeat */
+	FCriticalSection FunctionHeartBeatCritical;
+	/** Keeps track of the last heartbeat time for a function, can't be nested */
+	TMap<uint32, FHeartBeatInfo> FunctionHeartBeat;
+	
 	/** True if heartbeat should be measured */
 	FThreadSafeBool bReadyToCheckHeartbeat;
 	/** Max time the thread is allowed to not send the heartbeat*/
@@ -93,12 +111,17 @@ class CORE_API FThreadHeartBeat : public FRunnable
 	double CurrentHangDuration;
 	double ConfigPresentDuration;
 	double CurrentPresentDuration;
+	double ConfigStuckDuration;
+	double CurrentStuckDuration;
+
 	double HangDurationMultiplier;
-	
+
 	/** CRC of the last hang's callstack */
 	uint32 LastHangCallstackCRC;
 	/** Id of the last thread that hung */
 	uint32 LastHungThreadId;
+
+	uint32 LastStuckThreadId;
 
 	bool bHangsAreFatal;
 
@@ -107,6 +130,9 @@ class CORE_API FThreadHeartBeat : public FRunnable
 
 	FThreadHeartBeatClock Clock;
 
+	FOnThreadStuck OnStuck;
+	FOnThreadUnstuck OnUnstuck;
+
 	FThreadHeartBeat();
 	virtual ~FThreadHeartBeat();
 
@@ -114,6 +140,8 @@ class CORE_API FThreadHeartBeat : public FRunnable
 
 	void FORCENOINLINE OnHang(double HangDuration, uint32 ThreadThatHung);
 	void FORCENOINLINE OnPresentHang(double HangDuration);
+
+	bool IsEnabled();
 
 public:
 
@@ -140,6 +168,14 @@ public:
 	uint32 CheckHeartBeat(double& OutHangDuration);
 	/** Called by a thread when it's no longer expecting to be ticked */
 	void KillHeartBeat();
+
+	/** Called from a thread once on entry to a function to be monitored */
+	void MonitorFunctionStart();
+	/** Called by a thread when a function has completed and no longer needs to be monitored */
+	void MonitorFunctionEnd();
+	/** Called by a supervising thread to check all function calls' being monitored health */
+	uint32 CheckFunctionHeartBeat(double& OutHangDuration);
+
 	/** 
 	 * Suspend heartbeat measuring for the current thread if the thread has already had a heartbeat 
 	 * @param bAllThreads If true, suspends heartbeat for all threads, not only the current one
@@ -167,6 +203,18 @@ public:
 	* Returns InvalidThreadId if hang detector has not been triggered.
 	*/
 	uint32 GetLastHungThreadId() const { return LastHungThreadId; }
+
+	/*
+	* Get the Id of the last thread to pass the stuck thread time.
+	* Returns InvalidThreadId if hang detector has not been triggered.
+	*/
+	uint32 GetLastStuckThreadId() const { return LastStuckThreadId; }
+
+	/*
+	* Get delegate for callback on stuck or unstuck thread.
+	*/
+	FOnThreadStuck& GetOnThreadStuck() { return OnStuck; }
+	FOnThreadUnstuck& GetOnThreadUnstuck() { return OnUnstuck; }
 
 	//~ Begin FRunnable Interface.
 	virtual bool Init();
@@ -197,6 +245,27 @@ public:
 		}
 	}
 };
+
+/** Simple scope object to put at the top of a function to monitor it completes in a timely fashion */
+struct FFunctionHeartBeatScope
+{
+public:
+	FORCEINLINE FFunctionHeartBeatScope()
+	{
+		if (FThreadHeartBeat* HB = FThreadHeartBeat::GetNoInit())
+		{
+			HB->MonitorFunctionStart();
+		}
+	}
+	FORCEINLINE ~FFunctionHeartBeatScope()
+	{
+		if (FThreadHeartBeat* HB = FThreadHeartBeat::GetNoInit())
+		{
+			HB->MonitorFunctionEnd();
+		}
+	}
+};
+
 
 // When 1, performs a full symbol lookup in hitch call stacks, otherwise only
 // a backtrace is performed and the raw addresses are written to the log.

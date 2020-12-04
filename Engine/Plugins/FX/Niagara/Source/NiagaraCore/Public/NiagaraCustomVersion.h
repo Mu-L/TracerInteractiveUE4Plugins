@@ -152,6 +152,16 @@ struct FNiagaraCustomVersion
 
 		StandardizeParameterNames, // Fix graph parameter map parameters on post load so that they all have a consisten parsable format and update the UI to show and filter based on these formats.
 
+		ComponentsOnlyHaveUserVariables, // Make sure that UNiagaraComponents only have override maps for User variables.
+
+		RibbonRendererUVRefactor, // Refactor the options for UV settings on the ribbon renderer.
+
+		VariablesUseTypeDefRegistry, // Replace the TypeDefinition in VariableBase with an index into the type registry
+
+		AddLibraryVisibilityProperty, // Expand the visibility options of the scripts to be able to hide a script completely from the user 
+
+		SignificanceHandlers,
+
 		// DO NOT ADD A NEW VERSION UNLESS YOU HAVE TALKED TO THE NIAGARA LEAD. Mismanagement of these versions can lead to data loss if it is adjusted in multiple streams simultaneously.
 		// -----<new versions can be added above this line>  -------------------------------------------------
 		VersionPlusOne,

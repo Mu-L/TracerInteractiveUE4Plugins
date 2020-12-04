@@ -29,6 +29,14 @@ struct FAndroidOpenGLFramePacer : public IAndroidFramePacer
 
 private:
 	void InitSwappy();
+	bool SupportsFramePaceInternal(int32 QueryFramePace, int32& OutRefreshRate, int32& OutSyncInterval);
+
+	// swappy state
+	bool bSwappyInit = false;
+	int32 CachedFramePace = 60;
+	int32 CachedRefreshRate = 60;
+	int32 CachedSyncInterval = 1;
+
 	// legacy framepacer state
 	int32 DesiredSyncIntervalRelativeTo60Hz = -1;
 	int32 DesiredSyncIntervalRelativeToDevice = -1;
@@ -37,16 +45,16 @@ private:
 	int64 DriverRefreshNanos = 16666666;
 	double LastTimeEmulatedSync = -1.0;
 	uint32 SwapBufferFailureCount = 0;
-
-	bool bSwappyInit = false;
 };
 
 struct FAndroidVulkanFramePacer : public IAndroidFramePacer
 {
-	// Temporary stub until we enable Swappy on Vulkan
 	virtual void Init() override {}
 	virtual ~FAndroidVulkanFramePacer() {}
-	virtual bool SupportsFramePace(int32 QueryFramePace) override { return FGenericPlatformRHIFramePacer::SupportsFramePace(QueryFramePace); }
+	virtual bool SupportsFramePace(int32 QueryFramePace) override;
+private:
+	bool SupportsFramePaceInternal(int32 QueryFramePace, int32& OutRefreshRate, int32& OutSyncInterval);
+	friend class FVulkanAndroidPlatform;
 };
 
 struct FAndroidPlatformRHIFramePacer : public FGenericPlatformRHIFramePacer
@@ -64,6 +72,7 @@ struct FAndroidPlatformRHIFramePacer : public FGenericPlatformRHIFramePacer
 	static void SwapBuffers(bool bLockToVsync) { if (ensure(FramePacer)) { FramePacer->SwapBuffers(bLockToVsync); } }
 
 	static TAutoConsoleVariable<int32> CVarUseSwappyForFramePacing;
+	static TAutoConsoleVariable<int32> CVarSupportNonVSyncMultipleFrameRates;
 
 	// Legacy pacer stuff
 	static TAutoConsoleVariable<int32> CVarAllowFrameTimestamps;

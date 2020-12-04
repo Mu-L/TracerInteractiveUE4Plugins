@@ -118,9 +118,7 @@ void ScreenSpaceReflections(
 	const float3 PositionTranslatedWorld = mul( float4( ScreenPos * SceneDepth, SceneDepth, 1 ), View.ScreenToTranslatedWorld ).xyz;
 	const float3 V = normalize(View.TranslatedWorldCameraOrigin - PositionTranslatedWorld);
 
-#if GBUFFER_HAS_TANGENT
 	ModifyGGXAnisotropicNormalRoughness(GBuffer.WorldTangent, GBuffer.Anisotropy, GBuffer.Roughness, N, V);
-#endif
 	
 	float Roughness = GetRoughness(GBuffer);
 	float RoughnessFade = GetRoughnessFade(Roughness);
@@ -257,7 +255,7 @@ void ScreenSpaceReflections(
 
 				float2 SampleUV;
 				float Vignette;
-				ReprojectHit(PrevScreenPositionScaleBias, SceneVelocityBuffer, SceneVelocityBufferSampler, HitUVz, SampleUV, Vignette);
+				ReprojectHit(PrevScreenPositionScaleBias, GBufferVelocityTexture, GBufferVelocityTextureSampler, HitUVz, SampleUV, Vignette);
 
 				float4 SampleColor = SampleScreenColor( SceneColor, SceneColorSampler, SampleUV ) * Vignette;
 
@@ -286,11 +284,6 @@ void ScreenSpaceReflections(
 		//OutColor /= NumRays;
 		OutColor /= max( NumRays, 0.0001 );
 		OutColor.rgb *= rcp( 1 - Luminance(OutColor.rgb) );
-
-		if (ClosestHitDistanceSqr == INFINITE_FLOAT)
-		{
-			ClosestHitDistanceSqr = DENOISER_MISS_HIT_DISTANCE;
-		}
 	}
 	else
 	{
@@ -341,13 +334,9 @@ void ScreenSpaceReflections(
 
 			float2 SampleUV;
 			float Vignette;
-			ReprojectHit(PrevScreenPositionScaleBias, SceneVelocityBuffer, SceneVelocityBufferSampler, HitUVz, SampleUV, Vignette);
+			ReprojectHit(PrevScreenPositionScaleBias, GBufferVelocityTexture, GBufferVelocityTextureSampler, HitUVz, SampleUV, Vignette);
 
 			OutColor = SampleScreenColor(SceneColor, SceneColorSampler, SampleUV) * Vignette;
-		}
-		else
-		{
-			ClosestHitDistanceSqr = DENOISER_MISS_HIT_DISTANCE;
 		}
 	}
 	
@@ -361,7 +350,10 @@ void ScreenSpaceReflections(
 	// Output closest hit distance for denoiser.
 	#if SSR_OUTPUT_FOR_DENOISER
 	{
-		OutClosestHitDistance = ClosestHitDistanceSqr > 0 ? ClampToHalfFloatRange(sqrt(ClosestHitDistanceSqr)) : ClosestHitDistanceSqr;
+		OutClosestHitDistance = ComputeDenoiserConfusionFactor(
+			ClosestHitDistanceSqr > 0,
+			length(View.TranslatedWorldCameraOrigin - PositionTranslatedWorld),
+			sqrt(ClosestHitDistanceSqr));
 	}
 	#endif
 }

@@ -10,11 +10,13 @@ static float GHairTT = 1;
 static float GHairTRT = 1;
 static float GHairGlobalScattering = 1;
 static float GHairLocalScattering = 1;
+static int32 GHairTTModel = 0;
 static FAutoConsoleVariableRef CVarHairR(TEXT("r.HairStrands.Components.R"), GHairR, TEXT("Enable/disable hair BSDF component R"));
 static FAutoConsoleVariableRef CVarHairTT(TEXT("r.HairStrands.Components.TT"), GHairTT, TEXT("Enable/disable hair BSDF component TT"));
 static FAutoConsoleVariableRef CVarHairTRT(TEXT("r.HairStrands.Components.TRT"), GHairTRT, TEXT("Enable/disable hair BSDF component TRT"));
 static FAutoConsoleVariableRef CVarHairGlobalScattering(TEXT("r.HairStrands.Components.GlobalScattering"), GHairGlobalScattering, TEXT("Enable/disable hair BSDF component global scattering"));
 static FAutoConsoleVariableRef CVarHairLocalScattering(TEXT("r.HairStrands.Components.LocalScattering"), GHairLocalScattering, TEXT("Enable/disable hair BSDF component local scattering"));
+static FAutoConsoleVariableRef CVarHairTTModel(TEXT("r.HairStrands.Components.TTModel"), GHairTTModel, TEXT("Select hair TT model"));
 
 static float GStrandHairRasterizationScale = 0.5f; // For no AA without TAA, a good value is: 1.325f (Empirical)
 static FAutoConsoleVariableRef CVarStrandHairRasterizationScale(TEXT("r.HairStrands.RasterizationScale"), GStrandHairRasterizationScale, TEXT("Rasterization scale to snap strand to pixel"), ECVF_Scalability | ECVF_RenderThreadSafe);
@@ -34,11 +36,24 @@ static FAutoConsoleVariableRef CVarDeepShadowAABBScale(TEXT("r.HairStrands.DeepS
 static int32 GHairVisibilityRectOptimEnable = 0;
 static FAutoConsoleVariableRef CVarHairVisibilityRectOptimEnable(TEXT("r.HairStrands.RectLightingOptim"), GHairVisibilityRectOptimEnable, TEXT("Hair Visibility use projected view rect to light only relevant pixels"));
 
+static int32 GHairStrandsComposeAfterTranslucency = 1;
+static FAutoConsoleVariableRef CVarHairStrandsComposeAfterTranslucency(TEXT("r.HairStrands.ComposeAfterTranslucency"), GHairStrandsComposeAfterTranslucency, TEXT("Compose hair rendering with scene color after the translucency pass if true. Otherwise compose hair defor the translucent objects are rendered."));
+
 static float GHairDualScatteringRoughnessOverride = 0;
 static FAutoConsoleVariableRef CVarHairDualScatteringRoughnessOverride(TEXT("r.HairStrands.DualScatteringRoughness"), GHairDualScatteringRoughnessOverride, TEXT("Override all roughness for the dual scattering evaluation. 0 means no override. Default:0"));
 float GetHairDualScatteringRoughnessOverride()
 {
 	return GHairDualScatteringRoughnessOverride;
+}
+
+bool IsHairStrandsComposeAfterTranslucency()
+{
+	return GHairStrandsComposeAfterTranslucency > 0;
+}
+
+float GetDeepShadowAABBScale()
+{
+	return FMath::Max(0.f, GDeepShadowAABBScale);
 }
 
 float SampleCountToSubPixelSize(uint32 SamplePerPixelCount)
@@ -47,6 +62,7 @@ float SampleCountToSubPixelSize(uint32 SamplePerPixelCount)
 	switch (SamplePerPixelCount)
 	{
 	case 1: Scale = 1.f; break;
+	case 2: Scale = 8.f / 16.f; break;
 	case 4: Scale = 8.f / 16.f; break;
 	case 8: Scale = 4.f / 16.f; break;
 	}
@@ -60,6 +76,7 @@ FHairComponent GetHairComponents()
 	Out.TRT = GHairTRT > 0;
 	Out.LocalScattering = GHairLocalScattering > 0;
 	Out.GlobalScattering = GHairGlobalScattering > 0;
+	Out.TTModel = GHairTTModel > 0 ? 1 : 0;
 	return Out;
 }
 
@@ -70,7 +87,9 @@ uint32 ToBitfield(const FHairComponent& C)
 		(C.TT				? 1u : 0u) << 1 |
 		(C.TRT				? 1u : 0u) << 2 |
 		(C.LocalScattering  ? 1u : 0u) << 3 |
-		(C.GlobalScattering ? 1u : 0u) << 4 ;
+		(C.GlobalScattering ? 1u : 0u) << 4 |
+		// Multiple scattering         << 5 (used only within shader)
+		(C.TTModel			? 1u : 0u) << 6;
 }
 
 float GetPrimiartyRasterizationScale()
@@ -120,7 +139,7 @@ void ComputeWorldToLightClip(
 	const FIntPoint& ShadowResolution)
 {
 	const FSphere SphereBound = PrimitivesBounds.GetSphere();
-	const float SphereRadius = SphereBound.W * GDeepShadowAABBScale;
+	const float SphereRadius = SphereBound.W * GetDeepShadowAABBScale();
 	const FVector LightPosition = LightProxy.GetPosition();
 	const float MinZ = FMath::Max(0.1f, FVector::Distance(LightPosition, SphereBound.Center)) - SphereBound.W;
 	const float MaxZ = FMath::Max(0.2f, FVector::Distance(LightPosition, SphereBound.Center)) + SphereBound.W;
@@ -230,11 +249,6 @@ bool IsHairStrandsViewRectOptimEnable()
 	return GHairVisibilityRectOptimEnable > 0;
 }
 
-bool IsHairStrandsSupported(const EShaderPlatform Platform)
-{
-	return IsD3DPlatform(Platform, false) && IsPCPlatform(Platform) && GetMaxSupportedFeatureLevel(Platform) == ERHIFeatureLevel::SM5;
-}
-
 EHairVisibilityVendor GetVendor()
 {
 	return IsRHIDeviceAMD() ? HairVisibilityVendor_AMD : (IsRHIDeviceNVIDIA() ? HairVisibilityVendor_NVIDIA : HairVisibilityVendor_INTEL);
@@ -284,38 +298,4 @@ uint32 PackHairRenderInfoBits(
 	BitField |= bIsOrtho ? 0x1 : 0;
 	BitField |= bIsGPUDriven ? 0x2 : 0;
 	return BitField;
-}
-FHairStrandsProjectionMeshData ExtractMeshData(FSkeletalMeshRenderData* RenderData)
-{
-	FHairStrandsProjectionMeshData MeshData;
-	uint32 LODIndex = 0;
-	for (FSkeletalMeshLODRenderData& LODRenderData : RenderData->LODRenderData)
-	{
-		FHairStrandsProjectionMeshData::LOD& LOD = MeshData.LODs.AddDefaulted_GetRef();
-		uint32 SectionIndex = 0;
-		for (FSkelMeshRenderSection& InSection : LODRenderData.RenderSections)
-		{
-			// Pick between float and halt
-			const uint32 UVSizeInByte = (LODRenderData.StaticVertexBuffers.StaticMeshVertexBuffer.GetUseFullPrecisionUVs() ? 4 : 2) * 2;
-
-			FHairStrandsProjectionMeshData::Section& OutSection = LOD.Sections.AddDefaulted_GetRef();
-			OutSection.UVsChannelOffset = 0; // Assume that we needs to pair meshes based on UVs 0
-			OutSection.UVsChannelCount = LODRenderData.StaticVertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords();
-			OutSection.UVsBuffer = LODRenderData.StaticVertexBuffers.StaticMeshVertexBuffer.GetTexCoordsSRV();
-			OutSection.PositionBuffer = LODRenderData.StaticVertexBuffers.PositionVertexBuffer.GetSRV();
-			OutSection.IndexBuffer = LODRenderData.MultiSizeIndexContainer.GetIndexBuffer()->GetSRV();
-			OutSection.TotalVertexCount = LODRenderData.StaticVertexBuffers.PositionVertexBuffer.GetNumVertices();
-			OutSection.TotalIndexCount = LODRenderData.MultiSizeIndexContainer.GetIndexBuffer()->Num();
-			OutSection.NumPrimitives = InSection.NumTriangles;
-			OutSection.VertexBaseIndex = InSection.BaseVertexIndex;
-			OutSection.IndexBaseIndex = InSection.BaseIndex;
-			OutSection.SectionIndex = SectionIndex;
-			OutSection.LODIndex = LODIndex;
-
-			++SectionIndex;
-		}
-		++LODIndex;
-	}
-
-	return MeshData;
 }

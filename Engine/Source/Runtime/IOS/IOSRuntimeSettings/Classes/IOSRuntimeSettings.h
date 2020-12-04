@@ -30,27 +30,14 @@ enum class EPowerUsageFrameRateLock : uint8
 UENUM()
 	enum class EIOSVersion : uint8
 {
-	/** iOS 6.1 */
-	IOS_61 = 6 UMETA(Hidden),
-
-	/** iOS 7 */
-	IOS_7 = 7 UMETA(Hidden),
-
-	/** iOS 8 */
-	IOS_8 = 8 UMETA(Hidden),
-
-	/** iOS 9 */
-	IOS_9 = 9 UMETA(Hidden),
-
-	/** iOS 10 */
-	IOS_10 = 10 UMETA(Hidden),
-
-	/** iOS 11 */
-	IOS_11 = 11 UMETA(DisplayName = "11.0"),
-
-	/** iOS 12 */
+    /** iOS 12 */
 	IOS_12 = 12 UMETA(DisplayName = "12.0"),
 
+	/** iOS 13 */
+	IOS_13 = 13 UMETA(DisplayName = "13.0"),
+
+    /** iOS 14 */
+    IOS_14 = 14 UMETA(DisplayName = "14.0"),
 };
 
 UENUM()
@@ -244,9 +231,8 @@ public:
     UPROPERTY(GlobalConfig, EditAnywhere, Category = Build, meta = (DisplayName = "Build project as a framework (Experimental)"))
     bool bBuildAsFramework;
 
-	// Remotely compile shaders offline
-	UPROPERTY(GlobalConfig, EditAnywhere, Category = Build)
-	bool EnableRemoteShaderCompile;
+	UPROPERTY(GlobalConfig, EditAnywhere, Category = Build, meta = (DisplayName = "Override location of Metal toolchain"))
+	FIOSBuildResourceDirectory WindowsMetalToolchainOverride;
 
 	// Enable generation of dSYM file
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = Build, meta = (DisplayName = "Generate dSYM file for code debugging and profiling"))
@@ -264,30 +250,6 @@ public:
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = Build, meta = (DisplayName = "Generate xcode archive package"))
 	bool bGenerateXCArchive;	
 	
-	// Enable ArmV7 support? (this will be used if all type are unchecked)
-	UPROPERTY(GlobalConfig)
-	bool bDevForArmV7;
-
-	// Enable Arm64 support?
-	UPROPERTY(GlobalConfig)
-	bool bDevForArm64;
-
-	// Enable ArmV7s support?
-	UPROPERTY(GlobalConfig)
-	bool bDevForArmV7S;
-
-	// Enable ArmV7 support? (this will be used if all type are unchecked)
-	UPROPERTY(GlobalConfig)
-	bool bShipForArmV7;
-
-	// Enable Arm64 support?
-	UPROPERTY(GlobalConfig)
-	bool bShipForArm64;
-
-	// Enable ArmV7s support?
-	UPROPERTY(GlobalConfig)
-	bool bShipForArmV7S;
-
 	// Enable bitcode compiling?
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = Build, meta = (DisplayName = "Support bitcode in Shipping"))
 	bool bShipForBitcode;
@@ -327,18 +289,22 @@ public:
 	// The path of the ssh permissions key to be used when connecting to the remote server.
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = "Build", meta = (EditCondition = "bUseRSync", DisplayName = "Override existing SSH permissions file", ConfigHierarchyEditable))
 	FIOSBuildResourceFilePath SSHPrivateKeyOverridePath;
+    
+    // Should the app be compatible with Multi-User feature on tvOS ?　If checked, the game will will shutdown with the typical exit flow.
+    UPROPERTY(GlobalConfig, EditAnywhere, Category = "Build", meta = (DisplayName = "Support user switching on tvOS."))
+    bool bRunAsCurrentUser;
 
-	// If checked, the Siri Remote will act as a separate controller Id from any connected controllers. If unchecked, the remote and the first connected controller will share an ID (and control the same player)
-	UPROPERTY(GlobalConfig, EditAnywhere, Category = Input, meta = (DisplayName = "Treat AppleTV Remote as separate controller"))
-	bool bTreatRemoteAsSeparateController;
+	// If checked, the game will be able to handle multiple gamepads at the same time (the Siri Remote is a gamepad)
+	UPROPERTY(GlobalConfig, EditAnywhere, Category = Input, meta = (DisplayName = "Can the Game have multiple gamepads connected at a single time"))
+	bool bGameSupportsMultipleActiveControllers;
 
 	// If checked, the Siri Remote can be rotated to landscape view
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = Input, meta = (DisplayName = "Allow AppleTV Remote landscape mode"))
 	bool bAllowRemoteRotation;
 	
 	// If checked, the trackpad is a virtual joystick (acts like the left stick of a controller). If unchecked, the trackpad will send touch events
-	UPROPERTY(GlobalConfig, EditAnywhere, Category = Input, meta = (DisplayName = "Use AppleTV trackpad as virtual joystick"))
-	bool bUseRemoteAsVirtualJoystick;
+	UPROPERTY(config, meta = (Deprecated, DeprecationMessage = "Use AppleTV trackpad as virtual joystick. Deprecated. Siri Remote shouls always behave as a joystick"))
+	bool bUseRemoteAsVirtualJoystick_DEPRECATED;
 	
 	// If checked, the center of the trackpad is 0,0 (center) for the virtual joystick. If unchecked, the location the user taps becomes 0,0
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = Input, meta = (DisplayName = "Use AppleTV Remote absolute trackpad values"))
@@ -545,6 +511,10 @@ public:
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = "Audio|CookOverrides|Stream Caching", meta = (DisplayName = "Max Cache Size (KB)"))
 	int32 CacheSizeKB;
 
+	/** This overrides the default max chunk size used when chunking audio for stream caching (ignored if < 0) */
+	UPROPERTY(GlobalConfig, EditAnywhere, Category = "Audio|CookOverrides|Stream Caching", meta = (DisplayName = "Max Chunk Size Override (KB)"))
+	int32 MaxChunkSizeOverrideKB;
+
 	UPROPERTY(config, EditAnywhere, Category = "Audio|CookOverrides")
 	bool bResampleForDevice;
 
@@ -576,6 +546,10 @@ public:
 	// When set to anything beyond 0, this will ensure any SoundWaves longer than this value, in seconds, to stream directly off of the disk.
 	UPROPERTY(GlobalConfig, EditAnywhere, Category = "Audio|CookOverrides", meta = (DisplayName = "Stream All Soundwaves Longer Than: "))
 	float AutoStreamingThreshold;
+
+	/** Whether to enable LOD streaming for landscape visual meshes. Requires Metal support. */
+	UPROPERTY(GlobalConfig, EditAnywhere, Category = "Misc", Meta = (DisplayName = "Stream landscape visual mesh LODs"))
+	bool bStreamLandscapeMeshLODs;
 
 	virtual void PostReloadConfig(class FProperty* PropertyThatWasLoaded) override;
 

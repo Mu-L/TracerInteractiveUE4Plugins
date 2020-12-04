@@ -18,9 +18,11 @@ public class HeadlessChaosTarget : TargetRules
 
 		// HeadlessChaos doesn't ever compile with the engine linked in
 		bCompileAgainstEngine = false;
-		bCompileAgainstCoreUObject = false;
+		bCompileAgainstCoreUObject = true;
 
         bHasExports = false;
+
+        bUseLoggingInShipping = true;
 
         // UnrealHeaderTool is a console application, not a Windows app (sets entry point to main(), instead of WinMain())
         bIsBuildingConsoleApplication = true;

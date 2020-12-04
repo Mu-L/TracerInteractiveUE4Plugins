@@ -28,6 +28,7 @@ namespace AutomationCommon
 
 #if WITH_AUTOMATION_TESTS
 
+
 	/** Gets a name to be used for this screenshot.  This will return something like 
 		TestName/PlatformName/DeviceName.png. It's important to understand that a screenshot
 		generated on a device will likely have a different absolute path than the editor so this
@@ -41,7 +42,7 @@ namespace AutomationCommon
 	*/
 	ENGINE_API FString GetLocalPathForScreenshot(const FString& InScreenshotName);
 
-	ENGINE_API FAutomationScreenshotData BuildScreenshotData(const FString& MapOrContext, const FString& TestName, int32 Width, int32 Height);
+	ENGINE_API FAutomationScreenshotData BuildScreenshotData(const FString& MapOrContext, const FString& TestName, const FString& ScreenShotName, int32 Width, int32 Height);
 
 	ENGINE_API extern FOnEditorAutomationMapLoad OnEditorAutomationMapLoad;
 	static FOnEditorAutomationMapLoad& OnEditorAutomationMapLoadDelegate()

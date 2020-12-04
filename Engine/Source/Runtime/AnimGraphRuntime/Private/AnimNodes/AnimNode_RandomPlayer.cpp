@@ -231,7 +231,7 @@ void FAnimNode_RandomPlayer::Update_AnyThread(const FAnimationUpdateContext& Con
 
 	FAnimInstanceProxy* AnimProxy = Context.AnimInstanceProxy;
 	FAnimGroupInstance* SyncGroup;
-	FAnimTickRecord& TickRecord = AnimProxy->CreateUninitializedTickRecord(INDEX_NONE, SyncGroup);
+	FAnimTickRecord& TickRecord = AnimProxy->CreateUninitializedTickRecord(SyncGroup, NAME_None);
 	AnimProxy->MakeSequenceTickRecord(
 	    TickRecord, CurrentData->Entry->Sequence, true, CurrentData->PlayRate,
 	    CurrentData->BlendWeight, CurrentData->CurrentPlayTime, CurrentData->MarkerTickRecord);
@@ -240,7 +240,7 @@ void FAnimNode_RandomPlayer::Update_AnyThread(const FAnimationUpdateContext& Con
 
 	if (FAnimationRuntime::HasWeight(NextData->BlendWeight))
 	{
-		FAnimTickRecord& NextTickRecord = AnimProxy->CreateUninitializedTickRecord(INDEX_NONE, SyncGroup);
+		FAnimTickRecord& NextTickRecord = AnimProxy->CreateUninitializedTickRecord(SyncGroup, NAME_None);
 		AnimProxy->MakeSequenceTickRecord(
 		    NextTickRecord, NextData->Entry->Sequence, true, NextData->PlayRate,
 		    NextData->BlendWeight, NextData->CurrentPlayTime, NextData->MarkerTickRecord);
@@ -274,6 +274,7 @@ void FAnimNode_RandomPlayer::Evaluate_AnyThread(FPoseContext& Output)
 		// Start Blending
 		FCompactPose Poses[2];
 		FBlendedCurve Curves[2];
+		FStackCustomAttributes Attributes[2];
 		float Weights[2];
 
 		const FBoneContainer& RequiredBone = AnimProxy->GetRequiredBones();
@@ -288,15 +289,21 @@ void FAnimNode_RandomPlayer::Evaluate_AnyThread(FPoseContext& Output)
 
 		UAnimSequence* NextSequence = NextData.Entry->Sequence;
 
-		CurrentSequence->GetAnimationPose(Poses[0], Curves[0], FAnimExtractContext(CurrentData.CurrentPlayTime, AnimProxy->ShouldExtractRootMotion()));
-		NextSequence->GetAnimationPose(Poses[1], Curves[1], FAnimExtractContext(NextData.CurrentPlayTime, AnimProxy->ShouldExtractRootMotion()));
 
-		FAnimationRuntime::BlendPosesTogether(Poses, Curves, Weights, Output.Pose, Output.Curve);
+		FAnimationPoseData CurrentPoseData(Poses[0], Curves[0], Attributes[0]);
+		FAnimationPoseData NextPoseData(Poses[1], Curves[1], Attributes[1]);
+
+		CurrentSequence->GetAnimationPose(CurrentPoseData, FAnimExtractContext(CurrentData.CurrentPlayTime, AnimProxy->ShouldExtractRootMotion()));
+		NextSequence->GetAnimationPose(NextPoseData, FAnimExtractContext(NextData.CurrentPlayTime, AnimProxy->ShouldExtractRootMotion()));
+
+		FAnimationPoseData AnimationPoseData(Output);
+		FAnimationRuntime::BlendPosesTogether(Poses, Curves, Attributes, Weights, AnimationPoseData);
 	}
 	else
 	{
 		// Single animation, no blending needed.
-		CurrentSequence->GetAnimationPose(Output.Pose, Output.Curve, FAnimExtractContext(CurrentData.CurrentPlayTime, Output.AnimInstanceProxy->ShouldExtractRootMotion()));
+		FAnimationPoseData AnimationPoseData(Output);
+		CurrentSequence->GetAnimationPose(AnimationPoseData, FAnimExtractContext(CurrentData.CurrentPlayTime, Output.AnimInstanceProxy->ShouldExtractRootMotion()));
 	}
 }
 

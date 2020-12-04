@@ -23,6 +23,7 @@ using namespace Chaos;
 FImplicitObject::FImplicitObject(int32 Flags, EImplicitObjectType InType)
     : Type(InType)
 	, CollisionType(InType)
+	, Margin(0.0f)
     , bIsConvex(!!(Flags & EImplicitObject::IsConvex))
     , bDoCollide(!(Flags & EImplicitObject::DisableCollisions))
     , bHasBoundingBox(!!(Flags & EImplicitObject::HasBoundingBox))
@@ -338,6 +339,8 @@ void FImplicitObject::SerializeImp(FArchive& Ar)
 	{
 		CollisionType = Type;
 	}
+
+	// NOTE: Do not serialize Margin in FImplicitObject base class - this is handled by derived types that use it
 }
 
 void FImplicitObject::Serialize(FChaosArchive& Ar)
@@ -433,7 +436,7 @@ FImplicitObject* FImplicitObject::SerializationFactory(FChaosArchive& Ar, FImpli
 		ensure(Ar.IsLoading() && (Ar.CustomVer(FExternalPhysicsCustomObjectVersion::GUID) < FExternalPhysicsCustomObjectVersion::ScaledGeometryIsConcrete));
 		return new TImplicitObjectScaledGeneric<FReal, 3>();
 	}
-	case ImplicitObjectType::HeightField: if (Ar.IsLoading()) { return new THeightField<FReal>(); } break;
+	case ImplicitObjectType::HeightField: if (Ar.IsLoading()) { return new FHeightField(); } break;
 	case ImplicitObjectType::Cylinder: if (Ar.IsLoading()) { return new TCylinder<FReal>(); } break;
 	default:
 		check(false);

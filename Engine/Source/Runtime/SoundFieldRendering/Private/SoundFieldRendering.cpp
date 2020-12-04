@@ -329,7 +329,7 @@ void FSoundFieldDecoder::DecodeAudioToSevenOneAndDownmixToDevice(const FAmbisoni
 	check(NumVirtualChannels == 9); // if this has changed, it breaks our assumptions for fast gain indexing
 
 	// get listener orientation in spherical coordinates
-	FQuat RelativeRotation = OutputPositions.Rotation *InputData.Rotation.Inverse();
+	FQuat RelativeRotation = OutputPositions.Rotation * InputData.Rotation;
 	FVector2D ListenerRotationSphericalCoord = RelativeRotation.Vector().UnitCartesianToSpherical();
 	FSphericalHarmonicCalculator::AdjustUESphericalCoordinatesForAmbisonics(ListenerRotationSphericalCoord);
 
@@ -346,7 +346,7 @@ void FSoundFieldDecoder::DecodeAudioToSevenOneAndDownmixToDevice(const FAmbisoni
 		CurrentSpeakerGains = TargetSpeakerGains;
 		TargetSpeakerGains = FoaVirtualSpeakerWordLockedGains;
 		FVector ListenerRot = RelativeRotation.Euler();
-		FoaRotationInPlace(TargetSpeakerGains, ListenerRot.X, -ListenerRot.Y, ListenerRot.Z);
+		FoaRotationInPlace(TargetSpeakerGains, ListenerRot.X, ListenerRot.Y, ListenerRot.Z);
 
 		// If we just switched to this decode method (from direct to device), we need to initialize CurrentSpeakerGains size
 		if (CurrentSpeakerGains.Num() != TargetSpeakerGains.Num())
@@ -662,7 +662,7 @@ void FSoundFieldDecoder::FoaRotationInPlace(Audio::AlignedFloatBuffer& InOutBuff
 	VectorRegister InputAmbiFrame = VectorRegister();
 
 	FMatrix RotationMatrix;
-	SphereHarmCalc.GenerateFirstOrderRotationMatrixGivenDegrees(XRotDegrees - 180.0f, YRotDegrees, ZRotDegrees, RotationMatrix);
+	SphereHarmCalc.GenerateFirstOrderRotationMatrixGivenDegrees(-XRotDegrees + 180.0f, -YRotDegrees, ZRotDegrees, RotationMatrix);
 
 	VectorRegister RotMatrixRow0 = VectorLoadAligned(RotationMatrix.M[0]);
 	VectorRegister RotMatrixRow1 = VectorLoadAligned(RotationMatrix.M[1]);
@@ -734,13 +734,18 @@ void FSoundFieldEncoder::EncodeAudioDirectlyFromOutputPositions(const Audio::Ali
 
 	check(InputPositions.ChannelPositions);
 
+	const bool bIsMono = NumInputChannels == 1;
+
 	// fill out the ambisonics speaker gain maps
 	for (int InChan = 0; InChan < NumInputChannels; ++InChan)
 	{
 		const Audio::FChannelPositionInfo& CurrSpeakerPos = (*InputPositions.ChannelPositions)[InChan];
 
 		// skip LFE and Center channel (leave gains at zero)
-		if (CurrSpeakerPos.Channel == EAudioMixerChannel::LowFrequency || CurrSpeakerPos.Channel == EAudioMixerChannel::FrontCenter)
+		// Mono audio channels are FrontCenter, so do _not_ skip if center channel and mono.
+		const bool bSkipChannel = CurrSpeakerPos.Channel == EAudioMixerChannel::LowFrequency || (!bIsMono && (CurrSpeakerPos.Channel == EAudioMixerChannel::FrontCenter));
+			
+		if (bSkipChannel)
 		{
 			SpeakerGainsPtr += NumAmbiChannels;
 			continue;

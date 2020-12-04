@@ -18,11 +18,16 @@ MapBuildData.cpp
 #include "EngineUtils.h"
 #include "Components/ModelComponent.h"
 #include "ComponentRecreateRenderStateContext.h"
+#include "UObject/MobileObjectVersion.h"
 #include "UObject/RenderingObjectVersion.h"
 #include "UObject/ReflectionCaptureObjectVersion.h"
 #include "ContentStreaming.h"
 #include "Components/ReflectionCaptureComponent.h"
 #include "Interfaces/ITargetPlatform.h"
+#if WITH_EDITOR
+#include "Factories/TextureFactory.h"
+#endif
+#include "Engine/TextureCube.h"
 
 DECLARE_MEMORY_STAT(TEXT("Stationary Light Static Shadowmap"),STAT_StationaryLightBuildData,STATGROUP_MapBuildData);
 DECLARE_MEMORY_STAT(TEXT("Reflection Captures"),STAT_ReflectionCaptureBuildData,STATGROUP_MapBuildData);
@@ -209,6 +214,8 @@ void ULevel::HandleLegacyMapBuildData()
 				}
 			}
 		}
+
+		Registry->HandleLegacyEncodedCubemapData();
 	}
 }
 
@@ -304,19 +311,17 @@ FArchive& operator<<(FArchive& Ar, FReflectionCaptureMapBuildData& ReflectionCap
 		Ar << StrippedData;
 	}
 
-	if (Formats.Num() == 0 || Formats.Contains(EncodedHDR))
+	if (Ar.CustomVer(FMobileObjectVersion::GUID) >= FMobileObjectVersion::StoreReflectionCaptureCompressedMobile)
 	{
-		if (Ar.IsSaving() 
-			&& Ar.IsCooking()
-			&& ReflectionCaptureMapBuildData.EncodedHDRCapturedData.Num() == 0
-			&& ReflectionCaptureMapBuildData.FullHDRCapturedData.Num() > 0)
+		if (Ar.IsCooking() && !Formats.Contains(EncodedHDR))
 		{
-			// Encode from HDR as needed
-			//@todo - cache in DDC?
-			GenerateEncodedHDRData(ReflectionCaptureMapBuildData.FullHDRCapturedData, ReflectionCaptureMapBuildData.CubemapSize, ReflectionCaptureMapBuildData.Brightness, ReflectionCaptureMapBuildData.EncodedHDRCapturedData);
+			UTextureCube* StrippedData = NULL;
+			Ar << StrippedData;
 		}
-
-		Ar << ReflectionCaptureMapBuildData.EncodedHDRCapturedData;
+		else
+		{
+			Ar << ReflectionCaptureMapBuildData.EncodedCaptureData;
+		}
 	}
 	else
 	{
@@ -339,10 +344,14 @@ FReflectionCaptureMapBuildData::~FReflectionCaptureMapBuildData()
 
 void FReflectionCaptureMapBuildData::FinalizeLoad()
 {
-	AllocatedSize = FullHDRCapturedData.GetAllocatedSize() + EncodedHDRCapturedData.GetAllocatedSize();
+	AllocatedSize = FullHDRCapturedData.GetAllocatedSize();
 	INC_DWORD_STAT_BY(STAT_ReflectionCaptureBuildData, AllocatedSize);
 }
 
+void FReflectionCaptureMapBuildData::AddReferencedObjects(FReferenceCollector& Collector)
+{
+	Collector.AddReferencedObject(EncodedCaptureData);
+}
 
 UMapBuildDataRegistry::UMapBuildDataRegistry(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -358,6 +367,7 @@ void UMapBuildDataRegistry::Serialize(FArchive& Ar)
 	FStripDataFlags StripFlags(Ar, 0);
 
 	Ar.UsingCustomVersion(FRenderingObjectVersion::GUID);
+	Ar.UsingCustomVersion(FMobileObjectVersion::GUID);
 	Ar.UsingCustomVersion(FReflectionCaptureObjectVersion::GUID);
 
 	if (!StripFlags.IsDataStrippedForServer())
@@ -378,7 +388,7 @@ void UMapBuildDataRegistry::Serialize(FArchive& Ar)
 			{
 				const FReflectionCaptureMapBuildData& CaptureBuildData = It.Value();
 				// Sanity check that every reflection capture entry has valid data for at least one format
-				check(CaptureBuildData.FullHDRCapturedData.Num() > 0 || CaptureBuildData.EncodedHDRCapturedData.Num() > 0);
+				check(CaptureBuildData.FullHDRCapturedData.Num() > 0 || CaptureBuildData.EncodedCaptureData != nullptr);
 			}
 		}
 
@@ -386,7 +396,7 @@ void UMapBuildDataRegistry::Serialize(FArchive& Ar)
 		{
 			Ar << ReflectionCaptureBuildData;
 		}
-
+		
 		if (Ar.CustomVer(FRenderingObjectVersion::GUID) >= FRenderingObjectVersion::SkyAtmosphereStaticLightingVersioning)
 		{
 			Ar << SkyAtmosphereBuildData;
@@ -397,16 +407,18 @@ void UMapBuildDataRegistry::Serialize(FArchive& Ar)
 void UMapBuildDataRegistry::PostLoad()
 {
 	Super::PostLoad();
+	bool bUsesMobileDeferredShading = IsMobileDeferredShadingEnabled(GMaxRHIShaderPlatform);
+	bool bFullDataRequired = GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5 || bUsesMobileDeferredShading;
+	bool bEncodedDataRequired = (GIsEditor || (GMaxRHIFeatureLevel == ERHIFeatureLevel::ES3_1 && !bUsesMobileDeferredShading));
 
-	if (ReflectionCaptureBuildData.Num() > 0 
+	HandleLegacyEncodedCubemapData();
+
+	if (ReflectionCaptureBuildData.Num() > 0
 		// Only strip in PostLoad for cooked platforms.  Uncooked may need to generate encoded HDR data in UReflectionCaptureComponent::OnRegister().
 		&& FPlatformProperties::RequiresCookedData())
 	{
-		// We already stripped unneeded formats during cooking, but some cooking targets require multiple formats to be stored
-		// Strip unneeded formats for the current max feature level
-		bool bRetainAllFeatureLevelData = GIsEditor && GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5;
-		bool bEncodedDataRequired = bRetainAllFeatureLevelData || GMaxRHIFeatureLevel == ERHIFeatureLevel::ES3_1;
-		bool bFullDataRequired = GMaxRHIFeatureLevel >= ERHIFeatureLevel::SM5;
+		// We expect to use only one type of data at cooked runtime
+		check(bFullDataRequired != bEncodedDataRequired);
 
 		for (TMap<FGuid, FReflectionCaptureMapBuildData>::TIterator It(ReflectionCaptureBuildData); It; ++It)
 		{
@@ -419,14 +431,37 @@ void UMapBuildDataRegistry::PostLoad()
 
 			if (!bEncodedDataRequired)
 			{
-				CaptureBuildData.EncodedHDRCapturedData.Empty();
+				CaptureBuildData.EncodedCaptureData = nullptr;
 			}
 
-			check(CaptureBuildData.FullHDRCapturedData.Num() > 0 || CaptureBuildData.EncodedHDRCapturedData.Num() > 0 || FApp::CanEverRender() == false);
+			check(CaptureBuildData.EncodedCaptureData != nullptr || CaptureBuildData.FullHDRCapturedData.Num() > 0 || FApp::CanEverRender() == false);
 		}
 	}
 
 	SetupLightmapResourceClusters();
+}
+
+
+void UMapBuildDataRegistry::HandleLegacyEncodedCubemapData()
+{
+#if WITH_EDITOR
+	bool bUsesMobileDeferredShading = IsMobileDeferredShadingEnabled(GMaxRHIShaderPlatform);
+	bool bEncodedDataRequired = (GIsEditor || (GMaxRHIFeatureLevel == ERHIFeatureLevel::ES3_1 && !bUsesMobileDeferredShading));
+
+	if (ReflectionCaptureBuildData.Num() > 0 && bEncodedDataRequired)
+	{
+		for (TMap<FGuid, FReflectionCaptureMapBuildData>::TIterator It(ReflectionCaptureBuildData); It; ++It)
+		{
+			FReflectionCaptureMapBuildData& CaptureBuildData = It.Value();
+			if (CaptureBuildData.EncodedCaptureData == nullptr && CaptureBuildData.FullHDRCapturedData.Num() != 0)
+			{
+				FString TextureName = TEXT("DeprecatedTexture");
+				TextureName += LexToString(It.Key());
+				GenerateEncodedHDRTextureCube(this, CaptureBuildData, TextureName, 16.0f);
+			}
+		}
+	}
+#endif
 }
 
 void UMapBuildDataRegistry::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector)
@@ -437,6 +472,11 @@ void UMapBuildDataRegistry::AddReferencedObjects(UObject* InThis, FReferenceColl
 	check(TypedThis);
 
 	for (TMap<FGuid, FMeshMapBuildData>::TIterator It(TypedThis->MeshBuildData); It; ++It)
+	{
+		It.Value().AddReferencedObjects(Collector);
+	}
+
+	for (TMap<FGuid, FReflectionCaptureMapBuildData>::TIterator It(TypedThis->ReflectionCaptureBuildData); It; ++It)
 	{
 		It.Value().AddReferencedObjects(Collector);
 	}
@@ -653,40 +693,7 @@ void UMapBuildDataRegistry::InvalidateStaticLighting(UWorld* World, bool bRecrea
 		RecreateContext = TUniquePtr<FGlobalComponentRecreateRenderStateContext>(new FGlobalComponentRecreateRenderStateContext);
 	}
 
-	if (MeshBuildData.Num() > 0 || LightBuildData.Num() > 0)
-	{
-		if (!ResourcesToKeep || !ResourcesToKeep->Num())
-		{
-			MeshBuildData.Empty();
-			LightBuildData.Empty();
-		}
-		else // Otherwise keep any resource if it's guid is in ResourcesToKeep.
-		{
-			TMap<FGuid, FMeshMapBuildData> PrevMeshData;
-			TMap<FGuid, FLightComponentMapBuildData> PrevLightData;
-			FMemory::Memswap(&MeshBuildData , &PrevMeshData, sizeof(MeshBuildData));
-			FMemory::Memswap(&LightBuildData , &PrevLightData, sizeof(LightBuildData));
-
-			for (const FGuid& Guid : *ResourcesToKeep)
-			{
-				const FMeshMapBuildData* MeshData = PrevMeshData.Find(Guid);
-				if (MeshData)
-				{
-					MeshBuildData.Add(Guid, *MeshData);
-					continue;
-				}
-
-				const FLightComponentMapBuildData* LightData = PrevLightData.Find(Guid);
-				if (LightData)
-				{
-					LightBuildData.Add(Guid, *LightData);
-					continue;
-				}
-			}
-		}
-
-		MarkPackageDirty();
-	}
+	InvalidateSurfaceLightmaps(World, false, ResourcesToKeep);
 
 	if (LevelPrecomputedLightVolumeBuildData.Num() > 0 || LevelPrecomputedVolumetricLightmapBuildData.Num() > 0 || LightmapResourceClusters.Num() > 0)
 	{
@@ -709,6 +716,52 @@ void UMapBuildDataRegistry::InvalidateStaticLighting(UWorld* World, bool bRecrea
 	ClearSkyAtmosphereBuildData();
 
 	bSetupResourceClusters = false;
+}
+
+void UMapBuildDataRegistry::InvalidateSurfaceLightmaps(UWorld* World, bool bRecreateRenderState, const TSet<FGuid>* ResourcesToKeep)
+{
+	TUniquePtr<FGlobalComponentRecreateRenderStateContext> RecreateContext;
+
+	if (bRecreateRenderState)
+	{
+		// Warning: if skipping this, caller is responsible for unregistering any components potentially referencing this UMapBuildDataRegistry before we change its contents!
+		RecreateContext = TUniquePtr<FGlobalComponentRecreateRenderStateContext>(new FGlobalComponentRecreateRenderStateContext);
+	}
+
+	if (MeshBuildData.Num() > 0 || LightBuildData.Num() > 0)
+	{
+		if (!ResourcesToKeep || !ResourcesToKeep->Num())
+		{
+			MeshBuildData.Empty();
+			LightBuildData.Empty();
+		}
+		else // Otherwise keep any resource if it's guid is in ResourcesToKeep.
+		{
+			TMap<FGuid, FMeshMapBuildData> PrevMeshData;
+			TMap<FGuid, FLightComponentMapBuildData> PrevLightData;
+			FMemory::Memswap(&MeshBuildData, &PrevMeshData, sizeof(MeshBuildData));
+			FMemory::Memswap(&LightBuildData, &PrevLightData, sizeof(LightBuildData));
+
+			for (const FGuid& Guid : *ResourcesToKeep)
+			{
+				const FMeshMapBuildData* MeshData = PrevMeshData.Find(Guid);
+				if (MeshData)
+				{
+					MeshBuildData.Add(Guid, *MeshData);
+					continue;
+				}
+
+				const FLightComponentMapBuildData* LightData = PrevLightData.Find(Guid);
+				if (LightData)
+				{
+					LightBuildData.Add(Guid, *LightData);
+					continue;
+				}
+			}
+		}
+
+		MarkPackageDirty();
+	}
 }
 
 void UMapBuildDataRegistry::InvalidateReflectionCaptures(const TSet<FGuid>* ResourcesToKeep)

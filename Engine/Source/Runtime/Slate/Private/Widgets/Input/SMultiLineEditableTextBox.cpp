@@ -47,6 +47,7 @@ void SMultiLineEditableTextBox::Construct( const FArguments& InArgs )
 	ForegroundColorOverride = InArgs._ForegroundColor;
 	BackgroundColorOverride = InArgs._BackgroundColor;
 	ReadOnlyForegroundColorOverride = InArgs._ReadOnlyForegroundColor;
+	bSelectWordOnMouseDoubleClick = InArgs._SelectWordOnMouseDoubleClick;
 
 	bHasExternalHScrollBar = InArgs._HScrollBar.IsValid();
 	HScrollBar = InArgs._HScrollBar;
@@ -110,6 +111,7 @@ void SMultiLineEditableTextBox::Construct( const FArguments& InArgs )
 					.Justification(InArgs._Justification)
 					.RevertTextOnEscape(InArgs._RevertTextOnEscape)
 					.SelectAllTextWhenFocused(InArgs._SelectAllTextWhenFocused)
+					.SelectWordOnMouseDoubleClick(InArgs._SelectWordOnMouseDoubleClick)
 					.ClearTextSelectionOnFocusLoss(InArgs._ClearTextSelectionOnFocusLoss)
 					.ClearKeyboardFocusOnCommit(InArgs._ClearKeyboardFocusOnCommit)
 					.LineHeightPercentage(InArgs._LineHeightPercentage)
@@ -166,6 +168,11 @@ void SMultiLineEditableTextBox::Construct( const FArguments& InArgs )
 		];
 	}
 
+}
+
+void SMultiLineEditableTextBox::GetCurrentTextLine(FString& OutTextLine) const
+{
+	EditableText->GetCurrentTextLine(OutTextLine);
 }
 
 void SMultiLineEditableTextBox::SetStyle(const FEditableTextBoxStyle* InStyle)
@@ -259,6 +266,11 @@ void SMultiLineEditableTextBox::SetTextBoxBackgroundColor(const TAttribute<FSlat
 void SMultiLineEditableTextBox::SetReadOnlyForegroundColor(const TAttribute<FSlateColor>& InReadOnlyForegroundColor)
 {
 	ReadOnlyForegroundColorOverride = InReadOnlyForegroundColor;
+}
+
+void SMultiLineEditableTextBox::SetSelectWordOnMouseDoubleClick(const TAttribute<bool>& InSelectWordOnMouseDoubleClick)
+{
+	EditableText->SetSelectWordOnMouseDoubleClick(InSelectWordOnMouseDoubleClick);
 }
 
 void SMultiLineEditableTextBox::SetTextShapingMethod(const TOptional<ETextShapingMethod>& InTextShapingMethod)
@@ -387,6 +399,19 @@ FReply SMultiLineEditableTextBox::OnFocusReceived( const FGeometry& MyGeometry, 
 	}
 
 	return Reply;
+}
+
+FReply SMultiLineEditableTextBox::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
+{
+	FKey Key = InKeyEvent.GetKey();
+
+	if (Key == EKeys::Escape && EditableText->HasKeyboardFocus())
+	{
+		// Clear focus
+		return FReply::Handled().SetUserFocus(SharedThis(this), EFocusCause::Cleared);
+	}
+
+	return FReply::Unhandled();
 }
 
 bool SMultiLineEditableTextBox::AnyTextSelected() const

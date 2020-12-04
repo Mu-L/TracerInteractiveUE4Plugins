@@ -117,7 +117,8 @@ void FPropertyNode::InitNode(const FPropertyNodeInitParams& InitParams)
 	}
 
 	// Property is advanced if it is marked advanced or the entire class is advanced and the property not marked as simple
-	bool bAdvanced = Property.IsValid() ? ( Property->HasAnyPropertyFlags(CPF_AdvancedDisplay) || ( !Property->HasAnyPropertyFlags( CPF_SimpleDisplay ) && Property->GetOwnerClass() && Property->GetOwnerClass()->HasAnyClassFlags( CLASS_AdvancedDisplay ) ) ): false;
+	static const FName Name_AdvancedClassDisplay("AdvancedClassDisplay");
+	bool bAdvanced = Property.IsValid() ? ( Property->HasAnyPropertyFlags(CPF_AdvancedDisplay) || ( !Property->HasAnyPropertyFlags( CPF_SimpleDisplay ) && Property->GetOwnerClass() && Property->GetOwnerClass()->GetBoolMetaData(Name_AdvancedClassDisplay) ) ) : false;
 
 	PropertyNodeFlags = EPropertyNodeFlags::NoFlags;
 	SetNodeFlags(EPropertyNodeFlags::IsSparseClassData, bIsSparse);
@@ -1133,14 +1134,12 @@ public:
 
 	void InnerInitialize()
 	{
-	{
-			PropertyValueRoot.OwnerObject = NULL;
-			PropertyDefaultValueRoot.OwnerObject = NULL;
-			PropertyValueAddress = NULL;
-			PropertyValueBaseAddress = NULL;
-			PropertyDefaultBaseAddress = NULL;
-			PropertyDefaultAddress = NULL;
-		}
+		PropertyValueRoot.OwnerObject = NULL;
+		PropertyDefaultValueRoot.OwnerObject = NULL;
+		PropertyValueAddress = NULL;
+		PropertyValueBaseAddress = NULL;
+		PropertyDefaultBaseAddress = NULL;
+		PropertyDefaultAddress = NULL;
 
 		PropertyValueRoot.OwnerObject = OwnerObject.Get();
 		check(PropertyNode);
@@ -1148,7 +1147,7 @@ public:
 		check(Property);
 		check(PropertyValueRoot.OwnerObject);
 
-		FPropertyNode* ParentNode		= PropertyNode->GetParentNode();
+		FPropertyNode* ParentNode = PropertyNode->GetParentNode();
 
 		// if the object specified is a class object, transfer to the CDO instead
 		if ( Cast<UClass>(PropertyValueRoot.OwnerObject) != NULL )
@@ -1789,11 +1788,7 @@ bool FPropertyNode::GetDiffersFromDefaultForObject( FPropertyItemValueDataTracke
 			uint32 PortFlags = 0;
 			if (InProperty->ContainsInstancedObjectProperty())
 			{
-				// Use PPF_DeepCompareInstances for component objects
-				if (CastField<FObjectPropertyBase>(InProperty))
-				{
-					PortFlags |= PPF_DeepCompareInstances;
-				}
+				PortFlags |= PPF_DeepCompareInstances;
 			}
 
 			if ( ValueTracker.GetPropertyValueAddress() == NULL || ValueTracker.GetPropertyDefaultAddress() == NULL )
@@ -1893,11 +1888,7 @@ FString FPropertyNode::GetDefaultValueAsStringForObject( FPropertyItemValueDataT
 			
 				if (InProperty->ContainsInstancedObjectProperty())
 				{
-					// Use PPF_DeepCompareInstances for component objects
-					if (CastField<FObjectPropertyBase>(InProperty))
-					{
-						PortFlags |= PPF_DeepCompareInstances;
-					}
+					PortFlags |= PPF_DeepCompareInstances;
 				}
 
 				if ( ValueTracker.GetPropertyDefaultAddress() == NULL )
@@ -2061,13 +2052,31 @@ void FPropertyNode::FilterNodes( const TArray<FString>& InFilterStrings, const b
 		//if filtering, default to NOT-seen
 		bool bPassedFilter = false;	//assuming that we aren't filtered
 
-		//see if this is a filter-able primitive
+		// Populate name aliases acceptable for searching / filtering
 		FText DisplayName = GetDisplayName();
 		const FString& DisplayNameStr = DisplayName.ToString();
 		TArray <FString> AcceptableNames;
 		AcceptableNames.Add(DisplayNameStr);
 
-		//get the basic name as well of the property
+		// For containers, check if base class metadata in parent includes 'TitleProperty', add corresponding value to filter names if so.
+		static const FName TitlePropertyFName = FName(TEXT("TitleProperty"));
+		if (ParentNode && ParentNode->GetProperty())
+		{
+			const FString& TitleProperty = ParentNode->GetProperty()->GetMetaData(TitlePropertyFName);
+			if (!TitleProperty.IsEmpty())
+			{
+				if (TSharedPtr<FPropertyNode> TitlePropertyNode = FindChildPropertyNode(*TitleProperty, true))
+				{
+					FString TitlePropertyValue;
+					if (TitlePropertyNode->GetPropertyValueString(TitlePropertyValue, true /*bAllowAlternateDisplayValue*/) != FPropertyAccess::Result::Fail)
+					{
+						AcceptableNames.Add(TitlePropertyValue);
+					}
+				}
+			}
+		}
+
+		// Get the basic name as well of the property
 		FProperty* TheProperty = GetProperty();
 		if (TheProperty && (TheProperty->GetName() != DisplayNameStr))
 		{
@@ -2462,6 +2471,60 @@ void FPropertyNode::BroadcastPropertyPreChangeDelegates()
 void FPropertyNode::BroadcastPropertyResetToDefault()
 {
 	PropertyResetToDefaultEvent.Broadcast();
+}
+
+void FPropertyNode::GetExpandedChildPropertyPaths(TSet<FString>& OutExpandedChildPropertyPaths)
+{
+	TArray<FPropertyNode*> RecursiveStack;
+	RecursiveStack.Add(this);
+
+	do
+	{
+		FPropertyNode* SearchNode = RecursiveStack.Pop();
+		if (SearchNode->HasNodeFlags(EPropertyNodeFlags::Expanded) != 0)
+		{
+			OutExpandedChildPropertyPaths.Add(SearchNode->PropertyPath);
+
+			for (auto Index = 0; Index < SearchNode->GetNumChildNodes(); ++Index)
+			{
+				TSharedPtr<FPropertyNode> ChildNode = SearchNode->GetChildNode(Index);
+				if (ChildNode.IsValid())
+				{
+					RecursiveStack.Push(ChildNode.Get());
+				}
+			}
+		}
+	} while (RecursiveStack.Num() > 0);
+}
+
+void FPropertyNode::SetExpandedChildPropertyNodes(const TSet<FString>& InNodesToExpand)
+{
+	TArray<FPropertyNode*> RecursiveStack;
+	RecursiveStack.Add(this);
+
+	do
+	{
+		FPropertyNode* SearchNode = RecursiveStack.Pop();
+		if (InNodesToExpand.Contains(SearchNode->PropertyPath))
+		{
+			SearchNode->SetNodeFlags(EPropertyNodeFlags::Expanded, true);
+
+			// Lets recurse over this nodes children to see if they need to be expanded
+			for (auto Index = 0; Index < SearchNode->GetNumChildNodes(); ++Index)
+			{
+				TSharedPtr<FPropertyNode> ChildNode = SearchNode->GetChildNode(Index);
+				if (ChildNode.IsValid())
+				{
+					RecursiveStack.Push(ChildNode.Get());
+				}
+			}
+		}
+		else
+		{
+			// Collapse the target node if its not within the list of expanded nodes.
+			SearchNode->SetNodeFlags(EPropertyNodeFlags::Expanded, false);
+		}
+	} while (RecursiveStack.Num() > 0);
 }
 
 void FPropertyNode::SetOnRebuildChildren( FSimpleDelegate InOnRebuildChildren )

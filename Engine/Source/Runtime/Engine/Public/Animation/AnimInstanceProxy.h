@@ -109,11 +109,14 @@ struct ENGINE_API FAnimInstanceProxy
 	GENERATED_BODY()
 
 public:
+	using FSyncGroupMap = TMap<FName, FAnimGroupInstance>;
+
 	FAnimInstanceProxy()
 		: AnimInstanceObject(nullptr)
 		, AnimClassInterface(nullptr)
 		, Skeleton(nullptr)
 		, SkeletalMeshComponent(nullptr)
+		, MainInstanceProxy(nullptr)
 		, CurrentDeltaSeconds(0.0f)
 		, CurrentTimeDilation(1.0f)
 		, RootNode(nullptr)
@@ -138,6 +141,7 @@ public:
 		, AnimClassInterface(IAnimClassInterface::GetFromClass(Instance->GetClass()))
 		, Skeleton(nullptr)
 		, SkeletalMeshComponent(nullptr)
+		, MainInstanceProxy(nullptr)
 		, CurrentDeltaSeconds(0.0f)
 		, CurrentTimeDilation(1.0f)
 		, RootNode(nullptr)
@@ -216,10 +220,17 @@ public:
 		SyncGroupWriteIndex = GetSyncGroupReadIndex();
 	}
 
-	/** Get the sync group we are currently reading from */
+	UE_DEPRECATED(5.0, "Sync groups are no longer stored in arrays, please use GetSyncGroupMapRead")
 	const TArray<FAnimGroupInstance>& GetSyncGroupRead() const
+	{
+		static const TArray<FAnimGroupInstance> Dummy;
+		return Dummy; 
+	}
+
+	/** Get the sync group we are currently reading from */
+	const FSyncGroupMap& GetSyncGroupMapRead() const
 	{ 
-		return SyncGroupArrays[GetSyncGroupReadIndex()]; 
+		return SyncGroupMaps[GetSyncGroupReadIndex()]; 
 	}
 
 	/** Get the ungrouped active player we are currently reading from */
@@ -342,8 +353,19 @@ public:
 		return SkeletalMeshComponent; 
 	}
 
-	// Creates an uninitialized tick record in the list for the correct group or the ungrouped array.  If the group is valid, OutSyncGroupPtr will point to the group.
+	UE_DEPRECATED(4.26, "Please use the overload that takes a group FName")
 	FAnimTickRecord& CreateUninitializedTickRecord(int32 GroupIndex, FAnimGroupInstance*& OutSyncGroupPtr);
+
+	UE_DEPRECATED(4.26, "Please use the overload that takes a group FName")
+	FAnimTickRecord& CreateUninitializedTickRecordInScope(int32 GroupIndex, EAnimSyncGroupScope Scope, FAnimGroupInstance*& OutSyncGroupPtr);
+
+	// Creates an uninitialized tick record in the list for the correct group or the ungrouped array.  If the group is valid, OutSyncGroupPtr will point to the group.
+	FAnimTickRecord& CreateUninitializedTickRecord(FAnimGroupInstance*& OutSyncGroupPtr, FName GroupName);
+
+	// Creates an uninitialized tick record in the list for the correct group or the ungrouped array.  
+	// If the group is valid, OutSyncGroupPtr will point to the group.
+	// Supply the scope to sync with tick records outside this instance
+	FAnimTickRecord& CreateUninitializedTickRecordInScope(FAnimGroupInstance*& OutSyncGroupPtr, FName GroupName, EAnimSyncGroupScope Scope);
 
 	/** Helper function: make a tick record for a sequence */
 	void MakeSequenceTickRecord(FAnimTickRecord& TickRecord, UAnimSequenceBase* Sequence, bool bLooping, float PlayRate, float FinalBlendWeight, float& CurrentTime, FMarkerTickRecord& MarkerTickRecord) const;
@@ -365,7 +387,10 @@ public:
 	void GetSlotWeight(const FName& SlotNodeName, float& out_SlotNodeWeight, float& out_SourceWeight, float& out_TotalNodeWeight) const;
 
 	/** Evaluate a pose for a named montage slot */
+	UE_DEPRECATED(4.26, "Use SlotEvaluatePose with other signature")
 	void SlotEvaluatePose(const FName& SlotNodeName, const FCompactPose& SourcePose, const FBlendedCurve& SourceCurve, float InSourceWeight, FCompactPose& BlendedPose, FBlendedCurve& BlendedCurve, float InBlendWeight, float InTotalNodeWeight);
+
+	void SlotEvaluatePose(const FName& SlotNodeName, const FAnimationPoseData& SourceAnimationPoseData, float InSourceWeight, FAnimationPoseData& OutBlendedAnimationPoseData, float InBlendWeight, float InTotalNodeWeight);
 	
 	// Allow slot nodes to store off their weight during ticking
 	void UpdateSlotNodeWeight(const FName& SlotNodeName, float InLocalMontageWeight, float InNodeGlobalWeight);
@@ -802,6 +827,7 @@ protected:
 	static void CacheBonesInputProxy(FAnimInstanceProxy* InputProxy);
 	static void UpdateInputProxy(FAnimInstanceProxy* InputProxy, const FAnimationUpdateContext& Context);
 	static void EvaluateInputProxy(FAnimInstanceProxy* InputProxy, FPoseContext& Output);
+	static void ResetCounterInputProxy(FAnimInstanceProxy* InputProxy);
 
 private:
 	/** The component to world transform of the component we are running on */
@@ -824,6 +850,9 @@ private:
 
 	/** Skeletal mesh component we are attached to. Note that this will be nullptr outside of pre/post update */
 	USkeletalMeshComponent* SkeletalMeshComponent;
+
+	/** Cached ptr to the main instance proxy, which may be "this" */
+	FAnimInstanceProxy* MainInstanceProxy;
 
 	/** The last time passed into PreUpdate() */
 	float CurrentDeltaSeconds;
@@ -860,7 +889,7 @@ private:
 	TArray<FAnimTickRecord> UngroupedActivePlayerArrays[2];
 
 	/** The set of tick groups for this anim instance */
-	TArray<FAnimGroupInstance> SyncGroupArrays[2];
+	FSyncGroupMap SyncGroupMaps[2];
 
 	/** Buffers containing read/write buffers for all current machine weights */
 	TArray<float> MachineWeightArrays[2];

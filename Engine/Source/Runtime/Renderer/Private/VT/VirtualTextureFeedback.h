@@ -3,89 +3,82 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "RenderCore/Public/RenderTargetPool.h"
+#include "RenderResource.h"
+#include "VT/VirtualTextureFeedbackBuffer.h"
 
-/*
-====================================
-	Manages GPU and CPU buffers for VT feedback.
-	Shared for all views, not per view.
-
-	Should use append buffer but that requires RHI ability to copy
-	a GPU structured buffer to a CPU read only version.
-====================================
-*/
-class FVirtualTextureFeedback
+/** 
+ * Class that handles the read back of feedback buffers from the GPU.
+ * Multiple buffers can be transferred per frame using TransferGPUToCPU().
+ * Use Map()/Unmap() to return the data. It will only return data that is ready to fetch without stalling the GPU.
+ * All calls are expected to be from the single render thread only.
+ */
+class FVirtualTextureFeedback : public FRenderResource
 {
 public:
 	FVirtualTextureFeedback();
 	~FVirtualTextureFeedback();
 
-	static const uint32 TargetCapacity = 4u;
-	static const uint32 MaxRectPerTarget = 4u;
+	/** Commit a RHIBuffer to be transferred for later CPU analysis. */
+	void TransferGPUToCPU(FRHICommandListImmediate& RHICmdList, FVertexBufferRHIRef const& Buffer, FVirtualTextureFeedbackBufferDesc const& Desc);
 
-	struct MapResult
+	/** Returns true if there are any pending transfer results that are ready so that we can call Map(). */
+	bool CanMap(FRHICommandListImmediate& RHICmdList);
+
+	/** Structure returned by Map() containing the feedback data. */
+	struct FMapResult
 	{
-		TArray<uint32> Buffer;
-		int32 Pitch;
-		int32 NumRects;
-		FIntRect Rects[MaxRectPerTarget];
+		uint32* RESTRICT Data = nullptr;
+		uint32 Size = 0;
+		int32 MapHandle = -1;
 	};
 
-	FVertexBufferRHIRef FeedbackBuffer;
-	FUnorderedAccessViewRHIRef FeedbackBufferUAV;
+	/** Fetch all pending results into a flat output buffer for analysis. */
+	FMapResult Map(FRHICommandListImmediate& RHICmdList);
+	/** Fetch up to MaxTransfersToMap pending results into a flat output buffer for analysis. */
+	FMapResult Map(FRHICommandListImmediate& RHICmdList, int32 MaxTransfersToMap);
+	
+	/** Always call Unmap() after finishing processing of the returned data. This releases any resources allocated for the Map(). */
+	void Unmap(FRHICommandListImmediate& RHICmdList, int32 MapHandle);
 
-	void			CreateResourceGPU(FRHICommandListImmediate& RHICmdList, FIntPoint InSize);
-	void			ReleaseResources();
-
-	void			TransferGPUToCPU(FRHICommandListImmediate& RHICmdList, TArrayView<FIntRect> const& ViewRects);
-
-	uint32			GetPendingTargetCount() const { return PendingTargetCount; }
-	uint32			GetFeedbackStride() const { return (uint32)Size.X; }
-
-	bool			CanMap(FRHICommandListImmediate& RHICmdList);
-	bool			Map(FRHICommandListImmediate& RHICmdList, MapResult& OutResult);
+protected:
+	//~ Begin FRenderResource Interface
+	virtual void InitRHI() override;
+	virtual void ReleaseRHI() override;
+	//~ End FRenderResource Interface
 
 private:
-	struct FFeedBackItem
+	/** Description of a pending feedback transfer. */
+	struct FFeedbackItem
 	{
-		int32 NumRects;
-		FIntRect Rects[MaxRectPerTarget];
+		FVirtualTextureFeedbackBufferDesc Desc;
 		FRHIGPUMask GPUMask;
-		FStagingBufferRHIRef ReadbackBuffer;
+		FStagingBufferRHIRef StagingBuffer;
 	};
 
-	FFeedBackItem FeedbackCPU[TargetCapacity];
+	/** The maximum number of pending feedback transfers that can be held before we start dropping them. */
+	static const uint32 MaxTransfers = 8u;
+	/** Pending feedback transfers are stored as a ring buffer. */
+	FFeedbackItem FeedbackItems[MaxTransfers];
 
-	class FFeedbackFences* FeedBackFences;
+	/** GPU fence pool. Contains a fence array that is kept in sync with the FeedbackItems ring buffer. Fences are used to know when a transfer is ready to Map() without stalling. */
+	class FFeedbackGPUFencePool* Fences;
 
-	FIntPoint Size;
-	uint32 NumBytes;
+	int32 NumPending;
+	uint32 WriteIndex;
+	uint32 ReadIndex;
 
-	uint32 GPUWriteIndex;
-	uint32 CPUReadIndex;
-	uint32 PendingTargetCount;
+	/** Structure describing resources associated with a Map() that will need freeing on UnMap() */
+	struct FMapResources
+	{
+		int32 FeedbackItemToUnlockIndex = -1;
+		TArray<uint32> ResultData;
+	};
+
+	/** Array of FMapResources. Will always be size 1 unless we need to Map() multiple individual buffers at once. */
+	TArray<FMapResources> MapResources;
+	/** Free indices in the MapResources array. */
+	TArray<int32> FreeMapResources;
 };
 
-
-/* Dummy resource for VT feedback, used to bypass UB validation errors when VT is disabled */
-class FVirtualTextureFeedbackDummyResource : public FRenderResource
-{
-public:
-	FVertexBufferRHIRef			VertexBufferRHI;
-	FUnorderedAccessViewRHIRef	UAV;
-
-	virtual void InitRHI() override
-	{
-		FRHIResourceCreateInfo CreateInfo(TEXT("VTFeedbackDummy"));
-		VertexBufferRHI = RHICreateVertexBuffer(4, BUF_Static | BUF_ShaderResource | BUF_UnorderedAccess, CreateInfo);
-		UAV = RHICreateUnorderedAccessView(VertexBufferRHI, /*Format=*/ PF_R32_UINT);
-	}
-	virtual void ReleaseRHI() override
-	{
-		UAV.SafeRelease();
-		VertexBufferRHI.SafeRelease();
-	}
-};
-
-extern TGlobalResource<FVirtualTextureFeedbackDummyResource> GVirtualTextureFeedbackDummyResource;
-
+/** Global object for handling the read back of Virtual Texture Feedback. */
+extern TGlobalResource< FVirtualTextureFeedback > GVirtualTextureFeedback;

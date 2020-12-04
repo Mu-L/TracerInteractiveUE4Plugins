@@ -380,6 +380,13 @@ struct FScriptName
 	{
 	}
 
+	FORCEINLINE bool IsNone() const
+	{
+		return !ComparisonIndex && Number == NAME_NO_NUMBER_INTERNAL;
+	}
+
+	CORE_API FString ToString() const;
+
 	/** Index into the Names array (used to find String portion of the string/number pair used for comparison) */
 	FNameEntryId	ComparisonIndex;
 	/** Index into the Names array (used to find String portion of the string/number pair used for display) */
@@ -593,7 +600,10 @@ public:
 	 *
 	 * @return	true if the name is valid
 	 */
+	static bool IsValidXName( const FName InName, const FString& InInvalidChars, FText* OutReason = nullptr, const FText* InErrorCtx = nullptr );
+	static bool IsValidXName( const TCHAR* InName, const FString& InInvalidChars, FText* OutReason = nullptr, const FText* InErrorCtx = nullptr );
 	static bool IsValidXName( const FString& InName, const FString& InInvalidChars, FText* OutReason = nullptr, const FText* InErrorCtx = nullptr );
+	static bool IsValidXName( const FStringView& InName, const FString& InInvalidChars, FText* OutReason = nullptr, const FText* InErrorCtx = nullptr );
 
 	/**
 	 * Checks to see that a FName follows the rules that Unreal requires.
@@ -606,7 +616,7 @@ public:
 	 */
 	bool IsValidXName( const FString& InInvalidChars = INVALID_NAME_CHARACTERS, FText* OutReason = nullptr, const FText* InErrorCtx = nullptr ) const
 	{
-		return IsValidXName(ToString(), InInvalidChars, OutReason, InErrorCtx);
+		return IsValidXName(*this, InInvalidChars, OutReason, InErrorCtx);
 	}
 
 	/**
@@ -619,7 +629,7 @@ public:
 	 */
 	bool IsValidXName( FText& OutReason, const FString& InInvalidChars = INVALID_NAME_CHARACTERS ) const
 	{
-		return IsValidXName(ToString(), InInvalidChars, &OutReason);
+		return IsValidXName(*this, InInvalidChars, &OutReason);
 	}
 
 	/**
@@ -631,7 +641,7 @@ public:
 	 */
 	bool IsValidObjectName( FText& OutReason ) const
 	{
-		return IsValidXName(ToString(), INVALID_OBJECTNAME_CHARACTERS, &OutReason);
+		return IsValidXName(*this, INVALID_OBJECTNAME_CHARACTERS, &OutReason);
 	}
 
 	/**
@@ -644,7 +654,7 @@ public:
 	 */
 	bool IsValidGroupName( FText& OutReason, bool bIsGroupName=false ) const
 	{
-		return IsValidXName(ToString(), INVALID_LONGPACKAGE_CHARACTERS, &OutReason);
+		return IsValidXName(*this, INVALID_LONGPACKAGE_CHARACTERS, &OutReason);
 	}
 
 	/**
@@ -767,8 +777,16 @@ public:
 	/** Create FName from non-null string with known length  */
 	FName(int32 Len, const WIDECHAR* Name, EFindName FindType=FNAME_Add);
 	FName(int32 Len, const ANSICHAR* Name, EFindName FindType=FNAME_Add);
-	explicit FName(const FStringView& Name, EFindName FindType=FNAME_Add);
-	explicit FName(const FAnsiStringView& Name, EFindName FindType=FNAME_Add);
+
+	template <typename CharRangeType,
+		typename CharType = typename TRemoveCV<typename TRemovePointer<decltype(GetData(DeclVal<CharRangeType>()))>::Type>::Type,
+		typename = decltype(ImplicitConv<TStringView<CharType>>(DeclVal<CharRangeType>()))>
+	inline explicit FName(CharRangeType&& Name, EFindName FindType = FNAME_Add)
+		: FName(NoInit)
+	{
+		TStringView<CharType> View = Forward<CharRangeType>(Name);
+		*this = FName(View.Len(), View.GetData());
+	}
 
 	/**
 	 * Create an FName. If FindType is FNAME_Find, and the string part of the name 
@@ -783,8 +801,16 @@ public:
 	FName(const ANSICHAR* Name, int32 InNumber, EFindName FindType = FNAME_Add);
 	FName(int32 Len, const WIDECHAR* Name, int32 Number, EFindName FindType = FNAME_Add);
 	FName(int32 Len, const ANSICHAR* Name, int32 InNumber, EFindName FindType = FNAME_Add);
-	FName(const FStringView& Name, int32 InNumber, EFindName FindType=FNAME_Add);
-	FName(const FAnsiStringView& Name, int32 InNumber, EFindName FindType=FNAME_Add);
+
+	template <typename CharRangeType,
+		typename CharType = typename TRemoveCV<typename TRemovePointer<decltype(GetData(DeclVal<CharRangeType>()))>::Type>::Type,
+		typename = decltype(ImplicitConv<TStringView<CharType>>(DeclVal<CharRangeType>()))>
+	inline FName(CharRangeType&& Name, int32 InNumber, EFindName FindType = FNAME_Add)
+		: FName(NoInit)
+	{
+		TStringView<CharType> View = Forward<CharRangeType>(Name);
+		*this = FName(View.Len(), View.GetData(), InNumber);
+	}
 
 	/**
 	 * Create an FName. If FindType is FNAME_Find, and the string part of the name 
@@ -925,13 +951,28 @@ Expose_TNameOf(FName)
 namespace Freeze
 {
 	CORE_API void IntrinsicWriteMemoryImage(FMemoryImageWriter& Writer, const FName& Object, const FTypeLayoutDesc&);
+	CORE_API uint32 IntrinsicAppendHash(const FName* DummyObject, const FTypeLayoutDesc& TypeDesc, const FPlatformTypeLayoutParameters& LayoutParams, FSHA1& Hasher);
+	CORE_API void IntrinsicWriteMemoryImage(FMemoryImageWriter& Writer, const FMinimalName& Object, const FTypeLayoutDesc&);
+	CORE_API void IntrinsicWriteMemoryImage(FMemoryImageWriter& Writer, const FScriptName& Object, const FTypeLayoutDesc&);
 }
 
 DECLARE_INTRINSIC_TYPE_LAYOUT(FName);
+DECLARE_INTRINSIC_TYPE_LAYOUT(FMinimalName);
+DECLARE_INTRINSIC_TYPE_LAYOUT(FScriptName);
 
 FORCEINLINE uint32 GetTypeHash(FName Name)
 {
 	return GetTypeHash(Name.GetComparisonIndex()) + Name.GetNumber();
+}
+
+FORCEINLINE uint32 GetTypeHash(FMinimalName Name)
+{
+	return GetTypeHash(Name.Index) + Name.Number;
+}
+
+FORCEINLINE uint32 GetTypeHash(FScriptName Name)
+{
+	return GetTypeHash(Name.ComparisonIndex) + Name.Number;
 }
 
 FORCEINLINE FString LexToString(const FName& Name)
@@ -1031,6 +1072,66 @@ struct FNameLexicalLess
 		return A.LexicalLess(B);
 	}
 };
+
+FORCEINLINE bool operator==(const FMinimalName& Lhs, const FMinimalName& Rhs)
+{
+	return Lhs.Number == Rhs.Number && Lhs.Index == Rhs.Index;
+}
+
+FORCEINLINE bool operator!=(const FMinimalName& Lhs, const FMinimalName& Rhs)
+{
+	return !operator==(Lhs, Rhs);
+}
+
+FORCEINLINE bool operator==(const FScriptName& Lhs, const FScriptName& Rhs)
+{
+	return Lhs.Number == Rhs.Number && Lhs.ComparisonIndex == Rhs.ComparisonIndex;
+}
+
+FORCEINLINE bool operator!=(const FScriptName& Lhs, const FScriptName& Rhs)
+{
+	return !operator==(Lhs, Rhs);
+}
+
+FORCEINLINE bool operator==(const FName& Lhs, const FMinimalName& Rhs)
+{
+	return Lhs.GetNumber() == Rhs.Number && Lhs.GetComparisonIndex() == Rhs.Index;
+}
+
+FORCEINLINE bool operator!=(const FName& Lhs, const FMinimalName& Rhs)
+{
+	return !operator==(Lhs, Rhs);
+}
+
+FORCEINLINE bool operator==(const FMinimalName& Lhs, const FName& Rhs)
+{
+	return Lhs.Number == Rhs.GetNumber() && Lhs.Index == Rhs.GetComparisonIndex();
+}
+
+FORCEINLINE bool operator!=(const FMinimalName& Lhs, const FName& Rhs)
+{
+	return !operator==(Lhs, Rhs);
+}
+
+FORCEINLINE bool operator==(const FName& Lhs, const FScriptName& Rhs)
+{
+	return Lhs.GetNumber() == Rhs.Number && Lhs.GetComparisonIndex() == Rhs.ComparisonIndex;
+}
+
+FORCEINLINE bool operator!=(const FName& Lhs, const FScriptName& Rhs)
+{
+	return !operator==(Lhs, Rhs);
+}
+
+FORCEINLINE bool operator==(const FScriptName& Lhs, const FName& Rhs)
+{
+	return Lhs.Number == Rhs.GetNumber() && Lhs.ComparisonIndex == Rhs.GetComparisonIndex();
+}
+
+FORCEINLINE bool operator!=(const FScriptName& Lhs, const FName& Rhs)
+{
+	return !operator==(Lhs, Rhs);
+}
 
 #ifndef WITH_CUSTOM_NAME_ENCODING
 inline void FNameEntry::Encode(ANSICHAR*, uint32) {}

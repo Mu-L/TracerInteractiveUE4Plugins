@@ -57,6 +57,43 @@ PRAGMA_ENABLE_SHADOW_VARIABLE_WARNINGS
 #define _strdup strdup
 #endif
 
+const char* VULKAN_SUBPASS_FETCH[9] = 
+{
+	"VulkanSubpassDepthFetch",
+	"VulkanSubpassFetch0",
+	"VulkanSubpassFetch1",
+	"VulkanSubpassFetch2",
+	"VulkanSubpassFetch3",
+	"VulkanSubpassFetch4",
+	"VulkanSubpassFetch5",
+	"VulkanSubpassFetch6",
+	"VulkanSubpassFetch7"
+};
+const char* VULKAN_SUBPASS_FETCH_VAR[9] = 
+{
+	"GENERATED_SubpassDepthFetchAttachment",
+	"GENERATED_SubpassFetchAttachment0",
+	"GENERATED_SubpassFetchAttachment1",
+	"GENERATED_SubpassFetchAttachment2",
+	"GENERATED_SubpassFetchAttachment3",
+	"GENERATED_SubpassFetchAttachment4",
+	"GENERATED_SubpassFetchAttachment5",
+	"GENERATED_SubpassFetchAttachment6",
+	"GENERATED_SubpassFetchAttachment7"
+};
+const TCHAR* VULKAN_SUBPASS_FETCH_VAR_W[9] =
+{
+	TEXT("GENERATED_SubpassDepthFetchAttachment"),
+	TEXT("GENERATED_SubpassFetchAttachment0"),
+	TEXT("GENERATED_SubpassFetchAttachment1"),
+	TEXT("GENERATED_SubpassFetchAttachment2"),
+	TEXT("GENERATED_SubpassFetchAttachment3"),
+	TEXT("GENERATED_SubpassFetchAttachment4"),
+	TEXT("GENERATED_SubpassFetchAttachment5"),
+	TEXT("GENERATED_SubpassFetchAttachment6"),
+	TEXT("GENERATED_SubpassFetchAttachment7")
+};
+
 static inline std::string FixHlslName(const glsl_type* Type, bool bUseTextureInsteadOfSampler = false)
 {
 	check(Type->is_image() || Type->is_vector() || Type->is_numeric() || Type->is_void() || Type->is_sampler() || Type->is_scalar());
@@ -430,6 +467,7 @@ struct FSamplerMappingGatherData
 	struct FEntry
 	{
 		bool bUsingLoadOrDim = false; // either "Load" or "GetDimensions" intrinsics are used
+		bool bUsingSampling = false; // at least one texture intrinsic that requires a sampler state was used, e.g. "Sample", "SampleLevel" etc.
 		TStringSet SamplerStates;
 	};
 	std::map<std::string, FEntry> Entries;
@@ -451,7 +489,8 @@ struct FSamplerMapping
 		// First find all samplers using T.Load()
 		for (auto EntryPair : GatherData.Entries)
 		{
-			if (EntryPair.second.bUsingLoadOrDim)
+			// Use a combined sampler if "Load" or "GetDimensions" intrinsic is used, except when sampling is used as well.
+			if (EntryPair.second.bUsingLoadOrDim && !EntryPair.second.bUsingSampling)
 			{
 				CombinedSamplers.insert(EntryPair.first);
 			}
@@ -462,21 +501,22 @@ struct FSamplerMapping
 		TStringSet CombinedSamplerStates;
 		for (auto Pair : GatherData.SamplerToTextureMap)
 		{
-			uint32 NumTextures = 0;
+			uint32 NumTexturesPerSampler = 0;
 			for (auto& Texture : Pair.second)
 			{
+				// Only count the textures that are *not* listed as combined-texture-samplers
 				if (CombinedSamplers.find(Texture) == CombinedSamplers.end())
 				{
-					++NumTextures;
+					++NumTexturesPerSampler;
 				}
 			}
 
-			if (NumTextures == 0 || NumTextures == 1)
+			if (NumTexturesPerSampler == 0 || NumTexturesPerSampler == 1)
 			{
 				CombinedSamplerStates.insert(Pair.first);
 			}
 
-			TexturesUsedPerSampler[Pair.first] = NumTextures;
+			TexturesUsedPerSampler[Pair.first] = NumTexturesPerSampler;
 		}
 
 		// Now add combined samplers (ones with one samplerstate)
@@ -767,7 +807,7 @@ class FGenerateVulkanVisitor : public ir_visitor
 	int loop_count;
 
 	/** Whether the shader being cross compiled needs EXT_shader_texture_lod. */
-	bool bUsesES2TextureLODExtension;
+	bool bUsesGLTextureLODExtension;
 
 	/** Found dFdx or dFdy */
 	bool bUsesDXDY;
@@ -1614,7 +1654,7 @@ class FGenerateVulkanVisitor : public ir_visitor
 		if (bIsES && op == ir_txl)
 		{
 			// See http://www.khronos.org/registry/gles/extensions/EXT/EXT_shader_texture_lod.txt
-			bUsesES2TextureLODExtension = true;
+			bUsesGLTextureLODExtension = true;
 			bEmitEXT = true;
 		}
 
@@ -1656,8 +1696,13 @@ class FGenerateVulkanVisitor : public ir_visitor
 			ralloc_asprintf_append(buffer, "sampler%s%s(", GetSamplerSuffix(tex->sampler->type->sampler_dimensionality),
 					tex->sampler->type->sampler_array ? "Array" : "");
 			tex->sampler->accept(this);
-			if ((op == ir_txs || op == ir_txm) && !bHasSamplerState)
+			if ((op == ir_txf || op == ir_txs || op == ir_txm) && !bHasSamplerState)
 			{
+				// No sampler state was provided in the intrinsic, so look up the texture-to-sampler map to find a sampler state.
+				// This is required when a texture is used for intrinsics that actually don't need a sampler-state such as "texelFetch",
+				// but the texture was also used for an intrinsic that might need a separate sampler, so we have a "uniform texture2D" instead of a "uniform sampler2D".
+				// To avoid the dependency to the GLSL extension "GL_EXT_samplerless_texture_functions", which provides "texelFetch(texture2D,...)",
+				// we construct a combined-sampler with *any* of the samplers for this texture such as "sampler2D(myTexture, mySampler)".
 				auto Found = ParseState->TextureToSamplerMap.find(tex->sampler->variable_referenced()->name);
 
 				// Can't find a sampler state for this texture, internal error!
@@ -1891,7 +1936,7 @@ class FGenerateVulkanVisitor : public ir_visitor
 		}
 	}
 
-	void print_image_op(ir_dereference_image *deref, ir_rvalue *src)
+	void print_image_op(ir_dereference_image *deref, ir_rvalue *src, const char* Mask = nullptr)
 	{
 		const char* swizzle[] =
 		{
@@ -1927,6 +1972,10 @@ class FGenerateVulkanVisitor : public ir_visitor
 					ralloc_asprintf_append(buffer, "[");
 					deref->image_index->accept(this);
 					ralloc_asprintf_append(buffer, "]");
+					if (Mask)
+					{
+						ralloc_asprintf_append(buffer, Mask);
+					}
 					ralloc_asprintf_append(buffer, " = ");
 					src->accept(this);
 				}
@@ -2041,31 +2090,30 @@ class FGenerateVulkanVisitor : public ir_visitor
 			ralloc_asprintf_append(buffer, ") { ");
 		}
 
+		char mask[6] = "";
+		unsigned j = 1;
+		if (assign->lhs->type->is_scalar() == false ||
+			assign->write_mask != 0x1)
+		{
+			for (unsigned i = 0; i < 4; i++)
+			{
+				if ((assign->write_mask & (1 << i)) != 0)
+				{
+					mask[j] = "xyzw"[i];
+					j++;
+				}
+			}
+		}
+		mask[j] = '\0';
+
+		mask[0] = (j == 1) ? '\0' : '.';
+
 		if (assign->lhs->as_dereference_image() != NULL)
 		{
-			/** EHart - should the write mask be checked here? */
-			print_image_op(assign->lhs->as_dereference_image(), assign->rhs);
+			print_image_op(assign->lhs->as_dereference_image(), assign->rhs, mask);
 		}
 		else
 		{
-			char mask[6];
-			unsigned j = 1;
-			if (assign->lhs->type->is_scalar() == false ||
-				assign->write_mask != 0x1)
-			{
-				for (unsigned i = 0; i < 4; i++)
-				{
-					if ((assign->write_mask & (1 << i)) != 0)
-					{
-						mask[j] = "xyzw"[i];
-						j++;
-					}
-				}
-			}
-			mask[j] = '\0';
-
-			mask[0] = (j == 1) ? '\0' : '.';
-
 			assign->lhs->accept(this);
 			ralloc_asprintf_append(buffer, "%s = ", mask);
 			assign->rhs->accept(this);
@@ -2185,20 +2233,20 @@ class FGenerateVulkanVisitor : public ir_visitor
 					ralloc_asprintf_append(buffer, "(1.0/0.0) /*Inf*/");
 					break;
 
-				case 0xffc00000u:
-					ralloc_asprintf_append(buffer, "(0.0/0.0) /*-Nan*/");
-					break;
-
 				case 0xff800000u:
 					ralloc_asprintf_append(buffer, "(-1.0/0.0) /*-Inf*/");
 					break;
 
-				case 0x7fc00000u:
-					ralloc_asprintf_append(buffer, "(0.0/0.0) /*Nan*/");
-					break;
-
 				default:
-					checkf(false, TEXT("constant->value.u[index] = 0x%0x"), constant->value.u[index]);
+					checkf(FGenericPlatformMath::IsNaN(constant->value.f[index]), TEXT("constant->value.u[index] = 0x%0x"), constant->value.u[index]);
+					if ((constant->value.u[index] >> 31u) == 1u)
+					{
+						ralloc_asprintf_append(buffer, "(-0.0/0.0) /*-Nan*/");
+					}
+					else
+					{
+						ralloc_asprintf_append(buffer, "(0.0/0.0) /*Nan*/");
+					}
 					break;
 				}
 			}
@@ -3357,7 +3405,7 @@ class FGenerateVulkanVisitor : public ir_visitor
 
 	void print_extensions(_mesa_glsl_parse_state* state, bool bUsesES31Extensions, bool bShouldEmitOESExtensions, bool bShouldEmitMultiview)
 	{
-		if (bUsesES2TextureLODExtension)
+		if (bUsesGLTextureLODExtension)
 		{
 			//ralloc_asprintf_append(buffer, "#ifndef DONTEMITEXTENSIONSHADERTEXTURELODENABLE\n");
 			//ralloc_asprintf_append(buffer, "#extension GL_EXT_shader_texture_lod : enable\n");
@@ -3433,7 +3481,7 @@ public:
 		, needs_semicolon(false)
 		, should_print_uint_literals_as_ints(false)
 		, loop_count(0)
-		, bUsesES2TextureLODExtension(false)
+		, bUsesGLTextureLODExtension(false)
 		, bUsesDXDY(false)
 		, bUsesDiscard(false)
 		, bUsesImageWriteAtomic(false)
@@ -3442,8 +3490,8 @@ public:
 		used_structures = hash_table_ctor(32, hash_table_pointer_hash, hash_table_pointer_compare);
 		used_uniform_blocks = hash_table_ctor(32, hash_table_string_hash, hash_table_string_compare);
 
-		bEmitPrecision = (Target == HCT_FeatureLevelES2 || Target == HCT_FeatureLevelES3_1 || Target == HCT_FeatureLevelES3_1Ext);
-		bIsES = false;//(Target == HCT_FeatureLevelES2 || Target == HCT_FeatureLevelES3_1 || Target == HCT_FeatureLevelES3_1Ext);
+		bEmitPrecision = (Target == HCT_FeatureLevelES3_1 || Target == HCT_FeatureLevelES3_1Ext);
+		bIsES = false;//(Target == HCT_FeatureLevelES3_1 || Target == HCT_FeatureLevelES3_1Ext);
 		bIsES31 = (Target == HCT_FeatureLevelES3_1 || Target == HCT_FeatureLevelES3_1Ext);
 	}
 
@@ -3483,7 +3531,7 @@ public:
 	* Executes the visitor on the provided ir.
 	* @returns the GLSL source code generated.
 	*/
-	const char* run(exec_list* ir, _mesa_glsl_parse_state* state, bool bGroupFlattenedUBs, bool bCanHaveUBs, bool bUsesSubpassFetch, bool bUsesSubpassDepthFetch)
+	const char* run(exec_list* ir, _mesa_glsl_parse_state* state, bool bGroupFlattenedUBs, bool bCanHaveUBs, uint32 SubpassFetchMask)
 	{
 		mem_ctx = ralloc_context(NULL);
 
@@ -3640,45 +3688,47 @@ public:
 
 				return "";
 			};
-
-			if (bUsesSubpassFetch)
+			
+			BindingTable.InputAttachmentsMask = SubpassFetchMask;
+			for (uint32 Index = 0; SubpassFetchMask != 0; ++Index, SubpassFetchMask>>=1)
 			{
-				int32 BindingIndex = BindingTable.RegisterBinding(VULKAN_SUBPASS_FETCH, "a", EVulkanBindingType::InputAttachment);
-				int32 InputAttachmentIndex = BindingTable.GetInputAttachmentIndex(VULKAN_SUBPASS_FETCH_VAR_W);
+				if ((SubpassFetchMask & 1) == 0)
+				{
+					continue;
+				}
+				
+				int32 BindingIndex = BindingTable.RegisterBinding(VULKAN_SUBPASS_FETCH_VAR[Index], "a", EVulkanBindingType::InputAttachment);
+				int32 InputAttachmentIndex = Index;
 				ralloc_asprintf_append(buffer, "layout(set=%d, binding=BINDING_%d, input_attachment_index=%d) uniform highp subpassInput %s;\n",
 					GetDescriptorSetForStage(ParseState->target),
 					BindingIndex,
 					InputAttachmentIndex,
-					VULKAN_SUBPASS_FETCH_VAR);
+					VULKAN_SUBPASS_FETCH_VAR[Index]);
 
-				ralloc_asprintf_append(buffer,
-					"highp float %s()\n"
-					"{\n"\
-					"\treturn subpassLoad(%s).x;\n"\
-					"}\n\n",
-					VULKAN_SUBPASS_FETCH,
-					VULKAN_SUBPASS_FETCH_VAR);
+				if (Index == 0) 
+				{
+					// Depth Input
+					ralloc_asprintf_append(buffer,
+						"highp float %s()\n"
+						"{\n"\
+						"\treturn subpassLoad(%s).x;\n"\
+						"}\n\n",
+						VULKAN_SUBPASS_FETCH[Index],
+						VULKAN_SUBPASS_FETCH_VAR[Index]);
+				}
+				else
+				{
+					// Color Input
+					ralloc_asprintf_append(buffer,
+						"highp vec4 %s()\n"
+						"{\n"\
+						"\treturn subpassLoad(%s);\n"\
+						"}\n\n",
+						VULKAN_SUBPASS_FETCH[Index],
+						VULKAN_SUBPASS_FETCH_VAR[Index]);
+				}
 			}
-
-			if (bUsesSubpassDepthFetch)
-			{
-				int32 BindingIndex = BindingTable.RegisterBinding(VULKAN_SUBPASS_DEPTH_FETCH_VAR, "a", EVulkanBindingType::InputAttachment);
-				int32 InputAttachmentIndex = BindingTable.GetInputAttachmentIndex(VULKAN_SUBPASS_DEPTH_FETCH_VAR_W);
-				ralloc_asprintf_append(buffer, "layout(set=%d, binding=BINDING_%d, input_attachment_index=%d) uniform highp subpassInput %s;\n",
-					GetDescriptorSetForStage(ParseState->target),
-					BindingIndex,
-					InputAttachmentIndex,
-					VULKAN_SUBPASS_DEPTH_FETCH_VAR);
-
-				ralloc_asprintf_append(buffer,
-					"highp float %s()\n"
-					"{\n"\
-					"\treturn subpassLoad(%s).x;\n"\
-					"}\n\n",
-					VULKAN_SUBPASS_DEPTH_FETCH,
-					VULKAN_SUBPASS_DEPTH_FETCH_VAR);
-			}
-
+						
 			for (int32 Index = 0; Index < BindingTable.Bindings.Num(); ++Index)
 			{
 				if (BindingTable.Bindings[Index].Type == EVulkanBindingType::Sampler)
@@ -3852,6 +3902,8 @@ struct FGenerateSamplerToTextureMapVisitor : public ir_hierarchical_visitor
 		{
 			if (IR->SamplerStateName && IR->SamplerStateName[0])
 			{
+				// Keep in mind this sampler uses a sampling intrinsic, e.g. "Sample" or "SampleLevel" (Potential separate sampler sate).
+				GatherData.Entries[Sampler->name].bUsingSampling = true;
 				GatherData.Entries[Sampler->name].SamplerStates.insert(IR->SamplerStateName);
 				GatherData.SamplerToTextureMap[IR->SamplerStateName].insert(Sampler->name);
 			}
@@ -3859,6 +3911,7 @@ struct FGenerateSamplerToTextureMapVisitor : public ir_hierarchical_visitor
 			{
 				if (IR->op == ir_txf || IR->op == ir_txs || IR->op == ir_txm)
 				{
+					// Keep in mind this sampler uses the "Load" or "GetDimensions" intrinsic (Potential combined image-sampler).
 					GatherData.Entries[Sampler->name].bUsingLoadOrDim = true;
 				}
 				else
@@ -3904,21 +3957,27 @@ char* FVulkanCodeBackend::GenerateCode(exec_list* ir, _mesa_glsl_parse_state* st
 		visitor.SamplerMapping.Consolidate(GenerateSamplerToTextureMapVisitor.GatherData);
 	}
 
-	const bool bUsesSubpassFetch = (Frequency == HSF_PixelShader) && UsesUEIntrinsic(ir, VULKAN_SUBPASS_FETCH);
-	const bool bUsesSubpassDepthFetch = (Frequency == HSF_PixelShader) && UsesUEIntrinsic(ir, VULKAN_SUBPASS_DEPTH_FETCH);
+	uint32 SubpassFetchMask = 0;
+	if (Frequency == HSF_PixelShader)
+	{
+		for (int32 i = 0; i < UE_ARRAY_COUNT(VULKAN_SUBPASS_FETCH); ++i)	
+		{
+			SubpassFetchMask|= (UsesUEIntrinsic(ir, VULKAN_SUBPASS_FETCH[i]) ? 1 << i : 0);
+		}
+	}
 
-	const char* code = visitor.run(ir, state, bGroupFlattenedUBs, bCanHaveUBs, bUsesSubpassFetch, bUsesSubpassDepthFetch);
+	const char* code = visitor.run(ir, state, bGroupFlattenedUBs, bCanHaveUBs, SubpassFetchMask);
 
 	return _strdup(code);
 }
 
 
 // Verify if SampleLevel() is used
-struct SPromoteSampleLevelES2 : public ir_hierarchical_visitor
+struct SPromoteSampleLevelES : public ir_hierarchical_visitor
 {
 	_mesa_glsl_parse_state* ParseState;
 	const bool bIsVertexShader;
-	SPromoteSampleLevelES2(_mesa_glsl_parse_state* InParseState, bool bInIsVertexShader) :
+	SPromoteSampleLevelES(_mesa_glsl_parse_state* InParseState, bool bInIsVertexShader) :
 		ParseState(InParseState),
 		bIsVertexShader(bInIsVertexShader)
 	{
@@ -3963,18 +4022,18 @@ struct SPromoteSampleLevelES2 : public ir_hierarchical_visitor
 
 
 // Converts an array index expression using an integer input attribute, to a float input attribute using a conversion to int
-struct SConvertIntVertexAttributeES2 final : public ir_hierarchical_visitor
+struct SConvertIntVertexAttributeES final : public ir_hierarchical_visitor
 {
 	_mesa_glsl_parse_state* ParseState;
 	exec_list* FunctionBody;
 	int InsideArrayDeref;
 	std::map<ir_variable*, ir_variable*> ConvertedVarMap;
 
-	SConvertIntVertexAttributeES2(_mesa_glsl_parse_state* InParseState, exec_list* InFunctionBody) : ParseState(InParseState), FunctionBody(InFunctionBody), InsideArrayDeref(0)
+	SConvertIntVertexAttributeES(_mesa_glsl_parse_state* InParseState, exec_list* InFunctionBody) : ParseState(InParseState), FunctionBody(InFunctionBody), InsideArrayDeref(0)
 	{
 	}
 
-	virtual ~SConvertIntVertexAttributeES2()
+	virtual ~SConvertIntVertexAttributeES()
 	{
 	}
 
@@ -4046,7 +4105,7 @@ bool FVulkanCodeBackend::ApplyAndVerifyPlatformRestrictions(exec_list* Instructi
 
 		// Handle SampleLevel
 		{
-			SPromoteSampleLevelES2 Visitor(ParseState, bIsVertexShader);
+			SPromoteSampleLevelES Visitor(ParseState, bIsVertexShader);
 			Visitor.run(Instructions);
 		}
 
@@ -4056,7 +4115,7 @@ bool FVulkanCodeBackend::ApplyAndVerifyPlatformRestrictions(exec_list* Instructi
 		// Handle integer vertex attributes used as array indices
 		if (bIsVertexShader)
 		{
-			SConvertIntVertexAttributeES2 ConvertIntVertexAttributeVisitor(ParseState, Instructions);
+			SConvertIntVertexAttributeES ConvertIntVertexAttributeVisitor(ParseState, Instructions);
 			ConvertIntVertexAttributeVisitor.run(Instructions);
 		}
 	}
@@ -4174,6 +4233,32 @@ static FSystemValue* SystemValueTable[HSF_FrequencyCount] =
 
 #define CUSTOM_LAYER_INDEX_SEMANTIC "HLSLCC_LAYER_INDEX"
 
+// Returns the number of slots an in/out variable occupies. This is determined by the variable type, e.g. vec4 has offset 1, mat4 has offset 4.
+// For geometry shader input variables, the first array specifier is ignored as geometry shaders get their input from multiple vertex shader invocations.
+static unsigned GetInOutVariableSlotSize(EHlslShaderFrequency Frequency, ir_variable_mode Mode, const struct glsl_type* VarType)
+{
+	check(VarType != nullptr);
+	if (VarType->fields.array != nullptr)
+	{
+		if (Frequency == HSF_GeometryShader && Mode == ir_var_in)
+		{
+			// Ignore frequency after first array specifier, so use HSF_InvalidFrequency
+			return GetInOutVariableSlotSize(HSF_InvalidFrequency, Mode, VarType->fields.array);
+		}
+		else
+		{
+			// Multiply inner array type by array size, i.e. both 'vec2[4]' and 'float[4]' occupy 4 slots
+			// Ignore frequency after first array specifier, so use HSF_InvalidFrequency
+			return GetInOutVariableSlotSize(HSF_InvalidFrequency, Mode, VarType->fields.array) * VarType->length;
+		}
+	}
+	else
+	{
+		// Only use number of matrix columns to determine number of slots this variable occupies: 1 for scalars and vectors, 2/3/4 for matrices
+		return VarType->matrix_columns;
+	}
+}
+
 static void ConfigureInOutVariableLayout(EHlslShaderFrequency Frequency,
 	_mesa_glsl_parse_state* ParseState,
 	const char* Semantic,
@@ -4213,12 +4298,12 @@ static void ConfigureInOutVariableLayout(EHlslShaderFrequency Frequency,
 		if (Mode == ir_var_in)
 		{
 			Variable->location = ParseState->next_in_location_slot;
-			ParseState->next_in_location_slot += NumVectors;
+			ParseState->next_in_location_slot += GetInOutVariableSlotSize(Frequency, Mode, Variable->type);
 		}
 		else
 		{
 			Variable->location = ParseState->next_out_location_slot;
-			ParseState->next_out_location_slot += NumVectors;
+			ParseState->next_out_location_slot += GetInOutVariableSlotSize(Frequency, Mode, Variable->type);
 		}
 	}
 }
@@ -5955,10 +6040,10 @@ void FVulkanCodeBackend::GenShaderPatchConstantFunctionInputs(_mesa_glsl_parse_s
 
 void FVulkanLanguageSpec::SetupLanguageIntrinsics(_mesa_glsl_parse_state* State, exec_list* ir)
 {
-	auto AddIntrisicReturningFloat = [](_mesa_glsl_parse_state* State, exec_list* ir, const char* Name)
+	auto AddIntrisicReturningFloat = [](_mesa_glsl_parse_state* State, exec_list* ir, const char* Name, int32 NumColumns)
 	{
 		ir_function* Func = new(State) ir_function(Name);
-		auto* ReturnType = glsl_type::get_instance(GLSL_TYPE_FLOAT, 1, 1);
+		auto* ReturnType = glsl_type::get_instance(GLSL_TYPE_FLOAT, NumColumns, 1);
 		ir_function_signature* Sig = new(State) ir_function_signature(ReturnType);
 		Sig->is_builtin = true;
 		Func->add_signature(Sig);
@@ -5966,9 +6051,14 @@ void FVulkanLanguageSpec::SetupLanguageIntrinsics(_mesa_glsl_parse_state* State,
 		ir->push_head(Func);
 	};
 
-	AddIntrisicReturningFloat(State, ir, VULKAN_SUBPASS_FETCH);
-	AddIntrisicReturningFloat(State, ir, VULKAN_SUBPASS_DEPTH_FETCH);
-
+	// Depth fetch
+	AddIntrisicReturningFloat(State, ir, VULKAN_SUBPASS_FETCH[0], 1);
+	// Color fetch
+	for (int32 i = 1; i < UE_ARRAY_COUNT(VULKAN_SUBPASS_FETCH); ++i)	
+	{
+		AddIntrisicReturningFloat(State, ir, VULKAN_SUBPASS_FETCH[i], 4);
+	}
+	
 	//if (State->language_version >= 310)
 	{
 		/**
@@ -6088,7 +6178,6 @@ int32 FVulkanBindingTable::RegisterBinding(const char* InName, const char* Block
 		return -1;
 	}
 
-
 	for (int32 Index = 0; Index < Bindings.Num(); ++Index)
 	{
 		if (FCStringAnsi::Strcmp(Bindings[Index].Name, InName) == 0)
@@ -6098,13 +6187,8 @@ int32 FVulkanBindingTable::RegisterBinding(const char* InName, const char* Block
 	}
 
 	int32 BindingIdx = Bindings.Num();
-
+	
 	Bindings.Add(FBinding(InName, BindingIdx, Type, ExtractHLSLCCType(BlockName)));
-
-	if (Type == EVulkanBindingType::InputAttachment)
-	{
-		InputAttachments.Add(ANSI_TO_TCHAR(InName));
-	}
 
 	return BindingIdx;
 }

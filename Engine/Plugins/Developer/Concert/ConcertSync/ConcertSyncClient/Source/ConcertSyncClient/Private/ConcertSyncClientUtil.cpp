@@ -5,6 +5,7 @@
 #include "ConcertTransactionEvents.h"
 #include "ConcertLogGlobal.h"
 #include "ConcertSyncSettings.h"
+#include "ConcertWorkspaceData.h"
 
 #include "UObject/Class.h"
 #include "UObject/UObjectHash.h"
@@ -78,16 +79,19 @@ int32 GetObjectPathDepth(UObject* InObjToTest)
 	return Depth;
 }
 
-FGetObjectResult GetObject(const FConcertObjectId& InObjectId, const FName InNewName, const FName InNewOuterPath, const bool bAllowCreate)
+FGetObjectResult GetObject(const FConcertObjectId& InObjectId, const FName InNewName, const FName InNewOuterPath, const FName InNewPackageName, const bool bAllowCreate)
 {
 	const bool bIsRename = !InNewName.IsNone();
 	const bool bIsOuterChange = !InNewOuterPath.IsNone();
+	const bool bIsPackageChange = !InNewPackageName.IsNone();
 
 	const FName ObjectOuterPathToFind = InObjectId.ObjectOuterPathName;
 	const FName ObjectOuterPathToCreate = bIsOuterChange ? InNewOuterPath : ObjectOuterPathToFind;
 
 	const FName ObjectNameToFind = InObjectId.ObjectName;
 	const FName ObjectNameToCreate = bIsRename ? InNewName : ObjectNameToFind;
+
+	const FName ObjectPackageToAssign = bIsPackageChange ? InNewPackageName : InObjectId.ObjectExternalPackageName;
 
 	auto FindOrLoadClass = [bAllowCreate](const FName InClassName) -> UClass*
 	{
@@ -96,6 +100,27 @@ FGetObjectResult GetObject(const FConcertObjectId& InObjectId, const FName InNew
 		return bAllowCreate
 			? LoadObject<UClass>(nullptr, *ClassNameStr)
 			: FindObject<UClass>(nullptr, *ClassNameStr);
+	};
+
+	auto AssignExternalPackage = [bIsPackageChange, &ObjectPackageToAssign, &ObjectNameToCreate](UObject* InObject)
+	{
+		if (bIsPackageChange)
+		{
+			if (ObjectPackageToAssign.IsNone())
+			{
+				InObject->SetExternalPackage(nullptr);
+			}
+			else
+			// find the new package to assign to the object
+			if (UPackage* NewPackage = FindObject<UPackage>(nullptr, *ObjectPackageToAssign.ToString()))
+			{
+				InObject->SetExternalPackage(NewPackage);
+			}
+			else
+			{
+				UE_LOG(LogConcert, Warning, TEXT("Package '%s' could not be found and assigned to Object '%s'."), *ObjectPackageToAssign.ToString(), *ObjectNameToCreate.ToString());
+			}
+		}
 	};
 
 	// Find the outer for the existing object
@@ -115,6 +140,7 @@ FGetObjectResult GetObject(const FConcertObjectId& InObjectId, const FName InNew
 					UObject* NewObjectOuter = nullptr;
 					if (bIsOuterChange)
 					{
+						//@todo FH: what if our new outer isn't loaded yet?
 						NewObjectOuter = StaticFindObject(UObject::StaticClass(), nullptr, *ObjectOuterPathToCreate.ToString());
 					}
 
@@ -136,6 +162,9 @@ FGetObjectResult GetObject(const FConcertObjectId& InObjectId, const FName InNew
 				// Update the object flags
 				ExistingObject->SetFlags((EObjectFlags)InObjectId.ObjectPersistentFlags);
 
+				// if we have any package assignment, do it here
+				AssignExternalPackage(ExistingObject);
+
 				// We found the object, return it
 				return FGetObjectResult(ExistingObject, ResultFlags);
 			}
@@ -154,11 +183,15 @@ FGetObjectResult GetObject(const FConcertObjectId& InObjectId, const FName InNew
 				// Update the object flags
 				NewObject->SetFlags((EObjectFlags)InObjectId.ObjectPersistentFlags);
 
+				// if we have any package assignment, do it here
+				AssignExternalPackage(NewObject);
+
 				return FGetObjectResult(NewObject);
 			}
 
 			if (bAllowCreate)
 			{
+				FGetObjectResult ObjectResult;
 				// Create the new object
 				if (ObjectClass->IsChildOf<AActor>())
 				{
@@ -180,7 +213,7 @@ FGetObjectResult GetObject(const FConcertObjectId& InObjectId, const FName InNew
 							SpawnParams.bNoFail = true;
 							SpawnParams.bDeferConstruction = true; // We defer FinishSpawning until the correct object state has been applied
 							SpawnParams.ObjectFlags = (EObjectFlags)InObjectId.ObjectPersistentFlags;
-							return FGetObjectResult(OwnerWorld->SpawnActor<AActor>(ObjectClass, FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams), EGetObjectResultFlags::NeedsPostSpawn);
+							ObjectResult = FGetObjectResult(OwnerWorld->SpawnActor<AActor>(ObjectClass, FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams), EGetObjectResultFlags::NeedsPostSpawn);
 						}
 						else
 						{
@@ -192,7 +225,15 @@ FGetObjectResult GetObject(const FConcertObjectId& InObjectId, const FName InNew
 						UE_LOG(LogConcert, Warning, TEXT("Actor '%s' wasn't directly outered to a Level! This is unexpected and the Actor will be created via NewObject rather than SpawnActor."), *ObjectNameToCreate.ToString());
 					}
 				}
-				return FGetObjectResult(NewObject<UObject>(NewObjectOuter, ObjectClass, *ObjectNameToCreate.ToString(), (EObjectFlags)InObjectId.ObjectPersistentFlags));
+				else
+				{
+					ObjectResult = FGetObjectResult(NewObject<UObject>(NewObjectOuter, ObjectClass, *ObjectNameToCreate.ToString(), (EObjectFlags)InObjectId.ObjectPersistentFlags));
+				}
+				
+				// if we have any package assignment, do it here
+				AssignExternalPackage(ObjectResult.Obj);
+
+				return ObjectResult;
 			}
 		}
 	}
@@ -217,7 +258,7 @@ TArray<FName> GetRootProperties(const TArray<FName>& InChangedProperties)
 {
 	TArray<FName> RootProperties;
 	RootProperties.Reserve(InChangedProperties.Num());
-	for (const FName PropertyChainName : InChangedProperties)
+	for (const FName& PropertyChainName : InChangedProperties)
 	{
 		// Only care about the root property in the chain
 		TArray<FString> PropertyChainNames;
@@ -307,7 +348,7 @@ void HotReloadPackages(TArrayView<const FName> InPackageNames)
 	FlushAsyncLoading();
 	{
 		bool bRunGC = false;
-		for (const FName PackageName : InPackageNames)
+		for (const FName& PackageName : InPackageNames)
 		{
 			bRunGC |= FLinkerLoad::RemoveKnownMissingPackage(PackageName);
 		}
@@ -322,7 +363,7 @@ void HotReloadPackages(TArrayView<const FName> InPackageNames)
 	// Find the packages in-memory to content hot-reload
 	TArray<UPackage*> ExistingPackages;
 	ExistingPackages.Reserve(InPackageNames.Num());
-	for (const FName PackageName : InPackageNames)
+	for (const FName& PackageName : InPackageNames)
 	{
 		UPackage* ExistingPackage = FindPackage(nullptr, *PackageName.ToString());
 		if (ExistingPackage)
@@ -368,7 +409,7 @@ void PurgePackages(TArrayView<const FName> InPackageNames)
 	UPackage* EditedMapPackage = CurrentWorld ? CurrentWorld->GetOutermost(): nullptr;
 
 	// Collect any in-memory packages that should be purged and check if we are including the current map in the purge.
-	for (const FName PackageName : InPackageNames)
+	for (const FName& PackageName : InPackageNames)
 	{
 		UPackage* ExistingPackage = FindPackage(nullptr, *PackageName.ToString());
 		if (ExistingPackage)
@@ -377,9 +418,10 @@ void PurgePackages(TArrayView<const FName> InPackageNames)
 			ExistingPackage->SetDirtyFlag(false);
 
 			CollectObjectToPurge(ExistingPackage);
-			ForEachObjectWithOuter(ExistingPackage, [&CollectObjectToPurge](UObject* InObject)
+			ForEachObjectWithPackage(ExistingPackage, [&CollectObjectToPurge](UObject* InObject)
 			{
 				CollectObjectToPurge(InObject);
+				return true;
 			});
 
 			bEditedMapPurged |= EditedMapPackage == ExistingPackage;
@@ -441,6 +483,15 @@ UWorld* GetCurrentWorld()
 		CurrentWorld = GameEngine->GetGameWorld();
 	}
 	return CurrentWorld;
+}
+
+void FillPackageInfo(UPackage* InPackage, UObject* InAsset, const EConcertPackageUpdateType InPackageUpdateType, FConcertPackageInfo& OutPackageInfo)
+{
+	UObject* Asset = InAsset ? InAsset : InPackage->FindAssetInPackage();
+	OutPackageInfo.PackageName = InPackage->GetFName();
+	OutPackageInfo.AssetClass = Asset ? Asset->GetClass()->GetPathName() : FString();
+	OutPackageInfo.PackageFileExtension = Asset && Asset->IsA<UWorld>()? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension();
+	OutPackageInfo.PackageUpdateType = InPackageUpdateType;
 }
 
 }

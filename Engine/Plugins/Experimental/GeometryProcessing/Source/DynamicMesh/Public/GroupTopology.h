@@ -128,11 +128,18 @@ public:
 
 	virtual ~FGroupTopology() {}
 
+	/**
+	 * Keeps the structures of topology in place but points the mesh pointers to
+	 * a new cloned mesh. If the given mesh is not cloned, the topology will no
+	 * longer be consistent.
+	 */
+	void RetargetOnClonedMesh(const FDynamicMesh3* Mesh);
 
 	/**
 	 * Build the group topology graph.
+	 * @return true on success, false if there was an error
 	 */
-	virtual void RebuildTopology();
+	virtual bool RebuildTopology();
 
 	/** 
 	 * Adjacency of Per-Triangle integers are what define the triangle groups.
@@ -316,12 +323,13 @@ protected:
 	/** @return true if given mesh vertex is a Corner vertex */
 	virtual bool IsCornerVertex(int VertexID) const;
 
-	void ExtractGroupEdges(FGroup& Group);
+	/** Return false if we had a problem finding group boundaries */
+	bool ExtractGroupEdges(FGroup& Group);
 
 	inline FIndex2i MakeEdgeID(int MeshEdgeID) const;
 	inline FIndex2i MakeEdgeID(int Group1, int Group2) const;
 
-	int FindExistingGroupEdge(int GroupID, int OtherGroupID, int FirstVertexID);
+	int FindExistingGroupEdge(int GroupID, int OtherGroupID, int FirstVertexID, int SecondVertexID);
 	void GetAllVertexGroups(int32 VertexID, TArray<int32>& GroupsOut) const;
 };
 
@@ -335,7 +343,7 @@ FIndex2i FGroupTopology::MakeEdgeID(int MeshEdgeID) const
 
 	if (EdgeTris.B == FDynamicMesh3::InvalidID)
 	{
-		return FIndex2i(GetGroupID(EdgeTris.A), FDynamicMesh3::InvalidGroupID);
+		return FIndex2i(GetGroupID(EdgeTris.A), FDynamicMesh3::InvalidID);
 	}
 	else
 	{
@@ -370,7 +378,7 @@ public:
 	FTriangleGroupTopology() {}
 	FTriangleGroupTopology(const FDynamicMesh3* Mesh, bool bAutoBuild);
 
-	virtual void RebuildTopology() override;
+	virtual bool RebuildTopology() override;
 
 	virtual int GetGroupID(int TriangleID) const override
 	{

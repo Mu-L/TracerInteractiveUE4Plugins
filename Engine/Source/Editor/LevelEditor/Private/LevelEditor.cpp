@@ -34,6 +34,7 @@
 #include "PixelInspectorModule.h"
 #include "CommonMenuExtensionsModule.h"
 #include "ProjectDescriptor.h"
+#include "PlatformInfo.h"
 
 // @todo Editor: remove this circular dependency
 #include "Interfaces/IMainFrameModule.h"
@@ -74,6 +75,7 @@ const FName LevelEditorTabIds::WorldBrowserHierarchy(TEXT("WorldBrowserHierarchy
 const FName LevelEditorTabIds::WorldBrowserDetails(TEXT("WorldBrowserDetails"));
 const FName LevelEditorTabIds::LevelEditorHierarchicalLODOutliner(TEXT("LevelEditorHierarchicalLODOutliner"));
 const FName LevelEditorTabIds::OutputLog(TEXT("OutputLog"));
+const FName LevelEditorTabIds::LevelEditorEnvironmentLightingViewer(TEXT("LevelEditorEnvironmentLightingViewer"));
 
 FLevelEditorModule::FLevelEditorModule()
 	: ToggleImmersiveConsoleCommand(
@@ -217,7 +219,7 @@ TSharedRef<SDockTab> FLevelEditorModule::SpawnLevelEditor( const FSpawnTabArgs& 
 		{
 			// In legacy mode this toolbox should always be open
 			static const FTabId ToolboxTabId("LevelEditorToolBox");
-			LevelEditorTabManager->InvokeTab(ToolboxTabId);
+			LevelEditorTabManager->TryInvokeTab(ToolboxTabId);
 
 			// In legacy mode the standalone placement browser tab should not be opened
 			static const FTabId PlacementBrowserTabId("PlacementBrowser");
@@ -292,7 +294,6 @@ void FLevelEditorModule::StartupModule()
 	FEditorViewportCommands::Register();
 	FLevelViewportCommands::Register();
 	FLevelEditorCommands::Register();
-	FLevelEditorModesCommands::Register();
 
 	// Bind level editor commands shared across an instance
 	BindGlobalLevelEditorCommands();
@@ -375,26 +376,26 @@ void FLevelEditorModule::SummonSelectionDetails()
 void FLevelEditorModule::SummonBuildAndSubmit()
 {
 	TSharedPtr<SLevelEditor> LevelEditorInstance = LevelEditorInstancePtr.Pin();
-	LevelEditorInstance->InvokeTab(LevelEditorTabIds::LevelEditorBuildAndSubmit);
+	LevelEditorInstance->TryInvokeTab(LevelEditorTabIds::LevelEditorBuildAndSubmit);
 }
 
 
 void FLevelEditorModule::SummonWorldBrowserHierarchy()
 {
 	TSharedPtr<SLevelEditor> LevelEditorInstance = LevelEditorInstancePtr.Pin();
-	LevelEditorInstance->InvokeTab(LevelEditorTabIds::WorldBrowserHierarchy);
+	LevelEditorInstance->TryInvokeTab(LevelEditorTabIds::WorldBrowserHierarchy);
 }
 
 void FLevelEditorModule::SummonWorldBrowserDetails()
 {
 	TSharedPtr<SLevelEditor> LevelEditorInstance = LevelEditorInstancePtr.Pin();
-	LevelEditorInstance->InvokeTab(LevelEditorTabIds::WorldBrowserDetails);
+	LevelEditorInstance->TryInvokeTab(LevelEditorTabIds::WorldBrowserDetails);
 }
 
 void FLevelEditorModule::SummonWorldBrowserComposition()
 {
 	TSharedPtr<SLevelEditor> LevelEditorInstance = LevelEditorInstancePtr.Pin();
-	LevelEditorInstance->InvokeTab(LevelEditorTabIds::WorldBrowserComposition);
+	LevelEditorInstance->TryInvokeTab(LevelEditorTabIds::WorldBrowserComposition);
 }
 
 // @todo remove when world-centric mode is added
@@ -1536,6 +1537,9 @@ void FLevelEditorModule::BindGlobalLevelEditorCommands()
 	ActionList.MapAction(Commands.BuildVirtualTextureOnly,
 		FExecuteAction::CreateStatic(&FLevelEditorActionCallbacks::BuildVirtualTextureOnly_Execute));
 
+	ActionList.MapAction(Commands.BuildGrassMapsOnly,
+		FExecuteAction::CreateStatic(&FLevelEditorActionCallbacks::BuildGrassMapsOnly_Execute));
+
 	ActionList.MapAction( 
 		Commands.LightingQuality_Production, 
 		FExecuteAction::CreateStatic( &FLevelEditorActionCallbacks::SetLightingQuality, (ELightingBuildQuality)Quality_Production ),
@@ -1802,6 +1806,11 @@ void FLevelEditorModule::BindGlobalLevelEditorCommands()
 		FExecuteAction::CreateStatic( &FLevelEditorActionCallbacks::SetMaterialQualityLevel, (EMaterialQualityLevel::Type)EMaterialQualityLevel::High ),
 		FCanExecuteAction(),
 		FIsActionChecked::CreateStatic( &FLevelEditorActionCallbacks::IsMaterialQualityLevelChecked, (EMaterialQualityLevel::Type)EMaterialQualityLevel::High ) );
+	ActionList.MapAction(
+		Commands.MaterialQualityLevel_Epic,
+		FExecuteAction::CreateStatic(&FLevelEditorActionCallbacks::SetMaterialQualityLevel, (EMaterialQualityLevel::Type)EMaterialQualityLevel::Epic),
+		FCanExecuteAction(),
+		FIsActionChecked::CreateStatic(&FLevelEditorActionCallbacks::IsMaterialQualityLevelChecked, (EMaterialQualityLevel::Type)EMaterialQualityLevel::Epic));
 
 	ActionList.MapAction(
 		Commands.ToggleFeatureLevelPreview,
@@ -1812,27 +1821,21 @@ void FLevelEditorModule::BindGlobalLevelEditorCommands()
 
 	ActionList.MapAction(
 		Commands.PreviewPlatformOverride_SM5,
-		FExecuteAction::CreateStatic(&FLevelEditorActionCallbacks::SetPreviewPlatform, FPreviewPlatformInfo(ERHIFeatureLevel::SM5, NAME_None, false)),
+		FExecuteAction::CreateStatic(&FLevelEditorActionCallbacks::SetPreviewPlatform, FPreviewPlatformInfo(ERHIFeatureLevel::SM5, NAME_None, NAME_None, NAME_None, false)),
 		FCanExecuteAction(),
 		FIsActionChecked::CreateStatic(&FLevelEditorActionCallbacks::IsPreviewPlatformChecked, FPreviewPlatformInfo(ERHIFeatureLevel::SM5, NAME_None)));
 
-	ActionList.MapAction(
-		Commands.PreviewPlatformOverride_AndroidGLES31,
-		FExecuteAction::CreateStatic(&FLevelEditorActionCallbacks::SetPreviewPlatform, FPreviewPlatformInfo(ERHIFeatureLevel::ES3_1, LegacyShaderPlatformToShaderFormat(SP_OPENGL_ES3_1_ANDROID), true)),
-		FCanExecuteAction(),
-		FIsActionChecked::CreateStatic(&FLevelEditorActionCallbacks::IsPreviewPlatformChecked, FPreviewPlatformInfo(ERHIFeatureLevel::ES3_1, LegacyShaderPlatformToShaderFormat(SP_OPENGL_ES3_1_ANDROID))));
+	for (auto It = PlatformInfo::GetPreviewPlatformMenuItems().CreateConstIterator(); It; ++It)
+	{
+		EShaderPlatform ShaderPlatform = ShaderFormatToLegacyShaderPlatform(It.Value().ShaderFormat);
+		ERHIFeatureLevel::Type FeatureLevel = GetMaxSupportedFeatureLevel(ShaderPlatform);
 
-	ActionList.MapAction(
-		Commands.PreviewPlatformOverride_AndroidVulkanES31,
-		FExecuteAction::CreateStatic(&FLevelEditorActionCallbacks::SetPreviewPlatform, FPreviewPlatformInfo(ERHIFeatureLevel::ES3_1, LegacyShaderPlatformToShaderFormat(SP_VULKAN_ES3_1_ANDROID), true)),
-		FCanExecuteAction(),
-		FIsActionChecked::CreateStatic(&FLevelEditorActionCallbacks::IsPreviewPlatformChecked, FPreviewPlatformInfo(ERHIFeatureLevel::ES3_1, LegacyShaderPlatformToShaderFormat(SP_VULKAN_ES3_1_ANDROID))));
-
-	ActionList.MapAction(
-		Commands.PreviewPlatformOverride_IOSMetalES31,
-		FExecuteAction::CreateStatic(&FLevelEditorActionCallbacks::SetPreviewPlatform, FPreviewPlatformInfo(ERHIFeatureLevel::ES3_1, LegacyShaderPlatformToShaderFormat(SP_METAL), true)),
-		FCanExecuteAction(),
-		FIsActionChecked::CreateStatic(&FLevelEditorActionCallbacks::IsPreviewPlatformChecked, FPreviewPlatformInfo(ERHIFeatureLevel::ES3_1, LegacyShaderPlatformToShaderFormat(SP_METAL))));
+		ActionList.MapAction(
+			*Commands.PreviewPlatformOverrides.Find(It.Key()),
+			FExecuteAction::CreateStatic(&FLevelEditorActionCallbacks::SetPreviewPlatform, FPreviewPlatformInfo(FeatureLevel, It.Value().PlatformName, It.Value().ShaderFormat, It.Value().DeviceProfileName, true)),
+			FCanExecuteAction(),
+			FIsActionChecked::CreateStatic(&FLevelEditorActionCallbacks::IsPreviewPlatformChecked, FPreviewPlatformInfo(FeatureLevel, It.Value().PlatformName, It.Value().ShaderFormat, It.Value().DeviceProfileName)));
+	}
 
 	ActionList.MapAction(
 		Commands.OpenMergeActor,

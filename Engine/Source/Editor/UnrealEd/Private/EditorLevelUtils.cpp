@@ -49,6 +49,7 @@ EditorLevelUtils.cpp: Editor-specific level management routines
 #include "HAL/PlatformApplicationMisc.h"
 #include "IAssetTools.h"
 #include "AssetToolsModule.h"
+#include "Dialogs/Dialogs.h"
 
 DEFINE_LOG_CATEGORY(LogLevelTools);
 
@@ -351,6 +352,11 @@ ULevelStreaming* UEditorLevelUtils::AddLevelToWorld(UWorld* InWorld, const TCHAR
 	ULevel* NewLevel = nullptr;
 
 	ULevelStreaming* NewStreamingLevel = AddLevelToWorld_Internal(InWorld, LevelPackageName, LevelStreamingClass, LevelTransform);
+
+	// Broadcast the levels have changed (new style)
+	InWorld->BroadcastLevelsChanged();
+	FEditorDelegates::RefreshLevelBrowser.Broadcast();
+
 	if (NewStreamingLevel)
 	{
 		NewLevel = NewStreamingLevel->GetLoadedLevel();
@@ -372,10 +378,6 @@ ULevelStreaming* UEditorLevelUtils::AddLevelToWorld(UWorld* InWorld, const TCHAR
 		GLevelEditorModeTools().ActivateDefaultMode();
 	}
 
-	// Broadcast the levels have changed (new style)
-	InWorld->BroadcastLevelsChanged();
-	FEditorDelegates::RefreshLevelBrowser.Broadcast();
-
 	// Update volume actor visibility for each viewport since we loaded a level which could potentially contain volumes
 	if (GUnrealEd)
 	{
@@ -396,12 +398,16 @@ ULevelStreaming* UEditorLevelUtils::AddLevelToWorld_Internal(UWorld* InWorld, co
 		// Do nothing if the level already exists in the world.
 		const FString LevelName(LevelPackageName);
 		const FText MessageText = FText::Format(NSLOCTEXT("UnrealEd", "LevelAlreadyExistsInWorld", "A level with that name ({0}) already exists in the world."), FText::FromString(LevelName));
-		FMessageDialog::Open(EAppMsgType::Ok, MessageText);
+
+		FSuppressableWarningDialog::FSetupInfo Info(MessageText, LOCTEXT("AddLevelToWorld_Title", "Add Level"), "LevelAlreadyExistsInWorldWarning");
+		Info.ConfirmText = LOCTEXT("AlreadyExist_Ok", "Ok");
+		FSuppressableWarningDialog RemoveLevelWarning(Info);
+		RemoveLevelWarning.ShowModal();
 	}
 	else
 	{
-		// If the selected class is still NULL, abort the operation.
-		if (LevelStreamingClass == nullptr)
+		// If the selected class is still NULL or the selected class is abstract, abort the operation.
+		if (LevelStreamingClass == nullptr || LevelStreamingClass->HasAnyClassFlags(CLASS_Abstract))
 		{
 			return nullptr;
 		}
@@ -486,6 +492,7 @@ ULevelStreaming* UEditorLevelUtils::SetStreamingClassForLevel(ULevelStreaming* I
 		NewStreamingLevel->MinTimeBetweenVolumeUnloadRequests = InLevel->MinTimeBetweenVolumeUnloadRequests;
 		NewStreamingLevel->LevelColor = InLevel->LevelColor;
 		NewStreamingLevel->Keywords = InLevel->Keywords;
+		NewStreamingLevel->SetFolderPath(InLevel->GetFolderPath());
 	}
 
 	return NewStreamingLevel;
@@ -567,7 +574,7 @@ bool UEditorLevelUtils::PrivateRemoveInvalidLevelFromWorld(ULevelStreaming* InLe
 		if (UWorld* OwningWorld = InLevelStreaming->GetWorld())
 		{
 			OwningWorld->RemoveStreamingLevel(InLevelStreaming);
-			OwningWorld->RefreshStreamingLevels();
+			OwningWorld->RefreshStreamingLevels({});
 			bRemovedLevelStreaming = true;
 		}
 	}
@@ -643,7 +650,7 @@ ULevelStreaming* UEditorLevelUtils::CreateNewStreamingLevelForWorld(UWorld& InWo
 		// Create a new world
 		UWorldFactory* Factory = NewObject<UWorldFactory>();
 		Factory->WorldType = EWorldType::Inactive;
-		UPackage* Pkg = CreatePackage(NULL, NULL);
+		UPackage* Pkg = CreatePackage( NULL);
 		FName WorldName(TEXT("Untitled"));
 		EObjectFlags Flags = RF_Public | RF_Standalone;
 		NewLevelWorld = CastChecked<UWorld>(Factory->FactoryCreateNew(UWorld::StaticClass(), Pkg, WorldName, Flags, NULL, GWarn));
@@ -713,7 +720,10 @@ bool UEditorLevelUtils::RemoveLevelFromWorld(ULevel* InLevel)
 
 		FEditorSupportDelegates::PrepareToCleanseEditorObject.Broadcast(InLevel);
 
-		GEditor->Trans->Reset(LOCTEXT("RemoveLevelTransReset", "Removing Levels from World"));
+		if (GEditor->Trans != nullptr)
+		{
+			GEditor->Trans->Reset(LOCTEXT("RemoveLevelTransReset", "Removing Levels from World"));
+		}
 
 		EditorDestroyLevel(InLevel);
 
@@ -773,7 +783,7 @@ bool UEditorLevelUtils::PrivateRemoveLevelFromWorld(ULevel* InLevel)
 		ULevelStreaming* StreamingLevel = InLevel->OwningWorld->GetStreamingLevels()[StreamingLevelIndex];
 		StreamingLevel->MarkPendingKill();
 		InLevel->OwningWorld->RemoveStreamingLevel(StreamingLevel);
-		InLevel->OwningWorld->RefreshStreamingLevels();
+		InLevel->OwningWorld->RefreshStreamingLevels({});
 	}
 	else if (InLevel->bIsVisible)
 	{
@@ -1221,10 +1231,8 @@ void UEditorLevelUtils::SetLevelsVisibility(const TArray<ULevel*>& Levels, const
 	}
 }
 
-void UEditorLevelUtils::GetWorlds(UWorld* InWorld, TArray<UWorld*>& OutWorlds, bool bIncludeInWorld, bool bOnlyEditorVisible)
+void UEditorLevelUtils::ForEachWorlds(UWorld* InWorld, TFunctionRef<bool(UWorld*)> Operation, bool bIncludeInWorld, bool bOnlyEditorVisible)
 {
-	OutWorlds.Empty();
-
 	if (!InWorld)
 	{
 		return;
@@ -1232,7 +1240,10 @@ void UEditorLevelUtils::GetWorlds(UWorld* InWorld, TArray<UWorld*>& OutWorlds, b
 
 	if (bIncludeInWorld)
 	{
-		OutWorlds.AddUnique(InWorld);
+		if (!Operation(InWorld))
+		{
+			return;
+		}
 	}
 
 	// Iterate over the world's level array to find referenced levels ("worlds"). We don't 
@@ -1253,7 +1264,10 @@ void UEditorLevelUtils::GetWorlds(UWorld* InWorld, TArray<UWorld*>& OutWorlds, b
 					UWorld* World = Cast<UWorld>(Level->GetOuter());
 					if (World)
 					{
-						OutWorlds.AddUnique(World);
+						if (!Operation(World))
+						{
+							return;
+						}
 					}
 				}
 			}
@@ -1269,10 +1283,19 @@ void UEditorLevelUtils::GetWorlds(UWorld* InWorld, TArray<UWorld*>& OutWorlds, b
 			UWorld* World = Cast<UWorld>(Level->GetOuter());
 			if (World)
 			{
-				OutWorlds.AddUnique(World);
+				if (!Operation(World))
+				{
+					return;
+				}
 			}
 		}
 	}
+}
+
+void UEditorLevelUtils::GetWorlds(UWorld* InWorld, TArray<UWorld*>& OutWorlds, bool bIncludeInWorld, bool bOnlyEditorVisible)
+{
+	OutWorlds.Empty();
+	ForEachWorlds(InWorld, [&OutWorlds](UWorld* World) { OutWorlds.AddUnique(World); return true; }, bIncludeInWorld, bOnlyEditorVisible);
 }
 
 #undef LOCTEXT_NAMESPACE

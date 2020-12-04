@@ -41,7 +41,7 @@ FD3D12DeferredDeletionQueue::~FD3D12DeferredDeletionQueue()
 	}
 }
 
-void FD3D12DeferredDeletionQueue::EnqueueResource(FD3D12Resource* pResource, FD3D12Fence* Fence)
+void FD3D12DeferredDeletionQueue::EnqueueResource(FD3D12Resource* pResource, FFenceList&& FenceList)
 {
 	check(pResource->ShouldDeferDelete());
 
@@ -50,8 +50,7 @@ void FD3D12DeferredDeletionQueue::EnqueueResource(FD3D12Resource* pResource, FD3
 
 	FencedObjectType FencedObject;
 	FencedObject.RHIObject  = pResource;
-	FencedObject.Fence      = Fence;
-	FencedObject.FenceValue = Fence->GetCurrentFence();
+	FencedObject.FenceList  = MoveTemp(FenceList);
 	FencedObject.Type       = EObjectType::RHI;
 	DeferredReleaseQueue.Enqueue(FencedObject);
 }
@@ -63,8 +62,7 @@ void FD3D12DeferredDeletionQueue::EnqueueResource(ID3D12Object* pResource, FD3D1
 
 	FencedObjectType FencedObject;
 	FencedObject.D3DObject  = pResource;
-	FencedObject.Fence      = Fence;
-	FencedObject.FenceValue = Fence->GetCurrentFence();
+	FencedObject.FenceList.Emplace(Fence, Fence->GetCurrentFence());
 	FencedObject.Type       = EObjectType::D3D;
 	DeferredReleaseQueue.Enqueue(FencedObject);
 }
@@ -77,17 +75,20 @@ bool FD3D12DeferredDeletionQueue::ReleaseResources(bool bDeleteImmediately, bool
 	{
 		if (bDeleteImmediately)
 		{
+			// Wait for all deferred delete tasks to finish
 			FAsyncTask<FD3D12AsyncDeletionWorker>* DeleteTask = nullptr;
-			// Call back all threads
 			while (DeleteTasks.Peek(DeleteTask))
 			{
 				DeleteTasks.Dequeue(DeleteTask);
 				DeleteTask->EnsureCompletion(true);
 				delete(DeleteTask);
 			}
+
+			// current deferred release queue will be freed via non async deferred deletion code path below
 		}
 		else
 		{
+			// Clean up all previously finished delete tasks
 			FAsyncTask<FD3D12AsyncDeletionWorker>* DeleteTask = nullptr;
 			while (DeleteTasks.Peek(DeleteTask) && DeleteTask->IsDone())
 			{
@@ -95,11 +96,13 @@ bool FD3D12DeferredDeletionQueue::ReleaseResources(bool bDeleteImmediately, bool
 				delete(DeleteTask);
 			}
 
+			// Create new delete task, which will only collect resources in the constructor for which the fence is complete, not the whole list!
 			DeleteTask = new FAsyncTask<FD3D12AsyncDeletionWorker>(Adapter, &DeferredReleaseQueue);
 
 			DeleteTask->StartBackgroundTask();
 			DeleteTasks.Enqueue(DeleteTask);
 
+			// Deferred release queue is not empty yet
 			return false;
 		}
 	}
@@ -143,7 +146,14 @@ bool FD3D12DeferredDeletionQueue::ReleaseResources(bool bDeleteImmediately, bool
 		{
 			bool operator() (FencedObjectType FenceObject) const
 			{
-				return FenceObject.Fence->IsFenceComplete(FenceObject.FenceValue);
+				for (auto& FencePair : FenceObject.FenceList)
+				{
+					if (!FencePair.Key->IsFenceComplete(FencePair.Value))
+					{
+						return false;
+					}
+				}
+				return true;
 			}
 		};
 
@@ -170,7 +180,14 @@ FD3D12DeferredDeletionQueue::FD3D12AsyncDeletionWorker::FD3D12AsyncDeletionWorke
 	{
 		bool operator() (FencedObjectType FenceObject) const
 		{
-			return FenceObject.Fence->IsFenceComplete(FenceObject.FenceValue);
+			for (auto& FencePair : FenceObject.FenceList)
+			{
+				if (!FencePair.Key->IsFenceComplete(FencePair.Value))
+				{
+					return false;
+				}
+			}
+			return true;
 		}
 	};
 
@@ -208,7 +225,20 @@ int64 FD3D12Resource::NoStateTrackingResourceCount = 0;
 FD3D12Resource::FD3D12Resource(FD3D12Device* ParentDevice,
 	FRHIGPUMask VisibleNodes,
 	ID3D12Resource* InResource,
-	D3D12_RESOURCE_STATES InitialState,
+	D3D12_RESOURCE_STATES InInitialState,
+	D3D12_RESOURCE_DESC const& InDesc,
+	FD3D12Heap* InHeap,
+	D3D12_HEAP_TYPE InHeapType) : 
+	FD3D12Resource(ParentDevice, VisibleNodes, InResource, InInitialState, ED3D12ResourceStateMode::Default, D3D12_RESOURCE_STATE_TBD, InDesc, InHeap, InHeapType)
+{
+}
+
+FD3D12Resource::FD3D12Resource(FD3D12Device* ParentDevice,
+	FRHIGPUMask VisibleNodes,
+	ID3D12Resource* InResource,
+	D3D12_RESOURCE_STATES InInitialState,
+	ED3D12ResourceStateMode InResourceStateMode,
+	D3D12_RESOURCE_STATES InDefaultResourceState,
 	D3D12_RESOURCE_DESC const& InDesc,
 	FD3D12Heap* InHeap,
 	D3D12_HEAP_TYPE InHeapType)
@@ -224,6 +254,9 @@ FD3D12Resource::FD3D12Resource(FD3D12Device* ParentDevice,
 	, bRequiresResourceStateTracking(true)
 	, bDepthStencil(false)
 	, bDeferDelete(true)
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+	, bBackBuffer(false)
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
 	, HeapType(InHeapType)
 	, GPUVirtualAddress(0)
 	, ResourceBaseAddress(nullptr)
@@ -241,7 +274,7 @@ FD3D12Resource::FD3D12Resource(FD3D12Device* ParentDevice,
 		GPUVirtualAddress = Resource->GetGPUVirtualAddress();
 	}
 
-	InitalizeResourceState(InitialState);
+	InitalizeResourceState(InInitialState, InResourceStateMode, InDefaultResourceState);
 }
 
 FD3D12Resource::~FD3D12Resource()
@@ -282,7 +315,26 @@ void FD3D12Resource::UpdateResidency(FD3D12CommandListHandle& CommandList)
 
 void FD3D12Resource::DeferDelete()
 {
-	GetParentDevice()->GetParentAdapter()->GetDeferredDeletionQueue().EnqueueResource(this, &GetParentDevice()->GetCommandListManager().GetFence());
+	FD3D12Adapter* Adapter = GetParentDevice()->GetParentAdapter();
+
+	// Upload heaps such as texture lock data can be referenced by multiple GPUs so we
+	// must wait for all of them to finish before releasing.
+	FD3D12DeferredDeletionQueue::FFenceList FenceList;
+	if (HeapType == D3D12_HEAP_TYPE_UPLOAD)
+	{
+		for (uint32 GPUIndex : FRHIGPUMask::All())
+		{
+			FD3D12Fence* Fence = &Adapter->GetDevice(GPUIndex)->GetCommandListManager().GetFence();
+			FenceList.Emplace(Fence, Fence->GetCurrentFence());
+		}
+	}
+	else
+	{
+		FD3D12Fence* Fence = &GetParentDevice()->GetCommandListManager().GetFence();
+		FenceList.Emplace(Fence, Fence->GetCurrentFence());
+	}
+
+	Adapter->GetDeferredDeletionQueue().EnqueueResource(this, MoveTemp(FenceList));
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -333,7 +385,8 @@ void FD3D12Heap::BeginTrackingResidency(uint64 Size)
 //	FD3D12 Adapter
 /////////////////////////////////////////////////////////////////////
 
-HRESULT FD3D12Adapter::CreateCommittedResource(const D3D12_RESOURCE_DESC& InDesc, FRHIGPUMask CreationNode, const D3D12_HEAP_PROPERTIES& HeapProps, const D3D12_RESOURCE_STATES& InitialUsage, const D3D12_CLEAR_VALUE* ClearValue, FD3D12Resource** ppOutResource, const TCHAR* Name, bool bVerifyHResult)
+HRESULT FD3D12Adapter::CreateCommittedResource(const D3D12_RESOURCE_DESC& InDesc, FRHIGPUMask CreationNode, const D3D12_HEAP_PROPERTIES& HeapProps, D3D12_RESOURCE_STATES InInitialState,
+	ED3D12ResourceStateMode InResourceStateMode, D3D12_RESOURCE_STATES InDefaultState, const D3D12_CLEAR_VALUE* ClearValue, FD3D12Resource** ppOutResource, const TCHAR* Name, bool bVerifyHResult)
 {
 	if (!ppOutResource)
 	{
@@ -343,13 +396,18 @@ HRESULT FD3D12Adapter::CreateCommittedResource(const D3D12_RESOURCE_DESC& InDesc
 	LLM_PLATFORM_SCOPE(ELLMTag::GraphicsPlatform);
 
 	TRefCountPtr<ID3D12Resource> pResource;
+#if PLATFORM_WINDOWS
+	D3D12_HEAP_FLAGS HeapFlags = bHeapNotZeroedSupported? D3D12_HEAP_FLAG_CREATE_NOT_ZEROED : D3D12_HEAP_FLAG_NONE;
+#else
+	check(!bHeapNotZeroedSupported);
 	D3D12_HEAP_FLAGS HeapFlags = D3D12_HEAP_FLAG_NONE;
+#endif
 	if (InDesc.Flags & D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS)
 	{
 		HeapFlags |= D3D12_HEAP_FLAG_SHARED;
 	}
 
-	const HRESULT hr = RootDevice->CreateCommittedResource(&HeapProps, HeapFlags, &InDesc, InitialUsage, ClearValue, IID_PPV_ARGS(pResource.GetInitReference()));
+	const HRESULT hr = RootDevice->CreateCommittedResource(&HeapProps, HeapFlags, &InDesc, InInitialState, ClearValue, IID_PPV_ARGS(pResource.GetInitReference()));
 	if (bVerifyHResult)
 	{
 		VERIFYD3D12RESULT_EX(hr, RootDevice);
@@ -357,12 +415,12 @@ HRESULT FD3D12Adapter::CreateCommittedResource(const D3D12_RESOURCE_DESC& InDesc
 
 	if (SUCCEEDED(hr))
 	{
-		// Set a default name (can override later).
-		SetName(pResource, Name);
-
 		// Set the output pointer
-		*ppOutResource = new FD3D12Resource(GetDevice(CreationNode.ToIndex()), CreationNode, pResource, InitialUsage, InDesc, nullptr, HeapProps.Type);
+		*ppOutResource = new FD3D12Resource(GetDevice(CreationNode.ToIndex()), CreationNode, pResource, InInitialState, InResourceStateMode, InDefaultState, InDesc, nullptr, HeapProps.Type);
 		(*ppOutResource)->AddRef();
+
+		// Set a default name (can override later).
+		SetName(*ppOutResource, Name);
 
 		// Only track resources that cannot be accessed on the CPU.
 		if (IsCPUInaccessible(HeapProps.Type))
@@ -374,7 +432,8 @@ HRESULT FD3D12Adapter::CreateCommittedResource(const D3D12_RESOURCE_DESC& InDesc
 	return hr;
 }
 
-HRESULT FD3D12Adapter::CreatePlacedResource(const D3D12_RESOURCE_DESC& InDesc, FD3D12Heap* BackingHeap, uint64 HeapOffset, const D3D12_RESOURCE_STATES& InitialUsage, const D3D12_CLEAR_VALUE* ClearValue, FD3D12Resource** ppOutResource, const TCHAR* Name, bool bVerifyHResult)
+HRESULT FD3D12Adapter::CreatePlacedResource(const D3D12_RESOURCE_DESC& InDesc, FD3D12Heap* BackingHeap, uint64 HeapOffset, D3D12_RESOURCE_STATES InInitialState, ED3D12ResourceStateMode InResourceStateMode, 
+	D3D12_RESOURCE_STATES InDefaultState, const D3D12_CLEAR_VALUE* ClearValue, FD3D12Resource** ppOutResource, const TCHAR* Name, bool bVerifyHResult)
 {
 	if (!ppOutResource)
 	{
@@ -384,7 +443,7 @@ HRESULT FD3D12Adapter::CreatePlacedResource(const D3D12_RESOURCE_DESC& InDesc, F
 	ID3D12Heap* Heap = BackingHeap->GetHeap();
 
 	TRefCountPtr<ID3D12Resource> pResource;
-	const HRESULT hr = RootDevice->CreatePlacedResource(Heap, HeapOffset, &InDesc, InitialUsage, nullptr, IID_PPV_ARGS(pResource.GetInitReference()));
+	const HRESULT hr = RootDevice->CreatePlacedResource(Heap, HeapOffset, &InDesc, InInitialState, nullptr, IID_PPV_ARGS(pResource.GetInitReference()));
 
 	if (bVerifyHResult)
 	{
@@ -403,7 +462,9 @@ HRESULT FD3D12Adapter::CreatePlacedResource(const D3D12_RESOURCE_DESC& InDesc, F
 		*ppOutResource = new FD3D12Resource(Device,
 			Device->GetVisibilityMask(),
 			pResource,
-			InitialUsage,
+			InInitialState,
+			InResourceStateMode,
+			InDefaultState,
 			InDesc,
 			BackingHeap,
 			HeapDesc.Properties.Type);
@@ -418,18 +479,20 @@ HRESULT FD3D12Adapter::CreateBuffer(D3D12_HEAP_TYPE HeapType, FRHIGPUMask Creati
 {
 	const D3D12_HEAP_PROPERTIES HeapProps = CD3DX12_HEAP_PROPERTIES(HeapType, CreationNode.GetNative(), VisibleNodes.GetNative());
 	const D3D12_RESOURCE_STATES InitialState = DetermineInitialResourceState(HeapProps.Type, &HeapProps);
-	return CreateBuffer(HeapProps, CreationNode, InitialState, HeapSize, ppOutResource, Name, Flags);
+	return CreateBuffer(HeapProps, CreationNode, InitialState, ED3D12ResourceStateMode::Default, D3D12_RESOURCE_STATE_TBD, HeapSize, ppOutResource, Name, Flags);
 }
 
-HRESULT FD3D12Adapter::CreateBuffer(D3D12_HEAP_TYPE HeapType, FRHIGPUMask CreationNode, FRHIGPUMask VisibleNodes, D3D12_RESOURCE_STATES InitialState, uint64 HeapSize, FD3D12Resource** ppOutResource, const TCHAR* Name, D3D12_RESOURCE_FLAGS Flags)
+HRESULT FD3D12Adapter::CreateBuffer(D3D12_HEAP_TYPE HeapType, FRHIGPUMask CreationNode, FRHIGPUMask VisibleNodes, D3D12_RESOURCE_STATES InitialState, ED3D12ResourceStateMode ResourceStateMode, uint64 HeapSize, FD3D12Resource** ppOutResource, const TCHAR* Name, D3D12_RESOURCE_FLAGS Flags)
 {
 	const D3D12_HEAP_PROPERTIES HeapProps = CD3DX12_HEAP_PROPERTIES(HeapType, CreationNode.GetNative(), VisibleNodes.GetNative());
-	return CreateBuffer(HeapProps, CreationNode, InitialState, HeapSize, ppOutResource, Name, Flags);
+	return CreateBuffer(HeapProps, CreationNode, InitialState, ResourceStateMode, InitialState, HeapSize, ppOutResource, Name, Flags);
 }
 
 HRESULT FD3D12Adapter::CreateBuffer(const D3D12_HEAP_PROPERTIES& HeapProps,
 	FRHIGPUMask CreationNode,
 	D3D12_RESOURCE_STATES InitialState,
+	ED3D12ResourceStateMode ResourceStateMode,
+	D3D12_RESOURCE_STATES InDefaultState,
 	uint64 HeapSize,
 	FD3D12Resource** ppOutResource,
 	const TCHAR* Name,
@@ -445,6 +508,8 @@ HRESULT FD3D12Adapter::CreateBuffer(const D3D12_HEAP_PROPERTIES& HeapProps,
 		CreationNode,
 		HeapProps,
 		InitialState,
+		ResourceStateMode,
+		InDefaultState,
 		nullptr,
 		ppOutResource, Name);
 }
@@ -515,7 +580,7 @@ void FD3D12ResourceLocation::TransferOwnership(FD3D12ResourceLocation& Destinati
 #if !PLATFORM_WINDOWS && ENABLE_LOW_LEVEL_MEM_TRACKER
 	if (Source.GetType() == ResourceLocationType::eSubAllocation && Source.AllocatorType != AT_SegList)
 	{
-		FLowLevelMemTracker::Get().OnLowLevelAllocMoved( ELLMTracker::Default, &Destination, &Source );
+		FLowLevelMemTracker::Get().OnLowLevelAllocMoved(ELLMTracker::Default, Destination.GetAddressForLLMTracking(), Source.GetAddressForLLMTracking());
 	}
 #endif
 
@@ -532,15 +597,15 @@ void FD3D12ResourceLocation::Swap(FD3D12ResourceLocation& Other)
 
 	if (bRequiresManualTracking)
 	{
-		FLowLevelMemTracker::Get().OnLowLevelFree(ELLMTracker::Default, this);
+		FLowLevelMemTracker::Get().OnLowLevelFree(ELLMTracker::Default, GetAddressForLLMTracking());
 	}
 	if (bOtherRequiresManualTracking)
 	{
-		FLowLevelMemTracker::Get().OnLowLevelAllocMoved(ELLMTracker::Default, this, &Other);
+		FLowLevelMemTracker::Get().OnLowLevelAllocMoved(ELLMTracker::Default, GetAddressForLLMTracking(), Other.GetAddressForLLMTracking());
 	}
 	if (bRequiresManualTracking)
 	{
-		FLowLevelMemTracker::Get().OnLowLevelAlloc(ELLMTracker::Default, &Other, GetSize());
+		FLowLevelMemTracker::Get().OnLowLevelAlloc(ELLMTracker::Default, Other.GetAddressForLLMTracking(), GetSize());
 	}
 #endif
 
@@ -652,4 +717,58 @@ void FD3D12ResourceLocation::SetResource(FD3D12Resource* Value)
 
 	UnderlyingResource = Value;
 	ResidencyHandle = UnderlyingResource->GetResidencyHandle();
+}
+
+/////////////////////////////////////////////////////////////////////
+//	FD3D12 Resource Barrier Batcher
+/////////////////////////////////////////////////////////////////////
+
+void FD3D12ResourceBarrierBatcher::Flush(FD3D12Device* Device, ID3D12GraphicsCommandList* pCommandList, int32 BarrierBatchMax)
+{
+	if (Barriers.Num())
+	{
+		check(pCommandList);
+		if (Barriers.Num() > BarrierBatchMax)
+		{
+			int Num = Barriers.Num();
+			D3D12_RESOURCE_BARRIER* Ptr = Barriers.GetData();
+			while (Num > 0)
+			{
+				int DispatchNum = FMath::Min(Num, BarrierBatchMax);
+				pCommandList->ResourceBarrier(DispatchNum, Ptr);
+				Ptr += BarrierBatchMax;
+				Num -= BarrierBatchMax;
+			}
+		}
+		else
+		{
+			pCommandList->ResourceBarrier(Barriers.Num(), Barriers.GetData());
+		}
+	}
+
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+	if (BackBufferBarriers.Num())
+	{
+		check(pCommandList);
+		FD3D12ScopedTimedIntervalQuery BarrierScopeTimer(Device->GetBackBufferWriteBarrierTracker(), pCommandList);
+		if (BackBufferBarriers.Num() > BarrierBatchMax)
+		{
+			int Num = BackBufferBarriers.Num();
+			D3D12_RESOURCE_BARRIER* Ptr = BackBufferBarriers.GetData();
+			while (Num > 0)
+			{
+				int DispatchNum = FMath::Min(Num, BarrierBatchMax);
+				pCommandList->ResourceBarrier(DispatchNum, Ptr);
+				Ptr += BarrierBatchMax;
+				Num -= BarrierBatchMax;
+			}
+		}
+		else
+		{
+			pCommandList->ResourceBarrier(BackBufferBarriers.Num(), BackBufferBarriers.GetData());
+		}
+	}
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+
+	Reset();
 }

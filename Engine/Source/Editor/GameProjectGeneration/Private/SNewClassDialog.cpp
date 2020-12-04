@@ -1197,7 +1197,7 @@ void SNewClassDialog::FinishClicked()
 		}
 		else if (!NewClassPath.IsEmpty() && !NewClassName.IsEmpty())
 		{
-			UPackage* Package = CreatePackage(NULL, *PackagePath);
+			UPackage* Package = CreatePackage( *PackagePath);
 			if (Package)
 			{
 				// Create and init a new Blueprint
@@ -1336,7 +1336,7 @@ void SNewClassDialog::FinishClicked()
 				, FText::FromString(NewClassName), FText::FromString(SelectedModuleInfo->ModuleName), FailReason );
 			if( FMessageDialog::Open(EAppMsgType::YesNo, Message) == EAppReturnType::Yes )
 			{
-				FGlobalTabmanager::Get()->InvokeTab(FName("OutputLog"));
+				FGlobalTabmanager::Get()->TryInvokeTab(FName("OutputLog"));
 			}
 
 			// We did manage to add the code itself, so we can close the dialog.

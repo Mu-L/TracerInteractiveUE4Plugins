@@ -43,6 +43,8 @@
 #include "ObjectTrace.h"
 #include "Net/Core/PushModel/PushModel.h"
 #include "Engine/AutoDestroySubsystem.h"
+#include "LevelUtils.h"
+#include "GameFramework/InputSettings.h"
 
 DEFINE_LOG_CATEGORY(LogActor);
 
@@ -304,7 +306,7 @@ void AActor::ResetOwnedComponents()
 
 			if (Component->GetIsReplicated())
 			{
-				ReplicatedComponents.AddUnique(Component);
+				ReplicatedComponents.Add(Component);
 			}
 		}
 	}, true, RF_NoFlags, EInternalObjectFlags::PendingKill);
@@ -345,6 +347,52 @@ void AActor::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collecto
 bool AActor::IsEditorOnly() const
 { 
 	return bIsEditorOnlyActor; 
+}
+
+bool AActor::IsAsset() const
+{
+	// External actors are considered assets, to allow using the asset logic for save dialogs, etc.
+	// Also, they return true even if pending kill, in order to show up as deleted in these dialogs.
+	return IsPackageExternal() && !IsChildActor() && !HasAnyFlags(RF_Transient | RF_ClassDefaultObject);
+}
+
+bool AActor::PreSaveRoot(const TCHAR* InFilename)
+{
+	bool bResult = Super::PreSaveRoot(InFilename);
+#if WITH_EDITOR
+	// if `PreSaveRoot` is called on an actor, it should be have its package overridden (external to the level)
+	// if this actor is not in the current persistent level then we might need to remove level streamin transform before saving it
+	ULevel* Level = GetLevel();
+	if (IsPackageExternal() && Level && !Level->IsPersistentLevel())
+	{
+		// If we can get the streaming level, we should remove the editor transform before saving
+		ULevelStreaming* LevelStreaming = FLevelUtils::FindStreamingLevel(Level);
+		if (LevelStreaming && Level->bAlreadyMovedActors)
+		{
+			FLevelUtils::RemoveEditorTransform(LevelStreaming, true, this);
+		}
+		bResult |= true;
+	}
+#endif
+	return bResult;
+}
+
+void AActor::PostSaveRoot(bool bCleanupIsRequired)
+{
+	Super::PostSaveRoot(bCleanupIsRequired);
+#if WITH_EDITOR
+	// if this actor is not in the current persistent level then we will need to clean up the removal of level streaming
+	ULevel* Level = GetLevel();
+	if (bCleanupIsRequired && IsPackageExternal() && Level && !Level->IsPersistentLevel())
+	{
+		// If we can get the streaming level, we should remove the editor transform before saving
+		ULevelStreaming* LevelStreaming = FLevelUtils::FindStreamingLevel(Level);
+		if (LevelStreaming && Level->bAlreadyMovedActors)
+		{
+			FLevelUtils::ApplyEditorTransform(LevelStreaming, true, this);
+		}
+	}
+#endif
 }
 
 #if WITH_EDITOR
@@ -409,7 +457,8 @@ UGameInstance* AActor::GetGameInstance() const
 
 bool AActor::IsNetStartupActor() const
 {
-	return bNetStartup;
+	// Check bNetStartup and also check if this is a Net Startup Actor that has not been initialized and has not had a chance to flag bNetStartup yet
+	return bNetStartup || (!bActorInitialized && !bActorSeamlessTraveled && bNetLoadOnClient && GetLevel() && !GetLevel()->bAlreadyInitializedNetworkActors);
 }
 
 FVector AActor::GetVelocity() const
@@ -424,8 +473,7 @@ FVector AActor::GetVelocity() const
 
 void AActor::ClearCrossLevelReferences()
 {
-	// TODO: Change GetOutermost to GetLevel?
-	if(RootComponent && GetRootComponent()->GetAttachParent() && (GetOutermost() != GetRootComponent()->GetAttachParent()->GetOutermost()))
+	if(RootComponent && GetRootComponent()->GetAttachParent() && (GetLevel() != GetRootComponent()->GetAttachParent()->GetOwner()->GetLevel()))
 	{
 		GetRootComponent()->DetachFromComponent(FDetachmentTransformRules::KeepRelativeTransform);
 	}
@@ -662,6 +710,24 @@ void AActor::Serialize(FArchive& Ar)
 #endif
 
 	Super::Serialize(Ar);
+
+#if WITH_EDITOR
+	// Fixup actor guids
+	if (Ar.IsLoading())
+	{
+		if (IsTemplate())
+		{
+			if (ActorGuid.IsValid())
+			{
+				ActorGuid.Invalidate();
+			}
+		}
+		else if ((Ar.GetPortFlags() & PPF_Duplicate) || (Ar.IsPersistent() && !ActorGuid.IsValid()))
+		{
+			ActorGuid = FGuid::NewGuid();
+		}
+	}
+#endif
 }
 
 void AActor::PostLoad()
@@ -926,6 +992,11 @@ bool AActor::Rename( const TCHAR* InName, UObject* NewOuter, ERenameFlags Flags 
 	const bool bRenameTest = ((Flags & REN_Test) != 0);
 	const bool bChangingOuters = (NewOuter && (NewOuter != GetOuter()));
 
+#if WITH_EDITOR
+	// if we have an external actor and the actor is changing outer, we will want to move its package location
+	const bool bExternalActor = IsPackageExternal();
+#endif
+
 	if (!bRenameTest && bChangingOuters)
 	{
 		RegisterAllActorTickFunctions(false, true); // unregister all tick functions
@@ -940,6 +1011,13 @@ bool AActor::Rename( const TCHAR* InName, UObject* NewOuter, ERenameFlags Flags 
 				MyLevel->ActorsForGC.Remove(this);
 				// TODO: There may need to be some consideration about removing this actor from the level cluster, but that would probably require destroying the entire cluster, so defer for now
 			}
+
+#if WITH_EDITOR
+			if (bExternalActor)
+			{
+				SetPackageExternal(false, MyLevel->IsUsingExternalActors());
+			}
+#endif
 		}
 	}
 
@@ -952,6 +1030,12 @@ bool AActor::Rename( const TCHAR* InName, UObject* NewOuter, ERenameFlags Flags 
 	{
 		if (ULevel* MyLevel = GetLevel())
 		{
+#if WITH_EDITOR
+			if (bExternalActor)
+			{
+				SetPackageExternal(true, MyLevel->IsUsingExternalActors());
+			}
+#endif
 			MyLevel->Actors.Add(this);
 			MyLevel->ActorsForGC.Add(this);
 
@@ -1084,19 +1168,23 @@ void AActor::CallPreReplication(UNetDriver* NetDriver)
 
 	IRepChangedPropertyTracker* const ActorChangedPropertyTracker = NetDriver->FindOrCreateRepChangedPropertyTracker(this).Get();
 
+	const ENetRole LocalRole = GetLocalRole();
+	const UWorld* World = GetWorld();
+	
 	// PreReplication is only called on the server, except when we're recording a Client Replay.
 	// In that case we call PreReplication on the locally controlled Character as well.
-	const ENetRole LocalRole = GetLocalRole();
-	if ((LocalRole == ROLE_Authority) || ((LocalRole == ROLE_AutonomousProxy) && GetWorld()->IsRecordingClientReplay()))
+	if ((LocalRole == ROLE_Authority) || ((LocalRole == ROLE_AutonomousProxy) && World && World->IsRecordingClientReplay()))
 	{
 		PreReplication(*ActorChangedPropertyTracker);
 	}
 
+	PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	// If we're recording a replay, call this for everyone (includes SimulatedProxies).
-	if (ActorChangedPropertyTracker->IsReplay())
+	if (ActorChangedPropertyTracker->IsReplay() || NetDriver->HasReplayConnection())
 	{
 		PreReplicationForReplay(*ActorChangedPropertyTracker);
 	}
+	PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 	// Call PreReplication on all owned components that are replicated
 	for (UActorComponent* Component : ReplicatedComponents)
@@ -1227,9 +1315,18 @@ bool AActor::Modify( bool bAlwaysMarkDirty/*=true*/ )
 	}
 
 	// If the root component is blueprint constructed we don't save it to the transaction buffer
-	if( RootComponent && !RootComponent->IsCreatedByConstructionScript())
+	if (RootComponent)
 	{
-		bSavedToTransactionBuffer = RootComponent->Modify( bAlwaysMarkDirty ) || bSavedToTransactionBuffer;
+		if (!RootComponent->IsCreatedByConstructionScript())
+		{
+			bSavedToTransactionBuffer = RootComponent->Modify(bAlwaysMarkDirty) || bSavedToTransactionBuffer;
+		}
+
+		USceneComponent* DefaultAttachComp = GetDefaultAttachComponent();
+		if (DefaultAttachComp && DefaultAttachComp != RootComponent && !DefaultAttachComp->IsCreatedByConstructionScript())
+		{
+			bSavedToTransactionBuffer = DefaultAttachComp->Modify(bAlwaysMarkDirty) || bSavedToTransactionBuffer;
+		}
 	}
 
 	return bSavedToTransactionBuffer;
@@ -1985,10 +2082,12 @@ void AActor::ForceNetUpdate()
 	}
 	
 	// Even if not authority, still need to ForceNetUpdate on the demo net driver
-	UWorld* MyWorld = GetWorld();
-	if (MyWorld && MyWorld->DemoNetDriver)
+	if (UWorld* MyWorld = GetWorld())
 	{
-		MyWorld->DemoNetDriver->ForceNetUpdate(this);
+		if (UDemoNetDriver* DemoNetDriver = MyWorld->GetDemoNetDriver())
+		{
+			DemoNetDriver->ForceNetUpdate(this);
+		}
 	}
 }
 
@@ -2034,9 +2133,12 @@ void AActor::SetNetDormancy(ENetDormancy NewDormancy)
 
 			NetDriver->FlushActorDormancy(this);
 
-			if (MyWorld->DemoNetDriver && MyWorld->DemoNetDriver != NetDriver)
+			if (UDemoNetDriver* DemoNetDriver = MyWorld->GetDemoNetDriver())
 			{
-				MyWorld->DemoNetDriver->FlushActorDormancy(this);
+				if (DemoNetDriver != NetDriver)
+				{
+					DemoNetDriver->FlushActorDormancy(this);
+				}
 			}
 		}
 	}
@@ -2077,9 +2179,12 @@ void AActor::FlushNetDormancy()
 		{
 			NetDriver->FlushActorDormancy(this);
 
-			if (MyWorld->DemoNetDriver && MyWorld->DemoNetDriver != NetDriver)
+			if (UDemoNetDriver* DemoNetDriver = MyWorld->GetDemoNetDriver())
 			{
-				MyWorld->DemoNetDriver->FlushActorDormancy(this, bWasDormInitial);
+				if (DemoNetDriver != NetDriver)
+				{
+					DemoNetDriver->FlushActorDormancy(this, bWasDormInitial);
+				}
 			}
 		}
 	}
@@ -2105,9 +2210,12 @@ void AActor::ForcePropertyCompare()
 	{
 		NetDriver->ForcePropertyCompare( this );
 
-		if ( MyWorld->DemoNetDriver && MyWorld->DemoNetDriver != NetDriver )
+		if (UDemoNetDriver* DemoNetDriver = MyWorld->GetDemoNetDriver())
 		{
-			MyWorld->DemoNetDriver->ForcePropertyCompare( this );
+			if (DemoNetDriver != NetDriver)
+			{
+				DemoNetDriver->ForcePropertyCompare(this);
+			}
 		}
 	}
 }
@@ -2716,7 +2824,7 @@ void AActor::RemoveOwnedComponent(UActorComponent* Component)
 
 	if (OwnedComponents.Remove(Component) > 0)
 	{
-		ReplicatedComponents.Remove(Component);
+		ReplicatedComponents.RemoveSingleSwap(Component);
 		if (Component->IsCreatedByConstructionScript())
 		{
 			BlueprintCreatedComponents.RemoveSingleSwap(Component);
@@ -2737,14 +2845,13 @@ bool AActor::OwnsComponent(UActorComponent* Component) const
 
 void AActor::UpdateReplicatedComponent(UActorComponent* Component)
 {
-	checkf(Component->GetOwner() == this, TEXT("UE-9568: Component %s being updated for Actor %s"), *Component->GetPathName(), *GetPathName() );
 	if (Component->GetIsReplicated())
 	{
 		ReplicatedComponents.AddUnique(Component);
 	}
 	else
 	{
-		ReplicatedComponents.Remove(Component);
+		ReplicatedComponents.RemoveSingleSwap(Component);
 	}
 }
 
@@ -2914,7 +3021,6 @@ bool AActor::IsSelectedInEditor() const
 {
 	return !IsPendingKill() && GSelectedActorAnnotation.Get(this);
 }
-
 #endif
 
 /** Util that sets up the actor's component hierarchy (when users forget to do so, in their native ctor) */
@@ -3031,7 +3137,7 @@ void AActor::PostSpawnInitialize(FTransform const& UserSpawnTransform, AActor* I
 			// nativized case. We used to ignore any non-default transform value set on the root component at cook (nativization) time, but that 
 			// doesn't work because existing placements of the Blueprint component in a scene may rely on the value that's stored in the CDO,
 			// and as a result the instance-specific override value doesn't get serialized out to the instance as a result of delta serialization.
-			SceneRootComponent->SetWorldTransform(UserSpawnTransform);
+			SceneRootComponent->SetWorldTransform(UserSpawnTransform, false, nullptr, ETeleportType::ResetPhysics);
 		}
 		else
 		{
@@ -3039,7 +3145,7 @@ void AActor::PostSpawnInitialize(FTransform const& UserSpawnTransform, AActor* I
 			// that's owned by the native CDO, so the final transform might not always necessarily equate to the passed-in UserSpawnTransform.
 			const FTransform RootTransform(SceneRootComponent->GetRelativeRotation(), SceneRootComponent->GetRelativeLocation(), SceneRootComponent->GetRelativeScale3D());
 			const FTransform FinalRootComponentTransform = RootTransform * UserSpawnTransform;
-			SceneRootComponent->SetWorldTransform(FinalRootComponentTransform);
+			SceneRootComponent->SetWorldTransform(FinalRootComponentTransform, false, nullptr, ETeleportType::ResetPhysics);
 		}
 	}
 
@@ -3050,7 +3156,7 @@ void AActor::PostSpawnInitialize(FTransform const& UserSpawnTransform, AActor* I
 	// at the native class level. In that case, if this is a Blueprint instance, we need to defer native registration until after SCS execution can establish a scene root.
 	// Note: This API will also call PostRegisterAllComponents() on the actor instance. If deferred, PostRegisterAllComponents() won't be called until the root is set by SCS.
 	bHasDeferredComponentRegistration = (SceneRootComponent == nullptr && Cast<UBlueprintGeneratedClass>(GetClass()) != nullptr);
-	if (!bHasDeferredComponentRegistration)
+	if (!bHasDeferredComponentRegistration && GetWorld())
 	{
 		RegisterAllComponents();
 	}
@@ -3130,7 +3236,10 @@ void AActor::FinishSpawning(const FTransform& UserTransform, bool bIsDefaultTran
 		FinalRootComponentTransform.GetLocation().DiagnosticCheckNaN(TEXT("AActor::FinishSpawning: FinalRootComponentTransform.GetLocation()"));
 		FinalRootComponentTransform.GetRotation().DiagnosticCheckNaN(TEXT("AActor::FinishSpawning: FinalRootComponentTransform.GetRotation()"));
 
-		ExecuteConstruction(FinalRootComponentTransform, nullptr, InstanceDataCache, bIsDefaultTransform);
+		{
+			FEditorScriptExecutionGuard ScriptGuard;
+			ExecuteConstruction(FinalRootComponentTransform, nullptr, InstanceDataCache, bIsDefaultTransform);
+		}
 
 		{
 			SCOPE_CYCLE_COUNTER(STAT_PostActorConstruction);
@@ -3264,19 +3373,30 @@ void AActor::SetReplicates(bool bInReplicates)
 		RemoteRole = bInReplicates ? ROLE_SimulatedProxy : ROLE_None;
 		bReplicates = bInReplicates;
 
-		// Only call into net driver if we just started replicating changed
-		// This actor should already be in the Network Actors List if it was already replicating.
-		if (bNewlyReplicates)
+		if (bActorInitialized)
 		{
-			// GetWorld will return nullptr on CDO, FYI
-			if (UWorld* MyWorld = GetWorld())		
+			if (bReplicates)
 			{
-				MyWorld->AddNetworkActor(this);
-				ForcePropertyCompare();
-			}
-		}
+				// GetWorld will return nullptr on CDO, FYI
+				if (UWorld* MyWorld = GetWorld())
+				{
+					// Only call into net driver if we just started replicating changed
+					// This actor should already be in the Network Actors List if it was already replicating.
+					if (bNewlyReplicates)
+					{
+						MyWorld->AddNetworkActor(this);
+					}
 
-		MARK_PROPERTY_DIRTY_FROM_NAME(AActor, RemoteRole, this);
+					ForcePropertyCompare();
+				}
+			}
+
+			MARK_PROPERTY_DIRTY_FROM_NAME(AActor, RemoteRole, this);
+		}
+		else
+		{
+			UE_LOG(LogActor, Warning, TEXT("SetReplicates called on non-initialized actor %s. Directly setting bReplicates is the correct procedure for pre-init actors."), *GetName());
+		}
 	}
 	else
 	{
@@ -3506,7 +3626,7 @@ void AActor::EnableInput(APlayerController* PlayerController)
 		// If it doesn't exist create it and bind delegates
 		if (!InputComponent)
 		{
-			InputComponent = NewObject<UInputComponent>(this);
+			InputComponent = NewObject<UInputComponent>(this, UInputSettings::GetDefaultInputComponentClass());
 			InputComponent->RegisterComponent();
 			InputComponent->bBlockInput = bBlockInput;
 			InputComponent->Priority = InputPriority;
@@ -3737,6 +3857,17 @@ void AActor::AddActorWorldTransform(const FTransform& DeltaTransform, bool bSwee
 	}
 }
 
+void AActor::AddActorWorldTransformKeepScale(const FTransform& DeltaTransform, bool bSweep, FHitResult* OutSweepHitResult, ETeleportType Teleport)
+{
+	if (RootComponent)
+	{
+		RootComponent->AddWorldTransformKeepScale(DeltaTransform, bSweep, OutSweepHitResult, Teleport);
+	}
+	else if (OutSweepHitResult)
+	{
+		*OutSweepHitResult = FHitResult();
+	}
+}
 
 bool AActor::SetActorTransform(const FTransform& NewTransform, bool bSweep, FHitResult* OutSweepHitResult, ETeleportType Teleport)
 {
@@ -3952,9 +4083,24 @@ bool AActor::SetRootComponent(class USceneComponent* NewRootComponent)
 	/** Only components owned by this actor can be used as a its root component. */
 	if (ensure(NewRootComponent == nullptr || NewRootComponent->GetOwner() == this))
 	{
-		Modify();
+		if (RootComponent != NewRootComponent)
+		{
+			Modify();
 
-		RootComponent = NewRootComponent;
+			USceneComponent* OldRootComponent = RootComponent;
+			RootComponent = NewRootComponent;
+
+			// Notify new root first, as it probably has no delegate on it.
+			if (NewRootComponent)
+			{
+				NewRootComponent->NotifyIsRootComponentChanged(true);
+			}
+
+			if (OldRootComponent)
+			{
+				OldRootComponent->NotifyIsRootComponentChanged(false);
+			}
+		}
 		return true;
 	}
 
@@ -3996,9 +4142,9 @@ ENetMode AActor::InternalGetNetMode() const
 		return NetDriver->GetNetMode();
 	}
 
-	if (World != nullptr && World->DemoNetDriver != nullptr)
+	if (UDemoNetDriver* DemoNetDriver = World ? World->GetDemoNetDriver() : nullptr)
 	{
-		return World->DemoNetDriver->GetNetMode();
+		return DemoNetDriver->GetNetMode();
 	}
 
 	return NM_Standalone;
@@ -4033,27 +4179,19 @@ void AActor::SetNetDriverName(FName NewNetDriverName)
 //
 int32 AActor::GetFunctionCallspace( UFunction* Function, FFrame* Stack )
 {
-	// Quick reject 1.
-	if ((Function->FunctionFlags & FUNC_Static))
-	{
-		// Call local
-		DEBUG_CALLSPACE(TEXT("GetFunctionCallspace Local1: %s"), *Function->GetName());
-		return FunctionCallspace::Local;
-	}
-
 	if (GAllowActorScriptExecutionInEditor)
 	{
-		// Call local
-		DEBUG_CALLSPACE(TEXT("GetFunctionCallspace Local2: %s"), *Function->GetName());
+		// Call local, this global is only true when we know it's being called on an editor-placed object
+		DEBUG_CALLSPACE(TEXT("GetFunctionCallspace ScriptExecutionInEditor: %s"), *Function->GetName());
 		return FunctionCallspace::Local;
 	}
 
-	UWorld* World = GetWorld();
-	if (!World)
+	if ((Function->FunctionFlags & FUNC_Static) || (GetWorld() == nullptr))
 	{
-		// Call local
-		DEBUG_CALLSPACE(TEXT("GetFunctionCallspace Local3: %s"), *Function->GetName());
-		return FunctionCallspace::Local;
+		// Use the same logic as function libraries for static/CDO called functions, will try to use the global context to check authority only/cosmetic
+		DEBUG_CALLSPACE(TEXT("GetFunctionCallspace Static: %s"), *Function->GetName());
+
+		return GEngine->GetGlobalFunctionCallspace(Function, this, Stack);
 	}
 
 	const ENetRole LocalRole = GetLocalRole();
@@ -4371,10 +4509,13 @@ void AActor::PostUnregisterAllComponents()
 
 void AActor::RegisterAllComponents()
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_AActor_RegisterAllComponents);
+
 	PreRegisterAllComponents();
 
 	// 0 - means register all components
-	verify(IncrementalRegisterComponents(0));
+	bool bAllRegistered = IncrementalRegisterComponents(0);
+	check(bAllRegistered);
 
 	// Clear this flag as it's no longer deferred
 	bHasDeferredComponentRegistration = false;
@@ -4889,6 +5030,11 @@ void AActor::K2_AddActorWorldTransform(const FTransform& DeltaTransform, bool bS
 	AddActorWorldTransform(DeltaTransform, bSweep, (bSweep ? &SweepHitResult : nullptr), TeleportFlagToEnum(bTeleport));
 }
 
+ void AActor::K2_AddActorWorldTransformKeepScale(const FTransform& DeltaTransform, bool bSweep, FHitResult& SweepHitResult, bool bTeleport)
+ {
+ 	AddActorWorldTransformKeepScale(DeltaTransform, bSweep, (bSweep ? &SweepHitResult : nullptr), TeleportFlagToEnum(bTeleport));
+ }
+
 bool AActor::K2_SetActorTransform(const FTransform& NewTransform, bool bSweep, FHitResult& SweepHitResult, bool bTeleport)
 {
 	return SetActorTransform(NewTransform, bSweep, (bSweep ? &SweepHitResult : nullptr), TeleportFlagToEnum(bTeleport));
@@ -4937,6 +5083,7 @@ float AActor::GetGameTimeSinceCreation() const
 	}
 }
 
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 void AActor::SetNetUpdateTime( float NewUpdateTime )
 {
 	if ( FNetworkObjectInfo* NetActor = FindNetworkObjectInfo() )
@@ -4945,6 +5092,7 @@ void AActor::SetNetUpdateTime( float NewUpdateTime )
 		NetActor->NextUpdateTime = FMath::Min( NetActor->NextUpdateTime, (double)NewUpdateTime );
 	}			
 }
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 FNetworkObjectInfo* AActor::FindOrAddNetworkObjectInfo()
 {
@@ -4983,9 +5131,9 @@ void AActor::PostRename(UObject* OldOuter, const FName OldName)
 			NetDriver->NotifyActorRenamed(this, OldName);
 		}
 
-		if (World->DemoNetDriver)
+		if (UDemoNetDriver* DemoNetDriver = World->GetDemoNetDriver())
 		{
-			World->DemoNetDriver->NotifyActorRenamed(this, OldName);
+			DemoNetDriver->NotifyActorRenamed(this, OldName);
 		}
 	}
 }

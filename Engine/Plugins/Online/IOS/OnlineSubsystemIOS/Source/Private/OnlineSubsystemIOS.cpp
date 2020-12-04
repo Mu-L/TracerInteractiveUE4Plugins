@@ -5,6 +5,13 @@
 #import "OnlineStoreKitHelper.h"
 #import "OnlineAppStoreUtils.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Stats/Stats.h"
+
+#if (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && __IPHONE_OS_VERSION_MIN_REQUIRED <= __IPHONE_12_0) || (defined(__TV_OS_VERSION_MIN_REQUIRED) && __TV_OS_VERSION_MIN_REQUIRED <= __TVOS_12_0)
+#define USE_DEPRECATED_PLAYERID 1
+#else
+#define USE_DEPRECATED_PLAYERID 0
+#endif
 
 FOnlineSubsystemIOS::FOnlineSubsystemIOS(FName InInstanceName)
 	: FOnlineSubsystemImpl(IOS_SUBSYSTEM, InInstanceName)
@@ -210,15 +217,15 @@ void FOnlineSubsystemIOS::InitStoreKitHelper()
 	// Give each interface a chance to bind to the store kit helper
 	StoreV2Interface->InitStoreKit(StoreHelper);
 	PurchaseInterface->InitStoreKit(StoreHelper);
-	
-	// Bind the observer after the interfaces have bound their delegates
-	[[SKPaymentQueue defaultQueue] addTransactionObserver:StoreHelper];
+
+	// Pump the event queue to handle any events that came in between launch and now.
+	[StoreHelper pumpObserverEventQueue];
 }
 
 void FOnlineSubsystemIOS::CleanupStoreKitHelper()
 {
-	// @todo MetalMRT: This needs to be analyzed with ASAN - but this pointer is garbage on shutdown...
-	// [StoreHelper release];
+	[StoreHelper release];
+	StoreHelper = nil;
 }
 
 void FOnlineSubsystemIOS::InitAppStoreHelper()
@@ -240,6 +247,8 @@ FAppStoreUtils* FOnlineSubsystemIOS::GetAppStoreUtils()
 
 bool FOnlineSubsystemIOS::Tick(float DeltaTime)
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_FOnlineSubsystemIOS_Tick);
+
 	if (!FOnlineSubsystemImpl::Tick(DeltaTime))
 	{
 		return false;
@@ -374,3 +383,36 @@ bool FOnlineSubsystemIOS::IsInAppPurchasingEnabled()
 	GConfig->GetBool(TEXT("OnlineSubsystemIOS.Store"), TEXT("bSupportInAppPurchasing"), bEnableIAP1, GEngineIni);
 	return bEnableIAP || bEnableIAP1;
 }
+
+NSString* FOnlineSubsystemIOS::GetPlayerId(GKPlayer* Player)
+{
+#if USE_DEPRECATED_PLAYERID
+	if ([GKPlayer respondsToSelector:@selector(gamePlayerID)] == YES)
+	{
+		return Player.gamePlayerID;
+	}
+	else
+	{
+		return Player.playerID;
+	}
+#else
+	return Player.gamePlayerID;
+#endif
+}
+
+NSString* FOnlineSubsystemIOS::GetPlayerId(GKLocalPlayer* Player)
+{
+#if USE_DEPRECATED_PLAYERID
+	if ([GKLocalPlayer respondsToSelector:@selector(gamePlayerID)] == YES)
+	{
+		return Player.gamePlayerID;
+	}
+	else
+	{
+		return Player.playerID;
+	}
+#else
+	return Player.gamePlayerID;
+#endif
+}
+

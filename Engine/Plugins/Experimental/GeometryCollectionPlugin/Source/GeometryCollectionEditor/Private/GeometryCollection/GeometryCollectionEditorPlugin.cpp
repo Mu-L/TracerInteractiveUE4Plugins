@@ -21,6 +21,7 @@
 #include "GeometryCollection/DetailCustomizations/GeomComponentCacheCustomization.h"
 #include "GeometryCollection/DetailCustomizations/SelectedRigidBodyCustomization.h"
 #include "GeometryCollection/DetailCustomizations/WarningMessageCustomization.h"
+#include "GeometryCollection/DetailCustomizations/GeometryCollectionCustomization.h"
 #include "Styling/SlateStyle.h"
 #include "Styling/SlateStyleRegistry.h"
 #include "Styling/CoreStyle.h"
@@ -178,6 +179,12 @@ void IGeometryCollectionEditorPlugin::StartupModule()
 			FConsoleCommandWithWorldDelegate::CreateStatic(&FGeometryCollectionCommands::HealGeometry),
 			ECVF_Default
 		));
+		EditorCommands.Add(IConsoleManager::Get().RegisterConsoleCommand(
+			TEXT("GeometryCollection.SetNamedAttributeValues"),
+			TEXT("Command to set attributes within a named group."),
+			FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&FGeometryCollectionCommands::SetNamedAttributeValues),
+			ECVF_Default
+		));
 	}
 
 	// Bind our scene outliner provider to the editor
@@ -191,6 +198,9 @@ void IGeometryCollectionEditorPlugin::StartupModule()
 		PropertyModule->RegisterCustomPropertyTypeLayout("GeomComponentCacheParameters", FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FGeomComponentCacheParametersCustomization::MakeInstance));
 		PropertyModule->RegisterCustomPropertyTypeLayout("GeometryCollectionDebugDrawActorSelectedRigidBody", FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FSelectedRigidBodyCustomization::MakeInstance));
 		PropertyModule->RegisterCustomPropertyTypeLayout("GeometryCollectionDebugDrawWarningMessage", FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FWarningMessageCustomization::MakeInstance));
+
+		const FName GeometryCollectionName = UGeometryCollection::StaticClass()->GetFName();
+		PropertyModule->RegisterCustomClassLayout(GeometryCollectionName, FOnGetDetailCustomizationInstance::CreateStatic(&FGeometryCollectionCustomization::MakeInstance));
 	}
 
 	// Register rigid body selection editor mode
@@ -246,6 +256,9 @@ void IGeometryCollectionEditorPlugin::ShutdownModule()
 			PropertyModule->UnregisterCustomPropertyTypeLayout("GeomCollectionCacheParameters");
 			PropertyModule->UnregisterCustomPropertyTypeLayout("GeometryCollectionDebugDrawActorSelectedRigidBody");
 			PropertyModule->UnregisterCustomPropertyTypeLayout("GeometryCollectionDebugDrawWarningMessage");
+
+			const FName GeometryCollectionName = UGeometryCollection::StaticClass()->GetFName();
+			PropertyModule->UnregisterCustomClassLayout(GeometryCollectionName);
 		}
 
 		// Unregister rigid body selection editor mode

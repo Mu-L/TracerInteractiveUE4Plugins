@@ -8,7 +8,7 @@
 
 IClothingSimulation* UChaosClothingSimulationFactory::CreateSimulation()
 {
-	IClothingSimulation* Simulation = new Chaos::ClothingSimulation();
+	IClothingSimulation* Simulation = new Chaos::FClothingSimulation();
 	return Simulation;
 }
 
@@ -19,7 +19,11 @@ void UChaosClothingSimulationFactory::DestroySimulation(IClothingSimulation* InS
 
 bool UChaosClothingSimulationFactory::SupportsAsset(UClothingAssetBase* InAsset)
 {
+#if WITH_CHAOS
     return true;
+#else
+    return false;
+#endif
 }
 
 bool UChaosClothingSimulationFactory::SupportsRuntimeInteraction()

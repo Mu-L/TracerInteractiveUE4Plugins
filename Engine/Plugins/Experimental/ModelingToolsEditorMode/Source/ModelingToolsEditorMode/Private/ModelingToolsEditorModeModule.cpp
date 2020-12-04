@@ -10,6 +10,7 @@
 
 #include "ISettingsModule.h"
 #include "ISettingsSection.h"
+#include "Misc/CoreDelegates.h"
 
 #define LOCTEXT_NAMESPACE "FModelingToolsEditorModeModule"
 
@@ -21,6 +22,11 @@ void FModelingToolsEditorModeModule::StartupModule()
 void FModelingToolsEditorModeModule::ShutdownModule()
 {
 	FCoreDelegates::OnPostEngineInit.RemoveAll(this);
+
+	if (ISettingsModule* SettingsModule = FModuleManager::GetModulePtr<ISettingsModule>("Settings"))
+	{
+		SettingsModule->UnregisterSettings("Project", "Plugins", "ModelingMode");
+	}
 
 	FModelingToolActionCommands::UnregisterAllToolActions();
 	FModelingToolsManagerCommands::Unregister();

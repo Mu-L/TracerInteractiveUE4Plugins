@@ -128,8 +128,17 @@ class COREUOBJECT_API UField : public UObject
 	 * @param Key The key to lookup in the metadata
 	 * @return true if there is a (possibly blank) value associated with this key
 	 */
-	bool HasMetaData(const TCHAR* Key) const;
-	bool HasMetaData(const FName& Key) const;
+	bool HasMetaData(const TCHAR* Key) const { return FindMetaData(Key) != nullptr; }
+	bool HasMetaData(const FName& Key) const { return FindMetaData(Key) != nullptr; }
+
+	/**
+	 * Find the metadata value associated with the key
+	 *
+	 * @param Key The key to lookup in the metadata
+	 * @return The value associated with the key if exists, null otherwise
+	 */
+	const FString* FindMetaData(const TCHAR* Key) const;
+	const FString* FindMetaData(const FName& Key) const;
 
 	/**
 	 * Find the metadata value associated with the key
@@ -548,6 +557,21 @@ public:
 		}
 	}
 
+	/**
+	 * Collects UObjects referenced by bytecode
+	 * @param OutReferencedObjects buffer to store the referenced objects in (not cleared by this function)
+	 */
+	void CollectBytecodeReferencedObjects(TArray<UObject*>& OutReferencedObjects);
+	/**
+	 * Collects UObjects referenced by properties
+	 * @param OutReferencedObjects buffer to store the referenced objects in (not cleared by this function)
+	 */
+	void CollectPropertyReferencedObjects(TArray<UObject*>& OutReferencedObjects);
+	/**
+	 * Collects UObjects referenced by bytecode and properties for faster GC access
+	 */
+	void CollectBytecodeAndPropertyReferencedObjects();
+
 protected:
 
 	/** Returns the property name from the guid */
@@ -937,11 +961,11 @@ struct TStructOpsTypeTraits : public TStructOpsTypeTraitsBase2<CPPSTRUCT>
 	 * Selection of AddStructReferencedObjects check.
 	 */
 	template<class CPPSTRUCT>
-	FORCEINLINE void AddStructReferencedObjectsOrNot(const void* A, FReferenceCollector& Collector)
+	FORCEINLINE void AddStructReferencedObjectsOrNot(void* A, FReferenceCollector& Collector)
 	{
 		if constexpr (TStructOpsTypeTraits<CPPSTRUCT>::WithAddStructReferencedObjects)
 		{
-			((CPPSTRUCT const*)A)->AddStructReferencedObjects(Collector);
+			((CPPSTRUCT*)A)->AddStructReferencedObjects(Collector);
 		}
 	}
 
@@ -951,14 +975,14 @@ struct TStructOpsTypeTraits : public TStructOpsTypeTraitsBase2<CPPSTRUCT>
 	 * Selection of AddStructReferencedObjects check.
 	 */
 	template<class CPPSTRUCT>
-	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithAddStructReferencedObjects>::Type AddStructReferencedObjectsOrNot(const void* A, FReferenceCollector& Collector)
+	FORCEINLINE typename TEnableIf<!TStructOpsTypeTraits<CPPSTRUCT>::WithAddStructReferencedObjects>::Type AddStructReferencedObjectsOrNot(void* A, FReferenceCollector& Collector)
 	{
 	}
 
 	template<class CPPSTRUCT>
-	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithAddStructReferencedObjects>::Type AddStructReferencedObjectsOrNot(const void* A, FReferenceCollector& Collector)
+	FORCEINLINE typename TEnableIf<TStructOpsTypeTraits<CPPSTRUCT>::WithAddStructReferencedObjects>::Type AddStructReferencedObjectsOrNot(void* A, FReferenceCollector& Collector)
 	{
-		((CPPSTRUCT const*)A)->AddStructReferencedObjects(Collector);
+		((CPPSTRUCT*)A)->AddStructReferencedObjects(Collector);
 	}
 
 #endif
@@ -1084,7 +1108,7 @@ public:
 		 * return a pointer to a function that can add referenced objects
 		 * @return true if the copy was imported, otherwise it will fall back to FStructProperty::ImportText
 		 */
-		typedef void (*TPointerToAddStructReferencedObjects)(const void* A, class FReferenceCollector& Collector);
+		typedef void (*TPointerToAddStructReferencedObjects)(void* A, class FReferenceCollector& Collector);
 		virtual TPointerToAddStructReferencedObjects AddStructReferencedObjects() = 0;
 
 		/** return true if this class wants to serialize from some other tag (usually for conversion purposes) **/
@@ -1494,7 +1518,7 @@ public:
 	friend struct FScriptStructArchiveProxy;
 #endif
 
-private:
+protected:
 	/** true if we have performed PrepareCppStructOps **/
 	bool bPrepareCppStructOpsCompleted;
 	/** Holds the Cpp ctors and dtors, sizeof, etc. Is not owned by this and is not released. **/
@@ -1523,7 +1547,7 @@ public:
 	static COREUOBJECT_API void DeferCppStructOps(FName Target, ICppStructOps* InCppStructOps);
 
 	/** Look for the CppStructOps and hook it up **/
-	COREUOBJECT_API void PrepareCppStructOps();
+	virtual COREUOBJECT_API void PrepareCppStructOps();
 
 	/** Returns the CppStructOps that can be used to do custom operations */
 	FORCEINLINE ICppStructOps* GetCppStructOps() const
@@ -1969,6 +1993,9 @@ public:
 	/** Returns the short name matching the enum Value, returns empty string if invalid */
 	FString GetNameStringByValue(int64 InValue) const;
 
+	/** Looks for a name with a given value and returns true and writes the name to Out if one was found */
+	bool FindNameStringByValue(FString& Out, int64 InValue) const;
+
 	/** Gets enum value by name, returns INDEX_NONE and optionally errors when name is not found. Handles full or short names */
 	int64 GetValueByNameString(const FString& SearchString, EGetByNameFlags Flags = EGetByNameFlags::None) const;
 
@@ -1985,6 +2012,9 @@ public:
 	/** Version of GetDisplayNameTextByIndex that takes a value instead */
 	FText GetDisplayNameTextByValue(int64 InValue) const;
 
+	/** Looks for a display name with a given value and returns true and writes the name to Out if one was found */
+	bool FindDisplayNameTextByValue(FText& Out, int64 InValue) const;
+
 	/**
 	 * Returns the unlocalized logical name originally assigned to the enum at creation.
 	 * By default this is the same as the short name but it is overridden in child classes with different internal name storage.
@@ -1998,6 +2028,9 @@ public:
 
 	/** Version of GetAuthoredNameByIndex that takes a value instead */
 	FString GetAuthoredNameStringByValue(int64 InValue) const;
+
+	/** Looks for a display name with a given value and returns true and writes the unlocalized logical name to Out if one was found */
+	bool FindAuthoredNameStringByValue(FString& Out, int64 InValue) const;
 
 	/** Gets max value of Enum. Defaults to zero if there are no entries. */
 	int64 GetMaxEnumValue() const;
@@ -2028,6 +2061,11 @@ public:
 	ECppForm GetCppForm() const
 	{
 		return CppForm;
+	}
+
+	bool HasAnyEnumFlags(EEnumFlags InFlags) const
+	{
+		return EnumHasAnyFlags(EnumFlags, InFlags);
 	}
 
 	/**
@@ -2109,7 +2147,7 @@ public:
 	 * @param bAddMaxKeyIfMissing Should a default Max item be added.
 	 * @return	true unless the MAX enum already exists and isn't the last enum.
 	 */
-	virtual bool SetEnums(TArray<TPair<FName, int64>>& InNames, ECppForm InCppForm, bool bAddMaxKeyIfMissing = true);
+	virtual bool SetEnums(TArray<TPair<FName, int64>>& InNames, ECppForm InCppForm, EEnumFlags InFlags = EEnumFlags::None, bool bAddMaxKeyIfMissing = true);
 
 	/**
 	 * @return	 The number of enum names.
@@ -2351,6 +2389,9 @@ protected:
 
 	/** How the enum was originally defined. */
 	ECppForm CppForm;
+
+	/** Enum flags. */
+	EEnumFlags EnumFlags;
 
 	/** pointer to function used to look up the enum's display name. Currently only assigned for UEnums generated for nativized blueprints */
 	FEnumDisplayNameFn EnumDisplayNameFn;
@@ -2723,10 +2764,7 @@ public:
 	 *
 	 * @return The version of this class that references should be stored to
 	 */
-	virtual UClass* GetAuthoritativeClass()
-	{
-		return this;
-	}
+	virtual UClass* GetAuthoritativeClass();
 	const UClass* GetAuthoritativeClass() const { return const_cast<UClass*>(this)->GetAuthoritativeClass(); }
 
 	/**
@@ -3028,6 +3066,12 @@ public:
 	 * Realtime garbage collection helper function used to indicated the end of a fixed array.
 	 */
 	void EmitFixedArrayEnd();
+
+	/**
+	 * Realtime garbage collection helper function used to emit token containing information about an
+	 * external package reference.
+	 */
+	void EmitExternalPackageReference();
 
 	/**
 	 * Assembles the token stream for realtime garbage collection by combining the per class only
@@ -3396,6 +3440,21 @@ public:
 	void RetrieveObjectInstances( class UObject* SearchOuter, TArray<class UObject*>& out_Objects );
 
 	/**
+	 * Allows looping over instances that were created during this instancing.
+	 *
+	 * @param	Pred		the object to retrieve object instances for
+	 */
+	template <typename Predicate>
+	void ForEachObjectInstance(Predicate Pred)
+	{
+		for (TMap<UObject*, UObject*>::TIterator It(SourceToDestinationMap); It; ++It)
+		{
+			UObject* InstancedObject = It.Value();
+			Pred(InstancedObject);
+		}
+	}
+
+	/**
 	 * Enables / disables component instancing.
 	 */
 	void EnableSubobjectInstancing( bool bEnabled )
@@ -3705,6 +3764,12 @@ template<> struct TBaseStructure<FFrameNumber>
 	COREUOBJECT_API static UScriptStruct* Get();
 };
 
+struct FFrameTime;
+template<> struct TBaseStructure<FFrameTime>
+{
+	COREUOBJECT_API static UScriptStruct* Get();
+};
+
 struct FSoftObjectPath;
 template<> struct TBaseStructure<FSoftObjectPath>
 {
@@ -3737,6 +3802,12 @@ template<> struct TBaseStructure<FDateTime>
 
 struct FPolyglotTextData;
 template<> struct TBaseStructure<FPolyglotTextData>
+{
+	COREUOBJECT_API static UScriptStruct* Get();
+};
+
+struct FAssetBundleData;
+template<> struct TBaseStructure<FAssetBundleData>
 {
 	COREUOBJECT_API static UScriptStruct* Get();
 };

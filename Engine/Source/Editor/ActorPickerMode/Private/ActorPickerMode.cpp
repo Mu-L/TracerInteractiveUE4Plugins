@@ -5,21 +5,33 @@
 #include "EditorModeRegistry.h"
 #include "EditorModeManager.h"
 #include "EditorModes.h"
-#include "EditorModeActorPicker.h"
+#include "EditorModeActorPicker.h" 
+#include "Framework/Application/SlateApplication.h"
 
 IMPLEMENT_MODULE( FActorPickerModeModule, ActorPickerMode );
 
 void FActorPickerModeModule::StartupModule()
 {
 	FEditorModeRegistry::Get().RegisterMode<FEdModeActorPicker>(FBuiltinEditorModes::EM_ActorPicker);
+
+	if (FSlateApplication::IsInitialized())
+	{
+		OnApplicationDeactivatedHandle = FSlateApplication::Get().OnApplicationActivationStateChanged().Add(TDelegate<void(const bool)>::CreateRaw(this, &FActorPickerModeModule::OnApplicationDeactivated));
+	}
 }
 
 void FActorPickerModeModule::ShutdownModule()
 {
+	if (FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().OnApplicationActivationStateChanged().Remove(OnApplicationDeactivatedHandle);
+		OnApplicationDeactivatedHandle.Reset();
+	}
+
 	FEditorModeRegistry::Get().UnregisterMode(FBuiltinEditorModes::EM_ActorPicker);
 }
 
-void FActorPickerModeModule::BeginActorPickingMode(FOnGetAllowedClasses InOnGetAllowedClasses, FOnShouldFilterActor InOnShouldFilterActor, FOnActorSelected InOnActorSelected)
+void FActorPickerModeModule::BeginActorPickingMode(FOnGetAllowedClasses InOnGetAllowedClasses, FOnShouldFilterActor InOnShouldFilterActor, FOnActorSelected InOnActorSelected) const
 {
 	// Activate the mode
 	GLevelEditorModeTools().ActivateMode(FBuiltinEditorModes::EM_ActorPicker);
@@ -34,9 +46,20 @@ void FActorPickerModeModule::BeginActorPickingMode(FOnGetAllowedClasses InOnGetA
 	}
 }
 
-void FActorPickerModeModule::EndActorPickingMode()
+void FActorPickerModeModule::OnApplicationDeactivated(const bool IsActive) const
 {
-	GLevelEditorModeTools().DeactivateMode(FBuiltinEditorModes::EM_ActorPicker);
+	if (!IsActive) 
+	{ 
+		EndActorPickingMode();
+	}
+}
+
+void FActorPickerModeModule::EndActorPickingMode() const
+{
+	if (IsInActorPickingMode())
+	{
+		GLevelEditorModeTools().DeactivateMode(FBuiltinEditorModes::EM_ActorPicker);
+	}
 }
 
 bool FActorPickerModeModule::IsInActorPickingMode() const

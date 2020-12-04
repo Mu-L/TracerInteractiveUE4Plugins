@@ -95,10 +95,14 @@ FActiveSound::FActiveSound()
 	, CurrentInteriorLPF(MAX_FILTER_FREQUENCY)
 	, EnvelopeFollowerAttackTime(10)
 	, EnvelopeFollowerReleaseTime(100)
+	, bHasNewBusSends(false)
 #if ENABLE_AUDIO_DEBUG
 	, DebugColor(FColor::Black)
 #endif // ENABLE_AUDIO_DEBUG
 {
+	static uint32 TotalPlayOrder = 0;
+	PlayOrder = TotalPlayOrder++;
+
 	if (!ActiveSoundTraceDelegate.IsBound())
 	{
 		ActiveSoundTraceDelegate.BindStatic(&OcclusionTraceDone);
@@ -134,29 +138,37 @@ FActiveSound* FActiveSound::CreateVirtualCopy(const FActiveSound& InActiveSoundT
 	ActiveSound->ConcurrencyGroupData.Reset();
 	ActiveSound->WaveInstances.Reset();
 
+	FAudioThread::RunCommandOnGameThread([AudioComponentID = ActiveSound->GetAudioComponentID()]()
+	{
+		if (UAudioComponent* AudioComponent = UAudioComponent::GetAudioComponentFromID(AudioComponentID))
+		{
+			AudioComponent->SetIsVirtualized(true);
+		}
+	});
+
 	return ActiveSound;
 }
 
-FArchive& operator<<( FArchive& Ar, FActiveSound* ActiveSound )
+FArchive& operator<<(FArchive& Ar, FActiveSound* ActiveSound)
 {
-	if( !Ar.IsLoading() && !Ar.IsSaving() )
+	if (!Ar.IsLoading() && !Ar.IsSaving())
 	{
 		Ar << ActiveSound->Sound;
 		Ar << ActiveSound->WaveInstances;
 		Ar << ActiveSound->SoundNodeOffsetMap;
 	}
-	return( Ar );
+	return(Ar);
 }
 
-void FActiveSound::AddReferencedObjects( FReferenceCollector& Collector)
+void FActiveSound::AddReferencedObjects(FReferenceCollector& Collector)
 {
 	for (auto WaveInstanceIt(WaveInstances.CreateConstIterator()); WaveInstanceIt; ++WaveInstanceIt)
 	{
 		FWaveInstance* WaveInstance = WaveInstanceIt.Value();
 		// Avoid recursing back to the wave instance that sourced this active sound
-		if( WaveInstance )
+		if (WaveInstance)
 		{
-			WaveInstance->AddReferencedObjects( Collector );
+			WaveInstance->AddReferencedObjects(Collector);
 		}
 	}
 
@@ -226,7 +238,7 @@ void FActiveSound::SetSound(USoundBase* InSound)
 {
 	Sound = InSound;
 	bApplyInteriorVolumes = (SoundClassOverride && SoundClassOverride->Properties.bApplyAmbientVolumes)
-							|| (Sound && Sound->ShouldApplyInteriorVolumes());
+		|| (Sound && Sound->ShouldApplyInteriorVolumes());
 }
 
 void FActiveSound::SetSourceEffectChain(USoundEffectSourcePresetChain* InSourceEffectChain)
@@ -238,7 +250,7 @@ void FActiveSound::SetSoundClass(USoundClass* SoundClass)
 {
 	SoundClassOverride = SoundClass;
 	bApplyInteriorVolumes = (SoundClassOverride && SoundClassOverride->Properties.bApplyAmbientVolumes)
-							|| (Sound && Sound->ShouldApplyInteriorVolumes());
+		|| (Sound && Sound->ShouldApplyInteriorVolumes());
 }
 
 bool FActiveSound::IsPlayWhenSilent() const
@@ -343,20 +355,42 @@ void FActiveSound::SetSubmixSend(const FSoundSubmixSendInfo& SubmixSendInfo)
 	SoundSubmixSendsOverride.Add(SubmixSendInfo);
 }
 
-void FActiveSound::SetSourceBusSend(EBusSendType BusSendType, const FSoundSourceBusSendInfo& SourceBusSendInfo)
+void FActiveSound::SetSourceBusSend(EBusSendType BusSendType, const FSoundSourceBusSendInfo& SendInfo)
 {
 	// Override send level if the source bus send is already included in active sound
-	for (FSoundSourceBusSendInfo& Info : SoundSourceBusSendsOverride[(int32)BusSendType])
+	for (FSoundSourceBusSendInfo& Info : BusSendsOverride[(int32)BusSendType])
 	{
-		if (Info.SoundSourceBus == SourceBusSendInfo.SoundSourceBus)
+		if (Info.SoundSourceBus == SendInfo.SoundSourceBus || Info.AudioBus == SendInfo.AudioBus)
 		{
-			Info.SendLevel = SourceBusSendInfo.SendLevel;
+			Info.SendLevel = SendInfo.SendLevel;
+
+			bHasNewBusSends = true;
+			newBusSends.Add(TTuple<EBusSendType, FSoundSourceBusSendInfo>(BusSendType, SendInfo));
 			return;
 		}
 	}
 
 	// Otherwise, add it to the source bus send overrides
-	SoundSourceBusSendsOverride[(int32)BusSendType].Add(SourceBusSendInfo);
+	BusSendsOverride[(int32)BusSendType].Add(SendInfo);
+
+	bHasNewBusSends = true;
+	newBusSends.Add(TTuple<EBusSendType, FSoundSourceBusSendInfo>(BusSendType,SendInfo));
+}
+
+bool FActiveSound::HasNewBusSends() const
+{
+	return bHasNewBusSends;
+}
+
+TArray< TTuple<EBusSendType, FSoundSourceBusSendInfo> > const& FActiveSound::GetNewBusSends() const
+{
+	return newBusSends;
+}
+
+void FActiveSound::ResetNewBusSends()
+{
+	newBusSends.Empty();
+	bHasNewBusSends = false;
 }
 
 void FActiveSound::Stop()
@@ -398,7 +432,7 @@ void FActiveSound::GetSoundSubmixSends(TArray<FSoundSubmixSendInfo>& OutSends) c
 	}
 }
 
-void FActiveSound::GetSoundSourceBusSends(EBusSendType BusSendType, TArray<FSoundSourceBusSendInfo>& OutSends) const
+void FActiveSound::GetBusSends(EBusSendType BusSendType, TArray<FSoundSourceBusSendInfo>& OutSends) const
 {
 	if (Sound)
 	{
@@ -406,12 +440,12 @@ void FActiveSound::GetSoundSourceBusSends(EBusSendType BusSendType, TArray<FSoun
 		Sound->GetSoundSourceBusSends(BusSendType, OutSends);
 
 		// Loop through the overrides, which may append or override the existing send
-		for (const FSoundSourceBusSendInfo& SendInfo : SoundSourceBusSendsOverride[(int32)BusSendType])
+		for (const FSoundSourceBusSendInfo& SendInfo : BusSendsOverride[(int32)BusSendType])
 		{
 			bool bOverridden = false;
 			for (FSoundSourceBusSendInfo& OutSendInfo : OutSends)
 			{
-				if (OutSendInfo.SoundSourceBus == SendInfo.SoundSourceBus)
+				if (OutSendInfo.SoundSourceBus == SendInfo.SoundSourceBus || OutSendInfo.AudioBus == SendInfo.AudioBus)
 				{
 					OutSendInfo.SendLevel = SendInfo.SendLevel;
 					bOverridden = true;
@@ -492,8 +526,6 @@ bool FActiveSound::GetConcurrencyFadeDuration(float& OutFadeDuration) const
 
 void FActiveSound::UpdateWaveInstances(TArray<FWaveInstance*> &InWaveInstances, const float DeltaTime)
 {
-	check(AudioDevice);
-
 	// Reset whether or not the active sound is playing audio.
 	bIsPlayingAudio = false;
 
@@ -501,13 +533,13 @@ void FActiveSound::UpdateWaveInstances(TArray<FWaveInstance*> &InWaveInstances, 
 	MinCurrentPitch = 1.0f;
 
 	// Early outs.
-	if (Sound == nullptr || !Sound->IsPlayable())
+	if (!AudioDevice || Sound == nullptr || !Sound->IsPlayable())
 	{
 		return;
 	}
 
 	{
-		SCOPE_CYCLE_COUNTER( STAT_AudioFindNearestLocation );
+		SCOPE_CYCLE_COUNTER(STAT_AudioFindNearestLocation);
 		ClosestListenerIndex = AudioDevice->FindClosestListenerIndex(Transform);
 	}
 
@@ -517,7 +549,28 @@ void FActiveSound::UpdateWaveInstances(TArray<FWaveInstance*> &InWaveInstances, 
 	ParseParams.Transform = Transform;
 	ParseParams.StartTime = RequestedStartTime;
 
-	ComponentVolumeFader.Update(DeltaTime);
+	// Report back to component if necessary once initial fade is complete
+	const bool bIsInitFade = PlaybackTimeNonVirtualized < ComponentVolumeFader.GetFadeDuration();
+	if (bIsInitFade)
+	{
+		bool bWasFading = ComponentVolumeFader.IsFadingIn();
+		ComponentVolumeFader.Update(DeltaTime);
+		const bool bIsFading = ComponentVolumeFader.IsFading();
+		if (bWasFading && !bIsFading)
+		{
+			FAudioThread::RunCommandOnGameThread([AudioComponentID = GetAudioComponentID()]()
+			{
+				if (UAudioComponent* AudioComponent = UAudioComponent::GetAudioComponentFromID(AudioComponentID))
+				{
+					AudioComponent->SetFadeInComplete();
+				}
+			});
+		}
+	}
+	else
+	{
+		ComponentVolumeFader.Update(DeltaTime);
+	}
 
 	ParseParams.VolumeMultiplier = GetVolume();
 
@@ -535,7 +588,7 @@ void FActiveSound::UpdateWaveInstances(TArray<FWaveInstance*> &InWaveInstances, 
 
 	for (int32 BusSendType = 0; BusSendType < (int32)EBusSendType::Count; ++BusSendType)
 	{
-		GetSoundSourceBusSends((EBusSendType)BusSendType, ParseParams.SoundSourceBusSends[BusSendType]);
+		GetBusSends((EBusSendType)BusSendType, ParseParams.BusSends[BusSendType]);
 	}
 
 	// Set up the base source effect chain.
@@ -584,7 +637,6 @@ void FActiveSound::UpdateWaveInstances(TArray<FWaveInstance*> &InWaveInstances, 
 			}
 		}
 
-		ParseParams.ModulationPluginSettings = FindModulationSettings();
 		Sound->Parse(AudioDevice, 0, *this, ParseParams, ThisSoundsWaveInstances);
 
 		// Track this active sound's min pitch value. This is used to scale it's possible duration value.
@@ -606,6 +658,22 @@ void FActiveSound::UpdateWaveInstances(TArray<FWaveInstance*> &InWaveInstances, 
 			for (FWaveInstance* WaveInstance : ThisSoundsWaveInstances)
 			{
 				WaveInstance->SetStopping(true);
+			}
+		}
+
+
+		// each wave instance needs its own copy of the quantization command
+		for (FWaveInstance* WaveInstance : ThisSoundsWaveInstances)
+		{
+			check(WaveInstance);
+
+			if (!WaveInstance->QuantizedRequestData && QuantizedRequestData.QuantizedCommandPtr)
+			{
+				// shallow copy of the FQuartzQuantizedRequestData struct
+				WaveInstance->QuantizedRequestData = MakeUnique<Audio::FQuartzQuantizedRequestData>(QuantizedRequestData);
+
+				// manually deep copy the QuantizedCommandPtr object itself
+				WaveInstance->QuantizedRequestData->QuantizedCommandPtr = QuantizedRequestData.QuantizedCommandPtr->GetDeepCopyOfDerivedObject();
 			}
 		}
 
@@ -714,48 +782,10 @@ void FActiveSound::UpdateWaveInstances(TArray<FWaveInstance*> &InWaveInstances, 
 	{
 		DebugColor = FColor::MakeRandomColor();
 	}
-	FAudioDebugger::DrawDebugInfo(*this, ThisSoundsWaveInstances, DeltaTime);
+	Audio::FAudioDebugger::DrawDebugInfo(*this, ThisSoundsWaveInstances, DeltaTime);
 #endif // ENABLE_AUDIO_DEBUG
 
 	InWaveInstances.Append(ThisSoundsWaveInstances);
-}
-
-USoundModulationPluginSourceSettingsBase* FActiveSound::FindModulationSettings() const
-{
-	if (UClass* PluginClass = GetAudioPluginCustomSettingsClass(EAudioPlugin::MODULATION))
-	{
-		for (USoundModulationPluginSourceSettingsBase* Settings : Sound->Modulation.Settings)
-		{
-			if (Settings && Settings->IsA(PluginClass))
-			{
-				return Settings;
-			}
-		}
-
-		if (UAudioComponent* AudioComponent = UAudioComponent::GetAudioComponentFromID(AudioComponentID))
-		{
-			for (USoundModulationPluginSourceSettingsBase* Settings : AudioComponent->Modulation.Settings)
-			{
-				if (Settings && Settings->IsA(PluginClass))
-				{
-					return Settings;
-				}
-			}
-		}
-
-		if (USoundClass* SoundClass = Sound->GetSoundClass())
-		{
-			for (USoundModulationPluginSourceSettingsBase* Settings : SoundClass->Modulation.Settings)
-			{
-				if (Settings && Settings->IsA(PluginClass))
-				{
-					return Settings;
-				}
-			}
-		}
-	}
-
-	return nullptr;
 }
 
 void FActiveSound::MarkPendingDestroy(bool bDestroyNow)
@@ -773,14 +803,6 @@ void FActiveSound::MarkPendingDestroy(bool bDestroyNow)
 			if (*PlayCount == 0)
 			{
 				Sound->CurrentPlayCount.Remove(AudioDevice->DeviceID);
-			}
-		}
-
-		if (AudioDevice->IsModulationPluginEnabled() && AudioDevice->ModulationInterface.IsValid())
-		{
-			if (USoundModulationPluginSourceSettingsBase* ModulationSettings = FindModulationSettings())
-			{
-				AudioDevice->ModulationInterface->OnReleaseSound(static_cast<ISoundModulatable&>(*this));
 			}
 		}
 	}
@@ -1073,6 +1095,7 @@ void FActiveSound::HandleInteriorVolumes(FSoundParseParameters& ParseParams)
 		AudioDevice->GetAudioVolumeSettings(WorldID, ParseParams.Transform.GetTranslation(), AudioVolumeSettings);
 
 		InteriorSettings = AudioVolumeSettings.InteriorSettings;
+		AudioVolumeSubmixSendSettings = AudioVolumeSettings.SubmixSendSettings;
 		AudioVolumeID = AudioVolumeSettings.AudioVolumeID;
 		bGotInteriorSettings = true;
 	}
@@ -1098,11 +1121,25 @@ void FActiveSound::HandleInteriorVolumes(FSoundParseParameters& ParseParams)
 
 		CurrentInteriorLPF = FMath::Lerp(SourceInteriorLPF, MAX_FILTER_FREQUENCY, Listener.InteriorLPFInterp);
 		ParseParams.AmbientZoneFilterFrequency = CurrentInteriorLPF;
+
+		if (AudioVolumeSubmixSendSettings.Num() > 0)
+		{
+			for (const FAudioVolumeSubmixSendSettings& SendSetting : AudioVolumeSubmixSendSettings)
+			{
+				if (SendSetting.ListenerLocationState == EAudioVolumeLocationState::InsideTheVolume)
+				{
+					for (const FSoundSubmixSendInfo& SubmixSendInfo : SendSetting.SubmixSends)
+					{
+						ParseParams.SoundSubmixSends.Add(SubmixSendInfo);
+					}
+				}
+			}
+		}
 	}
 	else
 	{
 		// Ambient and listener in different ambient zone
-		if( InteriorSettings.bIsWorldSettings )
+		if (InteriorSettings.bIsWorldSettings)
 		{
 			// The ambient sound is 'outside' - use the listener's exterior volume
 			CurrentInteriorVolume = FMath::Lerp(SourceInteriorVolume, Listener.InteriorSettings.ExteriorVolume, Listener.ExteriorVolumeInterp);
@@ -1110,6 +1147,20 @@ void FActiveSound::HandleInteriorVolumes(FSoundParseParameters& ParseParams)
 
 			CurrentInteriorLPF = FMath::Lerp(SourceInteriorLPF, Listener.InteriorSettings.ExteriorLPF, Listener.ExteriorLPFInterp);
 			ParseParams.AmbientZoneFilterFrequency = CurrentInteriorLPF;
+
+			if (AudioVolumeSubmixSendSettings.Num() > 0)
+			{
+				for (const FAudioVolumeSubmixSendSettings& SendSetting : AudioVolumeSubmixSendSettings)
+				{
+					if (SendSetting.ListenerLocationState == EAudioVolumeLocationState::InsideTheVolume)
+					{
+						for (const FSoundSubmixSendInfo& SubmixSendInfo : SendSetting.SubmixSends)
+						{
+							ParseParams.SoundSubmixSends.Add(SubmixSendInfo);
+						}
+					}
+				}
+			}
 		}
 		else
 		{
@@ -1132,6 +1183,20 @@ void FActiveSound::HandleInteriorVolumes(FSoundParseParameters& ParseParams)
 				CurrentInteriorLPF = ListenerLPFValue;
 				ParseParams.AmbientZoneFilterFrequency = ListenerLPFValue;
 			}
+
+			if (AudioVolumeSubmixSendSettings.Num() > 0)
+			{
+				for (const FAudioVolumeSubmixSendSettings& SendSetting : AudioVolumeSubmixSendSettings)
+				{
+					if (SendSetting.ListenerLocationState == EAudioVolumeLocationState::OutsideTheVolume)
+					{
+						for (const FSoundSubmixSendInfo& SubmixSendInfo : SendSetting.SubmixSends)
+						{
+							ParseParams.SoundSubmixSends.Add(SubmixSendInfo);
+						}
+					}
+				}
+			}
 		}
 	}
 }
@@ -1143,18 +1208,18 @@ FWaveInstance& FActiveSound::AddWaveInstance(const UPTRINT WaveInstanceHash)
 	return *WaveInstance;
 }
 
-void FActiveSound::ApplyRadioFilter(const FSoundParseParameters& ParseParams )
+void FActiveSound::ApplyRadioFilter(const FSoundParseParameters& ParseParams)
 {
 	check(AudioDevice);
-	if( AudioDevice->GetMixDebugState() != DEBUGSTATE_DisableRadio )
+	if (AudioDevice->GetMixDebugState() != DEBUGSTATE_DisableRadio)
 	{
 		// Make sure the radio filter is requested
-		if( ParseParams.SoundClass)
+		if (ParseParams.SoundClass)
 		{
 			const float RadioFilterVolumeThreshold = ParseParams.VolumeMultiplier * ParseParams.SoundClass->Properties.RadioFilterVolumeThreshold;
-			if (RadioFilterVolumeThreshold > KINDA_SMALL_NUMBER )
+			if (RadioFilterVolumeThreshold > KINDA_SMALL_NUMBER)
 			{
-				bApplyRadioFilter = ( ParseParams.Volume < RadioFilterVolumeThreshold );
+				bApplyRadioFilter = (ParseParams.Volume < RadioFilterVolumeThreshold);
 			}
 		}
 	}
@@ -1166,14 +1231,14 @@ void FActiveSound::ApplyRadioFilter(const FSoundParseParameters& ParseParams )
 	bRadioFilterSelected = true;
 }
 
-bool FActiveSound::GetFloatParameter( const FName InName, float& OutFloat ) const
+bool FActiveSound::GetFloatParameter(const FName InName, float& OutFloat) const
 {
 	// Always fail if we pass in no name.
-	if( InName != NAME_None )
+	if (InName != NAME_None)
 	{
-		for( const FAudioComponentParam& P : InstanceParameters )
+		for (const FAudioComponentParam& P : InstanceParameters)
 		{
-			if( P.ParamName == InName )
+			if (P.ParamName == InName)
 			{
 				OutFloat = P.FloatParam;
 				return true;
@@ -1210,14 +1275,14 @@ void FActiveSound::UpdateConcurrencyVolumeScalars(const float DeltaTime)
 	}
 }
 
-void FActiveSound::SetFloatParameter( const FName InName, const float InFloat )
+void FActiveSound::SetFloatParameter(const FName InName, const float InFloat)
 {
-	if( InName != NAME_None )
+	if (InName != NAME_None)
 	{
 		// First see if an entry for this name already exists
-		for( FAudioComponentParam& P : InstanceParameters )
+		for (FAudioComponentParam& P : InstanceParameters)
 		{
-			if( P.ParamName == InName )
+			if (P.ParamName == InName)
 			{
 				P.FloatParam = InFloat;
 				return;
@@ -1226,19 +1291,19 @@ void FActiveSound::SetFloatParameter( const FName InName, const float InFloat )
 
 		// We didn't find one, so create a new one.
 		const int32 NewParamIndex = InstanceParameters.AddDefaulted();
-		InstanceParameters[ NewParamIndex ].ParamName = InName;
-		InstanceParameters[ NewParamIndex ].FloatParam = InFloat;
+		InstanceParameters[NewParamIndex].ParamName = InName;
+		InstanceParameters[NewParamIndex].FloatParam = InFloat;
 	}
 }
 
-bool FActiveSound::GetWaveParameter( const FName InName, USoundWave*& OutWave ) const
+bool FActiveSound::GetWaveParameter(const FName InName, USoundWave*& OutWave) const
 {
 	// Always fail if we pass in no name.
-	if( InName != NAME_None )
+	if (InName != NAME_None)
 	{
-		for( const FAudioComponentParam& P : InstanceParameters )
+		for (const FAudioComponentParam& P : InstanceParameters)
 		{
-			if( P.ParamName == InName )
+			if (P.ParamName == InName)
 			{
 				OutWave = P.SoundWaveParam;
 				return true;
@@ -1249,14 +1314,14 @@ bool FActiveSound::GetWaveParameter( const FName InName, USoundWave*& OutWave ) 
 	return false;
 }
 
-void FActiveSound::SetWaveParameter( const FName InName, USoundWave* InWave )
+void FActiveSound::SetWaveParameter(const FName InName, USoundWave* InWave)
 {
-	if( InName != NAME_None )
+	if (InName != NAME_None)
 	{
 		// First see if an entry for this name already exists
-		for( FAudioComponentParam& P : InstanceParameters )
+		for (FAudioComponentParam& P : InstanceParameters)
 		{
-			if( P.ParamName == InName )
+			if (P.ParamName == InName)
 			{
 				P.SoundWaveParam = InWave;
 				return;
@@ -1265,19 +1330,19 @@ void FActiveSound::SetWaveParameter( const FName InName, USoundWave* InWave )
 
 		// We didn't find one, so create a new one.
 		const int32 NewParamIndex = InstanceParameters.AddDefaulted();
-		InstanceParameters[ NewParamIndex ].ParamName = InName;
-		InstanceParameters[ NewParamIndex ].SoundWaveParam = InWave;
+		InstanceParameters[NewParamIndex].ParamName = InName;
+		InstanceParameters[NewParamIndex].SoundWaveParam = InWave;
 	}
 }
 
-bool FActiveSound::GetBoolParameter( const FName InName, bool& OutBool ) const
+bool FActiveSound::GetBoolParameter(const FName InName, bool& OutBool) const
 {
 	// Always fail if we pass in no name.
-	if( InName != NAME_None )
+	if (InName != NAME_None)
 	{
-		for( const FAudioComponentParam& P : InstanceParameters )
+		for (const FAudioComponentParam& P : InstanceParameters)
 		{
-			if( P.ParamName == InName )
+			if (P.ParamName == InName)
 			{
 				OutBool = P.BoolParam;
 				return true;
@@ -1288,14 +1353,14 @@ bool FActiveSound::GetBoolParameter( const FName InName, bool& OutBool ) const
 	return false;
 }
 
-void FActiveSound::SetBoolParameter( const FName InName, const bool InBool )
+void FActiveSound::SetBoolParameter(const FName InName, const bool InBool)
 {
-	if( InName != NAME_None )
+	if (InName != NAME_None)
 	{
 		// First see if an entry for this name already exists
-		for( FAudioComponentParam& P : InstanceParameters )
+		for (FAudioComponentParam& P : InstanceParameters)
 		{
-			if( P.ParamName == InName )
+			if (P.ParamName == InName)
 			{
 				P.BoolParam = InBool;
 				return;
@@ -1304,19 +1369,19 @@ void FActiveSound::SetBoolParameter( const FName InName, const bool InBool )
 
 		// We didn't find one, so create a new one.
 		const int32 NewParamIndex = InstanceParameters.AddDefaulted();
-		InstanceParameters[ NewParamIndex ].ParamName = InName;
-		InstanceParameters[ NewParamIndex ].BoolParam = InBool;
+		InstanceParameters[NewParamIndex].ParamName = InName;
+		InstanceParameters[NewParamIndex].BoolParam = InBool;
 	}
 }
 
-bool FActiveSound::GetIntParameter( const FName InName, int32& OutInt ) const
+bool FActiveSound::GetIntParameter(const FName InName, int32& OutInt) const
 {
 	// Always fail if we pass in no name.
-	if( InName != NAME_None )
+	if (InName != NAME_None)
 	{
-		for( const FAudioComponentParam& P : InstanceParameters )
+		for (const FAudioComponentParam& P : InstanceParameters)
 		{
-			if( P.ParamName == InName )
+			if (P.ParamName == InName)
 			{
 				OutInt = P.IntParam;
 				return true;
@@ -1327,14 +1392,14 @@ bool FActiveSound::GetIntParameter( const FName InName, int32& OutInt ) const
 	return false;
 }
 
-void FActiveSound::SetIntParameter( const FName InName, const int32 InInt )
+void FActiveSound::SetIntParameter(const FName InName, const int32 InInt)
 {
-	if( InName != NAME_None )
+	if (InName != NAME_None)
 	{
 		// First see if an entry for this name already exists
-		for( FAudioComponentParam& P : InstanceParameters )
+		for (FAudioComponentParam& P : InstanceParameters)
 		{
-			if( P.ParamName == InName )
+			if (P.ParamName == InName)
 			{
 				P.IntParam = InInt;
 				return;
@@ -1343,8 +1408,8 @@ void FActiveSound::SetIntParameter( const FName InName, const int32 InInt )
 
 		// We didn't find one, so create a new one.
 		const int32 NewParamIndex = InstanceParameters.AddDefaulted();
-		InstanceParameters[ NewParamIndex ].ParamName = InName;
-		InstanceParameters[ NewParamIndex ].IntParam = InInt;
+		InstanceParameters[NewParamIndex].ParamName = InName;
+		InstanceParameters[NewParamIndex].IntParam = InInt;
 	}
 }
 
@@ -1353,7 +1418,7 @@ void FActiveSound::SetSoundParameter(const FAudioComponentParam& Param)
 	if (Param.ParamName != NAME_None)
 	{
 		// First see if an entry for this name already exists
-		for( FAudioComponentParam& P : InstanceParameters )
+		for (FAudioComponentParam& P : InstanceParameters)
 		{
 			if (P.ParamName == Param.ParamName)
 			{
@@ -1381,7 +1446,7 @@ void FActiveSound::CollectAttenuationShapesForVisualization(TMultiMap<EAttenuati
 	if (SoundCue)
 	{
 		TArray<USoundNodeAttenuation*> AttenuationNodes;
-		SoundCue->RecursiveFindAttenuation( SoundCue->FirstNode, AttenuationNodes );
+		SoundCue->RecursiveFindAttenuation(SoundCue->FirstNode, AttenuationNodes);
 		for (int32 NodeIndex = 0; NodeIndex < AttenuationNodes.Num(); ++NodeIndex)
 		{
 			const FSoundAttenuationSettings* AttenuationSettingsToApply = AttenuationNodes[NodeIndex]->GetAttenuationSettingsToApply();
@@ -1456,12 +1521,11 @@ float FActiveSound::GetAttenuationFrequency(const FSoundAttenuationSettings* Set
 	return FMath::Clamp<float>(OutputFrequency, MIN_FILTER_FREQUENCY, MAX_FILTER_FREQUENCY);
 }
 
-float FActiveSound::GetHighestPriority() const
-{ 
-	static constexpr float MaxPriority = TNumericLimits<float>::Max();
+bool FActiveSound::GetAlwaysPlay() const
+{
 	if (bAlwaysPlay)
 	{
-		return MaxPriority;
+		return true;
 	}
 
 	for (const TPair<UPTRINT, FWaveInstance*>& Pair : WaveInstances)
@@ -1472,12 +1536,26 @@ float FActiveSound::GetHighestPriority() const
 			check(SoundClassProperties);
 			if (SoundClassProperties->bAlwaysPlay)
 			{
-				return MaxPriority;
+				return true;
 			}
 		}
 	}
 
-	const float HighestPriority = Priority * FocusData.PriorityHighest * FocusData.PriorityScale;
+	return false;
+}
+
+float FActiveSound::GetHighestPriority(bool bIgnoreAlwaysPlay) const
+{ 
+	if (!bIgnoreAlwaysPlay)
+	{
+		if (GetAlwaysPlay())
+		{
+			static constexpr float AlwaysPlayPriority = TNumericLimits<float>::Max();
+			return AlwaysPlayPriority;
+		}
+	}
+
+	const float HighestPriority = FocusData.PriorityHighest * FocusData.PriorityScale;
 	return FMath::Clamp(HighestPriority, 0.0f, 100.0f);
 }
 
@@ -1634,6 +1712,14 @@ void FActiveSound::UpdateAttenuation(float DeltaTime, FSoundParseParameters& Par
 	// The old audio engine will scale this together when the wave instance is queried for GetActualVolume.
 	if (Settings->bAttenuate)
 	{
+		// Apply the sound-class-based distance scale
+		if (ParseParams.SoundClass)
+		{
+			FSoundClassDynamicProperties* DynamicSoundClassProperties = AudioDevice->GetSoundClassDynamicProperties(ParseParams.SoundClass);
+
+			FocusDataToApply.DistanceScale *= FMath::Max(DynamicSoundClassProperties->AttenuationScaleParam.GetValue(), 0.0f);
+		}
+
 		if (Settings->AttenuationShape == EAttenuationShape::Sphere)
 		{
 			// Update attenuation data in-case it hasn't been updated

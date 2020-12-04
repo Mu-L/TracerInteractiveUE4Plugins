@@ -16,12 +16,38 @@ const FString UNiagaraDataInterfaceTexture::TextureName(TEXT("Texture_"));
 const FString UNiagaraDataInterfaceTexture::SamplerName(TEXT("Sampler_"));
 const FString UNiagaraDataInterfaceTexture::DimensionsBaseName(TEXT("Dimensions_"));
 
+struct FNiagaraDataInterfaceProxyTexture : public FNiagaraDataInterfaceProxy
+{
+	FSamplerStateRHIRef SamplerStateRHI;
+	FTextureReferenceRHIRef TextureReferenceRHI;
+	FVector2D TexDims;
+
+	virtual void ConsumePerInstanceDataFromGameThread(void* PerInstanceData, const FNiagaraSystemInstanceID& Instance) override
+	{
+		checkNoEntry();
+	}
+
+	virtual int32 PerInstanceDataPassedToRenderThreadSize() const override
+	{
+		return 0;
+	}
+
+	virtual void PreStage(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceStageArgs& Context) override
+	{
+		if (TextureReferenceRHI.IsValid())
+		{
+			// Make sure the texture is readable, we don't know where it's coming from.
+			RHICmdList.Transition(FRHITransitionInfo(TextureReferenceRHI->GetReferencedTexture(), ERHIAccess::Unknown, ERHIAccess::SRVMask));
+		}
+	}
+};
+
 UNiagaraDataInterfaceTexture::UNiagaraDataInterfaceTexture(FObjectInitializer const& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, Texture(nullptr)
 {
 	Proxy.Reset(new FNiagaraDataInterfaceProxyTexture());
-	PushToRenderThread();
+	MarkRenderDataDirty();
 }
 
 void UNiagaraDataInterfaceTexture::PostInitProperties()
@@ -33,7 +59,7 @@ void UNiagaraDataInterfaceTexture::PostInitProperties()
 		FNiagaraTypeRegistry::Register(FNiagaraTypeDefinition(GetClass()), true, false, false);
 	}
 
-	PushToRenderThread();
+	MarkRenderDataDirty();
 }
 
 void UNiagaraDataInterfaceTexture::PostLoad()
@@ -51,7 +77,7 @@ void UNiagaraDataInterfaceTexture::PostLoad()
 #endif
 	// Not safe since the UTexture might not have yet PostLoad() called and so UpdateResource() called.
 	// This will affect whether the SamplerStateRHI will be available or not.
-	PushToRenderThread();
+	MarkRenderDataDirty();
 }
 
 #if WITH_EDITOR
@@ -59,7 +85,7 @@ void UNiagaraDataInterfaceTexture::PostLoad()
 void UNiagaraDataInterfaceTexture::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
-	PushToRenderThread();
+	MarkRenderDataDirty();
 }
 
 
@@ -85,7 +111,7 @@ bool UNiagaraDataInterfaceTexture::CopyToInternal(UNiagaraDataInterface* Destina
 	}
 	UNiagaraDataInterfaceTexture* DestinationTexture = CastChecked<UNiagaraDataInterfaceTexture>(Destination);
 	DestinationTexture->Texture = Texture;
-	DestinationTexture->PushToRenderThread();
+	DestinationTexture->MarkRenderDataDirty();
 
 	return true;
 }
@@ -148,16 +174,7 @@ void UNiagaraDataInterfaceTexture::GetFunctions(TArray<FNiagaraFunctionSignature
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec2Def(), TEXT("DDX")));
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec2Def(), TEXT("DDY")));
 		
-		Sig.SetDescription(LOCTEXT("TextureSamplePseudoVolumeTextureDesc", "Return a pseudovolume texture sample.\n"
-			"Useful for simulating 3D texturing with a 2D texture or as a texture flipbook with lerped transitions.\n"
-			"Treats 2d layout of frames as a 3d texture and performs bilinear filtering by blending with an offset Z frame.\n"
-			"Texture = Input Texture Object storing Volume Data\n"
-			"UVW = Input float3 for Position, 0 - 1\n"
-			"XYNumFrames = Input float for num frames in x, y directions\n"
-			"TotalNumFrames = Input float for num total frames\n"
-			"MipMode = Sampling mode : 0 = use miplevel, 1 = use UV computed gradients, 2 = Use gradients(default = 0)\n"
-			"MipLevel = MIP level to use in mipmode = 0 (default 0)\n"
-			"DDX, DDY = Texture gradients in mipmode = 2\n"));
+		Sig.SetDescription(LOCTEXT("TextureSamplePseudoVolumeTextureDesc", "Return a pseudovolume texture sample.\nUseful for simulating 3D texturing with a 2D texture or as a texture flipbook with lerped transitions.\nTreats 2d layout of frames as a 3d texture and performs bilinear filtering by blending with an offset Z frame.\nTexture = Input Texture Object storing Volume Data\nUVW = Input float3 for Position, 0 - 1\nXYNumFrames = Input float for num frames in x, y directions\nTotalNumFrames = Input float for num total frames\nMipMode = Sampling mode : 0 = use miplevel, 1 = use UV computed gradients, 2 = Use gradients(default = 0)\nMipLevel = MIP level to use in mipmode = 0 (default 0)\nDDX, DDY = Texture gradients in mipmode = 2\n"));
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec4Def(), TEXT("Value")));
 		//Sig.Owner = *GetName();
 
@@ -363,15 +380,7 @@ public:
 		TextureParam.Bind(ParameterMap, *TexName);
 		SamplerParam.Bind(ParameterMap, *SampleName);
 		
-		if (!TextureParam.IsBound())
-		{
-			UE_LOG(LogNiagara, Warning, TEXT("Binding failed for FNiagaraDataInterfaceParametersCS_Texture Texture %s. Was it optimized out?"), *TexName)
-		}
-
-		if (!SamplerParam.IsBound())
-		{
-			UE_LOG(LogNiagara, Warning, TEXT("Binding failed for FNiagaraDataInterfaceParametersCS_Texture Sampler %s. Was it optimized out?"), *SampleName)
-		}
+		
 
 		Dimensions.Bind(ParameterMap, *(UNiagaraDataInterfaceTexture::DimensionsBaseName + ParameterInfo.DataInterfaceHLSLSymbol));
 
@@ -384,22 +393,24 @@ public:
 		FRHIComputeShader* ComputeShaderRHI = Context.Shader.GetComputeShader();
 		FNiagaraDataInterfaceProxyTexture* TextureDI = static_cast<FNiagaraDataInterfaceProxyTexture*>(Context.DataInterface);
 
-		if (TextureDI && TextureDI->TextureRHI)
+		
+		if (TextureDI && TextureDI->TextureReferenceRHI.IsValid())
 		{
 			FRHISamplerState* SamplerStateRHI = TextureDI->SamplerStateRHI;
 			if (!SamplerStateRHI)
 			{
 				// Fallback required because PostLoad() order affects whether RHI resources 
-				// are initalized in UNiagaraDataInterfaceTexture::PushToRenderThread().
+				// are initalized in UNiagaraDataInterfaceTexture::PushToRenderThreadImpl().
 				SamplerStateRHI = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 			}
+
 			SetTextureParameter(
 				RHICmdList,
 				ComputeShaderRHI,
 				TextureParam,
 				SamplerParam,
 				SamplerStateRHI,
-				TextureDI->TextureRHI
+				TextureDI->TextureReferenceRHI->GetReferencedTexture()
 			);
 			SetShaderValue(RHICmdList, ComputeShaderRHI, Dimensions, TextureDI->TexDims);
 		}
@@ -428,7 +439,7 @@ IMPLEMENT_TYPE_LAYOUT(FNiagaraDataInterfaceParametersCS_Texture);
 
 IMPLEMENT_NIAGARA_DI_PARAMETER(UNiagaraDataInterfaceTexture, FNiagaraDataInterfaceParametersCS_Texture);
 
-void UNiagaraDataInterfaceTexture::PushToRenderThread()
+void UNiagaraDataInterfaceTexture::PushToRenderThreadImpl()
 {
 	FNiagaraDataInterfaceProxyTexture* RT_Proxy = GetProxyAs<FNiagaraDataInterfaceProxyTexture>();
 
@@ -442,20 +453,27 @@ void UNiagaraDataInterfaceTexture::PushToRenderThread()
 
 	ENQUEUE_RENDER_COMMAND(FPushDITextureToRT)
 	(
-		[RT_Proxy, RT_Resource=Texture ? Texture->Resource : nullptr, RT_TexDims](FRHICommandListImmediate& RHICmdList)
+		[RT_Proxy, RT_Texture=Texture, RT_TexDims](FRHICommandListImmediate& RHICmdList)
 		{
-			RT_Proxy->TextureRHI = RT_Resource ? RT_Resource->TextureRHI : nullptr;
-			RT_Proxy->SamplerStateRHI = RT_Resource ? RT_Resource->SamplerStateRHI : nullptr;
+			if (RT_Texture)
+			{
+				RT_Proxy->TextureReferenceRHI = RT_Texture->TextureReference.TextureReferenceRHI;
+				RT_Proxy->SamplerStateRHI = RT_Texture->Resource ? RT_Texture->Resource->SamplerStateRHI : nullptr;
+			}
+			else
+			{
+				RT_Proxy->TextureReferenceRHI = nullptr;
+				RT_Proxy->SamplerStateRHI = nullptr;
+			}
 			RT_Proxy->TexDims = RT_TexDims;
 		}
 	);
 }
 
-
 void UNiagaraDataInterfaceTexture::SetTexture(UTexture* InTexture)
 {
 	Texture = InTexture;
-	PushToRenderThread();
+	MarkRenderDataDirty();
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -60,7 +60,7 @@ public:
 	/**
 	 * Dynamically set the font info for this text block
 	 * 
-	 * @param InFontInfo THe new font info
+	 * @param InFontInfo The new font info
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Appearance")
 	void SetFont(FSlateFontInfo InFontInfo);
@@ -88,6 +88,14 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Appearance")
 	void SetAutoWrapText(bool InAutoTextWrap);
+
+	/**
+	 * Set the text transformation policy for this text block.
+	 *
+	 * @param InTransformPolicy the new text transformation policy.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Appearance")
+	void SetTextTransformPolicy(ETextTransformPolicy InTransformPolicy);
 
 	/**  */
 	UFUNCTION(BlueprintCallable, Category="Appearance")
@@ -145,6 +153,10 @@ public:
 	/** Whether the text should automatically wrap */
 	UPROPERTY(meta = (DeprecatedProperty, DeprecationMessage = "bAutoWrapText is deprecated. Please use AutoWrapText instead."))
 	bool bAutoWrapText_DEPRECATED;
+
+	/** The text transformation policy to apply to this text block */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Appearance, meta=(DisplayName="Transform Policy"))
+	ETextTransformPolicy TextTransformPolicy;
 
 	/** 
 	 * Gets the widget text

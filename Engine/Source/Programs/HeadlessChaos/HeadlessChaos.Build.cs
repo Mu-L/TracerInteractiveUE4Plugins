@@ -11,16 +11,20 @@ public class HeadlessChaos : ModuleRules
 		// For LaunchEngineLoop.cpp include
 		PrivateIncludePaths.Add("Runtime/Launch/Private");
 
+		SetupModulePhysicsSupport(Target);
+
 		PrivateDependencyModuleNames.AddRange(
 			new string[] {
                 "ApplicationCore",
 				"Core",
-                "Projects",
+				"CoreUObject",
+				"Projects",
                 "GoogleTest",
-				"Chaos",
-				"ChaosSolvers",
+				"GeometricObjects",
+				"ChaosVehiclesCore"
             }
         );
+
 
 		if (Target.Platform == UnrealTargetPlatform.Win32 || Target.Platform == UnrealTargetPlatform.Win64 || Target.Platform == UnrealTargetPlatform.XboxOne)
 		{
@@ -42,5 +46,7 @@ public class HeadlessChaos : ModuleRules
 		{
 			PublicDefinitions.Add("GTEST_OS_LINUX=1");
 		}
+
+		PrivateDefinitions.Add("CHAOS_INCLUDE_LEVEL_1=1");
 	}
 }

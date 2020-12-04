@@ -7,6 +7,7 @@
 #include "Containers/ArrayView.h"
 
 class UObject;
+class UPackage;
 class UStruct;
 class ULevel;
 class AActor;
@@ -19,6 +20,9 @@ struct FConcertObjectId;
 struct FConcertWorldNodeId;
 struct FConcertSessionVersionInfo;
 struct FConcertSerializedPropertyData;
+struct FConcertPackageInfo;
+
+enum class EConcertPackageUpdateType : uint8;
 
 namespace ConcertSyncClientUtil
 {
@@ -66,7 +70,7 @@ namespace ConcertSyncClientUtil
 
 	int32 GetObjectPathDepth(UObject* InObjToTest);
 
-	FGetObjectResult GetObject(const FConcertObjectId& InObjectId, const FName InNewName, const FName InNewOuterPath, const bool bAllowCreate);
+	FGetObjectResult GetObject(const FConcertObjectId& InObjectId, const FName InNewName, const FName InNewOuterPath, const FName InNewPackageName, const bool bAllowCreate);
 	
 	bool ImportPropertyData(const FConcertLocalIdentifierTable* InLocalIdentifierTable, const FConcertSyncWorldRemapper& InWorldRemapper, const FConcertSessionVersionInfo* InVersionInfo, UObject* InObj, const FName InPropertyName, const TArray<uint8>& InSerializedData);
 
@@ -89,4 +93,6 @@ namespace ConcertSyncClientUtil
 	void PurgePackages(TArrayView<const FName> InPackageNames);
 
 	UWorld* GetCurrentWorld();
+
+	void FillPackageInfo(UPackage* InPackage, UObject* InAsset, const EConcertPackageUpdateType InPackageUpdateType, FConcertPackageInfo& OutPackageInfo);
 }

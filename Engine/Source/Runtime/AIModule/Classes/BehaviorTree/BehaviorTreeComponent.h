@@ -9,6 +9,7 @@
 #include "GameplayTagContainer.h"
 #include "AITypes.h"
 #include "BrainComponent.h"
+#include "ProfilingDebugging/CsvProfiler.h"
 #include "BehaviorTreeComponent.generated.h"
 
 class FBehaviorTreeDebugger;
@@ -61,9 +62,16 @@ struct FBTPendingExecutionInfo
 
 	FBTPendingExecutionInfo() : NextTask(NULL), bOutOfNodes(false), bLocked(false) {}
 	bool IsSet() const { return (NextTask || bOutOfNodes) && !bLocked; }
+	bool IsLocked() const { return bLocked; }
 
 	void Lock() { bLocked = true; }
 	void Unlock() { bLocked = false; }
+};
+
+struct FBTPendingAuxNodesUnregisterInfo
+{
+	/** list of node index ranges pending aux nodes unregistration */
+	TArray<FBTNodeIndexRange> Ranges;
 };
 
 struct FBTTreeStartInfo
@@ -82,6 +90,10 @@ class AIMODULE_API UBehaviorTreeComponent : public UBrainComponent
 {
 	GENERATED_UCLASS_BODY()
 
+	// UActorComponent overrides
+	virtual void RegisterComponentTickFunctions(bool bRegister) override;
+	virtual void SetComponentTickEnabled(bool bEnabled) override;
+
 	// Begin UBrainComponent overrides
 	virtual void StartLogic() override;
 	virtual void RestartLogic() override;
@@ -99,6 +111,7 @@ public:
 	virtual bool IsRunning() const override;
 	virtual bool IsPaused() const override;
 	virtual void Cleanup() override;
+	virtual void HandleMessage(const FAIMessage& Message) override;
 	// End UBrainComponent overrides
 
 	// Begin UActorComponent overrides
@@ -125,6 +138,9 @@ public:
 	/** request execution change: helpers for task nodes */
 	void RequestExecution(EBTNodeResult::Type ContinueWithResult);
 
+	/** request unregistration of aux nodes in the specified branch */
+	void RequestUnregisterAuxNodesInBranch(const UBTCompositeNode* Node);
+
 	/** finish latent execution or abort */
 	void OnTaskFinished(const UBTTaskNode* TaskNode, EBTNodeResult::Type TaskResult);
 
@@ -149,11 +165,15 @@ public:
 	void UnregisterAuxNodesInRange(const FBTNodeIndex& FromIndex, const FBTNodeIndex& ToIndex);
 
 	/** unregister all aux nodes in branch of tree */
+	UE_DEPRECATED(4.26, "This function is deprecated. Please use RequestUnregisterAuxNodesInBranch instead.")
 	void UnregisterAuxNodesInBranch(const UBTCompositeNode* Node, bool bApplyImmediately = true);
 
 	/** BEGIN UActorComponent overrides */
 	virtual void TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction *ThisTickFunction) override;
 	/** END UActorComponent overrides */
+
+	/** Schedule when will be the next tick, 0.0f means next frame, FLT_MAX means never */
+	void ScheduleNextTick(float NextDeltaTime);
 
 	/** process execution flow */
 	void ProcessExecutionRequest();
@@ -226,6 +246,11 @@ public:
 	virtual void DescribeSelfToVisLog(struct FVisualLogEntry* Snapshot) const override;
 #endif
 
+#if CSV_PROFILER
+	/** Set a custom CSV tick stat name, must point to a static string */
+	void SetCSVTickStatName(const char* InCSVTickStatName) { CSVTickStatName = InCSVTickStatName; }
+#endif
+
 protected:
 	/** stack of behavior tree instances */
 	TArray<FBehaviorTreeInstance> InstanceStack;
@@ -245,6 +270,9 @@ protected:
 
 	/** result of ExecutionRequest, will be applied when current task finish aborting */
 	FBTPendingExecutionInfo PendingExecution;
+
+	/** list of all pending aux nodes unregistration requests */
+	FBTPendingAuxNodesUnregisterInfo PendingUnregisterAuxNodesRequests;
 
 	/** stored data for starting new tree, waits until previously running finishes aborting */
 	FBTTreeStartInfo TreeStartInfo;
@@ -352,6 +380,12 @@ protected:
 	/** apply pending tree initialization */
 	void ProcessPendingInitialize();
 
+	/**
+	 * apply pending unregister aux nodes requests
+	 * @return true if some request were processed, false otherwise
+	 */
+	bool ProcessPendingUnregister();
+
 	/** restore state of tree to state before search */
 	void RollbackSearchChanges();
 
@@ -397,6 +431,20 @@ protected:
 	/** data asset defining the tree */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = AI)
 	UBehaviorTree* DefaultBehaviorTreeAsset;
+
+	/** Used to tell tickmanager that we want interval ticking */
+	bool bTickedOnce = false;
+	/** Predicted next DeltaTime*/
+	float NextTickDeltaTime = 0.0f;
+	/** Accumulated DeltaTime if ticked more than predicted next delta time */
+	float AccumulatedTickDeltaTime = 0.0f;
+	/** GameTime of the last DeltaTime request, used for debugging to output warnings about ticking */
+	float LastRequestedDeltaTimeGameTime = 0;
+
+#if CSV_PROFILER
+	/** CSV tick stat name. Can be changed but must point to a static string */
+	const char* CSVTickStatName = "BehaviorTreeTick";
+#endif
 };
 
 //////////////////////////////////////////////////////////////////////////

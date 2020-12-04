@@ -160,8 +160,7 @@ const FPlatformUserId PLATFORMUSERID_NONE = INDEX_NONE;
  *		UE_DEPRECATED(4.xx, "Message")
  *		typedef FThing MyType;
  *
- *		UE_DEPRECATED(4.xx, "Message")
- *		using MyAlias = FThing;
+ *		using MyAlias UE_DEPRECATED(4.xx, "Message") = FThing;
  *
  *		UE_DEPRECATED(4.xx, "Message")
  *		int32 MyVariable;
@@ -170,11 +169,19 @@ const FPlatformUserId PLATFORMUSERID_NONE = INDEX_NONE;
  *		{
  *		}
  *
- *		struct UE_DEPRECATED(4.xx, "Message") MODULE_API FMyStruct
+ *		Unfortunately, clang will complain that [the] "declaration of [an] anonymous class must
+ *		be a definition" for API types.  To work around this, first forward declare the type as
+ *		deprecated, then declare the type with the visibility macro.  Note that macros like
+ *		USTRUCT must immediately precede the the type declaration, not the forward declaration.
+ *
+ *		struct UE_DEPRECATED(4.xx, "Message") FMyStruct;
+ *		USTRUCT()
+ *		struct MODULE_API FMyStruct
  *		{
  *		};
  *
- *		class UE_DEPRECATED(4.xx, "Message") MODULE_API FMyClass
+ *		class UE_DEPRECATED(4.xx, "Message") FMyClass;
+ *		class MODULE_API FMyClass
  *		{
  *		};
  *

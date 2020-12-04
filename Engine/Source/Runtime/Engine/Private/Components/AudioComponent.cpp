@@ -14,6 +14,8 @@
 #include "Misc/App.h"
 #include "Kismet/GameplayStatics.h"
 
+
+
 DECLARE_CYCLE_STAT(TEXT("AudioComponent Play"), STAT_AudioComp_Play, STATGROUP_Audio);
 
 static float BakedAnalysisTimeShiftCVar = 0.0f;
@@ -111,7 +113,7 @@ void UAudioComponent::BeginDestroy()
 	AudioIDToComponentMap.Remove(AudioComponentID);
 }
 
-FString UAudioComponent::GetDetailedInfoInternal( void ) const
+FString UAudioComponent::GetDetailedInfoInternal() const
 {
 	FString Result;
 
@@ -315,6 +317,19 @@ void UAudioComponent::OnUpdateTransform(EUpdateTransformFlags UpdateTransformFla
 	}
 };
 
+void UAudioComponent::BroadcastPlayState()
+{
+	if (OnAudioPlayStateChanged.IsBound())
+	{
+		OnAudioPlayStateChanged.Broadcast(GetPlayState());
+	}
+
+	if (OnAudioPlayStateChangedNative.IsBound())
+	{
+		OnAudioPlayStateChangedNative.Broadcast(this, GetPlayState());
+	}
+}
+
 FBoxSphereBounds UAudioComponent::CalcBounds(const FTransform& LocalToWorld) const
 {
 	const USceneComponent* UseAutoParent = (bAutoManageAttachment && GetAttachParent() == nullptr) ? AutoAttachParent.Get() : nullptr;
@@ -371,10 +386,48 @@ bool UAudioComponent::IsInAudibleRange(float* OutMaxDistance) const
 
 void UAudioComponent::Play(float StartTime)
 {
-	PlayInternal(StartTime);
+	PlayInternalRequestData Data;
+	Data.StartTime = StartTime;
+	PlayInternal(Data);
 }
 
-void UAudioComponent::PlayInternal(const float StartTime, const float FadeInDuration, const float FadeVolumeLevel, const EAudioFaderCurve FadeCurve)
+void UAudioComponent::PlayQuantized(
+	  const UObject* WorldContextObject
+	, UPARAM(ref) UQuartzClockHandle*& InClockHandle
+	, UPARAM(ref) FQuartzQuantizationBoundary& InQuantizationBoundary
+	, const FOnQuartzCommandEventBP& InDelegate
+	, float InStartTime
+	, float InFadeInDuration
+	, float InFadeVolumeLevel
+	, EAudioFaderCurve InFadeCurve)
+{
+	PlayInternalRequestData Data;
+
+	Data.StartTime = InStartTime;
+	Data.FadeInDuration = InFadeInDuration;
+	Data.FadeVolumeLevel = InFadeVolumeLevel;
+	Data.FadeCurve = InFadeCurve;
+
+	if (InClockHandle != nullptr)
+	{
+		Data.QuantizedRequestData = InClockHandle->GetQuartzSubsystem()->CreateDataDataForSchedulePlaySound(InClockHandle, InDelegate, InQuantizationBoundary);
+	}
+
+	// validate clock existence 
+	if (!InClockHandle)
+	{
+		UE_LOG(LogAudio, Warning, TEXT("Attempting to play Quantized Sound without supplying a Clock Handle"));	
+	}
+	else if (!InClockHandle->DoesClockExist(WorldContextObject))
+	{
+		UE_LOG(LogAudio, Warning, TEXT("Clock: '%s' Does not exist! Cannot play quantized sound: %s"), *Data.QuantizedRequestData.ClockName.ToString(), *this->Sound->GetName());
+		Data.QuantizedRequestData = {};
+	}
+
+	PlayInternal(Data);
+}
+
+void UAudioComponent::PlayInternal(const PlayInternalRequestData& InPlayRequestData)
 {
 	SCOPE_CYCLE_COUNTER(STAT_AudioComp_Play);
 
@@ -408,7 +461,7 @@ void UAudioComponent::PlayInternal(const float StartTime, const float FadeInDura
 			{
 				TimeAudioComponentPlayed = 0.0f;
 			}
-			FadeInTimeDuration = FadeInDuration;
+			FadeInTimeDuration = InPlayRequestData.FadeInDuration;
 
 			// Auto attach if requested
 			const bool bWasAutoAttached = bDidAutoAttach;
@@ -472,7 +525,7 @@ void UAudioComponent::PlayInternal(const float StartTime, const float FadeInDura
 
 			NewActiveSound.bEnableLowPassFilter = bEnableLowPassFilter;
 			NewActiveSound.LowPassFilterFrequency = LowPassFilterFrequency;
-			NewActiveSound.RequestedStartTime = FMath::Max(0.f, StartTime);
+			NewActiveSound.RequestedStartTime = FMath::Max(0.f, InPlayRequestData.StartTime);
 
 			if (bOverrideSubtitlePriority)
 			{
@@ -516,6 +569,8 @@ void UAudioComponent::PlayInternal(const float StartTime, const float FadeInDura
 			NewActiveSound.bUpdateSingleEnvelopeValue = OnAudioSingleEnvelopeValue.IsBound() || OnAudioSingleEnvelopeValueNative.IsBound();
 			NewActiveSound.bUpdateMultiEnvelopeValue = OnAudioMultiEnvelopeValue.IsBound() || OnAudioMultiEnvelopeValueNative.IsBound();
 
+			NewActiveSound.ModulationRouting = ModulationRouting;
+
 			// Setup audio component cooked analysis data playback data set
 			if (AudioDevice->IsBakedAnalaysisQueryingEnabled())
 			{
@@ -530,12 +585,16 @@ void UAudioComponent::PlayInternal(const float StartTime, const float FadeInDura
 				}
 			}
 
+
+			// Pass quantization data to the active sound
+			NewActiveSound.QuantizedRequestData = InPlayRequestData.QuantizedRequestData;
+
 			NewActiveSound.MaxDistance = MaxDistance;
 			NewActiveSound.InstanceParameters = InstanceParameters;
 
 			Audio::FVolumeFader& Fader = NewActiveSound.ComponentVolumeFader;
 			Fader.SetVolume(0.0f); // Init to 0.0f to fade as default is 1.0f
-			Fader.StartFade(FadeVolumeLevel, FadeInDuration, static_cast<Audio::EFaderCurve>(FadeCurve));
+			Fader.StartFade(InPlayRequestData.FadeVolumeLevel, InPlayRequestData.FadeInDuration, static_cast<Audio::EFaderCurve>(InPlayRequestData.FadeCurve));
 
 			// Bump ActiveCount... this is used to determine if an audio component is still active after a sound reports back as completed
 			++ActiveCount;
@@ -544,6 +603,8 @@ void UAudioComponent::PlayInternal(const float StartTime, const float FadeInDura
 			// In editor, the audio thread is not run separate from the game thread, and can result in calling PlaybackComplete prior
 			// to bIsActive being set. Therefore, we assign to the current state of ActiveCount as opposed to just setting to true.
 			SetActiveFlag(ActiveCount > 0);
+
+			BroadcastPlayState();
 		}
 	}
 }
@@ -573,7 +634,13 @@ FAudioDevice* UAudioComponent::GetAudioDevice() const
 
 void UAudioComponent::FadeIn(float FadeInDuration, float FadeVolumeLevel, float StartTime, const EAudioFaderCurve FadeCurve)
 {
-	PlayInternal(StartTime, FadeInDuration, FadeVolumeLevel, FadeCurve);
+	PlayInternalRequestData Data;
+	Data.StartTime = StartTime;
+	Data.FadeInDuration = FadeInDuration;
+	Data.FadeVolumeLevel = FadeVolumeLevel;
+	Data.FadeCurve = FadeCurve;
+
+	PlayInternal(Data);
 }
 
 void UAudioComponent::FadeOut(float FadeOutDuration, float FadeVolumeLevel, const EAudioFaderCurve FadeCurve)
@@ -588,7 +655,7 @@ void UAudioComponent::AdjustVolume(float AdjustVolumeDuration, float AdjustVolum
 	AdjustVolumeInternal(AdjustVolumeDuration, AdjustVolumeLevel, bIsFadeOut, FadeCurve);
 }
 
-void UAudioComponent::AdjustVolumeInternal(float AdjustVolumeDuration, float AdjustVolumeLevel, bool bIsFadeOut, const EAudioFaderCurve FadeCurve)
+void UAudioComponent::AdjustVolumeInternal(float AdjustVolumeDuration, float AdjustVolumeLevel, bool bInIsFadeOut, const EAudioFaderCurve FadeCurve)
 {
 	if (!IsActive())
 	{
@@ -609,11 +676,17 @@ void UAudioComponent::AdjustVolumeInternal(float AdjustVolumeDuration, float Adj
 		return;
 	}
 
-	bIsFadingOut = bIsFadeOut || FMath::IsNearlyZero(AdjustVolumeLevel);
+	const bool bWasFadingOut = bIsFadingOut;
+	bIsFadingOut = bInIsFadeOut || FMath::IsNearlyZero(AdjustVolumeLevel);
+
+	if (bWasFadingOut != bIsFadingOut)
+	{
+		BroadcastPlayState();
+	}
 
 	const uint64 InAudioComponentID = AudioComponentID;
 	DECLARE_CYCLE_STAT(TEXT("FAudioThreadTask.AdjustVolume"), STAT_AudioAdjustVolume, STATGROUP_AudioThreadCommands);
-	FAudioThread::RunCommandOnAudioThread([AudioDevice, InAudioComponentID, AdjustVolumeDuration, AdjustVolumeLevel, bIsFadeOut, FadeCurve]()
+	FAudioThread::RunCommandOnAudioThread([AudioDevice, InAudioComponentID, AdjustVolumeDuration, AdjustVolumeLevel, bInIsFadeOut, FadeCurve]()
 	{
 		FActiveSound* ActiveSound = AudioDevice->FindActiveSound(InAudioComponentID);
 		if (!ActiveSound)
@@ -625,7 +698,7 @@ void UAudioComponent::AdjustVolumeInternal(float AdjustVolumeDuration, float Adj
 		const float InitialTargetVolume = Fader.GetTargetVolume();
 
 		// Ignore fade out request if requested volume is higher than current target.
-		if (bIsFadeOut && AdjustVolumeLevel >= InitialTargetVolume)
+		if (bInIsFadeOut && AdjustVolumeLevel >= InitialTargetVolume)
 		{
 			return;
 		}
@@ -647,10 +720,10 @@ void UAudioComponent::AdjustVolumeInternal(float AdjustVolumeDuration, float Adj
 		}
 		else
 		{
-			ActiveSound->FadeOut = bIsFadeOut || ToZeroVolume ? FActiveSound::EFadeOut::User : FActiveSound::EFadeOut::None;
+			ActiveSound->FadeOut = bInIsFadeOut || ToZeroVolume ? FActiveSound::EFadeOut::User : FActiveSound::EFadeOut::None;
 		}
 
-		if (bIsFadeOut || ToZeroVolume)
+		if (bInIsFadeOut || ToZeroVolume)
 		{
 			// If negative, active indefinitely, so always make sure set to minimum positive value for active fade.
 			const float OldActiveDuration = Fader.GetActiveDuration();
@@ -685,6 +758,8 @@ void UAudioComponent::Stop()
 		Sound ? *Sound->GetName() : TEXT("nullptr"));
 
 	AudioDevice->StopActiveSound(AudioComponentID);
+
+	BroadcastPlayState();
 }
 
 void UAudioComponent::StopDelayed(float DelayTime)
@@ -771,6 +846,8 @@ void UAudioComponent::SetPaused(bool bPause)
 				}, GET_STATID(STAT_AudioPauseActiveSound));
 			}
 		}
+
+		BroadcastPlayState();
 	}
 }
 
@@ -822,11 +899,18 @@ void UAudioComponent::PlaybackCompleted(bool bFailedToStart)
 	{
 		CancelAutoAttachment(true, MyWorld);
 	}
+
+	BroadcastPlayState();
 }
 
 bool UAudioComponent::IsPlaying() const
 {
 	return IsActive();
+}
+
+bool UAudioComponent::IsVirtualized() const
+{
+	return bIsVirtualized;
 }
 
 EAudioComponentPlayState UAudioComponent::GetPlayState() const
@@ -1113,7 +1197,6 @@ void UAudioComponent::SetBoolParameter( const FName InName, const bool InBool )
 	}
 }
 
-
 void UAudioComponent::SetIntParameter( const FName InName, const int32 InInt )
 {
 	if (InName != NAME_None)
@@ -1199,6 +1282,33 @@ void UAudioComponent::SetSoundParameter(const FAudioComponentParam& Param)
 			}
 		}
 	}
+}
+
+void UAudioComponent::SetFadeInComplete()
+{
+	EAudioComponentPlayState PlayState = GetPlayState();
+	if (PlayState != EAudioComponentPlayState::FadingIn)
+	{
+		BroadcastPlayState();
+	}
+}
+
+void UAudioComponent::SetIsVirtualized(bool bInIsVirtualized)
+{
+	if (bIsVirtualized != bInIsVirtualized)
+	{
+		if (OnAudioVirtualizationChanged.IsBound())
+		{
+			OnAudioVirtualizationChanged.Broadcast(bInIsVirtualized);
+		}
+
+		if (OnAudioVirtualizationChangedNative.IsBound())
+		{
+			OnAudioVirtualizationChangedNative.Broadcast(this, bInIsVirtualized);
+		}
+	}
+
+	bIsVirtualized = bInIsVirtualized ? 1 : 0;
 }
 
 void UAudioComponent::SetVolumeMultiplier(const float NewVolumeMultiplier)
@@ -1317,46 +1427,45 @@ void UAudioComponent::SetSubmixSend(USoundSubmixBase* Submix, float SendLevel)
 	}
 }
 
-// BP function to set source bus sends (pre effect)
-void UAudioComponent::SetSourceBusSendPreEffect(USoundSourceBus* SoundSourceBus, float SourceBusSendLevel)
+void UAudioComponent::SetBusSendffectInternal(USoundSourceBus* InSourceBus, UAudioBus* InAudioBus, float SendLevel, EBusSendType InBusSendType)
 {
 	if (FAudioDevice* AudioDevice = GetAudioDevice())
 	{
 		const uint64 MyAudioComponentID = AudioComponentID;
-		FAudioThread::RunCommandOnAudioThread([AudioDevice, MyAudioComponentID, SoundSourceBus, SourceBusSendLevel]()
+		FAudioThread::RunCommandOnAudioThread([AudioDevice, MyAudioComponentID, InSourceBus, InAudioBus, SendLevel, InBusSendType]()
 		{
 			FActiveSound* ActiveSound = AudioDevice->FindActiveSound(MyAudioComponentID);
 			if (ActiveSound)
 			{
 				FSoundSourceBusSendInfo SourceBusSendInfo;
-				SourceBusSendInfo.SoundSourceBus = SoundSourceBus;
-				SourceBusSendInfo.SendLevel = SourceBusSendLevel;
+				SourceBusSendInfo.SoundSourceBus = InSourceBus;
+				SourceBusSendInfo.AudioBus = InAudioBus;
+				SourceBusSendInfo.SendLevel = SendLevel;
 
-				ActiveSound->SetSourceBusSend(EBusSendType::PreEffect, SourceBusSendInfo);
+				ActiveSound->SetSourceBusSend(InBusSendType, SourceBusSendInfo);
 			}
 		});
 	}
 }
 
-// BP function to set source bus sends (post effect)
+void UAudioComponent::SetSourceBusSendPreEffect(USoundSourceBus* SoundSourceBus, float SourceBusSendLevel)
+{
+	SetBusSendffectInternal(SoundSourceBus, nullptr, SourceBusSendLevel, EBusSendType::PreEffect);
+}
+
 void UAudioComponent::SetSourceBusSendPostEffect(USoundSourceBus * SoundSourceBus, float SourceBusSendLevel)
 {
-	if (FAudioDevice* AudioDevice = GetAudioDevice())
-	{
-		const uint64 MyAudioComponentID = AudioComponentID;
-		FAudioThread::RunCommandOnAudioThread([AudioDevice, MyAudioComponentID, SoundSourceBus, SourceBusSendLevel]()
-		{
-			FActiveSound* ActiveSound = AudioDevice->FindActiveSound(MyAudioComponentID);
-			if (ActiveSound)
-			{
-				FSoundSourceBusSendInfo SourceBusSendInfo;
-				SourceBusSendInfo.SoundSourceBus = SoundSourceBus;
-				SourceBusSendInfo.SendLevel = SourceBusSendLevel;
+	SetBusSendffectInternal(SoundSourceBus, nullptr, SourceBusSendLevel, EBusSendType::PostEffect);
+}
 
-				ActiveSound->SetSourceBusSend(EBusSendType::PostEffect, SourceBusSendInfo);
-			}
-		});
-	}
+void UAudioComponent::SetAudioBusSendPreEffect(UAudioBus* AudioBus, float AudioBusSendLevel)
+{
+	SetBusSendffectInternal(nullptr, AudioBus, AudioBusSendLevel, EBusSendType::PreEffect);
+}
+
+void UAudioComponent::SetAudioBusSendPostEffect(UAudioBus* AudioBus, float AudioBusSendLevel)
+{
+	SetBusSendffectInternal(nullptr, AudioBus, AudioBusSendLevel, EBusSendType::PostEffect);
 }
 
 void UAudioComponent::SetLowPassFilterEnabled(bool InLowPassFilterEnabled)

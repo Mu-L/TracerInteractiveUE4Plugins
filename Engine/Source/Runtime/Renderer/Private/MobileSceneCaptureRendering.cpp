@@ -33,8 +33,18 @@ MobileSceneCaptureRendering.cpp - Mobile specific scene capture code.
 * Shader set for the copy of scene color to capture target, alpha channel will contain opacity information. (Determined from depth buffer content)
 */
 
-// Use same defines as deferred for capture source defines,
-extern const TCHAR* GShaderSourceModeDefineName[];
+static const TCHAR* GShaderSourceModeDefineName[] =
+{
+	TEXT("SOURCE_MODE_SCENE_COLOR_AND_OPACITY"),
+	TEXT("SOURCE_MODE_SCENE_COLOR_NO_ALPHA"),
+	nullptr,
+	TEXT("SOURCE_MODE_SCENE_COLOR_SCENE_DEPTH"),
+	TEXT("SOURCE_MODE_SCENE_DEPTH"),
+	TEXT("SOURCE_MODE_DEVICE_DEPTH"),
+	TEXT("SOURCE_MODE_NORMAL"),
+	TEXT("SOURCE_MODE_BASE_COLOR"),
+	nullptr
+};
 
 template<ESceneCaptureSource CaptureSource>
 class FMobileSceneCaptureCopyPS : public FGlobalShader
@@ -49,7 +59,6 @@ public:
 	{
 		InTexture.Bind(Initializer.ParameterMap, TEXT("InTexture"), SPF_Mandatory);
 		InTextureSampler.Bind(Initializer.ParameterMap, TEXT("InTextureSampler"));
-		SceneTextureParameters.Bind(Initializer);
 	}
 	FMobileSceneCaptureCopyPS() {}
 
@@ -67,13 +76,11 @@ public:
 	{
 		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, RHICmdList.GetBoundPixelShader(), View.ViewUniformBuffer);
 		SetTextureParameter(RHICmdList, RHICmdList.GetBoundPixelShader(), InTexture, InTextureSampler, SamplerStateRHI, TextureRHI);
-		SceneTextureParameters.Set(RHICmdList, RHICmdList.GetBoundPixelShader(), View.FeatureLevel, ESceneTextureSetupMode::All);
 	}
 
 private:
 	LAYOUT_FIELD(FShaderResourceParameter, InTexture)
 	LAYOUT_FIELD(FShaderResourceParameter, InTextureSampler)
-	LAYOUT_FIELD(FSceneTextureShaderParameters, SceneTextureParameters)
 };
 
 /**
@@ -212,6 +219,7 @@ static void CopyCaptureToTarget(
 	FIntPoint SourceTexSize = SourceTextureRHI->GetSizeXY();
 	
 	{
+		RHICmdList.Transition(FRHITransitionInfo(Target->GetRenderTargetTexture(), ERHIAccess::Unknown,ERHIAccess::RTV));
 		FRHIRenderPassInfo RPInfo(Target->GetRenderTargetTexture(), MakeRenderTargetActions(RTLoadAction, ERenderTargetStoreAction::EStore));
 		RHICmdList.BeginRenderPass(RPInfo, TEXT("CaptureToTarget"));
 		RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
@@ -339,7 +347,7 @@ void UpdateSceneCaptureContentMobile_RenderThread(
 		FViewInfo& View = SceneRenderer->Views[0];
 
 		const bool bIsMobileHDR = IsMobileHDR();
-		const bool bRHINeedsFlip = RHINeedsToSwitchVerticalAxis(GMaxRHIShaderPlatform) && bDisableFlipCopyGLES;
+		const bool bRHINeedsFlip = RHINeedsToSwitchVerticalAxis(GMaxRHIShaderPlatform) && !bDisableFlipCopyGLES;
 		// note that GLES code will flip the image when:
 		//	bIsMobileHDR && SceneCaptureSource == SCS_FinalColorLDR (flip performed during post processing)
 		//	!bIsMobileHDR (rendering is flipped by vertex shader)
@@ -432,15 +440,30 @@ void UpdateSceneCaptureContentMobile_RenderThread(
 		{
 			// Copy the captured scene into the destination texture
 			SCOPED_DRAW_EVENT(RHICmdList, CaptureSceneColor);
-			CopyCaptureToTarget(RHICmdList, Target, TargetSize, View, ViewRect, FSceneRenderTargets::Get(RHICmdList).GetSceneColorTexture()->GetTexture2D(), bNeedsFlippedCopy, SceneRenderer);
+			// If multiview is enabled, the SceneColorTexture will be an array texture.
+			if (View.bIsMobileMultiViewEnabled)
+			{
+				CopyCaptureToTarget(RHICmdList, Target, TargetSize, View, ViewRect, FSceneRenderTargets::Get(RHICmdList).GetSceneColorTexture()->GetTexture2DArray(), bNeedsFlippedCopy, SceneRenderer);
+			}
+			else
+			{
+				CopyCaptureToTarget(RHICmdList, Target, TargetSize, View, ViewRect, FSceneRenderTargets::Get(RHICmdList).GetSceneColorTexture()->GetTexture2D(), bNeedsFlippedCopy, SceneRenderer);
+			}
 		}
 
-		if (bGenerateMips)
+		FRDGBuilder GraphBuilder(RHICmdList);
 		{
-			FGenerateMips::Execute(RHICmdList, RenderTarget->GetRenderTargetTexture(), GenerateMipsParams);
-		}
+			FRDGTextureRef MipTexture = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(RenderTarget->GetRenderTargetTexture(), TEXT("MipGenerationInput")));
+			FRDGTextureRef OutputTexture = GraphBuilder.RegisterExternalTexture(CreateRenderTarget(RenderTargetTexture->TextureRHI, TEXT("MipGenerationOutput")));
 
-		RHICmdList.CopyToResolveTarget(RenderTarget->GetRenderTargetTexture(), RenderTargetTexture->TextureRHI, ResolveParams);
+			if (bGenerateMips)
+			{
+				FGenerateMips::Execute(GraphBuilder, MipTexture, GenerateMipsParams);
+			}
+
+			AddCopyToResolveTargetPass(GraphBuilder, MipTexture, OutputTexture, ResolveParams);
+		}
+		GraphBuilder.Execute();
 	}
 	FSceneRenderer::WaitForTasksClearSnapshotsAndDeleteSceneRenderer(RHICmdList, SceneRenderer);
 }

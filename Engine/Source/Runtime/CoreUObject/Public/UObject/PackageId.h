@@ -9,33 +9,35 @@ class FStructuredArchiveSlot;
 
 class FPackageId
 {
-	static constexpr uint32 InvalidId = ~uint32(0u);
-	uint32 Id = InvalidId;
+	static constexpr uint64 InvalidId = 0;
+	uint64 Id = InvalidId;
 
-	inline explicit FPackageId(int32 InId): Id(InId) {}
+	inline explicit FPackageId(uint64 InId): Id(InId) {}
 
 public:
 	FPackageId() = default;
 
-	inline static FPackageId FromIndex(uint32 Index)
-	{
-		return FPackageId(Index);
-	}
+	COREUOBJECT_API static FPackageId FromName(const FName& Name);
 
 	inline bool IsValid() const
 	{
 		return Id != InvalidId;
 	}
 
-	inline uint32 ToIndex() const
+	inline uint64 Value() const
 	{
 		check(Id != InvalidId);
 		return Id;
 	}
 
-	inline uint32 ToIndexForDebugging() const
+	inline uint64 ValueForDebugging() const
 	{
 		return Id;
+	}
+
+	inline bool operator<(FPackageId Other) const
+	{
+		return Id < Other.Id;
 	}
 
 	inline bool operator==(FPackageId Other) const
@@ -45,7 +47,7 @@ public:
 
 	inline friend uint32 GetTypeHash(const FPackageId& In)
 	{
-		return In.Id;
+		return uint32(In.Id);
 	}
 
 	COREUOBJECT_API friend FArchive& operator<<(FArchive& Ar, FPackageId& Value);

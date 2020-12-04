@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Delegates/IDelegateInstance.h"
 #include "UObject/ObjectMacros.h"
 #include "InputCoreTypes.h"
 #include "Engine/EngineBaseTypes.h"
@@ -109,6 +110,9 @@ protected:
 	/** Strong handle to the audio device used by this viewport. */
 	FAudioDeviceHandle AudioDevice;
 
+	/** Handle to delegate in case audio device is destroyed. */
+	FDelegateHandle AudioDeviceDestroyedHandle;
+
 public:
 
 	/** see enum EViewModeIndex */
@@ -150,7 +154,6 @@ public:
 	//~ Begin UObject Interface
 	virtual void PostInitProperties() override;
 	virtual void BeginDestroy() override;
-	virtual bool IsDestructionThreadSafe() const override { return false; }
 	//~ End UObject Interface
 
 	//~ Begin FViewportClient Interface.
@@ -222,6 +225,7 @@ public:
 	bool HandleDisplayAllRotationCommand( const TCHAR* Cmd, FOutputDevice& Ar );
 	bool HandleDisplayClearCommand( const TCHAR* Cmd, FOutputDevice& Ar );
 	bool HandleGetAllLocationCommand( const TCHAR* Cmd, FOutputDevice& Ar );
+	bool HandleGetAllRotationCommand( const TCHAR* Cmd, FOutputDevice& Ar );
 	bool HandleTextureDefragCommand( const TCHAR* Cmd, FOutputDevice& Ar );
 	bool HandleToggleMIPFadeCommand( const TCHAR* Cmd, FOutputDevice& Ar );
 	bool HandlePauseRenderClockCommand( const TCHAR* Cmd, FOutputDevice& Ar );
@@ -611,19 +615,15 @@ public:
 	/** FViewport interface */
 	virtual bool ShouldDPIScaleSceneCanvas() const override { return false; }
 
-#if WITH_EDITOR
-	void SetPlayInEditorUseMouseForTouch(bool bUseMouseForTouch);
-#endif
+	bool GetUseMouseForTouch() const;
 
 protected:
-
-	bool GetUseMouseForTouch() const;
 	void SetCurrentBufferVisualizationMode(FName NewBufferVisualizationMode) { CurrentBufferVisualizationMode = NewBufferVisualizationMode; }
 	FName GetCurrentBufferVisualizationMode() const { return CurrentBufferVisualizationMode; }
 	bool HasAudioFocus() const { return bHasAudioFocus; }
 
 	/** Updates CSVProfiler camera stats */
-	void UpdateCsvCameraStats(const FSceneView* View);
+	void UpdateCsvCameraStats(const TMap<ULocalPlayer*, FSceneView*>& PlayerViewMap);
 
 protected:
 	/** FCommonViewportClient interface */
@@ -707,20 +707,17 @@ public:
 	}
 
 	/**
-	 * Set the mouse capture behavior when the viewport is clicked
+	 * Set the mouse capture behavior for the viewport.
 	 */
-	void SetCaptureMouseOnClick(EMouseCaptureMode Mode)
-	{
-		MouseCaptureMode = Mode;
-	}
+	void SetMouseCaptureMode(EMouseCaptureMode Mode);
+
+	UE_DEPRECATED(4.26, "Please call UGameViewportClient::SetMouseCaptureMode(EMouseCaptureMode) instead.")
+	void SetCaptureMouseOnClick(EMouseCaptureMode Mode) { SetMouseCaptureMode(Mode); }
 
 	/**
 	 * Gets the mouse capture behavior when the viewport is clicked
 	 */
-	virtual EMouseCaptureMode CaptureMouseOnClick() override
-	{
-		return MouseCaptureMode;
-	}
+	virtual EMouseCaptureMode GetMouseCaptureMode() const override;
 
 	/**
 	 * Gets whether or not the viewport captures the Mouse on launch of the application
@@ -759,23 +756,17 @@ public:
 	/**
 	* Sets the current mouse cursor lock mode when the viewport is clicked
 	*/
-	void SetMouseLockMode(EMouseLockMode InMouseLockMode)
-	{
-		MouseLockMode = InMouseLockMode;
-	}
+	void SetMouseLockMode(EMouseLockMode InMouseLockMode);
 
 	/**
 	 * Sets whether or not the cursor is hidden when the viewport captures the mouse
 	 */
-	void SetHideCursorDuringCapture(bool InHideCursorDuringCapture)
-	{
-		bHideCursorDuringCapture = InHideCursorDuringCapture;
-	}
+	void SetHideCursorDuringCapture(bool InHideCursorDuringCapture);
 
 	/**
 	 * Gets whether or not the cursor is hidden when the viewport captures the mouse
 	 */
-	virtual bool HideCursorDuringCapture() override
+	virtual bool HideCursorDuringCapture() const override
 	{
 		return bHideCursorDuringCapture;
 	}
@@ -799,6 +790,11 @@ public:
 		bUseSoftwareCursorWidgets = bInUseSoftwareCursorWidgets;
 	}
 
+	/**
+	* Get whether or not the viewport is currently using software cursor
+	*/
+	bool GetIsUsingSoftwareCursorWidgets() { return bUseSoftwareCursorWidgets; }
+
 #if WITH_EDITOR
 	/** Accessor for delegate called when a game viewport received input key */
 	FOnGameViewportInputKey& OnGameViewportInputKey()
@@ -815,11 +811,19 @@ public:
 
 	void SetVirtualCursorWidget(EMouseCursor::Type Cursor, class UUserWidget* Widget);
 
+	/** Add a cursor to the set based on the enum and a slate widget */
+	void AddSoftwareCursorFromSlateWidget(EMouseCursor::Type InCursorType, TSharedPtr<SWidget> CursorWidgetPtr);
+
 	/** Adds a cursor to the set based on the enum and the class reference to it. */
 	void AddSoftwareCursor(EMouseCursor::Type Cursor, const FSoftClassPath& CursorClass);
 
+	/** Get the slate widget of the current software cursor */
+	TSharedPtr<SWidget> GetSoftwareCursorWidget(EMouseCursor::Type Cursor) const;
+
 	/** Does the viewport client have a software cursor set up for the given enum? */
 	bool HasSoftwareCursor(EMouseCursor::Type Cursor) const;
+
+	void EnableCsvPlayerStats(int32 LocalPlayerCount);
 
 private:
 	/** Resets the platform type shape to nullptr, to restore it to the OS default. */
@@ -898,6 +902,13 @@ private:
 	* @param bSpecialProperty	whether PropertyName is a "special" value not directly mapping to a real property (e.g. state name)
 	*/
 	void AddDebugDisplayProperty(class UObject* Obj, TSubclassOf<class UObject> WithinClass, const FName& PropertyName, bool bSpecialProperty = false);
+
+protected:
+	/** Handle to the audio device created for this viewport. Each viewport (for multiple PIE) will have its own audio device. */
+	uint32 AudioDeviceHandle = INDEX_NONE;
+
+	/** Whether or not this audio device is in audio-focus */
+	bool bHasAudioFocus = false;
 
 private:
 	/** Slate window associated with this viewport client.  The same window may host more than one viewport client. */
@@ -1010,9 +1021,6 @@ private:
 
 	/** Mouse cursor locking behavior when the viewport is clicked */
 	EMouseLockMode MouseLockMode;
-
-	/** Whether or not this audio device is in audio-focus */
-	bool bHasAudioFocus;
 
 	/** Is the mouse currently over the viewport client */
 	bool bIsMouseOverClient;

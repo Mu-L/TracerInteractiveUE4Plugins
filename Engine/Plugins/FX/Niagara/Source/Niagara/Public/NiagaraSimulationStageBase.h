@@ -5,6 +5,7 @@
 #include "NiagaraMergeable.h"
 #include "NiagaraCommon.h"
 #include "NiagaraTypes.h"
+#include "NiagaraConstants.h"
 #include "NiagaraSimulationStageBase.generated.h"
 
 class UNiagaraScript;
@@ -18,14 +19,28 @@ class NIAGARA_API UNiagaraSimulationStageBase : public UNiagaraMergeable
 	GENERATED_BODY()
 
 public:
+	UNiagaraSimulationStageBase()
+	{
+		bEnabled = true;
+	}
+
 	UPROPERTY()
 	UNiagaraScript* Script;
 
 	UPROPERTY(EditAnywhere, Category = "Simulation Stage")
 	FName SimulationStageName;
 
-	virtual bool AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor) const { return true; }
+	UPROPERTY()
+	uint32 bEnabled : 1;
 
+	virtual bool AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor) const;
+#if WITH_EDITOR
+	/** Return the FName to use in place of the default for the location in the stack context. If this would be the default, return NAME_None.*/
+	virtual FName GetStackContextReplacementName() const { return NAME_None; }
+	void SetEnabled(bool bEnabled);
+	void RequestRecompile();
+	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 };
 
 UCLASS(meta = (DisplayName = "Generic Simulation Stage"))
@@ -49,11 +64,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Simulation Stage", meta = (DisplayName = "Emitter Reset Only", Tooltip = "When enabled the stage will only run on the first tick after the emitter is reset, only valid for data interface iteration stages", EditCondition = "IterationSource == ENiagaraIterationSource::DataInterface"))
 	uint32 bSpawnOnly : 1;
 
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Simulation Stage", meta = (Tooltip = "Disables the ability to read / write from the same particle buffer, i.e. only update position and no other attributes.  By default this should not be changed and is a debugging tool.", EditCondition = "IterationSource == ENiagaraIterationSource::Particles"))
+	uint32 bDisablePartialParticleUpdate : 1;
+
 	UPROPERTY(EditAnywhere, Category = "Simulation Stage", meta = (editcondition = "IterationSource == ENiagaraIterationSource::DataInterface"))
 	FNiagaraVariableDataInterfaceBinding DataInterface;
 
 	virtual bool AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor) const override;
 #if WITH_EDITOR
+	virtual FName GetStackContextReplacementName() const override; 
+
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 };

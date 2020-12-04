@@ -126,13 +126,39 @@ namespace Audio
 	// Returns the log frequency of the input value. Maps linear domain and range values to log output (good for linear slider controlling frequency)
 	static FORCEINLINE float GetLogFrequencyClamped(const float InValue, const FVector2D& Domain, const FVector2D& Range)
 	{
-		const float InValueCopy = FMath::Clamp<float>(InValue, Domain.X, Domain.Y);
+		// Check if equal as well as less than to avoid round error in case where at edges.
+		if (InValue <= Domain.X)
+		{
+			return Range.X;
+		}
+
+		if (InValue >= Domain.Y)
+		{
+			return Range.Y;
+		}
+
 		const FVector2D RangeLog(FMath::Loge(Range.X), FMath::Loge(Range.Y));
+		const float FreqLinear = FMath::GetMappedRangeValueUnclamped(Domain, RangeLog, InValue);
+		return FMath::Exp(FreqLinear);
+	}
 
-		check(Domain.Y != Domain.X);
-		const float Scale = (RangeLog.Y - RangeLog.X) / (Domain.Y - Domain.X);
+	// Returns the linear frequency of the input value. Maps log domain and range values to linear output (good for linear slider representation/visualization of log frequency). Reverse of GetLogFrequencyClamped.
+	static FORCEINLINE float GetLinearFrequencyClamped(const float InFrequencyValue, const FVector2D& Domain, const FVector2D& Range)
+	{
+		// Check if equal as well as less than to avoid round error in case where at edges.
+		if (InFrequencyValue <= Range.X)
+		{
+			return Domain.X;
+		}
 
-		return FMath::Exp(RangeLog.X + Scale * (InValueCopy - Domain.X));
+		if (InFrequencyValue >= Range.Y)
+		{
+			return Domain.Y;
+		}
+
+		const FVector2D RangeLog(FMath::Loge(Range.X), FMath::Loge(Range.Y));
+		const float FrequencyLog = FMath::Loge(InFrequencyValue);
+		return FMath::GetMappedRangeValueUnclamped(RangeLog, Domain, FrequencyLog);
 	}
 
 	// Using midi tuning standard, compute midi from frequency in hz
@@ -150,7 +176,7 @@ namespace Audio
 		return PitchScale;
 	}
 
-	// Returns the frequency multipler to scale a base frequency given the input semitones
+	// Returns the frequency multiplier to scale a base frequency given the input semitones
 	static FORCEINLINE float GetFrequencyMultiplier(const float InPitchSemitones)
 	{
 		if (InPitchSemitones == 0.0f)
@@ -206,6 +232,38 @@ namespace Audio
 		const float Temp = FMath::Pow(2.0f, InBandwidthClamped);
 		const float OutQ = FMath::Sqrt(Temp) / (Temp - 1.0f);
 		return OutQ;
+	}
+
+	// Given three values, determine peak location and value of quadratic fitted to the data.
+	//
+	// @param InValues - An array of 3 values with the maximum value located in InValues[1].
+	// @param OutPeakLoc - The peak location relative to InValues[1].
+	// @param OutPeakValue - The value of the peak at the peak location.
+	//
+	// @returns True if a peak was found, false if the values do not represent a peak.
+	static FORCEINLINE bool QuadraticPeakInterpolation(const float InValues[3], float& OutPeakLoc, float& OutPeakValue)
+	{
+		float Denom = InValues[0] - 2.f * InValues[1] + InValues[2];
+
+		if (Denom >= 0.f)
+		{
+			// This is not a peak.
+			return false;
+		}
+
+		float Tmp = InValues[0] - InValues[2];
+
+		OutPeakLoc = 0.5f * Tmp / Denom;
+
+		if ((OutPeakLoc > 0.5f) || (OutPeakLoc < -0.5f))
+		{
+			// This is not a peak.
+			return false;
+		}
+
+		OutPeakValue = InValues[1] - 0.25f * Tmp * OutPeakLoc;
+
+		return true;
 	}
 
 	// Polynomial interpolation using lagrange polynomials. 
@@ -519,12 +577,12 @@ namespace Audio
 	 * Designed to be thread safe for SPSC; However, if Push() and Pop() are both trying to access an overlapping area of the buffer,
 	 * One of the calls will be truncated. Thus, it is advised that you use a high enough capacity that the producer and consumer are never in contention.
 	 */
-	template <typename SampleType>
+	template <typename SampleType, size_t Alignment = 16>
 	class TCircularAudioBuffer
 	{
 	private:
 
-		TArray<SampleType> InternalBuffer;
+		TArray<SampleType, TAlignedHeapAllocator<Alignment>> InternalBuffer;
 		uint32 Capacity;
 		FThreadSafeCounter ReadCounter;
 		FThreadSafeCounter WriteCounter;
@@ -536,6 +594,11 @@ namespace Audio
 		}
 
 		TCircularAudioBuffer(uint32 InCapacity)
+		{
+			SetCapacity(InCapacity);
+		}
+
+		void Reset(uint32 InCapacity = 0)
 		{
 			SetCapacity(InCapacity);
 		}
@@ -560,13 +623,32 @@ namespace Audio
 
 			int32 NumToCopy = FMath::Min<int32>(NumSamples, Remainder());
 			const int32 NumToWrite = FMath::Min<int32>(NumToCopy, Capacity - WriteIndex);
+
 			FMemory::Memcpy(&DestBuffer[WriteIndex], InBuffer, NumToWrite * sizeof(SampleType));
-					
 			FMemory::Memcpy(&DestBuffer[0], &InBuffer[NumToWrite], (NumToCopy - NumToWrite) * sizeof(SampleType));
 
 			WriteCounter.Set((WriteIndex + NumToCopy) % Capacity);
 
 			return NumToCopy;
+		}
+
+		// Pushes some amount of zeros into the circular buffer.
+		// Useful when acting as a blocked, mono/interleaved delay line
+		int32 PushZeros(uint32 NumSamplesOfZeros)
+		{
+			SampleType* DestBuffer = InternalBuffer.GetData();
+			const uint32 ReadIndex = ReadCounter.GetValue();
+			const uint32 WriteIndex = WriteCounter.GetValue();
+
+			int32 NumToZeroEnd = FMath::Min<int32>(NumSamplesOfZeros, Remainder());
+			const int32 NumToZeroBegin = FMath::Min<int32>(NumToZeroEnd, Capacity - WriteIndex);
+
+			FMemory::Memzero(&DestBuffer[WriteIndex], NumToZeroBegin * sizeof(SampleType));
+			FMemory::Memzero(&DestBuffer[0], (NumToZeroEnd - NumToZeroBegin) * sizeof(SampleType));
+
+			WriteCounter.Set((WriteIndex + NumToZeroEnd) % Capacity);
+
+			return NumToZeroEnd;
 		}
 
 		// Same as Pop(), but does not increment the read counter.

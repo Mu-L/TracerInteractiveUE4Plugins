@@ -8,6 +8,9 @@
 #include "Interfaces/ITargetPlatform.h"
 #include "NiagaraSystem.h"
 #include "NiagaraSettings.h"
+#include "SystemSettings.h"
+
+#include "HAL/IConsoleManager.h"
 
 #if WITH_EDITOR
 #include "PlatformInfo.h"
@@ -48,6 +51,79 @@ static FAutoConsoleVariableRef CVarNiagaraQualityLevel(
 	ECVF_Scalability
 );
 
+// Override platform device profile
+// In editor all profiles will be available
+// On cooked builds only the profiles for that cooked platform will be available
+TWeakObjectPtr<UDeviceProfile> GNiagaraPlatformOverride;
+
+static int32 GNiagaraBackupQualityLevel = INDEX_NONE;
+
+static FAutoConsoleCommand GCmdSetNiagaraPlatformOverride(
+	TEXT("fx.Niagara.SetOverridePlatformName"),
+	TEXT("Sets which platform we should override with, no args means reset to default"),
+	FConsoleCommandWithArgsDelegate::CreateLambda(
+		[](const TArray<FString>& Args)
+		{
+			GNiagaraPlatformOverride.Reset();
+			if (Args.Num() == 0)
+			{
+				if (GNiagaraBackupQualityLevel != INDEX_NONE)
+				{
+					OnSetCVarFromIniEntry(*GDeviceProfilesIni, NiagaraQualityLevelName, *LexToString(GNiagaraBackupQualityLevel), ECVF_SetByMask);
+				}
+				GNiagaraBackupQualityLevel = INDEX_NONE;
+				UE_LOG(LogNiagara, Warning, TEXT("Niagara Clearing Override DeviceProfile"));
+			}
+			else
+			{
+				for (UObject* DeviceProfileObj : UDeviceProfileManager::Get().Profiles)
+				{
+					if (UDeviceProfile* Profile = Cast<UDeviceProfile>(DeviceProfileObj))
+					{
+						if (Profile->GetName() == Args[0])
+						{
+							GNiagaraPlatformOverride = Profile;
+							break;
+						}
+					}
+				}
+
+
+				if (GNiagaraPlatformOverride.IsValid())
+				{
+					//Save the previous QL state the first time we enter a preview.
+					if (GNiagaraBackupQualityLevel == INDEX_NONE)
+					{
+						GNiagaraBackupQualityLevel = GNiagaraQualityLevel;
+					}
+
+					UDeviceProfile* OverrideDP = GNiagaraPlatformOverride.Get();
+					check(OverrideDP);
+					int32 DPQL = FNiagaraPlatformSet::QualityLevelFromMask(FNiagaraPlatformSet::GetEffectQualityMaskForDeviceProfile(OverrideDP));
+					
+					OnSetCVarFromIniEntry(*GDeviceProfilesIni, NiagaraQualityLevelName, *LexToString(DPQL), ECVF_SetByMask);
+
+					UE_LOG(LogNiagara, Warning, TEXT("Niagara Setting Override DeviceProfile '%s'"), *Args[0]);
+				}
+				else
+				{
+					UE_LOG(LogNiagara, Warning, TEXT("Niagara Failed to Find Override DeviceProfile '%s'"), *Args[0]);
+				}
+			}
+		}
+	)
+);
+
+static UDeviceProfile* NiagaraGetActiveDeviceProfile()
+{
+	UDeviceProfile* ActiveProfile = GNiagaraPlatformOverride.Get(); 
+	if (ActiveProfile == nullptr)
+	{
+		ActiveProfile = UDeviceProfileManager::Get().GetActiveProfile();
+	}
+	return ActiveProfile;
+}
+
 int32 FNiagaraPlatformSet::CachedQualityLevel = INDEX_NONE;
 
 int32 FNiagaraPlatformSet::GetQualityLevel()
@@ -73,7 +149,7 @@ void FNiagaraPlatformSet::OnQualityLevelChanged(IConsoleVariable* Variable)
 		{
 			UNiagaraSystem* System = *It;
 			check(System);
-			System->OnQualityLevelChanged();
+			System->OnScalabilityCVarChanged();
 		}
 	}
 }
@@ -130,11 +206,16 @@ FNiagaraPlatformSet::FNiagaraPlatformSet()
 {
 }
 
+bool FNiagaraPlatformSet::operator==(const FNiagaraPlatformSet& Other)const
+{
+	return QualityLevelMask == Other.QualityLevelMask && DeviceProfileStates == Other.DeviceProfileStates;
+}
+
 bool FNiagaraPlatformSet::IsActive()const
 {
 	if (LastBuiltFrame <= LastDirtiedFrame || LastBuiltFrame == 0)
 	{
-		bEnabledForCurrentProfileAndEffectQuality = IsEnabled(UDeviceProfileManager::Get().GetActiveProfile(), GetQualityLevel());
+		bEnabledForCurrentProfileAndEffectQuality = IsEnabled(NiagaraGetActiveDeviceProfile(), GetQualityLevel(), true);
 		LastBuiltFrame = GFrameNumber;
 	}
 	return bEnabledForCurrentProfileAndEffectQuality;
@@ -219,9 +300,9 @@ int32 FNiagaraPlatformSet::GetEffectQualityMaskForDeviceProfile(const UDevicePro
 	}
 
 	int32 QLMask = INDEX_NONE;
-	FPlatformIniSettings PlatformSettings = GetPlatformIniSettings(Profile->DeviceType);
+	FPlatformIniSettings& PlatformSettings = GetPlatformIniSettings(Profile->DeviceType);
 	
-	if (PlatformSettings.bCanChangeQualityLevelAtRuntime)
+	if (PlatformSettings.bCanChangeScalabilitySettingsAtRuntime)
 	{
 		QLMask = INDEX_NONE;
 	}
@@ -255,7 +336,7 @@ int32 FNiagaraPlatformSet::GetEffectQualityMaskForDeviceProfile(const UDevicePro
 #else
 
 	//When not in editor we can assume we're asking about the current platform.
-	check(Profile == UDeviceProfileManager::Get().GetActiveProfile());
+	check(Profile == NiagaraGetActiveDeviceProfile());
 	bool bCanChangeEQAtRuntime = CanChangeScalabilityAtRuntime();
 
 	return CreateQualityLevelMask(bCanChangeEQAtRuntime ? INDEX_NONE : GetQualityLevel());
@@ -263,13 +344,31 @@ int32 FNiagaraPlatformSet::GetEffectQualityMaskForDeviceProfile(const UDevicePro
 #endif
 }
 
-bool FNiagaraPlatformSet::IsEnabled(const UDeviceProfile* Profile, int32 QualityLevel)const
+bool FNiagaraPlatformSet::IsEnabled(const UDeviceProfile* Profile, int32 QualityLevel, bool bConsiderCurrentStateOnly)const
 {
 	checkSlow(Profile);
 
+	//Check CVar conditions first.
+	//Only apply CVars if we're checking current state or we're not on a platform that can change scalability CVars at runtime.
+	if (bConsiderCurrentStateOnly || CanChangeScalabilityAtRuntime(Profile) == false)
+	{
+		for (const FNiagaraPlatformSetCVarCondition& CVarCondition : CVarConditions)
+		{
+			//Bail if any cvar condition isn't met.
+			if (CVarCondition.IsEnabledForDeviceProfile(Profile, bConsiderCurrentStateOnly) == false)
+			{
+				return false;
+			}
+		}
+	}
+
+	//Does this platform set match the passed in current quality level?
 	int32 TestQLMask = CreateQualityLevelMask(QualityLevel);
+	bool bIsEnabledByEQ = (QualityLevelMask & TestQLMask) != 0;
+
+	//Does it match the device profile's quality level and do we care?
 	int32 ProfileQLMask = GetEffectQualityMaskForDeviceProfile(Profile);
-	bool bIsEnabledByEQ = (QualityLevelMask & ProfileQLMask & TestQLMask) != 0;
+	bIsEnabledByEQ &= bConsiderCurrentStateOnly || ((ProfileQLMask & QualityLevelMask) != 0);
 
 	if (DeviceProfileStates.Num() > 0)
 	{
@@ -298,6 +397,7 @@ void FNiagaraPlatformSet::InvalidateCachedData()
 #if WITH_EDITOR
 	CachedQLMasksPerDeviceProfile.Empty();
 	CachedPlatformIniSettings.Empty();
+	FDeviceProfileValueCache::Empty();
 #endif
 
 	LastDirtiedFrame = GFrameNumber;
@@ -326,11 +426,25 @@ bool FNiagaraPlatformSet::IsEnabledForPlatform(const FString& PlatformName)const
 bool FNiagaraPlatformSet::ShouldPruneEmittersOnCook(const FString& PlatformName)
 {
 #if WITH_EDITOR
-	FPlatformIniSettings Settings = GetPlatformIniSettings(PlatformName);
+	FPlatformIniSettings& Settings = GetPlatformIniSettings(PlatformName);
 	return Settings.bPruneEmittersOnCook != 0;
 #else
 	return GbPruneEmittersOnCook != 0;
 #endif
+}
+
+bool FNiagaraPlatformSet::CanChangeScalabilityAtRuntime(const UDeviceProfile* DeviceProfile)
+{
+	if (ensure(DeviceProfile))
+	{
+#if WITH_EDITOR
+		FPlatformIniSettings& PlatformSettings = GetPlatformIniSettings(DeviceProfile->DeviceType);
+		return PlatformSettings.bCanChangeScalabilitySettingsAtRuntime != 0;
+#else
+		return CanChangeScalabilityAtRuntime();
+#endif
+	}
+	return true;//Assuming true if we fail to find the platform seems safest.
 }
 
 #if WITH_EDITOR
@@ -427,24 +541,6 @@ void FNiagaraPlatformSet::OnChanged()
 	LastBuiltFrame = 0;
 }
 
-bool FNiagaraPlatformSet::CanChangeScalabilityAtRuntime(const FString& PlatformName)
-{
-	int32 QLMask = GetEffectQualityMaskForPlatform(PlatformName);
-	//If we're on a platform that can change EQ then it will have the full mask.
-	return QLMask == INDEX_NONE;
-}
-
-bool FNiagaraPlatformSet::CanChangeScalabilityAtRuntime(const UDeviceProfile* DeviceProfile)
-{
-	if (ensure(DeviceProfile))
-	{
-		int32 QLMask = GetEffectQualityMaskForDeviceProfile(DeviceProfile);
-		//If we're on a platform that can change EQ then it will have the full mask.
-		return QLMask == INDEX_NONE;
-	}
-	return true;//Assuming true if we fail to find the platform seems safest.
-}
-
 bool FNiagaraPlatformSet::GatherConflicts(const TArray<const FNiagaraPlatformSet*>& PlatformSets, TArray<FNiagaraPlatformSetConflictInfo>& OutConflicts)
 {
 	const UNiagaraSettings* Settings = GetDefault<UNiagaraSettings>();
@@ -491,7 +587,7 @@ bool FNiagaraPlatformSet::GatherConflicts(const TArray<const FNiagaraPlatformSet
 	return OutConflicts.Num() > 0;
 }
 
-FNiagaraPlatformSet::FPlatformIniSettings FNiagaraPlatformSet::GetPlatformIniSettings(const FString& PlatformName)
+FNiagaraPlatformSet::FPlatformIniSettings& FNiagaraPlatformSet::GetPlatformIniSettings(const FString& PlatformName)
 {
 	if (FPlatformIniSettings* CachedSettings = CachedPlatformIniSettings.Find(*PlatformName))
 	{
@@ -527,10 +623,10 @@ FNiagaraPlatformSet::FPlatformIniSettings FNiagaraPlatformSet::GetPlatformIniSet
 	//The effect quality for this platform.
 	int32 EffectsQuality = Scalability::DefaultQualityLevel;
 
-	//If this platform can change quality settings at runtime then we return the full mask.
-	int32 CanChangeEffectQuality = 0;
+	//If this platform can change scalability settings at runtime then we return the full mask.
+	int32 CanChangeScalabiltiySettings = 0;
 
-	FindCVarValue(TEXT("SystemSettings"), CanChangeEQCVarName, CanChangeEffectQuality);
+	FindCVarValue(TEXT("SystemSettings"), CanChangeEQCVarName, CanChangeScalabiltiySettings);
 
 	if (!FindCVarValue(TEXT("ScalabilityGroups"), TEXT("sg.EffectsQuality"), EffectsQuality))
 	{
@@ -544,7 +640,7 @@ FNiagaraPlatformSet::FPlatformIniSettings FNiagaraPlatformSet::GetPlatformIniSet
 	FindCVarValue(TEXT("SystemSettings"), PruneEmittersOnCookName, PruneEmittersOnCook);
 
 	FPlatformIniSettings& NewSetting = CachedPlatformIniSettings.Add(*PlatformName);
-	NewSetting = FPlatformIniSettings(CanChangeEffectQuality, PruneEmittersOnCook, EffectsQuality);
+	NewSetting = FPlatformIniSettings(CanChangeScalabiltiySettings, PruneEmittersOnCook, EffectsQuality);
 
 	//Find the Niagara Quality Levels set for each EffectsQuality Level for this platform.
 	int32 NumEffectsQualities = Scalability::GetQualityLevelCounts().EffectsQuality;
@@ -564,9 +660,232 @@ FNiagaraPlatformSet::FPlatformIniSettings FNiagaraPlatformSet::GetPlatformIniSet
 
 int32 FNiagaraPlatformSet::GetEffectQualityMaskForPlatform(const FString& PlatformName)
 {
-	FPlatformIniSettings PlatformSettings = GetPlatformIniSettings(PlatformName);
-	return PlatformSettings.bCanChangeQualityLevelAtRuntime;
+	FPlatformIniSettings& PlatformSettings = GetPlatformIniSettings(PlatformName);
+	return PlatformSettings.bCanChangeScalabilitySettingsAtRuntime;
 }
 #endif
+
+//////////////////////////////////////////////////////////////////////////
+
+#if WITH_EDITOR
+TMap<const UDeviceProfile*, FDeviceProfileValueCache::FCVarValueMap> FDeviceProfileValueCache::CachedDeviceProfileValues;
+TMap<FName, FDeviceProfileValueCache::FCVarValueMap> FDeviceProfileValueCache::CachedPlatformValues;
+
+bool FDeviceProfileValueCache::GetValueInternal(const UDeviceProfile* DeviceProfile, FName CVarName, FString& OutValue)
+{
+	//First look if we've asked for this CVar for this device profile before.
+	if (FCVarValueMap* CVarMap = CachedDeviceProfileValues.Find(DeviceProfile))
+	{
+		if (FString* CVarValueString = CVarMap->Find(CVarName))
+		{
+			OutValue = *CVarValueString;
+			return true;
+		}
+	}
+
+	//If not we'll need to look for it.
+	
+	FCVarValueMap& CVarMap = CachedDeviceProfileValues.Add(DeviceProfile);
+
+	//First see if the device profile has it explicitly set.
+	if (DeviceProfile->GetConsolidatedCVarValue(*CVarName.ToString(), OutValue, false))
+	{
+		CVarMap.Add(CVarName, OutValue);
+		return true;
+	}
+
+	//Otherwise we need to check the ini files for the profiles platform.
+	//It'd be lovely if there were just a utility function to call that did this (or better) for us.
+	
+	const FString& PlatformName = DeviceProfile->DeviceType;
+
+	FConfigFile EngineSettings;
+	FConfigCacheIni::LoadLocalIniFile(EngineSettings, TEXT("Engine"), true, *PlatformName);
+
+	FConfigFile GameSettings;
+	FConfigCacheIni::LoadLocalIniFile(GameSettings, TEXT("Game"), true, *PlatformName);
+
+	FConfigFile ScalabilitySettings;
+	FConfigCacheIni::LoadLocalIniFile(ScalabilitySettings, TEXT("Scalability"), true, *PlatformName);
+
+	auto FindCVarValue = [&](const TCHAR* Section, const TCHAR* CVarName, FString& OutVal)
+	{
+		bool bFound = true;
+		if (!ScalabilitySettings.GetString(Section, CVarName, OutVal))
+		{
+			if (!GameSettings.GetString(Section, CVarName, OutVal))
+			{
+				if (!EngineSettings.GetString(Section, CVarName, OutVal))
+				{
+					bFound = false;
+				}
+			}
+		}
+		return bFound;
+	};
+
+	if (FindCVarValue(TEXT("SystemSettings"), *CVarName.ToString(), OutValue))
+	{
+		CVarMap.Add(CVarName, OutValue);
+		return true;
+	}
+
+	//Failing all that we just take the default value.
+	if (IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(*CVarName.ToString()))
+	{
+		OutValue = CVar->GetString();
+		CVarMap.Add(CVarName, OutValue);
+		return true;
+	}
+
+	//Only really possible if the CVar doesn't exist.
+	return false;
+}
+
+void FDeviceProfileValueCache::Empty()
+{
+	CachedDeviceProfileValues.Empty();
+	CachedPlatformValues.Empty();
+}
+
+template<typename T>
+bool FDeviceProfileValueCache::GetValue(const UDeviceProfile* DeviceProfile, FName CVarName, T& OutValue)
+{
+	FString ValString;
+	if (GetValueInternal(DeviceProfile, CVarName, ValString))
+	{
+		LexFromString(OutValue, *ValString);
+		return true;
+	}
+	return false;
+}
+
+#endif
+
+//////////////////////////////////////////////////////////////////////////
+
+TMap<FName, FDelegateHandle> FNiagaraPlatformSetCVarCondition::CVarChangedDelegateHandles;
+FCriticalSection FNiagaraPlatformSetCVarCondition::ChangedDelegateHandlesCritSec;
+
+void FNiagaraPlatformSetCVarCondition::OnCVarChanged(IConsoleVariable* CVar)
+{
+	//TODO: Iterate over all systems and recheck all their PlatformSet active states.
+	//Any states that have changes should trigger a reinit of the system in question.
+
+	//For right now just brute force reinit everything.
+	//At least this is limited to only the CVars that these conditions are reading.
+	FNiagaraPlatformSet::InvalidateCachedData();
+
+	for (TObjectIterator<UNiagaraSystem> It; It; ++It)
+	{
+		UNiagaraSystem* System = *It;
+		check(System);
+		System->OnScalabilityCVarChanged();
+	}
+}
+
+FNiagaraPlatformSetCVarCondition::FNiagaraPlatformSetCVarCondition()
+	: bUseMinInt(true)
+	, bUseMaxInt(false)
+	, bUseMinFloat(true)
+	, bUseMaxFloat(false)
+{
+
+}
+
+IConsoleVariable* FNiagaraPlatformSetCVarCondition::GetCVar()const
+{
+	if (CachedCVar == nullptr)
+	{
+		IConsoleManager& CVarMan = IConsoleManager::Get();
+		CachedCVar = CVarMan.FindConsoleVariable(*CVarName.ToString());
+		if(CachedCVar)
+		{
+			FScopeLock Lock(&ChangedDelegateHandlesCritSec);
+			FDelegateHandle* Handle = CVarChangedDelegateHandles.Find(CVarName);
+			if(!Handle)
+			{
+				//We've not bound to this cvar's change callback yet. Do so now.
+				CVarChangedDelegateHandles.Add(CVarName) = CachedCVar->OnChangedDelegate().AddStatic(&FNiagaraPlatformSetCVarCondition::OnCVarChanged);
+			}
+		}
+	}
+	return CachedCVar;
+}
+
+void FNiagaraPlatformSetCVarCondition::SetCVar(FName InCVarName)
+{
+	CVarName = InCVarName;
+	CachedCVar = nullptr;
+}
+
+bool FNiagaraPlatformSetCVarCondition::IsEnabledForPlatform(const FString& PlatformName)const
+{
+	for (const UObject* ProfileObj : UDeviceProfileManager::Get().Profiles)
+	{
+		if (const UDeviceProfile* Profile = Cast<const UDeviceProfile>(ProfileObj))
+		{
+			if (Profile->DeviceType == PlatformName)
+			{
+				if (IsEnabledForDeviceProfile(Profile, false) != 0)
+				{
+					return true;//At least one profile for this platform is enabled.
+				}
+			}
+		}
+	}
+	return false;
+}
+
+template<> bool FNiagaraPlatformSetCVarCondition::GetCVarValue<bool>(IConsoleVariable* CVar)const { return CVar->GetBool(); }
+template<> int32 FNiagaraPlatformSetCVarCondition::GetCVarValue<int32>(IConsoleVariable* CVar)const { return CVar->GetInt(); }
+template<> float FNiagaraPlatformSetCVarCondition::GetCVarValue<float>(IConsoleVariable* CVar)const { return CVar->GetFloat(); }
+
+template<typename T>
+bool FNiagaraPlatformSetCVarCondition::IsEnabledForDeviceProfile_Internal(const UDeviceProfile* DeviceProfile, bool bCheckCurrentStateOnly)const
+{
+#if WITH_EDITOR
+	T ProfileValue;
+	if (bCheckCurrentStateOnly == false && FDeviceProfileValueCache::GetValue(DeviceProfile, CVarName, ProfileValue))
+	{
+		return CheckValue(ProfileValue);
+	}
+#endif
+
+	if (IConsoleVariable* CVar = GetCVar())
+	{
+		return CheckValue(GetCVarValue<T>(CVar));
+	}
+	return false;
+}
+
+bool FNiagaraPlatformSetCVarCondition::IsEnabledForDeviceProfile(const UDeviceProfile* DeviceProfile, bool bCheckCurrentStateOnly)const
+{
+	if (IConsoleVariable* CVar = GetCVar())
+	{
+		if (CVar->IsVariableBool())
+		{
+			return IsEnabledForDeviceProfile_Internal<bool>(DeviceProfile, bCheckCurrentStateOnly);
+		}
+		else if (CVar->IsVariableInt())
+		{
+			return IsEnabledForDeviceProfile_Internal<int32>(DeviceProfile, bCheckCurrentStateOnly);
+		}
+		else if (CVar->IsVariableFloat())
+		{
+			return IsEnabledForDeviceProfile_Internal<float>(DeviceProfile, bCheckCurrentStateOnly);
+		}
+		else
+		{
+			ensureMsgf(false, TEXT("CVar % is of an unsupported type for FNiagaraPlatformSetCVarCondition. Supported types are Bool, Int and Float. This should not be possible unless the CVar's type has been chagned."), *CVarName.ToString());
+		}
+	}
+	else
+	{
+		UE_LOG(LogNiagara, Warning, TEXT("Niagara Platform Set is trying to use a CVar that doesn't exist. %s"), *CVarName.ToString());
+	}
+
+	return false;
+}
 
 #undef LOCTEXT_NAMESPACE

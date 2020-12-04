@@ -56,6 +56,9 @@ enum ERichCurveCompressionFormat
 
 	/** Keys use mixed interpolation modes */
 	RCCF_Mixed UMETA(DisplayName = "Mixed"),
+
+	/** Keys use weighted interpolation modes */
+	RCCF_Weighted UMETA(DisplayName = "Weighted"),
 };
 
 /** Enumerates key time compression options. */
@@ -149,7 +152,9 @@ struct ENGINE_API FRichCurveKey
 
 	/** Conversion constructor */
 	FRichCurveKey(const FInterpCurvePoint<float>& InPoint);
+	FRichCurveKey(const FInterpCurvePoint<FVector2D>& InPoint, int32 ComponentIndex);
 	FRichCurveKey(const FInterpCurvePoint<FVector>& InPoint, int32 ComponentIndex);
+	FRichCurveKey(const FInterpCurvePoint<FTwoVectors>& InPoint, int32 ComponentIndex);
 
 	/** ICPPStructOps interface */
 	bool Serialize(FArchive& Ar);

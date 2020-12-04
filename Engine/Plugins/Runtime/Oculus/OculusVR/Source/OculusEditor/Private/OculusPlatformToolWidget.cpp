@@ -12,11 +12,21 @@
 #include "DOM/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "OculusHMDModule.h"
+#include "GenericPlatform/GenericPlatformMisc.h"
 
 #define LOCTEXT_NAMESPACE "OculusPlatformToolWidget"
 
 const FString UrlPlatformUtil = "https://www.oculus.com/download_app/?id=1076686279105243";
 const FString ProjectPlatformUtilPath = "Oculus/Tools/ovr-platform-util.exe";
+
+FText OculusPlatformDialogTitle = LOCTEXT("DownloadOculusPlatformUtility", "Download Oculus Platform Utility");
+FText OculusPlatformDialogMessage = LOCTEXT("DownloadOculusPlatformUtilityMessage",
+	"Oculus Platform Window would like to download the latest version of the Oculus Platform Utility."
+	" Oculus Platform Utility is a command-line tool that enables the uploading of builds to your release channels on the Oculus Developer Dashboard."
+	"\n\nYou can learn more about the Oculus Platform Utility at https://developer.oculus.com/distribute/publish-reference-platform-command-line-utility/"
+	"\n\nCanceling will prevent the download and the UPLOAD button will be unfunctional. Would you like the tool to download the Oculus Platform Utility to your project?"
+);
+
 
 FString SOculusPlatformToolWidget::LogText;
 
@@ -649,9 +659,6 @@ bool SOculusPlatformToolWidget::ConstructArguments(FString& args)
 			break;
 		case (uint8)EOculusPlatformTarget::Quest:
 			args = "upload-quest-build";
-			break;
-		case (uint8)EOculusPlatformTarget::Mobile:
-			args = "upload-mobile-build";
 			break;
 		default:
 			UpdateLogText(LogText + "ERROR: Invalid target platform selected");
@@ -1356,7 +1363,7 @@ void FPlatformDownloadTask::DoWork()
 {
 	// Create HTTP request for downloading oculus platform tool
 	downloadCompleteEvent = FGenericPlatformProcess::GetSynchEventFromPool(false);
-	TSharedRef<IHttpRequest> httpRequest = FHttpModule::Get().CreateRequest();
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> httpRequest = FHttpModule::Get().CreateRequest();
 
 	httpRequest->OnProcessRequestComplete().BindRaw(this, &FPlatformDownloadTask::OnDownloadRequestComplete);
 	httpRequest->OnRequestProgress().BindRaw(this, &FPlatformDownloadTask::OnRequestDownloadProgress);
@@ -1434,10 +1441,18 @@ void FPlatformUploadTask::DoWork()
 	{
 		FEvent* PlatformToolCreatedEvent = FGenericPlatformProcess::GetSynchEventFromPool(false);
 
-		UpdateLogText.Execute(SOculusPlatformToolWidget::LogText + LOCTEXT("NoCLI", "Unable to find Oculus Platform Tool. Starting download . . .\n").ToString());
-		(new FAsyncTask<FPlatformDownloadTask>(UpdateLogText, PlatformToolCreatedEvent))->StartBackgroundTask();
-
-		PlatformToolCreatedEvent->Wait();
+		UpdateLogText.Execute(SOculusPlatformToolWidget::LogText + LOCTEXT("NoCLI", "Unable to find Oculus Platform Utility.\n").ToString());
+		EAppReturnType::Type dialogChoice = FMessageDialog::Open(EAppMsgType::OkCancel, OculusPlatformDialogMessage, &OculusPlatformDialogTitle);
+		if (dialogChoice == EAppReturnType::Ok)
+		{
+			UpdateLogText.Execute(SOculusPlatformToolWidget::LogText + LOCTEXT("DownloadCLI", "Downloading Oculus Platform Utility . . .\n").ToString());
+			(new FAsyncTask<FPlatformDownloadTask>(UpdateLogText, PlatformToolCreatedEvent))->StartBackgroundTask();
+			PlatformToolCreatedEvent->Wait();
+		}
+		else
+		{
+			return;
+		}
 
 		UpdateLogText.Execute(SOculusPlatformToolWidget::LogText + LOCTEXT("StartUploadAfterDownload", "Starting upload . . .\n").ToString());
 	}
@@ -1451,8 +1466,20 @@ void FPlatformUploadTask::DoWork()
 	while (FPlatformProcess::IsProcRunning(PlatformProcess))
 	{
 		FString log = FPlatformProcess::ReadPipe(ReadPipe);
-		if (!log.IsEmpty() && !log.Contains("\u001b"))
+		if (!log.IsEmpty())
 		{
+			// Remove parts of the log that contain escape character codes
+			int32 escapeIndex = log.Find("\u001b");
+			while (escapeIndex >= 0)
+			{
+				int32 lineEndIndex = log.Find("\n", ESearchCase::IgnoreCase, ESearchDir::FromStart, escapeIndex);
+				if (lineEndIndex < 0) // If an escape character code exists without a new line end, just remove the escape character
+				{
+					lineEndIndex = escapeIndex + 1;
+				}
+				log.RemoveAt(escapeIndex, lineEndIndex - escapeIndex);
+				escapeIndex = log.Find("\u001b");
+			}
 			UpdateLogText.Execute(SOculusPlatformToolWidget::LogText + log);
 		}
 	}
@@ -1478,10 +1505,18 @@ void FPlatformLoadRedistPackagesTask::DoWork()
 
 		FEvent* PlatformToolCreatedEvent = FGenericPlatformProcess::GetSynchEventFromPool(false);
 
-		UpdateLogText.Execute(SOculusPlatformToolWidget::LogText + LOCTEXT("NoCLI", "Unable to find Oculus Platform Tool. Starting download . . .\n").ToString());
-		(new FAsyncTask<FPlatformDownloadTask>(UpdateLogText, PlatformToolCreatedEvent))->StartBackgroundTask();
-
-		PlatformToolCreatedEvent->Wait();
+		UpdateLogText.Execute(SOculusPlatformToolWidget::LogText + LOCTEXT("NoCLI", "Unable to find Oculus Platform Utility.\n").ToString());
+		EAppReturnType::Type dialogChoice = FMessageDialog::Open(EAppMsgType::OkCancel, OculusPlatformDialogMessage, &OculusPlatformDialogTitle);
+		if (dialogChoice == EAppReturnType::Ok)
+		{
+			UpdateLogText.Execute(SOculusPlatformToolWidget::LogText + LOCTEXT("DownloadCLI", "Downloading Oculus Platform Utility . . .\n").ToString());
+			(new FAsyncTask<FPlatformDownloadTask>(UpdateLogText, PlatformToolCreatedEvent))->StartBackgroundTask();
+			PlatformToolCreatedEvent->Wait();
+		}
+		else
+		{
+			return;
+		}
 	}
 
 	// Launch CLI and pass command to list out redist packages currently avalible

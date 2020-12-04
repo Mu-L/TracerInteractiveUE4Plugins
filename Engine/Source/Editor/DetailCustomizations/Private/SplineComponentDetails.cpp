@@ -12,7 +12,9 @@
 #include "Widgets/SWidget.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Input/SComboBox.h"
+#include "Widgets/Input/SButton.h"
 #include "ComponentVisualizer.h"
 #include "Editor/UnrealEdEngine.h"
 #include "UnrealEdGlobals.h"
@@ -26,8 +28,14 @@
 #include "Widgets/Input/SVectorInputBox.h"
 #include "Widgets/Input/SNumericEntryBox.h"
 #include "ScopedTransaction.h"
+#include "LevelEditorViewport.h"
+#include "Engine/Blueprint.h"
+#include "BlueprintEditor.h"
+#include "BlueprintEditorModule.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "SplineComponentDetails"
+DEFINE_LOG_CATEGORY_STATIC(LogSplineComponentDetails, Log, All)
 
 USplineMetadataDetailsFactoryBase::USplineMetadataDetailsFactoryBase(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -49,6 +57,8 @@ public:
 	virtual bool InitiallyCollapsed() const override { return false; }
 	virtual FName GetName() const override;
 	//~ End IDetailCustomNodeBuilder interface
+
+	static bool bAlreadyWarnedInvalidIndex;
 
 private:
 
@@ -150,6 +160,8 @@ private:
 	EVisibility IsEnabled() const { return (SelectedKeys.Num() > 0) ? EVisibility::Visible : EVisibility::Collapsed; }
 	EVisibility IsDisabled() const { return (SelectedKeys.Num() == 0) ? EVisibility::Visible : EVisibility::Collapsed; }
 	bool IsOnePointSelected() const { return SelectedKeys.Num() == 1; }
+	bool ArePointsSelected() const { return (SelectedKeys.Num() > 0); };
+	bool AreNoPointsSelected() const { return (SelectedKeys.Num() == 0); };
 	TOptional<float> GetInputKey() const { return InputKey.Value; }
 	TOptional<float> GetPositionX() const { return Position.X; }
 	TOptional<float> GetPositionY() const { return Position.Y; }
@@ -176,6 +188,13 @@ private:
 	void OnSplinePointTypeChanged(TSharedPtr<FString> NewValue, ESelectInfo::Type SelectInfo);
 	TSharedRef<SWidget> OnGenerateComboWidget(TSharedPtr<FString> InComboString);
 
+	void GenerateSplinePointSelectionControls(IDetailChildrenBuilder& ChildrenBuilder);
+	FReply OnSelectFirstLastSplinePoint(bool bFirst);
+	FReply OnSelectPrevNextSplinePoint(bool bNext, bool bAddToSelection);
+	FReply OnSelectAllSplinePoints();
+
+	USplineComponent* GetSplineComponentToVisualize() const;
+
 	void UpdateValues();
 
 	USplineComponent* SplineComp;
@@ -189,19 +208,21 @@ private:
 	FSharedRotatorValue Rotation;
 	TSharedValue<ESplinePointType::Type> PointType;
 
-	FSplineComponentVisualizer* SplineVisualizer;
+	TSharedPtr<FSplineComponentVisualizer> SplineVisualizer;
 	FProperty* SplineCurvesProperty;
 	TArray<TSharedPtr<FString>> SplinePointTypes;
 	TSharedPtr<ISplineMetadataDetails> SplineMetaDataDetails;
 	FSimpleDelegate OnRegenerateChildren;
 };
 
+bool FSplinePointDetails::bAlreadyWarnedInvalidIndex = false;
+
 FSplinePointDetails::FSplinePointDetails(USplineComponent* InOwningSplineComponent)
 	: SplineComp(nullptr)
 {
 	TSharedPtr<FComponentVisualizer> Visualizer = GUnrealEd->FindComponentVisualizer(InOwningSplineComponent->GetClass());
-	SplineVisualizer = (FSplineComponentVisualizer*)Visualizer.Get();
-	check(SplineVisualizer);
+	SplineVisualizer = StaticCastSharedPtr<FSplineComponentVisualizer>(Visualizer);
+	check(SplineVisualizer.IsValid());
 
 	SplineCurvesProperty = FindFProperty<FProperty>(USplineComponent::StaticClass(), GET_MEMBER_NAME_CHECKED(USplineComponent, SplineCurves));
 
@@ -213,6 +234,9 @@ FSplinePointDetails::FSplinePointDetails(USplineComponent* InOwningSplineCompone
 	}
 
 	SplineComp = InOwningSplineComponent;
+	check(SplineComp);
+
+	bAlreadyWarnedInvalidIndex = false;
 }
 
 void FSplinePointDetails::SetOnRebuildChildren(FSimpleDelegate InOnRegenerateChildren)
@@ -223,10 +247,114 @@ void FSplinePointDetails::SetOnRebuildChildren(FSimpleDelegate InOnRegenerateChi
 void FSplinePointDetails::GenerateHeaderRowContent(FDetailWidgetRow& NodeRow)
 {
 }
-									  									  
+
+void FSplinePointDetails::GenerateSplinePointSelectionControls(IDetailChildrenBuilder& ChildrenBuilder)
+{
+	ChildrenBuilder.AddCustomRow(LOCTEXT("SelectSplinePoints", "Select Spline Points"))
+	.NameContent()
+	[
+		SNew(STextBlock)
+		.Font(IDetailLayoutBuilder::GetDetailFont())
+		.Text(LOCTEXT("SelectSplinePoints", "Select Spline Points"))
+	]
+	.ValueContent()
+	.MaxDesiredWidth(125.f)
+	.MinDesiredWidth(125.f)
+	[
+		SNew(SHorizontalBox)
+		.Clipping(EWidgetClipping::ClipToBounds)
+		+ SHorizontalBox::Slot()
+		.HAlign(HAlign_Center)
+		.VAlign(VAlign_Center)
+		[
+			SNew(SButton)
+			.ButtonStyle(FEditorStyle::Get(), "SplineComponentDetails.SelectFirst")
+			.ContentPadding(2.0f)
+			.ToolTipText(LOCTEXT("SelectFirstSplinePointToolTip", "Select first spline point."))
+			.OnClicked(this, &FSplinePointDetails::OnSelectFirstLastSplinePoint, true)
+		]
+		+ SHorizontalBox::Slot()
+		.HAlign(HAlign_Center)
+		.VAlign(VAlign_Center)
+		[
+			SNew(SButton)
+			.ButtonStyle(FEditorStyle::Get(), "SplineComponentDetails.AddPrev")
+			.ContentPadding(2.f)
+			.ToolTipText(LOCTEXT("SelectAddPrevSplinePointToolTip", "Add previous spline point to current selection."))
+			.OnClicked(this, &FSplinePointDetails::OnSelectPrevNextSplinePoint, false, true)
+			.IsEnabled(this, &FSplinePointDetails::ArePointsSelected)
+		]
+		+ SHorizontalBox::Slot()
+		.HAlign(HAlign_Center)
+		.VAlign(VAlign_Center)
+		[
+			SNew(SButton)
+			.ButtonStyle(FEditorStyle::Get(), "SplineComponentDetails.SelectPrev")
+			.ContentPadding(2.f)
+			.VAlign(VAlign_Center)
+			.HAlign(HAlign_Center)
+			.ToolTipText(LOCTEXT("SelectPrevSplinePointToolTip", "Select previous spline point."))
+			.OnClicked(this, &FSplinePointDetails::OnSelectPrevNextSplinePoint, false, false)
+			.IsEnabled(this, &FSplinePointDetails::ArePointsSelected)
+		]
+		+ SHorizontalBox::Slot()
+		.HAlign(HAlign_Center)
+		.VAlign(VAlign_Center)
+		[
+			SNew(SButton)
+			.ButtonStyle(FEditorStyle::Get(), "SplineComponentDetails.SelectAll")
+			.ContentPadding(2.f)
+			.VAlign(VAlign_Center)
+			.HAlign(HAlign_Center)
+			.ToolTipText(LOCTEXT("SelectAllSplinePointToolTip", "Select all spline points."))
+			.OnClicked(this, &FSplinePointDetails::OnSelectAllSplinePoints)
+		]
+		+ SHorizontalBox::Slot()
+		.HAlign(HAlign_Center)
+		.VAlign(VAlign_Center)
+		[
+			SNew(SButton)
+			.ButtonStyle(FEditorStyle::Get(), "SplineComponentDetails.SelectNext")
+			.ContentPadding(2.f)
+			.VAlign(VAlign_Center)
+			.HAlign(HAlign_Center)
+			.ToolTipText(LOCTEXT("SelectNextSplinePointToolTip", "Select next spline point."))
+			.OnClicked(this, &FSplinePointDetails::OnSelectPrevNextSplinePoint, true, false)
+			.IsEnabled(this, &FSplinePointDetails::ArePointsSelected)
+		]
+		+ SHorizontalBox::Slot()
+		.HAlign(HAlign_Center)
+		.VAlign(VAlign_Center)
+		[
+			SNew(SButton)
+			.ButtonStyle(FEditorStyle::Get(), "SplineComponentDetails.AddNext")
+			.ContentPadding(2.f)
+			.VAlign(VAlign_Center)
+			.HAlign(HAlign_Center)
+			.ToolTipText(LOCTEXT("SelectAddNextSplinePointToolTip", "Add next spline point to current selection."))
+			.OnClicked(this, &FSplinePointDetails::OnSelectPrevNextSplinePoint, true, true)
+			.IsEnabled(this, &FSplinePointDetails::ArePointsSelected)
+		]
+		+ SHorizontalBox::Slot()
+		.HAlign(HAlign_Center)
+		.VAlign(VAlign_Center)
+		[
+			SNew(SButton)
+			.ButtonStyle(FEditorStyle::Get(), "SplineComponentDetails.SelectLast")
+			.ContentPadding(2.f)
+			.VAlign(VAlign_Center)
+			.HAlign(HAlign_Center)
+			.ToolTipText(LOCTEXT("SelectLastSplinePointToolTip", "Select last spline point."))
+			.OnClicked(this, &FSplinePointDetails::OnSelectFirstLastSplinePoint, false)
+		]
+	];
+}
 
 void FSplinePointDetails::GenerateChildContent(IDetailChildrenBuilder& ChildrenBuilder)
 {
+	// Select spline point buttons
+	GenerateSplinePointSelectionControls(ChildrenBuilder);
+
 	// Message which is shown when no points are selected
 	ChildrenBuilder.AddCustomRow(LOCTEXT("NoneSelected", "None selected"))
 	.Visibility(TAttribute<EVisibility>(this, &FSplinePointDetails::IsDisabled))
@@ -425,14 +553,14 @@ void FSplinePointDetails::GenerateChildContent(IDetailChildrenBuilder& ChildrenB
 		]
 	];
 
-	if (SplineComp && SplineVisualizer && SplineVisualizer->GetSelectedKeys().Num() > 0)
+	if (SplineComp && SplineVisualizer.IsValid() && SplineVisualizer->GetSelectedKeys().Num() > 0)
 	{
 		for (TObjectIterator<UClass> ClassIterator; ClassIterator; ++ClassIterator)
 		{
 			if (ClassIterator->IsChildOf(USplineMetadataDetailsFactoryBase::StaticClass()) && !ClassIterator->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
 			{
 				USplineMetadataDetailsFactoryBase* Factory = ClassIterator->GetDefaultObject<USplineMetadataDetailsFactoryBase>();
-				USplineMetadata* SplineMetadata = SplineComp->GetSplinePointsMetadata();
+				const USplineMetadata* SplineMetadata = SplineComp->GetSplinePointsMetadata();
 				if (SplineMetadata && SplineMetadata->GetClass() == Factory->GetMetadataClass())
 				{
 					SplineMetaDataDetails = Factory->Create();
@@ -452,7 +580,10 @@ void FSplinePointDetails::Tick(float DeltaTime)
 
 void FSplinePointDetails::UpdateValues()
 {
-	SplineComp = SplineVisualizer->GetEditedSplineComponent();
+	if (!SplineComp || !SplineVisualizer.IsValid())
+	{
+		return;
+	}
 
 	bool bNeedsRebuild = false;
 	const TSet<int32>& NewSelectedKeys = SplineVisualizer->GetSelectedKeys();
@@ -473,23 +604,50 @@ void FSplinePointDetails::UpdateValues()
 	Scale.Reset();
 	PointType.Reset();
 
-	if (SplineComp)
+	// Only display point details when there are selected keys
+	if (SelectedKeys.Num() > 0)
 	{
+		bool bValidIndices = true;
 		for (int32 Index : SelectedKeys)
 		{
-			InputKey.Add(SplineComp->GetSplinePointsPosition().Points[Index].InVal);
-			Position.Add(SplineComp->GetSplinePointsPosition().Points[Index].OutVal);
-			ArriveTangent.Add(SplineComp->GetSplinePointsPosition().Points[Index].ArriveTangent);
-			LeaveTangent.Add(SplineComp->GetSplinePointsPosition().Points[Index].LeaveTangent);
-			Rotation.Add(SplineComp->GetSplinePointsRotation().Points[Index].OutVal.Rotator());
-			Scale.Add(SplineComp->GetSplinePointsScale().Points[Index].OutVal);
-			PointType.Add(ConvertInterpCurveModeToSplinePointType(SplineComp->GetSplinePointsPosition().Points[Index].InterpMode));
+			if (Index < 0 ||
+				Index >= SplineComp->GetSplinePointsPosition().Points.Num() ||
+				Index >= SplineComp->GetSplinePointsRotation().Points.Num() ||
+				Index >= SplineComp->GetSplinePointsScale().Points.Num())
+			{
+				bValidIndices = false;
+				if (!bAlreadyWarnedInvalidIndex)
+				{
+					UE_LOG(LogSplineComponentDetails, Error, TEXT("Spline component details selected keys contains invalid index %d for spline %s with %d points, %d rotations, %d scales"),
+						Index, 
+						*SplineComp->GetPathName(), 
+						SplineComp->GetSplinePointsPosition().Points.Num(),
+						SplineComp->GetSplinePointsRotation().Points.Num(),
+						SplineComp->GetSplinePointsScale().Points.Num());
+					bAlreadyWarnedInvalidIndex = true;
+				}
+				break;
+			}
 		}
-	}
 
-	if (SplineMetaDataDetails)
-	{
-		SplineMetaDataDetails->Update(SplineComp, SelectedKeys);
+		if (bValidIndices)
+		{
+			for (int32 Index : SelectedKeys)
+			{
+				InputKey.Add(SplineComp->GetSplinePointsPosition().Points[Index].InVal);
+				Position.Add(SplineComp->GetSplinePointsPosition().Points[Index].OutVal);
+				ArriveTangent.Add(SplineComp->GetSplinePointsPosition().Points[Index].ArriveTangent);
+				LeaveTangent.Add(SplineComp->GetSplinePointsPosition().Points[Index].LeaveTangent);
+				Rotation.Add(SplineComp->GetSplinePointsRotation().Points[Index].OutVal.Rotator());
+				Scale.Add(SplineComp->GetSplinePointsScale().Points[Index].OutVal);
+				PointType.Add(ConvertInterpCurveModeToSplinePointType(SplineComp->GetSplinePointsPosition().Points[Index].InterpMode));
+			}
+
+			if (SplineMetaDataDetails)
+			{
+				SplineMetaDataDetails->Update(SplineComp, SelectedKeys);
+			}
+		}
 	}
 
 	if (bNeedsRebuild)
@@ -572,6 +730,8 @@ void FSplinePointDetails::OnSetInputKey(float NewValue, ETextCommit::Type Commit
 	SplineComp->bSplineHasBeenEdited = true;
 	FComponentVisualizer::NotifyPropertyModified(SplineComp, SplineCurvesProperty);
 	UpdateValues();
+
+	GEditor->RedrawLevelEditingViewports(true);
 }
 
 void FSplinePointDetails::OnSetPosition(float NewValue, ETextCommit::Type CommitInfo, int32 Axis)
@@ -595,6 +755,8 @@ void FSplinePointDetails::OnSetPosition(float NewValue, ETextCommit::Type Commit
 	SplineComp->bSplineHasBeenEdited = true;
 	FComponentVisualizer::NotifyPropertyModified(SplineComp, SplineCurvesProperty);
 	UpdateValues();
+
+	GEditor->RedrawLevelEditingViewports(true);
 }
 
 void FSplinePointDetails::OnSetArriveTangent(float NewValue, ETextCommit::Type CommitInfo, int32 Axis)
@@ -619,6 +781,8 @@ void FSplinePointDetails::OnSetArriveTangent(float NewValue, ETextCommit::Type C
 	SplineComp->bSplineHasBeenEdited = true;
 	FComponentVisualizer::NotifyPropertyModified(SplineComp, SplineCurvesProperty);
 	UpdateValues();
+
+	GEditor->RedrawLevelEditingViewports(true);
 }
 
 void FSplinePointDetails::OnSetLeaveTangent(float NewValue, ETextCommit::Type CommitInfo, int32 Axis)
@@ -643,6 +807,8 @@ void FSplinePointDetails::OnSetLeaveTangent(float NewValue, ETextCommit::Type Co
 	SplineComp->bSplineHasBeenEdited = true;
 	FComponentVisualizer::NotifyPropertyModified(SplineComp, SplineCurvesProperty);
 	UpdateValues();
+
+	GEditor->RedrawLevelEditingViewports(true);
 }
 
 void FSplinePointDetails::OnSetRotation(float NewValue, ETextCommit::Type CommitInfo, int32 Axis)
@@ -673,6 +839,8 @@ void FSplinePointDetails::OnSetRotation(float NewValue, ETextCommit::Type Commit
 	SplineComp->bSplineHasBeenEdited = true;
 	FComponentVisualizer::NotifyPropertyModified(SplineComp, SplineCurvesProperty);
 	UpdateValues();
+
+	GEditor->RedrawLevelEditingViewports(true);
 }
 
 void FSplinePointDetails::OnSetScale(float NewValue, ETextCommit::Type CommitInfo, int32 Axis)
@@ -696,6 +864,8 @@ void FSplinePointDetails::OnSetScale(float NewValue, ETextCommit::Type CommitInf
 	SplineComp->bSplineHasBeenEdited = true;
 	FComponentVisualizer::NotifyPropertyModified(SplineComp, SplineCurvesProperty);
 	UpdateValues();
+
+	GEditor->RedrawLevelEditingViewports(true);
 }
 
 FText FSplinePointDetails::GetPointType() const
@@ -729,6 +899,97 @@ void FSplinePointDetails::OnSplinePointTypeChanged(TSharedPtr<FString> NewValue,
 	SplineComp->bSplineHasBeenEdited = true;
 	FComponentVisualizer::NotifyPropertyModified(SplineComp, SplineCurvesProperty);
 	UpdateValues();
+
+	GEditor->RedrawLevelEditingViewports(true);
+}
+
+USplineComponent* FSplinePointDetails::GetSplineComponentToVisualize() const
+{
+	if (SplineComp->IsTemplate()) 
+	{
+		FBlueprintEditorModule& BlueprintEditorModule = FModuleManager::LoadModuleChecked<FBlueprintEditorModule>("Kismet");
+
+		const UClass* BPClass;
+		if (const AActor* OwningCDO = SplineComp->GetOwner())
+		{
+			// Native component template
+			BPClass = OwningCDO->GetClass();
+		}
+		else
+		{
+			// Non-native component template
+			BPClass = Cast<UClass>(SplineComp->GetOuter());
+		}
+
+		if (BPClass)
+		{
+			if (UBlueprint* Blueprint = UBlueprint::GetBlueprintFromClass(BPClass))
+			{
+				if (FBlueprintEditor* BlueprintEditor = StaticCast<FBlueprintEditor*>(GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(Blueprint, false)))
+				{
+					const AActor* PreviewActor = BlueprintEditor->GetPreviewActor();
+					TArray<UObject*> Instances;
+					SplineComp->GetArchetypeInstances(Instances);
+
+					for (UObject* Instance : Instances)
+					{
+						USplineComponent* SplineCompInstance = Cast<USplineComponent>(Instance);
+						if (SplineCompInstance->GetOwner() == PreviewActor)
+						{
+							return SplineCompInstance;
+						}
+					}
+				}
+			}
+		}
+
+		// If we failed to find an archetype instance, must return nullptr 
+		// since component visualizer cannot visualize the archetype.
+		return nullptr;
+	}
+
+	return SplineComp;
+}
+
+FReply FSplinePointDetails::OnSelectFirstLastSplinePoint(bool bFirst)
+{
+	if (SplineComp && SplineVisualizer.IsValid())
+	{
+		if (USplineComponent* SplineCompToVisualize = GetSplineComponentToVisualize())
+		{
+			if (SplineVisualizer->HandleSelectFirstLastSplinePoint(SplineCompToVisualize, bFirst))
+			{
+				TSharedPtr<FComponentVisualizer> Visualizer = StaticCastSharedPtr<FComponentVisualizer>(SplineVisualizer);
+				GUnrealEd->ComponentVisManager.SetActiveComponentVis(GCurrentLevelEditingViewportClient, Visualizer);
+			}
+		}
+	}
+	return FReply::Handled();
+}
+
+FReply FSplinePointDetails::OnSelectPrevNextSplinePoint(bool bNext, bool bAddToSelection)
+{
+	if (SplineVisualizer.IsValid())
+	{
+		SplineVisualizer->OnSelectPrevNextSplinePoint(bNext, bAddToSelection);
+	}
+	return FReply::Handled();
+}
+
+FReply FSplinePointDetails::OnSelectAllSplinePoints()
+{
+	if (SplineComp && SplineVisualizer.IsValid())
+	{
+		if (USplineComponent* SplineCompToVisualize = GetSplineComponentToVisualize())
+		{
+			if (SplineVisualizer->HandleSelectAllSplinePoints(SplineCompToVisualize))
+			{
+				TSharedPtr<FComponentVisualizer> Visualizer = StaticCastSharedPtr<FComponentVisualizer>(SplineVisualizer);
+				GUnrealEd->ComponentVisManager.SetActiveComponentVis(GCurrentLevelEditingViewportClient, Visualizer);
+			}
+		}
+	}
+	return FReply::Handled();
 }
 
 TSharedRef<SWidget> FSplinePointDetails::OnGenerateComboWidget(TSharedPtr<FString> InComboString)
@@ -759,7 +1020,8 @@ void FSplineComponentDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBuild
 	{
 		if (USplineComponent* SplineComp = Cast<USplineComponent>(ObjectsBeingCustomized[0]))
 		{
-			IDetailCategoryBuilder& Category = DetailBuilder.EditCategory("Selected Points");
+			// Set the spline points details as important in order to have it on top 
+			IDetailCategoryBuilder& Category = DetailBuilder.EditCategory("Selected Points", FText::GetEmpty(), ECategoryPriority::Important);
 			TSharedRef<FSplinePointDetails> SplinePointDetails = MakeShareable(new FSplinePointDetails(SplineComp));
 			Category.AddCustomBuilder(SplinePointDetails);
 		}

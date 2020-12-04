@@ -47,8 +47,9 @@ protected:
 	virtual void CreateActor(USkeletalMeshComponent* InOwnerComponent, UClothingAssetBase* InAsset, int32 SimDataIndex) = 0;
 
 	/** Do any required initialization after all the actors have been loaded */
-	virtual void PostActorCreationInitialize() = 0;
-	
+	UE_DEPRECATED(4.26, "No longer required.")
+	virtual void PostActorCreationInitialize() {}
+
 	/** Create a new context, will not be filled, call FillContext before simulating with this context */
 	virtual IClothingSimulationContext* CreateContext() = 0;
 
@@ -139,6 +140,28 @@ public:
 	 * This can be called on any thread, so derived implementations should make sure the gather is
 	 * safe
 	 */
-	virtual void GatherStats() const
-	{}
+	virtual void GatherStats() const {}
+
+	/** Return the number of simulated cloths. Implementation must be thread safe. */
+	virtual int32 GetNumCloths() const { return 0;  }
+	/** Return the number of kinematic (fixed) particles. Implementation must be thread safe. */
+	virtual int32 GetNumKinematicParticles() const { return 0; }
+	/** Return the number of dynamic (simulated) particles. Implementation must be thread safe. */
+	virtual int32 GetNumDynamicParticles() const { return 0; }
+	/**
+	 * Return the number of iterations used by the solver.
+	 * This is the maximum used as an indicative value only, as this could vary between cloths.
+	 * Implementation must be thread safe.
+	 */
+	virtual int32 GetNumIterations() const { return 0; }
+	/**
+	 * Return the number of substeps used by the solver.
+	 * This is the maximum used as an indicative value only, as this could vary between cloths.
+	 * Implementation must be thread safe.
+	 */
+	virtual int32 GetNumSubsteps() const { return 0; }
+	/** Return the simulation time in ms. Implementation must be thread safe. */
+	virtual float GetSimulationTime() const { return 0.f; }
+	/** Return whether the simulation is teleported. Implementation must be thread safe. */
+	virtual bool IsTeleported() const { return false; }
 };

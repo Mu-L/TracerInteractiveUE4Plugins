@@ -77,7 +77,7 @@ public:
 	 * Given a tab ID, summons a new tab in the position saved in the current layout, or in a default position.
 	 * @return the invoked tab
 	 */
-	TSharedRef<SDockTab> InvokeTab( FName TabID );
+	TSharedPtr<SDockTab> TryInvokeTab( FName TabID );
 
 	/**
 	 * Sync the details panel to the current selection
@@ -121,7 +121,8 @@ public:
 	virtual void OnToolkitHostingFinished( const TSharedRef< class IToolkit >& Toolkit ) override;
 	virtual UWorld* GetWorld() const override;
 	virtual TSharedRef<SWidget> CreateActorDetails( const FName TabIdentifier ) override;
-	virtual void SetActorDetailsFilter(TSharedPtr<FDetailsViewObjectFilter> ActorDetailsFilter) override;
+	virtual void SetActorDetailsRootCustomization(TSharedPtr<FDetailsViewObjectFilter> InActorDetailsObjectFilter, TSharedPtr<IDetailRootObjectCustomization> InActorDetailsRootCustomization) override;
+	virtual void SetActorDetailsSCSEditorUICustomization(TSharedPtr<ISCSEditorUICustomization> InActorDetailsSCSEditorUICustomization) override;
 	virtual TSharedRef<SWidget> CreateToolBox() override;
 
 	/** SWidget overrides */
@@ -141,6 +142,7 @@ private:
 	TSharedRef<SDockTab> SpawnLevelEditorTab(const FSpawnTabArgs& Args, FName TabIdentifier, FString InitializationPayload);
 	bool CanSpawnEditorModeToolbarTab(const FSpawnTabArgs& Args) const;
 	bool CanSpawnEditorModeToolboxTab(const FSpawnTabArgs& Args) const;
+	bool HasAnyHostedEditorModeToolkit() const;
 
 	//TSharedRef<SDockTab> SpawnLevelEditorModeTab(const FSpawnTabArgs& Args, FEdMode* EditorMode);
 	TSharedRef<SDockTab> SummonDetailsPanel( FName Identifier );
@@ -218,11 +220,18 @@ private:
 	/** Handles Editor map changes */
 	void HandleEditorMapChange( uint32 MapChangeFlags );
 
+	/** Handles deletion of assets */
+	void HandleAssetsDeleted(const TArray<UClass*>& DeletedClasses);
+
 	/** Called when actors are selected or unselected */
 	void OnActorSelectionChanged(const TArray<UObject*>& NewSelection, bool bForceRefresh = false);
 
 	/** Called when an actor changes outer */
 	void OnLevelActorOuterChanged(AActor* InActor = nullptr, UObject* InOldOuter = nullptr);
+
+	/** @return All valid actor details panels */
+	TArray<TSharedRef<SActorDetails>> GetAllActorDetails() const;
+
 private:
 
 	// Tracking the active viewports in this level editor.
@@ -277,6 +286,15 @@ private:
 
 	/** Handle to the registered OnLevelActorOuterChanged delegate */
 	FDelegateHandle LevelActorOuterChangedHandle;
+
+	/** Actor details object filters */
+	TSharedPtr<FDetailsViewObjectFilter> ActorDetailsObjectFilter;
+
+	/** Actor details root customization */
+	TSharedPtr<IDetailRootObjectCustomization> ActorDetailsRootCustomization;
+
+	/** Actor details SCS editor customization */
+	TSharedPtr<ISCSEditorUICustomization> ActorDetailsSCSEditorUICustomization;
 		
 	/** If this flag is raised we will force refresh on next selection update. */
 	bool bNeedsRefresh : 1;

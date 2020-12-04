@@ -68,6 +68,16 @@ namespace Gauntlet
 		float MaxDuration { get; }
 
 		/// <summary>
+		/// Return true if the warnings and errors needs to log after summary
+		/// </summary>
+		bool LogWarningsAndErrorsAfterSummary { get; }
+
+		/// <summary>
+		/// What the test result should be treated as if we reach max duration.
+		/// </summary>
+		EMaxDurationReachedResult MaxDurationReachedResult { get; }
+
+		/// <summary>
 		/// Priority of this test in relation to any others that are running
 		/// </summary>
 		TestPriority Priority { get;  }
@@ -147,7 +157,11 @@ namespace Gauntlet
 		/// </summary>
 		/// <param name="Node"></param>
 		/// <returns></returns>
-		void CleanupTest();	
-		
+		void CleanupTest();
+
+		/// <summary>
+		/// Output all defined commandline information for this test to the gauntlet window and exit test early.
+		/// </summary>
+		void DisplayCommandlineHelp();
 	}
 }

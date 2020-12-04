@@ -71,7 +71,9 @@ void UMeshOpPreviewWithBackgroundCompute::UpdateResults()
 	EBackgroundComputeTaskStatus Status = BackgroundCompute->CheckStatus();
 	if (Status == EBackgroundComputeTaskStatus::NewResultAvailable)
 	{
-		TUniquePtr<FDynamicMeshOperator> MeshOp  = BackgroundCompute->ExtractResult();
+		TUniquePtr<FDynamicMeshOperator> MeshOp = BackgroundCompute->ExtractResult();
+		OnOpCompleted.Broadcast(MeshOp.Get());
+
 		TUniquePtr<FDynamicMesh3> ResultMesh = MeshOp->ExtractResult();
 		PreviewMesh->SetTransform((FTransform)MeshOp->GetResultTransform());
 		PreviewMesh->UpdatePreview(ResultMesh.Get());  // copies the mesh @todo we could just give ownership to the Preview!
@@ -87,6 +89,17 @@ void UMeshOpPreviewWithBackgroundCompute::InvalidateResult()
 {
 	BackgroundCompute->NotifyActiveComputeInvalidated();
 	bResultValid = false;
+}
+
+
+bool UMeshOpPreviewWithBackgroundCompute::GetCurrentResultCopy(FDynamicMesh3& MeshOut, bool bOnlyIfValid)
+{
+	if ( HaveValidResult() || bOnlyIfValid == false)
+	{
+		MeshOut.Copy( *PreviewMesh->GetMesh() );
+		return true;
+	}
+	return false;
 }
 
 

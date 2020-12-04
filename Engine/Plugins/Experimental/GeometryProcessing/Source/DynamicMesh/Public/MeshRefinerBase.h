@@ -85,7 +85,7 @@ public:
 	/** Set to true to profile various passes @todo re-enable this! */
 	bool ENABLE_PROFILING = false;
 
-	/** 0 = no checking, 1 = check constraints and validity each pass, 2 = check validity after every mesh change (v slow but best for debugging) */
+	/** 0 = no checking, 1 = check constraints each pass, 2 = and check validity each pass, 3 = and check validity after every mesh change (v slow but best for debugging) */
 	int DEBUG_CHECK_LEVEL = 0;
 
 
@@ -153,7 +153,8 @@ protected:
 		}
 		else
 		{
-			return Direction0.Normalized().Dot(Direction1.Normalized());
+			double ZeroTolerance = FMathd::ZeroTolerance;
+			return Direction0.Normalized(ZeroTolerance).Dot(Direction1.Normalized(ZeroTolerance));
 		}
 	}
 
@@ -210,24 +211,16 @@ protected:
 	 */
 	bool CanCollapseVertex(int eid, int a, int b, int& collapse_to) const;
 
-	/**
-	 * @return true if given vertex is Fixed under current constraints
-	 */
-	inline bool IsVertexFixed(int VertexID)
-	{
-		return (Constraints && Constraints->GetVertexConstraint(VertexID).Fixed);
-	}
-
 
 	/**
-	 * @return true if given vertex is Fixed or has a projection target
+	 * @return true if given vertex can't move, or has a projection target
 	 */
-	inline bool IsVertexConstrained(int VertexID)
+	inline bool IsVertexPositionConstrained(int VertexID)
 	{
 		if (Constraints)
 		{
 			FVertexConstraint vc = Constraints->GetVertexConstraint(VertexID);
-			return (vc.Fixed || vc.Target != nullptr);
+			return (!vc.bCanMove || vc.Target != nullptr);
 		}
 		return false;
 	}

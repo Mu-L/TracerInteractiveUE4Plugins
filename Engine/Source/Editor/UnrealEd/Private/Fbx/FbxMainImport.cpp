@@ -36,6 +36,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
 #include "IMeshReductionInterfaces.h"
+#include "ObjectTools.h"
 
 DEFINE_LOG_CATEGORY(LogFbx);
 
@@ -508,6 +509,7 @@ void ApplyImportUIToImportOptions(UFbxImportUI* ImportUI, FBXImportOptions& InOu
 		InOutImportOptions.bDoNotImportCurveWithZero	= ImportUI->AnimSequenceImportData->bDoNotImportCurveWithZero;
 		InOutImportOptions.bImportCustomAttribute		= ImportUI->AnimSequenceImportData->bImportCustomAttribute;
 		InOutImportOptions.bDeleteExistingCustomAttributeCurves = ImportUI->AnimSequenceImportData->bDeleteExistingCustomAttributeCurves;
+		InOutImportOptions.bDeleteExistingNonCurveCustomAttributes = ImportUI->AnimSequenceImportData->bDeleteExistingNonCurveCustomAttributes;
 		InOutImportOptions.bImportBoneTracks			= ImportUI->AnimSequenceImportData->bImportBoneTracks;
 		InOutImportOptions.bSetMaterialDriveParameterOnCustomAttribute = ImportUI->AnimSequenceImportData->bSetMaterialDriveParameterOnCustomAttribute;
 		InOutImportOptions.MaterialCurveSuffixes		= ImportUI->AnimSequenceImportData->MaterialCurveSuffixes;
@@ -637,7 +639,10 @@ void FFbxImporter::ReleaseScene()
 	ImportedMaterialData.Clear();
 
 	// reset
+	FbxTextureToUniqueNameMap.Empty();
+	NodeUniqueNameToOriginalNameMap.Clear();
 	CollisionModels.Clear();
+	CreatedObjects.Empty();
 	CurPhase = NOTSTARTED;
 	bFirstMesh = true;
 	LastMergeBonesChoice = EAppReturnType::Ok;
@@ -1081,50 +1086,128 @@ bool FFbxImporter::OpenFile(FString Filename)
 	return Result;
 }
 
+TSet<FbxFileTexture*> GetFbxMaterialTextures(const FbxSurfaceMaterial& Material)
+{
+	TSet<FbxFileTexture*> TextureSet;
+
+	int32 TextureIndex;
+	FBXSDK_FOR_EACH_TEXTURE(TextureIndex)
+	{
+		FbxProperty Property = Material.FindProperty(FbxLayerElement::sTextureChannelNames[TextureIndex]);
+
+		if (Property.IsValid())
+		{
+			//We use auto as the parameter type to allow for a generic lambda accepting both FbxProperty and FbxLayeredTexture
+			auto AddSrcTextureToSet =  [&TextureSet](const auto& InObject) {
+				int32 NbTextures = InObject.template GetSrcObjectCount<FbxTexture>();
+				for (int32 TexIndex = 0; TexIndex < NbTextures; ++TexIndex)
+				{
+					FbxFileTexture* Texture = InObject.template GetSrcObject<FbxFileTexture>(TexIndex);
+					if (Texture)
+					{
+						TextureSet.Add(Texture);
+					}
+				}
+			};
+
+			//Here we have to check if it's layered textures, or just textures:
+			const int32 LayeredTextureCount = Property.GetSrcObjectCount<FbxLayeredTexture>();
+			if (LayeredTextureCount > 0)
+			{
+				for (int32 LayerIndex = 0; LayerIndex < LayeredTextureCount; ++LayerIndex)
+				{
+					if (const FbxLayeredTexture* lLayeredTexture = Property.GetSrcObject<FbxLayeredTexture>(LayerIndex))
+					{
+						AddSrcTextureToSet(*lLayeredTexture);
+					}
+				}
+			}
+			else
+			{
+				//no layered texture simply get on the property
+				AddSrcTextureToSet(Property);
+			}
+		}
+	}
+
+	return TextureSet;
+}
+
 void FFbxImporter::FixMaterialClashName()
 {
 	const bool bKeepNamespace = GetDefault<UEditorPerProjectUserSettings>()->bKeepFbxNamespace;
 
 	FbxArray<FbxSurfaceMaterial*> MaterialArray;
 	Scene->FillMaterialArray(MaterialArray);
-	TSet<FString> AllMaterialName;
+
+	TSet<FString> AllMaterialAndTextureNames;
+	TSet<FbxFileTexture*> MaterialTextures;
+
+	auto FixNameIfNeeded = [this, &AllMaterialAndTextureNames](const FString& AssetName, 
+		TFunctionRef<void(const FString& /*UniqueName*/)> ApplyUniqueNameFunction,
+		TFunctionRef<FText(const FString& /*UniqueName*/)> GetErrorTextFunction){
+
+		FString UniqueName(AssetName);
+		if (AllMaterialAndTextureNames.Contains(UniqueName))
+		{
+			//Use the fbx nameclash 1 convention: NAMECLASH1_KEY
+			//This will add _ncl1_
+			FString AssetBaseName = UniqueName + TEXT(NAMECLASH1_KEY);
+			int32 NameIndex = 1;
+			do 
+			{
+				UniqueName = AssetBaseName + FString::FromInt(NameIndex++);
+			} while (AllMaterialAndTextureNames.Contains(UniqueName));
+
+			//Apply the unique name.
+			ApplyUniqueNameFunction(UniqueName);
+			if (!GIsAutomationTesting)
+			{
+				AddTokenizedErrorMessage(
+					FTokenizedMessage::Create(EMessageSeverity::Info, GetErrorTextFunction(UniqueName)),
+					FFbxErrors::Generic_LoadingSceneFailed);
+			}
+		}
+		AllMaterialAndTextureNames.Add(UniqueName);
+	};
+
+	// First rename materials to unique names and gather their texture.
 	for (int32 MaterialIndex = 0; MaterialIndex < MaterialArray.Size(); ++MaterialIndex)
 	{
 		FbxSurfaceMaterial *Material = MaterialArray[MaterialIndex];
 		FString MaterialName = UTF8_TO_TCHAR(MakeName(Material->GetName()));
+		MaterialTextures.Append(GetFbxMaterialTextures(*Material));
 
 		if (!bKeepNamespace)
 		{
 			Material->SetName(TCHAR_TO_UTF8(*MaterialName));
 		}
 
-		if (AllMaterialName.Contains(MaterialName))
-		{
-			FString OriginalMaterialName = MaterialName;
-			//Use the fbx nameclash 1 convention: NAMECLASH1_KEY
-			//This will add _ncl1_
-			FString MaterialBaseName = MaterialName + TEXT(NAMECLASH1_KEY);
-			int32 NameIndex = 1;
-			MaterialName = MaterialBaseName + FString::FromInt(NameIndex++);
-			while (AllMaterialName.Contains(MaterialName))
-			{
-				MaterialName = MaterialBaseName + FString::FromInt(NameIndex++);
+		FixNameIfNeeded(MaterialName,
+			[&](const FString& UniqueName) { Material->SetName(TCHAR_TO_UTF8(*UniqueName)); },
+			[&](const FString& UniqueName) {
+				return FText::Format(LOCTEXT("FbxImport_MaterialNameClash", "FBX Scene Loading: Found material name clash, name clash can be wrongly reassign at reimport , material '{0}' was renamed '{1}'"), FText::FromString(MaterialName), FText::FromString(UniqueName));
 			}
-			//Rename the Material
-			Material->SetName(TCHAR_TO_UTF8(*MaterialName));
-			if (!GIsAutomationTesting)
-			{
-				AddTokenizedErrorMessage(
-					FTokenizedMessage::Create(EMessageSeverity::Warning,
-						FText::Format(LOCTEXT("FbxImport_MaterialNameClash", "FBX Scene Loading: Found material name clash, name clash can be wrongly reassign at reimport , material '{0}' was rename '{1}'"), FText::FromString(OriginalMaterialName), FText::FromString(MaterialName))),
-					FFbxErrors::Generic_LoadingSceneFailed);
+		);
+	}
+
+	// Then rename make sure the texture have unique names as well.
+	for (FbxFileTexture* CurrentTexture : MaterialTextures)
+	{
+		FString AbsoluteFilename = UTF8_TO_TCHAR(CurrentTexture->GetFileName());
+		FString TextureName = FPaths::GetBaseFilename(AbsoluteFilename);
+		TextureName = ObjectTools::SanitizeObjectName(TextureName);
+
+		FixNameIfNeeded(TextureName,
+			[&](const FString& UniqueName) { FbxTextureToUniqueNameMap.Add(CurrentTexture, UniqueName); },
+			[&](const FString& UniqueName) {
+				return FText::Format(LOCTEXT("FbxImport_TextureNameClash", "FBX Scene Loading: Found texture name clash, name clash can be wrongly reassign at reimport , texture '{0}' was renamed '{1}'"), FText::FromString(TextureName), FText::FromString(UniqueName));
 			}
-		}
-		AllMaterialName.Add(MaterialName);
+		);
 	}
 }
 
-void FFbxImporter::EnsureNodeNameAreValid()
+void FFbxImporter::EnsureNodeNameAreValid(const FString& BaseFilename)
 {
 	const bool bKeepNamespace = GetDefault<UEditorPerProjectUserSettings>()->bKeepFbxNamespace;
 
@@ -1157,21 +1240,26 @@ void FFbxImporter::EnsureNodeNameAreValid()
 				NodeName = NodeName.Replace(TEXT(":"), TEXT("_"));
 				Node->SetName(TCHAR_TO_UTF8(*NodeName));
 			}
-			if (AllNodeName.Contains(NodeName))
+		}
+		// Do not allow node to be named same as filename as this creates problems later on (reimport)
+		if (AllNodeName.Contains(NodeName) || (ImportOptions->bImportScene && 0 == NodeName.Compare(BaseFilename, ESearchCase::IgnoreCase)))
+		{
+			FString UniqueNodeName;
+			do
 			{
-				FString UniqueNodeName;
-				do
-				{
-					UniqueNodeName = NodeName + FString::FromInt(CurrentNameIndex++);
-				} while (AllNodeName.Contains(UniqueNodeName));
-				Node->SetName(TCHAR_TO_UTF8(*UniqueNodeName));
-				if (!GIsAutomationTesting)
-				{
-					AddTokenizedErrorMessage(
-						FTokenizedMessage::Create(EMessageSeverity::Warning,
-							FText::Format(LOCTEXT("FbxImport_NodeNameClash", "FBX File Loading: Found name clash, node '{0}' was rename '{1}'"), FText::FromString(NodeName), FText::FromString(UniqueNodeName))),
-						FFbxErrors::Generic_LoadingSceneFailed);
-				}
+				UniqueNodeName = NodeName + FString::FromInt(CurrentNameIndex++);
+			} while (AllNodeName.Contains(UniqueNodeName));
+
+			FbxString UniqueName(TCHAR_TO_UTF8(*UniqueNodeName));
+			NodeUniqueNameToOriginalNameMap[UniqueName] = Node->GetName();
+			Node->SetName(UniqueName);
+			
+			if (!GIsAutomationTesting)
+			{
+				AddTokenizedErrorMessage(
+					FTokenizedMessage::Create(EMessageSeverity::Info,
+						FText::Format(LOCTEXT("FbxImport_NodeNameClash", "FBX File Loading: Found name clash, node '{0}' was renamed to '{1}'"), FText::FromString(NodeName), FText::FromString(UniqueNodeName))),
+					FFbxErrors::Generic_LoadingSceneFailed);
 			}
 		}
 		AllNodeName.Add(NodeName);
@@ -1260,7 +1348,8 @@ bool FFbxImporter::ImportFile(FString Filename, bool bPreventMaterialNameClash /
 	// Import the scene.
 	bStatus = Importer->Import(Scene);
 
-	EnsureNodeNameAreValid();
+	const bool bRemovePath = true;
+	EnsureNodeNameAreValid(FPaths::GetBaseFilename(Filename, bRemovePath));
 
 	//Make sure we don't have name clash for materials
 	if (bPreventMaterialNameClash)
@@ -1413,6 +1502,7 @@ bool FFbxImporter::ReadHeaderFromFile(const FString& Filename, bool bPreventMate
 //-------------------------------------------------------------------------
 bool FFbxImporter::ImportFromFile(const FString& Filename, const FString& Type, bool bPreventMaterialNameClash /*= false*/)
 {
+	FFbxScopedOperation ScopedImportOperation(this);
 	bool Result = true;
 
 
@@ -1610,6 +1700,7 @@ bool FFbxImporter::ImportFromFile(const FString& Filename, const FString& Type, 
 							Attribs.Add(FAnalyticsEventAttribute(TEXT("AnimOpt ImportBoneTracks"), CaptureImportOptions->bImportBoneTracks));
 							Attribs.Add(FAnalyticsEventAttribute(TEXT("AnimOpt ImportCustomAttribute"), CaptureImportOptions->bImportCustomAttribute));
 							Attribs.Add(FAnalyticsEventAttribute(TEXT("AnimOpt DeleteExistingCustomAttributeCurves"), CaptureImportOptions->bDeleteExistingCustomAttributeCurves));
+							Attribs.Add(FAnalyticsEventAttribute(TEXT("AnimOpt DeleteExistingNonCurveCustomAttributes"), CaptureImportOptions->bDeleteExistingNonCurveCustomAttributes));
 							Attribs.Add(FAnalyticsEventAttribute(TEXT("AnimOpt PreserveLocalTransform"), CaptureImportOptions->bPreserveLocalTransform));
 							Attribs.Add(FAnalyticsEventAttribute(TEXT("AnimOpt RemoveRedundantKeys"), CaptureImportOptions->bRemoveRedundantKeys));
 							Attribs.Add(FAnalyticsEventAttribute(TEXT("AnimOpt Resample"), CaptureImportOptions->bResample));
@@ -2595,31 +2686,32 @@ void FFbxImporter::RecursiveFindFbxSkelMesh(FbxNode* Node, TArray< TArray<FbxNod
 			bool bFoundCorrectLink = false;
 			for (int32 ClusterId = 0; ClusterId < ClusterCount; ++ClusterId)
 			{
-				FbxNode* Link = Deformer->GetCluster(ClusterId)->GetLink(); //Get the bone influences by this first cluster
-				Link = GetRootSkeleton(Link); // Get the skeleton root itself
+				FbxNode* RootBoneLink = Deformer->GetCluster(ClusterId)->GetLink(); //Get the bone influences by this first cluster
+				RootBoneLink = GetRootSkeleton(RootBoneLink); // Get the skeleton root itself
 
-				if (Link)
+				if (RootBoneLink)
 				{
-					int32 i;
-					for (i = 0; i < SkeletonArray.Num(); i++)
+					bool bAddedToExistingSkeleton = false;
+					for (int32 SkeletonIndex = 0; SkeletonIndex < SkeletonArray.Num(); ++SkeletonIndex)
 					{
-						if (Link == SkeletonArray[i])
+						if (RootBoneLink == SkeletonArray[SkeletonIndex])
 						{
 							// append to existed outSkelMeshArray element
-							TArray<FbxNode*>* TempArray = outSkelMeshArray[i];
+							TArray<FbxNode*>* TempArray = outSkelMeshArray[SkeletonIndex];
 							TempArray->Add(NodeToAdd);
+							bAddedToExistingSkeleton = true;
 							break;
 						}
 					}
 
 					// if there is no outSkelMeshArray element that is bind to this skeleton
 					// create new element for outSkelMeshArray
-					if (i == SkeletonArray.Num())
+					if (!bAddedToExistingSkeleton)
 					{
 						TArray<FbxNode*>* TempArray = new TArray<FbxNode*>();
 						TempArray->Add(NodeToAdd);
 						outSkelMeshArray.Add(TempArray);
-						SkeletonArray.Add(Link);
+						SkeletonArray.Add(RootBoneLink);
 						
 						if (ImportOptions->bImportScene && !ImportOptions->bTransformVertexToAbsolute)
 						{
@@ -2661,35 +2753,30 @@ void FFbxImporter::RecursiveFindFbxSkelMesh(FbxNode* Node, TArray< TArray<FbxNod
 
 	//Skeletalmesh node can have child so let's always iterate trough child
 	{
-		int32 ChildIndex;
-		TArray<FbxNode*> ChildNoScale;
-		TArray<FbxNode*> ChildScale;
+		TArray<FbxNode*> ChildScaled;
 		//Sort the node to have the one with no scaling first so we have more chance
 		//to have a root skeletal mesh with no scale. Because scene import do not support
 		//root skeletal mesh containing scale
-		for (ChildIndex = 0; ChildIndex < Node->GetChildCount(); ++ChildIndex)
+		for (int32 ChildIndex = 0; ChildIndex < Node->GetChildCount(); ++ChildIndex)
 		{
 			FbxNode *ChildNode = Node->GetChild(ChildIndex);
 
 			if(!Node->GetNodeAttribute() || Node->GetNodeAttribute()->GetAttributeType() != FbxNodeAttribute::eLODGroup)
 			{
-				FbxVector4 ChildScaling = ChildNode->EvaluateLocalScaling();
 				FbxVector4 NoScale(1.0, 1.0, 1.0);
-				if(ChildScaling == NoScale)
+
+				if(ChildNode->EvaluateLocalScaling() == NoScale)
 				{
-					ChildNoScale.Add(ChildNode);
+					RecursiveFindFbxSkelMesh(ChildNode, outSkelMeshArray, SkeletonArray, ExpandLOD);
 				}
 				else
 				{
-					ChildScale.Add(ChildNode);
+					ChildScaled.Add(ChildNode);
 				}
 			}
 		}
-		for (FbxNode *ChildNode : ChildNoScale)
-		{
-			RecursiveFindFbxSkelMesh(ChildNode, outSkelMeshArray, SkeletonArray, ExpandLOD);
-		}
-		for (FbxNode *ChildNode : ChildScale)
+
+		for (FbxNode *ChildNode : ChildScaled)
 		{
 			RecursiveFindFbxSkelMesh(ChildNode, outSkelMeshArray, SkeletonArray, ExpandLOD);
 		}
@@ -2886,13 +2973,10 @@ void FFbxImporter::FillFbxSkelMeshArrayInScene(FbxNode* Node, TArray< TArray<Fbx
 		TArray<FbxNode*>* CombineNodes = new TArray<FbxNode*>();
 		for (TArray<FbxNode*> *Parts : outSkelMeshArray)
 		{
-			for (FbxNode* TmpNode : (*Parts))
-			{
-				CombineNodes->Add(TmpNode);
-			}
+			CombineNodes->Append(*Parts);
 			delete Parts;
 		}
-		outSkelMeshArray.Empty();
+		outSkelMeshArray.Empty(1);
 		outSkelMeshArray.Add(CombineNodes);
 	}
 }

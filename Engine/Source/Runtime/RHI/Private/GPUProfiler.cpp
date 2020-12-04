@@ -480,8 +480,7 @@ void FGPUProfilerEventNodeFrame::DumpEventTree()
 		static IConsoleVariable* CVSyncVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.VSync"));
 		if (CVSyncVar->GetInt() != 0 && !PlatformDisablesVSync())
 		{
-			VsyncEnabledWarningText = LOCTEXT("GpuProfileVsyncEnabledWarning",
-				"WARNING: This GPU profile was captured with v-sync enabled.  V-sync wait time may show up in any bucket, and as a result the data in this profile may be skewed. Please profile with v-sync disabled to obtain the most accurate data.");
+			VsyncEnabledWarningText = LOCTEXT("GpuProfileVsyncEnabledWarning", "WARNING: This GPU profile was captured with v-sync enabled.  V-sync wait time may show up in any bucket, and as a result the data in this profile may be skewed. Please profile with v-sync disabled to obtain the most accurate data.");
 			UE_LOG(LogRHI, Log, TEXT("%s"), *(VsyncEnabledWarningText.ToString()));
 		}
 
@@ -654,13 +653,13 @@ void FGPUProfiler::PopEvent()
 bool FGPUTiming::GIsSupported = false;
 
 /** Frequency for the timing values, in number of ticks per seconds, or 0 if the feature isn't supported. */
-uint64 FGPUTiming::GTimingFrequency = 0;
+TStaticArray<uint64, MAX_NUM_GPUS> FGPUTiming::GTimingFrequency(0);
 
 /**
 * Two timestamps performed on GPU and CPU at nearly the same time.
 * This can be used to visualize GPU and CPU timing events on the same timeline.
 */
-FGPUTimingCalibrationTimestamp FGPUTiming::GCalibrationTimestamp = {};
+TStaticArray<FGPUTimingCalibrationTimestamp, MAX_NUM_GPUS> FGPUTiming::GCalibrationTimestamp;
 
 /** Whether the static variables have been initialized. */
 bool FGPUTiming::GAreGlobalsInitialized = false;

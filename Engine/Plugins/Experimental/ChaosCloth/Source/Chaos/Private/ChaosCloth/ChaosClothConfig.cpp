@@ -7,7 +7,6 @@
 #include "ClothingSimulationInteractor.h"
 
 // Legacy parameters not yet migrated to Chaos parameters:
-//  WindMethod
 //  VerticalConstraintConfig.CompressionLimit
 //  VerticalConstraintConfig.StretchLimit
 //  HorizontalConstraintConfig.CompressionLimit
@@ -18,7 +17,6 @@
 //  ShearConstraintConfig.StretchLimit
 //  SelfCollisionStiffness
 //  SelfCollisionCullScale
-//  WindLiftCoefficient
 //  LinearDrag
 //  AngularDrag
 //  StiffnessFrequency
@@ -61,16 +59,25 @@ void UChaosClothConfig::MigrateFrom(const FClothConfig_Legacy& ClothConfig)
 	LimitScale = FMath::Clamp(ClothConfig.TetherLimit, 0.01f, 10.f);
 	ShapeTargetStiffness = 0.f;
 
-	DragCoefficient = (ClothConfig.WindMethod == EClothingWindMethod_Legacy::Accurate) ? ClothConfig.WindDragCoefficient: 0.07f;  // Only Accurate wind uses the WindDragCoefficient
+	bUsePointBasedWindModel = (ClothConfig.WindMethod == EClothingWindMethod_Legacy::Legacy);
+	DragCoefficient = bUsePointBasedWindModel ? 0.07f  : ClothConfig.WindDragCoefficient;  // Only Accurate wind uses the WindDragCoefficient
+	LiftCoefficient = bUsePointBasedWindModel ? 0.035f : ClothConfig.WindLiftCoefficient;  // Only Accurate wind uses the WindLiftCoefficient
 
 	const float Damping = (ClothConfig.Damping.X + ClothConfig.Damping.Y + ClothConfig.Damping.Z) / 3.f;
 	DampingCoefficient = FMath::Clamp(Damping * Damping * 0.7f, 0.f, 1.f);  // Nv Cloth seems to have a different damping formulation.
 
 	CollisionThickness = FMath::Clamp(ClothConfig.CollisionThickness, 0.f, 1000.f);
+	SelfCollisionThickness = FMath::Clamp(ClothConfig.SelfCollisionRadius, 0.f, 1000.f);
 
 	LinearVelocityScale = ClothConfig.LinearInertiaScale * 0.75f;
 	const FVector AngularInertiaScale = ClothConfig.AngularInertiaScale * ClothConfig.CentrifugalInertiaScale * 0.75f;
 	AngularVelocityScale = (AngularInertiaScale.X + AngularInertiaScale.Y + AngularInertiaScale.Z) / 3.f;
+
+	bUseGravityOverride = ClothConfig.bUseGravityOverride;
+	GravityScale = ClothConfig.GravityScale;
+	Gravity = ClothConfig.GravityOverride;
+
+	bUseLegacyBackstop = true;
 }
 
 void UChaosClothConfig::MigrateFrom(const UClothSharedConfigCommon* ClothSharedConfig)
@@ -86,6 +93,13 @@ void UChaosClothConfig::MigrateFrom(const UClothSharedConfigCommon* ClothSharedC
 				DampingCoefficient = ChaosClothSharedSimConfig->Damping_DEPRECATED;
 			}
 			CollisionThickness = ChaosClothSharedSimConfig->CollisionThickness_DEPRECATED;
+		}
+		if (ChaosClothConfigCustomVersion < FChaosClothConfigCustomVersion::AddGravitySelfCollisionMigration)
+		{
+			SelfCollisionThickness = ChaosClothSharedSimConfig->SelfCollisionThickness_DEPRECATED;
+			bUseGravityOverride = ChaosClothSharedSimConfig->bUseGravityOverride_DEPRECATED;
+			GravityScale = ChaosClothSharedSimConfig->GravityScale_DEPRECATED;
+			Gravity = ChaosClothSharedSimConfig->Gravity_DEPRECATED;
 		}
 	}
 }
@@ -103,7 +117,28 @@ void UChaosClothConfig::PostLoad()
 
 	if (ChaosClothConfigCustomVersion < FChaosClothConfigCustomVersion::UpdateDragDefault)
 	{
-		DragCoefficient = 0.07f;  // Reset to a more appropirate default for chaos cloth assets saved before this custom version
+		DragCoefficient = 0.07f;  // Reset to a more appropriate default for chaos cloth assets saved before this custom version
+	}
+
+	if (ChaosClothConfigCustomVersion < FChaosClothConfigCustomVersion::RemoveInternalConfigParameters)
+	{
+		MinPerParticleMass = 0.0001f;  // Override these values in case they might have been accidentally
+	}
+
+	if (ChaosClothConfigCustomVersion < FChaosClothConfigCustomVersion::AddLegacyBackstopParameter)
+	{
+		bUseLegacyBackstop = true;
+	}
+}
+
+float UChaosClothConfig::GetMassValue() const
+{
+	switch (MassMode)
+	{
+	default:
+	case EClothMassMode::Density: return Density;
+	case EClothMassMode::TotalMass: return TotalMass;
+	case EClothMassMode::UniformMass: return UniformMass;
 	}
 }
 
@@ -116,14 +151,6 @@ UChaosClothSharedSimConfig::~UChaosClothSharedSimConfig()
 void UChaosClothSharedSimConfig::MigrateFrom(const FClothConfig_Legacy& ClothConfig)
 {
 	IterationCount = FMath::Clamp(int32(ClothConfig.SolverFrequency / 60.f), 1, 100);
-
-	SelfCollisionThickness = FMath::Clamp(ClothConfig.SelfCollisionRadius, 0.f, 1000.f);
-
-	bUseGravityOverride = ClothConfig.bUseGravityOverride;
-
-	GravityScale = ClothConfig.GravityScale;
-
-	Gravity = ClothConfig.GravityOverride;
 
 	bUseDampingOverride_DEPRECATED = false;  // Damping is migrated to per cloth configs
 }
@@ -141,7 +168,7 @@ void UChaosClothSharedSimConfig::PostLoad()
 
 	if (ChaosClothSharedConfigCustomVersion < FChaosClothSharedConfigCustomVersion::AddGravityOverride)
 	{
-		bUseGravityOverride = true;  // Default gravity override would otherwise disable the currently set gravity on older versions
+		bUseGravityOverride_DEPRECATED = true;  // Default gravity override would otherwise disable the currently set gravity on older versions
 	}
 }
 

@@ -23,10 +23,12 @@ class UReimportFbxAnimSequenceFactory : public UFbxFactory, public FReimportHand
 	virtual void SetReimportPaths( UObject* Obj, const TArray<FString>& NewReimportPaths ) override;
 	virtual EReimportResult::Type Reimport( UObject* Obj ) override;
 	virtual int32 GetPriority() const override;
+	virtual void PostImportCleanUp() { CleanUp(); }
 	//~ End FReimportHandler Interface
 
 	//~ Begin UFactory Interface
 	virtual bool FactoryCanImport(const FString& Filename) override;
+	virtual bool IsAutomatedImport() const override;
 	//~ End UFactory Interface
 };
 

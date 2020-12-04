@@ -295,6 +295,11 @@ struct FPrimaryCrashProperties
 	 */
 	FString PCallStackHash;
 
+	/*
+	 * The signal that was raised to enter the crash handler
+	 */
+	int32 CrashSignal;
+
 	/**
 	 * Specifies the number of stack frames in the callstack to ignore when symbolicating from a minidump.
 	 */
@@ -415,6 +420,11 @@ struct FPrimaryCrashProperties
 	 *	Thread contexts, XML elements containing info specific to an active thread, e.g. callstacks
 	 */
 	FCrashPropertyXmlNode Threads;
+
+	/**
+	 *	Optional additional data for platform properties
+	 */
+	FCrashPropertyXmlNode PlatformPropertiesExtras;
 
 	/**
 	 * Whether it was an OOM or not

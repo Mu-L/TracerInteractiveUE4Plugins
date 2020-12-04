@@ -49,9 +49,9 @@ namespace Chaos
 				break;	//if taking too long just stop. This should never happen
 			}
 			const TVector<T, 3> NegV = -V;
-			const TVector<T, 3> SupportA = A.Support2(NegV);
+			const TVector<T, 3> SupportA = A.SupportCore(NegV);
 			const TVector<T, 3> VInB = AToBRotation * V;
-			const TVector<T, 3> SupportBLocal = B.Support2(VInB);
+			const TVector<T, 3> SupportBLocal = B.SupportCore(VInB);
 			const TVector<T, 3> SupportB = BToATM.TransformPositionNoScale(SupportBLocal);
 			const TVector<T, 3> W = SupportA - SupportB;
 
@@ -86,23 +86,32 @@ namespace Chaos
 		
 	}
 
-	
-	// This function will be faster if bNegativePenetrationSupport is false, so don't use the feature if not required
-	template <bool bNegativePenetrationSupport = false, typename T, typename TGeometryA, typename TGeometryB>
-	bool GJKPenetration(const TGeometryA& A, const TGeometryB& B, const TRigidTransform<T, 3>& BToATM, T& OutPenetration, TVec3<T>& OutClosestA, TVec3<T>& OutClosestB, TVec3<T>& OutNormal, const T InThicknessA = 0, const TVector<T, 3>& InitialDir = TVector<T, 3>(1, 0, 0), const T InThicknessB = 0, int32* OutNumIterations = nullptr)
+	// Calculate the penetration depth of two geometries.
+	// OutClosestA and OutClosestB are the closest or deepest-penetrating points on the two core geometries, both in the space of A and ignoring the margin.
+	// This function will be faster if bNegativePenetrationAllowed is false, so don't use the feature if not required
+	// NOTE: OutPenetration is the penetration including the Thickness (i.e., the actual penetration depth), but the closest points
+	// returned are on the core shapes (i.e., ignoring the Thickness). If you want the closest positions on the shape surface (including
+	// the Thickness) use GJKPenetration().
+	template <bool bNegativePenetrationAllowed = false, typename T, typename TGeometryA, typename TGeometryB>
+	bool GJKPenetrationCore(const TGeometryA& A, const TGeometryB& B, const TRigidTransform<T, 3>& BToATM, T& OutPenetration, TVec3<T>& OutClosestA, TVec3<T>& OutClosestB, TVec3<T>& OutNormal, int32& OutClosestVertexIndexA, int32& OutClosestVertexIndexB, const T ThicknessA, const T ThicknessB, const TVector<T, 3>& InitialDir = TVector<T, 3>(1, 0, 0), const T EpsilonSq = 1.e-6)
 	{
-		auto SupportAFunc = [&A](const TVec3<T>& V)
+		int32 VertexIndexA = INDEX_NONE;
+		int32 VertexIndexB = INDEX_NONE;
+
+		auto SupportAFunc = [&A, &VertexIndexA](const TVec3<T>& V)
 		{
-			return A.Support2(V);
+			VertexIndexA = INDEX_NONE;
+			return A.SupportCore(V);
 		};
 
 		const TRotation<T, 3> AToBRotation = BToATM.GetRotation().Inverse();
 
 
-		auto SupportBFunc = [&B, &BToATM, &AToBRotation](const TVec3<T>& V)
+		auto SupportBFunc = [&B, &BToATM, &AToBRotation, &VertexIndexB](const TVec3<T>& V)
 		{
+			VertexIndexB = INDEX_NONE;
 			const TVector<T, 3> VInB = AToBRotation * V;
-			const TVector<T, 3> SupportBLocal = B.Support2(VInB);
+			const TVector<T, 3> SupportBLocal = B.SupportCore(VInB);
 			return BToATM.TransformPositionNoScale(SupportBLocal);
 		};
 
@@ -123,11 +132,8 @@ namespace Chaos
 		bool bNearZero = false;
 		int NumIterations = 0;
 		T PrevDist2 = FLT_MAX;
-		const T ThicknessA = A.GetMargin() + InThicknessA;
-		const T ThicknessB = B.GetMargin() + InThicknessB;
 		const T Inflation = ThicknessA + ThicknessB + 1e-3;
 		const T Inflation2 = Inflation * Inflation;
-		const T Eps2 = 1e-6;
 		do
 		{
 			if (!ensure(NumIterations++ < 32))	//todo: take this out
@@ -139,7 +145,7 @@ namespace Chaos
 			const TVector<T, 3> SupportB = SupportBFunc(V);
 			const TVector<T, 3> W = SupportA - SupportB;
 
-			if (!bNegativePenetrationSupport && TVector<T, 3>::DotProduct(V, W) > Inflation)
+			if (!bNegativePenetrationAllowed && TVector<T, 3>::DotProduct(V, W) > Inflation)
 			{
 				return false;
 			}
@@ -152,7 +158,7 @@ namespace Chaos
 			V = SimplexFindClosestToOrigin(Simplex, SimplexIDs, Barycentric, As, Bs);
 
 			T NewDist2 = V.SizeSquared();
-			bNearZero = NewDist2 < Eps2;	//want to get the closest point for MTD
+			bNearZero = NewDist2 < EpsilonSq;	//want to get the closest point for MTD
 
 			//as simplices become degenerate we will stop making progress. This is a side-effect of precision, in that case take V as the current best approximation
 			//question: should we take previous v in case it's better?
@@ -168,12 +174,7 @@ namespace Chaos
 
 		} while (!bTerminate);
 
-		if (OutNumIterations != nullptr)
-		{
-			*OutNumIterations = NumIterations;
-		}
-
-		if (PrevDist2 > Eps2)
+		if (PrevDist2 > EpsilonSq)
 		{
 			//generally this happens when shapes are inflated.
 			TVector<T, 3> ClosestA(0);
@@ -187,16 +188,18 @@ namespace Chaos
 
 			
 			const T PreDist = FMath::Sqrt(PrevDist2);
-			OutNormal = (ClosestBInA - ClosestA).GetUnsafeNormal();	//Note1: should we just use PreDist2? //Note2: we can just use -V.GetUnsafeNormal() here instead if it improves accuracy
+			OutNormal = -V.GetUnsafeNormal();
+
 			T Penetration = ThicknessA + ThicknessB - PreDist;
-			if (!bNegativePenetrationSupport)
+			if (!bNegativePenetrationAllowed)
 			{
-				Penetration = FMath::Clamp<T>(Penetration, 0, TNumericLimits<T>::Max());
+				if (Penetration < 0.0f) return false;
 			}
 			OutPenetration = Penetration;
-			OutClosestA = ClosestA + OutNormal * ThicknessA;
-			OutClosestB = ClosestBInA - OutNormal * ThicknessB;
-
+			OutClosestA = ClosestA;
+			OutClosestB = ClosestBInA;
+			OutClosestVertexIndexA = VertexIndexA;
+			OutClosestVertexIndexB = VertexIndexB;
 		}
 		else
 		{
@@ -218,8 +221,10 @@ namespace Chaos
 			{
 				OutNormal = MTD;
 				OutPenetration = Penetration + ThicknessA + ThicknessB;
-				OutClosestA = ClosestA + OutNormal * ThicknessA;
-				OutClosestB = ClosestBInA - OutNormal * ThicknessB;
+				OutClosestA = ClosestA;
+				OutClosestB = ClosestBInA;
+				OutClosestVertexIndexA = VertexIndexA;
+				OutClosestVertexIndexB = VertexIndexB;
 			}
 			else
 			{
@@ -236,13 +241,29 @@ namespace Chaos
 
 				OutPenetration = ThicknessA + ThicknessB;
 				OutNormal = MTD;
-				OutClosestA = ClosestA + OutNormal * ThicknessA;
-				OutClosestB = ClosestBInA - OutNormal * ThicknessB;
-				return OutPenetration > Eps2;
+				OutClosestA = ClosestA;
+				OutClosestB = ClosestBInA;
+				OutClosestVertexIndexA = VertexIndexA;
+				OutClosestVertexIndexB = VertexIndexB;
+				return OutPenetration > EpsilonSq;
 			}
 		}
 
 		return true;
+	}
+
+	// Calculate the penetration depth of two geometries.
+	// OutClosestA and OutClosestB are the closest or deepest-penetrating points on the two geometries, both in the space of A.
+	// This function will be faster if bNegativePenetrationAllowed is false, so don't use the feature if not required
+	template <bool bNegativePenetrationAllowed = false, typename T, typename TGeometryA, typename TGeometryB>
+	bool GJKPenetration(const TGeometryA& A, const TGeometryB& B, const TRigidTransform<T, 3>& BToATM, T& OutPenetration, TVec3<T>& OutClosestA, TVec3<T>& OutClosestB, TVec3<T>& OutNormal, int32& OutClosestVertexIndexA, int32& OutClosestVertexIndexB, const T InThicknessA = 0, const TVector<T, 3>& InitialDir = TVector<T, 3>(1, 0, 0), const T InThicknessB = 0, const T EpsilonSq = 1.e-6)
+	{
+		T NetThicknessA = InThicknessA + A.GetMargin();
+		T NetThicknessB = InThicknessB + B.GetMargin();
+		bool bCoreHit = GJKPenetrationCore<bNegativePenetrationAllowed, T, TGeometryA, TGeometryB>(A, B, BToATM, OutPenetration, OutClosestA, OutClosestB, OutNormal, OutClosestVertexIndexA, OutClosestVertexIndexB, NetThicknessA, NetThicknessB, InitialDir, EpsilonSq);
+		OutClosestA += OutNormal * NetThicknessA;
+		OutClosestB -= OutNormal * NetThicknessB;
+		return bCoreHit;
 	}
 
 
@@ -426,13 +447,13 @@ namespace Chaos
 
 		auto SupportAFunc = [&A](const TVec3<T>& V)
 		{
-			return A.Support2(V);
+			return A.SupportCore(V);
 		};
 
 		auto SupportBFunc = [&B, &AToBRotation, &BToARotation](const TVec3<T>& V)
 		{
 			const TVector<T, 3> VInB = AToBRotation * V;
-			const TVector<T, 3> SupportBLocal = B.Support2(VInB);
+			const TVector<T, 3> SupportBLocal = B.SupportCore(VInB);
 			return BToARotation * SupportBLocal;
 		};
 
@@ -588,7 +609,8 @@ namespace Chaos
 				
 				const TVec3<T> ClosestBInA = StartPoint + ClosestB;
 				const T InGJKPreDist = FMath::Sqrt(InGJKPreDist2);
-				OutNormal = (ClosestBInA - ClosestA).GetUnsafeNormal();	//question: should we just use InGJKPreDist2?
+				OutNormal = V.GetUnsafeNormal();
+
 				const T Penetration = FMath::Clamp<T>(ThicknessA + ThicknessB - InGJKPreDist, 0, TNumericLimits<T>::Max());
 				const TVector<T, 3> ClosestLocal = ClosestB - OutNormal * ThicknessB;
 
@@ -617,7 +639,7 @@ namespace Chaos
 					auto SupportBAtOriginFunc = [&](const TVec3<T>& Dir)
 					{
 						const TVector<T, 3> DirInB = AToBRotation * Dir;
-						const TVector<T, 3> SupportBLocal = B.Support2(DirInB);
+						const TVector<T, 3> SupportBLocal = B.SupportCore(DirInB);
 						return StartTM.TransformPositionNoScale(SupportBLocal);
 					};
 

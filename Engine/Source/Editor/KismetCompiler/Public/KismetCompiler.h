@@ -139,9 +139,6 @@ public:
 	// CreateClassVariablesFromBlueprint:
 	bool bAssignDelegateSignatureFunction;
 
-	// Flag to trigger ProcessLinkedGraph in CreateClassVariablesFromBlueprint:
-	bool bGenerateLinkedAnimGraphVariables;
-
 	static FSimpleMulticastDelegate OnPreCompile;
 	static FSimpleMulticastDelegate OnPostCompile;
 
@@ -288,6 +285,13 @@ public:
 	/** Ensures that all component class overrides are legal overrides of the parent class */
 	void ValidateComponentClassOverrides();
 
+	/**
+	* Ensures that all class reference Properties are legal overrides of the parent class
+	* by checking the default value set on any PC_Class variable types. Requires a 
+	* valid CDO in order to do this validation. Called in Stage V: Validate 
+	*/
+	void ValidateClassPropertyDefaults();
+
 	/** Creates a class variable for each entry in the Blueprint NewVars array */
 	virtual void CreateClassVariablesFromBlueprint();
 
@@ -347,6 +351,9 @@ protected:
 	 */
 	void CheckConnectionResponse(const FPinConnectionResponse &Response, const UEdGraphNode *Node);
 
+	/** Prune isolated nodes given the specified graph */
+	void PruneIsolatedNodes(UEdGraph* InGraph, bool bInIncludeNodesThatCouldBeExpandedToRootSet);
+
 protected:
 	// FGraphCompilerContext interface
 	virtual void ValidateLink(const UEdGraphPin* PinA, const UEdGraphPin* PinB) const override;
@@ -379,6 +386,9 @@ protected:
 	// Gives derived classes a chance to hook up any custom logic
 	virtual void PreCompile() { OnPreCompile.Broadcast(); }
 	virtual void PostCompile() { OnPostCompile.Broadcast(); }
+
+	// Gives derived classes a chance to process post-node expansion
+	virtual void PostExpansionStep(const UEdGraph* Graph) {}
 
 	/** Determines if a node is pure */
 	virtual bool IsNodePure(const UEdGraphNode* Node) const;
@@ -500,6 +510,10 @@ protected:
 	 */
 	virtual void PrecompileFunction(FKismetFunctionContext& Context, EInternalCompilerFlags InternalFlags);
 
+	/**
+	 * Used for performing custom patching during stage IX of the compilation during load.
+	 */
+	virtual void PreCompileUpdateBlueprintOnLoad(UBlueprint* BP) {}
 	/**
 	 * Second phase of compiling a function graph
 	 *   - Generates an executable statement list

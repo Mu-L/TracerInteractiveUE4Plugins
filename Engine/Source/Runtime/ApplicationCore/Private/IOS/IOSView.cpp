@@ -264,9 +264,6 @@ id<MTLDevice> GMetalDevice = nil;
 {
 	[CachedMarkedText release];
 	[markedTextStyle release];
-#if WITH_ACCESSIBILITY
-	[_accessibilityElements release];
-#endif
 	[super dealloc];
 }
 
@@ -290,14 +287,12 @@ id<MTLDevice> GMetalDevice = nil;
 		// 0 means to leave the scale alone, use native
 		if (RequestedContentScaleFactor == 0.0f)
 		{
-#ifdef __IPHONE_8_0
             if ([self.window.screen respondsToSelector:@selector(nativeScale)])
             {
                 self.contentScaleFactor = self.window.screen.nativeScale;
                 UE_LOG(LogIOS, Log, TEXT("Setting contentScaleFactor to nativeScale which is = %f"), self.contentScaleFactor);
             }
             else
-#endif
             {
                 UE_LOG(LogIOS, Log, TEXT("Leaving contentScaleFactor alone, with scale = %f"), NativeScale);
             }
@@ -389,24 +384,18 @@ id<MTLDevice> GMetalDevice = nil;
 
 -(void)SetAccessibilityWindow:(AccessibleWidgetId)WindowId
 {
-	if (_accessibilityElements == nil)
+	[FIOSAccessibilityCache AccessibilityElementCache].RootWindowId = WindowId;
+ 	if (WindowId != IAccessibleWidget::InvalidAccessibleWidgetId)
 	{
-		_accessibilityElements = [[NSMutableArray alloc] init];
+		FIOSAccessibilityLeaf* Window = [[FIOSAccessibilityCache AccessibilityElementCache] GetAccessibilityElement: WindowId];
+		// We go ahead and assume the window will have children and add the FIOSAccessibilityContainer
+		// for the Window to enforce accessibility hierarchy
+self.accessibilityElements = @[Window.accessibilityContainer];
 	}
 	else
 	{
-		[_accessibilityElements removeAllObjects];
+		self.accessibilityElements = Nil;
 	}
-
-	if (WindowId != IAccessibleWidget::InvalidAccessibleWidgetId)
-	{
-		[_accessibilityElements addObject : [[FIOSAccessibilityCache AccessibilityElementCache] GetAccessibilityElement:WindowId]];
-	}
-}
-
--(NSArray*)accessibilityElements
-{
-	return _accessibilityElements;
 }
 
 -(BOOL)isAccessibilityElement
@@ -549,6 +538,16 @@ id<MTLDevice> GMetalDevice = nil;
 	TArray<TouchInput> TouchesArray;
 	for (UITouch* Touch in Touches)
 	{
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 140000
+        // ignore mouse-produced touches, these will be handled by FIOSInputInterface
+        if (@available(iOS 14, *))
+        {
+            if ( Touch.type == UITouchTypeIndirectPointer ) // Requires UIApplicationSupportsIndirectInputEvents:true in plist
+            {
+                continue;
+            }
+        }
+#endif
 		// get info from the touch
 		CGPoint Loc = [Touch locationInView:self];
 		CGPoint PrevLoc = [Touch previousLocationInView:self];
@@ -693,6 +692,8 @@ id<MTLDevice> GMetalDevice = nil;
 			// Dismiss the existing keyboard, if one exists, so the style can be overridden.
 			[self endEditing:YES];
 			[self becomeFirstResponder];
+            
+            FIOSInputInterface::SetKeyboardInhibited(true);
 		}
 		
 		FPlatformAtomics::InterlockedDecrement(&KeyboardShowCount);
@@ -713,6 +714,7 @@ id<MTLDevice> GMetalDevice = nil;
 			{
 				// Dismiss the existing keyboard, if one exists.
 				[self endEditing:YES];
+                FIOSInputInterface::SetKeyboardInhibited(false);
 			}
 		}
 	});
@@ -1084,6 +1086,20 @@ id<MTLDevice> GMetalDevice = nil;
  * Tell the OS to hide the status bar (iOS 7 method for hiding)
  */
 - (BOOL)prefersStatusBarHidden
+{
+	return YES;
+}
+
+- (BOOL)prefersPointerLocked
+{
+    UE_LOG(LogIOS, Log, TEXT("IOSViewController prefersPointerLocked"));
+    return YES;
+}
+
+/**
+ * Tell the OS to hide the home bar
+ */
+- (BOOL)prefersHomeIndicatorAutoHidden
 {
 	return YES;
 }

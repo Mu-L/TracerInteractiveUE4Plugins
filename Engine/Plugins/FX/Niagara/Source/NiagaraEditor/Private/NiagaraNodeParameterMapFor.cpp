@@ -35,7 +35,7 @@ void UNiagaraNodeParameterMapFor::AllocateDefaultPins()
 
 void UNiagaraNodeParameterMapFor::Compile(FHlslNiagaraTranslator* Translator, TArray<int32>& Outputs)
 {
-	TArray<UEdGraphPin*> InputPins;
+	FPinCollectorArray InputPins;
 	GetInputPins(InputPins);
 	if (Translator)
 	{
@@ -51,7 +51,7 @@ void UNiagaraNodeParameterMapFor::Compile(FHlslNiagaraTranslator* Translator, TA
 		else
 		{
 			UNiagaraNodeParameterMapSet::Compile(Translator, Outputs);
-			Translator->Message(FNiagaraCompileEventSeverity::Log,LOCTEXT("UnsupportedParamMapFor", "Parameter map for is not yet supported on cpu."), this, nullptr);
+			//Translator->Message(FNiagaraCompileEventSeverity::Log,LOCTEXT("UnsupportedParamMapFor", "Parameter map for is not yet supported on cpu."), this, nullptr);
 		}
 	}
 }

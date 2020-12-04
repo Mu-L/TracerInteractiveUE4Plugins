@@ -13,9 +13,9 @@ enum class EMoviePipelineTextureStreamingMethod : uint8
 {
 	/** This will not change the texture streaming method / cvars the users has set. */
 	None UMETA(DisplayName="Don't Override" ),
-	/** Disable the Texture Streaming system. Requires higher RAM limits but can help if there are still blurry textures. */
+	/** Disable the Texture Streaming system. Requires the highest amount of VRAM, but helps if Fully Load Used Textures still has blurry textures. */
 	Disabled UMETA(DisplayName = "Disable Streaming"),
-	/**  Fully load used textures instead of progressively streaming them in over multiple frames. Requires less VRAM. */
+	/**  Fully load used textures instead of progressively streaming them in over multiple frames. Requires less VRAM but can occasionally still results in blurry textures. */
 	FullyLoad UMETA(DisplayName = "Fully Load Used Textures")
 };
 
@@ -27,7 +27,7 @@ public:
 	UMoviePipelineGameOverrideSetting()
 		: GameModeOverride(AMoviePipelineGameMode::StaticClass())
 		, bCinematicQualitySettings(true)
-		, TextureStreaming(EMoviePipelineTextureStreamingMethod::FullyLoad)
+		, TextureStreaming(EMoviePipelineTextureStreamingMethod::Disabled)
 		, bUseLODZero(true)
 		, bDisableHLODs(true)
 		, bUseHighQualityShadows(true)
@@ -35,6 +35,7 @@ public:
 		, ShadowRadiusThreshold(0.001f)
 		, bOverrideViewDistanceScale(true)
 		, ViewDistanceScale(50)
+		, bDisableGPUTimeout(true) 
 	{
 	}
 
@@ -47,6 +48,9 @@ public:
 	virtual void BuildNewProcessCommandLineImpl(FString& InOutUnrealURLParams, FString& InOutCommandLineArgs) const override;
 	virtual void SetupForPipelineImpl(UMoviePipeline* InPipeline) override;
 	virtual void TeardownForPipelineImpl(UMoviePipeline* InPipeline) override;
+	// Used to ensure we set the default values even if the user forgets to add it.
+	virtual bool IgnoreTransientFilters() const override { return true; }
+
 protected:
 	void ApplyCVarSettings(const bool bOverrideValues);
 
@@ -91,6 +95,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rendering", meta = (EditCondition = bOverrideViewDistanceScale))
 	int32 ViewDistanceScale;
 
+	/** Should we disable the GPU Timeout? Currently only applicable when using D3D12 renderer. */
+	bool bDisableGPUTimeout;
+
 private:
 	// To restore previous choices when we modify these at runtime. These will be unset if the user doesn't have the override enabled.
 	Scalability::FQualityLevels PreviousQualityLevels;
@@ -104,4 +111,9 @@ private:
 	int32 PreviousShadowQuality;
 	float PreviousShadowRadiusThreshold;
 	int32 PreviousViewDistanceScale;
+	int32 PreviousGPUTimeout;
+	int32 PreviousAnimationUROEnabled;
+	int32 PreviousFoliageDitheredLOD;
+	int32 PreviousFoliageForceLOD;
+	int32 PreviousNeverMuteNonRealtimeAudio;
 };

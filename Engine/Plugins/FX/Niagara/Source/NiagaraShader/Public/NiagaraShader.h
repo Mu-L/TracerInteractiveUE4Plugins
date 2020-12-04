@@ -37,14 +37,12 @@ public:
 
 	static uint32 GetGroupSize(EShaderPlatform Platform)
 	{
-		if (Platform == SP_XBOXONE_D3D12 || Platform == SP_PS4)
+		//-TODO: Should come from DDPI
+		if (Platform == SP_PS4)
 		{
 			return 64;
 		}
-		else
-		{
-			return 32;
-		}
+		return 32;
 	}
 
 	static void ModifyCompilationEnvironment(const FNiagaraShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
@@ -93,8 +91,10 @@ public:
 
 	LAYOUT_FIELD(FShaderResourceParameter, FloatInputBufferParam);
 	LAYOUT_FIELD(FShaderResourceParameter, IntInputBufferParam);
+	LAYOUT_FIELD(FShaderResourceParameter, HalfInputBufferParam);
 	LAYOUT_FIELD(FRWShaderParameter, FloatOutputBufferParam);
 	LAYOUT_FIELD(FRWShaderParameter, IntOutputBufferParam);
+	LAYOUT_FIELD(FRWShaderParameter, HalfOutputBufferParam);
 	LAYOUT_FIELD(FRWShaderParameter, InstanceCountsParam);
 	LAYOUT_FIELD(FShaderParameter, ReadInstanceCountOffsetParam);
 	LAYOUT_FIELD(FShaderParameter, WriteInstanceCountOffsetParam);
@@ -105,7 +105,6 @@ public:
 	LAYOUT_ARRAY(FShaderUniformBufferParameter, OwnerConstantBufferParam, 2);
 	LAYOUT_ARRAY(FShaderUniformBufferParameter, EmitterConstantBufferParam, 2);
 	LAYOUT_ARRAY(FShaderUniformBufferParameter, ExternalConstantBufferParam, 2);
-	LAYOUT_FIELD(FShaderUniformBufferParameter, DataInterfaceUniformBufferParam);
 	LAYOUT_FIELD(FShaderUniformBufferParameter, ViewUniformBufferParam);
 	LAYOUT_FIELD(FShaderParameter, SimStartParam);
 	LAYOUT_FIELD(FShaderParameter, EmitterTickCounterParam);
@@ -118,7 +117,11 @@ public:
 	LAYOUT_FIELD(FShaderParameter, UpdateStartInstanceParam);
 	LAYOUT_FIELD(FShaderParameter, DefaultSimulationStageIndexParam);
 	LAYOUT_FIELD(FShaderParameter, SimulationStageIndexParam);
-	LAYOUT_FIELD(FShaderParameter, IterationInterfaceCount);
+
+	LAYOUT_FIELD(FShaderParameter, SimulationStageIterationInfoParam);
+	LAYOUT_FIELD(FShaderParameter, SimulationStageNormalizedIterationIndexParam);
+	LAYOUT_FIELD(FShaderParameter, DispatchThreadIdToLinearParam);
+
 	LAYOUT_FIELD(FShaderParameter, ComponentBufferSizeReadParam);
 	LAYOUT_FIELD(FShaderParameter, ComponentBufferSizeWriteParam);
 	LAYOUT_ARRAY(FRWShaderParameter, EventIntUAVParams, MAX_CONCURRENT_EVENT_DATASETS);

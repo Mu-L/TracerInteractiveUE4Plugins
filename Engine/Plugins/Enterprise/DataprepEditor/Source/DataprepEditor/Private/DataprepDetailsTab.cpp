@@ -107,7 +107,7 @@ void FDataprepEditor::TryInvokingDetailsTab(bool bFlash)
 				if (!DetailsTabPtr.IsValid())
 				{
 					// Show the details panel if it doesn't exist.
-					TabManager->InvokeTab(FDataprepEditor::DetailsTabId);
+					TabManager->TryInvokeTab(FDataprepEditor::DetailsTabId);
 				}
 			}
 		}

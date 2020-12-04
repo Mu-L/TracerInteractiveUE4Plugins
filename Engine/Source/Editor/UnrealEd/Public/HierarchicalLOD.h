@@ -34,6 +34,10 @@ public:
 	UPROPERTY(EditAnywhere, config, Category = HLODSystem)
 	bool bForceSettingsInAllMaps;
 
+	/** If enabled, will save LOD actors descriptions in the HLOD packages */
+	UPROPERTY(EditAnywhere, config, Category = HLODSystem)
+	bool bSaveLODActorsToHLODPackages;
+
 	/** When set in combination with */
 	UPROPERTY(EditAnywhere, config, Category = HLODSystem, meta=(editcondition="bForceSettingsInAllMaps"))
 	TSoftClassPtr<UHierarchicalLODSetup> DefaultSetup;
@@ -101,6 +105,9 @@ struct UNREALED_API FHierarchicalLODBuilder
 	/** Get the list of mesh packages to save for a given level */
 	void GetMeshesPackagesToSave(ULevel* InLevel, TSet<UPackage*>& InHLODPackagesToSave, const FString& PreviousLevelName = "");
 
+	/** Delete HLOD packages that are empty. */
+	void DeleteEmptyHLODPackages(ULevel* InLevel);
+
 	/** 
 	 * @param	bInForce	Whether to force the recalculation of this actor's build flag. If this is false then the cached flag is used an only recalculated every so often.
 	 * @return whether a build is needed (i.e. any LOD actors are dirty) 
@@ -155,6 +162,15 @@ private:
 	* @param InLevel - Level for which the HLODs are currently being build
 	*/
 	void HandleHLODVolumes(ULevel* InLevel);
+
+	/**
+	* Determine whether or not this level should have HLODs built for it in the specified world
+	*
+	* @param World - The world the level is part of
+	* @param Level - The level to test
+	* @return bool
+	*/
+	bool ShouldBuildHLODForLevel(const UWorld* World, const ULevel* Level) const;
 
 	/**
 	* Determine whether or not this actor is eligble for HLOD creation

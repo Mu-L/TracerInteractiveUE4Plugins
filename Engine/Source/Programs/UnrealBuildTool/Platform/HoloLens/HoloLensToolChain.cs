@@ -32,6 +32,8 @@ namespace UnrealBuildTool
 		/// The target being built
 		/// </summary>
 		protected ReadOnlyTargetRules Target;
+		
+		private readonly string CodeAnalysisExtension = ".nativecodeanalysis.xml";
 
 		public HoloLensToolChain(ReadOnlyTargetRules Target)
 		{
@@ -252,6 +254,19 @@ namespace UnrealBuildTool
 			// missing or duplicated type references.
 			Arguments.Add("/ZW:nostdlib");
 
+			if (CompileEnvironment.CppStandard >= CppStandardVersion.Latest)
+			{
+				Arguments.Add("/std:c++latest");
+			}
+			else if (CompileEnvironment.CppStandard >= CppStandardVersion.Cpp17)
+			{
+				Arguments.Add("/std:c++17");
+			}
+			else if (CompileEnvironment.CppStandard >= CppStandardVersion.Cpp14)
+			{
+				Arguments.Add("/std:c++14");
+			}
+
 			// Explicitly compile the file as C++.
 			Arguments.Add("/TP");
 
@@ -399,6 +414,13 @@ namespace UnrealBuildTool
 			{
 				Arguments.Add("/INCREMENTAL:NO");
 			}
+
+			// Disable 
+			//LINK : warning LNK4199: /DELAYLOAD:nvtt_64.dll ignored; no imports found from nvtt_64.dll
+			// type warning as we leverage the DelayLoad option to put third-party DLLs into a 
+			// non-standard location. This requires the module(s) that use said DLL to ensure that it 
+			// is loaded prior to using it.
+			Arguments.Add("/ignore:4199");
 
 			// Suppress warnings about missing PDB files for statically linked libraries.  We often don't want to distribute
 			// PDB files for these libraries.
@@ -607,6 +629,33 @@ namespace UnrealBuildTool
 					}
 				}
 
+				if (Target.HoloLensPlatform.bRunNativeCodeAnalysis)
+				{
+					// Add the analysis log to the produced item list.
+					FileItem AnalysisLogFile = FileItem.GetItemByFileReference(
+						FileReference.Combine(
+							OutputDir,
+							Path.GetFileName(SourceFile.AbsolutePath) + CodeAnalysisExtension
+							)
+						);
+					CompileAction.ProducedItems.Add(AnalysisLogFile);
+					Result.DebugDataFiles.Add(AnalysisLogFile);
+					// Peform code analysis with results in a log file
+					FileArguments.AddFormat(" /analyze:log \"{0}\"", AnalysisLogFile.AbsolutePath);
+					// Suppress code analysis output
+					FileArguments.Add(" /analyze:quiet");
+					string rulesetFile = Target.HoloLensPlatform.NativeCodeAnalysisRuleset;
+					if (!String.IsNullOrEmpty(rulesetFile))
+					{
+						if (!Path.IsPathRooted(rulesetFile))
+						{
+							rulesetFile = FileReference.Combine(Target.ProjectFile.Directory, rulesetFile).FullName;
+						}
+						// A non default ruleset was specified
+						FileArguments.AddFormat(" /analyze:ruleset \"{0}\"", rulesetFile);
+					}
+				}
+				
 				// Add C or C++ specific compiler arguments.
 				if (bIsPlainCFile)
 				{
@@ -821,7 +870,7 @@ namespace UnrealBuildTool
 			else if (!LinkEnvironment.bIsBuildingLibrary)
 			{
 				// Add the library paths to the argument list.
-				foreach (DirectoryReference LibraryPath in LinkEnvironment.LibraryPaths)
+				foreach (DirectoryReference LibraryPath in LinkEnvironment.SystemLibraryPaths)
 				{
 					Arguments.Add(String.Format("/LIBPATH:\"{0}\"", LibraryPath));
 				}
@@ -875,17 +924,14 @@ namespace UnrealBuildTool
 
 			if (!bIsBuildingLibrary)
 			{
-				foreach (string AdditionalLibrary in LinkEnvironment.AdditionalLibraries)
+				foreach (string SystemLibrary in LinkEnvironment.SystemLibraries)
 				{
-					InputFileNames.Add(string.Format("\"{0}\"", AdditionalLibrary));
-
-					// If the library file name has a relative path attached (rather than relying on additional
-					// lib directories), then we'll add it to our prerequisites list.  This will allow UBT to detect
-					// when the binary needs to be relinked because a dependent external library has changed.
-					//if( !String.IsNullOrEmpty( Path.GetDirectoryName( AdditionalLibrary ) ) )
-					{
-						PrerequisiteItems.Add(FileItem.GetItemByPath(AdditionalLibrary));
-					}
+					InputFileNames.Add(string.Format("\"{0}\"", SystemLibrary));
+				}
+				foreach (FileReference Library in LinkEnvironment.Libraries)
+				{
+					InputFileNames.Add(string.Format("\"{0}\"", Library));
+					PrerequisiteItems.Add(FileItem.GetItemByFileReference(Library));
 				}
 			}
 
@@ -1003,16 +1049,11 @@ namespace UnrealBuildTool
 			{
 				ObjectFileDirectories.Add(InputFile.Location.Directory);
 			}
-			foreach (string AdditionalLibrary in LinkEnvironment.AdditionalLibraries)
+			foreach (FileReference Library in LinkEnvironment.Libraries)
 			{
-				// Need to handle import libraries that are about to be built (but may not exist yet), third party libraries with relative paths in the UE4 tree, and system libraries in the system path
-				FileReference AdditionalLibraryLocation = new FileReference(AdditionalLibrary);
-				if (Path.IsPathRooted(AdditionalLibrary) || FileReference.Exists(AdditionalLibraryLocation))
-				{
-					ObjectFileDirectories.Add(AdditionalLibraryLocation.Directory);
-				}
+				ObjectFileDirectories.Add(Library.Directory);
 			}
-			foreach (DirectoryReference LibraryPath in LinkEnvironment.LibraryPaths)
+			foreach (DirectoryReference LibraryPath in LinkEnvironment.SystemLibraryPaths)
 			{
 				ObjectFileDirectories.Add(LibraryPath);
 			}

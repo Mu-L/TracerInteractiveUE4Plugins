@@ -40,7 +40,7 @@ void FVulkanGPUTiming::PlatformStaticInitialize(void* UserData)
 			UE_LOG(LogVulkanRHI, Warning, TEXT("Timestamps not supported on Device"));
 			return;
 		}
-		GTimingFrequency = (uint64)((1000.0 * 1000.0 * 1000.0) / Limits.timestampPeriod);
+		SetTimingFrequency((uint64)((1000.0 * 1000.0 * 1000.0) / Limits.timestampPeriod));
 		GIsSupported = true;
 	}
 }
@@ -156,7 +156,7 @@ void FVulkanGPUTiming::Initialize()
 	if (FVulkanPlatform::SupportsTimestampRenderQueries() && GIsSupported)
 	{
 		check(!Pool);
-		Pool = new FVulkanTimingQueryPool(Device, 8);
+		Pool = new FVulkanTimingQueryPool(Device, CmdContext->GetCommandBufferManager(), 8);
 		Pool->ResultsBuffer = Device->GetStagingManager().AcquireBuffer(Pool->GetMaxQueries() * sizeof(uint64), VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 	}
 }
@@ -401,7 +401,7 @@ void FVulkanGPUProfiler::BeginFrame()
 		// Use local tracepoints if no extension is available
 		if (!Device->GetOptionalExtensions().HasGPUCrashDumpExtensions() && LocalTracePointsQueryPool == nullptr)
 		{
-			LocalTracePointsQueryPool = new FVulkanTimingQueryPool(Device, GMaxCrashBufferEntries);
+			LocalTracePointsQueryPool = new FVulkanTimingQueryPool(Device, CmdContext->GetCommandBufferManager(), GMaxCrashBufferEntries);
 		}
 	}
 #endif
@@ -654,6 +654,12 @@ void FVulkanGPUProfiler::DumpCrashMarkers(void* BufferData)
 #include "VulkanRHIBridge.h"
 namespace VulkanRHIBridge
 {
+	TArray<const ANSICHAR*> InstanceExtensions;
+	TArray<const ANSICHAR*> InstanceLayers;
+	TArray<const ANSICHAR*> DeviceExtensions;
+	TArray<const ANSICHAR*> DeviceLayers;
+
+
 	uint64 GetInstance(FVulkanDynamicRHI* RHI)
 	{
 		return (uint64)RHI->GetInstance();
@@ -675,22 +681,25 @@ namespace VulkanRHIBridge
 	{
 		return (uint64)Device->GetPhysicalHandle();
 	}
+
+	void AddEnabledInstanceExtensionsAndLayers(const TArray<const ANSICHAR*>& InInstanceExtensions, const TArray<const ANSICHAR*>& InInstanceLayers)
+	{
+		checkf(!GVulkanRHI, TEXT("AddEnabledInstanceExtensionsAndLayers should be called before the VulkanRHI has been created"));
+		InstanceExtensions.Append(InInstanceExtensions);
+		InstanceLayers.Append(InInstanceLayers);
+	}
+
+	void AddEnabledDeviceExtensionsAndLayers(const TArray<const ANSICHAR*>& InDeviceExtensions, const TArray<const ANSICHAR*>& InDeviceLayers)
+	{
+		checkf(!GVulkanRHI, TEXT("AddEnabledDeviceExtensionsAndLayers should be called before the VulkanRHI has been created"));
+		DeviceExtensions.Append(InDeviceExtensions);
+		DeviceLayers.Append(InDeviceLayers);
+	}
 }
 
 
 namespace VulkanRHI
 {
-#if ENABLE_RHI_VALIDATION
-	FVulkanCommandListContext& GetVulkanContext(class FValidationContext& CmdContext)
-	{
-		if (GValidationRHI && GValidationRHI->Context == &CmdContext)
-		{
-			return (FVulkanCommandListContext&)*CmdContext.RHIContext;
-		}
-
-		return (FVulkanCommandListContext&)CmdContext;
-	}
-#endif
 	VkBuffer CreateBuffer(FVulkanDevice* InDevice, VkDeviceSize Size, VkBufferUsageFlags BufferUsageFlags, VkMemoryRequirements& OutMemoryRequirements)
 	{
 		VkDevice Device = InDevice->GetInstanceHandle();
@@ -767,7 +776,7 @@ namespace VulkanRHI
 		{
 			if (GValidationCvar.GetValueOnRenderThread() == 0)
 			{
-				UE_LOG(LogVulkanRHI, Fatal, TEXT("Failed with Validation error. Try running with r.Vulkan.EnableValidation=1 to get information from the driver"));
+				UE_LOG(LogVulkanRHI, Fatal, TEXT("Failed with Validation error. Try running with r.Vulkan.EnableValidation=1 or -vulkandebug to get information from the validation layers."));
 			}
 		}
 #endif

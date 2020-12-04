@@ -2,6 +2,9 @@
 
 /*=============================================================================
 	LUTBlender.usf: Filter pixel shader source.   
+
+	Note: Any changes to device encoding logic in CombineLUTsCommon() must
+	also be made in PostProcessDeviceEncodingOnly.usf.
 =============================================================================*/
 
 #define USE_COLOR_MATRIX	1
@@ -210,6 +213,7 @@ uint GetOutputDevice()
 
 float BlueCorrection;
 float ExpandGamut;
+float ToneCurveAmount;
 
 float4 CombineLUTsCommon(float2 InUV, uint InLayerIndex)
 {
@@ -323,7 +327,8 @@ float4 CombineLUTsCommon(float2 InUV, uint InLayerIndex)
 	ColorAP1 = lerp( ColorAP1, mul( BlueCorrectAP1, ColorAP1 ), BlueCorrection );
 
 	// Tonemapped color in the AP1 gamut
-	ColorAP1 = FilmToneMap( ColorAP1 );
+	float3 ToneMappedColorAP1 = FilmToneMap( ColorAP1 );
+	ColorAP1 = lerp(ColorAP1, ToneMappedColorAP1, ToneCurveAmount);
 
 	// Uncorrect blue to maintain white point
 	ColorAP1 = lerp( ColorAP1, mul( BlueCorrectInvAP1, ColorAP1 ), BlueCorrection );
@@ -387,6 +392,8 @@ float4 CombineLUTsCommon(float2 InUV, uint InLayerIndex)
 	// Apply "gamma" curve adjustment.
 	FilmColor = pow( max(0, FilmColorNoGamma), InverseGamma.y );
 		
+	// Note: Any changes to the following device encoding logic must also be made 
+	// in PostProcessDeviceEncodingOnly.usf's corresponding pixel shader.
 	half3 OutDeviceColor = 0;
 	BRANCH
 

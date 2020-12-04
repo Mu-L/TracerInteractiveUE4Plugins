@@ -14,8 +14,12 @@
 #include "Serialization/LargeMemoryReader.h"
 #include "GenericPlatform/GenericPlatformChunkInstall.h"
 #include "HAL/Event.h"
+#include "Async/MappedFileHandle.h"
+#include "ProfilingDebugging/CountersTrace.h"
+#include "ProfilingDebugging/CsvProfiler.h"
 
 DEFINE_LOG_CATEGORY(LogIoDispatcher);
+
 
 const FIoChunkId FIoChunkId::InvalidChunkId = FIoChunkId::CreateEmptyId();
 
@@ -24,6 +28,8 @@ TUniquePtr<FIoDispatcher> GIoDispatcher;
 #if UE_BUILD_DEVELOPMENT || UE_BUILD_DEBUG
 //PRAGMA_DISABLE_OPTIMIZATION
 #endif
+
+TRACE_DECLARE_INT_COUNTER(PendingIoRequests, TEXT("IoDispatcher/PendingIoRequests"));
 
 template <typename T, uint32 BlockSize = 128>
 class TBlockAllocator
@@ -132,16 +138,15 @@ class FIoDispatcherImpl
 	: public FRunnable
 {
 public:
-	FIoDispatcherImpl()
-		: FileIoStore(EventQueue)
+	FIoDispatcherImpl(bool bInIsMultithreaded)
+		: bIsMultithreaded(bInIsMultithreaded)
+		, FileIoStore(EventQueue, SignatureErrorEvent, bIsMultithreaded)
 	{
 		FCoreDelegates::GetMemoryTrimDelegate().AddLambda([this]()
 		{
 			RequestAllocator.Trim();
 			BatchAllocator.Trim();
 		});
-
-		Thread = FRunnableThread::Create(this, TEXT("IoDispatcher"), 0, TPri_AboveNormal);
 	}
 
 	~FIoDispatcherImpl()
@@ -154,23 +159,20 @@ public:
 		return FIoStatus::Ok;
 	}
 
+	bool InitializePostSettings()
+	{
+		FileIoStore.Initialize();
+		Thread = FRunnableThread::Create(this, TEXT("IoDispatcher"), 0, TPri_AboveNormal, FPlatformAffinity::GetIoDispatcherThreadMask());
+		return true;
+	}
+
 	FIoRequestImpl* AllocRequest(const FIoChunkId& ChunkId, FIoReadOptions Options)
 	{
-		FIoRequestImpl* Request = RequestAllocator.Construct();
+		LLM_SCOPE(ELLMTag::FileSystem);
+		FIoRequestImpl* Request = RequestAllocator.Construct(*this);
 
 		Request->ChunkId = ChunkId;
 		Request->Options = Options;
-		Request->Status = FIoStatus::Unknown;
-
-		return Request;
-	}
-
-	FIoRequestImpl* AllocRequest(FIoBatchImpl* Batch, const FIoChunkId& ChunkId, FIoReadOptions Options)
-	{
-		FIoRequestImpl* Request = AllocRequest(ChunkId, Options);
-		Request->Batch = Batch;
-		Request->BatchNextRequest = Batch->FirstRequest;
-		Batch->FirstRequest = Request;
 
 		return Request;
 	}
@@ -182,48 +184,59 @@ public:
 
 	FIoBatchImpl* AllocBatch()
 	{
+		LLM_SCOPE(ELLMTag::FileSystem);
 		FIoBatchImpl* Batch = BatchAllocator.Construct();
 
 		return Batch;
 	}
 
-	void FreeBatch(FIoBatchImpl* Batch)
+	void OnNewWaitingRequestsAdded()
 	{
-		FIoRequestImpl* Request = Batch->FirstRequest;
-
-		while (Request)
+		if (bIsMultithreaded)
 		{
-			FIoRequestImpl* Tmp = Request;
-			Request = Request->BatchNextRequest;
-			FreeRequest(Tmp);
+			EventQueue.DispatcherNotify();
 		}
-
-		BatchAllocator.Destroy(Batch);
-	}
-
-	void ReadWithCallback(const FIoChunkId& Chunk, const FIoReadOptions& Options, TFunction<void(TIoStatusOr<FIoBuffer>)>&& Callback)
-	{
-		FIoRequestImpl* Request = AllocRequest(Chunk, Options);
-		Request->Callback = MoveTemp(Callback);
+		else
 		{
-			FScopeLock _(&WaitingLock);
-			Request->NextRequest = nullptr;
-			if (!WaitingRequestsTail)
+			ProcessIncomingRequests();
+			while (PendingIoRequestsCount > 0)
 			{
-				WaitingRequestsHead = WaitingRequestsTail = Request;
-			}
-			else
-			{
-				WaitingRequestsTail->NextRequest = Request;
-				WaitingRequestsTail = Request;
+				ProcessCompletedRequests();
 			}
 		}
-		EventQueue.Notify();
 	}
 
-	FIoStatus Mount(const FIoStoreEnvironment& Environment)
+	TIoStatusOr<FIoMappedRegion> OpenMapped(const FIoChunkId& ChunkId, const FIoReadOptions& Options)
 	{
-		return FileIoStore.Mount(Environment);
+		if (ChunkId.IsValid())
+		{
+			return FileIoStore.OpenMapped(ChunkId, Options);
+		}
+		else
+		{
+			return FIoStatus(EIoErrorCode::InvalidParameter, TEXT("FIoChunkId is not valid"));
+		}
+	}
+
+	FIoStatus Mount(const FIoStoreEnvironment& Environment, const FGuid& EncryptionKeyGuid, const FAES::FAESKey& EncryptionKey)
+	{
+		TIoStatusOr<FIoContainerId> ContainerId = FileIoStore.Mount(Environment, EncryptionKeyGuid, EncryptionKey);
+
+		if (ContainerId.IsOk())
+		{
+			FIoDispatcherMountedContainer MountedContainer;
+			MountedContainer.ContainerId = ContainerId.ValueOrDie();
+			MountedContainer.Environment = Environment;
+			if (ContainerMountedEvent.IsBound())
+			{
+				ContainerMountedEvent.Broadcast(MountedContainer);
+			}
+			FScopeLock Lock(&MountedContainersCritical);
+			MountedContainers.Add(MoveTemp(MountedContainer));
+			return FIoStatus::Ok;
+		}
+
+		return ContainerId.Status();
 	}
 
 	bool DoesChunkExist(const FIoChunkId& ChunkId) const
@@ -233,93 +246,182 @@ public:
 
 	TIoStatusOr<uint64> GetSizeForChunk(const FIoChunkId& ChunkId) const
 	{
-		return FileIoStore.GetSizeForChunk(ChunkId);
+		// Only attempt to find the size if the FIoChunkId is valid
+		if (ChunkId.IsValid())
+		{
+			return FileIoStore.GetSizeForChunk(ChunkId);
+		}
+		else
+		{
+			return FIoStatus(EIoErrorCode::InvalidParameter, TEXT("FIoChunkId is not valid"));
+		}	
 	}
 
-	template<typename Func>
-	void IterateBatch(const FIoBatchImpl* Batch, Func&& InCallbackFunction)
+	TArray<FIoDispatcherMountedContainer> GetMountedContainers() const
 	{
-		FIoRequestImpl* Request = Batch->FirstRequest;
+		FScopeLock Lock(&MountedContainersCritical);
+		return MountedContainers;
+	}
 
+	FIoDispatcher::FIoContainerMountedEvent& OnContainerMounted()
+	{
+		return ContainerMountedEvent;
+	}
+
+	FIoSignatureErrorEvent& GetSignatureErrorEvent()
+	{
+		return SignatureErrorEvent;
+	}
+
+	void IssueBatchInternal(FIoBatch& Batch, FIoBatchImpl* BatchImpl)
+	{
+		if (!Batch.HeadRequest)
+		{
+			if (BatchImpl)
+			{
+				CompleteBatch(BatchImpl);
+			}
+			return;
+		}
+		check(Batch.TailRequest);
+		uint32 RequestCount = 0;
+		FIoRequestImpl* Request = Batch.HeadRequest;
 		while (Request)
 		{
-			const bool bDoContinue = InCallbackFunction(Request);
-
-			Request = bDoContinue ? Request->BatchNextRequest : nullptr;
+			Request->Batch = BatchImpl;
+			Request = Request->NextRequest;
+			++RequestCount;
 		}
-	}
-
-	void IssueBatch(const FIoBatchImpl* Batch)
-	{
+		if (BatchImpl)
+		{
+			BatchImpl->UnfinishedRequestsCount += RequestCount;
+		}
 		{
 			FScopeLock _(&WaitingLock);
 			if (!WaitingRequestsHead)
 			{
-				WaitingRequestsHead = Batch->FirstRequest;
+				WaitingRequestsHead = Batch.HeadRequest;
 			}
 			else
 			{
-				WaitingRequestsTail->NextRequest = Batch->FirstRequest;
+				WaitingRequestsTail->NextRequest = Batch.HeadRequest;
 			}
-			WaitingRequestsTail = Batch->FirstRequest;
-			while (WaitingRequestsTail->BatchNextRequest)
-			{
-				WaitingRequestsTail->NextRequest = WaitingRequestsTail->BatchNextRequest;
-				WaitingRequestsTail = WaitingRequestsTail->BatchNextRequest;
-			}
-			WaitingRequestsTail->NextRequest = nullptr;
+			WaitingRequestsTail = Batch.TailRequest;
 		}
-		EventQueue.Notify();
+		Batch.HeadRequest = Batch.TailRequest = nullptr;
+		OnNewWaitingRequestsAdded();
+	}
+
+	void IssueBatch(FIoBatch& Batch)
+	{
+		IssueBatchInternal(Batch, nullptr);
+	}
+
+	void IssueBatchWithCallback(FIoBatch& Batch, TFunction<void()>&& Callback)
+	{
+		FIoBatchImpl* Impl = AllocBatch();
+		Impl->Callback = MoveTemp(Callback);
+		IssueBatchInternal(Batch, Impl);
+	}
+
+	void IssueBatchAndTriggerEvent(FIoBatch& Batch, FEvent* Event)
+	{
+		FIoBatchImpl* Impl = AllocBatch();
+		Impl->Event = Event;
+		IssueBatchInternal(Batch, Impl);
+	}
+
+	void IssueBatchAndDispatchSubsequents(FIoBatch& Batch, FGraphEventRef GraphEvent)
+	{
+		FIoBatchImpl* Impl = AllocBatch();
+		Impl->GraphEvent = GraphEvent;
+		IssueBatchInternal(Batch, Impl);
+	}
+
+	int64 GetTotalLoaded() const
+	{
+		return TotalLoaded;
 	}
 
 private:
 	friend class FIoBatch;
-
-	void ProcessCompletedBlocks()
-	{
-		EventQueue.Poll();
-		while (FileIoStore.ProcessCompletedBlock())
-		{
-			ProcessCompletedRequests();
-		}
-	}
+	friend class FIoRequest;
 
 	void ProcessCompletedRequests()
 	{
-		while (SubmittedRequestsHead && SubmittedRequestsHead->UnfinishedReadsCount == 0)
+		//TRACE_CPUPROFILER_EVENT_SCOPE(ProcessCompletedRequests);
+
+		FIoRequestImpl* CompletedRequestsHead = FileIoStore.GetCompletedRequests();
+		while (CompletedRequestsHead)
 		{
-			//TRACE_CPUPROFILER_EVENT_SCOPE(CompleteRequest);
-			FIoRequestImpl* NextRequest = SubmittedRequestsHead->NextRequest;
-			CompleteRequest(SubmittedRequestsHead);
-			SubmittedRequestsHead = NextRequest;
-		}
-		if (!SubmittedRequestsHead)
-		{
-			SubmittedRequestsTail = nullptr;
+			FIoRequestImpl* NextRequest = CompletedRequestsHead->NextRequest;
+			if (CompletedRequestsHead->bFailed)
+			{
+				CompleteRequest(CompletedRequestsHead, EIoErrorCode::ReadError);
+			}
+			else
+			{
+				FPlatformAtomics::InterlockedAdd(&TotalLoaded, CompletedRequestsHead->IoBuffer.DataSize());
+				CompleteRequest(CompletedRequestsHead, EIoErrorCode::Ok);
+			}
+			CompletedRequestsHead->ReleaseRef();
+			CompletedRequestsHead = NextRequest;
+			--PendingIoRequestsCount;
+			TRACE_COUNTER_SET(PendingIoRequests, PendingIoRequestsCount);
 		}
 	}
 
-	void CompleteRequest(FIoRequestImpl* Request)
+	void CompleteBatch(FIoBatchImpl* Batch)
 	{
-		if (!Request->Status.IsCompleted())
+		if (Batch->Callback)
 		{
-			Request->Status = EIoErrorCode::Ok;
-			if (Request->Callback)
+			Batch->Callback();
+		}
+		if (Batch->Event)
+		{
+			Batch->Event->Trigger();
+		}
+		if (Batch->GraphEvent)
+		{
+			TArray<FBaseGraphTask*> NewTasks;
+			Batch->GraphEvent->DispatchSubsequents(NewTasks);
+		}
+		BatchAllocator.Destroy(Batch);
+	}
+
+	bool CompleteRequest(FIoRequestImpl* Request, EIoErrorCode Status)
+	{
+		//TRACE_CPUPROFILER_EVENT_SCOPE(CompleteRequest);
+
+		EIoErrorCode ExpectedStatus = EIoErrorCode::Unknown;
+		if (!Request->ErrorCode.CompareExchange(ExpectedStatus, Status))
+		{
+			return false;
+		}
+
+		FIoBatchImpl* Batch = Request->Batch;
+		if (Request->Callback)
+		{
+			TIoStatusOr<FIoBuffer> Result;
+			if (Status == EIoErrorCode::Ok)
 			{
-				Request->Callback(Request->IoBuffer);
+				Result = Request->IoBuffer;
+			}
+			else
+			{
+				Result = Status;
+			}
+			Request->Callback(Result);
+		}
+		if (Batch)
+		{
+			check(Batch->UnfinishedRequestsCount);
+			if (--Batch->UnfinishedRequestsCount == 0)
+			{
+				CompleteBatch(Batch);
 			}
 		}
-		else
-		{
-			if (Request->Callback)
-			{
-				Request->Callback(Request->Status);
-			}
-		}
-		if (!Request->Batch)
-		{
-			FreeRequest(Request);
-		}
+		return true;
 	}
 
 	void ProcessIncomingRequests()
@@ -358,25 +460,30 @@ private:
 				RequestsToSubmitTail = nullptr;
 			}
 
-			//TRACE_CPUPROFILER_EVENT_SCOPE(ResolveRequest);
-
-			EIoStoreResolveResult Result = FileIoStore.Resolve(Request);
-			if (Result == IoStoreResolveResult_NotFound)
+			// Make sure that the FIoChunkId in the request is valid before we try to do anything with it.
+			if (Request->ChunkId.IsValid())
 			{
-				Request->Status = FIoStatus(EIoErrorCode::NotFound);
-			}
-			if (!SubmittedRequestsTail)
-			{
-				SubmittedRequestsHead = SubmittedRequestsTail = Request;
+				TRACE_CPUPROFILER_EVENT_SCOPE(ResolveRequest);
+				EIoStoreResolveResult Result = FileIoStore.Resolve(Request);
+				if (Result != IoStoreResolveResult_OK)
+				{
+					CompleteRequest(Request, EIoErrorCode::NotFound);
+					Request->ReleaseRef();
+					continue;
+				}
 			}
 			else
 			{
-				SubmittedRequestsTail->NextRequest = Request;
-				SubmittedRequestsTail = Request;
+				CompleteRequest(Request, EIoErrorCode::InvalidParameter);
+				Request->ReleaseRef();
+				continue;
 			}
+			
+			++PendingIoRequestsCount;
+			TRACE_COUNTER_SET(PendingIoRequests, PendingIoRequestsCount);
 			Request->NextRequest = nullptr;
-
-			ProcessCompletedBlocks();
+			
+			ProcessCompletedRequests();
 		}
 	}
 
@@ -387,13 +494,19 @@ private:
 
 	virtual uint32 Run()
 	{
+		FMemory::SetupTLSCachesOnCurrentThread();
 		while (!bStopRequested)
 		{
-			EventQueue.Wait();
-			
-			TRACE_CPUPROFILER_EVENT_SCOPE(ProcessEventQueue);
+			if (PendingIoRequestsCount)
+			{
+				TRACE_CPUPROFILER_EVENT_SCOPE(IoDispatcherWaitForIo);
+				EventQueue.DispatcherWaitForIo();
+			}
+			else
+			{
+				EventQueue.DispatcherWait();
+			}
 			ProcessIncomingRequests();
-			ProcessCompletedBlocks();
 			ProcessCompletedRequests();
 		}
 		return 0;
@@ -402,14 +515,16 @@ private:
 	virtual void Stop()
 	{
 		bStopRequested = true;
-		EventQueue.Notify();
+		EventQueue.DispatcherNotify();
 	}
 
 	using FRequestAllocator = TBlockAllocator<FIoRequestImpl, 4096>;
 	using FBatchAllocator = TBlockAllocator<FIoBatchImpl, 4096>;
 
+	bool bIsMultithreaded;
 	FIoDispatcherEventQueue EventQueue;
 
+	FIoSignatureErrorEvent SignatureErrorEvent;
 	FFileIoStore FileIoStore;
 	FRequestAllocator RequestAllocator;
 	FBatchAllocator BatchAllocator;
@@ -417,13 +532,16 @@ private:
 	FCriticalSection WaitingLock;
 	FIoRequestImpl* WaitingRequestsHead = nullptr;
 	FIoRequestImpl* WaitingRequestsTail = nullptr;
-	FIoRequestImpl* SubmittedRequestsHead = nullptr;
-	FIoRequestImpl* SubmittedRequestsTail = nullptr;
 	TAtomic<bool> bStopRequested { false };
+	mutable FCriticalSection MountedContainersCritical;
+	TArray<FIoDispatcherMountedContainer> MountedContainers;
+	FIoDispatcher::FIoContainerMountedEvent ContainerMountedEvent;
+	uint64 PendingIoRequestsCount = 0;
+	int64 TotalLoaded = 0;
 };
 
 FIoDispatcher::FIoDispatcher()
-	: Impl(new FIoDispatcherImpl())
+	: Impl(new FIoDispatcherImpl(FGenericPlatformProcess::SupportsMultithreading()))
 {
 }
 
@@ -432,27 +550,22 @@ FIoDispatcher::~FIoDispatcher()
 	delete Impl;
 }
 
-FIoStatus FIoDispatcher::Mount(const FIoStoreEnvironment& Environment)
+FIoStatus FIoDispatcher::Mount(const FIoStoreEnvironment& Environment, const FGuid& EncryptionKeyGuid, const FAES::FAESKey& EncryptionKey)
 {
-	return Impl->Mount(Environment);
+	LLM_SCOPE(ELLMTag::FileSystem);
+	return Impl->Mount(Environment, EncryptionKeyGuid, EncryptionKey);
 }
 
 FIoBatch
 FIoDispatcher::NewBatch()
 {
-	return FIoBatch(Impl, Impl->AllocBatch());
+	return FIoBatch(*Impl);
 }
 
-void
-FIoDispatcher::FreeBatch(FIoBatch Batch)
+TIoStatusOr<FIoMappedRegion>
+FIoDispatcher::OpenMapped(const FIoChunkId& ChunkId, const FIoReadOptions& Options)
 {
-	Impl->FreeBatch(Batch.Impl);
-}
-
-void
-FIoDispatcher::ReadWithCallback(const FIoChunkId& Chunk, const FIoReadOptions& Options, TFunction<void(TIoStatusOr<FIoBuffer>)>&& Callback)
-{
-	Impl->ReadWithCallback(Chunk, Options, MoveTemp(Callback));
+	return Impl->OpenMapped(ChunkId, Options);
 }
 
 // Polling methods
@@ -466,6 +579,30 @@ TIoStatusOr<uint64>
 FIoDispatcher::GetSizeForChunk(const FIoChunkId& ChunkId) const
 {
 	return Impl->GetSizeForChunk(ChunkId);
+}
+
+TArray<FIoDispatcherMountedContainer>
+FIoDispatcher::GetMountedContainers() const
+{
+	return Impl->GetMountedContainers();
+}
+
+int64
+FIoDispatcher::GetTotalLoaded() const
+{
+	return Impl->GetTotalLoaded();
+}
+
+FIoDispatcher::FIoContainerMountedEvent&
+FIoDispatcher::OnContainerMounted()
+{
+	return Impl->OnContainerMounted();
+}
+
+FIoSignatureErrorEvent&
+FIoDispatcher::GetSignatureErrorEvent()
+{
+	return Impl->GetSignatureErrorEvent();
 }
 
 bool
@@ -483,9 +620,20 @@ FIoDispatcher::IsValidEnvironment(const FIoStoreEnvironment& Environment)
 FIoStatus
 FIoDispatcher::Initialize()
 {
+	LLM_SCOPE(ELLMTag::FileSystem);
 	GIoDispatcher = MakeUnique<FIoDispatcher>();
 
 	return GIoDispatcher->Impl->Initialize();
+}
+
+void
+FIoDispatcher::InitializePostSettings()
+{
+	LLM_SCOPE(ELLMTag::FileSystem);
+
+	check(GIoDispatcher);
+	bool bSuccess = GIoDispatcher->Impl->InitializePostSettings();
+	UE_CLOG(!bSuccess, LogIoDispatcher, Fatal, TEXT("Failed to initialize IoDispatcher"));
 }
 
 void
@@ -500,81 +648,221 @@ FIoDispatcher::Get()
 	return *GIoDispatcher;
 }
 
-FIoBatch::FIoBatch(FIoDispatcherImpl* InDispatcher, FIoBatchImpl* InImpl)
-	: Dispatcher(InDispatcher)
-	, Impl(InImpl)
-	, CompletionEvent()
+//////////////////////////////////////////////////////////////////////////
+
+FIoBatch::FIoBatch(FIoDispatcherImpl& InDispatcher)
+	: Dispatcher(&InDispatcher)
 {
+}
+
+FIoBatch::FIoBatch()
+	: Dispatcher(FIoDispatcher::Get().Impl)
+{
+}
+
+FIoBatch::FIoBatch(FIoBatch&& Other)
+{
+	Dispatcher = Other.Dispatcher;
+	HeadRequest = Other.HeadRequest;
+	Other.HeadRequest = nullptr;
+}
+
+FIoBatch::~FIoBatch()
+{
+	FIoRequestImpl* Request = HeadRequest;
+	while (Request)
+	{
+		FIoRequestImpl* NextRequest = Request->NextRequest;
+		Request->ReleaseRef();
+		Request = NextRequest;
+	}
+}
+
+FIoBatch&
+FIoBatch::operator=(const FIoBatch& Other)
+{
+	Dispatcher = Other.Dispatcher;
+	check(!Other.HeadRequest);
+	return *this;
+}
+
+FIoBatch&
+FIoBatch::operator=(FIoBatch&& Other)
+{
+	FIoRequestImpl* Request = HeadRequest;
+	while (Request)
+	{
+		FIoRequestImpl* NextRequest = Request->NextRequest;
+		Request->ReleaseRef();
+		Request = NextRequest;
+	}
+	Dispatcher = Other.Dispatcher;
+	HeadRequest = Other.HeadRequest;
+	Other.HeadRequest = nullptr;
+	return *this;
+}
+
+FIoRequestImpl*
+FIoBatch::ReadInternal(const FIoChunkId& ChunkId, const FIoReadOptions& Options, int32 Priority)
+{
+	FIoRequestImpl* Request = Dispatcher->AllocRequest(ChunkId, Options);
+	Request->Priority = Priority;
+	Request->AddRef();
+	if (!HeadRequest)
+	{
+		check(!TailRequest);
+		HeadRequest = TailRequest = Request;
+	}
+	else
+	{
+		check(TailRequest);
+		TailRequest->NextRequest = Request;
+		TailRequest = Request;
+	}
+	return Request;
 }
 
 FIoRequest
-FIoBatch::Read(const FIoChunkId& ChunkId, FIoReadOptions Options)
+FIoBatch::Read(const FIoChunkId& ChunkId, FIoReadOptions Options, int32 Priority)
 {
-	return FIoRequest(Dispatcher->AllocRequest(Impl, ChunkId, Options));
+	FIoRequestImpl* Request = ReadInternal(ChunkId, Options, Priority);
+	return FIoRequest(Request);
 }
 
-void
-FIoBatch::ForEachRequest(TFunction<bool(FIoRequest&)>&& Callback)
+FIoRequest
+FIoBatch::ReadWithCallback(const FIoChunkId& ChunkId, const FIoReadOptions& Options, int32 Priority, FIoReadCallback&& Callback)
 {
-	Dispatcher->IterateBatch(Impl, [&](FIoRequestImpl* InRequest) {
-		FIoRequest Request(InRequest);
-		return Callback(Request);
-	});
+	FIoRequestImpl* Request = ReadInternal(ChunkId, Options, Priority);
+	Request->Callback = MoveTemp(Callback);
+	return FIoRequest(Request);
 }
 
 void
 FIoBatch::Issue()
 {
-	Dispatcher->IssueBatch(Impl);
+	Dispatcher->IssueBatch(*this);
 }
 
 void
-FIoBatch::Wait()
+FIoBatch::Issue(int32 Priority)
 {
-	for (FIoRequestImpl* Request = Impl->FirstRequest; Request; Request = Request->BatchNextRequest)
+	FIoRequestImpl* Request = HeadRequest;
+	while (Request)
 	{
-		while (!Request->Status.IsCompleted())
-		{
-			FPlatformProcess::Sleep(0);
-		}
+		Request->Priority = Priority;
+		Request = Request->NextRequest;
 	}
+	Issue();
 }
 
 void
-FIoBatch::Cancel()
+FIoBatch::IssueWithCallback(TFunction<void()>&& Callback)
 {
-	unimplemented();
+	Dispatcher->IssueBatchWithCallback(*this, MoveTemp(Callback));
+}
+
+void
+FIoBatch::IssueAndTriggerEvent(FEvent* Event)
+{
+	Dispatcher->IssueBatchAndTriggerEvent(*this, Event);
+}
+
+void
+FIoBatch::IssueAndDispatchSubsequents(FGraphEventRef Event)
+{
+	Dispatcher->IssueBatchAndDispatchSubsequents(*this, Event);
 }
 
 //////////////////////////////////////////////////////////////////////////
 
-bool
-FIoRequest::IsOk() const
+void FIoRequestImpl::FreeRequest()
 {
-	return Impl->Status.IsOk();
+	Dispatcher.FreeRequest(this);
+}
+
+FIoRequest::FIoRequest(FIoRequestImpl* InImpl)
+	: Impl(InImpl)
+{
+	if (Impl)
+	{
+		Impl->AddRef();
+	}
+}
+
+FIoRequest::FIoRequest(const FIoRequest& Other)
+{
+	if (Other.Impl)
+	{
+		Impl = Other.Impl;
+		Impl->AddRef();
+	}
+}
+
+FIoRequest::FIoRequest(FIoRequest&& Other)
+{
+	Impl = Other.Impl;
+	Other.Impl = nullptr;
+}
+
+FIoRequest& FIoRequest::operator=(const FIoRequest& Other)
+{
+	if (Other.Impl)
+	{
+		Other.Impl->AddRef();
+	}
+	if (Impl)
+	{
+		Impl->ReleaseRef();
+	}
+	Impl = Other.Impl;
+	return *this;
+}
+
+FIoRequest& FIoRequest::operator=(FIoRequest&& Other)
+{
+	Impl = Other.Impl;
+	Other.Impl = nullptr;
+	return *this;
+}
+
+FIoRequest::~FIoRequest()
+{
+	if (Impl)
+	{
+		Impl->ReleaseRef();
+	}
 }
 
 FIoStatus
 FIoRequest::Status() const
 {
-	return Impl->Status;
-}
-
-const FIoChunkId&
-FIoRequest::GetChunkId() const
-{
-	return Impl->ChunkId;
+	if (Impl)
+	{
+		return Impl->ErrorCode.Load();
+	}
+	else
+	{
+		return FIoStatus::Invalid;
+	}
 }
 
 TIoStatusOr<FIoBuffer>
-FIoRequest::GetResult() const
+FIoRequest::GetResult()
 {
-	if (Impl->Status.IsOk())
+	if (!Impl)
+	{
+		return FIoStatus::Invalid;
+	}
+	FIoStatus Status(Impl->ErrorCode.Load());
+	check(Status.IsCompleted());
+	TIoStatusOr<FIoBuffer> Result;
+	if (Status.IsOk())
 	{
 		return Impl->IoBuffer;
 	}
 	else
 	{
-		return Impl->Status;
+		return Status;
 	}
 }
+

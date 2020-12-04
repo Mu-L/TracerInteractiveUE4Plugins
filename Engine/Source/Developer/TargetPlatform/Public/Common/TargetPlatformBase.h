@@ -5,6 +5,9 @@
 #include "CoreMinimal.h"
 #include "Interfaces/ITargetPlatform.h"
 #include "PlatformInfo.h"
+#include "HAL/PlatformFilemanager.h"
+#include "GenericPlatform/GenericPlatformFile.h"
+#include "Misc/Paths.h"
 
 /**
  * Base class for target platforms.
@@ -42,20 +45,27 @@ public:
 
 	TARGETPLATFORM_API virtual bool UsesBasePassVelocity() const override;
 
-	TARGETPLATFORM_API virtual bool UsesAnisotropicBRDF() const override;
-
 	TARGETPLATFORM_API virtual bool UsesSelectiveBasePassOutputs() const override;
 	
 	TARGETPLATFORM_API virtual bool UsesDistanceFields() const override;
 
 	TARGETPLATFORM_API virtual bool UsesRayTracing() const override;
 
+	TARGETPLATFORM_API virtual bool ForcesSimpleSkyDiffuse() const override;
+
 	TARGETPLATFORM_API virtual float GetDownSampleMeshDistanceFieldDivider() const override;
+
+	TARGETPLATFORM_API virtual int32 GetHeightFogModeForOpaque() const override;
 
 #if WITH_ENGINE
 	virtual void GetReflectionCaptureFormats( TArray<FName>& OutFormats ) const override
 	{
 		OutFormats.Add(FName(TEXT("FullHDR")));
+	}
+
+	virtual FName FinalizeVirtualTextureLayerFormat(FName Format) const override
+	{
+		return Format;
 	}
 
 	virtual FName GetVirtualTextureLayerFormat(
@@ -72,9 +82,22 @@ public:
 		return true;
 	}
 
-	virtual bool CanSupportXGEShaderCompile() const override
+	virtual bool CanSupportRemoteShaderCompile() const override
 	{
 		return true;
+	}
+	
+	virtual void GetShaderCompilerDependencies(TArray<FString>& OutDependencies) const override
+	{
+	}
+
+	/** Helper method to fill a dependencies array for the shader compiler with absolute paths, passing a relative path to the Engine as the parameter. */
+	static void AddDependencySCArrayHelper(TArray<FString>& OutDependencies, const FString& DependencyRelativePath)
+	{
+		IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+		FString DependencyAbsolutePath = PlatformFile.ConvertToAbsolutePathForExternalAppForRead(*(FPaths::EngineDir() / DependencyRelativePath));
+		FPaths::NormalizeDirectoryName(DependencyAbsolutePath);
+		OutDependencies.AddUnique(DependencyAbsolutePath);
 	}
 
 	virtual bool IsSdkInstalled(bool bProjectHasCode, FString& OutDocumentationPath) const override
@@ -162,6 +185,11 @@ public:
 		return NAME_MeshBuilder;
 	}
 #endif
+
+	virtual bool CopyFileToTarget(const FString& TargetAddress, const FString& HostFilename, const FString& TargetFilename, const TMap<FString,FString>& CustomPlatformData) override
+	{
+		return false; 
+	}
 
 protected:
 
@@ -312,6 +340,8 @@ public:
 			return TPlatformProperties::SupportsTextureStreaming();
 		case ETargetPlatformFeatures::MeshLODStreaming:
 			return TPlatformProperties::SupportsMeshLODStreaming();
+		case ETargetPlatformFeatures::LandscapeMeshLODStreaming:
+			return false;
 
 		case ETargetPlatformFeatures::MemoryMappedFiles:
 			return TPlatformProperties::SupportsMemoryMappedFiles();

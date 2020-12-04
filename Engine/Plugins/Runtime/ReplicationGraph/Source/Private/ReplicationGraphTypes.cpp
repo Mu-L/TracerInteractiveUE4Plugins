@@ -192,6 +192,7 @@ private:
 		FPool* Pool = PoolTable.FindByPredicate([&ExpectedMaxSize](const FPool& InPool) { return ExpectedMaxSize <= InPool.ListSize; });
 		if (!Pool)
 		{
+			QUICK_SCOPE_CYCLE_COUNTER(RepList_Pool_Allocation);
 			if (!ForPreAllocation)
 			{
 				UE_LOG(LogReplicationGraph, Warning, TEXT("No pool big enough for requested list size %d. Creating a new pool. (You may want to preallocate a pool of this size or investigate why this size is needed)"), ExpectedMaxSize);
@@ -227,6 +228,7 @@ void FActorRepList::Release()
 
 void FActorRepListRefView::RequestNewList(int32 NewSize, bool CopyExistingContent)
 {
+	QUICK_SCOPE_CYCLE_COUNTER(RepList_RequestNewList);
 	FActorRepList* NewList = &GActorListAllocator.RequestList(NewSize > 0 ? NewSize : InitialListSize);
 	if (CopyExistingContent)
 	{
@@ -474,22 +476,26 @@ void FGlobalActorReplicationInfoMap::AddDependentActor(AActor* Parent, AActor* C
 		bool bChildIsAlreadyDependant(false);
 		if (FGlobalActorReplicationInfo* ParentInfo = Find(Parent))
 		{
-			bChildIsAlreadyDependant = ParentInfo->DependentActorList.IsValid() && ParentInfo->DependentActorList.Contains(Child);
+			bChildIsAlreadyDependant = ParentInfo->DependentActorList.Find(Child) != INDEX_NONE;
 			if (bChildIsAlreadyDependant == false)
 			{
-				ParentInfo->DependentActorList.PrepareForWrite();
-				ParentInfo->DependentActorList.ConditionalAdd(Child);
+				if (IsActorValidForReplicationGather(Child))
+				{
+					ParentInfo->DependentActorList.Add(Child);
+				}
 			}
 		}
 
 		bool bChildHadParentAlready(false);
 		if (FGlobalActorReplicationInfo* ChildInfo = Find(Child))
 		{
-			bChildHadParentAlready = ChildInfo->ParentActorList.IsValid() && ChildInfo->ParentActorList.Contains(Parent);
+			bChildHadParentAlready = ChildInfo->ParentActorList.Find(Parent) != INDEX_NONE;
 			if (bChildHadParentAlready == false)
 			{
-				ChildInfo->ParentActorList.PrepareForWrite();
-				ChildInfo->ParentActorList.ConditionalAdd(Parent);
+				if (IsActorValidForReplicationGather(Parent))
+				{ 
+					ChildInfo->ParentActorList.Add(Parent);
+				}
 			}
 		}
 

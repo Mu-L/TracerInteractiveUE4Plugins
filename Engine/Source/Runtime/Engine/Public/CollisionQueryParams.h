@@ -6,6 +6,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/EngineTypes.h"
+#include "Chaos/ChaosEngineInterface.h"
 
 /** Macro to convert ECollisionChannels to bit flag **/
 #define ECC_TO_BITFIELD(x)	(1<<(x))
@@ -62,6 +63,9 @@ struct ENGINE_API FCollisionQueryParams
 
 	/** Whether to ignore touch/overlap results. */
 	bool bIgnoreTouches;
+
+	/** Whether to skip narrow phase checks (only for overlaps). */
+	bool bSkipNarrowPhase;
 
 	/** Filters query by mobility types (static vs stationary/movable)*/
 	EQueryMobilityType MobilityType;
@@ -152,6 +156,7 @@ public:
 		IgnoreMask = 0;
 		bIgnoreBlocks = false;
 		bIgnoreTouches = false;
+		bSkipNarrowPhase = false;
 		StatId = GetUnknownStatId();
 #if !(UE_BUILD_TEST || UE_BUILD_SHIPPING)
 		bDebugQuery = false;
@@ -170,6 +175,7 @@ public:
 		IgnoreMask = 0;
 		bIgnoreBlocks = false;
 		bIgnoreTouches = false;
+		bSkipNarrowPhase = false;
 		StatId = GetUnknownStatId();
 #if !(UE_BUILD_TEST || UE_BUILD_SHIPPING)
 		bDebugQuery = false;

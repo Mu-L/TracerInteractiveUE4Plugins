@@ -3,16 +3,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "UObject/ObjectMacros.h"
-#include "RenderResource.h"
-#include "RenderCommandFence.h"
-#include "Engine/Texture.h"
 #include "Engine/Texture2D.h"
-#include "VirtualTexturing.h"
+#include "VT/VirtualTextureBuildSettings.h"
 #include "VirtualTexture.generated.h"
 
-DECLARE_LOG_CATEGORY_EXTERN(LogVirtualTexturingModule, Log, All);
-
+/** Deprecated class */
 UCLASS(ClassGroup = Rendering)
 class ENGINE_API UVirtualTexture : public UObject
 {
@@ -20,33 +15,47 @@ class ENGINE_API UVirtualTexture : public UObject
 	virtual void Serialize(FArchive& Ar) override;
 };
 
+/** Deprecated class */
 UCLASS(ClassGroup = Rendering)
 class ENGINE_API ULightMapVirtualTexture : public UVirtualTexture
 {
 	GENERATED_UCLASS_BODY()
 };
 
-enum class ELightMapVirtualTextureType
+/** Deprecated class. */
+UCLASS(ClassGroup = Rendering)
+class URuntimeVirtualTextureStreamingProxy : public UTexture2D
 {
-	HqLayer0,
-	HqLayer1,
-	ShadowMask,
-	SkyOcclusion,
-	AOMaterialMask,
-
-	Count,
+	GENERATED_UCLASS_BODY()
 };
 
+
+/**
+ * Virtual Texture with locally configurable build settings.
+ * A raw UTexture2D can also represent a Virtual Texture but uses the one and only per-project build settings.
+ */
 UCLASS(ClassGroup = Rendering)
-class ENGINE_API ULightMapVirtualTexture2D : public UTexture2D
+class UVirtualTexture2D : public UTexture2D
 {
 	GENERATED_UCLASS_BODY()
 
-	UPROPERTY(EditAnywhere, Category = VirtualTexture)
-	TArray<int8> TypeToLayer;
+	UPROPERTY()
+	FVirtualTextureBuildSettings Settings;
 
-	void SetLayerForType(ELightMapVirtualTextureType InType, uint8 InLayer);
-	uint32 GetLayerForType(ELightMapVirtualTextureType InType) const;
+	UPROPERTY()
+	bool bContinuousUpdate;
 
-	inline bool HasLayerForType(ELightMapVirtualTextureType InType) const { return GetLayerForType(InType) != ~0u; }
+	UPROPERTY()
+	bool bSinglePhysicalSpace;
+
+	//~ Begin UTexture Interface.
+	virtual void GetVirtualTextureBuildSettings(FVirtualTextureBuildSettings& OutSettings) const override { OutSettings = Settings; }
+	virtual bool IsVirtualTexturedWithContinuousUpdate() const override { return bContinuousUpdate; }
+	virtual bool IsVirtualTexturedWithSinglePhysicalSpace() const override { return bSinglePhysicalSpace; }
+#if WITH_EDITOR
+	virtual void BeginCacheForCookedPlatformData(const ITargetPlatform* TargetPlatform) override;
+	virtual bool IsCachedCookedPlatformDataLoaded(const ITargetPlatform* TargetPlatform) override;
+	virtual void ClearCachedCookedPlatformData(const ITargetPlatform* TargetPlatform) override;
+#endif
+	//~ End UTexture Interface.
 };

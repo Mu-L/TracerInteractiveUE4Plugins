@@ -17,7 +17,7 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogAutomationTest, Warning, All);
 
-void FAutomationTestFramework::FAutomationTestFeedbackContext::Serialize( const TCHAR* V, ELogVerbosity::Type Verbosity, const class FName& Category )
+void FAutomationTestFramework::FAutomationTestOutputDevice::Serialize( const TCHAR* V, ELogVerbosity::Type Verbosity, const class FName& Category )
 {
 	const int32 STACK_OFFSET = 5;//FMsg::Logf_InternalImpl
 	// TODO would be nice to search for the first stack frame that isn't in outputdevice or other logging files, would be more robust.
@@ -28,15 +28,34 @@ void FAutomationTestFramework::FAutomationTestFeedbackContext::Serialize( const 
 	}
 
 	// Ensure there's a valid unit test associated with the context
-	if ( CurTest )
+	if (CurTest)
 	{
-		bool CaptureLog = !CurTest->SuppressLogs() 
-					&& (Verbosity == ELogVerbosity::Error || Verbosity == ELogVerbosity::Warning || Verbosity == ELogVerbosity::Display);
+		bool CaptureLog = !CurTest->SuppressLogs()
+			&& (Verbosity == ELogVerbosity::Error || Verbosity == ELogVerbosity::Warning || Verbosity == ELogVerbosity::Display);
 
 		if (CaptureLog)
 		{
-			bool IsError = (Verbosity == ELogVerbosity::Error && CurTest->TreatLogErrorsAsErrors()) || (Verbosity == ELogVerbosity::Warning && CurTest->TreatLogWarningsAsErrors());
-			bool IsWarning = (Verbosity == ELogVerbosity::Warning || Verbosity == ELogVerbosity::Error) && !IsError;
+			bool IsError = false; 
+			bool IsWarning = false;
+
+			if (Verbosity == ELogVerbosity::Warning)
+			{
+				// If this is a warning, it gets suppressed if the test says so
+				IsWarning = CurTest->SuppressLogWarnings() == false;
+
+				// If it wasn't suppressed, it might get elevated to an error.
+				if (IsWarning && CurTest->ElevateLogWarningsToErrors())
+				{
+					IsError = true;
+					IsWarning = false;
+				}
+			}
+			// now check errors, and yes a test can both elevate warnings to errors and suppress them which doesn't
+			// make sense yet makes sense at the same time...
+			if (Verbosity == ELogVerbosity::Error)
+			{
+				IsError = CurTest->SuppressLogErrors() == false;;
+			}
 			
 			// Errors
 			if (IsError)
@@ -76,6 +95,22 @@ void FAutomationTestFramework::FAutomationTestFeedbackContext::Serialize( const 
 			//	CurTest->AddInfo(LogString, STACK_OFFSET);
 			//}
 		}
+	}
+}
+
+void FAutomationTestFramework::FAutomationTestMessageFilter::Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const class FName& Category)
+{
+	if (DestinationContext)
+	{
+		if ((Verbosity == ELogVerbosity::Warning) || (Verbosity == ELogVerbosity::Error))
+		{
+			if (CurTest->IsExpectedError(FString(V)))
+			{
+				Verbosity = ELogVerbosity::Verbose;
+			}
+		}
+
+		DestinationContext->Serialize(V, Verbosity, Category);
 	}
 }
 
@@ -169,6 +204,8 @@ bool FAutomationTestFramework::RunSmokeTests()
 			// We disable capturing the stack when running smoke tests, it adds too much overhead to do it at startup.
 			FAutomationTestFramework::Get().SetCaptureStack(false);
 
+			double SlowestTestDuration = 0.0f;
+			FString SlowestTestName;
 			for ( int TestIndex = 0; TestIndex < TestInfo.Num(); ++TestIndex )
 			{
 				SlowTask.EnterProgressFrame(1);
@@ -182,17 +219,24 @@ bool FAutomationTestFramework::RunSmokeTests()
 					const bool CurTestSuccessful = StopTest(CurExecutionInfo);
 
 					bAllSuccessful = bAllSuccessful && CurTestSuccessful;
+
+					if (CurTestSuccessful && CurExecutionInfo.Duration > SlowestTestDuration)
+					{
+						SlowestTestDuration = CurExecutionInfo.Duration;
+						SlowestTestName = MoveTemp(TestCommand);
+					}
 				}
 			}
 
 			FAutomationTestFramework::Get().SetCaptureStack(true);
 
-			const double EndTime = FPlatformTime::Seconds();
-			const double TimeForTest = static_cast<float>(EndTime - SmokeTestStartTime);
+			const double TimeForTest = FPlatformTime::Seconds() - SmokeTestStartTime;
 			if (TimeForTest > 2.0f)
 			{
 				//force a failure if a smoke test takes too long
-				UE_LOG(LogAutomationTest, Warning, TEXT("Smoke tests took > 2s to run: %.2fs"), (float)TimeForTest);
+				UE_LOG(LogAutomationTest, Warning, TEXT("Smoke tests took >2s to run (%.2fs). '%s' took %dms. "
+					"SmokeFilter tier tests should take less than 1ms. Please optimize or move '%s' to a slower tier than SmokeFilter."), 
+					TimeForTest, *SlowestTestName, static_cast<int32>(1000*SlowestTestDuration), *SlowestTestName);
 			}
 
 			FAutomationTestFramework::DumpAutomationTestExecutionInfo( OutExecutionInfoMap );
@@ -670,11 +714,10 @@ void FAutomationTestFramework::PrepForAutomationTests()
 	// about them.
 	PreTestingEvent.Broadcast();
 
-	// Cache the contents of GWarn, as unit testing is going to forcibly replace GWarn with a specialized feedback context
-	// designed for unit testing
-	AutomationTestFeedbackContext.TreatWarningsAsErrors = GWarn->TreatWarningsAsErrors;
-	//GWarn = &AutomationTestFeedbackContext;
-	GLog->AddOutputDevice(&AutomationTestFeedbackContext);
+	OriginalGWarn = GWarn;
+	AutomationTestMessageFilter.SetDestinationContext(GWarn);
+	GWarn = &AutomationTestMessageFilter;
+	GLog->AddOutputDevice(&AutomationTestOutputDevice);
 
 	// Mark that unit testing has begun
 	GIsAutomationTesting = true;
@@ -687,8 +730,10 @@ void FAutomationTestFramework::ConcludeAutomationTests()
 	// Mark that unit testing is over
 	GIsAutomationTesting = false;
 
-	//GWarn = CachedContext;
-	GLog->RemoveOutputDevice(&AutomationTestFeedbackContext);
+	GLog->RemoveOutputDevice(&AutomationTestOutputDevice);
+	GWarn = OriginalGWarn;
+	AutomationTestMessageFilter.SetDestinationContext(nullptr);
+	OriginalGWarn = nullptr;
 
 	// Fire off callback signifying that unit testing has concluded.
 	PostTestingEvent.Broadcast();
@@ -747,8 +792,9 @@ void FAutomationTestFramework::InternalStartTest( const FString& InTestToRun )
 		// Clear any execution info from the test in case it has been run before
 		CurrentTest->ClearExecutionInfo();
 
-		// Associate the test that is about to be run with the special unit test feedback context
-		AutomationTestFeedbackContext.SetCurrentAutomationTest( CurrentTest );
+		// Associate the test that is about to be run with the special unit test output device and feedback context
+		AutomationTestOutputDevice.SetCurrentAutomationTest(CurrentTest);
+		AutomationTestMessageFilter.SetCurrentAutomationTest(CurrentTest);
 
 		StartTime = FPlatformTime::Seconds();
 
@@ -779,14 +825,18 @@ bool FAutomationTestFramework::InternalStopTest(FAutomationTestExecutionInfo& Ou
 		UE_LOG(LogAutomationTest, Log, TEXT("%s %s ran in %f"), *CurrentTest->GetBeautifiedTestName(), *Parameters, TimeForTest);
 	}
 
-	// Disassociate the test from the feedback context
-	AutomationTestFeedbackContext.SetCurrentAutomationTest( NULL );
-
 	// Determine if the test was successful based on three criteria:
 	// 1) Did the test itself report success?
 	// 2) Did any errors occur and were logged by the feedback context during execution?++----
 	// 3) Did we meet any errors that were expected with this test
 	bTestSuccessful = bTestSuccessful && !CurrentTest->HasAnyErrors() && CurrentTest->HasMetExpectedErrors();
+
+	// Re-enable log parsing if it was disabled and empty the expected errors list
+	if (CurrentTest->ExpectedErrors.Num())
+	{
+		GLog->Logf(ELogVerbosity::Display, TEXT("<-- Resume Log Parsing -->"));
+	}
+	CurrentTest->ExpectedErrors.Empty();
 
 	// Set the success state of the test based on the above criteria
 	CurrentTest->SetSuccessState( bTestSuccessful );
@@ -797,12 +847,9 @@ bool FAutomationTestFramework::InternalStopTest(FAutomationTestExecutionInfo& Ou
 	// Save off timing for the test
 	OutExecutionInfo.Duration = TimeForTest;
 
-	// Re-enable log parsing if it was disabled and empty the expected errors list
-	if (CurrentTest->ExpectedErrors.Num())
-	{
-		GLog->Logf(ELogVerbosity::Display, TEXT("<-- Resume Log Parsing -->"));
-	}
-	CurrentTest->ExpectedErrors.Empty();
+	// Disassociate the test from the output device and feedback context
+	AutomationTestOutputDevice.SetCurrentAutomationTest(nullptr);
+	AutomationTestMessageFilter.SetCurrentAutomationTest(nullptr);
 
 	// Release pointers to now-invalid data
 	CurrentTest = NULL;
@@ -993,7 +1040,7 @@ FAutomationEvent FAutomationScreenshotCompareResults::ToAutomationEvent(const FS
 
 			if (ErrorMessage.IsEmpty())
 			{
-				Event.Message = FString::Printf(TEXT("Screenshot '%s' test failed, Screnshots were different!  Global Difference = %f, Max Local Difference = %f"),
+				Event.Message = FString::Printf(TEXT("Screenshot '%s' test failed, Screenshots were different!  Global Difference = %f, Max Local Difference = %f"),
 					*ScreenhotName, GlobalDifference, MaxLocalDifference);
 			}
 			else
@@ -1214,7 +1261,6 @@ bool FAutomationTestBase::TestEqual(const TCHAR* What, const int32 Actual, const
 	return true;
 }
 
-
 bool FAutomationTestBase::TestEqual(const TCHAR* What, const int64 Actual, const int64 Expected)
 {
 	if (Actual != Expected)
@@ -1224,6 +1270,18 @@ bool FAutomationTestBase::TestEqual(const TCHAR* What, const int64 Actual, const
 	}
 	return true;
 }
+
+#if PLATFORM_64BITS
+bool FAutomationTestBase::TestEqual(const TCHAR* What, const SIZE_T Actual, const SIZE_T Expected)
+{
+	if (Actual != Expected)
+	{
+		AddError(FString::Printf(TEXT("Expected '%s' to be %" PRIuPTR ", but it was %" PRIuPTR "."), What, Expected, Actual), 1);
+		return false;
+	}
+	return true;
+}
+#endif
 
 bool FAutomationTestBase::TestEqual(const TCHAR* What, const float Actual, const float Expected, float Tolerance)
 {
@@ -1246,6 +1304,16 @@ bool FAutomationTestBase::TestEqual(const TCHAR* What, const double Actual, cons
 }
 
 bool FAutomationTestBase::TestEqual(const TCHAR* What, const FVector Actual, const FVector Expected, float Tolerance)
+{
+	if (!Expected.Equals(Actual, Tolerance))
+	{
+		AddError(FString::Printf(TEXT("Expected '%s' to be %s, but it was %s within tolerance %f."), What, *Expected.ToString(), *Actual.ToString(), Tolerance), 1);
+		return false;
+	}
+	return true;
+}
+
+bool FAutomationTestBase::TestEqual(const TCHAR* What, const FRotator Actual, const FRotator Expected, float Tolerance)
 {
 	if (!Expected.Equals(Actual, Tolerance))
 	{

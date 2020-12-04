@@ -208,9 +208,8 @@ public:
 		check(OutAudio.NumChannels == InAudio.NumChannels);
 		check(InAudio.AudioBuffer.Num() == OutAudio.AudioBuffer.Num());
 
-		const FQuat AmountToRotateBy = InAudio.Rotation.Inverse();
-		const FQuat PreviousAmountRotatedBy = InAudio.PreviousRotation.Inverse();
-		FSoundFieldDecoder::RotateFirstOrderAmbisonicsBed(InAudio, RotatedAudio, AmountToRotateBy, PreviousAmountRotatedBy);
+		// Rotate 
+		FSoundFieldDecoder::RotateFirstOrderAmbisonicsBed(InAudio, RotatedAudio, InAudio.Rotation, InAudio.PreviousRotation);
 		Audio::MixInBufferFast(RotatedAudio.AudioBuffer, OutAudio.AudioBuffer, InputData.SendLevel);
 	}
 };

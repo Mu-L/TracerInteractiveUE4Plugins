@@ -98,7 +98,7 @@ void FLevelEditorMenu::RegisterLevelEditorMenus()
 								ToggleFavoriteLabel.BindStatic(&Local::GetToggleFavoriteLabelText);
 								Section.AddMenuEntry(FLevelEditorCommands::Get().ToggleFavorite, ToggleFavoriteLabel);
 							}
-							Section.AddMenuSeparator("LevelEditorToggleFavorite");
+							Section.AddSeparator("LevelEditorToggleFavorite");
 						}
 						const FMainMRUFavoritesList& MRUFavorites = *FModuleManager::LoadModuleChecked<IMainFrameModule>("MainFrame").GetMRUFavoritesList();
 						const int32 NumFavorites = MRUFavorites.GetNumFavorites();
@@ -209,7 +209,7 @@ void FLevelEditorMenu::RegisterLevelEditorMenus()
 
 				Section.AddMenuEntry( FLevelEditorCommands::Get().BrowseCVars );
 
-				Section.AddMenuSeparator( "HelpBrowse" );
+				Section.AddSeparator( "HelpBrowse" );
 
 				Section.AddMenuEntry( FLevelEditorCommands::Get().BrowseViewportControls );
 			}
@@ -251,7 +251,7 @@ TSharedRef< SWidget > FLevelEditorMenu::MakeNotificationBar( const TSharedPtr<FU
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>( "LevelEditor");
 	const TSharedPtr<FExtender> NotificationBarExtenders = LevelEditorModule.GetNotificationBarExtensibilityManager()->GetAllExtenders();
 
-	FToolBarBuilder NotificationBarBuilder( CommandList, FMultiBoxCustomization::None, NotificationBarExtenders, Orient_Horizontal );
+	FToolBarBuilder NotificationBarBuilder( CommandList, FMultiBoxCustomization::None, NotificationBarExtenders );
 	NotificationBarBuilder.SetStyle(&FEditorStyle::Get(), "NotificationBar");
 	{
 		NotificationBarBuilder.BeginSection("Start");

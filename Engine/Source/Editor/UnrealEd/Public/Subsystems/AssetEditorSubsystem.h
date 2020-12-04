@@ -4,17 +4,19 @@
 
 #include "EditorSubsystem.h"
 
-#include "UObject/ObjectMacros.h"
-#include "UObject/UObjectGlobals.h"
 #include "Toolkits/IToolkit.h"
 
-#include "Templates/SubclassOf.h"
-#include "AssetEditorMessages.h"
-#include "IMessageContext.h"
-#include "MessageEndpoint.h"
 #include "Containers/Ticker.h"
+#include "Tools/Modes.h"
 #include "AssetEditorSubsystem.generated.h"
 
+class UAssetEditor;
+class UEdMode;
+class UObject;
+class UClass;
+struct FAssetEditorRequestOpenAsset;
+class FEditorModeTools;
+class IMessageContext;
 
 /**
  * This class keeps track of a currently open asset editor; allowing it to be
@@ -44,6 +46,13 @@ enum class EAssetEditorCloseReason : uint8
 	RemoveAssetFromAllEditors,
 	CloseAllAssetEditors,
 };
+
+struct UNREALED_API FRegisteredModeInfo
+{
+	TWeakObjectPtr<UClass> ModeClass;
+	FEditorModeInfo ModeInfo;
+};
+using RegisteredModeInfoMap = TMap<FEditorModeID, FRegisteredModeInfo>;
 
 /**
  * UAssetEditorSubsystem
@@ -137,6 +146,50 @@ public:
 	/** Request notification to restore the assets that were previously open when the editor was last closed */
 	void RequestRestorePreviouslyOpenAssets();
 
+	
+	void RegisterUAssetEditor(UAssetEditor* NewAssetEditor);
+	void UnregisterUAssetEditor(UAssetEditor* RemovedAssetEditor);
+	
+	/**
+	 * Creates a scriptable editor mode based on ID name, which will be owned by the given Owner, if that name exists in the map of editor modes found at system startup.
+	 * @param ModeID	ID of the mode to create.
+	 * @param Owner		The tools ownership context that the mode should be created under.
+	 *
+	 * @return 			A pointer to the created UEdMode or nullptr, if the given ModeID does not exist in the set of known modes.
+	 */
+	UEdMode* CreateEditorModeWithToolsOwner(FEditorModeID ModeID, FEditorModeTools& Owner);
+	
+	/**
+	 * Returns information about an editor mode, based on the given ID.
+	 * @param ModeID		ID of the editor mode.
+	 * @param OutModeInfo	The out struct where the mode information should be stored.
+	 *
+	 * @return 				True if OutModeInfo was filled out successfully, otherwise false.
+	 */
+	bool FindEditorModeInfo(const FEditorModeID& InModeID, FEditorModeInfo& OutModeInfo) const;
+	
+	/**
+	 * Creates an array of all known FEditorModeInfos, sorted by their priority, from greatest to least.
+	 *
+	 * @return 			The sorted array of FEditorModeInfos.
+	 */
+	TArray<FEditorModeInfo> GetEditorModeInfoOrderedByPriority() const;
+
+	/**
+	 * Event that is triggered whenever a mode is registered or unregistered
+	 */
+	FRegisteredModesChangedEvent& OnEditorModesChanged();
+
+	/**
+	 * Event that is triggered whenever a mode is registered
+	 */
+	FOnModeRegistered& OnEditorModeRegistered();
+
+	/**
+	 * Event that is triggered whenever a mode is unregistered
+	 */
+	FOnModeUnregistered& OnEditorModeUnregistered();
+
 private:
 
 	/** Handles FAssetEditorRequestOpenAsset messages. */
@@ -154,17 +207,30 @@ private:
 	/** Handler for when the "Don't Restore" button is clicked on the RestorePreviouslyOpenAssets notification */
 	void OnCancelRestorePreviouslyOpenAssets();
 
-	/** Saves a list of open asset editors so they can be restored on editor restart */
-	void SaveOpenAssetEditors(bool bOnShutdown);
+public:
 
-	/** Restore the assets that were previously open when the editor was last closed */
+	/**
+	 * Saves a list of open asset editors so they can be restored on editor restart.
+	 * @param bCancelIfDebugger If true, don't save a list of assets to restore if we are running under a debugger.
+	 */
+	void SaveOpenAssetEditors(const bool bOnShutdown, const bool bCancelIfDebugger = true);
+
+	/** Restore the assets that were previously open when the editor was last closed. */
 	void RestorePreviouslyOpenAssets();
+
+	/** Sets bAutoRestoreAndDisableSaving and sets bRequestRestorePreviouslyOpenAssets to false to avoid running RestorePreviouslyOpenAssets() twice. */
+	void SetAutoRestoreAndDisableSaving(const bool bInAutoRestoreAndDisableSaving);
+
+private:
 
 	/** Handles a package being reloaded */
 	void HandlePackageReloaded(const EPackageReloadPhase InPackageReloadPhase, FPackageReloadedEvent* InPackageReloadedEvent);
 
 	/** Callback for when the Editor closes, before Slate shuts down all the windows. */
 	void OnEditorClose();
+
+	void RegisterEditorModes();
+	void UnregisterEditorModes();
 
 private:
 
@@ -201,10 +267,6 @@ private:
 	TMap<FName, FAssetEditorAnalyticInfo> EditorUsageAnalytics;
 
 private:
-
-	/** Holds the messaging endpoint. */
-	TSharedPtr<FMessageEndpoint, ESPMode::ThreadSafe> MessageEndpoint;
-
 	/** Holds a delegate to be invoked when the widget ticks. */
 	FTickerDelegate TickDelegate;
 
@@ -222,11 +284,33 @@ private:
 
 	/** Flag whether we are currently shutting down */
 	bool bSavingOnShutdown;
+	
+	/**
+	 * Flag whether to disable SaveOpenAssetEditors() and enable auto-restore on RestorePreviouslyOpenAssets().
+	 * Useful e.g., to allow LayoutsMenu.cpp re-load layouts on-the-fly and reload the previously opened assets.
+	 * If true, SaveOpenAssetEditors() will not save any asset editor and RestorePreviouslyOpenAssets() will automatically open them without asking the user.
+	 * If false, default behavior of both SaveOpenAssetEditors() and RestorePreviouslyOpenAssets().
+	 */
+	bool bAutoRestoreAndDisableSaving;
 
 	/** Flag whether there has been a request to notify whether to restore previously open assets */
 	bool bRequestRestorePreviouslyOpenAssets;
 
 	/** A pointer to the notification used by RestorePreviouslyOpenAssets */
 	TWeakPtr<SNotificationItem> RestorePreviouslyOpenAssetsNotificationPtr;
+	
+	UPROPERTY(Transient)
+	TArray<UAssetEditor*> OwnedAssetEditors;
+	
+	/** Map of FEditorModeId to EditorModeInfo for all known UEdModes when the subsystem initialized */
+	RegisteredModeInfoMap EditorModes;
 
+	/** Event that is triggered whenever a mode is unregistered */
+	FRegisteredModesChangedEvent OnEditorModesChangedEvent;
+
+	/** Event that is triggered whenever a mode is unregistered */
+	FOnModeRegistered OnEditorModeRegisteredEvent;
+
+	/** Event that is triggered whenever a mode is unregistered */
+	FOnModeUnregistered OnEditorModeUnregisteredEvent;
 };

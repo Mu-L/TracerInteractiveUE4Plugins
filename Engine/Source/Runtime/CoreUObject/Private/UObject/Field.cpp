@@ -8,6 +8,7 @@ Field.cpp: Defines FField property system fundamentals
 #include "UObject/Class.h"
 #include "HAL/ThreadSafeBool.h"
 #include "Misc/ScopeLock.h"
+#include "Misc/StringBuilder.h"
 #include "Serialization/MemoryWriter.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/OutputDeviceHelper.h"
@@ -562,24 +563,36 @@ void FField::AddCppProperty(FProperty* Property)
 
 FString FField::GetPathName(const UObject* StopOuter /*= nullptr*/) const
 {
-	FString PathName;
+	TStringBuilder<256> ResultString;
+	GetPathName(StopOuter, ResultString);
+	return FString(FStringView(ResultString));
+}
+
+void FField::GetPathName(const UObject* StopOuter, FStringBuilderBase& ResultString) const
+{
+	TArray<FName, TInlineAllocator<16>> ParentFields;
 	for (FFieldVariant TempOwner = Owner; TempOwner.IsValid(); TempOwner = TempOwner.GetOwnerVariant())
 	{		
 		if (!TempOwner.IsUObject())
 		{
 			FField* FieldOwner = TempOwner.ToField();
-			PathName = FieldOwner->GetName() + TEXT(".") + PathName;
+			ParentFields.Add(FieldOwner->GetFName());
 		}
 		else
 		{
 			UObject* ObjectOwner = TempOwner.ToUObject();
-			PathName += ObjectOwner->GetPathName(StopOuter);
-			PathName += SUBOBJECT_DELIMITER_CHAR;
+			ObjectOwner->GetPathName(StopOuter, ResultString);
+			ResultString << SUBOBJECT_DELIMITER_CHAR;
 			break;
 		}
 	}
-	PathName += GetName();
-	return PathName;
+
+	for (int FieldIndex = ParentFields.Num() - 1; FieldIndex >= 0; --FieldIndex)
+	{
+		ParentFields[FieldIndex].AppendString(ResultString);
+		ResultString << TEXT(".");
+	}
+	GetFName().AppendString(ResultString);
 }
 
 FString FField::GetFullName() const
@@ -690,9 +703,9 @@ FText FField::GetDisplayNameText() const
 	const FString Key = GetFullGroupName(false);
 
 	FString NativeDisplayName;
-	if (HasMetaData(NAME_DisplayName))
+	if (const FString* FoundMetaData = FindMetaData(NAME_DisplayName))
 	{
-		NativeDisplayName = GetMetaData(NAME_DisplayName);
+		NativeDisplayName = *FoundMetaData;
 	}
 	else
 	{
@@ -760,20 +773,14 @@ FText FField::GetToolTipText(bool bShortTooltip) const
 	return LocalizedToolTip;
 }
 
-/**
-* Determines if the property has any metadata associated with the key
-*
-* @param Key The key to lookup in the metadata
-* @return true if there is a (possibly blank) value associated with this key
-*/
-bool FField::HasMetaData(const TCHAR* Key) const
+const FString* FField::FindMetaData(const TCHAR* Key) const
 {
-	return HasMetaData(FName(Key, FNAME_Find));
+	return FindMetaData(FName(Key, FNAME_Find));
 }
 
-bool FField::HasMetaData(const FName& Key) const
+const FString* FField::FindMetaData(const FName& Key) const
 {
-	return MetaDataMap && MetaDataMap->Contains(Key);
+	return (MetaDataMap ? MetaDataMap->Find(Key) : nullptr);
 }
 
 /**
@@ -815,9 +822,9 @@ const FText FField::GetMetaDataText(const TCHAR* MetaDataKey, const FString Loca
 {
 	FString DefaultMetaData;
 
-	if (HasMetaData(MetaDataKey))
+	if (const FString* FoundMetaData = FindMetaData(MetaDataKey))
 	{
-		DefaultMetaData = GetMetaData(MetaDataKey);
+		DefaultMetaData = *FoundMetaData;
 	}
 
 	// If attempting to grab the DisplayName metadata, we must correct the source string and output it as a DisplayString for lookup
@@ -843,9 +850,9 @@ const FText FField::GetMetaDataText(const FName& MetaDataKey, const FString Loca
 {
 	FString DefaultMetaData;
 
-	if (HasMetaData(MetaDataKey))
+	if (const FString* FoundMetaData = FindMetaData(MetaDataKey))
 	{
-		DefaultMetaData = GetMetaData(MetaDataKey);
+		DefaultMetaData = *FoundMetaData;
 	}
 
 	// If attempting to grab the DisplayName metadata, we must correct the source string and output it as a DisplayString for lookup
@@ -875,17 +882,27 @@ const FText FField::GetMetaDataText(const FName& MetaDataKey, const FString Loca
 */
 void FField::SetMetaData(const TCHAR* Key, const TCHAR* InValue)
 {
-	SetMetaData(FName(Key), InValue);
+	SetMetaData(FName(Key), FString(InValue));
+}
+
+void FField::SetMetaData(const TCHAR* Key, FString&& InValue)
+{
+	SetMetaData(FName(Key), MoveTemp(InValue));
 }
 
 void FField::SetMetaData(const FName& Key, const TCHAR* InValue)
+{
+	SetMetaData(Key, FString(InValue));
+}
+
+void FField::SetMetaData(const FName& Key, FString&& InValue)
 {
 	check(Key != NAME_None);
 	if (!MetaDataMap)
 	{
 		MetaDataMap = new TMap<FName, FString>();
 	}
-	MetaDataMap->Add(Key, InValue);
+	MetaDataMap->Add(Key, MoveTemp(InValue));
 }
 
 UClass* FField::GetClassMetaData(const TCHAR* Key) const
@@ -970,6 +987,13 @@ FName FField::GenerateFFieldName(FFieldVariant InOwner /** Unused yet */, FField
 }
 
 #if WITH_EDITORONLY_DATA
+
+FField::FOnConvertCustomUFieldToFField& FField::GetConvertCustomUFieldToFFieldDelegate()
+{
+	static FOnConvertCustomUFieldToFField ConvertCustomUFieldToFFieldDelegate;
+	return ConvertCustomUFieldToFFieldDelegate;
+}
+
 FField* FField::CreateFromUField(UField* InField)
 {
 	FField* NewField = nullptr;
@@ -1093,7 +1117,10 @@ FField* FField::CreateFromUField(UField* InField)
 	}
 	else
 	{
-		checkf(false, TEXT("Cannot create an FField from %s. The class is either abstract or not implemented."), *InField->GetFullName());
+		FFieldClass** FieldClassPtr = FFieldClass::GetNameToFieldClassMap().Find(UFieldClass->GetFName());
+		checkf(FieldClassPtr, TEXT("Cannot create an FField from %s. The class is either abstract or not implemented."), *InField->GetFullName());
+		GetConvertCustomUFieldToFFieldDelegate().Broadcast(*FieldClassPtr, InField, NewField);
+		checkf(NewField, TEXT("Cannot create an FField from %s. The class conversion function is not implemented or not bound to FField::GetConvertCustomUFieldToFField() delegate."), *InField->GetFullName());
 	}
 
 	return NewField;

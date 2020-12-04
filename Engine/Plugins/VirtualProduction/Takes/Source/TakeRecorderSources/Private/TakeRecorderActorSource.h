@@ -49,6 +49,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Actor Source")
 	ETakeRecorderActorRecordType RecordType;
 
+	/** 
+	 * Whether to ensure that the parent hierarchy is also recorded. If recording to possessable and the parent is not recorded, 
+	 * the recorded transforms will be in local space since the child will still be attached to the parent in the level after 
+	 * recording.  If recording to spawnable and the parent is not recorded, the recorded transforms will be in global space 
+	 * since the child will not be attached to the parent in the level.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Actor Source")
+	bool bRecordParentHierarchy;
+
 	/** Whether to perform key-reduction algorithms as part of the recording */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Actor Source")
 	bool bReduceKeys;
@@ -111,6 +120,7 @@ public:
 	UTakeRecorderActorSource(const FObjectInitializer& ObjInit);
 	
 	// UTakeRecorderSource Interface
+	virtual bool IsValid()const override;
 	virtual TArray<UTakeRecorderSource*> PreRecording(class ULevelSequence* InSequence, class ULevelSequence* InMasterSequence, FManifestSerializer* InManifestSerializer) override;
 	virtual void StartRecording(const FTimecode& InSectionStartTimecode, const FFrameNumber& InSectionFirstFrame, class ULevelSequence* InSequence) override;
 	virtual void TickRecording(const FQualifiedFrameTime& CurrentSequenceTime) override;
@@ -137,6 +147,13 @@ public:
 
 	/** Get the record type. If set to project default, gets the type from the project settings */
 	bool GetRecordToPossessable() const;
+
+	TOptional<FMovieSceneSequenceID> GetSequenceID() const
+	{
+		return SequenceID;
+	}
+
+	void SetSequenceID(FMovieSceneSequenceID InSequenceID) { SequenceID = InSequenceID; }
 
 protected:
 
@@ -177,7 +194,7 @@ protected:
 	void CleanExistingDataFromSequence(const FGuid& ForGuid, ULevelSequence& InSequence);
 
 	/** Called as part of PostRecording before Track Recorders are finalized. Calls PostProcessTrackRecordersImpl afterwards for any other post processing you wish to do before Track recorders are finalized. */
-	void PostProcessTrackRecorders();
+	void PostProcessTrackRecorders(ULevelSequence* InSequence);
 
 	/** 
 	* Ensure that the Object Template this recording is recording into has the specified component. Used to initialize dynamically added components that don't exist in the CDO.
@@ -265,6 +282,9 @@ private:
 	virtual FText GetCategoryTextImpl() const;
 	virtual FText GetDisplayTextImpl() const override;
 	virtual FText GetDescriptionTextImpl() const override;
+
+	void ProcessRecordedTimes(ULevelSequence* InSequence);
+
 private:
 	/** Object Binding guid that is created in the Level Sequence when recording starts.*/
 	FGuid CachedObjectBindingGuid;

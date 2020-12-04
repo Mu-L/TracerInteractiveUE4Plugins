@@ -36,6 +36,8 @@ class SDockTab;
 class SWindow;
 class USequencerSettings;
 class FSequencerTrackFilter;
+class SSequencerGroupManager;
+class SSequencerTreeFilterStatusBar;
 struct FPaintPlaybackRangeArgs;
 struct FSequencerCustomizationInfo;
 struct FSequencerSelectionCurveFilter;
@@ -150,6 +152,9 @@ public:
 		/** The Marked Frames */
 		SLATE_ATTRIBUTE(TArray<FMovieSceneMarkedFrame>, MarkedFrames)
 
+		/** The Global Marked Frames */
+		SLATE_ATTRIBUTE(TArray<FMovieSceneMarkedFrame>, GlobalMarkedFrames)
+
 		/** The current sub sequence range */
 		SLATE_ATTRIBUTE( TOptional<TRange<FFrameNumber>>, SubSequenceRange)
 
@@ -188,6 +193,18 @@ public:
 
 		/** The current scrub position in (seconds) */
 		SLATE_ATTRIBUTE( FFrameTime, ScrubPosition )
+
+		/** The current scrub position text */
+		SLATE_ATTRIBUTE( FString, ScrubPositionText )
+
+		/** The parent sequence that the scrub position display text is relative to */
+		SLATE_ATTRIBUTE( FMovieSceneSequenceID, ScrubPositionParent )
+
+		/** Called when the scrub position parent sequence is changed */
+		SLATE_EVENT( FOnScrubPositionParentChanged, OnScrubPositionParentChanged )
+
+		/** Attribute for the parent sequence chain of the current sequence */
+		SLATE_ATTRIBUTE( TArray<FMovieSceneSequenceID>, ScrubPositionParentChain )
 
 		/** Called when the user changes the view range */
 		SLATE_EVENT( FOnViewRangeChanged, OnViewRangeChanged )
@@ -316,6 +333,9 @@ public:
 	/** Sets the play time for the sequence but clamped by the working range. This is useful for cases where we can't clamp via the UI control. */
 	void SetPlayTimeClampedByWorkingRange(double Frame);
 
+	/** Sets the play time for the sequence. Will extend the working range if out of bounds. */
+	void SetPlayTime(double Frame);
+
 	/** Set's the specified filter to be on or off*/
 	void SetFilterOn(const FText& InName, bool bOn);
 
@@ -409,6 +429,10 @@ public:
 	/** Makes the time display format menu for the toolbar and the play rate menu. */
 	void FillTimeDisplayFormatMenu(FMenuBuilder& MenuBuilder);
 
+	void OpenNodeGroupsManager();
+
+	TSharedPtr<SSequencerGroupManager> GetNodeGroupsManager() const { return NodeGroupManager; }
+
 public:	
 	/** Makes a time range widget with the specified inner content */
 	TSharedRef<SWidget> MakeTimeRange(const TSharedRef<SWidget>& InnerContent, bool bShowWorkingRange, bool bShowViewRange, bool bShowPlaybackRange);
@@ -428,6 +452,10 @@ private:
 	bool IsTrackLevelFilterActive(const FString LevelName) const;
 
 	void FillLevelFilterMenu(FMenuBuilder& InMenuBarBuilder);
+	void FillNodeGroupsFilterMenu(FMenuBuilder& InMenuBarBuilder);
+
+	void OnEnableAllNodeGroupFilters(bool bEnableAll);
+	void OnNodeGroupFilterClicked(UMovieSceneNodeGroup* NodeGroup);
 
 	/**
 	* Called when the time snap interval changes.
@@ -485,11 +513,6 @@ private:
 	/** Called when a breadcrumb is clicked on in the sequencer */
 	void OnCrumbClicked(const FSequencerBreadcrumb& Item);
 
-	void OnBreadcrumbPickerContentClicked(const FSequencerBreadcrumb& Breadcrumb);
-
-	/** Called when the user opens the breadcrumb dropdown */
-	TSharedRef<SWidget> GetBreadcrumbPickerContent();
-
 	/** Gets the root movie scene name */
 	FText GetRootAnimationName() const;
 
@@ -504,8 +527,6 @@ private:
 
 	/** Gets whether or not the breadcrumb trail should be visible. */
 	EVisibility GetBreadcrumbTrailVisibility() const;
-
-
 
 	/** Gets whether or not the bottom time slider should be visible. */
 	EVisibility GetBottomTimeSliderVisibility() const;
@@ -583,6 +604,9 @@ private:
 	/** Main Sequencer Area*/
 	TSharedPtr<SVerticalBox> MainSequencerArea;
 
+	/** Filter Status Bar */
+	TSharedPtr<SSequencerTreeFilterStatusBar> SequencerTreeFilterStatusBar;
+	
 	/** Section area widget */
 	TSharedPtr<SSequencerTrackArea> TrackArea;
 
@@ -716,6 +740,10 @@ private:
 	TArray< TSharedRef<FSequencerTrackFilter> > AllTrackFilters;
 
 	TWeakPtr<SWindow> WeakExposedBindingsWindow;
+
+	TWeakPtr<SWindow> WeakNodeGroupWindow;
+
+	TSharedPtr<SSequencerGroupManager> NodeGroupManager;
 
 public:
 	static const FName CurveEditorTabName;

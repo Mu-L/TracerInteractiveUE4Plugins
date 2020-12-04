@@ -8,6 +8,7 @@
 #include "Containers/UnrealString.h"
 #include "CoreGlobals.h"
 #include "Misc/OutputDeviceRedirector.h"
+#include "Misc/Guid.h"
 #include "Stats/Stats.h"
 #include "GenericPlatform/GenericPlatformMemoryPoolStats.h"
 
@@ -227,7 +228,11 @@ FPlatformMemoryStats FWindowsPlatformMemory::GetStats()
 	MemoryStats.TotalPhysical = MemoryStatusEx.ullTotalPhys;
 	MemoryStats.AvailablePhysical = MemoryStatusEx.ullAvailPhys;
 	MemoryStats.AvailableVirtual = MemoryStatusEx.ullAvailVirtual;
-	
+
+	// On Windows, Virtual Memory is limited per process to the address space (e.g. 47 bits (128Tb)), but is additionally limited by the sum of used virtual memory across all processes
+	// must be less than PhysicalMemory plus the Virtual Memory Page Size. The remaining virtual memory space given this system-wide limit is stored in ullAvailPageSize
+	MemoryStats.AvailableVirtual = FMath::Min(MemoryStats.AvailableVirtual, MemoryStatusEx.ullAvailPageFile);
+
 	MemoryStats.UsedPhysical = ProcessMemoryCounters.WorkingSetSize;
 	MemoryStats.PeakUsedPhysical = ProcessMemoryCounters.PeakWorkingSetSize;
 	MemoryStats.UsedVirtual = ProcessMemoryCounters.PagefileUsage;
@@ -392,11 +397,23 @@ void FWindowsPlatformMemory::FPlatformVirtualMemoryBlock::Decommit(size_t InOffs
 
 
 
-
-FPlatformMemory::FSharedMemoryRegion* FWindowsPlatformMemory::MapNamedSharedMemoryRegion(const FString& InName, bool bCreate, uint32 AccessMode, SIZE_T Size)
+FPlatformMemory::FSharedMemoryRegion* FWindowsPlatformMemory::MapNamedSharedMemoryRegion(const FString& InName, bool bCreate, uint32 AccessMode, SIZE_T Size, const void* pSecurityAttributes)
 {
-	FString Name(TEXT("Global\\"));
-	Name += InName;
+	FString Name;
+
+	// Use {Guid} as the name for the memory region without prefix.
+	FGuid Guid;
+	if (FGuid::ParseExact(InName, EGuidFormats::DigitsWithHyphensInBraces, Guid))
+	{
+		// Only the Guid string is used as the name of the memory region. It works without administrator rights
+		Name = Guid.ToString(EGuidFormats::DigitsWithHyphensInBraces);
+	}
+	else
+	{
+		// The prefix "Global\\" is used to share this region with other processes. This method requires administrator rights, if pSecurityAttributes not defined
+		Name = TEXT("Global\\");
+		Name += InName;
+	}
 
 	DWORD OpenMappingAccess = FILE_MAP_READ;
 	check(AccessMode != 0);
@@ -436,7 +453,7 @@ FPlatformMemory::FSharedMemoryRegion* FWindowsPlatformMemory::MapNamedSharedMemo
 #endif // PLATFORM_64BITS
 			;
 
-		Mapping = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, CreateMappingAccess, MaxSizeHigh, MaxSizeLow, *Name);
+		Mapping = CreateFileMapping(INVALID_HANDLE_VALUE, (SECURITY_ATTRIBUTES*)pSecurityAttributes, CreateMappingAccess, MaxSizeHigh, MaxSizeLow, *Name);
 
 		if (Mapping == NULL)
 		{

@@ -8,6 +8,14 @@
 
 #define LOCTEXT_NAMESPACE "UInteractiveTool"
 
+#if WITH_EDITOR
+void UInteractiveToolPropertySet::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	OnModified.Broadcast(this, PropertyChangedEvent.Property);
+}
+#endif
 
 UInteractiveTool::UInteractiveTool()
 {
@@ -41,6 +49,9 @@ void UInteractiveTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
 }
 
+void UInteractiveTool::DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* RenderAPI)
+{
+}
 
 void UInteractiveTool::AddInputBehavior(UInputBehavior* Behavior)
 {
@@ -144,9 +155,40 @@ TArray<UObject*> UInteractiveTool::GetToolProperties(bool bEnabledOnly) const
 		}
 	}
 
-	return MoveTemp(Properties);
+	return Properties;
 }
 
+void
+UInteractiveToolPropertySet::SaveProperties(UInteractiveTool* SaveFromTool)
+{
+	SaveRestoreProperties(SaveFromTool, true);
+}
+
+void
+UInteractiveToolPropertySet::RestoreProperties(UInteractiveTool* RestoreToTool)
+{
+	SaveRestoreProperties(RestoreToTool, false);
+}
+
+void UInteractiveToolPropertySet::SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving)
+{
+	UInteractiveToolPropertySet* PropertyCache = GetDynamicPropertyCache();
+	for ( FProperty* Prop : TFieldRange<FProperty>(GetClass()) )
+	{
+#if WITH_EDITOR
+		if (!Prop->HasMetaData(TEXT("TransientToolProperty")))
+#endif
+		{
+			void* DestValue = Prop->ContainerPtrToValuePtr<void>(this);
+			void* SrcValue = Prop->ContainerPtrToValuePtr<void>(PropertyCache);
+			if ( bSaving )
+			{
+				Swap(SrcValue, DestValue);
+			}
+			Prop->CopySingleValue(DestValue, SrcValue);
+		}
+	}
+}
 
 void UInteractiveTool::RegisterActions(FInteractiveToolActionSet& ActionSet)
 {
@@ -187,6 +229,22 @@ bool UInteractiveTool::CanAccept() const
 
 void UInteractiveTool::Tick(float DeltaTime)
 {
+	for (auto* Object : ToolPropertyObjects)
+	{
+		auto* Propset = Cast<UInteractiveToolPropertySet>(Object);
+		if ( Propset != nullptr )
+		{
+			if ( Propset->IsPropertySetEnabled() )
+			{
+				Propset->CheckAndUpdateWatched();
+			}
+			else
+			{
+				Propset->SilentUpdateWatched();
+			}
+		}
+	}
+	OnTick(DeltaTime);
 }
 
 UInteractiveToolManager* UInteractiveTool::GetToolManager() const

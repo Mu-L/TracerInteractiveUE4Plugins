@@ -10,6 +10,11 @@
 #include "HAL/MemoryMisc.h"
 #include "HAL/PlatformMisc.h"
 #include "Misc/App.h"
+#include "HAL/MallocTimer.h"
+#include "ProfilingDebugging/CsvProfiler.h"
+#if CSV_PROFILER
+CSV_DEFINE_CATEGORY_MODULE(CORE_API, FMemory, true);
+#endif
 
 PRAGMA_DISABLE_UNSAFE_TYPECAST_WARNINGS
 
@@ -51,6 +56,14 @@ static FAutoConsoleVariableRef GMallocBinned2AllocExtraCVar(
 	);
 
 #endif
+
+float GMallocBinned2FlushThreadCacheMaxWaitTime = 0.02f;
+static FAutoConsoleVariableRef GMallocBinned2FlushThreadCacheMaxWaitTimeCVar(
+	TEXT("MallocBinned2.FlushThreadCacheMaxWaitTime"),
+	GMallocBinned2FlushThreadCacheMaxWaitTime,
+	TEXT("The threshold of time before warning about FlushCurrentThreadCache taking too long (seconds)."),
+	ECVF_ReadOnly
+);
 
 #if BINNED2_ALLOCATOR_STATS
 TAtomic<int64> AllocatedSmallPoolMemory(0); // memory that's requested to be allocated by the game
@@ -610,7 +623,7 @@ FMallocBinned2::FPoolInfo& FMallocBinned2::FPoolList::PushNewPoolToFront(FMalloc
 	const uint32 LocalPageSize = Allocator.PageSize;
 
 	// Allocate memory.
-	void* FreePtr = Allocator.CachedOSPageAllocator.Allocate(LocalPageSize);
+	void* FreePtr = Allocator.CachedOSPageAllocator.Allocate(LocalPageSize, FMemory::AllocationHints::SmallPool);
 	if (!FreePtr)
 	{
 		Private::OutOfMemory(LocalPageSize);
@@ -1070,11 +1083,11 @@ void FMallocBinned2::FlushCurrentThreadCache()
 	}
 
 	// These logs must happen outside the above mutex to avoid deadlocks
-	if (WaitForMutexTime > 0.02f)
+	if (WaitForMutexTime > GMallocBinned2FlushThreadCacheMaxWaitTime)
 	{
 		UE_LOG(LogMemory, Warning, TEXT("FMallocBinned2 took %6.2fms to wait for mutex for trim."), WaitForMutexTime * 1000.0f);
 	}
-	if (WaitForMutexAndTrimTime > 0.02f)
+	if (WaitForMutexAndTrimTime > GMallocBinned2FlushThreadCacheMaxWaitTime)
 	{
 		UE_LOG(LogMemory, Warning, TEXT("FMallocBinned2 took %6.2fms to wait for mutex AND trim."), WaitForMutexAndTrimTime * 1000.0f);
 	}
@@ -1307,5 +1320,15 @@ void FMallocBinned2::DumpAllocatorStats(class FOutputDevice& Ar)
 		#include "FMemory.inl"
 	#endif
 #endif
+
+void FMallocBinned2::UpdateStats()
+{
+#if CSV_PROFILER
+	CSV_CUSTOM_STAT(FMemory, AllocatorCachedSlackMB, (int32)(CachedOSPageAllocator.GetCachedFreeTotal()/(1024*1024)), ECsvCustomStatOp::Set);
+#endif
+
+	FScopedVirtualMallocTimer::UpdateStats();
+}
+
 
 PRAGMA_ENABLE_UNSAFE_TYPECAST_WARNINGS

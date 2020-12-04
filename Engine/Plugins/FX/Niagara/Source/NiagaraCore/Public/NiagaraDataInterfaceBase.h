@@ -11,6 +11,7 @@ class INiagaraCompiler;
 class UCurveVector;
 class UCurveLinearColor;
 class UCurveFloat;
+class UNiagaraEmitter;
 class FNiagaraSystemInstance;
 class FNiagaraShader;
 class FNiagaraShaderMapPointerTable;
@@ -24,12 +25,53 @@ struct FNiagaraComputeInstanceData;
 
 DECLARE_EXPORTED_TEMPLATE_INTRINSIC_TYPE_LAYOUT(template<>, TIndexedPtr<UNiagaraDataInterfaceBase>, NIAGARACORE_API);
 
-struct FNiagaraDataInterfaceSetArgs
+struct FNiagaraDataInterfaceArgs
 {
-	TShaderRefBase<FNiagaraShader, FNiagaraShaderMapPointerTable> Shader;
-	FNiagaraDataInterfaceProxy* DataInterface;
-	FNiagaraSystemInstanceID SystemInstance;
+	FNiagaraDataInterfaceArgs(FNiagaraDataInterfaceProxy* InDataInterface, FNiagaraSystemInstanceID InSystemInstanceID, const NiagaraEmitterInstanceBatcher* InBatcher)
+		: DataInterface(InDataInterface)
+		, SystemInstanceID(InSystemInstanceID)
+		, Batcher(InBatcher)
+	{
+	}
+
+	FNiagaraDataInterfaceProxy*	DataInterface;
+	FNiagaraSystemInstanceID SystemInstanceID;
 	const NiagaraEmitterInstanceBatcher* Batcher;
+};
+
+struct FNiagaraDataInterfaceStageArgs : public FNiagaraDataInterfaceArgs
+{
+	FNiagaraDataInterfaceStageArgs(FNiagaraDataInterfaceProxy* InDataInterface, FNiagaraSystemInstanceID InSystemInstanceID, const NiagaraEmitterInstanceBatcher* InBatcher, const FNiagaraComputeInstanceData* InComputeInstanceData, uint32 InSimulationStageIndex, bool InIsOutputStage, bool InIsIterationStage)
+		: FNiagaraDataInterfaceArgs(InDataInterface, InSystemInstanceID, InBatcher)
+		, ComputeInstanceData(InComputeInstanceData)
+		, SimulationStageIndex(InSimulationStageIndex)
+		, IsOutputStage(InIsOutputStage)
+		, IsIterationStage(InIsIterationStage)
+	{
+	}
+
+	const FNiagaraComputeInstanceData* ComputeInstanceData;
+	uint32 SimulationStageIndex;
+	bool IsOutputStage;
+	bool IsIterationStage;
+};
+
+struct FNiagaraDataInterfaceSetArgs : public FNiagaraDataInterfaceArgs
+{
+	typedef TShaderRefBase<FNiagaraShader, FNiagaraShaderMapPointerTable> FShaderReference;
+
+	FNiagaraDataInterfaceSetArgs(
+		FNiagaraDataInterfaceProxy* InDataInterface, FNiagaraSystemInstanceID InSystemInstanceID, const NiagaraEmitterInstanceBatcher* InBatcher, const FShaderReference& InShader, const FNiagaraComputeInstanceData* InComputeInstanceData, uint32 InSimulationStageIndex, bool InIsOutputStage, bool InIsIterationStage)
+		: FNiagaraDataInterfaceArgs(InDataInterface, InSystemInstanceID, InBatcher)
+		, Shader(InShader)
+		, ComputeInstanceData(InComputeInstanceData)
+		, SimulationStageIndex(InSimulationStageIndex)
+		, IsOutputStage(InIsOutputStage)
+		, IsIterationStage(InIsIterationStage)
+	{
+	}
+
+	FShaderReference Shader;
 	const FNiagaraComputeInstanceData* ComputeInstanceData;
 	uint32 SimulationStageIndex;
 	bool IsOutputStage;
@@ -70,6 +112,9 @@ public:
 	virtual void BindParameters(FNiagaraDataInterfaceParametersCS* Base, const FNiagaraDataInterfaceGPUParamInfo& ParameterInfo, const class FShaderParameterMap& ParameterMap) {}
 	virtual void SetParameters(const FNiagaraDataInterfaceParametersCS* Base, FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) const {}
 	virtual void UnsetParameters(const FNiagaraDataInterfaceParametersCS* Base, FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) const {}
+
+	/** Returns true if the DI (owned by OwnerEmitter) reads any attributes from the Provider emitter */
+	virtual bool HasInternalAttributeReads(const UNiagaraEmitter* OwnerEmitter, const UNiagaraEmitter* Provider) const { return false; }
 };
 
 /** This goes in class declaration for UNiagaraDataInterfaceBase-derived types, that need custom parameter type */

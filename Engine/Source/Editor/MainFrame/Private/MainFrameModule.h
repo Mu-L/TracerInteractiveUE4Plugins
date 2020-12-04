@@ -55,6 +55,8 @@ public:
 
 	virtual void RequestCloseEditor( ) override
 	{
+		ClearDelayedShowMainFrameDelegate();
+
 		if ( MainFrameHandler->CanCloseEditor() )
 		{
 			MainFrameHandler->ShutDownEditor();
@@ -72,7 +74,7 @@ public:
 		return LoadedLevelName; 
 	}
 
-	virtual const TSharedRef<FUICommandList>& GetMainFrameCommandBindings( ) override
+	virtual TSharedRef<FUICommandList>& GetMainFrameCommandBindings( ) override
 	{
 		return FMainFrameCommands::ActionList;
 	}
@@ -108,6 +110,22 @@ public:
 	void BroadcastMainFrameSDKNotInstalled(const FString& PlatformName, const FString& DocLink) override
 	{
 		return MainFrameSDKNotInstalled.Broadcast(PlatformName, DocLink);
+	}
+
+	virtual void EnableDelayedShowMainFrame() override
+	{
+		bDelayedShowMainFrame = true;
+	}
+
+	virtual void ShowDelayedMainFrame() override
+	{
+		bDelayedShowMainFrame = false;
+
+		if (DelayedShowMainFrameDelegate.IsBound())
+		{
+			DelayedShowMainFrameDelegate.Execute();
+			ClearDelayedShowMainFrameDelegate();
+		}
 	}
 
 public:
@@ -161,6 +179,12 @@ private:
 	// Handles launching code accessor
 	void HandleCodeAccessorLaunching( );
 
+	// Reset delegate
+	void ClearDelayedShowMainFrameDelegate()
+	{
+		DelayedShowMainFrameDelegate.Unbind();
+	}
+
 private:
 
 	// Weak pointer to the level editor's compile notification item.
@@ -193,8 +217,9 @@ private:
 	// Weak pointer to the code accessor's notification item.
 	TWeakPtr<class SNotificationItem> CodeAccessorNotificationPtr;
 
-	// Sounds used for compilation.
-	class USoundBase* CompileStartSound;
-	class USoundBase* CompileSuccessSound;
-	class USoundBase* CompileFailSound;
+	// Delegate that holds a delayed call to ShowMainFrameWindow
+	FSimpleDelegate DelayedShowMainFrameDelegate;
+
+	// Allow delaying when to show main frame's window
+	bool bDelayedShowMainFrame;
 };

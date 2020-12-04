@@ -6,7 +6,7 @@
 #include "MovieScene.h"
 #include "MovieSceneFolder.h"
 #include "Algo/Find.h"
-#include "Compilation/MovieSceneCompiler.h"
+#include "Compilation/MovieSceneCompiledDataManager.h"
 
 TArray<UMovieSceneTrack*> UMovieSceneSequenceExtensions::FilterTracks(TArrayView<UMovieSceneTrack* const> InTracks, UClass* DesiredClass, bool bExactMatch)
 {
@@ -113,6 +113,26 @@ UMovieSceneTrack* UMovieSceneSequenceExtensions::AddMasterTrack(UMovieSceneSeque
 	return nullptr;
 }
 
+bool UMovieSceneSequenceExtensions::RemoveMasterTrack(UMovieSceneSequence* Sequence, UMovieSceneTrack* MasterTrack)
+{
+	UMovieScene* MovieScene = GetMovieScene(Sequence);
+	if (MovieScene)
+	{
+		if (MasterTrack->IsA(UMovieSceneCameraCutTrack::StaticClass()))
+		{
+			MovieScene->RemoveCameraCutTrack();
+			return true;
+		}
+		else
+		{
+			return MovieScene->RemoveMasterTrack(*MasterTrack);
+		}
+	}
+
+	return false;
+}
+
+
 FFrameRate UMovieSceneSequenceExtensions::GetDisplayRate(UMovieSceneSequence* Sequence)
 {
 	UMovieScene* MovieScene = GetMovieScene(Sequence);
@@ -124,6 +144,8 @@ void UMovieSceneSequenceExtensions::SetDisplayRate(UMovieSceneSequence* Sequence
 	UMovieScene* MovieScene = GetMovieScene(Sequence);
 	if (MovieScene)
 	{
+		MovieScene->Modify();
+
 		MovieScene->SetDisplayRate(DisplayRate);
 	}
 }
@@ -139,6 +161,19 @@ void UMovieSceneSequenceExtensions::SetTickResolution(UMovieSceneSequence* Seque
 	UMovieScene* MovieScene = GetMovieScene(Sequence);
 	if (MovieScene)
 	{
+		MovieScene->Modify();
+
+		UE::MovieScene::TimeHelpers::MigrateFrameTimes(MovieScene->GetTickResolution(), TickResolution, MovieScene);
+	}
+}
+
+void UMovieSceneSequenceExtensions::SetTickResolutionDirectly(UMovieSceneSequence* Sequence, FFrameRate TickResolution)
+{
+	UMovieScene* MovieScene = GetMovieScene(Sequence);
+	if (MovieScene)	
+	{
+		MovieScene->Modify();
+
 		MovieScene->SetTickResolutionDirectly(TickResolution);
 	}
 }
@@ -160,7 +195,7 @@ FSequencerScriptingRange UMovieSceneSequenceExtensions::GetPlaybackRange(UMovieS
 	UMovieScene* MovieScene = GetMovieScene(Sequence);
 	if (MovieScene)
 	{
-		return FSequencerScriptingRange::FromNative(MovieScene->GetPlaybackRange(), GetTickResolution(Sequence));
+		return FSequencerScriptingRange::FromNative(MovieScene->GetPlaybackRange(), GetTickResolution(Sequence), GetDisplayRate(Sequence));
 	}
 	else
 	{
@@ -174,7 +209,7 @@ int32 UMovieSceneSequenceExtensions::GetPlaybackStart(UMovieSceneSequence* Seque
 	if (MovieScene)
 	{
 		FFrameRate DisplayRate = GetDisplayRate(Sequence);
-		return ConvertFrameTime(MovieScene::DiscreteInclusiveLower(MovieScene->GetPlaybackRange()), GetTickResolution(Sequence), DisplayRate).FloorToFrame().Value;
+		return ConvertFrameTime(UE::MovieScene::DiscreteInclusiveLower(MovieScene->GetPlaybackRange()), GetTickResolution(Sequence), DisplayRate).FloorToFrame().Value;
 	}
 	else
 	{
@@ -188,7 +223,7 @@ float UMovieSceneSequenceExtensions::GetPlaybackStartSeconds(UMovieSceneSequence
 	if (MovieScene)
 	{
 		FFrameRate DisplayRate = GetDisplayRate(Sequence);
-		return DisplayRate.AsSeconds(ConvertFrameTime(MovieScene::DiscreteInclusiveLower(MovieScene->GetPlaybackRange()), GetTickResolution(Sequence), DisplayRate));
+		return DisplayRate.AsSeconds(ConvertFrameTime(UE::MovieScene::DiscreteInclusiveLower(MovieScene->GetPlaybackRange()), GetTickResolution(Sequence), DisplayRate));
 	}
 
 	return -1.f;
@@ -200,7 +235,7 @@ int32 UMovieSceneSequenceExtensions::GetPlaybackEnd(UMovieSceneSequence* Sequenc
 	if (MovieScene)
 	{
 		FFrameRate DisplayRate = GetDisplayRate(Sequence);
-		return ConvertFrameTime(MovieScene::DiscreteExclusiveUpper(MovieScene->GetPlaybackRange()), GetTickResolution(Sequence), DisplayRate).FloorToFrame().Value;
+		return ConvertFrameTime(UE::MovieScene::DiscreteExclusiveUpper(MovieScene->GetPlaybackRange()), GetTickResolution(Sequence), DisplayRate).FloorToFrame().Value;
 	}
 	else
 	{
@@ -214,7 +249,7 @@ float UMovieSceneSequenceExtensions::GetPlaybackEndSeconds(UMovieSceneSequence* 
 	if (MovieScene)
 	{
 		FFrameRate DisplayRate = GetDisplayRate(Sequence);
-		return DisplayRate.AsSeconds(ConvertFrameTime(MovieScene::DiscreteExclusiveUpper(MovieScene->GetPlaybackRange()), GetTickResolution(Sequence), DisplayRate));
+		return DisplayRate.AsSeconds(ConvertFrameTime(UE::MovieScene::DiscreteExclusiveUpper(MovieScene->GetPlaybackRange()), GetTickResolution(Sequence), DisplayRate));
 	}
 
 	return -1.f;
@@ -364,6 +399,46 @@ float UMovieSceneSequenceExtensions::GetWorkRangeEnd(UMovieSceneSequence* Sequen
 	return 0.f;
 }
 
+void UMovieSceneSequenceExtensions::SetEvaluationType(UMovieSceneSequence* Sequence, EMovieSceneEvaluationType InEvaluationType)
+{
+	UMovieScene* MovieScene = GetMovieScene(Sequence);
+	if (MovieScene)
+	{
+		MovieScene->SetEvaluationType(InEvaluationType);
+	}
+}
+
+EMovieSceneEvaluationType UMovieSceneSequenceExtensions::GetEvaluationType(UMovieSceneSequence* Sequence)
+{
+	UMovieScene* MovieScene = GetMovieScene(Sequence);
+	if (MovieScene)
+	{
+		return MovieScene->GetEvaluationType();
+	}
+
+	return EMovieSceneEvaluationType::WithSubFrames;
+}
+
+void UMovieSceneSequenceExtensions::SetClockSource(UMovieSceneSequence* Sequence, EUpdateClockSource InClockSource)
+{
+	UMovieScene* MovieScene = GetMovieScene(Sequence);
+	if (MovieScene)
+	{
+		MovieScene->SetClockSource(InClockSource);
+	}
+}
+
+EUpdateClockSource UMovieSceneSequenceExtensions::GetClockSource(UMovieSceneSequence* Sequence)
+{
+	UMovieScene* MovieScene = GetMovieScene(Sequence);
+	if (MovieScene)
+	{
+		return MovieScene->GetClockSource();
+	}
+
+	return EUpdateClockSource::Tick;
+}
+
 FTimecode UMovieSceneSequenceExtensions::GetTimecodeSource(UMovieSceneSequence* Sequence)
 {
 	UMovieScene* MovieScene = GetMovieScene(Sequence);
@@ -383,6 +458,20 @@ FSequencerBindingProxy UMovieSceneSequenceExtensions::FindBindingByName(UMovieSc
 	if (MovieScene)
 	{
 		const FMovieSceneBinding* Binding = Algo::FindBy(MovieScene->GetBindings(), Name, &FMovieSceneBinding::GetName);
+		if (Binding)
+		{
+			return FSequencerBindingProxy(Binding->GetObjectGuid(), Sequence);
+		}
+	}
+	return FSequencerBindingProxy();
+}
+
+FSequencerBindingProxy UMovieSceneSequenceExtensions::FindBindingById(UMovieSceneSequence* Sequence, FGuid BindingId)
+{
+	UMovieScene* MovieScene = GetMovieScene(Sequence);
+	if (MovieScene)
+	{
+		const FMovieSceneBinding* Binding = Algo::FindBy(MovieScene->GetBindings(), BindingId, &FMovieSceneBinding::GetObjectGuid);
 		if (Binding)
 		{
 			return FSequencerBindingProxy(Binding->GetObjectGuid(), Sequence);
@@ -478,22 +567,44 @@ FMovieSceneObjectBindingID UMovieSceneSequenceExtensions::MakeBindingID(UMovieSc
 {
 	FMovieSceneSequenceID SequenceID = MovieSceneSequenceID::Root;
 
-	FMovieSceneSequenceHierarchy SequenceHierarchyCache;
-	FMovieSceneCompiler::CompileHierarchy(*MasterSequence, SequenceHierarchyCache);
+	FMovieSceneCompiledDataID DataID = UMovieSceneCompiledDataManager::GetPrecompiledData()->Compile(MasterSequence);
 
-	for (const TTuple<FMovieSceneSequenceID, FMovieSceneSubSequenceData>& Pair : SequenceHierarchyCache.AllSubSequenceData())
+
+	const FMovieSceneSequenceHierarchy* Hierarchy = UMovieSceneCompiledDataManager::GetPrecompiledData()->FindHierarchy(DataID);
+	if (Hierarchy)
 	{
-		if (UMovieSceneSequence* SubSequence = Pair.Value.GetSequence())
+		for (const TTuple<FMovieSceneSequenceID, FMovieSceneSubSequenceData>& Pair : Hierarchy->AllSubSequenceData())
 		{
-			if (SubSequence == InBinding.Sequence)
+			if (UMovieSceneSequence* SubSequence = Pair.Value.GetSequence())
 			{
-				SequenceID = Pair.Key;
-				break;
+				if (SubSequence == InBinding.Sequence)
+				{
+					SequenceID = Pair.Key;
+					break;
+				}
 			}
 		}
 	}
 
 	return FMovieSceneObjectBindingID(InBinding.BindingID, SequenceID, Space);
+}
+
+FSequencerBindingProxy UMovieSceneSequenceExtensions::ResolveBindingID(UMovieSceneSequence* MasterSequence, FMovieSceneObjectBindingID InObjectBindingID)
+{
+	UMovieSceneSequence* Sequence = MasterSequence;
+
+	FMovieSceneCompiledDataID DataID = UMovieSceneCompiledDataManager::GetPrecompiledData()->Compile(MasterSequence);
+
+	const FMovieSceneSequenceHierarchy* Hierarchy = UMovieSceneCompiledDataManager::GetPrecompiledData()->FindHierarchy(DataID);
+	if (Hierarchy)
+	{
+		if (UMovieSceneSequence* SubSequence = Hierarchy->FindSubSequence(InObjectBindingID.GetSequenceID()))
+		{
+			Sequence = SubSequence;
+		}
+	}
+
+	return FSequencerBindingProxy(InObjectBindingID.GetGuid(), Sequence);
 }
 
 TArray<UMovieSceneFolder*> UMovieSceneSequenceExtensions::GetRootFoldersInSequence(UMovieSceneSequence* Sequence)
@@ -521,6 +632,7 @@ UMovieSceneFolder* UMovieSceneSequenceExtensions::AddRootFolderToSequence(UMovie
 		UMovieScene* MovieScene = Sequence->GetMovieScene();
 		if (MovieScene)
 		{
+			MovieScene->Modify();
 			NewFolder = NewObject<UMovieSceneFolder>(MovieScene);
 			NewFolder->SetFolderName(FName(*NewFolderName));
 			MovieScene->GetRootFolders().Add(NewFolder);
@@ -546,16 +658,31 @@ int32 UMovieSceneSequenceExtensions::AddMarkedFrame(UMovieSceneSequence* Sequenc
 	UMovieScene* MovieScene = Sequence->GetMovieScene();
 	if (MovieScene)
 	{
+		MovieScene->Modify();
+
 		return MovieScene->AddMarkedFrame(InMarkedFrame);
 	}
 	return INDEX_NONE;
 }
+
+
+void UMovieSceneSequenceExtensions::SetMarkedFrame(UMovieSceneSequence* Sequence, int32 InMarkIndex, FFrameNumber InFrameNumber)
+{
+	UMovieScene* MovieScene = Sequence->GetMovieScene();
+	if (MovieScene)
+	{
+		return MovieScene->SetMarkedFrame(InMarkIndex, InFrameNumber);
+	}
+}
+
 
 void UMovieSceneSequenceExtensions::DeleteMarkedFrame(UMovieSceneSequence* Sequence, int32 DeleteIndex)
 {
 	UMovieScene* MovieScene = Sequence->GetMovieScene();
 	if (MovieScene)
 	{
+		MovieScene->Modify();
+
 		MovieScene->DeleteMarkedFrame(DeleteIndex);
 	}
 }
@@ -565,7 +692,18 @@ void UMovieSceneSequenceExtensions::DeleteMarkedFrames(UMovieSceneSequence* Sequ
 	UMovieScene* MovieScene = Sequence->GetMovieScene();
 	if (MovieScene)
 	{
+		MovieScene->Modify();
+
 		MovieScene->DeleteMarkedFrames();
+	}
+}
+
+void UMovieSceneSequenceExtensions::SortMarkedFrames(UMovieSceneSequence* Sequence)
+{
+	UMovieScene* MovieScene = Sequence->GetMovieScene();
+	if (MovieScene)
+	{
+		return MovieScene->SortMarkedFrames();
 	}
 }
 

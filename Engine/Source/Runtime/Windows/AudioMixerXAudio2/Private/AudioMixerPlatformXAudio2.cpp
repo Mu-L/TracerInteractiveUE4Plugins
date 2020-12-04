@@ -9,6 +9,8 @@
 #include "AudioMixerPlatformXAudio2.h"
 #include "AudioMixer.h"
 #include "HAL/PlatformAffinity.h"
+#include "HAL/PlatformTime.h"
+#include "HAL/PlatformProcess.h"
 
 #ifndef WITH_XMA2
 #define WITH_XMA2 0
@@ -36,6 +38,8 @@
 #include <mmdeviceapi.h>
 #include <FunctionDiscoveryKeys_devpkey.h>
 #endif
+
+#include "Misc/CoreDelegates.h"
 
 // Macro to check result code for XAudio2 failure, get the string version, log, and goto a cleanup
 #define XAUDIO2_GOTO_CLEANUP_ON_FAIL(Result)																										 \
@@ -166,6 +170,7 @@ namespace Audio
 		, TimeSinceNullDeviceWasLastChecked(0.0f)		
 		, bIsInitialized(false)
 		, bIsDeviceOpen(false)
+		, bIsSuspended(false)
 	{
 #if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 		FPlatformMisc::CoInitialize();
@@ -221,6 +226,57 @@ namespace Audio
 		return true;
 	}
 
+	void FMixerPlatformXAudio2::Suspend()
+	{
+		if( !bIsSuspended )
+		{				
+			if( XAudio2System )
+			{
+				XAudio2System->StopEngine();
+				StartRunningNullDevice();
+				bIsSuspended = true;
+			}					
+		}
+	}
+	void FMixerPlatformXAudio2::Resume()
+	{
+		if( bIsSuspended )
+		{
+			if( XAudio2System )
+			{			
+				StopRunningNullDevice();			
+
+				HRESULT Result = XAudio2System->StartEngine();				
+				
+				// Suggestion from Microsoft for this returning 0x80070490 on a quick cycle. 
+				// Try again with delay.
+				constexpr int32 NumStartAttempts = 16;
+				constexpr float DelayBetweenAttemptsSecs = 0.1f;
+				
+				uint64 StartCycles = FPlatformTime::Cycles64();				
+				int32 StartAttempt = 0;
+				for(; StartAttempt < NumStartAttempts && FAILED(Result); ++StartAttempt)
+				{
+					FPlatformProcess::Sleep(DelayBetweenAttemptsSecs);
+					Result = XAudio2System->StartEngine();	
+				}
+
+				UE_CLOG(FAILED(Result), LogAudioMixer, Error,
+					TEXT("Could not resume XAudio2, StartEngine() returned %#010x, after %d attempts"),
+					(uint32)Result, StartAttempt
+				);
+				
+				if(SUCCEEDED(Result))
+				{		
+					bIsSuspended = false;								
+					UE_CLOG(StartAttempt > 1, LogAudioMixer, Warning, 
+						TEXT("StartEngine() took %d attempts to start, taking '%f' ms"), 
+						StartAttempt, FPlatformTime::ToMilliseconds64(FPlatformTime::Cycles64() - StartCycles));
+				}
+			}						
+		}		
+	}
+
 	bool FMixerPlatformXAudio2::InitializeHardware()
 	{
 		if (bIsInitialized)
@@ -230,6 +286,16 @@ namespace Audio
 
 		}
 
+#if PLATFORM_NEEDS_SUSPEND_ON_BACKGROUND
+
+		// Constrain/Suspend 
+		DeactiveHandle = FCoreDelegates::ApplicationWillDeactivateDelegate.AddRaw(this, &FMixerPlatformXAudio2::Suspend);
+		ReactivateHandle = FCoreDelegates::ApplicationHasReactivatedDelegate.AddRaw(this, &FMixerPlatformXAudio2::Resume);
+		EnteredBackgroundHandle = FCoreDelegates::ApplicationWillEnterBackgroundDelegate.AddRaw(this, &FMixerPlatformXAudio2::Suspend);
+		EnteredForegroundHandle = FCoreDelegates::ApplicationHasEnteredForegroundDelegate.AddRaw(this, &FMixerPlatformXAudio2::Resume);
+
+#endif //PLATFORM_NEEDS_SUSPEND_ON_BACKGROUND
+		
 #if PLATFORM_WINDOWS
 		// Work around the fact the x64 version of XAudio2_7.dll does not properly ref count
 		// by forcing it to be always loaded
@@ -303,6 +369,24 @@ namespace Audio
 			AUDIO_PLATFORM_ERROR(TEXT("XAudio2 was already tore down."));
 			return false;
 		}
+
+#if PLATFORM_NEEDS_SUSPEND_ON_BACKGROUND
+
+		auto UnregisterLambda = [](FDelegateHandle& InHandle, FCoreDelegates::FApplicationLifetimeDelegate& InDelegate) 
+		{
+			if (InHandle.IsValid())
+			{
+				InDelegate.Remove(InHandle);
+				InHandle.Reset();
+			}
+		};
+	 		
+		UnregisterLambda(DeactiveHandle,FCoreDelegates::ApplicationWillDeactivateDelegate);
+		UnregisterLambda(ReactivateHandle,FCoreDelegates::ApplicationHasReactivatedDelegate);
+		UnregisterLambda(EnteredBackgroundHandle,FCoreDelegates::ApplicationWillEnterBackgroundDelegate);
+		UnregisterLambda(EnteredForegroundHandle,FCoreDelegates::ApplicationHasEnteredForegroundDelegate);
+
+#endif //PLATFORM_NEEDS_SUSPEND_ON_BACKGROUND
 
 		SAFE_RELEASE(XAudio2System);
 
@@ -869,7 +953,7 @@ namespace Audio
 				AudioStreamInfo.DeviceInfo.NumChannels,
 				AudioStreamInfo.DeviceInfo.SampleRate,
 				0,
-				nullptr,
+				*AudioStreamInfo.DeviceInfo.DeviceId,
 				nullptr,
 				AudioCategory_GameEffects);
 #elif PLATFORM_HOLOLENS
@@ -936,11 +1020,16 @@ namespace Audio
 				DllName = GetNextDllToTry(DllName);
 				if (DllName != NAME_None)
 				{
+					UE_LOG(LogAudioMixer, Warning, TEXT("Xaudio 2.9: Failed to create Master Voice. Attempting fallback DLL"));
 					TeardownHardware();
 					if (InitializeHardware())
 					{
 						return OpenAudioStream(Params);
 					}
+				}
+				else
+				{
+					UE_LOG(LogAudioMixer, Warning, TEXT("Xaudio 2.9: Failed to create Master Voice. Out of DLL fallbacks"));
 				}
 			}
 #endif //PLATFORM_WINDOWS
@@ -995,6 +1084,7 @@ namespace Audio
 
 	bool FMixerPlatformXAudio2::StartAudioStream()
 	{
+		UE_LOG(LogAudioMixer, Log, TEXT("FMixerPlatformXAudio2::StartAudioStream() called"));
 		// Start generating audio with our output source voice
 		BeginGeneratingAudio();
 
@@ -1022,6 +1112,8 @@ namespace Audio
 			AUDIO_PLATFORM_ERROR(TEXT("XAudio2 was not initialized."));
 			return false;
 		}
+
+		UE_LOG(LogAudioMixer, Log, TEXT("FMixerPlatformXAudio2::StopAudioStream() called"));
 
 		check(XAudio2System);
 
@@ -1078,7 +1170,7 @@ namespace Audio
 			return true;
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("Resetting audio stream to device id %s"), *InNewDeviceId);
+		UE_LOG(LogAudioMixer, Log, TEXT("Resetting audio stream to device id %s"), *InNewDeviceId);
 
 		if (bIsUsingNullDevice)
 		{
@@ -1191,13 +1283,11 @@ namespace Audio
 			// Create the output source voice
 			XAUDIO2_RETURN_ON_FAIL(XAudio2System->CreateSourceVoice(&OutputAudioStreamSourceVoice, &Format, XAUDIO2_VOICE_NOPITCH, 2.0f, &OutputVoiceCallback));
 
-			const int32 NewNumSamples = OpenStreamParams.NumFrames * AudioStreamInfo.DeviceInfo.NumChannels;
+			// Reinitialize the output circular buffer to match the buffer math of the new audio device.
+			const int32 NumOutputSamples = AudioStreamInfo.NumOutputFrames * AudioStreamInfo.DeviceInfo.NumChannels;
+			OutputBuffer.Init(AudioStreamInfo.AudioMixer, NumOutputSamples, NumOutputBuffers, AudioStreamInfo.DeviceInfo.Format);
 
-			// Clear the output buffers with zero's and submit one
-			for (int32 Index = 0; Index < OutputBuffers.Num(); ++Index)
-			{
-				OutputBuffers[Index].Reset(NewNumSamples);
-			}
+			const int32 NewNumSamples = OpenStreamParams.NumFrames * AudioStreamInfo.DeviceInfo.NumChannels;
 		}
 		else
 		{	
@@ -1214,11 +1304,11 @@ namespace Audio
 	{
 		if (OutputAudioStreamSourceVoice)
 		{
-			CurrentBufferReadIndex = 0;
-			CurrentBufferWriteIndex = 1;
+			int32 NumSamplesPopped = 0;
+			TArrayView<const uint8> PoppedAudio = OutputBuffer.PopBufferData(NumSamplesPopped);
+			SubmitBuffer(PoppedAudio.GetData());
 
-			SubmitBuffer(OutputBuffers[CurrentBufferReadIndex].GetBufferData());
-			check(OpenStreamParams.NumFrames * AudioStreamInfo.DeviceInfo.NumChannels == OutputBuffers[CurrentBufferReadIndex].GetBuffer().Num());
+			check(OpenStreamParams.NumFrames * AudioStreamInfo.DeviceInfo.NumChannels == OutputBuffer.GetNumSamples());
 
 			AudioRenderEvent->Trigger();
 
@@ -1239,6 +1329,12 @@ namespace Audio
 
 			// Submit buffer to the output streaming voice
 			OutputAudioStreamSourceVoice->SubmitSourceBuffer(&XAudio2Buffer);
+
+			if(!FirstBufferSubmitted)
+			{
+				UE_LOG(LogAudioMixer, Display, TEXT("FMixerPlatformXAudio2::SubmitBuffer() called for the first time"));
+				FirstBufferSubmitted = true;
+			}
 		}
 	}
 
@@ -1364,10 +1460,6 @@ namespace Audio
 
 	bool FMixerPlatformXAudio2::DisablePCMAudioCaching() const
 	{
-#if PLATFORM_WINDOWS
-		return false;
-#else
 		return true;
-#endif
 	}
 }

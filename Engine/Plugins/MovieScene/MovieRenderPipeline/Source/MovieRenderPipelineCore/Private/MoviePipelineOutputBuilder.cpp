@@ -27,24 +27,24 @@ FMoviePipelineMergerOutputFrame& FMoviePipelineOutputMerger::QueueOutputFrame_Ga
 	return NewFrame;
 }
 
-void FMoviePipelineOutputMerger::OnSingleSampleDataAvailable_AnyThread(TUniquePtr<FImagePixelData>&& InData, const TSharedRef<FImagePixelDataPayload, ESPMode::ThreadSafe> InFrameData)
+void FMoviePipelineOutputMerger::OnSingleSampleDataAvailable_AnyThread(TUniquePtr<FImagePixelData>&& InData)
 {
 	// This is to support outputting individual samples (skipping accumulation) for debug reasons,
 	// or because you want to post-process them yourself. We just forward this directly on for output to disk.
 
 	TWeakObjectPtr<UMoviePipeline> LocalWeakPipeline = WeakMoviePipeline;
 
-	AsyncTask(ENamedThreads::GameThread, [LocalData = MoveTemp(InData), InFrameData, LocalWeakPipeline]() mutable
+	AsyncTask(ENamedThreads::GameThread, [LocalData = MoveTemp(InData), LocalWeakPipeline]() mutable
 	{
 		if (ensureAlwaysMsgf(LocalWeakPipeline.IsValid(), TEXT("A memory lifespan issue has left an output builder alive without an owning Movie Pipeline.")))
 		{
-			LocalWeakPipeline->OnSampleRendered(MoveTemp(LocalData), InFrameData);
+			LocalWeakPipeline->OnSampleRendered(MoveTemp(LocalData));
 		}
 	}
 	);
 }
 
-void FMoviePipelineOutputMerger::OnCompleteRenderPassDataAvailable_AnyThread(TUniquePtr<FImagePixelData>&& InData, const TSharedRef<FImagePixelDataPayload, ESPMode::ThreadSafe> InFrameData)
+void FMoviePipelineOutputMerger::OnCompleteRenderPassDataAvailable_AnyThread(TUniquePtr<FImagePixelData>&& InData)
 {
 	// Lock the ActiveData when we're updating what data has been gathered.
 	FScopeLock ScopeLock(&ActiveDataMutex);
@@ -57,9 +57,14 @@ void FMoviePipelineOutputMerger::OnCompleteRenderPassDataAvailable_AnyThread(TUn
 	// Instead of just finding the result in the TMap with the equality operator, we find it by hand so that we can
 	// ignore certain parts of equality (such as Temporal Sample, as the last sample has a temporal index different
 	// than the first sample!)
+	FImagePixelDataPayload* Payload = InData->GetPayload<FImagePixelDataPayload>();
+
+	// If you're hitting this check then your FImagePixelData was not initialized with a payload with the  required data.
+	check(Payload);
+
 	for (TPair<FMoviePipelineFrameOutputState, FMoviePipelineMergerOutputFrame>& KVP : PendingData)
 	{
-		if (KVP.Key.OutputFrameNumber == InFrameData->OutputState.OutputFrameNumber)
+		if (KVP.Key.OutputFrameNumber == Payload->SampleState.OutputState.OutputFrameNumber)
 	 	{
 	 		OutputFrame = &KVP.Value;
 	 		break;
@@ -71,20 +76,38 @@ void FMoviePipelineOutputMerger::OnCompleteRenderPassDataAvailable_AnyThread(TUn
 	}
 
 	// Ensure this pass is expected as well...
-	if (!ensureAlwaysMsgf(OutputFrame->ExpectedRenderPasses.Contains(InFrameData->PassIdentifier), TEXT("Recieved data for unexpected render pass: %s"), *InFrameData->PassIdentifier.Name))
+	if (!ensureAlwaysMsgf(OutputFrame->ExpectedRenderPasses.Contains(Payload->PassIdentifier), TEXT("Recieved data for unexpected render pass: %s"), *Payload->PassIdentifier.Name))
 	{
 		return;
 	}
 
-	// If this data was expected and this frame is still in progress, pass the data to the frame.
-	OutputFrame->ImageOutputData.FindOrAdd(InFrameData->PassIdentifier) = MoveTemp(InData);
+	// Merge the metadata from each output state. Metadata is part of the output state but gets forked when
+	// we submit different render passes, so we need to merge it again. Doesn't handle conflicts.
+	for (const TPair<FString, FStringFormatArg>& KVP : Payload->SampleState.OutputState.FileMetadata)
+	{
+		OutputFrame->FrameOutputState.FileMetadata.Add(KVP.Key, KVP.Value);
+	}
 
+	// If this data was expected and this frame is still in progress, pass the data to the frame.
+	OutputFrame->ImageOutputData.FindOrAdd(Payload->PassIdentifier) = MoveTemp(InData);
+	
 	// Check to see if this was the last piece of data needed for this frame.
 	int32 TotalPasses = OutputFrame->ExpectedRenderPasses.Num();
 	int32 SucceededPasses = OutputFrame->ImageOutputData.Num();
 
 	if (SucceededPasses == TotalPasses)
 	{
+		// Sort the output frames. This is only really important for multi-channel formats like EXR, but it lets passes
+		// specify which one should be the thumbnail/default rgba channels instead of a first-come-first-serve.
+		OutputFrame->ImageOutputData.ValueStableSort([](const TUniquePtr<FImagePixelData>& First, const TUniquePtr<FImagePixelData>& Second) -> bool
+				{
+					FImagePixelDataPayload* FirstPayload = First->GetPayload<FImagePixelDataPayload>();
+					FImagePixelDataPayload* SecondPayload = Second->GetPayload<FImagePixelDataPayload>();
+
+					return FirstPayload->SortingOrder < SecondPayload->SortingOrder;
+				}
+		);
+
 		// Transfer ownership from the map to here; It's important that we use the manually looked up OutputFrame from PendingData
 		// as PendingData uses the equality operator. Some combinations of temporal sampling + slowmo tracks results in different
 		// original source frame numbers, which would cause the tmap lookup to fail and thus returning an empty frame.

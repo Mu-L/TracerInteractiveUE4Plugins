@@ -36,6 +36,10 @@ struct ENGINE_API FTextureLODGroup
 		, MipFilter(NAME_Point)
 		, MipLoadOptions(ETextureMipLoadOptions::AllMips)
 		, DuplicateNonOptionalMips(false)
+		, Downscale(1.0)
+		, DownscaleOptions(ETextureDownscaleOptions::SimpleAverage)
+		, VirtualTextureTileCountBias(0)
+		, VirtualTextureTileSizeBias(0)
 	{
 		SetupGroup();
 	}
@@ -105,6 +109,18 @@ struct ENGINE_API FTextureLODGroup
 	UPROPERTY()
 	bool DuplicateNonOptionalMips;
 
+	UPROPERTY()
+	float Downscale;
+
+	UPROPERTY()
+	ETextureDownscaleOptions DownscaleOptions;
+
+	UPROPERTY()
+	int32 VirtualTextureTileCountBias;
+
+	UPROPERTY()
+	int32 VirtualTextureTileSizeBias;
+
 	void SetupGroup();
 };
 
@@ -154,6 +170,7 @@ public:
 
 #if WITH_EDITORONLY_DATA
 	void GetMipGenSettings( const UTexture& Texture, TextureMipGenSettings& OutMipGenSettings, float& OutSharpen, uint32& OutKernelSize, bool& bOutDownsampleWithAverage, bool& bOutSharpenWithoutColorShift, bool &bOutBorderColorBlack ) const;
+	void GetDownscaleOptions(const UTexture& Texture, const ITargetPlatform& CurrentPlatform, float& Downscale, ETextureDownscaleOptions& DownscaleOptions) const;
 #endif // #if WITH_EDITORONLY_DATA
 
 	/**

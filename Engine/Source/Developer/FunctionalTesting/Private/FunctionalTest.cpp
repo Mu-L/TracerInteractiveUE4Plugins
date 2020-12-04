@@ -59,7 +59,7 @@ namespace
 	FString GetComparisonAsString(EComparisonMethod comparison)
 	{
 		UEnum* Enum = StaticEnum<EComparisonMethod>();
-		return Enum->GetNameStringByValue((uint8)comparison).ToLower().Replace(TEXT("_"), TEXT(" "));
+		return Enum->GetNameStringByValue((uint8)comparison).ToLower().Replace(TEXT("_"), TEXT(" "), ESearchCase::CaseSensitive);
 	}
 
 	FString TransformToString(const FTransform &transform)
@@ -193,28 +193,31 @@ void AFunctionalTest::OnConstruction(const FTransform& Transform)
 
 bool AFunctionalTest::RunTest(const TArray<FString>& Params)
 {
-	ensure(GetWorld()->HasBegunPlay());
+	UWorld* World = GetWorld();
+	ensure(World->HasBegunPlay());
 
 	FFunctionalTestBase* FunctionalTest = static_cast<FFunctionalTestBase*>(FAutomationTestFramework::Get().GetCurrentTest());
 
 	// Set handling of warnings/errors based on this test. Tests can either specify an explicit option or choose to go with the
 	// project defaults.
-	TOptional<bool> bLogErrorsAreErrors, bLogWarningsAreErrors;
+	TOptional<bool> bSuppressErrors, bSuppressWarnings, bWarningsAreErrors;
 
 	if (LogErrorHandling != EFunctionalTestLogHandling::ProjectDefault)
 	{
-		bLogErrorsAreErrors = LogErrorHandling == EFunctionalTestLogHandling::OutputIsError ? true : false;
+		bSuppressErrors = LogErrorHandling == EFunctionalTestLogHandling::OutputIgnored ? true : false;
 	}
 
 	if (LogWarningHandling != EFunctionalTestLogHandling::ProjectDefault)
 	{
-		bLogWarningsAreErrors = LogWarningHandling == EFunctionalTestLogHandling::OutputIsError ? true : false;
+		// warnings can be set to be suppressed, or elevated to errors
+		bSuppressWarnings = LogWarningHandling == EFunctionalTestLogHandling::OutputIgnored ? true : false;
+		bWarningsAreErrors = LogWarningHandling == EFunctionalTestLogHandling::OutputIsError;
 	}
 
 	if (FunctionalTest)
 	{
-		FunctionalTest->SetLogErrorAndWarningHandling(bLogErrorsAreErrors, bLogWarningsAreErrors);
-		FunctionalTest->SetFunctionalTestRunning(true);
+		FunctionalTest->SetLogErrorAndWarningHandling(bSuppressErrors, bSuppressErrors, bWarningsAreErrors);
+		FunctionalTest->SetFunctionalTestRunning(GetName());
 	}
 
 	FailureMessage = TEXT("");
@@ -223,7 +226,7 @@ bool AFunctionalTest::RunTest(const TArray<FString>& Params)
 	//GEngine->DelayGarbageCollection();
 
 	RunFrame = GFrameNumber;
-	RunTime = GetWorld()->GetTimeSeconds();
+	RunTime = World->GetTimeSeconds();
 
 	TotalTime = 0.f;
 	if (TimeLimit >= 0)
@@ -370,7 +373,7 @@ void AFunctionalTest::FinishTest(EFunctionalTestResult TestResult, const FString
 	FFunctionalTestBase* FunctionalTest = static_cast<FFunctionalTestBase*>(FAutomationTestFramework::Get().GetCurrentTest());
 	if (FunctionalTest)
 	{
-		FunctionalTest->SetFunctionalTestRunning(false);
+		FunctionalTest->SetFunctionalTestComplete(GetName());
 	}
 
 	bIsRunning = false;
@@ -587,7 +590,7 @@ UBillboardComponent* AFunctionalTest::GetSpriteComponent()
 
 //////////////////////////////////////////////////////////////////////////
 
-bool AFunctionalTest::AssertTrue(bool Condition, FString Message, const UObject* ContextObject)
+bool AFunctionalTest::AssertTrue(bool Condition, const FString& Message, const UObject* ContextObject)
 {
 	if ( !Condition )
 	{
@@ -601,12 +604,12 @@ bool AFunctionalTest::AssertTrue(bool Condition, FString Message, const UObject*
 	}
 }
 
-bool AFunctionalTest::AssertFalse(bool Condition, FString Message, const UObject* ContextObject)
+bool AFunctionalTest::AssertFalse(bool Condition, const FString& Message, const UObject* ContextObject)
 {
 	return AssertTrue(!Condition, Message, ContextObject);
 }
 
-bool AFunctionalTest::AssertIsValid(UObject* Object, FString Message, const UObject* ContextObject)
+bool AFunctionalTest::AssertIsValid(UObject* Object, const FString& Message, const UObject* ContextObject)
 {
 	if ( !IsValid(Object) )
 	{
@@ -718,6 +721,19 @@ bool AFunctionalTest::AssertEqual_Name(const FName Actual, const FName Expected,
 	}
 }
 
+bool AFunctionalTest::AssertEqual_Object(UObject* Actual, UObject* Expected, const FString& What, const UObject* ContextObject)
+{
+	if (Actual != Expected)
+	{
+		LogStep(ELogVerbosity::Error, FString::Printf(TEXT("Expected '%s' to be {%s}, but it was {%s} for context '%s'"), *What, *GetNameSafe(Expected), *GetNameSafe(Actual), ContextObject ? *ContextObject->GetName() : TEXT("")));
+		return false;
+	}
+	else
+	{
+		LogStep(ELogVerbosity::Log, FString::Printf(TEXT("Object assertion passed (%s)"), *What));
+		return true;
+	}
+}
 
 bool AFunctionalTest::AssertEqual_Transform(const FTransform& Actual, const FTransform& Expected, const FString& What, const float Tolerance, const UObject* ContextObject)
 {
@@ -836,12 +852,12 @@ bool AFunctionalTest::AssertEqual_TraceQueryResults(const UTraceQueryTestResults
 	return Actual->AssertEqual(Expected, What, ContextObject, *this);
 }
 
-void AFunctionalTest::AddWarning(const FString Message)
+void AFunctionalTest::AddWarning(const FString& Message)
 {
 	LogStep(ELogVerbosity::Warning, Message);
 }
 
-void AFunctionalTest::AddError(const FString Message)
+void AFunctionalTest::AddError(const FString& Message)
 {
 	LogStep(ELogVerbosity::Error, Message);
 }

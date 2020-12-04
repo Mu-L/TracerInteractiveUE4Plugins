@@ -69,6 +69,16 @@ namespace UnrealBuildTool
 			// convert to float for easy comparison
 			IOSSDKVersionFloat = float.Parse(IOSSDKVersion, System.Globalization.CultureInfo.InvariantCulture);
 		}
+
+		public string GetSDKPath(string Architecture)
+		{
+			if (Architecture == "-simulator")
+			{
+				return BaseSDKDirSim + "/" + SimulatorPlatformName + IOSSDKVersion + ".sdk";
+			}
+
+			return BaseSDKDir + "/" + DevicePlatformName + IOSSDKVersion + ".sdk";
+		}
 	}
 
 	class IOSToolChain : AppleToolChain
@@ -149,37 +159,9 @@ namespace UnrealBuildTool
 					string OutputFile = Binary.OutputFilePath.GetFileNameWithoutExtension().Substring(0, Index > 0 ? Index : Binary.OutputFilePath.GetFileNameWithoutExtension().Length);
 					FileReference AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "Assets.car");
 					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon20x20@2x.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon20x20@2x~ipad.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon20x20@3x.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon20x20~ipad.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon29x29@2x.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon29x29@2x~ipad.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon29x29@3x.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon29x29~ipad.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon40x40@2x.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon40x40@2x~ipad.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon40x40@3x.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon40x40~ipad.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
 					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon60x60@2x.png");
 					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
 					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon76x76@2x~ipad.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon76x76~ipad.png");
-					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
-					AssetFile = FileReference.Combine(Binary.OutputFilePath.Directory, "Payload", OutputFile + ".app", "AppIcon83.5x83.5@2x~ipad.png");
 					BuildProducts.Add(AssetFile, BuildProductType.RequiredResource);
 				}
 			}
@@ -293,14 +275,7 @@ namespace UnrealBuildTool
 			// What architecture(s) to build for
 			Result += GetArchitectureArgument(CompileEnvironment.Configuration, CompileEnvironment.Architecture);
 
-			if (CompileEnvironment.Architecture == "-simulator")
-			{
-				Result += " -isysroot " + Settings.Value.BaseSDKDirSim + "/" + Settings.Value.SimulatorPlatformName + Settings.Value.IOSSDKVersion + ".sdk";
-			}
-			else
-			{
-				Result += " -isysroot " + Settings.Value.BaseSDKDir + "/" + Settings.Value.DevicePlatformName + Settings.Value.IOSSDKVersion + ".sdk";
-			}
+			Result += string.Format(" -isysroot \"{0}\"", Settings.Value.GetSDKPath(CompileEnvironment.Architecture));
 
 			Result += " -m" + GetXcodeMinVersionParam() + "=" + ProjectSettings.RuntimeVersion;
 
@@ -342,12 +317,12 @@ namespace UnrealBuildTool
 			// Add additional frameworks so that their headers can be found
 			foreach (UEBuildFramework Framework in CompileEnvironment.AdditionalFrameworks)
 			{
-				if (Framework.OutputDirectory != null)
+				if (Framework.FrameworkDirectory != null)
 				{
-					string FrameworkDir = Framework.OutputDirectory.FullName;
+					string FrameworkDir = Framework.FrameworkDirectory.FullName;
 					// embedded frameworks have a framework inside of this directory, so we use this directory. regular frameworks need to go one up to point to the 
 					// directory containing the framework. -F gives a path to look for the -framework
-					if (FrameworkDir.Contains("embeddedframework") == false)
+					if (FrameworkDir.EndsWith(".framework"))
 					{
 						FrameworkDir = Path.GetDirectoryName(FrameworkDir);
 					}
@@ -571,14 +546,14 @@ namespace UnrealBuildTool
 			}
 			foreach (UEBuildFramework Framework in LinkEnvironment.AdditionalFrameworks)
 			{
-				if (Framework.OutputDirectory != null)
+				if (Framework.FrameworkDirectory != null)
 				{
-					// If this framework has a zip specified, we'll need to setup the path as well
-					string FrameworkDir = Framework.OutputDirectory.FullName;
+					// If this framework has a directory specified, we'll need to setup the path as well
+					string FrameworkDir = Framework.FrameworkDirectory.FullName;
 
 					// embedded frameworks have a framework inside of this directory, so we use this directory. regular frameworks need to go one up to point to the 
 					// directory containing the framework. -F gives a path to look for the -framework
-					if (FrameworkDir.Contains("embeddedframework") == false)
+					if (FrameworkDir.EndsWith(".framework"))
 					{
 						FrameworkDir = Path.GetDirectoryName(FrameworkDir);
 					}
@@ -817,28 +792,26 @@ namespace UnrealBuildTool
 			if (!LinkEnvironment.bIsBuildingLibrary)
 			{
 				// Add the library paths to the argument list.
-				foreach (DirectoryReference LibraryPath in LinkEnvironment.LibraryPaths)
+				foreach (DirectoryReference LibraryPath in LinkEnvironment.SystemLibraryPaths)
 				{
 					LinkCommandArguments += string.Format(" -L\"{0}\"", LibraryPath.FullName);
 				}
 
 				// Add the additional libraries to the argument list.
-				foreach (string AdditionalLibrary in LinkEnvironment.AdditionalLibraries)
+				foreach (string AdditionalLibrary in LinkEnvironment.SystemLibraries)
+				{
+					LinkCommandArguments += string.Format(" -l\"{0}\"", AdditionalLibrary);
+				}
+
+				foreach(FileReference Library in LinkEnvironment.Libraries)
 				{
 					// for absolute library paths, convert to remote filename
-					if (!String.IsNullOrEmpty(Path.GetDirectoryName(AdditionalLibrary)))
-					{
-						// add it to the prerequisites to make sure it's built first (this should be the case of non-system libraries)
-						FileItem LibFile = FileItem.GetItemByPath(AdditionalLibrary);
-						LinkAction.PrerequisiteItems.Add(LibFile);
+					// add it to the prerequisites to make sure it's built first (this should be the case of non-system libraries)
+					FileItem LibFile = FileItem.GetItemByFileReference(Library);
+					LinkAction.PrerequisiteItems.Add(LibFile);
 
-						// and add to the commandline
-						LinkCommandArguments += string.Format(" \"{0}\"", Path.GetFullPath(AdditionalLibrary));
-					}
-					else
-					{
-						LinkCommandArguments += string.Format(" -l\"{0}\"", AdditionalLibrary);
-					}
+					// and add to the commandline
+					LinkCommandArguments += string.Format(" \"{0}\"", Library.FullName);
 				}
 			}
 
@@ -987,9 +960,8 @@ namespace UnrealBuildTool
 				Arguments.Append(" --app-icon 'App Icon & Top Shelf Image'");
 				Arguments.Append(" --launch-image 'Launch Image'");
 				Arguments.Append(" --filter-for-device-model AppleTV5,3");
-				//Arguments.Append(" --filter-for-device-os-version 10.0");
 				Arguments.Append(" --target-device tv");
-				Arguments.Append(" --minimum-deployment-target 10.0");
+				Arguments.Append(" --minimum-deployment-target 12.0");
 				Arguments.Append(" --platform appletvos");
 			}
 			else
@@ -998,7 +970,7 @@ namespace UnrealBuildTool
 				Arguments.Append(" --product-type com.apple.product-type.application");
 				Arguments.Append(" --target-device iphone");
 				Arguments.Append(" --target-device ipad");
-				Arguments.Append(" --minimum-deployment-target 10.0");
+				Arguments.Append(" --minimum-deployment-target 12.0");
 				Arguments.Append(" --platform iphoneos");
 			}
 			Arguments.Append(" --enable-on-demand-resources YES");
@@ -1233,17 +1205,17 @@ namespace UnrealBuildTool
 			if(Framework.ExtractedTokenFile == null)
 			{
 				FileItem InputFile = FileItem.GetItemByFileReference(Framework.ZipFile);
-				Framework.ExtractedTokenFile = FileItem.GetItemByFileReference(new FileReference(Framework.OutputDirectory.FullName + ".extracted"));
+				Framework.ExtractedTokenFile = FileItem.GetItemByFileReference(new FileReference(Framework.FrameworkDirectory.FullName + ".extracted"));
 
 				StringBuilder ExtractScript = new StringBuilder();
 				ExtractScript.AppendLine("#!/bin/sh");
 				ExtractScript.AppendLine("set -e");
 				// ExtractScript.AppendLine("set -x"); // For debugging
-				ExtractScript.AppendLine(String.Format("[ -d {0} ] && rm -rf {0}", Utils.MakePathSafeToUseWithCommandLine(Framework.OutputDirectory.FullName)));
-				ExtractScript.AppendLine(String.Format("unzip -q -o {0} -d {1}", Utils.MakePathSafeToUseWithCommandLine(Framework.ZipFile.FullName), Utils.MakePathSafeToUseWithCommandLine(Framework.OutputDirectory.ParentDirectory.FullName))); // Zip contains folder with the same name, hence ParentDirectory
+				ExtractScript.AppendLine(String.Format("[ -d {0} ] && rm -rf {0}", Utils.MakePathSafeToUseWithCommandLine(Framework.FrameworkDirectory.FullName)));
+				ExtractScript.AppendLine(String.Format("unzip -q -o {0} -d {1}", Utils.MakePathSafeToUseWithCommandLine(Framework.ZipFile.FullName), Utils.MakePathSafeToUseWithCommandLine(Framework.FrameworkDirectory.ParentDirectory.FullName))); // Zip contains folder with the same name, hence ParentDirectory
 				ExtractScript.AppendLine(String.Format("touch {0}", Utils.MakePathSafeToUseWithCommandLine(Framework.ExtractedTokenFile.AbsolutePath)));
 
-				FileItem ExtractScriptFileItem = Graph.CreateIntermediateTextFile(new FileReference(Framework.OutputDirectory.FullName + ".sh"), ExtractScript.ToString());
+				FileItem ExtractScriptFileItem = Graph.CreateIntermediateTextFile(new FileReference(Framework.FrameworkDirectory.FullName + ".sh"), ExtractScript.ToString());
 
 				Action UnzipAction = Graph.CreateAction(ActionType.BuildProject);
 				UnzipAction.CommandPath = new FileReference("/bin/sh");
@@ -1253,7 +1225,7 @@ namespace UnrealBuildTool
 				UnzipAction.PrerequisiteItems.Add(ExtractScriptFileItem);
 				UnzipAction.ProducedItems.Add(Framework.ExtractedTokenFile);
 				UnzipAction.DeleteItems.Add(Framework.ExtractedTokenFile);
-				UnzipAction.StatusDescription = String.Format("Unzipping : {0} -> {1}", Framework.ZipFile, Framework.OutputDirectory);
+				UnzipAction.StatusDescription = String.Format("Unzipping : {0} -> {1}", Framework.ZipFile, Framework.FrameworkDirectory);
 				UnzipAction.bCanExecuteRemotely = false;
 			}
 			return Framework.ExtractedTokenFile;
@@ -1479,18 +1451,33 @@ namespace UnrealBuildTool
 				VersionNumber SdkVersion = VersionNumber.Parse(Settings.Value.IOSSDKVersion);
 
 				Dictionary<string, DirectoryReference> FrameworkNameToSourceDir = new Dictionary<string, DirectoryReference>();
+				FileReference StagedExecutablePath = GetStagedExecutablePath(Executable.Location, Target.Name);
+				DirectoryReference BundleDirectory = Target.bShouldCompileAsDLL ? Executable.Directory.Location : StagedExecutablePath.Directory;
 				foreach (UEBuildFramework Framework in BinaryLinkEnvironment.AdditionalFrameworks)
 				{
-					if (Framework.OutputDirectory != null && !String.IsNullOrEmpty(Framework.CopyBundledAssets))
+					if (Framework.FrameworkDirectory != null)
 					{
-						// For now, this is hard coded, but we need to loop over all modules, and copy bundled assets that need it
-						DirectoryReference LocalSource = DirectoryReference.Combine(Framework.OutputDirectory, Framework.CopyBundledAssets);
-						string BundleName = Framework.CopyBundledAssets.Substring(Framework.CopyBundledAssets.LastIndexOf('/') + 1);
-						FrameworkNameToSourceDir[BundleName] = LocalSource;
+						if (!String.IsNullOrEmpty(Framework.CopyBundledAssets))
+						{
+							// For now, this is hard coded, but we need to loop over all modules, and copy bundled assets that need it
+							DirectoryReference LocalSource = DirectoryReference.Combine(Framework.FrameworkDirectory, Framework.CopyBundledAssets);
+							string BundleName = Framework.CopyBundledAssets.Substring(Framework.CopyBundledAssets.LastIndexOf('/') + 1);
+							FrameworkNameToSourceDir[BundleName] = LocalSource;
+						}
+
+						if (Framework.bCopyFramework)
+						{
+							string FrameworkDir = Framework.FrameworkDirectory.FullName;
+							if (FrameworkDir.EndsWith(".framework"))
+							{
+								FrameworkDir = Path.GetDirectoryName(FrameworkDir);
+							}
+
+							OutputFiles.Add(CopyBundleResource(new UEBuildBundleResource(new ModuleRules.BundleResource(Path.Combine(FrameworkDir, Framework.Name + ".framework"), "Frameworks")), Executable, BundleDirectory, Graph));
+						}
 					}
 				}
 
-				FileReference StagedExecutablePath = GetStagedExecutablePath(Executable.Location, Target.Name);
 				foreach (UEBuildBundleResource Resource in BinaryLinkEnvironment.AdditionalBundleResources)
 				{
 					OutputFiles.Add(CopyBundleResource(Resource, Executable, StagedExecutablePath.Directory, Graph));
@@ -2131,7 +2118,15 @@ namespace UnrealBuildTool
 
 			string BundlePath = BundleDirectory.FullName;
 			string SourcePath = Path.Combine(Path.GetFullPath("."), Resource.ResourcePath);
-			string TargetPath = Path.Combine(BundlePath, Path.GetFileName(Resource.ResourcePath));
+			string TargetPath;
+			if (Resource.BundleContentsSubdir == "Resources")
+			{
+				TargetPath = Path.Combine(BundlePath, Path.GetFileName(Resource.ResourcePath));
+			}
+			else
+			{
+				TargetPath = Path.Combine(BundlePath, Resource.BundleContentsSubdir, Path.GetFileName(Resource.ResourcePath));
+			}
 
 			FileItem TargetItem = FileItem.GetItemByPath(TargetPath);
 

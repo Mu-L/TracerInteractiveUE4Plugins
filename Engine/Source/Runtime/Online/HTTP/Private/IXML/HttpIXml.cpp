@@ -125,15 +125,23 @@ void FHttpRequestIXML::SetContent(const TArray<uint8>& ContentPayload)
 //-----------------------------------------------------------------------------
 //	
 //-----------------------------------------------------------------------------
+void FHttpRequestIXML::SetContent(TArray<uint8>&& ContentPayload)
+{
+	Payload = MakeUnique<FRequestPayloadInMemory>(MoveTemp(ContentPayload));
+}
+
+//-----------------------------------------------------------------------------
+//	
+//-----------------------------------------------------------------------------
 void FHttpRequestIXML::SetContentAsString(const FString& ContentString)
 {
 	if ( ContentString.Len() )
 	{
-		FTCHARToUTF8 Converter(*ContentString);
+		int32 Utf8Length = FTCHARToUTF8_Convert::ConvertedLength(*ContentString, ContentString.Len());
 		TArray<uint8> Buffer;
-		Buffer.SetNum(Converter.Length());
-		FMemory::Memcpy(Buffer.GetData(), Converter.Get(), Buffer.Num());
-		Payload = MakeUnique<FRequestPayloadInMemory>(Buffer);
+		Buffer.SetNumUninitialized(Utf8Length);
+		FTCHARToUTF8_Convert::Convert((ANSICHAR*)Buffer.GetData(), Buffer.Num(), *ContentString, ContentString.Len());
+		Payload = MakeUnique<FRequestPayloadInMemory>(MoveTemp(Buffer));
 	}
 }
 
@@ -208,7 +216,7 @@ void FHttpRequestIXML::AppendToHeader(const FString& HeaderName, const FString& 
 //-----------------------------------------------------------------------------
 bool FHttpRequestIXML::ProcessRequest()
 {
-	uint32	hr = 0;
+	uint32 Result = 0;
 
 	// Are we already processing?
 	if (RequestStatus == EHttpRequestStatus::Processing)
@@ -222,21 +230,21 @@ bool FHttpRequestIXML::ProcessRequest()
 	}
 	else
 	{
-		hr = CreateRequest();
+		Result = CreateRequest();
 
-		if (SUCCEEDED(hr))
+		if (SUCCEEDED(Result))
 		{
-			hr = ApplyHeaders();
+			Result = ApplyHeaders();
 
-			if (SUCCEEDED(hr))
+			if (SUCCEEDED(Result))
 			{
 				RequestStatus = EHttpRequestStatus::Processing;
 				Response = MakeShareable( new FHttpResponseIXML(*this, HttpCB) );
 
 				// Try to start the connection and send the Http request
-				hr = SendRequest();
+				Result = SendRequest();
 
-				if (SUCCEEDED(hr))
+				if (SUCCEEDED(Result))
 				{
 					// Add to global list while being processed so that the ref counted request does not get deleted
 					FHttpModule::Get().GetHttpManager().AddRequest(SharedThis(this));
@@ -245,17 +253,30 @@ bool FHttpRequestIXML::ProcessRequest()
 				{
 					// No response since connection failed
 					Response = NULL;
+
 					// Cleanup and call delegate
-					FinishedRequest();
+					if (!IsInGameThread())
+					{
+						FHttpModule::Get().GetHttpManager().AddGameThreadTask([StrongThis = StaticCastSharedRef<FHttpRequestIXML>(AsShared())]()
+						{
+							StrongThis->FinishedRequest();
+						});
+					}
+					else
+					{
+						FinishedRequest();
+					}
 				}
 			}
-		}else{
-			UE_LOG(LogHttp, Warning, TEXT("CreateRequest failed with error code %d URL=%s"),hr, *URL);
+		}
+		else
+		{
+			UE_LOG(LogHttp, Warning, TEXT("CreateRequest failed with error code %d URL=%s"), Result, *URL);
 		}
 
 	}
 
-	return SUCCEEDED( hr );
+	return SUCCEEDED(Result);
 }
 
 //-----------------------------------------------------------------------------
@@ -345,31 +366,6 @@ uint32 FHttpRequestIXML::SendRequest()
 //-----------------------------------------------------------------------------
 //	
 //-----------------------------------------------------------------------------
-FHttpRequestCompleteDelegate& FHttpRequestIXML::OnProcessRequestComplete()
-{
-	return CompleteDelegate;
-}
-
-
-FHttpRequestProgressDelegate& FHttpRequestIXML::OnRequestProgress()
-{
-	return RequestProgressDelegate;
-}
-
-
-FHttpRequestHeaderReceivedDelegate& FHttpRequestIXML::OnHeaderReceived()
-{
-	return RequestHeaderReceivedDelegate;
-}
-
-FHttpRequestWillRetryDelegate& FHttpRequestIXML::OnRequestWillRetry()
-{
-	return OnRequestWillRetryDelegate;
-}
-
-//-----------------------------------------------------------------------------
-//	
-//-----------------------------------------------------------------------------
 void FHttpRequestIXML::CancelRequest()
 {
 	check ( XHR );
@@ -405,8 +401,8 @@ void FHttpRequestIXML::Tick(float DeltaSeconds)
 
 	// keep track of elapsed seconds
 	ElapsedTime += DeltaSeconds;
-	const float HttpTimeout = FHttpModule::Get().GetHttpTimeout();
-	if (HttpTimeout > 0 && 
+	const float HttpTimeout = GetTimeoutOrDefault();
+	if (HttpTimeout > 0 &&
 		ElapsedTime >= HttpTimeout)
 	{
 		UE_LOG(LogHttp, Warning, TEXT("Timeout processing Http request. %p"),

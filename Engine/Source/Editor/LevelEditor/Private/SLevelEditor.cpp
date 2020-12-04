@@ -52,6 +52,10 @@
 #include "EditorViewportCommands.h"
 #include "IPlacementModeModule.h"
 #include "Classes/EditorStyleSettings.h"
+#include "Editor/EnvironmentLightingViewer/Public/EnvironmentLightingModule.h"
+#include "Misc/MessageDialog.h"
+
+#define LOCTEXT_NAMESPACE "SLevelEditor"
 
 static const FName MainFrameModuleName("MainFrame");
 static const FName LevelEditorModuleName("LevelEditor");
@@ -161,26 +165,25 @@ void SLevelEditor::Construct( const SLevelEditor::FArguments& InArgs)
 	RegisterMenus();
 
 	// We need to register when modes list changes so that we can refresh the auto generated commands.
-	FEditorModeRegistry::Get().OnRegisteredModesChanged().AddRaw(this, &SLevelEditor::EditorModeCommandsChanged);
+	if (GEditor != nullptr)
+	{
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OnEditorModesChanged().AddRaw(this, &SLevelEditor::EditorModeCommandsChanged);
+	}
 	GLevelEditorModeTools().OnEditorModeIDChanged().AddSP(this, &SLevelEditor::OnEditorModeIdChanged);
 
 	// @todo This is a hack to get this working for now. This won't work with multiple worlds
 	if (GEditor != nullptr)
 	{
 		GEditor->GetEditorWorldContext(true).AddRef(World);
-	}
 
-	// Set the initial preview feature level.
-	UEditorEngine* Editor = (UEditorEngine*)GEngine;
-	World->ChangeFeatureLevel(Editor->GetActiveFeatureLevelPreviewType());
+		// Set the initial preview feature level.
+		World->ChangeFeatureLevel(GEditor->GetActiveFeatureLevelPreviewType());
 
-	if (GEditor != nullptr)
-	{
 		LevelActorOuterChangedHandle = GEditor->OnLevelActorOuterChanged().AddSP(this, &SLevelEditor::OnLevelActorOuterChanged);
 	}
 
 	// Patch into the OnPreviewFeatureLevelChanged() delegate to swap out the current feature level with a user selection.
-	PreviewFeatureLevelChangedHandle = Editor->OnPreviewFeatureLevelChanged().AddLambda([this](ERHIFeatureLevel::Type NewFeatureLevel)
+	PreviewFeatureLevelChangedHandle = GEditor->OnPreviewFeatureLevelChanged().AddLambda([this](ERHIFeatureLevel::Type NewFeatureLevel)
 		{
 			// Do one recapture if atleast one ReflectionComponent is dirty
 			// BuildReflectionCapturesOnly_Execute in LevelEditorActions relies on this happening on toggle between SM5->ES31. If you remove this, update that code!
@@ -192,6 +195,7 @@ void SLevelEditor::Construct( const SLevelEditor::FArguments& InArgs)
 		});
 
 	FEditorDelegates::MapChange.AddRaw(this, &SLevelEditor::HandleEditorMapChange);
+	FEditorDelegates::OnAssetsDeleted.AddRaw(this, &SLevelEditor::HandleAssetsDeleted);
 	HandleEditorMapChange(MapChangeEventFlags::NewMap);
 }
 
@@ -313,8 +317,7 @@ SLevelEditor::~SLevelEditor()
 		GetMutableDefault<UEditorPerProjectUserSettings>()->OnUserSettingChanged().RemoveAll(this);
 	}
 
-	FEditorModeRegistry::Get().OnRegisteredModesChanged().RemoveAll( this );
-
+	FEditorDelegates::OnAssetsDeleted.RemoveAll(this);
 	FEditorDelegates::MapChange.RemoveAll(this);
 
 	if (GEngine)
@@ -324,8 +327,11 @@ SLevelEditor::~SLevelEditor()
 
 	if (GEditor)
 	{
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OnEditorModesChanged().RemoveAll(this);
 		GEditor->OnLevelActorOuterChanged().Remove(LevelActorOuterChangedHandle);
 		GEditor->GetEditorWorldContext(true).RemoveRef(World);
+
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OnEditorModesChanged().RemoveAll(this);
 	}
 }
 
@@ -567,39 +573,40 @@ void SLevelEditor::AttachSequencer( TSharedPtr<SWidget> SequencerWidget, TShared
 
 	if( !bIsReentrant )
 	{
-		TSharedRef<SDockTab> Tab = SNew(SDockTab);
-		Tab = InvokeTab(LevelEditorTabIds::Sequencer);
-
-		// Close the sequence editor after invoking a sequencer tab instead of before so that the existing asset editor doesn't refer to a stale sequencer.
-		if(SequencerAssetEditor.IsValid())
+		TSharedPtr<SDockTab> Tab = TryInvokeTab(LevelEditorTabIds::Sequencer);
+		if(Tab.IsValid())
 		{
-			// Closing the window will invoke this method again but we are handling reopening with a new movie scene ourselves
-			TGuardValue<bool> ReentrantGuard(bIsReentrant, true);
-			// Shutdown cleanly
-			SequencerAssetEditor.Pin()->CloseWindow();
-		}
-
-		if(!FGlobalTabmanager::Get()->OnOverrideDockableAreaRestore_Handler.IsBound())
-		{
-			// Don't allow standard tab closing behavior when the override is active
-			Tab->SetOnTabClosed(SDockTab::FOnTabClosedCallback::CreateStatic(&Local::OnSequencerClosed, TWeakPtr<IAssetEditorInstance>(NewSequencerAssetEditor)));
-		}
-		if(SequencerWidget.IsValid() && NewSequencerAssetEditor.IsValid())
-		{
-			Tab->SetContent(SequencerWidget.ToSharedRef());
-			SequencerWidgetPtr = SequencerWidget;
-			SequencerAssetEditor = NewSequencerAssetEditor;
-			if (FGlobalTabmanager::Get()->OnOverrideDockableAreaRestore_Handler.IsBound())
+			// Close the sequence editor after invoking a sequencer tab instead of before so that the existing asset editor doesn't refer to a stale sequencer.
+			if (SequencerAssetEditor.IsValid())
 			{
-				// @todo vreditor: more general vr editor tab manager should handle windows instead
-				// Close the original tab so we just work with the override window
-				Tab->RequestCloseTab();
+				// Closing the window will invoke this method again but we are handling reopening with a new movie scene ourselves
+				TGuardValue<bool> ReentrantGuard(bIsReentrant, true);
+				// Shutdown cleanly
+				SequencerAssetEditor.Pin()->CloseWindow();
 			}
-		}
-		else
-		{
-			Tab->SetContent(SNullWidget::NullWidget);
-			SequencerAssetEditor.Reset();
+
+			if (!FGlobalTabmanager::Get()->OnOverrideDockableAreaRestore_Handler.IsBound())
+			{
+				// Don't allow standard tab closing behavior when the override is active
+				Tab->SetOnTabClosed(SDockTab::FOnTabClosedCallback::CreateStatic(&Local::OnSequencerClosed, TWeakPtr<IAssetEditorInstance>(NewSequencerAssetEditor)));
+			}
+			if (SequencerWidget.IsValid() && NewSequencerAssetEditor.IsValid())
+			{
+				Tab->SetContent(SequencerWidget.ToSharedRef());
+				SequencerWidgetPtr = SequencerWidget;
+				SequencerAssetEditor = NewSequencerAssetEditor;
+				if (FGlobalTabmanager::Get()->OnOverrideDockableAreaRestore_Handler.IsBound())
+				{
+					// @todo vreditor: more general vr editor tab manager should handle windows instead
+					// Close the original tab so we just work with the override window
+					Tab->RequestCloseTab();
+				}
+			}
+			else
+			{
+				Tab->SetContent(SNullWidget::NullWidget);
+				SequencerAssetEditor.Reset();
+			}
 		}
 	}
 }
@@ -894,6 +901,16 @@ TSharedRef<SDockTab> SLevelEditor::SpawnLevelEditorTab( const FSpawnTabArgs& Arg
 				WorldSettingsView.ToSharedRef()
 			];
 	}
+	else if( TabIdentifier == LevelEditorTabIds::LevelEditorEnvironmentLightingViewer)
+	{
+		FEnvironmentLightingViewerModule& EnvironmentLightingViewerModule = FModuleManager::Get().LoadModuleChecked<FEnvironmentLightingViewerModule>( "EnvironmentLightingViewer" );
+		return SNew(SDockTab)
+			.Icon(FEditorStyle::GetBrush("EditorViewport.ReflectionOverrideMode"))
+			.Label(NSLOCTEXT("LevelEditor", "EnvironmentLightingViewerTitle", "Env. Light Mixer"))
+			[
+				EnvironmentLightingViewerModule.CreateEnvironmentLightingViewer()
+			];
+	}
 	
 	return SNew(SDockTab);
 }
@@ -905,13 +922,25 @@ bool SLevelEditor::CanSpawnEditorModeToolbarTab(const FSpawnTabArgs& Args) const
 
 bool SLevelEditor::CanSpawnEditorModeToolboxTab(const FSpawnTabArgs& Args) const
 {
-	return GLevelEditorModeTools().ShouldShowModeToolbox();
+	return HasAnyHostedEditorModeToolkit();
 }
 
-TSharedRef<SDockTab> SLevelEditor::InvokeTab( FName TabID )
+bool SLevelEditor::HasAnyHostedEditorModeToolkit() const
+{
+	for (TSharedPtr<IToolkit> Toolkit : HostedToolkits)
+	{
+		if (Toolkit->GetScriptableEditorMode() || Toolkit->GetEditorMode())
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+TSharedPtr<SDockTab> SLevelEditor::TryInvokeTab( FName TabID )
 {
 	TSharedPtr<FTabManager> LevelEditorTabManager = GetTabManager();
-	return LevelEditorTabManager->InvokeTab(TabID);
+	return LevelEditorTabManager->TryInvokeTab(TabID);
 }
 
 void SLevelEditor::SyncDetailsToSelection()
@@ -944,7 +973,7 @@ void SLevelEditor::SyncDetailsToSelection()
 
 		if(DetailsView->IsUpdatable() && !DetailsView->IsLocked())
 		{
-			InvokeTab(DetailsTabIdentifier);
+			TryInvokeTab(DetailsTabIdentifier);
 			return;
 		}
 	}
@@ -952,7 +981,7 @@ void SLevelEditor::SyncDetailsToSelection()
 	// If we got this far then there were no open details views, so open the first available one
 	if(!FirstClosedDetailsTabIdentifier.IsNone())
 	{
-		InvokeTab(FirstClosedDetailsTabIdentifier);
+		TryInvokeTab(FirstClosedDetailsTabIdentifier);
 	}
 }
 
@@ -1274,6 +1303,15 @@ TSharedRef<SWidget> SLevelEditor::RestoreContentArea( const TSharedRef<SDockTab>
 				.SetIcon( WorldPropertiesIcon );
 		}
 
+		{
+			const FSlateIcon EnvironmentLightingViewerIcon(FEditorStyle::GetStyleSetName(), "EditorViewport.ReflectionOverrideMode");
+			LevelEditorTabManager->RegisterTabSpawner(LevelEditorTabIds::LevelEditorEnvironmentLightingViewer, FOnSpawnTab::CreateSP<SLevelEditor, FName, FString>(this, &SLevelEditor::SpawnLevelEditorTab, LevelEditorTabIds::LevelEditorEnvironmentLightingViewer, FString()))
+				.SetDisplayName(NSLOCTEXT("LevelEditorTabs", "EnvironmentLightingViewer", "Env. Light Mixer"))
+				.SetTooltipText(NSLOCTEXT("LevelEditorTabs", "LevelEditorEnvironmentLightingViewerTooltipText", "Open the Environmment Lighting tab to edit all the entities important for world lighting."))
+				.SetGroup(MenuStructure.GetLevelEditorCategory())
+				.SetIcon(EnvironmentLightingViewerIcon);
+		}
+
 		FTabSpawnerEntry& BuildAndSubmitEntry = LevelEditorTabManager->RegisterTabSpawner(LevelEditorTabIds::LevelEditorBuildAndSubmit, FOnSpawnTab::CreateSP<SLevelEditor, FName, FString>(this, &SLevelEditor::SpawnLevelEditorTab, LevelEditorTabIds::LevelEditorBuildAndSubmit, FString()));
 		BuildAndSubmitEntry.SetAutoGenerateMenuEntry(false);
 
@@ -1295,10 +1333,14 @@ TSharedRef<SWidget> SLevelEditor::RestoreContentArea( const TSharedRef<SDockTab>
 	//     - Name: Default Editor Layout
 	//     - Description: Default layout that the Unreal Editor automatically generates
 	// 8. Either click on the toast generated by Unreal that would open the saving path or manually open Engine\Saved\Config\Layouts\ in your explorer
-	// 9. Move and rename the new file (Engine\Saved\Config\Layouts\Default_Editor_Layout.ini) into Engine\Config\Layouts\DefaultLayout.ini
+	// 9. Move and rename the new file (Engine\Saved\Config\Layouts\Default_Editor_Layout.ini) into Engine\Config\Layouts\DefaultLayout.ini. You might also have to modify:
+	//     9.1. QAGame/Config/DefaultEditorLayout.ini
+	//     9.2. Engine/Config/BaseEditorLayout.ini
+	//     9.3. Etc
 	// 10. Push the new "DefaultLayout.ini" together with your new code.
 	// 11. Also update these instructions if you change the version number (e.g., from "UnrealEd_Layout_v1.4" to "UnrealEd_Layout_v1.5").
-	const TSharedRef<FTabManager::FLayout> DefaultLayout = FTabManager::NewLayout("LevelEditor_Layout_v1.2")
+	const FName LayoutName = TEXT("LevelEditor_Layout_v1.2");
+	const TSharedRef<FTabManager::FLayout> DefaultLayout = FTabManager::NewLayout(LayoutName)
 		->AddArea
 		(
 			FTabManager::NewPrimaryArea()
@@ -1378,7 +1420,20 @@ TSharedRef<SWidget> SLevelEditor::RestoreContentArea( const TSharedRef<SDockTab>
 				)
 			)
 		);
-	const TSharedRef<FTabManager::FLayout> Layout = FLayoutSaveRestore::LoadFromConfig(GEditorLayoutIni, DefaultLayout);
+	const EOutputCanBeNullptr OutputCanBeNullptr = EOutputCanBeNullptr::IfNoTabValid;
+	TArray<FString> RemovedOlderLayoutVersions;
+	const TSharedRef<FTabManager::FLayout> Layout = FLayoutSaveRestore::LoadFromConfig(GEditorLayoutIni,
+		DefaultLayout, OutputCanBeNullptr, RemovedOlderLayoutVersions);
+
+	// If older fields of the layout name (i.e., lower versions than "LevelEditor_Layout_v1.2") were found
+	if (RemovedOlderLayoutVersions.Num() > 0)
+	{
+		// FMessageDialog - Notify the user that the layout version was updated and the current layout uses a deprecated one
+		const FText TextTitle = LOCTEXT("LevelEditorVersionErrorTitle", "Unreal Level Editor Layout Version Mismatch");
+		const FText TextBody = FText::Format(LOCTEXT("LevelEditorVersionErrorBody", "The expected Unreal Level Editor layout version is \"{0}\", while only version \"{1}\" was found. I.e., the current layout was created with a previous version of Unreal that is deprecated and no longer compatible.\n\nUnreal will continue with the default layout for its current version, the deprecated one has been removed.\n\nYou can create and save your custom layouts with \"Window\"->\"Save Layout\"->\"Save Layout As...\"."),
+			FText::FromString(LayoutName.ToString()), FText::FromString(RemovedOlderLayoutVersions[0]));
+		FMessageDialog::Open(EAppMsgType::Ok, TextBody, &TextTitle);
+	}
 
 	FLayoutExtender LayoutExtender;
 
@@ -1386,7 +1441,6 @@ TSharedRef<SWidget> SLevelEditor::RestoreContentArea( const TSharedRef<SDockTab>
 	Layout->ProcessExtensions(LayoutExtender);
 
 	const bool bEmbedTitleAreaContent = false;
-	const EOutputCanBeNullptr OutputCanBeNullptr = EOutputCanBeNullptr::IfNoTabValid;
 	TSharedPtr<SWidget> ContentAreaWidget = LevelEditorTabManager->RestoreFrom(Layout, OwnerWindow, bEmbedTitleAreaContent, OutputCanBeNullptr);
 	// ContentAreaWidget will only be nullptr if its main area contains invalid tabs (probably some layout bug). If so, reset layout to avoid potential crashes
 	if (!ContentAreaWidget.IsValid())
@@ -1394,8 +1448,7 @@ TSharedRef<SWidget> SLevelEditor::RestoreContentArea( const TSharedRef<SDockTab>
 		// Try to load default layout to avoid nullptr.ToSharedRef() crash
 		ContentAreaWidget = LevelEditorTabManager->RestoreFrom(DefaultLayout, OwnerWindow, bEmbedTitleAreaContent, EOutputCanBeNullptr::Never);
 		// Warn user/developer
-		const FString WarningMessage = FString::Format(TEXT("Level editor layout could not be loaded from the config file {0}, trying to reset this config file to the"
-			" default one."), { *GEditorLayoutIni });
+		const FString WarningMessage = FString::Format(TEXT("Level editor layout could not be loaded from the config file {0}, trying to reset this config file to the default one."), { *GEditorLayoutIni });
 		UE_LOG(LogTemp, Warning, TEXT("%s"), *WarningMessage);
 		ensureMsgf(false, TEXT("%s Some additional testing of that layout file should be done."));
 	}
@@ -1423,7 +1476,8 @@ void SLevelEditor::ToggleEditorMode( FEditorModeID ModeID )
 		FEdMode* MatineeMode = GLevelEditorModeTools().GetActiveMode(FBuiltinEditorModes::EM_InterpEdit);
 		if (MatineeMode && !MatineeMode->IsCompatibleWith(ModeID))
 		{
-			FEditorModeInfo MatineeModeInfo = FEditorModeRegistry::Get().GetModeInfo(ModeID);
+			FEditorModeInfo MatineeModeInfo;
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorModeInfo(ModeID, MatineeModeInfo);
 			FFormatNamedArguments Args;
 			Args.Add(TEXT("ModeName"), MatineeModeInfo.Name);
 			FText Msg = FText::Format(NSLOCTEXT("LevelEditor", "ModeSwitchCloseMatineeQ", "Activating '{ModeName}' editor mode will close UnrealMatinee.  Continue?"), Args);
@@ -1473,7 +1527,7 @@ void SLevelEditor::OnEditorModeIdChanged(const FEditorModeID& ModeChangedID, boo
 		FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>("LevelEditor");
 		TSharedPtr<FTabManager> LevelEditorTabManager = LevelEditorModule.GetLevelEditorTabManager();
 
-		if (!GLevelEditorModeTools().ShouldShowModeToolbox())
+		if (!HasAnyHostedEditorModeToolkit())
 		{
 			TSharedPtr<SDockTab> ToolboxTab = LevelEditorTabManager->FindExistingLiveTab(LevelEditorTabIds::LevelEditorToolBox);
 			if (ToolboxTab.IsValid())
@@ -1483,7 +1537,7 @@ void SLevelEditor::OnEditorModeIdChanged(const FEditorModeID& ModeChangedID, boo
 		}
 		else if (!GetDefault<UEditorStyleSettings>()->bEnableLegacyEditorModeUI)
 		{
-			LevelEditorTabManager->InvokeTab(LevelEditorTabIds::LevelEditorToolBox);
+			LevelEditorTabManager->TryInvokeTab(LevelEditorTabIds::LevelEditorToolBox);
 		}
 	}
 }
@@ -1503,7 +1557,7 @@ void SLevelEditor::RefreshEditorModeCommands()
 	const FLevelEditorModesCommands& Commands = FLevelEditorModesCommands::Get();
 
 	int32 CommandIndex = 0;
-	for( const FEditorModeInfo& Mode : FEditorModeRegistry::Get().GetSortedModeInfo() )
+	for( const FEditorModeInfo& Mode : GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->GetEditorModeInfoOrderedByPriority() )
 	{
 		// If the mode isn't visible don't create a menu option for it.
 		if( !Mode.bVisible )
@@ -1670,20 +1724,35 @@ void SLevelEditor::HandleEditorMapChange( uint32 MapChangeFlags )
 	}
 }
 
-void SLevelEditor::OnActorSelectionChanged(const TArray<UObject*>& NewSelection, bool bForceRefresh)
+void SLevelEditor::HandleAssetsDeleted(const TArray<UClass*>& DeletedClasses)
 {
-	for( auto It = AllActorDetailPanels.CreateIterator(); It; ++It )
+	bool bDeletedMaterials = false;
+	for (UClass* AssetClass : DeletedClasses)
 	{
-		TSharedPtr<SActorDetails> ActorDetails = It->Pin();
-		if( ActorDetails.IsValid() )
+		if (AssetClass->IsChildOf<UMaterialInterface>())
 		{
-			ActorDetails->SetObjects(NewSelection, bForceRefresh || bNeedsRefresh);
-		}
-		else
-		{
-			// remove stray entries here
+			bDeletedMaterials = true;
+			break;
 		}
 	}
+
+	if (bDeletedMaterials)
+	{
+		// If a material asset has been deleted, it may be being referenced by the BSP model.
+		// In case this is the case, invalidate the surface and immediately commit it (rather than waiting until the next tick as is usual),
+		// to ensure that it is rebuilt prior to the viewport being redrawn.
+		GetWorld()->InvalidateModelSurface(false);
+		GetWorld()->CommitModelSurfaces();
+	}
+}
+
+void SLevelEditor::OnActorSelectionChanged(const TArray<UObject*>& NewSelection, bool bForceRefresh)
+{
+	for (TSharedRef<SActorDetails> ActorDetails : GetAllActorDetails())
+	{
+		ActorDetails->SetObjects(NewSelection, bForceRefresh || bNeedsRefresh);
+	}
+
 	bNeedsRefresh = false;
 }
 
@@ -1721,19 +1790,57 @@ TSharedRef<SWidget> SLevelEditor::CreateActorDetails( const FName TabIdentifier 
 		ActorDetails->SetObjects( SelectedActors, bForceRefresh );
 	}
 
+	ActorDetails->SetActorDetailsRootCustomization(ActorDetailsObjectFilter, ActorDetailsRootCustomization);
+	ActorDetails->SetSCSEditorUICustomization(ActorDetailsSCSEditorUICustomization);
+
 	AllActorDetailPanels.Add( ActorDetails );
 	return ActorDetails;
 }
 
-
-void SLevelEditor::SetActorDetailsFilter(TSharedPtr<FDetailsViewObjectFilter> ActorDetailsFilter)
+TArray<TSharedRef<SActorDetails>> SLevelEditor::GetAllActorDetails() const
 {
-	for (TWeakPtr<SActorDetails> Details : AllActorDetailPanels)
+	TArray<TSharedRef<SActorDetails>> AllValidActorDetails;
+	AllValidActorDetails.Reserve(AllActorDetailPanels.Num());
+
+	for (TWeakPtr<SActorDetails> ActorDetails : AllActorDetailPanels)
 	{
-		if (Details.IsValid())
+		if (TSharedPtr<SActorDetails> ActorDetailsPinned = ActorDetails.Pin())
 		{
-			Details.Pin()->SetActorDetailsFilter(ActorDetailsFilter);
+			AllValidActorDetails.Add(ActorDetailsPinned.ToSharedRef());
 		}
+	}
+
+	if (AllActorDetailPanels.Num() > AllValidActorDetails.Num())
+	{
+		TArray<TWeakPtr<SActorDetails>>& AllActorDetailPanelsNonConst = const_cast<TArray<TWeakPtr<SActorDetails>>&>(AllActorDetailPanels);
+		AllActorDetailPanelsNonConst.Reset(AllValidActorDetails.Num());
+		for (const TSharedRef<SActorDetails>& ValidActorDetails : AllValidActorDetails)
+		{
+			AllActorDetailPanelsNonConst.Add(ValidActorDetails);
+		}
+	}
+
+	return AllValidActorDetails;
+}
+
+void SLevelEditor::SetActorDetailsRootCustomization(TSharedPtr<FDetailsViewObjectFilter> InActorDetailsObjectFilter, TSharedPtr<IDetailRootObjectCustomization> InActorDetailsRootCustomization)
+{
+	ActorDetailsObjectFilter = InActorDetailsObjectFilter;
+	ActorDetailsRootCustomization = InActorDetailsRootCustomization;
+
+	for (TSharedRef<SActorDetails> ActorDetails : GetAllActorDetails())
+	{
+		ActorDetails->SetActorDetailsRootCustomization(ActorDetailsObjectFilter, ActorDetailsRootCustomization);
+	}
+}
+
+void SLevelEditor::SetActorDetailsSCSEditorUICustomization(TSharedPtr<ISCSEditorUICustomization> InActorDetailsSCSEditorUICustomization)
+{
+	ActorDetailsSCSEditorUICustomization = InActorDetailsSCSEditorUICustomization;
+
+	for (TSharedRef<SActorDetails> ActorDetails : GetAllActorDetails())
+	{
+		ActorDetails->SetSCSEditorUICustomization(ActorDetailsSCSEditorUICustomization);
 	}
 }
 
@@ -1748,3 +1855,4 @@ TSharedRef<SWidget> SLevelEditor::CreateToolBox()
 	return NewToolBox;
 }
 
+#undef LOCTEXT_NAMESPACE

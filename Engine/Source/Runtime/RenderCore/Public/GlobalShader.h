@@ -14,7 +14,7 @@
 
 class FShaderCommonCompileJob;
 class FShaderCompileJob;
-class TargetPlatform;
+class ITargetPlatform;
 
 /** Used to identify the global shader map in compile queues. */
 extern RENDERCORE_API const int32 GlobalShaderMapId;
@@ -180,6 +180,7 @@ public:
 	bool IsEmpty() const;
 
 	void Empty();
+	void ReleaseAllSections();
 
 	FShader* FindOrAddShader(const FShaderType* ShaderType, int32 PermutationId, FShader* Shader);
 	FShaderPipeline* FindOrAddShaderPipeline(const FShaderPipelineType* ShaderPipelineType, FShaderPipeline* ShaderPipeline);

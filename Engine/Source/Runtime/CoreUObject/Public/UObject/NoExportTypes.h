@@ -44,6 +44,10 @@
 
 #include "Internationalization/PolyglotTextData.h"
 
+#include "AssetRegistry/ARFilter.h"
+#include "AssetRegistry/AssetBundleData.h"
+#include "AssetRegistry/AssetData.h"
+
 #include "../../../ApplicationCore/Public/GenericPlatform/ICursor.h"
 
 #endif
@@ -354,6 +358,50 @@ enum class EPropertyAccessChangeNotifyMode : uint8
 	/** Always notify that a value change has occurred, even if the value is unchanged */
 	Always,
 };
+
+/**
+* Enum denoting message dialog return types.
+* @note Mirrored from GenericPlatformMisc.h
+*/
+UENUM(BlueprintType)
+namespace EAppReturnType
+{
+	enum Type
+	{
+		No,
+		Yes,
+		YesAll,
+		NoAll,
+		Cancel,
+		Ok,
+		Retry,
+		Continue,
+	};
+}
+
+/**
+* Enum denoting message dialog button choices. Used in combination with EAppReturnType.
+* @note Mirrored from GenericPlatformMisc.h
+*/
+UENUM(BlueprintType)
+namespace EAppMsgType
+{
+	/**
+	 * Enumerates supported message dialog button types.
+	 */
+	enum Type
+	{
+		Ok,
+		YesNo,
+		OkCancel,
+		YesNoCancel,
+		CancelRetryContinue,
+		YesNoYesAllNoAll,
+		YesNoYesAllNoAllCancel,
+		YesNoYesAll,
+	};
+}
+
 
 /** A globally unique identifier (mirrored from Guid.h) */
 USTRUCT(immutable, noexport, BlueprintType)
@@ -1089,6 +1137,7 @@ struct FFrameRate
 /** 
  * Represents a time by a context-free frame number, plus a sub frame value in the range [0:1). 
  * @note The full C++ class is located here: Engine\Source\Runtime\Core\Public\Misc\FrameTime.h
+ * @note The 'SubFrame' field is private to match its C++ class declaration in the header above.
  */
 USTRUCT(noexport, BlueprintType)
 struct FFrameTime
@@ -1096,9 +1145,10 @@ struct FFrameTime
 	/** Count of frames from start of timing */
 	UPROPERTY(BlueprintReadWrite, Category=FrameTime)
 	FFrameNumber FrameNumber;
-
+	
+private:
 	/** Time within a frame, always between >= 0 and < 1 */
-	UPROPERTY(BlueprintReadWrite, Category=FrameTime)
+	UPROPERTY(BlueprintReadWrite, Category=FrameTime, meta=(AllowPrivateAccess="true"))
 	float SubFrame;
 };
 
@@ -1299,6 +1349,34 @@ struct FInt32Range
 };
 
 /**
+ * Defines a single bound for a range of frame numbers.
+ * @note This is a mirror of TRangeBound<FFrameNumber>, defined in RangeBound.h
+ */
+USTRUCT(noexport, BlueprintType)
+struct FFrameNumberRangeBound
+{
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Range)
+	TEnumAsByte<ERangeBoundTypes::Type> Type;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Range)
+	FFrameNumber Value;
+};
+
+/**
+ * A contiguous set of frame numbers described by lower and upper bound values.
+ * @note This is a mirror of TRange<FFrameNumber>, defined in Range.h
+ */
+USTRUCT(noexport, BlueprintType)
+struct FFrameNumberRange
+{
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Range)
+	FFrameNumberRangeBound LowerBound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Range)
+	FFrameNumberRangeBound UpperBound;
+};
+
+/**
  * An interval of floats, defined by inclusive min and max values
  * @note This is a mirror of TInterval<float>, defined in Interval.h
  */
@@ -1457,6 +1535,105 @@ enum class EDataValidationResult : uint8
 	NotValidated
 };
 
+USTRUCT(noexport, BlueprintType)
+struct FARFilter
+{
+	/** The filter component for package names */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = AssetRegistry)
+	TArray<FName> PackageNames;
+
+	/** The filter component for package paths */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = AssetRegistry)
+	TArray<FName> PackagePaths;
+
+	/** The filter component containing specific object paths */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = AssetRegistry)
+	TArray<FName> ObjectPaths;
+
+	/** The filter component for class names. Instances of the specified classes, but not subclasses (by default), will be included. Derived classes will be included only if bRecursiveClasses is true. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = AssetRegistry)
+	TArray<FName> ClassNames;
+
+	/** The filter component for properties marked with the AssetRegistrySearchable flag */
+	TMultiMap<FName, TOptional<FString>> TagsAndValues;
+
+	/** Only if bRecursiveClasses is true, the results will exclude classes (and subclasses) in this list */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = AssetRegistry)
+	TSet<FName> RecursiveClassesExclusionSet;
+
+	/** If true, PackagePath components will be recursive */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = AssetRegistry)
+	bool bRecursivePaths = false;
+
+	/** If true, subclasses of ClassNames will also be included and RecursiveClassesExclusionSet will be excluded. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = AssetRegistry)
+	bool bRecursiveClasses = false;
+
+	/** If true, only on-disk assets will be returned. Be warned that this is rarely what you want and should only be used for performance reasons */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadWrite, Category = AssetRegistry)
+	bool bIncludeOnlyOnDiskAssets = false;
+
+	/** The exclusive filter component for package flags. Only assets without any of the specified flags will be returned. */
+	uint32 WithoutPackageFlags = 0;
+
+	/** The inclusive filter component for package flags. Only assets with all of the specified flags will be returned. */
+	uint32 WithPackageFlags = 0;
+};
+
+USTRUCT(noexport)
+struct COREUOBJECT_API FAssetBundleEntry
+{
+	/** Asset this bundle is saved within. This is empty for global bundles, or in the saved bundle info */
+	UPROPERTY()
+	FPrimaryAssetId BundleScope;
+
+	/** Specific name of this bundle, should be unique for a given scope */
+	UPROPERTY()
+	FName BundleName;
+
+	/** List of string assets contained in this bundle */
+	UPROPERTY()
+	TArray<FSoftObjectPath> BundleAssets;
+};
+
+/** A struct with a list of asset bundle entries. If one of these is inside a UObject it will get automatically exported as the asset registry tag AssetBundleData */
+USTRUCT(noexport)
+struct COREUOBJECT_API FAssetBundleData
+{
+	/** List of bundles defined */
+	UPROPERTY()
+	TArray<FAssetBundleEntry> Bundles;
+};
+
+/**
+ * A struct to hold important information about an assets found by the Asset Registry
+ * This struct is transient and should never be serialized
+ */
+USTRUCT(noexport, BlueprintType)
+struct FAssetData
+{
+	/** The object path for the asset in the form PackageName.AssetName. Only top level objects in a package can have AssetData */
+	UPROPERTY(BlueprintReadOnly, Category = AssetData, transient)
+	FName ObjectPath;
+	/** The name of the package in which the asset is found, this is the full long package name such as /Game/Path/Package */
+	UPROPERTY(BlueprintReadOnly, Category = AssetData, transient)
+	FName PackageName;
+	/** The path to the package in which the asset is found, this is /Game/Path with the Package stripped off */
+	UPROPERTY(BlueprintReadOnly, Category = AssetData, transient)
+	FName PackagePath;
+	/** The name of the asset without the package */
+	UPROPERTY(BlueprintReadOnly, Category = AssetData, transient)
+	FName AssetName;
+	/** The name of the asset's class */
+	UPROPERTY(BlueprintReadOnly, Category = AssetData, transient)
+	FName AssetClass;
+	/** The map of values for properties that were marked AssetRegistrySearchable or added by GetAssetRegistryTags */
+	FAssetDataTagMapSharedView TagsAndValues;
+	/** The IDs of the pakchunks this asset is located in for streaming install.  Empty if not assigned to a chunk */
+	TArray<int32> ChunkIDs;
+	/** Asset package flags */
+	uint32 PackageFlags = 0;
+};
 
 /**
  * Direct base class for all UE4 objects

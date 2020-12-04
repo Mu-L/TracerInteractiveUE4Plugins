@@ -106,7 +106,6 @@ DECLARE_CYCLE_STAT(TEXT("ParticleComponent UpdateDynamicData GT"), STAT_Particle
 DECLARE_CYCLE_STAT(TEXT("ParticleComponent OrientZAxisTowardCamera GT"), STAT_UParticleSystemComponent_OrientZAxisTowardCamera, STATGROUP_Particles);
 DECLARE_CYCLE_STAT(TEXT("ParticleComponent QueueFinalize GT"), STAT_UParticleSystemComponent_QueueFinalize, STATGROUP_Particles);
 DECLARE_CYCLE_STAT(TEXT("ParticleComponent CheckForReset GT"), STAT_UParticleSystemComponent_CheckForReset, STATGROUP_Particles);
-DECLARE_CYCLE_STAT(TEXT("ParticleComponent LOD_Inactive GT"), STAT_UParticleSystemComponent_LOD_Inactive, STATGROUP_Particles);
 DECLARE_CYCLE_STAT(TEXT("ParticleComponent LOD GT"), STAT_UParticleSystemComponent_LOD, STATGROUP_Particles);
 DECLARE_CYCLE_STAT(TEXT("ParticleComponent QueueTasksGT"), STAT_UParticleSystemComponent_QueueTasks, STATGROUP_Particles);
 DECLARE_CYCLE_STAT(TEXT("ParticleComponent QueueAsyncGT"), STAT_UParticleSystemComponent_QueueAsync, STATGROUP_Particles);
@@ -3563,7 +3562,6 @@ bool UParticleSystemComponent::CanSkipTickDueToVisibility()
 {
 	if (Template && Template->IsLooping() && CanConsiderInvisible() && !bWasDeactivated)
 	{
-		SCOPE_CYCLE_COUNTER(STAT_UParticleSystemComponent_LOD_Inactive);
 		bForcedInActive = true;
 		SpawnEvents.Empty();
 		DeathEvents.Empty();
@@ -3594,7 +3592,7 @@ bool UParticleSystemComponent::CanConsiderInvisible()const
 		const float ClampedMaxSecondsBeforeInactive = MaxSecondsBeforeInactive > 0 ? FMath::Max(MaxSecondsBeforeInactive, 0.1f) : 0.0f;
 		if (ClampedMaxSecondsBeforeInactive > 0.0f && AccumTickTime > ClampedMaxSecondsBeforeInactive && World->IsGameWorld())
 		{
-			return World->GetTimeSeconds() > (GetLastRenderTime() + ClampedMaxSecondsBeforeInactive);
+			return (GetLastRenderTime() > 0.0f) && (World->GetTimeSeconds() > (GetLastRenderTime() + ClampedMaxSecondsBeforeInactive));
 		}
 	}
 	return false;
@@ -4793,7 +4791,6 @@ public:
 				Prereqs.Add(FinalizePrereq);
 			}
 			FGraphEventRef Finalize = TGraphTask<FParticleFinalizeTask>::CreateTask(&Prereqs, CurrentThread).ConstructAndDispatchWhenReady(Target);
-			MyCompletionGraphEvent->SetGatherThreadForDontCompleteUntil(ENamedThreads::GameThread);
 			MyCompletionGraphEvent->DontCompleteUntil(Finalize);
 			if (FinalizeDispatchCounter)
 			{
@@ -5256,7 +5253,6 @@ void UParticleSystemComponent::TickComponent(float DeltaTime, enum ELevelTick Ti
 				FGraphEventArray* Prereqs = FXAsyncBatcher.GetAsyncPrereq(OutFinalizeBatchEvent, FinalizeDispatchCounter);
 				AsyncWork = TGraphTask<FParticleAsyncTask>::CreateTask(Prereqs, ENamedThreads::GameThread).ConstructAndDispatchWhenReady(this, OutFinalizeBatchEvent, FinalizeDispatchCounter);
 #if !WITH_EDITOR  // we need to not complete until this is done because the game thread finalize task has not beed queued yet
-				ThisTickFunction->GetCompletionHandle()->SetGatherThreadForDontCompleteUntil(ENamedThreads::GameThread);
 				ThisTickFunction->GetCompletionHandle()->DontCompleteUntil(AsyncWork);
 #endif
 			}
@@ -5266,7 +5262,6 @@ void UParticleSystemComponent::TickComponent(float DeltaTime, enum ELevelTick Ti
 				FGraphEventArray Prereqs;
 				Prereqs.Add(AsyncWork);
 				FGraphEventRef Finalize = TGraphTask<FParticleFinalizeTask>::CreateTask(&Prereqs, ENamedThreads::GameThread).ConstructAndDispatchWhenReady(this);
-				ThisTickFunction->GetCompletionHandle()->SetGatherThreadForDontCompleteUntil(ENamedThreads::GameThread);
 				ThisTickFunction->GetCompletionHandle()->DontCompleteUntil(Finalize);
 			}
 #endif
@@ -5836,6 +5831,8 @@ void UParticleSystemComponent::SetTemplate(class UParticleSystem* NewTemplate)
 		// set the LOD level to 0 in case we're recycling the component, so InitParticles doesn't mistakenly grab an invalid LOD level
 		// speculative fix for OR-11322. May become permanent if the ensure in InitParticles never fires.
 		LODLevel = 0;
+
+		SetComponentTickEnabled(false);
 
 		if(NewTemplate && IsRegistered())
 		{
@@ -7083,6 +7080,17 @@ void UParticleSystemComponent::SetBoolParameter(FName Name, bool Value)
 {
 	SetFloatParameter(Name, (Value ? 1.0f : 0.0f));
 
+}
+/**
+ *	Set a named float instance parameter on this ParticleSystemComponent.
+ *	Updates the parameter if it already exists, or creates a new entry if not.
+	This maps a int to a float for parity as cascade doesn't have booleans.
+	This for adding functionality to the parent UFXSystemComponent to set int
+	variables.
+ */
+void UParticleSystemComponent::SetIntParameter(FName Name, int Value)
+{
+	SetFloatParameter(Name, float(Value));
 }
 
 /** 

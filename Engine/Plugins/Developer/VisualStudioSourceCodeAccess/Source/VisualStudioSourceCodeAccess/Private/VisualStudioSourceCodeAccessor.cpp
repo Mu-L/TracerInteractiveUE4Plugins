@@ -230,7 +230,7 @@ EAccessVisualStudioResult AccessVisualStudioViaDTE(TComPtr<EnvDTE::_DTE>& OutDTE
 									FString Filename(OutPath);
 									FPaths::NormalizeFilename(Filename);
 
-									if (Filename == InSolutionPath)
+									if (Filename == InSolutionPath || InSolutionPath.IsEmpty())
 									{
 										OutDTE = TempDTE;
 										AccessResult = EAccessVisualStudioResult::VSInstanceIsOpen;
@@ -1389,7 +1389,7 @@ FString FVisualStudioSourceCodeAccessor::GetSolutionPath() const
 		{
 			CachedSolutionPath = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
 
-			if (!FUProjectDictionary(FPaths::RootDir()).IsForeignProject(CachedSolutionPath))
+			if (!FUProjectDictionary::GetDefault().IsForeignProject(CachedSolutionPath))
 			{
 				FString MasterProjectName;
 				if (!FFileHelper::LoadFileToString(MasterProjectName, *(FPaths::EngineIntermediateDir() / TEXT("ProjectFiles/MasterProjectName.txt"))))

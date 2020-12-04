@@ -11,6 +11,11 @@
 #include "UObject/UObjectGlobals.h"
 #include "Serialization/ArchiveUObject.h"
 #include "HAL/ThreadSafeBool.h"
+#include "UObject/FastReferenceCollectorOptions.h"
+
+#if !defined(UE_WITH_GC)
+#	define UE_WITH_GC	1
+#endif
 
 /** Context sensitive keep flags for garbage collection */
 #define GARBAGE_COLLECTION_KEEPFLAGS	(GIsEditor ? RF_Standalone : RF_NoFlags)
@@ -42,6 +47,7 @@ enum EGCReferenceType
 	GCRT_Object,
 	GCRT_Class,
 	GCRT_PersistentObject,
+	GCRT_ExternalPackage,				// Specific reference type token for UObject external package
 	GCRT_ArrayObject,
 	GCRT_ArrayStruct,
 	GCRT_FixedArray,
@@ -57,6 +63,16 @@ enum EGCReferenceType
 	GCRT_NoopClass,
 	GCRT_ArrayObjectFreezable,
 	GCRT_ArrayStructFreezable,
+	GCRT_WeakObject,
+	GCRT_ArrayWeakObject,
+	GCRT_LazyObject,
+	GCRT_ArrayLazyObject,
+	GCRT_SoftObject,
+	GCRT_ArraySoftObject,
+	GCRT_Delegate,
+	GCRT_ArrayDelegate,
+	GCRT_MulticastDelegate,
+	GCRT_ArrayMulticastDelegate,
 };
 
 /** 
@@ -105,7 +121,7 @@ struct FGCReferenceInfo
 			/** Return depth, e.g. 1 for last entry in an array, 2 for last entry in an array of structs of arrays, ... */
 			uint32 ReturnCount	: 8;
 			/** Type of reference */
-			uint32 Type			: 5;
+			uint32 Type			: 5; // The number of bits needs to match TFastReferenceCollector::FStackEntry::ContainerHelperType
 			/** Offset into struct/ object */
 			uint32 Offset		: 19;
 		};
@@ -428,7 +444,7 @@ public:
 	~FGCScopeGuard();
 };
 
-template <bool bParallel, bool bWithClusters> class FGCReferenceProcessor;
+template <EFastReferenceCollectorOptions Options> class FGCReferenceProcessor;
 
 /** Struct to hold the objects to serialize array and the list of weak references. This is allocated by ArrayPool */
 struct FGCArrayStruct
@@ -440,16 +456,25 @@ struct FGCArrayStruct
 /**
 * Specialized FReferenceCollector that uses FGCReferenceProcessor to mark objects as reachable.
 */
-template <bool bParallel, bool bWithClusters>
+template <EFastReferenceCollectorOptions Options>
 class FGCCollector : public FReferenceCollector
 {
-	FGCReferenceProcessor<bParallel, bWithClusters>& ReferenceProcessor;
+	FGCReferenceProcessor<Options>& ReferenceProcessor;
 	FGCArrayStruct& ObjectArrayStruct;
 	bool bAllowEliminatingReferences;
 
+	constexpr FORCEINLINE bool IsParallel() const
+	{
+		return !!(Options & EFastReferenceCollectorOptions::Parallel);
+	}
+	constexpr FORCEINLINE bool IsWithClusters() const
+	{
+		return !!(Options & EFastReferenceCollectorOptions::WithClusters);
+	}
+
 public:
 
-	FGCCollector(FGCReferenceProcessor<bParallel, bWithClusters>& InProcessor, FGCArrayStruct& InObjectArrayStruct);
+	FGCCollector(FGCReferenceProcessor<Options>& InProcessor, FGCArrayStruct& InObjectArrayStruct);
 
 	virtual void HandleObjectReference(UObject*& InObject, const UObject* InReferencingObject, const FProperty* InReferencingProperty) override;
 

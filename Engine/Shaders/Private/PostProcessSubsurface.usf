@@ -37,8 +37,9 @@ SamplerState SubsurfaceSampler2;
 
 SCREEN_PASS_TEXTURE_VIEWPORT(SubsurfaceInput0)
 SCREEN_PASS_TEXTURE_VIEWPORT(SubsurfaceInput1)
-SCREEN_PASS_TEXTURE_VIEWPORT(SubsurfaceInput2)
 SCREEN_PASS_TEXTURE_VIEWPORT(Output)
+
+RWTexture2D<uint> ProfileIdTexture;
 
 #define SUBSURFACE_PASS_ONE 0
 #define SUBSURFACE_PASS_TWO 1
@@ -502,7 +503,7 @@ void SetupIndirectCS(uint3 DT_ID : SV_DispatchThreadID,
 	{
 		SubsurfaceTypeFlag = 0;
 	}
-	GroupMemoryBarrier();
+	GroupMemoryBarrierWithGroupSync();
 
 	uint2 Pos = DT_ID.xy + Output_ViewportMin;
 	bool bHasSubsurface = false;
@@ -556,6 +557,10 @@ void SetupIndirectCS(uint3 DT_ID : SV_DispatchThreadID,
 	}
 #endif // SUBSURFACE_HALF_RES
 
+#if !SUBSURFACE_FORCE_SEPARABLE && ENABLE_PROFILE_ID_CACHE
+	uint ProfileId = GetSubsurfaceProfileId(BufferUV);
+#endif
+
 	// setup the Subsurface type
 	uint SelectedProfile = 0;
 	if (bHasSubsurface)
@@ -600,6 +605,10 @@ void SetupIndirectCS(uint3 DT_ID : SV_DispatchThreadID,
 	if (all(Pos < Output_ViewportMax))
 	{
 		SetupTexture[Pos] = OutColor;
+
+#if !SUBSURFACE_FORCE_SEPARABLE && ENABLE_PROFILE_ID_CACHE
+		ProfileIdTexture[Pos] = ProfileId;
+#endif
 	}
 
 	AddSubsurfaceComputeGroup(GI, Type, G_ID.xy);
@@ -694,6 +703,22 @@ void SubsurfaceRecombinePS(noperspective float4 UVAndScreenPos : TEXCOORD0, floa
 	// Scalability requests no Scatter, but we still need to reconstruct a color
 	LerpFactor = 0;
 #endif // SUBSURFACE_RECOMBINE_MODE
+
+	float3 DirectColor = Texture2DSample(SubsurfaceInput0_Texture, SharedSubsurfaceSampler0, BufferUV).rgb;
+
+	uint ProfileId = ExtractSubsurfaceProfileInt(ScreenSpaceData.GBuffer);
+
+	bool bIsHalfResUpsample = false;
+	if (bIsHalfResUpsample && GetSubsurfaceProfileUseBurley(ProfileId))
+	{
+		FBurleyParameter BurleyParameter = GetBurleyParameters(ScreenSpaceData.GBuffer);
+		
+		float Depth = CalcSceneDepth(BufferUV);
+
+		float3 CenterSampleWeight = CalculateCenterSampleWeight(Depth, BurleyParameter);
+
+		SSSColor = lerp(SSSColor,DirectColor,CenterSampleWeight);
+	}
 
 	// we multiply the base color later in to get more crips human skin textures (scanned data always has Subsurface included)
 	float3 StoredBaseColor = ScreenSpaceData.GBuffer.StoredBaseColor;

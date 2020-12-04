@@ -56,12 +56,14 @@ protected:
 
 	// Array of instances which are using this preset
 	TArray<TSoundEffectWeakPtr> Instances;
+	FCriticalSection InstancesMutationCriticalSection;
 	bool bInitialized;
 
 	/* Immediately executes command for each active effect instance on the active thread */
 	template <typename T>
 	void IterateEffects(TFunction<void(T&)> InForEachEffect)
 	{
+		FScopeLock ScopeLock(&InstancesMutationCriticalSection);
 		for (TSoundEffectWeakPtr& Instance : Instances)
 		{
 			TSoundEffectPtr EffectStrongPtr = Instance.Pin();
@@ -87,12 +89,13 @@ protected:
 	}
 
 public:
-	template <typename TInitData, typename TSoundEffectType>
-	static TSharedPtr<TSoundEffectType, ESPMode::ThreadSafe> CreateInstance(const TInitData& InInitData, USoundEffectPreset& InOutPreset)
+	// Creates a sound effect instance but does not initialize it.
+	template <typename TSoundEffectType>
+	static TSharedPtr<TSoundEffectType, ESPMode::ThreadSafe> CreateInstance(USoundEffectPreset& InOutPreset)
 	{
 		TSoundEffectType* NewEffect = static_cast<TSoundEffectType*>(InOutPreset.CreateNewEffect());
 		NewEffect->Preset = &InOutPreset;
-		NewEffect->Init(InInitData);
+		NewEffect->ParentPresetUniqueId = InOutPreset.GetUniqueID();
 
 		TSharedPtr<TSoundEffectType, ESPMode::ThreadSafe> NewEffectPtr(NewEffect);
 
@@ -102,39 +105,24 @@ public:
 		return NewEffectPtr;
 	}
 
-	static void UnregisterInstance(TSoundEffectPtr InEffectPtr)
+	template <typename TInitData, typename TSoundEffectType>
+	static TSharedPtr<TSoundEffectType, ESPMode::ThreadSafe> CreateInstance(const TInitData& InInitData, USoundEffectPreset& InOutPreset)
 	{
-		if (InEffectPtr.IsValid())
-		{
-			if (USoundEffectPreset* Preset = InEffectPtr->GetPreset())
-			{
-				Preset->RemoveEffectInstance(InEffectPtr);
-			}
+		TSoundEffectType* NewEffect = static_cast<TSoundEffectType*>(InOutPreset.CreateNewEffect());
+		NewEffect->Preset = &InOutPreset;
+		NewEffect->ParentPresetUniqueId = InInitData.ParentPresetUniqueId;
 
-			InEffectPtr->ClearPreset();
-		}
+		NewEffect->Setup(InInitData);
+
+		TSharedPtr<TSoundEffectType, ESPMode::ThreadSafe> NewEffectPtr(NewEffect);
+
+		TSoundEffectPtr SoundEffectPtr = StaticCastSharedPtr<FSoundEffectBase, TSoundEffectType, ESPMode::ThreadSafe>(NewEffectPtr);
+		InOutPreset.AddEffectInstance(SoundEffectPtr);
+
+		return NewEffectPtr;
 	}
 
-	static void RegisterInstance(USoundEffectPreset& InPreset, TSoundEffectPtr InEffectPtr)
-	{
-		if (!InEffectPtr.IsValid())
-		{
-			return;
-		}
+	static void UnregisterInstance(TSoundEffectPtr InEffectPtr);
 
-		if (InEffectPtr->Preset.Get() != &InPreset)
-		{
-			UnregisterInstance(InEffectPtr);
-
-			InEffectPtr->Preset = &InPreset;
-			if (InEffectPtr->Preset.IsValid())
-			{
-				InPreset.AddEffectInstance(InEffectPtr);
-			}
-		}
-
-		// Anytime notification occurs that the preset has been modified,
-		// flag for update.
-		InEffectPtr->bChanged = true;
-	}
+	static void RegisterInstance(USoundEffectPreset& InPreset, TSoundEffectPtr InEffectPtr);
 };

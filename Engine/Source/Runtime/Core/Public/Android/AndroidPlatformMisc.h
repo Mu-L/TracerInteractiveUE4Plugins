@@ -32,6 +32,7 @@ class TFunction;
 struct CORE_API FAndroidMisc : public FGenericPlatformMisc
 {
 	static void RequestExit( bool Force );
+	static bool RestartApplication();
 	static void LocalPrint(const TCHAR *Message);
 	static bool IsLocalPrintThreadSafe() { return true; }
 	static void PlatformPreInit();
@@ -166,8 +167,10 @@ public:
 	static bool FileExistsInPlatformPackage(const FString& RelativePath);
 
 	// ANDROID ONLY:
-	static void SetVersionInfo(FString AndroidVersion, FString DeviceMake, FString DeviceModel, FString DeviceBuildNumber, FString OSLanguage);
+	static void SetVersionInfo(FString AndroidVersion, int32 InTargetSDKVersion, FString DeviceMake, FString DeviceModel, FString DeviceBuildNumber, FString OSLanguage);
 	static const FString GetAndroidVersion();
+	static int32 GetAndroidMajorVersion();
+	static int32 GetTargetSDKVersion();
 	static const FString GetDeviceMake();
 	static const FString GetDeviceModel();
 	static const FString GetOSLanguage();
@@ -215,8 +218,12 @@ public:
 	typedef TFunction<void()> OnPauseCallBackType;
 	static OnPauseCallBackType GetOnPauseCallback();
 	static void SetOnPauseCallback(OnPauseCallBackType InOnPauseCallback);
-	static void TriggerCrashHandler(const TCHAR* InErrorMessage, const TCHAR* OverrideCallstack);
-	static void TriggerNonFatalCrashHandler(enum class ECrashContextType InType, const FString& Message);
+	static void TriggerCrashHandler(enum class ECrashContextType InType, const TCHAR* InErrorMessage, const TCHAR* OverrideCallstack = nullptr);
+
+	// To help track down issues with failing crash handler.
+	static FString GetFatalSignalMessage(int Signal, siginfo* Info);
+	static void OverrideFatalSignalHandler(void (*FatalSignalHandlerOverrideFunc)(int Signal, struct siginfo* Info, void* Context));
+	// To help track down issues with failing crash handler.
 
 	static bool IsInSignalHandler();
 
@@ -245,6 +252,8 @@ public:
 	
 	// run time compatibility information
 	static FString AndroidVersion; // version of android we are running eg "4.0.4"
+	static int32 AndroidMajorVersion; // integer major version of Android we are running, eg 10
+	static int32 TargetSDKVersion; // Target SDK version, eg 29.
 	static FString DeviceMake; // make of the device we are running on eg. "samsung"
 	static FString DeviceModel; // model of the device we are running on eg "SAMSUNG-SGH-I437"
 	static FString DeviceBuildNumber; // platform image build number of device "R16NW.G960NKSU1ARD6"
@@ -268,18 +277,31 @@ public:
 	};
 
 	static uint32 GetCoreFrequency(int32 CoreIndex, ECoreFrequencyProperty CoreFrequencyProperty);
+
+	// Returns CPU temperature read from one of the configurable CPU sensors via android.CPUThermalSensorFilePath CVar or AndroidEngine.ini, [ThermalSensors] section.
+	// Doesn't guarantee to work on all devices. Some devices require root access rights to read sensors information, in that case 0.0 will be returned
+	static float GetCPUTemperature();
     
     static void SetDeviceOrientation(EDeviceScreenOrientation NewDeviceOrentation) { DeviceOrientation = NewDeviceOrentation; }
 
 	// Window access is locked by the game thread before preinit and unlocked here after RHIInit (PlatformCreateDynamicRHI). 
 	static void UnlockAndroidWindow();
 	
+	static TArray<int32> GetSupportedNativeDisplayRefreshRates();
+
+	static bool SetNativeDisplayRefreshRate(int32 RefreshRate);
+
+	static int32 GetNativeDisplayRefreshRate();
+
 	/**
 	 * Returns whether or not a 16 bit index buffer should be promoted to 32 bit on load, needed for some Android devices
 	 */
 	static bool Expand16BitIndicesTo32BitOnLoad();
+
+	static bool SupportsBackbufferSampling();
 private:
-    static EDeviceScreenOrientation DeviceOrientation;
+	static const ANSICHAR* CodeToString(int Signal, int si_code);
+	static EDeviceScreenOrientation DeviceOrientation;
 };
 
 #if !PLATFORM_LUMIN

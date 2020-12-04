@@ -12,6 +12,7 @@
 #include "UObject/WeakObjectPtr.h"
 #include "UObject/WeakObjectPtrTemplates.h"
 #include "UObject/UObjectArray.h"
+#include "UObject/FastReferenceCollectorOptions.h"
 
 class UStruct;
 class UField;
@@ -20,7 +21,7 @@ class FLinkerLoad;
 struct COREUOBJECT_API FFieldPath
 {
 	// GC needs access to GetResolvedOwnerItemInternal and ClearCachedFieldInternal
-	template <bool bParallel, typename ReferenceProcessorType, typename CollectorType, typename ArrayPoolType, bool bAutoGenerateTokenStream, bool bIgnoreNoopTokens>
+	template <typename ReferenceProcessorType, typename CollectorType, typename ArrayPoolType, EFastReferenceCollectorOptions Options>
 	friend class TFastReferenceCollector;
 
 	// TWeakFieldPtr needs access to ClearCachedField
@@ -257,7 +258,7 @@ public:
 	FORCEINLINE friend uint32 GetTypeHash(const FFieldPath& InPropertyPath)
 	{
 		uint32 HashValue = 0;
-		for (const FName PathSegment : InPropertyPath.Path)
+		for (const FName& PathSegment : InPropertyPath.Path)
 		{
 			HashValue = HashCombine(HashValue, GetTypeHash(PathSegment));
 		}

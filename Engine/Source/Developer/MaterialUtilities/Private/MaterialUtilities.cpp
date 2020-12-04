@@ -138,11 +138,11 @@ UMaterialInterface* FMaterialUtilities::CreateProxyMaterialAndTextures(UPackage*
 
 			if (Property == MP_BaseColor || Property == MP_EmissiveColor)
 			{
-				Material->SetVectorParameterValueEditorOnly(ParameterInfo, ColorData[0].ReinterpretAsLinear());
+				Material->SetVectorParameterValueEditorOnly(ParameterInfo, FLinearColor::FromSRGBColor(ColorData[0]));
 			}
 			else
 			{
-				Material->SetScalarParameterValueEditorOnly(ParameterInfo, ColorData[0].ReinterpretAsLinear().R);
+				Material->SetScalarParameterValueEditorOnly(ParameterInfo, FLinearColor::FromSRGBColor(ColorData[0]).R);
 			}
 		}
 	}
@@ -180,7 +180,7 @@ UMaterialInterface* FMaterialUtilities::CreateProxyMaterialAndTextures(UPackage*
 
 UMaterialInterface* FMaterialUtilities::CreateProxyMaterialAndTextures(const FString& PackageName, const FString& AssetName, const FBakeOutput& BakeOutput, const FMeshData& MeshData, const FMaterialData& MaterialData, UMaterialOptions* Options)
 {
-	UPackage* MaterialPackage = CreatePackage(nullptr, *PackageName);
+	UPackage* MaterialPackage = CreatePackage( *PackageName);
 	check(MaterialPackage);
 	MaterialPackage->FullyLoad();
 	MaterialPackage->Modify();
@@ -300,6 +300,16 @@ struct FExportMaterialCompiler : public FProxyMaterialCompiler
 		return Compiler->VertexColor(); 
 	}
 
+	virtual int32 PreSkinVertexOffset() override
+	{
+		return Compiler->PreSkinVertexOffset();
+	}
+
+	virtual int32 PostSkinVertexOffset() override
+	{
+		return Compiler->PostSkinVertexOffset();
+	}
+
 	virtual int32 PreSkinnedPosition() override
 	{
 		return Compiler->PreSkinnedPosition();
@@ -400,7 +410,7 @@ public:
 	FExportMaterialProxy()
 		: FMaterial()
 	{
-		SetQualityLevelProperties(EMaterialQualityLevel::High, false, GMaxRHIFeatureLevel);
+		SetQualityLevelProperties(GMaxRHIFeatureLevel);
 	}
 
 	FExportMaterialProxy(UMaterialInterface* InMaterialInterface, EMaterialProperty InPropertyToCompile)
@@ -408,7 +418,7 @@ public:
 		, MaterialInterface(InMaterialInterface)
 		, PropertyToCompile(InPropertyToCompile)
 	{
-		SetQualityLevelProperties(EMaterialQualityLevel::High, false, GMaxRHIFeatureLevel);
+		SetQualityLevelProperties(GMaxRHIFeatureLevel);
 		Material = InMaterialInterface->GetMaterial();
 		ReferencedTextures = InMaterialInterface->GetReferencedTextures();
 		FPlatformMisc::CreateGuid(Id);
@@ -1050,7 +1060,7 @@ UMaterial* FMaterialUtilities::CreateMaterial(const FFlattenMaterial& InFlattenM
 	UPackage* MaterialOuter = InOuter;
 	if (MaterialOuter == NULL)
 	{
-		MaterialOuter = CreatePackage(NULL, *(AssetBasePath / MaterialAssetName));
+		MaterialOuter = CreatePackage( *(AssetBasePath / MaterialAssetName));
 		MaterialOuter->FullyLoad();
 		MaterialOuter->Modify();
 	}
@@ -1456,7 +1466,7 @@ UMaterialInstanceConstant* FMaterialUtilities::CreateInstancedMaterial(UMaterial
 	UPackage* MaterialOuter = InOuter;
 	if (MaterialOuter == NULL)
 	{		
-		MaterialOuter = CreatePackage(NULL, *(AssetBasePath / MaterialAssetName));
+		MaterialOuter = CreatePackage( *(AssetBasePath / MaterialAssetName));
 		MaterialOuter->FullyLoad();
 		MaterialOuter->Modify();
 	}
@@ -1490,7 +1500,7 @@ UTexture2D* FMaterialUtilities::CreateTexture(UPackage* Outer, const FString& As
 
 	if (Outer == nullptr)
 	{
-		Outer = CreatePackage(NULL, *AssetLongName);
+		Outer = CreatePackage( *AssetLongName);
 		Outer->FullyLoad();
 		Outer->Modify();
 	}

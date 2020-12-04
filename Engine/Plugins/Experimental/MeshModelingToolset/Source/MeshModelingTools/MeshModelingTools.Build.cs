@@ -42,7 +42,6 @@ public class MeshModelingTools : ModuleRules
 				"MeshConversion",
 				"MeshDescription",
                 "StaticMeshDescription",
-                "MeshSolverUtilities",
 				"ModelingComponents",
 				"ModelingOperators",
 
@@ -73,9 +72,10 @@ public class MeshModelingTools : ModuleRules
 
 				"CoreUObject",
 				"Engine",
+				"RenderCore",
 				"ModelingOperators",
 				"InputCore",
-
+				"PhysicsCore"
 				// ... add private dependencies that you statically link with here ...
 			}
 			);

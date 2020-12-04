@@ -144,6 +144,7 @@ struct FRecastDebugGeometry
 		FColor	Color;
 	};
 
+#if WITH_NAVMESH_CLUSTER_LINKS
 	struct FCluster
 	{
 		TArray<int32> MeshIndices;
@@ -154,7 +155,9 @@ struct FRecastDebugGeometry
 		FVector FromCluster;
 		FVector ToCluster;
 	};
+#endif // WITH_NAVMESH_CLUSTER_LINKS
 
+#if WITH_NAVMESH_SEGMENT_LINKS
 	struct FOffMeshSegment
 	{
 		FVector LeftStart, LeftEnd;
@@ -163,6 +166,7 @@ struct FRecastDebugGeometry
 		uint8	Direction;
 		uint8	ValidEnds;
 	};
+#endif // WITH_NAVMESH_SEGMENT_LINKS
 
 	TArray<FVector> MeshVerts;
 	TArray<int32> AreaIndices[RECAST_MAX_AREAS];
@@ -172,10 +176,16 @@ struct FRecastDebugGeometry
 	TArray<FVector> NavMeshEdges;
 	TArray<FOffMeshLink> OffMeshLinks;
 	TArray<FOffMeshLink> ForbiddenLinks;
+
+#if WITH_NAVMESH_CLUSTER_LINKS
 	TArray<FCluster> Clusters;
 	TArray<FClusterLink> ClusterLinks;
+#endif // WITH_NAVMESH_CLUSTER_LINKS
+
+#if WITH_NAVMESH_SEGMENT_LINKS
 	TArray<FOffMeshSegment> OffMeshSegments;
 	TArray<int32> OffMeshSegmentAreas[RECAST_MAX_AREAS];
+#endif // WITH_NAVMESH_SEGMENT_LINKS
 
 #if RECAST_INTERNAL_DEBUG_DATA
 	TArray<FIntPoint> TilesToDisplayInternalData;
@@ -300,6 +310,11 @@ struct NAVIGATIONSYSTEM_API FRecastNavMeshGenerationProperties
 	UPROPERTY(EditAnywhere, Category = Generation, AdvancedDisplay)
 	uint32 bMarkLowHeightAreas : 1;
 
+	/** Expand the top of the area nav modifier's bounds by one cell height when applying to the navmesh. 
+	    If unset, navmesh on top of surfaces might not be marked by marking bounds flush with top surfaces (since navmesh is generated slightly above collision, depending on cell height). */
+	UPROPERTY(EditAnywhere, Category = Generation, AdvancedDisplay)
+	uint32 bUseExtraTopCellWhenMarkingAreas : 1;
+
 	/** if set, only single low height span will be allowed under valid one */
 	UPROPERTY(EditAnywhere, Category = Generation, AdvancedDisplay)
 	uint32 bFilterLowSpanSequences : 1;
@@ -394,6 +409,10 @@ class NAVIGATIONSYSTEM_API ARecastNavMesh : public ANavigationData
 
 	virtual void Serialize( FArchive& Ar ) override;
 
+#if WITH_EDITOR
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
+#endif
+
 	/** should we draw edges of every navmesh's triangle */
 	UPROPERTY(EditAnywhere, Category=Display)
 	uint32 bDrawTriangleEdges:1;
@@ -436,6 +455,7 @@ class NAVIGATIONSYSTEM_API ARecastNavMesh : public ANavigationData
 	UPROPERTY(EditAnywhere, Category=Display)
 	uint32 bDrawFailedNavLinks:1;
 	
+	/** should we draw navmesh's clusters and cluster links. (Requires WITH_NAVMESH_CLUSTER_LINKS=1) */
 	UPROPERTY(EditAnywhere, Category=Display)
 	uint32 bDrawClusters:1;
 
@@ -449,11 +469,9 @@ class NAVIGATIONSYSTEM_API ARecastNavMesh : public ANavigationData
 	UPROPERTY(EditAnywhere, Category = Display)
 	uint32 bDrawMarkedForbiddenPolys : 1;
 
+	/** if true, show currently rebuilding tiles differently when visualizing */
 	UPROPERTY(config)
 	uint32 bDistinctlyDrawTilesBeingBuilt:1;
-
-	UPROPERTY(EditAnywhere, Category = Display)
-	uint32 bDrawNavMesh : 1;
 
 	/** vertical offset added to navmesh's debug representation for better readability */
 	UPROPERTY(EditAnywhere, Category=Display, config)
@@ -491,10 +509,6 @@ class NAVIGATIONSYSTEM_API ARecastNavMesh : public ANavigationData
 	UPROPERTY(EditAnywhere, Category = Generation, config, meta = (ClampMin = "0.0"))
 	float AgentHeight;
 
-	UE_DEPRECATED(4.24, "ARecastNavMesh.AgentMaxHeight has been deprecated as it has no use. Use AgentHeight instead.")
-	UPROPERTY(VisibleAnywhere, Category=Generation, config, meta=(ClampMin = "0.0", DisplayName="DEPRECATED_AgentMaxHeight"))
-	float AgentMaxHeight;
-
 	/* The maximum slope (angle) that the agent can move on. */ 
 	UPROPERTY(EditAnywhere, Category=Generation, config, meta=(ClampMin = "0.0", ClampMax = "89.0", UIMin = "0.0", UIMax = "89.0" ))
 	float AgentMaxSlope;
@@ -515,6 +529,7 @@ class NAVIGATIONSYSTEM_API ARecastNavMesh : public ANavigationData
 	UPROPERTY(EditAnywhere, Category = Generation, config, meta = (ClampMin = "0.0"))
 	float MaxSimplificationError;
 
+	/** Sets the limit for number of asynchronous tile generators running at one time, also used for some synchronous tasks */
 	UPROPERTY(EditAnywhere, Category = Generation, config, meta = (ClampMin = "0", UIMin = "0"), AdvancedDisplay)
 	int32 MaxSimultaneousTileGenerationJobsCount;
 
@@ -584,6 +599,11 @@ class NAVIGATIONSYSTEM_API ARecastNavMesh : public ANavigationData
 	UPROPERTY(EditAnywhere, Category = Generation, config, AdvancedDisplay)
 	uint32 bMarkLowHeightAreas : 1;
 
+	/** Expand the top of the area nav modifier's bounds by one cell height when applying to the navmesh.
+		If unset, navmesh on top of surfaces might not be marked by marking bounds flush with top surfaces (since navmesh is generated slightly above collision, depending on cell height). */
+	UPROPERTY(EditAnywhere, Category = Generation, config, AdvancedDisplay)
+	uint32 bUseExtraTopCellWhenMarkingAreas : 1;
+
 	/** if set, only single low height span will be allowed under valid one */
 	UPROPERTY(EditAnywhere, Category = Generation, config, AdvancedDisplay)
 	uint32 bFilterLowSpanSequences : 1;
@@ -592,6 +612,7 @@ class NAVIGATIONSYSTEM_API ARecastNavMesh : public ANavigationData
 	UPROPERTY(EditAnywhere, Category = Generation, config, AdvancedDisplay)
 	uint32 bFilterLowSpanFromTileCache : 1;
 
+	/** if set, navmesh data gathering will never happen on the game thread and will only be done on background threads */
 	UPROPERTY(EditAnywhere, Category = Generation, config, AdvancedDisplay)
 	uint32 bDoFullyAsyncNavDataGathering : 1;
 	
@@ -715,6 +736,7 @@ public:
 	virtual bool GetRandomReachablePointInRadius(const FVector& Origin, float Radius, FNavLocation& OutResult, FSharedConstNavQueryFilter Filter = NULL, const UObject* Querier = NULL) const override;
 	virtual bool GetRandomPointInNavigableRadius(const FVector& Origin, float Radius, FNavLocation& OutResult, FSharedConstNavQueryFilter Filter = NULL, const UObject* Querier = NULL) const override;
 
+	virtual bool FindMoveAlongSurface(const FNavLocation& StartLocation, const FVector& TargetPosition, FNavLocation& OutLocation, FSharedConstNavQueryFilter Filter = NULL, const UObject* Querier = NULL) const override;
 	virtual bool ProjectPoint(const FVector& Point, FNavLocation& OutLocation, const FVector& Extent, FSharedConstNavQueryFilter Filter = NULL, const UObject* Querier = NULL) const override;
 	virtual bool IsNodeRefValid(NavNodeRef NodeRef) const override;
 
@@ -862,7 +884,8 @@ public:
 	/** Returns query extent including adjustments for voxelization error compensation */
 	FVector GetModifiedQueryExtent(const FVector& QueryExtent) const
 	{
-		return FVector(QueryExtent.X, QueryExtent.Y, QueryExtent.Z + FMath::Max(0.0f, VerticalDeviationFromGroundCompensation));
+		// Using HALF_WORLD_MAX instead of BIG_NUMBER, else using the extent for a box will result in NaN.
+		return FVector(QueryExtent.X, QueryExtent.Y, QueryExtent.Z >= HALF_WORLD_MAX ? HALF_WORLD_MAX : (QueryExtent.Z + FMath::Max(0.0f, VerticalDeviationFromGroundCompensation)));
 	}
 
 	//----------------------------------------------------------------------//
@@ -874,8 +897,10 @@ public:
 	/** update area class and poly flags for all offmesh links with given UserId */
 	void UpdateNavigationLinkArea(int32 UserId, TSubclassOf<UNavArea> AreaClass) const;
 
+#if WITH_NAVMESH_SEGMENT_LINKS
 	/** update area class and poly flags for all offmesh segment links with given UserId */
 	void UpdateSegmentLinkArea(int32 UserId, TSubclassOf<UNavArea> AreaClass) const;
+#endif // WITH_NAVMESH_SEGMENT_LINKS
 
 	//----------------------------------------------------------------------//
 	// Batch processing (important with async rebuilding)

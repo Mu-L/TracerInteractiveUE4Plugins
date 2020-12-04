@@ -14,6 +14,9 @@
 #include "Intersection/IntersectionUtil.h"
 #include "PreviewMesh.h"
 
+#include "BaseBehaviors/SingleClickBehavior.h"
+#include "Selection/SelectClickedAction.h"
+
 #include "BaseGizmos/GizmoComponents.h"
 #include "BaseGizmos/TransformGizmo.h"
 #include "BaseGizmos/IntervalGizmo.h"
@@ -117,7 +120,7 @@ void UMeshSpaceDeformerTool::SetAssetAPI(IToolsContextAssetAPI* AssetAPIIn)
 
 bool UMeshSpaceDeformerTool::CanAccept() const 
 {
-	return (Preview == nullptr || Preview->HaveValidResult());
+	return Super::CanAccept() && (Preview == nullptr || Preview->HaveValidResult());
 }
 
 void UMeshSpaceDeformerTool::ComputeAABB(const FDynamicMesh3& MeshIn, const FTransform& XFormIn, FVector& BBoxMin, FVector& BBoxMax) const 
@@ -171,6 +174,21 @@ void UMeshSpaceDeformerTool::Setup()
 	GizmoCenter = 0.5 * (AABBMin + AABBMax);
 
 
+	// add click to set plane behavior
+	SetPointInWorldConnector = MakePimpl<FSelectClickedAction>();
+	SetPointInWorldConnector->World = this->TargetWorld;
+	SetPointInWorldConnector->InvisibleComponentsToHitTest.Add(ComponentTarget->GetOwnerComponent());
+	SetPointInWorldConnector->OnClickedPositionFunc = [this](const FHitResult& Hit)
+	{
+		SetGizmoPlaneFromWorldPos(Hit.ImpactPoint, -Hit.ImpactNormal, false);
+	};
+
+	USingleClickInputBehavior* ClickToSetPlaneBehavior = NewObject<USingleClickInputBehavior>();
+	ClickToSetPlaneBehavior->ModifierCheckFunc = FInputDeviceState::IsCtrlKeyDown;
+	ClickToSetPlaneBehavior->Initialize(SetPointInWorldConnector.Get());
+	AddInputBehavior(ClickToSetPlaneBehavior);
+
+
 	// Create a new TransformGizmo and associated TransformProxy. The TransformProxy will not be the
 	// parent of any Components in this case, we just use it's transform and change delegate.
 	TransformProxy = NewObject<UTransformProxy>(this);
@@ -185,7 +203,7 @@ void UMeshSpaceDeformerTool::Setup()
 	// wire these to the input 
 
 	// The initial range for the intervals.
-	const float InitialVerticalIntervalSize = AABBHalfExtents.Z;
+	const float InitialVerticalIntervalSize = AABBHalfExtents.Length();
 
 	// create sources for the interval parameters
 
@@ -276,6 +294,10 @@ void UMeshSpaceDeformerTool::Setup()
 		Preview->InvalidateResult();
 	}
 
+
+	GetToolManager()->DisplayMessage(
+		LOCTEXT("MeshSpaceDeformerToolDescription", "Deform the vertices of the selected Mesh using various spatial deformations. Use the in-viewport Gizmo to control the extents/strength of the deformation."),
+		EToolMessageLevel::UserNotification);
 }
 
 void UMeshSpaceDeformerTool::Shutdown(EToolShutdownType ShutdownType)
@@ -466,7 +488,7 @@ void UMeshSpaceDeformerTool::UpdateOpParameters(FMeshSpaceDeformerOp& MeshSpaceD
 	*/
 
 	// Set half axis length to be 1/2 the major axis of the bbox.
-	double LengthScale = FMath::Max( AABBHalfExtents.MaxAbs(), 1.e-3);
+	double LengthScale = FMath::Max( AABBHalfExtents.MaxAbsElement(), 1.e-3);
 	MeshSpaceDeformerOp.AxesHalfLength = LengthScale;
 
 	// set the bound range
@@ -486,15 +508,45 @@ void UMeshSpaceDeformerTool::UpdateOpParameters(FMeshSpaceDeformerOp& MeshSpaceD
 	MeshSpaceDeformerOp.CopySource(*OriginalDynamicMesh, ComponentTarget->GetWorldTransform());
 }
 
-void UMeshSpaceDeformerTool::Tick(float DeltaTime)
+void UMeshSpaceDeformerTool::OnTick(float DeltaTime)
 {
-	UMeshSurfacePointTool::Tick(DeltaTime);
+	if (TransformGizmo != nullptr)
+	{
+		TransformGizmo->bSnapToWorldGrid = this->bSnapToWorldGrid;
+	}
 
 	if (Preview != nullptr)
 	{
 		Preview->Tick(DeltaTime);
 	}
 }
+
+
+
+void UMeshSpaceDeformerTool::SetGizmoPlaneFromWorldPos(const FVector& Position, const FVector& Normal, bool bIsInitializing)
+{
+	GizmoCenter = Position;
+
+	FFrame3f GizmoPlane(Position, Normal);
+	GizmoOrientation = (FQuat)GizmoPlane.Rotation;
+	GizmoFrame = FFrame3d(FVector3d(GizmoCenter), FQuaterniond(GizmoOrientation));
+
+	TransformGizmo->SetActiveTarget(TransformProxy, GetToolManager());
+	if (bIsInitializing)
+	{
+		TransformGizmo->ReinitializeGizmoTransform(GizmoPlane.ToFTransform());
+	}
+	else
+	{
+		TransformGizmo->SetNewGizmoTransform(GizmoPlane.ToFTransform());
+	}
+
+	if (Preview != nullptr)
+	{
+		Preview->InvalidateResult();
+	}
+}
+
 
 #undef LOCTEXT_NAMESPACE
 

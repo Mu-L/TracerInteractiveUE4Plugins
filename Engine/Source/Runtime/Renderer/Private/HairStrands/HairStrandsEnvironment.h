@@ -10,19 +10,26 @@
 #include "RendererInterface.h"
 #include "RenderGraphResources.h"
 
+class FScene;
+class FViewInfo;
+struct FHairStrandsRenderingData;
+
 void RenderHairStrandsAmbientOcclusion(
-	FRHICommandListImmediate& RHICmdList,
-	const TArray<FViewInfo>& Views,
-	const struct FHairStrandsDatas* HairDatas,
-	const TRefCountPtr<IPooledRenderTarget>& InAOTexture);
+	FRDGBuilder& GraphBuilder,
+	TArrayView<const FViewInfo> Views,
+	const FHairStrandsRenderingData* HairDatas,
+	const FRDGTextureRef& InAOTexture);
 
 void RenderHairStrandsEnvironmentLighting(
 	FRDGBuilder& GraphBuilder,
+	const FScene* Scene,
 	const uint32 ViewIndex,
-	const TArray<FViewInfo>& Views,
-	struct FHairStrandsDatas* HairDatas);
+	TArrayView<const FViewInfo> Views,
+	FHairStrandsRenderingData* HairDatas);
 
 void RenderHairStrandsSceneColorScattering(
-	FRHICommandListImmediate& RHICmdList,
-	const TArray<FViewInfo>& Views,
-	struct FHairStrandsDatas* HairDatas);
+	FRDGBuilder& GraphBuilder,
+	FRDGTextureRef SceneColorTexture,
+	const FScene* Scene,
+	TArrayView<const FViewInfo> Views,
+	FHairStrandsRenderingData* HairDatas);

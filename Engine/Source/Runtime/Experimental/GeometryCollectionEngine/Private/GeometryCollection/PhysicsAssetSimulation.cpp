@@ -14,7 +14,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/SkeletalMeshSocket.h"
-#include "PhysicalMaterials/Experimental/ChaosPhysicalMaterial.h"
+#include "Chaos/ChaosPhysicalMaterial.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "PhysicsProxy/SkeletalMeshPhysicsProxy.h"
@@ -279,6 +279,7 @@ void FPhysicsAssetSimulationUtil::BuildParams(const UObject* Caller, const AActo
 					Bounds += Points[i];
 				}
 
+#if PHYSICS_INTERFACE_PHYSX
 				if (physx::PxConvexMesh *ConvexMesh = Elem.GetConvexMesh())
 				{
 					ConvexMesh->acquireReference();
@@ -364,6 +365,10 @@ void FPhysicsAssetSimulationUtil::BuildParams(const UObject* Caller, const AActo
 								"ADDED (LEVELSET) SPHERE"), Caller, &OwningActor->GetName()[0]);
 					}
 				}
+#elif WITH_CHAOS
+				// TODO: Use Chaos convex.
+				CHAOS_ENSURE(false);
+#endif
 			}
 		}
 		Params.BoneHierarchy.Add(MoveTemp(AnalyticShapeGroup));

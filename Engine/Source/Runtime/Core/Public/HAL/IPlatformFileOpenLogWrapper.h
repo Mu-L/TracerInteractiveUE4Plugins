@@ -12,6 +12,7 @@
 #include "GenericPlatform/GenericPlatformFile.h"
 #include "Misc/Paths.h"
 #include "Async/AsyncFileHandle.h"
+#include "Misc/DataDrivenPlatformInfoRegistry.h"
 
 class IAsyncReadFileHandle;
 class FPlatformFileOpenLog;
@@ -72,7 +73,7 @@ public:
 
 	virtual bool ShouldBeUsed(IPlatformFile* Inner, const TCHAR* CmdLine) const override
 	{
-		bool bResult = FParse::Param(CmdLine, TEXT("FileOpenLog"));
+		bool bResult = FParse::Param(CmdLine, TEXT("FileOpenLog")) || FParse::Param(CmdLine, TEXT("FilePackageOpenLog"));
 		return bResult;
 	}
 
@@ -93,7 +94,14 @@ public:
 
 			for (int32 Platform = 0;Platform < PlatformNames.Num(); ++Platform)
 			{
-				LogFileDirectory = FPaths::Combine( FPlatformMisc::ProjectDir(), TEXT( "Build" ), *PlatformNames[Platform], TEXT("FileOpenOrder"));
+				if (FDataDrivenPlatformInfoRegistry::GetPlatformInfo(PlatformNames[Platform]).bIsConfidential)
+				{
+					LogFileDirectory = FPaths::Combine(FPlatformMisc::ProjectDir(), TEXT("Platforms"), *PlatformNames[Platform], TEXT("Build"), TEXT("FileOpenOrder"));
+				}
+				else
+				{
+					LogFileDirectory = FPaths::Combine( FPlatformMisc::ProjectDir(), TEXT( "Build" ), *PlatformNames[Platform], TEXT("FileOpenOrder"));
+				}
 #if WITH_EDITOR
 				LogFilePath = FPaths::Combine( *LogFileDirectory, TEXT("EditorOpenOrder.log"));
 #else 
@@ -109,7 +117,14 @@ public:
 		}
 		else
 		{
-			LogFileDirectory = FPaths::Combine( FPlatformMisc::ProjectDir(), TEXT( "Build" ), StringCast<TCHAR>(FPlatformProperties::PlatformName()).Get(), TEXT("FileOpenOrder"));
+			if (FDataDrivenPlatformInfoRegistry::GetPlatformInfo(FPlatformProperties::PlatformName()).bIsConfidential)
+			{
+				LogFileDirectory = FPaths::Combine(FPlatformMisc::ProjectDir(), TEXT("Platforms"), StringCast<TCHAR>(FPlatformProperties::PlatformName()).Get(), TEXT("Build"), TEXT("FileOpenOrder"));
+			}
+			else
+			{
+				LogFileDirectory = FPaths::Combine(FPlatformMisc::ProjectDir(), TEXT("Build"), StringCast<TCHAR>(FPlatformProperties::PlatformName()).Get(), TEXT("FileOpenOrder"));
+			}
 #if WITH_EDITOR
 			LogFilePath = FPaths::Combine( *LogFileDirectory, TEXT("EditorOpenOrder.log"));
 #else 
@@ -277,15 +292,20 @@ public:
 		}
 		CriticalSection.Unlock();
 	}
-};
 
-IAsyncReadRequest* FLoggingAsyncReadFileHandle::ReadRequest(int64 Offset, int64 BytesToRead, EAsyncIOPriorityAndFlags PriorityAndFlags, FAsyncFileCallBack* CompleteCallback, uint8* UserSuppliedMemory)
-{
-	if ( ( PriorityAndFlags & AIOP_FLAG_PRECACHE ) == 0 )
+	void AddPackageToOpenLog(const TCHAR* Filename)
 	{
-		Owner->AddToOpenLog(*Filename);
+		CriticalSection.Lock();
+		if (FilenameAccessMap.Find(Filename) == nullptr)
+		{
+			FilenameAccessMap.Emplace(Filename, ++OpenOrder);
+			FString Text = FString::Printf(TEXT("\"%s\" %llu\n"), Filename, OpenOrder);
+			for (auto File = LogOutput.CreateIterator(); File; ++File)
+			{
+				(*File)->Write((uint8*)StringCast<ANSICHAR>(*Text).Get(), Text.Len());
+			}
+		}
+		CriticalSection.Unlock();
 	}
-	return ActualRequest->ReadRequest(Offset, BytesToRead, PriorityAndFlags, CompleteCallback, UserSuppliedMemory);
-}
-
+};
 #endif // !UE_BUILD_SHIPPING

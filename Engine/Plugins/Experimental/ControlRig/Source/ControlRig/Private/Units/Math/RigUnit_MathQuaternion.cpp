@@ -44,6 +44,15 @@ FRigUnit_MathQuaternionToAxisAndAngle_Execute()
 	Value.ToAxisAndAngle(Axis, Angle);
 }
 
+FRigUnit_MathQuaternionScale_Execute()
+{
+    DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
+	FVector Axis = FVector::ZeroVector;
+	float Angle = 0.f;
+	Value.ToAxisAndAngle(Axis, Angle);
+	Value = FQuat(Axis, Angle * Scale);
+}
+
 FRigUnit_MathQuaternionToEuler_Execute()
 {
     DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()
@@ -146,4 +155,8 @@ FRigUnit_MathQuaternionSwingTwist_Execute()
 
 	FVector NormalizedAxis = TwistAxis.GetSafeNormal();
 	Input.ToSwingTwist(NormalizedAxis, Swing, Twist);
+}
+
+FRigUnit_MathQuaternionRotationOrder_Execute()
+{
 }

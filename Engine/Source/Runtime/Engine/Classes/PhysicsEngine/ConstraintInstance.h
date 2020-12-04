@@ -8,7 +8,6 @@
 #include "PhysicsEngine/ConstraintTypes.h"
 #include "PhysicsEngine/ConstraintDrives.h"
 #include "Physics/PhysicsInterfaceCore.h"
-#include "PhysxUserData.h"
 #include "ConstraintInstance.generated.h"
 
 class FMaterialRenderProxy;
@@ -27,13 +26,21 @@ struct ENGINE_API FConstraintProfileProperties
 {
 	GENERATED_USTRUCT_BODY()
 
-	/** Linear tolerance value in world units. If the distance error exceeds this tolerence limit, the body will be projected. */
+	/** [PhysX only] Linear tolerance value in world units. If the distance error exceeds this tolerence limit, the body will be projected. */
 	UPROPERTY(EditAnywhere, Category = Projection, meta = (editcondition = "bEnableProjection", ClampMin = "0.0"))
 	float ProjectionLinearTolerance;
 
-	/** Angular tolerance value in world units. If the distance error exceeds this tolerence limit, the body will be projected. */
+	/** [PhysX only] Angular tolerance value in world units. If the distance error exceeds this tolerence limit, the body will be projected. */
 	UPROPERTY(EditAnywhere, Category = Projection, meta = (editcondition = "bEnableProjection", ClampMin = "0.0"))
 	float ProjectionAngularTolerance;
+
+	/** [Chaos Only] How much linear projection to apply [0-1]. Projection fixes any post-solve position error in the constraint. */
+	UPROPERTY(EditAnywhere, Category = Projection, meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float ProjectionLinearAlpha;
+
+	/** [Chaos Only] How much angular projection to apply [0-1]. Projection fixes any post-solve angle error in the constraint. */
+	UPROPERTY(EditAnywhere, Category = Projection, meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float ProjectionAngularAlpha;
 
 	/** Force needed to break the distance constraint. */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = Linear, meta = (editcondition = "bLinearBreakable", ClampMin = "0.0"))
@@ -67,11 +74,28 @@ struct ENGINE_API FConstraintProfileProperties
 	uint8 bParentDominates : 1;
 
 	/**
-	* If distance error between bodies exceeds 0.1 units, or rotation error exceeds 10 degrees, body will be projected to fix this.
+	* [PhysX] If distance error between bodies exceeds 0.1 units, or rotation error exceeds 10 degrees, body will be projected to fix this.
 	* For example a chain spinning too fast will have its elements appear detached due to velocity, this will project all bodies so they still appear attached to each other.
+	*
+	* [Chaos] Chaos applies a post-solve position and angular fixup where the parent body in the constraint is treated as having infinite mass and the child body is 
+	* translated and rotated to resolve any remaining errors. This can be used to make constraint chains significantly stiffer at lower iteration counts. Increasing
+	* iterations would have the same effect, but be much more expensive. Projection only works well if the chain is not interacting with other objects (e.g.,
+	* through collisions) because the projection of the bodies in the chain will cause other constraints to be violated. Likewise, if a body is influenced by multiple
+	* constraints, then enabling projection on more than one constraint may lead to unexpected results - the "last" constraint would win but the order in which constraints
+	* are solved cannot be directly controlled.
+	*
+	* Note: projection will not be applied to constraints with soft limits.
 	*/
 	UPROPERTY(EditAnywhere, Category = Projection)
 	uint8 bEnableProjection : 1;
+
+	/**
+	 * [Chaos Only] Apply projection to constraints with soft limits. This can be used to stiffen up soft joints at low iteration counts, but the projection will
+	 * override a lot of the spring-damper behaviour of the soft limits. E.g., if you have soft projection enabled and ProjectionAngularAlpha = 1.0,
+	 * the joint will act as if it is a hard limit.
+	 */
+	UPROPERTY(EditAnywhere, Category = Projection)
+	uint8 bEnableSoftProjection : 1;
 
 	/** Whether it is possible to break the joint with angular force. */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = Angular)
@@ -97,12 +121,15 @@ struct ENGINE_API FConstraintProfileProperties
 #endif
 };
 
-
-/** Container for a physics representation of an object. */
 USTRUCT()
-struct ENGINE_API FConstraintInstance
+struct ENGINE_API FConstraintInstanceBase
 {
 	GENERATED_USTRUCT_BODY()
+
+	/** Constructor **/
+	FConstraintInstanceBase();
+	void Reset();
+
 
 	/** Indicates position of this constraint within the array in SkeletalMeshComponent. */
 	int32 ConstraintIndex;
@@ -110,7 +137,18 @@ struct ENGINE_API FConstraintInstance
 	// Internal physics constraint representation
 	FPhysicsConstraintHandle ConstraintHandle;
 
-	FPhysScene*	PhysScene;
+	// Scene thats using the constraint
+	FPhysScene* PhysScene;
+
+	FPhysScene* GetPhysicsScene() { return PhysScene; }
+	const FPhysScene* GetPhysicsScene() const { return PhysScene; }
+};
+
+/** Container for a physics representation of an object. */
+USTRUCT()
+struct ENGINE_API FConstraintInstance : public FConstraintInstanceBase
+{
+	GENERATED_USTRUCT_BODY()
 
 	/** Name of bone that this joint is associated with. */
 	UPROPERTY(VisibleAnywhere, Category=Constraint)
@@ -182,7 +220,7 @@ public:
 	/** Get underlying physics engine constraint */
 	const FPhysicsConstraintHandle& GetPhysicsConstraintRef() const;
 
-	FPhysxUserData PhysxUserData;
+	FChaosUserData UserData;
 
 private:
 	/** The component scale passed in during initialization*/

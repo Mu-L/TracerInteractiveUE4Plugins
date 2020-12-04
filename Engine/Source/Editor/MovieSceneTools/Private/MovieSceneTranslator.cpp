@@ -128,7 +128,7 @@ bool FMovieSceneExportData::ConstructMovieSceneData(const UMovieScene* InMovieSc
 	MovieSceneData->Name = InMovieScene->GetOuter()->GetName();
 	MovieSceneData->Path = InMovieScene->GetOuter()->GetPathName();
 	MovieSceneData->TickResolution = TickResolution;
-	MovieSceneData->Duration = ConvertFrameTime(MovieScene::DiscreteSize(PlaybackRange), TickResolution, FrameRate).FrameNumber.Value;
+	MovieSceneData->Duration = ConvertFrameTime(UE::MovieScene::DiscreteSize(PlaybackRange), TickResolution, FrameRate).FrameNumber.Value;
 
 	bool bFoundCinematicMasterTrack = false;
 
@@ -670,7 +670,6 @@ TSharedPtr<FMovieSceneImportCinematicSectionData> FMovieSceneImportData::CreateC
 	if (SequenceToAdd == nullptr)
 	{
 		UE_LOG(LogMovieScene, Error, TEXT("Can't find valid level sequence asset to map clip to: (%s)"), *InName);
-		return nullptr;
 	}
 
 	// both FCP XML and Sequencer have inclusive start frame, exclusive end frame

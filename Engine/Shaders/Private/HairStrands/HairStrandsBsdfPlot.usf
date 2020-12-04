@@ -1,14 +1,17 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
-#define HAIR_CUSTOM_BSDF 1
-
 #include "../Common.ush"
 #include "../SceneTexturesCommon.ush"
 #include "../ShadingModels.ush"
 #include "../DeferredShadingCommon.ush"
 #include "../HairBsdf.ush"
+#include "HairStrandsCommon.ush"
+#include "HairStrandsDebugCommon.ush"
 #include "HairStrandsVisibilityCommon.ush"
 #include "HairStrandsEnvironmentLightingCommon.ush"
+#include "HairStrandsDeepShadowCommon.ush"
+#include "HairStrandsDeepTransmittanceCommon.ush"
+#include "HairStrandsDeepTransmittanceDualScattering.ush"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -144,6 +147,9 @@ Buffer<uint>						Debug_SampleCounter;
 uint								Debug_MaxShadingPointCount;
 uint								Debug_MaxSampleCount;
 
+Texture3D<float4>					HairScatteringLUTTexture;
+SamplerState 						HairLUTSampler;
+
 int2 OutputOffset;
 int2 OutputResolution;
 int2 MaxResolution;
@@ -230,14 +236,46 @@ void MainPS(
 		const float3 T_Local = mul(P.T, WorldToLocal); // Should be float3(1,0,0)
 
 		{
-			FHairTransmittanceData TransmittanceData = (FHairTransmittanceData)0;
-			TransmittanceData.LocalScattering = 0;
-			TransmittanceData.GlobalScattering = 1;
-			TransmittanceData.ScatteringComponent = HairComponents;
-			TransmittanceData.OpaqueVisibility = 1;
 
 			const float SampleBacklit = 1;
 			const float SampleSpecular = 0.5f;
+			FHairTransmittanceData TransmittanceData = InitHairStrandsTransmittanceData();
+
+			uint InHairComponents = HairComponents;
+			const bool bPlotDualScatteringContribution = true;
+			if (!bPlotDualScatteringContribution)
+			{
+				TransmittanceData.LocalScattering = 1;
+				TransmittanceData.GlobalScattering = 1;
+				TransmittanceData.ScatteringComponent = InHairComponents;
+				TransmittanceData.OpaqueVisibility = 1;
+			}
+			else
+			{
+				const float3 L = PixelDir_Local;
+				const float3 T = T_Local;
+				const float3 V = V_Local;
+				const float SinLightAngle = dot(L, T);
+
+				// Compute the transmittance based on precompute Hair transmittance LUT
+				FHairAverageScattering AverageScattering = SampleHairLUT(HairScatteringLUTTexture, HairLUTSampler, P.BaseColor, P.Roughness, SinLightAngle);
+
+				FHairTransmittanceMask TransmittanceMask;
+				TransmittanceMask.HairCount = 0;
+				TransmittanceMask.Visibility = 1;
+				TransmittanceMask.Transmittance = 1;
+
+				TransmittanceData = ComputeDualScatteringTerms(
+					TransmittanceMask,
+					AverageScattering,
+					P.Roughness,
+					SampleBacklit,
+					V,
+					L,
+					T,
+					InHairComponents);
+			}
+
 			FGBufferData HairGBuffer = (FGBufferData)0;
 			HairGBuffer.WorldNormal = P.T;
 			HairGBuffer.BaseColor = P.BaseColor;

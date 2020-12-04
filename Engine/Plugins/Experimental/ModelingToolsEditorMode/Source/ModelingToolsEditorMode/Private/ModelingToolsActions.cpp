@@ -3,6 +3,7 @@
 #include "ModelingToolsActions.h"
 #include "EditorStyleSet.h"
 #include "DynamicMeshSculptTool.h"
+#include "MeshVertexSculptTool.h"
 #include "MeshInspectorTool.h"
 #include "DrawPolygonTool.h"
 #include "EditMeshPolygonsTool.h"
@@ -12,6 +13,7 @@
 #include "TransformMeshesTool.h"
 #include "PlaneCutTool.h"
 #include "EditMeshPolygonsTool.h"
+#include "DrawAndRevolveTool.h"
 
 #define LOCTEXT_NAMESPACE "ModelingToolsCommands"
 
@@ -43,6 +45,11 @@ void FModelingModeActionCommands::RegisterCommandBindings(TSharedPtr<FUICommandL
 		FExecuteAction::CreateLambda([OnCommandExecuted]() { OnCommandExecuted(EModelingModeActionCommands::FocusViewToCursor); }));
 }
 
+void FModelingModeActionCommands::UnRegisterCommandBindings(TSharedPtr<FUICommandList> UICommandList)
+{
+	const FModelingModeActionCommands& Commands = FModelingModeActionCommands::Get();
+	UICommandList->UnmapAction(Commands.FocusViewCommand);
+}
 
 
 
@@ -73,22 +80,26 @@ void FModelingToolActionCommands::RegisterAllToolActions()
 {
 	FModelingToolActionCommands::Register();
 	FSculptToolActionCommands::Register();
+	FVertexSculptToolActionCommands::Register();
 	FDrawPolygonToolActionCommands::Register();
 	FTransformToolActionCommands::Register();
 	FMeshSelectionToolActionCommands::Register();
 	FMeshPlaneCutToolActionCommands::Register();
 	FEditMeshPolygonsToolActionCommands::Register();
+	FDrawAndRevolveToolActionCommands::Register();
 }
 
 void FModelingToolActionCommands::UnregisterAllToolActions()
 {
 	FModelingToolActionCommands::Unregister();
 	FSculptToolActionCommands::Unregister();
+	FVertexSculptToolActionCommands::Unregister();
 	FDrawPolygonToolActionCommands::Unregister();
 	FTransformToolActionCommands::Unregister();
 	FMeshSelectionToolActionCommands::Unregister();
 	FMeshPlaneCutToolActionCommands::Unregister();
 	FEditMeshPolygonsToolActionCommands::Unregister();
+	FDrawAndRevolveToolActionCommands::Unregister();
 }
 
 
@@ -106,6 +117,10 @@ void FModelingToolActionCommands::UpdateToolCommandBinding(UInteractiveTool* Too
 	{
 		UPDATE_BINDING(FSculptToolActionCommands);
 	}
+	else if (Cast<UMeshVertexSculptTool>(Tool) != nullptr)
+	{
+		UPDATE_BINDING(FVertexSculptToolActionCommands);
+	}
 	else if (Cast<UDrawPolygonTool>(Tool) != nullptr)
 	{
 		UPDATE_BINDING(FDrawPolygonToolActionCommands);
@@ -122,6 +137,10 @@ void FModelingToolActionCommands::UpdateToolCommandBinding(UInteractiveTool* Too
 	{
 		UPDATE_BINDING(FEditMeshPolygonsToolActionCommands);
 	}
+	else if (Cast<UDrawAndRevolveTool>(Tool) != nullptr)
+	{
+		UPDATE_BINDING(FDrawAndRevolveToolActionCommands);
+	}
 	else
 	{
 		UPDATE_BINDING(FModelingToolActionCommands);
@@ -132,104 +151,25 @@ void FModelingToolActionCommands::UpdateToolCommandBinding(UInteractiveTool* Too
 
 
 
-FSculptToolActionCommands::FSculptToolActionCommands() :
-	TInteractiveToolCommands<FSculptToolActionCommands>(
-		"ModelingToolsSculptTool", // Context name for fast lookup
-		NSLOCTEXT("Contexts", "ModelingToolsSculptTool", "Modeling Tools - Sculpt Tool"), // Localized context name for displaying
-		NAME_None, // Parent
-		FEditorStyle::GetStyleSetName() // Icon Style Set
-		)
-{
-}
-
-void FSculptToolActionCommands::GetToolDefaultObjectList(TArray<UInteractiveTool*>& ToolCDOs)
-{
-	ToolCDOs.Add(GetMutableDefault<UDynamicMeshSculptTool>());
+#define DEFINE_TOOL_ACTION_COMMANDS(CommandsClassName, ContextNameString, SettingsDialogString, ToolClassName ) \
+CommandsClassName::CommandsClassName() : TInteractiveToolCommands<CommandsClassName>( \
+ContextNameString, NSLOCTEXT("Contexts", ContextNameString, SettingsDialogString), NAME_None, FEditorStyle::GetStyleSetName()) {} \
+void CommandsClassName::GetToolDefaultObjectList(TArray<UInteractiveTool*>& ToolCDOs) \
+{\
+	ToolCDOs.Add(GetMutableDefault<ToolClassName>()); \
 }
 
 
 
-FTransformToolActionCommands::FTransformToolActionCommands() :
-	TInteractiveToolCommands<FTransformToolActionCommands>(
-		"ModelingToolsTransformTool", // Context name for fast lookup
-		NSLOCTEXT("Contexts", "ModelingToolsTransformTool", "Modeling Tools - Transform Tool"), // Localized context name for displaying
-		NAME_None, // Parent
-		FEditorStyle::GetStyleSetName() // Icon Style Set
-		)
-{
-}
 
-void FTransformToolActionCommands::GetToolDefaultObjectList(TArray<UInteractiveTool*>& ToolCDOs)
-{
-	ToolCDOs.Add(GetMutableDefault<UTransformMeshesTool>());
-}
-
-
-
-FDrawPolygonToolActionCommands::FDrawPolygonToolActionCommands() :
-	TInteractiveToolCommands<FDrawPolygonToolActionCommands>(
-		"ModelingToolsDrawPolygonTool", // Context name for fast lookup
-		NSLOCTEXT("Contexts", "ModelingToolsDrawPolygonTool", "Modeling Tools - Draw Polygon Tool"), // Localized context name for displaying
-		NAME_None, // Parent
-		FEditorStyle::GetStyleSetName() // Icon Style Set
-		)
-{
-}
-
-void FDrawPolygonToolActionCommands::GetToolDefaultObjectList(TArray<UInteractiveTool*>& ToolCDOs)
-{
-	ToolCDOs.Add(GetMutableDefault<UDrawPolygonTool>());
-}
-
-
-FMeshSelectionToolActionCommands::FMeshSelectionToolActionCommands() :
-	TInteractiveToolCommands<FMeshSelectionToolActionCommands>(
-		"ModelingToolsMeshSelectionTool", // Context name for fast lookup
-		NSLOCTEXT("Contexts", "ModelingToolsMeshSelectionTool", "Modeling Tools - Mesh Selection Tool"), // Localized context name for displaying
-		NAME_None, // Parent
-		FEditorStyle::GetStyleSetName() // Icon Style Set
-		)
-{
-}
-
-void FMeshSelectionToolActionCommands::GetToolDefaultObjectList(TArray<UInteractiveTool*>& ToolCDOs)
-{
-	ToolCDOs.Add(GetMutableDefault<UMeshSelectionTool>());
-}
-
-
-
-FMeshPlaneCutToolActionCommands::FMeshPlaneCutToolActionCommands() :
-	TInteractiveToolCommands<FMeshPlaneCutToolActionCommands>(
-		"ModelingToolsMeshPlaneCutTool", // Context name for fast lookup
-		NSLOCTEXT("Contexts", "ModelingToolsMeshPlaneCutTool", "Modeling Tools - Mesh Plane Cut Tool"), // Localized context name for displaying
-		NAME_None, // Parent
-		FEditorStyle::GetStyleSetName() // Icon Style Set
-		)
-{
-}
-
-void FMeshPlaneCutToolActionCommands::GetToolDefaultObjectList(TArray<UInteractiveTool*>& ToolCDOs)
-{
-	ToolCDOs.Add(GetMutableDefault<UPlaneCutTool>());
-}
-
-
-
-FEditMeshPolygonsToolActionCommands::FEditMeshPolygonsToolActionCommands() :
-	TInteractiveToolCommands<FEditMeshPolygonsToolActionCommands>(
-		"ModelingToolsEditMeshPolygonsTool", // Context name for fast lookup
-		NSLOCTEXT("Contexts", "ModelingToolsEditMeshPolygonsTool", "Modeling Tools - Edit Mesh Polygons Tool"), // Localized context name for displaying
-		NAME_None, // Parent
-		FEditorStyle::GetStyleSetName() // Icon Style Set
-		)
-{
-}
-void FEditMeshPolygonsToolActionCommands::GetToolDefaultObjectList(TArray<UInteractiveTool*>& ToolCDOs)
-{
-	ToolCDOs.Add(GetMutableDefault<UEditMeshPolygonsTool>());
-}
-
+DEFINE_TOOL_ACTION_COMMANDS(FSculptToolActionCommands, "ModelingToolsSculptTool", "Modeling Tools - Sculpt Tool", UDynamicMeshSculptTool);
+DEFINE_TOOL_ACTION_COMMANDS(FVertexSculptToolActionCommands, "ModelingToolsVertexSculptTool", "Modeling Tools - Vertex Sculpt Tool", UMeshVertexSculptTool);
+DEFINE_TOOL_ACTION_COMMANDS(FTransformToolActionCommands, "ModelingToolsTransformTool", "Modeling Tools - Transform Tool", UTransformMeshesTool);
+DEFINE_TOOL_ACTION_COMMANDS(FDrawPolygonToolActionCommands, "ModelingToolsDrawPolygonTool", "Modeling Tools - Draw Polygon Tool", UDrawPolygonTool);
+DEFINE_TOOL_ACTION_COMMANDS(FMeshSelectionToolActionCommands, "ModelingToolsMeshSelectionTool", "Modeling Tools - Mesh Selection Tool", UMeshSelectionTool);
+DEFINE_TOOL_ACTION_COMMANDS(FMeshPlaneCutToolActionCommands, "ModelingToolsMeshPlaneCutTool", "Modeling Tools - Mesh Plane Cut Tool", UPlaneCutTool);
+DEFINE_TOOL_ACTION_COMMANDS(FEditMeshPolygonsToolActionCommands, "ModelingToolsEditMeshPolygonsTool", "Modeling Tools - Edit Mesh Polygons Tool", UEditMeshPolygonsTool);
+DEFINE_TOOL_ACTION_COMMANDS(FDrawAndRevolveToolActionCommands, "ModelingToolsDrawAndRevolveTool", "Modeling Tools - Draw-and-Revolve Tool", UDrawAndRevolveTool);
 
 
 

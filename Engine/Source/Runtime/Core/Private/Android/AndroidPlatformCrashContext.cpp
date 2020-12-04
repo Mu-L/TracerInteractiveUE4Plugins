@@ -70,12 +70,12 @@ struct FAndroidCrashInfo
 	bool bInitialized = false;
 } GAndroidCrashInfo;
 
-const FString FAndroidCrashContext::GetCrashDirectoryName()
+const FString FAndroidCrashContext::GetGlobalCrashDirectoryPath()
 {
 	return FString(GAndroidCrashInfo.TargetDirectory);
 }
 
-void FAndroidCrashContext::GetCrashDirectoryName(char(&DirectoryNameOUT)[CrashReportMaxPathSize])
+void FAndroidCrashContext::GetGlobalCrashDirectoryPath(char(&DirectoryNameOUT)[CrashReportMaxPathSize])
 {
 	FCStringAnsi::Strncpy(DirectoryNameOUT, GAndroidCrashInfo.TargetDirectory, CrashReportMaxPathSize);
 }
@@ -142,7 +142,7 @@ static void CrashReportFileCopy(const char* DestPath, const char* SourcePath)
 	close(SourceHandle);
 }
 
-void FAndroidCrashContext::StoreCrashInfo() const
+void FAndroidCrashContext::StoreCrashInfo(bool bWriteLog) const
 {
 	char FilePath[CrashReportMaxPathSize] = { 0 };
 	FCStringAnsi::Strcpy(FilePath, ReportDirectory);
@@ -150,12 +150,15 @@ void FAndroidCrashContext::StoreCrashInfo() const
 	FCStringAnsi::Strcat(FilePath, FGenericCrashContext::CrashContextRuntimeXMLNameA);
 	SerializeAsXML(*FString(FilePath)); // CreateFileWriter will also create destination directory.
 
-	// copy log:
-	FCStringAnsi::Strcpy(FilePath, ReportDirectory);
-	FCStringAnsi::Strcat(FilePath, "/");
-	FCStringAnsi::Strcat(FilePath, FCStringAnsi::Strlen(GAndroidCrashInfo.AppName) ? GAndroidCrashInfo.AppName : "UE4");
-	FCStringAnsi::Strcat(FilePath, ".log");
-	CrashReportFileCopy(FilePath, GAndroidCrashInfo.AppLogPath);
+	if(bWriteLog)
+	{
+		// copy log:
+		FCStringAnsi::Strcpy(FilePath, ReportDirectory);
+		FCStringAnsi::Strcat(FilePath, "/");
+		FCStringAnsi::Strcat(FilePath, FCStringAnsi::Strlen(GAndroidCrashInfo.AppName) ? GAndroidCrashInfo.AppName : "UE4");
+		FCStringAnsi::Strcat(FilePath, ".log");
+		CrashReportFileCopy(FilePath, GAndroidCrashInfo.AppLogPath);
+	}
 }
 
 
@@ -237,12 +240,10 @@ void FAndroidCrashContext::DumpAllThreadCallstacks() const
 
 		Writeln(DestHandle, "<Threads>");
 
-		if( GIsGameThreadIdInitialized )
-		{
-			// On android the Game thread is that which calls android_main entry point. 
-			// Explicitly call it here as the thread manager is not aware of it.
-			WriteThreadEntry(GGameThreadId, "GameThread");
-		}
+		// On android the Game thread is that which calls android_main entry point. 
+		// Explicitly call it here as the thread manager is not aware of it.
+		WriteThreadEntry(GGameThreadId, "GameThread");
+
 		// For each thread append it's info to the file.
 		FThreadManager::Get().ForEachThread([WriteThreadEntry, this, DestHandle, &CrashStackFrames, &CallstacksRecorded](uint32 ThreadID, FRunnableThread* Runnable)
 		{
@@ -270,14 +271,16 @@ FAndroidCrashContext::FAndroidCrashContext(ECrashContextType InType, const TCHAR
 , Info(NULL)
 , Context(NULL)
 {
-	if (GetType() == ECrashContextType::Ensure)
+	switch(GetType())
 	{
-		// create a new report folder.
-		GenerateReportDirectoryName(ReportDirectory);
-	}
-	else
-	{
-		GetCrashDirectoryName(ReportDirectory);
+		case ECrashContextType::AbnormalShutdown:
+		case ECrashContextType::Ensure:
+			// create a new report folder.
+			GenerateReportDirectoryName(ReportDirectory);
+			break;
+		default:
+			GetGlobalCrashDirectoryPath(ReportDirectory);
+			break;
 	}
 }
 

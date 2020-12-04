@@ -20,6 +20,7 @@
 #include "IOS/IOSAsyncTask.h"
 #include "Misc/ConfigCacheIni.h"
 #include "IOS/IOSPlatformCrashContext.h"
+#include "IOS/IOSPaymentTransactionObserver.h"
 #include "Misc/OutputDeviceError.h"
 #include "Misc/OutputDeviceRedirector.h"
 #include "Misc/FeedbackContext.h"
@@ -200,12 +201,7 @@ bool FIOSCoreDelegates::PassesPushNotificationFilters(NSDictionary* Payload)
 @implementation IOSAppDelegate
 
 #if !UE_BUILD_SHIPPING && !PLATFORM_TVOS
-#if __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_9_0
-	@synthesize ConsoleAlert;
-#endif
-#ifdef __IPHONE_8_0
     @synthesize ConsoleAlertController;
-#endif
 	@synthesize ConsoleHistoryValues;
 	@synthesize ConsoleHistoryValuesIndex;
 #endif
@@ -271,12 +267,7 @@ static IOSAppDelegate* CachedDelegate = nil;
 -(void)dealloc
 {
 #if !UE_BUILD_SHIPPING && !PLATFORM_TVOS
-#if __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_9_0
-	[ConsoleAlert release];
-#endif
-#ifdef __IPHONE_8_0
 	[ConsoleAlertController release];
-#endif
 	[ConsoleHistoryValues release];
 #endif
 	[Window release];
@@ -862,9 +853,9 @@ static IOSAppDelegate* CachedDelegate = nil;
 
 - (UIViewController*) IOSController
 {
-	// walk the responder chain until we get to a non-view, that's the VC
+	// walk the responder chain until we get to a VC
 	UIResponder *Responder = IOSView;
-	while ([Responder isKindOfClass:[UIView class]])
+	while (Responder != nil && ![Responder isKindOfClass:[UIViewController class]])
 	{
 		Responder = [Responder nextResponder];
 	}
@@ -982,29 +973,8 @@ static FAutoConsoleVariableRef CVarGEnableThermalsReport(
 #endif
 	
 #if !PLATFORM_TVOS
-#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_10_0
 	UNUserNotificationCenter *Center = [UNUserNotificationCenter currentNotificationCenter];
 	Center.delegate = self;
-#else
-	// Save launch local notification so the app can check for it when it is ready
-	UILocalNotification *notification = [launchOptions objectForKey:UIApplicationLaunchOptionsLocalNotificationKey];
-	if ( notification != nullptr )
-	{
-		NSDictionary*	userInfo = [notification userInfo];
-		if(userInfo != nullptr)
-		{
-			NSString*	activationEvent = (NSString*)[notification.userInfo objectForKey: @"ActivationEvent"];
-			
-			if(activationEvent != nullptr)
-			{
-				FAppEntry::gAppLaunchedWithLocalNotification = true;
-				FAppEntry::gLaunchLocalNotificationActivationEvent = FString(activationEvent);
-				FAppEntry::gLaunchLocalNotificationFireDate = [notification.fireDate timeIntervalSince1970];
-			}
-		}
-	}
-#endif
-
 	// Register for device orientation changes
 	[[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
 	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(didRotate:) name:UIApplicationDidChangeStatusBarOrientationNotification object:nil];
@@ -1081,6 +1051,8 @@ static FAutoConsoleVariableRef CVarGEnableThermalsReport(
 #if WITH_ACCESSIBILITY
 	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(OnVoiceOverStatusChanged) name:UIAccessibilityVoiceOverStatusDidChangeNotification object:nil];
 #endif
+
+	[[SKPaymentQueue defaultQueue] addTransactionObserver:[FPaymentTransactionObserver sharedInstance]];
     
 	return YES;
 }
@@ -1344,7 +1316,10 @@ FCriticalSection RenderSuspend;
 		}
 		UE_LOG(LogTemp, Display, TEXT("Done with entering background tasks time."));
     }
-	[self ToggleSuspend:true];
+// fix for freeze on tvOS, moving to applicationDidEnterBackground. Not making the changes for iOS platforms as the bug does not happen and could bring some side effets.
+#if !PLATFORM_TVOS
+    [self ToggleSuspend:true];
+#endif
 	[self ToggleAudioSession:false];
     
     RenderSuspend.TryLock();
@@ -1379,6 +1354,11 @@ FCriticalSection RenderSuspend;
 	 If your application supports background execution, this method is called
 	 instead of applicationWillTerminate: when the user quits.
 	 */
+
+    // fix for freeze on tvOS, moving to applicationDidEnterBackground. Not making the changes for iOS platforms as the bug does not happen and could bring some side effets.
+#if PLATFORM_TVOS
+    [self ToggleSuspend:true];
+#endif
 
 	FEmbeddedCommunication::KeepAwake(TEXT("Background"), false);
 
@@ -1714,18 +1694,10 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 #if !PLATFORM_TVOS
 	GameCenterDisplay.viewState = GKGameCenterViewControllerStateLeaderboards;
 #endif
-#ifdef __IPHONE_7_0
 	if ([GameCenterDisplay respondsToSelector : @selector(leaderboardIdentifier)] == YES)
 	{
 #if !PLATFORM_TVOS // @todo tvos: Why not??
 		GameCenterDisplay.leaderboardIdentifier = Category;
-#endif
-	}
-	else
-#endif
-	{
-#if __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_7_0
-		GameCenterDisplay.leaderboardCategory = Category;
 #endif
 	}
 	GameCenterDisplay.gameCenterDelegate = self;

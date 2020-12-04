@@ -8,6 +8,8 @@
 #include "Interfaces/IShaderFormatModule.h"
 #include "hlslcc.h"
 #include "ShaderCore.h"
+#include "ShaderCompilerCore.h"
+#include "DXCWrapper.h"
 
 static FName NAME_VULKAN_ES3_1_ANDROID(TEXT("SF_VULKAN_ES31_ANDROID"));
 static FName NAME_VULKAN_ES3_1_ANDROID_NOUB(TEXT("SF_VULKAN_ES31_ANDROID_NOUB"));
@@ -26,8 +28,8 @@ class FShaderFormatVulkan : public IShaderFormat
 {
 	enum 
 	{
-		UE_SHADER_VULKAN_ES3_1_VER	= 29,
-		UE_SHADER_VULKAN_SM5_VER 	= 29,
+		UE_SHADER_VULKAN_ES3_1_VER	= 30,
+		UE_SHADER_VULKAN_SM5_VER 	= 30,
 	};
 
 	int32 InternalGetVersion(FName Format) const
@@ -51,7 +53,7 @@ public:
 	{
 		const uint8 HLSLCCVersion = ((HLSLCC_VersionMajor & 0x0f) << 4) | (HLSLCC_VersionMinor & 0x0f);
 		uint16 Version = ((HLSLCCVersion & 0xff) << 8) | (InternalGetVersion(Format) & 0xff);
-#if VULKAN_ENABLE_SHADER_DEBUG_NAMES
+#if VULKAN_ENABLE_BINDING_DEBUG_NAMES
 		Version = (Version << 1) + Version;
 #endif
 		return Version;
@@ -112,28 +114,35 @@ public:
 	{
 		return TEXT("Vulkan");
 	}
+
+	virtual bool UsesHLSLcc(const struct FShaderCompilerInput& Input) const override
+	{
+		return !Input.Environment.CompilerFlags.Contains(CFLAG_ForceDXC);
+	}
 };
 
 /**
  * Module for Vulkan shaders
  */
 
-static IShaderFormat* Singleton = NULL;
+static IShaderFormat* Singleton = nullptr;
 
-class FVulkanShaderFormatModule : public IShaderFormatModule
+class FVulkanShaderFormatModule : public IShaderFormatModule, public FShaderConductorModuleWrapper
 {
 public:
 	virtual ~FVulkanShaderFormatModule()
 	{
 		delete Singleton;
-		Singleton = NULL;
+		Singleton = nullptr;
 	}
+
 	virtual IShaderFormat* GetShaderFormat()
 	{
 		if (!Singleton)
 		{
 			Singleton = new FShaderFormatVulkan();
 		}
+
 		return Singleton;
 	}
 };

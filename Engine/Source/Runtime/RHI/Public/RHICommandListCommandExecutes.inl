@@ -19,13 +19,11 @@ struct FComputedBSS;
 struct FComputedGraphicsPipelineState;
 struct FComputedUniformBuffer;
 struct FMemory;
-struct FRHICommandAutomaticCacheFlushAfterComputeShader;
 struct FRHICommandBeginDrawingViewport;
 struct FRHICommandBeginFrame;
 struct FRHICommandBeginOcclusionQueryBatch;
 struct FRHICommandBeginRenderQuery;
 struct FRHICommandBeginScene;
-struct FRHICommandBindClearMRTValues;
 struct FRHICommandBuildLocalBoundShaderState;
 struct FRHICommandBuildLocalGraphicsPipelineState;
 struct FRHICommandBuildLocalUniformBuffer;
@@ -41,7 +39,6 @@ struct FRHICommandEndFrame;
 struct FRHICommandEndOcclusionQueryBatch;
 struct FRHICommandEndRenderQuery;
 struct FRHICommandEndScene;
-struct FRHICommandFlushComputeShaderCache;
 struct FRHICommandSetBlendFactor;
 struct FRHICommandSetBoundShaderState;
 struct FRHICommandSetLocalGraphicsPipelineState;
@@ -124,7 +121,7 @@ template<> void FRHICommandSetShaderParameter<FRHIComputeShader>::Execute(FRHICo
 template <> void FRHICommandSetShaderParameter<FRHIGraphicsShader>::Execute(FRHICommandListBase& CmdList)
 {
 	RHISTAT(SetShaderParameter);
-	INTERNAL_DECORATOR(RHISetShaderParameter)(Shader, BufferIndex, BaseIndex, NumBytes, NewValue); 
+	INTERNAL_DECORATOR(RHISetShaderParameter)(Shader, BufferIndex, BaseIndex, NumBytes, NewValue);
 }
 
 template<> void FRHICommandSetShaderUniformBuffer<FRHIComputeShader>::Execute(FRHICommandListBase& CmdList)
@@ -253,37 +250,6 @@ void FRHICommandNextSubpass::Execute(FRHICommandListBase& CmdList)
 	INTERNAL_DECORATOR(RHINextSubpass)();
 }
 
-void FRHICommandBeginComputePass::Execute(FRHICommandListBase& CmdList)
-{
-	RHISTAT(BeginComputePass);
-	INTERNAL_DECORATOR(RHIBeginComputePass)(Name);
-}
-
-void FRHICommandEndComputePass::Execute(FRHICommandListBase& CmdList)
-{
-	RHISTAT(EndComputePass);
-	INTERNAL_DECORATOR(RHIEndComputePass)();
-}
-
-void FRHICommandSetRenderTargets::Execute(FRHICommandListBase& CmdList)
-{
-	RHISTAT(SetRenderTargets);
-	INTERNAL_DECORATOR(RHISetRenderTargets)(
-		NewNumSimultaneousRenderTargets,
-		NewRenderTargetsRHI,
-		&NewDepthStencilTarget);
-}
-
-void FRHICommandBindClearMRTValues::Execute(FRHICommandListBase& CmdList)
-{
-	RHISTAT(BindClearMRTValues);
-	INTERNAL_DECORATOR(RHIBindClearMRTValues)(
-		bClearColor,
-		bClearDepth,
-		bClearStencil		
-		);
-}
-
 void FRHICommandSetComputeShader::Execute(FRHICommandListBase& CmdList)
 {
 	RHISTAT(SetComputeShader);
@@ -303,7 +269,7 @@ void FRHICommandSetGraphicsPipelineState::Execute(FRHICommandListBase& CmdList)
 	RHISTAT(SetGraphicsPipelineState);
 	extern FRHIGraphicsPipelineState* ExecuteSetGraphicsPipelineState(FGraphicsPipelineState* GraphicsPipelineState);
 	FRHIGraphicsPipelineState* RHIGraphicsPipelineState = ExecuteSetGraphicsPipelineState(GraphicsPipelineState);
-	INTERNAL_DECORATOR(RHISetGraphicsPipelineState)(RHIGraphicsPipelineState);
+	INTERNAL_DECORATOR(RHISetGraphicsPipelineState)(RHIGraphicsPipelineState, bApplyAdditionalState);
 }
 
 void FRHICommandDispatchComputeShader::Execute(FRHICommandListBase& CmdList)
@@ -330,16 +296,16 @@ void FRHICommandEndUAVOverlap::Execute(FRHICommandListBase& CmdList)
 	INTERNAL_DECORATOR(RHIEndUAVOverlap)();
 }
 
-void FRHICommandAutomaticCacheFlushAfterComputeShader::Execute(FRHICommandListBase& CmdList)
+void FRHICommandBeginSpecificUAVOverlap::Execute(FRHICommandListBase& CmdList)
 {
-	RHISTAT(AutomaticCacheFlushAfterComputeShader);
-	INTERNAL_DECORATOR(RHIAutomaticCacheFlushAfterComputeShader)(bEnable);
+	RHISTAT(BeginSpecificUAVOverlap);
+	INTERNAL_DECORATOR(RHIBeginUAVOverlap)(UAVs);
 }
 
-void FRHICommandFlushComputeShaderCache::Execute(FRHICommandListBase& CmdList)
+void FRHICommandEndSpecificUAVOverlap::Execute(FRHICommandListBase& CmdList)
 {
-	RHISTAT(FlushComputeShaderCache);
-	INTERNAL_DECORATOR(RHIFlushComputeShaderCache)();
+	RHISTAT(EndSpecificUAVOverlap);
+	INTERNAL_DECORATOR(RHIEndUAVOverlap)(UAVs);
 }
 
 void FRHICommandDrawPrimitiveIndirect::Execute(FRHICommandListBase& CmdList)
@@ -358,6 +324,18 @@ void FRHICommandDrawIndexedPrimitiveIndirect::Execute(FRHICommandListBase& CmdLi
 {
 	RHISTAT(DrawIndexedPrimitiveIndirect);
 	INTERNAL_DECORATOR(RHIDrawIndexedPrimitiveIndirect)(IndexBuffer, ArgumentsBuffer, ArgumentOffset);
+}
+
+void FRHICommandSetShadingRate::Execute(FRHICommandListBase& CmdList)
+{
+	RHISTAT(SetShadingRate);
+	INTERNAL_DECORATOR(RHISetShadingRate)(ShadingRate, Combiner);
+}
+
+void FRHICommandSetShadingRateImage::Execute(FRHICommandListBase& CmdList)
+{
+	RHISTAT(SetShadingRateImage);
+	INTERNAL_DECORATOR(RHISetShadingRateImage)(RateImageTexture, Combiner);
 }
 
 void FRHICommandSetDepthBounds::Execute(FRHICommandListBase& CmdList)
@@ -396,46 +374,44 @@ void FRHICommandResummarizeHTile::Execute(FRHICommandListBase& CmdList)
 	INTERNAL_DECORATOR(RHIResummarizeHTile)(DepthTexture);
 }
 
-void FRHICommandTransitionTextures::Execute(FRHICommandListBase& CmdList)
+void FRHICommandBeginTransitions::Execute(FRHICommandListBase& CmdList)
 {
-	RHISTAT(TransitionTextures);
-	INTERNAL_DECORATOR(RHITransitionResources)(TransitionType, &Textures[0], NumTextures);
+	RHISTAT(BeginTransitions);
+	INTERNAL_DECORATOR_COMPUTE(RHIBeginTransitions)(Transitions);
+
+	for (const FRHITransition* Transition : Transitions)
+	{
+		Transition->MarkBegin(CmdList.GetPipeline());
+	}
 }
 
-void FRHICommandTransitionTexturesPipeline::Execute(FRHICommandListBase& CmdList)
+void FRHICommandEndTransitions::Execute(FRHICommandListBase& CmdList)
 {
-	RHISTAT(TransitionTextures);
-	INTERNAL_DECORATOR(RHITransitionResources)(TransitionType, TransitionPipeline, &Textures[0], NumTextures);
+	RHISTAT(EndTransitions);
+	INTERNAL_DECORATOR_COMPUTE(RHIEndTransitions)(Transitions);
+
+	for (const FRHITransition* Transition : Transitions)
+	{
+		Transition->MarkEnd(CmdList.GetPipeline());
+	}
 }
 
-void FRHICommandTransitionTexturesDepth::Execute(FRHICommandListBase& CmdList)
+void FRHICommandResourceTransition::Execute(FRHICommandListBase& CmdList)
 {
-	RHISTAT(TransitionTextures);
-	INTERNAL_DECORATOR(RHITransitionResources)(DepthStencilMode, DepthTexture);
-}
+	RHISTAT(ResourceTransition);
 
-void FRHICommandTransitionTexturesArray::Execute(FRHICommandListBase& CmdList)
-{
-	RHISTAT(TransitionTextures);
-	INTERNAL_DECORATOR(RHITransitionResources)(TransitionType, &Textures[0], Textures.Num());
-}
+	INTERNAL_DECORATOR_COMPUTE(RHIBeginTransitions)(MakeArrayView((const FRHITransition**)&Transition, 1));
+	INTERNAL_DECORATOR_COMPUTE(RHIEndTransitions)(MakeArrayView((const FRHITransition**)&Transition, 1));
 
-void FRHICommandTransitionUAVs::Execute(FRHICommandListBase& CmdList)
-{
-	RHISTAT(TransitionUAVs);
-	INTERNAL_DECORATOR_COMPUTE(RHITransitionResources)(TransitionType, TransitionPipeline, UAVs, NumUAVs, WriteFence);
+	// Manual release. No need to free, the instance was allocated on the RHICmdList stack.
+	GDynamicRHI->RHIReleaseTransition(Transition);
+	Transition->~FRHITransition();
 }
 
 void FRHICommandSetAsyncComputeBudget::Execute(FRHICommandListBase& CmdList)
 {
 	RHISTAT(SetAsyncComputeBudget);
 	INTERNAL_DECORATOR_COMPUTE(RHISetAsyncComputeBudget)(Budget);
-}
-
-void FRHICommandWaitComputeFence::Execute(FRHICommandListBase& CmdList)
-{
-	RHISTAT(WaitComputeFence);
-	INTERNAL_DECORATOR_COMPUTE(RHIWaitComputeFence)(WaitFence);
 }
 
 void FRHICommandCopyToStagingBuffer::Execute(FRHICommandListBase& CmdList)
@@ -523,12 +499,12 @@ void FRHICommandPollOcclusionQueries::Execute(FRHICommandListBase& CmdList)
 	INTERNAL_DECORATOR(RHIPollOcclusionQueries)();
 }
 
-#if RHI_RAYTRACING
-
 void FRHICommandCopyBufferRegion::Execute(FRHICommandListBase& CmdList)
 {
 	INTERNAL_DECORATOR(RHICopyBufferRegion)(DestBuffer, DstOffset, SourceBuffer, SrcOffset, NumBytes);
 }
+
+#if RHI_RAYTRACING
 
 void FRHICommandCopyBufferRegions::Execute(FRHICommandListBase& CmdList)
 {
@@ -762,3 +738,11 @@ void FRHICommandDiscardRenderTargets::Execute(FRHICommandListBase& CmdList)
 	RHISTAT(RHIDiscardRenderTargets);
 	INTERNAL_DECORATOR(RHIDiscardRenderTargets)(Depth, Stencil, ColorBitMask);
 }
+
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+void FRHICommandBackBufferWaitTrackingBeginFrame::Execute(FRHICommandListBase& CmdList)
+{
+	RHISTAT(FRHICommandBackBufferWaitTrackingBeginFrame);
+	INTERNAL_DECORATOR(RHIBackBufferWaitTrackingBeginFrame)(FrameToken, bDeferred);
+}
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING

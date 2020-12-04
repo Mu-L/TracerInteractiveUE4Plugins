@@ -532,9 +532,8 @@ extern RENDERCORE_API FVertexFactoryType* FindVertexFactoryType(const FHashedNam
 		); \
 		FVertexFactoryType* FactoryClass::GetType() const { return &StaticType; }
 
-// @todo - need more extensible type properties - shouldn't have to change all IMPLEMENT_VERTEX_FACTORY_TYPE's when you add one new parameter
-#define IMPLEMENT_VERTEX_FACTORY_TYPE_EX(FactoryClass,ShaderFilename,bUsedWithMaterials,bSupportsStaticLighting,bSupportsDynamicLighting,bPrecisePrevWorldPos,bSupportsPositionOnly,bSupportsCachingMeshDrawCommands,bSupportsPrimitiveIdStream) \
-	FVertexFactoryType FactoryClass::StaticType( \
+#define IMPLEMENT_TEMPLATE_VERTEX_FACTORY_TYPE_EX(TemplatePrefix, FactoryClass,ShaderFilename,bUsedWithMaterials,bSupportsStaticLighting,bSupportsDynamicLighting,bPrecisePrevWorldPos,bSupportsPositionOnly,bSupportsCachingMeshDrawCommands,bSupportsPrimitiveIdStream) \
+	PREPROCESSOR_REMOVE_OPTIONAL_PARENS(TemplatePrefix) FVertexFactoryType FactoryClass::StaticType( \
 		TEXT(#FactoryClass), \
 		TEXT(ShaderFilename), \
 		bUsedWithMaterials, \
@@ -546,7 +545,11 @@ extern RENDERCORE_API FVertexFactoryType* FindVertexFactoryType(const FHashedNam
 		bSupportsPrimitiveIdStream, \
 		IMPLEMENT_VERTEX_FACTORY_VTABLE(FactoryClass) \
 		); \
-		FVertexFactoryType* FactoryClass::GetType() const { return &StaticType; }
+		PREPROCESSOR_REMOVE_OPTIONAL_PARENS(TemplatePrefix) FVertexFactoryType* FactoryClass::GetType() const { return &StaticType; }
+
+// @todo - need more extensible type properties - shouldn't have to change all IMPLEMENT_VERTEX_FACTORY_TYPE's when you add one new parameter
+#define IMPLEMENT_VERTEX_FACTORY_TYPE_EX(FactoryClass,ShaderFilename,bUsedWithMaterials,bSupportsStaticLighting,bSupportsDynamicLighting,bPrecisePrevWorldPos,bSupportsPositionOnly,bSupportsCachingMeshDrawCommands,bSupportsPrimitiveIdStream) \
+	IMPLEMENT_TEMPLATE_VERTEX_FACTORY_TYPE_EX(,FactoryClass,ShaderFilename,bUsedWithMaterials,bSupportsStaticLighting,bSupportsDynamicLighting,bPrecisePrevWorldPos,bSupportsPositionOnly,bSupportsCachingMeshDrawCommands,bSupportsPrimitiveIdStream)
 
 /** Encapsulates a dependency on a vertex factory type and saved state from that vertex factory type. */
 class FVertexFactoryTypeDependency
@@ -654,12 +657,6 @@ public:
 	virtual bool SupportsNullPixelShader() const { return true; }
 
 	virtual bool RendersPrimitivesAsCameraFacingSprites() const { return false; }
-
-	/**
-	 * Get a bitmask representing the visibility of each FMeshBatch element.
-	 * FMeshBatch.bRequiresPerElementVisibility must be set for this to be called.
-	 */
-	virtual uint64 GetStaticBatchElementVisibility(const class FSceneView& View, const struct FMeshBatch* Batch, const void* InViewCustomData = nullptr) const { return 1; }
 
 	bool NeedsDeclaration() const { return bNeedsDeclaration; }
 	inline bool SupportsManualVertexFetch(const FStaticFeatureLevel InFeatureLevel) const

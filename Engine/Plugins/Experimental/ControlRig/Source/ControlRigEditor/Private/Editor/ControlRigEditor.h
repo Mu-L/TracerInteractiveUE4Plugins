@@ -26,6 +26,25 @@ class SBorder;
 class USkeletalMesh;
 class FStructOnScope;
 
+UENUM()
+enum class EControlRigEditorEventQueue : uint8
+{
+	/** Setup Event */
+	Setup,
+
+	/** Update Event */
+	Update,
+
+	/** Inverse Event */
+	Inverse,
+
+	/** Inverse -> Update */
+	InverseAndUpdate,
+
+	/** MAX - invalid */
+	Max UMETA(Hidden),
+};
+
 struct FControlRigEditorModes
 {
 	// Mode constants
@@ -137,7 +156,7 @@ public:
 	void OnCurveContainerChanged();
 
 	void OnRigElementAdded(FRigHierarchyContainer* Container, const FRigElementKey& InKey);
-	void OnRigElementRemoved(FRigHierarchyContainer* Container, const FRigElementKey& InKey);
+	void OnRigElementRemoved(FRigHierarchyContainer* Container, const FRigElementKey& InKey, bool bForce = false);
 	void OnRigElementRenamed(FRigHierarchyContainer* Container, ERigElementType ElementType, const FName& InOldName, const FName& InNewName);
 	void OnRigElementReparented(FRigHierarchyContainer* Container, const FRigElementKey& InKey, const FName& InOldParentName, const FName& InNewParentName);
 	void OnRigElementSelected(FRigHierarchyContainer* Container, const FRigElementKey& InKey, bool bSelected);
@@ -152,15 +171,23 @@ public:
 	DECLARE_EVENT_OneParam(FControlRigEditor, FPreviewControlRigUpdated, FControlRigEditor*);
 	FPreviewControlRigUpdated& OnPreviewControlRigUpdated() { return PreviewControlRigUpdated;  }
 
+private:
+
+	virtual void OnCreateComment() override;
+
 protected:
 
 	void OnHierarchyChanged();
 	void OnControlsSettingsChanged();
 
+	void SynchronizeViewportBoneSelection();
+
 	// FBlueprintEditor Interface
 	virtual void CreateDefaultCommands() override;
 	virtual void OnCreateGraphEditorCommands(TSharedPtr<FUICommandList> GraphEditorCommandsList);
 	virtual void Compile() override;
+	virtual void SaveAsset_Execute() override;
+	virtual void SaveAssetAs_Execute() override;
 	virtual bool IsInAScriptingMode() const override { return true; }
 	virtual void CreateDefaultTabContents(const TArray<UBlueprint*>& InBlueprints) override;
 	virtual bool IsSectionVisible(NodeSectionID::Type InSectionID) const override;
@@ -175,7 +202,7 @@ protected:
 
 	void HandleModifiedEvent(ERigVMGraphNotifType InNotifType, URigVMGraph* InGraph, UObject* InSubject);
 	void HandleVMCompiledEvent(UBlueprint* InBlueprint, URigVM* InVM);
-	void HandleControlRigInitializedEvent(UControlRig* InControlRig, const EControlRigState InState);
+	void HandleControlRigExecutedEvent(UControlRig* InControlRig, const EControlRigState InState, const FName& InEventName);
 
 	// FGCObject Interface
 	virtual void AddReferencedObjects( FReferenceCollector& Collector ) override;
@@ -199,6 +226,13 @@ private:
 	/** Fill the toolbar with content */
 	void FillToolbar(FToolBarBuilder& ToolbarBuilder);
 
+	EControlRigEditorEventQueue GetEventQueue() const;
+	void SetEventQueue(EControlRigEditorEventQueue InEventQueue);
+	int32 GetEventQueueComboValue() const;
+	FText GetEventQueueLabel() const;
+	static FSlateIcon GetEventQueueIcon(EControlRigEditorEventQueue InEventQueue);
+	FSlateIcon GetEventQueueIcon() const;
+	void OnEventQueueComboChanged(int32 InValue, ESelectInfo::Type InSelectInfo);
 	virtual void GetCustomDebugObjects(TArray<FCustomDebugObject>& DebugList) const override;
 	virtual bool OnlyShowCustomDebugObjects() const override { return true; }
 	virtual void HandleSetObjectBeingDebugged(UObject* InObject) override;
@@ -211,6 +245,11 @@ private:
 	/** Handle preview scene setup */
 	void HandlePreviewSceneCreated(const TSharedRef<IPersonaPreviewScene>& InPersonaPreviewScene);
 	void HandleViewportCreated(const TSharedRef<class IPersonaViewport>& InViewport);
+	bool IsToolbarDrawSpacesEnabled() const;
+	ECheckBoxState GetToolbarDrawSpaces() const;
+	void OnToolbarDrawSpacesChanged(ECheckBoxState InNewValue);
+	ECheckBoxState GetToolbarDrawAxesOnSelection() const;
+	void OnToolbarDrawAxesOnSelectionChanged(ECheckBoxState InNewValue);
 	TOptional<float> GetToolbarAxesScale() const;
 	void OnToolbarAxesScaleChanged(float InValue);
 
@@ -237,6 +276,9 @@ private:
 	bool IsExecuteGraphOn() const;
 	void ToggleAutoCompileGraph();
 	bool IsAutoCompileGraphOn() const;
+	bool CanAutoCompileGraph() const { return true; }
+	void ToggleEventQueue();
+	TSharedRef<SWidget> GenerateEventQueueMenuContent();
 
 	enum ERigElementGetterSetterType
 	{
@@ -251,7 +293,11 @@ private:
 
 	 void HandleMakeElementGetterSetter(ERigElementGetterSetterType Type, bool bIsGetter, TArray<FRigElementKey> Keys, UEdGraph* Graph, FVector2D NodePosition);
 
-	 void HandleOnControlModified(IControlRigManipulatable* Subject, const FRigControl& Control, EControlRigSetKey InSetKey);
+	 void HandleOnControlModified(UControlRig* Subject, const FRigControl& Control, const FRigControlModifiedContext& Context);
+
+	 void HandleRefreshEditorFromBlueprint(UControlRigBlueprint* InBlueprint);
+
+	 void HandleVariableDroppedFromBlueprint(UObject* InSubject, FProperty* InVariableToDrop, const FVector2D& InDropPosition, const FVector2D& InScreenPosition);
 
 	 void OnGraphNodeClicked(UControlRigGraphNode* InNode);
 
@@ -322,6 +368,9 @@ protected:
 
 	void OnAnimInitialized();
 
+	/** Are we currently in setup mode */
+	bool bSetupModeEnabled;
+
 	FPreviewControlRigUpdated PreviewControlRigUpdated;
 
 	TSharedPtr<SControlRigGraphPinNameListValueWidget> PinControlNameList;
@@ -332,6 +381,13 @@ protected:
 	void SetPinControlNameListText(const FText& NewTypeInValue, ETextCommit::Type /*CommitInfo*/);
 	void OnPinControlNameListChanged(TSharedPtr<FString> NewSelection, ESelectInfo::Type SelectInfo);
 	void OnPinControlNameListComboBox(const TArray<TSharedPtr<FString>>* InNameList);
+	void ToggleSetupMode();
+
+	bool bFirstTimeSelecting;
+	bool bAnyErrorsLeft;
+
+	EControlRigEditorEventQueue LastEventQueue;
+	FString LastDebuggedRig;
 
 	friend class FControlRigEditorMode;
 	friend class SControlRigStackView;

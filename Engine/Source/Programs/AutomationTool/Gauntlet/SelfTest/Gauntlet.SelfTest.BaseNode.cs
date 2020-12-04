@@ -19,7 +19,20 @@ namespace Gauntlet.SelfTest
 				return 300;
 			}
 		}
-	
+
+
+		/// <summary>
+		/// What the test result should be treated as if we reach max duration.
+		/// </summary>
+		public virtual EMaxDurationReachedResult MaxDurationReachedResult
+		{
+			get
+			{
+				return EMaxDurationReachedResult.Failure;
+			}
+		}
+
+
 		public TestPriority Priority { get { return TestPriority.Normal; } }
 
 		public string Name
@@ -31,6 +44,8 @@ namespace Gauntlet.SelfTest
 		}
 
 		public bool HasWarnings { get { return false; } }
+
+		public virtual bool LogWarningsAndErrorsAfterSummary { get { return true; } }
 
 		public TestResult GetTestResult()
 		{
@@ -136,6 +151,14 @@ namespace Gauntlet.SelfTest
 		protected void MarkComplete()
 		{
 			MarkComplete(TestFailures.Count == 0 ? TestResult.Passed : TestResult.Failed);
+		}
+
+		/// <summary>
+		/// Output all defined commandline information for this test to the gauntlet window and exit test early.
+		/// </summary>
+		public virtual void DisplayCommandlineHelp()
+		{
+
 		}
 
 		// Self test interface

@@ -38,12 +38,15 @@ void FWindowsMixedRealityRHIModule::StartupModule()
 	}
 
 	HoloSpace = HolographicSpace::CreateForCoreWindow(CoreWindow::GetForCurrentThread());
-	HMD->SetHolographicSpace(HoloSpace);
-	id =
+	if (HoloSpace != nullptr)
 	{
-		HoloSpace->PrimaryAdapterId.LowPart,
-		HoloSpace->PrimaryAdapterId.HighPart
-	};
+		HMD->SetHolographicSpace(HoloSpace);
+		id =
+		{
+			HoloSpace->PrimaryAdapterId.LowPart,
+			HoloSpace->PrimaryAdapterId.HighPart
+		};
+	}
 
 #endif
 
@@ -303,7 +306,7 @@ void FWindowsMixedRealityViewport::UpdateBackBuffer()
 void FWindowsMixedRealityViewport::Resize(uint32 InSizeX, uint32 InSizeY, bool bInIsFullscreen, EPixelFormat PreferredPixelFormat)
 {
 	// Unbind any dangling references to resources
-	D3DRHI->RHISetRenderTargets(0, nullptr, nullptr);
+	D3DRHI->SetRenderTargets(0, nullptr, nullptr);
 	D3DRHI->ClearState();
 	D3DRHI->GetDeviceContext()->Flush(); // Potential perf hit
 

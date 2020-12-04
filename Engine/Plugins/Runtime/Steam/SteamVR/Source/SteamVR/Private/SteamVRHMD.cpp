@@ -673,6 +673,11 @@ bool FSteamVRHMD::GetTrackingSensorProperties(int32 SensorId, FQuat& OutOrientat
 	return true;
 }
 
+FString FSteamVRHMD::GetTrackedDevicePropertySerialNumber(int32 DeviceId)
+{
+	return GetFStringTrackedDeviceProperty(VRSystem, DeviceId, vr::Prop_SerialNumber_String);
+}
+
 void FSteamVRHMD::SetInterpupillaryDistance(float NewInterpupillaryDistance)
 {
 }
@@ -891,7 +896,6 @@ bool FSteamVRHMD::GetFloorToEyeTrackingTransform(FTransform& OutStandingToSeated
 	}
 	return bSuccess;
 }
-
 
 void FSteamVRHMD::RecordAnalytics()
 {
@@ -1595,7 +1599,7 @@ static const uint32 SteamVRSwapChainLength = 3;
 static const uint32 SteamVRSwapChainLength = 1;
 #endif
 
-bool FSteamVRHMD::AllocateRenderTargetTexture(uint32 Index, uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 InTexFlags, uint32 InTargetableTextureFlags, FTexture2DRHIRef& OutTargetableTexture, FTexture2DRHIRef& OutShaderResourceTexture, uint32 NumSamples)
+bool FSteamVRHMD::AllocateRenderTargetTexture(uint32 Index, uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, ETextureCreateFlags InTexFlags, ETextureCreateFlags InTargetableTextureFlags, FTexture2DRHIRef& OutTargetableTexture, FTexture2DRHIRef& OutShaderResourceTexture, uint32 NumSamples)
 {
 	if (!IsStereoEnabled())
 	{
@@ -1651,7 +1655,7 @@ bool FSteamVRHMD::AllocateRenderTargetTexture(uint32 Index, uint32 SizeX, uint32
 	return true;
 }
 
-bool FSteamVRHMD::AllocateDepthTexture(uint32 Index, uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 Flags, uint32 TargetableTextureFlags, 
+bool FSteamVRHMD::AllocateDepthTexture(uint32 Index, uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, ETextureCreateFlags Flags, ETextureCreateFlags TargetableTextureFlags,
 	FTexture2DRHIRef& OutTargetableTexture, FTexture2DRHIRef& OutShaderResourceTexture, uint32 NumSamples /* ignored, we always use 1 */)
 {
 	if (!IsStereoEnabled() || pBridge == nullptr)

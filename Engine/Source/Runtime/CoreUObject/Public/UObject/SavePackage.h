@@ -6,12 +6,48 @@
 #include "Containers/Set.h"
 #include "Containers/Map.h"
 #include "UObject/NameTypes.h"
+#include "Serialization/FileRegions.h"
+#include "Misc/DateTime.h"
+#include "ObjectMacros.h"
+
+#if !defined(UE_WITH_SAVEPACKAGE)
+#	define UE_WITH_SAVEPACKAGE 1
+#endif
 
 class FArchive;
 class FIoBuffer;
-class FLinkerLoad;
-class FLinkerSave;
 class FPackageStoreBulkDataManifest;
+class FSavePackageContext;
+class FArchiveDiffMap;
+class FOutputDevice;
+
+/**
+ * Struct to encapsulate arguments specific to saving one package
+ */
+struct FPackageSaveInfo
+{
+	class UPackage* Package = nullptr;
+	class UObject* Asset = nullptr;
+	FString Filename;
+};
+
+/**
+ * Struct to encapsulate UPackage::Save arguments. 
+ * These arguments are shared between packages when saving multiple packages concurrently.
+ */
+struct FSavePackageArgs
+{
+	class ITargetPlatform* TargetPlatform = nullptr;
+	EObjectFlags TopLevelFlags = RF_NoFlags;
+	uint32 SaveFlags = 0;
+	bool bForceByteSwapping = false; // for FLinkerSave
+	bool bWarnOfLongFilename = false;
+	bool bSlowTask = true;
+	FDateTime FinalTimeStamp;
+	FOutputDevice* Error = nullptr;
+	FArchiveDiffMap* DiffMap = nullptr;
+	FSavePackageContext* SavePackageContext = nullptr;
+};
 
 class FPackageStoreWriter
 {
@@ -33,13 +69,14 @@ public:
 	{
 		FName	PackageName;
 		FString	LooseFilePath;
+		uint64  RegionsOffset;
 
 		TArray<FIoBuffer> Exports;
 	};
 
 	/** Write 'uexp' data
 	  */
-	virtual void WriteExports(const ExportsInfo& Info, const FIoBuffer& ExportsData) = 0;
+	virtual void WriteExports(const ExportsInfo& Info, const FIoBuffer& ExportsData, const TArray<FFileRegion>& FileRegions) = 0;
 
 	struct FBulkDataInfo
 	{
@@ -57,7 +94,7 @@ public:
 
 	/** Write 'ubulk' data
 	  */
-	virtual void WriteBulkdata(const FBulkDataInfo& Info, const FIoBuffer& BulkData) = 0;
+	virtual void WriteBulkdata(const FBulkDataInfo& Info, const FIoBuffer& BulkData, const TArray<FFileRegion>& FileRegions) = 0;
 };
 
 class FLooseFileWriter : public FPackageStoreWriter
@@ -67,8 +104,8 @@ public:
 	COREUOBJECT_API ~FLooseFileWriter();
 
 	COREUOBJECT_API virtual void WriteHeader(const HeaderInfo& Info, const FIoBuffer& HeaderData) override;
-	COREUOBJECT_API virtual void WriteExports(const ExportsInfo& Info, const FIoBuffer& ExportsData) override;
-	COREUOBJECT_API virtual void WriteBulkdata(const FBulkDataInfo& Info, const FIoBuffer& BulkData) override;
+	COREUOBJECT_API virtual void WriteExports(const ExportsInfo& Info, const FIoBuffer& ExportsData, const TArray<FFileRegion>& FileRegions) override;
+	COREUOBJECT_API virtual void WriteBulkdata(const FBulkDataInfo& Info, const FIoBuffer& BulkData, const TArray<FFileRegion>& FileRegions) override;
 
 private:
 };
@@ -76,9 +113,10 @@ private:
 class FSavePackageContext
 {
 public:
-	FSavePackageContext(FPackageStoreWriter* InPackageStoreWriter, FPackageStoreBulkDataManifest* InBulkDataManifest)
+	FSavePackageContext(FPackageStoreWriter* InPackageStoreWriter, FPackageStoreBulkDataManifest* InBulkDataManifest, bool InbForceLegacyOffsets)
 	: PackageStoreWriter(InPackageStoreWriter) 
 	, BulkDataManifest(InBulkDataManifest)
+	, bForceLegacyOffsets(InbForceLegacyOffsets)
 	{
 	}
 
@@ -86,4 +124,5 @@ public:
 
 	FPackageStoreWriter* PackageStoreWriter;
 	FPackageStoreBulkDataManifest* BulkDataManifest;
+	bool bForceLegacyOffsets;
 };

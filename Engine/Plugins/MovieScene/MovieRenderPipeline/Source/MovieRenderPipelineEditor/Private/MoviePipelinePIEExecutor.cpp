@@ -15,29 +15,60 @@
 #include "MoviePipelinePIEExecutorSettings.h"
 #include "MoviePipelineEditorBlueprintLibrary.h"
 #include "Misc/MessageDialog.h"
+#include "Modules/ModuleManager.h"
+#include "MessageLogModule.h"
+#include "Logging/MessageLog.h"
 
 #define LOCTEXT_NAMESPACE "MoviePipelinePIEExecutor"
 
+
+const TArray<FString> UMoviePipelinePIEExecutor::FValidationMessageGatherer::Whitelist = { "LogMovieRenderPipeline", "LogMoviePipelineExecutor" };
+
+UMoviePipelinePIEExecutor::FValidationMessageGatherer::FValidationMessageGatherer()
+	: FOutputDevice()
+	, ExecutorLog()
+{
+	FMessageLogModule& MessageLogModule = FModuleManager::LoadModuleChecked<FMessageLogModule>("MessageLog");
+	FMessageLogInitializationOptions MessageLogOptions;
+	MessageLogOptions.bShowPages = true;
+	MessageLogOptions.bAllowClear = true;
+	MessageLogOptions.MaxPageCount = 10;
+	MessageLogOptions.bShowFilters = true;
+	MessageLogModule.RegisterLogListing("MoviePipelinePIEExecutor", LOCTEXT("MoviePipelineExecutorLogLabel", "High Quality Media Export"));
+
+	ExecutorLog = MakeUnique<FMessageLog>("MoviePipelinePIEExecutor");
+}
+
+void UMoviePipelinePIEExecutor::FValidationMessageGatherer::Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const class FName& Category)
+{
+	for (const FString& WhiteCategory : Whitelist)
+	{
+		if (Category.ToString().Equals(WhiteCategory))
+		{
+			if (Verbosity == ELogVerbosity::Warning)
+			{
+				ExecutorLog->Warning(FText::FromString(FString(V)));
+			}
+			else if (Verbosity == ELogVerbosity::Error)
+			{
+				ExecutorLog->Error(FText::FromString(FString(V)));
+			}
+			return;
+		}
+	}
+}
 
 void UMoviePipelinePIEExecutor::Start(const UMoviePipelineExecutorJob* InJob)
 {
 	Super::Start(InJob);
 
+	// Start capturing logging messages
+	ValidationMessageGatherer.StartGathering();
+
 	// Check for unsaved maps. It's pretty rare that someone actually wants to execute on an unsaved map,
 	// and it catches the much more common case of adding the job to an unsaved map and then trying to render
 	// from a newly loaded map, PIE startup will fail because the map is no longer valid.
-	bool bAllMapsValid = true;
-
-	for (const UMoviePipelineExecutorJob* Job : Queue->GetJobs())
-	{
-		FString PackageName = Job->Map.GetLongPackageName();
-		if (!FPackageName::IsValidLongPackageName(PackageName))
-		{
-			bAllMapsValid = false;
-			break;
-		}
-	}
-
+	const bool bAllMapsValid = UMoviePipelineEditorBlueprintLibrary::IsMapValidForRemoteRender(Queue->GetJobs());
 	if (!bAllMapsValid)
 	{
 		FText FailureReason = LOCTEXT("UnsavedMapFailureDialog", "One or more jobs in the queue have an unsaved map as their target map. Maps must be saved at least once before rendering.");
@@ -69,6 +100,7 @@ void UMoviePipelinePIEExecutor::Start(const UMoviePipelineExecutorJob* InJob)
 	PlayInEditorSettings->bLaunchSeparateServer = false;
 	PlayInEditorSettings->SetRunUnderOneProcess(true);
 	PlayInEditorSettings->LastExecutedPlayModeType = EPlayModeType::PlayMode_InEditorFloating;
+	PlayInEditorSettings->bUseNonRealtimeAudioDevice = true;
 
 	FRequestPlaySessionParams Params;
 	Params.EditorPlaySettings = PlayInEditorSettings;
@@ -125,9 +157,10 @@ void UMoviePipelinePIEExecutor::OnPIEStartupFinished(bool)
 		}
 	}
 	
-	if (!ExecutingWorld)
+	if(!ExecutingWorld)
 	{
-		OnIndividualPipelineFinished(nullptr);
+		// This only happens if PIE startup fails and they've usually gotten a pop-up dialog already.
+		OnExecutorFinishedImpl();
 		return;
 	}
 
@@ -142,6 +175,7 @@ void UMoviePipelinePIEExecutor::OnPIEStartupFinished(bool)
 
 	// This Pipeline belongs to the world being created so that they have context for things they execute.
 	ActiveMoviePipeline = NewObject<UMoviePipeline>(ExecutingWorld, PipelineClass);
+	ActiveMoviePipeline->DebugWidgetClass = DebugWidgetClass;
 	
 	// We allow users to set a multi-frame delay before we actually run the Initialization function and start thinking.
 	// This solves cases where there are engine systems that need to finish loading before we do anything.
@@ -152,7 +186,6 @@ void UMoviePipelinePIEExecutor::OnPIEStartupFinished(bool)
 
 	// Listen for when the pipeline thinks it has finished.
 	ActiveMoviePipeline->OnMoviePipelineFinished().AddUObject(this, &UMoviePipelinePIEExecutor::OnPIEMoviePipelineFinished);
-	ActiveMoviePipeline->OnMoviePipelineErrored().AddUObject(this, &UMoviePipelinePIEExecutor::OnPipelineErrored);
 	
 	if (ExecutorSettings->InitialDelayFrameCount == 0)
 	{
@@ -188,8 +221,13 @@ void UMoviePipelinePIEExecutor::OnTick()
 	}
 }
 
-void UMoviePipelinePIEExecutor::OnPIEMoviePipelineFinished(UMoviePipeline* InMoviePipeline)
+void UMoviePipelinePIEExecutor::OnPIEMoviePipelineFinished(UMoviePipeline* InMoviePipeline, bool bFatalError)
 {
+	if (bFatalError)
+	{
+		OnPipelineErrored(InMoviePipeline, true, FText());
+	}
+
 	// Unsubscribe to the EndPIE event so we don't think the user canceled it.
 	FCoreDelegates::OnBeginFrame.RemoveAll(this);
 
@@ -213,8 +251,7 @@ void UMoviePipelinePIEExecutor::OnPIEEnded(bool)
 		UE_LOG(LogMovieRenderPipeline, Log, TEXT("PIE Ended while Movie Pipeline was still active. Stalling to do full shutdown."));
 
 		// This will flush any outstanding work on the movie pipeline (file writes) immediately
-		ActiveMoviePipeline->RequestShutdown(); // Set the Shutdown Requested flag.
-		ActiveMoviePipeline->Shutdown(); // Flush the shutdown.
+		ActiveMoviePipeline->Shutdown(true);
 		
 		UE_LOG(LogMovieRenderPipeline, Log, TEXT("MoviePipelinePIEExecutor: Stalling finished, pipeline has shut down."));
 	}
@@ -222,19 +259,26 @@ void UMoviePipelinePIEExecutor::OnPIEEnded(bool)
 
 	// Delay for one frame so that PIE can finish shut down. It's not a huge fan of us starting up on the same frame.
 	GEditor->GetTimerManager()->SetTimerForNextTick(FTimerDelegate::CreateUObject(this, &UMoviePipelinePIEExecutor::DelayedFinishNotification));
+
+	// Restore the previous settings.
+	FApp::SetUseFixedTimeStep(bPreviousUseFixedTimeStep);
+	FApp::SetFixedDeltaTime(PreviousFixedTimeStepDelta);
+
+	// Stop capturing logging messages
+	ValidationMessageGatherer.StopGathering();
+	ValidationMessageGatherer.OpenLog();
 }
 
 void UMoviePipelinePIEExecutor::DelayedFinishNotification()
 {
+	OnIndividualJobFinishedImpl(Queue->GetJobs()[CurrentPipelineIndex]);
+
+	// Now that PIE has finished
 	UMoviePipeline* MoviePipeline = ActiveMoviePipeline;
 	
 	// Null these out now since OnIndividualPipelineFinished might invoke something that causes a GC
 	// and we want them to go away with the GC.
 	ActiveMoviePipeline = nullptr;
-
-	// Restore the previous settings.
-	FApp::SetUseFixedTimeStep(bPreviousUseFixedTimeStep);
-	FApp::SetFixedDeltaTime(PreviousFixedTimeStepDelta);
 	
 	// Now that another frame has passed and we should be OK to start another PIE session, notify our owner.
 	OnIndividualPipelineFinished(MoviePipeline);

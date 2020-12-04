@@ -27,6 +27,7 @@ struct FViewportClick;
 // Forward declarations.
 //
 class UStaticMesh;
+struct FAssetData;
 
 /** View modes supported by the foliage palette */
 namespace EFoliagePaletteViewMode
@@ -401,6 +402,9 @@ public:
 	/** Tell us if we can moves selected foliage instances to the target level. */
 	bool CanMoveSelectedFoliageToLevel(ULevel* InTargetLevel) const;
 
+	/** Ends tracking and end potential transaction */
+	bool EndTracking();
+
 	/** FEdMode: widget handling */
 	virtual FVector GetWidgetLocation() const override;
 	virtual bool AllowWidgetMove() override;
@@ -707,5 +711,8 @@ private:
 
 	/** When transforming instances */
 	bool bMoving;
+
+	/** Flag to know when we are tracking a transaction in mouse delta */
+	bool bTracking;
 };
 

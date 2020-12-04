@@ -104,6 +104,8 @@ FDatasmithUEPbrMaterialElementImpl::FDatasmithUEPbrMaterialElementImpl( const TC
 	, bTwoSided( false )
 	, bUseMaterialAttributes( false )
 	, bMaterialFunctionOnly ( false )
+	, OpacityMaskClipValue( 0.3333f )
+	, ShadingModel( EDatasmithShadingModel::DefaultLit )
 {
 }
 

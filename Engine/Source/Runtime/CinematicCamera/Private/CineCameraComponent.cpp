@@ -25,15 +25,8 @@
 UCineCameraComponent::UCineCameraComponent()
 {
 	// Super 35mm 4 Perf
-	// These will be overridden if valid default presets are specified in ini
-	Filmback.SensorWidth = 24.89f;
-	Filmback.SensorHeight = 18.67;
-	LensSettings.MinFocalLength = 50.f;
-	LensSettings.MaxFocalLength = 50.f;
-	LensSettings.MinFStop = 2.f;
-	LensSettings.MaxFStop = 2.f;
-	LensSettings.MinimumFocusDistance = 15.f;
-	LensSettings.DiaphragmBladeCount = FPostProcessSettings::kDefaultDepthOfFieldBladeCount;
+	// Default filmback and lens settings will be overridden if valid default presets are specified in ini
+	
 
 #if WITH_EDITORONLY_DATA
 	bTickInEditor = true;
@@ -83,21 +76,11 @@ void UCineCameraComponent::Serialize(FArchive& Ar)
 	Ar.UsingCustomVersion(FReleaseObjectVersion::GUID);
 
 	Super::Serialize(Ar);
-}
 
-void UCineCameraComponent::PostInitProperties()
-{
-	Super::PostInitProperties();
-
-	RecalcDerivedData();
-}
-
-void UCineCameraComponent::PostLoad()
-{
-	if (GetLinkerCustomVersion(FReleaseObjectVersion::GUID) < FReleaseObjectVersion::DeprecateFilmbackSettings)
+	if (Ar.IsLoading() && Ar.CustomVer(FReleaseObjectVersion::GUID) < FReleaseObjectVersion::DeprecateFilmbackSettings)
 	{
 		bool bUpgradeFilmback = true;
-		if (GetLinkerCustomVersion(FCineCameraObjectVersion::GUID) == FCineCameraObjectVersion::ChangeDefaultFilmbackToDigitalFilm)
+		if (Ar.CustomVer(FCineCameraObjectVersion::GUID) == FCineCameraObjectVersion::ChangeDefaultFilmbackToDigitalFilm)
 		{
 			UCineCameraComponent* Template = Cast<UCineCameraComponent>(GetArchetype());
 			if (Template)
@@ -129,6 +112,18 @@ void UCineCameraComponent::PostLoad()
 			Filmback = FilmbackSettings_DEPRECATED;
 		}
 	}
+}
+
+void UCineCameraComponent::PostInitProperties()
+{
+	Super::PostInitProperties();
+
+	RecalcDerivedData();
+}
+
+void UCineCameraComponent::PostLoad()
+{
+	Super::PostLoad();
 
 	if (FocusSettings.FocusMethod >= ECameraFocusMethod::MAX )
 	{
@@ -137,7 +132,6 @@ void UCineCameraComponent::PostLoad()
 
 	RecalcDerivedData();
 	bResetInterpolation = true;
-	Super::PostLoad();
 }
 
 static const FColor DebugFocusPointSolidColor(102, 26, 204, 153);		// purple
@@ -193,6 +187,23 @@ void UCineCameraComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 
 void UCineCameraComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
+	static const FName NAME_MinFocalLength = GET_MEMBER_NAME_CHECKED(FCameraLensSettings, MinFocalLength);
+	static const FName NAME_MaxFocalLength = GET_MEMBER_NAME_CHECKED(FCameraLensSettings, MaxFocalLength);
+
+	const FName PropertyChangedName = PropertyChangedEvent.GetPropertyName();
+
+	// If the user changed one of these 2 properties, leave the one that they changed alone, and 
+	// re-adjust the other one.
+	if (PropertyChangedName == NAME_MinFocalLength)
+	{
+		LensSettings.MaxFocalLength = FMath::Max(LensSettings.MinFocalLength, LensSettings.MaxFocalLength);
+	}
+	else if (PropertyChangedName == NAME_MaxFocalLength)
+	{
+		LensSettings.MinFocalLength = FMath::Min(LensSettings.MinFocalLength, LensSettings.MaxFocalLength);
+	}
+
+	// Recalculate everything based on any new values.
 	RecalcDerivedData();
 
 	// handle debug focus plane
@@ -238,7 +249,7 @@ void UCineCameraComponent::SetFieldOfView(float InFieldOfView)
 	CurrentFocalLength = (Filmback.SensorWidth / 2.f) / FMath::Tan(FMath::DegreesToRadians(InFieldOfView / 2.f));
 }
 
-void UCineCameraComponent::SetCurrentFocalLength(const float& InFocalLength)
+void UCineCameraComponent::SetCurrentFocalLength(float InFocalLength)
 {
 	CurrentFocalLength = InFocalLength;
 	RecalcDerivedData();
@@ -342,6 +353,12 @@ float UCineCameraComponent::GetWorldToMetersScale() const
 }
 
 // static
+TArray<FNamedFilmbackPreset> UCineCameraComponent::GetFilmbackPresetsCopy()
+{
+	return GetDefault<UCineCameraComponent>()->FilmbackPresets;
+}
+
+// static
 TArray<FNamedLensPreset> UCineCameraComponent::GetLensPresetsCopy()
 {
 	return GetDefault<UCineCameraComponent>()->LensPresets;
@@ -361,6 +378,9 @@ TArray<FNamedLensPreset> const& UCineCameraComponent::GetLensPresets()
 
 void UCineCameraComponent::RecalcDerivedData()
 {
+	// validate incorrect values
+	LensSettings.MaxFocalLength = FMath::Max(LensSettings.MinFocalLength, LensSettings.MaxFocalLength);
+	
 	// respect physical limits of the (simulated) hardware
 	CurrentFocalLength = FMath::Clamp(CurrentFocalLength, LensSettings.MinFocalLength, LensSettings.MaxFocalLength);
 	CurrentAperture = FMath::Clamp(CurrentAperture, LensSettings.MinFStop, LensSettings.MaxFStop);

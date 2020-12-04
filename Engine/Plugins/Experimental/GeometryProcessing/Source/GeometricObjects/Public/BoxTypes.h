@@ -5,6 +5,7 @@
 #include "Math/Box.h"
 #include "Math/Box2D.h"
 #include "VectorTypes.h"
+#include "TransformTypes.h"
 
 template <typename RealType>
 struct TInterval1
@@ -38,6 +39,11 @@ struct TInterval1
 	RealType Length() const
 	{
 		return Max - Min;
+	}
+
+	RealType MaxAbsExtrema() const
+	{
+		return TMathUtil<RealType>::Max(TMathUtil<RealType>::Abs(Min), TMathUtil<RealType>::Abs(Max));
 	}
 
 	void Contain(const RealType& V)
@@ -177,6 +183,17 @@ struct TInterval1
 	{
 		return TInterval1(Min * f, Max * f);
 	}
+
+	inline bool IsEmpty() const
+	{
+		return Max > Min;
+	}
+
+	void Expand(RealType Radius)
+	{
+		Max += Radius;
+		Min -= Radius;
+	}
 };
 
 typedef TInterval1<float> FInterval1f;
@@ -198,6 +215,13 @@ struct TAxisAlignedBox3
 	{
 		this->Min = Min;
 		this->Max = Max;
+	}
+
+	TAxisAlignedBox3(const FVector3<RealType>& V0, const FVector3<RealType>& V1, const FVector3<RealType>& V2)
+	{
+		TMathUtil<RealType>::MinMax(V0.X, V1.X, V2.X, Min.X, Max.X);
+		TMathUtil<RealType>::MinMax(V0.Y, V1.Y, V2.Y, Min.Y, Max.Y);
+		TMathUtil<RealType>::MinMax(V0.Z, V1.Z, V2.Z, Min.Z, Max.Z);
 	}
 
 	TAxisAlignedBox3(const TAxisAlignedBox3& OtherBox) = default;
@@ -234,6 +258,27 @@ struct TAxisAlignedBox3
 		}
 	}
 
+	TAxisAlignedBox3(const TAxisAlignedBox3& Box, const FTransform3d& Transform)
+	{
+		FVector3<RealType> C0 = Transform.TransformPosition(Box.GetCorner(0));
+		Min = C0;
+		Max = C0;
+		for (int i = 1; i < 8; ++i)
+		{
+			Contain(Transform.TransformPosition(Box.GetCorner(i)));
+		}
+	}
+
+	bool operator==(const TAxisAlignedBox3<RealType>& Other) const
+	{
+		return Max == Other.Max && Min == Other.Min;
+	}
+	bool operator!=(const TAxisAlignedBox3<RealType>& Other) const
+	{
+		return Max != Other.Max || Min != Other.Min;
+	}
+
+
 	explicit operator FBox() const
 	{
 		FVector MinV((float)Min.X, (float)Min.Y, (float)Min.Z);
@@ -264,6 +309,13 @@ struct TAxisAlignedBox3
 		return TAxisAlignedBox3(
 			FVector3<RealType>(TNumericLimits<RealType>::Max(), TNumericLimits<RealType>::Max(), TNumericLimits<RealType>::Max()),
 			FVector3<RealType>(-TNumericLimits<RealType>::Max(), -TNumericLimits<RealType>::Max(), -TNumericLimits<RealType>::Max()));
+	}
+
+	static TAxisAlignedBox3<RealType> Infinite()
+	{
+		return TAxisAlignedBox3(
+			FVector3<RealType>(-TNumericLimits<RealType>::Max(), -TNumericLimits<RealType>::Max(), -TNumericLimits<RealType>::Max()),
+			FVector3<RealType>(TNumericLimits<RealType>::Max(), TNumericLimits<RealType>::Max(), TNumericLimits<RealType>::Max()) );
 	}
 
 	FVector3<RealType> Center() const
@@ -406,9 +458,29 @@ struct TAxisAlignedBox3
 		return TMathUtil<RealType>::Max(Width(), TMathUtil<RealType>::Max(Height(), Depth()));
 	}
 
+	RealType MinDim() const
+	{
+		return TMathUtil<RealType>::Min(Width(), TMathUtil<RealType>::Min(Height(), Depth()));
+	}
+
 	FVector3<RealType> Diagonal() const
 	{
 		return FVector3<RealType>(Max.X - Min.X, Max.Y - Min.Y, Max.Z - Min.Z);
+	}
+
+	inline bool IsEmpty() const
+	{
+		return Max.X > Min.X || Max.Y > Min.Y || Max.Z > Min.Z;
+	}
+
+	void Expand(RealType Radius)
+	{
+		Max.X += Radius;
+		Max.Y += Radius;
+		Max.Z += Radius;
+		Min.X -= Radius;
+		Min.Y -= Radius;
+		Min.Z -= Radius;
 	}
 };
 
@@ -587,6 +659,19 @@ struct TAxisAlignedBox2
 	inline RealType MinDim() const
 	{
 		return TMathUtil<RealType>::Min(Width(), Height());
+	}
+
+	inline bool IsEmpty() const
+	{
+		return Max.X > Min.X || Max.Y > Min.Y;
+	}
+
+	void Expand(RealType Radius)
+	{
+		Max.X += Radius;
+		Max.Y += Radius;
+		Min.X -= Radius;
+		Min.Y -= Radius;
 	}
 };
 

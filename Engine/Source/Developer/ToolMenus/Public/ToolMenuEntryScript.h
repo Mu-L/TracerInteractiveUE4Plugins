@@ -10,6 +10,7 @@
 #include "Textures/SlateIcon.h"
 #include "Framework/MultiBox/MultiBoxDefs.h"
 #include "Styling/SlateTypes.h"
+#include "UObject/UObjectThreadContext.h"
 
 #include "ToolMenuMisc.h"
 #include "ToolMenuContext.h"
@@ -154,10 +155,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Advanced")
 	void InitEntry(const FName OwnerName, const FName Menu, const FName Section, const FName Name, const FText& Label = FText(), const FText& ToolTip = FText());
 
+	FORCEINLINE bool CanSafelyRouteCall() { return !(GIntraFrameDebuggingGameThread || IsUnreachable() || FUObjectThreadContext::Get().IsRoutingPostLoad); }
+
+	static UToolMenuEntryScript* GetIfCanSafelyRouteCall(const TWeakObjectPtr<UToolMenuEntryScript>& InWeak);
+
 private:
 
 	friend struct FToolMenuSection;
 	friend class UToolMenus;
+	friend class FPopulateMenuBuilderWithToolMenuEntry;
 
 	TAttribute<FText> CreateLabelAttribute(FToolMenuContext& Context);
 

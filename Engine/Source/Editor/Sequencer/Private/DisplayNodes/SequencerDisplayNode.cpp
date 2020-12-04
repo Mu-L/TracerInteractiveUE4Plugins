@@ -29,6 +29,7 @@
 #include "Tree/SCurveEditorTreePin.h"
 #include "Tree/CurveEditorTreeFilter.h"
 #include "ScopedTransaction.h"
+#include "MovieSceneTrack.h"
 #include "SequencerKeyTimeCache.h"
 #include "SequencerNodeSortingMethods.h"
 #include "SequencerSelectionCurveFilter.h"
@@ -340,8 +341,8 @@ void SSequencerCombinedKeysTrack::GenerateCachedKeyPositions(const FGeometry& Al
 		}
 
 		// Generate a new cache
-		FSequencerCachedKeys TempCache;
-		TempCache.Update(KeyArea, CachedTickResolution);
+		FSequencerCachedKeys TempCache(KeyArea);
+		TempCache.Update(CachedTickResolution);
 
 		if (CacheKey.IsValid())
 		{
@@ -451,6 +452,8 @@ void FSequencerDisplayNode::SetParent(TSharedPtr<FSequencerDisplayNode> InParent
 	TSharedPtr<FSequencerDisplayNode> CurrentParent = ParentNode.Pin();
 	if (CurrentParent != InParent)
 	{
+		const FString OldPath = GetPathName();
+
 		TSharedRef<FSequencerDisplayNode> ThisNode = AsShared();
 		if (CurrentParent)
 		{
@@ -478,9 +481,11 @@ void FSequencerDisplayNode::SetParent(TSharedPtr<FSequencerDisplayNode> InParent
 				ParentTree.SavePinnedState(*this, false);
 			}
 		}
-	}
 
-	ParentNode = InParent;
+		ParentNode = InParent;
+
+		ParentTree.GetSequencer().OnNodePathChanged(OldPath, GetPathName());
+	}
 }
 
 void FSequencerDisplayNode::MoveChild(int32 InChildIndex, int32 InDesiredNewIndex)
@@ -925,6 +930,12 @@ FString FSequencerDisplayNode::GetPathName() const
 	return PathName;
 }
 
+void FSequencerDisplayNode::SetNodeName(const FName& InName)
+{
+	const FString OldPath = GetPathName();
+	NodeName = InName;
+	ParentTree.GetSequencer().OnNodePathChanged(OldPath, GetPathName());
+}
 
 TSharedPtr<SWidget> FSequencerDisplayNode::OnSummonContextMenu()
 {
@@ -1032,9 +1043,9 @@ void FSequencerDisplayNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 
 	ESequencerNode::Type BaseNodeType = BaseNode->GetType();
 
-	bool bCanSolo = (BaseNodeType == ESequencerNode::Track || BaseNodeType == ESequencerNode::Object || BaseNodeType == ESequencerNode::Folder);
-	bool bIsReadOnly = !GetSequencer().IsReadOnly();
-	FCanExecuteAction CanExecute = FCanExecuteAction::CreateLambda([bIsReadOnly]{ return bIsReadOnly; });
+	bool bFilterableNode = (BaseNodeType == ESequencerNode::Track || BaseNodeType == ESequencerNode::Object || BaseNodeType == ESequencerNode::Folder);
+	bool bIsReadOnly = GetSequencer().IsReadOnly();
+	FCanExecuteAction CanExecute = FCanExecuteAction::CreateLambda([bIsReadOnly]{ return !bIsReadOnly; });
 
 	MenuBuilder.BeginSection("Edit", LOCTEXT("EditContextMenuSectionName", "Edit"));
 	{
@@ -1068,7 +1079,7 @@ void FSequencerDisplayNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 			);
 		}
 
-		if (bCanSolo)
+		if (bFilterableNode)
 		{
 			MenuBuilder.AddMenuEntry(
 				LOCTEXT("ToggleNodeSolo", "Solo"),
@@ -1163,6 +1174,15 @@ void FSequencerDisplayNode::BuildContextMenu(FMenuBuilder& MenuBuilder)
 				LOCTEXT("MoveTracksToNewFolderTooltip", "Move the selected tracks to a new folder."),
 				FSlateIcon(FEditorStyle::GetStyleSetName(), "ContentBrowser.AssetTreeFolderOpen"),
 				FUIAction(FExecuteAction::CreateSP(&GetSequencer(), &FSequencer::MoveSelectedNodesToNewFolder)));
+		}
+
+		if (bFilterableNode && !bIsReadOnly)
+		{
+			MenuBuilder.AddSubMenu(
+				LOCTEXT("AddNodesToNodeGroup", "Add to Group"),
+				LOCTEXT("AddNodesToNodeGroupTooltip", "Add selected nodes to a group"),
+				FNewMenuDelegate::CreateSP(&GetSequencer(), &FSequencer::BuildAddSelectedToNodeGroupMenu));
+
 		}
 	}
 	MenuBuilder.EndSection();

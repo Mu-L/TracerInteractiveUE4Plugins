@@ -114,7 +114,7 @@ FAnimationViewportClient::FAnimationViewportClient(const TSharedRef<IPersonaPrev
 	if(GEditor->PlayWorld)
 	{
 		const bool bShouldBeRealtime = false;
-		SetRealtimeOverride(bShouldBeRealtime, LOCTEXT("RealtimeOverride_PIE", "Play in Editor"));
+		AddRealtimeOverride(bShouldBeRealtime, LOCTEXT("RealtimeOverride_PIE", "Play in Editor"));
 	}
 
 	// @todo double define - fix it
@@ -122,6 +122,8 @@ FAnimationViewportClient::FAnimationViewportClient(const TSharedRef<IPersonaPrev
 	const float FOVMax = 170.f;
 
 	ViewFOV = FMath::Clamp<float>(ConfigOption->GetAssetEditorOptions(InAssetEditorToolkit->GetEditorName()).ViewportConfigs[ViewportIndex].ViewFOV, FOVMin, FOVMax);
+	CameraSpeedSetting = ConfigOption->GetAssetEditorOptions(InAssetEditorToolkit->GetEditorName()).ViewportConfigs[ViewportIndex].CameraSpeedSetting;
+	CameraSpeedScalar = ConfigOption->GetAssetEditorOptions(InAssetEditorToolkit->GetEditorName()).ViewportConfigs[ViewportIndex].CameraSpeedScalar;
 
 	EngineShowFlags.SetSeparateTranslucency(true);
 	EngineShowFlags.SetCompositeEditorPrimitives(true);
@@ -482,6 +484,9 @@ void FAnimationViewportClient::DrawCanvas( FViewport& InViewport, FSceneView& Vi
 		{
 			DrawUVsForMesh(Viewport, &Canvas, 1.0f);
 		}
+
+		// Debug draw clothing texts
+		PreviewMeshComponent->DebugDrawClothingTexts(&Canvas, &View);
 	}
 }
 
@@ -839,7 +844,7 @@ FText FAnimationViewportClient::GetDisplayInfo(bool bDisplayAllInfo) const
 
 			// Calculate polys based on non clothing sections so we don't duplicate the counts.
 			uint32 NumTotalTriangles = 0;
-			int32 NumSections = LODData.NumNonClothingSections();
+			int32 NumSections = LODData.RenderSections.Num();
 			for(int32 SectionIndex = 0; SectionIndex < NumSections; SectionIndex++)
 			{
 				NumTotalTriangles += LODData.RenderSections[SectionIndex].NumTriangles;
@@ -852,13 +857,14 @@ FText FAnimationViewportClient::GetDisplayInfo(bool bDisplayAllInfo) const
 				FText::AsNumber(NumTotalTriangles)));
 
 			TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("ScreenSizeFOVFormat", "Current Screen Size: {0}, FOV: {1}"), FText::AsNumber(CachedScreenSize), FText::AsNumber(ViewFOV)));
-
 			for (int32 SectionIndex = 0; SectionIndex < LODData.RenderSections.Num(); SectionIndex++)
 			{
 				int32 SectionVerts = LODData.RenderSections[SectionIndex].GetNumVertices();
 
-				TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("SectionFormat", " [Section {0}] Verts: {1}, Bones: {2}, Max Influences: {3}"),
+				FText SectionDisabledText = LODData.RenderSections[SectionIndex].bDisabled ? LOCTEXT("SectionIsDisbable", " Disabled") : FText::GetEmpty();
+				TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("SectionFormat", " [Section {0}]{1} Verts: {2}, Bones: {3}, Max Influences: {4}"),
 					FText::AsNumber(SectionIndex),
+					SectionDisabledText,
 					FText::AsNumber(SectionVerts),
 					FText::AsNumber(LODData.RenderSections[SectionIndex].BoneMap.Num()),
 					FText::AsNumber(LODData.RenderSections[SectionIndex].MaxBoneInfluences)
@@ -931,11 +937,12 @@ FText FAnimationViewportClient::GetDisplayInfo(bool bDisplayAllInfo) const
 
 			// Triangles
 			uint32 NumTotalTriangles = 0;
-			int32 NumSections = LODData.NumNonClothingSections();
+			int32 NumSections = LODData.RenderSections.Num();
 			for (int32 SectionIndex = 0; SectionIndex < NumSections; SectionIndex++)
 			{
 				NumTotalTriangles += LODData.RenderSections[SectionIndex].NumTriangles;
 			}
+
 			TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("TrianglesFormat", "Triangles: {0}"), FText::AsNumber(NumTotalTriangles)));
 
 			// Vertices
@@ -962,7 +969,40 @@ FText FAnimationViewportClient::GetDisplayInfo(bool bDisplayAllInfo) const
 			
 			const FName ProfileName = PreviewMeshComponent->GetCurrentSkinWeightProfileName();
 			const FRuntimeSkinWeightProfileData* OverrideData = LODData.SkinWeightProfilesData.GetOverrideData(ProfileName);
-			TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("NumSkinWeightOverrides", "Skin Weight Profile Weights: {0}"),	OverrideData ? FText::AsNumber(OverrideData->OverridesInfo.Num()) : LOCTEXT("NoSkinWeightsOverridesForLOD", "no data for LOD")));
+			TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("NumSkinWeightOverrides", "Skin Weight Profile Weights: {0}"),	(OverrideData && OverrideData->NumWeightsPerVertex > 0) ? FText::AsNumber(OverrideData->BoneWeights.Num() / OverrideData->NumWeightsPerVertex) : LOCTEXT("NoSkinWeightsOverridesForLOD", "no data for LOD")));
+		}
+	}
+
+	if (const IClothingSimulation* const ClothingSimulation = PreviewMeshComponent->GetClothingSimulation())
+	{
+		// Cloth stats
+		if (const int32 NumActiveCloths = ClothingSimulation->GetNumCloths())
+		{
+			TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("NumActiveCloths", "Active Cloths: {0}"), NumActiveCloths));
+		}
+		if (const int32 NumKinematicParticles = ClothingSimulation->GetNumKinematicParticles())
+		{
+			TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("NumKinematicParticles", "Kinematic Particles: {0}"), NumKinematicParticles));
+		}
+		if (const int32 NumDynamicParticles = ClothingSimulation->GetNumDynamicParticles())
+		{
+			TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("NumDynamicParticles", "Dynamic Particles: {0}"), NumDynamicParticles));
+		}
+		if (const float SimulationTime = ClothingSimulation->GetSimulationTime())
+		{
+			FNumberFormattingOptions NumberFormatOptions;
+			NumberFormatOptions.AlwaysSign = false;
+			NumberFormatOptions.UseGrouping = false;
+			NumberFormatOptions.RoundingMode = ERoundingMode::HalfFromZero;
+			NumberFormatOptions.MinimumIntegralDigits = 1;
+			NumberFormatOptions.MaximumIntegralDigits = 6;
+			NumberFormatOptions.MinimumFractionalDigits = 2;
+			NumberFormatOptions.MaximumFractionalDigits = 2;
+			TextValue = ConcatenateLine(TextValue, FText::Format(LOCTEXT("SimulationTime", "Simulation Time: {0}ms"), FText::AsNumber(SimulationTime, &NumberFormatOptions)));
+		}
+		if (ClothingSimulation->IsTeleported())
+		{
+			TextValue = ConcatenateLine(TextValue, LOCTEXT("IsTeleported", "*** Warning ***: Max Delta Time Teleport!"));
 		}
 	}
 

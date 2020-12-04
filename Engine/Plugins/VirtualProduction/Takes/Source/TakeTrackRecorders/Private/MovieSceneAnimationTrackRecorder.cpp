@@ -14,6 +14,7 @@
 #include "Engine/TimecodeProvider.h"
 #include "Engine/Engine.h"
 #include "LevelSequence.h"
+#include "UObject/UObjectBaseUtility.h"
 
 DEFINE_LOG_CATEGORY(AnimationSerialization);
 
@@ -60,6 +61,8 @@ void UMovieSceneAnimationTrackRecorder::CreateAnimationAssetAndSequence(const AA
 		AnimSequence = TakesUtils::MakeNewAsset<UAnimSequence>(AnimationDirectory.Path, AnimationAssetName);
 		if (AnimSequence.IsValid())
 		{
+			AnimSequence.Get()->MarkPackageDirty();
+
 			FAssetRegistryModule::AssetCreated(AnimSequence.Get());
 
 			// Assign the skeleton we're recording to the newly created Animation Sequence.
@@ -307,6 +310,11 @@ void UMovieSceneAnimationTrackRecorder::RemoveRootMotion()
 			 AnimSequence->RootMotionRootLock = ERootMotionRootLock::Zero;
 		 }
 	 }
+}
+
+void UMovieSceneAnimationTrackRecorder::ProcessRecordedTimes(const FString& HoursName, const FString& MinutesName, const FString& SecondsName, const FString& FramesName, const FString& SubFramesName, const FString& SlateName, const FString& Slate)
+{
+	AnimationRecorder.ProcessRecordedTimes(AnimSequence.Get(), SkeletalMeshComponent.Get(), HoursName, MinutesName, SecondsName, FramesName, SubFramesName, SlateName, Slate);
 }
 
 bool UMovieSceneAnimationTrackRecorder::LoadRecordedFile(const FString& FileName, UMovieScene *InMovieScene, TMap<FGuid, AActor*>& ActorGuidToActorMap,  TFunction<void()> InCompletionCallback)

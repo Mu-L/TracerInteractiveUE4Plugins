@@ -47,6 +47,12 @@ namespace Audio
 		bIsBus = false;
 		bOutputToBusOnly = false;
 		bStopFadedOut = false;
+
+		PitchModBase = TNumericLimits<float>::Max();
+		VolumeModBase = TNumericLimits<float>::Max();
+		LPFFrequencyModBase = TNumericLimits<float>::Max();
+		HPFFrequencyModBase = TNumericLimits<float>::Max();
+
 		SubmixSends.Reset();
 	}
 
@@ -60,7 +66,7 @@ namespace Audio
 			AUDIO_MIXER_CHECK(InitParams.NumInputChannels > 0);
 
 			bOutputToBusOnly = InitParams.bOutputToBusOnly;
-			bIsBus = InitParams.BusId != INDEX_NONE;
+			bIsBus = InitParams.AudioBusId != INDEX_NONE;
 
 			for (int32 i = 0; i < InitParams.SubmixSends.Num(); ++i)
 			{
@@ -138,6 +144,50 @@ namespace Audio
 		{
 			HPFFrequency = InHPFFrequency;
 			SourceManager->SetHPFFrequency(SourceId, HPFFrequency);
+		}
+	}
+
+	void FMixerSourceVoice::SetModVolume(const float InVolumeModBase)
+	{
+		AUDIO_MIXER_CHECK_GAME_THREAD(MixerDevice);
+
+		if (InVolumeModBase != VolumeModBase)
+		{
+			VolumeModBase = InVolumeModBase;
+			SourceManager->SetModVolume(SourceId, VolumeModBase);
+		}
+	}
+
+	void FMixerSourceVoice::SetModPitch(const float InPitchModBase)
+	{
+		AUDIO_MIXER_CHECK_GAME_THREAD(MixerDevice);
+
+		if (InPitchModBase != PitchModBase)
+		{
+			PitchModBase = InPitchModBase;
+			SourceManager->SetModPitch(SourceId, InPitchModBase);
+		}
+	}
+
+	void FMixerSourceVoice::SetModHPFFrequency(const float InHPFFrequencyModBase)
+	{
+		AUDIO_MIXER_CHECK_GAME_THREAD(MixerDevice);
+
+		if (InHPFFrequencyModBase != HPFFrequencyModBase)
+		{
+			HPFFrequencyModBase = InHPFFrequencyModBase;
+			SourceManager->SetModHPFFrequency(SourceId, InHPFFrequencyModBase);
+		}
+	}
+
+	void FMixerSourceVoice::SetModLPFFrequency(const float InLPFFrequencyModBase)
+	{
+		AUDIO_MIXER_CHECK_GAME_THREAD(MixerDevice);
+
+		if (InLPFFrequencyModBase != LPFFrequencyModBase)
+		{
+			LPFFrequencyModBase = InLPFFrequencyModBase;
+			SourceManager->SetModLPFFrequency(SourceId, InLPFFrequencyModBase);
 		}
 	}
 
@@ -249,13 +299,13 @@ namespace Audio
 		return SourceManager->GetEnvelopeValue(SourceId);
 	}
 
-	void FMixerSourceVoice::MixOutputBuffers(int32 InNumOutputChannels, const float SendLevel, AlignedFloatBuffer& OutWetBuffer) const
+	void FMixerSourceVoice::MixOutputBuffers(int32 InNumOutputChannels, const float SendLevel, EMixerSourceSubmixSendStage InSubmixSendStage, AlignedFloatBuffer& OutWetBuffer) const
 	{
 		AUDIO_MIXER_CHECK_AUDIO_PLAT_THREAD(MixerDevice);
 
 		check(!bOutputToBusOnly);
 
-		return SourceManager->MixOutputBuffers(SourceId, InNumOutputChannels, SendLevel, OutWetBuffer);
+		return SourceManager->MixOutputBuffers(SourceId, InNumOutputChannels, SendLevel, InSubmixSendStage, OutWetBuffer);
 	}
 
 	const ISoundfieldAudioPacket* FMixerSourceVoice::GetEncodedOutput(const FSoundfieldEncodingKey& InKey) const
@@ -301,11 +351,30 @@ namespace Audio
 		}
 	}
 
-	void FMixerSourceVoice::SetBusSendInfo(EBusSendType InBusSendType, FMixerBusSend& BusSend)
+	void FMixerSourceVoice::ClearSubmixSendInfo(FMixerSubmixWeakPtr Submix)
 	{
 		AUDIO_MIXER_CHECK_GAME_THREAD(MixerDevice);
 
-		SourceManager->SetBusSendInfo(SourceId, InBusSendType, BusSend);
+		if (!bOutputToBusOnly)
+		{
+			FMixerSubmixPtr SubmixPtr = Submix.Pin();
+			if (SubmixPtr.IsValid())
+			{
+				FMixerSourceSubmixSend* SubmixSend = SubmixSends.Find(SubmixPtr->GetId());
+				if (SubmixSend)
+				{
+					SourceManager->ClearSubmixSendInfo(SourceId, *SubmixSend);
+					SubmixSends.Remove(SubmixPtr->GetId());
+				}
+			}
+		}
+	}
+
+	void FMixerSourceVoice::SetAudioBusSendInfo(EBusSendType InBusSendType, uint32 AudioBusId, float BusSendLevel)
+	{
+		AUDIO_MIXER_CHECK_GAME_THREAD(MixerDevice);
+
+		SourceManager->SetBusSendInfo(SourceId, InBusSendType, AudioBusId, BusSendLevel);
 	}
 
 	void FMixerSourceVoice::OnMixBus(FMixerSourceVoiceBuffer* OutMixerSourceBuffer)

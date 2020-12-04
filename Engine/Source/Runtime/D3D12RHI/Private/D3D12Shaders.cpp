@@ -7,9 +7,9 @@
 #include "D3D12RHIPrivate.h"
 
 template <typename TShaderType>
-static inline bool ReadShaderOptionalData(FShaderCodeReader& InShaderCode, TShaderType& OutShader)
+static inline bool ReadShaderOptionalData(FShaderCodeReader& InShaderCode, TShaderType& OutShader, bool& bOutFoundCodeFeatures, FShaderCodeFeatures& OutCodeFeatures)
 {
-	auto PackedResourceCounts = InShaderCode.FindOptionalData<FShaderCodePackedResourceCounts>();
+	const FShaderCodePackedResourceCounts* PackedResourceCounts = InShaderCode.FindOptionalData<FShaderCodePackedResourceCounts>();
 	if (!PackedResourceCounts)
 	{
 		return false;
@@ -19,7 +19,7 @@ static inline bool ReadShaderOptionalData(FShaderCodeReader& InShaderCode, TShad
 	OutShader.ShaderName = InShaderCode.FindOptionalData('n');
 
 	int32 UniformBufferTableSize = 0;
-	auto* UniformBufferData = InShaderCode.FindOptionalDataAndSize('u', UniformBufferTableSize);
+	const auto* UniformBufferData = InShaderCode.FindOptionalDataAndSize('u', UniformBufferTableSize);
 #if 0
 	//#todo-rco
 	if (UniformBufferData && UniformBufferTableSize > 0)
@@ -42,7 +42,27 @@ static inline bool ReadShaderOptionalData(FShaderCodeReader& InShaderCode, TShad
 		FBufferReader Ar((void*)VendorExtensionData, VendorExtensionTableSize, false);
 		Ar << OutShader.VendorExtensions;
 	}
+
+	const FShaderCodeFeatures* CodeFeatures = InShaderCode.FindOptionalData<FShaderCodeFeatures>();
+	if (CodeFeatures)
+	{
+		bOutFoundCodeFeatures = true;
+		OutCodeFeatures = *CodeFeatures;
+	}
+	else
+	{
+		bOutFoundCodeFeatures = false;
+	}
+
 	return true;
+}
+
+template <typename TShaderType>
+static inline bool ReadShaderOptionalData(FShaderCodeReader& InShaderCode, TShaderType& OutShader)
+{
+	bool bHasCodeFeatures = false;
+	FShaderCodeFeatures Features;
+	return ReadShaderOptionalData(InShaderCode, OutShader, bHasCodeFeatures, Features);
 }
 
 template <typename TShaderType>
@@ -75,8 +95,13 @@ FVertexShaderRHIRef FD3D12DynamicRHI::RHICreateVertexShader(TArrayView<const uin
 	int32 Offset = Ar.Tell();
 	const uint8* CodePtr = Code.GetData() + Offset;
 	const SIZE_T CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
-
-	if (!ReadShaderOptionalData(ShaderCode, *Shader))
+	bool bFoundCodeFeatures;
+	FShaderCodeFeatures CodeFeatures;
+	if (!ReadShaderOptionalData(ShaderCode, *Shader, bFoundCodeFeatures, CodeFeatures))
+	{
+		return nullptr;
+	}
+	if (bFoundCodeFeatures && CodeFeatures.bUsesWaveOps && !GRHISupportsWaveOperations)
 	{
 		return nullptr;
 	}
@@ -104,8 +129,13 @@ FPixelShaderRHIRef FD3D12DynamicRHI::RHICreatePixelShader(TArrayView<const uint8
 	int32 Offset = Ar.Tell();
 	const uint8* CodePtr = Code.GetData() + Offset;
 	const SIZE_T CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
-
-	if (!ReadShaderOptionalData(ShaderCode, *Shader))
+	bool bFoundCodeFeatures;
+	FShaderCodeFeatures CodeFeatures;
+	if (!ReadShaderOptionalData(ShaderCode, *Shader, bFoundCodeFeatures, CodeFeatures))
+	{
+		return nullptr;
+	}
+	if (bFoundCodeFeatures && CodeFeatures.bUsesWaveOps && !GRHISupportsWaveOperations)
 	{
 		return nullptr;
 	}
@@ -132,8 +162,13 @@ FHullShaderRHIRef FD3D12DynamicRHI::RHICreateHullShader(TArrayView<const uint8> 
 	int32 Offset = Ar.Tell();
 	const uint8* CodePtr = Code.GetData() + Offset;
 	const SIZE_T CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
-
-	if (!ReadShaderOptionalData(ShaderCode, *Shader))
+	bool bFoundCodeFeatures;
+	FShaderCodeFeatures CodeFeatures;
+	if (!ReadShaderOptionalData(ShaderCode, *Shader, bFoundCodeFeatures, CodeFeatures))
+	{
+		return nullptr;
+	}
+	if (bFoundCodeFeatures && CodeFeatures.bUsesWaveOps && !GRHISupportsWaveOperations)
 	{
 		return nullptr;
 	}
@@ -160,8 +195,13 @@ FDomainShaderRHIRef FD3D12DynamicRHI::RHICreateDomainShader(TArrayView<const uin
 	int32 Offset = Ar.Tell();
 	const uint8* CodePtr = Code.GetData() + Offset;
 	const SIZE_T CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
-
-	if (!ReadShaderOptionalData(ShaderCode, *Shader))
+	bool bFoundCodeFeatures;
+	FShaderCodeFeatures CodeFeatures;
+	if (!ReadShaderOptionalData(ShaderCode, *Shader, bFoundCodeFeatures, CodeFeatures))
+	{
+		return nullptr;
+	}
+	if (bFoundCodeFeatures && CodeFeatures.bUsesWaveOps && !GRHISupportsWaveOperations)
 	{
 		return nullptr;
 	}
@@ -188,8 +228,13 @@ FGeometryShaderRHIRef FD3D12DynamicRHI::RHICreateGeometryShader(TArrayView<const
 	int32 Offset = Ar.Tell();
 	const uint8* CodePtr = Code.GetData() + Offset;
 	const SIZE_T CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
-
-	if (!ReadShaderOptionalData(ShaderCode, *Shader))
+	bool bFoundCodeFeatures;
+	FShaderCodeFeatures CodeFeatures;
+	if (!ReadShaderOptionalData(ShaderCode, *Shader, bFoundCodeFeatures, CodeFeatures))
+	{
+		return nullptr;
+	}
+	if (bFoundCodeFeatures && CodeFeatures.bUsesWaveOps && !GRHISupportsWaveOperations)
 	{
 		return nullptr;
 	}
@@ -216,8 +261,13 @@ FComputeShaderRHIRef FD3D12DynamicRHI::RHICreateComputeShader(TArrayView<const u
 	int32 Offset = Ar.Tell();
 	const uint8* CodePtr = Code.GetData() + Offset;
 	const SIZE_T CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
-
-	if (!ReadShaderOptionalData(ShaderCode, *Shader))
+	bool bFoundCodeFeatures;
+	FShaderCodeFeatures CodeFeatures;
+	if (!ReadShaderOptionalData(ShaderCode, *Shader, bFoundCodeFeatures, CodeFeatures))
+	{
+		return nullptr;
+	}
+	if (bFoundCodeFeatures && CodeFeatures.bUsesWaveOps && !GRHISupportsWaveOperations)
 	{
 		return nullptr;
 	}
@@ -248,6 +298,8 @@ FComputeShaderRHIRef FD3D12DynamicRHI::RHICreateComputeShader(TArrayView<const u
 
 FRayTracingShaderRHIRef FD3D12DynamicRHI::RHICreateRayTracingShader(TArrayView<const uint8> Code, const FSHAHash& Hash, EShaderFrequency ShaderFrequency)
 {
+	checkf(GRHISupportsRayTracing, TEXT("Tried to create RayTracing shader but RHI doesn't support it!"));
+
 	FShaderCodeReader ShaderCode(Code);
 	FD3D12RayTracingShader* Shader = new FD3D12RayTracingShader(ShaderFrequency);
 
@@ -258,22 +310,48 @@ FRayTracingShaderRHIRef FD3D12DynamicRHI::RHICreateRayTracingShader(TArrayView<c
 	Ar << Shader->IntersectionEntryPoint;
 
 	int32 Offset = Ar.Tell();
-	const uint8* CodePtr = Code.GetData() + Offset;
-	const SIZE_T CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
 
-	ReadShaderOptionalData(ShaderCode, *Shader);
+	bool bFoundCodeFeatures;
+	FShaderCodeFeatures CodeFeatures;
+	if (!ReadShaderOptionalData(ShaderCode, *Shader, bFoundCodeFeatures, CodeFeatures))
+	{
+		return nullptr;
+	}
 
-	Shader->Code = Code;
+	int32 PrecompiledKey = 0;
+	Ar << PrecompiledKey;
+	if (PrecompiledKey == RayTracingPrecompiledPSOKey)
+	{
+		Offset += sizeof(PrecompiledKey); // Skip the precompiled PSO marker if it's present
+		Shader->bPrecompiledPSO = true;
+	}
+
+	// Copy the native shader data only, skipping any of our own headers.
+	TArrayView<const uint8> NativeShaderCode = MakeArrayView(Code.GetData() + Offset, ShaderCode.GetActualShaderCodeSize() - Offset);
+	Shader->Code = TArray<uint8>(NativeShaderCode);
 
 	D3D12_SHADER_BYTECODE ShaderBytecode;
-	ShaderBytecode.pShaderBytecode = Shader->Code.GetData() + Offset;
-	ShaderBytecode.BytecodeLength = CodeSize;
+	ShaderBytecode.pShaderBytecode = Shader->Code.GetData();
+	ShaderBytecode.BytecodeLength = Shader->Code.Num();
+
 	Shader->ShaderBytecode.SetShaderBytecode(ShaderBytecode);
 
 	FD3D12Adapter& Adapter = GetAdapter();
 
 #if USE_STATIC_ROOT_SIGNATURE
-	Shader->pRootSignature = Adapter.GetStaticComputeRootSignature();
+	switch (ShaderFrequency)
+	{
+	case SF_RayGen:
+		Shader->pRootSignature = Adapter.GetStaticRayTracingGlobalRootSignature();
+		break;
+	case SF_RayHitGroup:
+	case SF_RayCallable:
+	case SF_RayMiss:
+		Shader->pRootSignature = Adapter.GetStaticRayTracingLocalRootSignature();
+		break;
+	default:
+		checkNoEntry(); // Unexpected shader target frequency
+	}
 #else // USE_STATIC_ROOT_SIGNATURE
 	const D3D12_RESOURCE_BINDING_TIER Tier = Adapter.GetResourceBindingTier();
 	FD3D12QuantizedBoundShaderState QBSS;
@@ -299,21 +377,19 @@ FD3D12BoundShaderState::FD3D12BoundShaderState(
 	FRHIHullShader* InHullShaderRHI,
 	FRHIDomainShader* InDomainShaderRHI,
 	FRHIGeometryShader* InGeometryShaderRHI,
-	FD3D12Device* InDevice
+	FD3D12Adapter* InAdapter
 	) :
 	CacheLink(InVertexDeclarationRHI, InVertexShaderRHI, InPixelShaderRHI, InHullShaderRHI, InDomainShaderRHI, InGeometryShaderRHI, this)
 {
 	INC_DWORD_STAT(STAT_D3D12NumBoundShaderState);
 
-	FD3D12Adapter* Adapter = InDevice->GetParentAdapter();
-
 #if USE_STATIC_ROOT_SIGNATURE
-	pRootSignature = Adapter->GetStaticGraphicsRootSignature();
+	pRootSignature = InAdapter->GetStaticGraphicsRootSignature();
 #else
-	const D3D12_RESOURCE_BINDING_TIER Tier = Adapter->GetResourceBindingTier();
+	const D3D12_RESOURCE_BINDING_TIER Tier = InAdapter->GetResourceBindingTier();
 	FD3D12QuantizedBoundShaderState QuantizedBoundShaderState;
 	QuantizeBoundShaderState(Tier, this, QuantizedBoundShaderState);
-	pRootSignature = Adapter->GetRootSignature(QuantizedBoundShaderState);
+	pRootSignature = InAdapter->GetRootSignature(QuantizedBoundShaderState);
 #endif
 
 #if D3D12_SUPPORTS_PARALLEL_RHI_EXECUTE
@@ -350,7 +426,7 @@ FBoundShaderStateRHIRef FD3D12DynamicRHI::RHICreateBoundShaderState(
 {
 	//SCOPE_CYCLE_COUNTER(STAT_D3D12CreateBoundShaderStateTime);
 
-	checkf(GIsRHIInitialized && GetRHIDevice()->GetCommandListManager().IsReady(), (TEXT("Bound shader state RHI resource was created without initializing Direct3D first")));
+	checkf(GIsRHIInitialized && GetRHIDevice(0)->GetCommandListManager().IsReady(), (TEXT("Bound shader state RHI resource was created without initializing Direct3D first")));
 
 #if D3D12_SUPPORTS_PARALLEL_RHI_EXECUTE
 	// Check for an existing bound shader state which matches the parameters
@@ -388,6 +464,6 @@ FBoundShaderStateRHIRef FD3D12DynamicRHI::RHICreateBoundShaderState(
 	{
 		SCOPE_CYCLE_COUNTER(STAT_D3D12NewBoundShaderStateTime);
 
-		return new FD3D12BoundShaderState(VertexDeclarationRHI, VertexShaderRHI, PixelShaderRHI, HullShaderRHI, DomainShaderRHI, GeometryShaderRHI, GetRHIDevice());
+		return new FD3D12BoundShaderState(VertexDeclarationRHI, VertexShaderRHI, PixelShaderRHI, HullShaderRHI, DomainShaderRHI, GeometryShaderRHI, &GetAdapter());
 	}
 }

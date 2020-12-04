@@ -3329,16 +3329,12 @@ bool FEdModeLandscape::IsSelectionAllowed(AActor* InActor, bool bInSelection) co
 	{
 		return true;
 	}
-	else if (InActor->IsA(ALight::StaticClass()))
-	{
-		return true;
-	}
 	else if (InActor->IsA(ALandscapeBlueprintBrushBase::StaticClass()))
 	{
 		return true;
 	}
 
-	return true;
+	return false;
 }
 
 /** FEdMode: Called when the currently selected actor has changed */
@@ -3385,9 +3381,10 @@ void FEdModeLandscape::ForceRealTimeViewports(const bool bEnable)
 			if (ViewportWindow.IsValid())
 			{
 				FEditorViewportClient& Viewport = ViewportWindow->GetAssetViewportClient();
+				const FText SystemDisplayName = LOCTEXT("RealtimeOverrideMessage_Landscape", "Landscape Mode");
 				if (bEnable)
 				{
-					Viewport.SetRealtimeOverride(bEnable, LOCTEXT("RealtimeOverrideMessage_Landscape", "Landscape Mode"));
+					Viewport.AddRealtimeOverride(bEnable, SystemDisplayName);
 
 					// @todo vreditor: Force game view to true in VREditor since we can't use hitproxies and debug objects yet
 					UVREditorMode* VREditorMode = Cast<UVREditorMode>( GEditor->GetEditorWorldExtensionsManager()->GetEditorWorldExtensions( GetWorld() )->FindExtension( UVREditorMode::StaticClass() ) );
@@ -3402,7 +3399,7 @@ void FEdModeLandscape::ForceRealTimeViewports(const bool bEnable)
 				}
 				else
 				{
-					Viewport.RemoveRealtimeOverride();
+					Viewport.RemoveRealtimeOverride(SystemDisplayName, false);
 				}
 			}
 		}
@@ -4038,6 +4035,7 @@ ALandscape* FEdModeLandscape::ChangeComponentSetting(int32 NumComponentsX, int32
 			NewLandscape->bCastShadowAsTwoSided = OldLandscape->bCastShadowAsTwoSided;
 			NewLandscape->LightingChannels = OldLandscape->LightingChannels;
 			NewLandscape->bRenderCustomDepth = OldLandscape->bRenderCustomDepth;
+			NewLandscape->CustomDepthStencilWriteMask = OldLandscape->CustomDepthStencilWriteMask;
 			NewLandscape->CustomDepthStencilValue = OldLandscape->CustomDepthStencilValue;
 			NewLandscape->LightmassSettings = OldLandscape->LightmassSettings;
 			NewLandscape->CollisionThickness = OldLandscape->CollisionThickness;

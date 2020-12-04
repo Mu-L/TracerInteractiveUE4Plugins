@@ -13,7 +13,6 @@
 #include "K2Node.h"
 #include "AnimGraphNode_Base.generated.h"
 
-class FAnimBlueprintCompilerContext;
 class FAnimGraphNodeDetails;
 class FBlueprintActionDatabaseRegistrar;
 class FCanvas;
@@ -23,6 +22,9 @@ class IDetailLayoutBuilder;
 class UAnimGraphNode_Base;
 class UEdGraphSchema;
 class USkeletalMeshComponent;
+class IAnimBlueprintCompilerHandlerCollection;
+class IAnimBlueprintGeneratedClassCompiledData;
+class IAnimBlueprintCompilationContext;
 
 struct FPoseLinkMappingRecord
 {
@@ -106,12 +108,61 @@ enum class EBlueprintUsage : uint8
 	UsesBlueprint
 };
 
-/** Enum that indicates level of support of this node for a parciular asset class */
+/** Enum that indicates level of support of this node for a particular asset class */
 enum class EAnimAssetHandlerType : uint8
 {
 	PrimaryHandler,
 	Supported,
 	NotSupported
+};
+
+/** The type of a property binding */
+UENUM()
+enum class EAnimGraphNodePropertyBindingType
+{
+	None,
+	Property,
+	Function,
+};
+
+USTRUCT()
+struct FAnimGraphNodePropertyBinding
+{
+	GENERATED_BODY()
+
+	FAnimGraphNodePropertyBinding() = default;
+
+	/** Pin type */
+	UPROPERTY()
+	FEdGraphPinType PinType;
+
+	/** Source type if the binding is a promotion */
+	UPROPERTY()
+	FEdGraphPinType PromotedPinType;
+
+	/** Property binding name */
+	UPROPERTY()
+	FName PropertyName;
+
+	/** The property path as text */
+	UPROPERTY()
+	FText PathAsText;
+
+	/** The property path a pin is bound to */
+	UPROPERTY()
+	TArray<FString> PropertyPath;
+
+	/** Whether the binding is a function or not */
+	UPROPERTY()
+	EAnimGraphNodePropertyBindingType Type = EAnimGraphNodePropertyBindingType::Property;
+
+	/** Whether the pin is bound or not */
+	UPROPERTY()
+	bool bIsBound = false;
+
+	/** Whether the pin binding is a promotion (e.g. bool->int) */
+	UPROPERTY()
+	bool bIsPromotion = false;
 };
 
 /**
@@ -128,12 +179,17 @@ class ANIMGRAPH_API UAnimGraphNode_Base : public UK2Node
 	UPROPERTY(EditAnywhere, Category=PinOptions, EditFixedSize)
 	TArray<FOptionalPinFromProperty> ShowPinForProperties;
 
+	/** Map from property name->binding info */
+ 	UPROPERTY(EditAnywhere, Category=PinOptions)
+ 	TMap<FName, FAnimGraphNodePropertyBinding> PropertyBindings;
+
 	UPROPERTY(Transient)
 	EBlueprintUsage BlueprintUsage;
 
 	// UObject interface
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void PreEditChange(FProperty* PropertyAboutToChange) override;
+	virtual void Serialize(FArchive& Ar) override;
 	// End of UObject interface
 
 	// UEdGraphNode interface
@@ -144,6 +200,8 @@ class ANIMGRAPH_API UAnimGraphNode_Base : public UK2Node
 	virtual bool ShowPaletteIconOnNode() const override{ return false; }
 	virtual void PinDefaultValueChanged(UEdGraphPin* Pin) override;
 	virtual FString GetPinMetaData(FName InPinName, FName InKey) override;
+	virtual void AddSearchMetaDataInfo(TArray<struct FSearchTagDataPair>& OutTaggedMetaData) const override;
+	virtual void PinConnectionListChanged(UEdGraphPin* Pin) override;
 	// End of UEdGraphNode interface
 
 	// UK2Node interface
@@ -155,6 +213,7 @@ class ANIMGRAPH_API UAnimGraphNode_Base : public UK2Node
 	virtual void GetNodeAttributes(TArray<TKeyValuePair<FString, FString>>& OutNodeAttributes) const override;
 	virtual void GetMenuActions(FBlueprintActionDatabaseRegistrar& ActionRegistrar) const override;
 	virtual FText GetMenuCategory() const override;
+	virtual void ExpandNode(class FKismetCompilerContext& CompilerContext, UEdGraph* SourceGraph) override;
 
 	// By default return any animation assets we have
 	virtual UObject* GetJumpTargetForDoubleClick() const override { return GetAnimationAsset(); }
@@ -199,7 +258,7 @@ class ANIMGRAPH_API UAnimGraphNode_Base : public UK2Node
 
 	// Replace references to animations that exist in the supplied maps 	
 	virtual void ReplaceReferredAnimations(const TMap<UAnimationAsset*, UAnimationAsset*>& AnimAssetReplacementMap) {};
-	
+
 	// Helper function for GetAllAnimationSequencesReferred
 	void HandleAnimReferenceCollection(UAnimationAsset* AnimAsset, TArray<UAnimationAsset*>& AnimationAssets) const;
 
@@ -294,8 +353,9 @@ class ANIMGRAPH_API UAnimGraphNode_Base : public UK2Node
 	FOnNodeTitleChangedEvent& OnNodeTitleChangedEvent() { return NodeTitleChangedEvent; }
 
 protected:
-	friend FAnimBlueprintCompilerContext;
-	friend FAnimGraphNodeDetails;
+	friend class FAnimBlueprintCompilerContext;
+	friend class FAnimGraphNodeDetails;
+	friend class FAnimBlueprintCompilerHandler_Base;
 
 	// Gets the animation FNode type represented by this ed graph node
 	UScriptStruct* GetFNodeType() const;
@@ -313,6 +373,12 @@ protected:
 
 	/** Get the property (and possibly array index) associated with the supplied pin */
 	virtual void GetPinAssociatedProperty(const UScriptStruct* NodeType, const UEdGraphPin* InputPin, FProperty*& OutProperty, int32& OutIndex) const;
+
+	// Process this node's data during compilation
+	void ProcessDuringCompilation(IAnimBlueprintCompilationContext& InCompilationContext, IAnimBlueprintGeneratedClassCompiledData& OutCompiledData);
+
+	// Process this node's data during compilation (override point)
+	virtual void OnProcessDuringCompilation(IAnimBlueprintCompilationContext& InCompilationContext, IAnimBlueprintGeneratedClassCompiledData& OutCompiledData) {}
 
 	// Allocates or reallocates pins
 	void InternalPinCreation(TArray<UEdGraphPin*>* OldPins);

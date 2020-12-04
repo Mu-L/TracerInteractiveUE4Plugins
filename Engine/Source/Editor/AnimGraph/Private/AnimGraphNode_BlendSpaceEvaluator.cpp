@@ -106,8 +106,18 @@ void UAnimGraphNode_BlendSpaceEvaluator::ValidateAnimNodeDuringCompilation(class
 
 	if (BlendSpaceToCheck == nullptr)
 	{
-		// we may have a connected node
-		if (BlendSpacePin == nullptr || BlendSpacePin->LinkedTo.Num() == 0)
+		// Check for bindings
+		bool bHasBinding = false;
+		if(BlendSpacePin != nullptr)
+		{
+			if (FAnimGraphNodePropertyBinding* BindingPtr = PropertyBindings.Find(BlendSpacePin->GetFName()))
+			{
+				bHasBinding = true;
+			}
+		}
+
+		// we may have a connected node or binding
+		if (BlendSpacePin == nullptr || (BlendSpacePin->LinkedTo.Num() == 0 && !bHasBinding))
 		{
 			MessageLog.Error(TEXT("@@ references an unknown blend space"), this);
 		}
@@ -126,8 +136,10 @@ void UAnimGraphNode_BlendSpaceEvaluator::ValidateAnimNodeDuringCompilation(class
 void UAnimGraphNode_BlendSpaceEvaluator::BakeDataDuringCompilation(class FCompilerResultsLog& MessageLog)
 {
 	UAnimBlueprint* AnimBlueprint = GetAnimBlueprint();
-	Node.GroupIndex = AnimBlueprint->FindOrAddGroup(SyncGroup.GroupName);
+	AnimBlueprint->FindOrAddGroup(SyncGroup.GroupName);
+	Node.GroupName = SyncGroup.GroupName;
 	Node.GroupRole = SyncGroup.GroupRole;
+	Node.GroupScope = SyncGroup.GroupScope;
 }
 
 void UAnimGraphNode_BlendSpaceEvaluator::GetNodeContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const

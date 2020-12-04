@@ -6,12 +6,13 @@
 #include "../Common.ush"
 #include "../CommonViewUniformBuffer.ush"
 #include "../DeferredShadingCommon.ush"
+#include "../MonteCarlo.ush"
 #include "HairStrandsVisibilityCommon.ush"
 #include "HairStrandsVoxelPageCommon.ush"
 
 #include "HairStrandsCommon.ush"
-#include "HairStrandsDeepShadowCommon.ush"
 #include "HairStrandsDebugCommon.ush"
+#include "HairStrandsDeepShadowCommon.ush"
 #include "HairStrandsDeepTransmittanceCommon.ush"
 
 #define OPAQUE_MASK_TYPE_DEEP_SHADOW 0
@@ -34,10 +35,12 @@ uint				DeepShadow_SlotIndex;
 uint				DeepShadow_KernelType;
 float				DeepShadow_DepthBiasScale;
 float				DeepShadow_DensityScale;
+float4				DeepShadow_LayerDepths;
 
 float4				Voxel_LightPosition;
 float3				Voxel_LightDirection;
 uint				Voxel_MacroGroupId;
+uint				Voxel_RandomType;
 
 Texture2D<float4>	RayMarchMaskTexture;
 
@@ -50,6 +53,60 @@ RWTexture2D<float4>	OutputColor;
 
 SamplerState		LinearSampler;	
 SamplerState 		ShadowSampler;
+
+float4 WriteShadowMaskOutput(const float InFadedShadow)
+{
+	// Depending of if the light is direction (i.e., WholeSceneLight) or a local light (Point/Spot/Rect), 
+	// we change the output layout
+	const float EncodedShadow = EncodeLightAttenuation(InFadedShadow);
+	return float4(EncodedShadow, EncodedShadow, EncodedShadow, EncodedShadow);
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Random functions
+
+#if PERMUTATION_OPAQUEMASK_TYPE == OPAQUE_MASK_TYPE_VIRTUAL_VOXEL
+// The hair shadow mask is rendered by tracing ray/cone through the voxel structure. The traversing is done with 
+// point sampling and jittering to get the smooth aspect, and avoid expensive trilinear sampling in a sparse 
+// structure. These random functions make various tradeoff between randomness and correlation, so that the output 
+// can coverge with TAA without any denoiser. They result from experimentation, and don't have a good grounding
+float4 ComputeRandom4_0(uint2 PixelPosition, uint InSeed)
+{
+	const float2 U0 = InterleavedGradientNoise(PixelPosition, InSeed);
+	const float2 U1 = InterleavedGradientNoise(PixelPosition + 17, InSeed);
+	return float4(U0.x, U0.y, U1.x, U1.y);
+}
+
+float4 ComputeRandom4_1(uint2 PixelPosition, uint InSeed)
+{
+	const uint2 Seed0 = Rand3DPCG16(int3(PixelPosition, InSeed)).xy;
+	const uint2 Seed1 = Rand3DPCG16(int3(PixelPosition + 17, InSeed)).xy;
+	return float4(
+		Hammersley16(InSeed, 8, Seed0),
+		Hammersley16(InSeed, 8, Seed1));
+}
+
+float3 GetShadowMaskRandom(uint2 PixelPosition)
+{
+	float3 Random = 0.5f;
+	if (Voxel_RandomType == 0)
+	{
+		Random = GetHairVoxelJitter(PixelPosition.xy, View.StateFrameIndexMod8);
+	}
+	else if (Voxel_RandomType == 1)
+	{
+		Random = ComputeRandom4_0(PixelPosition, View.StateFrameIndexMod8).xyz;
+	}
+	else if (Voxel_RandomType == 2)
+	{
+		Random = ComputeRandom4_1(PixelPosition, View.StateFrameIndexMod8).xyz;
+	}
+	return Random;
+}
+#endif
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// 
 
 #define KERNEL_TYPE_2x2 0 
 #define KERNEL_TYPE_4x4 1
@@ -73,7 +130,7 @@ float3 ToLightPosition(float3 WorldPosition)
 	float4x4 WorldToLightTransform = 0;
 	if (DeepShadow_bIsGPUDriven > 0)
 	{
-		WorldToLightTransform = DeepShadow_WorldToLightTransformBuffer.Load(DeepShadow_SlotIndex).WorldToClip;
+		WorldToLightTransform = DeepShadow_WorldToLightTransformBuffer[DeepShadow_SlotIndex].WorldToClip;
 	}
 	else
 	{
@@ -329,9 +386,9 @@ float InternalGaussianTransmissionFilter(float3 ShadowPosition, FHairSamplingSet
 	for (uint SampleIt = 0; SampleIt < SampleCount; ++SampleIt)
 	{
 		const float2 Offset = PoissonDisk[SampleIt] * SampleRadius;
-		const float DepthBias = LAYER_DEPTH0 * DeepShadow_DepthBiasScale;
+		const float DepthBias = DeepShadow_LayerDepths[0] * DeepShadow_DepthBiasScale;
 		const float3 LightSpacePositionInAtlas = (ShadowPosition+float3(Offset,0)) * float3(DeepShadow_SlotResolution, 1) + float3(DeepShadow_SlotOffset, 0);
-		const float HairCount = SampleDOM_PCF2x2(LightSpacePositionInAtlas.xyz, DepthBias, Settings.ShadowDepthTexture, Settings.ShadowDomTexture);
+		const float HairCount = SampleDOM_PCF2x2(LightSpacePositionInAtlas.xyz, DepthBias, DeepShadow_LayerDepths, Settings.ShadowDepthTexture, Settings.ShadowDomTexture);
 		AccHairCount += saturate(HairCount);
 	}
 
@@ -390,12 +447,9 @@ void MainPS(
 		(LightSpacePosition.x >= 0 && LightSpacePosition.x <= 1) &&
 		(LightSpacePosition.y >= 0 && LightSpacePosition.y <= 1);
 	Visibility = bIsValid ? Visibility : 1;
+	OutColor = WriteShadowMaskOutput(Visibility);
 
-	// Depending of if the light is direction (i.e., WholeSceneLight) or a local light (Point/Spot/Rect), 
-	// we change the output layout
-    OutColor = bIsWholeSceneLight ? float4(Visibility, 1, 1, 1) : float4(1, 1, Visibility, 1);
 }
-
 #endif
 
 #if PERMUTATION_OPAQUEMASK_TYPE == OPAQUE_MASK_TYPE_VIRTUAL_VOXEL
@@ -424,9 +478,10 @@ void MainPS(
 
 		// Depth bias
 		// Origin is shifted 2 voxels away towards the light + a constant bias of the size of the voxel
-		const float3 Random = GetHairVoxelJitter(PixelCoord.xy, View.StateFrameIndexMod8);
+		const float3 Random = GetShadowMaskRandom(PixelCoord.xy);
 		{
-			const float3 DepthBias = VirtualVoxel.VoxelWorldSize * (2 * LightDirection + Random);
+			const float PositionBiasScale = 0.5f;
+			const float3 DepthBias = VirtualVoxel.VoxelWorldSize * (VirtualVoxel.DepthBiasScale_Shadow * LightDirection + PositionBiasScale * (Random * 2 - 1));
 			WorldPosition += DepthBias;
 		}
 
@@ -451,11 +506,11 @@ void MainPS(
 		#endif	
 
 		FHairTraversalSettings TraversalSettings = InitHairTraversalSettings();
-		TraversalSettings.DensityScale = VirtualVoxel.DensityScale;
+		TraversalSettings.DensityScale = VirtualVoxel.DensityScale_Shadow;
 		TraversalSettings.CountThreshold = 1;
 		TraversalSettings.DistanceThreshold = DistanceThreshold;
 		TraversalSettings.bDebugEnabled = bDebugEnabled;
-		TraversalSettings.SteppingScale = VirtualVoxel.SteppingScale;
+		TraversalSettings.SteppingScale = VirtualVoxel.SteppingScale_Shadow;
 		TraversalSettings.Random = Random;
 		TraversalSettings.PixelRadius = SceneDepth * VirtualVoxel.HairCoveragePixelRadiusAtDepth1;
 		
@@ -467,6 +522,7 @@ void MainPS(
 				CommonDesc,
 				NodeDesc,
 				VirtualVoxel.PageIndexBuffer,
+				VirtualVoxel.PageIndexOccupancyBuffer,
 				VirtualVoxel.PageTexture,
 				TraversalSettings);
 
@@ -476,12 +532,9 @@ void MainPS(
 			discard;
 		}
 
-		Visibility = min(saturate(1 - Result.HairCount), Result.Visibility);
+		Visibility = saturate(1 - Result.HairCount);
 	}
-
-	// Depending of if the light is direction (i.e., WholeSceneLight) or a local light (Point/Spot/Rect), 
-	// we change the output layout
-	OutColor = bIsWholeSceneLight ? float4(Visibility, 1, 1, 1) : float4(1, 1, Visibility, 1);
+	OutColor = WriteShadowMaskOutput(Visibility);
 }
 
 #endif

@@ -4,6 +4,8 @@
 #include "MoviePipelineLinearExecutor.h"
 #include "MoviePipelineInProcessExecutor.generated.h"
 
+class UWorld;
+
 /**
 * This executor implementation can process an array of movie pipelines and
 * run them inside the currently running process. This is intended for usage
@@ -19,21 +21,45 @@ class MOVIERENDERPIPELINECORE_API UMoviePipelineInProcessExecutor : public UMovi
 public:
 	UMoviePipelineInProcessExecutor()
 		: UMoviePipelineLinearExecutorBase()
+		, bUseCurrentLevel(false)
 		, RemainingInitializationFrames(-1)
 	{
 	}
 
+	/** Use current level instead of opening new level */
+	UPROPERTY(BlueprintReadWrite, Category = "Movie Render Pipeline")
+	bool bUseCurrentLevel;
+
 protected:
 	virtual void Start(const UMoviePipelineExecutorJob* InJob) override;
-	virtual void OnIndividualPipelineFinished(UMoviePipeline* FinishedPipeline) override;
 
 private:
 	void OnMapLoadFinished(UWorld* NewWorld);
-	void OnMoviePipelineFinished(UMoviePipeline* InMoviePipeline);
+	void OnMoviePipelineFinished(UMoviePipeline* InMoviePipeline, bool bFatalError);
 	void OnApplicationQuit();
 	void OnTick();
+
+	void BackupState();
+	void ModifyState(const UMoviePipelineExecutorJob* InJob);
+	void RestoreState();
 
 private:
 	/** If using delayed initialization, how many frames are left before we call Initialize. Will be -1 if not actively counting down. */
 	int32 RemainingInitializationFrames;
+
+	struct FSavedState
+	{
+		bool bBackedUp = false;
+
+		// PlayerController
+		bool bCinematicMode = false;
+		bool bHidePlayer = false;
+
+		bool bUseFixedTimeStep = false;
+		double FixedDeltaTime = 1.0;
+
+		TOptional<FText> WindowTitle;
+	};
+
+	FSavedState SavedState;
 };

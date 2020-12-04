@@ -2,7 +2,7 @@
 #include "ProfilingDebugging/CountersTrace.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/Parse.h"
-#include "Trace/Trace.h"
+#include "Trace/Trace.inl"
 
 #if COUNTERSTRACE_ENABLED
 
@@ -56,14 +56,6 @@ void FCountersTrace::OutputSetValue(uint16 CounterId, double Value)
 		<< SetValueFloat.Cycle(FPlatformTime::Cycles64())
 		<< SetValueFloat.Value(Value)
 		<< SetValueFloat.CounterId(CounterId);
-}
-
-void FCountersTrace::Init(const TCHAR* CmdLine)
-{
-	if (FParse::Param(CmdLine, TEXT("counterstrace")))
-	{
-		Trace::ToggleChannel(CountersChannel, true);
-	}
 }
 
 #endif

@@ -99,10 +99,12 @@ namespace Audio
 		// Mixer buffer object which is a convenience wrapper around some buffer initialization and management
 		FMixerBuffer* MixerBuffer;
 
+		// Critical Section around mixer source buffer access
+		FCriticalSection MixerSourceBufferCritSec;
+
 		// Object which handles bulk of decoding operations
 		TSharedPtr<FMixerSourceBuffer, ESPMode::ThreadSafe> MixerSourceBuffer;
 
-		FCriticalSection DtorCritSec;
 		// Scratch buffer used for upmixing and downmixing the audio
 		AlignedFloatBuffer ScratchBuffer;
 
@@ -260,7 +262,7 @@ namespace Audio
 		int32 AudioThreadId;
 		FAudioDevice* AudioDevice;
 		int32 SampleRate;
-		FCriticalSection DecodingSourcesCritSec;
+		mutable FCriticalSection DecodingSourcesCritSec;
 		TMap<int32, FDecodingSoundSourcePtr> InitializingDecodingSources;
 		TMap<int32, FDecodingSoundSourcePtr> DecodingSources;
 		TMap<int32, FSourceDecodeInit> PrecachingSources;

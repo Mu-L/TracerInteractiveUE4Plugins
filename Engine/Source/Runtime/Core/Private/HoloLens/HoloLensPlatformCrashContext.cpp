@@ -359,7 +359,7 @@ void CreateExceptionInfoString(EXCEPTION_RECORD* ExceptionRecord)
 		{
 			ErrorString += TEXT("writing address ");
 		}
-		ErrorString += FString::Printf(TEXT("0x%08x"), (uint32)ExceptionRecord->ExceptionInformation[1]);
+		ErrorString += FString::Printf(TEXT("0x%016llx"), ExceptionRecord->ExceptionInformation[1]);
 		break;
 	HANDLE_CASE(EXCEPTION_ARRAY_BOUNDS_EXCEEDED)
 	HANDLE_CASE(EXCEPTION_DATATYPE_MISALIGNMENT)
@@ -460,8 +460,10 @@ void ReportHang(const TCHAR* ErrorMessage, const uint64* StackFrames, int32 NumS
 /** Implement platform specific static cleanup function */
 void FGenericCrashContext::CleanupPlatformSpecificFiles()
 {
+#if WER_CUSTOM_REPORTS
 	FString CrashVideoPath = FPaths::ProjectLogDir() / TEXT("CrashVideo.avi");
 	IFileManager::Get().Delete(*CrashVideoPath);
+#endif
 }
 
 #if WER_CUSTOM_REPORTS

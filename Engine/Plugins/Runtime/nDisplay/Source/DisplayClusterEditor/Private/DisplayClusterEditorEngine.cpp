@@ -5,6 +5,9 @@
 
 #include "DisplayClusterRootActor.h"
 
+#include "IDisplayClusterConfiguration.h"
+#include "DisplayClusterConfigurationTypes.h"
+
 #include "DisplayCluster/Private/IPDisplayCluster.h"
 
 #include "Engine/LevelStreaming.h"
@@ -83,26 +86,18 @@ void UDisplayClusterEditorEngine::StartPlayInEditorSession(FRequestPlaySessionPa
 		{
 			// Also search inside streamed levels
 			const TArray<ULevelStreaming*>& StreamingLevels = EditorWorldPreDup->GetStreamingLevels();
-			for (ULevelStreaming* StreamingLevel : StreamingLevels)
+			for (const ULevelStreaming* const StreamingLevel : StreamingLevels)
 			{
-				if (StreamingLevel)
+				if (StreamingLevel && StreamingLevel->GetCurrentState() == ULevelStreaming::ECurrentState::LoadedVisible)
 				{
-					switch (StreamingLevel->GetCurrentState())
-					{
-					case ULevelStreaming::ECurrentState::LoadedVisible:
-					{
-						// Look for the actor in those sub-levels that have been loaded already
-						const TSoftObjectPtr<UWorld>& SubWorldAsset = StreamingLevel->GetWorldAsset();
-						RootActor = FindDisplayClusterRootActor(SubWorldAsset.Get());
-						if (RootActor)
-						{
-							break;
-						}
-					}
+					// Look for the actor in those sub-levels that have been loaded already
+					const TSoftObjectPtr<UWorld>& SubWorldAsset = StreamingLevel->GetWorldAsset();
+					RootActor = FindDisplayClusterRootActor(SubWorldAsset.Get());
+				}
 
-					default:
-						break;
-					}
+				if (RootActor)
+				{
+					break;
 				}
 			}
 		}
@@ -112,9 +107,18 @@ void UDisplayClusterEditorEngine::StartPlayInEditorSession(FRequestPlaySessionPa
 		{
 			bIsNDisplayPIE = true;
 
-			if (!DisplayClusterModule->StartSession(RootActor->GetEditorConfigPath(), RootActor->GetEditorNodeId()))
+			// Load config data
+			const UDisplayClusterConfigurationData* ConfigData = IDisplayClusterConfiguration::Get().LoadConfig(RootActor->GetPreviewConfigPath());
+			if (ConfigData)
 			{
-				UE_LOG(LogDisplayClusterEditorEngine, Error, TEXT("An error occurred during DisplayCluster session start"));
+				if (!DisplayClusterModule->StartSession(ConfigData, ConfigData->Cluster->MasterNode.Id))
+				{
+					UE_LOG(LogDisplayClusterEditorEngine, Error, TEXT("An error occurred during DisplayCluster session start"));
+				}
+			}
+			else
+			{
+				UE_LOG(LogDisplayClusterEditorEngine, Error, TEXT("Couldn't load config data"));
 			}
 		}
 	}
@@ -138,7 +142,6 @@ void UDisplayClusterEditorEngine::StartPlayInEditorSession(FRequestPlaySessionPa
 
 bool UDisplayClusterEditorEngine::LoadMap(FWorldContext& WorldContext, FURL URL, class UPendingNetGame* Pending, FString& Error)
 {
-	 
 	if (bIsNDisplayPIE)
 	{
 		// Finish previous scene

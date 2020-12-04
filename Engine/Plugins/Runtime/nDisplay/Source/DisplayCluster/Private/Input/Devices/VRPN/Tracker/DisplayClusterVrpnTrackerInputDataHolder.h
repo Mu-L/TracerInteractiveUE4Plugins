@@ -2,10 +2,12 @@
 
 #pragma once
 
+#include "CoreMinimal.h"
+
 #include "Input/Devices/DisplayClusterInputDeviceTraits.h"
 #include "Input/Devices/DisplayClusterInputDeviceBase.h"
 
-#include "CoreMinimal.h"
+class UDisplayClusterConfigurationInputDeviceTracker;
 
 
 /**
@@ -15,7 +17,7 @@ class FDisplayClusterVrpnTrackerInputDataHolder
 	: public FDisplayClusterInputDeviceBase<EDisplayClusterInputDeviceType::VrpnTracker>
 {
 public:
-	FDisplayClusterVrpnTrackerInputDataHolder(const FDisplayClusterConfigInput& config);
+	FDisplayClusterVrpnTrackerInputDataHolder(const FString& DeviceId, const UDisplayClusterConfigurationInputDeviceTracker* CfgDevice);
 	virtual ~FDisplayClusterVrpnTrackerInputDataHolder();
 
 public:
@@ -24,12 +26,15 @@ public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	virtual bool Initialize() override;
 
+	virtual FString GetType() const override
+	{ return FString("tracker"); }
+
 public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	// IDisplayClusterStringSerializable
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	virtual FString SerializeToString() const override final;
-	virtual bool    DeserializeFromString(const FString& data) override final;
+	virtual bool    DeserializeFromString(const FString& Data) override final;
 
 private:
 	// Serialization constants

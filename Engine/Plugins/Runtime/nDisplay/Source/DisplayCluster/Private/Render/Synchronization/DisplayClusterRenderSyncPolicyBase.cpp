@@ -3,13 +3,14 @@
 #include "Render/Synchronization/DisplayClusterRenderSyncPolicyBase.h"
 
 #include "Cluster/IPDisplayClusterClusterManager.h"
-#include "Cluster/Controller/IPDisplayClusterNodeController.h"
+#include "Cluster/Controller/IDisplayClusterNodeController.h"
 
-#include "DisplayClusterGlobals.h"
-#include "DisplayClusterLog.h"
+#include "Misc/DisplayClusterGlobals.h"
+#include "Misc/DisplayClusterLog.h"
 
 
-FDisplayClusterRenderSyncPolicyBase::FDisplayClusterRenderSyncPolicyBase()
+FDisplayClusterRenderSyncPolicyBase::FDisplayClusterRenderSyncPolicyBase(const TMap<FString, FString>& InParameters)
+	: Parameters(InParameters)
 {
 }
 
@@ -20,21 +21,19 @@ FDisplayClusterRenderSyncPolicyBase::~FDisplayClusterRenderSyncPolicyBase()
 
 void FDisplayClusterRenderSyncPolicyBase::SyncBarrierRenderThread()
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterRenderSync);
-
 	if (GDisplayCluster->GetOperationMode() == EDisplayClusterOperationMode::Disabled)
 	{
 		return;
 	}
 
-	double tTime = 0.f;
-	double bTime = 0.f;
+	double ThreadTime  = 0.f;
+	double BarrierTime = 0.f;
 
-	IPDisplayClusterNodeController* const pController = GDisplayCluster->GetPrivateClusterMgr()->GetController();
+	IDisplayClusterNodeController* const pController = GDisplayCluster->GetPrivateClusterMgr()->GetController();
 	if (pController)
 	{
-		pController->WaitForSwapSync(&tTime, &bTime);
+		pController->WaitForSwapSync(&ThreadTime, &BarrierTime);
 	}
 
-	UE_LOG(LogDisplayClusterRenderSync, Verbose, TEXT("Render barrier wait: t=%lf b=%lf"), tTime, bTime);
+	UE_LOG(LogDisplayClusterRenderSync, VeryVerbose, TEXT("Render barrier wait: t=%lf b=%lf"), ThreadTime, BarrierTime);
 }

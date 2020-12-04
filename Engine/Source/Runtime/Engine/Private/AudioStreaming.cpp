@@ -324,7 +324,7 @@ void FStreamingWaveData::BeginPendingRequests(const TArray<uint32>& IndicesToLoa
 			// returns.
 			PendingChunkChangeRequestStatus.Increment();
 
-			EAsyncIOPriorityAndFlags AsyncIOPriority = AIOP_High;
+			EAsyncIOPriorityAndFlags AsyncIOPriority = AIOP_High | AIOP_FLAG_DONTCACHE;
 
 			// Load and decompress async.
 #if WITH_EDITORONLY_DATA
@@ -920,7 +920,7 @@ FAudioChunkHandle FLegacyAudioStreamingManager::GetLoadedChunk(const USoundWave*
 				if (WaveData->LoadedChunks[Index].Index == ChunkIndex)
 				{
 					CriticalSection.Unlock();
-					return BuildChunkHandle(WaveData->LoadedChunks[Index].Data, WaveData->LoadedChunks[Index].AudioDataSize, SoundWave, SoundWave->GetFName(), ChunkIndex);
+					return BuildChunkHandle(WaveData->LoadedChunks[Index].Data, WaveData->LoadedChunks[Index].AudioDataSize, SoundWave, SoundWave->GetFName(), ChunkIndex, InvalidAudioStreamCacheLookupID);
 				}
 			}
 		}

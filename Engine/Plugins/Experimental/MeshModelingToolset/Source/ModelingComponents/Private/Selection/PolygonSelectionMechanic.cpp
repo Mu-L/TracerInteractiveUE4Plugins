@@ -4,8 +4,14 @@
 #include "InteractiveToolManager.h"
 #include "Util/ColorConstants.h"
 #include "ToolSceneQueriesUtil.h"
+#include "ToolSetupUtil.h"
 
 #define LOCTEXT_NAMESPACE "UPolygonSelectionMechanic"
+
+UPolygonSelectionMechanic::~UPolygonSelectionMechanic()
+{
+	checkf(PreviewGeometryActor == nullptr, TEXT("Shutdown() should be called before UPolygonSelectionMechanic is destroyed."));
+}
 
 void UPolygonSelectionMechanic::Setup(UInteractiveTool* ParentToolIn)
 {
@@ -24,39 +30,107 @@ void UPolygonSelectionMechanic::Setup(UInteractiveTool* ParentToolIn)
 	HilightRenderer.LineThickness = 4.0f;
 	SelectionRenderer.LineColor = LinearColors::Gold3f();
 	SelectionRenderer.LineThickness = 4.0f;
+
+	float HighlightedFacePercentDepthOffset = 0.5f;
+	HighlightedFaceMaterial = ToolSetupUtil::GetSelectionMaterial(FLinearColor::Green, ParentToolIn->GetToolManager(), HighlightedFacePercentDepthOffset);
+	// The rest of the highlighting setup has to be done in Initialize(), since we need the world to set up our drawing component.
 }
 
-
-void UPolygonSelectionMechanic::Initialize(const USimpleDynamicMeshComponent* MeshComponentIn, const FGroupTopology* TopologyIn,
-	TFunction<FDynamicMeshAABBTree3*()> GetSpatialSourceFunc,
-	TFunction<bool()> GetAddToSelectionModifierStateFuncIn)
+void UPolygonSelectionMechanic::Shutdown()
 {
-	this->MeshComponent = MeshComponentIn;
+	if (PreviewGeometryActor)
+	{
+		PreviewGeometryActor->Destroy();
+		PreviewGeometryActor = nullptr;
+	}
+}
+
+void UPolygonSelectionMechanic::Initialize(
+	const FDynamicMesh3* MeshIn,
+	FTransform TargetTransformIn,
+	UWorld* WorldIn,
+	const FGroupTopology* TopologyIn,
+	TFunction<FDynamicMeshAABBTree3 * ()> GetSpatialSourceFuncIn,
+	TFunction<bool(void)> GetAddToSelectionModifierStateFuncIn)
+{
+	this->Mesh = MeshIn;
 	this->Topology = TopologyIn;
+	this->TargetTransform = FTransform3d(TargetTransformIn);
 
-	TargetTransform = FTransform3d(MeshComponent->GetComponentTransform());
-
-	TopoSelector.Initialize(MeshComponent->GetMesh(), Topology);
-	this->GetSpatialFunc = GetSpatialSourceFunc;
+	TopoSelector.Initialize(Mesh, Topology);
+	this->GetSpatialFunc = GetSpatialSourceFuncIn;
 	TopoSelector.SetSpatialSource(GetSpatialFunc);
-	TopoSelector.PointsWithinToleranceTest = [this](const FVector3d& Position1, const FVector3d& Position2) {
-		return ToolSceneQueriesUtil::PointSnapQuery(this->CameraState,
-			TargetTransform.TransformPosition(Position1), TargetTransform.TransformPosition(Position2));
+	TopoSelector.PointsWithinToleranceTest = [this](const FVector3d& Position1, const FVector3d& Position2, double TolScale) {
+		if (CameraState.bIsOrthographic)
+		{
+			// We could just always use ToolSceneQueriesUtil::PointSnapQuery. But in ortho viewports, we happen to know
+			// that the only points that we will ever give this function will be the closest points between a ray and
+			// some geometry, meaning that the vector between them will be orthogonal to the view ray. With this knowledge,
+			// we can do the tolerance computation more efficiently than PointSnapQuery can, since we don't need to project
+			// down to the view plane.
+			// As in PointSnapQuery, we convert our angle-based tolerance to one we can use in an ortho viewport (instead of
+			// dividing our field of view into 90 visual angle degrees, we divide the plane into 90 units).
+			float OrthoTolerance = ToolSceneQueriesUtil::GetDefaultVisualAngleSnapThreshD() * CameraState.OrthoWorldCoordinateWidth / 90.0;
+			OrthoTolerance *= TolScale;
+			return TargetTransform.TransformPosition(Position1).DistanceSquared(TargetTransform.TransformPosition(Position2)) < OrthoTolerance * OrthoTolerance;
+		}
+		else
+		{
+			return ToolSceneQueriesUtil::PointSnapQuery(CameraState,
+				TargetTransform.TransformPosition(Position1), TargetTransform.TransformPosition(Position2),
+				ToolSceneQueriesUtil::GetDefaultVisualAngleSnapThreshD() * TolScale);
+		}
 	};
 
 	GetAddToSelectionModifierStateFunc = GetAddToSelectionModifierStateFuncIn;
+
+	// Set up the component we use to draw highlighted triangles. Only needs to be done once, not when the mesh
+	// changes (we are assuming that we won't swap worlds without creating a new mechanic).
+	if (PreviewGeometryActor == nullptr)
+	{
+		FRotator Rotation(0.0f, 0.0f, 0.0f);
+		FActorSpawnParameters SpawnInfo;;
+		PreviewGeometryActor = WorldIn->SpawnActor<APreviewGeometryActor>(FVector::ZeroVector, Rotation, SpawnInfo);
+
+		DrawnTriangleSetComponent = NewObject<UTriangleSetComponent>(PreviewGeometryActor);
+		PreviewGeometryActor->SetRootComponent(DrawnTriangleSetComponent);
+		DrawnTriangleSetComponent->RegisterComponent();
+	}
+
+	PreviewGeometryActor->SetActorTransform(TargetTransformIn);
+
+	DrawnTriangleSetComponent->Clear();
+	CurrentlyHighlightedGroups.Empty();
 }
 
+void UPolygonSelectionMechanic::Initialize(
+	USimpleDynamicMeshComponent* MeshComponentIn,
+	const FGroupTopology* TopologyIn,
+	TFunction<FDynamicMeshAABBTree3 * ()> GetSpatialSourceFuncIn,
+	TFunction<bool()> GetAddToSelectionModifierStateFuncIn)
+{
 
+	Initialize(MeshComponentIn->GetMesh(),
+		MeshComponentIn->GetComponentTransform(),
+		MeshComponentIn->GetWorld(),
+		TopologyIn,
+		GetSpatialSourceFuncIn,
+		GetAddToSelectionModifierStateFuncIn);
+}
 
 void UPolygonSelectionMechanic::Render(IToolsContextRenderAPI* RenderAPI)
 {
+	// Cache the view camera state so we can use for snapping/etc.
+	// This should not happen in Render() though...
 	GetParentTool()->GetToolManager()->GetContextQueriesAPI()->GetCurrentViewState(CameraState);
 
-	const FDynamicMesh3* TargetMesh = MeshComponent->GetMesh();
+
+	FViewCameraState RenderCameraState = RenderAPI->GetCameraState();
+
+	const FDynamicMesh3* TargetMesh = this->Mesh;
 	FTransform Transform = (FTransform)TargetTransform;
 
-	PolyEdgesRenderer.BeginFrame(RenderAPI, CameraState);
+	PolyEdgesRenderer.BeginFrame(RenderAPI, RenderCameraState);
 	PolyEdgesRenderer.SetTransform(Transform);
 	for (const FGroupTopology::FGroupEdge& Edge : Topology->Edges)
 	{
@@ -69,18 +143,18 @@ void UPolygonSelectionMechanic::Render(IToolsContextRenderAPI* RenderAPI)
 	}
 	PolyEdgesRenderer.EndFrame();
 
-	HilightRenderer.BeginFrame(RenderAPI, CameraState);
-	HilightRenderer.SetTransform(Transform);
-	TopoSelector.DrawSelection(HilightSelection, &HilightRenderer, &CameraState);
-	HilightRenderer.EndFrame();
-
 	if (PersistentSelection.IsEmpty() == false)
 	{
-		SelectionRenderer.BeginFrame(RenderAPI, CameraState);
+		SelectionRenderer.BeginFrame(RenderAPI, RenderCameraState);
 		SelectionRenderer.SetTransform(Transform);
-		TopoSelector.DrawSelection(PersistentSelection, &SelectionRenderer, &CameraState);
+		TopoSelector.DrawSelection(PersistentSelection, &SelectionRenderer, &RenderCameraState);
 		SelectionRenderer.EndFrame();
 	}
+
+	HilightRenderer.BeginFrame(RenderAPI, RenderCameraState);
+	HilightRenderer.SetTransform(Transform);
+	TopoSelector.DrawSelection(HilightSelection, &HilightRenderer, &RenderCameraState);
+	HilightRenderer.EndFrame();
 }
 
 
@@ -89,7 +163,11 @@ void UPolygonSelectionMechanic::Render(IToolsContextRenderAPI* RenderAPI)
 
 void UPolygonSelectionMechanic::ClearHighlight()
 {
+	checkf(DrawnTriangleSetComponent != nullptr, TEXT("Initialize() not called on UPolygonSelectionMechanic."));
+
 	HilightSelection.Clear();
+	DrawnTriangleSetComponent->Clear();
+	CurrentlyHighlightedGroups.Empty();
 }
 
 
@@ -106,22 +184,22 @@ void UPolygonSelectionMechanic::NotifyMeshChanged(bool bTopologyModified)
 }
 
 
-bool UPolygonSelectionMechanic::TopologyHitTest(const FRay& WorldRay, FHitResult& OutHit)
+bool UPolygonSelectionMechanic::TopologyHitTest(const FRay& WorldRay, FHitResult& OutHit, bool bUseOrthoSettings)
 {
 	FGroupTopologySelection Selection;
-	return TopologyHitTest(WorldRay, OutHit, Selection);
+	return TopologyHitTest(WorldRay, OutHit, Selection, bUseOrthoSettings);
 }
 
-bool UPolygonSelectionMechanic::TopologyHitTest(const FRay& WorldRay, FHitResult& OutHit, FGroupTopologySelection& OutSelection)
+bool UPolygonSelectionMechanic::TopologyHitTest(const FRay& WorldRay, FHitResult& OutHit, FGroupTopologySelection& OutSelection, bool bUseOrthoSettings)
 {
 	FRay3d LocalRay(TargetTransform.InverseTransformPosition(WorldRay.Origin),
 		TargetTransform.InverseTransformVector(WorldRay.Direction));
 	LocalRay.Direction.Normalize();
 
-	UpdateTopoSelector();
-
 	FVector3d LocalPosition, LocalNormal;
-	if (TopoSelector.FindSelectedElement(LocalRay, OutSelection, LocalPosition, LocalNormal) == false)
+	int32 EdgeSegmentId; // Only used if hit is an edge
+	FGroupTopologySelector::FSelectionSettings TopoSelectorSettings = GetTopoSelectorSettings(bUseOrthoSettings);
+	if (TopoSelector.FindSelectedElement(TopoSelectorSettings, LocalRay, OutSelection, LocalPosition, LocalNormal, &EdgeSegmentId) == false)
 	{
 		return false;
 	}
@@ -137,6 +215,7 @@ bool UPolygonSelectionMechanic::TopologyHitTest(const FRay& WorldRay, FHitResult
 		OutHit.FaceIndex = OutSelection.SelectedEdgeIDs[0];
 		OutHit.Distance = LocalRay.Project(LocalPosition);
 		OutHit.ImpactPoint = (FVector)TargetTransform.TransformPosition(LocalRay.PointAt(OutHit.Distance));
+		OutHit.Item = EdgeSegmentId;
 	}
 	else
 	{
@@ -165,20 +244,29 @@ bool UPolygonSelectionMechanic::TopologyHitTest(const FRay& WorldRay, FHitResult
 
 
 
-void UPolygonSelectionMechanic::UpdateTopoSelector()
+FGroupTopologySelector::FSelectionSettings UPolygonSelectionMechanic::GetTopoSelectorSettings(bool bUseOrthoSettings)
 {
-	bool bFaces = Properties->bSelectFaces;
-	bool bEdges = Properties->bSelectEdges;
-	bool bVertices = Properties->bSelectVertices;
+	FGroupTopologySelector::FSelectionSettings Settings;
+
+	Settings.bEnableFaceHits = Properties->bSelectFaces;
+	Settings.bEnableEdgeHits = Properties->bSelectEdges;
+	Settings.bEnableCornerHits = Properties->bSelectVertices;
 
 	if (PersistentSelection.IsEmpty() == false && GetAddToSelectionModifierStateFunc() == true)
 	{
-		bFaces = bFaces && PersistentSelection.SelectedGroupIDs.Num() > 0;
-		bEdges = bEdges && PersistentSelection.SelectedEdgeIDs.Num() > 0;
-		bVertices = bVertices && PersistentSelection.SelectedCornerIDs.Num() > 0;
+		Settings.bEnableFaceHits = Settings.bEnableFaceHits && PersistentSelection.SelectedGroupIDs.Num() > 0;
+		Settings.bEnableEdgeHits = Settings.bEnableEdgeHits && PersistentSelection.SelectedEdgeIDs.Num() > 0;
+		Settings.bEnableCornerHits = Settings.bEnableCornerHits && PersistentSelection.SelectedCornerIDs.Num() > 0;
 	}
 
-	TopoSelector.UpdateEnableFlags(bFaces, bEdges, bVertices);
+	if (bUseOrthoSettings)
+	{
+		Settings.bPreferProjectedElement = Properties->bPreferProjectedElement;
+		Settings.bSelectDownRay = Properties->bSelectDownRay;
+		Settings.bIgnoreOcclusion = Properties->bIgnoreOcclusion;
+	}
+
+	return Settings;
 }
 
 
@@ -186,14 +274,63 @@ void UPolygonSelectionMechanic::UpdateTopoSelector()
 
 bool UPolygonSelectionMechanic::UpdateHighlight(const FRay& WorldRay)
 {
+	checkf(DrawnTriangleSetComponent != nullptr, TEXT("Initialize() not called on UPolygonSelectionMechanic."));
+
 	FRay3d LocalRay(TargetTransform.InverseTransformPosition(WorldRay.Origin),
 		TargetTransform.InverseTransformVector(WorldRay.Direction));
 	LocalRay.Direction.Normalize();
 
 	HilightSelection.Clear();
-	UpdateTopoSelector();
 	FVector3d LocalPosition, LocalNormal;
-	bool bHit = TopoSelector.FindSelectedElement(LocalRay, HilightSelection, LocalPosition, LocalNormal);
+	FGroupTopologySelector::FSelectionSettings TopoSelectorSettings = GetTopoSelectorSettings(CameraState.bIsOrthographic);
+	bool bHit = TopoSelector.FindSelectedElement(TopoSelectorSettings, LocalRay, HilightSelection, LocalPosition, LocalNormal);
+
+	if (HilightSelection.SelectedEdgeIDs.Num() > 0 && ShouldSelectEdgeLoopsFunc())
+	{
+		TopoSelector.ExpandSelectionByEdgeLoops(HilightSelection);
+	}
+
+	// Currently we draw highlighted edges/vertices differently from highlighted faces. Edges/vertices
+	// get drawn in the Render() call, so it is sufficient to just update HighlightSelection above.
+	// Faces, meanwhile, get placed into a Component that is rendered through the normal rendering system.
+	// So, we need to update the component when the highlighted selection changes.
+
+	// Put hovered groups in a set to easily compare to current
+	TSet<int> NewlyHighlightedGroups;
+	NewlyHighlightedGroups.Append(HilightSelection.SelectedGroupIDs);
+
+	// See if we're currently highlighting any groups that we're not supposed to
+	if (!NewlyHighlightedGroups.Includes(CurrentlyHighlightedGroups))
+	{
+		DrawnTriangleSetComponent->Clear();
+		CurrentlyHighlightedGroups.Empty();
+	}
+
+	// See if we need to add any groups
+	if (!CurrentlyHighlightedGroups.Includes(NewlyHighlightedGroups))
+	{
+		// Add triangles for each new group
+		for (int Gid : HilightSelection.SelectedGroupIDs)
+		{
+			if (!CurrentlyHighlightedGroups.Contains(Gid))
+			{
+				for (int32 Tid : Topology->GetGroupTriangles(Gid))
+				{
+					// We use the triangle normals because the normal overlay isn't guaranteed to be valid as we edit the mesh
+					FVector3d TriangleNormal = Mesh->GetTriNormal(Tid);
+
+					FIndex3i VertIndices = Mesh->GetTriangle(Tid);
+					DrawnTriangleSetComponent->AddTriangle(FRenderableTriangle(HighlightedFaceMaterial,
+						FRenderableTriangleVertex((FVector)Mesh->GetVertex(VertIndices.A), (FVector2D)Mesh->GetVertexUV(VertIndices.A), (FVector)TriangleNormal, (FColor)Mesh->GetVertexColor(VertIndices.A)),
+						FRenderableTriangleVertex((FVector)Mesh->GetVertex(VertIndices.B), (FVector2D)Mesh->GetVertexUV(VertIndices.B), (FVector)TriangleNormal, (FColor)Mesh->GetVertexColor(VertIndices.B)),
+						FRenderableTriangleVertex((FVector)Mesh->GetVertex(VertIndices.C), (FVector2D)Mesh->GetVertexUV(VertIndices.C), (FVector)TriangleNormal, (FColor)Mesh->GetVertexColor(VertIndices.C))));
+				}
+
+				CurrentlyHighlightedGroups.Add(Gid);
+			}
+		}//end iterating through groups
+	}//end if groups need to be added
+
 	return bHit;
 }
 
@@ -212,23 +349,55 @@ bool UPolygonSelectionMechanic::UpdateSelection(const FRay& WorldRay, FVector3d&
 		TargetTransform.InverseTransformVector(WorldRay.Direction));
 	LocalRay.Direction.Normalize();
 
-	UpdateTopoSelector();
-
 	bool bSelectionModified = false;
 	FVector3d LocalPosition, LocalNormal;
 	FGroupTopologySelection Selection;
-	if (TopoSelector.FindSelectedElement(LocalRay, Selection, LocalPosition, LocalNormal))
+	FGroupTopologySelector::FSelectionSettings TopoSelectorSettings = GetTopoSelectorSettings(CameraState.bIsOrthographic);
+	if (TopoSelector.FindSelectedElement(TopoSelectorSettings, LocalRay, Selection, LocalPosition, LocalNormal))
 	{
 		LocalHitPositionOut = LocalPosition;
 		LocalHitNormalOut = LocalNormal;
+
+		bool bSelectedEdgeLoops = false;
+		if (Selection.SelectedEdgeIDs.Num() > 0 && ShouldSelectEdgeLoopsFunc())
+		{
+			bSelectedEdgeLoops = true;
+			TopoSelector.ExpandSelectionByEdgeLoops(Selection);
+		}
 		if (GetAddToSelectionModifierStateFunc())
 		{
-			PersistentSelection.Toggle(Selection);
+			if (bSelectedEdgeLoops)
+			{
+				// We don't want to toggle if we're adding loops to the selection
+				// unless the entire loop was selected to begin with.
+				bool bLoopsAlreadySelected = true;
+				for (int32 Eid : Selection.SelectedEdgeIDs)
+				{
+					if (!PersistentSelection.SelectedEdgeIDs.Contains(Eid))
+					{
+						bLoopsAlreadySelected = false;
+						break;
+					}
+				}
+				if (bLoopsAlreadySelected)
+				{
+					PersistentSelection.Remove(Selection);
+				}
+				else
+				{
+					PersistentSelection.Append(Selection);
+				}
+			}
+			else
+			{
+				PersistentSelection.Toggle(Selection);
+			}
 		}
 		else
 		{
 			PersistentSelection = Selection;
 		}
+
 		bSelectionModified = true;
 	}
 	else

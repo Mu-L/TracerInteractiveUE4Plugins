@@ -19,6 +19,7 @@
 #include "Serialization/ArchiveProxy.h"
 #include "UObject/RenderingObjectVersion.h"
 #include "Serialization/MemoryImage.h"
+#include <atomic>
 
 // For FShaderUniformBufferParameter
 
@@ -38,7 +39,7 @@ class FShaderType;
 class FVertexFactoryType;
 class FShaderParametersMetadata;
 class FShaderMapPointerTable;
-class FStringBuilderBase;
+struct FShaderCompilerOutput;
 
 /** Define a shader permutation uniquely according to its type, and permutation id.*/
 template<typename MetaShaderType>
@@ -178,6 +179,7 @@ public:
 	LAYOUT_FIELD(TMemoryImageArray<FShaderParameterInfo>, TextureSamplers);
 	LAYOUT_FIELD(TMemoryImageArray<FShaderParameterInfo>, SRVs);
 	LAYOUT_FIELD(TMemoryImageArray<FShaderLooseParameterBufferInfo>, LooseParameterBuffers);
+	LAYOUT_FIELD(uint64, Hash);
 
 	friend FArchive& operator<<(FArchive& Ar,FShaderParameterMapInfo& Info)
 	{
@@ -185,15 +187,13 @@ public:
 		Ar << Info.TextureSamplers;
 		Ar << Info.SRVs;
 		Ar << Info.LooseParameterBuffers;
+		Ar << Info.Hash;
 		return Ar;
 	}
 
 	inline bool operator==(const FShaderParameterMapInfo& Rhs) const
 	{
-		return UniformBuffers == Rhs.UniformBuffers
-			&& TextureSamplers == Rhs.TextureSamplers
-			&& SRVs == Rhs.SRVs
-			&& LooseParameterBuffers == Rhs.LooseParameterBuffers;
+		return Hash == Rhs.Hash;
 	}
 };
 
@@ -213,21 +213,37 @@ public:
 
 	inline int32 GetNumShaders() const
 	{
-		return RHIShaders.Num();
+		return NumRHIShaders;
 	}
 
 	inline bool HasShader(int32 ShaderIndex) const
 	{
-		return RHIShaders[ShaderIndex].IsValid();
+		return RHIShaders[ShaderIndex].load(std::memory_order_acquire) != nullptr;
 	}
 
 	inline FRHIShader* GetShader(int32 ShaderIndex)
 	{
-		if (!RHIShaders[ShaderIndex])
+		// This is a double checked locking. This trickery arises from the fact that we're
+		// synchronizing two threads: one that takes a lock and another that doesn't.
+		// Without fences, there is a race between storing the shader pointer and accessing it
+		// on the other (lockless) thread.
+
+		FRHIShader* Shader = RHIShaders[ShaderIndex].load(std::memory_order_acquire);
+		if (Shader == nullptr)
 		{
-			CreateShader(ShaderIndex);
+			// most shadermaps have <100 shaders, and less than a half of them can be created. One lock
+			// for all creation seems sufficient, but if this function is often contended, per-shader
+			// locks are easily possible.
+			FScopeLock ScopeLock(&RHIShadersCreationGuard);
+
+			Shader = RHIShaders[ShaderIndex].load(std::memory_order_relaxed);
+			if (Shader == nullptr)
+			{
+				Shader = CreateShader(ShaderIndex);
+				RHIShaders[ShaderIndex].store(Shader, std::memory_order_release);
+			}
 		}
-		return RHIShaders[ShaderIndex];
+		return Shader;
 	}
 
 	void BeginCreateAllShaders();
@@ -237,10 +253,7 @@ public:
 
 	inline uint32 GetRayTracingMaterialLibraryIndex(int32 ShaderIndex)
 	{
-		if (!RHIShaders[ShaderIndex])
-		{
-			CreateShader(ShaderIndex);
-		}
+		GetShader(ShaderIndex);	// make sure the shader is created
 		return RayTracingMaterialLibraryIndices[ShaderIndex];
 	}
 #endif // RHI_RAYTRACING
@@ -253,20 +266,32 @@ protected:
 
 	uint32 GetAllocatedSize() const
 	{
-		uint32 Size = RHIShaders.GetAllocatedSize();
+		uint32 Size = NumRHIShaders * sizeof(std::atomic<FRHIShader*>);
 #if RHI_RAYTRACING
 		Size += RayTracingMaterialLibraryIndices.GetAllocatedSize();
 #endif
 		return Size;
 	}
 
-	void CreateShader(int32 ShaderIndex);
+	/** Addrefs the reference, passing the responsibility to the caller to Release() it. */
+	FRHIShader* CreateShader(int32 ShaderIndex);
 
 	virtual TRefCountPtr<FRHIShader> CreateRHIShader(int32 ShaderIndex) = 0;
 	virtual bool TryRelease() { return true; }
 
+	void ReleaseShaders();
+
 private:
-	TArray<TRefCountPtr<FRHIShader>> RHIShaders;
+
+	/** This lock is to prevent two threads creating the same RHIShaders element. It is only taken if the element is to be created. */
+	FCriticalSection RHIShadersCreationGuard;
+
+	/** An array of shader pointers (refcount is managed manually). */
+	TUniquePtr<std::atomic<FRHIShader*>[]> RHIShaders;
+
+	/** Since the shaders are no longer a TArray, this is their count (the size of the RHIShadersArray). */
+	int32 NumRHIShaders;
+
 #if RHI_RAYTRACING
 	TArray<uint32> RayTracingMaterialLibraryIndices;
 #endif // RHI_RAYTRACING
@@ -319,13 +344,7 @@ public:
 
 	RENDERCORE_API uint32 GetSizeBytes() const;
 
-	inline void AddShaderCompilerOutput(const FShaderCompilerOutput& Output)
-	{
-#if WITH_EDITORONLY_DATA
-		AddPlatformDebugData(Output.PlatformDebugData);
-#endif
-		AddShaderCode(Output.Target.GetFrequency(), Output.OutputHash, Output.ShaderCode.GetReadAccess());
-	}
+	RENDERCORE_API void AddShaderCompilerOutput(const FShaderCompilerOutput& Output);
 
 	int32 FindShaderIndex(const FSHAHash& InHash) const;
 
@@ -553,10 +572,10 @@ public:
 
 	struct FResourceParameter
 	{
-		DECLARE_INLINE_TYPE_LAYOUT(FResourceParameter, NonVirtual);
-
-		LAYOUT_FIELD(uint16, BaseIndex);
+		DECLARE_INLINE_TYPE_LAYOUT(FResourceParameter, NonVirtual);		
 		LAYOUT_FIELD(uint16, ByteOffset);
+		LAYOUT_FIELD(uint8, BaseIndex);
+		LAYOUT_FIELD(EUniformBufferBaseType, BaseType);
 
 	};
 
@@ -577,13 +596,8 @@ public:
 	void BindForRootShaderParameters(const FShader* Shader, int32 PermutationId, const FShaderParameterMap& ParameterMaps);
 
 	LAYOUT_FIELD(TMemoryImageArray<FParameter>, Parameters);
-	LAYOUT_FIELD(TMemoryImageArray<FResourceParameter>, Textures);
-	LAYOUT_FIELD(TMemoryImageArray<FResourceParameter>, SRVs);
-	LAYOUT_FIELD(TMemoryImageArray<FResourceParameter>, UAVs);
-	LAYOUT_FIELD(TMemoryImageArray<FResourceParameter>, Samplers);
-	LAYOUT_FIELD(TMemoryImageArray<FResourceParameter>, GraphTextures);
-	LAYOUT_FIELD(TMemoryImageArray<FResourceParameter>, GraphSRVs);
-	LAYOUT_FIELD(TMemoryImageArray<FResourceParameter>, GraphUAVs);
+	LAYOUT_FIELD(TMemoryImageArray<FResourceParameter>, ResourceParameters);
+	LAYOUT_FIELD(TMemoryImageArray<FParameterStructReference>, GraphUniformBuffers);
 	LAYOUT_FIELD(TMemoryImageArray<FParameterStructReference>, ParameterReferences);
 
 	// Hash of the shader parameter structure when doing the binding.
@@ -608,7 +622,7 @@ struct FShaderPermutationParameters
 	{}
 };
 
-struct FShadereCompiledShaderInitializerType
+struct FShaderCompiledShaderInitializerType
 {
 	FShaderType* Type;
 	FShaderTarget Target;
@@ -623,28 +637,18 @@ struct FShadereCompiledShaderInitializerType
 	uint32 CodeSize;
 	int32 PermutationId;
 
-	FShadereCompiledShaderInitializerType(
+	RENDERCORE_API FShaderCompiledShaderInitializerType(
 		FShaderType* InType,
 		int32 InPermutationId,
 		const FShaderCompilerOutput& CompilerOutput,
 		const FSHAHash& InMaterialShaderMapHash,
 		const FShaderPipelineType* InShaderPipeline,
 		FVertexFactoryType* InVertexFactoryType
-	) :
-		Type(InType),
-		Target(CompilerOutput.Target),
-		Code(CompilerOutput.ShaderCode.GetReadAccess()),
-		ParameterMap(CompilerOutput.ParameterMap),
-		OutputHash(CompilerOutput.OutputHash),
-		MaterialShaderMapHash(InMaterialShaderMapHash),
-		ShaderPipeline(InShaderPipeline),
-		VertexFactoryType(InVertexFactoryType),
-		NumInstructions(CompilerOutput.NumInstructions),
-		NumTextureSamplers(CompilerOutput.NumTextureSamplers),
-		CodeSize(CompilerOutput.ShaderCode.GetShaderCodeSize()),
-		PermutationId(InPermutationId)
-	{}
+	);
 };
+
+UE_DEPRECATED(4.26, "FShadereCompiledShaderInitializerType is deprecated. Use FShaderCompiledShaderInitializerType.")
+typedef FShaderCompiledShaderInitializerType FShadereCompiledShaderInitializerType;
 
 namespace Freeze
 {
@@ -663,7 +667,7 @@ class RENDERCORE_API FShader
 public:
 	using FPermutationDomain = FShaderPermutationNone;
 	using FPermutationParameters = FShaderPermutationParameters;
-	using CompiledShaderInitializerType = FShadereCompiledShaderInitializerType;
+	using CompiledShaderInitializerType = FShaderCompiledShaderInitializerType;
 	using ShaderMetaType = FShaderType;
 
 	/** 
@@ -731,10 +735,18 @@ public:
 	FORCEINLINE_DEBUGGABLE const FShaderUniformBufferParameter& GetUniformBufferParameter(const FShaderParametersMetadata* SearchStruct) const
 	{
 		const FHashedName SearchName = SearchStruct->GetShaderVariableHashedName();
+		
+		return GetUniformBufferParameter(SearchName);
+	}
+
+	/** Finds an automatically bound uniform buffer matching the HashedName if one exists, or returns an unbound parameter. */
+	FORCEINLINE_DEBUGGABLE const FShaderUniformBufferParameter& GetUniformBufferParameter(const FHashedName SearchName) const
+	{
 		int32 FoundIndex = INDEX_NONE;
-		for (int32 StructIndex = 0, Count = UniformBufferParameterStructs.Num(); StructIndex < Count; StructIndex++)
+		TArrayView<const FHashedName> UniformBufferParameterStructsView(UniformBufferParameterStructs);
+		for (int32 StructIndex = 0, Count = UniformBufferParameterStructsView.Num(); StructIndex < Count; StructIndex++)
 		{
-			if (UniformBufferParameterStructs[StructIndex] == SearchName)
+			if (UniformBufferParameterStructsView[StructIndex] == SearchName)
 			{
 				FoundIndex = StructIndex;
 				break;
@@ -1599,7 +1611,7 @@ class RENDERCORE_API FShaderPipeline
 {
 	DECLARE_TYPE_LAYOUT(FShaderPipeline, NonVirtual);
 public:
-	explicit FShaderPipeline(const FShaderPipelineType* InType) : TypeName(InType->GetHashedName()) {}
+	explicit FShaderPipeline(const FShaderPipelineType* InType) : TypeName(InType->GetHashedName()) { FMemory::Memzero(&PermutationIds, sizeof(PermutationIds)); }
 	~FShaderPipeline();
 
 	void AddShader(FShader* Shader, int32 PermutationId);
@@ -1782,12 +1794,12 @@ public:
 		return HasShader(Type->GetHashedName(), PermutationId);
 	}
 
-	inline const TMemoryImageArray<TMemoryImagePtr<FShader>>& GetShaders() const
+	inline TArrayView<const TMemoryImagePtr<FShader>> GetShaders() const
 	{
 		return Shaders;
 	}
 
-	inline const TMemoryImageArray<TMemoryImagePtr<FShaderPipeline>>& GetShaderPipelines() const
+	inline TArrayView<const TMemoryImagePtr<FShaderPipeline>> GetShaderPipelines() const
 	{
 		return ShaderPipelines;
 	}
@@ -1905,7 +1917,7 @@ public:
 	void AssignContent(FShaderMapContent* InContent);
 	void FinalizeContent();
 	void UnfreezeContent();
-	bool Serialize(FArchive& Ar, bool bInlineShaderResources, bool bLoadedByCookedMaterial);
+	bool Serialize(FArchive& Ar, bool bInlineShaderResources, bool bLoadedByCookedMaterial, bool bInlineShaderCode=false);
 
 	FString ToString() const;
 
@@ -1918,6 +1930,24 @@ public:
 	{
 		Content->SaveShaderStableKeys(*this, TargetShaderPlatform, SaveKeyVal);
 	}
+
+	/** Associates a shadermap with an asset (note: one shadermap can be used by several assets, e.g. MIs). 
+	 * This helps cooker lay out the shadermaps (and shaders) in the file open order, if provided. Maps not associated with any assets
+	 * may be placed after all maps associated with known assets. Global shadermaps need to be associated with a "Global" asset */
+	void AssociateWithAsset(const FString& AssetPath)
+	{
+		AssociatedAssets.Add(AssetPath);
+	}
+
+	void AssociateWithAssets(const FShaderMapAssetPaths& AssetPaths)
+	{
+		AssociatedAssets.Append(AssetPaths);
+	}
+
+	const FShaderMapAssetPaths& GetAssociatedAssets() const
+	{
+		return AssociatedAssets;
+	}
 #endif // WITH_EDITOR
 
 protected:
@@ -1928,6 +1958,10 @@ protected:
 	virtual FShaderMapPointerTable* CreatePointerTable() const = 0;
 
 private:
+#if WITH_EDITOR
+	/** List of the assets that are using this shadermap. This is only available in the editor (cooker) to influence ordering of shader libraries. */
+	FShaderMapAssetPaths AssociatedAssets;
+#endif
 	const FTypeLayoutDesc& ContentTypeLayout;
 	TRefCountPtr<FShaderMapResource> Resource;
 	TRefCountPtr<FShaderMapResourceCode> Code;
@@ -2196,14 +2230,7 @@ extern RENDERCORE_API FShaderType* FindShaderTypeByName(const FHashedName& Shade
 
 /** Helper function to dispatch a compute shader while checking that parameters have been set correctly. */
 extern RENDERCORE_API void DispatchComputeShader(
-	FRHICommandList& RHICmdList,
-	FShader* Shader,
-	uint32 ThreadGroupCountX,
-	uint32 ThreadGroupCountY,
-	uint32 ThreadGroupCountZ);
-
-extern RENDERCORE_API void DispatchComputeShader(
-	FRHIAsyncComputeCommandListImmediate& RHICmdList,
+	FRHIComputeCommandList& RHICmdList,
 	FShader* Shader,
 	uint32 ThreadGroupCountX,
 	uint32 ThreadGroupCountY,
@@ -2211,13 +2238,13 @@ extern RENDERCORE_API void DispatchComputeShader(
 
 /** Helper function to dispatch a compute shader indirectly while checking that parameters have been set correctly. */
 extern RENDERCORE_API void DispatchIndirectComputeShader(
-	FRHICommandList& RHICmdList,
+	FRHIComputeCommandList& RHICmdList,
 	FShader* Shader,
 	FRHIVertexBuffer* ArgumentBuffer,
 	uint32 ArgumentOffset);
 
 inline void DispatchComputeShader(
-	FRHICommandList& RHICmdList,
+	FRHIComputeCommandList& RHICmdList,
 	const TShaderRef<FShader>& Shader,
 	uint32 ThreadGroupCountX,
 	uint32 ThreadGroupCountY,
@@ -2226,24 +2253,8 @@ inline void DispatchComputeShader(
 	DispatchComputeShader(RHICmdList, Shader.GetShader(), ThreadGroupCountX, ThreadGroupCountY, ThreadGroupCountZ);
 }
 
-inline void DispatchComputeShader(
-	FRHIAsyncComputeCommandListImmediate& RHICmdList,
-	const TShaderRef<FShader>& Shader,
-	uint32 ThreadGroupCountX,
-	uint32 ThreadGroupCountY,
-	uint32 ThreadGroupCountZ)
-{
-	DispatchComputeShader(RHICmdList, Shader.GetShader(), ThreadGroupCountX, ThreadGroupCountY, ThreadGroupCountZ);
-}
-
-inline void DispatchIndirectComputeShader(
-	FRHICommandList& RHICmdList,
-	const TShaderRef<FShader>& Shader,
-	FRHIVertexBuffer* ArgumentBuffer,
-	uint32 ArgumentOffset)
-{
-	DispatchIndirectComputeShader(RHICmdList, Shader.GetShader(), ArgumentBuffer, ArgumentOffset);
-}
+/** Returns whether DirectXShaderCompiler (DXC) is enabled for the specified shader platform. See console variables "r.OpenGL.ForceDXC", "r.Vulkan.ForceDXC", and "r.D3D.ForceDXC". */
+extern RENDERCORE_API bool IsDxcEnabledForPlatform(EShaderPlatform Platform);
 
 /** Appends to KeyString for all shaders. */
 extern RENDERCORE_API void ShaderMapAppendKeyString(EShaderPlatform Platform, FString& KeyString);

@@ -131,7 +131,7 @@ void FShaderPlatformSettings::AllocateMaterialResources()
 	for (int32 QualityLevelIndex = 0; QualityLevelIndex < EMaterialQualityLevel::Num; QualityLevelIndex++)
 	{
 		PlatformData[QualityLevelIndex].MaterialResourcesStats = new FMaterialResourceStats();
-		PlatformData[QualityLevelIndex].MaterialResourcesStats->SetMaterial(Material, (EMaterialQualityLevel::Type)QualityLevelIndex, true, (ERHIFeatureLevel::Type)TargetFeatureLevel, MaterialInstance);
+		PlatformData[QualityLevelIndex].MaterialResourcesStats->SetMaterial(Material, MaterialInstance, (ERHIFeatureLevel::Type)TargetFeatureLevel, (EMaterialQualityLevel::Type)QualityLevelIndex);
 	}
 }
 
@@ -222,7 +222,7 @@ bool FShaderPlatformSettings::Update()
 					MaterialShaderMap->GetShaderList(ShaderMap);
 
 					QualityItem.ArrShaderNames.Empty();
-					for (const auto Entry : ShaderMap)
+					for (const auto& Entry : ShaderMap)
 					{
 						QualityItem.ArrShaderNames.Add(MakeShareable(new FName(Entry.Value.GetType()->GetFName())));
 					}
@@ -299,7 +299,7 @@ void FMaterialStats::LoadSettings()
 {
 	Options = NewObject<UMaterialStatsOptions>();
 
-	for (const auto PlatformEntry : ShaderPlatformStatsDB)
+	for (const auto& PlatformEntry : ShaderPlatformStatsDB)
 	{
 		const EShaderPlatform PlatformID = PlatformEntry.Key;
 		const bool bPresentInGrid = !!Options->bPlatformUsed[PlatformID];
@@ -313,7 +313,7 @@ void FMaterialStats::LoadSettings()
 		const bool bUsed = !!Options->bMaterialQualityUsed[i];
 		bArrStatsQualitySelector[(EMaterialQualityLevel::Type)i] = bUsed;
 
-		for (const auto PlatformEntry : ShaderPlatformStatsDB)
+		for (const auto& PlatformEntry : ShaderPlatformStatsDB)
 		{
 			TSharedPtr<FShaderPlatformSettings> SomePlatform = PlatformEntry.Value;
 			if (SomePlatform.IsValid())
@@ -326,7 +326,7 @@ void FMaterialStats::LoadSettings()
 
 void FMaterialStats::SaveSettings()
 {
-	for (const auto PlatformEntry : ShaderPlatformStatsDB)
+	for (const auto& PlatformEntry : ShaderPlatformStatsDB)
 	{
 		const EShaderPlatform PlatformID = PlatformEntry.Key;
 		const auto Platform = PlatformEntry.Value;
@@ -379,7 +379,7 @@ void FMaterialStats::DisplayOldStats(const bool bShow)
 {
 	if (bShow)
 	{
-		MaterialEditor->GetTabManager()->InvokeTab(OldStatsTabId);
+		MaterialEditor->GetTabManager()->TryInvokeTab(OldStatsTabId);
 	}
 	else if (!bShowOldStats && OldStatsTab.IsValid())
 	{
@@ -391,7 +391,7 @@ void FMaterialStats::DisplayStatsGrid(const bool bShow)
 {
 	if (bShow)
 	{
-		MaterialEditor->GetTabManager()->InvokeTab(StatsTabId);
+		MaterialEditor->GetTabManager()->TryInvokeTab(StatsTabId);
 	}
 	else if (!bShowStats && StatsTab.IsValid())
 	{
@@ -413,9 +413,6 @@ void FMaterialStats::BuildShaderPlatformDB()
 
 	// Vulkan
 	AddShaderPlatform(EPlatformCategoryType::Desktop, SP_VULKAN_SM5, TEXT("Vulkan SM5"), false, true, TEXT("Desktop, Vulkan, Shader Model 5"));
-
-	// OpenGL
-	AddShaderPlatform(EPlatformCategoryType::Desktop, SP_OPENGL_SM5, TEXT("OpenGL SM5"), false, true, TEXT("Desktop, OpenGL, Shader Model 5"));
 
 	// Android
 	AddShaderPlatform(EPlatformCategoryType::Android, SP_OPENGL_ES3_1_ANDROID, TEXT("Android GLES 3.1"), true, true, TEXT("Android, OpenGLES 3.1"));
@@ -446,6 +443,21 @@ void FMaterialStats::BuildShaderPlatformDB()
 			AddShaderPlatform(EPlatformCategoryType::Console, ShaderPlatform, FName(*PlatformName), true, true, PlatformName);
 		}
 	}
+
+	// Add platform extensions
+	for (int32 StaticPlatform = SP_StaticPlatform_First; StaticPlatform <= SP_StaticPlatform_Last; ++StaticPlatform)
+	{
+		EShaderPlatform ShaderPlatform = (EShaderPlatform)StaticPlatform;
+		if (FDataDrivenShaderPlatformInfo::IsValid(ShaderPlatform))
+		{
+			bool bIsConsole = FDataDrivenShaderPlatformInfo::GetIsConsole(ShaderPlatform);
+
+			const FName ShaderFormat = LegacyShaderPlatformToShaderFormat(ShaderPlatform);
+			const FName PlatformName = ShaderPlatformToPlatformName(ShaderPlatform);
+			AddShaderPlatform(bIsConsole ? EPlatformCategoryType::Console : EPlatformCategoryType::Desktop, ShaderPlatform, PlatformName, true, true, PlatformName.ToString());
+		}
+	}
+
 }
 
 TSharedPtr<FShaderPlatformSettings> FMaterialStats::AddShaderPlatform(const EPlatformCategoryType PlatformType, const EShaderPlatform PlatformID, const FName PlatformName,
@@ -498,7 +510,7 @@ void FMaterialStats::SetStatusQualityFlag(const EMaterialQualityLevel::Type Qual
 
 	bArrStatsQualitySelector[QualityLevel] = bValue;
 
-	for (const auto PlatformEntry : ShaderPlatformStatsDB)
+	for (const auto& PlatformEntry : ShaderPlatformStatsDB)
 	{
 		TSharedPtr<FShaderPlatformSettings> SomePlatform = PlatformEntry.Value;
 		if (SomePlatform.IsValid())
@@ -594,7 +606,7 @@ void FMaterialStats::Update()
 
 	bool bInfoChanged = false;
 
-	for (const auto Entry : ShaderPlatformStatsDB)
+	for (const auto& Entry : ShaderPlatformStatsDB)
 	{
 		auto PlatformStats = Entry.Value;
 		bInfoChanged |= PlatformStats->Update();
@@ -853,7 +865,7 @@ void FMaterialStats::BuildViewShaderCodeMenus()
 
 bool FMaterialStats::IsCodeViewWindowActive() const
 {
-	for (const auto MapEntry : ShaderPlatformStatsDB)
+	for (const auto& MapEntry : ShaderPlatformStatsDB)
 	{
 		TSharedPtr<FShaderPlatformSettings> PlatformPtr = MapEntry.Value;
 

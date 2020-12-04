@@ -1,7 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
-#include "Chaos/Collision/CollisionReceiver.h"
+#include "Chaos/Core.h"
+#include "Chaos/Collision/CollisionContext.h"
 #include "Chaos/Collision/StatsData.h"
 #include "Chaos/CollisionResolution.h"
 #include "Chaos/ParticleHandle.h"
@@ -29,16 +30,17 @@ namespace Chaos
 	class CHAOS_API FNarrowPhase
 	{
 	public:
-		FNarrowPhase(const FCollisionContext& InContext)
-			: Context(InContext)
+		FNarrowPhase()
 		{
 		}
+
+		FCollisionContext& GetContext() { return Context; }
 
 		// @todo(chaos): COLLISION Transient Handle version
 		/**
 		 * /param CullDistance The contact separation at which we ignore the constraint
 		 */
-		void GenerateCollisions(FCollisionConstraintsArray& NewConstraints, FReal Dt, TGeometryParticleHandle<FReal, 3>* Particle0, TGeometryParticleHandle<FReal, 3>* Particle1, const FReal CullDistance, CollisionStats::FStatData& StatData)
+		void GenerateCollisions(FCollisionConstraintsArray& NewConstraints, FReal Dt, TGeometryParticleHandle<FReal, 3>* Particle0, TGeometryParticleHandle<FReal, 3>* Particle1, const FReal CullDistance)
 		{
 			SCOPE_CYCLE_COUNTER_NAROWPHASE();
 			if (ensure(Particle0 && Particle1))
@@ -50,14 +52,15 @@ namespace Chaos
 				//   determine if the constraint is already defined, and then opt out of 
 				//   the creation process. 
 				//
-				Collisions::ConstructConstraints<FReal, 3>(Particle0, Particle1, Particle0->Geometry().Get(), Particle1->Geometry().Get(), Collisions::GetTransform(Particle0), Collisions::GetTransform(Particle1), CullDistance, Context, NewConstraints);
 
-				CHAOS_COLLISION_STAT(if (NewConstraints.Num()) { StatData.IncrementCountNP(NewConstraints.Num()); });
-				CHAOS_COLLISION_STAT(if (!NewConstraints.Num()) { StatData.IncrementRejectedNP(); });
+				// @todo(mlentine): Collision particles should exist optionally on geometry particles not rigid dynamic particles
+				TPBDRigidParticleHandle<FReal, 3>* RigidParticle0 = Particle0->CastToRigidParticle();
+				TPBDRigidParticleHandle<FReal, 3>* RigidParticle1 = Particle1->CastToRigidParticle();
+				Collisions::ConstructConstraints(Particle0, Particle1, Particle0->Geometry().Get(), RigidParticle0 ? RigidParticle0->CollisionParticles().Get() : nullptr, Particle1->Geometry().Get(), RigidParticle1 ? RigidParticle1->CollisionParticles().Get() : nullptr, FRigidTransform3(), FRigidTransform3(), CullDistance, Dt, Context, NewConstraints);
 			}
 		}
 
 	private:
-		const FCollisionContext& Context;
+		FCollisionContext Context;
 	};
 }

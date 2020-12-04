@@ -122,16 +122,7 @@ class FFrameProProfilerContext : public TThreadSingleton<FFrameProProfilerContex
 	FFrameProProfilerContext()
 	: TThreadSingleton<FFrameProProfilerContext>()
 	{
-		FString ThreadName;
-		if (IsInGameThread())
-		{
-			ThreadName = FName(NAME_GameThread).GetPlainNameString();
-		}
-		else
-		{
-			ThreadName = FThreadManager::Get().GetThreadName(ThreadId);
-		}
-
+		const FString& ThreadName = FThreadManager::GetThreadName(ThreadId);
 		if (ThreadName.Len())
 		{
 			FramePro::SetThreadName(TCHAR_TO_ANSI(*ThreadName));
@@ -367,14 +358,14 @@ FString FFrameProProfiler::StartFrameProRecording(const FString& FilenameRoot, i
 
 	UE_LOG(LogFramePro, Log, TEXT("--- Start Recording To File: %s"), *OutputFilename);
 	
-	FramePro::StartRecording(OutputFilename, false, 100 * 1024 * 1024); // 100 MB file
+	FramePro::StartRecording(OutputFilename, FParse::Param(FCommandLine::Get(), TEXT("FrameproEnableContextSwitches")), 100 * 1024 * 1024); // 100 MB file
 	FramePro::SetConditionalScopeMinTimeInMicroseconds(MinScopeTime);
 
 	// Force this on, no events to record without it
 	GFrameProEnabled = true;
 
 	// Enable named events as well
-	GCycleStatsShouldEmitNamedEvents = true;
+	GCycleStatsShouldEmitNamedEvents += 1;
 
 	// Set recording flag
 	GFrameProIsRecording = true;
@@ -390,10 +381,15 @@ static FAutoConsoleCommand StartFrameProRecordCommand(
 
 void FFrameProProfiler::StopFrameProRecording()
 {
+	if (!GFrameProIsRecording)
+	{
+		return;
+	}
+
 	FramePro::StopRecording();
 
 	// Disable named events
-	GCycleStatsShouldEmitNamedEvents = false;
+	GCycleStatsShouldEmitNamedEvents -= 1;
 
 	// Clear recording flag
 	GFrameProIsRecording = false;

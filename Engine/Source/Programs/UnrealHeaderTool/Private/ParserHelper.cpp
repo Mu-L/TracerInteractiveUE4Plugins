@@ -3,6 +3,7 @@
 
 #include "ParserHelper.h"
 #include "UnrealHeaderTool.h"
+#include "Algo/Find.h"
 #include "Misc/DefaultValueHelper.h"
 
 /////////////////////////////////////////////////////
@@ -82,9 +83,9 @@ FTokenData* FClassMetaData::FindTokenData( FProperty* Prop )
 	return Result;
 }
 
-void FClassMetaData::AddInheritanceParent(const FString& InParent, FUnrealSourceFile* UnrealSourceFile)
+void FClassMetaData::AddInheritanceParent(FString&& InParent, FUnrealSourceFile* UnrealSourceFile)
 {
-	MultipleInheritanceParents.Add(new FMultipleInheritanceBaseClass(InParent));
+	MultipleInheritanceParents.Add(new FMultipleInheritanceBaseClass(MoveTemp(InParent)));
 }
 
 void FClassMetaData::AddInheritanceParent(UClass* ImplementedInterfaceClass, FUnrealSourceFile* UnrealSourceFile)
@@ -143,10 +144,9 @@ const TCHAR* FPropertyBase::GetPropertyTypeText( EPropertyType Type )
  *
  * @param	Other	the token to copy this token's properties to.
  */
-void FToken::Clone( const FToken& Other )
+FToken& FToken::operator=(const FToken& Other)
 {
-	// none of FPropertyBase's members require special handling
-	(FPropertyBase&)*this	= (FPropertyBase&)Other;
+	FPropertyBase::operator=((FPropertyBase&)Other);
 
 	TokenType = Other.TokenType;
 	TokenName = Other.TokenName;
@@ -157,6 +157,25 @@ void FToken::Clone( const FToken& Other )
 
 	FCString::Strncpy(Identifier, Other.Identifier, NAME_SIZE);
 	FMemory::Memcpy(String, Other.String, sizeof(String));
+
+	return *this;
+}
+
+FToken& FToken::operator=(FToken&& Other)
+{
+	FPropertyBase::operator=(MoveTemp(Other));
+
+	TokenType = Other.TokenType;
+	TokenName = Other.TokenName;
+	bTokenNameInitialized = Other.bTokenNameInitialized;
+	StartPos = Other.StartPos;
+	StartLine = Other.StartLine;
+	TokenProperty = Other.TokenProperty;
+
+	FCString::Strncpy(Identifier, Other.Identifier, NAME_SIZE);
+	FMemory::Memcpy(String, Other.String, sizeof(String));
+
+	return *this;
 }
 
 /////////////////////////////////////////////////////
@@ -234,9 +253,9 @@ FFunctionData* FFunctionData::Add(UFunction* Function)
 	return &Output.Get();
 }
 
-FFunctionData* FFunctionData::Add(const FFuncInfo& FunctionInfo)
+FFunctionData* FFunctionData::Add(FFuncInfo&& FunctionInfo)
 {
-	TUniqueObj<FFunctionData>& Output = FunctionDataMap.Emplace(FunctionInfo.FunctionReference, FunctionInfo);
+	TUniqueObj<FFunctionData>& Output = FunctionDataMap.Emplace(FunctionInfo.FunctionReference, MoveTemp(FunctionInfo));
 
 	return &Output.Get();
 }
@@ -265,7 +284,15 @@ FClassMetaData* FCompilerMetadataManager::AddClassData(UStruct* Struct, FUnrealS
 	return pClassData->Get();
 }
 
-FTokenData* FPropertyData::Set(FProperty* InKey, const FTokenData& InValue, FUnrealSourceFile* UnrealSourceFile)
+FClassMetaData* FCompilerMetadataManager::AddInterfaceClassData(UStruct* Struct, FUnrealSourceFile* UnrealSourceFile)
+{
+	FClassMetaData* ClassData = AddClassData(Struct, UnrealSourceFile);
+	ClassData->ParsedInterface = EParsedInterface::ParsedUInterface;
+	InterfacesToVerify.Emplace(Struct, ClassData);
+	return ClassData;
+}
+
+FTokenData* FPropertyData::Set(FProperty* InKey, FTokenData&& InValue, FUnrealSourceFile* UnrealSourceFile)
 {
 	FTokenData* Result = NULL;
 
@@ -273,13 +300,26 @@ FTokenData* FPropertyData::Set(FProperty* InKey, const FTokenData& InValue, FUnr
 	if (pResult != NULL)
 	{
 		Result = pResult->Get();
-		*Result = FTokenData(InValue);
+		*Result = MoveTemp(InValue);
 	}
 	else
 	{
-		pResult = &Super::Emplace(InKey, new FTokenData(InValue));
+		pResult = &Super::Emplace(InKey, new FTokenData(MoveTemp(InValue)));
 		Result = pResult->Get();
 	}
 
 	return Result;
+}
+
+void FCompilerMetadataManager::CheckForNoIInterfaces()
+{
+	for (const TPair<UStruct*, FClassMetaData*>& StructDataPair : InterfacesToVerify)
+	{
+		if (StructDataPair.Value->ParsedInterface == EParsedInterface::ParsedUInterface)
+		{
+			FString Name = StructDataPair.Key->GetName();
+			FError::Throwf(TEXT("UInterface 'U%s' parsed without a corresponding 'I%s'"), *Name, *Name);
+		}
+	}
+	InterfacesToVerify.Reset();
 }

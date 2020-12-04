@@ -9,6 +9,7 @@
 #include "IMeshReductionManagerModule.h"
 #include "MeshBuild.h"
 #include "MeshDescriptionHelper.h"
+#include "Misc/ScopedSlowTask.h"
 #include "Modules/ModuleManager.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "StaticMeshAttributes.h"
@@ -55,6 +56,9 @@ static bool UseNativeQuadraticReduction()
 
 bool FStaticMeshBuilder::Build(FStaticMeshRenderData& StaticMeshRenderData, UStaticMesh* StaticMesh, const FStaticMeshLODGroup& LODGroup)
 {
+	FScopedSlowTask SlowTask(StaticMesh->GetNumSourceModels(), NSLOCTEXT("StaticMeshEditor", "StaticMeshBuilderBuild", "Building static mesh render data."));
+	SlowTask.MakeDialog();
+
 	// The tool can only been switch by restarting the editor
 	static bool bIsThirdPartyReductiontool = !UseNativeQuadraticReduction();
 
@@ -89,6 +93,10 @@ bool FStaticMeshBuilder::Build(FStaticMeshRenderData& StaticMeshRenderData, USta
 
 	for (int32 LodIndex = 0; LodIndex < NumSourceModels; ++LodIndex)
 	{
+		SlowTask.EnterProgressFrame(1);
+		FScopedSlowTask BuildLODSlowTask(3);
+		BuildLODSlowTask.EnterProgressFrame(1);
+
 		FStaticMeshSourceModel& SrcModel = StaticMesh->GetSourceModel(LodIndex);
 
 		float MaxDeviation = 0.0f;
@@ -181,7 +189,7 @@ bool FStaticMeshBuilder::Build(FStaticMeshRenderData& StaticMeshRenderData, USta
 			//Set the new SectionInfoMap for this reduced LOD base on the ReductionSettings.BaseLODModel SectionInfoMap
 			TArray<int32> BaseUniqueMaterialIndexes;
 			//Find all unique Material in used order
-			for (const FPolygonGroupID& PolygonGroupID : MeshDescriptions[BaseReduceLodIndex].PolygonGroups().GetElementIDs())
+			for (const FPolygonGroupID PolygonGroupID : MeshDescriptions[BaseReduceLodIndex].PolygonGroups().GetElementIDs())
 			{
 				int32 MaterialIndex = StaticMesh->GetMaterialIndexFromImportedMaterialSlotName(BasePolygonGroupImportedMaterialSlotNames[PolygonGroupID]);
 				if (MaterialIndex == INDEX_NONE)
@@ -192,7 +200,7 @@ bool FStaticMeshBuilder::Build(FStaticMeshRenderData& StaticMeshRenderData, USta
 			}
 			TArray<int32> UniqueMaterialIndex;
 			//Find all unique Material in used order
-			for (const FPolygonGroupID& PolygonGroupID : MeshDescriptions[LodIndex].PolygonGroups().GetElementIDs())
+			for (const FPolygonGroupID PolygonGroupID : MeshDescriptions[LodIndex].PolygonGroups().GetElementIDs())
 			{
 				int32 MaterialIndex = StaticMesh->GetMaterialIndexFromImportedMaterialSlotName(PolygonGroupImportedMaterialSlotNames[PolygonGroupID]);
 				if (MaterialIndex == INDEX_NONE)
@@ -246,7 +254,7 @@ bool FStaticMeshBuilder::Build(FStaticMeshRenderData& StaticMeshRenderData, USta
 				}
 			}
 		}
-
+		BuildLODSlowTask.EnterProgressFrame(1);
 		const FPolygonGroupArray& PolygonGroups = MeshDescriptions[LodIndex].PolygonGroups();
 
 		FStaticMeshLODResources& StaticMeshLOD = StaticMeshRenderData.LODResources[LodIndex];
@@ -312,7 +320,7 @@ bool FStaticMeshBuilder::Build(FStaticMeshRenderData& StaticMeshRenderData, USta
 
 		const EIndexBufferStride::Type IndexBufferStride = bNeeds32BitIndices ? EIndexBufferStride::Force32Bit : EIndexBufferStride::Force16Bit;
 		StaticMeshLOD.IndexBuffer.SetIndices(CombinedIndices, IndexBufferStride);
-
+		BuildLODSlowTask.EnterProgressFrame(1);
 		BuildAllBufferOptimizations(StaticMeshLOD, LODBuildSettings, CombinedIndices, bNeeds32BitIndices, StaticMeshBuildVertices);
 	} //End of LOD for loop
 

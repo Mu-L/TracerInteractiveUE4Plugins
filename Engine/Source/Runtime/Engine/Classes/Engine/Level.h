@@ -432,7 +432,7 @@ public:
 	 * This is not the same as GetOuter(), because GetOuter() for a streaming level is a vestigial world that is not used. 
 	 * It should not be accessed during BeginDestroy(), just like any other UObject references, since GC may occur in any order.
 	 */
-	UPROPERTY(transient)
+	UPROPERTY(Transient)
 	UWorld* OwningWorld;
 
 	/** BSP UModel. */
@@ -570,6 +570,9 @@ public:
 	 */
 	UPROPERTY()
 	uint8 										bLocked:1;
+
+	/** Whether the level has been saved after introducing actor GUIDs */
+	uint8										bContainsStableActorGUIDs:1;
 #endif
 	
 	/** The below variables are used temporarily while making a level visible.				*/
@@ -598,6 +601,8 @@ public:
 	uint8										bRequireFullVisibilityToRender:1;
 	/** Whether this level is specific to client, visibility state will not be replicated to server	*/
 	uint8										bClientOnlyVisible:1;
+	/** Whether this level was duplicated */
+	uint8										bWasDuplicated:1;
 	/** Whether this level was duplicated for PIE	*/
 	uint8										bWasDuplicatedForPIE:1;
 	/** Whether the level is currently being removed from the world */
@@ -624,6 +629,9 @@ public:
 	// Event on level transform changes
 	DECLARE_MULTICAST_DELEGATE_OneParam(FLevelTransformEvent, const FTransform&);
 	FLevelTransformEvent OnApplyLevelTransform;
+
+	DECLARE_MULTICAST_DELEGATE(FLevelCleanupEvent);
+	FLevelCleanupEvent OnCleanupLevel;
 
 #if WITH_EDITORONLY_DATA
 	/** Level simplification settings for each LOD */
@@ -677,6 +685,13 @@ public:
 	ENGINE_API void MarkLevelBoundsDirty();
 
 private:
+
+#if WITH_EDITORONLY_DATA
+	/** Use external actors, new actor spawned in this level will be external and existing external actors will be loaded on load. */
+	UPROPERTY(EditInstanceOnly, Category = World)
+	bool bUseExternalActors;
+#endif
+
 	FLevelBoundsActorUpdatedEvent LevelBoundsActorUpdatedEvent; 
 
 	UPROPERTY()
@@ -750,11 +765,18 @@ public:
 #endif // WITH_EDITOR
 	virtual void PostLoad() override;
 	virtual void PreSave(const class ITargetPlatform* TargetPlatform) override;
+	virtual void PreDuplicate(FObjectDuplicationParameters& DupParams) override;
 	virtual void PostDuplicate(bool bDuplicateForPIE) override;
 	virtual bool CanBeClusterRoot() const override;
 	virtual void CreateCluster() override;
 	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
 	//~ End UObject Interface.
+
+	/**
+	 * Flag this level instance for destruction.
+	 * This is called by UWorld::CleanupWorld to flag the level and its owned packages for destruction.
+	 */
+	ENGINE_API void CleanupLevel();
 
 	/**
 	 * Clears all components of actors associated with this level (aka in Actors array) and 
@@ -900,7 +922,63 @@ public:
 	ENGINE_API void HandleLegacyMapBuildData();
 
 #if WITH_EDITOR
+	/** Returns true if the level uses external actors mode. */
+	ENGINE_API bool IsUsingExternalActors() const;
+
+	/** Sets if the level uses external actors mode or not. */
+	ENGINE_API void SetUseExternalActors(bool bEnable);
+
+	ENGINE_API static bool CanConvertActorToExternalPackaging(AActor* Actor);
+
+	/** 
+	 * Convert this level actors to the specified loading strategy
+	 * @param bExternal if true will convert internal actors to external, will convert external actors to internal otherwise
+	 * @note does not affect the level bUseExternalActors flag
+	 */
+	ENGINE_API void ConvertAllActorsToPackaging(bool bExternal);
+
 	/**
+	 * Get the list of (on disk) external actor packages associated with this level
+	 * @return Array of packages associated with this level
+	 */
+	ENGINE_API TArray<FString> GetOnDiskExternalActorPackages() const;
+
+	/**
+	 * Get the list of (loaded) external actor packages associated with this level
+	 * @return Array of packages associated with this level
+	 */
+	ENGINE_API TArray<UPackage*> GetLoadedExternalActorPackages() const;
+
+	/**
+	 * Get the folder containing the external actors for this level path
+	 * @param InLevelPackageName The package name to get the external actors path of
+	 * @param InPackageShortName Optional short name to use instead of the package short name
+	 * @return the folder
+	 */
+	static ENGINE_API FString GetExternalActorsPath(const FString& InLevelPackageName, const FString& InPackageShortName = FString());
+
+	/**
+	 * Get the folder containing the external actors for this level
+	 * @param InLevelPackage The package to get the external actors path of
+	 * @param InPackageShortName Optional short name to use instead of the package short name
+	 * @return the folder
+	 */
+	static ENGINE_API FString GetExternalActorsPath(UPackage* InLevelPackage, const FString& InPackageShortName = FString());
+
+	/**
+	 * Create an package for this actor
+	 * @param InGuid the guid to generate the name from.
+	 * @return the created package
+	 */
+	static ENGINE_API UPackage* CreateActorPackage(UPackage* InLevelPackage, const FGuid& InGuid);
+
+	/**
+	 * Detach or reattach all level actors to from/to their external package
+	 * @param bReattach if false will detach actors from their external package until reattach is called, passing true will reattach actors, no-op for non external actors
+	 */
+	ENGINE_API void DetachAttachAllActorsPackages(bool bReattach);
+
+	/** 
 	*  Called after lighting was built and data gets propagated to this level
 	*  @param	bLightingSuccessful	 Whether lighting build was successful
 	*/

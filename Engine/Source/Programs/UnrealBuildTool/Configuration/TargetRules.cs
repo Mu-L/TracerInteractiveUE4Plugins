@@ -158,9 +158,33 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
-		/// The name of this target.
+		/// The name of this target
 		/// </summary>
-		public readonly string Name;
+		public string Name
+		{
+			get
+			{
+				if (!String.IsNullOrEmpty(NameOverride))
+				{
+					return NameOverride;
+				}
+
+				return DefaultName;
+			}
+			set
+			{
+				NameOverride = value;
+			}
+		}
+
+		/// <summary>
+		/// If the Name of this target has been overriden
+		/// </summary>
+		public bool IsNameOverriden() { return !String.IsNullOrEmpty(NameOverride); }
+
+		private string NameOverride;
+
+		private readonly string DefaultName;
 
 		/// <summary>
 		/// File containing this target
@@ -267,6 +291,16 @@ namespace UnrealBuildTool
 		/// </summary>
 		[RequiresUniqueBuildEnvironment]
 		public UnrealTargetConfiguration UndecoratedConfiguration = UnrealTargetConfiguration.Development;
+
+		/// <summary>
+		/// Whether this target supports hot reload
+		/// </summary>
+		public bool bAllowHotReload
+		{
+			get { return bAllowHotReloadOverride ?? (Type == TargetType.Editor && LinkType == TargetLinkType.Modular); }
+			set { bAllowHotReloadOverride = value; }
+		}
+		private bool? bAllowHotReloadOverride;
 
 		/// <summary>
 		/// Build all the plugins that we can find, even if they're not enabled. This is particularly useful for content-only projects,
@@ -534,6 +568,18 @@ namespace UnrealBuildTool
 		public bool bCompileRecast = true;
 
 		/// <summary>
+		/// Whether to compile with navmesh segment links.
+		/// </summary>
+		[RequiresUniqueBuildEnvironment]
+		public bool bCompileNavmeshSegmentLinks = true;
+
+		/// <summary>
+		/// Whether to compile with navmesh cluster links.
+		/// </summary>
+		[RequiresUniqueBuildEnvironment]
+		public bool bCompileNavmeshClusterLinks = true;
+
+		/// <summary>
 		/// Whether to compile SpeedTree support.
 		/// </summary>
 		[ConfigFile(ConfigHierarchyType.Engine, "/Script/BuildSettings.BuildSettings", "bCompileSpeedTree")]
@@ -587,10 +633,23 @@ namespace UnrealBuildTool
 		private bool? bWithServerCodeOverride;
 
 		/// <summary>
-		/// When enabled, Push Model Networking will be used on the server. This can help reduce CPU overhead of networking, at the cost of more memory.
+		/// When enabled, Push Model Networking support will be compiled in.
+		/// This can help reduce CPU overhead of networking, at the cost of more memory.
+		/// Always enabled in editor builds.
 		/// </summary>
 		[RequiresUniqueBuildEnvironment]
-		public bool bWithPushModel = false;
+		public bool bWithPushModel
+		{
+			get
+			{
+				return bWithPushModelOverride ?? (bBuildEditor);
+			}
+			set
+			{
+				bWithPushModelOverride = value;
+			}
+		}
+		private bool? bWithPushModelOverride;
 
 		/// <summary>
 		/// Whether to include stats support even without the engine.
@@ -681,6 +740,13 @@ namespace UnrealBuildTool
 		/// </summary>
 		[RequiresUniqueBuildEnvironment]
 		public bool bUseChecksInShipping = false;
+
+		/// <summary>
+		/// Whether to use the EstimatedUtcNow or PlatformUtcNow.  EstimatedUtcNow is appropriate in
+		/// cases where PlatformUtcNow can be slow.
+		/// </summary>
+		[RequiresUniqueBuildEnvironment]
+		public bool bUseEstimatedUtcNow = false;
 
 		/// <summary>
 		/// True if we need FreeType support.
@@ -997,13 +1063,6 @@ namespace UnrealBuildTool
 		[CommandLine("-PGOOptimize", Value = "true")]
 		[XmlConfigFile(Category = "BuildConfiguration")]
 		public bool bPGOOptimize = false;
-
-		/// <summary>
-		/// Whether to allow the use of ASLR (address space layout randomization) if supported. Only
-		/// applies to shipping builds.
-		/// </summary>
-		[XmlConfigFile(Category = "BuildConfiguration")]
-		public bool bAllowASLRInShipping = true;
 
 		/// <summary>
 		/// Whether to support edit and continue.  Only works on Microsoft compilers.
@@ -1336,6 +1395,11 @@ namespace UnrealBuildTool
 		public bool bOverrideBuildEnvironment = false;
 
 		/// <summary>
+		/// Specifies a list of targets which should be built before this target is built.
+		/// </summary>
+		public List<TargetInfo> PreBuildTargets = new List<TargetInfo>();
+
+		/// <summary>
 		/// Specifies a list of steps which should be executed before this target is built, in the context of the host platform's shell.
 		/// The following variables will be expanded before execution:
 		/// $(EngineDir), $(ProjectDir), $(TargetName), $(TargetPlatform), $(TargetConfiguration), $(TargetType), $(ProjectFile).
@@ -1458,7 +1522,7 @@ namespace UnrealBuildTool
 		/// <param name="Target">Information about the target being built</param>
 		public TargetRules(TargetInfo Target)
 		{
-			this.Name = Target.Name;
+			this.DefaultName = Target.Name;
 			this.Platform = Target.Platform;
 			this.Configuration = Target.Configuration;
 			this.Architecture = Target.Architecture;
@@ -1497,8 +1561,17 @@ namespace UnrealBuildTool
 				}
 			}
 
+			// Get the directory to use for crypto settings. We can build engine targets (eg. UHT) with 
+			// a project file, but we can't use that to determine crypto settings without triggering
+			// constant rebuilds of UHT.
+			DirectoryReference CryptoSettingsDir = DirectoryReference.FromFile(ProjectFile);
+			if (CryptoSettingsDir != null && File != null && !File.IsUnderDirectory(CryptoSettingsDir))
+			{
+				CryptoSettingsDir = null;
+			}
+
 			// Setup macros for signing and encryption keys
-			EncryptionAndSigning.CryptoSettings CryptoSettings = EncryptionAndSigning.ParseCryptoSettings(DirectoryReference.FromFile(ProjectFile), Platform);
+			EncryptionAndSigning.CryptoSettings CryptoSettings = EncryptionAndSigning.ParseCryptoSettings(CryptoSettingsDir, Platform);
 			if (CryptoSettings.IsAnyEncryptionEnabled())
 			{
 				ProjectDefinitions.Add(String.Format("IMPLEMENT_ENCRYPTION_KEY_REGISTRATION()=UE_REGISTER_ENCRYPTION_KEY({0})", FormatHexBytes(CryptoSettings.EncryptionKey.Key)));
@@ -1860,6 +1933,11 @@ namespace UnrealBuildTool
 			get { return Inner.UndecoratedConfiguration; }
 		}
 
+		public bool bAllowHotReload
+		{
+			get { return Inner.bAllowHotReload; }
+		}
+
 		[Obsolete("bBuildAllPlugins has been deprecated. Use bPrecompile to build all modules which are not part of the target.")]
 		public bool bBuildAllPlugins
 		{
@@ -2041,6 +2119,16 @@ namespace UnrealBuildTool
 			get { return Inner.bCompileRecast; }
 		}
 
+		public bool bCompileNavmeshSegmentLinks
+		{
+			get { return Inner.bCompileNavmeshSegmentLinks; }
+		}
+
+		public bool bCompileNavmeshClusterLinks
+		{
+			get { return Inner.bCompileNavmeshClusterLinks; }
+		}
+
 		public bool bCompileSpeedTree
 		{
 			get { return Inner.bCompileSpeedTree; }
@@ -2134,6 +2222,11 @@ namespace UnrealBuildTool
 		public bool bUseChecksInShipping
 		{
 			get { return Inner.bUseChecksInShipping; }
+		}
+
+		public bool bUseEstimatedUtcNow
+		{
+			get { return Inner.bUseEstimatedUtcNow; }
 		}
 
 		public bool bCompileFreeType
@@ -2348,11 +2441,6 @@ namespace UnrealBuildTool
 			get { return Inner.bPGOOptimize; }
 		}
 
-		public bool bAllowASLRInShipping
-		{
-			get { return Inner.bAllowASLRInShipping; }
-		}
-
 		public bool bSupportEditAndContinue
 		{
 			get { return Inner.bSupportEditAndContinue; }
@@ -2548,6 +2636,11 @@ namespace UnrealBuildTool
 		public bool bOverrideBuildEnvironment
 		{
 			get { return Inner.bOverrideBuildEnvironment; }
+		}
+
+		public IReadOnlyList<TargetInfo> PreBuildTargets
+		{
+			get { return Inner.PreBuildTargets; }
 		}
 
 		public IReadOnlyList<string> PreBuildSteps

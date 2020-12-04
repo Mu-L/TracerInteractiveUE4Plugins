@@ -3,19 +3,16 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "UObject/NoExportTypes.h"
 #include "BaseTools/MeshSurfacePointTool.h"
+#include "Properties/MeshMaterialProperties.h"
 #include "SimpleDynamicMeshComponent.h"
 #include "DynamicMeshAABBTree3.h"
 #include "ToolDataVisualizer.h"
-#include "Transforms/QuickAxisTranslater.h"
-#include "Transforms/QuickAxisRotator.h"
 #include "Changes/MeshVertexChange.h"
 #include "GroupTopology.h"
 #include "Selection/GroupTopologySelector.h"
 #include "ModelingOperators/Public/ModelingTaskTypes.h"
 #include "Transforms/MultiTransformer.h"
-#include "Changes/ValueWatcher.h"
 #include "Selection/PolygonSelectionMechanic.h"
 #include "EditUVIslandsTool.generated.h"
 
@@ -72,13 +69,11 @@ public:
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 
-	virtual void Tick(float DeltaTime) override;
+	virtual void OnTick(float DeltaTime) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
 
 	virtual bool HasCancel() const override { return true; }
 	virtual bool HasAccept() const override { return true; }
-	virtual bool CanAccept() const override { return true; }
-
 
 	// UMeshSurfacePointTool API
 	virtual bool HitTest(const FRay& Ray, FHitResult& OutHit) override;
@@ -94,6 +89,14 @@ public:
 	// IClickBehaviorTarget API
 	virtual FInputRayHit IsHitByClick(const FInputDeviceRay& ClickPos) override;
 	virtual void OnClicked(const FInputDeviceRay& ClickPos) override;
+
+
+public:
+	UPROPERTY()
+	UExistingMeshMaterialProperties* MaterialSettings = nullptr;
+
+	UPROPERTY()
+	UMaterialInstanceDynamic* CheckerMaterial = nullptr;
 
 protected:
 	UPROPERTY()
@@ -155,5 +158,7 @@ protected:
 	void BeginChange();
 	void EndChange();
 	void UpdateChangeFromROI(bool bFinal);
+
+	void OnMaterialSettingsChanged();
 };
 

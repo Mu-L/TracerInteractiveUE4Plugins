@@ -2,7 +2,6 @@
 
 #include "ViewModels/Stack/NiagaraStackEntry.h"
 #include "ViewModels/Stack/NiagaraStackErrorItem.h"
-#include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 #include "ViewModels/NiagaraSystemViewModel.h"
 #include "ViewModels/NiagaraEmitterViewModel.h"
 #include "NiagaraStackEditorData.h"
@@ -74,7 +73,7 @@ UNiagaraStackEntry::FStackIssue::FStackIssue(EStackIssueSeverity InSeverity, FTe
 	: Severity(InSeverity)
 	, ShortDescription(InShortDescription)
 	, LongDescription(InLongDescription)
-	, UniqueIdentifier(FMD5::HashAnsiString(*FString::Printf(TEXT("%s-%s"), *InStackEditorDataKey, *InLongDescription.ToString())))
+	, UniqueIdentifier(FMD5::HashAnsiString(*FString::Printf(TEXT("%s-%s-%s"), *InStackEditorDataKey, *InShortDescription.ToString(), *InLongDescription.ToString())))
 	, bCanBeDismissed(bInCanBeDismissed)
 	, Fixes(InFixes)
 {
@@ -298,6 +297,16 @@ UNiagaraStackEntry::EStackRowStyle UNiagaraStackEntry::GetStackRowStyle() const
 	return EStackRowStyle::None;
 }
 
+bool UNiagaraStackEntry::HasFrontDivider() const
+{
+	UNiagaraStackEntry* Outer = Cast<UNiagaraStackEntry>(GetOuter());
+	if (Outer == nullptr)
+	{
+		return false;
+	}
+	return Outer->HasFrontDivider();
+}
+
 bool UNiagaraStackEntry::GetShouldShowInStack() const
 {
 	return true;
@@ -516,7 +525,7 @@ TOptional<UNiagaraStackEntry::FDropRequestResponse> UNiagaraStackEntry::ChildReq
 	return TOptional<FDropRequestResponse>();
 }
 
-void UNiagaraStackEntry::ChlildStructureChangedInternal()
+void UNiagaraStackEntry::ChildStructureChangedInternal()
 {
 }
 
@@ -733,7 +742,7 @@ int32 UNiagaraStackEntry::GetChildIndentLevel() const
 
 void UNiagaraStackEntry::ChildStructureChanged()
 {
-	ChlildStructureChangedInternal();
+	ChildStructureChangedInternal();
 	StructureChangedDelegate.Broadcast();
 }
 

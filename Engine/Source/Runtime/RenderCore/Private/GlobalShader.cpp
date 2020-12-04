@@ -294,10 +294,7 @@ FGlobalShaderMap::FGlobalShaderMap(EShaderPlatform InPlatform)
 
 FGlobalShaderMap::~FGlobalShaderMap()
 {
-	for (const auto& It : SectionMap)
-	{
-		delete It.Value;
-	}
+	ReleaseAllSections();
 }
 
 TShaderRef<FShader> FGlobalShaderMap::GetShader(FShaderType* ShaderType, int32 PermutationId) const
@@ -357,6 +354,14 @@ void FGlobalShaderMap::Empty()
 	for (const auto& It : SectionMap)
 	{
 		It.Value->GetMutableContent()->Empty();
+	}
+}
+
+void FGlobalShaderMap::ReleaseAllSections()
+{
+	for (auto& It : SectionMap)
+	{
+		delete It.Value;
 	}
 }
 

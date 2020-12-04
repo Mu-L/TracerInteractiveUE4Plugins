@@ -6,13 +6,16 @@
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
 #include "Components/ActorComponent.h"
+#include "PhysicsEngine/ConstraintInstance.h"
 #include "PhysicsHandleComponent.generated.h"
 
+#if PHYSICS_INTERFACE_PHYSX
 namespace physx
 {
 	class PxD6Joint;
 	class PxRigidDynamic;
 }
+#endif
 
 /**
  *	Utility object for moving physics objects around.
@@ -42,19 +45,19 @@ class ENGINE_API UPhysicsHandleComponent : public UActorComponent
 	uint32 bInterpolateTarget : 1;
 
 	/** Linear damping of the handle spring. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=PhysicsHandle, meta = (EditCondition = "bSoftConstraint"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=PhysicsHandle, meta = (EditCondition = "bSoftLinearConstraint"))
 	float LinearDamping;
 
 	/** Linear stiffness of the handle spring */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=PhysicsHandle, meta = (EditCondition = "bSoftConstraint"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=PhysicsHandle, meta = (EditCondition = "bSoftLinearConstraint"))
 	float LinearStiffness;
 
 	/** Angular damping of the handle spring */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=PhysicsHandle, meta = (EditCondition = "bSoftConstraint"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=PhysicsHandle, meta = (EditCondition = "bSoftAngularConstraint"))
 	float AngularDamping;
 
 	/** Angular stiffness of the handle spring */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=PhysicsHandle, meta = (EditCondition = "bSoftConstraint"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=PhysicsHandle, meta = (EditCondition = "bSoftAngularConstraint"))
 	float AngularStiffness;
 
 	/** Target transform */
@@ -68,10 +71,24 @@ class ENGINE_API UPhysicsHandleComponent : public UActorComponent
 
 
 protected:
+
+#if PHYSICS_INTERFACE_PHYSX
 	/** Pointer to PhysX joint used by the handle*/
 	physx::PxD6Joint* HandleData;
 	/** Pointer to kinematic actor jointed to grabbed object */
 	physx::PxRigidDynamic* KinActorData;
+#elif WITH_CHAOS
+	FTransform PreviousTransform;
+	bool bPendingConstraint;
+
+	FPhysicsUserData PhysicsUserData;
+	FConstraintInstanceBase ConstraintInstance;
+	FPhysicsActorHandle GrabbedHandle;
+	FPhysicsActorHandle KinematicHandle;
+	FPhysicsConstraintHandle ConstraintHandle;
+	FVector ConstraintLocalPosition; // Position of constraint in the grabbed body local space (updated when grabbing)
+	FRotator ConstraintLocalRotation;
+#endif
 
 	//~ Begin UActorComponent Interface.
 	virtual void OnUnregister() override;

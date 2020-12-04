@@ -26,6 +26,12 @@
 #include "Widgets/Views/SExpanderArrow.h"
 #include "Widgets/Views/SHeaderRow.h"
 #include "Framework/Views/TableViewTypeTraits.h"
+#if WITH_ACCESSIBILITY
+#include "GenericPlatform/Accessibility/GenericAccessibleInterfaces.h"
+#include "Widgets/Accessibility/SlateCoreAccessibleWidgets.h"
+#include "Widgets/Accessibility/SlateAccessibleWidgetCache.h"
+#include "Widgets/Accessibility/SlateAccessibleMessageHandler.h"
+#endif
 
 template <typename ItemType> class SListView;
 
@@ -265,6 +271,98 @@ public:
 		}
 	}
 
+#if WITH_ACCESSIBILITY
+	protected:
+	friend class FSlateAccessibleTableRow;
+	/**
+	* An accessible implementation of STableRow exposed to platform accessibility APIs.
+	* For subclasses of STableRow, inherit from this class and override any functions
+	* to give the desired behavior.
+	*/
+	class FSlateAccessibleTableRow
+		: public FSlateAccessibleWidget
+		, public IAccessibleTableRow
+	{
+	public:
+		FSlateAccessibleTableRow(TWeakPtr<SWidget> InWidget, EAccessibleWidgetType InWidgetType)
+			: FSlateAccessibleWidget(InWidget, InWidgetType)
+		{}
+
+		// IAccessibleWidget
+		virtual IAccessibleTableRow* AsTableRow() 
+		{ 
+			return this; 
+		}
+		// ~
+		// IAccessibleTableRow
+		virtual void Select() override
+		{
+			if (Widget.IsValid())
+			{
+				TSharedPtr<STableRow<ItemType>> TableRow = StaticCastSharedPtr<STableRow<ItemType>>(Widget.Pin());
+				if(TableRow->OwnerTablePtr.IsValid())
+				{
+					TSharedRef< ITypedTableView<ItemType> > OwnerTable = TableRow->OwnerTablePtr.Pin().ToSharedRef();
+					const bool bIsActive = OwnerTable->AsWidget()->HasKeyboardFocus();
+
+					if (const ItemType* MyItemPtr = TableRow->GetItemForThis(OwnerTable))
+					{
+						const ItemType& MyItem = *MyItemPtr;
+						const bool bIsSelected = OwnerTable->Private_IsItemSelected(MyItem);
+						OwnerTable->Private_ClearSelection();
+						OwnerTable->Private_SetItemSelection(MyItem, true, true);
+						// @TODOAccessibility: Not sure if  irnoring  the signal selection mode will affect anything 
+						OwnerTable->Private_SignalSelectionChanged(ESelectInfo::Direct);
+					}
+				}
+			}
+		}
+
+		virtual void AddToSelection() override
+		{
+			// @TODOAccessibility: When multiselection is supported 
+		}
+
+		virtual void RemoveFromSelection() override
+		{
+			// @TODOAccessibility: When multiselection is supported 
+		}
+
+		virtual bool IsSelected() const override
+		{
+			if (Widget.IsValid())
+			{
+				TSharedPtr<STableRow<ItemType>> TableRow = StaticCastSharedPtr<STableRow<ItemType>>(Widget.Pin());
+				return TableRow->IsItemSelected();
+			}
+			return false; 
+		}
+
+		virtual TSharedPtr<IAccessibleWidget> GetOwningTable() const override
+		{
+			if (Widget.IsValid())
+			{
+				TSharedPtr<STableRow<ItemType>> TableRow = StaticCastSharedPtr<STableRow<ItemType>>(Widget.Pin());
+				if (TableRow->OwnerTablePtr.IsValid())
+				{
+					TSharedRef<SWidget> OwningTableWidget = TableRow->OwnerTablePtr.Pin()->AsWidget();
+					return FSlateAccessibleWidgetCache::GetAccessibleWidgetChecked(OwningTableWidget);
+				}
+			}
+			return nullptr;
+		}
+		// ~
+	};
+	public: 
+	virtual TSharedRef<FSlateAccessibleWidget> CreateAccessibleWidget() override
+	{
+		// @TODOAccessibility: Add support for tile table rows and tree table rows etc 
+		// The widget type passed in should be based on the table type of the owning tabel
+		EAccessibleWidgetType WidgetType = EAccessibleWidgetType::ListItem;
+		return MakeShareable<FSlateAccessibleWidget>(new STableRow<ItemType>::FSlateAccessibleTableRow(SharedThis(this), WidgetType));
+	}
+#endif
+
 	virtual int32 OnPaint( const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled ) const override
 	{
 		TSharedRef< ITypedTableView<ItemType> > OwnerTable = OwnerTablePtr.Pin().ToSharedRef();
@@ -301,15 +399,38 @@ public:
 				};
 			}();
 
-			FSlateDrawElement::MakeBox
-			(
-				OutDrawElements,
-				LayerId++,
-				AllottedGeometry.ToPaintGeometry(),
-				DropIndicatorBrush,
-				ESlateDrawEffect::None,
-				DropIndicatorBrush->GetTint(InWidgetStyle) * InWidgetStyle.GetColorAndOpacityTint()
-			);
+			if (OwnerTable->Private_GetOrientation() == Orient_Vertical)
+			{
+				FSlateDrawElement::MakeBox
+				(
+					OutDrawElements,
+					LayerId++,
+					AllottedGeometry.ToPaintGeometry(),
+					DropIndicatorBrush,
+					ESlateDrawEffect::None,
+					DropIndicatorBrush->GetTint(InWidgetStyle) * InWidgetStyle.GetColorAndOpacityTint()
+				);
+			}
+			else
+			{
+				// Reuse the drop indicator asset for horizontal, by rotating the drawn box 90 degrees.
+				const FVector2D LocalSize(AllottedGeometry.GetLocalSize());
+				const FVector2D Pivot(LocalSize * 0.5f);
+				const FVector2D RotatedLocalSize(LocalSize.Y, LocalSize.X);
+				FSlateLayoutTransform RotatedTransform(Pivot - RotatedLocalSize * 0.5f);	// Make the box centered to the alloted geometry, so that it can be rotated around the center.
+
+				FSlateDrawElement::MakeRotatedBox(
+					OutDrawElements,
+					LayerId++,
+					AllottedGeometry.ToPaintGeometry(RotatedLocalSize, RotatedTransform),
+					DropIndicatorBrush,
+					ESlateDrawEffect::None,
+					-HALF_PI,	// 90 deg CCW
+					RotatedLocalSize * 0.5f,	// Relative center to the flipped
+					FSlateDrawElement::RelativeToElement,
+					DropIndicatorBrush->GetTint(InWidgetStyle) * InWidgetStyle.GetColorAndOpacityTint()
+				);
+			}
 		}
 
 		return LayerId;
@@ -637,14 +758,17 @@ public:
 	}
 
 	/** @return the zone (above, onto, below) based on where the user is hovering over within the row */
-	EItemDropZone ZoneFromPointerPosition(FVector2D LocalPointerPos, float RowHeight)
+	EItemDropZone ZoneFromPointerPosition(FVector2D LocalPointerPos, FVector2D LocalSize, EOrientation Orientation)
 	{
-		const float VecticalZoneBoundarySu = FMath::Clamp(RowHeight * 0.25f, 3.0f, 10.0f);
-		if (LocalPointerPos.Y < VecticalZoneBoundarySu)
+		const float PointerPos = Orientation == EOrientation::Orient_Horizontal ? LocalPointerPos.X : LocalPointerPos.Y;
+		const float Size = Orientation == EOrientation::Orient_Horizontal ? LocalSize.X : LocalSize.Y;
+
+		const float ZoneBoundarySu = FMath::Clamp(Size * 0.25f, 3.0f, 10.0f);
+		if (PointerPos < ZoneBoundarySu)
 		{
 			return EItemDropZone::AboveItem;
 		}
-		else if (LocalPointerPos.Y > RowHeight - VecticalZoneBoundarySu)
+		else if (PointerPos > Size - ZoneBoundarySu)
 		{
 			return EItemDropZone::BelowItem;
 		}
@@ -658,8 +782,9 @@ public:
 	{
 		if ( OnCanAcceptDrop.IsBound() )
 		{
+			const TSharedRef< ITypedTableView<ItemType> > OwnerTable = OwnerTablePtr.Pin().ToSharedRef();
 			const FVector2D LocalPointerPos = MyGeometry.AbsoluteToLocal(DragDropEvent.GetScreenSpacePosition());
-			const EItemDropZone ItemHoverZone = ZoneFromPointerPosition(LocalPointerPos, MyGeometry.GetLocalSize().Y);
+			const EItemDropZone ItemHoverZone = ZoneFromPointerPosition(LocalPointerPos, MyGeometry.GetLocalSize(), OwnerTable->Private_GetOrientation());
 
 			ItemDropZone = [ItemHoverZone, DragDropEvent, this]()
 			{
@@ -697,7 +822,7 @@ public:
 				{
 					// Which physical drop zone is the drop about to be performed onto?
 					const FVector2D LocalPointerPos = MyGeometry.AbsoluteToLocal(DragDropEvent.GetScreenSpacePosition());
-					const EItemDropZone HoveredZone = ZoneFromPointerPosition(LocalPointerPos, MyGeometry.GetLocalSize().Y);
+					const EItemDropZone HoveredZone = ZoneFromPointerPosition(LocalPointerPos, MyGeometry.GetLocalSize(), OwnerTable->Private_GetOrientation());
 
 					// The row gets final say over which zone to drop onto regardless of physical location.
 					const TOptional<EItemDropZone> ReportedZone = OnCanAcceptDrop.IsBound()
@@ -976,7 +1101,16 @@ public:
 		: IndexInList(0)
 		, bShowSelection(true)
 		, SignalSelectionMode( ETableRowSignalSelectionMode::Deferred )
-	{ }
+	{ 
+#if WITH_ACCESSIBILITY
+		// As the contents of table rows could be anything,
+		// Ideally, somebody would assign a custom label to each table row with non-accessible content.
+		// However, that's not always feasible so we want the screen reader to read out the concatenated contents of children.
+		// E.g If ItemType == FString, then the screen reader can just read out the contents of the text box.
+		AccessibleBehavior = EAccessibleBehavior::Summary;
+		bCanChildrenBeAccessible = true;
+#endif
+	}
 
 protected:
 
@@ -1201,7 +1335,7 @@ protected:
 		for( int32 ColumnIndex = 0; ColumnIndex < NumColumns; ++ColumnIndex )
 		{
 			const SHeaderRow::FColumn& Column = Columns[ColumnIndex];
-			if (Column.ShouldGenerateWidget.Get(true))
+			if (InColumnHeaders->ShouldGeneratedColumn(Column.ColumnId))
 			{
 				TSharedRef< SWidget >* ExistingWidget = ColumnIdToSlotContents.Find(Column.ColumnId);
 				TSharedRef< SWidget > CellContents = SNullWidget::NullWidget;

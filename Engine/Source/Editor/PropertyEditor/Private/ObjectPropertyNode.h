@@ -48,6 +48,10 @@ public:
 	 * Adds a new object to the list.
 	 */
 	void AddObject( UObject* InObject );
+
+	/** Adds new objects to the list. */
+	void AddObjects(const TArray<UObject*>& InObjects);
+
 	/**
 	 * Removes an object from the list.
 	 */
@@ -90,7 +94,13 @@ public:
 	}
 	virtual uint8* GetValuePtrOfInstance(int32 Index, const FProperty* InProperty, FPropertyNode* InParentNode) override
 	{
-		uint8* ParentOffset = InParentNode ? InParentNode->GetValueAddressFromObject(GetUObject(Index)) : nullptr;
+		const UObject* Obj = GetUObject(Index);
+		if (Obj == nullptr)
+		{
+			return nullptr;
+		}
+
+		uint8* ParentOffset = InParentNode ? InParentNode->GetValueAddressFromObject(Obj) : nullptr;
 		return InProperty ? InProperty->ContainerPtrToValuePtr<uint8>(ParentOffset) : nullptr;
 	}
 	virtual TWeakObjectPtr<UObject> GetInstanceAsUObject(int32 Index) override

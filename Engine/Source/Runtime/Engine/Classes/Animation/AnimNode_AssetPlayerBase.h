@@ -43,13 +43,22 @@ struct ENGINE_API FAnimNode_AssetPlayerBase : public FAnimNode_Base
 	/** Update method for the asset player, to be implemented by derived classes */
 	virtual void UpdateAssetPlayer(const FAnimationUpdateContext& Context) {};
 
-	// The group index, assigned at compile time based on the editoronly GroupName (or INDEX_NONE if it is not part of any group)
+	// The group name (NAME_None if it is not part of any group)
 	UPROPERTY()
-	int32 GroupIndex;
+	FName GroupName;
+
+#if WITH_EDITORONLY_DATA
+	UPROPERTY()
+	int32 GroupIndex_DEPRECATED;
+#endif
 
 	// The role this player can assume within the group (ignored if GroupIndex is INDEX_NONE)
 	UPROPERTY()
 	TEnumAsByte<EAnimGroupRole::Type> GroupRole;
+
+	// The scope at which marker-based sync is applied
+	UPROPERTY()
+	EAnimSyncGroupScope GroupScope;
 
 	/** If true, "Relevant anim" nodes that look for the highest weighted animation in a state will ignore
 	 *  this node

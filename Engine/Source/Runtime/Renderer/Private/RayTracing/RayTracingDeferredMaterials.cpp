@@ -8,6 +8,7 @@
 #include "RenderGraphUtils.h"
 #include "DeferredShadingRenderer.h"
 #include "PipelineStateCache.h"
+#include "ShaderCompilerCore.h"
 
 #if RHI_RAYTRACING
 
@@ -32,13 +33,32 @@ class FRayTracingDeferredMaterialCHS : public FGlobalShader
 
 IMPLEMENT_GLOBAL_SHADER(FRayTracingDeferredMaterialCHS, "/Engine/Private/RayTracing/RayTracingDeferredMaterials.usf", "DeferredMaterialCHS", SF_RayHitGroup);
 
-FRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingDeferredMaterialGatherPipeline(FRHICommandList& RHICmdList, const FViewInfo& View, FRHIRayTracingShader* RayGenShader)
+class FRayTracingDeferredMaterialMS : public FGlobalShader
+{
+	DECLARE_GLOBAL_SHADER(FRayTracingDeferredMaterialMS)
+	SHADER_USE_ROOT_PARAMETER_STRUCT(FRayTracingDeferredMaterialMS, FGlobalShader)
+
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return ShouldCompileRayTracingShadersForProject(Parameters.Platform);
+	}
+
+	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+	}
+
+	using FParameters = FEmptyShaderParameters;
+};
+
+IMPLEMENT_GLOBAL_SHADER(FRayTracingDeferredMaterialMS, "/Engine/Private/RayTracing/RayTracingDeferredMaterials.usf", "DeferredMaterialMS", SF_RayMiss);
+
+FRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingDeferredMaterialGatherPipeline(FRHICommandList& RHICmdList, const FViewInfo& View, const TArrayView<FRHIRayTracingShader*>& RayGenShaderTable)
 {
 	SCOPE_CYCLE_COUNTER(STAT_BindRayTracingPipeline);
 
 	FRayTracingPipelineStateInitializer Initializer;
 
-	FRHIRayTracingShader* RayGenShaderTable[] = { RayGenShader };
 	Initializer.SetRayGenShaderTable(RayGenShaderTable);
 
 	Initializer.MaxPayloadSizeInBytes = 12; // sizeof FDeferredMaterialPayload
@@ -48,29 +68,42 @@ FRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingDeferredM
 	FRHIRayTracingShader* HitShaderTable[] = { ClosestHitShader.GetRayTracingShader() };
 	Initializer.SetHitGroupTable(HitShaderTable);
 
+	auto MissShader = View.ShaderMap->GetShader<FRayTracingDeferredMaterialMS>();
+	FRHIRayTracingShader* MissShaderTable[] = { MissShader.GetRayTracingShader() };
+	Initializer.SetMissShaderTable(MissShaderTable);
+
 	FRayTracingPipelineState* PipelineState = PipelineStateCache::GetAndOrCreateRayTracingPipelineState(RHICmdList, Initializer);
 
 	const FViewInfo& ReferenceView = Views[0];
+
+	const int32 NumTotalBindings = ReferenceView.VisibleRayTracingMeshCommands.Num();
+
+	const uint32 MergedBindingsSize = sizeof(FRayTracingLocalShaderBindings) * NumTotalBindings;
+	FRayTracingLocalShaderBindings* Bindings = (FRayTracingLocalShaderBindings*)(RHICmdList.Bypass()
+		? FMemStack::Get().Alloc(MergedBindingsSize, alignof(FRayTracingLocalShaderBindings))
+		: RHICmdList.Alloc(MergedBindingsSize, alignof(FRayTracingLocalShaderBindings)));
+
+	uint32 BindingIndex = 0;
 
 	for (const FVisibleRayTracingMeshCommand VisibleMeshCommand : ReferenceView.VisibleRayTracingMeshCommands)
 	{
 		const FRayTracingMeshCommand& MeshCommand = *VisibleMeshCommand.RayTracingMeshCommand;
 
-		const uint32 HitGroupIndex = 0; // Force the default CHS to be used on all geometry
+		FRayTracingLocalShaderBindings Binding = {};
+		Binding.InstanceIndex = VisibleMeshCommand.InstanceIndex;
+		Binding.SegmentIndex = MeshCommand.GeometrySegmentIndex;
+		Binding.UserData = MeshCommand.MaterialShaderIndex;
 
-		const uint32 ShaderSlot = 0; // Multiple shader slots can be used for different ray types. Slot 0 is the primary material slot.
-		const uint32 MaterialIndexInUserData = MeshCommand.MaterialShaderIndex;
-		RHICmdList.SetRayTracingHitGroup(
-			View.RayTracingScene.RayTracingSceneRHI,
-			VisibleMeshCommand.InstanceIndex, 
-			MeshCommand.GeometrySegmentIndex, 
-			ShaderSlot,
-			PipelineState,
-			HitGroupIndex,
-			0, nullptr, // uniform buffers
-			0, nullptr, // loose data
-			MaterialIndexInUserData);
+		Bindings[BindingIndex] = Binding;
+		BindingIndex++;
 	}
+
+	const bool bCopyDataToInlineStorage = false; // Storage is already allocated from RHICmdList, no extra copy necessary
+	RHICmdList.SetRayTracingHitGroups(
+		View.RayTracingScene.RayTracingSceneRHI,
+		PipelineState,
+		NumTotalBindings, Bindings,
+		bCopyDataToInlineStorage);
 
 	return PipelineState;
 }

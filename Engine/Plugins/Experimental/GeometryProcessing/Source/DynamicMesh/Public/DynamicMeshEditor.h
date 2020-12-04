@@ -102,6 +102,9 @@ struct DYNAMICMESH_API FDynamicMeshEditResult
 	/** New triangle groups created by an edit */
 	TArray<int> NewGroups;
 
+	/** New normal overlay elements */
+	TArray<TArray<int32>> NewNormalOverlayElements;
+
 	/** clear this data structure */
 	void Reset()
 	{
@@ -110,6 +113,7 @@ struct DYNAMICMESH_API FDynamicMeshEditResult
 		NewQuads.Reset();
 		NewPolygons.Reset();
 		NewGroups.Reset();
+		NewNormalOverlayElements.Reset();
 	}
 
 	/** Flatten the triangle/quad/polygon lists into a single list of all triangles */
@@ -143,13 +147,13 @@ public:
 	/**
 	 * Stitch together two loops of vertices with a quad-strip of triangles.
 	 * Loops must be oriented (ordered) correctly for your use case.
+	 * If loop edges are [a,b] and [c,d], then tris added are [b,a,d] and [a,c,d]
 	 * @param Loop1 first loop of sequential vertices
 	 * @param Loop2 second loop of sequential vertices
 	 * @param ResultOut lists of newly created triangles/vertices/etc
 	 * @return true if operation succeeded. If a failure occurs, any added triangles are removed via RemoveTriangles
 	 */
 	bool StitchVertexLoopsMinimal(const TArray<int>& VertexLoop1, const TArray<int>& VertexLoop2, FDynamicMeshEditResult& ResultOut);
-
 
 
 	/**
@@ -162,6 +166,15 @@ public:
 	 * @return true if operation succeeded.  If a failure occurs, any added triangles are removed via RemoveTriangles
 	 */
 	bool StitchSparselyCorrespondedVertexLoops(const TArray<int>& VertexIDs1, const TArray<int>& MatchedIndices1, const TArray<int>& VertexIDs2, const TArray<int>& MatchedIndices2, FDynamicMeshEditResult& ResultOut);
+
+
+	/**
+	 * Weld together two loops of vertices. Loops must be oriented (ordered) correctly for your use case.
+	 * @param Loop1 first loop of sequential vertices
+	 * @param Loop2 second loop of sequential vertices. These vertices and their edges will not exist after the operation.
+	 * @return true if operation succeeded, false if any errors ocurred
+	 */
+	bool WeldVertexLoops(const TArray<int32>& VertexLoop1, const TArray<int32>& VertexLoop2);
 
 
 	/**
@@ -276,6 +289,16 @@ public:
 	 */
 	bool RemoveTriangles(const TArray<int>& Triangles, bool bRemoveIsolatedVerts);
 
+
+	/**
+	 * Remove any connected components with volume or  area below the given thresholds
+	 * @param MinVolume Remove components with less volume than this
+	 * @param MinArea Remove components with less area than this
+	 * @return number of components removed
+	 */
+	int RemoveSmallComponents(double MinVolume, double MinArea = 0.0);
+
+
 	/**
 	 * Remove a list of triangles from the mesh, and optionally any vertices that are now orphaned
 	 * @param Triangles the triangles to remove
@@ -336,7 +359,6 @@ public:
 	 */
 	void SetTriangleNormals(const TArray<int>& Triangles);
 
-
 	/**
 	 * For a 'tube' of triangles connecting loops of corresponded vertices, set smooth normals such that corresponding vertices have corresponding normals
 	 */
@@ -361,15 +383,33 @@ public:
 
 	/**
 	* Project triangles onto a plane defined by the ProjectionFrame and use that to create/set new shared per-triangle UVs.
-	* UVs are translated so that their bbox min-corner is at origin, and scaled by given scale factor
+	* UVs can be translated so that their bbox min-corner is at origin, and scaled by given scale factor
+	* This is an older function signature that forwards to the more specific one.
+	*
 	* @param Triangles TArray of triangle IDs
 	* @param ProjectFrame vertices are projected into XY axes of this frame
 	* @param UVScaleFactor UVs are scaled by this uniform scale factor
 	* @param UVTranslation UVs are translated after scaling
+	* @param bShiftToOrigin Whether to translate the UV coordinates to make their bounding box min corner be (0,0) before applying UVTranslation
 	* @param UVLayerIndex which UV layer to operate on (must exist)
 	*/
-	void SetTriangleUVsFromProjection(const TArray<int32>& Triangles, const FFrame3d& ProjectionFrame, float UVScaleFactor = 1.0f, const FVector2f& UVTranslation = FVector2f::Zero(), bool bShiftToOrigin = true, int32 UVLayerIndex = 0);
+	void SetTriangleUVsFromProjection(const TArray<int32>& Triangles, const FFrame3d& ProjectionFrame, 
+		float UVScaleFactor = 1.0f, const FVector2f& UVTranslation = FVector2f::Zero(), bool bShiftToOrigin = true, int32 UVLayerIndex = 0);
 
+	/**
+	* Project triangles onto a plane defined by the ProjectionFrame and use that to create/set new shared per-triangle UVs.
+	*
+	* @param Triangles TArray of triangle IDs
+	* @param ProjectFrame Vertices are projected into XY axes of this frame
+	* @param UVScaleFactor UVs are scaled by these factors
+	* @param UVTranslation UVs are translated after scaling by these amounts
+	* @param UVLayerIndex Which UV layer to operate on (must exist)
+	* @param bShiftToOrigin Whether to translate the UV coordinates to make their bounding box min corner be (0,0) before applying UVTranslation
+	* @param bNormalizeBeforeScaling Whether to place the UV coordinates into the range [0,1] before applying UVScaleFactor and UVTranslation
+	*/
+	void SetTriangleUVsFromProjection(const TArray<int>& Triangles, const FFrame3d& ProjectionFrame, 
+		const FVector2f& UVScale = FVector2f::One(), const FVector2f& UVTranslation = FVector2f::Zero(), int UVLayerIndex = 0,
+		bool bShiftToOrigin = true, bool bNormalizeBeforeScaling = false);
 
 	/**
 	 * For triangles connecting loops of corresponded vertices, set UVs in a cylindrical pattern so that the U coordinate starts at 0 for the first corresponded pair of vertices, and cycles around to 1
@@ -424,9 +464,11 @@ public:
 	 * @param ElementID the source normal we want a duplicate of
 	 * @param NormalLayerIndex which normal layer to consider
 	 * @param IndexMaps source/destination mapping of already-duplicated normals
+	 * @param ResultOut any newly created element indices are stored in NewNormalOverlayElements here. Note that
+	 *   NewNormalOverlayElements must have size > NormalLayerIndex.
 	 * @return index of duplicate normal in given normal layer
 	 */
-	int FindOrCreateDuplicateNormal(int ElementID, int NormalLayerIndex, FMeshIndexMappings& IndexMaps);
+	int FindOrCreateDuplicateNormal(int ElementID, int NormalLayerIndex, FMeshIndexMappings& IndexMaps, FDynamicMeshEditResult* ResultOut = nullptr);
 
 
 	/**
@@ -434,7 +476,7 @@ public:
 	 * @param FromTriangleID source triangle
 	 * @param ToTriangleID destination triangle
 	 * @param IndexMaps mappings passed to FindOrCreateDuplicateX functions to track already-created attributes
-	 * @param ResultOut information about new attributes is stored here (@todo populate this, at time of writing there are no attribute fields)
+	 * @param ResultOut information about new attributes is stored here (@todo finish populating this, at time of writing only normal overlay elements get tracked)
 	 */
 	void CopyAttributes(int FromTriangleID, int ToTriangleID, FMeshIndexMappings& IndexMaps, FDynamicMeshEditResult& ResultOut);
 

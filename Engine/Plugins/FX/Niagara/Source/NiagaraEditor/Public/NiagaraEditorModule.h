@@ -29,6 +29,8 @@ struct FNiagaraScriptHighlight;
 class FNiagaraClipboard;
 class UNiagaraScratchPadViewModel;
 class FHlslNiagaraCompiler;
+class FNiagaraComponentBroker;
+class INiagaraStackObjectIssueGenerator;
 
 DECLARE_STATS_GROUP(TEXT("Niagara Editor"), STATGROUP_NiagaraEditor, STATCAT_Advanced);
 
@@ -119,7 +121,7 @@ public:
 
 	void GetScriptAssetsMatchingHighlight(const FNiagaraScriptHighlight& InHighlight, TArray<FAssetData>& OutMatchingScriptAssets) const;
 
-	FNiagaraClipboard& GetClipboard() const;
+	NIAGARAEDITOR_API FNiagaraClipboard& GetClipboard() const;
 
 	template<typename T>
 	void EnqueueObjectForDeferredDestruction(TSharedRef<T> InObjectToDestruct)
@@ -130,6 +132,15 @@ public:
 
 	/** Lookup a parameter scope info by name. Returns nullptr if the parameter scope info registered name cannot be found. */
 	static const FNiagaraParameterScopeInfo* FindParameterScopeInfo(const FName& ParameterScopeInfoName);
+
+	FORCEINLINE INiagaraStackObjectIssueGenerator* FindStackObjectIssueGenerator(FName StructName)
+	{
+		if (INiagaraStackObjectIssueGenerator** FoundGenerator = StackIssueGenerators.Find(StructName))
+		{
+			return *FoundGenerator;
+		}
+		return nullptr;
+	}
 
 private:
 	class FDeferredDestructionContainerBase
@@ -158,11 +169,12 @@ private:
 	};
 
 	void RegisterAssetTypeAction(IAssetTools& AssetTools, TSharedRef<IAssetTypeActions> Action);
-	void OnNiagaraSettingsChangedEvent(const FString& PropertyName, const UNiagaraSettings* Settings);
+	void OnNiagaraSettingsChangedEvent(const FName& PropertyName, const UNiagaraSettings* Settings);
 	void OnPreGarbageCollection();
 	void OnExecParticleInvoked(const TCHAR* InStr);
 	void OnPostEngineInit();
 	void OnDeviceProfileManagerUpdated();
+	void OnPreviewPlatformChanged();
 	void OnPreExit();
 
 	/** FGCObject interface */
@@ -181,6 +193,11 @@ private:
 
 	/** Register a parameter scope info to lookup by name. */
 	static void RegisterParameterScopeInfo(const FName& ParameterScopeInfoName, const FNiagaraParameterScopeInfo& ParameterScopeInfo);
+
+	void RegisterStackIssueGenerator(FName StructName, INiagaraStackObjectIssueGenerator* Generator)
+	{
+		StackIssueGenerators.Add(StructName) = Generator;
+	}
 
 
 private:
@@ -211,6 +228,8 @@ private:
 
 	FDelegateHandle DeviceProfileManagerUpdatedHandle;
 
+	FDelegateHandle PreviewPlatformChangedHandle;
+
 	USequencerSettings* SequencerSettings;
 	
 	TSharedPtr<INiagaraEditorWidgetProvider> WidgetProvider;
@@ -218,6 +237,8 @@ private:
 	TSharedPtr<FNiagaraScriptMergeManager> ScriptMergeManager;
 
 	TSharedPtr<INiagaraEditorOnlyDataUtilities> EditorOnlyDataUtilities;
+
+	TSharedPtr<FNiagaraComponentBroker> NiagaraComponentBroker;
 
 	TMap<const UScriptStruct*, FOnCreateMovieSceneTrackForParameter> TypeToParameterTrackCreatorMap;
 
@@ -243,4 +264,6 @@ private:
 	TArray<TSharedRef<const FDeferredDestructionContainerBase>> EnqueuedForDeferredDestruction;
 
 	static TArray<TPair<FName, FNiagaraParameterScopeInfo>> RegisteredParameterScopeInfos;
+
+	TMap<FName, INiagaraStackObjectIssueGenerator*> StackIssueGenerators;
 };

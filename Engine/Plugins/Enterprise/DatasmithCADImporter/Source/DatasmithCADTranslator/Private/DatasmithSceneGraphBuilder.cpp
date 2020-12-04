@@ -42,7 +42,7 @@ namespace
 		}
 
 		FTransform LocalTransform(Instance.TransformMatrix);
-		FTransform LocalUETransform = FDatasmithUtils::ConvertTransform((FDatasmithUtils::EModelCoordSystem) ImportParameters.ModelCoordSys, LocalTransform);
+		FTransform LocalUETransform = FDatasmithUtils::ConvertTransform(ImportParameters.ModelCoordSys, LocalTransform);
 
 		Actor->SetTranslation(LocalUETransform.GetTranslation() * ImportParameters.ScaleFactor);
 		Actor->SetScale(LocalUETransform.GetScale3D());
@@ -335,6 +335,8 @@ void FDatasmithSceneGraphBuilder::FillAnchorActor(const TSharedRef<IDatasmithAct
 	GetMainMaterial(Component.MetaData, ComponentData, bMaterialPropagationIsTopDown);
 
 	AddChildren(ActorElement, Component, ComponentData);
+
+	ActorElement->SetLabel(*ActorLabel);
 }
 
 TSharedPtr< IDatasmithActorElement >  FDatasmithSceneGraphBuilder::CreateActor(const TCHAR* InEUUID, const TCHAR* InLabel)

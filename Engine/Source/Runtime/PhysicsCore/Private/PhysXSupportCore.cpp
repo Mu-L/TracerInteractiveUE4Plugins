@@ -2,7 +2,7 @@
 
 #include "PhysXSupportCore.h"
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 #include "PhysicsPublicCore.h"
 #include "PhysXSupportCore.h"
 #include "HAL/IConsoleManager.h"
@@ -11,6 +11,9 @@ PxFoundation* GPhysXFoundation = nullptr;
 FPhysXAllocator* GPhysXAllocator = nullptr;
 PxPvd* GPhysXVisualDebugger = nullptr;
 physx::PxPhysics* GPhysXSDK = nullptr;
+
+TArray<PxMaterial*> GPhysXPendingKillMaterial;
+
 #if WITH_APEX
 PHYSICSCORE_API apex::ApexSDK* GApexSDK = nullptr;
 

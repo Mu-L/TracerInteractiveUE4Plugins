@@ -156,11 +156,12 @@ void FMetalBuffer::Release()
 	}
 }
 
-void FMetalBuffer::SetOwner(class FMetalRHIBuffer* Owner)
+void FMetalBuffer::SetOwner(class FMetalRHIBuffer* Owner, bool bIsSwap)
 {
+	check(Owner == nullptr);
 	if (Heap)
 	{
-		Heap->SetOwner(ns::Range(GetOffset(), GetLength()), Owner);
+		Heap->SetOwner(ns::Range(GetOffset(), GetLength()), Owner, bIsSwap);
 	}
 }
 
@@ -219,15 +220,16 @@ FMetalSubBufferHeap::~FMetalSubBufferHeap()
 	}
 }
 
-void FMetalSubBufferHeap::SetOwner(ns::Range const& Range, FMetalRHIBuffer* Owner)
+void FMetalSubBufferHeap::SetOwner(ns::Range const& Range, FMetalRHIBuffer* Owner, bool bIsSwap)
 {
+	check(Owner == nullptr);
 	FScopeLock Lock(&PoolMutex);
 	for (uint32 i = 0; i < AllocRanges.Num(); i++)
 	{
 		if (AllocRanges[i].Range.Location == Range.Location)
 		{
 			check(AllocRanges[i].Range.Length == Range.Length);
-			check(AllocRanges[i].Owner == nullptr || Owner == nullptr);
+			check(AllocRanges[i].Owner == nullptr || Owner == nullptr || bIsSwap);
 			AllocRanges[i].Owner = Owner;
 			break;
 		}
@@ -1759,53 +1761,6 @@ void FMetalResourceHeap::Compact(FMetalRenderPass* Pass, bool const bForce)
             
             for (uint32 i = 0; i < NumHeapSizes; i++)
             {
-				// When not forcing the disposal of all resources we can compact them using the render-pass
-                for (uint32 j = 1; !bForce && j < BufferHeaps[u][t][i].Num(); j++)
-                {
-                    FMetalSubBufferHeap* Data = BufferHeaps[u][t][i][j];
-                    if (Data->AllocRanges.Num() > 0 && BytesCompacted < BytesToCompact)
-                    {
-                        for (FMetalSubBufferHeap::Allocation const& Alloc : Data->AllocRanges)
-                        {
-                            if (Alloc.Owner)
-                            {
-                                for (uint32 AllocIndex = 0; AllocIndex < j && BytesCompacted < BytesToCompact; AllocIndex++)
-                                {
-                                    FMetalSubBufferHeap* Prev = BufferHeaps[u][t][i][AllocIndex];
-                                    if (Prev->MaxAvailableSize() >= Alloc.Range.Length)
-                                    {
-                                        FMetalBuffer NewBuffer = Prev->NewBuffer(Alloc.Range.Length);
-                                        check(NewBuffer && NewBuffer.GetPtr());
-                                        
-                                        FMetalBuffer SourceResource = FMetalBuffer((id<MTLBuffer>)Alloc.Resource);
-										Pass->AsyncCopyFromBufferToBuffer(SourceResource, Alloc.Range.Location, NewBuffer, 0, Alloc.Range.Length);
-										
-                                        FMetalBuffer PrevBuffer;
-                                        FMetalBuffer PrevCPUBuffer;
-                                        if (Alloc.Owner->Buffer.GetPtr() == Alloc.Resource && Alloc.Owner->Buffer.GetOffset() == Alloc.Range.Location)
-                                        {
-                                            PrevBuffer = Alloc.Owner->Buffer;
-                                            Alloc.Owner->Buffer = NewBuffer;
-                                        }
-                                        if (Alloc.Owner->CPUBuffer.GetPtr() == Alloc.Resource && Alloc.Owner->CPUBuffer.GetOffset() == Alloc.Range.Location)
-                                        {
-                                            PrevCPUBuffer = Alloc.Owner->CPUBuffer;
-                                            Alloc.Owner->CPUBuffer = NewBuffer;
-                                        }
-                                        if (PrevBuffer)
-                                            SafeReleaseMetalBuffer(PrevBuffer);
-                                        if (PrevCPUBuffer)
-                                            SafeReleaseMetalBuffer(PrevCPUBuffer);
-                                        
-                                        BytesCompacted += Alloc.Range.Length;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
                 for (auto It = BufferHeaps[u][t][i].CreateIterator(); It; ++It)
                 {
                     FMetalSubBufferHeap* Data = *It;

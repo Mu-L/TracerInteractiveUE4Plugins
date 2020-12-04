@@ -15,13 +15,16 @@ public class Niagara : ModuleRules
                 "Core",
                 "Engine",
                 "TimeManagement",
+                "TraceLog",
                 "Renderer",
                 "JsonUtilities",
-		"Json",
-		"AudioPlatformConfiguration",
-		"SignalProcessing",
-		"ApplicationCore"
-            }
+				"Landscape",
+				"Json",
+				"AudioPlatformConfiguration",
+				"SignalProcessing",
+				"ApplicationCore",
+				"DeveloperSettings"
+			}
         );
 
 
@@ -36,6 +39,7 @@ public class Niagara : ModuleRules
                 "RHI",
                 "NiagaraVertexFactories",
                 "RenderCore",
+                "IntelISPC",
             }
         );
 

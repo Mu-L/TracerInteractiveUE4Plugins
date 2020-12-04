@@ -33,6 +33,10 @@ public:
 	 */
 	void StopThread();
 
+	/**
+	 * Is the HTTP thread started or stopped.
+	 */
+	bool IsStopped() const { return bIsStopped; }
 	/** 
 	 * Add a request to begin processing on HTTP thread.
 	 *
@@ -55,8 +59,15 @@ public:
 	void GetCompletedRequests(TArray<IHttpThreadedRequest*>& OutCompletedRequests);
 
 	//~ Begin FSingleThreadRunnable Interface
-	virtual void Tick() override;
+	// Cannot be overriden to ensure identical behavior with the threaded tick
+	virtual void Tick() override final;
 	//~ End FSingleThreadRunnable Interface
+
+	/**
+	 * When true the owner of the HTTPThread needs to manually call Tick() since no automomous threads are
+	 * executing the runnable object
+	 */
+	bool NeedsSingleThreadTick() const;
 
 protected:
 
@@ -81,7 +92,7 @@ protected:
 
 	//~ Begin FRunnable Interface
 	virtual bool Init() override;
-	virtual uint32 Run() override;
+	virtual uint32 Run() override final;
 	virtual void Stop() override;
 	virtual void Exit() override;
 	//~ End FRunnable Interface
@@ -135,4 +146,12 @@ protected:
 
 	/** Pointer to Runnable Thread */
 	FRunnableThread* Thread;
+
+private:
+
+	/** Are we holding a fake thread and we need to be ticked manually when Flushing */
+	bool bIsSingleThread;
+
+	/** Tells if the runnable thread is running or stopped */
+	bool bIsStopped;
 };

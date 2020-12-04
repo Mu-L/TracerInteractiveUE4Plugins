@@ -7,6 +7,7 @@
 #include "Framework/Text/TextHitPoint.h"
 #include "Framework/Text/ILayoutBlock.h"
 #include "Internationalization/BreakIterator.h"
+#include "Internationalization/TextTransformer.h"
 #include "Framework/Text/ShapedTextCache.h"
 
 DECLARE_CYCLE_STAT(TEXT("Text Layout"), STAT_SlateTextLayout, STATGROUP_Slate);
@@ -986,6 +987,29 @@ void FTextLayout::ClearView()
 	LineViewsToJustify.Empty();
 }
 
+void FTextLayout::TransformLineText(FLineModel& LineModel) const
+{
+	auto ApplyTransformedText = [&LineModel](FString&& InNewText)
+	{
+		if (ensure(LineModel.Text->Len() == InNewText.Len()))
+		{
+			*LineModel.Text = MoveTemp(InNewText);
+		}
+	};
+
+	switch (TransformPolicy)
+	{
+	case ETextTransformPolicy::ToLower:
+		ApplyTransformedText(FTextTransformer::ToLower(*LineModel.Text));
+		break;
+	case ETextTransformPolicy::ToUpper:
+		ApplyTransformedText(FTextTransformer::ToUpper(*LineModel.Text));
+		break;
+	default:
+		break;
+	}
+}
+
 void FTextLayout::CalculateTextDirection()
 {
 	for (FLineModel& LineModel : LineModels)
@@ -1125,6 +1149,7 @@ FTextLayout::FTextLayout()
 	, Scale( 1.0f )
 	, WrappingWidth( 0 )
 	, WrappingPolicy( ETextWrappingPolicy::DefaultWrapping )
+	, TransformPolicy( ETextTransformPolicy::None )
 	, Margin()
 	, Justification( ETextJustify::Left )
 	, LineHeightPercentage( 1.0f )
@@ -1136,11 +1161,17 @@ FTextLayout::FTextLayout()
 	, WordBreakIterator(FBreakIterator::CreateWordBreakIterator())
 	, TextBiDiDetection(TextBiDi::CreateTextBiDi())
 {
-
 }
 
 void FTextLayout::UpdateIfNeeded()
 {
+	if (CachedLayoutGeneration != GSlateLayoutGeneration)
+	{
+		CachedLayoutGeneration = GSlateLayoutGeneration;
+		DirtyFlags |= ETextLayoutDirtyState::Layout;
+		DirtyAllLineModels(ELineModelDirtyState::All);
+	}
+
 	const bool bHasChangedLayout = !!(DirtyFlags & ETextLayoutDirtyState::Layout);
 	const bool bHasChangedHighlights = !!(DirtyFlags & ETextLayoutDirtyState::Highlights);
 
@@ -2074,6 +2105,7 @@ void FTextLayout::AddLine( const FNewLineData& NewLine )
 {
 	{
 		FLineModel LineModel( NewLine.Text );
+		TransformLineText(LineModel);
 
 		for (const auto& Run : NewLine.Runs)
 		{
@@ -2132,6 +2164,7 @@ void FTextLayout::AddLines( const TArray<FNewLineData>& NewLines )
 	for (const auto& NewLine : NewLines)
 	{
 		FLineModel LineModel( NewLine.Text );
+		TransformLineText(LineModel);
 
 		for (const auto& Run : NewLine.Runs)
 		{
@@ -2576,6 +2609,15 @@ void FTextLayout::SetWrappingPolicy(ETextWrappingPolicy Value)
 	if (WrappingPolicy != Value)
 	{
 		WrappingPolicy = Value;
+		DirtyFlags |= ETextLayoutDirtyState::Layout;
+	}
+}
+
+void FTextLayout::SetTransformPolicy(ETextTransformPolicy Value)
+{
+	if (TransformPolicy != Value)
+	{
+		TransformPolicy = Value;
 		DirtyFlags |= ETextLayoutDirtyState::Layout;
 	}
 }

@@ -6,13 +6,12 @@ public class AudioModulationEditor : ModuleRules
 {
 	public AudioModulationEditor(ReadOnlyTargetRules Target) : base(Target)
 	{
-		OptimizeCode = CodeOptimization.Never;
-
 		PrivateDependencyModuleNames.AddRange(
 			new string[] {
 				"Core",
 				"CoreUObject",
 				"Engine",
+				"GameProjectGeneration",
 				"UnrealEd",
 				"PropertyEditor",
 				"SequenceRecorder",
@@ -21,6 +20,7 @@ public class AudioModulationEditor : ModuleRules
 				"InputCore",
 				"EditorStyle",
 				"AudioEditor",
+				"AudioExtensions",
 				"AudioModulation",
 				"CurveEditor",
 				"EditorWidgets"

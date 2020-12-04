@@ -9,7 +9,7 @@
 #include "Framework/Commands/Commands.h"
 #include "MultiSelectionTool.h"
 #include "InteractiveToolManager.h"
-#include "InteractiveToolsContext.h"
+#include "EdModeInteractiveToolsContext.h"
 #include "Components/MeshComponent.h"
 #include "Dialogs/Dialogs.h"
 #include "Components/StaticMeshComponent.h"
@@ -24,6 +24,8 @@
 #include "MeshPaintModeHelpers.h"
 #include "MeshSelect.h"
 #include "MeshTexturePaintingTool.h"
+#include "Modules/ModuleManager.h"
+#include "Settings/LevelEditorMiscSettings.h"
 
 
 #define LOCTEXT_NAMESPACE "MeshPaintMode"
@@ -113,11 +115,22 @@ UMeshPaintMode* UMeshPaintMode::GetMeshPaintMode()
 }
 
 UMeshPaintMode::UMeshPaintMode()
-	:Super()
+	: Super()
 {
 	SettingsClass = UMeshPaintModeSettings::StaticClass();
 	ToolsContextClass = UMeshToolsContext::StaticClass();
 	CurrentPaletteName = MeshPaintMode_Color;
+	// Don't be a visible mode unless legacy mesh paint mode is not on.
+	const bool bVisible = !GetDefault<ULevelEditorMiscSettings>()->bEnableLegacyMeshPaintMode;
+	FModuleManager::Get().LoadModule("EditorStyle");
+
+	Info = FEditorModeInfo(
+		FName(TEXT("MeshPaintMode")),
+		LOCTEXT("ModeName", "Mesh Paint"),
+		FSlateIcon(FEditorStyle::GetStyleSetName(), "LevelEditor.MeshPaintMode", "LevelEditor.MeshPaintMode.Small"),
+		bVisible,
+		600
+	);
 }
 
 void UMeshPaintMode::Enter()
@@ -169,7 +182,7 @@ void UMeshPaintMode::CreateToolkit()
 		Toolkit = MakeShareable(PaintToolkit);
 		Toolkit->Init(Owner->GetToolkitHost());
 
-		OnToolNotificationMessage.AddSP(PaintToolkit, &FMeshPaintModeToolkit::SetActiveToolMessage);
+		ToolsContext->OnToolNotificationMessage.AddSP(PaintToolkit, &FMeshPaintModeToolkit::SetActiveToolMessage);
 	}
 
 	// Register UI commands
@@ -332,11 +345,11 @@ void UMeshPaintMode::OnVertexPaintFinished()
 		{
 			if (UMeshToolManager* MeshToolManager = Cast<UMeshToolManager>(GetToolManager()))
 			{
+				UpdateCachedVertexDataSize();
 				MeshToolManager->Refresh();
 			}
 		}
 	}
-	UpdateCachedVertexDataSize();
 }
 
 void UMeshPaintMode::OnToolEnded(UInteractiveToolManager* Manager, UInteractiveTool* Tool)
@@ -681,7 +694,7 @@ void UMeshPaintMode::PropagateVertexColorsToLODs()
 			FComponentReregisterContext ReregisterContext(SelectedComponent);
 		}
 	}
-
+	UpdateCachedVertexDataSize();
 	MeshToolManager->Refresh();
 }
 
@@ -798,15 +811,15 @@ void UMeshPaintMode::ActivateDefaultTool()
 {
 	if (GetCurrentPaletteName() == UMeshPaintMode::MeshPaintMode_Color)
 	{
-		ToolsContext->StartTool(EToolSide::Mouse, VertexSelectToolName);
+		ToolsContext->StartTool(VertexSelectToolName);
 	}
 	if (GetCurrentPaletteName() == UMeshPaintMode::MeshPaintMode_Weights)
 	{
-		ToolsContext->StartTool(EToolSide::Mouse, VertexSelectToolName);
+		ToolsContext->StartTool(VertexSelectToolName);
 	}
 	if (GetCurrentPaletteName() == UMeshPaintMode::MeshPaintMode_Texture)
 	{
-		ToolsContext->StartTool(EToolSide::Mouse, TextureSelectToolName);
+		ToolsContext->StartTool(TextureSelectToolName);
 	}
 }
 
@@ -834,7 +847,7 @@ void UMeshPaintMode::UpdateOnPaletteChange()
 	// change to new tool if it is different
 	if (SwitchToTool.IsEmpty() == false && SwitchToTool != ActiveTool)
 	{
-		ToolsContext->StartTool(EToolSide::Mouse, SwitchToTool);
+		ToolsContext->StartTool(SwitchToTool);
 	}
 }
 

@@ -77,6 +77,9 @@ struct FSkelMeshSection
 	/** This section will recompute tangent in runtime */
 	bool bRecomputeTangent;
 
+	/** Vertex color channel to mask recompute tangents. R=0,G=1 (default),B=2 */
+	ESkinVertexColorChannel RecomputeTangentsVertexMaskChannel;
+
 	/** This section will cast shadow */
 	bool bCastShadow;
 
@@ -88,10 +91,6 @@ struct FSkelMeshSection
 	or disabled section index when this section is enabled for cloth simulation
 	*/
 	int16 CorrespondClothSectionIndex_DEPRECATED;
-
-	/** Decide whether enabling clothing LOD for this section or not, just using skelmesh LOD_0's one to decide */
-	/** no need anymore because each clothing LOD will be assigned to each mesh LOD  */
-	uint8 bEnableClothLOD_DEPRECATED;
 
 	/** The offset into the LOD's vertex buffer of this section's vertices. */
 	uint32 BaseVertexIndex;
@@ -156,6 +155,7 @@ struct FSkelMeshSection
 		, NumTriangles(0)
 		, bSelected(false)
 		, bRecomputeTangent(false)
+		, RecomputeTangentsVertexMaskChannel(ESkinVertexColorChannel::Green)
 		, bCastShadow(true)
 		, bLegacyClothingSection_DEPRECATED(false)
 		, CorrespondClothSectionIndex_DEPRECATED(-1)
@@ -231,6 +231,9 @@ struct FSkelMeshSourceSectionUserData
 {
 	/** This section will recompute tangent in runtime */
 	bool bRecomputeTangent;
+	
+	/** Vertex color channel to use to mask recompute tangent */
+	ESkinVertexColorChannel RecomputeTangentsVertexMaskChannel;
 
 	/** This section will cast shadow */
 	bool bCastShadow;
@@ -261,6 +264,7 @@ struct FSkelMeshSourceSectionUserData
 
 	FSkelMeshSourceSectionUserData()
 		: bRecomputeTangent(false)
+		, RecomputeTangentsVertexMaskChannel(ESkinVertexColorChannel::Green)
 		, bCastShadow(true)
 		, CorrespondClothAssetIndex(INDEX_NONE)
 		, bDisabled(false)
@@ -275,6 +279,25 @@ struct FSkelMeshSourceSectionUserData
 		return (ClothingData.AssetGuid.IsValid());
 	}
 
+	static FSkelMeshSourceSectionUserData& GetSourceSectionUserData(TMap<int32, FSkelMeshSourceSectionUserData>& UserSectionsData, const FSkelMeshSection& Section)
+	{
+		FSkelMeshSourceSectionUserData* UserSectionData = UserSectionsData.Find(Section.OriginalDataSectionIndex);
+		if (!UserSectionData)
+		{
+			//If the UserSectionData do not exist add it and copy from the section data
+			UserSectionData = &UserSectionsData.Add(Section.OriginalDataSectionIndex);
+			UserSectionData->bCastShadow = Section.bCastShadow;
+			UserSectionData->bDisabled = Section.bDisabled;
+			UserSectionData->bRecomputeTangent = Section.bRecomputeTangent;
+			UserSectionData->RecomputeTangentsVertexMaskChannel = Section.RecomputeTangentsVertexMaskChannel;
+			UserSectionData->GenerateUpToLodIndex = Section.GenerateUpToLodIndex;
+			UserSectionData->CorrespondClothAssetIndex = Section.CorrespondClothAssetIndex;
+			UserSectionData->ClothingData.AssetGuid = Section.ClothingData.AssetGuid;
+			UserSectionData->ClothingData.AssetLodIndex = Section.ClothingData.AssetLodIndex;
+		}
+		check(UserSectionData);
+		return *UserSectionData;
+	}
 	// Serialization.
 	friend FArchive& operator<<(FArchive& Ar, FSkelMeshSourceSectionUserData& S);
 };
@@ -431,7 +454,7 @@ public:
 	ENGINE_API void GetNonClothVertices(TArray<FSoftSkinVertex>& OutVertices) const;
 
 	ENGINE_API int32 GetMaxBoneInfluences() const;
-	bool DoSectionsUse16BitBoneIndex() const;
+	ENGINE_API bool DoSectionsUse16BitBoneIndex() const;
 
 	void GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize) const;
 
@@ -454,20 +477,20 @@ public:
 	* This function will update the chunked information for each section. Only old data before the 
 	* skeletal mesh build refactor should need to call this function.
 	*/
-	ENGINE_API void UpdateChunkedSectionInfo(const FString& SkeletalMeshName, TArray<int32>& LODMaterialMap);
+	ENGINE_API void UpdateChunkedSectionInfo(const FString& SkeletalMeshName);
 
 	/**
 	* Copy one structure to the other, make sure all bulk data is unlock and the data can be read before copying.
 	*
 	* It also use a private mutex to make sure it's thread safe to copy the same source multiple time in multiple thread.
 	*/
-	static ENGINE_API void CopyStructure(FSkeletalMeshLODModel* Destination, FSkeletalMeshLODModel* Source);
+	static ENGINE_API void CopyStructure(FSkeletalMeshLODModel* Destination, const FSkeletalMeshLODModel* Source);
 
 	/**
 	* Create a new FSkeletalMeshLODModel on the heap. Copy data from the "FSkeletalMeshLODModel* Other" to the just created LODModel return the heap allocated LODModel.
 	* This function is thread safe since its use the thread safe CopyStructure function to copy the data from Other.
 	*/
-	static ENGINE_API FSkeletalMeshLODModel* CreateCopy(FSkeletalMeshLODModel* Other)
+	static ENGINE_API FSkeletalMeshLODModel* CreateCopy(const FSkeletalMeshLODModel* Other)
 	{
 		FSkeletalMeshLODModel* Destination = new FSkeletalMeshLODModel();
 		FSkeletalMeshLODModel::CopyStructure(Destination, Other);

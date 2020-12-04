@@ -43,6 +43,8 @@
 #include "Materials/MaterialInstance.h"
 #include "VirtualTexturingEditorModule.h"
 #include "Components/RuntimeVirtualTextureComponent.h"
+#include "LandscapeSubsystem.h"
+#include "ShaderCompilerCore.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogEditorBuildUtils, Log, All);
 
@@ -63,6 +65,7 @@ const FName FBuildOptions::BuildAllOnlySelectedPaths(TEXT("BuildAllOnlySelectedP
 const FName FBuildOptions::BuildHierarchicalLOD(TEXT("BuildHierarchicalLOD"));
 const FName FBuildOptions::BuildTextureStreaming(TEXT("BuildTextureStreaming"));
 const FName FBuildOptions::BuildVirtualTexture(TEXT("BuildVirtualTexture"));
+const FName FBuildOptions::BuildGrassMaps(TEXT("BuildGrassMaps"));
 
 bool FEditorBuildUtils::bBuildingNavigationFromUserRequest = false;
 TMap<FName, FEditorBuildUtils::FCustomBuildType> FEditorBuildUtils::CustomBuildTypes;
@@ -304,6 +307,10 @@ bool FEditorBuildUtils::EditorBuild( UWorld* InWorld, FName Id, const bool bAllo
 	{
 		BuildType = SBuildProgressWidget::BUILDTYPE_VirtualTexture;
 	}
+	else if (Id == FBuildOptions::BuildGrassMaps)
+	{
+		BuildType = SBuildProgressWidget::BUILDTYPE_GrassMaps;
+	}
 	else
 	{
 		BuildType = SBuildProgressWidget::BUILDTYPE_Unknown;	
@@ -423,6 +430,15 @@ bool FEditorBuildUtils::EditorBuild( UWorld* InWorld, FName Id, const bool bAllo
 			const FScopedBusyCursor BusyCursor;
 
 			TriggerHierarchicalLODBuilder(InWorld, Id);
+		}
+	}
+	else if (Id == FBuildOptions::BuildGrassMaps)
+	{
+		bDoBuild = GEditor->WarnAboutHiddenLevels(InWorld, false);
+		if (bDoBuild)
+		{
+			GEditor->ResetTransaction(NSLOCTEXT("UnrealEd", "BuildGrassMaps", "Building Grass Maps"));
+			EditorBuildGrassMaps(InWorld);
 		}
 	}
 	else if (Id == FBuildOptions::BuildAll || Id == FBuildOptions::BuildAllSubmit)
@@ -912,6 +928,7 @@ FBuildAllHandler::FBuildAllHandler()
 	: CurrentStep(0)
 {
 	// Add built in build steps.
+	BuildSteps.Add(FBuildOptions::BuildGrassMaps);
 	BuildSteps.Add(FBuildOptions::BuildGeometry);
 	BuildSteps.Add(FBuildOptions::BuildHierarchicalLOD);
 	BuildSteps.Add(FBuildOptions::BuildAIPaths);
@@ -1012,6 +1029,11 @@ void FBuildAllHandler::ProcessBuild(const TWeakPtr<SBuildProgressWidget>& BuildP
 		{
 			BuildProgressWidget.Pin()->SetBuildType(SBuildProgressWidget::BUILDTYPE_VirtualTexture);
 			FEditorBuildUtils::EditorBuildVirtualTexture(CurrentWorld);
+		}
+		else if (StepId == FBuildOptions::BuildGrassMaps)
+		{
+			BuildProgressWidget.Pin()->SetBuildType(SBuildProgressWidget::BUILDTYPE_GrassMaps);
+			FEditorBuildUtils::EditorBuildGrassMaps(CurrentWorld);
 		}
 		else if (StepId == FBuildOptions::BuildAIPaths)
 		{
@@ -1398,6 +1420,7 @@ bool FEditorBuildUtils::EditorBuildVirtualTexture(UWorld* InWorld)
 	{
 		BuildTask.EnterProgressFrame();
 
+		// Note that Build*() functions return true if the associated Has*() functions return false
 		if (BuildTask.ShouldCancel() || !Module->BuildStreamedMips(Component))
 		{
 			return false;
@@ -1407,6 +1430,17 @@ bool FEditorBuildUtils::EditorBuildVirtualTexture(UWorld* InWorld)
 	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 
 	return true;
+}
+
+void FEditorBuildUtils::EditorBuildGrassMaps(UWorld* InWorld)
+{
+	if (InWorld)
+	{
+		if (ULandscapeSubsystem* LandscapeSubsystem = InWorld->GetSubsystem<ULandscapeSubsystem>())
+		{
+			LandscapeSubsystem->BuildGrassMaps();
+		}
+	}
 }
 
 /** classed used to compile shaders for a specific (mobile) platform and copy the number of instruction to the editor-emulated (mobile) platform */
@@ -1454,7 +1488,7 @@ bool FEditorBuildUtils::CompileShadersComplexityViewMode(EMaterialQualityLevel::
 		check(MaterialInterface);
 
 		TSharedPtr<FMaterialOfflineCompilation> SpecialResource = MakeShareable(new FMaterialOfflineCompilation());
-		SpecialResource->SetMaterial(MaterialInterface->GetMaterial(), QualityLevel, true, FeatureLevel, Cast<UMaterialInstance>(MaterialInterface));
+		SpecialResource->SetMaterial(MaterialInterface->GetMaterial(), Cast<UMaterialInstance>(MaterialInterface), FeatureLevel, QualityLevel);
 
 		SpecialResource->CacheShaders(ShaderPlatform);
 

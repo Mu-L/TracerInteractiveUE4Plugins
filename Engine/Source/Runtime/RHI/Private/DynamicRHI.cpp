@@ -15,6 +15,12 @@
 #include "GenericPlatform/GenericPlatformCrashContext.h"
 #include "PipelineStateCache.h"
 
+#if NV_GEFORCENOW
+THIRD_PARTY_INCLUDES_START
+#include "GfnRuntimeSdk_CAPI.h"
+THIRD_PARTY_INCLUDES_END
+#endif
+
 IMPLEMENT_TYPE_LAYOUT(FRayTracingGeometryInitializer);
 IMPLEMENT_TYPE_LAYOUT(FRayTracingGeometrySegment);
 
@@ -39,6 +45,11 @@ static TAutoConsoleVariable<int32> CVarWarnOfBadDrivers(
 	ECVF_RenderThreadSafe
 	);
 
+static TAutoConsoleVariable<int32> CVarDisableDriverWarningPopupIfGFN(
+	TEXT("r.DisableDriverWarningPopupIfGFN"),
+	1,
+	TEXT("If non-zero, disable driver version warning popup if running on a GFN cloud machine."),
+	ECVF_RenderThreadSafe);
 
 void InitNullRHI()
 {
@@ -53,8 +64,11 @@ void InitNullRHI()
 
 	GDynamicRHI = DynamicRHIModule->CreateRHI();
 	GDynamicRHI->Init();
-	GRHICommandList.GetImmediateCommandList().SetContext(GDynamicRHI->RHIGetDefaultContext());
-	GRHICommandList.GetImmediateAsyncComputeCommandList().SetComputeContext(GDynamicRHI->RHIGetDefaultAsyncComputeContext());
+
+	// Command lists need the validation RHI context if enabled, so call the global scope version of RHIGetDefaultContext() and RHIGetDefaultAsyncComputeContext().
+	GRHICommandList.GetImmediateCommandList().SetContext(::RHIGetDefaultContext());
+	GRHICommandList.GetImmediateAsyncComputeCommandList().SetComputeContext(::RHIGetDefaultAsyncComputeContext());
+
 	GUsingNullRHI = true;
 	GRHISupportsTextureStreaming = false;
 
@@ -181,7 +195,7 @@ static void RHIDetectAndWarnOfBadDrivers(bool bHasEditorToken)
 		return;
 	}
 
-	if (FPlatformMisc::MacOSXVersionCompare(10,14,6) < 0)
+	if (FPlatformMisc::MacOSXVersionCompare(10,15,5) < 0)
 	{
 		// this message can be suppressed with r.WarnOfBadDrivers=0
 		FPlatformMisc::MessageBoxExt(EAppMsgType::Ok,
@@ -193,7 +207,7 @@ static void RHIDetectAndWarnOfBadDrivers(bool bHasEditorToken)
 
 void RHIInit(bool bHasEditorToken)
 {
-	if(!GDynamicRHI)
+	if (!GDynamicRHI)
 	{
 		// read in any data driven shader platform info structures we can find
 		FGenericDataDrivenShaderPlatformInfo::Initialize();
@@ -222,6 +236,12 @@ void RHIInit(bool bHasEditorToken)
 				GRHICommandList.GetImmediateAsyncComputeCommandList().GetComputeContext();
 				check(GIsRHIInitialized);
 
+				// Set default GPU mask to all GPUs. This is necessary to ensure that any commands
+				// that create and initialize resources are executed on all GPUs. Scene rendering
+				// will restrict itself to a subset of GPUs as needed.
+				GRHICommandList.GetImmediateCommandList().SetGPUMask(FRHIGPUMask::All());
+				GRHICommandList.GetImmediateAsyncComputeCommandList().SetGPUMask(FRHIGPUMask::All());
+
 				FString FeatureLevelString;
 				GetFeatureLevelName(GMaxRHIFeatureLevel, FeatureLevelString);
 
@@ -232,7 +252,7 @@ void RHIInit(bool bHasEditorToken)
 					FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Error));
 					FPlatformMisc::RequestExit(1);
 				}
-				
+
 				// Update the crash context analytics
 				FGenericCrashContext::SetEngineData(TEXT("RHI.RHIName"), GDynamicRHI ? GDynamicRHI->GetName() : TEXT("Unknown"));
 				FGenericCrashContext::SetEngineData(TEXT("RHI.AdapterName"), GRHIAdapterName);
@@ -254,7 +274,32 @@ void RHIInit(bool bHasEditorToken)
 	}
 
 #if PLATFORM_WINDOWS || PLATFORM_MAC
+#if NV_GEFORCENOW
+	bool bDetectAndWarnBadDrivers = true;
+	if (IsRHIDeviceNVIDIA() && !!CVarDisableDriverWarningPopupIfGFN.GetValueOnAnyThread())
+	{
+		const GfnRuntimeSdk::GfnRuntimeError GfnResult = GfnRuntimeSdk::gfnInitializeRuntimeSdk(GfnRuntimeSdk::gfnDefaultLanguage);
+		const bool bGfnRuntimeSDKInitialized = GfnResult == GfnRuntimeSdk::gfnSuccess || GfnResult == GfnRuntimeSdk::gfnInitSuccessClientOnly;
+		if (bGfnRuntimeSDKInitialized)
+		{
+			UE_LOG(LogRHI, Log, TEXT("GeForceNow SDK initialized: %d"), (int32)GfnResult);
+		}
+		else
+		{
+			UE_LOG(LogRHI, Log, TEXT("GeForceNow SDK initialization failed: %d"), (int32)GfnResult);
+		}
+
+		// Don't pop up a driver version warning window when running on a cloud machine
+		bDetectAndWarnBadDrivers = !bGfnRuntimeSDKInitialized || !GfnRuntimeSdk::gfnIsRunningInCloud();
+	}
+
+	if (bDetectAndWarnBadDrivers)
+	{
+		RHIDetectAndWarnOfBadDrivers(bHasEditorToken);
+	}
+#else
 	RHIDetectAndWarnOfBadDrivers(bHasEditorToken);
+#endif
 #endif
 }
 
@@ -267,7 +312,7 @@ void RHIPostInit(const TArray<uint32>& InPixelFormatByteWidth)
 
 void RHIExit()
 {
-	if ( !GUsingNullRHI && GDynamicRHI != NULL )
+	if (!GUsingNullRHI && GDynamicRHI != NULL)
 	{
 		// Clean up all cached pipelines
 		PipelineStateCache::Shutdown();
@@ -277,6 +322,13 @@ void RHIExit()
 		delete GDynamicRHI;
 		GDynamicRHI = NULL;
 	}
+
+#if NV_GEFORCENOW
+	if (GRHIVendorId != 0 && IsRHIDeviceNVIDIA() && !!CVarDisableDriverWarningPopupIfGFN.GetValueOnAnyThread())
+	{
+		GfnRuntimeSdk::gfnShutdownRuntimeSdk();
+	}
+#endif
 }
 
 
@@ -300,6 +352,34 @@ static FAutoConsoleCommandWithWorldAndArgs GBaseRHISetGPUCaptureOptions(
 	TEXT("Platform RHI's may implement more feature toggles."),
 	FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&BaseRHISetGPUCaptureOptions)
 	);
+
+void FDynamicRHI::RHIReadSurfaceFloatData(FRHITexture* Texture, FIntRect Rect, TArray<FFloat16Color>& OutData, FReadSurfaceDataFlags InFlags)
+{
+#if WITH_MGPU
+	if (InFlags.GetGPUIndex() != 0)
+	{
+		unimplemented();
+	}
+	else
+#endif
+	{
+		RHIReadSurfaceFloatData(Texture, Rect, OutData, InFlags.GetCubeFace(), InFlags.GetArrayIndex(), InFlags.GetMip());
+	}
+}
+
+void FDynamicRHI::RHIRead3DSurfaceFloatData(FRHITexture* Texture, FIntRect Rect, FIntPoint ZMinMax, TArray<FFloat16Color>& OutData, FReadSurfaceDataFlags InFlags)
+{
+#if WITH_MGPU
+	if (InFlags.GetGPUIndex() != 0)
+	{
+		unimplemented();
+	}
+	else
+#endif
+	{
+		RHIRead3DSurfaceFloatData(Texture, Rect, ZMinMax, OutData);
+	}
+}
 
 void FDynamicRHI::EnableIdealGPUCaptureOptions(bool bEnabled)
 {
@@ -374,7 +454,7 @@ uint64 FDynamicRHI::RHIGetMinimumAlignmentForBufferBackedSRV(EPixelFormat Format
 	return 1;
 }
 
-uint64 FDynamicRHI::RHICalcVMTexture2DPlatformSize(uint32 Mip0Width, uint32 Mip0Height, uint8 Format, uint32 NumMips, uint32 FirstMipIdx, uint32 NumSamples, uint32 Flags, uint32& OutAlign)
+uint64 FDynamicRHI::RHICalcVMTexture2DPlatformSize(uint32 Mip0Width, uint32 Mip0Height, uint8 Format, uint32 NumMips, uint32 FirstMipIdx, uint32 NumSamples, ETextureCreateFlags Flags, uint32& OutAlign)
 {
 	UE_LOG(LogRHI, Fatal, TEXT("RHICalcVMTexture2DPlatformSize isn't implemented for the current RHI"));
 	return -1;

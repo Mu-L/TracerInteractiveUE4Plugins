@@ -79,7 +79,7 @@ void STimedDataMonitorPanel::RegisterNomadTabSpawner(TSharedRef<FWorkspaceItem> 
 		TSharedPtr<FTabManager> LevelEditorTabManager = LevelEditorModule.GetLevelEditorTabManager();
 
 		LevelEditorTabManager->RegisterTabSpawner(Utilities::NAME_App, FOnSpawnTab::CreateStatic(&Utilities::CreateApp))
-			.SetDisplayName(LOCTEXT("TabTitle", "Timed Input Monitor"))
+			.SetDisplayName(LOCTEXT("TabTitle", "Timed Data Monitor"))
 			.SetTooltipText(LOCTEXT("TooltipText", "Monitor inputs that can be time synchronized"))
 			.SetGroup(InWorkspaceItem)
 			.SetIcon(FSlateIcon(FTimedDataMonitorEditorStyle::Get().GetStyleSetName(), "Img.TimedDataMonitor.Small"));
@@ -677,7 +677,7 @@ bool STimedDataMonitorPanel::IsResetEvaluationChecked() const
 
 FReply STimedDataMonitorPanel::OnShowBuffersClicked()
 {
-	FGlobalTabmanager::Get()->InvokeTab(FTabId(Utilities::NAME_TimedDataMonitorBuffers));
+	FGlobalTabmanager::Get()->TryInvokeTab(FTabId(Utilities::NAME_TimedDataMonitorBuffers));
 	return FReply::Handled();
 }
 

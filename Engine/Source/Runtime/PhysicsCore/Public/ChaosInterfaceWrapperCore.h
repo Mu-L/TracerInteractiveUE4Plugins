@@ -28,10 +28,10 @@ struct FDummyPhysActor {};
 template<typename DummyT>
 struct FDummyCallback {};
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 using FQueryFilterData = PxQueryFilterData;
-#else
-using FQueryFilterData = FDummyPhysType;
+#elif WITH_CHAOS
+using FQueryFilterData = FChaosQueryFilterData;
 #endif
 
 /** We use this struct so that if no conversion is needed in another API, we can avoid the copy (if we think that's critical) */
@@ -81,19 +81,23 @@ struct FQueryDebugParams
 {
 #if !(UE_BUILD_TEST || UE_BUILD_SHIPPING) 
 	FQueryDebugParams()
-		: bDebugQuery(false) { }
+		: bDebugQuery(false)
+		, bExternalQuery(true) { }
 	bool bDebugQuery;
+	bool bExternalQuery;
 	bool IsDebugQuery() const { return bDebugQuery; }
+	bool IsExternalQuery() const { return bExternalQuery; }
 #else
 	// In test or shipping builds, this struct must be left empty
 	FQueryDebugParams() { }
 	constexpr bool IsDebugQuery() const { return false; }
+	constexpr bool IsExternalQuery() const { return true; }
 #endif
 };
 #endif
 
-extern PHYSICSCORE_API FCollisionFilterData GetQueryFilterData(const Chaos::TPerShapeData<float, 3>& Shape);
-extern PHYSICSCORE_API FCollisionFilterData GetSimulationFilterData(const Chaos::TPerShapeData<float, 3>& Shape);
+extern PHYSICSCORE_API FCollisionFilterData GetQueryFilterData(const Chaos::FPerShapeData& Shape);
+extern PHYSICSCORE_API FCollisionFilterData GetSimulationFilterData(const Chaos::FPerShapeData& Shape);
 
 
 PHYSICSCORE_API ECollisionShapeType GetImplicitType(const Chaos::FImplicitObject& InGeometry);
@@ -113,7 +117,7 @@ inline bool HadInitialOverlap(const FLocationHit& Hit)
 	return Hit.Distance <= 0.f;
 }
 
-inline const Chaos::TPerShapeData<float, 3>* GetShape(const FActorShape& Hit)
+inline const Chaos::FPerShapeData* GetShape(const FActorShape& Hit)
 {
 	return Hit.Shape;
 }

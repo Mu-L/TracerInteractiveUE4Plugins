@@ -9,8 +9,6 @@ namespace UnrealBuildTool.Rules
 	{
 		public USDStageEditor(ReadOnlyTargetRules Target) : base(Target)
 		{
-			bUseRTTI = true;
-
 			PrivateDependencyModuleNames.AddRange(
 				new string[]
 				{
@@ -19,18 +17,20 @@ namespace UnrealBuildTool.Rules
 					"DesktopWidgets",
 					"EditorStyle",
 					"Engine",
-					"LevelEditor",
 					"InputCore",
+					"LevelEditor",
+					"Projects", // So that we can use the IPluginManager, required for our custom style
 					"Slate",
 					"SlateCore",
 					"UnrealEd",
 					"UnrealUSDWrapper",
-					"USDImporter",
+					"USDStageImporter",
 					"USDStage",
+					"USDStageEditorViewModels",
 					"USDUtilities",
 					"WorkspaceMenuStructure",
 				}
-				);
+			);
 		}
 	}
 }

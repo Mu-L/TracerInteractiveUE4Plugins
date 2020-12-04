@@ -34,6 +34,12 @@ static FAutoConsoleVariableRef CVarReflectionsMethod(
 	ECVF_RenderThreadSafe
 );
 
+static TAutoConsoleVariable<float> CVarReflectionScreenPercentage(
+	TEXT("r.RayTracing.Reflections.ScreenPercentage"),
+	100.0f,
+	TEXT("Screen percentage the reflections should be ray traced at (default = 100)."),
+	ECVF_RenderThreadSafe);
+
 static int32 GRayTracingReflectionsSamplesPerPixel = -1;
 static FAutoConsoleVariableRef CVarRayTracingReflectionsSamplesPerPixel(
 	TEXT("r.RayTracing.Reflections.SamplesPerPixel"),
@@ -202,6 +208,18 @@ static TAutoConsoleVariable<int32> CVarRayTracingReflectionsExperimentalDeferred
 	TEXT("Whether to use the experimental deferred ray traced reflection rendering algorithm, which only supports a subset of features but runs faster. (default = 0)."),
 	ECVF_RenderThreadSafe);
 
+static TAutoConsoleVariable<float> CVarRayTracingReflectionsNormalBias(
+	TEXT("r.RayTracing.Reflections.NormalBias"),
+	0.1,
+	TEXT("Magnitude of normal bias for reflection rays. (default = 0.1)"),
+	ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<int32> CVarRayTracingReflectionsEnableTwoSidedGeometry(
+	TEXT("r.RayTracing.Reflections.EnableTwoSidedGeometry"),
+	1,
+	TEXT("Two-sided geometry setting for reflection rays. (default = 1)"),
+	ECVF_RenderThreadSafe);
+
 // ESamplePhase
 enum class ESamplePhase
 {
@@ -251,6 +269,7 @@ class FRayTracingReflectionsRGS : public FGlobalShader
 		SHADER_PARAMETER(int32, ShouldDoDirectLighting)
 		SHADER_PARAMETER(int32, ReflectedShadowsType)
 		SHADER_PARAMETER(int32, ShouldDoEmissiveAndIndirectLighting)
+		SHADER_PARAMETER(int32, ShouldReflectOnlyWater)
 		SHADER_PARAMETER(int32, UpscaleFactor)
 		SHADER_PARAMETER(int32, SortTileSize)
 		SHADER_PARAMETER(FIntPoint, RayTracingResolution)
@@ -259,6 +278,8 @@ class FRayTracingReflectionsRGS : public FGlobalShader
 		SHADER_PARAMETER(float, ReflectionMaxRayDistance)
 		SHADER_PARAMETER(float, ReflectionMaxRoughness)
 		SHADER_PARAMETER(float, ReflectionMaxNormalBias)
+		SHADER_PARAMETER(float, ShadowMaxNormalBias)
+		SHADER_PARAMETER(int32, ReflectionEnableTwoSidedGeometry)
 		SHADER_PARAMETER(int32, TestPathRoughness)
 		SHADER_PARAMETER(float, MinClearCoatLevel)
 		SHADER_PARAMETER(int32, MaxUnderCoatBounces)
@@ -275,14 +296,13 @@ class FRayTracingReflectionsRGS : public FGlobalShader
 		SHADER_PARAMETER_SRV(StructuredBuffer<FRTLightingData>, LightDataBuffer)
 
 		SHADER_PARAMETER_STRUCT_INCLUDE(FSceneTextureParameters, SceneTextures)
-		SHADER_PARAMETER_STRUCT_INCLUDE(FSceneTextureSamplerParameters, SceneTextureSamplers)
 		SHADER_PARAMETER_STRUCT_INCLUDE(FSkyLightQuasiRandomData, SkyLightQuasiRandomData)
 		SHADER_PARAMETER_STRUCT_INCLUDE(FSkyLightVisibilityRaysData, SkyLightVisibilityRaysData)
 
 		SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, ViewUniformBuffer)
 		SHADER_PARAMETER_STRUCT_REF(FRaytracingLightDataPacked, LightDataPacked)
 		SHADER_PARAMETER_STRUCT_REF(FReflectionUniformParameters, ReflectionStruct)
-		SHADER_PARAMETER_STRUCT_REF(FFogUniformParameters, FogUniformParameters)
+		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FFogUniformParameters, FogUniformParameters)
 		SHADER_PARAMETER_STRUCT_REF(FReflectionCaptureShaderData, ReflectionCapture)
 		SHADER_PARAMETER_STRUCT_REF(FForwardLightData, Forward)
 		SHADER_PARAMETER_STRUCT_REF(FSkyLightData, SkyLightData)
@@ -362,9 +382,14 @@ class FSplitImaginaryReflectionGBufferCS : public FGlobalShader
 
 IMPLEMENT_GLOBAL_SHADER(FSplitImaginaryReflectionGBufferCS, "/Engine/Private/RayTracing/SplitImaginaryReflectionGBufferCS.usf", "MainCS", SF_Compute);
 
-int32 GetRayTracingReflectionsSamplesPerPixel(const FViewInfo& View)
+static int32 GetRayTracingReflectionsSamplesPerPixel(const FViewInfo& View)
 {
 	return GRayTracingReflectionsSamplesPerPixel >= 0 ? GRayTracingReflectionsSamplesPerPixel : View.FinalPostProcessSettings.RayTracingReflectionsSamplesPerPixel;
+}
+
+static float GetRayTracingReflectionsMaxRoughness(const FViewInfo& View)
+{
+	return FMath::Clamp(GRayTracingReflectionsMaxRoughness >= 0 ? GRayTracingReflectionsMaxRoughness : View.FinalPostProcessSettings.RayTracingReflectionsMaxRoughness, 0.01f, 1.0f);
 }
 
 bool ShouldRenderRayTracingReflections(const FViewInfo& View)
@@ -378,19 +403,26 @@ bool ShouldRenderRayTracingReflections(const FViewInfo& View)
 	return IsRayTracingEnabled() && bReflectionPassEnabled;
 }
 
-bool ShouldRayTracedReflectionsUseHybridReflections()
+static bool ShouldRayTracedReflectionsUseHybridReflections()
 {
 	return CVarRayTracingReflectionsHybrid.GetValueOnRenderThread() != 0;
 }
 
-bool ShouldRayTracedReflectionsSortMaterials(const FViewInfo& View)
+static bool ShouldRayTracedReflectionsSortMaterials(const FViewInfo& View)
 {
 	const bool bIsMultiviewSecondary = View.ViewRect.Min.X > 0 || View.ViewRect.Min.Y > 0;
 
 	return (ShouldRayTracedReflectionsUseHybridReflections() || CVarRayTracingReflectionsSortMaterials.GetValueOnRenderThread() != 0) && !bIsMultiviewSecondary;
 }
 
-bool ShouldRayTracedReflectionsRayTraceSkyLightContribution(const FScene& Scene)
+static bool ShouldRayTracedReflectionsUseSortedDeferredAlgorithm(const FViewInfo& View)
+{
+	const bool bIsMultiviewSecondary = View.ViewRect.Min.X > 0 || View.ViewRect.Min.Y > 0;
+
+	return (CVarRayTracingReflectionsExperimentalDeferred.GetValueOnRenderThread() != 0) && !bIsMultiviewSecondary;
+}
+
+static bool ShouldRayTracedReflectionsRayTraceSkyLightContribution(const FScene& Scene)
 {
 	// Only ray trace sky light contribution when the ray traced sky light should be rendered in normal conditions (sky light exists, ray traced shadows enabled)
 	return CVarRayTracingReflectionsRayTraceSkyLightContribution.GetValueOnRenderThread() && ShouldRenderRayTracingSkyLight(Scene.SkyLight);
@@ -399,6 +431,11 @@ bool ShouldRayTracedReflectionsRayTraceSkyLightContribution(const FScene& Scene)
 void FDeferredShadingSceneRenderer::PrepareRayTracingReflections(const FViewInfo& View, const FScene& Scene, TArray<FRHIRayTracingShader*>& OutRayGenShaders)
 {
 	// Declare all RayGen shaders that require material closest hit shaders to be bound
+
+	if (!GRayTracingReflections)
+	{
+		return;
+	}
 
 	if (CVarRayTracingReflectionsExperimentalDeferred.GetValueOnRenderThread())
 	{
@@ -448,6 +485,54 @@ void FDeferredShadingSceneRenderer::PrepareRayTracingReflections(const FViewInfo
 	}
 }
 
+void FDeferredShadingSceneRenderer::PrepareRayTracingReflectionsDeferredMaterial(const FViewInfo& View, const FScene& Scene, TArray<FRHIRayTracingShader*>& OutRayGenShaders)
+{
+	// Declare all RayGen shaders that are used with deferred material sorts
+
+	if (CVarRayTracingReflectionsExperimentalDeferred.GetValueOnRenderThread())
+	{
+		// If deferred reflections technique is used, then we only need to gather its shaders and skip the rest.
+		PrepareRayTracingDeferredReflectionsDeferredMaterial(View, Scene, OutRayGenShaders);
+		return;
+	}
+
+	if (!ShouldRayTracedReflectionsSortMaterials(View))
+	{
+		return;
+	}
+
+	const bool bHybridReflections = ShouldRayTracedReflectionsUseHybridReflections();
+	const bool bMissShaderLighting = CanUseRayTracingLightingMissShader(View.GetShaderPlatform());
+	const bool bRayTraceSkyLightContribution = ShouldRayTracedReflectionsRayTraceSkyLightContribution(Scene);
+
+	{
+		FRayTracingReflectionsRGS::FPermutationDomain PermutationVector;
+		PermutationVector.Set<FRayTracingReflectionsRGS::FEnableTwoSidedGeometryForShadowDim>(EnableRayTracingShadowTwoSidedGeometry());
+		PermutationVector.Set<FRayTracingReflectionsRGS::FDeferredMaterialMode>(EDeferredMaterialMode::Gather);
+		PermutationVector.Set<FRayTracingReflectionsRGS::FHybrid>(bHybridReflections);
+		PermutationVector.Set<FRayTracingReflectionsRGS::FMissShaderLighting>(bMissShaderLighting);
+		PermutationVector.Set<FRayTracingReflectionsRGS::FRayTraceSkyLightContribution>(bRayTraceSkyLightContribution);
+		auto RayGenShader = View.ShaderMap->GetShader<FRayTracingReflectionsRGS>(PermutationVector);
+		OutRayGenShaders.Add(RayGenShader.GetRayTracingShader());
+	}
+}
+
+void FDeferredShadingSceneRenderer::PrepareSingleLayerWaterRayTracingReflections(const FViewInfo& View, const FScene& Scene, TArray<FRHIRayTracingShader*>& OutRayGenShaders)
+{
+	const bool bHybridReflections = ShouldRayTracedReflectionsUseHybridReflections();
+	const bool bMissShaderLighting = CanUseRayTracingLightingMissShader(View.GetShaderPlatform());
+	const bool bRayTraceSkyLightContribution = ShouldRayTracedReflectionsRayTraceSkyLightContribution(Scene);
+
+	FRayTracingReflectionsRGS::FPermutationDomain PermutationVector;
+	PermutationVector.Set<FRayTracingReflectionsRGS::FEnableTwoSidedGeometryForShadowDim>(EnableRayTracingShadowTwoSidedGeometry());
+	PermutationVector.Set<FRayTracingReflectionsRGS::FDeferredMaterialMode>(EDeferredMaterialMode::None);
+	PermutationVector.Set<FRayTracingReflectionsRGS::FHybrid>(bHybridReflections);
+	PermutationVector.Set<FRayTracingReflectionsRGS::FMissShaderLighting>(bMissShaderLighting);
+	PermutationVector.Set<FRayTracingReflectionsRGS::FRayTraceSkyLightContribution>(bRayTraceSkyLightContribution);
+	auto RayGenShader = View.ShaderMap->GetShader<FRayTracingReflectionsRGS>(PermutationVector);
+	OutRayGenShaders.Add(RayGenShader.GetRayTracingShader());
+}
+
 #endif // RHI_RAYTRACING
 
 void FDeferredShadingSceneRenderer::SetupImaginaryReflectionTextureParameters(
@@ -462,9 +547,9 @@ void FDeferredShadingSceneRenderer::SetupImaginaryReflectionTextureParameters(
 
 	if (SceneViewState != nullptr)
 	{
-		OutTextures->SceneDepthBuffer = GraphBuilder.RegisterExternalTexture(SceneViewState->ImaginaryReflectionDepthZ, TEXT("ImaginaryReflectionDepthZ"));
-		OutTextures->SceneVelocityBuffer = GraphBuilder.TryRegisterExternalTexture(SceneViewState->ImaginaryReflectionVelocity, TEXT("ImaginaryReflectionVelocity"));
-		OutTextures->SceneGBufferA = GraphBuilder.TryRegisterExternalTexture(SceneViewState->ImaginaryReflectionGBufferA, TEXT("ImaginaryReflectionGBufferA"));
+		OutTextures->SceneDepthTexture = GraphBuilder.RegisterExternalTexture(SceneViewState->ImaginaryReflectionDepthZ, TEXT("ImaginaryReflectionDepthZ"));
+		OutTextures->GBufferVelocityTexture = TryRegisterExternalTexture(GraphBuilder, SceneViewState->ImaginaryReflectionVelocity);
+		OutTextures->GBufferATexture = TryRegisterExternalTexture(GraphBuilder, SceneViewState->ImaginaryReflectionGBufferA);
 	}
 }
 #else
@@ -477,17 +562,17 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 	FRDGBuilder& GraphBuilder,
 	const FSceneTextureParameters& SceneTextures,
 	const FViewInfo& View,
-	int32 SamplePerPixel,
-	float ResolutionFraction,
+	const FRayTracingReflectionOptions& Options,
 	IScreenSpaceDenoiser::FReflectionsInputs* OutDenoiserInputs)
 #if RHI_RAYTRACING
 {
-	if (CVarRayTracingReflectionsExperimentalDeferred.GetValueOnRenderThread())
+	if (Options.Algorithm == FRayTracingReflectionOptions::SortedDeferred)
 	{
 		RenderRayTracingDeferredReflections(
 			GraphBuilder,
 			SceneTextures,
 			View,
+			Options,
 			OutDenoiserInputs);
 		return;
 	}
@@ -496,27 +581,25 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 	const uint32 EnableTranslucency = GRayTracingReflectionsTranslucency > -1 ? (uint32)GRayTracingReflectionsTranslucency : (uint32)View.FinalPostProcessSettings.RayTracingReflectionsTranslucency;
 
 	const bool bHybridReflections = ShouldRayTracedReflectionsUseHybridReflections();
-	const bool bSortMaterials = ShouldRayTracedReflectionsSortMaterials(View);
+	const bool bSortMaterials = Options.Algorithm == FRayTracingReflectionOptions::Sorted;
 	const bool bLightingMissShader = CanUseRayTracingLightingMissShader(View.GetShaderPlatform());
 	const bool bRayTraceSkyLightContribution = ShouldRayTracedReflectionsRayTraceSkyLightContribution(*Scene);
 
 	FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(GraphBuilder.RHICmdList);
 	FSceneViewState* SceneViewState = (FSceneViewState*)View.State;
 
-	int32 UpscaleFactor = int32(1.0f / ResolutionFraction);
-	ensure(ResolutionFraction == 1.0 / UpscaleFactor);
+	int32 UpscaleFactor = int32(1.0f / Options.ResolutionFraction);
+	ensure(Options.ResolutionFraction == 1.0 / UpscaleFactor);
 	ensureMsgf(FComputeShaderUtils::kGolden2DGroupSize % UpscaleFactor == 0, TEXT("Reflection ray tracing will have uv misalignement."));
 	FIntPoint RayTracingResolution = FIntPoint::DivideAndRoundUp(View.ViewRect.Size(), UpscaleFactor);
-	FIntPoint RayTracingBufferSize = SceneTextures.SceneDepthBuffer->Desc.Extent / UpscaleFactor;
+	FIntPoint RayTracingBufferSize = SceneTextures.SceneDepthTexture->Desc.Extent / UpscaleFactor;
 
 	{
-		FRDGTextureDesc Desc = FRDGTextureDesc::Create2DDesc(
+		FRDGTextureDesc Desc = FRDGTextureDesc::Create2D(
 			RayTracingBufferSize,
 			PF_FloatRGBA,
 			FClearValueBinding::None,
-			/* InFlags = */ TexCreate_None,
-			/* InTargetableFlags = */ TexCreate_ShaderResource | TexCreate_RenderTargetable | TexCreate_UAV,
-			/* bInForceSeparateTargetAndShaderResource = */ false);
+			TexCreate_ShaderResource | TexCreate_RenderTargetable | TexCreate_UAV);
 
 		OutDenoiserInputs->Color = GraphBuilder.CreateTexture(Desc, TEXT("RayTracingReflections"));
 		
@@ -558,18 +641,21 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 
 	FRayTracingReflectionsRGS::FParameters CommonParameters;
 
-	CommonParameters.SamplesPerPixel = SamplePerPixel;
+	CommonParameters.SamplesPerPixel = Options.SamplesPerPixel;
 	CommonParameters.MaxBounces = FMath::Max(1, GRayTracingReflectionsMaxBounces > -1? GRayTracingReflectionsMaxBounces : View.FinalPostProcessSettings.RayTracingReflectionsMaxBounces);
 	CommonParameters.HeightFog = GRayTracingReflectionsHeightFog;
-	CommonParameters.UseReflectionCaptures = GRayTracingReflectionsCaptures;
-	CommonParameters.ShouldDoDirectLighting = GRayTracingReflectionsDirectLighting;
+	CommonParameters.UseReflectionCaptures = Options.bReflectionCaptures;
+	CommonParameters.ShouldDoDirectLighting = Options.bDirectLighting;
 	CommonParameters.ReflectedShadowsType = GRayTracingReflectionsShadows > -1 ? GRayTracingReflectionsShadows : (int32)View.FinalPostProcessSettings.RayTracingReflectionsShadows;
-	CommonParameters.ShouldDoEmissiveAndIndirectLighting = GRayTracingReflectionsEmissiveAndIndirectLighting;
+	CommonParameters.ShouldDoEmissiveAndIndirectLighting = Options.bEmissiveAndIndirectLighting;
+	CommonParameters.ShouldReflectOnlyWater = Options.bReflectOnlyWater;
 	CommonParameters.UpscaleFactor = UpscaleFactor;
 	CommonParameters.ReflectionMinRayDistance = FMath::Min(GRayTracingReflectionsMinRayDistance, GRayTracingReflectionsMaxRayDistance);
 	CommonParameters.ReflectionMaxRayDistance = GRayTracingReflectionsMaxRayDistance;
-	CommonParameters.ReflectionMaxRoughness = FMath::Clamp(GRayTracingReflectionsMaxRoughness >= 0 ? GRayTracingReflectionsMaxRoughness : View.FinalPostProcessSettings.RayTracingReflectionsMaxRoughness, 0.01f, 1.0f);
-	CommonParameters.ReflectionMaxNormalBias = GetRaytracingMaxNormalBias();
+	CommonParameters.ReflectionMaxRoughness = GetRayTracingReflectionsMaxRoughness(View);
+	CommonParameters.ReflectionMaxNormalBias = CVarRayTracingReflectionsNormalBias.GetValueOnRenderThread();
+	CommonParameters.ReflectionEnableTwoSidedGeometry = CVarRayTracingReflectionsEnableTwoSidedGeometry.GetValueOnRenderThread();
+	CommonParameters.ShadowMaxNormalBias = GetRaytracingMaxNormalBias();
 	CommonParameters.RayTracingResolution = RayTracingResolution;
 	CommonParameters.TileAlignedResolution = TileAlignedResolution;
 	CommonParameters.TestPathRoughness = CVarRayTracingReflectionsTestPathRoughness.GetValueOnRenderThread();
@@ -583,11 +669,10 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 
 	CommonParameters.TLAS = View.RayTracingScene.RayTracingSceneRHI->GetShaderResourceView();
 	CommonParameters.ViewUniformBuffer = View.ViewUniformBuffer;
-	CommonParameters.LightDataPacked = View.RayTracingLightingDataUniformBuffer;
-	CommonParameters.LightDataBuffer = View.RayTracingLightingDataSRV;
+	CommonParameters.LightDataPacked = View.RayTracingLightData.UniformBuffer;
+	CommonParameters.LightDataBuffer = View.RayTracingLightData.LightBufferSRV;
 
 	CommonParameters.SceneTextures = SceneTextures;
-	SetupSceneTextureSamplers(&CommonParameters.SceneTextureSamplers);
 	SetupSkyLightVisibilityRaysParameters(GraphBuilder, View, &CommonParameters.SkyLightVisibilityRaysData);
 
 	// Hybrid reflection path samples lit scene color texture instead of performing a ray trace.
@@ -597,7 +682,7 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 	CommonParameters.SSProfilesTexture = GraphBuilder.RegisterExternalTexture(View.RayTracingSubSurfaceProfileTexture);
 
 	CommonParameters.ReflectionStruct = CreateReflectionUniformBuffer(View, EUniformBufferUsage::UniformBuffer_SingleFrame);
-	CommonParameters.FogUniformParameters = CreateFogUniformBuffer(View, EUniformBufferUsage::UniformBuffer_SingleFrame);
+	CommonParameters.FogUniformParameters = CreateFogUniformBuffer(GraphBuilder, View);
 	CommonParameters.ColorOutput = GraphBuilder.CreateUAV(OutDenoiserInputs->Color);
 	CommonParameters.RayHitDistanceOutput = GraphBuilder.CreateUAV(OutDenoiserInputs->RayHitDistance);
 	CommonParameters.RayImaginaryDepthOutput = GraphBuilder.CreateUAV(OutDenoiserInputs->RayImaginaryDepth);
@@ -619,13 +704,13 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 		SetupSkyLightQuasiRandomParameters(*Scene, View, BlueNoiseDimensions, &CommonParameters.SkyLightQuasiRandomData);
 	}
 
-	for (int32 SamplePassIndex = 0; SamplePassIndex < SamplePerPixel; SamplePassIndex++)
+	for (int32 SamplePassIndex = 0; SamplePassIndex < Options.SamplesPerPixel; SamplePassIndex++)
 	{
-		if (SamplePerPixel > 1)
+		if (Options.SamplesPerPixel > 1)
 		{
 			CommonParameters.SampleMode = (int32)ESamplePhase::Accum;
 			CommonParameters.SampleMode = SamplePassIndex == 0 ? (int32)ESamplePhase::Init : CommonParameters.SampleMode;
-			CommonParameters.SampleMode = SamplePassIndex == (SamplePerPixel - 1) ? (int32)ESamplePhase::Resolve : CommonParameters.SampleMode;
+			CommonParameters.SampleMode = SamplePassIndex == (Options.SamplesPerPixel - 1) ? (int32)ESamplePhase::Resolve : CommonParameters.SampleMode;
 		}
 		CommonParameters.SampleOffset = SamplePassIndex;
 
@@ -665,7 +750,7 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 					ERDGPassFlags::Compute,
 					[PassParameters, this, &View, RayGenShader, TileAlignedResolution](FRHICommandList& RHICmdList)
 				{
-					FRayTracingPipelineState* Pipeline = BindRayTracingDeferredMaterialGatherPipeline(RHICmdList, View, RayGenShader.GetRayTracingShader());
+					FRayTracingPipelineState* Pipeline = View.RayTracingMaterialGatherPipeline;
 
 					FRayTracingShaderBindingsWriter GlobalResources;
 					SetShaderParameters(GlobalResources, RayGenShader, *PassParameters);
@@ -688,7 +773,7 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 				if (NumPasses > 1 || RenderTileSize <= 0)
 				{
 					GraphBuilder.AddPass(
-						RDG_EVENT_NAME("ReflectionRayTracing(spp=%d) %dx%d", SamplePerPixel, RayTracingResolution.X, RayTracingResolution.Y),
+						RDG_EVENT_NAME("ReflectionRayTracing(spp=%d) %dx%d", Options.SamplesPerPixel, RayTracingResolution.X, RayTracingResolution.Y),
 						PassParameters,
 						ERDGPassFlags::Compute,
 						[PassParameters, this, &View, RayGenShader, RayTracingResolution, DeferredMaterialBufferNumElements, DeferredMaterialMode](FRHICommandList& RHICmdList)
@@ -731,7 +816,7 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 							int32 DispatchSizeX = FMath::Min<int32>(RenderTileSize, RayTracingResolution.X - TilePassParameters->RenderTileOffsetX);
 							int32 DispatchSizeY = FMath::Min<int32>(RenderTileSize, RayTracingResolution.Y - TilePassParameters->RenderTileOffsetY);
 							GraphBuilder.AddPass(
-								RDG_EVENT_NAME("ReflectionRayTracing(spp=%d) %dx%d", SamplePerPixel, DispatchSizeX, DispatchSizeY),
+								RDG_EVENT_NAME("ReflectionRayTracing(spp=%d) %dx%d", Options.SamplesPerPixel, DispatchSizeX, DispatchSizeY),
 								TilePassParameters,
 								ERDGPassFlags::Compute,
 								[TilePassParameters, this, &View, RayGenShader, DispatchSizeX, DispatchSizeY, DeferredMaterialBufferNumElements, DeferredMaterialMode](FRHICommandList& RHICmdList)
@@ -755,7 +840,7 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 		// Create a texture for the world-space normal imaginary reflection g-buffer.
 		FRDGTextureRef ImaginaryReflectionGBufferATexture;
 		{
-			FRDGTextureDesc Desc(FRDGTextureDesc::Create2DDesc(RayTracingBufferSize, SceneContext.GetGBufferAFormat(), FClearValueBinding::Transparent, TexCreate_None, TexCreate_ShaderResource | TexCreate_UAV, false));
+			FRDGTextureDesc Desc(FRDGTextureDesc::Create2D(RayTracingBufferSize, SceneContext.GetGBufferAFormat(), FClearValueBinding::Transparent, TexCreate_ShaderResource | TexCreate_UAV));
 			ImaginaryReflectionGBufferATexture = GraphBuilder.CreateTexture(Desc, TEXT("ImaginaryReflectionGBufferA"));
 		}
 
@@ -763,14 +848,14 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 		FRDGTextureRef ImaginaryReflectionDepthZTexture;
 		{
 			// R32_FLOAT used instead of usual depth/stencil format to work as a normal SRV/UAV rather a depth target
-			FRDGTextureDesc Desc(FRDGTextureDesc::Create2DDesc(RayTracingBufferSize, PF_R32_FLOAT, SceneContext.GetDefaultDepthClear(), TexCreate_None, TexCreate_ShaderResource | TexCreate_UAV, false));
+			FRDGTextureDesc Desc(FRDGTextureDesc::Create2D(RayTracingBufferSize, PF_R32_FLOAT, SceneContext.GetDefaultDepthClear(), TexCreate_ShaderResource | TexCreate_UAV));
 			ImaginaryReflectionDepthZTexture = GraphBuilder.CreateTexture(Desc, TEXT("ImaginaryReflectionDepthZ"));
 		}
 
 		// Create a texture for the velocity imaginary reflection g-buffer.
 		FRDGTextureRef ImaginaryReflectionGBufferVelocityTexture;
 		{
-			FRDGTextureDesc Desc(FRDGTextureDesc::Create2DDesc(RayTracingBufferSize, FVelocityRendering::GetFormat(), FClearValueBinding::Transparent, TexCreate_None, TexCreate_ShaderResource | TexCreate_UAV, false));
+			FRDGTextureDesc Desc(FRDGTextureDesc::Create2D(RayTracingBufferSize, FVelocityRendering::GetFormat(View.GetShaderPlatform()), FClearValueBinding::Transparent, TexCreate_ShaderResource | TexCreate_UAV));
 			ImaginaryReflectionGBufferVelocityTexture = GraphBuilder.CreateTexture(Desc, TEXT("ImaginaryReflectionGBufferVelocity"));
 		}
 
@@ -809,3 +894,42 @@ void FDeferredShadingSceneRenderer::RenderRayTracingReflections(
 	check(0);
 }
 #endif
+
+FRayTracingReflectionOptions GetRayTracingReflectionOptions(const FViewInfo& View, const FScene& Scene)
+{
+	FRayTracingReflectionOptions Result;
+
+#if RHI_RAYTRACING
+
+	Result.bEnabled = ShouldRenderRayTracingReflections(View);
+
+	if (ShouldRayTracedReflectionsUseSortedDeferredAlgorithm(View))
+	{
+		Result.Algorithm = FRayTracingReflectionOptions::SortedDeferred;
+	}
+	else if (ShouldRayTracedReflectionsSortMaterials(View))
+	{
+		Result.Algorithm = FRayTracingReflectionOptions::Sorted;
+	}
+	else
+	{
+		Result.Algorithm = FRayTracingReflectionOptions::EAlgorithm::BruteForce;
+	}
+
+	Result.SamplesPerPixel = GetRayTracingReflectionsSamplesPerPixel(View);
+	Result.ResolutionFraction = FMath::Clamp(CVarReflectionScreenPercentage.GetValueOnRenderThread() / 100.0f, 0.25f, 1.0f);
+	Result.MaxRoughness = GetRayTracingReflectionsMaxRoughness(View);
+	Result.bSkyLight = ShouldRayTracedReflectionsRayTraceSkyLightContribution(Scene);
+
+	Result.bDirectLighting = GRayTracingReflectionsDirectLighting != 0;
+	Result.bEmissiveAndIndirectLighting = GRayTracingReflectionsEmissiveAndIndirectLighting != 0;
+	Result.bReflectionCaptures = GRayTracingReflectionsCaptures != 0;
+
+#else // RHI_RAYTRACING
+
+	Result.bEnabled = false;
+
+#endif // RHI_RAYTRACING
+
+	return Result;
+}

@@ -17,7 +17,7 @@
 #include "Toolkits/IToolkitHost.h"
 #include "IPhysicsAssetEditor.h"
 #include "Editor/PhysicsAssetEditor/Private/PhysicsAssetEditorSharedData.h"
-#include "PhysicsEngine/BodySetupEnums.h"
+#include "BodySetupEnums.h"
 #include "Containers/ArrayView.h"
 #include "GraphEditor.h"
 
@@ -158,6 +158,9 @@ private:
 	virtual void PostRedo(bool bSuccess) override;
 	// End of FEditorUndoClient
 	
+	/** Called when an asset has just been imported */
+	void OnAssetReimport(UObject* Object);
+
 	/** Builds the menu for the PhysicsAsset editor */
 	void ExtendMenu();
 
@@ -233,6 +236,12 @@ private:
 	bool CanSetCollision(bool bEnable) const;
 	void OnSetCollisionAll(bool bEnable);
 	bool CanSetCollisionAll(bool bEnable) const;
+	void OnSetPrimitiveCollision(ECollisionEnabled::Type CollisionEnabled);
+	bool CanSetPrimitiveCollision(ECollisionEnabled::Type CollisionEnabled) const;
+	bool IsPrimitiveCollisionChecked(ECollisionEnabled::Type CollisionEnabled) const;
+	void OnSetPrimitiveContributeToMass();
+	bool CanSetPrimitiveContributeToMass() const;
+	bool GetPrimitiveContributeToMass() const;
 	void OnWeldToBody();
 	bool CanWeldToBody();
 	void OnAddSphere();
@@ -275,6 +284,11 @@ private:
 	void OnSelectAllConstraints();
 	void OnToggleSelectionType();
 	void OnToggleShowSelected();
+	void OnShowSelected();
+	void OnHideSelected();
+	void OnToggleShowOnlySelected();
+	void OnShowAll();
+	void OnHideAll();
 	void OnDeselectAll();
 
 	FText GetRepeatLastSimulationToolTip() const;
@@ -346,6 +360,9 @@ private:
 
 	/** Command list for viewport operations */
 	TSharedPtr<FUICommandList_Pinnable> ViewportCommandList;
+
+	/** To unregister reimport handler */
+	FDelegateHandle OnAssetReimportDelegateHandle;
 
 	void FixPhysicsState();
 	void ImpToggleSimulation();

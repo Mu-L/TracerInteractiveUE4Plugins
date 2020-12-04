@@ -15,8 +15,7 @@ struct FCollisionQueryParams;
 
 namespace Chaos
 {
-	template <class T, int d>
-	class TPerShapeData;
+	class FPerShapeData;
 }
 
 namespace ChaosInterface
@@ -26,7 +25,7 @@ namespace ChaosInterface
 #if WITH_CHAOS
 struct FScopedSceneReadLock
 {
-	FScopedSceneReadLock(FPhysScene_ChaosInterface& SceneIn);
+	FScopedSceneReadLock(FPhysScene_Chaos& SceneIn);
 	~FScopedSceneReadLock();
 
 	FPhysScene_Chaos& Scene;
@@ -35,10 +34,10 @@ struct FScopedSceneReadLock
 
 inline FQueryFilterData MakeQueryFilterData(const FCollisionFilterData& FilterData, EQueryFlags QueryFlags, const FCollisionQueryParams& Params)
 {
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	return PxQueryFilterData(U2PFilterData(FilterData), U2PQueryFlags(QueryFlags));
 #else
-	return FQueryFilterData();
+	return FChaosQueryFilterData(U2CFilterData(FilterData), U2CQueryFlags(QueryFlags));
 #endif
 }
 

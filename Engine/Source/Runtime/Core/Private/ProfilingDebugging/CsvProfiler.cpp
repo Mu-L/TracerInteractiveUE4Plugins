@@ -26,6 +26,9 @@
 #include "Stats/Stats.h"
 #include "HAL/LowLevelMemTracker.h"
 #include "Misc/Compression.h"
+#include "Misc/Fork.h"
+
+#include "HAL/PlatformMisc.h"
 
 #if CSV_PROFILER
 
@@ -1550,8 +1553,11 @@ class FCsvStreamWriter
 	TArray<FCsvStatSeries*> AllSeries;
 	TArray<class FCsvProfilerThreadDataProcessor*> DataProcessors;
 
+	uint32 RenderThreadId;
+	uint32 RHIThreadId;
+
 public:
-	FCsvStreamWriter(const TSharedRef<FArchive>& InOutputFile, bool bInContinuousWrites, int32 InBufferSize, bool bInCompressOutput);
+	FCsvStreamWriter(const TSharedRef<FArchive>& InOutputFile, bool bInContinuousWrites, int32 InBufferSize, bool bInCompressOutput, uint32 RenderThreadId, uint32 RHIThreadId);
 	~FCsvStreamWriter();
 
 	void AddSeries(FCsvStatSeries* Series);
@@ -1636,23 +1642,6 @@ private:
 	static CSV_PROFILER_INLINE uint64 GetStatID(const char* StatName) { return uint64(StatName); }
 	static CSV_PROFILER_INLINE uint64 GetStatID(const FName& StatId) { return StatId.GetComparisonIndex().ToUnstableInt(); }
 
-	static inline FString GenerateThreadName(uint32 ThreadId)
-	{
-		// Determine the thread name
-		if (ThreadId == GGameThreadId)
-		{
-			return TEXT("GameThread");
-		}
-		else if (ThreadId == GRenderThreadId)
-		{
-			return TEXT("RenderThread");
-		}
-		else
-		{
-			return FThreadManager::Get().GetThreadName(ThreadId);
-		}
-	}
-
 	static FCriticalSection TlsCS;
 	static TArray<FWeakPtr> TlsInstances;
 	static uint32 TlsSlot;
@@ -1712,7 +1701,7 @@ public:
 
 	FCsvProfilerThreadData()
 		: ThreadId(FPlatformTLS::GetCurrentThreadId())
-		, ThreadName(GenerateThreadName(ThreadId))
+		, ThreadName(FThreadManager::GetThreadName(ThreadId))
 		, DataProcessor(nullptr)
 	{
 	}
@@ -1912,11 +1901,16 @@ class FCsvProfilerThreadDataProcessor
 
 	uint64 LastProcessedTimestamp;
 
+	uint32 RenderThreadId;
+	uint32 RHIThreadId;
+
 public:
-	FCsvProfilerThreadDataProcessor(FCsvProfilerThreadData::FSharedPtr InThreadData, FCsvStreamWriter* InWriter)
+	FCsvProfilerThreadDataProcessor(FCsvProfilerThreadData::FSharedPtr InThreadData, FCsvStreamWriter* InWriter, uint32 InRenderThreadId, uint32 InRHIThreadId)
 		: ThreadData(InThreadData)
 		, Writer(InWriter)
 		, LastProcessedTimestamp(0)
+		, RenderThreadId(InRenderThreadId)
+		, RHIThreadId(InRHIThreadId)
 	{
 		check(ThreadData->DataProcessor == nullptr);
 		ThreadData->DataProcessor = this;
@@ -1974,12 +1968,14 @@ private:
 	}
 };
 
-FCsvStreamWriter::FCsvStreamWriter(const TSharedRef<FArchive>& InOutputFile, bool bInContinuousWrites, int32 InBufferSize, bool bInCompressOutput)
+FCsvStreamWriter::FCsvStreamWriter(const TSharedRef<FArchive>& InOutputFile, bool bInContinuousWrites, int32 InBufferSize, bool bInCompressOutput, uint32 InRenderThreadId, uint32 InRHIThreadId)
 	: Stream(InOutputFile, InBufferSize, bInCompressOutput)
 	, WriteFrameIndex(-1)
 	, ReadFrameIndex(-1)
 	, bContinuousWrites(bInContinuousWrites)
 	, bFirstRow(true)
+	, RenderThreadId(InRenderThreadId)
+	, RHIThreadId(InRHIThreadId)
 {}
 
 FCsvStreamWriter::~FCsvStreamWriter()
@@ -2140,7 +2136,7 @@ void FCsvStreamWriter::Process(FCsvProcessThreadDataStats& OutStats)
 	{
 		if (!Data->DataProcessor)
 		{
-			DataProcessors.Add(new FCsvProfilerThreadDataProcessor(Data, this));
+			DataProcessors.Add(new FCsvProfilerThreadDataProcessor(Data, this, RenderThreadId, RHIThreadId));
 		}
 	}
 
@@ -2188,9 +2184,9 @@ public:
 		: CsvProfiler(InCsvProfiler)
 	{
 #if CSV_THREAD_HIGH_PRI
-		Thread = FRunnableThread::Create(this, TEXT("CSVProfiler"), 0, TPri_Highest, FPlatformAffinity::GetTaskGraphThreadMask());
+		Thread = FForkProcessHelper::CreateForkableThread(this, TEXT("CSVProfiler"), 0, TPri_Highest, FPlatformAffinity::GetTaskGraphThreadMask());
 #else
-		Thread = FRunnableThread::Create(this, TEXT("CSVProfiler"), 0, TPri_Lowest, FPlatformAffinity::GetTaskGraphBackgroundTaskMask());
+		Thread = FForkProcessHelper::CreateForkableThread(this, TEXT("CSVProfiler"), 0, TPri_Lowest, FPlatformAffinity::GetTaskGraphBackgroundTaskMask());
 #endif
 	}
 
@@ -2202,6 +2198,11 @@ public:
 			delete Thread;
 			Thread = nullptr;
 		}
+	}
+
+	bool IsValid() const
+	{
+		return Thread != nullptr;
 	}
 
 	// FRunnable interface
@@ -2267,7 +2268,7 @@ void FCsvProfilerThreadDataProcessor::Process(FCsvProcessThreadDataStats& OutSta
 	// Flush the frame boundaries after the stat data. This way, we ensure the frame boundary data is up to date
 	// (we do not want to encounter markers from a frame which hasn't been registered yet)
 	FPlatformMisc::MemoryBarrier();
-	ECsvTimeline::Type Timeline = (ThreadData->ThreadId == GRenderThreadId || ThreadData->ThreadId == GRHIThreadId) ? ECsvTimeline::Renderthread : ECsvTimeline::Gamethread;
+	ECsvTimeline::Type Timeline = (ThreadData->ThreadId == RenderThreadId || ThreadData->ThreadId == RHIThreadId) ? ECsvTimeline::Renderthread : ECsvTimeline::Gamethread;
 
 	if (ThreadMarkers.Num() > 0)
 	{
@@ -2590,7 +2591,7 @@ void FCsvProfiler::BeginFrame()
 				else
 				{
 					
-					CsvWriter = new FCsvStreamWriter(OutputFile.ToSharedRef(), bContinuousWrites, BufferSize, bCompressOutput);
+					CsvWriter = new FCsvStreamWriter(OutputFile.ToSharedRef(), bContinuousWrites, BufferSize, bCompressOutput, RenderThreadId, RHIThreadId);
 
 					NumFramesToCapture = CurrentCommand.Value;
 					GCsvRepeatFrameCount = NumFramesToCapture;
@@ -2602,6 +2603,13 @@ void FCsvProfiler::BeginFrame()
 					{
 						// Lazily create the CSV processing thread
 						ProcessingThread = new FCsvProfilerProcessingThread(*this);
+						if (ProcessingThread->IsValid() == false)
+						{
+							UE_LOG(LogCsvProfiler, Error, TEXT("CSV Processing Thread could not be created due to being in a single-thread environment "));
+							delete ProcessingThread;
+							ProcessingThread = nullptr;
+							GCsvUseProcessingThread = false;
+						}
 					}
 
 					// Figure out the target framerate
@@ -2614,7 +2622,7 @@ void FCsvProfiler::BeginFrame()
 					}
 					if (SyncIntervalCVar && SyncIntervalCVar->GetInt() > 0)
 					{
-						TargetFPS = FMath::Min(TargetFPS, 60 / SyncIntervalCVar->GetInt());
+						TargetFPS = FMath::Min(TargetFPS, FPlatformMisc::GetMaxRefreshRate() / SyncIntervalCVar->GetInt());
 					}
 					SetMetadata(TEXT("TargetFramerate"), *FString::FromInt(TargetFPS));
 
@@ -2623,11 +2631,17 @@ void FCsvProfiler::BeginFrame()
 					SetMetadata(TEXT("ExtraDevelopmentMemoryMB"), *FString::FromInt(ExtraDevelopmentMemoryMB)); 
 #endif
 
+#if PLATFORM_COMPILER_OPTIMIZATION_PG
+					SetMetadata(TEXT("PGOEnabled"), TEXT("1"));
+#else
+					SetMetadata(TEXT("PGOEnabled"), TEXT("0"));
+#endif
+
 					GCsvStatCounts = !!CVarCsvStatCounts.GetValueOnGameThread();
 
 					// Initialize tls before setting the capturing flag to true.
 					FCsvProfilerThreadData::InitTls();
-					TRACE_CSV_PROFILER_BEGIN_CAPTURE(*Filename, GRenderThreadId, GRHIThreadId, GDefaultWaitStatName, GCsvStatCounts);
+					TRACE_CSV_PROFILER_BEGIN_CAPTURE(*Filename, RenderThreadId, RHIThreadId, GDefaultWaitStatName, GCsvStatCounts);
 					GCsvProfilerIsCapturing = true;
 				}
 			}
@@ -2800,6 +2814,32 @@ void FCsvProfiler::EndFrame()
 	GCsvProfilerFrameNumber++;
 }
 
+void FCsvProfiler::OnEndFramePostFork()
+{
+	if (FForkProcessHelper::IsForkedMultithreadInstance())
+	{
+		if (FParse::Param(FCommandLine::Get(), TEXT("csvNoProcessingThread")))
+		{
+			GCsvUseProcessingThread = false;
+		}
+		else 
+		{
+			if (ProcessingThread == nullptr)
+			{
+				GCsvUseProcessingThread = true;
+				// Lazily create the CSV processing thread
+				ProcessingThread = new FCsvProfilerProcessingThread(*this);
+				if (ProcessingThread->IsValid() == false)
+				{
+					UE_LOG(LogCsvProfiler, Error, TEXT("CSV Processing Thread could not be created due to being in a single-thread environment "));
+					delete ProcessingThread;
+					ProcessingThread = nullptr;
+					GCsvUseProcessingThread = false;
+				}
+			}
+		}
+	}
+}
 
 /** Per-frame update */
 void FCsvProfiler::BeginFrameRT()
@@ -3272,6 +3312,12 @@ bool FCsvProfiler::EnableCategoryByString(const FString& CategoryName) const
 		return true;
 	}
 	return false;
+}
+
+void FCsvProfiler::EnableCategoryByIndex(uint32 CategoryIndex, bool bEnable) const
+{
+	check(CategoryIndex < CSV_MAX_CATEGORY_COUNT);
+	GCsvCategoriesEnabled[CategoryIndex] = bEnable;
 }
 
 bool FCsvProfiler::IsCapturing_Renderthread()

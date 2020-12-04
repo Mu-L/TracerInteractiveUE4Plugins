@@ -1,6 +1,11 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
+#include "CoreTypes.h"
+#include "UObject/ObjectMacros.h"
+
+#include <UObject/ObjectMacros.h>
+
 /**
  * Only used when stream caching is enabled. Determines how we are going to load or retain a given audio asset.
  * A USoundWave's loading behavior can be overridden in the USoundWave itself, the sound wave's USoundClass, or by cvars.
@@ -26,3 +31,5 @@ enum class ESoundWaveLoadingBehavior : uint8
 	// This value is used to delineate when the value of ESoundWaveLoadingBehavior hasn't been cached on a USoundWave yet.
 	Uninitialized = 0xff UMETA(Hidden)
 };
+
+const TCHAR* EnumToString(ESoundWaveLoadingBehavior InCurrentState);

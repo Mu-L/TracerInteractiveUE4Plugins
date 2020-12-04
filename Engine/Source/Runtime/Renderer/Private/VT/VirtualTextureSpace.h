@@ -20,7 +20,9 @@ struct FVTSpaceDescription
 	uint8 Dimensions = 0u;
 	EVTPageTableFormat PageTableFormat = EVTPageTableFormat::UInt16;
 	uint8 NumPageTableLayers = 0u;
-	uint8 bPrivateSpace : 1;
+	uint8 bPrivateSpace = false;
+	uint32 MaxSpaceSize = VIRTUALTEXTURE_MAX_PAGETABLE_SIZE;
+	uint32 IndirectionTextureSize = 0u;
 };
 
 inline bool operator==(const FVTSpaceDescription& Lhs, const FVTSpaceDescription& Rhs)
@@ -30,7 +32,9 @@ inline bool operator==(const FVTSpaceDescription& Lhs, const FVTSpaceDescription
 		Lhs.TileBorderSize == Rhs.TileBorderSize &&
 		Lhs.NumPageTableLayers == Rhs.NumPageTableLayers &&
 		Lhs.PageTableFormat == Rhs.PageTableFormat &&
-		Lhs.bPrivateSpace == Rhs.bPrivateSpace;
+		Lhs.bPrivateSpace == Rhs.bPrivateSpace &&
+		Lhs.MaxSpaceSize == Rhs.MaxSpaceSize &&
+		Lhs.IndirectionTextureSize == Rhs.IndirectionTextureSize;
 }
 inline bool operator!=(const FVTSpaceDescription& Lhs, const FVTSpaceDescription& Rhs)
 {
@@ -80,9 +84,14 @@ public:
 		return PageTable[PageTableIndex].TextureReferenceRHI.GetReference();
 	}
 
+	FRHITextureReference* GetPageTableIndirectionTexture() const
+	{
+		return PageTableIndirection.TextureReferenceRHI.GetReference();
+	}
+
 	void				QueueUpdate( uint8 Layer, uint8 vLogSize, uint32 vAddress, uint8 vLevel, const FPhysicalTileLocation& pTileLocation);
 	void				AllocateTextures(FRHICommandList& RHICmdList);
-	void				ApplyUpdates(FVirtualTextureSystem* System, FRHICommandList& RHICmdList);
+	void				ApplyUpdates(FVirtualTextureSystem* System, FRHICommandListImmediate& RHICmdList);
 	void				QueueUpdateEntirePageTable();
 
 	void DumpToConsole(bool verbose);
@@ -103,7 +112,9 @@ private:
 
 	FTextureEntry PageTable[TextureCapacity];
 	TEnumAsByte<EPixelFormat> TexturePixelFormat[TextureCapacity];
-	
+
+	FTextureEntry PageTableIndirection;
+
 	TArray<FPageTableUpdate> PageTableUpdates[VIRTUALTEXTURE_SPACE_MAXLAYERS];
 
 	FVertexBufferRHIRef UpdateBuffer;
@@ -115,5 +126,6 @@ private:
 
 	uint8 ID;
 	bool bNeedToAllocatePageTable;
+	bool bNeedToAllocatePageTableIndirection;
 	bool bForceEntireUpdate;
 };

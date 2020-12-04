@@ -15,23 +15,11 @@
 
 void UMoviePipelineWidgetRenderer::GatherOutputPassesImpl(TArray<FMoviePipelinePassIdentifier>& ExpectedRenderPasses)
 {
-	// If this was transiently added, don't render.
-	if (!GetIsUserCustomized() || !IsEnabled())
-	{
-		return;
-	}
-
 	ExpectedRenderPasses.Add(FMoviePipelinePassIdentifier(TEXT("ViewportUI")));
 }
 
 void UMoviePipelineWidgetRenderer::RenderSample_GameThreadImpl(const FMoviePipelineRenderPassMetrics& InSampleState)
 {
-	// If this was transiently added, don't make a burn-in.
-	if (!GetIsUserCustomized() || !IsEnabled())
-	{
-		return;
-	}
-
 	if (InSampleState.bDiscardResult)
 	{
 		return;
@@ -70,26 +58,20 @@ void UMoviePipelineWidgetRenderer::RenderSample_GameThreadImpl(const FMoviePipel
 			RHICmdList.ReadSurfaceData(BackbufferRenderTarget->GetRenderTargetTexture(), SourceRect, RawPixels, ReadDataFlags);
 
 			TSharedRef<FImagePixelDataPayload, ESPMode::ThreadSafe> FrameData = MakeShared<FImagePixelDataPayload, ESPMode::ThreadSafe>();
-			FrameData->OutputState = InSampleState.OutputState;
 			FrameData->PassIdentifier = FMoviePipelinePassIdentifier(TEXT("ViewportUI"));
 			FrameData->SampleState = InSampleState;
 			FrameData->bRequireTransparentOutput = true;
+			FrameData->SortingOrder = 4;
 
 			TUniquePtr<FImagePixelData> PixelData = MakeUnique<TImagePixelData<FColor>>(InSampleState.BackbufferSize, TArray64<FColor>(MoveTemp(RawPixels)), FrameData);
 
-			OutputBuilder->OnCompleteRenderPassDataAvailable_AnyThread(MoveTemp(PixelData), FrameData);
+			OutputBuilder->OnCompleteRenderPassDataAvailable_AnyThread(MoveTemp(PixelData));
 		});
 	}
 }
 
-void UMoviePipelineWidgetRenderer::SetupImpl(TArray<TSharedPtr<MoviePipeline::FMoviePipelineEnginePass>>& InEnginePasses, const MoviePipeline::FMoviePipelineRenderPassInitSettings& InPassInitSettings)
+void UMoviePipelineWidgetRenderer::SetupImpl(const MoviePipeline::FMoviePipelineRenderPassInitSettings& InPassInitSettings)
 {
-	// If this was transiently added, don't render.
-	if (!GetIsUserCustomized() || !IsEnabled())
-	{
-		return;
-	}
-
 	RenderTarget = NewObject<UTextureRenderTarget2D>();
 	RenderTarget->ClearColor = FLinearColor::Transparent;
 
@@ -103,19 +85,15 @@ void UMoviePipelineWidgetRenderer::SetupImpl(TArray<TSharedPtr<MoviePipeline::FM
 
 void UMoviePipelineWidgetRenderer::TeardownImpl() 
 {
-	// If this was transiently added, don't render.
-	if (!GetIsUserCustomized() || !IsEnabled())
-	{
-		return;
-	}
-	
 	FlushRenderingCommands();
 
 	WidgetRenderer = nullptr;
 	RenderTarget = nullptr;
 }
 
+#if WITH_EDITOR
 FText UMoviePipelineWidgetRenderer::GetFooterText(UMoviePipelineExecutorJob* InJob) const
 { 
 	return NSLOCTEXT("MovieRenderPipeline", "WidgetRenderSetting_NoCompositeWarning", "This will render widgets added to the Viewport to a separate texture with alpha. This is currently not composited onto the final image, and will need to be combined in post.");
 }
+#endif

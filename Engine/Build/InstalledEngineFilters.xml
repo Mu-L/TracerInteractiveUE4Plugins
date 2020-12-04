@@ -8,8 +8,8 @@
 			<Expand Name="FilterRestrictedFolders$(Platform)"/>
 		</ForEach>
 		<Do If="'$(RestrictedFolderName)' != ''">
-			<Property Name="ConfidentialExceptions" Value="$(ConfidentialExceptions);" If="'$(ConfidentialExceptions)' != ''"/>
-			<Property Name="ConfidentialExceptions" Value="$(ConfidentialExceptions).../$(RestrictedFolderName)/..."/>
+				<Property Name="ConfidentialExceptions" Value="$(ConfidentialExceptions);" If="'$(ConfidentialExceptions)' != ''"/>
+				<Property Name="ConfidentialExceptions" Value="$(ConfidentialExceptions).../$(RestrictedFolderName)/..."/>
 		</Do>
 	</ForEach>
 
@@ -65,7 +65,6 @@
 		TP_VehicleAdvBP
 		TP_VehicleBP
 		TP_VirtualRealityBP
-		TP_CollaborativeBP
 	</Property>
 
 	<!-- List of projects to build DDC for -->
@@ -92,6 +91,8 @@
 	</Property>
 	<!-- Win64 specific DDC -->
 	<Property Name="ProjectsToBuildDDCWin64" Value="$(ProjectsToBuildDDC)">
+		Templates/TP_InCamVFXBP/TP_InCamVFXBP.uproject
+		Templates/TP_DMXBP/TP_DMXBP.uproject
 	</Property>
 	
 	<!-- Define Editor Filters -->
@@ -274,7 +275,7 @@
 		<!-- Build utilities -->
 		Engine/Build/Windows/cl-filter/cl-filter.exe
 		Engine/Build/Windows/link-filter/link-filter.exe
-		Engine/Source/ThirdParty/IntelISPC/bin/Windows/ispc.exe
+		Engine/Source/ThirdParty/Intel/ISPC/bin/Windows/ispc.exe
 
 		<!-- Default resource files -->
 		Engine/Build/Windows/Resources/...
@@ -295,6 +296,11 @@
 
 		<!-- Enterprise Templates -->
 		Templates/TP_HololensBP/...
+		Templates/TP_InCamVFXBP/...
+		Templates/TP_DMXBP/...
+
+		<!-- CsvTools binaries which are manually updated in P4 -->
+		Engine/Binaries/DotNET/CsvTools/...
 	</Property>
 
 	<Property Name="CopyEditorExceptionsWin64" Value="$(CopyEditorExceptions)">
@@ -311,6 +317,7 @@
 		Engine/Build/BatchFiles/Mac/GenerateLLDBInit.sh
 		Engine/Build/BatchFiles/Mac/FixDependencyFiles.sh
 		Engine/Build/BatchFiles/Mac/GenerateProjectFiles.sh
+		Engine/Build/BatchFiles/Mac/SetupEnvironment.sh
 		Engine/Build/BatchFiles/Mac/SetupMono.sh
 		Engine/Build/BatchFiles/Mac/FixMonoFiles.sh
 		Engine/Build/BatchFiles/Mac/RunMono.sh
@@ -348,6 +355,7 @@
 		Engine/Build/BatchFiles/Linux/GenerateProjectFiles.sh
 		Engine/Build/BatchFiles/Linux/QASmokeManual.sh
 		Engine/Build/BatchFiles/Linux/Setup.sh
+		Engine/Build/BatchFiles/Linux/SetupEnvironment.sh
 		Engine/Build/BatchFiles/Linux/SetupMono.sh
 		Engine/Build/BatchFiles/Linux/FixMonoFiles.sh
 		Engine/Build/BatchFiles/Linux/RunMono.sh
@@ -520,8 +528,8 @@
 	<!-- Platform extensions filter overrides -->
 	<ForEach Name="Platform" Values="$(ExtensionPlatforms)">
 		<Expand Name="$(Platform)FilterOverrides"/>
-	</ForEach>
-
+		</ForEach>
+	
 	<!-- Lumin -->
 	<Property Name="CopyLuminFilter">
 		<!-- Build Files -->

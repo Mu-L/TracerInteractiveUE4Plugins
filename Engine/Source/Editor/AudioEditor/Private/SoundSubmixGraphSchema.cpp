@@ -124,52 +124,6 @@ bool USoundSubmixGraphSchema::ConnectionCausesLoop(const UEdGraphPin* InputPin, 
 	return OutputNode->SoundSubmix->RecurseCheckChild(InputNode->SoundSubmix);
 }
 
-void USoundSubmixGraphSchema::GetBreakLinkToSubMenuActions(UToolMenu* Menu, const FName SectionName, UEdGraphPin* InGraphPin)
-{
-	FToolMenuSection& Section = Menu->FindOrAddSection(SectionName);
-
-	// Make sure we have a unique name for every entry in the list
-	TMap<FString, uint32> LinkTitleCount;
-
-	// Add all the links we could break from
-	for(TArray<class UEdGraphPin*>::TConstIterator Links(InGraphPin->LinkedTo); Links; ++Links)
-	{
-		UEdGraphPin* Pin = *Links;
-		FString TitleString = Pin->GetOwningNode()->GetNodeTitle(ENodeTitleType::ListView).ToString();
-		FText Title = FText::FromString(TitleString);
-		if (Pin->PinName != TEXT(""))
-		{
-			TitleString = FString::Printf(TEXT("%s (%s)"), *TitleString, *Pin->PinName.ToString());
-
-			// Add name of connection if possible
-			FFormatNamedArguments Args;
-			Args.Add(TEXT("NodeTitle"), Title);
-			Args.Add(TEXT("PinName"), Pin->GetDisplayName());
-			Title = FText::Format(LOCTEXT("BreakDescPin", "{NodeTitle} ({PinName})"), Args);
-		}
-
-		uint32 &Count = LinkTitleCount.FindOrAdd(TitleString);
-
-		FText Description;
-		FFormatNamedArguments Args;
-		Args.Add(TEXT("NodeTitle"), Title);
-		Args.Add(TEXT("NumberOfNodes"), Count);
-
-		if (Count == 0)
-		{
-			Description = FText::Format(LOCTEXT("BreakDesc", "Break link to {NodeTitle}"), Args);
-		}
-		else
-		{
-			Description = FText::Format(LOCTEXT("BreakDescMulti", "Break link to {NodeTitle} ({NumberOfNodes})"), Args);
-		}
-		++Count;
-
-		Section.AddMenuEntry(NAME_None, Description, Description, FSlateIcon(), FUIAction(
-			FExecuteAction::CreateUObject((USoundSubmixGraphSchema*const)this, &USoundSubmixGraphSchema::BreakSinglePinLink, const_cast< UEdGraphPin* >(InGraphPin), *Links)));
-	}
-}
-
 void USoundSubmixGraphSchema::GetGraphContextActions(FGraphContextMenuBuilder& ContextMenuBuilder) const
 {
 	const FText Name = LOCTEXT("NewSoundSubmix", "New Sound Submix");
@@ -182,34 +136,7 @@ void USoundSubmixGraphSchema::GetGraphContextActions(FGraphContextMenuBuilder& C
 
 void USoundSubmixGraphSchema::GetContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const
 {
-	if (Context->Pin)
-	{
-		const UEdGraphPin* InGraphPin = Context->Pin;
-		{
-			const static FName SectionName = "SoundSubmixGraphSchemaPinActions";
-			FToolMenuSection& Section = Menu->AddSection(SectionName, LOCTEXT("PinActionsMenuHeader", "Pin Actions"));
-			// Only display the 'Break Links' option if there is a link to break!
-			if (InGraphPin->LinkedTo.Num() > 0)
-			{
-				Section.AddMenuEntry(FGraphEditorCommands::Get().BreakPinLinks);
-
-				// add sub menu for break link to
-				if(InGraphPin->LinkedTo.Num() > 1)
-				{
-					Section.AddSubMenu(
-						"BreakLinkTo",
-						LOCTEXT("BreakLinkTo", "Break Link To..." ),
-						LOCTEXT("BreakSpecificLinks", "Break a specific link..." ),
-						FNewToolMenuDelegate::CreateUObject((USoundSubmixGraphSchema*const)this, &USoundSubmixGraphSchema::GetBreakLinkToSubMenuActions, SectionName, const_cast<UEdGraphPin*>(InGraphPin)));
-				}
-				else
-				{
-					((USoundSubmixGraphSchema*const)this)->GetBreakLinkToSubMenuActions(Menu, SectionName, const_cast<UEdGraphPin*>(InGraphPin));
-				}
-			}
-		}
-	}
-	else if (Context->Node)
+	if (Context->Node)
 	{
 		const USoundSubmixGraphNode* SoundGraphNode = Cast<const USoundSubmixGraphNode>(Context->Node);
 		{
@@ -356,32 +283,17 @@ bool USoundSubmixGraphSchema::TryCreateConnection(UEdGraphPin* PinA, UEdGraphPin
 		USoundSubmixBase* SubmixA = CastChecked<USoundSubmixGraphNode>(PinA->GetOwningNode())->SoundSubmix;
 		USoundSubmixBase* SubmixB = CastChecked<USoundSubmixGraphNode>(PinB->GetOwningNode())->SoundSubmix;
 
-		bool bReopenEditors = false;
-
 		USoundSubmixWithParentBase* SubmixWithParentA = Cast<USoundSubmixWithParentBase>(SubmixA);
 		USoundSubmixWithParentBase* SubmixWithParentB = Cast<USoundSubmixWithParentBase>(SubmixA);
 
 		// If re-basing root, re-open editor.  This will force the root to be the primary edited node
 		if (Graph->GetRootSoundSubmix() == SubmixA && SubmixWithParentA && SubmixWithParentA->ParentSubmix != nullptr)
 		{
-			bReopenEditors = true;
+			Graph->SetRootSoundSubmix(SubmixWithParentA->ParentSubmix);
 		}
 		else if (Graph->GetRootSoundSubmix() == SubmixB && SubmixWithParentB && SubmixWithParentB->ParentSubmix != nullptr)
 		{
-			bReopenEditors = true;
-		}
-
-		if (bReopenEditors)
-		{
-			check(GEditor);
-			UAssetEditorSubsystem* EditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
-			TArray<IAssetEditorInstance*> SubmixEditors = EditorSubsystem->FindEditorsForAsset(SubmixA);
-			for (IAssetEditorInstance* Editor : SubmixEditors)
-			{
-				Editor->CloseWindow();
-			}
-
-			EditorSubsystem->OpenEditorForAsset(SubmixA);
+			Graph->SetRootSoundSubmix(SubmixWithParentB->ParentSubmix);
 		}
 	}
 

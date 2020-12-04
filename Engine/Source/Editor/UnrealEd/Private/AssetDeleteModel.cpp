@@ -362,22 +362,16 @@ bool FAssetDeleteModel::CanReplaceReferencesWith( const FAssetData& InAssetData 
 	{
 		// Get BP native parent classes
 		UClass* OriginalBPParentClass = CastChecked<UBlueprint>(PendingDeletes[0]->GetObject())->ParentClass;
-		const FString BPClassNameToTest = InAssetData.GetTagValueRef<FString>(FBlueprintTags::ParentClassPath);
+		const FString NativeClassName = InAssetData.GetTagValueRef<FString>(FBlueprintTags::NativeParentClassPath);
 
-		if (!BPClassNameToTest.IsEmpty())
+		if (!NativeClassName.IsEmpty())
 		{
-			UClass* ParentClassToTest = FindObject<UClass>(ANY_PACKAGE, *BPClassNameToTest);
-			if (!ParentClassToTest)
-			{
-				ParentClassToTest = LoadObject<UClass>(nullptr, *BPClassNameToTest);
-			}
-
+			UClass* NativeParentClassToTest = FindObject<UClass>(ANY_PACKAGE, *NativeClassName);
 			UClass* NativeParentClassToReplace = FBlueprintEditorUtils::FindFirstNativeClass(OriginalBPParentClass);
-			UClass* NativeParentClassToTest = FBlueprintEditorUtils::FindFirstNativeClass(ParentClassToTest);
 
 			if (!NativeParentClassToTest || !NativeParentClassToTest->IsChildOf(NativeParentClassToReplace))
 			{
-				// If we couldn't determine the asset parent class (e.g. because the ParentClass tag wasn't present in the FAssetData), or if
+				// If we couldn't determine the asset parent class (e.g. because the NativeParentClass tag wasn't present in the FAssetData), or if
 				// the asset parent class wasn't equal to or derived from the pending delete BP class, filter i
 				return true;
 			}
@@ -663,6 +657,7 @@ bool FPendingDelete::IsAssetContained(const FName& PackageName) const
 	return false;
 }
 
+
 void FPendingDelete::CheckForReferences()
 {
 	if (bReferencesChecked)
@@ -678,71 +673,11 @@ void FPendingDelete::CheckForReferences()
 
 	AssetRegistryModule.Get().GetReferencers(Object->GetOutermost()->GetFName(), DiskReferences);
 
-	// This new version uses the fast reference collector to gather referencers and handles transaction referencers in a single pass
 	IConsoleVariable* UseLegacyGetReferencersForDeletion = IConsoleManager::Get().FindConsoleVariable(TEXT("Editor.UseLegacyGetReferencersForDeletion"));
 	if (UseLegacyGetReferencersForDeletion == nullptr || !UseLegacyGetReferencersForDeletion->GetBool())
 	{
-		MemoryReferences.ExternalReferences.Empty();
-		MemoryReferences.InternalReferences.Empty();
-
-		const UTransactor* Transactor = GEditor ? GEditor->Trans : nullptr;
-
-		// Get the cluster of objects that are going to be deleted
-		TArray<UObject*> ObjectsToDelete;
-		GetObjectsWithOuter(Object, ObjectsToDelete);
-		ObjectsToDelete.Add(Object);
-		
-		// If it's a blueprint, we also want to find anything with a reference to it's generated class
-		UBlueprint* Blueprint = Cast<UBlueprint>(Object);
-		if (Blueprint && Blueprint->GeneratedClass)
-		{
-			ObjectsToDelete.Add(Blueprint->GeneratedClass);
-		}
-
-		// Check and see whether we are referenced by any objects that won't be garbage collected (*including* the undo buffer)
-		for (UObject* Referencer : FReferencerFinder::GetAllReferencers(ObjectsToDelete, nullptr))
-		{
-			if (Referencer->IsIn(Object))
-			{
-				MemoryReferences.InternalReferences.Emplace(Referencer);
-			}
-			else
-			{
-				if (Transactor == Referencer)
-				{
-					bIsReferencedInMemoryByUndo = true;
-				}
-				else
-				{
-					MemoryReferences.ExternalReferences.Emplace(Referencer);
-					bIsReferencedInMemoryByNonUndo = true;
-				}
-			}
-		}
-
-		// If the object itself isn't in the transaction buffer, check to see if it's a Blueprint asset. We might have instances of the
-		// Blueprint in the transaction buffer, in which case we also want to both alert the user and clear it prior to deleting the asset.
-		if (!bIsReferencedInMemoryByUndo)
-		{
-			if (Blueprint && Blueprint->GeneratedClass)
-			{
-				TArray<UObject*> Objects;
-				const TArray<FReferencerInformation>& ExternalMemoryReferences = MemoryReferences.ExternalReferences;
-				for (auto RefIt = ExternalMemoryReferences.CreateConstIterator(); RefIt; ++RefIt)
-				{
-					const FReferencerInformation& RefInfo = *RefIt;
-					if (RefInfo.Referencer->IsA(Blueprint->GeneratedClass))
-					{
-						Objects.Add(RefInfo.Referencer);
-					}
-				}
-
-				if (FReferencerFinder::GetAllReferencers(Objects, nullptr).Contains(Transactor))
-				{
-					bIsReferencedInMemoryByUndo = true;
-				}
-			}
-		}
+		// This new version uses the fast reference collector to gather referencers and handles transaction referencers in a single pass
+		ObjectTools::GatherObjectReferencersForDeletion(Object, bIsReferencedInMemoryByNonUndo, bIsReferencedInMemoryByUndo, &MemoryReferences);
 	}
 	else
 	{

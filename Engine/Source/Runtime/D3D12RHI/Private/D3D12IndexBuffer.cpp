@@ -37,64 +37,36 @@ FD3D12IndexBuffer::~FD3D12IndexBuffer()
 	}
 }
 
-void FD3D12IndexBuffer::Rename(FD3D12ResourceLocation& NewLocation)
-{
-	FD3D12ResourceLocation::TransferOwnership(ResourceLocation, NewLocation);
-}
-
-void FD3D12IndexBuffer::RenameLDAChain(FD3D12ResourceLocation& NewLocation)
-{
-	// Dynamic buffers use cross-node resources.
-	ensure(GetUsage() & BUF_AnyDynamic);
-	Rename(NewLocation);
-
-	if (GNumExplicitGPUsForRendering > 1)
-	{
-		// This currently crashes at exit time because NewLocation isn't tracked in the right allocator.
-		ensure(IsHeadLink());
-		ensure(GetParentDevice() == NewLocation.GetParentDevice());
-
-		// Update all of the resources in the LDA chain to reference this cross-node resource
-		for (FD3D12IndexBuffer* NextBuffer = GetNextObject(); NextBuffer; NextBuffer = NextBuffer->GetNextObject())
-		{
-			FD3D12ResourceLocation::ReferenceNode(NextBuffer->GetParentDevice(), NextBuffer->ResourceLocation, ResourceLocation);
-		}
-	}
-}
-
 void FD3D12IndexBuffer::Swap(FD3D12IndexBuffer& Other)
 {
 	check(!LockedData.bLocked && !Other.LockedData.bLocked);
 	FRHIIndexBuffer::Swap(Other);
 	FD3D12BaseShaderResource::Swap(Other);
 	FD3D12TransientResource::Swap(Other);
-	FD3D12LinkedAdapterObject<FD3D12IndexBuffer>::Swap(Other);
+	FD3D12LinkedAdapterObject<FD3D12Buffer>::Swap(Other);
 }
 
 void FD3D12IndexBuffer::ReleaseUnderlyingResource()
 {
-	check(!LockedData.bLocked && ResourceLocation.IsValid());
 	UpdateBufferStats<FD3D12IndexBuffer>(&ResourceLocation, false);
-	ResourceLocation.Clear();
 	FRHIIndexBuffer::ReleaseUnderlyingResource();
-	FD3D12IndexBuffer* NextIB = GetNextObject();
-	if (NextIB)
-	{
-		NextIB->ReleaseUnderlyingResource();
-	}
+	FD3D12Buffer::ReleaseUnderlyingResource();
 }
 
-FIndexBufferRHIRef FD3D12DynamicRHI::RHICreateIndexBuffer(uint32 Stride, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
+FIndexBufferRHIRef FD3D12DynamicRHI::RHICreateIndexBuffer(uint32 Stride, uint32 Size, uint32 InUsage, ERHIAccess InResourceState, FRHIResourceCreateInfo& CreateInfo)
 {
 	if (CreateInfo.bWithoutNativeResource)
 	{
-		return new FD3D12IndexBuffer();
+		return GetAdapter().CreateLinkedObject<FD3D12IndexBuffer>(CreateInfo.GPUMask, [](FD3D12Device* Device)
+			{
+				return new FD3D12IndexBuffer();
+			});
 	}
 
 	const D3D12_RESOURCE_DESC Desc = CreateIndexBufferResourceDesc(Size, InUsage);
 	const uint32 Alignment = 4;
 
-	FD3D12IndexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12IndexBuffer>(nullptr, Desc, Alignment, Stride, Size, InUsage, CreateInfo);
+	FD3D12IndexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12IndexBuffer>(nullptr, Desc, Alignment, Stride, Size, InUsage, ED3D12ResourceStateMode::Default, CreateInfo);
 	if (Buffer->ResourceLocation.IsTransient())
 	{
 		// TODO: this should ideally be set in platform-independent code, since this tracking is for the high level
@@ -106,12 +78,14 @@ FIndexBufferRHIRef FD3D12DynamicRHI::RHICreateIndexBuffer(uint32 Stride, uint32 
 
 void* FD3D12DynamicRHI::RHILockIndexBuffer(FRHICommandListImmediate& RHICmdList, FRHIIndexBuffer* IndexBufferRHI, uint32 Offset, uint32 Size, EResourceLockMode LockMode)
 {
-	return LockBuffer(&RHICmdList, FD3D12DynamicRHI::ResourceCast(IndexBufferRHI), Offset, Size, LockMode);
+	FD3D12IndexBuffer* Buffer = FD3D12DynamicRHI::ResourceCast(IndexBufferRHI);
+	return LockBuffer(&RHICmdList, Buffer, Buffer->GetSize(), Buffer->GetUsage(), Offset, Size, LockMode);
 }
 
 void FD3D12DynamicRHI::RHIUnlockIndexBuffer(FRHICommandListImmediate& RHICmdList, FRHIIndexBuffer* IndexBufferRHI)
 {
-	UnlockBuffer(&RHICmdList, FD3D12DynamicRHI::ResourceCast(IndexBufferRHI));
+	FD3D12IndexBuffer* Buffer = FD3D12DynamicRHI::ResourceCast(IndexBufferRHI);
+	UnlockBuffer(&RHICmdList, Buffer, Buffer->GetUsage());
 }
 
 void FD3D12DynamicRHI::RHITransferIndexBufferUnderlyingResource(FRHIIndexBuffer* DestIndexBuffer, FRHIIndexBuffer* SrcIndexBuffer)
@@ -129,17 +103,20 @@ void FD3D12DynamicRHI::RHITransferIndexBufferUnderlyingResource(FRHIIndexBuffer*
 	}
 }
 
-FIndexBufferRHIRef FD3D12DynamicRHI::CreateIndexBuffer_RenderThread(class FRHICommandListImmediate& RHICmdList, uint32 Stride, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
+FIndexBufferRHIRef FD3D12DynamicRHI::CreateIndexBuffer_RenderThread(class FRHICommandListImmediate& RHICmdList, uint32 Stride, uint32 Size, uint32 InUsage, ERHIAccess InResourceState, FRHIResourceCreateInfo& CreateInfo)
 {
 	if (CreateInfo.bWithoutNativeResource)
 	{
-		return new FD3D12IndexBuffer();
+		return GetAdapter().CreateLinkedObject<FD3D12IndexBuffer>(CreateInfo.GPUMask, [](FD3D12Device* Device)
+			{
+				return new FD3D12IndexBuffer();
+			});
 	}
 
 	const D3D12_RESOURCE_DESC Desc = CreateIndexBufferResourceDesc(Size, InUsage);
 	const uint32 Alignment = 4;
 
-	FD3D12IndexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12IndexBuffer>(&RHICmdList, Desc, Alignment, Stride, Size, InUsage, CreateInfo);
+	FD3D12IndexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12IndexBuffer>(&RHICmdList, Desc, Alignment, Stride, Size, InUsage, ED3D12ResourceStateMode::Default, CreateInfo);
 	if (Buffer->ResourceLocation.IsTransient())
 	{
 		// TODO: this should ideally be set in platform-independent code, since this tracking is for the high level
@@ -149,19 +126,19 @@ FIndexBufferRHIRef FD3D12DynamicRHI::CreateIndexBuffer_RenderThread(class FRHICo
 	return Buffer;
 }
 
-FIndexBufferRHIRef FD3D12DynamicRHI::CreateAndLockIndexBuffer_RenderThread(class FRHICommandListImmediate& RHICmdList, uint32 Stride, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo, void*& OutDataBuffer)
+FIndexBufferRHIRef FD3D12DynamicRHI::CreateAndLockIndexBuffer_RenderThread(class FRHICommandListImmediate& RHICmdList, uint32 Stride, uint32 Size, uint32 InUsage, ERHIAccess InResourceState, FRHIResourceCreateInfo& CreateInfo, void*& OutDataBuffer)
 {
 	const D3D12_RESOURCE_DESC Desc = CreateIndexBufferResourceDesc(Size, InUsage);
 	const uint32 Alignment = 4;
 
-	FD3D12IndexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12IndexBuffer>(&RHICmdList, Desc, Alignment, Stride, Size, InUsage, CreateInfo);
+	FD3D12IndexBuffer* Buffer = GetAdapter().CreateRHIBuffer<FD3D12IndexBuffer>(&RHICmdList, Desc, Alignment, Stride, Size, InUsage, ED3D12ResourceStateMode::Default, CreateInfo);
 	if (Buffer->ResourceLocation.IsTransient())
 	{
 		// TODO: this should ideally be set in platform-independent code, since this tracking is for the high level
 		Buffer->SetCommitted(false);
 	}
 
-	OutDataBuffer = LockBuffer(&RHICmdList, Buffer, 0, Size, RLM_WriteOnly);
+	OutDataBuffer = LockBuffer(&RHICmdList, Buffer, Buffer->GetSize(), Buffer->GetUsage(), 0, Size, RLM_WriteOnly);
 
 	return Buffer;
 }

@@ -7,6 +7,8 @@
 #include "MeshRegionBoundaryLoops.h"
 #include "DynamicSubmesh3.h"
 #include "MeshNormals.h"
+#include "MeshQueries.h"
+#include "Selections/MeshConnectedComponents.h"
 
 
 void FMeshIndexMappings::Initialize(FDynamicMesh3* Mesh)
@@ -48,7 +50,7 @@ void FDynamicMeshEditResult::GetAllTriangles(TArray<int>& TrianglesOut) const
 bool FDynamicMeshEditor::StitchVertexLoopsMinimal(const TArray<int>& Loop1, const TArray<int>& Loop2, FDynamicMeshEditResult& ResultOut)
 {
 	int N = Loop1.Num();
-	checkf(N == Loop2.Num(), TEXT("FDynamicMeshEditor::StitchLoop: loops are not the same length!"));
+	checkf(N == Loop2.Num(), TEXT("FDynamicMeshEditor::StitchVertexLoopsMinimal: loops are not the same length!"));
 	if (N != Loop2.Num())
 	{
 		return false;
@@ -96,11 +98,85 @@ operation_failed:
 		}
 		if (!RemoveTriangles(Triangles, false))
 		{
-			checkf(false, TEXT("FDynamicMeshEditor::StitchLoop: failed to add all triangles, and also failed to back out changes."));
+			checkf(false, TEXT("FDynamicMeshEditor::StitchVertexLoopsMinimal: failed to add all triangles, and also failed to back out changes."));
 		}
 	}
 	return false;
 }
+
+
+
+
+bool FDynamicMeshEditor::WeldVertexLoops(const TArray<int32>& Loop1, const TArray<int32>& Loop2)
+{
+	int32 N = Loop1.Num();
+	checkf(N == Loop2.Num(), TEXT("FDynamicMeshEditor::WeldVertexLoops: loops are not the same length!"));
+	if (N != Loop2.Num())
+	{
+		return false;
+	}
+
+	int32 FailureCount = 0;
+
+	// collect set of edges
+	TArray<int32> Edges1, Edges2;
+	Edges1.SetNum(N);
+	Edges2.SetNum(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		int32 a = Loop1[i];
+		int32 b = Loop1[(i + 1) % N];
+		Edges1[i] = Mesh->FindEdge(a, b);
+		if (Edges1[i] == FDynamicMesh3::InvalidID)
+		{
+			return false;
+		}
+
+		int32 c = Loop2[i];
+		int32 d = Loop2[(i + 1) % N];
+		Edges2[i] = Mesh->FindEdge(c, d);
+		if (Edges2[i] == FDynamicMesh3::InvalidID)
+		{
+			return false;
+		}
+	}
+
+	// merge edges. Some merges may merge multiple edges, in which case we want to 
+	// skip those when we encounter them later.
+	TArray<int32> SkipEdges;
+	for (int32 i = 0; i < N; ++i)
+	{
+		int32 Edge1 = Edges1[i];
+		int32 Edge2 = Edges2[i];
+		if (SkipEdges.Contains(Edge2))		// occurs at loop closures
+		{
+			continue;
+		}
+
+		FDynamicMesh3::FMergeEdgesInfo MergeInfo;
+		EMeshResult Result = Mesh->MergeEdges(Edge1, Edge2, MergeInfo);
+		if (Result != EMeshResult::Ok)
+		{
+			FailureCount++;
+		}
+		else
+		{
+			if (MergeInfo.ExtraRemovedEdges.A != FDynamicMesh3::InvalidID)
+			{
+				SkipEdges.Add(MergeInfo.ExtraRemovedEdges.A);
+			}
+			if (MergeInfo.ExtraRemovedEdges.B != FDynamicMesh3::InvalidID)
+			{
+				SkipEdges.Add(MergeInfo.ExtraRemovedEdges.B);
+			}
+		}
+	}
+
+	return (FailureCount > 0);
+}
+
+
+
 
 
 
@@ -262,6 +338,25 @@ bool FDynamicMeshEditor::RemoveTriangles(const TArray<int>& Triangles, bool bRem
 
 
 
+int FDynamicMeshEditor::RemoveSmallComponents(double MinVolume, double MinArea)
+{
+	FMeshConnectedComponents C(Mesh);
+	C.FindConnectedTriangles();
+	if (C.Num() == 1)
+	{
+		return 0;
+	}
+	int Removed = 0;
+	for (FMeshConnectedComponents::FComponent& Comp : C) {
+		FVector2d VolArea = TMeshQueries<FDynamicMesh3>::GetVolumeArea(*Mesh, Comp.Indices);
+		if (VolArea.X < MinVolume || VolArea.Y < MinArea) {
+			RemoveTriangles(Comp.Indices, true);
+			Removed++;
+		}
+	}
+	return Removed;
+}
+
 
 
 /**
@@ -277,7 +372,7 @@ void FDynamicMeshEditor::DuplicateTriangles(const TArray<int>& Triangles, FMeshI
 	{
 		FIndex3i Tri = Mesh->GetTriangle(TriangleID);
 
-		int NewGroupID = FindOrCreateDuplicateGroup(TriangleID, IndexMaps, ResultOut);
+		int NewGroupID = Mesh->HasTriangleGroups() ? FindOrCreateDuplicateGroup(TriangleID, IndexMaps, ResultOut) : -1;
 
 		FIndex3i NewTri;
 		NewTri[0] = FindOrCreateDuplicateVertex(Tri[0], IndexMaps, ResultOut);
@@ -535,7 +630,7 @@ bool FDynamicMeshEditor::ReinsertSubmesh(const FDynamicSubmesh3& Region, FOption
 					int base_v = Region.MapVertexToBaseMesh(sub_v);
 					if (base_v >= 0 && Mesh->IsVertex(base_v) && Region.InBaseBorderVertices(base_v) == true)
 					{
-						// [RMS] this should always be true, but assert in tests to find out
+						// this should always be true
 						if (ensure(Mesh->IsBoundaryVertex(base_v)))
 						{
 							new_v = base_v;
@@ -638,9 +733,9 @@ void FDynamicMeshEditor::SetQuadNormals(const FIndex2i& QuadTris, const FVector3
 	FIndex3i Triangle1 = Mesh->GetTriangle(QuadTris.A);
 
 	FIndex3i NormalTriangle1;
-	NormalTriangle1[0] = Normals->AppendElement(Normal, Triangle1[0]);
-	NormalTriangle1[1] = Normals->AppendElement(Normal, Triangle1[1]);
-	NormalTriangle1[2] = Normals->AppendElement(Normal, Triangle1[2]);
+	NormalTriangle1[0] = Normals->AppendElement(Normal);
+	NormalTriangle1[1] = Normals->AppendElement(Normal);
+	NormalTriangle1[2] = Normals->AppendElement(Normal);
 	Normals->SetTriangle(QuadTris.A, NormalTriangle1);
 
 	if (Mesh->IsTriangle(QuadTris.B))
@@ -652,7 +747,7 @@ void FDynamicMeshEditor::SetQuadNormals(const FIndex2i& QuadTris, const FVector3
 			int i = Triangle1.IndexOf(Triangle2[j]);
 			if (i == -1)
 			{
-				NormalTriangle2[j] = Normals->AppendElement(Normal, Triangle2[j]);
+				NormalTriangle2[j] = Normals->AppendElement(Normal);
 			}
 			else
 			{
@@ -674,6 +769,11 @@ void FDynamicMeshEditor::SetTriangleNormals(const TArray<int>& Triangles, const 
 
 	for (int tid : Triangles)
 	{
+		if (Normals->IsSetTriangle(tid))
+		{
+			Normals->UnsetTriangle(tid);
+		}
+
 		FIndex3i BaseTri = Mesh->GetTriangle(tid);
 		FIndex3i ElemTri;
 		for (int j = 0; j < 3; ++j)
@@ -681,7 +781,7 @@ void FDynamicMeshEditor::SetTriangleNormals(const TArray<int>& Triangles, const 
 			const int* FoundElementID = Vertices.Find(BaseTri[j]);
 			if (FoundElementID == nullptr)
 			{
-				ElemTri[j] = Normals->AppendElement(Normal, BaseTri[j]);
+				ElemTri[j] = Normals->AppendElement(Normal);
 				Vertices.Add(BaseTri[j], ElemTri[j]);
 			}
 			else
@@ -692,7 +792,6 @@ void FDynamicMeshEditor::SetTriangleNormals(const TArray<int>& Triangles, const 
 		Normals->SetTriangle(tid, ElemTri);
 	}
 }
-
 
 
 void FDynamicMeshEditor::SetTriangleNormals(const TArray<int>& Triangles)
@@ -707,6 +806,11 @@ void FDynamicMeshEditor::SetTriangleNormals(const TArray<int>& Triangles)
 
 	for (int tid : Triangles)
 	{
+		if (Normals->IsSetTriangle(tid))
+		{
+			Normals->UnsetTriangle(tid);
+		}
+
 		FIndex3i BaseTri = Mesh->GetTriangle(tid);
 		FIndex3i ElemTri;
 		for (int j = 0; j < 3; ++j)
@@ -715,7 +819,7 @@ void FDynamicMeshEditor::SetTriangleNormals(const TArray<int>& Triangles)
 			if (FoundElementID == nullptr)
 			{
 				FVector3d VtxROINormal = FMeshNormals::ComputeVertexNormal(*Mesh, BaseTri[j], TrianglePredicate);
-				ElemTri[j] = Normals->AppendElement( (FVector3f)VtxROINormal, BaseTri[j]);
+				ElemTri[j] = Normals->AppendElement( (FVector3f)VtxROINormal);
 				Vertices.Add(BaseTri[j], ElemTri[j]);
 			}
 			else
@@ -808,8 +912,7 @@ void FDynamicMeshEditor::SetTubeNormals(const TArray<int>& Triangles, const TArr
 		for (int Idx = 0; Idx < NumVertices; Idx++)
 		{
 			int VID = VertexIDs[Idx];
-			VertToElID.Add(VID, Normals->AppendElement(VertNormals[Side][Idx], VID));
-
+			VertToElID.Add(VID, Normals->AppendElement(VertNormals[Side][Idx]));
 		}
 	}
 	for (int TID : Triangles)
@@ -891,9 +994,9 @@ void FDynamicMeshEditor::SetGeneralTubeUVs(const TArray<int>& Triangles,
 		for (int Idx = 0; Idx < NumVertices; Idx++)
 		{
 			int VID = VertexIDs[Idx];
-			VertToElID.Add(VID, UVs->AppendElement(VertUVs[Side][Idx], VID));
+			VertToElID.Add(VID, UVs->AppendElement(VertUVs[Side][Idx]));
 		}
-		DuplicateMappingForLastVert[Side] = UVs->AppendElement(VertUVs[Side].Last(), VertexIDs[0]);
+		DuplicateMappingForLastVert[Side] = UVs->AppendElement(VertUVs[Side].Last());
 	}
 	
 	bool bPastInitialVertices[2]{ false, false };
@@ -921,6 +1024,12 @@ void FDynamicMeshEditor::SetGeneralTubeUVs(const TArray<int>& Triangles,
 
 void FDynamicMeshEditor::SetTriangleUVsFromProjection(const TArray<int>& Triangles, const FFrame3d& ProjectionFrame, float UVScaleFactor, const FVector2f& UVTranslation, bool bShiftToOrigin, int UVLayerIndex)
 {
+	SetTriangleUVsFromProjection(Triangles, ProjectionFrame, FVector2f(UVScaleFactor, UVScaleFactor), UVTranslation, UVLayerIndex, bShiftToOrigin, false);
+}
+
+void FDynamicMeshEditor::SetTriangleUVsFromProjection(const TArray<int>& Triangles, const FFrame3d& ProjectionFrame, const FVector2f& UVScale, 
+	const FVector2f& UVTranslation, int UVLayerIndex, bool bShiftToOrigin, bool bNormalizeBeforeScaling)
+{
 	if (!Triangles.Num())
 	{
 		return;
@@ -936,6 +1045,11 @@ void FDynamicMeshEditor::SetTriangleUVsFromProjection(const TArray<int>& Triangl
 
 	for (int TID : Triangles)
 	{
+		if (UVs->IsSetTriangle(TID))
+		{
+			UVs->UnsetTriangle(TID);
+		}
+
 		FIndex3i BaseTri = Mesh->GetTriangle(TID);
 		FIndex3i ElemTri;
 		for (int j = 0; j < 3; ++j)
@@ -945,7 +1059,7 @@ void FDynamicMeshEditor::SetTriangleUVsFromProjection(const TArray<int>& Triangl
 			{
 				FVector2f UV = (FVector2f)ProjectionFrame.ToPlaneUV(Mesh->GetVertex(BaseTri[j]), 2);
 				UVBounds.Contain(UV);
-				ElemTri[j] = UVs->AppendElement(UV, BaseTri[j]);
+				ElemTri[j] = UVs->AppendElement(UV);
 				AllUVIndices.Add(ElemTri[j]);
 				BaseToOverlayVIDMap.Add(BaseTri[j], ElemTri[j]);
 			}
@@ -957,11 +1071,14 @@ void FDynamicMeshEditor::SetTriangleUVsFromProjection(const TArray<int>& Triangl
 		UVs->SetTriangle(TID, ElemTri);
 	}
 
+	FVector2f UvScaleToUse = bNormalizeBeforeScaling ? FVector2f(UVScale[0] / UVBounds.Width(), UVScale[1] / UVBounds.Height())
+		: UVScale;
+
 	// shift UVs so that their bbox min-corner is at origin and scaled by external scale factor
 	for (int UVID : AllUVIndices)
 	{
 		FVector2f UV = UVs->GetElement(UVID);
-		FVector2f TransformedUV = (bShiftToOrigin) ? ((UV - UVBounds.Min) * UVScaleFactor) : (UV * UVScaleFactor);
+		FVector2f TransformedUV = (bShiftToOrigin) ? ((UV - UVBounds.Min) * UvScaleToUse) : (UV * UvScaleToUse);
 		TransformedUV += UVTranslation;
 		UVs->SetElement(UVID, TransformedUV);
 	}
@@ -982,7 +1099,7 @@ void FDynamicMeshEditor::SetQuadUVsFromProjection(const FIndex2i& QuadTris, cons
 	for (int j = 0; j < 3; ++j)
 	{
 		FVector2f UV = (FVector2f)ProjectionFrame.ToPlaneUV(Mesh->GetVertex(Triangle1[j]), 2);
-		UVTriangle1[j] = UVs->AppendElement(UV, Triangle1[j]);
+		UVTriangle1[j] = UVs->AppendElement(UV);
 		AllUVs[j] = UV;
 		AllUVIndices[j] = UVTriangle1[j];
 	}
@@ -999,7 +1116,7 @@ void FDynamicMeshEditor::SetQuadUVsFromProjection(const FIndex2i& QuadTris, cons
 			if (i == -1)
 			{
 				FVector2f UV = (FVector2f)ProjectionFrame.ToPlaneUV(Mesh->GetVertex(Triangle2[j]), 2);
-				UVTriangle2[j] = UVs->AppendElement(UV, Triangle2[j]);
+				UVTriangle2[j] = UVs->AppendElement(UV);
 				AllUVs[3] = UV;
 				AllUVIndices[3] = UVTriangle2[j];
 			}
@@ -1160,17 +1277,23 @@ void FDynamicMeshEditor::CopyAttributes(int FromTriangleID, int ToTriangleID, FM
 		}
 	}
 
+	// Make sure the storage in NewNormalOverlayElements has a slot for each normal layer.
+	if (ResultOut.NewNormalOverlayElements.Num() < Mesh->Attributes()->NumNormalLayers())
+	{
+		ResultOut.NewNormalOverlayElements.AddDefaulted(Mesh->Attributes()->NumNormalLayers() - ResultOut.NewNormalOverlayElements.Num());
+	}
 
 	for (int NormalLayerIndex = 0; NormalLayerIndex < Mesh->Attributes()->NumNormalLayers(); NormalLayerIndex++)
 	{
 		FDynamicMeshNormalOverlay* NormalOverlay = Mesh->Attributes()->GetNormalLayer(NormalLayerIndex);
+
 		if (NormalOverlay->IsSetTriangle(FromTriangleID))
 		{
 			FIndex3i FromElemTri = NormalOverlay->GetTriangle(FromTriangleID);
 			FIndex3i ToElemTri = NormalOverlay->GetTriangle(ToTriangleID);
 			for (int j = 0; j < 3; ++j)
 			{
-				int NewElemID = FindOrCreateDuplicateNormal(FromElemTri[j], NormalLayerIndex, IndexMaps);
+				int NewElemID = FindOrCreateDuplicateNormal(FromElemTri[j], NormalLayerIndex, IndexMaps, &ResultOut);
 				ToElemTri[j] = NewElemID;
 			}
 			NormalOverlay->SetTriangle(ToTriangleID, ToElemTri);
@@ -1193,15 +1316,7 @@ int FDynamicMeshEditor::FindOrCreateDuplicateUV(int ElementID, int UVLayerIndex,
 	if (NewElementID == IndexMaps.InvalidID())
 	{
 		FDynamicMeshUVOverlay* UVOverlay = Mesh->Attributes()->GetUVLayer(UVLayerIndex);
-
-		// need to determine new parent vertex. It should be in the map already!
-		int ParentVertexID = UVOverlay->GetParentVertex(ElementID);
-		int NewParentVertexID = IndexMaps.GetNewVertex(ParentVertexID);
-		check(NewParentVertexID != IndexMaps.InvalidID());
-
-		NewElementID = UVOverlay->AppendElement(
-			UVOverlay->GetElement(ElementID), NewParentVertexID);
-
+		NewElementID = UVOverlay->AppendElement(UVOverlay->GetElement(ElementID));
 		IndexMaps.SetUV(UVLayerIndex, ElementID, NewElementID);
 	}
 	return NewElementID;
@@ -1209,22 +1324,19 @@ int FDynamicMeshEditor::FindOrCreateDuplicateUV(int ElementID, int UVLayerIndex,
 
 
 
-int FDynamicMeshEditor::FindOrCreateDuplicateNormal(int ElementID, int NormalLayerIndex, FMeshIndexMappings& IndexMaps)
+int FDynamicMeshEditor::FindOrCreateDuplicateNormal(int ElementID, int NormalLayerIndex, FMeshIndexMappings& IndexMaps, FDynamicMeshEditResult* ResultOut)
 {
 	int NewElementID = IndexMaps.GetNewNormal(NormalLayerIndex, ElementID);
 	if (NewElementID == IndexMaps.InvalidID())
 	{
 		FDynamicMeshNormalOverlay* NormalOverlay = Mesh->Attributes()->GetNormalLayer(NormalLayerIndex);
-
-		// need to determine new parent vertex. It should be in the map already!
-		int ParentVertexID = NormalOverlay->GetParentVertex(ElementID);
-		int NewParentVertexID = IndexMaps.GetNewVertex(ParentVertexID);
-		check(NewParentVertexID != IndexMaps.InvalidID());
-
-		NewElementID = NormalOverlay->AppendElement(
-			NormalOverlay->GetElement(ElementID), NewParentVertexID);
-
+		NewElementID = NormalOverlay->AppendElement(NormalOverlay->GetElement(ElementID));
 		IndexMaps.SetNormal(NormalLayerIndex, ElementID, NewElementID);
+		if (ResultOut)
+		{
+			check(ResultOut->NewNormalOverlayElements.Num() > NormalLayerIndex);
+			ResultOut->NewNormalOverlayElements[NormalLayerIndex].Add(NewElementID);
+		}
 	}
 	return NewElementID;
 }
@@ -1392,7 +1504,7 @@ void FDynamicMeshEditor::AppendNormals(const FDynamicMesh3* AppendMesh,
 		{
 			Normal = (FVector3f)NormalTransform(ParentVertID, (FVector3d)Normal);
 		}
-		int NewElemID = ToNormals->AppendElement(Normal, VertexMap.GetTo(ParentVertID));
+		int NewElemID = ToNormals->AppendElement(Normal);
 		NormalMapOut.Add(ElemID, NewElemID);
 	}
 
@@ -1421,9 +1533,8 @@ void FDynamicMeshEditor::AppendUVs(const FDynamicMesh3* AppendMesh,
 	// copy over uv elements
 	for (int ElemID : FromUVs->ElementIndicesItr())
 	{
-		int ParentVertID = FromUVs->GetParentVertex(ElemID);
 		FVector2f UV = FromUVs->GetElement(ElemID);
-		int NewElemID = ToUVs->AppendElement(UV, VertexMap.GetTo(ParentVertID));
+		int NewElemID = ToUVs->AppendElement(UV);
 		UVMapOut.Add(ElemID, NewElemID);
 	}
 
@@ -1464,15 +1575,7 @@ static int AppendTriangleUVAttribute(const FDynamicMesh3* FromMesh, int FromElem
 	{
 		const FDynamicMeshUVOverlay* FromUVOverlay = FromMesh->Attributes()->GetUVLayer(UVLayerIndex);
 		FDynamicMeshUVOverlay* ToUVOverlay = ToMesh->Attributes()->GetUVLayer(UVLayerIndex);
-
-		// need to determine new parent vertex. It should be in the map already!
-		int ParentVertexID = FromUVOverlay->GetParentVertex(FromElementID);
-		int NewParentVertexID = IndexMaps.GetNewVertex(ParentVertexID);
-		check(NewParentVertexID != IndexMaps.InvalidID());
-
-		NewElementID = ToUVOverlay->AppendElement(
-			FromUVOverlay->GetElement(FromElementID), NewParentVertexID);
-
+		NewElementID = ToUVOverlay->AppendElement(FromUVOverlay->GetElement(FromElementID));
 		IndexMaps.SetUV(UVLayerIndex, FromElementID, NewElementID);
 	}
 	return NewElementID;
@@ -1487,15 +1590,7 @@ static int AppendTriangleNormalAttribute(const FDynamicMesh3* FromMesh, int From
 	{
 		const FDynamicMeshNormalOverlay* FromNormalOverlay = FromMesh->Attributes()->GetNormalLayer(NormalLayerIndex);
 		FDynamicMeshNormalOverlay* ToNormalOverlay = ToMesh->Attributes()->GetNormalLayer(NormalLayerIndex);
-
-		// need to determine new parent vertex. It should be in the map already!
-		int ParentVertexID = FromNormalOverlay->GetParentVertex(FromElementID);
-		int NewParentVertexID = IndexMaps.GetNewVertex(ParentVertexID);
-		check(NewParentVertexID != IndexMaps.InvalidID());
-
-		NewElementID = ToNormalOverlay->AppendElement(
-			FromNormalOverlay->GetElement(FromElementID), NewParentVertexID);
-
+		NewElementID = ToNormalOverlay->AppendElement(FromNormalOverlay->GetElement(FromElementID));
 		IndexMaps.SetNormal(NormalLayerIndex, FromElementID, NewElementID);
 	}
 	return NewElementID;
@@ -1581,13 +1676,20 @@ void FDynamicMeshEditor::AppendTriangles(const FDynamicMesh3* SourceMesh, const 
 		FIndex3i Tri = SourceMesh->GetTriangle(SourceTriangleID);
 
 		// FindOrCreateDuplicateGroup
-		int SourceGroupID = SourceMesh->GetTriangleGroup(SourceTriangleID);
-		int NewGroupID = IndexMaps.GetNewGroup(SourceGroupID);
-		if (NewGroupID == IndexMaps.InvalidID())
+		int NewGroupID = FDynamicMesh3::InvalidID;
+		if (SourceMesh->HasTriangleGroups())
 		{
-			NewGroupID = Mesh->AllocateTriangleGroup();
-			IndexMaps.SetGroup(SourceGroupID, NewGroupID);
-			ResultOut.NewGroups.Add(NewGroupID);
+			int SourceGroupID = SourceMesh->GetTriangleGroup(SourceTriangleID);
+			if (SourceGroupID >= 0)
+			{
+				NewGroupID = IndexMaps.GetNewGroup(SourceGroupID);
+				if (NewGroupID == IndexMaps.InvalidID())
+				{
+					NewGroupID = Mesh->AllocateTriangleGroup();
+					IndexMaps.SetGroup(SourceGroupID, NewGroupID);
+					ResultOut.NewGroups.Add(NewGroupID);
+				}
+			}
 		}
 
 		// FindOrCreateDuplicateVertex
@@ -1682,8 +1784,9 @@ bool FDynamicMeshEditor::SplitMesh(const FDynamicMesh3* SourceMesh, TArray<FDyna
 		FIndex3i Tri = SourceMesh->GetTriangle(SourceTID);
 
 		// FindOrCreateDuplicateGroup
-		int SourceGID = SourceMesh->GetTriangleGroup(SourceTID);
-		int NewGID = IndexMaps.GetNewGroup(SourceGID);
+		// TODO: despite the FindOrCreateDuplicateGroup comment, this code does not create?  check about intent!
+		int NewGID = SourceMesh->HasTriangleGroups() ?
+			IndexMaps.GetNewGroup(SourceMesh->GetTriangleGroup(SourceTID)) : FDynamicMesh3::InvalidID;
 
 		FIndex3i NewTri;
 		for (int j = 0; j < 3; ++j)

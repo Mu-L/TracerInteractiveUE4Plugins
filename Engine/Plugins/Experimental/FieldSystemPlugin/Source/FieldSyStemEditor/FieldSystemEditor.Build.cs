@@ -20,7 +20,7 @@ namespace UnrealBuildTool.Rules
                     "PropertyEditor",
                     "RenderCore",
                     "RHI",
-                    "FieldSystemCore",
+					"Chaos",
                     "FieldSystemEngine",
                     "RawMesh",
                     "AssetTools",
@@ -28,6 +28,8 @@ namespace UnrealBuildTool.Rules
 					"ToolMenus",
 				}
 				);
+
+			PrivateDefinitions.Add("CHAOS_INCLUDE_LEVEL_1=1");
 		}
 	}
 }

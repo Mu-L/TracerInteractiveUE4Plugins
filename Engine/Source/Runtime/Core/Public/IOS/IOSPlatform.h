@@ -7,6 +7,7 @@
 #pragma once
 
 #include "Clang/ClangPlatform.h"
+#include "Availability.h"
 
 /**
 * iOS specific types
@@ -35,6 +36,7 @@ typedef FIOSPlatformTypes FPlatformTypes;
 
 // Base defines, defaults are commented out
 #define PLATFORM_LITTLE_ENDIAN							1
+#define PLATFORM_SEH_EXCEPTIONS_DISABLED				1
 #define PLATFORM_SUPPORTS_PRAGMA_PACK					1
 #define PLATFORM_COMPILER_DISTINGUISHES_INT_AND_LONG	1
 #define PLATFORM_WCHAR_IS_4_BYTES						1
@@ -74,6 +76,7 @@ typedef FIOSPlatformTypes FPlatformTypes;
 #define PLATFORM_SUPPORTS_GEOMETRY_SHADERS				0
 #define PLATFORM_SUPPORTS_TESSELLATION_SHADERS			0
 #define PLATFORM_SUPPORTS_VIRTUAL_TEXTURE_STREAMING		1
+#define PLATFORM_SUPPORTS_LANDSCAPE_VISUAL_MESH_LOD_STREAMING 1
 
 #define PLATFORM_GLOBAL_LOG_CATEGORY					LogIOS
 
@@ -132,3 +135,5 @@ typedef FIOSPlatformTypes FPlatformTypes;
 #define DLLIMPORT
 
 #define IOS_MAX_PATH 1024
+
+static_assert(__IPHONE_OS_VERSION_MAX_ALLOWED >= 13000, "Unreal requires Xcode 11 or later to build"); 

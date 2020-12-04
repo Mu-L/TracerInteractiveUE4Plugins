@@ -22,11 +22,6 @@
 
 #ifdef OVERRIDE_PLATFORMCOMMON_USH
 	#include "/Platform/Public/PlatformCommon.ush"
-#elif PS4_PROFILE  
-	// always #include PS4Common.usf so it can #define override anything in any other included file.
-	#include "Platform/PS4/PS4Common.ush"
-#elif XBOXONE_PROFILE
-	#include "Platform/XboxOne/XboxOneCommon.ush"
 #elif COMPILER_METAL
 	// Helps with iteration when changing Metal shader code generation backend.
 	#include "Platform/Metal/MetalCommon.ush"
@@ -49,6 +44,10 @@
 #define COMPILER_HLSLCC 0
 #endif
 
+#ifndef COMPILER_DXC
+#define COMPILER_DXC 0
+#endif
+
 #ifndef COMPILER_HLSL
 #define COMPILER_HLSL 0
 #endif
@@ -59,10 +58,6 @@
 
 #ifndef COMPILER_GLSL_ES3_1
 #define COMPILER_GLSL_ES3_1 0
-#endif
-
-#ifndef COMPILER_GLSL_ES3_1_EXT
-#define COMPILER_GLSL_ES3_1_EXT 0
 #endif
 
 #ifndef COMPILER_METAL
@@ -161,6 +156,12 @@
 #define PLATFORM_SUPPORTS_SM6_0_WAVE_OPERATIONS 0
 #endif
 
+#ifndef PLATFORM_SUPPORTS_REAL_TYPES
+#define PLATFORM_SUPPORTS_REAL_TYPES 0
+#elif FORCE_FLOATS
+#error Collision between FORCE_FLOATS and PLATFORM_SUPPORTS_REAL_TYPES
+#endif
+
 #ifndef COMPILER_SUPPORTS_BITFIELD_INTRINSICS
 #define COMPILER_SUPPORTS_BITFIELD_INTRINSICS 0
 #endif
@@ -181,7 +182,7 @@
 #define FORCE_FLOATS 0
 #endif
 
-#if (!(ES3_1_PROFILE || METAL_PROFILE) || FORCE_FLOATS)
+#if ((!(ES3_1_PROFILE || METAL_PROFILE)) && !PLATFORM_SUPPORTS_REAL_TYPES) || FORCE_FLOATS
 	// Always use floats when using the ES3/METAL compiler, because platforms not optimized for lower precision, 
 	// And we don't want potential side effects on other platforms
 	#define half float
@@ -236,15 +237,6 @@
 	#define FEATURE_LEVEL FEATURE_LEVEL_SM5
 	#define STENCIL_COMPONENT_SWIZZLE .x
 
-#elif GL4_PROFILE
-	#define FEATURE_LEVEL FEATURE_LEVEL_SM5
-
-	// A8 textures when sampled have their component in R.
-	#define A8_SAMPLE_MASK .r
-
-	// hacks until the shader compiler supports those
-	#define class struct
-
 #elif METAL_PROFILE
 	#define FEATURE_LEVEL  FEATURE_LEVEL_ES3_1
 	// @todo metal: remove this and make sure all uses handle METAL_PROFILE
@@ -282,17 +274,18 @@
 
 #elif ES3_1_PROFILE
 	#define FEATURE_LEVEL FEATURE_LEVEL_ES3_1
-	
+
 	#if COMPILER_GLSL_ES3_1
 		#define FCOLOR_COMPONENT_SWIZZLE .bgra  
 		#define FMANUALFETCH_COLOR_COMPONENT_SWIZZLE .bgra
 	#else 
 		#define FCOLOR_COMPONENT_SWIZZLE .rgba
 		#define FMANUALFETCH_COLOR_COMPONENT_SWIZZLE .bgra
-		#if COMPILER_GLSL
-			// A8 textures when sampled have their component in R
-			#define A8_SAMPLE_MASK .r
-		#endif
+	#endif
+
+	#if COMPILER_GLSL || COMPILER_GLSL_ES3_1
+		// A8 textures when sampled have their component in R
+		#define A8_SAMPLE_MASK .r
 	#endif
 #elif VECTORVM_PROFILE
 	#define FEATURE_LEVEL FEATURE_LEVEL_SM5
@@ -335,7 +328,7 @@
 
 // non-editor platforms generally never want development/editor features.
 #ifndef PLATFORM_SUPPORTS_DEVELOPMENT_SHADERS
-#define PLATFORM_SUPPORTS_DEVELOPMENT_SHADERS !ESDEFERRED_PROFILE
+#define PLATFORM_SUPPORTS_DEVELOPMENT_SHADERS 1
 #endif
 
 #ifndef MOBILE_EMULATION
@@ -353,7 +346,7 @@
 // Whether the platform supports a global clip plane through SV_ClipDistance
 // Ideally this would just be enabled for all SM4 and above feature level platforms, but not tested everywhere yet
 #ifndef PLATFORM_SUPPORTS_GLOBAL_CLIP_PLANE
-#define PLATFORM_SUPPORTS_GLOBAL_CLIP_PLANE (PS4_PROFILE || SM5_PROFILE || SM4_PROFILE || METAL_PROFILE || METAL_MRT_PROFILE || METAL_SM5_NOTESS_PROFILE || METAL_SM5_PROFILE || GL4_PROFILE || VULKAN_PROFILE_SM5)
+#define PLATFORM_SUPPORTS_GLOBAL_CLIP_PLANE (PS4_PROFILE || SM5_PROFILE || SM4_PROFILE || METAL_PROFILE || METAL_MRT_PROFILE || METAL_SM5_NOTESS_PROFILE || METAL_SM5_PROFILE || VULKAN_PROFILE_SM5)
 #endif
 
 // Whether the platform support pixel coverage on MSAA targets (SV_Coverage).
@@ -706,4 +699,8 @@ float UnpackByte3(uint v) { return float(v >> 24); }
 	#else
 		#define INFINITE_FLOAT 1.#INF
 	#endif
+#endif
+
+#ifndef RWTextureCube
+#define RWTextureCube RWTexture2DArray
 #endif

@@ -19,6 +19,8 @@
 #include "DDCCleanup.h"
 #include "ProfilingDebugging/CookStats.h"
 
+#include <atomic>
+
 DEFINE_STAT(STAT_DDC_NumGets);
 DEFINE_STAT(STAT_DDC_NumPuts);
 DEFINE_STAT(STAT_DDC_NumBuilds);
@@ -145,6 +147,14 @@ class FDerivedDataCache : public FDerivedDataCacheInterface
 	class FBuildAsyncWorker : public FNonAbandonableTask
 	{
 	public:
+		enum EWorkerState : uint32
+		{
+			WorkerStateNone			= 0,
+			WorkerStateRunning		= 1 << 0,
+			WorkerStateFinished		= 1 << 1,
+			WorkerStateDestroyed	= 1 << 2,
+		};
+
 		/** 
 		 * Constructor for async task 
 		 * @param	InDataDeriver	plugin to produce cache key and in the event of a miss, return the data.
@@ -158,10 +168,28 @@ class FDerivedDataCache : public FDerivedDataCacheInterface
 		, CacheKey(InCacheKey)
 		{
 		}
-		
+
+		virtual ~FBuildAsyncWorker()
+		{
+			// Record that the task is destroyed and check that it was not running or destroyed previously.
+			{
+				const uint32 PreviousState = WorkerState.fetch_or(WorkerStateDestroyed, std::memory_order_relaxed);
+				checkf(!(PreviousState & WorkerStateRunning), TEXT("Destroying DDC worker that is still running! Key: %s"), *CacheKey);
+				checkf(!(PreviousState & WorkerStateDestroyed), TEXT("Destroying DDC worker that has been destroyed previously! Key: %s"), *CacheKey);
+			}
+		}
+
 		/** Async worker that checks the cache backend and if that fails, calls the deriver to build the data and then puts the results to the cache **/
 		void DoWork()
 		{
+			// Record that the task is running and check that it was not running, finished, or destroyed previously.
+			{
+				const uint32 PreviousState = WorkerState.fetch_or(WorkerStateRunning, std::memory_order_relaxed);
+				checkf(!(PreviousState & WorkerStateRunning), TEXT("Starting DDC worker that is already running! Key: %s"), *CacheKey);
+				checkf(!(PreviousState & WorkerStateFinished), TEXT("Starting DDC worker that is already finished! Key: %s"), *CacheKey);
+				checkf(!(PreviousState & WorkerStateDestroyed), TEXT("Starting DDC worker that has been destroyed! Key: %s"), *CacheKey);
+			}
+
 			TRACE_CPUPROFILER_EVENT_SCOPE(DDC_DoWork);
 
 			const int32 NumBeforeDDC = Data.Num();
@@ -254,6 +282,14 @@ class FDerivedDataCache : public FDerivedDataCacheInterface
 				Data.Empty();
 			}
 			FDerivedDataBackend::Get().AddToAsyncCompletionCounter(-1);
+
+			// Record that the task is finished and check that it was running and not finished or destroyed previously.
+			{
+				const uint32 PreviousState = WorkerState.fetch_xor(WorkerStateRunning | WorkerStateFinished, std::memory_order_relaxed);
+				checkf((PreviousState & WorkerStateRunning), TEXT("Finishing DDC worker that was not running! Key: %s"), *CacheKey);
+				checkf(!(PreviousState & WorkerStateFinished), TEXT("Finishing DDC worker that is already finished! Key: %s"), *CacheKey);
+				checkf(!(PreviousState & WorkerStateDestroyed), TEXT("Finishing DDC worker that has been destroyed! Key: %s"), *CacheKey);
+			}
 		}
 
 		FORCEINLINE TStatId GetStatId() const
@@ -261,6 +297,7 @@ class FDerivedDataCache : public FDerivedDataCacheInterface
 			RETURN_QUICK_DECLARE_CYCLE_STAT(FBuildAsyncWorker, STATGROUP_ThreadPoolAsyncTasks);
 		}
 
+		std::atomic<uint32>				WorkerState{WorkerStateNone};
 		/** true in the case of a cache hit, otherwise the result of the deriver build call **/
 		bool							bSuccess;
 		/** true if we should record the timing **/
@@ -305,7 +342,7 @@ public:
 		DDC_SCOPE_CYCLE_COUNTER(DDC_GetSynchronous);
 		check(DataDeriver);
 		FString CacheKey = FDerivedDataCache::BuildCacheKey(DataDeriver);
-		UE_LOG(LogDerivedDataCache, Verbose, TEXT("GetSynchronous %s from '%s'"), *CacheKey, *DataDeriver->GetDebugContextString());
+		UE_LOG(LogDerivedDataCache, VeryVerbose, TEXT("GetSynchronous %s from '%s'"), *CacheKey, *DataDeriver->GetDebugContextString());
 		FAsyncTask<FBuildAsyncWorker> PendingTask(DataDeriver, *CacheKey, true);
 		AddToAsyncCompletionCounter(1);
 		PendingTask.StartSynchronousTask();
@@ -323,7 +360,7 @@ public:
 		FScopeLock ScopeLock(&SynchronizationObject);
 		const uint32 Handle = NextHandle();
 		FString CacheKey = FDerivedDataCache::BuildCacheKey(DataDeriver);
-		UE_LOG(LogDerivedDataCache, Verbose, TEXT("GetAsynchronous %s from '%s', Handle %d"), *CacheKey, *DataDeriver->GetDebugContextString(), Handle);
+		UE_LOG(LogDerivedDataCache, VeryVerbose, TEXT("GetAsynchronous %s from '%s', Handle %d"), *CacheKey, *DataDeriver->GetDebugContextString(), Handle);
 		const bool bSync = !DataDeriver->IsBuildThreadsafe();
 		FAsyncTask<FBuildAsyncWorker>* AsyncTask = new FAsyncTask<FBuildAsyncWorker>(DataDeriver, *CacheKey, bSync);
 		check(!PendingTasks.Contains(Handle));
@@ -403,7 +440,7 @@ public:
 	virtual bool GetSynchronous(const TCHAR* CacheKey, TArray<uint8>& OutData, FStringView DataContext) override
 	{
 		DDC_SCOPE_CYCLE_COUNTER(DDC_GetSynchronous_Data);
-		UE_LOG(LogDerivedDataCache, Verbose, TEXT("GetSynchronous %s from '%.*s'"), CacheKey, DataContext.Len(), DataContext.GetData());
+		UE_LOG(LogDerivedDataCache, VeryVerbose, TEXT("GetSynchronous %s from '%.*s'"), CacheKey, DataContext.Len(), DataContext.GetData());
 		FAsyncTask<FBuildAsyncWorker> PendingTask((FDerivedDataPluginInterface*)NULL, CacheKey, true);
 		AddToAsyncCompletionCounter(1);
 		PendingTask.StartSynchronousTask();
@@ -416,7 +453,7 @@ public:
 		DDC_SCOPE_CYCLE_COUNTER(DDC_GetAsynchronous_Handle);
 		FScopeLock ScopeLock(&SynchronizationObject);
 		const uint32 Handle = NextHandle();
-		UE_LOG(LogDerivedDataCache, Verbose, TEXT("GetAsynchronous %s from '%.*s', Handle %d"), CacheKey, DataContext.Len(), DataContext.GetData(), Handle);
+		UE_LOG(LogDerivedDataCache, VeryVerbose, TEXT("GetAsynchronous %s from '%.*s', Handle %d"), CacheKey, DataContext.Len(), DataContext.GetData(), Handle);
 		FAsyncTask<FBuildAsyncWorker>* AsyncTask = new FAsyncTask<FBuildAsyncWorker>((FDerivedDataPluginInterface*)NULL, CacheKey, false);
 		check(!PendingTasks.Contains(Handle));
 		PendingTasks.Add(Handle, AsyncTask);
@@ -425,10 +462,10 @@ public:
 		return Handle;
 	}
 
-	virtual void Put(const TCHAR* CacheKey, TArray<uint8>& Data, FStringView DataContext, bool bPutEvenIfExists = false) override
+	virtual void Put(const TCHAR* CacheKey, TArrayView<const uint8> Data, FStringView DataContext, bool bPutEvenIfExists = false) override
 	{
 		DDC_SCOPE_CYCLE_COUNTER(DDC_Put);
-		UE_LOG(LogDerivedDataCache, Verbose, TEXT("Put %s from '%.*s'"), CacheKey, DataContext.Len(), DataContext.GetData());
+		UE_LOG(LogDerivedDataCache, VeryVerbose, TEXT("Put %s from '%.*s'"), CacheKey, DataContext.Len(), DataContext.GetData());
 		STAT(double ThisTime = 0);
 		{
 			SCOPE_SECONDS_COUNTER(ThisTime);
@@ -478,6 +515,11 @@ public:
 	virtual bool GetUsingSharedDDC() const override
 	{		
 		return FDerivedDataBackend::Get().GetUsingSharedDDC();
+	}
+
+	virtual const TCHAR* GetGraphName() const override
+	{
+		return FDerivedDataBackend::Get().GetGraphName();
 	}
 
 	void GetDirectories(TArray<FString>& OutResults) override

@@ -3,6 +3,16 @@
 #include "Units/Math/RigUnit_MathBool.h"
 #include "Units/RigUnitContext.h"
 
+FRigUnit_MathBoolConstTrue_Execute()
+{
+	Value = true;
+}
+
+FRigUnit_MathBoolConstFalse_Execute()
+{
+	Value = false;
+}
+
 FRigUnit_MathBoolNot_Execute()
 {
     DECLARE_SCOPE_HIERARCHICAL_COUNTER_RIGUNIT()

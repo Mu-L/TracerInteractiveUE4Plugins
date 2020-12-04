@@ -6,11 +6,30 @@
 #include "TraceSourceFilteringSettings.h"
 #include "SourceFilterTrace.h"
 #include "TraceWorldFiltering.h"
+#include "Misc/CommandLine.h"
+
+#include "TraceSourceFilteringProjectSettings.h"
 
 FTraceSourceFiltering::FTraceSourceFiltering()
 {
 	FilterCollection = NewObject<USourceFilterCollection>(GetTransientPackage(), NAME_None, RF_Transactional | RF_Transient);
 	Settings = DuplicateObject(GetDefault<UTraceSourceFilteringSettings>(), nullptr);
+
+	FString DefaultPresetPath;
+	if (FParse::Value(FCommandLine::Get(), TEXT("-TraceSourcePreset="), DefaultPresetPath))
+	{
+		// Set default preset, if valid path
+		FSoftObjectPath ObjectPath(DefaultPresetPath);
+		if (USourceFilterCollection* Collection = Cast<USourceFilterCollection>(ObjectPath.TryLoad()))
+		{
+			FilterCollection->CopyData(Collection);
+		}
+	}
+	// Try and load the user-defined default filter preset
+	else if (USourceFilterCollection* PresetCollection = GetDefault<UTraceSourceFilteringProjectSettings>()->DefaultFilterPreset.LoadSynchronous())
+	{	
+		FilterCollection->CopyData(PresetCollection);	
+	}
 
 	PopulateRemoteTraceCommands();
 }
@@ -100,7 +119,7 @@ void FTraceSourceFiltering::AddReferencedObjects(FReferenceCollector& Collector)
 void FTraceSourceFiltering::PopulateRemoteTraceCommands()
 {
 #if SOURCE_FILTER_TRACE_ENABLED
-	CommandMap.Add(TEXT("AddFilterById"), { [this](const TArray<FString>& Arguments) -> void { FilterCollection->AddFilterOfClass(ConvertArgumentToClass(Arguments[0])); }, 1 });
+CommandMap.Add(TEXT("AddFilterById"), { [this](const TArray<FString>& Arguments) -> void { FilterCollection->AddFilterOfClass(ConvertArgumentToClass(Arguments[0])); }, 1 });
 
 	CommandMap.Add(TEXT("AddFilterClassToSet"),
 		{ [this](const TArray<FString>& Arguments) -> void { FilterCollection->AddFilterOfClassToSet(ConvertArgumentToClass(Arguments[0]), ConvertArgumentToFilterSet(Arguments[1])); }, 2 });

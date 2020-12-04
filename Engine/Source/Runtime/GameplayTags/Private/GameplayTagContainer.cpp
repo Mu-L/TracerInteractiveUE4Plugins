@@ -19,6 +19,9 @@ DEFINE_STAT(STAT_FGameplayTagContainer_HasTag);
 DEFINE_STAT(STAT_FGameplayTagContainer_DoesTagContainerMatch);
 DEFINE_STAT(STAT_UGameplayTagsManager_GameplayTagsMatch);
 
+static bool GEnableGameplayTagDetailedStats = false;
+static FAutoConsoleVariableRef CVarGameplayTagDetailedStats(TEXT("GameplayTags.EnableDetailedStats"), GEnableGameplayTagDetailedStats, TEXT("Runtime toggle for verbose CPU profiling stats"), ECVF_Default);
+
 /**
  *	Replicates a tag in a packed format:
  *	-A segment of NetIndexFirstBitSegment bits are always replicated.
@@ -724,7 +727,7 @@ DECLARE_CYCLE_STAT(TEXT("FGameplayTagContainer::AppendTags"), STAT_FGameplayTagC
 
 void FGameplayTagContainer::AppendTags(FGameplayTagContainer const& Other)
 {
-	SCOPE_CYCLE_COUNTER(STAT_FGameplayTagContainer_AppendTags);
+	CONDITIONAL_SCOPE_CYCLE_COUNTER(STAT_FGameplayTagContainer_AppendTags, GEnableGameplayTagDetailedStats);
 
 	GameplayTags.Reserve(GameplayTags.Num() + Other.GameplayTags.Num());
 	ParentTags.Reserve(ParentTags.Num() + Other.ParentTags.Num());
@@ -746,7 +749,7 @@ DECLARE_CYCLE_STAT(TEXT("FGameplayTagContainer::AppendMatchingTags"), STAT_FGame
 
 void FGameplayTagContainer::AppendMatchingTags(FGameplayTagContainer const& OtherA, FGameplayTagContainer const& OtherB)
 {
-	SCOPE_CYCLE_COUNTER(STAT_FGameplayTagContainer_AppendMatchingTags);
+	CONDITIONAL_SCOPE_CYCLE_COUNTER(STAT_FGameplayTagContainer_AppendMatchingTags, GEnableGameplayTagDetailedStats);
 
 	for(const FGameplayTag& OtherATag : OtherA.GameplayTags)
 	{
@@ -764,7 +767,7 @@ static UGameplayTagsManager* CachedTagManager = nullptr;
 
 void FGameplayTagContainer::AddTag(const FGameplayTag& TagToAdd)
 {
-	SCOPE_CYCLE_COUNTER(STAT_FGameplayTagContainer_AddTag);
+	CONDITIONAL_SCOPE_CYCLE_COUNTER(STAT_FGameplayTagContainer_AddTag, GEnableGameplayTagDetailedStats);
 
 	if (TagToAdd.IsValid())
 	{
@@ -967,6 +970,39 @@ FString FGameplayTagContainer::ToStringSimple(bool bQuoted) const
 	return RetString;
 }
 
+TArray<FString> FGameplayTagContainer::ToStringsMaxLen(int32 MaxLen) const
+{
+	// caveat, if MaxLen < than a tag string, full string will be put in array (as a single line in the array)
+	// since this is used for debug output.  If need to clamp, it can be added.  Also, strings will end in ", " to 
+	// avoid extra complication.
+	TArray<FString> RetStrings;
+	FString CurLine;
+	CurLine.Reserve(MaxLen);
+	for (int32 i = 0; i < GameplayTags.Num(); ++i)
+	{
+		FString TagString = GameplayTags[i].ToString();
+		if (i < GameplayTags.Num() - 1)
+		{
+			TagString += TEXT(",");
+		}
+		// Add 1 for space
+		if (CurLine.Len() + TagString.Len() + 1 >= MaxLen)
+		{
+			RetStrings.Add(CurLine);
+			CurLine = TagString;
+		} 
+		else
+		{
+			CurLine += TagString + TEXT(" ");
+		}
+	}
+	if (CurLine.Len() > 0)
+	{
+		RetStrings.Add(CurLine);
+	}
+	return RetStrings;
+}
+
 bool FGameplayTagContainer::NetSerialize(FArchive& Ar, class UPackageMap* Map, bool& bOutSuccess)
 {
 	// 1st bit to indicate empty tag container or not (empty tag containers are frequently replicated). Early out if empty.
@@ -1128,7 +1164,7 @@ DECLARE_CYCLE_STAT(TEXT("FGameplayTag::MatchesAny"), STAT_FGameplayTag_MatchesAn
 
 bool FGameplayTag::MatchesAny(const FGameplayTagContainer& ContainerToCheck) const
 {
-	SCOPE_CYCLE_COUNTER(STAT_FGameplayTag_MatchesAny);
+	CONDITIONAL_SCOPE_CYCLE_COUNTER(STAT_FGameplayTag_MatchesAny, GEnableGameplayTagDetailedStats);
 
 	const FGameplayTagContainer* TagContainer = UGameplayTagsManager::Get().GetSingleTagContainer(*this);
 

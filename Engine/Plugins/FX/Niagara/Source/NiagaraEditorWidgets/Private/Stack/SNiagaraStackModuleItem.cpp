@@ -223,6 +223,7 @@ TSharedRef<SWidget> SNiagaraStackModuleItem::RaiseActionMenuClicked()
 				.OnCollectAllActions(this, &SNiagaraStackModuleItem::CollectParameterActions)
 				.AutoExpandActionMenu(false)
 				.ShowFilterTextBox(true)
+				.OnCreateCustomRowExpander_Static(&SNiagaraStackModuleItem::CreateCustomActionExpander)
 				.OnCreateWidgetForAction_Lambda([](const FCreateWidgetForActionData* InData)
 				{
 					return SNew(SNiagaraGraphActionWidget, InData);
@@ -234,6 +235,46 @@ TSharedRef<SWidget> SNiagaraStackModuleItem::RaiseActionMenuClicked()
 		return MenuWidget;
 	}
 	return SNullWidget::NullWidget;
+}
+
+class SNiagaraActionMenuExpander : public SExpanderArrow
+{
+	SLATE_BEGIN_ARGS(SNiagaraActionMenuExpander) {}
+		SLATE_ATTRIBUTE(float, IndentAmount)
+	SLATE_END_ARGS()
+
+public:
+	void Construct(const FArguments& InArgs, const FCustomExpanderData& ActionMenuData)
+	{
+		OwnerRowPtr = ActionMenuData.TableRow;
+		IndentAmount = InArgs._IndentAmount;
+		if (!ActionMenuData.RowAction.IsValid())
+		{
+			SExpanderArrow::FArguments SuperArgs;
+			SuperArgs._IndentAmount = InArgs._IndentAmount;
+
+			SExpanderArrow::Construct(SuperArgs, ActionMenuData.TableRow);
+		}
+		else
+		{
+			ChildSlot
+			.Padding(TAttribute<FMargin>(this, &SNiagaraActionMenuExpander::GetCustomIndentPadding))
+			[	
+				SNew(SBox)
+			];
+		}
+	}
+
+private:
+	FMargin GetCustomIndentPadding() const
+	{
+		return SExpanderArrow::GetExpanderPadding();
+	}
+};
+
+TSharedRef<SExpanderArrow> SNiagaraStackModuleItem::CreateCustomActionExpander(const FCustomExpanderData& ActionMenuData)
+{
+	return SNew(SNiagaraActionMenuExpander, ActionMenuData);
 }
 
 bool SNiagaraStackModuleItem::CanRaiseActionMenu() const
@@ -249,30 +290,16 @@ FReply SNiagaraStackModuleItem::RefreshClicked()
 
 FReply SNiagaraStackModuleItem::OnModuleItemDrop(TSharedPtr<FDragDropOperation> DragDropOperation)
 {
-	if (DragDropOperation->IsOfType<FNiagaraParameterDragOperation>())
-	{
-		TSharedPtr<FNiagaraParameterDragOperation> InputDragDropOperation = StaticCastSharedPtr<FNiagaraParameterDragOperation>(DragDropOperation);
-		TSharedPtr<FNiagaraParameterAction> Action = StaticCastSharedPtr<FNiagaraParameterAction>(InputDragDropOperation->GetSourceAction());
-		if (Action.IsValid() && ModuleItem->CanAddInput(Action->GetParameter()))
-		{
-			ModuleItem->AddInput(Action->GetParameter());
-			return FReply::Handled();
-		}
-	}
-
-	return FReply::Unhandled();
+	UNiagaraStackEntry::FDropRequest DropRequest(DragDropOperation.ToSharedRef(), EItemDropZone::OntoItem, UNiagaraStackEntry::EDragOptions::None, UNiagaraStackEntry::EDropOptions::None);
+	TOptional<UNiagaraStackEntry::FDropRequestResponse> DropResponse = ModuleItem->Drop(DropRequest);
+	return DropResponse.IsSet() && DropResponse->DropZone == EItemDropZone::OntoItem ? FReply::Handled() : FReply::Unhandled();
 }
 
 bool SNiagaraStackModuleItem::OnModuleItemAllowDrop(TSharedPtr<FDragDropOperation> DragDropOperation)
 {
-	if (DragDropOperation->IsOfType<FNiagaraParameterDragOperation>())
-	{
-		TSharedPtr<FNiagaraParameterDragOperation> InputDragDropOperation = StaticCastSharedPtr<FNiagaraParameterDragOperation>(DragDropOperation);
-		TSharedPtr<FNiagaraParameterAction> Action = StaticCastSharedPtr<FNiagaraParameterAction>(InputDragDropOperation->GetSourceAction());
-		return Action.IsValid() && ModuleItem->CanAddInput(Action->GetParameter());
-	}
-
-	return false;
+	UNiagaraStackEntry::FDropRequest AllowDropRequest(DragDropOperation.ToSharedRef(), EItemDropZone::OntoItem, UNiagaraStackEntry::EDragOptions::None, UNiagaraStackEntry::EDropOptions::None);
+	TOptional<UNiagaraStackEntry::FDropRequestResponse> AllowDropResponse = ModuleItem->CanDrop(AllowDropRequest);
+	return AllowDropResponse.IsSet() && AllowDropResponse->DropZone == EItemDropZone::OntoItem;
 }
 
 void ReassignModuleScript(UNiagaraStackModuleItem* ModuleItem, FAssetData NewModuleScriptAsset)

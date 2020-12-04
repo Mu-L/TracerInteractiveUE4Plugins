@@ -25,6 +25,17 @@ class UAdvancedCopyCustomization;
 class FBlacklistNames;
 class FBlacklistPaths;
 
+UENUM()
+enum class EAssetRenameResult : uint8
+{
+	/** The asset rename failed */
+	Failure,
+	/** The asset rename succeeded */
+	Success,
+	/** The asset rename is still pending, likely due to outstanding asset discovery */
+	Pending,
+};
+
 USTRUCT(BlueprintType)
 struct FAssetRenameData
 {
@@ -239,7 +250,7 @@ public:
 
 	/** Renames assets using the specified names. */
 	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Asset Tools")
-	virtual void RenameAssetsWithDialog(const TArray<FAssetRenameData>& AssetsAndNames, bool bAutoCheckout = false) = 0;
+	virtual EAssetRenameResult RenameAssetsWithDialog(const TArray<FAssetRenameData>& AssetsAndNames, bool bAutoCheckout = false) = 0;
 
 	/** Returns list of objects that soft reference the given soft object path. This will load assets into memory to verify */
 	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Asset Tools")
@@ -373,8 +384,11 @@ public:
 	/* Copy packages and dependencies to another folder */
 	virtual void BeginAdvancedCopyPackages(const TArray<FName>& InputNamesToCopy, const FString& TargetPath) const = 0;
 
-	/** Fix up references to the specified redirectors */
-	virtual void FixupReferencers(const TArray<UObjectRedirector*>& Objects) const = 0;
+	/**
+	 * Fix up references to the specified redirectors.
+	 * @param bCheckoutDialogPrompt indicates whether to prompt the user with files checkout dialog or silently attempt to checkout all necessary files.
+	 */
+	virtual void FixupReferencers(const TArray<UObjectRedirector*>& Objects, bool bCheckoutDialogPrompt = true) const = 0;
 
 	/** Returns whether redirectors are being fixed up. */
 	virtual bool IsFixupReferencersInProgress() const = 0;

@@ -67,28 +67,6 @@ UUVLayoutToolProperties::UUVLayoutToolProperties()
 }
 
 
-void UUVLayoutToolProperties::SaveProperties(UInteractiveTool* SaveFromTool)
-{
-	UUVLayoutToolProperties* PropertyCache = GetPropertyCache<UUVLayoutToolProperties>();
-	PropertyCache->bSeparateUVIslands = this->bSeparateUVIslands;
-	PropertyCache->TextureResolution = this->TextureResolution;
-	PropertyCache->UVScaleFactor = this->UVScaleFactor;
-}
-
-void UUVLayoutToolProperties::RestoreProperties(UInteractiveTool* RestoreToTool)
-{
-	UUVLayoutToolProperties* PropertyCache = GetPropertyCache<UUVLayoutToolProperties>();
-	this->bSeparateUVIslands = PropertyCache->bSeparateUVIslands;
-	this->TextureResolution = PropertyCache->TextureResolution;
-	this->UVScaleFactor = PropertyCache->UVScaleFactor;
-}
-
-
-UUVLayoutAdvancedProperties::UUVLayoutAdvancedProperties()
-{
-}
-
-
 UUVLayoutTool::UUVLayoutTool()
 {
 }
@@ -110,17 +88,35 @@ void UUVLayoutTool::Setup()
 
 	BasicProperties = NewObject<UUVLayoutToolProperties>(this, TEXT("UV Projection Settings"));
 	BasicProperties->RestoreProperties(this);
-	AdvancedProperties = NewObject<UUVLayoutAdvancedProperties>(this, TEXT("Advanced Settings"));
 
-	// initialize our properties
 	AddToolPropertySource(BasicProperties);
-	AddToolPropertySource(AdvancedProperties);
 
 	MaterialSettings = NewObject<UExistingMeshMaterialProperties>(this);
 	MaterialSettings->RestoreProperties(this);
 	AddToolPropertySource(MaterialSettings);
 
+	// if we only have one object, add optional UV layout view
+	if (ComponentTargets.Num() == 1)
+	{
+		UVLayoutView = NewObject<UUVLayoutPreview>(this);
+		UVLayoutView->CreateInWorld(TargetWorld);
+
+		FComponentMaterialSet MaterialSet;
+		ComponentTargets[0]->GetMaterialSet(MaterialSet);
+		UVLayoutView->SetSourceMaterials(MaterialSet);
+
+		UVLayoutView->SetSourceWorldPosition(
+			ComponentTargets[0]->GetOwnerActor()->GetTransform(),
+			ComponentTargets[0]->GetOwnerActor()->GetComponentsBoundingBox());
+
+		UVLayoutView->Settings->RestoreProperties(this);
+		AddToolPropertySource(UVLayoutView->Settings);
+	}
+
 	UpdateVisualization();
+
+	GetToolManager()->DisplayMessage(LOCTEXT("OnStartUVLayoutTool", "Transform/Rotate/Scale existing UV Islands/Shells/Charts using various strategies"),
+		EToolMessageLevel::UserNotification);
 }
 
 
@@ -160,6 +156,11 @@ void UUVLayoutTool::UpdateNumPreviews()
 			Preview->PreviewMesh->UpdatePreview(OriginalDynamicMeshes[PreviewIdx].Get());
 			Preview->PreviewMesh->SetTransform(ComponentTargets[PreviewIdx]->GetWorldTransform());
 
+			Preview->OnMeshUpdated.AddLambda([this](UMeshOpPreviewWithBackgroundCompute* Compute)
+			{
+				OnPreviewMeshUpdated(Compute);
+			});
+
 			Preview->SetVisibility(true);
 		}
 	}
@@ -168,6 +169,12 @@ void UUVLayoutTool::UpdateNumPreviews()
 
 void UUVLayoutTool::Shutdown(EToolShutdownType ShutdownType)
 {
+	if (UVLayoutView)
+	{
+		UVLayoutView->Settings->SaveProperties(this);
+		UVLayoutView->Disconnect();
+	}
+
 	BasicProperties->SaveProperties(this);
 	MaterialSettings->SaveProperties(this);
 
@@ -199,9 +206,25 @@ TUniquePtr<FDynamicMeshOperator> UUVLayoutOperatorFactory::MakeNewOperator()
 
 	FTransform LocalToWorld = Tool->ComponentTargets[ComponentIndex]->GetWorldTransform();
 	Op->OriginalMesh = Tool->OriginalDynamicMeshes[ComponentIndex];
-	Op->bSeparateUVIslands = Tool->BasicProperties->bSeparateUVIslands;
+
+	switch (Tool->BasicProperties->LayoutType)
+	{
+	case EUVLayoutType::Transform:
+		Op->UVLayoutMode = EUVLayoutOpLayoutModes::TransformOnly;
+		break;
+	case EUVLayoutType::Stack:
+		Op->UVLayoutMode = EUVLayoutOpLayoutModes::StackInUnitRect;
+		break;
+	case EUVLayoutType::Repack:
+		Op->UVLayoutMode = EUVLayoutOpLayoutModes::RepackToUnitRect;
+		break;
+	}
+
+	//Op->bSeparateUVIslands = Tool->BasicProperties->bSeparateUVIslands;
 	Op->TextureResolution = Tool->BasicProperties->TextureResolution;
+	Op->bAllowFlips = Tool->BasicProperties->bAllowFlips;
 	Op->UVScaleFactor = Tool->BasicProperties->UVScaleFactor;
+	Op->UVTranslation = FVector2f(Tool->BasicProperties->UVTranslate);
 	Op->SetTransform(LocalToWorld);
 
 	return Op;
@@ -211,34 +234,64 @@ TUniquePtr<FDynamicMeshOperator> UUVLayoutOperatorFactory::MakeNewOperator()
 
 void UUVLayoutTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
+	GetToolManager()->GetContextQueriesAPI()->GetCurrentViewState(CameraState);
+
+	if (UVLayoutView)
+	{
+		UVLayoutView->Render(RenderAPI);
+	}
+
 }
 
-void UUVLayoutTool::Tick(float DeltaTime)
+void UUVLayoutTool::OnTick(float DeltaTime)
 {
 	for (UMeshOpPreviewWithBackgroundCompute* Preview : Previews)
 	{
 		Preview->Tick(DeltaTime);
 	}
-}
 
-
-
-#if WITH_EDITOR
-void UUVLayoutTool::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
-{
-	UpdateNumPreviews();
-	for (UMeshOpPreviewWithBackgroundCompute* Preview : Previews)
+	if (UVLayoutView)
 	{
-		Preview->InvalidateResult();
+		UVLayoutView->OnTick(DeltaTime);
 	}
+
+
 }
-#endif
+
+
 
 void UUVLayoutTool::OnPropertyModified(UObject* PropertySet, FProperty* Property)
 {
-	// if we don't know what changed, or we know checker density changed, update checker material
-	UpdateVisualization();
+	if (PropertySet == BasicProperties)
+	{
+		UpdateNumPreviews();
+		for (UMeshOpPreviewWithBackgroundCompute* Preview : Previews)
+		{
+			Preview->InvalidateResult();
+		}
+	}
+	else if (PropertySet == MaterialSettings)
+	{
+		// if we don't know what changed, or we know checker density changed, update checker material
+		UpdateVisualization();
+	}
 }
+
+
+void UUVLayoutTool::OnPreviewMeshUpdated(UMeshOpPreviewWithBackgroundCompute* Compute)
+{
+	if (UVLayoutView)
+	{
+		FDynamicMesh3 ResultMesh;
+		if (Compute->GetCurrentResultCopy(ResultMesh, false) == false)
+		{
+			return;
+		}
+		UVLayoutView->UpdateUVMesh(&ResultMesh);
+	}
+
+}
+
 
 void UUVLayoutTool::UpdateVisualization()
 {
@@ -256,11 +309,6 @@ void UUVLayoutTool::UpdateVisualization()
 	}
 }
 
-bool UUVLayoutTool::HasAccept() const
-{
-	return true;
-}
-
 bool UUVLayoutTool::CanAccept() const
 {
 	for (UMeshOpPreviewWithBackgroundCompute* Preview : Previews)
@@ -270,7 +318,7 @@ bool UUVLayoutTool::CanAccept() const
 			return false;
 		}
 	}
-	return true;
+	return Super::CanAccept();
 }
 
 

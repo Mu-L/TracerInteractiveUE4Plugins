@@ -336,8 +336,8 @@ int32 FShaderPipelineCache::GetGameVersionForPSOFileCache()
 
 bool FShaderPipelineCache::SetGameUsageMaskWithComparison(uint64 InMask, FPSOMaskComparisonFn InComparisonFnPtr)
 {
-	bool bMaskChanged = false;
-	
+	static bool bMaskChanged = false;
+
 	if (ShaderPipelineCache != nullptr && CVarPSOFileCacheGameFileMaskEnabled.GetValueOnAnyThread() && !ShaderPipelineCache->bPreOptimizing)
 	{
 		FScopeLock Lock(&ShaderPipelineCache->Mutex);
@@ -345,7 +345,7 @@ bool FShaderPipelineCache::SetGameUsageMaskWithComparison(uint64 InMask, FPSOMas
 		if (ShaderPipelineCache->bOpened)
 		{
 			uint64 OldMask = FPipelineFileCache::SetGameUsageMaskWithComparison(InMask, InComparisonFnPtr);
-			bMaskChanged = OldMask != InMask;
+			bMaskChanged |= OldMask != InMask;
 		
 			ShaderPipelineCache->bReady = true;
 		
@@ -392,7 +392,11 @@ bool FShaderPipelineCache::SetGameUsageMaskWithComparison(uint64 InMask, FPSOMas
 				
 					ShaderPipelineCache->PreFetchedTasks = LocalPreFetchedTasks;
 				
+					bMaskChanged = false;
+					
 					UE_LOG(LogRHI, Display, TEXT("New ShaderPipelineCache GameUsageMask [%llu=>%llu], Enqueued %d of %d tasks for precompile."), OldMask, InMask, Count, ShaderPipelineCache->PreFetchedTasks.Num());
+					
+					return OldMask != InMask;
 				}
 				else
 				{
@@ -406,7 +410,12 @@ bool FShaderPipelineCache::SetGameUsageMaskWithComparison(uint64 InMask, FPSOMas
 		}
 		else
 		{
-			UE_LOG(LogRHI, Display, TEXT("ShaderPipelineCache::SetGameUsageMaskWithComparison failed to set a new mask because the cache was not open"));
+			// NOTE: if this is called and then the cache is opened, but this function is never called again, the PSOs will not get precompiled. Should probably update the open call itself to see if there was a new mask set and call the code above
+			uint64 OldMask = FPipelineFileCache::SetGameUsageMaskWithComparison(InMask, InComparisonFnPtr);
+			bMaskChanged |= OldMask != InMask;
+
+			UE_LOG(LogRHI, Display, TEXT("ShaderPipelineCache::SetGameUsageMaskWithComparison set a new mask but did not attempt to setup any tasks because the cache was not open"));
+			return OldMask != InMask;
 		}
 	}
 	else
@@ -649,15 +658,15 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 				GraphicsInitializer.BoundShaderState.GeometryShaderRHI = GeometryShader;
 			}
 	#endif
-			auto BlendState = RHICmdList.CreateBlendState(PSO.GraphicsDesc.BlendState);
+			auto BlendState = GetOrCreateBlendState(PSO.GraphicsDesc.BlendState);
 			GraphicsInitializer.BlendState = BlendState;
 			
-			auto RasterState = RHICmdList.CreateRasterizerState(PSO.GraphicsDesc.RasterizerState);
+			auto RasterState = GetOrCreateRasterizerState(PSO.GraphicsDesc.RasterizerState);
 			GraphicsInitializer.RasterizerState = RasterState;
 			
-			auto DepthState = RHICmdList.CreateDepthStencilState(PSO.GraphicsDesc.DepthStencilState);
+			auto DepthState = GetOrCreateDepthStencilState(PSO.GraphicsDesc.DepthStencilState);
 			GraphicsInitializer.DepthStencilState = DepthState;
-			
+
 			for (uint32 i = 0; i < MaxSimultaneousRenderTargets; ++i)
 			{
 				GraphicsInitializer.RenderTargetFormats[i] = PSO.GraphicsDesc.RenderTargetFormats[i];
@@ -685,17 +694,57 @@ bool FShaderPipelineCache::Precompile(FRHICommandListImmediate& RHICmdList, ESha
 			GraphicsInitializer.bFromPSOFileCache = 1;
 			
 			// Use SetGraphicsPipelineState to call down into PipelineStateCache and also handle the fallback case used by OpenGL.
-			SetGraphicsPipelineState(RHICmdList, GraphicsInitializer, EApplyRendertargetOption::DoNothing);
+			SetGraphicsPipelineState(RHICmdList, GraphicsInitializer, EApplyRendertargetOption::DoNothing, false);
 			bOk = true;
 		}
 		else if(FPipelineCacheFileFormatPSO::DescriptorType::Compute == PSO.Type)
 		{
-			FComputeShaderRHIRef ComputeInitializer = FShaderCodeLibrary::CreateComputeShader(GMaxRHIShaderPlatform, PSO.ComputeDesc.ComputeShader);
+			FComputeShaderRHIRef ComputeInitializer = FShaderCodeLibrary::CreateComputeShader(Platform, PSO.ComputeDesc.ComputeShader);
 			if(ComputeInitializer.IsValid())
 			{
 				FComputePipelineState* ComputeResult = PipelineStateCache::GetAndOrCreateComputePipelineState(RHICmdList, ComputeInitializer);
 				bOk = ComputeResult != nullptr;
 			}
+		}
+		else if (FPipelineCacheFileFormatPSO::DescriptorType::RayTracing == PSO.Type)
+		{
+		#if 0 // Workaround for UE-97607:
+			  // If ray tracing PSO file cache is generated using one payload size but later shaders were re-compiled with a different payload declaration 
+			  // it is possible for the wrong size to be used here, which leads to a D3D run-time error when attempting to create the PSO.
+			  // Ray tracing shader pre-compilation is disabled until a robust solution is found.
+			if (IsRayTracingEnabled())
+			{
+				FRayTracingPipelineStateInitializer Initializer;
+				Initializer.bPartial = true;
+				Initializer.MaxPayloadSizeInBytes = PSO.RayTracingDesc.MaxPayloadSizeInBytes;
+				Initializer.bAllowHitGroupIndexing = PSO.RayTracingDesc.bAllowHitGroupIndexing;
+
+				FRHIRayTracingShader* ShaderTable[] =
+				{
+					FShaderCodeLibrary::CreateRayTracingShader(Platform, PSO.RayTracingDesc.ShaderHash, PSO.RayTracingDesc.Frequency)
+				};
+
+				switch (PSO.RayTracingDesc.Frequency)
+				{
+				case SF_RayGen:
+					Initializer.SetRayGenShaderTable(ShaderTable);
+					break;
+				case SF_RayMiss:
+					Initializer.SetMissShaderTable(ShaderTable);
+					break;
+				case SF_RayHitGroup:
+					Initializer.SetHitGroupTable(ShaderTable);
+					break;
+				case SF_RayCallable:
+					Initializer.SetCallableTable(ShaderTable);
+					break;
+				default:
+					checkNoEntry();
+				}
+				FRayTracingPipelineState* RayTracingPipeline = PipelineStateCache::GetAndOrCreateRayTracingPipelineState(RHICmdList, Initializer);
+				bOk = RayTracingPipeline != nullptr;
+			}
+		#endif // Workaround for UE-97607
 		}
 		else
 		{
@@ -745,6 +794,7 @@ void FShaderPipelineCache::PreparePipelineBatch(TDoubleLinkedList<FPipelineCache
 			
 			// Assume that the shader is present and the PSO can be compiled by default,
 			bool bOK = true;
+			bool bCompatible = true;
 	
             // Shaders required.
             TSet<FSHAHash> RequiredShaders;
@@ -842,6 +892,27 @@ void FShaderPipelineCache::PreparePipelineBatch(TDoubleLinkedList<FPipelineCache
 					UE_LOG(LogRHI, Error, TEXT("Invalid PSO entry in pipeline cache!"));
 				}
 			}
+			else if (PSO.Type == FPipelineCacheFileFormatPSO::DescriptorType::RayTracing)
+			{
+				if (IsRayTracingEnabled())
+				{
+					if (PSO.RayTracingDesc.ShaderHash != EmptySHA)
+					{
+						RequiredShaders.Add(PSO.RayTracingDesc.ShaderHash);
+						bOK &= FShaderCodeLibrary::PreloadShader(PSO.RayTracingDesc.ShaderHash, AsyncJob.ReadRequests);
+						UE_CLOG(!bOK, LogRHI, Verbose, TEXT("Failed to find RayTracing shader: %s"), *(PSO.RayTracingDesc.ShaderHash.ToString()));
+					}
+					else
+					{
+						bOK = false;
+						UE_LOG(LogRHI, Error, TEXT("Invalid PSO entry in pipeline cache!"));
+					}
+				}
+				else
+				{
+					bCompatible = false;
+				}
+			}
 			else
 			{
 				bOK = false;
@@ -850,7 +921,7 @@ void FShaderPipelineCache::PreparePipelineBatch(TDoubleLinkedList<FPipelineCache
 			
 			// Then if and only if all shaders can be found do we schedule a compile job
 			// Otherwise this job needs to be put in the shutdown list to correctly release shader code
-			if (bOK)
+			if (bOK && bCompatible)
 			{
 				ReadTasks.Add(AsyncJob);
 			}
@@ -865,7 +936,7 @@ void FShaderPipelineCache::PreparePipelineBatch(TDoubleLinkedList<FPipelineCache
 					Hdr.Shaders = RequiredShaders;
 					OrderedCompileTasks.Insert(Hdr, 0);
 				}
-				else
+				else if (bCompatible)
 				{
 					UE_LOG(LogRHI, Error, TEXT("Invalid PSO entry in pipeline cache: %u!"), PSORead->Hash);
 				}
@@ -950,6 +1021,11 @@ void FShaderPipelineCache::PrecompilePipelineBatch()
 			case FPipelineCacheFileFormatPSO::DescriptorType::Graphics:
 			{
 				INC_DWORD_STAT(STAT_TotalGraphicsPipelineStateCount);
+				break;
+			}
+			case FPipelineCacheFileFormatPSO::DescriptorType::RayTracing:
+			{
+				INC_DWORD_STAT(STAT_TotalRayTracingPipelineStateCount);
 				break;
 			}
 			default:
@@ -1091,6 +1167,7 @@ void FShaderPipelineCache::Flush(bool bClearCompiled /*= true*/)
 
 FShaderPipelineCache::FShaderPipelineCache(EShaderPlatform Platform)
 : FTickableObjectRenderThread(true, false) // (RegisterNow, HighFrequency)
+, CurrentPlatform((EShaderPlatform)-1)
 , BatchSize(0)
 , BatchTime(0.0f)
 , bPaused(false)
@@ -1403,8 +1480,11 @@ static const int32 MaxUserCount = 16;
 
 static bool PreCompileMaskComparison(uint64 ReferenceGameMask, uint64 PSOMask)
 {
+	// If game mask use is disabled then the precompile comparison should succeed.
+	const bool bIgnoreGameMask = CVarPSOFileCacheGameFileMaskEnabled.GetValueOnAnyThread() == 0;
+
 	uint64 UsageMask = (ReferenceGameMask & PSOMask);
-	return (UsageMask & (7l << (MaxQualityCount*3+MaxPlaylistCount))) && (UsageMask & (7 << (MaxQualityCount*3))) && (UsageMask & (63 << MaxQualityCount*2)) && (UsageMask & (63 << MaxQualityCount)) && (UsageMask & 63);
+	return bIgnoreGameMask || ((UsageMask & (7l << (MaxQualityCount*3+MaxPlaylistCount))) && (UsageMask & (7 << (MaxQualityCount*3))) && (UsageMask & (63 << MaxQualityCount*2)) && (UsageMask & (63 << MaxQualityCount)) && (UsageMask & 63));
 }
 
 bool FShaderPipelineCache::Open(FString const& Name, EShaderPlatform Platform)
@@ -1530,6 +1610,27 @@ void FShaderPipelineCache::Close(bool bShuttingDown)
 	bOpened = false;
 
 	FPipelineFileCache::ClosePipelineFileCache();
+
+	//
+	// Clean up cached RHI resources
+	//
+	for (auto Pair : BlendStateCache)
+	{
+		Pair.Value->Release();
+	}
+	BlendStateCache.Empty();
+	
+	for (auto Pair : RasterizerStateCache)
+	{
+		Pair.Value->Release();
+	}
+	RasterizerStateCache.Empty();
+	
+	for (auto Pair : DepthStencilStateCache)
+	{
+		Pair.Value->Release();
+	}
+	DepthStencilStateCache.Empty();
 }
 
 void FShaderPipelineCache::OnShaderLibraryStateChanged(ELibraryState State, EShaderPlatform Platform, FString const& Name)
@@ -1572,4 +1673,52 @@ void FShaderPipelineCache::OnShaderLibraryStateChanged(ELibraryState State, ESha
     // Set the new waiting count that we can actually process.
     FPlatformAtomics::InterlockedExchange(&TotalWaitingTasks, Count);
 	UE_LOG(LogRHI, Display, TEXT("Opened pipeline cache after state change and enqueued %d of %d tasks for precompile."), Count, OrderedCompileTasks.Num());
+}
+
+FRHIBlendState* FShaderPipelineCache::GetOrCreateBlendState(const FBlendStateInitializerRHI& Initializer)
+{
+	FRHIBlendState** Found = BlendStateCache.Find(Initializer);
+	if (Found)
+	{
+		return *Found;
+	}
+	
+	FBlendStateRHIRef NewState = RHICreateBlendState(Initializer);
+	
+	// Add an extra reference so we don't have TRefCountPtr in the maps
+	NewState->AddRef();
+	BlendStateCache.Add(Initializer, NewState);
+	return NewState;
+}
+
+FRHIRasterizerState* FShaderPipelineCache::GetOrCreateRasterizerState(const FRasterizerStateInitializerRHI& Initializer)
+{
+	FRHIRasterizerState** Found = RasterizerStateCache.Find(Initializer);
+	if (Found)
+	{
+		return *Found;
+	}
+	
+	FRasterizerStateRHIRef NewState = RHICreateRasterizerState(Initializer);
+	
+	// Add an extra reference so we don't have TRefCountPtr in the maps
+	NewState->AddRef();
+	RasterizerStateCache.Add(Initializer, NewState);
+	return NewState;
+}
+
+FRHIDepthStencilState* FShaderPipelineCache::GetOrCreateDepthStencilState(const FDepthStencilStateInitializerRHI& Initializer)
+{
+	FRHIDepthStencilState** Found = DepthStencilStateCache.Find(Initializer);
+	if (Found)
+	{
+		return *Found;
+	}
+	
+	FDepthStencilStateRHIRef NewState = RHICreateDepthStencilState(Initializer);
+	
+	// Add an extra reference so we don't have TRefCountPtr in the maps
+	NewState->AddRef();
+	DepthStencilStateCache.Add(Initializer, NewState);
+	return NewState;
 }

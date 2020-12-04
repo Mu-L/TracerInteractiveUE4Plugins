@@ -6,6 +6,7 @@
 #include "DSP/ModulationMatrix.h"
 #include "DSP/BiQuadFilter.h"
 
+
 namespace Audio
 {
 	// Enumeration of filter types
@@ -21,6 +22,8 @@ namespace Audio
 			LowShelf,
 			HighShelf,
 			AllPass,
+			ButterworthLowPass,
+			ButterworthHighPass
 		};
 	}
 

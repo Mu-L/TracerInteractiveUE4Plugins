@@ -319,24 +319,15 @@ bool FParse::Value( const TCHAR* Stream, const TCHAR* Match, FString& Value, boo
 	}
 
 	int32 StreamLen = FCString::Strlen(Stream);
-	if (StreamLen < 4096)
+	if (StreamLen > 0)
 	{
-		TCHAR Temp[4096]=TEXT("");
-		if (FParse::Value(Stream, Match, Temp, UE_ARRAY_COUNT(Temp), bShouldStopOnSeparator))
-		{
-			Value = Temp;
-			return true;
-		}
-	}
-	else
-	{
-		FString TempValue;
-		TArray<TCHAR>& ValueCharArray = TempValue.GetCharArray();
+		TArray<TCHAR, TInlineAllocator<4096>> ValueCharArray;
 		ValueCharArray.AddUninitialized(StreamLen + 1);
-		if( FParse::Value( Stream, Match, ValueCharArray.GetData(), StreamLen + 1, bShouldStopOnSeparator) )
+		ValueCharArray[0] = 0;
+
+		if( FParse::Value(Stream, Match, ValueCharArray.GetData(), ValueCharArray.Num(), bShouldStopOnSeparator) )
 		{
-			TempValue.Shrink();
-			Value = MoveTemp(TempValue);
+			Value = FString(ValueCharArray.GetData());
 			return true;
 		}
 	}
@@ -919,10 +910,14 @@ bool FParse::Token( const TCHAR*& Str, FString& Arg, bool UseEscape )
 FString FParse::Token( const TCHAR*& Str, bool UseEscape )
 {
 	TCHAR Buffer[1024];
-	if( FParse::Token( Str, Buffer, UE_ARRAY_COUNT(Buffer), UseEscape ) )
+	if (FParse::Token(Str, Buffer, UE_ARRAY_COUNT(Buffer), UseEscape))
+	{
 		return Buffer;
+	}
 	else
+	{
 		return TEXT("");
+	}
 }
 
 bool FParse::AlnumToken(const TCHAR*& Str, FString& Arg)
@@ -1016,7 +1011,7 @@ bool FParse::Line(const TCHAR** Stream, FString& Result, bool bExact)
 	bool bIsQuoted = false;
 	bool bIgnore = false;
 
-	Result = TEXT("");
+	Result.Reset();
 
 	while (**Stream != TEXT('\0') && **Stream != TEXT('\n') && **Stream != TEXT('\r'))
 	{
@@ -1078,7 +1073,7 @@ bool FParse::LineExtended(const TCHAR** Stream, FString& Result, int32& LinesCon
 	bool bIgnore = false;
 	int32 BracketDepth = 0;
 
-	Result = TEXT("");
+	Result.Reset();
 	LinesConsumed = 0;
 
 	while (**Stream != TEXT('\0') && ((**Stream != TEXT('\n') && **Stream != TEXT('\r')) || BracketDepth > 0))

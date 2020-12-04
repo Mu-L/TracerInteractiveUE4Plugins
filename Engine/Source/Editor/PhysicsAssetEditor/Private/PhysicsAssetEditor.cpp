@@ -88,6 +88,8 @@ const FName PhysicsAssetEditorAppIdentifier = FName(TEXT("PhysicsAssetEditorApp"
 DEFINE_LOG_CATEGORY(LogPhysicsAssetEditor);
 #define LOCTEXT_NAMESPACE "PhysicsAssetEditor"
 
+//PRAGMA_DISABLE_OPTIMIZATION
+
 namespace PhysicsAssetEditor
 {
 	const float	DefaultPrimSize = 15.0f;
@@ -110,6 +112,7 @@ FPhysicsAssetEditor::~FPhysicsAssetEditor()
 	}
 
 	GEditor->UnregisterForUndo(this);
+	GEditor->GetEditorSubsystem<UImportSubsystem>()->OnAssetReimport.Remove(OnAssetReimportDelegateHandle);
 }
 
 void FPhysicsAssetEditor::InitPhysicsAssetEditor(const EToolkitMode::Type Mode, const TSharedPtr< class IToolkitHost >& InitToolkitHost, UPhysicsAsset* ObjectToEdit)
@@ -160,6 +163,9 @@ void FPhysicsAssetEditor::InitPhysicsAssetEditor(const EToolkitMode::Type Mode, 
 
 	GEditor->RegisterForUndo(this);
 
+	// If any assets we care about get reimported, we need to rebuild some stuff
+	OnAssetReimportDelegateHandle = GEditor->GetEditorSubsystem<UImportSubsystem>()->OnAssetReimport.AddSP(this, &FPhysicsAssetEditor::OnAssetReimport);
+
 	// Register our commands. This will only register them if not previously registered
 	FPhysicsAssetEditorCommands::Register();
 
@@ -167,8 +173,7 @@ void FPhysicsAssetEditor::InitPhysicsAssetEditor(const EToolkitMode::Type Mode, 
 
 	const bool bCreateDefaultStandaloneMenu = true;
 	const bool bCreateDefaultToolbar = true;
-	const TSharedRef<FTabManager::FLayout> DummyLayout = FTabManager::NewLayout("NullLayout")->AddArea(FTabManager::NewPrimaryArea());
-	FAssetEditorToolkit::InitAssetEditor(Mode, InitToolkitHost, PhysicsAssetEditorAppIdentifier, DummyLayout, bCreateDefaultStandaloneMenu, bCreateDefaultToolbar, ObjectToEdit);
+	FAssetEditorToolkit::InitAssetEditor(Mode, InitToolkitHost, PhysicsAssetEditorAppIdentifier, FTabManager::FLayout::NullLayout, bCreateDefaultStandaloneMenu, bCreateDefaultToolbar, ObjectToEdit);
 
 	AddApplicationMode(
 		PhysicsAssetEditorModes::PhysicsAssetEditorMode,
@@ -177,7 +182,7 @@ void FPhysicsAssetEditor::InitPhysicsAssetEditor(const EToolkitMode::Type Mode, 
 	SetCurrentMode(PhysicsAssetEditorModes::PhysicsAssetEditorMode);
 
 	// Force disable simulation as InitArticulated can be called during viewport creation
-	SharedData->ForceDisableSimulation();
+	SharedData->EnableSimulation(false);
 
 	GetAssetEditorModeManager()->SetDefaultMode(FPhysicsAssetEditorEditMode::ModeName);
 	GetAssetEditorModeManager()->ActivateMode(FPersonaEditModes::SkeletonSelection);
@@ -363,11 +368,19 @@ void FPhysicsAssetEditor::PostRedo( bool bSuccess )
 		{
 			FKConvexElem& Element = Body->AggGeom.ConvexElems[ElemIdx];
 
+#if PHYSICS_INTERFACE_PHYSX
 			if (Element.GetConvexMesh() == NULL)
 			{
 				bRecreate = true;
 				break;
 			}
+#elif WITH_CHAOS
+			if (Element.GetChaosConvexMesh() == NULL)
+			{
+				bRecreate = true;
+				break;
+			}
+#endif
 		}
 
 		if (bRecreate)
@@ -379,6 +392,21 @@ void FPhysicsAssetEditor::PostRedo( bool bSuccess )
 	}
 
 	PostUndo(bSuccess);
+}
+
+void FPhysicsAssetEditor::OnAssetReimport(UObject* Object)
+{
+	RecreatePhysicsState();
+	RefreshHierachyTree();
+	RefreshPreviewViewport();
+
+	if (SharedData->EditorSkelComp && SharedData->EditorSkelComp->SkeletalMesh)
+	{
+		IMeshUtilities& MeshUtilities = FModuleManager::Get().LoadModuleChecked<IMeshUtilities>("MeshUtilities");
+		// Update various infos based on the mesh
+		MeshUtilities.CalcBoneVertInfos(SharedData->EditorSkelComp->SkeletalMesh, SharedData->DominantWeightBoneInfos, true);
+		MeshUtilities.CalcBoneVertInfos(SharedData->EditorSkelComp->SkeletalMesh, SharedData->AnyWeightBoneInfos, false);
+	}
 }
 
 void FPhysicsAssetEditor::OnFinishedChangingProperties(const FPropertyChangedEvent& PropertyChangedEvent)
@@ -576,6 +604,11 @@ void FPhysicsAssetEditor::ExtendMenu()
 			MenuBarBuilder.AddMenuEntry(Commands.SelectAllConstraints);
 			MenuBarBuilder.AddMenuEntry(Commands.ToggleSelectionType);
 			MenuBarBuilder.AddMenuEntry(Commands.ToggleShowSelected);
+			MenuBarBuilder.AddMenuEntry(Commands.ShowSelected);
+			MenuBarBuilder.AddMenuEntry(Commands.HideSelected);
+			MenuBarBuilder.AddMenuEntry(Commands.ToggleShowOnlySelected);
+			MenuBarBuilder.AddMenuEntry(Commands.ShowAll);
+			MenuBarBuilder.AddMenuEntry(Commands.HideAll);
 			MenuBarBuilder.AddMenuEntry(Commands.DeselectAll);
 			MenuBarBuilder.EndSection();
 		}
@@ -661,6 +694,36 @@ void FPhysicsAssetEditor::BindCommands()
 		Commands.EnableCollisionAll,
 		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnSetCollisionAll, true),
 		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::CanSetCollisionAll, true));
+
+	ToolkitCommands->MapAction(
+		Commands.PrimitiveQueryAndPhysics,
+		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnSetPrimitiveCollision, ECollisionEnabled::QueryAndPhysics),
+		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::CanSetPrimitiveCollision, ECollisionEnabled::QueryAndPhysics),
+		FIsActionChecked::CreateSP(this, &FPhysicsAssetEditor::IsPrimitiveCollisionChecked, ECollisionEnabled::QueryAndPhysics));
+
+	ToolkitCommands->MapAction(
+		Commands.PrimitiveQueryOnly,
+		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnSetPrimitiveCollision, ECollisionEnabled::QueryOnly),
+		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::CanSetPrimitiveCollision, ECollisionEnabled::QueryOnly),
+		FIsActionChecked::CreateSP(this, &FPhysicsAssetEditor::IsPrimitiveCollisionChecked, ECollisionEnabled::QueryOnly));
+
+	ToolkitCommands->MapAction(
+		Commands.PrimitivePhysicsOnly,
+		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnSetPrimitiveCollision, ECollisionEnabled::PhysicsOnly),
+		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::CanSetPrimitiveCollision, ECollisionEnabled::PhysicsOnly),
+		FIsActionChecked::CreateSP(this, &FPhysicsAssetEditor::IsPrimitiveCollisionChecked, ECollisionEnabled::PhysicsOnly));
+
+	ToolkitCommands->MapAction(
+		Commands.PrimitiveNoCollision,
+		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnSetPrimitiveCollision, ECollisionEnabled::NoCollision),
+		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::CanSetPrimitiveCollision, ECollisionEnabled::NoCollision),
+		FIsActionChecked::CreateSP(this, &FPhysicsAssetEditor::IsPrimitiveCollisionChecked, ECollisionEnabled::NoCollision));
+
+	ToolkitCommands->MapAction(
+		Commands.PrimitiveContributeToMass,
+		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnSetPrimitiveContributeToMass),
+		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::CanSetPrimitiveContributeToMass),
+		FIsActionChecked::CreateSP(this, &FPhysicsAssetEditor::GetPrimitiveContributeToMass));
 
 	ToolkitCommands->MapAction(
 		Commands.WeldToBody,
@@ -836,6 +899,31 @@ void FPhysicsAssetEditor::BindCommands()
 	ToolkitCommands->MapAction(
 		Commands.ToggleShowSelected,
 		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnToggleShowSelected),
+		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::IsNotSimulation));
+
+	ToolkitCommands->MapAction(
+		Commands.ShowSelected,
+		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnShowSelected),
+		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::IsNotSimulation));
+
+	ToolkitCommands->MapAction(
+		Commands.HideSelected,
+		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnHideSelected),
+		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::IsNotSimulation));
+
+	ToolkitCommands->MapAction(
+		Commands.ToggleShowOnlySelected,
+		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnToggleShowOnlySelected),
+		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::IsNotSimulation));
+
+	ToolkitCommands->MapAction(
+		Commands.ShowAll,
+		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnShowAll),
+		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::IsNotSimulation));
+
+	ToolkitCommands->MapAction(
+		Commands.HideAll,
+		FExecuteAction::CreateSP(this, &FPhysicsAssetEditor::OnHideAll),
 		FCanExecuteAction::CreateSP(this, &FPhysicsAssetEditor::IsNotSimulation));
 
 	ToolkitCommands->MapAction(
@@ -1118,6 +1206,18 @@ void FPhysicsAssetEditor::BuildMenuWidgetBody(FMenuBuilder& InMenuBuilder)
 				InSubMenuBuilder.AddMenuEntry( PhysicsAssetEditorCommands.DisableCollision );
 				InSubMenuBuilder.AddMenuEntry( PhysicsAssetEditorCommands.DisableCollisionAll );
 				InSubMenuBuilder.EndSection();
+
+#if WITH_CHAOS
+				InSubMenuBuilder.BeginSection("CollisionFilteringHeader", LOCTEXT("CollisionFilteringHeader", "CollisionFiltering"));
+				InSubMenuBuilder.AddMenuEntry(PhysicsAssetEditorCommands.PrimitiveQueryAndPhysics);
+				InSubMenuBuilder.AddMenuEntry(PhysicsAssetEditorCommands.PrimitiveQueryOnly);
+				InSubMenuBuilder.AddMenuEntry(PhysicsAssetEditorCommands.PrimitivePhysicsOnly);
+				InSubMenuBuilder.AddMenuEntry(PhysicsAssetEditorCommands.PrimitiveNoCollision);
+				InSubMenuBuilder.EndSection();
+#endif
+				InSubMenuBuilder.BeginSection("MassHeader", LOCTEXT("MassHeader", "Mass"));
+				InSubMenuBuilder.AddMenuEntry(PhysicsAssetEditorCommands.PrimitiveContributeToMass);
+				InSubMenuBuilder.EndSection();
 			}
 		};
 
@@ -1257,6 +1357,11 @@ void FPhysicsAssetEditor::BuildMenuWidgetSelection(FMenuBuilder& InMenuBuilder)
 		InMenuBuilder.AddMenuEntry( Commands.SelectAllConstraints );
 		InMenuBuilder.AddMenuEntry( Commands.ToggleSelectionType );
 		InMenuBuilder.AddMenuEntry( Commands.ToggleShowSelected );
+		InMenuBuilder.AddMenuEntry( Commands.ShowSelected );
+		InMenuBuilder.AddMenuEntry( Commands.HideSelected );
+		InMenuBuilder.AddMenuEntry( Commands.ToggleShowOnlySelected );
+		InMenuBuilder.AddMenuEntry( Commands.ShowAll );
+		InMenuBuilder.AddMenuEntry( Commands.HideAll );
 		InMenuBuilder.EndSection();
 	}
 	InMenuBuilder.PopCommandList();
@@ -2147,6 +2252,38 @@ bool FPhysicsAssetEditor::CanSetCollisionAll(bool bEnable) const
 	return SharedData->CanSetCollisionBetweenSelectedAndAll(bEnable);
 }
 
+void FPhysicsAssetEditor::OnSetPrimitiveCollision(ECollisionEnabled::Type CollisionEnabled)
+{
+	FScopedTransaction Transaction(LOCTEXT("SetPrimitiveCollision", "Set Primitive Collision"));
+
+	SharedData->SetPrimitiveCollision(CollisionEnabled);
+}
+
+bool FPhysicsAssetEditor::CanSetPrimitiveCollision(ECollisionEnabled::Type CollisionEnabled) const
+{
+	return SharedData->CanSetPrimitiveCollision(CollisionEnabled);
+}
+
+bool FPhysicsAssetEditor::IsPrimitiveCollisionChecked(ECollisionEnabled::Type CollisionEnabled) const
+{
+	return SharedData->GetIsPrimitiveCollisionEnabled(CollisionEnabled);
+}
+
+void FPhysicsAssetEditor::OnSetPrimitiveContributeToMass()
+{
+	SharedData->SetPrimitiveContributeToMass(!SharedData->GetPrimitiveContributeToMass());
+}
+
+bool FPhysicsAssetEditor::CanSetPrimitiveContributeToMass() const
+{
+	return SharedData->CanSetPrimitiveContributeToMass();
+}
+
+bool FPhysicsAssetEditor::GetPrimitiveContributeToMass() const
+{
+	return SharedData->GetPrimitiveContributeToMass();
+}
+
 void FPhysicsAssetEditor::OnWeldToBody()
 {
 	SharedData->WeldSelectedBodies();
@@ -2707,6 +2844,32 @@ void FPhysicsAssetEditor::OnToggleShowSelected()
 	SharedData->ToggleShowSelected();
 }
 
+void FPhysicsAssetEditor::OnShowSelected()
+{
+	SharedData->ShowSelected();
+}
+
+void FPhysicsAssetEditor::OnHideSelected()
+{
+	SharedData->HideSelected();
+}
+
+void FPhysicsAssetEditor::OnToggleShowOnlySelected()
+{
+	SharedData->ToggleShowOnlySelected();
+}
+
+void FPhysicsAssetEditor::OnShowAll()
+{
+	SharedData->ShowAll();
+}
+
+void FPhysicsAssetEditor::OnHideAll()
+{
+	SharedData->HideAll();
+}
+
+
 void FPhysicsAssetEditor::OnDeselectAll()
 {
 	SharedData->ClearSelectedBody();
@@ -3088,7 +3251,7 @@ void FPhysicsAssetEditor::RecreatePhysicsState()
 	SharedData->EditorSkelComp->RecreateClothingActors();
 
 	// Reset simulation state of body instances so we dont actually simulate outside of 'simulation mode'
-	SharedData->ForceDisableSimulation();
+	SharedData->EnableSimulation(false);
 }
 
 TSharedRef<SWidget> FPhysicsAssetEditor::MakeConstraintScaleWidget()

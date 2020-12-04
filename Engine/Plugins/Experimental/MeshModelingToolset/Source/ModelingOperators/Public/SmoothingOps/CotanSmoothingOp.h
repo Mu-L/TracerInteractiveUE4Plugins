@@ -9,7 +9,7 @@
 class MODELINGOPERATORS_API  FCotanSmoothingOp : public FSmoothingOpBase
 {
 public:
-	FCotanSmoothingOp(const FDynamicMesh3* Mesh, float Speed, int32 Iterations);
+	FCotanSmoothingOp(const FDynamicMesh3* Mesh, const FSmoothingOpBase::FOptions& OptionsIn);
 
 	~FCotanSmoothingOp() override {};
 
@@ -18,4 +18,6 @@ public:
 private:
 	// Compute the smoothed result by using Cotan Biharmonic
 	void Smooth();	
+
+	double GetSmoothPower(int32 VertexID, bool bIsBoundary);
 };

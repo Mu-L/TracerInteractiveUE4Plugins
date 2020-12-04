@@ -52,7 +52,11 @@
 	#endif
 #endif
 
-#if FEATURE_LEVEL < FEATURE_LEVEL_SM5
+#ifndef SUPPORTS_TEXTURECUBE_ARRAY
+#define SUPPORTS_TEXTURECUBE_ARRAY (FEATURE_LEVEL >= FEATURE_LEVEL_SM5)
+#endif
+
+#if SUPPORTS_TEXTURECUBE_ARRAY == 0
 	// Define TextureCubeArray to something which will compile so we can use it in uniform buffers
 	#define TextureCubeArray TextureCube
 #endif
@@ -69,15 +73,14 @@
 
 #define METAL_TESSELLATION_PROFILE ((METAL_PROFILE || METAL_SM5_PROFILE) && USING_TESSELLATION)
 
-#ifndef MOBILE_FORCE_DEPTH_TEXTURE_READS
-#define MOBILE_FORCE_DEPTH_TEXTURE_READS 0
-#endif
-
 // Using SV_ClipDistance has overhead (15% slower base pass in triangle bound test scene on PS4) so projects have to opt-in
 #define USE_GLOBAL_CLIP_PLANE (PLATFORM_SUPPORTS_GLOBAL_CLIP_PLANE && PROJECT_ALLOW_GLOBAL_CLIP_PLANE && !MATERIAL_DOMAIN_POSTPROCESS && !MATERIAL_DOMAIN_UI)
 
 #define POSITIVE_INFINITY (asfloat(0x7F800000))
 #define NEGATIVE_INFINITY (asfloat(0xFF800000))
+
+#define NearDepthValue (HAS_INVERTED_Z_BUFFER ? 1.0f : 0.0f)
+#define FarDepthValue  (HAS_INVERTED_Z_BUFFER ? 0.0f : 1.0f)
 
 const static MaterialFloat PI = 3.1415926535897932f;
 const static float MaxHalfFloat = 65504.0f;
@@ -104,7 +107,8 @@ const static float Max10BitsFloat = 64512.0f;
 #define USE_RAYTRACED_TEXTURE_RAYCONE_LOD (RAYHITGROUPSHADER)
 #endif // USE_RAYTRACED_TEXTURE_RAYCONE_LOD
 
-static float GlobalRayCone_TexArea;
+static float GlobalTextureMipBias = 0;
+static float GlobalRayCone_TexArea = 0;
 float ComputeRayConeLod(Texture2D Tex)
 {
 #if USE_RAYTRACED_TEXTURE_RAYCONE_LOD
@@ -135,7 +139,7 @@ MaterialFloat4 Texture1DSample(Texture1D Tex, SamplerState Sampler, float UV)
 MaterialFloat4 Texture2DSample(Texture2D Tex, SamplerState Sampler, float2 UV)
 {
 #if USE_FORCE_TEXTURE_MIP
-	return Tex.SampleLevel(Sampler, UV, ComputeRayConeLod(Tex));
+	return Tex.SampleLevel(Sampler, UV, ComputeRayConeLod(Tex) + GlobalTextureMipBias);
 #else
 	return Tex.Sample(Sampler, UV);
 #endif
@@ -143,7 +147,7 @@ MaterialFloat4 Texture2DSample(Texture2D Tex, SamplerState Sampler, float2 UV)
 MaterialFloat Texture2DSample_A8(Texture2D Tex, SamplerState Sampler, float2 UV)
 {
 #if USE_FORCE_TEXTURE_MIP
-	return Tex.SampleLevel(Sampler, UV, ComputeRayConeLod(Tex)) A8_SAMPLE_MASK;
+	return Tex.SampleLevel(Sampler, UV, ComputeRayConeLod(Tex) + GlobalTextureMipBias) A8_SAMPLE_MASK;
 #else
 	return Tex.Sample(Sampler, UV) A8_SAMPLE_MASK;
 #endif
@@ -183,7 +187,7 @@ MaterialFloat4 Texture2DSampleLevel(Texture2D Tex, SamplerState Sampler, float2 
 MaterialFloat4 Texture2DSampleBias(Texture2D Tex, SamplerState Sampler, float2 UV, MaterialFloat MipBias)
 {
 #if USE_FORCE_TEXTURE_MIP
-	return Tex.SampleLevel(Sampler, UV, ComputeRayConeLod(Tex) + MipBias);
+	return Tex.SampleLevel(Sampler, UV, ComputeRayConeLod(Tex) + MipBias + GlobalTextureMipBias);
 #else
 	return Tex.SampleBias(Sampler, UV, MipBias);
 #endif
@@ -199,7 +203,7 @@ MaterialFloat4 Texture3DSampleLevel(Texture3D Tex, SamplerState Sampler, float3 
 MaterialFloat4 Texture3DSampleBias(Texture3D Tex, SamplerState Sampler, float3 UV, MaterialFloat MipBias)
 {
 #if USE_FORCE_TEXTURE_MIP
-	return Tex.SampleBias(Sampler, UV, 0);
+	return Tex.SampleLevel(Sampler, UV, 0);
 #else
 	return Tex.SampleBias(Sampler, UV, MipBias);
 #endif
@@ -234,7 +238,7 @@ MaterialFloat4 TextureExternalSample(TextureExternal Tex, SamplerState Sampler, 
 	#if SUPPORTS_TEXTURE_EXTERNAL
 		return Tex.SampleLevel(Sampler, UV, 0);
 	#else
-		return Tex.SampleLevel(Sampler, UV, ComputeRayConeLod(Tex));
+		return Tex.SampleLevel(Sampler, UV, ComputeRayConeLod(Tex) + GlobalTextureMipBias);
 	#endif
 #else
 	return Tex.Sample(Sampler, UV);
@@ -342,7 +346,7 @@ float4 PseudoVolumeTexture(Texture2D Tex, SamplerState TexSampler, float3 inPos,
 	float2 uvCurFrame = uv + curframe;
 	float2 uvNextFrame = uv + nextframe;
 
-	#if (COMPILER_GLSL_ES3_1 || COMPILER_GLSL_ES3_1_EXT)
+	#if COMPILER_GLSL_ES3_1
 	uvCurFrame.y = 1.0 - uvCurFrame.y;
 	uvNextFrame.y = 1.0 - uvNextFrame.y;
 	#endif
@@ -401,11 +405,11 @@ float4 PseudoVolumeTexture(Texture2D Tex, SamplerState TexSampler, float3 inPos,
 
 #else
 
-	#define TANGENTTOWORLD0					TEXCOORD10
-	#define TANGENTTOWORLD2					TEXCOORD11
+	#define TANGENTTOWORLD0					TEXCOORD10_centroid
+	#define TANGENTTOWORLD2					TEXCOORD11_centroid
 
 	// TangentToWorld0 is float4 only to match D3D11
-#if METAL_PROFILE || COMPILER_GLSL_ES3_1
+#if METAL_PROFILE || COMPILER_GLSL_ES3_1 || VULKAN_PROFILE
 		//@todo-rco: FIXME!
 		#define TANGENTTOWORLD_INTERPOLATOR_BLOCK	float4 TangentToWorld0 : TANGENTTOWORLD0; float4	TangentToWorld2	: TANGENTTOWORLD2;
 #else
@@ -495,21 +499,22 @@ MaterialFloat4 ClampedPow(MaterialFloat4 X,MaterialFloat4 Y)
 	return pow(max(abs(X),MaterialFloat4(POW_CLAMP,POW_CLAMP,POW_CLAMP,POW_CLAMP)),Y);
 } 
 
-MaterialFloat PositiveClampedPow(MaterialFloat X,MaterialFloat Y)
+/* Pow function that will return 0 if Base is <=0. This ensures that no compiler expands pow into exp(Exponent * log(Base)) with Base=0 */
+MaterialFloat PositiveClampedPow(MaterialFloat Base, MaterialFloat Exponent)
 {
-	return pow(max(X,POW_CLAMP),Y);
+	return (Base <= 0.0f) ? 0.0f : pow(Base, Exponent);
 }
-MaterialFloat2 PositiveClampedPow(MaterialFloat2 X,MaterialFloat2 Y)
+MaterialFloat2 PositiveClampedPow(MaterialFloat2 Base, MaterialFloat2 Exponent)
 {
-	return pow(max(X,MaterialFloat2(POW_CLAMP,POW_CLAMP)),Y);
+	return MaterialFloat2(PositiveClampedPow(Base.x, Exponent.x), PositiveClampedPow(Base.y, Exponent.y)); 
 }
-MaterialFloat3 PositiveClampedPow(MaterialFloat3 X,MaterialFloat3 Y)
+MaterialFloat3 PositiveClampedPow(MaterialFloat3 Base, MaterialFloat3 Exponent)
 {
-	return pow(max(X,MaterialFloat3(POW_CLAMP,POW_CLAMP,POW_CLAMP)),Y);
+	return MaterialFloat3(PositiveClampedPow(Base.xy, Exponent.xy), PositiveClampedPow(Base.z, Exponent.z)); 
 }  
-MaterialFloat4 PositiveClampedPow(MaterialFloat4 X,MaterialFloat4 Y)
+MaterialFloat4 PositiveClampedPow(MaterialFloat4 Base, MaterialFloat4 Exponent)
 {
-	return pow(max(X,MaterialFloat4(POW_CLAMP,POW_CLAMP,POW_CLAMP,POW_CLAMP)),Y);
+	return MaterialFloat4(PositiveClampedPow(Base.xy, Exponent.xy), PositiveClampedPow(Base.zw, Exponent.zw)); 
 } 
 
 float DDX(float Input)
@@ -1519,20 +1524,30 @@ struct FScreenVertexOutput
 // for velocity rendering, motionblur and temporal AA
 // velocity needs to support -2..2 screen space range for x and y
 // texture is 16bit 0..1 range per channel
-float2 EncodeVelocityToTexture(float2 In)
+float4 EncodeVelocityToTexture(float3 V)
 {
 	// 0.499f is a value smaller than 0.5f to avoid using the full range to use the clear color (0,0) as special value
 	// 0.5f to allow for a range of -2..2 instead of -1..1 for really fast motions for temporal AA
-	return In * (0.499f * 0.5f) + 32767.0f / 65535.0f;
+	float4 EncodedV;
+	EncodedV.xy = V.xy * (0.499f * 0.5f) + 32767.0f / 65535.0f;
+
+	uint Vz = asuint(V.z);
+
+	EncodedV.z = saturate(float((Vz >> 16) & 0xFFFF) * rcp(65535.0f) + (0.1 / 65535.0f));
+	EncodedV.w = saturate(float((Vz >>  0) & 0xFFFF) * rcp(65535.0f) + (0.1 / 65535.0f));
+
+	return EncodedV;
 }
 // see EncodeVelocityToTexture()
-float2 DecodeVelocityFromTexture(float2 In)
+float3 DecodeVelocityFromTexture(float4 EncodedV)
 {
 	const float InvDiv = 1.0f / (0.499f * 0.5f);
-	// reference
-//	return (In - 32767.0f / 65535.0f ) / (0.499f * 0.5f);
-	// MAD layout to help compiler
-	return In * InvDiv - 32767.0f / 65535.0f * InvDiv;
+
+	float3 V;
+	V.xy = EncodedV.xy * InvDiv - 32767.0f / 65535.0f * InvDiv;
+	V.z = asfloat((uint(round(EncodedV.z * 65535.0f)) << 16) | uint(round(EncodedV.w * 65535.0f)));
+
+	return V;
 }
 
 // Used for the Global Illumination in the GIReplace material expression
@@ -1667,6 +1682,11 @@ bool GetShadowReplaceState()
 #endif
 }
 
+bool GetReflectionCapturePassSwitchState()
+{
+	return View.RenderingReflectionCaptureMask > 0.0f;
+}
+
 float IsShadowDepthShader()
 {
 	return GetShadowReplaceState() ? 1.0f : 0.0f;
@@ -1764,3 +1784,18 @@ struct FPixelShaderOut
 
 #endif // SUPPORTS_INDEPENDENT_SAMPLERS
 
+#if FEATURE_LEVEL >= FEATURE_LEVEL_SM5
+
+float4 GatherDepth(Texture2D Texture, float2 UV)
+{
+	// using Gather: xyzw in counter clockwise order starting with the sample to the lower left of the queried location
+	float4 DeviceZ = Texture.GatherRed(GlobalBilinearClampedSampler, UV);
+
+	return float4(
+		ConvertFromDeviceZ(DeviceZ.x),
+		ConvertFromDeviceZ(DeviceZ.y),
+		ConvertFromDeviceZ(DeviceZ.z),
+		ConvertFromDeviceZ(DeviceZ.w));
+}
+
+#endif

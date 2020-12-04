@@ -3,13 +3,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
+
 #include "Blueprints/IDisplayClusterBlueprintAPI.h"
 #include "DisplayClusterBlueprintAPIImpl.generated.h"
-
-class UDisplayClusterRootComponent;
-
-struct FDisplayClusterClusterEvent;
-struct FPostProcessSettings;
 
 
 /**
@@ -26,53 +22,46 @@ public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	// DisplayCluster module API
 	//////////////////////////////////////////////////////////////////////////////////////////////
-	/** Return if the module has been initialized. */
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Is module initialized"), Category = "DisplayCluster")
-	virtual bool IsModuleInitialized() override;
+	virtual bool IsModuleInitialized() const override;
 
-	/** Return current operation mode. */
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get operation mode"), Category = "DisplayCluster")
-	virtual EDisplayClusterOperationMode GetOperationMode() override;
+	virtual EDisplayClusterOperationMode GetOperationMode() const override;
 
 public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	// Cluster API
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Is master node"), Category = "DisplayCluster|Cluster")
-	virtual bool IsMaster() override;
+	virtual bool IsMaster() const override;
 	
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Is slave node"), Category = "DisplayCluster|Cluster")
-	virtual bool IsSlave() override;
-
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Is cluster mode"), Category = "DisplayCluster|Cluster")
-	virtual bool IsCluster() override;
-
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Is standalone mode"), Category = "DisplayCluster|Cluster")
-	virtual bool IsStandalone() override;
+	virtual bool IsSlave() const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get node ID"), Category = "DisplayCluster|Cluster")
-	virtual FString GetNodeId() override;
+	virtual FString GetNodeId() const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get nodes amount"), Category = "DisplayCluster|Cluster")
-	virtual int32 GetNodesAmount() override;
+	virtual int32 GetNodesAmount() const override;
 
-	/** Returns amount of nodes in cluster. */
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Add cluster event listener"), Category = "DisplayCluster|Cluster")
 	virtual void AddClusterEventListener(TScriptInterface<IDisplayClusterClusterEventListener> Listener) override;
 
-	/** Returns amount of nodes in cluster. */
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Remove cluster event listener"), Category = "DisplayCluster|Cluster")
 	virtual void RemoveClusterEventListener(TScriptInterface<IDisplayClusterClusterEventListener> Listener) override;
 
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Emit cluster event"), Category = "DisplayCluster|Cluster")
-	virtual void EmitClusterEvent(const FDisplayClusterClusterEvent& Event, bool MasterOnly) override;
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Emit JSON cluster event"), Category = "DisplayCluster|Cluster")
+	virtual void EmitClusterEventJson(const FDisplayClusterClusterEventJson& Event, bool bMasterOnly) override;
+
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Emit binary cluster event"), Category = "DisplayCluster|Cluster")
+	virtual void EmitClusterEventBinary(const FDisplayClusterClusterEventBinary& Event, bool bMasterOnly) override;
 
 public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	// Config API
 	//////////////////////////////////////////////////////////////////////////////////////////////
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get local viewports"), Category = "DisplayCluster|Config")
-	virtual void GetLocalViewports(bool IsRTT, TArray<FString>& ViewportIDs, TArray<FString>& ViewportTypes, TArray<FIntPoint>& ViewportLocations, TArray<FIntPoint>& ViewportSizes) override;
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get config data"), Category = "DisplayCluster|Cluster")
+	virtual UDisplayClusterConfigurationData* GetConfig() const override;
 
 public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
@@ -80,43 +69,7 @@ public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	// Root
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get root actor"), Category = "DisplayCluster|Game")
-	virtual ADisplayClusterRootActor* GetRootActor() override;
-
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get root component"), Category = "DisplayCluster|Game")
-	virtual UDisplayClusterRootComponent* GetRootComponent() override;
-
-	// Screens
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get screen by ID"), Category = "DisplayCluster|Game")
-	virtual UDisplayClusterScreenComponent* GetScreenById(const FString& id) override;
-
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get all screens"), Category = "DisplayCluster|Game")
-	virtual TArray<UDisplayClusterScreenComponent*> GetAllScreens() override;
-
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get amount of screens"), Category = "DisplayCluster|Game")
-	virtual int32 GetScreensAmount() override;
-
-	// Cameras
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get all cameras"), Category = "DisplayCluster|Game")
-	virtual TArray<UDisplayClusterCameraComponent*> GetAllCameras() override;
-
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get camera by ID"), Category = "DisplayCluster|Game")
-	virtual UDisplayClusterCameraComponent* GetCameraById(const FString& id) override;
-
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get cameras amount"), Category = "DisplayCluster|Game")
-	virtual int32 GetCamerasAmount() override;
-
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get default camera"), Category = "DisplayCluster|Game")
-	virtual UDisplayClusterCameraComponent* GetDefaultCamera() override;
-
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set default camera by ID"), Category = "DisplayCluster|Game")
-	virtual void SetDefaultCameraById(const FString& id) override;
-
-	// Nodes
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get node by ID"), Category = "DisplayCluster|Game")
-	virtual UDisplayClusterSceneComponent* GetNodeById(const FString& id) override;
-
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get all nodes"), Category = "DisplayCluster|Game")
-	virtual TArray<UDisplayClusterSceneComponent*> GetAllNodes() override;
+	virtual ADisplayClusterRootActor* GetRootActor() const override;
 
 public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
@@ -124,96 +77,82 @@ public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	// Device information
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get amount of VRPN axis devices"), Category = "DisplayCluster|Input")
-	virtual int32 GetAxisDeviceAmount() override;
+	virtual int32 GetAxisDeviceAmount() const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get amount of VRPN button devices"), Category = "DisplayCluster|Input")
-	virtual int32 GetButtonDeviceAmount() override;
+	virtual int32 GetButtonDeviceAmount() const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get amount of VRPN tracker devices"), Category = "DisplayCluster|Input")
-	virtual int32 GetTrackerDeviceAmount() override;
+	virtual int32 GetTrackerDeviceAmount() const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get IDs of VRPN axis devices"), Category = "DisplayCluster|Input")
-	virtual bool GetAxisDeviceIds(TArray<FString>& IDs) override;
+	virtual void GetAxisDeviceIds(TArray<FString>& DeviceIDs) const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get IDs of VRPN button devices"), Category = "DisplayCluster|Input")
-	virtual bool GetButtonDeviceIds(TArray<FString>& IDs) override;
+	virtual void GetButtonDeviceIds(TArray<FString>& DeviceIDs) const override;
+
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get IDs of keyboard devices"), Category = "DisplayCluster|Input")
+	virtual void GetKeyboardDeviceIds(TArray<FString>& DeviceIDs) const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get IDs of VRPN tracker devices"), Category = "DisplayCluster|Input")
-	virtual bool GetTrackerDeviceIds(TArray<FString>& IDs) override;
+	virtual void GetTrackerDeviceIds(TArray<FString>& DeviceIDs) const override;
 
 	// Buttons
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get VRPN button state"), Category = "DisplayCluster|Input")
-	virtual void GetButtonState(const FString& DeviceId, uint8 DeviceChannel, bool& CurState, bool& IsChannelAvailable) override;
+	virtual void GetButtonState(const FString& DeviceID, int32 DeviceChannel, bool& CurrentState, bool& IsChannelAvailable) const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Is VRPN button pressed"), Category = "DisplayCluster|Input")
-	virtual void IsButtonPressed(const FString& DeviceId, uint8 DeviceChannel, bool& CurPressed, bool& IsChannelAvailable) override;
+	virtual void IsButtonPressed(const FString& DeviceID, int32 DeviceChannel, bool& IsPressedCurrently, bool& IsChannelAvailable) const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Is VRPN button released"), Category = "DisplayCluster|Input")
-	virtual void IsButtonReleased(const FString& DeviceId, uint8 DeviceChannel, bool& CurReleased, bool& IsChannelAvailable) override;
+	virtual void IsButtonReleased(const FString& DeviceID, int32 DeviceChannel, bool& IsReleasedCurrently, bool& IsChannelAvailable) const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Was VRPN button pressed"), Category = "DisplayCluster|Input")
-	virtual void WasButtonPressed(const FString& DeviceId, uint8 DeviceChannel, bool& WasPressed, bool& IsChannelAvailable) override;
+	virtual void WasButtonPressed(const FString& DeviceID, int32 DeviceChannel, bool& WasPressed, bool& IsChannelAvailable) const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Was VRPN button released"), Category = "DisplayCluster|Input")
-	virtual void WasButtonReleased(const FString& DeviceId, uint8 DeviceChannel, bool& WasReleased, bool& IsChannelAvailable) override;
+	virtual void WasButtonReleased(const FString& DeviceID, int32 DeviceChannel, bool& WasReleased, bool& IsChannelAvailable) const override;
 
 	// Axes
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get VRPN axis value"), Category = "DisplayCluster|Input")
-	virtual void GetAxis(const FString& DeviceId, uint8 DeviceChannel, float& Value, bool& IsAvailable) override;
+	virtual void GetAxis(const FString& DeviceID, int32 DeviceChannel, float& Value, bool& IsAvailable) const override;
 
 	// Trackers
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get VRPN tracker location"), Category = "DisplayCluster|Input")
-	virtual void GetTrackerLocation(const FString& DeviceId, uint8 DeviceChannel, FVector& Location, bool& IsChannelAvailable) override;
+	virtual void GetTrackerLocation(const FString& DeviceID, int32 DeviceChannel, FVector& Location, bool& IsChannelAvailable) const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get VRPN tracker rotation (as quaternion)"), Category = "DisplayCluster|Input")
-	virtual void GetTrackerQuat(const FString& DeviceId, uint8 DeviceChannel, FQuat& Rotation, bool& IsChannelAvailable) override;
+	virtual void GetTrackerQuat(const FString& DeviceID, int32 DeviceChannel, FQuat& Rotation, bool& IsChannelAvailable) const override;
 
 public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	// Render API
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set viewport camera"), Category = "DisplayCluster|Render")
-	virtual void SetViewportCamera(const FString& InCameraId, const FString& InViewportId) override;
+	virtual void SetViewportCamera(const FString& CameraId, const FString& ViewportId) override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get viewport's buffer ratio"), Category = "DisplayCluster|Render")
-	virtual void GetBufferRatio(const FString& InViewportId, float& OutBufferRatio) override;
+	virtual bool GetBufferRatio(const FString& ViewportId, float& BufferRatio) const override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set viewport's buffer ratio"), Category = "DisplayCluster|Render")
-	virtual void SetBufferRatio(const FString& InViewportId, float InBufferRatio) override;
+	virtual bool SetBufferRatio(const FString& ViewportId, float BufferRatio) override;
 
 	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set start post processing settings for viewport"), Category = "DisplayCluster|Render")
-	virtual void SetStartPostProcessingSettings(const FString& ViewportID, const FPostProcessSettings& StartPostProcessingSettings) override;
+	virtual void SetStartPostProcessingSettings(const FString& ViewportId, const FPostProcessSettings& StartPostProcessingSettings) override;
 
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set start post override settings for viewport"), Category = "DisplayCluster|Render")
-	virtual void SetOverridePostProcessingSettings(const FString& ViewportID, const FPostProcessSettings& OverridePostProcessingSettings, float BlendWeight = 1.0f) override;
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set override post processing settings for viewport"), Category = "DisplayCluster|Render")
+	virtual void SetOverridePostProcessingSettings(const FString& ViewportId, const FPostProcessSettings& OverridePostProcessingSettings, float BlendWeight = 1.0f) override;
 
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set start post processing settings for viewport"), Category = "DisplayCluster|Render")
-	virtual void SetFinalPostProcessingSettings(const FString& ViewportID, const FPostProcessSettings& FinalPostProcessingSettings) override;
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set final post processing settings for viewport"), Category = "DisplayCluster|Render")
+	virtual void SetFinalPostProcessingSettings(const FString& ViewportId, const FPostProcessSettings& FinalPostProcessingSettings) override;
 
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get viewport rectangle"), Category = "DisplayCluster|Render")
-	virtual bool GetViewportRect(const FString& ViewportID, FIntPoint& ViewportLoc, FIntPoint& ViewportSize) override;
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get Updated Post Processing"), Category = "DisplayCluster|Render")
+	virtual bool GetViewportRect(const FString& ViewportId, FIntPoint& ViewportLoc, FIntPoint& ViewportSize) const override;
 
-public:
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	// Render/Camera API
-	//////////////////////////////////////////////////////////////////////////////////////////////
-	/** Return eye interpupillary distance (eye separation) for stereoscopic rendering. */
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get interpuppillary distance"), Category = "DisplayCluster|Render|Camera")
-	virtual float GetInterpupillaryDistance(const FString& CameraId) override;
+	/** Returns list of local viewports. */
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get local viewports"), Category = "DisplayCluster|Config")
+	virtual void GetLocalViewports(TArray<FString>& ViewportIDs, TArray<FString>& ProjectionTypes, TArray<FIntPoint>& ViewportLocations, TArray<FIntPoint>& ViewportSizes) const override;
 
-	/** Set eye interpupillary distance (eye separation) for stereoscopic rendering. */
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set interpuppillary distance"), Category = "DisplayCluster|Render|Camera")
-	virtual void SetInterpupillaryDistance(const FString& CameraId, float EyeDistance) override;
-
-	/** Get Swap eye rendering state. */
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Get eye swap"), Category = "DisplayCluster|Render|Camera")
-	virtual bool GetEyesSwap(const FString& CameraId) override;
-
-	/** Swap eye rendering. */
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Set eye swap"), Category = "DisplayCluster|Render|Camera")
-	virtual void SetEyesSwap(const FString& CameraId, bool EyeSwapped) override;
-
-	/** Toggle current eye swap state. */
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Toggle eye swap"), Category = "DisplayCluster|Render|Camera")
-	virtual bool ToggleEyesSwap(const FString& CameraId) override;
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Scene View Extension Is Active In Context Function"), Category = "DisplayCluster|Render")
+	virtual void SceneViewExtensionIsActiveInContextFunction(const TArray<FString>& ViewportIDs, FSceneViewExtensionIsActiveFunctor& OutIsActiveFunction) const override;
 };

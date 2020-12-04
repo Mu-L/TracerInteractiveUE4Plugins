@@ -31,6 +31,10 @@ struct FTakeRecorderUserParameters
 	UPROPERTY(config, EditAnywhere, BlueprintReadWrite, Category="User Settings")
 	bool bRemoveRedundantTracks;
 
+	/** Tolerance to use when reducing keys */
+	UPROPERTY(config, EditAnywhere, BlueprintReadWrite, Category="User Settings")
+	float ReduceKeysTolerance;
+
 	/** Whether to save recorded level sequences and assets when done recording */
 	UPROPERTY(config, EditAnywhere, BlueprintReadWrite, Category = "User Settings")
 	bool bSaveRecordedAssets;
@@ -79,6 +83,12 @@ struct FTakeRecorderProjectParameters
 	 */
 	UPROPERTY(config, EditAnywhere, BlueprintReadWrite, Category = "Take Recorder")
 	bool bStartAtCurrentTimecode;
+
+	/**
+	 * If enabled, timecode will be recorded into each actor track
+	 */
+	UPROPERTY(config, EditAnywhere, BlueprintReadWrite, Category = "Take Recorder")
+	bool bRecordTimecode;
 
 	/**
 	* If enabled, each Source will be recorded into a separate Sequence and embedded in the Master Sequence will link to them via Subscenes track.

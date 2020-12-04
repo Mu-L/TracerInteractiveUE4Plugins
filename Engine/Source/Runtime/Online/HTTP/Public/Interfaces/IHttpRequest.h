@@ -65,10 +65,10 @@ namespace EHttpRequestStatus
 class IHttpRequest;
 class IHttpResponse;
 
-typedef TSharedPtr<IHttpRequest> FHttpRequestPtr;
+typedef TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> FHttpRequestPtr;
 typedef TSharedPtr<IHttpResponse, ESPMode::ThreadSafe> FHttpResponsePtr;
 
-typedef TSharedRef<IHttpRequest> FHttpRequestRef;
+typedef TSharedRef<IHttpRequest, ESPMode::ThreadSafe> FHttpRequestRef;
 typedef TSharedRef<IHttpResponse, ESPMode::ThreadSafe> FHttpResponseRef;
 
 /**
@@ -111,7 +111,7 @@ DECLARE_DELEGATE_ThreeParams(FHttpRequestWillRetryDelegate, FHttpRequestPtr /*Re
  * Interface for Http requests (created using FHttpFactory)
  */
 class IHttpRequest : 
-	public IHttpBase, public TSharedFromThis<IHttpRequest>
+	public IHttpBase, public TSharedFromThis<IHttpRequest, ESPMode::ThreadSafe>
 {
 public:
 
@@ -148,6 +148,16 @@ public:
 	 * @param ContentPayload - payload to set.
 	 */
 	virtual void SetContent(const TArray<uint8>& ContentPayload) = 0;
+
+	/**
+	 * Sets the content of the request (optional data).
+	 * Usually only set for POST requests.
+	 *
+	 * This version lets the API take ownership of the payload directly, helpful for larger payloads.
+	 *
+	 * @param ContentPayload - payload to set.
+	 */
+	virtual void SetContent(TArray<uint8>&& ContentPayload) = 0;
 
 	/**
 	 * Sets the content of the request as a string encoded as UTF8.
@@ -197,6 +207,28 @@ public:
 	*	comma is inserted between old value and new value, per HTTP specifications
 	*/
 	virtual void AppendToHeader(const FString& HeaderName, const FString& AdditionalHeaderValue) = 0;
+
+	/**
+	 * Sets an optional timeout in seconds for this entire HTTP request to complete.
+	 * If set, this value overrides the default HTTP timeout set via FHttpModule::SetTimeout().
+	 *
+	 * @param InTimeoutSecs - Timeout for this HTTP request instance, in seconds
+	 */
+	virtual void SetTimeout(float InTimeoutSecs) = 0;
+
+	/**
+	 * Clears the optional timeout in seconds for this HTTP request, causing the default value
+	 * from FHttpModule::GetTimeout() to be used.
+	 */
+	virtual void ClearTimeout() = 0;
+
+	/**
+	 * Gets the optional timeout in seconds for this entire HTTP request to complete.
+	 * If valid, this value overrides the default HTTP timeout set via FHttpModule::SetTimeout().
+	 *
+	 * @return the timeout for this HTTP request instance, in seconds
+	 */
+	virtual TOptional<float> GetTimeout() const = 0;
 
 	/**
 	 * Called to begin processing the request.

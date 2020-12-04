@@ -195,10 +195,41 @@ public:
 	 * Add an element at the lowest free index, instead of the last freed index. 
 	 * This requires a search which can be accelerated with LowestFreeIndexSearchStart.
 	 */
+	UE_DEPRECATED(4.26, "AddAtLowestFreeIndex API is deprecated; please use EmplaceAtLowestFreeIndex instead.")
 	int32 AddAtLowestFreeIndex(const ElementType& Element, int32& LowestFreeIndexSearchStart)
 	{
 		FSparseArrayAllocationInfo Allocation = AddUninitializedAtLowestFreeIndex(LowestFreeIndexSearchStart);
 		new(Allocation) ElementType(Element);
+		return Allocation.Index;
+	}
+
+	/**
+	 * Constructs a new item at the last freed index of the array.
+	 *
+	 * @param Args	The arguments to forward to the constructor of the new item.
+	 * @return		Index to the new item
+	 */
+	template <typename... ArgsType>
+	FORCEINLINE int32 Emplace(ArgsType&&... Args)
+	{
+		FSparseArrayAllocationInfo Allocation = AddUninitialized();
+		new(Allocation) ElementType(Forward<ArgsType>(Args)...);
+		return Allocation.Index;
+	}
+
+	/**
+	 * Constructs a new item at the lowest free index of the array.
+	 * This requires a search which can be accelerated with LowestFreeIndexSearchStart.
+	 *
+	 * @param LowestFreeIndexSearchStart	Where to start the search for a free index.
+	 * @param Args							The arguments to forward to the constructor of the new item.
+	 * @return								Index to the new item
+	 */
+	template <typename... ArgsType>
+	FORCEINLINE int32 EmplaceAtLowestFreeIndex(int32& LowestFreeIndexSearchStart, ArgsType&&... Args)
+	{
+		FSparseArrayAllocationInfo Allocation = AddUninitializedAtLowestFreeIndex(LowestFreeIndexSearchStart);
+		new(Allocation) ElementType(Forward<ArgsType>(Args)...);
 		return Allocation.Index;
 	}
 
@@ -486,9 +517,9 @@ public:
 		// Copy the existing elements to a new array.
 		TSparseArray<ElementType,Allocator> CompactedArray;
 		CompactedArray.Empty(Num());
-		for(TConstIterator It(*this);It;++It)
+		for(TIterator It(*this);It;++It)
 		{
-			new(CompactedArray.AddUninitialized()) ElementType(*It);
+			new(CompactedArray.AddUninitialized()) ElementType(MoveTempIfPossible(*It));
 		}
 
 		// Replace this array with the compacted array.
@@ -775,7 +806,7 @@ public:
 	int32 PointerToIndex(const ElementType* Ptr) const
 	{
 		checkSlow(Data.Num());
-		int32 Index = Ptr - &GetData(0);
+		int32 Index = (int32)((FElementOrFreeListLink*)Ptr - &GetData(0));
 		checkSlow(Index >= 0 && Index < Data.Num() && Index < AllocationFlags.Num() && AllocationFlags[Index]);
 		return Index;
 	}

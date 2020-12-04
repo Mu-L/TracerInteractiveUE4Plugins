@@ -27,15 +27,7 @@ class LEVELEDITOR_API FLevelEditorCommands : public TCommands<FLevelEditorComman
 {
 
 public:
-	FLevelEditorCommands() : TCommands<FLevelEditorCommands>
-	(
-		"LevelEditor", // Context name for fast lookup
-		NSLOCTEXT("Contexts", "LevelEditor", "Level Editor"), // Localized context name for displaying
-		"LevelViewport", // Parent
-		FEditorStyle::GetStyleSetName() // Icon Style Set
-	)
-	{
-	}
+	FLevelEditorCommands();
 	
 
 	/**
@@ -88,6 +80,7 @@ public:
 	TSharedPtr< FUICommandInfo > BuildLODsOnly;
 	TSharedPtr< FUICommandInfo > BuildTextureStreamingOnly;
 	TSharedPtr< FUICommandInfo > BuildVirtualTextureOnly;
+	TSharedPtr< FUICommandInfo > BuildGrassMapsOnly;
 	TSharedPtr< FUICommandInfo > LightingQuality_Production;
 	TSharedPtr< FUICommandInfo > LightingQuality_High;
 	TSharedPtr< FUICommandInfo > LightingQuality_Medium;
@@ -587,14 +580,13 @@ public:
 	TSharedPtr< FUICommandInfo > MaterialQualityLevel_Low;
 	TSharedPtr< FUICommandInfo > MaterialQualityLevel_Medium;
 	TSharedPtr< FUICommandInfo > MaterialQualityLevel_High;
+	TSharedPtr< FUICommandInfo > MaterialQualityLevel_Epic;
 
 	TSharedPtr< FUICommandInfo > ToggleFeatureLevelPreview;
 
 	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_SM5;
-	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_AndroidGLES31;
-	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_AndroidVulkanES31;
-	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_AndroidVulkanSM5;
-	TSharedPtr< FUICommandInfo > PreviewPlatformOverride_IOSMetalES31;
+
+	TMap <FName, TSharedPtr<FUICommandInfo>> PreviewPlatformOverrides;
 	
 	///**
 	// * Mode Commands                   
@@ -772,6 +764,7 @@ public:
 	static void BuildLODsOnly_Execute();
 	static void BuildTextureStreamingOnly_Execute();
 	static void BuildVirtualTextureOnly_Execute();
+	static void BuildGrassMapsOnly_Execute();
 	static void SetLightingQuality( ELightingBuildQuality NewQuality );
 	static bool IsLightingQualityChecked( ELightingBuildQuality TestQuality );
 	static float GetLightingDensityIdeal();

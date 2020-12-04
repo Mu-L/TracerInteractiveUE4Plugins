@@ -164,7 +164,7 @@ public:
 			const int32 NumTrueFramesPerTenMinutes = FMath::FloorToInt((float)((60 * 10) * InFrameRate.AsDecimal()));
 
 			// Calculate out how many times we've skipped dropping frames (ie: Minute 15 gives us a value of 1, as we've only didn't drop frames on the 10th minute)
-			const int32 NumTimesSkippedDroppingFrames = FMath::FloorToInt(FMath::Abs(InFrameNumber.Value) / (float)NumTrueFramesPerTenMinutes);
+			const int32 NumTimesSkippedDroppingFrames = FMath::Abs(InFrameNumber.Value) / NumTrueFramesPerTenMinutes;
 
 			// Now we can figure out how many frame (displays) have been skipped total; 9 times out of every 10 minutes
 			const int32 NumFramesSkippedTotal = NumTimesSkippedDroppingFrames * 9 * NumberOfTimecodesToDrop;
@@ -184,7 +184,7 @@ public:
 				const uint32 NumTrueFramesPerMinute = (uint32)FMath::FloorToInt(60 * (float)InFrameRate.AsDecimal());
 
 				// Figure out which minute we are (0-9) to see how many to skip
-				int32 CurrentMinuteOfTen = FMath::FloorToInt((FrameInTrueFrames - NumberOfTimecodesToDrop) / (float)NumTrueFramesPerMinute);
+				int32 CurrentMinuteOfTen = (FrameInTrueFrames - NumberOfTimecodesToDrop) / NumTrueFramesPerMinute;
 				int NumAddedFrames = NumFramesSkippedTotal + (NumberOfTimecodesToDrop * CurrentMinuteOfTen);
 				OffsetFrame += NumAddedFrames;
 			}
@@ -269,11 +269,10 @@ public:
 	/** Drop frame is only support for frame rate of 29.97 or 59.94. */
 	static bool IsDropFormatTimecodeSupported(const FFrameRate& InFrameRate)
 	{
-		// Drop Format Timecode is only valid for 29.97 and 59.94.
-		const FFrameRate TwentyNineNineSeven = FFrameRate(30000, 1001);
-		const FFrameRate FiftyNineNineFour = FFrameRate(60000, 1001);
+		const double InRate = InFrameRate.AsDecimal();
 
-		return InFrameRate == TwentyNineNineSeven || InFrameRate == FiftyNineNineFour;
+		return FMath::IsNearlyEqual(InRate, 30.0/1.001)
+			|| FMath::IsNearlyEqual(InRate, 60.0/1.001);
 	}
 
 	/** If the frame rate support drop frame format and the app wish to use drop frame format by default. */
@@ -286,7 +285,7 @@ public:
 	static CORE_API bool UseDropFormatTimecodeByDefaultWhenSupported();
 
 	/**
-	 * Get the Qualified Timecode formatted in HH:MM:SS:FF or HH;MM;SS;FF depending on if this represents drop-frame timecode or not.
+	 * Get the Qualified Timecode formatted in HH:MM:SS:FF or HH:MM:SS;FF depending on if this represents drop-frame timecode or not.
 	 * @param bForceSignDisplay - Forces the timecode to be prepended with a positive or negative sign.
 								  Standard behavior is to only show the sign when the value is negative.
 	 */
@@ -308,7 +307,7 @@ public:
 
 		if (bDropFrameFormat)
 		{
-			return FString::Printf(TEXT("%s%02d;%02d;%02d;%02d"), SignText, FMath::Abs(Hours), FMath::Abs(Minutes), FMath::Abs(Seconds), FMath::Abs(Frames));
+			return FString::Printf(TEXT("%s%02d:%02d:%02d;%02d"), SignText, FMath::Abs(Hours), FMath::Abs(Minutes), FMath::Abs(Seconds), FMath::Abs(Frames));
 		}
 		else
 		{

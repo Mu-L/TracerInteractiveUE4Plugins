@@ -3,6 +3,7 @@
 #include "BackChannel/Protocol/OSC/BackChannelOSCMessage.h"
 #include "BackChannel/Private/BackChannelCommon.h"
 
+bool FBackChannelOSCMessage::bIsLegacyConnection = false;
 
 FBackChannelOSCMessage::FBackChannelOSCMessage(OSCPacketMode InMode)
 {
@@ -15,7 +16,7 @@ FBackChannelOSCMessage::FBackChannelOSCMessage(OSCPacketMode InMode)
 FBackChannelOSCMessage::FBackChannelOSCMessage(const TCHAR* InAddress)
 	: FBackChannelOSCMessage(OSCPacketMode::Write)
 {
-	SetAddress(InAddress);
+	SetPath(InAddress);
 }
 
 FBackChannelOSCMessage::~FBackChannelOSCMessage()
@@ -41,9 +42,10 @@ FBackChannelOSCMessage& FBackChannelOSCMessage::operator=(FBackChannelOSCMessage
 }
 
 
-void FBackChannelOSCMessage::SetAddress(const TCHAR* InAddress)
+int FBackChannelOSCMessage::SetPath(const TCHAR* InAddress)
 {
 	Address = InAddress;
+	return 0;
 }
 
 void FBackChannelOSCMessage::ResetRead()
@@ -53,7 +55,7 @@ void FBackChannelOSCMessage::ResetRead()
 	BufferIndex = 0;
 }
 
-void FBackChannelOSCMessage::Read(FString& Value)
+int FBackChannelOSCMessage::Read(const TCHAR* InName, FString& Value)
 {
 	check(IsReading());
 	/*if (Mode == OSCPacketMode::Write)
@@ -73,7 +75,7 @@ void FBackChannelOSCMessage::Read(FString& Value)
 		if (CurrentTag != 's')
 		{
 			UE_LOG(LogBackChannel, Error, TEXT("OSCMessage: Requested tag 's' but next tag was %c"), CurrentTag);
-			return;
+			return 1;
 		}
 
 		// get a pointer to the string (which is null-terminated) and read into the value
@@ -85,70 +87,150 @@ void FBackChannelOSCMessage::Read(FString& Value)
 
 		TagIndex++;
 	}
+
+	return 0;
 }
 
-void FBackChannelOSCMessage::Serialize(const TCHAR Code, void* InData, int32 InSize)
+int FBackChannelOSCMessage::Serialize(const TCHAR Code, void* InData, int32 InSize)
 {
 	if (Mode == OSCPacketMode::Read)
 	{
-		SerializeRead(Code, InData, InSize);
+		return ReadTagAndData(Code, InData, InSize);
 	}
 	else
 	{
-		SerializeWrite(Code, InData, InSize);
+		return WriteTagAndData(Code, InData, InSize);
 	}
 }
 
-void FBackChannelOSCMessage::SerializeWrite(const TCHAR Code, const void* InData, int32 InSize)
+int FBackChannelOSCMessage::WriteTag(const TCHAR Code)
 {
 	TagString += Code;
+	TagIndex++;
+	return 0; 
+}
 
+int FBackChannelOSCMessage::WriteTagAndData(const TCHAR Code, const void* InData, int32 InSize)
+{
+	WriteTag(Code);
+	WriteData(InData, InSize);
+	return 0;
+}
+
+int FBackChannelOSCMessage::WriteData(const void* InData, int32 InSize)
+{
 	// in OSC every write must be a multiple of 32-bits
 	const int32 RoundedSize = RoundedArgumentSize(InSize);
 
+	// allocate space and write.
 	Buffer.AddUninitialized(RoundedSize);
 	FMemory::Memcpy(Buffer.GetData() + BufferIndex, InData, InSize);
-
 	BufferIndex += RoundedSize;
-	TagIndex++;
+
+	return 0;
 }
 
-void FBackChannelOSCMessage::SerializeRead(const TCHAR Code, void* InData, int32 InSize)
+TCHAR FBackChannelOSCMessage::ReadTag(const TCHAR ExpectedTag, bool SuppressWarning /*= false*/)
 {
 	if (TagIndex == TagString.Len())
 	{
-		UE_LOG(LogBackChannel, Error, TEXT("OSCMessage: Cannot read tag %c, no more tags!"), Code);
-		return;
+		UE_CLOG(!SuppressWarning, LogBackChannel, Error, TEXT("OSCMessage: Cannot read tag %c, no more tags!"), ExpectedTag);
+		return 0;
 	}
 
 	TCHAR CurrentTag = TagString[TagIndex];
 
-	if (CurrentTag != Code)
+	if (CurrentTag != ExpectedTag)
 	{
-		UE_LOG(LogBackChannel, Error, TEXT("OSCMessage: Requested tag %c but next tag was %c"), Code, CurrentTag);
-		return;
+		UE_CLOG(!SuppressWarning, LogBackChannel, Error, TEXT("OSCMessage: Requested tag %c but next tag was %c"), ExpectedTag, CurrentTag);
+		return 0;
 	}
 
-	FMemory::Memcpy(InData, Buffer.GetData() + BufferIndex, InSize);
-
-	// in OSC every write must be a multiple of 32-bits
-	BufferIndex += RoundedArgumentSize(InSize);
 	TagIndex++;
+	return CurrentTag;
 }
 
-int32 FBackChannelOSCMessage::GetSize() const 
+int FBackChannelOSCMessage::ReadTagAndData(const TCHAR ExpectedTag, void* InData, int32 InSize)
 {
-	const int32 kAddressLength = RoundedArgumentSize(GetAddress().Len()+1);
+	TCHAR CurrentTag = ReadTag(ExpectedTag);
+
+	if (CurrentTag == 0)
+	{
+		// readtag will generate errors
+		return 1;
+	}	
+	ReadData(InData, InSize);
+	return 0;
+}
+
+int FBackChannelOSCMessage::ReadData(void* InData, int32 InSize)
+{
+	FMemory::Memcpy(InData, Buffer.GetData() + BufferIndex, InSize);
+	// in OSC every write must be a multiple of 32-bits
+	BufferIndex += RoundedArgumentSize(InSize);
+	return 0;
+}
+
+/* Read a blob of data from our arguments */
+int FBackChannelOSCMessage::Read(const TCHAR* InName, void* OutBlob, int32 MaxBlobSize, int32& OutBlobSize)
+{
+	check(IsReading());
+
+	bool ReadWasSuccess = false;
+
+	if (ReadTag(TEXT('b')))
+	{
+		// take a copy here incase the user should use the same var for both args..
+		int PassedMaxSize = MaxBlobSize;
+
+		// read the blob size
+		ReadData(&OutBlobSize, sizeof(int32));
+
+		if (PassedMaxSize == 0)
+		{
+			// if MaxBlobSize was 0 then this was just a query so backout the tag and int that was read
+			TagIndex--;
+			BufferIndex -= sizeof(int32);
+			ReadWasSuccess = true; // still success
+		}
+		else
+		{
+			if (ensure(OutBlob) && PassedMaxSize >= OutBlobSize)
+			{
+				ReadData(OutBlob, OutBlobSize);
+			}
+			else
+			{
+				// don't read any data, just skip it all so subsequent reads don't access duff data
+				BufferIndex += RoundedArgumentSize(OutBlobSize);
+				UE_LOG(LogBackChannel, Error, TEXT("OSCMessage: buffer for reading blob was too small. Blob: %d bytes, buffer: %d"), OutBlobSize, MaxBlobSize);
+			}
+		}
+
+		ReadWasSuccess = (MaxBlobSize >= OutBlobSize || MaxBlobSize == 0);
+	}
+
+	return ReadWasSuccess ? 0 : 1;
+}
+
+void FBackChannelOSCMessage::GetComponentSizes(int32& OutAddressSize, int32& OutTagSize, int32& OutBufferSize) const
+{
+	OutAddressSize = RoundedArgumentSize(GetPath().Len()+1);
 
 	const FString FinalTagString = FString::Printf(TEXT(",%s"), *GetTags());
 
-	const int32 kTagLength = RoundedArgumentSize(FinalTagString.Len()+1);		// we don't store the , internally
+	OutTagSize = RoundedArgumentSize(FinalTagString.Len()+1);		// we don't store the , internally
 
-	const int32 kArgumentSize = BufferIndex;
-
-	return kAddressLength + kTagLength + kArgumentSize;
+	OutBufferSize = BufferIndex;
 }
 
+int32 FBackChannelOSCMessage::GetSize() const
+{
+	int32 AddressSize, TagSize, BufferSize;
+	GetComponentSizes(AddressSize, TagSize, BufferSize);
+
+	return AddressSize + TagSize + BufferSize;
+}
 
 TArray<uint8> FBackChannelOSCMessage::WriteToBuffer() const
 {
@@ -159,23 +241,28 @@ TArray<uint8> FBackChannelOSCMessage::WriteToBuffer() const
 
 void FBackChannelOSCMessage::WriteToBuffer(TArray<uint8>& OutBuffer) const
 {
-	const int kRequiredSize = GetSize();
+	int32 AddressSize(0);
+	int32 TagSize(0);
+	int32 BufferSize(0);
+	GetComponentSizes(AddressSize, TagSize, BufferSize);
+
+	const int32 kRequiredSize = AddressSize + TagSize + BufferSize;
 
 	OutBuffer.AddUninitialized(kRequiredSize);
 
 	ANSICHAR* pOutBuffer = (ANSICHAR*)OutBuffer.GetData();
 
-	const int32 kAddressLength = RoundedArgumentSize(GetAddress().Len()+1);
+	const int32 kAddressLength = GetPath().Len()+1;
 	const FString FinalTagString = FString::Printf(TEXT(",%s"), *GetTags());
-	const int32 kTagLength = RoundedArgumentSize(FinalTagString.Len() + 1);
+	const int32 kTagLength = FinalTagString.Len() + 1;
 
-	FCStringAnsi::Strncpy(pOutBuffer, TCHAR_TO_ANSI(*GetAddress()), kAddressLength);
+	FCStringAnsi::Strncpy(pOutBuffer, TCHAR_TO_ANSI(*GetPath()), kAddressLength);
 	pOutBuffer[kAddressLength] = 0;
-	pOutBuffer += RoundedArgumentSize(kAddressLength);
+	pOutBuffer += AddressSize;
 
-	FCStringAnsi::Strcpy(pOutBuffer, kRequiredSize, TCHAR_TO_ANSI(*FinalTagString));
+	FCStringAnsi::Strcpy(pOutBuffer, kTagLength, TCHAR_TO_ANSI(*FinalTagString));
 	pOutBuffer[kTagLength] = 0;
-	pOutBuffer += RoundedArgumentSize(kTagLength);
+	pOutBuffer += TagSize;
 
 	FMemory::Memcpy(pOutBuffer, Buffer.GetData(), BufferIndex);
 }
@@ -207,6 +294,7 @@ TSharedPtr<FBackChannelOSCMessage> FBackChannelOSCMessage::CreateFromBuffer(cons
 	return NewMessage;
 }
 
+/*
 
 FBackChannelOSCMessage& operator << (FBackChannelOSCMessage& Msg, int32& Value)
 {
@@ -258,3 +346,4 @@ FBackChannelOSCMessage& operator << (FBackChannelOSCMessage& Msg, FString& Value
 	return Msg;
 }
 
+*/

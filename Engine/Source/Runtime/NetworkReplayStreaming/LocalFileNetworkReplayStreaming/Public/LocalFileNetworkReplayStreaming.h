@@ -376,6 +376,7 @@ public:
 	DelegateResultType DelegateResult;
 	FLocalFileReplayInfo ReplayInfo;
 	TArray<uint8> DataBuffer;
+	bool bAsyncError = false;
 };
 
 template <typename DelegateResultType>
@@ -473,6 +474,8 @@ public:
 	virtual void GenerateEncryptionKey(TArray<uint8>& EncryptionKey) {}
 	virtual bool EncryptBuffer(TArrayView<const uint8> Plaintext, TArray<uint8>& Ciphertext, TArrayView<const uint8> EncryptionKey) const { return false; }
 	virtual bool DecryptBuffer(TArrayView<const uint8> Ciphertext, TArray<uint8>& Plaintext, TArrayView<const uint8> EncryptionKey) const { return false; }
+
+	bool AllowEncryptedWrite() const;
 
 	void Tick(float DeltaSeconds);
 

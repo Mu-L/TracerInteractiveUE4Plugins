@@ -233,12 +233,9 @@ void FAssetEditorToolkit::InitAssetEditor( const EToolkitMode::Type Mode, const 
 		FExecuteAction::CreateSP( this, &FAssetEditorToolkit::FindInContentBrowser_Execute ),
 		FCanExecuteAction::CreateSP( this, &FAssetEditorToolkit::CanFindInContentBrowser ));
 		
-	if (AppIdentifier != FName(TEXT("DataTableEditorApp")))
-	{
-		ToolkitCommands->MapAction(
-			FGlobalEditorCommonCommands::Get().OpenDocumentation,
-			FExecuteAction::CreateSP(this, &FAssetEditorToolkit::BrowseDocumentation_Execute));
-	}
+	ToolkitCommands->MapAction(
+		FGlobalEditorCommonCommands::Get().OpenDocumentation,
+		FExecuteAction::CreateSP(this, &FAssetEditorToolkit::BrowseDocumentation_Execute));
 
 	ToolkitCommands->MapAction(
 		FAssetEditorCommonCommands::Get().ReimportAsset,
@@ -296,7 +293,10 @@ FAssetEditorToolkit::~FAssetEditorToolkit()
 	EditingObjects.Empty();
 
 	// We're no longer editing this object, so let the editor know
-	GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->NotifyEditorClosed( this );
+	if (GEditor)
+	{
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->NotifyEditorClosed(this);
+	}
 }
 
 
@@ -304,11 +304,11 @@ void FAssetEditorToolkit::RegisterTabSpawners(const TSharedRef<class FTabManager
 {
 	// Use the first child category of the local workspace root if there is one, otherwise use the root itself
 	const auto& LocalCategories = InTabManager->GetLocalWorkspaceMenuRoot()->GetChildItems();
-	TSharedRef<FWorkspaceItem> ToolbarSpawnerCategory = LocalCategories.Num() > 0 ? LocalCategories[0] : InTabManager->GetLocalWorkspaceMenuRoot();
+	AssetEditorTabsCategory = LocalCategories.Num() > 0 ? LocalCategories[0] : InTabManager->GetLocalWorkspaceMenuRoot();
 
 	InTabManager->RegisterTabSpawner( ToolbarTabId, FOnSpawnTab::CreateSP(this, &FAssetEditorToolkit::SpawnTab_Toolbar) )
 		.SetDisplayName( LOCTEXT("ToolbarTab", "Toolbar") )
-		.SetGroup( ToolbarSpawnerCategory )
+		.SetGroup(AssetEditorTabsCategory.ToSharedRef())
 		.SetIcon( FSlateIcon(FEditorStyle::GetStyleSetName(), "Toolbar.Icon") );
 }
 
@@ -449,7 +449,7 @@ bool FAssetEditorToolkit::CloseWindow()
 
 void FAssetEditorToolkit::InvokeTab(const FTabId& TabId)
 {
-	GetTabManager()->InvokeTab(TabId);
+	GetTabManager()->TryInvokeTab(TabId);
 }
 
 TSharedPtr<class FTabManager> FAssetEditorToolkit::GetAssociatedTabManager()
@@ -928,7 +928,7 @@ void FAssetEditorToolkit::FillDefaultFileMenuCommands(FToolMenuSection& InSectio
 	{
 		InSection.AddMenuEntry(FAssetEditorCommonCommands::Get().SaveAssetAs, TAttribute<FText>(), TAttribute<FText>(), FSlateIcon(FEditorStyle::GetStyleSetName(), "AssetEditor.SaveAssetAs.Small")).InsertPosition = InsertPosition;
 	}
-	InSection.AddMenuSeparator("DefaultFileMenuCommandsSeparator").InsertPosition = InsertPosition;;
+	InSection.AddSeparator("DefaultFileMenuCommandsSeparator").InsertPosition = InsertPosition;;
 
 	if( IsWorldCentricAssetEditor() )
 	{

@@ -7,6 +7,7 @@
 #include "MobileBasePassRendering.h"
 #include "DynamicPrimitiveDrawing.h"
 #include "ScenePrivate.h"
+#include "SceneTextureParameters.h"
 #include "ShaderPlatformQualitySettings.h"
 #include "MaterialShaderQualitySettings.h"
 #include "PrimitiveSceneInfo.h"
@@ -15,6 +16,7 @@
 #include "EditorPrimitivesRendering.h"
 
 #include "FramePro/FrameProProfiler.h"
+#include "PostProcess/PostProcessPixelProjectedReflectionMobile.h"
 
 // Changing this causes a full shader recompile
 static TAutoConsoleVariable<int32> CVarMobileDisableVertexFog(
@@ -23,19 +25,23 @@ static TAutoConsoleVariable<int32> CVarMobileDisableVertexFog(
 	TEXT("Set to 1 to disable vertex fogging in all mobile shaders."),
 	ECVF_ReadOnly | ECVF_RenderThreadSafe);
 
-
-static TAutoConsoleVariable<int32> CVarMobileUseLegacyShadingModel(
-	TEXT("r.Mobile.UseLegacyShadingModel"),
-	0,
-	TEXT("If 1 then use legacy (pre 4.20) shading model (such as spherical guassian specular calculation.) (will cause a shader rebuild)"),
-	ECVF_ReadOnly | ECVF_RenderThreadSafe);
-
 static TAutoConsoleVariable<int32> CVarMobileEnableMovableSpotLights(
 	TEXT("r.Mobile.EnableMovableSpotlights"),
 	0,
 	TEXT("If 1 then enable movable spotlight support"),
 	ECVF_ReadOnly | ECVF_RenderThreadSafe);
 
+static TAutoConsoleVariable<int32> CVarMobileEnableMovableSpotLightShadows(
+	TEXT("r.Mobile.EnableMovableSpotlightsShadow"),
+	0,
+	TEXT("If 1 then enable movable spotlight shadow support"),
+	ECVF_ReadOnly | ECVF_RenderThreadSafe);
+
+static TAutoConsoleVariable<int32> CVarMobileMaxVisibleMovableSpotLightsShadow(
+	TEXT("r.Mobile.MaxVisibleMovableSpotLightsShadow"),
+	8,
+	TEXT("The max number of visible spotlighs can cast shadow sorted by screen size, should be as less as possible for performance reason"),
+	ECVF_RenderThreadSafe);
 
 IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT(FMobileBasePassUniformParameters, "MobileBasePass");
 
@@ -78,15 +84,11 @@ static_assert(MAX_BASEPASS_DYNAMIC_POINT_LIGHTS == 4, "If you change MAX_BASEPAS
 // Implement shader types per lightmap policy 
 IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_NO_LIGHTMAP>, FNoLightMapPolicy);
 IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_LQ_LIGHTMAP>, TLightMapPolicyLQ);
+IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_CACHED_POINT_INDIRECT_LIGHTING>, FCachedPointIndirectLightingPolicy);
 IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_MOBILE_DISTANCE_FIELD_SHADOWS_AND_LQ_LIGHTMAP>, FMobileDistanceFieldShadowsAndLQLightMapPolicy);
-IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_MOBILE_DISTANCE_FIELD_SHADOWS_LIGHTMAP_AND_CSM>, FMobileDistanceFieldShadowsLightMapAndCSMLightingPolicy);
 IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_MOBILE_DIRECTIONAL_LIGHT_AND_SH_INDIRECT>, FMobileDirectionalLightAndSHIndirectPolicy);
 IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_MOBILE_MOVABLE_DIRECTIONAL_LIGHT_AND_SH_INDIRECT>, FMobileMovableDirectionalLightAndSHIndirectPolicy);
-IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_MOBILE_MOVABLE_DIRECTIONAL_LIGHT_CSM_AND_SH_INDIRECT>, FMobileMovableDirectionalLightCSMAndSHIndirectPolicy);
-IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_MOBILE_DIRECTIONAL_LIGHT_CSM_AND_SH_INDIRECT>, FMobileDirectionalLightCSMAndSHIndirectPolicy);
-IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_MOBILE_MOVABLE_DIRECTIONAL_LIGHT_CSM>, FMobileMovableDirectionalLightCSMLightingPolicy);
 IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_MOBILE_MOVABLE_DIRECTIONAL_LIGHT_WITH_LIGHTMAP>, FMobileMovableDirectionalLightWithLightmapPolicy);
-IMPLEMENT_MOBILE_SHADING_BASEPASS_LIGHTMAPPED_SHADER_TYPE(TUniformLightMapPolicy<LMP_MOBILE_MOVABLE_DIRECTIONAL_LIGHT_CSM_WITH_LIGHTMAP>, FMobileMovableDirectionalLightCSMWithLightmapPolicy);
 
 template<typename LightMapPolicyType>
 bool TMobileBasePassPSPolicyParamType<LightMapPolicyType>::ModifyCompilationEnvironmentForQualityLevel(EShaderPlatform Platform, EMaterialQualityLevel::Type QualityLevel, FShaderCompilerEnvironment& OutEnvironment)
@@ -102,7 +104,7 @@ bool TMobileBasePassPSPolicyParamType<LightMapPolicyType>::ModifyCompilationEnvi
 	OutEnvironment.SetDefine(TEXT("QL_FORCEDISABLE_LM_DIRECTIONALITY"), QualityOverrides.bEnableOverride && QualityOverrides.bForceDisableLMDirectionality != 0 ? 1u : 0u);
 	OutEnvironment.SetDefine(TEXT("MOBILE_QL_FORCE_LQ_REFLECTIONS"), QualityOverrides.bEnableOverride && QualityOverrides.bForceLQReflections != 0 ? 1u : 0u);
 	OutEnvironment.SetDefine(TEXT("MOBILE_QL_FORCE_DISABLE_PREINTEGRATEDGF"), QualityOverrides.bEnableOverride && QualityOverrides.bForceDisablePreintegratedGF != 0 ? 1u : 0u);
-	OutEnvironment.SetDefine(TEXT("MOBILE_CSM_QUALITY"), (uint32)QualityOverrides.MobileCSMQuality);
+	OutEnvironment.SetDefine(TEXT("MOBILE_SHADOW_QUALITY"), (uint32)QualityOverrides.MobileShadowQuality);
 	OutEnvironment.SetDefine(TEXT("MOBILE_QL_DISABLE_MATERIAL_NORMAL"), QualityOverrides.bEnableOverride && QualityOverrides.bDisableMaterialNormalCalculation);
 	return true;
 }
@@ -117,7 +119,8 @@ FMobileBasePassMovableLightInfo::FMobileBasePassMovableLightInfo(const FPrimitiv
 	{
 		for (FLightPrimitiveInteraction* LPI = InSceneProxy->GetPrimitiveSceneInfo()->LightList; LPI && NumMovablePointLights < MobileNumDynamicPointLights; LPI = LPI->GetNextLight())
 		{
-			FLightSceneProxy* LightProxy = LPI->GetLight()->Proxy;
+			FLightSceneInfo* LightSceneInfo = LPI->GetLight();
+			FLightSceneProxy* LightProxy = LightSceneInfo->Proxy;
 			const uint8 LightType = LightProxy->GetLightType(); 
 			const bool bIsValidLightType =
 				  LightType == LightType_Point
@@ -126,25 +129,7 @@ FMobileBasePassMovableLightInfo::FMobileBasePassMovableLightInfo(const FPrimitiv
 				
 			if (bIsValidLightType && LightProxy->IsMovable() && (LightProxy->GetLightingChannelMask() & InSceneProxy->GetLightingChannelMask()) != 0)
 			{
-				FLightShaderParameters LightParameters;
-				LightProxy->GetLightShaderParameters(LightParameters);
-
-				LightPositionAndInvRadius[NumMovablePointLights] = FVector4(LightParameters.Position, LightParameters.InvRadius);
-				LightColorAndFalloffExponent[NumMovablePointLights] = FVector4(LightParameters.Color, LightParameters.FalloffExponent);
-				SpotLightDirectionAndSpecularScale[NumMovablePointLights] = LightParameters.Direction;
-				SpotLightDirectionAndSpecularScale[NumMovablePointLights].Component(3) = LightProxy->GetSpecularScale();
-				SpotLightAngles[NumMovablePointLights].Set(LightParameters.SpotAngles.X, LightParameters.SpotAngles.Y, 0.f, LightType == LightType_Spot ? 1.0f : 0.0f);
-
-				if (LightType == LightType_Rect)
-				{
-					// Treat rect lights as point lights.
-					LightColorAndFalloffExponent[NumMovablePointLights] = FVector4(LightParameters.Color, LightParameters.FalloffExponent);
-				}
-
-				if (LightProxy->IsInverseSquared())
-				{
-					LightColorAndFalloffExponent[NumMovablePointLights].W = 0;
-				}
+				MovablePointLightUniformBuffer[NumMovablePointLights] = LightProxy->GetMobileMovablePointLightUniformBufferRHI();
 
 				NumMovablePointLights++;
 			}
@@ -152,37 +137,84 @@ FMobileBasePassMovableLightInfo::FMobileBasePassMovableLightInfo(const FPrimitiv
 	}
 }
 
+extern void SetupFogUniformParameters(FRDGBuilder* GraphBuilder, const FViewInfo& View, FFogUniformParameters& OutParameters);
+
 void SetupMobileBasePassUniformParameters(
 	FRHICommandListImmediate& RHICmdList, 
 	const FViewInfo& View, 
 	bool bTranslucentPass, 
+	bool bCanUseCSM,
 	FMobileBasePassUniformParameters& BasePassParameters)
 {
-	SetupFogUniformParameters(View, BasePassParameters.Fog);
+	SetupFogUniformParameters(nullptr, View, BasePassParameters.Fog);
 
 	const FScene* Scene = View.Family->Scene ? View.Family->Scene->GetRenderScene() : nullptr;
 	const FPlanarReflectionSceneProxy* ReflectionSceneProxy = Scene ? Scene->GetForwardPassGlobalPlanarReflection() : nullptr;
 	SetupPlanarReflectionUniformParameters(View, ReflectionSceneProxy, BasePassParameters.PlanarReflection);
+	BasePassParameters.UseCSM = bCanUseCSM ? 1 : 0;
+
+	EMobileSceneTextureSetupMode SetupMode = EMobileSceneTextureSetupMode::None;
+	if (bTranslucentPass)
+	{
+		SetupMode |= EMobileSceneTextureSetupMode::SceneColor;
+	}
+	if (View.bCustomDepthStencilValid)
+	{
+		SetupMode |= EMobileSceneTextureSetupMode::CustomDepth;
+	}
 
 	FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(RHICmdList);
-	SetupMobileSceneTextureUniformParameters(SceneContext, View.FeatureLevel, bTranslucentPass, View.bCustomDepthStencilValid, BasePassParameters.SceneTextures);
-	if (View.HasValidEyeAdaptation() && View.GetEyeAdaptationBuffer())
-	{
-		BasePassParameters.SceneTextures.EyeAdaptationBuffer = View.GetEyeAdaptationBuffer()->SRV;
-	}
+	SetupMobileSceneTextureUniformParameters(SceneContext, SetupMode, BasePassParameters.SceneTextures);
 
 	BasePassParameters.PreIntegratedGFTexture = GSystemTextures.PreintegratedGF->GetRenderTargetItem().ShaderResourceTexture;
 	BasePassParameters.PreIntegratedGFSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+
+	if (GPixelProjectedReflectionMobileOutputs.IsValid())
+	{
+		if (bTranslucentPass)
+		{
+			BasePassParameters.PlanarReflection.PlanarReflectionTexture = GPixelProjectedReflectionMobileOutputs.PixelProjectedReflectionTexture->GetRenderTargetItem().ShaderResourceTexture;
+			if (GetMobilePixelProjectedReflectionQuality() <= EMobilePixelProjectedReflectionQuality::BestPerformance)
+			{
+				// We only render the meshes used for pixel projected reflection once and it could cause color bleeding artifact if we use bilinear filter.
+				BasePassParameters.PlanarReflection.PlanarReflectionSampler = TStaticSamplerState<SF_Point, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+			}
+			else
+			{
+				// We render the meshes used for pixel projected reflection twice, so we could use bilinear filter.
+				BasePassParameters.PlanarReflection.PlanarReflectionSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+			}
+		}
+		else
+		{
+			// Clear the ReflectionPlane to skip planar reflection on opaque mesh when the PPR is enabled because we render the reflection meshes used for pixel projected reflection in the translucent pass.
+			BasePassParameters.PlanarReflection.ReflectionPlane.Set(0.0f, 0.0f, 0.0f, 0.0f);
+		}
+	}
+
+	BasePassParameters.EyeAdaptationBuffer = GetEyeAdaptationBuffer(View);
+
+	if (!bTranslucentPass && GAmbientOcclusionMobileOutputs.IsValid())
+	{
+		BasePassParameters.AmbientOcclusionTexture = GAmbientOcclusionMobileOutputs.AmbientOcclusionTexture->GetRenderTargetItem().ShaderResourceTexture;
+	}
+	else
+	{
+		BasePassParameters.AmbientOcclusionTexture = GSystemTextures.WhiteDummy->GetRenderTargetItem().ShaderResourceTexture;
+	}
+	BasePassParameters.AmbientOcclusionSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+	BasePassParameters.AmbientOcclusionStaticFraction = FMath::Clamp(View.FinalPostProcessSettings.AmbientOcclusionStaticFraction, 0.0f, 1.0f);
 }
 
 void CreateMobileBasePassUniformBuffer(
 	FRHICommandListImmediate& RHICmdList, 
 	const FViewInfo& View,
 	bool bTranslucentPass,
+	bool bCanUseCSM,
 	TUniformBufferRef<FMobileBasePassUniformParameters>& BasePassUniformBuffer)
 {
 	FMobileBasePassUniformParameters BasePassParameters;
-	SetupMobileBasePassUniformParameters(RHICmdList, View, bTranslucentPass, BasePassParameters);
+	SetupMobileBasePassUniformParameters(RHICmdList, View, bTranslucentPass, bCanUseCSM, BasePassParameters);
 	BasePassUniformBuffer = TUniformBufferRef<FMobileBasePassUniformParameters>::CreateUniformBufferImmediate(BasePassParameters, UniformBuffer_SingleFrame);
 }
 
@@ -226,13 +258,27 @@ void SetupMobileDirectionalLightUniformParameters(
 			}
 
 			const int32 NumShadowsToCopy = FMath::Min(DirectionalLightShadowInfos.Num(), MAX_MOBILE_SHADOWCASCADES);
+			int32_t OutShadowIndex = 0;
 			for (int32 i = 0; i < NumShadowsToCopy; ++i)
 			{
 				const FProjectedShadowInfo* ShadowInfo = DirectionalLightShadowInfos[i];
-				Params.DirectionalLightScreenToShadow[i] = ShadowInfo->GetScreenToShadowMatrix(SceneView);
-				Params.DirectionalLightShadowDistances[i] = ShadowInfo->CascadeSettings.SplitFar;
+
+				if (ShadowInfo->ShadowDepthView)
+				{
+					Params.DirectionalLightScreenToShadow[OutShadowIndex] = ShadowInfo->GetScreenToShadowMatrix(SceneView);
+					Params.DirectionalLightShadowDistances[OutShadowIndex] = ShadowInfo->CascadeSettings.SplitFar;
+					OutShadowIndex++;
+				}
 			}
 		}
+	}
+	
+	if (SceneView.MobileMovableSpotLightsShadowInfo.ShadowDepthTexture != nullptr)
+	{
+		checkSlow(Params.DirectionalLightShadowTexture == SceneView.MobileMovableSpotLightsShadowInfo.ShadowDepthTexture || Params.DirectionalLightShadowTexture == GWhiteTexture->TextureRHI);
+
+		Params.DirectionalLightShadowSize = SceneView.MobileMovableSpotLightsShadowInfo.ShadowBufferSize;
+		Params.DirectionalLightShadowTexture = SceneView.MobileMovableSpotLightsShadowInfo.ShadowDepthTexture;
 	}
 }
 
@@ -261,6 +307,7 @@ void FMobileSceneRenderer::RenderMobileBasePass(FRHICommandListImmediate& RHICmd
 	CSV_SCOPED_TIMING_STAT_EXCLUSIVE(RenderBasePass);
 	SCOPED_DRAW_EVENT(RHICmdList, MobileBasePass);
 	SCOPE_CYCLE_COUNTER(STAT_BasePassDrawTime);
+	SCOPED_GPU_STAT(RHICmdList, Basepass);
 
 	for (int32 ViewIndex = 0; ViewIndex < PassViews.Num(); ViewIndex++)
 	{

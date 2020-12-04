@@ -75,8 +75,6 @@ bool FDetailLayoutCustomization::IsHidden() const
 	return !IsValidCustomization()
 		|| (HasCustomWidget() && WidgetDecl->VisibilityAttr.Get() != EVisibility::Visible)
 		|| (HasPropertyNode() && PropertyRow->GetPropertyVisibility() != EVisibility::Visible);
-	/** Partial revert of CL 7273612 (fix for UE-76064) that caused a bunch of regressions in the details panel (UE-77377,UE-77376,UE-77451). */
-	//|| (HasCustomBuilder() && CustomBuilderRow->AreChildCustomizationsHidden());
 }
 
 
@@ -122,7 +120,8 @@ FDetailCategoryImpl::FDetailCategoryImpl(FName InCategoryName, TSharedRef<FDetai
 {
 	const UStruct* BaseStruct = InDetailLayout->GetRootNode()->GetBaseStructure();
 
-	bShowOnlyChildren = InDetailLayout->IsLayoutForExternalRoot() && !InDetailLayout->GetRootNode()->HasNodeFlags(EPropertyNodeFlags::ShowCategories);
+	static const FName NoCategoryName = TEXT("NoCategory");
+	bShowOnlyChildren = (InDetailLayout->IsLayoutForExternalRoot() && !InDetailLayout->GetRootNode()->HasNodeFlags(EPropertyNodeFlags::ShowCategories)) || CategoryName == NoCategoryName;
 
 	// Use the base class name if there is one otherwise this is a generic category not specific to a class
 	FName BaseStructName = BaseStruct ? BaseStruct->GetFName() : FName("Generic");
@@ -513,6 +512,16 @@ bool FDetailCategoryImpl::ShouldShowAdvanced() const
 void FDetailCategoryImpl::SetShowAdvanced(bool bShowAdvanced)
 {
 	bUserShowAdvanced = bShowAdvanced;
+}
+
+int32 FDetailCategoryImpl::GetSortOrder() const
+{
+	return SortOrder;
+}
+
+void FDetailCategoryImpl::SetSortOrder(int32 InSortOrder)
+{
+	SortOrder = InSortOrder;
 }
 
 bool FDetailCategoryImpl::IsAdvancedDropdownEnabled() const

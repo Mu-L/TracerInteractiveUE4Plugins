@@ -25,6 +25,7 @@
 #include "HoloLens/AllowWindowsPlatformTypes.h"
 #include <d3d12.h>
 #include <d3dx12.h>
+#include <dxgidebug.h>
 #include <d3d12sdklayers.h>
 #include "HoloLens/HideWindowsPlatformTypes.h"
 
@@ -37,5 +38,7 @@
 #define D3D12RHI_HEAP_FLAG_ALLOW_INDIRECT_BUFFERS		D3D12_HEAP_FLAG_NONE
 
 #include "../Public/D3D12Util.h"
-#include "HoloLensD3D12DiskCache.h"
-#include "HoloLensD3D12PipelineState.h"
+
+// Windows desktop version is used.
+#include "Windows/WindowsD3D12DiskCache.h"
+#include "Windows/WindowsD3D12PipelineState.h"

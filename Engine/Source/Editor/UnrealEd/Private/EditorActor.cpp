@@ -72,10 +72,6 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogEditorActor, Log, All);
 
-PRAGMA_DISABLE_OPTIMIZATION /* Not performance-critical */
-
-	 
-
 static int32 RecomputePoly( ABrush* InOwner, FPoly* Poly )
 {
 	// force recalculation of normal, and texture U and V coordinates in FPoly::Finalize()
@@ -87,52 +83,6 @@ static int32 RecomputePoly( ABrush* InOwner, FPoly* Poly )
 /*-----------------------------------------------------------------------------
    Actor adding/deleting functions.
 -----------------------------------------------------------------------------*/
-
-class FSelectedActorExportObjectInnerContext : public FExportObjectInnerContext
-{
-public:
-	FSelectedActorExportObjectInnerContext()
-		//call the empty version of the base class
-		: FExportObjectInnerContext(false)
-	{
-		// For each object . . .
-		for (UObject* InnerObj : TObjectRange<UObject>(RF_ClassDefaultObject, /** bIncludeDerivedClasses */ true, /** IternalExcludeFlags */ EInternalObjectFlags::PendingKill))
-		{
-			UObject* OuterObj = InnerObj->GetOuter();
-
-			//assume this is not part of a selected actor
-			bool bIsChildOfSelectedActor = false;
-
-			UObject* TestParent = OuterObj;
-			while (TestParent)
-			{
-				AActor* TestParentAsActor = Cast<AActor>(TestParent);
-				if (TestParentAsActor && TestParentAsActor->IsSelected())
-				{
-					bIsChildOfSelectedActor = true;
-					break;
-				}
-				TestParent = TestParent->GetOuter();
-			}
-
-			if (bIsChildOfSelectedActor)
-			{
-				InnerList* Inners = ObjectToInnerMap.Find(OuterObj);
-				if (Inners)
-				{
-					// Add object to existing inner list.
-					Inners->Add( InnerObj );
-				}
-				else
-				{
-					// Create a new inner list for the outer object.
-					InnerList& InnersForOuterObject = ObjectToInnerMap.Add(OuterObj, InnerList());
-					InnersForOuterObject.Add(InnerObj);
-				}
-			}
-		}
-	}
-};
 
 void UUnrealEdEngine::edactCopySelected( UWorld* InWorld, FString* DestinationData )
 {
@@ -386,9 +336,12 @@ void UUnrealEdEngine::edactPasteSelected(UWorld* InWorld, bool bDuplicate, bool 
 			// Offset the actor's location.
 			Actor->TeleportTo(Actor->GetActorLocation() + ActorLocationOffset, Actor->GetActorRotation(), false, true);
 
-			// Re-label duplicated actors so that labels become unique
-			FActorLabelUtilities::SetActorLabelUnique(Actor, Actor->GetActorLabel(), &ActorLabels);
-			ActorLabels.Add(Actor->GetActorLabel());
+			if (!GetDefault<ULevelEditorMiscSettings>()->bAvoidRelabelOnPasteSelected)
+			{
+				// Re-label duplicated actors so that labels become unique
+				FActorLabelUtilities::SetActorLabelUnique(Actor, Actor->GetActorLabel(), &ActorLabels);
+				ActorLabels.Add(Actor->GetActorLabel());
+			}
 
 			LayersSubsystem->InitializeNewActorLayers(Actor);
 
@@ -885,8 +838,7 @@ bool UUnrealEdEngine::edactDeleteSelected( UWorld* InWorld, bool bVerifyDeletion
 					{
 						bReferencedByActor = true;
 
-						FText ActorReferencedMessage = FText::Format(LOCTEXT("ActorDeleteReferencedMessage",
-							"Actor {0} is referenced by {1}."),
+						FText ActorReferencedMessage = FText::Format(LOCTEXT("ActorDeleteReferencedMessage", "Actor {0} is referenced by {1}."),
 							FText::FromString(Actor->GetActorLabel()),
 							FText::FromString(ReferencingActor->GetActorLabel())
 						);
@@ -957,20 +909,17 @@ bool UUnrealEdEngine::edactDeleteSelected( UWorld* InWorld, bool bVerifyDeletion
 
 				if (bReferencedByLevelScript && (bReferencedByActor || bReferencedBySoftReference))
 				{
-					ConfirmDelete = FText::Format(LOCTEXT("ConfirmDeleteActorReferenceByScriptAndActor",
-						"Actor {0} is referenced by the level blueprint and other Actors/Objects.\nDo you really want to delete it? This will break references.\n\nReference List:\n\n{1}\n{2}"),
+					ConfirmDelete = FText::Format(LOCTEXT("ConfirmDeleteActorReferenceByScriptAndActor", "Actor {0} is referenced by the level blueprint and other Actors/Objects.\nDo you really want to delete it? This will break references.\n\nReference List:\n\n{1}\n{2}"),
 						FText::FromString(Actor->GetActorLabel()), FText::FromString(LevelScriptReferenceString), FText::FromString(ActorReferenceString));
 				}
 				else if (bReferencedByLevelScript)
 				{
-					ConfirmDelete = FText::Format(LOCTEXT("ConfirmDeleteActorReferencedByScript",
-						"Actor {0} is referenced by the level blueprint.\nDo you really want to delete it? This will break references.\n\nReference List:\n\n{1}"),
+					ConfirmDelete = FText::Format(LOCTEXT("ConfirmDeleteActorReferencedByScript", "Actor {0} is referenced by the level blueprint.\nDo you really want to delete it? This will break references.\n\nReference List:\n\n{1}"),
 						FText::FromString(Actor->GetActorLabel()), FText::FromString(LevelScriptReferenceString));
 				}
 				else
 				{
-					ConfirmDelete = FText::Format(LOCTEXT("ConfirmDeleteActorReferencedByActor",
-						"Actor {0} is referenced by other Actors/Objects.\nDo you really want to delete it? This will break references.\n\nReference List:\n\n{1}"),
+					ConfirmDelete = FText::Format(LOCTEXT("ConfirmDeleteActorReferencedByActor", "Actor {0} is referenced by other Actors/Objects.\nDo you really want to delete it? This will break references.\n\nReference List:\n\n{1}"),
 						FText::FromString(Actor->GetActorLabel()), FText::FromString(ActorReferenceString));
 				}
 
@@ -1015,8 +964,7 @@ bool UUnrealEdEngine::edactDeleteSelected( UWorld* InWorld, bool bVerifyDeletion
 					{
 						LODActor->RemoveSubActor(Actor);
 
-						FText SubActorRemovedMessage = FText::Format(LOCTEXT("LODActorSubActorDeletedMessage",
-							"Sub Actor '{0}' was removed from LODActor '{1}'."),
+						FText SubActorRemovedMessage = FText::Format(LOCTEXT("LODActorSubActorDeletedMessage", "Sub Actor '{0}' was removed from LODActor '{1}'."),
 							FText::FromString(Actor->GetActorLabel()),
 							FText::FromString(ReferencingActor->GetActorLabel())
 						);
@@ -1068,7 +1016,9 @@ bool UUnrealEdEngine::edactDeleteSelected( UWorld* InWorld, bool bVerifyDeletion
 		if ( LevelsAlreadyModified.Find( Level ) == INDEX_NONE )
 		{
 			LevelsAlreadyModified.Add( Level );
-			Level->Modify();
+			// Don't mark the level dirty when deleting external actors and the level is in `use external actors` mode.
+			bool bShouldDirty = !(Actor->IsPackageExternal() && Level->IsUsingExternalActors());
+			Level->Modify(bShouldDirty);
 		}
 
 		UE_LOG(LogEditorActor, Log,  TEXT("Deleted Actor: %s"), *Actor->GetClass()->GetName() );
@@ -2626,7 +2576,5 @@ void UUnrealEdEngine::edactAlignVertices()
 		}
 	}
 }
-
-PRAGMA_ENABLE_OPTIMIZATION
 
 #undef LOCTEXT_NAMESPACE

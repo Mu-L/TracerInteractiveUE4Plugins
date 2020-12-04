@@ -19,12 +19,13 @@ UFbxSceneImportOptionsSkeletalMesh::UFbxSceneImportOptionsSkeletalMesh(const FOb
 	, ThresholdUV(THRESH_UVS_ARE_SAME)
 	, MorphThresholdPosition(THRESH_POINTS_ARE_NEAR)
 	, bImportAnimations(true)
-	, AnimationLength(EFbxSceneVertexColorImportOption::Replace)
+	, AnimationLength(EFBXAnimationLengthImportType::FBXALIT_AnimatedKey)
 	, FrameImportRange(0, 0)
 	, bUseDefaultSampleRate(false)
 	, CustomSampleRate(0)
 	, bImportCustomAttribute(true)
 	, bDeleteExistingCustomAttributeCurves(false)
+	, bDeleteExistingNonCurveCustomAttributes(false)
 	, bPreserveLocalTransform(false)
 	, bDeleteExistingMorphTargetCurves(false)
 {
@@ -57,6 +58,7 @@ void UFbxSceneImportOptionsSkeletalMesh::FillSkeletalMeshInmportData(UFbxSkeleta
 	AnimSequenceImportData->bDeleteExistingMorphTargetCurves = bDeleteExistingMorphTargetCurves;
 	AnimSequenceImportData->bImportCustomAttribute = bImportCustomAttribute;
 	AnimSequenceImportData->bDeleteExistingCustomAttributeCurves = bDeleteExistingCustomAttributeCurves;
+	AnimSequenceImportData->bDeleteExistingNonCurveCustomAttributes = bDeleteExistingNonCurveCustomAttributes;
 	AnimSequenceImportData->bPreserveLocalTransform = bPreserveLocalTransform;
 	AnimSequenceImportData->bUseDefaultSampleRate = bUseDefaultSampleRate;
 	AnimSequenceImportData->CustomSampleRate = CustomSampleRate;

@@ -78,6 +78,12 @@ class TPBDRigidParticles : public TRigidParticles<T, d>
 			PreV(Index) = this->V(Index);
 			PreW(Index) = this->W(Index);
 		}
+		else if(bSleeping)
+		{
+			//being put to sleep, so zero out velocities
+			this->V(Index) = TVector<FReal,3>(0);
+			this->W(Index) = TVector<FReal,3>(0);
+		}
 
 		bool CurrentlySleeping = this->ObjectState(Index) == EObjectStateType::Sleeping;
 		if (CurrentlySleeping != bSleeping)
@@ -115,13 +121,13 @@ class TPBDRigidParticles : public TRigidParticles<T, d>
 			this->InvI(Index) = PMatrix<float, 3, 3>(0);
 		}
 
-		if (CurrentState == EObjectStateType::Dynamic && (InObjectState == EObjectStateType::Kinematic || InObjectState == EObjectStateType::Static))
+		if ((CurrentState == EObjectStateType::Dynamic || CurrentState == EObjectStateType::Sleeping) && (InObjectState == EObjectStateType::Kinematic || InObjectState == EObjectStateType::Static))
 		{
 			// Transitioning from dynamic to static or kinematic, set inverse mass and inertia tensor to zero.
 			this->InvM(Index) = 0.0f;
 			this->InvI(Index) = PMatrix<float, 3, 3>(0);
 		}
-		else if ((CurrentState == EObjectStateType::Kinematic || CurrentState == EObjectStateType::Static || CurrentState == EObjectStateType::Uninitialized) && InObjectState == EObjectStateType::Dynamic)
+		else if ((CurrentState == EObjectStateType::Kinematic || CurrentState == EObjectStateType::Static || CurrentState == EObjectStateType::Uninitialized) && (InObjectState == EObjectStateType::Dynamic || InObjectState == EObjectStateType::Sleeping))
 		{
 			// Transitioning from kinematic or static to dynamic, compute the inverses.
 			checkSlow(this->M(Index) != 0.0);
@@ -149,6 +155,21 @@ class TPBDRigidParticles : public TRigidParticles<T, d>
 		{
 			TGeometryParticleHandle<T, d>* Particle = reinterpret_cast<TGeometryParticleHandle<T, d>*>(this->Handle(Index));
  			this->AddSleepData(Particle, bNewSleeping);
+
+			if (bNewSleeping == false)
+			{
+				// If waking up, reset VSmooth to something roughly in the same direction as what V will be after integration.
+				// This is temp fix, if this is only re-computed after solve, island will get incorrectly put back to sleep.
+				float FakeDT = 1.0f / 30.0f;
+				if (this->LinearImpulse(Index).IsNearlyZero() == false || this->F(Index).IsNearlyZero() == false)
+				{
+					this->VSmooth(Index) = this->F(Index)* this->InvM(Index) * FakeDT  + this->LinearImpulse(Index) * this->InvM(Index);
+				}
+				if (this->AngularImpulse(Index).IsNearlyZero() == false || this->Torque(Index).IsNearlyZero() == false)
+				{
+					this->WSmooth(Index) = this->Torque(Index) * FakeDT + this->AngularImpulse(Index);
+				}
+			}
 		}
 
 		this->ObjectState(Index) = InObjectState;
@@ -165,6 +186,11 @@ class TPBDRigidParticles : public TRigidParticles<T, d>
 		TRigidParticles<T, d>::Serialize(Ar);
 		Ar << MP << MQ << MPreV << MPreW;
 	}
+
+	FORCEINLINE TArray<TVector<T, d>>& AllP() { return MP; }
+	FORCEINLINE TArray<TRotation<T, d>>& AllQ() { return MQ; }
+	FORCEINLINE TArray<TVector<T, d>>& AllPreV() { return MPreV; }
+	FORCEINLINE TArray<TVector<T, d>>& AllPreW() { return MPreW; }
 
   private:
 	TArrayCollectionArray<TVector<T, d>> MP;

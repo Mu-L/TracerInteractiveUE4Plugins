@@ -9,6 +9,9 @@
 #include "Channels/MovieSceneFloatChannel.h"
 #include "MovieSceneSkeletalAnimationSection.generated.h"
 
+struct FMovieSceneSkeletalAnimRootMotionTrackParams;
+struct FAnimationPoseData;
+
 USTRUCT(BlueprintType)
 struct FMovieSceneSkeletalAnimationParams
 {
@@ -67,6 +70,7 @@ struct FMovieSceneSkeletalAnimationParams
 
 	UPROPERTY()
 	float EndOffset_DEPRECATED;
+
 };
 
 /**
@@ -85,20 +89,25 @@ public:
 
 	/** Get Frame Time as Animation Time*/
 	MOVIESCENETRACKS_API float MapTimeToAnimation(FFrameTime InPosition, FFrameRate InFrameRate) const;
+	
+	//~ UMovieSceneSection interface
+	virtual void SetRange(const TRange<FFrameNumber>& NewRange) override;
+	virtual void SetStartFrame(TRangeBound<FFrameNumber> NewStartFrame) override;
+	virtual void SetEndFrame(TRangeBound<FFrameNumber> NewEndFrame)override;
 
 protected:
 
-	//~ UMovieSceneSection interface
 	virtual TOptional<TRange<FFrameNumber> > GetAutoSizeRange() const override;
 	virtual void TrimSection(FQualifiedFrameTime TrimTime, bool bTrimLeft, bool bDeleteKeys) override;
 	virtual UMovieSceneSection* SplitSection(FQualifiedFrameTime SplitTime, bool bDeleteKeys) override;
 	virtual void GetSnapTimes(TArray<FFrameNumber>& OutSnapTimes, bool bGetSectionBorders) const override;
 	virtual TOptional<FFrameTime> GetOffsetTime() const override;
-	virtual FMovieSceneEvalTemplatePtr GenerateTemplate() const override;
 	virtual float GetTotalWeightValue(FFrameTime InTime) const override;
+
 	/** ~UObject interface */
 	virtual void PostLoad() override;
 	virtual void Serialize(FArchive& Ar) override;
+
 
 private:
 
@@ -108,7 +117,11 @@ private:
 
 	virtual void PreEditChange(FProperty* PropertyAboutToChange) override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+public:
 	float PreviousPlayRate;
+private:
+	virtual void PostEditImport() override;
+	virtual void PostEditUndo() override;
 
 #endif
 
@@ -134,4 +147,86 @@ private:
 
 	UPROPERTY()
 	FName SlotName_DEPRECATED;
+
+public:
+	UPROPERTY(EditAnywhere, Category = "Root Motions")
+	/* Location Offset applied to this this animations start root motion*/
+	FVector StartLocationOffset;
+
+	UPROPERTY(EditAnywhere, Category = "Root Motions")
+	/* Rotation Offset applied to this this animations start root motion*/
+	FRotator StartRotationOffset;
+
+	UPROPERTY()
+	bool bMatchWithPrevious;
+
+	UPROPERTY()
+	FName MatchedBoneName;
+
+	UPROPERTY()
+	FVector MatchedLocationOffset;
+
+	UPROPERTY()
+	FRotator MatchedRotationOffset;
+
+	UPROPERTY()
+	bool bMatchTranslation;
+
+	UPROPERTY()
+	bool bMatchIncludeZHeight;
+
+	UPROPERTY()
+	bool bMatchRotationYaw;
+
+	UPROPERTY()
+	bool bMatchRotationPitch;
+
+	UPROPERTY()
+	bool bMatchRotationRoll;
+
+#if WITH_EDITORONLY_DATA
+	/** Whether to show the underlying skeleton for this section. */
+	UPROPERTY(EditAnywhere, Category = "Root Motions")
+	bool bShowSkeleton;
+#endif
+	//Temporary transform used to specify the global OffsetTransform while calculting the root motions.
+	FTransform TempOffsetTransform;
+
+	//Temporary index used by GetRootMotionTransform and set by SetBoneIndexforRootMotionCalculations
+	TOptional<int32> TempRootBoneIndex;
+public:
+	// Functions/params related to root motion calcuations.
+	MOVIESCENETRACKS_API FMovieSceneSkeletalAnimRootMotionTrackParams* GetRootMotionParams() const;
+
+	MOVIESCENETRACKS_API FTransform GetOffsetTransform() const;
+	MOVIESCENETRACKS_API bool GetRootMotionVelocity(FFrameTime PreviousTime, FFrameTime CurrentTime, FFrameRate FrameRate, FTransform& OutVelocity, float& OutWeight) const;
+	MOVIESCENETRACKS_API int32 SetBoneIndexForRootMotionCalculations(bool bBlendFirstChildOfRoot);
+	MOVIESCENETRACKS_API bool GetRootMotionTransform(FFrameTime CurrentTime, FFrameRate FrameRate, FAnimationPoseData& AnimationPoseData,bool &bIsAdditive, FTransform& OutTransform,  float& OutWeight) const;
+	MOVIESCENETRACKS_API void MatchSectionByBoneTransform(USkeletalMeshComponent* SkelMeshComp, FFrameTime CurrentFrame, FFrameRate FrameRate,
+		const FName& BoneName); //add options for z and rotation
+
+	MOVIESCENETRACKS_API void ClearMatchedOffsetTransforms();
+	
+	MOVIESCENETRACKS_API void FindBestBlendPoint(USkeletalMeshComponent* SkelMeshComp);
+
+	MOVIESCENETRACKS_API TOptional<FTransform> GetRootMotion(FFrameTime CurrentTime, bool& bBlendFirstChildOfRoot) const;
+
+	MOVIESCENETRACKS_API void ToggleMatchTranslation();
+
+	MOVIESCENETRACKS_API void ToggleMatchIncludeZHeight();
+
+	MOVIESCENETRACKS_API void ToggleMatchIncludeYawRotation();
+
+	MOVIESCENETRACKS_API void ToggleMatchIncludePitchRotation();
+
+	MOVIESCENETRACKS_API void ToggleMatchIncludeRollRotation();
+
+#if WITH_EDITORONLY_DATA
+	MOVIESCENETRACKS_API void ToggleShowSkeleton();
+#endif
+
+private:
+	void MultiplyOutInverseOnNextClips(FVector PreviousMatchedLocationOffset, FRotator PreviousMatchedRotationOffset);
+
+
 };

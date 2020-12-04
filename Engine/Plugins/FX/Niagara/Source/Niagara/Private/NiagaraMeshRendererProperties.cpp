@@ -5,12 +5,12 @@
 #include "Engine/StaticMesh.h"
 #include "NiagaraConstants.h"
 #include "NiagaraBoundsCalculatorHelper.h"
+#include "NiagaraCustomVersion.h"
 #include "Modules/ModuleManager.h"
 #if WITH_EDITOR
 #include "Widgets/Images/SImage.h"
 #include "Styling/SlateIconFinder.h"
 #include "Widgets/SWidget.h"
-#include "Styling/SlateBrush.h"
 #include "AssetThumbnail.h"
 #include "Widgets/Text/STextBlock.h"
 #endif
@@ -53,12 +53,13 @@ UNiagaraMeshRendererProperties::UNiagaraMeshRendererProperties()
 	, LockedAxis(0.0f, 0.0f, 1.0f)
 	, LockedAxisSpace(ENiagaraMeshLockedAxisSpace::Simulation)
 {
-	AttributeBindings.Reserve(12);
+	AttributeBindings.Reserve(15);
 	AttributeBindings.Add(&PositionBinding);
 	AttributeBindings.Add(&ColorBinding);
 	AttributeBindings.Add(&VelocityBinding);
 	AttributeBindings.Add(&MeshOrientationBinding);
 	AttributeBindings.Add(&ScaleBinding);
+	AttributeBindings.Add(&SubImageIndexBinding);
 	AttributeBindings.Add(&DynamicMaterialBinding);
 	AttributeBindings.Add(&DynamicMaterial1Binding);
 	AttributeBindings.Add(&DynamicMaterial2Binding);
@@ -66,14 +67,16 @@ UNiagaraMeshRendererProperties::UNiagaraMeshRendererProperties()
 	AttributeBindings.Add(&MaterialRandomBinding);
 	AttributeBindings.Add(&CustomSortingBinding);
 	AttributeBindings.Add(&NormalizedAgeBinding);
+	AttributeBindings.Add(&CameraOffsetBinding);
+	AttributeBindings.Add(&RendererVisibilityTagBinding);
 }
 
-FNiagaraRenderer* UNiagaraMeshRendererProperties::CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel, const FNiagaraEmitterInstance* Emitter)
+FNiagaraRenderer* UNiagaraMeshRendererProperties::CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel, const FNiagaraEmitterInstance* Emitter, const UNiagaraComponent* InComponent)
 {
 	if (ParticleMesh)
 	{
 		FNiagaraRenderer* NewRenderer = new FNiagaraRendererMeshes(FeatureLevel, this, Emitter);
-		NewRenderer->Initialize(this, Emitter);
+		NewRenderer->Initialize(this, Emitter, InComponent);
 		return NewRenderer;
 	}
 
@@ -84,8 +87,42 @@ FNiagaraBoundsCalculator* UNiagaraMeshRendererProperties::CreateBoundsCalculator
 {
 	if (ParticleMesh)
 	{
+		FBox LocalBounds = ParticleMesh->GetBounds().GetBox();
+		FVector MeshOffset(ForceInitToZero);
+		ENiagaraBoundsMeshOffsetTransform MeshOffsetTransform = ENiagaraBoundsMeshOffsetTransform::None;
+		if (PivotOffsetSpace == ENiagaraMeshPivotOffsetSpace::Mesh)
+		{
+			// Offset the local bounds
+			LocalBounds = LocalBounds.ShiftBy(PivotOffset);
+		}
+		else
+		{
+			// Offset is in either system-local or world space, and we need to decide how to transform it, if at all
+			MeshOffset = PivotOffset;
+
+			if (PivotOffsetSpace != ENiagaraMeshPivotOffsetSpace::Simulation)
+			{
+				bool bLocalSpace = false;
+				if (UNiagaraEmitter* Emitter = Cast<UNiagaraEmitter>(GetOuter()))
+				{
+					bLocalSpace = Emitter->bLocalSpace;
+				}
+
+				if (bLocalSpace && PivotOffsetSpace == ENiagaraMeshPivotOffsetSpace::World)
+				{
+					MeshOffsetTransform = ENiagaraBoundsMeshOffsetTransform::WorldToLocal;
+				}
+				else if (!bLocalSpace && PivotOffsetSpace == ENiagaraMeshPivotOffsetSpace::Local)
+				{
+					MeshOffsetTransform = ENiagaraBoundsMeshOffsetTransform::LocalToWorld;
+				}
+			}			
+		}
+
+		// Take the bounding center into account with the extents, as it may not be at the origin
+		const FVector Extents = LocalBounds.Max.GetAbs().ComponentMax(LocalBounds.Min.GetAbs());
 		FNiagaraBoundsCalculatorHelper<false, true, false>* BoundsCalculator
-			= new FNiagaraBoundsCalculatorHelper<false, true, false>(ParticleMesh->GetBounds().BoxExtent);
+			= new FNiagaraBoundsCalculatorHelper<false, true, false>(Extents, MeshOffset, MeshOffsetTransform);
 		return BoundsCalculator;
 	}
 
@@ -138,7 +175,7 @@ void UNiagaraMeshRendererProperties::InitCDOPropertiesAfterModuleStartup()
 
 void UNiagaraMeshRendererProperties::InitBindings()
 {
-	if (PositionBinding.BoundVariable.GetName() == NAME_None)
+	if (!PositionBinding.IsValid())
 	{
 		PositionBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_POSITION);
 		ColorBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_COLOR);
@@ -153,17 +190,53 @@ void UNiagaraMeshRendererProperties::InitBindings()
 		MaterialRandomBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_MATERIAL_RANDOM);
 		NormalizedAgeBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_NORMALIZED_AGE);
 		CameraOffsetBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_CAMERA_OFFSET);
+		RendererVisibilityTagBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_VISIBILITY_TAG);
 
 		//Default custom sorting to age
 		CustomSortingBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_NORMALIZED_AGE);
 	}
 }
 
+void UNiagaraMeshRendererProperties::CacheFromCompiledData(const FNiagaraDataSetCompiledData* CompiledData)
+{
+	// Initialize layout
+	RendererLayoutWithCustomSorting.Initialize(ENiagaraMeshVFLayout::Num);
+	RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, PositionBinding, ENiagaraMeshVFLayout::Position);
+	RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, VelocityBinding, ENiagaraMeshVFLayout::Velocity);
+	RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, ColorBinding, ENiagaraMeshVFLayout::Color);
+	RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, ScaleBinding, ENiagaraMeshVFLayout::Scale);
+	RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, MeshOrientationBinding, ENiagaraMeshVFLayout::Transform);
+	RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, MaterialRandomBinding, ENiagaraMeshVFLayout::MaterialRandom);
+	RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, NormalizedAgeBinding, ENiagaraMeshVFLayout::NormalizedAge);
+	RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, CustomSortingBinding, ENiagaraMeshVFLayout::CustomSorting);
+	RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, SubImageIndexBinding, ENiagaraMeshVFLayout::SubImage);
+	RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, CameraOffsetBinding, ENiagaraMeshVFLayout::CameraOffset);
+	MaterialParamValidMask  = RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, DynamicMaterialBinding, ENiagaraMeshVFLayout::DynamicParam0) ? 0x1 : 0;
+	MaterialParamValidMask |= RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, DynamicMaterial1Binding, ENiagaraMeshVFLayout::DynamicParam1) ? 0x2 : 0;
+	MaterialParamValidMask |= RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, DynamicMaterial2Binding, ENiagaraMeshVFLayout::DynamicParam2) ? 0x4 : 0;
+	MaterialParamValidMask |= RendererLayoutWithCustomSorting.SetVariableFromBinding(CompiledData, DynamicMaterial3Binding, ENiagaraMeshVFLayout::DynamicParam3) ? 0x8 : 0;
+	RendererLayoutWithCustomSorting.Finalize();
 
+	RendererLayoutWithoutCustomSorting.Initialize(ENiagaraMeshVFLayout::Num);
+	RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, PositionBinding, ENiagaraMeshVFLayout::Position);
+	RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, VelocityBinding, ENiagaraMeshVFLayout::Velocity);
+	RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, ColorBinding, ENiagaraMeshVFLayout::Color);
+	RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, ScaleBinding, ENiagaraMeshVFLayout::Scale);
+	RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, MeshOrientationBinding, ENiagaraMeshVFLayout::Transform);
+	RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, MaterialRandomBinding, ENiagaraMeshVFLayout::MaterialRandom);
+	RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, NormalizedAgeBinding, ENiagaraMeshVFLayout::NormalizedAge);
+	RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, SubImageIndexBinding, ENiagaraMeshVFLayout::SubImage);
+	RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, CameraOffsetBinding, ENiagaraMeshVFLayout::CameraOffset);
+	MaterialParamValidMask =  RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, DynamicMaterialBinding, ENiagaraMeshVFLayout::DynamicParam0) ? 0x1 : 0;
+	MaterialParamValidMask |= RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, DynamicMaterial1Binding, ENiagaraMeshVFLayout::DynamicParam1) ? 0x2 : 0;
+	MaterialParamValidMask |= RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, DynamicMaterial2Binding, ENiagaraMeshVFLayout::DynamicParam2) ? 0x4 : 0;
+	MaterialParamValidMask |= RendererLayoutWithoutCustomSorting.SetVariableFromBinding(CompiledData, DynamicMaterial3Binding, ENiagaraMeshVFLayout::DynamicParam3) ? 0x8 : 0;
+	RendererLayoutWithoutCustomSorting.Finalize();
+}
 
 void UNiagaraMeshRendererProperties::GetUsedMaterials(const FNiagaraEmitterInstance* InEmitter, TArray<UMaterialInterface*>& OutMaterials) const
 {
-	if (ParticleMesh)
+	if (ParticleMesh && ParticleMesh->RenderData)
 	{
 		const FStaticMeshLODResources& LODModel = ParticleMesh->RenderData->LODResources[0];
 		if (bOverrideMaterials)
@@ -217,12 +290,12 @@ uint32 UNiagaraMeshRendererProperties::GetNumIndicesPerInstance() const
 {
 	// TODO: Add proper support for multiple mesh sections for GPU mesh particles.
 	//return ParticleMesh ? ParticleMesh->RenderData->LODResources[0].Sections[0].NumTriangles * 3 : 0;
-	return ParticleMesh ? ParticleMesh->RenderData->LODResources[0].IndexBuffer.GetNumIndices() : 0;
+	return ParticleMesh && ParticleMesh->RenderData ? ParticleMesh->RenderData->LODResources[0].IndexBuffer.GetNumIndices() : 0;
 }
 
 void UNiagaraMeshRendererProperties::GetIndexInfoPerSection(int32 LODIndex, TArray<TPair<int32, int32>>& IndexInfoPerSection) const
 {
-	check(ParticleMesh && ParticleMesh->RenderData->LODResources.IsValidIndex(LODIndex));
+	check(ParticleMesh && ParticleMesh->RenderData && ParticleMesh->RenderData->LODResources.IsValidIndex(LODIndex));
 
 	if (ParticleMesh && ParticleMesh->RenderData->LODResources.IsValidIndex(LODIndex))
 	{
@@ -245,9 +318,12 @@ void UNiagaraMeshRendererProperties::PostLoad()
 #if WITH_EDITOR
 	if (GIsEditor && (ParticleMesh != nullptr))
 	{
+		ParticleMesh->ConditionalPostLoad();
 		ParticleMesh->GetOnMeshChanged().AddUObject(this, &UNiagaraMeshRendererProperties::OnMeshChanged);
+		ParticleMesh->OnPostMeshBuild().AddUObject(this, &UNiagaraMeshRendererProperties::OnMeshPostBuild);
 	}
 #endif
+	PostLoadBindings(ENiagaraRendererSourceDataMode::Particles);
 }
 
 #if WITH_EDITORONLY_DATA
@@ -343,6 +419,7 @@ void UNiagaraMeshRendererProperties::BeginDestroy()
 	if (GIsEditor && (ParticleMesh != nullptr))
 	{
 		ParticleMesh->GetOnMeshChanged().RemoveAll(this);
+		ParticleMesh->OnPostMeshBuild().RemoveAll(this);
 	}
 #endif
 }
@@ -357,6 +434,7 @@ void UNiagaraMeshRendererProperties::PreEditChange(class FProperty* PropertyThat
 		if (ParticleMesh != nullptr)
 		{
 			ParticleMesh->GetOnMeshChanged().RemoveAll(this);
+			ParticleMesh->OnPostMeshBuild().RemoveAll(this);
 		}
 	}
 }
@@ -367,11 +445,23 @@ void UNiagaraMeshRendererProperties::PostEditChangeProperty(FPropertyChangedEven
 	SubImageSize.Y = FMath::Max<float>(SubImageSize.Y, 1.f);
 
 	static FName ParticleMeshName(TEXT("ParticleMesh"));
-	if (ParticleMesh && PropertyChangedEvent.Property && PropertyChangedEvent.Property->GetFName() == ParticleMeshName)
+
+	if (ParticleMesh)
 	{
-		// We only need to check material usage as we will invalidate any renderers later on
-		CheckMaterialUsage();
-		ParticleMesh->GetOnMeshChanged().AddUObject(this, &UNiagaraMeshRendererProperties::OnMeshChanged);
+		const bool IsRedirect = PropertyChangedEvent.ChangeType == EPropertyChangeType::Redirected;
+		if (IsRedirect)
+		{
+			// Do this in case the redirected property is not ParticleMesh (we have no way of knowing b/c the property is nullptr)
+			ParticleMesh->GetOnMeshChanged().RemoveAll(this);
+			ParticleMesh->OnPostMeshBuild().RemoveAll(this);
+		}
+		if (IsRedirect || (PropertyChangedEvent.Property && PropertyChangedEvent.Property->GetFName() == ParticleMeshName))
+		{
+			// We only need to check material usage as we will invalidate any renderers later on
+			CheckMaterialUsage();
+			ParticleMesh->GetOnMeshChanged().AddUObject(this, &UNiagaraMeshRendererProperties::OnMeshChanged);
+			ParticleMesh->OnPostMeshBuild().AddUObject(this, &UNiagaraMeshRendererProperties::OnMeshPostBuild);
+		}
 	}
 
 	Super::PostEditChangeProperty(PropertyChangedEvent);
@@ -390,9 +480,14 @@ void UNiagaraMeshRendererProperties::OnMeshChanged()
 	CheckMaterialUsage();
 }
 
+void UNiagaraMeshRendererProperties::OnMeshPostBuild(UStaticMesh*)
+{
+	OnMeshChanged();
+}
+
 void UNiagaraMeshRendererProperties::CheckMaterialUsage()
 {
-	if ( ParticleMesh != nullptr )
+	if (ParticleMesh && ParticleMesh->RenderData)
 	{
 		const FStaticMeshLODResources& LODModel = ParticleMesh->RenderData->LODResources[0];
 		for (int32 SectionIndex = 0; SectionIndex < LODModel.Sections.Num(); SectionIndex++)

@@ -133,9 +133,9 @@ FSearchDataVersionInfo FSearchDataVersionInfo::Current =
 FStreamSearch::FStreamSearch(const FString& InSearchValue, const FStreamSearchOptions& InSearchOptions)
 	: SearchValue(InSearchValue)
 	, SearchOptions(InSearchOptions)
-	, StopTaskCounter(0)
 	, BlueprintCountBelowVersion(0)
 	, bThreadCompleted(false)
+	, StopTaskCounter(0)
 {
 	// Unique identifier for this search, used to generate a unique label for profiling and debugging.
 	static int32 GlobalSearchCounter = 0;
@@ -193,13 +193,10 @@ uint32 FStreamSearch::Run()
 				OnResultReady(SearchResult);
 			}
 		}
-
-		if (StopTaskCounter.GetValue())
-		{
-			// Ensure that the FiB Manager knows that we are done searching
-			FFindInBlueprintSearchManager::Get().EnsureSearchQueryEnds(this);
-		}
 	}
+
+	// Ensure that the FiB Manager knows that we are done searching
+	FFindInBlueprintSearchManager::Get().EnsureSearchQueryEnds(this);
 
 	bThreadCompleted = true;
 
@@ -233,6 +230,11 @@ void FStreamSearch::EnsureCompletion()
 bool FStreamSearch::IsComplete() const
 {
 	return bThreadCompleted;
+}
+
+bool FStreamSearch::WasStopped() const
+{
+	return StopTaskCounter.GetValue() > 0;
 }
 
 void FStreamSearch::GetFilteredItems(TArray<FSearchResult>& OutItemsFound)
@@ -1331,10 +1333,15 @@ public:
 			// Determine whether this is a full or partial indexing operation.
 			const bool bEnableFullIndexingPass = Controller->ShouldFullyIndexAssets();
 
-			// Determine whether to disable multiprocessing for this batch. If true, this batch will be processed only on this thread.
-			const bool bDisableMultiprocessing = !Controller->ShouldEnableMultiprocessing();
+			// Determine whether to disable multiprocessing for this batch. By default, use multiprocessing with low-priority worker threads.
+			EParallelForFlags ParallelForFlags = EParallelForFlags::Unbalanced | EParallelForFlags::BackgroundPriority;
+			if (!Controller->ShouldEnableMultiprocessing())
+			{
+				// This batch will be processed entirely on this thread.
+				ParallelForFlags |= EParallelForFlags::ForceSingleThread;
+			}
 
-			ParallelFor(AssetPathsToIndex.Num(), [&AssetPathsToIndex, Controller = this->Controller, bEnableFullIndexingPass, bDisableMultiprocessing](int32 ArrayIdx)
+			ParallelFor(AssetPathsToIndex.Num(), [&AssetPathsToIndex, Controller = this->Controller, bEnableFullIndexingPass, ParallelForFlags](int32 ArrayIdx)
 			{
 				CSV_CUSTOM_STAT(FindInBlueprint, IndexedAssetCountThisFrame, 1, ECsvCustomStatOp::Accumulate);
 
@@ -1366,7 +1373,7 @@ public:
 									ParallelFor(IndexNodes.Num(), [&IndexNodes](int32 NodeIdx)
 									{
 										IndexNodes[NodeIdx]->ParseAllChildData();
-									}, bDisableMultiprocessing);
+									}, ParallelForFlags);
 
 									TArray<FImaginaryFiBDataSharedPtr> ChildNodes;
 									for (FImaginaryFiBDataSharedPtr& NodePtr : IndexNodes)
@@ -1394,7 +1401,7 @@ public:
 					// Signal that indexing has been completed for this asset path, even though its cache entry is invalid.
 					Controller->IndexCompletedForAssetPath(AssetPath);
 				}
-			}, bDisableMultiprocessing);
+			}, ParallelForFlags);
 		}
 
 		return 0;
@@ -2207,7 +2214,7 @@ void FFindInBlueprintSearchManager::ExtractUnloadedFiBData(const FAssetData& InA
 		}
 	}
 
-	NewSearchData.Value = *InFiBData;
+	NewSearchData.Value = InFiBData;
 
 	// This will be set to 'None' if the data is versioned. Deserialization of the actual version from the tag value is deferred until later.
 	NewSearchData.VersionInfo.FiBDataVersion = InFiBDataVersion;
@@ -2439,6 +2446,10 @@ void FFindInBlueprintSearchManager::AddOrUpdateBlueprintSearchMetadata(UBlueprin
 	CSV_SCOPED_TIMING_STAT(FindInBlueprint, AddOrUpdateBlueprintSearchMetadata);
 	CSV_CUSTOM_STAT(FindInBlueprint, AddOrUpdateCountThisFrame, 1, ECsvCustomStatOp::Accumulate);
 
+	check(InBlueprint);
+
+	const bool bIsTransientBlueprint = InBlueprint->HasAnyFlags(RF_Transient) || InBlueprint->IsInPackage(GetTransientPackage());
+
 	// No need to update the cache in the following cases:
 	//	a) Indexing is disabled.
 	//  b) The Blueprint is explicitly marked as being transient (i.e. internal utility-type assets that aren't saved).
@@ -2446,7 +2457,8 @@ void FFindInBlueprintSearchManager::AddOrUpdateBlueprintSearchMetadata(UBlueprin
 	//	d) The Blueprint was loaded for diffing. It makes search all very strange and allows you to fully open those Blueprints.
 	//	e) The Blueprint was loaded/copied for PIE. These assets are temporarily created for a session and don't need to be re-indexed.
 	if (!bEnableGatheringData
-		|| InBlueprint->HasAnyFlags(RF_NeedLoad | RF_NeedPostLoad | RF_Transient)
+		|| bIsTransientBlueprint
+		|| InBlueprint->HasAnyFlags(RF_NeedLoad | RF_NeedPostLoad)
 		|| InBlueprint->GetOutermost()->HasAnyPackageFlags(PKG_ForDiffing | PKG_PlayInEditor))
 	{
 		return;
@@ -2458,7 +2470,7 @@ void FFindInBlueprintSearchManager::AddOrUpdateBlueprintSearchMetadata(UBlueprin
 
 	UObject* AssetObject = GetAssetObject(InBlueprint);
 
-	check(InBlueprint && AssetObject);
+	check(AssetObject);
 
 	FName AssetPath = *AssetObject->GetPathName();
 	FSearchData SearchData = GetSearchDataForAssetPath(AssetPath);
@@ -2542,8 +2554,16 @@ FFindInBlueprintSearchManager::FActiveSearchQueryPtr FFindInBlueprintSearchManag
 	return ActiveSearchQueries.FindRef(InSearchOriginator);
 }
 
-FSearchData FFindInBlueprintSearchManager::GetNextSearchDataForQuery(FActiveSearchQueryPtr SearchQuery, bool bCheckDeferredList)
+FSearchData FFindInBlueprintSearchManager::GetNextSearchDataForQuery(const FStreamSearch* SearchOriginator, FActiveSearchQueryPtr SearchQuery, bool bCheckDeferredList)
 {
+	check(SearchOriginator);
+
+	// If terminated, don't advance, just return with no entry.
+	if (SearchOriginator->WasStopped())
+	{
+		return FSearchData();
+	}
+
 	// Get the entry in the index cache for the next asset to search.
 	FSearchData SearchData = GetSearchDataForIndex(SearchQuery->NextIndex);
 	while (SearchData.IsValid())
@@ -2590,8 +2610,14 @@ FSearchData FFindInBlueprintSearchManager::GetNextSearchDataForQuery(FActiveSear
 					FPlatformProcess::Sleep(0.1f);
 				}
 
+				// If terminated, break out of the loop and return with no entry.
+				if (SearchOriginator->WasStopped())
+				{
+					return FSearchData();
+				}
+
 				// Check for a new entry in case the cache has grown in size.
-				SearchData = GetNextSearchDataForQuery(SearchQuery, /*bCheckDeferredList = */false);
+				SearchData = GetNextSearchDataForQuery(SearchOriginator, SearchQuery, /*bCheckDeferredList = */false);
 				if (SearchData.IsValid())
 				{
 					// Ok to use this entry; break out of the loop.
@@ -2605,7 +2631,15 @@ FSearchData FFindInBlueprintSearchManager::GetNextSearchDataForQuery(FActiveSear
 				// If this asset is still waiting to be indexed, put it back into the queue.
 				if (!SearchData.IsIndexingCompleted())
 				{
-					SearchQuery->DeferredAssetPaths.Enqueue(AssetPath);
+					// Only put it back into the queue if we're either still actively indexing or if the asset is queued up for the next indexing operation.
+					if (IsCacheInProgress() || PendingAssets.Contains(AssetPath) || AssetsToIndexOnFirstSearch.Contains(AssetPath))
+					{
+						SearchQuery->DeferredAssetPaths.Enqueue(AssetPath);
+					}
+					else
+					{
+						UE_LOG(LogFindInBlueprint, Warning, TEXT("%s has been unexpectedly excluded from indexing and will not be included in the search."), *AssetPath.ToString());
+					}
 
 					// Keep track of the first dequeued asset path. If we wrap back around, we'll yield to give the indexing thread more time to work.
 					if (FirstAssetPath == NAME_None)
@@ -2669,15 +2703,25 @@ bool FFindInBlueprintSearchManager::ContinueSearchQuery(const FStreamSearch* InS
 	// If paused, wait here until searching is resumed.
 	BlockSearchQueryIfPaused();
 
+	check(InSearchOriginator);
+
+	// Check for an explicit termination of the search thread.
+	if (InSearchOriginator->WasStopped())
+	{
+		return false;
+	}
+
+	// We can have multiple active search queries, so find the matching one that corresponds to the originating search thread.
 	FActiveSearchQueryPtr SearchQuery = FindSearchQuery(InSearchOriginator);
 	if (!SearchQuery.IsValid())
 	{
+		// Terminate the search if there is no matching query.
 		return false;
 	}
 
 	// Grab the next entry and update the active search query. Include the list of entries that were deferred pending completion of async indexing work.
 	const bool bCheckDeferredList = true;
-	FSearchData SearchData = GetNextSearchDataForQuery(SearchQuery, bCheckDeferredList);
+	FSearchData SearchData = GetNextSearchDataForQuery(InSearchOriginator, SearchQuery, bCheckDeferredList);
 	if (SearchData.IsValid())
 	{
 		// In these modes, the full index may not have been parsed yet. We'll do that now on the search thread.
@@ -2709,13 +2753,6 @@ bool FFindInBlueprintSearchManager::ContinueSearchQuery(const FStreamSearch* InS
 
 		OutSearchData = SearchData;
 		return true;
-	}
-	else
-	{
-		FScopeLock ScopeLock(&SafeQueryModifyCriticalSection);
-
-		ActiveSearchQueries.Remove(InSearchOriginator);
-		ActiveSearchCounter.Decrement();
 	}
 
 	return false;
@@ -2827,7 +2864,7 @@ void FFindInBlueprintSearchManager::CleanCache()
 				// Don't check the deferred list here; in this case we are only fixing up the query's index position (state) if
 				// we haven't yet reached the end of the database, and we don't care about assets that are waiting to be indexed.
 				const bool bCheckDeferredList = false;
-				FSearchData SearchData = GetNextSearchDataForQuery(SearchQuery, bCheckDeferredList);
+				FSearchData SearchData = GetNextSearchDataForQuery(ActiveSearch, SearchQuery, bCheckDeferredList);
 				if (SearchData.IsValid())
 				{
 					FName CachePath = SearchData.AssetPath;
@@ -2849,7 +2886,7 @@ void FFindInBlueprintSearchManager::CleanCache()
 
 		// If the database item is invalid, marked for deletion, stale or pending kill (if loaded), remove it from the database
 		const bool bEvenIfPendingKill = true;
-		const FSearchData& SearchData = SearchArray[SearchValuePair.Value];
+		FSearchData& SearchData = SearchArray[SearchValuePair.Value];
 		if (!SearchData.IsValid()
 			|| SearchData.IsMarkedForDeletion()
 			|| SearchData.Blueprint.IsStale()
@@ -2862,7 +2899,7 @@ void FFindInBlueprintSearchManager::CleanCache()
 		else
 		{
 			// Build the new map/array
-			NewSearchMap.Add(SearchValuePair.Key, NewSearchArray.Add(SearchData));
+			NewSearchMap.Add(SearchValuePair.Key, NewSearchArray.Add(MoveTemp(SearchData)));
 		}
 	}
 
@@ -3108,18 +3145,15 @@ void FFindInBlueprintSearchManager::CacheAllAssets(TWeakPtr< SFindInBlueprints >
 				Args.Add(TEXT("PackageCount"), UnindexedAssets.Num() + BlueprintsToUpdate.Num());
 				Args.Add(TEXT("UnindexedCount"), UnindexedAssets.Num());
 				Args.Add(TEXT("OutOfDateCount"), BlueprintsToUpdate.Num());
-				DialogDisplayText = FText::Format(LOCTEXT("CacheAllConfirmationMessage_UnindexedAndOutOfDate", "This process can take a long time and the editor may become unresponsive; there are {PackageCount} ({UnindexedCount} Unindexed/{OutOfDateCount} Out-of-Date) Blueprints to load. \
-																					\n\nWould you like to checkout, load, and save all Blueprints to make this indexing permanent? Otherwise, all Blueprints will still be loaded but you will be required to re-index the next time you start the editor!"), Args);
+				DialogDisplayText = FText::Format(LOCTEXT("CacheAllConfirmationMessage_UnindexedAndOutOfDate", "This process can take a long time and the editor may become unresponsive; there are {PackageCount} ({UnindexedCount} Unindexed/{OutOfDateCount} Out-of-Date) Blueprints to load.\n\nWould you like to checkout, load, and save all Blueprints to make this indexing permanent? Otherwise, all Blueprints will still be loaded but you will be required to re-index the next time you start the editor!"), Args);
 			}
 			else if (UnindexedAssets.Num() && BlueprintsToUpdate.Num() == 0)
 			{
-				DialogDisplayText = FText::Format(LOCTEXT("CacheAllConfirmationMessage_UnindexedOnly", "This process can take a long time and the editor may become unresponsive; there are {PackageCount} unindexed Blueprints to load. \
-																					 \n\nWould you like to checkout, load, and save all Blueprints to make this indexing permanent? Otherwise, all Blueprints will still be loaded but you will be required to re-index the next time you start the editor!"), Args);
+				DialogDisplayText = FText::Format(LOCTEXT("CacheAllConfirmationMessage_UnindexedOnly", "This process can take a long time and the editor may become unresponsive; there are {PackageCount} unindexed Blueprints to load.\n\nWould you like to checkout, load, and save all Blueprints to make this indexing permanent? Otherwise, all Blueprints will still be loaded but you will be required to re-index the next time you start the editor!"), Args);
 			}
 			else if (UnindexedAssets.Num() == 0 && BlueprintsToUpdate.Num())
 			{
-				DialogDisplayText = FText::Format(LOCTEXT("CacheAllConfirmationMessage_OutOfDateOnly", "This process can take a long time and the editor may become unresponsive; there are {PackageCount} out-of-date Blueprints to load. \
-																					 \n\nWould you like to checkout, load, and save all Blueprints to make this indexing permanent? Otherwise, all Blueprints will still be loaded but you will be required to re-index the next time you start the editor!"), Args);
+				DialogDisplayText = FText::Format(LOCTEXT("CacheAllConfirmationMessage_OutOfDateOnly", "This process can take a long time and the editor may become unresponsive; there are {PackageCount} out-of-date Blueprints to load.\n\nWould you like to checkout, load, and save all Blueprints to make this indexing permanent? Otherwise, all Blueprints will still be loaded but you will be required to re-index the next time you start the editor!"), Args);
 			}
 
 			const EAppReturnType::Type ReturnValue = FMessageDialog::Open(EAppMsgType::YesNoCancel, DialogDisplayText, &DialogTitle);
@@ -3436,10 +3470,16 @@ TSharedPtr<SFindInBlueprints> FFindInBlueprintSearchManager::OpenGlobalFindResul
 		const FName GlobalTabId = GlobalFindResultsTabIDs[Idx];
 		if (!OpenGlobalTabIDs.Contains(GlobalTabId))
 		{
-			TSharedRef<SDockTab> NewTab = FGlobalTabmanager::Get()->InvokeTab(GlobalTabId);
-			TSharedRef<SFindInBlueprints> NewFindTab = StaticCastSharedRef<SFindInBlueprints>(NewTab->GetContent());
-
-			return NewFindTab;
+			TSharedPtr<SDockTab> NewTab = FGlobalTabmanager::Get()->TryInvokeTab(GlobalTabId);
+			if (NewTab.IsValid())
+			{
+				TSharedRef<SFindInBlueprints> NewFindTab = StaticCastSharedRef<SFindInBlueprints>(NewTab->GetContent());
+				return NewFindTab;
+			}
+			else
+			{
+				break;
+			}
 		}
 	}
 
@@ -3462,7 +3502,7 @@ TSharedPtr<SFindInBlueprints> FFindInBlueprintSearchManager::GetGlobalFindResult
 
 	if (FindResultsToUse.IsValid())
 	{
-		FGlobalTabmanager::Get()->InvokeTab(FindResultsToUse->GetHostTabId());
+		FGlobalTabmanager::Get()->TryInvokeTab(FindResultsToUse->GetHostTabId());
 	}
 	else
 	{
@@ -3583,10 +3623,11 @@ void FFindInBlueprintSearchManager::Tick(float DeltaTime)
 
 bool FFindInBlueprintSearchManager::IsTickable() const
 {
-	const bool bHasPendingAssets = PendingAssets.Num() > 0 || (bHasFirstSearchOccurred && AssetsToIndexOnFirstSearch.Num() > 0);
+	const bool bHasPendingAssets = PendingAssets.Num() > 0;
+	const bool bNeedsFirstIndex = bHasFirstSearchOccurred && AssetsToIndexOnFirstSearch.Num() > 0;
 
-	// Tick only if we have an active caching operation or if we have pending assets and an open FiB context
-	return IsCacheInProgress() || (bHasPendingAssets && GlobalFindResults.Num() > 0);
+	// Tick only if we have an active caching operation or if a search has occured before we're ready or if we have pending assets and an open FiB context
+	return IsCacheInProgress() || bNeedsFirstIndex || (bHasPendingAssets && IsGlobalFindResultsOpen());
 }
 
 TStatId FFindInBlueprintSearchManager::GetStatId() const

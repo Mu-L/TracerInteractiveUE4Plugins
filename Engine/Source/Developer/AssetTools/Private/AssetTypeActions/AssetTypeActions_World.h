@@ -19,4 +19,5 @@ public:
 	virtual uint32 GetCategories() override { return EAssetTypeCategories::Basic; }
 	virtual bool CanLocalize() const override { return false; }
 	virtual class UThumbnailInfo* GetThumbnailInfo(UObject* Asset) const override;
+	virtual TArray<FAssetData> GetValidAssetsForPreviewOrEdit(TArrayView<const FAssetData> InAssetDatas, bool bIsPreview) override;
 };

@@ -18,6 +18,8 @@ const FName UNiagaraDataInterfaceVector2DCurve::SampleCurveName("SampleVector2DC
 UNiagaraDataInterfaceVector2DCurve::UNiagaraDataInterfaceVector2DCurve(FObjectInitializer const& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	ExposedName = TEXT("Vector2 Curve");
+
 	SetDefaultLUT();
 }
 
@@ -40,7 +42,7 @@ void UNiagaraDataInterfaceVector2DCurve::Serialize(FArchive& Ar)
 #if WITH_EDITORONLY_DATA
 	if (bUseLUT && Ar.IsCooking() && Ar.CookingTarget()->RequiresCookedData())
 	{
-		UpdateLUT();
+		UpdateLUT(true);
 
 		FRichCurve TempXCurve;
 		FRichCurve TempYCurve;
@@ -67,7 +69,7 @@ void UNiagaraDataInterfaceVector2DCurve::UpdateTimeRanges()
 		LUTMinTime = FMath::Min(XCurve.GetNumKeys() > 0 ? XCurve.GetFirstKey().Time : LUTMinTime, LUTMinTime);
 		LUTMinTime = FMath::Min(YCurve.GetNumKeys() > 0 ? YCurve.GetFirstKey().Time : LUTMinTime, LUTMinTime);
 
-		LUTMaxTime = FLT_MIN;
+		LUTMaxTime = -FLT_MAX;
 		LUTMaxTime = FMath::Max(XCurve.GetNumKeys() > 0 ? XCurve.GetLastKey().Time : LUTMaxTime, LUTMaxTime);
 		LUTMaxTime = FMath::Max(YCurve.GetNumKeys() > 0 ? YCurve.GetLastKey().Time : LUTMaxTime, LUTMaxTime);
 		LUTInvTimeRange = 1.0f / (LUTMaxTime - LUTMinTime);

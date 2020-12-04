@@ -140,7 +140,7 @@ FWebSocket::FWebSocket(WebSocketInternalContext* InContext, WebSocketInternal* I
 }
 #endif
 
-bool FWebSocket::Send(uint8* Data, uint32 Size)
+bool FWebSocket::Send(const uint8* Data, uint32 Size, bool bPrependSize)
 {
 	TArray<uint8> Buffer;
 
@@ -148,16 +148,25 @@ bool FWebSocket::Send(uint8* Data, uint32 Size)
 	Buffer.AddDefaulted(LWS_PRE); // Reserve space for WS header data
 #endif
 
-	Buffer.Append((uint8*)&Size, sizeof (uint32)); // insert size.
+	if (bPrependSize)
+	{
+		Buffer.Append((uint8*)&Size, sizeof(uint32)); // insert size.
+	}
+
 	Buffer.Append((uint8*)Data, Size);
 	OutgoingBuffer.Add(Buffer);
 
 	return true;
 }
 
-void FWebSocket::SetRecieveCallBack(FWebSocketPacketRecievedCallBack CallBack)
+void FWebSocket::SetReceiveCallBack(FWebSocketPacketReceivedCallBack CallBack)
 {
-	RecievedCallBack = CallBack;
+	ReceivedCallback = CallBack;
+}
+
+void FWebSocket::SetSocketClosedCallBack(FWebSocketInfoCallBack CallBack)
+{
+	SocketClosedCallback = CallBack;
 }
 
 FString FWebSocket::RemoteEndPoint(bool bAppendPort)
@@ -317,18 +326,25 @@ void FWebSocket::SetErrorCallBack(FWebSocketInfoCallBack CallBack)
 	ErrorCallBack = CallBack;
 }
 
+void FWebSocket::OnReceive(void* Data, uint32 Size)
+{
+#if USE_LIBWEBSOCKET
+	ReceivedCallback.ExecuteIfBound(Data, Size);
+#endif
+}
+
 void FWebSocket::OnRawRecieve(void* Data, uint32 Size)
 {
 #if USE_LIBWEBSOCKET
 
-	RecievedBuffer.Append((uint8*)Data, Size); // consumes all of Data
-	while (RecievedBuffer.Num() > sizeof(uint32))
+	ReceiveBuffer.Append((uint8*)Data, Size); // consumes all of Data
+	while (ReceiveBuffer.Num() > sizeof(uint32))
 	{
-		uint32 BytesToBeRead = *(uint32*)RecievedBuffer.GetData();
-		if (BytesToBeRead <= ((uint32)RecievedBuffer.Num() - sizeof(uint32)))
+		uint32 BytesToBeRead = *(uint32*)ReceiveBuffer.GetData();
+		if (BytesToBeRead <= ((uint32)ReceiveBuffer.Num() - sizeof(uint32)))
 		{
-			RecievedCallBack.ExecuteIfBound((void*)((uint8*)RecievedBuffer.GetData() + sizeof(uint32)), BytesToBeRead);
-			RecievedBuffer.RemoveAt(0, sizeof(uint32) + BytesToBeRead );
+			ReceivedCallback.ExecuteIfBound((void*)((uint8*)ReceiveBuffer.GetData() + sizeof(uint32)), BytesToBeRead);
+			ReceiveBuffer.RemoveAt(0, sizeof(uint32) + BytesToBeRead );
 		}
 		else
 		{
@@ -338,7 +354,7 @@ void FWebSocket::OnRawRecieve(void* Data, uint32 Size)
 
 #else // ! USE_LIBWEBSOCKET -- HTML5 uses BSD network API
 
-	// browser was crashing when using RecievedBuffer...
+	// browser was crashing when using ReceiveBuffer...
 
 	check(Data == NULL); // jic this is not obvious, Data will be resigned to Buffer below
 
@@ -353,9 +369,9 @@ void FWebSocket::OnRawRecieve(void* Data, uint32 Size)
 		while ( ( BytesToBeRead > 0 ) && ( BytesToBeRead < BytesLeft ) )
 		{
 			Data = (void*)((uint8*)Data + sizeof(uint32));
-			RecievedCallBack.ExecuteIfBound(Data, BytesToBeRead);
+			ReceivedCallback.ExecuteIfBound(Data, BytesToBeRead);
 
-			// "RecievedBuffer.RemoveAt()"
+			// "ReceiveBuffer.RemoveAt()"
 			Data = (void*)((uint8*)Data + BytesToBeRead);
 			BytesLeft -= BytesToBeRead + sizeof(uint32);
 			if ( (uint8*)Data >= (Buffer+Size)  // hard cap
@@ -425,9 +441,14 @@ void FWebSocket::OnRawWebSocketWritable(WebSocketInternal* wsi)
 
 }
 
+void FWebSocket::OnClose()
+{
+	SocketClosedCallback.ExecuteIfBound();
+}
+
 FWebSocket::~FWebSocket()
 {
-	RecievedCallBack.Unbind();
+	ReceivedCallback.Unbind();
 
 #if USE_LIBWEBSOCKET
 

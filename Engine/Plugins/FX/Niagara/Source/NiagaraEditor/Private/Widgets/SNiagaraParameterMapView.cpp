@@ -4,7 +4,6 @@
 #include "SNiagaraParameterMapPaletteItem.h"
 #include "NiagaraObjectSelection.h"
 #include "Widgets/Images/SImage.h"
-#include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SComboButton.h"
 #include "Widgets/Input/SSearchBox.h"
 #include "NiagaraCommon.h"
@@ -15,13 +14,11 @@
 #include "NiagaraGraph.h"
 #include "NiagaraParameterStore.h"
 #include "NiagaraNodeWithDynamicPins.h"
-#include "NiagaraNodeParameterMapBase.h"
 #include "NiagaraNodeAssignment.h"
 #include "NiagaraNodeParameterMapGet.h"
 #include "NiagaraActions.h"
 #include "SGraphActionMenu.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
-#include "IDetailsView.h"
 #include "DetailLayoutBuilder.h"
 #include "NiagaraConstants.h"
 #include "EdGraph/EdGraphSchema.h"
@@ -36,11 +33,9 @@
 #include "ScopedTransaction.h"
 #include "NiagaraEditorUtilities.h"
 #include "NiagaraScriptVariable.h"
-#include "Widgets/SPanel.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/SNullWidget.h"
 #include "Widgets/SToolTip.h"
-#include "NiagaraSystemEditorData.h"
 #include "ViewModels/Stack/NiagaraStackSystemSettingsGroup.h"
 #include "ViewModels/Stack/NiagaraStackGraphUtilities.h"
 #include "SNiagaraGraphActionWidget.h"
@@ -51,6 +46,9 @@
 #include "NiagaraNodeOutput.h"
 #include "NiagaraNodeEmitter.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "NiagaraClipboard.h"
+#include "NiagaraEditorModule.h"
+#include "NiagaraSimulationStageBase.h"
 
 #define LOCTEXT_NAMESPACE "NiagaraParameterMapView"
 
@@ -116,6 +114,10 @@ void NiagaraParameterMapSectionID::OnGetSectionNamespaces(const NiagaraParameter
 	case NiagaraParameterMapSectionID::PARAMETERCOLLECTION:
 		OutSectionNamespaces.Add(FNiagaraConstants::ParameterCollectionNamespace);
 		break;
+	case NiagaraParameterMapSectionID::STACK_CONTEXT:
+		OutSectionNamespaces.Add(FNiagaraConstants::StackContextNamespace);
+		break;
+
 	}
 }
 
@@ -170,6 +172,10 @@ NiagaraParameterMapSectionID::Type NiagaraParameterMapSectionID::OnGetSectionFro
 	else if (OutParameterHandle.IsDataInstanceHandle())
 	{
 		SectionID = NiagaraParameterMapSectionID::DATA_INSTANCE;
+	}
+	else if (OutParameterHandle.IsStackContextHandle())
+	{
+		SectionID = NiagaraParameterMapSectionID::STACK_CONTEXT;
 	}
 
 	return SectionID;
@@ -483,12 +489,14 @@ TSharedRef<SWidget> SNiagaraParameterMapView::GetViewOptionsMenu()
 
 bool SNiagaraParameterMapView::AllowMakeTypeGeneric(const FNiagaraTypeDefinition& InType) const
 {
-	return InType != FNiagaraTypeDefinition::GetParameterMapDef();
+	return InType != FNiagaraTypeDefinition::GetParameterMapDef() && !InType.IsInternalType();
 }
 
 bool SNiagaraParameterMapView::AllowMakeTypeAttribute(const FNiagaraTypeDefinition& InType) const
 {
-	return InType != FNiagaraTypeDefinition::GetParameterMapDef() && InType != FNiagaraTypeDefinition::GetGenericNumericDef();
+	return InType != FNiagaraTypeDefinition::GetParameterMapDef()
+		&& InType != FNiagaraTypeDefinition::GetGenericNumericDef()
+		&& !InType.IsInternalType();
 }
 
 void SNiagaraParameterMapView::OnFilterTextChanged(const FText& InFilterText)
@@ -517,13 +525,14 @@ void SNiagaraParameterMapView::CollectAllActions(FGraphActionListBuilderBase& Ou
 	}
 
 	TMap<FNiagaraVariable, TArray<FNiagaraGraphParameterReferenceCollection>> ParameterEntries;
+	TArray<FName> CustomIterationSourceNamespaces;
 	if (ToolkitType == SCRIPT)
 	{
-		CollectAllActionsForScriptToolkit(ParameterEntries);
+		CollectAllActionsForScriptToolkit(ParameterEntries, CustomIterationSourceNamespaces);
 	}
 	else if (ToolkitType == SYSTEM)
 	{
-		CollectAllActionsForSystemToolkit(ParameterEntries);
+		CollectAllActionsForSystemToolkit(ParameterEntries, CustomIterationSourceNamespaces);
 	}
 
 	ParameterEntries.KeySort([](const FNiagaraVariable& A, const FNiagaraVariable& B) { return A.GetName().LexicalLess(B.GetName()); });
@@ -544,6 +553,7 @@ void SNiagaraParameterMapView::CollectAllActions(FGraphActionListBuilderBase& Ou
 		}
 
 		bool bIsExternallyReferenced = false;
+		bool bIsSourcedFromCustomStackContext = false;
 		for (const FNiagaraGraphParameterReferenceCollection& ReferenceCollection : ParameterEntry.Value)
 		{
 			for (const FNiagaraGraphParameterReference& ParameterReference : ReferenceCollection.ParameterReferences)
@@ -577,16 +587,26 @@ void SNiagaraParameterMapView::CollectAllActions(FGraphActionListBuilderBase& Ou
 			}
 		}
 
+		for (const FName& CustomIterationNamespace : CustomIterationSourceNamespaces)
+		{
+			if (Parameter.IsInNameSpace(CustomIterationNamespace))
+			{
+				bIsSourcedFromCustomStackContext = true;
+				break;
+			}
+		}
+
 		const FText Name = FNiagaraParameterUtilities::FormatParameterNameForTextDisplay(Parameter.GetName());
 		const FText Tooltip = FText::Format(TooltipFormat, Name, Parameter.GetType().GetNameText());
 		TSharedPtr<FNiagaraParameterAction> ParameterAction(new FNiagaraParameterAction(Parameter, ParameterEntry.Value, FText::GetEmpty(), Name, Tooltip, 0, FText(), ParametersWithNamespaceModifierRenamePending, Section));
 		ParameterAction->bIsExternallyReferenced = bIsExternallyReferenced;
+		ParameterAction->bIsSourcedFromCustomStackContext = bIsSourcedFromCustomStackContext;
 		OutAllActions.AddAction(ParameterAction);
 		LastCollectedParameters.Add(Parameter);
 	}
 }
 
-void SNiagaraParameterMapView::CollectAllActionsForScriptToolkit(TMap<FNiagaraVariable, TArray<FNiagaraGraphParameterReferenceCollection>>& OutParameterEntries)
+void SNiagaraParameterMapView::CollectAllActionsForScriptToolkit(TMap<FNiagaraVariable, TArray<FNiagaraGraphParameterReferenceCollection>>& OutParameterEntries, TArray<FName>& OutCustomIterationSourceNamespaces)
 {
 	// For scripts we use the reference maps cached in the graph to collect parameters.
 	for (auto& GraphWeakPtr : Graphs)
@@ -613,7 +633,7 @@ void SNiagaraParameterMapView::CollectAllActionsForScriptToolkit(TMap<FNiagaraVa
 	}
 }
 
-void SNiagaraParameterMapView::CollectAllActionsForSystemToolkit(TMap<FNiagaraVariable, TArray<FNiagaraGraphParameterReferenceCollection>>& OutParameterEntries)
+void SNiagaraParameterMapView::CollectAllActionsForSystemToolkit(TMap<FNiagaraVariable, TArray<FNiagaraGraphParameterReferenceCollection>>& OutParameterEntries, TArray<FName>& OutCustomIterationSourceNamespaces)
 {
 	// For systems we need to collect the user parameters if a system is selected, and then we use parameter map traversal
 	// to find the compile time parameters.
@@ -655,6 +675,7 @@ void SNiagaraParameterMapView::CollectAllActionsForSystemToolkit(TMap<FNiagaraVa
 			continue;
 		}
 
+		int32 NumSimStages = 0;
 		TArray<UNiagaraNodeOutput*> OutputNodes;
 		Graph->GetNodesOfClass<UNiagaraNodeOutput>(OutputNodes);
 		for (UNiagaraNodeOutput* OutputNode : OutputNodes)
@@ -681,13 +702,33 @@ void SNiagaraParameterMapView::CollectAllActionsForSystemToolkit(TMap<FNiagaraVa
 			FNiagaraParameterMapHistoryBuilder Builder;
 			UNiagaraEmitter* GraphOwningEmitter = Graph->GetTypedOuter<UNiagaraEmitter>();
 			FCompileConstantResolver ConstantResolver = GraphOwningEmitter != nullptr
-				? FCompileConstantResolver(GraphOwningEmitter)
+				? FCompileConstantResolver(GraphOwningEmitter, ENiagaraScriptUsage::Function)
 				: FCompileConstantResolver();
 
 			Builder.SetIgnoreDisabled(bIgnoreDisabled);
 			Builder.ConstantResolver = ConstantResolver;
+			FName StageName;
+			ENiagaraScriptUsage StageUsage = OutputNode->GetUsage();
+			if (StageUsage == ENiagaraScriptUsage::ParticleSimulationStageScript && GraphOwningEmitter)
+			{
+				UNiagaraSimulationStageBase* Base = GraphOwningEmitter->GetSimulationStageById(OutputNode->GetUsageId());
+				if (Base)
+				{
+					StageName = Base->GetStackContextReplacementName();
+				}
+			}
+			Builder.BeginUsage(StageUsage, StageName);
 			NodeToTraverse->BuildParameterMapHistory(Builder, true, false);
-			
+			Builder.EndUsage();
+
+			for (int32 HistoryIdx = 0; HistoryIdx < Builder.Histories.Num(); HistoryIdx++)
+			{
+				for (const FName& Namespace : Builder.Histories[HistoryIdx].IterationNamespaceOverridesEncountered)
+				{
+					OutCustomIterationSourceNamespaces.AddUnique(Namespace);
+				}
+			}
+
 			TMap<FNiagaraVariable, FNiagaraGraphParameterReferenceCollection> ReferenceCollectionsForTraversedNode;
 			if (Builder.Histories.Num() == 1)
 			{
@@ -804,6 +845,27 @@ void SNiagaraParameterMapView::OnActionDoubleClicked(const TArray< TSharedPtr<FE
 
 }
 
+void SNiagaraParameterMapView::AddMetadataContextMenuEntries(FMenuBuilder MenuBuilder)
+{
+	TAttribute<FText> CopyParameterMetadataToolTip;
+	CopyParameterMetadataToolTip.Bind(this, &SNiagaraParameterMapView::GetCopyParameterMetadataToolTip);
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("CopyParameterMetadata", "Copy Metadata"),
+		CopyParameterMetadataToolTip,
+		FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateSP(this, &SNiagaraParameterMapView::OnCopyParameterMetadata),
+			FCanExecuteAction::CreateSP(this, &SNiagaraParameterMapView::CanCopyParameterMetadata)));
+
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("PasteParameterMetadata", "Paste Metadata"),
+		LOCTEXT("PasteParameterMetadataToolTip", "Paste the parameter metadata from the system clipboard to the selected parameters."),
+		FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateSP(this, &SNiagaraParameterMapView::OnPasteParameterMetadata),
+			FCanExecuteAction::CreateSP(this, &SNiagaraParameterMapView::CanPasteParameterMetadata)));
+}
+
 TSharedPtr<SWidget> SNiagaraParameterMapView::OnContextMenuOpening()
 {
 	// Check if the selected action is valid for a context menu
@@ -813,51 +875,71 @@ TSharedPtr<SWidget> SNiagaraParameterMapView::OnContextMenuOpening()
 		FMenuBuilder MenuBuilder(bShouldCloseWindowAfterMenuSelection, ToolkitCommands);
 		MenuBuilder.BeginSection("Edit", LOCTEXT("EditMenuHeader", "Edit"));
 		{
-			TAttribute<FText> CopyReferenceToolTip;
-			CopyReferenceToolTip.Bind(this, &SNiagaraParameterMapView::GetCopyParameterReferenceToolTip);
-			MenuBuilder.AddMenuEntry(FGenericCommands::Get().Copy, NAME_None, LOCTEXT("CopyReference", "Copy Reference"), CopyReferenceToolTip);
+			if (HasStaticSwitchSelected())
+			{
+				if (IsScriptToolkit())
+				{
+					AddMetadataContextMenuEntries(MenuBuilder);
+				}
+				else
+				{
+					return SNullWidget::NullWidget;
+				}
+			}
+			else
+			{
+				TAttribute<FText> CopyReferenceToolTip;
+				CopyReferenceToolTip.Bind(this, &SNiagaraParameterMapView::GetCopyParameterReferenceToolTip);
+				MenuBuilder.AddMenuEntry(FGenericCommands::Get().Copy, NAME_None, LOCTEXT("CopyReference", "Copy Reference"), CopyReferenceToolTip);
+			
+				TAttribute<FText> DeleteToolTip;
+				DeleteToolTip.Bind(this, &SNiagaraParameterMapView::GetDeleteEntryToolTip);
+				MenuBuilder.AddMenuEntry(FGenericCommands::Get().Delete, NAME_None, TAttribute<FText>(), DeleteToolTip);
 
-			TAttribute<FText> DeleteToolTip;
-			DeleteToolTip.Bind(this, &SNiagaraParameterMapView::GetDeleteEntryToolTip);
-			MenuBuilder.AddMenuEntry(FGenericCommands::Get().Delete, NAME_None, TAttribute<FText>(), DeleteToolTip);
+				TAttribute<FText> RenameToolTip;
+				RenameToolTip.Bind(this, &SNiagaraParameterMapView::GetRenameOnActionNodeToolTip);
+				MenuBuilder.AddMenuEntry(FGenericCommands::Get().Rename, NAME_None, LOCTEXT("Rename", "Rename"), RenameToolTip);
+			
+				MenuBuilder.AddMenuSeparator();
+			
+				if (IsScriptToolkit())
+				{
+					AddMetadataContextMenuEntries(MenuBuilder);
+					MenuBuilder.AddMenuSeparator();
+				}
 
-			TAttribute<FText> RenameToolTip;
-			RenameToolTip.Bind(this, &SNiagaraParameterMapView::GetRenameOnActionNodeToolTip);
-			MenuBuilder.AddMenuEntry(FGenericCommands::Get().Rename, NAME_None, LOCTEXT("Rename", "Rename"), RenameToolTip);
+				MenuBuilder.AddSubMenu(
+                 LOCTEXT("ChangeNamespace", "Change Namespace"),
+                 LOCTEXT("ChangeNamespaceToolTip", "Select a new namespace for the selected parameter."),
+                 FNewMenuDelegate::CreateSP(this, &SNiagaraParameterMapView::GetChangeNamespaceSubMenu, false));
 
-			MenuBuilder.AddMenuSeparator();
+				MenuBuilder.AddSubMenu(
+                    LOCTEXT("ChangeNamespaceModifier", "Change Namespace Modifier"),
+                    LOCTEXT("ChangeNamespaceModifierToolTip", "Edit the namespace modifier for the selected parameter."),
+                    FNewMenuDelegate::CreateSP(this, &SNiagaraParameterMapView::GetChangeNamespaceModifierSubMenu, false));
 
-			MenuBuilder.AddSubMenu(
-				LOCTEXT("ChangeNamespace", "Change Namespace"),
-				LOCTEXT("ChangeNamespaceToolTip", "Select a new namespace for the selected parameter."),
-				FNewMenuDelegate::CreateSP(this, &SNiagaraParameterMapView::GetChangeNamespaceSubMenu, false));
+				MenuBuilder.AddMenuSeparator();
 
-			MenuBuilder.AddSubMenu(
-				LOCTEXT("ChangeNamespaceModifier", "Change Namespace Modifier"),
-				LOCTEXT("ChangeNamespaceModifierToolTip", "Edit the namespace modifier for the selected parameter."),
-				FNewMenuDelegate::CreateSP(this, &SNiagaraParameterMapView::GetChangeNamespaceModifierSubMenu, false));
+				TAttribute<FText> DuplicateToolTip;
+				DuplicateToolTip.Bind(this, &SNiagaraParameterMapView::GetDuplicateParameterToolTip);
+				MenuBuilder.AddMenuEntry(
+                    LOCTEXT("DuplicateParameter", "Duplicate"),
+                    DuplicateToolTip,
+                    FSlateIcon(),
+                    FUIAction(
+                        FExecuteAction::CreateSP(this, &SNiagaraParameterMapView::OnDuplicateParameter),
+                        FCanExecuteAction::CreateSP(this, &SNiagaraParameterMapView::CanDuplicateParameter)));
 
-			MenuBuilder.AddMenuSeparator();
+				MenuBuilder.AddSubMenu(
+                    LOCTEXT("DuplicateToNewNamespace", "Duplicate to Namespace"),
+                    LOCTEXT("DuplicateToNewNamespaceToolTip", "Duplicate this parameter to a new namespace."),
+                    FNewMenuDelegate::CreateSP(this, &SNiagaraParameterMapView::GetChangeNamespaceSubMenu, true));
 
-			TAttribute<FText> DuplicateToolTip;
-			DuplicateToolTip.Bind(this, &SNiagaraParameterMapView::GetDuplicateParameterToolTip);
-			MenuBuilder.AddMenuEntry(
-				LOCTEXT("DuplicateParameter", "Duplicate"),
-				DuplicateToolTip,
-				FSlateIcon(),
-				FUIAction(
-					FExecuteAction::CreateSP(this, &SNiagaraParameterMapView::OnDuplicateParameter),
-					FCanExecuteAction::CreateSP(this, &SNiagaraParameterMapView::CanDuplicateParameter)));
-
-			MenuBuilder.AddSubMenu(
-				LOCTEXT("DuplicateToNewNamespace", "Duplicate to Namespace"),
-				LOCTEXT("DuplicateToNewNamespaceToolTip", "Duplicate this parameter to a new namespace."),
-				FNewMenuDelegate::CreateSP(this, &SNiagaraParameterMapView::GetChangeNamespaceSubMenu, true));
-
-			MenuBuilder.AddSubMenu(
-				LOCTEXT("DuplicateWithNewNamespaceModifier", "Duplicate with Namespace Modifier"),
-				LOCTEXT("DupilcateWithNewNamespaceModifierToolTip", "Duplicate this parameter with a different namespace modifier."),
-				FNewMenuDelegate::CreateSP(this, &SNiagaraParameterMapView::GetChangeNamespaceModifierSubMenu, true));
+				MenuBuilder.AddSubMenu(
+                    LOCTEXT("DuplicateWithNewNamespaceModifier", "Duplicate with Namespace Modifier"),
+                    LOCTEXT("DupilcateWithNewNamespaceModifierToolTip", "Duplicate this parameter with a different namespace modifier."),
+                    FNewMenuDelegate::CreateSP(this, &SNiagaraParameterMapView::GetChangeNamespaceModifierSubMenu, true));
+			}
 		}
 		MenuBuilder.EndSection();
 
@@ -955,15 +1037,22 @@ bool SNiagaraParameterMapView::SelectionHasContextMenu() const
 {
 	TArray<TSharedPtr<FEdGraphSchemaAction>> SelectedActions;
 	GraphActionMenu->GetSelectedActions(SelectedActions);
+	return SelectedActions.Num() > 0;
+}
+
+bool SNiagaraParameterMapView::HasStaticSwitchSelected() const
+{
+	TArray<TSharedPtr<FEdGraphSchemaAction>> SelectedActions;
+	GraphActionMenu->GetSelectedActions(SelectedActions);
 	for (TSharedPtr<FEdGraphSchemaAction> Action : SelectedActions)
 	{
 		TSharedPtr<FNiagaraParameterAction> NiagaraAction = StaticCastSharedPtr<FNiagaraParameterAction>(Action);
 		if (NiagaraAction && IsStaticSwitchParameter(NiagaraAction->GetParameter(), Graphs))
 		{
-			return false;
+			return true;
 		}
 	}
-	return SelectedActions.Num() > 0;
+	return false;
 }
 
 TSharedRef<SWidget> SNiagaraParameterMapView::OnGetParameterMenu(const NiagaraParameterMapSectionID::Type InSection)
@@ -1148,6 +1237,10 @@ void SNiagaraParameterMapView::OnDeleteEntry()
 			System->Modify();
 			System->GetExposedParameters().RemoveParameter(ParameterAction->Parameter);
 			System->EditorOnlyAddedParameters.RemoveParameter(ParameterAction->Parameter);
+
+			// Update anything that was referencing that parameter
+			System->HandleVariableRemoved(ParameterAction->Parameter, true);
+
 		}
 	}
 }
@@ -1655,6 +1748,144 @@ void SNiagaraParameterMapView::OnCopyParameterReference()
 	}
 }
 
+FText SNiagaraParameterMapView::GetCopyParameterMetadataToolTip() const
+{
+	TArray<TSharedPtr<FEdGraphSchemaAction>> SelectedActions;
+	GraphActionMenu->GetSelectedActions(SelectedActions);
+	if (SelectedActions.Num() != 1)
+	{
+		return LOCTEXT("CantCopyMetadataMultipleSelection", "Can only copy metadata from a single parameter.");
+	}
+
+	TSharedPtr<FNiagaraParameterAction> ParameterAction = StaticCastSharedPtr<FNiagaraParameterAction>(SelectedActions[0]);
+	if (ParameterAction.IsValid() == false)
+	{
+		return LOCTEXT("CantCopyInvalidParameterMetadataToolTip", "Can only copy metadata for valid parameters.");
+	}
+
+	bool bMetadataFound = false;
+	for (TWeakObjectPtr<UNiagaraGraph> WeakGraph : Graphs)
+	{
+		if (WeakGraph.IsValid())
+		{
+			UNiagaraScriptVariable* ParameterScriptVariable = WeakGraph->GetScriptVariable(ParameterAction->GetParameter().GetName());
+			if (ParameterScriptVariable != nullptr)
+			{
+				bMetadataFound = true;
+				break;
+			}
+		}
+	}
+
+	if (bMetadataFound == false)
+	{
+		return LOCTEXT("CantCopyInvalidMetadataToolTip", "The metadata for this parameter is invalid and can't be copied.");
+	}
+
+	return LOCTEXT("CopyMetadataToolTip", "Copy the metadata for this parameter to the system clipboard.");
+}
+
+bool SNiagaraParameterMapView::CanCopyParameterMetadata() const
+{
+	bool bMetadataFound = false;
+	TArray<TSharedPtr<FEdGraphSchemaAction>> SelectedActions;
+	GraphActionMenu->GetSelectedActions(SelectedActions);
+	if (SelectedActions.Num() == 1)
+	{
+		TSharedPtr<FNiagaraParameterAction> ParameterAction = StaticCastSharedPtr<FNiagaraParameterAction>(SelectedActions[0]);
+		if (ParameterAction.IsValid())
+		{
+			for (TWeakObjectPtr<UNiagaraGraph> WeakGraph : Graphs)
+			{
+				if (WeakGraph.IsValid() && WeakGraph->GetScriptVariable(ParameterAction->GetParameter().GetName()) != nullptr)
+				{
+					bMetadataFound = true;
+					break;
+				}
+			}
+		}
+	}
+
+	return bMetadataFound;
+}
+
+void SNiagaraParameterMapView::OnCopyParameterMetadata()
+{
+	bool bMetadataFound = false;
+	TArray<TSharedPtr<FEdGraphSchemaAction>> SelectedActions;
+	GraphActionMenu->GetSelectedActions(SelectedActions);
+	if (SelectedActions.Num() == 1)
+	{
+		TSharedPtr<FNiagaraParameterAction> ParameterAction = StaticCastSharedPtr<FNiagaraParameterAction>(SelectedActions[0]);
+		if (ParameterAction.IsValid())
+		{
+			for (TWeakObjectPtr<UNiagaraGraph> WeakGraph : Graphs)
+			{
+				if (WeakGraph.IsValid())
+				{
+					UNiagaraScriptVariable* ParameterScriptVariable = WeakGraph->GetScriptVariable(ParameterAction->GetParameter().GetName());
+					if (ParameterScriptVariable != nullptr)
+					{
+						UNiagaraClipboardContent* ClipboardContent = UNiagaraClipboardContent::Create();
+						ClipboardContent->ScriptVariables.Add(ParameterScriptVariable);
+						FNiagaraEditorModule::Get().GetClipboard().SetClipboardContent(ClipboardContent);
+						break;
+					}
+				}
+			}
+		}
+	}
+}
+
+bool SNiagaraParameterMapView::CanPasteParameterMetadata() const
+{
+	const UNiagaraClipboardContent* ClipboardContent = FNiagaraEditorModule::Get().GetClipboard().GetClipboardContent();
+	return ClipboardContent != nullptr && ClipboardContent->ScriptVariables.Num() == 1;
+}
+
+void SNiagaraParameterMapView::OnPasteParameterMetadata()
+{
+	const UNiagaraClipboardContent* ClipboardContent = FNiagaraEditorModule::Get().GetClipboard().GetClipboardContent();
+	if (ClipboardContent != nullptr && ClipboardContent->ScriptVariables.Num() == 1)
+	{
+		TArray<UNiagaraScriptVariable*> TargetScriptVariables;
+		TArray<TSharedPtr<FEdGraphSchemaAction>> SelectedActions;
+		GraphActionMenu->GetSelectedActions(SelectedActions);
+		if (SelectedActions.Num() > 0)
+		{
+			for (TSharedPtr<FEdGraphSchemaAction> SelectedAction : SelectedActions)
+			{
+				TSharedPtr<FNiagaraParameterAction> ParameterAction = StaticCastSharedPtr<FNiagaraParameterAction>(SelectedActions[0]);
+				if (ParameterAction.IsValid())
+				{
+					for (TWeakObjectPtr<UNiagaraGraph> WeakGraph : Graphs)
+					{
+						if (WeakGraph.IsValid())
+						{
+							UNiagaraScriptVariable* ParameterScriptVariable = WeakGraph->GetScriptVariable(ParameterAction->GetParameter().GetName());
+							if (ParameterScriptVariable != nullptr)
+							{
+								TargetScriptVariables.Add(ParameterScriptVariable);
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if (TargetScriptVariables.Num() > 0)
+		{
+			FScopedTransaction PasteMetadataTransaction(LOCTEXT("PasteMetadataTransaction", "Paste parameter metadata"));
+			for (UNiagaraScriptVariable* TargetScriptVariable : TargetScriptVariables)
+			{
+				TargetScriptVariable->Modify();
+				TargetScriptVariable->Metadata.CopyUserEditableMetaData(ClipboardContent->ScriptVariables[0]->Metadata);
+				TargetScriptVariable->PostEditChange();
+			}
+		}
+	}
+}
+
 void SNiagaraParameterMapView::RenameParameter(TSharedPtr<FNiagaraParameterAction> ParameterAction, FName NewName)
 {
 	if (ensureMsgf(ParameterAction->bIsExternallyReferenced == false, TEXT("Can not modify an externally referenced parameter.")) == false)
@@ -1700,6 +1931,7 @@ void SNiagaraParameterMapView::RenameParameter(TSharedPtr<FNiagaraParameterActio
 		if (System != nullptr)
 		{
 			// Rename the parameter in the parameter stores.
+			bool bParameterStoreRename = false;
 			FNiagaraParameterStore* OwningParameterStore = nullptr;
 			if (System->GetExposedParameters().IndexOf(Parameter) != INDEX_NONE)
 			{
@@ -1724,45 +1956,68 @@ void SNiagaraParameterMapView::RenameParameter(TSharedPtr<FNiagaraParameterActio
 					// Otherwise it's safe to rename.
 					OwningParameterStore->RenameParameter(Parameter, NewName);
 				}
-				bSuccess = true;
+				bParameterStoreRename = true;
 			}
 
-			if (bSuccess)
+			// Look for set parameters nodes or linked inputs which reference this parameter.
+			bool bAssignmentNodeRename = false;
+			for (FNiagaraGraphParameterReferenceCollection& ReferenceCollection : ParameterAction->ReferenceCollection)
 			{
-				// Look for set variables nodes or linked inputs which reference this parameter.
-				for (FNiagaraGraphParameterReferenceCollection& ReferenceCollection : ParameterAction->ReferenceCollection)
+				for (FNiagaraGraphParameterReference& ParameterReference : ReferenceCollection.ParameterReferences)
 				{
-					for (FNiagaraGraphParameterReference& ParameterReference : ReferenceCollection.ParameterReferences)
+					UNiagaraNode* ReferenceNode = Cast<UNiagaraNode>(ParameterReference.Value);
+					if (ReferenceNode != nullptr)
 					{
-						UNiagaraNode* ReferenceNode = Cast<UNiagaraNode>(ParameterReference.Value);
-						if (ReferenceNode != nullptr)
+						UNiagaraNodeAssignment* OwningAssignmentNode = ReferenceNode->GetTypedOuter<UNiagaraNodeAssignment>();
+						if (OwningAssignmentNode != nullptr)
 						{
-							UNiagaraNodeAssignment* OwningAssignmentNode = ReferenceNode->GetTypedOuter<UNiagaraNodeAssignment>();
-							if (OwningAssignmentNode != nullptr)
+							// If this is owned by a set variables node and it's not locked, update the assignment target on the assignment node.
+							bAssignmentNodeRename |= FNiagaraStackGraphUtilities::TryRenameAssignmentTarget(*OwningAssignmentNode, Parameter, NewName);
+						}
+						else
+						{
+							// Otherwise if the reference node is a get node it's for a linked input so we can just update pin name.
+							UNiagaraNodeParameterMapGet* ReferenceGetNode = Cast<UNiagaraNodeParameterMapGet>(ReferenceNode);
+							if (ReferenceGetNode != nullptr)
 							{
-								// If this is owned by a set variables node and it's not locked, update the assignment target on the assignment node.
-								FNiagaraStackGraphUtilities::TryRenameAssignmentTarget(*OwningAssignmentNode, Parameter, NewName);
-							}
-							else
-							{
-								// Otherwise if the reference node is a get node it's for a linked input so we can just update pin name.
-								UNiagaraNodeParameterMapGet* ReferenceGetNode = Cast<UNiagaraNodeParameterMapGet>(ReferenceNode);
-								if (ReferenceGetNode != nullptr)
+								UEdGraphPin** LinkedInputPinPtr = ReferenceGetNode->Pins.FindByPredicate([&ParameterReference](UEdGraphPin* Pin) { return Pin->PersistentGuid == ParameterReference.Key; });
+								if (LinkedInputPinPtr != nullptr)
 								{
-									UEdGraphPin** LinkedInputPinPtr = ReferenceGetNode->Pins.FindByPredicate([&ParameterReference](UEdGraphPin* Pin) { return Pin->PersistentGuid == ParameterReference.Key; });
-									if (LinkedInputPinPtr != nullptr)
-									{
-										UEdGraphPin* LinkedInputPin = *LinkedInputPinPtr;
-										LinkedInputPin->Modify();
-										LinkedInputPin->PinName = NewName;
-									}
+									UEdGraphPin* LinkedInputPin = *LinkedInputPinPtr;
+									LinkedInputPin->Modify();
+									LinkedInputPin->PinName = NewName;
 								}
 							}
 						}
 					}
 				}
 			}
+
+			bSuccess = bParameterStoreRename | bAssignmentNodeRename;
 		}
+
+		// Handle renaming any renderer properties that might match.
+		if (bSuccess)
+		{
+			if (Parameter.IsInNameSpace(FNiagaraConstants::ParticleAttributeNamespace) || Parameter.IsInNameSpace(FNiagaraConstants::EmitterNamespace))
+			{
+				FGraphPanelSelectionSet Objs = SelectedScriptObjects->GetSelectedObjects();
+				for (UObject* SelectedObj : Objs)
+				{
+					UNiagaraEmitter* Emitter = Cast<UNiagaraEmitter>(SelectedObj);
+					if (Emitter)
+					{
+						Emitter->HandleVariableRenamed(Parameter, FNiagaraVariableBase(Parameter.GetType(), NewName), true);
+					}
+				}
+			}
+			else
+			{
+				System->HandleVariableRenamed(Parameter, FNiagaraVariableBase(Parameter.GetType(), NewName), true);
+			}
+
+		}
+		
 	}
 
 	if (bSuccess)
@@ -2019,6 +2274,12 @@ void SNiagaraAddParameterMenu::CollectAllActions(FGraphActionListBuilderBase& Ou
 		CollectParameterCollectionsActions(OutAllActions);
 	}
 
+	// Stack Context
+	if (CanCollectSection(NiagaraParameterMapSectionID::STACK_CONTEXT) && !IDsExcluded.Contains(NiagaraParameterMapSectionID::STACK_CONTEXT))
+	{
+		CollectMakeNew(OutAllActions, NiagaraParameterMapSectionID::STACK_CONTEXT);
+	}
+
 	// Engine
 	if (CanCollectSection(NiagaraParameterMapSectionID::ENGINE) && !IDsExcluded.Contains(NiagaraParameterMapSectionID::ENGINE))
 	{
@@ -2138,7 +2399,9 @@ void SNiagaraAddParameterMenu::AddParameterGroup(
 			Tooltip = VariableStruct->GetToolTipText(true);
 		}
 
-		TSharedPtr<FNiagaraMenuAction> Action(new FNiagaraMenuAction(Category, DisplayName, Tooltip, 0, FText(),
+		FText SubCategory = FNiagaraEditorUtilities::GetVariableTypeCategory(Variable);
+		FText FullCategory = SubCategory.IsEmpty() ? Category : FText::Format(FText::FromString("{0}|{1}"), Category, SubCategory);
+		TSharedPtr<FNiagaraMenuAction> Action(new FNiagaraMenuAction(FullCategory, DisplayName, Tooltip, 0, FText(),
 			FNiagaraMenuAction::FOnExecuteStackAction::CreateSP(this, &SNiagaraAddParameterMenu::AddParameterSelected, Variable, bCustomName, InSection)));
 		if (bForMakeNew == false)
 		{
@@ -2183,8 +2446,7 @@ void SNiagaraAddParameterMenu::CollectMakeNew(FGraphActionListBuilderBase& OutAc
 	}
 
 	TArray<FNiagaraVariable> Variables;
-	TArray<FNiagaraTypeDefinition> Types = FNiagaraTypeRegistry::GetRegisteredTypes();
-	for (const FNiagaraTypeDefinition& RegisteredType : Types)
+	for (const FNiagaraTypeDefinition& RegisteredType : FNiagaraTypeRegistry::GetRegisteredTypes())
 	{
 		bool bAllowType = true;
 		if (OnAllowMakeType.IsBound())

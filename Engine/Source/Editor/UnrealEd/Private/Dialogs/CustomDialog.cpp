@@ -26,6 +26,8 @@ void SCustomDialog::Construct(const FArguments& InArgs)
 
 	check(InArgs._Buttons.Num() > 0);
 	
+	OnClosed = InArgs._OnClosed;
+
 	TSharedPtr<SHorizontalBox> ContentBox;
 	TSharedPtr<SHorizontalBox> ButtonBox;
 
@@ -117,7 +119,7 @@ void SCustomDialog::Construct(const FArguments& InArgs)
 			.MinDesiredSlotHeight(FEditorStyle::GetFloat("StandardDialog.MinDesiredSlotHeight"))
 		];
 
-	for (int i = 0; i < InArgs._Buttons.Num(); ++i)
+	for (int32 i = 0; i < InArgs._Buttons.Num(); ++i)
 	{
 		const FButton& Button = InArgs._Buttons[i];
 
@@ -139,7 +141,7 @@ void SCustomDialog::Construct(const FArguments& InArgs)
 	}
 }
 
-int SCustomDialog::ShowModal()
+int32 SCustomDialog::ShowModal()
 {
 	FSlateApplication::Get().AddModalWindow(StaticCastSharedRef<SWindow>(this->AsShared()), FGlobalTabmanager::Get()->GetRootWindow());
 
@@ -148,11 +150,16 @@ int SCustomDialog::ShowModal()
 
 void SCustomDialog::Show()
 {
-	FSlateApplication::Get().AddWindow(StaticCastSharedRef<SWindow>(this->AsShared()), true);
+	TSharedRef<SWindow> Window = FSlateApplication::Get().AddWindow(StaticCastSharedRef<SWindow>(this->AsShared()), true);
+
+	if (OnClosed.IsBound())
+	{
+		Window->GetOnWindowClosedEvent().AddLambda([this](const TSharedRef<SWindow>& Window) { OnClosed.Execute(); });
+	}
 }
 
 /** Handle the button being clicked */
-FReply SCustomDialog::OnButtonClicked(FSimpleDelegate OnClicked, int ButtonIndex)
+FReply SCustomDialog::OnButtonClicked(FSimpleDelegate OnClicked, int32 ButtonIndex)
 {
 	LastPressedButton = ButtonIndex;
 

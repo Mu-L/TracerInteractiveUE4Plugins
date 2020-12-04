@@ -20,7 +20,7 @@ void FWebMMediaTextureSample::CreateTexture()
 {
 	check(IsInRenderingThread());
 
-	const uint32 CreateFlags = TexCreate_Dynamic | TexCreate_SRGB;
+	const ETextureCreateFlags CreateFlags = TexCreate_Dynamic | TexCreate_SRGB;
 
 	TRefCountPtr<FRHITexture2D> DummyTexture2DRHI;
 	FRHIResourceCreateInfo CreateInfo;
@@ -79,9 +79,9 @@ FRHITexture* FWebMMediaTextureSample::GetTexture() const
 	return Texture.GetReference();
 }
 
-FTimespan FWebMMediaTextureSample::GetTime() const
+FMediaTimeStamp FWebMMediaTextureSample::GetTime() const
 {
-	return Time;
+	return FMediaTimeStamp(Time);
 }
 
 bool FWebMMediaTextureSample::IsCacheable() const

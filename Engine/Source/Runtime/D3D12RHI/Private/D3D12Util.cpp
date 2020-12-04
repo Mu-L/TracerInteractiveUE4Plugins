@@ -267,13 +267,13 @@ static void LogBreadcrumbData(ID3D12Device* Device)
 	bool bValidData = true;
 
 	// Check all the devices
-	FD3D12DynamicRHI* D3D12RHI = (FD3D12DynamicRHI*)GDynamicRHI;
+	FD3D12DynamicRHI* D3D12RHI = FD3D12DynamicRHI::GetD3DRHI();
 	D3D12RHI->ForEachDevice(Device, [&](FD3D12Device* Device)
-		{
-			bValidData = bValidData && LogBreadcrumbData(Device->GetParentAdapter()->GetGPUProfiler(), Device->GetCommandListManager());
-			bValidData = bValidData && LogBreadcrumbData(Device->GetParentAdapter()->GetGPUProfiler(), Device->GetAsyncCommandListManager());
-			bValidData = bValidData && LogBreadcrumbData(Device->GetParentAdapter()->GetGPUProfiler(), Device->GetCopyCommandListManager());
-		});
+	{
+		bValidData = bValidData && LogBreadcrumbData(Device->GetGPUProfiler(), Device->GetCommandListManager());
+		bValidData = bValidData && LogBreadcrumbData(Device->GetGPUProfiler(), Device->GetAsyncCommandListManager());
+		bValidData = bValidData && LogBreadcrumbData(Device->GetGPUProfiler(), Device->GetCopyCommandListManager());
+	});
 
 	if (!bValidData)
 	{
@@ -283,16 +283,60 @@ static void LogBreadcrumbData(ID3D12Device* Device)
 
 #if PLATFORM_WINDOWS
 
+static TArrayView<D3D12_DRED_BREADCRUMB_CONTEXT> GetBreadcrumbContexts(const D3D12_AUTO_BREADCRUMB_NODE* Node)
+{
+	return {};
+}
+
+static TArrayView<D3D12_DRED_BREADCRUMB_CONTEXT> GetBreadcrumbContexts(const D3D12_AUTO_BREADCRUMB_NODE1* Node)
+{
+	return MakeArrayView<D3D12_DRED_BREADCRUMB_CONTEXT>(Node->pBreadcrumbContexts, Node->BreadcrumbContextsCount);
+}
+
+struct FDred_1_1
+{
+	FDred_1_1(ID3D12Device* Device)
+	{
+		if (SUCCEEDED(Device->QueryInterface(IID_PPV_ARGS(Data.GetInitReference()))))
+		{
+			D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT DredAutoBreadcrumbsOutput;
+			if (SUCCEEDED(Data->GetAutoBreadcrumbsOutput(&DredAutoBreadcrumbsOutput)))
+			{
+				BreadcrumbHead = DredAutoBreadcrumbsOutput.pHeadAutoBreadcrumbNode;
+			}
+		}
+	}
+	TRefCountPtr<ID3D12DeviceRemovedExtendedData> Data;
+	const D3D12_AUTO_BREADCRUMB_NODE* BreadcrumbHead = nullptr;
+};
+
+struct FDred_1_2
+{
+	FDred_1_2(ID3D12Device* Device)
+	{
+		if (SUCCEEDED(Device->QueryInterface(IID_PPV_ARGS(Data.GetInitReference()))))
+		{
+			D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT1 DredAutoBreadcrumbsOutput;
+			if (SUCCEEDED(Data->GetAutoBreadcrumbsOutput1(&DredAutoBreadcrumbsOutput)))
+			{
+				BreadcrumbHead = DredAutoBreadcrumbsOutput.pHeadAutoBreadcrumbNode;
+			}
+		}
+	}
+	TRefCountPtr<ID3D12DeviceRemovedExtendedData1> Data;
+	const D3D12_AUTO_BREADCRUMB_NODE1* BreadcrumbHead = nullptr;
+};
 
 /** Log the DRED data to Error log if available */
-static void LogDREDData(ID3D12Device* Device)
+template <typename FDred_T>
+static bool LogDREDData(ID3D12Device* Device)
 {
 	// Should match all values from D3D12_AUTO_BREADCRUMB_OP
 	static const TCHAR* OpNames[] =
 	{
 		TEXT("SetMarker"),
 		TEXT("BeginEvent"),
-		TEXT("Endevent"),
+		TEXT("EndEvent"),
 		TEXT("DrawInstanced"),
 		TEXT("DrawIndexedInstanced"),
 		TEXT("ExecuteIndirect"),
@@ -370,40 +414,70 @@ static void LogDREDData(ID3D12Device* Device)
 	};
 	static_assert(UE_ARRAY_COUNT(AllocTypesNames) == D3D12_DRED_ALLOCATION_TYPE_VIDEO_EXTENSION_COMMAND - D3D12_DRED_ALLOCATION_TYPE_COMMAND_QUEUE + 1, "AllocTypes array length mismatch");
 
-	ID3D12DeviceRemovedExtendedData* Dred = nullptr;
-	if (SUCCEEDED(Device->QueryInterface(IID_PPV_ARGS(&Dred))))
+	FDred_T Dred(Device);
+	if (Dred.Data.IsValid())
 	{
-		D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT DredAutoBreadcrumbsOutput;
-		if (SUCCEEDED(Dred->GetAutoBreadcrumbsOutput(&DredAutoBreadcrumbsOutput)))
+		if (Dred.BreadcrumbHead)
 		{
 			UE_LOG(LogD3D12RHI, Error, TEXT("DRED: Last tracked GPU operations:"));
 
-			const D3D12_AUTO_BREADCRUMB_NODE* Node = DredAutoBreadcrumbsOutput.pHeadAutoBreadcrumbNode;
+			FString ContextStr;
+			TMap<int32, const wchar_t*> ContextStrings;
+
+			uint32 TracedCommandLists = 0;
+			auto Node = Dred.BreadcrumbHead;
 			while (Node)
 			{
 				int32 LastCompletedOp = *Node->pLastBreadcrumbValue;
 
-				UE_LOG(LogD3D12RHI, Error, TEXT("DRED: Commandlist \"%s\" on CommandQueue \"%s\", %d completed of %d"), Node->pCommandListDebugNameW, Node->pCommandQueueDebugNameW, LastCompletedOp, Node->BreadcrumbCount);
-
-				int32 FirstOp = FMath::Max(LastCompletedOp - 5, 0);
-				int32 LastOp = FMath::Min(LastCompletedOp + 5, int32(Node->BreadcrumbCount) - 1);
-
-				for (int32 Op = FirstOp; Op <= LastOp; ++Op)
+				if (LastCompletedOp != Node->BreadcrumbCount && LastCompletedOp != 0)
 				{
-					//uint32 LastOpIndex = (*Node->pLastBreadcrumbValue - 1) % 65536;
-					D3D12_AUTO_BREADCRUMB_OP BreadcrumbOp = Node->pCommandHistory[Op];
-					const TCHAR* OpName = (BreadcrumbOp < UE_ARRAY_COUNT(OpNames)) ? OpNames[BreadcrumbOp] : TEXT("Unknown Op");
-					UE_LOG(LogD3D12RHI, Error, TEXT("\tOp: %d, %s%s"), Op, OpName, (Op + 1 == LastCompletedOp) ? TEXT(" - Last completed") : TEXT(""));
+					UE_LOG(LogD3D12RHI, Error, TEXT("DRED: Commandlist \"%s\" on CommandQueue \"%s\", %d completed of %d"), Node->pCommandListDebugNameW, Node->pCommandQueueDebugNameW, LastCompletedOp, Node->BreadcrumbCount);
+					TracedCommandLists++;
+
+					int32 FirstOp = FMath::Max(LastCompletedOp - 100, 0);
+					int32 LastOp = FMath::Min(LastCompletedOp + 20, int32(Node->BreadcrumbCount) - 1);
+
+					ContextStrings.Reset();
+					for (const D3D12_DRED_BREADCRUMB_CONTEXT& Context : GetBreadcrumbContexts(Node))
+					{
+						ContextStrings.Add(Context.BreadcrumbIndex, Context.pContextString);
+					}
+
+					for (int32 Op = FirstOp; Op <= LastOp; ++Op)
+					{
+						D3D12_AUTO_BREADCRUMB_OP BreadcrumbOp = Node->pCommandHistory[Op];
+
+						auto OpContextStr = ContextStrings.Find(Op);
+						if (OpContextStr)
+						{
+							ContextStr = " [";
+							ContextStr += *OpContextStr;
+							ContextStr += "]";
+						}
+						else
+						{
+							ContextStr.Reset();
+						}
+
+						const TCHAR* OpName = (BreadcrumbOp < UE_ARRAY_COUNT(OpNames)) ? OpNames[BreadcrumbOp] : TEXT("Unknown Op");
+						UE_LOG(LogD3D12RHI, Error, TEXT("\tOp: %d, %s%s%s"), Op, OpName, *ContextStr, (Op + 1 == LastCompletedOp) ? TEXT(" - Last completed") : TEXT(""));
+					}
 				}
 
 				Node = Node->pNext;
 			}
+
+			if (TracedCommandLists == 0)
+			{
+				UE_LOG(LogD3D12RHI, Error, TEXT("DRED: No command list found with active outstanding operations (all finished or not started yet)."));
+			}
 		}
 
 		D3D12_DRED_PAGE_FAULT_OUTPUT DredPageFaultOutput;
-		if (SUCCEEDED(Dred->GetPageFaultAllocationOutput(&DredPageFaultOutput)) && DredPageFaultOutput.PageFaultVA != 0)
+		if (SUCCEEDED(Dred.Data->GetPageFaultAllocationOutput(&DredPageFaultOutput)) && DredPageFaultOutput.PageFaultVA != 0)
 		{
-			UE_LOG(LogD3D12RHI, Error, TEXT("DRED: PageFault at VA GPUAddress \"0x%x\""), DredPageFaultOutput.PageFaultVA);
+			UE_LOG(LogD3D12RHI, Error, TEXT("DRED: PageFault at VA GPUAddress \"0x%llX\""), (long long)DredPageFaultOutput.PageFaultVA);
 
 			const D3D12_DRED_ALLOCATION_NODE* Node = DredPageFaultOutput.pHeadExistingAllocationNode;
 			if (Node)
@@ -433,6 +507,16 @@ static void LogDREDData(ID3D12Device* Device)
 				}
 			}
 		}
+		else
+		{
+			UE_LOG(LogD3D12RHI, Error, TEXT("DRED: No PageFault data."));
+		}
+
+		return true;
+	}
+	else
+	{
+		return false;
 	}
 }
 
@@ -483,14 +567,17 @@ namespace D3D12RHI
 		// Log RHI independent breadcrumbing data
 		LogBreadcrumbData(InDevice);
 
-		FD3D12DynamicRHI* D3D12RHI = (FD3D12DynamicRHI*)GDynamicRHI;
+		FD3D12DynamicRHI* D3D12RHI = FD3D12DynamicRHI::GetD3DRHI();
 #if PLATFORM_WINDOWS
 		// If no device provided then try and log the DRED status of each device
 		D3D12RHI->ForEachDevice(InDevice, [&](FD3D12Device* IterationDevice)
 			{
 				if (InDevice == nullptr || InDevice == IterationDevice->GetDevice())
 				{
-					LogDREDData(IterationDevice->GetDevice());
+					if (!LogDREDData<FDred_1_2>(IterationDevice->GetDevice()))
+					{
+						LogDREDData<FDred_1_1>(IterationDevice->GetDevice());
+					}
 				}
 			});
 #endif  // PLATFORM_WINDOWS
@@ -522,11 +609,13 @@ namespace D3D12RHI
 		GLog->Flush();
 
 		// Show message box or trace information
-		if (!FApp::IsUnattended())
+#if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
+		if (!FApp::IsUnattended() && !IsDebuggerPresent())
 		{
 			FPlatformMisc::MessageBoxExt(EAppMsgType::Ok, *ErrorMessage.ToText().ToString(), TEXT("Error"));
 		}
 		else
+#endif // !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 		{
 			UE_LOG(LogD3D12RHI, Error, TEXT("%s"), *ErrorMessage.ToText().ToString());
 		}
@@ -549,16 +638,13 @@ namespace D3D12RHI
 			// Report the GPU crash which will raise the exception (only interesting if we have a GPU dump)
 			ReportGPUCrash(TEXT("Aftermath GPU Crash dump Triggered"), 0);
 		}
-		else
-#endif  // PLATFORM_WINDOWS
-		{
-			// Make sure the log is flushed!
-			GLog->PanicFlushThreadedLogs();
-			GLog->Flush();
-		}
+#endif // PLATFORM_WINDOWS
 
-		// Force shutdown, we can't do anything useful anymore.
-		FPlatformMisc::RequestExit(true);
+		// hard break here when the debugger is attached
+		if (IsDebuggerPresent())
+		{
+			UE_DEBUG_BREAK();
+		}
 	}
 
 	void VerifyD3D12Result(HRESULT D3DResult, const ANSICHAR* Code, const ANSICHAR* Filename, uint32 Line, ID3D12Device* Device, FString Message)
@@ -568,8 +654,8 @@ namespace D3D12RHI
 		const FString& ErrorString = GetD3D12ErrorString(D3DResult, Device);
 		UE_LOG(LogD3D12RHI, Error, TEXT("%s failed \n at %s:%u \n with error %s\n%s"), ANSI_TO_TCHAR(Code), ANSI_TO_TCHAR(Filename), Line, *ErrorString, *Message);
 
-		// Terminate with device removed but we don't have any GPU crash dump information
-		if (D3DResult == DXGI_ERROR_DEVICE_REMOVED)
+		// Terminate with device removed or hung then try and get the current GPU state and dump to log
+		if (D3DResult == DXGI_ERROR_DEVICE_REMOVED || D3DResult == DXGI_ERROR_DEVICE_HUNG)
 		{	 
 			TerminateOnGPUCrash(Device, nullptr, 0);
 		}
@@ -578,11 +664,14 @@ namespace D3D12RHI
 			TerminateOnOutOfMemory(D3DResult, false);
 		}
 
-		UE_LOG(LogD3D12RHI, Fatal, TEXT("%s failed \n at %s:%u \n with error %s\n%s"), ANSI_TO_TCHAR(Code), ANSI_TO_TCHAR(Filename), Line, *ErrorString, *Message);
-
 		// Make sure the log is flushed!
 		GLog->PanicFlushThreadedLogs();
 		GLog->Flush();
+
+		UE_LOG(LogD3D12RHI, Fatal, TEXT("%s failed \n at %s:%u \n with error %s\n%s"), ANSI_TO_TCHAR(Code), ANSI_TO_TCHAR(Filename), Line, *ErrorString, *Message);
+
+		// Force shutdown, we can't do anything useful anymore.
+		FPlatformMisc::RequestExit(true);
 	}
 
 	void VerifyD3D12CreateTextureResult(HRESULT D3DResult, const ANSICHAR* Code, const ANSICHAR* Filename, uint32 Line, const D3D12_RESOURCE_DESC& TextureDesc, ID3D12Device* Device)
@@ -607,7 +696,7 @@ namespace D3D12RHI
 			*GetD3D12TextureFlagString(TextureDesc.Flags));
 
 		// Terminate with device removed but we don't have any GPU crash dump information
-		if (D3DResult == DXGI_ERROR_DEVICE_REMOVED)
+		if (D3DResult == DXGI_ERROR_DEVICE_REMOVED || D3DResult == DXGI_ERROR_DEVICE_HUNG)
 		{
 			TerminateOnGPUCrash(Device, nullptr, 0);
 		}
@@ -619,6 +708,10 @@ namespace D3D12RHI
 			GetRendererModule().DebugLogOnCrash();
 #endif // STATS
 		}
+
+		// Make sure the log is flushed!
+		GLog->PanicFlushThreadedLogs();
+		GLog->Flush();
 
 		UE_LOG(LogD3D12RHI, Fatal,
 			TEXT("%s failed \n at %s:%u \n with error %s, \n Size=%ix%ix%i Format=%s(0x%08X), NumMips=%i, Flags=%s"),
@@ -634,9 +727,8 @@ namespace D3D12RHI
 			TextureDesc.MipLevels,
 			*GetD3D12TextureFlagString(TextureDesc.Flags));
 
-		// Make sure the log is flushed!
-		GLog->PanicFlushThreadedLogs();
-		GLog->Flush();
+		// Force shutdown, we can't do anything useful anymore.
+		FPlatformMisc::RequestExit(true);
 	}
 
 	void VerifyComRefCount(IUnknown* Object, int32 ExpectedRefs, const TCHAR* Code, const TCHAR* Filename, int32 Line)
@@ -756,6 +848,22 @@ void QuantizeBoundShaderState(
 }
 
 #if D3D12_RHI_RAYTRACING
+
+FD3D12QuantizedBoundShaderState GetRayTracingGlobalRootSignatureDesc()
+{
+	FD3D12QuantizedBoundShaderState OutQBSS = {};
+	FShaderRegisterCounts& QBSSRegisterCounts = OutQBSS.RegisterCounts[SV_All];
+
+	OutQBSS.RootSignatureType = RS_RayTracingGlobal;
+
+	QBSSRegisterCounts.SamplerCount = MAX_SAMPLERS;
+	QBSSRegisterCounts.ShaderResourceCount = MAX_SRVS;
+	QBSSRegisterCounts.ConstantBufferCount = MAX_CBS;
+	QBSSRegisterCounts.UnorderedAccessCount = MAX_UAVS;
+
+	return OutQBSS;
+}
+
 void QuantizeBoundShaderState(
 	EShaderFrequency ShaderFrequency,
 	const D3D12_RESOURCE_BINDING_TIER& ResourceBindingTier,
@@ -763,33 +871,28 @@ void QuantizeBoundShaderState(
 	FD3D12QuantizedBoundShaderState &OutQBSS
 )
 {
-	check(RayTracingShader);
-
-	const FShaderCodePackedResourceCounts& Counts = RayTracingShader->ResourceCounts;
-
 	FMemory::Memzero(&OutQBSS, sizeof(OutQBSS));
 	FShaderRegisterCounts& QBSSRegisterCounts = OutQBSS.RegisterCounts[SV_All];
 
 	switch (ShaderFrequency)
 	{
 	case SF_RayGen:
-
+	{
 		// Shared conservative root signature layout is used for all raygen and miss shaders.
 
-		OutQBSS.RootSignatureType = RS_RayTracingGlobal;
-
-		QBSSRegisterCounts.SamplerCount = MAX_SAMPLERS;
-		QBSSRegisterCounts.ShaderResourceCount = MAX_SRVS;
-		QBSSRegisterCounts.ConstantBufferCount = MAX_CBS;
-		QBSSRegisterCounts.UnorderedAccessCount = MAX_UAVS;
+		OutQBSS = GetRayTracingGlobalRootSignatureDesc();
 
 		break;
+	}
 
 	case SF_RayHitGroup:
 	case SF_RayCallable:
 	case SF_RayMiss:
-
+	{
 		// Local root signature is used for hit group shaders, using the exact number of resources to minimize shader binding table record size.
+
+		check(RayTracingShader);
+		const FShaderCodePackedResourceCounts& Counts = RayTracingShader->ResourceCounts;
 
 		OutQBSS.RootSignatureType = RS_RayTracingLocal;
 
@@ -804,6 +907,7 @@ void QuantizeBoundShaderState(
 		check(QBSSRegisterCounts.UnorderedAccessCount <= MAX_UAVS);
 
 		break;
+	}
 	default:
 		checkNoEntry(); // Unexpected shader target frequency
 	}
@@ -1161,6 +1265,7 @@ DEFINE_STAT(STAT_D3D12CreateTextureTime);
 DEFINE_STAT(STAT_D3D12LockTextureTime);
 DEFINE_STAT(STAT_D3D12UnlockTextureTime);
 DEFINE_STAT(STAT_D3D12CreateBufferTime);
+DEFINE_STAT(STAT_D3D12CopyToStagingBufferTime);
 DEFINE_STAT(STAT_D3D12LockBufferTime);
 DEFINE_STAT(STAT_D3D12UnlockBufferTime);
 DEFINE_STAT(STAT_D3D12CommitTransientResourceTime);
@@ -1200,15 +1305,32 @@ DEFINE_STAT(STAT_D3D12AvailableVideoMemory);
 DEFINE_STAT(STAT_D3D12TotalVideoMemory);
 DEFINE_STAT(STAT_D3D12TextureAllocatorWastage);
 
+DEFINE_STAT(STAT_D3D12BufferPoolMemoryAllocated);
+DEFINE_STAT(STAT_D3D12BufferPoolMemoryUsed);
+DEFINE_STAT(STAT_D3D12BufferPoolMemoryFree);
+DEFINE_STAT(STAT_D3D12BufferPoolAlignmentWaste);
+DEFINE_STAT(STAT_D3D12BufferPoolPageCount);
+DEFINE_STAT(STAT_D3D12BufferPoolFullPages);
+DEFINE_STAT(STAT_D3D12BufferStandAloneUsedMemory);
+
+DEFINE_STAT(STAT_UniqueSamplers);
+
 DEFINE_STAT(STAT_ViewHeapChanged);
 DEFINE_STAT(STAT_SamplerHeapChanged);
 
 DEFINE_STAT(STAT_NumViewOnlineDescriptorHeaps);
 DEFINE_STAT(STAT_NumSamplerOnlineDescriptorHeaps);
 DEFINE_STAT(STAT_NumReuseableSamplerOnlineDescriptorTables);
+DEFINE_STAT(STAT_NumReuseableSamplerOnlineDescriptors);
 DEFINE_STAT(STAT_NumReservedViewOnlineDescriptors);
 DEFINE_STAT(STAT_NumReservedSamplerOnlineDescriptors);
 DEFINE_STAT(STAT_NumReusedSamplerOnlineDescriptors);
+
+DEFINE_STAT(STAT_GlobalViewHeapFreeDescriptors);
+DEFINE_STAT(STAT_GlobalViewHeapReservedDescriptors);
+DEFINE_STAT(STAT_GlobalViewHeapUsedDescriptors);
+DEFINE_STAT(STAT_GlobalViewHeapWastedDescriptors);
+DEFINE_STAT(STAT_GlobalViewHeapBlockAllocations);
 
 DEFINE_STAT(STAT_ViewOnlineDescriptorHeapMemory);
 DEFINE_STAT(STAT_SamplerOnlineDescriptorHeapMemory);

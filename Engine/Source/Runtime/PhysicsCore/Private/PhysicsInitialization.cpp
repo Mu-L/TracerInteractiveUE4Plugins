@@ -9,6 +9,7 @@
 #include "IPhysXCooking.h"
 #include "Modules/ModuleManager.h"
 #include "Misc/Paths.h"
+#include "Core/Public/HAL/IConsoleManager.h"
 
 #ifndef APEX_STATICALLY_LINKED
 #define APEX_STATICALLY_LINKED	0
@@ -38,14 +39,13 @@ bool InitGamePhysCore()
 {
 	// If we're running with Chaos enabled, load its module
 	FModuleManager::Get().LoadModule("Chaos");
-	FModuleManager::Get().LoadModule("ChaosSolvers");
 
 #if WITH_ENGINE && WITH_CHAOS
 	// Loading this without Chaos gives warning, as no module depends on it.
 	FModuleManager::Get().LoadModule("ChaosSolverEngine");
 #endif
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	// Do nothing if SDK already exists
 	if (GPhysXFoundation != nullptr)
 	{
@@ -190,7 +190,7 @@ bool InitGamePhysCore()
 
 void TermGamePhysCore()
 {
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 
 	FPhysxSharedData::Terminate();
 

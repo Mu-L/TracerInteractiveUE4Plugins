@@ -11,108 +11,60 @@
 #include "nvapi.h"
 #endif
 
-
-// 4.25.1 Patch: A bugfix for RT/UAV hazard detection needed to use some padding in FD3D11ShaderData
-//               These static_asserts ensure that it does not change binary compatibility
-struct FD3D11ShaderData425
-{
-	FD3D11ShaderResourceTable			ShaderResourceTable;
-	TArray<FName>						UniformBuffers;
-	TArray<FUniformBufferStaticSlot>	StaticSlots;
-	TArray<FShaderCodeVendorExtension>	VendorExtensions;
-	bool								bShaderNeedsGlobalConstantBuffer;
-};
-class FD3D11VertexShader425 : public FRHIVertexShader, public FD3D11ShaderData425
-{
-public:
-	enum { StaticFrequency = SF_Vertex };
-
-	/** The vertex shader resource. */
-	TRefCountPtr<ID3D11VertexShader> Resource;
-
-	/** The vertex shader's bytecode, with custom data attached. */
-	TArray<uint8> Code;
-
-	// TEMP remove with removal of bound shader state
-	int32 Offset;
-};
-
-class FD3D11GeometryShader425 : public FRHIGeometryShader, public FD3D11ShaderData425
-{
-public:
-	enum { StaticFrequency = SF_Geometry };
-
-	/** The shader resource. */
-	TRefCountPtr<ID3D11GeometryShader> Resource;
-};
-
-class FD3D11HullShader425 : public FRHIHullShader, public FD3D11ShaderData425
-{
-public:
-	enum { StaticFrequency = SF_Hull };
-
-	/** The shader resource. */
-	TRefCountPtr<ID3D11HullShader> Resource;
-};
-
-class FD3D11DomainShader425 : public FRHIDomainShader, public FD3D11ShaderData425
-{
-public:
-	enum { StaticFrequency = SF_Domain };
-
-	/** The shader resource. */
-	TRefCountPtr<ID3D11DomainShader> Resource;
-};
-
-class FD3D11PixelShader425 : public FRHIPixelShader, public FD3D11ShaderData425
-{
-public:
-	enum { StaticFrequency = SF_Pixel };
-
-	/** The shader resource. */
-	TRefCountPtr<ID3D11PixelShader> Resource;
-};
-
-class FD3D11ComputeShader425 : public FRHIComputeShader, public FD3D11ShaderData425
-{
-public:
-	enum { StaticFrequency = SF_Compute };
-
-	/** The shader resource. */
-	TRefCountPtr<ID3D11ComputeShader> Resource;
-};
-
-static_assert(sizeof(FD3D11ShaderData) == sizeof(FD3D11ShaderData425), "sizeof(FD3D11ShaderData) should not change as it will effect binary compatibility");
-static_assert(sizeof(FD3D11VertexShader) == sizeof(FD3D11VertexShader425), "sizeof(FD3D11ShaderData) should not change as it will effect binary compatibility");
-static_assert(sizeof(FD3D11ComputeShader) == sizeof(FD3D11ComputeShader425), "sizeof(FD3D11ShaderData) should not change as it will effect binary compatibility");
-static_assert(sizeof(FD3D11GeometryShader) == sizeof(FD3D11GeometryShader425), "sizeof(FD3D11ShaderData) should not change as it will effect binary compatibility");
-static_assert(sizeof(FD3D11HullShader) == sizeof(FD3D11HullShader425), "sizeof(FD3D11ShaderData) should not change as it will effect binary compatibility");
-static_assert(sizeof(FD3D11PixelShader) == sizeof(FD3D11PixelShader425), "sizeof(FD3D11ShaderData) should not change as it will effect binary compatibility");
-
-
-static_assert(offsetof(FD3D11VertexShader, Resource) == offsetof(FD3D11VertexShader425, Resource), "Offset of FD3D11VertexShader::Resource should not change as it will effect binary compatibility");
-static_assert(offsetof(FD3D11ComputeShader, Resource) == offsetof(FD3D11ComputeShader425, Resource), "Offset of FD3D11ComputeShader::Resource should not change as it will effect binary compatibility");
-static_assert(offsetof(FD3D11GeometryShader, Resource) == offsetof(FD3D11GeometryShader425, Resource), "Offset of FD3D11GeometryShader::Resource should not change as it will effect binary compatibility");
-static_assert(offsetof(FD3D11HullShader, Resource) == offsetof(FD3D11HullShader425, Resource), "Offset of FD3D11HullShader::Resource should not change as it will effect binary compatibility");
-static_assert(offsetof(FD3D11DomainShader, Resource) == offsetof(FD3D11DomainShader425, Resource), "Offset of FD3D11DomainShader::Resource should not change as it will effect binary compatibility");
-static_assert(offsetof(FD3D11PixelShader, Resource) == offsetof(FD3D11PixelShader425, Resource), "Offset of FD3D11PixelShader::Resource should not change as it will effect binary compatibility");
-
 template <typename TShaderType>
 static inline void ReadShaderOptionalData(FShaderCodeReader& InShaderCode, TShaderType& OutShader)
 {
 	auto PackedResourceCounts = InShaderCode.FindOptionalData<FShaderCodePackedResourceCounts>();
 	check(PackedResourceCounts);
+	OutShader.OutputMask = PackedResourceCounts->OutputMask;
+	
 	uint32 UAVMask = 0;
-	for (uint32 UAVBinding : OutShader.ShaderResourceTable.UnorderedAccessViewMap)
+	uint32 MinOffset = OutShader.ShaderResourceTable.UnorderedAccessViewMap.Num();
+	// If the token stream isn't empty, it has a length of at least 2, because it's always terminated with 0xffffffff. If it has
+	// a length of 2, it means it only contains an offset entry for a single uniform buffer, which must be 0, because there's nothing
+	// for it to offset into. Therefore, we only care about streams which have 3 or more tokens (including the terminator).
+	if (MinOffset > 2)
 	{
-		if (UAVBinding == 0 || UAVBinding == 0xffffffff)
+		// Ignore the terminator.
+		--MinOffset;
+
+		// The token stream starts with a table of offsets, followed by a list of UAV bindings, like this:
+		//		O1 O2 O3 ... On B1 B2 B3 ... Bm
+		// The offsets indicate where to find the bindings for each active uniform buffer, relative to the start of the
+		// data (not the start of the binding list). Therefore, this buffer:
+		//		9 0 7 6 0 0 B1 B2 B3 B4
+		// means that:
+		//		buffer 0 starts at index 9 (B4)
+		//		buffers 1, 4 and 5 are empty (offsets are 0)
+		//		buffer 2 starts at index 7 (B2)
+		//		buffer 3 starts at index 6 (B1)
+		// We can also infer that buffer 2 has two elements in this case (B2 and B3). Since we don't know how many buffers there are,
+		// we will parse the data like this:
+		//		* read an offset from the start of the list
+		//		* process every binding from that offset until the end, since the bindings list is contiguous
+		//		* read the next offset, process bindings from that until the first biding we've already processed
+		//		* stop when the next offset is at a location we've already processed as a binding (we've found the first binding in that case).
+		for (uint32 BufferIdx = 0; BufferIdx < MinOffset; ++BufferIdx)
 		{
-			break;
+			uint32 BufferOffset = OutShader.ShaderResourceTable.UnorderedAccessViewMap[BufferIdx];
+			if (BufferOffset == 0 || BufferOffset >= MinOffset)
+			{
+				continue;
+			}
+
+			for (uint32 ElemIdx = BufferOffset; ElemIdx < MinOffset; ++ElemIdx)
+			{
+				uint32 UAVBinding = OutShader.ShaderResourceTable.UnorderedAccessViewMap[ElemIdx];
+				const uint8 BindIndex = FRHIResourceTableEntry::GetBindIndex(UAVBinding);
+				UAVMask |= (1 << BindIndex);
+			}
+
+			MinOffset = BufferOffset;
 		}
-		const uint8 BindIndex = FRHIResourceTableEntry::GetBindIndex(UAVBinding);
-		UAVMask |= (1 << BindIndex);
 	}
+
 	OutShader.UAVMask = UAVMask;
+
 	OutShader.bShaderNeedsGlobalConstantBuffer = PackedResourceCounts->bGlobalUniformBufferUsed;
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 	OutShader.ShaderName = InShaderCode.FindOptionalData('n');
@@ -139,16 +91,27 @@ static inline void ReadShaderOptionalData(FShaderCodeReader& InShaderCode, TShad
 		Ar << OutShader.VendorExtensions;
 	}
 	OutShader.bShaderNeedsGlobalConstantBuffer = PackedResourceCounts->bGlobalUniformBufferUsed;
+
+	int32 IsSm6ShaderSize = 1;
+	const uint8* IsSm6Shader = InShaderCode.FindOptionalData('6', IsSm6ShaderSize);
+	OutShader.bIsSm6Shader = IsSm6Shader && IsSm6ShaderSize && *IsSm6Shader;
 }
 
-static void ApplyVendorExtensions(ID3D11Device* Direct3DDevice, EShaderFrequency Frequency, const TArray<FShaderCodeVendorExtension>& VendorExtensions)
+static bool ApplyVendorExtensions(ID3D11Device* Direct3DDevice, EShaderFrequency Frequency, const TArray<FShaderCodeVendorExtension>& VendorExtensions)
 {
+	bool IsValidHardwareExtension = true;
 #if !PLATFORM_HOLOLENS
 	for (int32 ExtensionIndex = 0; ExtensionIndex < VendorExtensions.Num(); ++ExtensionIndex)
 	{
 		const FShaderCodeVendorExtension& Extension = VendorExtensions[ExtensionIndex];
 		if (Extension.VendorId == 0x10DE) // NVIDIA
 		{
+			if (!IsRHIDeviceNVIDIA())
+			{
+				IsValidHardwareExtension = false;
+				break;
+			}
+
 			// https://developer.nvidia.com/unlocking-gpu-intrinsics-hlsl
 			if (Extension.Parameter.Type == EShaderParameterType::UAV)
 			{
@@ -157,14 +120,25 @@ static void ApplyVendorExtensions(ID3D11Device* Direct3DDevice, EShaderFrequency
 		}
 		else if (Extension.VendorId == 0x1002) // AMD
 		{
+			if (!IsRHIDeviceAMD())
+			{
+				IsValidHardwareExtension = false;
+				break;
+			}
 			// TODO: https://github.com/GPUOpen-LibrariesAndSDKs/AGS_SDK/blob/master/ags_lib/hlsl/ags_shader_intrinsics_dx11.hlsl
 		}
 		else if (Extension.VendorId == 0x8086) // Intel
 		{
+			if (!IsRHIDeviceIntel())
+			{
+				IsValidHardwareExtension = false;
+				break;
+			}
 			// TODO: https://github.com/intel/intel-graphics-compiler/blob/master/inc/IntelExtensions.hlsl
 		}
 	}
 #endif
+	return IsValidHardwareExtension;
 }
 
 static void ResetVendorExtensions(ID3D11Device* Direct3DDevice, EShaderFrequency Frequency, const TArray<FShaderCodeVendorExtension>& VendorExtensions)
@@ -223,10 +197,12 @@ FVertexShaderRHIRef FD3D11DynamicRHI::RHICreateVertexShader(TArrayView<const uin
 	const size_t CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
 
 	ReadShaderOptionalData(ShaderCode, *Shader);
-	ApplyVendorExtensions(Direct3DDevice, SF_Vertex, Shader->VendorExtensions);
-	VERIFYD3D11SHADERRESULT(Direct3DDevice->CreateVertexShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
-	ResetVendorExtensions(Direct3DDevice, SF_Vertex, Shader->VendorExtensions);
-	InitUniformBufferStaticSlots(Shader);
+	if (!Shader->bIsSm6Shader && ApplyVendorExtensions(Direct3DDevice, SF_Vertex, Shader->VendorExtensions))
+	{
+		VERIFYD3D11SHADERRESULT(Direct3DDevice->CreateVertexShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
+		ResetVendorExtensions(Direct3DDevice, SF_Vertex, Shader->VendorExtensions);
+		InitUniformBufferStaticSlots(Shader);
+	}
 	
 	// TEMP
 	Shader->Code = Code;
@@ -255,10 +231,12 @@ FGeometryShaderRHIRef FD3D11DynamicRHI::RHICreateGeometryShader(TArrayView<const
 	const size_t CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
 
 	ReadShaderOptionalData(ShaderCode, *Shader);
-	ApplyVendorExtensions(Direct3DDevice, SF_Geometry, Shader->VendorExtensions);
-	VERIFYD3D11SHADERRESULT(Direct3DDevice->CreateGeometryShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
-	ResetVendorExtensions(Direct3DDevice, SF_Geometry, Shader->VendorExtensions);
-	InitUniformBufferStaticSlots(Shader);
+	if (!Shader->bIsSm6Shader && ApplyVendorExtensions(Direct3DDevice, SF_Geometry, Shader->VendorExtensions))
+	{
+		VERIFYD3D11SHADERRESULT(Direct3DDevice->CreateGeometryShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
+		ResetVendorExtensions(Direct3DDevice, SF_Geometry, Shader->VendorExtensions);
+		InitUniformBufferStaticSlots(Shader);
+	}
 
 	return Shader;
 }
@@ -283,10 +261,12 @@ FHullShaderRHIRef FD3D11DynamicRHI::RHICreateHullShader(TArrayView<const uint8> 
 	const size_t CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
 
 	ReadShaderOptionalData(ShaderCode, *Shader);
-	ApplyVendorExtensions(Direct3DDevice, SF_Hull, Shader->VendorExtensions);
-	VERIFYD3D11SHADERRESULT(Direct3DDevice->CreateHullShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
-	ResetVendorExtensions(Direct3DDevice, SF_Hull, Shader->VendorExtensions);
-	InitUniformBufferStaticSlots(Shader);
+	if (!Shader->bIsSm6Shader && ApplyVendorExtensions(Direct3DDevice, SF_Hull, Shader->VendorExtensions))
+	{
+		VERIFYD3D11SHADERRESULT(Direct3DDevice->CreateHullShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
+		ResetVendorExtensions(Direct3DDevice, SF_Hull, Shader->VendorExtensions);
+		InitUniformBufferStaticSlots(Shader);
+	}
 
 	return Shader;
 }
@@ -311,10 +291,12 @@ FDomainShaderRHIRef FD3D11DynamicRHI::RHICreateDomainShader(TArrayView<const uin
 	const size_t CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
 
 	ReadShaderOptionalData(ShaderCode, *Shader);
-	ApplyVendorExtensions(Direct3DDevice, SF_Domain, Shader->VendorExtensions);
-	VERIFYD3D11SHADERRESULT(Direct3DDevice->CreateDomainShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
-	ResetVendorExtensions(Direct3DDevice, SF_Domain, Shader->VendorExtensions);
-	InitUniformBufferStaticSlots(Shader);
+	if (!Shader->bIsSm6Shader && ApplyVendorExtensions(Direct3DDevice, SF_Domain, Shader->VendorExtensions))
+	{
+		VERIFYD3D11SHADERRESULT(Direct3DDevice->CreateDomainShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
+		ResetVendorExtensions(Direct3DDevice, SF_Domain, Shader->VendorExtensions);
+		InitUniformBufferStaticSlots(Shader);
+	}
 
 	return Shader;
 }
@@ -339,10 +321,12 @@ FPixelShaderRHIRef FD3D11DynamicRHI::RHICreatePixelShader(TArrayView<const uint8
 	const size_t CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
 
 	ReadShaderOptionalData(ShaderCode, *Shader);
-	ApplyVendorExtensions(Direct3DDevice, SF_Pixel, Shader->VendorExtensions);
-	VERIFYD3D11SHADERRESULT(Direct3DDevice->CreatePixelShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
-	ResetVendorExtensions(Direct3DDevice, SF_Pixel, Shader->VendorExtensions);
-	InitUniformBufferStaticSlots(Shader);
+	if (!Shader->bIsSm6Shader && ApplyVendorExtensions(Direct3DDevice, SF_Pixel, Shader->VendorExtensions))
+	{
+		VERIFYD3D11SHADERRESULT(Direct3DDevice->CreatePixelShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
+		ResetVendorExtensions(Direct3DDevice, SF_Pixel, Shader->VendorExtensions);
+		InitUniformBufferStaticSlots(Shader);
+	}
 
 	return Shader;
 }
@@ -367,10 +351,12 @@ FComputeShaderRHIRef FD3D11DynamicRHI::RHICreateComputeShader(TArrayView<const u
 	const size_t CodeSize = ShaderCode.GetActualShaderCodeSize() - Offset;
 
 	ReadShaderOptionalData(ShaderCode, *Shader);
-	ApplyVendorExtensions(Direct3DDevice, SF_Compute, Shader->VendorExtensions);
-	VERIFYD3D11SHADERRESULT(Direct3DDevice->CreateComputeShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
-	ResetVendorExtensions(Direct3DDevice, SF_Compute, Shader->VendorExtensions);
-	InitUniformBufferStaticSlots(Shader);
+	if (!Shader->bIsSm6Shader && ApplyVendorExtensions(Direct3DDevice, SF_Compute, Shader->VendorExtensions))
+	{
+		VERIFYD3D11SHADERRESULT(Direct3DDevice->CreateComputeShader((void*)CodePtr, CodeSize, nullptr, Shader->Resource.GetInitReference()), Shader, Direct3DDevice);
+		ResetVendorExtensions(Direct3DDevice, SF_Compute, Shader->VendorExtensions);
+		InitUniformBufferStaticSlots(Shader);
+	}
 
 	return Shader;
 }

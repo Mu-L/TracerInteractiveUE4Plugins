@@ -72,7 +72,7 @@ UMaterial* FEditorPromotionTestUtilities::CreateMaterialFromTexture(UTexture* In
 
 	const FString AssetName = FString::Printf(TEXT("%s_Mat"), *InTexture->GetName());
 	const FString PackageName = FEditorPromotionTestUtilities::GetGamePath() + TEXT("/") + AssetName;
-	UPackage* AssetPackage = CreatePackage(NULL, *PackageName);
+	UPackage* AssetPackage = CreatePackage( *PackageName);
 	EObjectFlags Flags = RF_Public | RF_Standalone;
 
 	UObject* CreatedAsset = Factory->FactoryCreateNew(UMaterial::StaticClass(), AssetPackage, FName(*AssetName), Flags, NULL, GWarn);
@@ -288,7 +288,7 @@ void FEditorPromotionTestUtilities::TakeScreenshot(const FString& ScreenshotName
 		FIntVector OutImageSize;
 		if (FSlateApplication::Get().TakeScreenshot(WindowRef, OutImageData, OutImageSize))
 		{
-			FAutomationScreenshotData Data = AutomationCommon::BuildScreenshotData(TEXT("Editor"), ScreenshotName, OutImageSize.X, OutImageSize.Y);
+			FAutomationScreenshotData Data = AutomationCommon::BuildScreenshotData(TEXT("Editor"), TEXT("PromotionTest"), ScreenshotName, OutImageSize.X, OutImageSize.Y);
 
 			// Copy the relevant data into the metadata for the screenshot.
 			Data.bHasComparisonRules = true;

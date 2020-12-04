@@ -15,13 +15,11 @@ class AUDIOSYNESTHESIA_API UAudioSynesthesiaNRTSettings : public UAudioAnalyzerN
 
 	public:
 
-		FText GetAssetActionName() const override;
-
 		const TArray<FText>& GetAssetActionSubmenus() const;
 
-		UClass* GetSupportedClass() const override;
-
+#if WITH_EDITOR
 		FColor GetTypeColor() const override;
+#endif
 };
 
 /** UAudioSynesthesiaNRT
@@ -35,12 +33,10 @@ class AUDIOSYNESTHESIA_API UAudioSynesthesiaNRT : public UAudioAnalyzerNRT
 
 	public:
 
-		FText GetAssetActionName() const override;
-
 		const TArray<FText>& GetAssetActionSubmenus() const;
 
-		UClass* GetSupportedClass() const override;
-
+#if WITH_EDITOR
 		FColor GetTypeColor() const override;
+#endif
 };
 

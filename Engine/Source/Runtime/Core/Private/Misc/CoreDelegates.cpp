@@ -27,12 +27,16 @@ FCoreDelegates::FOnPreMainInit& FCoreDelegates::GetPreMainInitDelegate()
 }
 
 FCoreDelegates::FOnMountAllPakFiles FCoreDelegates::OnMountAllPakFiles;
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 FCoreDelegates::FOnMountPak FCoreDelegates::OnMountPak;
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+FCoreDelegates::FMountPak FCoreDelegates::MountPak;
 FCoreDelegates::FOnUnmountPak FCoreDelegates::OnUnmountPak;
 FCoreDelegates::FOnOptimizeMemoryUsageForMountedPaks FCoreDelegates::OnOptimizeMemoryUsageForMountedPaks;
 
-FCoreDelegates::FOnPakFileMounted FCoreDelegates::OnPakFileMounted;
+FCoreDelegates::FOnPakFileMounted2 FCoreDelegates::OnPakFileMounted2;
 PRAGMA_DISABLE_DEPRECATION_WARNINGS
+FCoreDelegates::FOnPakFileMounted FCoreDelegates::OnPakFileMounted;
 FCoreDelegates::FPakFileMountedDelegate FCoreDelegates::PakFileMountedCallback;
 PRAGMA_ENABLE_DEPRECATION_WARNINGS
 FCoreDelegates::FNewFileAddedDelegate FCoreDelegates::NewFileAddedDelegate;
@@ -51,9 +55,17 @@ FCoreDelegates::FOnActorLabelChanged FCoreDelegates::OnActorLabelChanged;
 FCoreDelegates::FRegisterMovieStreamerDelegate FCoreDelegates::RegisterMovieStreamerDelegate;
 FCoreDelegates::FUnRegisterMovieStreamerDelegate FCoreDelegates::UnRegisterMovieStreamerDelegate;
 
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 FCoreDelegates::FRegisterEncryptionKeyDelegate& FCoreDelegates::GetRegisterEncryptionKeyDelegate()
 {
 	static FRegisterEncryptionKeyDelegate RegisterEncryptionKeyDelegate;
+	return RegisterEncryptionKeyDelegate;
+}
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+
+FCoreDelegates::FRegisterEncryptionKeyMulticastDelegate& FCoreDelegates::GetRegisterEncryptionKeyMulticastDelegate()
+{
+	static FRegisterEncryptionKeyMulticastDelegate RegisterEncryptionKeyDelegate;
 	return RegisterEncryptionKeyDelegate;
 }
 
@@ -177,6 +189,8 @@ FCoreDelegates::FIsLoadingMovieCurrentlyPlaying FCoreDelegates::IsLoadingMovieCu
 FCoreDelegates::FShouldLaunchUrl FCoreDelegates::ShouldLaunchUrl;
 
 FCoreDelegates::FOnGCFinishDestroyTimeExtended FCoreDelegates::OnGCFinishDestroyTimeExtended;
+
+FCoreDelegates::FApplicationNetworkInitializationChanged FCoreDelegates::ApplicationNetworkInitializationChanged;
 
 PRAGMA_DISABLE_DEPRECATION_WARNINGS
 FCrashOverrideParameters::~FCrashOverrideParameters()

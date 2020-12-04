@@ -5,6 +5,7 @@
 #include "OculusAudioSourceSettings.h"
 #include "OculusAudioContextManager.h"
 #include "IOculusAudioPlugin.h"
+#include "Stats/Stats.h"
 
 
 float dbToLinear(float db)
@@ -29,7 +30,6 @@ void OculusAudioSpatializationAudioMixer::ClearContext()
 void OculusAudioSpatializationAudioMixer::Initialize(const FAudioPluginInitializationParams InitializationParams)
 {
 	FScopeLock ScopeLock(&ContextLock);
-	InitParams = InitializationParams;
 
 	Context = FOculusAudioContextManager::GetContextForAudioDevice(InitializationParams.AudioDevicePtr);
 	if (!Context)
@@ -46,6 +46,8 @@ void OculusAudioSpatializationAudioMixer::Initialize(const FAudioPluginInitializ
 
 	const UOculusAudioSettings* Settings = GetDefault<UOculusAudioSettings>();
 	ApplyOculusAudioSettings(Settings);
+
+	InitParams = InitializationParams;
 
 	TickDelegateHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateRaw(this, &OculusAudioSpatializationAudioMixer::Tick));
 }
@@ -165,6 +167,7 @@ void OculusAudioSpatializationAudioMixer::ProcessAudio(const FAudioPluginSourceI
 
 bool OculusAudioSpatializationAudioMixer::Tick(float DeltaTime)
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_OculusAudioSpatializationAudioMixer_Tick);
 	if (ContextLock.TryLock())
 	{
 		if (Context != nullptr)

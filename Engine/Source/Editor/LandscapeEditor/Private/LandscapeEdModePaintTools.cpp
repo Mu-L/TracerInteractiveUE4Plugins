@@ -16,10 +16,13 @@
 #include "Landscape.h"
 #include "Logging/TokenizedMessage.h"
 #include "Logging/MessageLog.h"
+#include "Logging/LogMacros.h"
 #include "Misc/MapErrors.h"
 #include "EngineModule.h"
 
 #define LOCTEXT_NAMESPACE "LandscapeTools"
+
+DEFINE_LOG_CATEGORY(LogLandscapeTools);
 
 const int32 FNoiseParameter::Permutations[256] =
 {
@@ -103,8 +106,8 @@ public:
 	void Apply(FEditorViewportClient* ViewportClient, FLandscapeBrush* Brush, const ULandscapeEditorObject* UISettings, const TArray<FLandscapeToolInteractorPosition>& InteractorPositions)
 	{
 		// Invert when holding Shift
-		//UE_LOG(LogLandscape, Log, TEXT("bInvert = %d"), bInvert);
 		bool bInvert = InteractorPositions.Last().bModifierPressed;
+		UE_LOG(LogLandscapeTools, VeryVerbose, TEXT("bInvert = %d"), bInvert);
 
 		if (bIsWhitelistMode)
 		{
@@ -261,12 +264,12 @@ public:
 		
 		// If we render to a runtime virtual texture then we mark touched components as dirty to trigger updates
 		//todo[vt]: Would be more efficient to update VT in a single flush instead of one flush per component. Also dirtying all render state is a bit heavyweight.
-		ALandscape* Landscape = LandscapeInfo->LandscapeActor.Get();
-		if (Landscape != nullptr && Landscape->RuntimeVirtualTextures.Num() > 0)
+		TSet<ULandscapeComponent*> Components;
+		LandscapeInfo->GetComponentsInRegion(X1 + 1, Y1 + 1, X2 - 1, Y2 - 1, Components);
+		for (ULandscapeComponent* Component : Components)
 		{
-			TSet<ULandscapeComponent*> Components;
-			LandscapeInfo->GetComponentsInRegion(X1 + 1, Y1 + 1, X2 - 1, Y2 - 1, Components);
-			for (ULandscapeComponent* Component : Components)
+			ALandscapeProxy* Landscape = Component->GetLandscapeProxy();
+			if (Landscape != nullptr && Landscape->RuntimeVirtualTextures.Num() > 0)
 			{
 				Component->MarkRenderStateDirty();
 			}
@@ -389,8 +392,8 @@ public:
 	void Apply(FEditorViewportClient* ViewportClient, FLandscapeBrush* Brush, const ULandscapeEditorObject* UISettings, const TArray<FLandscapeToolInteractorPosition>& InteractorPositions)
 	{
 		// Invert when holding Shift
-		//UE_LOG(LogLandscape, Log, TEXT("bInvert = %d"), bInvert);
 		bool bInvert = InteractorPositions.Last().bModifierPressed;
+		UE_LOG(LogLandscapeTools, VeryVerbose, TEXT("bInvert = %d"), bInvert);
 
 		// Get list of verts to update
 		FLandscapeBrushData BrushInfo = Brush->ApplyBrush(InteractorPositions);

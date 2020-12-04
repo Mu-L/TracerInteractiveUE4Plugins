@@ -10,6 +10,7 @@
 #include "DistanceFieldLightingShared.ush"
 #include "SHCommon.ush"
 #include "VolumetricLightmapShared.ush"
+#include "ReflectionEnvironmentShared.ush"
 
 #ifndef THREADGROUP_SIZEX
 #define THREADGROUP_SIZEX 1
@@ -79,7 +80,7 @@ void GetLightDirectionData(uint ShapeIndex, bool bDistanceFieldCaster, out float
 	DecodeLightDirectionW(VectorValue.w, LightAngle, MinVisibility);
 }
 
-uint UseStationarySkylightShadowing;
+uint SkyLightMode;
 float CapsuleIndirectConeAngle;
 float CapsuleSkyAngleScale;
 float CapsuleMinSkyAngle;
@@ -99,8 +100,19 @@ void ComputeLightDirectionFromVolumetricLightmapCS(
 		float3 LightDirection;
 		float LightAngle;
 
-		if (UseStationarySkylightShadowing > 0)
+		if (SkyLightMode == 2)
 		{
+			FTwoBandSHVectorRGB SkyIrradianceSH;
+			// See ComputeSkyEnvMapDiffuseIrradianceCS for the coefficient and sign adaptation. N need to rescale the coefficients, direction is preserve.
+			SkyIrradianceSH.R.V = SkyIrradianceEnvironmentMap[0].wyzx * float4(1.0f, -1.0f, 1.0f, -1.0f);
+			SkyIrradianceSH.G.V = SkyIrradianceEnvironmentMap[1].wyzx * float4(1.0f, -1.0f, 1.0f, -1.0f);
+			SkyIrradianceSH.B.V = SkyIrradianceEnvironmentMap[2].wyzx * float4(1.0f, -1.0f, 1.0f, -1.0f);
+			LightDirection = GetMaximumDirection(GetLuminance(SkyIrradianceSH));
+			LightAngle = CapsuleIndirectConeAngle;
+		}
+		else if (SkyLightMode == 1)
+		{
+			// Stationary sky light shadowing
 			float3 SkyBentNormal = GetVolumetricLightmapSkyBentNormal(BrickTextureUVs);
 			float SkyBentNormalLength = length(SkyBentNormal);
 
@@ -1121,6 +1133,10 @@ void CapsuleShadowingCS(
 #endif
 	#if LIGHT_SOURCE_MODE == LIGHT_SOURCE_FROM_CAPSULE && !FORWARD_SHADING
 		ApplySelfShadowingIntensityForDeferred(ScreenUV, Visibility);
+	#endif
+	#if METAL_PROFILE 
+		// clamp max depth to avoid #inf
+		SceneDepth = min(SceneDepth, 65500.0f);
 	#endif
 	RWBentNormalTexture[DispatchThreadId.xy] = float4(ReceiverBentNormal * Visibility, SceneDepth);
 #else

@@ -95,8 +95,9 @@ TArray<FNiagaraParameterMapHistory> UNiagaraNodeParameterMapBase::GetParameterMa
 
 bool UNiagaraNodeParameterMapBase::AllowNiagaraTypeForAddPin(const FNiagaraTypeDefinition& InType)
 {
-	return InType != FNiagaraTypeDefinition::GetGenericNumericDef() &&
-		InType != FNiagaraTypeDefinition::GetParameterMapDef();
+	return InType != FNiagaraTypeDefinition::GetGenericNumericDef()
+		&& InType != FNiagaraTypeDefinition::GetParameterMapDef()
+		&& !InType.IsInternalType();
 }
 
 FText UNiagaraNodeParameterMapBase::GetPinDescriptionText(UEdGraphPin* Pin) const
@@ -206,11 +207,6 @@ void UNiagaraNodeParameterMapBase::SetPinName(UEdGraphPin* InPin, const FName& I
 	OnPinRenamed(InPin, OldName.ToString());
 }
 
-bool UNiagaraNodeParameterMapBase::OnAllowDrop(TSharedPtr<FDragDropOperation> DragDropOperation)
-{
-	return true;
-}
-
 bool UNiagaraNodeParameterMapBase::CanRenamePin(const UEdGraphPin* Pin) const
 {
 	if (IsAddPin(Pin))
@@ -239,11 +235,57 @@ void UNiagaraNodeParameterMapBase::SetIsPinEditNamespaceModifierPending(const UE
 	}
 }
 
+bool UNiagaraNodeParameterMapBase::CanHandleDropOperation(TSharedPtr<FDragDropOperation> DragDropOperation)
+{
+	if (DragDropOperation->IsOfType<FNiagaraParameterGraphDragOperation>())
+	{
+		if (StaticCastSharedPtr<FNiagaraParameterGraphDragOperation>(DragDropOperation)->IsCurrentlyHoveringNode(this))
+		{
+			// The FNiagaraParameterGraphDragOperation handles the drop action itself so just return true here and let it handle it when it's executed.
+			return true;
+		}
+	}
+	else if (DragDropOperation->IsOfType<FNiagaraParameterDragOperation>())
+	{
+		TSharedPtr<FNiagaraParameterDragOperation> ParameterDragDropOperation = StaticCastSharedPtr<FNiagaraParameterDragOperation>(DragDropOperation);
+		TSharedPtr<const FNiagaraParameterAction> ParameterAction = StaticCastSharedPtr<const FNiagaraParameterAction>(ParameterDragDropOperation->GetSourceAction());
+		EEdGraphPinDirection NewPinDirection = GetPinDirectionForNewParameters();
+		if (ParameterAction.IsValid() && NewPinDirection != EGPD_MAX)
+		{
+			FNiagaraVariable Parameter = ParameterAction->GetParameter();
+			FNiagaraParameterHandle ParameterHandle(Parameter.GetName());
+			FNiagaraNamespaceMetadata ParameterNamespaceMetadata = GetDefault<UNiagaraEditorSettings>()->GetMetaDataForNamespaces(ParameterHandle.GetHandleParts());
+			return ParameterNamespaceMetadata.IsValid() && ParameterNamespaceMetadata.Options.Contains(ENiagaraNamespaceMetadataOptions::HideInScript) == false;
+		}
+	}
+	return false;
+}
+
+bool UNiagaraNodeParameterMapBase::HandleDropOperation(TSharedPtr<FDragDropOperation> DropOperation)
+{
+	if (CanHandleDropOperation(DropOperation) && DropOperation->IsOfType<FNiagaraParameterDragOperation>())
+	{
+		TSharedPtr<FNiagaraParameterDragOperation> ParameterDropOperation = StaticCastSharedPtr<FNiagaraParameterDragOperation>(DropOperation);
+		TSharedPtr<const FNiagaraParameterAction> ParameterAction = StaticCastSharedPtr<const FNiagaraParameterAction>(ParameterDropOperation->GetSourceAction());
+		FNiagaraVariable Parameter = ParameterAction->GetParameter();
+		EEdGraphPinDirection NewPinDirection = GetPinDirectionForNewParameters();
+
+		FScopedTransaction AddNewPinTransaction(LOCTEXT("DropParameterOntoParameterMapNode", "Drop parameter onto parameter map node."));
+		UEdGraphPin* AddedPin = RequestNewTypedPin(NewPinDirection, Parameter.GetType(), Parameter.GetName());
+		if (AddedPin != nullptr)
+		{
+			CancelEditablePinName(FText::GetEmpty(), AddedPin);
+		}
+		return true;
+	}
+	return false;
+}
+
 void UNiagaraNodeParameterMapBase::OnPinRenamed(UEdGraphPin* RenamedPin, const FString& OldName)
 {
 	RenamedPin->PinFriendlyName = FText::FromName(RenamedPin->PinName);
 
-	TArray<UEdGraphPin*> InOrOutPins;
+	FPinCollectorArray InOrOutPins;
 	if (RenamedPin->Direction == EEdGraphPinDirection::EGPD_Input)
 	{
 		GetInputPins(InOrOutPins);

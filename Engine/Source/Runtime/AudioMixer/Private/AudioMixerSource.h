@@ -61,11 +61,11 @@ namespace Audio
 
 	private:
 
+		/** Initializes the bus sends. */
+		void SetupBusData(TArray<FInitAudioBusSend>* OutAudioBusSends = nullptr);
+
 		/** Frees any resources for this sound source. */
 		void FreeResources();
-
-		/** Updates modulation parameters set from the modulation plugin. */
-		void UpdateModulation();
 
 		/** Updates the pitch parameter set from the game thread. */
 		void UpdatePitch();
@@ -104,9 +104,6 @@ namespace Audio
 		bool UseSpatializationPlugin() const;
 
 		/** Whether or not to use the occlusion plugin. */
-		bool UseModulationPlugin() const;
-
-		/** Whether or not to use the occlusion plugin. */
 		bool UseOcclusionPlugin() const;
 
 		/** Whether or not to use the reverb plugin. */
@@ -123,26 +120,16 @@ namespace Audio
 		// so that distance-based level control can be calculated during rendering
 		struct FDynamicBusSendInfo
 		{
-			float SendLevel;
-			uint32 BusId;
-			ESourceBusSendLevelControlMethod BusSendLevelControlMethod;
-			EBusSendType BusSendType;
-			float MinSendLevel;
-			float MaxSendLevel;
-			float MinSendDistance;
-			float MaxSendDistance;
+			float SendLevel = 0.0f;
+			uint32 BusId = 0;
+			ESourceBusSendLevelControlMethod BusSendLevelControlMethod = ESourceBusSendLevelControlMethod::Manual;
+			EBusSendType BusSendType = EBusSendType::PreEffect;
+			float MinSendLevel = 0.0f;
+			float MaxSendLevel = 0.0f;
+			float MinSendDistance = 0.0f;
+			float MaxSendDistance = 0.0f;
 			FRuntimeFloatCurve CustomSendLevelCurve;
-
-			FDynamicBusSendInfo()
-				: SendLevel(0.0f)
-				, BusId(0)
-				, BusSendLevelControlMethod(ESourceBusSendLevelControlMethod::Manual)
-				, BusSendType(EBusSendType::PreEffect)
-				, MinSendLevel(0.0f)
-				, MaxSendLevel(0.0f)
-				, MinSendDistance(0.0f)
-				, MaxSendDistance(0.0f)
-			{}
+			bool bIsInit = true;
 		};
 
 		// Mapping of channel map types to channel maps. Determined by what submixes this source sends its audio to.
@@ -168,6 +155,9 @@ namespace Audio
 		// source may need to live-update during its lifespan
 		TArray<FDynamicBusSendInfo> DynamicBusSendInfos;
 
+		// An array of submix sends from previous update. Allows us to clear out submix sends if they are no longer being sent.
+		TArray<FSoundSubmixSendInfo> PreviousSubmixSendSettings;
+
 		// Whether or not we're currently releasing our resources. Prevents recycling the source until release is finished.
 		FThreadSafeBool bIsReleasing;
 
@@ -178,5 +168,6 @@ namespace Audio
 		uint32 bIsVorbis : 1;
 		uint32 bIsStoppingVoicesEnabled : 1;
 		uint32 bSendingAudioToBuses : 1;
+		uint32 bPrevAllowedSpatializationSetting : 1;
 	};
 }

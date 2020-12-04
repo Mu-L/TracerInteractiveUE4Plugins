@@ -103,7 +103,7 @@ void FUnixPlatformMemory::Init()
 
 class FMalloc* FUnixPlatformMemory::BaseAllocator()
 {
-#if UE4_DO_ROOT_PRIVILEGE_CHECK
+#if UE4_DO_ROOT_PRIVILEGE_CHECK && !IS_PROGRAM
 	// This function gets executed very early, way before main() (because global constructors will allocate memory).
 	// This makes it ideal, if unobvious, place for a root privilege check.
 	if (geteuid() == 0)
@@ -113,7 +113,7 @@ class FMalloc* FUnixPlatformMemory::BaseAllocator()
 		// unreachable
 		return nullptr;
 	}
-#endif // UE4_DO_ROOT_PRIVILEGE_CHECK
+#endif // UE4_DO_ROOT_PRIVILEGE_CHECK && !IS_PROGRAM
 
 #if UE_USE_MALLOC_REPLAY_PROXY
 	bool bAddReplayProxy = false;
@@ -604,8 +604,10 @@ namespace UnixPlatformMemory
 			return 0;
 		}
 
+		const int NewLen = Len - kSuffixLength;
+
 		// let's check that this is indeed "kB"
-		char * Suffix = &Line[Len - kSuffixLength];
+		char * Suffix = &Line[NewLen];
 		if (strcmp(Suffix, " kB\n") != 0)
 		{
 			// Unix the kernel changed the format, huh?
@@ -615,12 +617,12 @@ namespace UnixPlatformMemory
 		// kill the kB
 		*Suffix = 0;
 
-		// find the beginning of the number
-		for (const char * NumberBegin = Suffix; NumberBegin >= Line; --NumberBegin)
+        // find the beginning of the number
+		for (const char* NumberBegin = Line; NumberBegin < Suffix; ++NumberBegin)
 		{
-			if (*NumberBegin == ' ')
+			if (isdigit(*NumberBegin))
 			{
-				return static_cast< uint64 >(atol(NumberBegin + 1)) * 1024ULL;
+				return atoll(NumberBegin) * 1024ULL;
 			}
 		}
 

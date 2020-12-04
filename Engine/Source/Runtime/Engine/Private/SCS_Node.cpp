@@ -458,6 +458,13 @@ void USCS_Node::Serialize(FArchive& Ar)
 			{
 				ComponentClass = ComponentTemplate->GetClass();
 			}
+
+			// Only "override" template objects created/referenced by the ICH should have this flag set.
+			// Older versions may have been saved with this flag incorrectly set on the default root node.
+			if (ComponentTemplate != nullptr)
+			{
+				ComponentTemplate->ClearFlags(RF_InheritableComponentTemplate);
+			}
 		}
 	}
 }
@@ -501,7 +508,7 @@ void USCS_Node::SetParent(USCS_Node* InParentNode)
 	}
 }
 
-void USCS_Node::SetParent(USceneComponent* InParentComponent)
+void USCS_Node::SetParent(const USceneComponent* InParentComponent)
 {
 	check(InParentComponent != NULL);
 

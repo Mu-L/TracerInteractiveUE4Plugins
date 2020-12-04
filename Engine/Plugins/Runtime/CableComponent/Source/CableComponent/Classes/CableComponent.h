@@ -49,6 +49,7 @@ public:
 	virtual bool HasAnySockets() const override;
 	virtual bool DoesSocketExist(FName InSocketName) const override;
 	virtual FTransform GetSocketTransform(FName InSocketName, ERelativeTransformSpace TransformSpace = RTS_World) const override;
+	virtual void OnVisibilityChanged() override;
 	//~ End USceneComponent Interface.
 
 	//~ Begin UPrimitiveComponent Interface.
@@ -125,6 +126,16 @@ public:
 	/** Add stiffness constraints to cable. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category = "Cable")
 	bool bEnableStiffness;
+
+	/** When false, will still wait for SubstepTime to elapse before updating, but will only run the cable simulation once using all of accumulated simulation time */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category = "Cable")
+	bool bUseSubstepping = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category = "Cable")
+	bool bSkipCableUpdateWhenNotVisible = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category = "Cable")
+	bool bSkipCableUpdateWhenNotOwnerRecentlyRendered = false;
 
 	/** 
 	 *	EXPERIMENTAL. Perform sweeps for each cable particle, each substep, to avoid collisions with the world. 

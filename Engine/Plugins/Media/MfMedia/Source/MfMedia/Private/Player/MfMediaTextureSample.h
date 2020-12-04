@@ -192,9 +192,9 @@ public:
 	}
 #endif //WITH_ENGINE
 
-	virtual FTimespan GetTime() const override
+	virtual FMediaTimeStamp GetTime() const override
 	{
-		return Time;
+		return FMediaTimeStamp(Time);
 	}
 
 	virtual bool IsCacheable() const override
@@ -251,6 +251,9 @@ protected:
 		{
 			return false; // failed to lock buffer
 		}
+
+		// Recompute the output buffer vertical dimension - we may get a SMALLER buffer (no padding) here than what we expected before!
+		Dim.Y = BufferSize / Stride;
 
 		// copy pixels
 		if ((Bytes != NULL) && (BufferSize > 0))

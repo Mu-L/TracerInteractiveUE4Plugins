@@ -18,6 +18,7 @@
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialFunctionInstance.h"
 #include "Materials/MaterialExpressionSingleLayerWaterMaterialOutput.h"
+#include "Materials/MaterialExpressionVolumetricAdvancedMaterialOutput.h"
 #include "Materials/MaterialExpressionThinTranslucentMaterialOutput.h"
 #include "MaterialCompiler.h"
 #include "RenderUtils.h"
@@ -118,10 +119,20 @@ struct FMaterialVTStackEntry
 	int32 DebugMipValue0Index;
 	int32 DebugMipValue1Index;
 	int32 PreallocatedStackTextureIndex;
+	bool bAdaptive;
 	bool bGenerateFeedback;
 	float AspectRatio;
 
 	int32 CodeIndex;
+};
+
+struct FMaterialCustomExpressionEntry
+{
+	uint64 ScopeID;
+	const UMaterialExpressionCustom* Expression;
+	FString Implementation;
+	TArray<uint64> InputHash;
+	TArray<int32> OutputCodeIndex;
 };
 
 class FHLSLMaterialTranslator : public FMaterialCompiler
@@ -192,7 +203,9 @@ protected:
 	int32 NextSymbolIndex;
 
 	/** Any custom expression function implementations */
-	TArray<FString> CustomExpressionImplementations;
+	//TArray<FString> CustomExpressionImplementations;
+	//TMap<UMaterialExpressionCustom*, int32> CachedCustomExpressions;
+	TArray<FMaterialCustomExpressionEntry> CustomExpressions;
 
 	/** Any custom output function implementations */
 	TArray<FString> CustomOutputImplementations;
@@ -277,6 +290,9 @@ protected:
 	/** True if this material reads any per-instance custom data */
 	uint32 bUsesPerInstanceCustomData : 1;
 
+	/** True if this material write anisotropy material property */
+	uint32 bUsesAnisotropy : 1;
+
 	/** Tracks the texture coordinates used by this material. */
 	TBitArray<> AllocatedUserTexCoords;
 	/** Tracks the texture coordinates used by the vertex shader in this material. */
@@ -320,7 +336,7 @@ public:
 	EMaterialExpressionVisitResult VisitExpressionsForProperty(EMaterialProperty InProperty, IMaterialExpressionVisitor& InVisitor);
 
 	void ValidateVtPropertyLimits();
- 
+	void ValidateShadingModelsForFeatureLevel(const FMaterialShadingModelField& ShadingModels);
 	bool Translate();
 
 	void GetMaterialEnvironment(EShaderPlatform InPlatform, FShaderCompilerEnvironment& OutEnvironment);
@@ -334,7 +350,7 @@ public:
 
 protected:
 
-	bool IsMaterialPropertyUsed(EMaterialProperty Property, int32 PropertyChunkIndex, const FLinearColor& ReferenceValue, int32 NumComponents);
+	bool IsMaterialPropertyUsed(EMaterialProperty Property, int32 PropertyChunkIndex, const FLinearColor& ReferenceValue, int32 NumComponents) const;
 
 	// only used by GetMaterialShaderCode()
 	// @param Index ECompiledMaterialProperty or EMaterialProperty
@@ -399,6 +415,8 @@ protected:
 	// AccessUniformExpression - Adds code to access the value of a uniform expression to the Code array and returns its index.
 	int32 AccessUniformExpression(int32 Index);
 
+	int32 AccessMaterialAttribute(int32 CodeIndex, const FGuid& AttributeID);
+
 	// CoerceParameter
 	FString CoerceParameter(int32 Index, EMaterialValueType DestType);
 
@@ -452,6 +470,7 @@ protected:
 	virtual ERHIFeatureLevel::Type GetFeatureLevel() override;
 	virtual EShaderPlatform GetShaderPlatform() override;
 	virtual const ITargetPlatform* GetTargetPlatform() const override;
+	virtual bool IsMaterialPropertyUsed(EMaterialProperty Property, int32 PropertyChunkIndex) const override;
 
 	/** 
 	 * Casts the passed in code to DestType, or generates a compile error if the cast is not valid. 
@@ -566,7 +585,14 @@ protected:
 
 	//static const TCHAR* GetVTAddressMode(TextureAddress Address);
 
-	uint32 AcquireVTStackIndex(ETextureMipValueMode MipValueMode, TextureAddress AddressU, TextureAddress AddressV, float AspectRatio, int32 CoordinateIndex, int32 MipValue0Index, int32 MipValue1Index, int32 PreallocatedStackTextureIndex, bool bGenerateFeedback);
+	uint32 AcquireVTStackIndex(
+		ETextureMipValueMode MipValueMode, 
+		TextureAddress AddressU, TextureAddress AddressV, 
+		float AspectRatio, 
+		int32 CoordinateIndex, 
+		int32 MipValue0Index, int32 MipValue1Index, 
+		int32 PreallocatedStackTextureIndex, 
+		bool bAdaptive, bool bGenerateFeedback);
 
 	virtual int32 TextureSample(
 		int32 TextureIndex,
@@ -577,7 +603,8 @@ protected:
 		ETextureMipValueMode MipValueMode = TMVM_None,
 		ESamplerSourceMode SamplerSource = SSM_FromTextureAsset,
 		int32 TextureReferenceIndex = INDEX_NONE,
-		bool AutomaticViewMipBias = false
+		bool AutomaticViewMipBias = false,
+		bool AdaptiveVirtualTexture = false
 	) override;
 
 	virtual int32 TextureProperty(int32 TextureIndex, EMaterialExposedTextureProperty Property) override;
@@ -634,6 +661,9 @@ protected:
 
 	virtual int32 VertexColor() override;
 
+	virtual int32 PreSkinVertexOffset() override;
+	virtual int32 PostSkinVertexOffset() override;
+
 	virtual int32 PreSkinnedPosition() override;
 	virtual int32 PreSkinnedNormal() override;
 
@@ -650,6 +680,9 @@ protected:
 	virtual int32 Logarithm10(int32 X) override;
 	virtual int32 SquareRoot(int32 X) override;
 	virtual int32 Length(int32 X) override;
+	virtual int32 Step(int32 Y, int32 X) override;
+	virtual int32 SmoothStep(int32 X, int32 Y, int32 A) override;
+	virtual int32 InvLerp(int32 X, int32 Y, int32 A) override;
 	virtual int32 Lerp(int32 X, int32 Y, int32 A) override;
 	virtual int32 Min(int32 A, int32 B) override;
 	virtual int32 Max(int32 A, int32 B) override;
@@ -667,6 +700,7 @@ protected:
 	virtual int32 PrecomputedAOMask() override;
 	virtual int32 GIReplace(int32 Direct, int32 StaticIndirect, int32 DynamicIndirect) override;
 	virtual int32 ShadowReplace(int32 Default, int32 Shadow) override;
+	virtual int32 ReflectionCapturePassSwitch(int32 Default, int32 Reflection) override;
 
 	virtual int32 RayTracingQualitySwitchReplace(int32 Normal, int32 RayTraced);
 
@@ -695,10 +729,15 @@ protected:
 	virtual int32 GetHairUV() override;
 	virtual int32 GetHairDimensions() override;
 	virtual int32 GetHairSeed() override;
-	virtual int32 GetHairTangent() override;
+	virtual int32 GetHairTangent(bool bUseTangentSpace) override;
 	virtual int32 GetHairRootUV() override;
 	virtual int32 GetHairBaseColor() override;
 	virtual int32 GetHairRoughness() override;
+	virtual int32 GetHairDepth() override;
+	virtual int32 GetHairCoverage() override;
+	virtual int32 GetHairAuxilaryData() override;
+	virtual int32 GetHairAtlasUVs() override;
+	virtual int32 GetHairColorFromMelanin(int32 Melanin, int32 Redness, int32 DyeColor) override;
 	virtual int32 DistanceToNearestSurface(int32 PositionArg) override;
 	virtual int32 DistanceFieldGradient(int32 PositionArg) override;
 	virtual int32 AtmosphericFogColor(int32 WorldPosition) override;
@@ -712,13 +751,21 @@ protected:
 	virtual int32 SkyAtmosphereAerialPerspective(int32 WorldPosition) override;
 	virtual int32 SkyAtmosphereDistantLightScatteredLuminance() override;
 
+	// Water
+	virtual int32 SceneDepthWithoutWater(int32 Offset, int32 ViewportUV, bool bUseOffset, float FallbackDepth) override;
+
+	virtual int32 GetCloudSampleAltitude() override;
+	virtual int32 GetCloudSampleAltitudeInLayer() override;
+	virtual int32 GetCloudSampleNormAltitudeInLayer() override;
+	virtual int32 GetVolumeSampleConservativeDensity() override;
+
 	virtual int32 CustomPrimitiveData(int32 OutputIndex, EMaterialValueType Type) override;
 
 	virtual int32 ShadingModel(EMaterialShadingModel InSelectedShadingModel) override;
 
 	virtual int32 MapARPassthroughCameraUV(int32 UV) override;
 
-	virtual int32 CustomExpression(class UMaterialExpressionCustom* Custom, TArray<int32>& CompiledInputs) override;
+	virtual int32 CustomExpression(class UMaterialExpressionCustom* Custom, int32 OutputIndex, TArray<int32>& CompiledInputs) override;
 	virtual int32 CustomOutput(class UMaterialExpressionCustomOutput* Custom, int32 OutputIndex, int32 OutputCode) override;
 
 	virtual int32 VirtualTextureOutput(uint8 MaterialAttributeMask) override;

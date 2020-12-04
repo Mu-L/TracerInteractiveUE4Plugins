@@ -17,7 +17,6 @@ void UMoviePipelineMasterConfig::AddTransientSettingByClass(const UClass* InSett
 {
 	// We do this directly because the FindOrAddSetting API adds them to the user-defined settings array.
 	UMoviePipelineSetting* NewSetting = NewObject<UMoviePipelineSetting>(this, InSettingClass);
-	NewSetting->SetIsUserCustomized(false);
 
 	// Don't add settings that don't belong on this type of config
 	if (CanSettingBeAdded(NewSetting))
@@ -89,7 +88,7 @@ UMoviePipelineShotConfig* UMoviePipelineMasterConfig::GetConfigForShot(const FSt
 	return OutConfig;
 }
 
-void UMoviePipelineMasterConfig::GetFilenameFormatArguments(FMoviePipelineFormatArgs& InOutFormatArgs) const
+void UMoviePipelineMasterConfig::GetFormatArguments(FMoviePipelineFormatArgs& InOutFormatArgs, const bool bIncludeAllSettings) const
 {
 	// Add "global" ones not specific to a setting.
 	{
@@ -106,18 +105,23 @@ void UMoviePipelineMasterConfig::GetFilenameFormatArguments(FMoviePipelineFormat
 			FrameRate = GetEffectiveFrameRate(Cast<ULevelSequence>(InOutFormatArgs.InJob->Sequence.TryLoad())).AsDecimal();
 		}
 
-		InOutFormatArgs.Arguments.Add(TEXT("level_name"), LevelName);
-		InOutFormatArgs.Arguments.Add(TEXT("sequence_name"), SequenceName);
-		InOutFormatArgs.Arguments.Add(TEXT("frame_rate"), FrameRate);
+		InOutFormatArgs.FilenameArguments.Add(TEXT("level_name"), LevelName);
+		InOutFormatArgs.FilenameArguments.Add(TEXT("sequence_name"), SequenceName);
+		InOutFormatArgs.FilenameArguments.Add(TEXT("frame_rate"), FrameRate);
+
+		InOutFormatArgs.FileMetadata.Add(TEXT("unreal/levelName"), LevelName);
+		InOutFormatArgs.FileMetadata.Add(TEXT("unreal/sequenceName"), SequenceName);
+		InOutFormatArgs.FileMetadata.Add(TEXT("unreal/frameRate"), FrameRate);
+
 		
 		// Normally these are filled when resolving the file name by the job (so that the time is shared), but stub them in here so
 		// they show up in the UI with a value.
 		FDateTime CurrentTime = FDateTime::Now();
-		InOutFormatArgs.Arguments.Add(TEXT("date"), CurrentTime.ToString(TEXT("%Y.%m.%d")));
-		InOutFormatArgs.Arguments.Add(TEXT("year"), CurrentTime.ToString(TEXT("%Y")));
-		InOutFormatArgs.Arguments.Add(TEXT("month"), CurrentTime.ToString(TEXT("%m")));
-		InOutFormatArgs.Arguments.Add(TEXT("day"), CurrentTime.ToString(TEXT("%d")));
-		InOutFormatArgs.Arguments.Add(TEXT("time"), CurrentTime.ToString(TEXT("%H.%M.%S")));
+		InOutFormatArgs.FilenameArguments.Add(TEXT("date"), CurrentTime.ToString(TEXT("%Y.%m.%d")));
+		InOutFormatArgs.FilenameArguments.Add(TEXT("year"), CurrentTime.ToString(TEXT("%Y")));
+		InOutFormatArgs.FilenameArguments.Add(TEXT("month"), CurrentTime.ToString(TEXT("%m")));
+		InOutFormatArgs.FilenameArguments.Add(TEXT("day"), CurrentTime.ToString(TEXT("%d")));
+		InOutFormatArgs.FilenameArguments.Add(TEXT("time"), CurrentTime.ToString(TEXT("%H.%M.%S")));
 		
 		// Let the output state fill out some too, since its the keeper of the information.
 		UMoviePipelineOutputSetting* OutputSettings = FindSetting<UMoviePipelineOutputSetting>();
@@ -125,14 +129,19 @@ void UMoviePipelineMasterConfig::GetFilenameFormatArguments(FMoviePipelineFormat
 
 		FMoviePipelineFrameOutputState BlankOutputState;
 		BlankOutputState.OutputFrameNumber = 0; // It gets initialized to -1 but looks funny in the UI since the actual output would be zero.
-		BlankOutputState.GetFilenameFormatArguments(InOutFormatArgs, OutputSettings->ZeroPadFrameNumbers, OutputSettings->FrameNumberOffset);
+		BlankOutputState.GetFilenameFormatArguments(InOutFormatArgs, OutputSettings->ZeroPadFrameNumbers, OutputSettings->FrameNumberOffset, false);
 	}
 
 	// Let each setting provide its own set of key/value pairs.
 	{
-		for (UMoviePipelineSetting* Setting : GetUserSettings())
+		// The UI will only show user customized settings but actually writing to disk should use all.
+		const bool bIncludeDisabledSettings = false;
+		const bool bIncludeTransientSettings = bIncludeAllSettings;
+		TArray<UMoviePipelineSetting*> TargetSettings = GetAllSettings( bIncludeDisabledSettings, bIncludeTransientSettings);
+
+		for (UMoviePipelineSetting* Setting : TargetSettings)
 		{
-			Setting->GetFilenameFormatArguments(InOutFormatArgs);
+			Setting->GetFormatArguments(InOutFormatArgs);
 		}
 
 		// ToDo: Should shots be able to provide arguments too? They're only overrides, and
@@ -261,6 +270,35 @@ TArray<UMoviePipelineSetting*> UMoviePipelineMasterConfig::GetUserSettings() con
 	return BaseSettings;
 }
 
+TArray<UMoviePipelineSetting*> UMoviePipelineMasterConfig::GetAllSettings(const bool bIncludeDisabledSettings, const bool bIncludeTransientSettings) const
+{
+	TArray<UMoviePipelineSetting*> OutSettings;
+
+	// User settings were explicitly added by the user via the UI or scripting.
+	for (UMoviePipelineSetting* Setting : GetUserSettings())
+	{
+		if (bIncludeDisabledSettings || Setting->IsEnabled())
+		{
+			OutSettings.Add(Setting);
+		}
+	}
+
+	// Transient settings are initialized when we're about to render so that classes
+	// that the user didn't add to the UI still have a chance to apply sane default settings
+	for (UMoviePipelineSetting* Setting : GetTransientSettings())
+	{
+		if (bIncludeTransientSettings || Setting->IgnoreTransientFilters())
+		{
+			if (bIncludeDisabledSettings || Setting->IsEnabled())
+			{
+				OutSettings.Add(Setting);
+			}
+		}
+	}
+
+	return OutSettings;
+}
+
 void UMoviePipelineMasterConfig::CopyFrom(UMoviePipelineConfigBase* InConfig)
 {
 	Super::CopyFrom(InConfig);
@@ -288,7 +326,7 @@ TArray<UMoviePipelineOutputBase*> UMoviePipelineMasterConfig::GetOutputContainer
 	TArray<UMoviePipelineOutputBase*> OutputContainers;
 
 	// Don't want transient settings trying to write out files 
-	for (UMoviePipelineSetting* Setting : GetUserSettings())
+	for (UMoviePipelineSetting* Setting : FindSettings<UMoviePipelineOutputBase>())
 	{
 		UMoviePipelineOutputBase* Output = Cast<UMoviePipelineOutputBase>(Setting);
 		if (Output)

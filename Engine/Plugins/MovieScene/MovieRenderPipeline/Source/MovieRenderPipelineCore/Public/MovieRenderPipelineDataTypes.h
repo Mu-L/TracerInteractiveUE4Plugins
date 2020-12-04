@@ -7,6 +7,8 @@
 #include "Engine/Scene.h"
 #include "Engine/EngineTypes.h"
 #include "DSP/BufferVectorOperations.h"
+#include "Evaluation/MovieSceneSequenceTransform.h"
+#include "OpenColorIOColorSpace.h"
 #include "MovieRenderPipelineDataTypes.generated.h"
 
 class UMovieSceneCinematicShotSection;
@@ -27,6 +29,7 @@ class FMoviePipelineOutputMerger;
 class FRenderTarget;
 class UMoviePipeline;
 struct FMoviePipelineFormatArgs;
+
 namespace Audio { class FMixerSubmix; }
 
 /**
@@ -336,14 +339,14 @@ struct FMoviePipelineCameraCutInfo
 	GENERATED_BODY()
 public:
 	FMoviePipelineCameraCutInfo()
-		: OriginalRange(TRange<FFrameNumber>::Empty())
-		, TotalOutputRange(TRange<FFrameNumber>::Empty())
+		: OriginalRangeLocal(TRange<FFrameNumber>::Empty())
+		, TotalOutputRangeLocal(TRange<FFrameNumber>::Empty())
+		, WarmUpRangeLocal(TRange<FFrameNumber>::Empty())
 		, bEmulateFirstFrameMotionBlur(true)
 		, NumTemporalSamples(0)
 		, NumSpatialSamples(0)
 		, NumTiles(0, 0)
 		, State(EMovieRenderShotState::Uninitialized)
-		, CurrentMasterSeqTick(FFrameNumber(0))
 		, CurrentLocalSeqTick(FFrameNumber(0))
 		, bHasEvaluatedMotionBlurFrame(false)
 		, NumEngineWarmUpFramesRemaining(0)
@@ -358,11 +361,17 @@ private:
 	FFrameNumber GetOutputFrameCountEstimate() const;
 
 public:
-	/** The original non-modified range for this shot that will be rendered. */
-	TRange<FFrameNumber> OriginalRange;
+	/** The original non-modified range for this shot that will be rendered. This is in local space and should be multiplied by InnerToOuterTransform to convert to top-level space. */
+	TRange<FFrameNumber> OriginalRangeLocal;
 
-	/** The range for this shot including handle frames that will be rendered. */
-	TRange<FFrameNumber> TotalOutputRange;
+	/** The range for this shot including handle frames that will be rendered. This is in local space and should be multiplied by InnerToOuterTransform to convert to top-level space. */
+	TRange<FFrameNumber> TotalOutputRangeLocal;
+
+	/** The range for this shot (overlapping handle frames) that has data to do real warm ups with. Intermediate product to turn into NumEngineWarmUpFramesRemaining later. */
+	TRange<FFrameNumber> WarmUpRangeLocal;
+
+	/** The ranges in this class are in local space and need to be multiplied by the LinearTransform of this to convert them to master space. If they are already in master space the transform is identity. */
+	FMovieSceneSequenceTransform InnerToOuterTransform;
 
 	/** 
 	* Should we evaluate/render an extra frame at the start of this shot to show correct motion blur on the first frame? 
@@ -379,10 +388,6 @@ public:
 	/** How many image tiles are going to be rendered per temporal frame. */
 	FIntPoint NumTiles;
 
-	/** Display name for UI Purposes. */
-	FString CameraName;
-	FString ShotName;
-
 	/** Cached Frame Rate these are being rendered at. Simplifies some APIs. */
 	FFrameRate CachedFrameRate;
 
@@ -394,9 +399,6 @@ public:
 public:
 	/** The current state of processing this Shot is in. Not all states will be passed through. */
 	EMovieRenderShotState State;
-
-	/** The current tick of this shot that we're on in master sequence space, for evaluating the master sequence at this time. */
-	FFrameNumber CurrentMasterSeqTick;
 
 	/** The current tick of this shot that we're on local space, for knowing which frame of this sub-section is equivalent to the master. */
 	FFrameNumber CurrentLocalSeqTick;
@@ -416,115 +418,17 @@ public:
 	bool operator == (const FMoviePipelineCameraCutInfo& InRHS) const
 	{
 		return
-			OriginalRange == InRHS.OriginalRange &&
-			TotalOutputRange == InRHS.TotalOutputRange &&
+			OriginalRangeLocal == InRHS.OriginalRangeLocal &&
+			TotalOutputRangeLocal == InRHS.TotalOutputRangeLocal &&
 			State == InRHS.State &&
 			NumEngineWarmUpFramesRemaining == InRHS.NumEngineWarmUpFramesRemaining &&
 			bEmulateFirstFrameMotionBlur == InRHS.bEmulateFirstFrameMotionBlur &&
 			bHasEvaluatedMotionBlurFrame == InRHS.bHasEvaluatedMotionBlurFrame &&
-			CurrentMasterSeqTick == InRHS.CurrentMasterSeqTick &&
 			CurrentLocalSeqTick == InRHS.CurrentLocalSeqTick &&
 			CameraCutSection == InRHS.CameraCutSection;
 	}
 
 	bool operator != (const FMoviePipelineCameraCutInfo& InRHS) const
-	{
-		return !(*this == InRHS);
-	}
-};
-
-/**
-* Pre-calculated information about a shot we are going to produce. This lets us build
-* the expected output at the start of the process and just read from it later. Having
-* all information in advanced aids in debugging and visualization of progress.
-*/
-USTRUCT(BlueprintType)
-struct FMoviePipelineShotInfo
-{
-	GENERATED_BODY()
-public:
-	FMoviePipelineShotInfo()
-		: NumHandleFrames(0)
-		, OriginalRange(TRange<FFrameNumber>::Empty())
-		, TotalOutputRange(TRange<FFrameNumber>::Empty())
-		, HandleFrameRangeStart(TRange<FFrameNumber>::Empty())
-		, HandleFrameRangeEnd(TRange<FFrameNumber>::Empty())
-		, ShotOverrideConfig(nullptr)
-		, CinematicShotSection(nullptr)
-		, CurrentCameraCutIndex(0)
-	{}
-
-	FString GetDisplayName() const;
-
-public:
-	/** How many handle frames (in Display Rate of the Master Sequence) */
-	int32 NumHandleFrames;
-
-	/** The original non-modified (overall) range for this shot that will be rendered. */
-	TRange<FFrameNumber> OriginalRange;
-
-	/** The range for this shot including handle frames that will be rendered. */
-	TRange<FFrameNumber> TotalOutputRange;
-
-	/** The range of time that represents the handle frames (if any) before the shot. */
-	TRange<FFrameNumber> HandleFrameRangeStart;
-
-	/** The range of time that represents the handle frames (if any) after the shot. */
-	TRange<FFrameNumber> HandleFrameRangeEnd;
-
-	FFrameNumber StartFrameOffsetTick;
-	
-	UPROPERTY(Transient, BlueprintReadOnly, Category = "Movie Render Pipeline")
-	UMoviePipelineShotConfig* ShotOverrideConfig;
-
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "Movie Render Pipeline")
-	TWeakObjectPtr<UMovieSceneCinematicShotSection> CinematicShotSection;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Movie Render Pipeline")
-	TArray<FMoviePipelineCameraCutInfo> CameraCuts;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Movie Render Pipeline")
-	int32 CurrentCameraCutIndex;
-
-	FMoviePipelineCameraCutInfo& GetCurrentCameraCut()
-	{
-		check(CurrentCameraCutIndex >= 0 && CurrentCameraCutIndex < CameraCuts.Num());
-		return CameraCuts[CurrentCameraCutIndex];
-	}
-
-	const FMoviePipelineCameraCutInfo& GetCurrentCameraCut() const
-	{
-		check(CurrentCameraCutIndex >= 0 && CurrentCameraCutIndex < CameraCuts.Num());
-		return CameraCuts[CurrentCameraCutIndex];
-	}
-
-	bool SetNextShotActive()
-	{
-		if (CurrentCameraCutIndex == CameraCuts.Num() - 1)
-		{
-			// We're on the last camera cut, we can't make another one active.
-			return true;
-		}
-		
-		CurrentCameraCutIndex++;
-		return false;
-	}
-
-	bool operator == (const FMoviePipelineShotInfo& InRHS) const
-	{ 
-		return
-			NumHandleFrames == InRHS.NumHandleFrames &&
-			OriginalRange == InRHS.OriginalRange &&
-			TotalOutputRange == InRHS.TotalOutputRange &&
-			HandleFrameRangeStart == InRHS.HandleFrameRangeStart &&
-			HandleFrameRangeEnd == InRHS.HandleFrameRangeEnd &&
-			ShotOverrideConfig == InRHS.ShotOverrideConfig &&
-			CinematicShotSection == InRHS.CinematicShotSection &&
-			CameraCuts == InRHS.CameraCuts &&
-			CurrentCameraCutIndex == InRHS.CurrentCameraCutIndex;
-	}
-
-	bool operator != (const FMoviePipelineShotInfo& InRHS) const
 	{
 		return !(*this == InRHS);
 	}
@@ -545,7 +449,7 @@ public:
 			: MotionBlurFraction(0.f)
 			, FrameDeltaTime(0.0)
 			, WorldSeconds(0.0)
-			, bWasAffectedByTimeDilation(false)
+			, TimeDilation(1.f)
 		{
 		}
 
@@ -559,17 +463,19 @@ public:
 		double WorldSeconds;
 
 		/**
-		* If true, there was a non-1.0 Time Dilation in effect when this frame was produced. This indicates that there
+		* Check if there was a non-1.0 Time Dilation in effect when this frame was produced. This indicates that there
 		* may be duplicate frame Source/Effective frame numbers as they find the closest ideal time to the current.
 		*/
-		bool bWasAffectedByTimeDilation;
+		float TimeDilation;
 
 		void ResetPerFrameData()
 		{
 			MotionBlurFraction = 0.f;
 			FrameDeltaTime = 0.0;
-			bWasAffectedByTimeDilation = false;
+			TimeDilation = 1.f;
 		}
+
+		FORCEINLINE bool IsTimeDilated() const { return !FMath::IsNearlyEqual(TimeDilation, 1.f); }
 	};
 
 	FMoviePipelineFrameOutputState()
@@ -643,6 +549,7 @@ public:
 		EffectiveTimeCode = FTimecode();
 		CurrentShotSourceFrameNumber = 0;
 		CurrentShotSourceTimeCode = FTimecode();
+		FileMetadata.Reset();
 	}
 
 	void ResetPerShotData()
@@ -684,6 +591,9 @@ public:
 	/** The closest time code version of the EffectiveFrameNumber. May be a duplicate in the event of Play Rate tracks. */
 	FTimecode EffectiveTimeCode;
 
+	/** Metadata to attach to the output file (if supported by the output container) */
+	FStringFormatNamedArguments FileMetadata;
+
 
 	int32 CurrentShotSourceFrameNumber;
 	
@@ -717,7 +627,7 @@ public:
 	{
 		return GetTypeHash(OutputState.OutputFrameNumber);
 	}
-	void GetFilenameFormatArguments(FMoviePipelineFormatArgs& InOutFormatArgs, const int32 InZeroPadCount, const int32 InFrameNumberOffset) const;
+	void GetFilenameFormatArguments(FMoviePipelineFormatArgs& InOutFormatArgs, const int32 InZeroPadCount, const int32 InFrameNumberOffset, const bool bForceRelFrameNumbers) const;
 };
 
 struct FMoviePipelineFormatArgs
@@ -727,8 +637,11 @@ struct FMoviePipelineFormatArgs
 	{
 	}
 
-	/** A set of Key/Value pairs for format strings (without {}) and their values. */
-	FStringFormatNamedArguments Arguments;
+	/** A set of Key/Value pairs for output filename format strings (without {}) and their values. */
+	FStringFormatNamedArguments FilenameArguments;
+
+	/** A set of Key/Value pairs for file metadata for file formats that support metadata. */
+	FStringFormatNamedArguments FileMetadata;
 
 	/** Which job is this for? Some settings are specific to the level sequence being rendered. */
 	class UMoviePipelineExecutorJob* InJob;
@@ -815,11 +728,6 @@ public:
 	FVector2D ProjectionMatrixJitterAmount;
 
 	/**
-	* If set, forces the exposure compensation on a render. Useful when doing tiled renders where auto-exposure is disabled.
-	*/
-	TOptional<float> ExposureCompensation;
-
-	/**
 	* Any additional texture mip map bias that should be added when rendering. Can be used to force extra sharpness. A more negative number means more likely to use a higher quality mip map.
 	*/
 	float TextureSharpnessBias;
@@ -838,9 +746,9 @@ public:
 	MoviePipeline::FTileWeight1D WeightFunctionY;
 
 	MoviePipeline::FMoviePipelineFrameInfo FrameInfo;
-};
 
-DECLARE_MULTICAST_DELEGATE_TwoParams(FMoviePipelineSampleReady, TArray<FFloat16Color>&, FMoviePipelineRenderPassMetrics);
+	FOpenColorIODisplayConfiguration* OCIOConfiguration;
+};
 
 namespace MoviePipeline
 {
@@ -850,7 +758,6 @@ namespace MoviePipeline
 		FMoviePipelineRenderPassInitSettings()
 			: BackbufferResolution(0, 0)
 			, TileCount(0, 0)
-			, bAccumulateAlpha(false)
 		{
 		}
 
@@ -860,64 +767,12 @@ namespace MoviePipeline
 
 		/** How many tiles (in each direction) are we rendering with. */
 		FIntPoint TileCount;
-
-		/** If true, the alpha channel will be accumulated. This adds about 30% cost over the base to accumulation. */
-		bool bAccumulateAlpha;
 	};
 
-	struct MOVIERENDERPIPELINECORE_API FMoviePipelineEnginePass
-	{
-		FMoviePipelineEnginePass(const FMoviePipelinePassIdentifier& InPassIdentifier)
-			: PassIdentifier(InPassIdentifier)
-		{
-		}
-
-		virtual ~FMoviePipelineEnginePass()
-		{}
-
-		virtual void Setup(TWeakObjectPtr<UMoviePipeline> InOwningPipeline, const FMoviePipelineRenderPassInitSettings& InInitSettings)
-		{
-			OwningPipeline = InOwningPipeline;
-			InitSettings = InInitSettings;
-		}
-
-		virtual void RenderSample_GameThread(const FMoviePipelineRenderPassMetrics& InSampleState)
-		{
-		}
-
-		virtual void Teardown()
-		{
-		}
-
-		const FMoviePipelineRenderPassInitSettings& GetInitSettings() const { return InitSettings; }
-
-	protected:
-		UMoviePipeline* GetPipeline() const;
-
-	public:
-		/** A unique name for this engine pass. This is how an individual output pass specifies what data source it wants. */
-		FMoviePipelinePassIdentifier PassIdentifier;
-
-	protected:
-		FMoviePipelineRenderPassInitSettings InitSettings;
-
-	private:
-		TWeakObjectPtr<UMoviePipeline> OwningPipeline;
-	};
-
-	struct FSampleRenderThreadParams
-	{
-		FMoviePipelineRenderPassMetrics SampleState;
-		TSharedPtr<FImageOverlappedAccumulator, ESPMode::ThreadSafe> ImageAccumulator;
-		TSharedPtr<FMoviePipelineOutputMerger, ESPMode::ThreadSafe> OutputMerger;
-		FMoviePipelinePassIdentifier PassIdentifier;
-		bool bAccumulateAlpha;
-	};
 }
 
 struct FImagePixelDataPayload : IImagePixelDataPayload, public TSharedFromThis<FImagePixelDataPayload, ESPMode::ThreadSafe>
 {
-	FMoviePipelineFrameOutputState OutputState;
 	FMoviePipelineRenderPassMetrics SampleState;
 
 	FMoviePipelinePassIdentifier PassIdentifier;
@@ -925,8 +780,11 @@ struct FImagePixelDataPayload : IImagePixelDataPayload, public TSharedFromThis<F
 	/** Does this output data have to be transparent to be useful? Overrides output format to one that supports transparency. */
 	bool bRequireTransparentOutput;
 
+	int32 SortingOrder;
+
 	FImagePixelDataPayload()
 		: bRequireTransparentOutput(false)
+		, SortingOrder(TNumericLimits<int32>::Max())
 	{}
 
 	/** Is this the first tile of an image and we should start accumulating? */
@@ -988,8 +846,13 @@ public:
 	TMap<FMoviePipelinePassIdentifier, TUniquePtr<FImagePixelData>> ImageOutputData;
 };
 
+
 namespace MoviePipeline
 {
+	struct MOVIERENDERPIPELINECORE_API IMoviePipelineOverlappedAccumulator : public TSharedFromThis<IMoviePipelineOverlappedAccumulator>
+	{
+	};
+
 	struct FAudioState
 	{
 		struct FAudioSegment

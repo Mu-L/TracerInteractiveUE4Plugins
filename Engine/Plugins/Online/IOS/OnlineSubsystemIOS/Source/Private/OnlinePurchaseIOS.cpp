@@ -3,6 +3,7 @@
 #include "OnlinePurchaseIOS.h"
 #include "OnlineError.h"
 #include "OnlineSubsystemIOS.h"
+#include "Stats/Stats.h"
 #import "OnlineStoreKitHelper.h"
 
 /** Take successful transactions and route them through deferred pipeline */
@@ -47,30 +48,23 @@ void FOnlinePurchaseIOS::InitStoreKit(FStoreKitHelperV2* InStoreKit)
 {
 	StoreHelper = InStoreKit;
 
-	FOnProductsRequestResponseDelegate OnProductsRequestResponseDelegate;
-    OnProductsRequestResponseDelegate.BindRaw(this, &FOnlinePurchaseIOS::OnProductPurchaseRequestResponse);
+	FOnProductsRequestResponseDelegate OnProductsRequestResponseDelegate = FOnProductsRequestResponseDelegate::CreateThreadSafeSP(this, &FOnlinePurchaseIOS::OnProductPurchaseRequestResponse);
 	[StoreHelper AddOnProductRequestResponse: OnProductsRequestResponseDelegate];
 	
-	FOnTransactionCompleteIOSDelegate OnTransactionCompleteResponseDelegate = FOnTransactionCompleteIOSDelegate::CreateRaw(this, &FOnlinePurchaseIOS::OnTransactionCompleteResponse);
+	FOnTransactionCompleteIOSDelegate OnTransactionCompleteResponseDelegate = FOnTransactionCompleteIOSDelegate::CreateThreadSafeSP(this, &FOnlinePurchaseIOS::OnTransactionCompleteResponse);
 	[StoreHelper AddOnTransactionComplete: OnTransactionCompleteResponseDelegate];
 	
-	FOnTransactionRestoredIOSDelegate OnTransactionRestoredDelegate = FOnTransactionRestoredIOSDelegate::CreateRaw(this, &FOnlinePurchaseIOS::OnTransactionRestored);
+	FOnTransactionRestoredIOSDelegate OnTransactionRestoredDelegate = FOnTransactionRestoredIOSDelegate::CreateThreadSafeSP(this, &FOnlinePurchaseIOS::OnTransactionRestored);
 	[StoreHelper AddOnTransactionRestored: OnTransactionRestoredDelegate];
 	
-	FOnRestoreTransactionsCompleteIOSDelegate OnRestoreTransactionsCompleteDelegate = FOnRestoreTransactionsCompleteIOSDelegate::CreateRaw(this, &FOnlinePurchaseIOS::OnRestoreTransactionsComplete);
+	FOnRestoreTransactionsCompleteIOSDelegate OnRestoreTransactionsCompleteDelegate = FOnRestoreTransactionsCompleteIOSDelegate::CreateThreadSafeSP(this, &FOnlinePurchaseIOS::OnRestoreTransactionsComplete);
 	[StoreHelper AddOnRestoreTransactionsComplete: OnRestoreTransactionsCompleteDelegate];
 	
-	FOnTransactionProgressDelegate OnTransactionPurchasingDelegate = FOnTransactionProgressDelegate::CreateRaw(this, &FOnlinePurchaseIOS::OnTransactionInProgress);
+	FOnTransactionProgressDelegate OnTransactionPurchasingDelegate = FOnTransactionProgressDelegate::CreateThreadSafeSP(this, &FOnlinePurchaseIOS::OnTransactionInProgress);
 	[StoreHelper AddOnPurchaseInProgress: OnTransactionPurchasingDelegate];
 	
-	FOnTransactionProgressDelegate OnTransactionDeferredDelegate = FOnTransactionProgressDelegate::CreateRaw(this, &FOnlinePurchaseIOS::OnTransactionDeferred);
+	FOnTransactionProgressDelegate OnTransactionDeferredDelegate = FOnTransactionProgressDelegate::CreateThreadSafeSP(this, &FOnlinePurchaseIOS::OnTransactionDeferred);
 	[StoreHelper AddOnTransactionDeferred: OnTransactionDeferredDelegate];
-}
-
-void FOnlinePurchaseIOS::ManuallyIteratePaymentQueue()
-{
-	NSArray *Transactions = [[SKPaymentQueue defaultQueue] transactions];
-	[StoreHelper paymentQueue : [SKPaymentQueue defaultQueue] updatedTransactions : Transactions];
 }
 
 bool FOnlinePurchaseIOS::IsAllowedToPurchase(const FUniqueNetId& UserId)
@@ -207,28 +201,13 @@ void FOnlinePurchaseIOS::QueryReceipts(const FUniqueNetId& UserId, bool bRestore
 			bSuccess = false;
 		}
 	}
-	else
-	{
-		// We don't always seem to get events from our payment queue observer, 
-		// so manually iterate the transactions in the queue and handle them.
-		ManuallyIteratePaymentQueue();
-	}
 	
 	if (bTriggerDelegate)
 	{
 		// Query receipts comes dynamically from the StoreKit observer
-		// Re-entrant WaitNextTick happening here because we want to wait 2 frames, to ensure
-		// Async delegates fired as a result of ManuallyIteratePaymentQueue have been handled.
-		TWeakPtr<FOnlinePurchaseIOS, ESPMode::ThreadSafe> WeakThis(AsShared());
-		Subsystem->ExecuteNextTick([WeakThis, Delegate, bSuccess]() {
-			FOnlinePurchaseIOSPtr StrongThis = WeakThis.Pin();
-			if (StrongThis.IsValid())
-			{
-				StrongThis->Subsystem->ExecuteNextTick([Delegate, bSuccess]() {
-					FOnlineError Result(bSuccess);
-					Delegate.ExecuteIfBound(Result);
-				});
-			}
+		Subsystem->ExecuteNextTick([Delegate, bSuccess]() {
+			FOnlineError Result(bSuccess);
+			Delegate.ExecuteIfBound(Result);
 		});
 	}
 }
@@ -261,7 +240,7 @@ void FOnlinePurchaseIOS::OnProductPurchaseRequestResponse(SKProductsResponse* Re
 
 void FOnlinePurchaseIOS::OnTransactionCompleteResponse(EPurchaseTransactionState Result, const FStoreKitTransactionData& TransactionData)
 {
-	UE_LOG_ONLINE_PURCHASE(Log, TEXT("FOnlinePurchaseIOS::OnTransactionCompleteResponse %d %s"), (int32)Result, *TransactionData.ToDebugString());
+	UE_LOG_ONLINE_PURCHASE(Log, TEXT("FOnlinePurchaseIOS::OnTransactionCompleteResponse Result=%s TransactionData=[%s]"), LexToString(Result), *TransactionData.ToDebugString());
 	
 	FString UserIdStr = IOSUSER;
 	const TSharedRef<FOnlinePurchasePendingTransactionIOS>* UserPendingTransactionPtr = PendingTransactions.Find(UserIdStr);
@@ -345,7 +324,7 @@ void FOnlinePurchaseIOS::OnTransactionCompleteResponse(EPurchaseTransactionState
 
 void FOnlinePurchaseIOS::OnTransactionRestored(const FStoreKitTransactionData& TransactionData)
 {
-	UE_LOG_ONLINE_PURCHASE(Verbose, TEXT("FOnlinePurchaseIOS::OnTransactionRestored %s"), *TransactionData.ToDebugString());
+	UE_LOG_ONLINE_PURCHASE(Verbose, TEXT("FOnlinePurchaseIOS::OnTransactionRestored TransactionData=[%s]"), *TransactionData.ToDebugString());
 
 	// Single item restored amongst a group of items
 	TSharedRef<FPurchaseReceipt> OfflineReceipt = FOnlinePurchasePendingTransactionIOS::GenerateReceipt(EPurchaseTransactionState::Restored, TransactionData);
@@ -386,12 +365,12 @@ void FOnlinePurchaseIOS::OnRestoreTransactionsComplete(EPurchaseTransactionState
 
 void FOnlinePurchaseIOS::OnTransactionInProgress(const FStoreKitTransactionData& TransactionData)
 {
-	UE_LOG_ONLINE_PURCHASE(Verbose, TEXT("FOnlinePurchaseIOS::OnTransactionInProgress %s"), *TransactionData.ToDebugString());
+	UE_LOG_ONLINE_PURCHASE(Verbose, TEXT("FOnlinePurchaseIOS::OnTransactionInProgress TransactionData=[%s]"), *TransactionData.ToDebugString());
 }
 
 void FOnlinePurchaseIOS::OnTransactionDeferred(const FStoreKitTransactionData& TransactionData)
 {
-	UE_LOG_ONLINE_PURCHASE(Verbose, TEXT("FOnlinePurchaseIOS::OnTransactionDeferred %s"), *TransactionData.ToDebugString());
+	UE_LOG_ONLINE_PURCHASE(Verbose, TEXT("FOnlinePurchaseIOS::OnTransactionDeferred TransactionData=[%s]"), *TransactionData.ToDebugString());
 	
 	FString UserIdStr = IOSUSER;
 	const TSharedRef<FOnlinePurchasePendingTransactionIOS>* UserPendingTransactionPtr = PendingTransactions.Find(UserIdStr);
@@ -416,6 +395,7 @@ void FOnlinePurchaseIOS::OnTransactionDeferred(const FStoreKitTransactionData& T
 		TWeakPtr<FOnlinePurchaseIOS, ESPMode::ThreadSafe> WeakThis(AsShared());
 		FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakThis, TransactionData](float) -> bool
 		{
+			QUICK_SCOPE_CYCLE_COUNTER(STAT_FOnlinePurchaseIOS_TestDeferredTransactions);
 			FOnlinePurchaseIOSPtr StrongThis = WeakThis.Pin();
 			if (StrongThis.IsValid())
 			{

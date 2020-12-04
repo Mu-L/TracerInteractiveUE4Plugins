@@ -17,7 +17,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogGeometryCollectionParticlesData, Log, All);
 
 template<class T, int d>
 TGeometryCollectionParticlesData<T, d>::TGeometryCollectionParticlesData()
-	: ChaosModule(FModuleManager::Get().GetModulePtr<FChaosSolversModule>("ChaosSolvers"))
+	: ChaosModule(FChaosSolversModule::GetModule())
 	, BufferedData()
 	, PhysicsSyncCount(0)
 	, GameSyncCount(MAX_int32)
@@ -51,10 +51,8 @@ void TGeometryCollectionParticlesData<T, d>::Sync(Chaos::FPhysicsSolver* Solver,
 			GameSyncCount = SyncCount;
 
 			// Send sync command
-			Chaos::IDispatcher* const PhysicsDispatcher = ChaosModule->GetDispatcher();
-			check(PhysicsDispatcher);
 
-			PhysicsDispatcher->EnqueueCommandImmediate(Solver, [this, &RigidBodyIds](Chaos::FPhysicsSolver* InSolver)
+			Solver->EnqueueCommandImmediate([this, &RigidBodyIds, InSolver=Solver]()
 			{
 				// Iterate through all data
 				FData& Data = BufferedData.GetPhysicsDataForWrite();

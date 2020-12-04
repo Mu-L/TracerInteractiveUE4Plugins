@@ -27,65 +27,36 @@ struct FSkeletalMeshSkinningDataUsage
 		: LODIndex(INDEX_NONE)
 		, bUsesBoneMatrices(false)
 		, bUsesPreSkinnedVerts(false)
-		, bNeedDataImmediately(false)
 	{}
 
-	FSkeletalMeshSkinningDataUsage(int32 InLODIndex, bool bInUsesBoneMatrices, bool bInUsesPreSkinnedVerts, bool bInNeedDataImmediately)
+	FSkeletalMeshSkinningDataUsage(int32 InLODIndex, bool bInUsesBoneMatrices, bool bInUsesPreSkinnedVerts)
 		: LODIndex(InLODIndex)
 		, bUsesBoneMatrices(bInUsesBoneMatrices)
 		, bUsesPreSkinnedVerts(bInUsesPreSkinnedVerts)
-		, bNeedDataImmediately(bInNeedDataImmediately)
 	{}
 
 	FORCEINLINE bool NeedBoneMatrices()const { return bUsesBoneMatrices || bUsesPreSkinnedVerts; }
 	FORCEINLINE bool NeedPreSkinnedVerts()const { return bUsesPreSkinnedVerts; }
-	FORCEINLINE bool NeedsDataImmediately()const { return bNeedDataImmediately; }
 	FORCEINLINE int32 GetLODIndex()const { return LODIndex; }
 private:
 	int32 LODIndex;
 	uint32 bUsesBoneMatrices : 1;
 	uint32 bUsesPreSkinnedVerts : 1;
-	/** Some users need valid data immediately after the register call rather than being able to wait until the next tick. */
-	uint32 bNeedDataImmediately : 1;
 };
 
 struct FSkeletalMeshSkinningDataHandle
 {
 	FSkeletalMeshSkinningDataHandle();
-	FSkeletalMeshSkinningDataHandle(FSkeletalMeshSkinningDataUsage InUsage, TSharedPtr<struct FSkeletalMeshSkinningData> InSkinningData);
-
-	FSkeletalMeshSkinningDataHandle& operator=(FSkeletalMeshSkinningDataHandle&& Other)
-	{
-		if (this != &Other)
-		{
-			Usage = Other.Usage;
-			SkinningData = Other.SkinningData;
-			Other.SkinningData = nullptr;
-		}
-		return *this;
-	}
-
-	FSkeletalMeshSkinningDataHandle(FSkeletalMeshSkinningDataHandle&& Other)
-	{
-		Usage = Other.Usage;
-		SkinningData = Other.SkinningData;
-	}
-
+	FSkeletalMeshSkinningDataHandle(FSkeletalMeshSkinningDataUsage InUsage, const TSharedPtr<struct FSkeletalMeshSkinningData>& InSkinningData, bool bNeedsDataImmediately);
+	FSkeletalMeshSkinningDataHandle(const FSkeletalMeshSkinningDataHandle& Other) = delete;
+	FSkeletalMeshSkinningDataHandle(FSkeletalMeshSkinningDataHandle&& Other);
 	~FSkeletalMeshSkinningDataHandle();
+
+	FSkeletalMeshSkinningDataHandle& operator=(const FSkeletalMeshSkinningDataHandle& Other) = delete;
+	FSkeletalMeshSkinningDataHandle& operator=(FSkeletalMeshSkinningDataHandle&& Other);
 
 	FSkeletalMeshSkinningDataUsage Usage;
 	TSharedPtr<FSkeletalMeshSkinningData> SkinningData;
-
-private:
-
-	FSkeletalMeshSkinningDataHandle& operator=(FSkeletalMeshSkinningDataHandle& Other)
-	{
-		return *this;
-	}
-
-	FSkeletalMeshSkinningDataHandle(FSkeletalMeshSkinningDataHandle& Other)
-	{
-	}
 };
 
 struct FSkeletalMeshSkinningData
@@ -95,15 +66,26 @@ struct FSkeletalMeshSkinningData
 		, DeltaSeconds(.0333f)
 		, CurrIndex(0)
 		, BoneMatrixUsers(0)
+		, TotalPreSkinnedVertsUsers(0)
 		, bForceDataRefresh(false)
 	{}
 
-	void RegisterUser(FSkeletalMeshSkinningDataUsage Usage);
+	void RegisterUser(FSkeletalMeshSkinningDataUsage Usage, bool bNeedsDataImmediately);
 	void UnregisterUser(FSkeletalMeshSkinningDataUsage Usage);
 	bool IsUsed()const;
 	void ForceDataRefresh();
 
 	bool Tick(float InDeltaSeconds, bool bRequirePreskin = true);
+
+	FORCEINLINE void EnterRead()
+	{
+		RWGuard.ReadLock();
+	}
+
+	FORCEINLINE void ExitRead()
+	{
+		RWGuard.ReadUnlock();
+	}
 
 	FORCEINLINE int32 GetBoneCount(bool RequiresPrevious) const
 	{
@@ -187,11 +169,19 @@ struct FSkeletalMeshSkinningData
 		return ComponentTransforms[CurrIndex ^ 1];
 	}
 
+	FORCEINLINE bool NeedPreSkinnedVerts() const
+	{
+		return TotalPreSkinnedVertsUsers > 0;
+	}
+
+	/** Whether this has been ticked this frame.*/
+	mutable bool bHasTicked = false;
+
 private:
 
 	void UpdateBoneTransforms();
 
-	FCriticalSection CriticalSection; 
+	FRWLock RWGuard;
 	
 	TWeakObjectPtr<USkeletalMeshComponent> MeshComp;
 
@@ -203,6 +193,8 @@ private:
 
 	/** Number of users for cached bone matrices. */
 	volatile int32 BoneMatrixUsers;
+	/** Total number of users for pre skinned verts.  (From LODData) */
+	volatile int32 TotalPreSkinnedVertsUsers;
 
 	/** Cached bone matrices. */
 	TArray<FMatrix> BoneRefToLocals[2];
@@ -230,38 +222,58 @@ private:
 
 class FNDI_SkeletalMesh_GeneratedData
 {
-	// Encapsulates skinning data and mesh usage information. 
-	// Set by GetCachedSkinningData and used by TickGeneratedData to determine whether we need to pre-skin or not.
-	struct CachedSkinningDataAndUsage
-	{
-		bool bHasTicked = false;
-		TSharedPtr<FSkeletalMeshSkinningData> SkinningData;
-		FSkeletalMeshSkinningDataUsage Usage;
-	};
-
 	FRWLock CachedSkinningDataGuard;
-	TMap<TWeakObjectPtr<USkeletalMeshComponent>, CachedSkinningDataAndUsage> CachedSkinningData;
+	TMap<TWeakObjectPtr<USkeletalMeshComponent>, TSharedPtr<FSkeletalMeshSkinningData> > CachedSkinningData;
 
 public:
-	FSkeletalMeshSkinningDataHandle GetCachedSkinningData(TWeakObjectPtr<USkeletalMeshComponent>& InComponent, FSkeletalMeshSkinningDataUsage Usage);
+	FSkeletalMeshSkinningDataHandle GetCachedSkinningData(TWeakObjectPtr<USkeletalMeshComponent>& InComponent, FSkeletalMeshSkinningDataUsage Usage, bool bNeedsDataImmediately);
 	void TickGeneratedData(ETickingGroup TickGroup, float DeltaSeconds);
 };
 
 //////////////////////////////////////////////////////////////////////////
 
 UENUM()
+enum class ENDISkeletalMesh_SourceMode : uint8
+{
+	/**
+	Default behavior.
+	- Use "Source" when specified (either set explicitly or via blueprint with Set Niagara Skeletal Mesh Component).
+	- When no source is specified, fall back on attached actor or component.
+	*/
+	Default,
+
+	/**
+	Only use "Source" (either set explicitly or via blueprint with Set Niagara Skeletal Mesh Component).
+	*/
+	Source,
+
+	/**
+	Only use the parent actor or component the system is attached to.
+	*/
+	AttachParent
+};
+
+UENUM()
 enum class ENDISkeletalMesh_SkinningMode : uint8
 {
 	Invalid = (uint8)-1 UMETA(Hidden),
 
-	/** No skinning. */
+	/**
+	No skinning, use for reference pose only.
+	- Bone and socket sampling will be calculated on demand.
+	- Triangle and vertex sampling will be calculated on demand.
+	*/
 	None = 0,
-	/** Skin vertex locations as you need them. Use if you have a high poly mesh or you are sampling the interface a small number of times. */
+	/**
+	Skin as required, use for bone or socket sampling or when reading a subset of triangles or vertices.
+	- Bone and socket sampling will be calculated up front.
+	- Triangle and vertex sampling will be calculated on demand (Note: CPU Access required).
+	*/
 	SkinOnTheFly,
 	/**
-	Pre skins the whole mesh. Makes access to location data on the mesh much faster but incurs a significant initial cost in cpu time and memory to skin the mesh.
-	Cost is proportional to vertex count in the mesh.
-	Use if you are sampling skinned data from the mesh many times and are able to provide a low poly LOD to sample from.
+	Pre-skin the whole mesh, can be more optimal when reading a lot of triangle or vertex data.
+	- Bone and socket sampling will be calculated up front.
+	- Triangle and vertex sampling will be calculated up front (Note: CPU Access required).
 	*/
 	PreSkin,
 };
@@ -308,7 +320,7 @@ public:
 
 	virtual ~FSkeletalMeshGpuSpawnStaticBuffers();
 
-	FORCEINLINE_DEBUGGABLE void Initialise(struct FNDISkeletalMesh_InstanceData* InstData, const FSkeletalMeshLODRenderData& SkeletalMeshLODRenderData,const FSkeletalMeshSamplingLODBuiltData& SkeletalMeshSamplingLODBuiltData);
+	FORCEINLINE_DEBUGGABLE void Initialise(struct FNDISkeletalMesh_InstanceData* InstData, const FSkeletalMeshLODRenderData& SkeletalMeshLODRenderData,const FSkeletalMeshSamplingLODBuiltData& SkeletalMeshSamplingLODBuiltData, FNiagaraSystemInstance* SystemInstance);
 
 	virtual void InitRHI() override;
 	virtual void ReleaseRHI() override;
@@ -322,6 +334,7 @@ public:
 	uint32 GetVertexCount() const { return VertexCount; }
 
 	bool IsSamplingRegionsAllAreaWeighted() const { return bSamplingRegionsAllAreaWeighted; }
+	bool IsUseGpuUniformlyDistributedSampling() const { return bUseGpuUniformlyDistributedSampling; }
 	int32 GetNumSamplingRegionTriangles() const { return NumSamplingRegionTriangles; }
 	int32 GetNumSamplingRegionVertices() const { return NumSamplingRegionVertices; }
 	FShaderResourceViewRHIRef GetSampleRegionsProbSRV() const { return SampleRegionsProbSRV; }
@@ -347,7 +360,6 @@ public:
 	int32 GetFilteredSocketBoneOffset() const { return FilteredSocketBoneOffset; }
 
 protected:
-
 	FVertexBufferRHIRef BufferTriangleUniformSamplerProbaRHI = nullptr;
 	FShaderResourceViewRHIRef BufferTriangleUniformSamplerProbaSRV = nullptr;
 	FVertexBufferRHIRef BufferTriangleUniformSamplerAliasRHI = nullptr;
@@ -399,6 +411,10 @@ protected:
 	uint32 VertexCount = 0;
 	uint32 InputWeightStride = 0;
 	bool bUseGpuUniformlyDistributedSampling = false;
+
+#if STATS
+	int64 GPUMemoryUsage = 0;
+#endif
 };
 
 /**
@@ -448,24 +464,26 @@ private:
 
 	bool bBoneGpuBufferValid = false;
 	bool bPrevBoneGpuBufferValid = false;
+
+#if STATS
+	int64 GPUMemoryUsage = 0;
+#endif
 };
 
 struct FNDISkeletalMesh_InstanceData
 {
-	//Cached ptr to component we sample from. TODO: This should not need to be a weak ptr. We should always be clearing out DIs when the component is destroyed.
-	TWeakObjectPtr<USceneComponent> Component;
+	/** Cached ptr to SkeletalMeshComponent we sample from, when found. Otherwise, the scene component to use to transform the PreviewMesh */
+	TWeakObjectPtr<USceneComponent> SceneComponent;
 
 	/** A binding to the user ptr we're reading the mesh from (if we are). */
 	FNiagaraParameterDirectBinding<UObject*> UserParamBinding;
 
-	//Always reset the DI when the attach parent changes.
+	/** Always reset the DI when the attach parent changes. */
 	TWeakObjectPtr<USceneComponent> CachedAttachParent;
 
 	UObject* CachedUserParam;
 
-	USkeletalMesh* Mesh;
-
-	TWeakObjectPtr<USkeletalMesh> MeshSafe;
+	TWeakObjectPtr<USkeletalMesh> SkeletalMesh;
 
 	/** Handle to our skinning data. */
 	FSkeletalMeshSkinningDataHandle SkinningData;
@@ -476,12 +494,12 @@ struct FNDISkeletalMesh_InstanceData
 	/** Additional sampler for if we need to do area weighting sampling across multiple area weighted regions. */
 	FSkeletalMeshSamplingRegionAreaWeightedSampler SamplingRegionAreaWeightedSampler;
 
-	//Cached ComponentToWorld.
+	/** Cached ComponentToWorld of the mesh (falls back to WorldTransform of the system instance). */
 	FMatrix Transform;
-	//InverseTranspose of above for transforming normals/tangents.
+	/** InverseTranspose of above for transforming normals/tangents. */
 	FMatrix TransformInverseTransposed;
 
-	//Cached ComponentToWorld from previous tick.
+	/** Cached ComponentToWorld from previous tick. */
 	FMatrix PrevTransform;
 
 	/** Time separating Transform and PrevTransform. */
@@ -490,9 +508,9 @@ struct FNDISkeletalMesh_InstanceData
 	/* Excluded bone for some specific functions, generally the root bone which you don't want to include when picking a random bone. */
 	int32 ExcludedBoneIndex = INDEX_NONE;
 
-	/* Number of filtered bones in the array. */
+	/** Number of filtered bones in the array. */
 	int32 NumFilteredBones = 0;
-	/* Number of unfiltered bones in the array. */
+	/** Number of unfiltered bones in the array. */
 	int32 NumUnfilteredBones = 0;
 	/** Indices of the bones filtered by the user followed by the unfiltered bones, if this array is empty no filtering is in effect. */
 	TArray<uint16> FilteredAndUnfilteredBones;
@@ -516,6 +534,12 @@ struct FNDISkeletalMesh_InstanceData
 
 	uint32 ChangeId;
 
+	/** True if SceneComponent was valid on initialization (used to track invalidation of the component on tick) */
+	uint32 bComponentValid : 1;
+
+	/** True if StaticMesh was valid on initialization (used to track invalidation of the mesh on tick) */
+	uint32 bMeshValid : 1;
+
 	/** True if the mesh we're using allows area weighted sampling on GPU. */
 	uint32 bIsGpuUniformlyDistributedSampling : 1;
 
@@ -533,44 +557,30 @@ struct FNDISkeletalMesh_InstanceData
 	/** Flag to stub VM functions that rely on mesh data being accessible on the CPU */
 	bool bAllowCPUMeshDataAccess;
 
-	FORCEINLINE_DEBUGGABLE bool ResetRequired(UNiagaraDataInterfaceSkeletalMesh* Interface)const;
+	/** The MinLOD applicable to the skeletal mesh, based on USkeletalMesh::MinLod which is platform specific.*/
+	int32 MinLODIdx = 0;
+	/** Whether to reset the emitter if any LOD get streamed in. Used when the required LOD was not initially available. */
+	bool bResetOnLODStreamedIn = false;
+	/** The cached LODIdx used to initialize the FNDIStaticMesh_InstanceData.*/
+	int32 CachedLODIdx = 0;
+	/** The referenced LOD data, used to prevent streaming out LODs while they are being referenced*/
+	TRefCountPtr<const FSkeletalMeshLODRenderData> CachedLODData;
+
+	FORCEINLINE_DEBUGGABLE bool ResetRequired(UNiagaraDataInterfaceSkeletalMesh* Interface, FNiagaraSystemInstance* SystemInstance) const;
 
 	bool Init(UNiagaraDataInterfaceSkeletalMesh* Interface, FNiagaraSystemInstance* SystemInstance);
 	FORCEINLINE_DEBUGGABLE bool Tick(UNiagaraDataInterfaceSkeletalMesh* Interface, FNiagaraSystemInstance* SystemInstance, float InDeltaSeconds);
 	FORCEINLINE_DEBUGGABLE void Release();
-	FORCEINLINE int32 GetLODIndex()const { return SkinningData.Usage.GetLODIndex(); }
+	FORCEINLINE int32 GetLODIndex()const { return CachedLODIdx; }
 
-	FORCEINLINE_DEBUGGABLE FSkeletalMeshLODRenderData* GetLODRenderDataAndSkinWeights(FSkinWeightVertexBuffer*& OutSkinWeightBuffer)
+	FORCEINLINE_DEBUGGABLE const FSkinWeightVertexBuffer* GetSkinWeights()
 	{
-		FSkeletalMeshLODRenderData* Ret = nullptr;
-		OutSkinWeightBuffer = nullptr;
-		if (Mesh)
-		{
-			Ret = &Mesh->GetResourceForRendering()->LODRenderData[GetLODIndex()];
-			if (bAllowCPUMeshDataAccess)
-			{
-				USkeletalMeshComponent* SkelComp = Cast<USkeletalMeshComponent>(Component.Get());
-				if (SkelComp != nullptr && SkelComp->SkeletalMesh != nullptr)
-				{
-					OutSkinWeightBuffer = SkelComp->GetSkinWeightBuffer(GetLODIndex());
-				}
-				else
-				{
-					OutSkinWeightBuffer = &Ret->SkinWeightVertexBuffer; // Todo @sckime fix this when main comes in for real
-				}
-			}
-		}
-		return Ret;
-	}
-
-	FORCEINLINE_DEBUGGABLE FSkinWeightVertexBuffer* GetSkinWeights()
-	{
-		USkeletalMeshComponent* SkelComp = Cast<USkeletalMeshComponent>(Component.Get());
+		USkeletalMeshComponent* SkelComp = Cast<USkeletalMeshComponent>(SceneComponent.Get());
 		if (SkelComp != nullptr && SkelComp->SkeletalMesh != nullptr)
 		{
-			return SkelComp->GetSkinWeightBuffer(GetLODIndex());
+			return SkelComp->GetSkinWeightBuffer(CachedLODIdx);			
 		}
-		return &Mesh->GetResourceForRendering()->LODRenderData[GetLODIndex()].SkinWeightVertexBuffer;
+		return CachedLODData ? &CachedLODData->SkinWeightVertexBuffer : nullptr;
 	}
 
 	void UpdateFilteredSocketTransforms();
@@ -590,6 +600,10 @@ class NIAGARA_API UNiagaraDataInterfaceSkeletalMesh : public UNiagaraDataInterfa
 public:
 
 	DECLARE_NIAGARA_DI_PARAMETER();
+
+	/** Controls how to retrieve the Skeletal Mesh Component to attach to. */
+	UPROPERTY(EditAnywhere, Category = "Mesh")
+	ENDISkeletalMesh_SourceMode SourceMode;
 	
 #if WITH_EDITORONLY_DATA
 	/** Mesh used to sample from when not overridden by a source actor from the scene. Only available in editor for previewing. This is removed in cooked builds. */
@@ -609,6 +623,7 @@ public:
 	UPROPERTY(Transient)
 	USkeletalMeshComponent* SourceComponent;
 
+	/** Selects which skinning mode to use, for most cases Skin On The Fly will cover your requirements, see individual tooltips for more information. */
 	UPROPERTY(EditAnywhere, Category="Mesh")
 	ENDISkeletalMesh_SkinningMode SkinningMode;
 
@@ -638,13 +653,21 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Skeleton", meta = (InlineEditConditionToggle))
 	uint8 bExcludeBone : 1;
 
+
+	/** When this option is disabled, we use the previous frame's data for the skeletal mesh and can often issue the simulation early. This greatly
+	reduces overhead and allows the game thread to run faster, but comes at a tradeoff if the dependencies might leave gaps or other visual artifacts.*/
+	UPROPERTY(EditAnywhere, Category = "Performance")
+	bool bRequireCurrentFrameData = true;
+
 	/** Cached change id off of the data interface.*/
 	uint32 ChangeId;
 
 	//~ UObject interface
 	virtual void PostInitProperties()override; 
+	virtual void PostLoad()override;
 #if WITH_EDITOR
-	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;	
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
 #endif
 	//~ UObject interface END
 
@@ -654,6 +677,7 @@ public:
 	virtual void DestroyPerInstanceData(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance)override;
 	virtual bool PerInstanceTick(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance, float DeltaSeconds) override;
 	virtual int32 PerInstanceDataSize()const override { return sizeof(FNDISkeletalMesh_InstanceData); }
+	virtual bool HasPreSimulateTick() const override { return true; }
 
 	virtual void GetFunctions(TArray<FNiagaraFunctionSignature>& OutFunctions)override;
 	virtual void GetVMExternalFunction(const FVMExternalFunctionBindingInfo& BindingInfo, void* InstanceData, FVMExternalFunction &OutFunc)override;
@@ -665,11 +689,11 @@ public:
 	virtual void ValidateFunction(const FNiagaraFunctionSignature& Function, TArray<FText>& OutValidationErrors) override;
 #endif
 	virtual bool HasTickGroupPrereqs() const override { return true; }
-	virtual ETickingGroup CalculateTickGroup(void* PerInstanceData) const override;
+	virtual ETickingGroup CalculateTickGroup(const void* PerInstanceData) const override;
 	virtual bool AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor) const override;
 	//~ UNiagaraDataInterface interface END
 
-	USkeletalMesh* GetSkeletalMesh(class UNiagaraComponent* OwningComponent, TWeakObjectPtr<USceneComponent>& SceneComponent, USkeletalMeshComponent*& FoundSkelComp, FNDISkeletalMesh_InstanceData* InstData = nullptr);
+	USkeletalMesh* GetSkeletalMesh(FNiagaraSystemInstance* SystemInstance, TWeakObjectPtr<USceneComponent>& SceneComponent, USkeletalMeshComponent*& FoundSkelComp, FNDISkeletalMesh_InstanceData* InstData = nullptr);
 
 	virtual void GetCommonHLSL(FString& OutHLSL) override;
 	virtual void GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
@@ -677,6 +701,8 @@ public:
 #if WITH_EDITORONLY_DATA
 	virtual bool UpgradeFunctionCall(FNiagaraFunctionSignature& FunctionSignature) override;
 #endif
+
+	int32 CalculateLODIndexAndSamplingRegions(USkeletalMesh* InMesh, TArray<int32>& OutSamplingRegionIndices, bool& OutAllRegionsAreAreaWeighting) const;
 
 	virtual void ProvidePerInstanceDataForRenderThread(void* DataForRenderThread, void* PerInstanceData, const FNiagaraSystemInstanceID& SystemInstance) override;
 
@@ -828,8 +854,6 @@ public:
 
 	template<typename SkinningHandlerType, typename TransformHandlerType, typename bInterpolated>
 	void GetSkinnedBoneData(FVectorVMContext& Context);	
-	template<typename TransformHandlerType, typename bInterpolated>
-	void GetSkinnedBoneDataFallback(FVectorVMContext& Context);
 	
 	void IsValidBone(FVectorVMContext& Context);
 	void RandomBone(FVectorVMContext& Context);
@@ -855,6 +879,7 @@ public:
 	//////////////////////////////////////////////////////////////////////////
 
 	void SetSourceComponentFromBlueprints(USkeletalMeshComponent* ComponentToUse);
+	void SetSamplingRegionsFromBlueprints(const TArray<FName>& InSamplingRegions);
 };
 
 

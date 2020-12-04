@@ -96,6 +96,7 @@ enum ESaveFlags
 	SAVE_DiffOnly       = 0x00000200,	///< Serializes the package to a special memory archive that performs a diff with an existing file on disk
 	SAVE_DiffCallstack  = 0x00000400,	///< Serializes the package to a special memory archive that compares all differences against a file on disk and dumps relevant callstacks
 	SAVE_ComputeHash    = 0x00000800,	///< Compute the MD5 hash of the cooked data
+	SAVE_CompareLinker	= 0x00001000,	///< Return the linker save to compare against another
 };
 
 /** Package flags, passed into UPackage::SetPackageFlags and related functions */
@@ -129,8 +130,8 @@ enum EPackageFlags
 //	PKG_Unused						= 0x02000000,	
 //	PKG_Unused						= 0x04000000,
 //	PKG_Unused						= 0x08000000,	
-//	PKG_Unused						= 0x10000000,	
-//	PKG_Unused						= 0x20000000,
+	PKG_DynamicImports				= 0x10000000,	///< This package should resolve dynamic imports from its export at runtime.
+	PKG_RuntimeGenerated			= 0x20000000,	///< This package contains elements that are runtime generated, and may not follow standard loading order rules
 	PKG_ReloadingForCooker			= 0x40000000,   ///< This package is reloading in the cooker, try to avoid getting data we will never need. We won't save this package.
 	PKG_FilterEditorOnly			= 0x80000000,	///< Package has editor-only data filtered out
 };
@@ -179,8 +180,8 @@ enum EClassFlags
 	CLASS_Parsed              = 0x00000010u,
 	/** */
 	CLASS_MatchedSerializers  = 0x00000020u,
-	/** All the properties on the class are shown in the advanced section (which is hidden by default) unless SimpleDisplay is specified on the property */
-	CLASS_AdvancedDisplay	  = 0x00000040u,
+	/** Indicates that the config settings for this class will be saved to Project/User*.ini (similar to CLASS_GlobalUserConfig) */
+	CLASS_ProjectUserConfig	  = 0x00000040u,
 	/** Class is a native class - native interfaces will have CLASS_Native set, but not RF_MarkAsNative */
 	CLASS_Native			  = 0x00000080u,
 	/** Don't export to C++ header. */
@@ -246,7 +247,7 @@ ENUM_CLASS_FLAGS(EClassFlags);
 
 /** Flags to inherit from base class */
 #define CLASS_Inherit ((EClassFlags)(CLASS_Transient | CLASS_DefaultConfig | CLASS_Config | CLASS_PerObjectConfig | CLASS_ConfigDoNotCheckDefaults | CLASS_NotPlaceable \
-						| CLASS_Const | CLASS_HasInstancedReference | CLASS_Deprecated | CLASS_DefaultToInstanced | CLASS_GlobalUserConfig))
+						| CLASS_Const | CLASS_HasInstancedReference | CLASS_Deprecated | CLASS_DefaultToInstanced | CLASS_GlobalUserConfig | CLASS_ProjectUserConfig))
 
 /** These flags will be cleared by the compiler when the class is parsed during script compilation */
 #define CLASS_RecompilerClear ((EClassFlags)(CLASS_Inherit | CLASS_Abstract | CLASS_NoExport | CLASS_Native | CLASS_Intrinsic | CLASS_TokenStreamAssembled))
@@ -262,6 +263,7 @@ ENUM_CLASS_FLAGS(EClassFlags);
 	CLASS_Abstract | \
 	CLASS_DefaultConfig | \
 	CLASS_GlobalUserConfig | \
+	CLASS_ProjectUserConfig | \
 	CLASS_Config | \
 	CLASS_Transient | \
 	CLASS_Native | \
@@ -277,7 +279,6 @@ ENUM_CLASS_FLAGS(EClassFlags);
 	CLASS_Deprecated | \
 	CLASS_HideDropDown | \
 	CLASS_Intrinsic | \
-	CLASS_AdvancedDisplay | \
 	CLASS_Const | \
 	CLASS_MinimalAPI | \
 	CLASS_RequiredAPI | \
@@ -384,7 +385,7 @@ enum EPropertyFlags : uint64
 	CPF_InstancedReference				= 0x0000000000080000,	///< Property is a component references.
 	//CPF_								= 0x0000000000100000,	///<
 	CPF_DuplicateTransient				= 0x0000000000200000,	///< Property should always be reset to the default value during any type of duplication (copy/paste, binary duplication, etc.)
-	CPF_SubobjectReference				= 0x0000000000400000,	///< Property contains subobject references (TSubobjectPtr)
+	//CPF_								= 0x0000000000400000,	///< 
 	//CPF_    							= 0x0000000000800000,	///< 
 	CPF_SaveGame						= 0x0000000001000000,	///< Property should be serialized for save games, this is only checked for game-specific archives with ArIsSaveGame
 	CPF_NoClear							= 0x0000000002000000,	///< Hide clear (and browse) button.
@@ -502,7 +503,7 @@ enum EObjectFlags
 	RF_FinishDestroyed			=0x00010000,	///< FinishDestroy has been called on the object.
 
 	// Misc. Flags
-	RF_BeingRegenerated			=0x00020000,	///< Flagged on UObjects that are used to create UClasses (e.g. Blueprints) while they are regenerating their UClass on load (See FLinkerLoad::CreateExport())
+	RF_BeingRegenerated			=0x00020000,	///< Flagged on UObjects that are used to create UClasses (e.g. Blueprints) while they are regenerating their UClass on load (See FLinkerLoad::CreateExport()), as well as UClass objects in the midst of being created
 	RF_DefaultSubObject			=0x00040000,	///< Flagged on subobjects that are defaults
 	RF_WasLoaded				=0x00080000,	///< Flagged on UObjects that were loaded
 	RF_TextExportTransient		=0x00100000,	///< Do not export object to text form (e.g. copy/paste). Generally used for sub-objects that can be regenerated from data in their parent object.
@@ -513,10 +514,11 @@ enum EObjectFlags
 	RF_NonPIEDuplicateTransient	=0x02000000,	///< Object should not be included for duplication unless it's being duplicated for a PIE session
 	RF_Dynamic					=0x04000000,	///< Field Only. Dynamic field - doesn't get constructed during static initialization, can be constructed multiple times
 	RF_WillBeLoaded				=0x08000000,	///< This object was constructed during load and will be loaded shortly
+	RF_HasExternalPackage		=0x10000000,	///< This object has an external package assigned and should look it up when getting the outermost package
 };
 
 /** Mask for all object flags */
-#define RF_AllFlags				(EObjectFlags)0x0fffffff	///< All flags, used mainly for error checking
+#define RF_AllFlags				(EObjectFlags)0x1fffffff	///< All flags, used mainly for error checking
 
 /** Flags to load from unreal asset files */
 #define RF_Load						((EObjectFlags)(RF_Public | RF_Standalone | RF_Transactional | RF_ClassDefaultObject | RF_ArchetypeObject | RF_DefaultSubObject | RF_TextExportTransient | RF_InheritableComponentTemplate | RF_DuplicateTransient | RF_NonPIEDuplicateTransient)) 
@@ -548,6 +550,16 @@ enum class EInternalObjectFlags : int32
 	AllFlags = ReachableInCluster | ClusterRoot | Native | Async | AsyncLoading | Unreachable | PendingKill | RootSet
 };
 ENUM_CLASS_FLAGS(EInternalObjectFlags);
+
+/** Flags describing a UEnum */
+enum class EEnumFlags
+{
+	None,
+
+	Flags = 0x00000001 // Whether the UEnum represents a set of flags
+};
+
+ENUM_CLASS_FLAGS(EEnumFlags)
 
 /*----------------------------------------------------------------------------
 	Core types.
@@ -750,8 +762,11 @@ namespace UC
 		/// Marks this class as an 'early access' preview (while not considered production-ready, it's a step beyond 'experimental' and is being provided as a preview of things to come)
 		EarlyAccessPreview,
 
-		// Some properties are stored once per class in a sidecar structure and not on instances of the class
+		/// Some properties are stored once per class in a sidecar structure and not on instances of the class
 		SparseClassDataType,
+
+		/// Specifies the struct that contains the CustomThunk implementations
+		CustomThunkTemplates
 	};
 }
 
@@ -1099,6 +1114,9 @@ namespace UM
 
 		/// [StructMetadata] Pins in Make and Break nodes are hidden by default.
 		HiddenByDefault,
+
+		/// [StructMetadata] Indicates that node pins of this struct type cannot be split
+		DisableSplitPin,
 	};
 
 	// Metadata usable in UPROPERTY
@@ -1194,6 +1212,9 @@ namespace UM
 
 		/// [PropertyMetadata] Used by asset properties. Indicates that the asset pickers should always show engine content
 		ForceShowEngineContent,
+
+		/// [PropertyMetadata] Used by asset properties. Indicates that the asset pickers should always show plugin content
+		ForceShowPluginContent,
 
 		/// [PropertyMetadata] Used for FColor and FLinearColor properties. Indicates that the Alpha property should be hidden when displaying the property widget in the details.
 		HideAlphaChannel,
@@ -1369,7 +1390,11 @@ namespace UM
 		// DeprecationMessage, (Commented out so as to avoid duplicate name with version in the Class section, but still show in the function section)
 
 		/// [FunctionMetadata] For BlueprintCallable functions indicates that an input/output (determined by whether it is an input/output enum) exec pin should be created for each entry in the enum specified.
+		/// Use ReturnValue to refer to the return value of the function. Also works for bools.
 		ExpandEnumAsExecs,
+
+		// Synonym for ExpandEnumAsExecs
+		ExpandBoolAsExecs,
 
 		/// [ClassMetadata] [PropertyMetadata] [FunctionMetadata] The name to display for this class, property, or function instead of auto-generating it from the name.
 		// DisplayName, (Commented out so as to avoid duplicate name with version in the Class section, but still show in the function section)

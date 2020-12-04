@@ -114,12 +114,34 @@ public class SplashActivity extends Activity
 		{
 			String model = android.os.Build.MODEL;
 			if (model.startsWith("SM-G970") || model.startsWith("SM-G973") || model.startsWith("SM-G975") ||
-				model.startsWith("SC-03L") || model.startsWith("SCV41") || model.startsWith("SC-04L") || model.startsWith("SCV42"))
+				model.startsWith("SC-03L") || model.startsWith("SCV41") || model.startsWith("SC-04L") ||
+				model.startsWith("SCV42") || model.startsWith("SM-N97") || model.startsWith("SM-F700") ||
+				model.startsWith("SM-G98") || model.startsWith("SCV47") || model.startsWith("SCG01") ||
+				model.startsWith("SCG02") || model.startsWith("SC-51A") || model.startsWith("SC-52A") ||
+				android.os.Build.VERSION.SDK_INT >= 28)
 			{
 				BlockDisplayCutout = false;
 			}
 		}
-			
+		else if (android.os.Build.MANUFACTURER.equals("Xiaomi"))
+		{
+			String model = android.os.Build.MODEL;
+			if (model.startsWith("POCOPHONE F1"))
+			{
+				BlockDisplayCutout = false;
+			}
+		}
+		else if (android.os.Build.MANUFACTURER.equals("OnePlus"))
+		{
+			String model = android.os.Build.MODEL;
+			if (model.startsWith("IN2020") || model.startsWith("IN2021") || model.startsWith("IN2023") ||
+				model.startsWith("IN2025") || model.startsWith("IN2010") || model.startsWith("IN2011") ||
+				model.startsWith("IN2013") || model.startsWith("IN2015") || model.startsWith("IN2017") ||
+				model.startsWith("IN2019") || model.startsWith("AC2001") || model.startsWith("AC2003"))
+			{
+				BlockDisplayCutout = false;
+			}
+		}
 		if (BlockDisplayCutout)
 		{
 			UseDisplayCutout = false;

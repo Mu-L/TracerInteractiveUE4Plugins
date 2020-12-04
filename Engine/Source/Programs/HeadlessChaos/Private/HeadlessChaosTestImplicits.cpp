@@ -272,8 +272,8 @@ namespace ChaosTest {
 		}
 
 		// intersection
-		EXPECT_TRUE(Subject.Intersects(TAABB<T, 3>(TVector3(0.5), TVector3(1.5))));
-		EXPECT_FALSE(Subject.Intersects(TAABB<T, 3>(TVector3(2), TVector3(3))));
+		EXPECT_TRUE(Subject.BoundingBox().Intersects(TAABB<T, 3>(TVector3(0.5), TVector3(1.5))));
+		EXPECT_FALSE(Subject.BoundingBox().Intersects(TAABB<T, 3>(TVector3(2), TVector3(3))));
 
 		{// closest point near origin (+)
 			TVector<T, 3> InputPoint(0, 0, 2);
@@ -444,16 +444,16 @@ namespace ChaosTest {
 		EXPECT_VECTOR_NEAR_ERR(Subject.Normal(TVector3(-3 / 2., 0., 3 / 2.)), TVector3(-1, 0, 1).GetSafeNormal(), KINDA_SMALL_NUMBER, Error);
 
 		// inside phi
-		EXPECT_EQ(Subject.SignedDistance(TVector3(1 / 2., 1 / 2., 1 / 2.)), -TVector3(1 / 2.).Size()) << *Error;
-		EXPECT_EQ(Subject.SignedDistance(TVector3(-1 / 2., -1 / 2., -1 / 2.)), -TVector3(1 / 2.).Size()) << *Error;
+		EXPECT_NEAR(Subject.SignedDistance(TVector3(1 / 2., 1 / 2., 1 / 2.)), -TVector3(1 / 2.).Size(), KINDA_SMALL_NUMBER) << *Error;
+		EXPECT_NEAR(Subject.SignedDistance(TVector3(-1 / 2., -1 / 2., -1 / 2.)), -TVector3(1 / 2.).Size(), KINDA_SMALL_NUMBER) << *Error;
 		EXPECT_NEAR(Subject.SignedDistance(TVector3(0., sqrt(2) / 4., -sqrt(2) / 4.)), -1 / 2., KINDA_SMALL_NUMBER) << *Error;
 		EXPECT_NEAR(Subject.SignedDistance(TVector3(0., -sqrt(2) / 4., sqrt(2) / 4.)), -1 / 2., KINDA_SMALL_NUMBER) << *Error;
 		EXPECT_NEAR(Subject.SignedDistance(TVector3(sqrt(2) / 4., 0., -sqrt(2) / 4.)), -1 / 2., KINDA_SMALL_NUMBER) << *Error;
 		EXPECT_NEAR(Subject.SignedDistance(TVector3(-sqrt(2) / 4., 0., sqrt(2) / 4.)), -1 / 2., KINDA_SMALL_NUMBER) << *Error;
 
 		// outside phi
-		EXPECT_EQ(Subject.SignedDistance(TVector3(3 / 2., 3 / 2., 3 / 2.)), TVector3(1 / 2.).Size()) << *Error;
-		EXPECT_EQ(Subject.SignedDistance(TVector3(-3 / 2., -3 / 2., -3 / 2.)), TVector3(1 / 2.).Size()) << *Error;
+		EXPECT_NEAR(Subject.SignedDistance(TVector3(3 / 2., 3 / 2., 3 / 2.)), TVector3(1 / 2.).Size(), KINDA_SMALL_NUMBER) << *Error;
+		EXPECT_NEAR(Subject.SignedDistance(TVector3(-3 / 2., -3 / 2., -3 / 2.)), TVector3(1 / 2.).Size(), KINDA_SMALL_NUMBER) << *Error;
 		EXPECT_NEAR(Subject.SignedDistance(TVector3(0., 3 * sqrt(2) / 4., -3 * sqrt(2) / 4.)), 1 / 2., KINDA_SMALL_NUMBER) << *Error;
 		EXPECT_NEAR(Subject.SignedDistance(TVector3(0., -3 * sqrt(2) / 4., 3 * sqrt(2) / 4.)), 1 / 2., KINDA_SMALL_NUMBER) << *Error;
 		EXPECT_NEAR(Subject.SignedDistance(TVector3(3 * sqrt(2) / 4., 0., -3 * sqrt(2) / 4.)), 1 / 2., KINDA_SMALL_NUMBER) << *Error;
@@ -1238,7 +1238,7 @@ namespace ChaosTest {
 				EXPECT_NE(Tri.Z, 8);
 			}
 
-			FConvex Convex(Particles);
+			FConvex Convex(Particles, 0.0f);
 			const TParticles<T, 3>& CulledParticles = Convex.GetSurfaceParticles();
 			EXPECT_EQ(CulledParticles.Size(), 8);
 
@@ -1344,6 +1344,46 @@ namespace ChaosTest {
 			EXPECT_EQ(Indices.Num(), 8);
 		}
 		{
+			// This is a specific case where without coplaner face merging and
+			// a large enough epsilon for building horizons in hull generation
+			// (tested to fail with 1e-1) we will generate a non-convex hull
+			// Using a scaled epsilon resolves this case
+			Chaos::TParticles<T, 3> Particles;
+			Particles.AddParticles(9);
+			Particles.X(0) = TVector<float, 3>(-1, -1, -1);
+			Particles.X(1) = TVector<float, 3>(-1, -1, 1);
+			Particles.X(2) = TVector<float, 3>(-1, 1, -1);
+			Particles.X(3) = TVector<float, 3>(-1, 1, 1);
+			Particles.X(4) = TVector<float, 3>(1, -1, -1);
+			Particles.X(5) = TVector<float, 3>(1, -1, 1);
+			Particles.X(6) = TVector<float, 3>(1, 1, -1);
+			Particles.X(7) = TVector<float, 3>(1, 1, 1);
+			Particles.X(8) = TVector<float, 3>(0.966962576, -0.0577232838, 0.959515572);
+			
+			TArray<TVector<int32, 3>> Indices;
+			Chaos::FConvexBuilder::Params BuildParams;
+			BuildParams.HorizonEpsilon = Chaos::FConvexBuilder::SuggestEpsilon(Particles);
+
+			Chaos::FConvexBuilder::BuildConvexHull(Particles, Indices, BuildParams);
+
+			EXPECT_EQ(Indices.Num(), 12);
+
+			for (const TVector<int32, 3>& Tri : Indices)
+			{
+				for (int32 i = 0; i < 3; ++i)
+				{
+					TVector<T, 3> V = Particles.X(Tri[i]);
+					TVector<T, 3> VAbs = V.GetAbs();
+					T Max = VAbs.GetMax();
+					EXPECT_GE(Max, 1 - 1e-2);
+				}
+			}
+		}
+		{
+			// Build a box and fill it with many other points. Correct hull generation should produce
+			// only the original box - ignoring all interior and coplanar points.
+			// Note: If hull generation is changed to support non-triangular faces the conditions here
+			// will need to change as a correct hull in that method will produce only 6 faces not 12
 			Chaos::TParticles<T, 3> Particles;
 			int32 NumParticles = 3600;
 			Particles.AddParticles(NumParticles);
@@ -1356,16 +1396,21 @@ namespace ChaosTest {
 			Particles.X(6) = TVector<float, 3>(1, 1, -1);
 			Particles.X(7) = TVector<float, 3>(1, 1, 1);
 			FRandomStream Stream(42);
-			for (int i = 8; i < NumParticles; ++i)
+			for(int i = 8; i < NumParticles; ++i)
 			{
 				Particles.X(i) = TVector<float, 3>(Stream.FRandRange(-1.f, 1.f), Stream.FRandRange(-1.f, 1.f), Stream.FRandRange(-1.f, 1.f));
 			}
 			TArray<TVector<int32, 3>> Indices;
-			Chaos::FConvexBuilder::BuildConvexHull(Particles, Indices);
-			//EXPECT_EQ(Indices.Num(), 12); todo(ocohen): handle coplaner verts
-			for (auto Tri : Indices)
+
+			Chaos::FConvexBuilder::Params BuildParams;
+			BuildParams.HorizonEpsilon = Chaos::FConvexBuilder::SuggestEpsilon(Particles);
+
+			Chaos::FConvexBuilder::BuildConvexHull(Particles, Indices, BuildParams);
+
+			EXPECT_EQ(Indices.Num(), 12);
+			for(auto Tri : Indices)
 			{
-				for (int i = 0; i < 3; ++i)
+				for(int i = 0; i < 3; ++i)
 				{
 					TVector<T, 3> V = Particles.X(Tri[i]);
 					TVector<T, 3> VAbs = V.GetAbs();
@@ -1401,12 +1446,12 @@ namespace ChaosTest {
 		Particles.X(16) = TVector<float, 3>(-1.0f, 0.0f, 0.0f);
 		Particles.X(17) = TVector<float, 3>(0, 0, -2.0f);
 
-		FConvex Convex(Particles);
+		FConvex Convex(Particles, 0.0f);
 
 		// capture original details
 		uint32 OriginalNumberParticles = Convex.GetSurfaceParticles().Size();
 		int32 OriginalNumberFaces = Convex.GetFaces().Num();
-		TBox<T, 3> OriginalBoundingBox = Convex.BoundingBox();
+		TAABB<T, 3> OriginalBoundingBox = Convex.BoundingBox();
 
 		const TParticles<T, 3>& CulledParticles = Convex.GetSurfaceParticles();
 		const TArray<TPlaneConcrete<T, 3>> Planes = Convex.GetFaces();
@@ -1421,7 +1466,7 @@ namespace ChaosTest {
 		// capture new details
 		uint32 NewNumberParticles = Convex.GetSurfaceParticles().Size();
 		int32 NewNumberFaces = Convex.GetFaces().Num();
-		TBox<T, 3> NewBoundingBox = Convex.BoundingBox();
+		TAABB<T, 3> NewBoundingBox = Convex.BoundingBox();
 
 		EXPECT_EQ(OriginalNumberParticles, 18);
 		EXPECT_EQ(NewNumberParticles, 10);
@@ -1573,5 +1618,49 @@ namespace ChaosTest {
 		}
 	}
 	template void ImplicitScaled2<float>();
+
+
+	template <typename T>
+	void UpdateImplicitUnion()
+	{
+		typedef TVector<T, 3> TVector3;
+		TUniquePtr<FImplicitObjectUnion> MUnionedObjects;
+
+		TArray<TUniquePtr<FImplicitObject>> Objects;
+		Objects.Add(MakeUnique<TCylinder<T>>(TVector<T, 3>(0, 0, 1), TVector3(0), 1));
+		Objects.Add(MakeUnique<TCylinder<T>>(TVector<T, 3>(0, 0, -1), TVector3(0), 1));
+		MUnionedObjects.Reset(new Chaos::FImplicitObjectUnion(std::move(Objects)));
+
+		TArray<TUniquePtr<FImplicitObject>> Objects2;
+		Objects2.Add(MakeUnique<TSphere<T, 3>>(TVector<T, 3>(4, 0, 0), 1));
+		Objects2.Add(MakeUnique<TSphere<T, 3>>(TVector<T, 3>(5, 0, 0), 2));
+		Objects2.Add(MakeUnique<TSphere<T, 3>>(TVector<T, 3>(10, 0, 0), 3));
+
+		const TAABB<FReal, 3> OriginalBounds = MUnionedObjects->BoundingBox();
+
+		EXPECT_EQ(MUnionedObjects->GetObjects().Num(), 2);
+		EXPECT_FLOAT_EQ(OriginalBounds.Extents().X, 2.f);
+		EXPECT_FLOAT_EQ(OriginalBounds.Extents().Y, 2.f);
+		EXPECT_FLOAT_EQ(OriginalBounds.Extents().Z, 4.f);
+
+		MUnionedObjects->Combine(Objects2);
+
+		EXPECT_EQ(MUnionedObjects->GetObjects().Num(), 5);
+		const TAABB<FReal, 3> CombinedBounds = MUnionedObjects->BoundingBox();
+		EXPECT_FLOAT_EQ(CombinedBounds.Extents().X, 14.f);
+		EXPECT_FLOAT_EQ(CombinedBounds.Extents().Y, 6.f);
+		EXPECT_FLOAT_EQ(CombinedBounds.Extents().Z, 6.f);
+
+		MUnionedObjects->RemoveAt(1);
+		MUnionedObjects->RemoveAt(0);
+
+		EXPECT_EQ(MUnionedObjects->GetObjects().Num(), 3);
+		const TAABB<FReal, 3> RemovedBounds = MUnionedObjects->BoundingBox();
+		EXPECT_FLOAT_EQ(RemovedBounds.Extents().X, 10.f);
+		EXPECT_FLOAT_EQ(RemovedBounds.Extents().Y, 6.f);
+		EXPECT_FLOAT_EQ(RemovedBounds.Extents().Z, 6.f);
+
+	}
+	template void UpdateImplicitUnion<float>();
 
 }

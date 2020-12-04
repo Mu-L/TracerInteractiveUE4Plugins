@@ -305,8 +305,8 @@ void UAutomatedLevelSequenceCapture::Initialize(TSharedPtr<FSceneViewport> InVie
 				bUseCustomStartFrame = true;
 				bUseCustomEndFrame = true;
 
-				FFrameNumber StartFrame = MovieScene::DiscreteInclusiveLower(CinematicShotSection->GetRange());
-				FFrameNumber EndFrame = MovieScene::DiscreteExclusiveUpper(CinematicShotSection->GetRange());
+				FFrameNumber StartFrame = UE::MovieScene::DiscreteInclusiveLower(CinematicShotSection->GetRange());
+				FFrameNumber EndFrame = UE::MovieScene::DiscreteExclusiveUpper(CinematicShotSection->GetRange());
 
 				CustomStartFrame = FFrameRate::TransformTime(StartFrame, TickResolution, DisplayRate).CeilToFrame();
 				CustomEndFrame = FFrameRate::TransformTime(EndFrame, TickResolution, DisplayRate).CeilToFrame();
@@ -422,14 +422,14 @@ bool UAutomatedLevelSequenceCapture::InitializeShots()
 
 			if (ShotMovieScene)
 			{
-				TRange<FFrameNumber> NewPlaybackRange = MovieScene::ExpandRange(ShotMovieScene->GetPlaybackRange(), FFrameNumber(FMath::FloorToInt(HandleFramesResolutionSpace.Value * OuterToInnerScale)));
+				TRange<FFrameNumber> NewPlaybackRange = UE::MovieScene::ExpandRange(ShotMovieScene->GetPlaybackRange(), FFrameNumber(FMath::FloorToInt(HandleFramesResolutionSpace.Value * OuterToInnerScale)));
 				ShotMovieScene->SetPlaybackRange(NewPlaybackRange, false);
 			}
 
 			ShotSection->SetIsLocked(false);
 			ShotSection->SetIsActive(false);
 
-			ShotSection->SetRange(MovieScene::ExpandRange(ShotSection->GetRange(), HandleFramesResolutionSpace));
+			ShotSection->SetRange(UE::MovieScene::ExpandRange(ShotSection->GetRange(), HandleFramesResolutionSpace));
 		}
 	}
 	return NumShots > 0;
@@ -519,12 +519,12 @@ bool UAutomatedLevelSequenceCapture::SetupShot(FFrameNumber& StartTime, FFrameNu
 			// the playback range intersected the middle of the shot before we started manipulating ranges. We manually expand the master
 			// Movie Sequence's playback range by the number of handle frames to allow handle frames to work as expected on first/last shot.
 			FFrameNumber HandleFramesResolutionSpace = ConvertFrameTime(Settings.HandleFrames, Settings.GetFrameRate(), MovieScene->GetTickResolution()).FloorToFrame();
-			TRange<FFrameNumber> ExtendedCachedPlaybackRange = MovieScene::ExpandRange(CachedPlaybackRange, HandleFramesResolutionSpace);
+			TRange<FFrameNumber> ExtendedCachedPlaybackRange = UE::MovieScene::ExpandRange(CachedPlaybackRange, HandleFramesResolutionSpace);
 
 			TRange<FFrameNumber> TotalRange = TRange<FFrameNumber>::Intersection(ShotSection->GetRange(), ExtendedCachedPlaybackRange);
 
-			StartTime = TotalRange.IsEmpty() ? FFrameNumber(0) : MovieScene::DiscreteInclusiveLower(TotalRange);
-			EndTime   = TotalRange.IsEmpty() ? FFrameNumber(0) : MovieScene::DiscreteExclusiveUpper(TotalRange);
+			StartTime = TotalRange.IsEmpty() ? FFrameNumber(0) : UE::MovieScene::DiscreteInclusiveLower(TotalRange);
+			EndTime   = TotalRange.IsEmpty() ? FFrameNumber(0) : UE::MovieScene::DiscreteExclusiveUpper(TotalRange);
 
 			MovieScene->SetPlaybackRange(StartTime, (EndTime - StartTime).Value, false);
 			MovieScene->MarkAsChanged();
@@ -548,8 +548,8 @@ void UAutomatedLevelSequenceCapture::SetupFrameRange()
 				FFrameRate           SourceFrameRate = MovieScene->GetTickResolution();
 				TRange<FFrameNumber> SequenceRange   = MovieScene->GetPlaybackRange();
 
-				FFrameNumber PlaybackStartFrame = ConvertFrameTime(MovieScene::DiscreteInclusiveLower(SequenceRange), SourceFrameRate, Settings.GetFrameRate()).CeilToFrame();
-				FFrameNumber PlaybackEndFrame   = ConvertFrameTime(MovieScene::DiscreteExclusiveUpper(SequenceRange), SourceFrameRate, Settings.GetFrameRate()).CeilToFrame();
+				FFrameNumber PlaybackStartFrame = ConvertFrameTime(UE::MovieScene::DiscreteInclusiveLower(SequenceRange), SourceFrameRate, Settings.GetFrameRate()).CeilToFrame();
+				FFrameNumber PlaybackEndFrame   = ConvertFrameTime(UE::MovieScene::DiscreteExclusiveUpper(SequenceRange), SourceFrameRate, Settings.GetFrameRate()).CeilToFrame();
 
 				if( bUseCustomStartFrame )
 				{
@@ -601,7 +601,7 @@ void UAutomatedLevelSequenceCapture::SetupFrameRange()
 				// Override the movie scene's playback range
 				Actor->SequencePlayer->SetFrameRate(Settings.GetFrameRate());
 				Actor->SequencePlayer->SetFrameRange(PlaybackStartFrame.Value, (PlaybackEndFrame - PlaybackStartFrame).Value);
-				Actor->SequencePlayer->JumpToFrame(PlaybackStartFrame.Value);
+				Actor->SequencePlayer->SetPlaybackPosition(FMovieSceneSequencePlaybackParams(FFrameTime(PlaybackStartFrame), EUpdatePositionMethod::Jump));
 
 				Actor->SequencePlayer->SetSnapshotOffsetFrames(WarmUpFrameCount);
 			}
@@ -741,7 +741,7 @@ void UAutomatedLevelSequenceCapture::OnTick(float DeltaSeconds)
 			FFrameNumber EndTimePlayRateSpace   = ConvertFrameTime(EndTime,   MovieScene->GetTickResolution(), Settings.GetFrameRate()).CeilToFrame();
 
 			Actor->SequencePlayer->SetFrameRange(StartTimePlayRateSpace.Value, (EndTimePlayRateSpace - StartTimePlayRateSpace).Value);
-			Actor->SequencePlayer->JumpToFrame(StartTimePlayRateSpace.Value);
+			Actor->SequencePlayer->SetPlaybackPosition(FMovieSceneSequencePlaybackParams(FFrameTime(StartTimePlayRateSpace), EUpdatePositionMethod::Jump));
 			Actor->SequencePlayer->Play();
 
 			// We need to re-register to the binding when we start each shot. When a shot reaches the last frame it unregisters the binding so that
@@ -1080,7 +1080,7 @@ double UAutomatedLevelSequenceCapture::GetEstimatedCaptureDurationSeconds() cons
 	if (Actor)
 	{
 		TRange<FFrameNumber> PlaybackRange = Actor->GetSequence()->GetMovieScene()->GetPlaybackRange();
-		int32 MovieSceneDurationFrameCount = MovieScene::DiscreteSize(PlaybackRange);
+		int32 MovieSceneDurationFrameCount = UE::MovieScene::DiscreteSize(PlaybackRange);
 		
 		return Actor->GetSequence()->GetMovieScene()->GetTickResolution().AsSeconds(FFrameTime(FFrameNumber(MovieSceneDurationFrameCount)));
 	}

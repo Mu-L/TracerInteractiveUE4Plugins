@@ -7,6 +7,7 @@
 
 #include "Chaos/PBDEvolution.h"
 #include "Chaos/GeometryParticles.h"
+#include "Chaos/PBDAxialSpringConstraints.h"
 #include "Chaos/PBDSpringConstraints.h"
 #include "Chaos/TriangleMesh.h"
 #include "Chaos/Utilities.h"
@@ -98,13 +99,31 @@ namespace ChaosTest {
 		const T Stiffness)
 	{
 		check(Stiffness >= 0. && Stiffness <= 1.);
-		Evolution->AddPBDConstraintFunction(
-			[SpringConstraints = Chaos::TPBDSpringConstraints<float, 3>(
-				Evolution->Particles(), Topology, Stiffness)](
-					TPBDParticles<float, 3>& InParticles, const float Dt) 
-			{
-				SpringConstraints.Apply(InParticles, Dt);
-			});
+		// TODO: Use Add AddConstraintRuleRange
+		//Evolution->AddPBDConstraintFunction(
+		//	[SpringConstraints = Chaos::FPBDSpringConstraints(
+		//		Evolution->Particles(), Topology, Stiffness)](
+		//			TPBDParticles<float, 3>& InParticles, const float Dt) 
+		//	{
+		//		SpringConstraints.Apply(InParticles, Dt);
+		//	});
+	}
+	
+	template <class T, int d, class TEvolutionPtr>
+	void AddAxialConstraint(
+		TEvolutionPtr& Evolution,
+		TArray<Chaos::TVector<int32, d>>&& Topology,
+		const T Stiffness)
+	{
+		check(Stiffness >= 0. && Stiffness <= 1.);
+		// TODO: Use Add AddConstraintRuleRange
+		//Evolution->AddPBDConstraintFunction(
+		//	[SpringConstraints = Chaos::FPBDAxialSpringConstraints(
+		//		Evolution->Particles(), MoveTemp(Topology), Stiffness)](
+		//			TPBDParticles<float, 3>& InParticles, const float Dt) 
+		//	{
+		//		SpringConstraints.Apply(InParticles, Dt);
+		//	});
 	}
 
 	template <class T, class TEvolutionPtr>
@@ -286,5 +305,29 @@ namespace ChaosTest {
 		Reset(Evolution->Particles(), InitialPoints);
 	}
 	template void DeformableGravity<float>();
+
+	template <class T>
+	void EdgeConstraints()
+	{
+		TUniquePtr<TPBDEvolution<T, 3>> Evolution = InitPBDEvolution<T>();
+		Chaos::TTriangleMesh<T> TriMesh;
+		auto& Particles = Evolution->Particles();
+		Particles.AddParticles(2145);
+		TArray<TVector<int32, 3>> Triangles;
+		Triangles.SetNum(2048);
+		// 32 n, 32 m
+		// 6 + 4*(n-1) + (m - 1)(3 + 2*(n-1)) = 2*n*m
+		for (int32 TriIndex = 0; TriIndex < 2048; TriIndex++)
+		{
+			int32 i = ((float)rand()) / ((float)RAND_MAX) * 2144;
+			int32 j = ((float)rand()) / ((float)RAND_MAX) * 2144;
+			int32 k = ((float)rand()) / ((float)RAND_MAX) * 2144;
+			Triangles[TriIndex] = TVector<int32, 3>(i, j, k);
+		}
+		AddEdgeLengthConstraint(Evolution, Triangles, 1.0);
+		AddAxialConstraint(Evolution, MoveTemp(Triangles), 1.0);
+	}
+	template void EdgeConstraints<float>();
+
 
 } // namespace ChaosTest

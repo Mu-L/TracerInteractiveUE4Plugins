@@ -16,7 +16,6 @@
 #include "NiagaraScript.h"
 #include "NiagaraNodeOutput.h"
 #include "NiagaraOverviewNode.h"
-#include "EdGraphUtilities.h"
 #include "NiagaraConstants.h"
 #include "Widgets/SWidget.h"
 #include "Widgets/Text/STextBlock.h"
@@ -30,17 +29,14 @@
 #include "ViewModels/NiagaraEmitterHandleViewModel.h"
 #include "ViewModels/NiagaraOverviewGraphViewModel.h"
 #include "ViewModels/NiagaraSystemSelectionViewModel.h"
-#include "HAL/PlatformApplicationMisc.h"
 #include "AssetRegistryModule.h"
 #include "Misc/FeedbackContext.h"
 #include "EdGraphSchema_Niagara.h"
 #include "HAL/PlatformFilemanager.h"
 #include "Misc/FileHelper.h"
 #include "EdGraph/EdGraphPin.h"
-#include "NiagaraNodeWriteDataSet.h"
 #include "ViewModels/Stack/NiagaraParameterHandle.h"
 #include "NiagaraNodeStaticSwitch.h"
-#include "NiagaraNodeFunctionCall.h"
 #include "NiagaraParameterMapHistory.h"
 #include "ScopedTransaction.h"
 #include "NiagaraStackEditorData.h"
@@ -49,8 +45,8 @@
 #include "ContentBrowserModule.h"
 #include "Modules/ModuleManager.h"
 #include "AssetToolsModule.h"
+#include "NiagaraCustomVersion.h"
 #include "Subsystems/AssetEditorSubsystem.h"
-#include "Framework/Commands/GenericCommands.h"
 #include "UObject/TextProperty.h"
 #include "Editor/EditorEngine.h"
 #include "Widgets/Notifications/SNotificationList.h"
@@ -296,12 +292,13 @@ void FNiagaraEditorUtilities::FixUpPastedNodes(UEdGraph* Graph, TSet<UEdGraphNod
 		}
 	}
 
+	FPinCollectorArray InputPins;
 	for (UEdGraphNode* PastedNode : PastedNodes)
 	{
 		UNiagaraNodeParameterMapSet* ParameterMapSetNode = Cast<UNiagaraNodeParameterMapSet>(PastedNode);
 		if (ParameterMapSetNode != nullptr)
 		{
-			TArray<UEdGraphPin*> InputPins;
+			InputPins.Reset();
 			ParameterMapSetNode->GetInputPins(InputPins);
 			for (UEdGraphPin* InputPin : InputPins)
 			{
@@ -422,6 +419,15 @@ bool FNiagaraEditorUtilities::NestedPropertiesAppendCompileHash(const void* Cont
 			return true;
 		}
 	}
+	else if (Struct == FNiagaraTypeDefinitionHandle::StaticStruct())
+	{
+		FNiagaraTypeDefinitionHandle* TypeDef = (FNiagaraTypeDefinitionHandle*)Container;
+		if (TypeDef)
+		{
+			TypeDef->AppendCompileHash(InVisitor);
+			return true;
+		}
+	}
 
 	TFieldIterator<FProperty> PropertyCountIt(Struct, IteratorFlags);
 	int32 NumProperties = 0;
@@ -430,6 +436,7 @@ bool FNiagaraEditorUtilities::NestedPropertiesAppendCompileHash(const void* Cont
 		NumProperties++;
 	}
 
+	TStringBuilder<128> PathName;
 	for (TFieldIterator<FProperty> PropertyIt(Struct, IteratorFlags); PropertyIt; ++PropertyIt)
 	{
 		FProperty* Property = *PropertyIt;
@@ -453,8 +460,12 @@ bool FNiagaraEditorUtilities::NestedPropertiesAppendCompileHash(const void* Cont
 			InVisitor->UpdatePOD(*PropertyName, MapHelper.Num());
 			if (MapHelper.GetKeyProperty())
 			{
-				InVisitor->UpdateString(TEXT("KeyPathname"), MapHelper.GetKeyProperty()->GetPathName());
-				InVisitor->UpdateString(TEXT("ValuePathname"), MapHelper.GetValueProperty()->GetPathName());
+				PathName.Reset();
+				MapHelper.GetKeyProperty()->GetPathName(nullptr, PathName);
+				InVisitor->UpdateString(TEXT("KeyPathname"), PathName);
+				PathName.Reset();
+				MapHelper.GetValueProperty()->GetPathName(nullptr, PathName);
+				InVisitor->UpdateString(TEXT("ValuePathname"), PathName);
 
 				// We currently only support maps with keys of FNames. Anything else should generate a warning.
 				if (MapHelper.GetKeyProperty()->GetClass() == FNameProperty::StaticClass())
@@ -532,7 +543,9 @@ bool FNiagaraEditorUtilities::NestedPropertiesAppendCompileHash(const void* Cont
 
 			FScriptArrayHelper ArrayHelper(CastProp, CastProp->ContainerPtrToValuePtr<void>(Container));
 			InVisitor->UpdatePOD(*PropertyName, ArrayHelper.Num());
-			InVisitor->UpdateString(TEXT("InnerPathname"), CastProp->Inner->GetPathName());
+			PathName.Reset();
+			CastProp->Inner->GetPathName(nullptr, PathName);
+			InVisitor->UpdateString(TEXT("InnerPathname"), PathName);
 
 			// We support arrays of POD types or arrays of structs with POD types internally. Anything else we should generate a warning on.
 			if (CastProp->Inner->IsA(FStructProperty::StaticClass()))
@@ -925,6 +938,38 @@ bool FNiagaraEditorUtilities::IsCompilableAssetClass(UClass* AssetClass)
 	return CompilableClasses.Contains(AssetClass);
 }
 
+FText FNiagaraEditorUtilities::GetVariableTypeCategory(const FNiagaraVariable& Variable)
+{
+	return GetTypeDefinitionCategory(Variable.GetType());
+}
+
+FText FNiagaraEditorUtilities::GetTypeDefinitionCategory(const FNiagaraTypeDefinition& TypeDefinition)
+{
+	FText Category = FText::GetEmpty();
+	if (TypeDefinition.IsDataInterface())
+	{
+		Category = LOCTEXT("NiagaraParameterMenuGroupDI", "Data Interface");
+	}
+	else if (TypeDefinition.IsEnum())
+	{
+		Category = LOCTEXT("NiagaraParameterMenuGroupEnum", "Enum");
+	}
+	else if (TypeDefinition.IsUObject())
+	{
+		Category = LOCTEXT("NiagaraParameterMenuGroupObject", "Object");
+	}
+	else if (TypeDefinition.GetNameText().ToString().Contains("event"))
+	{
+		Category = LOCTEXT("NiagaraParameterMenuGroupEventType", "Event");
+	}
+	else
+	{
+		// add common types like bool, vector, etc into a category of their own so they appear first in the search
+		Category = LOCTEXT("NiagaraParameterMenuGroupCommon", "Common");
+	}
+	return Category;
+}
+
 void FNiagaraEditorUtilities::MarkDependentCompilableAssetsDirty(TArray<UObject*> InObjects)
 {
 	const FText LoadAndMarkDirtyDisplayName = NSLOCTEXT("NiagaraEditor", "MarkDependentAssetsDirtySlowTask", "Loading and marking dependent assets dirty.");
@@ -998,7 +1043,7 @@ void FNiagaraEditorUtilities::FixUpNumericPins(const UEdGraphSchema_Niagara* Sch
 	TraverseGraphFromOutputDepthFirst(Schema, Node, FixUpVisitor);
 }
 
-void FNiagaraEditorUtilities::SetStaticSwitchConstants(UNiagaraGraph* Graph, const TArray<UEdGraphPin*>& CallInputs, const FCompileConstantResolver& ConstantResolver)
+void FNiagaraEditorUtilities::SetStaticSwitchConstants(UNiagaraGraph* Graph, TArrayView<UEdGraphPin* const> CallInputs, const FCompileConstantResolver& ConstantResolver)
 {
 	const UEdGraphSchema_Niagara* Schema = GetDefault<UEdGraphSchema_Niagara>();
 
@@ -1136,10 +1181,11 @@ void PreProcessGraphForInputNumerics(const UEdGraphSchema_Niagara* Schema, UNiag
 	// Visit all input nodes
 	TArray<UNiagaraNodeInput*> InputNodes;
 	Graph->FindInputNodes(InputNodes);
+	FPinCollectorArray OutputPins;
 	for (UNiagaraNodeInput* InputNode : InputNodes)
 	{
 		// See if any of the output pins are of Numeric type. If so, force to floats.
-		TArray<UEdGraphPin*> OutputPins;
+		OutputPins.Reset();
 		InputNode->GetOutputPins(OutputPins);
 		for (UEdGraphPin* OutputPin : OutputPins)
 		{
@@ -1168,7 +1214,7 @@ void PreProcessGraphForAttributeNumerics(const UEdGraphSchema_Niagara* Schema, U
 	{
 		// For each pin, make sure that if it has a valid type, but the associated variable is still Numeric,
 		// force the variable to match the pin's new type. Record that we touched this variable for later cleanup.
-		TArray<UEdGraphPin*> InputPins;
+		FPinCollectorArray InputPins;
 		OutputNode->GetInputPins(InputPins);
 		check(OutputNode->Outputs.Num() == InputPins.Num());
 		for (int32 i = 0; i < InputPins.Num(); i++)
@@ -1218,7 +1264,8 @@ void FNiagaraEditorUtilities::ResolveNumerics(UNiagaraGraph* SourceGraph, bool b
 	}
 }
 
-void FNiagaraEditorUtilities::PreprocessFunctionGraph(const UEdGraphSchema_Niagara* Schema, UNiagaraGraph* Graph, const TArray<UEdGraphPin*>& CallInputs, const TArray<UEdGraphPin*>& CallOutputs, ENiagaraScriptUsage ScriptUsage, const FCompileConstantResolver& ConstantResolver)
+void FNiagaraEditorUtilities::PreprocessFunctionGraph(const UEdGraphSchema_Niagara* Schema, UNiagaraGraph* Graph, TArrayView<UEdGraphPin* const> CallInputs, TArrayView<UEdGraphPin* const> CallOutputs,
+	ENiagaraScriptUsage ScriptUsage, const FCompileConstantResolver& ConstantResolver)
 {
 	// Change any numeric inputs or outputs to match the types from the call node.
 	TArray<UNiagaraNodeInput*> InputNodes;
@@ -1230,6 +1277,7 @@ void FNiagaraEditorUtilities::PreprocessFunctionGraph(const UEdGraphSchema_Niaga
 
 	Graph->FindInputNodes(InputNodes, Options);
 
+	FPinCollectorArray OutputPins;
 	for (UNiagaraNodeInput* InputNode : InputNodes)
 	{
 		FNiagaraVariable& Input = InputNode->Input;
@@ -1241,7 +1289,7 @@ void FNiagaraEditorUtilities::PreprocessFunctionGraph(const UEdGraphSchema_Niaga
 			{
 				FNiagaraTypeDefinition PinType = Schema->PinToTypeDefinition(*MatchingPin);
 				Input.SetType(PinType);
-				TArray<UEdGraphPin*> OutputPins;
+				OutputPins.Reset();
 				InputNode->GetOutputPins(OutputPins);
 				check(OutputPins.Num() == 1);
 				OutputPins[0]->PinType = (*MatchingPin)->PinType;
@@ -1252,7 +1300,7 @@ void FNiagaraEditorUtilities::PreprocessFunctionGraph(const UEdGraphSchema_Niaga
 	UNiagaraNodeOutput* OutputNode = Graph->FindOutputNode(ScriptUsage);
 	check(OutputNode);
 
-	TArray<UEdGraphPin*> InputPins;
+	FPinCollectorArray InputPins;
 	OutputNode->GetInputPins(InputPins);
 
 	for (FNiagaraVariable& Output : OutputNode->Outputs)
@@ -1346,27 +1394,11 @@ void FNiagaraEditorUtilities::GetFilteredScriptAssets(FGetFilteredScriptAssetsOp
 			}
 		}
 
-		// Check if library script
-		if (InFilter.bIncludeNonLibraryScripts == false)
+		// Check script visibility
+		ENiagaraScriptLibraryVisibility ScriptVisibility = GetScriptAssetVisibility(FilteredScriptAssets[i]);
+		if (ScriptVisibility == ENiagaraScriptLibraryVisibility::Hidden || (InFilter.bIncludeNonLibraryScripts == false && ScriptVisibility != ENiagaraScriptLibraryVisibility::Library))
 		{
-			bool bScriptIsLibrary = true;
-			bool bFoundLibScriptTag = FilteredScriptAssets[i].GetTagValue(GET_MEMBER_NAME_CHECKED(UNiagaraScript, bExposeToLibrary), bScriptIsLibrary);
-
-			if (bFoundLibScriptTag == false)
-			{
-				if (FilteredScriptAssets[i].IsAssetLoaded())
-				{
-					UNiagaraScript* Script = static_cast<UNiagaraScript*>(FilteredScriptAssets[i].GetAsset());
-					if (Script != nullptr)
-					{
-						bScriptIsLibrary = Script->bExposeToLibrary;
-					}
-				}
-			}
-			if (bScriptIsLibrary == false)
-			{
-				continue;
-			}
+			continue;
 		}
 
 		OutFilteredScriptAssets.Add(FilteredScriptAssets[i]);
@@ -1442,10 +1474,12 @@ const FNiagaraEmitterHandle* FNiagaraEditorUtilities::GetEmitterHandleForEmitter
 		[&Emitter](const FNiagaraEmitterHandle& EmitterHandle) { return EmitterHandle.GetInstance() == &Emitter; });
 }
 
-bool FNiagaraEditorUtilities::IsScriptAssetInLibrary(const FAssetData& ScriptAssetData)
+ENiagaraScriptLibraryVisibility FNiagaraEditorUtilities::GetScriptAssetVisibility(const FAssetData& ScriptAssetData)
 {
-	bool bIsInLibrary;
-	bool bIsLibraryTagFound = ScriptAssetData.GetTagValue(GET_MEMBER_NAME_CHECKED(UNiagaraScript, bExposeToLibrary), bIsInLibrary);
+	FString Value;
+	bool bIsLibraryTagFound = ScriptAssetData.GetTagValue(GET_MEMBER_NAME_CHECKED(UNiagaraScript, LibraryVisibility), Value);
+
+	ENiagaraScriptLibraryVisibility ScriptVisibility = ENiagaraScriptLibraryVisibility::Invalid;
 	if (bIsLibraryTagFound == false)
 	{
 		if (ScriptAssetData.IsAssetLoaded())
@@ -1453,15 +1487,30 @@ bool FNiagaraEditorUtilities::IsScriptAssetInLibrary(const FAssetData& ScriptAss
 			UNiagaraScript* Script = static_cast<UNiagaraScript*>(ScriptAssetData.GetAsset());
 			if (Script != nullptr)
 			{
-				bIsInLibrary = Script->bExposeToLibrary;
+				ScriptVisibility = Script->LibraryVisibility;
 			}
 		}
-		else
-		{
-			bIsInLibrary = false;
-		}
 	}
-	return bIsInLibrary;
+	else
+	{
+		UEnum* VisibilityEnum = StaticEnum<ENiagaraScriptLibraryVisibility>();
+		int32 Index = VisibilityEnum->GetIndexByNameString(Value);
+		ScriptVisibility = (ENiagaraScriptLibraryVisibility) VisibilityEnum->GetValueByIndex(Index == INDEX_NONE ? 0 : Index);
+	}
+	
+	if (ScriptVisibility == ENiagaraScriptLibraryVisibility::Invalid)
+	{
+		// Check the deprecated tag value as a fallback. If even that property cannot be found the asset must be pretty old and should just be exposed as that was the default in the beginning.
+		bool bIsExposed = false;
+		bIsLibraryTagFound = ScriptAssetData.GetTagValue(FName("bExposeToLibrary"), bIsExposed);
+		ScriptVisibility = !bIsLibraryTagFound || bIsExposed ? ENiagaraScriptLibraryVisibility::Library : ENiagaraScriptLibraryVisibility::Unexposed;
+	}
+	return ScriptVisibility;
+}
+
+bool FNiagaraEditorUtilities::IsScriptAssetInLibrary(const FAssetData& ScriptAssetData)
+{
+	return GetScriptAssetVisibility(ScriptAssetData) == ENiagaraScriptLibraryVisibility::Library;
 }
 
 NIAGARAEDITOR_API FText FNiagaraEditorUtilities::FormatScriptName(FName Name, bool bIsInLibrary)
@@ -1812,14 +1861,16 @@ void FNiagaraEditorUtilities::CreateAssetFromEmitter(TSharedRef<FNiagaraEmitterH
 	const FName EmitterName = EmitterToCopy->GetFName();
 	
 	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
-	UNiagaraEmitter* CreatedAsset = Cast<UNiagaraEmitter>(AssetToolsModule.Get().DuplicateAssetWithDialogAndTitle(EmitterName.GetPlainNameString(), PackagePath, EmitterToCopy, LOCTEXT("CreateEmitterAssetDialogTitle", "Create Emitter As")));
+	
+	// First duplicate the asset so that fixes can be made on the duplicate without modifying the system and before it's saved.
+	UNiagaraEmitter* DuplicateEmitter = CastChecked<UNiagaraEmitter>(StaticDuplicateObject(EmitterToCopy, GetTransientPackage()));
+	FNiagaraScratchPadUtilities::FixExternalScratchPadScriptsForEmitter(SystemViewModel->GetSystem(), *DuplicateEmitter);
+
+	// Save the duplicated emiter.
+	UNiagaraEmitter* CreatedAsset = Cast<UNiagaraEmitter>(AssetToolsModule.Get().DuplicateAssetWithDialogAndTitle(EmitterName.GetPlainNameString(), PackagePath, DuplicateEmitter, LOCTEXT("CreateEmitterAssetDialogTitle", "Create Emitter As")));
 	if (CreatedAsset != nullptr)
 	{
-		CreatedAsset->SetFlags(RF_Standalone | RF_Public);
-
 		CreatedAsset->SetUniqueEmitterName(CreatedAsset->GetName());
-
-		FNiagaraScratchPadUtilities::FixExternalScratchPadScriptsForEmitter(SystemViewModel->GetSystem(), *CreatedAsset);
 
 		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(CreatedAsset);
 

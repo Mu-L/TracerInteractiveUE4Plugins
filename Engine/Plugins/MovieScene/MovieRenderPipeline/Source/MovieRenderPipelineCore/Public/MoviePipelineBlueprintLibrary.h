@@ -11,7 +11,7 @@
 class UMoviePipeline;
 class UMovieSceneSequence;
 
-UCLASS()
+UCLASS(meta = (ScriptName = "MoviePipelineLibrary"))
 class MOVIERENDERPIPELINECORE_API UMoviePipelineBlueprintLibrary : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
@@ -74,7 +74,7 @@ public:
 	static void GetOverallOutputFrames(const UMoviePipeline* InMoviePipeline, int32& OutCurrentIndex, int32& OutTotalCount);
 
 	UFUNCTION(BlueprintPure, Category = "Movie Render Pipeline")
-	static FText GetCurrentSegmentName(UMoviePipeline* InMoviePipeline);
+	static void GetCurrentSegmentName(UMoviePipeline* InMoviePipeline, FText& OutOuterName, FText& OutInnerName);
 
 	UFUNCTION(BlueprintPure, Category = "Movie Render Pipeline")
 	static void GetOverallSegmentCounts(const UMoviePipeline* InMoviePipeline, int32& OutCurrentIndex, int32& OutTotalCount);
@@ -82,30 +82,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Movie Render Pipeline")
 	static FMoviePipelineSegmentWorkMetrics GetCurrentSegmentWorkMetrics(const UMoviePipeline* InMoviePipeline);
 
-	// The most accurate way to determine 0-1 progress as it looks at the total number of samples needing to be rendered
-	UFUNCTION(BlueprintPure, Category = "Movie Render Pipeline")
-	static int32 GetTotalSampleCount(const UMoviePipeline* InMoviePipeline)
-	{
-		return 35;
-	}
-
-	// same as above but just 0-1
+	/** Gets the completion percent of the Pipeline in 0-1 */
 	UFUNCTION(BlueprintPure, Category = "Movie Render Pipeline")
 	static float GetCompletionPercentage(const UMoviePipeline* InPipeline);
-
-	UFUNCTION(BlueprintPure, Category = "Movie Render Pipeline")
-	static void GetSubsampleCount(const UMoviePipeline* InMoviePipeline, int32& OutCurrentIndex, int32& OutTotalCount)
-	{
-		OutCurrentIndex = 0;
-		OutTotalCount = 1;
-	}
-
-	UFUNCTION(BlueprintPure, Category = "Movie Render Pipeline")
-	static void GetEngineWarmUpFrameCount(const UMoviePipeline* InMoviePipeline, const int32 InSegmentIndex, int32& OutCurrentIndex, int32& OutTotalCount)
-	{
-		OutCurrentIndex = 301;
-		OutTotalCount = 919;
-	}
 
 	UFUNCTION(BlueprintPure, Category = "Movie Render Pipeline")
 	static FTimecode GetMasterTimecode(const UMoviePipeline* InMoviePipeline);
@@ -118,4 +97,16 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Movie Render Pipeline")
 	static FFrameNumber GetCurrentShotFrameNumber(const UMoviePipeline* InMoviePipeline);
+
+	/** Get the package name for the map in this job. The level travel command requires the package path and not the asset path. */
+	UFUNCTION(BlueprintPure, Category = "Movie Render Pipeline")
+	static FString GetMapPackageName(UMoviePipelineExecutorJob* InJob);
+
+	/** Scan the provided sequence in the job to see which camera cut sections we would try to render and update the job's shotlist. */
+	UFUNCTION(BlueprintCallable, Category = "Movie Render Pipeline")
+	static void UpdateJobShotListFromSequence(ULevelSequence* InSequence, UMoviePipelineExecutorJob* InJob);
+	
+	/** If version number is manually specifies, returns that, otherwise search the Output Directory for the highest version already existing an increments it by one. */
+	UFUNCTION(BlueprintCallable, Category = "Movie Render Pipeline")
+	static int32 ResolveVersionNumber(const UMoviePipeline* InMoviePipeline);
 };

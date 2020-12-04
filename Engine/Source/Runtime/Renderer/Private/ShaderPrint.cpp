@@ -155,6 +155,21 @@ namespace ShaderPrint
 		return IsSupported(View.GetShaderPlatform());
 	}
 
+	void SetEnabled(bool bInEnabled)
+	{
+		CVarEnable->Set(bInEnabled);
+	}
+
+	void SetFontSize(int32 InFontSize)
+	{
+		CVarFontSize->Set(FMath::Clamp(InFontSize, 6, 128));
+	}
+
+	void SetMaxValueCount(int32 InMaxCount)
+	{
+		CVarMaxValueCount->Set(FMath::Max(256, InMaxCount));
+	}	
+
 	bool IsEnabled()
 	{
 		return CVarEnable.GetValueOnAnyThread() != 0;
@@ -333,6 +348,12 @@ namespace ShaderPrint
 
 		RDG_EVENT_SCOPE(GraphBuilder, "ShaderPrintDrawView");
 
+		FRHIUnorderedAccessView* ShaderPrintValueBufferUAV = View.ShaderPrintValueBuffer.UAV;
+		AddPass(GraphBuilder, [ShaderPrintValueBufferUAV](FRHICommandList& RHICmdList)
+		{
+			RHICmdList.Transition(FRHITransitionInfo(ShaderPrintValueBufferUAV, ERHIAccess::UAVMask, ERHIAccess::SRVMask));
+		});
+
 		// Initialize graph managed resources
 		// Symbols buffer contains Count + 1 elements. The first element is only used as a counter.
 		FRDGBufferRef SymbolBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(ShaderPrintItem), GetMaxSymbolCount() + 1), TEXT("ShaderPrintSymbolBuffer"));
@@ -341,9 +362,9 @@ namespace ShaderPrint
 
 		// Non graph managed resources
 		FUniformBufferRef UniformBuffer = CreateUniformBuffer(View);
-		FShaderResourceViewRHIRef ValuesBuffer = View.ShaderPrintValueBuffer.SRV;
 		FTextureRHIRef FontTexture = GEngine->MiniFontTexture != nullptr ? GEngine->MiniFontTexture->Resource->TextureRHI : GSystemTextures.BlackDummy->GetRenderTargetItem().ShaderResourceTexture;;
 
+		FShaderResourceViewRHIRef ValuesBuffer = View.ShaderPrintValueBuffer.SRV;
 		const ERHIFeatureLevel::Type FeatureLevel = View.GetFeatureLevel();
 		FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(FeatureLevel);
 

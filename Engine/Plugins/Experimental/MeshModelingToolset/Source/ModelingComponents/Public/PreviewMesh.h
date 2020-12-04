@@ -12,8 +12,9 @@
 
 class FDynamicMesh3;
 struct FMeshDescription;
-class FTangentsf;
 
+// predeclare tangents template
+template<typename RealType> class TMeshTangents;
 
 
 /**
@@ -77,10 +78,14 @@ public:
 
 
 	/**
+	 * @return internal Actor created by this UPreviewMesh
+	 */
+	AActor* GetActor() const { return TemporaryParentActor; }
+
+	/**
 	 * @return internal Root Component of internal Actor
 	 */
 	UPrimitiveComponent* GetRootComponent() { return DynamicMeshComponent; }
-
 
 	//
 	// visualization parameters
@@ -107,9 +112,19 @@ public:
 	void SetMaterials(const TArray<UMaterialInterface*>& Materials);
 
 	/**
+	* Get number of materials in the preview mesh (base materials, i.e., not including override material)
+	*/
+	int32 GetNumMaterials() const;
+
+	/**
 	* Get material from the preview mesh
 	*/
 	UMaterialInterface* GetMaterial(int MaterialIndex = 0) const;
+
+	/**
+	* Get the entire materials array from the preview mesh. Appends to OutMaterials without clearing it.
+	*/
+	void GetMaterials(TArray<UMaterialInterface*>& OutMaterials) const;
 
 	/**
 	 * Set an override material for the preview mesh. This material will override all the given materials.
@@ -161,7 +176,14 @@ public:
 	/**
 	 * @return a MeshTangents data structure for the underlying component, if available, otherwise nullptr
 	 */
-	FMeshTangentsf* GetTangents() const;
+	const TMeshTangents<float>* GetTangents() const;
+
+	/**
+	 * Update tangents on internal Mesh Component
+	 */
+	template<typename RealType>
+	void UpdateTangents(const TMeshTangents<RealType>* ExternalTangents, bool bFastUpdateIfPossible);
+
 
 
 	/**
@@ -259,6 +281,11 @@ public:
 	void UpdatePreview(const FDynamicMesh3* Mesh);
 
 	/**
+	 * Update the internal mesh by moving in the given Mesh
+	 */
+	void UpdatePreview(FDynamicMesh3&& Mesh);
+
+	/**
 	 * Initialize the internal mesh based on the given MeshDescription
 	 */
 	void InitializeMesh(FMeshDescription* MeshDescription);
@@ -272,6 +299,12 @@ public:
 	* @return pointer to the current FDynamicMesh used for preview
 	*/
 	const FDynamicMesh3* GetMesh() const;
+
+	/**
+	 * @return point to the current AABBTree used for preview spatial mesh, or nullptr if not available
+	 * @warning this has to return non-const because of current FDynamicMeshAABBTree3 API, but you should not modify this!
+	 */
+	FDynamicMeshAABBTree3* GetSpatial();
 
 	/**
 	 * @return the current preview FDynamicMesh, and replace with a new empty mesh
@@ -314,9 +347,10 @@ public:
 	/**
 	 * Notify that a DeferredEditMesh sequence is complete and cause update of rendering data structures.
 	 * @param UpdateMode type of rendering update required for the applied mesh edits
+	 * @param ModifiedAttribs which mesh attributes have been modified and need to be updated
 	 * @param bRebuildSpatial if true, and internal spatial data structure is enabled, rebuild it for updated mesh
 	 */
-	void NotifyDeferredEditCompleted(ERenderUpdateMode UpdateMode, bool bRebuildSpatial);
+	void NotifyDeferredEditCompleted(ERenderUpdateMode UpdateMode, EMeshRenderAttributeFlags ModifiedAttribs, bool bRebuildSpatial);
 
 
 	/**
@@ -374,3 +408,14 @@ protected:
 	/** Spatial data structure that is initialized if bBuildSpatialDataStructure = true when UpdatePreview() is called */
 	FDynamicMeshAABBTree3 MeshAABBTree;
 };
+
+
+
+template<typename RealType>
+void UPreviewMesh::UpdateTangents(const TMeshTangents<RealType>* ExternalTangents, bool bFastUpdateIfPossible)
+{
+	if (ensure(DynamicMeshComponent))
+	{
+		DynamicMeshComponent->UpdateTangents(ExternalTangents, bFastUpdateIfPossible);
+	}
+}

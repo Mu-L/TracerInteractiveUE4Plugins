@@ -11,15 +11,17 @@
 namespace ShaderDrawDebug 
 {
 	// Console variables
+	static int32 GShaderDrawDebug_Enable = 1;
 	static TAutoConsoleVariable<int32> CVarShaderDrawEnable(
 		TEXT("r.ShaderDrawDebug"),
-		1,
+		GShaderDrawDebug_Enable,
 		TEXT("ShaderDrawDebug debugging toggle.\n"),
 		ECVF_Cheat | ECVF_RenderThreadSafe);
 
-	static TAutoConsoleVariable<int32> CVarShaderDrawMaxElementCount(
+	static int32 GShaderDrawDebug_MaxElementCount;
+	static FAutoConsoleVariableRef CVarShaderDrawMaxElementCount(
 		TEXT("r.ShaderDrawDebug.MaxElementCount"),
-		10000,
+		GShaderDrawDebug_MaxElementCount,
 		TEXT("ShaderDraw output buffer size in element.\n"),
 		ECVF_Cheat | ECVF_RenderThreadSafe);
 
@@ -32,7 +34,7 @@ namespace ShaderDrawDebug
 	bool IsShaderDrawDebugEnabled()
 	{
 #if WITH_EDITOR
-		return CVarShaderDrawEnable.GetValueOnAnyThread() > 0;
+		return GShaderDrawDebug_Enable > 0;
 #else
 		return false;
 #endif
@@ -52,20 +54,42 @@ namespace ShaderDrawDebug
 		return IsFeatureLevelSupported(Platform, ERHIFeatureLevel::SM5) && IsPCPlatform(Platform) && !IsOpenGLPlatform(Platform);
 	}
 
+	void SetEnabled(bool bInEnabled)
+	{
+#if WITH_EDITOR
+		GShaderDrawDebug_Enable = bInEnabled ? 1 : 0;
+#endif		
+	}
+
+	void SetMaxElementCount(uint32 MaxCount)
+	{
+#if WITH_EDITOR
+		GShaderDrawDebug_MaxElementCount = FMath::Max(1024, int32(MaxCount));
+#endif		
+	}
+
+	uint32 GetMaxElementCount()
+	{
+#if WITH_EDITOR
+		return uint32(FMath::Max(1, GShaderDrawDebug_MaxElementCount));
+#else
+		return 0;
+#endif			
+	}
+
 	bool IsShaderDrawDebugEnabled(const FViewInfo& View)
 	{
 		return IsShaderDrawDebugEnabled() && IsShaderDrawDebugEnabled(View.GetShaderPlatform());
 	}
 
-	static uint32 GetMaxShaderDrawElementCount()
+	// Note: Unaligned structures used for structured buffers is an unsupported and/or sparsely
+	//         supported feature in VK (VK_EXT_scalar_block_layout) and Metal. Consequently, we
+	//         do manual packing in order to accommodate.
+	struct FPackedShaderDrawElement
 	{
-		return uint32(FMath::Max(1, CVarShaderDrawMaxElementCount.GetValueOnRenderThread()));
-	}
-
-	struct ShaderDrawDebugElement
-	{
-		uint32 Pos[3];
-		uint32 Color[2];
+		// This is not packed as fp16 to be able to debug large scale data while preserving accuracy at short range.
+		float Pos0_ColorX[4];		// float3 pos0 + packed color0
+		float Pos1_ColorY[4];		// float3 pos1 + packed color1
 	};
 
 	// This needs to be allocated per view, or move into a more persistent place
@@ -181,7 +205,10 @@ namespace ShaderDrawDebug
 		SHADER_USE_PARAMETER_STRUCT(FShaderDrawDebugPS, FGlobalShader);
 		
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-			SHADER_PARAMETER(float, ColorScale)
+			SHADER_PARAMETER_RDG_TEXTURE(Texture2D, DepthTexture)
+			SHADER_PARAMETER(FIntPoint, DepthTextureResolution)
+			SHADER_PARAMETER(FVector2D, DepthTextureInvResolution)
+			SHADER_PARAMETER_SAMPLER(SamplerState, LinearSampler)
 			RENDER_TARGET_BINDING_SLOTS()
 		END_SHADER_PARAMETER_STRUCT()
 
@@ -203,7 +230,7 @@ namespace ShaderDrawDebug
 
 	IMPLEMENT_GLOBAL_SHADER(FShaderDrawDebugPS, "/Engine/Private/ShaderDrawDebug.usf", "ShaderDrawDebugPS", SF_Pixel);
 
-	BEGIN_SHADER_PARAMETER_STRUCT(ShaderDrawVSPSParameters, )
+	BEGIN_SHADER_PARAMETER_STRUCT(FShaderDrawVSPSParameters , )
 		SHADER_PARAMETER_STRUCT_INCLUDE(FShaderDrawDebugVS::FParameters, ShaderDrawVSParameters)
 		SHADER_PARAMETER_STRUCT_INCLUDE(FShaderDrawDebugPS::FParameters, ShaderDrawPSParameters)
 	END_SHADER_PARAMETER_STRUCT()
@@ -218,7 +245,7 @@ namespace ShaderDrawDebug
 		}
 
 		FRDGBuilder GraphBuilder(InRHICmdList);
-		FRDGBufferRef DataBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(ShaderDrawDebugElement), GetMaxShaderDrawElementCount()), TEXT("ShaderDrawDataBuffer"));
+		FRDGBufferRef DataBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FPackedShaderDrawElement), GetMaxElementCount()), TEXT("ShaderDrawDataBuffer"));
 		FRDGBufferRef IndirectBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateIndirectDesc<FRHIDrawIndirectParameters>(1), TEXT("ShaderDrawDataIndirectBuffer"));
 
 		FShaderDrawDebugClearCS::FParameters* Parameters = GraphBuilder.AllocParameters<FShaderDrawDebugClearCS::FParameters>();
@@ -237,14 +264,14 @@ namespace ShaderDrawDebug
 			FComputeShaderUtils::Dispatch(RHICmdList, ComputeShader, *Parameters, FIntVector(1,1,1));
 		});
 
-		GraphBuilder.QueueBufferExtraction(DataBuffer, &View.ShaderDrawData.Buffer, FRDGResourceState::EAccess::Write, FRDGResourceState::EPipeline::Compute);
-		GraphBuilder.QueueBufferExtraction(IndirectBuffer, &View.ShaderDrawData.IndirectBuffer, FRDGResourceState::EAccess::Write, FRDGResourceState::EPipeline::Compute);
+		GraphBuilder.QueueBufferExtraction(DataBuffer, &View.ShaderDrawData.Buffer, ERHIAccess::UAVCompute);
+		GraphBuilder.QueueBufferExtraction(IndirectBuffer, &View.ShaderDrawData.IndirectBuffer, ERHIAccess::UAVCompute);
 
 		GraphBuilder.Execute();
 
 		if (IsShaderDrawLocked() && !LockedData.bIsLocked)
 		{
-			LockedData.Buffer.Initialize(sizeof(ShaderDrawDebugElement), GetMaxShaderDrawElementCount(), 0U, TEXT("ShaderDrawDataBuffer"));
+			LockedData.Buffer.Initialize(sizeof(FPackedShaderDrawElement), GetMaxElementCount(), 0U, TEXT("ShaderDrawDataBuffer"));
 			LockedData.IndirectBuffer.Initialize(sizeof(uint32), 4, PF_R32_UINT, BUF_DrawIndirect, TEXT("ShaderDrawDataIndirectBuffer"));
 		}
 
@@ -259,7 +286,6 @@ namespace ShaderDrawDebug
 		}
 
 		auto RunPass = [&](
-			bool bIsBehindDepth, 
 			bool bUseRdgInput,
 			FRDGBufferRef DataBuffer, 
 			FRDGBufferRef IndirectBuffer, 
@@ -271,10 +297,13 @@ namespace ShaderDrawDebug
 			TShaderMapRef<FShaderDrawDebugVS> VertexShader(View.ShaderMap, PermutationVector);
 			TShaderMapRef<FShaderDrawDebugPS> PixelShader(View.ShaderMap);
 
-			ShaderDrawVSPSParameters* PassParameters = GraphBuilder.AllocParameters<ShaderDrawVSPSParameters>();
+			FShaderDrawVSPSParameters * PassParameters = GraphBuilder.AllocParameters<FShaderDrawVSPSParameters >();
 			PassParameters->ShaderDrawPSParameters.RenderTargets[0] = FRenderTargetBinding(OutputTexture, ERenderTargetLoadAction::ELoad);
-			PassParameters->ShaderDrawPSParameters.RenderTargets.DepthStencil = FDepthStencilBinding(DepthTexture, ERenderTargetLoadAction::ELoad, FExclusiveDepthStencil::DepthRead_StencilNop, ERenderTargetMsaaPlane::Resolved);
-			PassParameters->ShaderDrawPSParameters.ColorScale = bIsBehindDepth ? 0.4f : 1.0f;	// When debug primitive are behind the depth buffer, make them look darker.
+			PassParameters->ShaderDrawPSParameters.RenderTargets.DepthStencil = FDepthStencilBinding(DepthTexture, ERenderTargetLoadAction::ELoad, FExclusiveDepthStencil::DepthRead_StencilNop);
+			PassParameters->ShaderDrawPSParameters.DepthTexture = DepthTexture;
+			PassParameters->ShaderDrawPSParameters.DepthTextureResolution    = FIntPoint(DepthTexture->Desc.Extent.X, DepthTexture->Desc.Extent.Y);
+			PassParameters->ShaderDrawPSParameters.DepthTextureInvResolution = FVector2D(1.f/DepthTexture->Desc.Extent.X, 1.f / DepthTexture->Desc.Extent.Y);
+			PassParameters->ShaderDrawPSParameters.LinearSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 			PassParameters->ShaderDrawVSParameters.View = View.ViewUniformBuffer;
 			if (bUseRdgInput)
 			{
@@ -295,7 +324,7 @@ namespace ShaderDrawDebug
 				RDG_EVENT_NAME("ShaderDrawDebug"),
 				PassParameters,
 				ERDGPassFlags::Raster,
-				[VertexShader, PixelShader, PassParameters, IndirectBuffer, LockedIndirectBuffer, bIsBehindDepth, bUseRdgInput](FRHICommandListImmediate& RHICmdListImmediate)
+				[VertexShader, PixelShader, PassParameters, IndirectBuffer, LockedIndirectBuffer, bUseRdgInput](FRHICommandListImmediate& RHICmdListImmediate)
 			{
 				// Marks the indirect draw parameter as used by the pass, given it's not used directly by any of the shaders.
 				if (bUseRdgInput)
@@ -305,7 +334,7 @@ namespace ShaderDrawDebug
 
 				FGraphicsPipelineStateInitializer GraphicsPSOInit;
 				RHICmdListImmediate.ApplyCachedRenderTargets(GraphicsPSOInit);
-				GraphicsPSOInit.DepthStencilState = bIsBehindDepth ? TStaticDepthStencilState<false, CF_DepthFarther>::GetRHI() : TStaticDepthStencilState<false, CF_DepthNearOrEqual>::GetRHI();
+				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
 				GraphicsPSOInit.BlendState = TStaticBlendState<CW_RGBA, BO_Add, BF_One, BF_InverseSourceAlpha, BO_Add, BF_Zero, BF_One>::GetRHI(); // Premultiplied-alpha composition
 				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None, true>::GetRHI();
 				GraphicsPSOInit.PrimitiveType = PT_LineList;
@@ -332,25 +361,23 @@ namespace ShaderDrawDebug
 			});
 		};
 
-		FRDGBufferRef DataBuffer = GraphBuilder.RegisterExternalBuffer(View.ShaderDrawData.Buffer, TEXT("ShaderDrawDebugDataBuffer"));
-		FRDGBufferRef IndirectBuffer = GraphBuilder.RegisterExternalBuffer(View.ShaderDrawData.IndirectBuffer, TEXT("ShaderDrawDebugIndirectDataBuffer"));
+		FRDGBufferRef DataBuffer = GraphBuilder.RegisterExternalBuffer(View.ShaderDrawData.Buffer);
+		FRDGBufferRef IndirectBuffer = GraphBuilder.RegisterExternalBuffer(View.ShaderDrawData.IndirectBuffer);
 		{
-			RunPass(true,  true, DataBuffer, IndirectBuffer, nullptr, nullptr);	// Render what is behind the depth buffer
-			RunPass(false, true, DataBuffer, IndirectBuffer, nullptr, nullptr); // Render what is in front of the depth buffer
+			RunPass(true, DataBuffer, IndirectBuffer, nullptr, nullptr);
 		}
 
 		if (LockedData.bIsLocked)
 		{
 			FShaderResourceViewRHIRef LockedDataBuffer = LockedData.Buffer.SRV;
 			FRHIVertexBuffer* LockedIndirectBuffer = LockedData.IndirectBuffer.Buffer;
-			RunPass(false, false, nullptr, nullptr, LockedDataBuffer, LockedIndirectBuffer); // Render what is in front of the depth buffer
-			RunPass(true,  false, nullptr, nullptr, LockedDataBuffer, LockedIndirectBuffer); // Render what is behind the depth buffer
+			RunPass(false, nullptr, nullptr, LockedDataBuffer, LockedIndirectBuffer);
 		}
 
 		if (IsShaderDrawLocked() && !LockedData.bIsLocked)
 		{
 			{
-				const uint32 NumElements = LockedData.Buffer.NumBytes / sizeof(ShaderDrawDebugElement);
+				const uint32 NumElements = LockedData.Buffer.NumBytes / sizeof(FPackedShaderDrawElement);
 
 				FShaderDrawDebugCopyCS::FPermutationDomain PermutationVector;
 				PermutationVector.Set<FShaderDrawDebugCopyCS::FBufferType>(0);
@@ -396,11 +423,11 @@ namespace ShaderDrawDebug
 
 	void SetParameters(FRDGBuilder& GraphBuilder, const FShaderDrawDebugData& Data, FShaderDrawDebugParameters& OutParameters)
 	{
-		FRDGBufferRef DataBuffer = GraphBuilder.RegisterExternalBuffer(Data.Buffer, TEXT("ShaderDrawDebugDataBuffer"));
-		FRDGBufferRef IndirectBuffer = GraphBuilder.RegisterExternalBuffer(Data.IndirectBuffer, TEXT("ShaderDrawDebugIndirectDataBuffer"));
+		FRDGBufferRef DataBuffer = GraphBuilder.RegisterExternalBuffer(Data.Buffer);
+		FRDGBufferRef IndirectBuffer = GraphBuilder.RegisterExternalBuffer(Data.IndirectBuffer);
 
 		OutParameters.ShaderDrawCursorPos = Data.CursorPosition;
-		OutParameters.ShaderDrawMaxElementCount = GetMaxShaderDrawElementCount();
+		OutParameters.ShaderDrawMaxElementCount = GetMaxElementCount();
 		OutParameters.OutShaderDrawPrimitive = GraphBuilder.CreateUAV(DataBuffer);
 		OutParameters.OutputShaderDrawIndirect = GraphBuilder.CreateUAV(IndirectBuffer);
 	}

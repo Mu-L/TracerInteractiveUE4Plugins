@@ -9,7 +9,7 @@
 #include "Misc/App.h"
 #include "RenderingThread.h"
 #include "ProfilingDebugging/LoadTimeTracker.h"
-
+#include "CoreGlobals.h"
 
 /** Whether to enable mip-level fading or not: +1.0f if enabled, -1.0f if disabled. */
 float GEnableMipLevelFading = 1.0f;
@@ -306,6 +306,9 @@ FString FTextureReference::GetFriendlyName() const
 
 /** The global null color vertex buffer, which is set with a stride of 0 on meshes without a color component. */
 TGlobalResource<FNullColorVertexBuffer> GNullColorVertexBuffer;
+
+/** The global null vertex buffer, which is set with a stride of 0 on meshes */
+TGlobalResource<FNullVertexBuffer> GNullVertexBuffer;
 
 /*------------------------------------------------------------------------------
 	FGlobalDynamicVertexBuffer implementation.
@@ -796,3 +799,61 @@ void FMipBiasFade::SetNewMipCount( float ActualMipCount, float TargetMipCount, d
 		}
 	}
 }
+
+class FTextureSamplerStateCache : public FRenderResource
+{
+public:
+	TMap<FSamplerStateInitializerRHI, FRHISamplerState*> Samplers;
+
+	virtual void ReleaseRHI() override
+	{
+		for (auto Pair : Samplers)
+		{
+			Pair.Value->Release();
+		}
+		Samplers.Empty();
+	}
+};
+
+TGlobalResource<FTextureSamplerStateCache> GTextureSamplerStateCache;
+
+FRHISamplerState* FTexture::GetOrCreateSamplerState(const FSamplerStateInitializerRHI& Initializer)
+{
+	// This sampler cache is supposed to be used only from RT
+	// Add a lock here if it's used from multiple threads
+	check(IsInRenderingThread());
+	
+	FRHISamplerState** Found = GTextureSamplerStateCache.Samplers.Find(Initializer);
+	if (Found)
+	{
+		return *Found;
+	}
+	
+	FSamplerStateRHIRef NewState = RHICreateSamplerState(Initializer);
+	
+	// Add an extra reference so we don't have TRefCountPtr in the maps
+	NewState->AddRef();
+	GTextureSamplerStateCache.Samplers.Add(Initializer, NewState);
+	return NewState;
+}
+
+bool IsRayTracingEnabled()
+{
+	checkf(GIsRHIInitialized, TEXT("IsRayTracingEnabled() may only be called once RHI is initialized."));
+
+#if DO_CHECK && WITH_EDITOR
+	{
+		FString Commandline = FCommandLine::Get();
+		bool bIsCookCommandlet = IsRunningCommandlet() && Commandline.Contains(TEXT("run=cook"));
+		// This function must not be called while cooking
+		if (bIsCookCommandlet)
+		{
+			return false;
+		}
+	}
+#endif // DO_CHECK && WITH_EDITOR
+
+	extern RENDERCORE_API bool GUseRayTracing;
+	return GUseRayTracing;
+}
+

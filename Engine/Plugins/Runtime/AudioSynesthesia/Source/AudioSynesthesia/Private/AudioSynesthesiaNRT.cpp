@@ -3,11 +3,6 @@
 #include "AudioSynesthesiaNRT.h"
 
 
-FText UAudioSynesthesiaNRTSettings::GetAssetActionName() const
-{
-	return NSLOCTEXT("AssetTypeActions", "AssetTypeActions_AssetSoundSynesthesiaNRTSettings", "Synesthesia NRT Settings");
-}
-
 const TArray<FText>& UAudioSynesthesiaNRTSettings::GetAssetActionSubmenus() const
 {
 	static const TArray<FText> SubMenus
@@ -18,20 +13,12 @@ const TArray<FText>& UAudioSynesthesiaNRTSettings::GetAssetActionSubmenus() cons
 	return SubMenus;
 }
 
-UClass* UAudioSynesthesiaNRTSettings::GetSupportedClass() const 
-{
-	return UAudioSynesthesiaNRTSettings::StaticClass();
-}
-
+#if WITH_EDITOR
 FColor UAudioSynesthesiaNRTSettings::GetTypeColor() const
 {
 	return FColor(200.0f, 150.0f, 200.0f);
 }
-
-FText UAudioSynesthesiaNRT::GetAssetActionName() const
-{
-	return NSLOCTEXT("AssetTypeActions", "AssetTypeActions_AssetSoundSynesthesiaNRT", "Synesthesia NRT");
-}
+#endif
 
 const TArray<FText>& UAudioSynesthesiaNRT::GetAssetActionSubmenus() const
 {
@@ -43,13 +30,9 @@ const TArray<FText>& UAudioSynesthesiaNRT::GetAssetActionSubmenus() const
 	return SubMenus;
 }
 
-UClass* UAudioSynesthesiaNRT::GetSupportedClass() const
-{
-	return UAudioSynesthesiaNRT::StaticClass();
-}
-
+#if WITH_EDITOR
 FColor UAudioSynesthesiaNRT::GetTypeColor() const
 {
 	return FColor(200.0f, 150.0f, 200.0f);
 }
-
+#endif

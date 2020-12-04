@@ -159,31 +159,9 @@ UInteractiveTool* UDrawPolyPathToolBuilder::BuildTool(const FToolBuilderState& S
 	return NewTool;
 }
 
-
-void UDrawPolyPathProperties::SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving)
-{
-	UDrawPolyPathProperties* PropertyCache = GetPropertyCache<UDrawPolyPathProperties>();
-	SaveRestoreProperty(PropertyCache->OutputType, this->OutputType, bSaving);
-	SaveRestoreProperty(PropertyCache->WidthMode, this->WidthMode, bSaving);
-	SaveRestoreProperty(PropertyCache->Width, this->Width, bSaving);
-	SaveRestoreProperty(PropertyCache->HeightMode, this->HeightMode, bSaving);
-	SaveRestoreProperty(PropertyCache->Height, this->Height, bSaving);
-	SaveRestoreProperty(PropertyCache->RampStartRatio, this->RampStartRatio, bSaving);
-	SaveRestoreProperty(PropertyCache->bSnapToWorldGrid, this->bSnapToWorldGrid, bSaving);
-}
-
-
-
-
-
 /*
 * Tool methods
 */
-
-UDrawPolyPathTool::UDrawPolyPathTool()
-{
-}
-
 void UDrawPolyPathTool::SetWorld(UWorld* World)
 {
 	this->TargetWorld = World;
@@ -396,10 +374,8 @@ bool UDrawPolyPathTool::OnUpdateHover(const FInputDeviceRay& DevicePos)
 
 
 
-void UDrawPolyPathTool::Tick(float DeltaTime)
+void UDrawPolyPathTool::OnTick(float DeltaTime)
 {
-	UInteractiveTool::Tick(DeltaTime);
-
 	if (PlaneMechanic != nullptr)
 	{
 		PlaneMechanic->SetEnableGridSnaping(TransformProps->bSnapToWorldGrid);
@@ -441,7 +417,7 @@ void UDrawPolyPathTool::InitializeNewSurfacePath()
 	double SnapTol = ToolSceneQueriesUtil::GetDefaultVisualAngleSnapThreshD();
 	SurfacePathMechanic->SpatialSnapPointsFunc = [this, SnapTol](FVector3d Position1, FVector3d Position2)
 	{
-		return true && ToolSceneQueriesUtil::CalculateViewVisualAngleD(this->CameraState, Position1, Position2) < SnapTol;
+		return true && ToolSceneQueriesUtil::PointSnapQuery(this->CameraState, Position1, Position2, SnapTol);
 	};
 	SurfacePathMechanic->SetDoubleClickOrCloseLoopMode();
 	UpdateSurfacePathPlane();
@@ -666,8 +642,7 @@ void UDrawPolyPathTool::BeginInteractiveExtrudeHeight()
 
 	ExtrudeHeightMechanic->WorldHitQueryFunc = [this](const FRay& WorldRay, FHitResult& HitResult)
 	{
-		FCollisionObjectQueryParams QueryParams(FCollisionObjectQueryParams::AllObjects);
-		return TargetWorld->LineTraceSingleByObjectType(HitResult, WorldRay.Origin, WorldRay.PointAt(999999), QueryParams);
+		return ToolSceneQueriesUtil::FindNearestVisibleObjectHit(TargetWorld, HitResult, WorldRay);
 	};
 	ExtrudeHeightMechanic->WorldPointSnapFunc = [this](const FVector3d& WorldPos, FVector3d& SnapPos)
 	{
@@ -717,7 +692,7 @@ void UDrawPolyPathTool::InitializePreviewMesh()
 		}
 		else
 		{
-			EditPreview->SetMaterial(MaterialProperties->Material);
+			EditPreview->SetMaterial(MaterialProperties->Material.Get());
 		}
 	}
 }
@@ -799,7 +774,7 @@ void UDrawPolyPathTool::EmitNewObject(EDrawPolyPathOutputMode OutputMode)
 
 	AActor* NewActor = AssetGenerationUtil::GenerateStaticMeshActor(
 		AssetAPI, TargetWorld,
-		&PathMesh, MeshTransform.ToTransform(), TEXT("Path"), MaterialProperties->Material);
+		&PathMesh, MeshTransform.ToTransform(), TEXT("Path"), MaterialProperties->Material.Get());
 	if (NewActor != nullptr)
 	{
 		ToolSelectionUtil::SetNewActorSelection(GetToolManager(), NewActor);

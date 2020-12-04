@@ -140,6 +140,7 @@ public:
 	virtual void SetVerb(const FString& InVerb) override;
 	virtual void SetURL(const FString& InURL) override;
 	virtual void SetContent(const TArray<uint8>& ContentPayload) override;
+	virtual void SetContent(TArray<uint8>&& ContentPayload) override;
 	virtual void SetContentAsString(const FString& ContentString) override;
 	virtual bool SetContentAsStreamedFile(const FString& Filename) override;
 	virtual bool SetContentFromStream(TSharedRef<FArchive, ESPMode::ThreadSafe> Stream) override;
@@ -159,6 +160,13 @@ public:
 	virtual bool IsThreadedRequestComplete() override;
 	virtual void TickThreadedRequest(float DeltaSeconds) override;
 	//~ End IHttpRequestThreaded Interface
+
+	/**
+	 * Perform the http-thread setup of the request
+	 *
+	 * @return true if the request was successfully setup
+	 */
+	bool SetupRequestHttpThread();
 
 	/**
 	 * Returns libcurl's easy handle - needed for HTTP manager.
@@ -312,7 +320,7 @@ private:
 	size_t DebugCallback(CURL * Handle, curl_infotype DebugInfoType, char * DebugInfo, size_t DebugInfoSize);
 
 	/**
-	 * Setup the request
+	 * Perform the game-thread setup of the request
 	 *
 	 * @return true if the request was successfully setup
 	 */
@@ -383,6 +391,8 @@ private:
 	static const constexpr int32 NumberOfInfoMessagesToCache = 50;
 	/** Index of least recently cached message */
 	int32 LeastRecentlyCachedInfoMessageIndex;
+	/** Critical section for accessing InfoMessageCache */
+	FCriticalSection InfoMessageCacheCriticalSection;
 	/** Cache of info messages from libcurl */
 	TArray<FString, TFixedAllocator<NumberOfInfoMessagesToCache>> InfoMessageCache;
 };

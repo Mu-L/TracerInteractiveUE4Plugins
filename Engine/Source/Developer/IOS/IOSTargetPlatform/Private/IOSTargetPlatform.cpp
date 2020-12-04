@@ -18,6 +18,7 @@
 #include "Windows/WindowsHWrapper.h"
 #endif
 #if WITH_ENGINE
+#include "Engine/TextureCube.h"
 #include "TextureResource.h"
 #include "AudioCompressionSettings.h"
 #endif
@@ -491,7 +492,14 @@ static bool SupportsSoftwareOcclusion()
 	return CVarMobileAllowSoftwareOcclusion->GetValueOnAnyThread() != 0;
 }
 
-bool FIOSTargetPlatform::CanSupportXGEShaderCompile() const
+static bool SupportsLandscapeMeshLODStreaming()
+{
+	bool bStreamLandscapeMeshLODs = false;
+	GConfig->GetBool(TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings"), TEXT("bStreamLandscapeMeshLODs"), bStreamLandscapeMeshLODs, GEngineIni);
+	return bStreamLandscapeMeshLODs;
+}
+
+bool FIOSTargetPlatform::CanSupportRemoteShaderCompile() const
 {
 	// for 4.22 we are disabling support for XGE Shader compile on IOS
 	bool bRemoteCompilingEnabled = false;
@@ -521,6 +529,9 @@ bool FIOSTargetPlatform::SupportsFeature( ETargetPlatformFeatures Feature ) cons
 		case ETargetPlatformFeatures::VirtualTextureStreaming:
 			return UsesVirtualTextures();
 
+		case ETargetPlatformFeatures::LandscapeMeshLODStreaming:
+			return SupportsLandscapeMeshLODStreaming() && SupportsMetal();
+
 		default:
 			break;
 	}
@@ -531,9 +542,12 @@ bool FIOSTargetPlatform::SupportsFeature( ETargetPlatformFeatures Feature ) cons
 
 #if WITH_ENGINE
 
-void FIOSTargetPlatform::GetReflectionCaptureFormats(TArray<FName>& OutFormats) const
+void FIOSTargetPlatform::GetReflectionCaptureFormats( TArray<FName>& OutFormats ) const
 {
-	if (SupportsMetalMRT())
+	static auto* MobileShadingPathCvar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Mobile.ShadingPath"));
+	const bool bMobileDeferredShading = (MobileShadingPathCvar->GetValueOnAnyThread() == 1);
+
+	if (SupportsMetalMRT() || bMobileDeferredShading)
 	{
 		OutFormats.Add(FName(TEXT("FullHDR")));
 	}
@@ -591,6 +605,8 @@ static FName FormatRemap[] =
 	FName(TEXT("BC5")),		FName(TEXT("PVRTCN")),		FName(TEXT("ASTC_NormalRG")),
 	FName(TEXT("AutoDXT")),	FName(TEXT("AutoPVRTC")),	FName(TEXT("ASTC_RGBAuto")),
 	FName(TEXT("BC4")),		FName(TEXT("G8")),			FName(TEXT("G8")),
+	FName(TEXT("BC6H")),	FName(TEXT("PVRTC2")),		FName(TEXT("ASTC_RGB")), 
+	FName(TEXT("BC7")),		FName(TEXT("AutoPVRTC")),	FName(TEXT("ASTC_RGBAuto"))
 };
 static FName NameBGRA8(TEXT("BGRA8"));
 static FName NameG8 = FName(TEXT("G8"));
@@ -633,7 +649,7 @@ void FIOSTargetPlatform::GetTextureFormats( const UTexture* Texture, TArray< TAr
         {
             BlockSize = 1;
         }
-		GetDefaultTextureFormatNamePerLayer(TextureFormatNames, this, Texture, EngineSettings, false, false, BlockSize);
+		GetDefaultTextureFormatNamePerLayer(TextureFormatNames, this, Texture, EngineSettings, true, false, BlockSize);
 	}
 
 	// include the formats we want (use ASTC first so that it is preferred at runtime if they both exist and it's supported)
@@ -681,6 +697,23 @@ void FIOSTargetPlatform::GetTextureFormats( const UTexture* Texture, TArray< TAr
 		}
 		OutFormats.AddUnique(TextureFormatNamesPVRTC);
 	}
+
+	for (FName& TextureFormatName : OutFormats.Last())
+	{
+		if (Texture->IsA(UTextureCube::StaticClass()))
+		{
+			const UTextureCube* Cube = CastChecked<UTextureCube>(Texture);
+			if (Cube != nullptr)
+			{
+				FTextureFormatSettings FormatSettings;
+				Cube->GetDefaultFormatSettings(FormatSettings);
+				if (FormatSettings.CompressionSettings == TC_ReflectionCapture && !FormatSettings.CompressionNone)
+				{
+					TextureFormatName = FName(TEXT("ETC2_RGBA"));
+				}
+			}
+		}
+	}
 }
 
 void FIOSTargetPlatform::GetAllTextureFormats(TArray<FName>& OutFormats) const 
@@ -713,6 +746,37 @@ void FIOSTargetPlatform::GetAllTextureFormats(TArray<FName>& OutFormats) const
 	}
 }
 
+FName FIOSTargetPlatform::FinalizeVirtualTextureLayerFormat(FName Format) const
+{
+#if WITH_EDITOR
+	const static FName NameETC2_RGB(TEXT("ETC2_RGB"));
+	const static FName NameETC2_RGBA(TEXT("ETC2_RGBA"));
+	const static FName NameAutoETC2(TEXT("AutoETC2"));
+
+	// Remap non-ETC variants to ETC
+	const static FName ETCRemap[][2] =
+	{
+		{ { FName(TEXT("ASTC_RGB")) },			{ NameETC2_RGB } },
+		{ { FName(TEXT("ASTC_RGBA")) },			{ NameETC2_RGBA } },
+		{ { FName(TEXT("ASTC_RGBAuto")) },		{ NameAutoETC2 } },
+		{ { FName(TEXT("ASTC_NormalAG")) },		{ NameETC2_RGB } },
+		{ { FName(TEXT("ASTC_NormalRG")) },		{ NameETC2_RGB } },
+		{ { FName(TEXT("PVRTC2")) },			{ NameETC2_RGB } },
+		{ { FName(TEXT("PVRTC4")) },			{ NameETC2_RGBA } },
+		{ { FName(TEXT("PVRTCN")) },			{ NameETC2_RGB } },
+		{ { FName(TEXT("AutoPVRTC")) },			{ NameAutoETC2 } }
+	};
+
+	for (int32 RemapIndex = 0; RemapIndex < UE_ARRAY_COUNT(ETCRemap); RemapIndex++)
+	{
+		if (ETCRemap[RemapIndex][0] == Format)
+		{
+			return ETCRemap[RemapIndex][1];
+		}
+	}
+#endif
+	return Format;
+}
 
 const UTextureLODSettings& FIOSTargetPlatform::GetTextureLODSettings() const
 {

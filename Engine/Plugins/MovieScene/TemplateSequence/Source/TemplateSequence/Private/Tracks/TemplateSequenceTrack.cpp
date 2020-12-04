@@ -6,7 +6,7 @@
 #include "MovieSceneTimeHelpers.h"
 #include "Sections/TemplateSequenceSection.h"
 #include "Compilation/IMovieSceneTemplateGenerator.h"
-#include "Evaluation/TemplateSequenceSectionTemplate.h"
+#include "Evaluation/MovieSceneEvaluationTrack.h"
 
 #define LOCTEXT_NAMESPACE "TemplateSequenceTrack"
 
@@ -33,7 +33,7 @@ UMovieSceneSection* UTemplateSequenceTrack::AddNewTemplateSequenceSection(FFrame
 		UMovieScene* OuterMovieScene = GetTypedOuter<UMovieScene>();
 		UMovieScene* InnerMovieScene = InSequence->GetMovieScene();
 
-		int32      InnerSequenceLength = MovieScene::DiscreteSize(InnerMovieScene->GetPlaybackRange());
+		int32      InnerSequenceLength = UE::MovieScene::DiscreteSize(InnerMovieScene->GetPlaybackRange());
 		FFrameTime OuterSequenceLength = ConvertFrameTime(InnerSequenceLength, InnerMovieScene->GetTickResolution(), OuterMovieScene->GetTickResolution());
 
 		NewSection->InitialPlacement(Sections, KeyTime, OuterSequenceLength.FrameNumber.Value, SupportsMultipleRows());
@@ -43,23 +43,6 @@ UMovieSceneSection* UTemplateSequenceTrack::AddNewTemplateSequenceSection(FFrame
 	AddSection(*NewSection);
 
 	return NewSection;
-}
-
-void UTemplateSequenceTrack::PostCompile(FMovieSceneEvaluationTrack& OutTrack, const FMovieSceneTrackCompilerArgs& Args) const
-{
-	// Make sure out evaluation template runs before the spawn tracks because it will have to setup the overrides.
-	OutTrack.SetEvaluationGroup(IMovieSceneTracksModule::GetEvaluationGroupName(EBuiltInEvaluationGroup::SpawnObjects));
-	OutTrack.SetEvaluationPriority(GetEvaluationPriority());
-
-	// Cache our parent binding ID onto our templates.
-	for (FMovieSceneEvalTemplatePtr& BaseTemplate : OutTrack.GetChildTemplates())
-	{
-		if (BaseTemplate.IsValid())
-		{
-			FTemplateSequenceSectionTemplate* Template = static_cast<FTemplateSequenceSectionTemplate*>(BaseTemplate.GetPtr());
-			Template->OuterBindingId = Args.ObjectBindingId;
-		}
-	}
 }
 
 #if WITH_EDITORONLY_DATA

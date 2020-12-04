@@ -111,7 +111,7 @@ class COREUOBJECT_API UObject : public UObjectBaseUtility
 	/**
 	 * Create a component or subobject, allows creating a child class and returning the parent class.
 	 * @param	TReturnType					Class of return type, all overrides must be of this type
-	 * @param	TClassToConstructByDefault	Class of object to actually construct
+	 * @param	TClassToConstructByDefault	Class of object to actually construct, must be a subclass of TReturnType
 	 * @param	SubobjectName				Name of the new component
 	 * @param	bTransient					True if the component is being assigned to a transient property. This does not make the component itself transient, but does stop it from inheriting parent defaults
 	 */
@@ -122,8 +122,8 @@ class COREUOBJECT_API UObject : public UObjectBaseUtility
 	}
 	
 	/**
-	 * Create an optional component or subobject. Optional subobjects may not get created.
-	 * when a derived class specified DoNotCreateDefaultSubobject with the subobject's name.
+	 * Create an optional component or subobject. Optional subobjects will not get created
+	 * if a derived class specified DoNotCreateDefaultSubobject with the subobject's name.
 	 * @param	TReturnType					Class of return type, all overrides must be of this type
 	 * @param	SubobjectName				Name of the new component
 	 * @param	bTransient					True if the component is being assigned to a transient property. This does not make the component itself transient, but does stop it from inheriting parent defaults
@@ -135,6 +135,19 @@ class COREUOBJECT_API UObject : public UObjectBaseUtility
 		return static_cast<TReturnType*>(CreateDefaultSubobject(SubobjectName, ReturnType, ReturnType, /*bIsRequired =*/ false, bTransient));
 	}
 	
+	/**
+	 * Create an optional component or subobject. Optional subobjects will not get created
+	 * if a derived class specified DoNotCreateDefaultSubobject with the subobject's name.
+	 * @param	TReturnType					Class of return type, all overrides must be of this type
+	 * @param	TClassToConstructByDefault	Class of object to actually construct, must be a subclass of TReturnType
+	 * @param	SubobjectName				Name of the new component
+	 * @param	bTransient					True if the component is being assigned to a transient property. This does not make the component itself transient, but does stop it from inheriting parent defaults
+	 */
+	template<class TReturnType, class TClassToConstructByDefault>
+	TReturnType* CreateOptionalDefaultSubobject(FName SubobjectName, bool bTransient = false)
+	{
+		return static_cast<TReturnType*>(CreateDefaultSubobject(SubobjectName, TReturnType::StaticClass(), TClassToConstructByDefault::StaticClass(), /*bIsRequired =*/ false, bTransient));
+	}
 	/**
 	 * Create a subobject that has the Abstract class flag, child classes are expected to override this by calling SetDefaultSubobjectClass with the same name and a non-abstract class.
 	 * @param	TReturnType					Class of return type, all overrides must be of this type
@@ -390,7 +403,16 @@ public:
 
 	/** Called at the end of Rename(), but only if the rename was actually carried out */
 	virtual void PostRename(UObject* OldOuter, const FName OldName) {}
-	
+
+	/**
+	 * Called before duplication.
+	 *
+	 * @param DupParams the full parameters the object will be duplicated with.
+	 *        Allows access to modify params such as the duplication seed for example for pre-filling the dup-source => dup-target map used by StaticDuplicateObject. 
+	 * @see FObjectDuplicationParameters
+	 */
+	virtual void PreDuplicate(FObjectDuplicationParameters& DupParams) {}
+
 	/**
 	 * Called after duplication & serialization and before PostLoad. Used to e.g. make sure UStaticMesh's UModel gets copied as well.
 	 * Note: NOT called on components on actor duplication (alt-drag or copy-paste).  Use PostEditImport as well to cover that case.
@@ -699,10 +721,16 @@ public:
 			: Name(InName), Value(InValue), Type(InType), DisplayFlags(InDisplayFlags) {}
 
 		/** Gathers a list of asset registry searchable tags from given objects properties */
-		COREUOBJECT_API static void GetAssetRegistryTagsFromSearchableProperties(const UObject* Object, TArray<FAssetRegistryTag>& OutTags);
+		COREUOBJECT_API static void GetAssetRegistryTagsFromSearchableProperties(const UObject* Object, TArray<FAssetRegistryTag>& InOutTags);
 
 		/** Returns true if this FName is a special UStruct that should be exported even if not tagged, with the struct name as the tag name */
 		COREUOBJECT_API static bool IsUniqueAssetRegistryTagStruct(FName StructName, ETagType& TagType);
+
+#if WITH_EDITOR
+		/** Callback  */
+		DECLARE_MULTICAST_DELEGATE_TwoParams(FOnGetObjectAssetRegistryTags, const UObject* /*Object*/, TArray<FAssetRegistryTag>& /*InOutTags*/);
+		COREUOBJECT_API static FOnGetObjectAssetRegistryTags OnGetExtraObjectTags;
+#endif // WITH_EDITOR
 	};
 
 	/**
@@ -1028,7 +1056,7 @@ public:
 	 * Save configuration out to ini files
 	 * @warning Must be safe to call on class-default object
 	 */
-	void SaveConfig( uint64 Flags=CPF_Config, const TCHAR* Filename=NULL, FConfigCacheIni* Config=GConfig );
+	void SaveConfig( uint64 Flags=CPF_Config, const TCHAR* Filename=NULL, FConfigCacheIni* Config=GConfig, bool bAllowCopyToDefaultObject=true );
 
 	/**
 	 * Saves just the section(s) for this class into the default ini file for the class (with just the changes from base)
@@ -1039,6 +1067,11 @@ public:
 	 * Saves just the section(s) for this class into the global user ini file for the class (with just the changes from base)
 	 */
 	void UpdateGlobalUserConfigFile();
+
+	/**
+	 * Saves just the section(s) for this class into the project user ini file for the class (with just the changes from base)
+	 */
+	void UpdateProjectUserConfigFile();
 
 	/**
 	 * Saves just the property into the global user ini file for the class (with just the changes from base)
@@ -1067,6 +1100,11 @@ public:
 	 * Get the global user override config filename for the specified UObject
 	 */
 	FString GetGlobalUserConfigFilename() const;
+
+	/**
+	 * Get the project user override config filename for the specified UObject
+	 */
+	FString GetProjectUserConfigFilename() const;
 
 	/** Returns the override config hierarchy platform (if NDAd platforms need defaults to not be in Base*.ini but still want editor to load them) */
 	virtual const TCHAR* GetConfigOverridePlatform() const { return nullptr; }
@@ -1348,6 +1386,7 @@ public:
 	DECLARE_FUNCTION(execStringConst);
 	DECLARE_FUNCTION(execUnicodeStringConst);
 	DECLARE_FUNCTION(execTextConst);
+	DECLARE_FUNCTION(execPropertyConst);
 	DECLARE_FUNCTION(execObjectConst);
 	DECLARE_FUNCTION(execSoftObjectConst);
 	DECLARE_FUNCTION(execFieldPathConst);
@@ -1474,7 +1513,10 @@ private:
 		// always have this implemented (by UHT).
 		check(false);
 	}
-	
+
+public:
+
+	/** Should only ever be used by internal systems. */
 	virtual int32 GetNetPushIdDynamic() const
 	{
 		return INDEX_NONE;
@@ -1485,17 +1527,10 @@ struct FObjectNetPushIdHelper
 {
 private:
 	friend struct FNetPrivatePushIdHelper;
-	friend class UNetPushModelHelpers;
-	friend class UKismetArrayLibrary;
 
 	static void SetNetPushIdDynamic(UObject* Object, const int32 NewNetPushId)
 	{
 		Object->SetNetPushIdDynamic(NewNetPushId);
-	}
-	
-	static int32 GetNetPushIdDynamic(const UObject* const Object)
-	{
-		return Object->GetNetPushIdDynamic();
 	}
 };
 

@@ -272,7 +272,8 @@ public:
 			FLoadPackageAsyncDelegate InCompletionDelegate,
 			EPackageFlags InPackageFlags,
 			int32 InPIEInstanceID,
-			int32 InPackagePriority) override;
+			int32 InPackagePriority,
+			const FLinkerInstancingContext* InstancingContext) override;
 
 	EAsyncPackageState::Type ProcessLoading(bool bUseTimeLimit, bool bUseFullTimeLimit, float TimeLimit) override;
 
@@ -281,6 +282,8 @@ public:
 	void FlushLoading(int32 PackageId) override;
 
 	void NotifyConstructedDuringAsyncLoading(UObject* Object, bool bSubObject) override;
+
+	void NotifyUnreachableObjects(const TArrayView<FUObjectItem*>& UnreachableObjects) override {};
 
 	void FireCompletedCompiledInImport(void* AsyncPacakge, FPackageIndex Import) override;
 
@@ -390,6 +393,12 @@ public:
 	{
 		FPlatformMisc::MemoryBarrier();
 		return IsLoadingSuspended.GetValue();
+	}
+
+	/** Returns the number of async packages that are currently queued but not yet processed */
+	FORCEINLINE int32 GetNumQueuedPackages() override
+	{
+		return QueuedPackagesCounter.GetValue();
 	}
 
 	/** Returns the number of async packages that are currently being processed */

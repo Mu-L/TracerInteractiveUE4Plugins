@@ -3,28 +3,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "RemoteSessionTypes.h"
 
 class IRemoteSessionChannel;
 
-enum class ERemoteSessionChannelMode
-{
-	Read,
-	Write
-};
-
-DECLARE_DELEGATE_ThreeParams(FOnRemoteSessionChannelCreated, TWeakPtr<IRemoteSessionChannel> /*Instance*/, const FString& /*Type*/, ERemoteSessionChannelMode /*Mode*/);
-
-struct REMOTESESSION_API FRemoteSessionChannelInfo
-{
-	FString Type;
-	ERemoteSessionChannelMode Mode;
-	FOnRemoteSessionChannelCreated OnCreated;
-
-	FRemoteSessionChannelInfo() = default;
-	FRemoteSessionChannelInfo(FString InType, ERemoteSessionChannelMode InMode, FOnRemoteSessionChannelCreated InOnCreated)
-		: Type(InType), Mode(InMode), OnCreated(InOnCreated)
-	{ }
-};
 
 class REMOTESESSION_API IRemoteSessionRole
 {
@@ -36,6 +18,22 @@ public:
 	virtual bool HasError() const = 0;
 	
 	virtual FString GetErrorMessage() const = 0;
+
+	/* Future versions will support querying the version type, at the moment we just have old & new */
+	virtual bool IsLegacyConnection() const = 0;
+
+
+	/* Registers a delegate for notifications of connection changes*/
+	virtual FDelegateHandle RegisterConnectionChangeDelegate(FOnRemoteSessionConnectionChange::FDelegate InDelegate) = 0;
+
+	/* Register for notifications when the host sends a list of available channels */
+	virtual FDelegateHandle RegisterChannelListDelegate(FOnRemoteSessionReceiveChannelList::FDelegate InDelegate) = 0;
+
+	/* Register for notifications whenever a change in the state of a channel occurs */
+	virtual FDelegateHandle RegisterChannelChangeDelegate(FOnRemoteSessionChannelChange::FDelegate InDelegate) = 0;
+
+	/* Unregister all delegates for the specified object */
+	virtual void RemoveAllDelegates(void* UserObject) = 0;
 
 	virtual TSharedPtr<IRemoteSessionChannel> GetChannel(const TCHAR* Type) = 0;
 
@@ -51,12 +49,14 @@ public:
 
 		return TSharedPtr<T>();
 	}
+
+	virtual bool OpenChannel(const FRemoteSessionChannelInfo& Info) = 0;
+
 };
 
 class REMOTESESSION_API IRemoteSessionUnmanagedRole : public IRemoteSessionRole
 {
 public:
 	virtual void Tick(float DeltaTime) = 0;
-	virtual void Close() = 0;
-	virtual void CloseWithError(const FString& Message) = 0;
+	virtual void Close(const FString& InReason) = 0;
 };

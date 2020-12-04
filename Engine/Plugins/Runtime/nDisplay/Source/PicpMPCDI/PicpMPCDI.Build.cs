@@ -6,31 +6,30 @@ public class PicpMPCDI : ModuleRules
 {
 	public PicpMPCDI(ReadOnlyTargetRules Target) : base(Target)
 	{
+		PublicIncludePathModuleNames.AddRange(
+			new string[] {
+				"PicpProjection"
+			});
+
 		PrivateIncludePaths.AddRange(
 			new string[] {
-				"PicpMPCDI/Private",
-				"PicpProjection/Private",
-				"MPCDI/Private"				
+				"MPCDI/Private"
 			});
 
 		PublicDependencyModuleNames.AddRange(
-			new string[]
-			{
+			new string[] {
 				"Core",
 				"CoreUObject",
-				"Engine",
+				"Engine"
 			});
 
 		PrivateDependencyModuleNames.AddRange(
-			new string[]
-			{
+			new string[] {
 				"MPCDI",
-				"PicpProjection",
-				"Projects",				
+				"Projects",
 				"RenderCore",
-                "RHI"
-			}
-		);
+				"RHI"
+			});
 
 		if (Target.bBuildEditor == true)
 		{

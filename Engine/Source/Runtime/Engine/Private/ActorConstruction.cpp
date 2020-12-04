@@ -169,6 +169,7 @@ void AActor::DestroyConstructedComponents()
 		return A > B;
 	});
 
+	bool bMarkPackageDirty = false;
 	for (const TPair<UActorComponent*,int32>& ComponentAndDepth : ComponentDepthMap)
 	{
 		UActorComponent* Component = ComponentAndDepth.Key;
@@ -205,9 +206,16 @@ void AActor::DestroyConstructedComponents()
 				// Rename component to avoid naming conflicts in the case where we rerun the SCS and name the new components the same way.
 				FName const NewBaseName( *(FString::Printf(TEXT("TRASH_%s"), *Component->GetClass()->GetName())) );
 				FName const NewObjectName = MakeUniqueObjectName(this, GetClass(), NewBaseName);
-				Component->Rename(*NewObjectName.ToString(), this, REN_ForceNoResetLoaders|REN_DontCreateRedirectors|REN_NonTransactional);
+				Component->Rename(*NewObjectName.ToString(), this, REN_ForceNoResetLoaders|REN_DontCreateRedirectors|REN_NonTransactional|REN_DoNotDirty);
+
+				bMarkPackageDirty = true;
 			}
 		}
+	}
+
+	if (bMarkPackageDirty)
+	{
+		GetPackage()->MarkPackageDirty();
 	}
 }
 
@@ -1079,7 +1087,7 @@ UActorComponent* AActor::CreateComponentFromTemplateData(const FBlueprintCookedC
 	return NewActorComp;
 }
 
-UActorComponent* AActor::AddComponent(FName TemplateName, bool bManualAttachment, const FTransform& RelativeTransform, const UObject* ComponentTemplateContext)
+UActorComponent* AActor::AddComponent(FName TemplateName, bool bManualAttachment, const FTransform& RelativeTransform, const UObject* ComponentTemplateContext, bool bDeferredFinish)
 {
 	UWorld* World = GetWorld();
 	if (World->bIsTearingDown)
@@ -1118,10 +1126,47 @@ UActorComponent* AActor::AddComponent(FName TemplateName, bool bManualAttachment
 		}
 	}
 
-	bool bIsSceneComponent = false;
 	UActorComponent* NewActorComp = TemplateData ? CreateComponentFromTemplateData(TemplateData) : CreateComponentFromTemplate(Template);
+
+	if (!bDeferredFinish)
+	{
+		FinishAddComponent(NewActorComp, bManualAttachment, RelativeTransform);
+	}
+
+	return NewActorComp;
+}
+
+UActorComponent* AActor::AddComponentByClass(TSubclassOf<UActorComponent> Class, bool bManualAttachment, const FTransform& RelativeTransform, bool bDeferredFinish)
+{
+	if (Class == nullptr)
+	{
+		return nullptr;
+	}
+
+	UWorld* World = GetWorld();
+	if (World->bIsTearingDown)
+	{
+		UE_LOG(LogActor, Warning, TEXT("AddComponent failed because we are in the process of tearing down the world"));
+		return nullptr;
+	}
+
+	UActorComponent* NewActorComp = NewObject<UActorComponent>(this, *Class);
+	PostCreateBlueprintComponent(NewActorComp);
+
+	if (!bDeferredFinish)
+	{
+		FinishAddComponent(NewActorComp, bManualAttachment, RelativeTransform);
+	}
+
+	return NewActorComp;
+}
+
+void AActor::FinishAddComponent(UActorComponent* NewActorComp, bool bManualAttachment, const FTransform& RelativeTransform)
+{
 	if(NewActorComp != nullptr)
 	{
+		bool bIsSceneComponent = false;
+
 		// Call function to notify component it has been created
 		NewActorComp->OnComponentCreated();
 		
@@ -1153,6 +1198,7 @@ UActorComponent* AActor::AddComponent(FName TemplateName, bool bManualAttachment
 			NewActorComp->RegisterComponent();
 		}
 
+		UWorld* World = GetWorld();
 		if (!bRunningUserConstructionScript && World && bIsSceneComponent)
 		{
 			UPrimitiveComponent* NewPrimitiveComponent = Cast<UPrimitiveComponent>(NewActorComp);
@@ -1162,8 +1208,6 @@ UActorComponent* AActor::AddComponent(FName TemplateName, bool bManualAttachment
 			}
 		}
 	}
-
-	return NewActorComp;
 }
 
 void AActor::CheckComponentInstanceName(const FName InName)

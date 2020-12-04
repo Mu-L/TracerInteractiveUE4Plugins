@@ -97,6 +97,9 @@ void FStaticMeshDetails::CustomizeDetails( class IDetailLayoutBuilder& DetailBui
 	LightMapCoordinateIndexProperty->SetOnPropertyValueChanged(FSimpleDelegate::CreateSP(this, &FStaticMeshDetails::OnLightmapSettingsChanged));
 	LightMapResolutionProperty->SetOnPropertyValueChanged(FSimpleDelegate::CreateSP(this, &FStaticMeshDetails::OnLightmapSettingsChanged));
 
+	TSharedRef<IPropertyHandle> StaticMaterials = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(UStaticMesh, StaticMaterials));
+	StaticMaterials->MarkHiddenByCustomization();
+
 	TSharedRef<IPropertyHandle> ImportSettings = DetailBuilder.GetProperty(GET_MEMBER_NAME_CHECKED(UStaticMesh, AssetImportData));
 	if (!StaticMeshEditor.GetStaticMesh() || 
 		!StaticMeshEditor.GetStaticMesh()->AssetImportData ||
@@ -2115,6 +2118,19 @@ TSharedRef<SWidget> FMeshSectionSettingsLayout::OnGenerateCustomSectionWidgetsFo
 			]
 		]
 		+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.Padding(2, 0, 2, 0)
+			[
+				SNew(SCheckBox)
+				.IsChecked(this, &FMeshSectionSettingsLayout::IsSectionVisibleInRayTracing, SectionIndex)
+			.OnCheckStateChanged(this, &FMeshSectionSettingsLayout::OnSectionVisibleInRayTracingChanged, SectionIndex)
+			[
+				SNew(STextBlock)
+				.Font(FEditorStyle::GetFontStyle("StaticMeshEditor.NormalFont"))
+			.Text(LOCTEXT("VisibleInRayTracing", "Visible In Ray Tracing"))
+			]
+		]
+		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		.Padding(2, 0, 2, 0)
 		[
@@ -2129,7 +2145,38 @@ TSharedRef<SWidget> FMeshSectionSettingsLayout::OnGenerateCustomSectionWidgetsFo
 		];
 }
 
-ECheckBoxState FMeshSectionSettingsLayout::IsSectionOpaque( int32 SectionIndex ) const
+ECheckBoxState FMeshSectionSettingsLayout::IsSectionVisibleInRayTracing(int32 SectionIndex) const
+{
+	UStaticMesh& StaticMesh = GetStaticMesh();
+	FMeshSectionInfo Info = StaticMesh.GetSectionInfoMap().Get(LODIndex, SectionIndex);
+	return Info.bVisibleInRayTracing ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+}
+
+void FMeshSectionSettingsLayout::OnSectionVisibleInRayTracingChanged(ECheckBoxState NewState, int32 SectionIndex)
+{
+	UStaticMesh& StaticMesh = GetStaticMesh();
+
+	FText TransactionTest = LOCTEXT("StaticMeshEditorSetVisibleInRayTracingSectionFlag", "Staticmesh editor: Set VisibleInRayTracing For section, the section will be visible in ray tracing effects");
+	if (NewState == ECheckBoxState::Unchecked)
+	{
+		TransactionTest = LOCTEXT("StaticMeshEditorClearVisibleInRayTracingSectionFlag", "Staticmesh editor: Clear VisibleInRayTracing For section");
+	}
+	FScopedTransaction Transaction(TransactionTest);
+
+	PRAGMA_DISABLE_DEPRECATION_WARNINGS
+		FProperty* Property = UStaticMesh::StaticClass()->FindPropertyByName(GET_MEMBER_NAME_STRING_CHECKED(UStaticMesh, SectionInfoMap));
+	PRAGMA_ENABLE_DEPRECATION_WARNINGS
+
+		StaticMesh.PreEditChange(Property);
+	StaticMesh.Modify();
+
+	FMeshSectionInfo Info = StaticMesh.GetSectionInfoMap().Get(LODIndex, SectionIndex);
+	Info.bVisibleInRayTracing = (NewState == ECheckBoxState::Checked) ? true : false;
+	StaticMesh.GetSectionInfoMap().Set(LODIndex, SectionIndex, Info);
+	CallPostEditChange();
+}
+
+ECheckBoxState FMeshSectionSettingsLayout::IsSectionOpaque(int32 SectionIndex) const
 {
 	UStaticMesh& StaticMesh = GetStaticMesh();
 	FMeshSectionInfo Info = StaticMesh.GetSectionInfoMap().Get(LODIndex, SectionIndex);
@@ -3975,8 +4022,7 @@ void FLevelOfDetailSettingsLayout::OnImportLOD(TSharedPtr<FString> NewValue, ESe
 			{
 				//Ask the user to change the LODGroup to None, if the user cancel do not re-import the LOD
 				//We can have a LODGroup with custom LOD only if custom LOD are after the generated LODGroup LODs
-				EAppReturnType::Type ReturnResult = FMessageDialog::Open(EAppMsgType::OkCancel, EAppReturnType::Ok, FText::Format(LOCTEXT("LODImport_LODGroupVersusCustomLODConflict",
-					"This static mesh uses the LOD group \"{0}\" which generates the LOD {1}. To import a custom LOD at index {1}, the LODGroup must be cleared to \"None\"."), FText::FromName(StaticMesh->LODGroup), FText::AsNumber(LODIndex)));
+				EAppReturnType::Type ReturnResult = FMessageDialog::Open(EAppMsgType::OkCancel, EAppReturnType::Ok, FText::Format(LOCTEXT("LODImport_LODGroupVersusCustomLODConflict", "This static mesh uses the LOD group \"{0}\" which generates the LOD {1}. To import a custom LOD at index {1}, the LODGroup must be cleared to \"None\"."), FText::FromName(StaticMesh->LODGroup), FText::AsNumber(LODIndex)));
 				if (ReturnResult == EAppReturnType::Cancel)
 				{
 					StaticMeshEditor.RefreshTool();
@@ -4264,8 +4310,11 @@ void FLevelOfDetailSettingsLayout::OnNumStreamedLODsCommitted(int32 InValue, ETe
 	check(StaticMesh);
 	if (UpdateStaticMeshNumStreamedLODsHelper(StaticMesh, InValue, Platform))
 	{
-		// Make sure FStaticMeshRenderData::CurrentFirstLODIdx is not accessed on other threads
-		IStreamingManager::Get().GetTextureStreamingManager().BlockTillAllRequestsFinished();
+		if (IStreamingManager::Get().IsRenderAssetStreamingEnabled(EStreamableRenderAssetType::StaticMesh))
+		{
+			// Make sure FStaticMeshRenderData::CurrentFirstLODIdx is not accessed on other threads
+			IStreamingManager::Get().GetRenderAssetStreamingManager().BlockTillAllRequestsFinished();
+		}
 		// Recache derived data and relink streaming
 		ApplyChanges();
 	}

@@ -47,6 +47,18 @@ namespace Audio
 		// Sets the source voice's HPF filter frequency.
 		void SetHPFFrequency(const float InFrequency);
 
+		// Sets the source voice modulation base pitch value.
+		void SetModPitch(const float InPitch);
+
+		// Sets the source voice's volume modulation base frequency.
+		void SetModVolume(const float InVolume);
+
+		// Sets the source voice's LPF filter modulation base frequency.
+		void SetModLPFFrequency(const float InFrequency);
+
+		// Sets the source voice's HPF filter modulation base frequency.
+		void SetModHPFFrequency(const float InFrequency);
+
 		// Sets the source voice's channel map (2d or 3d).
 		void SetChannelMap(const uint32 NumInputChannels, const Audio::AlignedFloatBuffer& InChannelMap, const bool bInIs3D, const bool bInIsCenterChannelOnly);
 
@@ -95,7 +107,7 @@ namespace Audio
 		float GetEnvelopeValue() const;
 
 		// Mixes the dry and wet buffer audio into the given buffers.
-		void MixOutputBuffers(int32 InNumChannels, const float SendLevel, AlignedFloatBuffer& OutWetBuffer) const;
+		void MixOutputBuffers(int32 InNumChannels, const float SendLevel, EMixerSourceSubmixSendStage InSubmixSendStage, AlignedFloatBuffer& OutWetBuffer) const;
 
 		// For soundfield conversions, get the encoded audio.
 		const ISoundfieldAudioPacket* GetEncodedOutput(const FSoundfieldEncodingKey& InKey) const;
@@ -106,8 +118,11 @@ namespace Audio
 		// Sets the submix send levels
 		void SetSubmixSendInfo(FMixerSubmixWeakPtr Submix, const float SendLevel);
 
+		// Clears the submix send to the given submix
+		void ClearSubmixSendInfo(FMixerSubmixWeakPtr Submix);
+
 		// Set the source bus send levels
-		void SetBusSendInfo(EBusSendType InBusSendType, FMixerBusSend& BusSend);
+		void SetAudioBusSendInfo(EBusSendType InBusSendType, uint32 AudioBusId, float BusSendLevel);
 
 		// Called when the source is a bus and needs to mix other sources together to generate output
 		void OnMixBus(FMixerSourceVoiceBuffer* OutMixerSourceBuffer);
@@ -127,6 +142,10 @@ namespace Audio
 		float Distance;
 		float LPFFrequency;
 		float HPFFrequency;
+		float PitchModBase;
+		float VolumeModBase;
+		float LPFFrequencyModBase;
+		float HPFFrequencyModBase;
 		int32 SourceId;
 		uint16 bIsPlaying : 1;
 		uint16 bIsPaused : 1;

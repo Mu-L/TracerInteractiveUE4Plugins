@@ -9,6 +9,7 @@
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
 #include "UObject/Object.h"
+#include "HAL/ThreadSafeBool.h"
 #include "Misc/Guid.h"
 #include "UniformBuffer.h"
 #include "Templates/UniquePtr.h"
@@ -73,7 +74,7 @@ struct FCollectionVectorParameter : public FCollectionParameterBase
  * Asset class that contains a list of parameter names and their default values. 
  * Any number of materials can reference these parameters and get new values when the parameter values are changed.
  */
-UCLASS(hidecategories=object, MinimalAPI)
+UCLASS(hidecategories=object, MinimalAPI, BlueprintType)
 class UMaterialParameterCollection : public UObject
 {
 	GENERATED_UCLASS_BODY()
@@ -129,8 +130,8 @@ private:
 	virtual ENGINE_API void FinishDestroy() override;
 	virtual ENGINE_API bool IsReadyForFinishDestroy() override;
 
-	/** Fence used to guarantee that the RT is finished using various resources in this UMaterial before cleanup. */
-	FRenderCommandFence ReleaseFence;
+	/** Flag used to guarantee that the RT is finished using various resources in this UMaterial before cleanup. */
+	FThreadSafeBool ReleasedByRT;
 
 	/** Default resource used when no instance is available. */
 	class FMaterialParameterCollectionInstanceResource* DefaultResource;

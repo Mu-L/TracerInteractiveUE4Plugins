@@ -202,16 +202,29 @@ void FD3D12CommandContext::RHICopyToResolveTarget(FRHITexture* SourceTextureRHI,
 		return;
 	}
 
+	// Could be back buffer reference texture, so get the correct D3D12 texture here
+	// We know already that it's a FD3D12Texture2D so cast is safe
+	if (SourceTextureRHI->GetFlags() & TexCreate_Presentable)
+	{
+		FD3D12BackBufferReferenceTexture2D* BufferBufferReferenceTexture = (FD3D12BackBufferReferenceTexture2D*)SourceTextureRHI;
+		SourceTextureRHI = BufferBufferReferenceTexture->GetBackBufferTexture();
+	}
+	if (DestTextureRHI->GetFlags() & TexCreate_Presentable)
+	{
+		FD3D12BackBufferReferenceTexture2D* BufferBufferReferenceTexture = (FD3D12BackBufferReferenceTexture2D*)DestTextureRHI;
+		DestTextureRHI = BufferBufferReferenceTexture->GetBackBufferTexture();
+	}
+
 	FRHICommandList_RecursiveHazardous RHICmdList(this, FRHIGPUMask::FromIndex(GetGPUIndex()));
 
-	FD3D12Texture2D* SourceTexture2D = static_cast<FD3D12Texture2D*>(RetrieveTextureBase(SourceTextureRHI->GetTexture2D()));
-	FD3D12Texture2D* DestTexture2D = static_cast<FD3D12Texture2D*>(RetrieveTextureBase(DestTextureRHI->GetTexture2D()));
+	FD3D12Texture2D* SourceTexture2D = RetrieveObject<FD3D12Texture2D>(SourceTextureRHI->GetTexture2D());
+	FD3D12Texture2D* DestTexture2D = RetrieveObject<FD3D12Texture2D>(DestTextureRHI->GetTexture2D());
 
-	FD3D12TextureCube* SourceTextureCube = static_cast<FD3D12TextureCube*>(RetrieveTextureBase(SourceTextureRHI->GetTextureCube()));
-	FD3D12TextureCube* DestTextureCube = static_cast<FD3D12TextureCube*>(RetrieveTextureBase(DestTextureRHI->GetTextureCube()));
+	FD3D12TextureCube* SourceTextureCube = RetrieveObject<FD3D12TextureCube>(SourceTextureRHI->GetTextureCube());
+	FD3D12TextureCube* DestTextureCube = RetrieveObject<FD3D12TextureCube>(DestTextureRHI->GetTextureCube());
 
-	FD3D12Texture3D* SourceTexture3D = static_cast<FD3D12Texture3D*>(RetrieveTextureBase(SourceTextureRHI->GetTexture3D()));
-	FD3D12Texture3D* DestTexture3D = static_cast<FD3D12Texture3D*>(RetrieveTextureBase(DestTextureRHI->GetTexture3D()));
+	FD3D12Texture3D* SourceTexture3D = RetrieveObject<FD3D12Texture3D>(SourceTextureRHI->GetTexture3D());
+	FD3D12Texture3D* DestTexture3D = RetrieveObject<FD3D12Texture3D>(DestTextureRHI->GetTexture3D());
 
 	if (SourceTexture2D && DestTexture2D)
 	{
@@ -274,10 +287,10 @@ void FD3D12CommandContext::RHICopyToResolveTarget(FRHITexture* SourceTextureRHI,
 				{
 					D3D12_RESOURCE_DESC const& srcDesc = SourceTexture2D->GetResource()->GetDesc();
 					D3D12_RESOURCE_DESC const& ResolveTargetDesc = DestTexture2D->GetResource()->GetDesc();
-					bool bCopySubRect = ResolveParams.Rect.IsValid() && (ResolveParams.Rect.X1 != 0 || ResolveParams.Rect.Y1 != 0 || ResolveParams.Rect.X2 != srcDesc.Width || ResolveParams.Rect.Y2 != srcDesc.Height);
-					bool bCopySubDestRect = ResolveParams.DestRect.IsValid() && (ResolveParams.DestRect.X1 != 0 || ResolveParams.DestRect.Y1 != 0 || ResolveParams.DestRect.X2 != ResolveTargetDesc.Width || ResolveParams.DestRect.Y2 != ResolveTargetDesc.Height);
+					bool bCopySrcSubRect = ResolveParams.Rect.IsValid() && (ResolveParams.Rect.X1 != 0 || ResolveParams.Rect.Y1 != 0 || ResolveParams.Rect.X2 != srcDesc.Width || ResolveParams.Rect.Y2 != srcDesc.Height);
+					bool bCopyDstSubRect = ResolveParams.DestRect.IsValid() && (ResolveParams.DestRect.X1 != 0 || ResolveParams.DestRect.Y1 != 0 || ResolveParams.DestRect.X2 != ResolveTargetDesc.Width || ResolveParams.DestRect.Y2 != ResolveTargetDesc.Height);
 
-					if ((bCopySubRect || bCopySubDestRect)
+					if ((bCopySrcSubRect || bCopyDstSubRect)
 						&& !SourceTextureRHI->IsMultisampled()
 						&& !DestTexture2D->GetDepthStencilView(FExclusiveDepthStencil::DepthWrite_StencilWrite))
 					{
@@ -501,8 +514,8 @@ void FD3D12DynamicRHI::RHITransferTexture(FRHITexture2D* TextureRHI, FIntRect Re
 {
 	FD3D12Adapter& Adapter = GetAdapter();
 
-	FD3D12Texture2D* SrcTexture2D = static_cast<FD3D12Texture2D*>(FD3D12CommandContext::RetrieveTextureBase(TextureRHI->GetTexture2D(), [&](FD3D12Device* Device) { return Device->GetGPUIndex() == SrcGPUIndex; }));
-	FD3D12Texture2D* DestTexture2D = static_cast<FD3D12Texture2D*>(FD3D12CommandContext::RetrieveTextureBase(TextureRHI->GetTexture2D(), [&](FD3D12Device* Device) { return Device->GetGPUIndex() == DestGPUIndex; }));
+	FD3D12Texture2D* SrcTexture2D = ResourceCast(TextureRHI->GetTexture2D(), SrcGPUIndex);
+	FD3D12Texture2D* DestTexture2D = ResourceCast(TextureRHI->GetTexture2D(), DestGPUIndex);
 
 	const FRHIGPUMask SrcAndDestMask = FRHIGPUMask::FromIndex(SrcGPUIndex) | FRHIGPUMask::FromIndex(DestGPUIndex);
 
@@ -539,6 +552,73 @@ void FD3D12DynamicRHI::RHITransferTexture(FRHITexture2D* TextureRHI, FIntRect Re
 
 	DEBUG_RHI_EXECUTE_COMMAND_LIST(this);
 }
+
+void FD3D12DynamicRHI::RHITransferTextures(const TArrayView<const FTransferTextureParams> Params)
+{
+	FD3D12Adapter& Adapter = GetAdapter();
+
+	FRHIGPUMask SrcAndDestMask;
+
+	for (const auto& Param : Params)
+	{
+		FRHITexture2D* TextureRHI = Param.Texture;
+		uint32 SrcGPUIndex = Param.SrcGPUIndex;
+		uint32 DestGPUIndex = Param.DestGPUIndex;
+		bool PullData = Param.PullData;
+
+		FD3D12TextureBase* SrcTexture = FD3D12CommandContext::RetrieveTextureBase(TextureRHI, SrcGPUIndex);
+		FD3D12TextureBase* DestTexture = FD3D12CommandContext::RetrieveTextureBase(TextureRHI, DestGPUIndex);
+
+		SrcAndDestMask |= FRHIGPUMask::FromIndex(SrcGPUIndex) | FRHIGPUMask::FromIndex(DestGPUIndex);
+
+		{
+			FD3D12CommandContext& SrcContext = Adapter.GetDevice(SrcGPUIndex)->GetDefaultCommandContext();
+			FD3D12DynamicRHI::TransitionResource(SrcContext.CommandListHandle, SrcTexture->GetResource(), D3D12_RESOURCE_STATE_COPY_SOURCE, 0);
+
+			FD3D12CommandContext& DestContext = Adapter.GetDevice(DestGPUIndex)->GetDefaultCommandContext();
+			FD3D12DynamicRHI::TransitionResource(DestContext.CommandListHandle, DestTexture->GetResource(), D3D12_RESOURCE_STATE_COPY_DEST, 0);
+		}
+	}
+
+	RHIMultiGPULockstep(SrcAndDestMask);
+
+	for (const auto& Param : Params)
+	{
+		FRHITexture2D* TextureRHI = Param.Texture;
+		uint32 SrcGPUIndex = Param.SrcGPUIndex;
+		uint32 DestGPUIndex = Param.DestGPUIndex;
+		bool PullData = Param.PullData;
+
+		FD3D12TextureBase* SrcTexture = FD3D12CommandContext::RetrieveTextureBase(TextureRHI, SrcGPUIndex);
+		FD3D12TextureBase* DestTexture = FD3D12CommandContext::RetrieveTextureBase(TextureRHI, DestGPUIndex);
+
+		ensureMsgf(
+			Param.Min.X >= 0 && Param.Min.Y >= 0 && Param.Min.Z >= 0 &&
+			Param.Max.X >= 0 && Param.Max.Y >= 0 && Param.Max.Z >= 0,
+			TEXT("Invalid rect for texture transfer: %i, %i, %i, %i"), Param.Min.X, Param.Min.Y, Param.Min.Z, Param.Max.X, Param.Max.Y, Param.Max.Z);
+
+		D3D12_BOX Box = { (UINT)Param.Min.X, (UINT)Param.Min.Y, (UINT)Param.Min.Z, (UINT)Param.Max.X, (UINT)Param.Max.Y, (UINT)Param.Max.Z };
+
+		CD3DX12_TEXTURE_COPY_LOCATION SrcLocation(SrcTexture->GetResource()->GetResource(), 0);
+		CD3DX12_TEXTURE_COPY_LOCATION DestLocation(DestTexture->GetResource()->GetResource(), 0);
+
+		FD3D12CommandContext& Context = Adapter.GetDevice(PullData ? DestGPUIndex : SrcGPUIndex)->GetDefaultCommandContext();
+
+		Context.CommandListHandle->CopyTextureRegion(
+			&DestLocation,
+			Box.left, Box.top, Box.front,
+			&SrcLocation,
+			&Box);
+
+		Context.numCopies++;
+
+	}
+
+	RHIMultiGPULockstep(SrcAndDestMask);
+
+	DEBUG_RHI_EXECUTE_COMMAND_LIST(this);
+}
+
 
 static uint32 ComputeBytesPerPixel(DXGI_FORMAT Format)
 {
@@ -630,14 +710,14 @@ static uint32 ComputeBytesPerPixel(DXGI_FORMAT Format)
 	return BytesPerPixel;
 }
 
-TRefCountPtr<FD3D12Resource> FD3D12DynamicRHI::GetStagingTexture(FRHITexture* TextureRHI, FIntRect InRect, FIntRect& StagingRectOUT, FReadSurfaceDataFlags InFlags, D3D12_PLACED_SUBRESOURCE_FOOTPRINT &readbackHeapDesc)
+TRefCountPtr<FD3D12Resource> FD3D12DynamicRHI::GetStagingTexture(FRHITexture* TextureRHI, FIntRect InRect, FIntRect& StagingRectOUT, FReadSurfaceDataFlags InFlags, D3D12_PLACED_SUBRESOURCE_FOOTPRINT &readbackHeapDesc, uint32 GPUIndex)
 {
-	FD3D12Device* Device = GetRHIDevice();
+	FD3D12Device* Device = GetRHIDevice(GPUIndex);
 	FD3D12Adapter* Adapter = Device->GetParentAdapter();
 	const FRHIGPUMask Node = Device->GetGPUMask();
 
 	FD3D12CommandListHandle& hCommandList = Device->GetDefaultCommandContext().CommandListHandle;
-	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI);
+	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI, GPUIndex);
 	D3D12_RESOURCE_DESC const& SourceDesc = Texture->GetResource()->GetDesc();
 
 	// Ensure we're dealing with a Texture2D, which the rest of this function already assumes
@@ -742,7 +822,8 @@ TRefCountPtr<FD3D12Resource> FD3D12DynamicRHI::GetStagingTexture(FRHITexture* Te
 
 void FD3D12DynamicRHI::ReadSurfaceDataNoMSAARaw(FRHITexture* TextureRHI, FIntRect InRect, TArray<uint8>& OutData, FReadSurfaceDataFlags InFlags)
 {
-	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI);
+	const uint32 GPUIndex = InFlags.GetGPUIndex();
+	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI, GPUIndex);
 
 	const uint32 SizeX = InRect.Width();
 	const uint32 SizeY = InRect.Height();
@@ -750,7 +831,7 @@ void FD3D12DynamicRHI::ReadSurfaceDataNoMSAARaw(FRHITexture* TextureRHI, FIntRec
 	// Check the format of the surface
 	FIntRect StagingRect;
 	D3D12_PLACED_SUBRESOURCE_FOOTPRINT readBackHeapDesc;
-	TRefCountPtr<FD3D12Resource> TempTexture2D = GetStagingTexture(TextureRHI, InRect, StagingRect, InFlags, readBackHeapDesc);
+	TRefCountPtr<FD3D12Resource> TempTexture2D = GetStagingTexture(TextureRHI, InRect, StagingRect, InFlags, readBackHeapDesc, GPUIndex);
 
 	uint32 BytesPerPixel = GPixelFormats[TextureRHI->GetFormat()].BlockBytes;
 
@@ -1152,7 +1233,7 @@ void FD3D12DynamicRHI::RHIReadSurfaceData(FRHITexture* TextureRHI, FIntRect InRe
 {
 	TArray<uint8> OutDataRaw;
 
-	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI);
+	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI, InFlags.GetGPUIndex());
 
 	// Check the format of the surface
 	D3D12_RESOURCE_DESC const& TextureDesc = Texture->GetResource()->GetDesc();
@@ -1185,29 +1266,31 @@ void FD3D12DynamicRHI::RHIReadSurfaceData(FRHITexture* TextureRHI, FIntRect InRe
 		ConvertRAWSurfaceDataToFLinearColor(Format, SizeX, SizeY, OutDataRaw.GetData(), SrcPitch, OutData.GetData(), InFlags);
 	}
 }
-void FD3D12DynamicRHI::RHIReadSurfaceData(FRHITexture* TextureRHI, FIntRect InRect, TArray<FColor>& OutData, FReadSurfaceDataFlags InFlags)
+void FD3D12DynamicRHI::RHIReadSurfaceData(FRHITexture* InRHITexture, FIntRect InRect, TArray<FColor>& OutData, FReadSurfaceDataFlags InFlags)
 {
-	if (!ensure(TextureRHI))
+	if (!ensure(InRHITexture))
 	{
 		OutData.Empty();
 		OutData.AddZeroed(InRect.Width() * InRect.Height());
 		return;
 	}
 
+	const uint32 GPUIndex = InFlags.GetGPUIndex();
 	TArray<uint8> OutDataRaw;
 
-	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI);
+	FD3D12CommandContext& CommandContext = GetRHIDevice(GPUIndex)->GetDefaultCommandContext();
+	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(InRHITexture);
 
 	// Wait for the command list if needed
-	FD3D12Texture2D* DestTexture2D = static_cast<FD3D12Texture2D*>(TextureRHI->GetTexture2D());
+	FD3D12Texture2D* DestTexture2D = static_cast<FD3D12Texture2D*>(Texture);
 	FD3D12CLSyncPoint SyncPoint = DestTexture2D->GetReadBackSyncPoint();
 
 	if (!!SyncPoint)
 	{
-		CommandListState ListState = GetRHIDevice()->GetCommandListManager().GetCommandListState(SyncPoint);
+		CommandListState ListState = GetRHIDevice(GPUIndex)->GetCommandListManager().GetCommandListState(SyncPoint);
 		if (ListState == CommandListState::kOpen)
 		{
-			GetRHIDevice()->GetDefaultCommandContext().FlushCommands(true);
+			CommandContext.FlushCommands(true);
 		}
 		else
 		{
@@ -1216,19 +1299,19 @@ void FD3D12DynamicRHI::RHIReadSurfaceData(FRHITexture* TextureRHI, FIntRect InRe
 	}
 
 	// Check the format of the surface
-	D3D12_RESOURCE_DESC const& TextureDesc = Texture->GetResource()->GetDesc();
+	D3D12_RESOURCE_DESC const& TextureDesc = DestTexture2D->GetResource()->GetDesc();
 
 	check(TextureDesc.SampleDesc.Count >= 1);
 
 	if (TextureDesc.SampleDesc.Count == 1)
 	{
-		ReadSurfaceDataNoMSAARaw(TextureRHI, InRect, OutDataRaw, InFlags);
+		ReadSurfaceDataNoMSAARaw(DestTexture2D, InRect, OutDataRaw, InFlags);
 	}
 	else
 	{
 		FD3D12CommandContextBase* CmdContext = static_cast<FD3D12CommandContextBase*>(RHIGetDefaultContext());
 		FRHICommandList_RecursiveHazardous RHICmdList(CmdContext, CmdContext->GetGPUMask());
-		ReadSurfaceDataMSAARaw(RHICmdList, TextureRHI, InRect, OutDataRaw, InFlags);
+		ReadSurfaceDataMSAARaw(RHICmdList, DestTexture2D, InRect, OutDataRaw, InFlags);
 	}
 
 	const uint32 SizeX = InRect.Width() * TextureDesc.SampleDesc.Count;
@@ -1238,7 +1321,7 @@ void FD3D12DynamicRHI::RHIReadSurfaceData(FRHITexture* TextureRHI, FIntRect InRe
 	OutData.Empty();
 	OutData.AddUninitialized(SizeX * SizeY);
 
-	FPixelFormatInfo FormatInfo = GPixelFormats[TextureRHI->GetFormat()];
+	FPixelFormatInfo FormatInfo = GPixelFormats[DestTexture2D->GetFormat()];
 	uint32 BytesPerPixel = FormatInfo.BlockBytes;
 	uint32 SrcPitch = SizeX * BytesPerPixel;
 
@@ -1247,13 +1330,14 @@ void FD3D12DynamicRHI::RHIReadSurfaceData(FRHITexture* TextureRHI, FIntRect InRe
 
 void FD3D12DynamicRHI::ReadSurfaceDataMSAARaw(FRHICommandList_RecursiveHazardous& RHICmdList, FRHITexture* TextureRHI, FIntRect InRect, TArray<uint8>& OutData, FReadSurfaceDataFlags InFlags)
 {
-	FD3D12Device* Device = GetRHIDevice();
+	const uint32 GPUIndex = InFlags.GetGPUIndex();
+	FD3D12Device* Device = GetRHIDevice(GPUIndex);
 	FD3D12Adapter* Adapter = Device->GetParentAdapter();
 	const FRHIGPUMask NodeMask = Device->GetGPUMask();
 
 	FD3D12CommandContext& DefaultContext = Device->GetDefaultCommandContext();
 	FD3D12CommandListHandle& hCommandList = DefaultContext.CommandListHandle;
-	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI);
+	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI, GPUIndex);
 
 	const uint32 SizeX = InRect.Width();
 	const uint32 SizeY = InRect.Height();
@@ -1354,7 +1438,7 @@ void FD3D12DynamicRHI::ReadSurfaceDataMSAARaw(FRHICommandList_RecursiveHazardous
 		// Resolve the sample to the non-MSAA render target.
 		DefaultContext.ResolveTextureUsingShader<FResolveSingleSamplePS>(
 			RHICmdList,
-			(FD3D12Texture2D*)TextureRHI->GetTexture2D(),
+			ResourceCast(TextureRHI->GetTexture2D()),
 			NULL,
 			NonMSAARTV,
 			NULL,
@@ -1408,15 +1492,7 @@ void FD3D12DynamicRHI::ReadSurfaceDataMSAARaw(FRHICommandList_RecursiveHazardous
 
 void FD3D12DynamicRHI::RHIMapStagingSurface(FRHITexture* TextureRHI, FRHIGPUFence* FenceRHI, void*& OutData, int32& OutWidth, int32& OutHeight, uint32 GPUIndex)
 {
-	FD3D12Texture2D* DestTexture2D = ResourceCast(TextureRHI->GetTexture2D());
-
-#if WITH_MGPU
-	FD3D12Device* Device = GetAdapter().GetDevice(GPUIndex);
-	while (DestTexture2D && DestTexture2D->GetParentDevice() != Device)
-	{
-		DestTexture2D = static_cast<FD3D12Texture2D*>(DestTexture2D->GetNextObject());
-	}
-#endif
+	FD3D12Texture2D* DestTexture2D = ResourceCast(TextureRHI->GetTexture2D(), GPUIndex);
 
 	check(DestTexture2D);
 	FD3D12Resource* Texture = DestTexture2D->GetResource();
@@ -1427,14 +1503,14 @@ void FD3D12DynamicRHI::RHIMapStagingSurface(FRHITexture* TextureRHI, FRHIGPUFenc
 
 	// Wait for the command list if needed
 	FD3D12CLSyncPoint SyncPoint = DestTexture2D->GetReadBackSyncPoint();
-	CommandListState listState = GetRHIDevice()->GetCommandListManager().GetCommandListState(SyncPoint);
+	CommandListState listState = GetRHIDevice(GPUIndex)->GetCommandListManager().GetCommandListState(SyncPoint);
 	if (listState == CommandListState::kOpen)
 	{
-		GetRHIDevice()->GetDefaultCommandContext().FlushCommands(true);
+		GetRHIDevice(GPUIndex)->GetDefaultCommandContext().FlushCommands(true);
 	}
 	else
 	{
-		GetRHIDevice()->GetCommandListManager().WaitForCompletion(SyncPoint);
+		GetRHIDevice(GPUIndex)->GetCommandListManager().WaitForCompletion(SyncPoint);
 	}
 
 	void* pData;
@@ -1475,15 +1551,7 @@ void FD3D12DynamicRHI::RHIMapStagingSurface(FRHITexture* TextureRHI, FRHIGPUFenc
 
 void FD3D12DynamicRHI::RHIUnmapStagingSurface(FRHITexture* TextureRHI, uint32 GPUIndex)
 {
-	FD3D12Texture2D* DestTexture2D = ResourceCast(TextureRHI->GetTexture2D());
-
-#if WITH_MGPU
-	FD3D12Device* Device = GetAdapter().GetDevice(GPUIndex);
-	while (DestTexture2D && DestTexture2D->GetParentDevice() != Device)
-	{
-		DestTexture2D = static_cast<FD3D12Texture2D*>(DestTexture2D->GetNextObject());
-	}
-#endif
+	FD3D12Texture2D* DestTexture2D = ResourceCast(TextureRHI->GetTexture2D(), GPUIndex);
 
 	check(DestTexture2D);
 	ID3D12Resource* Texture = DestTexture2D->GetResource()->GetResource();
@@ -1493,13 +1561,22 @@ void FD3D12DynamicRHI::RHIUnmapStagingSurface(FRHITexture* TextureRHI, uint32 GP
 
 void FD3D12DynamicRHI::RHIReadSurfaceFloatData(FRHITexture* TextureRHI, FIntRect InRect, TArray<FFloat16Color>& OutData, ECubeFace CubeFace, int32 ArrayIndex, int32 MipIndex)
 {
-	FD3D12Device* Device = GetRHIDevice();
+	FReadSurfaceDataFlags ReadFlags(RCM_MinMax, CubeFace);
+	ReadFlags.SetArrayIndex(ArrayIndex);
+	ReadFlags.SetMip(MipIndex);
+	RHIReadSurfaceFloatData(TextureRHI, InRect, OutData, ReadFlags);
+}
+
+void FD3D12DynamicRHI::RHIReadSurfaceFloatData(FRHITexture* TextureRHI, FIntRect InRect, TArray<FFloat16Color>& OutData, FReadSurfaceDataFlags InFlags)
+{
+	const uint32 GPUIndex = InFlags.GetGPUIndex();
+	FD3D12Device* Device = GetRHIDevice(GPUIndex);
 	FD3D12Adapter* Adapter = Device->GetParentAdapter();
 	const FRHIGPUMask Node = Device->GetGPUMask();
 
 	FD3D12CommandContext& DefaultContext = Device->GetDefaultCommandContext();
 	FD3D12CommandListHandle& hCommandList = DefaultContext.CommandListHandle;
-	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI);
+	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI, GPUIndex);
 
 	uint32 SizeX = InRect.Width();
 	uint32 SizeY = InRect.Height();
@@ -1556,8 +1633,13 @@ void FD3D12DynamicRHI::RHIReadSurfaceFloatData(FRHITexture* TextureRHI, FIntRect
 	uint32 Subresource = 0;
 	if (bIsTextureCube)
 	{
-		uint32 D3DFace = GetD3D12CubeFace(CubeFace);
-		Subresource = CalcSubresource(MipIndex, ArrayIndex * 6 + D3DFace, TextureDesc.MipLevels);
+		uint32 D3DFace = GetD3D12CubeFace(InFlags.GetCubeFace());
+		Subresource = CalcSubresource(InFlags.GetMip(), InFlags.GetArrayIndex() * 6 + D3DFace, TextureDesc.MipLevels);
+	}
+	else
+	{
+		const bool bIsTextureArray = InTexture2DArray != nullptr;
+		Subresource = CalcSubresource(InFlags.GetMip(), bIsTextureArray ? InFlags.GetArrayIndex() : 0, TextureDesc.MipLevels);
 	}
 
 	uint32 BytesPerPixel = ComputeBytesPerPixel(TextureDesc.Format);
@@ -1621,13 +1703,19 @@ void FD3D12DynamicRHI::RHIReadSurfaceFloatData(FRHITexture* TextureRHI, FIntRect
 
 void FD3D12DynamicRHI::RHIRead3DSurfaceFloatData(FRHITexture* TextureRHI, FIntRect InRect, FIntPoint ZMinMax, TArray<FFloat16Color>& OutData)
 {
-	FD3D12Device* Device = GetRHIDevice();
+	RHIRead3DSurfaceFloatData(TextureRHI, InRect, ZMinMax, OutData, FReadSurfaceDataFlags(RCM_MinMax));
+}
+
+void FD3D12DynamicRHI::RHIRead3DSurfaceFloatData(FRHITexture* TextureRHI, FIntRect InRect, FIntPoint ZMinMax, TArray<FFloat16Color>& OutData, FReadSurfaceDataFlags InFlags)
+{
+	const uint32 GPUIndex = InFlags.GetGPUIndex();
+	FD3D12Device* Device = GetRHIDevice(GPUIndex);
 	FD3D12Adapter* Adapter = Device->GetParentAdapter();
 	const FRHIGPUMask Node = Device->GetGPUMask();
 
 	FD3D12CommandContext& DefaultContext = Device->GetDefaultCommandContext();
 	FD3D12CommandListHandle& hCommandList = DefaultContext.CommandListHandle;
-	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI);
+	FD3D12TextureBase* Texture = GetD3D12TextureFromRHITexture(TextureRHI, GPUIndex);
 
 	uint32 SizeX = InRect.Width();
 	uint32 SizeY = InRect.Height();
@@ -1637,7 +1725,8 @@ void FD3D12DynamicRHI::RHIRead3DSurfaceFloatData(FRHITexture* TextureRHI, FIntRe
 	D3D12_RESOURCE_DESC const& TextureDesc = Texture->GetResource()->GetDesc();
 	bool bIsRGBAFmt = TextureDesc.Format == GPixelFormats[PF_FloatRGBA].PlatformFormat;
 	bool bIsR16FFmt = TextureDesc.Format == GPixelFormats[PF_R16F].PlatformFormat;
-	check(bIsRGBAFmt || bIsR16FFmt);	
+	bool bIsR32FFmt = TextureDesc.Format == GPixelFormats[PF_R32_FLOAT].PlatformFormat;
+	check(bIsRGBAFmt || bIsR16FFmt || bIsR32FFmt);
 
 	// Allocate the output buffer.
 	OutData.Empty(SizeX * SizeY * SizeZ * sizeof(FFloat16Color));
@@ -1735,6 +1824,24 @@ void FD3D12DynamicRHI::RHIRead3DSurfaceFloatData(FRHITexture* TextureRHI, FIntRe
 					int32 Index = (Y - InRect.Min.Y) * SizeX + (Z - ZMinMax.X) * SizeX * SizeY + X;
 					check(Index < OutData.Num());
 					OutData[Index].R = SrcPtr[X];
+					OutData[Index].A = FFloat16(1.0f); // ensure full alpha (as if you sampled on GPU)
+				}
+			}
+		}
+	}
+	else if (bIsR32FFmt)
+	{
+		// Texture is R16F format
+		for (int32 Z = ZMinMax.X; Z < ZMinMax.Y; ++Z)
+		{
+			for (int32 Y = InRect.Min.Y; Y < InRect.Max.Y; ++Y)
+			{
+				const float* SrcPtr = (const float*)((const uint8*)pData + (Y - InRect.Min.Y) * XBytesAligned + (Z - ZMinMax.X) * DepthBytesAligned);
+				for (int32 X = InRect.Min.X; X < InRect.Max.X; ++X)
+				{
+					int32 Index = (Y - InRect.Min.Y) * SizeX + (Z - ZMinMax.X) * SizeX * SizeY + X;
+					check(Index < OutData.Num());
+					OutData[Index].R = FFloat16(SrcPtr[X]);
 					OutData[Index].A = FFloat16(1.0f); // ensure full alpha (as if you sampled on GPU)
 				}
 			}

@@ -478,6 +478,10 @@ namespace Chaos
 		{
 			return (X < Y && X < Z) ? X : (Y < Z ? Y : Z);
 		}
+		int32 MaxAxis() const
+		{
+			return (X > Y && X > Z) ? 0 : (Y > Z ? 1 : 2);
+		}
 		TVector<float, 3> ComponentwiseMin(const TVector<float, 3>& Other) const { return {FMath::Min(X,Other.X), FMath::Min(Y,Other.Y), FMath::Min(Z,Other.Z)}; }
 		TVector<float, 3> ComponentwiseMax(const TVector<float, 3>& Other) const { return {FMath::Max(X,Other.X), FMath::Max(Y,Other.Y), FMath::Max(Z,Other.Z)}; }
 		static TVector<float, 3> Max(const TVector<float, 3>& V1, const TVector<float, 3>& V2)
@@ -504,10 +508,10 @@ namespace Chaos
 					return MakePair(max.Z, 2);
 			}
 		}
-		float SafeNormalize()
+		float SafeNormalize(float Epsilon = 1e-4)
 		{
 			float Size = SizeSquared();
-			if (Size < (float)1e-4)
+			if (Size < Epsilon)
 			{
 				*this = AxisVector(0);
 				return 0.f;
@@ -544,6 +548,10 @@ namespace Chaos
 			return (P1 - P0) / Dt;
 		}
 
+		static bool IsNearlyEqual(const TVector<float, 3>& A, const TVector<float, 3>& B, const float Epsilon)
+		{
+			return (B - A).IsNearlyZero(Epsilon);
+		}
 	};
 
 	template<>
@@ -929,12 +937,6 @@ namespace Chaos
 	}
 
 } // namespace Chaos
-
-template<class T, int d>
-struct TIsContiguousContainer<Chaos::TVector<T, d>>
-{
-	static constexpr bool Value = TIsContiguousContainer<TArray<T>>::Value;
-};
 
 //template<>
 //uint32 GetTypeHash(const Chaos::TVector<int32, 2>& V)

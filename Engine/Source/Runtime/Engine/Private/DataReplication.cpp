@@ -24,14 +24,25 @@
 DECLARE_CYCLE_STAT(TEXT("Custom Delta Property Rep Time"), STAT_NetReplicateCustomDeltaPropTime, STATGROUP_Game);
 DECLARE_CYCLE_STAT(TEXT("ReceiveRPC"), STAT_NetReceiveRPC, STATGROUP_Game);
 
-static TAutoConsoleVariable<int32> CVarMaxRPCPerNetUpdate( TEXT( "net.MaxRPCPerNetUpdate" ), 2, TEXT( "Maximum number of RPCs allowed per net update" ) );
-static TAutoConsoleVariable<int32> CVarDelayUnmappedRPCs( TEXT("net.DelayUnmappedRPCs" ), 0, TEXT( "If >0 delay received RPCs with unmapped properties" ) );
+static TAutoConsoleVariable<int32> CVarMaxRPCPerNetUpdate(
+	TEXT("net.MaxRPCPerNetUpdate"),
+	2,
+	TEXT("Maximum number of unreliable multicast RPC calls allowed per net update, additional ones will be dropped"),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarDelayUnmappedRPCs(
+	TEXT("net.DelayUnmappedRPCs"),
+	0,
+	TEXT("If true delay received RPCs with unmapped object references until they are received or loaded, ")
+	TEXT("if false RPCs will execute immediately with null parameters. ")
+	TEXT("This can be used with net.AllowAsyncLoading to avoid null asset parameters during async loads."),
+	ECVF_Default);
 
 static TAutoConsoleVariable<FString> CVarNetReplicationDebugProperty(
 	TEXT("net.Replication.DebugProperty"),
 	TEXT(""),
-	TEXT("Debugs Replication of property by name")
-	TEXT("Partial name of property to debug"),
+	TEXT("Debugs Replication of property by name, ")
+	TEXT("this should be set to the partial name of the property to debug"),
 	ECVF_Default);
 
 int32 GNetRPCDebug = 0;
@@ -176,7 +187,15 @@ public:
 	{
 		UpdateCachedState(Params.DeltaSerializeInfo.Object->GetClass(), Params.DeltaSerializeInfo.Struct);
 		UpdateCachedRepLayout();
-		return CachedRequestState.RepLayout->DeltaSerializeFastArrayProperty(Params, ChangelistMgr.Get());
+
+		const ERepLayoutResult Result = CachedRequestState.RepLayout->DeltaSerializeFastArrayProperty(Params, ChangelistMgr.Get());
+
+		if (ERepLayoutResult::FatalError == Result && Params.DeltaSerializeInfo.Connection)
+		{
+			Params.DeltaSerializeInfo.Connection->SetPendingCloseDueToReplicationFailure();
+		}
+
+		return ERepLayoutResult::Success == Result;
 	}
 
 	virtual void GatherGuidReferencesForFastArray(FFastArrayDeltaSerializeParams& Params) override final
@@ -251,7 +270,7 @@ public:
 		return RepLayout.GetLifetimeCustomDeltaProperty(CustomDeltaPropertyIndex);
 	}
 
-	static void UpdateChangelistMgr(
+	static ERepLayoutResult UpdateChangelistMgr(
 		const FRepLayout& RepLayout,
 		FSendingRepState* RESTRICT RepState,
 		FReplicationChangelistMgr& InChangelistMgr,
@@ -260,7 +279,7 @@ public:
 		const FReplicationFlags& RepFlags,
 		const bool bForceCompare)
 	{
-		RepLayout.UpdateChangelistMgr(RepState, InChangelistMgr, InObject, ReplicationFrame, RepFlags, bForceCompare);
+		return RepLayout.UpdateChangelistMgr(RepState, InChangelistMgr, InObject, ReplicationFrame, RepFlags, bForceCompare);
 	}
 
 	static const ELifetimeCondition GetLifetimeCustomDeltaPropertyCondition(const FRepLayout& RepLayout, const uint16 CustomDeltaPropertyIndex)
@@ -574,6 +593,9 @@ void FObjectReplicator::StartReplicating(class UActorChannel * InActorChannel)
 		return;
 	}
 
+
+	bOpenAckCalled = false;
+
 	if (ConnectionNetDriver->IsServer() || ConnectionNetDriver->MaySendProperties())
 	{
 		// We don't need to handle retirement if our connection is reliable.
@@ -585,6 +607,15 @@ void FObjectReplicator::StartReplicating(class UActorChannel * InActorChannel)
 				// SetNum now constructs, so this is safe
 
 				SendingRepState->Retirement.SetNum(ObjectClass->ClassReps.Num());
+
+				if (OwningChannel->SpawnAcked)
+				{
+					// Since SpawnAcked is already true, this should be true as well - this helps prevent an issue where actors can't go dormant if this object replicator is created after the actor's spawn has
+					// been acked by the client
+					SendingRepState->bOpenAckedCalled = true;
+					UE_LOG(LogRep, Verbose, TEXT("FObjectReplicator::InitRecentProperties -  OwningChannel->SpawnAcked is true, also setting SendingRepState->bOpenAckedCalled to true. Object = %s. Channel actor = %s."),
+						*GetFullNameSafe(Object), *GetFullNameSafe(InActorChannel->GetActor()));
+				}
 			}
 		}
 
@@ -1099,21 +1130,42 @@ struct FScopedRPCTimingTracker
 		{
 			StartTime = FPlatformTime::Seconds();
 		}
+
+		ActiveTrackers.Add(this);
 	};
 
 	~FScopedRPCTimingTracker()
 	{
+		ActiveTrackers.RemoveSingleSwap(this);
 		if (GReceiveRPCTimingEnabled)
 		{
 			const double Elapsed = FPlatformTime::Seconds() - StartTime;
 			Connection->Driver->NotifyRPCProcessed(Function, Connection, Elapsed);
-
 		}
 	}
 	UNetConnection* Connection;
 	UFunction* Function;
 	double StartTime;
+
+	static TArray<FScopedRPCTimingTracker*> ActiveTrackers;
 };
+
+TArray<FScopedRPCTimingTracker*> FScopedRPCTimingTracker::ActiveTrackers;
+
+ENGINE_API TArray<UFunction*> FindScopedRPCTrackers(UNetConnection* Connection = nullptr)
+{
+	TArray<UFunction*> FuncList;
+	for (int32 Idx = 0; Idx < FScopedRPCTimingTracker::ActiveTrackers.Num(); Idx++)
+	{
+		const FScopedRPCTimingTracker* TestTracker = FScopedRPCTimingTracker::ActiveTrackers[Idx];
+		if (TestTracker && (Connection == nullptr || TestTracker->Connection == Connection))
+		{
+			FuncList.Add(TestTracker->Function);
+		}
+	}
+
+	return FuncList;
+}
 
 bool FObjectReplicator::ReceivedRPC(FNetBitReader& Reader, const FReplicationFlags& RepFlags, const FFieldNetCache* FieldCache, const bool bCanDelayRPC, bool& bOutDelayRPC, TSet<FNetworkGUID>& UnmappedGuids)
 {
@@ -1557,7 +1609,13 @@ bool FObjectReplicator::ReplicateProperties( FOutBunch & Bunch, FReplicationFlag
 
 	// Update change list (this will re-use work done by previous connections)
 	FSendingRepState* SendingRepState = ((Connection->ResendAllDataState == EResendAllDataState::SinceCheckpoint) && CheckpointRepState.IsValid()) ? CheckpointRepState->GetSendingRepState() : RepState->GetSendingRepState();
-	FNetSerializeCB::UpdateChangelistMgr(*RepLayout, SendingRepState, *ChangelistMgr, Object, Connection->Driver->ReplicationFrame, RepFlags, OwningChannel->bForceCompareProperties);
+	const ERepLayoutResult UpdateResult = FNetSerializeCB::UpdateChangelistMgr(*RepLayout, SendingRepState, *ChangelistMgr, Object, Connection->Driver->ReplicationFrame, RepFlags, OwningChannel->bForceCompareProperties);
+
+	if (UNLIKELY(ERepLayoutResult::FatalError == UpdateResult))
+	{
+		Connection->SetPendingCloseDueToReplicationFailure();
+		return false;
+	}
 
 	// Replicate properties in the layout
 	const bool bHasRepLayout = RepLayout->ReplicateProperties(SendingRepState, ChangelistMgr->GetRepChangelistState(), (uint8*)Object, ObjectClass, OwningChannel, Writer, RepFlags);

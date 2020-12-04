@@ -6,6 +6,7 @@
 #include "RHI.h"
 #include "FileCache/FileCache.h"
 #include "Containers/HashTable.h"
+#include "Shader.h"
 
 struct FShaderMapEntry
 {
@@ -47,14 +48,39 @@ struct FShaderCodeEntry
 class RENDERCORE_API FSerializedShaderArchive
 {
 public:
+
+	/** Hashes of all shadermaps in the library */
 	TArray<FSHAHash> ShaderMapHashes;
+
+	/** Output hashes of all shaders in the library */
 	TArray<FSHAHash> ShaderHashes;
+
+	/** An array of a shadermap descriptors. Each shadermap can reference an arbitrary number of shaders */
 	TArray<FShaderMapEntry> ShaderMapEntries;
+
+	/** An array of all shaders descriptors, deduplicated */
 	TArray<FShaderCodeEntry> ShaderEntries;
+
+	/** An array of preload entries*/
 	TArray<FFileCachePreloadEntry> PreloadEntries;
+
+	/** Flat array of shaders referenced by all shadermaps. Each shadermap has a range in this array, beginning of which is
+	  * stored as ShaderIndicesOffset in the shadermap's descriptor (FShaderMapEntry).
+	  */
 	TArray<uint32> ShaderIndices;
+
 	FHashTable ShaderMapHashTable;
 	FHashTable ShaderHashTable;
+
+#if WITH_EDITOR
+	/** Mapping from shadermap hashes to an array of asset names. */
+	TMap<FSHAHash, FShaderMapAssetPaths> ShaderCodeToAssets;
+
+	enum class EAssetInfoVersion : uint8
+	{
+		CurrentVersion = 1
+	};
+#endif
 
 	FSerializedShaderArchive() : ShaderMapHashTable(0u), ShaderHashTable(0u) {}
 
@@ -65,7 +91,11 @@ public:
 			ShaderMapHashes.GetAllocatedSize() +
 			ShaderMapEntries.GetAllocatedSize() +
 			PreloadEntries.GetAllocatedSize() +
-			ShaderIndices.GetAllocatedSize();
+			ShaderIndices.GetAllocatedSize()
+#if WITH_EDITOR
+			+ ShaderCodeToAssets.GetAllocatedSize()
+#endif
+			;
 	}
 
 	void Empty()
@@ -78,6 +108,9 @@ public:
 		ShaderIndices.Empty();
 		ShaderMapHashTable.Clear();
 		ShaderHashTable.Clear();
+#if WITH_EDITOR
+		ShaderCodeToAssets.Empty();
+#endif
 	}
 
 	int32 GetNumShaderMaps() const
@@ -92,7 +125,7 @@ public:
 
 	int32 FindShaderMapWithKey(const FSHAHash& Hash, uint32 Key) const;
 	int32 FindShaderMap(const FSHAHash& Hash) const;
-	bool FindOrAddShaderMap(const FSHAHash& Hash, int32& OutIndex);
+	bool FindOrAddShaderMap(const FSHAHash& Hash, int32& OutIndex, const FShaderMapAssetPaths* AssociatedAssets);
 
 	int32 FindShaderWithKey(const FSHAHash& Hash, uint32 Key) const;
 	int32 FindShader(const FSHAHash& Hash) const;
@@ -102,6 +135,10 @@ public:
 
 	void Finalize();
 	void Serialize(FArchive& Ar);
+#if WITH_EDITOR
+	void SaveAssetInfo(FArchive& Ar);
+	bool LoadAssetInfo(const FString& Filename);
+#endif
 
 	friend FArchive& operator<<(FArchive& Ar, FSerializedShaderArchive& Ref)
 	{
@@ -109,8 +146,6 @@ public:
 		return Ar;
 	}
 };
-
-#define TRACK_SHADER_PRELOADS STATS
 
 class FShaderCodeArchive : public FRHIShaderLibrary
 {
@@ -124,7 +159,8 @@ public:
 	uint32 GetSizeBytes() const
 	{
 		return sizeof(*this) +
-			SerializedShaders.GetAllocatedSize();
+			SerializedShaders.GetAllocatedSize() +
+			ShaderPreloads.GetAllocatedSize();
 	}
 
 	virtual int32 GetNumShaders() const override { return SerializedShaders.ShaderEntries.Num(); }
@@ -147,23 +183,33 @@ public:
 		return SerializedShaders.FindShader(Hash);
 	}
 
-	virtual FGraphEventRef PreloadShader(int32 ShaderIndex) override;
+	virtual bool PreloadShader(int32 ShaderIndex, FGraphEventArray& OutCompletionEvents) override;
 
-	virtual FGraphEventRef PreloadShaderMap(int32 ShaderMapIndex) override;
+	virtual bool PreloadShaderMap(int32 ShaderMapIndex, FGraphEventArray& OutCompletionEvents) override;
 
-	virtual void ReleasePreloadedShaderMap(int32 ShaderMapIndex) override;
+	virtual void ReleasePreloadedShader(int32 ShaderIndex) override;
 
 	virtual TRefCountPtr<FRHIShader> CreateShader(int32 Index) override;
 	virtual void Teardown() override;
 
+	void OnShaderPreloadFinished(int32 ShaderIndex, const IMemoryReadStreamRef& PreloadData);
+
 protected:
 	FShaderCodeArchive(EShaderPlatform InPlatform, const FString& InLibraryDir, const FString& InLibraryName);
-
-	IMemoryReadStreamRef ReadShaderCode(int32 Index);
 
 	FORCENOINLINE void CheckShaderCreation(void* ShaderPtr, int32 Index)
 	{
 	}
+
+	struct FShaderPreloadEntry
+	{
+		FGraphEventRef PreloadEvent;
+		void* Code = nullptr;
+		uint32 FramePreloadStarted = ~0u;
+		uint32 NumRefs = 0u;
+	};
+
+	bool WaitForPreload(FShaderPreloadEntry& ShaderPreloadEntry);
 
 	// Library directory
 	FString LibraryDir;
@@ -177,7 +223,8 @@ protected:
 	// The shader code present in the library
 	FSerializedShaderArchive SerializedShaders;
 
-#if TRACK_SHADER_PRELOADS
-	TArray<uint32> ShaderFramePreloaded;
-#endif
+	TArray<FGraphEventRef> ShaderMapPreloadEvents;
+
+	TArray<FShaderPreloadEntry> ShaderPreloads;
+	FRWLock ShaderPreloadLock;
 };

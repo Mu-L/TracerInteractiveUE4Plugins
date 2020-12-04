@@ -11,18 +11,18 @@ namespace ChaosInterface
 	FBodyInstance* GetUserData(const Chaos::TGeometryParticle<float,3>& Actor)
 	{
 		void* UserData = Actor.UserData();
-		return UserData ? FPhysxUserData::Get<FBodyInstance>(Actor.UserData()) : nullptr;
+		return UserData ? FChaosUserData::Get<FBodyInstance>(Actor.UserData()) : nullptr;
 	}
 
 	UPhysicalMaterial* GetUserData(const Chaos::FChaosPhysicsMaterial& Material)
 	{
 		void* UserData = Material.UserData;
-		return UserData ? FPhysxUserData::Get<UPhysicalMaterial>(UserData) : nullptr;
+		return UserData ? FChaosUserData::Get<UPhysicalMaterial>(UserData) : nullptr;
 	}
 
 #if WITH_CHAOS
-	FScopedSceneReadLock::FScopedSceneReadLock(FPhysScene_ChaosInterface& SceneIn)
-		: Scene(SceneIn.GetScene())
+	FScopedSceneReadLock::FScopedSceneReadLock(FPhysScene_Chaos& SceneIn)
+		: Scene(SceneIn)
 	{
 		Scene.ExternalDataLock.ReadLock();
 	}

@@ -6,23 +6,16 @@
 #include "Misc/SecureHash.h"
 #include "Templates/Function.h"
 
+#include "UnrealUSDWrapper.h"
 #include "USDLevelSequenceHelper.h"
 #include "USDListener.h"
 #include "USDMemory.h"
 #include "USDPrimTwin.h"
+#include "USDSkeletalDataConversion.h"
 
-#if USE_USD_SDK
-
-#include "USDIncludesStart.h"
-
-#include "pxr/pxr.h"
-#include "pxr/usd/sdf/path.h"
-#include "pxr/usd/usd/stage.h"
-#include "pxr/usd/usdGeom/mesh.h"
-
-#include "USDIncludesEnd.h"
-
-#endif // #if USE_USD_SDK
+#include "UsdWrappers/UsdStage.h"
+#include "UsdWrappers/UsdPrim.h"
+#include "UsdWrappers/SdfPath.h"
 
 #include "USDStageActor.generated.h"
 
@@ -36,13 +29,6 @@ enum class EUsdPurpose : int32;
 struct FMeshDescription;
 struct FUsdSchemaTranslationContext;
 
-UENUM()
-enum class EUsdInitialLoadSet
-{
-	LoadAll,
-	LoadNone
-};
-
 UCLASS( MinimalAPI )
 class AUsdStageActor : public AActor
 {
@@ -52,7 +38,7 @@ class AUsdStageActor : public AActor
 	friend class FUsdLevelSequenceHelperImpl;
 
 public:
-	UPROPERTY(EditAnywhere, Category = "USD", meta = (FilePathFilter = "usd files (*.usd; *.usda; *.usdc)|*.usd; *.usda; *.usdc"))
+	UPROPERTY(EditAnywhere, Category = "USD")
 	FFilePath RootLayer;
 
 	UPROPERTY(EditAnywhere, Category = "USD")
@@ -76,20 +62,20 @@ private:
 	UPROPERTY(EditAnywhere, Category = "USD")
 	float Time;
 
-	UPROPERTY(EditAnywhere, Category = "USD")
-	float StartTimeCode;
+	UPROPERTY()
+	float StartTimeCode_DEPRECATED;
 
-	UPROPERTY(EditAnywhere, Category = "USD")
-	float EndTimeCode;
+	UPROPERTY()
+	float EndTimeCode_DEPRECATED;
 
-	UPROPERTY(VisibleAnywhere, Category = "USD")
-	float TimeCodesPerSecond;
+	UPROPERTY()
+	float TimeCodesPerSecond_DEPRECATED;
 
 	UPROPERTY(VisibleAnywhere, Category = "USD", Transient)
 	ULevelSequence* LevelSequence;
 
 	UPROPERTY(Transient)
-	TMap<FString, ULevelSequence*> SubLayerLevelSequencesByIdentifier;
+	TMap<FString, ULevelSequence*> LevelSequencesByIdentifier;
 
 public:
 	DECLARE_EVENT_OneParam( AUsdStageActor, FOnActorLoaded, AUsdStageActor* );
@@ -112,13 +98,22 @@ public:
 	USDSTAGE_API void Reset() override;
 	void Refresh() const;
 	void ReloadAnimations();
+	float GetTime() { return Time; }
+	TMap< FString, UObject* > GetAssetsCache() { return AssetsCache; } // Intentional copies
+	TMap< FString, UObject* > GetPrimPathsToAssets() { return PrimPathsToAssets; }
 
 public:
-	virtual void PostEditChangeProperty( FPropertyChangedEvent& PropertyChangedEvent ) override;
 	virtual void PostTransacted(const FTransactionObjectEvent& TransactionEvent) override;
 	virtual void PostDuplicate( bool bDuplicateForPIE ) override;
 	virtual void PostLoad() override;
 	virtual void Serialize(FArchive& Ar) override;
+	virtual void Destroyed() override;
+
+	void OnLevelAddedToWorld(ULevel* Level, UWorld* World);
+	void OnLevelRemovedFromWorld(ULevel* Level, UWorld* World);
+
+	void OnPreUsdImport( FString FilePath );
+	void OnPostUsdImport( FString FilePath );
 
 private:
 	void Clear();
@@ -136,7 +131,8 @@ private:
 	void OnPrimsChanged( const TMap< FString, bool >& PrimsChangedList );
 	void OnUsdPrimTwinDestroyed( const UUsdPrimTwin& UsdPrimTwin );
 
-	void OnPrimObjectPropertyChanged( UObject* ObjectBeingModified, FPropertyChangedEvent& PropertyChangedEvent );
+	void OnObjectPropertyChanged( UObject* ObjectBeingModified, FPropertyChangedEvent& PropertyChangedEvent );
+	void HandlePropertyChangedEvent( FPropertyChangedEvent& PropertyChangedEvent );
 	bool HasAutorithyOverStage() const;
 
 private:
@@ -158,30 +154,45 @@ private:
 	UPROPERTY(Transient)
 	TMap< FString, UObject* > PrimPathsToAssets;
 
-#if USE_USD_SDK
+	/** Keep track of blend shapes so that we can map 'inbetween shapes' to their separate morph targets when animating */
+	UsdUtils::FBlendShapeMap BlendShapesByPath;
+
+	/**
+	 * When parsing materials, we keep track of which primvar we mapped to which UV channel.
+	 * When parsing meshes later, we use this data to place the correct primvar values in each UV channel.
+	 * We keep this here as these are generated when the materials stored in AssetsCache are parsed, so it should accompany them
+	 */
+	TMap< FString, TMap< FString, int32 > > MaterialToPrimvarToUVIndex;
+
 public:
-	USDSTAGE_API const pxr::UsdStageRefPtr& GetUsdStage();
+	USDSTAGE_API UE::FUsdStage& GetUsdStage();
+	USDSTAGE_API const UE::FUsdStage& GetUsdStage() const;
 
 	FUsdListener& GetUsdListener() { return UsdListener; }
 	const FUsdListener& GetUsdListener() const { return UsdListener; }
 
-	UUsdPrimTwin* GetOrCreatePrimTwin( const pxr::SdfPath& UsdPrimPath );
-	UUsdPrimTwin* ExpandPrim( const pxr::UsdPrim& Prim, FUsdSchemaTranslationContext& TranslationContext );
-	void UpdatePrim( const pxr::SdfPath& UsdPrimPath, bool bResync, FUsdSchemaTranslationContext& TranslationContext );
+	/** Prevents writing back data to the USD stage whenever our LevelSequences are modified */
+	USDSTAGE_API void StopMonitoringLevelSequence();
+	USDSTAGE_API void ResumeMonitoringLevelSequence();
+
+	UUsdPrimTwin* GetOrCreatePrimTwin( const UE::FSdfPath& UsdPrimPath );
+	UUsdPrimTwin* ExpandPrim( const UE::FUsdPrim& Prim, FUsdSchemaTranslationContext& TranslationContext );
+	void UpdatePrim( const UE::FSdfPath& UsdPrimPath, bool bResync, FUsdSchemaTranslationContext& TranslationContext );
 
 protected:
 	/** Loads the asset for a single prim */
-	void LoadAsset( FUsdSchemaTranslationContext& TranslationContext, const pxr::UsdPrim& Prim );
+	void LoadAsset( FUsdSchemaTranslationContext& TranslationContext, const UE::FUsdPrim& Prim );
 
 	/** Loads the assets for all prims from StartPrim and its children */
-	void LoadAssets( FUsdSchemaTranslationContext& TranslationContext, const pxr::UsdPrim& StartPrim );
+	void LoadAssets( FUsdSchemaTranslationContext& TranslationContext, const UE::FUsdPrim& StartPrim );
 
 	void AnimatePrims();
 
 private:
-	TUsdStore< pxr::UsdStageRefPtr > UsdStageStore;
+	UE::FUsdStage UsdStage;
 	FUsdListener UsdListener;
-#endif // #if USE_USD_SDK
 
 	FUsdLevelSequenceHelper LevelSequenceHelper;
+
+	FDelegateHandle OnRedoHandle;
 };

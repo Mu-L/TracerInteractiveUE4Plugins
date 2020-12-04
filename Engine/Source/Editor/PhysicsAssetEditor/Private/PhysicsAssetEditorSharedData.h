@@ -19,8 +19,6 @@ struct FBoneVertInfo;
 class IPersonaPreviewScene;
 class FPhysicsAssetEditorSharedData;
 
-#define DEBUG_CLICK_VIEWPORT 0
-
 /** Scoped object that blocks selection broadcasts until it leaves scope */
 struct FScopedBulkSelection
 {
@@ -145,6 +143,11 @@ public:
 	bool IsBodySelected(const FSelection& Body) const;
 	void ToggleSelectionType();
 	void ToggleShowSelected();
+	void ShowAll();
+	void HideAll();
+	void ToggleShowOnlySelected();
+	void ShowSelected();
+	void HideSelected();
 	void SetSelectedBodyAnyPrim(int32 BodyIndex, bool bSelected);
 	void DeleteCurrentPrim();
 	void DeleteBody(int32 DelBodyIndex, bool bRefreshComponent=true);
@@ -184,6 +187,14 @@ public:
 	bool CanSetCollisionBetweenSelected(bool bEnableCollision) const;
 	void SetCollisionBetweenSelectedAndAll(bool bEnableCollision);
 	bool CanSetCollisionBetweenSelectedAndAll(bool bEnableCollision) const;
+
+	/** Helpers to set primitive-level collision filtering on selected bodies */
+	void SetPrimitiveCollision(ECollisionEnabled::Type CollisionEnabled);
+	bool CanSetPrimitiveCollision(ECollisionEnabled::Type CollisionEnabled) const;
+	bool GetIsPrimitiveCollisionEnabled(ECollisionEnabled::Type CollisionEnabled) const;
+	void SetPrimitiveContributeToMass(bool bContributeToMass);
+	bool CanSetPrimitiveContributeToMass() const;
+	bool GetPrimitiveContributeToMass() const;
 
 	/** Prevents GC from collecting our objects */
 	void AddReferencedObjects(FReferenceCollector& Collector);
@@ -304,9 +315,10 @@ public:
 
 	FTransform ResetTM;
 
-#if DEBUG_CLICK_VIEWPORT
+	FIntPoint LastClickPos;
 	FVector LastClickOrigin;
 	FVector LastClickDirection;
-#endif
-	FIntPoint LastClickPos;
+	FVector LastClickHitPos;
+	FVector LastClickHitNormal;
+	bool bLastClickHit;
 };

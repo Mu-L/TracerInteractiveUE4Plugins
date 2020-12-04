@@ -198,7 +198,7 @@ void USplitMeshCommand::Execute(IMeshEditorModeEditingContract& MeshEditorMode)
 		TSet<FVertexID> SeenVerts;
 		FVector Center(0, 0, 0);
 		int32 Count = 0;
-		for(const FEdgeID EdgeId : BoundaryIds)
+		for(const FEdgeID& EdgeId : BoundaryIds)
 		{
 			FVertexID Vertex0 = Mesh->GetMeshDescription()->GetEdgeVertex(EdgeId, 0);
 			FVertexID Vertex1 = Mesh->GetMeshDescription()->GetEdgeVertex(EdgeId, 1);
@@ -221,7 +221,7 @@ void USplitMeshCommand::Execute(IMeshEditorModeEditingContract& MeshEditorMode)
 		FVertexInstanceID NewVertInstance = Mesh->GetMeshDescription()->CreateVertexInstance(NewVert);
 
 		FPolygonGroupID GroupId = Mesh->GetMeshDescription()->CreatePolygonGroup();
-		for(const FEdgeID EdgeId : BoundaryIds)
+		for(const FEdgeID& EdgeId : BoundaryIds)
 		{
 			FVertexID Vertex0 = Mesh->GetMeshDescription()->GetEdgeVertex(EdgeId, 0);
 			const TArray<FVertexInstanceID>& VertexInstances0 = Mesh->GetMeshDescription()->GetVertexVertexInstances(Vertex0);
@@ -255,7 +255,7 @@ void USplitMeshCommand::Execute(IMeshEditorModeEditingContract& MeshEditorMode)
 		FString NewMeshName = Mesh->GetName() + "_2";
 		FString NewPackageName = FPackageName::GetLongPackagePath(Mesh->GetOutermost()->GetName()) + TEXT("/") + NewMeshName;
 		NewPackageName = UPackageTools::SanitizePackageName(NewPackageName);
-		UPackage* NewPackage = CreatePackage(nullptr, *NewPackageName);
+		UPackage* NewPackage = CreatePackage(*NewPackageName);
 		UStaticMesh* NewStaticMesh = NewObject<UStaticMesh>(NewPackage, *NewMeshName, RF_Public);
 		NewStaticMesh->AddSourceModel();
 		FMeshDescription* NewMeshDescription = NewStaticMesh->CreateMeshDescription(0);
@@ -271,7 +271,7 @@ void USplitMeshCommand::Execute(IMeshEditorModeEditingContract& MeshEditorMode)
 		TSet<FVertexID> VertexSet;
 		TSet<FEdgeID> EdgeSet;
 		TSet<FPolygonGroupID> PolygonGroupSet;
-		for(const FPolygonID PolygonId : NewPolygonIds)
+		for(const FPolygonID& PolygonId : NewPolygonIds)
 		{
 			const TArray<FVertexInstanceID>& VertexInstanceIds = Mesh->GetMeshDescription()->GetPolygonVertexInstances(PolygonId);
 			// @todo (mlentine): Remove this when we don't need duplicate vertex instance ids.
@@ -298,7 +298,7 @@ void USplitMeshCommand::Execute(IMeshEditorModeEditingContract& MeshEditorMode)
 			}
 			TArray<FEdgeID> EdgeIds;
 			Mesh->GetMeshDescription()->GetPolygonPerimeterEdges(PolygonId, EdgeIds);
-			for(const FEdgeID EdgeId : EdgeIds)
+			for(const FEdgeID& EdgeId : EdgeIds)
 			{
 				if(!EdgeSet.Contains(EdgeId))
 				{

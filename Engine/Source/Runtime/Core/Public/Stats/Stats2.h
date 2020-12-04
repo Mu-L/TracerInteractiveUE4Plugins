@@ -711,7 +711,7 @@ struct FStatMessage
 		// these branches are FORCEINLINE_STATS of constants in almost all cases, so they disappear
 		if (InStatOperation == EStatOperation::CycleScopeStart || InStatOperation == EStatOperation::CycleScopeEnd)
 		{
-			GetValue_int64()= int64(FPlatformTime::Cycles());
+			GetValue_int64()= int64(FPlatformTime::Cycles64());
 		}
 		else
 		{
@@ -1123,11 +1123,11 @@ struct FStatPacket
 	void SetThreadProperties()
 	{
 		ThreadId = FPlatformTLS::GetCurrentThreadId();
-		if (ThreadId == GGameThreadId)
+		if (IsInGameThread())
 		{
 			ThreadType = EThreadType::Game;
 		}
-		else if (ThreadId == GRenderThreadId)
+		else if (IsInActualRenderingThread())
 		{
 			ThreadType = EThreadType::Renderer;
 		}
@@ -1520,9 +1520,17 @@ public:
  */
 class FCycleCounter
 {
+	/** Event types emitted */
+	enum 
+	{
+		NamedEvent			= 1 << 0,
+		TraceEvent			= 1 << 1,
+		ThreadStatsEvent	= 1 << 2,
+	};
+
 	/** Name of the stat, usually a short name **/
 	FName StatId;
-	bool bEmittedNamedEvent = false;
+	uint8 EmittedEvent = 0;
 
 public:
 
@@ -1546,14 +1554,23 @@ public:
 #else
 			FPlatformMisc::BeginNamedEvent( FColor( 0 ), InStatId.GetStatDescriptionWIDE() );
 #endif // PLATFORM_USES_ANSI_STRING_FOR_EXTERNAL_PROFILING
-			bEmittedNamedEvent = true;
+			EmittedEvent |= NamedEvent;
 		}
+
+#if CPUPROFILERTRACE_ENABLED
+		if (GCycleStatsShouldEmitNamedEvents > 0 && UE_TRACE_CHANNELEXPR_IS_ENABLED(CpuChannel))
+		{
+			FCpuProfilerTrace::OutputBeginDynamicEvent(InStatId.GetStatDescriptionANSI()); //todo: Could we use FName index as event id?
+			EmittedEvent |= TraceEvent;
+		}
+#endif
 
 		if( (bAlways && FThreadStats::WillEverCollectData()) || FThreadStats::IsCollectingData() )
 		{
 			FName StatName = MinimalNameToName(StatMinimalName);
 			StatId = StatName;
 			FThreadStats::AddMessage( StatName, EStatOperation::CycleScopeStart );
+			EmittedEvent |= ThreadStatsEvent;
 		}
 	}
 
@@ -1562,16 +1579,24 @@ public:
 	 */
 	FORCEINLINE_STATS void Stop()
 	{
-		if ( bEmittedNamedEvent )
+		if ( EmittedEvent & NamedEvent )
 		{
-			bEmittedNamedEvent = false;
 			FPlatformMisc::EndNamedEvent();
 		}
 
-		if( !StatId.IsNone() )
+#if CPUPROFILERTRACE_ENABLED
+		if (EmittedEvent & TraceEvent)
+		{
+			FCpuProfilerTrace::OutputEndEvent();
+		}
+#endif
+
+		if(EmittedEvent & ThreadStatsEvent)
 		{
 			FThreadStats::AddMessage(StatId, EStatOperation::CycleScopeEnd);
 		}
+
+		EmittedEvent = 0;
 	}
 
 	/**
@@ -1728,6 +1753,15 @@ struct FThreadSafeStaticStatInner<TStatData, false>
 template<class TStatData>
 struct FThreadSafeStaticStat : public FThreadSafeStaticStatInner<TStatData, TStatData::TGroup::CompileTimeEnable>
 {
+	FThreadSafeStaticStat()
+	{
+		//This call will result in registering the Group if it's compile time enabled. 
+		//It fixes a bug when a StatGroup only has counters that are using the INC_\DEC_ macros. 
+		//Those macros are guarded for the stats collection to be active which prevented the registration of the stat group.
+		//It was not possible to activate the stat group unless another was already active.
+		//Most groups are registered when a FScopeCycleCounter is declared as GetStatId is called as the constructor parameter.
+		FThreadSafeStaticStatInner<TStatData, TStatData::TGroup::CompileTimeEnable>::GetStatId();
+	}
 };
 
 #define DECLARE_STAT_GROUP(Description, StatName, StatCategory, InDefaultEnable, InCompileTimeEnable, InSortByName) \
@@ -2199,7 +2233,8 @@ DECLARE_STATS_GROUP(TEXT("Physics"),STATGROUP_Physics, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Platform"), STATGROUP_Platform, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Profiler"), STATGROUP_Profiler, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Quick"), STATGROUP_Quick, STATCAT_Advanced);
-DECLARE_STATS_GROUP(TEXT("RHI"),STATGROUP_RHI, STATCAT_Advanced);
+DECLARE_STATS_GROUP(TEXT("RHI"), STATGROUP_RHI, STATCAT_Advanced);
+DECLARE_STATS_GROUP(TEXT("RDG"), STATGROUP_RDG, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Render Thread"),STATGROUP_RenderThreadProcessing, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Render Target Pool"), STATGROUP_RenderTargetPool, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Scene Memory"),STATGROUP_SceneMemory, STATCAT_Advanced);
@@ -2210,11 +2245,9 @@ DECLARE_STATS_GROUP(TEXT("MapBuildData"),STATGROUP_MapBuildData, STATCAT_Advance
 DECLARE_STATS_GROUP(TEXT("Shader Compiling"),STATGROUP_ShaderCompiling, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Shader Compression"),STATGROUP_Shaders, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Shadow Rendering"),STATGROUP_ShadowRendering, STATCAT_Advanced);
-DECLARE_STATS_GROUP_VERBOSE(TEXT("Shadow Rendering Verbose"), STATGROUP_ShadowRenderingVerbose, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Stat System"),STATGROUP_StatSystem, STATCAT_Advanced);
 DECLARE_STATS_GROUP_SORTBYNAME(TEXT("Streaming Overview"),STATGROUP_StreamingOverview, STATCAT_Advanced);
 DECLARE_STATS_GROUP_SORTBYNAME(TEXT("Streaming Details"),STATGROUP_StreamingDetails, STATCAT_Advanced);
-DECLARE_STATS_GROUP_VERBOSE(TEXT("Streaming Details Verbose"), STATGROUP_StreamingDetailsVerbose, STATCAT_Advanced);
 DECLARE_STATS_GROUP_SORTBYNAME(TEXT("Streaming"),STATGROUP_Streaming, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Target Platform"),STATGROUP_TargetPlatform, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Text"),STATGROUP_Text, STATCAT_Advanced);

@@ -6,11 +6,16 @@
 
 #include "D3D12RHIPrivate.h"
 #include "UniformBuffer.h"
-#include "RenderGraphResources.h"
+#include "ShaderParameterStruct.h"
 
 FUniformBufferRHIRef FD3D12DynamicRHI::RHICreateUniformBuffer(const void* Contents, const FRHIUniformBufferLayout& Layout, EUniformBufferUsage Usage, EUniformBufferValidation Validation)
 {
 	SCOPE_CYCLE_COUNTER(STAT_D3D12UpdateUniformBufferTime);
+
+	if (Validation == EUniformBufferValidation::ValidateResources)
+	{
+		ValidateShaderParameterResourcesRHI(Contents, Layout);
+	}
 
 	//Note: This is not overly efficient in the mGPU case (we create two+ upload locations) but the CPU savings of having no extra indirection to the resource are worth
 	//      it in single node.
@@ -72,49 +77,18 @@ FUniformBufferRHIRef FD3D12DynamicRHI::RHICreateUniformBuffer(const void* Conten
 	{
 		const int32 NumResources = Layout.Resources.Num();
 
-		FD3D12UniformBuffer* CurrentBuffer = UniformBufferOut;
-
-		while (CurrentBuffer != nullptr)
+		for (FD3D12UniformBuffer& CurrentBuffer : *UniformBufferOut)
 		{
-			CurrentBuffer->ResourceTable.Empty(NumResources);
-			CurrentBuffer->ResourceTable.AddZeroed(NumResources);
-			for (int32 i = 0; i < NumResources; ++i)
+			CurrentBuffer.ResourceTable.Empty(NumResources);
+			CurrentBuffer.ResourceTable.AddZeroed(NumResources);
+			for (int32 Index = 0; Index < NumResources; ++Index)
 			{
-				EUniformBufferBaseType ResourceType = Layout.Resources[i].MemberType;
-
-				FRHIResource* Resource;
-				if (IsShaderParameterTypeIgnoredByRHI(ResourceType))
-				{
-					continue;
-				}
-				else if (IsRDGResourceReferenceShaderParameterType(ResourceType))
-				{
-					check(IsInRenderingThread()); // TODO: UE-68018
-					FRDGResource* ResourcePtr = *(FRDGResource**)((uint8*)Contents + Layout.Resources[i].MemberOffset);
-					Resource = ResourcePtr ? ResourcePtr->GetRHI() : nullptr;
-				}
-				else
-				{
-					Resource = *(FRHIResource**)((uint8*)Contents + Layout.Resources[i].MemberOffset);
-				}
-
-				// Allow null SRV's in uniform buffers for feature levels that don't support SRV's in shaders
-				if (!(GMaxRHIFeatureLevel <= ERHIFeatureLevel::ES3_1 && (ResourceType == UBMT_SRV || ResourceType == UBMT_RDG_TEXTURE_SRV)) && Validation == EUniformBufferValidation::ValidateResources)
-				{
-					check(Resource);
-				}
-
-				CurrentBuffer->ResourceTable[i] = Resource;
+				CurrentBuffer.ResourceTable[Index] = GetShaderParameterResourceRHI(Contents, Layout.Resources[Index].MemberOffset, Layout.Resources[Index].MemberType);
 			}
-
-			CurrentBuffer = CurrentBuffer->GetNextObject();
 		}
 	}
 
-	if (UniformBufferOut)
-	{
-		UpdateBufferStats<FD3D12UniformBuffer>(&UniformBufferOut->ResourceLocation, true);
-	}
+	UpdateBufferStats<FD3D12UniformBuffer>(&UniformBufferOut->ResourceLocation, true);
 
 	return UniformBufferOut;
 }
@@ -160,10 +134,12 @@ void FD3D12DynamicRHI::RHIUpdateUniformBuffer(FRHIUniformBuffer* UniformBufferRH
 	check(UniformBufferRHI);
 
 	const FRHIUniformBufferLayout& Layout = UniformBufferRHI->GetLayout();
+	ValidateShaderParameterResourcesRHI(Contents, Layout);
+
 	FRHICommandListImmediate& RHICmdList = FRHICommandListExecutor::GetImmediateCommandList();
 	const bool bBypass = RHICmdList.Bypass();
 
-	FD3D12UniformBuffer* UniformBuffer = ResourceCast(UniformBufferRHI);
+	FD3D12UniformBuffer* FirstUniformBuffer = ResourceCast(UniformBufferRHI);
 
 	const uint32 NumBytes = Layout.ConstantBufferSize;
 	const int32 NumResources = Layout.Resources.Num();
@@ -176,41 +152,19 @@ void FD3D12DynamicRHI::RHIUpdateUniformBuffer(FRHIUniformBuffer* UniformBufferRH
 			? (FRHIResource**)FMemory_Alloca(sizeof(FRHIResource*) * NumResources) 
 			: (FRHIResource**)RHICmdList.Alloc(sizeof(FRHIResource*) * NumResources, alignof(FRHIResource*));
 
-		for (int32 ResourceIndex = 0; ResourceIndex < NumResources; ++ResourceIndex)
+		for (int32 Index = 0; Index < NumResources; ++Index)
 		{
-			EUniformBufferBaseType ResourceType = Layout.Resources[ResourceIndex].MemberType;
-
-			FRHIResource* Resource;
-			if (IsShaderParameterTypeIgnoredByRHI(ResourceType))
-			{
-				continue;
-			}
-			else if (IsRDGResourceReferenceShaderParameterType(ResourceType))
-			{
-				check(IsInRenderingThread()); // TODO: UE-68018
-				FRDGResource* ResourcePtr = *(FRDGResource**)((uint8*)Contents + Layout.Resources[ResourceIndex].MemberOffset);
-				Resource = ResourcePtr ? ResourcePtr->GetRHI() : nullptr;
-			}
-			else
-			{
-				Resource = *(FRHIResource**)((uint8*)Contents + Layout.Resources[ResourceIndex].MemberOffset);
-			}
-
-			checkf(Resource, TEXT("Invalid resource entry creating uniform buffer, %s.Resources[%u], ResourceType 0x%x."),
-				*Layout.GetDebugName(),
-				ResourceIndex,
-				Layout.Resources[ResourceIndex].MemberType);
-
-			CmdListResources[ResourceIndex] = Resource;
+			const auto Parameter = Layout.Resources[Index];
+			CmdListResources[Index] = GetShaderParameterResourceRHI(Contents, Parameter.MemberOffset, Parameter.MemberType);
 		}
 	}
 
 	// Update buffers on all GPUs by looping over FD3D12LinkedAdapterObject chain
-	while (UniformBuffer)
+	for (FD3D12UniformBuffer& UniformBuffer : *FirstUniformBuffer)
 	{
-		check(UniformBuffer->ResourceTable.Num() == NumResources);
+		check(UniformBuffer.ResourceTable.Num() == NumResources);
 
-		FD3D12Device* Device = UniformBuffer->GetParentDevice();
+		FD3D12Device* Device = UniformBuffer.GetParentDevice();
 
 		FD3D12ResourceLocation UpdatedResourceLocation(Device);
 
@@ -218,7 +172,7 @@ void FD3D12DynamicRHI::RHIUpdateUniformBuffer(FRHIUniformBuffer* UniformBufferRH
 		{
 			void* MappedData = nullptr;
 
-			if (UniformBuffer->UniformBufferUsage == UniformBuffer_MultiFrame)
+			if (UniformBuffer.UniformBufferUsage == UniformBuffer_MultiFrame)
 			{
 				FD3D12DynamicHeapAllocator& Allocator = GetAdapter().GetUploadHeapAllocator(Device->GetGPUIndex());
 				MappedData = Allocator.AllocUploadResource(NumBytes, DEFAULT_CONTEXT_UPLOAD_POOL_ALIGNMENT, UpdatedResourceLocation);
@@ -240,18 +194,16 @@ void FD3D12DynamicRHI::RHIUpdateUniformBuffer(FRHIUniformBuffer* UniformBufferRH
 
 		if (bBypass)
 		{
-			FRHICommandD3D12UpdateUniformBuffer Cmd(UniformBuffer, UpdatedResourceLocation, CmdListResources, NumResources);
+			FRHICommandD3D12UpdateUniformBuffer Cmd(&UniformBuffer, UpdatedResourceLocation, CmdListResources, NumResources);
 			Cmd.Execute(RHICmdList);
 		}
 		else
 		{
-			new (RHICmdList.AllocCommand<FRHICommandD3D12UpdateUniformBuffer>()) FRHICommandD3D12UpdateUniformBuffer(UniformBuffer, UpdatedResourceLocation, CmdListResources, NumResources);
+			new (RHICmdList.AllocCommand<FRHICommandD3D12UpdateUniformBuffer>()) FRHICommandD3D12UpdateUniformBuffer(&UniformBuffer, UpdatedResourceLocation, CmdListResources, NumResources);
 
 			//fence is required to stop parallel recording threads from recording with the old bad state of the uniformbuffer resource table.  This command MUST execute before dependent recording starts.
 			RHICmdList.RHIThreadFence(true);
 		}
-
-		UniformBuffer = UniformBuffer->GetNextObject();
 	}
 
 }

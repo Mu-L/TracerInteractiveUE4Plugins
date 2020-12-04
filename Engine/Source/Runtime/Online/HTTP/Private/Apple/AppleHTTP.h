@@ -38,11 +38,15 @@ public:
 	virtual void SetVerb(const FString& Verb) override;
 	virtual void SetURL(const FString& URL) override;
 	virtual void SetContent(const TArray<uint8>& ContentPayload) override;
+	virtual void SetContent(TArray<uint8>&& ContentPayload) override;
 	virtual void SetContentAsString(const FString& ContentString) override;
     virtual bool SetContentAsStreamedFile(const FString& Filename) override;
 	virtual bool SetContentFromStream(TSharedRef<FArchive, ESPMode::ThreadSafe> Stream) override;
 	virtual void SetHeader(const FString& HeaderName, const FString& HeaderValue) override;
 	virtual void AppendToHeader(const FString& HeaderName, const FString& AdditionalHeaderValue) override;
+	virtual void SetTimeout(float InTimeoutSecs) override;
+	virtual void ClearTimeout() override;
+	virtual TOptional<float> GetTimeout() const override;
 	virtual bool ProcessRequest() override;
 	virtual void CancelRequest() override;
 	virtual EHttpRequestStatus::Type GetStatus() const override;
@@ -101,6 +105,9 @@ private:
 
 	/** BYTE array payload to use with the request. Typically for a POST */
 	mutable TArray<uint8> RequestPayload;
+
+	/** BYTE array for content which we now own */
+	TArray<uint8> ContentData;
 
 	/** Current status of request being processed */
 	EHttpRequestStatus::Type CompletionStatus;

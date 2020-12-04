@@ -100,7 +100,8 @@ Texture2D<uint4> HairCategorizationTexture;
 // Need to disable early depth stencil as discard operation are not supported. 
 // This is only for hair case. One way to solve this would be to run tile coverring 
 // hair pixels, rather than rendering a full screen to avoid partially this extra cost
-#if SUBPIXEL_SHADOW == 0
+// Do not force early_fragment_tests on mobile, as it does not work with depth fetch on MALI
+#if (SUBPIXEL_SHADOW == 0 && FEATURE_LEVEL > FEATURE_LEVEL_ES3_1)
 EARLYDEPTHSTENCIL
 #endif
 void Main(
@@ -264,8 +265,7 @@ void Main(
 		if (bIsSubsurfaceCompatible && IsSubsurfaceModel(GBufferData.ShadingModelID))
 		{
 			float Opacity = GBufferData.CustomData.a;
-			// Derive density from a heuristic using opacity, tweaked for useful falloff ranges and to give a linear depth falloff with opacity
-			float Density = -.05f * log(1 - min(Opacity, .999f));
+			float Density = SubsurfaceDensityFromOpacity(Opacity);
 			if( GBufferData.ShadingModelID == SHADINGMODELID_HAIR || GBufferData.ShadingModelID == SHADINGMODELID_EYE )
 			{
 				Opacity = 1;
@@ -384,13 +384,13 @@ void MainOnePassPointLightPS(
 
 	// For debugging
 #define OUTPUT_CUBE_SHADOW_DEPTH_NO_FILTERING 0
-	float3 LightVector = LightPositionAndInvRadius.xyz - WorldPosition.xyz;
+	float3 WorldSampleToLightVec = LightPositionAndInvRadius.xyz - WorldPosition.xyz;
 #if OUTPUT_CUBE_SHADOW_DEPTH_NO_FILTERING
 	// Note: point light shadow depth is Z / W, not linear
 #if OPENGL_PROFILE || COMPILER_VULKAN || COMPILER_SWITCH
-	float Shadow = TextureCubeSampleLevel(ShadowDepthCubeTexture2, ShadowDepthTextureSampler, LightVector, 0);
+	float Shadow = TextureCubeSampleLevel(ShadowDepthCubeTexture2, ShadowDepthTextureSampler, WorldSampleToLightVec, 0);
 #else
-	float Shadow = TextureCubeSampleLevel(ShadowDepthCubeTexture, ShadowDepthTextureSampler, LightVector, 0);
+	float Shadow = TextureCubeSampleLevel(ShadowDepthCubeTexture, ShadowDepthTextureSampler, WorldSampleToLightVec, 0);
 #endif
 #else
 	// Normal receiver bias: Increase depth based on the angle with the light and the shading normal. 
@@ -400,8 +400,7 @@ void MainOnePassPointLightPS(
 #if !SUBPIXEL_SHADOW
 	{
 		FGBufferData GBufferData = GetGBufferData(ScreenUV);
-		const bool bIsDirectional = LightPositionOrDirection.w == 0;
-		const float3 LightDirection = bIsDirectional ? -LightPositionOrDirection.xyz : normalize(LightPositionOrDirection.xyz - WorldPosition);
+		const float3 LightDirection = normalize(WorldSampleToLightVec);
 		const float NoL = saturate(dot(GBufferData.WorldNormal, LightDirection));
 		SlopeBias = (1-NoL) * PointLightDepthBias.y;
 	}
@@ -435,7 +434,7 @@ void MainOnePassPointLightPS(
 	bool IsSubsurfaceProfile = GBufferData.ShadingModelID == SHADINGMODELID_SUBSURFACE_PROFILE;
 	if (IsSubsurfaceProfile)
 	{
-		Thickness = CalcTransmissionThickness(GBufferData, WorldPosition, LightVector, PointLightProjParameters, LightPositionAndInvRadius.w, 0);
+		Thickness = CalcTransmissionThickness(GBufferData, WorldSampleToLightVec, PointLightProjParameters, LightPositionAndInvRadius.w, 0);
 	}
 	OutColor.a = IsSubsurfaceProfile ? EncodeLightAttenuation(Thickness) : OutColor.b;
 #endif // USE_TRANSMISSION

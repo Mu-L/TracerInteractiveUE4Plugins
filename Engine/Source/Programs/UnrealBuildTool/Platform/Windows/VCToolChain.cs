@@ -75,6 +75,12 @@ namespace UnrealBuildTool
 			}
 		}
 
+		public override void GetExternalDependencies(HashSet<FileItem> ExternalDependencies)
+		{
+			ExternalDependencies.Add(FileItem.GetItemByFileReference(EnvVars.CompilerPath));
+			ExternalDependencies.Add(FileItem.GetItemByFileReference(EnvVars.LinkerPath));
+		}
+
 		static public void AddDefinition(List<string> Arguments, string Definition)
 		{
 			// Split the definition into name and value
@@ -145,7 +151,7 @@ namespace UnrealBuildTool
 		}
 
 
-		void AppendCLArguments_Global(CppCompileEnvironment CompileEnvironment, List<string> Arguments)
+		protected virtual void AppendCLArguments_Global(CppCompileEnvironment CompileEnvironment, List<string> Arguments)
 		{
 			// Suppress generation of object code for unreferenced inline functions. Enabling this option is more standards compliant, and causes a big reduction
 			// in object file sizes (and link times) due to the amount of stuff we inline.
@@ -195,6 +201,9 @@ namespace UnrealBuildTool
 				{
 					Arguments.Add("--target=i686-pc-windows-msvc");
 				}
+
+				// This matches Microsoft's default support floor for SSE.
+				Arguments.Add("-mssse3");
 			}
 
 			// Compile into an .obj file, and skip linking.
@@ -280,6 +289,17 @@ namespace UnrealBuildTool
 				Arguments.Add("/execution-charset:utf-8");
 			}
 
+			// Do not allow inline method expansion if E&C support is enabled or inline expansion has been disabled
+			if (!CompileEnvironment.bSupportEditAndContinue && CompileEnvironment.bUseInlining)
+			{
+				Arguments.Add("/Ob2");
+			}
+			else
+			{
+				// Specifically disable inline expansion to override /O1,/O2/ or /Ox if set
+				Arguments.Add("/Ob0");
+			}
+
 			//
 			//	Debug
 			//
@@ -290,12 +310,6 @@ namespace UnrealBuildTool
 
 				// Favor code size (especially useful for embedded platforms).
 				Arguments.Add("/Os");
-
-				// Allow inline method expansion unless E&C support is requested
-				if (!CompileEnvironment.bSupportEditAndContinue && CompileEnvironment.bUseInlining)
-				{
-					Arguments.Add("/Ob2");
-				}
 
 				// Always include runtime error checks
 				Arguments.Add("/RTCs");
@@ -327,9 +341,6 @@ namespace UnrealBuildTool
 						Arguments.Add("/Oy-");
 					}
 				}
-
-				// Allow inline method expansion
-				Arguments.Add("/Ob2");
 
 				//
 				// LTCG
@@ -381,7 +392,7 @@ namespace UnrealBuildTool
 			else
 			{
 				// This is required to disable exception handling in VC platform headers.
-				CompileEnvironment.Definitions.Add("_HAS_EXCEPTIONS=0");
+				Arguments.Add("/D_HAS_EXCEPTIONS=0");
 			}
 
 			// If enabled, create debug information.
@@ -498,11 +509,18 @@ namespace UnrealBuildTool
 				Arguments.Add("/wd4463"); // 4463 - overflow; assigning 1 to bit-field that can only hold values from -1 to 0
 			}
 
-			if(CompileEnvironment.bEnableUndefinedIdentifierWarnings)
+			if (CompileEnvironment.bEnableUndefinedIdentifierWarnings)
 			{
 				if (CompileEnvironment.bUndefinedIdentifierWarningsAsErrors)
 				{
-					Arguments.Add("/we4668");
+					if (Target.WindowsPlatform.Compiler == WindowsCompiler.VisualStudio2015_DEPRECATED)
+					{
+						Arguments.Add("/we4668");
+					}
+					else if (Target.WindowsPlatform.Compiler == WindowsCompiler.VisualStudio2017)
+					{
+						Arguments.Add("/wd4668");
+					}
 				}
 				else
 				{
@@ -533,6 +551,13 @@ namespace UnrealBuildTool
  				Arguments.Add("/wd4244");
 				Arguments.Add("/wd4838");
  			}
+
+			// If using WindowsSDK 10.0.18362.0 or later and compiling Win32 we need to add a definition
+			//   for ignoring packing mismatches.
+			if(CompileEnvironment.Platform == UnrealTargetPlatform.Win32 && EnvVars.WindowsSdkVersion >= VersionNumber.Parse("10.0.18362.0"))
+			{
+				AddDefinition(Arguments, "WINDOWS_IGNORE_PACKING_MISMATCH");
+			}
 		}
 
 		protected virtual void AppendCLArguments_CPP(CppCompileEnvironment CompileEnvironment, List<string> Arguments)
@@ -1005,7 +1030,7 @@ namespace UnrealBuildTool
 					FileReference PCHCPPPath = CompileEnvironment.PrecompiledHeaderIncludeFilename.ChangeExtension(".cpp");
 					FileItem PCHCPPFile = Graph.CreateIntermediateTextFile(
 						PCHCPPPath,
-						string.Format("#include \"{0}\"\r\n", CompileEnvironment.PrecompiledHeaderIncludeFilename.FullName.Replace('\\', '/'))
+						string.Format("// Compiler: {0}\n#include \"{1}\"\r\n", EnvVars.CompilerVersion, CompileEnvironment.PrecompiledHeaderIncludeFilename.FullName.Replace('\\', '/'))
 						);
 
 					// Make sure the original source directory the PCH header file existed in is added as an include
@@ -1289,6 +1314,10 @@ namespace UnrealBuildTool
 				{
 					// Generate the file manifest for the aggregator.
 					FileReference ManifestFile = FileReference.Combine(Makefile.ProjectIntermediateDirectory, $"{Target.Name}TimingManifest.txt");
+					if (!DirectoryReference.Exists(ManifestFile.Directory))
+					{
+						DirectoryReference.CreateDirectory(ManifestFile.Directory);
+					}
 					File.WriteAllLines(ManifestFile.FullName, TimingJsonFiles.Select(f => f.AbsolutePath));
 
 					FileReference ExpectedCompileTimeFile = FileReference.FromString(Path.Combine(Makefile.ProjectIntermediateDirectory.FullName, String.Format("{0}.json", Target.Name)));
@@ -1583,7 +1612,7 @@ namespace UnrealBuildTool
 			else if (!LinkEnvironment.bIsBuildingLibrary)
 			{
 				// Add the library paths to the argument list.
-				foreach (DirectoryReference LibraryPath in LinkEnvironment.LibraryPaths)
+				foreach (DirectoryReference LibraryPath in LinkEnvironment.SystemLibraryPaths)
 				{
 					Arguments.Add(String.Format("/LIBPATH:\"{0}\"", LibraryPath));
 				}
@@ -1649,17 +1678,14 @@ namespace UnrealBuildTool
 
 			if (!bIsBuildingLibraryOrImportLibrary)
 			{
-				foreach (string AdditionalLibrary in LinkEnvironment.AdditionalLibraries)
+				foreach (FileReference Library in LinkEnvironment.Libraries)
 				{
-					InputFileNames.Add(string.Format("\"{0}\"", AdditionalLibrary));
-
-					// If the library file name has a relative path attached (rather than relying on additional
-					// lib directories), then we'll add it to our prerequisites list.  This will allow UBT to detect
-					// when the binary needs to be relinked because a dependent external library has changed.
-					//if( !String.IsNullOrEmpty( Path.GetDirectoryName( AdditionalLibrary ) ) )
-					{
-						PrerequisiteItems.Add(FileItem.GetItemByPath(AdditionalLibrary));
-					}
+					InputFileNames.Add(string.Format("\"{0}\"", Library));
+					PrerequisiteItems.Add(FileItem.GetItemByFileReference(Library));
+				}
+				foreach (string SystemLibrary in LinkEnvironment.SystemLibraries)
+				{
+					InputFileNames.Add(string.Format("\"{0}\"", SystemLibrary));
 				}
 			}
 
@@ -1737,6 +1763,9 @@ namespace UnrealBuildTool
 				}
 			}
 
+			// Allow the toolchain to adjust/process the link arguments
+			ModifyFinalLinkArguments(LinkEnvironment, Arguments, bBuildImportLibraryOnly );
+
 			// Create a response file for the linker, unless we're generating IntelliSense data
 			FileReference ResponseFileName = GetResponseFileName(LinkEnvironment, OutputFile);
 			if (!ProjectFileGenerator.bGenerateProjectFiles)
@@ -1794,6 +1823,11 @@ namespace UnrealBuildTool
 			return OutputFile;
 		}
 
+		protected virtual void ModifyFinalLinkArguments(LinkEnvironment LinkEnvironment, List<string> Arguments, bool bBuildImportLibraryOnly)
+		{
+			
+		}
+
 		private void ExportObjectFilePaths(LinkEnvironment LinkEnvironment, string FileName, VCEnvironment EnvVars)
 		{
 			// Write the list of object file directories
@@ -1802,16 +1836,11 @@ namespace UnrealBuildTool
 			{
 				ObjectFileDirectories.Add(InputFile.Location.Directory);
 			}
-			foreach(string AdditionalLibrary in LinkEnvironment.AdditionalLibraries)
+			foreach(FileReference Library in LinkEnvironment.Libraries)
 			{
-				// Need to handle import libraries that are about to be built (but may not exist yet), third party libraries with relative paths in the UE4 tree, and system libraries in the system path
-				FileReference AdditionalLibraryLocation = new FileReference(AdditionalLibrary);
-				if(Path.IsPathRooted(AdditionalLibrary) || FileReference.Exists(AdditionalLibraryLocation))
-				{
-					ObjectFileDirectories.Add(AdditionalLibraryLocation.Directory);
-				}
+				ObjectFileDirectories.Add(Library.Directory);
 			}
-			foreach(DirectoryReference LibraryPath in LinkEnvironment.LibraryPaths)
+			foreach(DirectoryReference LibraryPath in LinkEnvironment.SystemLibraryPaths)
 			{
 				ObjectFileDirectories.Add(LibraryPath);
 			}

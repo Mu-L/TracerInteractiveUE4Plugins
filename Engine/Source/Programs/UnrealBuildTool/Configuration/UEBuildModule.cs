@@ -10,6 +10,7 @@ using System.Text.RegularExpressions;
 using System.Xml;
 using Tools.DotNETCommon;
 
+
 namespace UnrealBuildTool
 {
 	/// <summary>
@@ -92,19 +93,19 @@ namespace UnrealBuildTool
 		public readonly HashSet<DirectoryReference> PublicSystemIncludePaths;
 
 		/// <summary>
-		/// Set of all public system library paths
-		/// </summary>
-		public readonly HashSet<DirectoryReference> PublicSystemLibraryPaths;
-
-		/// <summary>
 		/// Set of all additional libraries
 		/// </summary>
-		public readonly HashSet<string> PublicAdditionalLibraries;
+		public readonly HashSet<FileReference> PublicLibraries = new HashSet<FileReference>();
 
 		/// <summary>
 		/// Set of all system libraries
 		/// </summary>
-		public readonly HashSet<string> PublicSystemLibraries;
+		public readonly HashSet<string> PublicSystemLibraries = new HashSet<string>();
+
+		/// <summary>
+		/// Set of all public system library paths
+		/// </summary>
+		public readonly HashSet<DirectoryReference> PublicSystemLibraryPaths;
 
 		/// <summary>
 		/// Set of additional frameworks
@@ -178,25 +179,36 @@ namespace UnrealBuildTool
 
 			ModuleApiDefine = Name.ToUpperInvariant() + "_API";
 
+			HashSet<string> PublicPreBuildLibraries = HashSetFromOptionalEnumerableStringParameter(Rules.PublicPreBuildLibraries);
 			PublicDefinitions = HashSetFromOptionalEnumerableStringParameter(Rules.PublicDefinitions);
 			PublicIncludePaths = CreateDirectoryHashSet(Rules.PublicIncludePaths);
 			PublicSystemIncludePaths = CreateDirectoryHashSet(Rules.PublicSystemIncludePaths);
 			PublicSystemLibraryPaths = CreateDirectoryHashSet(Rules.PublicSystemLibraryPaths);
-			PublicAdditionalLibraries = HashSetFromOptionalEnumerableStringParameter(Rules.PublicAdditionalLibraries);
+			HashSet<string> PublicAdditionalLibraries = HashSetFromOptionalEnumerableStringParameter(Rules.PublicAdditionalLibraries.Union(PublicPreBuildLibraries));
 			PublicSystemLibraries = HashSetFromOptionalEnumerableStringParameter(Rules.PublicSystemLibraries);
 			PublicFrameworks = HashSetFromOptionalEnumerableStringParameter(Rules.PublicFrameworks);
 			PublicWeakFrameworks = HashSetFromOptionalEnumerableStringParameter(Rules.PublicWeakFrameworks);
 
 			foreach (string LibraryName in PublicAdditionalLibraries)
 			{
-				// if the library path is fully qualified we just add it, this is the preferred method of adding a library
-				if (File.Exists(LibraryName))
+				FileItem Library = FileItem.GetItemByPath(LibraryName);
+				if (Library.Exists)
 				{
-					continue;
+					// if the library path is fully qualified we just add it, this is the preferred method of adding a library
+					FileReference Location = Library.Location;
+					PublicLibraries.Add(Location);
 				}
-
-				// the library path does not seem to be resolvable as is, lets warn about it as dependency checking will not work for it
-				Log.TraceWarning("Library '{0}' was not resolvable to a file when used in Module '{1}', assuming it is a filename and will search library paths for it. This is slow and dependency checking will not work for it. Please update reference to be fully qualified alternatively use PublicSystemLibraryPaths if you do intended to use this slow path to suppress this warning. ", LibraryName, Name);
+				else if (PublicPreBuildLibraries.Contains(LibraryName))
+				{
+					Log.TraceLog("Library '{0}' was not resolvable to a file when used in Module '{1}'.  Be sure to add either a TargetRules.PreBuildSteps entry or a TargetRules.PreBuildTargets entry to assure it is built for your target.", LibraryName, Name);
+					PublicSystemLibraries.Add(LibraryName);
+				}
+				else
+				{
+					// the library path does not seem to be resolvable as is, lets warn about it as dependency checking will not work for it
+					Log.TraceWarning("Library '{0}' was not resolvable to a file when used in Module '{1}', assuming it is a filename and will search library paths for it. This is slow and dependency checking will not work for it. Please update reference to be fully qualified alternatively use PublicSystemLibraryPaths if you do intended to use this slow path to suppress this warning. ", LibraryName, Name);
+					PublicSystemLibraries.Add(LibraryName);
+				}
 			}
 
 			PublicAdditionalFrameworks = new HashSet<UEBuildFramework>();
@@ -205,13 +217,15 @@ namespace UnrealBuildTool
 				foreach(ModuleRules.Framework FrameworkRules in Rules.PublicAdditionalFrameworks)
 				{
 					UEBuildFramework Framework;
-					if(String.IsNullOrEmpty(FrameworkRules.ZipPath))
+					if (FrameworkRules.IsZipFile())
 					{
-						Framework = new UEBuildFramework(FrameworkRules.Name, FrameworkRules.CopyBundledAssets);
+						// If FrameworkPath ends in .zip, it needs to be extracted
+						Framework = new UEBuildFramework(FrameworkRules.Name, FileReference.Combine(ModuleDirectory, FrameworkRules.Path), DirectoryReference.Combine(UnrealBuildTool.EngineDirectory, "Intermediate", "UnzippedFrameworks", FrameworkRules.Name, Path.GetFileNameWithoutExtension(FrameworkRules.Path)), FrameworkRules.CopyBundledAssets, FrameworkRules.bCopyFramework);
 					}
 					else
 					{
-						Framework = new UEBuildFramework(FrameworkRules.Name, FileReference.Combine(ModuleDirectory, FrameworkRules.ZipPath), DirectoryReference.Combine(UnrealBuildTool.EngineDirectory, "Intermediate", "UnzippedFrameworks", FrameworkRules.Name, Path.GetFileNameWithoutExtension(FrameworkRules.ZipPath)), FrameworkRules.CopyBundledAssets);
+						// Framework on disk
+						Framework = new UEBuildFramework(FrameworkRules.Name, null, DirectoryReference.Combine(ModuleDirectory, FrameworkRules.Path), FrameworkRules.CopyBundledAssets, FrameworkRules.bCopyFramework);
 					}
 					PublicAdditionalFrameworks.Add(Framework);
 				}
@@ -231,16 +245,8 @@ namespace UnrealBuildTool
 			WhitelistRestrictedFolders = new HashSet<DirectoryReference>(Rules.WhitelistRestrictedFolders.Select(x => DirectoryReference.Combine(ModuleDirectory, x)));
 			AliasRestrictedFolders = new Dictionary<string, string>(Rules.AliasRestrictedFolders);
 
-			// merge the main directory and any others set in the Rules
-			List<DirectoryReference> MergedDirectories = new List<DirectoryReference> { ModuleDirectory };
-			DirectoryReference[] ExtraModuleDirectories = Rules.GetModuleDirectoriesForAllSubClasses();
-			if (ExtraModuleDirectories != null)
-			{
-				MergedDirectories.AddRange(ExtraModuleDirectories);
-			}
-
-			// cache the results (it will always at least have the ModuleDirectory)
-			ModuleDirectories = MergedDirectories.ToArray();
+			// get the module directories from the module
+			ModuleDirectories = Rules.GetAllModuleDirectories();
 		}
 
 		/// <summary>
@@ -250,7 +256,7 @@ namespace UnrealBuildTool
 		/// <returns>True if the file is part of this module</returns>
 		public virtual bool ContainsFile(FileReference Location)
 		{
-			return Location.IsUnderDirectory(ModuleDirectory);
+			return ModuleDirectories.Any(x => Location.IsUnderDirectory(x));
 		}
 
 		/// <summary>
@@ -340,7 +346,7 @@ namespace UnrealBuildTool
 		/// <param name="BundleResources">List of bundle resources required by this module</param>
 		public void GatherAdditionalResources(List<string> Libraries, List<UEBuildBundleResource> BundleResources)
 		{
-			Libraries.AddRange(PublicAdditionalLibraries);
+			Libraries.AddRange(PublicLibraries.Select(x => x.FullName));
 			Libraries.AddRange(PublicSystemLibraries);
 			BundleResources.AddRange(PublicAdditionalBundleResources);
 		}
@@ -686,8 +692,9 @@ namespace UnrealBuildTool
 		/// </summary>
 		protected virtual void SetupPublicLinkEnvironment(
 			UEBuildBinary SourceBinary,
-			List<DirectoryReference> LibraryPaths,
-			List<string> AdditionalLibraries,
+			List<FileReference> Libraries,
+			List<DirectoryReference> SystemLibraryPaths,
+			List<string> SystemLibraries,
 			List<string> RuntimeLibraryPaths,
 			List<string> Frameworks,
 			List<string> WeakFrameworks,
@@ -728,16 +735,16 @@ namespace UnrealBuildTool
 						bool bIsInStaticLibrary = (DependencyModule.Binary != null && DependencyModule.Binary.Type == UEBuildBinaryType.StaticLibrary);
 						if (bIsExternalModule || bIsInStaticLibrary)
 						{
-							DependencyModule.SetupPublicLinkEnvironment(SourceBinary, LibraryPaths, AdditionalLibraries, RuntimeLibraryPaths, Frameworks, WeakFrameworks,
+							DependencyModule.SetupPublicLinkEnvironment(SourceBinary, Libraries, SystemLibraryPaths, SystemLibraries, RuntimeLibraryPaths, Frameworks, WeakFrameworks,
 								AdditionalFrameworks, AdditionalBundleResources, DelayLoadDLLs, BinaryDependencies, VisitedModules, ExeDir);
 						}
 					}
 				}
 
 				// Add this module's public include library paths and additional libraries.
-				LibraryPaths.AddRange(PublicSystemLibraryPaths);
-				AdditionalLibraries.AddRange(PublicAdditionalLibraries);
-				AdditionalLibraries.AddRange(PublicSystemLibraries);
+				Libraries.AddRange(PublicLibraries);
+				SystemLibraryPaths.AddRange(PublicSystemLibraryPaths);
+				SystemLibraries.AddRange(PublicSystemLibraries);
 				RuntimeLibraryPaths.AddRange(ExpandPathVariables(Rules.PublicRuntimeLibraryPaths, SourceBinary.OutputDir, ExeDir));
 				Frameworks.AddRange(PublicFrameworks);
 				WeakFrameworks.AddRange(PublicWeakFrameworks);
@@ -762,7 +769,7 @@ namespace UnrealBuildTool
 			LinkEnvironment.RuntimeLibraryPaths.AddRange(ExpandPathVariables(Rules.PrivateRuntimeLibraryPaths, SourceBinary.OutputDir, ExeDir));
 
 			// Allow the module's public dependencies to add library paths and additional libraries to the link environment.
-			SetupPublicLinkEnvironment(SourceBinary, LinkEnvironment.LibraryPaths, LinkEnvironment.AdditionalLibraries, LinkEnvironment.RuntimeLibraryPaths, LinkEnvironment.Frameworks, LinkEnvironment.WeakFrameworks,
+			SetupPublicLinkEnvironment(SourceBinary, LinkEnvironment.Libraries, LinkEnvironment.SystemLibraryPaths, LinkEnvironment.SystemLibraries, LinkEnvironment.RuntimeLibraryPaths, LinkEnvironment.Frameworks, LinkEnvironment.WeakFrameworks,
 				LinkEnvironment.AdditionalFrameworks, LinkEnvironment.AdditionalBundleResources, LinkEnvironment.DelayLoadDLLs, BinaryDependencies, VisitedModules, ExeDir);
 
 			// Also allow the module's public and private dependencies to modify the link environment.
@@ -772,7 +779,7 @@ namespace UnrealBuildTool
 
 			foreach (UEBuildModule DependencyModule in AllDependencyModules)
 			{
-				DependencyModule.SetupPublicLinkEnvironment(SourceBinary, LinkEnvironment.LibraryPaths, LinkEnvironment.AdditionalLibraries, LinkEnvironment.RuntimeLibraryPaths, LinkEnvironment.Frameworks, LinkEnvironment.WeakFrameworks,
+				DependencyModule.SetupPublicLinkEnvironment(SourceBinary, LinkEnvironment.Libraries, LinkEnvironment.SystemLibraryPaths, LinkEnvironment.SystemLibraries, LinkEnvironment.RuntimeLibraryPaths, LinkEnvironment.Frameworks, LinkEnvironment.WeakFrameworks,
 					LinkEnvironment.AdditionalFrameworks, LinkEnvironment.AdditionalBundleResources, LinkEnvironment.DelayLoadDLLs, BinaryDependencies, VisitedModules, ExeDir);
 			}
 
@@ -786,7 +793,7 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Compiles the module, and returns a list of files output by the compiler.
 		/// </summary>
-		public virtual List<FileItem> Compile(ReadOnlyTargetRules Target, UEToolChain ToolChain, CppCompileEnvironment CompileEnvironment, FileReference SingleFileToCompile, ISourceFileWorkingSet WorkingSet, IActionGraphBuilder Graph)
+		public virtual List<FileItem> Compile(ReadOnlyTargetRules Target, UEToolChain ToolChain, CppCompileEnvironment CompileEnvironment, List<FileReference> SpecificFilesToCompile, ISourceFileWorkingSet WorkingSet, IActionGraphBuilder Graph)
 		{
 			// Generate type libraries for Windows
 			foreach(ModuleRules.TypeLibrary TypeLibrary in Rules.TypeLibraries)
@@ -831,14 +838,78 @@ namespace UnrealBuildTool
 		public delegate UEBuildModule CreateModuleDelegate(string Name, string ReferenceChain);
 
 		/// <summary>
+		/// Public entry point to recursively create a module and all its dependencies
+		/// </summary>
+		/// <param name="CreateModule"></param>
+		/// <param name="ReferenceChain"></param>
+		public void RecursivelyCreateModules(CreateModuleDelegate CreateModule, string ReferenceChain)
+		{
+			List<UEBuildModule> ReferenceStack = new List<UEBuildModule>();
+			RecursivelyCreateModules(CreateModule, ReferenceChain, ReferenceStack);
+		}
+
+		/// <summary>
 		/// Creates all the modules required for this target
 		/// </summary>
 		/// <param name="CreateModule">Delegate to create a module with a given name</param>
 		/// <param name="ReferenceChain">Chain of references before reaching this module</param>
-		public void RecursivelyCreateModules(CreateModuleDelegate CreateModule, string ReferenceChain)
+		/// <param name="ReferenceStack">Stack of module dependencies that led to this module</param>
+		protected void RecursivelyCreateModules(CreateModuleDelegate CreateModule, string ReferenceChain, List<UEBuildModule> ReferenceStack)
 		{
-			// Get the reference chain for anything referenced by this module
-			string NextReferenceChain = String.Format("{0} -> {1}", ReferenceChain, (RulesFile == null)? Name : RulesFile.GetFileName());
+			// Name of this reference
+			string ThisRefName = (RulesFile == null) ? Name : RulesFile.GetFileName();
+
+			// Set the reference chain for anything referenced by this module
+			string NextReferenceChain = String.Format("{0} -> {1}", ReferenceChain, ThisRefName);
+
+			// We need to check for cycles if this module has already been created and its name is in the stack.
+			bool CheckForCycles = PrivateIncludePathModules != null && ReferenceStack.Contains(this);
+
+			// Add us to the reference stack - note do this before checking for cycles as we allow them if an element in the stack
+			// declares the next element at leading to a dependency cycle.
+			ReferenceStack.Add(this);
+
+			if (CheckForCycles)
+			{
+				// We are FeatureModuleA and we know we're already in the list so there must be a circular dependency like this:
+				//   Target -> FeatureModuleA -> FeatureModuleB -> BaseModule -> FeatureModuleA
+				// In this case it's up to BaseModule to confess that it's going to introduce a 
+				// cycle by referencing FeatureModuleA so let's check it did that.
+				// (Note: it's *bad* that it is doing this, but it's even worse not to flag these
+				// cycles when they're introduced and have a way of tracking them!)
+
+				string GuiltyModule = null;
+				string VictimModule = null;
+
+				for (int i = 0; i < ReferenceStack.Count() - 1; i++)
+				{
+					UEBuildModule ReferringModule = ReferenceStack.ElementAt(i);
+					UEBuildModule TargetModule = ReferenceStack.ElementAt(i + 1);
+
+					if (ReferringModule.HasCircularDependencyOn(TargetModule.Name))
+					{
+						GuiltyModule = ReferringModule.Name;
+						VictimModule = TargetModule.Name;
+						break;
+					}
+				}
+
+				// No module has confessed its guilt, so this is an error.
+				if (string.IsNullOrEmpty(GuiltyModule))
+				{
+					string CycleChain = string.Join(" -> ", ReferenceStack);
+					Log.TraceError("Circular dependency on {0} detected.\n" +
+						"\tFull Route: {1}\n" +
+						"\tCycled Route: is {2}.\n" +
+						"Break this loop by moving dependencies into a separate module or using Private/PublicIncludePathModuleNames to reference declarations\n", 
+						ThisRefName, NextReferenceChain, CycleChain);
+
+				}
+				else
+				{
+					Log.TraceVerbose("Found circular reference to {0}, but {1} declares a cycle on {2} which breaks the chain", ThisRefName, GuiltyModule, VictimModule);
+				}
+			}		
 
 			// Recursively create all the public include path modules. These modules may not be added to the target (and we don't process their referenced 
 			// dependencies), but they need to be created to set up their include paths.
@@ -851,14 +922,18 @@ namespace UnrealBuildTool
 				// Create the private include path modules
 				RecursivelyCreateIncludePathModulesByName(Rules.PrivateIncludePathModuleNames, ref PrivateIncludePathModules, CreateModule, NextReferenceChain);
 
-				// Create all the dependency modules
-				RecursivelyCreateModulesByName(Rules.PublicDependencyModuleNames, ref PublicDependencyModules, CreateModule, NextReferenceChain);
-				RecursivelyCreateModulesByName(Rules.PrivateDependencyModuleNames, ref PrivateDependencyModules, CreateModule, NextReferenceChain);
-				RecursivelyCreateModulesByName(Rules.DynamicallyLoadedModuleNames, ref DynamicallyLoadedModules, CreateModule, NextReferenceChain);
+				// Create all the dependency modules - pass through the reference stack so we can check for cycles
+				RecursivelyCreateModulesByName(Rules.PublicDependencyModuleNames, ref PublicDependencyModules, CreateModule, NextReferenceChain, ReferenceStack);
+				RecursivelyCreateModulesByName(Rules.PrivateDependencyModuleNames, ref PrivateDependencyModules, CreateModule, NextReferenceChain, ReferenceStack);
+				// Dynamic loads aren't considered a reference chain so start with an empty stack
+				RecursivelyCreateModulesByName(Rules.DynamicallyLoadedModuleNames, ref DynamicallyLoadedModules, CreateModule, NextReferenceChain, new List<UEBuildModule>());
 			}
+
+			// pop us off the current stack
+			ReferenceStack.RemoveAt(ReferenceStack.Count - 1);
 		}
 
-		private static void RecursivelyCreateModulesByName(List<string> ModuleNames, ref List<UEBuildModule> Modules, CreateModuleDelegate CreateModule, string ReferenceChain)
+		private static void RecursivelyCreateModulesByName(List<string> ModuleNames, ref List<UEBuildModule> Modules, CreateModuleDelegate CreateModule, string ReferenceChain, List<UEBuildModule> ReferenceStack)
 		{
 			// Check whether the module list is already set. We set this immediately (via the ref) to avoid infinite recursion.
 			if (Modules == null)
@@ -869,7 +944,7 @@ namespace UnrealBuildTool
 					UEBuildModule Module = CreateModule(ModuleName, ReferenceChain);
 					if (!Modules.Contains(Module))
 					{
-						Module.RecursivelyCreateModules(CreateModule, ReferenceChain);
+						Module.RecursivelyCreateModules(CreateModule, ReferenceChain, ReferenceStack);
 						Modules.Add(Module);
 					}
 				}
@@ -936,9 +1011,9 @@ namespace UnrealBuildTool
 			ExportJsonStringArray(Writer, "PublicSystemIncludePaths", PublicSystemIncludePaths.Select(x => x.FullName));
 			ExportJsonStringArray(Writer, "PublicIncludePaths", PublicIncludePaths.Select(x => x.FullName));
 			ExportJsonStringArray(Writer, "PrivateIncludePaths", PrivateIncludePaths.Select(x => x.FullName));
-			ExportJsonStringArray(Writer, "PublicSystemLibraryPaths", PublicSystemLibraryPaths.Select(x => x.FullName));
-			ExportJsonStringArray(Writer, "PublicAdditionalLibraries", PublicAdditionalLibraries);
+			ExportJsonStringArray(Writer, "PublicLibraries", PublicLibraries.Select(x => x.FullName));
 			ExportJsonStringArray(Writer, "PublicSystemLibraries", PublicSystemLibraries);
+			ExportJsonStringArray(Writer, "PublicSystemLibraryPaths", PublicSystemLibraryPaths.Select(x => x.FullName));
 			ExportJsonStringArray(Writer, "PublicFrameworks", PublicFrameworks);
 			ExportJsonStringArray(Writer, "PublicWeakFrameworks", PublicWeakFrameworks);
 			ExportJsonStringArray(Writer, "PublicDelayLoadDLLs", PublicDelayLoadDLLs);

@@ -7,9 +7,14 @@
 #if WITH_PUSH_MODEL
 
 #include "CoreMinimal.h"
+#include "UObject/ObjectKey.h"
 
 /**
  * Push Model Support for networking.
+ *
+ * Note: While the theoretical gains for Push Model are good, in practice the gains seen haven't been as good as expected.
+ *			More work may be needed in order to optimize comparisons, and have other systems buy in / use Push Model in order
+ *			to increase gains.
  *
  ****************************************************************
  * Rationale
@@ -53,7 +58,7 @@
  *
  * With Fast Arrays (see NetSerialization.h), no changes will be replicated unless devs explicitly mark a given Array Property
  * as being dirty. Beyond that, individual elements won't be sent unless they are marked dirty. This means that the replication
- * system only needs to check a few flags / keys, and if they are different, it doesn't need to do anything.
+ * system only needs to check a few flags / keys, and if they aren't different, it doesn't need to do anything.
  *
  * With Replication Keys (see ActorChannel.h, KeyNeedsToReplicate / ReplicateSubobject), we go up a step and handle changes
  * at the Subobject level. Devs can assign an arbitrary ID and Key to a specific subobject. As they make changes to the
@@ -81,7 +86,7 @@
  * C++, then it is completely up to them to call the necessary methods.
  *
  * UFUNCTIONS or Blueprint Defined Functions that take Properties by reference will check for Networked Properties and
- * should add nodes automatically (see UNetPushModelHelpers).
+ * should add nodes automatically (see UNetPushModelHelpers). This is **only** true when they are called from Blueprints!!
  *
  * Devs don't need to care *if* a given object is actually networked or is actively replicating, Push Model handles
  * that sort of tracking internally. As such, we don't expect users to ever need to know or have a reference to
@@ -116,6 +121,7 @@
  */
 
 #if 0
+USTRUCT()
 struct FMyAwesomeStruct
 {
 	UPROPERTY()
@@ -125,6 +131,7 @@ struct FMyAwesomeStruct
 	bool bSomeOtherReplicatedProperty;
 }
 
+UCLASS()
 class AMyAwesomeActor : public AActor
 {
 	GENERATED_BODY()
@@ -137,9 +144,11 @@ class AMyAwesomeActor : public AActor
 	}
 
 	/**
-	 * Calls to Set this from Blueprints will be automatically flagged, but we still need
-	 * to manually set this if we change it natively.
+	 * Typically, calls to Set <Property> in blueprint will be handled automatically.
+	 * However, since this is just an exposed Blueprint Function (especially since it is callable
+	 * from native code), we should make the property dirty.
 	 */
+	UFUNCTION(BlueprintCallable)
 	void SetMyBlueprintProperty(const int32 NewValue)
 	{
 		MyBlueprintProperty = NewValue;
@@ -228,36 +237,48 @@ class AMyAwesomeActor : public AActor
 private:
 
 	/** This is a standard property that can only be set natively */
+	UPROPERTY(Replicated)
 	bool bMyReplicatedBool;
 
 	/**
 	 * Properties marked as BlueprintReadWrite will automatically be marked dirty when set is called.
 	 * This won't work if the value is passed by reference.
+	 *
+	 * Note: AllowPrivateAccess is only necessary here because this property is private.
 	 */
+	UPROPERTY(Replicated, BlueprintReadWrite, Meta=(AllowPrivateAccess="true"))
 	int32 MyBlueprintProperty;
 
 	/**
 	 * Properties with custom BlueprintSetters won't automatically be marked dirty when set is called.
 	 * This means our setter will need to call it manually.
 	 */
+	UPROPERTY(Replicated, BlueprintSetter=SetMyBlueprintSetterProperty, Meta = (AllowPrivateAccess = "true"))
 	FString MyBlueprintSetterProperty;
 
+	UPROPERTY(Replicated)
 	FMyAwesomeStruct MyStruct;
 
 	/**
 	 * Static Arrays are broken into separate replicated properties for each index, so we can flag individual
 	 * indices for comparison, or the entire array.
 	 */
+	UPROPERTY(Replicated)
 	int32 MyStaticArray[4];
 
+	UPROPERTY(Replicated)
 	int32 NonPushModelProperty;
 };
 #endif
 
 // DO NOT USE METHODS IN THIS NAMESPACE DIRECTLY
 // Use the Macros instead, as they respect conditional compilation.
+// See PushModelMarcos.h
 namespace UE4PushModelPrivate
 {
+	//~ Using int32 isn't very forward looking, but for now GUObjectArray also uses int32
+	//~ so we're probably safe.
+
 	using FNetPushObjectId = int32;
 	using FNetPushPerNetDriverId = int32;
 
@@ -340,13 +361,12 @@ namespace UE4PushModelPrivate
 	 */
 	NETCORE_API void MarkPropertyDirty(const FNetPushObjectId ObjectId, const int32 StartRepIndex, const int32 EndRepIndex);
 
-	/**
-	 * This method is called by all NetDriver's PostGarbageCollection.
-	 * It's required in order to give PushModel a chance to do any cleanup work.
-	 */
-	NETCORE_API void PostGarbageCollect();
-	
-	NETCORE_API const FPushModelPerNetDriverHandle AddPushModelObject(const FNetPushObjectId ObjectId, const uint16 NumberOfReplicatedProperties);
+	//~ As the comments above state, none of the methods in this namespace should be invoked directly.
+	//~ Particularly, the methods below are **only** needed by internal systems.
+	//~ When Push Model is enabled, registration is handled automatically by the networking system, so no
+	//~ extra dev work is required.
+
+	NETCORE_API const FPushModelPerNetDriverHandle AddPushModelObject(const FObjectKey ObjectId, const uint16 NumberOfReplicatedProperties);
 	NETCORE_API void RemovePushModelObject(const FPushModelPerNetDriverHandle Handle);
 
 	NETCORE_API class FPushModelPerNetDriverState* GetPerNetDriverState(const FPushModelPerNetDriverHandle Handle);
@@ -354,21 +374,19 @@ namespace UE4PushModelPrivate
 
 
 #define CONDITIONAL_ON_PUSH_MODEL(Work) if (UE4PushModelPrivate::IsPushModelEnabled()) { Work; }
-#define CALL_PUSH_MODEL_PREREPLICATION() CONDITIONAL_ON_PUSH_MODEL(UE4PushModelPrivate::PreReplication();)
-#define CALL_PUSH_MODEL_POSTGARBAGECOLLECT() CONDITIONAL_ON_PUSH_MODEL(UE4PushModelPrivate::PostGarbageCollect();)
 #define IS_PUSH_MODEL_ENABLED() UE4PushModelPrivate::IsPushModelEnabled()
 #define PUSH_MAKE_BP_PROPERTIES_PUSH_MODEL() (UE4PushModelPrivate::IsPushModelEnabled() && UE4PushModelPrivate::MakeBpPropertiesPushModel())
 
 #define GET_PROPERTY_REP_INDEX(ClassName, PropertyName) (int32)ClassName::ENetFields_Private::PropertyName
-#define GET_PROPERTY_REP_INDEX_STATIC_ARRAY_START(ClassName, PropertyName) ((int32)GET_PROPERTY_REP_INDEX(ClassName, PropertyName)_STATIC_ARRAY)
-#define GET_PROPERTY_REP_INDEX_STATIC_ARRAY_END(ClassName, PropertyName) ((int32)GET_PROPERTY_REP_INDEX(ClassName, PropertyName)_STATIC_ARRAY_END)
-#define GET_PROPERTY_REP_INDEX_STATIC_ARRAY_INDEX(ClassName, PropertyName, ArrayIndex) ((int32)GET_PROPERTY_REP_INDEX_STATIC_ARRAY_START(ClassName, PropertyName) + ArrayIndex)
+#define GET_PROPERTY_REP_INDEX_STATIC_ARRAY_START(ClassName, PropertyName) ((int32)ClassName::ENetFields_Private::PropertyName ## _STATIC_ARRAY)
+#define GET_PROPERTY_REP_INDEX_STATIC_ARRAY_END(ClassName, PropertyName) ((int32)ClassName::ENetFields_Private::PropertyName ## _STATIC_ARRAY_END)
+#define GET_PROPERTY_REP_INDEX_STATIC_ARRAY_INDEX(ClassName, PropertyName, ArrayIndex) (GET_PROPERTY_REP_INDEX_STATIC_ARRAY_START(ClassName, PropertyName) + ArrayIndex)
 
 #define IS_PROPERTY_REPLICATED(Property) (0 != (EPropertyFlags::CPF_Net & Property->PropertyFlags))
 
-#define CONDITIONAL_ON_OBJECT_NET_ID(Object, Work) { const UE4PushModelPrivate::FNetPushObjectId PrivatePushId = Object->GetNetPushId(); if (INDEX_NONE != PrivatePushId) { Work; } }
-#define CONDITIONAL_ON_OBJECT_NET_ID_DYNAMIC(Object, Work) { const UE4PushModelPrivate::FNetPushObjectId PrivatePushId = FObjectNetPushIdHelper::GetNetPushIdDynamic(Object); if (INDEX_NONE != PrivatePushId) { Work; } }
-#define CONDITIONAL_ON_REP_INDEX_AND_OBJECT_NET_ID(Object, Property, Work) if (IS_PROPERTY_REPLICATED(Property)) { const UE4PushModelPrivate::FNetPushObjectId PrivatePushId = FObjectNetPushIdHelper::GetNetPushIdDynamic(Object); if (PrivatePushId != INDEX_NONE) { Work; } }
+#define CONDITIONAL_ON_OBJECT_NET_ID(Object, Work) { const UE4PushModelPrivate::FNetPushObjectId PrivatePushId = Object->GetNetPushId(); Work; }
+#define CONDITIONAL_ON_OBJECT_NET_ID_DYNAMIC(Object, Work) { const UE4PushModelPrivate::FNetPushObjectId PrivatePushId = Object->GetNetPushIdDynamic(); Work; }
+#define CONDITIONAL_ON_REP_INDEX_AND_OBJECT_NET_ID(Object, Property, Work) if (IS_PROPERTY_REPLICATED(Property)) { const UE4PushModelPrivate::FNetPushObjectId PrivatePushId = Object->GetNetPushIdDynamic();  Work; }
 
 //~ For these macros, we won't bother checking if Push Model is enabled. Instead, we'll just check to see whether or not the Custom ID is valid.
 
@@ -412,8 +430,5 @@ namespace UE4PushModelPrivate
 
 #define IS_PUSH_MODEL_ENABLED() false
 #define PUSH_MAKE_BP_PROPERTIES_PUSH_MODEL() false
-
-#define CALL_PUSH_MODEL_PREREPLICATION() 
-#define CALL_PUSH_MODEL_POSTGARBAGECOLLECT() 
 
 #endif

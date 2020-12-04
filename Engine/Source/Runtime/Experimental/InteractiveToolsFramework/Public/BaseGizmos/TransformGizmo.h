@@ -9,6 +9,7 @@
 #include "InteractiveToolChange.h"
 #include "BaseGizmos/GizmoActor.h"
 #include "BaseGizmos/TransformProxy.h"
+
 #include "TransformGizmo.generated.h"
 
 class UInteractiveGizmoManager;
@@ -274,6 +275,13 @@ public:
 	ATransformGizmoActor* GetGizmoActor() const { return GizmoActor; }
 
 	/**
+	 * Repositions the gizmo without issuing undo/redo changes, triggering callbacks, 
+	 * or moving any components. Useful for resetting the gizmo to a new location without
+	 * it being viewed as a gizmo manipulation.
+	 */
+	void ReinitializeGizmoTransform(const FTransform& NewTransform);
+
+	/**
 	 * Set a new position for the Gizmo. This is done via the same mechanisms as the sub-gizmos,
 	 * so it generates the same Change/Modify() events, and hence works with Undo/Redo
 	 */
@@ -296,6 +304,27 @@ public:
 	UPROPERTY()
 	bool bSnapToWorldGrid = false;
 
+	/**
+	 * Optional grid size which overrides the Context Grid
+	 */
+	UPROPERTY()
+	bool bGridSizeIsExplicit = false;
+	UPROPERTY()
+	FVector ExplicitGridSize;
+
+	/**
+	 * Optional grid size which overrides the Context Rotation Grid
+	 */
+	UPROPERTY()
+	bool bRotationGridSizeIsExplicit = false;
+	UPROPERTY()
+	FRotator ExplicitRotationGridSize;
+
+	/**
+	 * If true, then when using world frame, Axis and Plane translation snap to the world grid via the ContextQueriesAPI (in RotationSnapFunction)
+	 */
+	UPROPERTY()
+	bool bSnapToWorldRotGrid = false;
 
 	/**
 	 * Whether to use the World/Local coordinate system provided by the context via the ContextyQueriesAPI.
@@ -484,7 +513,8 @@ protected:
 		IGizmoStateTarget* StateTarget);
 
 	// Axis and Plane TransformSources use this function to execute worldgrid snap queries
-	bool PositionSnapFunction(const FVector& WorldPosition, FVector& SnappedPositionOut);
+	bool PositionSnapFunction(const FVector& WorldPosition, FVector& SnappedPositionOut) const;
+	FQuat RotationSnapFunction(const FQuat& DeltaRotation) const;
 
 };
 

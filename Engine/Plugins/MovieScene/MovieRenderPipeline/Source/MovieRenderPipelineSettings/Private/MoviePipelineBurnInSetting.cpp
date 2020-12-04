@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MoviePipelineBurnInSetting.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Slate/WidgetRenderer.h"
 #include "MovieRenderPipelineDataTypes.h"
 #include "MoviePipelineBurnInWidget.h"
@@ -13,12 +14,6 @@
 
 void UMoviePipelineBurnInSetting::GatherOutputPassesImpl(TArray<FMoviePipelinePassIdentifier>& ExpectedRenderPasses)
 {
-	// If this was transiently added, don't make a burn-in.
-	if (!GetIsUserCustomized() || !IsEnabled())
-	{
-		return;
-	}
-
 	if (BurnInClass.IsValid())
 	{
 		ExpectedRenderPasses.Add(FMoviePipelinePassIdentifier(TEXT("BurnInOverlay")));
@@ -27,13 +22,12 @@ void UMoviePipelineBurnInSetting::GatherOutputPassesImpl(TArray<FMoviePipelinePa
 
 void UMoviePipelineBurnInSetting::RenderSample_GameThreadImpl(const FMoviePipelineRenderPassMetrics& InSampleState)
 {
-	// If this was transiently added, don't make a burn-in.
-	if (!GetIsUserCustomized() || !IsEnabled())
+	if (InSampleState.bDiscardResult)
 	{
 		return;
 	}
 
-	if (InSampleState.bDiscardResult)
+	if (!WidgetRenderer)
 	{
 		return;
 	}
@@ -68,58 +62,51 @@ void UMoviePipelineBurnInSetting::RenderSample_GameThreadImpl(const FMoviePipeli
 			RHICmdList.ReadSurfaceData(BackbufferRenderTarget->GetRenderTargetTexture(), SourceRect, RawPixels, ReadDataFlags);
 
 			TSharedRef<FImagePixelDataPayload, ESPMode::ThreadSafe> FrameData = MakeShared<FImagePixelDataPayload, ESPMode::ThreadSafe>();
-			FrameData->OutputState = InSampleState.OutputState;
 			FrameData->PassIdentifier = FMoviePipelinePassIdentifier(TEXT("BurnInOverlay"));
 			FrameData->SampleState = InSampleState;
 			FrameData->bRequireTransparentOutput = true;
+			FrameData->SortingOrder = 3;
 
 			TUniquePtr<FImagePixelData> PixelData = MakeUnique<TImagePixelData<FColor>>(InSampleState.BackbufferSize, TArray64<FColor>(MoveTemp(RawPixels)), FrameData);
 
-			OutputBuilder->OnCompleteRenderPassDataAvailable_AnyThread(MoveTemp(PixelData), FrameData);
+			OutputBuilder->OnCompleteRenderPassDataAvailable_AnyThread(MoveTemp(PixelData));
 		});
 	}
 }
 
-void UMoviePipelineBurnInSetting::SetupImpl(TArray<TSharedPtr<MoviePipeline::FMoviePipelineEnginePass>>& InEnginePasses, const MoviePipeline::FMoviePipelineRenderPassInitSettings& InPassInitSettings)
+void UMoviePipelineBurnInSetting::SetupImpl(const MoviePipeline::FMoviePipelineRenderPassInitSettings& InPassInitSettings)
 {
-	// If this was transiently added, don't make a burn-in.
-	if (!GetIsUserCustomized() || !IsEnabled())
+	if (!BurnInClass.IsValid())
 	{
 		return;
 	}
 
-	if (BurnInClass.IsValid())
+	UClass* BurnIn = BurnInClass.TryLoadClass<UMoviePipelineBurnInWidget>();
+	ensureAlwaysMsgf(BurnIn, TEXT("Failed to load burnin class: '%s'."), *BurnInClass.GetAssetPathString());
+
+	BurnInWidgetInstance = CreateWidget<UMoviePipelineBurnInWidget>(GetWorld(), BurnIn);
+
+	OutputResolution = GetPipeline()->GetPipelineMasterConfig()->FindSetting<UMoviePipelineOutputSetting>()->OutputResolution;
+	VirtualWindow = SNew(SVirtualWindow).Size(FVector2D(OutputResolution.X, OutputResolution.Y));
+	VirtualWindow->SetContent(BurnInWidgetInstance->TakeWidget());
+
+	if (FSlateApplication::IsInitialized())
 	{
-		BurnInWidgetInstance = NewObject<UMoviePipelineBurnInWidget>(this, BurnInClass.TryLoadClass<UMoviePipelineBurnInWidget>());
-
-		OutputResolution = GetPipeline()->GetPipelineMasterConfig()->FindSetting<UMoviePipelineOutputSetting>()->OutputResolution;
-		VirtualWindow = SNew(SVirtualWindow).Size(FVector2D(OutputResolution.X, OutputResolution.Y));
-		VirtualWindow->SetContent(BurnInWidgetInstance->TakeWidget());
-
-		if (FSlateApplication::IsInitialized())
-		{
-			FSlateApplication::Get().RegisterVirtualWindow(VirtualWindow.ToSharedRef());
-		}
-
-		RenderTarget = NewObject<UTextureRenderTarget2D>();
-		RenderTarget->ClearColor = FLinearColor::Transparent;
-
-		bool bInForceLinearGamma = false;
-		RenderTarget->InitCustomFormat(OutputResolution.X, OutputResolution.Y, EPixelFormat::PF_B8G8R8A8, bInForceLinearGamma);
-
-		bool bApplyGammaCorrection = false;
-		WidgetRenderer = MakeShared<FWidgetRenderer>(bApplyGammaCorrection);
+		FSlateApplication::Get().RegisterVirtualWindow(VirtualWindow.ToSharedRef());
 	}
+
+	RenderTarget = NewObject<UTextureRenderTarget2D>();
+	RenderTarget->ClearColor = FLinearColor::Transparent;
+
+	bool bInForceLinearGamma = false;
+	RenderTarget->InitCustomFormat(OutputResolution.X, OutputResolution.Y, EPixelFormat::PF_B8G8R8A8, bInForceLinearGamma);
+
+	bool bApplyGammaCorrection = false;
+	WidgetRenderer = MakeShared<FWidgetRenderer>(bApplyGammaCorrection);
 }
 
 void UMoviePipelineBurnInSetting::TeardownImpl() 
 {
-	// If this was transiently added, don't make a burn-in.
-	if (!GetIsUserCustomized() || !IsEnabled())
-	{
-		return;
-	}
-	
 	FlushRenderingCommands();
 
 	if (FSlateApplication::IsInitialized() && VirtualWindow.IsValid())

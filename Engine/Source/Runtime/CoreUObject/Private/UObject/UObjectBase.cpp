@@ -144,7 +144,7 @@ void UObjectBase::DeferredRegister(UClass *UClassStaticClass,const TCHAR* Packag
 {
 	check(UObjectInitialized());
 	// Set object properties.
-	UPackage* Package = CreatePackage(nullptr, PackageName);
+	UPackage* Package = CreatePackage(PackageName);
 	check(Package);
 	Package->SetPackageFlags(PKG_CompiledIn);
 	OuterPrivate = Package;
@@ -204,7 +204,9 @@ void UObjectBase::AddObject(FName InName, EInternalObjectFlags InSetInternalFlag
  */
 void UObjectBase::LowLevelRename(FName NewName,UObject *NewOuter)
 {
-	STAT(((UObject*)this)->ResetStatID()); // reset the stat id since this thing now has a different name
+#if STATS || ENABLE_STATNAMEDEVENTS_UOBJECT
+	((UObject*)this)->ResetStatID(); // reset the stat id since this thing now has a different name
+#endif
 	UnhashObject(this);
 	check(InternalIndex >= 0);
 	NamePrivate = NewName;
@@ -215,9 +217,51 @@ void UObjectBase::LowLevelRename(FName NewName,UObject *NewOuter)
 	HashObject(this);
 }
 
+UPackage* UObjectBase::GetExternalPackage() const
+{
+	// if we have no outer, consider this a package, packages returns themselves as their external package
+	if (OuterPrivate == nullptr)
+	{
+		return CastChecked<UPackage>((UObject*)(this));
+	}
+	UPackage* ExternalPackage = nullptr;
+	if ((GetFlags() & RF_HasExternalPackage) != 0)
+	{
+		ExternalPackage = GetObjectExternalPackageThreadSafe(this);
+		// if the flag is set there should be an override set.
+		ensure(ExternalPackage);
+	}
+	return ExternalPackage;
+}
+
+UPackage* UObjectBase::GetExternalPackageInternal() const
+{
+	// if we have no outer, consider this a package, packages returns themselves as their external package
+	if (OuterPrivate == nullptr)
+	{
+		return CastChecked<UPackage>((UObject*)(this));
+	}
+	return (GetFlags() & RF_HasExternalPackage) != 0 ? GetObjectExternalPackageInternal(this) : nullptr;
+}
+
+void UObjectBase::SetExternalPackage(UPackage* InPackage)
+{
+	HashObjectExternalPackage(this, InPackage);
+	if (InPackage)
+	{
+		SetFlagsTo(GetFlags() | RF_HasExternalPackage);
+	}
+	else
+	{
+		SetFlagsTo(GetFlags() & ~RF_HasExternalPackage);
+	}
+}
+
 void UObjectBase::SetClass(UClass* NewClass)
 {
-	STAT(((UObject*)this)->ResetStatID()); // reset the stat id since this thing now has a different name
+#if STATS || ENABLE_STATNAMEDEVENTS_UOBJECT
+	((UObject*)this)->ResetStatID(); // reset the stat id since this thing now has a different name
+#endif
 
 	UnhashObject(this);
 #if USE_UBER_GRAPH_PERSISTENT_FRAME
@@ -305,9 +349,12 @@ void UObjectBase::EmitBaseReferences(UClass *RootClass)
 {
 	static const FName ClassPropertyName(TEXT("Class"));
 	static const FName OuterPropertyName(TEXT("Outer"));
-
-	RootClass->EmitObjectReference(STRUCT_OFFSET(UObjectBase, ClassPrivate), ClassPropertyName, GCRT_Class);
+	// Mark UObject class reference as persistent object reference so that it (ClassPrivate) doesn't get nulled when a class
+	// is marked as pending kill. Nulling ClassPrivate may leave the object in a broken state if it doesn't get GC'd in the same
+	// GC call as its class. And even if it gets GC'd in the same call as its class it may break inside of GC (for example when traversing TMap references)
+	RootClass->EmitObjectReference(STRUCT_OFFSET(UObjectBase, ClassPrivate), ClassPropertyName, GCRT_PersistentObject);
 	RootClass->EmitObjectReference(STRUCT_OFFSET(UObjectBase, OuterPrivate), OuterPropertyName, GCRT_PersistentObject);
+	RootClass->EmitExternalPackageReference();
 }
 
 #if USE_PER_MODULE_UOBJECT_BOOTSTRAP
@@ -628,9 +675,9 @@ static TArray<FFieldCompiledInInfo*>& GetHotReloadClasses()
 #endif
 
 /** Removes prefix from the native class name */
-FString RemoveClassPrefix(const TCHAR* ClassName)
+FString UObjectBase::RemoveClassPrefix(const TCHAR* ClassName)
 {
-	const TCHAR* DeprecatedPrefix = TEXT("DEPRECATED_");
+	static const TCHAR* DeprecatedPrefix = TEXT("DEPRECATED_");
 	FString NameWithoutPrefix(ClassName);
 	NameWithoutPrefix.MidInline(1, MAX_int32, false);
 	if (NameWithoutPrefix.StartsWith(DeprecatedPrefix))
@@ -654,7 +701,7 @@ void UClassCompiledInDefer(FFieldCompiledInInfo* ClassInfo, const TCHAR* Name, S
 		checkf(GIsHotReload, TEXT("Trying to recreate class '%s' outside of hot reload!"), *CPPClassName.ToString());
 
 		// Get the native name
-		FString NameWithoutPrefix = RemoveClassPrefix(Name);
+		FString NameWithoutPrefix = UObjectBase::RemoveClassPrefix(Name);
 		UClass* ExistingClass = FindObjectChecked<UClass>(ANY_PACKAGE, *NameWithoutPrefix);
 
 		if (ClassInfo->bHasChanged)
@@ -710,7 +757,7 @@ void UObjectCompiledInDefer(UClass *(*InRegister)(), UClass *(*InStaticClass)(),
 		if (!GIsHotReload || DeferMap.FindChecked(Name)->bHasChanged)
 #endif
 		{
-			FString NoPrefix(RemoveClassPrefix(Name));
+			FString NoPrefix(UObjectBase::RemoveClassPrefix(Name));
 			NotifyRegistrationEvent(PackageName, *NoPrefix, ENotifyRegistrationType::NRT_Class, ENotifyRegistrationPhase::NRP_Added, (UObject *(*)())(InRegister), false);
 			NotifyRegistrationEvent(PackageName, *(FString(DEFAULT_OBJECT_PREFIX) + NoPrefix), ENotifyRegistrationType::NRT_ClassCDO, ENotifyRegistrationPhase::NRP_Added, (UObject *(*)())(InRegister), false);
 
@@ -896,12 +943,12 @@ static void UObjectLoadAllCompiledInStructs()
 		for (const FPendingEnumRegistrant& EnumRegistrant : PendingEnumRegistrants)
 		{
 			// Make sure the package exists in case it does not contain any UObjects
-			CreatePackage(nullptr, EnumRegistrant.PackageName);
+			CreatePackage(EnumRegistrant.PackageName);
 		}
 		for (const FPendingStructRegistrant& StructRegistrant : PendingStructRegistrants)
 		{
 			// Make sure the package exists in case it does not contain any UObjects or UEnums
-			CreatePackage(nullptr, StructRegistrant.PackageName);
+			CreatePackage(StructRegistrant.PackageName);
 		}
 	}
 
@@ -1043,6 +1090,16 @@ void UObjectBaseInit()
 #endif
 	}
 
+	if (MaxObjectsNotConsideredByGC <= 0 && SizeOfPermanentObjectPool > 0)
+	{
+		// If permanent object pool is enabled but disregard for GC is disabled, GC will mark permanent object pool objects
+		// as unreachable and may destroy them so disable permanent object pool too.
+		// An alternative would be to make GC not mark permanent object pool objects as unreachable but then they would have to
+		// be considered as root set objects because they could be referencing objects from outside of permanent object pool.
+		// This would be inconsistent and confusing and also counter productive (the more root set objects the more expensive MarkAsUnreachable phase is).
+		SizeOfPermanentObjectPool = 0;
+		UE_LOG(LogInit, Warning, TEXT("Disabling permanent object pool because disregard for GC is disabled (gc.MaxObjectsNotConsideredByGC=%d)."), MaxObjectsNotConsideredByGC);
+	}
 
 	// Log what we're doing to track down what really happens as log in LaunchEngineLoop doesn't report those settings in pristine form.
 	UE_LOG(LogInit, Log, TEXT("%s for max %d objects, including %i objects not considered by GC, pre-allocating %i bytes for permanent pool."), 
@@ -1345,7 +1402,7 @@ UPackage* FindOrConstructDynamicTypePackage(const TCHAR* PackageName)
 	UPackage* Package = Cast<UPackage>(StaticFindObjectFast(UPackage::StaticClass(), nullptr, PackageName));
 	if (!Package)
 	{
-		Package = CreatePackage(nullptr, PackageName);
+		Package = CreatePackage(PackageName);
 		if (!GEventDrivenLoaderEnabled)
 		{
 			Package->SetPackageFlags(PKG_CompiledIn);

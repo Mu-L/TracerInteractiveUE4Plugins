@@ -8,8 +8,14 @@
 
 #include "VulkanConfiguration.h"
 #include "VulkanMemory.h"
-#include "VulkanGlobalUniformBuffer.h"
 #include "VulkanShaderResources.h"
+
+#if (UE_BUILD_SHIPPING || UE_BUILD_TEST)
+#define VULKAN_VALIDATE_DESCRIPTORS_WRITTEN 0
+#else
+#define VULKAN_VALIDATE_DESCRIPTORS_WRITTEN 1
+#endif
+
 
 class FVulkanCommandBufferPool;
 
@@ -951,14 +957,14 @@ public:
 		return NumWrites;
 	}
 
-	bool WriteUniformBuffer(uint32 DescriptorIndex, const FBufferAllocation& BufferAllocation, VkDeviceSize Offset, VkDeviceSize Range)
+	bool WriteUniformBuffer(uint32 DescriptorIndex, const FVulkanAllocation& Allocation, VkDeviceSize Offset, VkDeviceSize Range)
 	{
-		return WriteBuffer<VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER>(DescriptorIndex, BufferAllocation, Offset, Range);
+		return WriteBuffer<VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER>(DescriptorIndex, Allocation, Offset, Range);
 	}
 
-	bool WriteDynamicUniformBuffer(uint32 DescriptorIndex, const FBufferAllocation& BufferAllocation, VkDeviceSize Offset, VkDeviceSize Range, uint32 DynamicOffset)
+	bool WriteDynamicUniformBuffer(uint32 DescriptorIndex, const FVulkanAllocation& Allocation, VkDeviceSize Offset, VkDeviceSize Range, uint32 DynamicOffset)
 	{
-		return WriteBuffer<VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC>(DescriptorIndex, BufferAllocation, Offset, Range, DynamicOffset);
+		return WriteBuffer<VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC>(DescriptorIndex, Allocation, Offset, Range, DynamicOffset);
 	}
 
 	bool WriteSampler(uint32 DescriptorIndex, const FVulkanSamplerState& Sampler)
@@ -967,7 +973,7 @@ public:
 		check(WriteDescriptors[DescriptorIndex].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER || WriteDescriptors[DescriptorIndex].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
 		VkDescriptorImageInfo* ImageInfo = const_cast<VkDescriptorImageInfo*>(WriteDescriptors[DescriptorIndex].pImageInfo);
 		check(ImageInfo);
-		
+
 		bool bChanged = false;
 		if (UseVulkanDescriptorCache())
 		{
@@ -1009,9 +1015,9 @@ public:
 		return WriteBufferView<VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER>(DescriptorIndex, View);
 	}
 
-	bool WriteStorageBuffer(uint32 DescriptorIndex, const FBufferAllocation& BufferAllocation, VkDeviceSize Offset, VkDeviceSize Range)
+	bool WriteStorageBuffer(uint32 DescriptorIndex, const FVulkanAllocation& Allocation, VkDeviceSize Offset, VkDeviceSize Range)
 	{
-		return WriteBuffer<VK_DESCRIPTOR_TYPE_STORAGE_BUFFER>(DescriptorIndex, BufferAllocation, Offset, Range);
+		return WriteBuffer<VK_DESCRIPTOR_TYPE_STORAGE_BUFFER>(DescriptorIndex, Allocation, Offset, Range);
 	}
 
 	bool WriteUniformTexelBuffer(uint32 DescriptorIndex, const FVulkanBufferView* View)
@@ -1034,12 +1040,10 @@ public:
 
 protected:
 	template <VkDescriptorType DescriptorType>
-	bool WriteBuffer(uint32 DescriptorIndex, const FBufferAllocation& BufferAllocation, VkDeviceSize Offset, VkDeviceSize Range, uint32 DynamicOffset = 0)
+	bool WriteBuffer(uint32 DescriptorIndex, const FVulkanAllocation& Allocation, VkDeviceSize Offset, VkDeviceSize Range, uint32 DynamicOffset = 0)
 	{
 		check(DescriptorIndex < NumWrites);
-		uint64 MaxSize = BufferAllocation.GetMaxSize();
-		uint64 EndSize = Offset + Range;
-		check(MaxSize >= EndSize);
+		SetWritten(DescriptorIndex);		
 		if (DescriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
 		{
 			check(WriteDescriptors[DescriptorIndex].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER || WriteDescriptors[DescriptorIndex].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC);
@@ -1050,16 +1054,17 @@ protected:
 		}
 		VkDescriptorBufferInfo* BufferInfo = const_cast<VkDescriptorBufferInfo*>(WriteDescriptors[DescriptorIndex].pBufferInfo);
 		check(BufferInfo);
-		
+
 		bool bChanged = false;
 		if (UseVulkanDescriptorCache())
 		{
 			FVulkanHashableDescriptorInfo& HashableInfo = HashableDescriptorInfos[DescriptorIndex];
-			check(BufferAllocation.GetHandleId() > 0);
-			if (HashableInfo.Buffer.Id != BufferAllocation.GetHandleId())
+			int32 HandleId = Allocation.HandleId;
+			check(HandleId > 0);
+			if (HashableInfo.Buffer.Id != HandleId)
 			{
-				HashableInfo.Buffer.Id = BufferAllocation.GetHandleId();
-				BufferInfo->buffer = BufferAllocation.GetHandle();
+				HashableInfo.Buffer.Id = HandleId;
+				BufferInfo->buffer = (VkBuffer)Allocation.VulkanHandle;
 				bChanged = true;
 			}
 			if (HashableInfo.Buffer.Offset != static_cast<uint32>(Offset))
@@ -1078,7 +1083,7 @@ protected:
 		}
 		else
 		{
-			bChanged = CopyAndReturnNotEqual(BufferInfo->buffer, BufferAllocation.GetHandle());
+			bChanged = CopyAndReturnNotEqual(BufferInfo->buffer, Allocation.GetBufferHandle());
 			bChanged |= CopyAndReturnNotEqual(BufferInfo->offset, Offset);
 			bChanged |= CopyAndReturnNotEqual(BufferInfo->range, Range);
 		}
@@ -1095,6 +1100,7 @@ protected:
 	bool WriteTextureView(uint32 DescriptorIndex, const FVulkanTextureView& TextureView, VkImageLayout Layout)
 	{
 		check(DescriptorIndex < NumWrites);
+		SetWritten(DescriptorIndex);
 		if (DescriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
 		{
 			check(WriteDescriptors[DescriptorIndex].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE || WriteDescriptors[DescriptorIndex].descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
@@ -1145,6 +1151,7 @@ protected:
 	{
 		check(DescriptorIndex < NumWrites);
 		check(WriteDescriptors[DescriptorIndex].descriptorType == DescriptorType);
+		SetWritten(DescriptorIndex);
 		WriteDescriptors[DescriptorIndex].pTexelBufferView = &View->View;
 		BufferViewReferences[DescriptorIndex] = View;
 		
@@ -1191,6 +1198,26 @@ protected:
 		const FVulkanSamplerState& DefaultSampler, const FVulkanTextureView& DefaultImageView);
 
 	friend class FVulkanCommonPipelineDescriptorState;
+	friend class FVulkanComputePipelineDescriptorState;
+	friend class FVulkanGraphicsPipelineDescriptorState;
+
+#if VULKAN_VALIDATE_DESCRIPTORS_WRITTEN
+	TArray<uint32, TInlineAllocator<2> > WrittenMask;
+	TArray<uint32, TInlineAllocator<2> > BaseWrittenMask;
+
+	void CheckAllWritten();
+	void Reset();
+	void SetWritten(uint32 DescriptorIndex);
+	void SetWrittenBase(uint32 DescriptorIndex);
+	void InitWrittenMasks(uint32 NumDescriptorWrites);
+#else
+	void Reset(){}
+	void CheckAllWritten() {}
+	void SetWritten(uint32 DescriptorIndex) {}
+	void SetWrittenBase(uint32 DescriptorIndex){}
+	void InitWrittenMasks(uint32 NumDescriptorWrites){}
+#endif
+
 };
 
 class FVulkanGenericDescriptorPool : FNoncopyable

@@ -55,6 +55,18 @@ namespace EMaxConcurrentResolutionRule
 	};
 }
 
+UENUM()
+enum class EConcurrencyVolumeScaleMode
+{
+	/* Scales volume of older sounds more than newer sounds (default) */
+	Default = 0,
+
+	/* Scales distant sounds by volume scalar more than closer sounds */
+	Distance,
+
+	/* Scales lower priority sounds by volume scalar more than closer sounds */
+	Priority
+};
 
 USTRUCT(BlueprintType)
 struct ENGINE_API FSoundConcurrencySettings
@@ -73,9 +85,13 @@ struct ENGINE_API FSoundConcurrencySettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Concurrency)
 	TEnumAsByte<EMaxConcurrentResolutionRule::Type> ResolutionRule;
 
+	/** Amount of time to wait (in seconds) between different sounds which play with this concurrency. Sounds rejected from this will ignore virtualization settings. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Concurrency, meta = (UIMin = "0.0", ClampMin = "0.0"))
+	float RetriggerTime;
+
 private:
 	/**
-	 * Ducking factor to apply per older voice instance (generation), which compounds as new voices play
+	 * Ducking factor to apply per older voice instance (generation), which compounds based on scaling mode
 	 * and (optionally) revives them as they stop according to the provided attack/release times.
 	 *
 	 * AppliedVolumeScale = Math.Pow(DuckingScale, VoiceGeneration)
@@ -84,22 +100,26 @@ private:
 	float VolumeScale;
 
 public:
+	/** Volume Scale mode designating how to scale voice volume based on number of member sounds active in group. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Volume Scaling")
+	EConcurrencyVolumeScaleMode VolumeScaleMode;
+
 	/**
 	 * Time taken to apply duck using volume scalar.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Volume Scaling", meta = (DisplayName = "Attack Time", UIMin = "0.0", ClampMin = "0.0", UIMax = "10.0", ClampMax = "1000000.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Volume Scaling", meta = (DisplayName = "Duck Time", UIMin = "0.0", ClampMin = "0.0", UIMax = "10.0", ClampMax = "1000000.0"))
 	float VolumeScaleAttackTime;
 
 	/**
-	 * Whether or not volume scaling can release (i.e. "recover") volume ducking behavior when concurrency group sounds stop.
+	 * Whether or not volume scaling can recover volume ducking behavior when concurrency group sounds stop (default scale mode only).
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Volume Scaling", meta = (DisplayName = "Can Release"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Volume Scaling", meta = (DisplayName = "Can Recover", EditCondition = "VolumeScaleMode == EConcurrencyVolumeScaleMode::Default"))
 	uint32 bVolumeScaleCanRelease:1;
 
 	/**
-	 * Time taken to remove duck using volume scalar.
+	 * Time taken to recover volume scalar duck.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Volume Scaling", meta = (DisplayName = "Release Time", EditCondition = "bVolumeScaleCanRelease", UIMin = "0.0", ClampMin = "0.0", UIMax = "10.0", ClampMax="1000000.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Volume Scaling", meta = (DisplayName = "Recover Time", EditCondition = "bVolumeScaleCanRelease && VolumeScaleMode == EConcurrencyVolumeScaleMode::Default", UIMin = "0.0", ClampMin = "0.0", UIMax = "10.0", ClampMax="1000000.0"))
 	float VolumeScaleReleaseTime;
 
 	/**
@@ -113,7 +133,9 @@ public:
 		: MaxCount(16)
 		, bLimitToOwner(0)
 		, ResolutionRule(EMaxConcurrentResolutionRule::StopFarthestThenOldest)
+		, RetriggerTime(0.0f)
 		, VolumeScale(1.0f)
+		, VolumeScaleMode(EConcurrencyVolumeScaleMode::Default)
 		, VolumeScaleAttackTime(0.01f)
 		, bVolumeScaleCanRelease(0)
 		, VolumeScaleReleaseTime(0.5f)
@@ -191,6 +213,7 @@ public:
 
 	void Update(float InElapsed);
 
+	float GetLerpTime() const;
 	float GetVolume(bool bInDecibels = false) const;
 	float GetTargetVolume(bool bInDecibels = false) const;
 
@@ -241,6 +264,9 @@ public:
 	/** Removes an active sound from the active sound array. */
 	void RemoveActiveSound(FActiveSound& ActiveSound);
 
+	/** Updates volume based on distance generation if set as VolumeScaleMode */
+	void UpdateGeneration(FActiveSound* NewActiveSound = nullptr);
+
 	/** Sorts the active sound if concurrency settings require culling post playback */
 	void CullSoundsDueToMaxConcurrency();
 };
@@ -259,6 +285,9 @@ struct FSoundInstanceEntry
 
 /** Type for mapping an object id to a concurrency entry. */
 typedef TMap<FConcurrencyObjectID, FConcurrencyGroupID> FConcurrencyMap;
+
+/** Type for mapping concurrency group id to when the group last played. */
+typedef TMap<FConcurrencyGroupID, float> FLastTimePlayedMap;
 
 struct FOwnerConcurrencyMapEntry
 {
@@ -295,10 +324,16 @@ public:
 	/** Stops sound, applying concurrency rules for how to stop. */
 	void StopDueToVoiceStealing(FActiveSound& ActiveSound);
 
+	/** Updates generations for concurrency groups set to scale active sound volumes by distance or priority */
+	void UpdateVolumeScaleGenerations();
+
 	/** Culls any active sounds due to max concurrency sound resolution rule constraints being met */
 	void UpdateSoundsToCull();
 
 private: // Methods
+	/** Returns whether or not the sound is rate-limited using retrigger threshold */
+	bool IsRateLimited(const FConcurrencyHandle& InHandle);
+
 	/** Evaluates whether or not the sound can play given the concurrency group's rules. Appends permissible
 	sounds to evict in order for sound to play (if required) and returns the desired concurrency group. */
 	FConcurrencyGroup* CanPlaySound(const FActiveSound& NewActiveSound, const FConcurrencyGroupID GroupID, TArray<FActiveSound*>& OutSoundsToEvict, bool bIsRetriggering);
@@ -329,6 +364,9 @@ private: // Methods
 private: // Data
 	/** Owning audio device ptr for the concurrency manager. */
 	FAudioDevice* AudioDevice;
+
+	/** A map of when a sound last played on the concurrency group. */
+	FLastTimePlayedMap LastTimePlayedMap;
 
 	/** Global concurrency map that maps individual sounds instances to shared USoundConcurrency UObjects. */
 	FConcurrencyMap ConcurrencyMap;

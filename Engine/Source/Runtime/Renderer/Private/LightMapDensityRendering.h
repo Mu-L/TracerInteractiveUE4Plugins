@@ -19,11 +19,9 @@
 #include "ShaderBaseClasses.h"
 #include "SceneRendering.h"
 #include "Engine/LightMapTexture2D.h"
-#include "Runtime/Engine/Classes/VT/VirtualTexture.h"
-#include "Runtime/Renderer/Private/VT/VirtualTextureSpace.h"
 
 BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FLightmapDensityPassUniformParameters, )
-	SHADER_PARAMETER_STRUCT(FSceneTexturesUniformParameters, SceneTextures)
+	SHADER_PARAMETER_STRUCT(FSceneTextureUniformParameters, SceneTextures)
 	SHADER_PARAMETER(FVector4, LightMapDensity)
 	SHADER_PARAMETER(FVector4, DensitySelectedColor) // The color to apply to selected objects.
 	SHADER_PARAMETER(FVector4, VertexMappedColor) // The color to apply to vertex mapped objects.
@@ -58,7 +56,10 @@ public:
 
 	static bool ShouldCompilePermutation(const FMeshMaterialShaderPermutationParameters& Parameters)
 	{
+		static const auto AllowStaticLightingVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.AllowStaticLighting"));
+		bool bAllowStaticLighting = AllowStaticLightingVar->GetValueOnAnyThread() != 0;
 		return  AllowDebugViewmodes(Parameters.Platform) 
+				&& bAllowStaticLighting
 				&& (Parameters.MaterialParameters.bIsSpecialEngineMaterial || Parameters.MaterialParameters.bIsMasked || Parameters.MaterialParameters.bMaterialMayModifyMeshPosition)
 				&& LightMapPolicyType::ShouldCompilePermutation(Parameters)
 				&& IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
@@ -75,7 +76,6 @@ public:
 		FMeshMaterialShader(Initializer)
 	{
 		LightMapPolicyType::VertexParametersType::Bind(Initializer.ParameterMap);
-		PassUniformBuffer.Bind(Initializer.ParameterMap, FLightmapDensityPassUniformParameters::StaticStructMetadata.GetShaderVariableName());
 	}
 	TLightMapDensityVS() {}
 
@@ -111,7 +111,12 @@ public:
 
 	static bool ShouldCompilePermutation(const FMeshMaterialShaderPermutationParameters& Parameters)
 	{
+
+		static const auto AllowStaticLightingVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.AllowStaticLighting"));
+		bool bAllowStaticLighting = AllowStaticLightingVar->GetValueOnAnyThread() != 0;
+
 		return AllowDebugViewmodes(Parameters.Platform) 
+			&& bAllowStaticLighting
 			&& FBaseHS::ShouldCompilePermutation(Parameters)
 			&& TLightMapDensityVS<LightMapPolicyType>::ShouldCompilePermutation(Parameters);
 	}
@@ -142,7 +147,11 @@ public:
 
 	static bool ShouldCompilePermutation(const FMeshMaterialShaderPermutationParameters& Parameters)
 	{
+		static const auto AllowStaticLightingVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.AllowStaticLighting"));
+		bool bAllowStaticLighting = AllowStaticLightingVar->GetValueOnAnyThread() != 0;
+
 		return AllowDebugViewmodes(Parameters.Platform) 
+			&& bAllowStaticLighting
 			&& FBaseDS::ShouldCompilePermutation(Parameters)
 			&& TLightMapDensityVS<LightMapPolicyType>::ShouldCompilePermutation(Parameters);		
 	}
@@ -174,7 +183,10 @@ public:
 
 	static bool ShouldCompilePermutation(const FMeshMaterialShaderPermutationParameters& Parameters)
 	{
+		static const auto AllowStaticLightingVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.AllowStaticLighting"));
+		bool bAllowStaticLighting = AllowStaticLightingVar->GetValueOnAnyThread() != 0;
 		return	AllowDebugViewmodes(Parameters.Platform) 
+				&& bAllowStaticLighting
 				&& (Parameters.MaterialParameters.bIsSpecialEngineMaterial || Parameters.MaterialParameters.bIsMasked || Parameters.MaterialParameters.bMaterialMayModifyMeshPosition)
 				&& LightMapPolicyType::ShouldCompilePermutation(Parameters)
 				&& IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
@@ -194,7 +206,6 @@ public:
 		BuiltLightingAndSelectedFlags.Bind(Initializer.ParameterMap,TEXT("BuiltLightingAndSelectedFlags"));
 		LightMapResolutionScale.Bind(Initializer.ParameterMap,TEXT("LightMapResolutionScale"));
 		LightMapDensityDisplayOptions.Bind(Initializer.ParameterMap,TEXT("LightMapDensityDisplayOptions"));
-		PassUniformBuffer.Bind(Initializer.ParameterMap, FLightmapDensityPassUniformParameters::StaticStructMetadata.GetShaderVariableName());
 	}
 	TLightMapDensityPS() {}
 

@@ -7,6 +7,11 @@
 //==============================================================================
 // FClothingSimulationContextCommon
 //==============================================================================
+DEFINE_STAT(STAT_ClothComputeNormals);
+DEFINE_STAT(STAT_ClothInternalSolve);
+DEFINE_STAT(STAT_ClothUpdateCollisions);
+DEFINE_STAT(STAT_ClothSkinPhysMesh);
+DEFINE_STAT(STAT_ClothFillContext);
 
 static TAutoConsoleVariable<float> GClothMaxDeltaTimeTeleportMultiplier(
 	TEXT("p.Cloth.MaxDeltaTimeTeleportMultiplier"),
@@ -18,9 +23,11 @@ FClothingSimulationContextCommon::FClothingSimulationContextCommon()
 	: ComponentToWorld(FTransform::Identity)
 	, WorldGravity(FVector::ZeroVector)
 	, WindVelocity(FVector::ZeroVector)
+	, WindAdaption(0.f)
 	, DeltaSeconds(0.f)
 	, TeleportMode(EClothingTeleportMode::None)
 	, MaxDistanceScale(1.f)
+	, PredictedLod(INDEX_NONE)
 {}
 
 FClothingSimulationContextCommon::~FClothingSimulationContextCommon()
@@ -28,6 +35,9 @@ FClothingSimulationContextCommon::~FClothingSimulationContextCommon()
 
 void FClothingSimulationContextCommon::Fill(const USkeletalMeshComponent* InComponent, float InDeltaSeconds, float InMaxPhysicsDelta)
 {
+	SCOPE_CYCLE_COUNTER(STAT_ClothFillContext);
+	LLM_SCOPE(ELLMTag::SkeletalMesh);
+
 	check(InComponent);
 	FillBoneTransforms(InComponent);
 	FillRefToLocals(InComponent);
@@ -37,6 +47,8 @@ void FClothingSimulationContextCommon::Fill(const USkeletalMeshComponent* InComp
 	FillDeltaSeconds(InDeltaSeconds, InMaxPhysicsDelta);
 	FillTeleportMode(InComponent, InDeltaSeconds, InMaxPhysicsDelta);
 	FillMaxDistanceScale(InComponent);
+
+	PredictedLod = InComponent->PredictedLODLevel;
 }
 
 void FClothingSimulationContextCommon::FillBoneTransforms(const USkeletalMeshComponent* InComponent)
@@ -99,7 +111,7 @@ void FClothingSimulationContextCommon::FillBoneTransforms(const USkeletalMeshCom
 void FClothingSimulationContextCommon::FillRefToLocals(const USkeletalMeshComponent* InComponent)
 {
 	RefToLocals.Reset();
-	InComponent->GetCurrentRefToLocalMatrices(RefToLocals, 0);
+	InComponent->GetCurrentRefToLocalMatrices(RefToLocals, InComponent->PredictedLODLevel);
 }
 
 void FClothingSimulationContextCommon::FillComponentToWorld(const USkeletalMeshComponent* InComponent)
@@ -116,7 +128,7 @@ void FClothingSimulationContextCommon::FillWorldGravity(const USkeletalMeshCompo
 
 void FClothingSimulationContextCommon::FillWindVelocity(const USkeletalMeshComponent* InComponent)
 {
-	SetWindFromComponent(InComponent);
+	InComponent->GetWindForCloth_GameThread(WindVelocity, WindAdaption);
 }
 
 void FClothingSimulationContextCommon::FillDeltaSeconds(float InDeltaSeconds, float InMaxPhysicsDelta)
@@ -131,16 +143,9 @@ void FClothingSimulationContextCommon::FillTeleportMode(const USkeletalMeshCompo
 		InComponent->ClothTeleportMode;
 }
 
-float FClothingSimulationContextCommon::SetWindFromComponent(const USkeletalMeshComponent* Component)
+void FClothingSimulationContextCommon::FillMaxDistanceScale(const USkeletalMeshComponent* InComponent)
 {
-	float WindAdaption;
-	Component->GetWindForCloth_GameThread(WindVelocity, WindAdaption);
-	return WindAdaption;
-}
-
-void FClothingSimulationContextCommon::FillMaxDistanceScale(const USkeletalMeshComponent* Component)
-{
-	MaxDistanceScale = Component->GetClothMaxDistanceScale();
+	MaxDistanceScale = InComponent->GetClothMaxDistanceScale();
 }
 
 //==============================================================================

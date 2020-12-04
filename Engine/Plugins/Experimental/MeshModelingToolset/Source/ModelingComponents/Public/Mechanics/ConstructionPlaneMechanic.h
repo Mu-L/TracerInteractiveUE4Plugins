@@ -7,6 +7,8 @@
 #include "ToolDataVisualizer.h"
 #include "FrameTypes.h"
 #include "BaseBehaviors/BehaviorTargetInterfaces.h"
+#include "Selection/SelectClickedAction.h"
+
 #include "ConstructionPlaneMechanic.generated.h"
 
 class UTransformGizmo;
@@ -47,6 +49,13 @@ public:
 
 	void SetDrawPlaneFromWorldPos(const FVector3d& Position, const FVector3d& Normal, bool bIgnoreNormal);
 
+	/** 
+	 * Sets the plane without broadcasting OnPlaneChanged. Useful when the user of the tool wants to change
+	 * the plane through some other means. Better than setting the Plane field directly because this function
+	 * properly deals with the gizmo.
+	 */
+	void SetPlaneWithoutBroadcast(const FFrame3d& Plane);
+
 	void SetEnableGridSnaping(bool bEnable);
 
 	void UpdateClickPriority(FInputCapturePriority NewPriority);
@@ -58,9 +67,15 @@ public:
 	UPROPERTY()
 	UTransformProxy* PlaneTransformProxy;
 
+	/** 
+	 * This is the behavior target used for the Ctrl+click behavior that sets the plane
+	 * in the world, exposed here so that the user can modify it after Setup() if needed.
+	 * By default, Setup() will have it call SetDrawPlaneFromWorldPos.
+	 */
+	TUniquePtr<FSelectClickedAction> SetPlaneCtrlClickBehaviorTarget;
+
 protected:
 	bool bEnableSnapToWorldGrid = false;
-	TUniquePtr<IClickBehaviorTarget> SetPointInWorldConnector = nullptr;
 
 	UPROPERTY()
 	USingleClickInputBehavior* ClickToSetPlaneBehavior;

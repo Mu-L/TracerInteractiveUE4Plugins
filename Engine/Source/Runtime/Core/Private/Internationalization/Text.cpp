@@ -1,7 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Internationalization/Text.h"
-#include "CoreTypes.h"
 #include "Algo/Transform.h"
 #include "Misc/Parse.h"
 #include "UObject/ObjectVersion.h"
@@ -32,15 +31,6 @@ DEFINE_LOG_CATEGORY(LogText);
 
 
 #define LOCTEXT_NAMESPACE "Core.Text"
-
-namespace FastDecimalFormat
-{
-	/**
-	 * Return the value of 10^exp for the given exponent value.
-	 * @note The maximum exponent supported is 10^18.
-	 */
-	CORE_API uint64 Pow10(const int32 InExponent);
-}
 
 bool FTextInspector::ShouldGatherForLocalization(const FText& Text)
 {
@@ -195,25 +185,36 @@ const FNumberFormattingOptions& FNumberFormattingOptions::DefaultNoGrouping()
 // These default values have been duplicated to the KismetTextLibrary functions for Blueprints. Please replicate any changes there!
 FNumberParsingOptions::FNumberParsingOptions()
 	: UseGrouping(true)
+	, InsideLimits(false)
+	, UseClamping(false)
 {
 
 }
 
 FArchive& operator<<(FArchive& Ar, FNumberParsingOptions& Value)
 {
+	Ar.UsingCustomVersion(FEditorObjectVersion::GUID);
+
 	Ar << Value.UseGrouping;
+	if (Ar.CustomVer(FEditorObjectVersion::GUID) >= FEditorObjectVersion::NumberParsingOptionsNumberLimitsAndClamping)
+	{
+		Ar << Value.InsideLimits;
+		Ar << Value.UseClamping;
+	}
 	return Ar;
 }
 
 uint32 GetTypeHash(const FNumberParsingOptions& Key)
 {
-	uint32 Hash = GetTypeHash(Key.UseGrouping);
-	return Hash;
+	uint32 Hash = HashCombine(GetTypeHash(Key.UseGrouping), GetTypeHash(Key.InsideLimits));
+	return HashCombine(Hash, GetTypeHash(Key.UseClamping));
 }
 
 bool FNumberParsingOptions::IsIdentical(const FNumberParsingOptions& Other) const
 {
-	return UseGrouping == Other.UseGrouping;
+	return UseGrouping == Other.UseGrouping
+		&& InsideLimits == Other.InsideLimits
+		&& UseClamping == Other.UseClamping;
 }
 
 const FNumberParsingOptions& FNumberParsingOptions::DefaultWithGrouping()
@@ -618,7 +619,7 @@ FText FText::AsCurrencyBase(int64 BaseVal, const FString& CurrencyCode, const FC
 
 	const FDecimalNumberFormattingRules& FormattingRules = Culture.GetCurrencyFormattingRules(CurrencyCode);
 	const FNumberFormattingOptions& FormattingOptions = FormattingRules.CultureDefaultFormattingOptions;
-	double Val = static_cast<double>(BaseVal) / FastDecimalFormat::Pow10(FormattingOptions.MaximumFractionalDigits);
+	double Val = static_cast<double>(BaseVal) / static_cast<double>(FastDecimalFormat::Pow10(FormattingOptions.MaximumFractionalDigits));
 	FString NativeString = FastDecimalFormat::NumberToString(Val, FormattingRules, FormattingOptions);
 
 	FText Result = FText(MakeShared<TGeneratedTextData<FTextHistory_AsCurrency>, ESPMode::ThreadSafe>(MoveTemp(NativeString), FTextHistory_AsCurrency(Val, CurrencyCode, nullptr, TargetCulture)));
@@ -1183,7 +1184,7 @@ bool FText::GetHistoricNumericData(FHistoricTextNumericData& OutHistoricNumericD
 	return TextData->GetTextHistory().GetHistoricNumericData(*this, OutHistoricNumericData);
 }
 
-bool FText::IdenticalTo( const FText& Other ) const
+bool FText::IdenticalTo( const FText& Other, const ETextIdenticalModeFlags CompareModeFlags ) const
 {
 	// If both instances point to the same data, then both instances are considered identical.
 	if (TextData == Other.TextData)
@@ -1194,9 +1195,36 @@ bool FText::IdenticalTo( const FText& Other ) const
 	// If both instances point to the same localized string, then both instances are considered identical.
 	// This is fast as it skips a lexical compare, however it can also return false for two instances that have identical strings, but in different pointers.
 	// For instance, this method will return false for two FText objects created from FText::FromString("Wooble") as they each have unique (or null), non-shared instances.
-	FTextDisplayStringPtr DisplayStringPtr = TextData->GetLocalizedString();
-	FTextDisplayStringPtr OtherDisplayStringPtr = Other.TextData->GetLocalizedString();
-	return DisplayStringPtr && OtherDisplayStringPtr && DisplayStringPtr == OtherDisplayStringPtr;
+	{
+		FTextDisplayStringPtr DisplayStringPtr = TextData->GetLocalizedString();
+		FTextDisplayStringPtr OtherDisplayStringPtr = Other.TextData->GetLocalizedString();
+		if (DisplayStringPtr && OtherDisplayStringPtr && DisplayStringPtr == OtherDisplayStringPtr)
+		{
+			return true;
+		}
+	}
+
+	if (EnumHasAnyFlags(CompareModeFlags, ETextIdenticalModeFlags::DeepCompare))
+	{
+		const FTextHistory& ThisTextHistory = TextData->GetTextHistory();
+		const FTextHistory& OtherTextHistory = Other.TextData->GetTextHistory();
+		if (ThisTextHistory.GetType() == OtherTextHistory.GetType() && ThisTextHistory.IdenticalTo(OtherTextHistory, CompareModeFlags))
+		{
+			return true;
+		}
+	}
+
+	if (EnumHasAnyFlags(CompareModeFlags, ETextIdenticalModeFlags::LexicalCompareInvariants))
+	{
+		const bool bThisIsInvariant = (Flags & (ETextFlag::CultureInvariant | ETextFlag::InitializedFromString)) != 0;
+		const bool bOtherIsInvariant = (Other.Flags & (ETextFlag::CultureInvariant | ETextFlag::InitializedFromString)) != 0;
+		if (bThisIsInvariant && bOtherIsInvariant && ToString().Equals(Other.ToString(), ESearchCase::CaseSensitive))
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 void operator<<(FStructuredArchive::FSlot Slot, FFormatArgumentValue& Value)
@@ -1238,6 +1266,32 @@ void operator<<(FStructuredArchive::FSlot Slot, FFormatArgumentValue& Value)
 			break;
 		}
 	}
+}
+
+bool FFormatArgumentValue::IdenticalTo(const FFormatArgumentValue& Other, const ETextIdenticalModeFlags CompareModeFlags) const
+{
+	if (Type == Other.Type)
+	{
+		switch (Type)
+		{
+		case EFormatArgumentType::Int:
+			return IntValue == Other.IntValue;
+		case EFormatArgumentType::UInt:
+			return UIntValue == Other.UIntValue;
+		case EFormatArgumentType::Float:
+			return FloatValue == Other.FloatValue;
+		case EFormatArgumentType::Double:
+			return DoubleValue == Other.DoubleValue;
+		case EFormatArgumentType::Text:
+			return GetTextValue().IdenticalTo(Other.GetTextValue(), CompareModeFlags);
+		case EFormatArgumentType::Gender:
+			return GetGenderValue() == Other.GetGenderValue();
+		default:
+			break;
+		}
+	}
+
+	return false;
 }
 
 FString FFormatArgumentValue::ToFormattedString(const bool bInRebuildText, const bool bInRebuildAsSource) const

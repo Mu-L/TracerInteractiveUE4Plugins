@@ -21,19 +21,15 @@
 #include "Misc/ScopeExit.h"
 #include "Apple/ApplePlatformCrashContext.h"
 #include "IOS/IOSPlatformCrashContext.h"
-#if !PLATFORM_TVOS
-#include "PLCrashReporter.h"
-#include "PLCrashReport.h"
-#include "PLCrashReportTextFormatter.h"
-#endif
+#include "IOS/IOSPlatformPLCrashReporterIncludes.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformOutputDevices.h"
 #include "Misc/OutputDeviceError.h"
 #include "Misc/OutputDeviceRedirector.h"
 #include "Misc/FeedbackContext.h"
-
 #include "Internationalization/Internationalization.h"
 #include "Internationalization/Culture.h"
+#include "Internationalization/Regex.h"
 
 #if !PLATFORM_TVOS
 #include <AdSupport/ASIdentifierManager.h> 
@@ -46,11 +42,9 @@
 #import <StoreKit/StoreKit.h>
 #import <DeviceCheck/DeviceCheck.h>
 
-#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_10_0
 #import <UserNotifications/UserNotifications.h>
 #include "Async/TaskGraphInterfaces.h"
 #include "Misc/CoreDelegates.h"
-#endif
 
 #if !defined ENABLE_ADVERTISING_IDENTIFIER
 	#define ENABLE_ADVERTISING_IDENTIFIER 0
@@ -74,15 +68,8 @@ float GOriginalBrightness = -1.0f;
 
 static int32 GetFreeMemoryMB()
 {
-	// get free memory
-	vm_size_t PageSize;
-	host_page_size(mach_host_self(), &PageSize);
-
-	// get memory stats
-	vm_statistics Stats;
-	mach_msg_type_number_t StatsSize = sizeof(Stats);
-	host_statistics(mach_host_self(), HOST_VM_INFO, (host_info_t)&Stats, &StatsSize);
-	return ((Stats.free_count + Stats.inactive_count) * PageSize) / 1024 / 1024;
+	FPlatformMemoryStats MemoryStats = FPlatformMemory::GetStats();
+	return MemoryStats.AvailablePhysical / 1024 / 1024;
 }
 
 void FIOSPlatformMisc::PlatformInit()
@@ -348,72 +335,6 @@ bool FIOSPlatformMisc::HasPlatformFeature(const TCHAR* FeatureName)
 	return FGenericPlatformMisc::HasPlatformFeature(FeatureName);
 }
 
-const TCHAR* FIOSPlatformMisc::GetDefaultDeviceProfileName()
-{
-	static const TCHAR* IOSDeviceNames[] =
-	{
-		TEXT("IPhone4"),
-		TEXT("IPhone4S"),
-		TEXT("IPhone5"),
-		TEXT("IPhone5S"),
-		TEXT("IPodTouch5"),
-		TEXT("IPodTouch6"),
-		TEXT("IPad2"),
-		TEXT("IPad3"),
-		TEXT("IPad4"),
-		TEXT("IPadMini"),
-		TEXT("IPadMini2"),
-		TEXT("IPadMini4"),
-		TEXT("IPadAir"),
-		TEXT("IPadAir2"),
-		TEXT("IPhone6"),
-		TEXT("IPhone6Plus"),
-		TEXT("IPhone6S"),
-		TEXT("IPhone6SPlus"),
-		TEXT("IPhone7"),
-		TEXT("IPhone7Plus"),
-		TEXT("IPhone8"),
-		TEXT("IPhone8Plus"),
-		TEXT("IPhoneX"),
-		TEXT("IPadPro"),
-		TEXT("AppleTV"),
-		TEXT("AppleTV4K"),
-		TEXT("IPhoneSE"),
-		TEXT("IPadPro129"),
-		TEXT("IPadPro97"),
-		TEXT("IPadPro105"),
-		TEXT("IPadPro2_129"),
-		TEXT("IPad5"),
-		TEXT("IPhoneXS"),
-		TEXT("IPhoneXSMax"),
-		TEXT("IPhoneXR"),
-		TEXT("IPhone11"),
-		TEXT("IPhone11Pro"),
-		TEXT("IPhone11ProMax"),
-		TEXT("IPad6"),
-		TEXT("IPadPro11"),
-		TEXT("IPadPro3_129"),
-		TEXT("IPadAir3"),
-		TEXT("IPadMini5"),
-		TEXT("IPodTouch7"),
-		TEXT("IPad7"),
-		TEXT("IPhoneSE2"),
-		TEXT("NewIDevice1"),
-		TEXT("NewIDevice2"),
-		TEXT("NewIDevice3"),
-		TEXT("NewIDevice4"),
-		TEXT("NewIDevice5"),
-		TEXT("NewIDevice6"),
-		TEXT("NewIDevice7"),
-		TEXT("NewIDevice8"),
-		TEXT("Unknown"),
-	};
-	static_assert((sizeof(IOSDeviceNames) / sizeof(IOSDeviceNames[0])) == ((int32)IOS_Unknown + 1), "Mismatched IOSDeviceNames and EIOSDevice.");
-
-	// look up into the string array by the enum
-	return IOSDeviceNames[(int32)GetIOSDeviceType()];
-}
-
 FString GetIOSDeviceIDString()
 {
 	static FString CachedResult;
@@ -437,6 +358,46 @@ FString GetIOSDeviceIDString()
 	return CachedResult;
 }
 
+
+const TCHAR* FIOSPlatformMisc::GetDefaultDeviceProfileName()
+{
+	static FString IOSDeviceProfileName;
+	if (IOSDeviceProfileName.Len() == 0)
+	{
+		IOSDeviceProfileName = TEXT("IOS");
+
+		FString DeviceIDString = GetIOSDeviceIDString();
+		FPlatformMisc::LowLevelOutputDebugStringf(TEXT("Device Type: %s") LINE_TERMINATOR, *DeviceIDString);
+
+		TArray<FString> Mappings;
+		if (ensure(GConfig->GetSection(TEXT("IOSDeviceMappings"), Mappings, GDeviceProfilesIni)))
+		{
+			for (const FString& MappingString : Mappings)
+			{
+				FString MappingRegex, ProfileName;
+				if (MappingString.Split(TEXT("="), &MappingRegex, &ProfileName))
+				{
+					const FRegexPattern RegexPattern(MappingRegex);
+					FRegexMatcher RegexMatcher(RegexPattern, *DeviceIDString);
+					if (RegexMatcher.FindNext())
+					{
+						FPlatformMisc::LowLevelOutputDebugStringf(TEXT("Matched %s as %s") LINE_TERMINATOR, *MappingRegex, *ProfileName);
+						IOSDeviceProfileName = ProfileName;
+						break;
+					}
+				}
+				else
+				{
+					FPlatformMisc::LowLevelOutputDebugStringf(TEXT("Invalid IOSDeviceMappings: %s") LINE_TERMINATOR, *MappingString);
+				}
+			}
+		}
+	}
+
+	return *IOSDeviceProfileName;
+}
+
+// Deprecated in 4.26.
 FIOSPlatformMisc::EIOSDevice FIOSPlatformMisc::GetIOSDeviceType()
 {
 	// default to unknown
@@ -569,9 +530,17 @@ FIOSPlatformMisc::EIOSDevice FIOSPlatformMisc::GetIOSDeviceType()
 			{
 				DeviceType = IOS_IPadPro_11;
 			}
-			else
+			else if (Minor <= 8)
 			{
 				DeviceType = IOS_IPadPro3_129;
+			}
+			else if (Minor <= 10)
+			{
+				DeviceType = IOS_IPadPro2_11;
+			}
+			else
+			{
+				DeviceType = IOS_IPadPro4_129;
 			}
 		}
         else if (Major == 11)
@@ -588,7 +557,7 @@ FIOSPlatformMisc::EIOSDevice FIOSPlatformMisc::GetIOSDeviceType()
 		// Default to highest settings currently available for any future device
 		else if (Major >= 9)
 		{
-			DeviceType = IOS_IPadPro3_129;
+			DeviceType = IOS_IPadPro4_129;
 		}
 	}
 	// iPhones
@@ -814,30 +783,11 @@ bool FIOSPlatformMisc::IsPackagedForDistribution()
 	return PackagingMode != nil && [PackagingMode isEqualToString : @"Distribution"];
 }
 
-/**
- * Returns a unique string for device identification
- * 
- * @return the unique string generated by this platform for this device
- */
-FString FIOSPlatformMisc::GetUniqueDeviceId()
-{
-	// Check to see if this OS has this function
-	if ([[UIDevice currentDevice] respondsToSelector:@selector(identifierForVendor)])
-	{
-		NSUUID* Id = [[UIDevice currentDevice] identifierForVendor];
-		if (Id != nil)
-		{
-			return FString([[Id UUIDString] autorelease]);
-		}
-	}
-
-	PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	return FPlatformMisc::GetHashedMacAddressString();
-	PRAGMA_ENABLE_DEPRECATION_WARNINGS
-}
-
 FString FIOSPlatformMisc::GetDeviceId()
 {
+#if GET_DEVICE_ID_UNAVAILABLE
+	return FString();
+#else
 	// Check to see if this OS has this function
 
 	if ([[UIDevice currentDevice] respondsToSelector:@selector(identifierForVendor)])
@@ -851,6 +801,7 @@ FString FIOSPlatformMisc::GetDeviceId()
 	    }
 	}
 	return FString();
+#endif
 }
 
 FString FIOSPlatformMisc::GetOSVersion()
@@ -981,7 +932,11 @@ class IPlatformChunkInstall* FIOSPlatformMisc::GetPlatformChunkInstall()
 
 bool FIOSPlatformMisc::SupportsForceTouchInput()
 {
-	return UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone && GetIOSDeviceType() != IOS_IPhoneSE;
+#if !PLATFORM_TVOS
+	return [[[IOSAppDelegate GetDelegate].IOSView traitCollection] forceTouchCapability];
+#else
+	return false;
+#endif
 }
 
 #if !PLATFORM_TVOS
@@ -1216,7 +1171,6 @@ void FIOSPlatformMisc::RegisterForRemoteNotifications()
 
     dispatch_async(dispatch_get_main_queue(), ^{
 #if !PLATFORM_TVOS && NOTIFICATIONS_ENABLED
-#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_10_0
 		UNUserNotificationCenter *Center = [UNUserNotificationCenter currentNotificationCenter];
 		[Center requestAuthorizationWithOptions:(UNAuthorizationOptionBadge | UNAuthorizationOptionSound | UNAuthorizationOptionAlert)
 							  completionHandler:^(BOOL granted, NSError * _Nullable error) {
@@ -1227,6 +1181,12 @@ void FIOSPlatformMisc::RegisterForRemoteNotifications()
 								  else
 								  {
 									  int32 types = (int32)granted;
+                                      if (granted)
+                                      {
+                                          UIApplication* application = [UIApplication sharedApplication];
+                                          [application registerForRemoteNotifications];
+                                          
+                                      }
 									  FFunctionGraphTask::CreateAndDispatchWhenReady([types]()
 																					 {
 																						 FCoreDelegates::ApplicationRegisteredForUserNotificationsDelegate.Broadcast(types);
@@ -1234,24 +1194,6 @@ void FIOSPlatformMisc::RegisterForRemoteNotifications()
 									  
 								  }
 							  }];
-#else
-	UIApplication* application = [UIApplication sharedApplication];
-	if ([application respondsToSelector : @selector(registerUserNotificationSettings:)])
-	{
-#ifdef __IPHONE_8_0
-		UIUserNotificationSettings * settings = [UIUserNotificationSettings settingsForTypes : (UIUserNotificationTypeBadge | UIUserNotificationTypeSound | UIUserNotificationTypeAlert) categories:nil];
-		[application registerUserNotificationSettings : settings];
-#endif
-	}
-	else
-	{
-        
-#if __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_8_0
-		UIRemoteNotificationType myTypes = UIRemoteNotificationTypeBadge | UIRemoteNotificationTypeAlert | UIRemoteNotificationTypeSound;
-		[application registerForRemoteNotificationTypes : myTypes];
-#endif
-	}
-#endif
 #endif
     });
 }
@@ -1264,17 +1206,8 @@ bool FIOSPlatformMisc::IsRegisteredForRemoteNotifications()
 bool FIOSPlatformMisc::IsAllowedRemoteNotifications()
 {
 #if !PLATFORM_TVOS && NOTIFICATIONS_ENABLED
-#if __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_10_0
 	checkf(false, TEXT("For min iOS version >= 10 use FIOSLocalNotificationService::CheckAllowedNotifications."));
 	return true;
-#elif defined(__IPHONE_8_0)
-	UIApplication* application = [UIApplication sharedApplication];
-	UIUserNotificationSettings* Settings = [application currentUserNotificationSettings];
-	int32 AllowedTypes = (int32)[Settings types];
-	return AllowedTypes != UIUserNotificationTypeNone;
-#else
-	return true;
-#endif
 #else
 	return true;
 #endif
@@ -1393,6 +1326,13 @@ FString FIOSPlatformMisc::GetProjectVersion()
 	return localVersionString;
 }
 
+FString FIOSPlatformMisc::GetBuildNumber()
+{
+	NSDictionary* infoDictionary = [[NSBundle mainBundle]infoDictionary];
+	FString BuildString = FString(infoDictionary[@"CFBundleVersion"]);
+	return BuildString;
+}
+
 bool FIOSPlatformMisc::RequestDeviceCheckToken(TFunction<void(const TArray<uint8>&)> QuerySucceededFunc, TFunction<void(const FString&, const FString&)> QueryFailedFunc)
 {
 	DCDevice* DeviceCheckDevice = [DCDevice currentDevice];
@@ -1427,180 +1367,6 @@ bool FIOSPlatformMisc::RequestDeviceCheckToken(TFunction<void(const TArray<uint8
 
 	return false;
 }
-
-/*------------------------------------------------------------------------------
- FIOSApplicationInfo - class to contain all state for crash reporting that is unsafe to acquire in a signal.
- ------------------------------------------------------------------------------*/
-
-/**
- * Information that cannot be obtained during a signal-handler is initialised here.
- * This ensures that we only call safe functions within the crash reporting handler.
- */
-struct FIOSApplicationInfo
-{
-    void Init()
-    {
-        SCOPED_AUTORELEASE_POOL;
-        
-        AppName = FApp::GetProjectName();
-        FCStringAnsi::Strcpy(AppNameUTF8, PATH_MAX+1, TCHAR_TO_UTF8(*AppName));
-        
-        ExecutableName = FPlatformProcess::ExecutableName();
-        
-        AppPath = FString([[NSBundle mainBundle] executablePath]);
-        
-        AppBundleID = FString([[NSBundle mainBundle] bundleIdentifier]);
-        
-        NumCores = FPlatformMisc::NumberOfCores();
-        
-        LCID = FString::Printf(TEXT("%d"), FInternationalization::Get().GetCurrentCulture()->GetLCID());
-        
-        PrimaryGPU = FPlatformMisc::GetPrimaryGPUBrand();
-        
-        RunUUID = RunGUID();
-        
-        OSXVersion = [[NSProcessInfo processInfo] operatingSystemVersion];
-        OSVersion = FString::Printf(TEXT("%ld.%ld.%ld"), OSXVersion.majorVersion, OSXVersion.minorVersion, OSXVersion.patchVersion);
-        FCStringAnsi::Strcpy(OSVersionUTF8, PATH_MAX+1, TCHAR_TO_UTF8(*OSVersion));
-        
-        // macOS build number is only accessible on non-sandboxed applications as it resides outside the accessible sandbox
-        if(!bIsSandboxed)
-        {
-            NSDictionary* SystemVersion = [NSDictionary dictionaryWithContentsOfFile: @"/System/Library/CoreServices/SystemVersion.plist"];
-            OSBuild = FString((NSString*)[SystemVersion objectForKey: @"ProductBuildVersion"]);
-        }
-        
-        char TempSysCtlBuffer[PATH_MAX] = {};
-        size_t TempSysCtlBufferSize = PATH_MAX;
-        
-        sysctlbyname("kern.osrelease", TempSysCtlBuffer, &TempSysCtlBufferSize, NULL, 0);
-        BiosRelease = TempSysCtlBuffer;
-        uint32 KernelRevision = 0;
-        TempSysCtlBufferSize = 4;
-        sysctlbyname("kern.osrevision", &KernelRevision, &TempSysCtlBufferSize, NULL, 0);
-        BiosRevision = FString::Printf(TEXT("%d"), KernelRevision);
-        TempSysCtlBufferSize = PATH_MAX;
-        sysctlbyname("kern.uuid", TempSysCtlBuffer, &TempSysCtlBufferSize, NULL, 0);
-        BiosUUID = TempSysCtlBuffer;
-        TempSysCtlBufferSize = PATH_MAX;
-        sysctlbyname("hw.model", TempSysCtlBuffer, &TempSysCtlBufferSize, NULL, 0);
-        MachineModel = TempSysCtlBuffer;
-        TempSysCtlBufferSize = PATH_MAX+1;
-        sysctlbyname("machdep.cpu.brand_string", MachineCPUString, &TempSysCtlBufferSize, NULL, 0);
-        
-        gethostname(MachineName, UE_ARRAY_COUNT(MachineName));
-        
-       BranchBaseDir = FString::Printf( TEXT( "%s!%s!%s!%d" ), *FApp::GetBranchName(), FPlatformProcess::BaseDir(), FPlatformMisc::GetEngineMode(), FEngineVersion::Current().GetChangelist() );
-        
-        // Get the paths that the files will actually have been saved to
-        FString LogDirectory = FPaths::ProjectLogDir();
-        TCHAR CommandlineLogFile[MAX_SPRINTF]=TEXT("");
-        
-        // Use the log file specified on the commandline if there is one
-        CommandLine = FCommandLine::Get();
-        FString LogPath = FGenericPlatformOutputDevices::GetAbsoluteLogFilename();
-        LogPath = IFileManager::Get().ConvertToAbsolutePathForExternalAppForWrite(*LogPath);
-        FCStringAnsi::Strcpy(AppLogPath, PATH_MAX + 1, TCHAR_TO_UTF8(*LogPath));
-        
-        // Cache & create the crash report folder.
-        FString ReportPath = FPaths::ConvertRelativePathToFull(FString::Printf(TEXT("%s"), *(FPaths::GameAgnosticSavedDir() / TEXT("Crashes"))));
-        IFileManager::Get().MakeDirectory(*ReportPath, true);
-        ReportPath = IFileManager::Get().ConvertToAbsolutePathForExternalAppForWrite(*ReportPath);
-        FCStringAnsi::Strcpy(CrashReportPath, PATH_MAX+1, TCHAR_TO_UTF8(*ReportPath));
-        
-        NSString* PLCrashReportFile = [TemporaryCrashReportFolder().GetNSString() stringByAppendingPathComponent:TemporaryCrashReportName().GetNSString()];
-        [PLCrashReportFile getCString:PLCrashReportPath maxLength:PATH_MAX encoding:NSUTF8StringEncoding];
-    }
-    
-    ~FIOSApplicationInfo()
-    {
-#if !PLATFORM_TVOS
-        if (CrashReporter)
-        {
-            [CrashReporter release];
-            CrashReporter = nil;
-        }
-#endif
-    }
-    
-    static FGuid RunGUID()
-    {
-        static FGuid Guid;
-        if (!Guid.IsValid())
-        {
-            FPlatformMisc::CreateGuid(Guid);
-        }
-        return Guid;
-    }
-    
-    static FString TemporaryCrashReportFolder()
-    {
-        static FString PLCrashReportFolder;
-        if (PLCrashReportFolder.IsEmpty())
-        {
-            SCOPED_AUTORELEASE_POOL;
-            
-            NSArray* Paths = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
-            NSString* CacheDir = [Paths objectAtIndex: 0];
-            
-            NSString* BundleID = [[NSBundle mainBundle] bundleIdentifier];
-            if (!BundleID)
-            {
-                BundleID = [[NSProcessInfo processInfo] processName];
-            }
-            check(BundleID);
-            
-            NSString* PLCrashReportFolderPath = [CacheDir stringByAppendingPathComponent: BundleID];
-            PLCrashReportFolder = FString(PLCrashReportFolderPath);
-        }
-        return PLCrashReportFolder;
-    }
-    
-    static FString TemporaryCrashReportName()
-    {
-        static FString PLCrashReportFileName(RunGUID().ToString() + TEXT(".plcrash"));
-        return PLCrashReportFileName;
-    }
-    
-    bool bIsSandboxed;
-    int32 NumCores;
-    char AppNameUTF8[PATH_MAX+1];
-    char AppLogPath[PATH_MAX+1];
-    char CrashReportPath[PATH_MAX+1];
-    char PLCrashReportPath[PATH_MAX+1];
-    char OSVersionUTF8[PATH_MAX+1];
-    char MachineName[PATH_MAX+1];
-    char MachineCPUString[PATH_MAX+1];
-    FString AppPath;
-    FString AppName;
-    FString AppBundleID;
-    FString OSVersion;
-    FString OSBuild;
-    FString MachineUUID;
-    FString MachineModel;
-    FString BiosRelease;
-    FString BiosRevision;
-    FString BiosUUID;
-    FString ParentProcess;
-    FString LCID;
-    FString CommandLine;
-    FString BranchBaseDir;
-    FString PrimaryGPU;
-    FString ExecutableName;
-    NSOperatingSystemVersion OSXVersion;
-    FGuid RunUUID;
-    FString XcodePath;
-#if !PLATFORM_TVOS
-    static PLCrashReporter* CrashReporter;
-#endif
-    static FIOSMallocCrashHandler* CrashMalloc;
-};
-
-static FIOSApplicationInfo GIOSAppInfo;
-#if !PLATFORM_TVOS
-PLCrashReporter* FIOSApplicationInfo::CrashReporter = nullptr;
-#endif
-FIOSMallocCrashHandler* FIOSApplicationInfo::CrashMalloc = nullptr;
 
 void (*GCrashHandlerPointer)(const FGenericCrashContext& Context) = NULL;
 
@@ -1736,10 +1502,29 @@ bool FIOSPlatformMisc::DeleteStoredValue(const FString& InStoreId, const FString
 {
 	NSUserDefaults* UserSettings = [NSUserDefaults standardUserDefaults];
 	
-	// store it
+	// Remove it
 	[UserSettings removeObjectForKey:MakeStoredValueKeyName(InSectionName, InKeyName)];
 
 	return true;
+}
+
+bool FIOSPlatformMisc::DeleteStoredSection(const FString& InStoreId, const FString& InSectionName)
+{
+	bool bRemoved = false;
+	NSUserDefaults* UserSettings = [NSUserDefaults standardUserDefaults];
+	NSDictionary<NSString*,id>* KeyValues = [UserSettings dictionaryRepresentation];
+	NSString* SectionName = [NSString stringWithFString:InSectionName];
+
+	for (id Key in KeyValues)
+	{
+		if ([Key hasPrefix:SectionName])
+		{
+			[UserSettings removeObjectForKey:Key];
+			bRemoved = true;
+		}
+	}
+
+	return bRemoved;
 }
 
 void FIOSPlatformMisc::SetGracefulTerminationHandler()
@@ -1816,6 +1601,40 @@ bool FIOSPlatformMisc::HasSeparateChannelForDebugOutput()
 #endif
 }
 
+void FIOSPlatformMisc::RequestExit(bool Force)
+{
+	if (Force)
+	{
+		FApplePlatformMisc::RequestExit(Force);
+	}
+	else
+	{
+		// ForceExit is sort of a misnomer here.  This will exit the engine loop before calling _Exit() from the app delegate
+		[[IOSAppDelegate GetDelegate] ForceExit];
+	}
+}
+
+void FIOSPlatformMisc::RequestExitWithStatus(bool Force, uint8 ReturnCode)
+{
+	if (Force)
+	{
+		FApplePlatformMisc::RequestExit(Force);
+	}
+	else
+	{
+		// Implementation will ignore the return code - this may be important, so warn.
+		UE_LOG(LogIOS, Warning, TEXT("FIOSPlatformMisc::RequestExitWithStatus(%i, %d) - return code will be ignored by the generic implementation."), Force, ReturnCode);
+
+		// ForceExit is sort of a misnomer here.  This will exit the engine loop before calling _Exit() from the app delegate
+		[[IOSAppDelegate GetDelegate] ForceExit];
+	}
+}
+
+int32 FIOSPlatformMisc::GetMaxRefreshRate()
+{
+	return [UIScreen mainScreen].maximumFramesPerSecond;
+}
+
 void FIOSPlatformMisc::GPUAssert()
 {
     // make this a fatal error that ends here not in the log
@@ -1828,240 +1647,6 @@ void FIOSPlatformMisc::MetalAssert()
     // make this a fatal error that ends here not in the log
     // changed to 3 from NULL because clang noticed writing to NULL and warned about it
     *(int32 *)7 = 123;
-}
-
-FIOSCrashContext::FIOSCrashContext(ECrashContextType InType, const TCHAR* InErrorMessage)
-	: FApplePlatformCrashContext(InType, InErrorMessage)
-{
-}
-
-void FIOSCrashContext::CopyMinidump(char const* OutputPath, char const* InputPath) const
-{
-#if !PLATFORM_TVOS
-    NSError* Error = nil;
-    NSString* Path = FString(ANSI_TO_TCHAR(InputPath)).GetNSString();
-    NSData* CrashData = [NSData dataWithContentsOfFile: Path options: NSMappedRead error: &Error];
-    if (CrashData && !Error)
-    {
-        PLCrashReport* CrashLog = [[PLCrashReport alloc] initWithData: CrashData error: &Error];
-        if (CrashLog && !Error)
-        {
-            NSString* Report = [PLCrashReportTextFormatter stringValueForCrashReport: CrashLog withTextFormat: PLCrashReportTextFormatiOS];
-            FString CrashDump = FString(Report);
-            [Report writeToFile: Path atomically: YES encoding: NSUTF8StringEncoding error: &Error];
-        }
-        else
-        {
-            NSLog(@"****UE4 %@", [Error localizedDescription]);
-        }
-    }
-    else
-    {
-        NSLog(@"****UE4 %@", [Error localizedDescription]);
-    }
-    int ReportFile = open(OutputPath, O_CREAT|O_WRONLY, 0766);
-    int DumpFile = open(InputPath, O_RDONLY, 0766);
-    if (ReportFile != -1 && DumpFile != -1)
-    {
-        char Data[PATH_MAX];
-        
-        int Bytes = 0;
-        while((Bytes = read(DumpFile, Data, PATH_MAX)) > 0)
-        {
-            write(ReportFile, Data, Bytes);
-        }
-        
-        close(DumpFile);
-        close(ReportFile);
-        
-        unlink(InputPath);
-    }
-#endif
-}
-
-void FIOSCrashContext::GenerateInfoInFolder(char const* const InfoFolder, bool bIsEnsure) const
-{
-    // create a crash-specific directory
-    char CrashInfoFolder[PATH_MAX] = {};
-    FCStringAnsi::Strncpy(CrashInfoFolder, InfoFolder, PATH_MAX);
-    
-    if(!mkdir(CrashInfoFolder, 0766))
-    {
-        char FilePath[PATH_MAX] = {};
-        FCStringAnsi::Strncpy(FilePath, CrashInfoFolder, PATH_MAX);
-        FCStringAnsi::Strcat(FilePath, PATH_MAX, "/report.wer");
-        int ReportFile = open(FilePath, O_CREAT|O_WRONLY, 0766);
-        if (ReportFile != -1)
-        {
-            // write BOM
-            static uint16 ByteOrderMarker = 0xFEFF;
-            write(ReportFile, &ByteOrderMarker, sizeof(ByteOrderMarker));
-            
-            WriteUTF16String(ReportFile, TEXT("\r\nAppPath="));
-            WriteUTF16String(ReportFile, *GIOSAppInfo.AppPath);
-            WriteLine(ReportFile, TEXT("\r\n"));
-            
-            close(ReportFile);
-        }
-                
-        // generate "minidump" (Apple crash log format)
-        FCStringAnsi::Strncpy(FilePath, CrashInfoFolder, PATH_MAX);
-        FCStringAnsi::Strcat(FilePath, PATH_MAX, "/minidump.dmp");
-        CopyMinidump(FilePath, GIOSAppInfo.PLCrashReportPath);
-        
-        // generate "info.txt" custom data for our server
-        FCStringAnsi::Strncpy(FilePath, CrashInfoFolder, PATH_MAX);
-        FCStringAnsi::Strcat(FilePath, PATH_MAX, "/info.txt");
-        ReportFile = open(FilePath, O_CREAT|O_WRONLY, 0766);
-        if (ReportFile != -1)
-        {
-            WriteUTF16String(ReportFile, TEXT("GameName UE4-"));
-            WriteLine(ReportFile, *GIOSAppInfo.AppName);
-            
-            WriteUTF16String(ReportFile, TEXT("BuildVersion 1.0."));
-            WriteUTF16String(ReportFile, ItoTCHAR(FEngineVersion::Current().GetChangelist() >> 16, 10));
-            WriteUTF16String(ReportFile, TEXT("."));
-            WriteLine(ReportFile, ItoTCHAR(FEngineVersion::Current().GetChangelist() & 0xffff, 10));
-            
-            WriteUTF16String(ReportFile, TEXT("CommandLine "));
-            WriteLine(ReportFile, *GIOSAppInfo.CommandLine);
-            
-            WriteUTF16String(ReportFile, TEXT("BaseDir "));
-            WriteLine(ReportFile, *GIOSAppInfo.BranchBaseDir);
-            
-            WriteUTF16String(ReportFile, TEXT("MachineGuid "));
-            WriteLine(ReportFile, *GIOSAppInfo.MachineUUID);
-            
-            close(ReportFile);
-        }
-        
-        // Introduces a new runtime crash context. Will replace all Windows related crash reporting.
-        FCStringAnsi::Strncpy(FilePath, CrashInfoFolder, PATH_MAX);
-        FCStringAnsi::Strcat(FilePath, PATH_MAX, "/" );
-        FCStringAnsi::Strcat(FilePath, PATH_MAX, FGenericCrashContext::CrashContextRuntimeXMLNameA );
-        SerializeAsXML(*FString(FilePath));
-        
-        // copy log
-        FCStringAnsi::Strncpy(FilePath, CrashInfoFolder, PATH_MAX);
-        FCStringAnsi::Strcat(FilePath, PATH_MAX, "/");
-        FCStringAnsi::Strcat(FilePath, PATH_MAX, (!GIOSAppInfo.AppName.IsEmpty() ? GIOSAppInfo.AppNameUTF8 : "UE4"));
-        FCStringAnsi::Strcat(FilePath, PATH_MAX, ".log");
-        
-        int LogSrc = open(GIOSAppInfo.AppLogPath, O_RDONLY);
-        int LogDst = open(FilePath, O_CREAT|O_WRONLY, 0766);
-        
-        char Data[PATH_MAX] = {};
-        int Bytes = 0;
-        while((Bytes = read(LogSrc, Data, PATH_MAX)) > 0)
-        {
-            write(LogDst, Data, Bytes);
-        }
-        
-        // If present, include the crash report config file to pass config values to the CRC
-        FCStringAnsi::Strncpy(FilePath, CrashInfoFolder, PATH_MAX);
-        FCStringAnsi::Strcat(FilePath, PATH_MAX, "/");
-        FCStringAnsi::Strcat(FilePath, PATH_MAX, FGenericCrashContext::CrashConfigFileNameA);
-        int ConfigSrc = open(TCHAR_TO_ANSI(GetCrashConfigFilePath()), O_RDONLY);
-        int ConfigDst = open(FilePath, O_CREAT | O_WRONLY, 0766);
-        
-        while ((Bytes = read(ConfigSrc, Data, PATH_MAX)) > 0)
-        {
-            write(ConfigDst, Data, Bytes);
-        }
-        
-        close(ConfigDst);
-        close(ConfigSrc);
-        
-        close(LogDst);
-        close(LogSrc);
-        // best effort, so don't care about result: couldn't copy -> tough, no log
-    }
-    else
-    {
-        NSLog(@"******* UE4 - Failed to make folder: %s", CrashInfoFolder);
-    }
-}
-
-void FIOSCrashContext::GenerateCrashInfo() const
-{
-    // create a crash-specific directory
-    char CrashInfoFolder[PATH_MAX] = {};
-    FCStringAnsi::Strncpy(CrashInfoFolder, GIOSAppInfo.CrashReportPath, PATH_MAX);
-    FCStringAnsi::Strcat(CrashInfoFolder, PATH_MAX, "/CrashReport-UE4-");
-    FCStringAnsi::Strcat(CrashInfoFolder, PATH_MAX, GIOSAppInfo.AppNameUTF8);
-    FCStringAnsi::Strcat(CrashInfoFolder, PATH_MAX, "-pid-");
-    FCStringAnsi::Strcat(CrashInfoFolder, PATH_MAX, ItoANSI(getpid(), 10));
-    FCStringAnsi::Strcat(CrashInfoFolder, PATH_MAX, "-");
-    FCStringAnsi::Strcat(CrashInfoFolder, PATH_MAX, ItoANSI(GIOSAppInfo.RunUUID.A, 16));
-    FCStringAnsi::Strcat(CrashInfoFolder, PATH_MAX, ItoANSI(GIOSAppInfo.RunUUID.B, 16));
-    FCStringAnsi::Strcat(CrashInfoFolder, PATH_MAX, ItoANSI(GIOSAppInfo.RunUUID.C, 16));
-    FCStringAnsi::Strcat(CrashInfoFolder, PATH_MAX, ItoANSI(GIOSAppInfo.RunUUID.D, 16));
-        
-    const bool bIsEnsure = false;
-    GenerateInfoInFolder(CrashInfoFolder, bIsEnsure);
-        
-    // for IOS we will need to send the report on the next run
-    
-    // Sandboxed applications re-raise the signal to trampoline into the system crash reporter as suppressing it may fall foul of Apple's Mac App Store rules.
-    // @todo Submit an application to the MAS & see whether Apple's reviewers highlight our crash reporting or trampolining to the system reporter.
-    if(GIOSAppInfo.bIsSandboxed)
-    {
-        struct sigaction Action;
-        FMemory::Memzero(&Action, sizeof(struct sigaction));
-        Action.sa_handler = SIG_DFL;
-        sigemptyset(&Action.sa_mask);
-        sigaction(SIGQUIT, &Action, NULL);
-        sigaction(SIGILL, &Action, NULL);
-        sigaction(SIGEMT, &Action, NULL);
-        sigaction(SIGFPE, &Action, NULL);
-        sigaction(SIGBUS, &Action, NULL);
-        sigaction(SIGSEGV, &Action, NULL);
-        sigaction(SIGSYS, &Action, NULL);
-        sigaction(SIGABRT, &Action, NULL);
-        sigaction(SIGTRAP, &Action, NULL);
-        
-        raise(Signal);
-    }
-    
-    _Exit(0);
-}
-
-void FIOSCrashContext::GenerateEnsureInfo() const
-{
-    // Prevent CrashReportClient from spawning another CrashReportClient.
-    const bool bCanRunCrashReportClient = FCString::Stristr( *(GIOSAppInfo.ExecutableName), TEXT( "CrashReportClient" ) ) == nullptr;
-    
-#if !PLATFORM_TVOS
-    if(bCanRunCrashReportClient)
-    {
-        SCOPED_AUTORELEASE_POOL;
-        
-        // Write the PLCrashReporter report to the expected location
-        NSData* CrashReport = [FIOSApplicationInfo::CrashReporter generateLiveReport];
-        [CrashReport writeToFile:[NSString stringWithUTF8String:GIOSAppInfo.PLCrashReportPath] atomically:YES];
-        
-        // Use a slightly different output folder name to not conflict with a subequent crash
-        const FGuid Guid = FGuid::NewGuid();
-        FString GameName = FApp::GetProjectName();
-        FString EnsureLogFolder = FString(GIOSAppInfo.CrashReportPath) / FString::Printf(TEXT("EnsureReport-%s-%s"), *GameName, *Guid.ToString(EGuidFormats::Digits));
-        
-        const bool bIsEnsure = true;
-        GenerateInfoInFolder(TCHAR_TO_UTF8(*EnsureLogFolder), bIsEnsure);
-        
-        FString Arguments;
-        if (IsInteractiveEnsureMode())
-        {
-            Arguments = FString::Printf(TEXT("\"%s/\""), *EnsureLogFolder);
-        }
-        else
-        {
-            Arguments = FString::Printf(TEXT("\"%s/\" -Unattended"), *EnsureLogFolder);
-        }
-        
-        FString ReportClient = FPaths::ConvertRelativePathToFull(FPlatformProcess::GenerateApplicationPath(TEXT("CrashReportClient"), EBuildConfiguration::Development));
-        FPlatformProcess::ExecProcess(*ReportClient, *Arguments, nullptr, nullptr, nullptr);
-    }
-#endif
 }
 
 static FCriticalSection EnsureLock;

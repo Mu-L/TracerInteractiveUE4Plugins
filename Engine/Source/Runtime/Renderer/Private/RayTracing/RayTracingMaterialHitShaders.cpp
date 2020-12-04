@@ -37,6 +37,16 @@ static FAutoConsoleVariableRef CVarCompileRayTracingMaterialAHS(
 	ECVF_ReadOnly
 );
 
+static int32 GRayTracingNonBlockingPipelineCreation = 0;
+static FAutoConsoleVariableRef CVarRayTracingNonBlockingPipelineCreation(
+	TEXT("r.RayTracing.NonBlockingPipelineCreation"),
+	GRayTracingNonBlockingPipelineCreation,
+	TEXT("Enable background ray tracing pipeline creation, without blocking RHI or Render thread.\n")
+	TEXT("Fallback opaque black material will be used for missing shaders meanwhile.\n")
+	TEXT(" 0: off (default, rendering will always use correct requested material)\n")
+	TEXT(" 1: on (non-blocking mode may sometimes use the fallback opaque black material)\n"),
+	ECVF_RenderThreadSafe);
+
 // CVar defined in DeferredShadingRenderer.cpp
 extern int32 GRayTracingUseTextureLod;
 
@@ -51,6 +61,7 @@ static bool IsSupportedVertexFactoryType(const FVertexFactoryType* VertexFactory
 	static FName LandscapeVfFname = FName(TEXT("FLandscapeVertexFactory"), FNAME_Find);
 	static FName LandscapeFixedGridVfFname = FName(TEXT("FLandscapeFixedGridVertexFactory"), FNAME_Find);
 	static FName LandscapeXYOffsetVfFname = FName(TEXT("FLandscapeXYOffsetVertexFactory"), FNAME_Find);
+	static FName HairCardVfFname = FName(TEXT("FHairCardsVertexFactory"), FNAME_Find);
 
 	return VertexFactoryType == FindVertexFactoryType(LocalVfFname)
 		|| VertexFactoryType == FindVertexFactoryType(LSkinnedVfFname)
@@ -60,7 +71,8 @@ static bool IsSupportedVertexFactoryType(const FVertexFactoryType* VertexFactory
 		|| VertexFactoryType == FindVertexFactoryType(GeometryCacheVfFname)
 		|| VertexFactoryType == FindVertexFactoryType(LandscapeVfFname)
 		|| VertexFactoryType == FindVertexFactoryType(LandscapeFixedGridVfFname)
-		|| VertexFactoryType == FindVertexFactoryType(LandscapeXYOffsetVfFname);
+		|| VertexFactoryType == FindVertexFactoryType(LandscapeXYOffsetVfFname)
+		|| VertexFactoryType == FindVertexFactoryType(HairCardVfFname);
 }
 
 class FMaterialCHS : public FMeshMaterialShader, public FUniformLightMapPolicyShaderParametersType
@@ -70,7 +82,7 @@ public:
 	FMaterialCHS(const FMeshMaterialShaderType::CompiledShaderInitializerType& Initializer)
 		: FMeshMaterialShader(Initializer)
 	{
-		PassUniformBuffer.Bind(Initializer.ParameterMap, FSceneTexturesUniformParameters::StaticStructMetadata.GetShaderVariableName());
+		PassUniformBuffer.Bind(Initializer.ParameterMap, FSceneTextureUniformParameters::StaticStructMetadata.GetShaderVariableName());
 		FUniformLightMapPolicyShaderParametersType::Bind(Initializer.ParameterMap);
 	}
 
@@ -152,11 +164,14 @@ public:
 		OutEnvironment.SetDefine(TEXT("SCENE_TEXTURES_DISABLED"), 1);
 		LightMapPolicyType::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 		FMeshMaterialShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+		static const auto CVar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.VirtualTexturedLightmaps"));
+		const bool VirtualTextureLightmaps = (CVar->GetValueOnAnyThread() != 0) && UseVirtualTexturing(GMaxRHIFeatureLevel, OutEnvironment.TargetPlatform);
+		OutEnvironment.SetDefine(TEXT("LIGHTMAP_VT_ENABLED"), VirtualTextureLightmaps);
 	}
 
 	static bool ValidateCompiledResult(EShaderPlatform Platform, const FShaderParameterMap& ParameterMap, TArray<FString>& OutError)
 	{
-		if (ParameterMap.ContainsParameterAllocation(FSceneTexturesUniformParameters::StaticStructMetadata.GetShaderVariableName()))
+		if (ParameterMap.ContainsParameterAllocation(FSceneTextureUniformParameters::StaticStructMetadata.GetShaderVariableName()))
 		{
 			OutError.Add(TEXT("Ray tracing closest hit shaders cannot read from the SceneTexturesStruct."));
 			return false;
@@ -255,63 +270,6 @@ static TShaderRef<FMaterialCHS> GetMaterialHitShader(const FMaterial& RESTRICT M
 	}
 }
 
-template<typename PassShadersType, typename ShaderElementDataType>
-void FRayTracingMeshProcessor::BuildRayTracingMeshCommands(
-	const FMeshBatch& RESTRICT MeshBatch,
-	uint64 BatchElementMask,
-	const FPrimitiveSceneProxy* RESTRICT PrimitiveSceneProxy,
-	const FMaterialRenderProxy& RESTRICT MaterialRenderProxy,
-	const FMaterial& RESTRICT MaterialResource,
-	const FMeshPassProcessorRenderState& RESTRICT DrawRenderState,
-	PassShadersType PassShaders,
-	const ShaderElementDataType& ShaderElementData)
-{
-	const FVertexFactory* RESTRICT VertexFactory = MeshBatch.VertexFactory;
-
-	checkf(MaterialRenderProxy.ImmutableSamplerState.ImmutableSamplers[0] == nullptr, TEXT("Immutable samplers not yet supported in Mesh Draw Command pipeline"));
-
-	FRayTracingMeshCommand SharedCommand;
-
-	SharedCommand.SetShaders(PassShaders.GetUntypedShaders());
-	SharedCommand.InstanceMask = ComputeBlendModeMask(MaterialResource.GetBlendMode());
-	SharedCommand.bCastRayTracedShadows = MeshBatch.CastRayTracedShadow && MaterialResource.CastsRayTracedShadows();
-	SharedCommand.bOpaque = MaterialResource.GetBlendMode() == EBlendMode::BLEND_Opaque;
-	SharedCommand.bDecal = MaterialResource.GetMaterialDomain() == EMaterialDomain::MD_DeferredDecal;
-
-	FVertexInputStreamArray VertexStreams;
-	VertexFactory->GetStreams(ERHIFeatureLevel::SM5, EVertexInputStreamType::Default, VertexStreams);
-
-	int32 DataOffset = 0;
-	if (PassShaders.RayHitGroupShader.IsValid())
-	{
-		FMeshDrawSingleShaderBindings ShaderBindings = SharedCommand.ShaderBindings.GetSingleShaderBindings(SF_RayHitGroup, DataOffset);
-		PassShaders.RayHitGroupShader->GetShaderBindings(Scene, FeatureLevel, PrimitiveSceneProxy, MaterialRenderProxy, MaterialResource, DrawRenderState, ShaderElementData, ShaderBindings);
-	}
-
-	const int32 NumElements = MeshBatch.Elements.Num();
-
-	for (int32 BatchElementIndex = 0; BatchElementIndex < NumElements; BatchElementIndex++)
-	{
-		if ((1ull << BatchElementIndex) & BatchElementMask)
-		{
-			DataOffset = 0;
-			const FMeshBatchElement& BatchElement = MeshBatch.Elements[BatchElementIndex];
-			FRayTracingMeshCommand& RayTracingMeshCommand = CommandContext->AddCommand(SharedCommand);
-
-			if (PassShaders.RayHitGroupShader.IsValid())
-			{
-				FMeshDrawSingleShaderBindings RayHitGroupShaderBindings = RayTracingMeshCommand.ShaderBindings.GetSingleShaderBindings(SF_RayHitGroup, DataOffset);
-				FMeshMaterialShader::GetElementShaderBindings(PassShaders.RayHitGroupShader, Scene, ViewIfDynamicMeshCommand, VertexFactory, EVertexInputStreamType::Default, FeatureLevel, PrimitiveSceneProxy, MeshBatch, BatchElement, ShaderElementData, RayHitGroupShaderBindings, VertexStreams);
-			}
-
-			int32 GeometrySegmentIndex = MeshBatch.SegmentIndex + BatchElementIndex;
-			RayTracingMeshCommand.GeometrySegmentIndex = (GeometrySegmentIndex < UINT8_MAX) ? uint8(GeometrySegmentIndex) : UINT8_MAX;
-
-			CommandContext->FinalizeCommand(RayTracingMeshCommand);
-		}
-	}
-}
-
 void FRayTracingMeshProcessor::Process(
 	const FMeshBatch& RESTRICT MeshBatch,
 	uint64 BatchElementMask,
@@ -365,7 +323,6 @@ void FRayTracingMeshProcessor::Process(
 		RayTracingShaders.RayHitGroupShader = MaterialResource.GetShader<FTrivialMaterialCHS>(VertexFactory->GetType());
 	}
 
-	FMeshPassProcessorRenderState PassDrawRenderState(Scene->UniformBuffers.ViewUniformBuffer, Scene->UniformBuffers.OpaqueBasePassUniformBuffer);
 	PassDrawRenderState.SetBlendState(TStaticBlendState<CW_RGBA, BO_Add, BF_One, BF_One, BO_Add, BF_Zero, BF_One>::GetRHI());
 	PassDrawRenderState.SetDepthStencilState(TStaticDepthStencilState<false, CF_DepthNearOrEqual>::GetRHI());
 
@@ -382,7 +339,6 @@ void FRayTracingMeshProcessor::Process(
 		RayTracingShaders,
 		ShaderElementData);
 }
-
 
 void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch, uint64 BatchElementMask, const FPrimitiveSceneProxy* RESTRICT PrimitiveSceneProxy)
 {
@@ -521,6 +477,29 @@ void FRayTracingMeshProcessor::AddMeshBatch(const FMeshBatch& RESTRICT MeshBatch
 	}
 }
 
+static bool IsCompatibleFallbackPipelineSignature(FRayTracingPipelineStateSignature& B, FRayTracingPipelineStateSignature& A)
+{
+	// Compare everything except hit group table
+	return A.MaxPayloadSizeInBytes == B.MaxPayloadSizeInBytes
+		&& A.bAllowHitGroupIndexing == B.bAllowHitGroupIndexing
+		&& A.GetRayGenHash() == B.GetRayGenHash()
+		&& A.GetRayMissHash() == B.GetRayMissHash()
+		&& A.GetCallableHash() == B.GetCallableHash();
+}
+
+static bool PipelineContainsHitShaders(FRayTracingPipelineState* Pipeline, const TArrayView<FRHIRayTracingShader*>& Shaders)
+{
+	for (FRHIRayTracingShader* Shader : Shaders)
+	{
+		int32 Index = FindRayTracingHitGroupIndex(Pipeline, Shader, false);
+		if (Index == INDEX_NONE)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 FRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMaterialPipeline(
 	FRHICommandList& RHICmdList,
 	FViewInfo& View,
@@ -531,18 +510,16 @@ FRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMaterialP
 	TRACE_CPUPROFILER_EVENT_SCOPE(FDeferredShadingSceneRenderer::BindRayTracingMaterialPipeline);
 	SCOPE_CYCLE_COUNTER(STAT_BindRayTracingPipeline);
 
-	FRayTracingPipelineState* PipelineState = nullptr;
-
 	FRayTracingPipelineStateInitializer Initializer;
 
-	Initializer.MaxPayloadSizeInBytes = 60; // sizeof(FPackedMaterialClosestHitPayload)
+	Initializer.MaxPayloadSizeInBytes = 64; // sizeof(FPackedMaterialClosestHitPayload)
 	Initializer.bAllowHitGroupIndexing = true;
 
 	const bool bLightingMissShader = CanUseRayTracingLightingMissShader(View.GetShaderPlatform());
 
-	FRHIRayTracingShader* DefaultMissShader = View.ShaderMap->GetShader<FDefaultMainMS>().GetRayTracingShader();
+	FRHIRayTracingShader* DefaultMissShader = View.ShaderMap->GetShader<FPackedMaterialClosestHitPayloadMS>().GetRayTracingShader();
 
-	FRHIRayTracingShader* RayTracingMissShaderLibrary[RAY_TRACING_NUM_MISS_SHADER_SLOTS];
+	FRHIRayTracingShader* RayTracingMissShaderLibrary[RAY_TRACING_NUM_MISS_SHADER_SLOTS] = {};
 	RayTracingMissShaderLibrary[RAY_TRACING_MISS_SHADER_SLOT_DEFAULT] = DefaultMissShader;
 	RayTracingMissShaderLibrary[RAY_TRACING_MISS_SHADER_SLOT_LIGHTING] = bLightingMissShader ? GetRayTracingLightingMissShader(View) : DefaultMissShader;
 	Initializer.SetMissShaderTable(RayTracingMissShaderLibrary);
@@ -560,17 +537,60 @@ FRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMaterialP
 	{
 		FShaderMapResource::GetRayTracingMaterialLibrary(RayTracingMaterialLibrary, DefaultClosestHitShader);
 	}
-	else
-	{
-		RayTracingMaterialLibrary.Add(DefaultClosestHitShader);
-	}
 
-	int32 OpaqueShadowMaterialIndex = RayTracingMaterialLibrary.Add(View.ShaderMap->GetShader<FOpaqueShadowHitGroup>().GetRayTracingShader());
-	int32 HiddenMaterialIndex = RayTracingMaterialLibrary.Add(View.ShaderMap->GetShader<FHiddenMaterialHitGroup>().GetRayTracingShader());
+	FRHIRayTracingShader* OpaqueShadowShader = View.ShaderMap->GetShader<FOpaqueShadowHitGroup>().GetRayTracingShader();
+	FRHIRayTracingShader* HiddenMaterialShader = View.ShaderMap->GetShader<FHiddenMaterialHitGroup>().GetRayTracingShader();
+
+	FRHIRayTracingShader* RequiredHitShaders[] =
+	{
+		DefaultClosestHitShader,
+		OpaqueShadowShader,
+		HiddenMaterialShader
+	};
+
+	for (FRHIRayTracingShader* Shader : RequiredHitShaders)
+	{
+		RayTracingMaterialLibrary.Add(Shader);
+	}
 
 	Initializer.SetHitGroupTable(RayTracingMaterialLibrary);
 
-	PipelineState = PipelineStateCache::GetAndOrCreateRayTracingPipelineState(RHICmdList, Initializer);
+	FRayTracingPipelineState* FallbackPipelineState = GRayTracingNonBlockingPipelineCreation && View.ViewState
+		? PipelineStateCache::GetRayTracingPipelineState(View.ViewState->LastRayTracingMaterialPipelineSignature)
+		: nullptr;
+
+	ERayTracingPipelineCacheFlags PipelineCacheFlags = ERayTracingPipelineCacheFlags::Default;
+	if (GRayTracingNonBlockingPipelineCreation
+		&& FallbackPipelineState
+		&& View.ViewState
+		&& IsCompatibleFallbackPipelineSignature(View.ViewState->LastRayTracingMaterialPipelineSignature, Initializer)
+		&& PipelineContainsHitShaders(FallbackPipelineState, RequiredHitShaders))
+	{
+		PipelineCacheFlags |= ERayTracingPipelineCacheFlags::NonBlocking;
+	}
+
+	FRayTracingPipelineState* PipelineState = PipelineStateCache::GetAndOrCreateRayTracingPipelineState(RHICmdList, Initializer, PipelineCacheFlags);
+
+	if (PipelineState)
+	{
+		if (View.ViewState)
+		{
+			// Save the current pipeline to be used as fallback in future frames
+			View.ViewState->LastRayTracingMaterialPipelineSignature = static_cast<FRayTracingPipelineStateSignature&>(Initializer);
+		}
+	}
+	else
+	{
+		// If pipeline was not found in cache, use the fallback from previous frame
+		check(FallbackPipelineState);
+		PipelineState = FallbackPipelineState;
+	}
+
+	check(PipelineState);
+
+	const int32 DefaultClosestHitMaterialIndex = FindRayTracingHitGroupIndex(PipelineState, DefaultClosestHitShader, true);
+	const int32 OpaqueShadowMaterialIndex = FindRayTracingHitGroupIndex(PipelineState, OpaqueShadowShader, true);
+	const int32 HiddenMaterialIndex = FindRayTracingHitGroupIndex(PipelineState, HiddenMaterialShader, true);
 
 	FViewInfo& ReferenceView = Views[0];
 
@@ -582,7 +602,7 @@ FRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMaterialP
 	FGraphEventArray TaskList;
 	TaskList.Reserve(NumTasks);
 	View.RayTracingMaterialBindings.SetNum(NumTasks);
-		
+	
 	for (uint32 TaskIndex = 0; TaskIndex < NumTasks; ++TaskIndex)
 	{
 		const uint32 FirstTaskCommandIndex = TaskIndex * CommandsPerTask;
@@ -593,7 +613,8 @@ FRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMaterialP
 		View.RayTracingMaterialBindings[TaskIndex] = BindingWriter;
 
 		TaskList.Add(FFunctionGraphTask::CreateAndDispatchWhenReady(
-		[BindingWriter, MeshCommands, NumCommands, bEnableMaterials, bEnableShadowMaterials, OpaqueShadowMaterialIndex, HiddenMaterialIndex, TaskIndex]()
+		[PipelineState, BindingWriter, MeshCommands, NumCommands, bEnableMaterials, bEnableShadowMaterials,
+			DefaultClosestHitMaterialIndex, OpaqueShadowMaterialIndex, HiddenMaterialIndex, TaskIndex]()
 		{
 			TRACE_CPUPROFILER_EVENT_SCOPE(BindRayTracingMaterialPipelineTask);
 
@@ -602,9 +623,20 @@ FRayTracingPipelineState* FDeferredShadingSceneRenderer::BindRayTracingMaterialP
 				const FVisibleRayTracingMeshCommand VisibleMeshCommand = MeshCommands[CommandIndex];
 				const FRayTracingMeshCommand& MeshCommand = *VisibleMeshCommand.RayTracingMeshCommand;
 
-				const uint32 HitGroupIndex = bEnableMaterials
-					? MeshCommand.MaterialShaderIndex
-					: 0; // Force the same shader to be used on all geometry
+				int32 HitGroupIndex = DefaultClosestHitMaterialIndex; // Force the same shader to be used on all geometry unless materials are enabled
+
+				if (bEnableMaterials)
+				{
+					const int32 FoundIndex = FindRayTracingHitGroupIndex(PipelineState, MeshCommand.MaterialShader, false);
+					if (FoundIndex != INDEX_NONE)
+					{
+						HitGroupIndex = FoundIndex;
+					}
+					else
+					{
+						HitGroupIndex = DefaultClosestHitMaterialIndex;
+					}
+				}
 
 				// Bind primary material shader
 

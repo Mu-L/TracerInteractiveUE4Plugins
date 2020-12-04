@@ -6,50 +6,48 @@
 #include "HAL/CriticalSection.h"
 #include "Templates/Tuple.h"
 #include "HAL/Runnable.h"
-
-struct FFileIoStoreReadBlock;
-struct FFileIoStoreResolvedRequest;
-class IAsyncReadRequest;
+#include "Containers/Map.h"
+#include "IO/IoDispatcher.h"
+#include "IO/IoDispatcherFileBackendTypes.h"
 
 class FGenericIoDispatcherEventQueue
 {
 public:
 	FGenericIoDispatcherEventQueue();
 	~FGenericIoDispatcherEventQueue();
-	void Notify();
-	void Wait();
-	void Poll() {};
+	void DispatcherNotify();
+	void DispatcherWait();
+	void DispatcherWaitForIo()
+	{
+		DispatcherWait();
+	}
+	void ServiceNotify();
+	void ServiceWait();
 
 private:
-	FEvent* Event;
+	FEvent* DispatcherEvent = nullptr;
+	FEvent* ServiceEvent = nullptr;
 };
 
 class FGenericFileIoStoreImpl
-	: public FRunnable
 {
 public:
-	FGenericFileIoStoreImpl(FGenericIoDispatcherEventQueue& InEventQueue);
+	FGenericFileIoStoreImpl(FGenericIoDispatcherEventQueue& InEventQueue, FFileIoStoreBufferAllocator& InBufferAllocator, FFileIoStoreBlockCache& InBlockCache);
 	~FGenericFileIoStoreImpl();
 	bool OpenContainer(const TCHAR* ContainerFilePath, uint64& ContainerFileHandle, uint64& ContainerFileSize);
-	void BeginReadsForRequest(FFileIoStoreResolvedRequest& ResolvedRequest);
-	void ReadBlockFromFile(FFileIoStoreReadBlock* Block);
-	void EndReadsForRequest();
-	FFileIoStoreReadBlock* GetNextCompletedBlock();
-	virtual bool Init() override;
-	virtual uint32 Run() override;
-	virtual void Stop() override;
+	bool CreateCustomRequests(const FFileIoStoreContainerFile& ContainerFile, const FFileIoStoreResolvedRequest& ResolvedRequest, FFileIoStoreReadRequestList& OutRequests)
+	{
+		return false;
+	}
+	bool StartRequests(FFileIoStoreRequestQueue& RequestQueue);
+	void GetCompletedRequests(FFileIoStoreReadRequestList& OutRequests);
 
 private:
 	FGenericIoDispatcherEventQueue& EventQueue;
+	FFileIoStoreBufferAllocator& BufferAllocator;
+	FFileIoStoreBlockCache& BlockCache;
 
-	FCriticalSection PendingBlocksCritical;
-	FFileIoStoreReadBlock* PendingBlocksHead = nullptr;
-	FFileIoStoreReadBlock* PendingBlocksTail = nullptr;
-	FCriticalSection CompletedBlocksCritical;
-	FFileIoStoreReadBlock* CompletedBlocksHead = nullptr;
-	FFileIoStoreReadBlock* CompletedBlocksTail = nullptr;
-	FEvent* PendingBlockEvent;
-	FRunnableThread* Thread;
-	TAtomic<bool> bStopRequested{ false };
+	FCriticalSection CompletedRequestsCritical;
+	FFileIoStoreReadRequestList CompletedRequests;
 };
 

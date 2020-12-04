@@ -12,6 +12,7 @@ class FD3D12DynamicRHI;
 class FD3D12BasicRayTracingPipeline;
 class FD3D12RayTracingDescriptorHeapCache;
 class FD3D12RayTracingPipelineCache;
+class FD3D12TimedIntervalQueryTracker;
 
 class FD3D12Device : public FD3D12SingleNodeGPUObject, public FNoncopyable, public FD3D12AdapterChild
 {
@@ -45,10 +46,12 @@ public:
 #if D3D12_RHI_RAYTRACING
 	void									InitRayTracing();
 	void									CleanupRayTracing();
-	ID3D12Device5*							GetRayTracingDevice();
+	ID3D12Device5*							GetDevice5();
+	ID3D12Device7*							GetDevice7();
 	const FD3D12BasicRayTracingPipeline*	GetBasicRayTracingPipeline() const { return BasicRayTracingPipeline; }
 	FD3D12RayTracingDescriptorHeapCache*	GetRayTracingDescriptorHeapCache() { return RayTracingDescriptorHeapCache; }
 	FD3D12RayTracingPipelineCache*			GetRayTracingPipelineCache() { return RayTracingPipelineCache; }
+	TRefCountPtr<ID3D12StateObject>			DeserializeRayTracingStateObject(D3D12_SHADER_BYTECODE Bytecode, ID3D12RootSignature* RootSignature);
 #endif // D3D12_RHI_RAYTRACING
 
 	FD3D12DynamicRHI* GetOwningRHI();
@@ -74,8 +77,8 @@ public:
 	inline FD3D12CommandListManager& GetAsyncCommandListManager() { return *AsyncCommandListManager; }
 	inline FD3D12CommandAllocatorManager& GetTextureStreamingCommandAllocatorManager() { return TextureStreamingCommandAllocatorManager; }
 	inline FD3D12DefaultBufferAllocator& GetDefaultBufferAllocator() { return DefaultBufferAllocator; }
-	inline FD3D12GlobalOnlineHeap& GetGlobalSamplerHeap() { return GlobalSamplerHeap; }
-	inline FD3D12GlobalOnlineHeap& GetGlobalViewHeap() { return GlobalViewHeap; }
+	inline FD3D12GlobalOnlineSamplerHeap& GetGlobalSamplerHeap() { return GlobalSamplerHeap; }
+	inline FD3D12GlobalHeap& GetGlobalViewHeap() { return GlobalViewHeap; }
 
 	bool IsGPUIdle();
 
@@ -107,16 +110,21 @@ public:
 	inline FD3D12FastAllocator& GetDefaultFastAllocator() { return DefaultFastAllocator; }
 	inline FD3D12TextureAllocatorPool& GetTextureAllocator() { return TextureAllocator; }
 	inline FD3D12ResidencyManager& GetResidencyManager() { return ResidencyManager; }
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+	inline FD3D12TimedIntervalQueryTracker*	GetBackBufferWriteBarrierTracker() { return BackBufferWriteBarrierTracker; }
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
 
 	TArray<FD3D12CommandListHandle> PendingCommandLists;
 
-	void RegisterGPUWork(uint32 NumPrimitives = 0, uint32 NumVertices = 0);
-	void RegisterGPUDispatch(FIntVector GroupCount);
+	D3D12RHI_API void RegisterGPUWork(uint32 NumPrimitives = 0, uint32 NumVertices = 0);
+	D3D12RHI_API void RegisterGPUDispatch(FIntVector GroupCount);
 	
 	FD3D12SamplerState* CreateSampler(const FSamplerStateInitializerRHI& Initializer);
 	void CreateSamplerInternal(const D3D12_SAMPLER_DESC& Desc, D3D12_CPU_DESCRIPTOR_HANDLE Descriptor);
 
 	void BlockUntilIdle();
+
+	FORCEINLINE FD3DGPUProfiler& GetGPUProfiler() { return GPUProfilingData; }
 
 protected:
 
@@ -138,12 +146,12 @@ protected:
 #endif
 	FD3D12OfflineDescriptorManager SamplerAllocator;
 
-	FD3D12GlobalOnlineHeap GlobalSamplerHeap;
-	FD3D12GlobalOnlineHeap GlobalViewHeap;
+	FD3D12GlobalOnlineSamplerHeap GlobalSamplerHeap;
+	FD3D12GlobalHeap GlobalViewHeap;
 
 	FD3D12QueryHeap OcclusionQueryHeap;
 	FD3D12QueryHeap TimestampQueryHeap;
-#if WITH_PROFILEGPU
+#if WITH_PROFILEGPU || D3D12_SUBMISSION_GAP_RECORDER
 	FD3D12LinearQueryHeap CmdListExecTimeQueryHeap;
 #endif
 
@@ -190,8 +198,12 @@ protected:
 	FD3D12RayTracingDescriptorHeapCache* RayTracingDescriptorHeapCache = nullptr;
 	void DestroyRayTracingDescriptorCache();
 #endif
-};
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+	FD3D12TimedIntervalQueryTracker* BackBufferWriteBarrierTracker = nullptr;
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
 
+	FD3DGPUProfiler GPUProfilingData;
+};
 template <typename TDesc> 
 void TD3D12ViewDescriptorHandle<TDesc>::AllocateDescriptorSlot()
 {

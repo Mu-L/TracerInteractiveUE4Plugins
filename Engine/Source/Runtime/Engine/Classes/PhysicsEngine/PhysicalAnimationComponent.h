@@ -12,10 +12,12 @@
 class FPrimitiveDrawInterface;
 class USkeletalMeshComponent;
 
+#if PHYSICS_INTERFACE_PHYSX
 namespace physx
 {
 	class PxRigidDynamic;
 }
+#endif
 
 /** Stores info on the type of motor that will be used for a given bone */
 USTRUCT(BlueprintType)
@@ -127,8 +129,10 @@ private:
 	struct FPhysicalAnimationInstanceData
 	{
 		struct FConstraintInstance* ConstraintInstance;
-#if WITH_PHYSX
-		physx::PxRigidDynamic* TargetActor; // #PHYS2 Should prob change to FPhysicsActorReference?
+#if WITH_CHAOS
+		FPhysicsActorHandle TargetActor;
+#else
+		physx::PxRigidDynamic* TargetActor;
 #endif
 	};
 

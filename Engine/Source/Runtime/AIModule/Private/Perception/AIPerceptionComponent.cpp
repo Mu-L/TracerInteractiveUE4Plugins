@@ -46,6 +46,16 @@ FActorPerceptionBlueprintInfo::FActorPerceptionBlueprintInfo(const FActorPercept
 //----------------------------------------------------------------------//
 // 
 //----------------------------------------------------------------------//
+FActorPerceptionUpdateInfo::FActorPerceptionUpdateInfo(const int32 InTargetId, const TWeakObjectPtr<AActor>& InTarget, const FAIStimulus& InStimulus)
+	: TargetId(InTargetId)
+	, Target(InTarget)
+	, Stimulus(InStimulus)
+{
+}
+
+//----------------------------------------------------------------------//
+// 
+//----------------------------------------------------------------------//
 const int32 UAIPerceptionComponent::InitialStimuliToProcessArraySize = 10;
 
 UAIPerceptionComponent::UAIPerceptionComponent(const FObjectInitializer& ObjectInitializer)
@@ -289,7 +299,7 @@ void UAIPerceptionComponent::UpdatePerceptionWhitelist(const FAISenseID Channel,
 	}
 }
 
-void UAIPerceptionComponent::GetHostileActors(TArray<AActor*>& OutActors) const
+bool UAIPerceptionComponent::GetFilteredActors(TFunctionRef<bool(const FActorPerceptionInfo&)> Predicate, TArray<AActor*>& OutActors) const
 {
 	bool bDeadDataFound = false;
 
@@ -297,12 +307,11 @@ void UAIPerceptionComponent::GetHostileActors(TArray<AActor*>& OutActors) const
 	for (FActorPerceptionContainer::TConstIterator DataIt = GetPerceptualDataConstIterator(); DataIt; ++DataIt)
 	{
 		const FActorPerceptionInfo& ActorPerceptionInfo = DataIt->Value;
-
-		if (ActorPerceptionInfo.bIsHostile && ActorPerceptionInfo.HasAnyKnownStimulus())
+		if (Predicate(ActorPerceptionInfo))
 		{
-			if (ActorPerceptionInfo.Target.IsValid())
+			if (AActor* Actor = ActorPerceptionInfo.Target.Get())
 			{
-				OutActors.Add(ActorPerceptionInfo.Target.Get());
+				OutActors.Add(Actor);
 			}
 			else
 			{
@@ -310,6 +319,36 @@ void UAIPerceptionComponent::GetHostileActors(TArray<AActor*>& OutActors) const
 			}
 		}
 	}
+	return bDeadDataFound;
+}
+
+void UAIPerceptionComponent::GetHostileActors(TArray<AActor*>& OutActors) const
+{
+	const bool bDeadDataFound = GetFilteredActors([](const FActorPerceptionInfo& ActorPerceptionInfo) {
+			return (ActorPerceptionInfo.bIsHostile && ActorPerceptionInfo.HasAnyKnownStimulus());
+		}, OutActors);
+
+	if (bDeadDataFound)
+	{
+		FSimpleDelegateGraphTask::CreateAndDispatchWhenReady(
+			FSimpleDelegateGraphTask::FDelegate::CreateUObject(const_cast<UAIPerceptionComponent*>(this), &UAIPerceptionComponent::RemoveDeadData),
+			GET_STATID(STAT_FSimpleDelegateGraphTask_RequestingRemovalOfDeadPerceptionData), NULL, ENamedThreads::GameThread);
+	}
+}
+
+void UAIPerceptionComponent::GetHostileActorsBySense(TSubclassOf<UAISense> SenseToFilterBy, TArray<AActor*>& OutActors) const
+{
+	const FAISenseID SenseIdFilter = UAISense::GetSenseID(SenseToFilterBy);
+
+	if (SenseIdFilter == FAISenseID::InvalidID())
+	{
+		UE_VLOG(GetOwner(), LogAIPerception, Warning, TEXT("UAIPerceptionComponent::GetHostileActorsBySense called with an invalid or yet unregistered sense. Bailing out."));
+		return;
+	}
+
+	const bool bDeadDataFound = GetFilteredActors([SenseIdFilter](const FActorPerceptionInfo& ActorPerceptionInfo) {
+		return (ActorPerceptionInfo.bIsHostile && ActorPerceptionInfo.HasKnownStimulusOfSense(SenseIdFilter));
+		}, OutActors);
 
 	if (bDeadDataFound)
 	{
@@ -376,7 +415,7 @@ void UAIPerceptionComponent::SetDominantSense(TSubclassOf<UAISense> InDominantSe
 
 FGenericTeamId UAIPerceptionComponent::GetTeamIdentifier() const
 {
-	return AIOwner ? FGenericTeamId::GetTeamIdentifier(AIOwner) : FGenericTeamId::NoTeam;
+	return FGenericTeamId::GetTeamIdentifier(GetOwner());
 }
 
 FVector UAIPerceptionComponent::GetActorLocation(const AActor& Actor) const 
@@ -430,17 +469,20 @@ void UAIPerceptionComponent::ProcessStimuli()
 	}
 
 	const bool bBroadcastEveryTargetUpdate = OnTargetPerceptionUpdated.IsBound();
+	const bool bBroadcastEveryTargetInfoUpdate = OnTargetPerceptionInfoUpdated.IsBound();
 	
 	TArray<AActor*> UpdatedActors;
 	UpdatedActors.Reserve(StimuliToProcess.Num());
 	TArray<AActor*> ActorsToForget;
 	ActorsToForget.Reserve(StimuliToProcess.Num());
+	TArray<TObjectKey<AActor>, TInlineAllocator<8>> DataToRemove;
 
 	for (FStimulusToProcess& SourcedStimulus : StimuliToProcess)
 	{
-		const uint64 SourceAddr = reinterpret_cast<uint64>(SourcedStimulus.Source);
+		const TObjectKey<AActor>& SourceKey = SourcedStimulus.Source;
 
-		FActorPerceptionInfo* PerceptualInfo = PerceptualData.Find(SourceAddr);
+		FActorPerceptionInfo* PerceptualInfo = PerceptualData.Find(SourceKey);
+		AActor* SourceActor = nullptr;
 
 		if (PerceptualInfo == NULL)
 		{
@@ -452,12 +494,20 @@ void UAIPerceptionComponent::ProcessStimuli()
 			}
 			else
 			{
+				SourceActor = CastChecked<AActor>(SourceKey.ResolveObjectPtr(), ECastCheckedType::NullAllowed);
+
+				// no existing perceptual data and source no longer valid: nothing to do with this stimulus
+				if (SourceActor == nullptr)
+				{
+					continue;
+				}
+				
 				// create an entry
-				PerceptualInfo = &PerceptualData.Add(SourceAddr, FActorPerceptionInfo(SourcedStimulus.Source));
+				PerceptualInfo = &PerceptualData.Add(SourceKey, FActorPerceptionInfo(SourceActor));
 				// tell it what's our dominant sense
 				PerceptualInfo->DominantSense = DominantSenseID;
 
-				PerceptualInfo->bIsHostile = AIOwner != NULL && FGenericTeamId::GetAttitude(AIOwner, SourcedStimulus.Source) == ETeamAttitude::Hostile;
+				PerceptualInfo->bIsHostile = (FGenericTeamId::GetAttitude(GetOwner(), SourceActor) == ETeamAttitude::Hostile);
 			}
 		}
 
@@ -503,10 +553,24 @@ void UAIPerceptionComponent::ProcessStimuli()
 		// if the new stimulus is "valid" or it's info that "no longer sensed" and it used to be sensed successfully
 		if (bActorInfoUpdated)
 		{
-			UpdatedActors.AddUnique(SourcedStimulus.Source);
-			if (bBroadcastEveryTargetUpdate)
+			// Source Actor is only resolved from SourceKey when required but might already have been resolved for new entry
+			SourceActor = (SourceActor == nullptr) ? CastChecked<AActor>(SourceKey.ResolveObjectPtr(), ECastCheckedType::NullAllowed) : SourceActor;
+			if (SourceActor == nullptr)
 			{
-				OnTargetPerceptionUpdated.Broadcast(SourcedStimulus.Source, StimulusStore);
+				DataToRemove.Add(SourceKey);
+			}
+			else
+			{
+				UpdatedActors.AddUnique(SourceActor);
+				if (bBroadcastEveryTargetUpdate)
+				{
+					OnTargetPerceptionUpdated.Broadcast(SourceActor, StimulusStore);
+				}
+			}
+
+			if (bBroadcastEveryTargetInfoUpdate)
+			{
+				OnTargetPerceptionInfoUpdated.Broadcast(FActorPerceptionUpdateInfo(GetTypeHash(SourceKey), PerceptualInfo->Target, StimulusStore));
 			}
 		}
 	}
@@ -523,9 +587,16 @@ void UAIPerceptionComponent::ProcessStimuli()
 		OnPerceptionUpdated.Broadcast(UpdatedActors);
 	}
 
+	// forget actors that are no longer perceived
 	for (AActor* ActorToForget : ActorsToForget)
 	{
 		ForgetActor(ActorToForget);
+	}
+
+	// remove perceptual info related to stale actors
+	for (const TObjectKey<AActor>& SourceKey : DataToRemove)
+	{
+		PerceptualData.Remove(SourceKey);
 	}
 }
 
@@ -585,7 +656,7 @@ void UAIPerceptionComponent::ForgetActor(AActor* ActorToForget)
 			AIPerceptionSys->OnListenerForgetsActor(*this, *ActorToForget);
 		}
 
-		const int32 NumRemoved = PerceptualData.Remove(reinterpret_cast<uint64>(ActorToForget));
+		const int32 NumRemoved = PerceptualData.Remove(ActorToForget);
 	}
 }
 
@@ -678,6 +749,11 @@ void UAIPerceptionComponent::GetPerceivedHostileActors(TArray<AActor*>& OutActor
 	GetHostileActors(OutActors);
 }
 
+void UAIPerceptionComponent::GetPerceivedHostileActorsBySense(const TSubclassOf<UAISense> SenseToUse, TArray<AActor*>& OutActors) const
+{
+	GetHostileActorsBySense(SenseToUse, OutActors);
+}
+
 void UAIPerceptionComponent::GetCurrentlyPerceivedActors(TSubclassOf<UAISense> SenseToUse, TArray<AActor*>& OutActors) const
 {
 	const FAISenseID SenseID = UAISense::GetSenseID(SenseToUse);
@@ -688,9 +764,9 @@ void UAIPerceptionComponent::GetCurrentlyPerceivedActors(TSubclassOf<UAISense> S
 		const bool bCurrentlyPerceived = (SenseToUse == nullptr) ? DataIt->Value.HasAnyCurrentStimulus() : DataIt->Value.IsSenseActive(SenseID);
 		if (bCurrentlyPerceived)
 		{
-			if (DataIt->Value.Target.IsValid())
+			if (AActor* Actor = DataIt->Value.Target.Get())
 			{
-				OutActors.Add(DataIt->Value.Target.Get());
+				OutActors.Add(Actor);
 			}
 		}
 	}
@@ -753,9 +829,10 @@ void UAIPerceptionComponent::DescribeSelfToGameplayDebugger(FGameplayDebuggerCat
 	for (UAIPerceptionComponent::FActorPerceptionContainer::TConstIterator It(GetPerceptualDataConstIterator()); It; ++It)
 	{
 		const FActorPerceptionInfo& ActorPerceptionInfo = It->Value;
-		if (ActorPerceptionInfo.Target.IsValid() && It->Key)
+		const AActor* Target = ActorPerceptionInfo.Target.Get();
+		if (Target != nullptr)
 		{
-			const FVector TargetLocation = ActorPerceptionInfo.Target->GetActorLocation();
+			const FVector TargetLocation = Target->GetActorLocation();
 			for (const FAIStimulus& Stimulus : ActorPerceptionInfo.LastSensedStimuli)
 			{
 				const UAISenseConfig* SenseConfig = GetSenseConfig(Stimulus.Type);

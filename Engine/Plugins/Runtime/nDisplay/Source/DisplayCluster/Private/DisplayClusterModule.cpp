@@ -8,14 +8,15 @@
 #include "Input/DisplayClusterInputManager.h"
 #include "Render/DisplayClusterRenderManager.h"
 
-#include "DisplayClusterGlobals.h"
-#include "DisplayClusterLog.h"
+#include "DisplayClusterConfigurationTypes.h"
+
+#include "Misc/DisplayClusterGlobals.h"
+#include "Misc/DisplayClusterLog.h"
+#include "Misc/DisplayClusterTypesConverter.h"
 
 
 FDisplayClusterModule::FDisplayClusterModule()
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	GDisplayCluster = this;
 
 	UE_LOG(LogDisplayClusterModule, Log, TEXT("Instantiating subsystem managers..."));
@@ -30,8 +31,6 @@ FDisplayClusterModule::FDisplayClusterModule()
 
 FDisplayClusterModule::~FDisplayClusterModule()
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 #if 1
 	GDisplayCluster = nullptr;
 #else
@@ -54,15 +53,11 @@ FDisplayClusterModule::~FDisplayClusterModule()
 //////////////////////////////////////////////////////////////////////////////////////////////
 void FDisplayClusterModule::StartupModule()
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	UE_LOG(LogDisplayClusterModule, Log, TEXT("DisplayCluster module has been started"));
 }
 
 void FDisplayClusterModule::ShutdownModule()
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	// Clean everything before .dtor call
 	Release();
 }
@@ -78,11 +73,9 @@ void FDisplayClusterModule::ShutdownModule()
 //////////////////////////////////////////////////////////////////////////////////////////////
 bool FDisplayClusterModule::Init(EDisplayClusterOperationMode OperationMode)
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	CurrentOperationMode = OperationMode;
 
-	UE_LOG(LogDisplayClusterModule, Log, TEXT("Initializing subsystems to %s operation mode"), *FDisplayClusterTypesConverter::template ToString(CurrentOperationMode));
+	UE_LOG(LogDisplayClusterModule, Log, TEXT("Initializing subsystems to %s operation mode"), *DisplayClusterTypesConverter::template ToString(CurrentOperationMode));
 
 	bool result = true;
 	auto it = Managers.CreateIterator();
@@ -105,8 +98,6 @@ bool FDisplayClusterModule::Init(EDisplayClusterOperationMode OperationMode)
 
 void FDisplayClusterModule::Release()
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	UE_LOG(LogDisplayClusterModule, Log, TEXT("Cleaning up internals..."));
 
 	for (auto pMgr : Managers)
@@ -118,17 +109,15 @@ void FDisplayClusterModule::Release()
 	Managers.Empty();
 }
 
-bool FDisplayClusterModule::StartSession(const FString& configPath, const FString& nodeId)
+bool FDisplayClusterModule::StartSession(const UDisplayClusterConfigurationData* InConfigData, const FString& NodeId)
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
-	UE_LOG(LogDisplayClusterModule, Log, TEXT("StartSession: config path is %s"), *configPath);
+	UE_LOG(LogDisplayClusterModule, Log, TEXT("StartSession with node ID '%s'"), *NodeId);
 
 	bool result = true;
 	auto it = Managers.CreateIterator();
 	while (result && it)
 	{
-		result = result && (*it)->StartSession(configPath, nodeId);
+		result = result && (*it)->StartSession(InConfigData, NodeId);
 		++it;
 	}
 
@@ -144,8 +133,6 @@ bool FDisplayClusterModule::StartSession(const FString& configPath, const FStrin
 
 void FDisplayClusterModule::EndSession()
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	UE_LOG(LogDisplayClusterModule, Log, TEXT("Stopping DisplayCluster session..."));
 
 	DisplayClusterEndSessionEvent.Broadcast();
@@ -156,19 +143,17 @@ void FDisplayClusterModule::EndSession()
 	}
 }
 
-bool FDisplayClusterModule::StartScene(UWorld* pWorld)
+bool FDisplayClusterModule::StartScene(UWorld* InWorld)
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	UE_LOG(LogDisplayClusterModule, Log, TEXT("Starting game..."));
 
-	check(pWorld);
+	check(InWorld);
 
 	bool result = true;
 	auto it = Managers.CreateIterator();
 	while (result && it)
 	{
-		result = result && (*it)->StartScene(pWorld);
+		result = result && (*it)->StartScene(InWorld);
 		++it;
 	}
 
@@ -182,8 +167,6 @@ bool FDisplayClusterModule::StartScene(UWorld* pWorld)
 
 void FDisplayClusterModule::EndScene()
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	UE_LOG(LogDisplayClusterModule, Log, TEXT("Stopping game..."));
 
 	for (auto pMgr : Managers)
@@ -194,8 +177,6 @@ void FDisplayClusterModule::EndScene()
 
 void FDisplayClusterModule::StartFrame(uint64 FrameNum)
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	UE_LOG(LogDisplayClusterModule, Verbose, TEXT("StartFrame: frame num - %llu"), FrameNum);
 
 	for (auto pMgr : Managers)
@@ -208,8 +189,6 @@ void FDisplayClusterModule::StartFrame(uint64 FrameNum)
 
 void FDisplayClusterModule::EndFrame(uint64 FrameNum)
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	UE_LOG(LogDisplayClusterModule, Verbose, TEXT("EndFrame: frame num - %llu"), FrameNum);
 
 	for (auto pMgr : Managers)
@@ -222,8 +201,6 @@ void FDisplayClusterModule::EndFrame(uint64 FrameNum)
 
 void FDisplayClusterModule::PreTick(float DeltaSeconds)
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	UE_LOG(LogDisplayClusterModule, Verbose, TEXT("PreTick: delta time - %f"), DeltaSeconds);
 
 	for (auto pMgr : Managers)
@@ -236,8 +213,6 @@ void FDisplayClusterModule::PreTick(float DeltaSeconds)
 
 void FDisplayClusterModule::Tick(float DeltaSeconds)
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	UE_LOG(LogDisplayClusterModule, Verbose, TEXT("Tick: delta time - %f"), DeltaSeconds);
 
 	for (auto pMgr : Managers)
@@ -250,8 +225,6 @@ void FDisplayClusterModule::Tick(float DeltaSeconds)
 
 void FDisplayClusterModule::PostTick(float DeltaSeconds)
 {
-	DISPLAY_CLUSTER_FUNC_TRACE(LogDisplayClusterModule);
-
 	UE_LOG(LogDisplayClusterModule, Verbose, TEXT("PostTick: delta time - %f"), DeltaSeconds);
 
 	for (auto pMgr : Managers)

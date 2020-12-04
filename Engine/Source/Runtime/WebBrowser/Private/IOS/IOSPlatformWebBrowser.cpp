@@ -159,9 +159,8 @@ class SIOSWebBrowserWidget : public SLeafWidget
 							if (VideoTexture == nullptr)
 							{
 								FRHIResourceCreateInfo CreateInfo;
-								FRHICommandListImmediate& LocalRHICmdList = FRHICommandListExecutor::GetImmediateCommandList();
 								FIntPoint Size = Params.Size;
-								VideoTexture = LocalRHICmdList.CreateTextureExternal2D(Size.X, Size.Y, PF_R8G8B8A8, 1, 1, 0, CreateInfo);
+								VideoTexture = RHICreateTextureExternal2D(Size.X, Size.Y, PF_R8G8B8A8, 1, 1, TexCreate_None, CreateInfo);
 								[NativeWebBrowser SetVideoTexture : VideoTexture];
 								//UE_LOG(LogIOS, Log, TEXT("NativeWebBrowser SetVideoTexture:VideoTexture!"));
 
@@ -337,31 +336,36 @@ class SIOSWebBrowserWidget : public SLeafWidget
 		}
 	}
 
-	void ProcessScriptMessage(const FString& Message)
+	void ProcessScriptMessage(const FString& InMessage)
 	{
+		FString Message = InMessage;
 		if (WebBrowserWindowPtr.IsValid())
 		{
-			TSharedPtr<FWebBrowserWindow> BrowserWindow = WebBrowserWindowPtr.Pin();
-			if (BrowserWindow.IsValid())
+			[FIOSAsyncTask CreateTaskWithBlock : ^ bool(void)
 			{
-				TArray<FString> Params;
-				Message.ParseIntoArray(Params, TEXT("/"), false);
-				if (Params.Num() > 0)
+				TSharedPtr<FWebBrowserWindow> BrowserWindow = WebBrowserWindowPtr.Pin();
+				if (BrowserWindow.IsValid())
 				{
-					for (int I = 0; I < Params.Num(); I++)
+					TArray<FString> Params;
+					Message.ParseIntoArray(Params, TEXT("/"), false);
+					if (Params.Num() > 0)
 					{
-						Params[I] = FPlatformHttp::UrlDecode(Params[I]);
-					}
+						for (int I = 0; I < Params.Num(); I++)
+						{
+							Params[I] = FPlatformHttp::UrlDecode(Params[I]);
+						}
 
-					FString Command = Params[0];
-					Params.RemoveAt(0, 1);
-					BrowserWindow->OnJsMessageReceived(Command, Params, "");
+						FString Command = Params[0];
+						Params.RemoveAt(0, 1);
+						BrowserWindow->OnJsMessageReceived(Command, Params, "");
+					}
+					else
+					{
+						GLog->Logf(ELogVerbosity::Error, TEXT("Invalid message from browser view: %s"), *Message);
+					}
 				}
-				else
-				{
-					GLog->Logf(ELogVerbosity::Error, TEXT("Invalid message from browser view: %s"), *Message);
-				}
-			}
+				return true;
+			}];
 		}
 	}
 

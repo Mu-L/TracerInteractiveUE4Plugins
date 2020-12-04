@@ -5,8 +5,10 @@
 #include "MovieScene.h"
 #include "IMovieScenePlayer.h"
 #include "IMovieScenePlaybackClient.h"
+#include "MovieSceneObjectBindingID.h"
 
 DECLARE_CYCLE_STAT(TEXT("Find Bound Objects"), MovieSceneEval_FindBoundObjects, STATGROUP_MovieSceneEval);
+DECLARE_CYCLE_STAT(TEXT("Iterate Bound Objects"), MovieSceneEval_IterateBoundObjects, STATGROUP_MovieSceneEval);
 
 FMovieSceneSharedDataId FMovieSceneSharedDataId::Allocate()
 {
@@ -112,6 +114,48 @@ FGuid FMovieSceneObjectCache::FindCachedObjectId(UObject& InObject, IMovieSceneP
 	return FGuid();
 }
 
+void FMovieSceneObjectCache::FilterObjectBindings(UObject* PredicateObject, IMovieScenePlayer& Player, TArray<FMovieSceneObjectBindingID>* OutBindings)
+{
+	check(OutBindings);
+
+	TArray<FGuid, TInlineAllocator<8>> OutOfDateBindings;
+	for (const TTuple<FGuid, FBoundObjects>& Pair : BoundObjects)
+	{
+		if (Pair.Value.bUpToDate)
+		{
+			for (TWeakObjectPtr<> WeakObject : Pair.Value.Objects)
+			{
+				UObject* Object = WeakObject.Get();
+				if (Object && Object == PredicateObject)
+				{
+					OutBindings->Add(FMovieSceneObjectBindingID(Pair.Key, SequenceID));
+					break;
+				}
+			}
+		}
+		else
+		{
+			OutOfDateBindings.Add(Pair.Key);
+		}
+	}
+
+	for (const FGuid& DirtyBinding : OutOfDateBindings)
+	{
+		UpdateBindings(DirtyBinding, Player);
+
+		const FBoundObjects& Bindings = BoundObjects.FindChecked(DirtyBinding);
+		for (TWeakObjectPtr<> WeakObject : Bindings.Objects)
+		{
+			UObject* Object = WeakObject.Get();
+			if (Object && Object == PredicateObject)
+			{
+				OutBindings->Add(FMovieSceneObjectBindingID(DirtyBinding, SequenceID));
+				break;
+			}
+		}
+	}
+}
+
 void FMovieSceneObjectCache::InvalidateExpiredObjects()
 {
 	for (auto& Pair : BoundObjects)
@@ -143,6 +187,28 @@ void FMovieSceneObjectCache::InvalidateExpiredObjects()
 	}
 }
 
+void FMovieSceneObjectCache::InvalidateIfValid(const FGuid& InGuid)
+{
+	// Don't manipulate the actual map structure, since this can be called from inside an iterator
+	FBoundObjects* Cache = BoundObjects.Find(InGuid);
+
+	if (Cache && Cache->bUpToDate == true)
+	{
+		Cache->bUpToDate = false;
+
+		auto* Children = ChildBindings.Find(InGuid);
+		if (Children)
+		{
+			for (const FGuid& Child : *Children)
+			{
+				InvalidateIfValid(Child);
+			}
+		}
+
+		OnBindingInvalidated.Broadcast(InGuid);
+	}
+}
+
 void FMovieSceneObjectCache::Invalidate(const FGuid& InGuid)
 {
 	// Don't manipulate the actual map structure, since this can be called from inside an iterator
@@ -160,6 +226,8 @@ void FMovieSceneObjectCache::Invalidate(const FGuid& InGuid)
 			}
 		}
 	}
+
+	OnBindingInvalidated.Broadcast(InGuid);
 }
 
 void FMovieSceneObjectCache::Clear(IMovieScenePlayer& Player)
@@ -168,6 +236,7 @@ void FMovieSceneObjectCache::Clear(IMovieScenePlayer& Player)
 	ChildBindings.Reset();
 
 	Player.NotifyBindingsChanged();
+	OnBindingInvalidated.Broadcast(FGuid());
 }
 
 
@@ -192,10 +261,9 @@ void FMovieSceneObjectCache::UpdateBindings(const FGuid& InGuid, IMovieScenePlay
 	{
 		for (const FGuid& Child : *Children)
 		{
-			Invalidate(Child);
+			InvalidateIfValid(Child);
 		}
 	}
-	ChildBindings.Remove(InGuid);
 
 	// Find the sequence for this cache.
 	UMovieSceneSequence* Sequence = WeakSequence.Get();
@@ -295,6 +363,15 @@ void FMovieSceneObjectCache::UpdateBindings(const FGuid& InGuid, IMovieScenePlay
 	{
 		Bindings->bUpToDate = true;
 		Player.NotifyBindingUpdate(InGuid, SequenceID, Bindings->Objects);
+
+		if (auto* Children = ChildBindings.Find(InGuid))
+		{
+			for (const FGuid& Child : *Children)
+			{
+				InvalidateIfValid(Child);
+			}
+		}
+		ChildBindings.Remove(InGuid);
 	}
 }
 
@@ -357,4 +434,14 @@ FGuid FMovieSceneEvaluationState::FindCachedObjectId(UObject& Object, FMovieScen
 {
 	FMovieSceneObjectCache* Cache = ObjectCaches.Find(InSequenceID);
 	return Cache ? Cache->FindCachedObjectId(Object, Player) : FGuid();
+}
+
+void FMovieSceneEvaluationState::FilterObjectBindings(UObject* PredicateObject, IMovieScenePlayer& Player, TArray<FMovieSceneObjectBindingID>* OutBindings)
+{
+	check(OutBindings);
+
+	for (TTuple<FMovieSceneSequenceID, FMovieSceneObjectCache>& Cache : ObjectCaches)
+	{
+		Cache.Value.FilterObjectBindings(PredicateObject, Player, OutBindings);
+	}
 }

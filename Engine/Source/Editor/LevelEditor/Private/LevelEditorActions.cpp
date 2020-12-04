@@ -91,6 +91,8 @@
 #include "LevelUtils.h"
 #include "ISceneOutliner.h"
 #include "ISettingsModule.h"
+#include "PlatformInfo.h"
+#include "Misc/CoreMisc.h"
 
 #if WITH_LIVE_CODING
 #include "ILiveCodingModule.h"
@@ -269,10 +271,8 @@ void FLevelEditorActionCallbacks::OpenRecentFile( int32 RecentFileIndex )
 	IMainFrameModule& MainFrameModule = FModuleManager::LoadModuleChecked<IMainFrameModule>( "MainFrame" );
 	FMainMRUFavoritesList* RecentsAndFavorites = MainFrameModule.GetMRUFavoritesList();
 
-	// Save the name of the file we are attempting to load as VerifyFile/AskSaveChanges might rearrange the MRU list on us
-	const FString NewPackageName = RecentsAndFavorites->GetMRUItem( RecentFileIndex );
-	
-	if( RecentsAndFavorites->VerifyMRUFile( RecentFileIndex ) )
+	FString NewPackageName;
+	if( RecentsAndFavorites->VerifyMRUFile( RecentFileIndex, NewPackageName ) )
 	{
 		// Prompt the user to save any outstanding changes.
 		if( FEditorFileUtils::SaveDirtyPackages(true, true, false) )
@@ -602,7 +602,7 @@ bool FLevelEditorActionCallbacks::IsFeatureLevelPreviewActive()
 
 bool FLevelEditorActionCallbacks::IsPreviewModeButtonVisible()
 {
-	return GEditor->PreviewPlatform.PreviewFeatureLevel != ERHIFeatureLevel::SM5;
+	return GEditor->IsFeatureLevelPreviewEnabled();
 }
 
 void FLevelEditorActionCallbacks::SetPreviewPlatform(FPreviewPlatformInfo NewPreviewPlatform)
@@ -789,6 +789,12 @@ void FLevelEditorActionCallbacks::BuildVirtualTextureOnly_Execute()
 {
 	FEditorBuildUtils::EditorBuildVirtualTexture(GetWorld());
 	GEngine->DeferredCommands.AddUnique(TEXT("MAP CHECK NOTIFYRESULTS"));
+}
+
+void FLevelEditorActionCallbacks::BuildGrassMapsOnly_Execute()
+{
+	// Build Grass maps
+	FEditorBuildUtils::EditorBuild(GetWorld(), FBuildOptions::BuildGrassMaps);
 }
 
 bool FLevelEditorActionCallbacks::IsLightingQualityChecked( ELightingBuildQuality TestQuality )
@@ -2079,7 +2085,7 @@ bool FLevelEditorActionCallbacks::SaveAnimationFromSkeletalMeshComponent(AActor 
 
 void FLevelEditorActionCallbacks::OpenMergeActor_Clicked()
 {
-	FGlobalTabmanager::Get()->InvokeTab(FName("MergeActors"));
+	FGlobalTabmanager::Get()->TryInvokeTab(FName("MergeActors"));
 }
 
 void FLevelEditorActionCallbacks::OnKeepSimulationChanges()
@@ -2233,7 +2239,7 @@ void FLevelEditorActionCallbacks::OnFindActorInLevelScript()
 void FLevelEditorActionCallbacks::OnShowWorldProperties( TWeakPtr< SLevelEditor > LevelEditor )
 {
 	FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>( TEXT("LevelEditor") );
-	LevelEditorModule.GetLevelEditorTabManager()->InvokeTab(FName("WorldSettingsTab"));
+	LevelEditorModule.GetLevelEditorTabManager()->TryInvokeTab(FName("WorldSettingsTab"));
 }
 
 void FLevelEditorActionCallbacks::OpenContentBrowser()
@@ -2579,6 +2585,10 @@ void FLevelEditorActionCallbacks::OnAudioMutedChanged(bool bMuted)
 void FLevelEditorActionCallbacks::SnapObjectToView_Clicked()
 {
 	const FScopedTransaction Transaction(NSLOCTEXT("UnrealEd", "SnapObjectToView", "Snap Object to View"));
+
+	// Fires ULevel::LevelDirtiedEvent when falling out of scope.
+	FScopedLevelDirtied		LevelDirtyCallback;
+
 	for (FSelectionIterator It(GEditor->GetSelectedActorIterator()); It; ++It)
 	{
 		AActor* Actor = Cast<AActor>(*It);
@@ -2588,6 +2598,9 @@ void FLevelEditorActionCallbacks::SnapObjectToView_Clicked()
 
 		Actor->SetActorLocation(Location);
 		Actor->SetActorRotation(Rotation);
+		Actor->PostEditMove(true);
+
+		LevelDirtyCallback.Request();
 	}
 
 }
@@ -2802,6 +2815,7 @@ void FLevelEditorActionCallbacks::MoveActorTo_Clicked( const bool InAlign, const
 		Actor->TeleportTo( NewLocation, ( !InAlign ? Actor->GetActorRotation() : NewRotation ), false, true );
 		Actor->InvalidateLightingCache();
 		Actor->UpdateComponentTransforms();
+		Actor->PostEditMove(true);
 
 		Actor->MarkPackageDirty();
 		LevelDirtyCallback.Request();
@@ -2847,6 +2861,7 @@ void FLevelEditorActionCallbacks::SnapTo2DLayer_Clicked()
 
 				Actor->InvalidateLightingCache();
 				Actor->UpdateComponentTransforms();
+				Actor->PostEditMove(true);
 
 				Actor->MarkPackageDirty();
 				LevelDirtyCallback.Request();
@@ -2951,6 +2966,20 @@ void FLevelEditorActionCallbacks::SnapTo_Clicked( const bool InAlign, const bool
 		bSnappedComponents = true;
 	}
 
+	// Gather the selected actors and components to later add to the ingore list for object snapping
+	TArray<FActorOrComponent> ObjectsToIgnore;
+	for (FSelectedEditableComponentIterator It(GEditor->GetSelectedEditableComponentIterator()); It; ++It)
+	{
+		USceneComponent* SceneComponent = Cast<USceneComponent>(*It);
+		ObjectsToIgnore.Add(FActorOrComponent(SceneComponent));
+	}
+	for (FSelectionIterator It(GEditor->GetSelectedActorIterator()); It; ++It)
+	{
+		AActor* Actor = Cast<AActor>(*It);
+		ObjectsToIgnore.Add(FActorOrComponent(Actor));
+	}
+
+
 	if( !bSnappedComponents && GEditor->GetSelectedComponentCount() > 0 )
 	{
 		for(FSelectedEditableComponentIterator It(GEditor->GetSelectedEditableComponentIterator()); It; ++It)
@@ -2964,7 +2993,7 @@ void FLevelEditorActionCallbacks::SnapTo_Clicked( const bool InAlign, const bool
 				if(ActorOwner)
 				{
 					ActorOwner->Modify();
-					GEditor->SnapObjectTo(FActorOrComponent(SceneComponent), InAlign, InUseLineTrace, InUseBounds, InUsePivot, FActorOrComponent(InDestination));
+					GEditor->SnapObjectTo(FActorOrComponent(SceneComponent), InAlign, InUseLineTrace, InUseBounds, InUsePivot, FActorOrComponent(InDestination), ObjectsToIgnore);
 					ActorOwner->InvalidateLightingCache();
 					ActorOwner->UpdateComponentTransforms();
 
@@ -2986,7 +3015,7 @@ void FLevelEditorActionCallbacks::SnapTo_Clicked( const bool InAlign, const bool
 			if(Actor)
 			{
 				Actor->Modify();
-				GEditor->SnapObjectTo(FActorOrComponent(Actor), InAlign, InUseLineTrace, InUseBounds, InUsePivot, FActorOrComponent(InDestination));
+				GEditor->SnapObjectTo(FActorOrComponent(Actor), InAlign, InUseLineTrace, InUseBounds, InUsePivot, FActorOrComponent(InDestination), ObjectsToIgnore);
 				Actor->InvalidateLightingCache();
 				Actor->UpdateComponentTransforms();
 
@@ -3058,6 +3087,25 @@ class UWorld* FLevelEditorActionCallbacks::GetWorld()
 	return GEditor->GetEditorWorldContext().World();
 }
 
+namespace
+{
+	const FName OpenRecentFileBundle = "OpenRecentFile";
+	const FName OpenFavoriteFileBundle = "OpenFavoriteFile";
+}
+
+FLevelEditorCommands::FLevelEditorCommands()
+	: TCommands<FLevelEditorCommands>
+	(
+		"LevelEditor", // Context name for fast lookup
+		NSLOCTEXT("Contexts", "LevelEditor", "Level Editor"), // Localized context name for displaying
+		"LevelViewport", // Parent
+		FEditorStyle::GetStyleSetName() // Icon Style Set
+	)
+{
+	AddBundle(OpenRecentFileBundle, NSLOCTEXT("LevelEditorCommands", "OpenRecentFileBundle", "Open Recent File"));
+	AddBundle(OpenFavoriteFileBundle, NSLOCTEXT("LevelEditorCommands", "OpenFavoriteFileBundle", "Open Favorite File"));
+}
+
 /** UI_COMMAND takes long for the compile to optimize */
 PRAGMA_DISABLE_OPTIMIZATION
 void FLevelEditorCommands::RegisterCommands()
@@ -3082,7 +3130,8 @@ void FLevelEditorCommands::RegisterCommands()
 				this->AsShared(),
 				FName( *FString::Printf( TEXT( "OpenRecentFile%i" ), CurRecentIndex ) ),
 				FText::Format( NSLOCTEXT( "LevelEditorCommands", "OpenRecentFile", "Open Recent File {0}" ), FText::AsNumber( CurRecentIndex ) ),
-				NSLOCTEXT( "LevelEditorCommands", "OpenRecentFileToolTip", "Opens a recently opened file" ) )
+				NSLOCTEXT( "LevelEditorCommands", "OpenRecentFileToolTip", "Opens a recently opened file" ),
+				OpenRecentFileBundle)
 			.UserInterfaceType( EUserInterfaceActionType::Button )
 			.DefaultChord( FInputChord() );
 		OpenRecentFileCommands.Add( OpenRecentFile );
@@ -3096,7 +3145,8 @@ void FLevelEditorCommands::RegisterCommands()
 				this->AsShared(),
 				FName(*FString::Printf(TEXT("OpenFavoriteFile%i"), CurFavoriteIndex)),
 				FText::Format(NSLOCTEXT("LevelEditorCommands", "OpenFavoriteFile", "Open Favorite File {0}"), FText::AsNumber(CurFavoriteIndex)),
-				NSLOCTEXT("LevelEditorCommands", "OpenFavoriteFileToolTip", "Opens a favorite file"))
+				NSLOCTEXT("LevelEditorCommands", "OpenFavoriteFileToolTip", "Opens a favorite file"),
+				OpenFavoriteFileBundle)
 			.UserInterfaceType(EUserInterfaceActionType::Button)
 			.DefaultChord(FInputChord());
 		OpenFavoriteFileCommands.Add(OpenFavoriteFile);
@@ -3118,7 +3168,8 @@ void FLevelEditorCommands::RegisterCommands()
 	UI_COMMAND( BuildPathsOnly, "Build Paths", "Only builds paths (all levels.)", EUserInterfaceActionType::Button, FInputChord() );
 	UI_COMMAND( BuildLODsOnly, "Build LODs", "Only builds LODs (all levels.)", EUserInterfaceActionType::Button, FInputChord() );
 	UI_COMMAND( BuildTextureStreamingOnly, "Build Texture Streaming", "Build texture streaming data", EUserInterfaceActionType::Button, FInputChord() );
-	UI_COMMAND(BuildVirtualTextureOnly, "Build Virtual Textures", "Build runtime virtual texture low mips streaming data", EUserInterfaceActionType::Button, FInputChord());
+	UI_COMMAND( BuildVirtualTextureOnly, "Build Virtual Textures", "Build runtime virtual texture low mips streaming data", EUserInterfaceActionType::Button, FInputChord());
+	UI_COMMAND( BuildGrassMapsOnly, "Build Grass Maps", "Build landscape grass maps", EUserInterfaceActionType::Button, FInputChord());
 
 	UI_COMMAND( LightingQuality_Production, "Production", "Sets precomputed lighting quality to highest possible quality (slowest computation time.)", EUserInterfaceActionType::RadioButton, FInputChord() );
 	UI_COMMAND( LightingQuality_High, "High", "Sets precomputed lighting quality to high quality", EUserInterfaceActionType::RadioButton, FInputChord() );
@@ -3356,14 +3407,26 @@ void FLevelEditorCommands::RegisterCommands()
 	UI_COMMAND(MaterialQualityLevel_Low, "Low", "Sets material quality in the scene to low.", EUserInterfaceActionType::RadioButton, FInputChord());
 	UI_COMMAND(MaterialQualityLevel_Medium, "Medium", "Sets material quality in the scene to medium.", EUserInterfaceActionType::RadioButton, FInputChord());
 	UI_COMMAND(MaterialQualityLevel_High, "High", "Sets material quality in the scene to high.", EUserInterfaceActionType::RadioButton, FInputChord());
+	UI_COMMAND(MaterialQualityLevel_Epic, "Epic", "Sets material quality in the scene to Epic.", EUserInterfaceActionType::RadioButton, FInputChord());
 
 	UI_COMMAND(ToggleFeatureLevelPreview, "Preview Mode Toggle", "Toggles the Preview Mode on or off for the currently selected Preview target", EUserInterfaceActionType::ToggleButton, FInputChord());
 
 	UI_COMMAND(PreviewPlatformOverride_SM5, "Shader Model 5", "DirectX 11, OpenGL 4.3+, PS4, XB1", EUserInterfaceActionType::Check, FInputChord());
-	UI_COMMAND(PreviewPlatformOverride_AndroidGLES31, "Android ES 3.1", "Mobile preview using Android ES3.1 quality settings.", EUserInterfaceActionType::Check, FInputChord());
-	UI_COMMAND(PreviewPlatformOverride_AndroidVulkanES31, "Android Vulkan", "Mobile preview using Android Vulkan quality settings.", EUserInterfaceActionType::Check, FInputChord());
-	UI_COMMAND(PreviewPlatformOverride_AndroidVulkanSM5, "Android Vulkan SM5", "Mobile preview using Android Vulkan SM5 quality settings.", EUserInterfaceActionType::Check, FInputChord());
-	UI_COMMAND(PreviewPlatformOverride_IOSMetalES31, "iOS", "Mobile preview using iOS material quality settings.", EUserInterfaceActionType::Check, FInputChord());
+
+	// Add preview platforms
+	for (auto It = PlatformInfo::GetPreviewPlatformMenuItems().CreateConstIterator(); It; ++It)
+	{
+		PreviewPlatformOverrides.Add(
+			It.Key(),
+			FUICommandInfoDecl(
+				this->AsShared(),
+				FName(*(FString(TEXT("PreviewPlatformOverrides"))+It.Key().ToString())),
+				It.Value().MenuText,
+				It.Value().MenuTooltip)
+			.UserInterfaceType(EUserInterfaceActionType::Check)
+			.DefaultChord(FInputChord())
+		);
+	}
 
 	UI_COMMAND( ConnectToSourceControl, "Connect to Source Control...", "Opens a dialog to connect to source control.", EUserInterfaceActionType::Button, FInputChord());
 	UI_COMMAND( ChangeSourceControlSettings, "Change Source Control Settings...", "Opens a dialog to change source control settings.", EUserInterfaceActionType::Button, FInputChord());

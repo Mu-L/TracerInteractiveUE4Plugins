@@ -31,12 +31,6 @@ bool FTargetPlatformBase::UsesBasePassVelocity() const
 	return CVar ? (CVar->GetInt() != 0) : false;
 }
 
-bool FTargetPlatformBase::UsesAnisotropicBRDF() const
-{
-	static IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.AnisotropicBRDF"));
-	return CVar && CVar->GetInt();
-}
-
 bool FTargetPlatformBase::UsesSelectiveBasePassOutputs() const
 {
 	static IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.SelectiveBasePassOutputs"));
@@ -54,9 +48,21 @@ bool FTargetPlatformBase::UsesRayTracing() const
 	return CVar ? (CVar->GetInt() != 0) : false;
 }
 
+bool FTargetPlatformBase::ForcesSimpleSkyDiffuse() const
+{
+	return false;
+}
+
 float FTargetPlatformBase::GetDownSampleMeshDistanceFieldDivider() const
 {
 	return 1.0f;
+}
+
+int32 FTargetPlatformBase::GetHeightFogModeForOpaque() const
+{
+	// Don't override the project setting by default
+	// Platforms wish to support override need to implement the logic in their own target platform classes
+	return 0;
 }
 
 static bool IsPluginEnabledForTarget(const IPlugin& Plugin, const FProjectDescriptor* Project, const FString& Platform, EBuildConfiguration Configuration, EBuildTargetType TargetType)

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "TakesUtils.h"
+#include "TakesCoreLog.h"
 
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -74,7 +75,7 @@ void ClampPlaybackRangeToEncompassAllSections(UMovieScene* InMovieScene, bool bU
 	const double OutputViewSize = PlayRange.GetValue().Size<FFrameNumber>() / TickResolution;
 	const double OutputChange = OutputViewSize * 0.1;
 
-	TRange<double> NewRange = MovieScene::ExpandRange(PlayRange.GetValue() / TickResolution, OutputChange);
+	TRange<double> NewRange = UE::MovieScene::ExpandRange(PlayRange.GetValue() / TickResolution, OutputChange);
 	FMovieSceneEditorData& EditorData = InMovieScene->GetEditorData();
 	EditorData.ViewStart = EditorData.WorkStart = NewRange.GetLowerBoundValue();
 	EditorData.ViewEnd = EditorData.WorkEnd = NewRange.GetUpperBoundValue();
@@ -91,8 +92,13 @@ void SaveAsset(UObject* InObject)
 	UPackage* const Package = InObject->GetOutermost();
 	FString const PackageName = Package->GetName();
 	FString const PackageFileName = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
+	
+	double StartTime = FPlatformTime::Seconds();
 
 	UPackage::SavePackage(Package, NULL, RF_Standalone, *PackageFileName, GError, nullptr, false, true, SAVE_NoError);
+
+	double ElapsedTime = FPlatformTime::Seconds() - StartTime;
+	UE_LOG(LogTakesCore, Log, TEXT("Saved %s in %0.2f seconds"), *PackageName, ElapsedTime);
 }
 
 void CreateCameraCutTrack(ULevelSequence* LevelSequence, const FGuid& RecordedCameraGuid, const FMovieSceneSequenceID& SequenceID, const TRange<FFrameNumber>& InRange)

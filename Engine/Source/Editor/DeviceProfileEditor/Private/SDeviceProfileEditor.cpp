@@ -365,8 +365,7 @@ TSharedPtr< SWidget > SDeviceProfileEditor::CreateMainDeviceProfilePanel()
 			[
 				SNew( STextBlock )
 				.AutoWrapText(true)
-				.Text(LOCTEXT("CreateDeviceProfile", "To create a device profile, edit your project's DefaultDeviceProfiles.ini file. "
-					"Make sure to add to or create a section called [DeviceProfileNameAndTypes]. See Engine/Config/BaseDeviceProfiles.ini for examples."))
+				.Text(LOCTEXT("CreateDeviceProfile", "To create a device profile, edit your project's DefaultDeviceProfiles.ini file. Make sure to add to or create a section called [DeviceProfileNameAndTypes]. See Engine/Config/BaseDeviceProfiles.ini for examples."))
 			]
 		];
 
@@ -483,7 +482,7 @@ void SDeviceProfileEditor::HandleDeviceProfilePinned( const TWeakObjectPtr< UDev
 		DeviceProfiles.Add( DeviceProfile.Get() );
 		RebuildPropertyTable();
 
-		TabManager->InvokeTab(DeviceProfileEditorTabName);
+		TabManager->TryInvokeTab(DeviceProfileEditorTabName);
 	}
 }
 
@@ -495,7 +494,7 @@ void SDeviceProfileEditor::HandleDeviceProfileUnpinned( const TWeakObjectPtr< UD
 		DeviceProfiles.Remove( DeviceProfile.Get() );
 		RebuildPropertyTable();
 
-		TabManager->InvokeTab(DeviceProfileEditorTabName);
+		TabManager->TryInvokeTab(DeviceProfileEditorTabName);
 	}
 }
 
@@ -514,7 +513,7 @@ void SDeviceProfileEditor::HandleDeviceProfileViewAlone( const TWeakObjectPtr< U
 			.SetGroup(DeviceManagerMenuGroup.ToSharedRef());
 	}
 
-	TabManager->InvokeTab(TabId);
+	TabManager->TryInvokeTab(TabId);
 }
 
 

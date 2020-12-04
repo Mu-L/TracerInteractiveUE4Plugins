@@ -23,7 +23,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogTextureFormatUncompressed, Log, All);
 	op(RGBA16F) \
 	op(XGXR8) \
 	op(RGBA8) \
-	op(POTERROR)
+	op(POTERROR) \
+	op(R16F)
 
 #define DECL_FORMAT_NAME(FormatName) static FName GTextureFormatName##FormatName = FName(TEXT(#FormatName));
 ENUM_SUPPORTED_FORMATS(DECL_FORMAT_NAME);
@@ -85,7 +86,7 @@ class FTextureFormatUncompressed : public ITextureFormat
 			OutCompressedImage.SizeY = Image.SizeY;
 			OutCompressedImage.SizeZ = (BuildSettings.bVolume || BuildSettings.bTextureArray) ? Image.NumSlices : 1;
 			OutCompressedImage.PixelFormat = PF_G8;
-			OutCompressedImage.RawData = Image.RawData;
+			OutCompressedImage.RawData = MoveTemp(Image.RawData);
 
 			return true;
 		}
@@ -98,7 +99,7 @@ class FTextureFormatUncompressed : public ITextureFormat
 			OutCompressedImage.SizeY = Image.SizeY;
 			OutCompressedImage.SizeZ = BuildSettings.bVolume ? Image.NumSlices : 1;
 			OutCompressedImage.PixelFormat = PF_G16;
-			OutCompressedImage.RawData = Image.RawData;
+			OutCompressedImage.RawData = MoveTemp(Image.RawData);
 
 			return true;
 		}
@@ -115,7 +116,7 @@ class FTextureFormatUncompressed : public ITextureFormat
 			uint64 NumTexels = (uint64)Image.SizeX * Image.SizeY * Image.NumSlices;
 			OutCompressedImage.RawData.Empty(NumTexels * 2);
 			OutCompressedImage.RawData.AddUninitialized(NumTexels * 2);
-			const FColor* FirstColor = Image.AsBGRA8();
+			const FColor* FirstColor = (&Image.AsBGRA8()[0]);
 			const FColor* LastColor = FirstColor + NumTexels;
 			int8* Dest = (int8*)OutCompressedImage.RawData.GetData();
 
@@ -136,7 +137,7 @@ class FTextureFormatUncompressed : public ITextureFormat
 			OutCompressedImage.SizeY = Image.SizeY;
 			OutCompressedImage.SizeZ = (BuildSettings.bVolume || BuildSettings.bTextureArray) ? Image.NumSlices : 1;
 			OutCompressedImage.PixelFormat = PF_B8G8R8A8;
-			OutCompressedImage.RawData = Image.RawData;
+			OutCompressedImage.RawData = MoveTemp(Image.RawData);
 
 			return true;
 		}
@@ -154,7 +155,7 @@ class FTextureFormatUncompressed : public ITextureFormat
 			uint64 NumTexels = (uint64)Image.SizeX * Image.SizeY * Image.NumSlices;
 			OutCompressedImage.RawData.Empty(NumTexels * 4);
 			OutCompressedImage.RawData.AddUninitialized(NumTexels * 4);
-			const FColor* FirstColor = Image.AsBGRA8();
+			const FColor* FirstColor = (&Image.AsBGRA8()[0]);
 			const FColor* LastColor = FirstColor + NumTexels;
 			int8* Dest = (int8*)OutCompressedImage.RawData.GetData();
 
@@ -182,7 +183,7 @@ class FTextureFormatUncompressed : public ITextureFormat
 			uint64 NumTexels = (uint64)Image.SizeX * Image.SizeY * Image.NumSlices;
 			OutCompressedImage.RawData.Empty(NumTexels * 4);
 			OutCompressedImage.RawData.AddUninitialized(NumTexels * 4);
-			const FColor* FirstColor = Image.AsBGRA8();
+			const FColor* FirstColor = (&Image.AsBGRA8()[0]);
 			const FColor* LastColor = FirstColor + NumTexels;
 			int8* Dest = (int8*)OutCompressedImage.RawData.GetData();
 
@@ -205,7 +206,20 @@ class FTextureFormatUncompressed : public ITextureFormat
 			OutCompressedImage.SizeY = Image.SizeY;
 			OutCompressedImage.SizeZ = (BuildSettings.bVolume || BuildSettings.bTextureArray) ? Image.NumSlices : 1;
 			OutCompressedImage.PixelFormat = PF_FloatRGBA;
-			OutCompressedImage.RawData = Image.RawData;
+			OutCompressedImage.RawData = MoveTemp(Image.RawData);
+
+			return true;
+		}
+		else if (BuildSettings.TextureFormatName == GTextureFormatNameR16F)
+		{
+			FImage Image;
+			InImage.CopyTo(Image, ERawImageFormat::R16F, EGammaSpace::Linear);
+
+			OutCompressedImage.SizeX = Image.SizeX;
+			OutCompressedImage.SizeY = Image.SizeY;
+			OutCompressedImage.SizeZ = BuildSettings.bVolume ? Image.NumSlices : 1;
+			OutCompressedImage.PixelFormat = PF_R16F;
+			OutCompressedImage.RawData = MoveTemp(Image.RawData);
 
 			return true;
 		}

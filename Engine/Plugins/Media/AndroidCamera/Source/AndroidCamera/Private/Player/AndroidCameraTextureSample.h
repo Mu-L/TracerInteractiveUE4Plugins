@@ -142,7 +142,7 @@ public:
 			return Texture;
 		}
 
-		const uint32 CreateFlags = TexCreate_Dynamic | TexCreate_SRGB;
+		const ETextureCreateFlags CreateFlags = TexCreate_Dynamic | TexCreate_SRGB;
 
 		TRefCountPtr<FRHITexture2D> DummyTexture2DRHI;
 		FRHIResourceCreateInfo CreateInfo;
@@ -218,9 +218,9 @@ public:
 
 #endif //WITH_ENGINE
 
-	virtual FTimespan GetTime() const override
+	virtual FMediaTimeStamp GetTime() const override
 	{
-		return Time;
+		return FMediaTimeStamp(Time);
 	}
 
 	virtual bool IsCacheable() const override

@@ -96,7 +96,7 @@ struct TMathUtilConstants<int32>
 {
 	GEOMETRICOBJECTS_API static constexpr int32 Epsilon = 0;
 	GEOMETRICOBJECTS_API static constexpr int32 ZeroTolerance = 0;
-	GEOMETRICOBJECTS_API static constexpr int32 MaxReal = 2147483647;
+	GEOMETRICOBJECTS_API static constexpr int32 MaxReal = ((int32)0x7fffffff);
 	GEOMETRICOBJECTS_API static constexpr int32 Pi = 3;
 	GEOMETRICOBJECTS_API static constexpr int32 FourPi = 4 * Pi;
 	GEOMETRICOBJECTS_API static constexpr int32 TwoPi = 2 * Pi;
@@ -109,6 +109,28 @@ struct TMathUtilConstants<int32>
 	GEOMETRICOBJECTS_API static constexpr int32 InvSqrt2 = 1;
 	GEOMETRICOBJECTS_API static constexpr int32 Sqrt3 = 2;
 	GEOMETRICOBJECTS_API static constexpr int32 InvSqrt3 = 1;
+};
+
+
+// we use TMathUtil<int> so we need to define these nonsense constants
+template<>
+struct TMathUtilConstants<int64>
+{
+	GEOMETRICOBJECTS_API static constexpr int64 Epsilon = 0;
+	GEOMETRICOBJECTS_API static constexpr int64 ZeroTolerance = 0;
+	GEOMETRICOBJECTS_API static constexpr int64 MaxReal = ((int64)0x7fffffffffffffff);
+	GEOMETRICOBJECTS_API static constexpr int64 Pi = 3;
+	GEOMETRICOBJECTS_API static constexpr int64 FourPi = 4 * Pi;
+	GEOMETRICOBJECTS_API static constexpr int64 TwoPi = 2 * Pi;
+	GEOMETRICOBJECTS_API static constexpr int64 HalfPi = 1;
+	GEOMETRICOBJECTS_API static constexpr int64 InvPi = 1;
+	GEOMETRICOBJECTS_API static constexpr int64 InvTwoPi = 1;
+	GEOMETRICOBJECTS_API static constexpr int64 DegToRad = 1;
+	GEOMETRICOBJECTS_API static constexpr int64 RadToDeg = 1;
+	GEOMETRICOBJECTS_API static constexpr int64 Sqrt2 = 1;
+	GEOMETRICOBJECTS_API static constexpr int64 InvSqrt2 = 1;
+	GEOMETRICOBJECTS_API static constexpr int64 Sqrt3 = 2;
+	GEOMETRICOBJECTS_API static constexpr int64 InvSqrt3 = 1;
 };
 
 
@@ -125,8 +147,12 @@ public:
 	static inline RealType SignNonZero(const RealType Value);
 	static inline RealType Max(const RealType A, const RealType B);
 	static inline RealType Max3(const RealType A, const RealType B, const RealType C);
+	static inline int32 Max3Index(const RealType A, const RealType B, const RealType C);
 	static inline RealType Min(const RealType A, const RealType B);
 	static inline RealType Min3(const RealType A, const RealType B, const RealType C);
+	static inline int32 Min3Index(const RealType A, const RealType B, const RealType C);
+	/** compute min and max of a,b,c with max 3 comparisons (sometimes 2) */
+	static inline void MinMax(RealType A, RealType B, RealType C, RealType& MinOut, RealType& MaxOut);
 	static inline RealType Sqrt(const RealType Value);
 	static inline RealType Atan2(const RealType ValueY, const RealType ValueX);
 	static inline RealType Sin(const RealType Value);
@@ -134,7 +160,10 @@ public:
 	static inline RealType ACos(const RealType Value);
 	static inline RealType Floor(const RealType Value);
 	static inline RealType Ceil(const RealType Value);
+	static inline RealType Round(const RealType Value);
 	static inline RealType Pow(const RealType Value, const RealType Power);
+	static inline RealType Exp(const RealType Power);
+	static inline RealType Log(const RealType Value);
 	static inline RealType Lerp(const RealType A, const RealType B, RealType Alpha);
 
 
@@ -203,6 +232,19 @@ RealType TMathUtil<RealType>::Max3(const RealType A, const RealType B, const Rea
 }
 
 template<typename RealType>
+int32 TMathUtil<RealType>::Max3Index(const RealType A, const RealType B, const RealType C)
+{
+	if (A >= B) 
+	{
+		return (A >= C) ? 0 : 2;
+	}
+	else
+	{
+		return (B >= C) ? 1 : 2;
+	}
+}
+
+template<typename RealType>
 RealType TMathUtil<RealType>::Min(const RealType A, const RealType B)
 {
 	return (A <= B) ? A : B;
@@ -212,6 +254,41 @@ template<typename RealType>
 RealType TMathUtil<RealType>::Min3(const RealType A, const RealType B, const RealType C)
 {
 	return Min(Min(A, B), C);
+}
+
+template<typename RealType>
+int32 TMathUtil<RealType>::Min3Index(const RealType A, const RealType B, const RealType C)
+{
+	if (A <= B) 
+	{
+		return (A <= C) ? 0 : 2;
+	}
+	else 
+	{
+		return (B <= C) ? 1 : 2;
+	}
+}
+
+// compute min and max of a,b,c with max 3 comparisons (sometimes 2)
+template<typename RealType>
+void TMathUtil<RealType>::MinMax(RealType A, RealType B, RealType C, RealType& MinOut, RealType& MaxOut)
+{
+	if (A < B) {
+		if (A < C) {
+			MinOut = A; MaxOut = TMathUtil<RealType>::Max(B, C);
+		}
+		else {
+			MinOut = C; MaxOut = B;
+		}
+	}
+	else {
+		if (A > C) {
+			MaxOut = A; MinOut = TMathUtil<RealType>::Min(B, C);
+		}
+		else {
+			MinOut = B; MaxOut = C;
+		}
+	}
 }
 
 template<typename RealType>
@@ -257,10 +334,30 @@ RealType TMathUtil<RealType>::Ceil(const RealType Value)
 }
 
 template<typename RealType>
+RealType TMathUtil<RealType>::Round(const RealType Value)
+{
+	return round(Value);
+}
+
+template<typename RealType>
 RealType TMathUtil<RealType>::Pow(const RealType Value, const RealType Power)
 {
 	return pow(Value, Power);
 }
+
+template<typename RealType>
+RealType TMathUtil<RealType>::Exp(const RealType Power)
+{
+	return exp(Power);
+}
+
+template<typename RealType>
+RealType TMathUtil<RealType>::Log(const RealType Power)
+{
+	return log(Power);
+}
+
+
 
 template<typename RealType>
 RealType TMathUtil<RealType>::Lerp(const RealType A, const RealType B, RealType Alpha)

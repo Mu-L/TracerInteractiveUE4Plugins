@@ -2,12 +2,15 @@
 
 #pragma once
 
+#include "CoreMinimal.h"
 #include "Input/Devices/IDisplayClusterInputDevice.h"
 #include "Input/Devices/DisplayClusterInputDeviceTraits.h"
 
-#include "DisplayClusterLog.h"
+#include "DisplayClusterConfigurationTypes.h"
 
-#include "CoreMinimal.h"
+#include "Misc/DisplayClusterHelpers.h"
+#include "Misc/DisplayClusterLog.h"
+#include "Misc/DisplayClusterStrings.h"
 
 
 /**
@@ -21,31 +24,34 @@ public:
 	typedef typename display_cluster_input_device_traits<DevTypeID>::dev_channel_data_type   TChannelData;
 
 public:
-	FDisplayClusterInputDeviceBase(const FDisplayClusterConfigInput& config) :
-		ConfigData(config)
-	{ }
+	FDisplayClusterInputDeviceBase(const FString& InDeviceId, const UDisplayClusterConfigurationInputDevice* CfgDevice)
+		: DeviceId(InDeviceId)
+	{
+		Address = CfgDevice->Address;
+		ChannelRemapping = CfgDevice->ChannelRemapping;
+	}
 
 	virtual ~FDisplayClusterInputDeviceBase()
 	{ }
 
 public:
-	virtual bool GetChannelData(const uint8 channel, TChannelData& data) const
+	virtual bool GetChannelData(const int32 Channel, TChannelData& Data) const
 	{
-		uint8 channelToGet = channel;
-		if (ConfigData.ChMap.Contains(channel))
+		int32 ChannelToGet = Channel;
+		if (const int32* NewChannel = ChannelRemapping.Find(Channel))
 		{
-			channelToGet = (uint8)ConfigData.ChMap[channel];
-			UE_LOG(LogDisplayClusterInputVRPN, Verbose, TEXT("DevType %d, channel %d - remapped to channel %d"), DevTypeID, channel, channelToGet);
+			ChannelToGet = *NewChannel;
+			UE_LOG(LogDisplayClusterInputVRPN, Verbose, TEXT("DevType %d, channel %d - remapped to channel %d"), DevTypeID, Channel, ChannelToGet);
 		}
 
-		if (!DeviceData.Contains(static_cast<int32>(channelToGet)))
+		const TChannelData* OutData = DeviceData.Find(ChannelToGet);
+		if (!OutData)
 		{
-			UE_LOG(LogDisplayClusterInputVRPN, Verbose, TEXT("%s - channel %d data is not available yet"), *GetId(), channelToGet);
+			UE_LOG(LogDisplayClusterInputVRPN, Verbose, TEXT("%s - channel %d data is not available yet"), *GetId(), ChannelToGet);
 			return false;
 		}
 
-		data = DeviceData[static_cast<int32>(channelToGet)];
-
+		Data = *OutData;
 		return true;
 	}
 
@@ -54,16 +60,12 @@ public:
 	// IDisplayClusterInputDevice
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	virtual FString GetId() const override
-	{ return ConfigData.Id; }
-
-	virtual FString GetType() const override
-	{ return ConfigData.Type; }
+	{ return DeviceId; }
 
 	virtual EDisplayClusterInputDeviceType GetTypeId() const override
-	{ return static_cast<EDisplayClusterInputDeviceType>(DevTypeID); }
-
-	virtual FDisplayClusterConfigInput GetConfig() const override
-	{ return ConfigData; }
+	{
+		return static_cast<EDisplayClusterInputDeviceType>(DevTypeID);
+	}
 
 	virtual void PreUpdate() override
 	{ }
@@ -75,11 +77,17 @@ public:
 	{ }
 
 	virtual FString ToString() const override
-	{ return FString::Printf(TEXT("DisplayCluster input device: id=%s, type=%s"), *GetId(), *GetType()); }
+	{
+		return FString::Printf(TEXT("DisplayCluster input device: id=%s, type=%s"), *GetId(), *GetType());
+	}
 
 protected:
-	// Original config data
-	const FDisplayClusterConfigInput ConfigData;
+	// Device ID
+	FString DeviceId;
+	// Address
+	FString Address;
+	// Channel remapping
+	TMap<int32, int32> ChannelRemapping;
 	// Device data
 	TMap<int32, TChannelData> DeviceData;
 };

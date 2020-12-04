@@ -19,6 +19,8 @@
 #include "Physics/ImmediatePhysics/ImmediatePhysicsPhysX/ImmediatePhysicsKinematicTarget_PhysX.h"
 #include "Physics/ImmediatePhysics/ImmediatePhysicsPhysX/ImmediatePhysicsD6JointData_PhysX.h"
 
+#include "Chaos/ChaosEngineInterface.h"	//temp to help get code out of engine
+
 class UBodySetup;
 class UPhysicsConstraintTemplate;
 struct FBodyInstance;
@@ -126,8 +128,6 @@ namespace ImmediatePhysics_PhysX
 		/* Set solver iteration counts per step */
 		void SetPositionIterationCount(int32 InIterationCount);
 		void SetVelocityIterationCount(int32 InIterationCount);
-
-		void SetSimulationSpaceTransform(const FTransform& Transform) { }
 
 	private:
 		friend FActorHandle;

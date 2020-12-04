@@ -171,7 +171,7 @@ int32 UDiffAssetRegistriesCommandlet::Main(const FString& FullCommandLine)
 	}
 
 	auto FindAssetRegistryPath = [&](const FString& PathVal, FString& OutPath) {
-			for (const FString SearchPath : AssetRegistrySearchPath)
+			for (const FString& SearchPath : AssetRegistrySearchPath)
 			{
 				FString FinalSearchPath = SearchPath;
 				FinalSearchPath.ReplaceInline(TEXT("[buildversion]"), *PathVal);
@@ -462,7 +462,7 @@ void UDiffAssetRegistriesCommandlet::ConsistencyCheck(const FString& OldPath, co
 	{
 		FName Package = Recurse[RecurseIndex];
 		TArray<FAssetIdentifier> Referencers;
-		NewState.GetReferencers(Package, Referencers, EAssetRegistryDependencyType::Hard);
+		NewState.GetReferencers(Package, Referencers, UE::AssetRegistry::EDependencyCategory::Package, UE::AssetRegistry::EDependencyQuery::Hard);
 		
 		for (const FAssetIdentifier& Referencer : Referencers)
 		{
@@ -542,7 +542,7 @@ FName UDiffAssetRegistriesCommandlet::GetClassName(FAssetRegistryState& InRegist
 
 		if (NewName == NAME_None)
 		{
-			UE_LOG(LogDiffAssets, Warning, TEXT("Unable to find class type of asset %s"), *InAssetPath.ToString());
+			UE_LOG(LogDiffAssets, Log, TEXT("Unable to find class type of asset %s"), *InAssetPath.ToString());
 		}
 		AssetPathToClassName.Add(InAssetPath) = NewName;
 	}
@@ -682,7 +682,7 @@ void UDiffAssetRegistriesCommandlet::SummarizeDeterminism()
 	TArray<FName> AssetPaths;
 	ChangeInfoByAsset.GetKeys(AssetPaths);
 
-	for (const FName AssetPath : AssetPaths)
+	for (const FName& AssetPath : AssetPaths)
 	{
 		const FChangeInfo& ChangeInfo = ChangeInfoByAsset[AssetPath];
 
@@ -811,7 +811,7 @@ void UDiffAssetRegistriesCommandlet::LogChangedFiles(FArchive *CSVFile, FString 
 		UE_LOG(LogDiffAssets, Display, TEXT("Saving CSV results to %s"), *CSVFilename);
 	}
 
-	for (const FName AssetPath : AssetPaths)
+	for (const FName& AssetPath : AssetPaths)
 	{
 		const FChangeInfo& ChangeInfo = ChangeInfoByAsset[AssetPath];
 
@@ -1194,7 +1194,7 @@ void UDiffAssetRegistriesCommandlet::DiffAssetRegistries(const FString& OldPath,
 		{
 			FName Package = Recurse[RecurseIndex];
 			TArray<FAssetIdentifier> Referencers;
-			NewState.GetReferencers(Package, Referencers, EAssetRegistryDependencyType::Hard);
+			NewState.GetReferencers(Package, Referencers, UE::AssetRegistry::EDependencyCategory::Package, UE::AssetRegistry::EDependencyQuery::Hard);
 
 			for (const FAssetIdentifier& Referencer : Referencers)
 			{
@@ -1322,7 +1322,7 @@ void UDiffAssetRegistriesCommandlet::DiffAssetRegistries(const FString& OldPath,
 			// don't bother touching anything if this asset or its dependencies didn't change
 			if (NewFlags)
 			{
-				NewState.GetReferencers(Package, Referencers, EAssetRegistryDependencyType::Hard);
+				NewState.GetReferencers(Package, Referencers, UE::AssetRegistry::EDependencyCategory::Package, UE::AssetRegistry::EDependencyQuery::Hard);
 
 				for (const FAssetIdentifier& Referencer : Referencers)
 				{

@@ -13,7 +13,6 @@
 #include "Sound/SoundNode.h"
 #include "Sound/SoundNodeAssetReferencer.h"
 #include "Sound/SoundNodeMixer.h"
-#include "Sound/SoundWave.h"
 #include "Sound/SoundNodeAttenuation.h"
 #include "Sound/SoundNodeModulator.h"
 #include "Sound/SoundNodeQualityLevel.h"
@@ -26,12 +25,16 @@
 #include "DSP/Dsp.h"
 #if WITH_EDITOR
 #include "Kismet2/BlueprintEditorUtils.h"
-#include "Sound/AudioSettings.h"
 #include "SoundCueGraph/SoundCueGraphNode.h"
 #include "SoundCueGraph/SoundCueGraph.h"
 #include "SoundCueGraph/SoundCueGraphNode_Root.h"
 #include "SoundCueGraph/SoundCueGraphSchema.h"
+#include "Audio.h"
 #endif // WITH_EDITOR
+
+#include "Interfaces/ITargetPlatform.h"
+#include "AudioCompressionSettings.h"
+#include "Sound/AudioSettings.h"
 
 /*-----------------------------------------------------------------------------
 	USoundCue implementation.
@@ -49,7 +52,7 @@ USoundCue::USoundCue(const FObjectInitializer& ObjectInitializer)
 	VolumeMultiplier = 0.75f;
 	PitchMultiplier = 1.0f;
 	SubtitlePriority = DEFAULT_SUBTITLE_PRIORITY;
-
+	CookedQualityIndex = INDEX_NONE;
 	bIsRetainingAudio = false;
 }
 
@@ -81,7 +84,17 @@ void USoundCue::CacheAggregateValues()
 	{
 		FirstNode->ConditionalPostLoad();
 
-		Duration = FirstNode->GetDuration();
+		if (GIsEditor)
+		{
+			const float NewDuration = FirstNode->GetDuration();
+#if WITH_EDITOR
+			if (!FMath::IsNearlyEqual(NewDuration, Duration) && FMath::IsNearlyZero(Duration))
+			{
+				UE_LOG(LogAudio, Display, TEXT("Cached duration for Sound Cue %s was zero and has changed. Consider manually Re-saving the asset"), *GetFullName());
+			}
+#endif // #if WITH_EDITOR
+			Duration = NewDuration;
+		}
 
 		MaxDistance = FindMaxDistanceInternal();
 		bHasDelayNode = FirstNode->HasDelayNode();
@@ -117,6 +130,14 @@ void USoundCue::ReleaseRetainedAudio()
 	bIsRetainingAudio = false;
 }
 
+void USoundCue::CacheLoadingBehavior(ESoundWaveLoadingBehavior InBehavior)
+{
+	if (FirstNode)
+	{
+		FirstNode->OverrideLoadingBehaviorOnChildWaves(true, InBehavior);
+	}
+}
+
 void USoundCue::Serialize(FStructuredArchive::FRecord Record)
 {
 	FArchive& UnderlyingArchive = Record.GetUnderlyingArchive();
@@ -128,7 +149,23 @@ void USoundCue::Serialize(FStructuredArchive::FRecord Record)
 		CacheAggregateValues();
 	}
 
-	Super::Serialize(Record);
+#if WITH_EDITOR
+	// If we are cooking, record our cooked quality before serialize and then undo it.
+	if (UnderlyingArchive.IsCooking() && UnderlyingArchive.IsSaving() && UnderlyingArchive.CookingTarget())
+	{		
+		if (const FPlatformAudioCookOverrides* Overrides = FPlatformCompressionUtilities::GetCookOverrides(*UnderlyingArchive.CookingTarget()->IniPlatformName()))
+		{
+			FScopeLock Lock(&EditorOnlyCs);
+			CookedQualityIndex = Overrides->SoundCueCookQualityIndex;
+			Super::Serialize(Record);
+			CookedQualityIndex = INDEX_NONE;
+		}
+	}
+	else
+#endif //WITH_EDITOR
+	{
+		Super::Serialize(Record);
+	}
 
 	if (UnderlyingArchive.UE4Ver() >= VER_UE4_COOKED_ASSETS_IN_EDITOR_SUPPORT)
 	{
@@ -173,6 +210,17 @@ void USoundCue::PostLoad()
 	}
 	else
 #endif // WITH_EDITOR
+
+	// Warn if the Quality index is set to something that we can't support.
+	UE_CLOG(USoundCue::GetCachedQualityLevel() != CookedQualityIndex && CookedQualityIndex != INDEX_NONE, LogAudio, Warning,
+		TEXT("'%s' is ingoring Quality Setting '%s'(%d) as it was cooked with '%s'(%d)"),
+		*GetFullNameSafe(this),
+		*GetDefault<UAudioSettings>()->FindQualityNameByIndex(USoundCue::GetCachedQualityLevel()),
+		USoundCue::GetCachedQualityLevel(),
+		*GetDefault<UAudioSettings>()->FindQualityNameByIndex(CookedQualityIndex),
+		CookedQualityIndex
+	);
+
 	if (GEngine && *GEngine->GameUserSettingsClass)
 	{
 		EvaluateNodes(false);
@@ -195,14 +243,25 @@ void USoundCue::PostLoad()
 		CurrentSoundClass = CurrentSoundClass->ParentClass;
 	}
 
-	if (SoundClassLoadingBehavior == ESoundWaveLoadingBehavior::RetainOnLoad)
+	// RETAIN behavior gets demoted to PRIME in editor because in editor so many sound waves are technically "loaded" at a time.
+	// If the Cache were not willing to evict them, that would cause issues.
+	if (!GIsEditor && SoundClassLoadingBehavior == ESoundWaveLoadingBehavior::RetainOnLoad)
 	{
 		RetainSoundCue();
 	}
-	else if (bPrimeOnLoad || SoundClassLoadingBehavior == ESoundWaveLoadingBehavior::PrimeOnLoad)
+	else if (bPrimeOnLoad
+		|| (SoundClassLoadingBehavior == ESoundWaveLoadingBehavior::PrimeOnLoad)
+		|| (GIsEditor && (SoundClassLoadingBehavior == ESoundWaveLoadingBehavior::RetainOnLoad))
+		)
 	{
+		// In editor, we call this for RetainOnLoad behavior as well
 		PrimeSoundCue();
 	}
+	else if (SoundClassLoadingBehavior == ESoundWaveLoadingBehavior::LoadOnDemand)
+	{
+		// update the soundWaves with the loading behavior they inherited
+		CacheLoadingBehavior(SoundClassLoadingBehavior);
+ 	}
 }
 
 bool USoundCue::CanBeClusterRoot() const
@@ -225,15 +284,8 @@ void USoundCue::OnPostEngineInit()
 
 void USoundCue::EvaluateNodes(bool bAddToRoot)
 {
-	if (CachedQualityLevel == -1)
-	{
-		// Use per-platform quality index override if one exists, otherwise use the quality level from the game settings.
-		CachedQualityLevel = FPlatformCompressionUtilities::GetQualityIndexOverrideForCurrentPlatform();
-		if (CachedQualityLevel < 0)
-		{
-			CachedQualityLevel = GEngine->GetGameUserSettings()->GetAudioQualityLevel();
-		}
-	}
+	CacheQualityLevel();
+
 
 	TFunction<void(USoundNode*)> EvaluateNodes_Internal = [&](USoundNode* SoundNode)
 	{
@@ -261,7 +313,27 @@ void USoundCue::EvaluateNodes(bool bAddToRoot)
 		}
 	};
 
-	EvaluateNodes_Internal(FirstNode);
+	// Only Evaluate nodes if we haven't been cooked, as cooked builds will hard-ref all SoundAssetReferences.	
+	UE_CLOG(CookedQualityIndex == INDEX_NONE, LogAudio, Verbose, TEXT("'%s', DOING EvaluateNodes as we are *NOT* cooked"), *GetName());
+	UE_CLOG(CookedQualityIndex != INDEX_NONE, LogAudio, Verbose, TEXT("'%s', SKIPPING EvaluateNodes as we *ARE* cooked"), *GetName());
+
+	if (CookedQualityIndex == INDEX_NONE)
+	{		
+		EvaluateNodes_Internal(FirstNode);
+	}
+}
+
+void USoundCue::CacheQualityLevel()
+{
+	if (CachedQualityLevel == -1)
+	{
+		// Use per-platform quality index override if one exists, otherwise use the quality level from the game settings.
+		CachedQualityLevel = FPlatformCompressionUtilities::GetQualityIndexOverrideForCurrentPlatform();
+		if (CachedQualityLevel < 0)
+		{
+			CachedQualityLevel = GEngine->GetGameUserSettings()->GetAudioQualityLevel();
+		}
+	}
 }
 
 float USoundCue::FindMaxDistanceInternal() const
@@ -492,10 +564,7 @@ float USoundCue::GetDuration()
 	// Always recalc the duration when in the editor as it could change
 	if (GIsEditor || (Duration < SMALL_NUMBER) || HasDelayNode())
 	{
-		if (FirstNode)
-		{
-			Duration = FirstNode->GetDuration();
-		}
+		CacheAggregateValues();
 	}
 
 	return Duration;

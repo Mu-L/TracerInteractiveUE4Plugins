@@ -90,12 +90,12 @@ public class ResonanceAudio : ModuleRules
         }
 
         // Always use the official version of IntelTBB
-        string IntelTBBLibs = Target.UEThirdPartySourceDirectory + "IntelTBB/IntelTBB-2019u8/lib/";
+        string IntelTBBLibs = Target.UEThirdPartySourceDirectory + "Intel/TBB/IntelTBB-2019u8/lib/";
 
 		//Embree support:
         if (Target.Platform == UnrealTargetPlatform.Win64)
         {
-            string SDKDir = Target.UEThirdPartySourceDirectory + "IntelEmbree/Embree2140/Win64/";
+            string SDKDir = Target.UEThirdPartySourceDirectory + "Intel/Embree/Embree2140/Win64/";
 
             PublicIncludePaths.Add(SDKDir + "include");
             PublicAdditionalLibraries.Add(SDKDir + "lib/embree.2.14.0.lib");
@@ -108,7 +108,7 @@ public class ResonanceAudio : ModuleRules
         else if (Target.Platform == UnrealTargetPlatform.Mac)
         {
 			// In platforms that don't support Embree, we implement no-op versions of the functions.
-			string SDKDir = Target.UEThirdPartySourceDirectory + "IntelEmbree/Embree2140/";
+			string SDKDir = Target.UEThirdPartySourceDirectory + "Intel/Embree/Embree2140/";
 			PublicIncludePaths.Add(SDKDir + "include");
 			PrivateDefinitions.Add("USE_EMBRE_FOR_RESONANCE=0");
 			PrivateDefinitions.Add("EMBREE_STATIC_LIB=1");
@@ -116,7 +116,7 @@ public class ResonanceAudio : ModuleRules
 		else
         {
             // In platforms that don't support Embree, we implement no-op versions of the functions.
-            string SDKDir = Target.UEThirdPartySourceDirectory + "IntelEmbree/Embree2140/";
+            string SDKDir = Target.UEThirdPartySourceDirectory + "Intel/Embree/Embree2140/";
             PublicIncludePaths.Add(SDKDir + "include");
 			PrivateDefinitions.Add("USE_EMBRE_FOR_RESONANCE=0");
 			PrivateDefinitions.Add("USE_EMBREE=0");

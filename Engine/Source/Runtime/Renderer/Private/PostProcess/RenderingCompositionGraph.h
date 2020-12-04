@@ -222,9 +222,10 @@ struct FRenderingCompositePassContext
 	FRenderingCompositionGraph Graph;
 	//
 	FRHICommandListImmediate& RHICmdList;
+	//
+	FUniformBufferRHIRef SceneTexturesUniformBuffer;
 
 private:
-
 	// cached state to map between ScreenPos and pixels
 	FIntRect ViewPortRect;
 	//
@@ -417,7 +418,7 @@ struct FRenderingCompositePass
 		return bIsComputePass && bPreferAsyncCompute && GSupportsEfficientAsyncCompute;
 #endif
 	};
-	virtual FRHIComputeFence* GetComputePassEndFence() const { return nullptr; }
+	virtual const FRHITransition* GetComputePassEndFence() const { return nullptr; }
 
 protected:
 	/** to avoid wasteful recomputation and to support graph/DAG traversal, if ComputeOutputDesc() was called */
@@ -427,6 +428,9 @@ protected:
 
 	bool bIsComputePass;
 	bool bPreferAsyncCompute;
+
+	/** Whether the pass requires that global uniform buffers be bound. */
+	bool bBindGlobalUniformBuffers = true;
 
 	friend class FRenderingCompositionGraph;
 };
@@ -463,7 +467,7 @@ struct FRenderingCompositeOutputRef
 		return IsValid() && Source->IsAsyncComputePass();
 	}
 
-	FRHIComputeFence* GetComputePassEndFence() const
+	const FRHITransition* GetComputePassEndFence() const
 	{
 		return IsValid() ? Source->GetComputePassEndFence() : nullptr;
 	}
@@ -713,10 +717,10 @@ protected:
 		{
 			if (IsAsyncComputePass() != Input.IsAsyncComputePass())
 			{
-				FRHIComputeFence* InputComputePassEndFence = Input.GetComputePassEndFence();
+				const FRHITransition* InputComputePassEndFence = Input.GetComputePassEndFence();
 				if (InputComputePassEndFence)
 				{
-					RHICmdList.WaitComputeFence(InputComputePassEndFence);
+					RHICmdList.EndTransition(InputComputePassEndFence);
 				}
 			}
 		}
@@ -750,7 +754,9 @@ class TRCPassForRDG : public TRenderingCompositePassBase<InputCount, OutputCount
 public:
 	TRCPassForRDG(TFunction<void (FRenderingCompositePass*, FRenderingCompositePassContext&)>&& InProcessLambda)
 		: ProcessLambda(InProcessLambda)
-	{ }
+	{
+		FRenderingCompositePass::bBindGlobalUniformBuffers = false;
+	}
 
 	// interface FRenderingCompositePass ---------
 	virtual void Process(FRenderingCompositePassContext& Context) override

@@ -59,8 +59,6 @@ FArchive& operator<<(FArchive& Ar, FSoftSkinVertex& V)
 
 	Ar << V.Color;
 
-	Ar.UsingCustomVersion(FAnimObjectVersion::GUID);
-
 	if (Ar.IsLoading())
 	{
 		FMemory::Memzero(V.InfluenceBones);
@@ -303,6 +301,10 @@ FArchive& operator<<(FArchive& Ar, FSkelMeshSection& S)
 	Ar.UsingCustomVersion(FEditorObjectVersion::GUID);
 	Ar.UsingCustomVersion(FReleaseObjectVersion::GUID);
 	Ar.UsingCustomVersion(FRenderingObjectVersion::GUID);
+	Ar.UsingCustomVersion(FAnimObjectVersion::GUID); // Also used by FSoftSkinVertex serializer
+	Ar.UsingCustomVersion(FSkeletalMeshCustomVersion::GUID);
+	Ar.UsingCustomVersion(FRecomputeTangentCustomVersion::GUID);
+	Ar.UsingCustomVersion(FOverlappingVerticesCustomVersion::GUID);
 
 	// When data is cooked for server platform some of the
 	// variables are not serialized so that they're always
@@ -311,7 +313,6 @@ FArchive& operator<<(FArchive& Ar, FSkelMeshSection& S)
 
 	Ar << S.MaterialIndex;
 
-	Ar.UsingCustomVersion(FSkeletalMeshCustomVersion::GUID);
 	if (Ar.CustomVer(FSkeletalMeshCustomVersion::GUID) < FSkeletalMeshCustomVersion::CombineSectionWithChunk)
 	{
 		uint16 DummyChunkIndex;
@@ -352,13 +353,26 @@ FArchive& operator<<(FArchive& Ar, FSkelMeshSection& S)
 
 	if (Ar.UE4Ver() >= VER_UE4_APEX_CLOTH_LOD)
 	{
-		Ar << S.bEnableClothLOD_DEPRECATED;
+		if (Ar.CustomVer(FSkeletalMeshCustomVersion::GUID) < FSkeletalMeshCustomVersion::RemoveEnableClothLOD)
+		{
+			uint8 DummyEnableClothLOD;
+			Ar << DummyEnableClothLOD;
+		}
 	}
 
-	Ar.UsingCustomVersion(FRecomputeTangentCustomVersion::GUID);
 	if (Ar.CustomVer(FRecomputeTangentCustomVersion::GUID) >= FRecomputeTangentCustomVersion::RuntimeRecomputeTangent)
 	{
 		Ar << S.bRecomputeTangent;
+	}
+
+	if (Ar.CustomVer(FRecomputeTangentCustomVersion::GUID) >= FRecomputeTangentCustomVersion::RecomputeTangentVertexColorMask)
+	{
+		Ar << S.RecomputeTangentsVertexMaskChannel;
+	}
+	else
+	{
+		// Our default is to use the green vertex color channel 
+		S.RecomputeTangentsVertexMaskChannel = ESkinVertexColorChannel::Green;
 	}
 
 	if (Ar.CustomVer(FEditorObjectVersion::GUID) >= FEditorObjectVersion::RefactorMeshEditorMaterials)
@@ -379,7 +393,7 @@ FArchive& operator<<(FArchive& Ar, FSkelMeshSection& S)
 			Ar << S.BaseVertexIndex;
 		}
 
-		if (!StripFlags.IsEditorDataStripped() && !(Ar.IsFilterEditorOnly() && Ar.IsCountingMemory()))
+		if (!StripFlags.IsEditorDataStripped() && !(Ar.IsFilterEditorOnly() && Ar.IsCountingMemory()) && !Ar.IsObjectReferenceCollector())
 		{
 			// For backwards compat, read rigid vert array into array
 			TArray<FLegacyRigidSkinVertex> LegacyRigidVertices;
@@ -417,7 +431,6 @@ FArchive& operator<<(FArchive& Ar, FSkelMeshSection& S)
 			}
 		}
 
-		Ar.UsingCustomVersion(FAnimObjectVersion::GUID);
 		if (Ar.IsLoading() && Ar.CustomVer(FAnimObjectVersion::GUID) < FAnimObjectVersion::IncreaseBoneIndexLimitPerChunk)
 		{
 			// Previous versions only supported 8-bit bone indices and bUse16BitBoneIndex wasn't serialized 
@@ -481,8 +494,6 @@ FArchive& operator<<(FArchive& Ar, FSkelMeshSection& S)
 			Ar << S.ClothingData;
 		}
 
-		Ar.UsingCustomVersion(FOverlappingVerticesCustomVersion::GUID);
-		
 		if (Ar.CustomVer(FOverlappingVerticesCustomVersion::GUID) >= FOverlappingVerticesCustomVersion::DetectOVerlappingVertices)
 		{
 			Ar << S.OverlappingVertices;
@@ -521,6 +532,8 @@ FArchive& operator<<(FArchive& Ar, FSkelMeshSection& S)
 // Serialization.
 FArchive& operator<<(FArchive& Ar, FSkelMeshSourceSectionUserData& S)
 {
+	Ar.UsingCustomVersion(FRecomputeTangentCustomVersion::GUID); 
+
 	FStripDataFlags StripFlags(Ar);
 	// When data is cooked we do not serialize anything
 	//This is for editor only editing
@@ -530,6 +543,16 @@ FArchive& operator<<(FArchive& Ar, FSkelMeshSourceSectionUserData& S)
 	}
 
 	Ar << S.bRecomputeTangent;
+	if (Ar.CustomVer(FRecomputeTangentCustomVersion::GUID) >= FRecomputeTangentCustomVersion::RecomputeTangentVertexColorMask)
+	{
+		Ar << S.RecomputeTangentsVertexMaskChannel;
+	}
+ 	else
+	{
+		// Our default is to use the green vertex color channel 
+		S.RecomputeTangentsVertexMaskChannel = ESkinVertexColorChannel::Green;
+	}
+
 	Ar << S.bCastShadow;
 	Ar << S.bDisabled;
 	Ar << S.GenerateUpToLodIndex;
@@ -1043,6 +1066,7 @@ void FSkeletalMeshLODModel::SyncronizeUserSectionsDataArray(bool bResetNonUsedSe
 		FSkelMeshSourceSectionUserData& SectionUserData = UserSectionsData.FindOrAdd(Section.OriginalDataSectionIndex);
 		Section.bCastShadow					= SectionUserData.bCastShadow;
 		Section.bRecomputeTangent			= SectionUserData.bRecomputeTangent;
+		Section.RecomputeTangentsVertexMaskChannel = SectionUserData.RecomputeTangentsVertexMaskChannel;
 		Section.bDisabled					= SectionUserData.bDisabled;
 		Section.GenerateUpToLodIndex		= SectionUserData.GenerateUpToLodIndex;
 		Section.CorrespondClothAssetIndex	= SectionUserData.CorrespondClothAssetIndex;
@@ -1066,6 +1090,7 @@ void FSkeletalMeshLODModel::SyncronizeUserSectionsDataArray(bool bResetNonUsedSe
 			FSkelMeshSourceSectionUserData& SectionUserData = UserSectionsData.FindOrAdd(Section.OriginalDataSectionIndex);
 			SectionUserData.bCastShadow = Section.bCastShadow;
 			SectionUserData.bRecomputeTangent = Section.bRecomputeTangent;
+			SectionUserData.RecomputeTangentsVertexMaskChannel = Section.RecomputeTangentsVertexMaskChannel;
 			SectionUserData.bDisabled = Section.bDisabled;
 			SectionUserData.GenerateUpToLodIndex = Section.GenerateUpToLodIndex;
 			SectionUserData.CorrespondClothAssetIndex = Section.CorrespondClothAssetIndex;
@@ -1104,7 +1129,7 @@ FString FSkeletalMeshLODModel::GetLODModelDeriveDataKey() const
 	return KeySuffix;
 }
 
-void FSkeletalMeshLODModel::UpdateChunkedSectionInfo(const FString& SkeletalMeshName, TArray<int32>& LODMaterialMap)
+void FSkeletalMeshLODModel::UpdateChunkedSectionInfo(const FString& SkeletalMeshName)
 {
 	int32 LODModelSectionNum = Sections.Num();
 	//Fill the ChunkedParentSectionIndex data, we assume that every section using the same material are chunked
@@ -1129,6 +1154,7 @@ void FSkeletalMeshLODModel::UpdateChunkedSectionInfo(const FString& SkeletalMesh
 			Section.bDisabled = SectionUserData.bDisabled;
 			Section.bCastShadow = SectionUserData.bCastShadow;
 			Section.bRecomputeTangent = SectionUserData.bRecomputeTangent;
+			Section.RecomputeTangentsVertexMaskChannel = SectionUserData.RecomputeTangentsVertexMaskChannel;
 			Section.GenerateUpToLodIndex = SectionUserData.GenerateUpToLodIndex;
 			//Chunked section cannot have cloth, a cloth section will be a parent section
 			Section.CorrespondClothAssetIndex = INDEX_NONE;
@@ -1142,6 +1168,7 @@ void FSkeletalMeshLODModel::UpdateChunkedSectionInfo(const FString& SkeletalMesh
 			SectionUserData.bDisabled = Section.bDisabled;
 			SectionUserData.bCastShadow = Section.bCastShadow;
 			SectionUserData.bRecomputeTangent = Section.bRecomputeTangent;
+			SectionUserData.RecomputeTangentsVertexMaskChannel = Section.RecomputeTangentsVertexMaskChannel;
 			SectionUserData.GenerateUpToLodIndex = Section.GenerateUpToLodIndex;
 			SectionUserData.CorrespondClothAssetIndex = Section.CorrespondClothAssetIndex;
 			SectionUserData.ClothingData.AssetGuid = Section.ClothingData.AssetGuid;
@@ -1159,7 +1186,7 @@ void FSkeletalMeshLODModel::UpdateChunkedSectionInfo(const FString& SkeletalMesh
 	}
 }
 
-void FSkeletalMeshLODModel::CopyStructure(FSkeletalMeshLODModel* Destination, FSkeletalMeshLODModel* Source)
+void FSkeletalMeshLODModel::CopyStructure(FSkeletalMeshLODModel* Destination, const FSkeletalMeshLODModel* Source)
 {
 	//The private Lock should always be valid
 	check(Source);
@@ -1170,7 +1197,6 @@ void FSkeletalMeshLODModel::CopyStructure(FSkeletalMeshLODModel* Destination, FS
 	FScopeLock LockSource(Source->BulkDataReadMutex);
 	FScopeLock LockDestination(Destination->BulkDataReadMutex);
 
-
 	FCriticalSection* DestinationBulkDataReadMutex = Destination->BulkDataReadMutex;
 
 	//Empty the Destination BulkData to avoid leaks
@@ -1179,9 +1205,9 @@ void FSkeletalMeshLODModel::CopyStructure(FSkeletalMeshLODModel* Destination, FS
 	Destination->RawSkeletalMeshBulkData_DEPRECATED.EmptyBulkData();
 
 	// Bulk data arrays need to be locked before a copy can be made.
-	Source->RawPointIndices.Lock(LOCK_READ_ONLY);
-	Source->LegacyRawPointIndices.Lock(LOCK_READ_ONLY);
-	Source->RawSkeletalMeshBulkData_DEPRECATED.GetBulkData().Lock(LOCK_READ_ONLY);
+	Source->RawPointIndices.LockReadOnly();
+	Source->LegacyRawPointIndices.LockReadOnly();
+	Source->RawSkeletalMeshBulkData_DEPRECATED.GetBulkData().LockReadOnly();
 	*Destination = *Source;
 	Source->RawSkeletalMeshBulkData_DEPRECATED.GetBulkData().Unlock();
 	Source->RawPointIndices.Unlock();

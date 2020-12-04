@@ -370,8 +370,11 @@ public:
 	/** Actions to perform whenever the viewports floating buttons are pressed */
 	void OnFloatingButtonClicked();
 
+	/** Get the visibility for viewport toolbar */
+	EVisibility GetToolbarVisibility() const;
+
 	/** Get the visibility for items considered to be part of the 'full' viewport toolbar */
-	EVisibility GetFullToolbarVisibility() const { return bShowFullToolbar ? EVisibility::Visible : EVisibility::Collapsed; }
+	EVisibility GetFullToolbarVisibility() const { return (bShowToolbarAndControls && bShowFullToolbar) ? EVisibility::Visible : EVisibility::Collapsed; }
 
 	/** Unpin and close all actor preview windows */
 	void RemoveAllPreviews(const bool bRemoveFromDesktopViewport = true);
@@ -397,21 +400,22 @@ public:
 	 */
 	void OnClearBookmark( int32 BookmarkIndex );
 
-	UE_DEPRECATED(4.21, "Please use the version with corrected spelling (OnClearBookmark)")
-	void OnClearBookMark( int32 BookmarkIndex );
-
 	/**
 	 * Called to clear all bookmarks
 	 */
 	void OnClearAllBookmarks();
 
-	UE_DEPRECATED(4.21, "Please use the version with corrected spelling (OnClearAllBookmarks)")
-	void OnClearAllBookMarks();
-
 	/**
 	 * Called to Compact Bookmarks.
 	 */
 	void OnCompactBookmarks();
+
+	/** 
+	 * Returns the config key associated with this viewport. 
+	 * This is what is used when loading/saving per viewport settings. 
+	 * If a plugin extends a LevelViewport menu, they'll be able to identify it and match their settings accordingly
+	 */
+	FName GetConfigKey() const { return ConfigKey; }
 
 protected:
 	/** SEditorViewport interface */
@@ -724,6 +728,9 @@ private:
 	/** Get the SViewport size */
 	FVector2D GetSViewportSize() const;
 
+	/** Updates the real-time overrride applied to the viewport */
+	void OnPerformanceSettingsChanged(UObject* Obj, struct FPropertyChangedEvent& ChangeEvent);
+
 private:
 	/** Tab which this viewport is located in */
 	TWeakPtr<class FLevelViewportLayout> ParentLayout;
@@ -883,6 +890,9 @@ private:
 
 	/** The users value for allowing throttling, we restore this value when we lose focus. */
 	int32 UserAllowThrottlingValue;
+
+	/** Whether to show toolbar or buttons */
+	bool bShowToolbarAndControls;
 
 	/** Whether to show a full toolbar, or a compact one */
 	bool bShowFullToolbar;

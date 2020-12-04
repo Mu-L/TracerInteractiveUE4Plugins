@@ -12,9 +12,13 @@ THIRD_PARTY_INCLUDES_START
 #include <Alembic/AbcGeom/Visibility.h>
 THIRD_PARTY_INCLUDES_END
 
-static const ESampleReadFlags ReadAllFlags = ESampleReadFlags::Positions | ESampleReadFlags::Indices | ESampleReadFlags::UVs | ESampleReadFlags::Normals | ESampleReadFlags::Colors | ESampleReadFlags::MaterialIndices;
+static const ESampleReadFlags ReadAllFlags = ESampleReadFlags::Positions | ESampleReadFlags::Indices | ESampleReadFlags::UVs | ESampleReadFlags::Normals |
+	ESampleReadFlags::Colors | ESampleReadFlags::MaterialIndices | ESampleReadFlags::Velocities;
 
-FAbcPolyMesh::FAbcPolyMesh(const Alembic::AbcGeom::IPolyMesh& InPolyMesh, const FAbcFile* InFile, IAbcObject* InParent /*= nullptr*/) : IAbcObject(InPolyMesh, InFile, InParent), SelfBounds(EForceInit::ForceInitToZero), ChildBounds(EForceInit::ForceInitToZero), bShouldImport(true), PolyMesh(InPolyMesh), Schema(InPolyMesh.getSchema()), FirstSample(nullptr), TransformedFirstSample(nullptr), SampleReadFlags(ESampleReadFlags::Positions | ESampleReadFlags::Indices | ESampleReadFlags::UVs | ESampleReadFlags::Normals | ESampleReadFlags::Colors | ESampleReadFlags::MaterialIndices), bReturnFirstSample(false), bReturnTransformedFirstSample(false), bFirstFrameVisibility(true)
+FAbcPolyMesh::FAbcPolyMesh(const Alembic::AbcGeom::IPolyMesh& InPolyMesh, const FAbcFile* InFile, IAbcObject* InParent /*= nullptr*/)
+	: IAbcObject(InPolyMesh, InFile, InParent), SelfBounds(EForceInit::ForceInitToZero), ChildBounds(EForceInit::ForceInitToZero), bShouldImport(true), PolyMesh(InPolyMesh),
+	  Schema(InPolyMesh.getSchema()), FirstSample(nullptr), TransformedFirstSample(nullptr),
+	  SampleReadFlags(ReadAllFlags), bReturnFirstSample(false), bReturnTransformedFirstSample(false), bFirstFrameVisibility(true)
 {
 	// Retrieve schema and frame information		
 	NumSamples = Schema.getNumSamples();
@@ -186,10 +190,24 @@ void FAbcPolyMesh::SetFrameAndTime(const float InTime, const int32 FrameIndex, c
 			}
 			else
 			{
-				AbcImporterUtilities::GenerateSmoothingGroupsIndices(WriteSample, File->GetImportSettings()->NormalGenerationSettings.HardEdgeAngleThreshold);
+				// Check the user-configurable setting for smoothing group generation
+				if (!File->GetImportSettings()->NormalGenerationSettings.bForceOneSmoothingGroupPerObject)
+				{
+					AbcImporterUtilities::GenerateSmoothingGroupsIndices(WriteSample, File->GetImportSettings()->NormalGenerationSettings.HardEdgeAngleThreshold);
+				}
+				else
+				{
+					const int32 NumFaces = WriteSample->Indices.Num() / 3;
+					WriteSample->SmoothingGroupIndices.Empty(NumFaces);
+					WriteSample->SmoothingGroupIndices.AddZeroed(NumFaces);
+					WriteSample->NumSmoothingGroups = 1;
+				}
 			}
 
-			AbcImporterUtilities::ComputeTangents(WriteSample, File->GetImportSettings()->NormalGenerationSettings.bIgnoreDegenerateTriangles, *File->GetMeshUtilities());
+			if (!File->GetImportSettings()->NormalGenerationSettings.bSkipComputingTangents)
+			{
+				AbcImporterUtilities::ComputeTangents(WriteSample, File->GetImportSettings()->NormalGenerationSettings.bIgnoreDegenerateTriangles, *File->GetMeshUtilities());
+			}
 		}
 		else if (bConstant && !bConstantTransformation)
 		{
@@ -296,6 +314,11 @@ void FAbcMeshSample::Reset(const ESampleReadFlags ReadFlags)
 		Vertices.SetNum(0, false);
 	}
 
+	if (EnumHasAnyFlags(ReadFlags, ESampleReadFlags::Velocities))
+	{
+		Velocities.SetNum(0, false);
+	}
+
 	if (EnumHasAnyFlags(ReadFlags, ESampleReadFlags::Indices))
 	{
 		Indices.SetNum(0, false);
@@ -335,49 +358,7 @@ void FAbcMeshSample::Reset(const ESampleReadFlags ReadFlags)
 
 void FAbcMeshSample::Copy(const FAbcMeshSample& InSample, const ESampleReadFlags ReadFlags)
 {
-	Reset(ReadFlags);
-
-	if (!EnumHasAnyFlags(ReadFlags, ESampleReadFlags::Positions))
-	{
-		Vertices = InSample.Vertices;
-	}
-	
-	if (!EnumHasAnyFlags(ReadFlags, ESampleReadFlags::Indices))
-	{
-		Indices = InSample.Indices;
-	}
-
-	if (!EnumHasAnyFlags(ReadFlags, ESampleReadFlags::Normals))
-	{
-		Normals = InSample.Normals;
-		TangentX = InSample.TangentX;
-		TangentY = InSample.TangentY;
-		
-		SmoothingGroupIndices = InSample.SmoothingGroupIndices;
-		NumSmoothingGroups = InSample.NumSmoothingGroups;
-	}
-
-	if (!EnumHasAnyFlags(ReadFlags, ESampleReadFlags::UVs))
-	{
-		for (uint32 UVIndex = 0; UVIndex < InSample.NumUVSets; ++UVIndex)
-		{
-			UVs[UVIndex] = InSample.UVs[UVIndex];
-		}
-		NumUVSets = InSample.NumUVSets;
-	}
-
-	if (!EnumHasAnyFlags(ReadFlags, ESampleReadFlags::Colors))
-	{
-		Colors = InSample.Colors;
-	}
-
-	if (!EnumHasAnyFlags(ReadFlags, ESampleReadFlags::MaterialIndices))
-	{
-		MaterialIndices = InSample.MaterialIndices;
-		NumMaterials = InSample.NumMaterials;
-	}
-	
-	SampleTime = InSample.SampleTime;	
+	Copy(&InSample, ReadFlags);
 }
 
 void FAbcMeshSample::Copy(const FAbcMeshSample* InSample, const ESampleReadFlags ReadFlags)
@@ -387,6 +368,11 @@ void FAbcMeshSample::Copy(const FAbcMeshSample* InSample, const ESampleReadFlags
 	if (!EnumHasAnyFlags(ReadFlags, ESampleReadFlags::Positions))
 	{
 		Vertices = InSample->Vertices;
+	}
+
+	if (!EnumHasAnyFlags(ReadFlags, ESampleReadFlags::Velocities))
+	{
+		Velocities = InSample->Velocities;
 	}
 
 	if (!EnumHasAnyFlags(ReadFlags, ESampleReadFlags::Indices))

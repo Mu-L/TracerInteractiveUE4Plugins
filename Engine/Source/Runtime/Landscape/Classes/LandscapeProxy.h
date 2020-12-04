@@ -400,7 +400,7 @@ private:
 	uint32 Hash;
 };
 
-UCLASS(Abstract, MinimalAPI, NotBlueprintable, hidecategories=(Display, Attachment, Physics, Debug, Lighting, LOD), showcategories=(Lighting, Rendering, "Utilities|Transformation"), hidecategories=(Mobility))
+UCLASS(Abstract, MinimalAPI, NotBlueprintable, NotPlaceable, hidecategories=(Display, Attachment, Physics, Debug, Lighting, LOD), showcategories=(Lighting, Rendering, "Utilities|Transformation"), hidecategories=(Mobility))
 class ALandscapeProxy : public AActor
 {
 	GENERATED_BODY()
@@ -420,6 +420,9 @@ protected:
 
 public:
 	LANDSCAPE_API TOptional<float> GetHeightAtLocation(FVector Location) const;
+
+	/** Fills an array with height values **/
+	LANDSCAPE_API void GetHeightValues(int32& SizeX, int32& SizeY, TArray<float>& ArrayValue) const;
 
 	/** Offset in quads from global components grid origin (in quads) **/
 	UPROPERTY()
@@ -508,8 +511,8 @@ public:
 	/** Cached grass types from GetGrassTypes */
 	TArray<ULandscapeGrassType*> LandscapeGrassTypes;
 
-	/** Cached grass max square discard distance for all grass in GetGrassTypes */
-	float GrassMaxSquareDiscardDistance;
+	/** Cached grass max discard distance for all grass in GetGrassTypes */
+	float GrassMaxDiscardDistance;
 #endif
 
 	/** Material used to render landscape components with holes. If not set, LandscapeMaterial will be used (blend mode will be overridden to Masked if it is set to Opaque) */
@@ -542,10 +545,10 @@ public:
 	uint8 MeshHolesMaxLod = 6;
 
 	/**
-	 * Array of runtime virtual textures into which we render this landscape.
+	 * Array of runtime virtual textures into which we draw this landscape.
 	 * The material also needs to be set up to output to a virtual texture.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = VirtualTexture, meta = (DisplayName = "Render to Virtual Textures"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = VirtualTexture, meta = (DisplayName = "Draw in Virtual Textures"))
 	TArray<URuntimeVirtualTexture*> RuntimeVirtualTextures;
 
 	/** 
@@ -562,8 +565,8 @@ public:
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = VirtualTexture, meta = (DisplayName = "Virtual Texture LOD Bias", UIMin = "0", UIMax = "7"))
 	int32 VirtualTextureLodBias = 0;
 
-	/** Render to the main pass based on the virtual texture settings. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = VirtualTexture, meta = (DisplayName = "Virtual Texture Pass Type"))
+	/** Controls if this component draws in the main pass as well as in the virtual texture. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = VirtualTexture, meta = (DisplayName = "Draw in Main Pass"))
 	ERuntimeVirtualTextureMainPassType VirtualTextureRenderPassType = ERuntimeVirtualTextureMainPassType::Always;
 
 	/** Allows overriding the landscape bounds. This is useful if you distort the landscape with world-position-offset, for example
@@ -609,19 +612,32 @@ public:
 	UPROPERTY(EditAnywhere, Category=Lighting)
 	float StaticLightingResolution;
 
-	UPROPERTY(EditAnywhere, Category=Lighting, meta=(DisplayName = "Static Shadow"))
-	uint32 bCastStaticShadow:1;
+	/** Controls whether the primitive component should cast a shadow or not. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Lighting)
+	uint8 CastShadow : 1;
 
-	/** Whether this primitive should cast dynamic shadows as if it were a two sided material. */
-	UPROPERTY(EditAnywhere, AdvancedDisplay, Category=Lighting, meta=(DisplayName = "Shadow Two Sided"))
-	uint32 bCastShadowAsTwoSided:1;
+	/** Controls whether the primitive should cast shadows in the case of non precomputed shadowing.  This flag is only used if CastShadow is true. **/
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Lighting, AdvancedDisplay, meta = (EditCondition = "CastShadow", DisplayName = "Dynamic Shadow"))
+	uint8 bCastDynamicShadow : 1;
 
-	/** Whether this primitive should cast shadows in the far shadow cascades. */
-	UPROPERTY(EditAnywhere, AdvancedDisplay, Category=Lighting, meta=(DisplayName = "Far Shadow"))
-	uint32 bCastFarShadow:1;
-	
-	/** Controls whether the landscape should affect dynamic distance field lighting methods. **/
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Lighting, AdvancedDisplay)
+	/** Whether the object should cast a static shadow from shadow casting lights.  This flag is only used if CastShadow is true. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Lighting, AdvancedDisplay, meta = (EditCondition = "CastShadow", DisplayName = "Static Shadow"))
+	uint8 bCastStaticShadow : 1;
+
+	/** When enabled, the component will be rendering into the far shadow cascades(only for directional lights).  This flag is only used if CastShadow is true. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Lighting, meta = (EditCondition = "CastShadow", DisplayName = "Far Shadow"))
+	uint32 bCastFarShadow : 1;
+
+	/** If true, the primitive will cast shadows even if bHidden is true.  Controls whether the primitive should cast shadows when hidden.  This flag is only used if CastShadow is true. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Lighting, meta = (EditCondition = "CastShadow", DisplayName = "Hidden Shadow"))
+	uint8 bCastHiddenShadow : 1;
+
+	/** Whether this primitive should cast dynamic shadows as if it were a two sided material.  This flag is only used if CastShadow is true. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Lighting, meta = (EditCondition = "CastShadow", DisplayName = "Shadow Two Sided"))
+	uint32 bCastShadowAsTwoSided : 1;
+
+	/** Controls whether the primitive should affect dynamic distance field lighting methods.  This flag is only used if CastShadow is true. **/
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Lighting, AdvancedDisplay, meta = (EditCondition = "CastShadow"))
 	uint8 bAffectDistanceFieldLighting:1;
 
 	/**
@@ -641,12 +657,16 @@ public:
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=Rendering, meta=(DisplayName = "Render CustomDepth Pass"))
 	uint32 bRenderCustomDepth:1;
 
+	/** Mask used for stencil buffer writes. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Rendering, meta = (editcondition = "bRenderCustomDepth"))
+	ERendererStencilMask CustomDepthStencilWriteMask;
+
 	/** Optionally write this 0-255 value to the stencil buffer in CustomDepth pass (Requires project setting or r.CustomDepth == 3) */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=Rendering,  meta=(UIMin = "0", UIMax = "255", editcondition = "bRenderCustomDepth", DisplayName = "CustomDepth Stencil Value"))
 	int32 CustomDepthStencilValue;
 
 	/**  Max draw distance exposed to LDs. The real max draw distance is the min (disregarding 0) of this and volumes affecting this object. */
-	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = LOD, meta = (DisplayName = "Desired Max Draw Distance"))
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=Rendering, meta = (DisplayName = "Desired Max Draw Distance"))
 	float LDMaxDrawDistance;
 
 #if WITH_EDITORONLY_DATA
@@ -697,6 +717,10 @@ public:
 
 	UPROPERTY()
 	FString ReimportHeightmapFilePath;
+
+	/** Height and weightmap import destination layer guid */
+	UPROPERTY()
+	FGuid ReimportDestinationLayerGuid;
 
 	UPROPERTY()
 	TArray<FLandscapeEditorLayerSettings> EditorLayerSettings;
@@ -788,6 +812,7 @@ public:
 	// Editor-time blueprint functions
 
 	/** Deform landscape using a given spline
+	 * @param InSplineComponent - The component containing the spline data
 	 * @param StartWidth - Width of the spline at the start node, in Spline Component local space
 	 * @param EndWidth   - Width of the spline at the end node, in Spline Component local space
 	 * @param StartSideFalloff - Width of the falloff at either side of the spline at the start node, in Spline Component local space
@@ -798,9 +823,10 @@ public:
 	 * @param bRaiseHeights - Allow the landscape to be raised up to the level of the spline. If both bRaiseHeights and bLowerHeights are false, no height modification of the landscape will be performed
 	 * @param bLowerHeights - Allow the landscape to be lowered down to the level of the spline. If both bRaiseHeights and bLowerHeights are false, no height modification of the landscape will be performed
 	 * @param PaintLayer - LayerInfo to paint, or none to skip painting. The landscape must be configured with the same layer info in one of its layers or this will do nothing!
+	 * @param EditLayerName - Name of the landscape edition layer to affect (in Edit Layers mode)
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Landscape|Editor")
-	void EditorApplySpline(USplineComponent* InSplineComponent, float StartWidth = 200, float EndWidth = 200, float StartSideFalloff = 200, float EndSideFalloff = 200, float StartRoll = 0, float EndRoll = 0, int32 NumSubdivisions = 20, bool bRaiseHeights = true, bool bLowerHeights = true, ULandscapeLayerInfoObject* PaintLayer = nullptr);
+	void EditorApplySpline(USplineComponent* InSplineComponent, float StartWidth = 200, float EndWidth = 200, float StartSideFalloff = 200, float EndSideFalloff = 200, float StartRoll = 0, float EndRoll = 0, int32 NumSubdivisions = 20, bool bRaiseHeights = true, bool bLowerHeights = true, ULandscapeLayerInfoObject* PaintLayer = nullptr, FName EditLayerName = TEXT(""));
 
 	/** Set an MID texture parameter value for all landscape components. */
 	UFUNCTION(BlueprintCallable, Category = "Landscape|Runtime|Material")
@@ -896,13 +922,16 @@ public:
 
 #if WITH_EDITOR
 	/** Update Grass maps */
-	void UpdateGrassData();
+	void UpdateGrassData(bool bInShouldMarkDirty = false, struct FScopedSlowTask* InSlowTask = nullptr);
 
 	/** Render grass maps for the specified components */
 	void RenderGrassMaps(const TArray<ULandscapeComponent*>& LandscapeComponents, const TArray<ULandscapeGrassType*>& GrassTypes);
 
 	/** Update any textures baked from the landscape as necessary */
 	void UpdateBakedTextures();
+
+	/** Update the landscape physical material render tasks */
+	void UpdatePhysicalMaterialTasks();
 
 	/** Frame counter to count down to the next time we check to update baked textures, so we don't check every frame */
 	int32 UpdateBakedTexturesCountdown;
@@ -926,11 +955,24 @@ public:
 	/** Get the LandcapeActor-to-world transform with respect to landscape section offset*/
 	LANDSCAPE_API FTransform LandscapeActorToWorld() const;
 
+	/**
+	* Output a landscape heightmap to a render target
+	* @param InRenderTarget - Valid render target with a format of RTF_RGBA16f, RTF_RGBA32f or RTF_RGBA8
+	* @param InExportHeightIntoRGChannel - Tell us if we should export the height that is internally stored as R & G (for 16 bits) to a single R channel of the render target (the format need to be RTF_RGBA16f or RTF_RGBA32f)
+	*									   Note that using RTF_RGBA16f with InExportHeightIntoRGChannel == false, could have precision loss.
+	* @param InExportLandscapeProxies - Option to also export components of all proxies of Landscape actor (if LandscapeProxy is the Landscape Actor)
+	*/
+	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Landscape Export Heightmap to RenderTarget", Keywords = "Push Landscape Heightmap to RenderTarget", UnsafeDuringActorConstruction = "true"), Category = Rendering)
+	bool LandscapeExportHeightmapToRenderTarget(UTextureRenderTarget2D* InRenderTarget, bool InExportHeightIntoRGChannel = false, bool InExportLandscapeProxies = true);
+
 	/** Get landscape position in section space */
 	LANDSCAPE_API FIntPoint GetSectionBaseOffset() const;
 #if WITH_EDITOR
+	LANDSCAPE_API int32 GetOutdatedGrassMapCount() const;
+	LANDSCAPE_API void BuildGrassMaps(struct FScopedSlowTask* InSlowTask = nullptr);
 	LANDSCAPE_API void CreateSplineComponent(const FVector& Scale3D);
 
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void PostEditImport() override;
 	//~ End UObject Interface
@@ -968,6 +1010,9 @@ public:
 
 	/** Recreate all components rendering and collision states */
 	LANDSCAPE_API void RecreateComponentsState();
+
+	/** Recreate all component rendering states after applying a given function to each*/
+	LANDSCAPE_API void RecreateComponentsRenderState(TFunctionRef<void(ULandscapeComponent*)> Fn);
 
 	/** Recreate all collision components based on render component */
 	LANDSCAPE_API void RecreateCollisionComponents();
@@ -1054,15 +1099,6 @@ public:
 	bool LandscapeImportHeightmapFromRenderTarget(UTextureRenderTarget2D* InRenderTarget, bool InImportHeightFromRGChannel = false);
 
 	/**
-	* Output a landscape heightmap to a render target
-	* @param InRenderTarget - Valid render target with a format of RTF_RGBA16f, RTF_RGBA32f or RTF_RGBA8
-	* @param InExportHeightIntoRGChannel - Tell us if we should export the height that is internally stored as R & G (for 16 bits) to a single R channel of the render target (the format need to be RTF_RGBA16f or RTF_RGBA32f)
-	*									   Note that using RTF_RGBA16f with InExportHeightIntoRGChannel == false, could have precision loss.
-	*/
-	UFUNCTION(BlueprintCallable, meta = (DisplayName = "Landscape Export Heightmap to RenderTarget", Keywords = "Push Landscape Heightmap to RenderTarget", UnsafeDuringActorConstruction = "true"), Category = Rendering)
-	bool LandscapeExportHeightmapToRenderTarget(UTextureRenderTarget2D* InRenderTarget, bool InExportHeightIntoRGChannel = false);
-	
-	/**
 	* Overwrites a landscape weightmap with render target data
 	* Only works in the editor
 	*/
@@ -1128,7 +1164,7 @@ private:
 	static int32 GrassUpdateInterval;
 
 #if WITH_EDITOR
-	void UpdateGrassDataStatus(TSet<UTexture2D*>& OutCurrentForcedStreamedTextures, TSet<UTexture2D*>* OutDesiredForcedStreamedTextures, TSet<ULandscapeComponent*>& OutComponentsNeedingGrassMapRender, TSet<ULandscapeComponent*>* OutOutdatedComponents, bool bInEnableForceResidentFlag);
+	void UpdateGrassDataStatus(TSet<UTexture2D*>* OutCurrentForcedStreamedTextures, TSet<UTexture2D*>* OutDesiredForcedStreamedTextures, TSet<ULandscapeComponent*>* OutComponentsNeedingGrassMapRender, TSet<ULandscapeComponent*>* OutOutdatedComponents, bool bInEnableForceResidentFlag, int32* OutOutdatedGrassMaps = nullptr) const;
 #endif
 
 #if WITH_EDITORONLY_DATA
@@ -1140,3 +1176,21 @@ private:
 	static TArray<ALandscapeProxy*> LandscapeProxies;
 #endif
 };
+
+
+#if WITH_EDITOR
+/**
+ * Helper class used to Build or monitor outdated Grass maps of a world
+ */
+class LANDSCAPE_API FLandscapeGrassMapsBuilder
+{
+public:
+	FLandscapeGrassMapsBuilder(UWorld* InWorld);
+	void Build();
+	int32 GetOutdatedGrassMapCount(bool bInForceUpdate = true) const;
+private:
+	UWorld* World;
+	mutable int32 OutdatedGrassMapCount;
+	mutable double GrassMapsLastCheckTime;
+};
+#endif

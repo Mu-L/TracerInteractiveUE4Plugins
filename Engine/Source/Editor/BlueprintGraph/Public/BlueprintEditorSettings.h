@@ -6,6 +6,7 @@
 #include "UObject/ObjectMacros.h"
 #include "UObject/Object.h"
 #include "Engine/Blueprint.h"
+#include "Engine/DeveloperSettings.h"
 #include "BlueprintEditorSettings.generated.h"
 
 UENUM()
@@ -31,6 +32,14 @@ public:
 	/** Determines if lightweight tutorial text shows up at the top of empty blueprint graphs */
 	UPROPERTY(EditAnywhere, config, Category = VisualStyle)
 	bool bShowGraphInstructionText;
+
+	/** If true, fade nodes which are not connected to the selected nodes */
+	UPROPERTY(EditAnywhere, config, Category = VisualStyle)
+	bool bHideUnrelatedNodes;
+
+	/** If true, use short tooltips whenever possible */
+	UPROPERTY(EditAnywhere, config, Category = VisualStyle)
+	bool bShowShortTooltips;
 
 // Workflow Settings
 public:
@@ -90,7 +99,7 @@ public:
 	UPROPERTY(config)
 	bool bShowAccessSpecifier;
 
-	/** If set will spawn default nodes in new Blueprints */
+	/** If set will spawn default "ghost" event nodes in new Blueprints, modifiable in the [DefaultEventNodes] section of EditorPerProjectUserSettings */
 	UPROPERTY(EditAnywhere, config, Category=Workflow)
 	bool bSpawnDefaultBlueprintNodes;
 
@@ -102,7 +111,7 @@ public:
 	UPROPERTY(EditAnywhere, config, Category=Workflow)
 	bool bHostFindInBlueprintsInGlobalTab;
 	
-	/** If set double clicking on a call function node will jump to the native source definition: */
+	/** If set, double clicking on a call function node will attempt to navigate an open C++ editor to the native source definition */
 	UPROPERTY(EditAnywhere, config, Category=Workflow)
 	bool bNavigateToNativeFunctionsFromCallNodes;
 
@@ -149,6 +158,11 @@ public:
 	/** If enabled, blueprint nodes in the event graph will display with unique names rather than their display name. */
 	UPROPERTY(EditAnywhere, config, Category = DeveloperTools, meta = (DisplayName = "Display Unique Names for Blueprint Nodes"))
 	bool bBlueprintNodeUniqueNames;
+
+public:
+	// The list of namespaces to always expose in any Blueprint (local per-user)
+	UPROPERTY(EditAnywhere, config, Category = Experimental)
+	TArray<FString> NamespacesToAlwaysInclude;
 
 // Perf Settings
 public:

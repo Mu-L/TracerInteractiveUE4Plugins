@@ -11,46 +11,6 @@
 
 GLint GMaxOpenGLTextureFilterAnisotropic = 1;
 
-// Similar to sizeof(FSamplerStateInitializerRHI), but without any padding added by the compiler
-static uint32 SizeOfSamplerStateInitializer = 0;
-
-static FArchive& operator<<(FArchive& Ar, FSamplerStateInitializerRHI& SamplerStateInitializer)
-{
-	Ar << SamplerStateInitializer.Filter;
-	Ar << SamplerStateInitializer.AddressU;
-	Ar << SamplerStateInitializer.AddressV;
-	Ar << SamplerStateInitializer.AddressW;
-	Ar << SamplerStateInitializer.MipBias;
-	Ar << SamplerStateInitializer.MinMipLevel;
-	Ar << SamplerStateInitializer.MaxMipLevel;
-	Ar << SamplerStateInitializer.MaxAnisotropy;
-	Ar << SamplerStateInitializer.BorderColor;
-	Ar << SamplerStateInitializer.SamplerComparisonFunction;
-	return Ar;
-}
-
-static FORCEINLINE void CalculateSizeOfSamplerStateInitializer()
-{
-	if (SizeOfSamplerStateInitializer == 0)
-	{
-		TArray<uint8> Data;
-		FMemoryWriter Writer(Data);
-		FSamplerStateInitializerRHI State;
-		Writer << State;
-		SizeOfSamplerStateInitializer = Data.Num();
-	}
-}
-
-static bool operator==(const FSamplerStateInitializerRHI& A, const FSamplerStateInitializerRHI& B)
-{
-	return FMemory::Memcmp(&A, &B, SizeOfSamplerStateInitializer) == 0;
-}
-
-static FORCEINLINE uint32 GetTypeHash(const FSamplerStateInitializerRHI& SamplerState)
-{
-	return FCrc::MemCrc_DEPRECATED(&SamplerState, SizeOfSamplerStateInitializer);
-}
-
 // Hash of sampler states, used for caching sampler states and texture objects
 static TMap<FSamplerStateInitializerRHI, FOpenGLSamplerState*> GSamplerStateCache;
 
@@ -271,9 +231,6 @@ FSamplerStateRHIRef FOpenGLDynamicRHI::RHICreateSamplerState(const FSamplerState
 		return *Found;
 	}
 
-	// Create a new one
-	CalculateSizeOfSamplerStateInitializer();
-
 	FOpenGLSamplerState* SamplerState = new FOpenGLSamplerState;
 
 	SamplerState->Data.WrapS = TranslateAddressMode( Initializer.AddressU );
@@ -330,53 +287,43 @@ FSamplerStateRHIRef FOpenGLDynamicRHI::RHICreateSamplerState(const FSamplerState
 		SamplerState->Data.CompareMode = GL_NONE;
 	}
 
-	if (FOpenGL::SupportsSamplerObjects())
-	{
-		SamplerState->CreationFence.Reset();
-		SamplerState->Resource = 0;
+	SamplerState->CreationFence.Reset();
+	SamplerState->Resource = 0;
 
-		auto CreateGLSamplerState = [SamplerState]()
+	auto CreateGLSamplerState = [SamplerState]()
+	{
+		VERIFY_GL_SCOPE();
+		FOpenGL::GenSamplers( 1, &SamplerState->Resource);
+
+		FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_WRAP_S, SamplerState->Data.WrapS);
+		FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_WRAP_T, SamplerState->Data.WrapT);
+		if (FOpenGL::SupportsTexture3D())
 		{
-			VERIFY_GL_SCOPE();
-			FOpenGL::GenSamplers( 1, &SamplerState->Resource);
+			FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_WRAP_R, SamplerState->Data.WrapR);
+		}
+		if (FOpenGL::SupportsTextureLODBias())
+		{
+			FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_LOD_BIAS, SamplerState->Data.LODBias);
+		}
 
-			FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_WRAP_S, SamplerState->Data.WrapS);
-			FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_WRAP_T, SamplerState->Data.WrapT);
-			if (FOpenGL::SupportsTexture3D())
-			{
-				FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_WRAP_R, SamplerState->Data.WrapR);
-			}
-			if (FOpenGL::SupportsTextureLODBias())
-			{
-				FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_LOD_BIAS, SamplerState->Data.LODBias);
-			}
+		FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_MIN_FILTER, SamplerState->Data.MinFilter);
+		FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_MAG_FILTER, SamplerState->Data.MagFilter);
+		if (FOpenGL::SupportsTextureFilterAnisotropic())
+		{
+			FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_MAX_ANISOTROPY_EXT, SamplerState->Data.MaxAnisotropy);
+		}
 
-			FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_MIN_FILTER, SamplerState->Data.MinFilter);
-			FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_MAG_FILTER, SamplerState->Data.MagFilter);
-			if (FOpenGL::SupportsTextureFilterAnisotropic())
-			{
-				FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_MAX_ANISOTROPY_EXT, SamplerState->Data.MaxAnisotropy);
-			}
+		if (FOpenGL::SupportsTextureCompare())
+		{
+			FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_COMPARE_MODE, SamplerState->Data.CompareMode);
+			FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_COMPARE_FUNC, SamplerState->Data.CompareFunc);
+		}
+		SamplerState->CreationFence.WriteAssertFence();
+	};
 
-			if (FOpenGL::SupportsTextureCompare())
-			{
-				FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_COMPARE_MODE, SamplerState->Data.CompareMode);
-				FOpenGL::SetSamplerParameter(SamplerState->Resource, GL_TEXTURE_COMPARE_FUNC, SamplerState->Data.CompareFunc);
-			}
-			SamplerState->CreationFence.WriteAssertFence();
-		};
-
-		RunOnGLRenderContextThread(MoveTemp(CreateGLSamplerState));
-		SamplerState->CreationFence.SetRHIThreadFence();
-	}
-	else
-	{
-		// Resource is used to check for state changes so set to something unique
-		// 0 reserved for default
-		static GLuint SamplerCount = 1;
-		SamplerState->Resource = SamplerCount++;
-	}
-
+	RunOnGLRenderContextThread(MoveTemp(CreateGLSamplerState));
+	SamplerState->CreationFence.SetRHIThreadFence();
+	
 	// Manually add reference as we control the creation/destructions
 	SamplerState->AddRef();
 	GSamplerStateCache.Add(Initializer, SamplerState);
@@ -449,6 +396,7 @@ bool FOpenGLDepthStencilState::GetInitializer(FDepthStencilStateInitializerRHI& 
 bool FOpenGLBlendState::GetInitializer(FBlendStateInitializerRHI& Init)
 {
 	Init.bUseIndependentRenderTargetBlendStates = true;
+	Init.bUseAlphaToCoverage = Data.bUseAlphaToCoverage;
 	for(uint32 RenderTargetIndex = 0;RenderTargetIndex < MaxSimultaneousRenderTargets;++RenderTargetIndex)
 	{
 		FOpenGLBlendStateData::FRenderTarget const& RenderTarget = Data.RenderTargets[RenderTargetIndex];
@@ -483,6 +431,7 @@ bool FOpenGLBlendState::GetInitializer(FBlendStateInitializerRHI& Init)
 FBlendStateRHIRef FOpenGLDynamicRHI::RHICreateBlendState(const FBlendStateInitializerRHI& Initializer)
 {
 	FOpenGLBlendState* BlendState = new FOpenGLBlendState;
+	BlendState->Data.bUseAlphaToCoverage = Initializer.bUseAlphaToCoverage;
 	for(uint32 RenderTargetIndex = 0;RenderTargetIndex < MaxSimultaneousRenderTargets;++RenderTargetIndex)
 	{
 		const FBlendStateInitializerRHI::FRenderTarget& RenderTargetInitializer =

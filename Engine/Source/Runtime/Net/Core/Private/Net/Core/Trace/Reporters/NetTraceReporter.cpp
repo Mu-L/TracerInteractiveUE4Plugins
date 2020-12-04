@@ -9,7 +9,7 @@
 #include "HAL/PlatformTime.h"
 #include "Net/Core/Trace/NetTrace.h"
 #include "ProfilingDebugging/MiscTrace.h"
-#include "Trace/Trace.h"
+#include "Trace/Trace.inl"
 
 uint32 FNetTraceReporter::NetTraceReporterVersion = 1;
 
@@ -211,7 +211,7 @@ void FNetTraceReporter::ReportPacketContent(FNetTracePacketContentEvent* Events,
 
 				if (HeaderSize)
 				{
-					FTraceUtils::Encode7bit(CurrentEvent.ChannelIndex, BufferPtr);
+					FTraceUtils::Encode7bit(CurrentEvent.BunchInfo.Value, BufferPtr);
 				}
 			}
 			break;

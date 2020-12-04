@@ -5,7 +5,7 @@
 #include "DynamicMeshAttributeSet.h"
 #include "DynamicMeshOverlay.h"
 #include "MeshDescriptionBuilder.h"
-
+#include "MeshTangents.h"
 
 
 
@@ -126,13 +126,50 @@ void FDynamicMeshToMeshDescription::UpdateAttributes(const FDynamicMesh3* MeshIn
 }
 
 
+void FDynamicMeshToMeshDescription::UpdateTangents(const FDynamicMesh3* MeshIn, FMeshDescription& MeshOut, const FMeshTangentsd* Tangents)
+{
+	if (!ensureMsgf(MeshIn->TriangleCount() == MeshOut.Triangles().Num(), TEXT("Trying to update MeshDescription Tangents from Mesh that does not have same triangle count"))) return;
+	if (!ensureMsgf(MeshIn->IsCompactT(), TEXT("Trying to update MeshDescription Tangents from a non-compact DynamicMesh"))) return;
+	if (!ensureMsgf(MeshIn->HasAttributes(), TEXT("Trying to update MeshDescription Tangents from a DynamicMesh that has no Normals attribute"))) return;
+
+	const FDynamicMeshNormalOverlay* Normals = MeshIn->Attributes()->PrimaryNormals();
+	TVertexInstanceAttributesRef<FVector> TangentAttrib =
+		MeshOut.VertexInstanceAttributes().GetAttributesRef<FVector>(MeshAttribute::VertexInstance::Tangent);
+	TVertexInstanceAttributesRef<float> BinormalSignAttrib =
+		MeshOut.VertexInstanceAttributes().GetAttributesRef<float>(MeshAttribute::VertexInstance::BinormalSign);
+
+	if (!ensureMsgf(TangentAttrib.IsValid(), TEXT("Trying to update Tangents on a MeshDescription that has no Tangent Vertex Instance attribute"))) return;
+	if (!ensureMsgf(BinormalSignAttrib.IsValid(), TEXT("Trying to update Tangents on a MeshDescription that has no BinormalSign Vertex Instance attribute"))) return;
+
+	if (TangentAttrib.IsValid() && BinormalSignAttrib.IsValid())
+	{
+		int32 NumTriangles = MeshIn->TriangleCount();
+		for (int32 k = 0; k < NumTriangles; ++k)
+		{
+			FVector3f TriNormals[3];
+			Normals->GetTriElements(k, TriNormals[0], TriNormals[1], TriNormals[2]);
+
+			TArrayView<const FVertexInstanceID> TriInstances = MeshOut.GetTriangleVertexInstances(FTriangleID(k));
+			for (int j = 0; j < 3; ++j)
+			{
+				FVector3d Tangent, Bitangent;
+				Tangents->GetPerTriangleTangent(k, j, Tangent, Bitangent);
+				float BitangentSign = (float)VectorUtil::BitangentSign((FVector3d)TriNormals[j], Tangent, Bitangent);
+				TangentAttrib.Set(TriInstances[j], (FVector)Tangent);
+				BinormalSignAttrib.Set(TriInstances[j], BitangentSign);
+			}
+		}
+	}
+}
+
 
 
 void FDynamicMeshToMeshDescription::Convert(const FDynamicMesh3* MeshIn, FMeshDescription& MeshOut)
 {
 	if (MeshIn->HasAttributes())
 	{
-		Convert_SharedInstances(MeshIn, MeshOut);
+		//Convert_SharedInstances(MeshIn, MeshOut);
+		Convert_NoSharedInstances(MeshIn, MeshOut);
 	}
 	else
 	{
@@ -417,37 +454,53 @@ void FDynamicMeshToMeshDescription::Convert_NoSharedInstances(const FDynamicMesh
 		}
 	}
 
+	int32 NumUVLayers = MeshIn->HasAttributes() ? MeshIn->Attributes()->NumUVLayers() : 0;
+	Builder.SetNumUVLayers(NumUVLayers);
+	
+	// cache the UV layers
+	TArray<const FDynamicMeshUVOverlay*> UVLayers;
+	for (int32 k = 0; k < NumUVLayers; ++k)
+	{
+		UVLayers.Add( MeshIn->Attributes()->GetUVLayer(k) );
+	}
 
-	FVertexID TriVertices[3];
-	FVector2D TriUVs[3];
-	FVector TriNormals[3];
+	TArray<FIndex3i> UVTris;
+	UVTris.SetNum(NumUVLayers);
+
 	for (int TriID : MeshIn->TriangleIndicesItr())
 	{
 		FIndex3i Triangle = MeshIn->GetTriangle(TriID);
 
-		FVector2D* UseUVs = nullptr;
-		if (UVOverlay != nullptr)
+		FVertexID TriVertices[3] = { MapV[Triangle[0]] , MapV[Triangle[1]] , MapV[Triangle[2]] };
+		FVertexInstanceID TriVertInstances[3];
+
+		// look up normal and UV triangles
+		FIndex3i NormalTri = (NormalOverlay) ? NormalOverlay->GetTriangle(TriID) : FIndex3i::Invalid();
+		for (int32 k = 0; k < NumUVLayers; ++k)
 		{
-			FIndex3i UVTriangle = UVOverlay->GetTriangle(TriID);
-			TriUVs[0] = (FVector2D)UVOverlay->GetElement(UVTriangle[0]);
-			TriUVs[1] = (FVector2D)UVOverlay->GetElement(UVTriangle[1]);
-			TriUVs[2] = (FVector2D)UVOverlay->GetElement(UVTriangle[2]);
-			UseUVs = TriUVs;
+			UVTris[k] = UVLayers[k]->GetTriangle(TriID);
 		}
 
-		FVector* UseNormals = nullptr;
-		if (NormalOverlay != nullptr)
+		// create new vtx instances and set attributes for each triangle
+		for (int32 j = 0; j < 3; ++j)
 		{
-			FIndex3i NormalTriangle = NormalOverlay->GetTriangle(TriID);
-			TriNormals[0] = (FVector)NormalOverlay->GetElement(NormalTriangle[0]);
-			TriNormals[1] = (FVector)NormalOverlay->GetElement(NormalTriangle[1]);
-			TriNormals[2] = (FVector)NormalOverlay->GetElement(NormalTriangle[2]);
-			UseNormals = TriNormals;
-		}
+			FVertexInstanceID NewInstanceID = Builder.AppendInstance(TriVertices[j]);
+			TriVertInstances[j] = NewInstanceID;
 
-		TriVertices[0] = MapV[Triangle[0]];
-		TriVertices[1] = MapV[Triangle[1]];
-		TriVertices[2] = MapV[Triangle[2]];
+			FVector TriVertNormal = FVector::UpVector;
+			if (NormalOverlay && NormalOverlay->IsElement(NormalTri[j]))
+			{
+				TriVertNormal = (FVector)NormalOverlay->GetElement(NormalTri[j]);
+			}
+			Builder.SetInstanceNormal(NewInstanceID, TriVertNormal);
+				
+			for (int32 k = 0; k < NumUVLayers; ++k)
+			{
+				Builder.SetInstanceUV(NewInstanceID,
+					UVLayers[k]->IsElement(UVTris[k][j]) ? (FVector2D)UVLayers[k]->GetElement(UVTris[k][j]) : FVector2D::ZeroVector,
+					k);
+			}
+		}
 
 		// transfer material index to MeshDescription polygon group (by convention)
 		FPolygonGroupID UsePolygonGroupID = ZeroPolygonGroupID;
@@ -458,14 +511,11 @@ void FDynamicMeshToMeshDescription::Convert_NoSharedInstances(const FDynamicMesh
 			UsePolygonGroupID = FPolygonGroupID(MaterialID);
 		}
 
-		FPolygonID NewPolygonID = Builder.AppendTriangle(TriVertices, UsePolygonGroupID, UseUVs, UseNormals);
+		FPolygonID NewPolygonID = Builder.AppendTriangle(TriVertInstances[0], TriVertInstances[1], TriVertInstances[2], UsePolygonGroupID);
 
 		if (bCopyGroupToPolyGroup)
 		{
 			Builder.SetPolyGroupID(NewPolygonID, MeshIn->GetTriangleGroup(TriID));
 		}
 	}
-
-	// set to hard edges
-	//PolyMeshIn->SetAllEdgesHardness(true);
 }

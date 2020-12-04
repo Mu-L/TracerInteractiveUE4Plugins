@@ -43,15 +43,17 @@ public:
 	/** FEditorUndoClient Interface */
 	virtual void PostUndo(bool bSuccess) override;
 	virtual void PostRedo(bool bSuccess) override;
-
-	static LEVELEDITOR_API IConsoleVariable* ShowComponents;
 	
 	/**
 	 * Sets the filter that should be used to filter incoming actors in or out of the details panel
 	 *
 	 * @param InFilter	The filter to use or nullptr to remove the active filter
 	 */
-	void SetActorDetailsFilter(TSharedPtr<FDetailsViewObjectFilter> InFilter);
+	void SetActorDetailsRootCustomization(TSharedPtr<FDetailsViewObjectFilter> ActorDetailsObjectFilter, TSharedPtr<class IDetailRootObjectCustomization> ActorDetailsRootCustomization);
+
+	/** Sets the UI customization of the SCSEditor inside this details panel. */
+	void SetSCSEditorUICustomization(TSharedPtr<class ISCSEditorUICustomization> ActorDetailsSCSEditorUICustomization);
+
 private:
 	AActor* GetSelectedActorInEditor() const;
 	AActor* GetActorContext() const;
@@ -59,7 +61,6 @@ private:
 
 	void OnComponentsEditedInWorld();
 	void OnEditorSelectionChanged(UObject* Object);
-	void OnSCSEditorRootSelected(AActor* Actor);
 	void OnSCSEditorTreeViewSelectionChanged(const TArray<TSharedPtr<class FSCSEditorTreeNode> >& SelectedNodes);
 	void OnSCSEditorTreeViewItemDoubleClicked(const TSharedPtr<class FSCSEditorTreeNode> ClickedNode);
 	void UpdateComponentTreeFromEditorSelection();
@@ -67,6 +68,7 @@ private:
 
 	bool IsPropertyReadOnly(const struct FPropertyAndParent& PropertyAndParent) const;
 	bool IsPropertyEditingEnabled() const;
+	EVisibility GetComponentsBoxVisibility() const;
 	EVisibility GetUCSComponentWarningVisibility() const;
 	EVisibility GetInheritedBlueprintComponentWarningVisibility() const;
 	EVisibility GetNativeComponentWarningVisibility() const;
@@ -88,11 +90,14 @@ private:
 
 	// The current component blueprint selection
 	TWeakObjectPtr<UBlueprint> SelectedBPComponentBlueprint;
-	bool bSelectedComponentRecompiled;
+	bool bSelectedComponentRecompiled = false;
 
 	// Used to prevent reentrant changes
-	bool bSelectionGuard;
+	bool bSelectionGuard = false;
+
+	// True if the actor details has any component to show.
+	bool bHasComponentsToShow = false;
 
 	// True if the actor "root" node in the SCS editor is currently shown as selected
-	bool bShowingRootActorNodeSelected;
+	bool bShowingRootActorNodeSelected = false;
 };

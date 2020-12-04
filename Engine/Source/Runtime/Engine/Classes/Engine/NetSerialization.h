@@ -17,6 +17,7 @@
 #include "EngineLogs.h"
 #include "Containers/ArrayView.h"
 #include "Net/GuidReferences.h"
+#include "HAL/IConsoleManager.h"
 #include "NetSerialization.generated.h"
 
 class Error;
@@ -28,6 +29,55 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("NetSerializeFast Array BuildMap"), STAT_NetSeria
 DECLARE_CYCLE_STAT_EXTERN(TEXT("NetSerializeFast Array Delta Struct"), STAT_NetSerializeFastArray_DeltaStruct, STATGROUP_ServerCPU, ENGINE_API);
 
 extern ENGINE_API TAutoConsoleVariable<int32> CVarNetEnableDetailedScopeCounters;
+
+/**
+ * Helper to optionally serialize a value (using operator<< on Archive).
+ * A single signal bit is indicates whether to serialize, or whether to just use the default value.
+ * Returns true if the value was not the default and needed to be serialized.
+ */
+template<typename ValueType>
+bool SerializeOptionalValue(const bool bIsSaving, FArchive& Ar, ValueType& Value, const ValueType& DefaultValue)
+{
+	bool bNotDefault = (bIsSaving && (Value != DefaultValue));
+	Ar.SerializeBits(&bNotDefault, 1);
+	if (bNotDefault)
+	{
+		// Non-default value, need to save or load it.
+		Ar << Value;
+	}
+	else if (!bIsSaving)
+	{
+		// Loading, and should use default
+		Value = DefaultValue;
+	}
+
+	return bNotDefault;
+}
+
+/**
+ * Helper to optionally serialize a value (using the NetSerialize function).
+ * A single signal bit indicates whether to serialize, or whether to just use the default value.
+ * Returns true if the value was not the default and needed to be serialized.
+ */
+template<typename ValueType>
+bool NetSerializeOptionalValue(const bool bIsSaving, FArchive& Ar, ValueType& Value, const ValueType& DefaultValue, class UPackageMap* PackageMap)
+{
+	bool bNotDefault = (bIsSaving && (Value != DefaultValue));
+	Ar.SerializeBits(&bNotDefault, 1);
+	if (bNotDefault)
+	{
+		// Non-default value, need to save or load it.
+		bool bLocalSuccess = true;
+		Value.NetSerialize(Ar, PackageMap, bLocalSuccess);
+	}
+	else if (!bIsSaving)
+	{
+		// Loading, and should use default
+		Value = DefaultValue;
+	}
+
+	return bNotDefault;
+}
 
 /**
  *	===================== NetSerialize and NetDeltaSerialize customization. =====================
@@ -547,10 +597,22 @@ struct FFastArraySerializer
 		return DeltaFlags;
 	}
 
+	static const int32 GetMaxNumberOfAllowedChangesPerUpdate()
+	{
+		return MaxNumberOfAllowedChangesPerUpdate;
+	}
+
+	static const int32 GetMaxNumberOfAllowedDeletionsPerUpdate()
+	{
+		return MaxNumberOfAllowedDeletionsPerUpdate;
+	}
+
 private:
 
-	static constexpr int32 MAX_NUM_CHANGED = 2048;
-	static constexpr int32 MAX_NUM_DELETED = 2048;
+	ENGINE_API static int32 MaxNumberOfAllowedChangesPerUpdate;
+	ENGINE_API static int32 MaxNumberOfAllowedDeletionsPerUpdate;
+	ENGINE_API static FAutoConsoleVariableRef CVarMaxNumberOfAllowedChangesPerUpdate;
+	ENGINE_API static FAutoConsoleVariableRef CVarMaxNumberOfAllowedDeletionsPerUpdate;
 
 	/** Struct containing common header data that is written / read when serializing Fast Arrays. */
 	struct FFastArraySerializerHeader
@@ -882,6 +944,14 @@ void FFastArraySerializer::TFastArraySerializeHelper<Type, SerializerType>::Writ
 	UE_LOG(LogNetFastTArray, Log, TEXT("   Writing Bunch. NumChange: %d. NumDel: %d [%d/%d]"),
 		Header.NumChanged, Header.DeletedIndices.Num(), Header.ArrayReplicationKey, Header.BaseReplicationKey);
 
+	const int32 MaxNumDeleted = FFastArraySerializer::GetMaxNumberOfAllowedDeletionsPerUpdate();
+	const int32 MaxNumChanged = FFastArraySerializer::GetMaxNumberOfAllowedChangesPerUpdate();
+	
+	// TODO: We should consider propagating this error in the same way we handle
+	// array overflows in RepLayout SendProperties / CompareProperties.
+	UE_CLOG(NumDeletes > MaxNumDeleted, LogNetFastTArray, Warning, TEXT("NumDeletes > GetMaxNumberOfAllowedDeletionsPerUpdate: %d > %d. (Write)"), NumDeletes, MaxNumDeleted);
+	UE_CLOG(Header.NumChanged > MaxNumChanged, LogNetFastTArray, Warning, TEXT("NumChanged > GetMaxNumberOfAllowedChangesPerUpdate: %d > %d. (Write)"), Header.NumChanged, MaxNumChanged);
+
 	// Serialize deleted items, just by their ID
 	for (auto It = Header.DeletedIndices.CreateIterator(); It; ++It)
 	{
@@ -908,18 +978,20 @@ bool FFastArraySerializer::TFastArraySerializeHelper<Type, SerializerType>::Read
 
 	UE_LOG(LogNetFastTArray, Log, TEXT("Received [%d/%d]."), Header.ArrayReplicationKey, Header.BaseReplicationKey);
 
-	if (NumDeletes > MAX_NUM_DELETED)
+	const int32 MaxNumDeleted = FFastArraySerializer::GetMaxNumberOfAllowedDeletionsPerUpdate();
+	if (NumDeletes > MaxNumDeleted)
 	{
-		UE_LOG(LogNetFastTArray, Warning, TEXT("NumDeletes > MAX_NUM_DELETED: %d."), NumDeletes);
+		UE_LOG(LogNetFastTArray, Warning, TEXT("NumDeletes > GetMaxNumberOfAllowedDeletionsPerUpdate: %d > %d. (Read)"), NumDeletes, MaxNumDeleted);
 		Reader.SetError();
 		return false;
 	}
 
 	Reader << Header.NumChanged;
 
-	if (Header.NumChanged > MAX_NUM_CHANGED)
+	const int32 MaxNumChanged = FFastArraySerializer::GetMaxNumberOfAllowedChangesPerUpdate();
+	if (Header.NumChanged > MaxNumChanged)
 	{
-		UE_LOG(LogNetFastTArray, Warning, TEXT("NumChanged > MAX_NUM_CHANGED: %d."), Header.NumChanged);
+		UE_LOG(LogNetFastTArray, Warning, TEXT("NumChanged > GetMaxNumberOfAllowedChangesPerUpdate: %d > %d. (Read)"), Header.NumChanged, MaxNumChanged);
 		Reader.SetError();
 		return false;
 	}
@@ -1779,40 +1851,60 @@ bool SerializePackedVector(FVector &Vector, FArchive& Ar)
 // --------------------------------------------------------------
 
 template<int32 MaxValue, int32 NumBits>
+struct TFixedCompressedFloatDetails
+{
+	                                                                // NumBits = 8:
+	static constexpr int32 MaxBitValue = (1 << (NumBits - 1)) - 1;  //   0111 1111 - Max abs value we will serialize
+	static constexpr int32 Bias = (1 << (NumBits - 1));             //   1000 0000 - Bias to pivot around (in order to support signed values)
+	static constexpr int32 SerIntMax = (1 << (NumBits - 0));        // 1 0000 0000 - What we pass into SerializeInt
+	static constexpr int32 MaxDelta = (1 << (NumBits - 0)) - 1;     //   1111 1111 - Max delta is
+
+#if !PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+	static constexpr float GetInvScale()
+	{
+		if (MaxValue > MaxBitValue)
+		{
+			// We have to scale down, scale needs to be a float:
+			return (float)MaxValue / (float)MaxBitValue;
+		}
+		else
+		{
+			int32 scale = MaxBitValue / MaxValue;
+			return 1.f / scale;
+		}
+	}
+#endif
+};
+
+template<int32 MaxValue, int32 NumBits>
 bool WriteFixedCompressedFloat(const float Value, FArchive& Ar)
 {
-	// Note: enums are used in this function to force bit shifting to be done at compile time
-
-														// NumBits = 8:
-	enum { MaxBitValue	= (1 << (NumBits - 1)) - 1 };	//   0111 1111 - Max abs value we will serialize
-	enum { Bias			= (1 << (NumBits - 1)) };		//   1000 0000 - Bias to pivot around (in order to support signed values)
-	enum { SerIntMax	= (1 << (NumBits - 0)) };		// 1 0000 0000 - What we pass into SerializeInt
-	enum { MaxDelta		= (1 << (NumBits - 0)) - 1 };	//   1111 1111 - Max delta is
+	using Details = TFixedCompressedFloatDetails<MaxValue, NumBits>;
 
 	bool clamp = false;
 	int32 ScaledValue;
-	if ( MaxValue > MaxBitValue )
+	if ( MaxValue > Details::MaxBitValue )
 	{
 		// We have to scale this down, scale needs to be a float:
-		const float scale = (float)MaxBitValue / (float)MaxValue;
+		const float scale = (float)Details::MaxBitValue / (float)MaxValue;
 		ScaledValue = FMath::TruncToInt(scale * Value);
 	}
 	else
 	{
 		// We will scale up to get extra precision. But keep is a whole number preserve whole values
-		enum { scale = MaxBitValue / MaxValue };
+		enum { scale = Details::MaxBitValue / MaxValue };
 		ScaledValue = FMath::RoundToInt( scale * Value );
 	}
 
-	uint32 Delta = static_cast<uint32>(ScaledValue + Bias);
+	uint32 Delta = static_cast<uint32>(ScaledValue + Details::Bias);
 
-	if (Delta > MaxDelta)
+	if (Delta > Details::MaxDelta)
 	{
 		clamp = true;
-		Delta = static_cast<int32>(Delta) > 0 ? MaxDelta : 0;
+		Delta = static_cast<int32>(Delta) > 0 ? Details::MaxDelta : 0;
 	}
 
-	Ar.SerializeInt( Delta, SerIntMax );
+	Ar.SerializeInt( Delta, Details::SerIntMax );
 
 	return !clamp;
 }
@@ -1820,31 +1912,30 @@ bool WriteFixedCompressedFloat(const float Value, FArchive& Ar)
 template<int32 MaxValue, int32 NumBits>
 bool ReadFixedCompressedFloat(float &Value, FArchive& Ar)
 {
-	// Note: enums are used in this function to force bit shifting to be done at compile time
+	using Details = TFixedCompressedFloatDetails<MaxValue, NumBits>;
 
-														// NumBits = 8:
-	enum { MaxBitValue	= (1 << (NumBits - 1)) - 1 };	//   0111 1111 - Max abs value we will serialize
-	enum { Bias			= (1 << (NumBits - 1)) };		//   1000 0000 - Bias to pivot around (in order to support signed values)
-	enum { SerIntMax	= (1 << (NumBits - 0)) };		// 1 0000 0000 - What we pass into SerializeInt
-	enum { MaxDelta		= (1 << (NumBits - 0)) - 1 };	//   1111 1111 - Max delta is
-	
 	uint32 Delta;
-	Ar.SerializeInt(Delta, SerIntMax);
-	float UnscaledValue = static_cast<float>( static_cast<int32>(Delta) - Bias );
+	Ar.SerializeInt(Delta, Details::SerIntMax);
+	float UnscaledValue = static_cast<float>( static_cast<int32>(Delta) - Details::Bias );
 
-	if ( MaxValue > MaxBitValue )
+#if PLATFORM_COMPILER_HAS_IF_CONSTEXPR
+	if constexpr (MaxValue > Details::MaxBitValue)
 	{
 		// We have to scale down, scale needs to be a float:
-		const float InvScale = MaxValue / (float)MaxBitValue;
+		const float InvScale = MaxValue / (float)Details::MaxBitValue;
 		Value = UnscaledValue * InvScale;
 	}
 	else
 	{
-		enum { scale = MaxBitValue / MaxValue };
+		enum { scale = Details::MaxBitValue / MaxValue };
 		const float InvScale = 1.f / (float)scale;
 
 		Value = UnscaledValue * InvScale;
 	}
+#else
+	constexpr float InvScale = Details::GetInvScale();
+	Value = UnscaledValue * InvScale;
+#endif
 
 	return true;
 }

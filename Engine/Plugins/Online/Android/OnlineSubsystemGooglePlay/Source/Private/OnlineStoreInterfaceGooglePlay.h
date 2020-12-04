@@ -12,6 +12,7 @@ class FOnlineAsyncTaskGooglePlayQueryInAppPurchases;
 /**
  *	FOnlineStoreGooglePlay - Implementation of the online store for GooglePlay
  */
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 class FOnlineStoreGooglePlay : 
 	public IOnlineStore,
 	public TSharedFromThis<FOnlineStoreGooglePlay, ESPMode::ThreadSafe>
@@ -61,7 +62,7 @@ private:
 	 * @param InResponseCode response from Google backend
 	 * @param AvailablePurchases list of offers returned in response to a query on available offer ids
 	 */
-	void OnGooglePlayAvailableIAPQueryComplete(EGooglePlayBillingResponseCode InResponseCode, const TArray<FOnlineStoreOffer>& AvailablePurchases);
+	void OnGooglePlayAvailableIAPQueryComplete(EGooglePlayBillingResponseCode InResponseCode, const TArray<FProvidedProductInformation>& AvailablePurchases);
 	FDelegateHandle AvailableIAPQueryDelegateHandle;
 
 	/**
@@ -82,6 +83,7 @@ private:
 	void OnRestorePurchasesComplete(EGooglePlayBillingResponseCode InResponseCode, const TArray<FGoogleTransactionData>& InRestoredPurchases);
 	FDelegateHandle RestorePurchasesCompleteDelegateHandle;
 };
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
 typedef TSharedPtr<FOnlineStoreGooglePlay, ESPMode::ThreadSafe> FOnlineStoreGooglePlayPtr;
 

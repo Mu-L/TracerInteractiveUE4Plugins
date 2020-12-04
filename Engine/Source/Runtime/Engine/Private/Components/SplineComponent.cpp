@@ -11,6 +11,10 @@
 #include "SceneManagement.h"
 #include "UnrealEngine.h"
 
+#if WITH_EDITOR
+#include "Settings/LevelEditorViewportSettings.h"
+#endif
+
 #define SPLINE_FAST_BOUNDS_CALCULATION 0
 
 const FInterpCurvePointVector USplineComponent::DummyPointPosition(0.0f, FVector::ZeroVector, FVector::ForwardVector, FVector::ForwardVector, CIM_Constant);
@@ -38,6 +42,7 @@ USplineComponent::USplineComponent(const FObjectInitializer& ObjectInitializer)
 #if WITH_EDITORONLY_DATA
 	, EditorUnselectedSplineSegmentColor(FLinearColor(1.0f, 1.0f, 1.0f))
 	, EditorSelectedSplineSegmentColor(FLinearColor(0.828f, 0.364f, 0.003f))
+	, EditorTangentColor(FLinearColor(1.0f, 1.0f, 1.0f))
 	, bAllowDiscontinuousSpline(false)
 	, bShouldVisualizeScale(false)
 	, ScaleVisualizationWidth(30.0f)
@@ -203,6 +208,7 @@ void FSplineCurves::UpdateSpline(bool bClosedLoop, bool bStationaryEndpoints, in
 	}
 
 	ReparamTable.Points.Emplace(AccumulatedLength, static_cast<float>(NumSegments), 0.0f, 0.0f, CIM_Linear);
+	++Version;
 }
 
 void USplineComponent::UpdateSpline()
@@ -460,6 +466,29 @@ FVector USplineComponent::GetScaleAtSplineInputKey(float InKey) const
 	return Scale;
 }
 
+
+float USplineComponent::GetDistanceAlongSplineAtSplineInputKey(float InKey) const
+{
+	const int32 NumPoints = SplineCurves.Position.Points.Num();
+	const int32 NumSegments = bClosedLoop ? NumPoints : NumPoints - 1;
+
+	if ((InKey >= 0) && (InKey < NumSegments))
+	{
+		const int32 PointIndex = FMath::FloorToInt(InKey);
+		const float Fraction = InKey - PointIndex;
+		const int32 ReparamPointIndex = PointIndex * ReparamStepsPerSegment;
+		const float Distance = SplineCurves.ReparamTable.Points[ReparamPointIndex].InVal;
+		return Distance + GetSegmentLength(PointIndex, Fraction);
+	}
+	else if (InKey >= NumSegments)
+	{
+		return SplineCurves.GetSplineLength();
+	}
+
+	return 0.0f;
+}
+
+
 template<class T>
 T GetPropertyValueAtSplineInputKey(const USplineMetadata* Metadata, float InKey, FName PropertyName)
 {
@@ -530,6 +559,13 @@ void USplineComponent::SetSelectedSplineSegmentColor(const FLinearColor& Color)
 #endif
 }
 
+void USplineComponent::SetTangentColor(const FLinearColor& Color)
+{
+#if WITH_EDITORONLY_DATA
+	EditorTangentColor = Color;
+#endif
+}
+
 
 void USplineComponent::SetDrawDebug(bool bShow)
 {
@@ -543,6 +579,13 @@ void USplineComponent::ClearSplinePoints(bool bUpdateSpline)
 	SplineCurves.Position.Points.Reset();
 	SplineCurves.Rotation.Points.Reset();
 	SplineCurves.Scale.Points.Reset();
+
+	USplineMetadata* Metadata = GetSplinePointsMetadata();
+	if (Metadata)
+	{
+		Metadata->Reset(0);
+	}
+
 	if (bUpdateSpline)
 	{
 		UpdateSpline();
@@ -871,6 +914,38 @@ void USplineComponent::SetUpVectorAtSplinePoint(int32 PointIndex, const FVector&
 	}
 }
 
+void USplineComponent::SetRotationAtSplinePoint(int32 PointIndex, const FRotator& InRotation, ESplineCoordinateSpace::Type CoordinateSpace, bool bUpdateSpline /*= true*/)
+{
+	if (SplineCurves.Rotation.Points.IsValidIndex(PointIndex))
+	{
+		const FQuat Quat = (CoordinateSpace == ESplineCoordinateSpace::World) ?
+			GetComponentTransform().InverseTransformRotation(InRotation.Quaternion()) : InRotation.Quaternion();
+
+		FVector UpVector = Quat.GetUpVector();
+		SetUpVectorAtSplinePoint(PointIndex, UpVector, CoordinateSpace, false);
+
+		FVector Direction = Quat.GetForwardVector();
+		SetTangentAtSplinePoint(PointIndex, Direction, CoordinateSpace, false);
+
+		if (bUpdateSpline)
+		{
+			UpdateSpline();
+		}
+	}
+}
+
+void USplineComponent::SetScaleAtSplinePoint(int32 PointIndex, const FVector& InScaleVector, bool bUpdateSpline /*= true*/)
+{
+	if (SplineCurves.Rotation.Points.IsValidIndex(PointIndex))
+	{
+		SplineCurves.Scale.Points[PointIndex].OutVal = InScaleVector;
+
+		if (bUpdateSpline)
+		{
+			UpdateSpline();
+		}
+	}
+}
 
 ESplinePointType::Type USplineComponent::GetSplinePointType(int32 PointIndex) const
 {
@@ -1591,12 +1666,19 @@ void USplineComponent::Draw(FPrimitiveDrawInterface* PDI, const FSceneView* View
 
 				// Then draw a line for each substep.
 				const int32 NumSteps = 20;
+#if WITH_EDITOR
+				const float SegmentLineThickness = GetDefault<ULevelEditorViewportSettings>()->SplineLineThicknessAdjustment;
+#endif
 
 				for (int32 StepIdx = 1; StepIdx <= NumSteps; StepIdx++)
 				{
 					const float Key = (KeyIdx - 1) + (StepIdx / static_cast<float>(NumSteps));
 					const FVector NewPos = LocalToWorld.TransformPosition(SplineInfo.Eval(Key, FVector(0)));
+#if WITH_EDITOR
+					PDI->DrawLine(OldPos, NewPos, LineColor, DepthPriorityGroup, SegmentLineThickness);
+#else
 					PDI->DrawLine(OldPos, NewPos, LineColor, DepthPriorityGroup);
+#endif
 					OldPos = NewPos;
 				}
 			}
@@ -1605,6 +1687,14 @@ void USplineComponent::Draw(FPrimitiveDrawInterface* PDI, const FSceneView* View
 		OldKeyPos = NewKeyPos;
 	}
 }
+
+#if WITH_EDITOR
+bool USplineComponent::IgnoreBoundsForEditorFocus() const
+{
+	// Cannot compute proper bounds when there's no point so don't participate to editor focus if that's the case : 
+	return SplineCurves.Position.Points.Num() == 0;
+}
+#endif // WITH_EDITOR
 
 FBoxSphereBounds USplineComponent::CalcBounds(const FTransform& LocalToWorld) const
 {
@@ -1628,18 +1718,25 @@ FBoxSphereBounds USplineComponent::CalcBounds(const FTransform& LocalToWorld) co
 
 	FVector Min(WORLD_MAX);
 	FVector Max(-WORLD_MAX);
-	for (int32 Index = 0; Index < NumSegments; Index++)
+	if (NumSegments > 0)
 	{
-		const bool bLoopSegment = (Index == NumPoints - 1);
-		const int32 NextIndex = bLoopSegment ? 0 : Index + 1;
-		const FInterpCurvePoint<FVector>& ThisInterpPoint = SplineCurves.Position.Points[Index];
-		FInterpCurvePoint<FVector> NextInterpPoint = SplineCurves.Position.Points[NextIndex];
-		if (bLoopSegment)
+		for (int32 Index = 0; Index < NumSegments; Index++)
 		{
-			NextInterpPoint.InVal = ThisInterpPoint.InVal + SplineCurves.Position.LoopKeyOffset;
-		}
+			const bool bLoopSegment = (Index == NumPoints - 1);
+			const int32 NextIndex = bLoopSegment ? 0 : Index + 1;
+			const FInterpCurvePoint<FVector>& ThisInterpPoint = SplineCurves.Position.Points[Index];
+			FInterpCurvePoint<FVector> NextInterpPoint = SplineCurves.Position.Points[NextIndex];
+			if (bLoopSegment)
+			{
+				NextInterpPoint.InVal = ThisInterpPoint.InVal + SplineCurves.Position.LoopKeyOffset;
+			}
 
-		CurveVectorFindIntervalBounds(ThisInterpPoint, NextInterpPoint, Min, Max);
+			CurveVectorFindIntervalBounds(ThisInterpPoint, NextInterpPoint, Min, Max);
+		}
+	}
+	else if (NumPoints == 1)
+	{
+		Min = Max = SplineCurves.Position.Points[0].OutVal;
 	}
 
 	return FBoxSphereBounds(FBox(Min, Max).TransformBy(LocalToWorld));

@@ -118,6 +118,8 @@ struct GAMEPLAYABILITIES_API FGameplayAttribute
 	float GetNumericValueChecked(const UAttributeSet* Src) const;
 
 	/** Returns the AttributeData, will fail if this is a float attribute */
+	const FGameplayAttributeData* GetGameplayAttributeData(const UAttributeSet* Src) const;
+	const FGameplayAttributeData* GetGameplayAttributeDataChecked(const UAttributeSet* Src) const;
 	FGameplayAttributeData* GetGameplayAttributeData(UAttributeSet* Src) const;
 	FGameplayAttributeData* GetGameplayAttributeDataChecked(UAttributeSet* Src) const;
 	
@@ -495,7 +497,7 @@ private:
 /**
  *	This is a helper macro that can be used in RepNotify functions to handle attributes that will be predictively modified by clients.
  *	
- *	void UMyHealthSet::OnRep_Health(const FFortGameplayAttributeData& OldValue)
+ *	void UMyHealthSet::OnRep_Health(const FGameplayAttributeData& OldValue)
  *	{
  *		GAMEPLAYATTRIBUTE_REPNOTIFY(UMyHealthSet, Health, OldValue);
  *	}

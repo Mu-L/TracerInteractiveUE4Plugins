@@ -22,6 +22,10 @@ StructuredBuffer<FSkyLightVisibilityRays> SkyLightVisibilityRays;
 #define USE_HAIR_LIGHTING 0
 #endif
 
+#if USE_HAIR_LIGHTING
+#include "../HairStrands/HairStrandsRaytracing.ush"
+#endif
+
 // Evaluates the radiance for the current sky light in a given direction
 float3 EvaluateSkyLightRadiance(float3 Direction)
 {
@@ -40,6 +44,7 @@ float3 EvaluateSkyLightRadiance(float3 Direction)
 // bDecoupleSampleGeneration - Indicates weather or not to use decoupled sample generation for generating visibility rays, requires that the visibility ray buffer has been populated by the GenerateSkyLightVisibilityRaysCS pass.
 void SkyLightEvaluate(
 	in const uint2 SampleCoord,
+	in const uint2 PixelCoord,
 	in const uint SamplesPerPixel,
 	in const float3 WorldPosition,
 	in const float3 WorldNormal,
@@ -143,14 +148,23 @@ void SkyLightEvaluate(
 		}
 
 		// Apply a depth bias based on if the sample world position came from the g-buffer or not
-		if (bGBufferSampleOrigin)
+		float NoL = dot(CurrentWorldNormal, Ray.Direction);
+		if (NoL > 0.0)
 		{
-			ApplyCameraRelativeDepthBias(Ray, SampleCoord, DeviceZ, CurrentWorldNormal, SkyLight.MaxNormalBias);
+			if (bGBufferSampleOrigin)
+			{
+				ApplyCameraRelativeDepthBias(Ray, PixelCoord, DeviceZ, CurrentWorldNormal, SkyLight.MaxNormalBias);
+			}
+			else
+			{
+				ApplyPositionBias(Ray, CurrentWorldNormal, SkyLight.MaxNormalBias);
+			}
 		}
 		else
 		{
-			ApplyPositionBias(Ray, CurrentWorldNormal, SkyLight.MaxNormalBias);
+			ApplyPositionBias(Ray, -CurrentWorldNormal, SkyLight.MaxNormalBias);
 		}
+		NoL = saturate(NoL);
 
 		// Trace a visibility ray
 		uint RayFlags = 0;
@@ -167,12 +181,17 @@ void SkyLightEvaluate(
 			TLAS,
 			RayFlags,
 			InstanceInclusionMask,
+			PixelCoord,
 			Ray);
 
 		#if USE_HAIR_LIGHTING
 		if (GBufferData.ShadingModelID != SHADINGMODELID_HAIR)
 		{
-			MinimalPayload.HitT = TraverseHair(SampleCoord, Ray.Origin, Ray.Direction, MinimalPayload.HitT);
+			const float HairOcclusionThreshold = 1;
+			RandomSequence RandSequence;
+			uint LinearIndex = CalcLinearIndex(PixelCoord);
+			RandomSequence_Initialize(RandSequence, LinearIndex, View.StateFrameIndex);
+			MinimalPayload.HitT = TraverseHair(PixelCoord, RandSequence, Ray.Origin, Ray.Direction, MinimalPayload.HitT, VirtualVoxel.Raytracing_SkyOcclusionThreshold);
 		}
 		#endif
 
@@ -189,7 +208,6 @@ void SkyLightEvaluate(
 			const half3 N = WorldNormal;
 			const half3 V = -ViewDirection;
 			const half3 L = Ray.Direction;
-			const float NoL = saturate(dot(CurrentWorldNormal, L));
 			FDirectLighting LightingSample;
 			if (GBufferData.ShadingModelID == SHADINGMODELID_HAIR)
 			{
@@ -197,9 +215,8 @@ void SkyLightEvaluate(
 				float Backlit = 0.0;
 				float Area = 0.0;
 				uint2 Random = 0;
-				bool bEvalMultiScatter = false;
-				FHairTransmittanceData HairTransmittance = InitHairTransmittanceData();
-				LightingSample.Diffuse = HairShading(GBufferData, L, V, N, Shadow, HairTransmittance, Backlit, Area, Random, bEvalMultiScatter);
+				FHairTransmittanceData HairTransmittance = InitHairTransmittanceData(false);
+				LightingSample.Diffuse = HairShading(GBufferData, L, V, N, Shadow, HairTransmittance, Backlit, Area, Random);
 				LightingSample.Transmission = 0;
 				LightingSample.Specular = 0;
 			}
@@ -212,7 +229,12 @@ void SkyLightEvaluate(
 			float3 IncomingRadiance = EvaluateSkyLightRadiance(Ray.Direction);
 
 			ExitantRadiance += IncomingRadiance * Brdf * RayWeight;
-			DiffuseExitantRadiance += IncomingRadiance * (LightingSample.Diffuse + LightingSample.Transmission) * RayWeight;
+			float3 DiffuseThroughput = LightingSample.Diffuse;
+			if (SkyLight.bTransmission)
+			{
+				DiffuseThroughput += LightingSample.Transmission;
+			}
+			DiffuseExitantRadiance += IncomingRadiance * DiffuseThroughput * RayWeight;
 		}
 	}
 
@@ -270,6 +292,7 @@ void SkyLightEvaluate(
 				TLAS,
 				RayFlagsLocal,
 				InstanceInclusionMaskLocal,
+				PixelCoord,
 				RayLocal);
 
 			float3 P = RayLocal.Origin + RayLocal.Direction * MinimalPayloadLocal.HitT;
@@ -280,4 +303,40 @@ void SkyLightEvaluate(
 
 		DiffuseExitantRadiance += SkySHDiffuseIrradiance * ScatterThroughput * (1.0 - AmbientOcclusion);
 	}
+}
+
+
+// special case of pixel coord == sample coord
+void SkyLightEvaluate(
+	in const uint2 SampleCoord,
+	in const uint SamplesPerPixel,
+	in const float3 WorldPosition,
+	in const float3 WorldNormal,
+	in const float3 ViewDirection,
+	in const FGBufferData GBufferData,
+	in const RaytracingAccelerationStructure TLAS,
+	in const bool bGBufferSampleOrigin,
+	in const float DeviceZ,
+	in const bool bDecoupleSampleGeneration,
+	inout float3 ExitantRadiance,
+	inout float3 DiffuseExitantRadiance,
+	inout float AmbientOcclusion,
+	inout float HitDistance)
+{
+	SkyLightEvaluate(
+		SampleCoord,
+		SampleCoord,
+		SamplesPerPixel,
+		WorldPosition,
+		WorldNormal,
+		ViewDirection,
+		GBufferData,
+		TLAS,
+		bGBufferSampleOrigin,
+		DeviceZ,
+		bDecoupleSampleGeneration,
+		ExitantRadiance,
+		DiffuseExitantRadiance,
+		AmbientOcclusion,
+		HitDistance);
 }

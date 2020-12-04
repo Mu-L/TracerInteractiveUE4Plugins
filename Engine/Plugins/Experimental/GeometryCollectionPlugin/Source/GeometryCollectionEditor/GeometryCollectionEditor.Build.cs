@@ -21,18 +21,18 @@ namespace UnrealBuildTool.Rules
 				    "PropertyEditor",
 				    "RenderCore",
 				    "RHI",
-				    "GeometryCollectionCore",
                     "GeometryCollectionEngine",
-                    "GeometryCollectionSimulationCore",
                     "RawMesh",
 				    "AssetTools",
 				    "AssetRegistry",
 				    "SceneOutliner",
-				    "FieldSystemCore",
 					"EditorStyle",
 					"ToolMenus",
+					"Chaos"
 				}
 			);
+
+			PrivateDefinitions.Add("CHAOS_INCLUDE_LEVEL_1=1");
 		}
 	}
 }

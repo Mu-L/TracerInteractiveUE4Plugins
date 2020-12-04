@@ -8,6 +8,7 @@
 #include "Tree/CurveEditorTree.h"
 #include "DisplayNodes/SequencerDisplayNode.h"
 #include "SectionHandle.h"
+#include "MovieSceneSequence.h"
 
 class FSequencer;
 class FCurveEditor;
@@ -82,6 +83,8 @@ public:
 	 */
 	void FilterNodes( const FString& InFilter );
 
+	/** Called when the active MovieScene's node group colletion has been modifed */
+	void NodeGroupsCollectionChanged();
 
 	/**
 	 * Unpins any pinned nodes in this tree
@@ -210,7 +213,7 @@ public:
 
 private:
 
-	/** Returns whether this NodeTree should only display seleected nodes */
+	/** Returns whether this NodeTree should only display selected nodes */
 	bool ShowSelectedNodesOnly() const;
 
 	/** Population algorithm utilities */
@@ -286,6 +289,16 @@ private:
 	 */
 	bool KeyAreaHasCurves(const FSequencerSectionKeyAreaNode& KeyAreaNode) const;
 
+	/**
+	 * Destroys all nodes contained within this tree.
+	 * @note: Does not broadcast update notifications
+	 */
+	void DestroyAllNodes();
+
+public:
+	int32 GetTotalDisplayNodeCount() const { return DisplayNodeCount; }
+	int32 GetFilteredDisplayNodeCount() const { return FilteredNodes.Num(); }
+
 private:
 
 	/** Symbolic root node that contains the actual displayed root nodes as children */
@@ -324,8 +337,14 @@ private:
 	/** Level based track filtering */
 	TSharedPtr<FSequencerTrackFilter_LevelFilter> TrackFilterLevelFilter;
 
+	TWeakObjectPtr<UMovieSceneSequence> WeakCurrentSequence;
+
+	/** The total number of DisplayNodes in the tree, both displayed and hidden */
+	uint32 DisplayNodeCount;
+
 	bool bFilterUpdateRequested;
-	
+	bool bFilteringOnNodeGroups;
+
 	/** Cached value of whether we have any nodes that should be treated as soloing */
 	bool bHasSoloNodes;
 };

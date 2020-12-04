@@ -15,6 +15,9 @@
 #include "Engine/Engine.h"
 #include "DrawDebugHelpers.h"
 #include "GameFramework/WorldSettings.h"
+#include "Animation/AnimNode_Root.h"
+#include "Animation/AnimNode_LinkedAnimLayer.h"
+#include "Animation/AnimMontage.h"
 
 #define DO_ANIMSTAT_PROCESSING(StatName) DEFINE_STAT(STAT_ ## StatName)
 #include "Animation/AnimMTStats.h"
@@ -22,9 +25,7 @@
 
 #define DO_ANIMSTAT_PROCESSING(StatName) DEFINE_STAT(STAT_ ## StatName ## _WorkerThread)
 #include "Animation/AnimMTStats.h"
-#include "Animation/AnimNode_Root.h"
-#include "Animation/AnimNode_LinkedAnimLayer.h"
-#include "Animation/AnimMontage.h"
+#include "Animation/AnimInstance.h"
 
 #undef DO_ANIMSTAT_PROCESSING
 
@@ -124,26 +125,23 @@ void FAnimInstanceProxy::Initialize(UAnimInstance* InAnimInstance)
 
 		// Initialize state buffers
 		int32 NumStates = 0;
-		if(IAnimClassInterface* Interface = GetAnimClassInterface())
+		const TArray<FBakedAnimationStateMachine>& BakedMachines = AnimClassInterface->GetBakedStateMachines();
+		const int32 NumMachines = BakedMachines.Num();
+		for(int32 MachineClassIndex = 0; MachineClassIndex < NumMachines; ++MachineClassIndex)
 		{
-			const TArray<FBakedAnimationStateMachine>& BakedMachines = Interface->GetBakedStateMachines();
-			const int32 NumMachines = BakedMachines.Num();
-			for(int32 MachineClassIndex = 0; MachineClassIndex < NumMachines; ++MachineClassIndex)
-			{
-				const FBakedAnimationStateMachine& Machine = BakedMachines[MachineClassIndex];
-				StateMachineClassIndexToWeightOffset.Add(MachineClassIndex, NumStates);
-				NumStates += Machine.States.Num();
-			}
-			StateWeightArrays[0].Reset(NumStates);
-			StateWeightArrays[0].AddZeroed(NumStates);
-			StateWeightArrays[1].Reset(NumStates);
-			StateWeightArrays[1].AddZeroed(NumStates);
-
-			MachineWeightArrays[0].Reset(NumMachines);
-			MachineWeightArrays[0].AddZeroed(NumMachines);
-			MachineWeightArrays[1].Reset(NumMachines);
-			MachineWeightArrays[1].AddZeroed(NumMachines);
+			const FBakedAnimationStateMachine& Machine = BakedMachines[MachineClassIndex];
+			StateMachineClassIndexToWeightOffset.Add(MachineClassIndex, NumStates);
+			NumStates += Machine.States.Num();
 		}
+		StateWeightArrays[0].Reset(NumStates);
+		StateWeightArrays[0].AddZeroed(NumStates);
+		StateWeightArrays[1].Reset(NumStates);
+		StateWeightArrays[1].AddZeroed(NumStates);
+
+		MachineWeightArrays[0].Reset(NumMachines);
+		MachineWeightArrays[0].AddZeroed(NumMachines);
+		MachineWeightArrays[1].Reset(NumMachines);
+		MachineWeightArrays[1].AddZeroed(NumMachines);
 
 #if WITH_EDITORONLY_DATA
 		if (UAnimBlueprint* Blueprint = Cast<UAnimBlueprint>(InAnimInstance->GetClass()->ClassGeneratedBy))
@@ -397,10 +395,10 @@ void FAnimInstanceProxy::PreUpdate(UAnimInstance* InAnimInstance, float DeltaSec
 	TArray<FAnimTickRecord>& UngroupedActivePlayers = UngroupedActivePlayerArrays[GetSyncGroupWriteIndex()];
 	UngroupedActivePlayers.Reset();
 
-	TArray<FAnimGroupInstance>& SyncGroups = SyncGroupArrays[GetSyncGroupWriteIndex()];
-	for (int32 GroupIndex = 0; GroupIndex < SyncGroups.Num(); ++GroupIndex)
+	FSyncGroupMap& SyncGroups = SyncGroupMaps[GetSyncGroupWriteIndex()];
+	for (auto& SyncGroupPair : SyncGroups)
 	{
-		SyncGroups[GroupIndex].Reset();
+		SyncGroupPair.Value.Reset();
 	}
 
 	TArray<float>& StateWeights = StateWeightArrays[GetSyncGroupWriteIndex()];
@@ -555,6 +553,11 @@ void FAnimInstanceProxy::InitializeObjects(UAnimInstance* InAnimInstance)
 	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
 
 	SkeletalMeshComponent = InAnimInstance->GetSkelMeshComponent();
+	if(SkeletalMeshComponent->GetAnimInstance())
+	{
+		MainInstanceProxy = &SkeletalMeshComponent->GetAnimInstance()->GetProxyOnAnyThread<FAnimInstanceProxy>();
+	}
+
 	if (SkeletalMeshComponent->SkeletalMesh != nullptr)
 	{
 		Skeleton = SkeletalMeshComponent->SkeletalMesh->Skeleton;
@@ -595,26 +598,72 @@ void FAnimInstanceProxy::InitializeObjects(UAnimInstance* InAnimInstance)
 void FAnimInstanceProxy::ClearObjects()
 {
 	SkeletalMeshComponent = nullptr;
+	MainInstanceProxy = nullptr;
 	Skeleton = nullptr;
+}
+
+FAnimTickRecord& FAnimInstanceProxy::CreateUninitializedTickRecord(FAnimGroupInstance*& OutSyncGroupPtr, FName GroupName)
+{
+	// Find or create the sync group if there is one
+	OutSyncGroupPtr = nullptr;
+	if (GroupName != NAME_None)
+	{
+		FSyncGroupMap& SyncGroupMap = SyncGroupMaps[GetSyncGroupWriteIndex()];
+		OutSyncGroupPtr = &SyncGroupMap.FindOrAdd(GroupName);
+	}
+
+	// Create the record
+	FAnimTickRecord* TickRecord = new ((OutSyncGroupPtr != nullptr) ? OutSyncGroupPtr->ActivePlayers : UngroupedActivePlayerArrays[GetSyncGroupWriteIndex()]) FAnimTickRecord();
+	return *TickRecord;
+}
+
+FAnimTickRecord& FAnimInstanceProxy::CreateUninitializedTickRecordInScope(FAnimGroupInstance*& OutSyncGroupPtr, FName GroupName, EAnimSyncGroupScope Scope)
+{
+	if (GroupName != NAME_None)
+	{
+		// If we have no main proxy or it is "this", force us to local
+		if(MainInstanceProxy == nullptr || MainInstanceProxy == this)
+		{
+			Scope = EAnimSyncGroupScope::Local;
+		}
+
+		switch(Scope)
+		{
+		default:
+			ensureMsgf(false, TEXT("FAnimInstanceProxy::CreateUninitializedTickRecordInScope: Scope has invalid value %d"), Scope);
+			// Fall through
+
+		case EAnimSyncGroupScope::Local:
+			return CreateUninitializedTickRecord(OutSyncGroupPtr, GroupName);
+		case EAnimSyncGroupScope::Component:
+			// Forward to the main instance to sync with animations there in TickAssetPlayerInstances()
+			return MainInstanceProxy->CreateUninitializedTickRecord(OutSyncGroupPtr, GroupName);
+		}
+	}
+	
+	return CreateUninitializedTickRecord(OutSyncGroupPtr, GroupName);
 }
 
 FAnimTickRecord& FAnimInstanceProxy::CreateUninitializedTickRecord(int32 GroupIndex, FAnimGroupInstance*& OutSyncGroupPtr)
 {
-	// Find or create the sync group if there is one
-	OutSyncGroupPtr = NULL;
-	if (GroupIndex >= 0)
+	FName SyncGroupName = NAME_None;
+	if(GroupIndex >= 0)
 	{
-		TArray<FAnimGroupInstance>& SyncGroups = SyncGroupArrays[GetSyncGroupWriteIndex()];
-		while (SyncGroups.Num() <= GroupIndex)
-		{
-			new (SyncGroups) FAnimGroupInstance();
-		}
-		OutSyncGroupPtr = &(SyncGroups[GroupIndex]);
+		SyncGroupName = GetAnimClassInterface()->GetSyncGroupNames()[GroupIndex];
 	}
 
-	// Create the record
-	FAnimTickRecord* TickRecord = new ((OutSyncGroupPtr != NULL) ? OutSyncGroupPtr->ActivePlayers : UngroupedActivePlayerArrays[GetSyncGroupWriteIndex()]) FAnimTickRecord();
-	return *TickRecord;
+	return CreateUninitializedTickRecord(OutSyncGroupPtr, SyncGroupName);
+}
+
+FAnimTickRecord& FAnimInstanceProxy::CreateUninitializedTickRecordInScope(int32 GroupIndex, EAnimSyncGroupScope Scope, FAnimGroupInstance*& OutSyncGroupPtr)
+{
+	FName SyncGroupName = NAME_None;
+	if(GroupIndex >= 0)
+	{
+		SyncGroupName = GetAnimClassInterface()->GetSyncGroupNames()[GroupIndex];
+	}
+
+	return CreateUninitializedTickRecordInScope(OutSyncGroupPtr, SyncGroupName, Scope);
 }
 
 void FAnimInstanceProxy::MakeSequenceTickRecord(FAnimTickRecord& TickRecord, class UAnimSequenceBase* Sequence, bool bLooping, float PlayRate, float FinalBlendWeight, float& CurrentTime, FMarkerTickRecord& MarkerTickRecord) const
@@ -678,20 +727,20 @@ void FAnimInstanceProxy::TickAssetPlayerInstances(float DeltaSeconds)
 	SCOPE_CYCLE_COUNTER(STAT_TickAssetPlayerInstances);
 
 	// Handle all players inside sync groups
-	TArray<FAnimGroupInstance>& SyncGroups = SyncGroupArrays[GetSyncGroupWriteIndex()];
-	const TArray<FAnimGroupInstance>& PreviousSyncGroups = SyncGroupArrays[GetSyncGroupReadIndex()];
+	FSyncGroupMap& SyncGroupMap = SyncGroupMaps[GetSyncGroupWriteIndex()];
+	const FSyncGroupMap& PreviousSyncGroupMap = SyncGroupMaps[GetSyncGroupReadIndex()];
 	TArray<FAnimTickRecord>& UngroupedActivePlayers = UngroupedActivePlayerArrays[GetSyncGroupWriteIndex()];
 
-	for (int32 GroupIndex = 0; GroupIndex < SyncGroups.Num(); ++GroupIndex)
+	for (auto& SyncGroupPair : SyncGroupMap)
 	{
-		FAnimGroupInstance& SyncGroup = SyncGroups[GroupIndex];
+		FAnimGroupInstance& SyncGroup = SyncGroupPair.Value;
 	
 		if (SyncGroup.ActivePlayers.Num() > 0)
 		{
-			const FAnimGroupInstance* PreviousGroup = PreviousSyncGroups.IsValidIndex(GroupIndex) ? &PreviousSyncGroups[GroupIndex] : nullptr;
+			const FAnimGroupInstance* PreviousGroup = PreviousSyncGroupMap.Find(SyncGroupPair.Key);
 			SyncGroup.Prepare(PreviousGroup);
 
-			UE_LOG(LogAnimMarkerSync, Log, TEXT("Ticking Group [%d] GroupLeader [%d]"), GroupIndex, SyncGroup.GroupLeaderIndex);
+			UE_LOG(LogAnimMarkerSync, Log, TEXT("Ticking Group [%s] GroupLeader [%d]"), *SyncGroupPair.Key.ToString(), SyncGroup.GroupLeaderIndex);
 
 			const bool bOnlyOneAnimationInGroup = SyncGroup.ActivePlayers.Num() == 1;
 
@@ -712,12 +761,12 @@ void FAnimInstanceProxy::TickAssetPlayerInstances(float DeltaSeconds)
 			//For debugging UE-54705
 			FName InitialMarkerPrevious = TickContext.MarkerTickContext.GetMarkerSyncStartPosition().PreviousMarkerName;
 			FName InitialMarkerEnd = TickContext.MarkerTickContext.GetMarkerSyncStartPosition().NextMarkerName;
-			const bool bIsLeaderRecordValidPre = SyncGroup.ActivePlayers[0].MarkerTickRecord->IsValid();
+			const bool bIsLeaderRecordValidPre = SyncGroup.ActivePlayers[0].MarkerTickRecord->IsValid(SyncGroup.ActivePlayers[0].bLooping);
 			FMarkerTickRecord LeaderPreMarkerTickRecord = *SyncGroup.ActivePlayers[0].MarkerTickRecord;
 #endif
 
 			// initialize to invalidate first
-			ensureMsgf(SyncGroup.GroupLeaderIndex == INDEX_NONE, TEXT("SyncGroup with GroupIndex=%d had a non -1 group leader index of %d in asset %s"), GroupIndex, SyncGroup.GroupLeaderIndex, *GetNameSafe(SkeletalMeshComponent));
+			ensureMsgf(SyncGroup.GroupLeaderIndex == INDEX_NONE, TEXT("SyncGroup %s had a non -1 group leader index of %d in asset %s"), *SyncGroupPair.Key.ToString(), SyncGroup.GroupLeaderIndex, *GetNameSafe(SkeletalMeshComponent));
 			int32 GroupLeaderIndex = 0;
 			for (; GroupLeaderIndex < SyncGroup.ActivePlayers.Num(); ++GroupLeaderIndex)
 			{
@@ -762,7 +811,7 @@ void FAnimInstanceProxy::TickAssetPlayerInstances(float DeltaSeconds)
 			if (TickContext.CanUseMarkerPosition())
 			{
 				const FMarkerSyncAnimPosition& MarkerStart = TickContext.MarkerTickContext.GetMarkerSyncStartPosition();
-				FName SyncGroupName = GetAnimClassInterface()->GetSyncGroupNames()[GroupIndex];
+				FName SyncGroupName = SyncGroupPair.Key;
 				FAnimTickRecord& GroupLeader = SyncGroup.ActivePlayers[SyncGroup.GroupLeaderIndex];
 				FString LeaderAnimName = GroupLeader.SourceAsset->GetName();
 
@@ -880,16 +929,14 @@ int32 FAnimInstanceProxy::GetSyncGroupIndexFromName(FName SyncGroupName) const
 
 bool FAnimInstanceProxy::GetTimeToClosestMarker(FName SyncGroup, FName MarkerName, float& OutMarkerTime) const
 {
-	const int32 SyncGroupIndex = GetSyncGroupIndexFromName(SyncGroup);
-	const TArray<FAnimGroupInstance>& SyncGroups = SyncGroupArrays[GetSyncGroupReadIndex()];
+	const FSyncGroupMap& SyncGroupMap = SyncGroupMaps[GetSyncGroupReadIndex()];
 
-	if (SyncGroups.IsValidIndex(SyncGroupIndex))
+	if (const FAnimGroupInstance* SyncGroupInstancePtr = SyncGroupMap.Find(SyncGroup))
 	{
-		const FAnimGroupInstance& SyncGroupInstance = SyncGroups[SyncGroupIndex];
-		if (SyncGroupInstance.bCanUseMarkerSync && SyncGroupInstance.ActivePlayers.IsValidIndex(SyncGroupInstance.GroupLeaderIndex))
+		if (SyncGroupInstancePtr->bCanUseMarkerSync && SyncGroupInstancePtr->ActivePlayers.IsValidIndex(SyncGroupInstancePtr->GroupLeaderIndex))
 		{
-			const FMarkerSyncAnimPosition& EndPosition = SyncGroupInstance.MarkerTickContext.GetMarkerSyncEndPosition();
-			const FAnimTickRecord& Leader = SyncGroupInstance.ActivePlayers[SyncGroupInstance.GroupLeaderIndex];
+			const FMarkerSyncAnimPosition& EndPosition = SyncGroupInstancePtr->MarkerTickContext.GetMarkerSyncEndPosition();
+			const FAnimTickRecord& Leader = SyncGroupInstancePtr->ActivePlayers[SyncGroupInstancePtr->GroupLeaderIndex];
 			if (EndPosition.PreviousMarkerName == MarkerName)
 			{
 				OutMarkerTime = Leader.MarkerTickRecord->PreviousMarker.TimeToMarker;
@@ -922,15 +969,13 @@ void FAnimInstanceProxy::AddAnimNotifyFromGeneratedClass(int32 NotifyIndex)
 
 bool FAnimInstanceProxy::HasMarkerBeenHitThisFrame(FName SyncGroup, FName MarkerName) const
 {
-	const int32 SyncGroupIndex = GetSyncGroupIndexFromName(SyncGroup);
-	const TArray<FAnimGroupInstance>& SyncGroups = SyncGroupArrays[GetSyncGroupReadIndex()];
+	const FSyncGroupMap& SyncGroupMap = SyncGroupMaps[GetSyncGroupReadIndex()];
 
-	if (SyncGroups.IsValidIndex(SyncGroupIndex))
+	if (const FAnimGroupInstance* SyncGroupInstancePtr = SyncGroupMap.Find(SyncGroup))
 	{
-		const FAnimGroupInstance& SyncGroupInstance = SyncGroups[SyncGroupIndex];
-		if (SyncGroupInstance.bCanUseMarkerSync)
+		if (SyncGroupInstancePtr->bCanUseMarkerSync)
 		{
-			return SyncGroupInstance.MarkerTickContext.MarkersPassedThisTick.ContainsByPredicate([&MarkerName](const FPassedMarker& PassedMarker) -> bool
+			return SyncGroupInstancePtr->MarkerTickContext.MarkersPassedThisTick.ContainsByPredicate([&MarkerName](const FPassedMarker& PassedMarker) -> bool
 			{
 				return PassedMarker.PassedMarkerName == MarkerName;
 			});
@@ -957,15 +1002,13 @@ bool FAnimInstanceProxy::IsSyncGroupBetweenMarkers(FName InSyncGroupName, FName 
 
 FMarkerSyncAnimPosition FAnimInstanceProxy::GetSyncGroupPosition(FName InSyncGroupName) const
 {
-	const int32 SyncGroupIndex = GetSyncGroupIndexFromName(InSyncGroupName);
-	const TArray<FAnimGroupInstance>& SyncGroups = SyncGroupArrays[GetSyncGroupReadIndex()];
+	const FSyncGroupMap& SyncGroupMap = SyncGroupMaps[GetSyncGroupReadIndex()];
 
-	if (SyncGroups.IsValidIndex(SyncGroupIndex))
+	if (const FAnimGroupInstance* SyncGroupInstancePtr = SyncGroupMap.Find(InSyncGroupName))
 	{
-		const FAnimGroupInstance& SyncGroupInstance = SyncGroups[SyncGroupIndex];
-		if (SyncGroupInstance.bCanUseMarkerSync && SyncGroupInstance.MarkerTickContext.IsMarkerSyncEndValid())
+		if (SyncGroupInstancePtr->bCanUseMarkerSync && SyncGroupInstancePtr->MarkerTickContext.IsMarkerSyncEndValid())
 		{
-			return SyncGroupInstance.MarkerTickContext.GetMarkerSyncEndPosition();
+			return SyncGroupInstancePtr->MarkerTickContext.GetMarkerSyncEndPosition();
 		}
 	}
 
@@ -1205,6 +1248,14 @@ void FAnimInstanceProxy::UpdateAnimation()
 {
 	DECLARE_SCOPE_HIERARCHICAL_COUNTER_FUNC()
 
+	FMemMark Mark(FMemStack::Get());
+
+	// Process internal batched property copies
+	if(AnimClassInterface)
+	{
+		PropertyAccess::ProcessCopies(GetAnimInstanceObject(), AnimClassInterface->GetPropertyAccessLibrary(), EPropertyAccessCopyBatch::InternalBatched);
+	}
+
 #if WITH_EDITORONLY_DATA
 	UpdatedNodesThisFrame.Reset();
 #endif
@@ -1428,6 +1479,24 @@ void FAnimInstanceProxy::EvaluateAnimationNode_WithRoot(FPoseContext& Output, FA
 
 void FAnimInstanceProxy::SlotEvaluatePose(const FName& SlotNodeName, const FCompactPose& SourcePose, const FBlendedCurve& SourceCurve, float InSourceWeight, FCompactPose& BlendedPose, FBlendedCurve& BlendedCurve, float InBlendWeight, float InTotalNodeWeight)
 {
+	FStackCustomAttributes TempAttributes;
+
+	const FAnimationPoseData SourceAnimationPoseData(*const_cast<FCompactPose*>(&SourcePose), *const_cast<FBlendedCurve*>(&SourceCurve), TempAttributes);
+	FAnimationPoseData BlendedAnimationPoseData(BlendedPose, BlendedCurve, TempAttributes);
+
+	SlotEvaluatePose(SlotNodeName, SourceAnimationPoseData, InSourceWeight, BlendedAnimationPoseData, InBlendWeight, InTotalNodeWeight);
+}
+
+void FAnimInstanceProxy::SlotEvaluatePose(const FName& SlotNodeName, const FAnimationPoseData& SourceAnimationPoseData, float InSourceWeight, FAnimationPoseData& OutBlendedAnimationPoseData, float InBlendWeight, float InTotalNodeWeight)
+{
+	const FCompactPose& SourcePose = SourceAnimationPoseData.GetPose();
+	const FBlendedCurve& SourceCurve = SourceAnimationPoseData.GetCurve();
+	const FStackCustomAttributes& SourceAttributes = SourceAnimationPoseData.GetAttributes();
+	
+	FCompactPose& BlendedPose = OutBlendedAnimationPoseData.GetPose();
+	FBlendedCurve& BlendedCurve = OutBlendedAnimationPoseData.GetCurve();
+	FStackCustomAttributes& BlendedAttributes = OutBlendedAnimationPoseData.GetAttributes();
+	
 	//Accessing MontageInstances from this function is not safe (as this can be called during Parallel Anim Evaluation!
 	//Any montage data you need to add should be part of MontageEvaluationData
 	// nothing to blend, just get it out
@@ -1435,6 +1504,7 @@ void FAnimInstanceProxy::SlotEvaluatePose(const FName& SlotNodeName, const FComp
 	{
 		BlendedPose = SourcePose;
 		BlendedCurve = SourceCurve;
+		BlendedAttributes = SourceAttributes;
 		return;
 	}
 
@@ -1456,6 +1526,7 @@ void FAnimInstanceProxy::SlotEvaluatePose(const FName& SlotNodeName, const FComp
 		{
 			BlendedPose = SourcePose;
 			BlendedCurve = SourceCurve;
+			BlendedAttributes = SourceAttributes;
 			return;
 		}
 
@@ -1477,7 +1548,9 @@ void FAnimInstanceProxy::SlotEvaluatePose(const FName& SlotNodeName, const FComp
 
 			// Extract pose from Track
 			FAnimExtractContext ExtractionContext(EvalState.MontagePosition, Montage->HasRootMotion() && RootMotionMode != ERootMotionMode::NoRootMotionExtraction);
-			AnimTrack->GetAnimationPose(NewPose.Pose, NewPose.Curve, ExtractionContext);
+
+			FAnimationPoseData NewAnimationPoseData(NewPose);
+			AnimTrack->GetAnimationPose(NewAnimationPoseData, ExtractionContext);
 
 			// add montage curves 
 			FBlendedCurve MontageCurve;
@@ -1532,6 +1605,7 @@ void FAnimInstanceProxy::SlotEvaluatePose(const FName& SlotNodeName, const FComp
 		{
 			BlendedPose = SourcePose;
 			BlendedCurve = SourceCurve;
+			BlendedAttributes = SourceAttributes;
 		}
 		// Otherwise we need to blend non additive poses together
 		else
@@ -1547,10 +1621,14 @@ void FAnimInstanceProxy::SlotEvaluatePose(const FName& SlotNodeName, const FComp
 			TArray<const FBlendedCurve*, TInlineAllocator<8>> BlendingCurves;
 			BlendingCurves.AddUninitialized(NumPoses);
 
+			TArray<const FStackCustomAttributes*, TInlineAllocator<8>> BlendingAttributes;
+			BlendingAttributes.AddUninitialized(NumPoses);
+
 			for (int32 Index = 0; Index < NonAdditivePoses.Num(); Index++)
 			{
 				BlendingPoses[Index] = &NonAdditivePoses[Index].Pose;
 				BlendingCurves[Index] = &NonAdditivePoses[Index].Curve;
+				BlendingAttributes[Index] = &NonAdditivePoses[Index].Attributes;
 				BlendWeights[Index] = NonAdditivePoses[Index].Weight;
 			}
 
@@ -1559,11 +1637,12 @@ void FAnimInstanceProxy::SlotEvaluatePose(const FName& SlotNodeName, const FComp
 				int32 const SourceIndex = BlendWeights.Num() - 1;
 				BlendingPoses[SourceIndex] = &SourcePose;
 				BlendingCurves[SourceIndex] = &SourceCurve;
+				BlendingAttributes[SourceIndex] = &SourceAttributes;
 				BlendWeights[SourceIndex] = SourceWeight;
 			}
 
 			// now time to blend all montages
-			FAnimationRuntime::BlendPosesTogetherIndirect(BlendingPoses, BlendingCurves, BlendWeights, BlendedPose, BlendedCurve);
+			FAnimationRuntime::BlendPosesTogetherIndirect(BlendingPoses, BlendingCurves, BlendingAttributes, BlendWeights, OutBlendedAnimationPoseData);
 		}
 	}
 
@@ -1572,8 +1651,9 @@ void FAnimInstanceProxy::SlotEvaluatePose(const FName& SlotNodeName, const FComp
 	{
 		for (int32 Index = 0; Index < AdditivePoses.Num(); Index++)
 		{
-			FSlotEvaluationPose const& AdditivePose = AdditivePoses[Index];
-			FAnimationRuntime::AccumulateAdditivePose(BlendedPose, AdditivePose.Pose, BlendedCurve, AdditivePose.Curve, AdditivePose.Weight, AdditivePose.AdditiveType);
+			FSlotEvaluationPose& AdditivePose = AdditivePoses[Index];
+			const FAnimationPoseData AdditiveAnimationPoseData(AdditivePose);
+			FAnimationRuntime::AccumulateAdditivePose(OutBlendedAnimationPoseData, AdditiveAnimationPoseData, AdditivePose.Weight, AdditivePose.AdditiveType);
 		}
 	}
 
@@ -2555,24 +2635,24 @@ void FAnimInstanceProxy::UpdateCurvesToEvaluationContext(const FAnimationEvaluat
 			uint16 ArrayIndex = UIDToArrayIndexLookupTable[CurveUID];
 		
 			if (ArrayIndex != MAX_uint16 && 
-				ensureAlwaysMsgf(InContext.Curve.Elements.IsValidIndex(ArrayIndex), TEXT("%s Animation Instance contains out of bound UIDList."), *AnimInstanceObject->GetClass()->GetName()) &&
-				InContext.Curve.Elements[ArrayIndex].IsValid())
+				ensureAlwaysMsgf(InContext.Curve.CurveWeights.IsValidIndex(ArrayIndex), TEXT("%s Animation Instance contains out of bound UIDList."), *AnimInstanceObject->GetClass()->GetName()) &&
+				InContext.Curve.ValidCurveWeights[ArrayIndex])
 			{
 				const FName& CurveName = UIDToNameLookupTable[CurveUID];
 				const FAnimCurveType& CurveType = UIDToCurveTypeLookupTable[CurveUID];
-				const float Value = InContext.Curve.Elements[ArrayIndex].Value;
-
-				AnimationCurves[(uint8)EAnimCurveType::AttributeCurve].Add(CurveName, Value);
+				const float CurveWeight = InContext.Curve.CurveWeights[ArrayIndex];
+				
+				AnimationCurves[(uint8)EAnimCurveType::AttributeCurve].Add(CurveName, CurveWeight);
 
 				if(CurveType.bMorphtarget)
 				{
-					AnimationCurves[(uint8)EAnimCurveType::MorphTargetCurve].Add(CurveName, Value);
+					AnimationCurves[(uint8)EAnimCurveType::MorphTargetCurve].Add(CurveName, CurveWeight);
 				}
 
 				if(CurveType.bMaterial)
 				{
 					MaterialParametersToClear.Remove(CurveName);
-					AnimationCurves[(uint8)EAnimCurveType::MaterialCurve].Add(CurveName, Value);
+					AnimationCurves[(uint8)EAnimCurveType::MaterialCurve].Add(CurveName, CurveWeight);
 				}
 			}
 		}
@@ -2715,6 +2795,16 @@ void FAnimInstanceProxy::EvaluateInputProxy(FAnimInstanceProxy* InputProxy, FPos
 	if (InputProxy)
 	{
 		InputProxy->Evaluate(Output);
+	}
+}
+
+void FAnimInstanceProxy::ResetCounterInputProxy(FAnimInstanceProxy* InputProxy)
+{
+	if (InputProxy)
+	{
+		InputProxy->UpdateCounter.Reset();
+		InputProxy->EvaluationCounter.Reset();
+		InputProxy->CachedBonesCounter.Reset();
 	}
 }
 

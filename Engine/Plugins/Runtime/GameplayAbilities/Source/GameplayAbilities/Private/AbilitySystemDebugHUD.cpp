@@ -10,6 +10,7 @@
 #include "Engine/LocalPlayer.h"
 #include "EngineUtils.h"
 #include "AbilitySystemComponent.h"
+#include "AbilitySystemInterface.h"
 
 AAbilitySystemDebugHUD::AAbilitySystemDebugHUD(const FObjectInitializer& ObjectInitializer) : Super(ObjectInitializer)
 {
@@ -65,6 +66,15 @@ void AAbilitySystemDebugHUD::DrawDebugHUD(UCanvas* InCanvas, APlayerController*)
 		return;
 	}
 
+	if (IAbilitySystemInterface* Pawn = Cast<IAbilitySystemInterface>(PC->GetPawn()))
+	{
+		if (UAbilitySystemComponent* AbilitySystemComponent = Pawn->GetAbilitySystemComponent())
+		{
+			DrawDebugAbilitySystemComponent(AbilitySystemComponent);
+			return;
+		}
+	}
+
 	if (PC->GetPawn())
 	{
 		UAbilitySystemComponent * AbilitySystemComponent = PC->GetPawn()->FindComponentByClass<UAbilitySystemComponent>();
@@ -96,7 +106,7 @@ void AAbilitySystemDebugHUD::DrawDebugAbilitySystemComponent(UAbilitySystemCompo
 	DrawWithBackground(Font, String, Color, EAlignHorizontal::Left, X, EAlignVertical::Top, Y);
 
 
-	for (const UAttributeSet* Set : Component->SpawnedAttributes)
+	for (const UAttributeSet* Set : Component->GetSpawnedAttributes())
 	{
 		if (!Set)
 		{

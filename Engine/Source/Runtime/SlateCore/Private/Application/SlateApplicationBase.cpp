@@ -98,6 +98,16 @@ const FHitTesting& FSlateApplicationBase::GetHitTesting() const
 	return HitTesting;
 }
 
+TSharedRef<SWidget> FSlateApplicationBase::MakeWindowTitleBar(const TSharedRef<SWindow>& Window, const TSharedPtr<SWidget>& CenterContent, EHorizontalAlignment CenterContentAlignment, TSharedPtr<IWindowTitleBar>& OutTitleBar) const
+{
+	FWindowTitleBarArgs Args(Window);
+
+	Args.CenterContent = CenterContent;
+	Args.CenterContentAlignment = CenterContentAlignment;
+	
+	return MakeWindowTitleBar(Args, OutTitleBar);
+}
+
 void FSlateApplicationBase::RegisterActiveTimer( const TSharedRef<FActiveTimerHandle>& ActiveTimerHandle )
 {
 	FScopeLock ActiveTimerLock(&ActiveTimerCS);
@@ -163,7 +173,11 @@ void FSlateApplicationBase::ToggleGlobalInvalidation(bool bIsGlobalInvalidationE
 
 void FSlateApplicationBase::InvalidateAllWidgets(bool bClearResourcesImmediately) const
 {
-	SCOPED_NAMED_EVENT(Slate_GlobalInvalidate, FColor::Red);
-	UE_LOG(LogSlate, Log, TEXT("InvalidateAllWidgets triggered.  All widgets were invalidated"));
-	OnInvalidateAllWidgetsEvent.Broadcast(bClearResourcesImmediately);
+	// Only invalidate things if the thread triggering the invalidate owns slate rendering
+	if (DoesThreadOwnSlateRendering())
+	{
+		SCOPED_NAMED_EVENT(Slate_GlobalInvalidate, FColor::Red);
+		UE_LOG(LogSlate, Log, TEXT("InvalidateAllWidgets triggered.  All widgets were invalidated"));
+		OnInvalidateAllWidgetsEvent.Broadcast(bClearResourcesImmediately);
+	}
 }

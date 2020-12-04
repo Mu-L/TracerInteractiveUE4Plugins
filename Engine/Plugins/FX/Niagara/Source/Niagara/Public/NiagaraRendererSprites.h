@@ -7,6 +7,7 @@ NiagaraRendererSprites.h: Renderer for rendering Niagara particles as sprites.
 #pragma once
 
 #include "NiagaraRenderer.h"
+#include "NiagaraSpriteRendererProperties.h"
 
 struct FNiagaraDynamicDataSprites;
 
@@ -23,10 +24,12 @@ public:
 	virtual void CreateRenderThreadResources(NiagaraEmitterInstanceBatcher* Batcher)override;
 	virtual void ReleaseRenderThreadResources()override;
 
+	virtual int32 GetMaxIndirectArgs() const override;
+
 	virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, FMeshElementCollector& Collector, const FNiagaraSceneProxy *SceneProxy) const override;
 	virtual FNiagaraDynamicDataBase* GenerateDynamicData(const FNiagaraSceneProxy* Proxy, const UNiagaraRendererProperties* InProperties, const FNiagaraEmitterInstance* Emitter) const override;
 	virtual int GetDynamicDataSize()const override;
-	virtual bool IsMaterialValid(UMaterialInterface* Mat)const override;
+	virtual bool IsMaterialValid(const UMaterialInterface* Mat)const override;
 
 #if RHI_RAYTRACING
 		virtual void GetDynamicRayTracingInstances(FRayTracingMaterialGatheringContext& Context, TArray<FRayTracingInstance>& OutRayTracingInstances, const FNiagaraSceneProxy* Proxy) final override;
@@ -37,58 +40,63 @@ private:
 	struct FCPUSimParticleDataAllocation
 	{
 		FGlobalDynamicReadBuffer& DynamicReadBuffer;
-		FGlobalDynamicReadBuffer::FAllocation ParticleData;
+		FParticleRenderData ParticleData;
+		FGlobalDynamicReadBuffer::FAllocation IntData;
 	};
 
-	FCPUSimParticleDataAllocation ConditionalAllocateCPUSimParticleData(FNiagaraDynamicDataSprites *DynamicDataSprites, FGlobalDynamicReadBuffer& DynamicReadBuffer) const;
-	TUniformBufferRef<class FNiagaraSpriteUniformParameters> CreatePerViewUniformBuffer(const FSceneView* View, const FSceneViewFamily& ViewFamily, const FNiagaraSceneProxy *SceneProxy) const;
+	FCPUSimParticleDataAllocation ConditionalAllocateCPUSimParticleData(FNiagaraDynamicDataSprites *DynamicDataSprites, const FNiagaraRendererLayout* RendererLayout, FGlobalDynamicReadBuffer& DynamicReadBuffer, bool bNeedsGPUVis) const;
+	TUniformBufferRef<class FNiagaraSpriteUniformParameters> CreatePerViewUniformBuffer(const FSceneView* View, const FSceneViewFamily& ViewFamily, const FNiagaraSceneProxy *SceneProxy, const FNiagaraRendererLayout* RendererLayout, const FNiagaraDynamicDataSprites* DynamicDataSprites) const;
 	void SetVertexFactoryParticleData(
 		class FNiagaraSpriteVertexFactory& VertexFactory,
-		FNiagaraDynamicDataSprites *DynamicDataSprites,
+		int32& OutCulledGPUParticleCountOffset,
+		FNiagaraDynamicDataSprites* DynamicDataSprites,
 		FCPUSimParticleDataAllocation& CPUSimParticleDataAllocation,
 		const FSceneView* View,
-		const FNiagaraSceneProxy *SceneProxy) const;
+		class FNiagaraSpriteVFLooseParameters& VFLooseParams,
+		const FNiagaraSceneProxy* SceneProxy,
+		const FNiagaraRendererLayout* RendererLayout
+	) const;
 	void CreateMeshBatchForView(
 		const FSceneView* View,
 		const FSceneViewFamily& ViewFamily,
-		const FNiagaraSceneProxy *SceneProxy,
-		FNiagaraDynamicDataSprites *DynamicDataSprites,
-		uint32 IndirectArgsOffset,
+		const FNiagaraSceneProxy* SceneProxy,
+		int32 CulledGPUParticleCountOffset,
+		FNiagaraDynamicDataSprites* DynamicDataSprites,
 		FMeshBatch& OutMeshBatch,
-		class FNiagaraMeshCollectorResourcesSprite& OutCollectorResources) const;
+		class FNiagaraSpriteVFLooseParameters& VFLooseParams,
+		class FNiagaraMeshCollectorResourcesSprite& OutCollectorResources,
+		const FNiagaraRendererLayout* RendererLayout
+	) const;
 
 	//Cached data from the properties struct.
+	ENiagaraRendererSourceDataMode SourceMode;
 	ENiagaraSpriteAlignment Alignment;
 	ENiagaraSpriteFacingMode FacingMode;
 	FVector2D PivotInUVSpace;
 	ENiagaraSortMode SortMode;
 	FVector2D SubImageSize;
+	
 	uint32 bSubImageBlend : 1;
 	uint32 bRemoveHMDRollInVR : 1;
 	uint32 bSortOnlyWhenTranslucent : 1;
+	uint32 bGpuLowLatencyTranslucency : 1;
+	uint32 bEnableCulling : 1;
+	uint32 bEnableDistanceCulling : 1;
+	uint32 bSetAnyBoundVars : 1;
+	uint32 bVisTagInParamStore : 1;
+
 	float MinFacingCameraBlendDistance;
 	float MaxFacingCameraBlendDistance;
+	FVector2D DistanceCullRange;
 	FNiagaraCutoutVertexBuffer CutoutVertexBuffer;
 	int32 NumCutoutVertexPerSubImage = 0;
+	uint32 MaterialParamValidMask = 0;
 
+	int32 RendererVisTagOffset;
+	int32 RendererVisibility;
 
-	//Offsets into the emitter's dataset for each bound attribute.
-	int32 PositionOffset;
-	int32 ColorOffset;
-	int32 VelocityOffset;
-	int32 RotationOffset;
-	int32 SizeOffset;
-	int32 FacingOffset;
-	int32 AlignmentOffset;
-	int32 SubImageOffset;
-	uint32 MaterialParamValidMask;
-	int32 MaterialParamOffset;
-	int32 MaterialParamOffset1;
-	int32 MaterialParamOffset2;
-	int32 MaterialParamOffset3;
-	int32 CameraOffsetOffset;
-	int32 UVScaleOffset;
-	int32 MaterialRandomOffset;
-	int32 CustomSortingOffset;
-	int32 NormalizedAgeOffset;
+	int32 VFBoundOffsetsInParamStore[ENiagaraSpriteVFLayout::Type::Num];
+
+	const FNiagaraRendererLayout* RendererLayoutWithCustomSort;
+	const FNiagaraRendererLayout* RendererLayoutWithoutCustomSort;
 };

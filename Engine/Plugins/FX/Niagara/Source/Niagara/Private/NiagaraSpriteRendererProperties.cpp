@@ -6,13 +6,16 @@
 #include "NiagaraConstants.h"
 #include "NiagaraRendererSprites.h"
 #include "NiagaraBoundsCalculatorHelper.h"
+#include "NiagaraCustomVersion.h"
 #include "Modules/ModuleManager.h"
+#include "NiagaraEmitter.h"
+#include "NiagaraScriptSourceBase.h"
+
 #if WITH_EDITOR
 #include "DerivedDataCacheInterface.h"
 #include "Widgets/Images/SImage.h"
 #include "Styling/SlateIconFinder.h"
 #include "Widgets/SWidget.h"
-#include "Styling/SlateBrush.h"
 #include "AssetThumbnail.h"
 #include "Widgets/Text/STextBlock.h"
 #endif
@@ -45,6 +48,7 @@ UNiagaraSpriteRendererProperties::UNiagaraSpriteRendererProperties()
 	, bSubImageBlend(false)
 	, bRemoveHMDRollInVR(false)
 	, bSortOnlyWhenTranslucent(true)
+	, bGpuLowLatencyTranslucency(true)
 	, MinFacingCameraBlendDistance(0.0f)
 	, MaxFacingCameraBlendDistance(0.0f)
 #if WITH_EDITORONLY_DATA
@@ -55,7 +59,9 @@ UNiagaraSpriteRendererProperties::UNiagaraSpriteRendererProperties()
 	FNiagaraTypeDefinition MaterialDef(UMaterialInterface::StaticClass());
 	MaterialUserParamBinding.Parameter.SetType(MaterialDef);
 
-	AttributeBindings.Reserve(17);
+	AttributeBindings.Reserve(18);
+
+	// NOTE: These bindings' indices have to align to their counterpart in ENiagaraSpriteVFLayout
 	AttributeBindings.Add(&PositionBinding);
 	AttributeBindings.Add(&ColorBinding);
 	AttributeBindings.Add(&VelocityBinding);
@@ -73,12 +79,15 @@ UNiagaraSpriteRendererProperties::UNiagaraSpriteRendererProperties()
 	AttributeBindings.Add(&MaterialRandomBinding);
 	AttributeBindings.Add(&CustomSortingBinding);
 	AttributeBindings.Add(&NormalizedAgeBinding);
+
+	// The remaining bindings are not associated with attributes in the VF layout
+	AttributeBindings.Add(&RendererVisibilityTagBinding);
 }
 
-FNiagaraRenderer* UNiagaraSpriteRendererProperties::CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel, const FNiagaraEmitterInstance* Emitter)
+FNiagaraRenderer* UNiagaraSpriteRendererProperties::CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel, const FNiagaraEmitterInstance* Emitter, const UNiagaraComponent* InComponent)
 {
 	FNiagaraRenderer* NewRenderer = new FNiagaraRendererSprites(FeatureLevel, this, Emitter);	
-	NewRenderer->Initialize(this, Emitter);
+	NewRenderer->Initialize(this, Emitter, InComponent);
 	return NewRenderer;
 }
 
@@ -121,6 +130,7 @@ void UNiagaraSpriteRendererProperties::PostLoad()
 		}
 		CacheDerivedData();
 	}
+	PostLoadBindings(SourceMode);
 #endif // WITH_EDITORONLY_DATA
 }
 
@@ -182,7 +192,7 @@ void UNiagaraSpriteRendererProperties::InitCDOPropertiesAfterModuleStartup()
 
 void UNiagaraSpriteRendererProperties::InitBindings()
 {
-	if (PositionBinding.BoundVariable.GetName() == NAME_None)
+	if (PositionBinding.GetParamMapBindableVariable().GetName() == NAME_None)
 	{
 		PositionBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_POSITION);
 		ColorBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_COLOR);
@@ -200,13 +210,123 @@ void UNiagaraSpriteRendererProperties::InitBindings()
 		UVScaleBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_UV_SCALE);
 		MaterialRandomBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_MATERIAL_RANDOM);
 		NormalizedAgeBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_NORMALIZED_AGE);
+		RendererVisibilityTagBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_VISIBILITY_TAG);
 		
 		//Default custom sorting to age
 		CustomSortingBinding = FNiagaraConstants::GetAttributeDefaultBinding(SYS_PARAM_PARTICLES_NORMALIZED_AGE);
 	}
 }
 
+void UNiagaraSpriteRendererProperties::CacheFromCompiledData(const FNiagaraDataSetCompiledData* CompiledData)
+{
+	UpdateSourceModeDerivates(SourceMode);
+
+	RendererLayoutWithCustomSort.Initialize(ENiagaraSpriteVFLayout::Num);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, PositionBinding, ENiagaraSpriteVFLayout::Position);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, VelocityBinding, ENiagaraSpriteVFLayout::Velocity);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, ColorBinding, ENiagaraSpriteVFLayout::Color);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, SpriteRotationBinding, ENiagaraSpriteVFLayout::Rotation);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, SpriteSizeBinding, ENiagaraSpriteVFLayout::Size);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, SpriteFacingBinding, ENiagaraSpriteVFLayout::Facing);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, SpriteAlignmentBinding, ENiagaraSpriteVFLayout::Alignment);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, SubImageIndexBinding, ENiagaraSpriteVFLayout::SubImage);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, CameraOffsetBinding, ENiagaraSpriteVFLayout::CameraOffset);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, UVScaleBinding, ENiagaraSpriteVFLayout::UVScale);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, NormalizedAgeBinding, ENiagaraSpriteVFLayout::NormalizedAge);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, MaterialRandomBinding, ENiagaraSpriteVFLayout::MaterialRandom);
+	RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, CustomSortingBinding, ENiagaraSpriteVFLayout::CustomSorting);	
+	MaterialParamValidMask  = RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, DynamicMaterialBinding, ENiagaraSpriteVFLayout::MaterialParam0) ? 0x1 : 0;
+	MaterialParamValidMask |= RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, DynamicMaterial1Binding, ENiagaraSpriteVFLayout::MaterialParam1) ? 0x2 : 0;
+	MaterialParamValidMask |= RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, DynamicMaterial2Binding, ENiagaraSpriteVFLayout::MaterialParam2) ? 0x4 : 0;
+	MaterialParamValidMask |= RendererLayoutWithCustomSort.SetVariableFromBinding(CompiledData, DynamicMaterial3Binding, ENiagaraSpriteVFLayout::MaterialParam3) ? 0x8 : 0;
+	RendererLayoutWithCustomSort.Finalize();
+
+	RendererLayoutWithoutCustomSort.Initialize(ENiagaraSpriteVFLayout::Num);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, PositionBinding, ENiagaraSpriteVFLayout::Position);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, VelocityBinding, ENiagaraSpriteVFLayout::Velocity);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, ColorBinding, ENiagaraSpriteVFLayout::Color);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, SpriteRotationBinding, ENiagaraSpriteVFLayout::Rotation);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, SpriteSizeBinding, ENiagaraSpriteVFLayout::Size);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, SpriteFacingBinding, ENiagaraSpriteVFLayout::Facing);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, SpriteAlignmentBinding, ENiagaraSpriteVFLayout::Alignment);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, SubImageIndexBinding, ENiagaraSpriteVFLayout::SubImage);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, CameraOffsetBinding, ENiagaraSpriteVFLayout::CameraOffset);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, UVScaleBinding, ENiagaraSpriteVFLayout::UVScale);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, NormalizedAgeBinding, ENiagaraSpriteVFLayout::NormalizedAge);
+	RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, MaterialRandomBinding, ENiagaraSpriteVFLayout::MaterialRandom);
+	MaterialParamValidMask = RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, DynamicMaterialBinding, ENiagaraSpriteVFLayout::MaterialParam0) ? 0x1 : 0;
+	MaterialParamValidMask |= RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, DynamicMaterial1Binding, ENiagaraSpriteVFLayout::MaterialParam1) ? 0x2 : 0;
+	MaterialParamValidMask |= RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, DynamicMaterial2Binding, ENiagaraSpriteVFLayout::MaterialParam2) ? 0x4 : 0;
+	MaterialParamValidMask |= RendererLayoutWithoutCustomSort.SetVariableFromBinding(CompiledData, DynamicMaterial3Binding, ENiagaraSpriteVFLayout::MaterialParam3) ? 0x8 : 0;
+	RendererLayoutWithoutCustomSort.Finalize();
+
+}
+
+
+bool UNiagaraSpriteRendererProperties::PopulateRequiredBindings(FNiagaraParameterStore& InParameterStore) 
+{
+	bool bAnyAdded = false;
+
+	for (const FNiagaraVariableAttributeBinding* Binding : AttributeBindings)
+	{
+		if (Binding && Binding->CanBindToHostParameterMap())
+		{
+			InParameterStore.AddParameter(Binding->GetParamMapBindableVariable(), false);
+			bAnyAdded = true;
+		}
+	}
+
+	for (FNiagaraMaterialAttributeBinding& MaterialParamBinding : MaterialParameterBindings)
+	{
+		InParameterStore.AddParameter(MaterialParamBinding.GetParamMapBindableVariable(), false);
+		bAnyAdded = true;
+	}
+
+	return bAnyAdded;
+}
+
+void UNiagaraSpriteRendererProperties::UpdateSourceModeDerivates(ENiagaraRendererSourceDataMode InSourceMode, bool bFromPropertyEdit)
+{
+	UNiagaraEmitter* SrcEmitter = GetTypedOuter<UNiagaraEmitter>();
+	if (SrcEmitter)
+	{
+		for (FNiagaraMaterialAttributeBinding& MaterialParamBinding : MaterialParameterBindings)
+		{
+			MaterialParamBinding.CacheValues(SrcEmitter);
+		}
+	}
+
+	Super::UpdateSourceModeDerivates(InSourceMode, bFromPropertyEdit);
+}
+
 #if WITH_EDITORONLY_DATA
+
+bool UNiagaraSpriteRendererProperties::IsSupportedVariableForBinding(const FNiagaraVariableBase& InSourceForBinding, const FName& InTargetBindingName) const
+{
+	if ((SourceMode == ENiagaraRendererSourceDataMode::Particles && InSourceForBinding.IsInNameSpace(FNiagaraConstants::ParticleAttributeNamespace)) ||
+		InSourceForBinding.IsInNameSpace(FNiagaraConstants::UserNamespace) ||
+		InSourceForBinding.IsInNameSpace(FNiagaraConstants::SystemNamespace) ||
+		InSourceForBinding.IsInNameSpace(FNiagaraConstants::EmitterNamespace))
+	{
+		return true;
+	}
+	return false;
+}
+
+
+//#if WITH_EDITOR
+//void UNiagaraSpriteRendererProperties::PostEditUndo()
+//{
+//	Super::PostEditUndo();
+//	UpdateSourceModeDerivates(SourceMode);
+//}
+//
+//void UNiagaraSpriteRendererProperties::PostEditUndo(TSharedPtr<ITransactionObjectAnnotation> TransactionAnnotation)
+//{
+//	Super::PostEditUndo(TransactionAnnotation);
+//	UpdateSourceModeDerivates(SourceMode);
+//}
+//#endif
 
 void UNiagaraSpriteRendererProperties::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) 
 {
@@ -230,10 +350,62 @@ void UNiagaraSpriteRendererProperties::PostEditChangeProperty(struct FPropertyCh
 			CacheDerivedData();
 		}
 	}
-	
+
+	// If changing the source mode, we may need to update many of our values.
+	if (PropertyChangedEvent.GetPropertyName() == TEXT("SourceMode"))
+	{
+		UpdateSourceModeDerivates(SourceMode, true);
+	}
+	else if (FStructProperty* StructProp = CastField<FStructProperty>(PropertyChangedEvent.Property))
+	{
+		if (StructProp->Struct == FNiagaraVariableAttributeBinding::StaticStruct())
+		{
+			UpdateSourceModeDerivates(SourceMode, true);
+		}
+	}
+	else if (FArrayProperty* ArrayProp = CastField<FArrayProperty>(PropertyChangedEvent.Property))
+	{
+		if (ArrayProp->Inner)
+		{
+			FStructProperty* ChildStructProp = CastField<FStructProperty>(ArrayProp->Inner);
+			if (ChildStructProp->Struct == FNiagaraMaterialAttributeBinding::StaticStruct())
+			{
+				UpdateSourceModeDerivates(SourceMode, true);
+			}
+		}
+	}
+
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 
 }
+
+
+void UNiagaraSpriteRendererProperties::RenameVariable(const FNiagaraVariableBase& OldVariable, const FNiagaraVariableBase& NewVariable, const UNiagaraEmitter* InEmitter)
+{
+	Super::RenameVariable(OldVariable, NewVariable, InEmitter);
+
+	// Handle renaming material bindings
+	for (FNiagaraMaterialAttributeBinding& Binding : MaterialParameterBindings)
+	{
+		Binding.RenameVariableIfMatching(OldVariable, NewVariable, InEmitter, GetCurrentSourceMode());
+	}
+}
+
+void UNiagaraSpriteRendererProperties::RemoveVariable(const FNiagaraVariableBase& OldVariable, const UNiagaraEmitter* InEmitter)
+{
+	Super::RemoveVariable(OldVariable, InEmitter);
+	
+	// Handle resetting material bindings to defaults
+	for (FNiagaraMaterialAttributeBinding& Binding : MaterialParameterBindings)
+	{
+		if (Binding.Matches(OldVariable, InEmitter, GetCurrentSourceMode()))
+		{
+			Binding.NiagaraVariable = FNiagaraVariable();
+			Binding.CacheValues(InEmitter);
+		}
+	}
+}
+
 
 const TArray<FNiagaraVariable>& UNiagaraSpriteRendererProperties::GetOptionalAttributes()
 {
@@ -294,7 +466,7 @@ void UNiagaraSpriteRendererProperties::GetRendererFeedback(const UNiagaraEmitter
 	{
 		if (bUseMaterialCutoutTexture || CutoutTexture)
 		{
-			if (InEmitter->SpawnScriptProps.Script->GetVMExecutableData().Attributes.Contains(UVScaleBinding.DataSetVariable))
+			if (UVScaleBinding.DoesBindingExistOnSource())
 			{
 				OutInfo.Add(LOCTEXT("SpriteRendererUVScaleWithCutout", "Cutouts will not be sized dynamically with UVScale variable. If scaling above 1.0, geometry may clip."));
 			}			

@@ -36,6 +36,7 @@
 #include "CookOnTheSide/CookOnTheFlyServer.h"
 #include "LightingBuildOptions.h"
 #include "Subsystems/AssetEditorSubsystem.h"
+#include "Bookmarks/IBookmarkTypeTools.h"
 
 
 #define COOK_TIMEOUT 3600
@@ -84,7 +85,7 @@ UObject* FAutomationEditorCommonUtils::ImportAssetUsingFactory(UFactory* ImportF
 {
 	UObject* ImportedAsset = NULL;
 
-	UPackage* Pkg = CreatePackage(NULL, *PackagePath);
+	UPackage* Pkg = CreatePackage( *PackagePath);
 	if (Pkg)
 	{
 		// Make sure the destination package is loaded
@@ -632,12 +633,12 @@ void FAutomationEditorCommonUtils::LoadMap(const FString& MapName)
 	FEditorFileUtils::LoadMap(MapName, bLoadAsTemplate, bShowProgress);
 }
 
-void FAutomationEditorCommonUtils::RunPIE()
+void FAutomationEditorCommonUtils::RunPIE(float PIEDuration)
 {
 	bool bInSimulateInEditor = true;
 	//once in the editor
 	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(true));
-	ADD_LATENT_AUTOMATION_COMMAND(FWaitLatentCommand(3.0f));
+	ADD_LATENT_AUTOMATION_COMMAND(FWaitLatentCommand(PIEDuration));
 	ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
 
 	//wait between tests
@@ -645,7 +646,7 @@ void FAutomationEditorCommonUtils::RunPIE()
 
 	//once not in the editor
 	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
-	ADD_LATENT_AUTOMATION_COMMAND(FWaitLatentCommand(3.0f));
+	ADD_LATENT_AUTOMATION_COMMAND(FWaitLatentCommand(PIEDuration));
 	ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
 }
 
@@ -841,7 +842,6 @@ bool FWaitForShadersToFinishCompiling::Update()
 */
 bool FChangeViewportToFirstAvailableBookmarkCommand::Update()
 {
-	FEditorModeTools EditorModeTools;
 	uint32 ViewportIndex = 0;
 
 	UE_LOG(LogEditorAutomationTests, Log, TEXT("Attempting to change the editor viewports view to the first set bookmark."));
@@ -849,13 +849,13 @@ bool FChangeViewportToFirstAvailableBookmarkCommand::Update()
 	//Move the perspective viewport view to show the test.
 	for (FLevelEditorViewportClient* ViewportClient : GEditor->GetLevelViewportClients())
 	{
-		const uint32 NumberOfBookmarks = EditorModeTools.GetMaxNumberOfBookmarks(ViewportClient);
+		const uint32 NumberOfBookmarks = IBookmarkTypeTools::Get().GetMaxNumberOfBookmarks(ViewportClient);
 		for ( ViewportIndex = 0; ViewportIndex <= NumberOfBookmarks; ViewportIndex++ )
 		{
-			if ( EditorModeTools.CheckBookmark(ViewportIndex, ViewportClient) )
+			if (IBookmarkTypeTools::Get().CheckBookmark(ViewportIndex, ViewportClient) )
 			{
 				UE_LOG(LogEditorAutomationTests, VeryVerbose, TEXT("Changing a viewport view to the set bookmark %i"), ViewportIndex);
-				EditorModeTools.JumpToBookmark(ViewportIndex, TSharedPtr<struct FBookmarkBaseJumpToSettings>(), ViewportClient);
+				IBookmarkTypeTools::Get().JumpToBookmark(ViewportIndex, TSharedPtr<struct FBookmarkBaseJumpToSettings>(), ViewportClient);
 				break;
 			}
 		}

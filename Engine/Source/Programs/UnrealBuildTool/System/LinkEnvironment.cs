@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -69,19 +70,24 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
+		/// List of libraries to link in
+		/// </summary>
+		public List<FileReference> Libraries = new List<FileReference>();
+
+		/// <summary>
+		/// A list of additional libraries to link in (using the list of library search paths)
+		/// </summary>
+		public List<string> SystemLibraries = new List<string>();
+
+		/// <summary>
 		/// A list of the paths used to find libraries.
 		/// </summary>
-		public List<DirectoryReference> LibraryPaths = new List<DirectoryReference>();
+		public List<DirectoryReference> SystemLibraryPaths = new List<DirectoryReference>();
 
 		/// <summary>
 		/// A list of libraries to exclude from linking.
 		/// </summary>
 		public List<string> ExcludedLibraries = new List<string>();
-
-		/// <summary>
-		/// A list of additional libraries to link in.
-		/// </summary>
-		public List<string> AdditionalLibraries = new List<string>();
 
 		/// <summary>
 		/// Paths to add as search paths for runtime libraries
@@ -236,11 +242,6 @@ namespace UnrealBuildTool
         public bool bCreateMapFile;
 
 		/// <summary>
-		/// Whether to allow the use of ASLR (address space layout randomization) if supported.
-		/// </summary>
-		public bool bAllowASLR;
-
-		/// <summary>
 		/// Whether PDB files should be used for Visual C++ builds.
 		/// </summary>
 		public bool bUsePDBFiles;
@@ -324,9 +325,10 @@ namespace UnrealBuildTool
 			IntermediateDirectory = Other.IntermediateDirectory;
 			LocalShadowDirectory = Other.LocalShadowDirectory;
 			OutputFilePaths = Other.OutputFilePaths.ToList();
-			LibraryPaths.AddRange(Other.LibraryPaths);
+			Libraries.AddRange(Other.Libraries);
+			SystemLibraries.AddRange(Other.SystemLibraries);
+			SystemLibraryPaths.AddRange(Other.SystemLibraryPaths);
 			ExcludedLibraries.AddRange(Other.ExcludedLibraries);
-			AdditionalLibraries.AddRange(Other.AdditionalLibraries);
 			RuntimeLibraryPaths.AddRange(Other.RuntimeLibraryPaths);
 			Frameworks.AddRange(Other.Frameworks);
 			AdditionalFrameworks.AddRange(Other.AdditionalFrameworks);
@@ -356,7 +358,6 @@ namespace UnrealBuildTool
             PGODirectory = Other.PGODirectory;
             PGOFilenamePrefix = Other.PGOFilenamePrefix;
             bCreateMapFile = Other.bCreateMapFile;
-            bAllowASLR = Other.bAllowASLR;
 			bUsePDBFiles = Other.bUsePDBFiles;
 			bUseFastPDBLinking = Other.bUseFastPDBLinking;
 			bIgnoreUnresolvedSymbols = Other.bIgnoreUnresolvedSymbols;
@@ -369,6 +370,6 @@ namespace UnrealBuildTool
 			IncludeFunctions.AddRange(Other.IncludeFunctions);
 			ModuleDefinitionFile = Other.ModuleDefinitionFile;
 			AdditionalProperties.AddRange(Other.AdditionalProperties);
-        }
+		}
 	}
 }

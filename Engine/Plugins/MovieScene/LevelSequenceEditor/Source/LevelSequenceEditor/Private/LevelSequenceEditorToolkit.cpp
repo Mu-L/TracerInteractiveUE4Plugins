@@ -212,8 +212,8 @@ void FLevelSequenceEditorToolkit::Initialize(const EToolkitMode::Type Mode, cons
 		TSharedPtr<FTabManager> LevelEditorTabManager = LevelEditorModule.GetLevelEditorTabManager();
 		if (LevelEditorTabManager->FindExistingLiveTab(FName("LevelEditorSceneOutliner")).IsValid())
 		{
-			LevelEditorTabManager->InvokeTab(FName("LevelEditorSceneOutliner"))->RequestCloseTab();
-			LevelEditorTabManager->InvokeTab(FName("LevelEditorSceneOutliner"));
+			LevelEditorTabManager->TryInvokeTab(FName("LevelEditorSceneOutliner"))->RequestCloseTab();
+			LevelEditorTabManager->TryInvokeTab(FName("LevelEditorSceneOutliner"));
 		}
 	}
 	
@@ -537,7 +537,7 @@ void FLevelSequenceEditorToolkit::AddDefaultTracksForActor(AActor& Actor, const 
 				break;
 			}
 
-			if (!Sequencer->CanKeyProperty(FCanKeyPropertyParams(Actor.GetClass(), *PropertyPath)))
+			if (!Sequencer->CanKeyProperty(FCanKeyPropertyParams(PropertyOwner->GetClass(), *PropertyPath)))
 			{
 				continue;
 			}

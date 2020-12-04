@@ -184,6 +184,18 @@ bool FLinuxApplication::IsCursorDirectlyOverSlateWindow() const
 	return bInsideOwnWindow;
 }
 
+TSharedPtr<FGenericWindow> FLinuxApplication::GetWindowUnderCursor()
+{
+	// If we are drag and dropping the current window under the cursor will always be the DnD window
+	// fallback to the SlateApplication finding the top most in DnD situations
+	if (CurrentUnderCursorWindow.IsValid() && CurrentUnderCursorWindow->IsDragAndDropWindow())
+	{
+		return nullptr;
+	}
+
+	return CurrentUnderCursorWindow;
+}
+
 void FLinuxApplication::AddPendingEvent( SDL_Event SDLEvent )
 {
 	if( GPumpingMessagesOutsideOfMainLoop && bAllowedToDeferMessageProcessing )
@@ -386,7 +398,7 @@ void FLinuxApplication::ProcessDeferredMessage( SDL_Event Event )
 					if (CurrentlyActiveWindow != CurrentEventWindow)
 					{
 						ActivateWindow(CurrentEventWindow);
-						
+
 						if(NotificationWindows.Num() > 0)
 						{
 							RaiseNotificationWindows(CurrentEventWindow);
@@ -719,7 +731,7 @@ void FLinuxApplication::ProcessDeferredMessage( SDL_Event Event )
 
 						// Check if this window is different then the currently active one. If it is another one
 						// activate that window and if necessary deactivate the one which was active.
-						if (CurrentlyActiveWindow != CurrentEventWindow && CurrentEventWindow->GetActivationPolicy() != EWindowActivationPolicy::Never)
+						if (CurrentlyActiveWindow != CurrentEventWindow)
 						{
 							ActivateWindow(CurrentEventWindow);
 						}
@@ -766,8 +778,13 @@ void FLinuxApplication::ProcessDeferredMessage( SDL_Event Event )
 						{
 							MessageHandler->OnCursorSet();
 
+							// Currently Tooltip windows will also get enter/leave events. depending on if this causes issues
+							// should avoid setting the window under cursor for tooltips and use the window under
+							CurrentUnderCursorWindow = CurrentEventWindow;
+
 							bInsideOwnWindow = true;
-							UE_LOG(LogLinuxWindow, Verbose, TEXT("Entered one of application windows"));
+
+							UE_LOG(LogLinuxWindow, Verbose, TEXT("Entered one of application windows. Cursor under Window: '%d'"), CurrentEventWindow->GetID());
 						}
 					}
 					break;
@@ -781,6 +798,7 @@ void FLinuxApplication::ProcessDeferredMessage( SDL_Event Event )
 								UpdateMouseCaptureWindow((SDL_HWindow)GetCapture());
 							}
 
+ 							CurrentUnderCursorWindow = nullptr;
 							bInsideOwnWindow = false;
 							UE_LOG(LogLinuxWindow, Verbose, TEXT("Left an application window we were hovering above."));
 						}
@@ -1093,7 +1111,7 @@ void FLinuxApplication::PollGameDeviceState( const float TimeDelta )
 	}
 
 	// initialize any externally-implemented input devices (we delay load initialize the array so any plugins have had time to load)
-	if (!bHasLoadedInputPlugins)
+	if (!bHasLoadedInputPlugins && GIsRunning)
 	{
 		TArray<IInputDeviceModule*> PluginImplementations = IModularFeatures::Get().GetModularFeatureImplementations<IInputDeviceModule>(IInputDeviceModule::GetModularFeatureName());
 		for (auto InputPluginIt = PluginImplementations.CreateIterator(); InputPluginIt; ++InputPluginIt)
@@ -1474,6 +1492,7 @@ void FDisplayMetrics::RebuildDisplayMetrics(FDisplayMetrics& OutDisplayMetrics)
 			Display.ID = TEXT("fakedisplay");
 			Display.NativeWidth = Width;
 			Display.NativeHeight = Height;
+			Display.MaxResolution = FIntPoint(Width, Height);
 			Display.DisplayRect = FPlatformRect(0, 0, Width, Height);
 			Display.WorkArea = FPlatformRect(0, 0, Width, Height);
 
@@ -1496,6 +1515,7 @@ void FDisplayMetrics::RebuildDisplayMetrics(FDisplayMetrics& OutDisplayMetrics)
 		Display.ID = FString::Printf(TEXT("display%d"), DisplayIdx);
 		Display.NativeWidth = DisplayBounds.w;
 		Display.NativeHeight = DisplayBounds.h;
+		Display.MaxResolution = FIntPoint(DisplayBounds.w, DisplayBounds.h);
 		Display.DisplayRect = FPlatformRect(DisplayBounds.x, DisplayBounds.y, DisplayBounds.x + DisplayBounds.w, DisplayBounds.y + DisplayBounds.h);
 		Display.WorkArea = FPlatformRect(UsableBounds.x, UsableBounds.y, UsableBounds.x + UsableBounds.w, UsableBounds.y + UsableBounds.h);
 		Display.bIsPrimary = DisplayIdx == 0;
@@ -1636,8 +1656,13 @@ void FLinuxApplication::DeactivateApplication()
 	UE_LOG(LogLinuxWindowEvent, Verbose, TEXT("WM_ACTIVATEAPP, wParam = 0"));
 }
 
-void FLinuxApplication::ActivateWindow(const TSharedPtr< FLinuxWindow >& Window) 
+void FLinuxApplication::ActivateWindow(const TSharedPtr< FLinuxWindow >& Window)
 {
+	if (Window->GetActivationPolicy() == EWindowActivationPolicy::Never)
+	{
+		return;
+	}
+
 	PreviousActiveWindow = CurrentlyActiveWindow;
 	CurrentlyActiveWindow = Window;
 	if(PreviousActiveWindow.IsValid())

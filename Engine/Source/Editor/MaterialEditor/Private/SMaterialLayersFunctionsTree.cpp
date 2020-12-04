@@ -136,6 +136,7 @@ void SMaterialLayersFunctionsInstanceTreeItem::OnNameChanged(const FText& InText
 	const FScopedTransaction Transaction(LOCTEXT("RenamedSection", "Renamed layer and blend section"));
 	InTree->FunctionInstanceHandle->NotifyPreChange();
 	InTree->FunctionInstance->LayerNames[Counter] = InText;
+	InTree->FunctionInstance->UnlinkLayerFromParent(Counter);
 	InTree->MaterialEditorInstance->CopyToSourceInstance(true);
 	InTree->FunctionInstanceHandle->NotifyPostChange();
 }
@@ -218,7 +219,6 @@ FGetShowHiddenParameters SMaterialLayersFunctionsInstanceTree::GetShowHiddenDele
 void  SMaterialLayersFunctionsInstanceTreeItem::OnOverrideParameter(bool NewValue, class UDEditorParameterValue* Parameter)
 {
 	FMaterialPropertyHelpers::OnOverrideParameter(NewValue, Parameter, MaterialEditorInstance);
-	Tree->GetWrapper()->Refresh();
 }
 
 void SMaterialLayersFunctionsInstanceTreeItem::Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& InOwnerTableView)
@@ -349,35 +349,35 @@ void SMaterialLayersFunctionsInstanceTreeItem::Construct(const FArguments& InArg
 				];
 		}
 
-		// Can only unlink/remove layers that aren't the base layer.
+		// Unlink UI
+		HeaderRowWidget->AddSlot()
+			.FillWidth(1.0f)
+			.VAlign(VAlign_Center)
+			[
+				SNullWidget::NullWidget
+			];
+		HeaderRowWidget->AddSlot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(0.0f, 0.0f, 0.0f, 0.0f)
+			[
+				SNew(SButton)
+				.ButtonStyle(FEditorStyle::Get(), "HoverHintOnly")
+				.OnClicked(Tree, &SMaterialLayersFunctionsInstanceTree::UnlinkLayer, StackParameterData->ParameterInfo.Index)
+				.Visibility(Tree, &SMaterialLayersFunctionsInstanceTree::GetUnlinkLayerVisibility, StackParameterData->ParameterInfo.Index)
+				.ToolTipText(LOCTEXT("UnlinkLayer", "Whether or not to unlink this layer/blend combination from the parent."))
+				.Content()
+				[
+					SNew(STextBlock)
+					.TextStyle(FEditorStyle::Get(), "ContentBrowser.TopBar.Font")
+					.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.10"))
+					.Text(FEditorFontGlyphs::Chain_Broken) /*fa-filter*/
+				]
+			];
+
+		// Can only remove layers that aren't the base layer.
 		if (StackParameterData->ParameterInfo.Index != 0)
 		{
-			// Unlink UI
-			HeaderRowWidget->AddSlot()
-				.FillWidth(1.0f)
-				.VAlign(VAlign_Center)
-				[
-					SNullWidget::NullWidget
-				];
-			HeaderRowWidget->AddSlot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				.Padding(0.0f, 0.0f, 0.0f, 0.0f)
-				[
-					SNew(SButton)
-					.ButtonStyle(FEditorStyle::Get(), "HoverHintOnly")
-					.OnClicked(Tree, &SMaterialLayersFunctionsInstanceTree::UnlinkLayer, StackParameterData->ParameterInfo.Index)
-					.Visibility(Tree, &SMaterialLayersFunctionsInstanceTree::GetUnlinkLayerVisibility, StackParameterData->ParameterInfo.Index)
-					.ToolTipText(LOCTEXT("UnlinkLayer", "Whether or not to unlink this layer/blend combination from the parent."))
-					.Content()
-					[
-						SNew(STextBlock)
-						.TextStyle(FEditorStyle::Get(), "ContentBrowser.TopBar.Font")
-						.Font(FEditorStyle::Get().GetFontStyle("FontAwesome.10"))
-						.Text(FEditorFontGlyphs::Chain_Broken) /*fa-filter*/
-					]
-				];
-
 			HeaderRowWidget->AddSlot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
@@ -560,6 +560,7 @@ void SMaterialLayersFunctionsInstanceTreeItem::Construct(const FArguments& InArg
 // END ASSET
 
 // PROPERTY ----------------------------------------------
+	bool bisPaddedProperty = false;
 	if (StackParameterData->StackDataType == EStackDataType::Property)
 	{
 
@@ -810,32 +811,7 @@ void SMaterialLayersFunctionsInstanceTreeItem::Construct(const FArguments& InArg
 					}
 			}
 		}
-		else if (!CompMaskParam)
-		{
-			FNodeWidgets StoredNodeWidgets = Node.CreateNodeWidgets();
-			TSharedRef<SWidget> StoredRightSideWidget = StoredNodeWidgets.ValueWidget.ToSharedRef();
-			FDetailWidgetRow& CustomWidget = Row.CustomWidget();
-			CustomWidget
-			.FilterString(NameOverride)
-			.NameContent()
-			[
-				SNew(SHorizontalBox)
-				+SHorizontalBox::Slot()
-				.VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-					.Text(NameOverride)
-					.ToolTipText(FMaterialPropertyHelpers::GetParameterExpressionDescription(StackParameterData->Parameter, MaterialEditorInstance))
-					.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.NormalFont")))
-				]
-			]
-			.ValueContent()
-			[
-				StoredRightSideWidget
-			];
-
-		}
-		else
+		else if (CompMaskParam)
 		{
 			TSharedPtr<IPropertyHandle> RMaskProperty = StackParameterData->ParameterNode->CreatePropertyHandle()->GetChildHandle("R");
 			TSharedPtr<IPropertyHandle> GMaskProperty = StackParameterData->ParameterNode->CreatePropertyHandle()->GetChildHandle("G");
@@ -918,6 +894,27 @@ void SMaterialLayersFunctionsInstanceTreeItem::Construct(const FArguments& InArg
 				]	
 			];
 		}
+		else
+		{
+			FDetailWidgetDecl* CustomNameWidget = Row.CustomNameWidget();
+			if (CustomNameWidget)
+			{
+				(*CustomNameWidget)
+				[
+					SNew(SHorizontalBox)
+					+SHorizontalBox::Slot()
+					.VAlign(VAlign_Center)
+					[
+						SNew(STextBlock)
+						.Text(NameOverride)
+						.ToolTipText(FMaterialPropertyHelpers::GetParameterExpressionDescription(StackParameterData->Parameter, MaterialEditorInstance))
+						.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.NormalFont")))
+					]
+				];
+			}
+
+			bisPaddedProperty = true;
+		}
 
 		FNodeWidgets NodeWidgets = Node.CreateNodeWidgets();
 		LeftSideWidget = NodeWidgets.NameWidget.ToSharedRef();
@@ -945,6 +942,7 @@ void SMaterialLayersFunctionsInstanceTreeItem::Construct(const FArguments& InArg
 // END PROPERTY CHILD
 
 // FINAL WRAPPER
+	float ValuePadding = bisPaddedProperty ? 20.0f : 0.0f;
 	if (StackParameterData->StackDataType == EStackDataType::Stack)
 	{
 		TSharedPtr<SHorizontalBox> FinalStack;
@@ -1038,8 +1036,8 @@ void SMaterialLayersFunctionsInstanceTreeItem::Construct(const FArguments& InArg
 					[
 						SNew(SHorizontalBox)
 						+ SHorizontalBox::Slot()
-						.MaxWidth(350.0f)
-						.Padding(FMargin(5.0f, 2.0f, 0.0f, 2.0f))
+						.MaxWidth(350.0f - ValuePadding)
+						.Padding(FMargin(5.0f, 2.0f, ValuePadding, 2.0f))
 						[
 							RightSideWidget
 						]
@@ -1091,7 +1089,7 @@ void SMaterialLayersFunctionsInstanceTree::Construct(const FArguments& InArgs)
 	ShowHiddenDelegate = InArgs._InShowHiddenDelegate;
 	CreateGroupsWidget();
 
-#ifdef WITH_EDITOR
+#if WITH_EDITOR
 	//Fixup for adding new bool arrays to the class
 	if (FunctionInstance)
 	{
@@ -2097,6 +2095,7 @@ void SMaterialLayersFunctionsMaterialTreeItem::Construct(const FArguments& InArg
 	// END ASSET
 
 	// PROPERTY ----------------------------------------------
+	bool bisPaddedProperty = false;
 	if (StackParameterData->StackDataType == EStackDataType::Property)
 	{
 
@@ -2309,32 +2308,7 @@ void SMaterialLayersFunctionsMaterialTreeItem::Construct(const FArguments& InArg
 				}
 			}
 		}
-		else if (!CompMaskParam)
-		{
-			FNodeWidgets StoredNodeWidgets = Node.CreateNodeWidgets();
-			TSharedRef<SWidget> StoredRightSideWidget = StoredNodeWidgets.ValueWidget.ToSharedRef();
-			FDetailWidgetRow& CustomWidget = Row.CustomWidget();
-			CustomWidget
-				.FilterString(NameOverride)
-				.NameContent()
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot()
-					.VAlign(VAlign_Center)
-					[
-						SNew(STextBlock)
-						.Text(NameOverride)
-						.ToolTipText(FMaterialPropertyHelpers::GetParameterExpressionDescription(StackParameterData->Parameter, MaterialEditorInstance))
-						.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.NormalFont")))
-					]
-				]
-				.ValueContent()
-				[
-					StoredRightSideWidget
-				];
-
-		}
-		else
+		else if (CompMaskParam)
 		{
 			TSharedPtr<IPropertyHandle> RMaskProperty = StackParameterData->ParameterNode->CreatePropertyHandle()->GetChildHandle("R");
 			TSharedPtr<IPropertyHandle> GMaskProperty = StackParameterData->ParameterNode->CreatePropertyHandle()->GetChildHandle("G");
@@ -2417,6 +2391,27 @@ void SMaterialLayersFunctionsMaterialTreeItem::Construct(const FArguments& InArg
 				]
 				];
 		}
+		else
+		{
+			FDetailWidgetDecl* CustomNameWidget = Row.CustomNameWidget();
+			if (CustomNameWidget)
+			{
+				(*CustomNameWidget)
+				[
+					SNew(SHorizontalBox)
+					+SHorizontalBox::Slot()
+					.VAlign(VAlign_Center)
+					[
+						SNew(STextBlock)
+						.Text(NameOverride)
+						.ToolTipText(FMaterialPropertyHelpers::GetParameterExpressionDescription(StackParameterData->Parameter, MaterialEditorInstance))
+						.Font(FEditorStyle::GetFontStyle(TEXT("PropertyWindow.NormalFont")))
+					]
+				];
+			}
+
+			bisPaddedProperty = true;
+		}
 
 		FNodeWidgets NodeWidgets = Node.CreateNodeWidgets();
 		LeftSideWidget = NodeWidgets.NameWidget.ToSharedRef();
@@ -2435,6 +2430,7 @@ void SMaterialLayersFunctionsMaterialTreeItem::Construct(const FArguments& InArg
 
 	// FINAL WRAPPER
 
+	float ValuePadding = bisPaddedProperty ? 20.0f : 0.0f;
 	LeftSideWidget->SetEnabled(false);
 	RightSideWidget->SetEnabled(false);
 	if (StackParameterData->StackDataType == EStackDataType::Stack)
@@ -2519,8 +2515,8 @@ void SMaterialLayersFunctionsMaterialTreeItem::Construct(const FArguments& InArg
 					[
 						SNew(SHorizontalBox)
 						+ SHorizontalBox::Slot()
-						.MaxWidth(350.0f)
-						.Padding(FMargin(5.0f, 2.0f, 0.0f, 2.0f))
+						.MaxWidth(350.0f - ValuePadding)
+						.Padding(FMargin(5.0f, 2.0f, ValuePadding, 2.0f))
 						[
 							RightSideWidget
 						]
@@ -2565,7 +2561,7 @@ void SMaterialLayersFunctionsMaterialTree::Construct(const FArguments& InArgs)
 	Wrapper = InArgs._InWrapper;
 	CreateGroupsWidget();
 
-#ifdef WITH_EDITOR
+#if WITH_EDITOR
 	//Fixup for adding new bool arrays to the class
 	if (FunctionInstance)
 	{

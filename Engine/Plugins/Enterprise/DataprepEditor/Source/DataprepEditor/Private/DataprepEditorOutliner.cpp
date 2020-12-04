@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "DataprepEditor.h"
+#include "DataprepEditorMenu.h"
 
 #include "ICustomSceneOutliner.h"
 #include "ISceneOutlinerColumn.h"
@@ -9,6 +10,7 @@
 #include "Modules/ModuleManager.h"
 #include "SceneOutlinerModule.h"
 #include "ScopedTransaction.h"
+#include "ToolMenus.h"
 #include "Widgets/SDataprepEditorViewport.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Layout/SSpacer.h"
@@ -505,7 +507,8 @@ void FDataprepEditor::CreateScenePreviewTab()
 	FSceneOutlinerModule& SceneOutlinerModule = FModuleManager::Get().LoadModuleChecked<FSceneOutlinerModule>("SceneOutliner");
 
 	SceneOutliner::FInitializationOptions SceneOutlinerOptions;
-	SceneOutlinerOptions.SpecifiedWorldToDisplay = PreviewWorld.Get();
+	SceneOutlinerOptions.SpecifiedWorldToDisplay = PreviewWorld;
+	SceneOutlinerOptions.ContextMenuOverride.BindRaw(this, &FDataprepEditor::OnSceneOutlinerContextMenuOpening);
 
 	SceneOutliner = SceneOutlinerModule.CreateCustomSceneOutliner(SceneOutlinerOptions);
 
@@ -560,6 +563,41 @@ void FDataprepEditor::CreateScenePreviewTab()
 		];
 }
 
+TSharedPtr<SWidget> FDataprepEditor::OnSceneOutlinerContextMenuOpening()
+{
+	DataprepEditorSceneOutlinerUtils::FGetSelectionFromSceneOutliner Visitor;
+
+	for (SceneOutliner::FTreeItemPtr Item : SceneOutliner->GetTree().GetSelectedItems())
+	{
+		Item->Visit(Visitor);
+	}
+
+	TSet<UObject*> SelectedActors;
+
+	for (TWeakObjectPtr<UObject> ObjectPtr : Visitor.Selection)
+	{
+		if (AActor* Actor = Cast<AActor>(ObjectPtr.Get()))
+		{
+			SelectedActors.Add(Actor);
+		}
+	}
+
+	if (SelectedActors.Num() == 0)
+	{
+		return TSharedPtr<SWidget>();
+	}
+
+	// Build context menu
+
+	UDataprepEditorContextMenuContext* ContextObject = NewObject<UDataprepEditorContextMenuContext>();
+	ContextObject->SelectedObjects = SelectedActors.Array();
+	ContextObject->DataprepAsset = GetDataprepAsset();
+
+	UToolMenus* ToolMenus = UToolMenus::Get();
+	FToolMenuContext MenuContext( nullptr, nullptr, ContextObject );
+	return ToolMenus->GenerateWidget( "DataprepEditor.SceneOutlinerContextMenu", MenuContext );
+}
+
 void FDataprepEditor::OnSceneOutlinerSelectionChanged(SceneOutliner::FTreeItemPtr ItemPtr, ESelectInfo::Type SelectionMode)
 {
 	using namespace SceneOutliner;
@@ -574,7 +612,7 @@ void FDataprepEditor::OnSceneOutlinerSelectionChanged(SceneOutliner::FTreeItemPt
 	SetWorldObjectsSelection(MoveTemp(Visitor.Selection), EWorldSelectionFrom::SceneOutliner);
 }
 
-void FDataprepEditor::SetWorldObjectsSelection(TSet<TWeakObjectPtr<UObject>>&& NewSelection, EWorldSelectionFrom SelectionFrom /* = EWorldSelectionFrom::Unknow */)
+void FDataprepEditor::SetWorldObjectsSelection(TSet<TWeakObjectPtr<UObject>>&& NewSelection, EWorldSelectionFrom SelectionFrom /* = EWorldSelectionFrom::Unknow */,  bool bSetAsDetailsObject /* = true */)
 {
 	WorldItemsSelection.Empty(NewSelection.Num());
 	WorldItemsSelection.Append(MoveTemp(NewSelection));
@@ -601,6 +639,7 @@ void FDataprepEditor::SetWorldObjectsSelection(TSet<TWeakObjectPtr<UObject>>&& N
 		SceneViewportView->SelectActors(Actors);
 	}
 
+	if ( bSetAsDetailsObject )
 	{
 		TSet<UObject*> Objects;
 		Objects.Reserve(WorldItemsSelection.Num());

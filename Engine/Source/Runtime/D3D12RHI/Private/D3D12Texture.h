@@ -5,13 +5,17 @@ D3D12Texture.h: Implementation of D3D12 Texture
 =============================================================================*/
 #pragma once
 
+/** If true, guard texture creates with SEH to log more information about a driver crash we are seeing during texture streaming. */
+#define GUARDED_TEXTURE_CREATES (PLATFORM_WINDOWS && !(UE_BUILD_SHIPPING || UE_BUILD_TEST))
+
+
 void SafeCreateTexture2D(FD3D12Device* pDevice, 
 	FD3D12Adapter* Adapter,
 	const D3D12_RESOURCE_DESC& TextureDesc,
 	const D3D12_CLEAR_VALUE* ClearValue, 
 	FD3D12ResourceLocation* OutTexture2D, 
 	uint8 Format, 
-	uint32 Flags,
+	ETextureCreateFlags Flags,
 	D3D12_RESOURCE_STATES InitialState,
 	const TCHAR* Name);
 
@@ -75,13 +79,14 @@ public:
 		RenderTargetViews.Add(View);
 	}
 
-	int32 GetMemorySize() const
+	int64 GetMemorySize() const
 	{
 		return MemorySize;
 	}
 
-	void SetMemorySize(int32 InMemorySize)
+	void SetMemorySize(int64 InMemorySize)
 	{
+		check(InMemorySize > 0);
 		MemorySize = InMemorySize;
 	}
 
@@ -190,7 +195,7 @@ public:
 protected:
 
 	/** Amount of memory allocated by this texture, in bytes. */
-	int32 MemorySize;
+	int64 MemorySize;
 
 	/** Pointer to the base shader resource. Usually the object itself, but not for texture references. */
 	FD3D12BaseShaderResource* BaseShaderResource;
@@ -216,7 +221,7 @@ protected:
 	FTextureRHIRef AliasingSourceTexture;
 };
 
-#if PLATFORM_WINDOWS
+#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 struct FD3D12TextureLayout {};
 #endif
 
@@ -227,7 +232,7 @@ class TD3D12Texture2D : public BaseResourceType, public FD3D12TextureBase
 public:
 
 	/** Flags used when the texture was created */
-	uint32 Flags;
+	ETextureCreateFlags Flags;
 
 	/** Initialization constructor. */
 	TD3D12Texture2D(
@@ -239,7 +244,7 @@ public:
 		uint32 InNumSamples,
 		EPixelFormat InFormat,
 		bool bInCubemap,
-		uint32 InFlags,
+		ETextureCreateFlags InFlags,
 		const FClearValueBinding& InClearValue,
 		const FD3D12TextureLayout* InTextureLayout = nullptr
 #if PLATFORM_SUPPORTS_VIRTUAL_TEXTURES
@@ -259,6 +264,8 @@ public:
 		, FD3D12TextureBase(InParent)
 		, Flags(InFlags)
 		, bCubemap(bInCubemap)
+		, bStreamable(!!(InFlags & TexCreate_Streamable))
+		, bMipOrderDescending(false)
 #if PLATFORM_SUPPORTS_VIRTUAL_TEXTURES
 		, RawTextureMemory(InRawTextureMemory)
 #endif
@@ -270,6 +277,9 @@ public:
 		else
 		{
 			TextureLayout = *InTextureLayout;
+#if PLATFORM_SUPPORTS_VIRTUAL_TEXTURES
+			bMipOrderDescending = InNumMips > 1u && TextureLayout.GetSubresourceOffset(0, 0, 0) > TextureLayout.GetSubresourceOffset(0, 1, 0);
+#endif
 		}
 	}
 
@@ -293,6 +303,10 @@ public:
 	void GetReadBackHeapDesc(D3D12_PLACED_SUBRESOURCE_FOOTPRINT& OutFootprint, uint32 Subresource) const;
 
 	bool IsCubemap() const { return bCubemap; }
+
+	bool IsStreamable() const { return bStreamable; }
+
+	bool IsLastMipFirst() const { return bMipOrderDescending; }
 
 	/** FRHITexture override.  See FRHITexture::GetNativeResource() */
 	virtual void* GetNativeResource() const override final
@@ -339,10 +353,16 @@ public:
 
 private:
 	/** Unlocks a previously locked mip-map. */
-	void UnlockInternal(class FRHICommandListImmediate* RHICmdList, TD3D12Texture2D* Previous, uint32 MipIndex, uint32 ArrayIndex);
+	void UnlockInternal(class FRHICommandListImmediate* RHICmdList, FLinkedObjectIterator NextObject, uint32 MipIndex, uint32 ArrayIndex);
 
 	/** Whether the texture is a cube-map. */
 	const uint32 bCubemap : 1;
+
+	/** Whether the texture has been created with flag TexCreate_Streamable */
+	const uint32 bStreamable : 1;
+
+	/** Whether mips are ordered from the last to the first in memory */
+	uint32 bMipOrderDescending : 1;
 
 #if PLATFORM_SUPPORTS_VIRTUAL_TEXTURES
 	void* RawTextureMemory;
@@ -365,11 +385,12 @@ public:
 		uint32 InSizeZ,
 		uint32 InNumMips,
 		EPixelFormat InFormat,
-		uint32 InFlags,
+		ETextureCreateFlags InFlags,
 		const FClearValueBinding& InClearValue
 		)
 		: FRHITexture3D(InSizeX, InSizeY, InSizeZ, InNumMips, InFormat, InFlags, InClearValue)
 		, FD3D12TextureBase(InParent)
+		, bStreamable(!!(InFlags & TexCreate_Streamable))
 	{
 	}
 
@@ -403,12 +424,18 @@ public:
 	{
 		return FRHIResource::GetRefCount();
 	}
+
+	bool IsStreamable() const { return bStreamable; }
+
+private:
+	/** Whether the texture has been created with flag TexCreate_Streamable */
+	const uint32 bStreamable : 1;
 };
 
 class FD3D12BaseTexture2D : public FRHITexture2D, public FD3D12FastClearResource
 {
 public:
-	FD3D12BaseTexture2D(uint32 InSizeX, uint32 InSizeY, uint32 InSizeZ, uint32 InNumMips, uint32 InNumSamples, EPixelFormat InFormat, uint32 InFlags, const FClearValueBinding& InClearValue)
+	FD3D12BaseTexture2D(uint32 InSizeX, uint32 InSizeY, uint32 InSizeZ, uint32 InNumMips, uint32 InNumSamples, EPixelFormat InFormat, ETextureCreateFlags InFlags, const FClearValueBinding& InClearValue)
 		: FRHITexture2D(InSizeX, InSizeY, InNumMips, InNumSamples, InFormat, InFlags, InClearValue)
 	{}
 	uint32 GetSizeZ() const { return 0; }
@@ -422,7 +449,7 @@ public:
 class FD3D12BaseTexture2DArray : public FRHITexture2DArray, public FD3D12FastClearResource
 {
 public:
-	FD3D12BaseTexture2DArray(uint32 InSizeX, uint32 InSizeY, uint32 InSizeZ, uint32 InNumMips, uint32 InNumSamples, EPixelFormat InFormat, uint32 InFlags, const FClearValueBinding& InClearValue)
+	FD3D12BaseTexture2DArray(uint32 InSizeX, uint32 InSizeY, uint32 InSizeZ, uint32 InNumMips, uint32 InNumSamples, EPixelFormat InFormat, ETextureCreateFlags InFlags, const FClearValueBinding& InClearValue)
 		: FRHITexture2DArray(InSizeX, InSizeY, InSizeZ, InNumMips, InNumSamples, InFormat, InFlags, InClearValue)
 	{
 		check(InNumSamples == 1);
@@ -432,7 +459,7 @@ public:
 class FD3D12BaseTextureCube : public FRHITextureCube, public FD3D12FastClearResource
 {
 public:
-	FD3D12BaseTextureCube(uint32 InSizeX, uint32 InSizeY, uint32 InSizeZ, uint32 InNumMips, uint32 InNumSamples, EPixelFormat InFormat, uint32 InFlags, const FClearValueBinding& InClearValue)
+	FD3D12BaseTextureCube(uint32 InSizeX, uint32 InSizeY, uint32 InSizeZ, uint32 InNumMips, uint32 InNumSamples, EPixelFormat InFormat, ETextureCreateFlags InFlags, const FClearValueBinding& InClearValue)
 		: FRHITextureCube(InSizeX, InNumMips, InFormat, InFlags, InClearValue)
 		, SliceCount(InSizeZ)
 	{
@@ -488,6 +515,35 @@ public:
 	}
 };
 
+class FD3D12Viewport;
+
+class FD3D12BackBufferReferenceTexture2D : public FD3D12Texture2D
+{
+public:
+
+	FD3D12BackBufferReferenceTexture2D(
+		FD3D12Viewport* InViewPort,
+		bool bInIsSDR,
+		FD3D12Device* InDevice,
+		uint32 InSizeX,
+		uint32 InSizeY,
+		EPixelFormat InFormat) :
+		FD3D12Texture2D(InDevice, InSizeX, InSizeY, 1, 1, 1, InFormat, false, TexCreate_RenderTargetable | TexCreate_Presentable, FClearValueBinding()),
+		Viewport(InViewPort), bIsSDR(bInIsSDR)
+	{
+	}
+
+	FD3D12Viewport* GetViewPort() { return Viewport; }
+	bool IsSDR() const { return bIsSDR; }
+
+	D3D12RHI_API FRHITexture* GetBackBufferTexture();
+
+private:
+
+	FD3D12Viewport* Viewport = nullptr;
+	bool bIsSDR = false;
+};
+
 /** Given a pointer to a RHI texture that was created by the D3D12 RHI, returns a pointer to the FD3D12TextureBase it encapsulates. */
 FORCEINLINE FD3D12TextureBase* GetD3D12TextureFromRHITexture(FRHITexture* Texture)
 {
@@ -496,9 +552,32 @@ FORCEINLINE FD3D12TextureBase* GetD3D12TextureFromRHITexture(FRHITexture* Textur
 		return NULL;
 	}
 	
-	FD3D12TextureBase* Result((FD3D12TextureBase*)Texture->GetTextureBaseRHI());
+	// If it's the dummy backbuffer then swap with actual current RHI backbuffer right now
+	FRHITexture* RHITexture = Texture;
+	if (RHITexture && RHITexture->GetFlags() & TexCreate_Presentable)
+	{
+		FD3D12BackBufferReferenceTexture2D* BufferBufferReferenceTexture = (FD3D12BackBufferReferenceTexture2D*)RHITexture;
+		RHITexture = BufferBufferReferenceTexture->GetBackBufferTexture();
+	}
+
+	FD3D12TextureBase* Result((FD3D12TextureBase*)RHITexture->GetTextureBaseRHI());
 	check(Result);
 	return Result;
+}
+
+FORCEINLINE FD3D12TextureBase* GetD3D12TextureFromRHITexture(FRHITexture* Texture, uint32 GPUIndex)
+{
+	FD3D12TextureBase* Result = GetD3D12TextureFromRHITexture(Texture);
+	if (Result != nullptr)
+	{
+		Result = Result->GetLinkedObject(GPUIndex);
+		check(Result);
+		return Result;
+	}
+	else
+	{
+		return Result;
+	}
 }
 
 class FD3D12TextureStats
@@ -512,7 +591,8 @@ public:
 	// Note: This function can be called from many different threads
 	// @param TextureSize >0 to allocate, <0 to deallocate
 	// @param b3D true:3D, false:2D or cube map
-	static void UpdateD3D12TextureStats(const D3D12_RESOURCE_DESC& Desc, int64 TextureSize, bool b3D, bool bCubeMap);
+	// @param bStreamable true:Streamable, false:not streamable
+	static void UpdateD3D12TextureStats(const D3D12_RESOURCE_DESC& Desc, int64 TextureSize, bool b3D, bool bCubeMap, bool bStreamable);
 
 	template<typename BaseResourceType>
 	static void D3D12TextureAllocated(TD3D12Texture2D<BaseResourceType>& Texture, const D3D12_RESOURCE_DESC *Desc = nullptr);
@@ -532,18 +612,49 @@ struct TD3D12ResourceTraits<FRHITexture3D>
 {
 	typedef FD3D12Texture3D TConcreteType;
 };
+
 template<>
 struct TD3D12ResourceTraits<FRHITexture2D>
 {
 	typedef FD3D12Texture2D TConcreteType;
 };
+
 template<>
 struct TD3D12ResourceTraits<FRHITexture2DArray>
 {
 	typedef FD3D12Texture2DArray TConcreteType;
 };
+
 template<>
 struct TD3D12ResourceTraits<FRHITextureCube>
 {
 	typedef FD3D12TextureCube TConcreteType;
+};
+
+template<>
+struct TD3D12ResourceTraits<FRHITextureReference>
+{
+	typedef FD3D12TextureReference TConcreteType;
+};
+
+struct FRHICommandD3D12AsyncReallocateTexture2D final : public FRHICommand<FRHICommandD3D12AsyncReallocateTexture2D>
+{
+	FD3D12Texture2D* OldTexture;
+	FD3D12Texture2D* NewTexture;
+	int32 NewMipCount;
+	int32 NewSizeX;
+	int32 NewSizeY;
+	FThreadSafeCounter* RequestStatus;
+
+	FORCEINLINE_DEBUGGABLE FRHICommandD3D12AsyncReallocateTexture2D(FD3D12Texture2D* InOldTexture, FD3D12Texture2D* InNewTexture, int32 InNewMipCount, int32 InNewSizeX, int32 InNewSizeY, FThreadSafeCounter* InRequestStatus)
+		: OldTexture(InOldTexture)
+		, NewTexture(InNewTexture)
+		, NewMipCount(InNewMipCount)
+		, NewSizeX(InNewSizeX)
+		, NewSizeY(InNewSizeY)
+		, RequestStatus(InRequestStatus)
+	{
+	}
+
+	void Execute(FRHICommandListBase& RHICmdList);
 };

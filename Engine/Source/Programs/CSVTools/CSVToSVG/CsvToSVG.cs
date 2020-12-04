@@ -25,7 +25,7 @@ namespace CSVTools
 {
     class Version
     {
-        private static string VersionString = "2.31";
+        private static string VersionString = "2.32";
         
         public static string Get() { return VersionString; }
     };
@@ -194,6 +194,7 @@ namespace CSVTools
         int maxHierarchyDepth = -1;
         char hierarchySeparator = '/';
         int colourOffset = 0;
+        int frameOffset = 0;
 
 		static string formatString =
             "Format: \n" +
@@ -218,7 +219,7 @@ namespace CSVTools
 			"       -hideStatPrefix <list>\n" +
 			"       -hierarchySeparator <character>\n" +
 			"       -highlightEventRegions <startEventName,endEventName>\n" +
-			"       -ignoreStats <list> (can include wildcards)\n" +
+			"       -ignoreStats <list> (can include wildcards. Separate states with stat1;stat2;etc)\n" +
 			"       -interactive\n" +
 			"       -legend <list> \n" +
 			"       -maxHierarchyDepth <depth>\n" +
@@ -252,6 +253,7 @@ namespace CSVTools
 			"       -uniqueId <string> : unique ID for JS (needed if this is getting embedded in HTML alongside other graphs)\n" +
 			"       -nocommandlineEmbed : don't embed the commandline in the SVG" +
 			"       -lineDecimalPlaces <N> (default 3)" +
+			"       -frameOffset <N> : offset used for frame display name (default 0)" +
             "";
 
 		void Run(string[] args)
@@ -313,10 +315,13 @@ namespace CSVTools
             {
                 DirectoryInfo di = new DirectoryInfo(csvDir);
                 bool recurse = GetBoolArg("recurse");
-                var files = di.GetFiles("*.csv", recurse ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
-                csvFilenames = new string[files.Length];
+                FileInfo[] csvFiles = di.GetFiles("*.csv", recurse ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
+				FileInfo[] binFiles = di.GetFiles("*.csv.bin", recurse ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly);
+				List<FileInfo> allFiles = new List<FileInfo>(csvFiles);
+				allFiles.AddRange(binFiles);
+				csvFilenames = new string[allFiles.Count];
                 int i = 0;
-                foreach (FileInfo csvFile in files)
+                foreach (FileInfo csvFile in allFiles)
                 {
                     csvFilenames[i] = csvFile.FullName;
                     i++;
@@ -615,8 +620,9 @@ namespace CSVTools
             csvStats = new List<CsvStats>();
 
             bool bDiscardLastFrame = ( GetIntArg("discardLastFrame", 1) == 1 );
+			int frameOffset = GetIntArg("frameOffset", 0);
 
-            int firstFileNumSamples = -1;
+			int firstFileNumSamples = -1;
             foreach (string csvFilename in csvFilenames)
             {
                 CsvStats csv = ProcessCSV(csvFilename, statNames, bDiscardLastFrame);
@@ -711,8 +717,13 @@ namespace CSVTools
             if (graphTitle.Length == 0 && statNames.Length == 1 && csvStats.Count > 0 && !statNames[0].EndsWith("*"))
             {
                 StatSamples stat = csvStats[0].GetStat(statNames[0]);
-                if (graphTitle.Length == 0)
-                {
+                if (stat == null)
+				{
+                    Console.Out.WriteLine("Warning: Could not find stat {0}", statNames[0]);
+                    graphTitle = string.Format("UnknownStat {0}", statNames[0]);
+                }
+                else
+                { 
                     graphTitle = stat.Name;
                 }
             }
@@ -749,7 +760,7 @@ namespace CSVTools
             {
                 range.MinX = percentileTop99 ? 99 : (percentileTop90 ? 90 : 0);
                 range.MaxX = 100;
-                DrawGridLines(graphRect, range, graphOnly, 1.0f, true);
+                DrawGridLines(graphRect, range, graphOnly, 1.0f, true, frameOffset);
                 csvIndex = 0;
                 foreach (CsvStats csvStat in csvStats)
                 {
@@ -764,7 +775,7 @@ namespace CSVTools
             }
             else
             {
-                DrawGridLines(graphRect, range, graphOnly, 1.0f, stacked);
+                DrawGridLines(graphRect, range, graphOnly, 1.0f, stacked, frameOffset);
                 csvIndex = 0;
                 foreach (CsvStats csvStat in csvStats)
                 {
@@ -781,7 +792,7 @@ namespace CSVTools
                     if (hideEventNames == 0)
                     {
                         Colour eventColour = theme.EventTextColour;
-                        DrawEventText(csvStat.Events, eventColour, graphRect, range);
+                        DrawEventText(csvStat.Events, eventColour, graphRect, range );
                     }
 
                     csvIndex++;
@@ -793,7 +804,7 @@ namespace CSVTools
             // If we're stacked, we need to redraw the grid lines
             if (stacked)
             {
-                DrawGridLines(graphRect, range, true, 0.75f, false);
+                DrawGridLines(graphRect, range, true, 0.75f, false, frameOffset);
             }
 
             // Draw legend, metadata and title
@@ -1416,7 +1427,7 @@ namespace CSVTools
             return yIncrement;
         }
 
-        void DrawGridLines(Rect rect, Range range, bool graphOnly, float alpha=1.0f, bool extendLines = false)
+        void DrawGridLines(Rect rect, Range range, bool graphOnly, float alpha=1.0f, bool extendLines = false, int frameOffset = 0)
         {
             float xIncrement = GetXAxisIncrement(rect, range);
             float yIncrement = GetYAxisIncrement(rect, range);
@@ -1457,8 +1468,9 @@ namespace CSVTools
                 for (int i = 0; i < 2000; i++)
                 {
                     float x = range.MinX + i * xIncrement;
-                    if (x > range.MaxX) break;
-                    DrawHorizontalAxisText(x.ToString(), x, theme.TextColour, rect, range);
+                    if (x > (range.MaxX)) break;
+					int displayFrame = (int) Math.Floor(x) + frameOffset;
+                    DrawHorizontalAxisText(displayFrame.ToString(), x, theme.TextColour, rect, range);
                 }
                 SvgWriteLine("</g>");
 
@@ -1490,7 +1502,7 @@ namespace CSVTools
             DrawHorizLine(budget, budgetLineColour, rect, range, true, budgetLineThickness, dropShadow);
         }
 
-        void DrawText(string text, float x, float y, float size, Rect rect, Colour colour, string anchor = "start", string font="Helvetica", string id="", bool dropShadow = false)
+		void DrawText(string text, float x, float y, float size, Rect rect, Colour colour, string anchor = "start", string font="Helvetica", string id="", bool dropShadow = false)
         {
 
             SvgWriteLine("<text x='" + (rect.x + x) + "' y='"+ (rect.y + y) +"' fill="+colour.SVGString()+
@@ -1816,7 +1828,7 @@ namespace CSVTools
 			public int count;
 		};
 
-		void DrawEventText(List<CsvEvent> events, Colour colour, Rect rect, Range range )
+		void DrawEventText(List<CsvEvent> events, Colour colour, Rect rect, Range range)
         {
 			float LastEventX = -100000.0f;
 			int lastFrame = 0;
@@ -2070,7 +2082,7 @@ namespace CSVTools
 
 					if (showAverages || showTotals)
 					{
-						float legendValue = showTotals ? stat.total : stat.average;
+						float legendValue = showTotals ? (float)stat.total : stat.average;
 						string formatString = "0.00";
 						if (showTotals && legendValueIsWholeNumber)
 						{

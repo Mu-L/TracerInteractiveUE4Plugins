@@ -324,8 +324,18 @@ void UAnimGraphNode_SequencePlayer::ValidateAnimNodeDuringCompilation(class USke
 
 	if (SequenceToCheck == nullptr)
 	{
-		// we may have a connected node
-		if (SequencePin == nullptr || SequencePin->LinkedTo.Num() == 0)
+		// Check for bindings
+		bool bHasBinding = false;
+		if(SequencePin != nullptr)
+		{
+			if (FAnimGraphNodePropertyBinding* BindingPtr = PropertyBindings.Find(SequencePin->GetFName()))
+			{
+				bHasBinding = true;
+			}
+		}
+
+		// we may have a connected node or binding
+		if (SequencePin == nullptr || (SequencePin->LinkedTo.Num() == 0 && !bHasBinding))
 		{
 			MessageLog.Error(TEXT("@@ references an unknown sequence"), this);
 		}
@@ -369,8 +379,10 @@ void UAnimGraphNode_SequencePlayer::SetAnimationAsset(UAnimationAsset* Asset)
 void UAnimGraphNode_SequencePlayer::BakeDataDuringCompilation(class FCompilerResultsLog& MessageLog)
 {
 	UAnimBlueprint* AnimBlueprint = GetAnimBlueprint();
-	Node.GroupIndex = AnimBlueprint->FindOrAddGroup(SyncGroup.GroupName);
+	AnimBlueprint->FindOrAddGroup(SyncGroup.GroupName);
+	Node.GroupName = SyncGroup.GroupName;
 	Node.GroupRole = SyncGroup.GroupRole;
+	Node.GroupScope = SyncGroup.GroupScope;
 }
 
 void UAnimGraphNode_SequencePlayer::GetAllAnimationSequencesReferred(TArray<UAnimationAsset*>& AnimationAssets) const

@@ -131,26 +131,6 @@ void UBakeTransformTool::SetAssetAPI(IToolsContextAssetAPI* AssetAPIIn)
 
 
 
-void UBakeTransformTool::Render(IToolsContextRenderAPI* RenderAPI)
-{
-}
-
-void UBakeTransformTool::Tick(float DeltaTime)
-{
-}
-
-
-
-bool UBakeTransformTool::HasAccept() const
-{
-	return true;
-}
-
-bool UBakeTransformTool::CanAccept() const
-{
-	return true;
-}
-
 
 void UBakeTransformTool::UpdateAssets()
 {
@@ -207,7 +187,7 @@ void UBakeTransformTool::UpdateAssets()
 				RemainingUniformScale = AbsScales[BestSubIdx];
 				if (RemainingUniformScale <= FLT_MIN)
 				{
-					RemainingUniformScale = AbsScales.MaxAbs();
+					RemainingUniformScale = AbsScales.MaxAbsElement();
 				}
 			}
 			switch (BasicProperties->BakeScale)

@@ -95,7 +95,8 @@ public class Core : ModuleRules
 			
 			if (Target.bBuildEditor == true)
 			{
-				PublicAdditionalLibraries.Add("/System/Library/PrivateFrameworks/MultitouchSupport.framework/Versions/Current/MultitouchSupport");
+				string SDKROOT = Utils.RunLocalProcessAndReturnStdOut("/usr/bin/xcrun", "--sdk macosx --show-sdk-path");
+				PublicAdditionalLibraries.Add(SDKROOT + "/System/Library/PrivateFrameworks/MultitouchSupport.framework/Versions/Current/MultitouchSupport.tbd");
 			}
 		}
 		else if (Target.Platform == UnrealTargetPlatform.IOS || Target.Platform == UnrealTargetPlatform.TVOS)
@@ -181,8 +182,6 @@ public class Core : ModuleRules
 		{
 			PublicDefinitions.Add("WITH_VS_PERF_PROFILER=0");
 		}
-
-		WhitelistRestrictedFolders.Add("Private/NoRedist");
 
         if (Target.bWithDirectXMath && (Target.Platform == UnrealTargetPlatform.Win64 || Target.Platform == UnrealTargetPlatform.Win32))
         {

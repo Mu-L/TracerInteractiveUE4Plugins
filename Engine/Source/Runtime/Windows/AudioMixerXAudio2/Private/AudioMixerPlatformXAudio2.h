@@ -19,6 +19,10 @@
     #define XAUDIO_SUPPORTS_DEVICE_DETAILS		1
 #endif	//XAUDIO_SUPPORTS_DEVICE_DETAILS
 
+#ifndef PLATFORM_NEEDS_SUSPEND_ON_BACKGROUND
+	#define PLATFORM_NEEDS_SUSPEND_ON_BACKGROUND	0
+#endif //PLATFORM_NEEDS_SUSPEND_ON_BACKGROUND
+
 // Any platform defines
 namespace Audio
 {
@@ -102,9 +106,17 @@ namespace Audio
 		// This must be done to repopulate the playback device list in XAudio 2.7.
 		bool ResetXAudio2System();
 
+		void Suspend();
+		void Resume();
+
 		// Handle to XAudio2DLL
 		FName DllName;
 		HMODULE XAudio2Dll;
+
+		FDelegateHandle DeactiveHandle;
+		FDelegateHandle ReactivateHandle;
+		FDelegateHandle EnteredBackgroundHandle;
+		FDelegateHandle EnteredForegroundHandle;
 
 		// Bool indicating that the default audio device changed
 		// And that we need to restart the audio device.
@@ -123,9 +135,11 @@ namespace Audio
 		// we check whether a new audio device was connected every second or so.
 		float TimeSinceNullDeviceWasLastChecked;
 
+		bool FirstBufferSubmitted{false};
+
 		uint32 bIsInitialized : 1;
 		uint32 bIsDeviceOpen : 1;
-
+		uint32 bIsSuspended : 1;
 	};
 
 }

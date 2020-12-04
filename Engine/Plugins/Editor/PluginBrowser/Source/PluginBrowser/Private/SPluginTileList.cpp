@@ -86,9 +86,9 @@ void SPluginTileList::RebuildAndFilterPluginList()
 		{
 			struct FPluginListItemSorter
 			{
-				bool operator()( const TSharedRef<IPlugin>& A, const TSharedRef<IPlugin>& B ) const
+				bool operator()(const TSharedRef<IPlugin>& A, const TSharedRef<IPlugin>& B) const
 				{
-					return A->GetDescriptor().FriendlyName < B->GetDescriptor().FriendlyName;
+					return A->GetFriendlyName() < B->GetFriendlyName();
 				}
 			};
 			PluginListItems.Sort( FPluginListItemSorter() );

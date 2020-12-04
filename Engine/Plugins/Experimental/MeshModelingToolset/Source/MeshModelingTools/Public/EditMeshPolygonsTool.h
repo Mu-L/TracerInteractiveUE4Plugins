@@ -17,7 +17,6 @@
 #include "Operations/GroupTopologyDeformer.h"
 #include "ModelingOperators/Public/ModelingTaskTypes.h"
 #include "Transforms/MultiTransformer.h"
-#include "Changes/ValueWatcher.h"
 #include "Selection/PolygonSelectionMechanic.h"
 #include "Mechanics/PlaneDistanceFromHitMechanic.h"
 #include "Mechanics/SpatialCurveDistanceMechanic.h"
@@ -51,8 +50,11 @@ enum class ELocalFrameMode
 };
 
 
+/** 
+ * These are properties that do not get enabled/disabled based on the action 
+ */
 UCLASS()
-class MESHMODELINGTOOLS_API UPolyEditTransformProperties : public UInteractiveToolPropertySet
+class MESHMODELINGTOOLS_API UPolyEditCommonProperties : public UInteractiveToolPropertySet
 {
 	GENERATED_BODY()
 
@@ -60,7 +62,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = Options)
 	bool bShowWireframe = false;
 
-UPROPERTY(EditAnywhere, Category = Gizmo)
+	UPROPERTY(EditAnywhere, Category = Options)
+	bool bSelectEdgeLoops = false;
+
+	UPROPERTY(EditAnywhere, Category = Gizmo)
 	ELocalFrameMode LocalFrameMode = ELocalFrameMode::FromGeometry;
 
 	UPROPERTY(EditAnywhere, Category = Gizmo)
@@ -68,7 +73,6 @@ UPROPERTY(EditAnywhere, Category = Gizmo)
 
 	UPROPERTY(EditAnywhere, Category = Gizmo)
 	bool bSnapToWorldGrid = false;
-
 };
 
 
@@ -317,8 +321,74 @@ public:
 	UPROPERTY(EditAnywhere, Category = Extrude)
 	EPolyEditExtrudeDirection Direction = EPolyEditExtrudeDirection::SelectionNormal;
 
-	virtual void SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving) override;
+	/** Controls whether extruding an entire patch should create a solid or an open shell */
+	UPROPERTY(EditAnywhere, Category = Extrude)
+	bool bShellsToSolids = true;
 };
+
+
+
+UCLASS()
+class MESHMODELINGTOOLS_API UPolyEditOffsetProperties : public UInteractiveToolPropertySet
+{
+	GENERATED_BODY()
+
+public:
+	/** Offset by averaged face normals instead of per-vertex normals */
+	UPROPERTY(EditAnywhere, Category = Offset)
+	bool bUseFaceNormals = false;
+};
+
+
+
+/**
+ * Settings for Inset operation
+ */
+UCLASS()
+class MESHMODELINGTOOLS_API UPolyEditInsetProperties : public UInteractiveToolPropertySet
+{
+	GENERATED_BODY()
+
+public:
+	/** Determines whether vertices in inset region should be projected back onto input surface */
+	UPROPERTY(EditAnywhere, Category = Inset)
+	bool bReproject = true;
+
+	/** Amount of smoothing applied to inset boundary */
+	UPROPERTY(EditAnywhere, Category = Inset, meta = (UIMin = "0.0", UIMax = "1.0", EditCondition = "bBoundaryOnly == false"))
+	float Softness = 0.5;
+
+	/** Controls whether inset operation will move interior vertices as well as border vertices */
+	UPROPERTY(EditAnywhere, Category = Inset, AdvancedDisplay)
+	bool bBoundaryOnly = false;
+
+	/** Tweak area scaling when solving for interior vertices */
+	UPROPERTY(EditAnywhere, Category = Inset, AdvancedDisplay, meta = (UIMin = "0.0", UIMax = "1.0", EditCondition = "bBoundaryOnly == false"))
+	float AreaScale = true;
+};
+
+
+
+UCLASS()
+class MESHMODELINGTOOLS_API UPolyEditOutsetProperties : public UInteractiveToolPropertySet
+{
+	GENERATED_BODY()
+
+public:
+	/** Amount of smoothing applied to outset boundary */
+	UPROPERTY(EditAnywhere, Category = Inset, meta = (UIMin = "0.0", UIMax = "1.0", EditCondition = "bBoundaryOnly == false"))
+	float Softness = 0.5;
+
+	/** Controls whether outset operation will move interior vertices as well as border vertices */
+	UPROPERTY(EditAnywhere, Category = Inset, AdvancedDisplay)
+	bool bBoundaryOnly = false;
+
+	/** Tweak area scaling when solving for interior vertices */
+	UPROPERTY(EditAnywhere, Category = Inset, AdvancedDisplay, meta = (UIMin = "0.0", UIMax = "1.0", EditCondition = "bBoundaryOnly == false"))
+	float AreaScale = true;
+};
+
+
 
 
 
@@ -343,8 +413,6 @@ public:
 
 	UPROPERTY(EditAnywhere, Category = Cut)
 	bool bSnapToVertices = true;
-
-	virtual void SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving) override;
 };
 
 
@@ -358,8 +426,6 @@ class MESHMODELINGTOOLS_API UPolyEditSetUVProperties : public UInteractiveToolPr
 public:
 	UPROPERTY(EditAnywhere, Category = PlanarProjectUV)
 	bool bShowMaterial = false;
-
-	virtual void SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving) override;
 };
 
 
@@ -382,13 +448,11 @@ public:
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 
-	virtual void Tick(float DeltaTime) override;
+	virtual void OnTick(float DeltaTime) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
 
 	virtual bool HasCancel() const override { return true; }
 	virtual bool HasAccept() const override { return true; }
-	virtual bool CanAccept() const override { return true; }
-
 
 	// UMeshSurfacePointTool API
 	virtual bool HitTest(const FRay& Ray, FHitResult& OutHit) override;
@@ -419,9 +483,7 @@ protected:
 	USimpleDynamicMeshComponent* DynamicMeshComponent = nullptr;
 
 	UPROPERTY()
-	UPolyEditTransformProperties* TransformProps;
-	TValueWatcher<ELocalFrameMode> LocalFrameModeWatcher;
-	TValueWatcher<bool> LockFrameWatcher;
+	UPolyEditCommonProperties* CommonProps;
 
 	UPROPERTY()
 	UEditMeshPolygonsToolActions* EditActions;
@@ -438,7 +500,15 @@ protected:
 
 	UPROPERTY()
 	UPolyEditExtrudeProperties* ExtrudeProperties;
-	TValueWatcher<EPolyEditExtrudeDirection> ExtrudeDirectionWatcher;
+
+	UPROPERTY()
+	UPolyEditOffsetProperties* OffsetProperties;
+
+	UPROPERTY()
+	UPolyEditInsetProperties* InsetProperties;
+
+	UPROPERTY()
+	UPolyEditOutsetProperties* OutsetProperties;
 
 	UPROPERTY()
 	UPolyEditCutProperties* CutProperties;
@@ -602,6 +672,8 @@ protected:
 	void AfterTopologyEdit();
 	int32 ModifiedTopologyCounter = 0;
 	bool bWasTopologyEdited = false;
+
+	void SetActionButtonPanelsVisible(bool bVisible);
 
 	friend class FEditPolygonsTopologyPreEditChange;
 	friend class FEditPolygonsTopologyPostEditChange;

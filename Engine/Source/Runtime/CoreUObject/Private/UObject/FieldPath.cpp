@@ -8,6 +8,7 @@
 #include "UObject/UnrealType.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectArray.h"
+#include "UObject/FortniteMainBranchObjectVersion.h"
 #include "UObject/ReleaseObjectVersion.h"
 #include "UObject/LinkerLoad.h"
 #include "UObject/UObjectThreadContext.h"
@@ -220,15 +221,7 @@ UStruct* FFieldPath::TryToResolveOwnerFromStruct(UStruct* InCurrentStruct /*= nu
 	int32 LastOuterIndex = -1;
 	for (int32 PathIndex = Path.Num() - 1; PathIndex > 0; --PathIndex)
 	{
-		UObject* Outer = nullptr;
-		
-		// Simulate half of what StaticFindObjectSafe does without using StaticFindObjectSafe which deals with strings instead of FNames
-		// StaticFindObjectSafe is what's used internally by object properties when importing text values to make sure they don't crash on save		
-		if (!GIsSavingPackage)
-		{
-			// @todo Add StaticFindObjectSafeFast
-			Outer = StaticFindObjectFast(UObject::StaticClass(), LastOuter, Path[PathIndex]);
-		}
+		UObject* Outer = StaticFindObjectFastSafe(UObject::StaticClass(), LastOuter, Path[PathIndex]);
 
 		if (InCurrentStruct && PathIndex == (Path.Num() - 1))
 		{
@@ -320,25 +313,37 @@ FString FFieldPath::ToString() const
 
 FArchive& operator<<(FArchive& Ar, FFieldPath& InOutPropertyPath)
 {
+	Ar.UsingCustomVersion(FFortniteMainBranchObjectVersion::GUID);
 	Ar.UsingCustomVersion(FReleaseObjectVersion::GUID);
 
 	if (Ar.IsSaving())
 	{		
 		UStruct* Owner = InOutPropertyPath.ResolvedOwner.Get();
-		if (!Owner)
+		bool bFilterEditorOnlyProperty = false;
+		if (Owner && Ar.IsFilterEditorOnly())
+		{
+			FProperty* ResolvedProperty = CastField<FProperty>(InOutPropertyPath.GetTyped(FProperty::StaticClass()));
+			if (ResolvedProperty && ResolvedProperty->HasAnyPropertyFlags(CPF_EditorOnly))
+			{
+				bFilterEditorOnlyProperty = true;
+			}
+		}
+		if (!Owner || bFilterEditorOnlyProperty)
 		{
 			// If there's no owner, make sure we don't serialize potentially unresolved path from the actual field
 			// because if we don't save the owner, we won't be able to resolve it anyway.
 			// Possible scenario: the owner was GC'd and the path is no longer valid
 			TArray<FName> EmptyPath;
+			UStruct* NullOwner = nullptr;
 			Ar << EmptyPath;
+			Ar << NullOwner;
 			UE_CLOG(InOutPropertyPath.Path.Num(), LogProperty, Verbose, TEXT("Null owner but property path is not empty when saving \"%s\""), *PathToString(InOutPropertyPath.Path));
 		}
 		else
 		{
 			Ar << InOutPropertyPath.Path;
+			Ar << Owner;
 		}
-		Ar << Owner;
 		checkf(Owner == InOutPropertyPath.ResolvedOwner.Get(), TEXT("FFieldPath owner has changed when saving, this is not allowed (Path: \"%s\", new owner: \"%s\")"),
 			*InOutPropertyPath.ToString(), *GetPathNameSafe(Owner));
 	}
@@ -350,7 +355,7 @@ FArchive& operator<<(FArchive& Ar, FFieldPath& InOutPropertyPath)
 		{
 			InOutPropertyPath.Path.Empty();
 		}
-		if (Ar.CustomVer(FReleaseObjectVersion::GUID) >= FReleaseObjectVersion::FFieldPathOwnerSerialization)
+		if (Ar.CustomVer(FFortniteMainBranchObjectVersion::GUID) >= FFortniteMainBranchObjectVersion::FFieldPathOwnerSerialization || Ar.CustomVer(FReleaseObjectVersion::GUID) >= FReleaseObjectVersion::FFieldPathOwnerSerialization)
 		{
 			UStruct* SerializedOwner = InOutPropertyPath.ResolvedOwner.Get();
 			Ar << SerializedOwner;
@@ -417,5 +422,4 @@ int32 FFieldPath::GetFieldPathSerialNumber(UStruct* InStruct) const
 {
 	return InStruct->FieldPathSerialNumber;
 }
-
 #endif // WITH_EDITORONLY_DATA

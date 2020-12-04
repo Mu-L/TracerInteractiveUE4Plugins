@@ -22,6 +22,7 @@ enum class EIntersectionType
 	Line,
 	Polygon,
 	Plane,
+	MultiSegment,
 	Unknown
 };
 
@@ -262,7 +263,7 @@ namespace VectorUtil
 	}
 
 	/**
-	 * Fast cotangent of angle between two vectors.
+	 * Fast cotangent of angle between two vectors (*do not have to be normalized unit vectors*).
 	 * cot = cos/sin, both of which can be computed from vector identities
 	 * @return cotangent of angle between V1 and V2, or zero if result would be unstable (eg infinity)
 	 */ 
@@ -316,7 +317,7 @@ namespace VectorUtil
 	* TODO: make robust to degenerate triangles?
 	*/
 	template <typename RealType>
-	FVector3<RealType> BarycentricCoords(const FVector3<RealType>& Point, const FVector2<RealType>& V0, const FVector2<RealType>& V1, const FVector2<RealType>& V2)
+	FVector3<RealType> BarycentricCoords(const FVector2<RealType>& Point, const FVector2<RealType>& V0, const FVector2<RealType>& V1, const FVector2<RealType>& V2)
 	{
 		FVector2<RealType> kV02 = V0 - V2;
 		FVector2<RealType> kV12 = V1 - V2;
@@ -396,32 +397,56 @@ namespace VectorUtil
 
 
 	/**
-	 * @return sign of Binormal/Bitangent relative to Normal and Tangent
+	 * @return sign of Bitangent relative to Normal and Tangent
 	 */
 	template<typename RealType>
-	inline RealType BinormalSign(const FVector3<RealType>& NormalIn, const FVector3<RealType>& TangentIn, const FVector3<RealType>& BinormalIn)
+	inline RealType BitangentSign(const FVector3<RealType>& NormalIn, const FVector3<RealType>& TangentIn, const FVector3<RealType>& BitangentIn)
 	{
 		// following math from RenderUtils.h::GetBasisDeterminantSign()
-		RealType Cross00 = BinormalIn.Y*NormalIn.Z - BinormalIn.Z*NormalIn.Y;
-		RealType Cross10 = BinormalIn.Z*NormalIn.X - BinormalIn.X*NormalIn.Z;
-		RealType Cross20 = BinormalIn.X*NormalIn.Y - BinormalIn.Y*NormalIn.X;
+		RealType Cross00 = BitangentIn.Y*NormalIn.Z - BitangentIn.Z*NormalIn.Y;
+		RealType Cross10 = BitangentIn.Z*NormalIn.X - BitangentIn.X*NormalIn.Z;
+		RealType Cross20 = BitangentIn.X*NormalIn.Y - BitangentIn.Y*NormalIn.X;
 		RealType Determinant = TangentIn.X*Cross00 + TangentIn.Y*Cross10 + TangentIn.Z*Cross20;
 		return (Determinant < 0) ? (RealType)-1 : (RealType)1;
 	}
 
 	/**
-	 * @return Binormal vector based on given Normal, Tangent, and Sign value (+1/-1)
+	 * @return Bitangent vector based on given Normal, Tangent, and Sign value (+1/-1)
 	 */
 	template<typename RealType>
-	inline FVector3<RealType> Binormal(const FVector3<RealType>& NormalIn, const FVector3<RealType>& TangentIn, RealType BinormalSign)
+	inline FVector3<RealType> Bitangent(const FVector3<RealType>& NormalIn, const FVector3<RealType>& TangentIn, RealType BitangentSign)
 	{
-		return BinormalSign * FVector3<RealType>(
+		return BitangentSign * FVector3<RealType>(
 			NormalIn.Y*TangentIn.Z - NormalIn.Z*TangentIn.Y,
 			NormalIn.Z*TangentIn.X - NormalIn.X*TangentIn.Z,
 			NormalIn.X*TangentIn.Y - NormalIn.Y*TangentIn.X);
 	}
 
+	/**
+	 * @return Tangent-Space vector based on given Normal and Bitangent
+	 */
+	template<typename RealType>
+	inline FVector3<RealType> TangentFromBitangent(const FVector3<RealType>& NormalIn, const FVector3<RealType>& BitangentIn)
+	{
+		return BitangentIn.Cross(NormalIn);
+	}
 
+	/**
+	 * @return Bitangent vector based on given Normal and Tangent
+	 */
+	template<typename RealType>
+	inline FVector3<RealType> BitangentFromTangent(const FVector3<RealType>& NormalIn, const FVector3<RealType>& TangentIn)
+	{
+		return NormalIn.Cross(TangentIn);
+	}
+
+	/// @return Aspect ratio of triangle 
+	inline double AspectRatio(const FVector3d& v1, const FVector3d& v2, const FVector3d& v3)
+	{
+		double a = v1.Distance(v2), b = v2.Distance(v3), c = v3.Distance(v1);
+		double s = (a + b + c) / 2.0;
+		return (a * b * c) / (8.0 * (s - a) * (s - b) * (s - c));
+	}
 
 
 }; // namespace VectorUtil

@@ -13,10 +13,17 @@ namespace UnrealBuildTool.Rules
 					"CoreUObject",
 					"DNxHR",
 					"DNxMXF",
-					"DNxUncompressed",
 					"Engine",
 					"MovieSceneCapture",
 					"Projects",
+					"MovieRenderPipelineCore",
+				}
+			);
+
+			PublicDependencyModuleNames.AddRange(
+				new string[]
+				{
+					"DNxUncompressed"
 				}
 			);
 		}

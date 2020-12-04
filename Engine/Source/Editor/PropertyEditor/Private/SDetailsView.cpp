@@ -205,7 +205,7 @@ void SDetailsView::Construct(const FArguments& InArgs, const FDetailsViewArgs& I
 			[
 				SNew(SImage)
 				.Image(FEditorStyle::GetBrush("Searching.SearchActiveTab"))
-				.Visibility_Lambda([&](){ return this->bHasActiveFilter ? EVisibility::Visible : EVisibility::Collapsed; })
+				.Visibility_Lambda([this](){ return this->HasActiveSearch() ? EVisibility::Visible : EVisibility::Collapsed; })
 			]
 			+SOverlay::Slot()
 			.Padding(2.f, 2.0f, 4.f, 2.f)
@@ -313,10 +313,18 @@ void SDetailsView::Construct(const FArguments& InArgs, const FDetailsViewArgs& I
 			]
 		]
 		+ SOverlay::Slot()
+		.HAlign(HAlign_Center)
+		.Padding(2.0f, 24.0f, 2.0f, 2.0f)
+		[
+			SNew(STextBlock)
+			.Text(LOCTEXT("AllItemsFiltered", "All results have been filtered. Try changing your active filters above."))
+			.Visibility_Lambda([this]() { return ((this->GetFilterBoxVisibility() == EVisibility::Visible) && !this->CurrentFilter.IsEmptyFilter() && RootTreeNodes.Num() == 0) ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
+		]
+		+ SOverlay::Slot()
 		[
 			SNew(SImage)
 			.Image(FEditorStyle::GetBrush("Searching.SearchActiveBorder"))
-			.Visibility_Lambda([&]() { return this->bHasActiveFilter ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
+			.Visibility_Lambda([this]() { return (this->GetFilterBoxVisibility() == EVisibility::Visible) && this->HasActiveSearch() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
 		]
 	];
 
@@ -363,36 +371,25 @@ EVisibility SDetailsView::GetActorNameAreaVisibility() const
 	return bVisible ? EVisibility::Visible : EVisibility::Collapsed; 
 }
 
-EVisibility SDetailsView::GetScrollBarVisibility() const
-{
-	const bool bHasAnythingToShow = RootTreeNodes.Num() > 0;
-	const bool bShowScrollBar = DetailsViewArgs.bShowScrollBar && bHasAnythingToShow;
-	return bShowScrollBar ? EVisibility::Visible : EVisibility::Collapsed;
-}
-
 void SDetailsView::ForceRefresh()
 {
 	TArray<UObject*> NewObjectList;
+	NewObjectList.Reserve(UnfilteredSelectedObjects.Num());
+	TArray<TWeakObjectPtr<UObject>> ValidSelectedObjects;
+	ValidSelectedObjects.Reserve(UnfilteredSelectedObjects.Num());
 
-	const FRootPropertyNodeList& RootNodes = GetRootNodes();
-	for(const TSharedPtr<FComplexPropertyNode>& ComplexRootNode : RootNodes)
+	for (const TWeakObjectPtr<UObject>& Object : UnfilteredSelectedObjects)
 	{
-		FObjectPropertyNode* RootNode = ComplexRootNode->AsObjectNode();
-		if(RootNode)
+		if (Object.IsValid())
 		{
-			// Simply re-add the same existing objects to cause a refresh
-			for(TPropObjectIterator Itor(RootNode->ObjectIterator()); Itor; ++Itor)
-			{
-				TWeakObjectPtr<UObject> Object = *Itor;
-				if(Object.IsValid())
-				{
-					NewObjectList.Add(Object.Get());
-				}
-			}
+			ValidSelectedObjects.Add(Object);
+			NewObjectList.Add(Object.Get());
 		}
 	}
 
-	SetObjectArrayPrivate( NewObjectList );
+	UnfilteredSelectedObjects = MoveTemp(ValidSelectedObjects);
+
+	SetObjectArrayPrivate(NewObjectList);
 }
 
 void SDetailsView::MoveScrollOffset(int32 DeltaOffset)
@@ -406,6 +403,16 @@ void SDetailsView::SetObjects(const TArray<UObject*>& InObjects, bool bForceRefr
 	{
 		if( bForceRefresh || ShouldSetNewObjects(InObjects) )
 		{
+			// Keep source object list around to reapply the object filter when it changes or force refresh.
+			UnfilteredSelectedObjects.Empty(InObjects.Num());
+			for (UObject* InObject : InObjects)
+			{
+				if (InObject)
+				{
+					UnfilteredSelectedObjects.Add(InObject);
+				}
+			}
+
 			SetObjectArrayPrivate(InObjects);
 		}
 	}
@@ -413,24 +420,17 @@ void SDetailsView::SetObjects(const TArray<UObject*>& InObjects, bool bForceRefr
 
 void SDetailsView::SetObjects(const TArray<TWeakObjectPtr<UObject>>& InObjects, bool bForceRefresh/* = false*/, bool bOverrideLock/* = false*/)
 {
-	if (!IsLocked() || bOverrideLock)
+	TArray<UObject*> SourceObjects;
+	SourceObjects.Reserve(InObjects.Num());
+	for (const TWeakObjectPtr<UObject>& Object : InObjects)
 	{
-		TArray<UObject*> SourceObjects;
-		SourceObjects.Reserve(InObjects.Num());
-
-		for (const TWeakObjectPtr<UObject>& Object : InObjects)
+		if (Object.IsValid())
 		{
-			if (Object.IsValid())
-			{
-				SourceObjects.Add(Object.Get());
-			}
-		}
-
-		if(bForceRefresh || ShouldSetNewObjects(SourceObjects))
-		{
-			SetObjectArrayPrivate(SourceObjects);
+			SourceObjects.Add(Object.Get());
 		}
 	}
+
+	SetObjects(SourceObjects, bForceRefresh, bOverrideLock);
 }
 
 void SDetailsView::SetObject(UObject* InObject, bool bForceRefresh)
@@ -445,35 +445,7 @@ void SDetailsView::SetObject(UObject* InObject, bool bForceRefresh)
 
 void SDetailsView::RemoveInvalidObjects()
 {
-	TArray<UObject*> ResetArray;
-
-	bool bAllFound = true;
-	
-	for(const TSharedPtr<FComplexPropertyNode>& ComplexRootNode : RootPropertyNodes)
-	{
-		FObjectPropertyNode* RootPropertyNode = ComplexRootNode->AsObjectNode();
-		if(RootPropertyNode)
-		{
-			for(TPropObjectIterator Itor(RootPropertyNode->ObjectIterator()); Itor; ++Itor)
-			{
-				TWeakObjectPtr<UObject> Object = *Itor;
-
-				if(Object.IsValid() && !Object->IsPendingKill())
-				{
-					ResetArray.Add(Object.Get());
-				}
-				else
-				{
-					bAllFound = false;
-				}
-			}
-		}
-	}
-
-	if (!bAllFound)
-	{
-		SetObjectArrayPrivate(ResetArray);
-	}
+	ForceRefresh();
 }
 
 void SDetailsView::SetObjectPackageOverrides(const TMap<TWeakObjectPtr<UObject>, TWeakObjectPtr<UPackage>>& InMapping)
@@ -633,7 +605,7 @@ void SDetailsView::SetObjectArrayPrivate(const TArray<UObject*>& InObjects)
 
 		FObjectPropertyNode* RootNode = RootPropertyNodes[RootIndex]->AsObjectNode();
 
-		for(const TWeakObjectPtr<UObject>& Object : Root.Objects)
+		for(const TWeakObjectPtr<UObject> Object : Root.Objects)
 		{
 			if (Object.IsValid())
 			{
@@ -720,46 +692,38 @@ void SDetailsView::SetObjectArrayPrivate(const TArray<UObject*>& InObjects)
 	double ElapsedTime = FPlatformTime::Seconds() - StartTime;
 }
 
-void SDetailsView::ReplaceObjects( const TMap<UObject*, UObject*>& OldToNewObjectMap )
+void SDetailsView::ReplaceObjects(const TMap<UObject*, UObject*>& OldToNewObjectMap)
 {
 	TArray<UObject*> NewObjectList;
-	bool bObjectsReplaced = false;
+	NewObjectList.Reserve(UnfilteredSelectedObjects.Num());
+	TArray<TWeakObjectPtr<UObject>> NewUnfilteredSelectedObjects;
+	NewUnfilteredSelectedObjects.Reserve(UnfilteredSelectedObjects.Num());
 
-	TArray<FObjectPropertyNode*> ObjectNodes;
-	for (TSharedPtr<FComplexPropertyNode>& RootNode : RootPropertyNodes)
+	bool bNeedRefresh = false;
+	for (const TWeakObjectPtr<UObject>& Object : UnfilteredSelectedObjects)
 	{
-		PropertyEditorHelpers::CollectObjectNodes(RootNode, ObjectNodes);
-	}
-
-	for (FObjectPropertyNode* CurrentNode : ObjectNodes)
-	{
-		// Scan all objects and look for objects which need to be replaced
-		for (int32 Idx = 0; Idx < CurrentNode->GetNumObjects(); ++Idx)
+		// We could be replacing an object that has already been garbage collected, so look up the object using the raw pointer.
+		UObject* Replacement = OldToNewObjectMap.FindRef(Object.GetEvenIfUnreachable());
+		if (Replacement)
 		{
-			// We could be replacing an object that has already been garbage collected, so look up the object using the raw pointer.
-			TWeakObjectPtr<UObject> Existing = CurrentNode->GetInstanceAsUObject(Idx);
-			UObject* Replacement = OldToNewObjectMap.FindRef(Existing.GetEvenIfUnreachable());
-
-			// Note: only root objects count for the new object list. 
-			// Sub-Objects (i.e components) count as needing to be replaced but they don't belong in the top level object list)
-			if (Replacement)
-			{
-				bObjectsReplaced = true;
-
-				if (CurrentNode->IsRootNode())
-				{
-					NewObjectList.Add(Replacement);
-				}
-			}
-			else if (CurrentNode->IsRootNode())
-			{
-				NewObjectList.Add(Existing.Get());
-			}
+			NewObjectList.Add(Replacement);
+			NewUnfilteredSelectedObjects.Add(Replacement);
+			bNeedRefresh = true;
+		}
+		else if (Object.IsValid())
+		{
+			NewObjectList.Add(Object.Get());
+			NewUnfilteredSelectedObjects.Add(Object);
+		}
+		else
+		{
+			bNeedRefresh = true;
 		}
 	}
 
-	if (bObjectsReplaced)
+	if (bNeedRefresh)
 	{
+		UnfilteredSelectedObjects = MoveTemp(NewUnfilteredSelectedObjects);
 		SetObjectArrayPrivate(NewObjectList);
 	}
 }
@@ -767,30 +731,22 @@ void SDetailsView::ReplaceObjects( const TMap<UObject*, UObject*>& OldToNewObjec
 void SDetailsView::RemoveDeletedObjects(const TArray<UObject*>& DeletedObjects)
 {
 	TArray<UObject*> NewObjectList;
-	bool bObjectsRemoved = false;
+	NewObjectList.Reserve(UnfilteredSelectedObjects.Num());
+	TArray<TWeakObjectPtr<UObject>> NewUnfilteredSelectedObjects;
+	NewUnfilteredSelectedObjects.Reserve(UnfilteredSelectedObjects.Num());
 
-	for(const TSharedPtr<FComplexPropertyNode>& ComplexRootNode : RootPropertyNodes)
+	for (const TWeakObjectPtr<UObject>& Object : UnfilteredSelectedObjects)
 	{
-		FObjectPropertyNode* RootPropertyNode = ComplexRootNode->AsObjectNode();
-		// Scan all objects and look for objects which need to be replaced
-		for (TPropObjectIterator Itor( RootPropertyNode->ObjectIterator() ); Itor; ++Itor)
+		if (Object.IsValid() && !DeletedObjects.Contains(Object.Get()))
 		{
-			if(DeletedObjects.Contains( Itor->Get()))
-			{
-				// An object we had needs to be removed
-				bObjectsRemoved = true;
-			}
-			else
-			{
-				// If the deleted object list does not contain the current object, its ok to keep it in the list
-				NewObjectList.Add( Itor->Get() );
-			}
+			NewUnfilteredSelectedObjects.Add(Object);
+			NewObjectList.Add(Object.Get());
 		}
 	}
 
-	// if any objects were replaced update the observed objects
-	if( bObjectsRemoved )
+	if (NewUnfilteredSelectedObjects.Num() != UnfilteredSelectedObjects.Num())
 	{
+		UnfilteredSelectedObjects = MoveTemp(NewUnfilteredSelectedObjects);
 		SetObjectArrayPrivate(NewObjectList);
 	}
 }
@@ -813,17 +769,13 @@ void SDetailsView::PreSetObject(int32 InNewNumObjects)
 	for(const FDetailLayoutData& Layout : DetailLayouts)
 	{
 		FRootPropertyNodeList& ExternalRootPropertyNodes = Layout.DetailLayout->GetExternalRootPropertyNodes();
-		for (auto ExternalRootNode : ExternalRootPropertyNodes)
+		for (TSharedPtr<FComplexPropertyNode>& ExternalRootNode : ExternalRootPropertyNodes)
 		{
 			if (ExternalRootNode.IsValid())
 			{
 				SaveExpandedItems(ExternalRootNode.ToSharedRef());
 
-				FComplexPropertyNode* ComplexNode = ExternalRootNode->AsComplexNode();
-				if (ComplexNode)
-				{
-					ComplexNode->Disconnect();
-				}
+				ExternalRootNode->Disconnect();
 			}
 		}
 	}

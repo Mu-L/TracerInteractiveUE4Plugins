@@ -49,7 +49,7 @@ namespace WindowsMixedReality
 				return false;
 			}
 
-			if (!bIsMultiViewEnabled)
+			if (!bIsMultiViewEnabled || hmd->IsThirdCameraActive())
 			{
 				hmd->CopyResources(D3D11Context, ViewportTexture);
 			}

@@ -5,6 +5,7 @@
 #include "Modules/ModuleManager.h"
 #include "Interfaces/IShaderFormat.h"
 #include "Interfaces/IShaderFormatModule.h"
+#include "DxcWrapper.h"
 
 static FName NAME_PCD3D_SM5(TEXT("PCD3D_SM5"));
 static FName NAME_PCD3D_ES3_1(TEXT("PCD3D_ES31"));
@@ -49,15 +50,15 @@ public:
 		CheckFormat(Format);
 		if (Format == NAME_PCD3D_SM5)
 		{
-			CompileShader_Windows_SM5(Input, Output, WorkingDirectory);
+			CompileShader_Windows(Input, Output, WorkingDirectory, ELanguage::SM5);
 		}
 		else if (Format == NAME_PCD3D_ES3_1)
 		{
-			CompileShader_Windows_ES3_1(Input, Output, WorkingDirectory);
+			CompileShader_Windows(Input, Output, WorkingDirectory, ELanguage::ES3_1);
 		}
 		else
 		{
-			check(0);
+			checkf(0, TEXT("Unknown format %s"), *Format.ToString());
 		}
 	}
 	virtual const TCHAR* GetPlatformIncludeDirectory() const
@@ -71,16 +72,17 @@ public:
  * Module for D3D shaders
  */
 
-static IShaderFormat* Singleton = NULL;
+static IShaderFormat* Singleton = nullptr;
 
-class FShaderFormatD3DModule : public IShaderFormatModule
+class FShaderFormatD3DModule : public IShaderFormatModule, public FDxcModuleWrapper
 {
 public:
 	virtual ~FShaderFormatD3DModule()
 	{
 		delete Singleton;
-		Singleton = NULL;
+		Singleton = nullptr;
 	}
+
 	virtual IShaderFormat* GetShaderFormat()
 	{
 		if (!Singleton)

@@ -77,14 +77,14 @@ private:
 };
 
 // Automatically increments the current fence value after Signal.
-class FD3D12Fence : public FRHIComputeFence, public FD3D12AdapterChild, public FD3D12MultiNodeGPUObject, public FNoncopyable
+class FD3D12Fence : public FRefCountedObject, public FD3D12AdapterChild, public FD3D12MultiNodeGPUObject, public FNoncopyable
 {
 public:
 	FD3D12Fence(FD3D12Adapter* InParent, FRHIGPUMask InGPUMask, const FName& InName = L"<unnamed>");
-	~FD3D12Fence();
+	virtual ~FD3D12Fence();
 
-	void CreateFence();
-	uint64 Signal(ED3D12CommandQueueType InQueueType);
+	virtual void CreateFence();
+	virtual uint64 Signal(ED3D12CommandQueueType InQueueType);
 	void GpuWait(uint32 DeviceGPUIndex, ED3D12CommandQueueType InQueueType, uint64 FenceValue, uint32 FenceGPUIndex);
 	void GpuWait(ED3D12CommandQueueType InQueueType, uint64 FenceValue);
 	bool IsFenceComplete(uint64 FenceValue);
@@ -118,6 +118,8 @@ protected:
 
 	uint64 LastCompletedFences[MAX_NUM_GPUS];
 	FD3D12FenceCore* FenceCores[MAX_NUM_GPUS];
+
+	FName Name;
 };
 
 // Fence value must be incremented manually. Useful when you need incrementing and signaling to happen at different times, e.g. for a FrameFence,
@@ -135,7 +137,7 @@ public:
 	}
 
 	// Signals the specified fence value.
-	uint64 Signal(ED3D12CommandQueueType InQueueType, uint64 FenceToSignal);
+	uint64 ManualSignal(ED3D12CommandQueueType InQueueType, uint64 FenceToSignal);
 
 	// Increments the current fence and returns the previous value.
 	inline uint64 IncrementCurrentFence()
@@ -143,6 +145,40 @@ public:
 		check(IsInRenderingThread());
 		return CurrentFence++;
 	}
+};
+
+// Special fence for the command allocator which can be advanced already before internal signal has happened because
+// execute can be done via task
+class FD3D12CommandListFence : public FD3D12Fence
+{
+public:
+	explicit FD3D12CommandListFence(FD3D12Adapter* InParent, FRHIGPUMask InGPUMask, const FName& InName = L"<unnamed>")
+		: FD3D12Fence(InParent, InGPUMask, InName), CurrentOrPendingFenceValue(CurrentFence)
+	{}
+
+	virtual void CreateFence() final override
+	{
+		FD3D12Fence::CreateFence();
+		CurrentOrPendingFenceValue = CurrentFence;
+	}
+
+	virtual uint64 GetCurrentFence() const final override { check(CurrentOrPendingFenceValue == CurrentFence || CurrentOrPendingFenceValue == CurrentFence + 1); return CurrentOrPendingFenceValue; }
+	void AdvancePendingFenceValue()
+	{
+		check(CurrentOrPendingFenceValue == CurrentFence);
+		CurrentOrPendingFenceValue++;
+	}
+	virtual uint64 Signal(ED3D12CommandQueueType InQueueType) final override
+	{
+		check(CurrentOrPendingFenceValue == CurrentFence || CurrentOrPendingFenceValue == CurrentFence + 1);
+		uint64 Result = FD3D12Fence::Signal(InQueueType);
+		CurrentOrPendingFenceValue = CurrentFence;
+		return Result;
+	}
+
+protected:
+
+	uint64 CurrentOrPendingFenceValue;
 };
 
 class FD3D12CommandAllocatorManager : public FD3D12DeviceChild
@@ -206,7 +242,7 @@ public:
 	void ExecuteCommandList(FD3D12CommandListHandle& hList, bool WaitForCompletion = false);
 	virtual void ExecuteCommandLists(TArray<FD3D12CommandListHandle>& Lists, bool WaitForCompletion = false);
 
-	uint32 GetResourceBarrierCommandList(FD3D12CommandListHandle& hList, FD3D12CommandListHandle& hResourceBarrierList);
+	void WaitOnExecuteTask();
 
 	CommandListState GetCommandListState(const FD3D12CLSyncPoint& hSyncPoint);
 
@@ -243,10 +279,20 @@ public:
 	void EndTrackingCommandListTime();
 
 	/** Get the start/end timestamps of all tracked commandlists obtained from this manager */
-	void GetCommandListTimingResults(TArray<FResolvedCmdListExecTime>& OutTimingPairs);
+	void GetCommandListTimingResults(TArray<FResolvedCmdListExecTime>& OutTimingPairs, bool bUseBlockingCall = true);
 
-	/** Called back by commandlists when they are closed */
-	void AddCommandListTimingPair(int32 StartTimeQueryIdx, int32 EndTimeQueryIdx);
+	/** Get the start/end timestamps of all tracked command lists obtained from this manager */
+	void SortTimingResults();
+
+	/** Resolve all commandlist start/end timestamp queries and get results. Results will be 2-frame old if bWait is false */
+	void FlushPendingTimingPairs(bool bWait);
+
+	TArray<uint64> &GetStartTimestamps() { return CmdListStartTimestamps; }
+	TArray<uint64> &GetEndTimestamps() { return CmdListEndTimestamps; }
+	TArray<uint64> &GetIdleTime() { return IdleTimeCDF; }
+
+	bool GetShouldTrackCmdListTime() const { return bShouldTrackCmdListTime; }
+	void SetShouldTrackCmdListTime(bool val) { bShouldTrackCmdListTime = val; }
 
 protected:
 	struct FCmdListExecTime
@@ -262,15 +308,15 @@ protected:
 		{}
 	};
 
+	void ExecuteCommandListInteral(TArray<FD3D12CommandListHandle>& Lists, bool WaitForCompletion);
+	uint32 GetResourceBarrierCommandList(FD3D12CommandListHandle& hList, FD3D12CommandListHandle& hResourceBarrierList);
+
 	// Returns signaled Fence
 	uint64 ExecuteAndIncrementFence(FD3D12CommandListPayload& Payload, FD3D12Fence &Fence);
 	FD3D12CommandListHandle CreateCommandListHandle(FD3D12CommandAllocator& CommandAllocator);
 
 	/** Should this commandlist track its execution time */
 	bool ShouldTrackCommandListTime() const;
-
-	/** Resolve all commandlist start/end timestamp queries and get results. This method is blocking */
-	void FlushPendingTimingPairs();
 
 	TRefCountPtr<ID3D12CommandQueue>		D3DCommandQueue;
 
@@ -280,22 +326,32 @@ protected:
 	FD3D12CommandAllocatorManager ResourceBarrierCommandAllocatorManager;
 	FD3D12CommandAllocator* ResourceBarrierCommandAllocator;
 
-	TRefCountPtr<FD3D12Fence> CommandListFence;
+	TRefCountPtr<FD3D12CommandListFence>	CommandListFence;
 
 	D3D12_COMMAND_LIST_TYPE					CommandListType;
 	ED3D12CommandQueueType					QueueType;
 	FCriticalSection						ResourceStateCS;
 	FCriticalSection						FenceCS;
 
+	// Current possible active execute task to offload RHI thread
+	FGraphEventRef							ExecuteTask;
+	TArray<FD3D12CommandListHandle>			ExecuteCommandListHandles;
+
 	// Helper data used to track GPU progress on this command queue
 	void* BreadCrumbResourceAddress;
 	TRefCountPtr<FD3D12Heap> BreadCrumbHeap;
 	TRefCountPtr<FD3D12Resource> BreadCrumbResource;
 	
-#if WITH_PROFILEGPU
-	bool bShouldTrackCmdListTime;
-	FCriticalSection CmdListTimingCS;
-	TArray<FCmdListExecTime> PendingTimingPairs;
+#if WITH_PROFILEGPU || D3D12_SUBMISSION_GAP_RECORDER
+	uint64 CmdListTimingQueryBatchTokens[2];
 	TArray<FResolvedCmdListExecTime> ResolvedTimingPairs;
 #endif
+
+	bool bShouldTrackCmdListTime;
+	/** Timstamps marking the beginning of tracked command lists */
+	TArray<uint64> CmdListStartTimestamps;
+	/** Timstamps marking the end of tracked command lists */
+	TArray<uint64> CmdListEndTimestamps;
+	/** Accumulated idle GPU ticks before each corresponding command list */
+	TArray<uint64> IdleTimeCDF;
 };

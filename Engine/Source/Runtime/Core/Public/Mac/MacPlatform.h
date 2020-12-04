@@ -28,6 +28,15 @@ struct FMacPlatformTypes : public FGenericPlatformTypes
 
 typedef FMacPlatformTypes FPlatformTypes;
 
+// Define ARM64 / X86 here so we can run UBT once for both platforms
+#if __is_target_arch(arm64) || __is_target_arch(arm64e)
+    #define PLATFORM_MAC_ARM64 1
+    #define PLATFORM_MAC_X86 0
+#else
+    #define PLATFORM_MAC_ARM64 0
+    #define PLATFORM_MAC_X86 1
+#endif
+
 // Base defines, must define these for the platform, there are no defaults
 #define PLATFORM_DESKTOP				1
 #define PLATFORM_64BITS					1
@@ -39,10 +48,12 @@ typedef FMacPlatformTypes FPlatformTypes;
 
 #define PLATFORM_LITTLE_ENDIAN						1
 //#define PLATFORM_EXCEPTIONS_DISABLED				!PLATFORM_DESKTOP
+#define PLATFORM_SEH_EXCEPTIONS_DISABLED				1
 #define PLATFORM_SUPPORTS_PRAGMA_PACK				1
-#define PLATFORM_ENABLE_VECTORINTRINSICS			1
-#ifndef PLATFORM_MAYBE_HAS_SSE4_1 // May be set from UnrealBuildTool
-	#define PLATFORM_MAYBE_HAS_SSE4_1				1
+#define PLATFORM_ENABLE_VECTORINTRINSICS			PLATFORM_MAC_X86
+#define PLATFORM_ENABLE_VECTORINTRINSICS_NEON       PLATFORM_MAC_ARM64
+#ifndef PLATFORM_MAYBE_HAS_SSE4_1  // May be set from UnrealBuildTool
+	#define PLATFORM_MAYBE_HAS_SSE4_1				PLATFORM_MAC_X86
 #endif
 // Current unreal minspec is sse2, not sse4, so on mac any calling code must check _cpuid before calling SSE4 instructions
 // If called on a platform for which _cpuid for SSE4 returns false, attempting to call SSE4 intrinsics will crash
@@ -55,34 +66,38 @@ typedef FMacPlatformTypes FPlatformTypes;
 #define PLATFORM_COMPILER_DISTINGUISHES_INT_AND_LONG			1
 #define PLATFORM_WCHAR_IS_4_BYTES					1
 #if PLATFORM_MAC_USE_CHAR16
-	#define PLATFORM_TCHAR_IS_CHAR16				1
+	#define PLATFORM_TCHAR_IS_CHAR16					1
 #else
-	#define PLATFORM_TCHAR_IS_4_BYTES				1
+	#define PLATFORM_TCHAR_IS_4_BYTES					1
 #endif
-#define PLATFORM_HAS_BSD_TIME						1
-#define PLATFORM_HAS_BSD_IPV6_SOCKETS				1
-//#define PLATFORM_USE_PTHREADS						1
-#define PLATFORM_MAX_FILEPATH_LENGTH_DEPRECATED		MAC_MAX_PATH
-#define PLATFORM_SUPPORTS_TBB						1
-#define PLATFORM_SUPPORTS_STACK_SYMBOLS				1
+#define PLATFORM_HAS_BSD_TIME							1
+#define PLATFORM_HAS_BSD_IPV6_SOCKETS					1
+//#define PLATFORM_USE_PTHREADS							1
+#define PLATFORM_MAX_FILEPATH_LENGTH_DEPRECATED			MAC_MAX_PATH
+#define PLATFORM_SUPPORTS_TBB							1
+#define PLATFORM_SUPPORTS_STACK_SYMBOLS					1
 #define PLATFORM_HAS_BSD_SOCKET_FEATURE_MSG_DONTWAIT	1
-#define PLATFORM_IS_ANSI_MALLOC_THREADSAFE			1
+#define PLATFORM_IS_ANSI_MALLOC_THREADSAFE				1
 #define PLATFORM_SUPPORTS_VIRTUAL_TEXTURE_STREAMING		1
 
-#define PLATFORM_RHITHREAD_DEFAULT_BYPASS			WITH_EDITOR
+#define PLATFORM_RHITHREAD_DEFAULT_BYPASS				WITH_EDITOR
 
-#define PLATFORM_ENABLE_POPCNT_INTRINSIC 1
+#define PLATFORM_ENABLE_POPCNT_INTRINSIC				1
 
-#define PLATFORM_GLOBAL_LOG_CATEGORY				LogMac
+#define PLATFORM_GLOBAL_LOG_CATEGORY					LogMac
 
-#define PLATFORM_BREAK()							__asm__("int $3")
+#if PLATFORM_MAC_X86
+	#define PLATFORM_BREAK()							__asm__("int $3")
+#else
+    #define PLATFORM_BREAK()                            __builtin_trap()
+#endif
 
-#define PLATFORM_CODE_SECTION(Name)					__attribute__((section("__TEXT,__" Name ",regular,pure_instructions")))
+#define PLATFORM_CODE_SECTION(Name)						__attribute__((section("__TEXT,__" Name ",regular,pure_instructions")))
 
 #if __has_feature(cxx_decltype_auto)
-	#define PLATFORM_COMPILER_HAS_DECLTYPE_AUTO 1
+	#define PLATFORM_COMPILER_HAS_DECLTYPE_AUTO			1
 #else
-	#define PLATFORM_COMPILER_HAS_DECLTYPE_AUTO 0
+	#define PLATFORM_COMPILER_HAS_DECLTYPE_AUTO			0
 #endif
 
 // Function type macros.

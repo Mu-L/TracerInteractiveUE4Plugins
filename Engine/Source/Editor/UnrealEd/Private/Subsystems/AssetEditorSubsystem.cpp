@@ -8,6 +8,7 @@
 #include "UObject/Package.h"
 #include "CoreGlobals.h"
 #include "AssetToolsModule.h"
+#include "IMessageContext.h"
 #include "LevelEditor.h"
 #include "Toolkits/AssetEditorToolkit.h"
 #include "Toolkits/SimpleAssetEditor.h"
@@ -24,40 +25,41 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/BlacklistNames.h"
 #include "StudioAnalytics.h"
+#include "EditorModeRegistry.h"
+#include "Tools/UEdMode.h"
+#include "AssetEditorMessages.h"
+#include "EditorModeManager.h"
+#include "Tools/LegacyEdMode.h"
 
 
 #define LOCTEXT_NAMESPACE "AssetEditorSubsystem"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAssetEditorSubsystem, Log, All);
 
-
 UAssetEditorSubsystem::UAssetEditorSubsystem()
-	: bSavingOnShutdown(false)
+	: Super()
+	, bSavingOnShutdown(false)
+	, bAutoRestoreAndDisableSaving(false)
 	, bRequestRestorePreviouslyOpenAssets(false)
 {
-	// Message bus to receive requests to load assets
-//	MessageEndpoint = FMessageEndpoint::Builder("UAssetEditorSubsystem")
-	//	.Handling<FAssetEditorRequestOpenAsset>(this, &UAssetEditorSubsystem::HandleRequestOpenAssetMessage)
-	//	.WithInbox();
-
-	if (MessageEndpoint.IsValid())
-	{
-		MessageEndpoint->Subscribe<FAssetEditorRequestOpenAsset>();
-	}
-
-	TickDelegate = FTickerDelegate::CreateUObject(this, &UAssetEditorSubsystem::HandleTicker);
-	FTicker::GetCoreTicker().AddTicker(TickDelegate, 1.f);
-
-	FCoreUObjectDelegates::OnPackageReloaded.AddUObject(this, &UAssetEditorSubsystem::HandlePackageReloaded);
 }
 
 void UAssetEditorSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
+	TickDelegate = FTickerDelegate::CreateUObject(this, &UAssetEditorSubsystem::HandleTicker);
+	FTicker::GetCoreTicker().AddTicker(TickDelegate, 1.f);
+
+	FCoreUObjectDelegates::OnPackageReloaded.AddUObject(this, &UAssetEditorSubsystem::HandlePackageReloaded);
+
 	GEditor->OnEditorClose().AddUObject(this, &UAssetEditorSubsystem::OnEditorClose);
+
+	FCoreDelegates::OnPostEngineInit.AddUObject(this, &UAssetEditorSubsystem::RegisterEditorModes);
 }
 
 void UAssetEditorSubsystem::Deinitialize()
 {
+	UnregisterEditorModes();
+
 	FCoreUObjectDelegates::OnPackageReloaded.RemoveAll(this);
 	GEditor->OnEditorClose().RemoveAll(this);
 
@@ -583,7 +585,6 @@ bool UAssetEditorSubsystem::HandleTicker(float DeltaTime)
 		RestorePreviouslyOpenAssets();
 		bRequestRestorePreviouslyOpenAssets = false;
 	}
-//	MessageEndpoint->ProcessInbox();
 
 	return true;
 }
@@ -592,6 +593,99 @@ void UAssetEditorSubsystem::RequestRestorePreviouslyOpenAssets()
 {
 	// We defer the restore so that we guarantee that it happens once initialization is complete
 	bRequestRestorePreviouslyOpenAssets = true;
+}
+
+UEdMode* UAssetEditorSubsystem::CreateEditorModeWithToolsOwner(FEditorModeID ModeID, FEditorModeTools& Owner)
+{
+	FRegisteredModeInfo* ScriptableMode = EditorModes.Find(ModeID);
+	if (ScriptableMode && ScriptableMode->ModeClass.IsValid())
+	{
+		UEdMode* Instance = NewObject<UEdMode>(GetTransientPackage(), ScriptableMode->ModeClass.Get());
+		Instance->Owner = &Owner;
+		Instance->Initialize();
+
+		return Instance;
+	}
+
+	// If we couldn't find a valid UEdMode based class, attempt to make a UEdMode wrapped FEdMode
+	FEditorModeInfo LegacyModeInfo;
+	if (FindEditorModeInfo(ModeID, LegacyModeInfo))
+	{
+		ULegacyEdModeWrapper* LegacyEditorMode = NewObject<ULegacyEdModeWrapper>(GetTransientPackage());
+		if (LegacyEditorMode->CreateLegacyMode(ModeID, Owner))
+		{
+			LegacyEditorMode->Initialize();
+			return LegacyEditorMode;
+		}
+	}
+
+	return nullptr;
+}
+
+bool UAssetEditorSubsystem::FindEditorModeInfo(const FEditorModeID& InModeID, FEditorModeInfo& OutModeInfo) const
+{
+	const TSharedRef<IEditorModeFactory>* ModeFactory = FEditorModeRegistry::Get().GetFactoryMap().Find(InModeID);
+	if (ModeFactory)
+	{
+		OutModeInfo = (*ModeFactory)->GetModeInfo();
+		return true;
+	}
+
+	if (!EditorModes.Contains(InModeID))
+	{
+		return false;
+	}
+
+	OutModeInfo = EditorModes[InModeID].ModeInfo;
+	return true;
+}
+
+TArray<FEditorModeInfo> UAssetEditorSubsystem::GetEditorModeInfoOrderedByPriority() const
+{
+	TArray<FEditorModeInfo> ModeInfoArray;
+
+	for (const auto& Pair : FEditorModeRegistry::Get().GetFactoryMap())
+	{
+		ModeInfoArray.Add(Pair.Value->GetModeInfo());
+	}
+	for (const auto& EditorMode : EditorModes)
+	{
+		ModeInfoArray.Add(EditorMode.Value.ModeInfo);
+	}
+
+	ModeInfoArray.Sort([](const FEditorModeInfo& A, const FEditorModeInfo& B) {
+		return A.PriorityOrder < B.PriorityOrder;
+	});
+
+	return ModeInfoArray;
+}
+
+
+
+
+void UAssetEditorSubsystem::RegisterUAssetEditor(UAssetEditor* NewAssetEditor)
+{
+	OwnedAssetEditors.Add(NewAssetEditor);
+}
+
+void UAssetEditorSubsystem::UnregisterUAssetEditor(UAssetEditor* RemovedAssetEditor)
+{
+	OwnedAssetEditors.Remove(RemovedAssetEditor);
+}
+
+FRegisteredModesChangedEvent& UAssetEditorSubsystem::OnEditorModesChanged()
+{
+	return OnEditorModesChangedEvent;
+}
+
+FOnModeRegistered& UAssetEditorSubsystem::OnEditorModeRegistered()
+{
+	return OnEditorModeRegisteredEvent;
+}
+
+FOnModeUnregistered& UAssetEditorSubsystem::OnEditorModeUnregistered()
+{
+	return OnEditorModeUnregisteredEvent;
 }
 
 void UAssetEditorSubsystem::RestorePreviouslyOpenAssets()
@@ -609,7 +703,7 @@ void UAssetEditorSubsystem::RestorePreviouslyOpenAssets()
 		if (bCleanShutdown)
 		{
 			// Do we have permission to automatically re-open the assets, or should we ask?
-			const bool bAutoRestore = GetDefault<UEditorLoadingSavingSettings>()->bRestoreOpenAssetTabsOnRestart;
+			const bool bAutoRestore = GetDefault<UEditorLoadingSavingSettings>()->bRestoreOpenAssetTabsOnRestart || bAutoRestoreAndDisableSaving;
 
 			if (bAutoRestore)
 			{
@@ -635,6 +729,14 @@ void UAssetEditorSubsystem::RestorePreviouslyOpenAssets()
 			SpawnRestorePreviouslyOpenAssetsNotification(bCleanShutdown, OpenAssets);
 		}
 	}
+}
+
+void UAssetEditorSubsystem::SetAutoRestoreAndDisableSaving(const bool bInAutoRestoreAndDisableSaving)
+{
+	bAutoRestoreAndDisableSaving = bInAutoRestoreAndDisableSaving;
+
+	// Disable any pending request to avoid trying to restore previously opened assets twice
+	bRequestRestorePreviouslyOpenAssets = false;
 }
 
 void UAssetEditorSubsystem::SpawnRestorePreviouslyOpenAssetsNotification(const bool bCleanShutdown, const TArray<FString>& AssetsToOpen)
@@ -740,14 +842,14 @@ void UAssetEditorSubsystem::OnCancelRestorePreviouslyOpenAssets()
 	}
 }
 
-void UAssetEditorSubsystem::SaveOpenAssetEditors(bool bOnShutdown)
+void UAssetEditorSubsystem::SaveOpenAssetEditors(const bool bOnShutdown, const bool bCancelIfDebugger)
 {
-	if (!bSavingOnShutdown)
+	if (!bSavingOnShutdown && !bAutoRestoreAndDisableSaving)
 	{
 		TArray<FString> OpenAssets;
 
-		// Don't save a list of assets to restore if we are running under a debugger
-		if (!FPlatformMisc::IsDebuggerPresent())
+		// If bCancelIfDebugger = true, don't save a list of assets to restore if we are running under a debugger
+		if (!bCancelIfDebugger || !FPlatformMisc::IsDebuggerPresent())
 		{
 			for (const TPair<IAssetEditorInstance*, UObject*>& EditorPair : OpenedEditors)
 			{
@@ -784,7 +886,7 @@ void UAssetEditorSubsystem::HandlePackageReloaded(const EPackageReloadPhase InPa
 		TArray<UObject*> ObjectsToClose;
 		const TMap<UObject*, UObject*>& RepointedMap = InPackageReloadedEvent->GetRepointedObjects();
 
-		for (const TPair<UObject*, UObject*> RepointPair : RepointedMap)
+		for (const TPair<UObject*, UObject*>& RepointPair : RepointedMap)
 		{
 			if (RepointPair.Key->IsAsset())
 			{
@@ -841,10 +943,63 @@ void UAssetEditorSubsystem::OpenEditorsForAssets(const TArray<FString>& AssetsTo
 
 void UAssetEditorSubsystem::OpenEditorsForAssets(const TArray<FName>& AssetsToOpen)
 {
-	for (const FName AssetName : AssetsToOpen)
+	for (const FName& AssetName : AssetsToOpen)
 	{
 		OpenEditorForAsset(AssetName.ToString());
 	}
+}
+
+void UAssetEditorSubsystem::RegisterEditorModes()
+{
+	for (FObjectIterator EditorModeIter(UEdMode::StaticClass()); EditorModeIter; ++EditorModeIter)
+	{
+		UEdMode* EditorMode = Cast<UEdMode>(*EditorModeIter);
+		UClass* ModeClass = EditorMode->GetClass();
+		if (ModeClass->HasAnyClassFlags(CLASS_Abstract | CLASS_Interface))
+		{
+			continue;
+		}
+
+		FEditorModeInfo EditorModeInfo = EditorMode->GetModeInfo();
+
+		if (EditorModes.Contains(EditorModeInfo.ID))
+		{
+			TWeakObjectPtr<UClass> RegisteredClass = EditorModes[EditorModeInfo.ID].ModeClass;
+			UE_LOG(
+				LogAssetEditorSubsystem,
+				Warning,
+				TEXT("UAssetEditorSubsystem::RegisterEditorModes : Attempting to initialize duplicate mode with name '%s'. Conflicting classes: '%s' and '%s'."),
+				*EditorModeInfo.ID.ToString(),
+				*ModeClass->GetName(),
+				*RegisteredClass.Get()->GetName()
+			);
+			continue;
+		}
+
+		EditorModes.Add(
+			EditorModeInfo.ID,
+			FRegisteredModeInfo{ ModeClass, EditorModeInfo }
+		);
+
+		OnEditorModeRegisteredEvent.Broadcast(EditorModeInfo.ID);
+	}
+
+	// Initialize Legacy FEditorModes
+	FEditorModeRegistry::Get().Initialize();
+
+	OnEditorModesChangedEvent.Broadcast();
+}
+
+void UAssetEditorSubsystem::UnregisterEditorModes()
+{
+	FEditorModeRegistry::Get().Shutdown();
+
+	for (const auto& RegisteredMode : EditorModes)
+	{
+		OnEditorModeUnregisteredEvent.Broadcast(RegisteredMode.Value.ModeInfo.ID);
+	}
+	OnEditorModesChangedEvent.Broadcast();
+	EditorModes.Empty();
 }
 
 #undef LOCTEXT_NAMESPACE

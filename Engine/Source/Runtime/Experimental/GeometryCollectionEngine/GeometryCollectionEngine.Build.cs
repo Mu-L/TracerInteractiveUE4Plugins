@@ -9,6 +9,8 @@ namespace UnrealBuildTool.Rules
 			PrivateIncludePaths.Add("Runtime/Experimental/GeometryCollectionEngine/Private");
             PublicIncludePaths.Add(ModuleDirectory + "/Public");
 
+			SetupModulePhysicsSupport(Target);
+
 			PublicDependencyModuleNames.AddRange(
 				new string[]
 				{
@@ -17,16 +19,11 @@ namespace UnrealBuildTool.Rules
                     "Engine",
                     "RenderCore",
                     "RHI",
-                    "Chaos",
-					"ChaosSolvers",
                     "PhysX",
-                    "FieldSystemCore",
                     "FieldSystemEngine",
-                    "GeometryCollectionCore", 
-                    "GeometryCollectionSimulationCore",
 	                "ChaosSolverEngine",
-                    "IntelISPC",
-					"PhysicsSQ"
+					"NetCore",
+                    "IntelISPC"
                 }
                 );
 
@@ -44,8 +41,10 @@ namespace UnrealBuildTool.Rules
 
 			if(Target.bBuildEditor)
             {
-                PrivateDependencyModuleNames.Add("UnrealEd");
+                PublicDependencyModuleNames.Add("UnrealEd");
             }
-        }
+
+			PrivateDefinitions.Add("CHAOS_INCLUDE_LEVEL_1=1");
+		}
 	}
 }

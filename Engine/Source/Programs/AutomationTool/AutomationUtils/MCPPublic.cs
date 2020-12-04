@@ -137,6 +137,11 @@ namespace EpicGames.MCP.Automation
 		PS4,
 
 		/// <summary>
+		/// PS5 platform
+		/// </summary>
+		PS5,
+
+		/// <summary>
 		/// Switch platform
 		/// </summary>
 		Switch,
@@ -146,7 +151,15 @@ namespace EpicGames.MCP.Automation
 		/// </summary>
 		XboxOne,
 
+		/// <summary>
+		/// Xbox One with GDK Platform
+		/// </summary>
+		XboxOneGDK,
 
+		/// <summary>
+		/// XSX platform
+		/// </summary>
+		XSX,
 	}
 
 	/// <summary>
@@ -276,9 +289,21 @@ namespace EpicGames.MCP.Automation
 			{
 				return MCPPlatform.PS4;
 			}
+			else if (TargetPlatform.ToString() == "PS5")
+			{
+				return MCPPlatform.PS5;
+			}
 			else if (TargetPlatform == UnrealTargetPlatform.XboxOne)
 			{
 				return MCPPlatform.XboxOne;
+			}
+			else if (TargetPlatform.ToString() == "XboxOneGDK")
+			{
+				return MCPPlatform.XboxOneGDK;
+			}
+			else if (TargetPlatform.ToString() == "XSX")
+			{
+				return MCPPlatform.XSX;
 			}
 			else if (TargetPlatform == UnrealTargetPlatform.Switch)
 			{
@@ -327,6 +352,24 @@ namespace EpicGames.MCP.Automation
 			else if (TargetPlatform == MCPPlatform.Switch)
 			{
 				return UnrealTargetPlatform.Switch;
+			}
+			else if (TargetPlatform == MCPPlatform.XboxOneGDK)
+			{
+				UnrealTargetPlatform ReturnValue;
+				UnrealTargetPlatform.TryParse("XboxOneGDK", out ReturnValue);
+				return ReturnValue;
+			}
+			else if (TargetPlatform == MCPPlatform.XSX)
+			{
+				UnrealTargetPlatform ReturnValue;
+				UnrealTargetPlatform.TryParse("XSX", out ReturnValue);
+				return ReturnValue;
+			}
+			else if (TargetPlatform == MCPPlatform.PS5)
+			{
+				UnrealTargetPlatform ReturnValue;
+				UnrealTargetPlatform.TryParse("PS5", out ReturnValue);
+				return ReturnValue;
 			}
 			throw new AutomationException("Platform {0} is not properly supported by the MCP backend yet", TargetPlatform);
         }
@@ -1472,13 +1515,10 @@ namespace EpicGames.MCP.Automation
 		/// <param name="ContentType">The MIME type of the file being uploaded. If left NULL, will be determined server-side by cloud provider.</param>
 		/// <param name="bOverwrite">If true, will overwrite an existing file.  If false, will throw an exception if the file exists.</param>
 		/// <param name="bMakePublic">Specifies whether the file should be made publicly readable.</param>
-        /// <param name="bQuiet">If set to true, all log output for the operation is supressed.</param>
+		/// <param name="bQuiet">If set to true, all log output for the operation is supressed.</param>
 		/// <param name="Metadata">If not null, key-value pairs of metadata to be applied to the object.</param>
 		/// <returns>A PostFileResult indicating whether the call was successful, and the URL to the uploaded file.</returns>
-		public PostFileResult PostFile(string Container, string Identifier, byte[] Contents, string ContentType = null, bool bOverwrite = true, bool bMakePublic = false, bool bQuiet = false, IDictionary<string, object> Metadata = null)
-		{
-			return PostFileAsync(Container, Identifier, Contents, ContentType, bOverwrite, bMakePublic, bQuiet, Metadata).Result;
-		}
+		abstract public PostFileResult PostFile(string Container, string Identifier, byte[] Contents, string ContentType = null, bool bOverwrite = true, bool bMakePublic = false, bool bQuiet = false, IDictionary<string, object> Metadata = null);
 
 		/// <summary>
 		/// Posts a file to the cloud storage provider asynchronously.
@@ -1503,13 +1543,10 @@ namespace EpicGames.MCP.Automation
 		/// <param name="ContentType">The MIME type of the file being uploaded. If left NULL, will be determined server-side by cloud provider.</param>
 		/// <param name="bOverwrite">If true, will overwrite an existing file.  If false, will throw an exception if the file exists.</param>
 		/// <param name="bMakePublic">Specifies whether the file should be made publicly readable.</param>
-        /// <param name="bQuiet">If set to true, all log output for the operation is supressed.</param>
+		/// <param name="bQuiet">If set to true, all log output for the operation is supressed.</param>
 		/// <param name="Metadata">If not null, key-value pairs of metadata to be applied to the object.</param>
 		/// <returns>A PostFileResult indicating whether the call was successful, and the URL to the uploaded file.</returns>
-		public PostFileResult PostFile(string Container, string Identifier, string SourceFilePath, string ContentType = null, bool bOverwrite = true, bool bMakePublic = false, bool bQuiet = false, IDictionary<string, object> Metadata = null)
-		{
-			return PostFileAsync(Container, Identifier, SourceFilePath, ContentType, bOverwrite, bMakePublic, bQuiet, Metadata).Result;
-		}
+		abstract public PostFileResult PostFile(string Container, string Identifier, string SourceFilePath, string ContentType = null, bool bOverwrite = true, bool bMakePublic = false, bool bQuiet = false, IDictionary<string, object> Metadata = null);
 
 		/// <summary>
 		/// Posts a file to the cloud storage provider asynchronously.

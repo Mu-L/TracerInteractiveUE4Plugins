@@ -19,6 +19,7 @@
 #include "Widgets/DeclarativeSyntaxSupport.h"
 #include "Widgets/SWindow.h"
 #include "Framework/Application/SlateApplication.h"
+#include "ClassTemplateEditorSubsystem.h"
 #include "Components/ActorComponent.h"
 #include "Components/SceneComponent.h"
 #include "GameFramework/Actor.h"
@@ -70,13 +71,11 @@
 #include "IAudioExtensionPlugin.h"
 #include "AudioPluginUtilities.h"
 #include "Sound/AudioSettings.h"
-#include "Sound/SoundEffectSubmix.h"
-#include "Sound/SoundEffectSource.h"
-#include "Components/SynthComponent.h"
 
 #include "PlatformInfo.h"
 #include "Blueprint/BlueprintSupport.h"
 #include "Settings/ProjectPackagingSettings.h"
+#include "Async/ParallelFor.h"
 
 #if WITH_LIVE_CODING
 #include "ILiveCodingModule.h"
@@ -94,12 +93,17 @@ TWeakPtr<SNotificationItem> GameProjectUtils::WarningProjectNameNotification = N
 
 bool GameProjectUtils::bUseAudioMixerForAllPlatforms = false;
 
+constexpr const TCHAR GameProjectUtils::IncludePathFormatString[];
+
 struct FAudioDefaultPlatformSettings
 {
 	FString Name;
 	FAudioPlatformSettings Settings;
 	const TCHAR* ConfigSectionName;
 	bool bUseAudioMixer;
+	FString HardwareOcclusionPlugin;
+	FString HardwareReverbPlugin;
+	FString HardwareSpatializationPlugin;
 
 	FAudioDefaultPlatformSettings(const TCHAR* InConfigSectionName)
 		: ConfigSectionName(InConfigSectionName)
@@ -137,7 +141,15 @@ namespace
 		PS4Settings.Settings.CallbackBufferFrameSize = 256;
 		PS4Settings.Settings.NumBuffers = 7;
 		PS4Settings.Settings.NumSourceWorkers = 4;
+		PS4Settings.HardwareSpatializationPlugin = TEXT("Audio3D");
 		DefaultProjectSettings.Add(TEXT("PS4"), PS4Settings);
+
+		FAudioDefaultPlatformSettings PS5Settings(TEXT("/Script/PS5PlatformEditor.PS5TargetSettings"));
+		PS5Settings.Settings.CallbackBufferFrameSize = 256;
+		PS5Settings.Settings.NumBuffers = 7;
+		PS5Settings.Settings.NumSourceWorkers = 4;
+		PS5Settings.HardwareSpatializationPlugin = TEXT("Audio3D");
+		DefaultProjectSettings.Add(TEXT("PS5"), PS5Settings);
 
 		FAudioDefaultPlatformSettings SwitchSettings(TEXT("/Script/SwitchRuntimeSettings.SwitchRuntimeSettings"));
 		SwitchSettings.Settings.MaxChannels = 16;
@@ -152,6 +164,11 @@ namespace
 		XBoxSettings.Settings.CallbackBufferFrameSize = 256;
 		XBoxSettings.Settings.NumBuffers = 7;
 		DefaultProjectSettings.Add(TEXT("XboxOne"), XBoxSettings);
+
+		FAudioDefaultPlatformSettings XSXSettings(TEXT("/Script/XSXPlatformEditor.XSXTargetSettings"));
+		XSXSettings.Settings.CallbackBufferFrameSize = 256;
+		XSXSettings.Settings.NumBuffers = 7;
+		DefaultProjectSettings.Add(TEXT("XSX"), XSXSettings);
 
 		return MoveTemp(DefaultProjectSettings);
 	}
@@ -517,18 +534,6 @@ FString FNewClassInfo::GetHeaderTemplateFilename() const
 				{
 					return TEXT("CharacterClass.h.template");
 				}
-				else if (BaseClass == USoundEffectSourcePreset::StaticClass())
-				{
-					return TEXT("SoundEffectSourceClass.h.template");
-				}
-				else if (BaseClass == USoundEffectSubmixPreset::StaticClass())
-				{
-					return TEXT("SoundEffectSubmixClass.h.template");
-				}
-				else if (BaseClass == USynthComponent::StaticClass())
-				{
-					return TEXT("SynthComponentClass.h.template");
-				}
 			}
 			// Some other non-actor, non-component UObject class
 			return TEXT( "UObjectClass.h.template" );
@@ -574,18 +579,6 @@ FString FNewClassInfo::GetSourceTemplateFilename() const
 				else if (BaseClass == ACharacter::StaticClass())
 				{
 					return TEXT("CharacterClass.cpp.template");
-				}
-				else if (BaseClass == USoundEffectSubmixPreset::StaticClass())
-				{
-					return TEXT("SoundEffectSubmixClass.cpp.template");
-				}
-				else if (BaseClass == USoundEffectSourcePreset::StaticClass())
-				{
-					return TEXT("SoundEffectSourceClass.cpp.template");
-				}
-				else if (BaseClass == USynthComponent::StaticClass())
-				{
-					return TEXT("SynthComponentClass.cpp.template");
 				}
 			}
 			// Some other non-actor, non-component UObject class
@@ -921,7 +914,7 @@ bool GameProjectUtils::CreateProject(const FProjectInformation& InProjectInfo, F
 
 void GameProjectUtils::CheckForOutOfDateGameProjectFile()
 {
-	if ( FPaths::IsProjectFilePathSet() )
+	if (FPaths::IsProjectFilePathSet() && !IProjectManager::Get().IsSuppressingProjectFileWrite())
 	{
 		if (IProjectManager::Get().IsCurrentProjectDirty())
 		{
@@ -1918,6 +1911,25 @@ FString GameProjectUtils::GetTemplateDefsFilename()
 	return TEXT("TemplateDefs.ini");
 }
 
+FString GameProjectUtils::GetIncludePathForFile(const FString& InFullFilePath, const FString& ModuleRootPath)
+{
+	FString RelativeHeaderPath = FPaths::ChangeExtension(InFullFilePath, "h");
+
+	const FString PublicString = ModuleRootPath / "Public" / "";
+	if (RelativeHeaderPath.StartsWith(PublicString))
+	{
+		return RelativeHeaderPath.RightChop(PublicString.Len());
+	}
+
+	const FString PrivateString = ModuleRootPath / "Private" / "";
+	if (RelativeHeaderPath.StartsWith(PrivateString))
+	{
+		return RelativeHeaderPath.RightChop(PrivateString.Len());
+	}
+	
+	return RelativeHeaderPath.RightChop(ModuleRootPath.Len());
+}
+
 bool GameProjectUtils::NameContainsOnlyLegalCharacters(const FString& TestName, FString& OutIllegalCharacters)
 {
 	bool bContainsIllegalCharacters = false;
@@ -2214,10 +2226,14 @@ bool GameProjectUtils::GeneratePlatformConfigFiles(const FProjectInformation& In
 		FileContents += TEXT("AudioNumSourceWorkers=") + FString::Printf(TEXT("%d"), PlatformSettings.NumSourceWorkers) + LINE_TERMINATOR;
 
 		FileContents += LINE_TERMINATOR;
+		FileContents += TEXT("; Audio Plugins (must be enabled in .uproject") LINE_TERMINATOR;
+		FileContents += TEXT("; ReverbPlugin=") + SettingsPair.Value.HardwareReverbPlugin + LINE_TERMINATOR;
+		FileContents += TEXT("; OcclusionPlugin=") + SettingsPair.Value.HardwareOcclusionPlugin + LINE_TERMINATOR;
+		FileContents += TEXT("; SpatializationPlugin=") + SettingsPair.Value.HardwareSpatializationPlugin + LINE_TERMINATOR;
 
 		const FString NewProjectFolder = FPaths::GetPath(InProjectInfo.ProjectFilename);
-		const FString ProjectConfigPath = NewProjectFolder / TEXT("Config");
-		const FString PlatformEngineIniFilename = ProjectConfigPath / PlatformName / PlatformName + TEXT("Engine.ini");
+		const FString ProjectConfigPath = NewProjectFolder / TEXT("Platforms") / PlatformName / TEXT("Config");
+		const FString PlatformEngineIniFilename = ProjectConfigPath / PlatformName + TEXT("Engine.ini");
 		if (!WriteOutputFile(PlatformEngineIniFilename, FileContents, OutFailReason))
 		{
 			return false;
@@ -2809,7 +2825,6 @@ GameProjectUtils::EProjectDuplicateResult GameProjectUtils::DuplicateProjectForU
 				TEXT("Intermediate"),
 				TEXT("Saved/Autosaves"),
 				TEXT("Saved/Backup"),
-				TEXT("Saved/Config"),
 				TEXT("Saved/Cooked"),
 				TEXT("Saved/HardwareSurvey"),
 				TEXT("Saved/Logs"),
@@ -2948,7 +2963,7 @@ void GameProjectUtils::ClearSupportedTargetPlatforms()
 	}
 }
 
-void GameProjectUtils::UpdateAdditionalPluginDirectory(const FString& InDir, const bool bAddOrRemove)
+bool GameProjectUtils::UpdateAdditionalPluginDirectory(const FString& InDir, const bool bAddOrRemove)
 {
 	const FString& ProjectFilename = FPaths::GetProjectFilePath();
 	if (!ProjectFilename.IsEmpty())
@@ -2966,8 +2981,10 @@ void GameProjectUtils::UpdateAdditionalPluginDirectory(const FString& InDir, con
 			FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*ProjectFilename, false);
 		}
 
-		IProjectManager::Get().UpdateAdditionalPluginDirectory(InDir, bAddOrRemove);
+		return IProjectManager::Get().UpdateAdditionalPluginDirectory(InDir, bAddOrRemove);
 	}
+
+	return false;
 }
 
 const TCHAR* GameProjectUtils::GetDefaultBuildSettingsVersion()
@@ -2977,7 +2994,7 @@ const TCHAR* GameProjectUtils::GetDefaultBuildSettingsVersion()
 
 bool GameProjectUtils::ReadTemplateFile(const FString& TemplateFileName, FString& OutFileContents, FText& OutFailReason)
 {
-	const FString FullFileName = FPaths::EngineContentDir() / TEXT("Editor") / TEXT("Templates") / TemplateFileName;
+	const FString FullFileName = UClassTemplateEditorSubsystem::GetEngineTemplateDirectory() / TemplateFileName;
 	if ( FFileHelper::LoadFileToString(OutFileContents, *FullFileName) )
 	{
 		return true;
@@ -3049,7 +3066,8 @@ FString GameProjectUtils::MakeIncludeList(const TArray<FString>& InList)
 
 	for ( auto ListIt = InList.CreateConstIterator(); ListIt; ++ListIt )
 	{
-		ReturnString += FString::Printf( TEXT("#include \"%s\"") LINE_TERMINATOR, **ListIt);
+		ReturnString += FString::Printf(IncludePathFormatString, **ListIt);
+		ReturnString += LINE_TERMINATOR;
 	}
 
 	return ReturnString;
@@ -3156,7 +3174,24 @@ bool GenerateConstructorDeclaration(FString& Out, const FString& PrefixedClassNa
 bool GameProjectUtils::GenerateClassHeaderFile(const FString& NewHeaderFileName, const FString UnPrefixedClassName, const FNewClassInfo ParentClassInfo, const TArray<FString>& ClassSpecifierList, const FString& ClassProperties, const FString& ClassFunctionDeclarations, FString& OutSyncLocation, const FModuleContextInfo& ModuleInfo, bool bDeclareConstructor, FText& OutFailReason)
 {
 	FString Template;
-	if ( !ReadTemplateFile(ParentClassInfo.GetHeaderTemplateFilename(), Template, OutFailReason) )
+	bool bTemplateFound = false;
+	if (GEditor)
+	{
+		if (UClassTemplateEditorSubsystem* TemplateSubsystem = GEditor->GetEditorSubsystem<UClassTemplateEditorSubsystem>())
+		{
+			const UClass* BaseClass = ParentClassInfo.BaseClass;
+			if (const UClassTemplate* ClassTemplate = TemplateSubsystem->FindClassTemplate(ParentClassInfo.BaseClass))
+			{
+				bTemplateFound = ClassTemplate->ReadHeader(Template, OutFailReason);
+				if (!bTemplateFound)
+				{
+					return false;
+				}
+			}
+		}
+	}
+
+	if (!bTemplateFound && !ReadTemplateFile(ParentClassInfo.GetHeaderTemplateFilename(), Template, OutFailReason))
 	{
 		return false;
 	}
@@ -3169,7 +3204,7 @@ bool GameProjectUtils::GenerateClassHeaderFile(const FString& NewHeaderFileName,
 	FString BaseClassIncludePath;
 	if(ParentClassInfo.GetIncludePath(BaseClassIncludePath))
 	{
-		BaseClassIncludeDirective = FString::Printf(TEXT("#include \"%s\""), *BaseClassIncludePath);
+		BaseClassIncludeDirective = FString::Printf(IncludePathFormatString, *BaseClassIncludePath);
 	}
 
 	FString ModuleAPIMacro;
@@ -3201,6 +3236,7 @@ bool GameProjectUtils::GenerateClassHeaderFile(const FString& NewHeaderFileName,
 	FinalOutput = FinalOutput.Replace(TEXT("%UCLASS_SPECIFIER_LIST%"), *MakeCommaDelimitedList(ClassSpecifierList, false), ESearchCase::CaseSensitive);
 	FinalOutput = FinalOutput.Replace(TEXT("%PREFIXED_CLASS_NAME%"), *PrefixedClassName, ESearchCase::CaseSensitive);
 	FinalOutput = FinalOutput.Replace(TEXT("%PREFIXED_BASE_CLASS_NAME%"), *PrefixedBaseClassName, ESearchCase::CaseSensitive);
+	FinalOutput = FinalOutput.Replace(TEXT("%MODULE_NAME%"), *ModuleInfo.ModuleName, ESearchCase::CaseSensitive);
 
 	// Special case where where the wildcard starts with a tab and ends with a new line
 	const bool bLeadingTab = true;
@@ -3303,7 +3339,24 @@ static bool IsUsingOldStylePch(FString BaseDir)
 bool GameProjectUtils::GenerateClassCPPFile(const FString& NewCPPFileName, const FString UnPrefixedClassName, const FNewClassInfo ParentClassInfo, const TArray<FString>& AdditionalIncludes, const TArray<FString>& PropertyOverrides, const FString& AdditionalMemberDefinitions, FString& OutSyncLocation, const FModuleContextInfo& ModuleInfo, FText& OutFailReason)
 {
 	FString Template;
-	if ( !ReadTemplateFile(ParentClassInfo.GetSourceTemplateFilename(), Template, OutFailReason) )
+	bool bTemplateFound = false;
+	if (GEditor)
+	{
+		if (UClassTemplateEditorSubsystem* TemplateSubsystem = GEditor->GetEditorSubsystem<UClassTemplateEditorSubsystem>())
+		{
+			const UClass* BaseClass = ParentClassInfo.BaseClass;
+			if (const UClassTemplate* ClassTemplate = TemplateSubsystem->FindClassTemplate(ParentClassInfo.BaseClass))
+			{
+				bTemplateFound = ClassTemplate->ReadSource(Template, OutFailReason);
+				if (!bTemplateFound)
+				{
+					return false;
+				}
+			}
+		}
+	}
+
+	if (!bTemplateFound && !ReadTemplateFile(ParentClassInfo.GetSourceTemplateFilename(), Template, OutFailReason))
 	{
 		return false;
 	}
@@ -3316,17 +3369,6 @@ bool GameProjectUtils::GenerateClassCPPFile(const FString& NewCPPFileName, const
 	if ( !GetClassLocation(NewCPPFileName, ModuleInfo, ClassPathLocation, &OutFailReason) )
 	{
 		return false;
-	}
-
-	FString AdditionalIncludesStr;
-	for (int32 IncludeIdx = 0; IncludeIdx < AdditionalIncludes.Num(); ++IncludeIdx)
-	{
-		if (IncludeIdx > 0)
-		{
-			AdditionalIncludesStr += LINE_TERMINATOR;
-		}
-
-		AdditionalIncludesStr += FString::Printf(TEXT("#include \"%s\""), *AdditionalIncludes[IncludeIdx]);
 	}
 
 	FString PropertyOverridesStr;
@@ -3348,7 +3390,7 @@ bool GameProjectUtils::GenerateClassCPPFile(const FString& NewCPPFileName, const
 		const FString ModuleIncludePath = DetermineModuleIncludePath(ModuleInfo, NewCPPFileName);
 		if (ModuleIncludePath.Len() > 0)
 		{
-			PchIncludeDirective = FString::Printf(TEXT("#include \"%s\""), *ModuleIncludePath);
+			PchIncludeDirective = FString::Printf(IncludePathFormatString, *ModuleIncludePath);
 		}
 	}
 
@@ -3368,10 +3410,24 @@ bool GameProjectUtils::GenerateClassCPPFile(const FString& NewCPPFileName, const
 	FinalOutput = FinalOutput.Replace(TEXT("%MODULE_NAME%"), *ModuleInfo.ModuleName, ESearchCase::CaseSensitive);
 	FinalOutput = FinalOutput.Replace(TEXT("%PCH_INCLUDE_DIRECTIVE%"), *PchIncludeDirective, ESearchCase::CaseSensitive);
 
+	// Fixup the header file include for this cpp file
+	{
+		const FString RelativeHeaderIncludePath = GetIncludePathForFile(NewCPPFileName, ModuleInfo.ModuleSourcePath);
+
+		// First make sure we remove any potentially incorrect, legacy paths generated from some version of #include "%UNPREFIXED_CLASS_NAME%.h"
+		// This didn't take into account potential subfolders for the created class
+		const FString LegacyHeaderInclude = FString::Printf(IncludePathFormatString, *FPaths::GetCleanFilename(RelativeHeaderIncludePath));
+		FinalOutput = FinalOutput.Replace(*LegacyHeaderInclude, TEXT(""), ESearchCase::CaseSensitive);
+
+		// Now add the correct include directive which may include a subfolder.
+		const FString HeaderIncludeDirective = FString::Printf(IncludePathFormatString, *RelativeHeaderIncludePath);
+		FinalOutput = FinalOutput.Replace(TEXT("%MY_HEADER_INCLUDE_DIRECTIVE%"), *HeaderIncludeDirective, ESearchCase::CaseSensitive);
+	}
+
 	// Special case where where the wildcard ends with a new line
 	const bool bLeadingTab = false;
 	const bool bTrailingNewLine = true;
-	FinalOutput = ReplaceWildcard(FinalOutput, TEXT("%ADDITIONAL_INCLUDE_DIRECTIVES%"), *AdditionalIncludesStr, bLeadingTab, bTrailingNewLine);
+	FinalOutput = ReplaceWildcard(FinalOutput, TEXT("%ADDITIONAL_INCLUDE_DIRECTIVES%"), *MakeIncludeList(AdditionalIncludes), bLeadingTab, bTrailingNewLine);
 	FinalOutput = ReplaceWildcard(FinalOutput, TEXT("%EVENTUAL_CONSTRUCTOR_DEFINITION%"), *EventualConstructorDefinition, bLeadingTab, bTrailingNewLine);
 	FinalOutput = ReplaceWildcard(FinalOutput, TEXT("%ADDITIONAL_MEMBER_DEFINITIONS%"), *AdditionalMemberDefinitions, bLeadingTab, bTrailingNewLine);
 
@@ -3574,6 +3630,9 @@ void GameProjectUtils::UpdateProject_Impl(const FProjectDescriptorModifier* Modi
 	SNotificationItem::ECompletionState NewCompletionState;
 	if (UpdateGameProjectFile_Impl(ProjectFilename, FDesktopPlatformModule::Get()->GetCurrentEngineIdentifier(), Modifier, FailReason))
 	{
+		// Refresh the current in-memory project information from the new file on-disk.
+		IProjectManager::Get().LoadProjectFile(ProjectFilename);
+
 		// The project was updated successfully.
 		FFormatNamedArguments Args;
 		Args.Add( TEXT("ShortFilename"), FText::FromString( ShortFilename ) );
@@ -3626,6 +3685,11 @@ void GameProjectUtils::OnUpdateProjectCancel()
 
 void GameProjectUtils::TryMakeProjectFileWriteable(const FString& ProjectFile)
 {
+	if (IProjectManager::Get().IsSuppressingProjectFileWrite())
+	{
+		return;
+	}
+
 	// First attempt to check out the file if SCC is enabled
 	if ( ISourceControlModule::Get().IsEnabled() )
 	{
@@ -3747,44 +3811,90 @@ FString GameProjectUtils::GetDefaultProjectTemplateFilename()
 	return TEXT("");
 }
 
-void FindCodeFiles(const TCHAR* BaseDirectory, TArray<FString>& FileNames, int32 MaxNumFileNames)
+void FindCodeFiles(const TCHAR* BaseDirectory, TFunctionRef<bool(const TCHAR* FileName)> SourceFoundThreadSafeCallback)
 {
+	// Can't use IterateDirectoryRecursive here as we rely on some directory filtering without aborting whole enumeration
 	struct FDirectoryVisitor : public IPlatformFile::FDirectoryVisitor
 	{
-		TArray<FString>& FileNames;
-		int32 MaxNumFileNames;
+		TFunctionRef<bool(const TCHAR* FileName)> SourceFoundThreadSafeCallback;
+		FRWLock          DirectoriesLock;
+		TArray<FString>& Directories;
 
-		FDirectoryVisitor(TArray<FString>& InFileNames, int32 InMaxNumFileNames)
-			: FileNames(InFileNames)
-			, MaxNumFileNames(InMaxNumFileNames)
+		FDirectoryVisitor(TFunctionRef<bool(const TCHAR* FileName)> InSourceFoundThreadSafeCallback, TArray<FString>& InDirectories)
+			: IPlatformFile::FDirectoryVisitor(EDirectoryVisitorFlags::ThreadSafe)
+			, SourceFoundThreadSafeCallback(InSourceFoundThreadSafeCallback)
+			, Directories(InDirectories)
 		{
 		}
 
 		virtual bool Visit(const TCHAR* FilenameOrDirectory, bool bIsDirectory) override
 		{
-			if(bIsDirectory)
+			if (bIsDirectory)
 			{
 				FString CleanDirectoryName(FPaths::GetCleanFilename(FilenameOrDirectory));
-				if(!CleanDirectoryName.StartsWith(TEXT(".")))
+				// Skip directories like (i.e. .git) when finding code files to improve performance.
+				if (!CleanDirectoryName.StartsWith(TEXT(".")))
 				{
-					FindCodeFiles(FilenameOrDirectory, FileNames, MaxNumFileNames);
+					FString Directory(FilenameOrDirectory);
+					FRWScopeLock ScopeLock(DirectoriesLock, SLT_Write);
+					Directories.Emplace(MoveTemp(Directory));
 				}
 			}
 			else
 			{
-				FString FileName(FilenameOrDirectory);
-				if(FileName.EndsWith(TEXT(".h")) || FileName.EndsWith(".cpp"))
+				FStringView FileName(FilenameOrDirectory);
+				if (FileName.EndsWith(TEXT(".h")) || FileName.EndsWith(TEXT(".cpp")))
 				{
-					FileNames.Add(FileName);
+					return SourceFoundThreadSafeCallback(FilenameOrDirectory);
 				}
 			}
-			return (FileNames.Num() < MaxNumFileNames);
+			return true;
 		}
 	};
 
-	// Enumerate the contents of the current directory
-	FDirectoryVisitor Visitor(FileNames, MaxNumFileNames);
-	FPlatformFileManager::Get().GetPlatformFile().IterateDirectory(BaseDirectory, Visitor);
+	TArray<FString> DirectoriesToVisitNext;
+	DirectoriesToVisitNext.Add(BaseDirectory);
+	
+	TAtomic<bool> bResult(true);
+	FDirectoryVisitor Visitor(SourceFoundThreadSafeCallback, DirectoriesToVisitNext);
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	while (bResult && DirectoriesToVisitNext.Num() > 0)
+	{
+		TArray<FString> DirectoriesToVisit = MoveTemp(DirectoriesToVisitNext);
+		ParallelFor(
+			DirectoriesToVisit.Num(),
+			[&PlatformFile , &DirectoriesToVisit, &Visitor, &bResult](int32 Index)
+			{
+				if (bResult && !PlatformFile.IterateDirectory(*DirectoriesToVisit[Index], Visitor))
+				{
+					bResult = false;
+				}
+			},
+			EParallelForFlags::Unbalanced
+		);
+	}
+}
+
+void FindCodeFiles(const TCHAR* BaseDirectory, TArray<FString>& FileNames, int32 MaxNumFileNames)
+{
+	FRWLock FileNamesLock;
+	auto SourceFoundThreadSafeCallback =
+		[&FileNamesLock, &FileNames, MaxNumFileNames](const TCHAR* FileName) -> bool
+		{
+			// Prepare the string out of the lock
+			FString SourceFile(FileName);
+
+			FRWScopeLock ScopeLock(FileNamesLock, SLT_Write);
+			// Make sure we don't go over the requested MaxNumFileNames even
+			// when multiple threads are reaching this at the same time
+			if (FileNames.Num() < MaxNumFileNames)
+			{
+				FileNames.Emplace(MoveTemp(SourceFile));
+			}
+			return FileNames.Num() < MaxNumFileNames;
+		};
+
+	FindCodeFiles(BaseDirectory, SourceFoundThreadSafeCallback);
 }
 
 void GameProjectUtils::GetProjectCodeFilenames(TArray<FString>& OutProjectCodeFilenames)
@@ -3801,15 +3911,21 @@ int32 GameProjectUtils::GetProjectCodeFileCount()
 
 void GameProjectUtils::GetProjectSourceDirectoryInfo(int32& OutNumCodeFiles, int64& OutDirectorySize)
 {
-	TArray<FString> Filenames;
-	GetProjectCodeFilenames(Filenames);
-	OutNumCodeFiles = Filenames.Num();
+	TRACE_CPUPROFILER_EVENT_SCOPE(GameProjectUtils::GetProjectSourceDirectoryInfo)
 
-	OutDirectorySize = 0;
-	for (const auto& filename : Filenames)
-	{
-		OutDirectorySize += IFileManager::Get().FileSize(*filename);
-	}
+	TAtomic<int32> NumCodeFiles(0);
+	TAtomic<int64> DirectorySize(0);
+	auto SourceFoundThreadSafeCallback =
+		[&DirectorySize, &NumCodeFiles](const TCHAR* FileName) -> bool
+		{
+			NumCodeFiles++;
+			DirectorySize += IFileManager::Get().FileSize(FileName);
+			return true;
+		};
+
+	FindCodeFiles(*FPaths::GameSourceDir(), SourceFoundThreadSafeCallback);
+	OutDirectorySize = DirectorySize;
+	OutNumCodeFiles = NumCodeFiles;
 }
 
 bool GameProjectUtils::ProjectHasCodeFiles()

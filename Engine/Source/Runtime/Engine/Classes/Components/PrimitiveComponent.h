@@ -321,6 +321,10 @@ public:
 	/** If true, this component will be visible in reflection captures. */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Rendering)
 	uint8 bVisibleInReflectionCaptures:1;
+	
+	/** If true, this component will be visible in real-time sky light reflection captures. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Rendering)
+	uint8 bVisibleInRealTimeSkyCaptures :1;
 
 	/** If true, this component will be visible in ray tracing effects. Turning this off will remove it from ray traced reflections, shadows, etc. */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Rendering)
@@ -399,6 +403,13 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=Lighting, meta=(EditCondition="CastShadow", DisplayName = "Volumetric Translucent Shadow"))
 	uint8 bCastVolumetricTranslucentShadow:1;
+
+	/**
+	 * Whether the object should cast contact shadows.
+	 * This flag is only used if CastShadow is true.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Lighting, AdvancedDisplay, meta=(EditCondition="CastShadow", DisplayName = "Contact Shadow"))
+	uint8 bCastContactShadow:1;
 
 	/** 
 	 * When enabled, the component will only cast a shadow on itself and not other components in the world.  
@@ -534,6 +545,7 @@ private:
 #if WITH_EDITORONLY_DATA
 	UPROPERTY()
 	TEnumAsByte<enum ECanBeCharacterBase> CanBeCharacterBase_DEPRECATED;
+
 #endif
 
 	FMaskFilter MoveIgnoreMask;
@@ -572,6 +584,9 @@ private:
 	FCustomPrimitiveData CustomPrimitiveDataInternal;
 public:
 
+	/** If non-null, physics state creation has been deferred to ULevel::IncrementalUpdateComponents or this scene's StartFrame.*/
+	FPhysScene* DeferredCreatePhysicsStateScene;
+
 	/**
 	 * Translucent objects with a lower sort priority draw behind objects with a higher priority.
 	 * Translucent objects with the same priority are rendered from back-to-front based on their bounds origin.
@@ -589,10 +604,10 @@ public:
 	int32 VisibilityId;
 
 	/** 
-	 * Array of runtime virtual textures into which we render the mesh for this actor. 
+	 * Array of runtime virtual textures into which we draw the mesh for this actor. 
 	 * The material also needs to be set up to output to a virtual texture. 
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = VirtualTexture, meta = (DisplayName = "Render to Virtual Textures"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = VirtualTexture, meta = (DisplayName = "Draw in Virtual Textures"))
 	TArray<URuntimeVirtualTexture*> RuntimeVirtualTextures;
 
 	/** Bias to the LOD selected for rendering to runtime virtual textures. */
@@ -614,8 +629,8 @@ public:
 	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = VirtualTexture, meta = (UIMin = "0", UIMax = "7"))
 	int8 VirtualTextureMinCoverage = 0;
 
-	/** Render to the main pass based on the virtual texture settings. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = VirtualTexture, meta = (DisplayName = "Virtual Texture Pass Type"))
+	/** Controls if this component draws in the main pass as well as in the virtual texture. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = VirtualTexture, meta = (DisplayName = "Draw in Main Pass"))
 	ERuntimeVirtualTextureMainPassType VirtualTextureRenderPassType = ERuntimeVirtualTextureMainPassType::Exclusive;
 
 	/** Get the array of runtime virtual textures into which we render the mesh for this actor. */
@@ -795,19 +810,19 @@ public:
 	/** Get the mask filter checked when others move into us. */
 	FMaskFilter GetMaskFilterOnBodyInstance(FMaskFilter InMaskFilter) const { return BodyInstance.GetMaskFilter(); }
 
-	/** Set custom primitive data at index DataIndex. */
+	/** Set custom primitive data at index DataIndex. This sets the run-time data only, so it doesn't serialize. */
 	UFUNCTION(BlueprintCallable, Category="Rendering|Material")
 	void SetCustomPrimitiveDataFloat(int32 DataIndex, float Value);
 
-	/** Set custom primitive data, two floats at once, from index DataIndex to index DataIndex + 1. */
+	/** Set custom primitive data, two floats at once, from index DataIndex to index DataIndex + 1. This sets the run-time data only, so it doesn't serialize. */
 	UFUNCTION(BlueprintCallable, Category="Rendering|Material")
 	void SetCustomPrimitiveDataVector2(int32 DataIndex, FVector2D Value);
 
-	/** Set custom primitive data, three floats at once, from index DataIndex to index DataIndex + 2. */
+	/** Set custom primitive data, three floats at once, from index DataIndex to index DataIndex + 2. This sets the run-time data only, so it doesn't serialize. */
 	UFUNCTION(BlueprintCallable, Category="Rendering|Material")
 	void SetCustomPrimitiveDataVector3(int32 DataIndex, FVector Value);
 
-	/** Set custom primitive data, four floats at once, from index DataIndex to index DataIndex + 3. */
+	/** Set custom primitive data, four floats at once, from index DataIndex to index DataIndex + 3. This sets the run-time data only, so it doesn't serialize. */
 	UFUNCTION(BlueprintCallable, Category="Rendering|Material")
 	void SetCustomPrimitiveDataVector4(int32 DataIndex, FVector4 Value);
 
@@ -816,6 +831,28 @@ public:
 	 * @return The payload of custom data that will be set on the primitive and accessible in the material through a material expression.
 	 */
 	const FCustomPrimitiveData& GetCustomPrimitiveData() const { return CustomPrimitiveDataInternal; }
+
+	/** Set default custom primitive data at index DataIndex, and marks the render state dirty */
+	UFUNCTION(BlueprintCallable, Category = "Rendering|Material")
+	void SetDefaultCustomPrimitiveDataFloat(int32 DataIndex, float Value);
+
+	/** Set default custom primitive data, two floats at once, from index DataIndex to index DataIndex + 1, and marks the render state dirty */
+	UFUNCTION(BlueprintCallable, Category = "Rendering|Material")
+	void SetDefaultCustomPrimitiveDataVector2(int32 DataIndex, FVector2D Value);
+
+	/** Set default custom primitive data, three floats at once, from index DataIndex to index DataIndex + 2, and marks the render state dirty */
+	UFUNCTION(BlueprintCallable, Category = "Rendering|Material")
+	void SetDefaultCustomPrimitiveDataVector3(int32 DataIndex, FVector Value);
+
+	/** Set default custom primitive data, four floats at once, from index DataIndex to index DataIndex + 3, and marks the render state dirty */
+	UFUNCTION(BlueprintCallable, Category = "Rendering|Material")
+	void SetDefaultCustomPrimitiveDataVector4(int32 DataIndex, FVector4 Value);
+
+	/**
+	 * Get the default custom primitive data for this primitive component.
+	 * @return The payload of custom data that will be set on the primitive and accessible in the material through a material expression.
+	 */
+	const FCustomPrimitiveData& GetDefaultCustomPrimitiveData() const { return CustomPrimitiveData; }
 
 #if WITH_EDITOR
 	/** Override delegate used for checking the selection state of a component */
@@ -830,6 +867,9 @@ protected:
 
 	/** Insert an array of floats into the CustomPrimitiveData, starting at the given index */
 	void SetCustomPrimitiveDataInternal(int32 DataIndex, const TArray<float>& Values);
+
+	/** Insert an array of floats into the CustomPrimitiveData defaults, starting at the given index */
+	void SetDefaultCustomPrimitiveData(int32 DataIndex, const TArray<float>& Values);
 
 	/** Set of components that this component is currently overlapping. */
 	TArray<FOverlapInfo> OverlappingComponents;

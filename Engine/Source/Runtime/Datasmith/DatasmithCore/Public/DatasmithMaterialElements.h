@@ -209,6 +209,9 @@ public:
 	virtual bool GetMaterialFunctionOnly() const = 0;
 	virtual void SetMaterialFunctionOnly(bool bInMaterialFunctionOnly) = 0;
 
+	virtual float GetOpacityMaskClipValue() const = 0;
+	virtual void SetOpacityMaskClipValue(float InClipValue) = 0;
+
 	virtual int32 GetExpressionsCount() const = 0;
 	virtual IDatasmithMaterialExpression* GetExpression( int32 Index ) = 0;
 	virtual int32 GetExpressionIndex( const IDatasmithMaterialExpression* Expression ) const = 0;
@@ -223,6 +226,9 @@ public:
 	/** If a parent material is generated from this material, this will be its label. If none, the instance and the parent will have the same label. */
 	virtual void SetParentLabel( const TCHAR* InParentLabel ) = 0;
 	virtual const TCHAR* GetParentLabel() const = 0;
+
+	virtual void SetShadingModel( const EDatasmithShadingModel InShadingModel ) = 0;
+	virtual EDatasmithShadingModel GetShadingModel() const = 0;
 };
 
 template<>

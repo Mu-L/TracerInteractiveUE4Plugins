@@ -12,6 +12,7 @@
 #include "Serialization/BitWriter.h"
 #include "Misc/NetworkGuid.h"
 #include "GameFramework/OnlineReplStructs.h"
+#include "GameFramework/UpdateLevelVisibilityLevelInfo.h"
 #include "Engine/NetDriver.h"
 #include "Net/DataBunch.h"
 #include "Net/NetPacketNotify.h"
@@ -23,7 +24,7 @@
 #include "Net/Core/Trace/Config.h"
 #include "ReplicationDriver.h"
 #include "Analytics/EngineNetAnalytics.h"
-#include "Net/Core/Misc/PacketTraits.h"
+#include "Net/Common/Packets/PacketTraits.h"
 #include "Net/Core/Misc/ResizableCircularQueue.h"
 #include "Net/NetAnalyticsTypes.h"
 
@@ -232,6 +233,13 @@ struct FDelayedIncomingPacket
 
 #endif //#if DO_ENABLE_NET_TEST
 
+struct FChannelCloseInfo
+{
+	uint32 Id;
+	EChannelCloseReason CloseReason;
+};
+typedef TArray<FChannelCloseInfo, TInlineAllocator<8>> FChannelsToClose;
+
 /** Record of channels with data written into each outgoing packet. */
 struct FWrittenChannelsRecord
 {
@@ -310,8 +318,17 @@ public:
 		PRAGMA_ENABLE_DEPRECATION_WARNINGS
 	}
 
+	bool IsReplay() const { return bReplay; }
+	void SetReplay(bool bValue)
+	{
+		bReplay = bValue;
+	}
+
+	virtual bool IsReplayReady() const { return false; }
+
 private:
 	uint32 bInternalAck : 1;	// Internally ack all packets, for 100% reliable connections.
+	uint32 bReplay : 1;			// Flag to indicate a replay connection, independent of reliability
 
 public:
 	struct FURL			URL;				// URL of the other side.
@@ -449,14 +466,6 @@ public:
 
 	/** Average lag seen during the last StatPeriod */
 	float AvgLag;
-
-private:
-	// BestLag variable is deprecated. Use AvgLag instead
-	float			BestLag;
-	// BestLagAcc variable is deprecated. Use LagAcc instead
-	double			BestLagAcc;
-
-public:
 
 	/** Total accumulated lag values during the current StatPeriod */
 	double			LagAcc;
@@ -722,9 +731,6 @@ public:
 	/** Called by PlayerController to tell connection about client level visiblity change */
 	ENGINE_API void UpdateLevelVisibility(const struct FUpdateLevelVisibilityLevelInfo& LevelVisibility);
 	
-	UE_DEPRECATED(4.24, "This method will be removed. Use UpdateLevelVisibility that takes an FUpdateLevelVisibilityLevelInfo")
-	ENGINE_API void UpdateLevelVisibility(const FName& PackageName, bool bIsVisible);
-
 #if DO_ENABLE_NET_TEST
 
 	/** Packet settings for testing lag, net errors, etc */
@@ -862,7 +868,11 @@ public:
 	ENGINE_API virtual void FlushNet(bool bIgnoreSimulation = false);
 
 	/** Poll the connection. If it is timed out, close it. */
-	ENGINE_API virtual void Tick();
+	UE_DEPRECATED(4.26, "Now takes DeltaSeconds")
+	ENGINE_API virtual void Tick() { Tick(0.0f); }
+
+	/** Poll the connection. If it is timed out, close it. */
+	ENGINE_API virtual void Tick(float DeltaSeconds);
 
 	/** Return whether this channel is ready for sending. */
 	ENGINE_API virtual int32 IsNetReady( bool Saturate );
@@ -1082,9 +1092,6 @@ public:
 	UNetDriver* GetDriver() {return Driver;}
 	const UNetDriver* GetDriver() const { return Driver; }
 
-	/** @todo document */
-	class UControlChannel* GetControlChannel();
-
 	/** Create a channel. */
 	ENGINE_API UChannel* CreateChannelByName( const FName& ChName, EChannelCreateFlags CreateFlags, int32 ChannelIndex=INDEX_NONE );
 
@@ -1179,7 +1186,11 @@ public:
 	 * Sets whether or not we should ignore bunches that would attempt to open channels that are already open.
 	 * Should only be used with InternalAck.
 	 */
-	void SetIgnoreAlreadyOpenedChannels(bool bInIgnoreAlreadyOpenedChannels);
+	UE_DEPRECATED(4.26, "Please call SetAllowExistingChannelIndex instead.")
+	void SetIgnoreAlreadyOpenedChannels(bool bInIgnoreAlreadyOpenedChannels) { SetAllowExistingChannelIndex(bInIgnoreAlreadyOpenedChannels); }
+
+	/** Sets whether we handle opening channels with an index that already exists, used by replays to fast forward the packet stream */
+	void SetAllowExistingChannelIndex(bool bAllow);
 
 	/**
 	 * Sets whether or not we should ignore bunches for a specific set of NetGUIDs.
@@ -1278,6 +1289,18 @@ public:
 	/** Sends the NMT_Challenge message based on encryption response */
 	void SendChallengeControlMessage(const FEncryptionKeyResponse& Response);
 
+	bool GetPendingCloseDueToReplicationFailure() const
+	{
+		return bConnectionPendingCloseDueToReplicationFailure;
+	}
+
+	ENGINE_API void SetPendingCloseDueToReplicationFailure();
+
+	/** Called when owning network driver receives NotifyActorDestroyed. */
+	ENGINE_API virtual void NotifyActorDestroyed(AActor* Actor, bool IsSeamlessTravel = false);
+
+	ENGINE_API virtual void NotifyActorChannelCleanedUp(UActorChannel* Channel, EChannelCloseReason CloseReason);
+
 protected:
 
 	bool GetPendingCloseDueToSocketSendFailure() const
@@ -1288,6 +1311,9 @@ protected:
 	ENGINE_API void SetPendingCloseDueToSocketSendFailure();
 
 	void CleanupDormantActorState();
+
+	/** During cleanup this will destroy the actor owned by this connection (generally a PlayerController) */
+	ENGINE_API virtual void DestroyOwningActor();
 
 	/** Called internally to destroy an actor during replay fast-forward when the actor channel index will be recycled */
 	ENGINE_API virtual void DestroyIgnoredActor(AActor* Actor);
@@ -1312,7 +1338,15 @@ private:
 	FName PlayerOnlinePlatformName;
 
 	/** This is an acceleration set that is derived from ClientWorldPackageName and ClientVisibleLevelNames. We use this to quickly test an AActor*'s visibility while replicating. */
-	mutable TMap<UObject*, bool> ClientVisibileActorOuters;
+	mutable TMap<UObject*, bool> ClientVisibleActorOuters;
+
+	/** This is used to capture visibility updates while the server is in transition and deffer the update until the server has completed the transition */
+	TMap<FName, FUpdateLevelVisibilityLevelInfo> PendingUpdateLevelVisibility;
+
+private:
+
+	/** Called by PlayerController to tell connection about client level visibility change */
+	void UpdateLevelVisibilityInternal(const struct FUpdateLevelVisibilityLevelInfo& LevelVisibility);
 
 	/** Called internally to update cached acceleration map */
 	bool UpdateCachedLevelVisibility(ULevel* Level) const;
@@ -1346,7 +1380,7 @@ private:
 	bool ReadPacketInfo(FBitReader& Reader, bool bHasPacketInfoPayload);
 
 	/** Packet was acknowledged as delivered */
-	void ReceivedAck(int32 AckPacketId);
+	void ReceivedAck(int32 AckPacketId, FChannelsToClose& OutChannelsToClose);
 
 	/** Calculate the average jitter while adding the new packet's jitter value */
 	void ProcessJitter(uint32 PacketJitterClockTimeMS);
@@ -1374,7 +1408,11 @@ private:
 
 	/** Tracks channels that we should ignore when handling special demo data. */
 	TMap<int32, FNetworkGUID> IgnoringChannels;
-	bool bIgnoreAlreadyOpenedChannels;
+
+	/** Track remapped channel index values when replay flag is set */
+	TMap<int32, int32> ChannelIndexMap;
+
+	bool bAllowExistingChannelIndex;
 
 	/** Set of guids we may need to ignore when processing a delta checkpoint */
 	TSet<FNetworkGUID> IgnoredBunchGuids;
@@ -1407,6 +1445,9 @@ private:
 
 	/** True if we are pending close due to a socket failure during send */
 	bool bConnectionPendingCloseDueToSocketSendFailure;
+
+	/** True if we are pending close due to unrecoverable replication errors. */
+	bool bConnectionPendingCloseDueToReplicationFailure;
 
 	FNetworkGUID GetActorGUIDFromOpenBunch(FInBunch& Bunch);
 
@@ -1444,6 +1485,72 @@ private:
 	* Set to true after a packet is flushed (sent) and reset at the end of the connection's Tick. 
 	*/
 	bool bFlushedNetThisFrame = false;
+
+	/** Only set temporarily during the frame, should not need to be tracked for gc */
+	AActor* RepContextActor;
+	ULevel* RepContextLevel;
+
+	friend struct FScopedRepContext;
+
+	bool bAutoFlush;
+
+	int32 GetFreeChannelIndex(const FName& ChName) const;
+
+public:
+	AActor* GetRepContextActor() const { return RepContextActor; }
+	ULevel* GetRepContextLevel() const { return RepContextLevel; }
+
+	bool GetAutoFlush() const { return bAutoFlush; }
+	void SetAutoFlush(bool bValue) { bAutoFlush = bValue; }
+};
+
+struct FScopedRepContext
+{
+public:
+	FScopedRepContext(UNetConnection* InConnection, AActor* InActor)
+		: Connection(InConnection)
+	{
+		if (Connection)
+		{
+			check(!Connection->RepContextActor);
+			check(!Connection->RepContextLevel);
+
+			Connection->RepContextActor = InActor;
+			if (InActor)
+			{
+				Connection->RepContextLevel = InActor->GetLevel();
+			}
+		}
+	}
+
+	FScopedRepContext(UNetConnection* InConnection, ULevel* InLevel)
+		: Connection(InConnection)
+	{
+		if (Connection)
+		{
+			check(!Connection->RepContextActor);
+			check(!Connection->RepContextLevel);
+
+			Connection->RepContextLevel = InLevel;
+		}
+	}
+
+	~FScopedRepContext()
+	{
+		if (Connection)
+		{
+			Connection->RepContextActor = nullptr;
+			Connection->RepContextLevel = nullptr;
+		}
+	}
+
+	FScopedRepContext(FScopedRepContext&&) = delete;
+	FScopedRepContext(const FScopedRepContext&) = delete;
+	FScopedRepContext& operator=(const FScopedRepContext&) = delete;
+	FScopedRepContext& operator=(FScopedRepContext&&) = delete;
+
+private:
+	UNetConnection* Connection;
 };
 
 /** Help structs for temporarily setting network settings */
@@ -1513,6 +1620,8 @@ public:
 	void HandleClientPlayer( APlayerController* PC, UNetConnection* NetConnection ) override;
 	virtual FString LowLevelGetRemoteAddress(bool bAppendPort=false) override { return FString(); }
 	virtual bool ClientHasInitializedLevelFor(const AActor* TestActor) const { return true; }
+
+	virtual void DestroyOwningActor() override { /* Don't destroy the OwningActor since we follow a real PlayerController*/ }
 
 	virtual TSharedPtr<const FInternetAddr> GetRemoteAddr() override { return nullptr; }
 };

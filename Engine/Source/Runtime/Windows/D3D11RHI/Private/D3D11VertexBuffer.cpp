@@ -6,7 +6,14 @@
 
 #include "D3D11RHIPrivate.h"
 
-FVertexBufferRHIRef FD3D11DynamicRHI::RHICreateVertexBuffer(uint32 Size,uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
+TAutoConsoleVariable<int32> GCVarUseSharedKeyedMutex(
+	TEXT("r.D3D11.UseSharedKeyMutex"),
+	0,
+	TEXT("If 1, BUF_Shared vertex / index buffer and TexCreate_Shared texture will be created\n")
+	TEXT("with the D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX flag instead of D3D11_RESOURCE_MISC_SHARED (default).\n"),
+	ECVF_Default);
+
+FVertexBufferRHIRef FD3D11DynamicRHI::RHICreateVertexBuffer(uint32 Size,uint32 InUsage, ERHIAccess InResourceState, FRHIResourceCreateInfo& CreateInfo)
 {
 	if (CreateInfo.bWithoutNativeResource)
 	{
@@ -28,12 +35,6 @@ FVertexBufferRHIRef FD3D11DynamicRHI::RHICreateVertexBuffer(uint32 Size,uint32 I
 	if (InUsage & BUF_UnorderedAccess)
 	{
 		Desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
-
-		static bool bRequiresRawView = (GMaxRHIFeatureLevel < ERHIFeatureLevel::SM5);
-		if (bRequiresRawView)
-		{
-			Desc.MiscFlags |= D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		}
 	}
 
 	if (InUsage & BUF_ByteAddressBuffer)
@@ -54,6 +55,18 @@ FVertexBufferRHIRef FD3D11DynamicRHI::RHICreateVertexBuffer(uint32 Size,uint32 I
 	if (InUsage & BUF_ShaderResource)
 	{
 		Desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+	}
+
+	if (InUsage & BUF_Shared)
+	{
+		if (GCVarUseSharedKeyedMutex->GetInt() != 0)
+		{
+			Desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+		}
+		else
+		{
+			Desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED;
+		}
 	}
 
 	if (FPlatformMemory::SupportsFastVRAMMemory())
@@ -110,9 +123,10 @@ FVertexBufferRHIRef FD3D11DynamicRHI::CreateVertexBuffer_RenderThread(
 	class FRHICommandListImmediate& RHICmdList,
 	uint32 Size,
 	uint32 InUsage,
+	ERHIAccess InResourceState,
 	FRHIResourceCreateInfo& CreateInfo)
 {
-	return RHICreateVertexBuffer(Size, InUsage, CreateInfo);
+	return RHICreateVertexBuffer(Size, InUsage, InResourceState, CreateInfo);
 }
 
 void* FD3D11DynamicRHI::LockVertexBuffer_BottomOfPipe(FRHICommandListImmediate& RHICmdList, FRHIVertexBuffer* VertexBufferRHI,uint32 Offset,uint32 Size,EResourceLockMode LockMode)

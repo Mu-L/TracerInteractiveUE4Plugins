@@ -4,15 +4,15 @@
 
 #include "CoreMinimal.h"
 #include "UObject/NoExportTypes.h"
-#include "SingleSelectionTool.h"
+#include "MultiSelectionTool.h"
 #include "InteractiveToolBuilder.h"
-#include "Changes/ValueWatcher.h"
 #include "DynamicMesh3.h"
 #include "DynamicMeshAABBTree3.h"
 #include "MeshOpPreviewHelpers.h"
 #include "CleaningOps/RemeshMeshOp.h"
 #include "Properties/MeshStatisticsProperties.h"
 #include "Properties/RemeshProperties.h"
+#include "UObject/UObjectGlobals.h"
 #include "RemeshMeshTool.generated.h"
 
 /**
@@ -26,7 +26,12 @@ class MESHMODELINGTOOLS_API URemeshMeshToolBuilder : public UInteractiveToolBuil
 public:
 	IToolsContextAssetAPI* AssetAPI = nullptr;
 
+	/** 
+	 * Return true if we have one object selected. URemeshMeshTool is a UMultiSelectionTool, however we currently 
+	 * only ever apply it to a single mesh. (See comment at URemeshMeshTool definition below.)
+	 */
 	virtual bool CanBuildTool(const FToolBuilderState& SceneState) const override;
+
 	virtual UInteractiveTool* BuildTool(const FToolBuilderState& SceneState) const override;
 };
 
@@ -41,20 +46,13 @@ class MESHMODELINGTOOLS_API URemeshMeshToolProperties : public URemeshProperties
 public:
 	URemeshMeshToolProperties();
 
-	void SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving) override;
-
 	/** Target triangle count */
 	UPROPERTY(EditAnywhere, Category = Remeshing, meta = (EditCondition = "bUseTargetEdgeLength == false"))
 	int TargetTriangleCount;
 
-
 	/** Smoothing type */
 	UPROPERTY(EditAnywhere, Category = Remeshing)
 	ERemeshSmoothingType SmoothingType;
-
-	/** Number of Remeshing passes */
-	UPROPERTY(EditAnywhere, Category = Remeshing, meta = (UIMin = "0", UIMax = "50", ClampMin = "0", ClampMax = "1000"))
-	int RemeshIterations;
 
 	/** If true, UVs and Normals are discarded  */
 	UPROPERTY(EditAnywhere, Category = Remeshing)
@@ -67,6 +65,14 @@ public:
 	/** Display colors corresponding to the mesh's polygon groups */
 	UPROPERTY(EditAnywhere, Category = Display)
 	bool bShowGroupColors = false;
+
+	/** Remeshing type */
+	UPROPERTY(EditAnywhere, Category = Remeshing, AdvancedDisplay)
+	ERemeshType RemeshType;
+
+	/** Number of Remeshing passes */
+	UPROPERTY(EditAnywhere, Category = Remeshing, AdvancedDisplay, meta = (EditCondition = "RemeshType == ERemeshType::FullPass", UIMin = "0", UIMax = "50", ClampMin = "0", ClampMax = "1000"))
+	int RemeshIterations;
 
 	/** If true, the target count is ignored and the target edge length is used directly */
 	UPROPERTY(EditAnywhere, Category = Remeshing, AdvancedDisplay)
@@ -84,14 +90,20 @@ public:
 
 /**
  * Simple Mesh Remeshing Tool
+ *
+ * Note this is a subclass of UMultiSelectionTool, however we currently only ever apply it to one mesh at a time. The
+ * function URemeshMeshToolBuilder::CanBuildTool will return true only when a single mesh is selected, and the tool will
+ * only be applied to the first mesh in the selection list. The reason we inherit from UMultiSelectionTool is so 
+ * that subclasses of this class can work with multiple meshes (see, for example, UProjectToTargetTool.)
  */
 UCLASS()
-class MESHMODELINGTOOLS_API URemeshMeshTool : public USingleSelectionTool, public IDynamicMeshOperatorFactory
+class MESHMODELINGTOOLS_API URemeshMeshTool : public UMultiSelectionTool, public IDynamicMeshOperatorFactory
 {
 	GENERATED_BODY()
 
 public:
-	URemeshMeshTool();
+
+	URemeshMeshTool(const FObjectInitializer&);
 
 	virtual void SetWorld(UWorld* World);
 	virtual void SetAssetAPI(IToolsContextAssetAPI* AssetAPI);
@@ -99,11 +111,11 @@ public:
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 
-	virtual void Tick(float DeltaTime) override;
+	virtual void OnTick(float DeltaTime) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
 
 	virtual bool HasCancel() const override { return true; }
-	virtual bool HasAccept() const override;
+	virtual bool HasAccept() const override { return true; }
 	virtual bool CanAccept() const override;
 
 	virtual void OnPropertyModified(UObject* PropertySet, FProperty* Property) override;
@@ -120,16 +132,14 @@ public:
 	UPROPERTY()
 	UMeshOpPreviewWithBackgroundCompute* Preview;
 
-private:
+protected:
+
 	UWorld* TargetWorld;
 	IToolsContextAssetAPI* AssetAPI;
 
 	TSharedPtr<FDynamicMesh3> OriginalMesh;
 	TSharedPtr<FDynamicMeshAABBTree3> OriginalMeshSpatial;
 	double InitialMeshArea;
-
-	TValueWatcher<bool> ShowWireFrameWatcher;
-	TValueWatcher<bool> ShowGroupsWatcher;
 
 	double CalculateTargetEdgeLength(int TargetTriCount);
 	void GenerateAsset(const FDynamicMeshOpResult& Result);

@@ -111,15 +111,20 @@ public:
 	/**
 	 * Called when a key on this section is double clicked
 	 *
-	 * @param KeyHandle			The key that was clicked
+	 * @param KeyHandles			The array of keys that were clicked
 	 * @return A reply in response to double clicking the key
 	 */
-	virtual FReply OnKeyDoubleClicked( FKeyHandle KeyHandle ) { return FReply::Unhandled(); }
+	virtual FReply OnKeyDoubleClicked(const TArray<FKeyHandle>& KeyHandles ) { return FReply::Unhandled(); }
 
 	/**
 	 * @return The display name of the section in the section view
 	 */
 	virtual FText GetSectionTitle() const { return FText(); }
+
+	/**
+	 * @return The ToolTip for the section in the section view. By default, the section title
+	 */
+	virtual FText GetSectionToolTip() const { return GetSectionTitle(); }
 
 	/**
 	 * @return The amount of padding to apply to non-interactive portions of the section interface (such as section text)
@@ -202,6 +207,19 @@ public:
 	virtual void SlipSection(FFrameNumber SlipTime) {}
 
 	/**
+	Dilation starts with a drag operation
+	*/
+	SEQUENCER_API virtual void BeginDilateSection() {};
+	/**
+	New Range that's set as we Dilate
+	@param NewRange The NewRange.
+	@param DilationFactor The factor we have dilated from the beginning of the drag
+	*/
+	SEQUENCER_API virtual void DilateSection(const TRange<FFrameNumber>& NewRange, float DilationFactor) {};
+
+
+
+	/**
 	 * Called when the properties context menu is being built, so this section can customize how the menu's details view looks like.
 	 *
 	 * @param DetailsView The details view widget
@@ -225,6 +243,14 @@ public:
 	}
 
 	virtual bool IsReadOnly() const override { return WeakSection.IsValid() ? WeakSection.Get()->IsReadOnly() : false; }
+
+	virtual void DilateSection(const TRange<FFrameNumber>& NewRange, float DilationFactor) override
+	{
+		if (GetSectionObject())
+		{
+			GetSectionObject()->SetRange(NewRange);
+		}
+	}
 
 protected:
 	TWeakObjectPtr<UMovieSceneSection> WeakSection;

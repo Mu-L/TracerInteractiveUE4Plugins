@@ -63,10 +63,9 @@
 #endif
 #include "RHIGPUReadback.h"
 
-// Enable this define to do slow checks for components being added to the wrong
-// world's scene, when using PIE. This can happen if a PIE component is reattached
-// while GWorld is the editor world, for example.
-#define CHECK_FOR_PIE_PRIMITIVE_ATTACH_SCENE_MISMATCH	0
+#if WITH_EDITOR
+#include "Rendering/StaticLightingSystemInterface.h"
+#endif
 
 /** Affects BasePassPixelShader.usf so must relaunch editor to recompile shaders. */
 static TAutoConsoleVariable<int32> CVarEarlyZPassOnlyMaterialMasking(
@@ -153,6 +152,9 @@ FSceneViewState::FSceneViewState()
 	, SeparateTranslucencyTimer(TimerQueryPool)
 	, SeparateTranslucencyModulateTimer(TimerQueryPool)
 {
+	// Set FeatureLevel to a valid value, so we get Init/ReleaseDynamicRHI calls on FeatureLevel changes
+	SetFeatureLevel(GMaxRHIFeatureLevel);
+	
 	UniqueID = FSceneViewState_UniqueID.Increment();
 	OcclusionFrameCounter = 0;
 	LastRenderTime = -FLT_MAX;
@@ -212,8 +214,6 @@ FSceneViewState::FSceneViewState()
 
 	ShadowOcclusionQueryMaps.Empty(FOcclusionQueryHelpers::MaxBufferedOcclusionFrames);
 	ShadowOcclusionQueryMaps.AddZeroed(FOcclusionQueryHelpers::MaxBufferedOcclusionFrames);	
-
-	bValidEyeAdaptation = false;
 
 	LastAutoDownsampleChangeTime = 0;
 	SmoothedHalfResTranslucencyGPUDuration = 0;
@@ -390,8 +390,6 @@ FDistanceFieldSceneData::FDistanceFieldSceneData(EShaderPlatform ShaderPlatform)
 	: NumObjectsInBuffer(0)
 	, NumHeightFieldObjectsInBuffer(0)
 	, ObjectBufferIndex(0)
-	, SurfelBuffers(NULL)
-	, InstancedSurfelBuffers(NULL)
 	, AtlasGeneration(0)
 	, HeightFieldAtlasGeneration(0)
 	, HFVisibilityAtlasGenerattion(0)
@@ -880,44 +878,28 @@ void FScene::AddPrimitiveSceneInfo_RenderThread(FPrimitiveSceneInfo* PrimitiveSc
  */
 FORCEINLINE static void VerifyProperPIEScene(UPrimitiveComponent* Component, UWorld* World)
 {
-#if CHECK_FOR_PIE_PRIMITIVE_ATTACH_SCENE_MISMATCH
-	checkf(Component->GetOuter() == GetTransientPackage() || 
-		(FPackageName::GetLongPackageAssetName(Component->GetOutermost()->GetName()).StartsWith(PLAYWORLD_PACKAGE_PREFIX) == 
-		FPackageName::GetLongPackageAssetName(World->GetOutermost()->GetName()).StartsWith(PLAYWORLD_PACKAGE_PREFIX)),
+	checkfSlow(Component->GetOuter() == GetTransientPackage() || 
+		(FPackageName::GetLongPackageAssetName(Component->GetOutermostObject()->GetPackage()->GetName()).StartsWith(PLAYWORLD_PACKAGE_PREFIX) == 
+		FPackageName::GetLongPackageAssetName(World->GetPackage()->GetName()).StartsWith(PLAYWORLD_PACKAGE_PREFIX)),
 		TEXT("The component %s was added to the wrong world's scene (due to PIE). The callstack should tell you why"), 
 		*Component->GetFullName()
 		);
-#endif
 }
 
 void FPersistentUniformBuffers::Clear()
 {
 	ViewUniformBuffer.SafeRelease();
 	InstancedViewUniformBuffer.SafeRelease();
-	DepthPassUniformBuffer.SafeRelease();
-	OpaqueBasePassUniformBuffer.SafeRelease();
-	TranslucentBasePassUniformBuffer.SafeRelease();
 	ReflectionCaptureUniformBuffer.SafeRelease();
 	CSMShadowDepthViewUniformBuffer.SafeRelease();
 	CSMShadowDepthPassUniformBuffer.SafeRelease();
-	DistortionPassUniformBuffer.SafeRelease();
-	VelocityPassUniformBuffer.SafeRelease();
-	HitProxyPassUniformBuffer.SafeRelease();
-	MeshDecalPassUniformBuffer.SafeRelease();
-	LightmapDensityPassUniformBuffer.SafeRelease();
-	DebugViewModePassUniformBuffer.SafeRelease();
-	VoxelizeVolumePassUniformBuffer.SafeRelease();
 	VoxelizeVolumeViewUniformBuffer.SafeRelease();
-	ConvertToUniformMeshPassUniformBuffer.SafeRelease();
-	CustomDepthPassUniformBuffer.SafeRelease();
-	MobileCustomDepthPassUniformBuffer.SafeRelease();
 	CustomDepthViewUniformBuffer.SafeRelease();
 	InstancedCustomDepthViewUniformBuffer.SafeRelease();
 	VirtualTextureViewUniformBuffer.SafeRelease();
 	MobileOpaqueBasePassUniformBuffer.SafeRelease();
 	MobileTranslucentBasePassUniformBuffer.SafeRelease();
 	MobileCSMShadowDepthPassUniformBuffer.SafeRelease();
-	MobileDistortionPassUniformBuffer.SafeRelease();
 
 
 	for (auto& UniformBuffer : MobileDirectionalLightUniformBuffers)
@@ -925,9 +907,8 @@ void FPersistentUniformBuffers::Clear()
 		UniformBuffer.SafeRelease();
 	}
 	MobileSkyReflectionUniformBuffer.SafeRelease();
-#if WITH_EDITOR
-	EditorSelectionPassUniformBuffer.SafeRelease();
-#endif
+
+	Initialize();
 }
 void FPersistentUniformBuffers::Initialize()
 {
@@ -937,15 +918,6 @@ void FPersistentUniformBuffers::Initialize()
 	FInstancedViewUniformShaderParameters InstancedViewUniformBufferParameters;
 	InstancedViewUniformBuffer = TUniformBufferRef<FInstancedViewUniformShaderParameters>::CreateUniformBufferImmediate(InstancedViewUniformBufferParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
 
-	FSceneTexturesUniformParameters DepthPassParameters;
-	DepthPassUniformBuffer = TUniformBufferRef<FSceneTexturesUniformParameters>::CreateUniformBufferImmediate(DepthPassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-	FOpaqueBasePassUniformParameters BasePassParameters;
-	OpaqueBasePassUniformBuffer = TUniformBufferRef<FOpaqueBasePassUniformParameters>::CreateUniformBufferImmediate(BasePassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-	FTranslucentBasePassUniformParameters TranslucentBasePassParameters;
-	TranslucentBasePassUniformBuffer = TUniformBufferRef<FTranslucentBasePassUniformParameters>::CreateUniformBufferImmediate(TranslucentBasePassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
 	FReflectionCaptureShaderData ReflectionCaptureParameters;
 	ReflectionCaptureUniformBuffer = TUniformBufferRef<FReflectionCaptureShaderData>::CreateUniformBufferImmediate(ReflectionCaptureParameters, UniformBuffer_MultiFrame);
 
@@ -954,37 +926,7 @@ void FPersistentUniformBuffers::Initialize()
 	FShadowDepthPassUniformParameters CSMShadowDepthPassParameters;
 	CSMShadowDepthPassUniformBuffer = TUniformBufferRef<FShadowDepthPassUniformParameters>::CreateUniformBufferImmediate(CSMShadowDepthPassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
 
-	FDistortionPassUniformParameters DistortionPassParameters;
-	DistortionPassUniformBuffer = TUniformBufferRef<FDistortionPassUniformParameters>::CreateUniformBufferImmediate(DistortionPassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-	FSceneTexturesUniformParameters VelocityPassParameters;
-	VelocityPassUniformBuffer = TUniformBufferRef<FSceneTexturesUniformParameters>::CreateUniformBufferImmediate(VelocityPassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-	FSceneTexturesUniformParameters HitProxyPassParameters;
-	HitProxyPassUniformBuffer = TUniformBufferRef<FSceneTexturesUniformParameters>::CreateUniformBufferImmediate(HitProxyPassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-	FSceneTexturesUniformParameters MeshDecalPassParameters;
-	MeshDecalPassUniformBuffer = TUniformBufferRef<FSceneTexturesUniformParameters>::CreateUniformBufferImmediate(MeshDecalPassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-	FLightmapDensityPassUniformParameters LightmapDensityPassParameters;
-	LightmapDensityPassUniformBuffer = TUniformBufferRef<FLightmapDensityPassUniformParameters>::CreateUniformBufferImmediate(LightmapDensityPassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-	FDebugViewModePassPassUniformParameters DebugViewModePassParameters;
-	DebugViewModePassUniformBuffer = TUniformBufferRef<FDebugViewModePassPassUniformParameters>::CreateUniformBufferImmediate(DebugViewModePassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
 	VoxelizeVolumeViewUniformBuffer = TUniformBufferRef<FViewUniformShaderParameters>::CreateUniformBufferImmediate(ViewUniformBufferParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-	FVoxelizeVolumePassUniformParameters VoxelizeVolumePassParameters;
-	VoxelizeVolumePassUniformBuffer = TUniformBufferRef<FVoxelizeVolumePassUniformParameters>::CreateUniformBufferImmediate(VoxelizeVolumePassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-	FSceneTexturesUniformParameters ConvertToUniformMeshPassParameters;
-	ConvertToUniformMeshPassUniformBuffer = TUniformBufferRef<FSceneTexturesUniformParameters>::CreateUniformBufferImmediate(ConvertToUniformMeshPassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-	FSceneTexturesUniformParameters CustomDepthPassUniformBufferParameters;
-	CustomDepthPassUniformBuffer = TUniformBufferRef<FSceneTexturesUniformParameters>::CreateUniformBufferImmediate(CustomDepthPassUniformBufferParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-	FMobileSceneTextureUniformParameters MobileCustomDepthPassUniformBufferParameters;
-	MobileCustomDepthPassUniformBuffer = TUniformBufferRef<FMobileSceneTextureUniformParameters>::CreateUniformBufferImmediate(MobileCustomDepthPassUniformBufferParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
 
 	CustomDepthViewUniformBuffer = TUniformBufferRef<FViewUniformShaderParameters>::CreateUniformBufferImmediate(ViewUniformBufferParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
 	InstancedCustomDepthViewUniformBuffer = TUniformBufferRef<FInstancedViewUniformShaderParameters>::CreateUniformBufferImmediate(InstancedViewUniformBufferParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
@@ -996,11 +938,9 @@ void FPersistentUniformBuffers::Initialize()
 
 	FMobileBasePassUniformParameters MobileBasePassUniformParameters;
 	MobileOpaqueBasePassUniformBuffer = TUniformBufferRef<FMobileBasePassUniformParameters>::CreateUniformBufferImmediate(MobileBasePassUniformParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
+	MobileCSMOpaqueBasePassUniformBuffer = TUniformBufferRef<FMobileBasePassUniformParameters>::CreateUniformBufferImmediate(MobileBasePassUniformParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
 	MobileTranslucentBasePassUniformBuffer = TUniformBufferRef<FMobileBasePassUniformParameters>::CreateUniformBufferImmediate(MobileBasePassUniformParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-	
-	FMobileDistortionPassUniformParameters MobileDistortionPassUniformParameters;
-	MobileDistortionPassUniformBuffer = TUniformBufferRef<FMobileDistortionPassUniformParameters>::CreateUniformBufferImmediate(MobileDistortionPassUniformParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-	
+		
 	FMobileDirectionalLightShaderParameters MobileDirectionalLightShaderParameters = {};
 	for (int32 Index = 0; Index < UE_ARRAY_COUNT(MobileDirectionalLightUniformBuffers); ++Index)
 	{
@@ -1009,11 +949,6 @@ void FPersistentUniformBuffers::Initialize()
 
 	FMobileReflectionCaptureShaderParameters MobileSkyReflectionShaderParameters;
 	MobileSkyReflectionUniformBuffer = TUniformBufferRef<FMobileReflectionCaptureShaderParameters>::CreateUniformBufferImmediate(MobileSkyReflectionShaderParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-
-#if WITH_EDITOR
-	FSceneTexturesUniformParameters EditorSelectionPassParameters;
-	EditorSelectionPassUniformBuffer = TUniformBufferRef<FSceneTexturesUniformParameters>::CreateUniformBufferImmediate(EditorSelectionPassParameters, UniformBuffer_MultiFrame, EUniformBufferValidation::None);
-#endif
 }
 
 TSet<IPersistentViewUniformBufferExtension*> PersistentViewUniformBufferExtensions;
@@ -1104,13 +1039,11 @@ public:
 			const FPrimitiveSceneInfoCompact PrimitiveSceneInfoCompact(PrimInfo);
 
 			// Find local lights that affect the primitive in the light octree.
-			for (FSceneLightOctree::TConstElementBoxIterator<SceneRenderingAllocator> LightIt(Scene->LocalShadowCastingLightOctree, Bounds.GetBox());
-				LightIt.HasPendingElements();
-				LightIt.Advance())
+			Scene->LocalShadowCastingLightOctree.FindElementsWithBoundsTest(Bounds.GetBox(), [&PrimitiveSceneInfoCompact](const FLightSceneInfoCompact& LightSceneInfoCompact)
 			{
-				const FLightSceneInfoCompact& LightSceneInfoCompact = LightIt.GetCurrentElement();
 				LightSceneInfoCompact.LightSceneInfo->CreateLightPrimitiveInteraction(LightSceneInfoCompact, PrimitiveSceneInfoCompact);
-			}
+			});
+
 			// Also loop through non-local (directional) shadow-casting lights
 			for (int32 LightID : Scene->DirectionalShadowCastingLightIDs)
 			{
@@ -1136,6 +1069,9 @@ FScene::FScene(UWorld* InWorld, bool bInRequiresHitProxies, bool bInIsEditorScen
 ,	bScenesPrimitivesNeedStaticMeshElementUpdate(false)
 ,	bPathTracingNeedsInvalidation(true)
 ,	SkyLight(NULL)
+,	ConvolvedSkyRenderTargetReadyIndex(-1)
+,	bRealTimeSlicedReflectionCaptureFirstFrame(true)
+,	RealTimeSlicedReflectionCaptureState(0)
 ,	SimpleDirectionalLight(NULL)
 ,	ReflectionSceneData(InFeatureLevel)
 ,	IndirectLightingCache(InFeatureLevel)
@@ -1144,6 +1080,7 @@ FScene::FScene(UWorld* InWorld, bool bInRequiresHitProxies, bool bInIsEditorScen
 ,	PreshadowCacheLayout(0, 0, 0, 0, false)
 ,	AtmosphericFog(NULL)
 ,	SkyAtmosphere(NULL)
+,	VolumetricCloud(NULL)
 ,	PrecomputedVisibilityHandler(NULL)
 ,	LocalShadowCastingLightOctree(FVector::ZeroVector,HALF_WORLD_MAX)
 ,	PrimitiveOctree(FVector::ZeroVector,HALF_WORLD_MAX)
@@ -1153,14 +1090,17 @@ FScene::FScene(UWorld* InWorld, bool bInRequiresHitProxies, bool bInIsEditorScen
 ,	NumUnbuiltReflectionCaptures(0)
 ,	NumMobileStaticAndCSMLights_RenderThread(0)
 ,	NumMobileMovableDirectionalLights_RenderThread(0)
+,	MobileWholeSceneShadowAtlasSize(0, 0)
 ,	GPUSkinCache(nullptr)
 ,	SceneLODHierarchy(this)
+,	RuntimeVirtualTexturePrimitiveHideMaskEditor(0)
+,	RuntimeVirtualTexturePrimitiveHideMaskGame(0)
 ,	DefaultMaxDistanceFieldOcclusionDistance(InWorld->GetWorldSettings()->DefaultMaxDistanceFieldOcclusionDistance)
 ,	GlobalDistanceFieldViewDistance(InWorld->GetWorldSettings()->GlobalDistanceFieldViewDistance)
 ,	DynamicIndirectShadowsSelfShadowingIntensity(FMath::Clamp(InWorld->GetWorldSettings()->DynamicIndirectShadowsSelfShadowingIntensity, 0.0f, 1.0f))
 ,	ReadOnlyCVARCache(FReadOnlyCVARCache::Get())
 #if RHI_RAYTRACING
-, RayTracingDynamicGeometryCollection(nullptr)
+,	RayTracingDynamicGeometryCollection(nullptr)
 #endif
 ,	AsyncCreateLightPrimitiveInteractionsTask(nullptr)
 ,	NumVisibleLights_GameThread(0)
@@ -2371,6 +2311,9 @@ void FVolumetricLightmapSceneData::AddLevelVolume(const FPrecomputedVolumetricLi
 	}
 
 	InVolume->Data->AddToSceneData(&GlobalVolumetricLightmapData);
+	
+	// Invalidate CPU lightmap lookup cache
+	CPUInterpolationCache.Empty();
 }
 
 void FVolumetricLightmapSceneData::RemoveLevelVolume(const FPrecomputedVolumetricLightmap* InVolume)
@@ -2383,15 +2326,30 @@ void FVolumetricLightmapSceneData::RemoveLevelVolume(const FPrecomputedVolumetri
 	{
 		PersistentLevelVolumetricLightmap = nullptr;
 	}
+
+	// Invalidate CPU lightmap lookup cache
+	CPUInterpolationCache.Empty();
 }
 
 const FPrecomputedVolumetricLightmap* FVolumetricLightmapSceneData::GetLevelVolumetricLightmap() const
 {
+#if WITH_EDITOR
+	if (FStaticLightingSystemInterface::GetPrecomputedVolumetricLightmap(Scene->GetWorld()))
+	{
+		return FStaticLightingSystemInterface::GetPrecomputedVolumetricLightmap(Scene->GetWorld());
+	}
+#endif
 	return &GlobalVolumetricLightmap;
 }
 
 bool FVolumetricLightmapSceneData::HasData() const
 {
+#if WITH_EDITOR
+	if (FStaticLightingSystemInterface::GetPrecomputedVolumetricLightmap(Scene->GetWorld()))
+	{
+		return true;
+	}
+#endif
 	if (LevelVolumetricLightmaps.Num() > 0)
 	{
 		if (Scene->GetFeatureLevel() >= ERHIFeatureLevel::SM5)
@@ -2409,6 +2367,12 @@ bool FVolumetricLightmapSceneData::HasData() const
 
 bool FScene::HasPrecomputedVolumetricLightmap_RenderThread() const
 {
+#if WITH_EDITOR
+	if (FStaticLightingSystemInterface::GetPrecomputedVolumetricLightmap(GetWorld()))
+	{
+		return true;
+	}
+#endif
 	return VolumetricLightmapSceneData.HasData();
 }
 
@@ -2516,10 +2480,22 @@ void FScene::RemoveRuntimeVirtualTexture(class URuntimeVirtualTextureComponent* 
 void FScene::AddRuntimeVirtualTexture_RenderThread(FRuntimeVirtualTextureSceneProxy* SceneProxy)
 {
 	SceneProxy->SceneIndex = RuntimeVirtualTextures.Add(SceneProxy);
+
+	const uint8 HideFlagBit = 1 << SceneProxy->SceneIndex;
+	RuntimeVirtualTexturePrimitiveHideMaskEditor &= ~HideFlagBit;
+	RuntimeVirtualTexturePrimitiveHideMaskEditor |= (SceneProxy->bHidePrimitivesInEditor ? HideFlagBit : 0);
+	RuntimeVirtualTexturePrimitiveHideMaskGame &= ~HideFlagBit;
+	RuntimeVirtualTexturePrimitiveHideMaskGame |= (SceneProxy->bHidePrimitivesInGame ? HideFlagBit : 0);
 }
 
 void FScene::UpdateRuntimeVirtualTexture_RenderThread(FRuntimeVirtualTextureSceneProxy* SceneProxy, FRuntimeVirtualTextureSceneProxy* SceneProxyToReplace)
 {
+	const uint8 HideFlagBit = 1 << SceneProxy->SceneIndex;
+	RuntimeVirtualTexturePrimitiveHideMaskEditor &= ~HideFlagBit;
+	RuntimeVirtualTexturePrimitiveHideMaskEditor |= (SceneProxy->bHidePrimitivesInEditor ? HideFlagBit : 0);
+	RuntimeVirtualTexturePrimitiveHideMaskGame &= ~HideFlagBit;
+	RuntimeVirtualTexturePrimitiveHideMaskGame |= (SceneProxy->bHidePrimitivesInGame ? HideFlagBit : 0);
+
 	for (TSparseArray<FRuntimeVirtualTextureSceneProxy*>::TIterator It(RuntimeVirtualTextures); It; ++It)
 	{
 		if (*It == SceneProxyToReplace)
@@ -2536,6 +2512,10 @@ void FScene::UpdateRuntimeVirtualTexture_RenderThread(FRuntimeVirtualTextureScen
 
 void FScene::RemoveRuntimeVirtualTexture_RenderThread(FRuntimeVirtualTextureSceneProxy* SceneProxy)
 {
+	const uint8 HideFlagBit = 1 << SceneProxy->SceneIndex;
+	RuntimeVirtualTexturePrimitiveHideMaskEditor &= ~HideFlagBit;
+	RuntimeVirtualTexturePrimitiveHideMaskGame &= ~HideFlagBit;
+
 	RuntimeVirtualTextures.RemoveAt(SceneProxy->SceneIndex);
 	delete SceneProxy;
 }
@@ -2565,6 +2545,25 @@ uint32 FScene::GetRuntimeVirtualTextureSceneIndex(uint32 ProducerId)
 	// Should not get here
 	check(false);
 	return 0;
+}
+
+void FScene::GetRuntimeVirtualTextureHidePrimitiveMask(uint8& bHideMaskEditor, uint8& bHideMaskGame) const
+{
+	bHideMaskEditor = RuntimeVirtualTexturePrimitiveHideMaskEditor;
+	bHideMaskGame = RuntimeVirtualTexturePrimitiveHideMaskGame;
+}
+
+void FScene::InvalidateRuntimeVirtualTexture(class URuntimeVirtualTextureComponent* Component, FBoxSphereBounds const& WorldBounds)
+{
+	if (Component->SceneProxy != nullptr)
+	{
+		FRuntimeVirtualTextureSceneProxy* SceneProxy = Component->SceneProxy;
+		ENQUEUE_RENDER_COMMAND(RuntimeVirtualTextureComponent_SetDirty)(
+			[SceneProxy, WorldBounds](FRHICommandList& RHICmdList)
+		{
+			SceneProxy->Dirty(WorldBounds);
+		});
+	}
 }
 
 void FScene::FlushDirtyRuntimeVirtualTextures()
@@ -2727,6 +2726,8 @@ void FScene::UpdateLightColorAndBrightness(ULightComponent* Light)
 					{
 						Scene->Lights[ LightSceneInfo->Id ].Color = NewParameters.NewColor;
 					}
+
+					LightSceneInfo->Proxy->SetMobileMovablePointLightUniformBufferNeedsUpdate(true);
 				}
 			});
 	}
@@ -2875,6 +2876,11 @@ void FScene::RemoveExponentialHeightFog(UExponentialHeightFogComponent* FogCompo
 		});
 }
 
+bool FScene::HasAnyExponentialHeightFog() const
+{
+	return this->ExponentialFogs.Num() > 0;
+}
+
 void FScene::AddWindSource(UWindDirectionalSourceComponent* WindComponent)
 {
 	// if this wind component is not activated (or Auto Active is set to false), then don't add to WindSources
@@ -2971,7 +2977,7 @@ void FScene::GetWindParameters_GameThread(const FVector& Position, FVector& OutD
 	{
 		float Weight = 0.0f;
 		FWindData CurrentComponentData;
-		if(Component->GetWindParameters(Position, CurrentComponentData, Weight))
+		if(Component && Component->GetWindParameters(Position, CurrentComponentData, Weight))
 		{
 			AccumWindData.AddWeighted(CurrentComponentData, Weight);
 			TotalWeight += Weight;
@@ -3568,6 +3574,13 @@ void FScene::ApplyWorldOffset_RenderThread(const FVector& InOffset)
 			FogData.Height += InOffset.Z;
 		}
 	}
+
+	// SkyAtmospheres
+	for (FSkyAtmosphereSceneProxy* SkyAtmosphereProxy : SkyAtmosphereStack)
+	{
+		SkyAtmosphereProxy->ApplyWorldOffset(InOffset);
+	}
+	
 	
 	VelocityData.ApplyOffset(InOffset);
 }
@@ -4017,9 +4030,6 @@ void FScene::UpdateAllPrimitiveSceneInfos(FRHICommandListImmediate& RHICmdList, 
 				// Add the primitive to its shadow parent's linked list of children.
 				// Note: must happen before AddToScene because AddToScene depends on LightingAttachmentRoot
 				PrimitiveSceneInfo->LinkAttachmentGroup();
-
-				// Set lod Parent information if valid
-				PrimitiveSceneInfo->LinkLODParentComponent();
 			}
 
 
@@ -4069,11 +4079,10 @@ void FScene::UpdateAllPrimitiveSceneInfos(FRHICommandListImmediate& RHICmdList, 
 				// Flush virtual textures touched by primitive
 				PrimitiveSceneInfo->FlushRuntimeVirtualTexture();
 
-				// LOD Parent, if this is LOD parent, we should update Proxy Scene Info
-				// LOD parent gets removed WHEN no children is accessing
-				// LOD parent can be recreated as scene updates
-				// I update if the parent component ID is still valid
-				// @Todo : really remove it if you know this is being destroyed - should happen from game thread as streaming in/out
+				// Set LOD parent information if valid
+				PrimitiveSceneInfo->LinkLODParentComponent();
+
+				// Update scene LOD tree
 				SceneLODHierarchy.UpdateNodeSceneInfo(PrimitiveSceneInfo->PrimitiveComponentId, PrimitiveSceneInfo);
 			}
 			AddedLocalPrimitiveSceneInfos.RemoveAt(StartIndex, AddedLocalPrimitiveSceneInfos.Num() - StartIndex);
@@ -4252,13 +4261,11 @@ void FScene::CreateLightPrimitiveInteractionsForPrimitive(FPrimitiveSceneInfo* P
 		const FPrimitiveSceneInfoCompact PrimitiveSceneInfoCompact(PrimitiveInfo);
 
 		// Find local lights that affect the primitive in the light octree.
-		for (FSceneLightOctree::TConstElementBoxIterator<SceneRenderingAllocator> LightIt(LocalShadowCastingLightOctree, Bounds.GetBox());
-			LightIt.HasPendingElements();
-			LightIt.Advance())
+		LocalShadowCastingLightOctree.FindElementsWithBoundsTest(Bounds.GetBox(), [&PrimitiveSceneInfoCompact](const FLightSceneInfoCompact& LightSceneInfoCompact)
 		{
-			const FLightSceneInfoCompact& LightSceneInfoCompact = LightIt.GetCurrentElement();
 			LightSceneInfoCompact.LightSceneInfo->CreateLightPrimitiveInteraction(LightSceneInfoCompact, PrimitiveSceneInfoCompact);
-		}
+		});
+	
 		// Also loop through non-local (directional) shadow-casting lights
 		for (int32 LightID : DirectionalShadowCastingLightIDs)
 		{
@@ -4342,15 +4349,17 @@ public:
 
 	virtual void AddExponentialHeightFog(class UExponentialHeightFogComponent* FogComponent) override {}
 	virtual void RemoveExponentialHeightFog(class UExponentialHeightFogComponent* FogComponent) override {}
-	virtual void AddAtmosphericFog(class UAtmosphericFogComponent* FogComponent) override {}
-	virtual void RemoveAtmosphericFog(class UAtmosphericFogComponent* FogComponent) override {}
-	virtual void RemoveAtmosphericFogResource_RenderThread(FRenderResource* FogResource) override {}
-	virtual FAtmosphericFogSceneInfo* GetAtmosphericFogSceneInfo() override { return NULL; }
+	virtual bool HasAnyExponentialHeightFog() const override { return false; }
 
 	virtual void AddSkyAtmosphere(FSkyAtmosphereSceneProxy* SkyAtmosphereSceneProxy, bool bStaticLightingBuilt) override {}
 	virtual void RemoveSkyAtmosphere(FSkyAtmosphereSceneProxy* SkyAtmosphereSceneProxy) override {}
 	virtual FSkyAtmosphereRenderSceneInfo* GetSkyAtmosphereSceneInfo() override { return NULL; }
 	virtual const FSkyAtmosphereRenderSceneInfo* GetSkyAtmosphereSceneInfo() const override { return NULL; }
+
+	virtual void AddVolumetricCloud(FVolumetricCloudSceneProxy* VolumetricCloudSceneProxy) override {}
+	virtual void RemoveVolumetricCloud(FVolumetricCloudSceneProxy* VolumetricCloudSceneProxy) override {}
+	virtual FVolumetricCloudRenderSceneInfo* GetVolumetricCloudSceneInfo() override { return NULL; }
+	virtual const FVolumetricCloudRenderSceneInfo* GetVolumetricCloudSceneInfo() const override { return NULL; }
 
 	virtual void AddWindSource(class UWindDirectionalSourceComponent* WindComponent) override {}
 	virtual void RemoveWindSource(class UWindDirectionalSourceComponent* WindComponent) override {}
@@ -4416,6 +4425,15 @@ public:
 	}
 
 	virtual bool HasAnyLights() const override { return false; }
+
+protected:
+	PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	virtual void AddAtmosphericFog_Impl(class UAtmosphericFogComponent* FogComponent) override {}
+	virtual void RemoveAtmosphericFog_Impl(class UAtmosphericFogComponent* FogComponent) override {}
+	virtual void RemoveAtmosphericFogResource_RenderThread_Impl(FRenderResource* FogResource) override {}
+	virtual FAtmosphericFogSceneInfo* GetAtmosphericFogSceneInfo_Impl() override { return NULL; }
+	PRAGMA_ENABLE_DEPRECATION_WARNINGS
+
 private:
 	UWorld* World;
 	class FFXSystemInterface* FXSystem;

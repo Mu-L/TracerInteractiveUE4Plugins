@@ -40,6 +40,10 @@
 #include "EngineUtils.h"
 #include "UObject/UObjectIterator.h"
 #include "EngineModule.h"
+#include "ClearQuad.h"
+#include "VolumetricCloudRendering.h"
+#include "VolumetricCloudProxy.h"
+#include "RenderGraphUtils.h"
 
 /** Near plane to use when capturing the scene. */
 float GReflectionCaptureNearPlane = 5;
@@ -89,13 +93,11 @@ static TAutoConsoleVariable<int32> CVarReflectionCaptureStaticSceneOnly(
 	TEXT(" 0 is off, 1 is on (default)"),
 	ECVF_ReadOnly);
 
-static int32 GReleaseSRVsAfterCubeMipsGen = 1;
-static FAutoConsoleVariableRef CVarReleaseSRVsAfterCubeMipsGen(
-	TEXT("r.ReleaseSRVsAfterCubeMipsGen"),
-	GReleaseSRVsAfterCubeMipsGen,
-	TEXT("Don't store SRVs used during mip gen to the cubemap render target item.\n")
-	TEXT("This reduces unnecessary memory allocations and copies when the item is copied around during snapshot creation."),
-	ECVF_RenderThreadSafe);
+static int32 GFreeReflectionScratchAfterUse = 0;
+static FAutoConsoleVariableRef CVarFreeReflectionScratchAfterUse(
+	TEXT("r.FreeReflectionScratchAfterUse"),
+	GFreeReflectionScratchAfterUse,
+	TEXT("Free reflection scratch render targets after use."));
 
 bool DoGPUArrayCopy()
 {
@@ -184,16 +186,14 @@ void CreateCubeMips( FRHICommandListImmediate& RHICmdList, ERHIFeatureLevel::Typ
 
 	auto* ShaderMap = GetGlobalShaderMap(FeatureLevel);
 
-	if (!Cubemap.SRVs.Num())
-	{
-		Cubemap.SRVs.Empty(NumMips);
+	TArray<TPair<FRHITextureSRVCreateInfo, TRefCountPtr<FRHIShaderResourceView>>> SRVs;
+	SRVs.Empty(NumMips);
 
-		for (int32 MipIndex = 0; MipIndex < NumMips; MipIndex++)
-		{
-			FRHITextureSRVCreateInfo SRVDesc;
-			SRVDesc.MipLevel = MipIndex;
-			Cubemap.SRVs.Emplace(SRVDesc, RHICreateShaderResourceView(Cubemap.ShaderResourceTexture, SRVDesc));
-		}
+	for (int32 MipIndex = 0; MipIndex < NumMips; MipIndex++)
+	{
+		FRHITextureSRVCreateInfo SRVDesc;
+		SRVDesc.MipLevel = MipIndex;
+		SRVs.Emplace(SRVDesc, RHICreateShaderResourceView(Cubemap.ShaderResourceTexture, SRVDesc));
 	}
 
 	FGraphicsPipelineStateInitializer GraphicsPSOInit;
@@ -204,12 +204,27 @@ void CreateCubeMips( FRHICommandListImmediate& RHICmdList, ERHIFeatureLevel::Typ
 	// Downsample all the mips, each one reads from the mip above it
 	for (int32 MipIndex = 1; MipIndex < NumMips; MipIndex++)
 	{
+		// For the first iteration, we don't know what the previous state
+		// of the source mip was, but we *do* for all the other iterations...
+		ERHIAccess Previous = MipIndex == 1
+			? ERHIAccess::Unknown
+			: ERHIAccess::RTV;
+
+		FRHITransitionInfo Transitions[] =
+		{
+			// Make the source mip readable (SRVGraphics)
+			FRHITransitionInfo(CubeRef, Previous, ERHIAccess::SRVGraphics, EResourceTransitionFlags::None, uint32(MipIndex - 1)),
+
+			// Make the destination mip writable (RTV)
+			FRHITransitionInfo(CubeRef, ERHIAccess::Unknown, ERHIAccess::RTV, EResourceTransitionFlags::None, uint32(MipIndex))
+		};
+		RHICmdList.Transition(Transitions);
+
 		const int32 MipSize = 1 << (NumMips - MipIndex - 1);
 		SCOPED_DRAW_EVENT(RHICmdList, CreateCubeMipsPerFace);
 		for (int32 CubeFace = 0; CubeFace < CubeFace_MAX; CubeFace++)
 		{
 			FRHIRenderPassInfo RPInfo(Cubemap.TargetableTexture, ERenderTargetActions::DontLoad_Store, nullptr, MipIndex, CubeFace);
-			RPInfo.bGeneratingMips = true;
 			RHICmdList.BeginRenderPass(RPInfo, TEXT("CreateCubeMips"));
 			RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
 
@@ -235,9 +250,9 @@ void CreateCubeMips( FRHICommandListImmediate& RHICmdList, ERHIFeatureLevel::Typ
 
 				SetShaderValue(RHICmdList, ShaderRHI, PixelShader->NumMips, NumMips);
 
-				check(Cubemap.SRVs.IsValidIndex(MipIndex - 1) && Cubemap.SRVs[MipIndex - 1].Key.MipLevel == MipIndex - 1);
-				SetSRVParameter(RHICmdList, ShaderRHI, PixelShader->SourceTexture, Cubemap.SRVs[MipIndex - 1].Value);
-				SetSamplerParameter(RHICmdList, ShaderRHI, PixelShader->SourceTextureSampler, TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI());
+				check(SRVs.IsValidIndex(MipIndex - 1) && SRVs[MipIndex - 1].Key.MipLevel == MipIndex - 1);
+				SetSRVParameter(RHICmdList, ShaderRHI, PixelShader->SourceCubemapTexture, SRVs[MipIndex - 1].Value);
+				SetSamplerParameter(RHICmdList, ShaderRHI, PixelShader->SourceCubemapSampler, TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI());
 			}
 
 			DrawRectangle(
@@ -254,12 +269,9 @@ void CreateCubeMips( FRHICommandListImmediate& RHICmdList, ERHIFeatureLevel::Typ
 		}
 	}
 
-	RHICmdList.TransitionResources(EResourceTransitionAccess::EReadable, &CubeRef, 1);
+	RHICmdList.Transition(FRHITransitionInfo(CubeRef, ERHIAccess::Unknown, ERHIAccess::SRVMask));
 
-	if (!!GReleaseSRVsAfterCubeMipsGen)
-	{
-		Cubemap.SRVs.Empty();
-	}
+	SRVs.Empty();
 }
 
 /** Computes the average brightness of the given reflection capture and stores it in the scene. */
@@ -336,6 +348,79 @@ void ComputeAverageBrightness(FRHICommandListImmediate& RHICmdList, ERHIFeatureL
 	OutAverageBrightness = ComputeSingleAverageBrightnessFromCubemap(RHICmdList, FeatureLevel, CubmapSize, DownSampledCube);
 }
 
+
+void FilterCubeMap(FRHICommandListImmediate& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, int32 NumMips, 
+	FSceneRenderTargetItem& DownSampledCube, FSceneRenderTargetItem& FilteredCube)
+{
+	SCOPED_DRAW_EVENT(RHICmdList, FilterCubeMap);
+	auto ShaderMap = GetGlobalShaderMap(FeatureLevel);
+
+	FGraphicsPipelineStateInitializer GraphicsPSOInit;
+	GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
+	GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
+	GraphicsPSOInit.BlendState = TStaticBlendState<>::GetRHI();
+
+	RHICmdList.Transition(FRHITransitionInfo(FilteredCube.TargetableTexture, ERHIAccess::Unknown, ERHIAccess::RTV));
+
+	// Filter all the mips
+	for (int32 MipIndex = 0; MipIndex < NumMips; MipIndex++)
+	{
+		const int32 MipSize = 1 << (NumMips - MipIndex - 1);
+
+		for (int32 CubeFace = 0; CubeFace < CubeFace_MAX; CubeFace++)
+		{
+			FRHIRenderPassInfo RPInfo(FilteredCube.TargetableTexture, ERenderTargetActions::DontLoad_Store, nullptr, MipIndex, CubeFace);
+			RHICmdList.Transition(FRHITransitionInfo(FilteredCube.TargetableTexture, ERHIAccess::Unknown, ERHIAccess::RTV));
+			RHICmdList.BeginRenderPass(RPInfo, TEXT("FilterMips"));
+
+			RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
+
+			const FIntRect ViewRect(0, 0, MipSize, MipSize);
+			RHICmdList.SetViewport(0, 0, 0.0f, MipSize, MipSize, 1.0f);
+
+			//TShaderMapRef<TCubeFilterPS<1>> CaptureCubemapArrayPixelShader(GetGlobalShaderMap(FeatureLevel));
+
+			TShaderMapRef<FScreenVS> VertexShader(GetGlobalShaderMap(FeatureLevel));
+			TShaderMapRef<TCubeFilterPS<0>> PixelShader(GetGlobalShaderMap(FeatureLevel));
+			GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
+			GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
+			GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GFilterVertexDeclaration.VertexDeclarationRHI;
+			GraphicsPSOInit.PrimitiveType = PT_TriangleList;
+
+			SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit);
+
+			{
+				FRHIPixelShader* ShaderRHI = PixelShader.GetPixelShader();
+
+				SetShaderValue(RHICmdList, ShaderRHI, PixelShader->CubeFace, CubeFace);
+				SetShaderValue(RHICmdList, ShaderRHI, PixelShader->MipIndex, MipIndex);
+
+				SetShaderValue(RHICmdList, ShaderRHI, PixelShader->NumMips, NumMips);
+
+				SetTextureParameter(
+					RHICmdList,
+					ShaderRHI,
+					PixelShader->SourceCubemapTexture,
+					PixelShader->SourceCubemapSampler,
+					TStaticSamplerState<SF_Trilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI(),
+					DownSampledCube.ShaderResourceTexture);
+			}
+
+			DrawRectangle(
+				RHICmdList,
+				ViewRect.Min.X, ViewRect.Min.Y,
+				ViewRect.Width(), ViewRect.Height(),
+				ViewRect.Min.X, ViewRect.Min.Y,
+				ViewRect.Width(), ViewRect.Height(),
+				FIntPoint(ViewRect.Width(), ViewRect.Height()),
+				FIntPoint(MipSize, MipSize),
+				VertexShader);
+
+			RHICmdList.EndRenderPass();
+		}
+	}
+}
+
 /** Generates mips for glossiness and filters the cubemap for a given reflection. */
 void FilterReflectionEnvironment(FRHICommandListImmediate& RHICmdList, ERHIFeatureLevel::Type FeatureLevel, int32 CubmapSize, FSHVectorRGB3* OutIrradianceEnvironmentMap)
 {
@@ -350,8 +435,8 @@ void FilterReflectionEnvironment(FRHICommandListImmediate& RHICmdList, ERHIFeatu
 	GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
 	GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
 	GraphicsPSOInit.BlendState = TStaticBlendState<CW_RGBA, BO_Add, BF_Zero, BF_DestAlpha, BO_Add, BF_Zero, BF_One>::GetRHI();
-
-	RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, EffectiveColorRT.TargetableTexture);
+		
+	RHICmdList.Transition(FRHITransitionInfo(EffectiveColorRT.TargetableTexture, ERHIAccess::Unknown, ERHIAccess::RTV));
 
 	// Premultiply alpha in-place using alpha blending
 	for (uint32 CubeFace = 0; CubeFace < CubeFace_MAX; CubeFace++)
@@ -390,7 +475,7 @@ void FilterReflectionEnvironment(FRHICommandListImmediate& RHICmdList, ERHIFeatu
 		RHICmdList.EndRenderPass();
 	}
 
-	RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EffectiveColorRT.TargetableTexture);
+	RHICmdList.Transition(FRHITransitionInfo(EffectiveColorRT.TargetableTexture, ERHIAccess::Unknown, ERHIAccess::SRVMask));
 
 	auto ShaderMap = GetGlobalShaderMap(FeatureLevel);
 	FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(RHICmdList);
@@ -405,81 +490,13 @@ void FilterReflectionEnvironment(FRHICommandListImmediate& RHICmdList, ERHIFeatu
 		SCOPED_DRAW_EVENT(RHICmdList, ComputeDiffuseIrradiance);
 		
 		const int32 NumDiffuseMips = FMath::CeilLogTwo( GDiffuseIrradianceCubemapSize ) + 1;
-		const int32 DiffuseConvolutionSourceMip = NumMips - NumDiffuseMips;
+		const int32 DiffuseConvolutionSourceMip = FMath::Max(0, NumMips - NumDiffuseMips);
 
 		ComputeDiffuseIrradiance(RHICmdList, FeatureLevel, DownSampledCube.ShaderResourceTexture, DiffuseConvolutionSourceMip, OutIrradianceEnvironmentMap);
 	}
 
-	{	
-		SCOPED_DRAW_EVENT(RHICmdList, FilterCubeMap);
-
-		GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
-		GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
-		GraphicsPSOInit.BlendState = TStaticBlendState<>::GetRHI();
-
-		RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, FilteredCube.TargetableTexture);
-
-		// Filter all the mips
-		for (int32 MipIndex = 0; MipIndex < NumMips; MipIndex++)
-		{
-			const int32 MipSize = 1 << (NumMips - MipIndex - 1);
-
-			for (int32 CubeFace = 0; CubeFace < CubeFace_MAX; CubeFace++)
-			{
-				FRHIRenderPassInfo RPInfo(FilteredCube.TargetableTexture, ERenderTargetActions::DontLoad_Store, nullptr, MipIndex, CubeFace);
-				RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, FilteredCube.TargetableTexture);
-				RHICmdList.BeginRenderPass(RPInfo, TEXT("FilterMips"));
-
-				RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
-
-				const FIntRect ViewRect(0, 0, MipSize, MipSize);
-				RHICmdList.SetViewport(0.0f, 0.0f, 0.0f, (float)MipSize, (float)MipSize, 1.0f);
-
-				TShaderMapRef<FScreenVS> VertexShader(GetGlobalShaderMap(FeatureLevel));
-				TShaderMapRef< TCubeFilterPS<1> > CaptureCubemapArrayPixelShader(GetGlobalShaderMap(FeatureLevel));
-
-				TShaderMapRef< TCubeFilterPS<0> > PixelShader(ShaderMap);
-
-				GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GFilterVertexDeclaration.VertexDeclarationRHI;
-				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
-				GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
-				GraphicsPSOInit.PrimitiveType = PT_TriangleList;
-
-				SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit);
-
-				{
-					FRHIPixelShader* ShaderRHI = PixelShader.GetPixelShader();
-
-					SetShaderValue( RHICmdList, ShaderRHI, PixelShader->CubeFace, CubeFace );
-					SetShaderValue( RHICmdList, ShaderRHI, PixelShader->MipIndex, MipIndex );
-
-					SetShaderValue( RHICmdList, ShaderRHI, PixelShader->NumMips, NumMips );
-
-					SetTextureParameter(
-						RHICmdList, 
-						ShaderRHI, 
-						PixelShader->SourceTexture, 
-						PixelShader->SourceTextureSampler, 
-						TStaticSamplerState<SF_Trilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI(), 
-						DownSampledCube.ShaderResourceTexture);
-				}
-
-				DrawRectangle( 
-					RHICmdList,
-					ViewRect.Min.X, ViewRect.Min.Y, 
-					ViewRect.Width(), ViewRect.Height(),
-					ViewRect.Min.X, ViewRect.Min.Y, 
-					ViewRect.Width(), ViewRect.Height(),
-					FIntPoint(ViewRect.Width(), ViewRect.Height()),
-					FIntPoint(MipSize, MipSize),
-					VertexShader);
-
-				RHICmdList.EndRenderPass();
-			}
-		}
-
-		RHICmdList.CopyToResolveTarget(FilteredCube.TargetableTexture, FilteredCube.ShaderResourceTexture, FResolveParams());
-	}
+	FilterCubeMap(RHICmdList, FeatureLevel, NumMips, DownSampledCube, FilteredCube);
+	RHICmdList.CopyToResolveTarget(FilteredCube.TargetableTexture, FilteredCube.ShaderResourceTexture, FResolveParams());
 }
 
 class FCopyToCubeFaceShader : public FGlobalShader
@@ -550,8 +567,8 @@ public:
 	SHADER_USE_PARAMETER_STRUCT(FCopyCubemapToCubeFacePS, FCopyToCubeFaceShader);
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-		SHADER_PARAMETER_TEXTURE(TextureCube, CubemapTexture)
-		SHADER_PARAMETER_SAMPLER(SamplerState, CubemapSampler)
+		SHADER_PARAMETER_TEXTURE(TextureCube, SourceCubemapTexture)
+		SHADER_PARAMETER_SAMPLER(SamplerState, SourceCubemapSampler)
 		SHADER_PARAMETER(FVector, SkyLightCaptureParameters)
 		SHADER_PARAMETER(int32, CubeFace)
 		SHADER_PARAMETER(FVector4, LowerHemisphereColor)
@@ -632,7 +649,7 @@ void ClearScratchCubemaps(FRHICommandListImmediate& RHICmdList, int32 TargetSize
 }
 
 /** Captures the scene for a reflection capture by rendering the scene multiple times and copying into a cubemap texture. */
-void CaptureSceneToScratchCubemap(FRHICommandListImmediate& RHICmdList, FSceneRenderer* SceneRenderer, ECubeFace CubeFace, int32 CubemapSize, bool bCapturingForSkyLight, bool bLowerHemisphereIsBlack, const FLinearColor& LowerHemisphereColor)
+void CaptureSceneToScratchCubemap(FRHICommandListImmediate& RHICmdList, FSceneRenderer* SceneRenderer, ECubeFace CubeFace, int32 CubemapSize, bool bCapturingForSkyLight, bool bLowerHemisphereIsBlack, const FLinearColor& LowerHemisphereColor, bool bCapturingForMobile)
 {
 	FMemMark MemStackMark(FMemStack::Get());
 
@@ -680,8 +697,10 @@ void CaptureSceneToScratchCubemap(FRHICommandListImmediate& RHICmdList, FSceneRe
 				// When capturing reflection captures, support forcing all low hemisphere lighting to be black
 				SkyLightParametersValue = FVector(0, 0, bLowerHemisphereIsBlack ? 1.0f : 0.0f);
 			}
-			else if (Scene->SkyLight && !Scene->SkyLight->bHasStaticLighting)
+			else if (!bCapturingForMobile && Scene->SkyLight && !Scene->SkyLight->bHasStaticLighting)	
 			{
+				// Mobile renderer can't blend reflections with a sky at runtime, so we dont use this path when capturing for a mobile renderer
+				
 				// When capturing reflection captures and there's a stationary sky light, mask out any pixels whose depth classify it as part of the sky
 				// This will allow changing the stationary sky light at runtime
 				SkyLightParametersValue = FVector(1, Scene->SkyLight->SkyDistanceThreshold, 0);
@@ -777,8 +796,8 @@ void CopyCubemapToScratchCubemap(FRHICommandListImmediate& RHICmdList, ERHIFeatu
 		PassParameters->RenderTargets[0] = FRenderTargetBinding(OutputTexture, ERenderTargetLoadAction::ENoAction, 0, CubeFace);
 		PassParameters->LowerHemisphereColor = LowerHemisphereColorValue;
 		PassParameters->SkyLightCaptureParameters = FVector(bIsSkyLight ? 1.0f : 0.0f, 0.0f, bLowerHemisphereIsBlack ? 1.0f : 0.0f);
-		PassParameters->CubemapSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
-		PassParameters->CubemapTexture = SourceCubemapResource->TextureRHI;
+		PassParameters->SourceCubemapSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
+		PassParameters->SourceCubemapTexture = SourceCubemapResource->TextureRHI;
 		PassParameters->SinCosSourceCubemapRotation = FVector2D(FMath::Sin(SourceCubemapRotation), FMath::Cos(SourceCubemapRotation));
 		PassParameters->CubeFace = CubeFace;
 
@@ -870,11 +889,11 @@ void EndReflectionCaptureSlowTask(int32 NumCaptures)
  * Allocates reflection captures in the scene's reflection cubemap array and updates them by recapturing the scene.
  * Existing captures will only be uploaded.  Must be called from the game thread.
  */
-void FScene::AllocateReflectionCaptures(const TArray<UReflectionCaptureComponent*>& NewCaptures, const TCHAR* CaptureReason, bool bVerifyOnlyCapturing)
+void FScene::AllocateReflectionCaptures(const TArray<UReflectionCaptureComponent*>& NewCaptures, const TCHAR* CaptureReason, bool bVerifyOnlyCapturing, bool bCapturingForMobile)
 {
 	if (NewCaptures.Num() > 0)
 	{
-		if (GetFeatureLevel() >= ERHIFeatureLevel::SM5)
+		if (SupportsTextureCubeArray(GetFeatureLevel()))
 		{
 			int32_t PlatformMaxNumReflectionCaptures = FMath::Min(FMath::FloorToInt(GMaxTextureArrayLayers / 6.0f), GMaxNumReflectionCaptures);
 
@@ -954,7 +973,7 @@ void FScene::AllocateReflectionCaptures(const TArray<UReflectionCaptureComponent
 					});
 
 				// Recapture all reflection captures now that we have reallocated the cubemap array
-				UpdateAllReflectionCaptures(CaptureReason, bVerifyOnlyCapturing);
+				UpdateAllReflectionCaptures(CaptureReason, bVerifyOnlyCapturing, bCapturingForMobile);
 			}
 			else
 			{
@@ -979,7 +998,7 @@ void FScene::AllocateReflectionCaptures(const TArray<UReflectionCaptureComponent
 
 					if (bAllocated)
 					{
-						CaptureOrUploadReflectionCapture(CurrentComponent, bVerifyOnlyCapturing);
+						CaptureOrUploadReflectionCapture(CurrentComponent, bVerifyOnlyCapturing, bCapturingForMobile);
 					}
 				}
 
@@ -1005,7 +1024,7 @@ void FScene::AllocateReflectionCaptures(const TArray<UReflectionCaptureComponent
 }
 
 /** Updates the contents of all reflection captures in the scene.  Must be called from the game thread. */
-void FScene::UpdateAllReflectionCaptures(const TCHAR* CaptureReason, bool bVerifyOnlyCapturing)
+void FScene::UpdateAllReflectionCaptures(const TCHAR* CaptureReason, bool bVerifyOnlyCapturing, bool bCapturingForMobile)
 {
 	if (IsReflectionEnvironmentAvailable(GetFeatureLevel()))
 	{
@@ -1029,7 +1048,7 @@ void FScene::UpdateAllReflectionCaptures(const TCHAR* CaptureReason, bool bVerif
 
 			CaptureIndex++;
 			UReflectionCaptureComponent* CurrentComponent = *It;
-			CaptureOrUploadReflectionCapture(CurrentComponent, bVerifyOnlyCapturing);
+			CaptureOrUploadReflectionCapture(CurrentComponent, bVerifyOnlyCapturing, bCapturingForMobile);
 		}
 
 		EndReflectionCaptureSlowTask(NumCapturesForStatus);
@@ -1198,6 +1217,15 @@ FMatrix CalcCubeFaceViewRotationMatrix(ECubeFace Face)
 	return Result;
 }
 
+FMatrix GetCubeProjectionMatrix(float HalfFovDeg, float CubeMapSize, float NearPlane)
+{
+	if ((bool)ERHIZBuffer::IsInverted)
+	{
+		return FReversedZPerspectiveMatrix(HalfFovDeg * float(PI) / 180.0f, CubeMapSize, CubeMapSize, NearPlane);
+	}
+	return FPerspectiveMatrix(HalfFovDeg, CubeMapSize, CubeMapSize, NearPlane);
+}
+
 /** 
  * Render target class required for rendering the scene.
  * This doesn't actually allocate a render target as we read from scene color to get HDR results directly.
@@ -1236,7 +1264,8 @@ void CaptureSceneIntoScratchCubemap(
 	float SkyLightNearPlane,
 	bool bLowerHemisphereIsBlack, 
 	bool bCaptureEmissiveOnly,
-	const FLinearColor& LowerHemisphereColor
+	const FLinearColor& LowerHemisphereColor,
+	bool bCapturingForMobile
 	)
 {
 	int32 SupersampleCaptureFactor = FMath::Clamp(GSupersampleCaptureFactor, MinSupersampleCaptureFactor, MaxSupersampleCaptureFactor);
@@ -1299,24 +1328,7 @@ void CaptureSceneIntoScratchCubemap(
 
 		// Projection matrix based on the fov, near / far clip settings
 		// Each face always uses a 90 degree field of view
-		if ((bool)ERHIZBuffer::IsInverted)
-		{
-			ViewInitOptions.ProjectionMatrix = FReversedZPerspectiveMatrix(
-				90.0f * (float)PI / 360.0f,
-				(float)CubemapSize * SupersampleCaptureFactor,
-				(float)CubemapSize * SupersampleCaptureFactor,
-				NearPlane
-				);
-		}
-		else
-		{
-			ViewInitOptions.ProjectionMatrix = FPerspectiveMatrix(
-				90.0f * (float)PI / 360.0f,
-				(float)CubemapSize * SupersampleCaptureFactor,
-				(float)CubemapSize * SupersampleCaptureFactor,
-				NearPlane
-				);
-		}
+		ViewInitOptions.ProjectionMatrix = GetCubeProjectionMatrix(45.0f, (float)CubemapSize * SupersampleCaptureFactor, NearPlane);
 
 		ViewInitOptions.ViewOrigin = CapturePosition;
 		ViewInitOptions.ViewRotationMatrix = CalcCubeFaceViewRotationMatrix((ECubeFace)CubeFace);
@@ -1345,9 +1357,9 @@ void CaptureSceneIntoScratchCubemap(
 		FSceneRenderer* SceneRenderer = FSceneRenderer::CreateSceneRenderer(&ViewFamily, NULL);
 
 		ENQUEUE_RENDER_COMMAND(CaptureCommand)(
-			[SceneRenderer, CubeFace, CubemapSize, bCapturingForSkyLight, bLowerHemisphereIsBlack, LowerHemisphereColor](FRHICommandListImmediate& RHICmdList)
+			[SceneRenderer, CubeFace, CubemapSize, bCapturingForSkyLight, bLowerHemisphereIsBlack, LowerHemisphereColor, bCapturingForMobile](FRHICommandListImmediate& RHICmdList)
 			{
-				CaptureSceneToScratchCubemap(RHICmdList, SceneRenderer, (ECubeFace)CubeFace, CubemapSize, bCapturingForSkyLight, bLowerHemisphereIsBlack, LowerHemisphereColor);
+				CaptureSceneToScratchCubemap(RHICmdList, SceneRenderer, (ECubeFace)CubeFace, CubemapSize, bCapturingForSkyLight, bLowerHemisphereIsBlack, LowerHemisphereColor, bCapturingForMobile);
 
 				if (!bCapturingForSkyLight)
 				{
@@ -1385,7 +1397,7 @@ void CopyToSceneArray(FRHICommandListImmediate& RHICmdList, FScene* Scene, FRefl
  * Updates the contents of the given reflection capture by rendering the scene. 
  * This must be called on the game thread.
  */
-void FScene::CaptureOrUploadReflectionCapture(UReflectionCaptureComponent* CaptureComponent, bool bVerifyOnlyCapturing)
+void FScene::CaptureOrUploadReflectionCapture(UReflectionCaptureComponent* CaptureComponent, bool bVerifyOnlyCapturing, bool bCapturingForMobile)
 {
 	if (IsReflectionEnvironmentAvailable(GetFeatureLevel()))
 	{
@@ -1397,7 +1409,7 @@ void FScene::CaptureOrUploadReflectionCapture(UReflectionCaptureComponent* Captu
 			// Safety check during the reflection capture build, there should not be any map build data
 			ensure(!bVerifyOnlyCapturing);
 
-			check(GetFeatureLevel() >= ERHIFeatureLevel::SM5);
+			check(SupportsTextureCubeArray(GetFeatureLevel()));
 
 			FScene* Scene = this;
 
@@ -1468,17 +1480,17 @@ void FScene::CaptureOrUploadReflectionCapture(UReflectionCaptureComponent* Captu
 			if (CaptureComponent->ReflectionSourceType == EReflectionSourceType::CapturedScene)
 			{
 				bool const bCaptureStaticSceneOnly = CVarReflectionCaptureStaticSceneOnly.GetValueOnGameThread() != 0;
-				CaptureSceneIntoScratchCubemap(this, CaptureComponent->GetComponentLocation() + CaptureComponent->CaptureOffset, ReflectionCaptureSize, false, bCaptureStaticSceneOnly, 0, false, false, FLinearColor());
+				CaptureSceneIntoScratchCubemap(this, CaptureComponent->GetComponentLocation() + CaptureComponent->CaptureOffset, ReflectionCaptureSize, false, bCaptureStaticSceneOnly, 0, false, false, FLinearColor(), bCapturingForMobile);
 			}
 			else if (CaptureComponent->ReflectionSourceType == EReflectionSourceType::SpecifiedCubemap)
 			{
-				UTextureCube* SourceTexture = CaptureComponent->Cubemap;
+				UTextureCube* SourceCubemap = CaptureComponent->Cubemap;
 				float SourceCubemapRotation = CaptureComponent->SourceCubemapAngle * (PI / 180.f);
 				ERHIFeatureLevel::Type InFeatureLevel = FeatureLevel;
 				ENQUEUE_RENDER_COMMAND(CopyCubemapCommand)(
-					[SourceTexture, ReflectionCaptureSize, SourceCubemapRotation, InFeatureLevel](FRHICommandListImmediate& RHICmdList)
+					[SourceCubemap, ReflectionCaptureSize, SourceCubemapRotation, InFeatureLevel](FRHICommandListImmediate& RHICmdList)
 					{
-						CopyCubemapToScratchCubemap(RHICmdList, InFeatureLevel, SourceTexture, ReflectionCaptureSize, false, false, SourceCubemapRotation, FLinearColor());
+						CopyCubemapToScratchCubemap(RHICmdList, InFeatureLevel, SourceCubemap, ReflectionCaptureSize, false, false, SourceCubemapRotation, FLinearColor());
 					});
 			}
 			else
@@ -1565,11 +1577,21 @@ void CopyToSkyTexture(FRHICommandList& RHICmdList, FScene* Scene, FTexture* Proc
 		CopyInfo.NumSlices = 6;
 		CopyInfo.NumMips = NumMips;
 
-		RHICmdList.TransitionResource(EResourceTransitionAccess::EWritable, ProcessedTexture->TextureRHI);
+		FRHITransitionInfo TransitionsBefore[] =
+		{
+			FRHITransitionInfo(FilteredCube.ShaderResourceTexture, ERHIAccess::Unknown, ERHIAccess::CopySrc),
+			FRHITransitionInfo(ProcessedTexture->TextureRHI, ERHIAccess::Unknown, ERHIAccess::CopyDest)
+		};
+		RHICmdList.Transition(MakeArrayView(TransitionsBefore, UE_ARRAY_COUNT(TransitionsBefore)));
 
 		RHICmdList.CopyTexture(FilteredCube.ShaderResourceTexture, ProcessedTexture->TextureRHI, CopyInfo);
 
-		RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, ProcessedTexture->TextureRHI);
+		FRHITransitionInfo TransitionsAfter[] =
+		{
+			FRHITransitionInfo(FilteredCube.ShaderResourceTexture, ERHIAccess::CopySrc, ERHIAccess::SRVMask),
+			FRHITransitionInfo(ProcessedTexture->TextureRHI, ERHIAccess::CopyDest, ERHIAccess::SRVMask)
+		};
+		RHICmdList.Transition(MakeArrayView(TransitionsAfter, UE_ARRAY_COUNT(TransitionsAfter)));
 	}
 }
 
@@ -1606,7 +1628,8 @@ void FScene::UpdateSkyCaptureContents(
 		if (CaptureComponent->SourceType == SLS_CapturedScene)
 		{
 			bool bStaticSceneOnly = CaptureComponent->Mobility == EComponentMobility::Static;
-			CaptureSceneIntoScratchCubemap(this, CaptureComponent->GetComponentLocation(), CaptureComponent->CubemapResolution, true, bStaticSceneOnly, CaptureComponent->SkyDistanceThreshold, CaptureComponent->bLowerHemisphereIsBlack, bCaptureEmissiveOnly, CaptureComponent->LowerHemisphereColor);
+			bool bCapturingForMobile = false;
+			CaptureSceneIntoScratchCubemap(this, CaptureComponent->GetComponentLocation(), CaptureComponent->CubemapResolution, true, bStaticSceneOnly, CaptureComponent->SkyDistanceThreshold, CaptureComponent->bLowerHemisphereIsBlack, bCaptureEmissiveOnly, CaptureComponent->LowerHemisphereColor, bCapturingForMobile);
 		}
 		else if (CaptureComponent->SourceType == SLS_SpecifiedCubemap)
 		{
@@ -1620,6 +1643,11 @@ void FScene::UpdateSkyCaptureContents(
 				{
 					CopyCubemapToScratchCubemap(RHICmdList, InnerFeatureLevel, SourceCubemap, CubemapSize, true, bLowerHemisphereIsBlack, SourceCubemapRotation, LowerHemisphereColor);
 				});
+		}
+		else if (CaptureComponent->IsRealTimeCaptureEnabled())
+		{
+			ensureMsgf(false, TEXT("A sky light with RealTimeCapture enabled cannot be scheduled for a cubemap update. This will be done dynamically each frame by the renderer."));
+			return;
 		}
 		else
 		{
@@ -1674,6 +1702,17 @@ void FScene::UpdateSkyCaptureContents(
 						CopyToSkyTexture(RHICmdList, Scene, OutProcessedTexture);
 					}
 				});
+		}
+
+		if (!!GFreeReflectionScratchAfterUse)
+		{
+			ENQUEUE_RENDER_COMMAND(FreeReflectionScratch)(
+				[](FRHICommandListImmediate& RHICmdList)
+			{
+				FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(RHICmdList);
+				SceneContext.FreeReflectionScratchRenderTargets();
+				GRenderTargetPool.FreeUnusedResources();
+			});
 		}
 	}
 }

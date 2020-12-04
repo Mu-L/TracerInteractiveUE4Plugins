@@ -27,6 +27,7 @@
 #include "Serialization/MemoryWriter.h"
 #include "Components/ChildActorComponent.h"
 #include "Net/NetworkGranularMemoryLogging.h"
+#include "GameFramework/Controller.h"
 
 #if WITH_EDITOR
 #include "UObject/ObjectRedirector.h"
@@ -39,32 +40,68 @@
 static const int GUID_PACKET_NOT_ACKED	= -2;		
 static const int GUID_PACKET_ACKED		= -1;		
 
+CSV_DEFINE_CATEGORY(PackageMap, true);
+
 /**
  * Don't allow infinite recursion of InternalLoadObject - an attacker could
  * send malicious packets that cause a stack overflow on the server.
  */
 static const int INTERNAL_LOAD_OBJECT_RECURSION_LIMIT = 16;
 
-static TAutoConsoleVariable<int32> CVarAllowAsyncLoading( TEXT( "net.AllowAsyncLoading" ), 0, TEXT( "Allow async loading" ) );
-static TAutoConsoleVariable<int32> CVarIgnoreNetworkChecksumMismatch( TEXT( "net.IgnoreNetworkChecksumMismatch" ), 0, TEXT( "" ) );
-static TAutoConsoleVariable<int32> CVarReservedNetGuidSize(TEXT("net.ReservedNetGuidSize"), 512, TEXT("Reserved size in bytes for NetGUID serialization"));
 extern FAutoConsoleVariableRef CVarEnableMultiplayerWorldOriginRebasing;
 extern TAutoConsoleVariable<int32> CVarFilterGuidRemapping;
 
-static float GGuidCacheTrackAsyncLoadingGUIDTreshold = 0.f;
+static TAutoConsoleVariable<int32> CVarAllowAsyncLoading(
+	TEXT("net.AllowAsyncLoading"),
+	0,
+	TEXT("Allow async loading of unloaded assets referenced in packets."
+		" If false the client will hitch and immediately load the asset,"
+		" if true the packet will be delayed while the asset is async loaded."
+		" net.DelayUnmappedRPCs can be enabled to delay RPCs relying on async loading assets.")
+);
+
+static TAutoConsoleVariable<int32> CVarIgnoreNetworkChecksumMismatch(
+	TEXT("net.IgnoreNetworkChecksumMismatch"),
+	0,
+	TEXT("If true, the integrity checksum on packagemap objects will be ignored, which can cause issues with out of sync data")
+);
+
+static TAutoConsoleVariable<int32> CVarReservedNetGuidSize(
+	TEXT("net.ReservedNetGuidSize"),
+	512,
+	TEXT("Reserved size in bytes for NetGUID serialization, used as a placeholder for later serialization")
+);
+
+static float GGuidCacheTrackAsyncLoadingGUIDThreshold = 0.f;
 static FAutoConsoleVariableRef CVarTrackAsyncLoadingGUIDTreshold(
 	TEXT("net.TrackAsyncLoadingGUIDThreshold"),
-	GGuidCacheTrackAsyncLoadingGUIDTreshold,
+	GGuidCacheTrackAsyncLoadingGUIDThreshold,
 	TEXT("When > 0, any objects that take longer than the threshold to async load will be tracked."
 		" Threshold in seconds, @see FNetGUIDCache::ConsumeDelinquencyAnalytics. Used for Debugging and Analytics")
 );
 
-static float GPackageMapTrackQueuedActorTreshold = 0.f;
+static float GGuidCacheTrackAsyncLoadingGUIDThresholdOwner = 0.f;
+static FAutoConsoleVariableRef CVarTrackAsyncLoadingGUIDThresholdOwner(
+	TEXT("net.TrackAsyncLoadingGUIDThresholdOwner"),
+	GGuidCacheTrackAsyncLoadingGUIDThresholdOwner,
+	TEXT("When > 0, if the Net Connection's owning Controller or Pawn is waiting on Async Loads for longer than this"
+		" threshold, we will fire a CSV Event to track it. Used for Debugging and Profiling")
+);
+
+static float GPackageMapTrackQueuedActorThreshold = 0.f;
 static FAutoConsoleVariableRef CVarTrackQueuedActorTreshold(
 	TEXT("net.TrackQueuedActorThreshold"),
-	GPackageMapTrackQueuedActorTreshold,
+	GPackageMapTrackQueuedActorThreshold,
 	TEXT("When > 0, any actors that spend longer than the threshold with queued bunches will be tracked."
 		" Threshold in seconds, @see UPackageMap::ConsumeDelinquencyAnalytics. Used for Debugging and Analytics")
+);
+
+static float GPackageMapTrackQueuedActorThresholdOwner = 0.f;
+static FAutoConsoleVariableRef CVarTrackQueuedActorOwnerThreshold(
+	TEXT("net.TrackQueuedActorThresholdOwner"),
+	GPackageMapTrackQueuedActorThresholdOwner,
+	TEXT("When > 0, if the Net Connection's owning Controller or Pawn has Queued Bunches for longer than this"
+		" threshold, we will fire a CSV Event to track it. Used for Debugging and Profiling")
 );
 
 static int32 GDelinquencyNumberOfTopOffendersToTrack = 10;
@@ -103,6 +140,13 @@ static FAutoConsoleVariableRef CVarQuantizeActorVelocityOnSpawn(
 	TEXT("net.QuantizeActorVelocityOnSpawn"),
 	GbQuantizeActorVelocityOnSpawn,
 	TEXT("When enabled, we will quantize Velocity for newly spawned actors to a single decimal of precision.")
+);
+
+static bool GbNetCheckNoLoadPackages = true;
+static FAutoConsoleVariableRef CVarNetCheckNoLoadPackages(
+	TEXT("net.CheckNoLoadPackages"),
+	GbNetCheckNoLoadPackages,
+	TEXT("If enabled, check the no load flag in GetObjectFromNetGUID before forcing a sync load on packages that are not marked IsFullyLoaded")
 );
 
 void BroadcastNetFailure(UNetDriver* Driver, ENetworkFailure::Type FailureType, const FString& ErrorStr)
@@ -769,7 +813,7 @@ void UPackageMapClient::InternalWriteObject( FArchive & Ar, FNetworkGUID NetGUID
 			}
 		}
 
-		GEngine->NetworkRemapPath(Connection->Driver, ObjectPathName, false);
+		GEngine->NetworkRemapPath(Connection, ObjectPathName, false);
 
 		// Serialize Name of object
 		Ar << ObjectPathName;
@@ -949,7 +993,7 @@ FNetworkGUID UPackageMapClient::InternalLoadObject( FArchive & Ar, UObject *& Ob
 		}
 
 		// Remap name for PIE
-		GEngine->NetworkRemapPath( Connection->Driver, PathName, true );
+		GEngine->NetworkRemapPath( Connection, PathName, true );
 
 		if (NetGUID.IsDefault())
 		{
@@ -1413,7 +1457,7 @@ void UPackageMapClient::SerializeNetFieldExportGroupMap( FArchive& Ar, bool bCle
 			// Read in the export group
 			Ar << *NetFieldExportGroup.Get();
 
-			GEngine->NetworkRemapPath(Connection->Driver, NetFieldExportGroup->PathName, true);
+			GEngine->NetworkRemapPath(Connection, NetFieldExportGroup->PathName, true);
 
 			// Assign index to path name
 			GuidCache->NetFieldExportGroupPathToIndex.Add( NetFieldExportGroup->PathName, NetFieldExportGroup->PathNameIndex );
@@ -1586,7 +1630,7 @@ void UPackageMapClient::ReceiveNetFieldExportsCompat(FInBunch &InBunch)
 				break;
 			}
 
-			GEngine->NetworkRemapPath(Connection->Driver, PathName, true);
+			GEngine->NetworkRemapPath(Connection, PathName, true);
 
 			NetFieldExportGroup = GuidCache->NetFieldExportGroupMap.FindRef(PathName).Get();
 			if (!NetFieldExportGroup)
@@ -1665,7 +1709,7 @@ void UPackageMapClient::ReceiveNetFieldExports(FArchive& Archive)
 			Archive << PathName;
 			Archive.SerializeIntPacked(NumExports);
 
-			GEngine->NetworkRemapPath(Connection->Driver, PathName, true);
+			GEngine->NetworkRemapPath(Connection, PathName, true);
 
 			NetFieldExportGroup = GuidCache->NetFieldExportGroupMap.FindRef(PathName).Get();
 			if (!NetFieldExportGroup)
@@ -2210,7 +2254,7 @@ void UPackageMapClient::SetHasQueuedBunches(const FNetworkGUID& NetGUID, bool bH
 {
 	if (bHasQueuedBunches)
 	{
-		if (GPackageMapTrackQueuedActorTreshold > 0.f)
+		if (GPackageMapTrackQueuedActorThreshold > 0.f)
 		{
 			if (UNetDriver const * const NetDriver = ((Connection) ? Connection->GetDriver() : nullptr))
 			{
@@ -2224,24 +2268,47 @@ void UPackageMapClient::SetHasQueuedBunches(const FNetworkGUID& NetGUID, bool bH
 	{
 		double StartTime = 0.f;
 
+		const bool bNormalQueueEnabled = GPackageMapTrackQueuedActorThreshold > 0.f;
+		
+#if CSV_PROFILER		
+		const bool bOwnerQueueEnabled = GPackageMapTrackQueuedActorThresholdOwner > 0.f;
+#else
+		constexpr bool bOwnerQueueEnabled = false;
+#endif		
+
 		// We try to remove the value regardless of whether or not the CVar is on.
 		// That way if it's toggled on and off, we don't end up wasting resources.
 		// If it is disabled with entries in DelinquentQueuedActors, it will be up
 		// to clients to clear out the map by calling ConsumeDelinquencyAnalytics.
 		if (CurrentQueuedBunchNetGUIDs.RemoveAndCopyValue(NetGUID, StartTime) &&
-			GPackageMapTrackQueuedActorTreshold &&
+			(bNormalQueueEnabled || bOwnerQueueEnabled) &&
 			GuidCache)
 		{
 			if (UNetDriver const * const NetDriver = ((Connection) ? Connection->GetDriver() : nullptr))
 			{
 				const double QueuedTime = NetDriver->GetElapsedTime() - StartTime;
-				if (QueuedTime > GPackageMapTrackQueuedActorTreshold)
+				const bool bAboveNormalQueuedTime = bNormalQueueEnabled && QueuedTime > GPackageMapTrackQueuedActorThreshold;
+				const bool bAboveOwnerQueuedTime = bOwnerQueueEnabled && QueuedTime > GPackageMapTrackQueuedActorThresholdOwner;
+
+				if (bAboveNormalQueuedTime || bAboveOwnerQueuedTime)
 				{
 					if (FNetGuidCacheObject const * const CacheObject = GuidCache->ObjectLookup.Find(NetGUID))
 					{
 						if (UObject const * const Object = CacheObject->Object.Get())
 						{
-							DelinquentQueuedActors.DelinquentQueuedActors.Emplace(Object->GetClass()->GetFName(), QueuedTime);
+							const FName ObjectClass = Object->GetClass()->GetFName();
+
+							if (bAboveNormalQueuedTime)
+							{
+								DelinquentQueuedActors.DelinquentQueuedActors.Emplace(ObjectClass, QueuedTime);
+							}
+
+#if CSV_PROFILER
+							if (bAboveOwnerQueuedTime && GuidCache->IsTrackingOwnerOrPawn())
+							{
+								CSV_EVENT(PackageMap, TEXT("Owner Net Stall Queued Actor (QueueTime=%.2f)"), *ObjectClass.ToString(), QueuedTime);
+							}
+#endif
 						}
 					}
 				}
@@ -2871,6 +2938,10 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 	{
 		UE_LOG(LogNetPackageMap, Log, TEXT("ValidateAsyncLoadingPackage: Already async loading package. Path: %s, NetGUID: %s"), *CacheObject.PathName.ToString(), *NetGUID.ToString());
 	}
+	
+#if CSV_PROFILER
+	PendingLoadRequest.bWasRequestedByOwnerOrPawn |= IsTrackingOwnerOrPawn();
+#endif
 }
 
 void FNetGUIDCache::StartAsyncLoadingPackage(FNetGuidCacheObject& CacheObject, const FNetworkGUID NetGUID, const bool bWasAlreadyAsyncLoading)
@@ -2880,7 +2951,13 @@ PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	PendingAsyncPackages.Add(CacheObject.PathName, NetGUID);
 PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
-	PendingAsyncLoadRequests.Emplace(CacheObject.PathName, FPendingAsyncLoadRequest(NetGUID, Driver->GetElapsedTime()));
+	FPendingAsyncLoadRequest LoadRequest(NetGUID, Driver->GetElapsedTime());
+	
+#if CSV_PROFILER
+	LoadRequest.bWasRequestedByOwnerOrPawn = IsTrackingOwnerOrPawn();
+#endif
+
+	PendingAsyncLoadRequests.Emplace(CacheObject.PathName, MoveTemp(LoadRequest));
 
 	DelinquentAsyncLoads.MaxConcurrentAsyncLoads = FMath::Max<uint32>(DelinquentAsyncLoads.MaxConcurrentAsyncLoads, PendingAsyncLoadRequests.Num());
 
@@ -2932,11 +3009,21 @@ void FNetGUIDCache::AsyncPackageCallback(const FName& PackageName, UPackage * Pa
 		// This won't be the exact amount of time that we spent loading the package, but should
 		// give us a close enough estimate (within a frame time).
 		const double LoadTime = (Driver->GetElapsedTime() - PendingLoadRequest->RequestStartTime);
-		if (GGuidCacheTrackAsyncLoadingGUIDTreshold > 0.f &&
-			LoadTime >= GGuidCacheTrackAsyncLoadingGUIDTreshold)
+		if (GGuidCacheTrackAsyncLoadingGUIDThreshold > 0.f &&
+			LoadTime >= GGuidCacheTrackAsyncLoadingGUIDThreshold)
 		{
 			DelinquentAsyncLoads.DelinquentAsyncLoads.Emplace(PackageName, LoadTime);
 		}
+
+#if CSV_PROFILER
+		if (PendingLoadRequest->bWasRequestedByOwnerOrPawn &&
+			GGuidCacheTrackAsyncLoadingGUIDThresholdOwner > 0.f &&
+			LoadTime >= GGuidCacheTrackAsyncLoadingGUIDThresholdOwner &&
+			Driver->ServerConnection)
+		{
+			CSV_EVENT(PackageMap, TEXT("Owner Net Stall Async Load (Package=%s|LoadTime=%.2f)"), *PackageName.ToString(), LoadTime);
+		}
+#endif
 
 		PendingAsyncLoadRequests.Remove(PackageName);
 
@@ -3164,11 +3251,16 @@ UObject* FNetGUIDCache::GetObjectFromNetGUID( const FNetworkGUID& NetGUID, const
 				// We don't want to hook up this package into the cache yet or return it, because it's only partially loaded.
 				return nullptr;
 			}
-			else
+			else if (!GbNetCheckNoLoadPackages || !CacheObjectPtr->bNoLoad)
 			{
 				// If package isn't fully loaded, load it now
 				UE_LOG(LogNetPackageMap, Log, TEXT("GetObjectFromNetGUID: Blocking load of %s, NetGUID: %s"), *CacheObjectPtr->PathName.ToString(), *NetGUID.ToString());
-				Object = LoadPackage(NULL, *CacheObjectPtr->PathName.ToString(), LOAD_None);				
+				Object = LoadPackage(NULL, *CacheObjectPtr->PathName.ToString(), LOAD_None);
+			}
+			else
+			{
+				// Not fully loaded but we should not be loading it directly.
+				return nullptr;
 			}
 		}
 	}
@@ -3704,3 +3796,54 @@ FAutoConsoleCommand	ListNetGUIDExportsCommand(
 	);
 
 // ----------------------------------------------------------------
+
+#if CSV_PROFILER
+bool FNetGUIDCache::IsTrackingOwnerOrPawn() const
+{
+	return TrackingOwnerOrPawnHelper && TrackingOwnerOrPawnHelper->IsOwnerOrPawn();
+}
+
+FNetGUIDCache::FIsOwnerOrPawnHelper::FIsOwnerOrPawnHelper(
+	FNetGUIDCache* InGuidCache,
+	const AActor* InConnectionActor,
+	const AActor* InChannelActor)
+
+	: GuidCache(InGuidCache)
+	, ConnectionActor(InConnectionActor)
+	, ChannelActor(InChannelActor)
+{
+	if (GuidCache)
+	{
+		GuidCache->TrackingOwnerOrPawnHelper = this;
+	}
+}
+
+FNetGUIDCache::FIsOwnerOrPawnHelper::~FIsOwnerOrPawnHelper()
+{
+	if (GuidCache)
+	{
+		GuidCache->TrackingOwnerOrPawnHelper = nullptr;
+	}
+}
+
+bool FNetGUIDCache::FIsOwnerOrPawnHelper::IsOwnerOrPawn() const
+{
+	if (CachedResult == INDEX_NONE)
+	{
+		bool bIsOwnerOrPawn = false;
+		if (ChannelActor && ConnectionActor)
+		{
+			bIsOwnerOrPawn = (ChannelActor == ConnectionActor);
+			if (!bIsOwnerOrPawn)
+			{
+				const AController* Controller = Cast<AController>(ConnectionActor);
+				bIsOwnerOrPawn = Controller ? (Controller->GetPawn() == ChannelActor) : false;
+			}
+		}
+
+		CachedResult = bIsOwnerOrPawn ? 1 : 0;
+	}
+
+	return !!CachedResult;
+}
+#endif

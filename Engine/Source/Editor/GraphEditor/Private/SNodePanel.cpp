@@ -186,6 +186,11 @@ void FGraphSelectionManager::ClickedOnNode(SelectedItemType Node, const FPointer
 	}
 }
 
+void FGraphSelectionManager::AddReferencedObjects(FReferenceCollector& Collector)
+{
+	Collector.AddReferencedObjects(SelectedNodes);
+}
+
 //////////////////////////////////////////////////////////////////////////
 // SNodePanel
 
@@ -1239,6 +1244,7 @@ void SNodePanel::PaintBackgroundAsLines(const FSlateBrush* BackgroundImage, cons
 	const int32 RulePeriod = (int32)FEditorStyle::GetFloat("Graph.Panel.GridRulePeriod");
 	check(RulePeriod > 0);
 
+	const FLinearColor GraphBackGroundImageColor(BackgroundImage->TintColor.GetSpecifiedColor());
 	const FLinearColor RegularColor(GetDefault<UEditorStyleSettings>()->RegularColor);
 	const FLinearColor RuleColor(GetDefault<UEditorStyleSettings>()->RuleColor);
 	const FLinearColor CenterColor(GetDefault<UEditorStyleSettings>()->CenterColor);
@@ -1268,7 +1274,9 @@ void SNodePanel::PaintBackgroundAsLines(const FSlateBrush* BackgroundImage, cons
 		OutDrawElements,
 		DrawLayerId,
 		AllottedGeometry.ToPaintGeometry(),
-		BackgroundImage
+		BackgroundImage,
+		ESlateDrawEffect::None,
+		GraphBackGroundImageColor
 	);
 
 	TArray<FVector2D> LinePoints;

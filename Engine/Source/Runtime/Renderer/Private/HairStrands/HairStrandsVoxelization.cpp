@@ -22,9 +22,32 @@ static float GHairVoxelizationAABBScale = 1.0f;
 static FAutoConsoleVariableRef CVarHairVoxelizationAABBScale(TEXT("r.HairStrands.Voxelization.AABBScale"), GHairVoxelizationAABBScale, TEXT("Scale the hair macro group bounding box"));
 
 static float GHairVoxelizationDensityScale = 2.0f;
-static float GHairVoxelizationDepthBiasScale = 3.0f;
+static float GHairVoxelizationDensityScale_AO = -1;
+static float GHairVoxelizationDensityScale_Shadow = -1;
+static float GHairVoxelizationDensityScale_Transmittance = -1;
+static float GHairVoxelizationDensityScale_Environment = -1;
+static float GHairVoxelizationDensityScale_Raytracing = -1; 
 static FAutoConsoleVariableRef CVarHairVoxelizationDensityScale(TEXT("r.HairStrands.Voxelization.DensityScale"), GHairVoxelizationDensityScale, TEXT("Scale the hair density when computing voxel transmittance. Default value is 2 (arbitraty)"));
-static FAutoConsoleVariableRef CVarHairVoxelizationDepthBiasScale(TEXT("r.HairStrands.Voxelization.DepthBiasScale"), GHairVoxelizationDepthBiasScale, TEXT("Set depth bias for voxel ray marching. Offset the origin position towards the light"));
+static FAutoConsoleVariableRef CVarHairVoxelizationDensityScale_AO(TEXT("r.HairStrands.Voxelization.DensityScale.AO"), GHairVoxelizationDensityScale_AO, TEXT("Scale the hair density when computing voxel AO. (Default:-1, it will use the global density scale"));
+static FAutoConsoleVariableRef CVarHairVoxelizationDensityScale_Shadow(TEXT("r.HairStrands.Voxelization.DensityScale.Shadow"), GHairVoxelizationDensityScale_Shadow, TEXT("Scale the hair density when computing voxel shadow. (Default:-1, it will use the global density scale"));
+static FAutoConsoleVariableRef CVarHairVoxelizationDensityScale_Transmittance(TEXT("r.HairStrands.Voxelization.DensityScale.Transmittance"), GHairVoxelizationDensityScale_Transmittance, TEXT("Scale the hair density when computing voxel transmittance. (Default:-1, it will use the global density scale"));
+static FAutoConsoleVariableRef CVarHairVoxelizationDensityScale_Environment(TEXT("r.HairStrands.Voxelization.DensityScale.Environment"), GHairVoxelizationDensityScale_Environment, TEXT("Scale the hair density when computing voxel environment. (Default:-1, it will use the global density scale"));
+static FAutoConsoleVariableRef CVarHairVoxelizationDensityScale_Raytracing(TEXT("r.HairStrands.Voxelization.DensityScale.Raytracing"), GHairVoxelizationDensityScale_Raytracing, TEXT("Scale the hair density when computing voxel raytracing. (Default:-1, it will use the global density scale"));
+
+static float GetHairStrandsVoxelizationDensityScale() { return FMath::Max(0.0f, GHairVoxelizationDensityScale); }
+static float GetHairStrandsVoxelizationDensityScale_AO() { return GHairVoxelizationDensityScale_AO >= 0 ? FMath::Max(0.0f, GHairVoxelizationDensityScale_AO) : GetHairStrandsVoxelizationDensityScale();  }
+static float GetHairStrandsVoxelizationDensityScale_Shadow() { return GHairVoxelizationDensityScale_Shadow >= 0 ? FMath::Max(0.0f, GHairVoxelizationDensityScale_Shadow) : GetHairStrandsVoxelizationDensityScale(); }
+static float GetHairStrandsVoxelizationDensityScale_Transmittance() { return GHairVoxelizationDensityScale_Transmittance >= 0 ? FMath::Max(0.0f, GHairVoxelizationDensityScale_Transmittance) : GetHairStrandsVoxelizationDensityScale(); }
+static float GetHairStrandsVoxelizationDensityScale_Environment() { return GHairVoxelizationDensityScale_Environment >= 0 ? FMath::Max(0.0f, GHairVoxelizationDensityScale_Environment) : GetHairStrandsVoxelizationDensityScale(); }
+static float GetHairStrandsVoxelizationDensityScale_Raytracing() { return GHairVoxelizationDensityScale_Raytracing >= 0 ? FMath::Max(0.0f, GHairVoxelizationDensityScale_Raytracing) : GetHairStrandsVoxelizationDensityScale(); }
+
+static float GHairVoxelizationDepthBiasScale_Shadow = 2.0f;
+static float GHairVoxelizationDepthBiasScale_Transmittance = 3.0f;
+static float GHairVoxelizationDepthBiasScale_Environment = 1.8f;
+static FAutoConsoleVariableRef CVarHairVoxelizationDepthBiasScale_Shadow(TEXT("r.HairStrands.Voxelization.DepthBiasScale.Shadow"), GHairVoxelizationDepthBiasScale_Shadow, TEXT("Set depth bias for voxel ray marching for analyticaly light. Offset the origin position towards the light for shadow computation"));
+static FAutoConsoleVariableRef CVarHairVoxelizationDepthBiasScale_Light(TEXT("r.HairStrands.Voxelization.DepthBiasScale.Light"), GHairVoxelizationDepthBiasScale_Transmittance, TEXT("Set depth bias for voxel ray marching for analyticaly light. Offset the origin position towards the light for transmittance computation"));
+static FAutoConsoleVariableRef CVarHairVoxelizationDepthBiasScale_Transmittance(TEXT("r.HairStrands.Voxelization.DepthBiasScale.Transmittance"), GHairVoxelizationDepthBiasScale_Transmittance, TEXT("Set depth bias for voxel ray marching for analyticaly light. Offset the origin position towards the light for transmittance computation"));
+static FAutoConsoleVariableRef CVarHairVoxelizationDepthBiasScale_Environment(TEXT("r.HairStrands.Voxelization.DepthBiasScale.Environment"), GHairVoxelizationDepthBiasScale_Environment, TEXT("Set depth bias for voxel ray marching for environement lights. Offset the origin position towards the light"));
 
 static int32 GHairVoxelInjectOpaqueDepthEnable = 1;
 static FAutoConsoleVariableRef CVarHairVoxelInjectOpaqueDepthEnable(TEXT("r.HairStrands.Voxelization.InjectOpaqueDepth"), GHairVoxelInjectOpaqueDepthEnable, TEXT("Inject opaque geometry depth into the voxel volume for acting as occluder."));
@@ -35,10 +58,19 @@ static FAutoConsoleVariableRef CVarHairStransVoxelInjectOpaqueBiasCount(TEXT("r.
 static FAutoConsoleVariableRef CVarHairStransVoxelInjectOpaqueMarkCount(TEXT("r.HairStrands.Voxelization.InjectOpaque.MarkCount"), GHairStransVoxelInjectOpaqueMarkCount, TEXT("Number of voxel marked as opaque starting along the view direction beneath the opaque surface."));
 
 static float GHairStransVoxelRaymarchingSteppingScale = 1.15f;
-static FAutoConsoleVariableRef CVarHairStransVoxelRaymarchingSteppingScale(TEXT("r.HairStrands.Voxelization.Raymarching.SteppingScale"), GHairStransVoxelRaymarchingSteppingScale, TEXT("Stepping scale used for raymarching the voxel structure."));
+static float GHairStransVoxelRaymarchingSteppingScale_Shadow = -1;
+static float GHairStransVoxelRaymarchingSteppingScale_Transmittance = -1;
+static float GHairStransVoxelRaymarchingSteppingScale_Environment = -1;
+static float GHairStransVoxelRaymarchingSteppingScale_Raytracing = -1;
+static FAutoConsoleVariableRef CVarHairStransVoxelRaymarchingSteppingScale(TEXT("r.HairStrands.Voxelization.Raymarching.SteppingScale"), GHairStransVoxelRaymarchingSteppingScale, TEXT("Stepping scale used for raymarching the voxel structure for shadow."));
+static FAutoConsoleVariableRef CVarHairStransVoxelRaymarchingSteppingScale_Shadow(TEXT("r.HairStrands.Voxelization.Raymarching.SteppingScale.Shadow"), GHairStransVoxelRaymarchingSteppingScale_Shadow, TEXT("Stepping scale used for raymarching the voxel structure, override scale for shadow (default -1)."));
+static FAutoConsoleVariableRef CVarHairStransVoxelRaymarchingSteppingScale_Transmittance(TEXT("r.HairStrands.Voxelization.Raymarching.SteppingScale.Transmission"), GHairStransVoxelRaymarchingSteppingScale_Transmittance, TEXT("Stepping scale used for raymarching the voxel structure, override scale for transmittance (default -1)."));
+static FAutoConsoleVariableRef CVarHairStransVoxelRaymarchingSteppingScale_Environment(TEXT("r.HairStrands.Voxelization.Raymarching.SteppingScale.Environment"), GHairStransVoxelRaymarchingSteppingScale_Environment, TEXT("Stepping scale used for raymarching the voxel structure, override scale for env. lighting (default -1)."));
+static FAutoConsoleVariableRef CVarHairStransVoxelRaymarchingSteppingScale_Raytracing(TEXT("r.HairStrands.Voxelization.Raymarching.SteppingScale.Raytracing"), GHairStransVoxelRaymarchingSteppingScale_Raytracing, TEXT("Stepping scale used for raymarching the voxel structure, override scale for raytracing (default -1)."));
 
-static float GetHairStrandsVoxelizationDensityScale() { return FMath::Max(0.0f, GHairVoxelizationDensityScale); }
-static float GetHairStrandsVoxelizationDepthBiasScale() { return FMath::Max(0.0f, GHairVoxelizationDepthBiasScale); }
+static float GetHairStrandsVoxelizationDepthBiasScale_Shadow() { return FMath::Max(0.0f, GHairVoxelizationDepthBiasScale_Shadow); }
+static float GetHairStrandsVoxelizationDepthBiasScale_Transmittance() { return FMath::Max(0.0f, GHairVoxelizationDepthBiasScale_Transmittance); }
+static float GetHairStrandsVoxelizationDepthBiasScale_Environment() { return FMath::Max(0.0f, GHairVoxelizationDepthBiasScale_Environment); }
 
 static int32 GHairForVoxelTransmittanceAndShadow = 0;
 static FAutoConsoleVariableRef CVarHairForVoxelTransmittanceAndShadow(TEXT("r.HairStrands.Voxelization.ForceTransmittanceAndShadow"), GHairForVoxelTransmittanceAndShadow, TEXT("For transmittance and shadow to be computed with density volume. This requires voxelization is enabled."));
@@ -71,6 +103,14 @@ static FAutoConsoleVariableRef CVarHairStrandsVoxelComputeRaster(TEXT("r.HairStr
 static int32 GHairStrandsVoxelComputeRasterMaxVoxelCount = 32;
 static FAutoConsoleVariableRef CVarHairStrandsVoxelComputeRasterMaxVoxelCount(TEXT("r.HairStrands.Voxelization.Virtual.ComputeRasterMaxVoxelCount"), GHairStrandsVoxelComputeRasterMaxVoxelCount, TEXT("Max number of voxel which are rasterized for a given hair segment. This is for debug purpose only."));
 
+static int32 GHairVirtualVoxelUseImmediatePageAllocation = 1;
+static FAutoConsoleVariableRef CVarHairVirtualVoxelUseImmediatePageAllocation(TEXT("r.HairStrands.Voxelization.Virtual.UseDirectPageAllocation"), GHairVirtualVoxelUseImmediatePageAllocation, TEXT("Use the indirect page allocation code path, but force internally direct page allocation (for debugging purpose only)."));
+
+static float GHairVirtualVoxelRaytracing_ShadowOcclusionThreshold= 1;
+static float GHairVirtualVoxelRaytracing_SkyOcclusionThreshold = 1;
+static FAutoConsoleVariableRef CVarHairVirtualVoxelRaytracing_ShadowOcclusionThreshold(TEXT("r.RayTracing.Shadows.HairOcclusionThreshold"), GHairVirtualVoxelRaytracing_ShadowOcclusionThreshold, TEXT("Define the number of hair that need to be crossed, before casting occlusion (default = 1)"), ECVF_RenderThreadSafe);
+static FAutoConsoleVariableRef CVarHairVirtualVoxelRaytracing_SkyOcclusionThreshold(TEXT("r.RayTracing.Sky.HairOcclusionThreshold"), GHairVirtualVoxelRaytracing_SkyOcclusionThreshold, TEXT("Define the number of hair that need to be crossed, before casting occlusion (default = 1)"), ECVF_RenderThreadSafe);
+
 bool IsHairStrandsVoxelizationEnable()
 {
 	return GHairVoxelizationEnable > 0;
@@ -99,7 +139,6 @@ class FVirtualVoxelInjectOpaqueCS : public FGlobalShader
 		SHADER_PARAMETER(FVector2D, SceneDepthResolution)
 		SHADER_PARAMETER(uint32, VoxelBiasCount)
 		SHADER_PARAMETER(uint32, VoxelMarkCount)
-		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SceneDepthTexture)
 		SHADER_PARAMETER_RDG_BUFFER(StructuredBuffer, IndirectDispatchArgs)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D, OutPageTexture)
 
@@ -107,7 +146,7 @@ class FVirtualVoxelInjectOpaqueCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -123,11 +162,7 @@ static void AddVirtualVoxelInjectOpaquePass(
 	const FVirtualVoxelResources& VoxelResources,
 	const FHairStrandsMacroGroupData& MacroGroup)
 {
-	FSceneTextureParameters SceneTextures;
-	SetupSceneTextureParameters(GraphBuilder, &SceneTextures);
-
-	const FRDGTextureRef OutPageTexture = GraphBuilder.RegisterExternalTexture(VoxelResources.PageTexture, TEXT("HairVoxelPageTexture"));
-	FRDGBufferRef IndirectDispatchArgsBuffer = GraphBuilder.RegisterExternalBuffer(VoxelResources.IndirectArgsBuffer, TEXT("HairVoxelIndirectDispatchArgs"));
+	FSceneTextureParameters SceneTextures = GetSceneTextureParameters(GraphBuilder);
 
 	const uint32 TotalPageCount = VoxelResources.Parameters.Common.PageIndexCount;
 	const uint32 PageResolution = VoxelResources.Parameters.Common.PageResolution;
@@ -140,13 +175,12 @@ static void AddVirtualVoxelInjectOpaquePass(
 	Parameters->VirtualVoxelParams = VoxelResources.Parameters.Common;
 	Parameters->VoxelBiasCount = FMath::Max(0, GHairStransVoxelInjectOpaqueBiasCount);
 	Parameters->VoxelMarkCount = FMath::Max(0, GHairStransVoxelInjectOpaqueMarkCount);
-	Parameters->SceneDepthResolution = SceneTextures.SceneDepthBuffer->Desc.Extent;
-	Parameters->SceneDepthTexture = SceneTextures.SceneDepthBuffer;
+	Parameters->SceneDepthResolution = SceneTextures.SceneDepthTexture->Desc.Extent;
 	Parameters->SceneTextures = SceneTextures;
 	Parameters->MacroGroupId = MacroGroup.MacroGroupId;
-	Parameters->OutPageTexture = GraphBuilder.CreateUAV(OutPageTexture);
+	Parameters->OutPageTexture = GraphBuilder.CreateUAV(VoxelResources.PageTexture);
 	Parameters->DispatchedPageIndexResolution = MacroGroup.VirtualVoxelNodeDesc.PageIndexResolution;
-	Parameters->IndirectDispatchArgs = IndirectDispatchArgsBuffer;
+	Parameters->IndirectDispatchArgs = VoxelResources.IndirectArgsBuffer;
 	TShaderMapRef<FVirtualVoxelInjectOpaqueCS> ComputeShader(View.ShaderMap);
 	const FGlobalShaderMap* GlobalShaderMap = View.ShaderMap;
 
@@ -158,7 +192,7 @@ static void AddVirtualVoxelInjectOpaquePass(
 		RDG_EVENT_NAME("HairStrandsInjectOpaqueDepthInVoxel"), 
 		ComputeShader, 
 		Parameters, 
-		IndirectDispatchArgsBuffer, 
+		VoxelResources.IndirectArgsBuffer,
 		ArgsOffset);
 }
 
@@ -187,7 +221,7 @@ class FVoxelAllocatePageIndexCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -204,6 +238,8 @@ class FVoxelMarkValidPageIndex_PrepareCS : public FGlobalShader
 		SHADER_PARAMETER(uint32, MaxClusterCount)
 		SHADER_PARAMETER(uint32, MacroGroupId)
 		SHADER_PARAMETER(uint32, MaxScatterAllocationCount)
+		SHADER_PARAMETER(uint32, bForceDirectPageAllocation)
+
 		SHADER_PARAMETER_SRV(Buffer, ClusterAABBsBuffer)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer, MacroGroupAABBBuffer)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer, PageIndexResolutionAndOffsetBuffer)
@@ -213,7 +249,7 @@ class FVoxelMarkValidPageIndex_PrepareCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -232,7 +268,7 @@ class FVoxelMarkValidPageIndex_IndirectArgsCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -254,7 +290,7 @@ class FVoxelMarkValidPageIndex_ScatterCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -284,7 +320,7 @@ class FVoxelMarkValidPageIndexCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -315,7 +351,7 @@ class FVoxelAllocateVoxelPageCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -343,7 +379,7 @@ class FVoxelAddNodeDescCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -365,7 +401,7 @@ class FVoxelAddIndirectBufferCS : public FGlobalShader
 		END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -386,7 +422,7 @@ class FVoxelIndPageClearBufferGenCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -406,7 +442,7 @@ class FVoxelIndPageClearCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -443,6 +479,7 @@ static void AddAllocateVoxelPagesPass(
 	const uint32 IndirectDispatchGroupSize,
 	uint32& OutTotalPageIndexCount,
 	FRDGBufferRef& OutPageIndexBuffer,
+	FRDGBufferRef& OutPageIndexOccupancyBuffer,
 	FRDGBufferRef& OutPageToPageIndexBuffer,
 	FRDGBufferRef& OutPageIndexCoordBuffer,
 	FRDGBufferRef& OutNodeDescBuffer,
@@ -507,6 +544,7 @@ static void AddAllocateVoxelPagesPass(
 	check(OutTotalPageIndexCount > 0);
 	
 	FRDGBufferRef PageIndexBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), OutTotalPageIndexCount), TEXT("PageIndexBuffer"));
+	FRDGBufferRef PageIndexOccupancyBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32)*2, OutTotalPageIndexCount), TEXT("PageIndexOccupancyBuffer"));
 	FRDGBufferRef PageIndexCoordBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), OutTotalPageIndexCount), TEXT("PageIndexCoordBuffer"));
 	FRDGBufferRef PageIndexGlobalCounter = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), 2), TEXT("PageIndexGlobalCounter"));
 	FRDGBufferRef NodeDescBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(sizeof(FPackedVirtualVoxelNodeDesc), MacroGroupCount), TEXT("VirtualVoxelNodeDescBuffer"));
@@ -516,16 +554,17 @@ static void AddAllocateVoxelPagesPass(
 	FRDGBufferRef PageToPageIndexBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(sizeof(uint32), TotalPageCount), TEXT("PageToPageIndexBuffer"));
 
 	FRDGBufferUAVRef PageIndexBufferUAV = GraphBuilder.CreateUAV(PageIndexBuffer, PF_R32_UINT);
+	FRDGBufferUAVRef PageIndexOccupancyBufferUAV = GraphBuilder.CreateUAV(PageIndexOccupancyBuffer, PF_R32G32_UINT);
 	FRDGBufferUAVRef PageIndexGlobalCounterUAV = GraphBuilder.CreateUAV(PageIndexGlobalCounter, PF_R32_UINT);
 	
 	// Stored FVoxelizationViewInfo structs
 	// See HairStrandsVoxelPageCommonStruct.ush for more details
 	FRDGBufferRef VoxelizationViewInfoBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateStructuredDesc(24 * sizeof(float), MacroGroupCount), TEXT("VoxelizationViewInfo"));
 	FRDGBufferRef PageIndexResolutionBuffer = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateBufferDesc(MacroGroupCount * 4 * sizeof(uint32), OutTotalPageIndexCount), TEXT("PageIndexResolutionBuffer"));
-	FRDGBufferRef MacroGroupAABB = GraphBuilder.RegisterExternalBuffer(MacroGroups.MacroGroupResources.MacroGroupAABBsBuffer, TEXT("HairInstanceGroupAABBs"));
 	FRDGBufferRef PageIndexAllocationIndirectBufferArgs = GraphBuilder.CreateBuffer(FRDGBufferDesc::CreateIndirectDesc<FRHIDispatchIndirectParameters>(MacroGroupCount), TEXT("PageIndexAllocationIndirectBufferArgs"));
 
 	AddClearUAVPass(GraphBuilder, PageIndexBufferUAV, 0u);
+	AddClearUAVPass(GraphBuilder, PageIndexOccupancyBufferUAV, 0u);
 	AddClearUAVPass(GraphBuilder, PageIndexGlobalCounterUAV, 0u);
 
 	// Allocate page index for all instance group
@@ -537,15 +576,14 @@ static void AddAllocateVoxelPagesPass(
 		Parameters->TotalPageIndexCount = OutTotalPageIndexCount;
 		Parameters->PageResolution = PageResolution;
 		Parameters->MacroGroupCount = MacroGroupCount;
-		Parameters->MacroGroupAABBBuffer = GraphBuilder.CreateUAV(MacroGroupAABB, PF_R32_SINT);
+		Parameters->MacroGroupAABBBuffer = GraphBuilder.CreateUAV(MacroGroups.MacroGroupResources.MacroGroupAABBsBuffer, PF_R32_SINT);
 		Parameters->IndirectDispatchGroupSize = GroupSize; // This is the GroupSize used for FVoxelAllocateVoxelPageCS
 		Parameters->OutPageIndexResolutionAndOffsetBuffer = GraphBuilder.CreateUAV(PageIndexResolutionBuffer, PF_R32G32B32A32_UINT);
 		Parameters->OutVoxelizationViewInfoBuffer = GraphBuilder.CreateUAV(VoxelizationViewInfoBuffer);
 		Parameters->OutPageIndexAllocationIndirectBufferArgs = GraphBuilder.CreateUAV(PageIndexAllocationIndirectBufferArgs);
-		const bool bUseCPUData = GHairVirtualVoxelGPUDriven == 2;
-		if (bUseCPUData)
+		Parameters->CPU_bUseCPUData = GHairVirtualVoxelGPUDriven == 2 ? 1 : 0;
+		if (Parameters->CPU_bUseCPUData)
 		{
-			Parameters->CPU_bUseCPUData = bUseCPUData ? 1 : 0;
 			Parameters->CPU_MinAABB = CPUAllocationDescs.Num() > 0 ? CPUAllocationDescs[0].MinAABB : FVector::ZeroVector;
 			Parameters->CPU_MaxAABB = CPUAllocationDescs.Num() > 0 ? CPUAllocationDescs[0].MaxAABB : FVector::ZeroVector;
 			Parameters->CPU_PageIndexResolution = CPUAllocationDescs.Num() > 0 ? CPUAllocationDescs[0].PageIndexResolution : FIntVector(0, 0, 0);
@@ -567,12 +605,10 @@ static void AddAllocateVoxelPagesPass(
 	for (uint32 MacroGroupIt = 0; MacroGroupIt < MacroGroupCount; ++MacroGroupIt)
 	{
 		const FHairStrandsMacroGroupData& MacroGroup = MacroGroups.Datas[MacroGroupIt];
-		for (const FHairStrandsMacroGroupData::PrimitiveGroup& PrimitiveGroup : MacroGroup.PrimitivesGroups)
+		for (const FHairStrandsMacroGroupData::PrimitiveInfo& PrimitiveInfo : MacroGroup.PrimitivesInfos)
 		{
-			const FHairStrandsPrimitiveResources& Resources = GetHairStandsPrimitiveResources(PrimitiveGroup.ResourceId);
-			check(PrimitiveGroup.GroupIndex < uint32(Resources.Groups.Num()));
-			const FHairStrandsPrimitiveResources::FHairGroup& GroupResources = Resources.Groups[PrimitiveGroup.GroupIndex];
-			TotalClusterCount += GroupResources.ClusterCount;
+			FHairGroupPublicData* HairGroupData = PrimitiveInfo.PublicDataPtr;
+			TotalClusterCount += HairGroupData->GetClusterCount();
 		}
 	}
 
@@ -600,26 +636,25 @@ static void AddAllocateVoxelPagesPass(
 			AddClearUAVPass(GraphBuilder, ScatterCounterUAV, 0);
 
 			// Prepare
-			for (const FHairStrandsMacroGroupData::PrimitiveGroup& PrimitiveGroup : MacroGroup.PrimitivesGroups)
+			for (const FHairStrandsMacroGroupData::PrimitiveInfo& PrimitiveInfo : MacroGroup.PrimitivesInfos)
 			{
-				const FHairStrandsPrimitiveResources& Resources = GetHairStandsPrimitiveResources(PrimitiveGroup.ResourceId);
-				check(PrimitiveGroup.GroupIndex < uint32(Resources.Groups.Num()));
-				const FHairStrandsPrimitiveResources::FHairGroup& GroupResources = Resources.Groups[PrimitiveGroup.GroupIndex];
+				FHairGroupPublicData* HairGroupData = PrimitiveInfo.PublicDataPtr;
 
 				FVoxelMarkValidPageIndex_PrepareCS::FParameters* Parameters = GraphBuilder.AllocParameters<FVoxelMarkValidPageIndex_PrepareCS::FParameters>();
-				Parameters->MaxClusterCount			= GroupResources.ClusterCount;
-				Parameters->MacroGroupId			= MacroGroup.MacroGroupId;
-				Parameters->MaxScatterAllocationCount= MaxAllocationCount;
+				Parameters->MaxClusterCount				= HairGroupData->GetClusterCount();
+				Parameters->MacroGroupId				= MacroGroup.MacroGroupId;
+				Parameters->MaxScatterAllocationCount	= MaxAllocationCount;
+				Parameters->bForceDirectPageAllocation	= GHairVirtualVoxelUseImmediatePageAllocation > 0 ? 1 : 0;
 
-				Parameters->ClusterAABBsBuffer		= GroupResources.ClusterAABBBuffer->SRV;
-				Parameters->MacroGroupAABBBuffer	= GraphBuilder.CreateSRV(MacroGroupAABB, PF_R32_SINT);
+				Parameters->ClusterAABBsBuffer		= HairGroupData->GetClusterAABBBuffer().SRV;
+				Parameters->MacroGroupAABBBuffer	= GraphBuilder.CreateSRV(MacroGroups.MacroGroupResources.MacroGroupAABBsBuffer, PF_R32_SINT);
 				Parameters->PageIndexResolutionAndOffsetBuffer = PageIndexResolutionAndOffsetBufferSRV;
 
 				Parameters->OutDeferredScatterCounter	= ScatterCounterUAV;
 				Parameters->OutDeferredScatterBuffer	= ScatterBufferUAV;
 				Parameters->OutValidPageIndexBuffer		= PageIndexBufferUAV;
 
-				FIntVector DispatchCount((GroupResources.ClusterCount + GroupSize - 1) / GroupSize, 1, 1);
+				FIntVector DispatchCount((Parameters->MaxClusterCount + GroupSize - 1) / GroupSize, 1, 1);
 				check(DispatchCount.X < 65535);
 				TShaderMapRef<FVoxelMarkValidPageIndex_PrepareCS> ComputeShader(View.ShaderMap);
 				FComputeShaderUtils::AddPass(
@@ -664,32 +699,30 @@ static void AddAllocateVoxelPagesPass(
 		}
 		else
 		{		
-			for (const FHairStrandsMacroGroupData::PrimitiveGroup& PrimitiveGroup : MacroGroup.PrimitivesGroups)
+			for (const FHairStrandsMacroGroupData::PrimitiveInfo& PrimitiveInfo : MacroGroup.PrimitivesInfos)
 			{
-				const FHairStrandsPrimitiveResources& Resources = GetHairStandsPrimitiveResources(PrimitiveGroup.ResourceId);
-				check(PrimitiveGroup.GroupIndex < uint32(Resources.Groups.Num()));
-				const FHairStrandsPrimitiveResources::FHairGroup& GroupResources = Resources.Groups[PrimitiveGroup.GroupIndex];
+				FHairGroupPublicData* HairGroupData = PrimitiveInfo.PublicDataPtr;
 
 				FVoxelMarkValidPageIndexCS::FParameters* Parameters = GraphBuilder.AllocParameters<FVoxelMarkValidPageIndexCS::FParameters>();
 				Parameters->MacroGroupId = MacroGroup.MacroGroupId;
-				Parameters->MaxClusterCount = GroupResources.ClusterCount;
+				Parameters->MaxClusterCount = HairGroupData->GetClusterCount();
 				Parameters->CPU_PageIndexResolution = CPUAllocationDesc.PageIndexResolution;
 				Parameters->CPU_PageIndexOffset = CPUAllocationDesc.PageIndexOffset;
 				Parameters->CPU_MinAABB = CPUAllocationDesc.MinAABB;
 				Parameters->CPU_MaxAABB = CPUAllocationDesc.MaxAABB;
-				Parameters->ClusterAABBsBuffer = GroupResources.ClusterAABBBuffer->SRV;
+				Parameters->ClusterAABBsBuffer = HairGroupData->GetClusterAABBBuffer().SRV;
 				Parameters->OutValidPageIndexBuffer = PageIndexBufferUAV;
 
 				if (bIsGPUDriven)
 				{
-					Parameters->MacroGroupAABBBuffer = GraphBuilder.CreateSRV(MacroGroupAABB, PF_R32_SINT);
+					Parameters->MacroGroupAABBBuffer = GraphBuilder.CreateSRV(MacroGroups.MacroGroupResources.MacroGroupAABBsBuffer, PF_R32_SINT);
 					Parameters->PageIndexResolutionAndOffsetBuffer = PageIndexResolutionAndOffsetBufferSRV;
 				}
 
 				FVoxelMarkValidPageIndexCS::FPermutationDomain PermutationVector;
 				PermutationVector.Set<FVoxelMarkValidPageIndexCS::FGPUDriven>(bIsGPUDriven ? 1 : 0);
 
-				FIntVector DispatchCount((GroupResources.ClusterCount + GroupSize - 1) / GroupSize, 1, 1);
+				FIntVector DispatchCount((Parameters->MaxClusterCount + GroupSize - 1) / GroupSize, 1, 1);
 				check(DispatchCount.X < 65535);
 				TShaderMapRef<FVoxelMarkValidPageIndexCS> ComputeShader(View.ShaderMap, PermutationVector);
 				FComputeShaderUtils::AddPass(
@@ -717,7 +750,7 @@ static void AddAllocateVoxelPagesPass(
 
 			if (bIsGPUDriven)
 			{
-				Parameters->MacroGroupAABBBuffer = GraphBuilder.CreateSRV(MacroGroupAABB, PF_R32_SINT);
+				Parameters->MacroGroupAABBBuffer = GraphBuilder.CreateSRV(MacroGroups.MacroGroupResources.MacroGroupAABBsBuffer, PF_R32_SINT);
 				Parameters->PageIndexResolutionAndOffsetBuffer = PageIndexResolutionAndOffsetBufferSRV;
 			}
 
@@ -783,6 +816,7 @@ static void AddAllocateVoxelPagesPass(
 	}
 
 	OutPageIndexBuffer = PageIndexBuffer;
+	OutPageIndexOccupancyBuffer = PageIndexOccupancyBuffer;
 	OutPageToPageIndexBuffer = PageToPageIndexBuffer;
 	OutPageIndexCoordBuffer = PageIndexCoordBuffer;
 	OutNodeDescBuffer = NodeDescBuffer;
@@ -792,23 +826,14 @@ static void AddAllocateVoxelPagesPass(
 }
 
 FVirtualVoxelResources AllocateVirtualVoxelResources(
-	FRHICommandListImmediate& RHICmdList,
+	FRDGBuilder& GraphBuilder,
 	const FViewInfo& View,
 	FHairStrandsMacroGroupDatas& MacroGroups, 
-	TRefCountPtr<FPooledRDGBuffer>& PageToPageIndexBuffer)
+	FRDGBufferRef& PageToPageIndexBuffer)
 {
 	DECLARE_GPU_STAT(HairStrandsVoxelPageAllocation);
-	SCOPED_DRAW_EVENT(RHICmdList, HairStrandsVoxelPageAllocation);
-	SCOPED_GPU_STAT(RHICmdList, HairStrandsVoxelPageAllocation);
-
-	FRDGBuilder GraphBuilder(RHICmdList);
-	FRDGBufferRef OutPageIndexBuffer = nullptr;
-	FRDGBufferRef OutPageToPageIndexBuffer = nullptr;
-	FRDGBufferRef OutPageIndexCoordBuffer = nullptr;
-	FRDGBufferRef OutNodeDescBuffer = nullptr;
-	FRDGBufferRef OutIndirectArgsBuffer = nullptr;
-	FRDGBufferRef OutPageIndexGlobalCounter = nullptr;
-	FRDGBufferRef OutVoxelizationViewInfoBuffer = nullptr;
+	RDG_EVENT_SCOPE(GraphBuilder, "HairStrandsVoxelPageAllocation");
+	RDG_GPU_STAT_SCOPE(GraphBuilder, HairStrandsVoxelPageAllocation);
 
 	FVirtualVoxelResources Out;
 
@@ -817,14 +842,30 @@ FVirtualVoxelResources AllocateVirtualVoxelResources(
 	Out.Parameters.Common.VoxelWorldSize			= FMath::Clamp(GHairVirtualVoxel_VoxelWorldSize, 0.01f, 10.f);
 	Out.Parameters.Common.PageResolution			= FMath::RoundUpToPowerOfTwo(FMath::Clamp(GHairVirtualVoxel_PageResolution, 2, 256));
 	Out.Parameters.Common.PageTextureResolution		= Out.Parameters.Common.PageCountResolution * Out.Parameters.Common.PageResolution;
+
 	Out.Parameters.Common.DensityScale				= GetHairStrandsVoxelizationDensityScale();
-	Out.Parameters.Common.DepthBiasScale			= GetHairStrandsVoxelizationDepthBiasScale();
-	Out.Parameters.Common.SteppingScale				= FMath::Clamp(GHairStransVoxelRaymarchingSteppingScale, 1.f, 10.f);
+	Out.Parameters.Common.DensityScale_AO			= GetHairStrandsVoxelizationDensityScale_AO();
+	Out.Parameters.Common.DensityScale_Shadow		= GetHairStrandsVoxelizationDensityScale_Shadow();
+	Out.Parameters.Common.DensityScale_Transmittance= GetHairStrandsVoxelizationDensityScale_Transmittance();
+	Out.Parameters.Common.DensityScale_Environment	= GetHairStrandsVoxelizationDensityScale_Environment();
+	Out.Parameters.Common.DensityScale_Raytracing   = GetHairStrandsVoxelizationDensityScale_Raytracing();	
+
+	Out.Parameters.Common.DepthBiasScale_Shadow		= GetHairStrandsVoxelizationDepthBiasScale_Shadow();
+	Out.Parameters.Common.DepthBiasScale_Transmittance= GetHairStrandsVoxelizationDepthBiasScale_Transmittance();
+	Out.Parameters.Common.DepthBiasScale_Environment= GetHairStrandsVoxelizationDepthBiasScale_Environment();
+
+	Out.Parameters.Common.SteppingScale_Shadow		  = FMath::Clamp(GHairStransVoxelRaymarchingSteppingScale_Shadow			>= 0 ? GHairStransVoxelRaymarchingSteppingScale_Shadow			: GHairStransVoxelRaymarchingSteppingScale, 1.f, 10.f);
+	Out.Parameters.Common.SteppingScale_Transmittance = FMath::Clamp(GHairStransVoxelRaymarchingSteppingScale_Transmittance		>= 0 ? GHairStransVoxelRaymarchingSteppingScale_Transmittance	: GHairStransVoxelRaymarchingSteppingScale, 1.f, 10.f);
+	Out.Parameters.Common.SteppingScale_Environment	  = FMath::Clamp(GHairStransVoxelRaymarchingSteppingScale_Environment		>= 0 ? GHairStransVoxelRaymarchingSteppingScale_Environment		: GHairStransVoxelRaymarchingSteppingScale, 1.f, 10.f);
+	Out.Parameters.Common.SteppingScale_Raytracing	  = FMath::Clamp(GHairStransVoxelRaymarchingSteppingScale_Raytracing		>= 0 ? GHairStransVoxelRaymarchingSteppingScale_Raytracing		: GHairStransVoxelRaymarchingSteppingScale, 1.f, 10.f);
+
 	Out.Parameters.Common.NodeDescCount				= MacroGroups.Datas.Num();
-	Out.Parameters.Common.IndirectDispatchGroupSize = 64;
-	
+	Out.Parameters.Common.IndirectDispatchGroupSize = 64;	
+	Out.Parameters.Common.Raytracing_ShadowOcclusionThreshold	= FMath::Max(0.f, GHairVirtualVoxelRaytracing_ShadowOcclusionThreshold);
+	Out.Parameters.Common.Raytracing_SkyOcclusionThreshold		= FMath::Max(0.f, GHairVirtualVoxelRaytracing_SkyOcclusionThreshold);
+
 	Out.Parameters.Common.HairCoveragePixelRadiusAtDepth1	= ComputeMinStrandRadiusAtDepth1(FIntPoint(View.ViewRect.Width(), View.ViewRect.Height()), View.FOV, 1/*SampleCount*/, 1/*RasterizationScale*/).Primary;
-	Out.Parameters.Common.HairCoverageLUT					= GetHairLUT(RHICmdList, View).Textures[HairLUTType_Coverage]->GetRenderTargetItem().TargetableTexture;
+	Out.Parameters.Common.HairCoverageLUT					= GetHairLUT(GraphBuilder, View).Textures[HairLUTType_Coverage];
 	Out.Parameters.Common.HairCoverageSampler				= TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 
 	AddAllocateVoxelPagesPass(
@@ -838,65 +879,14 @@ FVirtualVoxelResources AllocateVirtualVoxelResources(
 		Out.Parameters.Common.PageTextureResolution,
 		Out.Parameters.Common.IndirectDispatchGroupSize,
 		Out.Parameters.Common.PageIndexCount,
-		OutPageIndexBuffer, 
-		OutPageToPageIndexBuffer,
-		OutPageIndexCoordBuffer,
-		OutNodeDescBuffer,
-		OutIndirectArgsBuffer,
-		OutPageIndexGlobalCounter,
-		OutVoxelizationViewInfoBuffer);
-
-	if (OutPageIndexBuffer)
-	{
-		GraphBuilder.QueueBufferExtraction(OutPageIndexBuffer, &Out.PageIndexBuffer, FRDGResourceState::EAccess::Read, FRDGResourceState::EPipeline::Graphics);
-	}
-
-	if (OutPageToPageIndexBuffer)
-	{
-		GraphBuilder.QueueBufferExtraction(OutPageToPageIndexBuffer, &PageToPageIndexBuffer, FRDGResourceState::EAccess::Read, FRDGResourceState::EPipeline::Graphics);
-	}
-
-	if (OutPageIndexCoordBuffer)
-	{
-		GraphBuilder.QueueBufferExtraction(OutPageIndexCoordBuffer, &Out.PageIndexCoordBuffer, FRDGResourceState::EAccess::Read, FRDGResourceState::EPipeline::Compute);
-	}
-
-	if (OutNodeDescBuffer)
-	{
-		GraphBuilder.QueueBufferExtraction(OutNodeDescBuffer, &Out.NodeDescBuffer, FRDGResourceState::EAccess::Read, FRDGResourceState::EPipeline::Graphics);
-	}
-
-	if (OutIndirectArgsBuffer)
-	{
-		GraphBuilder.QueueBufferExtraction(OutIndirectArgsBuffer, &Out.IndirectArgsBuffer, FRDGResourceState::EAccess::Read, FRDGResourceState::EPipeline::Compute);
-	}
-
-	if (OutPageIndexGlobalCounter)
-	{
-		GraphBuilder.QueueBufferExtraction(OutPageIndexGlobalCounter, &Out.PageIndexGlobalCounter, FRDGResourceState::EAccess::Read, FRDGResourceState::EPipeline::Compute);
-	}
-
-	if (OutVoxelizationViewInfoBuffer)
-	{
-		GraphBuilder.QueueBufferExtraction(OutVoxelizationViewInfoBuffer, &Out.VoxelizationViewInfoBuffer, FRDGResourceState::EAccess::Read, FRDGResourceState::EPipeline::Compute);
-	}
-
-	GraphBuilder.Execute();
-
-	if (Out.PageIndexBuffer)
-	{
-		Out.PageIndexBufferSRV = RHICreateShaderResourceView(Out.PageIndexBuffer->VertexBuffer, sizeof(uint32), PF_R32_UINT);
-	}
-
-	if (Out.PageIndexCoordBuffer)
-	{
-		Out.PageIndexCoordBufferSRV = RHICreateShaderResourceView(Out.PageIndexCoordBuffer->VertexBuffer, sizeof(uint32), PF_R8G8B8A8_UINT);
-	}
-
-	if (Out.NodeDescBuffer)
-	{
-		Out.NodeDescBufferSRV = RHICreateShaderResourceView(Out.NodeDescBuffer->StructuredBuffer);
-	}
+		Out.PageIndexBuffer,
+		Out.PageIndexOccupancyBuffer,
+		PageToPageIndexBuffer,
+		Out.PageIndexCoordBuffer,
+		Out.NodeDescBuffer,
+		Out.IndirectArgsBuffer,
+		Out.PageIndexGlobalCounter,
+		Out.VoxelizationViewInfoBuffer);
 
 	{
 		// Allocation should be conservative
@@ -904,27 +894,29 @@ FVirtualVoxelResources AllocateVirtualVoxelResources(
 		check(FMath::IsPowerOfTwo(Out.Parameters.Common.PageResolution));
 		const uint32 MipCount = FMath::Log2(Out.Parameters.Common.PageResolution) + 1;
 
-		FPooledRenderTargetDesc Desc(FPooledRenderTargetDesc::CreateVolumeDesc(
-			Out.Parameters.Common.PageTextureResolution.X, 
-			Out.Parameters.Common.PageTextureResolution.Y, 
-			Out.Parameters.Common.PageTextureResolution.Z, 
+		FRDGTextureDesc Desc = FRDGTextureDesc::Create3D(
+			FIntVector(
+			Out.Parameters.Common.PageTextureResolution.X,
+			Out.Parameters.Common.PageTextureResolution.Y,
+			Out.Parameters.Common.PageTextureResolution.Z),
 			PF_R32_UINT, 
 			FClearValueBinding::Black, 
-			TexCreate_None, TexCreate_UAV | TexCreate_ShaderResource, 
-			false, 
-			MipCount));
-
-		GRenderTargetPool.FindFreeElement(RHICmdList, Desc, Out.PageTexture, TEXT("VoxelPageTexture"));
+			TexCreate_UAV | TexCreate_ShaderResource,
+			MipCount);
+		Out.PageTexture = GraphBuilder.CreateTexture(Desc, TEXT("VoxelPageTexture"));
 	}
 
-	Out.Parameters.Common.PageIndexBuffer		= Out.PageIndexBufferSRV;
-	Out.Parameters.Common.PageIndexCoordBuffer	= Out.PageIndexCoordBufferSRV;
-	Out.Parameters.Common.NodeDescBuffer		= Out.NodeDescBufferSRV; 
-	Out.Parameters.PageTexture					= Out.PageTexture->GetRenderTargetItem().ShaderResourceTexture;
+	Out.Parameters.Common.PageIndexBuffer			= GraphBuilder.CreateSRV(Out.PageIndexBuffer, PF_R32_UINT);
+	Out.Parameters.Common.PageIndexOccupancyBuffer	= GraphBuilder.CreateSRV(Out.PageIndexOccupancyBuffer, PF_R32G32_UINT);
+	Out.Parameters.Common.PageIndexCoordBuffer		= GraphBuilder.CreateSRV(Out.PageIndexCoordBuffer, PF_R8G8B8A8_UINT);
+	Out.Parameters.Common.NodeDescBuffer			= GraphBuilder.CreateSRV(Out.NodeDescBuffer); 
+	Out.Parameters.PageTexture						= Out.PageTexture;
 
-	if (Out.PageIndexBufferSRV && Out.NodeDescBufferSRV)
+	if (Out.PageIndexBuffer && Out.NodeDescBuffer)
 	{
-		Out.UniformBuffer = CreateUniformBufferImmediate(Out.Parameters, UniformBuffer_SingleFrame);
+		FVirtualVoxelParameters* Parameters = GraphBuilder.AllocParameters<FVirtualVoxelParameters>();
+		*Parameters = Out.Parameters;
+		Out.UniformBuffer = GraphBuilder.CreateUniformBuffer(Parameters);
 	}
 
 	return Out;
@@ -944,12 +936,10 @@ static FRDGBufferRef IndirectVoxelPageClear(
 
 	// Generate the indirect buffer required to clear all voxel allocated linearly in the page volume texture, using the global counter.
 	{
-		FRDGBufferRef PageIndexGlobalCounter = GraphBuilder.RegisterExternalBuffer(VoxelResources.PageIndexGlobalCounter, TEXT("HairPageIndexGlobalCounter"));
-
 		FVoxelIndPageClearBufferGenCS::FParameters* Parameters = GraphBuilder.AllocParameters<FVoxelIndPageClearBufferGenCS::FParameters>();
 		Parameters->PageResolution = VoxelResources.Parameters.Common.PageResolution;
 		Parameters->OutIndirectArgsBuffer = GraphBuilder.CreateUAV(ClearIndArgsBuffer);
-		Parameters->PageIndexGlobalCounter = GraphBuilder.CreateSRV(PageIndexGlobalCounter, PF_R32_UINT);
+		Parameters->PageIndexGlobalCounter = GraphBuilder.CreateSRV(VoxelResources.PageIndexGlobalCounter, PF_R32_UINT);
 
 		TShaderMapRef<FVoxelIndPageClearBufferGenCS> ComputeShader(ViewInfo.ShaderMap);
 		FComputeShaderUtils::AddPass(
@@ -962,12 +952,9 @@ static FRDGBufferRef IndirectVoxelPageClear(
 
 	// Now single dispatch to clear all the pages
 	{
-		FRDGTextureRef OutPageTexture = GraphBuilder.RegisterExternalTexture(VoxelResources.PageTexture, TEXT("HairVoxelPageTexture"));
-		FRDGBufferRef IndirectDispatchArgsBuffer = GraphBuilder.RegisterExternalBuffer(VoxelResources.IndirectArgsBuffer, TEXT("HairVoxelIndirectDispatchArgs"));
-
 		FVoxelIndPageClearCS::FParameters* Parameters = GraphBuilder.AllocParameters<FVoxelIndPageClearCS::FParameters>();
 		Parameters->VirtualVoxelParams = VoxelResources.Parameters.Common;
-		Parameters->OutPageTexture = GraphBuilder.CreateUAV(FRDGTextureUAVDesc(OutPageTexture));
+		Parameters->OutPageTexture = GraphBuilder.CreateUAV(FRDGTextureUAVDesc(VoxelResources.PageTexture));
 		Parameters->IndirectDispatchBuffer = ClearIndArgsBuffer;
 
 		TShaderMapRef<FVoxelIndPageClearCS> ComputeShader(ViewInfo.ShaderMap);
@@ -990,12 +977,16 @@ class FVoxelRasterComputeCS : public FGlobalShader
 	DECLARE_GLOBAL_SHADER(FVoxelRasterComputeCS);
 	SHADER_USE_PARAMETER_STRUCT(FVoxelRasterComputeCS, FGlobalShader);
 
+	class FCulling : SHADER_PERMUTATION_INT("PERMUTATION_CULLING", 2);
+	using FPermutationDomain = TShaderPermutationDomain<FCulling>;
+
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_STRUCT(FVirtualVoxelCommonParameters, VirtualVoxelParams)
 		SHADER_PARAMETER(uint32, MacroGroupId)
 		SHADER_PARAMETER(uint32, DispatchCountX)
 		SHADER_PARAMETER(uint32, MaxRasterCount)
 		SHADER_PARAMETER(uint32, FrameIdMod8)
+		SHADER_PARAMETER(uint32, HairStrandsVF_bIsCullingEnable)
 		SHADER_PARAMETER(float,	  HairStrandsVF_Density)
 		SHADER_PARAMETER(float,   HairStrandsVF_Radius)
 		SHADER_PARAMETER(float,	  HairStrandsVF_Length)
@@ -1003,12 +994,16 @@ class FVoxelRasterComputeCS : public FGlobalShader
 		SHADER_PARAMETER(uint32,  HairStrandsVF_VertexCount)
 		SHADER_PARAMETER(FMatrix, HairStrandsVF_LocalToWorldPrimitiveTransform)
 		SHADER_PARAMETER_SRV(Buffer, HairStrandsVF_PositionBuffer)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer, HairStrandsVF_CullingIndirectBuffer)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer, HairStrandsVF_CullingIndexBuffer)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer, HairStrandsVF_CullingRadiusScaleBuffer)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer, VoxelizationViewInfoBuffer)
+		SHADER_PARAMETER_RDG_BUFFER(Buffer, IndirectBufferArgs)
 		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture3D, OutPageTexture)
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -1032,40 +1027,67 @@ static void AddVirtualVoxelizationComputeRasterPass(
 	{
 		const FHairStrandsMacroGroupData::TPrimitiveInfos& PrimitiveSceneInfos = MacroGroup.PrimitivesInfos;
 
-		FRDGBufferRef VoxelizationViewInfoBuffer = GraphBuilder.RegisterExternalBuffer(VoxelResources.VoxelizationViewInfoBuffer);
-		FRDGBufferSRVRef VoxelizationViewInfoBufferSRV = GraphBuilder.CreateSRV(VoxelizationViewInfoBuffer);
-		FRDGTextureRef PageTexture = GraphBuilder.RegisterExternalTexture(VoxelResources.PageTexture);
-		FRDGTextureUAVRef PageTextureUAV = GraphBuilder.CreateUAV(PageTexture);
+		FRDGBufferSRVRef VoxelizationViewInfoBufferSRV = GraphBuilder.CreateSRV(VoxelResources.VoxelizationViewInfoBuffer);
+		FRDGTextureUAVRef PageTextureUAV = GraphBuilder.CreateUAV(VoxelResources.PageTexture);
 
 		const uint32 FrameIdMode8 = ViewInfo && ViewInfo->ViewState ? (ViewInfo->ViewState->GetFrameIndex() % 8) : 0;
 		const uint32 GroupSize = 32;
 		const uint32 DispatchCountX = 64;
-		TShaderMapRef<FVoxelRasterComputeCS> ComputeShader(ViewInfo->ShaderMap);
+
+		FVoxelRasterComputeCS::FPermutationDomain PermutationVector_Off;
+		FVoxelRasterComputeCS::FPermutationDomain PermutationVector_On;
+		PermutationVector_Off.Set<FVoxelRasterComputeCS::FCulling>(0);
+		PermutationVector_On.Set<FVoxelRasterComputeCS::FCulling>(1);
+
+		TShaderMapRef<FVoxelRasterComputeCS> ComputeShader_CullingOff(ViewInfo->ShaderMap, PermutationVector_Off);
+		TShaderMapRef<FVoxelRasterComputeCS> ComputeShader_CullingOn(ViewInfo->ShaderMap, PermutationVector_On);
 		for (const FHairStrandsMacroGroupData::PrimitiveInfo& PrimitiveInfo : PrimitiveSceneInfos)
 		{
-			FVoxelRasterComputeCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FVoxelRasterComputeCS::FParameters>();
-			PassParameters->MaxRasterCount = FMath::Clamp(GHairStrandsVoxelComputeRasterMaxVoxelCount, 1, 256);
-			PassParameters->VirtualVoxelParams = VoxelResources.Parameters.Common;
-			PassParameters->MacroGroupId = MacroGroup.MacroGroupId;
-			PassParameters->VoxelizationViewInfoBuffer = VoxelizationViewInfoBufferSRV;
-			PassParameters->DispatchCountX = DispatchCountX;
-			PassParameters->OutPageTexture = PageTextureUAV;
-			PassParameters->FrameIdMod8 = FrameIdMode8;
-
 			check(PrimitiveInfo.MeshBatchAndRelevance.Mesh && PrimitiveInfo.MeshBatchAndRelevance.Mesh->Elements.Num() > 0);
 			const FHairGroupPublicData* HairGroupPublicData = reinterpret_cast<const FHairGroupPublicData*>(PrimitiveInfo.MeshBatchAndRelevance.Mesh->Elements[0].VertexFactoryUserData);
-			const FHairGroupPublicData::VertexFactoryInput& VFInput = HairGroupPublicData->VFInput;
-			PassParameters->HairStrandsVF_PositionBuffer = VFInput.HairPositionBuffer;
-			PassParameters->HairStrandsVF_PositionOffset = VFInput.HairPositionOffset;
-			PassParameters->HairStrandsVF_VertexCount = VFInput.VertexCount;
-			PassParameters->HairStrandsVF_Radius = VFInput.HairRadius;
-			PassParameters->HairStrandsVF_Length = VFInput.HairLength;
-			PassParameters->HairStrandsVF_Density = VFInput.HairDensity;
-			PassParameters->HairStrandsVF_LocalToWorldPrimitiveTransform = VFInput.LocalToWorldTransform.ToMatrixWithScale();
 
-			const uint32 DispatchCountY = FMath::CeilToInt(PassParameters->HairStrandsVF_VertexCount / float(GroupSize * DispatchCountX));
-			const FIntVector DispatchCount(DispatchCountX, DispatchCountY, 1);
-			FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("HairStrandsVoxelComputeRaster"), ComputeShader, PassParameters, DispatchCount);
+			if (HairGroupPublicData->DoesSupportVoxelization())
+			{
+				const FHairGroupPublicData::FVertexFactoryInput& VFInput = HairGroupPublicData->VFInput;
+
+				FVoxelRasterComputeCS::FParameters* PassParameters = GraphBuilder.AllocParameters<FVoxelRasterComputeCS::FParameters>();
+				PassParameters->MaxRasterCount = FMath::Clamp(GHairStrandsVoxelComputeRasterMaxVoxelCount, 1, 256);
+				PassParameters->VirtualVoxelParams = VoxelResources.Parameters.Common;
+				PassParameters->MacroGroupId = MacroGroup.MacroGroupId;
+				PassParameters->VoxelizationViewInfoBuffer = VoxelizationViewInfoBufferSRV;
+				PassParameters->DispatchCountX = DispatchCountX;
+				PassParameters->OutPageTexture = PageTextureUAV;
+				PassParameters->FrameIdMod8 = FrameIdMode8;
+
+				PassParameters->HairStrandsVF_PositionBuffer = VFInput.Strands.PositionBuffer;
+				PassParameters->HairStrandsVF_PositionOffset = VFInput.Strands.PositionOffset;
+				PassParameters->HairStrandsVF_VertexCount = VFInput.Strands.VertexCount;
+				PassParameters->HairStrandsVF_Radius = VFInput.Strands.HairRadius;
+				PassParameters->HairStrandsVF_Length = VFInput.Strands.HairLength;
+				PassParameters->HairStrandsVF_Density = VFInput.Strands.HairDensity;
+				PassParameters->HairStrandsVF_LocalToWorldPrimitiveTransform = VFInput.LocalToWorldTransform.ToMatrixWithScale();
+
+				const bool bCullingEnable = HairGroupPublicData->GetCullingResultAvailable();
+				PassParameters->HairStrandsVF_bIsCullingEnable = bCullingEnable ? 1 : 0;
+
+				if (bCullingEnable)
+				{
+					FRDGImportedBuffer CullingIndirectBuffer = Register(GraphBuilder, HairGroupPublicData->GetDrawIndirectRasterComputeBuffer(), ERDGImportedBufferFlags::CreateSRV);
+					PassParameters->HairStrandsVF_CullingIndirectBuffer		= CullingIndirectBuffer.SRV;
+					PassParameters->HairStrandsVF_CullingIndexBuffer		= RegisterAsSRV(GraphBuilder, HairGroupPublicData->GetCulledVertexIdBuffer());
+					PassParameters->HairStrandsVF_CullingRadiusScaleBuffer	= RegisterAsSRV(GraphBuilder, HairGroupPublicData->GetCulledVertexRadiusScaleBuffer());
+					PassParameters->IndirectBufferArgs = CullingIndirectBuffer.Buffer;
+
+					FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("HairStrandsVoxelComputeRaster(culling=on)"), ComputeShader_CullingOn, PassParameters, CullingIndirectBuffer.Buffer, 0);
+				}
+				else
+				{
+					const uint32 DispatchCountY = FMath::CeilToInt(PassParameters->HairStrandsVF_VertexCount / float(GroupSize * DispatchCountX));
+					const FIntVector DispatchCount(DispatchCountX, DispatchCountY, 1);
+					FComputeShaderUtils::AddPass(GraphBuilder, RDG_EVENT_NAME("HairStrandsVoxelComputeRaster(culling=off)"), ComputeShader_CullingOff, PassParameters, DispatchCount);
+				}
+
+			}
 		}
 	}
 }
@@ -1154,9 +1176,6 @@ static void AddVirtualVoxelizationRasterPass(
 		MacroGroup.VirtualVoxelNodeDesc.WorldToClip = WorldToClip;
 	}
 
-	FRDGBufferRef VoxelizationViewInfoBuffer = GraphBuilder.RegisterExternalBuffer(VoxelResources.VoxelizationViewInfoBuffer);
-	FRDGTextureRef PageTexture = GraphBuilder.RegisterExternalTexture(VoxelResources.PageTexture);
-
 	const bool bUseComputeRaster = GHairStrandsVoxelComputeRaster > 0;
 	if (bIsGPUDriven && bUseComputeRaster)
 	{	
@@ -1172,12 +1191,12 @@ static void AddVirtualVoxelizationRasterPass(
 	PassParameters->VoxelResolution = TotalVoxelResolution; // i.e., the virtual resolution
 	PassParameters->MacroGroupId = MacroGroup.MacroGroupId;
 	PassParameters->ViewportResolution = RasterResolution;
-	PassParameters->VoxelizationViewInfoBuffer = GraphBuilder.CreateSRV(VoxelizationViewInfoBuffer);
-	PassParameters->DensityTexture = GraphBuilder.CreateUAV(PageTexture);
+	PassParameters->VoxelizationViewInfoBuffer = GraphBuilder.CreateSRV(VoxelResources.VoxelizationViewInfoBuffer);
+	PassParameters->DensityTexture = GraphBuilder.CreateUAV(VoxelResources.PageTexture);
 
 	// For debug purpose
 	#if 0
-	FRDGTextureRef DebugOutputTexture = GraphBuilder.CreateTexture(FPooledRenderTargetDesc::Create2DDesc(RasterResolution, PF_R32_UINT, FClearValueBinding::Black, TexCreate_None, TexCreate_RenderTargetable, false), TEXT("DummyTexture"));
+	FRDGTextureRef DebugOutputTexture = GraphBuilder.CreateTexture(FRDGTextureDesc::Create2D(RasterResolution, PF_R32_UINT, FClearValueBinding::Black, TexCreate_RenderTargetable), TEXT("DummyTexture"));
 	PassParameters->RenderTargets[0] = FRenderTargetBinding(DebugOutputTexture, ERenderTargetLoadAction::EClear);
 	#endif
 
@@ -1204,7 +1223,7 @@ class FVirtualVoxelGenerateMipCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -1226,7 +1245,7 @@ class FVirtualVoxelIndirectArgMipCS : public FGlobalShader
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -1247,13 +1266,15 @@ class FVirtualVoxelPatchPageIndexWithMipDataCS : public FGlobalShader
 
 		SHADER_PARAMETER_RDG_TEXTURE(Texture3D, DensityTexture)
 		SHADER_PARAMETER_RDG_BUFFER(Buffer, IndirectDispatchArgs)
+		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer, PageIndexGlobalCounter)
 		SHADER_PARAMETER_RDG_BUFFER_SRV(Buffer<uint>, PageToPageIndexBuffer)
 		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint>, OutPageIndexBuffer)
+		SHADER_PARAMETER_RDG_BUFFER_UAV(RWBuffer<uint2>, OutPageIndexOccupancyBuffer)
 
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(Parameters.Platform); }
+	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters) { return IsHairStrandsSupported(EHairStrandsShaderType::Strands, Parameters.Platform); }
 	static void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
@@ -1272,7 +1293,7 @@ static void AddVirtualVoxelGenerateMipPass(
 	const FViewInfo& View,
 	FHairStrandsMacroGroupDatas& MacroGroups,
 	FRDGBufferRef IndirectArgsBuffer, 
-	TRefCountPtr<FPooledRDGBuffer>& InPageToPageIndexBuffer)
+	FRDGBufferRef InPageToPageIndexBuffer)
 {
 	if (!MacroGroups.VirtualVoxelResources.IsValid())
 		return;
@@ -1283,9 +1304,7 @@ static void AddVirtualVoxelGenerateMipPass(
 
 	FVirtualVoxelResources& VoxelResources = MacroGroups.VirtualVoxelResources;
 
-	const uint32 MipCount = VoxelResources.PageTexture->GetDesc().NumMips;
-	FRDGTextureRef VoxelDensityTexture = GraphBuilder.RegisterExternalTexture(VoxelResources.PageTexture, TEXT("HairVirtualVoxelDensityTexture"));
-	FRDGBufferRef PageIndexBuffer = GraphBuilder.RegisterExternalBuffer(VoxelResources.PageIndexBuffer, TEXT("HairVirtualVoxelDensityTexturePageIndex"));
+	const uint32 MipCount = VoxelResources.PageTexture->Desc.NumMips;
 
 	// Prepare indirect dispatch for all the pages this frame (allocated linearly in 3D DensityTexture)
 	TArray<FRDGBufferRef> MipIndirectArgsBuffers;
@@ -1314,8 +1333,8 @@ static void AddVirtualVoxelGenerateMipPass(
 		const uint32 TargetMipIndex = MipIt + 1;
 
 		FVirtualVoxelGenerateMipCS::FParameters* Parameters = GraphBuilder.AllocParameters<FVirtualVoxelGenerateMipCS::FParameters>();
-		Parameters->InDensityTexture = GraphBuilder.CreateSRV(FRDGTextureSRVDesc::CreateForMipLevel(VoxelDensityTexture, MipIt));
-		Parameters->OutDensityTexture = GraphBuilder.CreateUAV(FRDGTextureUAVDesc(VoxelDensityTexture, MipIt + 1));
+		Parameters->InDensityTexture = GraphBuilder.CreateSRV(FRDGTextureSRVDesc::CreateForMipLevel(VoxelResources.PageTexture, MipIt));
+		Parameters->OutDensityTexture = GraphBuilder.CreateUAV(FRDGTextureUAVDesc(VoxelResources.PageTexture, MipIt + 1));
 		Parameters->PageResolution = VoxelResources.Parameters.Common.PageResolution;
 		Parameters->PageCountResolution = VoxelResources.Parameters.Common.PageCountResolution;
 		Parameters->SourceMip = SourceMipIndex;
@@ -1327,7 +1346,7 @@ static void AddVirtualVoxelGenerateMipPass(
 		GraphBuilder.AddPass(
 			RDG_EVENT_NAME("HairStrandsComputeVoxelMip"),
 			Parameters,
-			ERDGPassFlags::Compute | ERDGPassFlags::GenerateMips,
+			ERDGPassFlags::Compute,
 			[Parameters, ComputeShader](FRHICommandList& RHICmdList)
 		{
 			FComputeShaderUtils::DispatchIndirect(RHICmdList, ComputeShader, *Parameters, Parameters->IndirectDispatchArgs->GetIndirectRHICallBuffer(), 0);
@@ -1335,20 +1354,23 @@ static void AddVirtualVoxelGenerateMipPass(
 	}
 
 	// Patch the page index buffer with page whose voxels are empty after the voxelization is done
-	FRDGBufferRef PageToPageIndexBuffer = GraphBuilder.RegisterExternalBuffer(InPageToPageIndexBuffer, TEXT("PageToPageIndexBuffer"));
-	FRDGBufferSRVRef PageToPageIndexBufferSRV = GraphBuilder.CreateSRV(PageToPageIndexBuffer, PF_R32_UINT);
-	FRDGBufferUAVRef PageIndexBufferUAV = GraphBuilder.CreateUAV(PageIndexBuffer, PF_R32_UINT);
+	FRDGBufferSRVRef PageToPageIndexBufferSRV = GraphBuilder.CreateSRV(InPageToPageIndexBuffer, PF_R32_UINT);
+	FRDGBufferUAVRef PageIndexBufferUAV = GraphBuilder.CreateUAV(VoxelResources.PageIndexBuffer, PF_R32_UINT);
+	FRDGBufferUAVRef PageIndexOccupancyBufferUAV = GraphBuilder.CreateUAV(VoxelResources.PageIndexOccupancyBuffer, PF_R32G32_UINT);
+	
 	const bool bPatchEmptyPage = GHairVirtualVoxelInvalidEmptyPageIndex > 0;
 	if (bPatchEmptyPage)
 	{
 		const uint32 LastMipIt = MipCount - 1;
 		FVirtualVoxelPatchPageIndexWithMipDataCS::FParameters* Parameters = GraphBuilder.AllocParameters<FVirtualVoxelPatchPageIndexWithMipDataCS::FParameters>();
 		Parameters->MipIt = LastMipIt;
+		Parameters->PageIndexGlobalCounter = GraphBuilder.CreateSRV(VoxelResources.PageIndexGlobalCounter, PF_R32_UINT);
 		Parameters->PageResolution = VoxelResources.Parameters.Common.PageResolution;
 		Parameters->PageCountResolution = VoxelResources.Parameters.Common.PageCountResolution;
-		Parameters->DensityTexture = VoxelDensityTexture;
+		Parameters->DensityTexture = VoxelResources.PageTexture;
 		Parameters->PageToPageIndexBuffer = PageToPageIndexBufferSRV;
 		Parameters->OutPageIndexBuffer = PageIndexBufferUAV;
+		Parameters->OutPageIndexOccupancyBuffer = PageIndexOccupancyBufferUAV;
 		Parameters->IndirectDispatchArgs = MipIndirectArgsBuffers[LastMipIt-1];
 
 		TShaderMapRef<FVirtualVoxelPatchPageIndexWithMipDataCS> ComputeShader(View.ShaderMap);
@@ -1366,7 +1388,7 @@ static void AddVirtualVoxelGenerateMipPass(
 /////////////////////////////////////////////////////////////////////////////////////////
 
 void VoxelizeHairStrands(
-	FRHICommandListImmediate& RHICmdList, 
+	FRDGBuilder& GraphBuilder, 
 	const FScene* Scene, 
 	const TArray<FViewInfo>& Views,
 	FHairStrandsMacroGroupViews& MacroGroupsViews)
@@ -1387,18 +1409,17 @@ void VoxelizeHairStrands(
 			continue;
 
 		DECLARE_GPU_STAT(HairStrandsVoxelization);
-		SCOPED_DRAW_EVENT(RHICmdList, HairStrandsVoxelization);
-		SCOPED_GPU_STAT(RHICmdList, HairStrandsVoxelization);
+		RDG_EVENT_SCOPE(GraphBuilder, "HairStrandsVoxelization");
+		RDG_GPU_STAT_SCOPE(GraphBuilder, HairStrandsVoxelization);
 
 		if (MacroGroupDatas.Datas.Num() > 0)
 		{
 			// Toto moves this function into the render graph. At the moment this is not possible as this functions 
 			// generates internally a non-transient constant buffer which initialized VirtualVoxelResources. This 
 			// needs to be rewritten/worked out.
-			TRefCountPtr<FPooledRDGBuffer> PageToPageIndexBuffer;
-			MacroGroupDatas.VirtualVoxelResources = AllocateVirtualVoxelResources(RHICmdList, View, MacroGroupDatas, PageToPageIndexBuffer);
+			FRDGBufferRef PageToPageIndexBuffer = nullptr;
+			MacroGroupDatas.VirtualVoxelResources = AllocateVirtualVoxelResources(GraphBuilder, View, MacroGroupDatas, PageToPageIndexBuffer);
 
-			FRDGBuilder GraphBuilder(RHICmdList);
 			FRDGBufferRef ClearIndArgsBuffer = IndirectVoxelPageClear(GraphBuilder, View, MacroGroupDatas.VirtualVoxelResources);
 
 			for (FHairStrandsMacroGroupData& MacroGroup : MacroGroupDatas.Datas)
@@ -1411,12 +1432,10 @@ void VoxelizeHairStrands(
 				for (FHairStrandsMacroGroupData& MacroGroup : MacroGroupDatas.Datas)
 				{
 					AddVirtualVoxelInjectOpaquePass(GraphBuilder, View, MacroGroupDatas.VirtualVoxelResources, MacroGroup);
-				}					
+				}
 			}
 
 			AddVirtualVoxelGenerateMipPass(GraphBuilder, View, MacroGroupDatas, ClearIndArgsBuffer, PageToPageIndexBuffer);
-
-			GraphBuilder.Execute();
 		}
 	}
 }

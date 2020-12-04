@@ -17,6 +17,8 @@ namespace Chaos
 
 	using FJointPostApplyCallback = TFunction<void(const FReal Dt, const TArray<FPBDJointConstraintHandle*>& InConstraintHandles)>;
 
+	using FJointBreakCallback = TFunction<void(FPBDJointConstraintHandle * ConstraintHandle)>;
+
 	enum class EJointMotionType : int32
 	{
 		Free,
@@ -33,6 +35,7 @@ namespace Chaos
 	/**
 	 * The order of the angular constraints (for settings held in vectors etc)
 	 */
+	// @todo(ccaulfield): rename EJointAngularConstraintType
 	enum class EJointAngularConstraintIndex : int32
 	{
 		Twist,
@@ -105,6 +108,10 @@ namespace Chaos
 		FReal AngularProjection;
 		FReal ParentInvMassScale;
 
+		bool bCollisionEnabled;
+		bool bProjectionEnabled;
+		bool bSoftProjectionEnabled;
+
 		TVector<EJointMotionType, 3> LinearMotionTypes;
 		FReal LinearLimit;
 
@@ -123,16 +130,23 @@ namespace Chaos
 		FReal SoftSwingStiffness;
 		FReal SoftSwingDamping;
 
-		FVec3 LinearDriveTarget;
+		FReal LinearRestitution;
+		FReal TwistRestitution;
+		FReal SwingRestitution;
+
+		FReal LinearContactDistance;
+		FReal TwistContactDistance;
+		FReal SwingContactDistance;
+
+		FVec3 LinearDrivePositionTarget;
+		FVec3 LinearDriveVelocityTarget;
 		TVector<bool, 3> bLinearPositionDriveEnabled;
 		TVector<bool, 3> bLinearVelocityDriveEnabled;
 		EJointForceMode LinearDriveForceMode;
 		FReal LinearDriveStiffness;
 		FReal LinearDriveDamping;
 
-		// @todo(ccaulfield): remove one of these
 		FRotation3 AngularDrivePositionTarget;
-		FVec3 AngularDriveTargetAngles;
 		FVec3 AngularDriveVelocityTarget;
 
 		bool bAngularSLerpPositionDriveEnabled;
@@ -144,6 +158,11 @@ namespace Chaos
 		EJointForceMode AngularDriveForceMode;
 		FReal AngularDriveStiffness;
 		FReal AngularDriveDamping;
+
+		FReal LinearBreakForce;
+		FReal AngularBreakTorque;
+
+		void* UserData;
 	};
 
 	class CHAOS_API FPBDJointSolverSettings
@@ -164,9 +183,6 @@ namespace Chaos
 		FReal MinParentMassRatio;
 		FReal MaxInertiaRatio;
 
-		// Angular stiffness
-		FReal AngularConstraintPositionCorrection;
-
 		// @todo(ccaulfield): remove these TEMP overrides for testing
 		bool bEnableTwistLimits;
 		bool bEnableSwingLimits;
@@ -185,4 +201,5 @@ namespace Chaos
 		FReal SoftSwingStiffness;
 		FReal SoftSwingDamping;
 	};
+
 }

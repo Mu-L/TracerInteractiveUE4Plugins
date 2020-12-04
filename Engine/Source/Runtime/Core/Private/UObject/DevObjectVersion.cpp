@@ -19,6 +19,7 @@
 #include "UObject/AnimPhysObjectVersion.h"
 #include "UObject/AnimObjectVersion.h"
 #include "UObject/FortniteMainBranchObjectVersion.h"
+#include "UObject/FortniteReleaseBranchCustomObjectVersion.h"
 #include "UObject/ReflectionCaptureObjectVersion.h"
 #include "UObject/LoadTimesObjectVersion.h"
 #include "UObject/AutomationObjectVersion.h"
@@ -27,6 +28,8 @@
 #include "UObject/ExternalPhysicsCustomObjectVersion.h"
 #include "UObject/ExternalPhysicsMaterialCustomObjectVersion.h"
 #include "UObject/CineCameraObjectVersion.h"
+#include "UObject/VirtualProductionObjectVersion.h"
+#include "UObject/MediaFrameWorkObjectVersion.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogDevObjectVersion, Log, All);
 
@@ -151,6 +154,11 @@ const FGuid FFortniteMainBranchObjectVersion::GUID(0x601D1886, 0xAC644F84, 0xAA1
 // Register Fortnite Main custom version with Core
 FDevVersionRegistration GRegisterFortniteMainBranchObjectVersion(FFortniteMainBranchObjectVersion::GUID, FFortniteMainBranchObjectVersion::LatestVersion, TEXT("FortniteMain"));
 
+// Unique Fortnite Release Object version id
+const FGuid FFortniteReleaseBranchCustomObjectVersion::GUID(0xE7086368, 0x6B234C58, 0x84391B70, 0x16265E91);
+// Register Fortnite Release custom version with Core
+FDevVersionRegistration GRegisterFortniteReleaseBranchCustomObjectVersion(FFortniteReleaseBranchCustomObjectVersion::GUID, FFortniteReleaseBranchCustomObjectVersion::LatestVersion, TEXT("FortniteRelease"));
+
 // Unique Enterprise Object version id
 const FGuid FEnterpriseObjectVersion::GUID(0x9DFFBCD6, 0x494F0158, 0xE2211282, 0x3C92A888);
 // Register Enterprise custom version with Core
@@ -182,4 +190,15 @@ FDevVersionRegistration GRegisterExternalPhysicsMaterialCustomVersion(FExternalP
 const FGuid FCineCameraObjectVersion::GUID(0xB2E18506, 0x4273CFC2, 0xA54EF4BB, 0x758BBA07);
 // Register CineCamera custom version with Core
 FDevVersionRegistration GRegisterCineCameraObjectVersion(FCineCameraObjectVersion::GUID, FCineCameraObjectVersion::LatestVersion, TEXT("Dev-CineCamera"));
+
+// Unique VirtualProduction Object version id
+const FGuid FVirtualProductionObjectVersion::GUID(0x64F58936, 0xFD1B42BA, 0xBA967289, 0xD5D0FA4E);
+// Register VirtualProduction custom version with Core
+FDevVersionRegistration GRegisterVirtualProductionObjectVersion(FVirtualProductionObjectVersion::GUID, FVirtualProductionObjectVersion::LatestVersion, TEXT("Dev-VirtualProduction"));
+
+// Unique MediaFramework Object version id
+const FGuid FMediaFrameworkObjectVersion::GUID(0x6f0ed827, 0xa6094895, 0x9c91998d, 0x90180ea4);
+// Register MediaFramework custom version with Core
+FDevVersionRegistration GRegisterMediaFrameworkObjectVersion(FMediaFrameworkObjectVersion::GUID, FMediaFrameworkObjectVersion::LatestVersion, TEXT("Dev-MediaFramework"));
+
 

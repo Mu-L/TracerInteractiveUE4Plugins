@@ -259,6 +259,15 @@ public:
 	bool bShareMaterialShaderCode;
 
 	/** 
+	 * With this option off, the shader code will be stored in the library essentially in a random order,
+	 * squarely the same in which the assets were loaded by the cooker. Enabling this will sort the shaders
+	 * by their hash, which makes the shader library more similar between the builds which can help patching, but
+	 * can adversely affect loading times.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = Packaging, meta = (EditCondition = "bShareMaterialShaderCode"))
+	bool bDeterministicShaderCodeOrder;
+
+	/**
 	 * By default shader shader code gets saved into individual platform agnostic files,
 	 * enabling this option will use the platform-specific library format if and only if one is available
 	 * This will reduce overall package size but might increase loading time
@@ -390,17 +399,25 @@ public:
 
 	/**
 	 * Directories containing .uasset files that should always be cooked regardless of whether they're referenced by anything in your project
-	 * These paths are stored relative to the project root so they can start with /game, /engine, or /pluginname
+	 * These paths are stored either as a full package path (e.g. /Game/Folder, /Engine/Folder, /PluginName/Folder) or as a relative package path from /Game
 	 */
 	UPROPERTY(config, EditAnywhere, Category=Packaging, AdvancedDisplay, meta=(DisplayName="Additional Asset Directories to Cook", LongPackageName))
 	TArray<FDirectoryPath> DirectoriesToAlwaysCook;
 
 	/**
 	 * Directories containing .uasset files that should never be cooked even if they are referenced by your project
-	 * These paths are stored relative to the project root so they can start with /game, /engine, or /pluginname
+	 * These paths are stored either as a full package path (e.g. /Game/Folder, /Engine/Folder, /PluginName/Folder) or as a relative package path from /Game
 	 */
 	UPROPERTY(config, EditAnywhere, Category = Packaging, AdvancedDisplay, meta = (DisplayName = "Directories to never cook", LongPackageName))
 	TArray<FDirectoryPath> DirectoriesToNeverCook;
+
+	/**
+	 * Directories containing .uasset files that are for editor testing purposes and should not be included in
+	 * enumerations of all packages in a root directory, because they will cause errors on load
+	 * These paths are stored either as a full package path (e.g. /Game/Folder, /Engine/Folder, /PluginName/Folder) or as a relative package path from /Game
+	 */
+	UPROPERTY(config, EditAnywhere, Category = Packaging, AdvancedDisplay, meta = (DisplayName = "Test directories to not search", LongPackageName))
+	TArray<FDirectoryPath> TestDirectoriesToNotSearch;
 
 	/**
 	 * Directories containing files that should always be added to the .pak file (if using a .pak file; otherwise they're copied as individual files)
@@ -437,12 +454,6 @@ public:
 private:
 	/** Helper array used to mirror Blueprint asset selections across edits */
 	TArray<FFilePath> CachedNativizeBlueprintAssets;
-
-	UPROPERTY(config)
-	bool bNativizeBlueprintAssets_DEPRECATED;
-
-	UPROPERTY(config)
-	bool bNativizeOnlySelectedBlueprints_DEPRECATED;
 	
 public:
 

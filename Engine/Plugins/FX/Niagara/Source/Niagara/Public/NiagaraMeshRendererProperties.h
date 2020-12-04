@@ -28,6 +28,18 @@ enum class ENiagaraMeshFacingMode : uint8
 };
 
 UENUM()
+enum class ENiagaraMeshPivotOffsetSpace : uint8 {
+	/** The pivot offset is in the mesh's local space (default) */
+	Mesh,
+	/** The pivot offset is in the emitter's local space if the emitter is marked as local-space, or in world space otherwise */
+	Simulation,
+	/** The pivot offset is in world space */
+	World,
+	/** The pivot offset is in the emitter's local space */
+	Local
+};
+
+UENUM()
 enum class ENiagaraMeshLockedAxisSpace : uint8 {
 	/** The locked axis is in the emitter's local space if the emitter is marked as local-space, or in world space otherwise */
 	Simulation,
@@ -38,7 +50,7 @@ enum class ENiagaraMeshLockedAxisSpace : uint8 {
 };
 
 USTRUCT()
-struct FNiagaraMeshMaterialOverride 
+struct NIAGARA_API FNiagaraMeshMaterialOverride 
 {
 	GENERATED_USTRUCT_BODY()
 public:	
@@ -65,8 +77,31 @@ struct TStructOpsTypeTraits<FNiagaraMeshMaterialOverride> : public TStructOpsTyp
 	};
 };
 
+namespace ENiagaraMeshVFLayout
+{
+	enum Type
+	{
+		Position,
+		Velocity,
+		Color,
+		Scale,
+		Transform,
+		MaterialRandom,
+		NormalizedAge,
+		CustomSorting,
+		SubImage,
+		DynamicParam0,
+		DynamicParam1,
+		DynamicParam2,
+		DynamicParam3,
+		CameraOffset,
+
+		Num,
+	};
+};
+
 UCLASS(editinlinenew, meta = (DisplayName = "Mesh Renderer"))
-class UNiagaraMeshRendererProperties : public UNiagaraRendererProperties
+class NIAGARA_API UNiagaraMeshRendererProperties : public UNiagaraRendererProperties
 {
 public:
 	GENERATED_BODY()
@@ -74,6 +109,7 @@ public:
 	UNiagaraMeshRendererProperties();
 
 	//UObject Interface
+	virtual void PostLoad() override;
 	virtual void PostInitProperties() override;
 	virtual void Serialize(FArchive& Ar) override;
 #if WITH_EDITORONLY_DATA
@@ -86,11 +122,10 @@ public:
 	static void InitCDOPropertiesAfterModuleStartup();
 
 	//~ UNiagaraRendererProperties interface
-	virtual FNiagaraRenderer* CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel, const FNiagaraEmitterInstance* Emitter) override;
+	virtual FNiagaraRenderer* CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel, const FNiagaraEmitterInstance* Emitter, const UNiagaraComponent* InComponent) override;
 	virtual class FNiagaraBoundsCalculator* CreateBoundsCalculator() override;
 	virtual void GetUsedMaterials(const FNiagaraEmitterInstance* InEmitter, TArray<UMaterialInterface*>& OutMaterials) const override;
 	virtual bool IsSimTargetSupported(ENiagaraSimTarget InSimTarget) const override { return true; };
-	virtual void PostLoad();
 
 #if WITH_EDITORONLY_DATA
 	virtual bool IsMaterialValidForRenderer(UMaterial* Material, FText& InvalidMessage) override;
@@ -100,8 +135,11 @@ public:
 	virtual	void GetRendererTooltipWidgets(const FNiagaraEmitterInstance* InEmitter, TArray<TSharedPtr<SWidget>>& OutWidgets, TSharedPtr<FAssetThumbnailPool> InThumbnailPool) const override;
 	virtual void GetRendererFeedback(const UNiagaraEmitter* InEmitter, TArray<FText>& OutErrors, TArray<FText>& OutWarnings, TArray<FText>& OutInfo) const override;
 	void OnMeshChanged();
+	void OnMeshPostBuild(UStaticMesh*);
 	void CheckMaterialUsage();
 #endif // WITH_EDITORONLY_DATA
+	virtual void CacheFromCompiledData(const FNiagaraDataSetCompiledData* CompiledData) override;
+	//UNiagaraRendererProperties Interface END
 
 	virtual uint32 GetNumIndicesPerInstance() const final override;
 	void GetIndexInfoPerSection(int32 LODIndex, TArray<TPair<int32, int32>>& InfoPerSection) const;
@@ -135,7 +173,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = "SubUV", meta = (DisplayName = "Sub UV Blending Enabled"))
 	uint32 bSubImageBlend : 1;
 
-	/** Determines how the mesh orients itself relative to the camera.*/
+	/** Determines how the mesh orients itself relative to the camera. */
 	UPROPERTY(EditAnywhere, Category = "Mesh Rendering")
 	ENiagaraMeshFacingMode FacingMode;
 
@@ -150,6 +188,32 @@ public:
 	/** Specifies what space the locked axis is in */
 	UPROPERTY(EditAnywhere, Category = "Mesh Rendering", meta = (EditCondition = "bLockedAxisEnable"))
 	ENiagaraMeshLockedAxisSpace LockedAxisSpace;
+
+	/** Offset of the mesh pivot */
+	UPROPERTY(EditAnywhere, Category = "Mesh Rendering")
+	FVector PivotOffset;
+
+	/** What space is the pivot offset in? */
+	UPROPERTY(EditAnywhere, Category = "Mesh Rendering")
+	ENiagaraMeshPivotOffsetSpace PivotOffsetSpace;
+	
+	/** Enables frustum culling of individual mesh particles */
+	UPROPERTY(EditAnywhere, Category = "Visibility")
+	uint32 bEnableFrustumCulling : 1;
+
+	/** Enables frustum culling of individual mesh particles */
+	UPROPERTY(EditAnywhere, Category = "Visibility")
+	uint32 bEnableCameraDistanceCulling : 1;
+
+	UPROPERTY(EditAnywhere, Category = "Visibility", meta = (EditCondition = "bEnableCameraDistanceCulling", UIMin = 0.0f))
+	float MinCameraDistance;
+	
+	UPROPERTY(EditAnywhere, Category = "Visibility", meta = (EditCondition = "bEnableCameraDistanceCulling", UIMin = 0.0f))
+	float MaxCameraDistance = 1000.0f;
+
+	/** If a render visibility tag is present, particles whose tag matches this value will be visible in this renderer. */
+	UPROPERTY(EditAnywhere, Category = "Visibility")
+	uint32 RendererVisibility = 0;
 	
 	/** Which attribute should we use for position when generating instanced meshes?*/
 	UPROPERTY(EditAnywhere, Category = "Bindings")
@@ -207,6 +271,13 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Bindings")
 	FNiagaraVariableAttributeBinding CameraOffsetBinding;
 
+	/** Which attribute should we use for the renderer visibility tag? */
+	UPROPERTY(EditAnywhere, Category = "Bindings")
+	FNiagaraVariableAttributeBinding RendererVisibilityTagBinding;
+
+	uint32 MaterialParamValidMask = 0;
+	FNiagaraRendererLayout RendererLayoutWithCustomSorting;
+	FNiagaraRendererLayout RendererLayoutWithoutCustomSorting;
 
 protected:
 	bool FindBinding(const FNiagaraUserParameterBinding& InBinding, const FNiagaraEmitterInstance* InEmitter, TArray<UMaterialInterface*>& OutMaterials);

@@ -23,8 +23,7 @@
 
 bool UMeshColorPaintingToolBuilder::CanBuildTool(const FToolBuilderState& SceneState) const
 {
-	UActorComponent* ActorComponent = ToolBuilderUtil::FindFirstComponent(SceneState, UMeshPaintingToolset::HasPaintableMesh);
-	return ActorComponent != nullptr;
+	return true;
 }
 
 UInteractiveTool* UMeshColorPaintingToolBuilder::BuildTool(const FToolBuilderState& SceneState) const
@@ -35,8 +34,7 @@ UInteractiveTool* UMeshColorPaintingToolBuilder::BuildTool(const FToolBuilderSta
 
 bool UMeshWeightPaintingToolBuilder::CanBuildTool(const FToolBuilderState& SceneState) const
 {
-	UActorComponent* ActorComponent = ToolBuilderUtil::FindFirstComponent(SceneState, UMeshPaintingToolset::HasPaintableMesh);
-	return ActorComponent != nullptr;
+	return true;
 }
 
 UInteractiveTool* UMeshWeightPaintingToolBuilder::BuildTool(const FToolBuilderState& SceneState) const
@@ -59,32 +57,15 @@ UMeshVertexPaintingToolProperties::UMeshVertexPaintingToolProperties()
 {
 }
 
-
-
-void UMeshVertexPaintingToolProperties::SaveProperties(UInteractiveTool* SaveFromTool)
-{
-	UBrushBaseProperties::SaveProperties(SaveFromTool);
-	UMeshVertexPaintingToolProperties* PropertyCache = GetPropertyCache<UMeshVertexPaintingToolProperties>();
-	PropertyCache->PaintColor = this->PaintColor;
-	PropertyCache->EraseColor = this->EraseColor;
-	PropertyCache->bEnableFlow = this->bEnableFlow;
-	PropertyCache->bOnlyFrontFacingTriangles = this->bOnlyFrontFacingTriangles;
-}
-
-void UMeshVertexPaintingToolProperties::RestoreProperties(UInteractiveTool* RestoreToTool)
-{
-	UMeshVertexPaintingToolProperties* PropertyCache = GetPropertyCache<UMeshVertexPaintingToolProperties>();
-	this->PaintColor = PropertyCache->PaintColor;
-	this->EraseColor = PropertyCache->EraseColor;
-	this->bEnableFlow = PropertyCache->bEnableFlow;
-	this->bOnlyFrontFacingTriangles = PropertyCache->bOnlyFrontFacingTriangles;
-}
-
 UMeshVertexPaintingTool::UMeshVertexPaintingTool()
 {
 	PropertyClass = UMeshVertexPaintingToolProperties::StaticClass();
 }
 
+bool UMeshVertexPaintingTool::IsMeshAdapterSupported(TSharedPtr<IMeshPaintComponentAdapter> MeshAdapter) const
+{
+	return MeshAdapter.IsValid() ? MeshAdapter->SupportsVertexPaint() : false;
+}
 
 void UMeshVertexPaintingTool::Setup()
 {
@@ -93,7 +74,18 @@ void UMeshVertexPaintingTool::Setup()
 	bResultValid = false;
 	bStampPending = false;
 	BrushProperties->RestoreProperties(this);
+
+	// Needed after restoring properties because the brush radius may be an output
+	// property based on selection, so we shouldn't use the last stored value there.
+	// We wouldn't have this problem if we restore properties before getting
+	// BrushRelativeSizeRange, but that happens in the Super::Setup() call earlier.
+	RecalculateBrushRadius(); 
+
 	BrushStampIndicator->LineColor = FLinearColor::Green;
+	// Set up selection mechanic to find and select edges
+	SelectionMechanic = NewObject<UMeshPaintSelectionMechanic>(this);
+	SelectionMechanic->Setup(this);
+	
 }
 
 
@@ -170,10 +162,8 @@ void UMeshVertexPaintingTool::Render(IToolsContextRenderAPI* RenderAPI)
 
 }
 
-void UMeshVertexPaintingTool::Tick(float DeltaTime)
+void UMeshVertexPaintingTool::OnTick(float DeltaTime)
 {
-	Super::Tick(DeltaTime);
-
 	if (UMeshToolManager* MeshToolManager = Cast<UMeshToolManager>(GetToolManager()))
 	{
 		if (MeshToolManager->bNeedsRecache)
@@ -225,9 +215,12 @@ double UMeshVertexPaintingTool::EstimateMaximumTargetDimension()
 			}
 
 			bFirstItem = false;
+			bFoundComponentToUse = true;
 		}
-
-		return Extents.BoxExtent.GetAbsMax();
+		if (bFoundComponentToUse)
+		{
+			return Extents.BoxExtent.GetAbsMax();
+		}
 	}
 
 	return Super::EstimateMaximumTargetDimension();
@@ -458,6 +451,30 @@ bool UMeshVertexPaintingTool::CanAccept() const
 	return false;
 }
 
+FInputRayHit UMeshVertexPaintingTool::CanBeginClickDragSequence(const FInputDeviceRay& PressPos)
+{
+	FHitResult OutHit;
+	bCachedClickRay = false;
+	if (!HitTest(PressPos.WorldRay, OutHit))
+	{
+		if (SelectionMechanic->IsHitByClick(PressPos).bHit)
+		{
+			bCachedClickRay = true;
+			PendingClickRay = PressPos.WorldRay;
+			PendingClickScreenPosition = PressPos.ScreenPosition;
+			return FInputRayHit(0.0);
+		}
+	}
+	return Super::CanBeginClickDragSequence(PressPos);
+}
+
+void UMeshVertexPaintingTool::OnUpdateModifierState(int ModifierID, bool bIsOn)
+{
+	Super::OnUpdateModifierState(ModifierID, bIsOn);
+	SelectionMechanic->SetAddToSelectionSet(bShiftToggle);
+}
+
+
 void UMeshVertexPaintingTool::OnBeginDrag(const FRay& Ray)
 {
 	Super::OnBeginDrag(Ray);
@@ -469,6 +486,14 @@ void UMeshVertexPaintingTool::OnBeginDrag(const FRay& Ray)
 		// apply initial stamp
 		PendingStampRay = Ray;
 		bStampPending = true;
+	}
+	else if (bCachedClickRay)
+	{
+		FInputDeviceRay InputDeviceRay = FInputDeviceRay(PendingClickRay, PendingClickScreenPosition);
+		SelectionMechanic->SetAddToSelectionSet(bShiftToggle);
+		SelectionMechanic->OnClicked(InputDeviceRay);
+		bCachedClickRay = false;
+		RecalculateBrushRadius();
 	}
 }
 
@@ -513,7 +538,6 @@ void UMeshVertexPaintingTool::FinishPainting()
 	}
 }
 
-
 UMeshColorPaintingToolProperties::UMeshColorPaintingToolProperties()
 	:UMeshVertexPaintingToolProperties(),
 	bWriteRed(true),
@@ -522,26 +546,6 @@ UMeshColorPaintingToolProperties::UMeshColorPaintingToolProperties()
 	bWriteAlpha(false)
 {
 
-}
-
-void UMeshColorPaintingToolProperties::SaveProperties(UInteractiveTool* SaveFromTool)
-{
-	Super::SaveProperties(SaveFromTool);
-	UMeshColorPaintingToolProperties* PropertyCache = GetPropertyCache<UMeshColorPaintingToolProperties>();
-	PropertyCache->bWriteRed = this->bWriteRed;
-	PropertyCache->bWriteGreen = this->bWriteGreen;
-	PropertyCache->bWriteBlue = this->bWriteBlue;
-	PropertyCache->bWriteRed = this->bWriteRed;
-}
-
-void UMeshColorPaintingToolProperties::RestoreProperties(UInteractiveTool* RestoreToTool)
-{
-	Super::RestoreProperties(RestoreToTool);
-	UMeshColorPaintingToolProperties* PropertyCache = GetPropertyCache<UMeshColorPaintingToolProperties>();
-	this->bWriteRed = PropertyCache->bWriteRed;
-	this->bWriteGreen = PropertyCache->bWriteGreen;
-	this->bWriteBlue = PropertyCache->bWriteBlue;
-	this->bWriteRed = PropertyCache->bWriteRed;
 }
 
 UMeshColorPaintingTool::UMeshColorPaintingTool()
@@ -718,25 +722,6 @@ UMeshWeightPaintingToolProperties::UMeshWeightPaintingToolProperties()
 	PaintTextureWeightIndex(EMeshPaintTextureIndex::TextureOne),
 	EraseTextureWeightIndex(EMeshPaintTextureIndex::TextureTwo)
 {
-
-}
-
-void UMeshWeightPaintingToolProperties::SaveProperties(UInteractiveTool* SaveFromTool)
-{
-	Super::SaveProperties(SaveFromTool);
-	UMeshWeightPaintingToolProperties* PropertyCache = GetPropertyCache<UMeshWeightPaintingToolProperties>();
-	PropertyCache->TextureWeightType = this->TextureWeightType;
-	PropertyCache->PaintTextureWeightIndex = this->PaintTextureWeightIndex;
-	PropertyCache->EraseTextureWeightIndex = this->EraseTextureWeightIndex;
-}
-
-void UMeshWeightPaintingToolProperties::RestoreProperties(UInteractiveTool* RestoreToTool)
-{
-	Super::RestoreProperties(RestoreToTool);
-	UMeshWeightPaintingToolProperties* PropertyCache = GetPropertyCache<UMeshWeightPaintingToolProperties>();
-	this->TextureWeightType = PropertyCache->TextureWeightType;
-	this->PaintTextureWeightIndex = PropertyCache->PaintTextureWeightIndex;
-	this->EraseTextureWeightIndex = PropertyCache->EraseTextureWeightIndex;
 
 }
 

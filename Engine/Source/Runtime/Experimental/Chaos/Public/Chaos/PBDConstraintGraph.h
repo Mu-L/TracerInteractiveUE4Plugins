@@ -74,6 +74,11 @@ namespace Chaos
 		void AddConstraint(const uint32 InContainerId, FConstraintHandle* InConstraintHandle, const TVector<TGeometryParticleHandle<FReal, 3>*, 2>& InConstrainedParticles);
 
 		/**
+		 * Remove a constraint from the graph
+		 */
+		void RemoveConstraint(const uint32 InContainerId, FConstraintHandle* InConstraintHandle, const TVector<TGeometryParticleHandle<FReal, 3>*, 2>& InConstrainedParticles);
+
+		/**
 		 * Add particles/constraints to their particle's already-assigned islands (if applicable).
 		 */
 		 // @todo(ccaulfield): InitializeIslands and ResetIslands are a bit confusing. Try to come up with better names.
@@ -87,18 +92,18 @@ namespace Chaos
 		/**
 		 * Put particles in inactive islands to sleep.
 		 */
-		bool SleepInactive(const int32 Island, const TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>>& PerParticleMaterialAttributes);
+		bool SleepInactive(const int32 Island, const TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>>& PerParticleMaterialAttributes, const THandleArray<FChaosPhysicsMaterial>& SolverPhysicsMaterials);
 
 		/**
 		 * Wake all particles in an Island.
 		 */
-		void WakeIsland(const int32 Island);
+		void WakeIsland(TPBDRigidsSOAs<FReal, 3>& Particles, const int32 Island);
 
 		/**
 		 * Ensure that the particles in each island have consistent sleep states - if any are awake, wake all.
 		 */
 		 // @todo(ccaulfield): Do we really need this? It implies some behind-the-scenes state manipulation.
-		void ReconcileIslands();
+		//void ReconcileIslands();
 
 		/**
 		 * Get the list of ConstraintsData indices associated with the specified island. NOTE: ConstraintDataIndex is an internal index and not related to 
@@ -132,6 +137,14 @@ namespace Chaos
 		int32 NumIslands() const
 		{
 			return IslandToParticles.Num();
+		}
+
+		/**
+		 * When resim is used, tells us whether we need to resolve island
+		 */
+		bool IslandNeedsResim(const int32 Island) const
+		{
+			return IslandToData[Island].bNeedsResim;
 		}
 
 		/**
@@ -208,15 +221,16 @@ namespace Chaos
 		{
 			FIslandData()
 			    : bIsIslandPersistant(false)
+				, bNeedsResim(true)
 			{
 			}
 
 			bool bIsIslandPersistant;
+			bool bNeedsResim;
 		};
 
 		void ComputeIslands(const TParticleView<TPBDRigidParticles<FReal, 3>>& PBDRigids, TPBDRigidsSOAs<FReal, 3>& Particles);
-		void ComputeIsland(const int32 Node, const int32 Island,
-			TSet<TGeometryParticleHandle<FReal, 3>*>& DynamicParticlesInIsland, TSet<TGeometryParticleHandle<FReal, 3>*>& StaticParticlesInIsland);
+		bool ComputeIsland(const int32 Node, const int32 Island, TSet<TGeometryParticleHandle<FReal, 3>*>& ParticlesInIsland);
 		bool CheckIslands(const TArray<TGeometryParticleHandle<FReal, 3>*>& Particles);
 		
 		void ParticleAdd(TGeometryParticleHandle<FReal, 3>* AddedParticle);

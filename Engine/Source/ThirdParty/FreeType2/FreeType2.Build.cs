@@ -10,13 +10,14 @@ public class FreeType2 : ModuleRules
 	{
 		get
 		{
-			if (Target.Platform == UnrealTargetPlatform.IOS ||
+			if (Target.IsInPlatformGroup(UnrealPlatformGroup.Android))
+			{
+				return "FreeType2-2.10.4";
+			}
+			else if (Target.Platform == UnrealTargetPlatform.IOS ||
 				Target.Platform == UnrealTargetPlatform.Mac ||
-				Target.Platform == UnrealTargetPlatform.Switch ||
 				Target.Platform == UnrealTargetPlatform.Win32 ||
 				Target.Platform == UnrealTargetPlatform.Win64 ||
-				Target.Platform == UnrealTargetPlatform.XboxOne ||
-				Target.IsInPlatformGroup(UnrealPlatformGroup.Android) ||
 				Target.IsInPlatformGroup(UnrealPlatformGroup.Unix)
 			)
 			{
@@ -63,7 +64,7 @@ public class FreeType2 : ModuleRules
 
 		string LibPath;
 
-		if (FreeType2Version == "FreeType2-2.10.0")
+		if (FreeType2Version.StartsWith("FreeType2-2.10."))
 		{
 			// FreeType needs these to deal with bitmap fonts
 			AddEngineThirdPartyPrivateStaticDependencies(Target, "zlib");
@@ -150,22 +151,6 @@ public class FreeType2 : ModuleRules
 				: "libfreetype_fPIC.a";
 
 			PublicAdditionalLibraries.Add(Path.Combine(FreeType2LibPath, "Linux", Target.Architecture, LibPath));
-		}
-		else if (Target.Platform == UnrealTargetPlatform.XboxOne)
-		{
-			// Use reflection to allow type not to exist if console code is not present
-			System.Type XboxOnePlatformType = System.Type.GetType("UnrealBuildTool.XboxOnePlatform,UnrealBuildTool");
-			if (XboxOnePlatformType != null)
-			{
-				System.Object VersionName = XboxOnePlatformType.GetMethod("GetVisualStudioCompilerVersionName").Invoke(null, null);
-
-				LibPath = Path.Combine(FreeType2LibPath, "XboxOne", "VS" + VersionName.ToString());
-				LibPath = Target.Configuration == UnrealTargetConfiguration.Debug && Target.bDebugBuildsActuallyUseDebugCRT
-					? Path.Combine(LibPath, "Debug", "freetyped.lib")
-					: Path.Combine(LibPath, "Release", "freetype.lib");
-
-				PublicAdditionalLibraries.Add(LibPath);
-			}
 		}
 	}
 }

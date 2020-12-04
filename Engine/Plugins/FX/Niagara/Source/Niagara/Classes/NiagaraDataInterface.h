@@ -207,6 +207,7 @@ private:
 
 //////////////////////////////////////////////////////////////////////////
 
+struct FNiagaraDataInterfaceProxyRW;
 struct FNiagaraDataInterfaceProxy : TSharedFromThis<FNiagaraDataInterfaceProxy, ESPMode::ThreadSafe>
 {
 	FNiagaraDataInterfaceProxy() {}
@@ -224,17 +225,16 @@ struct FNiagaraDataInterfaceProxy : TSharedFromThis<FNiagaraDataInterfaceProxy, 
 	// a set of the shader stages that require the data interface for setting number of output elements
 	TSet<int> IterationSimulationStages_DEPRECATED;
 	
-	// number of elements to output to
-	uint32 ElementCount;
-
-	void SetElementCount(uint32 Count) { ElementCount = Count;  }
 	virtual bool IsOutputStage_DEPRECATED(uint32 CurrentStage) const { return OutputSimulationStages_DEPRECATED.Contains(CurrentStage); }
 	virtual bool IsIterationStage_DEPRECATED(uint32 CurrentStage) const { return IterationSimulationStages_DEPRECATED.Contains(CurrentStage); }
 
-	virtual void ResetData(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) { }
+	virtual void ResetData(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceArgs& Context) { }
 
-	virtual void PreStage(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) {}	
-	virtual void PostStage(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) {}
+	virtual void PreStage(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceStageArgs& Context) {}
+	virtual void PostStage(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceStageArgs& Context) {}
+	virtual void PostSimulate(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceArgs& Context) {}
+
+	virtual FNiagaraDataInterfaceProxyRW* AsIterationProxy() { return nullptr; }
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -252,6 +252,19 @@ public:
 	virtual void PostLoad() override;
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+
+	/** Does this data interface need setup and teardown for each stage when working a sim stage sim source? */
+	virtual bool SupportsSetupAndTeardownHLSL() const { return false; }
+	/** Generate the necessary HLSL to set up data when being added as a sim stage sim source. */
+	virtual bool GenerateSetupHLSL(FNiagaraDataInterfaceGPUParamInfo& DIInstanceInfo, TConstArrayView<FNiagaraVariable> InArguments, bool bSpawnOnly, bool bPartialWrites, TArray<FText>& OutErrors, FString& OutHLSL) const { return false;}
+	/** Generate the necessary HLSL to tear down data when being added as a sim stage sim source. */
+	virtual bool GenerateTeardownHLSL(FNiagaraDataInterfaceGPUParamInfo& DIInstanceInfo, TConstArrayView<FNiagaraVariable> InArguments, bool bSpawnOnly, bool bPartialWrites, TArray<FText>& OutErrors, FString& OutHLSL) const { return false; }
+	/** Can this data interface be used as a StackContext parameter map replacement when being used as a sim stage iteration source? */
+	virtual bool SupportsIterationSourceNamespaceAttributesHLSL() const { return false; }
+	/** Generate the necessary plumbing HLSL at the beginning of the stage where this is used as a sim stage iteration source. Note that this should inject other internal calls using the CustomHLSL node syntax. See GridCollection2D for an example.*/
+	virtual bool GenerateIterationSourceNamespaceReadAttributesHLSL(FNiagaraDataInterfaceGPUParamInfo& DIInstanceInfo, const FNiagaraVariable& InIterationSourceVariable, TConstArrayView<FNiagaraVariable> InArguments, TConstArrayView<FNiagaraVariable> InAttributes, TConstArrayView<FString> InAttributeHLSLNames, bool bInSetToDefaults, bool bPartialWrites, TArray<FText>& OutErrors, FString& OutHLSL) const { return false; };
+	/** Generate the necessary plumbing HLSL at the end of the stage where this is used as a sim stage iteration source. Note that this should inject other internal calls using the CustomHLSL node syntax. See GridCollection2D for an example.*/
+	virtual bool GenerateIterationSourceNamespaceWriteAttributesHLSL(FNiagaraDataInterfaceGPUParamInfo& DIInstanceInfo, const FNiagaraVariable& InIterationSourceVariable, TConstArrayView<FNiagaraVariable> InArguments, TConstArrayView<FNiagaraVariable> InAttributes, TConstArrayView<FString> InAttributeHLSLNames, bool bPartialWrites, TArray<FText>& OutErrors, FString& OutHLSL) const { return false; };
 #endif
 	// UObject Interface END
 
@@ -318,12 +331,18 @@ public:
 
 	virtual bool CanExecuteOnTarget(ENiagaraSimTarget Target)const { return false; }
 
+	virtual bool HasPreSimulateTick() const { return false; }
+	virtual bool HasPostSimulateTick() const { return false; }
+
 	virtual bool RequiresDistanceFieldData() const { return false; }
 	virtual bool RequiresDepthBuffer() const { return false; }
 	virtual bool RequiresEarlyViewData() const { return false; }
 
 	virtual bool HasTickGroupPrereqs() const { return false; }
-	virtual ETickingGroup CalculateTickGroup(void* PerInstanceData) const { return NiagaraFirstTickGroup; }
+	virtual ETickingGroup CalculateTickGroup(const void* PerInstanceData) const { return NiagaraFirstTickGroup; }
+
+	/** Used to determine if we need to create GPU resources for the emitter. */
+	bool IsUsedWithGPUEmitter(class FNiagaraSystemInstance* SystemInstance) const;
 
 	/** Determines if this type definition matches to a known data interface type.*/
 	static bool IsDataInterfaceType(const FNiagaraTypeDefinition& TypeDef);
@@ -377,6 +396,10 @@ public:
 
 	FSimpleMulticastDelegate& OnErrorsRefreshed();
 #endif
+	virtual bool CanExposeVariables() const { return false; }
+	virtual void GetExposedVariables(TArray<FNiagaraVariableBase>& OutVariables) const {}
+	virtual bool GetExposedVariableValue(const FNiagaraVariableBase& InVariable, void* InPerInstanceData, FNiagaraSystemInstance* InSystemInstance, void* OutData) const { return false; }
+
 
 	FNiagaraDataInterfaceProxy* GetProxy()
 	{
@@ -387,8 +410,34 @@ public:
 	* Allows a DI to specify data dependencies between emitters, so the system can ensure that the emitter instances are executed in the correct order.
 	* The Dependencies array may already contain items, and this method should only append to it.
 	*/
-	virtual void GetEmitterDependencies(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance, TArray<FNiagaraEmitterInstance*>& Dependencies) const
+	virtual void GetEmitterDependencies(UNiagaraSystem* Asset, TArray<UNiagaraEmitter*>& Dependencies) const {}
+
+	virtual bool ReadsEmitterParticleData(const FString& EmitterName) const { return false; }
+
+protected:
+	virtual void PushToRenderThreadImpl() {}
+
+public:
+	void PushToRenderThread()
 	{
+		if (bUsedByGPUEmitter && bRenderDataDirty)
+		{
+			PushToRenderThreadImpl();
+			bRenderDataDirty = false;
+		}
+	}
+
+	void MarkRenderDataDirty()
+	{
+		bRenderDataDirty = true;
+		PushToRenderThread();
+	}
+
+	void SetUsedByGPUEmitter(bool bUsed = true)
+	{
+		check(IsInGameThread());
+		bUsedByGPUEmitter = bUsed;
+		PushToRenderThread();
 	}
 
 protected:
@@ -403,6 +452,9 @@ protected:
 	virtual bool CopyToInternal(UNiagaraDataInterface* Destination) const;
 
 	TUniquePtr<FNiagaraDataInterfaceProxy> Proxy;
+
+	uint32 bRenderDataDirty : 1;
+	uint32 bUsedByGPUEmitter : 1;
 
 private:
 #if WITH_EDITOR
@@ -599,13 +651,101 @@ struct FNDIRandomHelper
 	FNiagaraRandInfo RandInfo;
 };
 
+//Helper to deal with types with potentially several input registers.
+template<typename T>
+struct FNDIInputParam
+{
+	VectorVM::FExternalFuncInputHandler<T> Data;
+	FORCEINLINE FNDIInputParam(FVectorVMContext& Context) : Data(Context) {}
+	FORCEINLINE T GetAndAdvance() { return Data.GetAndAdvance(); }
+};
+
+template<>
+struct FNDIInputParam<FNiagaraBool>
+{
+	VectorVM::FExternalFuncInputHandler<FNiagaraBool> Data;
+	FORCEINLINE FNDIInputParam(FVectorVMContext& Context) : Data(Context) {}
+	FORCEINLINE bool GetAndAdvance() { return Data.GetAndAdvance().GetValue(); }
+};
+
+template<>
+struct FNDIInputParam<FVector2D>
+{
+	VectorVM::FExternalFuncInputHandler<float> X;
+	VectorVM::FExternalFuncInputHandler<float> Y;
+	FORCEINLINE FNDIInputParam(FVectorVMContext& Context) : X(Context), Y(Context) {}
+	FORCEINLINE FVector2D GetAndAdvance() { return FVector2D(X.GetAndAdvance(), Y.GetAndAdvance()); }
+};
+
+template<>
+struct FNDIInputParam<FVector>
+{
+	VectorVM::FExternalFuncInputHandler<float> X;
+	VectorVM::FExternalFuncInputHandler<float> Y;
+	VectorVM::FExternalFuncInputHandler<float> Z;
+	FNDIInputParam(FVectorVMContext& Context) : X(Context), Y(Context), Z(Context) {}
+	FORCEINLINE FVector GetAndAdvance() { return FVector(X.GetAndAdvance(), Y.GetAndAdvance(), Z.GetAndAdvance()); }
+};
+
+template<>
+struct FNDIInputParam<FVector4>
+{
+	VectorVM::FExternalFuncInputHandler<float> X;
+	VectorVM::FExternalFuncInputHandler<float> Y;
+	VectorVM::FExternalFuncInputHandler<float> Z;
+	VectorVM::FExternalFuncInputHandler<float> W;
+	FORCEINLINE FNDIInputParam(FVectorVMContext& Context) : X(Context), Y(Context), Z(Context), W(Context) {}
+	FORCEINLINE FVector4 GetAndAdvance() { return FVector4(X.GetAndAdvance(), Y.GetAndAdvance(), Z.GetAndAdvance(), W.GetAndAdvance()); }
+};
+
+template<>
+struct FNDIInputParam<FQuat>
+{
+	VectorVM::FExternalFuncInputHandler<float> X;
+	VectorVM::FExternalFuncInputHandler<float> Y;
+	VectorVM::FExternalFuncInputHandler<float> Z;
+	VectorVM::FExternalFuncInputHandler<float> W;
+	FORCEINLINE FNDIInputParam(FVectorVMContext& Context) : X(Context), Y(Context), Z(Context), W(Context) {}
+	FORCEINLINE FQuat GetAndAdvance() { return FQuat(X.GetAndAdvance(), Y.GetAndAdvance(), Z.GetAndAdvance(), W.GetAndAdvance()); }
+};
+
+template<>
+struct FNDIInputParam<FLinearColor>
+{
+	VectorVM::FExternalFuncInputHandler<float> R;
+	VectorVM::FExternalFuncInputHandler<float> G;
+	VectorVM::FExternalFuncInputHandler<float> B;
+	VectorVM::FExternalFuncInputHandler<float> A;
+	FORCEINLINE FNDIInputParam(FVectorVMContext& Context) : R(Context), G(Context), B(Context), A(Context) {}
+	FORCEINLINE FLinearColor GetAndAdvance() { return FLinearColor(R.GetAndAdvance(), G.GetAndAdvance(), B.GetAndAdvance(), A.GetAndAdvance()); }
+};
+
+template<>
+struct FNDIInputParam<FNiagaraID>
+{
+	VectorVM::FExternalFuncInputHandler<int32> Index;
+	VectorVM::FExternalFuncInputHandler<int32> AcquireTag;
+	FORCEINLINE FNDIInputParam(FVectorVMContext& Context) : Index(Context), AcquireTag(Context) {}
+	FORCEINLINE FNiagaraID GetAndAdvance() { return FNiagaraID(Index.GetAndAdvance(), AcquireTag.GetAndAdvance()); }
+};
+
 //Helper to deal with types with potentially several output registers.
 template<typename T>
 struct FNDIOutputParam
 {
 	VectorVM::FExternalFuncRegisterHandler<T> Data;
 	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : Data(Context) {}
+	FORCEINLINE bool IsValid() const { return Data.IsValid();  }
 	FORCEINLINE void SetAndAdvance(T Val) { *Data.GetDestAndAdvance() = Val; }
+};
+
+template<>
+struct FNDIOutputParam<FNiagaraBool>
+{
+	VectorVM::FExternalFuncRegisterHandler<FNiagaraBool> Data;
+	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : Data(Context) {}
+	FORCEINLINE bool IsValid() const { return Data.IsValid(); }
+	FORCEINLINE void SetAndAdvance(bool Val) { Data.GetDestAndAdvance()->SetValue(Val); }
 };
 
 template<>
@@ -614,6 +754,7 @@ struct FNDIOutputParam<FVector2D>
 	VectorVM::FExternalFuncRegisterHandler<float> X;
 	VectorVM::FExternalFuncRegisterHandler<float> Y;
 	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : X(Context), Y(Context) {}
+	FORCEINLINE bool IsValid() const { return X.IsValid() || Y.IsValid(); }
 	FORCEINLINE void SetAndAdvance(FVector2D Val)
 	{
 		*X.GetDestAndAdvance() = Val.X;
@@ -628,6 +769,7 @@ struct FNDIOutputParam<FVector>
 	VectorVM::FExternalFuncRegisterHandler<float> Y;
 	VectorVM::FExternalFuncRegisterHandler<float> Z;
 	FNDIOutputParam(FVectorVMContext& Context) : X(Context), Y(Context), Z(Context) {}
+	FORCEINLINE bool IsValid() const { return X.IsValid() || Y.IsValid() || Z.IsValid(); }
 	FORCEINLINE void SetAndAdvance(FVector Val)
 	{
 		*X.GetDestAndAdvance() = Val.X;
@@ -644,6 +786,7 @@ struct FNDIOutputParam<FVector4>
 	VectorVM::FExternalFuncRegisterHandler<float> Z;
 	VectorVM::FExternalFuncRegisterHandler<float> W;
 	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : X(Context), Y(Context), Z(Context), W(Context) {}
+	FORCEINLINE bool IsValid() const { return X.IsValid() || Y.IsValid() || Z.IsValid() || W.IsValid(); }
 	FORCEINLINE void SetAndAdvance(FVector4 Val)
 	{
 		*X.GetDestAndAdvance() = Val.X;
@@ -661,12 +804,57 @@ struct FNDIOutputParam<FQuat>
 	VectorVM::FExternalFuncRegisterHandler<float> Z;
 	VectorVM::FExternalFuncRegisterHandler<float> W;
 	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : X(Context), Y(Context), Z(Context), W(Context) {}
+	FORCEINLINE bool IsValid() const { return X.IsValid() || Y.IsValid() || Z.IsValid() || W.IsValid(); }
 	FORCEINLINE void SetAndAdvance(FQuat Val)
 	{
 		*X.GetDestAndAdvance() = Val.X;
 		*Y.GetDestAndAdvance() = Val.Y;
 		*Z.GetDestAndAdvance() = Val.Z;
 		*W.GetDestAndAdvance() = Val.W;
+	}
+};
+
+template<>
+struct FNDIOutputParam<FMatrix>
+{
+	VectorVM::FExternalFuncRegisterHandler<float> Out00;
+	VectorVM::FExternalFuncRegisterHandler<float> Out01;
+	VectorVM::FExternalFuncRegisterHandler<float> Out02;
+	VectorVM::FExternalFuncRegisterHandler<float> Out03;
+	VectorVM::FExternalFuncRegisterHandler<float> Out04;
+	VectorVM::FExternalFuncRegisterHandler<float> Out05;
+	VectorVM::FExternalFuncRegisterHandler<float> Out06;
+	VectorVM::FExternalFuncRegisterHandler<float> Out07;
+	VectorVM::FExternalFuncRegisterHandler<float> Out08;
+	VectorVM::FExternalFuncRegisterHandler<float> Out09;
+	VectorVM::FExternalFuncRegisterHandler<float> Out10;
+	VectorVM::FExternalFuncRegisterHandler<float> Out11;
+	VectorVM::FExternalFuncRegisterHandler<float> Out12;
+	VectorVM::FExternalFuncRegisterHandler<float> Out13;
+	VectorVM::FExternalFuncRegisterHandler<float> Out14;
+	VectorVM::FExternalFuncRegisterHandler<float> Out15;
+
+	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : Out00(Context), Out01(Context), Out02(Context), Out03(Context), Out04(Context), Out05(Context),
+		Out06(Context), Out07(Context), Out08(Context), Out09(Context), Out10(Context), Out11(Context), Out12(Context), Out13(Context), Out14(Context), Out15(Context)	{}
+	FORCEINLINE bool IsValid() const { return Out00.IsValid(); }
+	FORCEINLINE void SetAndAdvance(const FMatrix& Val)
+	{
+		*Out00.GetDestAndAdvance() = Val.M[0][0];
+		*Out01.GetDestAndAdvance() = Val.M[0][1];
+		*Out02.GetDestAndAdvance() = Val.M[0][2];
+		*Out03.GetDestAndAdvance() = Val.M[0][3];
+		*Out04.GetDestAndAdvance() = Val.M[1][0];
+		*Out05.GetDestAndAdvance() = Val.M[1][1];
+		*Out06.GetDestAndAdvance() = Val.M[1][2];
+		*Out07.GetDestAndAdvance() = Val.M[1][3];
+		*Out08.GetDestAndAdvance() = Val.M[2][0];
+		*Out09.GetDestAndAdvance() = Val.M[2][1];
+		*Out10.GetDestAndAdvance() = Val.M[2][2];
+		*Out11.GetDestAndAdvance() = Val.M[2][3];
+		*Out12.GetDestAndAdvance() = Val.M[3][0];
+		*Out13.GetDestAndAdvance() = Val.M[3][1];
+		*Out14.GetDestAndAdvance() = Val.M[3][2];
+		*Out15.GetDestAndAdvance() = Val.M[3][3];
 	}
 };
 
@@ -678,6 +866,7 @@ struct FNDIOutputParam<FLinearColor>
 	VectorVM::FExternalFuncRegisterHandler<float> B;
 	VectorVM::FExternalFuncRegisterHandler<float> A;
 	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : R(Context), G(Context), B(Context), A(Context) {}
+	FORCEINLINE bool IsValid() const { return R.IsValid() || G.IsValid() || B.IsValid() || A.IsValid(); }
 	FORCEINLINE void SetAndAdvance(FLinearColor Val)
 	{
 		*R.GetDestAndAdvance() = Val.R;
@@ -693,6 +882,7 @@ struct FNDIOutputParam<FNiagaraID>
 	VectorVM::FExternalFuncRegisterHandler<int32> Index;
 	VectorVM::FExternalFuncRegisterHandler<int32> AcquireTag;
 	FORCEINLINE FNDIOutputParam(FVectorVMContext& Context) : Index(Context), AcquireTag(Context) {}
+	FORCEINLINE bool IsValid() const { return Index.IsValid() || AcquireTag.IsValid(); }
 	FORCEINLINE void SetAndAdvance(FNiagaraID Val)
 	{
 		*Index.GetDestAndAdvance() = Val.Index;

@@ -2,21 +2,32 @@
 
 #include "MovieSceneSequence.h"
 #include "Evaluation/MovieSceneEvaluationCustomVersion.h"
-#include "Evaluation/MovieSceneSequenceTemplateStore.h"
 #include "MovieScene.h"
 #include "UObject/EditorObjectVersion.h"
 #include "Tracks/MovieSceneSubTrack.h"
 #include "Sections/MovieSceneSubSection.h"
-#include "Compilation/MovieSceneCompiler.h"
 #include "Logging/MessageLog.h"
 #include "Misc/UObjectToken.h"
 #include "Interfaces/ITargetPlatform.h"
+#include "EntitySystem/MovieSceneEntityIDs.h"
+#include "EntitySystem/MovieSceneEntityManager.h"
+#include "EntitySystem/IMovieSceneEntityProvider.h"
+#include "Compilation/MovieSceneCompiledDataManager.h"
+
 
 UMovieSceneSequence::UMovieSceneSequence(const FObjectInitializer& Init)
 	: Super(Init)
 {
 	bParentContextsAreSignificant = false;
 	bPlayableDirectly = true;
+	SequenceFlags = EMovieSceneSequenceFlags::None;
+	CompiledData = nullptr;
+
+	// Ensure that the precompiled data is set up when constructing the CDO. This guarantees that we do not try and create it for the first time when collecting garbage
+	if (HasAnyFlags(RF_ClassDefaultObject))
+	{
+		UMovieSceneCompiledDataManager::GetPrecompiledData();
+	}
 }
 
 #if WITH_EDITORONLY_DATA
@@ -24,8 +35,7 @@ void UMovieSceneSequence::PostDuplicate(bool bDuplicateForPIE)
 {
 	if (bDuplicateForPIE)
 	{
-		FMovieSceneSequencePrecompiledTemplateStore Store;
-		FMovieSceneCompiler::Compile(*this, Store);
+		UMovieSceneCompiledDataManager::GetPrecompiledData()->Compile(this);
 	}
 
 	Super::PostDuplicate(bDuplicateForPIE);
@@ -36,10 +46,44 @@ void UMovieSceneSequence::PostLoad()
 {
 #if WITH_EDITORONLY_DATA
 	// Wipe compiled data on editor load to ensure we don't try and iteratively compile previously saved content. In a cooked game, this will contain our up-to-date compiled template.
-	PrecompiledEvaluationTemplate = FMovieSceneEvaluationTemplate();
+	UMovieSceneCompiledDataManager::GetPrecompiledData()->Reset(this);
+#endif
+
+	if (!HasAnyFlags(RF_ClassDefaultObject))
+	{
+		UMovieSceneCompiledDataManager* PrecompiledData = UMovieSceneCompiledDataManager::GetPrecompiledData();
+		PrecompiledData->LoadCompiledData(this);
+
+#if !WITH_EDITOR
+		// Don't need this any more - allow it to be GC'd so it doesn't take up memory
+		CompiledData = nullptr;
+#else
+		// Wipe out in -game as well
+		if (!GIsEditor)
+		{
+			CompiledData = nullptr;
+		}
+#endif
+	}
+
+#if DO_CHECK
+	if (FPlatformProperties::RequiresCookedData() && !EnumHasAnyFlags(SequenceFlags, EMovieSceneSequenceFlags::Volatile))
+	{
+		ensureAlwaysMsgf(UMovieSceneCompiledDataManager::GetPrecompiledData()->GetDataID(this).IsValid(), TEXT("No precompiled movie scene data is present for sequence '%s'. This should have been generated and saved during cook."), *GetName());
+	}
 #endif
 
 	Super::PostLoad();
+}
+
+void UMovieSceneSequence::BeginDestroy()
+{
+	Super::BeginDestroy();
+
+	if (!GExitPurge && !HasAnyFlags(RF_ClassDefaultObject))
+	{
+		UMovieSceneCompiledDataManager::GetPrecompiledData()->Reset(this);
+	}
 }
 
 void UMovieSceneSequence::PreSave(const ITargetPlatform* TargetPlatform)
@@ -49,19 +93,12 @@ void UMovieSceneSequence::PreSave(const ITargetPlatform* TargetPlatform)
 	{
 		if (TargetPlatform && TargetPlatform->RequiresCookedData())
 		{
-			FMovieSceneSequencePrecompiledTemplateStore Store;
-			FMovieSceneCompiler::Compile(*this, Store);
-
-			if (!bPlayableDirectly)
-			{
-				PrecompiledEvaluationTemplate.EvaluationField = FMovieSceneEvaluationField();
-				PrecompiledEvaluationTemplate.ResetFieldData();
-			}
+			UMovieSceneCompiledDataManager::GetPrecompiledData()->CopyCompiledData(this);
 		}
-		else
+		else if (CompiledData)
 		{
 			// Don't save template data unless we're cooking
-			PrecompiledEvaluationTemplate = FMovieSceneEvaluationTemplate();
+			CompiledData->Reset();
 		}
 	}
 #endif
@@ -72,8 +109,30 @@ void UMovieSceneSequence::Serialize(FArchive& Ar)
 {
 	Ar.UsingCustomVersion(FMovieSceneEvaluationCustomVersion::GUID);
 	Ar.UsingCustomVersion(FEditorObjectVersion::GUID);
-	
+
 	Super::Serialize(Ar);
+}
+
+UMovieSceneCompiledData* UMovieSceneSequence::GetCompiledData() const
+{
+	return CompiledData;
+}
+
+UMovieSceneCompiledData* UMovieSceneSequence::GetOrCreateCompiledData()
+{
+	if (!CompiledData)
+	{
+		CompiledData = FindObject<UMovieSceneCompiledData>(this, TEXT("CompiledData"));
+		if (CompiledData)
+		{
+			CompiledData->Reset();
+		}
+		else
+		{
+			CompiledData = NewObject<UMovieSceneCompiledData>(this, "CompiledData");
+		}
+	}
+	return CompiledData;
 }
 
 FGuid UMovieSceneSequence::FindPossessableObjectId(UObject& Object, UObject* Context) const

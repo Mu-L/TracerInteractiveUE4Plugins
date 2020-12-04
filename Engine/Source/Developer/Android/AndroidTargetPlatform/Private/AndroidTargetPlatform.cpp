@@ -232,11 +232,6 @@ bool FAndroidTargetPlatform::SupportsES31() const
 	return bBuildForES31;
 }
 
-bool FAndroidTargetPlatform::SupportsAEP() const
-{
-	return false;
-}
-
 bool FAndroidTargetPlatform::SupportsVulkan() const
 {
 	// default to not supporting Vulkan
@@ -261,6 +256,15 @@ bool FAndroidTargetPlatform::SupportsSoftwareOcclusion() const
 {
 	static auto* CVarMobileAllowSoftwareOcclusion = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Mobile.AllowSoftwareOcclusion"));
 	return CVarMobileAllowSoftwareOcclusion->GetValueOnAnyThread() != 0;
+}
+
+bool FAndroidTargetPlatform::SupportsLandscapeMeshLODStreaming() const
+{
+	bool bStreamLandscapeMeshLODs = false;
+#if WITH_ENGINE
+	GConfig->GetBool(TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings"), TEXT("bStreamLandscapeMeshLODs"), bStreamLandscapeMeshLODs, GEngineIni);
+#endif
+	return bStreamLandscapeMeshLODs;
 }
 
 /* ITargetPlatform overrides
@@ -354,16 +358,19 @@ bool FAndroidTargetPlatform::SupportsFeature( ETargetPlatformFeatures Feature ) 
 
 		case ETargetPlatformFeatures::HighQualityLightmaps:
 		case ETargetPlatformFeatures::DeferredRendering:
-			return SupportsAEP() || SupportsVulkanSM5();
+			return SupportsVulkanSM5();
 
 		case ETargetPlatformFeatures::Tessellation:
-			return SupportsAEP();
+			return false;
 
 		case ETargetPlatformFeatures::SoftwareOcclusion:
 			return SupportsSoftwareOcclusion();
 
 		case ETargetPlatformFeatures::VirtualTextureStreaming:
 			return UsesVirtualTextures();
+
+		case ETargetPlatformFeatures::LandscapeMeshLODStreaming:
+			return SupportsLandscapeMeshLODStreaming();
 
 		default:
 			break;
@@ -377,7 +384,6 @@ bool FAndroidTargetPlatform::SupportsFeature( ETargetPlatformFeatures Feature ) 
 
 void FAndroidTargetPlatform::GetAllPossibleShaderFormats( TArray<FName>& OutFormats ) const
 {
-	static FName NAME_GLSL_310_ES_EXT(TEXT("GLSL_310_ES_EXT"));
 	static FName NAME_SF_VULKAN_ES31_ANDROID(TEXT("SF_VULKAN_ES31_ANDROID_NOUB"));
 	static FName NAME_GLSL_ES3_1_ANDROID(TEXT("GLSL_ES3_1_ANDROID"));
 	static FName NAME_SF_VULKAN_SM5_ANDROID(TEXT("SF_VULKAN_SM5_ANDROID"));
@@ -394,11 +400,6 @@ void FAndroidTargetPlatform::GetAllPossibleShaderFormats( TArray<FName>& OutForm
 	if (SupportsES31())
 	{
 		OutFormats.AddUnique(NAME_GLSL_ES3_1_ANDROID);
-	}
-
-	if (SupportsAEP())
-	{
-		OutFormats.AddUnique(NAME_GLSL_310_ES_EXT);
 	}
 }
 
@@ -463,6 +464,10 @@ void FAndroidTargetPlatform::GetTextureFormats( const UTexture* InTexture, TArra
 			{
 				FormatPerLayer[LayerIndex] = AndroidTexFormat::NameBGRA8;
 			}
+			else if (LayerFormatSettings.CompressionSettings == TC_ReflectionCapture && !LayerFormatSettings.CompressionNone)
+			{
+				FormatPerLayer[LayerIndex] = AndroidTexFormat::NameETC2_RGBA;
+			}
 			else if (LayerFormatSettings.CompressionSettings == TC_HDR || LayerFormatSettings.CompressionSettings == TC_HDR_Compressed)
 			{
 				FormatPerLayer[LayerIndex] = AndroidTexFormat::NameRGBA16F;
@@ -493,6 +498,10 @@ void FAndroidTargetPlatform::GetTextureFormats( const UTexture* InTexture, TArra
 			else if (LayerFormatSettings.CompressionSettings == TC_DistanceFieldFont)
 			{
 				FormatPerLayer[LayerIndex] = AndroidTexFormat::NameG8;
+			}
+			else if (LayerFormatSettings.CompressionSettings == TC_HalfFloat)
+			{
+				FormatPerLayer[LayerIndex] = AndroidTexFormat::NameR16F;
 			}
 			else if (LayerFormatSettings.CompressionSettings == TC_BC7)
 			{
@@ -532,7 +541,32 @@ void FAndroidTargetPlatform::GetTextureFormats( const UTexture* InTexture, TArra
 #endif // WITH_EDITOR
 }
 
+FName FAndroidTargetPlatform::FinalizeVirtualTextureLayerFormat(FName Format) const
+{
+#if WITH_EDITOR
+	// Remap non-ETC variants to ETC
+	const static FName ETCRemap[][2] =
+	{
+		{ { FName(TEXT("ASTC_RGB")) },			{ AndroidTexFormat::NameETC2_RGB } },
+		{ { FName(TEXT("ASTC_RGBA")) },			{ AndroidTexFormat::NameETC2_RGBA } },
+		{ { FName(TEXT("ASTC_RGBAuto")) },		{ AndroidTexFormat::NameAutoETC2 } },
+		{ { FName(TEXT("ASTC_NormalAG")) },		{ AndroidTexFormat::NameETC2_RGB } },
+		{ { FName(TEXT("ASTC_NormalRG")) },		{ AndroidTexFormat::NameETC2_RGB } },
+		{ { AndroidTexFormat::NameDXT1 },		{ AndroidTexFormat::NameETC2_RGB } },
+		{ { AndroidTexFormat::NameDXT5 },		{ AndroidTexFormat::NameAutoETC2 } },
+		{ { AndroidTexFormat::NameAutoDXT },	{ AndroidTexFormat::NameAutoETC2 } }
+	};
 
+	for (int32 RemapIndex = 0; RemapIndex < UE_ARRAY_COUNT(ETCRemap); RemapIndex++)
+	{
+		if (ETCRemap[RemapIndex][0] == Format)
+		{
+			return ETCRemap[RemapIndex][1];
+		}
+	}
+#endif
+	return Format;
+}
 
 void FAndroidTargetPlatform::GetAllTextureFormats(TArray<FName>& OutFormats) const
 {
@@ -545,6 +579,7 @@ void FAndroidTargetPlatform::GetAllTextureFormats(TArray<FName>& OutFormats) con
 	OutFormats.Add(AndroidTexFormat::NameG8);
 	OutFormats.Add(AndroidTexFormat::NameG8);
 	OutFormats.Add(AndroidTexFormat::NameG8);
+	OutFormats.Add(AndroidTexFormat::NameR16F);
 
 	auto AddAllTextureFormatIfSupports = [=, &OutFormats](bool bIsNonPOT)
 	{
@@ -561,9 +596,12 @@ void FAndroidTargetPlatform::GetAllTextureFormats(TArray<FName>& OutFormats) con
 
 void FAndroidTargetPlatform::GetReflectionCaptureFormats( TArray<FName>& OutFormats ) const
 {
-	if (SupportsAEP() || SupportsVulkanSM5())
+	static auto* MobileShadingPathCvar = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Mobile.ShadingPath"));
+	const bool bMobileDeferredShading = (MobileShadingPathCvar->GetValueOnAnyThread() == 1);
+	
+	if (SupportsVulkanSM5() || (SupportsVulkan() && bMobileDeferredShading))
 	{
-		// use Full HDR with AEP
+		// use Full HDR with SM5 and Mobile Deferred
 		OutFormats.Add(FName(TEXT("FullHDR")));
 	}
 

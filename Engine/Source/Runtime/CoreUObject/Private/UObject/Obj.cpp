@@ -86,6 +86,10 @@ static UPackage*			GObjTransientPkg								= NULL;
 	static TArray<FString>			DebugSpikeMarkNames;
 #endif
 
+#if WITH_EDITOR
+	UObject::FAssetRegistryTag::FOnGetObjectAssetRegistryTags UObject::FAssetRegistryTag::OnGetExtraObjectTags;
+#endif // WITH_EDITOR
+
 UObject::UObject( EStaticConstructor, EObjectFlags InFlags )
 : UObjectBaseUtility(InFlags | (!(InFlags & RF_Dynamic) ? (RF_MarkAsNative | RF_MarkAsRootSet) : RF_NoFlags))
 {
@@ -780,6 +784,8 @@ void UObject::BeginDestroy()
 #endif // WITH_EDITORONLY_DATA
 
 	LowLevelRename(NAME_None);
+	// Remove any associated external package, at this point
+	SetExternalPackage(nullptr);
 
 	// ensure BeginDestroy has been routed back to UObject::BeginDestroy.
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
@@ -1012,6 +1018,10 @@ bool UObject::ConditionalFinishDestroy()
 		DebugFinishDestroyed.Add(this);
 #endif
 		FinishDestroy();
+
+		// Make sure this object can't be found through any delete listeners (annotation maps etc) after it's been FinishDestroyed
+		GUObjectArray.RemoveObjectFromDeleteListeners(this);
+
 #if !(UE_BUILD_SHIPPING || UE_BUILD_TEST)
 		if( DebugFinishDestroyed.Contains(this) )
 		{
@@ -1028,6 +1038,8 @@ bool UObject::ConditionalFinishDestroy()
 
 void UObject::ConditionalPostLoad()
 {
+	LLM_SCOPE(ELLMTag::UObject);
+
 	check(!GEventDrivenLoaderEnabled || !HasAnyFlags(RF_NeedLoad)); //@todoio Added this as "nicks rule"
 									  // PostLoad only if the object needs it and has already been serialized
 	//@todoio note this logic should be unchanged compared to main
@@ -1061,6 +1073,9 @@ void UObject::ConditionalPostLoad()
 			}
 			else
 			{
+#if WITH_EDITOR
+				SCOPED_LOADTIMER_TEXT(*((GetClass()->IsChildOf(UDynamicClass::StaticClass()) ? UDynamicClass::StaticClass() : GetClass())->GetName() + TEXT("_PostLoad")));
+#endif
 				LLM_SCOPED_TAG_WITH_OBJECT_IN_SET(GetOutermost(), ELLMTagSet::Assets);
 				LLM_SCOPED_TAG_WITH_OBJECT_IN_SET(GetClass()->IsChildOf(UDynamicClass::StaticClass()) ? UDynamicClass::StaticClass() : GetClass(), ELLMTagSet::AssetClasses);
 
@@ -1270,6 +1285,7 @@ void UObject::Serialize(FStructuredArchive::FRecord Record)
 		UClass *ObjClass = GetClass();
 		UObject* LoadOuter = GetOuter();
 		FName LoadName = GetFName();
+		UPackage* LoadPackage = GetExternalPackage();
 
 		// Make sure this object's class's data is loaded.
 		if(ObjClass->HasAnyFlags(RF_NeedLoad) )
@@ -1307,7 +1323,7 @@ void UObject::Serialize(FStructuredArchive::FRecord Record)
 			{
 				if (UnderlyingArchive.IsLoading())
 				{
-					Record << SA_VALUE(TEXT("LoadName"), LoadName) << SA_VALUE(TEXT("LoadOuter"), LoadOuter);
+					Record << SA_VALUE(TEXT("LoadName"), LoadName) << SA_VALUE(TEXT("LoadOuter"), LoadOuter) << SA_VALUE(TEXT("LoadPackage"), LoadPackage);
 
 					// If the name we loaded is different from the current one,
 					// unhash the object, change the name and hash it again.
@@ -1339,10 +1355,13 @@ void UObject::Serialize(FStructuredArchive::FRecord Record)
 						
 						LowLevelRename(LoadName,LoadOuter);
 					}
+
+					// Set the package override
+					SetExternalPackage(LoadPackage);
 				}
 				else
 				{
-					Record << SA_VALUE(TEXT("LoadName"), LoadName) << SA_VALUE(TEXT("LoadOuter"), LoadOuter);
+					Record << SA_VALUE(TEXT("LoadName"), LoadName) << SA_VALUE(TEXT("LoadOuter"), LoadOuter) << SA_VALUE(TEXT("LoadPackage"), LoadPackage);
 				}
 			}
 		}
@@ -1743,14 +1762,14 @@ void GetAssetRegistryTagFromProperty(const void* BaseMemoryLocation, const UObje
 			TagType = UObject::FAssetRegistryTag::ETagType::TT_Alphabetical;
 		}
 		else if (Prop->IsA(FArrayProperty::StaticClass()) || Prop->IsA(FMapProperty::StaticClass()) || Prop->IsA(FSetProperty::StaticClass())
-			|| Prop->IsA(FStructProperty::StaticClass()) || Prop->IsA(FObjectPropertyBase::StaticClass()))
+			|| Prop->IsA(FStructProperty::StaticClass()))
 		{
-			// Arrays/maps/sets/structs/objects are hidden, it is often too much information to display and sort
+			// Arrays/maps/sets/structs are hidden, it is often too much information to display and sort
 			TagType = UObject::FAssetRegistryTag::ETagType::TT_Hidden;
 		}
 		else
 		{
-			// All other types are alphabetical
+			// All other types are alphabetical, there are special UI parsers for object properties
 			TagType = UObject::FAssetRegistryTag::ETagType::TT_Alphabetical;
 		}
 	}
@@ -1815,6 +1834,9 @@ void UObject::GetAssetRegistryTags(TArray<FAssetRegistryTag>& OutTags) const
 	FAssetRegistryTag::GetAssetRegistryTagsFromSearchableProperties(this, OutTags);
 
 #if WITH_EDITOR
+	// Notify external sources that we need tags.
+	FAssetRegistryTag::OnGetExtraObjectTags.Broadcast(this, OutTags);
+
 	// Check if there's a UMetaData for this object that has tags that are requested in the settings to be transferred to the Asset Registry
 	const TSet<FName>& MetaDataTagsForAR = GetMetaDataTagsForAssetRegistry();
 	if (MetaDataTagsForAR.Num() > 0)
@@ -2396,7 +2418,7 @@ void UObject::LoadConfig( UClass* ConfigClass/*=NULL*/, const TCHAR* InFilename/
 	}
 }
 
-void UObject::SaveConfig( uint64 Flags, const TCHAR* InFilename, FConfigCacheIni* Config/*=GConfig*/ )
+void UObject::SaveConfig( uint64 Flags, const TCHAR* InFilename, FConfigCacheIni* Config/*=GConfig*/, bool bAllowCopyToDefaultObject/*=true*/)
 {
 	if( !GetClass()->HasAnyClassFlags(CLASS_Config) )
 	{
@@ -2439,7 +2461,7 @@ void UObject::SaveConfig( uint64 Flags, const TCHAR* InFilename, FConfigCacheIni
 	UObject* CDO = GetClass()->GetDefaultObject();
 
 	// only copy the values to the CDO if this is GConfig and we're not saving the CDO
-	const bool bCopyValues = (this != CDO && Config == GConfig);
+	const bool bCopyValues = (bAllowCopyToDefaultObject && this != CDO && Config == GConfig);
 
 	for ( FProperty* Property = GetClass()->PropertyLink; Property; Property = Property->PropertyLinkNext )
 	{
@@ -2609,6 +2631,11 @@ FString UObject::GetGlobalUserConfigFilename() const
 	return FString::Printf(TEXT("%sUnreal Engine/Engine/Config/User%s.ini"), FPlatformProcess::UserSettingsDir(), *GetClass()->ClassConfigName.ToString());
 }
 
+FString UObject::GetProjectUserConfigFilename() const
+{
+	return FString::Printf(TEXT("%sUser%s.ini"), *FPaths::ProjectConfigDir(), *GetClass()->ClassConfigName.ToString());
+}
+
 // @todo ini: Verify per object config objects
 void UObject::UpdateSingleSectionOfConfigFile(const FString& ConfigIniName)
 {
@@ -2646,6 +2673,11 @@ void UObject::UpdateDefaultConfigFile(const FString& SpecificFileLocation)
 void UObject::UpdateGlobalUserConfigFile()
 {
 	UpdateSingleSectionOfConfigFile(GetGlobalUserConfigFilename());
+}
+
+void UObject::UpdateProjectUserConfigFile()
+{
+	UpdateSingleSectionOfConfigFile(GetProjectUserConfigFilename());
 }
 
 void UObject::UpdateSinglePropertyInConfigFile(const FProperty* InProperty, const FString& InConfigIniName)
@@ -2735,7 +2767,15 @@ void UObject::ReinitializeProperties( UObject* SourceObject/*=NULL*/, FObjectIns
 	// the properties for this object ensures that any cleanup required when an object is reinitialized from defaults occurs properly
 	// for example, when re-initializing UPrimitiveComponents, the component must notify the rendering thread that its data structures are
 	// going to be re-initialized
-	StaticConstructObject_Internal( GetClass(), GetOuter(), GetFName(), GetFlags(), GetInternalFlags(), SourceObject, !HasAnyFlags(RF_ClassDefaultObject), InstanceGraph );
+	FStaticConstructObjectParameters Params(GetClass());
+	Params.Outer = GetOuter();
+	Params.Name = GetFName();
+	Params.SetFlags = GetFlags();
+	Params.InternalSetFlags = GetInternalFlags();
+	Params.Template = SourceObject;
+	Params.bCopyTransientsFromClassDefaults = !HasAnyFlags(RF_ClassDefaultObject);
+	Params.InstanceGraph = InstanceGraph;
+	StaticConstructObject_Internal(Params);
 }
 
 
@@ -3224,7 +3264,7 @@ COREUOBJECT_API TArray<const TCHAR*> ParsePropertyFlags(EPropertyFlags InFlags)
 		TEXT("CPF_InstancedReference"),
 		TEXT("0x0000000000100000"),
 		TEXT("CPF_DuplicateTransient"),
-		TEXT("CPF_SubobjectReference"),
+		TEXT("0x0000000000400000"),
 		TEXT("0x0000000000800000"),
 		TEXT("CPF_SaveGame"),	
 		TEXT("CPF_NoClear"),
@@ -3945,6 +3985,10 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 					{
 						SearchModeFlags |= EReferenceChainSearchMode::Direct;
 					}
+					else if (FCString::Stricmp(*Tok, TEXT("full")) == 0)
+					{
+						SearchModeFlags |= EReferenceChainSearchMode::FullChain;
+					}
 				}
 				
 				FReferenceChainSearch RefChainSearch(Object, SearchModeFlags);
@@ -4055,8 +4099,10 @@ bool StaticExec( UWorld* InWorld, const TCHAR* Cmd, FOutputDevice& Ar )
 					TCHAR Temp[MAX_SPRINTF]=TEXT("");
 					FCString::Sprintf( Temp, TEXT("EXCLUDE%i="), i );
 					FName F;
-					if( FParse::Value(Str,Temp,F) )
-						Exclude.Add( CreatePackage(NULL,*F.ToString()) );
+					if (FParse::Value(Str, Temp, F))
+					{
+						Exclude.Add(CreatePackage(*F.ToString()));
+					}
 				}
 				Ar.Logf( TEXT("Dependencies of %s:"), *Pkg->GetPathName() );
 
@@ -4330,6 +4376,7 @@ void InitUObject()
 	FGCCSyncObject::Create();
 
 	// Initialize redirects map
+	FCoreRedirects::Initialize();
 	for (const TPair<FString,FConfigFile>& It : *GConfig)
 	{
 		FCoreRedirects::ReadRedirectsFromIni(It.Key);
@@ -4352,13 +4399,7 @@ void InitUObject()
 	FModuleManager::Get().IsPackageLoadedCallback().BindStatic(Local::IsPackageLoaded);
 	
 	FCoreDelegates::NewFileAddedDelegate.AddStatic(FLinkerLoad::OnNewFileAdded);
-
-#if WITH_EDITOR
-PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	FCoreUObjectDelegates::StringAssetReferenceLoaded.BindRaw(&GRedirectCollector, &FRedirectCollector::OnStringAssetReferenceLoaded);
-	FCoreUObjectDelegates::StringAssetReferenceSaving.BindRaw(&GRedirectCollector, &FRedirectCollector::OnStringAssetReferenceSaved);
-PRAGMA_ENABLE_DEPRECATION_WARNINGS
-#endif
+	FCoreDelegates::OnPakFileMounted2.AddStatic(FLinkerLoad::OnPakFileMounted);
 
 	// Object initialization.
 	StaticUObjectInit();
@@ -4408,11 +4449,6 @@ void StaticExit()
 	// Delete all linkers are pending destroy
 	DeleteLoaders();
 
-	// We'll be destroying objects without time limit during exit purge
-	// so doing it on a separate thread doesn't make anything faster,
-	// also the exit purge is not a standard GC pass so no need to overcompilcate things
-	GMultithreadedDestructionEnabled = false;
-
 	// Cleanup root.
 	if (GObjTransientPkg != NULL)
 	{
@@ -4431,6 +4467,11 @@ void StaticExit()
 	{
 		IncrementalPurgeGarbage(false);
 	}
+
+	// From now on we'll be destroying objects without time limit during exit purge
+	// so doing it on a separate thread doesn't make anything faster,
+	// also the exit purge is not a standard GC pass so no need to overcompilcate things
+	GMultithreadedDestructionEnabled = false;
 
 	// Make sure no other threads manipulate UObjects
 	AcquireGCLock();

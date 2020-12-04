@@ -123,6 +123,15 @@ struct CORE_API FExternalPhysicsCustomObjectVersion
 		// Added serialization for the physics material sleep counter threshold
 		PhysicsMaterialSleepCounterThreshold,
 
+		// Added ability to remove shapes from sim and/or query separately
+		AddShapeSimAndQueryCollisionEnabled,
+
+		// Remove extra representations of per shape sim and query enabled flags
+		RemoveShapeSimAndQueryDuplicateRepresentations,
+
+		// Removed unused full bounds from AABBTree
+		RemovedAABBTreeFullBounds,
+
 		// -----<new versions can be added above this line>-------------------------------------------------
 		VersionPlusOne,
 		LatestVersion = VersionPlusOne - 1

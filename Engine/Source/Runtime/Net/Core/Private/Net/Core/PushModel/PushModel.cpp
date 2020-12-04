@@ -10,7 +10,10 @@
 #include "Types/PushModelUtils.h"
 #include "Types/PushModelPerObjectState.h"
 #include "Types/PushModelPerNetDriverState.h"
+#include "UObject/UObjectGlobals.h"
+#include "Stats/Stats2.h"
 
+DECLARE_CYCLE_STAT(TEXT("PushModel PostGarbageCollect"), STAT_PushModel_PostGarbageCollect, STATGROUP_Net);
 
 namespace UE4PushModelPrivate
 {
@@ -42,9 +45,10 @@ namespace UE4PushModelPrivate
 	 * If that changes, we may need to move the custom IDs to base UObject and eat the memory.
 	 *
 	 * Also, instead of tracking Objects by pointer, we need another ID that can be used to track
-	 * objects **outside** of networking contexts. For now, we rely on UObject::GetUniqueId, which
-	 * is ultimately the GUObjectArray index of the Object. This same ID is used for Lazy Object Pointers,
-	 * and should be fine so long as that never changes during an Object's lifetime.
+	 * objects **outside** of networking contexts. We opt for FObjectKey. Although they are
+	 * somewhat expensive to construct, they ensure uniqueness and ensure that the reference
+	 * to a given object will be unique even across garbage collections if we're given stale
+	 * pointers.
 	 *
 	 * **********************************************************************************
 	 * ************* Adding Objects to and Remove Objects From the Manager **************
@@ -119,6 +123,21 @@ namespace UE4PushModelPrivate
 	 * See the comments in PushModel.h for more info on that.
 	 *
 	 * **********************************************************************************
+	 * ******************* Potential for "Automatic Subobject Keys" *********************
+	 * **********************************************************************************
+	 *
+	 * Push Model could achieve the same effect as Subobject Keys without requiring users
+	 * to do any extra work or manage additional state themselves.
+	 *
+	 * When an Object is about to be replicated (see FObjectReplicator::ReplicateProperties)
+	 * we could check to see if all the Object's properties were Push Model based.
+	 *
+	 * If they were, we could efficiently check to see whether or not *any* properties had changed.
+	 *
+	 * If they hadn't, we could skip doing any additional work for standard properties.
+	 * Some work may still need to happen for Custom Delta Properties (Fast Arrays).
+	 *
+	 * **********************************************************************************
 	 * ********************** Potential for "Automatic Dormancy" ************************
 	 * **********************************************************************************
 	 *
@@ -175,40 +194,48 @@ namespace UE4PushModelPrivate
 
 		FPushModelObjectManager_CustomId()
 		{
+			PostGarbageCollectHandle = FCoreUObjectDelegates::GetPostGarbageCollect().AddRaw(this, &FPushModelObjectManager_CustomId::PostGarbageCollect);
 		}
 
 		~FPushModelObjectManager_CustomId()
 		{
+			FCoreUObjectDelegates::GetPostGarbageCollect().Remove(PostGarbageCollectHandle);
 		}
 
 		void MarkPropertyDirty(const FNetPushObjectId ObjectId, const int32 RepIndex)
 		{
-			// The macros will take care of filtering out invalid objects, so we don't need to check here.
-			PerObjectStates[ObjectId].MarkPropertyDirty(RepIndex);
+			const int32 ObjectIndex = ObjectId;
+			if (LIKELY(PerObjectStates.IsValidIndex(ObjectIndex)))
+			{
+				// The macros will take care of filtering out invalid objects, so we don't need to check here.
+				PerObjectStates[ObjectIndex].MarkPropertyDirty(RepIndex);
+			}
 		}
 
 		void MarkPropertyDirty(const FNetPushObjectId ObjectId, const int32 StartRepIndex, const int32 EndRepIndex)
 		{
-			FPushModelPerObjectState& ObjectState = PerObjectStates[ObjectId];
-			for (int RepIndex = StartRepIndex; RepIndex <= EndRepIndex; ++RepIndex)
+			const int32 ObjectIndex = ObjectId;
+			if (LIKELY(PerObjectStates.IsValidIndex(ObjectIndex)))
 			{
-				ObjectState.MarkPropertyDirty(RepIndex);
+				FPushModelPerObjectState& ObjectState = PerObjectStates[ObjectIndex];
+				for (int RepIndex = StartRepIndex; RepIndex <= EndRepIndex; ++RepIndex)
+				{
+					ObjectState.MarkPropertyDirty(RepIndex);
+				}
 			}
 		}
 
-		const FPushModelPerNetDriverHandle AddNetworkObject(const FNetPushObjectId ObjectId, const uint16 NumReplicatedProperties)
+		const FPushModelPerNetDriverHandle AddNetworkObject(const FObjectKey ObjectKey, const uint16 NumReplicatedProperties)
 		{
-			FNetPushObjectId& InternalPushId = ObjectIdToInternalId.FindOrAdd(ObjectId, INDEX_NONE);
+			FNetPushObjectId& InternalPushId = ObjectKeyToInternalId.FindOrAdd(ObjectKey, INDEX_NONE);
 			if (INDEX_NONE == InternalPushId)
 			{
-				FSparseArrayAllocationInfo AllocationInfo = PerObjectStates.AddUninitializedAtLowestFreeIndex(NewObjectLookupPosition);
-				new (AllocationInfo.Pointer) FPushModelPerObjectState(ObjectId, NumReplicatedProperties);
-				InternalPushId = AllocationInfo.Index;
+				InternalPushId = PerObjectStates.EmplaceAtLowestFreeIndex(NewObjectLookupPosition, ObjectKey, NumReplicatedProperties);
 			}
 
 			FPushModelPerObjectState& PerObjectState = PerObjectStates[InternalPushId];
 			check(PerObjectState.GetNumberOfProperties() == NumReplicatedProperties);
-			check(PerObjectState.GetObjectId() == ObjectId);
+			check(PerObjectState.GetObjectKey() == ObjectKey);
 
 			const FNetPushPerNetDriverId NetDriverId = PerObjectState.AddPerNetDriverState();
 			return FPushModelPerNetDriverHandle(NetDriverId, InternalPushId);
@@ -216,38 +243,61 @@ namespace UE4PushModelPrivate
 
 		void RemoveNetworkObject(const FPushModelPerNetDriverHandle Handle)
 		{
-			if (PerObjectStates.IsValidIndex(Handle.ObjectId))
+			const int32 ObjectIndex = Handle.ObjectId;
+			if (LIKELY(PerObjectStates.IsValidIndex(ObjectIndex)))
 			{
-				FPushModelPerObjectState& PerObjectState = PerObjectStates[Handle.ObjectId];
+				FPushModelPerObjectState& PerObjectState = PerObjectStates[ObjectIndex];
 				PerObjectState.RemovePerNetDriverState(Handle.NetDriverId);
-				if (!PerObjectState.HasAnyNetDriverStates())
-				{
-					ObjectIdToInternalId.Remove(PerObjectState.GetObjectId());
-					PerObjectStates.RemoveAt(Handle.ObjectId);
-
-					if (NewObjectLookupPosition > Handle.ObjectId)
-					{
-						NewObjectLookupPosition = Handle.ObjectId;
-					}
-				}
 			}
 		}
 
 		void PostGarbageCollect()
 		{
+			SCOPE_CYCLE_COUNTER(STAT_PushModel_PostGarbageCollect);
+
 			// We can't compact PerObjectStates because we need ObjectIDs to be stable.
 			// But we can shrink it.
 
+			// Go ahead and remove any PerObjectStates that aren't being tracked by any NetDrivers.
+			// We have to wait until GC for this, because the NetDrivers will periodically remove
+			// Network Objects that are still alive (but marked Pending Kill) but we don't have a way
+			// to safely clear the Push Model Handles from those objects.
+			//
+			// That means if we tried to remove these items from Push Model tracking, we could end up
+			// with cases where we reassign the Push Model ID to a new object, and the old object could
+			// inadvertently dirty its state.
+			//
+			// In theory, this should never happen because once the object is marked Pending Kill none
+			// of its properties should change again, but it's also possible that calls like BeginDestroy
+			// could modify properties, etc.
+			//
+			// Currently, none of these objects are actually removed though unless the networking system
+			// detects they are PendingKill (their WeakObjectPtr can't be resolved anymore), so there shouldn't
+			// be any cases where we remove these for "still alive" objects.
+			for (auto It = PerObjectStates.CreateIterator(); It; ++It)
+			{
+				if (!It->HasAnyNetDriverStates())
+				{
+					ObjectKeyToInternalId.Remove(It->GetObjectKey());
+					It.RemoveCurrent();
+				}
+				else
+				{
+					It->SetRecentlyCollectedGarbage();
+				}
+			}
+
 			PerObjectStates.Shrink();
-			ObjectIdToInternalId.Compact();
+			ObjectKeyToInternalId.Compact();
 			NewObjectLookupPosition = 0;
 		}
 
 		FPushModelPerNetDriverState* GetPerNetDriverState(const FPushModelPerNetDriverHandle Handle)
 		{
-			if (PerObjectStates.IsValidIndex(Handle.ObjectId))
+			const int32 ObjectIndex = Handle.ObjectId;
+			if (LIKELY(PerObjectStates.IsValidIndex(ObjectIndex)))
 			{
-				FPushModelPerObjectState& ObjectState = PerObjectStates[Handle.ObjectId];
+				FPushModelPerObjectState& ObjectState = PerObjectStates[ObjectIndex];
 				ObjectState.PushDirtyStateToNetDrivers();
 				return &ObjectState.GetPerNetDriverState(Handle.NetDriverId);
 			}
@@ -258,8 +308,9 @@ namespace UE4PushModelPrivate
 	private:
 
 		int32 NewObjectLookupPosition = 0;
-		TMap<FNetPushObjectId, FNetPushObjectId> ObjectIdToInternalId;
+		TMap<FObjectKey, FNetPushObjectId> ObjectKeyToInternalId;
 		TSparseArray<FPushModelPerObjectState> PerObjectStates;
+		FDelegateHandle PostGarbageCollectHandle;
 	};
 
 	static FPushModelObjectManager_CustomId PushObjectManager;
@@ -275,7 +326,7 @@ namespace UE4PushModelPrivate
 	FAutoConsoleVariableRef CVarMakeBpPropertiesPushModel(
 		TEXT("Net.MakeBpPropertiesPushModel"),
 		bMakeBpPropertiesPushModel,
-		TEXT("Whether or not Blueprint Properties will be forced to used Push Model")
+		TEXT("Whether or not properties declared in Blueprints will be forced to used Push Model")
 	);
 
 	void MarkPropertyDirty(const FNetPushObjectId ObjectId, const int32 RepIndex)
@@ -288,11 +339,6 @@ namespace UE4PushModelPrivate
 		PushObjectManager.MarkPropertyDirty(ObjectId, StartRepIndex, EndRepIndex);
 	}
 
-	void PostGarbageCollect()
-	{
-		PushObjectManager.PostGarbageCollect();
-	}
-
 	/**
 	 * Called by a given NetDriver to notify us that it's seen a given Object for the first time (or the first time
 	 * since it was removed).
@@ -300,12 +346,12 @@ namespace UE4PushModelPrivate
 	 * This may be called multiple times for a given Object if there are multiple NetDrivers, but it's expected
 	 * that each NetDriver only calls this once per object before RemoteNetworkObject is called.
 	 *
-	 * @param ObjectId						The UniqueId for the object.
+	 * @param ObjectKey						An ObjectKey to uniquely identify the object.
 	 * @param NumberOfReplicatedProperties	The number of replicated properties for this object.
 	 *
 	 * @return A Handle that can be used in other calls to uniquely identify this object per NetDriver.
 	 */
-	const FPushModelPerNetDriverHandle AddPushModelObject(const FNetPushObjectId ObjectId, const uint16 NumberOfReplicatedProperties)
+	const FPushModelPerNetDriverHandle AddPushModelObject(const FObjectKey ObjectId, const uint16 NumberOfReplicatedProperties)
 	{
 		return PushObjectManager.AddNetworkObject(ObjectId, NumberOfReplicatedProperties);
 	}

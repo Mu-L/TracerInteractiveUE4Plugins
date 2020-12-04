@@ -31,6 +31,7 @@ DECLARE_DELEGATE_TwoParams(FOnSetMarkedFrame, int32, FFrameNumber)
 DECLARE_DELEGATE_OneParam(FOnAddMarkedFrame, FFrameNumber)
 DECLARE_DELEGATE_OneParam(FOnDeleteMarkedFrame, int32)
 DECLARE_DELEGATE_RetVal_TwoParams( FFrameNumber, FOnGetNearestKey, FFrameTime, bool )
+DECLARE_DELEGATE_OneParam(FOnScrubPositionParentChanged, FMovieSceneSequenceID)
 
 /** Structure used to wrap up a range, and an optional animation target */
 struct FAnimatedRange : public TRange<double>
@@ -77,6 +78,18 @@ struct FTimeSliderArgs
 
 	/** The scrub position */
 	TAttribute<FFrameTime> ScrubPosition;
+
+	/** The scrub position text */
+	TAttribute<FString> ScrubPositionText;
+
+	/** The parent sequence that the scrub position display text is relative to */
+	TAttribute<FMovieSceneSequenceID> ScrubPositionParent;
+
+	/** Called when the scrub position parent sequence is changed */
+	FOnScrubPositionParentChanged OnScrubPositionParentChanged;
+
+	/** Attribute for the parent sequence chain of the current sequence */
+	TAttribute<TArray<FMovieSceneSequenceID>> ScrubPositionParentChain;
 
 	/** View time range */
 	TAttribute< FAnimatedRange > ViewRange;
@@ -146,6 +159,9 @@ struct FTimeSliderArgs
 
 	/** Attribute for the current sequence's marked frames */
 	TAttribute<TArray<FMovieSceneMarkedFrame>> MarkedFrames;
+
+	/** Attribute for the marked frames that might need to be shown, but do not belong to the current sequence*/
+	TAttribute<TArray<FMovieSceneMarkedFrame>> GlobalMarkedFrames;
 
 	/** Called when the marked frame needs to be set */
 	FOnSetMarkedFrame OnSetMarkedFrame;

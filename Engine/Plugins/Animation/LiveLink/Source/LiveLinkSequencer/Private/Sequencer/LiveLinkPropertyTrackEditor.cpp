@@ -8,6 +8,7 @@
 #include "Misc/QualifiedFrameTime.h"
 #include "MovieScene/MovieSceneLiveLinkSection.h"
 #include "Styling/SlateIconFinder.h"
+#include "LevelSequence.h"
 
 #include "LiveLinkComponent.h"
 
@@ -85,7 +86,7 @@ void FLiveLinkSection::BuildSectionContextMenu(FMenuBuilder& MenuBuilder, const 
 		{
 			TArrayView<const FMovieSceneChannelMetaData> EntryMetaData = Entry.GetMetaData();
 			AllMetaData.Reserve(AllMetaData.Num() + EntryMetaData.Num());
-			for (const FMovieSceneChannelMetaData MetaData : EntryMetaData)
+			for (const FMovieSceneChannelMetaData& MetaData : EntryMetaData)
 			{
 				AllMetaData.Add(MetaData);
 			}
@@ -132,7 +133,7 @@ bool FLiveLinkSection::RequestDeleteKeyArea(const TArray<FName>& KeyAreaNamePath
 			{
 				TArrayView<const FMovieSceneChannelMetaData> EntryMetaData = Entry.GetMetaData();
 				AllMetaData.Reserve(AllMetaData.Num() + EntryMetaData.Num());
-				for (const FMovieSceneChannelMetaData MetaData : EntryMetaData)
+				for (const FMovieSceneChannelMetaData& MetaData : EntryMetaData)
 				{
 					AllMetaData.Add(MetaData);
 				}
@@ -208,7 +209,7 @@ TSharedRef<ISequencerSection> FLiveLinkPropertyTrackEditor::MakeSectionInterface
 
 bool FLiveLinkPropertyTrackEditor::SupportsSequence(UMovieSceneSequence* InSequence) const
 {
-	return (InSequence != nullptr) && (InSequence->GetClass()->GetName() == TEXT("LevelSequence"));
+	return InSequence && InSequence->IsA(ULevelSequence::StaticClass());
 }
 
 bool FLiveLinkPropertyTrackEditor::SupportsType(TSubclassOf<UMovieSceneTrack> Type) const

@@ -9,10 +9,6 @@
 #include "Misc/SecureHash.h"
 #include "Containers/StringConv.h"
 
-#if ANDROIDDEVICEPROFILESELECTORSECRETS_H
-#include "NoRedist/AndroidDeviceProfileSelectorSecrets.h"
-#endif
-
 UAndroidDeviceProfileMatchingRules::UAndroidDeviceProfileMatchingRules(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
@@ -27,7 +23,7 @@ static UAndroidDeviceProfileMatchingRules* GetAndroidDeviceProfileMatchingRules(
 {
 	// We need to initialize the class early as device profiles need to be evaluated before ProcessNewlyLoadedUObjects can be called.
 	extern UClass* Z_Construct_UClass_UAndroidDeviceProfileMatchingRules();
-	CreatePackage(nullptr, UAndroidDeviceProfileMatchingRules::StaticPackage());
+	CreatePackage(UAndroidDeviceProfileMatchingRules::StaticPackage());
 	Z_Construct_UClass_UAndroidDeviceProfileMatchingRules();
 
 	// Get the default object which will has the values from DeviceProfiles.ini
@@ -217,14 +213,14 @@ FString FAndroidDeviceProfileSelector::FindMatchingProfile(const FString& GPUFam
 						MatchHashString = Item.MatchString;
 					}
 					FString HashInputString = *SourceString + SaltString
-#if ANDROIDDEVICEPROFILESELECTORSECRETS_H
+#ifdef HASH_PEPPER_SECRET_GUID
 						+ HASH_PEPPER_SECRET_GUID.ToString()
 #endif
 						;
 
 					FSHAHash SourceHash;
 					FSHA1::HashBuffer(TCHAR_TO_ANSI(*HashInputString), HashInputString.Len(), SourceHash.Hash);
-					if (SourceHash.ToString() != MatchHashString)
+					if (SourceHash.ToString() != MatchHashString.ToUpper())
 					{
 						bFoundMatch = false;
 					}

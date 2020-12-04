@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/ContainersFwd.h"
 #include "Misc/FrameTime.h"
 #include "UObject/ObjectMacros.h"
 #include "MovieSceneFwd.h"
@@ -10,28 +11,42 @@
 #include "MovieScene.h"
 #include "MovieSceneSignedObject.h"
 #include "Evaluation/Blending/MovieSceneBlendType.h"
+#include "Evaluation/MovieSceneCompletionMode.h"
 #include "Generators/MovieSceneEasingFunction.h"
 #include "MovieSceneFrameMigration.h"
 #include "Misc/QualifiedFrameTime.h"
+#include "Evaluation/MovieSceneEvaluationCustomVersion.h"
+#include "EntitySystem/MovieSceneEntityBuilder.h"
 #include "MovieSceneSection.generated.h"
+
 
 class FStructOnScope;
 
 struct FKeyHandle;
+struct FEasingComponentData;
 struct FMovieSceneChannelProxy;
 struct FMovieSceneEvalTemplatePtr;
 
-template<typename> class TArrayView;
+class UMovieSceneEntitySystemLinker;
 
-/** Enumeration specifying how to handle state when this section is no longer evaluated */
-UENUM(BlueprintType)
-enum class EMovieSceneCompletionMode : uint8
+namespace UE
 {
-	KeepState,
+namespace MovieScene
+{
+	struct FEntityImportParams;
+	struct FImportedEntity;
+}
+}
 
-	RestoreState,
 
-	ProjectDefault,
+/** Enumeration defining how a section's channel proxy behaves. */
+enum class EMovieSceneChannelProxyType : uint8
+{
+	/** Once constructed, the channel proxy will not change even on serialization. The channel proxy has a static layout and the memory for each channel is always valid. */
+	Static,
+
+	/** The channel proxy layout can be affected by serialization or duplication and must be updated on such changes. */
+	Dynamic
 };
 
 
@@ -202,7 +217,7 @@ public:
 	 * 
 	 * @param NewRange	The new range of times
 	 */
-	void SetRange(const TRange<FFrameNumber>& NewRange)
+	MOVIESCENE_API virtual void SetRange(const TRange<FFrameNumber>& NewRange)
 	{
 		// Do not modify for objects that still need initialization (i.e. we're in the object's constructor)
 		bool bCanSetRange = HasAnyFlags(RF_NeedInitialization) || TryModify();
@@ -259,13 +274,13 @@ public:
 	 * Set this section's start frame in sequence resolution space.
 	 * @note: Will be clamped to the current end frame if necessary
 	 */
-	MOVIESCENE_API void SetStartFrame(TRangeBound<FFrameNumber> NewStartFrame);
+	MOVIESCENE_API virtual void SetStartFrame(TRangeBound<FFrameNumber> NewStartFrame);
 
 	/**
 	 * Set this section's end frame in sequence resolution space
 	 * @note: Will be clamped to the current start frame if necessary
 	 */
-	MOVIESCENE_API void SetEndFrame(TRangeBound<FFrameNumber> NewEndFrame);
+	MOVIESCENE_API virtual void SetEndFrame(TRangeBound<FFrameNumber> NewEndFrame);
 
 	/**
 	 * Returns whether or not a provided position in time is within the timespan of the section 
@@ -375,12 +390,6 @@ public:
 	 * @return The keys' data structure representation, or nullptr if key not found or no structure available.
 	 */
 	MOVIESCENE_API virtual TSharedPtr<FStructOnScope> GetKeyStruct(TArrayView<const FKeyHandle> KeyHandles);
-
-	/**
-	 * Generate an evaluation template for this section
-	 * @return a valid evaluation template ptr, or nullptr
-	 */
-	MOVIESCENE_API virtual FMovieSceneEvalTemplatePtr GenerateTemplate() const;
 
 	/**
 	 * Gets all snap times for this section
@@ -539,15 +548,32 @@ public:
 	MOVIESCENE_API virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 
+public:
+
+	MOVIESCENE_API void BuildDefaultComponents(UMovieSceneEntitySystemLinker* EntityLinker, const UE::MovieScene::FEntityImportParams& Params, UE::MovieScene::FImportedEntity* OutLedgerEntry);
+
 protected:
 
 	//~ UObject interface
 	MOVIESCENE_API virtual void PostInitProperties() override;
 	MOVIESCENE_API virtual bool IsPostLoadThreadSafe() const override;
+	MOVIESCENE_API virtual void PostDuplicate(bool bDuplicateForPIE) override;
+	MOVIESCENE_API virtual void PostRename(UObject* OldOuter, const FName OldName) override;
+	MOVIESCENE_API virtual void PostEditImport() override;
 	MOVIESCENE_API virtual void Serialize(FArchive& Ar) override;
 
 	virtual void OnMoved(int32 DeltaTime) {}
 	virtual void OnDilated(float DilationFactor, FFrameNumber Origin) {}
+
+	MOVIESCENE_API bool ShouldUpgradeEntityData(FArchive& Ar, FMovieSceneEvaluationCustomVersion::Type UpgradeVersion) const;
+
+private:
+
+	/**
+	 * Cache this section's channel proxy
+	 */
+	MOVIESCENE_API virtual EMovieSceneChannelProxyType CacheChannelProxy();
+
 
 public:
 
@@ -625,5 +651,8 @@ protected:
 	 * Must be re-allocated any time any channel pointer in derived types is reallocated (such as channel data stored in arrays)
 	 * to ensure that any weak handles to channels are invalidated correctly. Allocation is via MakeShared<FMovieSceneChannelProxy>().
 	 */
-	TSharedPtr<FMovieSceneChannelProxy> ChannelProxy;
+	mutable TSharedPtr<FMovieSceneChannelProxy> ChannelProxy;
+
+	/** Defines whether the channel proxy can change over the lifetime of the section */
+	mutable EMovieSceneChannelProxyType ChannelProxyType;
 };

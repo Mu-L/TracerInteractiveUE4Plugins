@@ -129,9 +129,8 @@ public:
 		Filter.ClassNames.Add(BaseClass->GetFName());
 
 		IAssetRegistry& AssetRegistry = FAssetRegistryModule::GetRegistry();
-		FARFilter ExpandedFilter;
-		AssetRegistry.ExpandRecursiveFilter(Filter, ExpandedFilter);
-		TSet<FName> ChildClassNames(ExpandedFilter.ClassNames);
+		FARCompiledFilter CompiledFilter;
+		AssetRegistry.CompileFilter(Filter, CompiledFilter);
 
 		FAssetPickerConfig AssetPickerConfig;
 		{
@@ -150,7 +149,7 @@ public:
 			}
 
 			AssetPickerConfig.OnShouldFilterAsset = FOnShouldFilterAsset::CreateLambda(
-				[this, ChildClassNames](const FAssetData& AssetData) -> bool
+				[this, ChildClassNames = CompiledFilter.ClassNames](const FAssetData& AssetData) -> bool
 				{
 					if (LegacyBaseClass == nullptr || AssetData.AssetClass != LegacyBaseClass->GetFName())
 					{
@@ -314,36 +313,6 @@ void FTemplateSequenceTrackEditor::OnTemplateSequenceAssetEnterPressed(const TAr
 	}
 }
 
-void FTemplateSequenceTrackEditor::AddKey(const FGuid& ObjectGuid)
-{
-	const UClass* RootBindingClass = AcquireObjectClassFromObjectGuid(ObjectGuid);
-
-	const UCameraComponent* CameraComponent = AcquireCameraComponentFromObjectGuid(ObjectGuid);
-	const bool bIsCameraAnimMenu = (CameraComponent != nullptr);
-
-	TSharedPtr<SWindow> ParentWindow = FSlateApplication::Get().GetActiveTopLevelWindow();
-	if (ParentWindow.IsValid() && RootBindingClass != nullptr)
-	{
-		TSharedPtr<SBox> MenuEntry = SNew(SBox)
-			.WidthOverride(300.0f)
-			.HeightOverride(300.f)
-			[
-				BuildTemplateSequenceAssetSubMenu(ObjectGuid, RootBindingClass, bIsCameraAnimMenu)
-			];
-
-		FMenuBuilder MenuBuilder(true, nullptr);
-		MenuBuilder.AddWidget(MenuEntry.ToSharedRef(), FText::GetEmpty(), true);
-		TSharedRef<SWidget> MenuContainer = MenuBuilder.MakeWidget();
-
-		FSlateApplication::Get().PushMenu(
-				ParentWindow.ToSharedRef(),
-				FWidgetPath(),
-				MenuContainer,
-				FSlateApplication::Get().GetCursorPos(),
-				FPopupTransitionEffect(FPopupTransitionEffect::TypeInPopup));
-	}
-}
-
 FKeyPropertyResult FTemplateSequenceTrackEditor::AddKeyInternal(FFrameNumber KeyTime, FGuid ObjectBinding, UTemplateSequence* TemplateSequence)
 {
 	TArray<FGuid> ObjectBindings;
@@ -396,6 +365,7 @@ FKeyPropertyResult FTemplateSequenceTrackEditor::AddKeyInternal(FFrameNumber Key
 				{
 					UMovieSceneSection* NewSection = Cast<UTemplateSequenceTrack>(Track)->AddNewTemplateSequenceSection(KeyTime, TemplateSequence);
 					KeyPropertyResult.bTrackModified = true;
+					KeyPropertyResult.SectionsCreated.Add(NewSection);
 					NewSections.Add(NewSection);
 				}
 			}

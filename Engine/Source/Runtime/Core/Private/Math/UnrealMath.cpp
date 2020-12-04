@@ -33,6 +33,9 @@ CORE_API const FVector2D FVector2D::ZeroVector(0.0f, 0.0f);
 CORE_API const FVector2D FVector2D::UnitVector(1.0f, 1.0f);
 CORE_API const FVector2D FVector2D::Unit45Deg(UE_INV_SQRT_2, UE_INV_SQRT_2);
 CORE_API const FRotator FRotator::ZeroRotator(0.f,0.f,0.f);
+CORE_API const FVector FVector::XAxisVector(1.0f, 0.0f, 0.0f);
+CORE_API const FVector FVector::YAxisVector(0.0f, 1.0f, 0.0f);
+CORE_API const FVector FVector::ZAxisVector(0.0f, 0.0f, 1.0f);
 
 CORE_API const VectorRegister VECTOR_INV_255 = DECLARE_VECTOR_REGISTER(1.f/255.f, 1.f/255.f, 1.f/255.f, 1.f/255.f);
 
@@ -1147,7 +1150,7 @@ float FVector::EvaluateBezier(const FVector* ControlPoints, int32 NumPoints, TAr
 	check( NumPoints >= 2 );
 
 	// var q is the change in t between successive evaluations.
-	const float q = 1.f/(NumPoints-1); // q is dependent on the number of GAPS = POINTS-1
+	const float q = 1.f/(float)(NumPoints-1); // q is dependent on the number of GAPS = POINTS-1
 
 	// recreate the names used in the derivation
 	const FVector& P0 = ControlPoints[0];
@@ -1198,7 +1201,7 @@ float FLinearColor::EvaluateBezier(const FLinearColor* ControlPoints, int32 NumP
 	check( NumPoints >= 2 );
 
 	// var q is the change in t between successive evaluations.
-	const float q = 1.f/(NumPoints-1); // q is dependent on the number of GAPS = POINTS-1
+	const float q = 1.f/(float)(NumPoints-1); // q is dependent on the number of GAPS = POINTS-1
 
 	// recreate the names used in the derivation
 	const FLinearColor& P0 = ControlPoints[0];
@@ -3023,7 +3026,7 @@ float Val(const FString& Value)
 		if( Char >= TEXT("0") && Char <= TEXT("9") )
 		{
 			RetValue *= 10;
-			RetValue += FCString::Atoi( *Char );
+			RetValue += (float)FCString::Atoi( *Char );
 		}
 		else 
 		{

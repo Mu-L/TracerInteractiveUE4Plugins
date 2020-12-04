@@ -116,9 +116,7 @@ public: \
 	} \
 	/** receives a message of this type from the passed in bunch */ \
 	template<typename... ParamTypes> \
-	FUNCTION_CHECK_RETURN_START \
-	static bool Receive(FInBunch& Bunch, ParamTypes&... Params) \
-	FUNCTION_CHECK_RETURN_END \
+	UE_NODISCARD static bool Receive(FInBunch& Bunch, ParamTypes&... Params) \
 	{ \
 		FNetControlMessageInfo::ReceiveParams(Bunch, Params...); \
 		return !Bunch.IsError(); \
@@ -166,6 +164,7 @@ DEFINE_CONTROL_CHANNEL_MESSAGE(NetGUIDAssign, 18, FNetworkGUID, FString); // Exp
 DEFINE_CONTROL_CHANNEL_MESSAGE(SecurityViolation, 19, FString); // server tells client that it has violated security and has been disconnected
 DEFINE_CONTROL_CHANNEL_MESSAGE(GameSpecific, 20, uint8, FString); // custom game-specific message routed to UGameInstance for processing
 DEFINE_CONTROL_CHANNEL_MESSAGE(EncryptionAck, 21);
+DEFINE_CONTROL_CHANNEL_MESSAGE(DestructionInfo, 22);
 
 // 			Beacon control channel flow
 // Client												Server

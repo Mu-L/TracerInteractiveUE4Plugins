@@ -38,7 +38,7 @@ public class OnlineSubsystemFacebook : ModuleRules
 			string FacebookNFLDir = "";
 			try
 			{
-				FacebookNFLDir = System.IO.Path.Combine(ModuleDirectory, "ThirdParty", "Android", "NotForLicensees", "FacebookSDK");
+				FacebookNFLDir = System.IO.Path.Combine(EngineDirectory, "Restricted/NotForLicensees/Plugins/Online/OnlineSubsystemFacebook/Source/ThirdParty/Android/FacebookSDK");
 				bHasFacebookSDK = System.IO.Directory.Exists(FacebookNFLDir);
 			}
 			catch (System.Exception)
@@ -75,16 +75,6 @@ public class OnlineSubsystemFacebook : ModuleRules
 		{
 			bUsesRestfulImpl = true;
 			PublicDefinitions.Add("WITH_FACEBOOK=1");
-		}
-		else if (Target.Platform == UnrealTargetPlatform.XboxOne)
-		{
-			PublicDefinitions.Add("WITH_FACEBOOK=1");
-			PrivateIncludePaths.Add("Private/XboxOne");
-		}
-		else if (Target.Platform == UnrealTargetPlatform.PS4)
-		{
-			PublicDefinitions.Add("WITH_FACEBOOK=1");
-			PrivateIncludePaths.Add("Private/PS4");
 		}
 		else if (Target.Platform == UnrealTargetPlatform.Mac)
 		{

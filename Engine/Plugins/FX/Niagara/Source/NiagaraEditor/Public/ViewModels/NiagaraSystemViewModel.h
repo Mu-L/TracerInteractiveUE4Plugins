@@ -37,6 +37,7 @@ class UNiagaraNodeFunctionCall;
 class FNiagaraEmitterViewModel;
 class FNiagaraOverviewGraphViewModel;
 class UNiagaraScratchPadViewModel;
+class UNiagaraMessageData;
 
 /** Defines different editing modes for this system view model. */
 enum class NIAGARAEDITOR_API ENiagaraSystemViewModelEditMode
@@ -48,7 +49,7 @@ enum class NIAGARAEDITOR_API ENiagaraSystemViewModelEditMode
 };
 
 /** Defines options for the niagara System view model */
-struct FNiagaraSystemViewModelOptions
+struct NIAGARAEDITOR_API FNiagaraSystemViewModelOptions
 {
 	FNiagaraSystemViewModelOptions();
 
@@ -105,6 +106,9 @@ public:
 
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnRequestFocusTab, FName /* TabName */);
 
+	DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnExternalRenameParameter, const FNiagaraVariableBase&, const FNiagaraVariableBase&, UNiagaraEmitter*);
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnExternalRemoveParameter, const FNiagaraVariableBase&,  UNiagaraEmitter*);
+
 public:
 	struct FEmitterHandleToDuplicate
 	{
@@ -143,12 +147,12 @@ public:
 		ResetSystem,
 	};
 	/** Creates a new view model with the supplied System and System instance. */
-	FNiagaraSystemViewModel();
+	NIAGARAEDITOR_API FNiagaraSystemViewModel();
 	
 	/** Initializes this system view model with the supplied system and options. */
-	void Initialize(UNiagaraSystem& InSystem, FNiagaraSystemViewModelOptions InOptions);
+	NIAGARAEDITOR_API void Initialize(UNiagaraSystem& InSystem, FNiagaraSystemViewModelOptions InOptions);
 
-	~FNiagaraSystemViewModel();
+	NIAGARAEDITOR_API ~FNiagaraSystemViewModel();
 
 	NIAGARAEDITOR_API FText GetDisplayName() const;
 
@@ -252,6 +256,9 @@ public:
 	/** Updates all selected emitter's fixed bounds with their current dynamic bounds. */
 	void UpdateEmitterFixedBounds();
 
+	/** Clear the captures stats for all the emitters in the current system. */
+	void ClearEmitterStats();
+
 	/** Isolates the supplied emitters.  This will remove all other emitters from isolation. */
 	NIAGARAEDITOR_API void IsolateEmitters(TArray<FGuid> EmitterHandlesIdsToIsolate);
 
@@ -292,8 +299,17 @@ public:
 	/** Set the system toolkit command list. */
 	void SetToolkitCommands(const TSharedRef<FUICommandList>& InToolkitCommands);
 
-	/** Gets the stack module data for the provided module, for use in determining dependencies. */
-	const TArray<FNiagaraStackModuleData>& GetStackModuleData(UNiagaraStackEntry* ModuleEntry);
+	/** Gets the stack module data for the provided module stack entry, for use in determining dependencies. */
+	const TArray<FNiagaraStackModuleData>& GetStackModuleDataByModuleEntry(UNiagaraStackEntry* ModuleEntry);
+
+	/** Gets the stack module data for the provided emitter handled id, for use in determining dependencies. */
+	const TArray<FNiagaraStackModuleData>& GetStackModuleDataByEmitterHandleId(FGuid EmitterHandleId);
+
+	/** Get all non-event scripts which will execute for an emitter. */
+	void GetOrderedScriptsForEmitterHandleId(FGuid EmitterHandleId, TArray<UNiagaraScript*>& OutScripts);
+
+	/** Gets all non-event scripts which will execute for an emitter. */
+	void GetOrderedScriptsForEmitter(UNiagaraEmitter* Emitter, TArray<UNiagaraScript*>& OutScripts);
 
 	/** Gets the ViewModel for the system overview graph. */
 	NIAGARAEDITOR_API TSharedPtr<FNiagaraOverviewGraphViewModel> GetOverviewGraphViewModel() const;
@@ -309,8 +325,32 @@ public:
 	/** Duplicates a set of emitters and refreshes everything.*/
 	void DuplicateEmitters(TArray<FEmitterHandleToDuplicate> EmitterHandlesToDuplicate);
 
+	/** Get the Guid Key for messages associated with this asset. */
 	FGuid GetMessageLogGuid() const;
 
+	/** Add a serialized message to the Emitter/System this viewmodel is managing. Returns a key to the new message. */
+	NIAGARAEDITOR_API FGuid AddMessage(UNiagaraMessageData* NewMessage) const;
+
+	/** Remove a serialized message from the Emitter/System this viewmodel is managing. */
+	NIAGARAEDITOR_API void RemoveMessage(const FGuid& MessageKey) const;
+
+	/** Add a serialized message to the target function call node inside a script this viewmodel is managing. Returns a key to the new message. */
+	NIAGARAEDITOR_API FGuid AddStackMessage(UNiagaraMessageData* NewMessage, UNiagaraNodeFunctionCall* TargetFunctionCallNode) const;
+
+	/** Remove a serialized message from the target function call node inside a script this viewmodel is managing. */
+	NIAGARAEDITOR_API void RemoveStackMessage(const FGuid& MessageKey, UNiagaraNodeFunctionCall* TargetFunctionCallNode) const;
+
+	/** Wrapper to set bPendingMessagesChanged after calling a delegate off of a message link. */
+	void ExecuteMessageDelegateAndRefreshMessages(FSimpleDelegate MessageDelegate);
+
+	ENiagaraStatEvaluationType StatEvaluationType = ENiagaraStatEvaluationType::Average;
+	ENiagaraStatDisplayMode StatDisplayMode = ENiagaraStatDisplayMode::Percent;
+
+	void NotifyParameterRemovedExternally(const FNiagaraVariableBase& InVar, UNiagaraEmitter* InOptionalEmitter) { OnExternalRemoveDelegate.Broadcast(InVar, InOptionalEmitter); }
+	void NotifyParameterRenamedExternally(const FNiagaraVariableBase& InOldVar, const FNiagaraVariableBase& InNewVar, UNiagaraEmitter* InOptionalEmitter) { OnExternalRenameDelegate.Broadcast(InOldVar, InNewVar, InOptionalEmitter); }
+
+	FOnExternalRenameParameter& OnParameterRenamedExternally() { return OnExternalRenameDelegate; }
+	FOnExternalRemoveParameter& OnParameterRemovedExternally() { return OnExternalRemoveDelegate; }
 private:
 
 	/** Sends message jobs to FNiagaraMessageManager for all compile events from the last compile. */
@@ -448,6 +488,11 @@ private:
 	/** Called whenever one of the scripts in the scratch pad changes. */
 	void ScratchPadScriptsChanged();
 
+	/** Called whenever the map of messages associated with the managed Emitter/System changes. */
+	void RefreshAssetMessages();
+
+	const TArray<FNiagaraStackModuleData>& BuildAndCacheStackModuleData(FGuid EmitterHandleId, UNiagaraEmitter* Emitter);
+
 private:
 	/** The System being viewed and edited by this view model. */
 	UNiagaraSystem* System;
@@ -511,6 +556,9 @@ private:
 
 	/** A multicast delegate which is called whenever this has been notified it's owner will be closing. */
 	FOnPreClose OnPreCloseDelegate;
+
+	FOnExternalRenameParameter OnExternalRenameDelegate;
+	FOnExternalRemoveParameter OnExternalRemoveDelegate;
 
 	FOnRequestFocusTab OnRequestFocusTabDelegate;
 
@@ -591,4 +639,10 @@ private:
 	TOptional<ENiagaraScriptCompileStatus> LatestCompileStatusCache;
 
 	FDelegateHandle SystemChangedDelegateHandle;
+
+	/** ObjectKeys for function call nodes that supply messages. Used to invalidate the messages of these nodes on refresh.*/
+	TArray<FObjectKey> LastFunctionCallNodeObjectKeys;
+
+	/** Flag for when messages have been added/removed through the viewmodel to signal that the message manager needs to be refreshed. */
+	mutable bool bPendingAssetMessagesChanged;
 };

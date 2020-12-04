@@ -7,6 +7,7 @@ FTakeRecorderUserParameters::FTakeRecorderUserParameters()
 	, CountdownSeconds(0.f)
 	, EngineTimeDilation(1.f)
 	, bRemoveRedundantTracks(true)
+	, ReduceKeysTolerance(KINDA_SMALL_NUMBER)
 	, bSaveRecordedAssets(false)
 	, bAutoSerialize(false)
 {
@@ -17,6 +18,7 @@ FTakeRecorderUserParameters::FTakeRecorderUserParameters()
 
 FTakeRecorderProjectParameters::FTakeRecorderProjectParameters()
 	: bStartAtCurrentTimecode(true)
+	, bRecordTimecode(true)
 	, bRecordSourcesIntoSubSequences(false)
 	, bRecordToPossessable(false)
 {}

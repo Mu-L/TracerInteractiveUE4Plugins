@@ -80,7 +80,7 @@ namespace UnrealBuildTool
 		/// This is the minimum SDK version we support.
 		/// </summary>
 		static uint MinimumSDKVersionMajor = 0;
-		static uint MinimumSDKVersionMinor = 23;
+		static uint MinimumSDKVersionMinor = 24;
 
 		/// <summary>
 		/// Gets a string defining the minimum required sdk version.
@@ -273,16 +273,16 @@ namespace UnrealBuildTool
 			CompileEnvironment.SystemIncludePaths.Add(DirectoryReference.Combine(MLSDKDir, "lumin/stl/libc++/include"));
 			CompileEnvironment.SystemIncludePaths.Add(DirectoryReference.Combine(MLSDKDir, "include"));
 
-			LinkEnvironment.LibraryPaths.Add(DirectoryReference.Combine(MLSDKDir, "lib/lumin"));
-			LinkEnvironment.LibraryPaths.Add(DirectoryReference.Combine(MLSDKDir, "lumin/stl/libc++/lib"));
+			LinkEnvironment.SystemLibraryPaths.Add(DirectoryReference.Combine(MLSDKDir, "lib/lumin"));
+			LinkEnvironment.SystemLibraryPaths.Add(DirectoryReference.Combine(MLSDKDir, "lumin/stl/libc++/lib"));
 
-			LinkEnvironment.AdditionalLibraries.Add("GLESv2");
-			LinkEnvironment.AdditionalLibraries.Add("EGL");
+			LinkEnvironment.SystemLibraries.Add("GLESv3");
+			LinkEnvironment.SystemLibraries.Add("EGL");
 
-			LinkEnvironment.AdditionalLibraries.Add("ml_lifecycle");
-			LinkEnvironment.AdditionalLibraries.Add("ml_ext_logging");
-			LinkEnvironment.AdditionalLibraries.Add("ml_dispatch");
-			//LinkEnvironment.AdditionalLibraries.Add("android_support");
+			LinkEnvironment.SystemLibraries.Add("ml_lifecycle");
+			LinkEnvironment.SystemLibraries.Add("ml_ext_logging");
+			LinkEnvironment.SystemLibraries.Add("ml_dispatch");
+			//LinkEnvironment.SystemLibraries.Add("android_support");
 		}
 
 		public override bool ShouldCreateDebugInfo(ReadOnlyTargetRules Target)
@@ -336,7 +336,7 @@ namespace UnrealBuildTool
 			return "Lumin";
 		}
 
-		protected override string GetRequiredSDKString()
+		public override string GetRequiredSDKString()
 		{
 			return SDKVersionHelper.GetRequiredSDKString();
 		}

@@ -7,6 +7,8 @@
 #include "EngineGlobals.h"
 #include "Sound/SoundSubmixSend.h"
 #include "UObject/UObjectIterator.h"
+#include "DSP/Dsp.h"
+#include "DSP/SpectrumAnalyzer.h"
 
 #if WITH_EDITOR
 #include "Framework/Notifications/NotificationManager.h"
@@ -41,10 +43,29 @@ USoundSubmix::USoundSubmix(const FObjectInitializer& ObjectInitializer)
 	, AmbisonicsPluginSettings(nullptr)
 	, EnvelopeFollowerAttackTime(10)
 	, EnvelopeFollowerReleaseTime(500)
+	, GainMode(EGainParamMode::Linear)
 	, OutputVolume(1.0f)
+	, WetLevel(1.0f)
+	, DryLevel(0.0f)
+#if WITH_EDITOR
+	, OutputVolumeDB(0.0f)
+	, WetLevelDB(0.0f)
+	, DryLevelDB(-120.0f)
+#endif
 {
 }
 
+void USoundSubmix::PostLoad()
+{
+	Super::PostLoad();
+
+#if WITH_EDITOR
+	OutputVolumeDB = Audio::ConvertToDecibels(OutputVolume);
+	WetLevelDB = Audio::ConvertToDecibels(WetLevel);
+	DryLevelDB = Audio::ConvertToDecibels(DryLevel);
+#endif
+
+}
 
 UEndpointSubmix::UEndpointSubmix(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -71,10 +92,13 @@ void USoundSubmix::StartRecordingOutput(const UObject* WorldContextObject, float
 	}
 
 	// Find device for this specific audio recording thing.
-	UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
-	FAudioDevice* DesiredAudioDevice = ThisWorld->GetAudioDeviceRaw();
-
-	StartRecordingOutput(DesiredAudioDevice, ExpectedDuration);
+	if (UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull))
+	{
+		if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw())
+		{
+			StartRecordingOutput(AudioDevice, ExpectedDuration);
+		}
+	}
 }
 
 void USoundSubmix::StartRecordingOutput(FAudioDevice* InDevice, float ExpectedDuration)
@@ -93,10 +117,13 @@ void USoundSubmix::StopRecordingOutput(const UObject* WorldContextObject, EAudio
 	}
 
 	// Find device for this specific audio recording thing.
-	UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull);
-	FAudioDevice* DesiredAudioDevice = ThisWorld->GetAudioDeviceRaw();
-
-	StopRecordingOutput(DesiredAudioDevice, ExportType, Name, Path, ExistingSoundWaveToOverwrite);
+	if (UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull))
+	{
+		if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw())
+		{
+			StopRecordingOutput(AudioDevice, ExportType, Name, Path, ExistingSoundWaveToOverwrite);
+		}
+	}
 }
 
 void USoundSubmix::StopRecordingOutput(FAudioDevice* InDevice, EAudioRecordingExportType ExportType, const FString& Name, FString Path, USoundWave* ExistingSoundWaveToOverwrite /*= nullptr*/)
@@ -232,6 +259,100 @@ void USoundSubmix::AddEnvelopeFollowerDelegate(const UObject* WorldContextObject
 	}
 }
 
+void USoundSubmix::AddSpectralAnalysisDelegate(const UObject* WorldContextObject, const TArray<FSoundSubmixSpectralAnalysisBandSettings>& InBandSettings, const FOnSubmixSpectralAnalysisBP& OnSubmixSpectralAnalysisBP, float UpdateRate,  float DecibelNoiseFloor, bool bDoNormalize, bool bDoAutoRange, float AutoRangeAttackTime, float AutoRangeReleaseTime)
+{
+
+	if (!GEngine)
+	{
+		return;
+	}
+
+	// Find device for this specific audio recording thing.
+	if (UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull))
+	{
+		if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw())
+		{
+			FSoundSpectrumAnalyzerDelegateSettings DelegateSettings = USoundSubmix::GetSpectrumAnalysisDelegateSettings(InBandSettings, UpdateRate, DecibelNoiseFloor, bDoNormalize, bDoAutoRange, AutoRangeAttackTime, AutoRangeReleaseTime);
+
+
+			AudioDevice->AddSpectralAnalysisDelegate(this, DelegateSettings, OnSubmixSpectralAnalysisBP);
+		}
+	}
+}
+
+void USoundSubmix::RemoveSpectralAnalysisDelegate(const UObject* WorldContextObject, const FOnSubmixSpectralAnalysisBP& OnSubmixSpectralAnalysisBP)
+{
+	if (!GEngine)
+	{
+		return;
+	}
+
+	// Find device for this specific audio recording thing.
+	if (UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull))
+	{
+		if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw())
+		{
+			AudioDevice->RemoveSpectralAnalysisDelegate(this, OnSubmixSpectralAnalysisBP);
+		}
+	}
+}
+
+void USoundSubmix::StartSpectralAnalysis(const UObject* WorldContextObject, EFFTSize FFTSize, EFFTPeakInterpolationMethod InterpolationMethod, EFFTWindowType WindowType, float HopSize, EAudioSpectrumType SpectrumType)
+{
+	if (!GEngine)
+	{
+		return;
+	}
+
+	// Find device for this specific audio recording thing.
+	if (UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull))
+	{	
+		if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw())
+		{
+			StartSpectralAnalysis(AudioDevice, FFTSize, InterpolationMethod, WindowType, HopSize, SpectrumType);
+		}
+	}
+}
+
+void USoundSubmix::StartSpectralAnalysis(FAudioDevice* InAudioDevice, EFFTSize FFTSize, EFFTPeakInterpolationMethod InterpolationMethod, EFFTWindowType WindowType, float HopSize, EAudioSpectrumType SpectrumType)
+{
+	if (!GEngine)
+	{
+		return;
+	}
+
+	if (InAudioDevice)
+	{
+		FSoundSpectrumAnalyzerSettings Settings = USoundSubmix::GetSpectrumAnalyzerSettings(FFTSize, InterpolationMethod, WindowType, HopSize, SpectrumType);
+		InAudioDevice->StartSpectrumAnalysis(this, Settings);
+	}
+}
+
+void USoundSubmix::StopSpectralAnalysis(const UObject* WorldContextObject)
+{
+	if (!GEngine)
+	{
+		return;
+	}
+
+	// Find device for this specific audio recording thing.
+	if (UWorld* ThisWorld = GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::LogAndReturnNull))
+	{
+		if (FAudioDevice* AudioDevice = ThisWorld->GetAudioDeviceRaw())
+		{
+			AudioDevice->StopSpectrumAnalysis(this);
+		}
+	}
+}
+
+void USoundSubmix::StopSpectralAnalysis(FAudioDevice* InAudioDevice)
+{
+	if (InAudioDevice)
+	{
+		InAudioDevice->StopSpectrumAnalysis(this);
+	}
+}
+
 void USoundSubmix::SetSubmixOutputVolume(const UObject* WorldContextObject, float InOutputVolume)
 {
 	if (!GEngine)
@@ -247,26 +368,84 @@ void USoundSubmix::SetSubmixOutputVolume(const UObject* WorldContextObject, floa
 		}
 	}
 }
+
 #if WITH_EDITOR
 void USoundSubmix::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent)
 {
 	if (PropertyChangedEvent.Property != nullptr)
 	{
-		static const FName NAME_OutputVolume(TEXT("OutputVolume"));
+		FName ChangedPropName = PropertyChangedEvent.Property->GetFName();
 
-		if (PropertyChangedEvent.Property->GetFName() == NAME_OutputVolume)
+		bool bUpdateSubmixGain = false;
+
+		if (ChangedPropName == GET_MEMBER_NAME_CHECKED(USoundSubmix, OutputVolume))
 		{
-			FAudioDeviceManager* AudioDeviceManager = (GEngine ? GEngine->GetAudioDeviceManager() : nullptr);
-			if (AudioDeviceManager)
+			OutputVolumeDB = Audio::ConvertToDecibels(OutputVolume);
+			bUpdateSubmixGain = true;
+		}
+		else if (ChangedPropName == GET_MEMBER_NAME_CHECKED(USoundSubmix, WetLevel))
+		{
+			WetLevelDB = Audio::ConvertToDecibels(OutputVolume);
+			bUpdateSubmixGain = true;
+		}
+		else if (ChangedPropName == GET_MEMBER_NAME_CHECKED(USoundSubmix, DryLevel))
+		{
+			DryLevelDB = Audio::ConvertToDecibels(DryLevel);
+			bUpdateSubmixGain = true;
+		}
+		else if (ChangedPropName == GET_MEMBER_NAME_CHECKED(USoundSubmix, OutputVolumeDB))
+		{
+			if (OutputVolumeDB <= -120.f)
 			{
-				AudioDeviceManager->UpdateSubmix(this);
+				OutputVolume = 0.0f;
 			}
+			else
+			{
+				OutputVolume = Audio::ConvertToLinear(OutputVolumeDB);
+			}
+			bUpdateSubmixGain = true;
+		}
+		else if (ChangedPropName == GET_MEMBER_NAME_CHECKED(USoundSubmix, WetLevelDB))
+		{
+			if (WetLevelDB <= -120.f)
+			{
+				WetLevel = 0.0f;
+			}
+			else
+			{
+				WetLevel = Audio::ConvertToLinear(WetLevelDB);
+			}
+			bUpdateSubmixGain = true;
+		}
+		else if (ChangedPropName == GET_MEMBER_NAME_CHECKED(USoundSubmix, DryLevelDB))
+		{
+			if (DryLevelDB <= -120.0f)
+			{
+				DryLevel = 0.0f;
+			}
+			else
+			{
+				DryLevel = Audio::ConvertToLinear(DryLevelDB);
+			}
+			bUpdateSubmixGain = true;
 		}
 
-		if (PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(USoundSubmix, SubmixEffectChain))
+		// Force the properties to be initialized for this SoundSubmix on all active audio devices
+		if (FAudioDeviceManager* AudioDeviceManager = FAudioDeviceManager::Get())
 		{
-			// Force the properties to be initialized for this SoundSubmix on all active audio devices
-			if (FAudioDeviceManager* AudioDeviceManager = GEngine->GetAudioDeviceManager())
+			if (bUpdateSubmixGain)
+			{
+				const float NewOutputVolume = OutputVolume;
+				const float NewWetLevel = WetLevel;
+				const float NewDryLevel = DryLevel;
+				USoundSubmix* SoundSubmix = this;
+				AudioDeviceManager->IterateOverAllDevices([SoundSubmix, NewOutputVolume, NewWetLevel, NewDryLevel](Audio::FDeviceId Id, FAudioDevice* Device)
+				{
+					Device->SetSubmixWetDryLevel(SoundSubmix, NewOutputVolume, NewWetLevel, NewDryLevel);
+				});
+			}
+
+			if (PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(USoundSubmix, SubmixEffectChain))
 			{
 				AudioDeviceManager->RegisterSoundSubmix(this);
 			}
@@ -349,9 +528,7 @@ void USoundSubmixBase::PostDuplicate(EDuplicateMode::Type DuplicateMode)
 
 void USoundSubmixBase::PreEditChange(FProperty* PropertyAboutToChange)
 {
-	static FName NAME_ChildSubmixes(TEXT("ChildSubmixes"));
-
-	if (PropertyAboutToChange && PropertyAboutToChange->GetFName() == NAME_ChildSubmixes)
+	if (PropertyAboutToChange && PropertyAboutToChange->GetFName() == GET_MEMBER_NAME_CHECKED(USoundSubmixBase, ChildSubmixes))
 	{
 		// Take a copy of the current state of child classes
 		BackupChildSubmixes = ChildSubmixes;
@@ -360,16 +537,14 @@ void USoundSubmixBase::PreEditChange(FProperty* PropertyAboutToChange)
 
 void USoundSubmixBase::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
-	// Whether or not we need to reinit the submix. Not all properties require reinitialization.
-	bool bReinitSubmix = true;
+	if (!GEngine)
+	{
+		return;
+	}
 
 	if (PropertyChangedEvent.Property != nullptr)
 	{
-		static const FName NAME_ChildSubmixes(TEXT("ChildSubmixes"));
-		static const FName NAME_ParentSubmix(TEXT("ParentSubmix"));
-		static const FName NAME_OutputVolume(TEXT("OutputVolume"));
-
-		if (PropertyChangedEvent.Property->GetFName() == NAME_ChildSubmixes)
+		if (PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(USoundSubmixBase, ChildSubmixes))
 		{
 			// Find child that was changed/added
 			for (int32 ChildIndex = 0; ChildIndex < ChildSubmixes.Num(); ChildIndex++)
@@ -408,15 +583,12 @@ void USoundSubmixBase::PostEditChangeProperty(FPropertyChangedEvent& PropertyCha
 					}
 				}
 			}
-				}
-			}
 
-	if (GEngine)
-	{
-		// Force the properties to be initialized for this SoundSubmix on all active audio devices
-		if (FAudioDeviceManager* AudioDeviceManager = GEngine->GetAudioDeviceManager())
-		{
-			AudioDeviceManager->RegisterSoundSubmix(this);
+			// Force the properties to be initialized for this SoundSubmix on all active audio devices
+			if (FAudioDeviceManager* AudioDeviceManager = GEngine->GetAudioDeviceManager())
+			{
+				AudioDeviceManager->RegisterSoundSubmix(this);
+			}
 		}
 	}
 
@@ -467,6 +639,7 @@ void USoundSubmixWithParentBase::SetParentSubmix(USoundSubmixBase* InParentSubmi
 	}
 }
 
+#if WITH_EDITOR
 void USoundSubmixWithParentBase::PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent)
 {
 	if (!GEngine)
@@ -523,6 +696,7 @@ void USoundSubmixWithParentBase::PostDuplicate(EDuplicateMode::Type DuplicateMod
 
 	Super::PostDuplicate(DuplicateMode);
 }
+#endif
 
 void USoundSubmixBase::AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector)
 {
@@ -542,7 +716,7 @@ void USoundSubmixBase::AddReferencedObjects(UObject* InThis, FReferenceCollector
 ISoundfieldFactory* USoundfieldSubmix::GetSoundfieldFactoryForSubmix() const
 {
 	// If this isn't called in the game thread, a ParentSubmix could get destroyed while we are recursing through the submix graph.
-	ensure(IsInGameThread());
+	// ensure(IsInGameThread());
 
 	FName SoundfieldFormat = GetSubmixFormat();
 	check(SoundfieldFormat != ISoundfieldFactory::GetFormatNameForInheritedEncoding());
@@ -658,9 +832,7 @@ void USoundfieldSubmix::PostEditChangeProperty(struct FPropertyChangedEvent& Pro
 
 	if (PropertyChangedEvent.Property != nullptr)
 	{
-		static const FName NAME_SoundfieldFormat(TEXT("SoundfieldEncodingFormat"));
-
-		if (PropertyChangedEvent.Property->GetFName() == NAME_SoundfieldFormat)
+		if (PropertyChangedEvent.Property->GetFName() == GET_MEMBER_NAME_CHECKED(USoundfieldSubmix, SoundfieldEncodingFormat))
 		{
 			bShouldSanitizeLinks = true;
 		}
@@ -704,6 +876,35 @@ const USoundfieldEncodingSettingsBase* USoundfieldEndpointSubmix::GetEncodingSet
 TArray<USoundfieldEffectBase*> USoundfieldEndpointSubmix::GetSoundfieldProcessors() const
 {
 	return SoundfieldEffectChain;
+}
+
+
+FSoundSpectrumAnalyzerSettings USoundSubmix::GetSpectrumAnalyzerSettings(EFFTSize FFTSize, EFFTPeakInterpolationMethod InterpolationMethod, EFFTWindowType WindowType, float HopSize, EAudioSpectrumType SpectrumType)
+{
+	FSoundSpectrumAnalyzerSettings OutSettings;
+
+	OutSettings.FFTSize = FFTSize;
+	OutSettings.WindowType = WindowType;
+	OutSettings.InterpolationMethod = InterpolationMethod;
+	OutSettings.HopSize = HopSize;
+	OutSettings.SpectrumType = SpectrumType;
+
+	return OutSettings;
+}
+
+FSoundSpectrumAnalyzerDelegateSettings USoundSubmix::GetSpectrumAnalysisDelegateSettings(const TArray<FSoundSubmixSpectralAnalysisBandSettings>& InBandSettings, float UpdateRate, float DecibelNoiseFloor, bool bDoNormalize, bool bDoAutoRange, float AutoRangeAttackTime, float AutoRangeReleaseTime)
+{
+	FSoundSpectrumAnalyzerDelegateSettings DelegateSettings;
+
+	DelegateSettings.BandSettings = InBandSettings;
+	DelegateSettings.UpdateRate = UpdateRate;
+	DelegateSettings.DecibelNoiseFloor = DecibelNoiseFloor;
+	DelegateSettings.bDoNormalize = bDoNormalize;
+	DelegateSettings.bDoAutoRange = bDoAutoRange;
+	DelegateSettings.AutoRangeAttackTime = AutoRangeAttackTime;
+	DelegateSettings.AutoRangeReleaseTime = AutoRangeReleaseTime;
+
+	return DelegateSettings;
 }
 
 void USoundfieldEndpointSubmix::SanitizeLinks()

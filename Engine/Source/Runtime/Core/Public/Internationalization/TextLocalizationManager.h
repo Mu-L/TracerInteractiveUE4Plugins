@@ -19,6 +19,7 @@
 
 struct FPolyglotTextData;
 class ILocalizedTextSource;
+class IPakFile;
 class FTextLocalizationResource;
 
 typedef TSharedRef<FString, ESPMode::ThreadSafe> FTextDisplayStringRef;
@@ -92,6 +93,16 @@ public:
 	void CompactDataStructures();
 
 	/**
+	 * Get the language that will be requested during localization initialization, based on the hierarchy of: command line -> configs -> OS default.
+	 */
+	FString GetRequestedLanguageName() const;
+
+	/**
+	 * Get the locale that will be requested during localization initialization, based on the hierarchy of: command line -> configs -> OS default.
+	 */
+	FString GetRequestedLocaleName() const;
+
+	/**
 	 * Given a localization category, get the native culture for the category (if known).
 	 * @return The native culture for the given localization category, or an empty string if the native culture is unknown.
 	 */
@@ -133,6 +144,11 @@ public:
 	 *	Returns true if found and sets the out parameters. Otherwise, returns false.
 	 */
 	bool FindNamespaceAndKeyFromDisplayString(const FTextDisplayStringRef& InDisplayString, FString& OutNamespace, FString& OutKey);
+
+	/**	Finds the namespace and key associated with the specified display string.
+	 *	Returns true if found and sets the out parameters. Otherwise, returns false.
+	 */
+	bool FindNamespaceAndKeyFromDisplayString(const FTextDisplayStringRef& InDisplayString, FTextKey& OutNamespace, FTextKey& OutKey);
 	
 	/**
 	 * Attempts to find a local revision history for the given display string.
@@ -229,7 +245,7 @@ public:
 
 private:
 	/** Callback for when a PAK file is loaded. Loads any chunk specific localization resources. */
-	void OnPakFileMounted(const TCHAR* PakFilename, const int32 ChunkId);
+	void OnPakFileMounted(const IPakFile& PakFile);
 
 	/** Callback for changes in culture. Loads the new culture's localization resources. */
 	void OnCultureChanged();

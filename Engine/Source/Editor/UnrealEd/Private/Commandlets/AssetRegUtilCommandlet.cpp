@@ -6,15 +6,18 @@
 =============================================================================*/
 
 #include "Commandlets/AssetRegUtilCommandlet.h"
-#include "PackageHelperFunctions.h"
+
+#include "AssetRegistryModule.h"
+#include "AssetRegistryState.h"
 #include "Engine/Texture.h"
 #include "Logging/LogMacros.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
-#include "UObject/UObjectIterator.h"
-#include "Stats/StatsMisc.h"
-#include "AssetRegistryModule.h"
 #include "Misc/FileHelper.h"
+#include "PackageHelperFunctions.h"
+#include "Serialization/ArrayReader.h"
+#include "Stats/StatsMisc.h"
+#include "UObject/UObjectIterator.h"
 
 DEFINE_LOG_CATEGORY(LogAssetRegUtil);
 
@@ -192,9 +195,7 @@ struct FSortableDependencySort
 	}
 };
 
-
-
-UAssetRegUtilCommandlet::UAssetRegUtilCommandlet( const FObjectInitializer& ObjectInitializer )
+UAssetRegUtilCommandlet::UAssetRegUtilCommandlet(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
 }
@@ -382,6 +383,103 @@ void UAssetRegUtilCommandlet::ReorderOrderFile(const FString& OrderFilePath, con
 	}
 }
 
+bool UAssetRegUtilCommandlet::MergeOrderFiles(TMap<FString, int64>& NewOrderMap, TMap<FString, int64>& PrevOrderMap)
+{
+	int64 PrevEntryCount = PrevOrderMap.Num() + 1;
+
+	UE_LOG(LogAssetRegUtil, Display, TEXT("Merge File Open Order intital count: %d."), PrevEntryCount);
+
+	NewOrderMap.ValueSort([](const uint64& A, const uint64& B) { return A < B; });
+
+	// check in the new file open order all the new resources
+	for (TMap<FString, int64>::TConstIterator It(NewOrderMap); It; ++It)
+	{
+		int64* match = PrevOrderMap.Find(It->Key);
+
+		// Only add resources if we dont find them in the previous FOO
+		if (match == nullptr)
+		{
+			PrevOrderMap.Add(It->Key, PrevEntryCount++);
+		}
+	}
+
+	UE_LOG(LogAssetRegUtil, Display, TEXT("Merge File Open Order final count: %d."), PrevEntryCount);
+
+	return true;
+}
+
+bool UAssetRegUtilCommandlet::GenerateOrderFile(TMap<FString, int64>& OutputOrderMap, const FString& ReorderFileOutPath)
+{
+	int NewOrderIndex = 1;
+	UE_LOG(LogAssetRegUtil, Display, TEXT("Writing output: %s"), *ReorderFileOutPath);
+	FArchive* OutArc = IFileManager::Get().CreateFileWriter(*ReorderFileOutPath);
+	if (OutArc)
+	{
+		OutputOrderMap.ValueSort([](const uint64& A, const uint64& B) { return A < B; });
+
+		for (TMap<FString, int64>::TConstIterator It(OutputOrderMap); It; ++It)
+		{
+			FString OutputLine;
+			OutputLine = FString::Printf(TEXT("\"%s\" %llu\n"), *It->Key, NewOrderIndex++);
+			OutArc->Serialize(const_cast<ANSICHAR*>(StringCast<ANSICHAR>(*OutputLine).Get()), OutputLine.Len());
+		}
+
+		OutArc->Close();
+		delete OutArc;
+		return true;
+	}
+	else
+	{
+		UE_LOG(LogAssetRegUtil, Warning, TEXT("Could not open specified output file."));
+		return false;
+	}
+}
+
+bool UAssetRegUtilCommandlet::LoadOrderFile(const FString& OrderFilePath, TMap<FString, int64>& OrderMap)
+{
+	UE_LOG(LogAssetRegUtil, Display, TEXT("Parsing order package: %s"), *OrderFilePath);
+	FString Text;
+	if (!FFileHelper::LoadFileToString(Text, *OrderFilePath))
+	{
+		UE_LOG(LogAssetRegUtil, Error, TEXT("Could not open file %s"), *OrderFilePath);
+		return false;
+	}
+
+	TArray<FString> Lines;
+	Text.ParseIntoArray(Lines, TEXT("\n"), true);
+
+	OrderMap.Reserve(Lines.Num());
+	for (int32 Index = 0; Index < Lines.Num(); ++Index)
+	{
+		int QuoteIndex;
+		Lines[Index].ReplaceInline(TEXT("\r"), TEXT(""), ESearchCase::CaseSensitive);
+		Lines[Index].ReplaceInline(TEXT("\n"), TEXT(""), ESearchCase::CaseSensitive);
+		if (Lines[Index].FindLastChar('"', QuoteIndex))
+		{
+			FString ReadNum = Lines[Index].RightChop(QuoteIndex + 1);
+			ReadNum.TrimStartInline();
+			ReadNum.TrimEndInline();
+
+			int64 OrderNumber = Index;
+			if (ReadNum.IsNumeric())
+			{
+				OrderNumber = FCString::Atoi(*ReadNum);
+			}
+			else
+			{
+				return false;
+			}
+
+			Lines[Index].LeftInline(QuoteIndex + 1, false);
+			FString Name = Lines[Index].TrimQuotes();
+
+			OrderMap.Add(Name, OrderNumber);
+		}
+	}
+
+	return true;
+}
+
 bool UAssetRegUtilCommandlet::LoadOrderFiles(const FString& OrderFilePath, TSet<FName>& OrderFiles)
 {
 	UE_LOG(LogAssetRegUtil, Display, TEXT("Parsing order file: %s"), *OrderFilePath);
@@ -506,44 +604,178 @@ bool UAssetRegUtilCommandlet::GeneratePartiallyUpdatedOrderFile(const FString& O
 
 int32 UAssetRegUtilCommandlet::Main(const FString& CmdLineParams)
 {
-	FAssetRegistryModule& AssetRegistryModule = FModuleManager::Get().LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
-	AssetRegistry = &AssetRegistryModule.Get();
+	// New deterministic FOO flavor
+	bool bMergeFileOpenOrder = FParse::Param(*CmdLineParams, TEXT("MergeFileOpenOrder"));
+	UE_LOG(LogAssetRegUtil, Display, TEXT("AssetRegUtil cmdLineParams: %s"),*CmdLineParams);
 
-	UE_LOG(LogAssetRegUtil, Display, TEXT("Populating the Asset Registry."));
-	AssetRegistry->SearchAllAssets(true);
-	
 	FString ReorderFile;
-	if (FParse::Value(*CmdLineParams, TEXT("ReorderFile="), ReorderFile, false))
+	FString ReorderOutput;
+
+	if (bMergeFileOpenOrder)
 	{
-		FString ReorderOutput;
-		if (!FParse::Value(*CmdLineParams, TEXT("ReorderOutput="), ReorderOutput, false))
+		if (!FParse::Value(*CmdLineParams, TEXT("ReorderFile="), ReorderFile, false))
 		{
-			//if nothing specified, base it on the input name
-			ReorderOutput = FPaths::SetExtension(FPaths::SetExtension(ReorderFile, TEXT("")) + TEXT("Reordered"), FPaths::GetExtension(ReorderFile));
+			UE_LOG(LogAssetRegUtil, Warning, TEXT("Could not load ReorderFile: %s"), *ReorderFile);
+			return 0;
 		}
 
-		ReorderOrderFile(ReorderFile, ReorderOutput);
-
-		// Generate partially-updated order file
-		float PatchSizePerfBalanceFactor;	// Set the value close to 0.0 to favor patch size and close to 1.0 to favor streaming performance
-		FParse::Value(*CmdLineParams, TEXT("PatchSizePerfBalanceFactor="), PatchSizePerfBalanceFactor);
-		PatchSizePerfBalanceFactor = FMath::Clamp(PatchSizePerfBalanceFactor, 0.f, 1.f);
-
-		FString OldOrderFilePath;
-		if (FParse::Value(*CmdLineParams, TEXT("OldFileOpenOrderFile="), OldOrderFilePath, false))
+		if (!FParse::Value(*CmdLineParams, TEXT("ReorderOutput="), ReorderOutput, false))
 		{
-			UE_LOG(LogAssetRegUtil, Display, TEXT("Generating partially-updated order file."));
+			UE_LOG(LogAssetRegUtil, Warning, TEXT("Could not load ReorderOutput: %s"), *ReorderOutput);
+			return 0;
+		}
 
-			FString OutPartialOrderFilePath;
-			if (!FParse::Value(*CmdLineParams, TEXT("PartialFileOpenOrderOutput="), OutPartialOrderFilePath, false))
+		FString PrevReorderFile;
+		if (!FParse::Value(*CmdLineParams, TEXT("PrevReorderFile="), PrevReorderFile, false))
+		{
+			UE_LOG(LogAssetRegUtil, Warning, TEXT("Could not load PrevReorderFile: %s"), *PrevReorderFile);
+			return 0;
+		}
+
+		// Load the new FOO
+		TMap<FString, int64> NewOrderMap;
+		if (!LoadOrderFile(ReorderFile, NewOrderMap))
+		{
+			UE_LOG(LogAssetRegUtil, Warning, TEXT("Could not load specified order file."));
+			return 0;
+		}
+
+		// Load the previous FOO
+		TMap<FString, int64> PrevOrderMap;
+		if (!LoadOrderFile(PrevReorderFile, PrevOrderMap))
+		{
+			UE_LOG(LogAssetRegUtil, Warning, TEXT("Could not load specified order file."));
+			return 0;
+		}
+
+		MergeOrderFiles(NewOrderMap, PrevOrderMap);
+		GenerateOrderFile(PrevOrderMap, ReorderOutput);
+	}
+	else
+	{
+		if (FParse::Value(*CmdLineParams, TEXT("ReorderFile="), ReorderFile, false))
+		{
+			FAssetRegistryModule& AssetRegistryModule = FModuleManager::Get().LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+			AssetRegistry = &AssetRegistryModule.Get();
+
+			UE_LOG(LogAssetRegUtil, Display, TEXT("Populating the Asset Registry."));
+			AssetRegistry->SearchAllAssets(true);
+
+			if (!FParse::Value(*CmdLineParams, TEXT("ReorderOutput="), ReorderOutput, false))
 			{
 				//if nothing specified, base it on the input name
-				OutPartialOrderFilePath = FPaths::SetExtension(FPaths::SetExtension(ReorderFile, TEXT("")) + TEXT("PartialUpdate"), FPaths::GetExtension(ReorderFile));
+				ReorderOutput = FPaths::SetExtension(FPaths::SetExtension(ReorderFile, TEXT("")) + TEXT("Reordered"), FPaths::GetExtension(ReorderFile));
 			}
 
-			GeneratePartiallyUpdatedOrderFile(OldOrderFilePath, ReorderOutput, OutPartialOrderFilePath, PatchSizePerfBalanceFactor);
+			ReorderOrderFile(ReorderFile, ReorderOutput);
+
+			// Generate partially-updated order file
+			float PatchSizePerfBalanceFactor;	// Set the value close to 0.0 to favor patch size and close to 1.0 to favor streaming performance
+			FParse::Value(*CmdLineParams, TEXT("PatchSizePerfBalanceFactor="), PatchSizePerfBalanceFactor);
+			PatchSizePerfBalanceFactor = FMath::Clamp(PatchSizePerfBalanceFactor, 0.f, 1.f);
+
+			FString OldOrderFilePath;
+			if (FParse::Value(*CmdLineParams, TEXT("OldFileOpenOrderFile="), OldOrderFilePath, false))
+			{
+				UE_LOG(LogAssetRegUtil, Display, TEXT("Generating partially-updated order file."));
+
+				FString OutPartialOrderFilePath;
+				if (!FParse::Value(*CmdLineParams, TEXT("PartialFileOpenOrderOutput="), OutPartialOrderFilePath, false))
+				{
+					//if nothing specified, base it on the input name
+					OutPartialOrderFilePath = FPaths::SetExtension(FPaths::SetExtension(ReorderFile, TEXT("")) + TEXT("PartialUpdate"), FPaths::GetExtension(ReorderFile));
+				}
+
+				GeneratePartiallyUpdatedOrderFile(OldOrderFilePath, ReorderOutput, OutPartialOrderFilePath, PatchSizePerfBalanceFactor);
+			}
 		}
 	}
 
 	return 0;
+}
+
+UAssetRegistryDumpCommandlet::UAssetRegistryDumpCommandlet(const FObjectInitializer& Initializer)
+	: Super(Initializer)
+{
+}
+
+int32 UAssetRegistryDumpCommandlet::Main(const FString& CmdLineParams)
+{
+	const FString* InputFileNamePtr;
+	const FString* OutputDirectoryPtr;
+	TArray<FString> Tokens, Switches;
+	TMap<FString, FString> Params;
+	ParseCommandLine(*CmdLineParams, Tokens, Switches, Params);
+	InputFileNamePtr = Params.Find(TEXT("Input"));
+	OutputDirectoryPtr = Params.Find(TEXT("OutDir"));
+	if (!InputFileNamePtr || !OutputDirectoryPtr)
+	{
+		UE_LOG(LogAssetRegUtil, Warning, TEXT("Usage: -input <AssetRegistry.bin Filepath> -outdir <Directory to contain the dumped file(s)"));
+		return 1;
+	}
+	const FString& InputFileName = *InputFileNamePtr;
+	const FString& OutputDirectory = *OutputDirectoryPtr;
+
+	IFileManager& FileManager = IFileManager::Get();
+	if (!FileManager.FileExists(*InputFileName))
+	{
+		UE_LOG(LogAssetRegUtil, Warning, TEXT("Could not open input file %s"), *InputFileName);
+		return 3;
+	}
+
+	FArrayReader Bytes;
+	if (!FFileHelper::LoadFileToArray(Bytes, *InputFileName))
+	{
+		UE_LOG(LogAssetRegUtil, Warning, TEXT("Failed to load file %s"), *InputFileName);
+		return 3;
+	}
+
+	FAssetRegistryState State;
+	FAssetRegistrySerializationOptions Options;
+	Options.ModifyForDevelopment();
+	if (!State.Serialize(Bytes, Options))
+	{
+		UE_LOG(LogAssetRegUtil, Warning, TEXT("Failed to serialize file %s as an AssetRegistry"), *InputFileName);
+		return 3;
+	}
+
+	FString DumpDir = FPaths::ConvertRelativePathToFull(OutputDirectory / TEXT("AssetRegistry"));
+	if (FileManager.DirectoryExists(*DumpDir))
+	{
+		FString DeleteDirectory = OutputDirectory / FGuid::NewGuid().ToString();
+		if (!FileManager.Move(*DeleteDirectory, *DumpDir))
+		{
+			UE_LOG(LogAssetRegUtil, Warning, TEXT("Failed to move old directory %s to delete staging directory %s"), *DumpDir, *DeleteDirectory);
+			return 4;
+		}
+		if (!FileManager.DeleteDirectory(*DeleteDirectory, false /* RequireExists */, true /* Tree */))
+		{
+			UE_LOG(LogAssetRegUtil, Warning, TEXT("Failed to delete temporary delete-staging directory %s"), *DeleteDirectory);
+		}
+	}
+	if (!FileManager.MakeDirectory(*DumpDir, true /* Tree */))
+	{
+		UE_LOG(LogAssetRegUtil, Warning, TEXT("Failed to create directory %s"), *DumpDir);
+		return 4;
+	}
+
+	TArray<FString> Pages;
+	TArray<FString> Arguments({ TEXT("ObjectPath"),TEXT("PackageName"),TEXT("Path"),TEXT("Class"),TEXT("Tag"), TEXT("DependencyDetails"), TEXT("PackageData") });
+	State.Dump(Arguments, Pages, 10000 /* LinesPerPage */);
+	int PageIndex = 0;
+	TStringBuilder<256> FileName;
+	int32 Result = 0;
+	for (FString& PageText : Pages)
+	{
+		FileName.Reset();
+		FileName.Appendf(TEXT("%s_%05d.txt"), *(DumpDir / TEXT("Page")), PageIndex++);
+		PageText.ToLowerInline();
+		if (!FFileHelper::SaveStringToFile(PageText, FileName.ToString()))
+		{
+			UE_LOG(LogAssetRegUtil, Warning, TEXT("Failed to save file %s"), *FileName);
+			Result = 4;
+		}
+	}
+
+	return Result;
 }

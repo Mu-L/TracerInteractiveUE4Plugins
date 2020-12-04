@@ -1,13 +1,20 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+using EnvDTE;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
+using System.Security.Policy;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web.Caching;
+
+using Thread = System.Threading.Thread;
 
 namespace UnrealGameSync
 {
@@ -41,6 +48,7 @@ namespace UnrealGameSync
 
 	public class IssueData
 	{
+		public int Version;
 		public long Id;
 		public DateTime CreatedAt;
 		public DateTime RetrievedAt;
@@ -53,7 +61,53 @@ namespace UnrealGameSync
 		public int FixChange;
 		public DateTime? ResolvedAt;
 		public bool bNotify;
-		public List<IssueBuildData> Builds;
+		public bool bIsWarning;
+		public string BuildUrl;
+		public List<string> Streams;
+
+		HashSet<string> CachedProjects;
+
+		public HashSet<string> Projects
+		{
+			get
+			{
+				// HACK to infer project names from streams
+				if(CachedProjects == null)
+				{
+					HashSet<string> NewProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+					if (!String.IsNullOrEmpty(Project))
+					{
+						NewProjects.Add(Project);
+					}
+					if (Streams != null)
+					{
+						foreach (string Stream in Streams)
+						{
+							Match Match = Regex.Match(Stream, "^//([^/]+)/");
+							if (Match.Success)
+							{
+								string Project = Match.Groups[1].Value;
+								if (Project.StartsWith("UE", StringComparison.OrdinalIgnoreCase))
+								{
+									Project = "UE" + Project.Substring(2);
+								}
+								else if (Char.IsLower(Project[0]))
+								{
+									Project = Char.ToUpper(Project[0], CultureInfo.InvariantCulture) + Project.Substring(1);
+								}
+								NewProjects.Add(Project);
+							}
+						}
+					}
+					if (NewProjects.Count == 0)
+					{
+						NewProjects.Add("Default");
+					}
+					CachedProjects = NewProjects;
+				}
+				return CachedProjects;
+			}
+		}
 	}
 
 	public class IssueUpdateData
@@ -276,9 +330,9 @@ namespace UnrealGameSync
 			{
 				// Check if there's any pending update
 				IssueUpdateData PendingUpdate;
-				lock(LockObject)
+				lock (LockObject)
 				{
-					if(PendingUpdates.Count > 0)
+					if (PendingUpdates.Count > 0)
 					{
 						PendingUpdate = PendingUpdates[0];
 					}
@@ -289,9 +343,9 @@ namespace UnrealGameSync
 				}
 
 				// If we have an update, try to post it to the backend and check for another
-				if(PendingUpdate != null)
+				if (PendingUpdate != null)
 				{
-					if(SendUpdate(PendingUpdate))
+					if (SendUpdate(PendingUpdate))
 					{
 						lock (LockObject) { PendingUpdates.RemoveAt(0); }
 					}
@@ -365,9 +419,22 @@ namespace UnrealGameSync
 				}
 
 				// Update all the builds for each issue
-				foreach(IssueData NewIssue in NewIssues)
+				foreach (IssueData NewIssue in NewIssues)
 				{
-					NewIssue.Builds = RESTApi.GET<List<IssueBuildData>>(ApiUrl, String.Format("issues/{0}/builds", NewIssue.Id));
+					if (NewIssue.Version == 0)
+					{
+						List<IssueBuildData> Builds = RESTApi.GET<List<IssueBuildData>>(ApiUrl, String.Format("issues/{0}/builds", NewIssue.Id));
+						if (Builds != null && Builds.Count > 0)
+						{
+							NewIssue.bIsWarning = !Builds.Any(x => x.Outcome != IssueBuildOutcome.Warning);
+
+							IssueBuildData LastBuild = Builds.OrderByDescending(x => x.Change).FirstOrDefault();
+							if (LastBuild != null && !String.IsNullOrEmpty(LastBuild.ErrorUrl))
+							{
+								NewIssue.BuildUrl = LastBuild.ErrorUrl;
+							}
+						}
+					}
 				}
 
 				// Apply any pending updates to this issue list, and update it

@@ -36,24 +36,8 @@ public:
 	FClothingSimulationContextNv();
 	virtual ~FClothingSimulationContextNv() override;
 
-	// Override the fill context function to also set the Nv specific simulation context members
-	virtual void Fill(const USkeletalMeshComponent* InComponent, float InDeltaSeconds, float InMaxPhysicsDelta) override;
-
-	// Set the RefToLocals array in the parent class using Nv specific predicted LOD information
-	virtual void FillRefToLocals(const USkeletalMeshComponent* InComponent) override;
-
 	// Set the world gravity in the parent class while preserving the Nv legacy code behavior
-	void virtual FillWorldGravity(const USkeletalMeshComponent* InComponent) override;
-
-	// Set WindVelocity in the parent class and Nv specific WindAdaption
-	virtual void FillWindVelocity(const USkeletalMeshComponent* InComponent) override;
-
-	// The predicted LOD of the skeletal mesh component running the simulation
-	int32 PredictedLod;
-
-	// Wind adaption, a measure of how quickly to adapt to the wind speed
-	// when using the legacy wind calculation mode
-	float WindAdaption;
+	virtual void FillWorldGravity(const USkeletalMeshComponent* InComponent) override;
 };
 
 // Scratch data for simulation to avoid allocations while processing, per actor data
@@ -198,13 +182,13 @@ public:
 
 	// IClothingSimulation Interface
 	virtual void CreateActor(USkeletalMeshComponent* InOwnerComponent, UClothingAssetBase* InAsset, int32 InSimDataIndex) override;
-	virtual void PostActorCreationInitialize() override {};
 	virtual IClothingSimulationContext* CreateContext() override;
 	virtual void Initialize() override;
 	virtual void Shutdown() override;
 	virtual bool ShouldSimulate() const override;
 	virtual void Simulate(IClothingSimulationContext* InContext) override;
 	virtual FBoxSphereBounds GetBounds(const USkeletalMeshComponent* InOwnerComponent) const override;
+	virtual float GetSimulationTime() const override { return SimulationTime; }
 
 	virtual void DestroyActors() override;
 	virtual void DestroyContext(IClothingSimulationContext* InContext) override;
@@ -261,6 +245,9 @@ private:
 
 	// The current LOD index for the owning skeletal mesh component
 	int32 CurrentMeshLodIndex;
+
+	// The current averaged simulation time in ms
+	TAtomic<float> SimulationTime;
 
 #if WITH_EDITOR
 public:

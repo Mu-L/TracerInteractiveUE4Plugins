@@ -2,10 +2,10 @@
 
 #include "Render/Synchronization/DisplayClusterRenderSyncPolicyNvidiaBase.h"
 
-#include "Config/IPDisplayClusterConfigManager.h"
-#include "Config/DisplayClusterConfigTypes.h"
-#include "DisplayClusterGlobals.h"
-#include "DisplayClusterLog.h"
+#include "Misc/DisplayClusterGlobals.h"
+#include "Misc/DisplayClusterHelpers.h"
+#include "Misc/DisplayClusterLog.h"
+#include "Misc/DisplayClusterTypesConverter.h"
 
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
@@ -21,17 +21,51 @@
 #pragma warning(pop)
 
 
+// TEMPORARY DIAGNOSTICS START
+static TAutoConsoleVariable<int32> CVarNvidiaSyncDiagnosticsInit(
+	TEXT("nDisplay.sync.nvidia.diag.init"),
+	0,
+	TEXT("NVAPI diagnostics: init\n")
+	TEXT("0 : disabled\n")
+	TEXT("1 : enabled\n")
+	,
+	ECVF_RenderThreadSafe
+);
+
+static TAutoConsoleVariable<int32> CVarNvidiaSyncDiagnosticsPresent(
+	TEXT("nDisplay.sync.nvidia.diag.present"),
+	0,
+	TEXT("NVAPI diagnostics: present\n")
+	TEXT("0 : disabled\n")
+	TEXT("1 : enabled\n")
+	,
+	ECVF_RenderThreadSafe
+);
+
+static TAutoConsoleVariable<int32> CVarNvidiaSyncDiagnosticsLatency(
+	TEXT("nDisplay.sync.nvidia.diag.latency"),
+	0,
+	TEXT("NVAPI diagnostics: latency\n")
+	TEXT("0 : disabled\n")
+	TEXT("1 : enabled\n")
+	,
+	ECVF_RenderThreadSafe
+);
+// TEMPORARY DIAGNOSTICS END
+
+
 namespace
 {
 	static IUnknown*       D3DDevice     = nullptr;
 	static IDXGISwapChain* DXGISwapChain = nullptr;
 
-	static NvU32 RequestedGroup   = 1;
-	static NvU32 RequestedBarrier = 1;
+	static uint32 RequestedGroup   = 1;
+	static uint32 RequestedBarrier = 1;
 }
 
 
-FDisplayClusterRenderSyncPolicyNvidiaBase::FDisplayClusterRenderSyncPolicyNvidiaBase()
+FDisplayClusterRenderSyncPolicyNvidiaBase::FDisplayClusterRenderSyncPolicyNvidiaBase(const TMap<FString, FString>& Parameters)
+	: FDisplayClusterRenderSyncPolicyBase(Parameters)
 {
 	const NvAPI_Status NvApiResult = NvAPI_Initialize();
 	if (NvApiResult != NVAPI_OK)
@@ -40,15 +74,15 @@ FDisplayClusterRenderSyncPolicyNvidiaBase::FDisplayClusterRenderSyncPolicyNvidia
 	}
 	else
 	{
-		bNvApiInitialised = true;
+		bNvApiInitialized = true;
 	}
 }
 
 FDisplayClusterRenderSyncPolicyNvidiaBase::~FDisplayClusterRenderSyncPolicyNvidiaBase()
 {
-	if (bNvApiInitialised)
+	if (bNvApiInitialized)
 	{
-		if (bNvApiIBarrierSet)
+		if (bNvApiBarrierSet)
 		{
 			// Unbind from swap barrier
 			NvAPI_D3D1x_BindSwapBarrier(D3DDevice, RequestedGroup, 0);
@@ -63,23 +97,41 @@ FDisplayClusterRenderSyncPolicyNvidiaBase::~FDisplayClusterRenderSyncPolicyNvidi
 bool FDisplayClusterRenderSyncPolicyNvidiaBase::SynchronizeClusterRendering(int32& InOutSyncInterval)
 {
 	// Initialize barriers at first call
-	if (!bNvApiIBarrierSet)
+	if (!bNvApiBarrierSet)
 	{
+		bNvDiagInit    = (CVarNvidiaSyncDiagnosticsInit.GetValueOnRenderThread() != 0);
+		bNvDiagPresent = (CVarNvidiaSyncDiagnosticsPresent.GetValueOnRenderThread() != 0);
+		bNvDiagLatency = (CVarNvidiaSyncDiagnosticsLatency.GetValueOnRenderThread() != 0);
+		UE_LOG(LogDisplayClusterRenderSync, Log, TEXT("NVAPI DIAG: init=%d present=%d latency=%d"), bNvDiagInit ? 1 : 0, bNvDiagPresent ? 1 : 0, bNvDiagLatency ? 1 : 0);
+
 		// Use network barrier to guarantee that all NVIDIA barriers are initialized simultaneously
 		SyncBarrierRenderThread();
 		// Set up NVIDIA swap barrier
-		bNvApiIBarrierSet = InitializeNvidiaSwapLock();
+		bNvApiBarrierSet = InitializeNvidiaSwapLock();
 	}
 
 	// Check if all required objects are available
 	if (!D3DDevice || !DXGISwapChain)
 	{
+		UE_LOG(LogDisplayClusterRenderSync, Warning, TEXT("Couldn't get DX resources, no swap synchronization will be performed"));
 		// Present frame on a higher level
 		return true;
 	}
 
-	if (bNvApiIBarrierSet && D3DDevice && DXGISwapChain)
+	// NVAPI Diagnostics: present
+	// Align all threads on the timescale before calling NvAPI_D3D1x_Present
+	// As a side-effect, it should avoid NvAPI_D3D1x_Present stuck on application kill
+	if (bNvDiagPresent)
 	{
+		UE_LOG(LogDisplayClusterRenderSync, VeryVerbose, TEXT("NVAPI DIAG: wait start"));
+		SyncBarrierRenderThread();
+		UE_LOG(LogDisplayClusterRenderSync, VeryVerbose, TEXT("NVAPI DIAG: wait end"));
+	}
+
+	if (bNvApiBarrierSet && D3DDevice && DXGISwapChain)
+	{
+		UE_LOG(LogDisplayClusterRenderSync, VeryVerbose, TEXT("NVAPI: presenting the frame with sync..."));
+
 		// Present frame via NVIDIA API
 		const NvAPI_Status NvApiResult = NvAPI_D3D1x_Present(D3DDevice, DXGISwapChain, (UINT)InOutSyncInterval, (UINT)0);
 		if (NvApiResult != NVAPI_OK)
@@ -89,11 +141,14 @@ bool FDisplayClusterRenderSyncPolicyNvidiaBase::SynchronizeClusterRendering(int3
 			return true;
 		}
 
+		UE_LOG(LogDisplayClusterRenderSync, VeryVerbose, TEXT("NVAPI: the frame has been presented successfully"));
+
 		// We presented current frame so no need to present it on higher level
 		return false;
 	}
 	else
 	{
+		UE_LOG(LogDisplayClusterRenderSync, VeryVerbose, TEXT("NVAPI: Can't synchronize frame presentation"));
 		// Something went wrong, let upper level present this frame
 		return true;
 	}
@@ -113,6 +168,36 @@ bool FDisplayClusterRenderSyncPolicyNvidiaBase::InitializeNvidiaSwapLock()
 	{
 		UE_LOG(LogDisplayClusterRenderSync, Error, TEXT("Couldn't get DX context data for NVIDIA swap barrier initialization"));
 		return false;
+	}
+
+	// NVAPI Diagnostics: latency
+	// Here we set frame latency to 1 explicitly (a workaround for DX12)
+	if (bNvDiagLatency)
+	{
+		TRefCountPtr<IDXGIDevice1> DXGIDevice;
+		D3DDevice->QueryInterface(IID_IDXGIDevice, (void**)DXGIDevice.GetInitReference());
+		DXGIDevice->SetMaximumFrameLatency(1);
+	}
+
+	// NVAPI Diagnostics: init
+	// Here we guarantee all the nodes initialize NVIDIA sync on the same frame interval on the timescale
+	if (bNvDiagInit)
+	{
+		IDXGIOutput* DXOutput = nullptr;
+		DXGISwapChain->GetContainingOutput(&DXOutput);
+		if (DXOutput)
+		{
+			UE_LOG(LogDisplayClusterRenderSync, VeryVerbose, TEXT("NVAPI DIAG: init start"));
+
+			// Wait for the next V-blank interval
+			DXOutput->WaitForVBlank();
+			// Sleep a bit to make sure the V-blank period is over and none of the nodes will present a frame
+			FPlatformProcess::Sleep(0.001f);
+			// Sync on a network barrier just in case
+			SyncBarrierRenderThread();
+
+			UE_LOG(LogDisplayClusterRenderSync, VeryVerbose, TEXT("NVAPI DIAG: init end"));
+		}
 	}
 
 	NvU32 MaxGroups = 0;
@@ -135,18 +220,12 @@ bool FDisplayClusterRenderSyncPolicyNvidiaBase::InitializeNvidiaSwapLock()
 		return false;
 	}
 
-	// Get requested sync group and barrier from config file (or defaults)
-	IPDisplayClusterConfigManager* const ConfigMgr = GDisplayCluster->GetPrivateConfigMgr();
-	if (ConfigMgr)
-	{
-		FDisplayClusterConfigNvidia CfgNvidia = ConfigMgr->GetConfigNvidia();
-		RequestedGroup   = static_cast<NvU32>(CfgNvidia.SyncGroup);
-		RequestedBarrier = static_cast<NvU32>(CfgNvidia.SyncBarrier);
-	}
+	DisplayClusterHelpers::map::template ExtractValueFromString(GetParameters(), FString("SyncGroup"),   RequestedGroup);
+	DisplayClusterHelpers::map::template ExtractValueFromString(GetParameters(), FString("SyncBarrier"), RequestedBarrier);
 
 	// Join swap group
 	NvApiResult = NvAPI_D3D1x_JoinSwapGroup(D3DDevice, DXGISwapChain, RequestedGroup, true);
-	if(NvApiResult != NVAPI_OK)
+	if (NvApiResult != NVAPI_OK)
 	{
 		UE_LOG(LogDisplayClusterRenderSync, Error, TEXT("NVAPI: Couldn't join swap group %d, error code 0x%x"), RequestedGroup, NvApiResult);
 		return false;
@@ -169,7 +248,7 @@ bool FDisplayClusterRenderSyncPolicyNvidiaBase::InitializeNvidiaSwapLock()
 	}
 
 	// Set barrier initialization flag
-	bNvApiIBarrierSet = true;
+	bNvApiBarrierSet = true;
 
 	return true;
 }

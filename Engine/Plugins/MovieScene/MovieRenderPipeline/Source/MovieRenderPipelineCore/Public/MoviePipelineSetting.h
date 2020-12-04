@@ -47,7 +47,8 @@ public:
 	* allows a setting to provide these when the user wants to run in a separate process. This won't
 	* be used when running in the current process because it is too late to modify the command line.
 	*/
-	void BuildNewProcessCommandLine(FString& InOutUnrealURLParams, FString& InOutCommandLineArgs) const { BuildNewProcessCommandLineImpl(InOutUnrealURLParams, InOutCommandLineArgs); }
+	UFUNCTION(BlueprintCallable, Category = "Movie Render Pipeline")
+	void BuildNewProcessCommandLine(UPARAM(ref) FString& InOutUnrealURLParams, UPARAM(ref) FString& InOutCommandLineArgs) const { BuildNewProcessCommandLineImpl(InOutUnrealURLParams, InOutCommandLineArgs); }
 
 	/**
 	* Attempt to validate the configuration the user has chosen for this setting. Caches results for fast lookup in UI later.
@@ -94,6 +95,11 @@ public:
 	virtual bool IsValidOnShots() const PURE_VIRTUAL(UMoviePipelineSetting::IsValidOnShots, return false; );
 	/** Can this configuration setting be added to the master configuration? If not, it will throw an error when trying to add it to the master configuration. */
 	virtual bool IsValidOnMaster() const PURE_VIRTUAL(UMoviePipelineSetting::IsValidOnMaster, return false; );
+	/**
+	* If true, then this setting will be included when searching for settings even if it was added transiently. This is used for the rare case where a setting
+	* needs to be run (to set reasonable default values) even if the user hasn't added it.
+	*/
+	virtual bool IgnoreTransientFilters() const { return false; }
 
 	// Validation
 	/** What is the result of the last validation? Only valid if the setting has had ValidateState() called on it. */
@@ -105,8 +111,8 @@ public:
 	/** Get a human-readable text describing what validation errors (if any) the call to ValidateState() produced. */
 	virtual TArray<FText> GetValidationResults() const;
 
-	/** Return Key/Value pairs that you wish to be usable in the Output File Name format string. This allows settings to add format strings based on their values. */
-	virtual void GetFilenameFormatArguments(FMoviePipelineFormatArgs& InOutFormatArgs) const {}
+	/** Return Key/Value pairs that you wish to be usable in the Output File Name format string or file metadata. This allows settings to add format strings based on their values. */
+	virtual void GetFormatArguments(FMoviePipelineFormatArgs& InOutFormatArgs) const {}
 	
 	/** Modify the Unreal URL and Command Line Arguments when preparing the setting to be run in a new process. */
 	virtual void BuildNewProcessCommandLineImpl(FString& InOutUnrealURLParams, FString& InOutCommandLineArgs) const { }
@@ -118,26 +124,18 @@ public:
 	virtual bool IsEnabled() const { return bEnabled; }
 	virtual void SetIsEnabled(bool bInEnabled) { bEnabled = bInEnabled; }
 
-	virtual void SetIsUserCustomized(bool bIsUserCustomized) { bUserCustomized = bIsUserCustomized; }
-	virtual bool GetIsUserCustomized() const { return bUserCustomized; }
-
 	/** Has this setting finished any export-related things it needs to do post-finalize? */
 	virtual bool HasFinishedExportingImpl() const { return true; }
 	/** Called once when all files have been finalized. */
 	virtual void BeginExportImpl() { }
 	
-protected:
+private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UMoviePipeline> CachedPipeline;
-private:
+
 	/** Is this setting currently enabled? Disabled settings are like they never existed. */
 	UPROPERTY()
 	bool bEnabled;
-
-	/** Was this setting added by the user (either through UI or the FindorAdd API) or false if it was transiently added. */
-	UPROPERTY()
-	bool bUserCustomized;
-
 protected:
 	/** What was the result of the last call to ValidateState() */
 	EMoviePipelineValidationState ValidationState;

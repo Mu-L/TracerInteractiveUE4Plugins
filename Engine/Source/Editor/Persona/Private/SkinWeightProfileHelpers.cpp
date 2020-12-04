@@ -28,7 +28,7 @@ void FSkinWeightProfileHelpers::ImportSkinWeightProfile(USkeletalMesh* InSkeleta
 	if (InSkeletalMesh)
 	{
 		const int32 LOD0Index = 0;
-		FString PickedFileName = FSkinWeightsUtilities::PickSkinWeightFBXPath(LOD0Index);
+		FString PickedFileName = FSkinWeightsUtilities::PickSkinWeightFBXPath(LOD0Index, InSkeletalMesh);
 
 		bool bShouldImport = false;
 		USkinWeightImportOptions* ImportSettings = GetMutableDefault<USkinWeightImportOptions>();		
@@ -86,8 +86,11 @@ void FSkinWeightProfileHelpers::ImportSkinWeightProfile(USkeletalMesh* InSkeleta
 				NotificationInfo.ExpireDuration = 2.5f;
 				FSlateNotificationManager::Get().AddNotification(NotificationInfo);
 			}
-			
-			FLODUtilities::RegenerateDependentLODs(InSkeletalMesh, 0);
+
+			if(!InSkeletalMesh->IsLODImportedDataBuildAvailable(ImportSettings->LODIndex))
+			{
+				FLODUtilities::RegenerateDependentLODs(InSkeletalMesh, ImportSettings->LODIndex);
+			}
 		}
 	}
 }
@@ -97,14 +100,17 @@ void FSkinWeightProfileHelpers::ImportSkinWeightProfileLOD(USkeletalMesh* InSkel
 	if (InSkeletalMesh)
 	{
 		// Pick a FBX file to import the weights from 
-		const FString PickedFileName = FSkinWeightsUtilities::PickSkinWeightFBXPath(LODIndex);
+		const FString PickedFileName = FSkinWeightsUtilities::PickSkinWeightFBXPath(LODIndex, InSkeletalMesh);
 		FScopedSuspendAlternateSkinWeightPreview ScopedSuspendAlternateSkinnWeightPreview(InSkeletalMesh);
 		FScopedSkeletalMeshPostEditChange ScopedPostEditChange(InSkeletalMesh);
 		// Try and import skin weights for a specific mesh LOD
 		const bool bResult = FSkinWeightsUtilities::ImportAlternateSkinWeight(InSkeletalMesh, PickedFileName, LODIndex, ProfileName);
 		if (bResult)
 		{
-			FLODUtilities::RegenerateDependentLODs(InSkeletalMesh, LODIndex);
+			if(!InSkeletalMesh->IsLODImportedDataBuildAvailable(LODIndex))
+			{
+				FLODUtilities::RegenerateDependentLODs(InSkeletalMesh, LODIndex);
+			}
 
 			FNotificationInfo NotificationInfo(FText::GetEmpty());
 			NotificationInfo.Text = FText::Format(LOCTEXT("LODImportSuccessful", "Skin Weights for LOD {0} imported successfully!"), FText::AsNumber(LODIndex));
@@ -145,15 +151,18 @@ void FSkinWeightProfileHelpers::ReimportSkinWeightProfileLOD(USkeletalMesh* InSk
 				if (EAppReturnType::Yes == FMessageDialog::Open(EAppMsgType::YesNo, WarningMessage))
 				{
 					// Otherwise let the user pick a new path
-					const FString PickedFileName = FSkinWeightsUtilities::PickSkinWeightFBXPath(LODIndex);
+					const FString PickedFileName = FSkinWeightsUtilities::PickSkinWeightFBXPath(LODIndex, InSkeletalMesh);
 					bResult = FSkinWeightsUtilities::ImportAlternateSkinWeight(InSkeletalMesh, PickedFileName, LODIndex, InProfileName);
 				}
 			}
 
 			if (bResult)
 			{
-				// Make sure we regenerate any LOD data that is based off the now re imported LOD
-				FLODUtilities::RegenerateDependentLODs(InSkeletalMesh, LODIndex);
+				if (!InSkeletalMesh->IsLODImportedDataBuildAvailable(LODIndex))
+				{
+					// Make sure we regenerate any LOD data that is based off the now re imported LOD
+					FLODUtilities::RegenerateDependentLODs(InSkeletalMesh, LODIndex);
+				}
 
 				FNotificationInfo NotificationInfo(FText::GetEmpty());
 				NotificationInfo.Text = FText::Format(LOCTEXT("ReimportedSkinWeightsForLOD", "Reimported Skin Weights for LOD {0} succesfully!"), FText::AsNumber(LODIndex));
@@ -195,9 +204,11 @@ void FSkinWeightProfileHelpers::RemoveSkinWeightProfile(USkeletalMesh* InSkeleta
 			{
 				// Delete the alternate influences data
 				LODModel.SkinWeightProfiles.Remove(InProfileName);
-				// Regenerate this generated LOD
-				FLODUtilities::SimplifySkeletalMeshLOD(UpdateContext, LODIndex);
-				
+				if (!InSkeletalMesh->IsLODImportedDataBuildAvailable(LODIndex))
+				{
+					// Regenerate this generated LOD
+					FLODUtilities::SimplifySkeletalMeshLOD(UpdateContext, LODIndex);
+				}
 				// Goto next LOD
 				continue;
 			}
@@ -238,8 +249,11 @@ void FSkinWeightProfileHelpers::RemoveSkinWeightProfileLOD(USkeletalMesh* InSkel
 		{
 			FSkinWeightProfileHelpers::ClearSkinWeightProfileInstanceOverrides(InSkeletalMesh, InProfileName);
 
-			//Regenerate dependent LODs if we remove the LOD successfully
-			FLODUtilities::RegenerateDependentLODs(InSkeletalMesh, LODIndex);
+			if (!InSkeletalMesh->IsLODImportedDataBuildAvailable(LODIndex))
+			{
+				//Regenerate dependent LODs if we remove the LOD successfully
+				FLODUtilities::RegenerateDependentLODs(InSkeletalMesh, LODIndex);
+			}
 
 			FNotificationInfo NotificationInfo(FText::GetEmpty());
 			NotificationInfo.Text = FText::Format(LOCTEXT("RemovedLODWeights", "Removed Skin Weights for LOD {0}!"), FText::AsNumber(LODIndex));

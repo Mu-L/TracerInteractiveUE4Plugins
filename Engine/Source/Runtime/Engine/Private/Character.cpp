@@ -64,6 +64,7 @@ ACharacter::ACharacter(const FObjectInitializer& ObjectInitializer)
 	JumpMaxHoldTime = 0.0f;
     JumpMaxCount = 1;
     JumpCurrentCount = 0;
+	JumpCurrentCountPreJump = 0;
     bWasJumping = false;
 
 	AnimRootMotionTranslationScale = 1.0f;
@@ -305,6 +306,7 @@ void ACharacter::ResetJumpState()
 	if (CharacterMovement && !CharacterMovement->IsFalling())
 	{
 		JumpCurrentCount = 0;
+		JumpCurrentCountPreJump = 0;
 	}
 }
 
@@ -806,6 +808,7 @@ void ACharacter::Restart()
 	Super::Restart();
 
     JumpCurrentCount = 0;
+	JumpCurrentCountPreJump = 0;
 
 	bPressedJump = false;
 	ResetJumpState();
@@ -1007,6 +1010,8 @@ void ACharacter::StopJumping()
 
 void ACharacter::CheckJumpInput(float DeltaTime)
 {
+	JumpCurrentCountPreJump = JumpCurrentCount;
+
 	if (CharacterMovement)
 	{
 		if (bPressedJump)
@@ -1473,7 +1478,7 @@ void ACharacter::PreReplication( IRepChangedPropertyTracker & ChangedPropertyTra
 	}
 }
 
-void ACharacter::PreReplicationForReplay(IRepChangedPropertyTracker & ChangedPropertyTracker)
+void ACharacter::PreReplicationForReplay(IRepChangedPropertyTracker& ChangedPropertyTracker)
 {
 	Super::PreReplicationForReplay(ChangedPropertyTracker);
 
@@ -1575,7 +1580,7 @@ void ACharacter::StopAnimMontage(class UAnimMontage* AnimMontage)
 	}
 }
 
-class UAnimMontage * ACharacter::GetCurrentMontage()
+class UAnimMontage * ACharacter::GetCurrentMontage() const
 {
 	UAnimInstance * AnimInstance = (Mesh)? Mesh->GetAnimInstance() : nullptr; 
 	if ( AnimInstance )
@@ -1629,6 +1634,18 @@ void ACharacter::RootMotionDebugClientPrintOnScreen_Implementation(const FString
 #endif
 }
 
+
+// ServerMovePacked
+void ACharacter::ServerMovePacked_Implementation(const FCharacterServerMovePackedBits& PackedBits)
+{
+	GetCharacterMovement()->ServerMovePacked_ServerReceive(PackedBits);
+}
+
+bool ACharacter::ServerMovePacked_Validate(const FCharacterServerMovePackedBits& PackedBits)
+{
+	// Can't really validate the bit stream without unpacking, and that is done in ServerMovePacked_ServerReceive() and can be rejected after unpacking.
+	return true;
+}
 
 // ServerMove
 void ACharacter::ServerMove_Implementation(float TimeStamp, FVector_NetQuantize10 InAccel, FVector_NetQuantize100 ClientLoc, uint8 CompressedMoveFlags, uint8 ClientRoll, uint32 View, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode)
@@ -1694,6 +1711,18 @@ void ACharacter::ServerMoveOld_Implementation(float OldTimeStamp, FVector_NetQua
 bool ACharacter::ServerMoveOld_Validate(float OldTimeStamp, FVector_NetQuantize10 OldAccel, uint8 OldMoveFlags)
 {
 	return GetCharacterMovement()->ServerMoveOld_Validate(OldTimeStamp, OldAccel, OldMoveFlags);
+}
+
+// ClientMoveResponsePacked
+void ACharacter::ClientMoveResponsePacked_Implementation(const FCharacterMoveResponsePackedBits& PackedBits)
+{
+	GetCharacterMovement()->MoveResponsePacked_ClientReceive(PackedBits);
+}
+
+bool ACharacter::ClientMoveResponsePacked_Validate(const FCharacterMoveResponsePackedBits& PackedBits)
+{
+	// Can't really validate the bit stream without unpacking, and that is done in MoveResponsePacked_ClientReceive() and can be rejected after unpacking.
+	return true;
 }
 
 // ClientAckGoodMove

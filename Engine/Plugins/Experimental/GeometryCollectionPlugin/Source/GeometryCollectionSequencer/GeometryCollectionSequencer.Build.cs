@@ -22,6 +22,7 @@ namespace UnrealBuildTool.Rules
                     "CoreUObject",
                     "EditorStyle",
                     "Engine",
+					"LevelSequence",
                     "MovieScene",
                     "MovieSceneTools",
                     "MovieSceneTracks",
@@ -32,9 +33,8 @@ namespace UnrealBuildTool.Rules
                     "TimeManagement",
                     "UnrealEd",
                     "GeometryCollectionTracks",
-                    "GeometryCollectionCore",
+					"Chaos",
                     "GeometryCollectionEngine",
-                    "GeometryCollectionSimulationCore",
                 }
             );
         }

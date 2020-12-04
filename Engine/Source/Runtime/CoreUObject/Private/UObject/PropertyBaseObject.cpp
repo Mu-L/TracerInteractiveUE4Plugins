@@ -78,18 +78,43 @@ bool FObjectPropertyBase::Identical( const void* A, const void* B, uint32 PortFl
 	if (!bResult && ObjectA->GetClass() == ObjectB->GetClass())
 	{
 		bool bPerformDeepComparison = (PortFlags&PPF_DeepComparison) != 0;
-		if ((PortFlags&PPF_DeepCompareInstances) && !bPerformDeepComparison)
+		if (((PortFlags&PPF_DeepCompareInstances) != 0) && !bPerformDeepComparison)
 		{
-			bPerformDeepComparison = ObjectA->IsTemplate() != ObjectB->IsTemplate();
+			bPerformDeepComparison = !(ObjectA->IsTemplate() && ObjectB->IsTemplate());
 		}
 
-		if (!bResult && bPerformDeepComparison)
+		if (bPerformDeepComparison)
 		{
-			// In order for deep comparison to be match they both need to have the same name and that name needs to be included in the instancing table for the class
-			if (ObjectA->GetFName() == ObjectB->GetFName() && ObjectA->GetClass()->GetDefaultSubobjectByName(ObjectA->GetFName()))
+			// In order for a deep comparison match both objects must have the same name
+			// and the two objects must have the same archetype or one object is the other's archetype
+			if (ObjectA->GetFName() == ObjectB->GetFName())
 			{
-				checkSlow(ObjectA->IsDefaultSubobject() && ObjectB->IsDefaultSubobject() && ObjectA->GetClass()->GetDefaultSubobjectByName(ObjectA->GetFName()) == ObjectB->GetClass()->GetDefaultSubobjectByName(ObjectB->GetFName())); // equivalent
-				bResult = AreInstancedObjectsIdentical(ObjectA,ObjectB,PortFlags);
+				if ((PortFlags&PPF_DeepCompareDSOsOnly) != 0)
+				{
+					if (UObject* DSO = ObjectA->GetClass()->GetDefaultSubobjectByName(ObjectA->GetFName()))
+					{
+						checkSlow(ObjectA->IsDefaultSubobject() && ObjectB->IsDefaultSubobject() && DSO == ObjectB->GetClass()->GetDefaultSubobjectByName(ObjectB->GetFName()));
+					}
+					else
+					{
+						bPerformDeepComparison = false;
+					}
+				}
+
+				if (bPerformDeepComparison)
+				{
+					UObject* ArchetypeA = ObjectA->GetArchetype();
+					bPerformDeepComparison = (ArchetypeA == ObjectB);
+					if (!bPerformDeepComparison)
+					{
+						UObject* ArchetypeB = ObjectB->GetArchetype();
+						bPerformDeepComparison = ((ArchetypeA == ArchetypeB) || (ArchetypeB == ObjectA));
+					}
+					if (bPerformDeepComparison)
+					{
+						bResult = AreInstancedObjectsIdentical(ObjectA, ObjectB, PortFlags);
+					}
+				}
 			}
 		}
 	}
@@ -430,7 +455,7 @@ UObject* FObjectPropertyBase::FindImportedObject( const FProperty* Property, UOb
 		if (Dot && AttemptNonQualifiedSearch)
 		{
 			// search with just the object name
-			Result = FindImportedObject(Property, OwnerObject, ObjectClass, RequiredMetaClass, Dot + 1, 0, InSerializeContext);
+			Result = FindImportedObject(Property, OwnerObject, ObjectClass, RequiredMetaClass, Dot + 1, 0);
 		}
 		FString NewText(Text);
 		// if it didn't have a dot, then maybe they just gave a uasset package name
@@ -467,7 +492,7 @@ UObject* FObjectPropertyBase::FindImportedObject( const FProperty* Property, UOb
 				const uint32 LoadFlags = LOAD_NoWarn | LOAD_FindIfFail;		
 
 				UE_LOG(LogProperty, Verbose, TEXT("FindImportedObject is attempting to import [%s] (class = %s) with StaticLoadObject"), Text, *GetFullNameSafe(ObjectClass));
-				Result = StaticLoadObject(ObjectClass, nullptr, Text, nullptr, LoadFlags, nullptr, true, InSerializeContext);
+				Result = StaticLoadObject(ObjectClass, nullptr, Text, nullptr, LoadFlags, nullptr, true);
 
 #if USE_DEFERRED_DEPENDENCY_CHECK_VERIFICATION_TESTS
 				check(!bDeferAssetImports || !Result || !FBlueprintSupport::IsInBlueprintPackage(Result));
@@ -476,8 +501,10 @@ UObject* FObjectPropertyBase::FindImportedObject( const FProperty* Property, UOb
 		}
 	}
 
-	// if we found an object, and we have a parent, make sure we are in the same package if the found object is private, unless it's a cross level property
-	if (Result && !Result->HasAnyFlags(RF_Public) && OwnerObject && Result->GetOutermost() != OwnerObject->GetOutermost())
+	// if we found an object, and we have a parent, make sure we are in the same package or share an outer if the found object is private, unless it's a cross level property
+	if (Result && !Result->HasAnyFlags(RF_Public) && OwnerObject 
+		&& Result->GetOutermostObject() != OwnerObject->GetOutermostObject()
+		&& Result->GetPackage() != OwnerObject->GetPackage())
 	{
 		const FObjectPropertyBase* ObjectProperty = CastField<const FObjectPropertyBase>(Property);
 		if ( !ObjectProperty || !ObjectProperty->AllowCrossLevel())
@@ -522,6 +549,8 @@ void FObjectPropertyBase::CheckValidObject(void* Value) const
 		// object type expected by the property...
 
 		UClass* ObjectClass = Object->GetClass();
+		UE_CLOG(!ObjectClass, LogProperty, Fatal, TEXT("Object without class referenced by %s, object: 0x%016llx %s"), *GetPathName(), (int64)(PTRINT)Object, *Object->GetPathName());
+
 		// we could be in the middle of replacing references to the 
 		// PropertyClass itself (in the middle of an FArchiveReplaceObjectRef 
 		// pass)... if this is the case, then we might have already replaced 
@@ -544,7 +573,7 @@ void FObjectPropertyBase::CheckValidObject(void* Value) const
 		bool const bIsDeferringValueLoad = false;
 #endif // USE_CIRCULAR_DEPENDENCY_LOAD_DEFERRING
 
-		if ((PropertyClass != nullptr) && !ObjectClass->IsChildOf(PropertyClass) && !bIsReplacingClassRefs && !bIsDeferringValueLoad)
+		if ((PropertyClass != nullptr) && !ObjectClass->IsChildOf(PropertyClass) && !ObjectClass->GetAuthoritativeClass()->IsChildOf(PropertyClass) && !bIsReplacingClassRefs && !bIsDeferringValueLoad)
 		{
 			UE_LOG(LogProperty, Warning,
 				TEXT("Serialized %s for a property of %s. Reference will be nullptred.\n    Property = %s\n    Item = %s"),
@@ -552,7 +581,7 @@ void FObjectPropertyBase::CheckValidObject(void* Value) const
 				*PropertyClass->GetFullName(),
 				*GetFullName(),
 				*Object->GetFullName()
-				);
+			);
 			SetObjectPropertyValue(Value, nullptr);
 		}
 	}

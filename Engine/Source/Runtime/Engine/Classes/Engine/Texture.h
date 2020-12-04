@@ -16,6 +16,7 @@
 #include "MaterialShared.h"
 #include "TextureResource.h"
 #include "Engine/StreamableRenderAsset.h"
+#include "PerPlatformProperties.h"
 #include "Texture.generated.h"
 
 class ITargetPlatform;
@@ -38,6 +39,8 @@ enum TextureCompressionSettings
 	TC_DistanceFieldFont		UMETA(DisplayName="DistanceFieldFont (R8)"),
 	TC_HDR_Compressed			UMETA(DisplayName="HDRCompressed (RGB, BC6H, DX11)"),
 	TC_BC7						UMETA(DisplayName="BC7 (DX11, optional A)"),
+	TC_HalfFloat				UMETA(DisplayName="Half Float (R16F)"),
+	TC_ReflectionCapture		UMETA(DisplayName="Default (DXT5)"),
 	TC_MAX,
 };
 
@@ -473,11 +476,6 @@ struct FTexturePlatformData
 	TIndirectArray<struct FTexture2DMipMap> Mips;
 	struct FVirtualTextureBuiltData* VTData;
 
-#if TEXTURE2DMIPMAP_USE_COMPACT_BULKDATA
-	/** Cached UPackage file name where the owning texture is loaded from */
-	FString CachedPackageFileName;
-#endif
-
 #if WITH_EDITORONLY_DATA
 	/** The key associated with this derived data. */
 	FString DerivedDataKey;
@@ -579,7 +577,12 @@ public:
 	bool AreDerivedVTChunksAvailable() const;
 #endif
 
+	/** Return the number of mips that are not streamable. */
 	int32 GetNumNonStreamingMips() const;
+	/** Return the number of mips that streamable but not optional. */
+	int32 GetNumNonOptionalMips() const;
+	/** Return true if at least one mip can be loaded either from DDC or disk. */
+	bool CanBeLoaded() const;
 
 	// Only because we don't want to expose FVirtualTextureBuiltData
 	ENGINE_API int32 GetNumVTMips() const;
@@ -798,6 +801,19 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=LevelOfDetail, meta=(DisplayName="Texture Group"), AssetRegistrySearchable)
 	TEnumAsByte<enum TextureGroup> LODGroup;
 
+	/** Downscale source texture, applied only to textures without mips 
+	 * 0.0 - use scale value from texture group
+	 * 1.0 - do not scale texture
+	 * > 1.0 - scale texure
+	 */
+	UPROPERTY(EditAnywhere, Category=LevelOfDetail, AdvancedDisplay, meta=(ClampMin="0.0", ClampMax="8.0"))
+	FPerPlatformFloat Downscale;
+
+	/** Texture downscaling options */
+	UPROPERTY(EditAnywhere, Category=LevelOfDetail, AdvancedDisplay)
+	ETextureDownscaleOptions DownscaleOptions;
+
+	
 	/** This should be unchecked if using alpha channels individually as masks. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=Texture, meta=(DisplayName="sRGB"), AssetRegistrySearchable)
 	uint8 SRGB:1;
@@ -821,6 +837,10 @@ public:
 	/** If true the texture stores YCoCg. Blue channel will be filled with a precision scale during compression. */
 	UPROPERTY()
 	uint8 CompressionYCoCg : 1;
+
+	/** If true, the RHI texture will be created without TexCreate_OfflineProcessed. */
+	UPROPERTY(transient)
+	uint8 bNotOfflineProcessed : 1;
 
 private:
 	/** Whether the async resource release process has already been kicked off or not */
@@ -869,18 +889,6 @@ public:
 	 * @return The material value type of this texture.
 	 */
 	virtual EMaterialValueType GetMaterialType() const PURE_VIRTUAL(UTexture::GetMaterialType,return MCT_Texture;);
-
-	/**
-	 * Waits until all streaming requests for this texture has been fully processed.
-	 */
-	virtual void WaitForStreaming()
-	{
-	}
-
-	virtual bool HasPendingUpdate() const override 
-	{ 
-		return false; // Overriden in UTexture2D
-	}
 
 	/**
 	 * Returns if the texture is actually being rendered using virtual texturing right now.
@@ -1030,7 +1038,14 @@ public:
 
 	//~ Begin UStreamableRenderAsset Interface
 	virtual int32 GetLODGroupForStreaming() const final override { return static_cast<int32>(LODGroup); }
-	virtual bool UpdateStreamingStatus(bool bWaitForMipFading = false) override { return false; }
+	virtual EStreamableRenderAssetType GetRenderAssetType() const final override { return EStreamableRenderAssetType::Texture; }
+	ENGINE_API virtual FIoFilenameHash GetMipIoFilenameHash(const int32 MipIndex) const final override;
+	ENGINE_API virtual bool DoesMipDataExist(const int32 MipIndex) const final override;
+	ENGINE_API virtual bool HasPendingRenderResourceInitialization() const final override;
+	ENGINE_API virtual bool HasPendingLODTransition() const final override;
+	ENGINE_API virtual void InvalidateLastRenderTimeForStreaming() final override;
+	ENGINE_API virtual float GetLastRenderTimeForStreaming() const final override;
+	ENGINE_API virtual bool ShouldMipLevelsBeForcedResident() const final override;
 	//~ End UStreamableRenderAsset Interface
 
 	/**
@@ -1115,19 +1130,54 @@ public:
 		LightingGuid = Guid;
 	}
 
+	/** Generates a deterministic GUID for the texture based on the full name of the object.
+	  * Used to ensure that assets created during cook can be deterministic
+	  */
+	ENGINE_API void SetDeterministicLightingGuid();
+
 	/**
 	 * Retrieves the pixel format enum for enum <-> string conversions.
 	 */
 	ENGINE_API static class UEnum* GetPixelFormatEnum();
 
+	/** Returns the minimum number of mips that must be resident in memory (cannot be streamed). */
+	static FORCEINLINE int32 GetStaticMinTextureResidentMipCount()
+	{
+		return GMinTextureResidentMipCount;
+	}
+
+	/** Sets the minimum number of mips that must be resident in memory (cannot be streamed). */
+	static void SetMinTextureResidentMipCount(int32 InMinTextureResidentMipCount);
+
 protected:
+
+	/** The minimum number of mips that must be resident in memory (cannot be streamed). */
+	static ENGINE_API int32 GMinTextureResidentMipCount;
 
 #if WITH_EDITOR
 
-	/** Notify any loaded material instances that the texture has changed. */
-	ENGINE_API void NotifyMaterials();
+	enum class ENotifyMaterialsEffectOnShaders
+	{
+		Default,
+		DoesNotInvalidate
+	};
 
-#endif //WITH_EDOTIR
+	/** Notify any loaded material instances that the texture has changed. */
+	ENGINE_API void NotifyMaterials(const ENotifyMaterialsEffectOnShaders EffectOnShaders = ENotifyMaterialsEffectOnShaders::Default);
+
+#endif //WITH_EDITOR
+
+	void BeginFinalReleaseResource();
+
+	/**
+	 * Calculates the render resource initial state, expected to be used in InitResource() for derived classes implementing streaming.
+	 *
+	 * @param	PlatformData - the asset platform data.
+	 * @param	bAllowStreaming - where streaming is allowed, might still be disabled based on asset settings.
+	 * @param	MaxMipCount - optional limitation on the max mip count.
+	 * @return  The state to be passed to FStreamableTextureResource.
+	 */
+	FStreamableRenderResourceState GetResourcePostInitState(FTexturePlatformData* PlatformData, bool bAllowStreaming, int32 MinRequestMipCount = 0, int32 MaxMipCount = 0) const;
 };
 
 /** 

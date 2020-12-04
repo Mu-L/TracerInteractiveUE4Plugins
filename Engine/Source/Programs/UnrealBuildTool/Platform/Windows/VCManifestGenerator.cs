@@ -20,7 +20,6 @@ namespace UnrealBuildTool
 
 		protected virtual string IniSection_PlatformTargetSettings { get { return string.Format( "/Script/{0}PlatformEditor.{0}TargetSettings", Platform.ToString() ); } }
 		protected virtual string IniSection_GeneralProjectSettings { get { return "/Script/EngineSettings.GeneralProjectSettings"; } }
-		protected virtual string BuildResourceProjectRelativePath { get { return "Build\\" + Platform.ToString(); } }
 
 		protected const string BuildResourceSubPath = "Resources";
 		protected const string EngineResourceSubPath = "DefaultImages";
@@ -275,28 +274,47 @@ namespace UnrealBuildTool
 			return DefaultValue;
 		}
 
+		protected bool FindResourceBinaryFile( out string SourcePath, string ResourceFileName, bool AllowEngineFallback = true)
+		{
+			// look in project normal Build location
+			SourcePath = Path.Combine(ProjectPath, "Build", Platform.ToString(), BuildResourceSubPath);
+			bool bFileExists = File.Exists(Path.Combine(SourcePath, ResourceFileName));
+
+			// look in Platform Extensions next
+			if (!bFileExists)
+			{
+				SourcePath = Path.Combine(ProjectPath, "Platforms", Platform.ToString(), "Build", BuildResourceSubPath);
+				bFileExists = File.Exists(Path.Combine(SourcePath, ResourceFileName));
+			}
+
+			// look in Engine, if allowed
+			if (!bFileExists && AllowEngineFallback)
+			{
+				SourcePath = Path.Combine(UnrealBuildTool.EngineDirectory.FullName, "Build", Platform.ToString(), EngineResourceSubPath);
+				bFileExists = File.Exists(Path.Combine(SourcePath, ResourceFileName));
+
+				// look in Platform extensions too
+				if (!bFileExists)
+				{
+					SourcePath = Path.Combine(UnrealBuildTool.EngineDirectory.FullName, "Platforms", Platform.ToString(), "Build", EngineResourceSubPath);
+					bFileExists = File.Exists(Path.Combine(SourcePath, ResourceFileName));
+				}
+			}
+
+			return bFileExists;
+		}
+
+		protected bool DoesResourceBinaryFileExist(string ResourceFileName, bool AllowEngineFallback = true)
+		{
+			string SourcePath;
+			return FindResourceBinaryFile( out SourcePath, ResourceFileName, AllowEngineFallback );
+		}
+
         protected bool CopyAndReplaceBinaryIntermediate(string ResourceFileName, bool AllowEngineFallback = true)
 		{
 			string TargetPath = Path.Combine(IntermediatePath, BuildResourceSubPath);
-			string SourcePath = Path.Combine(ProjectPath, BuildResourceProjectRelativePath, BuildResourceSubPath);
-
-			// Try falling back to the engine defaults if requested
-			bool bFileExists = File.Exists(Path.Combine(SourcePath, ResourceFileName));
-			if (!bFileExists)
-			{
-				if (AllowEngineFallback)
-				{
-					SourcePath = Path.Combine(UnrealBuildTool.EngineDirectory.FullName, BuildResourceProjectRelativePath, EngineResourceSubPath);
-					bFileExists = File.Exists(Path.Combine(SourcePath, ResourceFileName));
-
-					// look in Platform extensions too
-					if (!bFileExists)
-					{
-						SourcePath = Path.Combine(UnrealBuildTool.EnginePlatformExtensionsDirectory.FullName, Platform.ToString(), "Build", EngineResourceSubPath);
-						bFileExists = File.Exists(Path.Combine(SourcePath, ResourceFileName));
-					}
-				}
-			}
+			string SourcePath;
+			bool bFileExists = FindResourceBinaryFile( out SourcePath, ResourceFileName, AllowEngineFallback );
 
 			// At least the default culture entry for any resource binary must always exist
 			if (!bFileExists)
@@ -454,7 +472,7 @@ namespace UnrealBuildTool
 			}
 		}
 
-        protected void AddResourceEntry(string ResourceEntryName, string ConfigKey, string GenericINISection, string GenericINIKey, string DefaultValue, string ValueSuffix = "")
+        protected string AddResourceEntry(string ResourceEntryName, string ConfigKey, string GenericINISection, string GenericINIKey, string DefaultValue, string ValueSuffix = "")
 		{
 			string ConfigScratchValue = null;
 
@@ -466,7 +484,7 @@ namespace UnrealBuildTool
 				if (!ConfigHierarchy.TryParse(DefaultCultureScratchValue, out Values))
 				{
 					Log.TraceError("Invalid default culture string resources: \"{0}\". Unable to add resource entry.", DefaultCultureScratchValue);
-					return;
+					return "";
 				}
 
 				ConfigScratchValue = Values[ConfigKey];
@@ -515,9 +533,24 @@ namespace UnrealBuildTool
 					}
 				}
 			}
+
+			return "ms-resource:" + ResourceEntryName;
 		}
 
-        protected virtual XName GetName( string BaseName, string SchemaName )
+		protected string AddDebugResourceString(string ResourceEntryName, string Value)
+		{
+			DefaultResourceWriter.AddResource(ResourceEntryName, Value);
+
+			foreach (var CultureId in CulturesToStage)
+			{
+				var Writer = PerCultureResourceWriters[CultureId];
+				Writer.AddResource(ResourceEntryName, Value);
+			}
+
+			return "ms-resource:" + ResourceEntryName;
+		}
+
+		protected virtual XName GetName( string BaseName, string SchemaName )
 		{
 			return XName.Get(BaseName);
 		}
@@ -560,17 +593,7 @@ namespace UnrealBuildTool
             bool bIncludeEngineVersionInPackageVersion;
             if (EngineIni.GetBool(IniSection_PlatformTargetSettings, "bIncludeEngineVersionInPackageVersion", out bIncludeEngineVersionInPackageVersion) && bIncludeEngineVersionInPackageVersion)
             {
-                BuildVersion BuildVersionForPackage;
-                if (BuildVersion.TryRead(BuildVersion.GetDefaultFileName(), out BuildVersionForPackage) && BuildVersionForPackage.Changelist != 0)
-                {
-                    // Break apart the version number into individual elements
-                    string[] SplitVersionString = VersionNumber.Split('.');
-                    VersionNumber = string.Format("{0}.{1}.{2}.{3}",
-                        SplitVersionString[0],
-                        SplitVersionString[1],
-                        BuildVersionForPackage.Changelist / 10000,
-                        BuildVersionForPackage.Changelist % 10000);
-                }
+				VersionNumber = IncludeBuildVersionInPackageVersion(VersionNumber);
             }
 
             IdentityName = PackageName;
@@ -581,7 +604,24 @@ namespace UnrealBuildTool
                 new XAttribute("Version", VersionNumber));
         }
 
-        protected abstract string GetSDKDirectory();
+		protected virtual string IncludeBuildVersionInPackageVersion(string VersionNumber)
+		{
+			BuildVersion BuildVersionForPackage;
+			if (BuildVersion.TryRead(BuildVersion.GetDefaultFileName(), out BuildVersionForPackage) && BuildVersionForPackage.Changelist != 0)
+			{
+				// Break apart the version number into individual elements
+				string[] SplitVersionString = VersionNumber.Split('.');
+				VersionNumber = string.Format("{0}.{1}.{2}.{3}",
+					SplitVersionString[0],
+					SplitVersionString[1],
+					BuildVersionForPackage.Changelist / 10000,
+					BuildVersionForPackage.Changelist % 10000);
+			}
+
+			return VersionNumber;
+		}
+
+		protected abstract string GetSDKDirectory();
 
 		protected abstract string GetMakePriBinaryPath();
 

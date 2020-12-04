@@ -32,6 +32,7 @@ class AActor;
 class UTexture2D;
 class UStaticMesh;
 class USkeletalMesh;
+class ULandscapeLODStreamingProxy;
 class UStreamableRenderAsset;
 class FSoundSource;
 class USoundWave;
@@ -93,8 +94,10 @@ class ENGINE_API FAudioChunkHandle
 public:
 	FAudioChunkHandle();
 	FAudioChunkHandle(const FAudioChunkHandle& Other);
+	FAudioChunkHandle(FAudioChunkHandle&& Other);
 
 	FAudioChunkHandle& operator=(const FAudioChunkHandle& Other);
+	FAudioChunkHandle& operator=(FAudioChunkHandle&& Other);
 
 	~FAudioChunkHandle();
 
@@ -114,14 +117,20 @@ public:
 
 private:
 	// This constructor should only be called by an implementation of IAudioStreamingManager.
-	FAudioChunkHandle(const uint8* InData, uint32 NumBytes, const USoundWave* InSoundWave, const FName& SoundWaveName, uint32 InChunkIndex);
+	FAudioChunkHandle(const uint8* InData, uint32 NumBytes, const USoundWave* InSoundWave, const FName& SoundWaveName, uint32 InChunkIndex, uint64 InCacheLookupID);
 
 	const uint8*  CachedData;
 	int32 CachedDataNumBytes;
 
 	const USoundWave* CorrespondingWave;
 	FName CorrespondingWaveName;
+
+	// The index of this chunk in the sound wave's full set of chunks of compressed audio.
 	int32 ChunkIndex;
+
+	// This ID can be used to access the element this handle is for directly,
+	// rather than linearly searching the cache. This should only be used by the stream cache itself.
+	uint64 CacheLookupID;
 
 #if WITH_EDITOR
 	uint32 ChunkGeneration;
@@ -424,9 +433,7 @@ struct IRenderAssetStreamingManager : public IStreamingManager
 	virtual bool StreamOutRenderAssetData(int64 RequiredMemorySize) = 0;
 
 	/** Adds a new texture/mesh to the streaming manager. */
-	virtual void AddStreamingRenderAsset(UTexture2D* Texture) = 0;
-	virtual void AddStreamingRenderAsset(UStaticMesh* StaticMesh) = 0;
-	virtual void AddStreamingRenderAsset(USkeletalMesh* SkeletalMesh) = 0;
+	virtual void AddStreamingRenderAsset(UStreamableRenderAsset* RenderAsset) = 0;
 
 	/** Removes a texture/mesh from the streaming manager. */
 	virtual void RemoveStreamingRenderAsset(UStreamableRenderAsset* RenderAsset) = 0;
@@ -461,6 +468,9 @@ struct IRenderAssetStreamingManager : public IStreamingManager
 	ENGINE_API void RemoveStreamingTexture(UTexture2D* Texture);
 	ENGINE_API void PauseTextureStreaming(bool bInShouldPause);
 	//END: APIs for backward compatibility
+
+	/** Notify the streamer that the mounted state of a file needs to be re-evaluated. */
+	virtual void MarkMountedStateDirty(FIoFilenameHash FilenameHash) = 0;
 };
 
 enum class EAudioChunkLoadResult : uint8
@@ -554,7 +564,7 @@ protected:
 	friend FAudioChunkHandle;
 
 	/** This can be called by implementers of IAudioStreamingManager to construct an FAudioChunkHandle using an otherwise inaccessible constructor. */
-	static FAudioChunkHandle BuildChunkHandle(const uint8* InData, uint32 NumBytes, const USoundWave* InSoundWave, const FName& SoundWaveName, uint32 InChunkIndex);
+	static FAudioChunkHandle BuildChunkHandle(const uint8* InData, uint32 NumBytes, const USoundWave* InSoundWave, const FName& SoundWaveName, uint32 InChunkIndex, uint64 CacheLookupID);
 
 	/**
 	 * This can be used to increment reference counted handles to audio chunks. Called by the copy constructor of FAudioChunkHandle.
@@ -661,19 +671,14 @@ struct FStreamingManagerCollection : public IStreamingManager
 	ENGINE_API bool IsStreamingEnabled() const;
 
 	/**
-	 * Checks whether texture streaming is enabled
+	 * Checks whether texture streaming is enabled. 
 	 */
-	ENGINE_API bool IsTextureStreamingEnabled() const;
-
-	/**
-	 * Checks whether mesh streaming is enabled
-	 */
-	ENGINE_API bool IsMeshStreamingEnabled() const;
+	FORCEINLINE bool IsTextureStreamingEnabled() const { return IsRenderAssetStreamingEnabled(EStreamableRenderAssetType::Texture); }
 
 	/**
 	 * Checks whether texture/mesh streaming is enabled
 	 */
-	virtual bool IsRenderAssetStreamingEnabled() const;
+	ENGINE_API bool IsRenderAssetStreamingEnabled(EStreamableRenderAssetType FilteredAssetType = EStreamableRenderAssetType::None) const;
 
 	/**
 	 * Gets a reference to the Texture Streaming Manager interface
@@ -790,7 +795,7 @@ protected:
 	float LoadMapTimeLimit;
 
 	/** The currently added texture streaming manager. Can be NULL*/
-	FRenderAssetStreamingManager* TextureStreamingManager;
+	FRenderAssetStreamingManager* RenderAssetStreamingManager;
 
 	/** The audio streaming manager, should always exist */
 	IAudioStreamingManager* AudioStreamingManager;

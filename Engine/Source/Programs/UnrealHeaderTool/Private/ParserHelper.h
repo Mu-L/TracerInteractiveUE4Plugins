@@ -147,6 +147,11 @@ public:
 public:
 	/** @name Constructors */
 	//@{
+	FPropertyBase(const FPropertyBase&) = default;
+	FPropertyBase(FPropertyBase&&) = default;
+	FPropertyBase& operator=(const FPropertyBase&) = default;
+	FPropertyBase& operator=(FPropertyBase&&) = default;
+
 	explicit FPropertyBase(EPropertyType InType)
 	: Type                (InType)
 	, ArrayType           (EArrayType::None)
@@ -274,6 +279,21 @@ public:
 			// below the array will be assigned the inner property flags. This allows propagation of Parm flags (out, optional..)
 			PropagateFlags = Property->PropertyFlags & CPF_ParmFlags;
 			Property = CastFieldChecked<FArrayProperty>(Property)->Inner;
+			ClassOfProperty = Property->GetClass();
+		}
+		else if (ClassOfProperty == FSetProperty::StaticClass())
+		{
+			ArrType = EArrayType::Set;
+
+			PropagateFlags = Property->PropertyFlags & CPF_ParmFlags;
+			Property = CastFieldChecked<FSetProperty>(Property)->ElementProp;
+			ClassOfProperty = Property->GetClass();
+		}
+		else if (ClassOfProperty == FMapProperty::StaticClass())
+		{
+			PropagateFlags = Property->PropertyFlags & CPF_ParmFlags;
+			MapKeyProp = MakeShared<FPropertyBase>(CastFieldChecked<FMapProperty>(Property)->KeyProp);
+			Property = CastFieldChecked<FMapProperty>(Property)->ValueProp;
 			ClassOfProperty = Property->GetClass();
 		}
 
@@ -772,12 +792,8 @@ public:
 	};
 	//@}
 
-	/**
-	 * Copies the properties from this token into another.
-	 *
-	 * @param	Other	the token to copy this token's properties to.
-	 */
-	void Clone( const FToken& Other );
+	FToken& operator=(const FToken& Other);
+	FToken& operator=(FToken&& Other);
 
 	FString GetConstantValue() const
 	{
@@ -788,7 +804,7 @@ public:
 				case CPT_Byte:
 					return FString::Printf(TEXT("%u"), Byte);
 				case CPT_Int64:
-					return FString::Printf(TEXT("%ld"), Int64);
+					return FString::Printf(TEXT("%" INT64_FMT), Int64);
 				case CPT_Int:
 					return FString::Printf(TEXT("%i"), Int);
 				case CPT_Bool:
@@ -837,6 +853,18 @@ public:
 	{
 		InitToken( CPT_None );
 		(FPropertyBase&)*this = InType;
+	}
+
+	FToken(const FToken& InToken)
+		: FPropertyBase(CPT_None)
+	{
+		*this = InToken;
+	}
+
+	FToken(FToken&& InToken)
+		: FPropertyBase(CPT_None)
+	{
+		*this = MoveTemp(InToken);
 	}
 
 	// Inlines.
@@ -1020,20 +1048,6 @@ public:
 };
 
 /**
- * A group of FTokens.  Used for keeping track of reference chains tokens
- * e.g. SomeObject.default.Foo.DoSomething()
- */
-class FTokenChain : public TArray<FToken>
-{
-public:
-	FToken& operator+=( const FToken& NewToken )
-	{
-		FToken& Token = (*this)[AddZeroed()] = NewToken;
-		return Token;
-	}
-};
-
-/**
  * Information about a function being compiled.
  */
 struct FFuncInfo
@@ -1064,12 +1078,12 @@ struct FFuncInfo
 	uint16		RPCId;
 	/** Identifier for an RPC call expecting a response */
 	uint16		RPCResponseId;
-	/** Whether this function represents a sealed event */
-	bool		bSealedEvent;
 	/** Delegate macro line in header. */
 	int32		MacroLine;
 	/** Position in file where this function was declared. Points to first char of function name. */
 	int32 InputPos;
+	/** Whether this function represents a sealed event */
+	bool		bSealedEvent;
 	/** TRUE if the function is being forced to be considered as impure by the user */
 	bool bForceBlueprintImpure;
 
@@ -1081,36 +1095,18 @@ struct FFuncInfo
 		, FunctionFlags(FUNC_None)
 		, FunctionExportFlags(0)
 		, ExpectParms(0)
-		, FunctionReference(NULL)
-		, CppImplName(TEXT(""))
-		, CppValidationImplName(TEXT(""))
+		, FunctionReference(nullptr)
 		, RPCId(0)
 		, RPCResponseId(0)
-		, bSealedEvent(false)
 		, MacroLine(-1)
 		, InputPos(-1)
+		, bSealedEvent(false)
 		, bForceBlueprintImpure(false)
 	{}
 
-	FFuncInfo(const FFuncInfo& Other)
-		: FunctionFlags(Other.FunctionFlags)
-		, FunctionExportFlags(Other.FunctionExportFlags)
-		, ExpectParms(Other.ExpectParms)
-		, FunctionReference(Other.FunctionReference)
-		, CppImplName(Other.CppImplName)
-		, CppValidationImplName(Other.CppValidationImplName)
-		, RPCId(Other.RPCId)
-		, RPCResponseId(Other.RPCResponseId)
-		, MacroLine(Other.MacroLine)
-		, InputPos(Other.InputPos)
-		, bForceBlueprintImpure(Other.bForceBlueprintImpure)
-	{
-		Function.Clone(Other.Function);
-		if (FunctionReference)
-		{
-			SetFunctionNames();
-		}
-	}
+	FFuncInfo(const FFuncInfo& Other) = default;
+	FFuncInfo(FFuncInfo&& Other) = default;
+	FFuncInfo& operator=(FFuncInfo&& Other) = default;
 
 	/** Set the internal function names based on flags **/
 	void SetFunctionNames()
@@ -1191,21 +1187,13 @@ struct FTokenData
 	/** The token tracked by this FTokenData. */
 	FToken Token;
 
-	/** @name Constructors */
-	//@{
-	/**
-	 * Defalt constructor
-	 */
-	FTokenData()
-	{}
-
-	/**
-	 * Copy constructor
-	 */
-	FTokenData(const FToken& inToken)
-	 : Token(inToken)
-	{}
-	//@}
+	FTokenData() = default;
+	FTokenData(FTokenData&&) = default;
+	FTokenData& operator=(FTokenData&&) = default;
+	FTokenData(FToken&& InToken)
+		: Token(MoveTemp(InToken))
+	{
+	}
 };
 
 /**
@@ -1255,7 +1243,7 @@ public:
 	 *
 	 * @return	a pointer to token data created associated with the property
 	 */
-	FTokenData* Set(FProperty* InKey, const FTokenData& InValue, FUnrealSourceFile* UnrealSourceFile);
+	FTokenData* Set(FProperty* InKey, FTokenData&& InValue, FUnrealSourceFile* UnrealSourceFile);
 
 	/**
 	 * (debug) Dumps the values of this FPropertyData to the log file
@@ -1295,10 +1283,10 @@ public:
 	 * 
 	 * @param	PropertyToken	token that should be added to the list
 	 */
-	void AddStructProperty(const FTokenData& PropertyToken, FUnrealSourceFile* UnrealSourceFile)
+	void AddStructProperty(FTokenData&& PropertyToken, FUnrealSourceFile* UnrealSourceFile)
 	{
 		check(PropertyToken.Token.TokenProperty);
-		StructPropertyData.Set(PropertyToken.Token.TokenProperty, PropertyToken, UnrealSourceFile);
+		StructPropertyData.Set(PropertyToken.Token.TokenProperty, MoveTemp(PropertyToken), UnrealSourceFile);
 	}
 
 	FPropertyData& GetStructPropertyData()
@@ -1324,7 +1312,7 @@ public:
 	}
 
 	/** Constructor */
-	FStructData( const FToken& StructToken ) : StructData(StructToken) {}
+	FStructData(FToken&& StructToken) : StructData(MoveTemp(StructToken)) {}
 
 	friend struct FStructDataArchiveProxy;
 };
@@ -1348,10 +1336,10 @@ class FFunctionData
 	 * 
 	 * @param	PropertyToken	token that should be added to the list
 	 */
-	void AddParameter(const FToken& PropertyToken, FUnrealSourceFile* UnrealSourceFile)
+	void AddParameter(FToken&& PropertyToken, FUnrealSourceFile* UnrealSourceFile)
 	{
 		check(PropertyToken.TokenProperty);
-		ParameterData.Set(PropertyToken.TokenProperty, PropertyToken, UnrealSourceFile);
+		ParameterData.Set(PropertyToken.TokenProperty, MoveTemp(PropertyToken), UnrealSourceFile);
 	}
 
 	/**
@@ -1359,31 +1347,21 @@ class FFunctionData
 	 * 
 	 * @param	PropertyToken	token that should be added
 	 */
-	void SetReturnData( const FToken& PropertyToken )
+	void SetReturnData(FToken&& PropertyToken )
 	{
 		check(PropertyToken.TokenProperty);
-		ReturnTypeData.Token = PropertyToken;
+		ReturnTypeData.Token = MoveTemp(PropertyToken);
 	}
 
 public:
 	/** Constructors */
-	FFunctionData() {}
-	FFunctionData( const FFunctionData& Other )
-	{
-		(*this) = Other;
-	}
-	FFunctionData( const FFuncInfo& inFunctionData )
-	: FunctionData(inFunctionData)
+	FFunctionData() = default;
+	FFunctionData(FFunctionData&& Other) = default;
+	FFunctionData(FFuncInfo&& inFunctionData )
+		: FunctionData(MoveTemp(inFunctionData))
 	{}
 
-	/** Copy operator */
-	FFunctionData& operator=( const FFunctionData& Other )
-	{
-		FunctionData = Other.FunctionData;
-		ParameterData = Other.ParameterData;
-		ReturnTypeData.Token.Clone(Other.ReturnTypeData.Token);
-		return *this;
-	}
+	FFunctionData& operator=(FFunctionData&& Other) = default;
 	
 	/** @name getters */
 	//@{
@@ -1408,7 +1386,7 @@ public:
 	 * 
 	 * @param	PropertyToken	the property to add
 	 */
-	void AddProperty(const FToken& PropertyToken, FUnrealSourceFile* UnrealSourceFile)
+	void AddProperty(FToken&& PropertyToken, FUnrealSourceFile* UnrealSourceFile)
 	{
 		const FProperty* Prop = PropertyToken.TokenProperty;
 		check(Prop);
@@ -1416,11 +1394,11 @@ public:
 
 		if ( (Prop->PropertyFlags&CPF_ReturnParm) != 0 )
 		{
-			SetReturnData(PropertyToken);
+			SetReturnData(MoveTemp(PropertyToken));
 		}
 		else
 		{
-			AddParameter(PropertyToken, UnrealSourceFile);
+			AddParameter(MoveTemp(PropertyToken), UnrealSourceFile);
 		}
 	}
 
@@ -1470,7 +1448,7 @@ public:
 	/**
 	 * Adds function data object for given function object.
 	 */
-	static FFunctionData* Add(const FFuncInfo& FunctionInfo);
+	static FFunctionData* Add(FFuncInfo&& FunctionInfo);
 
 	/**
 	 * Tries to find function data for given function object.
@@ -1495,20 +1473,28 @@ struct FMultipleInheritanceBaseClass
 	 * For multiple inheritance parents declared using 'Implements', corresponds to the UClass for the interface.  For multiple inheritance parents declared
 	 * using 'Inherits', this value will be NULL.
 	 */
-	UClass* InterfaceClass;
+	UClass* InterfaceClass = nullptr;
 
 	/**
 	 * Constructors
 	 */
-	FMultipleInheritanceBaseClass(const FString& BaseClassName)
-	: ClassName(BaseClassName), InterfaceClass(NULL)
-	{}
+	explicit FMultipleInheritanceBaseClass(FString&& BaseClassName)
+		: ClassName(MoveTemp(BaseClassName))
+	{
+	}
 
-	FMultipleInheritanceBaseClass(UClass* ImplementedInterfaceClass)
-	: InterfaceClass(ImplementedInterfaceClass)
+	explicit FMultipleInheritanceBaseClass(UClass* ImplementedInterfaceClass)
+		: InterfaceClass(ImplementedInterfaceClass)
 	{
 		ClassName = FString::Printf(TEXT("I%s"), *ImplementedInterfaceClass->GetName());
 	}
+};
+
+enum class EParsedInterface
+{
+	NotAnInterface,
+	ParsedUInterface,
+	ParsedIInterface
 };
 
 /**
@@ -1617,7 +1603,7 @@ public:
 	 * 
 	 * @param	PropertyToken	the property to add
 	 */
-	void AddProperty(const FToken& PropertyToken, FUnrealSourceFile* UnrealSourceFile)
+	void AddProperty(FToken&& PropertyToken, FUnrealSourceFile* UnrealSourceFile)
 	{
 		FProperty* Prop = PropertyToken.TokenProperty;
 		check(Prop);
@@ -1628,7 +1614,7 @@ public:
 		if ( OuterClass != NULL )
 		{
 			// global property
-			GlobalPropertyData.Set(Prop, PropertyToken, UnrealSourceFile);
+			GlobalPropertyData.Set(Prop, MoveTemp(PropertyToken), UnrealSourceFile);
 		}
 		else
 		{
@@ -1637,7 +1623,7 @@ public:
 			if ( OuterFunction != NULL )
 			{
 				// function parameter, return, or local property
-				FFunctionData::FindForFunction(OuterFunction)->AddProperty(PropertyToken, UnrealSourceFile);
+				FFunctionData::FindForFunction(OuterFunction)->AddProperty(MoveTemp(PropertyToken), UnrealSourceFile);
 			}
 		}
 
@@ -1669,7 +1655,7 @@ public:
 	 * @param	Field		the property or function to add to
 	 * @param	InMetaData	the metadata to add
 	 */
-	static void AddMetaData(UField* Field, const TMap<FName, FString>& InMetaData)
+	static void AddMetaData(UField* Field, TMap<FName, FString>&& InMetaData)
 	{
 		// only add if we have some!
 		if (InMetaData.Num())
@@ -1686,16 +1672,16 @@ public:
 				MergedMetaData.Reserve(InMetaData.Num() + ExistingMetaData->Num());
 				MergedMetaData.Append(*ExistingMetaData);
 				MergedMetaData.Append(InMetaData);
-				MetaData->SetObjectValues(Field, MergedMetaData);
+				MetaData->SetObjectValues(Field, MoveTemp(MergedMetaData));
 			}
 			else
 			{
 				// set the metadata for this field
-				MetaData->SetObjectValues(Field, InMetaData);
+				MetaData->SetObjectValues(Field, MoveTemp(InMetaData));
 			}
 		}
 	}
-	static void AddMetaData(FField* Field, const TMap<FName, FString>& InMetaData)
+	static void AddMetaData(FField* Field, TMap<FName, FString>&& InMetaData)
 	{
 		// only add if we have some!
 		if (InMetaData.Num())
@@ -1706,9 +1692,9 @@ public:
 			// get (or create) a metadata object for this package
 			UMetaData* MetaData = Package->GetMetaData();
 			
-			for (const TPair<FName, FString>& MetaKeyValue : InMetaData)
+			for (TPair<FName, FString>& MetaKeyValue : InMetaData)
 			{
-				Field->SetMetaData(MetaKeyValue.Key, *MetaKeyValue.Value);
+				Field->SetMetaData(MetaKeyValue.Key, MoveTemp(MetaKeyValue.Value));
 			}
 		}
 	}
@@ -1750,7 +1736,7 @@ public:
 	 * @param Inparent The C++ class name to add to the multiple inheritance list
 	 * @param UnrealSourceFile Currently parsed source file.
 	 */
-	void AddInheritanceParent(const FString& InParent, FUnrealSourceFile* UnrealSourceFile);
+	void AddInheritanceParent(FString&& InParent, FUnrealSourceFile* UnrealSourceFile);
 
 	/**
 	 * Add a string to the list of inheritance parents for this class.
@@ -1800,6 +1786,9 @@ public:
 	// GENERATED_BODY access specifier to preserve.
 	EAccessSpecifier GeneratedBodyMacroAccessSpecifier;
 
+	/** Parsed interface state */
+	EParsedInterface ParsedInterface = EParsedInterface::NotAnInterface;
+
 	friend struct FClassMetaDataArchiveProxy;
 };
 
@@ -1810,6 +1799,8 @@ public:
  */
 class FCompilerMetadataManager : protected TMap<UStruct*, TUniquePtr<FClassMetaData> >
 {
+	using Super = TMap<UStruct*, TUniquePtr<FClassMetaData>>;
+
 public:
 	/**
 	 * Adds a new class to be tracked
@@ -1819,6 +1810,8 @@ public:
 	 * @return	a pointer to the newly added metadata for the class specified
 	 */
 	FClassMetaData* AddClassData(UStruct* Struct, FUnrealSourceFile* UnrealSourceFile);
+
+	FClassMetaData* AddInterfaceClassData(UStruct* Struct, FUnrealSourceFile* UnrealSourceFile);
 
 	/**
 	 * Find the metadata associated with the class specified
@@ -1853,7 +1846,15 @@ public:
 		}
 	}
 
+	/**
+	 * Throws an exception if a UInterface was parsed but not the corresponding IInterface.
+	 */
+	void CheckForNoIInterfaces();
+
 	friend struct FCompilerMetadataManagerArchiveProxy;
+
+private:
+	TArray<TPair<UStruct*, FClassMetaData*>> InterfacesToVerify;
 };
 
 /*-----------------------------------------------------------------------------

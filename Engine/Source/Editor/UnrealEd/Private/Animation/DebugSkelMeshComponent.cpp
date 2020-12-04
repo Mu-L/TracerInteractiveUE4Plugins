@@ -484,8 +484,9 @@ void UDebugSkelMeshComponent::GenSpaceBases(TArray<FTransform>& OutSpaceBases)
 	TempBoneSpaceTransforms.AddUninitialized(OutSpaceBases.Num());
 	FVector TempRootBoneTranslation;
 	FBlendedHeapCurve TempCurve;
+	FHeapCustomAttributes TempAtttributes;
 	AnimScriptInstance->PreEvaluateAnimation();
-	PerformAnimationEvaluation(SkeletalMesh, AnimScriptInstance, OutSpaceBases, TempBoneSpaceTransforms, TempRootBoneTranslation, TempCurve);
+	PerformAnimationEvaluation(SkeletalMesh, AnimScriptInstance, OutSpaceBases, TempBoneSpaceTransforms, TempRootBoneTranslation, TempCurve, TempAtttributes);
 	AnimScriptInstance->PostEvaluateAnimation();
 }
 
@@ -571,10 +572,13 @@ void UDebugSkelMeshComponent::RefreshBoneTransforms(FActorComponentTickFunction*
 					{
 						FCompactPose AdditiveBasePose;
 						FBlendedCurve AdditiveCurve;
+						FStackCustomAttributes AdditiveAttributes;
 						AdditiveCurve.InitFrom(BoneContainer);
 						AdditiveBasePose.SetBoneContainer(&BoneContainer);
-						Sequence->GetAdditiveBasePose(AdditiveBasePose, AdditiveCurve, FAnimExtractContext(PreviewInstance->GetCurrentTime()));
-						CSAdditiveBasePose.InitPose(AdditiveBasePose);
+						
+						FAnimationPoseData AnimationPoseData(AdditiveBasePose, AdditiveCurve, AdditiveAttributes);
+						Sequence->GetAdditiveBasePose(AnimationPoseData, FAnimExtractContext(PreviewInstance->GetCurrentTime()));
+						CSAdditiveBasePose.InitPose(AnimationPoseData.GetPose());
 					}
 
 					const int32 NumSkeletonBones = BoneContainer.GetNumBones();
@@ -723,7 +727,7 @@ void UDebugSkelMeshComponent::ResetMeshSectionVisibility()
 	}
 }
 
-void UDebugSkelMeshComponent::RebuildClothingSectionsFixedVerts()
+void UDebugSkelMeshComponent::RebuildClothingSectionsFixedVerts(bool bInvalidateDerivedDataCache)
 {
 	FSkeletalMeshModel* Resource = SkeletalMesh->GetImportedModel();
 	FScopedSkeletalMeshPostEditChange ScopedSkeletalMeshPostEditChange(SkeletalMesh);
@@ -743,24 +747,30 @@ void UDebugSkelMeshComponent::RebuildClothingSectionsFixedVerts()
 				{
 					UClothingAssetCommon* ConcreteAsset = Cast<UClothingAssetCommon>(BaseAsset);
 					const FClothLODDataCommon& LodData = ConcreteAsset->LodData[Section.ClothingData.AssetLodIndex];
-					const FPointWeightMap& MaxDistances = LodData.PhysicalMeshData.GetWeightMap(EWeightMapTargetCommon::MaxDistance);
+					const FPointWeightMap* const MaxDistances = LodData.PhysicalMeshData.FindWeightMap(EWeightMapTargetCommon::MaxDistance);
 
-					for(FMeshToMeshVertData& VertData : Section.ClothMappingData)
+					if (MaxDistances && MaxDistances->Num())
 					{
-						if(MaxDistances.AreAnyBelowThreshold(
-							VertData.SourceMeshVertIndices[0],
-							VertData.SourceMeshVertIndices[1],
-							VertData.SourceMeshVertIndices[2]))
+						for (FMeshToMeshVertData& VertData : Section.ClothMappingData)
 						{
-							VertData.SourceMeshVertIndices[3] = 0xFFFF;
+							VertData.SourceMeshVertIndices[3] = MaxDistances->AreAllBelowThreshold(
+								VertData.SourceMeshVertIndices[0],
+								VertData.SourceMeshVertIndices[1],
+								VertData.SourceMeshVertIndices[2]) ? 0xFFFF : 0;
 						}
-						else
+					}
+					else
+					{
+						for (FMeshToMeshVertData& VertData : Section.ClothMappingData)
 						{
 							VertData.SourceMeshVertIndices[3] = 0;
 						}
 					}
-					//We must dirty the DDC key
-					SkeletalMesh->InvalidateDeriveDataCacheGUID();
+					if (bInvalidateDerivedDataCache)
+					{
+						// We must always dirty the DDC key unless previewing
+						SkeletalMesh->InvalidateDeriveDataCacheGUID();
+					}
 				}
 			}
 		}
@@ -795,7 +805,10 @@ void UDebugSkelMeshComponent::TickComponent(float DeltaTime, enum ELevelTick Tic
 	bCachedMaterialParameterIndicesAreDirty = true;
 	
 	// Force retargeting data to be re-cached to take into account skeleton edits.
-	bRequiredBonesUpToDate = false;
+	if (bRequiredBonesUpToDateDuringTick)
+	{
+		bRequiredBonesUpToDate = false;
+	}
 
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 

@@ -28,7 +28,7 @@ namespace ChaosTest
 
 	FString GetSerializedBinaryPath()
 	{
-		return FPaths::EngineDir() / TEXT("Source/Programs/NotForLicensees/HeadlessChaos/SerializedBinaries");
+		return FPaths::EngineDir() / TEXT("Source/Programs/HeadlessChaos/SerializedBinaries");
 	}
 
 	template<class T>
@@ -424,7 +424,9 @@ namespace ChaosTest
 			{
 				Chaos::FChaosArchive ChaosAr(*File);
 				TPBDRigidsSOAs<float, 3> Particles;
-				FPBDRigidsEvolutionGBF Evolution(Particles);
+
+				THandleArray<FChaosPhysicsMaterial> PhysicalMaterials;
+				FPBDRigidsEvolution Evolution(Particles, PhysicalMaterials);
 
 				Evolution.Serialize(ChaosAr);
 				Evolution.AdvanceOneTimeStep(1 / 60.f);
@@ -436,7 +438,7 @@ namespace ChaosTest
 	void EvolutionPerfHarness()
 	{
 		//Load evolutions and step them over and over (with rewind) to measure perf of different components in the system
-		//EvolutionPerfHelper(FPaths::EngineDir() / TEXT("Source/Programs/NotForLicensees/HeadlessPhysicsSQ/Captures/ChaosEvolution_76.bin"));
+		//EvolutionPerfHelper(FPaths::EngineDir() / TEXT("Restricted/NotForLicensees/Source/Programs/HeadlessPhysicsSQ/Captures/ChaosEvolution_76.bin"));
 	}
 	
 

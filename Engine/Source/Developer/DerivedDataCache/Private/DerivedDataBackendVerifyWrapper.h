@@ -43,6 +43,11 @@ public:
 		return true;
 	}
 
+	virtual ESpeedClass GetSpeedClass() override
+	{
+		return ESpeedClass::Local;
+	}
+
 	virtual bool CachedDataProbablyExists(const TCHAR* CacheKey) override
 	{
 		COOK_STAT(auto Timer = UsageStats.TimeProbablyExists());
@@ -54,6 +59,7 @@ public:
 		}
 		return false;
 	}
+
 	virtual bool GetCachedData(const TCHAR* CacheKey, TArray<uint8>& OutData) override
 	{
 		COOK_STAT(auto Timer = UsageStats.TimeGet());
@@ -76,7 +82,8 @@ public:
 		}
 		return false;
 	}
-	virtual void PutCachedData(const TCHAR* CacheKey, TArray<uint8>& InData, bool bPutEvenIfExists) override
+
+	virtual void PutCachedData(const TCHAR* CacheKey, TArrayView<const uint8> InData, bool bPutEvenIfExists) override
 	{
 		COOK_STAT(auto Timer = UsageStats.TimePut());
 		bool bAlreadyTested = false;
@@ -138,6 +145,21 @@ public:
 				InnerBackend->GatherUsageStats(UsageStatsMap, GraphPath + TEXT(". 0"));
 			}
 		});
+	}
+
+	virtual bool TryToPrefetch(const TCHAR* CacheKey) override
+	{
+		return InnerBackend->TryToPrefetch(CacheKey);
+	}
+
+	virtual bool WouldCache(const TCHAR* CacheKey, TArrayView<const uint8> InData) override
+	{
+		return InnerBackend->WouldCache(CacheKey, InData);
+	}
+
+	bool ApplyDebugOptions(FBackendDebugOptions& InOptions) override
+	{
+		return InnerBackend->ApplyDebugOptions(InOptions);
 	}
 
 private:

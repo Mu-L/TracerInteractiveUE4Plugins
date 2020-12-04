@@ -18,6 +18,7 @@
 #include "PIEPreviewDeviceProfileSelectorModule.h"
 #endif
 #include "ProfilingDebugging/CsvProfiler.h"
+#include "DeviceProfiles/DeviceProfileFragment.h"
 
 static TAutoConsoleVariable<FString> CVarDeviceProfileOverride(
 	TEXT("dp.Override"),
@@ -81,8 +82,34 @@ UDeviceProfileManager& UDeviceProfileManager::Get(bool bFromPostCDOContruct)
 	return *DeviceProfileManagerSingleton;
 }
 
+static void GetFragmentCvars(const FString& CurrentSectionName, const FString& CVarArrayName, TArray<FString>& FragmentCVarsINOUT, const FString& DeviceProfileFileNameIn)
+{
+	FString FragmentIncludes = TEXT("FragmentIncludes");
+	TArray<FString> FragmentIncludeArray;
+	GConfig->GetArray(*CurrentSectionName, *FragmentIncludes, FragmentIncludeArray, DeviceProfileFileNameIn);
 
-void UDeviceProfileManager::InitializeCVarsForActiveDeviceProfile(bool bPushSettings)
+	for(const FString& FragmentInclude : FragmentIncludeArray)
+	{
+		FString FragmentSectionName = FString::Printf(TEXT("%s %s"), *FragmentInclude, *UDeviceProfileFragment::StaticClass()->GetName());
+		if (GConfig->DoesSectionExist(*FragmentSectionName, DeviceProfileFileNameIn))
+		{
+			TArray<FString> FragmentCVars;
+			GConfig->GetArray(*FragmentSectionName, *CVarArrayName, FragmentCVars, DeviceProfileFileNameIn);
+			UE_CLOG(FragmentCVars.Num()>0, LogInit, Log, TEXT("Including %s from fragment: %s"), *CVarArrayName, *FragmentInclude);
+			FragmentCVarsINOUT += FragmentCVars;
+		}
+		else
+		{
+#if UE_BUILD_SHIPPING
+			UE_LOG(LogInit, Error, TEXT("Could not find device profile fragment %s."), *FragmentInclude);
+#else
+			UE_LOG(LogInit, Fatal, TEXT("Could not find device profile fragment %s."), *FragmentInclude);
+#endif
+		}
+	}
+}
+
+void UDeviceProfileManager::InitializeCVarsForActiveDeviceProfile(bool bPushSettings, bool bForceDeviceProfilePriority)
 {
 	FString ActiveProfileName = DeviceProfileManagerSingleton ? DeviceProfileManagerSingleton->ActiveDeviceProfile->GetName() : GetPlatformDeviceProfileName();
 
@@ -196,8 +223,16 @@ void UDeviceProfileManager::InitializeCVarsForActiveDeviceProfile(bool bPushSett
 					ArrayName += BucketNames[(int32)FPlatformMemory::GetMemorySizeBucket()];
 				}
 
-				TArray< FString > CurrentProfilesCVars;
+				TArray< FString > CurrentProfilesCVars, FragmentCVars;
+				GetFragmentCvars(*CurrentSectionName, *ArrayName, FragmentCVars, GDeviceProfilesIni);
 				GConfig->GetArray(*CurrentSectionName, *ArrayName, CurrentProfilesCVars, GDeviceProfilesIni);
+
+				if (FragmentCVars.Num())
+				{
+					// Prepend fragments to CurrentProfilesCVars, fragment cvars should be first so the DP's cvars take priority.
+					Swap(CurrentProfilesCVars, FragmentCVars);
+					CurrentProfilesCVars += FragmentCVars;
+				}
 
 				// Iterate over the profile and make sure we do not have duplicate CVars
 				{
@@ -264,7 +299,7 @@ void UDeviceProfileManager::InitializeCVarsForActiveDeviceProfile(bool bPushSett
 								}
 							}
 
-							uint32 CVarPriority = bIsScalabilityBucket ? ECVF_SetByScalability : ECVF_SetByDeviceProfile;
+							uint32 CVarPriority = (bIsScalabilityBucket && !bForceDeviceProfilePriority) ? ECVF_SetByScalability : ECVF_SetByDeviceProfile;
 							OnSetCVarFromIniEntry(*GDeviceProfilesIni, *CVarKey, *CVarValue, CVarPriority);
 							CVarsAlreadySetList.Add(CVarKey, CVarValue);
 						}
@@ -600,7 +635,7 @@ void UDeviceProfileManager::SaveProfiles(bool bSaveToDefaults)
 /**
 * Overrides the device profile. The original profile can be restored with RestoreDefaultDeviceProfile
 */
-void UDeviceProfileManager::SetOverrideDeviceProfile(UDeviceProfile* DeviceProfile)
+void UDeviceProfileManager::SetOverrideDeviceProfile(UDeviceProfile* DeviceProfile, bool bForceDeviceProfilePriority)
 {
 	// pop any pushed settings
 	HandleDeviceProfileOverridePop();
@@ -610,7 +645,7 @@ void UDeviceProfileManager::SetOverrideDeviceProfile(UDeviceProfile* DeviceProfi
 
 	// activate new one!
 	DeviceProfileManagerSingleton->SetActiveDeviceProfile(DeviceProfile);
-	InitializeCVarsForActiveDeviceProfile(true);
+	InitializeCVarsForActiveDeviceProfile(true, bForceDeviceProfilePriority);
 
 	// broadcast cvar sinks now that we are done
 	IConsoleManager::Get().CallAllConsoleVariableSinks();
@@ -748,6 +783,20 @@ bool UDeviceProfileManager::GetScalabilityCVar(const FString& CVarName, float& O
 void UDeviceProfileManager::SetActiveDeviceProfile( UDeviceProfile* DeviceProfile )
 {
 	ActiveDeviceProfile = DeviceProfile;
+
+	FString ProfileNames;
+	for (int32 Idx = 0; Idx < Profiles.Num(); ++Idx)
+	{
+		UDeviceProfile* Profile = Cast<UDeviceProfile>(Profiles[Idx]);
+		const void* TextureLODGroupsAddr = Profile ? Profile->TextureLODGroups.GetData() : nullptr;
+		const int32 NumTextureLODGroups = Profile ? Profile->TextureLODGroups.Num() : 0;
+		ProfileNames += FString::Printf(TEXT("[%p][%p %d] %s, "), Profile, TextureLODGroupsAddr, NumTextureLODGroups, Profile ? *Profile->GetName() : TEXT("None"));
+	}
+
+	const void* TextureLODGroupsAddr = ActiveDeviceProfile ? ActiveDeviceProfile->TextureLODGroups.GetData() : nullptr;
+	const int32 NumTextureLODGroups = ActiveDeviceProfile ? ActiveDeviceProfile->TextureLODGroups.Num() : 0;
+	UE_LOG(LogInit, Log, TEXT("Active device profile: [%p][%p %d] %s"), ActiveDeviceProfile, TextureLODGroupsAddr, NumTextureLODGroups, ActiveDeviceProfile ? *ActiveDeviceProfile->GetName() : TEXT("None"));
+	UE_LOG(LogInit, Log, TEXT("Profiles: %s"), *ProfileNames);
 
 #if CSV_PROFILER
 	CSV_METADATA(TEXT("DeviceProfile"), *GetActiveDeviceProfileName());

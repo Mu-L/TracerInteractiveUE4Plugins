@@ -53,7 +53,7 @@ void Main(
 	LayerIndex = EyeIndex;
 	Output.BasePassInterpolants.MultiViewId = float(EyeIndex);
 #elif MOBILE_MULTI_VIEW
-#if (COMPILER_GLSL_ES3_1 || COMPILER_GLSL_ES3_1_EXT)
+#if COMPILER_GLSL_ES3_1
 	const int MultiViewId = int(ViewId);
 	ResolvedView = ResolveView(uint(MultiViewId));
 	Output.BasePassInterpolants.MultiViewId = float(MultiViewId);
@@ -106,6 +106,7 @@ void Main(
 		const float OneOverPreExposure = USE_PREEXPOSURE ? ResolvedView.OneOverPreExposure : 1.0f;
 		// Sample the aerial perspective (AP). It is also blended under the VertexFog parameter.
 		VertexFog = GetAerialPerspectiveLuminanceTransmittanceWithFogOver(
+			ResolvedView.RealTimeReflectionCapture, ResolvedView.SkyAtmosphereCameraAerialPerspectiveVolumeSizeAndInvSize,
 			Output.Position, WorldPosition.xyz*CM_TO_SKY_UNIT, ResolvedView.TranslatedWorldCameraOrigin*CM_TO_SKY_UNIT,
 			View.CameraAerialPerspectiveVolume, View.CameraAerialPerspectiveVolumeSampler,
 			ResolvedView.SkyAtmosphereCameraAerialPerspectiveVolumeDepthResolutionInv,
@@ -138,7 +139,7 @@ void Main(
 	VertexFactoryPackInterpolants(Output.FactoryInterpolants, PackedInterps);
 #endif // PACK_INTERPOLANTS
 
-#if !OUTPUT_MOBILE_HDR && (COMPILER_GLSL_ES3_1 || COMPILER_GLSL_ES3_1_EXT)
+#if !OUTPUT_MOBILE_HDR && COMPILER_GLSL_ES3_1
 	Output.Position.y *= -1;
 #endif
 }

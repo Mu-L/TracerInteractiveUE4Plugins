@@ -64,9 +64,11 @@ public:
 
 	~FStaticMeshEditor();
 
+private:
 	/** Initializes the editor to use a static mesh. Should be the first thing called. */
 	void InitEditorForStaticMesh(UStaticMesh* ObjectToEdit);
 
+public:
 	virtual void RegisterTabSpawners(const TSharedRef<class FTabManager>& TabManager) override;
 	virtual void UnregisterTabSpawners(const TSharedRef<class FTabManager>& TabManager) override;
 
@@ -440,6 +442,9 @@ private:
 
 	/** Redo Action **/
 	void RedoAction();
+
+	/** Callback when the mesh change **/
+	void OnMeshChanged();
 
 	/** Called when socket selection changes */
 	void OnSocketSelectionChanged();

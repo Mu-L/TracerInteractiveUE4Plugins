@@ -33,10 +33,9 @@ class FNullInstallBundleManager : public IInstallBundleManager
 		return EInstallBundleManagerInitState::Succeeded;
 	}
 
-	virtual FInstallBundleRequestInfo RequestUpdateContent(TArrayView<const FName> BundleNames, EInstallBundleRequestFlags Flags) override
+	virtual TValueOrError<FInstallBundleRequestInfo, EInstallBundleResult> RequestUpdateContent(TArrayView<const FName> BundleNames, EInstallBundleRequestFlags Flags) override
 	{
-		FInstallBundleRequestInfo RetInfo;
-		return RetInfo;
+		return MakeValue(FInstallBundleRequestInfo());
 	}
 
 	virtual void GetContentState(TArrayView<const FName> BundleNames, EInstallBundleGetContentStateFlags Flags, bool bAddDependencies, FInstallBundleGetContentStateDelegate Callback, FName RequestTag) override
@@ -47,6 +46,26 @@ class FNullInstallBundleManager : public IInstallBundleManager
 
 	virtual void CancelAllGetContentStateRequestsForTag(FName RequestTag) override
 	{
+	}
+
+	virtual void GetInstallState(TArrayView<const FName> BundleNames, bool bAddDependencies, FInstallBundleGetInstallStateDelegate Callback, FName RequestTag = NAME_None) override
+	{
+		FInstallBundleCombinedInstallState State;
+		Callback.ExecuteIfBound(State);
+	}
+
+	virtual TValueOrError<FInstallBundleCombinedInstallState, EInstallBundleResult> GetInstallStateSynchronous(TArrayView<const FName> BundleNames, bool bAddDependencies) const override
+	{
+		return MakeValue(FInstallBundleCombinedInstallState());
+	}
+
+	virtual void CancelAllGetInstallStateRequestsForTag(FName RequestTag) override
+	{
+	}
+
+	virtual TValueOrError<FInstallBundleRequestInfo, EInstallBundleResult> RequestReleaseContent(TArrayView<const FName> ReleaseNames, EInstallBundleReleaseRequestFlags Flags, TArrayView<const FName> KeepNames = TArrayView<const FName>()) override
+	{
+		return MakeValue(FInstallBundleRequestInfo());
 	}
 
 	virtual void RequestRemoveContentOnNextInit(TArrayView<const FName> RemoveNames, TArrayView<const FName> KeepNames = TArrayView<const FName>()) override

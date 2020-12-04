@@ -30,7 +30,7 @@ float3 DecodeTangent(float3 N)
 
 uint float4ToUint(float4 v)
 {
-	uint4 i = v * 255;
+	uint4 i = uint4(v.x * 255, v.y * 255, v.z * 255, v.w * 255);
 	return (0xFF & i.w) << 24 | (0xFF & i.z) << 16 | (0xFF & i.y) << 8 | (0xFF & i.x);
 }
 
@@ -89,7 +89,8 @@ float From16bitCoverage(uint Coverage16bit)
 
 uint3 QuantizeTo8Bits(float3 T)
 {
-	return saturate((T + float(1).xxx) * 0.5f) * 0xFF;
+	const float3 Quanta = saturate((T + float(1).xxx) * 0.5f) * 0xFF;
+	return uint3(Quanta.x, Quanta.y, Quanta.z);
 }
 
 float3 From8bits(float3 In8bits)
@@ -137,6 +138,7 @@ struct FHairSample
 	float	Backlit;
 	uint	LightChannelMask;
 	bool	bScatterSceneLighting;
+	float3  Emissive;
 };
 
 // * Max 67,108,864 total nodes (This is 32 nodes per pixel at 1080p if all pixel were covered)
@@ -191,6 +193,7 @@ FPackedHairSample PackHairSample(const FHairSample In)
 		((In.bScatterSceneLighting ? 1 : 0) << 12) |
 		(clamp(uint(In.Backlit * 0xFF), 0, 0xFF) << 16);
 
+	// Emissive is not packed/unpacked
 	return Out;
 }
 
@@ -216,6 +219,7 @@ FHairSample UnpackHairSample(const FPackedHairSample In)
 	Out.Backlit				= float(0xFF & (In.Specular_LightChannels_Backlit>>16)) / 0xFF;
 	Out.bScatterSceneLighting = (In.Specular_LightChannels_Backlit & (1<<12)) > 0;
 
+	// Emissive is not packed/unpacked
 	return Out;
 }
 
@@ -261,6 +265,21 @@ FCategorizationData DecodeCategorizationData(uint4 Data)
 	Out.ClosestDepth			= asfloat(ClosestDepthHigh | ClosestDepthLow);
 
 	return Out;
+}
+
+// Return true if the underlying pixel need to run with TAA fast resolve. This is the case when 
+// the velocity is larger than a certain threshold.
+bool NeedFastResolve(float2 InEncodedVelocity, float2 InVelocity, float InVelocityThreshold)
+{
+	const float VelocityMagnitude = sqrt(dot(InVelocity, InVelocity));
+	return InEncodedVelocity.x > 0 && VelocityMagnitude > InVelocityThreshold;
+}
+
+bool NeedFastResolve(float2 InEncodedVelocity, float InVelocityThreshold)
+{
+	const float2 Velocity = DecodeVelocityFromTexture(float4(InEncodedVelocity, 0.0, 0.0)).xy;
+	const float VelocityMagnitude = sqrt(dot(Velocity, Velocity));
+	return InEncodedVelocity.x > 0 && VelocityMagnitude > InVelocityThreshold;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -314,16 +333,24 @@ struct FHairAttributes
 FHairAttributes DecodeHairAttribute(uint4 Attributes)
 {
 	float2 RootUV, RootIndex;
-	RootUV.x	= (Attributes.x & 0xFF) / 255.f;
-	RootUV.y	= 1-(((Attributes.x>>8) & 0xFF) / 255.f); // Invert V to compensate image origin flip
-	RootIndex.x	= Attributes.z & 0xFF;
-	RootIndex.y	= (Attributes.z >> 8) & 0xFF;
+	RootUV.x	= float(Attributes.x & 0xFF) / 255.f;
+	RootUV.y	= 1.0-(float((Attributes.x>>8) & 0xFF) / 255.f); // Invert V to compensate image origin flip
+	RootIndex.x	= float(Attributes.z & 0xFF);
+	RootIndex.y	= float((Attributes.z >> 8) & 0xFF);
 
 	FHairAttributes Out;
 	Out.RootUV	= RootUV + RootIndex;
 	Out.UCoord	= (Attributes.y & 0xFF) / 255.f;
 	Out.Seed	= ((Attributes.y>>8) & 0xFF) / 255.f;
 	return Out;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Hair transmittance/coverage
+
+float TransmittanceToCoverage(float InTransmittance, float InCoverageThreashold)
+{
+	return saturate(min(1 - InTransmittance, 1) / InCoverageThreashold);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -432,6 +459,36 @@ FHairVisSample UnpackHairVisSample(uint RawVis)
 	return Out;
 }
  
+// Pack depth & coverage within a uint32
+uint PackHairVisSampleDepth(float InDepth, float InCoverage)
+{
+	//return asuint(Depth);
+	return (uint(InDepth * 0x00FFFFFF) << 8) | uint(0xFF * saturate(InCoverage));
+}
+
+// Unpack depth & coverage from a uint32
+float2 UnpackHairVisSampleDepth(uint InPacked)
+{
+	//return asfloat(InPacked);
+	float OutDepth = float(InPacked >> 8) / float(0x00FFFFFF);
+	float OutCoverage = float(InPacked & 0xFF) / float(0xFF);
+
+	return float2(OutDepth, OutCoverage);
+}
+
+uint PackCoverageAndHairCount(float InCoverage)
+{
+	// Assume the storage is enough for not overflowing
+	// Encode the strands_radius/pixel_radius ratio into 8bits, and this can accumulate up to 256 element with coverage of 1
+	//return (InHairCount<<16) | uint(saturate(InCoverage) * 0xFF);
+	return uint(saturate(InCoverage) * 1000.f);
+}
+
+float UnpackCoverageAndHairCount(uint InPacked)
+{
+	return float(InPacked) / 1000.f;
+}
+
  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
  // Hair MSAA buffer 
 
@@ -494,3 +551,5 @@ void UnpackHairMRT2(float4 In, inout float Specular, inout uint LightChannelMask
 	Backlit = In.z;
 	bUseScatterSceneLighting = In.w > 0;
 }
+
+

@@ -2,7 +2,7 @@ Availability: NoPublish
 Title: Build Configuration Properties Page
 Crumbs:
 Description: This is a procedurally generated markdown page.
-Version: 4.25
+Version: 4.26
 
 ### Read/Write Properties
 $ Type (ModuleType): Type of module
@@ -79,6 +79,8 @@ $ PublicRuntimeLibraryPaths (List&lt;String&gt;): List of search paths for libra
 
 $ PublicAdditionalLibraries (List&lt;String&gt;): List of additional libraries (names of the .lib files including extension) - typically used for External (third party) modules
 
+$ PublicPreBuildLibraries (List&lt;String&gt;): List of additional pre-build libraries (names of the .lib files including extension) - typically used for additional targets which are still built, but using either TargetRules.PreBuildSteps or TargetRules.PreBuildTargets.
+
 $ PublicSystemLibraries (List&lt;String&gt;): List of system libraries to use - these are typically referenced via name and then found via the system paths. If you need to reference a .lib file use the PublicAdditionalLibraries instead
 
 $ PublicFrameworks (List&lt;String&gt;): List of XCode frameworks (iOS and MacOS)
@@ -108,6 +110,8 @@ $ AdditionalPropertiesForReceipt (ReceiptPropertyList): List of additional prope
 $ PrecompileForTargets (PrecompileTargetsType): Which targets this module should be precompiled for
 
 $ ExternalDependencies (List&lt;String&gt;): External files which invalidate the makefile if modified. Relative paths are resolved relative to the .build.cs file.
+
+$ AdditionalCodeGenDirectories (List&lt;String&gt;): External directories containing generated interop files.
 
 $ SubclassRules (List&lt;String&gt;): Subclass rules files which invalidate the makefile if modified.
 

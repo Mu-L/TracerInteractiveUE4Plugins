@@ -883,15 +883,20 @@ void FAnimNode_StateMachine::EvaluateTransitionStandardBlendInternal(FPoseContex
 		}
 	}
 	else
+	{
 		for(FCompactPoseBoneIndex BoneIndex : Output.Pose.ForEachBoneIndex())
 		{
 			Output.Pose[BoneIndex] = PreviousStateResult.Pose[BoneIndex] * VPreviousWeight;
 			Output.Pose[BoneIndex].AccumulateWithShortestRotation(NextStateResult.Pose[BoneIndex], VWeight);
 		}
+	}
 	
 	// blend curve in
 	Output.Curve.Override(PreviousStateResult.Curve, 1.0 - Transition.Alpha);
 	Output.Curve.Accumulate(NextStateResult.Curve, Transition.Alpha);
+
+	FCustomAttributesRuntime::OverrideAttributes(PreviousStateResult.CustomAttributes, Output.CustomAttributes, 1.0 - Transition.Alpha);
+	FCustomAttributesRuntime::AccumulateAttributes(NextStateResult.CustomAttributes, Output.CustomAttributes, Transition.Alpha);
 }
 
 void FAnimNode_StateMachine::EvaluateTransitionCustomBlend(FPoseContext& Output, FAnimationActiveTransitionEntry& Transition, bool bIntermediatePoseIsValid)
@@ -992,6 +997,25 @@ void FAnimNode_StateMachine::SetState(const FAnimationBaseContext& Context, int3
 			if(FAnimNode_AssetPlayerBase* Player = Context.AnimInstanceProxy->GetNodeFromIndex<FAnimNode_AssetPlayerBase>(PlayerIndex))
 			{
 				Player->ClearCachedBlendWeight();
+			}
+		}
+
+		// Clear any currently cached blend weights for asset player nodes in layers.
+		for (const int32& LayerIdx : GetStateInfo(CurrentState).LayerNodeIndices)
+		{
+			// Try and retrieve the actual node object
+			if (FAnimNode_LinkedAnimLayer* Layer = Context.AnimInstanceProxy->GetNodeFromIndex<FAnimNode_LinkedAnimLayer>(LayerIdx))
+			{
+				// Retrieve the AnimInstance running for this layer
+				if (UAnimInstance* CurrentTarget = Layer->GetTargetInstance<UAnimInstance>())
+				{
+					// Retrieve all asset player nodes from the corresponding Anim blueprint class and clear their cached blend weight
+					TArray<FAnimNode_AssetPlayerBase*> PlayerNodesInLayer = CurrentTarget->GetInstanceAssetPlayers(Layer->Layer);
+					for (FAnimNode_AssetPlayerBase* Player : PlayerNodesInLayer)
+					{
+						Player->ClearCachedBlendWeight();
+					}
+				}
 			}
 		}
 

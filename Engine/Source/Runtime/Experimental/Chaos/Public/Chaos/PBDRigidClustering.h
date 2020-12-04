@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Chaos/PBDRigidClusteredParticles.h"
+#include "Chaos/PBDCollisionConstraints.h"
 #include "Chaos/Transform.h"
 #include "Chaos/CollisionResolutionTypes.h"
 #include "Chaos/ExternalCollisionData.h"
@@ -36,17 +37,17 @@ public:
 /* 
 * PDBRigidClustering
 */
-template<class FPBDRigidEvolution, class FPBDCollisionConstraint, class T, int d>
+template<class T_FPBDRigidEvolution, class T_FPBDCollisionConstraint, class T, int d>
 class CHAOS_API TPBDRigidClustering
 {
-	typedef typename FPBDCollisionConstraint::FPointContactConstraint FPointContactConstraint;
+	typedef typename T_FPBDCollisionConstraint::FPointContactConstraint FPointContactConstraint;
 public:
 	/** Parent to children */
 	typedef TMap<TPBDRigidParticleHandle<T, d>*, TArray<TPBDRigidParticleHandle<T, d>*> > FClusterMap;
 
-	using FCollisionConstraintHandle = TPBDCollisionConstraintHandle<T, d>;
+	using FCollisionConstraintHandle = FPBDCollisionConstraintHandle;
 
-	TPBDRigidClustering(FPBDRigidEvolution& InEvolution, TPBDRigidClusteredParticles<T, d>& InParticles);
+	TPBDRigidClustering(T_FPBDRigidEvolution& InEvolution, TPBDRigidClusteredParticles<T, d>& InParticles);
 	~TPBDRigidClustering();
 
 	//
@@ -109,6 +110,11 @@ public:
 		const TMap<TGeometryParticleHandle<T, d>*, float>* ExternalStrainMap = nullptr,
 		bool bForceRelease = false);
 
+	TSet<TPBDRigidParticleHandle<T, d>*> ReleaseClusterParticlesNoInternalCluster(
+		TPBDRigidClusteredParticleHandle<T, d>* ClusteredParticle,
+		const TMap<TGeometryParticleHandle<T, d>*, float>* ExternalStrainMap = nullptr,
+		bool bForceRelease = false);
+
 	/*
 	*  ReleaseClusterParticles
 	*    Release all rigid body IDs passed,
@@ -127,7 +133,7 @@ public:
 	*   ... Release bodies based collision impulses.
 	*   ... Updating properties as necessary.
 	*/
-	void AdvanceClustering(const T dt, FPBDCollisionConstraint& CollisionRule);
+	void AdvanceClustering(const T dt, T_FPBDCollisionConstraint& CollisionRule);
 
 	/**
 	*  BreakingModel
@@ -227,9 +233,18 @@ public:
 	/** If multi child proxy is used, this is the data needed */
 	const TArrayCollectionArray<TUniquePtr<TMultiChildProxyData<T, d>>>& GetMultiChildProxyDataArray() const { return MParticles.MultiChildProxyDataArray(); }
 
-	void AddToClusterUnion(int32 ClusterID, TPBDRigidClusteredParticleHandle<T, 3>* Handle) {
-		if (ClusterID <= 0) return;
-		if (!ClusterUnionMap.Contains(ClusterID)) ClusterUnionMap.Add(ClusterID, TArray<TPBDRigidClusteredParticleHandle<T, 3>*>());
+	void AddToClusterUnion(int32 ClusterID, TPBDRigidClusteredParticleHandle<T, 3>* Handle)
+	{
+		if(ClusterID <= 0)
+		{
+			return;
+		}
+
+		if(!ClusterUnionMap.Contains(ClusterID))
+		{
+			ClusterUnionMap.Add(ClusterID, TArray<TPBDRigidClusteredParticleHandle<T, 3>*>());
+		}
+
 		ClusterUnionMap[ClusterID].Add(Handle);
 	}
 
@@ -285,7 +300,7 @@ public:
 		TSharedPtr<Chaos::FImplicitObject, ESPMode::ThreadSafe> ProxyGeometry,
 		const FClusterCreationParameters<T>& Parameters);
 
-	void ComputeStrainFromCollision(const FPBDCollisionConstraint& CollisionRule);
+	void ComputeStrainFromCollision(const T_FPBDCollisionConstraint& CollisionRule);
 	void ResetCollisionImpulseArray();
 	void DisableCluster(TPBDRigidClusteredParticleHandle<T, d>* ClusteredParticle);
 	void DisableParticleWithBreakEvent(Chaos::TPBDRigidParticleHandle<float, 3>* Particle);
@@ -315,7 +330,7 @@ public:
 
 private:
 
-	FPBDRigidEvolution& MEvolution;
+	T_FPBDRigidEvolution& MEvolution;
 	TPBDRigidClusteredParticles<T, d>& MParticles;
 	TSet<Chaos::TPBDRigidClusteredParticleHandle<float, 3>*> TopLevelClusterParents;
 	TSet<Chaos::TPBDRigidParticleHandle<float, 3>*> MActiveRemovalIndices;

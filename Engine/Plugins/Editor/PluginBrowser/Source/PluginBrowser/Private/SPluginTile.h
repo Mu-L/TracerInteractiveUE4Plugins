@@ -31,6 +31,9 @@ class SPluginTile : public SCompoundWidget
 
 private:
 
+	/** Returns text to display for the plugin name. */
+	FText GetPluginNameText() const;
+
 	/** Updates the contents of this tile */
 	void RecreateWidgets();
 

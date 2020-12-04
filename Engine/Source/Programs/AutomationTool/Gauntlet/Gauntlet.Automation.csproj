@@ -81,6 +81,7 @@
     <Compile Include="Framework\Gauntlet.Exception.cs" />
     <Compile Include="Framework\Gauntlet.Params.cs" />
     <Compile Include="Framework\Gauntlet.TestGroup.cs" />
+    <Compile Include="Framework\Utils\Gauntlet.HordeReport.cs" />
     <Compile Include="Framework\Utils\Gauntlet.IniConfigUtil.cs" />
     <Compile Include="Framework\Utils\Gauntlet.MarkdownBuilder.cs" />
     <Compile Include="Framework\Utils\Gauntlet.HtmlBuilder.cs" />
@@ -123,6 +124,7 @@
     <Compile Include="Unreal\Base\Gauntlet.UnrealTestNode.cs" />
     <Compile Include="Unreal\Base\Gauntlet.UnrealPGONode.cs" />
     <Compile Include="Unreal\Game\EpicGame.TestConfig.cs" />
+    <Compile Include="Unreal\Game\Tests\Gauntlet.UnrealTest.BootTest.cs" />
     <Compile Include="Unreal\Game\UE4Game.DefaultNode.cs" />
     <Compile Include="Unreal\RunUnreal.cs" />
     <Compile Include="Unreal\Game\Samples\ElementalDemoTest.cs" />
@@ -135,6 +137,7 @@
     <Compile Include="Unreal\Utils\Gauntlet.UnrealLogParser.cs" />
     <Compile Include="Unreal\BuildSource\Gauntlet.StagedBuildSource.cs" />
     <Compile Include="Unreal\Utils\Gauntlet.UnrealSnapshotParser.cs" />
+    <Compile Include="Unreal\Utils\Gauntlet.UnrealTestResults.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\DotNETCommon\DotNETUtilities\DotNETUtilities.csproj">
@@ -160,6 +163,7 @@
     <ProjectReference Include="..\Lumin\Lumin.Automation.csproj">
       <Project>{17779110-5cab-43a0-9dfb-4df67df29b42}</Project>
       <Name>Lumin.Automation</Name>
+      <Private>False</Private>
     </ProjectReference>
     <ProjectReference Include="..\XLocLocalization\XLocLocalization.Automation.csproj">
       <Project>{7e2d6784-c9b7-40c6-a89b-0a8afddce60d}</Project>
@@ -208,15 +212,18 @@
     <Content Include="SelfTest\TestData\LogParser\Win64FatalError.txt" />
   </ItemGroup>
   <ItemGroup>
-        <Compile Include="Platform\**\*.cs" />
+    <Compile Include="Platform\**\*.cs" />
   </ItemGroup>
-
   <!-- The following will glob all platform extensions' Gauntlet source
   files and include them in the build. They will also appear in VisualStudio -->
   <ItemGroup>
     <Compile Include="../../../../Platforms/*/Source/Programs/AutomationTool/Gauntlet/**/*.cs">
+      <!-- RecursiveDir metadata expands to [PlatformName]/Source/Programs/[etc]. The Replace() will
+      replace everything from the first slash to the end leaving just the platform name. Should the
+      Replace() fail then RecursiveDir is still an agreeable value -->
+      <Link>Platform/$([System.Text.RegularExpressions.Regex]::Replace(%(Compile.RecursiveDir), [\\/].+$, ``))/_</Link>
     </Compile>
   </ItemGroup>
-  
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <Import Project="../../../../Platforms/*/Source/Programs/AutomationTool/Gauntlet/*.Gauntlet.targets" Condition="'$(OS)' == 'Windows_NT'" />
 </Project>

@@ -20,7 +20,6 @@
 
 #define LOCTEXT_NAMESPACE "TGenericWindowsTargetPlatform"
 
-
 /**
  * Template for Windows target platforms
  */
@@ -140,6 +139,16 @@ public:
 		return PLATFORM_WINDOWS && !UE_SERVER && !UE_GAME && WITH_EDITOR && HAS_EDITOR_DATA;
 	}
 
+	virtual void GetShaderCompilerDependencies(TArray<FString>& OutDependencies) const override
+	{		
+		FTargetPlatformBase::AddDependencySCArrayHelper(OutDependencies, TEXT("Binaries/ThirdParty/Windows/DirectX/x64/d3dcompiler_47.dll"));
+		FTargetPlatformBase::AddDependencySCArrayHelper(OutDependencies, TEXT("Binaries/ThirdParty/Windows/DirectX/x64/dxil.dll"));
+		FTargetPlatformBase::AddDependencySCArrayHelper(OutDependencies, TEXT("Binaries/ThirdParty/ShaderConductor/Win64/ShaderConductor.dll"));
+		FTargetPlatformBase::AddDependencySCArrayHelper(OutDependencies, TEXT("Binaries/ThirdParty/ShaderConductor/Win64/dxcompiler.dll"));
+		FTargetPlatformBase::AddDependencySCArrayHelper(OutDependencies, TEXT("Binaries/Win64/dxcompiler.dll"));
+		FTargetPlatformBase::AddDependencySCArrayHelper(OutDependencies, TEXT("Binaries/Win64/dxil.dll"));
+	}
+
 	virtual bool SupportsFeature( ETargetPlatformFeatures Feature ) const override
 	{
 		// we currently do not have a build target for WindowsServer
@@ -204,14 +213,12 @@ public:
 		if (!IS_DEDICATED_SERVER)
 		{
 			static FName NAME_PCD3D_SM5(TEXT("PCD3D_SM5"));
-			static FName NAME_GLSL_430(TEXT("GLSL_430"));
 			static FName NAME_VULKAN_ES31(TEXT("SF_VULKAN_ES31"));
 			static FName NAME_OPENGL_150_ES3_1(TEXT("GLSL_150_ES31"));
 			static FName NAME_VULKAN_SM5(TEXT("SF_VULKAN_SM5"));
 			static FName NAME_PCD3D_ES3_1(TEXT("PCD3D_ES31"));
 
 			OutFormats.AddUnique(NAME_PCD3D_SM5);
-			OutFormats.AddUnique(NAME_GLSL_430);
 			OutFormats.AddUnique(NAME_VULKAN_ES31);
 			OutFormats.AddUnique(NAME_OPENGL_150_ES3_1);
 			OutFormats.AddUnique(NAME_VULKAN_SM5);
@@ -281,6 +288,7 @@ public:
 		static FName NameG16(TEXT("G16"));
 		static FName NameVU8(TEXT("VU8"));
 		static FName NameRGBA16F(TEXT("RGBA16F"));
+		static FName NameR16F(TEXT("R16F"));
 		static FName NameBC6H(TEXT("BC6H"));
 		static FName NameBC7(TEXT("BC7"));
 
@@ -354,6 +362,10 @@ public:
 		else if (Settings == TC_BC7)
 		{
 			TextureFormatName = NameBC7;
+		}
+		else if (Settings == TC_HalfFloat)
+		{
+			TextureFormatName = NameR16F;
 		}
 		else if (bNoAlpha)
 		{

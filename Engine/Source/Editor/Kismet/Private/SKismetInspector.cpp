@@ -361,7 +361,7 @@ void SKismetInspector::Construct(const FArguments& InArgs)
 	{
 		FOnGetDetailCustomizationInstance LayoutDelegateDetails = FOnGetDetailCustomizationInstance::CreateStatic(&FBlueprintDelegateActionDetails::MakeInstance, MyBlueprint);
 		PropertyView->RegisterInstancedCustomPropertyLayout(UMulticastDelegatePropertyWrapper::StaticClass(), LayoutDelegateDetails);
-
+		
 		// Register function and variable details customization
 		FOnGetDetailCustomizationInstance LayoutGraphDetails = FOnGetDetailCustomizationInstance::CreateStatic(&FBlueprintGraphActionDetails::MakeInstance, MyBlueprint);
 		PropertyView->RegisterInstancedCustomPropertyLayout(UEdGraph::StaticClass(), LayoutGraphDetails);
@@ -657,7 +657,7 @@ void SKismetInspector::UpdateFromObjects(const TArray<UObject*>& PropertyObjects
 			{
 				AActor* Owner = ActorComponent->GetOwner();
 				if(Owner != nullptr && Owner->HasAnyFlags(RF_ClassDefaultObject))
-				{					
+				{
 					SelectionInfo.ObjectsForPropertyEditing.AddUnique(ActorComponent);
 					SelectionInfo.EditableComponentTemplates.Add(ActorComponent);
 				}

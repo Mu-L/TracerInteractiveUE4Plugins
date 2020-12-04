@@ -73,6 +73,7 @@ public:
 	FGlobalDynamicReadBuffer();
 	~FGlobalDynamicReadBuffer();
 	
+	FAllocation AllocateHalf(uint32 Num);
 	FAllocation AllocateFloat(uint32 Num);
 	FAllocation AllocateInt32(uint32 Num);
 
@@ -91,8 +92,10 @@ protected:
 	virtual void InitRHI() override;
 	virtual void ReleaseRHI() override;
 	void Cleanup();
+	void IncrementTotalAllocations(uint32 Num);
 
 	/** The pools of read buffers from which allocations are made. */
+	FDynamicReadBufferPool* HalfBufferPool;
 	FDynamicReadBufferPool* FloatBufferPool;
 	FDynamicReadBufferPool* Int32BufferPool;
 

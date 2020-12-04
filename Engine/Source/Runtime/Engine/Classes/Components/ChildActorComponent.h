@@ -51,9 +51,29 @@ public:
 	UPROPERTY()
 	TArray<FChildActorAttachedActorInfo> AttachedActors;
 
+#if WITH_EDITOR
+	/** Keep track of the child actor GUID to reuse it when reinstancing */
+	FGuid ChildActorGUID;
+#endif
+
 	// The component instance data cache for the ChildActor spawned by this component
 	TSharedPtr<FComponentInstanceDataCache> ComponentInstanceData;
 };
+
+#if WITH_EDITORONLY_DATA
+UENUM()
+enum class EChildActorComponentTreeViewVisualizationMode : uint8
+{
+	/** Use the editor's default setting. */
+	UseDefault UMETA(Hidden),
+	/** Show only the outer component as a single component node. */
+	ComponentOnly,
+	/** Include the child actor hierarchy attached to the outer component as the root node. */
+	ComponentWithChildActor,
+	/** Show only as a child actor hierarchy (i.e. do not show the outer component node as the root). */
+	ChildActorOnly,
+};
+#endif
 
 /** A component that spawns an Actor when registered, and destroys it when unregistered.*/
 UCLASS(ClassGroup=Utility, hidecategories=(Object,LOD,Physics,Lighting,TextureStreaming,Activation,"Components|Activation",Collision), meta=(BlueprintSpawnableComponent))
@@ -105,11 +125,24 @@ private:
 	/** We try to keep the child actor's name as best we can, so we store it off here when destroying */
 	FName ChildActorName;
 
+	/** Detect when the parent actor is renamed, in which case we can't preseve the child actor's name */
+	UObject* ActorOuter;
+
 	/** Cached copy of the instance data when the ChildActor is destroyed to be available when needed */
 	mutable FChildActorComponentInstanceData* CachedInstanceData;
 
+#if WITH_EDITORONLY_DATA
+	/** Indicates how this component will be visualized for editing in a tree view. Users can change this setting per instance via the context menu in the Blueprint/SCS editor. */
+	UPROPERTY()
+	EChildActorComponentTreeViewVisualizationMode EditorTreeViewVisualizationMode;
+#endif
+
 	/** Flag indicating that when the component is registered that the child actor should be recreated */
 	uint8 bNeedsRecreate:1;
+
+#if WITH_EDITOR
+	virtual void SetPackageExternal(bool bExternal, bool bShouldDirty) override;
+#endif
 
 public:
 
@@ -149,7 +182,20 @@ public:
 
 	/** Kill any currently present child actor */
 	void DestroyChildActor();
+
+#if WITH_EDITOR
+	EChildActorComponentTreeViewVisualizationMode GetEditorTreeViewVisualizationMode() const
+	{
+		return EditorTreeViewVisualizationMode;
+	}
+
+	void SetEditorTreeViewVisualizationMode(EChildActorComponentTreeViewVisualizationMode InMode);
+#endif
 };
 
-
-
+struct FActorParentComponentSetter
+{
+	static void Set(AActor* ChildActor, UChildActorComponent* ParentComponent);
+private:
+	friend UChildActorComponent;
+};

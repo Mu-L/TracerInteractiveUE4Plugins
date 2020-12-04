@@ -54,6 +54,9 @@ enum class ETargetPlatformFeatures
 	/** Mesh LOD streaming. */
 	MeshLODStreaming,
 
+	/** Landscape visual mesh LOD streaming. */
+	LandscapeMeshLODStreaming,
+
 	/** User credentials are required to use the device. */
 	UserCredentials,
 
@@ -89,6 +92,9 @@ enum class ETargetPlatformFeatures
 	
 	/* Can we use the virtual texture streaming system on this platform. */
 	VirtualTextureStreaming,
+
+	/* The platform makes use of extra cook-time file region metadata in its packaging process. */
+	CookFileRegionMetadata,
 };
 
 enum class EPlatformAuthentication
@@ -311,7 +317,14 @@ public:
 	*
 	* @return true if this platform can distribute shader compilation threads with XGE.
 	*/
-	virtual bool CanSupportXGEShaderCompile() const = 0;
+	virtual bool CanSupportRemoteShaderCompile() const = 0;
+
+	/**
+	* Provide platform specific file dependency patterns for SN-DBS shader compilation.
+	*
+	* @param OutDependencies Platform specific dependency file patterns are uniquely appended to this array.
+	*/
+	virtual void GetShaderCompilerDependencies(TArray<FString>& OutDependencies) const = 0;
 
 	/**
 	 * Checks whether the platform's SDK requirements are met so that we can do things like
@@ -390,11 +403,6 @@ public:
 	virtual bool UsesBasePassVelocity() const = 0;
 
 	/**
-	* Gets whether the platform should use Anisotropic BRDF in the base pass.
-	*/
-	virtual bool UsesAnisotropicBRDF() const = 0;
-
-	/**
 	* Gets whether the platform will use selective outputs in the base pass shaders.
 	*/
 	virtual bool UsesSelectiveBasePassOutputs() const = 0; 
@@ -410,11 +418,22 @@ public:
 	virtual bool UsesRayTracing() const = 0;
 
 	/**
+	* Gets whether the platform will use SH2 instead of SH3 for sky irradiance.
+	*/
+	virtual bool ForcesSimpleSkyDiffuse() const = 0;
+
+	/**
 	* Gets down sample mesh distance field divider.
 	*
 	* @return 1 if platform does not need to downsample mesh distance fields
 	*/
 	virtual float GetDownSampleMeshDistanceFieldDivider() const = 0;
+
+	/**
+	* Gets an integer representing the height fog mode for opaque materials on a platform.
+	* @return 0 if no override (i.e. use r.VertexFoggingForOpaque from project settings); 1 if pixel fog; 2 if vertex fog.
+	*/
+	virtual int32 GetHeightFogModeForOpaque() const = 0;
 
 #if WITH_ENGINE
 	/**
@@ -460,6 +479,12 @@ public:
 	 * @param OutFormats will contain all the texture formats which are possible for this platform
 	 */
 	virtual void GetAllTextureFormats( TArray<FName>& OutFormats ) const = 0;
+
+	/**
+	 * Platforms that support multiple texture compression variants 
+	 * might want to use a single specific variant for virtual textures to reduce fragmentation
+	 */
+	virtual FName FinalizeVirtualTextureLayerFormat(FName Format) const = 0;
 
 	/**
 	* Gets the texture format to use for a virtual texturing layer. In order to make a better guess
@@ -599,6 +624,12 @@ public:
 	 * Returns wheter or not this 16bit index buffer should be promoted to 32bit
 	 */
 	virtual bool ShouldExpandTo32Bit(const uint16* Indices, const int32 NumIndices) const = 0;
+
+	/**
+	 * Copy a file to the target
+	 */
+	virtual bool CopyFileToTarget(const FString& DeviceId, const FString& HostFilename, const FString& TargetFilename, const TMap<FString,FString>& CustomPlatformData) = 0;
+
 public:
 
 	/**

@@ -65,7 +65,6 @@ void FArrayProperty::LinkInternal(FArchive& Ar)
 	Inner->Link(Ar);
 
 	SetElementSize();
-	PropertyFlags |= CPF_HasGetValueTypeHash;
 }
 bool FArrayProperty::Identical( const void* A, const void* B, uint32 PortFlags ) const
 {
@@ -742,6 +741,15 @@ FField* FArrayProperty::GetInnerFieldByName(const FName& InName)
 		return Inner;
 	}
 	return nullptr;
+}
+
+void FArrayProperty::GetInnerFields(TArray<FField*>& OutFields)
+{
+	if (Inner)
+	{
+		OutFields.Add(Inner);
+		Inner->GetInnerFields(OutFields);
+	}
 }
 
 #include "UObject/DefineUPropertyMacros.h"

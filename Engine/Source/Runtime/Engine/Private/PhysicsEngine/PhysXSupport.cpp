@@ -12,7 +12,7 @@
 #include "PhysicalMaterials/PhysicalMaterial.h"
 #include "CustomPhysXPayload.h"
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 
 #include "PhysXPublic.h"
 #include "PhysicsEngine/ConstraintInstance.h"
@@ -24,7 +24,6 @@ int32						GNumPhysXConvexMeshes = 0;
 TArray<PxConvexMesh*>	GPhysXPendingKillConvex;
 TArray<PxTriangleMesh*>	GPhysXPendingKillTriMesh;
 TArray<PxHeightField*>	GPhysXPendingKillHeightfield;
-TArray<PxMaterial*>		GPhysXPendingKillMaterial;
 ///////////////////// Utils /////////////////////
 
 

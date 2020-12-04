@@ -1,5 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+#pragma once
+
 // Reference: A Practical and Controllable Hair and Fur Model for Production Path Tracing.
 float3 HairAbsorptionToColor(float3 A, float B=0.3f)
 {
@@ -22,7 +24,7 @@ float3 HairColorToAbsorption(float3 C, float B = 0.3f)
 	return Pow2(log(C) / D);
 }
 
-// Reference: An Energy‐Conserving Hair Reflectance Model
+// Reference: An Energy-Conserving Hair Reflectance Model
 // Adapated for [0..1] range
 float3 GetHairColorFromMelanin(float InMelanin, float InRedness, float3 InDyeColor)
 {

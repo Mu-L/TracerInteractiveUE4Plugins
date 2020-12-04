@@ -3,9 +3,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "AssetData.h"
-#include "IAssetRegistry.h"
-#include "AssetRegistryState.h"
+#include "AssetRegistry/AssetData.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "AssetRegistry/AssetRegistryState.h"
 #include "PathTree.h"
 #include "PackageDependencyData.h"
 #include "AssetDataGatherer.h"
@@ -41,13 +41,24 @@ public:
 	virtual bool GetAssetsByTagValues(const TMultiMap<FName, FString>& AssetTagsAndValues, TArray<FAssetData>& OutAssetData) const override;
 	virtual bool GetAssets(const FARFilter& Filter, TArray<FAssetData>& OutAssetData) const override;
 	virtual bool EnumerateAssets(const FARFilter& Filter, TFunctionRef<bool(const FAssetData&)> Callback) const override;
+	virtual bool EnumerateAssets(const FARCompiledFilter& Filter, TFunctionRef<bool(const FAssetData&)> Callback) const override;
 	virtual FAssetData GetAssetByObjectPath( const FName ObjectPath, bool bIncludeOnlyOnDiskAssets = false ) const override;
 	virtual bool GetAllAssets(TArray<FAssetData>& OutAssetData, bool bIncludeOnlyOnDiskAssets = false) const override;
 	virtual bool EnumerateAllAssets(TFunctionRef<bool(const FAssetData&)> Callback, bool bIncludeOnlyOnDiskAssets = false) const override;
-	virtual bool GetDependencies(const FAssetIdentifier& AssetIdentifier, TArray<FAssetIdentifier>& OutDependencies, EAssetRegistryDependencyType::Type InDependencyType = EAssetRegistryDependencyType::All) const override;
-	virtual bool GetDependencies(FName PackageName, TArray<FName>& OutDependencies, EAssetRegistryDependencyType::Type InDependencyType = EAssetRegistryDependencyType::Packages) const override;
-	virtual bool GetReferencers(const FAssetIdentifier& AssetIdentifier, TArray<FAssetIdentifier>& OutReferencers, EAssetRegistryDependencyType::Type InReferenceType = EAssetRegistryDependencyType::All) const override;
-	virtual bool GetReferencers(FName PackageName, TArray<FName>& OutReferencers, EAssetRegistryDependencyType::Type InReferenceType = EAssetRegistryDependencyType::Packages) const override;
+	UE_DEPRECATED(4.26, "Use GetDependencies that takes a UE::AssetRegistry::EDependencyCategory instead")
+	virtual bool GetDependencies(const FAssetIdentifier& AssetIdentifier, TArray<FAssetIdentifier>& OutDependencies, EAssetRegistryDependencyType::Type InDependencyType) const override;
+	virtual bool GetDependencies(const FAssetIdentifier& AssetIdentifier, TArray<FAssetIdentifier>& OutDependencies, UE::AssetRegistry::EDependencyCategory Category = UE::AssetRegistry::EDependencyCategory::All, const UE::AssetRegistry::FDependencyQuery& Flags = UE::AssetRegistry::FDependencyQuery()) const override;
+	virtual bool GetDependencies(const FAssetIdentifier& AssetIdentifier, TArray<FAssetDependency>& OutDependencies, UE::AssetRegistry::EDependencyCategory Category = UE::AssetRegistry::EDependencyCategory::All, const UE::AssetRegistry::FDependencyQuery& Flags = UE::AssetRegistry::FDependencyQuery()) const override;
+	UE_DEPRECATED(4.26, "Use GetDependencies that takes a UE::AssetRegistry::EDependencyCategory instead")
+	virtual bool GetDependencies(FName PackageName, TArray<FName>& OutDependencies, EAssetRegistryDependencyType::Type InDependencyType) const override;
+	virtual bool GetDependencies(FName PackageName, TArray<FName>& OutDependencies, UE::AssetRegistry::EDependencyCategory Category = UE::AssetRegistry::EDependencyCategory::Package, const UE::AssetRegistry::FDependencyQuery& Flags = UE::AssetRegistry::FDependencyQuery()) const override;
+	UE_DEPRECATED(4.26, "Use GetReferencers that takes a UE::AssetRegistry::EDependencyCategory instead")
+	virtual bool GetReferencers(const FAssetIdentifier& AssetIdentifier, TArray<FAssetIdentifier>& OutReferencers, EAssetRegistryDependencyType::Type InReferenceType) const override;
+	virtual bool GetReferencers(const FAssetIdentifier& AssetIdentifier, TArray<FAssetIdentifier>& OutReferencers, UE::AssetRegistry::EDependencyCategory Category = UE::AssetRegistry::EDependencyCategory::All, const UE::AssetRegistry::FDependencyQuery& Flags = UE::AssetRegistry::FDependencyQuery()) const override;
+	virtual bool GetReferencers(const FAssetIdentifier& AssetIdentifier, TArray<FAssetDependency>& OutReferencers, UE::AssetRegistry::EDependencyCategory Category = UE::AssetRegistry::EDependencyCategory::All, const UE::AssetRegistry::FDependencyQuery& Flags = UE::AssetRegistry::FDependencyQuery()) const override;
+	UE_DEPRECATED(4.26, "Use GetReferencers that takes a UE::AssetRegistry::EDependencyCategory instead")
+	virtual bool GetReferencers(FName PackageName, TArray<FName>& OutReferencers, EAssetRegistryDependencyType::Type InReferenceType) const override;
+	virtual bool GetReferencers(FName PackageName, TArray<FName>& OutReferencers, UE::AssetRegistry::EDependencyCategory Category = UE::AssetRegistry::EDependencyCategory::Package, const UE::AssetRegistry::FDependencyQuery& Flags = UE::AssetRegistry::FDependencyQuery()) const override;
 	virtual const FAssetPackageData* GetAssetPackageData(FName PackageName) const override;
 	virtual FName GetRedirectedObjectPath(const FName ObjectPath) const override;
 	virtual void StripAssetRegistryKeyForObject(FName ObjectPath, FName Key) override;
@@ -61,7 +72,10 @@ public:
 	virtual void EnumerateSubPaths(const FName InBasePath, TFunctionRef<bool(FName)> Callback, bool bInRecurse) const override;
 	virtual void RunAssetsThroughFilter (TArray<FAssetData>& AssetDataList, const FARFilter& Filter) const override;
 	virtual void UseFilterToExcludeAssets(TArray<FAssetData>& AssetDataList, const FARFilter& Filter) const override;
+	virtual bool IsAssetIncludedByFilter(const FAssetData& AssetData, const FARCompiledFilter& Filter) const override;
+	virtual bool IsAssetExcludedByFilter(const FAssetData& AssetData, const FARCompiledFilter& Filter) const override;
 	virtual void ExpandRecursiveFilter(const FARFilter& InFilter, FARFilter& ExpandedFilter) const override;
+	virtual void CompileFilter(const FARFilter& InFilter, FARCompiledFilter& OutCompiledFilter) const override;
 	virtual void SetTemporaryCachingMode(bool bEnable) override;
 	virtual bool GetTemporaryCachingMode() const override;
 	virtual EAssetAvailability::Type GetAssetAvailability(const FAssetData& AssetData) const override;	
@@ -70,7 +84,10 @@ public:
 	virtual void PrioritizeAssetInstall(const FAssetData& AssetData) const override;
 	virtual bool AddPath(const FString& PathToAdd) override;
 	virtual bool RemovePath(const FString& PathToRemove) override;
+	virtual bool PathExists(const FString& PathToTest) const override;
+	virtual bool PathExists(const FName PathToTest) const override;
 	virtual void SearchAllAssets(bool bSynchronousSearch) override;
+	virtual void WaitForCompletion() override;
 	virtual void ScanPathsSynchronous(const TArray<FString>& InPaths, bool bForceRescan = false) override;
 	virtual void ScanFilesSynchronous(const TArray<FString>& InFilePaths, bool bForceRescan = false) override;
 	virtual void PrioritizeSearchPath(const FString& PathToPrioritize) override;
@@ -131,7 +148,7 @@ public:
 	static bool IsUsingWorldAssets() { return true; }
 
 protected:
-	virtual void SetManageReferences(const TMultiMap<FAssetIdentifier, FAssetIdentifier>& ManagerMap, bool bClearExisting, EAssetRegistryDependencyType::Type RecurseType, ShouldSetManagerPredicate ShouldSetManager) override;
+	virtual void SetManageReferences(const TMultiMap<FAssetIdentifier, FAssetIdentifier>& ManagerMap, bool bClearExisting, UE::AssetRegistry::EDependencyCategory RecurseType, TSet<FDependsNode*>& ExistingManagedNodes, ShouldSetManagerPredicate ShouldSetManager = nullptr) override;
 	virtual bool SetPrimaryAssetIdForObjectPath(const FName ObjectPath, FPrimaryAssetId PrimaryAssetId) override;
 	virtual const FAssetData* GetCachedAssetDataForObjectPath(const FName ObjectPath) const override;
 
@@ -140,8 +157,8 @@ private:
 	void InitRedirectors();
 
 	/** Internal handler for ScanPathsSynchronous */
-	void ScanPathsAndFilesSynchronous(const TArray<FString>& InPaths, const TArray<FString>& InSpecificFiles, bool bForceRescan, EAssetDataCacheMode AssetDataCacheMode);
-	void ScanPathsAndFilesSynchronous(const TArray<FString>& InPaths, const TArray<FString>& InSpecificFiles, bool bForceRescan, EAssetDataCacheMode AssetDataCacheMode, TArray<FName>* OutFoundAssets, TArray<FName>* OutFoundPaths);
+	void ScanPathsAndFilesSynchronous(const TArray<FString>& InPaths, const TArray<FString>& InSpecificFiles, const TArray<FString>& InBlacklistScanFilters, bool bForceRescan, EAssetDataCacheMode AssetDataCacheMode);
+	void ScanPathsAndFilesSynchronous(const TArray<FString>& InPaths, const TArray<FString>& InSpecificFiles, const TArray<FString>& InBlacklistScanFilters, bool bForceRescan, EAssetDataCacheMode AssetDataCacheMode, TArray<FName>* OutFoundAssets, TArray<FName>* OutFoundPaths);
 
 	/** Called every tick to when data is retrieved by the background asset search. If TickStartTime is < 0, the entire list of gathered assets will be cached. Also used in sychronous searches */
 	void AssetSearchDataGathered(const double TickStartTime, TBackgroundGatherResults<FAssetData*>& AssetResults);
@@ -232,7 +249,7 @@ private:
 	void GetSubClasses_Recursive(FName InClassName, TSet<FName>& SubClassNames, TSet<FName>& ProcessedClassNames, const TMap<FName, TSet<FName>>& ReverseInheritanceMap, const TSet<FName>& ExcludedClassNames) const;
 
 	/** Finds all class names of classes capable of generating new UClasses */
-	void CollectCodeGeneratorClasses();
+	void CollectCodeGeneratorClasses() const;
 
 	/** Updates TempCachedInheritanceMap from native classes */
 	void UpdateTemporaryCaches() const;
@@ -243,10 +260,43 @@ private:
 	/** This will always read the ini, public version may return cache */
 	void InitializeSerializationOptionsFromIni(FAssetRegistrySerializationOptions& Options, const FString& PlatformIniName) const;
 
+	/** Initialize the scan filters from the ini */
+	void InitializeBlacklistScanFiltersFromIni();
+
 	bool ResolveRedirect(const FString& InPackageName, FString& OutPackageName);
 
 	/** Internal helper which processes a given state and adds its contents to the current registry */
 	void CachePathsFromState(const FAssetRegistryState& InState);
+
+	enum class EARFilterMode : uint8
+	{
+		/** Include things that pass the filter; include everything if the filter is empty */
+		Inclusive,
+		/** Exclude things that pass the filter; exclude nothing if the filter is empty */
+		Exclusive,
+	};
+
+	/**
+	 * Given an asset data, say whether it would pass the filter based on the inclusion/exclusion mode used.
+	 *  - If an asset data passes a filter, then in inclusive mode it will return true, and in exclusive mode it will return false.
+	 *  - If an asset data fails a filter, then in inclusive mode it will return false, and in exclusive mode it will return true.
+	 *  - If the filter is empty, then in inclusive mode it will return true, and in exclusive mode it will return false.
+	 */
+	bool RunAssetThroughFilterImpl(const FAssetData& AssetData, const FARCompiledFilter& Filter, const EARFilterMode FilterMode) const;
+	bool RunAssetThroughFilterImpl_Unchecked(const FAssetData& AssetData, const FARCompiledFilter& Filter, const bool bPassFilterValue) const;
+
+	/**
+	 * Given an array of asset data, trim the items that fail the filter based on the inclusion/exclusion mode used.
+	 *  - In inclusive mode it will remove all assets that fail the filter, and in exclusive mode it will remove all assets that pass the filter.
+	 *  - If the filter is empty, then the array will be untouched.
+	 */
+	void RunAssetsThroughFilterImpl(TArray<FAssetData>& AssetDataList, const FARFilter& Filter, const EARFilterMode FilterMode) const;
+
+	/**
+	 * Add sub content blacklist filter for a new mount point
+	 * @param InMount The mount point
+	 */
+	void AddSubContentBlacklist(const FString& InMount);
 
 private:
 	
@@ -262,20 +312,40 @@ private:
 	/** The map of classes to their parents, only full for offline blueprints */
 	TMap<FName, FName> CachedBPInheritanceMap;
 
+	/** If true, search caching is enabled */
+	bool bIsTempCachingEnabled;
+
+	/** If true, search caching is enabled permanently */
+	bool bIsTempCachingAlwaysEnabled;
+
 	/** A temporary fully cached list including native classes */
-	TMap<FName, FName> TempCachedInheritanceMap;
+	mutable TMap<FName, FName> TempCachedInheritanceMap;
 
 	/** A reverse map of TempCachedInheritanceMap, only kept during temp caching */
-	TMap<FName, TSet<FName>> TempReverseInheritanceMap;
+	mutable TMap<FName, TSet<FName>> TempReverseInheritanceMap;
 
-	/** If true, search caching is enabled */
-	bool bTempCachingEnabled;
+	/** If true, temp caching has been computed and is valid.
+	    Set this to false when changing something that might invalidate the cache so it gets recomputed on-demand.
+	*/
+	mutable bool bIsTempCachingUpToDate;
+
+	/** Contains a snapshot of GetRegisteredClassesVersionNumber() at the time of caching so the cache can
+	    be invalidated whenever registered classes have changed.
+	*/
+	mutable uint64 TempCachingRegisteredClassesVersionNumber;
+	mutable uint64 ClassGeneratorNamesRegisteredClassesVersionNumber;
 
 	/** If true, will cache AssetData loaded from in memory assets back into the disk cache */
 	bool bUpdateDiskCacheAfterLoad;
 
 	/** The tree of known cached paths that assets may reside within */
 	FPathTree CachedPathTree;
+
+	/** Set of blacklist paths to filter during full asset scans. */
+	TArray<FString> BlacklistScanFilters;
+
+	/** List of sub content path to filter on every mount during full asset scans. */
+	TArray<FString> BlacklistContentSubPaths;
 
 	/** Async task that gathers asset information from disk */
 	TSharedPtr< class FAssetDataGatherer > BackgroundAssetSearch;
@@ -334,7 +404,7 @@ private:
 	TSet<FString> SynchronouslyScannedPathsAndFiles;
 
 	/** List of all class names derived from Blueprint (including Blueprint itself) */
-	TSet<FName> ClassGeneratorNames;
+	mutable TSet<FName> ClassGeneratorNames;
 
 	/** Handles to all registered OnDirectoryChanged delegates */
 	TMap<FString, FDelegateHandle> OnDirectoryChangedDelegateHandles;

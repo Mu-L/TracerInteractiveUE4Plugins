@@ -2,94 +2,166 @@
 
 #include "Evaluation/MovieSceneEvaluationField.h"
 #include "Evaluation/MovieSceneEvaluationTemplateInstance.h"
-#include "Evaluation/MovieSceneSequenceTemplateStore.h"
 #include "Evaluation/MovieSceneEvaluationTree.h"
-#include "Compilation/MovieSceneCompiler.h"
 #include "MovieSceneCommonHelpers.h"
 #include "MovieSceneTimeHelpers.h"
 #include "Algo/Sort.h"
+#include "Algo/BinarySearch.h"
+#include "Algo/IndexOf.h"
+
+#include "EntitySystem/IMovieSceneEntityProvider.h"
+#include "EntitySystem/MovieSceneEntityIDs.h"
+#include "EntitySystem/MovieSceneEntityManager.h"
 
 #include "MovieSceneSequence.h"
 
-TRange<int32> FMovieSceneEvaluationField::ConditionallyCompileRange(const TRange<FFrameNumber>& InRange, UMovieSceneSequence* InSequence, IMovieSceneSequenceTemplateStore& TemplateStore)
+
+FMovieSceneEntityComponentFieldBuilder::FMovieSceneEntityComponentFieldBuilder(FMovieSceneEntityComponentField* InField)
+	: Field(InField)
+	, SharedMetaDataIndex(Field->SharedMetaData.Emplace())
+{}
+
+FMovieSceneEntityComponentFieldBuilder::~FMovieSceneEntityComponentFieldBuilder()
 {
-	check(InSequence);
-
-	// First off, attempt to find the evaluation group in the existing evaluation field data from the template
-	TRange<int32> OverlappingFieldEntries = OverlapRange(InRange);
-	int32 EvalFieldStartIndex = OverlappingFieldEntries.GetLowerBoundValue();
-	int32 EvalFieldEndIndex   = OverlappingFieldEntries.GetUpperBoundValue();
-
-	bool bIsDirty = OverlappingFieldEntries.IsEmpty();
-
-	const FMovieSceneSequenceHierarchy& RootHierarchy = TemplateStore.AccessTemplate(*InSequence).Hierarchy;
-
-	TArray<TRange<FFrameNumber>, TInlineAllocator<8>> RangesToInvalidate;
-	for (int32 Index = EvalFieldStartIndex; Index < EvalFieldEndIndex; ++Index)
+	const bool bContainsValidEntities = Algo::AnyOf(KeyToFieldIndex, [](FKeyToIndex In) { return In.FieldIndex != INDEX_NONE; });
+	if (!bContainsValidEntities)
 	{
-		const TRange<FFrameNumber>& ThisRange = Ranges[Index].Value;
-
-		// Check for gaps between the entries.
-		if (Index == EvalFieldStartIndex)
+		if (ensureMsgf(Field->SharedMetaData.Num() == SharedMetaDataIndex+1, TEXT("Additional shared meta-data has been added since this builder was constructed, recursive builders are not supported")))
 		{
-			// If the first overlapping range starts after InRange's lower bound, there must be a gap before it
-			if (TRangeBound<FFrameNumber>::MinLower(ThisRange.GetLowerBound(), InRange.GetLowerBound()) != ThisRange.GetLowerBound())
-			{
-				bIsDirty = true;
-			}
-		}
-		if (Index == EvalFieldEndIndex - 1)
-		{
-			// If the last overlapping range ends before InRange's upper bound, there must be a gap after it
-			if (TRangeBound<FFrameNumber>::MaxUpper(ThisRange.GetUpperBound(), InRange.GetUpperBound()) != ThisRange.GetUpperBound())
-			{
-				bIsDirty = true;
-			}
-		}
-
-		// If adjacent ranges are not contiguous, we have a gap
-		if (Index > EvalFieldStartIndex && Ranges.IsValidIndex(Index-1) && !Ranges[Index-1].Value.Adjoins(ThisRange))
-		{
-			bIsDirty = true;
-		}
-
-		// Verify that this field entry is still valid (all its cached signatures are still the same)
-		TRange<FFrameNumber> InvalidatedSubSequenceRange = TRange<FFrameNumber>::Empty();
-		if (MetaData[Index].IsDirty(RootHierarchy, TemplateStore, &InvalidatedSubSequenceRange))
-		{
-			bIsDirty = true;
-
-			if (!InvalidatedSubSequenceRange.IsEmpty())
-			{
-				// Invalidate this evaluation field
-				RangesToInvalidate.Add(InvalidatedSubSequenceRange);
-			}
+			Field->SharedMetaData.RemoveAt(SharedMetaDataIndex, 1, false);
 		}
 	}
+}
 
-	// Invalidate any areas in the evaluation field that are now out of date
-	for (const TRange<FFrameNumber>& Range : RangesToInvalidate)
+FMovieSceneEvaluationFieldSharedEntityMetaData& FMovieSceneEntityComponentFieldBuilder::GetSharedMetaData()
+{
+	return Field->SharedMetaData[SharedMetaDataIndex];
+}
+
+int32 FMovieSceneEntityComponentFieldBuilder::FindOrAddEntity(UObject* EntityOwner, uint32 EntityID)
+{
+	FMovieSceneEvaluationFieldEntityKey Key = { EntityOwner, EntityID };
+
+	int32 LocalIndex = Algo::IndexOfBy(KeyToFieldIndex, Key, &FKeyToIndex::Key);
+	if (LocalIndex != INDEX_NONE)
 	{
-		Invalidate(Range);
+		return LocalIndex;
 	}
 
-	if (bIsDirty)
-	{
-		// We need to compile an entry in the evaluation field
-		static bool bFullCompile = false;
- 		if (bFullCompile)
-		{
-			FMovieSceneCompiler::Compile(*InSequence, TemplateStore);
-		}
-		else
-		{
-			FMovieSceneCompiler::CompileRange(InRange, *InSequence, TemplateStore);
-		}
+	return KeyToFieldIndex.Add(FKeyToIndex{ Key, INDEX_NONE });
+}
 
-		return OverlapRange(InRange);
+int32 FMovieSceneEntityComponentFieldBuilder::AddMetaData(const FMovieSceneEvaluationFieldEntityMetaData& InMetaData)
+{
+	if (InMetaData.IsRedundant())
+	{
+		return INDEX_NONE;
 	}
 
-	return OverlappingFieldEntries;
+	int32 LocalIndex = Algo::IndexOfBy(MetaDataToFieldIndex, InMetaData, &FMetaDataToIndex::MetaData);
+	if (LocalIndex == INDEX_NONE)
+	{
+		LocalIndex = MetaDataToFieldIndex.Add(FMetaDataToIndex{ InMetaData, INDEX_NONE });
+	}
+
+	return LocalIndex;
+}
+
+void FMovieSceneEntityComponentFieldBuilder::AddPersistentEntity(const TRange<FFrameNumber>& Range, UObject* EntityOwner, uint32 EntityID, int32 LocalMetaDataIndex)
+{
+	AddPersistentEntity(Range, FindOrAddEntity(EntityOwner, EntityID), LocalMetaDataIndex);
+}
+
+void FMovieSceneEntityComponentFieldBuilder::AddPersistentEntity(const TRange<FFrameNumber>& Range, int32 LocalIndex, int32 LocalMetaDataIndex)
+{
+	FMovieSceneEvaluationFieldEntityTree::FEntityAndMetaDataIndex Data = {
+		LocalEntityIndexToFieldIndex(LocalIndex),
+		LocalMetaDataIndexToFieldIndex(LocalMetaDataIndex)
+	};
+	Field->PersistentEntityTree.SerializedData.AddUnique(Range, Data);
+}
+
+void FMovieSceneEntityComponentFieldBuilder::AddOneShotEntity(const TRange<FFrameNumber>& OneShotRange, UObject* EntityOwner, uint32 EntityID, int32 LocalMetaDataIndex)
+{
+	AddOneShotEntity(OneShotRange, FindOrAddEntity(EntityOwner, EntityID), LocalMetaDataIndex);
+}
+
+void FMovieSceneEntityComponentFieldBuilder::AddOneShotEntity(const TRange<FFrameNumber>& OneShotRange, int32 LocalIndex, int32 LocalMetaDataIndex)
+{
+	FMovieSceneEvaluationFieldEntityTree::FEntityAndMetaDataIndex Data = {
+		LocalEntityIndexToFieldIndex(LocalIndex),
+		LocalMetaDataIndexToFieldIndex(LocalMetaDataIndex)
+	};
+
+	Field->OneShotEntityTree.SerializedData.AddUnique(OneShotRange, Data);
+}
+
+int32 FMovieSceneEntityComponentFieldBuilder::LocalEntityIndexToFieldIndex(int32 LocalIndex)
+{
+	checkf(KeyToFieldIndex.IsValidIndex(LocalIndex), TEXT("Invalid local entity index specified"));
+
+	FKeyToIndex& KeyToIndex = KeyToFieldIndex[LocalIndex];
+	if (KeyToIndex.FieldIndex == INDEX_NONE)
+	{
+		KeyToIndex.FieldIndex = Field->Entities.Emplace(FMovieSceneEvaluationFieldEntity{ KeyToIndex.Key, SharedMetaDataIndex });
+	}
+
+	return KeyToIndex.FieldIndex;
+}
+
+int32 FMovieSceneEntityComponentFieldBuilder::LocalMetaDataIndexToFieldIndex(int32 LocalIndex)
+{
+	if (LocalIndex == INDEX_NONE)
+	{
+		return INDEX_NONE;
+	}
+
+	checkf(MetaDataToFieldIndex.IsValidIndex(LocalIndex), TEXT("Invalid local meta-data index specified"));
+
+	FMetaDataToIndex& MetaDataToIndex = MetaDataToFieldIndex[LocalIndex];
+	if (MetaDataToIndex.FieldIndex == INDEX_NONE)
+	{
+		MetaDataToIndex.FieldIndex = Field->EntityMetaData.Emplace(MetaDataToIndex.MetaData);
+	}
+
+	return MetaDataToIndex.FieldIndex;
+}
+
+void FMovieSceneEntityComponentField::QueryPersistentEntities(FFrameNumber QueryTime, TRange<FFrameNumber>& OutRange, FMovieSceneEvaluationFieldEntitySet& OutEntities) const
+{
+	FMovieSceneEvaluationTreeRangeIterator Iterator = PersistentEntityTree.SerializedData.IterateFromTime(QueryTime);
+	check(Iterator);
+
+	OutRange = Iterator.Range();
+	for (FMovieSceneEvaluationFieldEntityTree::FEntityAndMetaDataIndex Pair : PersistentEntityTree.SerializedData.GetAllData(Iterator.Node()))
+	{
+		OutEntities.Add(FMovieSceneEvaluationFieldEntityQuery{
+			GetEntity(Pair.EntityIndex),
+			Pair.MetaDataIndex
+		});
+	}
+}
+
+bool FMovieSceneEntityComponentField::HasAnyOneShotEntities() const
+{
+	return !OneShotEntityTree.SerializedData.IsEmpty();
+}
+
+void FMovieSceneEntityComponentField::QueryOneShotEntities(const TRange<FFrameNumber>& QueryRange, FMovieSceneEvaluationFieldEntitySet& OutEntities) const
+{
+	FMovieSceneEvaluationTreeRangeIterator Iterator = OneShotEntityTree.SerializedData.IterateFromLowerBound(QueryRange.GetLowerBound());
+	check(Iterator);
+
+	for ( ; Iterator && QueryRange.Overlaps(Iterator.Range()); ++Iterator )
+	{
+		for (FMovieSceneEvaluationFieldEntityTree::FEntityAndMetaDataIndex Pair : OneShotEntityTree.SerializedData.GetAllData(Iterator.Node()))
+		{
+			OutEntities.Add(FMovieSceneEvaluationFieldEntityQuery{
+				GetEntity(Pair.EntityIndex),
+				Pair.MetaDataIndex,
+			});
+		}
+	}
 }
 
 int32 FMovieSceneEvaluationField::GetSegmentFromTime(FFrameNumber Time) const
@@ -325,59 +397,4 @@ void FMovieSceneEvaluationMetaData::DiffEntities(const FMovieSceneEvaluationMeta
 
 		Algo::SortBy(*NewKeys, &FMovieSceneOrderedEvaluationKey::SetupIndex);
 	}
-}
-
-bool FMovieSceneEvaluationMetaData::IsDirty(const FMovieSceneSequenceHierarchy& RootHierarchy, IMovieSceneSequenceTemplateStore& TemplateStore, TRange<FFrameNumber>* OutSubRangeToInvalidate, TSet<UMovieSceneSequence*>* OutDirtySequences) const
-{
-	bool bDirty = false;
-
-	for (const TTuple<FMovieSceneSequenceID, uint32>& Pair : SubTemplateSerialNumbers)
-	{
-		// Sequence IDs at this point are relative to the root override template
-		const FMovieSceneSubSequenceData* SubData = RootHierarchy.FindSubData(Pair.Key);
-		UMovieSceneSequence* SubSequence = SubData ? SubData->GetSequence() : nullptr;
-
-		bool bThisSequenceIsDirty = true;
-		if (SubSequence)
-		{
-			FMovieSceneEvaluationTemplate& Template = TemplateStore.AccessTemplate(*SubSequence);
-
-			bThisSequenceIsDirty = Template.TemplateSerialNumber.GetValue() != Pair.Value || Template.SequenceSignature != SubSequence->GetSignature();
-
-			if (bThisSequenceIsDirty && OutDirtySequences)
-			{
-				OutDirtySequences->Add(SubSequence);
-			}
-		}
-
-		if (bThisSequenceIsDirty)
-		{
-			bDirty = true;
-
-			if (OutSubRangeToInvalidate)
-			{
-				if (SubData)
-				{
-					if (!SubData->RootToSequenceTransform.IsWarping())
-					{
-						TRange<FFrameNumber> FullSubPlayRange = TRange<FFrameNumber>::Hull(TRange<FFrameNumber>::Hull(SubData->PreRollRange.Value, SubData->PlayRange.Value), SubData->PostRollRange.Value);
-						TRange<FFrameNumber> DirtyRange = FullSubPlayRange * SubData->RootToSequenceTransform.InverseLinearOnly();
-						*OutSubRangeToInvalidate = TRange<FFrameNumber>::Hull(*OutSubRangeToInvalidate, DirtyRange);
-					}
-					else
-					{
-						TRange<FFrameNumber> DirtyRange = TRange<FFrameNumber>::All();
-						*OutSubRangeToInvalidate = TRange<FFrameNumber>::Hull(*OutSubRangeToInvalidate, DirtyRange);
-					}
-				}
-				else
-				{
-					TRange<FFrameNumber> DirtyRange = TRange<FFrameNumber>::All();
-					*OutSubRangeToInvalidate = TRange<FFrameNumber>::Hull(*OutSubRangeToInvalidate, DirtyRange);
-				}
-			}
-		}
-	}
-
-	return bDirty;
 }

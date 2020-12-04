@@ -17,12 +17,11 @@ namespace UnrealBuildTool.Rules
                     "RenderCore",
                     "RHI",
 					"Chaos",
-					"ChaosSolvers",
 					"ChaosSolverEngine",
-                    "FieldSystemCore",
-                    "FieldSystemSimulationCore"
                 }
                 );
-        }
+
+			PrivateDefinitions.Add("CHAOS_INCLUDE_LEVEL_1=1");
+		}
 	}
 }

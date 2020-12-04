@@ -20,14 +20,14 @@ FNavigationDataHandler::FNavigationDataHandler(FNavigationOctreeController& InOc
 		: OctreeController(InOctreeController), DirtyAreasController(InDirtyAreasController)
 {}
 
-void FNavigationDataHandler::RemoveNavOctreeElementId(const FOctreeElementId& ElementId, int32 UpdateFlags)
+void FNavigationDataHandler::RemoveNavOctreeElementId(const FOctreeElementId2& ElementId, int32 UpdateFlags)
 {
 	if (ensure(OctreeController.IsValidElement(ElementId)))
 	{
 		const FNavigationOctreeElement& ElementData = OctreeController.NavOctree->GetElementById(ElementId);
 		const int32 DirtyFlag = GetDirtyFlagHelper(UpdateFlags, ElementData.Data->GetDirtyFlag());
 		// mark area occupied by given actor as dirty
-		DirtyAreasController.AddArea(ElementData.Bounds.GetBox(), DirtyFlag);
+		DirtyAreasController.AddArea(ElementData.Bounds.GetBox(), DirtyFlag, [&ElementData] { return ElementData.Data->SourceObject.Get(); });
 		OctreeController.NavOctree->RemoveNode(ElementId);
 	}
 }
@@ -96,7 +96,7 @@ void FNavigationDataHandler::AddElementToNavOctree(const FNavigationDirtyElement
 	{
 		if (DirtyElement.bHasPrevData)
 		{
-			DirtyAreasController.AddArea(DirtyElement.PrevBounds, DirtyElement.PrevFlags);
+			DirtyAreasController.AddArea(DirtyElement.PrevBounds, DirtyElement.PrevFlags, [&DirtyElement] { return DirtyElement.Owner.Get(); });
 		}
 
 		return;
@@ -116,7 +116,7 @@ void FNavigationDataHandler::AddElementToNavOctree(const FNavigationDirtyElement
 	{
 		// check if parent node is waiting in queue
 		const FSetElementId ParentRequestId = OctreeController.PendingOctreeUpdates.FindId(FNavigationDirtyElement(NavigationParent));
-		const FOctreeElementId* ParentId = OctreeController.GetObjectsNavOctreeId(*NavigationParent);
+		const FOctreeElementId2* ParentId = OctreeController.GetObjectsNavOctreeId(*NavigationParent);
 		if (ParentRequestId.IsValidId() && ParentId == nullptr)
 		{
 			FNavigationDirtyElement& ParentNode = OctreeController.PendingOctreeUpdates[ParentRequestId];
@@ -126,7 +126,7 @@ void FNavigationDataHandler::AddElementToNavOctree(const FNavigationDirtyElement
 			ParentNode.bInvalidRequest = true;
 		}
 
-		const FOctreeElementId* ElementId = ParentId ? ParentId : OctreeController.GetObjectsNavOctreeId(*NavigationParent);
+		const FOctreeElementId2* ElementId = ParentId ? ParentId : OctreeController.GetObjectsNavOctreeId(*NavigationParent);
 		if (ElementId && ensure(OctreeController.IsValidElement(*ElementId)))
 		{
 			UE_LOG(LogNavOctree, Log, TEXT("ADD %s to %s"), *GetNameSafe(ElementOwner), *GetNameSafe(NavigationParent));
@@ -143,13 +143,10 @@ void FNavigationDataHandler::AddElementToNavOctree(const FNavigationDirtyElement
 		OctreeController.NavOctree->AddNode(ElementOwner, DirtyElement.NavInterface, ElementBounds, GeneratedData);
 	}
 
-	const FBox BBox = GeneratedData.Bounds.GetBox();
-	const bool bValidBBox = BBox.IsValid && !BBox.GetSize().IsNearlyZero();
-
-	if (bValidBBox && !GeneratedData.IsEmpty())
+	if (!GeneratedData.IsEmpty())
 	{
 		const int32 DirtyFlag = DirtyElement.FlagsOverride ? DirtyElement.FlagsOverride : GeneratedData.Data->GetDirtyFlag();
-		DirtyAreasController.AddArea(BBox, DirtyFlag);
+		DirtyAreasController.AddArea(GeneratedData.Bounds.GetBox(), DirtyFlag, [&ElementOwner] { return ElementOwner; });
 	}
 }
 
@@ -171,7 +168,7 @@ bool FNavigationDataHandler::UnregisterNavOctreeElement(UObject& ElementOwner, I
 	}
 
 	bool bUnregistered = false;
-	const FOctreeElementId* ElementId = OctreeController.GetObjectsNavOctreeId(ElementOwner);
+	const FOctreeElementId2* ElementId = OctreeController.GetObjectsNavOctreeId(ElementOwner);
 	UE_LOG(LogNavOctree, Log, TEXT("UNREG %s %s"), *ElementOwner.GetName(), ElementId ? TEXT("[exists]") : TEXT("[does\'t exist]"));
 
 	if (ElementId != nullptr)
@@ -332,7 +329,7 @@ void FNavigationDataHandler::UpdateNavOctreeParentChain(UObject& ElementOwner, b
 
 bool FNavigationDataHandler::UpdateNavOctreeElementBounds(UActorComponent& Comp, const FBox& NewBounds, const FBox& DirtyArea)
 {
-	const FOctreeElementId* ElementId = OctreeController.GetObjectsNavOctreeId(Comp);
+	const FOctreeElementId2* ElementId = OctreeController.GetObjectsNavOctreeId(Comp);
 	if (ElementId != nullptr && ensure(OctreeController.IsValidElement(*ElementId)))
 	{
 		OctreeController.NavOctree->UpdateNode(*ElementId, NewBounds);
@@ -344,8 +341,8 @@ bool FNavigationDataHandler::UpdateNavOctreeElementBounds(UActorComponent& Comp,
 			ElementId = OctreeController.GetObjectsNavOctreeId(Comp);
 			if (ElementId != nullptr && ensure(OctreeController.IsValidElement(*ElementId)))
 			{
-				FNavigationOctreeElement& ElementData = OctreeController.NavOctree->GetElementById(*ElementId);
-				DirtyAreasController.AddArea(DirtyArea, ElementData.Data->GetDirtyFlag());
+				const FNavigationOctreeElement& ElementData = OctreeController.NavOctree->GetElementById(*ElementId);
+				DirtyAreasController.AddArea(DirtyArea, ElementData.Data->GetDirtyFlag(), [&Comp] { return &Comp; });
 			}
 		}
 
@@ -363,14 +360,13 @@ void FNavigationDataHandler::FindElementsInNavOctree(const FBox& QueryBox, const
 		return;
 	}
 
-	for (FNavigationOctree::TConstElementBoxIterator<> It(*OctreeController.NavOctree, QueryBox); It.HasPendingElements(); It.Advance())
+	OctreeController.NavOctree->FindElementsWithBoundsTest(QueryBox, [&Elements, &Filter](const FNavigationOctreeElement& Element)
 	{
-		const FNavigationOctreeElement& Element = It.GetCurrentElement();
 		if (Element.IsMatchingFilter(Filter))
 		{
 			Elements.Add(Element);
 		}
-	}
+	});
 }
 
 bool FNavigationDataHandler::ReplaceAreaInOctreeData(const UObject& Object, TSubclassOf<UNavArea> OldArea, TSubclassOf<UNavArea> NewArea, bool bReplaceChildClasses)
@@ -424,7 +420,7 @@ void FNavigationDataHandler::AddLevelCollisionToOctree(ULevel& Level)
 		OctreeController.NavOctree->GetNavGeometryStoringMode() == FNavigationOctree::StoreNavGeometry)
 	{
 		const TArray<FVector>* LevelGeom = Level.GetStaticNavigableGeometry();
-		const FOctreeElementId* ElementId = OctreeController.GetObjectsNavOctreeId(Level);
+		const FOctreeElementId2* ElementId = OctreeController.GetObjectsNavOctreeId(Level);
 
 		if (!ElementId && LevelGeom && LevelGeom->Num() > 0)
 		{
@@ -435,7 +431,7 @@ void FNavigationDataHandler::AddLevelCollisionToOctree(ULevel& Level)
 			if (!Bounds.GetExtent().IsNearlyZero())
 			{
 				OctreeController.NavOctree->AddNode(&Level, nullptr, Bounds, BSPElem);
-				DirtyAreasController.AddArea(Bounds, ENavigationDirtyFlag::All);
+				DirtyAreasController.AddArea(Bounds, ENavigationDirtyFlag::All, [&Level] { return &Level; });
 
 				UE_LOG(LogNavOctree, Log, TEXT("ADD %s"), *Level.GetName());
 			}
@@ -448,7 +444,7 @@ void FNavigationDataHandler::RemoveLevelCollisionFromOctree(ULevel& Level)
 {
 	if (OctreeController.NavOctree.IsValid())
 	{
-		const FOctreeElementId* ElementId = OctreeController.GetObjectsNavOctreeId(Level);
+		const FOctreeElementId2* ElementId = OctreeController.GetObjectsNavOctreeId(Level);
 		UE_LOG(LogNavOctree, Log, TEXT("UNREG %s %s"), *Level.GetName(), ElementId ? TEXT("[exists]") : TEXT(""));
 
 		if (ElementId != nullptr)
@@ -456,8 +452,8 @@ void FNavigationDataHandler::RemoveLevelCollisionFromOctree(ULevel& Level)
 			if (ensure(OctreeController.IsValidElement(*ElementId)))
 			{
 				// mark area occupied by given actor as dirty
-				FNavigationOctreeElement& ElementData = OctreeController.NavOctree->GetElementById(*ElementId);
-				DirtyAreasController.AddArea(ElementData.Bounds.GetBox(), ENavigationDirtyFlag::All);
+				const FNavigationOctreeElement& ElementData = OctreeController.NavOctree->GetElementById(*ElementId);
+				DirtyAreasController.AddArea(ElementData.Bounds.GetBox(), ENavigationDirtyFlag::All, [&Level] { return &Level; });
 			}
 
 			OctreeController.NavOctree->RemoveNode(*ElementId);
@@ -502,4 +498,31 @@ void FNavigationDataHandler::ProcessPendingOctreeUpdates()
 		}
 	}
 	OctreeController.PendingOctreeUpdates.Empty(32);
+}
+
+void FNavigationDataHandler::DemandLazyDataGathering(FNavigationRelevantData& ElementData)
+{
+	// Do the lazy gathering on the element
+	OctreeController.NavOctree->DemandLazyDataGathering(ElementData);
+
+    // Check if any child asked for some lazy gathering
+	if (ElementData.IsPendingChildLazyModifiersGathering())
+	{
+		TArray<FWeakObjectPtr> ChildNodes;
+		OctreeController.OctreeChildNodesMap.MultiFind(ElementData.GetOwner(), ChildNodes);
+
+		for (FWeakObjectPtr& ChildNode : ChildNodes)
+		{
+			if (ChildNode.IsValid())
+			{
+				UObject* ChildNodeOb = ChildNode.Get();
+				INavRelevantInterface* ChildNavInterface = ChildNodeOb ? Cast<INavRelevantInterface>(ChildNodeOb) : nullptr;
+				if (ChildNavInterface)
+				{
+					OctreeController.NavOctree->DemandChildLazyDataGathering(ElementData, *ChildNavInterface);
+				}
+			}
+		}
+		ElementData.bPendingChildLazyModifiersGathering = false;
+	}
 }

@@ -8,6 +8,59 @@
 #include "Serialization/MemoryWriter.h"
 
 /**
+ * Takes an input string and escapes it so it can be written as a valid Json string. Also adds the quotes.
+ * Appends to a given string-like object to avoid reallocations.
+ * String-like object must support operator+=(const TCHAR*) and operation+=(TCHAR)
+ *
+ * @param AppendTo the string to append to.
+ * @param StringVal the string to escape
+ * @return the AppendTo string for convenience.
+ */
+template<typename StringType>
+inline StringType& AppendEscapeJsonString(StringType& AppendTo, const FString& StringVal)
+{
+	AppendTo += TEXT("\"");
+	for (const TCHAR* Char = *StringVal; *Char != TCHAR('\0'); ++Char)
+	{
+		switch (*Char)
+		{
+		case TCHAR('\\'): AppendTo += TEXT("\\\\"); break;
+		case TCHAR('\n'): AppendTo += TEXT("\\n"); break;
+		case TCHAR('\t'): AppendTo += TEXT("\\t"); break;
+		case TCHAR('\b'): AppendTo += TEXT("\\b"); break;
+		case TCHAR('\f'): AppendTo += TEXT("\\f"); break;
+		case TCHAR('\r'): AppendTo += TEXT("\\r"); break;
+		case TCHAR('\"'): AppendTo += TEXT("\\\""); break;
+		default:
+			// Must escape control characters
+			if (*Char >= TCHAR(32))
+			{
+				AppendTo += *Char;
+			}
+			else
+			{
+				AppendTo.Appendf(TEXT("\\u%04x"), *Char);
+			}
+		}
+	}
+	AppendTo += TEXT("\"");
+
+	return AppendTo;
+}
+
+/**
+ * Takes an input string and escapes it so it can be written as a valid Json string. Also adds the quotes.
+ *
+ * @param StringVal the string to escape
+ * @return the given string, escaped to produce a valid Json string.
+ */
+inline FString EscapeJsonString(const FString& StringVal)
+{
+	FString Result;
+	return AppendEscapeJsonString(Result, StringVal);
+}
+
+/**
  * Template for Json writers.
  *
  * @param CharType The type of characters to print, i.e. TCHAR or ANSICHAR.
@@ -28,6 +81,11 @@ public:
 	virtual ~TJsonWriter() { }
 
 	FORCEINLINE int32 GetIndentLevel() const { return IndentLevel; }
+
+	bool CanWriteObjectStart() const
+	{
+		return CanWriteObjectWithoutIdentifier();
+	}
 
 	void WriteObjectStart()
 	{
@@ -339,32 +397,7 @@ protected:
 
 	virtual void WriteStringValue( const FString& String )
 	{
-		FString OutString;
-		OutString += TEXT("\"");
-		for (const TCHAR* Char = *String; *Char != TCHAR('\0'); ++Char)
-		{
-			switch (*Char)
-			{
-			case TCHAR('\\'): OutString += TEXT("\\\\"); break;
-			case TCHAR('\n'): OutString += TEXT("\\n"); break;
-			case TCHAR('\t'): OutString += TEXT("\\t"); break;
-			case TCHAR('\b'): OutString += TEXT("\\b"); break;
-			case TCHAR('\f'): OutString += TEXT("\\f"); break;
-			case TCHAR('\r'): OutString += TEXT("\\r"); break;
-			case TCHAR('\"'): OutString += TEXT("\\\""); break;
-			default: 
-				// Must escape control characters
-				if (*Char >= TCHAR(32))
-				{
-					OutString += *Char;
-				}
-				else
-				{
-					OutString += FString::Printf(TEXT("\\u%04x"), *Char);
-				}
-			}
-		}
-		OutString += TEXT("\"");
+		FString OutString = EscapeJsonString(String);
 		PrintPolicy::WriteString(Stream, OutString);
 	}
 

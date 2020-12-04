@@ -14,8 +14,42 @@
 #include "Algo/IsSorted.h"
 #include "Algo/Sort.h"
 #include "Algo/Transform.h"
+#include "Algo/IndexOf.h"
 #include "Algo/LevenshteinDistance.h"
 #include "Templates/Greater.h"
+
+namespace UE
+{
+namespace Impl
+{
+
+	struct FFixedTestRangeUnsigned
+	{
+		using SizeType = uint8;
+
+		FFixedTestRangeUnsigned()
+		{
+			uint8 Count = 0;
+			for (uint8& N : Numbers)
+			{
+				N = Count++;
+			}
+		}
+		uint8 Num() const
+		{
+			return UE_ARRAY_COUNT(Numbers);
+		}
+		const uint8* GetData() const
+		{
+			return Numbers;
+		}
+		uint8 Numbers[255];
+	};
+
+} // namespace Impl
+} // namespace UE
+
+template<> struct TIsContiguousContainer<UE::Impl::FFixedTestRangeUnsigned>{ enum { Value = true }; };
 
 class FAlgosTestBase : public FAutomationTestBase
 {
@@ -33,6 +67,10 @@ public:
 		{
 		}
 
+		friend bool operator==(const FTestData& A, const FTestData&B)
+		{
+			return A.Name == B.Name && A.Age == B.Age && A.bRetired == B.bRetired;
+		}
 		bool IsTeenager() const
 		{
 			return Age >= 13 && Age <= 19;
@@ -127,25 +165,25 @@ public:
 
 		// empty array
 		{
-			Algo::Transform(TestData, TestArray, [](int i) { return FMath::DegreesToRadians(i); });
+			Algo::Transform(TestData, TestArray, [](int i) { return FMath::DegreesToRadians((float)i); });
 			check(TestArray.Num() == NumTestObjects);
 			for (int i = 0; i < TestArray.Num(); ++i)
 			{
-				check(TestArray[i] == FMath::DegreesToRadians(TestData[i]));
+				check(TestArray[i] == FMath::DegreesToRadians((float)TestData[i]));
 			}
 		}
 
 		// existing data
 		{
-			Algo::Transform(TestData2, TestArray, [](int i) { return FMath::DegreesToRadians(i); });
+			Algo::Transform(TestData2, TestArray, [](int i) { return FMath::DegreesToRadians((float)i); });
 			check(TestArray.Num() == NumTestObjects * 2);
 			for (int i = 0; i < NumTestObjects; ++i)
 			{
-				check(TestArray[i] == FMath::DegreesToRadians(TestData[i]));
+				check(TestArray[i] == FMath::DegreesToRadians((float)TestData[i]));
 			}
 			for (int i = 0; i < NumTestObjects; ++i)
 			{
-				check(TestArray[i + NumTestObjects] == FMath::DegreesToRadians(TestData2[i]));
+				check(TestArray[i + NumTestObjects] == FMath::DegreesToRadians((float)TestData2[i]));
 			}
 		}
 
@@ -203,13 +241,13 @@ public:
 
 		// empty array
 		{
-			Algo::TransformIf(TestData, TestArray, [](int i) { return (i % 2) == 0; }, [](int i) { return FMath::DegreesToRadians(i); });
+			Algo::TransformIf(TestData, TestArray, [](int i) { return (i % 2) == 0; }, [](int i) { return FMath::DegreesToRadians((float)i); });
 			int j = 0;
 			for (int i = 0; i < NumTestObjects; ++i)
 			{
 				if (TestData[i] % 2 == 0)
 				{
-					check(TestArray[j] == FMath::DegreesToRadians(TestData[i]));
+					check(TestArray[j] == FMath::DegreesToRadians((float)TestData[i]));
 					++j;
 				}
 			}
@@ -217,13 +255,13 @@ public:
 
 		// existing data
 		{
-			Algo::TransformIf(TestData2, TestArray, [](int i) { return (i % 2) == 0; }, [](int i) { return FMath::DegreesToRadians(i); });
+			Algo::TransformIf(TestData2, TestArray, [](int i) { return (i % 2) == 0; }, [](int i) { return FMath::DegreesToRadians((float)i); });
 			int j = 0;
 			for (int i = 0; i < NumTestObjects; ++i)
 			{
 				if (TestData[i] % 2 == 0)
 				{
-					check(TestArray[j] == FMath::DegreesToRadians(TestData[i]));
+					check(TestArray[j] == FMath::DegreesToRadians((float)TestData[i]));
 					++j;
 				}
 			}
@@ -231,7 +269,7 @@ public:
 			{
 				if (TestData2[i] % 2 == 0)
 				{
-					check(TestArray[j] == FMath::DegreesToRadians(TestData2[i]));
+					check(TestArray[j] == FMath::DegreesToRadians((float)TestData2[i]));
 					++j;
 				}
 			}
@@ -296,6 +334,44 @@ public:
 		check(Algo::LowerBound(IntArray, 9) == 9);
 		check(Algo::LowerBoundBy(IntArray, 6, FIdentityFunctor()) == 4);
 		check(Algo::UpperBoundBy(IntArray, 6, FIdentityFunctor()) == 7);
+	}
+
+	void TestIndexOf()
+	{
+		TArray<FTestData> Data = {
+			FTestData(TEXT("Alice"), 31),
+			FTestData(TEXT("Bob"), 25),
+			FTestData(TEXT("Charles"), 19),
+			FTestData(TEXT("Donna"), 13)
+		};
+
+		int FixedArray[] = { 2,4,6,6,6,8 };
+		check(Algo::IndexOf(FixedArray, 2) == 0);
+		check(Algo::IndexOf(FixedArray, 6) == 2);
+		check(Algo::IndexOf(FixedArray, 8) == 5);
+		check(Algo::IndexOf(FixedArray, 0) == INDEX_NONE);
+
+		check(Algo::IndexOf(Data, FTestData(TEXT("Alice"), 31)) == 0);
+		check(Algo::IndexOf(Data, FTestData(TEXT("Alice"), 32)) == INDEX_NONE);
+
+		check(Algo::IndexOfBy(Data, TEXT("Donna"), &FTestData::Name) == 3);
+		check(Algo::IndexOfBy(Data, 19, &FTestData::Age) == 2);
+		check(Algo::IndexOfBy(Data, 0, &FTestData::Age) == INDEX_NONE);
+
+		auto GetAge = [](const FTestData& In) { return In.Age; };
+		check(Algo::IndexOfBy(Data, 19, GetAge) == 2);
+		check(Algo::IndexOfBy(Data, 0, GetAge) == INDEX_NONE);
+
+		check(Algo::IndexOfByPredicate(Data, [](const FTestData& In) { return In.Age < 25; }) == 2);
+		check(Algo::IndexOfByPredicate(Data, [](const FTestData& In) { return In.Age > 19; }) == 0);
+		check(Algo::IndexOfByPredicate(Data, [](const FTestData& In) { return In.Age > 31; }) == INDEX_NONE);
+
+		static const uint8 InvalidIndex = (uint8)-1;
+		UE::Impl::FFixedTestRangeUnsigned TestRange;
+		check(Algo::IndexOf(TestRange, 25) == 25);
+		check(Algo::IndexOf(TestRange, 254) == 254);
+		check(Algo::IndexOf(TestRange, 255) == InvalidIndex);
+		check(Algo::IndexOf(TestRange, 1024) == InvalidIndex);
 	}
 
 	void TestHeapify()
@@ -505,6 +581,7 @@ bool FAlgosTest::RunTest(const FString& Parameters)
 	TestTransform();
 	TestTransformIf();
 	TestBinarySearch();
+	TestIndexOf();
 	TestHeapify();
 	TestHeapSort();
 	TestIntroSort();

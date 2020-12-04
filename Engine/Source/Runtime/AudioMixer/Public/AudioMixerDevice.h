@@ -7,7 +7,8 @@
 #include "AudioDevice.h"
 #include "Sound/SoundSubmix.h"
 #include "DSP/BufferVectorOperations.h"
-
+#include "DSP/MultithreadedPatching.h"
+#include "Quartz/AudioMixerClockManager.h"
 
 // Forward Declarations
 class FOnSubmixEnvelopeBP;
@@ -97,18 +98,20 @@ namespace Audio
 		virtual void InitSoundEffectPresets() override;
 		virtual int32 GetNumActiveSources() const override;
 
-		// Updates the provided source's modulation control values
-		virtual void UpdateModulationControls(const uint32 InSourceId, const FSoundModulationControls& InControls) override;
-
 		// Updates the source effect chain (using unique object id). 
 		virtual void UpdateSourceEffectChain(const uint32 SourceEffectChainId, const TArray<FSourceEffectChainEntry>& SourceEffectChain, const bool bPlayEffectChainTails) override;
 		virtual bool GetCurrentSourceEffectChain(const uint32 SourceEffectChainId, TArray<FSourceEffectChainEntry>& OutCurrentSourceEffectChainEntries) override;
 
-		// Updates submix instances with new properties
+		// Submix dry/wet settings
 		virtual void UpdateSubmixProperties(USoundSubmixBase* InSubmix) override;
-		
-		// Sets the submix output volume dynamically
-		virtual void SetSubmixOutputVolume(USoundSubmix* InSubmix, float NewVolume) override;
+		virtual void SetSubmixWetDryLevel(USoundSubmix* InSoundSubmix, float InOutputVolume, float InWetLevel, float InDryLevel) override;
+		virtual void SetSubmixOutputVolume(USoundSubmix* InSoundSubmix, float InOutputVolume) override;
+		virtual void SetSubmixWetLevel(USoundSubmix* InSoundSubmix, float InWetLevel) override;
+		virtual void SetSubmixDryLevel(USoundSubmix* InSoundSubmix, float InDryLevel) override;
+
+		// Submix effect chain override settings
+		virtual void SetSubmixEffectChainOverride(USoundSubmix* InSoundSubmix, const TArray<FSoundEffectSubmixPtr>& InSubmixEffectPresetChain, float InFadeTimeSec) override;
+		virtual void ClearSubmixEffectChainOverride(USoundSubmix* InSoundSubmix, float InFadeTimeSec) override;
 
 		// Submix recording callbacks:
 		virtual void StartRecording(USoundSubmix* InSubmix, float ExpectedRecordingDuration) override;
@@ -117,22 +120,28 @@ namespace Audio
 		virtual void PauseRecording(USoundSubmix* InSubmix);
 		virtual void ResumeRecording(USoundSubmix* InSubmix);
 
-		/** Submix envelope following */
+		// Submix envelope following
 		virtual void StartEnvelopeFollowing(USoundSubmix* InSubmix) override;
 		virtual void StopEnvelopeFollowing(USoundSubmix* InSubmix) override;
 		virtual void AddEnvelopeFollowerDelegate(USoundSubmix* InSubmix, const FOnSubmixEnvelopeBP& OnSubmixEnvelopeBP) override;
 
-		/** Submix Spectrum Analysis */
-		virtual void StartSpectrumAnalysis(USoundSubmix* InSubmix, const Audio::FSpectrumAnalyzerSettings& InSettings) override;
+		// Submix Spectrum Analysis
+		virtual void StartSpectrumAnalysis(USoundSubmix* InSubmix, const FSoundSpectrumAnalyzerSettings& InSettings) override;
 		virtual void StopSpectrumAnalysis(USoundSubmix* InSubmix) override;
-		virtual void GetMagnitudesForFrequencies(USoundSubmix* InSubmix, const TArray<float>& InFrequencies, TArray<float>& OutMagnitudes);
-		virtual void GetPhasesForFrequencies(USoundSubmix* InSubmix, const TArray<float>& InFrequencies, TArray<float>& OutPhases);
+		virtual void GetMagnitudesForFrequencies(USoundSubmix* InSubmix, const TArray<float>& InFrequencies, TArray<float>& OutMagnitudes) override;
+		virtual void GetPhasesForFrequencies(USoundSubmix* InSubmix, const TArray<float>& InFrequencies, TArray<float>& OutPhases) override;
+		virtual void AddSpectralAnalysisDelegate(USoundSubmix* InSubmix, const FSoundSpectrumAnalyzerDelegateSettings& InDelegateSettings, const FOnSubmixSpectralAnalysisBP& OnSubmixSpectralAnalysisBP) override;
+		virtual void RemoveSpectralAnalysisDelegate(USoundSubmix* InSubmix, const FOnSubmixSpectralAnalysisBP& OnSubmixSpectralAnalysisBP) override;
 
 		// Submix buffer listener callbacks
 		virtual void RegisterSubmixBufferListener(ISubmixBufferListener* InSubmixBufferListener, USoundSubmix* InSubmix = nullptr) override;
 		virtual void UnregisterSubmixBufferListener(ISubmixBufferListener* InSubmixBufferListener, USoundSubmix* InSubmix = nullptr) override;
-
+		virtual void FlushExtended(UWorld* WorldToFlush, bool bClearActivatedReverb);
 		virtual void FlushAudioRenderingCommands(bool bPumpSynchronously = false) override;
+
+		// Audio Device Properties
+		virtual bool IsNonRealtime() const override;
+
 		//~ End FAudioDevice
 
 		//~ Begin IAudioMixer
@@ -184,7 +193,7 @@ namespace Audio
 		FMixerSubmixWeakPtr GetMasterEQSubmix();
 
 		// Add submix effect to master submix
-		void AddMasterSubmixEffect(uint32 SubmixEffectId, FSoundEffectSubmixPtr SoundEffect);
+		void AddMasterSubmixEffect(FSoundEffectSubmixPtr SoundEffect);
 		
 		// Remove submix effect from master submix
 		void RemoveMasterSubmixEffect(uint32 SubmixEffectId);
@@ -193,7 +202,7 @@ namespace Audio
 		void ClearMasterSubmixEffects();
 
 		// Add submix effect to given submix
-		int32 AddSubmixEffect(USoundSubmix* InSoundSubmix, uint32 SubmixEffectId, FSoundEffectSubmixPtr SoundEffect);
+		int32 AddSubmixEffect(USoundSubmix* InSoundSubmix, FSoundEffectSubmixPtr SoundEffect);
 
 		// Remove submix effect to given submix
 		void RemoveSubmixEffect(USoundSubmix* InSoundSubmix, uint32 SubmixEffectId);
@@ -202,7 +211,7 @@ namespace Audio
 		void RemoveSubmixEffectAtIndex(USoundSubmix* InSoundSubmix, int32 SubmixChainIndex);
 
 		// Replace the submix effect of the given submix at the submix chain index with the new submix effect id and submix instance
-		void ReplaceSoundEffectSubmix(USoundSubmix* InSoundSubmix, int32 InSubmixChainIndex, int32 SubmixEffectId, FSoundEffectSubmixPtr SoundEffect);
+		void ReplaceSoundEffectSubmix(USoundSubmix* InSoundSubmix, int32 InSubmixChainIndex, FSoundEffectSubmixPtr SoundEffect);
 
 		// Clear all submix effects from given submix
 		void ClearSubmixEffects(USoundSubmix* InSoundSubmix);
@@ -221,9 +230,24 @@ namespace Audio
 		double GetAudioRenderThreadTime() const { return AudioThreadTimingData.AudioRenderThreadTime; }
 		double GetAudioClockDelta() const { return AudioClockDelta; }
 
+		EMonoChannelUpmixMethod GetMonoChannelUpmixMethod() const { return MonoChannelUpmixMethod; }
+
 		TArray<Audio::FChannelPositionInfo>* GetDefaultPositionMap(int32 NumChannels);
 
 		static bool IsEndpointSubmix(const USoundSubmixBase* InSubmix);
+
+		// Audio bus API
+		void StartAudioBus(uint32 InAudioBusId, int32 InNumChannels, bool bInIsAutomatic);
+		void StopAudioBus(uint32 InAudioBusId);
+		bool IsAudioBusActive(uint32 InAudioBusId);
+		FPatchOutputStrongPtr AddPatchForAudioBus(uint32 InAudioBusId, float PatchGain);
+
+		// Clock Manager for quantized event handling on Audio Render Thread
+		FQuartzClockManager QuantizedEventClockManager;
+
+		// Pushes the command to a audio render thread command queue to be executed on render thread
+		void AudioRenderThreadCommand(TFunction<void()> Command);
+
 
 	protected:
 
@@ -262,15 +286,15 @@ namespace Audio
 
 		bool IsMasterSubmixType(const USoundSubmixBase* InSubmix) const;
 		FMixerSubmixPtr GetMasterSubmixInstance(const USoundSubmixBase* InSubmix);
-
-		// Pushes the command to a audio render thread command queue to be executed on render thread
-		void AudioRenderThreadCommand(TFunction<void()> Command);
 		
 		// Pumps the audio render thread command queue
 		void PumpCommandQueue();
 
 		TArray<USoundSubmix*> MasterSubmixes;
 		TArray<FMixerSubmixPtr> MasterSubmixInstances;
+
+		// The active audio bus list accessible on the game thread
+		TArray<int32> ActiveAudioBuses_GameThread;
 
 		/** Ptr to the platform interface, which handles streaming audio to the hardware device. */
 		IAudioMixerPlatformInterface* AudioMixerPlatform;
@@ -298,9 +322,6 @@ namespace Audio
 		/** The time delta for each callback block. */
 		double AudioClockDelta;
 
-		/** The audio clock from device initialization, updated at block rate. */
-		double AudioClock;
-
 		/** What the previous master volume was. */
 		float PreviousMasterVolume;
 
@@ -325,7 +346,7 @@ namespace Audio
 		FCriticalSection EndpointSubmixesMutationLock;
 
 		/** Which submixes have been told to envelope follow with this audio device. */
-		TArray<USoundSubmix*> EnvelopeFollowingSubmixes;
+		TArray<USoundSubmix*> DelegateBoundSubmixes;
 
 		/** Queue of mixer source voices. */
 		TQueue<FMixerSourceVoice*> SourceVoices;

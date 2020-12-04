@@ -126,6 +126,10 @@ public:
 	UPROPERTY(EditAnywhere, config, Category = Graphs, meta = (ClampMin = "1.0", ClampMax = "100.0", UIMin = "1.0", UIMax = "100.0"))
 	uint32 GridSnapSize;
 
+	/** Optional brush used for graph backgrounds */
+	UPROPERTY(EditAnywhere, config, Category = Graphs, meta = (DisplayName = "Background Brush"))
+	FSlateBrush GraphBackgroundBrush;
+
 	/** Enables animated transitions for certain menus and pop-up windows.  Note that animations may be automatically disabled at low frame rates in order to improve responsiveness. */
 	UPROPERTY(EditAnywhere, config, Category=UserInterface)
 	uint32 bEnableWindowAnimations:1;
@@ -133,6 +137,10 @@ public:
 	/** When enabled, the C++ names for properties and functions will be displayed in a format that is easier to read */
 	UPROPERTY(EditAnywhere, config, Category=UserInterface, meta=(DisplayName="Show Friendly Variable Names"))
 	uint32 bShowFriendlyNames:1;
+
+	/** When enabled, the underlying Names for Components inherited from C++ will be shown alongside their UProperty Variable name */
+	UPROPERTY(EditAnywhere, config, Category = UserInterface, meta = (DisplayName = "Show Underlying Names For Native Components"))
+	uint32 bShowNativeComponentNames:1;
 
 	/** When enabled, the Editor Preferences and Project Settings menu items in the main menu will be expanded with sub-menus for each settings section. */
 	UPROPERTY(EditAnywhere, config, Category=UserInterface, AdvancedDisplay)
@@ -182,8 +190,8 @@ public:
 	UPROPERTY(EditAnywhere, config, Category="Output Log", meta=(DisplayName="Log Font Size", ConfigRestartRequired=true))
 	int32 LogFontSize;
 
-	/** The display mode for timestamps in the output log */
-	UPROPERTY(EditAnywhere, config, Category="Output Log")
+	/** The display mode for timestamps in the output log window*/
+	UPROPERTY(EditAnywhere, config, Category="Output Log", meta=(DisplayName = "Output Log Window Timestamp Mode"))
 	TEnumAsByte<ELogTimes::Type> LogTimestampMode;
 
 	/** Should warnings and errors in the Output Log during "Play in Editor" be promoted to the message log? */

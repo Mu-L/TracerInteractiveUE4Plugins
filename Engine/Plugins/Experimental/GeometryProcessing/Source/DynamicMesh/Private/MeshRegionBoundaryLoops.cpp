@@ -2,6 +2,9 @@
 
 
 #include "MeshRegionBoundaryLoops.h"
+
+#include "Algo/ForEach.h"
+#include "DynamicMeshAttributeSet.h"
 #include "MeshBoundaryLoops.h"   // has a set of internal static functions we re-use
 #include "VectorUtil.h"
 #include "Util/SparseIndexCollectionTypes.h"
@@ -522,3 +525,145 @@ bool FMeshRegionBoundaryLoops::TryExtractSubloops(TArray<int>& loopV, const TArr
 
 	return true;
 }
+
+template<typename StorageType, int ElementSize, typename ElementType>
+bool FMeshRegionBoundaryLoops::GetLoopOverlayMap(const FEdgeLoop& LoopIn,
+	const TDynamicMeshOverlay<StorageType, ElementSize>& Overlay,
+	VidOverlayMap<ElementType>& LoopVidsToOverlayElementsOut)
+{
+	for (int32 i = 0; i < LoopIn.Vertices.Num(); ++i)
+	{
+		int32 Vid = LoopIn.Vertices[i];
+
+		// Get the inner triangle associated with the edges going forward from this vertex
+		int32 TidInside, TidOutside;
+		IsEdgeOnBoundary(LoopIn.Edges[i], TidInside, TidOutside);
+		check(TidInside != IndexConstants::InvalidID);
+
+		// Find the overlay element associated with the vertex
+		FIndex3i TriangleVerts = Mesh->GetTriangle(TidInside);
+		int32 VidTriIndex = TriangleVerts.IndexOf(Vid);
+		check(VidTriIndex >= 0);
+
+		FIndex3i TriangleElements = Overlay.GetTriangle(TidInside);
+		int32 UVElementID = TriangleElements[VidTriIndex];
+		if (!Overlay.IsElement(UVElementID))
+		{
+			return false;
+		}
+
+		ElementType Element; 
+		Overlay.GetElement(UVElementID, Element);
+		LoopVidsToOverlayElementsOut.Add(Vid,
+			ElementIDAndValue<ElementType>(UVElementID, Element));
+	}
+
+	return true;
+}
+
+template<typename StorageType, int ElementSize, typename ElementType>
+void FMeshRegionBoundaryLoops::UpdateLoopOverlayMapValidity(
+	VidOverlayMap<ElementType>& LoopVidsToOverlayElements, 
+	const TDynamicMeshOverlay<StorageType, ElementSize>& Overlay)
+{
+	// Go through all the overlay element ids's and see if they are still an element
+	// in the overlay. If not, make that id an invalid ID.
+	Algo::ForEachIf(LoopVidsToOverlayElements,
+		[&Overlay](const auto& Entry) { return !Overlay.IsElement(Entry.Value.Key); },
+		[](auto& Entry) { Entry.Value.Key = IndexConstants::InvalidID; });
+}
+
+// Right now we use our templated functions just for UV layers. If we need other overlay layers,
+// we'll need to add instantiations here.
+template DYNAMICMESH_API bool FMeshRegionBoundaryLoops::GetLoopOverlayMap<float, 2, FVector2f>(
+	const FEdgeLoop& LoopIn, const TDynamicMeshOverlay<float, 2>& Overlay,
+	VidOverlayMap<FVector2f>& LoopVidsToOverlayElementsOut);
+template DYNAMICMESH_API void FMeshRegionBoundaryLoops::UpdateLoopOverlayMapValidity<float, 2, FVector2f>(
+	VidOverlayMap<FVector2f>& LoopVidsToOverlayElements, const TDynamicMeshOverlay<float, 2>& Overlay);
+
+
+bool FMeshRegionBoundaryLoops::GetTriangleSetBoundaryLoop(const FDynamicMesh3& Mesh, const TArray<int32>& Tris, FEdgeLoop& Loop)
+{
+	// todo: special-case single triangle
+	// collect list of border edges
+	TArray<int32> Edges;
+	for (int32 tid : Tris)
+	{
+		FIndex3i TriEdges = Mesh.GetTriEdges(tid);
+		for (int32 j = 0; j < 3; ++j)
+		{
+			FIndex2i EdgeT = Mesh.GetEdgeT(TriEdges[j]);
+			int32 OtherT = (EdgeT.A == tid) ? EdgeT.B : EdgeT.A;
+			if (OtherT == FDynamicMesh3::InvalidID || Tris.Contains(OtherT) == false)
+			{
+				Edges.AddUnique(TriEdges[j]);
+			}
+		}
+	}
+
+	if (Edges.Num() == 0)
+	{
+		return false;
+	}
+
+	Loop.Mesh = &Mesh;
+
+	// Start at first edge and walk around loop, adding one vertex and edge each time.
+	// Abort if we encounter any nonmanifold configuration 
+	int32 NumEdges = Edges.Num();
+	int32 StartEdge = Edges[0];
+	FIndex2i StartEdgeT = Mesh.GetEdgeT(StartEdge);
+	int32 InTri = Tris.Contains(StartEdgeT.A) ? StartEdgeT.A : StartEdgeT.B;
+	FIndex2i StartEdgeV = Mesh.GetEdgeV(StartEdge);
+	IndexUtil::OrientTriEdge(StartEdgeV.A, StartEdgeV.B, Mesh.GetTriangle(InTri));
+	Loop.Vertices.Reset();
+	Loop.Vertices.Add(StartEdgeV.A);
+	Loop.Vertices.Add(StartEdgeV.B);
+	int32 CurEndVert = Loop.Vertices.Last();
+	int32 PrevEdge = StartEdge;
+	Loop.Edges.Reset();
+	Loop.Edges.Add(StartEdge);
+	int32 NumEdgesUsed = 1;
+	bool bContinue = true;
+	do 
+	{
+		bContinue = false;
+		for (int32 eid : Mesh.VtxEdgesItr(CurEndVert))
+		{
+			if (eid != PrevEdge && Edges.Contains(eid) && Loop.Edges.Contains(eid) == false)
+			{
+				FIndex2i EdgeV = Mesh.GetEdgeV(eid);
+				int32 NextV = (EdgeV.A == CurEndVert) ? EdgeV.B : EdgeV.A;
+				if (NextV == Loop.Vertices[0])		// closed loop
+				{
+					Loop.Edges.Add(eid);
+					NumEdgesUsed++;
+					bContinue = false;
+					break;
+				}
+				else
+				{
+					if (Loop.Vertices.Contains(NextV))
+					{
+						return false;		// hit a middle vertex, we have nonmanifold set of edges, abort
+					}
+					Loop.Edges.Add(eid);
+					PrevEdge = eid;
+					Loop.Vertices.Add(NextV);
+					NumEdgesUsed++;
+					CurEndVert = NextV;
+					bContinue = true;
+					break;
+				}
+			}
+		}
+	} while (bContinue);
+
+	if (NumEdgesUsed != Edges.Num())	// closed loop but we still have edges? must have nonmanifold configuration, abort.
+	{
+		return false;
+	}
+
+	return true;
+}
+

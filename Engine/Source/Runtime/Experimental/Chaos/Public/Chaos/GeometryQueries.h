@@ -62,7 +62,8 @@ namespace Chaos
 				return Utilities::CastHelper(A, BToATM, [&](const auto& AConcrete, const auto& BToAFullTM)
 				{
 					FVec3 LocalA,LocalB,LocalNormal;
-					if(GJKPenetration<false, FReal>(AConcrete,B,BToAFullTM,OutMTD->Penetration,LocalA,LocalB,LocalNormal,Thickness,Offset.SizeSquared() < 1e-4 ? FVec3(1,0,0) : Offset))
+					int32 ClosestVertexIndexA, ClosestVertexIndexB;
+					if(GJKPenetration<false, FReal>(AConcrete,B,BToAFullTM,OutMTD->Penetration,LocalA,LocalB,LocalNormal,ClosestVertexIndexA,ClosestVertexIndexB,Thickness,Offset.SizeSquared() < 1e-4 ? FVec3(1,0,0) : Offset))
 					{
 						OutMTD->Normal = ATM.TransformVectorNoScale(LocalNormal);
 						return true;
@@ -82,7 +83,7 @@ namespace Chaos
 			{
 				case ImplicitObjectType::HeightField:
 				{
-					const THeightField<FReal>& AHeightField = static_cast<const THeightField<FReal>&>(A);
+					const FHeightField& AHeightField = static_cast<const FHeightField&>(A);
 					return AHeightField.OverlapGeom(B, BToATM, Thickness, OutMTD);
 				}
 				case ImplicitObjectType::TriangleMesh:
@@ -196,7 +197,7 @@ namespace Chaos
 			{
 				case ImplicitObjectType::HeightField:
 				{
-					const THeightField<FReal>& AHeightField = static_cast<const THeightField<FReal>&>(A);
+					const FHeightField& AHeightField = static_cast<const FHeightField&>(A);
 					bResult = AHeightField.SweepGeom(B, BToATM, LocalDir, Length, OutTime, LocalPosition, LocalNormal, OutFaceIndex, Thickness, bComputeMTD);
 					break;
 				}

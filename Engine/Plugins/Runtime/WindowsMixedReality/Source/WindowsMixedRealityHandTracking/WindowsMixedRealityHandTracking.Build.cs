@@ -12,9 +12,11 @@ namespace UnrealBuildTool.Rules
 			PublicDependencyModuleNames.AddRange(
 				new string[]
 				{
-					"InputDevice"
-				}
-			);
+					"InputDevice",
+                    "LiveLink",
+                    "LiveLinkInterface"
+                }
+            );
 
 			PrivateDependencyModuleNames.AddRange(
 				new string[]
@@ -25,13 +27,13 @@ namespace UnrealBuildTool.Rules
 					"InputCore",
 					"Slate",
 					"HeadMountedDisplay",
-					"WindowsMixedRealityHMD",
 					"SlateCore",
 	                "LiveLink",
-                    "LiveLinkInterface"
-                }
+                    "LiveLinkInterface",
+					"WindowsMixedRealityHMD"
+				}
 			);
-			
+
 			if (Target.Platform == UnrealTargetPlatform.Win64 && Target.bBuildEditor == true)
 			{
 				PrivateDependencyModuleNames.Add("WindowsMixedRealityInputSimulation");

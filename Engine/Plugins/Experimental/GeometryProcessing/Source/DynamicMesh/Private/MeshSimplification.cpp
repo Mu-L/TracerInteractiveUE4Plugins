@@ -3,6 +3,7 @@
 #include "MeshSimplification.h"
 #include "DynamicMeshAttributeSet.h"
 #include "Util/IndexUtil.h"
+#include "Async/ParallelFor.h"
 
 
 
@@ -45,7 +46,7 @@ FAttrBasedQuadricErrord TMeshSimplification<FAttrBasedQuadricErrord>::ComputeFac
 	FVector3d n1d(n1.X, n1.Y, n1.Z);
 	FVector3d n2d(n2.X, n2.Y, n2.Z);
 
-	double attrweight = 1.;
+	double attrweight = 16.;
 	return FQuadricErrorType(p0, p1, p2, n0d, n1d, n2d, nface, c, attrweight);
 }
 
@@ -56,7 +57,7 @@ void TMeshSimplification<QuadricErrorType>::InitializeTriQuadrics()
 	triQuadrics.SetNum(NT);
 	triAreas.SetNum(NT);
 
-	// tested with ParallelFor - no measurable benifit
+	// tested with ParallelFor - no measurable benefit
 	//@todo parallel version
 	//gParallel.BlockStartEnd(0, Mesh->MaxTriangleID - 1, (start_tid, end_tid) = > {
 	FVector3d n, c;
@@ -68,12 +69,86 @@ void TMeshSimplification<QuadricErrorType>::InitializeTriQuadrics()
 }
 
 template <typename QuadricErrorType>
+void TMeshSimplification<QuadricErrorType>::InitializeSeamQuadrics()
+{
+	// early out if this feature isn't needed.
+	if (!bAllowSeamCollapse)
+	{
+		return;
+	}
+
+	double EdgeWeight = this->SeamEdgeWeight;
+
+	auto AddSeamQuadric = [EdgeWeight, this](int eid)
+	{
+		FDynamicMesh3::FEdge edge = Mesh->GetEdge(eid);
+		FVector3d p0 = Mesh->GetVertex(edge.Vert[0]);
+		FVector3d p1 = Mesh->GetVertex(edge.Vert[1]);
+
+		// face normal 
+		FVector3d nA = Mesh->GetTriNormal(edge.Tri.A);
+
+		// this constrains the point to a plane aligned with the edge and normal to the face
+		FSeamQuadricType& seamQuadric = seamQuadrics.Add(eid, CreateSeamQuadric(p0, p1, nA));
+
+
+		// add the other side - this constrains the point to the line where the two planes intersect.
+		if (edge.Tri.B != FDynamicMesh3::InvalidID)
+		{
+			FVector3d nB = Mesh->GetTriNormal(edge.Tri.B);
+			seamQuadric.Add(CreateSeamQuadric(p0, p1, nB));
+		}
+
+		seamQuadric.Scale(EdgeWeight);
+	};
+
+	if (Constraints) // The edge constraints an entry for each seam, boundary, group boundary and material boundary
+	{
+		const auto& EdgeConstraints = Constraints->GetEdgeConstraints();
+
+		for (auto& ConstraintPair : EdgeConstraints)
+		{
+			int eid = ConstraintPair.Key;
+
+			AddSeamQuadric(eid);
+		}
+
+	}
+	else
+	{
+		const FDynamicMeshAttributeSet* Attributes = Mesh->Attributes();
+
+		if (!Attributes)
+		{
+			return;
+		}
+
+		for (int eid : Mesh->EdgeIndicesItr())
+		{
+			bool bNeedsQuadric = Mesh->IsBoundaryEdge(eid);
+			bNeedsQuadric = bNeedsQuadric || Mesh->IsGroupBoundaryEdge(eid);
+			if (Attributes)
+			{
+				bNeedsQuadric = bNeedsQuadric || Attributes->IsMaterialBoundaryEdge(eid);
+				bNeedsQuadric = bNeedsQuadric || Attributes->IsSeamEdge(eid);
+			}
+
+			if (bNeedsQuadric)
+			{
+				AddSeamQuadric(eid);
+			}
+		}
+	}
+}
+
+
+template <typename QuadricErrorType>
 void TMeshSimplification<QuadricErrorType>::InitializeVertexQuadrics()
 {
 
 	int NV = Mesh->MaxVertexID();
 	vertQuadrics.SetNum(NV);
-	// tested with ParallelFor - no measurable benifit 
+	// tested with ParallelFor - no measurable benefit 
 	//gParallel.BlockStartEnd(0, Mesh->MaxVertexID - 1, (start_vid, end_vid) = > {
 	for (int vid : Mesh->VertexIndicesItr())
 	{
@@ -85,8 +160,43 @@ void TMeshSimplification<QuadricErrorType>::InitializeVertexQuadrics()
 		//check(TMathUtil.EpsilonEqual(0, vertQuadrics[i].Evaluate(Mesh->GetVertex(i)), TMathUtil.Epsilon * 10));
 	}
 
+	// for each seam edge, add the seam quadric to its verts.
+	for (auto& seamQuadric : seamQuadrics)
+	{
+		int eid = seamQuadric.Key;
+		FIndex2i vids = Mesh->GetEdgeV(eid);
+
+		vertQuadrics[vids[0]].AddSeamQuadric(seamQuadric.Value);
+		vertQuadrics[vids[1]].AddSeamQuadric(seamQuadric.Value);
+	}
+
 }
 
+template <typename QuadricErrorType>
+QuadricErrorType TMeshSimplification<QuadricErrorType>::AssembleEdgeQuadric(const FDynamicMesh3::FEdge& edge) const
+{
+	return QuadricErrorType(vertQuadrics[edge.Vert.A], vertQuadrics[edge.Vert.B]);
+}
+
+template<>
+FAttrBasedQuadricErrord TMeshSimplification<FAttrBasedQuadricErrord>::AssembleEdgeQuadric(const FDynamicMesh3::FEdge& edge) const
+{
+	FAttrBasedQuadricErrord Q(vertQuadrics[edge.Vert.A], vertQuadrics[edge.Vert.B]);
+
+	// the edge.Tri faces are double counted. Remove one.
+	const FIndex2i& Tris = edge.Tri;
+	if (Tris.A != FDynamicMesh3::InvalidID)
+	{
+		Q.Add(-triAreas[Tris.A], triQuadrics[Tris.A]);
+	}
+
+	if (Tris.B != FDynamicMesh3::InvalidID)
+	{
+		Q.Add(-triAreas[Tris.B], triQuadrics[Tris.B]);
+	}
+
+	return Q;
+}
 
 
 template <typename QuadricErrorType>
@@ -105,9 +215,9 @@ void TMeshSimplification<QuadricErrorType>::InitializeQueue()
 	//for (int eid = start_eid; eid <= end_eid; eid++) {
 	for (int eid : Mesh->EdgeIndicesItr())
 	{
-		FIndex2i ev = Mesh->GetEdgeV(eid);
-		FQuadricErrorType Q(vertQuadrics[ev.A], vertQuadrics[ev.B]);
-		FVector3d opt = OptimalPoint(eid, Q, ev.A, ev.B);
+		FDynamicMesh3::FEdge edge = Mesh->GetEdge(eid);
+		FQuadricErrorType Q = AssembleEdgeQuadric(edge);
+		FVector3d opt = OptimalPoint(eid, Q, edge.Vert.A, edge.Vert.B);
 		EdgeErrors[eid] = { (float)Q.Evaluate(opt), eid };
 		EdgeQuadrics[eid] = QEdge(eid, Q, opt);
 	}
@@ -122,8 +232,9 @@ void TMeshSimplification<QuadricErrorType>::InitializeQueue()
 		int eid = EdgeErrors[i].eid;
 		if (Mesh->IsEdge(eid))
 		{
-			QEdge edge = EdgeQuadrics[eid];
-			EdgeQueue.Insert(edge.eid, EdgeErrors[i].error);
+			QEdge& edge = EdgeQuadrics[eid];
+			float error = EdgeErrors[i].error;
+			EdgeQueue.Insert(eid, error);
 		}
 	}
 
@@ -173,36 +284,65 @@ FVector3d TMeshSimplification<QuadricErrorType>::OptimalPoint(int eid, const FQu
 
 	// [TODO] if we have constraints, we should apply them here, for same reason as bdry above...
 
-	if (bMinimizeQuadricPositionError == false)
+	switch (CollapseMode)
 	{
-		return GetProjectedPoint((Mesh->GetVertex(ea) + Mesh->GetVertex(eb)) * 0.5);
-	}
-	else
-	{
-		FVector3d result = FVector3d::Zero();
-		if (q.OptimalPoint(result))
+		case ESimplificationCollapseModes::AverageVertexPosition:
 		{
-			return GetProjectedPoint(result);
+			return GetProjectedPoint((Mesh->GetVertex(ea) + Mesh->GetVertex(eb)) * 0.5);
 		}
+		break;
 
-		// degenerate matrix, evaluate quadric at edge end and midpoints
-		// (could do line search here...)
-		FVector3d va = Mesh->GetVertex(ea);
-		FVector3d vb = Mesh->GetVertex(eb);
-		FVector3d c = GetProjectedPoint((va + vb) * 0.5);
-		double fa = q.Evaluate(va);
-		double fb = q.Evaluate(vb);
-		double fc = q.Evaluate(c);
-		double m = FMath::Min3(fa, fb, fc);
-		if (m == fa)
+		case ESimplificationCollapseModes::MinimalExistingVertexError:
 		{
-			return va;
+			FVector3d va = Mesh->GetVertex(ea);
+			FVector3d vb = Mesh->GetVertex(eb);
+			double fa = q.Evaluate(va);
+			double fb = q.Evaluate(vb);
+			if (fa < fb)
+			{
+				return va;
+			}
+			else
+			{
+				return vb;
+			}
+		
 		}
-		else if (m == fb)
+		break;
+
+		case ESimplificationCollapseModes::MinimalQuadricPositionError:
 		{
-			return vb;
+			FVector3d result = FVector3d::Zero();
+			if (q.OptimalPoint(result))
+			{
+				return GetProjectedPoint(result);
+			}
+
+			// degenerate matrix, evaluate quadric at edge end and midpoints
+			// (could do line search here...)
+			FVector3d va = Mesh->GetVertex(ea);
+			FVector3d vb = Mesh->GetVertex(eb);
+			FVector3d c = GetProjectedPoint((va + vb) * 0.5);
+			double fa = q.Evaluate(va);
+			double fb = q.Evaluate(vb);
+			double fc = q.Evaluate(c);
+			double m = FMath::Min3(fa, fb, fc);
+			if (m == fa)
+			{
+				return va;
+			}
+			else if (m == fb)
+			{
+				return vb;
+			}
+			return c;
 		}
-		return c;
+		break;
+	default:
+
+		// should never happen
+		checkSlow(0);
+		return FVector3d::Zero();
 	}
 }
 
@@ -211,31 +351,92 @@ FVector3d TMeshSimplification<QuadricErrorType>::OptimalPoint(int eid, const FQu
 
 // update queue weight for each edge in vertex one-ring
 template <>
-void DYNAMICMESH_API TMeshSimplification<FQuadricErrord>::UpdateNeighbours(int vid, FIndex2i removedTris, FIndex2i opposingVerts)
+void DYNAMICMESH_API TMeshSimplification<FQuadricErrord>::UpdateNeighbours(const FDynamicMesh3::FEdgeCollapseInfo& collapseInfo)
 {
+	int vid = collapseInfo.KeptVertex;
+
+
+	double EdgeWeight = this->SeamEdgeWeight;
+
 	for (int eid : Mesh->VtxEdgesItr(vid))
 	{
-		FIndex2i nev = Mesh->GetEdgeV(eid);
-		FQuadricErrord Q(vertQuadrics[nev.A], vertQuadrics[nev.B]);
-		FVector3d opt = OptimalPoint(eid, Q, nev.A, nev.B);
-		double err = Q.Evaluate(opt);
+		FDynamicMesh3::FEdge ne = Mesh->GetEdge(eid);
+
+		// update the seam quadric and vert quadric to reflect the new seams
+		if (bAllowSeamCollapse)
+		{
+			
+			// need to recompute this seam quadric
+			if (FSeamQuadricType* seamQuadric = seamQuadrics.Find(eid))
+			{
+				// subtract the old seam quadric from adj verts
+
+				vertQuadrics[ne.Vert[0]].SubtractSeamQuadric(*seamQuadric);
+				vertQuadrics[ne.Vert[1]].SubtractSeamQuadric(*seamQuadric);
+
+				// rebuild the seam quadric
+
+				FVector3d p0 = Mesh->GetVertex(ne.Vert[0]);
+				FVector3d p1 = Mesh->GetVertex(ne.Vert[1]);
+
+				// face normal 
+				FVector3d nA = Mesh->GetTriNormal(ne.Tri.A);
+
+				// this constrains the point to a plane aligned with the edge and normal to the face
+				*seamQuadric = CreateSeamQuadric(p0, p1, nA);
+				// add the other side - this constrains the point to the line where the two planes intersect.
+				if (ne.Tri.B != FDynamicMesh3::InvalidID)
+				{
+					FVector3d nB = Mesh->GetTriNormal(ne.Tri.B);
+					seamQuadric->Add(CreateSeamQuadric(p0, p1, nB));
+				}
+
+				seamQuadric->Scale(EdgeWeight);
+
+				// add the seam quadric to the adj verts
+				vertQuadrics[ne.Vert[0]].AddSeamQuadric(*seamQuadric);
+				vertQuadrics[ne.Vert[1]].AddSeamQuadric(*seamQuadric);
+			}
+
+		}
+
+		
+		FQuadricErrord Q = AssembleEdgeQuadric(ne);
+		FVector3d opt = OptimalPoint(eid, Q, ne.Vert.A, ne.Vert.B);
+		float err = (float)Q.Evaluate(opt);
 		EdgeQuadrics[eid] = QEdge(eid, Q, opt);
 		if (EdgeQueue.Contains(eid))
 		{
-			EdgeQueue.Update(eid, (float)err);
+			EdgeQueue.Update(eid, err);
 		}
 		else
 		{
-			EdgeQueue.Insert(eid, (float)err);
+			EdgeQueue.Insert(eid, err);
 		}
 	}
 }
 
 // update queue weight for each edge in vertex one-ring.  Memoryless
 template <typename QuadricErrorType>
-void TMeshSimplification<QuadricErrorType>::UpdateNeighbours(int vid, FIndex2i removedTris, FIndex2i opposingVerts)
+void TMeshSimplification<QuadricErrorType>::UpdateNeighbours(const FDynamicMesh3::FEdgeCollapseInfo& collapseInfo)
 {
+	double EdgeWeight = this->SeamEdgeWeight;
 
+	int vid = collapseInfo.KeptVertex;
+	FIndex2i removedTris = collapseInfo.RemovedTris;
+	FIndex2i opposingVerts = collapseInfo.OpposingVerts;
+
+	TArray<int, TInlineAllocator<15>> AdjTris;
+	for (int tid : Mesh->VtxTrianglesItr(vid))
+	{
+		AdjTris.Add(tid);
+	}
+
+	TArray<int, TInlineAllocator<15>> AdjEdges;
+	for (int eid : Mesh->VtxEdgesItr(vid))
+	{
+		AdjEdges.Add(eid);
+	}
 
 	// This is the faster version that selectively updates the one-ring
 	{
@@ -246,7 +447,7 @@ void TMeshSimplification<QuadricErrorType>::UpdateNeighbours(int vid, FIndex2i r
 		double NewtriArea;
 
 		// Update the triangle areas and quadrics that will have changed
-		for (int tid : Mesh->VtxTrianglesItr(vid))
+		for (int tid : AdjTris)
 		{
 
 			const double OldtriArea = triAreas[tid];
@@ -256,7 +457,7 @@ void TMeshSimplification<QuadricErrorType>::UpdateNeighbours(int vid, FIndex2i r
 			// compute the new quadric for this tri.
 			FQuadricErrorType NewtriQuadric = ComputeFaceQuadric(tid, n, c, NewtriArea);
 
-			// update the arrays that hold the current face area & quadrics
+			// update the arrays that hold the current face area & quadric
 			triAreas[tid] = NewtriArea;
 			triQuadrics[tid] = NewtriQuadric;
 
@@ -282,55 +483,110 @@ void TMeshSimplification<QuadricErrorType>::UpdateNeighbours(int vid, FIndex2i r
 					const double   oldArea = triAreas[removedTris[i]];
 					FQuadricErrorType oldQuadric = triQuadrics[removedTris[i]];
 
-					triAreas[removedTris[i]] = 0.;
-
 					// subtract the quadric from the opposing vert
 					vertQuadrics[opposingVerts[i]].Add(-oldArea, oldQuadric);
+
+					// zero out the quadric & area for the removed tris.
+					triQuadrics[removedTris[i]] = FQuadricErrorType::Zero();
+					triAreas[removedTris[i]] = 0.;
 				}
 			}
 		}
 		// Rebuild the quadric for the vert that was retained during the collapse.
 		// NB: in the version with memory this quadric took the value of the edge quadric that collapsed.
 		{
-			FQuadricErrorType vertQuadric;
-			for (int tid : Mesh->VtxTrianglesItr(vid))
+			FQuadricErrorType vertQuadric = FQuadricErrorType::Zero();
+			for (int tid : AdjTris)
 			{
 				vertQuadric.Add(triAreas[tid], triQuadrics[tid]);
 			}
 			vertQuadrics[vid] = vertQuadric;
 		}
+
+		if (bAllowSeamCollapse)
+		{
+			for (int eid : AdjEdges)
+			{
+				// need to recompute this seam quadric
+				if (FSeamQuadricType* seamQuadric = seamQuadrics.Find(eid))
+				{
+					const FDynamicMesh3::FEdge ne = Mesh->GetEdge(eid);
+
+					// subtract the old seam quadric from adj verts
+					if (ne.Vert[0] == vid) // note we have reset the vertQuadric at the retained vertex so it doesn't have a contribution from the old seamQ
+					{
+						vertQuadrics[ne.Vert[1]].SubtractSeamQuadric(*seamQuadric);
+					}
+					else
+					{
+						check(ne.Vert[1] == vid);
+						vertQuadrics[ne.Vert[0]].SubtractSeamQuadric(*seamQuadric);
+					}
+
+					// rebuild the seam quadric
+
+					FVector3d p0 = Mesh->GetVertex(ne.Vert[0]);
+					FVector3d p1 = Mesh->GetVertex(ne.Vert[1]);
+
+					// face normal 
+					FVector3d nA = Mesh->GetTriNormal(ne.Tri.A);
+
+					// this constrains the point to a plane aligned with the edge and normal to the face
+					*seamQuadric = CreateSeamQuadric(p0, p1, nA);
+					// add the other side - this constrains the point to the line where the two planes intersect.
+					if (ne.Tri.B != FDynamicMesh3::InvalidID)
+					{
+						FVector3d nB = Mesh->GetTriNormal(ne.Tri.B);
+						seamQuadric->Add(CreateSeamQuadric(p0, p1, nB));
+					}
+
+					seamQuadric->Scale(EdgeWeight);
+
+					// add the seam quadric to the adj verts
+					vertQuadrics[ne.Vert[0]].AddSeamQuadric(*seamQuadric);
+					vertQuadrics[ne.Vert[1]].AddSeamQuadric(*seamQuadric);
+				}
+			}
+	}
 	}
 
 	// Update all the edges
 	{
 		TArray<int, TInlineAllocator<64>> EdgesToUpdate;
-		for (int adjvid : Mesh->VtxVerticesItr(vid))
+		for (int adjeid : AdjEdges)
 		{
-			for (int eid : Mesh->VtxEdgesItr(adjvid))
+			EdgesToUpdate.Add(adjeid);
+
+			const FIndex2i Verts = Mesh->GetEdgeV(adjeid);
+			int adjvid = (Verts[0] == vid) ? Verts[1] : Verts[0];
+			if (adjvid != FDynamicMesh3::InvalidID)
 			{
-				EdgesToUpdate.AddUnique(eid);
+				for (int eid : Mesh->VtxEdgesItr(adjvid))
+				{
+					if (eid != adjeid)
+					{
+						EdgesToUpdate.AddUnique(eid);
+					}
+				}
 			}
 		}
 
 		for (int eid : EdgesToUpdate)
 		{
-			// The volume conservation plane data held in the 
-			// vertex quadrics will have duplicates for 
-			// the two face adjacent to the edge.
+		
+			const FDynamicMesh3::FEdge edgeData = Mesh->GetEdge(eid);
+			FQuadricErrorType Q = AssembleEdgeQuadric(edgeData);
 
-			const FIndex4i edgeData = Mesh->GetEdge(eid);
-			FQuadricErrorType Q(vertQuadrics[edgeData[0]], vertQuadrics[edgeData[1]]);
-
-			FVector3d opt = OptimalPoint(eid, Q, edgeData[0], edgeData[1]);
-			double err = Q.Evaluate(opt);
+			FVector3d opt = OptimalPoint(eid, Q, edgeData.Vert[0], edgeData.Vert[1]);
+			float err = (float)Q.Evaluate(opt);
 			EdgeQuadrics[eid] = QEdge(eid, Q, opt);
 			if (EdgeQueue.Contains(eid))
 			{
-				EdgeQueue.Update(eid, (float)err);
+				EdgeQueue.Update(eid, err);
 			}
 			else
 			{
-				EdgeQueue.Insert(eid, (float)err);
+				EdgeQueue.Insert(eid, err);
 			}
 		}
 	}
@@ -368,6 +624,11 @@ void TMeshSimplification<QuadricErrorType>::DoSimplify()
 		return;
 	}
 
+	if (Mesh->HasAttributes() && GetConstraints().IsSet() == false)
+	{
+		ensureMsgf(false, TEXT("Input Mesh has Attribute overlays but no Constraints are configured. Use FMeshConstraintsUtil::ConstrainAllBoundariesAndSeams() to create a Constraint Set for Attribute seams."));
+	}
+
 	ProfileBeginPass();
 
 	ProfileBeginSetup();
@@ -377,6 +638,11 @@ void TMeshSimplification<QuadricErrorType>::DoSimplify()
 		return;
 	}
 	InitializeTriQuadrics();
+	if (Cancelled())
+	{
+		return;
+	}
+	InitializeSeamQuadrics();
 	if (Cancelled())
 	{
 		return;
@@ -422,8 +688,8 @@ void TMeshSimplification<QuadricErrorType>::DoSimplify()
 			}
 		}
 		
-		COUNT_ITERATIONS++;
-		int eid = EdgeQueue.Dequeue();
+		COUNT_ITERATIONS++;	
+		int eid = EdgeQueue.Dequeue(); 
 		if (Mesh->IsEdge(eid) == false)
 		{
 			continue;
@@ -433,18 +699,13 @@ void TMeshSimplification<QuadricErrorType>::DoSimplify()
 			return;
 		}
 
-		// find triangles adjacent to the target edge
-		// and the verts opposite the edge.
-		FIndex2i targetTris = Mesh->GetEdgeT(eid);
-		FIndex2i targetVrts = Mesh->GetEdgeOpposingV(eid);
 
-
-		int vKeptID;
-		ESimplificationResult result = CollapseEdge(eid, EdgeQuadrics[eid].collapse_pt, vKeptID);
+		FDynamicMesh3::FEdgeCollapseInfo collapseInfo;
+		ESimplificationResult result = CollapseEdge(eid, EdgeQuadrics[eid].collapse_pt, collapseInfo);
 		if (result == ESimplificationResult::Ok_Collapsed)
 		{
-			vertQuadrics[vKeptID] = EdgeQuadrics[eid].q;
-			UpdateNeighbours(vKeptID, targetTris, targetVrts);
+			vertQuadrics[collapseInfo.KeptVertex] = EdgeQuadrics[eid].q;
+			UpdateNeighbours(collapseInfo);
 		}
 	}
 	ProfileEndCollapse();
@@ -503,6 +764,261 @@ void TMeshSimplification<QuadricErrorType>::SimplifyToMaxError(double MaxError)
 
 
 
+template<typename GetTriNormalFuncType>
+static bool IsDevelopableVertex(const FDynamicMesh3& Mesh, int32 VertexID, double DotTolerance,
+	GetTriNormalFuncType GetTriNormalFunc)
+{
+	FVector3d Normal1, Normal2;
+	int32 Normal1Count = 0, Normal2Count = 0, OtherCount = 0;
+	Mesh.EnumerateVertexTriangles(VertexID, [&](int32 tid)
+	{
+		FVector3d TriNormal = GetTriNormalFunc(tid);
+		if (Normal1Count == 0)
+		{
+			Normal1 = TriNormal;
+			Normal1Count++;
+			return;
+		}
+		if (TriNormal.Dot(Normal1) > DotTolerance)
+		{
+			Normal1Count++;
+			return;
+		}
+		if (Normal2Count == 0)
+		{
+			Normal2 = TriNormal;
+			Normal2Count++;
+			return;
+		}
+		if (TriNormal.Dot(Normal2) > DotTolerance)
+		{
+			Normal2Count++;
+			return;
+		}
+		OtherCount++;
+	});
+	return OtherCount == 0;
+}
+
+
+
+
+template<typename GetTriNormalFuncType>
+static bool IsCollapsableDevelopableEdge(const FDynamicMesh3& Mesh, int32 CollapseEdgeID, int32 RemoveV, int32 KeepV, double DotTolerance,
+	GetTriNormalFuncType GetTriNormalFunc)
+{
+	FIndex2i CollapseEdgeT = Mesh.GetEdgeT(CollapseEdgeID);
+	FVector3d Normal1 = GetTriNormalFunc(CollapseEdgeT.A);
+	FVector3d Normal2 = GetTriNormalFunc(CollapseEdgeT.B);
+
+	// assuming is that RemoveV is developable vertex...should check?
+
+	// planar case
+	if (Normal1.Dot(Normal2) > DotTolerance)
+	{
+		bool bIsFlat = true;
+		Mesh.EnumerateVertexTriangles(RemoveV, [&](int32 tid)
+		{
+			if (GetTriNormalFunc(tid).Dot(Normal1) < DotTolerance)
+			{
+				bIsFlat = false;
+			}
+		});
+		return bIsFlat;
+	}
+
+	// if we are not planar, we need to find the 'other' developable edge at RemoveV.
+	// This edge must be aligned w/ our collapse edge and have the same normals
+	FVector3d A = Mesh.GetVertex(RemoveV), B = Mesh.GetVertex(KeepV);
+	FVector3d EdgeDir(B - A); EdgeDir.Normalize();
+	int32 FoldEdges = 0, FlatEdges = 0, OtherEdges = 0;
+	for (int32 eid : Mesh.VtxEdgesItr(RemoveV))
+	{
+		if (eid != CollapseEdgeID)
+		{
+			FIndex2i EdgeT = Mesh.GetEdgeT(eid);
+			FVector3d Normal3 = GetTriNormalFunc(EdgeT.A);
+			FVector3d Normal4 = GetTriNormalFunc(EdgeT.B);
+
+			FIndex2i OtherEdgeV = Mesh.GetEdgeV(eid);
+			int32 OtherV = IndexUtil::FindEdgeOtherVertex(OtherEdgeV, RemoveV);
+			FVector3d C = Mesh.GetVertex(OtherV);
+			if ((A-C).Normalized().Dot(EdgeDir) > DotTolerance)
+			{
+				if ((Normal3.Dot(Normal1) > DotTolerance && Normal4.Dot(Normal2) > DotTolerance) ||
+					(Normal3.Dot(Normal2) > DotTolerance && Normal4.Dot(Normal1) > DotTolerance))
+				{
+					FoldEdges++;
+				}
+			}
+			else if ( Normal3.Dot(Normal4) > DotTolerance)
+			{
+				FlatEdges++;
+			}
+			else
+			{
+				OtherEdges++;
+			}
+		}
+	}
+	return (FoldEdges == 1 && OtherEdges == 0);
+}
+
+
+template <typename QuadricErrorType>
+void TMeshSimplification<QuadricErrorType>::SimplifyToMinimalPlanar(double CoplanarAngleTolDeg)
+{
+#define RETURN_IF_CANCELLED 	if (Cancelled()) { return; }
+
+	if (Mesh->TriangleCount() == 0)    // badness if we don't catch this...
+	{
+		return;
+	}
+
+	// we don't collapse on the boundary
+	bHaveBoundary = false;
+
+	// keep triangle normals
+	TArray<FVector3d> TriNormals;
+	TArray<bool> DevelopableVerts;
+
+	ProfileBeginPass();
+
+	ProfileBeginSetup();
+	Precompute();
+	RETURN_IF_CANCELLED;
+
+	TriNormals.SetNum(Mesh->MaxTriangleID());
+	ParallelFor(Mesh->MaxTriangleID(), [&](int32 tid)
+	{
+		if (Mesh->IsTriangle(tid))
+		{
+			TriNormals[tid] = Mesh->GetTriNormal(tid);
+		}
+	});
+	RETURN_IF_CANCELLED;
+
+	DevelopableVerts.SetNum(Mesh->MaxVertexID());
+	double PlanarDotTol = FMathd::Cos( CoplanarAngleTolDeg * FMathd::DegToRad );
+	ParallelFor(Mesh->MaxVertexID(), [&](int32 vid)
+	{
+		if (Mesh->IsVertex(vid))
+		{
+			DevelopableVerts[vid] = IsDevelopableVertex(*Mesh, vid, PlanarDotTol, [&](int32 tid) { return TriNormals[tid]; });
+		}
+	});
+	RETURN_IF_CANCELLED;
+
+	ProfileEndSetup();
+
+
+	ProfileBeginOps();
+
+	ProfileBeginCollapse();
+
+	TArray<int32> CollapseEdges;
+	int32 MaxRounds = 50;
+	int32 num_last_pass = 0;
+	for (int ri = 0; ri < MaxRounds; ++ri)
+	{
+		num_last_pass = 0;
+
+		// collect up edges we have identified for collapse
+		CollapseEdges.Reset();
+		for (int32 eid : Mesh->EdgeIndicesItr())
+		{
+			FIndex2i ev = Mesh->GetEdgeV(eid);
+			if (DevelopableVerts[ev.A] || DevelopableVerts[ev.B])
+			{
+				CollapseEdges.Add(eid);
+			}
+		}
+
+
+		FVector3d va = FVector3d::Zero(), vb = FVector3d::Zero();
+		for ( int32 eid : CollapseEdges )
+		{
+			if ( (Mesh->IsEdge(eid) == false) || Mesh->IsBoundaryEdge(eid) )
+			{
+				continue;
+			}
+			RETURN_IF_CANCELLED;
+			COUNT_ITERATIONS++;
+
+			FIndex2i ev = Mesh->GetEdgeV(eid);
+			bool bDevelopableA = DevelopableVerts[ev.A];
+			bool bDevelopableB = DevelopableVerts[ev.B];
+			if (bDevelopableA || bDevelopableB)		// this may change during execution as edges are collapsed
+			{
+				if (! bDevelopableA)		// any other preference for verts?
+				{
+					Swap(ev.A, ev.B);
+				}
+
+				bool bIsCollapsible = IsCollapsableDevelopableEdge(*Mesh, eid, ev.A, ev.B, PlanarDotTol, [&](int32 tid) { return TriNormals[tid]; });
+				if (bIsCollapsible)
+				{
+					FDynamicMesh3::FEdgeCollapseInfo collapseInfo;
+					ESimplificationResult result;
+					result = CollapseEdge(eid, Mesh->GetVertex(ev.B), collapseInfo, ev.B);
+					if (result == ESimplificationResult::Ok_Collapsed)
+					{
+						++num_last_pass;
+
+						int vKeptID = collapseInfo.KeptVertex;
+						Mesh->EnumerateVertexTriangles(vKeptID, [&](int32 tid)
+						{
+							TriNormals[tid] = Mesh->GetTriNormal(tid);
+						});
+						for (int32 vid : Mesh->VtxVerticesItr(vKeptID))
+						{
+							DevelopableVerts[vid] = IsDevelopableVertex(*Mesh, vid, PlanarDotTol, [&](int32 tid) { return TriNormals[tid]; });
+						}
+						DevelopableVerts[vKeptID] = IsDevelopableVertex(*Mesh, vKeptID, PlanarDotTol, [&](int32 tid) { return TriNormals[tid]; });
+					}
+					else if (bDevelopableA && bDevelopableB &&
+								IsCollapsableDevelopableEdge(*Mesh, eid, ev.B, ev.A, PlanarDotTol, [&](int32 tid) { return TriNormals[tid]; }) )
+					{
+						// we can try collapsing to A
+						result = CollapseEdge(eid, Mesh->GetVertex(ev.A), collapseInfo, ev.A);
+						if (result == ESimplificationResult::Ok_Collapsed)
+						{
+							++num_last_pass;
+
+							int vKeptID = collapseInfo.KeptVertex;
+							Mesh->EnumerateVertexTriangles(vKeptID, [&](int32 tid)
+							{
+								TriNormals[tid] = Mesh->GetTriNormal(tid);
+							});
+							for (int32 vid : Mesh->VtxVerticesItr(vKeptID))
+							{
+								DevelopableVerts[vid] = IsDevelopableVertex(*Mesh, vid, PlanarDotTol, [&](int32 tid) { return TriNormals[tid]; });
+							}
+							DevelopableVerts[vKeptID] = IsDevelopableVertex(*Mesh, vKeptID, PlanarDotTol, [&](int32 tid) { return TriNormals[tid]; });
+						}
+					}
+				}
+			}
+		}
+
+		if (num_last_pass == 0)     // converged
+		{
+			break;
+		}
+	}
+	ProfileEndCollapse();
+	ProfileEndOps();
+
+	RETURN_IF_CANCELLED;
+
+	Reproject();
+
+	ProfileEndPass();
+
+#undef RETURN_IF_CANCELLED
+}
+
+
 
 template <typename QuadricErrorType>
 void TMeshSimplification<QuadricErrorType>::FastCollapsePass(double fMinEdgeLength, int nRounds, bool MeshIsClosedHint)
@@ -559,8 +1075,8 @@ void TMeshSimplification<QuadricErrorType>::FastCollapsePass(double fMinEdgeLeng
 			COUNT_ITERATIONS++;
 
 			FVector3d midpoint = (va + vb) * 0.5;
-			int vKeptID;
-			ESimplificationResult result = CollapseEdge(eid, midpoint, vKeptID);
+			FDynamicMesh3::FEdgeCollapseInfo collapseInfo;
+			ESimplificationResult result = CollapseEdge(eid, midpoint, collapseInfo);
 			if (result == ESimplificationResult::Ok_Collapsed)
 			{
 				++num_last_pass;
@@ -599,9 +1115,9 @@ void TMeshSimplification<QuadricErrorType>::FastCollapsePass(double fMinEdgeLeng
 
 
 template <typename QuadricErrorType>
-ESimplificationResult TMeshSimplification<QuadricErrorType>::CollapseEdge(int edgeID, FVector3d vNewPos, int& collapseToV)
+ESimplificationResult TMeshSimplification<QuadricErrorType>::CollapseEdge(int edgeID, FVector3d vNewPos, FDynamicMesh3::FEdgeCollapseInfo& collapseInfo, int32 RequireKeepVert)
 {
-	collapseToV = FDynamicMesh3::InvalidID;
+	collapseInfo.KeptVertex = FDynamicMesh3::InvalidID;
 	RuntimeDebugCheck(edgeID);
 
 	FEdgeConstraint constraint =
@@ -621,8 +1137,8 @@ ESimplificationResult TMeshSimplification<QuadricErrorType>::CollapseEdge(int ed
 	{
 		return ESimplificationResult::Failed_NotAnEdge;
 	}
-	FIndex4i edgeInfo = Mesh->GetEdge(edgeID);
-	int a = edgeInfo.A, b = edgeInfo.B, t0 = edgeInfo.C, t1 = edgeInfo.D;
+	const FDynamicMesh3::FEdge Edge = Mesh->GetEdge(edgeID);
+	int a = Edge.Vert[0], b = Edge.Vert[1], t0 = Edge.Tri[0], t1 = Edge.Tri[1];
 	bool bIsBoundaryEdge = (t1 == FDynamicMesh3::InvalidID);
 
 	// look up 'other' verts c (from t0) and d (from t1, if it exists)
@@ -641,7 +1157,7 @@ ESimplificationResult TMeshSimplification<QuadricErrorType>::CollapseEdge(int ed
 
 	ProfileBeginCollapse();
 
-	// check if we should collapse, and also find which vertex we should collapse to,
+	// check if we should collapse, and also find which vertex we should retain
 	// in cases where we have constraints/etc
 	int collapse_to = -1;
 	bool bCanCollapse = CanCollapseEdge(edgeID, a, b, c, d, t0, t1, collapse_to);
@@ -671,32 +1187,45 @@ ESimplificationResult TMeshSimplification<QuadricErrorType>::CollapseEdge(int ed
 		}
 	}
 
+	if (RequireKeepVert == a || RequireKeepVert == b)
+	{
+		if (collapse_to >= 0 && collapse_to != RequireKeepVert)
+		{
+			return ESimplificationResult::Ignored_Constrained;
+		}
+		collapse_to = RequireKeepVert;
+	}
+
 	// optimization: if edge cd exists, we cannot collapse or flip. look that up here?
 	//  funcs will do it internally...
 	//  (or maybe we can collapse if cd exists? edge-collapse doesn't check for it explicitly...)
 	ESimplificationResult retVal = ESimplificationResult::Failed_OpNotSuccessful;
 
 	int iKeep = b, iCollapse = a;
+	bool bCanMove = true;
+	
+	if (collapse_to != -1)
+	{
+		iKeep = collapse_to;
+		iCollapse = (iKeep == a) ? b : a;
 
-	// if either vtx is fixed, collapse to that position
+		// if constraints require a fixed position
+		if (Constraints)
+		{
+			bCanMove = Constraints->GetVertexConstraint(collapse_to).bCanMove;
+		}
+	}
 	double collapse_t = 0;
-	if (collapse_to == b)
-	{
-		vNewPos = vB;
-		collapse_t = 0;
-	}
-	else if (collapse_to == a)
-	{
-		iKeep = a; iCollapse = b;
-		vNewPos = vA;
-		collapse_t = 0;
-	}
-	else
+	if (bCanMove)
 	{
 		vNewPos = GetProjectedCollapsePosition(iKeep, vNewPos);
 		double div = vA.Distance(vB);
 		collapse_t = (div < FMathd::ZeroTolerance) ? 0.5 : (vNewPos.Distance(Mesh->GetVertex(iKeep))) / div;
 		collapse_t = VectorUtil::Clamp(collapse_t, 0.0, 1.0);
+	}
+	else
+	{
+		vNewPos = (collapse_to == a) ? vA : vB;
 	}
 
 	// check if this collapse will create a normal flip. Also checks
@@ -711,11 +1240,10 @@ ESimplificationResult TMeshSimplification<QuadricErrorType>::CollapseEdge(int ed
 	// lots of cases where we cannot collapse, but we should just let
 	// Mesh sort that out, right?
 	COUNT_COLLAPSES++;
-	FDynamicMesh3::FEdgeCollapseInfo collapseInfo;
+
 	EMeshResult result = Mesh->CollapseEdge(iKeep, iCollapse, collapse_t, collapseInfo);
 	if (result == EMeshResult::Ok)
 	{
-		collapseToV = iKeep;
 		Mesh->SetVertex(iKeep, vNewPos);
 		if (Constraints)
 		{
@@ -751,7 +1279,7 @@ void TMeshSimplification<QuadricErrorType>::FullProjectionPass()
 {
 	auto project = [&](int vID)
 	{
-		if (IsVertexConstrained(vID))
+		if (IsVertexPositionConstrained(vID))
 		{
 			return;
 		}
@@ -766,13 +1294,7 @@ void TMeshSimplification<QuadricErrorType>::FullProjectionPass()
 
 	ApplyToProjectVertices(project);
 
-	// [RMS] not sure how to do this...
-	//if (EnableParallelProjection) {
-	//    gParallel.ForEach<int>(project_vertices(), project);
-	//} else {
-	//    foreach (int vid in project_vertices())
-	//        project(vid);
-	//}
+	// TODO: optionally do projection in parallel?
 }
 
 template <typename QuadricErrorType>
@@ -803,7 +1325,7 @@ FVector3d TMeshSimplification<QuadricErrorType>::GetProjectedCollapsePosition(in
 		{
 			return vc.Target->Project(vNewPos, vid);
 		}
-		if (vc.Fixed)
+		if (vc.bCanMove == false)
 		{
 			return vNewPos;
 		}
@@ -841,7 +1363,14 @@ void TMeshSimplification<FAttrBasedQuadricErrord>::OnEdgeCollapse(int edgeID, in
 		TArray<int> ElementIdArray;
 		NormalOverlay->GetVertexElements(va, ElementIdArray);
 
-		// update everyone with the same normal.
+		if (ElementIdArray.Num() > 1)
+		{
+			// keep whatever split normals are currently in the overlay.
+			// @todo: normalize the split normals - since the values here result from a lerp
+			return;
+		}
+	
+		// at most one element
 		for (int ElementId : ElementIdArray)
 		{
 			NormalOverlay->SetElement(ElementId, UpdatedNormal);

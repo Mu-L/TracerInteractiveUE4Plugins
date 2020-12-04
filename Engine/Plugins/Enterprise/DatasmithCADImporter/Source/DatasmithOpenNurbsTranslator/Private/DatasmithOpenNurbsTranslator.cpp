@@ -10,6 +10,7 @@
 #include "RhinoCoretechWrapper.h"
 #endif // CAD_LIBRARY
 
+#include "CADInterfacesModule.h"
 #include "DatasmithImportOptions.h"
 #include "DatasmithMaterialElements.h"
 #include "DatasmithMaterialsUtils.h"
@@ -101,6 +102,27 @@ TSharedPtr<IDatasmithActorElement> DuplicateActorElement(TSharedPtr<IDatasmithAc
 	}
 
 	return DuplicatedElement;
+}
+
+TSharedPtr<IDatasmithMetaDataElement> DuplicateMetaDataElement(const TSharedPtr<IDatasmithMetaDataElement>& SourceMetaData, const TSharedPtr<IDatasmithActorElement>& TargetActorElement)
+{
+	FString MetaDataName = FString::Printf(TEXT("%s%s"), TargetActorElement->GetName(), TEXT("_DATA"));
+	TSharedPtr<IDatasmithMetaDataElement> DuplicatedMetaData = FDatasmithSceneFactory::CreateMetaData(*MetaDataName);
+	DuplicatedMetaData->SetAssociatedElement(TargetActorElement);
+
+	for (int32 PropertyIndex = 0, PropertyCount = SourceMetaData->GetPropertiesCount(); PropertyIndex < PropertyCount; ++PropertyIndex)
+	{
+		TSharedPtr<IDatasmithKeyValueProperty> SourceProperty = SourceMetaData->GetProperty(PropertyIndex);
+		if (SourceProperty)
+		{
+			TSharedRef<IDatasmithKeyValueProperty> DuplicatedProperty = FDatasmithSceneFactory::CreateKeyValueProperty(SourceProperty->GetName());
+			
+			DuplicatedProperty->SetValue(SourceProperty->GetValue());
+			DuplicatedMetaData->AddProperty(DuplicatedProperty);
+		}
+	}
+
+	return DuplicatedMetaData;
 }
 
 // #ueent_wip: test with CADSDK_ENABLED undefined
@@ -436,7 +458,7 @@ namespace DatasmithOpenNurbsTranslatorUtils
 
 				// Fill the vertex array
 				FVertexID AddedVertexId = MeshDescription.CreateVertex();
-				VertexPositions[AddedVertexId] = FVector(-Pos.X, Pos.Y, Pos.Z);
+				VertexPositions[AddedVertexId] = FDatasmithUtils::ConvertVector(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded_FBXLegacy, Pos);
 			}
 
 			int32 VertexIndices[3];
@@ -476,7 +498,7 @@ namespace DatasmithOpenNurbsTranslatorUtils
 					const FNode& FaceNode = *Face.Nodes[CornerIndex];
 
 					// Set the normal
-					FVector UENormal = FDatasmithUtils::ConvertVector(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded, FaceNode.Normal);
+					FVector UENormal = FDatasmithUtils::ConvertVector(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded_FBXLegacy, FaceNode.Normal);
 					UENormal = UENormal.GetSafeNormal();
 
 					// Check to see if normal is correct. If not replace by face's normal
@@ -675,6 +697,7 @@ private:
 	TSharedPtr<IDatasmithMeshActorElement> GetMeshActorElement(const FOpenNurbsObjectWrapper& Object);
 	TSharedPtr<IDatasmithActorElement> GetPointActorElement(const FOpenNurbsObjectWrapper& Object);
 	TSharedPtr<IDatasmithMeshElement> GetMeshElement(const FOpenNurbsObjectWrapper& Object, const FString& Uuid, const FString& Label);
+	TSharedPtr<IDatasmithMetaDataElement> GetObjectMetaData(const FOpenNurbsObjectWrapper& Object, const TSharedPtr<IDatasmithElement>& DatasmithElement);
 
 	struct FMaterial
 	{
@@ -721,7 +744,7 @@ private:
 	FDatasmithOpenNurbsOptions OpenNurbsOptions;
 	uint32 OpenNurbsOptionsHash;
 	FDatasmithImportBaseOptions BaseOptions;
-
+	
 #ifdef CAD_LIBRARY
 	TSharedPtr<FRhinoCoretechWrapper> LocalSession;
 #endif // CAD_LIBRARY
@@ -791,6 +814,7 @@ private:
 	std::map<ON_UUID, TSharedPtr<IDatasmithActorElement>> uuidToInstanceContainer;
 	std::map<ON_UUID, int> uuidToInstanceChildrenCount;
 	std::map<ON_UUID, ON_UUID> objectUUIDToInstanceUUID;
+	TMap<TSharedPtr<IDatasmithActorElement>, TSharedPtr<IDatasmithMetaDataElement>> ActorElementToMetaDataMap;
 	TMap<IDatasmithMeshElement*, FOpenNurbsTranslatorImpl*> MeshElementToTranslatorMap;
 
 	//Objects
@@ -817,10 +841,8 @@ void FOpenNurbsTranslatorImpl::ShowMessageLog(const FString& Filename)
 		LogListing->ClearMessages();
 
 		LogListing->AddMessage(FTokenizedMessage::Create(EMessageSeverity::Warning,
-			FText::Format(LOCTEXT("DatasmithOpenNurbsTranslator_NoMeshDataForAllMeshes",
-				"Rhino model \"{0}\" doesn't contain mesh data for all objects. \n"
-				"Either resave the 3dm file with a \"rendered view\" or change the import settings to \"Import as NURBS, Tessellate in Unreal\""),
-				FText::FromString(Filename))));
+			FText::Format(LOCTEXT("DatasmithOpenNurbsTranslator_NoMeshDataForAllMeshes", "Rhino model \"{0}\" doesn't contain mesh data for all objects. \nEither resave the 3dm file with a \"rendered view\" or change the import settings to \"Import as NURBS, Tessellate in Unreal\""), FText::FromString(Filename))
+		));
 
 		for (const FString& Name: MissingRenderMeshes)
 		{
@@ -1019,7 +1041,8 @@ void FOpenNurbsTranslatorImpl::TranslateMaterialTable(const ON_ObjectArray<ON_Ma
 
 				UVParameters.UVTiling.Y = Tiling.Y;
 
-				if (!Tiling.IsNearlyZero())
+				if ( !FMath::IsNearlyZero( Tiling.X, KINDA_SMALL_NUMBER )
+					&& !FMath::IsNearlyZero( Tiling.Y, KINDA_SMALL_NUMBER ) )
 				{
 					UVParameters.UVOffset.X = Translation.X / Tiling.X;
 
@@ -1090,6 +1113,7 @@ void FOpenNurbsTranslatorImpl::TranslateMaterialTable(const ON_ObjectArray<ON_Ma
 			{
 				// Transparent color
 				IDatasmithMaterialExpressionScalar* Scalar = static_cast<IDatasmithMaterialExpressionScalar*>(Material->AddMaterialExpression(EDatasmithMaterialExpressionType::ConstantScalar));
+				Scalar->SetName( TEXT( "Opacity" ) );
 				Scalar->GetScalar() = LinearColor.A;
 
 				Material->GetOpacity().SetExpression(Scalar);
@@ -1098,9 +1122,10 @@ void FOpenNurbsTranslatorImpl::TranslateMaterialTable(const ON_ObjectArray<ON_Ma
 			{
 				// Modulate the opacity map with the color transparency setting
 				IDatasmithMaterialExpressionGeneric* Multiply = static_cast<IDatasmithMaterialExpressionGeneric*>(Material->AddMaterialExpression(EDatasmithMaterialExpressionType::Generic));
-				Multiply->SetExpressionName(TEXT("Multiply"));
+				Multiply->SetExpressionName( TEXT( "Multiply" ) );
 
 				IDatasmithMaterialExpressionScalar* Scalar = static_cast<IDatasmithMaterialExpressionScalar*>(Material->AddMaterialExpression(EDatasmithMaterialExpressionType::ConstantScalar));
+				Scalar->SetName( TEXT( "Opacity Output Level" ) );
 				Scalar->GetScalar() = LinearColor.A;
 				Scalar->ConnectExpression(*Multiply->GetInput(0));
 
@@ -1116,6 +1141,7 @@ void FOpenNurbsTranslatorImpl::TranslateMaterialTable(const ON_ObjectArray<ON_Ma
 		if (!FMath::IsNearlyZero(Shininess))
 		{
 			IDatasmithMaterialExpressionScalar* Scalar = static_cast<IDatasmithMaterialExpressionScalar*>(Material->AddMaterialExpression(EDatasmithMaterialExpressionType::ConstantScalar));
+			Scalar->SetName( TEXT( "Roughness" ) );
 			Scalar->GetScalar() = 1.f - Shininess;
 			Material->GetRoughness().SetExpression(Scalar);
 		}
@@ -1124,6 +1150,7 @@ void FOpenNurbsTranslatorImpl::TranslateMaterialTable(const ON_ObjectArray<ON_Ma
 		if (!FMath::IsNearlyZero(Reflectivity))
 		{
 			IDatasmithMaterialExpressionScalar* Scalar = static_cast<IDatasmithMaterialExpressionScalar*>(Material->AddMaterialExpression(EDatasmithMaterialExpressionType::ConstantScalar));
+			Scalar->SetName( TEXT( "Metallic" ) );
 			Scalar->GetScalar() = Reflectivity;
 			Material->GetMetallic().SetExpression(Scalar);
 		}
@@ -1279,7 +1306,7 @@ void FOpenNurbsTranslatorImpl::TranslateLightTable(const ON_ClassArray<FOpenNurb
 		{
 			FVector Location(LightObj.Location().x, LightObj.Location().y, LightObj.Location().z);
 			Location *= ScalingFactor;
-			Location = FDatasmithUtils::ConvertVector(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded, Location);
+			Location = FDatasmithUtils::ConvertVector(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded_FBXLegacy, Location);
 			LightElement->SetTranslation(Location);
 		}
 
@@ -1288,7 +1315,7 @@ void FOpenNurbsTranslatorImpl::TranslateLightTable(const ON_ClassArray<FOpenNurb
 			LightType == EDatasmithElementType::SpotLight)
 		{
 			FVector Direction(LightObj.Direction().x, LightObj.Direction().y, LightObj.Direction().z);
-			Direction = FDatasmithUtils::ConvertVector(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded, Direction);
+			Direction = FDatasmithUtils::ConvertVector(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded_FBXLegacy, Direction);
 			LightElement->SetRotation(FQuat::FindBetweenVectors(FVector::ForwardVector, Direction));
 		}
 
@@ -1372,6 +1399,12 @@ void FOpenNurbsTranslatorImpl::TranslateLightTable(const ON_ClassArray<FOpenNurb
 		else
 		{
 			Scene->AddActor(LightElement);
+		}
+
+		TSharedPtr<IDatasmithMetaDataElement> MetaData = GetObjectMetaData(Object, LightElement);
+		if (MetaData.IsValid())
+		{
+			Scene->AddMetaData(MetaData);
 		}
 	}
 }
@@ -1691,6 +1724,12 @@ void FOpenNurbsTranslatorImpl::TranslateNonInstanceObject(const FOpenNurbsObject
 		if (ContainerElement.IsValid())
 		{
 			ContainerElement->AddChild(PartElement);
+
+			TSharedPtr<IDatasmithMetaDataElement> MetaData = GetObjectMetaData(Object, PartElement);
+			if (MetaData.IsValid())
+			{
+				ActorElementToMetaDataMap.FindOrAdd(PartElement) = MetaData;
+			}
 		}
 
 		SetTags(PartElement, Object);
@@ -1706,6 +1745,12 @@ void FOpenNurbsTranslatorImpl::TranslateNonInstanceObject(const FOpenNurbsObject
 		else
 		{
 			Scene->AddActor(PartElement);
+		}
+
+		TSharedPtr<IDatasmithMetaDataElement> MetaData = GetObjectMetaData(Object, PartElement);
+		if (MetaData.IsValid())
+		{
+			Scene->AddMetaData(MetaData);
 		}
 
 		SetLayers(PartElement, Object);
@@ -1825,17 +1870,25 @@ bool FOpenNurbsTranslatorImpl::TranslateInstance(const FOpenNurbsObjectWrapper& 
 
 	// Ref. FDatasmithCADImporter::SetWorldTransform
 	FTransform Transform(Matrix);
-	FTransform CorrectedTransform = FDatasmithUtils::ConvertTransform(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded, Transform);
+	FTransform CorrectedTransform = FDatasmithUtils::ConvertTransform(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded_FBXLegacy, Transform);
 
 	ContainerElement->SetTranslation(CorrectedTransform.GetTranslation() * ScalingFactor);
 	ContainerElement->SetScale(CorrectedTransform.GetScale3D());
 	ContainerElement->SetRotation(CorrectedTransform.GetRotation());
+	bool bIsPartOfInstanceDefinition = false;
 
 	// If instance of an instance, parent to parent instance definition
 	if (ON_UuidIsNotNil(instanceUuid) == true)
 	{
+		bIsPartOfInstanceDefinition = true;
 		TSharedPtr<IDatasmithActorElement> InstanceContainer = uuidToInstanceContainer[instanceUuid];
 		InstanceContainer->AddChild(ContainerElement);
+
+		TSharedPtr<IDatasmithMetaDataElement> MetaData = GetObjectMetaData(Object, ContainerElement);
+		if (MetaData.IsValid())
+		{
+			ActorElementToMetaDataMap.FindOrAdd(ContainerElement) = MetaData;
+		}
 	}
 	else
 	{
@@ -1847,6 +1900,12 @@ bool FOpenNurbsTranslatorImpl::TranslateInstance(const FOpenNurbsObjectWrapper& 
 		else
 		{
 			Scene->AddActor(ContainerElement);
+		}
+
+		TSharedPtr<IDatasmithMetaDataElement> MetaData = GetObjectMetaData(Object, ContainerElement);
+		if (MetaData.IsValid())
+		{
+			Scene->AddMetaData(MetaData);
 		}
 	}
 
@@ -1864,6 +1923,20 @@ bool FOpenNurbsTranslatorImpl::TranslateInstance(const FOpenNurbsObjectWrapper& 
 
 		TSharedPtr<IDatasmithActorElement> DuplicatedChild = DuplicateActorElement(Child, ContainerElement->GetName());
 		ContainerElement->AddChild(DuplicatedChild, EDatasmithActorAttachmentRule::KeepRelativeTransform);
+
+		if (TSharedPtr<IDatasmithMetaDataElement>* SourceMetaData = ActorElementToMetaDataMap.Find(Child))
+		{
+			TSharedPtr<IDatasmithMetaDataElement> DuplicatedMetaData = DuplicateMetaDataElement(*SourceMetaData, DuplicatedChild);
+
+			if (bIsPartOfInstanceDefinition)
+			{
+				ActorElementToMetaDataMap.FindOrAdd(DuplicatedChild) = DuplicatedMetaData;
+			}
+			else
+			{
+				Scene->AddMetaData(DuplicatedMetaData);
+			}
+		}
 	}
 
 	SetLayers(ContainerElement, Object);
@@ -1871,6 +1944,38 @@ bool FOpenNurbsTranslatorImpl::TranslateInstance(const FOpenNurbsObjectWrapper& 
 
 	// TODO: Apply material override
 	return true;
+}
+
+TSharedPtr<IDatasmithMetaDataElement> FOpenNurbsTranslatorImpl::GetObjectMetaData(const FOpenNurbsObjectWrapper& Object, const TSharedPtr<IDatasmithElement>& DatasmithElement)
+{
+	ON_ClassArray<ON_wString> UserStringKeys;
+	if (Object.Attributes.GetUserStringKeys(UserStringKeys))
+	{
+		FString MetaDataName = FString::Printf(TEXT("%s%s"), DatasmithElement->GetName(), TEXT("_DATA"));
+		TSharedPtr<IDatasmithMetaDataElement> MetaData = FDatasmithSceneFactory::CreateMetaData(*MetaDataName);
+		MetaData->SetAssociatedElement(DatasmithElement);
+
+		for (int32 UserTextIndex = 0; UserTextIndex < UserStringKeys.Count(); ++UserTextIndex)
+		{
+			ON_wString& KeyString = *UserStringKeys.At(UserTextIndex);
+			ON_wString Value;
+			if (Object.Attributes.GetUserString(KeyString.Array(), Value))
+			{
+				TSharedRef<IDatasmithKeyValueProperty> MetaDataProperty = FDatasmithSceneFactory::CreateKeyValueProperty(KeyString.Array());
+				MetaDataProperty->SetValue(Value.Array());
+				MetaDataProperty->SetPropertyType(EDatasmithKeyValuePropertyType::String);
+
+				MetaData->AddProperty(MetaDataProperty);
+			}
+		}
+
+		if (MetaData->GetPropertiesCount() > 0)
+		{
+			return  MetaData;
+		}
+	}
+
+	return TSharedPtr<IDatasmithMetaDataElement>();
 }
 
 TSharedPtr<IDatasmithActorElement> FOpenNurbsTranslatorImpl::GetActorElement(const FOpenNurbsObjectWrapper& Object)
@@ -1939,7 +2044,7 @@ TSharedPtr<IDatasmithMeshActorElement> FOpenNurbsTranslatorImpl::GetMeshActorEle
 	if (ComputeObjectGeometryCenter(Object, GeometryCenter))
 	{
 		MeshElementToGeometryCenter.Add(MeshElement.ToSharedRef(), GeometryCenter);
-		FVector ActorOffset = ScalingFactor * FDatasmithUtils::ConvertVector(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded, GeometryCenter);
+		FVector ActorOffset = ScalingFactor * FDatasmithUtils::ConvertVector(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded_FBXLegacy, GeometryCenter);
 		ActorElement->SetTranslation(ActorOffset);
 	}
 
@@ -1986,7 +2091,7 @@ TSharedPtr<IDatasmithActorElement> FOpenNurbsTranslatorImpl::GetPointActorElemen
 
 	FVector Location(pointObj->point.x, pointObj->point.y, pointObj->point.z);
 	Location *= ScalingFactor;
-	Location = FDatasmithUtils::ConvertVector(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded, Location);
+	Location = FDatasmithUtils::ConvertVector(FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded_FBXLegacy, Location);
 
 	ActorElement->SetTranslation(Location);
 	ActorElement->SetLabel(*ActorLabel);
@@ -3086,6 +3191,7 @@ bool FOpenNurbsTranslatorImpl::TranslateBRep(ON_Brep* Brep, const ON_3dmObjectAt
 		// Ref. visitBRep
 		const FDatasmithOpenNurbsOptions& TessellationOptions = OpenNurbsOptions;
 		LocalSession->SetImportParameters(TessellationOptions.ChordTolerance, TessellationOptions.MaxEdgeLength, TessellationOptions.NormalTolerance, (CADLibrary::EStitchingTechnique) TessellationOptions.StitchingTechnique, false);
+		LocalSession->GetImportParameters().ModelCoordSys = FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded_FBXLegacy;
 
 		CADLibrary::CheckedCTError Result;
 
@@ -3402,7 +3508,7 @@ bool FDatasmithOpenNurbsTranslator::LoadStaticMesh(const TSharedRef<IDatasmithMe
 
 #ifdef CAD_LIBRARY
 		CADLibrary::FImportParameters ImportParameters;
-		ImportParameters.ModelCoordSys = CADLibrary::EModelCoordSystem::ZUp_RightHanded;
+		ImportParameters.ModelCoordSys = FDatasmithUtils::EModelCoordSystem::ZUp_RightHanded_FBXLegacy;
 		ImportParameters.MetricUnit = Translator->GetMetricUnit();
 		ImportParameters.ScaleFactor = Translator->GetScalingFactor();
 
@@ -3439,7 +3545,12 @@ void FDatasmithOpenNurbsTranslator::SetSceneImportOptions(TArray<TStrongObjectPt
 
 void FDatasmithOpenNurbsTranslator::GetSceneImportOptions(TArray<TStrongObjectPtr<UDatasmithOptionsBase>>& Options)
 {
-	Options.Add(Datasmith::MakeOptions<UDatasmithOpenNurbsImportOptions>());
+	TStrongObjectPtr<UDatasmithOpenNurbsImportOptions> OpenNurbsOptionsPtr = Datasmith::MakeOptions<UDatasmithOpenNurbsImportOptions>();
+	if (ICADInterfacesModule::IsAvailable() == ECADInterfaceAvailability::Unavailable)
+	{
+		OpenNurbsOptionsPtr->Options.Geometry = EDatasmithOpenNurbsBrepTessellatedSource::UseRenderMeshes;
+	}
+	Options.Add(OpenNurbsOptionsPtr);
 }
 
 #undef LOCTEXT_NAMESPACE // "DatasmithOpenNurbsTranslator"

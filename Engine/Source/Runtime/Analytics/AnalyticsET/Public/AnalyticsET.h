@@ -33,12 +33,16 @@ public:
 	// Configuration functionality
 	//--------------------------------------------------------------------------
 public:
-	/** Defines required configuration values for ET analytics provider. */
+	/**
+	 * Defines required configuration values for ET analytics provider. 
+	 * APIKeyET MUST be set.
+	 * Set APIServerET to an empty string to create a "NULL" analytics provider that will be a valid instance but will suppress sending any events.
+	*/
 	struct Config
 	{
 		/** ET APIKey - Get from your account manager */
 		FString APIKeyET;
-		/** ET API Server - Base URL to send events. */
+		/** ET API Server - Base URL to send events. Set this to an empty string to essentially create a NULL analytics provider that will be non-null, but won't actually send events. */
 		FString APIServerET;
 		/** ET Alt API Servers - Base URLs to send events on retry. */
 		TArray<FString> AltAPIServersET;
@@ -57,12 +61,18 @@ public:
 		/** The UploadType that the data router should use. Defaults to GetDefaultUploadType. */
 		FString UploadType;
 		/** Maximum number of retries to attempt. */
-		uint32 RetryLimitCount;
+		uint32 RetryLimitCount = 0;
+		/** Maximum time to elapse before forcing events to be flushed. Use a negative value to use the defaults (60 sec). */
+		float FlushIntervalSec = -1.f;
+		/** Maximum size a payload can reach before we force a flush of the payload. Use a negative value to use the defaults. See FAnalyticsProviderETEventCache. */
+		int32 MaximumPayloadSize = -1;
+		/** We preallocate a payload. It defaults to the Maximum configured payload size (see FAnalyticsProviderETEventCache). Use a negative value use the default. See FAnalyticsProviderETEventCache. */
+		int32 PreallocatedPayloadSize = -1;
 
 		/** Default ctor to ensure all values have their proper default. */
-		Config() : UseLegacyProtocol(false) {}
+		Config() = default;
 		/** Ctor exposing common configurables . */
-		Config(FString InAPIKeyET, FString InAPIServerET, FString InAppVersionET = FString(), bool InUseLegacyProtocol = false, FString InAppEnvironment = FString(), FString InUploadType = FString(), TArray<FString> InAltApiServers = TArray<FString>())
+		Config(FString InAPIKeyET, FString InAPIServerET, FString InAppVersionET = FString(), bool InUseLegacyProtocol = false, FString InAppEnvironment = FString(), FString InUploadType = FString(), TArray<FString> InAltApiServers = TArray<FString>(), float InFlushIntervalSec = -1.f, int32 InMaximumPayloadSize = -1, int32 InPreallocatedPayloadSize = -1)
 			: APIKeyET(MoveTemp(InAPIKeyET))
 			, APIServerET(MoveTemp(InAPIServerET))
 			, AltAPIServersET(MoveTemp(InAltApiServers))
@@ -70,6 +80,9 @@ public:
 			, UseLegacyProtocol(InUseLegacyProtocol)
 			, AppEnvironment(MoveTemp(InAppEnvironment))
 			, UploadType(MoveTemp(InUploadType))
+			, FlushIntervalSec(InFlushIntervalSec)
+			, MaximumPayloadSize(InMaximumPayloadSize)
+			, PreallocatedPayloadSize(InPreallocatedPayloadSize)
 		{}
 
 		/** KeyName required for APIKey configuration. */

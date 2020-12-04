@@ -587,7 +587,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 	int loop_count;
 
 	/** Whether the shader being cross compiled needs EXT_shader_texture_lod. */
-	bool bUsesES2TextureLODExtension;
+	bool bUsesGLTextureLODExtension;
 
 	/** Whether the shader being cross compiled needs GL_EXT_texture_buffer. */
 	bool bUsesTextureBuffer;
@@ -1194,7 +1194,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 				if (bGenerateLayoutLocations && var->explicit_location)
 				{
 					check(layout_bits == 0);
-					layout = ralloc_asprintf(nullptr, "INTERFACE_LOCATION(%d) ", var->location);
+					layout = ralloc_asprintf(nullptr, "layout(location=%d) ", var->location);
 				}
 
 				const bool bOverrideFBFOutputVarStorageQualifier = bIsES31 && bUsesFrameBufferFetch && var->name && (strncmp(var->name, "out_Target0", 11) == 0);
@@ -1460,7 +1460,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 		if (bIsES && op == ir_txl && ShaderTarget == fragment_shader)
 		{
 			// See http://www.khronos.org/registry/gles/extensions/EXT/EXT_shader_texture_lod.txt
-			bUsesES2TextureLODExtension = true;
+			bUsesGLTextureLODExtension = true;
 			bEmitEXT = true;
 		}
 
@@ -1694,7 +1694,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 		}
 	}
 
-	void print_image_op( ir_dereference_image *deref, ir_rvalue *src)
+	void print_image_op( ir_dereference_image *deref, ir_rvalue *src, const char* Mask = nullptr)
 	{
 		const char* swizzle[] =
 		{
@@ -1725,6 +1725,10 @@ class ir_gen_glsl_visitor : public ir_visitor
 				ralloc_asprintf_append(buffer, "[");
 				deref->image_index->accept(this);
 				ralloc_asprintf_append(buffer, "]");
+				if (Mask)
+				{
+					ralloc_asprintf_append(buffer, Mask);
+				}
 				if (src)
 				{
 					ralloc_asprintf_append(buffer, " = ");
@@ -1840,31 +1844,30 @@ class ir_gen_glsl_visitor : public ir_visitor
 			ralloc_asprintf_append(buffer, ") { ");
 		}
 
+		char mask[6] = "";
+		unsigned j = 1;
+		if (assign->lhs->type->is_scalar() == false ||
+			assign->write_mask != 0x1)
+		{
+			for (unsigned i = 0; i < 4; i++)
+			{
+				if ((assign->write_mask & (1 << i)) != 0)
+				{
+					mask[j] = "xyzw"[i];
+					j++;
+				}
+			}
+		}
+		mask[j] = '\0';
+
+		mask[0] = (j == 1) ? '\0' : '.';
+
 		if (assign->lhs->as_dereference_image() != NULL)
 		{
-			/** EHart - should the write mask be checked here? */
-			print_image_op( assign->lhs->as_dereference_image(), assign->rhs);
+			print_image_op( assign->lhs->as_dereference_image(), assign->rhs, mask);
 		}
 		else
 		{
-			char mask[6];
-			unsigned j = 1;
-			if (assign->lhs->type->is_scalar() == false ||
-				assign->write_mask != 0x1)
-			{
-				for (unsigned i = 0; i < 4; i++)
-				{
-					if ((assign->write_mask & (1 << i)) != 0)
-					{
-						mask[j] = "xyzw"[i];
-						j++;
-					}
-				}
-			}
-			mask[j] = '\0';
-
-			mask[0] = (j == 1) ? '\0' : '.';
-
 			// decide if we need to cast to float
 			const bool need_float_conv = (assign->lhs->type->is_float()
 				&& ((assign->rhs->as_constant() != nullptr)
@@ -1931,7 +1934,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 			}
 		}
 		else if (constant->type->base_type == GLSL_TYPE_INT
-			// print literal uints as ints for ES2.
+			// print literal uints as ints.
 			|| (bIsES && !bIsES31 && !bIsWebGL && constant->type->base_type == GLSL_TYPE_UINT)
 			)
 		{
@@ -3112,7 +3115,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 			ralloc_asprintf_append(buffer, "// Uses samplerExternalOES\n");
 		}
 
-		if (bUsesES2TextureLODExtension)
+		if (bUsesGLTextureLODExtension)
 		{
 			ralloc_asprintf_append(buffer, "#ifndef DONTEMITEXTENSIONSHADERTEXTURELODENABLE\n");
 			ralloc_asprintf_append(buffer, "#extension GL_EXT_shader_texture_lod : enable\n");
@@ -3197,7 +3200,7 @@ class ir_gen_glsl_visitor : public ir_visitor
 
 			if (bUsesTextureBuffer)
 			{
-				// Not supported by ES2 and ES3.1 spec, but many phones support this extension
+				// Not supported by ES3.1 spec, but many phones support this extension
 				// GPU particles require this
 				// App shall not use a shader if this extension is not supported on device
 				ralloc_asprintf_append(buffer, "\n#ifdef GL_EXT_texture_buffer\n");
@@ -3231,7 +3234,7 @@ public:
 		, needs_semicolon(false)
 		, should_print_uint_literals_as_ints(false)
 		, loop_count(0)
-		, bUsesES2TextureLODExtension(false)
+		, bUsesGLTextureLODExtension(false)
 		, bUsesTextureBuffer(false)
 		, bUseImageAtomic(false)
 		, bUsesDXDY(false)
@@ -3274,7 +3277,7 @@ public:
 			// always use highp for integers as shaders use them as bit storage
 			ralloc_asprintf_append(&default_precision_buffer, "precision %s int;\n", "highp");
 
-			if (bIsES) // ES2 workarounds
+			if (bIsES) // ES workarounds
 			{
 				ralloc_asprintf_append(buffer, "\n#ifndef DONTEMITSAMPLERDEFAULTPRECISION\n"); 
 				ralloc_asprintf_append(buffer, "precision %s sampler2D;\n", DefaultPrecision);
@@ -3348,10 +3351,10 @@ bool compiler_internal_AdjustIsFrontFacing(bool isFrontFacing)
 				ralloc_asprintf_append(buffer, "	vec4 FramebufferFetchES2() { return gl_LastFragColorARM; }\n");
 				ralloc_asprintf_append(buffer, "#else\n");
 				ralloc_asprintf_append(buffer, "	#define %sout\n", ES31FrameBufferFetchStorageQualifier);
-				ralloc_asprintf_append(buffer, "	vec4 FramebufferFetchES2() { return vec4(65000.0, 65000.0, 65000.0, 65000.0); }\n");
+				ralloc_asprintf_append(buffer, "	vec4 FramebufferFetchES2() { return vec4(0.0, 0.0, 0.0, 0.0); }\n");
 				ralloc_asprintf_append(buffer, "#endif\n\n");
 			}
-			else // ES3, ES2
+			else // ES3
 			{
 				ralloc_asprintf_append(buffer, "\n#ifdef UE_EXT_shader_framebuffer_fetch\n");
 				ralloc_asprintf_append(buffer, "	#if (__VERSION__ >= 300)\n");
@@ -3364,7 +3367,7 @@ bool compiler_internal_AdjustIsFrontFacing(bool isFrontFacing)
 				//ralloc_asprintf_append(buffer, "		highp vec4 gl_LastFragColorARM;\n"); Does not work on S7 MALI
 				ralloc_asprintf_append(buffer, "		vec4 FramebufferFetchES2() { return gl_LastFragColorARM; }\n");
 				ralloc_asprintf_append(buffer, "	#else\n");
-				ralloc_asprintf_append(buffer, "		vec4 FramebufferFetchES2() { return vec4(65000.0, 65000.0, 65000.0, 65000.0); }\n");
+				ralloc_asprintf_append(buffer, "		vec4 FramebufferFetchES2() { return vec4(0.0, 0.0, 0.0, 0.0); }\n");
 				ralloc_asprintf_append(buffer, "	#endif\n");
 				ralloc_asprintf_append(buffer, "#endif\n\n");
 			}
@@ -3375,9 +3378,9 @@ bool compiler_internal_AdjustIsFrontFacing(bool isFrontFacing)
 		if (bUsesDepthbufferFetch)
 		{
 			ralloc_asprintf_append(buffer, "\n#ifdef GL_ARM_shader_framebuffer_fetch_depth_stencil\n");
-			ralloc_asprintf_append(buffer, "float DepthbufferFetchES2(float OptionalDepth, float C1, float C2) { float w = 1.0/(gl_LastFragDepthARM*C1-C2); return clamp(w, 0.0, 65000.0); }\n");
+			ralloc_asprintf_append(buffer, "float DepthbufferFetchES2() { return gl_LastFragDepthARM; }\n");
 			ralloc_asprintf_append(buffer, "#else\n");
-			ralloc_asprintf_append(buffer, "float DepthbufferFetchES2(float OptionalDepth, float C1, float C2) { return OptionalDepth; }\n");
+			ralloc_asprintf_append(buffer, "float DepthbufferFetchES2() { return 0.0; }\n");
 			ralloc_asprintf_append(buffer, "#endif\n\n");
 		}
 
@@ -3668,18 +3671,18 @@ struct SPromoteSampleLevel : public ir_hierarchical_visitor
 
 
 // Converts an array index expression using an integer input attribute, to a float input attribute using a conversion to int
-struct SConvertIntVertexAttributeES2 final : public ir_hierarchical_visitor
+struct SConvertIntVertexAttributeES final : public ir_hierarchical_visitor
 {
 	_mesa_glsl_parse_state* ParseState;
 	exec_list* FunctionBody;
 	int InsideArrayDeref;
 	std::map<ir_variable*, ir_variable*> ConvertedVarMap;
 
-	SConvertIntVertexAttributeES2(_mesa_glsl_parse_state* InParseState, exec_list* InFunctionBody) : ParseState(InParseState), FunctionBody(InFunctionBody), InsideArrayDeref(0)
+	SConvertIntVertexAttributeES(_mesa_glsl_parse_state* InParseState, exec_list* InFunctionBody) : ParseState(InParseState), FunctionBody(InFunctionBody), InsideArrayDeref(0)
 	{
 	}
 
-	virtual ~SConvertIntVertexAttributeES2()
+	virtual ~SConvertIntVertexAttributeES()
 	{
 	}
 
@@ -3761,7 +3764,7 @@ bool FGlslCodeBackend::ApplyAndVerifyPlatformRestrictions(exec_list* Instruction
 		// Handle integer vertex attributes used as array indices
 		if (bIsVertexShader)
 		{
-			SConvertIntVertexAttributeES2 ConvertIntVertexAttributeVisitor(ParseState, Instructions);
+			SConvertIntVertexAttributeES ConvertIntVertexAttributeVisitor(ParseState, Instructions);
 			ConvertIntVertexAttributeVisitor.run(Instructions);
 		}
 	}
@@ -3875,6 +3878,44 @@ FSystemValue* SystemValueTable[HSF_FrequencyCount] =
 
 #define CUSTOM_LAYER_INDEX_SEMANTIC "HLSLCC_LAYER_INDEX"
 
+// Returns the number of slots an in/out variable occupies. This is determined by the variable type, e.g. vec4 has offset 1, mat4 has offset 4.
+// For geometry shader input variables, the first array specifier is ignored as geometry shaders get their input from multiple vertex shader invocations.
+static unsigned GetInOutVariableSlotSize(EHlslShaderFrequency Frequency, ir_variable_mode Mode, const struct glsl_type* VarType)
+{
+	check(VarType != nullptr);
+	if (VarType->base_type == GLSL_TYPE_STRUCT)
+	{
+		uint32 NumSlots = 0;
+		for (uint32 Index = 0; Index < VarType->length; ++Index)
+		{
+			NumSlots += GetInOutVariableSlotSize(Frequency, Mode, VarType->fields.structure[Index].type);
+		}
+
+		return NumSlots;
+	}
+	else if (VarType->base_type == GLSL_TYPE_ARRAY)
+	{
+		if (Frequency == HSF_GeometryShader && Mode == ir_var_in)
+		{
+			// Ignore frequency after first array specifier, so use HSF_InvalidFrequency
+			return GetInOutVariableSlotSize(HSF_InvalidFrequency, Mode, VarType->fields.array);
+		}
+		else
+		{
+			// Multiply inner array type by array size, i.e. both 'vec2[4]' and 'float[4]' occupy 4 slots
+			// Ignore frequency after first array specifier, so use HSF_InvalidFrequency
+			return GetInOutVariableSlotSize(HSF_InvalidFrequency, Mode, VarType->fields.array) * VarType->length;
+		}
+	}
+	else
+	{
+		check(VarType->matrix_columns >= 0);
+
+		// Only use number of matrix columns to determine number of slots this variable occupies: 1 for scalars and vectors, 2/3/4 for matrices
+		return VarType->matrix_columns;
+	}
+}
+
 static void ConfigureInOutVariableLayout(EHlslShaderFrequency Frequency,
 										 _mesa_glsl_parse_state* ParseState,
 										 const char* Semantic,
@@ -3912,7 +3953,8 @@ static void ConfigureInOutVariableLayout(EHlslShaderFrequency Frequency,
 
 		if(Mode == ir_var_in)
 		{
-			Variable->location = ParseState->next_in_location_slot++;
+			Variable->location = ParseState->next_in_location_slot;
+		 	ParseState->next_in_location_slot += GetInOutVariableSlotSize(Frequency, Mode, Variable->type);
 		}
 		else
 		{
@@ -3921,7 +3963,8 @@ static void ConfigureInOutVariableLayout(EHlslShaderFrequency Frequency,
 			const bool bIsRenderTargetOutput = Frequency == HSF_PixelShader && Mode == ir_var_out;
 			if (!bIsRenderTargetOutput || !Variable->explicit_location)
 			{
-				Variable->location = ParseState->next_out_location_slot++;
+				Variable->location = ParseState->next_out_location_slot;
+				ParseState->next_out_location_slot += GetInOutVariableSlotSize(Frequency, Mode, Variable->type);
 			}
 		}
 
@@ -5677,8 +5720,9 @@ void FGlslCodeBackend::GenShaderPatchConstantFunctionInputs(_mesa_glsl_parse_sta
 
 void FGlslLanguageSpec::SetupLanguageIntrinsics(_mesa_glsl_parse_state* State, exec_list* ir)
 {
-	make_intrinsic_genType(ir, State, FRAMEBUFFER_FETCH_ES2, ir_invalid_opcode, IR_INTRINSIC_ALL_FLOATING, 0, 4, 4);
-	make_intrinsic_genType(ir, State, DEPTHBUFFER_FETCH_ES2, ir_invalid_opcode, IR_INTRINSIC_ALL_FLOATING, 3, 1, 1);
+	unsigned IntrinsicReturnType = bDefaultPrecisionIsHalf ? IR_INTRINSIC_ALL_FLOATING : IR_INTRINSIC_FLOAT;
+	make_intrinsic_genType(ir, State, FRAMEBUFFER_FETCH_ES2, ir_invalid_opcode, IntrinsicReturnType, 0, 4, 4);
+	make_intrinsic_genType(ir, State, DEPTHBUFFER_FETCH_ES2, ir_invalid_opcode, IntrinsicReturnType, 0, 1, 1);
 
 	{
 		ir_function* func = new(State)ir_function("compiler_internal_AdjustInputSemantic");

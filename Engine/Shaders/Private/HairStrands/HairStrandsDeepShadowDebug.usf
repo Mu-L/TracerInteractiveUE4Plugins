@@ -2,7 +2,6 @@
 
 #include "../Common.ush"
 #include "../PostProcessCommon.ush"
-#include "HairStrandsDeepShadowCommon.ush"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -153,7 +152,7 @@ void MainCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 		AddAABB(Bound.Min, Bound.Max, float4(1, 0.5f, 0, 1));
 	}
 
-	const float FrustumColor = float4(0.5f, 1, 0, 1);
+	const float4 FrustumColor = float4(0.5f, 1, 0, 1);
 	for (uint SlotIt = 0; SlotIt < AllocatedSlotCount; ++SlotIt)
 	{
 		const float4x4 WorldToClip = ShadowWorldToLightTransformBuffer[SlotIt].WorldToClip;

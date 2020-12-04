@@ -10,6 +10,7 @@ USTRUCT()
 struct CONTROLRIG_API FControlRigDrawContainer
 {
 	GENERATED_BODY()
+	virtual ~FControlRigDrawContainer() {}
 
 	FORCEINLINE int32 Num() const { return Instructions.Num(); }
 	int32 GetIndex(const FName& InName) const;
@@ -22,6 +23,8 @@ struct CONTROLRIG_API FControlRigDrawContainer
 	FORCEINLINE TArray<FControlRigDrawInstruction>::RangedForConstIteratorType begin() const { return Instructions.begin(); }
 	FORCEINLINE TArray<FControlRigDrawInstruction>::RangedForIteratorType      end() { return Instructions.end(); }
 	FORCEINLINE TArray<FControlRigDrawInstruction>::RangedForConstIteratorType end() const { return Instructions.end(); }
+
+	FORCEINLINE uint32 GetAllocatedSize(void) const { return Instructions.GetAllocatedSize(); }
 
 	void Reset();
 

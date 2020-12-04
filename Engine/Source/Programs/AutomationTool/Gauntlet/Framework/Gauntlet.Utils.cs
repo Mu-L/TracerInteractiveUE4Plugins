@@ -995,6 +995,11 @@ namespace Gauntlet
 					{
 						FileInfo DestInfo = new FileInfo(Path.Combine(DestDir.FullName, RelativePath));
 
+						if (!DestInfo.Exists)
+						{
+							continue;
+						}
+
 						if (Options.Verbose)
 						{
 							Log.Info("Deleting extra file {0}", DestInfo.FullName);
@@ -1153,7 +1158,7 @@ namespace Gauntlet
 									Copied = true;
 
 									// Filter out some known unneeded files which can cause this warning, and log the message instead
-									string[] Blacklist = new string[]{ "UE4CC-XboxOne" };
+									string[] Blacklist = new string[]{ "UE4CC-XboxOne", "PersistentDownloadDir" };
 									string Message = string.Format("Long path file copy failed with {0}.  Please verify that this file is not required.", ex.Message);
 									if ( Blacklist.FirstOrDefault(B => { return SourcePath.IndexOf(B, StringComparison.OrdinalIgnoreCase) >= 0; }) == null)
 									{
@@ -1380,7 +1385,7 @@ namespace Gauntlet
 
 				if (Files.Count() == 0)
 				{
-					Log.Warning("Could not find files at {0} to Gif-ify", InDirectory);
+					Log.Info("Could not find files at {0} to Gif-ify", InDirectory);
 					return false;
 				}
 
@@ -1437,24 +1442,44 @@ namespace Gauntlet
 
 				try
 				{
+					List<FileInfo> FilesToCleanUp = new List<FileInfo>();
 					foreach (FileInfo File in Files)
 					{
 						using (MagickImage Image = new MagickImage(File.FullName))
 						{
 							string OutFile = Path.Combine(OutDirectory, File.Name);
-							OutFile = Path.ChangeExtension(OutFile, OutExtension);	
-							Image.Write(OutFile);
+							OutFile = Path.ChangeExtension(OutFile, OutExtension);
+							// If we're trying to convert something to itself in place, skip the step.
+							if (OutFile != File.FullName)
+							{
+								Image.Write(OutFile);
+								if (DeleteOriginals)
+								{
+									FilesToCleanUp.Add(File);
+								}
+							}
 						}
 					}
 
-					if (DeleteOriginals)
+					foreach (FileInfo File in FilesToCleanUp)
 					{
-						Files.ToList().ForEach(F => F.Delete());
+						File.Delete();
 					}
 				}
 				catch (System.Exception Ex)
 				{
 					Log.Warning("ConvertImages failed: {0}", Ex);
+					try
+					{
+						if (DeleteOriginals)
+						{
+							Files.ToList().ForEach(F => F.Delete());
+						}
+					}
+					catch (System.Exception e)
+					{
+						Log.Warning("Cleaning up original files failed: {0}", e);
+					}
 					return false;
 				}
 

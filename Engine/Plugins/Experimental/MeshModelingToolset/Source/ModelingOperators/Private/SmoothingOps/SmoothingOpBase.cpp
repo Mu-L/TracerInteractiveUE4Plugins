@@ -6,10 +6,9 @@
 #include "MeshNormals.h"
 
 
-FSmoothingOpBase::FSmoothingOpBase(const FDynamicMesh3* Mesh, float Speed, int32 Iterations) :
-		FDynamicMeshOperator(),
-		SmoothSpeed(Speed),
-		SmoothIterations(Iterations)
+FSmoothingOpBase::FSmoothingOpBase(const FDynamicMesh3* Mesh, const FOptions& OptionsIn) :
+	FDynamicMeshOperator(),
+	SmoothOptions(OptionsIn)
 {
 	// deep copy the src mesh into the result mesh.  This ResultMesh will be directly updated by the smoothing.
 	ResultMesh->Copy(*Mesh);
@@ -22,7 +21,7 @@ FSmoothingOpBase::FSmoothingOpBase(const FDynamicMesh3* Mesh, float Speed, int32
 	}
 }
 
-void FSmoothingOpBase::SetTransform(FTransform3d& XForm)
+void FSmoothingOpBase::SetTransform(const FTransform3d& XForm)
 {
 	ResultTransform = XForm;
 }

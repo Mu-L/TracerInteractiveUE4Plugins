@@ -21,12 +21,14 @@
 #include "UObject/UObjectIterator.h"
 #include "UObject/PropertyPortFlags.h"
 #include "Components/SplineMeshComponent.h"
+#include "UObject/FortniteReleaseBranchCustomObjectVersion.h"
+
 #include "ChaosCheck.h"
 #include "Chaos/Convex.h"
 
 #include "PhysXCookHelper.h"
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	#include "PhysXPublic.h"
 	#include "PhysicsEngine/PhysXSupport.h"
 #endif // WITH_PHYSX
@@ -52,40 +54,10 @@
 	#include "Chaos/CollisionConvexMesh.h"
 #endif
 
-/** Helper for enum output... */
-#ifndef CASE_ENUM_TO_TEXT
-#define CASE_ENUM_TO_TEXT(txt) case txt: return TEXT(#txt);
-#endif
-
 /** Enable to verify that the cooked data matches the source data as we cook it */
 #define VERIFY_COOKED_PHYS_DATA 0
 
-const TCHAR* LexToString(ECollisionTraceFlag Enum)
-{
-	switch (Enum)
-	{
-		FOREACH_ENUM_ECOLLISIONTRACEFLAG(CASE_ENUM_TO_TEXT)
-	}
-	return TEXT("<Unknown ECollisionTraceFlag>");
-}
-
-const TCHAR* LexToString(EPhysicsType Enum)
-{
-	switch (Enum)
-	{
-		FOREACH_ENUM_EPHYSICSTYPE(CASE_ENUM_TO_TEXT)
-	}
-	return TEXT("<Unknown EPhysicsType>");
-}
-
-const TCHAR* LexToString(EBodyCollisionResponse::Type Enum)
-{
-	switch (Enum)
-	{
-		FOREACH_ENUM_EBODYCOLLISIONRESPONSE(CASE_ENUM_TO_TEXT)
-	}
-	return TEXT("<Unknown EBodyCollisionResponse>");
-}
+#define LOCTEXT_NAMESPACE "PhysicsAsset"
 
 
 FCookBodySetupInfo::FCookBodySetupInfo() :
@@ -128,12 +100,15 @@ DEFINE_STAT(STAT_PhysXCooking);
 
 bool IsRuntimeCookingEnabled()
 {
+#if PHYSICS_INTERFACE_PHYSX
 	return FModuleManager::LoadModulePtr<IPhysXCookingModule>("RuntimePhysXCooking") != nullptr;
+#else
+	return false;
+#endif
 }
 #endif //WITH_PHYSX
 
-
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	// Quaternion that converts Sphyls from UE space to PhysX space (negate Y, swap X & Z)
 	// This is equivalent to a 180 degree rotation around the normalized (1, 0, 1) axis
 	const physx::PxQuat U2PSphylBasis( PI, PxVec3( 1.0f / FMath::Sqrt( 2.0f ), 0.0f, 1.0f / FMath::Sqrt( 2.0f ) ) );
@@ -173,7 +148,6 @@ UBodySetup::UBodySetup(const FObjectInitializer& ObjectInitializer)
 {
 	bConsiderForBounds = true;
 	bMeshCollideAll = false;
-	CollisionTraceFlag = CTF_UseDefault;
 	bFailedToCreatePhysicsMeshes = false;
 	bHasCookedCollisionData = true;
 	bNeverNeedsCookedCollisionData = false;
@@ -188,7 +162,7 @@ UBodySetup::UBodySetup(const FObjectInitializer& ObjectInitializer)
 	SetFlags(RF_Transactional);
 	bSharedCookedData = false;
 	CookedFormatDataOverride = nullptr;
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	CurrentCookHelper = nullptr;
 #endif
 }
@@ -201,9 +175,10 @@ void UBodySetup::CopyBodyPropertiesFrom(const UBodySetup* FromSetup)
 	for (int32 i = 0; i < AggGeom.ConvexElems.Num(); i++)
 	{
 		FKConvexElem& ConvexElem = AggGeom.ConvexElems[i];
+#if PHYSICS_INTERFACE_PHYSX
 		ConvexElem.SetConvexMesh(nullptr);
 		ConvexElem.SetMirroredConvexMesh(nullptr);
-#if WITH_CHAOS
+#elif WITH_CHAOS
 		ConvexElem.ResetChaosConvexMesh();
 #endif
 	}
@@ -230,9 +205,10 @@ void UBodySetup::AddCollisionFrom(const FKAggregateGeom& FromAggGeom)
 	for (int32 i = FirstNewConvexIdx; i < AggGeom.ConvexElems.Num(); i++)
 	{
 		FKConvexElem& ConvexElem = AggGeom.ConvexElems[i];
+#if PHYSICS_INTERFACE_PHYSX
 		ConvexElem.SetConvexMesh(nullptr);
 		ConvexElem.SetMirroredConvexMesh(nullptr);
-#if WITH_CHAOS
+#elif WITH_CHAOS
 		ConvexElem.ResetChaosConvexMesh();
 #endif
 	}
@@ -467,6 +443,32 @@ void UBodySetup::CreatePhysicsMeshes()
 #endif
 		}
 	}
+	
+	// fix up invalid transform to use identity
+	// this can be here because BodySetup isn't blueprintable
+	if ( GetLinkerUE4Version() < VER_UE4_FIXUP_BODYSETUP_INVALID_CONVEX_TRANSFORM )
+	{
+		for (int32 i=0; i<AggGeom.ConvexElems.Num(); ++i)
+		{
+			if ( AggGeom.ConvexElems[i].GetTransform().IsValid() == false )
+			{
+				AggGeom.ConvexElems[i].SetTransform(FTransform::Identity);
+			}
+		}
+	}
+
+#if WITH_CHAOS
+	// For drawing of convex elements we require an index buffer, previously we could
+	// get this from a PxConvexMesh but Chaos doesn't maintain that data. Instead now
+	// it is a part of the element rather than the physics geometry, if we load in an
+	// element without that data present, generate a convex hull from the convex vert
+	// data and extract the index data from there.
+	for(FKConvexElem& Convex : AggGeom.ConvexElems)
+	{
+		Convex.ComputeChaosConvexIndices();
+	}
+#endif
+
 
 	if(bClearMeshes)
 	{
@@ -636,7 +638,7 @@ void UBodySetup::CreatePhysicsMeshesAsync(FOnAsyncPhysicsCookFinished OnAsyncPhy
 
 void UBodySetup::AbortPhysicsMeshAsyncCreation()
 {
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	if (CurrentCookHelper)
 	{
 		CurrentCookHelper->Abort();
@@ -855,7 +857,7 @@ void UBodySetup::AddShapesToRigidActor_AssumesLocked(
 	AddParams.LocalTransform = RelativeTM;
 	AddParams.WorldTransform = OwningInstance->GetUnrealWorldTransform();
 	AddParams.Geometry = &AggGeom;
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	AddParams.TriMeshes = TArrayView<PxTriangleMesh*>(TriMeshes);
 #endif
 
@@ -870,8 +872,8 @@ void UBodySetup::AddShapesToRigidActor_AssumesLocked(
 
 void UBodySetup::RemoveSimpleCollision()
 {
-	AggGeom.EmptyElements();
 	InvalidatePhysicsData();
+	AggGeom.EmptyElements();
 }
 
 void UBodySetup::RescaleSimpleCollision( FVector BuildScale )
@@ -967,6 +969,8 @@ void UBodySetup::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
 	Ar.UsingCustomVersion(FExternalPhysicsCustomObjectVersion::GUID);
+	Ar.UsingCustomVersion(FFortniteMainBranchObjectVersion::GUID);
+	Ar.UsingCustomVersion(FFortniteReleaseBranchCustomObjectVersion::GUID);
 
 	// Load GUID (or create one for older versions)
 	Ar << BodySetupGuid;
@@ -1031,6 +1035,12 @@ void UBodySetup::Serialize(FArchive& Ar)
 		{
 			if (Ar.UE4Ver() >= VER_UE4_STORE_HASCOOKEDDATA_FOR_BODYSETUP)
 			{
+				// CL#14327190 Removed cooked implicit collision structures from the UBodySetup.
+				// UBodySetups saved with support for cooked implicit geometry store a counter for the number 
+				// of implicit objects saved to the file. This count needs to be removed from the input stream. 
+				// Note: We only need to extract the count, not the array. Editor operations for populating the 
+				// implicit array were never added, so it's expected that the actual implicit array would 
+				// always be empty.
 				bool bTemp = bHasCookedCollisionData;
 				Ar << bTemp;
 				bHasCookedCollisionData = bTemp;
@@ -1061,6 +1071,66 @@ void UBodySetup::Serialize(FArchive& Ar)
 		}
 	}
 #endif
+
+
+	// Levelset Serialization support for BodySetup.
+	if (Ar.CustomVer(FFortniteMainBranchObjectVersion::GUID) >= FFortniteMainBranchObjectVersion::LevelsetSerializationSupportForBodySetup
+		&& Ar.CustomVer(FFortniteReleaseBranchCustomObjectVersion::GUID) < FFortniteReleaseBranchCustomObjectVersion::DisableLevelset_v14_10)
+	{
+		TArray<TSharedPtr<Chaos::FImplicitObject, ESPMode::ThreadSafe>> ChaosImplicitObjects;
+#if WITH_CHAOS
+		using namespace Chaos;
+		FChaosArchive ChaosAr(Ar);
+
+		int32 NumImplicits = 0;
+		
+		if (Ar.IsLoading())
+		{
+			ChaosImplicitObjects.Reset();
+
+			Ar << NumImplicits;
+
+			for (int i = 0; i < NumImplicits; i++)
+			{
+				if (FImplicitObject* ImplicitObject = FImplicitObject::SerializationFactory(ChaosAr, nullptr))
+				{
+					ImplicitObject->Serialize(Ar);
+					ChaosImplicitObjects.Add(TSharedPtr<FImplicitObject, ESPMode::ThreadSafe >(ImplicitObject));
+				}
+			}
+		}
+		/*
+		else if (Ar.IsSaving())
+		{
+			for (int i = 0; i < ChaosImplicitObjects.Num(); i++)
+			{
+				if (ChaosImplicitObjects[i])
+				{
+					NumImplicits++;
+				}
+			}
+			Ar << NumImplicits;
+
+			for (int i = 0; i < ChaosImplicitObjects.Num(); i++)
+			{
+				if (ChaosImplicitObjects[i])
+				{
+					FImplicitObject::SerializationFactory(ChaosAr, ChaosImplicitObjects[i].Get());
+					ChaosImplicitObjects[i]->Serialize(Ar);
+				}
+			}
+		}
+		*/
+#else
+		if(Ar.IsLoading())
+		{
+			int32 DummyCount;
+			Ar << DummyCount;
+		}
+#endif
+	}
+
+
 }
 
 void UBodySetup::PostLoad()
@@ -1121,38 +1191,23 @@ void UBodySetup::PostLoad()
 	}
 
 	// make sure that we load the physX data while the linker's loader is still open
+#if PHYSICS_INTERFACE_PHYSX
 	CreatePhysicsMeshes();
-
-	// fix up invalid transform to use identity
-	// this can be here because BodySetup isn't blueprintable
-	if ( GetLinkerUE4Version() < VER_UE4_FIXUP_BODYSETUP_INVALID_CONVEX_TRANSFORM )
+#elif WITH_CHAOS
+	// If Deferring physics creation, skip so we can call CreatePhysicsMeshes in parallel.
+	if (GEnableDeferredPhysicsCreation == false)
 	{
-		for (int32 i=0; i<AggGeom.ConvexElems.Num(); ++i)
-		{
-			if ( AggGeom.ConvexElems[i].GetTransform().IsValid() == false )
-			{
-				AggGeom.ConvexElems[i].SetTransform(FTransform::Identity);
-			}
-		}
-	}
-
-#if WITH_CHAOS
-	// For drawing of convex elements we require an index buffer, previously we could
-	// get this from a PxConvexMesh but Chaos doesn't maintain that data. Instead now
-	// it is a part of the element rather than the physics geometry, if we load in an
-	// element without that data present, generate a convex hull from the convex vert
-	// data and extract the index data from there.
-	for(FKConvexElem& Convex : AggGeom.ConvexElems)
-	{
-		Convex.ComputeChaosConvexIndices();
+		CreatePhysicsMeshes();
 	}
 #endif
+
+
 }
 
 void UBodySetup::UpdateTriMeshVertices(const TArray<FVector> & NewPositions)
 {
 	SCOPE_CYCLE_COUNTER(STAT_UpdateTriMeshVertices);
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	if (TriMeshes.Num())
 	{
 		check(TriMeshes[0] != nullptr);
@@ -1167,6 +1222,9 @@ void UBodySetup::UpdateTriMeshVertices(const TArray<FVector> & NewPositions)
 
 		TriMeshes[0]->refitBVH();
 	}
+#elif WITH_CHAOS
+	ensure(false);
+
 #endif
 }
 
@@ -1418,7 +1476,13 @@ void UBodySetup::GetGeometryDDCKey(FString& OutString) const
 		CDP->GetMeshId(MeshIdString);
 	}
 
-	OutString = FString::Printf(TEXT("%s_%s_%s_%d_%d_%d_%d_%d"),
+#if WITH_CHAOS
+	const int32 ConvexMarginType = Chaos::Chaos_Collision_ConvexMarginType;
+#else
+	const int32 ConvexMarginType = 0;
+#endif
+
+	OutString = FString::Printf(TEXT("%s_%s_%s_%d_%d_%d_%d_%f_%f_%d_%d"),
 		*BodySetupGuid.ToString(),
 		*MeshIdString,
 		*AggGeom.MakeDDCKey().ToString(),
@@ -1426,6 +1490,9 @@ void UBodySetup::GetGeometryDDCKey(FString& OutString) const
 		(int32)bGenerateMirroredCollision,
 		(int32)UPhysicsSettings::Get()->bSupportUVFromHitResults,
 		(int32)GetCollisionTraceFlag(),
+		UPhysicsSettings::Get()->SolverOptions.CollisionMarginFraction,
+		UPhysicsSettings::Get()->SolverOptions.CollisionMarginMax,
+		ConvexMarginType,
 		(int32)BODY_SETUP_GEOMETRY_KEY_VER);
 
 	if (bSupportUVsAndFaceRemap)
@@ -1498,13 +1565,50 @@ void UBodySetup::CopyBodySetupProperty(const UBodySetup* Other)
 	BuildScale3D = Other->BuildScale3D;
 }
 
+EDataValidationResult UBodySetup::IsDataValid(TArray<FText>& ValidationErrors)
+{
+	EDataValidationResult Result = EDataValidationResult::Valid;
+
+	// Check that the body has at least one shape
+	int32 NumElements = AggGeom.GetElementCount();
+	if (NumElements == 0)
+	{
+		ValidationErrors.Add(FText::Format(LOCTEXT("UBodySetupHasNoCollision", "Bone {0} requires at least one collision shape"), FText::FromName(BoneName)));
+		Result = EDataValidationResult::Invalid;
+	}
+
+	// Chekc that simulated bodies have at least one shape that contributes to mass, otherwise
+	// we cannot calculate the inertia, even if the mass is exlicitly set.
+	// @todo(physics): should we check non-simulated bodies? The simulation type can be changed in the runtime...
+	if (PhysicsType == EPhysicsType::PhysType_Simulated)
+	{
+		int32 NumMassContributors = 0;
+		for (int32 ElementIndex = 0; ElementIndex < NumElements; ++ElementIndex)
+		{
+			const FKShapeElem* Shape = AggGeom.GetElement(ElementIndex);
+			if (Shape->GetContributeToMass())
+			{
+				++NumMassContributors;
+			}
+		}
+		
+		if (NumMassContributors == 0)
+		{
+			ValidationErrors.Add(FText::Format(LOCTEXT("UBodySetupHasNoMass", "Bone {0} requires at least one shape with 'Contribute to Mass' set to 'true'"), FText::FromName(BoneName)));
+			Result = EDataValidationResult::Invalid;
+		}
+	}
+
+	return Result;
+}
+
 #endif // WITH_EDITOR
 
 void UBodySetup::GetResourceSizeEx(FResourceSizeEx& CumulativeResourceSize)
 {
 	Super::GetResourceSizeEx(CumulativeResourceSize);
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	// Count PhysX trimesh mem usage
 	for(PxTriangleMesh* TriMesh : TriMeshes)
 	{
@@ -1632,13 +1736,17 @@ FKConvexElem::FKConvexElem()
 	: FKShapeElem(EAggCollisionShape::Convex)
 	, ElemBox(ForceInit)
 	, Transform(FTransform::Identity)
+#if PHYSICS_INTERFACE_PHYSX
 	, ConvexMesh(NULL)
 	, ConvexMeshNegX(NULL)
+#endif
 {}
 
 FKConvexElem::FKConvexElem(const FKConvexElem& Other)
+#if PHYSICS_INTERFACE_PHYSX
 	: ConvexMesh(nullptr)
 	, ConvexMeshNegX(nullptr)
+#endif
 {
 	CloneElem(Other);
 }
@@ -1650,11 +1758,12 @@ FKConvexElem::~FKConvexElem()
 
 const FKConvexElem& FKConvexElem::operator=(const FKConvexElem& Other)
 {
+#if PHYSICS_INTERFACE_PHYSX
 	ensureMsgf(ConvexMesh == nullptr, TEXT("We are leaking memory. Why are we calling the assignment operator on an element that has already allocated resources?"));
 	ensureMsgf(ConvexMeshNegX == nullptr, TEXT("We are leaking memory. Why are we calling the assignment operator on an element that has already allocated resources?"));
 	ConvexMesh = nullptr;
 	ConvexMeshNegX = nullptr;
-#if WITH_CHAOS
+#elif WITH_CHAOS
 	ensureMsgf(!ChaosConvex, TEXT("We are leaking memory. Why are we calling the assignment operator on an element that has already allocated resources?"));
 	ResetChaosConvexMesh();
 #endif
@@ -1686,7 +1795,7 @@ float SignedVolumeOfTriangle(const FVector& p1, const FVector& p2, const FVector
 {
 	return FVector::DotProduct(p1, FVector::CrossProduct(p2, p3)) / 6.0f;
 }
-
+#if PHYSICS_INTERFACE_PHYSX
 physx::PxConvexMesh* FKConvexElem::GetConvexMesh() const
 {
 	return ConvexMesh;
@@ -1706,12 +1815,13 @@ void FKConvexElem::SetMirroredConvexMesh(physx::PxConvexMesh* InMesh)
 {
 	ConvexMeshNegX = InMesh;
 }
+#endif
 
 float FKConvexElem::GetVolume(const FVector& Scale) const
 {
 	float Volume = 0.0f;
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	if (ConvexMesh != NULL)
 	{
 		// Preparation for convex mesh scaling implemented in another changelist
@@ -1742,7 +1852,10 @@ float FKConvexElem::GetVolume(const FVector& Scale) const
 			}
 		}
 	}
-#endif // WITH_PHYSX
+#elif WITH_CHAOS
+	//TODO Support ChaosConvex.
+	CHAOS_ENSURE(false);
+#endif
 
 	return Volume;
 }
@@ -2203,8 +2316,4 @@ float UBodySetup::GetVolume(const FVector& Scale) const
 	return AggGeom.GetVolume(Scale);
 }
 
-TEnumAsByte<enum ECollisionTraceFlag> UBodySetup::GetCollisionTraceFlag() const
-{
-	TEnumAsByte<enum ECollisionTraceFlag> DefaultFlag = UPhysicsSettings::Get()->DefaultShapeComplexity;
-	return CollisionTraceFlag == ECollisionTraceFlag::CTF_UseDefault ? DefaultFlag : CollisionTraceFlag;
-}
+#undef LOCTEXT_NAMESPACE

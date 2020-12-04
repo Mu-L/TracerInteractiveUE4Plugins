@@ -48,6 +48,10 @@
 #include "Android/AndroidPlatformStackWalk.h"
 #include "Android/AndroidSignals.h"
 
+#include "Misc/OutputDevice.h"
+#include "Logging/LogMacros.h"
+#include "Misc/OutputDeviceError.h"
+
 #if USE_ANDROID_JNI
 extern AAssetManager * AndroidThunkCpp_GetAssetManager();
 extern int32 GAndroidPackageVersion;
@@ -80,6 +84,12 @@ static TAutoConsoleVariable<int32> CVarMaliMidgardIndexingBug(
 	ECVF_ReadOnly
 );
 
+static TAutoConsoleVariable<FString> CVarAndroidCPUThermalSensorFilePath(
+	TEXT("android.CPUThermalSensorFilePath"),
+	"",
+	TEXT("Overrides CPU Thermal sensor file path")
+);
+
 #if STATS || ENABLE_STATNAMEDEVENTS
 int32 FAndroidMisc::TraceMarkerFileDescriptor = -1;
 
@@ -97,6 +107,8 @@ static bool bUseNativeSystrace = false;
 
 // run time compatibility information
 FString FAndroidMisc::AndroidVersion; // version of android we are running eg "4.0.4"
+int32 FAndroidMisc::AndroidMajorVersion = 0; // integer major version of Android we are running, eg 10
+int32 FAndroidMisc::TargetSDKVersion = 0; // Target SDK version, eg 29.
 FString FAndroidMisc::DeviceMake; // make of the device we are running on eg. "samsung"
 FString FAndroidMisc::DeviceModel; // model of the device we are running on eg "SAMSUNG-SGH-I437"
 FString FAndroidMisc::DeviceBuildNumber; // platform image build number of device "R16NW.G960NKSU1ARD6"
@@ -121,6 +133,75 @@ extern void AndroidThunkCpp_ForceQuit();
 // From AndroidFile.cpp
 extern FString GFontPathBase;
 
+static char AndroidCpuThermalSensorFileBuf[256] = "";
+
+static void OverrideCpuThermalSensorFileFromCVar(IConsoleVariable* Var)
+{
+	FString Override = CVarAndroidCPUThermalSensorFilePath.GetValueOnAnyThread();
+	const int32 Len = Override.Len();
+	if (Len == 0)
+	{
+		return;
+	}
+
+	if (Len < UE_ARRAY_COUNT(AndroidCpuThermalSensorFileBuf))
+	{
+		FCStringAnsi::Strcpy(AndroidCpuThermalSensorFileBuf, TCHAR_TO_ANSI(*Override));
+		UE_LOG(LogAndroid, Display, TEXT("Thermal sensor's filepath was set to `%s`"), *Override);
+		return;
+	}
+
+	UE_LOG(LogAndroid, Display, TEXT("Thermal sensor's filepath is too long, max path is `%u`"), UE_ARRAY_COUNT(AndroidCpuThermalSensorFileBuf));
+}
+
+static void InitCpuThermalSensor()
+{
+	OverrideCpuThermalSensorFileFromCVar(nullptr);
+	CVarAndroidCPUThermalSensorFilePath->SetOnChangedCallback(FConsoleVariableDelegate::CreateStatic(&OverrideCpuThermalSensorFileFromCVar));
+
+	uint32 Counter = 0;
+	while (true)
+	{
+		char Buf[256] = "";
+		sprintf(Buf, "/sys/devices/virtual/thermal/thermal_zone%u/type", Counter);
+		if (FILE* File = fopen(Buf, "r"))
+		{
+			fgets(Buf, UE_ARRAY_COUNT(Buf), File);
+			fclose(File);
+			char* Ptr = Buf;
+			while (!iscntrl(*Ptr))		// it appears that zone type string ends up with \n symbol
+			{
+				++Ptr;
+			}
+			*Ptr = 0;
+
+			UE_LOG(LogAndroid, Display, TEXT("Detected thermal sensor `%s` at /sys/devices/virtual/thermal/thermal_zone%u/temp"), ANSI_TO_TCHAR(Buf), Counter);
+			++Counter;
+		}
+		else
+		{
+			break;
+		}
+	}
+
+	TArray<FString> SensorLocations;
+	GConfig->GetArray(TEXT("ThermalSensors"), TEXT("SensorLocations"), SensorLocations, GEngineIni);
+
+	for (uint32 i = 0; i < SensorLocations.Num(); ++i)
+	{
+		const char* SensorFilePath = TCHAR_TO_ANSI(*SensorLocations[i]);
+		if (FILE* File = fopen(SensorFilePath, "r"))
+		{
+			FCStringAnsi::Strcpy(AndroidCpuThermalSensorFileBuf, SensorFilePath);
+			UE_LOG(LogAndroid, Display, TEXT("Selecting thermal sensor located at `%s`"), ANSI_TO_TCHAR(AndroidCpuThermalSensorFileBuf));
+			fclose(File);
+			return;
+		}
+	}
+
+	UE_LOG(LogAndroid, Display, TEXT("No CPU thermal sensor was detected. To manually override the sensor path set android.CPUThermalSensorFilePath CVar."));
+}
+
 void FAndroidMisc::RequestExit( bool Force )
 {
 	UE_LOG(LogAndroid, Log, TEXT("FAndroidMisc::RequestExit(%i)"), Force);
@@ -136,6 +217,18 @@ void FAndroidMisc::RequestExit( bool Force )
 	{
 		RequestEngineExit(TEXT("Android RequestExit"));
 	}
+}
+
+extern void AndroidThunkCpp_RestartApplication(const FString& IntentString);
+
+bool FAndroidMisc::RestartApplication()
+{
+#if USE_ANDROID_JNI
+	AndroidThunkCpp_RestartApplication(TEXT(""));
+	return true;
+#else
+	return FGenericPlatformMisc::RestartApplication();
+#endif
 }
 
 void FAndroidMisc::LocalPrint(const TCHAR *Message)
@@ -437,6 +530,8 @@ void FAndroidMisc::PlatformInit()
 	AndroidOnBackgroundBinding = FCoreDelegates::ApplicationWillEnterBackgroundDelegate.AddStatic(EnableJavaEventReceivers, false);
 	AndroidOnForegroundBinding = FCoreDelegates::ApplicationHasEnteredForegroundDelegate.AddStatic(EnableJavaEventReceivers, true);
 #endif
+
+	InitCpuThermalSensor();
 }
 
 extern void AndroidThunkCpp_DismissSplashScreen();
@@ -893,7 +988,8 @@ static constexpr int32 TargetSignals[] =
 	SIGFPE,
 	SIGBUS,
 	SIGSEGV,
-	SIGSYS
+	SIGSYS,
+	SIGABRT
 };
 static constexpr int32 NumTargetSignals = UE_ARRAY_COUNT(TargetSignals);
 
@@ -913,6 +1009,8 @@ static const char* SignalToString(int32 Signal)
 			return "SIGSEGV";
 		case SIGSYS:
 			return "SIGSYS";
+		case SIGABRT:
+			return "SIGABRT";
 		default:
 			return FAndroidCrashContext::ItoANSI(Signal,16, 16);
 	}
@@ -998,6 +1096,100 @@ private:
 	static struct sigaction PreviousActionForThreadGenerator;
 };
 
+const ANSICHAR* FAndroidMisc::CodeToString(int Signal, int si_code)
+{
+	switch (Signal)
+	{
+		case SIGILL:
+		{
+			switch (si_code)
+			{
+				// SIGILL
+				case ILL_ILLOPC: return "ILL_ILLOPC";
+				case ILL_ILLOPN: return "ILL_ILLOPN";
+				case ILL_ILLADR: return "ILL_ILLADR";
+				case ILL_ILLTRP: return "ILL_ILLTRP";
+				case ILL_PRVOPC: return "ILL_PRVOPC";
+				case ILL_PRVREG: return "ILL_PRVREG";
+				case ILL_COPROC: return "ILL_COPROC";
+				case ILL_BADSTK: return "ILL_BADSTK";
+			}
+		}
+		break;
+		case SIGFPE:
+		{
+			switch (si_code)
+			{
+				// SIGFPE
+				case FPE_INTDIV: return "FPE_INTDIV";
+				case FPE_INTOVF: return "FPE_INTOVF";
+				case FPE_FLTDIV: return "FPE_FLTDIV";
+				case FPE_FLTOVF: return "FPE_FLTOVF";
+				case FPE_FLTUND: return "FPE_FLTUND";
+				case FPE_FLTRES: return "FPE_FLTRES";
+				case FPE_FLTINV: return "FPE_FLTINV";
+				case FPE_FLTSUB: return "FPE_FLTSUB";
+			}
+		}
+		break;
+		case SIGBUS:
+		{
+			switch (si_code)
+			{
+				// SIGBUS
+				case BUS_ADRALN: return "BUS_ADRALN";
+				case BUS_ADRERR: return "BUS_ADRERR";
+				case BUS_OBJERR: return "BUS_OBJERR";
+			}
+		}
+		break;
+		case SIGSEGV:
+		{
+			switch (si_code)
+			{
+				// SIGSEGV
+				case SEGV_MAPERR: return "SEGV_MAPERR";
+				case SEGV_ACCERR: return "SEGV_ACCERR";
+			}
+		}
+		break;
+	}
+	return FAndroidCrashContext::ItoANSI(si_code, 10, 0);
+}
+
+FString FAndroidMisc::GetFatalSignalMessage(int Signal, siginfo* Info)
+{
+	const int MessageSize = 255;
+	char AnsiMessage[MessageSize];
+	FCStringAnsi::Strncpy(AnsiMessage, "Caught signal : ", MessageSize);
+	FCStringAnsi::Strcat(AnsiMessage, SignalToString(Signal));
+	FCStringAnsi::Strcat(AnsiMessage, " (");
+	FCStringAnsi::Strcat(AnsiMessage, CodeToString(Signal, Info->si_code));
+	FCStringAnsi::Strcat(AnsiMessage, ")");
+	switch (Signal)
+	{
+		case SIGILL:
+		case SIGFPE:
+		case SIGSEGV:
+		case SIGBUS:
+		case SIGTRAP:
+		{
+			FCStringAnsi::Strcat(AnsiMessage, " fault address 0x");
+			FCStringAnsi::Strcat(AnsiMessage, FAndroidCrashContext::ItoANSI((uintptr_t)Info->si_addr, 16, 16));
+			break;
+		}
+	}
+
+	return ANSI_TO_TCHAR(AnsiMessage);
+}
+
+// Making the signal handler available to track down issues with failing crash handler.
+static void (*GFatalSignalHandlerOverrideFunc)(int Signal, struct siginfo* Info, void* Context) = nullptr;
+void FAndroidMisc::OverrideFatalSignalHandler(void (*FatalSignalHandlerOverrideFunc)(int Signal, struct siginfo* Info, void* Context))
+{
+	GFatalSignalHandlerOverrideFunc = FatalSignalHandlerOverrideFunc;
+}
+
 volatile sig_atomic_t FThreadCallstackSignalHandler::handling_signal = 0;
 bool FThreadCallstackSignalHandler::bSignalHooked = false;
 struct sigaction FThreadCallstackSignalHandler::PreviousActionForThreadGenerator;
@@ -1031,7 +1223,8 @@ protected:
 		if (FPlatformAtomics::InterlockedIncrement(&handling_fatal_signal) != 1)
 		{
 			FPlatformProcess::SleepNoStats(60.0f);
-			exit(0);
+			// exit immediately, crash malloc can cause deadlocks when attempting to clean up static objects via exit().
+			_exit(1);
 		}
 	}
 
@@ -1040,115 +1233,39 @@ protected:
 		EnterFatalCrash();
 		FSignalHandler<FFatalSignalHandler>::ForwardSignal(Signal, Info, Context);
 		RestorePreviousTargetSignalHandlers();
-	}
 
-	static const ANSICHAR* CodeToString(int Signal, int si_code)
-	{
-		switch (Signal)
-		{
-			case SIGILL:
-			{
-				switch (si_code)
-				{
-					// SIGILL
-					case ILL_ILLOPC: return "ILL_ILLOPC";
-					case ILL_ILLOPN: return "ILL_ILLOPN";
-					case ILL_ILLADR: return "ILL_ILLADR";
-					case ILL_ILLTRP: return "ILL_ILLTRP";
-					case ILL_PRVOPC: return "ILL_PRVOPC";
-					case ILL_PRVREG: return "ILL_PRVREG";
-					case ILL_COPROC: return "ILL_COPROC";
-					case ILL_BADSTK: return "ILL_BADSTK";
-				}
-			}
-			break;
-			case SIGFPE:
-			{
-				switch (si_code)
-				{
-					// SIGFPE
-					case FPE_INTDIV: return "FPE_INTDIV";
-					case FPE_INTOVF: return "FPE_INTOVF";
-					case FPE_FLTDIV: return "FPE_FLTDIV";
-					case FPE_FLTOVF: return "FPE_FLTOVF";
-					case FPE_FLTUND: return "FPE_FLTUND";
-					case FPE_FLTRES: return "FPE_FLTRES";
-					case FPE_FLTINV: return "FPE_FLTINV";
-					case FPE_FLTSUB: return "FPE_FLTSUB";
-				}
-			}
-			break;
-			case SIGBUS:
-			{
-				switch (si_code)
-				{
-					// SIGBUS
-					case BUS_ADRALN: return "BUS_ADRALN";
-					case BUS_ADRERR: return "BUS_ADRERR";
-					case BUS_OBJERR: return "BUS_OBJERR";
-				}
-			}
-			break;
-			case SIGSEGV:
-			{
-				switch (si_code)
-				{
-					// SIGSEGV
-					case SEGV_MAPERR: return "SEGV_MAPERR";
-					case SEGV_ACCERR: return "SEGV_ACCERR";
-				}
-			}
-			break;
-		}
-		return FAndroidCrashContext::ItoANSI(si_code, 10, 0);
-	}
-
-	static FString GetFatalSignalMessage(int Signal, siginfo* Info)
-	{
-		const int MessageSize = 255;
-		char AnsiMessage[MessageSize];
-		FCStringAnsi::Strncpy(AnsiMessage, "Caught signal : ", MessageSize);
-		FCStringAnsi::Strcat(AnsiMessage, SignalToString(Signal));
-		FCStringAnsi::Strcat(AnsiMessage, " (");
-		FCStringAnsi::Strcat(AnsiMessage, CodeToString(Signal, Info->si_code));
-		FCStringAnsi::Strcat(AnsiMessage, ")");
-		switch (Signal)
-		{
-			case SIGILL:
-			case SIGFPE:
-			case SIGSEGV:
-			case SIGBUS:
-			case SIGTRAP:
-			{
-				FCStringAnsi::Strcat(AnsiMessage, " fault address 0x");
-				FCStringAnsi::Strcat(AnsiMessage, FAndroidCrashContext::ItoANSI((uintptr_t)Info->si_addr, 16, 16));
-				break;
-			}
-		}
-
-		return ANSI_TO_TCHAR(AnsiMessage);
+		// re-raise the signal for the benefit of the previous handler.
+		raise(Signal);
 	}
 
 	static void HandleTargetSignal(int Signal, siginfo* Info, void* Context)
 	{
-		// Switch to malloc crash.
-		FPlatformMallocCrash::Get().SetAsGMalloc();
-
-		FString Message = GetFatalSignalMessage(Signal, Info);
-		FAndroidCrashContext CrashContext(ECrashContextType::Crash, *Message);
-
-		CrashContext.InitFromSignal(Signal, Info, Context);
-		CrashContext.CaptureCrashInfo();
-		if (GCrashHandlerPointer)
+		if (GFatalSignalHandlerOverrideFunc)
 		{
-			GCrashHandlerPointer(CrashContext);
+			GFatalSignalHandlerOverrideFunc(Signal, Info, Context);
 		}
 		else
 		{
-			// call default one
-			DefaultCrashHandler(CrashContext);
+			// Switch to malloc crash.
+			FPlatformMallocCrash::Get().SetAsGMalloc();
+
+			FString Message = FAndroidMisc::GetFatalSignalMessage(Signal, Info);
+			FAndroidCrashContext CrashContext(ECrashContextType::Crash, *Message);
+
+			CrashContext.InitFromSignal(Signal, Info, Context);
+			CrashContext.CaptureCrashInfo();
+			if (GCrashHandlerPointer)
+			{
+				GCrashHandlerPointer(CrashContext);
+			}
+			else
+			{
+				// call default one
+				DefaultCrashHandler(CrashContext);
+			}
 		}
 	}
+
 	static void HookTargetSignals()
 	{
 		check(PreviousSignalHandlersValid == false);
@@ -1162,7 +1279,8 @@ protected:
 
 		for (int32 i = 0; i < NumTargetSignals; ++i)
 		{
-			sigaction(TargetSignals[i], &Action, &PrevActions[i]);
+			int result = sigaction(TargetSignals[i], &Action, &PrevActions[i]);
+			UE_CLOG(result != 0, LogAndroid, Error, TEXT("sigaction(%d) failed to set: %d, errno = %x "), i, result, errno);
 		}
 		PreviousSignalHandlersValid = true;
 	}
@@ -1173,7 +1291,8 @@ protected:
 		{
 			for (int32 i = 0; i < NumTargetSignals; ++i)
 			{
-				sigaction(TargetSignals[i], &PrevActions[i], NULL);
+				int result = sigaction(TargetSignals[i], &PrevActions[i], NULL);
+				UE_CLOG(result != 0, LogAndroid, Error, TEXT("sigaction(%d) failed to set prev action: %d, errno = %x "), i, result, errno);
 			}
 			PreviousSignalHandlersValid = false;
 		}
@@ -1211,28 +1330,29 @@ bool FAndroidMisc::IsInSignalHandler()
 #endif
 }
 
-void FAndroidMisc::TriggerNonFatalCrashHandler(ECrashContextType InType, const FString& Message)
+void FAndroidMisc::TriggerCrashHandler(ECrashContextType InType, const TCHAR* InErrorMessage, const TCHAR* OverrideCallstack)
 {
-	check(InType == ECrashContextType::Ensure);
-
-	FAndroidCrashContext CrashContext(InType, *Message);
-
-	CrashContext.CaptureCrashInfo();
-	if (GCrashHandlerPointer)
+	if (InType != ECrashContextType::Crash)
 	{
-		GCrashHandlerPointer(CrashContext);
+		// we dont flush logs during a fatal signal, malloccrash can cause us to deadlock.
+		if (GLog)
+		{
+			GLog->PanicFlushThreadedLogs();
+			GLog->Flush();
+		}
+		if (GWarn)
+		{
+			GWarn->Flush();
+		}
+		if (GError)
+		{
+			GError->Flush();
+		}
 	}
-	else
-	{
-		// call default one
-		DefaultCrashHandler(CrashContext);
-	}
-}
 
-void FAndroidMisc::TriggerCrashHandler(const TCHAR* InErrorMessage, const TCHAR* OverrideCallstack)
-{
-	FAndroidCrashContext CrashContext(ECrashContextType::Crash, InErrorMessage);
-	if(OverrideCallstack)
+	FAndroidCrashContext CrashContext(InType, InErrorMessage);
+
+	if (OverrideCallstack)
 	{
 		CrashContext.SetOverrideCallstack(OverrideCallstack);
 	}
@@ -1466,9 +1586,11 @@ bool FAndroidMisc::FileExistsInPlatformPackage(const FString& RelativePath)
 	return false;
 }
 
-void FAndroidMisc::SetVersionInfo( FString InAndroidVersion, FString InDeviceMake, FString InDeviceModel, FString InDeviceBuildNumber, FString InOSLanguage )
+void FAndroidMisc::SetVersionInfo( FString InAndroidVersion, int32 InTargetSDKVersion, FString InDeviceMake, FString InDeviceModel, FString InDeviceBuildNumber, FString InOSLanguage )
 {
 	AndroidVersion = InAndroidVersion;
+	AndroidMajorVersion = FCString::Atoi(*InAndroidVersion);
+	TargetSDKVersion = InTargetSDKVersion;
 	DeviceMake = InDeviceMake;
 	DeviceModel = InDeviceModel;
 	DeviceBuildNumber = InDeviceBuildNumber;
@@ -1480,6 +1602,16 @@ void FAndroidMisc::SetVersionInfo( FString InAndroidVersion, FString InDeviceMak
 const FString FAndroidMisc::GetAndroidVersion()
 {
 	return AndroidVersion;
+}
+
+int32 FAndroidMisc::GetAndroidMajorVersion()
+{
+	return AndroidMajorVersion;
+}
+
+int32 FAndroidMisc::GetTargetSDKVersion()
+{
+	return TargetSDKVersion;
 }
 
 const FString FAndroidMisc::GetDeviceMake()
@@ -1597,10 +1729,7 @@ bool FAndroidMisc::ShouldDisablePluginAtRuntime(const FString& PluginName)
 
 void FAndroidMisc::SetThreadName(const char* name)
 {
-#if USE_ANDROID_JNI
-	extern void AndroidThunkCpp_SetThreadName(const char * name);
-	AndroidThunkCpp_SetThreadName(name);
-#endif
+	pthread_setname_np(pthread_self(), name);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -2346,12 +2475,6 @@ void FAndroidMisc::BeginNamedEvent(const struct FColor& Color, const TCHAR* Text
 #if FRAMEPRO_ENABLED
 	FFrameProProfiler::PushEvent(Text);
 #endif // FRAMEPRO_ENABLED
-#if CPUPROFILERTRACE_ENABLED
-	if (CpuChannel)
-	{
-		FCpuProfilerTrace::OutputBeginDynamicEvent(Text);
-	}
-#endif
 	if (bUseNativeSystrace ? !ATrace_isEnabled() : TraceMarkerFileDescriptor == -1)
 	{
 		return;
@@ -2379,12 +2502,6 @@ void FAndroidMisc::BeginNamedEvent(const struct FColor& Color, const ANSICHAR* T
 #if FRAMEPRO_ENABLED
 	FFrameProProfiler::PushEvent(Text);
 #endif // FRAMEPRO_ENABLED
-#if CPUPROFILERTRACE_ENABLED
-	if (CpuChannel)
-	{
-		FCpuProfilerTrace::OutputBeginDynamicEvent(Text);
-	}
-#endif
 	if (bUseNativeSystrace ? !ATrace_isEnabled() : TraceMarkerFileDescriptor == -1)
 	{
 		return;
@@ -2398,12 +2515,6 @@ void FAndroidMisc::EndNamedEvent()
 #if FRAMEPRO_ENABLED
 	FFrameProProfiler::PopEvent();
 #endif // FRAMEPRO_ENABLED
-#if CPUPROFILERTRACE_ENABLED
-	if (CpuChannel)
-	{
-		FCpuProfilerTrace::OutputEndEvent();
-	}
-#endif
 	if (bUseNativeSystrace ? !ATrace_isEnabled() : TraceMarkerFileDescriptor == -1)
 	{
 		return;
@@ -2504,11 +2615,15 @@ FString FAndroidMisc::GetLoginId()
 #if USE_ANDROID_JNI
 FString FAndroidMisc::GetDeviceId()
 {
+#if GET_DEVICE_ID_UNAVAILABLE
+	return FString();
+#else
 	extern FString AndroidThunkCpp_GetAndroidId();
 	static FString DeviceId = AndroidThunkCpp_GetAndroidId();
 
 	// note: this can be empty or NOT unique depending on the OEM implementation!
 	return DeviceId;
+#endif
 }
 
 FString FAndroidMisc::GetUniqueAdvertisingId()
@@ -2712,17 +2827,101 @@ uint32 FAndroidMisc::GetCoreFrequency(int32 CoreIndex, ECoreFrequencyProperty Co
 
 	if (FILE* CoreFreqStateFile = fopen(QueryFile, "r"))
 	{
-		char curr_corefreq[32] = { 0 };
-		if( fgets(curr_corefreq, UE_ARRAY_COUNT(curr_corefreq), CoreFreqStateFile) != nullptr)
+		char CurrCoreFreq[32] = { 0 };
+		if( fgets(CurrCoreFreq, UE_ARRAY_COUNT(CurrCoreFreq), CoreFreqStateFile) != nullptr)
 		{
-			ReturnFrequency = atol(curr_corefreq);
+			ReturnFrequency = atol(CurrCoreFreq);
 		}
 		fclose(CoreFreqStateFile);
 	}
 	return ReturnFrequency;
 }
 
+float FAndroidMisc::GetCPUTemperature()
+{
+	float Temp = 0.0f;
+	if (*AndroidCpuThermalSensorFileBuf == 0)
+	{
+		return Temp;
+	}
+
+	if (FILE* Thermals = fopen(AndroidCpuThermalSensorFileBuf, "r"))
+	{
+		char Buf[256];
+		if (fgets(Buf, UE_ARRAY_COUNT(Buf), Thermals))
+		{
+			// sensor temp file can contain whitespace symbols at the end of the line, count length only for digit symbols
+			char* p = Buf;
+			uint32 Len = 0;
+			while (isdigit(*p))
+			{
+				++Len;
+				++p;
+			}
+
+			// Temperature is reported by different sensors in different ways, some report it as XXX, some - as XXXXX. Reduce it to standard XX.X
+			const uint32 StandardLen = 2;
+			const float Divider = pow(10.0f, (float)(Len - StandardLen));
+			Temp = (float)atol(Buf) / Divider;
+		}
+		fclose(Thermals);
+	}
+
+	return Temp;
+}
+
 bool FAndroidMisc::Expand16BitIndicesTo32BitOnLoad()
 {
 	return  (CVarMaliMidgardIndexingBug.GetValueOnAnyThread() > 0);
 }
+
+TArray<int32> FAndroidMisc::GetSupportedNativeDisplayRefreshRates()
+{
+	TArray<int32> Result;
+#if USE_ANDROID_JNI
+	extern TArray<int32> AndroidThunkCpp_GetSupportedNativeDisplayRefreshRates();
+	Result = AndroidThunkCpp_GetSupportedNativeDisplayRefreshRates();
+#else
+	Result.Add(60);
+#endif
+	return Result;
+}
+
+bool FAndroidMisc::SetNativeDisplayRefreshRate(int32 RefreshRate)
+{
+#if USE_ANDROID_JNI
+	extern bool AndroidThunkCpp_SetNativeDisplayRefreshRate(int32 RefreshRate);
+	return AndroidThunkCpp_SetNativeDisplayRefreshRate(RefreshRate);
+#else
+	return RefreshRate == 60;
+#endif
+}
+
+int32 FAndroidMisc::GetNativeDisplayRefreshRate()
+{
+#if USE_ANDROID_JNI
+	extern int32 AndroidThunkCpp_GetNativeDisplayRefreshRate();
+	return AndroidThunkCpp_GetNativeDisplayRefreshRate();
+#else
+	return 60;
+#endif
+
+}
+
+bool FAndroidMisc::SupportsBackbufferSampling()
+{
+	static int32 CachedAndroidOpenGLSupportsBackbufferSampling = -1;
+	
+	if (CachedAndroidOpenGLSupportsBackbufferSampling == -1)
+	{
+		bool bAndroidOpenGLSupportsBackbufferSampling = false;
+		GConfig->GetBool(TEXT("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings"), TEXT("bAndroidOpenGLSupportsBackbufferSampling"), bAndroidOpenGLSupportsBackbufferSampling, GEngineIni);
+
+		CachedAndroidOpenGLSupportsBackbufferSampling = (bAndroidOpenGLSupportsBackbufferSampling || FAndroidMisc::ShouldUseVulkan()) ? 1 : 0;
+	}
+
+	return CachedAndroidOpenGLSupportsBackbufferSampling == 1;
+}
+
+
+

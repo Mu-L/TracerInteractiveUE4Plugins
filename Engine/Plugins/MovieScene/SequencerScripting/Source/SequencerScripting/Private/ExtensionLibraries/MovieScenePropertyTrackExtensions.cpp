@@ -6,6 +6,7 @@
 
 void UMovieScenePropertyTrackExtensions::SetPropertyNameAndPath(UMovieScenePropertyTrack* Track, const FName& InPropertyName, const FString& InPropertyPath)
 {
+	Track->Modify();
 	Track->SetPropertyNameAndPath(InPropertyName, InPropertyPath);
 }
 
@@ -16,7 +17,7 @@ FName UMovieScenePropertyTrackExtensions::GetPropertyName(UMovieScenePropertyTra
 
 FString UMovieScenePropertyTrackExtensions::GetPropertyPath(UMovieScenePropertyTrack* Track)
 {
-	return Track->GetPropertyPath();
+	return Track->GetPropertyPath().ToString();
 }
 
 FName UMovieScenePropertyTrackExtensions::GetUniqueTrackName(UMovieScenePropertyTrack* Track)

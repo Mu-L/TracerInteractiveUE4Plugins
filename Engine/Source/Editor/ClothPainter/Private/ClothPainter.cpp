@@ -203,6 +203,12 @@ void FClothPainter::ExitPaintMode()
 	{
 		SkeletalMeshComponent->UnregisterExtendedViewportTextDelegate(HoveredTextCallbackHandle);
 	}
+
+	// Remove reference to asset so it can be GC if necessary
+	if (PaintSettings)
+	{
+		PaintSettings->ClothingAssets.Reset();
+	}
 }
 
 void FClothPainter::RecalculateAutoViewRange()
@@ -271,8 +277,8 @@ void FClothPainter::Tick(FEditorViewportClient* ViewportClient, float DeltaTime)
 					Asset->ApplyParameterMasks();
 				}
 			}
-		
-			SkeletalMeshComponent->RebuildClothingSectionsFixedVerts();
+			static const bool bInvalidateDerivedDataCache = false;  // No need to rebuild the DDC while previewing
+			SkeletalMeshComponent->RebuildClothingSectionsFixedVerts(bInvalidateDerivedDataCache);
 		}
 
 		FComponentReregisterContext ReregisterContext(SkeletalMeshComponent);

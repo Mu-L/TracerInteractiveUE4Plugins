@@ -87,9 +87,9 @@ float GetDepth(int LightId)
 	return SceneLightsData.Dimensions[LightId].z;
 }
 
-float GetCosConeAngle(int LightId)
+float2 GetCosConeAngles(int LightId)
 {
-	return SceneLightsData.Dimensions[LightId].x;
+	return SceneLightsData.Dimensions[LightId].xy;
 }
 
 float3 GetColor(int LightId)
@@ -130,4 +130,14 @@ float ComputeAttenuationFalloff(float Distance, float Attenuation)
 #else
 	return 1.0;
 #endif
+}
+
+bool HasTransmission(int LightId)
+{
+	return SceneLightsData.Flags[LightId] & 0x01;
+}
+
+uint GetLightingChannelMask(int LightId)
+{
+	return (SceneLightsData.Flags[LightId] >> 1) & 0x7;
 }

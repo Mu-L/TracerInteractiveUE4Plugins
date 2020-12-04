@@ -30,7 +30,7 @@ void FDumpTransitionsHelper::DumpTransitionForResourceHandler()
 	DumpTransitionForResource = FName(*NewValue);
 }
 
-void FDumpTransitionsHelper::DumpResourceTransition(const FName& ResourceName, const EResourceTransitionAccess TransitionType)
+void FDumpTransitionsHelper::DumpResourceTransition(const FName& ResourceName, const ERHIAccess TransitionType)
 {
 	const FName ResourceDumpName = FDumpTransitionsHelper::DumpTransitionForResource;
 	if ((ResourceDumpName != NAME_None) && (ResourceDumpName == ResourceName))
@@ -39,7 +39,7 @@ void FDumpTransitionsHelper::DumpResourceTransition(const FName& ResourceName, c
 		ANSICHAR DumpCallstack[DumpCallstackSize] = { 0 };
 
 		FPlatformStackWalk::StackWalkAndDump(DumpCallstack, DumpCallstackSize, 2);
-		UE_LOG(LogRHI, Log, TEXT("%s transition to: %s"), *ResourceDumpName.ToString(), *FResourceTransitionUtility::ResourceTransitionAccessStrings[(int32)TransitionType]);
+		UE_LOG(LogRHI, Log, TEXT("%s transition to: %s"), *ResourceDumpName.ToString(), *GetRHIAccessName(TransitionType));
 		UE_LOG(LogRHI, Log, TEXT("%s"), ANSI_TO_TCHAR(DumpCallstack));
 	}
 }
@@ -155,8 +155,7 @@ struct FRHIFrameOffsetThread : public FRunnable
 	FCriticalSection CS;
 	FRHIFlipDetails LastFlipFrame;
 
-
-	FEvent* WaitEvent;
+	static FEvent* WaitEvent;
 
 #if !UE_BUILD_SHIPPING
 	struct FFrameDebugInfo
@@ -176,7 +175,7 @@ struct FRHIFrameOffsetThread : public FRunnable
 
 			int32 SyncInterval = RHIGetSyncInterval();
 			double TargetFrameTimeInSeconds = double(SyncInterval) / 60.0;
-			double SlackInSeconds = CVarRHISyncSlackMS.GetValueOnAnyThread() / 1000.0;
+			double SlackInSeconds = RHIGetSyncSlackMS() / 1000.0;
 			double TargetFlipTime = (NewFlipFrame.VBlankTimeInSeconds + TargetFrameTimeInSeconds) - SlackInSeconds;
 
 			double Timeout = FMath::Max(0.0, TargetFlipTime - FPlatformTime::Seconds());
@@ -207,7 +206,10 @@ struct FRHIFrameOffsetThread : public FRunnable
 #endif
 			}
 
-			WaitEvent->Trigger();
+			if (WaitEvent)
+			{
+				WaitEvent->Trigger();
+			}
 		}
 
 		return 0;
@@ -220,16 +222,10 @@ struct FRHIFrameOffsetThread : public FRunnable
 
 public:
 	FRHIFrameOffsetThread()
-		: WaitEvent(nullptr)
 	{}
 
 	~FRHIFrameOffsetThread()
 	{
-		if (WaitEvent)
-		{
-			FPlatformProcess::ReturnSynchEventToPool(WaitEvent);
-			WaitEvent = nullptr;
-		}
 	}
 
 	static FRHIFlipDetails WaitForFlip(double Timeout)
@@ -259,7 +255,7 @@ public:
 		bRun = true;
 		Singleton.GetOrInitializeWaitEvent();
 		check(Thread == nullptr);
-		Thread = FRunnableThread::Create(&Singleton, TEXT("RHIFrameOffsetThread"), 0, TPri_AboveNormal);
+		Thread = FRunnableThread::Create(&Singleton, TEXT("RHIFrameOffsetThread"), 0, TPri_AboveNormal, FPlatformAffinity::GetRHIFrameOffsetThreadMask());
 	}
 
 	static void Shutdown()
@@ -271,6 +267,12 @@ public:
 		}
 		bInitialized = false;
 		GDynamicRHI->RHISignalFlipEvent();
+
+		if (WaitEvent)
+		{
+			FPlatformProcess::ReturnSynchEventToPool(WaitEvent);
+			WaitEvent = nullptr;
+		}
 
 		if (Thread)
 		{
@@ -314,6 +316,7 @@ FRunnableThread* FRHIFrameOffsetThread::Thread = nullptr;
 FRHIFrameOffsetThread FRHIFrameOffsetThread::Singleton;
 bool FRHIFrameOffsetThread::bInitialized = false;
 bool FRHIFrameOffsetThread::bRun = false;
+FEvent* FRHIFrameOffsetThread::WaitEvent = nullptr;
 
 #endif // USE_FRAME_OFFSET_THREAD
 
@@ -481,6 +484,16 @@ RHI_API uint32 RHIGetSyncInterval()
 	return CVarRHISyncInterval.GetValueOnAnyThread();
 }
 
+RHI_API float RHIGetSyncSlackMS()
+{
+#if USE_FRAME_OFFSET_THREAD
+	const float SyncSlackMS = CVarRHISyncSlackMS.GetValueOnAnyThread();
+#else // #if USE_FRAME_OFFSET_THREAD
+	const float SyncSlackMS = RHIGetSyncInterval() / 60.f * 1000.f;		// Sync slack is entire frame interval if we aren't using the frame offset system
+#endif // #else // #if USE_FRAME_OFFSET_THREAD
+	return SyncSlackMS;
+}
+
 RHI_API void RHIGetPresentThresholds(float& OutTopPercent, float& OutBottomPercent)
 {
 	OutTopPercent = FMath::Clamp(CVarRHIPresentThresholdTop.GetValueOnAnyThread(), 0.0f, 1.0f);
@@ -515,4 +528,79 @@ RHI_API void RHIShutdownFlipTracking()
 #endif
 }
 
+RHI_API ERHIAccess RHIGetDefaultResourceState(ETextureCreateFlags InUsage, bool bInHasInitialData)
+{
+	// By default assume it can be bound for reading
+	ERHIAccess ResourceState = ERHIAccess::SRVMask;
+
+	if (!bInHasInitialData)
+	{
+		if (InUsage & TexCreate_RenderTargetable)
+		{
+			ResourceState = ERHIAccess::RTV;
+		}
+		else if (InUsage & TexCreate_DepthStencilTargetable)
+		{
+			ResourceState = ERHIAccess::DSVWrite | ERHIAccess::DSVRead;
+		}
+		else if (InUsage & TexCreate_UAV)
+		{
+			ResourceState = ERHIAccess::UAVMask;
+		}
+		else if (InUsage & TexCreate_Presentable)
+		{
+			ResourceState = ERHIAccess::Present;
+		}
+		else if (InUsage & TexCreate_ShaderResource)
+		{
+			ResourceState = ERHIAccess::SRVMask;
+		}
+	}
+
+	return ResourceState;
+}
+
+RHI_API ERHIAccess RHIGetDefaultResourceState(EBufferUsageFlags InUsage, bool bInHasInitialData)
+{
+	// Default reading state is different per buffer type
+	ERHIAccess DefaultReadingState = ERHIAccess::Unknown;
+	if (InUsage & BUF_IndexBuffer)
+	{
+		DefaultReadingState = ERHIAccess::VertexOrIndexBuffer;
+	}
+	if (InUsage & BUF_VertexBuffer)
+	{
+		// Could be vertex buffer or normal DataBuffer
+		DefaultReadingState = DefaultReadingState | ERHIAccess::VertexOrIndexBuffer | ERHIAccess::SRVMask;
+	}
+	if (InUsage & BUF_StructuredBuffer)
+	{
+		DefaultReadingState = DefaultReadingState | ERHIAccess::SRVMask;
+	}
+
+	// Vertex and index buffers might not have the BUF_ShaderResource flag set and just assume
+	// they are readable by default
+	ERHIAccess ResourceState = (!EnumHasAnyFlags(DefaultReadingState, ERHIAccess::VertexOrIndexBuffer)) ? ERHIAccess::Unknown : DefaultReadingState;
+
+	// SRV when we have initial data because we can sample the buffer then
+	if (bInHasInitialData)
+	{
+		ResourceState = DefaultReadingState;
+	}
+	else
+	{
+		if (InUsage & BUF_UnorderedAccess)
+		{
+			ResourceState = ERHIAccess::UAVMask;
+		}
+		else if (InUsage & BUF_ShaderResource)
+		{
+			ResourceState = DefaultReadingState | ERHIAccess::SRVMask;
+		}
+	}
+
+	check(ResourceState != ERHIAccess::Unknown);
+
+	return ResourceState;
+}
 

@@ -8,7 +8,7 @@
 #include "Engine/EngineTypes.h"
 #include "Engine/Texture.h"
 #include "EngineDefines.h"
-#include "PhysicsEngine/PhysicsSettingsEnums.h"
+#include "PhysicsSettingsEnums.h"
 #if WITH_CHAOS
 #include "Physics/PhysicsInterfaceCore.h"
 #endif
@@ -63,6 +63,9 @@ public:
 	virtual void FinishDestroy() override;
 	//~ End UObject Interface
 
+	virtual ~UPhysicalMaterialMask();
+	UPhysicalMaterialMask(FVTableHelper& Helper);
+
 #if WITH_EDITOR
 	// Helper method to set mask texture
 	void SetMaskTexture(UTexture* InMaskTexture, const FString& InTextureFilename);
@@ -72,7 +75,7 @@ public:
 #endif // WITH_EDITOR
 
 #if WITH_CHAOS
-	FPhysicsMaterialMaskHandle MaterialMaskHandle;
+	TUniquePtr<FPhysicsMaterialMaskHandle> MaterialMaskHandle;
 
 	/** Get the physics-interface derived version of this material */
 	FPhysicsMaterialMaskHandle& GetPhysicsMaterialMask();

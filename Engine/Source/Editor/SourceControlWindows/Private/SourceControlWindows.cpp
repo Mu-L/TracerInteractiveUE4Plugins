@@ -168,7 +168,12 @@ bool FSourceControlWindows::PromptForCheckin(FCheckinResultInfo& OutResultInfo, 
 	{
 		// Get any files pending delete
 		TArray<FSourceControlStateRef> PendingDeleteItems = SourceControlProvider.GetCachedStateByPredicate(
-			[](const FSourceControlStateRef& State) { return State->IsDeleted(); }
+			[&States](const FSourceControlStateRef& State) 
+			{ 
+				return State->IsDeleted() 
+					// if the states already contains the pending delete do not bother appending it
+					&& !States.Contains(State); 
+			}
 		);
 
 		// And append them to the list
@@ -445,10 +450,19 @@ void FSourceControlWindows::ChoosePackagesToCheckInCallback(const FSourceControl
 	TMap<FString, FSourceControlStatePtr> PackageStates;
 	FEditorFileUtils::FindAllSubmittablePackageFiles(PackageStates, true);
 
+	TArray<FString> ConfigFilesToSubmit;
+	const FString ProjectFilePath = FPaths::GetProjectFilePath();
+
 	for (TMap<FString, FSourceControlStatePtr>::TConstIterator PackageIter(PackageStates); PackageIter; ++PackageIter)
 	{
 		const FString PackageName = *PackageIter.Key();
 		const FSourceControlStatePtr CurPackageSCCState = PackageIter.Value();
+
+		if (PackageName == ProjectFilePath)
+		{
+			ConfigFilesToSubmit.Add(PackageName);
+			continue;
+		}
 
 		UPackage* Package = FindPackage(nullptr, *PackageName);
 		if (Package != nullptr)
@@ -461,7 +475,6 @@ void FSourceControlWindows::ChoosePackagesToCheckInCallback(const FSourceControl
 
 	// Get a list of all the checked out config files
 	TMap<FString, FSourceControlStatePtr> ConfigFileStates;
-	TArray<FString> ConfigFilesToSubmit;
 	FEditorFileUtils::FindAllSubmittableConfigFiles(ConfigFileStates);
 	for (TMap<FString, FSourceControlStatePtr>::TConstIterator It(ConfigFileStates); It; ++It)
 	{

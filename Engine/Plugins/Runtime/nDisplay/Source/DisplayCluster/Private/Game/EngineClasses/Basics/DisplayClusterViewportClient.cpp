@@ -33,10 +33,12 @@
 #include "DynamicResolutionState.h"
 #include "EngineStats.h"
 
-#include "Render\Device\IDisplayClusterRenderDevice.h"
+#include "Render/Device/IDisplayClusterRenderDevice.h"
+#include "Render/Device/DisplayClusterRenderViewport.h"
 
 #include "DisplayClusterEnums.h"
-#include "DisplayClusterGlobals.h"
+#include "DisplayClusterSceneViewExtensions.h"
+#include "Misc/DisplayClusterGlobals.h"
 
 
 UDisplayClusterViewportClient::UDisplayClusterViewportClient(FVTableHelper& Helper) : Super(Helper)
@@ -73,7 +75,7 @@ static UCanvas* GetCanvasByName(FName CanvasName)
 
 void UDisplayClusterViewportClient::Init(struct FWorldContext& WorldContext, UGameInstance* OwningGameInstance, bool bCreateNewAudioDevice)
 {
-	const bool bIsNDisplayClusterMode = (!GEngine->XRSystem.IsValid() && GEngine->StereoRenderingDevice.IsValid() && GDisplayCluster->GetOperationMode() == EDisplayClusterOperationMode::Cluster);
+	const bool bIsNDisplayClusterMode = (GEngine->StereoRenderingDevice.IsValid() && GDisplayCluster->GetOperationMode() == EDisplayClusterOperationMode::Cluster);
 	if (bIsNDisplayClusterMode)
 	{
 		// r.CompositionForceRenderTargetLoad
@@ -81,6 +83,13 @@ void UDisplayClusterViewportClient::Init(struct FWorldContext& WorldContext, UGa
 		if (ForceLoadCVar)
 		{
 			ForceLoadCVar->Set(int32(1));
+		}
+
+		// r.SceneRenderTargetResizeMethodForceOverride
+		IConsoleVariable* const RTResizeForceOverrideCVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.SceneRenderTargetResizeMethodForceOverride"));
+		if (RTResizeForceOverrideCVar)
+		{
+			RTResizeForceOverrideCVar->Set(int32(1));
 		}
 
 		// r.SceneRenderTargetResizeMethod
@@ -105,7 +114,7 @@ void UDisplayClusterViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCa
 {
 	////////////////////////////////
 	// For any operation mode other than 'Cluster' we use default UGameViewportClient::Draw pipeline
-	const bool bIsNDisplayClusterMode = (!GEngine->XRSystem.IsValid() && GEngine->StereoRenderingDevice.IsValid() && GDisplayCluster->GetOperationMode() == EDisplayClusterOperationMode::Cluster);
+	const bool bIsNDisplayClusterMode = (GEngine->StereoRenderingDevice.IsValid() && GDisplayCluster->GetOperationMode() == EDisplayClusterOperationMode::Cluster);
 	if (!bIsNDisplayClusterMode)
 	{
 		return UGameViewportClient::Draw(InViewport, SceneCanvas);
@@ -199,7 +208,24 @@ void UDisplayClusterViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCa
 		UpdateDebugViewModeShaders();
 #endif
 
-		ViewFamily.ViewExtensions = GEngine->ViewExtensions->GatherActiveExtensions(InViewport);
+		// Gather Scene View Extensions
+		{
+			// Scene View Extension activation with ViewportId granularity only works if you have one ViewFamily per ViewportId
+			check(NumViewsPerFamily == 1);
+
+			// If not in Mono, the number of Views may be a factor of the number of ViewportIds.
+			const uint32 ViewsAmountPerViewport = DCRenderDevice->GetViewsAmountPerViewport();
+			check(ViewsAmountPerViewport > 0);
+
+			const int32 ViewportIdx = (ViewFamilyIdx * NumViewsPerFamily) / ViewsAmountPerViewport;
+			const FDisplayClusterRenderViewport* RenderViewport = DCRenderDevice->GetRenderViewport(ViewportIdx);
+			check(RenderViewport);
+
+			const FString ViewportId = RenderViewport->GetId();
+			FDisplayClusterSceneViewExtensionContext ViewExtensionContext(InViewport, ViewportId);
+
+			ViewFamily.ViewExtensions = GEngine->ViewExtensions->GatherActiveExtensions(ViewExtensionContext);
+		}
 
 		for (auto ViewExt : ViewFamily.ViewExtensions)
 		{
@@ -246,6 +272,8 @@ void UDisplayClusterViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCa
 			}
 		}
 
+		const FDisplayClusterRenderViewport* RenderViewport = DCRenderDevice->GetRenderViewport(ViewFamilyIdx * NumViewsPerFamily);
+
 		TMap<ULocalPlayer*, FSceneView*> PlayerViewMap;
 
 		FAudioDeviceHandle RetrievedAudioDevice = MyWorld->GetAudioDevice();
@@ -266,6 +294,18 @@ void UDisplayClusterViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCa
 			if (View)
 			{
 				Views.Add(View);
+				if (RenderViewport)
+				{
+					// Support MGPU viewport mapping
+					if (RenderViewport->GetGPUIndex() >= 0)
+					{
+						View->bOverrideGPUMask = true;
+						View->GPUMask = FRHIGPUMask::FromIndex(RenderViewport->GetGPUIndex());
+					}
+
+					// Control CrossGPU transfer for this viewport
+					View->bAllowCrossGPUTransfer = RenderViewport->IsCrossGPUTransferAllowed();
+				}
 
 				// We don't allow instanced stereo currently
 				View->bIsInstancedStereoEnabled  = false;
@@ -376,9 +416,6 @@ void UDisplayClusterViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCa
 					View->SetupRayTracedRendering();
 #endif
 
-#if CSV_PROFILER
-					UpdateCsvCameraStats(View);
-#endif
 				}
 
 				// Add view information for resource streaming. Allow up to 5X boost for small FOV.
@@ -387,6 +424,10 @@ void UDisplayClusterViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCa
 				MyWorld->ViewLocationsRenderedLastFrame.Add(View->ViewMatrices.GetViewOrigin());
 			}
 		}
+
+#if CSV_PROFILER
+		UpdateCsvCameraStats(PlayerViewMap);
+#endif
 
 		FinalizeViews(&ViewFamily, PlayerViewMap);
 
@@ -454,11 +495,11 @@ void UDisplayClusterViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCa
 		if (ViewFamily.GetScreenPercentageInterface() == nullptr)
 		{
 			// In case of stereo, we set the same buffer ratio for both left and right views (taken from left)
-			float CustomBufferRatio = 1.f;
-			DCRenderDevice->GetBufferRatio(ViewFamilyIdx * NumViewsPerFamily, CustomBufferRatio);
+			float CustomBufferRatio = RenderViewport ? RenderViewport->GetBufferRatio() : 1;
 
 			bool AllowPostProcessSettingsScreenPercentage = false;
 			float GlobalResolutionFraction = 1.0f;
+			float SecondaryScreenPercentage = 1.0f;
 
 			if (ViewFamily.EngineShowFlags.ScreenPercentage)
 			{
@@ -467,10 +508,19 @@ void UDisplayClusterViewportClient::Draw(FViewport* InViewport, FCanvas* SceneCa
 
 				// Get global view fraction set by r.ScreenPercentage.
 				GlobalResolutionFraction = FLegacyScreenPercentageDriver::GetCVarResolutionFraction() * CustomBufferRatio;
+
+				// We need to split the screen percentage if below 0.5 because TAA upscaling only works well up to 2x.
+				if (GlobalResolutionFraction < 0.5f)
+				{
+					SecondaryScreenPercentage = 2.0f * GlobalResolutionFraction;
+					GlobalResolutionFraction = 0.5f;
+				}
 			}
 
 			ViewFamily.SetScreenPercentageInterface(new FLegacyScreenPercentageDriver(
 				ViewFamily, GlobalResolutionFraction, AllowPostProcessSettingsScreenPercentage));
+
+			ViewFamily.SecondaryViewFraction = SecondaryScreenPercentage;
 		}
 		else if (bStereoRendering)
 		{

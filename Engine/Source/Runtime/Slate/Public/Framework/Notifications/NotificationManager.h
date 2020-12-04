@@ -79,6 +79,9 @@ protected:
 	/** Create a notification list for the specified screen rectangle */
 	TSharedRef<SNotificationList> CreateStackForArea(const FSlateRect& InRectangle);
 
+	/** FCoreDelegates::OnPreExit shutdown callback */
+	void ShutdownOnPreExit();
+
 private:
 
 	/** A list of notifications, bound to a particular region */
@@ -110,5 +113,5 @@ private:
 	TLockFreePointerListLIFO<FNotificationInfo> PendingNotifications;
 
 	/** Whether notifications should be displayed or not.  This can be used to globally suppress notification pop-ups */
-	bool bAllowNotifications;
+	bool bAllowNotifications = true;
 };

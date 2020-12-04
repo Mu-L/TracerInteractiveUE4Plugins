@@ -11,6 +11,7 @@
 #include "UObject/UObjectHash.h"
 #include "UObject/UObjectIterator.h"
 #include "Engine/Blueprint.h"
+#include "Engine/SCS_Node.h"
 #include "Exporters/Exporter.h"
 #include "Editor/EditorEngine.h"
 #include "SourceControlOperations.h"
@@ -28,6 +29,7 @@
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "ToolMenus.h"
 #include "IClassTypeActions.h"
+#include "AssetTypeActions/AssetTypeActions_Actor.h"
 #include "AssetTypeActions/AssetTypeActions_Blueprint.h"
 #include "AssetTypeActions/AssetTypeActions_Curve.h"
 #include "AssetTypeActions/AssetTypeActions_MaterialInterface.h"
@@ -77,6 +79,7 @@
 #include "AssetTypeActions/AssetTypeActions_MaterialFunction.h"
 #include "AssetTypeActions/AssetTypeActions_MaterialFunctionInstance.h"
 #include "AssetTypeActions/AssetTypeActions_MaterialInstanceConstant.h"
+#include "AssetTypeActions/AssetTypeActions_MaterialInstanceDynamic.h"
 #include "AssetTypeActions/AssetTypeActions_MaterialParameterCollection.h"
 #include "AssetTypeActions/AssetTypeActions_ObjectLibrary.h"
 #include "AssetTypeActions/AssetTypeActions_ParticleSystem.h"
@@ -96,7 +99,9 @@
 #include "AssetTypeActions/AssetTypeActions_Texture2DArray.h"
 #include "AssetTypeActions/AssetTypeActions_TextureCube.h"
 #include "AssetTypeActions/AssetTypeActions_VolumeTexture.h"
+#include "AssetTypeActions/AssetTypeActions_TextureRenderTarget2DArray.h"
 #include "AssetTypeActions/AssetTypeActions_TextureRenderTargetCube.h"
+#include "AssetTypeActions/AssetTypeActions_TextureRenderTargetVolume.h"
 #include "AssetTypeActions/AssetTypeActions_TextureLightProfile.h"
 #include "AssetTypeActions/AssetTypeActions_TouchInterface.h"
 #include "AssetTypeActions/AssetTypeActions_VectorFieldAnimated.h"
@@ -163,13 +168,27 @@ UAssetToolsImpl::UAssetToolsImpl(const FObjectInitializer& ObjectInitializer)
 {
 	TArray<FString> SupportedTypesArray;
 	GConfig->GetArray(TEXT("AssetTools"), TEXT("SupportedAssetTypes"), SupportedTypesArray, GEditorIni);
-
 	for (const FString& Type : SupportedTypesArray)
 	{
 		AssetClassBlacklist->AddWhitelistItem("AssetToolsConfigFile", *Type);
 	}
-
 	AssetClassBlacklist->OnFilterChanged().AddUObject(this, &UAssetToolsImpl::AssetClassBlacklistChanged);
+
+	TArray<FString> BlacklistedViewPath;
+	GConfig->GetArray(TEXT("AssetTools"), TEXT("BlacklistAssetPaths"), BlacklistedViewPath, GEditorIni);
+	for (const FString& Path : BlacklistedViewPath)
+	{
+		FolderBlacklist->AddBlacklistItem("AssetToolsConfigFile", Path);
+	}
+
+	GConfig->GetArray(TEXT("AssetTools"), TEXT("BlacklistContentSubPaths"), SubContentBlacklistPaths, GEditorIni);
+	TArray<FString> ContentRoots;
+	FPackageName::QueryRootContentPaths(ContentRoots);
+	for (const FString& ContentRoot : ContentRoots)
+	{
+		AddSubContentBlacklist(ContentRoot);
+	}
+	FPackageName::OnContentPathMounted().AddUObject(this, &UAssetToolsImpl::OnContentPathMounted);
 
 	// Register the built-in advanced categories
 	AllocatedCategoryBits.Add(TEXT("_BuiltIn_0"), FAdvancedAssetCategory(EAssetTypeCategories::Animation, LOCTEXT("AnimationAssetCategory", "Animation")));
@@ -186,6 +205,7 @@ UAssetToolsImpl::UAssetToolsImpl(const FObjectInitializer& ObjectInitializer)
 	EAssetTypeCategories::Type FoliageCategoryBit = RegisterAdvancedAssetCategory(FName(TEXT("Foliage")), LOCTEXT("FoliageAssetCategory", "Foliage"));
 
 	// Register the built-in asset type actions
+	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_Actor));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_AnimationAsset));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_AnimBlueprint));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_AnimBoneCompressionSettings));
@@ -235,6 +255,7 @@ UAssetToolsImpl::UAssetToolsImpl(const FObjectInitializer& ObjectInitializer)
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_MaterialFunctionLayerBlendInstance));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_MaterialFunctionInstance));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_MaterialInstanceConstant(BlendablesCategoryBit)));
+	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_MaterialInstanceDynamic));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_MaterialInterface));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_MaterialParameterCollection));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_ObjectLibrary));
@@ -255,10 +276,12 @@ UAssetToolsImpl::UAssetToolsImpl(const FObjectInitializer& ObjectInitializer)
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_Texture2D));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_TextureCube));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_Texture2DArray));
-	RegisterAssetTypeActions( MakeShareable(new FAssetTypeActions_VolumeTexture) );
+	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_VolumeTexture));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_TextureRenderTarget));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_TextureRenderTarget2D));
+	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_TextureRenderTarget2DArray));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_TextureRenderTargetCube));
+	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_TextureRenderTargetVolume));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_TextureLightProfile));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_TouchInterface));
 	RegisterAssetTypeActions(MakeShareable(new FAssetTypeActions_VectorField));
@@ -416,31 +439,9 @@ TWeakPtr<IClassTypeActions> UAssetToolsImpl::GetClassTypeActionsForClass( UClass
 	return MostDerivedClassTypeActions;
 }
 
-struct FRootedOnScope
-{
-	UObject* Obj;
-
-	FRootedOnScope(UObject* InObj) : Obj(nullptr)
-	{
-		if (InObj && !InObj->IsRooted())
-		{
-			Obj = InObj;
-			Obj->AddToRoot();
-		}
-	}
-
-	~FRootedOnScope()
-	{
-		if (Obj)
-		{
-			Obj->RemoveFromRoot();
-		}
-	}
-};
-
 UObject* UAssetToolsImpl::CreateAsset(const FString& AssetName, const FString& PackagePath, UClass* AssetClass, UFactory* Factory, FName CallingContext)
 {
-	FRootedOnScope DontGCFactory(Factory);
+	FGCObjectScopeGuard DontGCFactory(Factory);
 
 	// Verify the factory class
 	if ( !ensure(AssetClass || Factory) )
@@ -465,7 +466,7 @@ UObject* UAssetToolsImpl::CreateAsset(const FString& AssetName, const FString& P
 
 	UClass* ClassToUse = AssetClass ? AssetClass : (Factory ? Factory->GetSupportedClass() : nullptr);
 
-	UPackage* Pkg = CreatePackage(nullptr,*PackageName);
+	UPackage* Pkg = CreatePackage(*PackageName);
 	UObject* NewObj = nullptr;
 	EObjectFlags Flags = RF_Public|RF_Standalone|RF_Transactional;
 	if ( Factory )
@@ -524,6 +525,7 @@ UObject* UAssetToolsImpl::CreateAssetWithDialog(UClass* AssetClass, UFactory* Fa
 
 UObject* UAssetToolsImpl::CreateAssetWithDialog(const FString& AssetName, const FString& PackagePath, UClass* AssetClass, UFactory* Factory, FName CallingContext)
 {
+	FGCObjectScopeGuard DontGCFactory(Factory);
 	if(Factory)
 	{
 		FSaveAssetDialogConfig SaveAssetDialogConfig;
@@ -612,6 +614,9 @@ UObject* UAssetToolsImpl::PerformDuplicateAsset(const FString& AssetName, const 
 	UObject* NewObject = ObjectTools::DuplicateSingleObject(OriginalObject, PGN, ObjectsUserRefusedToFullyLoad, bPromtToOverwrite);
 	if(NewObject != nullptr)
 	{
+		// Assets must have RF_Public and RF_Standalone
+		NewObject->SetFlags(RF_Public | RF_Standalone);
+
 		if ( ISourceControlModule::Get().IsEnabled() )
 		{
 			// Save package here if SCC is enabled because the user can use SCC to revert a change
@@ -625,6 +630,9 @@ UObject* UAssetToolsImpl::PerformDuplicateAsset(const FString& AssetName, const 
 			// now attempt to branch, we can do this now as we should have a file on disk
 			SourceControlHelpers::BranchPackage(NewObject->GetOutermost(), OriginalObject->GetOutermost());
 		}
+
+		// Notify the asset registry
+		FAssetRegistryModule::AssetCreated(NewObject);
 
 		// analytics create record
 		UAssetToolsImpl::OnNewCreateRecord(NewObject->GetClass(), true);
@@ -845,13 +853,12 @@ bool UAssetToolsImpl::AdvancedCopyPackages(const TMap<FString, FString>& SourceA
 		TArray<UObject*> NewObjects;
 		TSet<UObject*> NewObjectSet;
 		FString CopyErrors;
-		FScopedSlowTask LoopProgress(SourceAndDestPackages.Num(), LOCTEXT("AdvancedCopying", "Copying files and dependencies..."));
+		FScopedSlowTask LoopProgress(SourceAndDestPackages.Num() * 2 , LOCTEXT("AdvancedCopying", "Copying files and dependencies..."));
 		LoopProgress.MakeDialog();
-		for (auto It = SourceAndDestPackages.CreateConstIterator(); It; ++It)
+		for (const auto& Package : SourceAndDestPackages)
 		{
-
-			FString PackageName = It.Key();
-			FString DestFilename = It.Value();
+			const FString& PackageName = Package.Key;
+			const FString& DestFilename = Package.Value;
 			FString SrcFilename;
 
 			if (FPackageName::DoesPackageExist(PackageName, nullptr, &SrcFilename))
@@ -861,6 +868,22 @@ bool UAssetToolsImpl::AdvancedCopyPackages(const TMap<FString, FString>& SourceA
 				if (Pkg)
 				{
 					Pkg->FullyLoad();
+				}
+			}
+		}
+
+		for (const auto& Package : SourceAndDestPackages)
+		{
+			const FString& PackageName = Package.Key;
+			const FString& DestFilename = Package.Value;
+			FString SrcFilename;
+
+			if (FPackageName::DoesPackageExist(PackageName, nullptr, &SrcFilename))
+			{
+				LoopProgress.EnterProgressFrame();
+				UPackage* Pkg = FindPackage(nullptr, *PackageName);
+				if (Pkg)
+				{
 					FString Name = ObjectTools::SanitizeObjectName(FPaths::GetBaseFilename(SrcFilename));
 					UObject* ExistingObject = StaticFindObject(UObject::StaticClass(), Pkg, *Name);
 					if (ExistingObject)
@@ -886,6 +909,9 @@ bool UAssetToolsImpl::AdvancedCopyPackages(const TMap<FString, FString>& SourceA
 			}
 		}
 
+		TSet<UObject*> ObjectsAndSubObjectsToReplaceWithin;
+		ObjectTools::GatherSubObjectsForReferenceReplacement(NewObjectSet, ExistingObjectSet, ObjectsAndSubObjectsToReplaceWithin);
+
 		for (int32 ObjectIdx = 0; ObjectIdx < NewObjects.Num(); ObjectIdx++)
 		{
 			TMap<UObject*, UObject*> ReplacementMap;
@@ -902,7 +928,7 @@ bool UAssetToolsImpl::AdvancedCopyPackages(const TMap<FString, FString>& SourceA
 					{
 						TArray<UObject*> ObjectsToReplace;
 						ObjectsToReplace.Add(ExistingObjects[DependencyIndex]);
-						ObjectTools::ConsolidateObjects(NewObjects[DependencyIndex], ObjectsToReplace, NewObjectSet, ExistingObjectSet, false);
+						ObjectTools::ConsolidateObjects(NewObjects[DependencyIndex], ObjectsToReplace, ObjectsAndSubObjectsToReplaceWithin, ExistingObjectSet, false);
 					}
 				}
 			}
@@ -997,9 +1023,9 @@ bool UAssetToolsImpl::RenameAssets(const TArray<FAssetRenameData>& AssetsAndName
 	return AssetRenameManager->RenameAssets(AssetsAndNames);
 }
 
-void UAssetToolsImpl::RenameAssetsWithDialog(const TArray<FAssetRenameData>& AssetsAndNames, bool bAutoCheckout)
+EAssetRenameResult UAssetToolsImpl::RenameAssetsWithDialog(const TArray<FAssetRenameData>& AssetsAndNames, bool bAutoCheckout)
 {
-	AssetRenameManager->RenameAssetsWithDialog(AssetsAndNames, bAutoCheckout);
+	return AssetRenameManager->RenameAssetsWithDialog(AssetsAndNames, bAutoCheckout);
 }
 
 void UAssetToolsImpl::FindSoftReferencesToObject(FSoftObjectPath TargetObject, TArray<UObject*>& ReferencingObjects)
@@ -1644,7 +1670,12 @@ TArray<UObject*> UAssetToolsImpl::ImportAssetsInternal(const TArray<FString>& Fi
 	TMap< FString, TArray<UFactory*> > ExtensionToFactoriesMap;
 
 	FScopedSlowTask SlowTask(Files.Num(), LOCTEXT("ImportSlowTask", "Importing"));
-	SlowTask.MakeDialog();
+	if (Files.Num() > 1)
+	{	
+		//Always allow user to cancel the import task if they are importing multiple files.
+		//If we're importing a single file, then the factory policy will dictate if the import if cancelable.
+		SlowTask.MakeDialog(true);
+	}
 
 
 	TArray<TPair<FString, FString>> FilesAndDestinations;
@@ -1778,23 +1809,20 @@ TArray<UObject*> UAssetToolsImpl::ImportAssetsInternal(const TArray<FString>& Fi
 	}
 
 	TArray<UFactory*> UsedFactories;
-
+	bool bImportWasCancelled = false;
 	// Now iterate over the input files and use the same factory object for each file with the same extension
-	for(int32 FileIdx = 0; FileIdx < FilesAndDestinations.Num(); ++FileIdx)
+	for(int32 FileIdx = 0; FileIdx < FilesAndDestinations.Num() && !bImportWasCancelled; ++FileIdx)
 	{
 		// Filename and DestinationPath will need to get santized before we create an asset out of them as they
 		// can be created out of sources that contain spaces and other invalid characters. Filename cannot be sanitized
 		// until other checks are done that rely on looking at the actual source file so sanitation is delayed.
 		const FString& Filename = FilesAndDestinations[FileIdx].Key;
 		const FString DestinationPath = ObjectTools::SanitizeObjectPath(FilesAndDestinations[FileIdx].Value);
-
-
-		SlowTask.EnterProgressFrame(1, FText::Format(LOCTEXT("Import_ImportingFile", "Importing \"{0}\"..."), FText::FromString(FPaths::GetBaseFilename(Filename))));
-
 		FString FileExtension = FPaths::GetExtension(Filename);
-
 		const TArray<UFactory*>* FactoriesPtr = ExtensionToFactoriesMap.Find(FileExtension);
 		UFactory* Factory = nullptr;
+		SlowTask.EnterProgressFrame(1, FText::Format(LOCTEXT("Import_ImportingFile", "Importing \"{0}\"..."), FText::FromString(FPaths::GetBaseFilename(Filename))));
+
 		// Assume that for automated import, the user knows exactly what factory to use if it exists
 		if(bAutomatedImport && SpecifiedFactory && SpecifiedFactory->FactoryCanImport(Filename))
 		{
@@ -1843,6 +1871,11 @@ TArray<UObject*> UAssetToolsImpl::ImportAssetsInternal(const TArray<FString>& Fi
 
 		if(Factory != nullptr)
 		{
+			if (FilesAndDestinations.Num() == 1)
+			{
+				SlowTask.MakeDialog(Factory->CanImportBeCanceled());
+			}
+
 			// Reset the 'Do you want to overwrite the existing object?' Yes to All / No to All prompt, to make sure the
 			// user gets a chance to select something when the factory is first used during this import
 			if (!UsedFactories.Contains(Factory))
@@ -1853,7 +1886,6 @@ TArray<UObject*> UAssetToolsImpl::ImportAssetsInternal(const TArray<FString>& Fi
 
 			UClass* ImportAssetType = Factory->SupportedClass;
 			bool bImportSucceeded = false;
-			bool bImportWasCancelled = false;
 			FDateTime ImportStartTime = FDateTime::UtcNow();
 
 			FString Name;
@@ -1882,7 +1914,7 @@ TArray<UObject*> UAssetToolsImpl::ImportAssetsInternal(const TArray<FString>& Fi
 				continue;
 			}
 
-			UPackage* Pkg = CreatePackage(nullptr, *PackageName);
+			UPackage* Pkg = CreatePackage( *PackageName);
 			if(!ensure(Pkg))
 			{
 				// Failed to create the package to hold this asset for some reason
@@ -2006,7 +2038,7 @@ TArray<UObject*> UAssetToolsImpl::ImportAssetsInternal(const TArray<FString>& Fi
 							else
 							{
 								// succeed, recreate package since it has been deleted
-								Pkg = CreatePackage(nullptr, *PackageName);
+								Pkg = CreatePackage( *PackageName);
 								Pkg->MarkAsFullyLoaded();
 							}
 						}
@@ -2073,6 +2105,12 @@ TArray<UObject*> UAssetToolsImpl::ImportAssetsInternal(const TArray<FString>& Fi
 		else
 		{
 			// A factory or extension was not found. The extension warning is above. If a factory was not found, the user likely canceled a factory configuration dialog.
+		}
+
+		bImportWasCancelled |= SlowTask.ShouldCancel();
+		if (bImportWasCancelled)
+		{
+			UE_LOG(LogAssetTools, Log, TEXT("The import task was canceled."));
 		}
 	}
 
@@ -2497,7 +2535,7 @@ bool UAssetToolsImpl::CanCreateAsset(const FString& AssetName, const FString& Pa
 	}
 
 	// Find (or create!) the desired package for this object
-	UPackage* Pkg = CreatePackage(nullptr,*PackageName);
+	UPackage* Pkg = CreatePackage(*PackageName);
 
 	// Handle fully loading packages before creating new objects.
 	TArray<UPackage*> TopLevelPackages;
@@ -2542,7 +2580,7 @@ bool UAssetToolsImpl::CanCreateAsset(const FString& AssetName, const FString& Pa
 				CollectGarbage( GARBAGE_COLLECTION_KEEPFLAGS );
 
 				// Old package will be GC'ed... create a new one here
-				Pkg = CreatePackage(nullptr,*PackageName);
+				Pkg = CreatePackage(*PackageName);
 				Pkg->MarkAsFullyLoaded();
 			}
 			else
@@ -2912,7 +2950,7 @@ void UAssetToolsImpl::RecursiveGetDependenciesAdvanced(const FName& PackageName,
 		{
 			FARFilter ExclusionFilter = UAdvancedCopyCustomization::StaticClass()->GetDefaultObject<UAdvancedCopyCustomization>()->GetARFilter();
 			AssetRegistry.UseFilterToExcludeAssets(PathAssetData, ExclusionFilter);
-			for(const FAssetData Asset : PathAssetData)
+			for(const FAssetData& Asset : PathAssetData)
 			{
 				AllDependencies.Add(*Asset.GetPackage()->GetName());
 				// If we should check the assets we found for dependencies
@@ -2927,7 +2965,7 @@ void UAssetToolsImpl::RecursiveGetDependenciesAdvanced(const FName& PackageName,
 		{
 			TArray<FString> SubPaths;
 			AssetRegistry.GetSubPaths(PackageName.ToString(), SubPaths, false);
-			for (const FString SubPath : SubPaths)
+			for (const FString& SubPath : SubPaths)
 			{
 				TArray<FAssetData> EmptyArray;
 				RecursiveGetDependenciesAdvanced(FName(*SubPath), CopyParams, AllDependencies, DependencyMap, CopyCustomization, EmptyArray);
@@ -2937,9 +2975,9 @@ void UAssetToolsImpl::RecursiveGetDependenciesAdvanced(const FName& PackageName,
 	}
 }
 
-void UAssetToolsImpl::FixupReferencers(const TArray<UObjectRedirector*>& Objects) const
+void UAssetToolsImpl::FixupReferencers(const TArray<UObjectRedirector*>& Objects, bool bCheckoutDialogPrompt) const
 {
-	AssetFixUpRedirectors->FixupReferencers(Objects);
+	AssetFixUpRedirectors->FixupReferencers(Objects, bCheckoutDialogPrompt);
 }
 
 bool UAssetToolsImpl::IsFixupReferencersInProgress() const
@@ -3020,7 +3058,7 @@ void UAssetToolsImpl::PerformAdvancedCopyPackages(TArray<FName> SelectedAssetAnd
 		if (ExistingObject)
 		{
 			// Try to find the customization in the settings
-			for (const FAdvancedCopyMap Customization : Settings->AdvancedCopyCustomizations)
+			for (const FAdvancedCopyMap& Customization : Settings->AdvancedCopyCustomizations)
 			{
 				if (Customization.ClassToCopy.GetAssetPathString() == ExistingObject->GetClass()->GetPathName())
 				{
@@ -3173,6 +3211,19 @@ void UAssetToolsImpl::AssetClassBlacklistChanged()
 		const UClass* SupportedClass = ActionsIt->GetSupportedClass();
 		ActionsIt->SetSupported(SupportedClass && AssetClassBlacklist->PassesFilter(SupportedClass->GetFName()));
 	}
+}
+
+void UAssetToolsImpl::AddSubContentBlacklist(const FString& InMount)
+{
+	for (const FString& SubContentPath : SubContentBlacklistPaths)
+	{
+		FolderBlacklist->AddBlacklistItem("AssetToolsConfigFile", InMount / SubContentPath);
+	}
+}
+
+void UAssetToolsImpl::OnContentPathMounted(const FString& InAssetPath, const FString& FileSystemPath)
+{
+	AddSubContentBlacklist(InAssetPath);
 }
 
 TSharedRef<FBlacklistPaths>& UAssetToolsImpl::GetFolderBlacklist()

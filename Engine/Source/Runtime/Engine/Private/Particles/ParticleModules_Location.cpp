@@ -2748,8 +2748,7 @@ void UParticleModuleLocationSkelVertSurface::GetSkeletalMeshComponentSource(FPar
 		int32 MinLOD = INDEX_NONE;
 		if (NewSkelMeshComp && NewSkelMeshComp->GetScene() && NewSkelMeshComp->SkeletalMesh)
 		{
-			ERHIFeatureLevel::Type FeatureLevel = NewSkelMeshComp->GetScene()->GetFeatureLevel();
-			MinLOD = NewSkelMeshComp->SkeletalMesh->MinLod.GetValueForFeatureLevel(FeatureLevel);
+			MinLOD = NewSkelMeshComp->SkeletalMesh->MinLod.GetValue();
 			FSkeletalMeshRenderData* SkelMeshResource = NewSkelMeshComp->GetSkeletalMeshRenderData();
 			FSkinWeightVertexBuffer* SkinWeightBuffer = NewSkelMeshComp->GetSkinWeightBuffer(MinLOD);
 			FSkeletalMeshLODRenderData& LODData = SkelMeshResource->LODRenderData[MinLOD];
@@ -2931,7 +2930,7 @@ bool UParticleModuleLocationSkelVertSurface::VertInfluencedByActiveBone(FParticl
 			}
 		}
 
-		return VertInfluencedByActiveBoneTyped(LODData, 0, Section, VertIndex, InSkelMeshComponent, InstancePayload, OutBoneIndex);
+		return VertInfluencedByActiveBoneTyped(LODData, InstPayload->MeshMinLOD, Section, VertIndex, InSkelMeshComponent, InstancePayload, OutBoneIndex);
 	}
 	return false;
 }

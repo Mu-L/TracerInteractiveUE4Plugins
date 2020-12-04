@@ -48,7 +48,11 @@ struct FMarkerTickRecord
 	FMarkerPair PreviousMarker;
 	FMarkerPair NextMarker;
 
-	bool IsValid() const { return PreviousMarker.MarkerIndex != MarkerIndexSpecialValues::Unitialized && NextMarker.MarkerIndex != MarkerIndexSpecialValues::Unitialized; }
+	bool IsValid(bool bLooping) const
+	{
+		int32 Threshold = bLooping ? MarkerIndexSpecialValues::AnimationBoundary : MarkerIndexSpecialValues::Unitialized;
+		return PreviousMarker.MarkerIndex > Threshold && NextMarker.MarkerIndex > Threshold;
+	}
 
 	void Reset() { PreviousMarker.Reset(); NextMarker.Reset(); }
 
@@ -433,6 +437,16 @@ namespace EAnimGroupRole
 	};
 }
 
+UENUM()
+enum class EAnimSyncGroupScope : uint8
+{
+	// Sync only with animations in the current instance (either main or linked instance)
+	Local,
+
+	// Sync with all animations in the main and linked instances of this skeletal mesh component
+	Component,
+};
+
 USTRUCT()
 struct FAnimGroupInstance
 {
@@ -793,8 +807,13 @@ struct FAnimationGroupReference
 	UPROPERTY(EditAnywhere, Category=Settings)
 	TEnumAsByte<EAnimGroupRole::Type> GroupRole;
 
+	// The scope at which marker-based sync is applied (local, component etc...)
+	UPROPERTY(EditAnywhere, Category=Settings)
+	EAnimSyncGroupScope GroupScope;
+
 	FAnimationGroupReference()
 		: GroupRole(EAnimGroupRole::CanBeLeader)
+		, GroupScope(EAnimSyncGroupScope::Local)
 	{
 	}
 };

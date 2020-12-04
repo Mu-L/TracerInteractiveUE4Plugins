@@ -18,6 +18,7 @@
 #define PARAM_MAP_ATTRIBUTE_STR TEXT("Particles.")
 #define PARAM_MAP_INITIAL_STR TEXT("Initial.")
 #define PARAM_MAP_INITIAL_BASE_STR TEXT("Initial")
+#define PARAM_MAP_PREVIOUS_BASE_STR TEXT("Previous")
 #define PARAM_MAP_RAPID_ITERATION_STR TEXT("Constants.")
 #define PARAM_MAP_INDICES_STR TEXT("Array.")
 #define PARAM_MAP_RAPID_ITERATION_BASE_STR TEXT("Constants")
@@ -26,6 +27,7 @@
 #define PARAM_MAP_INTERMEDIATE_STR TEXT("Intermedate.")
 #define PARAM_MAP_LOCAL_STR TEXT("Local.")
 #define PARAM_MAP_OUTPUT_STR TEXT("Output.")
+#define PARAM_MAP_TRANSIENT_STR TEXT("Transient.")
 
 #define TRANSLATOR_SET_VARIABLES_STR TEXT("SetVariables")
 #define TRANSLATOR_SET_VARIABLES_UNDERSCORE_STR TEXT("SetVariables_")
@@ -34,6 +36,7 @@
 #define SYS_PARAM_ENGINE_INV_DELTA_TIME                  INiagaraModule::GetVar_Engine_InvDeltaTime()
 #define SYS_PARAM_ENGINE_TIME                            INiagaraModule::GetVar_Engine_Time()
 #define SYS_PARAM_ENGINE_REAL_TIME                       INiagaraModule::GetVar_Engine_RealTime()
+#define SYS_PARAM_ENGINE_QUALITY_LEVEL                   INiagaraModule::GetVar_Engine_QualityLevel()
 #define SYS_PARAM_ENGINE_POSITION                        INiagaraModule::GetVar_Engine_Owner_Position()
 #define SYS_PARAM_ENGINE_VELOCITY                        INiagaraModule::GetVar_Engine_Owner_Velocity()
 #define SYS_PARAM_ENGINE_X_AXIS                          INiagaraModule::GetVar_Engine_Owner_XAxis()
@@ -61,7 +64,9 @@
 #define SYS_PARAM_ENGINE_EMITTER_NUM_PARTICLES           INiagaraModule::GetVar_Engine_Emitter_NumParticles()
 #define SYS_PARAM_ENGINE_EMITTER_TOTAL_SPAWNED_PARTICLES INiagaraModule::GetVar_Engine_Emitter_TotalSpawnedParticles()
 #define SYS_PARAM_ENGINE_EMITTER_SPAWN_COUNT_SCALE       INiagaraModule::GetVar_Engine_Emitter_SpawnCountScale()
+#define SYS_PARAM_ENGINE_EMITTER_INSTANCE_SEED           INiagaraModule::GetVar_Engine_Emitter_InstanceSeed()
 #define SYS_PARAM_ENGINE_SYSTEM_NUM_EMITTERS_ALIVE       INiagaraModule::GetVar_Engine_System_NumEmittersAlive()
+#define SYS_PARAM_ENGINE_SYSTEM_SIGNIFICANCE_INDEX	 INiagaraModule::GetVar_Engine_System_SignificanceIndex()
 #define SYS_PARAM_ENGINE_SYSTEM_NUM_EMITTERS             INiagaraModule::GetVar_Engine_System_NumEmitters()
 #define SYS_PARAM_ENGINE_NUM_SYSTEM_INSTANCES            INiagaraModule::GetVar_Engine_NumSystemInstances()
 
@@ -107,16 +112,24 @@
 #define SYS_PARAM_PARTICLES_LIGHT_EXPONENT               INiagaraModule::GetVar_Particles_LightExponent()
 #define SYS_PARAM_PARTICLES_LIGHT_ENABLED                INiagaraModule::GetVar_Particles_LightEnabled()
 #define SYS_PARAM_PARTICLES_LIGHT_VOLUMETRIC_SCATTERING  INiagaraModule::GetVar_Particles_LightVolumetricScattering()
+#define SYS_PARAM_PARTICLES_VISIBILITY_TAG				 INiagaraModule::GetVar_Particles_VisibilityTag()
+#define SYS_PARAM_PARTICLES_COMPONENTS_ENABLED           INiagaraModule::GetVar_Particles_ComponentsEnabled()
 
 #define SYS_PARAM_PARTICLES_RIBBONID                     INiagaraModule::GetVar_Particles_RibbonID()
 #define SYS_PARAM_PARTICLES_RIBBONWIDTH                  INiagaraModule::GetVar_Particles_RibbonWidth()
 #define SYS_PARAM_PARTICLES_RIBBONTWIST                  INiagaraModule::GetVar_Particles_RibbonTwist()
 #define SYS_PARAM_PARTICLES_RIBBONFACING                 INiagaraModule::GetVar_Particles_RibbonFacing()
 #define SYS_PARAM_PARTICLES_RIBBONLINKORDER              INiagaraModule::GetVar_Particles_RibbonLinkOrder()
+#define SYS_PARAM_PARTICLES_RIBBONU0OVERRIDE             INiagaraModule::GetVar_Particles_RibbonU0Override()
+#define SYS_PARAM_PARTICLES_RIBBONV0RANGEOVERRIDE        INiagaraModule::GetVar_Particles_RibbonV0RangeOverride()
+#define SYS_PARAM_PARTICLES_RIBBONU1OVERRIDE             INiagaraModule::GetVar_Particles_RibbonU1Override()
+#define SYS_PARAM_PARTICLES_RIBBONV1RANGEOVERRIDE        INiagaraModule::GetVar_Particles_RibbonV1RangeOverride()
 
 #define SYS_PARAM_INSTANCE_ALIVE                         INiagaraModule::GetVar_DataInstance_Alive()
 #define SYS_PARAM_SCRIPT_USAGE                           INiagaraModule::GetVar_ScriptUsage()
+#define SYS_PARAM_SCRIPT_CONTEXT                         INiagaraModule::GetVar_ScriptContext()
 #define TRANSLATOR_PARAM_BEGIN_DEFAULTS                  INiagaraModule::GetVar_BeginDefaults()
+#define TRANSLATOR_PARAM_CALL_ID                  		 INiagaraModule::GetVar_CallID()
 
 struct NIAGARA_API FNiagaraConstants
 {
@@ -132,7 +145,8 @@ struct NIAGARA_API FNiagaraConstants
 	static FText GetAttributeDescription(const FNiagaraVariable& InVar);
 	static FString GetAttributeDefaultValue(const FNiagaraVariable& InVar);
 	static FNiagaraVariable GetAttributeWithDefaultValue(const FNiagaraVariable& InAttribute);
-	static FNiagaraVariable GetAttributeAsDataSetKey(const FNiagaraVariable& InAttribute);
+	static FNiagaraVariable GetAttributeAsParticleDataSetKey(const FNiagaraVariable& InAttribute);
+	static FNiagaraVariable GetAttributeAsEmitterDataSetKey(const FNiagaraVariable& InAttribute);
 	static FNiagaraVariableAttributeBinding GetAttributeDefaultBinding(const FNiagaraVariable& InAttribute);
 
 	static bool IsNiagaraConstant(const FNiagaraVariable& InVar);
@@ -156,6 +170,7 @@ struct NIAGARA_API FNiagaraConstants
 	static const FName ModuleNamespace;
 	static const FName OutputNamespace;
 	static const FName TransientNamespace;
+	static const FName StackContextNamespace;
 	static const FName DataInstanceNamespace;
 	static const FName StaticSwitchNamespace;
 	static const FName ArrayNamespace;
@@ -163,6 +178,7 @@ struct NIAGARA_API FNiagaraConstants
 	static const FString InitialPrefix;
 	static const FName LocalNamespace;
 	static const FName InitialNamespace;
+	static const FName PreviousNamespace;
 	static const FName OwnerNamespace;
 
 	static const FName EngineOwnerScopeName;

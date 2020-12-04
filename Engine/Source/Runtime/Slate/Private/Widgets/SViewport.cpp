@@ -5,6 +5,8 @@
 #include "Brushes/SlateColorBrush.h"
 #include "Application/SlateApplicationBase.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Input/HittestGrid.h"
+#include "Types/NavigationMetaData.h"
 
 DECLARE_CYCLE_STAT(TEXT("Game UI Tick"), STAT_ViewportTickTime, STATGROUP_Slate);
 DECLARE_CYCLE_STAT(TEXT("Game UI Paint"), STAT_ViewportPaintTime, STATGROUP_Slate);
@@ -46,6 +48,10 @@ void SViewport::Construct( const FArguments& InArgs )
 	bPreMultipliedAlpha = InArgs._PreMultipliedAlpha;
 	ViewportInterface = InArgs._ViewportInterface;
 	ViewportSize = InArgs._ViewportSize;
+
+#if UE_WITH_SLATE_SIMULATEDNAVIGATIONMETADATA
+	AddMetadata(MakeShared<FSimulatedNavigationMetaData>(EUINavigationRule::Stop));
+#endif
 
 	this->ChildSlot
 	[
@@ -385,17 +391,17 @@ void SViewport::OnFinishedPointerInput()
 void SViewport::OnArrangeChildren( const FGeometry& AllottedGeometry, FArrangedChildren& ArrangedChildren ) const
 {
 	SCompoundWidget::OnArrangeChildren(AllottedGeometry, ArrangedChildren);
-	if( ArrangedChildren.Allows3DWidgets() && CustomHitTestPath.IsValid() )
+	if (ArrangedChildren.Allows3DWidgets() && CustomHitTestPath.IsValid())
 	{
-		CustomHitTestPath->ArrangeChildren( ArrangedChildren );
+		CustomHitTestPath->ArrangeCustomHitTestChildren(ArrangedChildren);
 	}
 }
 
-TSharedPtr<FVirtualPointerPosition> SViewport::TranslateMouseCoordinateFor3DChild(const TSharedRef<SWidget>& ChildWidget, const FGeometry& MyGeometry, const FVector2D& ScreenSpaceMouseCoordinate, const FVector2D& LastScreenSpaceMouseCoordinate) const
+TSharedPtr<FVirtualPointerPosition> SViewport::TranslateMouseCoordinateForCustomHitTestChild(const TSharedRef<SWidget>& ChildWidget, const FGeometry& MyGeometry, const FVector2D& ScreenSpaceMouseCoordinate, const FVector2D& LastScreenSpaceMouseCoordinate) const
 {
 	if( CustomHitTestPath.IsValid() )
 	{
-		return CustomHitTestPath->TranslateMouseCoordinateFor3DChild( ChildWidget, MyGeometry, ScreenSpaceMouseCoordinate, LastScreenSpaceMouseCoordinate );
+		return CustomHitTestPath->TranslateMouseCoordinateForCustomHitTestChild( ChildWidget, MyGeometry, ScreenSpaceMouseCoordinate, LastScreenSpaceMouseCoordinate );
 	}
 
 	return nullptr;

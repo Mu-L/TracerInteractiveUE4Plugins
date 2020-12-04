@@ -79,7 +79,7 @@ public class Engine : ModuleRules
 				"AnalyticsET",
 				"RHI",
 				"Sockets",
-				"AssetRegistry", // Here until FAssetData is moved to engine
+				"AssetRegistry", // Here until we update all modules using AssetRegistry to add a dependency on it
 				"EngineMessages",
 				"EngineSettings",
 				"SynthBenchmark",
@@ -92,8 +92,10 @@ public class Engine : ModuleRules
 				"NetworkReplayStreaming",
 				"PhysicsCore",
                 "SignalProcessing",
-                "AudioExtensions"
-            }
+                "AudioExtensions",
+				"DeveloperSettings",
+				"PropertyAccess",
+			}
 		);
 
 		PrivateDependencyModuleNames.AddRange(
@@ -124,14 +126,6 @@ public class Engine : ModuleRules
 			);
 
 		DynamicallyLoadedModuleNames.Add("EyeTracker");
-
-		
-		if (Target.bUseXGEController &&
-			Target.Type == TargetType.Editor &&
-			(Target.Platform == UnrealTargetPlatform.Win64 || Target.Platform == UnrealTargetPlatform.Win32))
-		{
-			PrivateDependencyModuleNames.Add("XGEController");
-		}
 
 		if (Target.Configuration != UnrealTargetConfiguration.Shipping)
 		{
@@ -193,6 +187,7 @@ public class Engine : ModuleRules
 
 		if (Target.Type == TargetType.Editor)
 		{
+			PrivateDependencyModuleNames.Add("EditorStyle");
 			PrivateIncludePathModuleNames.Add("Foliage");
 		}
 
@@ -374,13 +369,6 @@ public class Engine : ModuleRules
 			DynamicallyLoadedModuleNames.Add("PhysXCooking");
 		}
 
-		PublicDependencyModuleNames.AddRange(
-			new string[] {
-				"PhysicsSQ",
-				"ChaosSolvers"
-			}
-		);
-
 		// Engine public headers need to know about some types (enums etc.)
 		PublicIncludePathModuleNames.Add("ClothingSystemRuntimeInterface");
 		PublicDependencyModuleNames.Add("ClothingSystemRuntimeInterface");
@@ -412,17 +400,22 @@ public class Engine : ModuleRules
 				"VorbisFile"
 				);
 
-			PrivateDependencyModuleNames.Add("AndroidRuntimeSettings");
+			PrivateIncludePathModuleNames.Add("AndroidRuntimeSettings");
 		}
 
 		if (Target.Platform == UnrealTargetPlatform.IOS || Target.Platform == UnrealTargetPlatform.TVOS)
 		{
-			PrivateDependencyModuleNames.Add("IOSRuntimeSettings");
+			PublicIncludePaths.AddRange(
+            	new string[] {
+               		"Runtime/IOS/IOSPlatformFeatures/Public"
+                });
+
+			PrivateIncludePathModuleNames.Add("IOSRuntimeSettings");
 		}
 
 		if (Target.Platform == UnrealTargetPlatform.Switch)
 		{
-			PrivateDependencyModuleNames.Add("SwitchRuntimeSettings");
+			PrivateIncludePathModuleNames.Add("SwitchRuntimeSettings");
 		}
 
 		if (Target.IsInPlatformGroup(UnrealPlatformGroup.Unix))

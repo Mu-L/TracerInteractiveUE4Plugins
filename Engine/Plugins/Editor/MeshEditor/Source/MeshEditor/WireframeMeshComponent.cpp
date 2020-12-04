@@ -25,6 +25,13 @@ void UWireframeMesh::BeginDestroy()
 }
 
 
+bool UWireframeMesh::IsReadyForFinishDestroy()
+{
+	bool bReady = Super::IsReadyForFinishDestroy();
+	return bReady && ReleaseFence.IsFenceComplete();
+}
+
+
 void UWireframeMesh::Reset()
 {
 	Vertices.Reset();
@@ -253,6 +260,7 @@ void UWireframeMesh::ReleaseResources()
 		BeginReleaseResource( &VertexBuffers.StaticMeshVertexBuffer );
 		BeginReleaseResource( &VertexBuffers.ColorVertexBuffer );
 		BeginReleaseResource( &IndexBuffer );
+		ReleaseFence.BeginFence();
 	}
 }
 
@@ -283,7 +291,7 @@ public:
 			InstanceVertexBuffer.SetVertexUV( Index, 0, FVector2D::ZeroVector );
 		}
 
-		for( const FEdgeID HiddenEdgeID : Component->HiddenEdgeIDs )
+		for( const FEdgeID& HiddenEdgeID : Component->HiddenEdgeIDs )
 		{
 			const TArray<int32>& EdgeInstanceIndices = Component->GetWireframeMesh()->GetEdgeInstanceIDs( HiddenEdgeID );
 			for( const int32 EdgeInstanceIndex : EdgeInstanceIndices )

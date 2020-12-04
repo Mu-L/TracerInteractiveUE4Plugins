@@ -139,7 +139,7 @@ FText UNiagaraStackRendererItem::GetDisplayName() const
 {
 	if (RendererProperties != nullptr)
 	{
-		return RendererProperties->GetClass()->GetDisplayNameText();
+		return RendererProperties->GetWidgetDisplayName();
 	}
 	else
 	{
@@ -325,7 +325,7 @@ const FSlateBrush* UNiagaraStackRendererItem::GetIconBrush() const
 {
 	if (IsFinalized() == false && RendererProperties.IsValid())
 	{
-		return FSlateIconFinder::FindIconBrushForClass(RendererProperties->GetClass());
+		return RendererProperties->GetStackIcon();
 	}
 	else
 	{
@@ -348,6 +348,20 @@ void UNiagaraStackRendererItem::RefreshChildrenInternal(const TArray<UNiagaraSta
 	Super::RefreshChildrenInternal(CurrentChildren, NewChildren, NewIssues);
 	
 	RefreshIssues(NewIssues);
+}
+
+void UNiagaraStackRendererItem::ProcessRendererIssues(const TArray<FNiagaraRendererFeedback>& InIssues, EStackIssueSeverity Severity, TArray<FStackIssue>& OutIssues)
+{
+	for (const FNiagaraRendererFeedback& Item : InIssues)
+	{
+		TArray<FStackIssueFix> Fixes;
+		if (Item.IsFixable())
+		{
+			Fixes.Add(FStackIssueFix(Item.GetFixDescriptionText(), FStackIssueFixDelegate::CreateLambda([Item]() { Item.TryFix(); })));
+		}
+		FStackIssue TargetSupportError(Severity, Item.GetSummaryText(), Item.GetDescriptionText(), GetStackEditorDataKey(), Item.IsDismissable(), Fixes);
+		OutIssues.Add(TargetSupportError);
+	}
 }
 
 void UNiagaraStackRendererItem::RefreshIssues(TArray<FStackIssue>& NewIssues)
@@ -401,49 +415,16 @@ void UNiagaraStackRendererItem::RefreshIssues(TArray<FStackIssue>& NewIssues)
 
 	if (RendererProperties->GetIsEnabled())
 	{
-		TArray<FText> Errors;
-		TArray<FText> Warnings;
-		TArray<FText> Infos;
+		TArray<FNiagaraRendererFeedback> Errors;
+		TArray<FNiagaraRendererFeedback> Warnings;
+		TArray<FNiagaraRendererFeedback> Infos;
 
 		RendererProperties->GetRendererFeedback(GetEmitterViewModel()->GetEmitter(), Errors, Warnings, Infos);
 
-		for (const FText& Item : Errors)
-		{
-			FStackIssue TargetSupportError(
-				EStackIssueSeverity::Error,
-				Item,
-				FText(),
-				GetStackEditorDataKey(),
-				false);
-
-			NewIssues.Add(TargetSupportError);
-		}
-
-		for (const FText& Item : Warnings)
-		{
-			FStackIssue TargetSupportError(
-				EStackIssueSeverity::Warning,
-				Item,
-				FText(),
-				GetStackEditorDataKey(),
-				false);
-
-			NewIssues.Add(TargetSupportError);
-		}
-
-		for (const FText& Item : Infos)
-		{
-			FStackIssue TargetSupportError(
-				EStackIssueSeverity::Info,
-				Item,
-				FText(),
-				GetStackEditorDataKey(),
-				false);
-
-			NewIssues.Add(TargetSupportError);
-		}
+		ProcessRendererIssues(Errors, EStackIssueSeverity::Error, NewIssues);		
+		ProcessRendererIssues(Warnings, EStackIssueSeverity::Warning, NewIssues);		
+		ProcessRendererIssues(Infos, EStackIssueSeverity::Info, NewIssues);	
 	}
-
 }
 
 void UNiagaraStackRendererItem::RendererChanged()

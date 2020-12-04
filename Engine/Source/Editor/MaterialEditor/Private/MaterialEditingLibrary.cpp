@@ -265,6 +265,35 @@ namespace MaterialEditingLibraryImpl
 			ColumnHeight = MaterialExpression->MaterialExpressionEditorY + MaterialExpression->GetHeight() + ME_STD_HPADDING;
 		}
 	}
+
+	IMaterialEditor* FindMaterialEditorForAsset(UObject* InAsset)
+	{
+		if (IAssetEditorInstance* AssetEditorInstance = (InAsset != nullptr) ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(InAsset, false) : nullptr)
+		{
+			// Ensure this is not a UMaterialInstanceDynamic, as that doesn't use IMaterialEditor as its editor
+			if (!InAsset->IsA(UMaterialInstanceDynamic::StaticClass()))
+			{
+				return static_cast<IMaterialEditor*>(AssetEditorInstance);
+			}
+		}
+
+		return nullptr;
+	}
+
+	FMaterialInstanceEditor* FindMaterialInstanceEditorForAsset(UObject* InAsset)
+	{
+		if (IAssetEditorInstance* AssetEditorInstance = (InAsset != nullptr) ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(InAsset, false) : nullptr)
+		{
+			// Ensure this is not a UMaterialInstanceDynamic, as that doesn't use FMaterialInstanceEditor as its editor
+			if (!InAsset->IsA(UMaterialInstanceDynamic::StaticClass()))
+			{
+				return static_cast<FMaterialInstanceEditor*>(AssetEditorInstance);
+			}
+		}
+
+		return nullptr;
+	}
+	
 }
 
 void UMaterialEditingLibrary::RebuildMaterialInstanceEditors(UMaterial* BaseMaterial)
@@ -277,7 +306,6 @@ void UMaterialEditingLibrary::RebuildMaterialInstanceEditors(UMaterial* BaseMate
 		UObject* EditedAsset = EditedAssets[AssetIdx];
 
 		UMaterialInstance* SourceInstance = Cast<UMaterialInstance>(EditedAsset);
-
 		if (!SourceInstance)
 		{
 			// Check to see if the EditedAssets are from material instance editor
@@ -288,17 +316,14 @@ void UMaterialEditingLibrary::RebuildMaterialInstanceEditors(UMaterial* BaseMate
 			}
 		}
 
-		// Ensure the material instance is valid and not a UMaterialInstanceDynamic, as that doesn't use FMaterialInstanceEditor as its editor
-		if (SourceInstance != nullptr && !SourceInstance->IsA(UMaterialInstanceDynamic::StaticClass()))
+		if (SourceInstance != nullptr)
 		{
 			UMaterial* MICOriginalMaterial = SourceInstance->GetMaterial();
 			if (MICOriginalMaterial == BaseMaterial)
 			{
-				IAssetEditorInstance* EditorInstance = AssetEditorSubsystem->FindEditorForAsset(EditedAsset, false);
-				if (EditorInstance != nullptr)
+				if (FMaterialInstanceEditor* MaterialInstanceEditor = MaterialEditingLibraryImpl::FindMaterialInstanceEditorForAsset(SourceInstance))
 				{
-					FMaterialInstanceEditor* OtherEditor = static_cast<FMaterialInstanceEditor*>(EditorInstance);
-					OtherEditor->RebuildMaterialInstanceEditor();
+					MaterialInstanceEditor->RebuildMaterialInstanceEditor();
 				}
 			}
 		}
@@ -322,11 +347,9 @@ void UMaterialEditingLibrary::RebuildMaterialInstanceEditors(UMaterialFunction* 
 			// Update function instances that are children of this material function	
 			if (BaseFunction && BaseFunction == FunctionInstance->GetBaseFunction())
 			{
-				IAssetEditorInstance* EditorInstance = AssetEditorSubsystem->FindEditorForAsset(EditedAsset, false);
-				if (EditorInstance)
+				if (FMaterialInstanceEditor* MaterialInstanceEditor = MaterialEditingLibraryImpl::FindMaterialInstanceEditorForAsset(EditedAsset))
 				{
-					FMaterialInstanceEditor* OtherEditor = static_cast<FMaterialInstanceEditor*>(EditorInstance);
-					OtherEditor->RebuildMaterialInstanceEditor();
+					MaterialInstanceEditor->RebuildMaterialInstanceEditor();
 				}
 			}
 		}
@@ -350,11 +373,9 @@ void UMaterialEditingLibrary::RebuildMaterialInstanceEditors(UMaterialFunction* 
 
 				if (BaseFunction && (DependentFunctions.Contains(BaseFunction) || DependentFunctions.Contains(BaseFunction->ParentFunction)))
 				{
-					IAssetEditorInstance* EditorInstance = AssetEditorSubsystem->FindEditorForAsset(EditedAsset, false);
-					if (EditorInstance != nullptr)
+					if (FMaterialInstanceEditor* MaterialInstanceEditor = MaterialEditingLibraryImpl::FindMaterialInstanceEditorForAsset(EditedAsset))
 					{
-						FMaterialInstanceEditor* OtherEditor = static_cast<FMaterialInstanceEditor*>(EditorInstance);
-						OtherEditor->RebuildMaterialInstanceEditor();
+						MaterialInstanceEditor->RebuildMaterialInstanceEditor();
 					}
 				}
 			}
@@ -714,11 +735,10 @@ bool UMaterialEditingLibrary::GetMaterialDefaultStaticSwitchParameterValue(UMate
 
 TSet<UObject*> UMaterialEditingLibrary::GetMaterialSelectedNodes(UMaterial* Material)
 {
-	auto* MaterialEditor = (IMaterialEditor*)GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(Material, false);
-	if (MaterialEditor)
+	if (IMaterialEditor* MaterialEditor = MaterialEditingLibraryImpl::FindMaterialEditorForAsset(Material))
 	{
 		TSet<UObject*> SelectedMaterialObjects;
-		for (const FFieldVariant& SelectedNode : MaterialEditor->GetSelectedNodes())
+		for (const FFieldVariant SelectedNode : MaterialEditor->GetSelectedNodes())
 		{
 			check(SelectedNode.IsUObject());
 			SelectedMaterialObjects.Add(SelectedNode.ToUObject());
@@ -727,6 +747,38 @@ TSet<UObject*> UMaterialEditingLibrary::GetMaterialSelectedNodes(UMaterial* Mate
 	}
 
 	return TSet<UObject*>();
+}
+
+UMaterialExpression* UMaterialEditingLibrary::GetMaterialPropertyInputNode(UMaterial* Material, EMaterialProperty Property)
+{
+	if (Material)
+	{
+		FExpressionInput*  ExpressionInput = Material->GetExpressionInputForProperty(Property);
+		return ExpressionInput->Expression;
+	}
+
+	return nullptr;
+}
+
+TArray<UMaterialExpression*> UMaterialEditingLibrary::GetInputsForMaterialExpression(UMaterial* Material, UMaterialExpression* MaterialExpression)
+{
+	TArray<UMaterialExpression*> MaterialExpressions;
+	if (Material)
+	{
+		for (const FExpressionInput* Input : MaterialExpression->GetInputs())
+		{
+			MaterialExpressions.Add(Input->Expression);
+		}
+	}
+
+	return MaterialExpressions;
+}
+
+TArray<UTexture*> UMaterialEditingLibrary::GetUsedTextures(UMaterial* Material)
+{
+	TArray<UTexture*> OutTextures;
+	Material->GetUsedTextures(OutTextures, EMaterialQualityLevel::Num, false, GMaxRHIFeatureLevel, true);
+	return OutTextures;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -837,8 +889,7 @@ void UMaterialEditingLibrary::UpdateMaterialFunction(UMaterialFunctionInterface*
 						}
 
 						// if this instance was opened in an editor notify the change
-						auto* MaterialEditor = (IMaterialEditor*)GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(CurrentMaterial, false);
-						if (MaterialEditor)
+						if (IMaterialEditor* MaterialEditor = MaterialEditingLibraryImpl::FindMaterialEditorForAsset(CurrentMaterial))
 						{
 							MaterialEditor->NotifyExternalMaterialChange();
 						}
@@ -861,8 +912,7 @@ void UMaterialEditingLibrary::UpdateMaterialFunction(UMaterialFunctionInterface*
 						CurrentInstance->PostEditChange();
 
 						// if this instance was opened in an editor notify the change
-						auto* MaterialEditor = (IMaterialEditor*)GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->FindEditorForAsset(CurrentInstance, false);
-						if (MaterialEditor)
+						if (IMaterialEditor* MaterialEditor = MaterialEditingLibraryImpl::FindMaterialEditorForAsset(CurrentInstance))
 						{
 							MaterialEditor->NotifyExternalMaterialChange();
 						}
@@ -1004,7 +1054,7 @@ void UMaterialEditingLibrary::GetChildInstances(UMaterialInterface* Parent, TArr
 	TagsAndValues.Add(GET_MEMBER_NAME_CHECKED(UMaterialInstance, Parent), ParentNameString);
 	AssetRegistryModule.Get().GetAssetsByTagValues(TagsAndValues, AssetList);
 	
-	for (const FAssetData MatInstRef : AssetList)
+	for (const FAssetData& MatInstRef : AssetList)
 	{
 		ChildInstances.Add(MatInstRef);
 	}

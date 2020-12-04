@@ -45,6 +45,16 @@ protected:
 
 };
 
+
+/** Optional Override To Specify RootMotion*/
+struct FRootMotionOverride
+{
+	FRootMotionOverride() :bBlendFirstChildOfRoot(false) {};
+	/** If true we use the first child of the root, if not we just use the root*/
+	bool bBlendFirstChildOfRoot;
+	FTransform RootMotion;
+};
+
 /** Quick n dirty RTTI to allow for derived classes to insert nodes of different types */
 #define SEQUENCER_INSTANCE_PLAYER_TYPE(TYPE, BASE) \
 	static const FName& GetTypeId() { static FName Type(TEXT(#TYPE)); return Type; } \
@@ -54,9 +64,10 @@ protected:
 struct FSequencerPlayerAnimSequence : public FSequencerPlayerBase
 {
 	SEQUENCER_INSTANCE_PLAYER_TYPE(FSequencerPlayerAnimSequence, FSequencerPlayerBase)
-
+	TOptional<FRootMotionOverride> RootMotion;
 	struct FAnimNode_SequenceEvaluator PlayerNode;
 };
+
 
 /** Proxy override for this UAnimInstance-derived class */
 USTRUCT()
@@ -85,6 +96,8 @@ public:
 	void UpdateAnimTrack(UAnimSequenceBase* InAnimSequence, uint32 SequenceId, float InPosition, float Weight, bool bFireNotifies);
 	void UpdateAnimTrack(UAnimSequenceBase* InAnimSequence, uint32 SequenceId, TOptional<float> InFromPosition, float InToPosition, float Weight, bool bFireNotifies);
 
+	void UpdateAnimTrackWithRootMotion(UAnimSequenceBase* InAnimSequence, int32 SequenceId, const TOptional<FRootMotionOverride>& RootMotion, float InFromPosition, float InToPosition, float Weight, bool bFireNotifies);
+
 	/** Reset all nodes in this instance */
 	virtual void ResetNodes();
 
@@ -94,6 +107,9 @@ public:
 	/** Construct and link the base part of the blend tree */
 	virtual void ConstructNodes();
 protected:
+
+	void UpdateAnimTrack(UAnimSequenceBase* InAnimSequence, uint32 SequenceId, const TOptional<FRootMotionOverride>& RootMomtionOverride, TOptional<float> InFromPosition, float InToPosition, float Weight, bool bFireNotifies);
+
 	/** Find a player of a specified type */
 	template<typename Type>
 	Type* FindPlayer(uint32 SequenceId) const
@@ -115,6 +131,9 @@ protected:
 
 	/** mapping from sequencer index to internal player index */
 	TMap<uint32, FSequencerPlayerBase*> SequencerToPlayerMap;
+
+	/** custom root motion override sent in from sequencer */
+	TOptional<FRootMotionOverride> RootMotionOverride;
 
 	void InitAnimTrack(UAnimSequenceBase* InAnimSequence, uint32 SequenceId);
 	void EnsureAnimTrack(UAnimSequenceBase* InAnimSequence, uint32 SequenceId);

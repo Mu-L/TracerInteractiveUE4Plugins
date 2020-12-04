@@ -11,6 +11,7 @@
 #include "IPAddress.h"
 #include "Containers/BitArray.h"
 #include "Serialization/MemoryWriter.h"
+#include "ProfilingDebugging/CsvProfiler.h"
 #include "Misc/ScopeLock.h"
 
 class AActor;
@@ -20,7 +21,14 @@ struct FURL;
 
 #if USE_NETWORK_PROFILER 
 
-#define NETWORK_PROFILER( x ) if ( GNetworkProfiler.IsTrackingEnabled() ) { x; }
+CSV_DECLARE_CATEGORY_EXTERN(NetworkProfiler);
+
+#define NETWORK_PROFILER( x ) \
+	if ( GNetworkProfiler.IsTrackingEnabled() ) \
+	{ \
+		CSV_SCOPED_TIMING_STAT_EXCLUSIVE(NetworkProfiler); \
+		x; \
+	}
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnNetworkProfileFinished, const FString& /*Filename */);
 
@@ -101,6 +109,8 @@ private:
 	bool									bHasNoticeableNetworkTrafficOccured;
 	/** Whether tracking is enabled.																*/
 	bool									bIsTrackingEnabled;	
+	/** Whether tracking should be enabled.															*/
+	bool									bShouldTrackingBeEnabled;
 
 	/** Header for the current session.																*/
 	FNetworkProfilerHeader					CurrentHeader;
@@ -110,6 +120,8 @@ private:
 
 	/** Delegate that's fired when tracking stops on the current network profile */
 	FOnNetworkProfileFinished				OnNetworkProfileFinishedDelegate;
+
+	FTimerHandle							AutoStopTimerHandle;
 
 	/** All the data required for writing sent bunches to the profiler stream						*/
 	struct FSendBunchInfo
@@ -181,6 +193,8 @@ private:
 
 	// Set of names that correspond to Object's whose top level property names have been exported.
 	TSet<FString> ExportedObjects;
+
+	void AutoStopTracking();
 
 public:
 	/**
@@ -464,10 +478,10 @@ public:
 	 *
 	 * @return			True if processed, false otherwise
 	 */
-	bool Exec( UWorld * InWorld, const TCHAR* Cmd, FOutputDevice & Ar );
+	ENGINE_API bool Exec( UWorld * InWorld, const TCHAR* Cmd, FOutputDevice & Ar );
 
-	bool FORCEINLINE IsTrackingEnabled() const { return bIsTrackingEnabled; }
-	bool IsComparisonTrackingEnabled() const { return bIsTrackingEnabled && bIsComparisonTrackingEnabled;  }
+	bool FORCEINLINE IsTrackingEnabled() const { return bIsTrackingEnabled || bShouldTrackingBeEnabled; }
+	bool IsComparisonTrackingEnabled() const { return (bIsTrackingEnabled || bShouldTrackingBeEnabled) && bIsComparisonTrackingEnabled; }
 
 	/** Return the network profile finished delegate */
 	FOnNetworkProfileFinished& OnNetworkProfileFinished() { return OnNetworkProfileFinishedDelegate; }

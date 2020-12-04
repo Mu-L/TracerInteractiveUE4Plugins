@@ -37,7 +37,6 @@ public class UnrealEd : ModuleRules
 				"DerivedDataCache",
 				"DesktopPlatform",
 				"LauncherPlatform",
-				"EnvironmentQueryEditor",
 				"GameProjectGeneration",
 				"ProjectTargetPlatformEditor",
 				"ImageWrapper",
@@ -126,6 +125,7 @@ public class UnrealEd : ModuleRules
 				"LauncherPlatform",
 				"EditorStyle",
 				"EngineSettings",
+				"IESFile",
 				"ImageWriteQueue",
 				"InputCore",
 				"InputBindingEditor",
@@ -152,7 +152,6 @@ public class UnrealEd : ModuleRules
 				"InternationalizationSettings",
 				"JsonUtilities",
 				"Landscape",
-				"HeadMountedDisplay",
 				"MeshPaint",
 				"MeshPaintMode",
 				"Foliage",
@@ -169,6 +168,7 @@ public class UnrealEd : ModuleRules
 				"PixelInspectorModule",
 				"MovieScene",
 				"MovieSceneTracks",
+				"Sequencer",
 				"ViewportInteraction",
 				"VREditor",
 				"ClothingSystemEditor",
@@ -184,7 +184,10 @@ public class UnrealEd : ModuleRules
 				"ToolMenus",
 				"FreeImage",
 				"IoStoreUtilities",
-            }
+				"EditorInteractiveToolsFramework",
+				"TraceLog",
+				"DeveloperSettings"
+			}
 		);
 
 		DynamicallyLoadedModuleNames.AddRange(
@@ -230,7 +233,6 @@ public class UnrealEd : ModuleRules
 				"ProjectTargetPlatformEditor",
 				"PListEditor",
 				"BehaviorTreeEditor",
-				"EnvironmentQueryEditor",
 				"ViewportSnapping",
 				"GameplayTasksEditor",
 				"UndoHistory",
@@ -245,7 +247,6 @@ public class UnrealEd : ModuleRules
 				"Media",
 				"TimeManagementEditor",
 				"VirtualTexturingEditor",
-				"EditorInteractiveToolsFramework",
 				"TraceInsights",
 			}
 		);
@@ -266,13 +267,22 @@ public class UnrealEd : ModuleRules
 		}
 
 		CircularlyReferencedDependentModules.AddRange(
-			new string[]
-			{
+			new string[] {
+				"Documentation",
 				"GraphEditor",
 				"Kismet",
 				"AudioEditor",
 				"ViewportInteraction",
 				"VREditor",
+				"MeshPaint",
+				"MeshPaintMode",
+				"PropertyEditor",
+				"ToolMenusEditor",
+				"InputBindingEditor",
+				"ClothingSystemEditor",
+				"PluginWarden",
+				//"PIEPreviewDeviceProfileSelector",
+				"EditorInteractiveToolsFramework"
 			}
 		);
 
@@ -326,19 +336,34 @@ public class UnrealEd : ModuleRules
 
 		SetupModulePhysicsSupport(Target);
 
-		if(Target.bCompileChaos && Target.bUseChaos)
-        {
-			PrivateDependencyModuleNames.Add("ChaosSolvers");
-        }
 
 		if (Target.bCompileRecast)
 		{
 			PrivateDependencyModuleNames.Add("Navmesh");
-			PublicDefinitions.Add( "WITH_RECAST=1" );
+			PublicDefinitions.Add("WITH_RECAST=1");
+			if (Target.bCompileNavmeshSegmentLinks)
+			{
+				PublicDefinitions.Add("WITH_NAVMESH_SEGMENT_LINKS=1");
+			}
+			else
+			{
+				PublicDefinitions.Add("WITH_NAVMESH_SEGMENT_LINKS=0");
+			}
+
+			if (Target.bCompileNavmeshClusterLinks)
+			{
+				PublicDefinitions.Add("WITH_NAVMESH_CLUSTER_LINKS=1");
+			}
+			else
+			{
+				PublicDefinitions.Add("WITH_NAVMESH_CLUSTER_LINKS=0");
+			}
 		}
 		else
 		{
-			PublicDefinitions.Add( "WITH_RECAST=0" );
+			PublicDefinitions.Add("WITH_RECAST=0");
+			PublicDefinitions.Add("WITH_NAVMESH_CLUSTER_LINKS=0");
+			PublicDefinitions.Add("WITH_NAVMESH_SEGMENT_LINKS=0");
 		}
 
 		if (Target.bWithLiveCoding)

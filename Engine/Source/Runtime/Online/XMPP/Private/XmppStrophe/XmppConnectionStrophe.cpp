@@ -14,6 +14,7 @@
 #include "XmppStrophe/StropheError.h"
 #include "XmppLog.h"
 #include "Containers/BackgroundableTicker.h"
+#include "Stats/Stats.h"
 
 #if WITH_XMPP_STROPHE
 
@@ -148,9 +149,10 @@ void FXmppConnectionStrophe::Logout()
 
 EXmppLoginStatus::Type FXmppConnectionStrophe::GetLoginStatus() const
 {
-	if (LoginStatus == EXmppLoginStatus::LoggedIn)
+	EXmppLoginStatus::Type CurrentLoginStatus = LoginStatus;
+	if (CurrentLoginStatus == EXmppLoginStatus::LoggedIn || CurrentLoginStatus == EXmppLoginStatus::ProcessingLogin)
 	{
-		return EXmppLoginStatus::LoggedIn;
+		return CurrentLoginStatus;
 	}
 	else
 	{
@@ -190,6 +192,8 @@ IXmppPubSubPtr FXmppConnectionStrophe::PubSub()
 
 bool FXmppConnectionStrophe::Tick(float DeltaTime)
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_FXmppConnectionStrophe_Tick);
+
 	// Logout if we've been requested to from the XMPP Thread
 	if (RequestLogout)
 	{

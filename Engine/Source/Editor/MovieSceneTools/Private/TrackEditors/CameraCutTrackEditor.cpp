@@ -228,7 +228,8 @@ TSharedRef<ISequencerSection> FCameraCutTrackEditor::MakeSectionInterface(UMovie
 
 bool FCameraCutTrackEditor::SupportsSequence(UMovieSceneSequence* InSequence) const
 {
-	return (InSequence != nullptr) && (InSequence->GetClass()->GetName() == TEXT("LevelSequence"));
+	ETrackSupport TrackSupported = InSequence ? InSequence->IsTrackSupported(UMovieSceneCameraCutTrack::StaticClass()) : ETrackSupport::NotSupported;
+	return TrackSupported == ETrackSupport::Supported;
 }
 
 
@@ -320,6 +321,9 @@ FReply FCameraCutTrackEditor::OnDrop(const FDragDropEvent& DragDropEvent, UMovie
 	
 	TSharedPtr<FActorDragDropGraphEdOp> DragDropOp = StaticCastSharedPtr<FActorDragDropGraphEdOp>( Operation );
 
+	FMovieSceneTrackEditor::BeginKeying();
+
+	bool bAnyDropped = false;
 	for (auto& ActorPtr : DragDropOp->Actors)
 	{
 		if (ActorPtr.IsValid())
@@ -331,13 +335,15 @@ FReply FCameraCutTrackEditor::OnDrop(const FDragDropEvent& DragDropEvent, UMovie
 			if (ObjectGuid.IsValid())
 			{
 				AnimatablePropertyChanged(FOnKeyProperty::CreateRaw(this, &FCameraCutTrackEditor::AddKeyInternal, ObjectGuid));
-	
-				return FReply::Handled();
+				
+				bAnyDropped = true;
 			}
 		}
 	}
 
-	return FReply::Unhandled();
+	FMovieSceneTrackEditor::EndKeying();
+
+	return bAnyDropped ? FReply::Handled() : FReply::Unhandled();
 }
 
 
@@ -353,6 +359,7 @@ FKeyPropertyResult FCameraCutTrackEditor::AddKeyInternal( FFrameNumber KeyTime, 
 
 	UMovieSceneCameraCutSection* NewSection = CameraCutTrack->AddNewCameraCut(FMovieSceneObjectBindingID(ObjectGuid, MovieSceneSequenceID::Root, EMovieSceneObjectBindingSpace::Local), KeyTime);
 	KeyPropertyResult.bTrackModified = true;
+	KeyPropertyResult.SectionsCreated.Add(NewSection);
 
 	GetSequencer()->EmptySelection();
 	GetSequencer()->SelectSection(NewSection);
@@ -514,6 +521,7 @@ void FCameraCutTrackEditor::CreateNewSectionFromBinding(FMovieSceneObjectBinding
 
 		UMovieSceneCameraCutSection* NewSection = FindOrCreateCameraCutTrack()->AddNewCameraCut(InBindingID, KeyTime);
 		KeyPropertyResult.bTrackModified = true;
+		KeyPropertyResult.SectionsCreated.Add(NewSection);
 
 		GetSequencer()->EmptySelection();
 		GetSequencer()->SelectSection(NewSection);

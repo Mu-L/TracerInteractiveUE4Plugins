@@ -14,13 +14,23 @@
 #include "Templates/SharedPointer.h"
 #include "XmlParser.h"
 
+// Set proper locale on Mac and Linux since locale "C" and not "en_US.UTF-8" is the default on those platforms
+#if PLATFORM_MAC | PLATFORM_LINUX
+#define USE_LOCALE
+#if PLATFORM_MAC
+#include <xlocale.h>
+#else
+#include <locale.h>
+#endif
+#endif
+
 FDatasmithSceneXmlReader::FDatasmithSceneXmlReader() = default;
 FDatasmithSceneXmlReader::~FDatasmithSceneXmlReader() = default;
 
 namespace DatasmithSceneXmlReaderImpl
 {
 	const TCHAR* ActorTags[] = { DATASMITH_ACTORNAME, DATASMITH_ACTORMESHNAME, DATASMITH_CAMERANAME, DATASMITH_LIGHTNAME,
-		DATASMITH_CUSTOMACTORNAME, DATASMITH_LANDSCAPENAME, DATASMITH_POSTPROCESSVOLUME, DATASMITH_ACTORHIERARCHICALINSTANCEDMESHNAME };
+		DATASMITH_CUSTOMACTORNAME, DATASMITH_LANDSCAPENAME, DATASMITH_POSTPROCESSVOLUME, DATASMITH_ACTORHIERARCHICALINSTANCEDMESHNAME, DATASMITH_DECALACTORNAME };
 
 	template< typename T >
 	T ValueFromString( const FString& InString )
@@ -147,6 +157,186 @@ void FDatasmithSceneXmlReader::ParseLevelSequence(FXmlNode* InNode, const TShare
 	}
 }
 
+void FDatasmithSceneXmlReader::ParseLevelVariantSets( FXmlNode* InNode, const TSharedRef<IDatasmithLevelVariantSetsElement>& OutElement, const TMap< FString, TSharedPtr<IDatasmithActorElement> >& Actors, const TMap< FString, TSharedPtr<IDatasmithElement> >& Objects ) const
+{
+	for ( FXmlNode* ChildNode : InNode->GetChildrenNodes() )
+	{
+		if ( !ChildNode )
+		{
+			continue;
+		}
+
+		if ( ChildNode->GetTag().Compare( DATASMITH_VARIANTSETNAME, ESearchCase::IgnoreCase ) == 0 )
+		{
+			FString ElementName = ChildNode->GetAttribute( TEXT( "name" ) );
+			TSharedRef< IDatasmithVariantSetElement > VarSetElement = FDatasmithSceneFactory::CreateVariantSet( *ElementName );
+
+			ParseVariantSet( ChildNode, VarSetElement, Actors, Objects );
+			OutElement->AddVariantSet( VarSetElement );
+		}
+	}
+}
+
+void FDatasmithSceneXmlReader::ParseVariantSet( FXmlNode* InNode, const TSharedRef<IDatasmithVariantSetElement>& OutElement, const TMap< FString, TSharedPtr<IDatasmithActorElement> >& Actors, const TMap< FString, TSharedPtr<IDatasmithElement> >& Objects ) const
+{
+	if ( !InNode )
+	{
+		return;
+	}
+
+	for ( FXmlNode* ChildNode : InNode->GetChildrenNodes() )
+	{
+		if ( !ChildNode )
+		{
+			continue;
+		}
+
+		if ( ChildNode->GetTag().Compare( DATASMITH_VARIANTNAME, ESearchCase::IgnoreCase ) == 0 )
+		{
+			FString ElementName = ChildNode->GetAttribute( TEXT( "name" ) );
+			TSharedRef< IDatasmithVariantElement > VarElement = FDatasmithSceneFactory::CreateVariant( *ElementName );
+
+			ParseVariant( ChildNode, VarElement, Actors, Objects );
+			OutElement->AddVariant( VarElement );
+		}
+	}
+}
+
+void FDatasmithSceneXmlReader::ParseVariant( FXmlNode* InNode, const TSharedRef<IDatasmithVariantElement>& OutElement, const TMap< FString, TSharedPtr<IDatasmithActorElement> >& Actors, const TMap< FString, TSharedPtr<IDatasmithElement> >& Objects ) const
+{
+	if ( !InNode )
+	{
+		return;
+	}
+
+	for ( FXmlNode* ChildNode : InNode->GetChildrenNodes() )
+	{
+		if ( !ChildNode )
+		{
+			continue;
+		}
+
+		if ( ChildNode->GetTag().Compare( DATASMITH_ACTORBINDINGNAME, ESearchCase::IgnoreCase ) == 0 )
+		{
+			TSharedRef< IDatasmithActorBindingElement > BindingElement = FDatasmithSceneFactory::CreateActorBinding();
+
+			FString ActorName = ChildNode->GetAttribute( TEXT( "actor" ) );
+			const TSharedPtr<IDatasmithActorElement>* FoundBoundActor = Actors.Find( ActorName );
+			if ( FoundBoundActor && ( *FoundBoundActor ).IsValid() )
+			{
+				BindingElement->SetActor( *FoundBoundActor );
+			}
+			else
+			{
+				UE_LOG( LogDatasmith, Warning, TEXT( "Missing actor referenced in variant %s" ), *OutElement->GetName() );
+			}
+
+			ParseActorBinding( ChildNode, BindingElement, Objects );
+			OutElement->AddActorBinding( BindingElement );
+		}
+	}
+}
+
+void FDatasmithSceneXmlReader::ParseActorBinding( FXmlNode* InNode, const TSharedRef<IDatasmithActorBindingElement>& OutElement, const TMap< FString, TSharedPtr<IDatasmithElement> >& Objects ) const
+{
+	if ( !InNode )
+	{
+		return;
+	}
+
+	for ( FXmlNode* ChildNode : InNode->GetChildrenNodes() )
+	{
+		if ( !ChildNode )
+		{
+			continue;
+		}
+
+		if ( ChildNode->GetTag().Compare( DATASMITH_PROPERTYCAPTURENAME, ESearchCase::IgnoreCase ) == 0 )
+		{
+			TSharedRef< IDatasmithPropertyCaptureElement > PropertyElement = FDatasmithSceneFactory::CreatePropertyCapture();
+
+			ParsePropertyCapture( ChildNode, PropertyElement );
+			OutElement->AddPropertyCapture( PropertyElement );
+		}
+		else if ( ChildNode->GetTag().Compare( DATASMITH_OBJECTPROPERTYCAPTURENAME, ESearchCase::IgnoreCase ) == 0 )
+		{
+			TSharedRef< IDatasmithObjectPropertyCaptureElement > ObjectPropertyElement = FDatasmithSceneFactory::CreateObjectPropertyCapture();
+
+			ParseObjectPropertyCapture( ChildNode, ObjectPropertyElement, Objects );
+			OutElement->AddPropertyCapture( ObjectPropertyElement );
+		}
+	}
+}
+
+void FDatasmithSceneXmlReader::ParsePropertyCapture( FXmlNode* InNode, const TSharedRef<IDatasmithPropertyCaptureElement>& OutElement ) const
+{
+	if ( !InNode )
+	{
+		return;
+	}
+
+	FString PropertyPath = InNode->GetAttribute( TEXT( "path" ) );
+	EDatasmithPropertyCategory Category = static_cast< EDatasmithPropertyCategory >( FCString::Atoi( *InNode->GetAttribute( TEXT( "category" ) ) ) );
+	FString RecordedDataHex = InNode->GetAttribute( TEXT( "data" ) );
+
+	for ( TCHAR Char : RecordedDataHex )
+	{
+		if ( !CheckTCharIsHex( Char ) )
+		{
+			UE_LOG( LogDatasmith, Warning, TEXT( "Invalid recorded data '%s' for captured property with path '%s' and category '%d'" ), *RecordedDataHex, *PropertyPath, Category );
+			RecordedDataHex = FString();
+			break;
+		}
+	}
+	if ( RecordedDataHex.Len() % 2 != 0 )
+	{
+		UE_LOG( LogDatasmith, Warning, TEXT( "Invalid recorded data '%s' for captured property with path '%s' and category '%d'" ), *RecordedDataHex, *PropertyPath, Category );
+		RecordedDataHex = FString();
+	}
+
+	int32 NumBytes = RecordedDataHex.Len() / 2; // Two characters for each byte
+	TArray<uint8> RecordedBytes;
+	RecordedBytes.SetNumZeroed( NumBytes );
+
+	int32 NumRead = HexToBytes( RecordedDataHex, RecordedBytes.GetData() );
+	if ( NumRead != NumBytes )
+	{
+		UE_LOG( LogDatasmith, Warning, TEXT( "Invalid recorded data '%s' for captured property with path '%s' and category '%d'" ), *RecordedDataHex, *PropertyPath, Category );
+		bool bAllowShrinking = false;
+		RecordedBytes.SetNum( 0, bAllowShrinking );
+		RecordedBytes.SetNumZeroed( NumBytes );
+	}
+
+	OutElement->SetPropertyPath( PropertyPath );
+	OutElement->SetCategory( Category );
+	OutElement->SetRecordedData( RecordedBytes.GetData(), NumBytes );
+}
+
+void FDatasmithSceneXmlReader::ParseObjectPropertyCapture( FXmlNode* InNode, const TSharedRef<IDatasmithObjectPropertyCaptureElement>& OutElement, const TMap< FString, TSharedPtr<IDatasmithElement> >& Objects ) const
+{
+	if ( !InNode )
+	{
+		return;
+	}
+
+	FString PropertyPath = InNode->GetAttribute( TEXT( "path" ) );
+	EDatasmithPropertyCategory Category = static_cast< EDatasmithPropertyCategory >( FCString::Atoi( *InNode->GetAttribute( TEXT( "category" ) ) ) );
+	FString ObjectName = InNode->GetAttribute( TEXT( "object" ) );
+
+	OutElement->SetPropertyPath( PropertyPath );
+	OutElement->SetCategory( Category );
+
+	const TSharedPtr<IDatasmithElement>* FoundObject = Objects.Find( ObjectName );
+	if ( FoundObject && ( *FoundObject ).IsValid() )
+	{
+		OutElement->SetRecordedObject( *FoundObject );
+	}
+	else
+	{
+		UE_LOG( LogDatasmith, Warning, TEXT( "Missing object '%s' referenced by captured property with path '%s' and category '%d'" ), *OutElement->GetName(), *PropertyPath, Category );
+	}
+}
+
 void FDatasmithSceneXmlReader::ParseMesh(FXmlNode* InNode, TSharedPtr<IDatasmithMeshElement>& OutElement) const
 {
 	ParseElement( InNode, OutElement.ToSharedRef() );
@@ -162,8 +352,8 @@ void FDatasmithSceneXmlReader::ParseMesh(FXmlNode* InNode, TSharedPtr<IDatasmith
 		{
 			float Area = FCString::Atod(*MeshNodes[j]->GetAttribute(TEXT("a")));
 			float Width = FCString::Atod(*MeshNodes[j]->GetAttribute(TEXT("x")));
-			float Height = FCString::Atod(*MeshNodes[j]->GetAttribute(TEXT("y")));
-			float Depth = FCString::Atod(*MeshNodes[j]->GetAttribute(TEXT("z")));
+			float Depth = FCString::Atod(*MeshNodes[j]->GetAttribute(TEXT("y")));
+			float Height = FCString::Atod(*MeshNodes[j]->GetAttribute(TEXT("z")));
 			OutElement->SetDimensions(Area, Width, Height, Depth);
 		}
 		else if (MeshNodes[j]->GetTag().Compare(DATASMITH_LIGHTMAPCOORDINATEINDEX, ESearchCase::IgnoreCase) ==0)
@@ -474,6 +664,13 @@ void FDatasmithSceneXmlReader::ParseActor(FXmlNode* InNode, TSharedPtr<IDatasmit
 		ParseCamera(InNode, CameraElement);
 		InOutElement = CameraElement;
 	}
+	else if (InNode->GetTag().Compare(DATASMITH_DECALACTORNAME, ESearchCase::IgnoreCase) == 0)
+	{
+		TSharedPtr< IDatasmithDecalActorElement > DecalActorElement = FDatasmithSceneFactory::CreateDecalActor(*InNode->GetAttribute(TEXT("name")));
+		TSharedPtr< IDatasmithCustomActorElement > CustomActorElement = StaticCastSharedPtr< IDatasmithCustomActorElement >( DecalActorElement );
+		ParseCustomActor(InNode, CustomActorElement);
+		InOutElement = DecalActorElement;
+	}
 	else if (InNode->GetTag().Compare(DATASMITH_CUSTOMACTORNAME, ESearchCase::IgnoreCase) == 0)
 	{
 		TSharedPtr< IDatasmithCustomActorElement > CustomActorElement = FDatasmithSceneFactory::CreateCustomActor(*InNode->GetAttribute(TEXT("name")));
@@ -694,6 +891,11 @@ void FDatasmithSceneXmlReader::ParseLight(FXmlNode* InNode, TSharedPtr<IDatasmit
 		{
 			OutElement->SetUseIes(true);
 			OutElement->SetIesFile( *ResolveFilePath(ChildNode->GetAttribute(TEXT("file"))) );
+		}
+		else if (ChildNode->GetTag().Compare(DATASMITH_LIGHTIESTEXTURENAME, ESearchCase::IgnoreCase) == 0)
+		{
+			OutElement->SetUseIes(true);
+			OutElement->SetIesTexturePathName( *ChildNode->GetAttribute(TEXT("name")) );
 		}
 		else if (ChildNode->GetTag().Compare(DATASMITH_LIGHTIESBRIGHTNAME, ESearchCase::IgnoreCase) == 0)
 		{
@@ -928,9 +1130,16 @@ bool FDatasmithSceneXmlReader::ParseXmlFile(TSharedRef< IDatasmithScene >& OutSc
 		OutScene->Reset();
 	}
 
+	// Set locale to support UTF-8 character set only on current thread
+#ifdef USE_LOCALE
+	locale_t Locale = ::newlocale(LC_ALL_MASK, "en_US.UTF-8", nullptr);
+	locale_t PreviousLocale = ::uselocale(Locale);
+#endif
+
 	OutScene->SetExporterSDKVersion( TEXT("N/A") ); // We're expecting to read the SDK Version from the XML file. If it's not available, put "N/A"
 
 	TMap< FString, TSharedPtr<IDatasmithActorElement> > Actors;
+	TMap< FString, TSharedPtr<IDatasmithElement> > Objects; // Our variants' property captures may reference objects. Usually materials, but can be actors/textures/etc.
 
 	const TArray<FXmlNode*>& Nodes = XmlFile->GetRootNode()->GetChildrenNodes();
 
@@ -950,6 +1159,11 @@ bool FDatasmithSceneXmlReader::ParseXmlFile(TSharedRef< IDatasmithScene >& OutSc
 		else if (Nodes[i]->GetTag().Compare(DATASMITH_EXPORTERSDKVERSION, ESearchCase::IgnoreCase) == 0)
 		{
 			OutScene->SetExporterSDKVersion(*Nodes[i]->GetContent());
+		}
+		// RESOURCE PATH
+		else if (Nodes[i]->GetTag().Compare(DATASMITH_RESOURCEPATH, ESearchCase::IgnoreCase) == 0)
+		{
+			OutScene->SetResourcePath(*Nodes[i]->GetContent());
 		}
 		// APPLICATION INFO
 		else if (Nodes[i]->GetTag().Compare(DATASMITH_APPLICATION, ESearchCase::IgnoreCase) == 0)
@@ -973,6 +1187,8 @@ bool FDatasmithSceneXmlReader::ParseXmlFile(TSharedRef< IDatasmithScene >& OutSc
 			ParseMesh( Nodes[i], Element );
 
 			OutScene->AddMesh(Element);
+
+			Objects.Add( Element->GetName(), Element );
 		}
 		//READ LEVEL SEQUENCES
 		else if (Nodes[i]->GetTag().Compare(DATASMITH_LEVELSEQUENCENAME, ESearchCase::IgnoreCase) == 0)
@@ -983,6 +1199,16 @@ bool FDatasmithSceneXmlReader::ParseXmlFile(TSharedRef< IDatasmithScene >& OutSc
 			ParseLevelSequence( Nodes[i], Element );
 
 			OutScene->AddLevelSequence(Element);
+		}
+		//READ LEVEL VARIANT SETS
+		else if (Nodes[i]->GetTag().Compare(DATASMITH_LEVELVARIANTSETSNAME, ESearchCase::IgnoreCase) == 0)
+		{
+			FString ElementName = Nodes[i]->GetAttribute(TEXT("name"));
+			TSharedRef< IDatasmithLevelVariantSetsElement > Element = FDatasmithSceneFactory::CreateLevelVariantSets(*ElementName);
+
+			ParseLevelVariantSets( Nodes[i], Element, Actors, Objects );
+
+			OutScene->AddLevelVariantSets(Element);
 		}
 		//READ TEXTURES
 		else if (Nodes[i]->GetTag().Compare(DATASMITH_TEXTURENAME, ESearchCase::IgnoreCase) == 0)
@@ -1008,6 +1234,8 @@ bool FDatasmithSceneXmlReader::ParseXmlFile(TSharedRef< IDatasmithScene >& OutSc
 				if (bIsDuplicate == false)
 				{
 					OutScene->AddTexture(Element);
+
+					Objects.Add( Element->GetName(), Element );
 				}
 			}
 		}
@@ -1038,6 +1266,8 @@ bool FDatasmithSceneXmlReader::ParseXmlFile(TSharedRef< IDatasmithScene >& OutSc
 			if( Element->GetEnvironmentComp()->GetParamSurfacesCount() != 0 && !FString(Element->GetEnvironmentComp()->GetParamTexture(0)).IsEmpty() )
 			{
 				OutScene->AddActor(Element);
+
+				Objects.Add( Element->GetName(), Element );
 			}
 		}
 		//READ SKY
@@ -1059,6 +1289,8 @@ bool FDatasmithSceneXmlReader::ParseXmlFile(TSharedRef< IDatasmithScene >& OutSc
 
 			ParseMaterial(Nodes[i], Material);
 			OutScene->AddMaterial(Material);
+
+			Objects.Add( Material->GetName(), Material );
 		}
 		//READ MASTER MATERIALS
 		else if (Nodes[i]->GetTag().Compare(DATASMITH_MASTERMATERIALNAME, ESearchCase::IgnoreCase) == 0)
@@ -1067,6 +1299,18 @@ bool FDatasmithSceneXmlReader::ParseXmlFile(TSharedRef< IDatasmithScene >& OutSc
 
 			ParseMasterMaterial(Nodes[i], MasterMaterial);
 			OutScene->AddMaterial(MasterMaterial);
+
+			Objects.Add( MasterMaterial->GetName(), MasterMaterial );
+		}
+		//READ DECAL MATERIALS
+		else if (Nodes[i]->GetTag().Compare(DATASMITH_DECALMATERIALNAME, ESearchCase::IgnoreCase) == 0)
+		{
+			TSharedPtr< IDatasmithDecalMaterialElement > DecalMaterial = FDatasmithSceneFactory::CreateDecalMaterial(*Nodes[i]->GetAttribute(TEXT("name")));
+
+			ParseDecalMaterial(Nodes[i], DecalMaterial);
+			OutScene->AddMaterial(DecalMaterial);
+
+			Objects.Add( DecalMaterial->GetName(), DecalMaterial );
 		}
 		//READ UEPBR MATERIALS
 		else if (Nodes[i]->GetTag().Compare(DATASMITH_UEPBRMATERIALNAME, ESearchCase::IgnoreCase) == 0)
@@ -1075,6 +1319,8 @@ bool FDatasmithSceneXmlReader::ParseXmlFile(TSharedRef< IDatasmithScene >& OutSc
 
 			ParseUEPbrMaterial(Nodes[i], Material);
 			OutScene->AddMaterial(Material);
+
+			Objects.Add( Material->GetName(), Material );
 		}
 		//READ METADATA
 		else if (Nodes[i]->GetTag().Compare(DATASMITH_METADATANAME, ESearchCase::IgnoreCase) == 0)
@@ -1108,6 +1354,8 @@ bool FDatasmithSceneXmlReader::ParseXmlFile(TSharedRef< IDatasmithScene >& OutSc
 					if ( ActorElement.IsValid() )
 					{
 						OutScene->AddActor(ActorElement);
+
+						Objects.Add( ActorElement->GetName(), ActorElement );
 					}
 
 					break;
@@ -1117,6 +1365,14 @@ bool FDatasmithSceneXmlReader::ParseXmlFile(TSharedRef< IDatasmithScene >& OutSc
 	}
 
 	PatchUpVersion(OutScene);
+
+	FDatasmithSceneUtils::CleanUpScene(OutScene);
+
+	// Restore locale only on current thread
+#ifdef USE_LOCALE
+	::uselocale(PreviousLocale);
+	::freelocale(Locale);
+#endif
 
 	return true;
 }
@@ -1377,6 +1633,25 @@ void FDatasmithSceneXmlReader::ParseMasterMaterial(FXmlNode* InNode, TSharedPtr<
 	ParseKeyValueProperties( InNode, *OutElement );
 }
 
+void FDatasmithSceneXmlReader::ParseDecalMaterial(FXmlNode* InNode, TSharedPtr< IDatasmithDecalMaterialElement >& OutElement) const
+{
+	ParseElement( InNode, OutElement.ToSharedRef() );
+
+	for ( const FXmlNode* PropNode : InNode->GetChildrenNodes() )
+	{
+		if (PropNode->GetTag().Compare(DATASMITH_DIFFUSETEXNAME, ESearchCase::IgnoreCase) == 0)
+		{
+			FString PathName = PropNode->GetAttribute( TEXT("PathName") );
+			OutElement->SetDiffuseTexturePathName( *PathName );
+		}
+		else if (PropNode->GetTag().Compare(DATASMITH_NORMALTEXNAME, ESearchCase::IgnoreCase) == 0)
+		{
+			FString PathName = PropNode->GetAttribute( TEXT("PathName") );
+			OutElement->SetNormalTexturePathName( *PathName );
+		}
+	}
+}
+
 template< typename ExpressionInputType >
 void ParseExpressionInput(const FXmlNode* InNode, TSharedPtr< IDatasmithUEPbrMaterialElement >& OutElement, ExpressionInputType& ExpressionInput)
 {
@@ -1533,12 +1808,17 @@ void FDatasmithSceneXmlReader::ParseUEPbrMaterial(FXmlNode* InNode, TSharedPtr< 
 					IDatasmithMaterialExpressionFlattenNormal* FlattenNormal = static_cast< IDatasmithMaterialExpressionFlattenNormal* >( Expression );
 
 					{
-						FXmlNode* const* NormalNode = Algo::FindByPredicate( ChildNode->GetChildrenNodes(), [ InputName = FlattenNormal->GetNormal().GetInputName() ]( FXmlNode* Node ) -> bool
+						FXmlNode* const* NormalNode = Algo::FindByPredicate( ChildNode->GetChildrenNodes(), [InputName = FlattenNormal->GetNormal().GetInputName()]( FXmlNode* Node ) -> bool
 						{
 							return Node->GetTag() == InputName;
-						});
+						} );
+						FXmlNode* const* FlatnessNode = Algo::FindByPredicate( ChildNode->GetChildrenNodes(), [InputName = FlattenNormal->GetFlatness().GetInputName()]( FXmlNode* Node ) -> bool
+						{
+							return Node->GetTag() == InputName;
+						} );
 
 						ParseExpressionInput( *NormalNode, OutElement, FlattenNormal->GetNormal() );
+						ParseExpressionInput( *NormalNode, OutElement, FlattenNormal->GetFlatness() );
 					}
 				}
 			}
@@ -1608,9 +1888,26 @@ void FDatasmithSceneXmlReader::ParseUEPbrMaterial(FXmlNode* InNode, TSharedPtr< 
 		{
 			OutElement->SetBlendMode( DatasmithSceneXmlReaderImpl::ValueFromString< int >( ChildNode->GetAttribute( TEXT("value") ) ) );
 		}
+		else if ( ChildNode->GetTag() == DATASMITH_OPACITYMASKCLIPVALUE )
+		{
+			OutElement->SetOpacityMaskClipValue( DatasmithSceneXmlReaderImpl::ValueFromString< float >( ChildNode->GetAttribute( TEXT("value") ) ) );
+		}
 		else if ( ChildNode->GetTag() == DATASMITH_FUNCTIONLYVALUENAME )
 		{
 			OutElement->SetMaterialFunctionOnly( DatasmithSceneXmlReaderImpl::ValueFromString< bool >( ChildNode->GetAttribute( TEXT("enabled") ) ) );
+		}
+		else if ( ChildNode->GetTag() == DATASMITH_SHADINGMODEL )
+		{
+			TArrayView< const TCHAR* > EnumStrings( DatasmithShadingModelStrings );
+			int32 IndexOfEnumValue = EnumStrings.IndexOfByPredicate( [ TypeString = ChildNode->GetAttribute(TEXT("value")) ]( const TCHAR* Value )
+			{
+				return TypeString == Value;
+			} );
+
+			if ( IndexOfEnumValue != INDEX_NONE )
+			{
+				OutElement->SetShadingModel( (EDatasmithShadingModel)IndexOfEnumValue );
+			}
 		}
 	}
 }
@@ -1732,7 +2029,14 @@ void FDatasmithSceneXmlReader::ParseKeyValueProperties(const FXmlNode* InNode, E
 {
 	for ( const FXmlNode* PropNode : InNode->GetChildrenNodes() )
 	{
-		TSharedPtr< IDatasmithKeyValueProperty > KeyValueProperty = FDatasmithSceneFactory::CreateKeyValueProperty( *PropNode->GetAttribute( TEXT("name") ) );
+		bool bAddProperty = false;
+		FString PropertyName = PropNode->GetAttribute( TEXT("name") );
+		TSharedPtr< IDatasmithKeyValueProperty > KeyValueProperty = OutElement.GetPropertyByName( *PropertyName );
+		if (!KeyValueProperty.IsValid())
+		{
+			KeyValueProperty = FDatasmithSceneFactory::CreateKeyValueProperty( *PropertyName );
+			bAddProperty = true;
+		}
 
 		TArrayView< const TCHAR* > EnumStrings( KeyValuePropertyTypeStrings );
 		int32 IndexOfEnumValue = EnumStrings.IndexOfByPredicate( [ TypeString = PropNode->GetAttribute(TEXT("type")) ]( const TCHAR* Value )
@@ -1745,7 +2049,10 @@ void FDatasmithSceneXmlReader::ParseKeyValueProperties(const FXmlNode* InNode, E
 			KeyValueProperty->SetPropertyType( (EDatasmithKeyValuePropertyType)IndexOfEnumValue );
 
 			KeyValueProperty->SetValue( *PropNode->GetAttribute(TEXT("val")) );
-			OutElement.AddProperty( KeyValueProperty );
+			if (bAddProperty)
+			{
+				OutElement.AddProperty( KeyValueProperty );
+			}
 		}
 	}
 }

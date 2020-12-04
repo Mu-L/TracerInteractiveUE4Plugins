@@ -111,10 +111,10 @@ bool FPlayer::DestroyDXManagerAndDevice()
 	return FVideoDecoder::DestroyDXManagerAndDevice();
 }
 
-FName FPlayer::GetPlayerName() const
+FGuid FPlayer::GetPlayerPluginGUID() const
 {
-	static FName PlayerName(TEXT("PixelStreamingPlayer"));
-	return PlayerName;
+	static FGuid PlayerPluginGUID(0xe5d58cf8, 0xfa474530, 0x84b00d8d, 0x0f4d7160);
+	return PlayerPluginGUID;
 }
 
 IMediaSamples& FPlayer::GetSamples()
@@ -211,6 +211,6 @@ void FPlayer::OnVideoFrame(const TSharedRef<IMediaTextureSample, ESPMode::Thread
 		FHUDStats::Get().EndToEndLatencyMs.Update(LatencyMs);
 	}
 
-	UE_LOG(PixelPlayer, Verbose, TEXT("(%d) Sending frame for rendering: ts %lld, capture ts %lld, latency %.0f"), RtcTimeMs(), Sample->GetTime().GetTicks(), Sample->GetDuration().GetTicks(), LatencyMs);
+	UE_LOG(PixelPlayer, Verbose, TEXT("(%d) Sending frame for rendering: ts %lld, capture ts %lld, latency %.0f"), RtcTimeMs(), Sample->GetTime().Time.GetTicks(), Sample->GetDuration().GetTicks(), LatencyMs);
 	MediaSamples->AddVideo(Sample);
 }

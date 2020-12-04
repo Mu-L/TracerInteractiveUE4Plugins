@@ -28,6 +28,7 @@ static FString JOURNAL_FILE_EXTENSION(TEXT(".jnl"));
 #if STATS // If STATS are not enabled RHI_API will DLLEXPORT on an empty line
 RHI_API DEFINE_STAT(STAT_TotalGraphicsPipelineStateCount);
 RHI_API DEFINE_STAT(STAT_TotalComputePipelineStateCount);
+RHI_API DEFINE_STAT(STAT_TotalRayTracingPipelineStateCount);
 #endif
 
 // CSV category for PSO encounter and save events
@@ -36,10 +37,12 @@ CSV_DEFINE_CATEGORY(PSO, true);
 // New Saved count
 DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("Serialized Graphics Pipeline State Count"), STAT_SerializedGraphicsPipelineStateCount, STATGROUP_PipelineStateCache );
 DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("Serialized Compute Pipeline State Count"), STAT_SerializedComputePipelineStateCount, STATGROUP_PipelineStateCache );
+DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("Serialized RayTracing Pipeline State Count"), STAT_SerializedRayTracingPipelineStateCount, STATGROUP_PipelineStateCache);
 
 // New created - Cache Miss count
 DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("New Graphics Pipeline State Count"), STAT_NewGraphicsPipelineStateCount, STATGROUP_PipelineStateCache );
 DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("New Compute Pipeline State Count"), STAT_NewComputePipelineStateCount, STATGROUP_PipelineStateCache );
+DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("New RayTracing Pipeline State Count"), STAT_NewRayTracingPipelineStateCount, STATGROUP_PipelineStateCache);
 
 // Memory - Only track the file representation and new state cache stats
 DECLARE_MEMORY_STAT(TEXT("New Cached PSO"), STAT_NewCachedPSOMemory, STATGROUP_PipelineStateCache);
@@ -59,12 +62,14 @@ enum class EPipelineCacheFileFormatVersions : uint32
 	EOFMarker = 15,
 	EngineFlags = 16,
 	Subpass = 17,
+	PatchSizeReduction_NoDuplicatedGuid = 18,
+	AlphaToCoverage = 19
 };
 
 const uint64 FPipelineCacheFileFormatMagic = 0x5049504543414348; // PIPECACH
-const uint64 FPipelineCacheTOCFileFormatMagic = 0x544F435354415254; // TOCSTART
+const uint64 FPipelineCacheTOCFileFormatMagic = 0x544F435354415232; // TOCSTAR2
 const uint64 FPipelineCacheEOFFileFormatMagic = 0x454F462D4D41524B; // EOF-MARK
-const uint32 FPipelineCacheFileFormatCurrentVersion = (uint32)EPipelineCacheFileFormatVersions::Subpass;
+const uint32 FPipelineCacheFileFormatCurrentVersion = (uint32)EPipelineCacheFileFormatVersions::AlphaToCoverage;
 const int32  FPipelineCacheGraphicsDescPartsNum = 63; // parser will expect this number of parts in a description string
 
 /**
@@ -230,7 +235,20 @@ struct FPipelineCacheFileFormatPSOMetaData
 	{
 		Ar << Info.FileOffset;
 		Ar << Info.FileSize;
-		Ar << Info.FileGuid;
+		// if FileGuid is zeroed out (a frequent case), don't write all 16 bytes of it
+		uint8 ArchiveFullGuid = 1;
+		if (Ar.GameNetVer() == (uint32)EPipelineCacheFileFormatVersions::PatchSizeReduction_NoDuplicatedGuid)
+		{
+			if (Ar.IsSaving())
+			{
+				ArchiveFullGuid = (Info.FileGuid != FGuid()) ? 1 : 0;
+			}
+			Ar << ArchiveFullGuid;
+		}
+		if (ArchiveFullGuid != 0)
+		{
+			Ar << Info.FileGuid;
+		}
 		Ar << Info.Stats;
         if (Ar.GameNetVer() == (uint32)EPipelineCacheFileFormatVersions::LibraryID)
         {
@@ -448,7 +466,9 @@ bool FPipelineCacheFileFormatPSO::GraphicsDescriptor::StateFromString(const FStr
 	{
 		check(PartEnd - PartIt >= 4 && sizeof(ERenderTargetLoadAction) == 1 && sizeof(ERenderTargetStoreAction) == 1 && sizeof(EPixelFormat) == sizeof(uint32)); //not a very robust parser
 		LexFromString((uint32&)(RenderTargetFormats[Index]), *PartIt++);
-		LexFromString(RenderTargetFlags[Index], *PartIt++);
+		uint32 RTFlags;
+		LexFromString(RTFlags, *PartIt++);
+		RenderTargetFlags[Index] = (ETextureCreateFlags)RTFlags;
 		uint8 Load, Store;
 		LexFromString(Load, *PartIt++);
 		LexFromString(Store, *PartIt++);
@@ -732,6 +752,16 @@ bool FPipelineCacheFileFormatPSO::Verify() const
 		
 		return true;
 	}
+	else if (Type == DescriptorType::RayTracing)
+	{
+		return RayTracingDesc.ShaderHash != FSHAHash() &&
+			RayTracingDesc.Frequency >= SF_RayGen &&
+			RayTracingDesc.Frequency <= SF_RayCallable;
+	}
+	else
+	{
+		checkNoEntry();
+	}
 	
 	return false;
 }
@@ -818,10 +848,14 @@ bool FPipelineCacheFileFormatPSO::Verify() const
 				
 				break;
 			}
+			case FPipelineCacheFileFormatPSO::DescriptorType::RayTracing:
+			{
+				KeyHash ^= GetTypeHash(Key.RayTracingDesc);
+				break;
+			}
 			default:
 			{
-				check(false);
-				break;
+				checkNoEntry();
 			}
 		}
 		FPlatformAtomics::InterlockedCompareExchange((volatile int32*)&Key.Hash, KeyHash, 0);
@@ -923,7 +957,9 @@ bool FPipelineCacheFileFormatPSO::Verify() const
 				uint32 Format = (uint32)Info.GraphicsDesc.RenderTargetFormats[i];
 				Ar << Format;
 				Info.GraphicsDesc.RenderTargetFormats[i] = (EPixelFormat)Format;
-				Ar << Info.GraphicsDesc.RenderTargetFlags[i];
+				uint32 RTFlags = Info.GraphicsDesc.RenderTargetFlags[i];
+				Ar << RTFlags;
+				Info.GraphicsDesc.RenderTargetFlags[i] = (ETextureCreateFlags)RTFlags;
 				uint8 LoadStore = 0;
 				Ar << LoadStore;
 				Ar << LoadStore;
@@ -947,10 +983,22 @@ bool FPipelineCacheFileFormatPSO::Verify() const
 
 			break;
 		}
+		case FPipelineCacheFileFormatPSO::DescriptorType::RayTracing:
+		{
+			Ar << Info.RayTracingDesc.ShaderHash;
+			Ar << Info.RayTracingDesc.MaxPayloadSizeInBytes;
+
+			uint32 Frequency = uint32(Info.RayTracingDesc.Frequency);
+			Ar << Frequency;
+			Info.RayTracingDesc.Frequency = EShaderFrequency(Frequency);
+
+			Ar << Info.RayTracingDesc.bAllowHitGroupIndexing;
+
+			break;
+		}
 		default:
 		{
-			check(false);
-			break;
+			checkNoEntry();
 		}
 	}
 	return Ar;
@@ -1092,7 +1140,7 @@ FPipelineCacheFileFormatPSO::FPipelineCacheFileFormatPSO()
 	for (uint32 i = 0; i < MaxSimultaneousRenderTargets; i++)
 	{
 		PSO.GraphicsDesc.RenderTargetFormats[i] = (EPixelFormat)Init.RenderTargetFormats[i];
-		PSO.GraphicsDesc.RenderTargetFlags[i] = Init.RenderTargetFlags[i];
+		PSO.GraphicsDesc.RenderTargetFlags[i] = (ETextureCreateFlags)Init.RenderTargetFlags[i];
 	}
 	
 	PSO.GraphicsDesc.RenderTargetsActive = Init.RenderTargetsEnabled;
@@ -1164,6 +1212,11 @@ bool FPipelineCacheFileFormatPSO::operator==(const FPipelineCacheFileFormatPSO& 
 					FMemory::Memcmp(&GraphicsDesc.RenderTargetFlags, &Other.GraphicsDesc.RenderTargetFlags, sizeof(GraphicsDesc.RenderTargetFlags)) == 0;
 					break;
 				}
+				case FPipelineCacheFileFormatPSO::DescriptorType::RayTracing:
+				{
+					bSame &= RayTracingDesc == Other.RayTracingDesc;
+					break;
+				}
 				default:
 				{
 					check(false);
@@ -1195,6 +1248,11 @@ FPipelineCacheFileFormatPSO::FPipelineCacheFileFormatPSO(const FPipelineCacheFil
 		{
 			// If we implement a classic copy constructor without memcpy - remove memset in ::Init() function above
 			FMemory::Memcpy(&GraphicsDesc, &Other.GraphicsDesc, sizeof(GraphicsDescriptor));
+			break;
+		}
+		case FPipelineCacheFileFormatPSO::DescriptorType::RayTracing:
+		{
+			RayTracingDesc = Other.RayTracingDesc;
 			break;
 		}
 		default:
@@ -1229,6 +1287,11 @@ FPipelineCacheFileFormatPSO& FPipelineCacheFileFormatPSO::operator=(const FPipel
 				FMemory::Memcpy(&GraphicsDesc, &Other.GraphicsDesc, sizeof(GraphicsDescriptor));
 				break;
 			}
+			case FPipelineCacheFileFormatPSO::DescriptorType::RayTracing:
+			{
+				RayTracingDesc = Other.RayTracingDesc;
+				break;
+			}
 			default:
 			{
 				check(false);
@@ -1252,7 +1315,12 @@ struct FPipelineCacheFileFormatTOC
 	{
 		// TOC is assumed to be at the end of the file
 		// If this changes then the EOF read check and write need to moved out of here
-		
+
+		// if all entries are using the same GUID (which is the norm when saving a packaged cache with the "buildsc" command of the commandlet),
+		// do not save it with every entry, reducing the surface of changes (GUID is regenerated on each save even if entries are the same)
+		bool bAllEntriesUseSameGuid = true;
+		FGuid FirstEntryGuid;
+
 		if(Ar.IsLoading())
 		{
 			uint64 TOCMagic = 0;
@@ -1280,8 +1348,50 @@ struct FPipelineCacheFileFormatTOC
 		{
 			uint64 TOCMagic = FPipelineCacheTOCFileFormatMagic;
 			Ar << TOCMagic;
+
+			// check if the whole file is using the same GUID
+			bool bGuidSet = false;
+			for (TMap<uint32, FPipelineCacheFileFormatPSOMetaData>::TConstIterator It(Info.MetaData); It; ++It)
+			{
+				if (bGuidSet)
+				{
+					if (It.Value().FileGuid != FirstEntryGuid)
+					{
+						bAllEntriesUseSameGuid = false;
+						break;
+					}
+				}
+				else
+				{
+					FirstEntryGuid = It.Value().FileGuid;
+					bGuidSet = true;
+				}
+			}
+
+			if (!bGuidSet)
+			{
+				bAllEntriesUseSameGuid = false;	// no entries, so don't do save the guid at all
+			}
+
+			// if the whole file uses the same guids, zero out
+			if (bAllEntriesUseSameGuid)
+			{
+				for (TMap<uint32, FPipelineCacheFileFormatPSOMetaData>::TIterator It(Info.MetaData); It; ++It)
+				{
+					It.Value().FileGuid = FGuid();
+				}
+			}
 		}
-		
+
+		uint8 AllEntriesUseSameGuid = bAllEntriesUseSameGuid ? 1 : 0;
+		Ar << AllEntriesUseSameGuid;
+		bAllEntriesUseSameGuid = AllEntriesUseSameGuid != 0;
+
+		if (bAllEntriesUseSameGuid)
+		{
+			Ar << FirstEntryGuid;
+		}
+
 		Ar << Info.SortedOrder;
 		Ar << Info.MetaData;
 		
@@ -1289,6 +1399,13 @@ struct FPipelineCacheFileFormatTOC
 		{
 			uint64 EOFMagic = FPipelineCacheEOFFileFormatMagic;
 			Ar << EOFMagic;
+		}
+		else if (bAllEntriesUseSameGuid)
+		{
+			for (TMap<uint32, FPipelineCacheFileFormatPSOMetaData>::TIterator It(Info.MetaData); It; ++It)
+			{
+				It.Value().FileGuid = FirstEntryGuid;
+			}
 		}
 		
 		return Ar;
@@ -1356,14 +1473,14 @@ public:
 				Handle = MakeShareable(FPlatformFileManager::Get().GetPlatformFile().OpenAsyncRead(*FilePath));
 				if(Handle.IsValid())
 				{
-					UE_LOG(LogRHI, Log, TEXT("Opened FPipelineCacheFile: %s (GUID: %s) with %d entries."), *FilePath, *Guid.ToString(), Content.MetaData.Num());
+					UE_LOG(LogRHI, Log, TEXT("Opened FPipelineCacheFile: %s (GUID: %s) with %d entries."), *FilePath, *Header.Guid.ToString(), Content.MetaData.Num());
 					
 					Guid = Header.Guid;
 					TOCOffset = Header.TableOffset;
 				}
 				else
 				{
-					UE_LOG(LogRHI, Log, TEXT("Filed to create async read file handle to FPipelineCacheFile: %s (GUID: %s)"), *FilePath, *Guid.ToString());
+					UE_LOG(LogRHI, Log, TEXT("Filed to create async read file handle to FPipelineCacheFile: %s (GUID: %s)"), *FilePath, *Header.Guid.ToString());
 					bSuccess = false;
 				}
 			}
@@ -1398,10 +1515,12 @@ public:
 	{
 		SET_DWORD_STAT(STAT_TotalGraphicsPipelineStateCount, 0);
 		SET_DWORD_STAT(STAT_TotalComputePipelineStateCount, 0);
+		SET_DWORD_STAT(STAT_TotalRayTracingPipelineStateCount, 0);
 		SET_DWORD_STAT(STAT_SerializedGraphicsPipelineStateCount, 0);
 		SET_DWORD_STAT(STAT_SerializedComputePipelineStateCount, 0);
 		SET_DWORD_STAT(STAT_NewGraphicsPipelineStateCount, 0);
 		SET_DWORD_STAT(STAT_NewComputePipelineStateCount, 0);
+		SET_DWORD_STAT(STAT_NewRayTracingPipelineStateCount, 0);
 
 		OutGameFileGuid = FGuid();
 		TOC.SortedOrder = FPipelineFileCache::PSOOrder::Default;
@@ -1672,6 +1791,9 @@ public:
 				}
 				else
 				{
+					// parent directory creation is necessary because the deploy process from
+					// AndroidPlatform.Automation.cs destroys the parent directories and recreates them
+					IFileManager::Get().MakeDirectory(*FPaths::GetPath(TempPath), true);
 					FileWriter = IFileManager::Get().CreateFileWriter(*TempPath, FILEWRITE_Append);
 				}
 				if (FileWriter)
@@ -1751,6 +1873,12 @@ public:
 											if (NewEntry.GraphicsDesc.GeometryShader != FSHAHash())
 												Meta.Shaders.Add(NewEntry.GraphicsDesc.GeometryShader);
 											
+											break;
+										}
+										case FPipelineCacheFileFormatPSO::DescriptorType::RayTracing:
+										{
+											INC_DWORD_STAT(STAT_SerializedRayTracingPipelineStateCount);
+											Meta.Shaders.Add(NewEntry.RayTracingDesc.ShaderHash);
 											break;
 										}
 										default:
@@ -1852,6 +1980,12 @@ public:
                                         
                                         break;
                                     }
+									case FPipelineCacheFileFormatPSO::DescriptorType::RayTracing:
+									{
+										INC_DWORD_STAT(STAT_SerializedRayTracingPipelineStateCount);
+										Meta.Shaders.Add(Entry.RayTracingDesc.ShaderHash);
+										break;
+									}
                                     default:
                                     {
                                         check(false);
@@ -2033,6 +2167,12 @@ public:
                                         
                                         break;
                                     }
+									case FPipelineCacheFileFormatPSO::DescriptorType::RayTracing:
+									{
+										INC_DWORD_STAT(STAT_SerializedRayTracingPipelineStateCount);
+										Meta.Shaders.Add(Entry.RayTracingDesc.ShaderHash);
+										break;
+									}
                                     default:
                                     {
                                         check(false);
@@ -2721,9 +2861,11 @@ void FPipelineFileCache::ClosePipelineFileCache()
 			// Not tracking when there is no file clear other stats as well
 			SET_DWORD_STAT(STAT_TotalGraphicsPipelineStateCount, 0);
 			SET_DWORD_STAT(STAT_TotalComputePipelineStateCount, 0);
+			SET_DWORD_STAT(STAT_TotalRayTracingPipelineStateCount, 0);
 			SET_DWORD_STAT(STAT_NewGraphicsPipelineStateCount, 0);
 			SET_DWORD_STAT(STAT_NewComputePipelineStateCount, 0);
-			
+			SET_DWORD_STAT(STAT_NewRayTracingPipelineStateCount, 0);
+
 			// Clear Runtime hashes otherwise we can't start adding newPSO's for a newly opened file
 			RunTimeToPSOUsage.Empty();
 			NewPSOUsage.Empty();
@@ -2890,6 +3032,108 @@ void FPipelineFileCache::CacheComputePSO(uint32 RunTimeHash, FRHIComputeShader c
 					PSOUsage->UsageMask |= FPipelineFileCache::GameUsageMask;
 					RegisterPSOUsageDataUpdateForNextSave(*PSOUsage);
 				}
+			}
+		}
+	}
+}
+
+void FPipelineFileCache::CacheRayTracingPSO(const FRayTracingPipelineStateInitializer& Initializer)
+{
+	if (!IsPipelineFileCacheEnabled() || !(LogPSOtoFileCache() || ReportNewPSOs()))
+	{
+		return;
+
+	}
+
+	TArrayView<FRHIRayTracingShader*> ShaderTables[] =
+	{
+		Initializer.GetRayGenTable(),
+		Initializer.GetMissTable(),
+		Initializer.GetHitGroupTable(),
+		Initializer.GetCallableTable()
+	};
+
+	FRWScopeLock Lock(FileCacheLock, SLT_ReadOnly);
+
+	if (!FileCache)
+	{
+		return;
+	}
+
+	for (TArrayView<FRHIRayTracingShader*>& Table : ShaderTables)
+	{
+		for (FRHIRayTracingShader* Shader : Table)
+		{
+			FPipelineFileCacheRayTracingDesc Desc(Initializer, Shader);
+			uint32 RunTimeHash = GetTypeHash(Desc);
+
+			FPSOUsageData* PSOUsage = RunTimeToPSOUsage.Find(RunTimeHash);
+			if (PSOUsage == nullptr || !IsReferenceMaskSet(FPipelineFileCache::GameUsageMask, PSOUsage->UsageMask))
+			{
+				Lock.ReleaseReadOnlyLockAndAcquireWriteLock_USE_WITH_CAUTION();
+				PSOUsage = RunTimeToPSOUsage.Find(RunTimeHash);
+				if (PSOUsage == nullptr)
+				{
+					FPipelineCacheFileFormatPSO NewEntry;
+					bool bOK = FPipelineCacheFileFormatPSO::Init(NewEntry, Desc);
+					check(bOK);
+
+					uint32 PSOHash = GetTypeHash(NewEntry);
+					FPSOUsageData CurrentUsageData(PSOHash, 0, 0);
+
+					if (!FileCache->IsPSOEntryCached(NewEntry, &CurrentUsageData))
+					{
+						CSV_EVENT(PSO, TEXT("Encountered new ray tracing PSO"));
+						UE_LOG(LogRHI, Display, TEXT("Encountered a new ray tracing PSO: %u"), PSOHash);
+						if (GPSOFileCachePrintNewPSODescriptors > 0)
+						{
+							UE_LOG(LogRHI, Display, TEXT("New ray tracing PSO (%u) Description: %s"), PSOHash, *NewEntry.RayTracingDesc.ToString());
+						}
+						if (LogPSOtoFileCache())
+						{
+							NewPSOs.Add(NewEntry);
+							INC_MEMORY_STAT_BY(STAT_NewCachedPSOMemory, sizeof(FPipelineCacheFileFormatPSO) + sizeof(uint32) + sizeof(uint32));
+						}
+
+						NumNewPSOs++;
+						INC_DWORD_STAT(STAT_NewRayTracingPipelineStateCount);
+						INC_DWORD_STAT(STAT_TotalRayTracingPipelineStateCount);
+
+						if (ReportNewPSOs() && PSOLoggedEvent.IsBound())
+						{
+							PSOLoggedEvent.Broadcast(NewEntry);
+						}
+					}
+
+					// Only set if the file cache doesn't have this Mask for the PSO - avoid making more entries and unnessary file saves
+					if (!IsReferenceMaskSet(FPipelineFileCache::GameUsageMask, CurrentUsageData.UsageMask))
+					{
+						CurrentUsageData.UsageMask |= FPipelineFileCache::GameUsageMask;
+						RegisterPSOUsageDataUpdateForNextSave(CurrentUsageData);
+					}
+
+					// Apply the existing file PSO Usage mask and current to our "fast" runtime check
+					RunTimeToPSOUsage.Add(RunTimeHash, CurrentUsageData);
+
+					// Immediately register usage of this ray tracing shader
+					FPipelineStateStats* Stat = Stats.FindRef(PSOHash);
+					if (Stat == nullptr)
+					{
+						Stat = new FPipelineStateStats;
+						Stat->FirstFrameUsed = 0;
+						Stat->LastFrameUsed = 0;
+						Stat->CreateCount = 1;
+						Stat->TotalBindCount = 1;
+						Stat->PSOHash = PSOHash;
+						Stats.Add(PSOHash, Stat);
+						INC_MEMORY_STAT_BY(STAT_PSOStatMemory, sizeof(FPipelineStateStats) + sizeof(uint32));
+					}
+				}
+			}
+			else if (!IsReferenceMaskSet(FPipelineFileCache::GameUsageMask, PSOUsage->UsageMask))
+			{
+				PSOUsage->UsageMask |= FPipelineFileCache::GameUsageMask;
+				RegisterPSOUsageDataUpdateForNextSave(*PSOUsage);
 			}
 		}
 	}
@@ -3088,6 +3332,9 @@ struct FPipelineCacheFileData
 										Entry.Value.Shaders.Add(PSO.GraphicsDesc.DomainShader);
 									}
 									break;
+								case FPipelineCacheFileFormatPSO::DescriptorType::RayTracing:
+									Entry.Value.Shaders.Add(PSO.RayTracingDesc.ShaderHash);
+									break;
 								default:
 									check(false);
 									break;
@@ -3230,6 +3477,12 @@ bool FPipelineFileCache::SavePipelineFileCacheFrom(uint32 GameVersion, EShaderPl
 				if (Item.GraphicsDesc.GeometryShader != FSHAHash())
 					Meta.Shaders.Add(Item.GraphicsDesc.GeometryShader);
 
+				break;
+			}
+			case FPipelineCacheFileFormatPSO::DescriptorType::RayTracing:
+			{
+				INC_DWORD_STAT(STAT_SerializedRayTracingPipelineStateCount);
+				Meta.Shaders.Add(Item.RayTracingDesc.ShaderHash);
 				break;
 			}
 			default:
@@ -3434,5 +3687,65 @@ bool FPipelineFileCache::MergePipelineFileCaches(FString const& PathA, FString c
         UE_LOG(LogRHI, Error, TEXT("Incompatible file headers: %u vs. %u: expected %u."), A.Header.Magic, B.Header.Magic, FPipelineCacheFileFormatMagic);
     }
 	return bOK;
+}
+
+FPipelineFileCacheRayTracingDesc::FPipelineFileCacheRayTracingDesc(const FRayTracingPipelineStateInitializer& Initializer, const FRHIRayTracingShader* ShaderRHI)
+: ShaderHash(ShaderRHI->GetHash())
+, MaxPayloadSizeInBytes(Initializer.MaxPayloadSizeInBytes)
+, Frequency(ShaderRHI->GetFrequency())
+, bAllowHitGroupIndexing(Initializer.bAllowHitGroupIndexing)
+{
+}
+
+FString FPipelineFileCacheRayTracingDesc::HeaderLine() const
+{
+	return FString(TEXT("RayTracingShader,MaxPayloadSizeInBytes,Frequency,bAllowHitGroupIndexing"));
+}
+
+FString FPipelineFileCacheRayTracingDesc::ToString() const
+{
+	return FString::Printf(TEXT("%s,%d,%d,%d")
+		, *ShaderHash.ToString()
+		, MaxPayloadSizeInBytes
+		, uint32(Frequency)
+		, uint32(bAllowHitGroupIndexing)
+	);
+}
+
+void FPipelineFileCacheRayTracingDesc::FromString(const FString& Src)
+{
+	TArray<FString> Parts;
+	Src.TrimStartAndEnd().ParseIntoArray(Parts, TEXT(","));
+
+	ShaderHash.FromString(Parts[0]);
+
+	LexFromString(MaxPayloadSizeInBytes, Parts[1]);
+
+	{
+		uint32 Temp = 0;
+		LexFromString(Temp, Parts[2]);
+		Frequency = EShaderFrequency(Temp);
+	}
+	
+	{
+		uint32 Temp = 0;
+		LexFromString(Temp, Parts[3]);
+		bAllowHitGroupIndexing = Temp != 0;
+	}
+}
+
+bool FPipelineCacheFileFormatPSO::Init(FPipelineCacheFileFormatPSO& PSO, FPipelineFileCacheRayTracingDesc const& Desc)
+{
+	PSO.Hash = 0;
+	PSO.Type = DescriptorType::RayTracing;
+
+#if PSO_COOKONLY_DATA
+	PSO.UsageMask = 0;
+	PSO.BindCount = 0;
+#endif
+
+	PSO.RayTracingDesc = Desc;
+
+	return true;
 }
 

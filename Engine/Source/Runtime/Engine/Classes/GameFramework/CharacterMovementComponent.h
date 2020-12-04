@@ -17,6 +17,7 @@
 #include "AI/Navigation/NavigationAvoidanceTypes.h"
 #include "AI/RVOAvoidanceInterface.h"
 #include "GameFramework/PawnMovementComponent.h"
+#include "GameFramework/CharacterMovementReplication.h"
 #include "Interfaces/NetworkPredictionInterface.h"
 #include "CharacterMovementComponent.generated.h"
 
@@ -1590,6 +1591,11 @@ protected:
 	/** Use new physics after landing. Defaults to swimming if in water, walking otherwise. */
 	virtual void SetPostLandedPhysics(const FHitResult& Hit);
 
+	/** Updates acceleration and perform movement, called from the TickComponent on the authoritative side for controlled characters, 
+	 *	or on the client for characters without a controller when either playing root motion or bRunPhysicsWithNoController is true.
+	 */
+	virtual void ControlledCharacterMove(const FVector& InputVector, float DeltaSeconds);
+
 	/** Switch collision settings for NavWalking mode (ignore world collisions) */
 	virtual void SetNavWalkingPhysics(bool bEnable);
 
@@ -2185,9 +2191,16 @@ protected:
 	/** If bUpdatePosition is true, then replay any unacked moves. Returns whether any moves were actually replayed. */
 	virtual bool ClientUpdatePositionAfterServerUpdate();
 
-	/** Call the appropriate replicated servermove() function to send a client player move to the server. */
-	virtual void CallServerMove(const class FSavedMove_Character* NewMove, const class FSavedMove_Character* OldMove);
-	
+	/** Call the appropriate replicated ServerMove() function to send a client player move to the server. */
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(CallServerMove, CallServerMovePacked)
+	virtual void CallServerMove(const FSavedMove_Character* NewMove, const FSavedMove_Character* OldMove);
+
+	/**
+	 * On the client, calls the ServerMovePacked_ClientSend() function with packed movement data.
+	 * First the FCharacterNetworkMoveDataContainer from GetNetworkMoveDataContainer() is updated with ClientFillNetworkMoveData(), then serialized into a data stream to send client player moves to the server.
+	 */
+	virtual void CallServerMovePacked(const FSavedMove_Character* NewMove, const FSavedMove_Character* PendingMove, const FSavedMove_Character* OldMove);
+
 	/**
 	 * Have the server check if the client is outside an error tolerance, and queue a client adjustment if so.
 	 * If either GetPredictionData_Server_Character()->bForceClientUpdate or ServerCheckClientError() are true, the client adjustment will be sent.
@@ -2287,26 +2300,99 @@ protected:
 	 */
 	virtual void OnTimeDiscrepancyDetected(float CurrentTimeDiscrepancy, float LifetimeRawTimeDiscrepancy, float Lifetime, float CurrentMoveError);
 
+public:
+
+	/**
+	 * The actual network RPCs for character movement are passed to ACharacter, which wrap to the _Implementation call here, to avoid Component RPC overhead.
+	 * For example:
+	 *		Client: UCharacterMovementComponent::ServerMovePacked_ClientSend() => Calls CharacterOwner->ServerMove() triggering RPC on the server.
+	 *		Server: ACharacter::ServerMovePacked_Implementation() from the RPC => Calls CharacterMovement->ServerMove_ServerReceive(), unpacked and sent to ServerMove_ServerHandleMoveData().
+	 *
+	 *	ServerMove_ClientSend() and ServerMove_ServerReceive() use a bitstream created from the current FCharacterNetworkMoveData data container that contains the client move.
+	 *	See GetNetworkMoveDataContainer()/SetNetworkMoveDataContainer() for details on setting a custom container with custom unpacking through FCharacterNetworkMoveData::Serialize().
+	 * 
+	*/
+
+	/**
+	 * Wrapper to send packed move data to the server, through the Character.
+	 * @see CallServerMovePacked()
+	 */
+	void ServerMovePacked_ClientSend(const FCharacterServerMovePackedBits& PackedBits);
+
+	/**
+	 * On the server, receives packed move data from the Character RPC, unpacks them into the FCharacterNetworkMoveDataContainer returned from GetNetworkMoveDataContainer(),
+	 * and passes the data container to ServerMove_HandleMoveData().
+	 */
+	void ServerMovePacked_ServerReceive(const FCharacterServerMovePackedBits& PackedBits);
+
+	/**
+	 * Determines whether to use packed movement RPCs with variable length payloads, or legacy code which has multiple functions required for different situations.
+	 * The default implementation checks the console variable "p.NetUsePackedMovementRPCs" and returns true if it is non-zero.
+	 */
+	virtual bool ShouldUsePackedMovementRPCs() const;
+
+	/* Sends a move response from the server to the client (through character to avoid component RPC overhead), eventually calling MoveResponsePacked_ClientReceive() on the client. */
+	void MoveResponsePacked_ServerSend(const FCharacterMoveResponsePackedBits& PackedBits);
+
+	/* On the client, receives a packed move response from the server, unpacks it by serializing into the MoveResponseContainer from GetMoveResponseDataContainer(), and passes the data container to ClientHandleMoveResponse(). */
+	void MoveResponsePacked_ClientReceive(const FCharacterMoveResponsePackedBits& PackedBits);
+
+	/* If no client adjustment is needed after processing received ServerMove(), ack the good move so client can remove it from SavedMoves */
+	virtual void ClientAckGoodMove_Implementation(float TimeStamp);
+
+	/* Replicate position correction to client, associated with a timestamped servermove.  Client will replay subsequent moves after applying adjustment. */
+	virtual void ClientAdjustPosition_Implementation(float TimeStamp, FVector NewLoc, FVector NewVel, UPrimitiveComponent* NewBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
+
+	/* Bandwidth saving version, when velocity is zeroed */
+	virtual void ClientVeryShortAdjustPosition_Implementation(float TimeStamp, FVector NewLoc, UPrimitiveComponent* NewBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
+
+	/* Replicate position correction to client when using root motion for movement. (animation root motion specific) */
+	virtual void ClientAdjustRootMotionPosition_Implementation(float TimeStamp, float ServerMontageTrackPosition, FVector ServerLoc, FVector_NetQuantizeNormal ServerRotation, float ServerVelZ, UPrimitiveComponent* ServerBase, FName ServerBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
+
+	/* Replicate root motion source correction to client when using root motion for movement. */
+	virtual void ClientAdjustRootMotionSourcePosition_Implementation(float TimeStamp, FRootMotionSourceGroup ServerRootMotion, bool bHasAnimRootMotion, float ServerMontageTrackPosition, FVector ServerLoc, FVector_NetQuantizeNormal ServerRotation, float ServerVelZ, UPrimitiveComponent* ServerBase, FName ServerBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
+
+	/**
+	 * Handle movement data after it's unpacked from the ServerMovePacked_ServerReceive() call.
+	 * Default implementation passes through to ServerMove_PerformMovement(), which may be called twice in the case of a "dual move", and one additional time for an "old important move".
+	 */
+	virtual void ServerMove_HandleMoveData(const FCharacterNetworkMoveDataContainer& MoveDataContainer);
+
+	/**
+	 * Check timestamps, generate a delta time, and pass through movement params to MoveAutonomous. Error checking is optionally done on the final location, compared to 'ClientLoc'.
+	 * The FCharacterNetworkMoveData parameter to this function is also the same returned by GetCurrentNetworkMoveData(), to assist in migration of code that may want to access the data without changing function signatures.
+	 * (Note: this is similar to "ServerMove_Implementation" in legacy versions).
+	 */
+	virtual void ServerMove_PerformMovement(const FCharacterNetworkMoveData& MoveData);
+
+	/**
+	 * On the server, sends a packed move response to the client. First the FCharacterMoveResponseDataContainer from GetMoveResponseDataContainer() is filled in with ServerFillResponseData().
+	 * Then this data is serialized to a bit stream that is sent to the client via MoveResponsePacked_ServerSend().
+	 */
+	void ServerSendMoveResponse(const FClientAdjustment& PendingAdjustment);
+
+	/**
+	 * On the client, handles the move response from the server after it has been received and unpacked in MoveResponsePacked_ClientReceive.
+	 * Based on the data in the response, dispatches a call to ClientAckGoodMove_Implementation if there was no error from the server.
+	 * Otherwise dispatches a call to one of ClientAdjustRootMotionSourcePosition_Implementation, ClientAdjustRootMotionPosition_Implementation,
+	 * or ClientAdjustPosition_Implementation depending on the payload.
+	 */
+	virtual void ClientHandleMoveResponse(const FCharacterMoveResponseDataContainer& MoveResponse);
+
 
 public:
 
-	////////////////////////////////////
-	// Network RPCs for movement
-	////////////////////////////////////
-	/**
-	 * The actual RPCs are passed to ACharacter, which wrap to the _Implementation and _Validate call here, to avoid Component RPC overhead.
-	 * For example:
-	 *		Client: UCharacterMovementComponent::ServerMove(...) => Calls CharacterOwner->ServerMove(...) triggering RPC on server
-	 *		Server: ACharacter::ServerMove_Implementation(...) => Calls CharacterMovement->ServerMove_Implementation
-	 *		To override the client call to the server RPC (on CharacterOwner), override ServerMove().
-	 *		To override the server implementation, override ServerMove_Implementation().
-	 */
+	/////////////////////////////////////////////////////////////////////////////////////
+	// BEGIN DEPRECATED movement RPCs. Use the Packed versions above instead. 
+	/////////////////////////////////////////////////////////////////////////////////////
 
 	/**
 	 * Replicated function sent by client to server - contains client movement and view info.
 	 * Calls either CharacterOwner->ServerMove() or CharacterOwner->ServerMoveNoBase() depending on whehter ClientMovementBase is null.
 	 */
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ServerMove, ServerMovePacked_ClientSend)
 	virtual void ServerMove(float TimeStamp, FVector_NetQuantize10 InAccel, FVector_NetQuantize100 ClientLoc, uint8 CompressedMoveFlags, uint8 ClientRoll, uint32 View, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode);
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ServerMove_Implementation, ServerMove_PerformMovement)
 	virtual void ServerMove_Implementation(float TimeStamp, FVector_NetQuantize10 InAccel, FVector_NetQuantize100 ClientLoc, uint8 CompressedMoveFlags, uint8 ClientRoll, uint32 View, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode);
 	virtual bool ServerMove_Validate(float TimeStamp, FVector_NetQuantize10 InAccel, FVector_NetQuantize100 ClientLoc, uint8 CompressedMoveFlags, uint8 ClientRoll, uint32 View, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode);
 
@@ -2314,56 +2400,148 @@ public:
 	 * Replicated function sent by client to server - contains client movement and view info for two moves.
 	 * Calls either CharacterOwner->ServerMoveDual() or CharacterOwner->ServerMoveDualNoBase() depending on whehter ClientMovementBase is null.
 	 */
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ServerMoveDual, ServerMovePacked_ClientSend)
 	virtual void ServerMoveDual(float TimeStamp0, FVector_NetQuantize10 InAccel0, uint8 PendingFlags, uint32 View0, float TimeStamp, FVector_NetQuantize10 InAccel, FVector_NetQuantize100 ClientLoc, uint8 NewFlags, uint8 ClientRoll, uint32 View, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode);
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ServerMoveDual_Implementation, ServerMove_PerformMovement)
 	virtual void ServerMoveDual_Implementation(float TimeStamp0, FVector_NetQuantize10 InAccel0, uint8 PendingFlags, uint32 View0, float TimeStamp, FVector_NetQuantize10 InAccel, FVector_NetQuantize100 ClientLoc, uint8 NewFlags, uint8 ClientRoll, uint32 View, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode);
 	virtual bool ServerMoveDual_Validate(float TimeStamp0, FVector_NetQuantize10 InAccel0, uint8 PendingFlags, uint32 View0, float TimeStamp, FVector_NetQuantize10 InAccel, FVector_NetQuantize100 ClientLoc, uint8 NewFlags, uint8 ClientRoll, uint32 View, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode);
 
 	/** Replicated function sent by client to server - contains client movement and view info for two moves. First move is non root motion, second is root motion. */
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ServerMoveDualHybridRootMotion, ServerMovePacked_ClientSend)
 	virtual void ServerMoveDualHybridRootMotion(float TimeStamp0, FVector_NetQuantize10 InAccel0, uint8 PendingFlags, uint32 View0, float TimeStamp, FVector_NetQuantize10 InAccel, FVector_NetQuantize100 ClientLoc, uint8 NewFlags, uint8 ClientRoll, uint32 View, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode);
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ServerMoveDualHybridRootMotion_Implementation, ServerMove_PerformMovement)
 	virtual void ServerMoveDualHybridRootMotion_Implementation(float TimeStamp0, FVector_NetQuantize10 InAccel0, uint8 PendingFlags, uint32 View0, float TimeStamp, FVector_NetQuantize10 InAccel, FVector_NetQuantize100 ClientLoc, uint8 NewFlags, uint8 ClientRoll, uint32 View, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode);
 	virtual bool ServerMoveDualHybridRootMotion_Validate(float TimeStamp0, FVector_NetQuantize10 InAccel0, uint8 PendingFlags, uint32 View0, float TimeStamp, FVector_NetQuantize10 InAccel, FVector_NetQuantize100 ClientLoc, uint8 NewFlags, uint8 ClientRoll, uint32 View, UPrimitiveComponent* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode);
 
 	/* Resending an (important) old move. Process it if not already processed. */
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ServerMoveOld, ServerMovePacked_ClientSend)
 	virtual void ServerMoveOld(float OldTimeStamp, FVector_NetQuantize10 OldAccel, uint8 OldMoveFlags);
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ServerMoveOld_Implementation, ServerMove_PerformMovement)
 	virtual void ServerMoveOld_Implementation(float OldTimeStamp, FVector_NetQuantize10 OldAccel, uint8 OldMoveFlags);
 	virtual bool ServerMoveOld_Validate(float OldTimeStamp, FVector_NetQuantize10 OldAccel, uint8 OldMoveFlags);
 	
 	/** If no client adjustment is needed after processing received ServerMove(), ack the good move so client can remove it from SavedMoves */
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ClientAckGoodMove, ClientHandleMoveResponse)
 	virtual void ClientAckGoodMove(float TimeStamp);
-	virtual void ClientAckGoodMove_Implementation(float TimeStamp);
 
 	/** Replicate position correction to client, associated with a timestamped servermove.  Client will replay subsequent moves after applying adjustment.  */
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ClientAdjustPosition, ClientHandleMoveResponse)
 	virtual void ClientAdjustPosition(float TimeStamp, FVector NewLoc, FVector NewVel, UPrimitiveComponent* NewBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
-	virtual void ClientAdjustPosition_Implementation(float TimeStamp, FVector NewLoc, FVector NewVel, UPrimitiveComponent* NewBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
 
 	/* Bandwidth saving version, when velocity is zeroed */
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ClientVeryShortAdjustPosition, ClientHandleMoveResponse)
 	virtual void ClientVeryShortAdjustPosition(float TimeStamp, FVector NewLoc, UPrimitiveComponent* NewBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
-	virtual void ClientVeryShortAdjustPosition_Implementation(float TimeStamp, FVector NewLoc, UPrimitiveComponent* NewBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
 	
 	/** Replicate position correction to client when using root motion for movement. (animation root motion specific) */
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ClientAdjustRootMotionPosition, ClientHandleMoveResponse)
 	virtual void ClientAdjustRootMotionPosition(float TimeStamp, float ServerMontageTrackPosition, FVector ServerLoc, FVector_NetQuantizeNormal ServerRotation, float ServerVelZ, UPrimitiveComponent* ServerBase, FName ServerBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
-	virtual void ClientAdjustRootMotionPosition_Implementation(float TimeStamp, float ServerMontageTrackPosition, FVector ServerLoc, FVector_NetQuantizeNormal ServerRotation, float ServerVelZ, UPrimitiveComponent* ServerBase, FName ServerBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
 
 	/** Replicate root motion source correction to client when using root motion for movement. */
+	DEPRECATED_CHARACTER_MOVEMENT_RPC(ClientAdjustRootMotionSourcePosition, ClientHandleMoveResponse)
 	virtual void ClientAdjustRootMotionSourcePosition(float TimeStamp, FRootMotionSourceGroup ServerRootMotion, bool bHasAnimRootMotion, float ServerMontageTrackPosition, FVector ServerLoc, FVector_NetQuantizeNormal ServerRotation, float ServerVelZ, UPrimitiveComponent* ServerBase, FName ServerBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
-	virtual void ClientAdjustRootMotionSourcePosition_Implementation(float TimeStamp, FRootMotionSourceGroup ServerRootMotion, bool bHasAnimRootMotion, float ServerMontageTrackPosition, FVector ServerLoc, FVector_NetQuantizeNormal ServerRotation, float ServerVelZ, UPrimitiveComponent* ServerBase, FName ServerBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
+
+	/////////////////////////////////////////////////////////////////////////////////////
+	// END DEPRECATED movement RPCs
+	/////////////////////////////////////////////////////////////////////////////////////
 
 protected:
 
 	/** Event notification when client receives correction data from the server, before applying the data. Base implementation logs relevant data and draws debug info if "p.NetShowCorrections" is not equal to 0. */
 	virtual void OnClientCorrectionReceived(class FNetworkPredictionData_Client_Character& ClientData, float TimeStamp, FVector NewLocation, FVector NewVelocity, UPrimitiveComponent* NewBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode);
 
-	// Root Motion
+	/**
+	 * Set custom struct used for client to server move RPC serialization.
+	 * This is typically set in the constructor for this component and should persist for the lifetime of the component.
+	 * @see GetNetworkMoveDataContainer(), ServerMovePacked_ServerReceive(), ServerMove_HandleMoveData()
+	 */
+	void SetNetworkMoveDataContainer(FCharacterNetworkMoveDataContainer& PersistentDataStorage) { NetworkMoveDataContainerPtr = &PersistentDataStorage; }
+
+	/**
+	 * Get the struct used for client to server move RPC serialization.
+	 * @see SetNetworkMoveDataContainer()
+	 */
+	FCharacterNetworkMoveDataContainer& GetNetworkMoveDataContainer() const { return *NetworkMoveDataContainerPtr; }
+
+	/**
+	 * Current move data being processed or handled.
+	 * This is set before MoveAutonomous (for replayed moves and server moves), and cleared thereafter.
+	 * Useful for being able to access custom movement data during internal movement functions such as MoveAutonomous() or UpdateFromCompressedFlags() to be able to maintain backwards API compatibility.
+	 */
+	FCharacterNetworkMoveData* GetCurrentNetworkMoveData() const { return CurrentNetworkMoveData; }
+
+	/**
+	 * Used internally to set the FCharacterNetworkMoveData currently being processed, either being serialized or replayed on the client, or being received and processed on the server.
+	 * @see GetCurrentNetworkMoveData()
+	 */
+	void SetCurrentNetworkMoveData(FCharacterNetworkMoveData* CurrentData) { CurrentNetworkMoveData = CurrentData; }
+
+	/**
+	 * Set custom struct used for server response RPC serialization.
+	 * This is typically set in the constructor for this component and should persist for the lifetime of the component.
+	 * @see GetMoveResponseDataContainer()
+	 */
+	void SetMoveResponseDataContainer(FCharacterMoveResponseDataContainer& PersistentDataStorage) { MoveResponseDataContainerPtr = &PersistentDataStorage; }
+
+	/**
+	 * Get the struct used for server response RPC serialization.
+	 * @see SetMoveResponseDataContainer(), ClientHandleMoveResponse(), ServerSendMoveResponse().
+	 */
+	FCharacterMoveResponseDataContainer& GetMoveResponseDataContainer() const { return *MoveResponseDataContainerPtr; }
+
+private:
+
+	//////////////////////////////////////////////////////////////////////////
+	// Server move data
+
+	/** Default client to server move RPC data container. Can be bypassed via SetNetworkMoveDataContainer(). */
+	FCharacterNetworkMoveDataContainer DefaultNetworkMoveDataContainer;
+
+	/** Pointer to server move RPC data container. */
+	FCharacterNetworkMoveDataContainer* NetworkMoveDataContainerPtr;
+
+	/** Used for writing server move RPC bits. */
+	FNetBitWriter ServerMoveBitWriter;
+
+	/** Used for reading server move RPC bits. */
+	FNetBitReader ServerMoveBitReader;
+
+	/** Current network move data being processed or handled within the NetworkMoveDataContainer. */
+	FCharacterNetworkMoveData* CurrentNetworkMoveData;
+
+	//////////////////////////////////////////////////////////////////////////
+	// Server response data
+
+	/** Default server response RPC data container. Can be bypassed via SetMoveResponseDataContainer(). */
+	FCharacterMoveResponseDataContainer DefaultMoveResponseDataContainer;
+
+	/** Pointer to server response RPC data container. */
+	FCharacterMoveResponseDataContainer* MoveResponseDataContainerPtr;
+
+	/** Used for writing server response RPC bits. */
+	FNetBitWriter MoveResponseBitWriter;
+
+	/** Used for reading server response RPC bits. */
+	FNetBitReader MoveResponseBitReader;
+
 public:
+
+	//////////////////////////////////////////////////////////////////////////
+	// Root Motion
+
 	/** Root Motion Group containing active root motion sources being applied to movement */
 	UPROPERTY(Transient)
 	FRootMotionSourceGroup CurrentRootMotion;
+
+	UPROPERTY(Transient)
+	FRootMotionSourceGroup ServerCorrectionRootMotion;
 
 	/** Returns true if we have Root Motion from any source to use in PerformMovement() physics. */
 	bool HasRootMotionSources() const;
 
 	/** Apply a RootMotionSource to current root motion 
 	 *  @return LocalID for this Root Motion Source */
+	uint16 ApplyRootMotionSource(TSharedPtr<FRootMotionSource> SourcePtr);
+	UE_DEPRECATED(4.26, "ApplyRootMotionSource no longer takes raw pointers. Pass in a TSharedPtr instead.")
 	uint16 ApplyRootMotionSource(FRootMotionSource* SourcePtr);
 
 	/** Called during ApplyRootMotionSource call, useful for project-specific alerts for "something is about to be altering our movement" */
@@ -2481,8 +2659,11 @@ public:
 	virtual float GetRVOAvoidanceHeight() override;
 	virtual float GetRVOAvoidanceConsiderationRadius() override;
 	virtual FVector GetVelocityForRVOConsideration() override;
+	virtual void SetAvoidanceGroupMask(int32 GroupFlags) override;
 	virtual int32 GetAvoidanceGroupMask() override;
+	virtual void SetGroupsToAvoidMask(int32 GroupFlags) override;
 	virtual int32 GetGroupsToAvoidMask() override;
+	virtual void SetGroupsToIgnoreMask(int32 GroupFlags) override;
 	virtual int32 GetGroupsToIgnoreMask() override;
 	/** END IRVOAvoidanceInterface */
 
@@ -2689,36 +2870,6 @@ inline FSavedMove_Character& FSavedMove_Character::operator=(const FSavedMove_Ch
 inline FSavedMove_Character& FSavedMove_Character::operator=(FSavedMove_Character&&) = default;
 PRAGMA_ENABLE_DEPRECATION_WARNINGS
 
-// ClientAdjustPosition replication (event called at end of frame by server)
-struct ENGINE_API FClientAdjustment
-{
-public:
-
-	FClientAdjustment()
-	: TimeStamp(0.f)
-	, DeltaTime(0.f)
-	, NewLoc(ForceInitToZero)
-	, NewVel(ForceInitToZero)
-	, NewRot(ForceInitToZero)
-	, NewBase(NULL)
-	, NewBaseBoneName(NAME_None)
-	, bAckGoodMove(false)
-	, bBaseRelativePosition(false)
-	, MovementMode(0)
-	{
-	}
-
-	float TimeStamp;
-	float DeltaTime;
-	FVector NewLoc;
-	FVector NewVel;
-	FRotator NewRot;
-	UPrimitiveComponent* NewBase;
-	FName NewBaseBoneName;
-	bool bAckGoodMove;
-	bool bBaseRelativePosition;
-	uint8 MovementMode;
-};
 
 class FCharacterReplaySample
 {
@@ -2888,6 +3039,9 @@ public:
 
 	/** Timestamp from the client of most recent ServerMove() processed for this player. Reset occasionally for timestamp resets (to maintain accuracy). */
 	float CurrentClientTimeStamp;
+
+	/** Timestamp from the client of most recent ServerMove() received for this player, including rejected requests. */
+	float LastReceivedClientTimeStamp;
 
 	/** Timestamp of total elapsed client time. Similar to CurrentClientTimestamp but this is accumulated with the calculated DeltaTime for each move on the server. */
 	double ServerAccumulatedClientTimeStamp;

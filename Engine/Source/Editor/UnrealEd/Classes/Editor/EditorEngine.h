@@ -29,6 +29,7 @@
 #include "EditorSubsystem.h"
 #include "Subsystems/SubsystemCollection.h"
 #include "RHI.h"
+#include "UnrealEngine.h"
 
 #include "EditorEngine.generated.h"
 
@@ -54,6 +55,7 @@ class UAnimSequence;
 class UAudioComponent;
 class UBrushBuilder;
 class UFoliageType;
+class UFbxImportUI;
 class UGameViewportClient;
 class ULocalPlayer;
 class UNetDriver;
@@ -274,20 +276,30 @@ struct FPreviewPlatformInfo
 {
 	FPreviewPlatformInfo()
 	:	PreviewFeatureLevel(ERHIFeatureLevel::SM5)
+	,	PreviewPlatformName(NAME_None)
+	,	PreviewShaderFormatName(NAME_None)
 	,	bPreviewFeatureLevelActive(false)
 	{}
 
-	FPreviewPlatformInfo(ERHIFeatureLevel::Type InFeatureLevel, FName InPreviewShaderPlatformName = NAME_None, bool InbPreviewFeatureLevelActive = false)
+	FPreviewPlatformInfo(ERHIFeatureLevel::Type InFeatureLevel, FName InPreviewPlatformName = NAME_None, FName InPreviewShaderFormatName = NAME_None, FName InDeviceProfileName = NAME_None, bool InbPreviewFeatureLevelActive = false)
 	:	PreviewFeatureLevel(InFeatureLevel)
-	,	PreviewShaderPlatformName(InPreviewShaderPlatformName)
+	,	PreviewPlatformName(InPreviewPlatformName)
+	,	PreviewShaderFormatName(InPreviewShaderFormatName)
+	,	DeviceProfileName(InDeviceProfileName)
 	,	bPreviewFeatureLevelActive(InbPreviewFeatureLevelActive)
 	{}
 
 	/** The feature level we should use when loading or creating a new world */
 	ERHIFeatureLevel::Type PreviewFeatureLevel;
-	
+
+	/** The the platform to preview, or NAME_None if there is no preview platform */
+	FName PreviewPlatformName;
+
 	/** The shader platform to preview, or NAME_None if there is no shader preview platform */
-	FName PreviewShaderPlatformName;
+	FName PreviewShaderFormatName;
+
+	/** The device profile to preview. */
+	FName DeviceProfileName;
 
 	/** Is feature level preview currently active */
 	bool bPreviewFeatureLevelActive;
@@ -295,21 +307,13 @@ struct FPreviewPlatformInfo
 	/** Checks if two FPreviewPlatformInfos are for the same preview platform. Note, this does NOT compare the bPreviewFeatureLevelActive flag */
 	bool Matches(const FPreviewPlatformInfo& Other) const
 	{
-		return PreviewFeatureLevel == Other.PreviewFeatureLevel && PreviewShaderPlatformName == Other.PreviewShaderPlatformName;
+		return PreviewFeatureLevel == Other.PreviewFeatureLevel && PreviewPlatformName == Other.PreviewPlatformName && PreviewShaderFormatName == Other.PreviewShaderFormatName && DeviceProfileName == Other.DeviceProfileName;
 	}
 
-	/** Convert platform name like "Android", or NAME_None if none is set or the preview feature level is not active */
+	/** Return platform name like "Android", or NAME_None if none is set or the preview feature level is not active */
 	FName GetEffectivePreviewPlatformName() const
 	{
-		if (PreviewShaderPlatformName != NAME_None && bPreviewFeatureLevelActive)
-		{
-			ITargetPlatform* TargetPlatform = GetTargetPlatformManager()->FindTargetPlatformWithSupport(TEXT("ShaderFormat"), PreviewShaderPlatformName);
-			if (TargetPlatform)
-			{
-				return FName(*TargetPlatform->IniPlatformName());
-			}
-		}
-		return NAME_None;
+		return bPreviewFeatureLevelActive ? PreviewPlatformName : NAME_None;
 	}
 
 	/** returns the preview feature level if active, or GMaxRHIFeatureLevel otherwise */
@@ -340,7 +344,7 @@ public:
  * Separate from UGameEngine because it may have much different functionality than desired for an instance of a game itself.
  */
 UCLASS(config=Engine, transient)
-class UNREALED_API UEditorEngine : public UEngine, public FGCObject
+class UNREALED_API UEditorEngine : public UEngine
 {
 public:
 	GENERATED_BODY()
@@ -593,6 +597,10 @@ public:
 	DECLARE_MULTICAST_DELEGATE_OneParam(FPreviewFeatureLevelChanged, ERHIFeatureLevel::Type);
 	FPreviewFeatureLevelChanged PreviewFeatureLevelChanged;
 
+	/** A delegate that is called when the preview platform changes. */
+	DECLARE_MULTICAST_DELEGATE(FPreviewPlatformChanged);
+	FPreviewPlatformChanged PreviewPlatformChanged;
+
 	/** Whether or not the editor is currently compiling */
 	bool bIsCompiling;
 
@@ -805,6 +813,7 @@ public:
 	virtual void SetMapBuildCancelled(bool InCancelled) override { /* Intentionally empty. */ }
 	virtual void HandleNetworkFailure(UWorld *World, UNetDriver *NetDriver, ENetworkFailure::Type FailureType, const FString& ErrorString) override;
 	virtual ERHIFeatureLevel::Type GetDefaultWorldFeatureLevel() const override { return DefaultWorldFeatureLevel; }
+	virtual bool GetPreviewPlatformName(FName& PlatformGroupName, FName& VanillaPlatformName) const override;
 
 protected:
 	virtual void InitializeObjectReferences() override;
@@ -815,8 +824,13 @@ private:
 	virtual void RemapGamepadControllerIdForPIE(class UGameViewportClient* GameViewport, int32 &ControllerId) override;
 	virtual TSharedPtr<SViewport> GetGameViewportWidget() const override;
 	virtual void TriggerStreamingDataRebuild() override;
+
+	PRAGMA_DISABLE_DEPRECATION_WARNINGS
 	virtual bool NetworkRemapPath(UNetDriver* Driver, FString& Str, bool bReading = true) override;
+	PRAGMA_ENABLE_DEPRECATION_WARNINGS
+	virtual bool NetworkRemapPath(UNetConnection* Connection, FString& Str, bool bReading = true) override;
 	virtual bool NetworkRemapPath(UPendingNetGame* PendingNetGame, FString& Str, bool bReading = true) override;
+
 	virtual bool AreEditorAnalyticsEnabled() const override;
 	virtual void CreateStartupAnalyticsAttributes(TArray<FAnalyticsEventAttribute>& StartSessionAttributes) const override;
 	virtual void VerifyLoadMapWorldCleanup() override;
@@ -839,7 +853,6 @@ public:
 	/**
 	 * Exec command handlers
 	 */
-	bool	HandleBlueprintifyFunction( const TCHAR* Str , FOutputDevice& Ar );
 	bool	HandleCallbackCommand( UWorld* InWorld, const TCHAR* Str, FOutputDevice& Ar );
 	bool	HandleTestPropsCommand( const TCHAR* Str, FOutputDevice& Ar );
 	bool	HandleMapCommand( const TCHAR* Str, FOutputDevice& Ar, UWorld* InWorld );
@@ -990,6 +1003,15 @@ public:
 	void RebuildModelFromBrushes(UModel* Model, bool bSelectedBrushesOnly, bool bTreatMovableBrushesAsStatic = false);
 
 	/**
+	 * Builds up a model from a given set of brushes. Used by BspConversionTool to build brushes before converting them
+	 * to static meshes.
+	 *
+	 * @param BrushesToBuild	List of brushes to build.
+	 * @param Model				Model into which to put the output.
+	 */
+	void RebuildModelFromBrushes(TArray<ABrush*>& BrushesToBuild, UModel* Model);
+
+	/**
 	 * Rebuilds levels containing currently selected brushes and should be invoked after a brush has been modified
 	 */
 	void RebuildAlteredBSP();
@@ -1054,14 +1076,14 @@ public:
 	/** 
 	 * Snaps an actor in a direction.  Optionally will align with the trace normal.
 	 * @param InActor			Actor to move to the floor.
-	 * @param InAlign			sWhether or not to rotate the actor to align with the trace normal.
+	 * @param InAlign			Whether or not to rotate the actor to align with the trace normal.
 	 * @param InUseLineTrace	Whether or not to only trace with a line through the world.
 	 * @param InUseBounds		Whether or not to base the line trace off of the bounds.
 	 * @param InUsePivot		Whether or not to use the pivot position.
 	 * @param InDestination		The destination actor we want to move this actor to, NULL assumes we just want to go towards the floor
 	 * @return					Whether or not the actor was moved.
 	 */
-	bool SnapObjectTo( FActorOrComponent Object, const bool InAlign, const bool InUseLineTrace, const bool InUseBounds, const bool InUsePivot, FActorOrComponent InDestination = FActorOrComponent() );
+	bool SnapObjectTo( FActorOrComponent Object, const bool InAlign, const bool InUseLineTrace, const bool InUseBounds, const bool InUsePivot, FActorOrComponent InDestination = FActorOrComponent(), TArray<FActorOrComponent> ObjectsToIgnore = TArray<FActorOrComponent>() );
 
 	/**
 	 * Snaps the view of the camera to that of the provided actor.
@@ -1607,10 +1629,15 @@ public:
 	/**
 	 * Reimport animation using SourceFilePath and SourceFileStamp 
 	 *
-	 * @param Skeleton	The skeleton that animation is import into
-	 * @param Filename	The FBX filename
+	 * @param Skeleton				The skeleton that animation is import into
+	 * @oaram AnimSequence			The existing AnimSequence.
+	 * @param ImportData			The import data of the existing AnimSequence
+	 * @param InFilename			The FBX filename
+	 * @param bOutImportAll			
+	 * @param bFactoryShowOptions	When true, create a UI popup asking the user for the reimport options.
+	 * @param ReimportUI			Optional parameter used to pass reimport options.
 	 */
-	static bool ReimportFbxAnimation( USkeleton* Skeleton, UAnimSequence* AnimSequence, class UFbxAnimSequenceImportData* ImportData, const TCHAR* InFilename);
+	static bool ReimportFbxAnimation( USkeleton* Skeleton, UAnimSequence* AnimSequence, class UFbxAnimSequenceImportData* ImportData, const TCHAR* InFilename, bool& bOutImportAll, const bool bFactoryShowOptions, UFbxImportUI* ReimportUI = nullptr);
 
 
 	// Object management.
@@ -1828,6 +1855,9 @@ public:
 	/**
 	 * Removes the current realtime override.  If there was another realtime override set it will restore that override
 	 */
+	void RemoveViewportsRealtimeOverride(FText SystemDisplayName);
+
+	UE_DEPRECATED(4.26, "To remove realtime overrides, please now provide a system name to make sure you remove the correct override.")
 	void RemoveViewportsRealtimeOverride();
 
 	/**
@@ -1951,6 +1981,12 @@ public:
 	 * Restore the selection state of the current level (its actors and components) from a previous state.
 	 */
 	void SetSelectionStateOfLevel(const FSelectionStateOfLevel& InSelectionStateOfLevel);
+
+	/**
+	 * Reset All Selection Sets (i.e. objects, actors, components)
+	 * @note each set is independent and a selected actor might not be in the object selection set.
+	 */
+	void ResetAllSelectionSets();
 
 	/**
 	 * Clears out the current map, if any, and creates a new blank map.
@@ -2459,9 +2495,11 @@ public:
 	 */
 	FWorldContext &GetEditorWorldContext(bool bEnsureIsGWorld = false);
 
-	/** Returns the WorldContext for the PIE world.
-	*/
-	FWorldContext* GetPIEWorldContext();
+	/** 
+	 * Returns the WorldContext for the PIE world, by default will get the first one which will be the server or simulate instance.
+	 * You need to iterate the context list if you want all the pie world contexts.
+	 */
+	FWorldContext* GetPIEWorldContext(int32 WorldPIEInstance = 0);
 
 	/** 
 	 * mostly done to check if PIE is being set up, go GWorld is going to change, and it's not really _the_G_World_
@@ -2877,6 +2915,15 @@ private:
 	/** The Timer manager for all timer delegates */
 	TSharedPtr<class FTimerManager> TimerManager;
 
+	/** Currently active function execution world switcher, will be null most of the time */
+	FScopedConditionalWorldSwitcher* FunctionStackWorldSwitcher = nullptr;
+
+	/** Stack entry where world switcher was created, and should be destroyed at */
+	int32 FunctionStackWorldSwitcherTag = -1;
+
+	/** Delegate handles for function execution */
+	FDelegateHandle ScriptExecutionStartHandle, ScriptExecutionEndHandle;
+
 	// This chunk is used for Play In New Process
 public:
 	/**
@@ -3002,15 +3049,30 @@ protected:
 	/**
 	 * Hack to switch worlds for the PIE window before and after a slate event
 	 *
-	 * @param WorldID	The id of the world to restore or -1 if no world
+	 * @param WorldID	The id of the world to switch to where -1 is unknown, 0 is editor, and 1 is PIE
+	 * @param PIEInstance	When switching to a PIE instance, this is the specific client/server instance to use
 	 * @return The ID of the world to restore later or -1 if no world to restore
 	 */
-	int32 OnSwitchWorldForSlatePieWindow(int32 WorldID);
+	int32 OnSwitchWorldForSlatePieWindow(int32 WorldID, int32 WorldPIEInstance);
 
 	/**
 	 * Called via a delegate to toggle between the editor and pie world
 	 */
 	void OnSwitchWorldsForPIE(bool bSwitchToPieWorld, UWorld* OverrideWorld = nullptr);
+
+	/**
+	 * Called to switch to a specific PIE instance, where -1 means the editor world
+	 */
+	void OnSwitchWorldsForPIEInstance(int32 WorldPIEInstance);
+
+	/** Call to enable/disable callbacks for PIE world switching when PIE starts/stops */
+	void EnableWorldSwitchCallbacks(bool bEnable);
+
+	/** Callback when script execution starts, might switch world */
+	void OnScriptExecutionStart(const struct FBlueprintContextTracker& ContextTracker, const UObject* ContextObject, const UFunction* ContextFunction);
+
+	/** Callback when script execution starts, might switch world */
+	void OnScriptExecutionEnd(const struct FBlueprintContextTracker& ContextTracker);
 
 	/**
 	 * Gives focus to the server or first PIE client viewport
@@ -3030,11 +3092,14 @@ protected:
 	/** Above function but called a frame later, to stop PIE login from happening from a network callback */
 	virtual void OnLoginPIEComplete_Deferred(int32 LocalUserNum, bool bWasSuccessful, FString ErrorString, FPieLoginStruct DataStruct);
 
+	/** allow for game specific override to determine if login should be treated as successful for pass-through handling instead */
+	virtual bool IsLoginPIESuccessful(int32 LocalUserNum, bool bWasSuccessful, const FString& ErrorString, const FPieLoginStruct& DataStruct) { return bWasSuccessful; }
+
 	/** Called when all PIE instances have been successfully logged in */
 	virtual void OnAllPIEInstancesStarted();
 	
-	/** Transfers the current Editor Selection to their SIE counterparts. */
-	void TransferEditorSelectionToSIEInstances();
+	/** Backs up the current editor selection and then clears it. Optionally reselects the instances in the Play world. */
+	void TransferEditorSelectionToPlayInstances(const bool bInSelectInstances);
 	
 	/** Create a new GameInstance for PIE with the specified parameters. */
 	virtual UGameInstance* CreateInnerProcessPIEGameInstance(FRequestPlaySessionParams& InParams, const FGameInstancePIEParameters& InPIEParameters, int32 InPIEInstanceIndex);
@@ -3165,6 +3230,9 @@ public:
 	/** Return the delegate that is called when the preview feature level changes */
 	FPreviewFeatureLevelChanged& OnPreviewFeatureLevelChanged() { return PreviewFeatureLevelChanged; }
 
+	/** Return the delegate that is called when the preview platform changes */
+	FPreviewPlatformChanged& OnPreviewPlatformChanged() { return PreviewPlatformChanged; }
+
 protected:
 
 	/** Function pair used to save and restore the global feature level */
@@ -3189,15 +3257,6 @@ private:
 
 	/** Delegate handle for game viewport close requests in PIE sessions. */
 	FDelegateHandle ViewportCloseRequestedDelegateHandle;
-
-public:
-	// FGCObject Interface
-	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
-	virtual FString GetReferencerName() const override
-	{
-		return "EditorEngine";
-	}
-	// ~FGCObject Interface
 
 public:
 	/**

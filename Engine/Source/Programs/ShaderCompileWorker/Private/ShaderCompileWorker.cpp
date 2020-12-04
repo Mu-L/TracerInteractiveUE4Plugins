@@ -46,7 +46,7 @@ static void OnXGEJobCompleted(const TCHAR* WorkingDirectory)
 }
 
 #if USING_CODE_ANALYSIS
-	FUNCTION_NO_RETURN_START static inline void ExitWithoutCrash(ESCWErrorCode ErrorCode, const FString& Message) FUNCTION_NO_RETURN_END;
+	UE_NORETURN static inline void ExitWithoutCrash(ESCWErrorCode ErrorCode, const FString& Message);
 #endif
 
 static inline void ExitWithoutCrash(ESCWErrorCode ErrorCode, const FString& Message)
@@ -129,6 +129,12 @@ static void ProcessCompilationJob(const FShaderCompilerInput& Input,FShaderCompi
 	double TimeStart = FPlatformTime::Seconds();
 	Compiler->CompileShader(Input.ShaderFormat, Input, Output, WorkingDirectory);
 	Output.CompileTime = FPlatformTime::Seconds() - TimeStart;
+
+	if (Compiler->UsesHLSLcc(Input))
+	{
+		Output.bUsedHLSLccCompiler = true;
+	}
+
 	++GNumProcessedJobs;
 }
 
@@ -179,8 +185,6 @@ static int64 WriteOutputFileHeader(FArchive& OutputFile, int32 ErrorCode, int32 
 class FWorkLoop
 {
 public:
-	bool bIsBuildMachine = false;
-
 	// If we have been idle for 20 seconds then exit. Can be overriden from the cmd line with -TimeToLive=N where N is in seconds (and a float value)
 	float TimeToLive = 20.0f;
 
@@ -193,8 +197,6 @@ public:
 	,	OutputFilePath(FString(InWorkingDirectory) + InOutputFilename)
 	,	FormatVersionMap(InFormatVersionMap)
 	{
-		bIsBuildMachine = FParse::Param(FCommandLine::Get(), TEXT("buildmachine"));
-
 		TArray<FString> Tokens, Switches;
 		FCommandLine::Parse(FCommandLine::Get(), Tokens, Switches);
 		for (FString& Switch : Switches)
@@ -263,6 +265,12 @@ public:
 				// We only do one pass per process when using XGE.
 				break;
 			}
+
+			if (TimeToLive == 0 || AnyJobUsedHLSLccCompiler( SingleJobResults, PipelineJobResults ))
+			{
+				UE_LOG(LogShaders, Log, TEXT("TimeToLive set to 0, or used HLSLcc compiler, exiting after single job"));
+				break;
+			}
 		}
 
 		UE_LOG(LogShaders, Log, TEXT("Exiting job loop"));
@@ -320,7 +328,7 @@ private:
 			{
 				if (Pair.Value != *Found)
 				{
-					ExitWithoutCrash(ESCWErrorCode::BadShaderFormatVersion, FString::Printf(TEXT("Mismatched shader version for format %s; did you forget to build ShaderCompilerWorker?"), *Pair.Key, *Found, Pair.Value));
+					ExitWithoutCrash(ESCWErrorCode::BadShaderFormatVersion, FString::Printf(TEXT("Mismatched shader version for format %s: Found version %u but expected %u; did you forget to build ShaderCompilerWorker?"), *Pair.Key, *Found, Pair.Value));
 				}
 			}
 		}
@@ -681,6 +689,32 @@ private:
 		}
 #endif
 	}
+	
+	static bool AnyJobUsedHLSLccCompiler(TArray<FJobResult>& SingleJobResults, TArray<FPipelineJobResult>& PipelineJobResults)
+	{
+		for (int32 ResultIndex = 0; ResultIndex < SingleJobResults.Num(); ResultIndex++)
+		{
+			FJobResult& JobResult = SingleJobResults[ResultIndex];
+			if (JobResult.CompilerOutput.bUsedHLSLccCompiler)
+			{
+				return true;
+			}
+		}
+
+		for (int32 ResultIndex = 0; ResultIndex < PipelineJobResults.Num(); ResultIndex++)
+		{
+			FPipelineJobResult& PipelineJob = PipelineJobResults[ResultIndex];
+			for (int32 Index = 0; Index < PipelineJob.SingleJobs.Num(); ++Index)
+			{
+				FJobResult& JobResult = PipelineJob.SingleJobs[Index];
+				if (JobResult.CompilerOutput.bUsedHLSLccCompiler)
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
 };
 
 static void DirectCompile(const TArray<const class IShaderFormat*>& ShaderFormats)
@@ -838,7 +872,7 @@ static void DirectCompile(const TArray<const class IShaderFormat*>& ShaderFormat
  */
 static int32 GuardedMain(int32 argc, TCHAR* argv[], bool bDirectMode)
 {
-	FString ExtraCmdLine = TEXT("-NOPACKAGECACHE -ReduceThreadUsage -cpuprofilertrace");
+	FString ExtraCmdLine = TEXT("-NOPACKAGECACHE -ReduceThreadUsage -cpuprofilertrace -nocrashreports");
 
 	// When executing tasks remotely through XGE, enumerating files requires tcp/ip round-trips with
 	// the initiator, which can slow down engine initialization quite drastically.
@@ -998,9 +1032,9 @@ static int32 GuardedMainWrapper(int32 ArgC, TCHAR* ArgV[], const TCHAR* CrashOut
 			ReturnCode = GuardedMain(ArgC, ArgV, bDirectMode);
 			GIsGuarded = 0;
 		}
-		__except( ReportCrash( GetExceptionInformation() ) )
+		__except(EXCEPTION_EXECUTE_HANDLER)
 		{
-			FArchive& OutputFile = *IFileManager::Get().CreateFileWriter(CrashOutputFile,FILEWRITE_NoFail);
+			FArchive& OutputFile = *IFileManager::Get().CreateFileWriter(CrashOutputFile, FILEWRITE_EvenIfReadOnly);
 
 			if (GFailedErrorCode == ESCWErrorCode::Success)
 			{

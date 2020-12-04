@@ -12,13 +12,18 @@
 
 #include "HairStrandsVisibilityCommon.ush"
 
+#define USE_HAIR_COMPLEX_TRANSMITTANCE 1
+
 #if MANUAL_VERTEX_FETCH
 	Buffer<float4> VertexFetch_InstanceOriginBuffer;
 	Buffer<float4> VertexFetch_InstanceTransformBuffer;
 #endif
 
+// Enable cluster culling by default as the output of the strands interpolation output culled data, 
+// and this allows to support other rendered (e.g., hit proxy, shadow rendering), for which it is not 
+// possible to provide custom defines
 #ifndef USE_CULLED_CLUSTER
-#define USE_CULLED_CLUSTER 0
+#define USE_CULLED_CLUSTER 1
 #endif
 
 #if USE_CULLED_CLUSTER == 1
@@ -129,6 +134,16 @@ FHairVertexAttributes GetHairStrandsAttributes(uint HairPrimitiveId, float2 Vert
 	Out.HairRoughness	= lerp(Material0.w, Material1.w, VertexUV.x);
 
 	return Out; 
+}
+
+float GetHairStrandsDepth(float2 InUV)
+{
+	return 0; // TODO: what should we do for the strands cards as we don't want to override the depth output, but we still want to share the same shader than the non cards one
+}
+
+float GetHairStrandsCoverage(uint HairPrimitiveId, float2 HairPrimitiveUV)
+{
+	return 1;
 }
 
 float2 GetHairStrandsUV(uint HairPrimitiveId, float2 HairPrimitiveUV)
@@ -274,7 +289,7 @@ FHairControlPoint GetVertexPosition(const FVertexInfo VertexInfo, bool bInvalidJ
 	// Create a degenerated quad the end of each strand to cut between each strands
 	// #hair_todo: This is not efficient for short strand like fur for instance. Need to revisit that at some point
 	const bool bIsInvalidQuad = (bInvalidJointVertex && Out.Type == HAIR_CONTROLPOINT_START && VertexInfo.IsTip == 1) || (bInvalidJointVertex && Out.Type == HAIR_CONTROLPOINT_END && VertexInfo.IsTip == 0) || VertexInfo.bForceInvalidQuad;
-	Out.Position = bIsInvalidQuad ? float3(1.#INF, 1.#INF, 1.#INF) : Out.Position;
+	Out.Position = bIsInvalidQuad ? float3(INFINITE_FLOAT, INFINITE_FLOAT, INFINITE_FLOAT) : Out.Position;
 
 	return Out;
 }
@@ -308,7 +323,7 @@ float3 GetVertexPreviousPosition(FVertexFactoryInput Input, bool bInvalidJointVe
 	// Create a degenerated quad the end of each strand to cut between each strands
 	// #hair_todo: This is not efficient for short strand like fur for instance. Need to revisit that at some point
 	const bool bIsInvalidQuad = (bInvalidJointVertex && Out.Type == HAIR_CONTROLPOINT_START && VertexInfo.IsTip == 1) || (bInvalidJointVertex && Out.Type == HAIR_CONTROLPOINT_END && VertexInfo.IsTip == 0) || VertexInfo.bForceInvalidQuad;
-	Out.Position = bIsInvalidQuad ? float3(1.#INF, 1.#INF, 1.#INF) : Out.Position;
+	Out.Position = bIsInvalidQuad ? float3(INFINITE_FLOAT, INFINITE_FLOAT, INFINITE_FLOAT) : Out.Position;
 
 	return Out.Position;
 }
@@ -409,8 +424,8 @@ half3x3 CalcTangentToLocal(FVertexFactoryInput Input, inout float TangentSign)
 
 half3x3 CalcTangentToWorld(FVertexFactoryIntermediates Intermediates, half3x3 TangentToLocal)
 {
-	half3x3 TangentToWorld = CalcTangentToWorldNoScale(Intermediates, TangentToLocal);
-	return TangentToWorld;
+	half3x3 LocalTangentToWorld = CalcTangentToWorldNoScale(Intermediates, TangentToLocal);
+	return LocalTangentToWorld;
 }
 
 float3 GetTangent(FVertexFactoryInput Input)
@@ -467,7 +482,7 @@ float4 ComputeViewAlignedWorldPosition(FVertexFactoryInput Input, float3 WorldTa
 	const float MinStrandHairRadius = HairViewInfo.bIsOrthoView ? HairViewInfo.RadiusAtDepth1 : (DistanceToCamera * HairViewInfo.RadiusAtDepth1);
 	const float3 ViewDir = -HairViewInfo.ViewForward;
 	const float3 Right = normalize(cross(WorldTangent, ViewDir));
-	const float3 OutWorldPosition = WorldPosition.xyz + (VertexInfo.IsLeft ? -Right : Right) * max(WorldStrandRadius * VertexInfo.LodRadiusScale, MinStrandHairRadius);
+	const float3 OutWorldPosition = WorldPosition.xyz + (VertexInfo.IsLeft ? -Right : Right) * max(WorldStrandRadius, MinStrandHairRadius);
 	
 	return float4(OutWorldPosition, 1);
 }
@@ -488,7 +503,7 @@ float4 VertexFactoryGetWorldPosition_Visibility(FVertexFactoryInput Input, FHair
 	const float MinStrandHairRadius = DistanceToCamera * HairViewInfo.RadiusAtDepth1;
 	const float3 ViewDir = -HairViewInfo.ViewForward;
 	const float3 Right = normalize(cross(WorldTangent, ViewDir));
-	const float3 OutWorldPosition = WorldPosition.xyz + (VertexInfo.IsLeft ? -Right : Right) * max(ControlPoint.WorldRadius * VertexInfo.LodRadiusScale, MinStrandHairRadius);
+	const float3 OutWorldPosition = WorldPosition.xyz + (VertexInfo.IsLeft ? -Right : Right) * max(ControlPoint.WorldRadius, MinStrandHairRadius);
 
 	return float4(OutWorldPosition, 1);
 }
@@ -509,7 +524,7 @@ float4 VertexFactoryGetWorldPosition_Voxelization(FVertexFactoryInput Input, FHa
 	// Minimal radius to snap the strand to a sample/pixel center (to avoid aliasing)
 	const float3 ViewDir = -HairViewInfo.ViewForward;
 	const float3 Right = normalize(cross(WorldTangent, ViewDir));
-	const float3 OutWorldPosition = WorldPosition.xyz + (VertexInfo.IsLeft ? -Right : Right) * max(ControlPoint.WorldRadius * VertexInfo.LodRadiusScale, HairViewInfo.RadiusAtDepth1);
+	const float3 OutWorldPosition = WorldPosition.xyz + (VertexInfo.IsLeft ? -Right : Right) * max(ControlPoint.WorldRadius, HairViewInfo.RadiusAtDepth1);
 
 	return float4(OutWorldPosition, 1);
 }

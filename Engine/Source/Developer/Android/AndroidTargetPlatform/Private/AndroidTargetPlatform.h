@@ -22,6 +22,7 @@
 #include "AndroidTargetDevice.h"
 
 #if WITH_ENGINE
+#include "Engine/TextureCube.h"
 #include "Internationalization/Text.h"
 #include "StaticMeshResources.h"
 #endif // WITH_ENGINE
@@ -64,6 +65,7 @@ namespace AndroidTexFormat
 	static FName NameG8(TEXT("G8"));
 	static FName NameVU8(TEXT("VU8"));
 	static FName NameRGBA16F(TEXT("RGBA16F"));
+	static FName NameR16F(TEXT("R16F"));
 
 	// Error "formats" (uncompressed)
 	static FName NamePOTERROR(TEXT("POTERROR"));
@@ -198,6 +200,8 @@ public:
 
 	virtual void GetTextureFormats( const UTexture* InTexture, TArray< TArray<FName> >& OutFormats) const override;
 
+	virtual FName FinalizeVirtualTextureLayerFormat(FName Format) const override;
+
 	virtual void GetAllTextureFormats(TArray<FName>& OutFormats) const override;
 
 	virtual const UTextureLODSettings& GetTextureLODSettings() const override;
@@ -268,9 +272,9 @@ protected:
 
 	// query for rene3ring mode support
 	bool SupportsES31() const;
-	bool SupportsAEP() const;
 	bool SupportsVulkan() const;
 	bool SupportsSoftwareOcclusion() const;
+	bool SupportsLandscapeMeshLODStreaming() const;
 	bool SupportsVulkanSM5() const;
 
 #if WITH_ENGINE
@@ -448,6 +452,21 @@ public:
 						// we found a remapping
 						TextureFormatName = FormatRemap[RemapIndex][1];
 						break;
+					}
+				}
+			}
+
+
+			if (Texture->IsA(UTextureCube::StaticClass()))
+			{
+				const UTextureCube* Cube = CastChecked<UTextureCube>(Texture);
+				if (Cube != nullptr)
+				{
+					FTextureFormatSettings FormatSettings;
+					Cube->GetDefaultFormatSettings(FormatSettings);
+					if (FormatSettings.CompressionSettings == TC_ReflectionCapture && !FormatSettings.CompressionNone)
+					{
+						TextureFormatName = FName(TEXT("ETC2_RGBA"));
 					}
 				}
 			}

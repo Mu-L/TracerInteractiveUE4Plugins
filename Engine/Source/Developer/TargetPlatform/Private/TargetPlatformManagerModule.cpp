@@ -21,20 +21,14 @@
 #include "PlatformInfo.h"
 #include "DesktopPlatformModule.h"
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 #include "IPhysXCooking.h"
 #include "IPhysXCookingModule.h"
-#endif // WITH_PHYSX
+#endif // PHYSICS_INTERFACE_PHYSX
 
 DEFINE_LOG_CATEGORY_STATIC(LogTargetPlatformManager, Log, All);
 
-
-// autosdks only function properly on windows right now.
-#if !IS_MONOLITHIC && (PLATFORM_WINDOWS)
-	#define AUTOSDKS_ENABLED 1
-#else
-	#define AUTOSDKS_ENABLED 0
-#endif
+#define AUTOSDKS_ENABLED (WITH_UNREAL_DEVELOPER_TOOLS || !IS_MONOLITHIC) && PLATFORM_WINDOWS
 
 static const size_t MaxPlatformCount = 64;		// In the unlikely event that someone bumps this please note that there's
 												// an implicit assumption that there won't be more than 64 unique target
@@ -105,10 +99,7 @@ public:
 			// before we get a change to setup for a given platform.  Use the platforminfo list to avoid any kind of interdependency.
 			for (const PlatformInfo::FPlatformInfo& PlatformInfo : PlatformInfo::GetPlatformInfoArray())
 			{
-				if (PlatformInfo.AutoSDKPath.Len() > 0)
-				{
-					SetupAndValidateAutoSDK(PlatformInfo.AutoSDKPath);
-				}
+				SetupAndValidateAutoSDK(PlatformInfo.AutoSDKPath);
 			}
 		}
 #endif
@@ -155,6 +146,12 @@ public:
 		}
 
 		bForceCacheUpdate = false;
+		OnTargetPlatformsInvalidated.Broadcast();
+	}
+
+	virtual FOnTargetPlatformsInvalidated& GetOnTargetPlatformsInvalidatedDelegate() override
+	{
+		return OnTargetPlatformsInvalidated;
 	}
 
 	virtual const TArray<ITargetPlatform*>& GetTargetPlatforms() override
@@ -565,7 +562,7 @@ public:
 		static bool bInitialized = false;
 		static TArray<const IPhysXCooking*> Results;
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 		if (!bInitialized || bForceCacheUpdate)
 		{
 			bInitialized = true;
@@ -592,14 +589,14 @@ public:
 				}
 			}
 		}
-#endif // WITH_PHYSX
+#endif // PHYSICS_INTERFACE_PHYSX
 
 		return Results;
 	}
 
 	virtual const IPhysXCooking* FindPhysXCooking(FName Name) override
 	{
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX 
 		const TArray<const IPhysXCooking*>& PhysXCooking = GetPhysXCooking();
 
 		for (int32 Index = 0; Index < PhysXCooking.Num(); Index++)
@@ -616,7 +613,7 @@ public:
 				}
 			}
 		}
-#endif // WITH_PHYSX
+#endif // PHYSICS_INTERFACE_PHYSX
 
 		return nullptr;
 	}
@@ -630,16 +627,9 @@ protected:
 	 */
 	bool IsAutoSDKsEnabled()
 	{
-		static const FString SDKRootEnvFar(TEXT("UE_SDKS_ROOT"));
-
-		FString SDKPath = FPlatformMisc::GetEnvironmentVariable(*SDKRootEnvFar);
-
 		// AutoSDKs only enabled if UE_SDKS_ROOT is set.
-		if (SDKPath.Len() != 0)
-		{
-			return true;
-		}
-		return false;
+		static const TCHAR* SDKRootEnvVar = TEXT("UE_SDKS_ROOT");
+		return !FPlatformMisc::GetEnvironmentVariable(SDKRootEnvVar).IsEmpty();
 	}
 
 	/** Discovers the available target platforms. */
@@ -1132,6 +1122,9 @@ private:
 	}
 
 	FString InitErrorMessages;
+
+	// Delegate used to notify users of returned ITargetPlatform* pointers when those pointers are destructed due to a call to Invalidate
+	FOnTargetPlatformsInvalidated OnTargetPlatformsInvalidated;
 
 	// If true we should build formats that are actually required for use by the runtime. 
 	// This happens for an ordinary editor run and more specifically whenever there is no

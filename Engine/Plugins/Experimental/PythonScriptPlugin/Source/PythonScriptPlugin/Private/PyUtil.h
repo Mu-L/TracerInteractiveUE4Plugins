@@ -44,7 +44,7 @@ namespace PyUtil
 
 	/** Convert a TCHAR to a transient buffer that can be passed to a Python API that doesn't hold the result */
 #if PY_MAJOR_VERSION >= 3
-	#define TCHARToPyApiChar(InStr) InStr
+	#define TCHARToPyApiChar(InStr) TCHAR_TO_WCHAR(InStr)
 #else	// PY_MAJOR_VERSION >= 3
 	#define TCHARToPyApiChar(InStr) TCHAR_TO_UTF8(InStr)
 #endif	// PY_MAJOR_VERSION >= 3
@@ -362,6 +362,16 @@ namespace PyUtil
 	Py_ssize_t ResolveContainerIndexParam(const Py_ssize_t InIndex, const Py_ssize_t InLen);
 
 	/**
+	 * A NewObject wrapper for Python which catches some internal check conditions and raises them as Python exceptions instead.
+	 *
+	 * @param InObjClass The class type to create an instance of.
+	 * @param InOuter The outer object that should host the new instance.
+	 * @param InName The name that should be given to the new instance (will generate a unique name if None).
+	 * @param InBaseClass The base class type required for InObjClass (ignored if null).
+	 */
+	UObject* NewObject(UClass* InObjClass, UObject* InOuter, const FName InName, UClass* InBaseClass, const TCHAR* InErrorCtxt);
+
+	/**
 	 * Given a Python object, try and get the owner Unreal object for the instance.
 	 * For wrapped objects this is the wrapped instance, for wrapped structs it will attempt to walk through the owner chain to find a wrapped object.
 	 * @return The owner Unreal object, or null.
@@ -409,6 +419,11 @@ namespace PyUtil
 	 * @note This function can't handle dot separated names.
 	 */
 	bool IsModuleImported(const TCHAR* InModuleName, PyObject** OutPyModule = nullptr);
+
+	/**
+	 * Get the path to the Python interpreter executable of the Python SDK this plugin was compiled against.
+	 */
+	FString GetInterpreterExecutablePath(bool* OutIsEnginePython = nullptr);
 
 	/**
 	 * Ensure that the given path is on the sys.path list.

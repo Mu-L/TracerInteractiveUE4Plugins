@@ -8,12 +8,15 @@
 // The shader used to render the debug element on view
 
 #if PERMUTATION_INPUT_TYPE == 0 
-StructuredBuffer<PackedShaderDrawElement>	ShaderDrawDebugPrimitive;
+StructuredBuffer<FPackedShaderDrawElement>	ShaderDrawDebugPrimitive;
 #else
-StructuredBuffer<PackedShaderDrawElement>	LockedShaderDrawDebugPrimitive;
+StructuredBuffer<FPackedShaderDrawElement>	LockedShaderDrawDebugPrimitive;
 #endif
 
-float ColorScale;
+Texture2D<float> DepthTexture;
+int2 DepthTextureResolution;
+float2 DepthTextureInvResolution;
+SamplerState LinearSampler;
 
 #if GPU_DEBUG_RENDERING_VS 
 void ShaderDrawDebugVS(
@@ -23,11 +26,11 @@ void ShaderDrawDebugVS(
 	out float4 ColorAlpha : TEXCOORD0)
 {
 #if PERMUTATION_INPUT_TYPE == 0
-	PackedShaderDrawElement PackedLine = ShaderDrawDebugPrimitive[InstanceId];
+	FPackedShaderDrawElement PackedLine = ShaderDrawDebugPrimitive[InstanceId];
 #else
-	PackedShaderDrawElement PackedLine = LockedShaderDrawDebugPrimitive[InstanceId];
+	FPackedShaderDrawElement PackedLine = LockedShaderDrawDebugPrimitive[InstanceId];
 #endif
-	ShaderDrawElement Line = UnpackShaderElement(PackedLine);
+	FShaderDrawElement Line = UnpackShaderElement(PackedLine);
 
 	float4 VertexPosition = float4(VertexId == 0 ? Line.Pos0 : Line.Pos1, 1.0f);
 	float4 VertexColor = VertexId == 0 ? Line.Color0 : Line.Color1;
@@ -44,15 +47,21 @@ void ShaderDrawDebugPS(
 	out float4 OutSceneColor : SV_Target0)
 {
 	uint2 PixelCoord = Position.xy;
+
+	const float2 DepthUV = float2(PixelCoord) * DepthTextureInvResolution;
+	const float Depth = DepthTexture.SampleLevel(LinearSampler, DepthUV, 0);	
+	const bool bIsHidden = Position.z < Depth; // Reverse-Z
+
+	const float ColorScale = bIsHidden ? 0.4f : 1;
 	const float CheckerboardScale = ((PixelCoord.x%2) ^ (PixelCoord.y%2)) > 0 ? 1 : 0.0;
-	const float OcclusionScale = ColorScale < 0.5 ? CheckerboardScale : 1;
+	const float OcclusionScale = bIsHidden ? CheckerboardScale : 1;
 	OutSceneColor = OcclusionScale * ColorAlpha * float4(ColorAlpha.aaa * ColorScale, 1.0); // Pre multiplied alpha with color scale
 }
 #endif
 
 #if GPU_DEBUG_RENDERING_CLEAR_CS
 
-RWStructuredBuffer<PackedShaderDrawElement>	DataBuffer;
+RWStructuredBuffer<FPackedShaderDrawElement>	DataBuffer;
 RWBuffer<uint> IndirectBuffer;
 
 [numthreads(1, 1, 1)]
@@ -69,8 +78,8 @@ void ShaderDrawDebugClearCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 
 	#if PERMUTATION_BUFFER_TYPE == 0
 	uint NumElements;
-	StructuredBuffer<PackedShaderDrawElement>	InStructuredBuffer;
-	RWStructuredBuffer<PackedShaderDrawElement>	OutStructuredBuffer;
+	StructuredBuffer<FPackedShaderDrawElement>	InStructuredBuffer;
+	RWStructuredBuffer<FPackedShaderDrawElement>	OutStructuredBuffer;
 	[numthreads(1024, 1, 1)]
 	void ShaderDrawDebugCopyCS(uint3 DispatchThreadId : SV_DispatchThreadID)
 	{

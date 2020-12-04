@@ -8,6 +8,9 @@
 class FRHICommandListImmediate;
 class FRHITexture2D;
 class FRHIUnorderedAccessView;
+class FRDGBuilder;
+class FRDGTexture;
+class FRDGTextureUAV;
 class FScene;
 class URuntimeVirtualTextureComponent;
 

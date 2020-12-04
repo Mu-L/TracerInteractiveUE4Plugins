@@ -87,6 +87,15 @@ struct TFrame3
 		Rotation = TQuaternion<RealType>(Transform.GetRotation());
 	}
 
+	/** Construct a Frame from an FPlane */
+	explicit TFrame3(const FPlane& Plane)
+	{
+		FVector Normal(Plane.X, Plane.Y, Plane.Z);
+		Origin = (RealType)Plane.W * FVector3<RealType>(Normal);
+		Rotation.SetFromTo(FVector3<RealType>::UnitZ(), Normal);
+	}
+
+
 	/** Construct a Frame from an FVector and FQuat */
 	explicit TFrame3(const FVector& OriginIn, const FQuat& RotationIn)
 	{
@@ -123,6 +132,14 @@ struct TFrame3
 		}
 	}
 
+	/**
+	 * @return X/Y/Z axes of frame. This is more efficient than calculating each axis separately.
+	 */
+	void GetAxes(FVector3<RealType>& X, FVector3<RealType>& Y, FVector3<RealType>& Z) const
+	{
+		Rotation.GetAxes(X, Y, Z);
+	}
+
 	/** @return X axis of frame (axis 0) */
 	FVector3<RealType> X() const
 	{
@@ -145,6 +162,12 @@ struct TFrame3
 	FTransform ToFTransform() const
 	{
 		return FTransform((FQuat)Rotation, (FVector)Origin);
+	}
+
+	/** @return conversion of this Frame to FPlane */
+	FPlane ToFPlane() const
+	{
+		return FPlane((FVector)Origin, (FVector)Z());
 	}
 
 	/** @return conversion of this Frame to TTransform */
@@ -209,7 +232,7 @@ struct TFrame3
 	/** @return input Ray transformed from local coordinate system of Frame into "World" coordinate system */
 	TRay3<RealType> FromFrame(const TRay3<RealType>& Ray) const
 	{
-		return TRay3<RealType>(ToFramePoint(Ray.Origin), ToFrameVector(Ray.Direction));
+		return TRay3<RealType>(FromFramePoint(Ray.Origin), FromFrameVector(Ray.Direction));
 	}
 
 
@@ -221,7 +244,7 @@ struct TFrame3
 	/** @return input Frame transformed from local coordinate system of this Frame into "World" coordinate system */
 	TFrame3<RealType> FromFrame(const TFrame3<RealType>& Frame) const
 	{
-		return TFrame3<RealType>(ToFramePoint(Frame.Origin), FromFrame(Frame.Rotation));
+		return TFrame3<RealType>(FromFramePoint(Frame.Origin), FromFrame(Frame.Rotation));
 	}
 
 
@@ -398,13 +421,13 @@ struct TFrame3
 		RealType NormalDot = RayDirection.Dot(Normal);
 		if (VectorUtil::EpsilonEqual(NormalDot, (RealType)0, TMathUtil<RealType>::ZeroTolerance))
 		{
-			HitPointOut = FVector3<RealType>::Max();
+			HitPointOut = FVector3<RealType>::MaxVector();
 			return false;
 		}
 		RealType t = -( RayOrigin.Dot(Normal) + PlaneD) / NormalDot;
 		if (t < 0)
 		{
-			HitPointOut = FVector3<RealType>::Max();
+			HitPointOut = FVector3<RealType>::MaxVector();
 			return false;
 		}
 		HitPointOut = RayOrigin + t * RayDirection;

@@ -14,7 +14,8 @@ class UTemplateSequenceSection;
 struct FMovieSceneEvaluationTrack;
 
 UCLASS(MinimalAPI)
-class UTemplateSequenceTrack : public UMovieSceneSubTrack
+class UTemplateSequenceTrack
+	: public UMovieSceneSubTrack
 {
 public:
 	GENERATED_BODY()
@@ -26,7 +27,6 @@ public:
 	// UMovieSceneTrack interface
 	virtual bool SupportsType(TSubclassOf<UMovieSceneSection> SectionClass) const override;
 	virtual UMovieSceneSection* CreateNewSection() override;
-	virtual void PostCompile(FMovieSceneEvaluationTrack& OutTrack, const FMovieSceneTrackCompilerArgs& Args) const override;
 
 #if WITH_EDITORONLY_DATA
 	virtual FText GetDisplayName() const override;

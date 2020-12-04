@@ -33,7 +33,7 @@ public class Persona : ModuleRules
                 "MeshReductionInterface",
                 "SequenceRecorder",
                 "AnimationBlueprintEditor",
-            }
+			}
         );
 
         PrivateDependencyModuleNames.AddRange(
@@ -44,6 +44,7 @@ public class Persona : ModuleRules
 				"ApplicationCore",
                 "Slate", 
                 "SlateCore",
+				"ContentBrowserData",
                 "EditorStyle",
                 "Engine", 
                 "UnrealEd", 
@@ -67,11 +68,12 @@ public class Persona : ModuleRules
                 "PinnedCommandList",
                 "RenderCore",
 				"SkeletalMeshUtilitiesCommon",
+				"ToolMenus",
                 "CurveEditor",
 				"SequencerWidgets",
 				"TimeManagement",
                 "Sequencer",
-            }
+			}
         );
 
         DynamicallyLoadedModuleNames.AddRange(
@@ -85,7 +87,7 @@ public class Persona : ModuleRules
                 "AnimationEditor",
                 "MeshReductionInterface",
                 "SequenceRecorder",
-            }
+			}
         );
     }
 }

@@ -2,24 +2,20 @@
 #pragma once
 
 #include "Chaos/Core.h"
+#include "Chaos/ArrayCollectionArray.h"
+#include "Chaos/Evolution/SimulationSpace.h"
 #include "Chaos/ParticleHandleFwd.h"
 
 
 namespace Chaos
 {
-	class FNarrowPhase;
-	class FParticlePairBroadPhase;
+	class FParticlePairCollisionDetector;
+	class FPBDCollisionConstraints;
 	class FSimpleConstraintRule;
-	class FSyncCollisionReceiver;
-
-	template <typename T, int d>
-	class TPBDCollisionConstraints;
-
-	template<typename T_BROADPHASE, typename T_NARROWPHASE, typename T_RECEIVER, typename T_CONTAINER>
-	class TCollisionDetector;
 
 	template <typename T, int d>
 	class TPBDRigidsSOAs;
+
 
 	/**
 	 * A minimal optimized evolution with support for
@@ -34,16 +30,15 @@ namespace Chaos
 	public:
 		// @todo(ccaulfield): make it so that CollisionDetection is plugged in with a constraint rule...
 
-		using FCollisionConstraints = TPBDCollisionConstraints<FReal, 3>;
-		using FCollisionDetector = TCollisionDetector<FParticlePairBroadPhase, FNarrowPhase, FSyncCollisionReceiver, FCollisionConstraints>;
+		using FCollisionDetector = FParticlePairCollisionDetector;
 		using FEvolutionCallback = TFunction<void()>;
 		using FRigidParticleSOAs = TPBDRigidsSOAs<FReal, 3>;
 
-		FPBDMinEvolution(FRigidParticleSOAs& InParticles, FCollisionDetector& InCollisionDetector, const FReal InBoundsExtension);
+		FPBDMinEvolution(FRigidParticleSOAs& InParticles, TArrayCollectionArray<FVec3>& InPrevX, TArrayCollectionArray<FRotation3>& InPrevR, FCollisionDetector& InCollisionDetector, const FReal InBoundsExtension);
 
 		void AddConstraintRule(FSimpleConstraintRule* Rule);
 
-		void Advance(const FReal StepDt, const int32 NumSteps);
+		void Advance(const FReal StepDt, const int32 NumSteps, const FReal RewindDt);
 		void AdvanceOneTimeStep(const FReal Dt, const FReal StepFraction);
 
 		void SetNumIterations(const int32 NumIts)
@@ -86,12 +81,38 @@ namespace Chaos
 			PostApplyPushOutCallback = Cb;
 		}
 
+		void SetSimulationSpace(const FSimulationSpace& InSimulationSpace)
+		{
+			SimulationSpace = InSimulationSpace;
+		}
+
+		FSimulationSpaceSettings& GetSimulationSpaceSettings()
+		{
+			return SimulationSpaceSettings;
+		}
+
+		const FSimulationSpaceSettings& GetSimulationSpaceSettings() const
+		{
+			return SimulationSpaceSettings;
+		}
+
+		void SetSimulationSpaceSettings(const FSimulationSpaceSettings& InSimulationSpaceSettings)
+		{
+			SimulationSpaceSettings = InSimulationSpaceSettings;
+		}
+
 	private:
+		void PrepareTick();
+		void UnprepareTick();
+		void Rewind(FReal Dt, FReal RewindDt);
 		void Integrate(FReal Dt);
+		void IntegrateImpl(FReal Dt);
+		void IntegrateImpl2(FReal Dt);
+		void IntegrateImplISPC(FReal Dt);
 		void ApplyKinematicTargets(FReal Dt, FReal StepFraction);
 		void DetectCollisions(FReal Dt);
-		void PrepareConstraints(FReal Dt);
-		void UnprepareConstraints(FReal Dt);
+		void PrepareIteration(FReal Dt);
+		void UnprepareIteration(FReal Dt);
 		void ApplyConstraints(FReal Dt);
 		void UpdateVelocities(FReal Dt);
 		void ApplyPushOutConstraints(FReal Dt);
@@ -100,6 +121,9 @@ namespace Chaos
 		FRigidParticleSOAs& Particles;
 		FCollisionDetector& CollisionDetector;
 
+		TArrayCollectionArray<FVec3>& ParticlePrevXs;
+		TArrayCollectionArray<FRotation3>& ParticlePrevRs;
+
 		TArray<FSimpleConstraintRule*> ConstraintRules;
 		TArray<FSimpleConstraintRule*> PrioritizedConstraintRules;
 
@@ -107,6 +131,8 @@ namespace Chaos
 		int32 NumApplyPushOutIterations;
 		FReal BoundsExtension;
 		FVec3 Gravity;
+		FSimulationSpaceSettings SimulationSpaceSettings;
+		FSimulationSpace SimulationSpace;
 
 		FEvolutionCallback PostIntegrateCallback;
 		FEvolutionCallback PostDetectCollisionsCallback;

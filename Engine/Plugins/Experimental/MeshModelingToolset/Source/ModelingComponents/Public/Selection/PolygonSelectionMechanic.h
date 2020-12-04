@@ -3,6 +3,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Drawing/PreviewGeometryActor.h"
+#include "Drawing/TriangleSetComponent.h"
 #include "InteractiveTool.h"
 #include "SimpleDynamicMeshComponent.h"
 #include "Selection/GroupTopologySelector.h"
@@ -27,6 +29,22 @@ public:
 
 	UPROPERTY(EditAnywhere, Category = SelectionFilter)
 	bool bSelectVertices = true;
+
+	// The following were originally in their own category, all marked as AdvancedDisplay. However, since there wasn't a non-AdvancedDisplay
+	// property in the category, they started out as expanded and could not be collapsed.
+	// The alternative approach, used below, is to have them in a nested category, which starts out as collapsed. This works nicely.
+
+	/** Prefer to select an edge projected to a point rather than the point, or a face projected to an edge rather than the edge. */
+	UPROPERTY(EditAnywhere, Category = "SelectionFilter|Ortho Viewport Behavior")
+	bool bPreferProjectedElement = true;
+
+	/** If the closest element is valid, select other elements behind it that are aligned with it. */
+	UPROPERTY(EditAnywhere, Category = "SelectionFilter|Ortho Viewport Behavior")
+	bool bSelectDownRay = true;
+
+	/** Do not check whether the closest element is occluded from the current view. */
+	UPROPERTY(EditAnywhere, Category = "SelectionFilter|Ortho Viewport Behavior")
+	bool bIgnoreOcclusion = false;
 };
 
 
@@ -41,17 +59,44 @@ class MODELINGCOMPONENTS_API UPolygonSelectionMechanic : public UInteractionMech
 	GENERATED_BODY()
 public:
 
+	virtual ~UPolygonSelectionMechanic();
+
 	// configuration variables that must be set before bSetup is called
 	bool bAddSelectionFilterPropertiesToParentTool = true;
 
 	virtual void Setup(UInteractiveTool* ParentTool) override;
+	virtual void Shutdown() override;
+
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
 
-
-	void Initialize(const USimpleDynamicMeshComponent* MeshComponent, const FGroupTopology* Topology,
+	/**
+	 * Initializes the mechanic.
+	 *
+	 * @param Mesh Mesh that we are operating on.
+	 * @param TargetTransform Transform of the mesh.
+	 * @param World World in which we are operating, used to add drawing components that draw highlighted edges.
+	 * @param Topology Group topology of the mesh.
+	 * @param GetSpatialSourceFunc Function that returns an AABB tree for the mesh.
+	 * @param GetAddToSelectionModifierStateFunc Functions that returns whether new selection should be trying to append to an existing 
+	     selection, usually by checking whether a particular modifier key is currently pressed.
+	 */
+	void Initialize(const FDynamicMesh3* Mesh,
+		FTransform TargetTransform,
+		UWorld* World,
+		const FGroupTopology* Topology,
 		TFunction<FDynamicMeshAABBTree3*()> GetSpatialSourceFunc,
 		TFunction<bool(void)> GetAddToSelectionModifierStateFunc = []() {return false; }
 		);
+
+	void Initialize(USimpleDynamicMeshComponent* MeshComponent, const FGroupTopology* Topology,
+		TFunction<FDynamicMeshAABBTree3 * ()> GetSpatialSourceFunc,
+		TFunction<bool(void)> GetAddToSelectionModifierStateFunc = []() {return false; }
+	);
+
+	void SetShouldSelectEdgeLoopsFunc(TFunction<bool(void)> Func)
+	{
+		ShouldSelectEdgeLoopsFunc = Func;
+	}
 
 	/**
 	 * Notify internal data structures that the associated MeshComponent has been modified.
@@ -59,8 +104,18 @@ public:
 	 */
 	void NotifyMeshChanged(bool bTopologyModified);
 
-	bool TopologyHitTest(const FRay& WorldRay, FHitResult& OutHit, FGroupTopologySelection& OutSelection);
-	bool TopologyHitTest(const FRay& WorldRay, FHitResult& OutHit);
+	/**
+	 * Perform a hit test on the topology using the current selection settings. In cases of hitting edges and
+	 * corners, OutHit contains the following:
+	 *   OutHit.FaceIndex: edge or corner id in the topology
+	 *   OutHit.ImpactPoint: closest point on the ray to the hit element (Note: not a point on the element!)
+	 *   OutHit.Distance: distance along the ray to ImpactPoint
+	 *   OutHit.Item: if hit item was an edge, index of the segment within the edge polyline. Otherwise undefined.
+	 *
+	 * @param bUseOrthoSettings If true, the ortho-relevant settings for selection are used (selecting down the view ray, etc)
+	 */
+	bool TopologyHitTest(const FRay& WorldRay, FHitResult& OutHit, FGroupTopologySelection& OutSelection, bool bUseOrthoSettings = false);
+	bool TopologyHitTest(const FRay& WorldRay, FHitResult& OutHit, bool bUseOrthoSettings = false);
 
 	//
 	// Hover API
@@ -143,21 +198,41 @@ public:
 	UPolygonSelectionMechanicProperties* Properties;
 
 protected:
-	const USimpleDynamicMeshComponent* MeshComponent;
+	const FDynamicMesh3* Mesh;
 	const FGroupTopology* Topology;
 	TFunction<FDynamicMeshAABBTree3*()> GetSpatialFunc;
 
 	TFunction<bool(void)> GetAddToSelectionModifierStateFunc;
+	TFunction<bool(void)> ShouldSelectEdgeLoopsFunc = []() {return false; };
 
 	FTransform3d TargetTransform;
 
 	FGroupTopologySelector TopoSelector;
-	void UpdateTopoSelector();
+
+	/**
+	 * Get the topology selector settings to use given the current selection settings.
+	 * 
+	 * @param bUseOrthoSettings If true, the topology selector will be configured to use ortho settings,
+	 *  which are generally different to allow for selection of projected elements, etc.
+	 */
+	FGroupTopologySelector::FSelectionSettings GetTopoSelectorSettings(bool bUseOrthoSettings = false);
 
 	FGroupTopologySelection HilightSelection;
 	FGroupTopologySelection PersistentSelection;
 	int32 SelectionTimestamp = 0;
 	TUniquePtr<FPolygonSelectionMechanicSelectionChange> ActiveChange;
+
+	/** The actor we create internally to own the DrawnTriangleSetComponent */
+	UPROPERTY()
+	APreviewGeometryActor* PreviewGeometryActor;
+
+	UPROPERTY()
+	UTriangleSetComponent* DrawnTriangleSetComponent;
+
+	TSet<int> CurrentlyHighlightedGroups;
+
+	UPROPERTY()
+	UMaterialInterface* HighlightedFaceMaterial;
 
 	FViewCameraState CameraState;
 public:

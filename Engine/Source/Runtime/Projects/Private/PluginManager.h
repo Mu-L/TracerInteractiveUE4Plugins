@@ -39,10 +39,15 @@ public:
 	 */
 	virtual ~FPlugin();
 
-	/* IPluginInfo interface */
+	/* IPlugin interface */
 	virtual const FString& GetName() const override
 	{
 		return Name;
+	}
+
+	virtual const FString& GetFriendlyName() const override
+	{
+		return GetDescriptor().FriendlyName.IsEmpty() ? GetName() : GetDescriptor().FriendlyName;
 	}
 
 	virtual const FString& GetDescriptorFileName() const override
@@ -98,8 +103,10 @@ public:
 	virtual void RefreshPluginsList() override;
 	virtual bool AddToPluginsList( const FString& PluginFilename ) override;
 	virtual bool LoadModulesForEnabledPlugins( const ELoadingPhase::Type LoadingPhase ) override;
+	virtual FLoadingModulesForPhaseEvent& OnLoadingPhaseComplete() override;
 	virtual void GetLocalizationPathsForEnabledPlugins( TArray<FString>& OutLocResPaths ) override;
 	virtual void SetRegisterMountPointDelegate( const FRegisterMountPointDelegate& Delegate ) override;
+	virtual void SetUpdatePackageLocalizationCacheDelegate( const FUpdatePackageLocalizationCacheDelegate& Delegate ) override;
 	virtual bool AreRequiredPluginsAvailable() override;
 #if !IS_MONOLITHIC
 	virtual bool CheckModuleCompatibility(TArray<FString>& OutIncompatibleModules, TArray<FString>& OutIncompatibleEngineModules) override;
@@ -109,7 +116,8 @@ public:
 	virtual TArray<TSharedRef<IPlugin>> GetEnabledPluginsWithContent() const override;
 	virtual TArray<TSharedRef<IPlugin>> GetDiscoveredPlugins() override;
 	virtual TArray< FPluginStatus > QueryStatusForAllPlugins() const override;
-	virtual void AddPluginSearchPath(const FString& ExtraDiscoveryPath, bool bRefresh = true) override;
+	virtual bool AddPluginSearchPath(const FString& ExtraDiscoveryPath, bool bRefresh = true) override;
+	const TSet<FString>& GetAdditionalPluginSearchPaths() const override;
 	virtual TArray<TSharedRef<IPlugin>> GetPluginsWithPakFile() const override;
 	virtual FNewPluginMountedEvent& OnNewPluginCreated() override;
 	virtual FNewPluginMountedEvent& OnNewPluginMounted() override;
@@ -169,6 +177,9 @@ private:
 	/** Prompts the user to disable a plugin */
 	static bool PromptToLoadIncompatiblePlugin(const FPlugin& Plugin);
 
+	/** Attempt to load all the modules for the given plugin */
+	bool TryLoadModulesForPlugin(const FPlugin& Plugin, const ELoadingPhase::Type LoadingPhase) const;
+
 	/** Gets the instance of a given plugin */
 	TSharedPtr<FPlugin> FindPluginInstance(const FString& Name);
 
@@ -179,17 +190,24 @@ private:
 	/** All of the plugins that we know about */
 	TMap< FString, TSharedRef< FPlugin > > AllPlugins;
 
+	/** Plugins that need to be configured to see if they should be enabled */
+	TSet<FString> PluginsToConfigure;
+
 	TArray<TSharedRef<IPlugin>> PluginsWithPakFile;
 
 	/** Delegate for mounting content paths.  Bound by FPackageName code in CoreUObject, so that we can access
 	    content path mounting functionality from Core. */
 	FRegisterMountPointDelegate RegisterMountPointDelegate;
 
-	/** Set when all the appropriate plugins have been marked as enabled */
-	bool bHaveConfiguredEnabledPlugins;
+	/** Delegate for updating the package localization cache.  Bound by FPackageLocalizationManager code in 
+		CoreUObject, so that we can access localization cache functionality from Core. */
+	FUpdatePackageLocalizationCacheDelegate UpdatePackageLocalizationCacheDelegate;
 
 	/** Set if all the required plugins are available */
-	bool bHaveAllRequiredPlugins;
+	bool bHaveAllRequiredPlugins = false;
+
+	/** Set if we were asked to load all plugins via the command line */
+	bool bAllPluginsEnabledViaCommandLine = false;
 
 	/** List of additional directory paths to search for plugins within */
 	TSet<FString> PluginDiscoveryPaths;
@@ -197,6 +215,9 @@ private:
 	/** Callback for notifications that a new plugin was mounted */
 	FNewPluginMountedEvent NewPluginCreatedEvent;
 	FNewPluginMountedEvent NewPluginMountedEvent;
+
+	/** Callback for notifications that a loading phase was completed */
+	FLoadingModulesForPhaseEvent LoadingPhaseCompleteEvent;
 };
 PRAGMA_ENABLE_DEPRECATION_WARNINGS
 

@@ -51,6 +51,11 @@ public:
 	virtual void AddToSelection(UMaterialExpression* Expression) {};
 
 	/**
+	 * Jumps to the node for this expression, if possible
+	 */
+	virtual void JumpToExpression(UMaterialExpression* Expression) {};
+
+	/**
 	 * Disconnects and removes the selected material graph nodes.
 	 */
 	virtual void DeleteSelectedNodes() {};
@@ -125,6 +130,9 @@ public:
 
 	/** call this to notify the editor that the edited material changed from outside */
 	virtual void NotifyExternalMaterialChange() {}
+
+	/** Fills inheritance drop down menu */
+	virtual void GenerateInheritanceMenu(class UToolMenu* Menu) {};
 
 private:
 	FMaterialEditorClosedEvent MaterialEditorClosedEvent;

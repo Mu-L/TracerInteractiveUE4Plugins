@@ -4,7 +4,6 @@
 	DestructibleComponent.cpp: UDestructibleComponent methods.
 =============================================================================*/
 
-
 #include "DestructibleComponent.h"
 #include "EngineStats.h"
 #include "GameFramework/DamageType.h"
@@ -26,13 +25,15 @@
 #include "Physics/PhysicsInterfaceUtils.h"
 #include "UObject/UObjectThreadContext.h"
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 #include "Physics/PhysicsGeometry.h"
 #endif
 
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
+
 UDestructibleComponent::UDestructibleComponent(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	, PhysxUserData(this)
 #endif
 {
@@ -1449,7 +1450,7 @@ bool UDestructibleComponent::IsAnySimulatingPhysics() const
 	return !!BodyInstance.bSimulatePhysics;
 }
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 
 bool UDestructibleComponent::IsChunkLarge(PxRigidActor* ChunkActor) const
 {
@@ -1534,7 +1535,7 @@ void UDestructibleComponent::SetCollisionProfileName(FName InCollisionProfileNam
 }
 
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 
 void UDestructibleComponent::SetCollisionResponseForActor(PxRigidDynamic* Actor, int32 ChunkIdx, const FCollisionResponseContainer* ResponseOverride /*= NULL*/)
 {
@@ -1679,3 +1680,4 @@ void UDestructibleComponent::SetMaterial(int32 ElementIndex, UMaterialInterface*
 #endif
 }
 
+PRAGMA_ENABLE_DEPRECATION_WARNINGS

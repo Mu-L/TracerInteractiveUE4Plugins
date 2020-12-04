@@ -15,6 +15,7 @@
 #include "NiagaraEmitterInstanceBatcher.h"
 
 #include <memory>
+#include "GeometryCollection/GeometryCollectionComponent.h"
 
 #define LOCTEXT_NAMESPACE "ChaosNiagaraDestructionDataInterface"
 //#pragma optimize("", off)
@@ -187,6 +188,8 @@ void UNiagaraDataInterfaceChaosDestruction::BeginDestroy()
 			EventManager->UnregisterHandler(Chaos::EEventType::Trailing, this);
 		}
 	}
+
+	Solvers.Reset();
 #endif
 }
 
@@ -359,11 +362,20 @@ bool UNiagaraDataInterfaceChaosDestruction::Equals(const UNiagaraDataInterface* 
 		return false;
 	}
 
+
+	TArray<AChaosSolverActor*> SolverActors = ChaosSolverActorSet.Array();
+	TArray<AChaosSolverActor*> OtherSolverActors = OtherChaosDestruction->ChaosSolverActorSet.Array();
+
 	bool bResult = true;
-	for (int32 Idx = 0; Idx < ChaosSolverActorSet.Num(); ++Idx)
+	for (int32 Idx = 0; Idx < SolverActors.Num(); ++Idx)
 	{
-		bResult = bResult &&
-			OtherChaosDestruction->ChaosSolverActorSet.Array()[Idx]->GetName().Equals(ChaosSolverActorSet.Array()[Idx]->GetName());
+		AChaosSolverActor* ThisActor = SolverActors[Idx];
+		AChaosSolverActor* OtherActor = OtherSolverActors[Idx];
+
+		if(ThisActor && OtherActor)
+		{
+			bResult = bResult && ThisActor->GetName().Equals(OtherActor->GetName());
+		}
 	}
 
 	return bResult
@@ -440,47 +452,48 @@ bool UNiagaraDataInterfaceChaosDestruction::InitPerInstanceData(void* PerInstanc
 	LastSpawnedPointID = -1;
 	LastSpawnTime = -1.0f;
 	TimeStampOfLastProcessedData = -1.f;
-
-	// If there is no SolverActor specified need to grab the WorldSolver
-	if (ChaosSolverActorSet.Num() == 0)
+	// No need to bind to non-game solvers as they will never generate events.
+	UWorld* CurrentWorld = GetWorld();
+	if(CurrentWorld && CurrentWorld->IsGameWorld())
 	{
-#if INCLUDE_CHAOS
-		if (SystemInstance)
+		// If there is no SolverActor specified need to grab the WorldSolver
+		if(ChaosSolverActorSet.Num() == 0)
 		{
-			if (UNiagaraComponent* NiagaraComponent = SystemInstance->GetComponent())
+#if INCLUDE_CHAOS
+			if(SystemInstance)
 			{
-				if (UWorld* World = NiagaraComponent->GetWorld())
+				if(UWorld* World = SystemInstance->GetWorld())
 				{
 					int32 NewIdx = Solvers.Add(FSolverData());
 
 					FSolverData& SolverData = Solvers[NewIdx];
-					SolverData.PhysScene = &World->GetPhysicsScene()->GetScene();
+					SolverData.PhysScene = World->GetPhysicsScene();
 					SolverData.Solver = SolverData.PhysScene->GetSolver();
 
 					RegisterWithSolverEventManager(SolverData.Solver);
 				}
 			}
-		}
 #endif
-	}
-	//else
-	{
-		// #todo : are solver actors going to exist going forwards?
-		for (AChaosSolverActor* SolverActor : ChaosSolverActorSet)
+		}
+		//else
 		{
-			if (SolverActor)
+			// #todo : are solver actors going to exist going forwards?
+			for(AChaosSolverActor* SolverActor : ChaosSolverActorSet)
 			{
-				if (Chaos::FPhysicsSolver* Solver = SolverActor->GetSolver())
+				if(SolverActor)
 				{
-					int32 NewIdx = Solvers.Add(FSolverData());
+					if(Chaos::FPhysicsSolver* Solver = SolverActor->GetSolver())
+					{
+						int32 NewIdx = Solvers.Add(FSolverData());
 
-					FSolverData& SolverData = Solvers[NewIdx];
-					SolverData.PhysScene = SolverActor->GetPhysicsScene().Get();
-					SolverData.Solver = Solver;
+						FSolverData& SolverData = Solvers[NewIdx];
+						SolverData.PhysScene = SolverActor->GetPhysicsScene().Get();
+						SolverData.Solver = Solver;
 
 #if INCLUDE_CHAOS
-					RegisterWithSolverEventManager(Solver);
+						RegisterWithSolverEventManager(Solver);
 #endif
+					}
 				}
 			}
 		}
@@ -2229,8 +2242,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("Position")));			// Vector3 Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetPosition",
-			"Helper function returning the position value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetPosition", "Helper function returning the position value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2245,8 +2257,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("Normal")));			// Vector3 Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetNormal",
-			"Helper function returning the normal value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetNormal", "Helper function returning the normal value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2261,8 +2272,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("Velocity")));			// Vector3 Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetVelocity",
-			"Helper function returning the velocity value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetVelocity", "Helper function returning the velocity value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2277,8 +2287,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("AngularVelocity")));	// Vector3 Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetAngularVelocity",
-			"Helper function returning the angular velocity value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetAngularVelocity", "Helper function returning the angular velocity value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2293,8 +2302,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("ExtentMin")));		// Float Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetExtentMin",
-			"Helper function returning the min extent value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetExtentMin", "Helper function returning the min extent value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2309,8 +2317,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("ExtentMax")));		// Float Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetExtentMax",
-			"Helper function returning the max extent value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetExtentMax", "Helper function returning the max extent value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2325,8 +2332,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("Volume")));		// Float Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetVolume",
-			"Helper function returning the max extent value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetVolume", "Helper function returning the max extent value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2343,8 +2349,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("MaxID")));			// Int Out
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("Count")));		    // Int Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetParticleIdsToSpawnAtTime",
-			"Returns the count and IDs of the particles that should spawn for a given time value."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetParticleIdsToSpawnAtTime", "Returns the count and IDs of the particles that should spawn for a given time value."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2359,8 +2364,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In		
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("Type")));				// Int Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetPointType",
-			"Helper function returning the type value for a given particle when spawned.\n"));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetPointType", "Helper function returning the type value for a given particle when spawned.\n"));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2375,8 +2379,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In		
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetColorDef(), TEXT("Color")));			// Color Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetColor",
-			"Helper function returning the color for a given particle when spawned."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetColor", "Helper function returning the color for a given particle when spawned."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2390,8 +2393,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition(GetClass()), TEXT("DestructionData")));		// DestructionData in
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("SolverTime")));		// SolverTime Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetSolverTime",
-			"Helper function returning the SolverTime."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetSolverTime", "Helper function returning the SolverTime."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2406,8 +2408,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("Density")));		// Float Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetDensity",
-			"Helper function returning the max extent value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetDensity", "Helper function returning the max extent value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2422,8 +2423,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("Friction")));		// Float Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetFriction",
-			"Helper function returning the max extent value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetFriction", "Helper function returning the max extent value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2438,8 +2438,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("Restitution")));		// Float Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetRestitution",
-			"Helper function returning the max extent value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetRestitution", "Helper function returning the max extent value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2454,8 +2453,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("Size")));		// Int Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetSize",
-			"Helper function returning the max extent value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetSize", "Helper function returning the max extent value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2472,8 +2470,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetQuatDef(), TEXT("Rotation")));		// Int Out
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("Scale")));		// Int Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetTransform",
-			"Helper function returning the max extent value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetTransform", "Helper function returning the max extent value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2488,8 +2485,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("ParticleID")));			// ParticleID In
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("SurfaceType")));		// Int Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetSurfaceType",
-			"Helper function returning the max extent value for a given ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetSurfaceType", "Helper function returning the max extent value for a given ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2513,8 +2509,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("CollisionMass2")));				// Float Out
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("CollisionTime")));				// Float Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetCollisionData",
-			"Helper function returning  ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetCollisionData", "Helper function returning  ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2533,8 +2528,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("BreakingMass")));					// Float Out
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("BreakingTime")));					// Float Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetBreakingData",
-			"Helper function returning  ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetBreakingData", "Helper function returning  ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -2553,8 +2547,7 @@ void UNiagaraDataInterfaceChaosDestruction::GetFunctions(TArray<FNiagaraFunction
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("TrailingMass")));					// Float Out
 		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("TrailingTime")));					// Float Out
 
-		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetTrailingData",
-			"Helper function returning  ..."));
+		Sig.SetDescription(LOCTEXT("DataInterfaceChaos_GetTrailingData", "Helper function returning  ..."));
 
 		OutFunctions.Add(Sig);
 	}
@@ -4352,7 +4345,7 @@ public:
 		FNiagaraDataInterfaceProxyChaosDestruction* ChaosDestructionInterfaceProxy = static_cast<FNiagaraDataInterfaceProxyChaosDestruction*>(Context.DataInterface);
 		if (ChaosDestructionInterfaceProxy)
 		{
-			FNiagaraDIChaosDestruction_GPUData* InstanceData = ChaosDestructionInterfaceProxy->SystemsToGPUInstanceData.Find(Context.SystemInstance);
+			FNiagaraDIChaosDestruction_GPUData* InstanceData = ChaosDestructionInterfaceProxy->SystemsToGPUInstanceData.Find(Context.SystemInstanceID);
 
 			ensure(InstanceData);
 

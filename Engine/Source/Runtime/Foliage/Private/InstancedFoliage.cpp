@@ -64,7 +64,7 @@ DECLARE_CYCLE_STAT(TEXT("FoliageMeshInfo_CreateComponent"), STAT_FoliageCreateCo
 static TAutoConsoleVariable<int32> CVarFoliageDiscardDataOnLoad(
 	TEXT("foliage.DiscardDataOnLoad"),
 	0,
-	TEXT("1: Discard scalable foliage data on load (disables all scalable foliage types); 0: Keep scalable foliage data (requires reloading level)"),
+	TEXT("1: Discard foliage data on load if the foliage type has it enabled; 0: Keep foliage data regardless of whether the foliage type has it enabled or not (requires reloading level)"),
 	ECVF_Scalability);
 
 const FGuid FFoliageCustomVersion::GUID(0x430C4D19, 0x71544970, 0x87699B69, 0xDF90B0E5);
@@ -464,6 +464,7 @@ UFoliageType::UFoliageType(const FObjectInitializer& ObjectInitializer)
 	HiddenEditorViews = 0;
 #endif
 	bEnableDensityScaling = false;
+	bEnableDiscardOnLoad = false;
 
 #if WITH_EDITORONLY_DATA
 	// Deprecated since FFoliageCustomVersion::FoliageTypeCustomization
@@ -978,6 +979,7 @@ void FFoliageStaticMesh::AddInstance(AInstancedFoliageActor* IFA, const FFoliage
 {
 	check(Component);
 	Component->AddInstanceWorldSpace(NewInstance.GetInstanceWorldTransform());
+	bInvalidateLightingCache = true;
 }
 
 void FFoliageStaticMesh::RemoveInstance(int32 InstanceIndex)
@@ -999,6 +1001,7 @@ void FFoliageStaticMesh::SetInstanceWorldTransform(int32 InstanceIndex, const FT
 {
 	check(Component);
 	Component->UpdateInstanceTransform(InstanceIndex, Transform, true, true, bTeleport);
+	bInvalidateLightingCache = true;
 }
 
 FTransform FFoliageStaticMesh::GetInstanceWorldTransform(int32 InstanceIndex) const
@@ -1440,6 +1443,12 @@ void FFoliageStaticMesh::UpdateComponentSettings(const UFoliageType_InstancedSta
 			bNeedsMarkRenderStateDirty = true;
 		}
 
+		if (Component->CustomDepthStencilWriteMask != FoliageType->CustomDepthStencilWriteMask)
+		{
+			Component->CustomDepthStencilWriteMask = FoliageType->CustomDepthStencilWriteMask;
+			bNeedsMarkRenderStateDirty = true;
+		}
+
 		if (Component->CustomDepthStencilValue != FoliageType->CustomDepthStencilValue)
 		{
 			Component->CustomDepthStencilValue = FoliageType->CustomDepthStencilValue;
@@ -1749,6 +1758,12 @@ void FFoliageInfo::AddInstanceImpl(AInstancedFoliageActor* InIFA, const FFoliage
 void FFoliageInfo::AddInstances(AInstancedFoliageActor* InIFA, const UFoliageType* InSettings, const TArray<const FFoliageInstance*>& InNewInstances)
 {
 	AddInstancesImpl(InIFA, InSettings, InNewInstances, [](FFoliageImpl* Impl, AInstancedFoliageActor* LocalIFA, const FFoliageInstance& LocalInstance) { Impl->AddInstance(LocalIFA, LocalInstance); });
+}
+
+void FFoliageInfo::ReserveAdditionalInstances(AInstancedFoliageActor* InIFA, const UFoliageType* InSettings, uint32 ReserveNum)
+{
+	Instances.Reserve(Instances.Num() + ReserveNum);
+	Implementation->PreAddInstances(InIFA, InSettings, ReserveNum);
 }
 
 void FFoliageInfo::AddInstancesImpl(AInstancedFoliageActor* InIFA, const UFoliageType* InSettings, const TArray<const FFoliageInstance*>& InNewInstances, FFoliageInfo::FAddImplementationFunc ImplementationFunc)
@@ -3805,6 +3820,31 @@ void AInstancedFoliageActor::PostLoad()
 					}
 				}
 			}
+
+			// Discard scalable Foliage data on load
+			if (GetLinkerCustomVersion(FFoliageCustomVersion::GUID) < FFoliageCustomVersion::FoliageDiscardOnLoad)
+			{
+				FoliageType->bEnableDiscardOnLoad = FoliageType->bEnableDensityScaling;
+			}
+
+			// Fixup corrupted data
+			if (Info.Type == EFoliageImplType::StaticMesh)
+			{
+				UFoliageType_InstancedStaticMesh* FoliageType_InstancedStaticMesh = Cast<UFoliageType_InstancedStaticMesh>(FoliageType);
+				if (UStaticMesh* FoliageTypeStaticMesh = FoliageType_InstancedStaticMesh->GetStaticMesh())
+				{
+					FFoliageStaticMesh* FoliageStaticMesh = StaticCast<FFoliageStaticMesh*>(Info.Implementation.Get());
+					if (UHierarchicalInstancedStaticMeshComponent* HISMComponent = FoliageStaticMesh->Component)
+					{
+						HISMComponent->ConditionalPostLoad();
+						UStaticMesh* ComponentStaticMesh = HISMComponent->GetStaticMesh();
+						if (ComponentStaticMesh != FoliageTypeStaticMesh)
+						{
+							HISMComponent->SetStaticMesh(FoliageTypeStaticMesh);
+						}
+					}
+				}
+			}
 		}
 
 		UWorld* World = GetWorld();
@@ -3888,7 +3928,7 @@ void AInstancedFoliageActor::PostLoad()
 	{
 		for (auto& Pair : FoliageInfos)
 		{
-			if (!Pair.Key || Pair.Key->bEnableDensityScaling)
+			if (!Pair.Key || Pair.Key->bEnableDiscardOnLoad)
 			{
 				if (Pair.Value->Type == EFoliageImplType::StaticMesh)
 				{

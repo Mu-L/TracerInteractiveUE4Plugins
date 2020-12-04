@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MetalRHIPrivate.h"
+#include "MetalRHIRenderQuery.h"
+#include "MetalCommandBufferFence.h"
 
 TGlobalResource<TBoundShaderStateHistory<10000>> FMetalRHICommandContext::BoundShaderStateHistory;
 
@@ -42,7 +44,7 @@ void SafeReleaseMetalBuffer(FMetalBuffer& Buffer)
 {
 	if(GIsMetalInitialized && GDynamicRHI && Buffer)
 	{
-		Buffer.SetOwner(nullptr);
+		Buffer.SetOwner(nullptr, false);
 		FMetalRHICommandContext* Context = static_cast<FMetalRHICommandContext*>(RHIGetDefaultContext());
 		if(Context)
 		{
@@ -144,29 +146,6 @@ void FMetalRHICommandContext::RHIBeginRenderPass(const FRHIRenderPassInfo& InInf
 	@autoreleasepool {
 	bool bHasTarget = (InInfo.DepthStencilRenderTarget.DepthStencilTarget != nullptr || InInfo.GetNumColorRenderTargets() > 0);
 	
-	if (InInfo.bGeneratingMips)
-	{
-		FRHITexture* Textures[MaxSimultaneousRenderTargets];
-		FRHITexture** LastTexture = Textures;
-		for (int32 Index = 0; Index < MaxSimultaneousRenderTargets; ++Index)
-		{
-			if (!InInfo.ColorRenderTargets[Index].RenderTarget)
-			{
-				break;
-			}
-			
-			*LastTexture = InInfo.ColorRenderTargets[Index].RenderTarget;
-			++LastTexture;
-		}
-		
-		//Use RWBarrier since we don't transition individual subresources.  Basically treat the whole texture as R/W as we walk down the mip chain.
-		int32 NumTextures = (int32)(LastTexture - Textures);
-		if (NumTextures)
-		{
-			IRHICommandContext::RHITransitionResources(EResourceTransitionAccess::ERWSubResBarrier, Textures, NumTextures);
-		}
-	}
-	
 	if (InInfo.bOcclusionQueries)
 	{
 		Context->GetCommandList().SetParallelIndex(0, 0);
@@ -229,16 +208,39 @@ void FMetalRHICommandContext::RHINextSubpass()
 	if (RenderPassInfo.SubpassHint == ESubpassHint::DepthReadSubpass)
 	{
 		FMetalRenderPass& RP = Context->GetCurrentRenderPass();
-		RP.InsertTextureBarrier();
+		if (RP.GetCurrentCommandEncoder().IsRenderCommandEncoderActive())
+		{
+			RP.InsertTextureBarrier();
+		}
 	}
 #endif
 }
 
-void FMetalRHICommandContext::RHIBeginComputePass(const TCHAR* InName)
+void FMetalRHICommandContext::RHIBeginRenderQuery(FRHIRenderQuery* QueryRHI)
 {
-	RHISetRenderTargets(0, nullptr, nullptr);
+	@autoreleasepool {
+		FMetalRHIRenderQuery* Query = ResourceCast(QueryRHI);
+		Query->Begin(Context, CommandBufferFence);
+	}
 }
 
-void FMetalRHICommandContext::RHIEndComputePass()
+void FMetalRHICommandContext::RHIEndRenderQuery(FRHIRenderQuery* QueryRHI)
 {
+	@autoreleasepool {
+		FMetalRHIRenderQuery* Query = ResourceCast(QueryRHI);
+		Query->End(Context);
+	}
+}
+
+void FMetalRHICommandContext::RHIBeginOcclusionQueryBatch(uint32 NumQueriesInBatch)
+{
+	check(!CommandBufferFence.IsValid());
+	CommandBufferFence = MakeShareable(new FMetalCommandBufferFence);
+}
+
+void FMetalRHICommandContext::RHIEndOcclusionQueryBatch()
+{
+	check(CommandBufferFence.IsValid());
+	Context->InsertCommandBufferFence(*CommandBufferFence);
+	CommandBufferFence.Reset();
 }

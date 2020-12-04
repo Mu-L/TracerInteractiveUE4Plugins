@@ -8,6 +8,7 @@
 #include "Engine/Scene.h"
 #include "Engine/DeveloperSettings.h"
 #include "PixelFormat.h"
+#include "PerPlatformProperties.h"
 
 #include "RendererSettings.generated.h"
 
@@ -187,12 +188,6 @@ class ENGINE_API URendererSettings : public UDeveloperSettings
 		ToolTip = "Multi-sample anti-aliasing setting to use on mobile. MSAA is currently supported using Metal on iOS, and on Android devices with the required support using ES 2 or ES 3.1.\nIf MSAA is not available, the current default AA method will be used."))
 	TEnumAsByte<EMobileMSAASampleCount::Type> MobileMSAASampleCount;
 
-	UPROPERTY(config, EditAnywhere, Category = Mobile, meta = (
-		ConsoleVariable = "r.Mobile.UseLegacyShadingModel", DisplayName = "Use legacy shading model",
-		ToolTip = "If true then mobile shaders will use the cheaper but lower quality specular calculation found in versions prior to 4.20.",
-		ConfigRestartRequired = true))
-		uint32 bMobileUseLegacyShadingModel : 1;
-
 	UPROPERTY(config, EditAnywhere, Category = Mobile, meta=(
 		ConsoleVariable="r.Mobile.AllowDitheredLODTransition", DisplayName="Allow Dithered LOD Transition",
 		ToolTip="Whether to support 'Dithered LOD Transition' material option on mobile platforms. Enabling this may degrade performance as rendering will not benefit from Early-Z optimization.",
@@ -219,7 +214,7 @@ class ENGINE_API URendererSettings : public UDeveloperSettings
 
 	UPROPERTY(config, EditAnywhere, Category=Culling, meta=(
 		ConsoleVariable="r.AllowOcclusionQueries",DisplayName="Occlusion Culling",
-		ToolTip="Allows occluded meshes to be culled and no rendered."))
+		ToolTip="Allows occluded meshes to be culled and not rendered."))
 	uint32 bOcclusionCulling:1;
 
 	UPROPERTY(config, EditAnywhere, Category=Culling, meta=(
@@ -310,18 +305,15 @@ class ENGINE_API URendererSettings : public UDeveloperSettings
 		ToolTip = "Use a separate normal map for the bottom layer of a clear coat material. This is a higher quality feature that is expensive."))
 	uint32 bClearCoatEnableSecondNormal : 1;
 
-	UPROPERTY(config, EditAnywhere, Category = Materials, meta = (
-		DisplayName = "Use anisotropic BRDF (Beta)",
-		ConsoleVariable = "r.AnisotropicBRDF",
-		EditCondition = "!bBasePassOutputsVelocity || bAnisotropicBRDF && bBasePassOutputsVelocity",
-		ConfigRestartRequired = true,
-		ToolTip = "Uses an anisotropic BRDF for default lit and clear coat surface materials. Changing this setting requires restarting the editor.\n\nNote: can only be enabled if 'Output velocities during base pass' (r.BasePassOutputsVelocity) is disabled."))
-	uint32 bAnisotropicBRDF : 1;
-
 	UPROPERTY(config, EditAnywhere, Category = Reflections, meta = (
 		ConsoleVariable = "r.ReflectionCaptureResolution", DisplayName = "Reflection Capture Resolution",
 		ToolTip = "The cubemap resolution for all reflection capture probes. Must be power of 2. Note that for very high values the memory and performance impact may be severe."))
 	int32 ReflectionCaptureResolution;
+
+	UPROPERTY(config, EditAnywhere, Category = Reflections, meta = (
+		ConsoleVariable = "r.Mobile.ReflectionCaptureCompression", DisplayName = "Mobile Reflection Capture Compression",
+		ToolTip = "Whether to use the Reflection Capture Compression or not for mobile. It will use ETC2 format to do the compression."))
+	uint32 bReflectionCaptureCompression : 1;
 
 	UPROPERTY(config, EditAnywhere, Category = Reflections, meta = (
 		ConsoleVariable = "r.ReflectionEnvironmentLightmapMixBasedOnRoughness", DisplayName = "Reduce lightmap mixing on smooth surfaces",
@@ -444,6 +436,7 @@ class ENGINE_API URendererSettings : public UDeveloperSettings
 		ToolTip = "Default Value for auto exposure bias."))
 	float DefaultFeatureAutoExposureBias;
 
+	UE_DEPRECATED(4.26, "Extend Default Luminance Range is deprecated, and will be forced to ON at all times in future revisions.")
 	UPROPERTY(config, EditAnywhere, Category = DefaultSettings, meta = (
 		ConsoleVariable = "r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange", DisplayName = "Extend default luminance range in Auto Exposure settings",
 		ToolTip = "Whether the default values for AutoExposure should support an extended range of scene luminance. Also changes the exposure settings to be expressed in EV100.",
@@ -536,9 +529,8 @@ class ENGINE_API URendererSettings : public UDeveloperSettings
 	UPROPERTY(config, EditAnywhere, Category=Optimizations, meta=(
 		DisplayName="Output velocities during base pass",
 		ConsoleVariable="r.BasePassOutputsVelocity",
-		EditCondition = "!bAnisotropicBRDF || bAnisotropicBRDF && bBasePassOutputsVelocity",
 		ConfigRestartRequired = true,
-		ToolTip="Enables emitting velocity during Base Pass rendering. Changing this setting requires restarting the editor.\n\nNote: can only be enabled if 'Use anisotropic BRDF' (r.AnisotropicBRDF) is disabled.\nNote: enabling this behaves as if 'Output velocities due to vertex deformation' (r.VertexDeformationOutputsVelocity) is also enabled."
+		ToolTip="Enables emitting velocity during Base Pass rendering. Changing this setting requires restarting the editor.\nNote: enabling this behaves as if 'Output velocities due to vertex deformation' (r.VertexDeformationOutputsVelocity) is also enabled."
 		))
 	uint32 bBasePassOutputsVelocity:1;
 
@@ -775,13 +767,21 @@ class ENGINE_API URendererSettings : public UDeveloperSettings
 		ConfigRestartRequired = true))
 		uint32 bMobileAllowMovableSpotlights : 1;
 
-	UPROPERTY(config, EditAnywhere, Category = Optimizations, meta = (
+	UPROPERTY(config, EditAnywhere, Category = MobileShaderPermutationReduction, meta = (
+		EditCondition = "bMobileAllowMovableSpotlights",
+		ConsoleVariable = "r.Mobile.EnableMovableSpotlightsShadow",
+		DisplayName = "Support Movable SpotlightShadows",
+		ToolTip = "Generate shaders for primitives to receive shadow from movable spotlights. Changing this setting requires restarting the editor.",
+		ConfigRestartRequired = true))
+		uint32 bMobileAllowMovableSpotlightShadows : 1;
+
+	UPROPERTY(config, EditAnywhere, Category = Skinning, meta = (
 		ConsoleVariable = "r.GPUSkin.Support16BitBoneIndex", DisplayName = "Support 16-bit Bone Index",
 		ToolTip = "If enabled, a new mesh imported will use 8 bit (if <=256 bones) or 16 bit (if > 256 bones) bone indices for rendering.",
 		ConfigRestartRequired = true))
 		uint32 bSupport16BitBoneIndex : 1;
 
-	UPROPERTY(config, EditAnywhere, Category = Optimizations, meta = (
+	UPROPERTY(config, EditAnywhere, Category = Skinning, meta = (
 		ConsoleVariable = "r.GPUSkin.Limit2BoneInfluences", DisplayName = "Limit GPU skinning to 2 bones influence",
 		ToolTip = "Whether to use 2 bone influences instead of the default of 4 for GPU skinning. This does not change skeletal mesh assets but reduces the number of instructions required by the GPU skin vertex shaders. Changing this setting requires restarting the editor.",
 		ConfigRestartRequired = true))
@@ -799,16 +799,65 @@ class ENGINE_API URendererSettings : public UDeveloperSettings
 		ConfigRestartRequired = true))
 		uint32 bSupportReversedIndexBuffers : 1;
 
-	UPROPERTY(config, EditAnywhere, Category = Materials, meta = (
-		ConsoleVariable = "r.SupportMaterialLayers", Tooltip = "Support new material layering system.",
-		ConfigRestartRequired = true))
-		uint32 bSupportMaterialLayers : 1;
-
 	UPROPERTY(config, EditAnywhere, Category = Lighting, meta = (
 		ConsoleVariable = "r.LightPropagationVolume", DisplayName = "Light Propagation Volumes",
 		ToolTip = "Whether to allow the usage and compilation of Light Propagation Volumes.",
 		ConfigRestartRequired = true))
 		uint32 bLPV : 1;
+
+	UPROPERTY(config, EditAnywhere, Category = Mobile, meta = (
+		ConsoleVariable = "r.Mobile.AmbientOcclusion", DisplayName = "Mobile Ambient Occlusion",
+		ToolTip = "Mobile Ambient Occlusion. Causion: An extra sampler will be occupied in mobile base pass pixel shader after enable the mobile ambient occlusion. Changing this setting requires restarting the editor.",
+		ConfigRestartRequired = true))
+		uint32 bMobileAmbientOcclusion : 1;
+
+	UPROPERTY(config, EditAnywhere, Category = Skinning, meta = (
+		ConsoleVariable = "r.GPUSkin.UnlimitedBoneInfluences", DisplayName = "Use Unlimited Bone Influences",
+		ToolTip = "If enabled, a new mesh imported will use unlimited bone buffer instead of fixed MaxBoneInfluences for rendering.",
+		ConfigRestartRequired = true))
+		uint32 bUseUnlimitedBoneInfluences : 1;
+		
+	UPROPERTY(config, EditAnywhere, Category = Skinning, meta = (
+		ConsoleVariable = "r.GPUSkin.UnlimitedBoneInfluencesThreshold", DisplayName = "Unlimited Bone Influences Threshold",
+		ToolTip = "When Unlimited Bone Influence is enabled, it still uses a fixed bone inflence buffer until the max bone influence of a mesh exceeds this value"))
+		int32 UnlimitedBonInfluencesThreshold;
+	
+	UPROPERTY(config, EditAnywhere, Category = Mobile, meta = (
+		ConsoleVariable = "r.Mobile.PlanarReflectionMode", DisplayName = "Planar Reflection Mode",
+		ToolTip = "The PlanarReflection will work differently on different mode on mobile platform, choose the proper mode as expect. Changing this setting requires restarting the editor.",
+		ConfigRestartRequired = true))
+		TEnumAsByte<EMobilePlanarReflectionMode::Type> MobilePlanarReflectionMode;
+
+	UPROPERTY(config, EditAnywhere, Category="Experimental|LOD Streaming|Skeletal Mesh", meta=(
+		DisplayName="Stream LODs by default",
+		ToolTip="Whether to stream skeletal mesh LODs by default."))
+	FPerPlatformBool bStreamSkeletalMeshLODs;
+
+	UPROPERTY(config, EditAnywhere, Category="Experimental|LOD Streaming|Skeletal Mesh", meta=(
+		DisplayName="Discard optional LODs",
+		ToolTip="Whether to discard skeletal mesh LODs below minimum LOD levels at cook time."))
+	FPerPlatformBool bDiscardSkeletalMeshOptionalLODs;
+
+	/**
+	" Visualize calibration material settings for post process calibration materials, used for setting full-screen images used for monitor calibration."
+	*/
+	UPROPERTY(config, EditAnywhere, Category = PostProcessCalibrationMaterials, meta = (AllowedClasses = "Material",
+		DisplayName = "Visualize Calibration Color Material Path",
+		ToolTip = "When the VisualizeCalibrationColor show flag is enabled, this path will be used as the post-process material to render.",
+		ConfigRestartRequired = false))
+	FSoftObjectPath VisualizeCalibrationColorMaterialPath;
+
+	UPROPERTY(config, EditAnywhere, Category = PostProcessCalibrationMaterials, meta = (AllowedClasses = "Material",
+		DisplayName = "Visualize Calibration Custom Material Path",
+		ToolTip = "When the VisualizeCalibrationCustom show flag is enabled, this path will be used as the post-process material to render.",
+		ConfigRestartRequired = false))
+	FSoftObjectPath VisualizeCalibrationCustomMaterialPath;
+
+	UPROPERTY(config, EditAnywhere, Category = PostProcessCalibrationMaterials, meta = (AllowedClasses = "Material",
+		DisplayName = "Visualize Calibration Grayscale Material Path",
+		ToolTip = "When the VisualizeCalibrationGrayscale show flag is enabled, this path will be used as the post-process material to render.",
+		ConfigRestartRequired = false))
+		FSoftObjectPath VisualizeCalibrationGrayscaleMaterialPath;
 
 public:
 
@@ -833,7 +882,7 @@ private:
 	void SanatizeReflectionCaptureResolution();
 };
 
-UCLASS(config = Engine, globaluserconfig, meta = (DisplayName = "Rendering Overrides (Local)"))
+UCLASS(config = Engine, projectuserconfig, meta = (DisplayName = "Rendering Overrides (Local)"))
 class ENGINE_API URendererOverrideSettings : public UDeveloperSettings
 {
 	GENERATED_UCLASS_BODY()

@@ -31,7 +31,7 @@ FDebugViewModeMaterialProxy::FDebugViewModeMaterialProxy(
 	, bIsDefaultMaterial(InMaterialInterface->GetMaterial()->IsDefaultMaterial())
 	, bSynchronousCompilation(InSynchronousCompilation)
 {
-	SetQualityLevelProperties(QualityLevel, false, FeatureLevel);
+	SetQualityLevelProperties(FeatureLevel);
 	const EShaderPlatform ShaderPlatform = GetFeatureLevelShaderPlatform(FeatureLevel);
 
 	Material = InMaterialInterface->GetMaterial();
@@ -62,6 +62,11 @@ FDebugViewModeMaterialProxy::FDebugViewModeMaterialProxy(
 				bIsUsedWithInstancedStaticMeshes = Resource->IsUsedWithInstancedStaticMeshes();
 				bIsUsedWithAPEXCloth = Resource->IsUsedWithAPEXCloth();
 				bIsUsedWithWater = Resource->IsUsedWithWater();
+				bIsUsedWithVirtualHeightfieldMesh = Resource->IsUsedWithVirtualHeightfieldMesh();
+				bIsUsedWithGeometryCache = Resource->IsUsedWithGeometryCache();
+				bIsUsedWithHairStrands = Resource->IsUsedWithHairStrands();
+				bIsUsedWithLidarPointCloud = Resource->IsUsedWithLidarPointCloud();
+				bIsUsedWithGeometryCollections = Resource->IsUsedWithGeometryCollections();
 			}
 		}
 
@@ -230,6 +235,14 @@ float FDebugViewModeMaterialProxy::GetMaxDisplacement() const
 {
 	FMaterialResource* Resource = MaterialInterface->GetMaterialResource(FeatureLevel);
 	return Resource ? Resource->GetMaxDisplacement() : 0.0f;
+}
+
+void FDebugViewModeMaterialProxy::GetStaticParameterSet(EShaderPlatform Platform, FStaticParameterSet& OutSet) const
+{
+	if (const FMaterialResource* Resource = MaterialInterface->GetMaterialResource(GMaxRHIFeatureLevel))
+	{
+		Resource->GetStaticParameterSet(Platform, OutSet);
+	}
 }
 
 #endif // WITH_EDITORONLY_DATA

@@ -604,7 +604,7 @@ void FBlueprintTypeDiffControl::GenerateTreeEntries(TArray< TSharedPtr<FBlueprin
 	OutTreeEntries.Push(CategoryEntry);
 
 	// Now add subobject diffs, one category per object
-	for (const TSharedPtr<FSubObjectDiff> SubObjectDiff : SubObjectDiffs)
+	for (const TSharedPtr<FSubObjectDiff>& SubObjectDiff : SubObjectDiffs)
 	{
 		Children.Reset();
 
@@ -1020,6 +1020,17 @@ void SBlueprintDiff::Construct( const FArguments& InArgs)
 			[
 				SNew(SOverlay)
 				+ SOverlay::Slot()
+				.VAlign(VAlign_Top)
+				[
+					TopRevisionInfoWidget.ToSharedRef()		
+				]
+				+ SOverlay::Slot()
+				.VAlign(VAlign_Top)
+				.Padding(0.0f, 6.0f, 0.0f, 4.0f)
+				[
+					GraphToolBarWidget.ToSharedRef()
+				]
+				+ SOverlay::Slot()
 				[
 					SNew(SVerticalBox)
 					+SVerticalBox::Slot()
@@ -1056,17 +1067,6 @@ void SBlueprintDiff::Construct( const FArguments& InArgs)
 							SAssignNew(ModeContents, SBox)
 						]
 					]
-				]
-				+ SOverlay::Slot()
-				.VAlign(VAlign_Top)
-				[
-					TopRevisionInfoWidget.ToSharedRef()		
-				]
-				+ SOverlay::Slot()
-				.VAlign(VAlign_Top)
-				.Padding(0.0f, 6.0f, 0.0f, 4.0f)
-				[
-					GraphToolBarWidget.ToSharedRef()
 				]
 			]
 		];

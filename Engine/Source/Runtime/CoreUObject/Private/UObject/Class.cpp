@@ -395,7 +395,7 @@ void UField::FormatNativeToolTip(FString& ToolTipString, bool bRemoveExtraSectio
  * @param Key The key to lookup in the metadata
  * @return true if there is a (possibly blank) value associated with this key
  */
-bool UField::HasMetaData(const TCHAR* Key) const
+const FString* UField::FindMetaData(const TCHAR* Key) const
 {
 	UPackage* Package = GetOutermost();
 	check(Package);
@@ -403,12 +403,10 @@ bool UField::HasMetaData(const TCHAR* Key) const
 	UMetaData* MetaData = Package->GetMetaData();
 	check(MetaData);
 
-	bool bHasMetaData = MetaData->HasValue(this, Key);
-		
-	return bHasMetaData;
+	return MetaData->FindValue(this, Key);
 }
 
-bool UField::HasMetaData(const FName& Key) const
+const FString* UField::FindMetaData(const FName& Key) const
 {
 	UPackage* Package = GetOutermost();
 	check(Package);
@@ -416,9 +414,7 @@ bool UField::HasMetaData(const FName& Key) const
 	UMetaData* MetaData = Package->GetMetaData();
 	check(MetaData);
 
-	bool bHasMetaData = MetaData->HasValue(this, Key);
-
-	return bHasMetaData;
+	return MetaData->FindValue(this, Key);
 }
 
 /**
@@ -457,9 +453,9 @@ FText UField::GetMetaDataText(const TCHAR* MetaDataKey, const FString Localizati
 {
 	FString DefaultMetaData;
 
-	if( HasMetaData( MetaDataKey ))
+	if(const FString* FoundMetaData = FindMetaData( MetaDataKey ))
 	{
-		DefaultMetaData = GetMetaData(MetaDataKey);
+		DefaultMetaData = *FoundMetaData;
 	}
 
 	// If attempting to grab the DisplayName metadata, we must correct the source string and output it as a DisplayString for lookup
@@ -484,9 +480,9 @@ FText UField::GetMetaDataText(const FName& MetaDataKey, const FString Localizati
 {
 	FString DefaultMetaData;
 
-	if( HasMetaData( MetaDataKey ))
+	if (const FString* FoundMetaData = FindMetaData( MetaDataKey ))
 	{
-		DefaultMetaData = GetMetaData(MetaDataKey);
+		DefaultMetaData = *FoundMetaData;
 	}
 
 	// If attempting to grab the DisplayName metadata, we must correct the source string and output it as a DisplayString for lookup
@@ -737,6 +733,34 @@ void UStruct::GetPreloadDependencies(TArray<UObject*>& OutDeps)
 	}
 }
 
+void UStruct::CollectBytecodeReferencedObjects(TArray<UObject*>& OutReferencedObjects)
+{
+	FArchiveScriptReferenceCollector ObjRefCollector(OutReferencedObjects);
+
+	int32 BytecodeIndex = 0;
+	while (BytecodeIndex < Script.Num())
+	{
+		SerializeExpr(BytecodeIndex, ObjRefCollector);
+	}
+}
+
+void UStruct::CollectPropertyReferencedObjects(TArray<UObject*>& OutReferencedObjects)
+{
+	FPropertyReferenceCollector PropertyReferenceCollector(this);
+	for (FField* CurrentField = ChildProperties; CurrentField; CurrentField = CurrentField->Next)
+	{
+		CurrentField->AddReferencedObjects(PropertyReferenceCollector);
+	}
+	OutReferencedObjects.Append(PropertyReferenceCollector.UniqueReferences.Array());
+}
+
+void UStruct::CollectBytecodeAndPropertyReferencedObjects()
+{
+	ScriptAndPropertyObjectReferences.Empty();
+	CollectBytecodeReferencedObjects(ScriptAndPropertyObjectReferences);
+	CollectPropertyReferencedObjects(ScriptAndPropertyObjectReferences);
+}
+
 void UStruct::Link(FArchive& Ar, bool bRelinkExistingProperties)
 {
 	if (bRelinkExistingProperties)
@@ -960,12 +984,7 @@ void UStruct::Link(FArchive& Ar, bool bRelinkExistingProperties)
 
 	{
 		// Now collect all references from FProperties to UObjects and store them in GC-exposed array for fast access
-		FPropertyReferenceCollector PropertyReferenceCollector(this);
-		for (FField* CurrentField = ChildProperties; CurrentField; CurrentField = CurrentField->Next)
-		{
-			CurrentField->AddReferencedObjects(PropertyReferenceCollector);
-		}
-		ScriptAndPropertyObjectReferences.Append(PropertyReferenceCollector.UniqueReferences.Array());
+		CollectPropertyReferencedObjects(ScriptAndPropertyObjectReferences);
 
 #if USE_CIRCULAR_DEPENDENCY_LOAD_DEFERRING
 		// The old (non-EDL) FLinkerLoad code paths create placeholder objects
@@ -1284,19 +1303,19 @@ void UStruct::SerializeVersionedTaggedProperties(FStructuredArchive::FSlot Slot,
 		else
 #endif // WITH_TEXT_ARCHIVE_SUPPORT
 		{
-			// Load tagged properties.
-			FStructuredArchive::FStream PropertiesStream = Slot.EnterStream();
+		// Load tagged properties.
+		FStructuredArchive::FStream PropertiesStream = Slot.EnterStream();
 
-			// This code assumes that properties are loaded in the same order they are saved in. This removes a n^2 search 
-			// and makes it an O(n) when properties are saved in the same order as they are loaded (default case). In the 
-			// case that a property was reordered the code falls back to a slower search.
+		// This code assumes that properties are loaded in the same order they are saved in. This removes a n^2 search 
+		// and makes it an O(n) when properties are saved in the same order as they are loaded (default case). In the 
+		// case that a property was reordered the code falls back to a slower search.
 			FProperty*	Property = PropertyLink;
-			bool		bAdvanceProperty	= false;
-			int32		RemainingArrayDim	= Property ? Property->ArrayDim : 0;
+		bool		bAdvanceProperty	= false;
+		int32		RemainingArrayDim	= Property ? Property->ArrayDim : 0;
 
-			// Load all stored properties, potentially skipping unknown ones.
-			while (true)
-			{
+		// Load all stored properties, potentially skipping unknown ones.
+		while (true)
+		{
 				FStructuredArchive::FRecord PropertyRecord = PropertiesStream.EnterElement().EnterRecord();
 
 				FPropertyTag Tag;
@@ -1308,7 +1327,7 @@ void UStruct::SerializeVersionedTaggedProperties(FStructuredArchive::FSlot Slot,
 				}
 
 				// Move to the next property to be serialized
-				if( bAdvanceProperty && --RemainingArrayDim <= 0 )
+				if (bAdvanceProperty && --RemainingArrayDim <= 0)
 				{
 					Property = Property->PropertyLinkNext;
 					// Skip over properties that don't need to be serialized.
@@ -1411,12 +1430,12 @@ void UStruct::SerializeVersionedTaggedProperties(FStructuredArchive::FSlot Slot,
 						}
 					}
 
-#if WITH_EDITOR
+	#if WITH_EDITOR
 					if (BreakRecursionIfFullyLoad && BreakRecursionIfFullyLoad->HasAllFlags(RF_LoadCompleted))
 					{
 					}
 					else
-#endif // WITH_EDITOR
+	#endif // WITH_EDITOR
 					// editoronly properties should be skipped if we are NOT the editor, or we are 
 					// the editor but are cooking for console (editoronly implies notforconsole)
 					if ((Property->PropertyFlags & CPF_EditorOnly) && !FPlatformProperties::HasEditorOnlyData() && !GForceLoadEditorOnly)
@@ -1670,8 +1689,8 @@ void UStruct::ConvertUFieldsToFFields()
 			{
 				Children = OldField->Next;
 			}
-			// Move the old FProperty to the transient package
-			OldField->Rename(nullptr, GetTransientPackage(), REN_ForceNoResetLoaders | REN_DoNotDirty | REN_DontCreateRedirectors | REN_NonTransactional);
+			// Move the old UProperty to the transient package and rename it to something unique
+			OldField->Rename(*MakeUniqueObjectName(GetTransientPackage(), OldField->GetClass()).ToString(), GetTransientPackage(), REN_ForceNoResetLoaders | REN_DoNotDirty | REN_DontCreateRedirectors | REN_NonTransactional);
 			OldField->RemoveFromRoot();
 		}
 		else 
@@ -1903,9 +1922,9 @@ void UStruct::Serialize(FArchive& Ar)
 
 				{
 					FPropertyProxyArchive PropertyAr(Ar, iCode, this);
-				// now, use the linker to save the byte code, but writing to memory
-				while (iCode < ScriptBytecodeSize)
-				{
+					// now, use the linker to save the byte code, but writing to memory
+					while (iCode < ScriptBytecodeSize)
+					{
 						SerializeExpr(iCode, PropertyAr);
 					}
 				}
@@ -2055,11 +2074,11 @@ bool UStruct::GetStringMetaDataHierarchical(const FName& Key, FString* OutValue)
 {
 	for (const UStruct* TestStruct = this; TestStruct != nullptr; TestStruct = TestStruct->GetSuperStruct())
 	{
-		if (TestStruct->HasMetaData(Key))
+		if (const FString* FoundMetaData = TestStruct->FindMetaData(Key))
 		{
 			if (OutValue != nullptr)
 			{
-				*OutValue = TestStruct->GetMetaData(Key);
+				*OutValue = *FoundMetaData;
 			}
 
 			return true;
@@ -2214,15 +2233,16 @@ struct ENGINE_API FTestStruct
 {
 	GENERATED_USTRUCT_BODY()
 
+	UObject* RawObjectPtr = nullptr;
 	TMap<int32, double> Doubles;
 	FTestStruct()
 	{
 		Doubles.Add(1, 1.5);
 		Doubles.Add(2, 2.5);
 	}
-	void AddStructReferencedObjects(class FReferenceCollector& Collector) const
+	void AddStructReferencedObjects(class FReferenceCollector& Collector)
 	{
-		Collector.AddReferencedObject(AActor::StaticClass());
+		Collector.AddReferencedObject(RawObjectPtr);
 	}
 	bool Serialize(FArchive& Ar)
 	{
@@ -3322,6 +3342,21 @@ private:
 
 int32 FStructUtils::AttemptToFindUninitializedScriptStructMembers()
 {
+	auto GetStructLocation = [](const UScriptStruct* ScriptStruct) -> FString {
+		check(ScriptStruct);
+		UPackage* ScriptPackage = ScriptStruct->GetOutermost();
+		FString StructLocation = FString::Printf(TEXT(" Module:%s"), *FPackageName::GetShortName(ScriptPackage->GetName()));
+#if WITH_EDITORONLY_DATA
+		static const FName NAME_ModuleRelativePath(TEXT("ModuleRelativePath"));
+		const FString& ModuleRelativeIncludePath = ScriptStruct->GetMetaData(NAME_ModuleRelativePath);
+		if (!ModuleRelativeIncludePath.IsEmpty())
+		{
+			StructLocation += FString::Printf(TEXT(" File:%s"), *ModuleRelativeIncludePath);
+		}
+#endif
+		return StructLocation;
+	};
+
 	int32 UninitializedScriptStructMemberCount = 0;
 
 	for (TObjectIterator<UScriptStruct> ScriptIt; ScriptIt; ++ScriptIt)
@@ -3353,7 +3388,7 @@ int32 FStructUtils::AttemptToFindUninitializedScriptStructMembers()
 					if (PropValue == BadPointer)
 					{
 						++UninitializedScriptStructMemberCount;
-						UE_LOG(LogClass, Warning, TEXT("ObjectProperty %s%s::%s is not initialized properly"), ScriptStruct->GetPrefixCPP(), *ScriptStruct->GetName(), *Property->GetNameCPP());
+						UE_LOG(LogClass, Warning, TEXT("ObjectProperty %s%s::%s is not initialized properly.%s"), ScriptStruct->GetPrefixCPP(), *ScriptStruct->GetName(), *Property->GetNameCPP(), *GetStructLocation(ScriptStruct));
 					}
 				}
 				else if (const FBoolProperty* BoolProperty = CastField<const FBoolProperty>(Property))
@@ -3365,7 +3400,7 @@ int32 FStructUtils::AttemptToFindUninitializedScriptStructMembers()
 					if (Value0 != Value1)
 					{
 						++UninitializedScriptStructMemberCount;
-						UE_LOG(LogClass, Warning, TEXT("BoolProperty %s%s::%s is not initialized properly"), ScriptStruct->GetPrefixCPP(), *ScriptStruct->GetName(), *Property->GetNameCPP());
+						UE_LOG(LogClass, Warning, TEXT("BoolProperty %s%s::%s is not initialized properly.%s"), ScriptStruct->GetPrefixCPP(), *ScriptStruct->GetName(), *Property->GetNameCPP(), *GetStructLocation(ScriptStruct));
 					}
 				}
 				else if (Property->IsA(FNameProperty::StaticClass()))
@@ -3393,7 +3428,7 @@ int32 FStructUtils::AttemptToFindUninitializedScriptStructMembers()
 						if (!Property->Identical_InContainer(WrapperAA.GetData(), Wrapper55.GetData()))
 						{
 							++UninitializedScriptStructMemberCount;
-							UE_LOG(LogClass, Warning, TEXT("%s%s::%s is not initialized properly"), ScriptStruct->GetPrefixCPP(), *ScriptStruct->GetName(), *Property->GetNameCPP());
+							UE_LOG(LogClass, Warning, TEXT("%s%s::%s is not initialized properly.%s"), ScriptStruct->GetPrefixCPP(), *ScriptStruct->GetName(), *Property->GetNameCPP(), *GetStructLocation(ScriptStruct));
 						}
 					}
 				}
@@ -3403,7 +3438,7 @@ int32 FStructUtils::AttemptToFindUninitializedScriptStructMembers()
 
 	if (UninitializedScriptStructMemberCount > 0)
 	{
-		UE_LOG(LogClass, Display, TEXT("%i Uninitialized script stuct members found"), UninitializedScriptStructMemberCount);
+		UE_LOG(LogClass, Display, TEXT("%i Uninitialized script struct members found"), UninitializedScriptStructMemberCount);
 	}
 	return UninitializedScriptStructMemberCount;
 }
@@ -3641,7 +3676,7 @@ UObject* UClass::CreateDefaultObject()
 				FString PackageName;
 				FString CDOName;
 				bool bDoNotify = false;
-				if (GIsInitialLoad && GetOutermost()->HasAnyPackageFlags(PKG_CompiledIn))
+				if (GIsInitialLoad && GetOutermost()->HasAnyPackageFlags(PKG_CompiledIn) && !GetOutermost()->HasAnyPackageFlags(PKG_RuntimeGenerated))
 				{
 					PackageName = GetOutermost()->GetFName().ToString();
 					CDOName = GetDefaultObjectName().ToString();
@@ -4058,7 +4093,7 @@ void UClass::SetUpRuntimeReplicationData()
 					NetProperties.Add(Prop);
 				}
 			}
-		}
+			}
 
 		for(TFieldIterator<UField> It(this,EFieldIteratorFlags::ExcludeSuper); It; ++It)
 		{
@@ -4079,20 +4114,20 @@ void UClass::SetUpRuntimeReplicationData()
 		const bool bIsNativeClass = HasAnyClassFlags(CLASS_Native);
 		if (!bIsNativeClass)
 		{
-			// Sort NetProperties so that their ClassReps are sorted by memory offset
+		// Sort NetProperties so that their ClassReps are sorted by memory offset
 			struct FComparePropertyOffsets
-			{
+		{
 				FORCEINLINE bool operator()(FProperty& A, FProperty& B) const
-				{
-					// Ensure stable sort
+			{
+				// Ensure stable sort
 					if (A.GetOffset_ForGC() == B.GetOffset_ForGC())
-					{
-						return A.GetName() < B.GetName();
-					}
-
-					return A.GetOffset_ForGC() < B.GetOffset_ForGC();
+				{
+					return A.GetName() < B.GetName();
 				}
-			};
+
+				return A.GetOffset_ForGC() < B.GetOffset_ForGC();
+			}
+		};
 
 			Sort(NetProperties.GetData(), NetProperties.Num(), FComparePropertyOffsets());
 		}
@@ -5080,6 +5115,22 @@ bool UClass::ReplaceNativeFunction(FName InFName, FNativeFuncPtr InPointer, bool
 
 #endif
 
+UClass* UClass::GetAuthoritativeClass()
+{
+#if WITH_HOT_RELOAD && WITH_ENGINE
+	if (GIsHotReload)
+	{
+		const TMap<UClass*, UClass*>& ReinstancedClasses = GetClassesToReinstanceForHotReload();
+		if (UClass* const* FoundMapping = ReinstancedClasses.Find(this))
+		{
+			return *FoundMapping;
+		}
+	}
+#endif
+
+	return this;
+}
+
 void UClass::AddNativeFunction(const ANSICHAR* InName, FNativeFuncPtr InPointer)
 {
 	FName InFName(InName);
@@ -5198,7 +5249,10 @@ void UClass::AssembleReferenceTokenStreams()
 		{
 			// Force the default object to be created (except when we're in the middle of exit purge -
 			// this may happen if we exited PreInit early because of error).
-			if (!GExitPurge)
+			// 
+			// Keep from handling script generated classes here, as those systems handle CDO 
+			// instantiation themselves.
+			if (!GExitPurge && !Class->HasAnyFlags(RF_BeingRegenerated))
 			{
 				Class->GetDefaultObject(); // Force the default object to be constructed if it isn't already
 			}
@@ -5263,20 +5317,18 @@ const FString UClass::GetConfigName() const
 void UClass::GetHideFunctions(TArray<FString>& OutHideFunctions) const
 {
 	static const FName NAME_HideFunctions(TEXT("HideFunctions"));
-	if (HasMetaData(NAME_HideFunctions))
+	if (const FString* HideFunctions = FindMetaData(NAME_HideFunctions))
 	{
-		const FString& HideFunctions = GetMetaData(NAME_HideFunctions);
-		HideFunctions.ParseIntoArray(OutHideFunctions, TEXT(" "), true);
+		HideFunctions->ParseIntoArray(OutHideFunctions, TEXT(" "), true);
 	}
 }
 
 bool UClass::IsFunctionHidden(const TCHAR* InFunction) const
 {
 	static const FName NAME_HideFunctions(TEXT("HideFunctions"));
-	if (HasMetaData(NAME_HideFunctions))
+	if (const FString* HideFunctions = FindMetaData(NAME_HideFunctions))
 	{
-		const FString& HideFunctions = GetMetaData(NAME_HideFunctions);
-		return !!FCString::StrfindDelim(*HideFunctions, InFunction, TEXT(" "));
+		return !!FCString::StrfindDelim(**HideFunctions, InFunction, TEXT(" "));
 	}
 	return false;
 }
@@ -5284,20 +5336,18 @@ bool UClass::IsFunctionHidden(const TCHAR* InFunction) const
 void UClass::GetAutoExpandCategories(TArray<FString>& OutAutoExpandCategories) const
 {
 	static const FName NAME_AutoExpandCategories(TEXT("AutoExpandCategories"));
-	if (HasMetaData(NAME_AutoExpandCategories))
+	if (const FString* AutoExpandCategories = FindMetaData(NAME_AutoExpandCategories))
 	{
-		const FString& AutoExpandCategories = GetMetaData(NAME_AutoExpandCategories);
-		AutoExpandCategories.ParseIntoArray(OutAutoExpandCategories, TEXT(" "), true);
+		AutoExpandCategories->ParseIntoArray(OutAutoExpandCategories, TEXT(" "), true);
 	}
 }
 
 bool UClass::IsAutoExpandCategory(const TCHAR* InCategory) const
 {
 	static const FName NAME_AutoExpandCategories(TEXT("AutoExpandCategories"));
-	if (HasMetaData(NAME_AutoExpandCategories))
+	if (const FString* AutoExpandCategories = FindMetaData(NAME_AutoExpandCategories))
 	{
-		const FString& AutoExpandCategories = GetMetaData(NAME_AutoExpandCategories);
-		return !!FCString::StrfindDelim(*AutoExpandCategories, InCategory, TEXT(" "));
+		return !!FCString::StrfindDelim(**AutoExpandCategories, InCategory, TEXT(" "));
 	}
 	return false;
 }
@@ -5305,20 +5355,18 @@ bool UClass::IsAutoExpandCategory(const TCHAR* InCategory) const
 void UClass::GetAutoCollapseCategories(TArray<FString>& OutAutoCollapseCategories) const
 {
 	static const FName NAME_AutoCollapseCategories(TEXT("AutoCollapseCategories"));
-	if (HasMetaData(NAME_AutoCollapseCategories))
+	if (const FString* AutoCollapseCategories = FindMetaData(NAME_AutoCollapseCategories))
 	{
-		const FString& AutoCollapseCategories = GetMetaData(NAME_AutoCollapseCategories);
-		AutoCollapseCategories.ParseIntoArray(OutAutoCollapseCategories, TEXT(" "), true);
+		AutoCollapseCategories->ParseIntoArray(OutAutoCollapseCategories, TEXT(" "), true);
 	}
 }
 
 bool UClass::IsAutoCollapseCategory(const TCHAR* InCategory) const
 {
 	static const FName NAME_AutoCollapseCategories(TEXT("AutoCollapseCategories"));
-	if (HasMetaData(NAME_AutoCollapseCategories))
+	if (const FString* AutoCollapseCategories = FindMetaData(NAME_AutoCollapseCategories))
 	{
-		const FString& AutoCollapseCategories = GetMetaData(NAME_AutoCollapseCategories);
-		return !!FCString::StrfindDelim(*AutoCollapseCategories, InCategory, TEXT(" "));
+		return !!FCString::StrfindDelim(**AutoCollapseCategories, InCategory, TEXT(" "));
 	}
 	return false;
 }
@@ -5326,20 +5374,18 @@ bool UClass::IsAutoCollapseCategory(const TCHAR* InCategory) const
 void UClass::GetClassGroupNames(TArray<FString>& OutClassGroupNames) const
 {
 	static const FName NAME_ClassGroupNames(TEXT("ClassGroupNames"));
-	if (HasMetaData(NAME_ClassGroupNames))
+	if (const FString* ClassGroupNames = FindMetaData(NAME_ClassGroupNames))
 	{
-		const FString& ClassGroupNames = GetMetaData(NAME_ClassGroupNames);
-		ClassGroupNames.ParseIntoArray(OutClassGroupNames, TEXT(" "), true);
+		ClassGroupNames->ParseIntoArray(OutClassGroupNames, TEXT(" "), true);
 	}
 }
 
 bool UClass::IsClassGroupName(const TCHAR* InGroupName) const
 {
 	static const FName NAME_ClassGroupNames(TEXT("ClassGroupNames"));
-	if (HasMetaData(NAME_ClassGroupNames))
+	if (const FString* ClassGroupNames = FindMetaData(NAME_ClassGroupNames))
 	{
-		const FString& ClassGroupNames = GetMetaData(NAME_ClassGroupNames);
-		return !!FCString::StrfindDelim(*ClassGroupNames, InGroupName, TEXT(" "));
+		return !!FCString::StrfindDelim(**ClassGroupNames, InGroupName, TEXT(" "));
 	}
 	return false;
 }
@@ -5953,6 +5999,18 @@ UScriptStruct* TBaseStructure<FDateTime>::Get()
 UScriptStruct* TBaseStructure<FFrameNumber>::Get()
 {
 	static UScriptStruct* ScriptStruct = StaticGetBaseStructureInternal(TEXT("FrameNumber"));
+	return ScriptStruct;
+}
+
+UScriptStruct* TBaseStructure<FFrameTime>::Get()
+{
+	static UScriptStruct* ScriptStruct = StaticGetBaseStructureInternal(TEXT("FrameTime"));
+	return ScriptStruct;
+}
+
+UScriptStruct* TBaseStructure<FAssetBundleData>::Get()
+{
+	static UScriptStruct* ScriptStruct = StaticGetBaseStructureInternal(TEXT("AssetBundleData"));
 	return ScriptStruct;
 }
 

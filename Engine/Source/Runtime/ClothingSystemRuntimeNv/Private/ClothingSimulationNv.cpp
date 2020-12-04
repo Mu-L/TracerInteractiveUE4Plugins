@@ -28,10 +28,6 @@
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "SkeletalRenderPublic.h"
 
-DECLARE_CYCLE_STAT(TEXT("Compute Clothing Normals"), STAT_NvClothComputeNormals, STATGROUP_Physics);
-DECLARE_CYCLE_STAT(TEXT("Internal Solve"), STAT_NvClothInternalSolve, STATGROUP_Physics);
-DECLARE_CYCLE_STAT(TEXT("Update Collisions"), STAT_NvClothUpdateCollisions, STATGROUP_Physics);
-DECLARE_CYCLE_STAT(TEXT("Fill Context"), STAT_NvClothFillContext, STATGROUP_Physics);
 DECLARE_CYCLE_STAT(TEXT("Update Anim Drive"), STAT_NvClothUpdateAnimDrive, STATGROUP_Physics);
 
 //=============================================================================
@@ -39,29 +35,11 @@ DECLARE_CYCLE_STAT(TEXT("Update Anim Drive"), STAT_NvClothUpdateAnimDrive, STATG
 //=============================================================================
 
 FClothingSimulationContextNv::FClothingSimulationContextNv()
-	: PredictedLod(0)
-	, WindAdaption(0.0f)
 {
 }
 
 FClothingSimulationContextNv::~FClothingSimulationContextNv()
 {
-}
-
-void FClothingSimulationContextNv::Fill(const USkeletalMeshComponent* InComponent, float InDeltaSeconds, float InMaxPhysicsDelta)
-{
-	SCOPE_CYCLE_COUNTER(STAT_NvClothFillContext);
-	LLM_SCOPE(ELLMTag::SkeletalMesh);
-
-	FClothingSimulationContextCommon::Fill(InComponent, InDeltaSeconds, InMaxPhysicsDelta);
-
-	PredictedLod = InComponent->PredictedLODLevel;
-}
-
-void FClothingSimulationContextNv::FillRefToLocals(const USkeletalMeshComponent* InComponent)
-{
-	FClothingSimulationContextCommon::RefToLocals.Reset();
-	InComponent->GetCurrentRefToLocalMatrices(FClothingSimulationContextCommon::RefToLocals, InComponent->PredictedLODLevel);
 }
 
 void FClothingSimulationContextNv::FillWorldGravity(const USkeletalMeshComponent* InComponent)
@@ -72,11 +50,6 @@ void FClothingSimulationContextNv::FillWorldGravity(const USkeletalMeshComponent
 		GravityStrength = ComponentWorld->GetGravityZ();
 	}
 	FClothingSimulationContextCommon::WorldGravity = FVector(0.f, 0.f, GravityStrength);
-}
-
-void FClothingSimulationContextNv::FillWindVelocity(const USkeletalMeshComponent* InComponent)
-{
-	WindAdaption = FClothingSimulationContextCommon::SetWindFromComponent(InComponent);  // Also update wind adaptation
 }
 
 //=============================================================================
@@ -144,7 +117,11 @@ void FClothingSimulationNv::CreateActor(USkeletalMeshComponent* InOwnerComponent
 		// We need to skin the vert positions to the current pose, or we'll end
 		// up with clothing placed incorrectly on already posed meshes.
 		FTransform SimBoneTransformCS = InOwnerComponent->GetBoneTransform(Asset->ReferenceBoneIndex, FTransform::Identity);
-		ClothingMeshUtils::SkinPhysicsMesh(Asset->UsedBoneIndices, PhysMesh, SimBoneTransformCS, RefToLocals.GetData(), RefToLocals.Num(), SkinnedVerts, SkinnedNormals);
+		{
+			SCOPE_CYCLE_COUNTER(STAT_ClothSkinPhysMesh);
+
+			ClothingMeshUtils::SkinPhysicsMesh(Asset->UsedBoneIndices, PhysMesh, SimBoneTransformCS, RefToLocals.GetData(), RefToLocals.Num(), SkinnedVerts, SkinnedNormals);
+		}
 
 		Tris.AddDefaulted(NumTriangles);
 
@@ -234,11 +211,22 @@ void FClothingSimulationNv::CreateActor(USkeletalMeshComponent* InOwnerComponent
 		nv::cloth::Range<physx::PxVec4> MotionConstraints = NewCloth->getMotionConstraints();
 		const int32 NumMotionConstraints = NewCloth->getNumMotionConstraints();
 		check(NumMotionConstraints == Verts.Num());
-		const FPointWeightMap& MaxDistances = PhysMesh.GetWeightMap(EWeightMapTargetCommon::MaxDistance);
-		for(int32 ConstraintIndex = 0; ConstraintIndex < NumMotionConstraints; ++ConstraintIndex)
+		const FPointWeightMap* const MaxDistances = PhysMesh.FindWeightMap(EWeightMapTargetCommon::MaxDistance);
+		if (MaxDistances && MaxDistances->Num())
 		{
-			physx::PxVec4& Constraint = MotionConstraints[ConstraintIndex];
-			Constraint = physx::PxVec4(U2PVector(SkinnedVerts[ConstraintIndex]), MaxDistances[ConstraintIndex]);
+			for(int32 ConstraintIndex = 0; ConstraintIndex < NumMotionConstraints; ++ConstraintIndex)
+			{
+				physx::PxVec4& Constraint = MotionConstraints[ConstraintIndex];
+				Constraint = physx::PxVec4(U2PVector(SkinnedVerts[ConstraintIndex]), (*MaxDistances)[ConstraintIndex]);
+			}
+		}
+		else
+		{
+			for(int32 ConstraintIndex = 0; ConstraintIndex < NumMotionConstraints; ++ConstraintIndex)
+			{
+				physx::PxVec4& Constraint = MotionConstraints[ConstraintIndex];
+				Constraint = physx::PxVec4(U2PVector(SkinnedVerts[ConstraintIndex]), TNumericLimits<float>::Max());
+			}
 		}
 
 		// Set up the starting transform data for the cloth, then clear our inertia so
@@ -540,6 +528,8 @@ void FClothingSimulationNv::Simulate(IClothingSimulationContext* InContext)
 		return;
 	}
 
+	const double StartTime = FPlatformTime::Seconds();
+
 	UpdateLod(NvContext->PredictedLod, NvContext->ComponentToWorld, NvContext->BoneTransforms, NvContext->RefToLocals);
 
 	// Pre-sim work
@@ -564,7 +554,12 @@ void FClothingSimulationNv::Simulate(IClothingSimulationContext* InContext)
 		// To build motion constraints (max distances) we need to skin the entire physics mesh
 		// this call also updates our fixed particles to avoid iterating the particle list a second time
 		const FClothPhysicalMeshData& PhysMesh = Actor.AssetCreatedFrom->LodData[Actor.CurrentLodIndex].PhysicalMeshData;
-		ClothingMeshUtils::SkinPhysicsMesh(Actor.AssetCreatedFrom->UsedBoneIndices, PhysMesh, RootBoneTransform, NvContext->RefToLocals.GetData(), NvContext->RefToLocals.Num(), Actor.SkinnedPhysicsMeshPositions[Actor.CurrentSkinnedPositionIndex], Actor.SkinnedPhysicsMeshNormals);
+
+		{
+			SCOPE_CYCLE_COUNTER(STAT_ClothSkinPhysMesh);
+
+			ClothingMeshUtils::SkinPhysicsMesh(Actor.AssetCreatedFrom->UsedBoneIndices, PhysMesh, RootBoneTransform, NvContext->RefToLocals.GetData(), NvContext->RefToLocals.Num(), Actor.SkinnedPhysicsMeshPositions[Actor.CurrentSkinnedPositionIndex], Actor.SkinnedPhysicsMeshNormals);
+		}
 
 		nv::cloth::Cloth* CurrentCloth = Actor.LodData[Actor.CurrentLodIndex].Cloth;
 
@@ -622,7 +617,7 @@ void FClothingSimulationNv::Simulate(IClothingSimulationContext* InContext)
 		Actor.UpdateMotionConstraints(NvContext);
 		
 		{
-			SCOPE_CYCLE_COUNTER(STAT_NvClothUpdateCollisions);
+			SCOPE_CYCLE_COUNTER(STAT_ClothUpdateCollisions);
 			// Set collision spheres for this frame
 			FClothCollisionData& CollisionData = Actor.AggregatedCollisions;
 
@@ -705,7 +700,7 @@ void FClothingSimulationNv::Simulate(IClothingSimulationContext* InContext)
 
 	// Sim
 	{
-		SCOPE_CYCLE_COUNTER(STAT_NvClothInternalSolve);
+		SCOPE_CYCLE_COUNTER(STAT_ClothInternalSolve);
 		
 		if(Solver->beginSimulation(NvContext->DeltaSeconds))
 		{
@@ -739,11 +734,17 @@ void FClothingSimulationNv::Simulate(IClothingSimulationContext* InContext)
 		// Flip the skin buffer
 		Actor.CurrentSkinnedPositionIndex = (Actor.CurrentSkinnedPositionIndex + 1) % 2;
 	}
+
+	// Update simulation time in ms (and provide an instant average instead of the value in real-time)
+	const float PrevSimulationTime = SimulationTime;  // Copy the atomic to prevent a re-read
+	const float CurrSimulationTime = (float)((FPlatformTime::Seconds() - StartTime) * 1000.);
+	static const float SimulationTimeDecay = 0.03f; // 0.03 seems to provide a good rate of update for the instant average
+	SimulationTime = PrevSimulationTime ? PrevSimulationTime + (CurrSimulationTime - PrevSimulationTime) * SimulationTimeDecay : CurrSimulationTime;
 }
 
 void FClothingSimulationNv::ComputePhysicalMeshNormals(FClothingActorNv &Actor)
 {
-	SCOPE_CYCLE_COUNTER(STAT_NvClothComputeNormals);
+	SCOPE_CYCLE_COUNTER(STAT_ClothComputeNormals);
 
 	FMemory::Memzero(Actor.CurrentNormals.GetData(), Actor.CurrentNormals.Num() * sizeof(FVector));
 
@@ -1181,14 +1182,18 @@ void FClothingSimulationNv::UpdateLod(int32 InPredictedLod, const FTransform& Co
 						const FClothPhysicalMeshData& PhysMesh = Actor.AssetCreatedFrom->LodData[PredictedClothingLod].PhysicalMeshData;
 						TArray<FVector> SkinnedPhysicsMeshPositions;
 						TArray<FVector> SkinnedPhysicsMeshNormals;
-						ClothingMeshUtils::SkinPhysicsMesh(
-							Actor.AssetCreatedFrom->UsedBoneIndices,
-							PhysMesh,
-							CSTransforms[Actor.AssetCreatedFrom->ReferenceBoneIndex],
-							RefToLocals.GetData(),
-							RefToLocals.Num(),
-							SkinnedPhysicsMeshPositions,
-							SkinnedPhysicsMeshNormals);
+						{
+							SCOPE_CYCLE_COUNTER(STAT_ClothSkinPhysMesh);
+
+							ClothingMeshUtils::SkinPhysicsMesh(
+								Actor.AssetCreatedFrom->UsedBoneIndices,
+								PhysMesh,
+								CSTransforms[Actor.AssetCreatedFrom->ReferenceBoneIndex],
+								RefToLocals.GetData(),
+								RefToLocals.Num(),
+								SkinnedPhysicsMeshPositions,
+								SkinnedPhysicsMeshNormals);
+						}
 
 						for(int32 ParticleIndex = 0; ParticleIndex < NumNewParticles; ++ParticleIndex)
 						{
@@ -1268,7 +1273,7 @@ void FClothingSimulationNv::DebugDraw_PhysMesh(USkeletalMeshComponent* OwnerComp
 
 		const FClothPhysicalMeshData& PhysMesh = Actor.AssetCreatedFrom->LodData[CurrentClothLod].PhysicalMeshData;
 		const TArray<uint32>& Indices = PhysMesh.Indices;
-		const FPointWeightMap& MaxDistances = PhysMesh.GetWeightMap(EWeightMapTargetCommon::MaxDistance);
+		const TArray<float>& InverseMasses = PhysMesh.InverseMasses;
 
 		const int32 NumTriangles = Indices.Num() / 3;
 
@@ -1283,10 +1288,10 @@ void FClothingSimulationNv::DebugDraw_PhysMesh(USkeletalMeshComponent* OwnerComp
 				const FVector Start = RootBoneTransform.TransformPosition(P2UVector(Particles[Indices[BaseIndex + TriVertIndex]]));
 				const FVector End = RootBoneTransform.TransformPosition(P2UVector(Particles[Indices[BaseIndex + NextIndex]]));
 
-				const float MaxDist0 = MaxDistances[Indices[BaseIndex + TriVertIndex]];
-				const float MaxDist1 = MaxDistances[Indices[BaseIndex + NextIndex]];
+				const float& InvMass1 = InverseMasses[Indices[BaseIndex + TriVertIndex]];
+				const float& InvMass2 = InverseMasses[Indices[BaseIndex + NextIndex]];
 
-				const FLinearColor LineColor = MaxDist0 < SMALL_NUMBER && MaxDist1 < SMALL_NUMBER ? FColor::Magenta : FColor::White;
+				const FLinearColor LineColor = (InvMass1 == 0.0f && InvMass2 == 0.0f) ? FColor::Magenta : FColor::White;
 
 				PDI->DrawLine(Start, End, LineColor, SDPG_World, 0.0f , 0.001f);
 			}
@@ -1424,8 +1429,7 @@ void FClothingSimulationNv::DebugDraw_Backstops(USkeletalMeshComponent* OwnerCom
 		const FPointWeightMap* const BackstopRadiuses = PhysMesh.FindWeightMap(EWeightMapTargetCommon::BackstopRadius);
 		const FPointWeightMap* const MaxDistances = PhysMesh.FindWeightMap(EWeightMapTargetCommon::MaxDistance);
 		if (!BackstopDistances || !BackstopDistances->Num() || 
-			!BackstopRadiuses || !BackstopRadiuses->Num() ||
-			!MaxDistances || !MaxDistances->Num())
+			!BackstopRadiuses || !BackstopRadiuses->Num())
 		{
 			continue;
 		}
@@ -1435,7 +1439,6 @@ void FClothingSimulationNv::DebugDraw_Backstops(USkeletalMeshComponent* OwnerCom
 		const TArray<FVector>& SkinnedPositions = Actor.GetCurrentSkinnedPositions();
 		const int32 NumVerts = SkinnedPositions.Num();
 		check(NumVerts == Actor.SkinnedPhysicsMeshNormals.Num());
-		check(NumVerts == MaxDistances->Num());
 
 		for(int32 VertIndex = 0; VertIndex < NumVerts; ++VertIndex)
 		{
@@ -1444,7 +1447,7 @@ void FClothingSimulationNv::DebugDraw_Backstops(USkeletalMeshComponent* OwnerCom
 
 			float BackstopDistance = (*BackstopDistances)[VertIndex];
 			const float BackstopRadius = (*BackstopRadiuses)[VertIndex];
-			const float MaxDistance = (*MaxDistances)[VertIndex];
+			const float MaxDistance = (MaxDistances && MaxDistances->Num()) ? (*MaxDistances)[VertIndex] : TNumericLimits<float>::Max();
 
 			FColor FixedPointColor = FColor::White;
 
@@ -1639,6 +1642,8 @@ FClothingActorNv::FClothingActorNv()
 
 void FClothingActorNv::SkinPhysicsMesh(FClothingSimulationContextNv* InContext)
 {
+	SCOPE_CYCLE_COUNTER(STAT_ClothSkinPhysMesh);
+
 	const FClothPhysicalMeshData& PhysMesh = AssetCreatedFrom->LodData[CurrentLodIndex].PhysicalMeshData;
 	FTransform RootBoneTransform = InContext->BoneTransforms[AssetCreatedFrom->ReferenceBoneIndex];
 	ClothingMeshUtils::SkinPhysicsMesh(AssetCreatedFrom->UsedBoneIndices, PhysMesh, RootBoneTransform, InContext->RefToLocals.GetData(), InContext->RefToLocals.Num(), SkinnedPhysicsMeshPositions[CurrentSkinnedPositionIndex], SkinnedPhysicsMeshNormals);
@@ -1657,17 +1662,23 @@ void FClothingActorNv::UpdateMotionConstraints(FClothingSimulationContextNv* InC
 
 	const FClothPhysicalMeshData& PhysMesh = AssetCreatedFrom->LodData[CurrentLodIndex].PhysicalMeshData;
 
+	nv::cloth::Range<physx::PxVec4> MotionConstraints = CurrentCloth->getMotionConstraints();
+	const int32 NumMotionConstraints = CurrentCloth->getNumMotionConstraints();
+	check(NumMotionConstraints <= CurrentSkinnedPositions.Num());
+
 	const FPointWeightMap* const MaxDistances = PhysMesh.FindWeightMap(EWeightMapTargetCommon::MaxDistance);
 	if (MaxDistances && MaxDistances->Num())
 	{
-
-		nv::cloth::Range<physx::PxVec4> MotionConstraints = CurrentCloth->getMotionConstraints();
-		const int32 NumMotionConstraints = CurrentCloth->getNumMotionConstraints();
-		check(NumMotionConstraints <= CurrentSkinnedPositions.Num());
-
 		for(int32 ConstraintIndex = 0; ConstraintIndex < NumMotionConstraints; ++ConstraintIndex)
 		{
 			MotionConstraints[ConstraintIndex] = physx::PxVec4(U2PVector(CurrentSkinnedPositions[ConstraintIndex]), (*MaxDistances)[ConstraintIndex] * InContext->MaxDistanceScale);
+		}
+	}
+	else
+	{
+		for(int32 ConstraintIndex = 0; ConstraintIndex < NumMotionConstraints; ++ConstraintIndex)
+		{
+			MotionConstraints[ConstraintIndex] = physx::PxVec4(U2PVector(CurrentSkinnedPositions[ConstraintIndex]), TNumericLimits<float>::Max());
 		}
 	}
 
@@ -1703,12 +1714,7 @@ void FClothingActorNv::UpdateWind(FClothingSimulationContextNv* InContext, const
 			CalculateParticleVelocities(ParticleVelocities);
 
 			const FClothPhysicalMeshData& PhysMesh = AssetCreatedFrom->LodData[CurrentLodIndex].PhysicalMeshData;
-			const FPointWeightMap* const MaxDistances = PhysMesh.FindWeightMap(EWeightMapTargetCommon::MaxDistance);
-			if (!MaxDistances || !MaxDistances->Num())
-			{
-				return;
-			}
-
+			const TArray<float>& InverseMasses = PhysMesh.InverseMasses;
 			const int32 NumAccelerations = LodData[CurrentLodIndex].Cloth->getNumParticleAccelerations();
 			nv::cloth::Range<physx::PxVec4> ParticleAccelerations = LodData[CurrentLodIndex].Cloth->getParticleAccelerations();
 
@@ -1717,7 +1723,7 @@ void FClothingActorNv::UpdateWind(FClothingSimulationContextNv* InContext, const
 				const FVector& Velocity = ParticleVelocities[AccelerationIndex];
 				FVector VelocityDelta = (TransformedWindVelocity * 2500.0f - Velocity);
 
-				if((*MaxDistances)[AccelerationIndex] > 0.0f && !VelocityDelta.IsZero())
+				if(InverseMasses[AccelerationIndex] > 0.0f && !VelocityDelta.IsZero())
 				{
 					// scaled by angle
 					const float DirectionDot = FVector::DotProduct(VelocityDelta.GetUnsafeNormal(), CurrentNormals[AccelerationIndex]);

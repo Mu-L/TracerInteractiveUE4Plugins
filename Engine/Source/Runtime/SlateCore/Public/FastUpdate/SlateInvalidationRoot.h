@@ -5,11 +5,14 @@
 #include "CoreMinimal.h"
 #include "UObject/GCObject.h"
 #include "WidgetProxy.h"
+#include "FastUpdate/SlateInvalidationRootHandle.h"
 #include "Rendering/DrawElements.h"
 
 struct FSlateCachedElementData;
 class FSlateWindowElementList;
 class FWidgetStyle;
+
+#define UE_SLATE_DEBUGGING_CLEAR_ALL_FAST_PATH_DATA 0
 
 struct FSlateInvalidationContext
 {
@@ -34,6 +37,13 @@ struct FSlateInvalidationContext
 	bool bAllowFastPathUpdate;
 };
 
+enum class ESlateInvalidationPaintType
+{
+	None,
+	Slow,
+	Fast,
+};
+
 struct FSlateInvalidationResult
 {
 	FSlateInvalidationResult()
@@ -52,6 +62,7 @@ class FSlateInvalidationRoot : public FGCObject, public FNoncopyable
 	friend class FSlateUpdateFastWidgetPathTask;
 	friend class FSlateUpdateFastPathAndHitTestGridTask;
 	friend class FWidgetProxyHandle;
+
 public:
 	SLATECORE_API FSlateInvalidationRoot();
 	SLATECORE_API virtual ~FSlateInvalidationRoot();
@@ -62,49 +73,60 @@ public:
 	SLATECORE_API virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
 	SLATECORE_API virtual FString GetReferencerName() const override;
 
-
-	SLATECORE_API void InvalidateRoot();
+	SLATECORE_API void InvalidateRoot(const SWidget* Investigator = nullptr);
 
 	/** Call to notify that the ordering of children somewhere in the hierarchy below this root has changed and the fast path is no longer valid */
-	SLATECORE_API void InvalidateChildOrder();
+	SLATECORE_API void InvalidateChildOrder(const SWidget* Investigator = nullptr);
 
-	SLATECORE_API void InvalidateScreenPosition();
+	SLATECORE_API void InvalidateScreenPosition(const SWidget* Investigator = nullptr);
 
 	bool NeedsSlowPath() const { return bNeedsSlowPath; }
 
 	void RemoveWidgetFromFastPath(FWidgetProxy& Proxy);
 
 	/** @return the cached draw elements for this window and its widget hierarchy*/
-	FSlateCachedElementData& GetCachedElements()
-	{
-		return *CachedElementData;
-	}
-
+	FSlateCachedElementData& GetCachedElements() { return *CachedElementData; }
+	const SWidget* GetInvalidationRootWidget() const;
 	int32 GetFastPathGenerationNumber() const { return FastPathGenerationNumber; }
+	FSlateInvalidationRootHandle GetInvalidationRootHandle() const { return InvalidationRootHandle; }
 
 	SLATECORE_API FSlateInvalidationResult PaintInvalidationRoot(const FSlateInvalidationContext& Context);
 
 	void OnWidgetDestroyed(const SWidget* Widget);
+
+	SLATECORE_API void Advanced_ResetInvalidation(bool bClearResourcesImmediately);
+
+	SLATECORE_API static void ClearAllWidgetUpdatesPending();
+
+#if WITH_SLATE_DEBUGGING
+	/** @return the last paint type the invalidation root handle used. */
+	ESlateInvalidationPaintType GetLastPaintType() const { return LastPaintType; }
+	void SetLastPaintType(ESlateInvalidationPaintType Value) { LastPaintType = Value; }
+#endif
+
 protected:
 	virtual int32 PaintSlowPath(const FSlateInvalidationContext& Context) = 0;
 
 	void SetInvalidationRootWidget(SWidget& InInvalidationRootWidget) { InvalidationRootWidget = &InInvalidationRootWidget; }
 	void SetInvalidationRootHittestGrid(FHittestGrid& InHittestGrid) { RootHittestGrid = &InHittestGrid; }
+	int32 GetCachedMaxLayerId() const { return CachedMaxLayerId; }
 
 	SLATECORE_API bool ProcessInvalidation();
 
 	SLATECORE_API void ClearAllFastPathData(bool bClearResourcesImmediately);
 
 private:
-
-	void OnInvalidateAllWidgets(bool bClearResourcesImmediately);
-
+	void HandleInvalidateAllWidgets(bool bClearResourcesImmediately);
+protected:
+	virtual void OnRootInvalidated() { }
+private:
 	bool PaintFastPath(const FSlateInvalidationContext& Context);
 
 	void BuildFastPathList(SWidget* RootWidget);
-	void BuildNewFastPathList_Recursive(FSlateInvalidationRoot& Root, FWidgetProxy& Proxy, int32 ParentIndex, int32& NextTreeIndex, TArray<FWidgetProxy>& CurrentFastPathList, TArray<FWidgetProxy, TMemStackAllocator<>>& NewFastPathList);
+	bool BuildNewFastPathList_Recursive(FSlateInvalidationRoot& Root, FWidgetProxy& Proxy, int32 ParentIndex, int32& NextTreeIndex, TArray<FWidgetProxy>& CurrentFastPathList, TArray<FWidgetProxy, TMemStackAllocator<>>& NewFastPathList);
 
 	void AdjustWidgetsDesktopGeometry(FVector2D WindowToDesktopTransform);
+
 private:
 	TArray<FWidgetProxy> FastWidgetPathList;
 	/** Index to widgets which are dirty, volatile, or need some sort of per frame update (such as a tick or timer) */
@@ -127,7 +149,18 @@ private:
 
 	int32 CachedMaxLayerId;
 
+	FSlateInvalidationRootHandle InvalidationRootHandle;
+
 	bool bChildOrderInvalidated;
 	bool bNeedsSlowPath;
 	bool bNeedScreenPositionShift;
+
+#if WITH_SLATE_DEBUGGING
+	ESlateInvalidationPaintType LastPaintType;
+#endif
+#if UE_SLATE_DEBUGGING_CLEAR_ALL_FAST_PATH_DATA
+	TArray<const SWidget*> FastWidgetPathToClearedBecauseOfDelay;
+#endif
+
+	static TArray<FSlateInvalidationRoot*> ClearUpdateList;
 };

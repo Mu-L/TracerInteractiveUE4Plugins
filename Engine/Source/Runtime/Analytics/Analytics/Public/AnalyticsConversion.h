@@ -25,13 +25,46 @@ inline FString AnalyticsConversionToString(const FString& Value)
 {
 	return Value;
 }
+
+#define ANALYTICS_MAX_FLOAT_VALUE_BEFORE_EXPONENTIAL_NOTATION (1.0e+15F)
+
 inline FString AnalyticsConversionToString(float Value)
 {
-	return LexToSanitizedString(Value);
+	if (FPlatformMath::IsFinite(Value))
+	{
+		if (Value > ANALYTICS_MAX_FLOAT_VALUE_BEFORE_EXPONENTIAL_NOTATION || Value < -ANALYTICS_MAX_FLOAT_VALUE_BEFORE_EXPONENTIAL_NOTATION)
+		{
+			return FString::Printf(TEXT("%.9e"), Value);
+		}
+		else
+		{
+			return LexToSanitizedString(Value);
+		}
+	}
+	else
+	{
+		// This function exists to convert numbers to Json-compatible strings for analytics. Json doesn't support INF or NAN so we will just send null
+		return "null";
+	}
 }
 inline FString AnalyticsConversionToString(double Value)
 {
-	return LexToSanitizedString(Value);
+	if (FPlatformMath::IsFinite(Value))
+	{
+		if (Value > ANALYTICS_MAX_FLOAT_VALUE_BEFORE_EXPONENTIAL_NOTATION || Value < -ANALYTICS_MAX_FLOAT_VALUE_BEFORE_EXPONENTIAL_NOTATION)
+		{
+			return FString::Printf(TEXT("%.9e"), Value);
+		}
+		else
+		{
+			return LexToSanitizedString(Value);
+		}
+	}
+	else
+	{
+		// This function exists to convert numbers to Json-compatible strings for analytics. Json doesn't support INF or NAN so we will just send null
+		return "null";
+	}
 }
 
 /** Array conversion. Creates comma-separated list. */

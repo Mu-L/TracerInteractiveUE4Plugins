@@ -19,6 +19,7 @@ GeometryCollectionActor.cpp: AGeometryCollectionActor methods.
 #include "Math/Box.h"
 #include "Physics/PhysicsInterfaceCore.h"
 #include "PhysicsSolver.h"
+#include "GeometryCollection/GeometryCollectionDebugDrawComponent.h"
 
 
 DEFINE_LOG_CATEGORY_STATIC(AGeometryCollectionActorLogging, Log, All);
@@ -40,6 +41,8 @@ AGeometryCollectionActor::AGeometryCollectionActor(const FObjectInitializer& Obj
 
 	PrimaryActorTick.bCanEverTick = true;
 	SetActorTickEnabled(true);
+
+	bReplicates = true;
 }
 
 

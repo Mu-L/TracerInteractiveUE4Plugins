@@ -39,6 +39,9 @@ class ENGINE_API UDeviceProfile : public UTextureLODSettings
 	/** This is not a property, it shouldn't be set by the editor */
 	FString ConfigPlatform;
 
+	/** A collection of UDeviceProfileFragment names, which can contain predefined sets of cvars */
+	TArray<FString> FragmentIncludes;
+
 public:
 
 	/** The collection of CVars which is set from this profile */
@@ -86,6 +89,7 @@ public:
 
 	//~ Begin UObject Interface
 	virtual void PostInitProperties() override;
+	virtual void BeginDestroy() override;
 	//~ End UObject Interface
 
 #if WITH_EDITOR

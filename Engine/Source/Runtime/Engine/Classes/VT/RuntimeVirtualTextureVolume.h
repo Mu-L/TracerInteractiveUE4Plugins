@@ -7,12 +7,12 @@
 #include "RuntimeVirtualTextureVolume.generated.h"
 
 /** Actor used to place a URuntimeVirtualTexture in the world. */
-UCLASS(hidecategories=(Actor, Collision, Cooking, Input, LOD, Replication), MinimalAPI)
+UCLASS(HideCategories = (Actor, Collision, Cooking, Input, LOD, Physics, Replication, Rendering), MinimalAPI)
 class ARuntimeVirtualTextureVolume : public AActor
 {
 	GENERATED_UCLASS_BODY()
 
-private:
+public:
 	/** Component that owns the runtime virtual texture. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = VirtualTexture, meta = (AllowPrivateAccess = "true"))
 	class URuntimeVirtualTextureComponent* VirtualTextureComponent;
@@ -25,6 +25,7 @@ private:
 
 protected:
 	//~ Begin UObject Interface.
+	virtual void Serialize(FArchive& Ar);
 	virtual bool NeedsLoadForServer() const override { return false; }
 	//~ End UObject Interface.
 	//~ Begin AActor Interface.

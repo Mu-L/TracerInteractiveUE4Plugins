@@ -8,12 +8,11 @@
 #include "DynamicMeshAttributeSet.h"
 
 
-struct FMeshDescription;
-
 enum class EParamOpUnwrapType
 {
 	MinStretch = 0,
-	ExpMap = 1
+	ExpMap = 1,
+	ConformalFreeBoundary = 2
 };
 
 
@@ -21,7 +20,8 @@ enum class EParamOpUnwrapType
 enum class EParamOpIslandMode
 {
 	Auto = 0,
-	PolyGroups = 1
+	PolyGroups = 1,
+	UVIslands = 2
 };
 
 
@@ -35,7 +35,7 @@ public:
 	// 
 
 	// source mesh
-	TSharedPtr<FMeshDescription> InputMesh;
+	TSharedPtr<FDynamicMesh3> InputMesh;
 		
 	// UV generation parameters
 	float Stretch;
@@ -44,6 +44,9 @@ public:
 	// area scaling
 	bool bNormalizeAreas = true;
 	float AreaScaling = 1.0;
+
+	// UV layer
+	int32 UVLayer = 0;
 
 	// Atlas Packing parameters
 	int32 Height = 512;
@@ -88,6 +91,7 @@ protected:
 
 	bool ComputeUVs(FDynamicMesh3& InOutMesh,  TFunction<bool(float)>& Interrupter, const bool bUsePolygroups = false, float GlobalScale = 1.0f);
 	bool ComputeUVs_ExpMap(FDynamicMesh3& InOutMesh, TFunction<bool(float)>& Interrupter, float GlobalScale = 1.0f);
+	bool ComputeUVs_ConformalFreeBoundary(FDynamicMesh3& InOutMesh, TFunction<bool(float)>& Interrupter, float GlobalScale = 1.0f);
 
 	void NormalizeUVAreas(const FDynamicMesh3& Mesh, FDynamicMeshUVOverlay* Overlay, float GlobalScale = 1.0f);
 };

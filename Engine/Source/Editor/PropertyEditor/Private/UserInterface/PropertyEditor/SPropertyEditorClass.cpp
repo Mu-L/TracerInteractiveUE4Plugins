@@ -116,7 +116,9 @@ void SPropertyEditorClass::Construct(const FArguments& InArgs, const TSharedPtr<
 			check(false);
 		}
 		
-		bAllowAbstract = Property->GetOwnerProperty()->HasMetaData(TEXT("AllowAbstract"));
+		const FString* AllowAbstractString = Property->GetOwnerProperty()->FindMetaData(TEXT("AllowAbstract"));
+		bAllowAbstract = AllowAbstractString && (AllowAbstractString->IsEmpty() || AllowAbstractString->ToBool());
+		
 		bAllowOnlyPlaceable = Property->GetOwnerProperty()->HasMetaData(TEXT("OnlyPlaceable"));
 		bIsBlueprintBaseOnly = Property->GetOwnerProperty()->HasMetaData(TEXT("BlueprintBaseOnly"));
 		RequiredInterface = Property->GetOwnerProperty()->GetClassMetaData(TEXT("MustImplement"));
@@ -237,7 +239,7 @@ FText SPropertyEditorClass::GetDisplayValueAsString() const
 	// Guard against re-entrancy which can happen if the delegate executed below (SelectedClass.Get()) forces a slow task dialog to open, thus causing this to lose context and regain focus later starting the loop over again
 	if( !bIsReentrant )
 	{
-		TGuardValue<bool>( bIsReentrant, true );
+		TGuardValue<bool> Guard( bIsReentrant, true );
 		if(PropertyEditor.IsValid())
 		{
 			UObject* ObjectValue = NULL;

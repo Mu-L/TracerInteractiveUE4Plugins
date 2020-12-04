@@ -8,6 +8,9 @@
 #include "Editor.h"
 #include "SPackagesDialog.h"
 #include "Widgets/Views/SListView.h"
+#include "AssetRegistryModule.h"
+#include "IAssetTools.h"
+#include "AssetToolsModule.h"
 
 IMPLEMENT_MODULE( FPackagesDialogModule, PackagesDialog );
 
@@ -191,10 +194,44 @@ void FPackagesDialogModule::RemoveAllPackageItems()
  * @param	InIconName		The name of the icon to display
  * @param	InIconToolTip	The tooltip to display
  */
-void FPackagesDialogModule::AddPackageItem(UPackage* InPackage, const FString& InEntryName, ECheckBoxState InChecked, 
+void FPackagesDialogModule::AddPackageItem(UPackage* InPackage, ECheckBoxState InChecked, 
 	bool InDisabled/*=false*/, FString InIconName/*=TEXT("SavePackages.SCC_DlgNoIcon")*/, FString InIconToolTip/*=TEXT("")*/)
 {
-	PackagesDialogWidget.Get()->Add(MakeShareable(new FPackageItem(InPackage, InEntryName, InChecked, InDisabled, InIconName, InIconToolTip)));
+	FName AssetName;
+	FName OwnerName;
+
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+
+	// Lookup for the first asset in the package
+	ForEachObjectWithPackage(InPackage, [&AssetName, &OwnerName, &AssetToolsModule](UObject* InnerObject)
+	{
+		if (InnerObject->IsAsset())
+		{
+			TWeakPtr<IAssetTypeActions> AssetTypeActions = AssetToolsModule.Get().GetAssetTypeActionsForClass(InnerObject->GetClass());
+
+			if (AssetTypeActions.IsValid())
+			{
+				AssetName = *AssetTypeActions.Pin()->GetObjectDisplayName(InnerObject);
+			}
+			else
+			{
+				AssetName = InnerObject->GetFName();
+			}
+
+			OwnerName = InnerObject->GetOutermostObject()->GetFName();
+			return false;
+		}
+		return true;
+	}, /*bIncludeNestedObjects*/ false);
+
+	// Last resort, display the package name
+	if (AssetName == NAME_None)
+	{
+		AssetName = *FPackageName::GetShortName(InPackage->GetFName());
+	}
+
+	FString FileName = FPaths::ConvertRelativePathToFull(FPackageName::LongPackageNameToFilename(InPackage->GetName()));
+	PackagesDialogWidget.Get()->Add(MakeShareable(new FPackageItem(InPackage, AssetName.ToString(), FileName, OwnerName.ToString(), InChecked, InDisabled, InIconName, InIconToolTip)));
 }
 
 /**

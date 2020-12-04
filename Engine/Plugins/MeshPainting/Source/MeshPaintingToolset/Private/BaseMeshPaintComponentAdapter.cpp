@@ -85,16 +85,14 @@ TArray<uint32> FBaseMeshPaintComponentAdapter::SphereIntersectTriangles(const fl
 	// definitely don't want our brush to be cut off by a hard triangle edge
 	const float SquaredRadiusBias = ComponentSpaceSquaredBrushRadius * 0.025f;
 
-	for (FMeshPaintTriangleOctree::TConstElementBoxIterator<> TriIt(*MeshTriOctree, FBoxCenterAndExtent(ComponentSpaceBrushPosition, FVector(FMath::Sqrt(ComponentSpaceSquaredBrushRadius + SquaredRadiusBias)))); TriIt.HasPendingElements(); TriIt.Advance())
+	MeshTriOctree->FindElementsWithBoundsTest(FBoxCenterAndExtent(ComponentSpaceBrushPosition, FVector(FMath::Sqrt(ComponentSpaceSquaredBrushRadius + SquaredRadiusBias))), [&OutTriangles, bOnlyFrontFacing, &ComponentSpaceCameraPosition](const FMeshPaintTriangle& CurrentTri)
 	{
-		// Check to see if the triangle is front facing
-		const FMeshPaintTriangle & CurrentTri = TriIt.GetCurrentElement();
 		const float SignedPlaneDist = FVector::PointPlaneDist(ComponentSpaceCameraPosition, CurrentTri.Vertices[0], CurrentTri.Normal);
 		if (!bOnlyFrontFacing || SignedPlaneDist < 0.0f)
 		{
 			OutTriangles.Add(CurrentTri.Index);
 		}
-	}
+	});
 
 	return OutTriangles;
 }
@@ -188,7 +186,9 @@ bool FBaseMeshPaintComponentAdapter::RayIntersectAdapter(FIndex3i& HitTriangle, 
 {
 	int32 HitTriangleID;
 	double NearestT;
-	FRay3d Ray(Start, End);
+	FVector3d Direction((FVector3d)End - (FVector3d)Start);
+	Direction.Normalize();
+	FRay3d Ray((FVector3d)Start, Direction);
 	bool bHit = AABBTree->FindNearestHitTriangle(Ray, NearestT, HitTriangleID);
 	if (bHit)
 	{

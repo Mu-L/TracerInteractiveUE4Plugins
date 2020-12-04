@@ -31,7 +31,7 @@ class ENGINE_API UMaterialExpressionTextureSampleParameter : public UMaterialExp
 #if WITH_EDITORONLY_DATA
 	/** Controls where the this parameter is displayed in a material instance parameter list.  The lower the number the higher up in the parameter list. */
 	UPROPERTY(EditAnywhere, Category = MaterialExpressionTextureSampleParameter)
-	int32 SortPriority;
+	int32 SortPriority = 32;
 
 	UPROPERTY(EditAnywhere, Category = ParameterCustomization)
 	FParameterChannelNames ChannelNames;
@@ -61,7 +61,6 @@ class ENGINE_API UMaterialExpressionTextureSampleParameter : public UMaterialExp
 	bool SetParameterValue(FName InParameterName, UTexture* InValue);
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	void ApplyChannelNames();
-#endif
 
 	/**
 	 * Return true if the texture is a movie texture
@@ -76,6 +75,7 @@ class ENGINE_API UMaterialExpressionTextureSampleParameter : public UMaterialExp
 	 *	Sets the default texture if none is set
 	 */
 	virtual void SetDefaultTexture();
+#endif // WITH_EDITOR
 
 	virtual FGuid& GetParameterExpressionId() override
 	{

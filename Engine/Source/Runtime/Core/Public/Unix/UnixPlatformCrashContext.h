@@ -109,6 +109,8 @@ struct CORE_API FUnixCrashContext : public FGenericCrashContext
 
 	virtual void GetPortableCallStack(const uint64* StackFrames, int32 NumStackFrames, TArray<FCrashStackFrame>& OutCallStack) const override;
 
+	void AddPlatformSpecificProperties() const;
+
 protected:
 	/**
 	 * Dumps all the data from crash context to the "minidump" report.

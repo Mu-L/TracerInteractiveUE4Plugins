@@ -58,14 +58,16 @@ bool NiagaraAny(bool4 b) { return b.x || b.y || b.z || b.w; }
  * -----------------------------------------------------------------
  */
 #if GPU_SIMULATION
+	// Used to convert from DispatchThreadId to a linear thread id
+	uint DispatchThreadIdToLinear;
 
+	static uint GLinearThreadId;
 	static uint3 GDispatchThreadId;
 	static uint3 GGroupThreadId;
 	static uint GCurrentPhase;
 	static uint GEmitterTickCounter;
 	static uint GSimStart;
 	static uint GRandomSeedOffset = 0;
-	static bool GStageWritesAlive = false;
 	
 	const static uint GSpawnPhase = 0;
 	const static uint GUpdatePhase = 1;
@@ -73,14 +75,12 @@ bool NiagaraAny(bool4 b) { return b.x || b.y || b.z || b.w; }
 	// To be removed as well but don't know who is using it
 	#include "/Engine/Private/SceneTexturesCommon.ush"
 
-	// Temporary include while everything is moved to plugins
+	// Physics common 
 	#if USE_SIMULATION_STAGES == 1
-		#include "NiagaraStrandsPhysics.ush"
+		#include "NiagaraPhysicsCommon.ush"
 	#endif
 
 	uint EmitterTickCounter;
-
-	
 
 	float4 Modulo(float4 x, float4 y){ return fmod(x,y); }
 	float3 Modulo(float3 x, float3 y){ return fmod(x,y); }
@@ -125,13 +125,13 @@ bool NiagaraAny(bool4 b) { return b.x || b.y || b.z || b.w; }
 
 	void SetupExecIndexForGPU()
 	{
-		GGPUExecIndex = UpdateStartInstance + GDispatchThreadId.x;
+		GGPUExecIndex = UpdateStartInstance + GLinearThreadId;
 		Engine_ExecutionCount = GSpawnStartInstance;
 	}
 
 	void SetupExecIndexAndSpawnInfoForGPU()
 	{
-		GGPUExecIndex = UpdateStartInstance + GDispatchThreadId.x - GSpawnStartInstance;
+		GGPUExecIndex = UpdateStartInstance + GLinearThreadId - GSpawnStartInstance;
 
 		int SpawnInfoIndex = 0;
 		UNROLL
@@ -166,6 +166,16 @@ bool NiagaraAny(bool4 b) { return b.x || b.y || b.z || b.w; }
 	int ExecIndex()
 	{
 		return GGPUExecIndex;
+	}
+
+	float4 NiagaraGPU_QuatMul(float4 Q1, float4 Q2)
+	{
+		float4 QOut;
+		QOut.x = Q1.w*Q2.x + Q1.x*Q2.w + Q1.y*Q2.z - Q1.z*Q2.y;
+		QOut.y = Q1.w*Q2.y - Q1.x*Q2.z + Q1.y*Q2.w + Q1.z*Q2.x;
+		QOut.z = Q1.w*Q2.z + Q1.x*Q2.y - Q1.y*Q2.x + Q1.z*Q2.w;
+		QOut.w = Q1.w*Q2.w - Q1.x*Q2.x - Q1.y*Q2.y - Q1.z*Q2.z;
+		return QOut;
 	}
 #endif
 
@@ -290,32 +300,32 @@ int rand(int x, int Seed1, int Seed2, int Seed3)
 	float rand(float x)
 	{
 		RandomCounterNonDeterministic -= 1;
-		return rand4(GDispatchThreadId.x, EmitterTickCounter, GDispatchThreadId.x, RandomCounterNonDeterministic).x * x;
+		return rand4(GLinearThreadId, EmitterTickCounter, GLinearThreadId, RandomCounterNonDeterministic).x * x;
 	}
 
 	float2 rand(float2 x)
 	{
 		RandomCounterNonDeterministic -= 1;
-		return rand4(GDispatchThreadId.x, EmitterTickCounter, GDispatchThreadId.x, RandomCounterNonDeterministic).xy * x;
+		return rand4(GLinearThreadId, EmitterTickCounter, GLinearThreadId, RandomCounterNonDeterministic).xy * x;
 	}
 
 	float3 rand(float3 x)
 	{
 		RandomCounterNonDeterministic -= 1;
-		return rand4(GDispatchThreadId.x, EmitterTickCounter, GDispatchThreadId.x, RandomCounterNonDeterministic).xyz * x;
+		return rand4(GLinearThreadId, EmitterTickCounter, GLinearThreadId, RandomCounterNonDeterministic).xyz * x;
 	}
 
 	float4 rand(float4 x) 
 	{
 		RandomCounterNonDeterministic -= 1;
-		return rand4(GDispatchThreadId.x, EmitterTickCounter, GDispatchThreadId.x, RandomCounterNonDeterministic).xyzw * x;
+		return rand4(GLinearThreadId, EmitterTickCounter, GLinearThreadId, RandomCounterNonDeterministic).xyzw * x;
 	}
 
 	// Integer randoms are INCLUSIVE, i.e. includes both the upper and lower limits
 	int rand(int x)
 	{
 		RandomCounterNonDeterministic -= 1;
-		return int(rand4(GDispatchThreadId.x, EmitterTickCounter, GDispatchThreadId.x, RandomCounterNonDeterministic).x * (x+1));
+		return int(rand4(GLinearThreadId, EmitterTickCounter, GLinearThreadId, RandomCounterNonDeterministic).x * (x+1));
 	}
 #else
 	// Old unseeded, passthrough to FRandomStream
@@ -366,7 +376,7 @@ int rand_int(int x)
 	// Going through the float function also give us a better distribution than using modulo 
 	// to get an integer range.
 	// This will not include the upper range as rand_float returns [0, max), not [0, max].
-	return rand_float(x.x);
+	return (int) rand_float(x.x);
 }
 
 // Explicit deterministic random overrides used by Random Float/Integer and Seeded Random Float/Integer op nodes
@@ -426,6 +436,7 @@ int rand_int(int x, int Seed1, int Seed2, int Seed3)
 	float InputDataFloat(int DataSetIndex, int RegisterIdx);  //DataSetIndex is 0 for main dataset
 	int InputDataInt(int DataSetIndex, int RegisterIdx);
 	bool InputDataBool(int DataSetIndex, int RegisterIdx);
+	float InputDataHalf(int DataSetIndex, int RegisterIdx);
 
 	float InputDataNoadvanceFloat(int DataSetIndex, int RegisterIdx);  //DataSetIndex is 0 for main dataset
 	int InputDataNoadvanceInt(int DataSetIndex, int RegisterIdx);
@@ -434,6 +445,7 @@ int rand_int(int x, int Seed1, int Seed2, int Seed3)
 	void OutputDataFloat(int DataSetIndex, int RegisterIndex, int InstanceIndex, float Value);
 	void OutputDataInt(int DataSetIndex, int RegisterIndex, int InstanceIndex, int Value);
 	void OutputDataBool(int DataSetIndex, int RegisterIndex, int InstanceIndex, bool Value);
+	void OutputDataHalf(int DataSetIndex, int RegisterIndex, int InstanceIndex, float Value);
 #endif
 
 
@@ -448,10 +460,10 @@ int rand_int(int x, int Seed1, int Seed2, int Seed3)
 	 * declared as int instead of uint to avoid compiler warnings because we can't expose uint on Niagara module parameters.  
 	 * This is still declared as a uint in the corresponding C++ classes
 	 */
-	int DefaultSimulationStageIndex;
-	int SimulationStageIndex;
-
-	int IterationInterfaceCount;
+	#if NIAGARA_SHADER_PERMUTATIONS == 0
+		int DefaultSimulationStageIndex;
+		int SimulationStageIndex;
+	#endif
 
 	uint ComponentBufferSizeRead;
 	uint ComponentBufferSizeWrite;
@@ -465,8 +477,10 @@ int rand_int(int x, int Seed1, int Seed2, int Seed3)
 	 */
 	Buffer<float> InputFloat;
 	Buffer<int> InputInt;
+	Buffer<half> InputHalf;
 	RWBuffer<int> RWOutputInt;
 	RWBuffer<float> RWOutputFloat;
+	RWBuffer<half> RWOutputHalf;
 
 	RWBuffer<uint> RWInstanceCounts;
 	uint ReadInstanceCountOffset;
@@ -474,6 +488,19 @@ int rand_int(int x, int Seed1, int Seed2, int Seed3)
 
 	Buffer<int> FreeIDList;
 	RWBuffer<int> RWIDToIndexTable;
+	
+	// X = Count Buffer Instance Count Offset (INDEX_NONE == Use Instance Count)
+	// Y = Instance Count
+	// Z = Iteration Index
+	// W = Num Iterations
+	int4 SimulationStageIterationInfo;
+	float SimulationStageNormalizedIterationIndex;
+
+	// Note: These are referenced from an asset that passes back the data to the user (see SimulationStageIterationInfo)
+	int SimulationStage_GetInstanceCount() { return SimulationStageIterationInfo.x == -1 ? SimulationStageIterationInfo.y : RWInstanceCounts[SimulationStageIterationInfo.x]; }
+	int SimulationStage_GetIterationIndex() { return SimulationStageIterationInfo.z; }
+	int SimulationStage_GetNumIterations() { return SimulationStageIterationInfo.w; }
+	float SimulationStage_GetNormalizedIterationIndex() { return SimulationStageNormalizedIterationIndex; }
 
 	void AcquireID(int DataSetID, out int IDIndex, out int IDAcquireTag)
 	{
@@ -484,7 +511,7 @@ int rand_int(int x, int Seed1, int Seed2, int Seed3)
 
 		// This is the same as ExecIndex() right now, but that function may change in the future to accommodate multiple
 		// spawn infos. Revisit this computation if the change affects the meaning of UpdateStartInstance or GSpawnStartInstance.
-		int SpawnIndex = UpdateStartInstance + GDispatchThreadId.x - GSpawnStartInstance;
+		int SpawnIndex = UpdateStartInstance + GLinearThreadId - GSpawnStartInstance;
 		IDIndex = FreeIDList[SpawnIndex];
 		IDAcquireTag = EmitterTickCounter;
 	}
@@ -499,7 +526,7 @@ int rand_int(int x, int Seed1, int Seed2, int Seed3)
 		RWIDToIndexTable[IDIndex] = InstanceIndex;
 	}
 
-#define USE_WAVE_INTRISICS (XBOXONE_PROFILE)
+#define USE_WAVE_INTRISICS 0//(XBOXONE_PROFILE)
 #define USE_GROUP_SHARED ((THREADGROUP_SIZE == 64 || THREADGROUP_SIZE == 32)  && !USE_WAVE_INTRISICS)
 
 #if USE_GROUP_SHARED
@@ -653,6 +680,34 @@ int rand_int(int x, int Seed1, int Seed2, int Seed3)
 		return InputInt[RegisterIdx*ComponentBufferSizeRead + InstanceIdx] == -1;
 	}
 
+	float InputDataHalf(int DataSetIndex, int RegisterIdx, int InstanceIdx)
+	{
+		return InputHalf[RegisterIdx*ComponentBufferSizeRead + InstanceIdx];
+	}
+
+	/* ---------------------------------------------------------------------
+	 * InputData from RW buffer
+	 * ---------------------------------------------------------------------
+	 */
+	float RWInputDataFloat(int DataSetIndex, int RegisterIdx, int InstanceIdx)
+	{
+		return RWOutputFloat[RegisterIdx*ComponentBufferSizeWrite + InstanceIdx];
+	}
+
+	int RWInputDataInt(int DataSetIndex, int RegisterIdx, int InstanceIdx)
+	{
+		return RWOutputInt[RegisterIdx*ComponentBufferSizeWrite + InstanceIdx];
+	}
+	
+	bool RWInputDataBool(int DataSetIndex, int RegisterIdx, int InstanceIdx)
+	{
+		return RWOutputInt[RegisterIdx*ComponentBufferSizeWrite + InstanceIdx] == -1;
+	}
+
+	float RWInputDataHalf(int DataSetIndex, int RegisterIdx, int InstanceIdx)
+	{
+		return RWOutputHalf[RegisterIdx*ComponentBufferSizeWrite + InstanceIdx];
+	}
 
 	/* ---------------------------------------------------------------------
 	 * OutputData operations 
@@ -673,6 +728,11 @@ int rand_int(int x, int Seed1, int Seed2, int Seed3)
 		RWOutputInt[RegisterIndex*ComponentBufferSizeWrite + InstanceIndex + UpdateStartInstance] = Value ? -1 : 0;
 	}
 
+	void OutputDataHalf(int DataSetIndex, int RegisterIndex, int InstanceIndex, float Value)
+	{
+		RWOutputHalf[RegisterIndex*ComponentBufferSizeWrite + InstanceIndex + UpdateStartInstance] = Value;
+	}
+
 	void EnterStatScope(int ID)	{}
 	void ExitStatScope()	{}
 #endif // GPU_SIMULATION
@@ -691,7 +751,7 @@ int rand_int(int x, int Seed1, int Seed2, int Seed3)
 			BRANCH
 			if (!bStageKillsParticles)
 			{
-				return GDispatchThreadId.x;
+				return GLinearThreadId;
 			}
 		#endif // USE_SIMULATION_STAGES
 

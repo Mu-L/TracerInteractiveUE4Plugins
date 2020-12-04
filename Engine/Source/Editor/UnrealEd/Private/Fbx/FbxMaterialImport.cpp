@@ -46,9 +46,16 @@ UTexture* UnFbx::FFbxImporter::ImportTexture(FbxFileTexture* FbxTexture, bool bS
 	FString AbsoluteFilename = UTF8_TO_TCHAR(FbxTexture->GetFileName());
 	FString Extension = FPaths::GetExtension(AbsoluteFilename).ToLower();
 	// name the texture with file name
-	FString TextureName = FPaths::GetBaseFilename(AbsoluteFilename);
-
-	TextureName = ObjectTools::SanitizeObjectName(TextureName);
+	FString TextureName;
+	if (FString* UniqueName = FbxTextureToUniqueNameMap.Find(FbxTexture))
+	{
+		TextureName = *UniqueName;
+	}
+	else
+	{
+		TextureName = FPaths::GetBaseFilename(AbsoluteFilename);
+		TextureName = ObjectTools::SanitizeObjectName(TextureName);
+	}
 
 	// set where to place the textures
 	FString BasePackageName = FPackageName::GetLongPackagePath(Parent->GetOutermost()->GetName()) / TextureName;
@@ -71,7 +78,7 @@ UTexture* UnFbx::FFbxImporter::ImportTexture(FbxFileTexture* FbxTexture, bool bS
 		FString FinalPackageName;
 		AssetToolsModule.Get().CreateUniqueAssetName(BasePackageName, Suffix, FinalPackageName, TextureName);
 
-		TexturePackage = CreatePackage(NULL, *FinalPackageName);
+		TexturePackage = CreatePackage( *FinalPackageName);
 	}
 	else
 	{
@@ -115,6 +122,7 @@ UTexture* UnFbx::FFbxImporter::ImportTexture(FbxFileTexture* FbxTexture, bool bS
 		// save texture settings if texture exist
 		TextureFact->SuppressImportOverwriteDialog();
 		const TCHAR* TextureType = *Extension;
+		const bool bTextureAssetAlreadyExists = FindObject<UTexture>(TexturePackage, *TextureName) != nullptr;
 
 		// Unless the normal map setting is used during import, 
 		//	the user has to manually hit "reimport" then "recompress now" button
@@ -139,6 +147,12 @@ UTexture* UnFbx::FFbxImporter::ImportTexture(FbxFileTexture* FbxTexture, bool bS
 
 		if ( UnrealTexture != NULL )
 		{
+			if ( !bTextureAssetAlreadyExists )
+			{
+				//This asset did not override any other asset during its creation, so it is considered as newly created.
+				 CreatedObjects.Add(UnrealTexture);
+			}
+
 			//Make sure the AssetImportData point on the texture file and not on the fbx files since the factory point on the fbx file
 			UnrealTexture->AssetImportData->Update(IFileManager::Get().ConvertToAbsolutePathForExternalAppForRead(*FinalFilePath));
 
@@ -399,9 +413,9 @@ void UnFbx::FFbxImporter::FixupMaterial( const FbxSurfaceMaterial& FbxMaterial, 
 		else
 		{
 			// use random color because there may be multiple materials, then they can be different 
-			MyColorExpression->DefaultValue.R = 0.5f+(0.5f*FMath::Rand())/RAND_MAX;
-			MyColorExpression->DefaultValue.G = 0.5f+(0.5f*FMath::Rand())/RAND_MAX;
-			MyColorExpression->DefaultValue.B = 0.5f+(0.5f*FMath::Rand())/RAND_MAX;
+			MyColorExpression->DefaultValue.R = 0.5f+(0.5f*FMath::Rand()) / static_cast<float>(RAND_MAX);
+			MyColorExpression->DefaultValue.G = 0.5f+(0.5f*FMath::Rand()) / static_cast<float>(RAND_MAX);
+			MyColorExpression->DefaultValue.B = 0.5f+(0.5f*FMath::Rand()) / static_cast<float>(RAND_MAX);
 		}
 
 		TArray<FExpressionOutput> Outputs = UnrealMaterial->BaseColor.Expression->GetOutputs();
@@ -611,7 +625,7 @@ UMaterialInterface* UnFbx::FFbxImporter::CreateUnrealMaterial(const FbxSurfaceMa
 	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
 	AssetToolsModule.Get().CreateUniqueAssetName(BasePackageName, Suffix, FinalPackageName, FinalMaterialName);
 
-	UPackage* Package = CreatePackage(nullptr, *FinalPackageName);
+	UPackage* Package = CreatePackage( *FinalPackageName);
 	
 	// Check if we can use the specified base material to instance from it
 	FBXImportOptions* FbxImportOptions = GetImportOptions();
@@ -638,6 +652,7 @@ UMaterialInterface* UnFbx::FFbxImporter::CreateUnrealMaterial(const FbxSurfaceMa
 		{
 			bCanInstance &= !FbxImportOptions->BaseEmissiveColorName.IsEmpty();
 		}
+
 		bCanInstance &= CanUseMaterialWithInstance(FbxMaterial, FbxSurfaceMaterial::sSpecular, FbxImportOptions->BaseSpecularTextureName, FbxImportOptions->BaseMaterial, OutUVSets);
 		bCanInstance &= CanUseMaterialWithInstance(FbxMaterial, FbxSurfaceMaterial::sNormalMap, FbxImportOptions->BaseNormalTextureName, FbxImportOptions->BaseMaterial, OutUVSets);
 		bCanInstance &= CanUseMaterialWithInstance(FbxMaterial, FbxSurfaceMaterial::sTransparentColor, FbxImportOptions->BaseOpacityTextureName, FbxImportOptions->BaseMaterial, OutUVSets);
@@ -650,6 +665,7 @@ UMaterialInterface* UnFbx::FFbxImporter::CreateUnrealMaterial(const FbxSurfaceMa
 		UMaterialInstanceConstant* UnrealMaterialConstant = (UMaterialInstanceConstant*)MaterialInstanceFactory->FactoryCreateNew(UMaterialInstanceConstant::StaticClass(), Package, *FinalMaterialName, RF_Standalone | RF_Public, NULL, GWarn);
 		if (UnrealMaterialConstant != NULL)
 		{
+			CreatedObjects.Add(UnrealMaterialConstant);
 			UnrealMaterialFinal = UnrealMaterialConstant;
 			// Notify the asset registry
 			FAssetRegistryModule::AssetCreated(UnrealMaterialConstant);
@@ -751,6 +767,7 @@ UMaterialInterface* UnFbx::FFbxImporter::CreateUnrealMaterial(const FbxSurfaceMa
 
 		if (UnrealMaterial != NULL)
 		{
+			CreatedObjects.Add(UnrealMaterial);
 			UnrealMaterialFinal = UnrealMaterial;
 			// Notify the asset registry
 			FAssetRegistryModule::AssetCreated(UnrealMaterial);

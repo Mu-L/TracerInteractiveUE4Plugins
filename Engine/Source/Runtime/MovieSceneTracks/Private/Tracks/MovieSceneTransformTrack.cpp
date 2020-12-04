@@ -29,14 +29,3 @@ UMovieSceneSection* UMovieSceneTransformTrack::CreateNewSection()
 {
 	return NewObject<UMovieScene3DTransformSection>(this, NAME_None, RF_Transactional);
 }
-
-FMovieSceneEvalTemplatePtr UMovieSceneTransformTrack::CreateTemplateForSection(const UMovieSceneSection& InSection) const
-{
-	return FMovieSceneTransformPropertySectionTemplate(*CastChecked<UMovieScene3DTransformSection>(&InSection), *this);
-}
-
-FMovieSceneInterrogationKey UMovieSceneTransformTrack::GetInterrogationKey()
-{
-	static FMovieSceneAnimTypeID TypeID = FMovieSceneAnimTypeID::Unique();
-	return TypeID;
-}

@@ -3,6 +3,7 @@
 #include "ConcertClientPackageBridge.h"
 #include "ConcertLogGlobal.h"
 #include "ConcertWorkspaceData.h"
+#include "ConcertSyncClientUtil.h"
 
 #include "Engine/World.h"
 #include "Engine/Engine.h"
@@ -25,13 +26,6 @@
 
 namespace ConcertClientPackageBridgeUtil
 {
-
-void FillPackageInfo(UPackage* InPackage, const EConcertPackageUpdateType InPackageUpdateType, FConcertPackageInfo& OutPackageInfo)
-{
-	OutPackageInfo.PackageName = InPackage->GetFName();
-	OutPackageInfo.PackageFileExtension = UWorld::FindWorldInPackage(InPackage) ? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension();
-	OutPackageInfo.PackageUpdateType = InPackageUpdateType;
-}
 
 bool ShouldIgnorePackage(const UPackage* InPackage)
 {
@@ -145,15 +139,15 @@ void FConcertClientPackageBridge::HandlePackagePreSave(UPackage* Package)
 		return;
 	}
 
-	UWorld* World = UWorld::FindWorldInPackage(Package);
+	UObject* Asset = Package->FindAssetInPackage();
 
 	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetFName().ToString(), PackageFilename, World ? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension()))
+	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetFName().ToString(), PackageFilename, Asset && Asset->IsA<UWorld>() ? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension()))
 	{
 		if (IFileManager::Get().FileExists(*PackageFilename))
 		{
 			FConcertPackageInfo PackageInfo;
-			ConcertClientPackageBridgeUtil::FillPackageInfo(Package, EConcertPackageUpdateType::Saved, PackageInfo);
+			ConcertSyncClientUtil::FillPackageInfo(Package, Asset, EConcertPackageUpdateType::Saved, PackageInfo);
 			PackageInfo.bPreSave = true;
 			PackageInfo.bAutoSave = GEngine->IsAutosaving();
 		
@@ -194,7 +188,7 @@ void FConcertClientPackageBridge::HandlePackageSaved(const FString& PackageFilen
 	if (IFileManager::Get().FileExists(*PackageFilename))
 	{
 		FConcertPackageInfo PackageInfo;
-		ConcertClientPackageBridgeUtil::FillPackageInfo(Package, NewPackageName.IsNone() ? EConcertPackageUpdateType::Saved : EConcertPackageUpdateType::Renamed, PackageInfo);
+		ConcertSyncClientUtil::FillPackageInfo(Package, nullptr, NewPackageName.IsNone() ? EConcertPackageUpdateType::Saved : EConcertPackageUpdateType::Renamed, PackageInfo);
 		PackageInfo.NewPackageName = NewPackageName;
 		PackageInfo.bPreSave = false;
 		PackageInfo.bAutoSave = GEngine->IsAutosaving();
@@ -224,9 +218,11 @@ void FConcertClientPackageBridge::HandleAssetAdded(UObject *Object)
 	// Save this package to disk so that we can send its contents immediately
 	{
 		FScopedIgnoreLocalSave IgnorePackageSaveScope(*this);
-		UWorld* World = UWorld::FindWorldInPackage(Package);
+		UObject* Asset = Package->FindAssetInPackage();
+		// @todo FH: Pass the Asset instead of the World to save package when the incidental IsFullyLoaded is fixed
+		UWorld* World = Cast<UWorld>(Asset);
 
-		const FString PackageFilename = FPaths::ProjectIntermediateDir() / TEXT("Concert") / TEXT("Temp") / FGuid::NewGuid().ToString() + (World ? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension());
+		const FString PackageFilename = FPaths::ProjectIntermediateDir() / TEXT("Concert") / TEXT("Temp") / FGuid::NewGuid().ToString() + (Asset && Asset->IsA<UWorld>() ? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension());
 		uint32 PackageFlags = Package->GetPackageFlags();
 		if (UPackage::SavePackage(Package, World, RF_Standalone, *PackageFilename, GWarn, nullptr, false, false, SAVE_NoError | SAVE_KeepDirty))
 		{
@@ -236,7 +232,7 @@ void FConcertClientPackageBridge::HandleAssetAdded(UObject *Object)
 			if (IFileManager::Get().FileExists(*PackageFilename))
 			{
 				FConcertPackageInfo PackageInfo;
-				ConcertClientPackageBridgeUtil::FillPackageInfo(Package, EConcertPackageUpdateType::Added, PackageInfo);
+				ConcertSyncClientUtil::FillPackageInfo(Package, Asset, EConcertPackageUpdateType::Added, PackageInfo);
 
 				OnLocalPackageEventDelegate.Broadcast(PackageInfo, PackageFilename);
 				IFileManager::Get().Delete(*PackageFilename);
@@ -258,7 +254,7 @@ void FConcertClientPackageBridge::HandleAssetDeleted(UObject *Object)
 	UPackage* Package = Object->GetOutermost();
 
 	FConcertPackageInfo PackageInfo;
-	ConcertClientPackageBridgeUtil::FillPackageInfo(Package, EConcertPackageUpdateType::Deleted, PackageInfo);
+	ConcertSyncClientUtil::FillPackageInfo(Package, nullptr, EConcertPackageUpdateType::Deleted, PackageInfo);
 	OnLocalPackageEventDelegate.Broadcast(PackageInfo, FString());
 
 	UE_LOG(LogConcert, Verbose, TEXT("Asset Deleted: %s"), *Package->GetName());

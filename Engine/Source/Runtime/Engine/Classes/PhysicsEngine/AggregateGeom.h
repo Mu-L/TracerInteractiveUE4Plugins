@@ -61,6 +61,58 @@ struct ENGINE_API FKAggregateGeom
 
 	int32 GetElementCount(EAggCollisionShape::Type Type) const;
 
+	FKShapeElem* GetElement(const EAggCollisionShape::Type Type, const int32 Index)
+	{
+		switch (Type)
+		{
+		case EAggCollisionShape::Sphere:
+			if (ensure(SphereElems.IsValidIndex(Index))) { return &SphereElems[Index]; }
+		case EAggCollisionShape::Box:
+			if (ensure(BoxElems.IsValidIndex(Index))) { return &BoxElems[Index]; }
+		case EAggCollisionShape::Sphyl:
+			if (ensure(SphylElems.IsValidIndex(Index))) { return &SphylElems[Index]; }
+		case EAggCollisionShape::Convex:
+			if (ensure(ConvexElems.IsValidIndex(Index))) { return &ConvexElems[Index]; }
+		case EAggCollisionShape::TaperedCapsule:
+			if (ensure(TaperedCapsuleElems.IsValidIndex(Index))) { return &TaperedCapsuleElems[Index]; }
+		default:
+			ensure(false);
+			return nullptr;
+		}
+	}
+
+	FKShapeElem* GetElement(const int32 InIndex)
+	{
+		int Index = InIndex;
+		if (Index < SphereElems.Num()) { return &SphereElems[Index]; }
+		Index -= SphereElems.Num();
+		if (Index < BoxElems.Num()) { return &BoxElems[Index]; }
+		Index -= BoxElems.Num();
+		if (Index < SphylElems.Num()) { return &SphylElems[Index]; }
+		Index -= SphylElems.Num();
+		if (Index < ConvexElems.Num()) { return &ConvexElems[Index]; }
+		Index -= ConvexElems.Num();
+		if (Index < TaperedCapsuleElems.Num()) { return &TaperedCapsuleElems[Index]; }
+		ensure(false);
+		return nullptr;
+	}
+
+	const FKShapeElem* GetElement(const int32 InIndex) const
+	{
+		int Index = InIndex;
+		if (Index < SphereElems.Num()) { return &SphereElems[Index]; }
+		Index -= SphereElems.Num();
+		if (Index < BoxElems.Num()) { return &BoxElems[Index]; }
+		Index -= BoxElems.Num();
+		if (Index < SphylElems.Num()) { return &SphylElems[Index]; }
+		Index -= SphylElems.Num();
+		if (Index < ConvexElems.Num()) { return &ConvexElems[Index]; }
+		Index -= ConvexElems.Num();
+		if (Index < TaperedCapsuleElems.Num()) { return &TaperedCapsuleElems[Index]; }
+		ensure(false);
+		return nullptr;
+	}
+
 	void EmptyElements()
 	{
 		BoxElems.Empty();

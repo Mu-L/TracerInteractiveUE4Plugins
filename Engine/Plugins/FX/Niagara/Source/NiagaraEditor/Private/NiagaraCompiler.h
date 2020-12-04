@@ -51,5 +51,8 @@ public:
 private:
 	TUniquePtr<FNiagaraCompilerJob> CompilationJob;
 
-	void DumpDebugInfo(FNiagaraCompileResults& CompileResult, bool bGPUScript);
+	void DumpDebugInfo(const FNiagaraCompileResults& CompileResult, const FShaderCompilerInput& Input, bool bGPUScript);
+
+	/** SCW doesn't have access to the VM op code names so we do a fixup pass to make these human readable after we get the data back from SCW. */
+	void FixupVMAssembly(FString& Asm);
 };

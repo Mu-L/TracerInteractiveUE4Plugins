@@ -11,16 +11,19 @@
 #pragma warning(push)
 #pragma warning(disable:6294) // Ill-defined for-loop:  initial condition does not satisfy test.  Loop body not executed.
 #endif
+PRAGMA_DEFAULT_VISIBILITY_START
 THIRD_PARTY_INCLUDES_START
 #include <Eigen/LU>
 THIRD_PARTY_INCLUDES_END
+PRAGMA_DEFAULT_VISIBILITY_END
 #if defined(_MSC_VER) && USING_CODE_ANALYSIS
 #pragma warning(pop)
 #endif
 
 bool FRBFInterpolatorBase::SetUpperKernel(
 	const TArrayView<float>& UpperKernel, 
-	int32 Size
+	int32 Size,
+	bool bSmoothing
 )
 {
 	using namespace Eigen;
@@ -64,15 +67,25 @@ bool FRBFInterpolatorBase::SetUpperKernel(
 	// Eigen will now happily pick LU factorization with partial pivoting for 
 	// the inverse, which is blazingly fast.
 
-	Coeffs.Init(0.0f, Size * Size);
-	Map<MatrixXf> Result(Coeffs.GetData(), Size, Size);
-
 	// If the matrix is non-invertible, return now and bail out.
 	float Det = FullKernel.determinant();
 	if (FMath::IsNearlyZero(Det))
 		return false;
 
-	Result = FullKernel.inverse();
+	Coeffs.SetNumZeroed(Size * Size);
+	Map<MatrixXf> Result(Coeffs.GetData(), Size, Size);
 
+	if (bSmoothing)
+	{
+		const float Lambda = 0.001f;
+		MatrixXf B = FullKernel.transpose();
+		FullKernel = B * FullKernel + Lambda * MatrixXf::Identity(Size, Size);
+
+		Result = PartialPivLU<MatrixXf>(FullKernel).solve(B);
+	}
+	else
+	{
+		Result = FullKernel.inverse();
+	}
 	return true;
 }

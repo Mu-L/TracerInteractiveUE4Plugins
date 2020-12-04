@@ -6,6 +6,7 @@
 #include "UObject/NoExportTypes.h"
 #include "SingleSelectionTool.h"
 #include "InteractiveToolBuilder.h"
+#include "Drawing/LineSetComponent.h"
 #include "DynamicMesh3.h"
 #include "DynamicMeshAABBTree3.h"
 #include "Properties/MeshMaterialProperties.h"
@@ -46,6 +47,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = Options)
 	bool bBoundaryEdges = true;
 
+	/** Toggle visibility of bowtie vertices */
+	UPROPERTY(EditAnywhere, Category = Options)
+	bool bBowtieVertices = true;
+
 	/** Toggle visibility of polygon borders */
 	UPROPERTY(EditAnywhere, Category = Options)
 	bool bPolygonBorders = false;
@@ -53,6 +58,10 @@ public:
 	/** Toggle visibility of UV seam edges */
 	UPROPERTY(EditAnywhere, Category = Options)
 	bool bUVSeams = false;
+
+	/** Toggle visibility of UV bowtie vertices */
+	UPROPERTY(EditAnywhere, Category = Options)
+	bool bUVBowties = false;
 
 	/** Toggle visibility of Normal seam edges */
 	UPROPERTY(EditAnywhere, Category = Options)
@@ -67,23 +76,15 @@ public:
 	bool bTangentVectors = false;
 
 	/** Length of line segments representing normal vectors */
-	UPROPERTY(EditAnywhere, Category = Options, meta = (EditCondition = "bNormalVectors"))
+	UPROPERTY(EditAnywhere, Category = Options, meta = (EditCondition = "bNormalVectors", 
+		UIMin="0", UIMax="400", ClampMin = "0", ClampMax = "1000000000.0"))
 	float NormalLength = 5.0f;
 
 	/** Length of line segments representing tangent vectors */
-	UPROPERTY(EditAnywhere, Category = Options, meta = (EditCondition = "bTangentVectors"))
+	UPROPERTY(EditAnywhere, Category = Options, meta = (EditCondition = "bTangentVectors", 
+		UIMin = "0", UIMax = "400", ClampMin = "0", ClampMax = "1000000000.0"))
 	float TangentLength = 5.0f;
-
-
-	//
-	// save/restore support
-	//
-	virtual void SaveProperties(UInteractiveTool* SaveFromTool) override;
-	virtual void RestoreProperties(UInteractiveTool* RestoreToTool) override;
 };
-
-
-
 
 /**
  * Mesh Inspector Tool for visualizing mesh information
@@ -130,10 +131,18 @@ protected:
 	UPreviewMesh* PreviewMesh;
 
 	UPROPERTY()
+	ULineSetComponent* DrawnLineSet;
+
+	UPROPERTY()
 	UMaterialInterface* DefaultMaterial = nullptr;
 
+	// copy of input mesh description with tangents/etc populated
+	TSharedPtr<FMeshDescription> InputMeshDescription;
+
 	TArray<int> BoundaryEdges;
+	TArray<int> BoundaryBowties;
 	TArray<int> UVSeamEdges;
+	TArray<int> UVBowties;
 	TArray<int> NormalSeamEdges;
 	TArray<int> GroupBoundaryEdges;
 

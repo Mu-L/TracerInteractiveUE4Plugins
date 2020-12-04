@@ -312,7 +312,7 @@ protected:
 					FText::AsNumber(CameraAnimsToConvert.Num()), FText::AsNumber(NumWarnings));
 			FNotificationInfo NotificationInfo(NotificationText);
 			NotificationInfo.ExpireDuration = 5.f;
-			NotificationInfo.Hyperlink = FSimpleDelegate::CreateStatic([](){ FGlobalTabmanager::Get()->InvokeTab(FName("OutputLog")); });
+			NotificationInfo.Hyperlink = FSimpleDelegate::CreateStatic([](){ FGlobalTabmanager::Get()->TryInvokeTab(FName("OutputLog")); });
 			NotificationInfo.HyperlinkText = LOCTEXT("ShowMessageLogHyperlink", "Show Output Log");
 			FSlateNotificationManager::Get().AddNotification(NotificationInfo);
 		}
@@ -425,7 +425,7 @@ protected:
 
 			FNotificationInfo NotificationInfo(NotificationText);
 			NotificationInfo.ExpireDuration = 5.f;
-			NotificationInfo.Hyperlink = FSimpleDelegate::CreateStatic([](){ FGlobalTabmanager::Get()->InvokeTab(FName("OutputLog")); });
+			NotificationInfo.Hyperlink = FSimpleDelegate::CreateStatic([](){ FGlobalTabmanager::Get()->TryInvokeTab(FName("OutputLog")); });
 			NotificationInfo.HyperlinkText = LOCTEXT("ShowMessageLogHyperlink", "Show Output Log");
 			FSlateNotificationManager::Get().AddNotification(NotificationInfo);
 		}
@@ -763,7 +763,7 @@ protected:
 				if (MatineeAnimControlTrack->GetNumKeyframes() != 0 && ObjectBindingGuid.IsValid())
 				{
 					UMovieSceneSkeletalAnimationTrack* SkeletalAnimationTrack = NewMovieScene->AddTrack<UMovieSceneSkeletalAnimationTrack>(ObjectBindingGuid);	
-					FFrameNumber EndPlaybackRange = MovieScene::DiscreteExclusiveUpper(NewMovieScene->GetPlaybackRange());
+					FFrameNumber EndPlaybackRange = UE::MovieScene::DiscreteExclusiveUpper(NewMovieScene->GetPlaybackRange());
 					FMatineeImportTools::CopyInterpAnimControlTrack(MatineeAnimControlTrack, SkeletalAnimationTrack, EndPlaybackRange);
 				}
 			}
@@ -973,7 +973,7 @@ protected:
 			FTemporaryPlayer(UMovieSceneSequence& InSequence, UObject* InContext)
 				: Context(InContext)
 			{
-				RootInstance.Initialize(InSequence, *this);
+				RootInstance.Initialize(InSequence, *this, nullptr);
 			}
 
 			virtual FMovieSceneRootEvaluationTemplateInstance& GetEvaluationTemplate() { return RootInstance; }
@@ -983,7 +983,6 @@ protected:
 			virtual EMovieScenePlayerStatus::Type GetPlaybackStatus() const { return EMovieScenePlayerStatus::Stopped; }
 			virtual void SetPlaybackStatus(EMovieScenePlayerStatus::Type InPlaybackStatus) {}
 			virtual UObject* GetPlaybackContext() const { return Context; }
-
 			FMovieSceneRootEvaluationTemplateInstance RootInstance;
 			UObject* Context;
 

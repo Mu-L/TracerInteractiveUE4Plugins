@@ -10,6 +10,10 @@
 #include "Engine/LevelStreaming.h"
 #include "LevelUtils.h"
 
+#if WITH_EDITOR
+#include "Editor.h"
+#endif
+
 static const FName SequencerActorTag(TEXT("SequencerActor"));
 
 TSharedRef<IMovieSceneObjectSpawner> FLevelSequenceActorSpawner::CreateObjectSpawner()
@@ -65,30 +69,49 @@ UObject* FLevelSequenceActorSpawner::SpawnObject(FMovieSceneSpawnable& Spawnable
 		return nullptr;
 	}
 
-	const EObjectFlags ObjectFlags = RF_Transient;
+	const EObjectFlags ObjectFlags = RF_Transient | RF_Transactional;
 
 	// @todo sequencer livecapture: Consider using SetPlayInEditorWorld() and RestoreEditorWorld() here instead
 	
 	// @todo sequencer actors: We need to make sure puppet objects aren't copied into PIE/SIE sessions!  They should be omitted from that duplication!
 
 	UWorld* WorldContext = Cast<UWorld>(Player.GetPlaybackContext());
-	if(WorldContext == nullptr)
-	{
-		WorldContext = GWorld;
-	}
 
 	FName DesiredLevelName = Spawnable.GetLevelName();
 	if (DesiredLevelName != NAME_None)
 	{
-		ULevelStreaming* LevelStreaming = GetLevelStreaming(DesiredLevelName, WorldContext);
-		if (LevelStreaming && LevelStreaming->GetWorldAsset().IsValid())
+		if (WorldContext && WorldContext->GetFName() == DesiredLevelName)
 		{
-			WorldContext = LevelStreaming->GetWorldAsset().Get();
+			// done, spawn into this world
 		}
 		else
 		{
-			UE_LOG(LogMovieScene, Warning, TEXT("Can't find sublevel '%s' to spawn '%s' into"), *DesiredLevelName.ToString(), *Spawnable.GetName());
+			ULevelStreaming* LevelStreaming = GetLevelStreaming(DesiredLevelName, WorldContext);
+			if (LevelStreaming && LevelStreaming->GetWorldAsset().IsValid())
+			{
+				WorldContext = LevelStreaming->GetWorldAsset().Get();
+			}
+			else
+			{
+				// Avoid spamming output, warning only once per level
+				if (!ErrorLevels.Contains(DesiredLevelName))
+				{
+					UE_LOG(LogMovieScene, Warning, TEXT("Can't find sublevel '%s' to spawn '%s' into, defaulting to Persistent level"), *DesiredLevelName.ToString(), *Spawnable.GetName());
+					ErrorLevels.Add(DesiredLevelName);
+				}
+			}
 		}
+	}
+
+	if (WorldContext == nullptr)
+	{
+		if (!ErrorLevels.Contains(DesiredLevelName))
+		{
+			UE_LOG(LogMovieScene, Warning, TEXT("Can't find world to spawn '%s' into, defaulting to Persistent level"), *Spawnable.GetName());
+			ErrorLevels.Add(DesiredLevelName);
+		}
+
+		WorldContext = GWorld;
 	}
 
 	// Construct the object with the same name that we will set later on the actor to avoid renaming it inside SetActorLabel
@@ -165,7 +188,7 @@ UObject* FLevelSequenceActorSpawner::SpawnObject(FMovieSceneSpawnable& Spawnable
 #if WITH_EDITOR
 	if (GIsEditor)
 	{
-		// Explicitly set RF_Transactional on spawned actors so we can undo/redo properties on them. We don't add this as a spawn flag since we don't want to transact spawn/destroy events.
+		// Explicitly set RF_Transactional on spawned actors so we can undo/redo properties on them.
 		SpawnedActor->SetFlags(RF_Transactional);
 
 		for (UActorComponent* Component : SpawnedActor->GetComponents())
@@ -182,7 +205,8 @@ UObject* FLevelSequenceActorSpawner::SpawnObject(FMovieSceneSpawnable& Spawnable
 	SpawnedActor->FinishSpawning(SpawnTransform, bIsDefaultTransform);
 
 #if WITH_EDITOR
-	if (GIsEditor)
+	// Don't set the actor label in PIE as this requires flushing async loading.
+	if (GIsEditor && !GEditor->IsPlaySessionInProgress())
 	{
 		SpawnedActor->SetActorLabel(Spawnable.GetName());
 	}

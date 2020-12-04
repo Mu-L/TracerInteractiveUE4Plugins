@@ -150,6 +150,9 @@ ANavigationData::ANavigationData(const FObjectInitializer& ObjectInitializer)
 	, FindHierarchicalPathImplementation(NULL)
 	, bRegistered(false)
 	, bRebuildingSuspended(false)
+#if WITH_EDITORONLY_DATA
+	, bIsBuildingOnLoad(false)
+#endif
 	, NavDataUniqueID(GetNextUniqueID())
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -415,6 +418,10 @@ void ANavigationData::PurgeUnusedPaths()
 {
 	check(IsInGameThread());
 
+	// Paths can be registered from async pathfinding thread 
+	// while unused paths are purged in main thread (actor tick)
+	FScopeLock PathLock(&ActivePathsLock);
+
 	const int32 Count = ActivePaths.Num();
 	FNavPathWeakPtr* WeakPathPtr = (ActivePaths.GetData() + Count - 1);
 	for (int32 i = Count - 1; i >= 0; --i, --WeakPathPtr)
@@ -521,8 +528,6 @@ void ANavigationData::RebuildAll()
 	
 	if (NavDataGenerator.IsValid())
 	{
-		// mark outermost package as dirty. Internal filters will dirty only for valid scenarios (i.e. commandlet or editor mode only)
-		MarkPackageDirty();
 		NavDataGenerator->RebuildAll();
 	}
 }
@@ -812,7 +817,15 @@ void ANavigationData::RemoveQueryFilter(TSubclassOf<UNavigationQueryFilter> Filt
 
 uint32 ANavigationData::LogMemUsed() const
 {
-	const uint32 MemUsed = ActivePaths.GetAllocatedSize() + SupportedAreas.GetAllocatedSize() +
+	uint32 ActivePathsMemSize = 0;
+	{
+		// Paths can be registered from async pathfinding thread
+		// while logging is requested on main thread (console command)
+		FScopeLock PathLock(&ActivePathsLock);
+		ActivePathsMemSize = ActivePaths.GetAllocatedSize();
+	}
+
+	const uint32 MemUsed = ActivePathsMemSize + SupportedAreas.GetAllocatedSize() +
 		QueryFilters.GetAllocatedSize() + AreaClassToIdMap.GetAllocatedSize();
 
 	UE_VLOG_UELOG(this, LogNavigation, Display, TEXT("%s: ANavigationData: %u\n    self: %d"), *GetName(), MemUsed, sizeof(ANavigationData));

@@ -1571,8 +1571,7 @@ uint32 FDynamicMeshEmitterData::GetMeshLODIndexFromProxy(const FParticleSystemSc
 	{
 		return FirstAvailableLOD;
 	}
-	const auto FeatureLevel = InOwnerProxy->GetScene().GetFeatureLevel();
-	const int32 EffectiveMinLOD = StaticMesh->MinLOD.GetValueForFeatureLevel(FeatureLevel);
+	const int32 EffectiveMinLOD = StaticMesh->MinLOD.GetValue();
 	const int32 MaxLOD = StaticMesh->RenderData->LODResources.Num() - 1;
 	const int32 ClampedMinLOD = FMath::Clamp(EffectiveMinLOD, FirstAvailableLOD, MaxLOD);
 	const int32 MeshLOD = (InOwnerProxy->MeshEmitterLODIndices.IsValidIndex(EmitterIndex)) ? InOwnerProxy->MeshEmitterLODIndices[EmitterIndex] : 0;
@@ -7246,7 +7245,7 @@ FPrimitiveSceneProxy* UParticleSystemComponent::CreateSceneProxy()
 	FParticleSystemSceneProxy* NewProxy = NULL;
 
 	//@fixme EmitterInstances.Num() check should be here to avoid proxies for dead emitters but there are some edge cases where it happens for emitters that have just activated...
-	//@fixme Get non-instanced path working in ES2!
+	//@fixme Get non-instanced path working in ES!
 	if ((IsActive() == true)/** && (EmitterInstances.Num() > 0)*/ && Template)
 	{
 		FInGameScopedCycleCounter InGameCycleCounter(GetWorld(), EInGamePerfTrackers::VFXSignificance, EInGamePerfTrackerThreads::GameThread, bIsManagingSignificance);
@@ -7261,7 +7260,9 @@ FPrimitiveSceneProxy* UParticleSystemComponent::CreateSceneProxy()
 		}
 
 		// Create the dynamic data for rendering this particle system.
+		bParallelRenderThreadUpdate = true;
 		FParticleDynamicData* ParticleDynamicData = CreateDynamicData(GetScene()->GetFeatureLevel());
+		bParallelRenderThreadUpdate = false;
 
 		if (CanBeOccluded())
 		{

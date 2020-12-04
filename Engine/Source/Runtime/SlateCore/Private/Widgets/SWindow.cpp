@@ -500,7 +500,11 @@ FVector2D SWindow::ComputeWindowSizeForContent( FVector2D ContentSize )
 
 TSharedRef<SWidget> SWindow::MakeWindowTitleBar(const TSharedRef<SWindow>& Window, const TSharedPtr<SWidget>& CenterContent, EHorizontalAlignment TitleContentAlignment)
 {
-	return FSlateApplicationBase::Get().MakeWindowTitleBar(Window, nullptr, TitleContentAlignment, TitleBar);
+	FWindowTitleBarArgs Args(Window);
+	Args.CenterContent = CenterContent;
+	Args.CenterContentAlignment = TitleContentAlignment;
+
+	return FSlateApplicationBase::Get().MakeWindowTitleBar(Args, TitleBar);
 }
 
 
@@ -533,7 +537,11 @@ void SWindow::ConstructWindowInternals()
 		SNew( SVerticalBox )
 		.Visibility( EVisibility::SelfHitTestInvisible );
 
-	TSharedRef<SWidget> TitleBarWidget = MakeWindowTitleBar(SharedThis(this), nullptr, GetTitleAlignment());
+	FWindowTitleBarArgs Args(SharedThis(this));
+	Args.CenterContent = nullptr;
+	Args.CenterContentAlignment = GetTitleAlignment();
+
+	TSharedRef<SWidget> TitleBarWidget = FSlateApplicationBase::Get().MakeWindowTitleBar(Args, TitleBar);
 
 	if (bCreateTitleBar)
 	{
@@ -691,11 +699,13 @@ FWindowSizeLimits SWindow::GetSizeLimits() const
 
 void SWindow::SetAllowFastUpdate(bool bInAllowFastUpdate)
 {
-	bAllowFastUpdate = bInAllowFastUpdate;
-
-	if (bAllowFastUpdate)
+	if (bAllowFastUpdate != bInAllowFastUpdate)
 	{
-		InvalidateChildOrder();
+		bAllowFastUpdate = bInAllowFastUpdate;
+		if (bAllowFastUpdate)
+		{
+			InvalidateChildOrder();
+		}
 	}
 }
 
@@ -1246,7 +1256,7 @@ void SWindow::SetContent( TSharedRef<SWidget> InContent )
 	{
 		this->ContentSlot->operator[]( InContent );
 	}
-	Invalidate(EInvalidateWidget::ChildOrder);
+	Invalidate(EInvalidateWidgetReason::ChildOrder);
 }
 
 TSharedRef<const SWidget> SWindow::GetContent() const
@@ -2101,6 +2111,10 @@ int32 SWindow::PaintWindow( double CurrentTime, float DeltaTime, FSlateWindowEle
 	{
 		OutDrawElements.PopCachedElementData();
 	}
+
+#if WITH_SLATE_DEBUGGING
+	FSlateDebugging::PaintDebugElements.Broadcast(PaintArgs, GetWindowGeometryInWindow(), OutDrawElements, Result.MaxLayerIdPainted);
+#endif 
 
 	return Result.MaxLayerIdPainted;
 

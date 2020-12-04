@@ -32,6 +32,7 @@
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SSpacer.h"
 #include "ISequencerChannelInterface.h"
 #include "Channels/MovieSceneChannelProxy.h"
 #include "SKeyEditInterface.h"
@@ -277,7 +278,20 @@ void FSectionContextMenu::PopulateMenu(FMenuBuilder& MenuBuilder)
 	MenuBuilder.AddSubMenu(
 		LOCTEXT("SectionProperties", "Properties"),
 		LOCTEXT("SectionPropertiesTooltip", "Modify the section properties"),
-		FNewMenuDelegate::CreateLambda([=](FMenuBuilder& SubMenuBuilder){ Shared->AddPropertiesMenu(SubMenuBuilder); })
+		FNewMenuDelegate::CreateLambda([=](FMenuBuilder& SubMenuBuilder)
+		{
+			TArray<TWeakObjectPtr<UObject>> Sections;
+			{
+				for (TWeakObjectPtr<UMovieSceneSection> Section : Sequencer->GetSelection().GetSelectedSections())
+				{
+					if (Section.IsValid())
+					{
+						Sections.Add(Section);
+					}
+				}
+			}
+			SequencerHelpers::AddPropertiesMenu(*Sequencer, SubMenuBuilder, Sections);
+		})
 	);
 
 	MenuBuilder.BeginSection("SequencerKeyEdit", LOCTEXT("EditMenu", "Edit"));
@@ -500,7 +514,82 @@ void FSectionContextMenu::AddEditMenu(FMenuBuilder& MenuBuilder)
 			FExecuteAction::CreateLambda([=]{ Shared->AutoSizeSection(); }),
 			FCanExecuteAction::CreateLambda([=]{ return Shared->CanAutoSize(); }))
 	);
-		
+
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("SyncSectionsUsingSourceTimecode", "Synchronize using Source Timecode"),
+		LOCTEXT("SyncSectionsUsingSourceTimecodeTooltip", "Sync selected sections using the source timecode.  The first selected section will be unchanged and subsequent sections will be adjusted according to their source timecode as relative to the first section's."),
+		FSlateIcon(),
+		FUIAction(
+			FExecuteAction::CreateLambda([=] { return Shared->Sequencer->SyncSectionsUsingSourceTimecode(); }),
+			FCanExecuteAction::CreateLambda([=]{ return (Shared->Sequencer->GetSelection().GetSelectedSections().Num() > 1); }))
+	);
+
+	MenuBuilder.BeginSection("SequencerInterpolation", LOCTEXT("KeyInterpolationMenu", "Key Interpolation"));
+	
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("SetKeyInterpolationAuto", "Cubic (Auto)"),
+		LOCTEXT("SetKeyInterpolationAutoTooltip", "Set key interpolation to auto"),
+		FSlateIcon(FEditorStyle::GetStyleSetName(), "Sequencer.IconKeyAuto"),
+		FUIAction(
+			FExecuteAction::CreateLambda([=]{ Shared->SetInterpTangentMode(RCIM_Cubic, RCTM_Auto); }),
+			FCanExecuteAction::CreateLambda([=]{ return Shared->CanSetInterpTangentMode(); }),
+			FIsActionChecked::CreateLambda([=]{ return Shared->IsInterpTangentModeSelected(RCIM_Cubic, RCTM_Auto); }) ),
+		NAME_None,
+		EUserInterfaceActionType::ToggleButton
+	);
+
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("SetKeyInterpolationUser", "Cubic (User)"),
+		LOCTEXT("SetKeyInterpolationUserTooltip", "Set key interpolation to user"),
+		FSlateIcon(FEditorStyle::GetStyleSetName(), "Sequencer.IconKeyUser"),
+		FUIAction(
+			FExecuteAction::CreateLambda([=]{ Shared->SetInterpTangentMode(RCIM_Cubic, RCTM_User); }),
+			FCanExecuteAction::CreateLambda([=]{ return Shared->CanSetInterpTangentMode(); }),
+			FIsActionChecked::CreateLambda([=]{ return Shared->IsInterpTangentModeSelected(RCIM_Cubic, RCTM_User); }) ),
+		NAME_None,
+		EUserInterfaceActionType::ToggleButton
+	);
+
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("SetKeyInterpolationBreak", "Cubic (Break)"),
+		LOCTEXT("SetKeyInterpolationBreakTooltip", "Set key interpolation to break"),
+		FSlateIcon(FEditorStyle::GetStyleSetName(), "Sequencer.IconKeyBreak"),
+		FUIAction(
+			FExecuteAction::CreateLambda([=]{ Shared->SetInterpTangentMode(RCIM_Cubic, RCTM_Break); }),
+			FCanExecuteAction::CreateLambda([=]{ return Shared->CanSetInterpTangentMode(); }),
+			FIsActionChecked::CreateLambda([=]{ return Shared->IsInterpTangentModeSelected(RCIM_Cubic, RCTM_Break); }) ),
+		NAME_None,
+		EUserInterfaceActionType::ToggleButton
+	);
+
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("SetKeyInterpolationLinear", "Linear"),
+		LOCTEXT("SetKeyInterpolationLinearTooltip", "Set key interpolation to linear"),
+		FSlateIcon(FEditorStyle::GetStyleSetName(), "Sequencer.IconKeyLinear"),
+		FUIAction(
+			FExecuteAction::CreateLambda([=]{ Shared->SetInterpTangentMode(RCIM_Linear, RCTM_Auto); }),
+			FCanExecuteAction::CreateLambda([=]{ return Shared->CanSetInterpTangentMode(); }),
+			FIsActionChecked::CreateLambda([=]{ return Shared->IsInterpTangentModeSelected(RCIM_Linear, RCTM_Auto); }) ),
+		NAME_None,
+		EUserInterfaceActionType::ToggleButton
+	);
+
+	MenuBuilder.AddMenuEntry(
+		LOCTEXT("SetKeyInterpolationConstant", "Constant"),
+		LOCTEXT("SetKeyInterpolationConstantTooltip", "Set key interpolation to constant"),
+		FSlateIcon(FEditorStyle::GetStyleSetName(), "Sequencer.IconKeyConstant"),
+		FUIAction(
+			FExecuteAction::CreateLambda([=]{ Shared->SetInterpTangentMode(RCIM_Constant, RCTM_Auto); }),
+			FCanExecuteAction::CreateLambda([=]{ return Shared->CanSetInterpTangentMode(); }),
+			FIsActionChecked::CreateLambda([=]{ return Shared->IsInterpTangentModeSelected(RCIM_Constant, RCTM_Auto); }) ),
+		NAME_None,
+		EUserInterfaceActionType::ToggleButton
+	);
+
+	MenuBuilder.EndSection(); // SequencerInterpolation
+
+	MenuBuilder.BeginSection("Key Editing", LOCTEXT("KeyEditingSectionMenus", "Key Editing"));
+
 	MenuBuilder.AddMenuEntry(
 		LOCTEXT("ReduceKeysSection", "Reduce Keys"),
 		LOCTEXT("ReduceKeysTooltip", "Reduce keys in this section"),
@@ -510,14 +599,32 @@ void FSectionContextMenu::AddEditMenu(FMenuBuilder& MenuBuilder)
 			FCanExecuteAction::CreateLambda([=]{ return Shared->CanReduceKeys(); }))
 	);
 
-	MenuBuilder.AddMenuEntry(
-		LOCTEXT("SyncSectionsUsingSourceTimecode", "Synchronize Selected Sections using Source Timecode"),
-		LOCTEXT("SyncSectionsUsingSourceTimecodeTooltip", "Sync selected sections using the source timecode.  The first selected section will be unchanged and subsequent sections will be adjusted according to their source timecode as relative to the first section's."),
-		FSlateIcon(),
-		FUIAction(
-			FExecuteAction::CreateLambda([=] { return Shared->Sequencer->SyncSectionsUsingSourceTimecode(); }),
-			FCanExecuteAction::CreateLambda([=]{ return (Shared->Sequencer->GetSelection().GetSelectedSections().Num() > 1); }))
-	);
+	auto OnReduceKeysToleranceChanged = [=](float NewValue) {
+		Sequencer->GetSequencerSettings()->SetReduceKeysTolerance(NewValue);
+	};
+
+	MenuBuilder.AddWidget(
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+			[
+				SNew(SSpacer)
+			]
+		+ SHorizontalBox::Slot()
+			.AutoWidth()
+			[
+				SNew(SSpinBox<float>)
+				.Style(&FEditorStyle::GetWidgetStyle<FSpinBoxStyle>("Sequencer.HyperlinkSpinBox"))
+				.OnValueCommitted_Lambda([=](float Value, ETextCommit::Type) { OnReduceKeysToleranceChanged(Value); })
+				.OnValueChanged_Lambda(OnReduceKeysToleranceChanged)
+				.MinValue(0)
+				.MaxValue(TOptional<float>())
+				.Value_Lambda([=]() -> float {
+				return Sequencer->GetSequencerSettings()->GetReduceKeysTolerance();
+				})
+			],
+		LOCTEXT("ReduceKeysTolerance", "Tolerance"));
+
+	MenuBuilder.EndSection();
 }
 
 FMovieSceneBlendTypeField FSectionContextMenu::GetSupportedBlendTypes() const
@@ -535,105 +642,6 @@ FMovieSceneBlendTypeField FSectionContextMenu::GetSupportedBlendTypes() const
 
 	return BlendTypes;
 }
-
-
-/** A widget which wraps the section details view which is an FNotifyHook which is used to forward
-	changes to the section to sequencer. */
-class SSectionDetailsNotifyHookWrapper : public SCompoundWidget, public FNotifyHook
-{
-public:
-	SLATE_BEGIN_ARGS(SSectionDetailsNotifyHookWrapper) {}
-	SLATE_END_ARGS();
-
-	void Construct(FArguments InArgs) { }
-
-	void SetDetailsAndSequencer(TSharedRef<SWidget> InDetailsPanel, TSharedRef<ISequencer> InSequencer)
-	{
-		ChildSlot
-		[
-			InDetailsPanel
-		];
-		Sequencer = InSequencer;
-	}
-
-	//~ FNotifyHook interface
-	virtual void NotifyPostChange(const FPropertyChangedEvent& PropertyChangedEvent, FProperty* PropertyThatChanged) override
-	{
-		Sequencer->NotifyMovieSceneDataChanged(EMovieSceneDataChangeType::TrackValueChanged);
-	}
-
-private:
-	TSharedPtr<ISequencer> Sequencer;
-};
-
-
-void FSectionContextMenu::AddPropertiesMenu(FMenuBuilder& MenuBuilder)
-{
-	TSharedRef<SSectionDetailsNotifyHookWrapper> DetailsNotifyWrapper = SNew(SSectionDetailsNotifyHookWrapper);
-	FDetailsViewArgs DetailsViewArgs;
-	{
-		DetailsViewArgs.bAllowSearch = false;
-		DetailsViewArgs.bCustomFilterAreaLocation = true;
-		DetailsViewArgs.bCustomNameAreaLocation = true;
-		DetailsViewArgs.bHideSelectionTip = true;
-		DetailsViewArgs.bLockable = false;
-		DetailsViewArgs.bSearchInitialKeyFocus = true;
-		DetailsViewArgs.bUpdatesFromSelection = false;
-		DetailsViewArgs.bShowOptions = false;
-		DetailsViewArgs.bShowModifiedPropertiesOption = false;
-		DetailsViewArgs.NotifyHook = &DetailsNotifyWrapper.Get();
-		DetailsViewArgs.ColumnWidth = 0.45f;
-	}
-
-	TArray<TWeakObjectPtr<UObject>> Sections;
-	{
-		for (TWeakObjectPtr<UMovieSceneSection> Section : Sequencer->GetSelection().GetSelectedSections())
-		{
-			if (Section.IsValid())
-			{
-				Sections.Add(Section);
-			}
-		}
-	}
-
-	// We pass the current scene to the UMovieSceneSection customization so we can get the overall bounds of the section when we change a section from infinite->bounded.
-	UMovieScene* CurrentScene = Sequencer->GetFocusedMovieSceneSequence()->GetMovieScene();
-
-	TSharedRef<IDetailsView> DetailsView = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor").CreateDetailView(DetailsViewArgs);
-	DetailsView->RegisterInstancedCustomPropertyTypeLayout("FrameNumber", FOnGetPropertyTypeCustomizationInstance::CreateLambda([=]() {
-		return MakeShared<FFrameNumberDetailsCustomization>(Sequencer->GetNumericTypeInterface()); }));
-	DetailsView->RegisterInstancedCustomPropertyLayout(UMovieSceneSection::StaticClass(), FOnGetDetailCustomizationInstance::CreateLambda([=]() {
-		return MakeShared<FMovieSceneSectionDetailsCustomization>(Sequencer->GetNumericTypeInterface(), CurrentScene); }));
-
-	// Let section interfaces further customize the properties details view.
-	TSharedRef<FSequencerNodeTree> SequencerNodeTree = Sequencer->GetNodeTree();
-	for (TWeakObjectPtr<UObject> Section : Sections)
-	{
-		if (Section.IsValid())
-		{
-			TOptional<FSectionHandle> SectionHandle = SequencerNodeTree->GetSectionHandle(Cast<UMovieSceneSection>(Section));
-			if (SectionHandle)
-			{
-				TSharedRef<ISequencerSection> SectionInterface = SectionHandle->GetSectionInterface();
-				FSequencerSectionPropertyDetailsViewCustomizationParams CustomizationDetails(
-					SectionInterface, Sequencer, SectionHandle->GetTrackNode()->GetTrackEditor());
-				TSharedPtr<FSequencerObjectBindingNode> ParentObjectBindingNode = SectionHandle->GetTrackNode()->FindParentObjectBindingNode();
-				if (ParentObjectBindingNode.IsValid())
-				{
-					CustomizationDetails.ParentObjectBindingGuid = ParentObjectBindingNode->GetObjectBinding();
-				}
-				SectionInterface->CustomizePropertiesDetailsView(DetailsView, CustomizationDetails);
-			}
-		}
-	}
-
-	Sequencer->OnInitializeDetailsPanel().Broadcast(DetailsView, Sequencer);
-	DetailsView->SetObjects(Sections);
-
-	DetailsNotifyWrapper->SetDetailsAndSequencer(DetailsView, Sequencer);
-	MenuBuilder.AddWidget(DetailsNotifyWrapper, FText::GetEmpty(), true);
-}
-
 
 void FSectionContextMenu::AddOrderMenu(FMenuBuilder& MenuBuilder)
 {
@@ -856,15 +864,15 @@ void FSectionContextMenu::ReduceKeys()
 	FScopedTransaction ReduceKeysTransaction(LOCTEXT("ReduceKeys_Transaction", "Reduce Keys"));
 
 	TSet<TSharedPtr<IKeyArea> > KeyAreas;
-	for (auto DisplayNode : Sequencer->GetSelection().GetSelectedOutlinerNodes())
+	for (const TSharedRef<FSequencerDisplayNode>& DisplayNode : Sequencer->GetSelection().GetSelectedOutlinerNodes())
 	{
 		SequencerHelpers::GetAllKeyAreas(DisplayNode, KeyAreas);
 	}
 
 	if (KeyAreas.Num() == 0)
 	{
-		TSet<TSharedRef<FSequencerDisplayNode>> SelectedNodes = Sequencer->GetSelection().GetNodesWithSelectedKeysOrSections();
-		for (auto DisplayNode : SelectedNodes)
+		const TSet<TSharedRef<FSequencerDisplayNode>>& SelectedNodes = Sequencer->GetSelection().GetNodesWithSelectedKeysOrSections();
+		for (const TSharedRef<FSequencerDisplayNode>& DisplayNode : SelectedNodes)
 		{
 			SequencerHelpers::GetAllKeyAreas(DisplayNode, KeyAreas);
 		}
@@ -873,8 +881,9 @@ void FSectionContextMenu::ReduceKeys()
 
 	FKeyDataOptimizationParams Params;
 	Params.bAutoSetInterpolation = true;
+	Params.Tolerance = Sequencer->GetSequencerSettings()->GetReduceKeysTolerance();
 
-	for (auto KeyArea : KeyAreas)
+	for (TSharedPtr<IKeyArea> KeyArea : KeyAreas)
 	{
 		if (KeyArea.IsValid())
 		{
@@ -924,21 +933,154 @@ bool FSectionContextMenu::CanAutoSize() const
 bool FSectionContextMenu::CanReduceKeys() const
 {
 	TSet<TSharedPtr<IKeyArea> > KeyAreas;
-	for (auto DisplayNode : Sequencer->GetSelection().GetSelectedOutlinerNodes())
+	for (const TSharedRef<FSequencerDisplayNode>& DisplayNode : Sequencer->GetSelection().GetSelectedOutlinerNodes())
 	{
 		SequencerHelpers::GetAllKeyAreas(DisplayNode, KeyAreas);
 	}
 
 	if (KeyAreas.Num() == 0)
 	{
-		TSet<TSharedRef<FSequencerDisplayNode>> SelectedNodes = Sequencer->GetSelection().GetNodesWithSelectedKeysOrSections();
-		for (auto DisplayNode : SelectedNodes)
+		const TSet<TSharedRef<FSequencerDisplayNode>>& SelectedNodes = Sequencer->GetSelection().GetNodesWithSelectedKeysOrSections();
+		for (const TSharedRef<FSequencerDisplayNode>& DisplayNode : SelectedNodes)
 		{
 			SequencerHelpers::GetAllKeyAreas(DisplayNode, KeyAreas);
 		}
 	}
 
 	return KeyAreas.Num() != 0;
+}
+
+void FSectionContextMenu::SetInterpTangentMode(ERichCurveInterpMode InterpMode, ERichCurveTangentMode TangentMode)
+{
+	FScopedTransaction SetInterpTangentModeTransaction(LOCTEXT("SetInterpTangentMode_Transaction", "Set Interpolation and Tangent Mode"));
+
+	TSet<TSharedPtr<IKeyArea> > KeyAreas;
+	for (const TSharedRef<FSequencerDisplayNode>& DisplayNode : Sequencer->GetSelection().GetSelectedOutlinerNodes())
+	{
+		SequencerHelpers::GetAllKeyAreas(DisplayNode, KeyAreas);
+	}
+
+	if (KeyAreas.Num() == 0)
+	{
+		const TSet<TSharedRef<FSequencerDisplayNode>>& SelectedNodes = Sequencer->GetSelection().GetNodesWithSelectedKeysOrSections();
+		for (const TSharedRef<FSequencerDisplayNode>& DisplayNode : SelectedNodes)
+		{
+			SequencerHelpers::GetAllKeyAreas(DisplayNode, KeyAreas);
+		}
+	}
+
+	bool bAnythingChanged = false;
+
+	for (TSharedPtr<IKeyArea> KeyArea : KeyAreas)
+	{
+		if (KeyArea.IsValid())
+		{
+			UMovieSceneSection* Section = KeyArea->GetOwningSection();
+			if (Section)
+			{
+				Section->Modify();
+
+				for (FMovieSceneFloatChannel* FloatChannel : Section->GetChannelProxy().GetChannels<FMovieSceneFloatChannel>())
+				{
+					TMovieSceneChannelData<FMovieSceneFloatValue> ChannelData = FloatChannel->GetData();
+					TArrayView<FMovieSceneFloatValue> Values = ChannelData.GetValues();
+
+					for (int32 KeyIndex = 0; KeyIndex < FloatChannel->GetNumKeys(); ++KeyIndex)
+					{
+						Values[KeyIndex].InterpMode = InterpMode;
+						Values[KeyIndex].TangentMode = TangentMode;
+						bAnythingChanged = true;
+					}
+
+					FloatChannel->AutoSetTangents();
+				}
+			}
+		}
+	}
+
+	if (bAnythingChanged)
+	{
+		Sequencer->NotifyMovieSceneDataChanged( EMovieSceneDataChangeType::TrackValueChanged );
+	}
+}
+
+bool FSectionContextMenu::CanSetInterpTangentMode() const
+{
+	TSet<TSharedPtr<IKeyArea> > KeyAreas;
+	for (const TSharedRef<FSequencerDisplayNode>& DisplayNode : Sequencer->GetSelection().GetSelectedOutlinerNodes())
+	{
+		SequencerHelpers::GetAllKeyAreas(DisplayNode, KeyAreas);
+	}
+
+	if (KeyAreas.Num() == 0)
+	{
+		const TSet<TSharedRef<FSequencerDisplayNode>>& SelectedNodes = Sequencer->GetSelection().GetNodesWithSelectedKeysOrSections();
+		for (const TSharedRef<FSequencerDisplayNode>& DisplayNode : SelectedNodes)
+		{
+			SequencerHelpers::GetAllKeyAreas(DisplayNode, KeyAreas);
+		}
+	}
+
+	for (TSharedPtr<IKeyArea> KeyArea : KeyAreas)
+	{
+		if (KeyArea.IsValid())
+		{
+			UMovieSceneSection* Section = KeyArea->GetOwningSection();
+			if (Section)
+			{
+				return Section->GetChannelProxy().GetChannels<FMovieSceneFloatChannel>().Num() != 0;
+			}
+		}
+	}
+
+	return false;
+}
+				
+
+bool FSectionContextMenu::IsInterpTangentModeSelected(ERichCurveInterpMode InterpMode, ERichCurveTangentMode TangentMode) const
+{
+	TSet<TSharedPtr<IKeyArea> > KeyAreas;
+	for (const TSharedRef<FSequencerDisplayNode>& DisplayNode : Sequencer->GetSelection().GetSelectedOutlinerNodes())
+	{
+		SequencerHelpers::GetAllKeyAreas(DisplayNode, KeyAreas);
+	}
+
+	if (KeyAreas.Num() == 0)
+	{
+		const TSet<TSharedRef<FSequencerDisplayNode>>& SelectedNodes = Sequencer->GetSelection().GetNodesWithSelectedKeysOrSections();
+		for (const TSharedRef<FSequencerDisplayNode>& DisplayNode : SelectedNodes)
+		{
+			SequencerHelpers::GetAllKeyAreas(DisplayNode, KeyAreas);
+		}
+	}
+
+	int32 NumKeys = 0;
+	for (TSharedPtr<IKeyArea> KeyArea : KeyAreas)
+	{
+		if (KeyArea.IsValid())
+		{
+			UMovieSceneSection* Section = KeyArea->GetOwningSection();
+			if (Section)
+			{
+				for (FMovieSceneFloatChannel* FloatChannel : Section->GetChannelProxy().GetChannels<FMovieSceneFloatChannel>())
+				{
+					TMovieSceneChannelData<FMovieSceneFloatValue> ChannelData = FloatChannel->GetData();
+					TArrayView<FMovieSceneFloatValue> Values = ChannelData.GetValues();
+
+					NumKeys += FloatChannel->GetNumKeys();
+					for (int32 KeyIndex = 0; KeyIndex < FloatChannel->GetNumKeys(); ++KeyIndex)
+					{
+						if (Values[KeyIndex].InterpMode != InterpMode || Values[KeyIndex].TangentMode != TangentMode)
+						{
+							return false;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return NumKeys != 0;
 }
 
 
@@ -1373,7 +1515,7 @@ void FPasteContextMenu::GatherPasteDestinationsForNode(FSequencerDisplayNode& In
 	}
 
 	// Add children
-	for (const TSharedPtr<FSequencerDisplayNode>& Child : InNode.GetChildNodes())
+	for (const TSharedPtr<FSequencerDisplayNode> Child : InNode.GetChildNodes())
 	{
 		GatherPasteDestinationsForNode(*Child, InSection, ThisScope, Map);
 	}
@@ -1851,12 +1993,12 @@ void FEasingContextMenu::OnUpdateLength(int32 NewLength)
 			if (Handle.EasingType == ESequencerEasingType::In)
 			{
 				Section->Easing.bManualEaseIn = true;
-				Section->Easing.ManualEaseInDuration = FMath::Min(MovieScene::DiscreteSize(Section->GetRange()), NewLength);
+				Section->Easing.ManualEaseInDuration = FMath::Min(UE::MovieScene::DiscreteSize(Section->GetRange()), NewLength);
 			}
 			else
 			{
 				Section->Easing.bManualEaseOut = true;
-				Section->Easing.ManualEaseOutDuration = FMath::Min(MovieScene::DiscreteSize(Section->GetRange()), NewLength);
+				Section->Easing.ManualEaseOutDuration = FMath::Min(UE::MovieScene::DiscreteSize(Section->GetRange()), NewLength);
 			}
 		}
 	}

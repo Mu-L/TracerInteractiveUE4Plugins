@@ -498,9 +498,13 @@ void STakeRecorderCockpit::UpdateRecordError()
 
 	UTakeRecorderSources*                  SourcesContainer = Sequence->FindMetaData<UTakeRecorderSources>();
 	TArrayView<UTakeRecorderSource* const> SourcesArray     = SourcesContainer ? SourcesContainer->GetSources() : TArrayView<UTakeRecorderSource* const>();
-	if (!Algo::FindBy(SourcesArray, true, &UTakeRecorderSource::bEnabled))
+	UTakeRecorderSource* const* Source = Algo::FindByPredicate(SourcesArray, [](const UTakeRecorderSource* Source)
 	{
-		RecordErrorText = LOCTEXT("ErrorWidget_NoSources", "There are no currently enabled sources to record from. Please add some above before recording.");
+		return Source->bEnabled && Source->IsValid();
+	});
+	if (!Source)
+	{
+		RecordErrorText = LOCTEXT("ErrorWidget_NoSources", "There are no currently enabled or valid sources to record from. Please add some above before recording.");
 		return;
 	}
 
@@ -509,7 +513,6 @@ void STakeRecorderCockpit::UpdateRecordError()
 		RecordErrorText = LOCTEXT("ErrorWidget_NoSlate", "You must enter a slate to begin recording.");
 		return;
 	}
-
 	FString PackageName = TakeMetaData->GenerateAssetPath(GetDefault<UTakeRecorderProjectSettings>()->Settings.GetTakeAssetPath());
 	FText OutReason;
 	if (!FPackageName::IsValidLongPackageName(PackageName, false, &OutReason))
@@ -959,9 +962,12 @@ FReply STakeRecorderCockpit::NewRecordingFromThis()
 	}
 
 	FLevelEditorModule& LevelEditorModule = FModuleManager::LoadModuleChecked<FLevelEditorModule>("LevelEditor");
-	TSharedRef<SDockTab> DockTab = LevelEditorModule.GetLevelEditorTabManager()->InvokeTab(ITakeRecorderModule::TakeRecorderTabName);
-	TSharedRef<STakeRecorderTabContent> TabContent = StaticCastSharedRef<STakeRecorderTabContent>(DockTab->GetContent());
-	TabContent->SetupForRecording(Sequence);
+	TSharedPtr<SDockTab> DockTab = LevelEditorModule.GetLevelEditorTabManager()->TryInvokeTab(ITakeRecorderModule::TakeRecorderTabName);
+	if (DockTab.IsValid())
+	{
+		TSharedRef<STakeRecorderTabContent> TabContent = StaticCastSharedRef<STakeRecorderTabContent>(DockTab->GetContent());
+		TabContent->SetupForRecording(Sequence);
+	}
 
 	return FReply::Handled();
 }

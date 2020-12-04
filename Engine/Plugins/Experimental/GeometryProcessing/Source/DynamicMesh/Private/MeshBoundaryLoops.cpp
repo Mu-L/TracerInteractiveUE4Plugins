@@ -19,6 +19,30 @@ int FMeshBoundaryLoops::GetMaxVerticesLoopIndex() const
 }
 
 
+
+int FMeshBoundaryLoops::GetLongestLoopIndex() const
+{
+	int32 LongestLoopIdx = -1;
+	double LongestLoopLen = 0;
+	for (int i = 0; i < Loops.Num(); ++i)
+	{
+		int32 LoopNum = Loops[i].Vertices.Num();
+		double LoopLen = 0;
+		for (int32 k = 0; k < LoopNum; ++k)
+		{
+			FVector3d NextPos = Mesh->GetVertex(Loops[i].Vertices[(k+1)%LoopNum]);
+			LoopLen += Mesh->GetVertex(Loops[i].Vertices[k]).Distance(NextPos);
+		}
+		if (LoopLen > LongestLoopLen)
+		{
+			LongestLoopLen = LoopLen;
+			LongestLoopIdx = i;
+		}
+	}
+	return LongestLoopIdx;
+}
+
+
 FIndex2i FMeshBoundaryLoops::FindVertexInLoop(int VertexID) const
 {
 	int N = Loops.Num();
@@ -395,9 +419,7 @@ int FMeshBoundaryLoops::FindLeftTurnEdge(int incoming_e, int bowtie_v, TArray<in
 		}
 	}
 
-	// [RMS] w/ bowtie vertices and open spans, this does happen
-	//Debug.Assert(best_e != -1);
-
+	// Note w/ bowtie vertices and open spans, best_e CAN be invalid (== -1)
 	return best_e;
 }
 
@@ -654,3 +676,55 @@ int FMeshBoundaryLoops::CountInList(const TArray<int>& Loop, int Item)
 	}
 	return c;
 }
+
+int FMeshBoundaryLoops::FindLoopTrianglesHint(const TArray<int>& HintTris) const
+{
+	TSet<int> HintEdges;
+	for (int TriangleID : HintTris)
+	{
+		if (Mesh->IsTriangle(TriangleID) == false)
+		{
+			continue;
+		}
+
+		FIndex3i TriangleEdges = Mesh->GetTriEdges(TriangleID);
+		for (int j = 0; j < 3; ++j)
+		{
+			if (Mesh->IsBoundaryEdge(TriangleEdges[j]))
+			{
+				HintEdges.Add(TriangleEdges[j]);
+			}
+		}
+	}
+
+	return FindLoopEdgesHint(HintEdges);
+}
+
+
+int FMeshBoundaryLoops::FindLoopEdgesHint(const TSet<int>& HintEdges) const
+{
+	int NumLoops = GetLoopCount();
+	int BestLoop = -1;
+	int MaxVotes = 0;
+	for (int LoopIndex = 0; LoopIndex < NumLoops; ++LoopIndex)
+	{
+		int Votes = 0;
+		const FEdgeLoop& CurrentLoop = Loops[LoopIndex];
+		for (int EdgeID : CurrentLoop.Edges)
+		{
+			if (HintEdges.Contains(EdgeID))
+			{
+				++Votes;
+			}
+		}
+
+		if (Votes > MaxVotes)
+		{
+			BestLoop = LoopIndex;
+			MaxVotes = Votes;
+		}
+	}
+
+	return BestLoop;
+}
+

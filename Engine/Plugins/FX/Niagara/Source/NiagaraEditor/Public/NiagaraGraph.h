@@ -123,7 +123,11 @@ private:
 
 struct FNiagaraGraphFunctionAliasContext
 {
+	// the usage as defined in the compilation request (same for all translation stages)
 	ENiagaraScriptUsage CompileUsage;
+
+	// the usage as defined in the current translation stage
+	ENiagaraScriptUsage ScriptUsage;
 	TArray<UEdGraphPin*> StaticSwitchValues;
 };
 
@@ -221,7 +225,7 @@ class UNiagaraGraph : public UEdGraph
 	void FindInputNodes(TArray<class UNiagaraNodeInput*>& OutInputNodes, FFindInputNodeOptions Options = FFindInputNodeOptions()) const;
 
 	/** Returns a list of variable inputs for all static switch nodes in the graph. */
-	TArray<FNiagaraVariable> FindStaticSwitchInputs(bool bReachableOnly = false) const;
+	TArray<FNiagaraVariable> NIAGARAEDITOR_API FindStaticSwitchInputs(bool bReachableOnly = false) const;
 
 	/** Get an in-order traversal of a graph by the specified target output script usage.*/
 	void BuildTraversal(TArray<class UNiagaraNode*>& OutNodesTraversed, ENiagaraScriptUsage TargetUsage, FGuid TargetUsageId, bool bEvaluateStaticSwitches = false) const;
@@ -386,6 +390,9 @@ class UNiagaraGraph : public UEdGraph
 
 	static FName StandardizeName(FName Name, ENiagaraScriptUsage Usage, bool bIsGet, bool bIsSet);
 
+	/** Helper to get a map of variables to all input/output pins with the same name. */
+	const TMap<FNiagaraVariable, FInputPinsAndOutputPins> NIAGARAEDITOR_API CollectVarsToInOutPinsMap() const;
+
 protected:
 	void RebuildNumericCache();
 	bool bNeedNumericCacheRebuilt;
@@ -405,9 +412,6 @@ private:
 	/** When a new variable is added to the VariableToScriptVariableMap, generate appropriate scope and usage. */
 	void GenerateMetaDataForScriptVariable(UNiagaraScriptVariable* InScriptVariable) const;
 
-	/** Helper to get a map of variables to all input/output pins with the same name. */
-	const TMap<FNiagaraVariable, FInputPinsAndOutputPins> CollectVarsToInOutPinsMap() const;
-
 	/**
 	 * Set the usage of a script variable depending on input/output pins with same name.
 	 * @param VarToPinsMap			Mapping of Pins to the associated UNiagaraScriptVariable.
@@ -420,7 +424,7 @@ private:
 	FOnGraphChanged OnGraphNeedsRecompile;
 
 	/** Find all nodes in the graph that can be reached during compilation. */
-	TArray<UEdGraphNode*> FindReachbleNodes() const;
+	TArray<UEdGraphNode*> FindReachableNodes() const;
 
 	/** Compares the values on the default pins with the metadata and syncs the two if necessary */
 	void ValidateDefaultPins();

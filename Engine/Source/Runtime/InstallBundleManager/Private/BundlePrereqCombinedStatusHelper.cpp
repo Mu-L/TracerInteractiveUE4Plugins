@@ -3,6 +3,7 @@
 #include "BundlePrereqCombinedStatusHelper.h"
 #include "Containers/Ticker.h"
 #include "InstallBundleManagerPrivatePCH.h"
+#include "Stats/Stats.h"
 
 FBundlePrereqCombinedStatusHelper::FBundlePrereqCombinedStatusHelper()
 {
@@ -101,7 +102,7 @@ void FBundlePrereqCombinedStatusHelper::SetBundlesToTrackFromContentState(const 
 		if (ensureAlwaysMsgf(BundleState, TEXT("Trying to track unknown bundle %s"), *Bundle.ToString()))
 		{
 			//Track if we need any kind of bundle updates
-			if (BundleState->State == EInstallBundleContentState::NotInstalled || BundleState->State == EInstallBundleContentState::NeedsUpdate)
+			if (BundleState->State == EInstallBundleInstallState::NotInstalled || BundleState->State == EInstallBundleInstallState::NeedsUpdate)
 			{
 				bBundleNeedsUpdate = true;
 			}
@@ -261,12 +262,12 @@ float FBundlePrereqCombinedStatusHelper::GetCombinedProgressPercent() const
 		}
 	}
 	
-	FMath::Clamp(AllBundleProgressPercent, 0.f, 1.0f);
-	return AllBundleProgressPercent;
+	return FMath::Clamp(AllBundleProgressPercent, 0.f, 1.0f);
 }
 
 bool FBundlePrereqCombinedStatusHelper::Tick(float dt)
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_FBundlePrereqCombinedStatusHelper_Tick);
 	UpdateBundleCache();
 	UpdateCombinedStatus();
 	

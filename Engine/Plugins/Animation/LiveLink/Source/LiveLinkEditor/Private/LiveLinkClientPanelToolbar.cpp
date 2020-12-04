@@ -211,23 +211,13 @@ private:
 	class FLiveLinkRoleClassFilter : public IClassViewerFilter
 	{
 	public:
-		TArray<UClass*> ValidRoles;
-		FLiveLinkRoleClassFilter()
-		{
-			for (TSubclassOf<ULiveLinkVirtualSubject> VSubjectClass : FLiveLinkRoleTrait::GetVirtualSubjectClasses())
-			{
-				if (VSubjectClass->GetDefaultObject<ULiveLinkVirtualSubject>()->GetRole() != nullptr)
-				{
-					ValidRoles.AddUnique(VSubjectClass.Get());
-				}
-			}
-		}
+		FLiveLinkRoleClassFilter() = default;
 
 		virtual bool IsClassAllowed(const FClassViewerInitializationOptions& InInitOptions, const UClass* InClass, TSharedRef< FClassViewerFilterFuncs > InFilterFuncs) override
 		{
-			if (ValidRoles.Contains(InClass))
+			if (InClass->IsChildOf(ULiveLinkVirtualSubject::StaticClass()))
 			{
-				return !InClass->HasAnyClassFlags(CLASS_Abstract | CLASS_HideDropDown | CLASS_Deprecated);
+				return InClass->GetDefaultObject<ULiveLinkVirtualSubject>()->GetRole() != nullptr && !InClass->HasAnyClassFlags(CLASS_Abstract | CLASS_HideDropDown | CLASS_Deprecated);
 			}
 			return false;
 		}
@@ -916,7 +906,7 @@ void SLiveLinkClientPanelToolbar::OnSaveAsPreset()
 
 	// Saving into a new package
 	const FString NewAssetName = FPackageName::GetLongPackageAssetName(PackageName);
-	UPackage* NewPackage = CreatePackage(nullptr, *PackageName);
+	UPackage* NewPackage = CreatePackage(*PackageName);
 	ULiveLinkPreset* NewPreset = NewObject<ULiveLinkPreset>(NewPackage, *NewAssetName, RF_Public | RF_Standalone | RF_Transactional);
 
 	if (NewPreset)

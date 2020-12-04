@@ -2,6 +2,8 @@
 
 #include "PostProcess/PostProcessCombineLUTs.h"
 #include "PostProcess/PostProcessTonemap.h"
+#include "ScenePrivate.h"
+#include "VolumeRendering.h"
 
 namespace
 {
@@ -121,6 +123,7 @@ BEGIN_SHADER_PARAMETER_STRUCT(FCombineLUTParameters, )
 	SHADER_PARAMETER(float, ColorCorrectionHighlightsMin)
 	SHADER_PARAMETER(float, BlueCorrection)
 	SHADER_PARAMETER(float, ExpandGamut)
+	SHADER_PARAMETER(float, ToneCurveAmount)
 	SHADER_PARAMETER(float, FilmSlope)
 	SHADER_PARAMETER(float, FilmToe)
 	SHADER_PARAMETER(float, FilmShoulder)
@@ -198,6 +201,7 @@ void GetCombineLUTParameters(
 
 	Parameters.BlueCorrection = Settings.BlueCorrection;
 	Parameters.ExpandGamut = Settings.ExpandGamut;
+	Parameters.ToneCurveAmount = Settings.ToneCurveAmount;
 
 	Parameters.FilmSlope = Settings.FilmSlope;
 	Parameters.FilmToe = Settings.FilmToe;
@@ -413,7 +417,7 @@ FRDGTextureRef AddCombineLUTPass(FRDGBuilder& GraphBuilder, const FViewInfo& Vie
 	const bool bUseFloatOutput = ViewFamily.SceneCaptureSource == SCS_FinalColorHDR || ViewFamily.SceneCaptureSource == SCS_FinalToneCurveHDR;
 
 	// Attempt to register the persistent view LUT texture.
-	FRDGTextureRef OutputTexture = GraphBuilder.TryRegisterExternalTexture(
+	FRDGTextureRef OutputTexture = TryRegisterExternalTexture(GraphBuilder,
 		View.GetTonemappingLUT(GraphBuilder.RHICmdList, GLUTSize, bUseVolumeTextureLUT, bUseComputePass, bUseFloatOutput));
 
 	View.SetValidTonemappingLUT();
@@ -422,7 +426,7 @@ FRDGTextureRef AddCombineLUTPass(FRDGBuilder& GraphBuilder, const FViewInfo& Vie
 	if (!OutputTexture)
 	{
 		OutputTexture = GraphBuilder.CreateTexture(
-			FSceneViewState::CreateLUTRenderTarget(GLUTSize, bUseVolumeTextureLUT, bUseComputePass, bUseFloatOutput),
+			Translate(FSceneViewState::CreateLUTRenderTarget(GLUTSize, bUseVolumeTextureLUT, bUseComputePass, bUseFloatOutput)),
 			TEXT("CombineLUT"));
 	}
 
@@ -520,21 +524,4 @@ FRDGTextureRef AddCombineLUTPass(FRDGBuilder& GraphBuilder, const FViewInfo& Vie
 	}
 
 	return OutputTexture;
-}
-
-FRenderingCompositeOutputRef AddCombineLUTPass(FRenderingCompositionGraph& Graph)
-{
-	FRenderingCompositePass* Pass = Graph.RegisterPass(
-		new(FMemStack::Get()) TRCPassForRDG<0, 1>(
-			[](FRenderingCompositePass* InPass, FRenderingCompositePassContext& InContext)
-	{
-		FRDGBuilder GraphBuilder(InContext.RHICmdList);
-
-		FRDGTextureRef OutputTexture = AddCombineLUTPass(GraphBuilder, InContext.View);
-
-		InPass->ExtractRDGTextureForOutput(GraphBuilder, ePId_Output0, OutputTexture);
-
-		GraphBuilder.Execute();
-	}));
-	return Pass;
 }

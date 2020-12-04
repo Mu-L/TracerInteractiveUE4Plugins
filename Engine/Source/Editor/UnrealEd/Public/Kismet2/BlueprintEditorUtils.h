@@ -22,6 +22,7 @@ class FCompilerResultsLog;
 class INameValidatorInterface;
 class UActorComponent;
 class UBlueprintGeneratedClass;
+class USimpleConstructionScript;
 class UK2Node_Event;
 class UK2Node_Variable;
 class ULevelScriptBlueprint;
@@ -180,9 +181,14 @@ public:
 	static void PreloadMembers(UObject* InObject);
 
 	/**
-	 * Preloads the construction script, and all templates therein
+	 * Preloads the construction script, and all templates therein, for the given Blueprint object
 	 */
 	static void PreloadConstructionScript(UBlueprint* Blueprint);
+
+	/**
+	 * Preloads the given construction script, and all templates therein
+	 */
+	static void PreloadConstructionScript(USimpleConstructionScript* SimpleConstructionScript);
 
 	/** 
 	 * Helper function to patch the new CDO into the linker where the old one existed 
@@ -326,6 +332,14 @@ public:
 	static class UEdGraph* CreateNewGraph(UObject* ParentScope, const FName& GraphName, TSubclassOf<class UEdGraph> GraphClass, TSubclassOf<class UEdGraphSchema> SchemaClass);
 
 	/**
+	 * Creates a new function graph with a signature that matches InNode
+	 *
+	 * @param InNode        Node to copy signature from
+	 * @param InSchemaClass The schema for the new graph
+	 */
+	static void CreateMatchingFunction(UK2Node_CallFunction* InNode, TSubclassOf<class UEdGraphSchema> InSchemaClass);
+
+	/**
 	 * Creates a function graph, but does not add it to the blueprint.  If bIsUserCreated is true, the entry/exit nodes will be editable. 
 	 * SignatureFromObject is used to find signature for entry/exit nodes if using an existing signature.
 	 * The template argument SignatureType should be UClass or UFunction.
@@ -350,6 +364,10 @@ public:
 				if ( BPTYPE_FunctionLibrary == Blueprint->BlueprintType )
 				{
 					ExtraFunctionFlags |= FUNC_Static;
+				}
+				if ( BPTYPE_Const == Blueprint->BlueprintType )
+				{
+					ExtraFunctionFlags |= FUNC_Const;
 				}
 				// We need to mark the function entry as editable so that we can
 				// set metadata on it if it is an editor utility blueprint/widget:
@@ -383,6 +401,13 @@ public:
 
 		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 	}
+
+	/**
+	* Check if the blueprint and function are valid options for conversion to an event (BP is not a function library)
+	*
+	* @return	True if this function can be converted to a custom event
+	*/
+	static bool IsFunctionConvertableToEvent(UBlueprint* const BlueprintObj, UFunction* const Function);
 
 	/**
 	* Get the override class of a given function from its name
@@ -735,9 +760,6 @@ public:
 	 * @param [out]		HiddenPins		Set of pins that should be hidden
 	 * @param [out]		OutInternalPins	Subset of hidden pins that are marked for internal use only rather than marked as hidden (optional)
 	 */
-	UE_DEPRECATED(4.19, "Use version that passes sets by name")
-	static void GetHiddenPinsForFunction(UEdGraph const* Graph, UFunction const* Function, TSet<FString>& HiddenPins, TSet<FString>* OutInternalPins = nullptr);
-
 	static void GetHiddenPinsForFunction(UEdGraph const* Graph, UFunction const* Function, TSet<FName>& HiddenPins, TSet<FName>* OutInternalPins = nullptr);
 
 	/** Makes sure that calls to parent functions are valid, and removes them if not */
@@ -768,6 +790,15 @@ public:
 	* @param MessageLog		BP compiler results log to output any error messages to
 	*/
 	static void ValidatePinConnections(const UEdGraphNode* Node, FCompilerResultsLog& MessageLog);
+
+	/**
+	* If the given node is from an editor only module but is placed in a runtime blueprint
+	* then place a warning in the message log that it will not be included in a cooked build. 
+	* 
+	* @param Node			Node to check the outer package on
+	* @param MessageLog		BP Compiler results log to output messages to
+	*/
+	static void ValidateEditorOnlyNodes(const UK2Node* Node, FCompilerResultsLog& MessageLog);
 
 	/**
 	 * Gets the visible class variable list.  This includes both variables introduced here and in all superclasses.
@@ -804,15 +835,26 @@ public:
 	static bool AddMemberVariable(UBlueprint* Blueprint, const FName& NewVarName, const FEdGraphPinType& NewVarType, const FString& DefaultValue = FString());
 
 	/**
-	 * Duplicates a variable given it's name and Blueprint
+	 * Duplicates a variable from one Blueprint to another blueprint
+	 *
+	 * @param InFromBlueprint				The Blueprint the variable can be found in
+	 * @param InToBlueprint					The Blueprint the new variable should be added to (can be the same blueprint)
+	 * @param InVariableToDuplicate			Variable name to be found and duplicated
+	 *
+	 * @return								Returns the name of the new variable or NAME_None if failed to duplicate
+	 */
+	static FName DuplicateMemberVariable(UBlueprint* InFromBlueprint, UBlueprint* InToBlueprint, FName InVariableToDuplicate);
+
+	/**
+	 * Duplicates a variable given its name and Blueprint
 	 *
 	 * @param InBlueprint					The Blueprint the variable can be found in
 	 * @paramInScope						Local variable's scope
 	 * @param InVariableToDuplicate			Variable name to be found and duplicated
 	 *
-	 * @return								Returns the name of the new variable or NAME_None is failed to duplicate
+	 * @return								Returns the name of the new variable or NAME_None if failed to duplicate
 	 */
-	static FName DuplicateVariable(UBlueprint* InBlueprint, const UStruct* InScope, const FName& InVariableToDuplicate);
+	static FName DuplicateVariable(UBlueprint* InBlueprint, const UStruct* InScope, FName InVariableToDuplicate);
 
 	/**
 	 * Internal function that deep copies a variable description
@@ -1003,6 +1045,19 @@ public:
 	static void ValidateBlueprintChildVariables(UBlueprint* InBlueprint, const FName InVariableName,
 		TFunction<void(UBlueprint* InChildBP, const FName InVariableName, bool bValidatedVariable)> PostValidationCallback = TFunction<void(UBlueprint*, FName, bool)>());
 
+	/**
+	 * Gets AssetData for all child classes of a given blueprint
+	 * 
+	 * @param InBlueprint    Taget Blueprint
+	 * @param OutChildren    AssetData representing the child blueprints
+	 * @param bInRecursive   if true, will return classes derived from child classes as well
+	 * @return Number of child blueprints found
+	 */
+	static int32 GetChildrenOfBlueprint(UBlueprint* InBlueprint, TArray<FAssetData>& OutChildren, bool bInRecursive = true);
+
+	/** Marks all children of a blueprint as modified */
+	static void MarkBlueprintChildrenAsModified(UBlueprint* InBlueprint);
+
 	/** Rename a Timeline. If bRenameNodes is true, will also rename any timeline nodes associated with this timeline */
 	static bool RenameTimeline (UBlueprint* Blueprint, const FName OldVarName, const FName NewVarName);
 
@@ -1148,6 +1203,9 @@ public:
 	/** Gets pointer to PropertyFlags of variable */
 	static uint64* GetBlueprintVariablePropertyFlags(UBlueprint* Blueprint, const FName& VarName);
 
+	/** Gets the variable linked to a RepNotify function, returns nullptr if not found */
+	static FBPVariableDescription* GetVariableFromOnRepFunction(UBlueprint* Blueprint, FName FuncName);
+
 	/** Get RepNotify function name of variable */
 	static FName GetBlueprintVariableRepNotifyFunc(UBlueprint* Blueprint, const FName& VarName);
 
@@ -1165,6 +1223,17 @@ public:
 	 * @return	The index of the variable, or INDEX_NONE if it wasn't introduced in this blueprint.
 	 */
 	static int32 FindNewVariableIndex(const UBlueprint* Blueprint, const FName& InName);
+
+	/**
+	 * Find the index of a variable first declared in this blueprint or its parents. Returns INDEX_NONE if not found.
+	 * 
+	 * @param   InBlueprint         Blueprint to begin search in (will search parents as well)
+	 * @param	InName	            Name of the variable to find.
+	 * @param   OutFoundBlueprint   Blueprint where the variable was eventually found
+	 *
+	 * @return	The index of the variable, or INDEX_NONE if it wasn't introduced in this blueprint.
+	 */
+	static int32 FindNewVariableIndexAndBlueprint(UBlueprint* InBlueprint, FName InName, UBlueprint*& OutFoundBlueprint);
 
 	/**
 	 * Find the index of a local variable declared in this blueprint. Returns INDEX_NONE if not found.
@@ -1219,16 +1288,28 @@ public:
 	/** Indicates if the variable is used on any graphs in this Blueprint*/
 	static bool IsVariableUsed(const UBlueprint* Blueprint, const FName& Name, UEdGraph* LocalGraphScope = nullptr);
 
-	/** Copies the value from the passed in string into a property. ContainerMem points to the Struct or Class containing Property */
+	/** 
+	 * Copies the value from the passed in string into a property. ContainerMem points to the Struct or Class containing Property 
+	 * NOTE: This function does not work correctly with static arrays.
+	 */
 	static bool PropertyValueFromString(const FProperty* Property, const FString& StrValue, uint8* Container, UObject* OwningObject = nullptr);
 
-	/** Copies the value from the passed in string into a property. DirectValue is the raw memory address of the property value */
+	/** 
+	 * Copies the value from the passed in string into a property. DirectValue is the raw memory address of the property value 
+	 * NOTE: This function does not work correctly with static arrays.
+	 */
 	static bool PropertyValueFromString_Direct(const FProperty* Property, const FString& StrValue, uint8* DirectValue, UObject* OwningObject = nullptr);
 
-	/** Copies the value from a property into the string OutForm. ContainerMem points to the Struct or Class containing Property */
+	/** 
+	 * Copies the value from a property into the string OutForm. ContainerMem points to the Struct or Class containing Property 
+	 * NOTE: This function does not work correctly with static arrays.
+	 */
 	static bool PropertyValueToString(const FProperty* Property, const uint8* Container, FString& OutForm, UObject* OwningObject = nullptr);
 
-	/** Copies the value from a property into the string OutForm. DirectValue is the raw memory address of the property value */
+	/** 
+	 * Copies the value from a property into the string OutForm. DirectValue is the raw memory address of the property value 
+	 * NOTE: This function does not work correctly with static arrays.
+	 */
 	static bool PropertyValueToString_Direct(const FProperty* Property, const uint8* DirectValue, FString& OutForm, UObject* OwningObject = nullptr);
 
 	/** Call PostEditChange() on all Actors based on the given Blueprint */
@@ -1267,8 +1348,8 @@ public:
 	/** Determines if this property is associated with a component that would be displayed in the SCS editor */
 	static bool IsSCSComponentProperty(FObjectProperty* MemberProperty);
 
-	/** Attempts to match up the FComponentKey with a ComponentTemplate from the Blueprint's UCS */
-	static UActorComponent* FindUCSComponentTemplate(const FComponentKey& ComponentKey);
+	/** Attempts to match up the FComponentKey with a ComponentTemplate from the Blueprint's UCS. Will fall back to try matching the given template name if the key cannot be used. */
+	static UActorComponent* FindUCSComponentTemplate(const FComponentKey& ComponentKey, const FName& TemplateName);
 
 	/** Takes the Blueprint's NativizedFlag property and applies it to the authoritative config (does the same for flagged dependencies) */
 	static bool PropagateNativizationSetting(UBlueprint* Blueprint);

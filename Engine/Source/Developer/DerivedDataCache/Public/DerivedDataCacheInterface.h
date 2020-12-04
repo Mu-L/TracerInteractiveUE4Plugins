@@ -180,7 +180,7 @@ public:
 	 * @param	Data		Data to put in the cache under this key
 	 * @param	DataContext	A string used to describe the data being generated. Typically the path to the object that it is generated from is sufficient.
 	**/
-	virtual void Put(const TCHAR* CacheKey, TArray<uint8>& Data, FStringView DataContext, bool bPutEvenIfExists = false) = 0;
+	virtual void Put(const TCHAR* CacheKey, TArrayView<const uint8> Data, FStringView DataContext, bool bPutEvenIfExists = false) = 0;
 
 	/**
 	 * Hint that the data associated with the key is transient and may be optionally purged from the cache.
@@ -223,6 +223,11 @@ public:
 	* Retrieve whether a Shared DDC is being used
 	*/
 	virtual bool GetUsingSharedDDC() const = 0;
+
+	/**
+	 * Retrieve the name of the graph used when configuring DDC
+	 */
+	virtual const TCHAR* GetGraphName() const = 0;
 
 	//--------------------
 	// UsageStats Interface

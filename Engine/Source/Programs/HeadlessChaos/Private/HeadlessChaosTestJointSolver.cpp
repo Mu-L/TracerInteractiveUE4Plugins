@@ -146,6 +146,8 @@ namespace ChaosTest
 
 			Solver.Update(
 				Dt,
+				SolverSettings,
+				JointSettings,
 				P0,
 				Q0,
 				V0,
@@ -158,7 +160,6 @@ namespace ChaosTest
 			for (int32 PairIt = 0; PairIt < NumPairIts; ++PairIt)
 			{
 				Solver.ApplyConstraints(Dt, SolverSettings, JointSettings);
-				Solver.ApplyDrives(Dt, SolverSettings, JointSettings);
 			}
 
 			if (Mass0 > 0)
@@ -398,7 +399,6 @@ namespace ChaosTest
 		SolverTestA.JointSettings.bAngularSLerpVelocityDriveEnabled = true;
 		SolverTestA.JointSettings.AngularDriveStiffness = Stiffness;
 		SolverTestA.JointSettings.AngularDriveDamping = Damping;
-		SolverTestA.JointSettings.AngularDriveTargetAngles = FVec3(0, 0, 0);
 		SolverTestA.JointSettings.AngularDrivePositionTarget = FRotation3::FromIdentity();
 		SolverTestA.JointSettings.AngularDriveForceMode = ForceMode;
 
@@ -580,7 +580,6 @@ namespace ChaosTest
 		SolverTestA.JointSettings.bAngularSLerpVelocityDriveEnabled = true;
 		SolverTestA.JointSettings.AngularDriveStiffness = 80.0f;
 		SolverTestA.JointSettings.AngularDriveDamping = 1.0f;
-		SolverTestA.JointSettings.AngularDriveTargetAngles = FVec3(0, 0, 0);
 		SolverTestA.JointSettings.AngularDrivePositionTarget = FRotation3::FromIdentity();
 
 		// Particle 0 is Kinematic

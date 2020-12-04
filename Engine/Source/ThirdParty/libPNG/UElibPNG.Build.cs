@@ -12,7 +12,12 @@ public class UElibPNG : ModuleRules
 	{
 		get
 		{
-			if (Target.IsInPlatformGroup(UnrealPlatformGroup.Android) ||
+			if (Target.IsInPlatformGroup(UnrealPlatformGroup.Android))
+			{
+				return "libPNG-1.6.37";
+			}
+			else if (Target.Platform == UnrealTargetPlatform.Mac ||
+				Target.Platform == UnrealTargetPlatform.Mac ||
 				Target.Architecture.StartsWith("aarch64") ||
 				Target.Architecture.StartsWith("i686"))
 			{
@@ -33,6 +38,8 @@ public class UElibPNG : ModuleRules
 		Type = ModuleType.External;
 
 		string LibDir;
+
+		PublicDefinitions.Add("WITH_LIBPNG_1_6=" + (LibPNGVersion.Contains("-1.6.") ? "1" : "0"));
 
 		// On Windows x64, use the LLVM compiled version with changes made by us to improve performance
 		// due to better vectorization and FMV support that will take advantage of the different instruction
@@ -109,16 +116,6 @@ public class UElibPNG : ModuleRules
 		else if (Target.IsInPlatformGroup(UnrealPlatformGroup.Unix))
 		{
 			PublicAdditionalLibraries.Add(Path.Combine(LibPNGPath, "Linux", Target.Architecture, "libpng.a"));
-		}
-		else if (Target.Platform == UnrealTargetPlatform.XboxOne)
-		{
-			// Use reflection to allow type not to exist if console code is not present
-			System.Type XboxOnePlatformType = System.Type.GetType("UnrealBuildTool.XboxOnePlatform,UnrealBuildTool");
-			if (XboxOnePlatformType != null)
-			{
-				System.Object VersionName = XboxOnePlatformType.GetMethod("GetVisualStudioCompilerVersionName").Invoke(null, null);
-				PublicAdditionalLibraries.Add(Path.Combine(LibPNGPath, "XboxOne", "VS" + VersionName.ToString(), "libpng125_XboxOne.lib"));
-			}
 		}
 
 		PublicIncludePaths.Add(IncPNGPath);

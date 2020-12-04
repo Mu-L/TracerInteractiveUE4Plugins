@@ -30,16 +30,16 @@ public:
 	{
 	public:
 		FDeviceSpace(XrAction InAction);
+		~FDeviceSpace();
 
 		bool CreateSpace(XrSession InSession);
 		void DestroySpace();
 
-		XrReferenceSpaceType ReferenceSpaceType;
 		XrAction Action;
 		XrSpace Space;
 	};
 
-	// The game and render threads each have a separate copy of this structure so that they don't stomp on each other or cause tearing
+	// The game and render threads each have a separate copy of these structures so that they don't stomp on each other or cause tearing
 	// when the game thread progresses to the next frame while the render thread is still working on the previous frame.
 	struct FPipelinedFrameState
 	{
@@ -48,6 +48,18 @@ public:
 		TArray<XrView> Views;
 		TArray<XrSpaceLocation> DeviceLocations;
 		XrSpace TrackingSpace;
+		float WorldToMetersScale = 100.0f;
+
+		TArray<XrViewConfigurationView> ViewConfigs;
+		TArray<class IOpenXRExtensionPlugin*> PluginViews;
+	};
+
+	struct FPipelinedLayerState
+	{
+		TArray<XrCompositionLayerProjectionView> ProjectionLayers;
+		TArray<XrCompositionLayerDepthInfoKHR> DepthLayers;
+		TArray<XrSwapchainSubImage> ColorImages;
+		TArray<XrSwapchainSubImage> DepthImages;
 	};
 
 	class FVulkanExtensions : public IHeadMountedDisplayVulkanExtensions
@@ -75,6 +87,23 @@ public:
 		return DefaultName;
 	}
 
+	int32 GetXRSystemFlags() const override
+	{
+		int32 flags = EXRSystemFlags::IsHeadMounted;
+
+		if (SelectedEnvironmentBlendMode != XR_ENVIRONMENT_BLEND_MODE_OPAQUE)
+		{
+			flags |= EXRSystemFlags::IsAR;
+		}
+
+		if (bSupportsHandTracking)
+		{
+			flags |= EXRSystemFlags::SupportsHandTracking;
+		}
+
+		return flags;
+	}
+
 	virtual bool EnumerateTrackedDevices(TArray<int32>& OutDevices, EXRTrackedDeviceType Type = EXRTrackedDeviceType::Any) override;
 
 	virtual void SetInterpupillaryDistance(float NewInterpupillaryDistance) override;
@@ -85,7 +114,9 @@ public:
 	virtual void ResetOrientation(float Yaw = 0.f) override;
 	virtual void ResetPosition() override;
 
+	virtual bool GetIsTracked(int32 DeviceId);
 	virtual bool GetCurrentPose(int32 DeviceId, FQuat& CurrentOrientation, FVector& CurrentPosition) override;
+	virtual bool GetPoseForTime(int32 DeviceId, FTimespan Timespan, FQuat& CurrentOrientation, FVector& CurrentPosition, bool& bProvidedLinearVelocity, FVector& LinearVelocity, bool& bProvidedAngularVelocity, FVector& AngularVelocityRadPerSec);
 	virtual void SetBaseRotation(const FRotator& BaseRot) override;
 	virtual FRotator GetBaseRotation() const override;
 
@@ -111,22 +142,29 @@ public:
 		return SharedThis(this);
 	}
 
-protected:
-	/** FXRTrackingSystemBase protected interface */
+	virtual void GetMotionControllerData(UObject* WorldContext, const EControllerHand Hand, FXRMotionControllerData& MotionControllerData) override;
+
 	virtual float GetWorldToMetersScale() const override;
 
+protected:
+
 	bool StartSession();
+	bool StopSession();
 	bool OnStereoStartup();
 	bool OnStereoTeardown();
 	bool ReadNextEvent(XrEventDataBuffer* buffer);
-	void CloseSession();
+	void DestroySession();
 
 	void BuildOcclusionMeshes();
 	bool BuildOcclusionMesh(XrVisibilityMaskTypeKHR Type, int View, FHMDViewMesh& Mesh);
 
 	const FPipelinedFrameState& GetPipelinedFrameStateForThread() const;
 	FPipelinedFrameState& GetPipelinedFrameStateForThread();
-	void UpdateDeviceLocations();
+	const FPipelinedLayerState& GetPipelinedLayerStateForThread() const;
+	FPipelinedLayerState& GetPipelinedLayerStateForThread();
+
+	void UpdateDeviceLocations(bool bUpdateOpenXRExtensionPlugins);
+	void EnumerateViews(FPipelinedFrameState& PipelineState);
 
 public:
 	/** IHeadMountedDisplay interface */
@@ -154,10 +192,12 @@ public:
 	virtual bool IsStereoEnabled() const override;
 	virtual bool EnableStereo(bool stereo = true) override;
 	virtual void AdjustViewRect(EStereoscopicPass StereoPass, int32& X, int32& Y, uint32& SizeX, uint32& SizeY) const override;
+	virtual void SetFinalViewRect(const enum EStereoscopicPass StereoPass, const FIntRect& FinalViewRect) override;
 	virtual int32 GetDesiredNumberOfViews(bool bStereoRequested) const override;
 	virtual EStereoscopicPass GetViewPassForIndex(bool bStereoRequested, uint32 ViewIndex) const override;
 	virtual uint32 GetViewIndexForPass(EStereoscopicPass StereoPassType) const override;
 	virtual uint32 DeviceGetLODViewIndex() const override;
+	virtual bool DeviceIsAPrimaryPass(EStereoscopicPass Pass) override;
 	
 	virtual FMatrix GetStereoProjectionMatrix(const enum EStereoscopicPass StereoPassType) const override;
 	virtual void GetEyeRenderParams_RenderThread(const struct FRenderingCompositePassContext& Context, FVector2D& EyeToSrcUVScaleValue, FVector2D& EyeToSrcUVOffsetValue) const override;
@@ -174,9 +214,9 @@ public:
 
 	/** IStereoRenderTargetManager */
 	virtual bool ShouldUseSeparateRenderTarget() const override { return IsStereoEnabled(); }
-	virtual bool AllocateRenderTargetTexture(uint32 Index, uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 Flags, uint32 TargetableTextureFlags, FTexture2DRHIRef& OutTargetableTexture, FTexture2DRHIRef& OutShaderResourceTexture, uint32 NumSamples = 1) override;
+	virtual bool AllocateRenderTargetTexture(uint32 Index, uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, ETextureCreateFlags Flags, ETextureCreateFlags TargetableTextureFlags, FTexture2DRHIRef& OutTargetableTexture, FTexture2DRHIRef& OutShaderResourceTexture, uint32 NumSamples = 1) override;
 	virtual bool NeedReAllocateDepthTexture(const TRefCountPtr<IPooledRenderTarget>& DepthTarget) override final { return bNeedReAllocatedDepth; }
-	virtual bool AllocateDepthTexture(uint32 Index, uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, uint32 InTexFlags, uint32 TargetableTextureFlags, FTexture2DRHIRef& OutTargetableTexture, FTexture2DRHIRef& OutShaderResourceTexture, uint32 NumSamples = 1) override final;
+	virtual bool AllocateDepthTexture(uint32 Index, uint32 SizeX, uint32 SizeY, uint8 Format, uint32 NumMips, ETextureCreateFlags InTexFlags, ETextureCreateFlags TargetableTextureFlags, FTexture2DRHIRef& OutTargetableTexture, FTexture2DRHIRef& OutShaderResourceTexture, uint32 NumSamples = 1) override final;
 
 	virtual FXRRenderBridge* GetActiveRenderBridge_GameThread(bool bUseSeparateRenderTarget) override;
 
@@ -186,46 +226,58 @@ public:
 
 public:
 	/** Constructor */
-	FOpenXRHMD(const FAutoRegister&, XrInstance InInstance, XrSystemId InSystem, TRefCountPtr<FOpenXRRenderBridge>& InRenderBridge, TArray<const char*> InEnabledExtensions);
+	FOpenXRHMD(const FAutoRegister&, XrInstance InInstance, XrSystemId InSystem, TRefCountPtr<FOpenXRRenderBridge>& InRenderBridge, TArray<const char*> InEnabledExtensions, TArray<class IOpenXRExtensionPlugin*> InExtensionPlugins, IARSystemSupport* ARSystemSupport);
 
 	/** Destructor */
 	virtual ~FOpenXRHMD();
+
+
+	void OnBeginRendering_RHIThread();
+	void OnFinishRendering_RHIThread();
 
 	/** @return	True if the HMD was initialized OK */
 	OPENXRHMD_API bool IsInitialized() const;
 	OPENXRHMD_API bool IsRunning() const;
 	OPENXRHMD_API bool IsFocused() const;
-	void FinishRendering();
 
 	OPENXRHMD_API int32 AddActionDevice(XrAction Action);
 	OPENXRHMD_API void ResetActionDevices();
 
-	FXRSwapChain* GetSwapchain() { return Swapchain.Get(); }
-	FXRSwapChain* GetDepthSwapchain() { return DepthSwapchain.Get(); }
+	OPENXRHMD_API FXRSwapChain* GetSwapchain() { return Swapchain.Get(); }
+	OPENXRHMD_API FXRSwapChain* GetDepthSwapchain() { return DepthSwapchain.Get(); }
 
-	bool IsExtensionEnabled(const FString& Name) const { return EnabledExtensions.Contains(Name); }
-	XrInstance GetInstance() { return Instance; }
-	XrSystemId GetSystem() { return System; }
-	XrSession GetSession() { return Session; }
-	XrSpace GetTrackingSpace()
+	OPENXRHMD_API bool IsExtensionEnabled(const FString& Name) const { return EnabledExtensions.Contains(Name); }
+	OPENXRHMD_API XrInstance GetInstance() { return Instance; }
+	OPENXRHMD_API XrSystemId GetSystem() { return System; }
+	OPENXRHMD_API XrSession GetSession() { return Session; }
+	OPENXRHMD_API XrSpace GetTrackingSpace()
 	{
 		return (TrackingSpaceType == XR_REFERENCE_SPACE_TYPE_STAGE) ? StageSpace : LocalSpace;
 	}
+	OPENXRHMD_API XrTime GetDisplayTime() const;
+	OPENXRHMD_API TArray<IOpenXRExtensionPlugin*>& GetExtensionPlugins() { return ExtensionPlugins; }
 
 private:
 	bool					bStereoEnabled;
-	bool					bIsRunning;
-	bool					bIsReady;
-	bool					bIsRendering;
-	bool					bRunRequested;
+	TAtomic<bool>			bIsRunning;
+	TAtomic<bool>			bIsReady;
+	TAtomic<bool>			bIsRendering;
+	TAtomic<bool>			bIsSynchronized;
 	bool					bDepthExtensionSupported;
 	bool					bHiddenAreaMaskSupported;
+	bool					bViewConfigurationFovSupported;
 	bool					bNeedReAllocatedDepth;
+	bool					bNeedReBuildOcclusionMesh;
 	bool					bIsMobileMultiViewEnabled;
+	bool					bSupportsHandTracking;
+	float					WorldToMetersScale = 100.0f;
 
 	XrSessionState			CurrentSessionState;
+	FEvent*					FrameEventRHI;
+	FCriticalSection		BeginEndFrameMutex;
 
 	TArray<const char*>		EnabledExtensions;
+	TArray<class IOpenXRExtensionPlugin*> ExtensionPlugins;
 	XrInstance				Instance;
 	XrSystemId				System;
 	XrSession				Session;
@@ -236,12 +288,13 @@ private:
 	XrEnvironmentBlendMode  SelectedEnvironmentBlendMode;
 
 	FPipelinedFrameState	PipelinedFrameStateGame;
+	FPipelinedFrameState	PipelinedFrameStateRendering;
 	FPipelinedFrameState	PipelinedFrameStateRHI;
 
-	TArray<XrViewConfigurationView> Configs;
-	TArray<XrCompositionLayerProjectionView> ProjectionViewsRHI;
-	TArray<XrCompositionLayerDepthInfoKHR> DepthLayersRHI;
+	FPipelinedLayerState	PipelinedLayerStateRendering;
+	FPipelinedLayerState	PipelinedLayerStateRHI;
 
+	FCriticalSection		DeviceMutex;
 	TArray<FDeviceSpace>	DeviceSpaces;
 
 	TRefCountPtr<FOpenXRRenderBridge> RenderBridge;

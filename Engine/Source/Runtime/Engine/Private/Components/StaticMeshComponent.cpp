@@ -613,8 +613,8 @@ void UStaticMeshComponent::OnDestroyPhysicsState()
 {
 	Super::OnDestroyPhysicsState();
 
-	FNavigationSystem::UpdateComponentData(*this);
 	bNavigationRelevant = IsNavigationRelevant();
+	FNavigationSystem::UpdateComponentData(*this);
 }
 
 #if WITH_EDITORONLY_DATA
@@ -842,7 +842,7 @@ void UStaticMeshComponent::GetStreamingRenderAssetInfo(FStreamingTextureLevelCon
 		}
 	}
 
-	if (IsStreamingRenderAsset(GetStaticMesh()))
+	if (GetStaticMesh()->RenderResourceSupportsStreaming())
 	{
 		const float TexelFactor = ForcedLodModel > 0 ?
 			-(GetStaticMesh()->RenderData->LODResources.Num() - ForcedLodModel + 1) :
@@ -1861,6 +1861,31 @@ void UStaticMeshComponent::SetDistanceFieldSelfShadowBias(float NewValue)
 	}
 }
 
+void UStaticMeshComponent::SetEvaluateWorldPositionOffsetInRayTracing(bool NewValue)
+{
+	if (bEvaluateWorldPositionOffset != NewValue && GetScene() != nullptr)
+	{
+		// Update game thread data
+		bEvaluateWorldPositionOffset = NewValue;
+
+		// Skip when this doesn't have a valid static mesh 
+		if (!GetStaticMesh())
+		{
+			return;
+		}
+
+		// Update render thread data
+		ENQUEUE_RENDER_COMMAND(UpdateDFSelfShadowBiasCmd)(
+			[NewValue, PrimitiveSceneProxy = (FStaticMeshSceneProxy*)SceneProxy](FRHICommandList&)
+			{
+				if (PrimitiveSceneProxy)
+				{
+					PrimitiveSceneProxy->SetEvaluateWorldPositionOffsetInRayTracing(NewValue);
+				}
+			});
+	}
+}
+
 void UStaticMeshComponent::SetReverseCulling(bool ReverseCulling)
 {
 	if (ReverseCulling != bReverseCulling)
@@ -2032,8 +2057,7 @@ bool UStaticMeshComponent::HasLightmapTextureCoordinates() const
 		Mesh->RenderData->LODResources.Num() > 0 &&
 		Mesh->LightMapCoordinateIndex >= 0)
 	{
-		const ERHIFeatureLevel::Type FeatureLevel = GetScene() ? GetScene()->GetFeatureLevel() : GMaxRHIFeatureLevel;
-		int32 MeshMinLOD = Mesh->MinLOD.GetValueForFeatureLevel(FeatureLevel);
+		int32 MeshMinLOD = Mesh->MinLOD.GetValue();
 		MeshMinLOD = FMath::Min(MeshMinLOD,  Mesh->RenderData->LODResources.Num() - 1);
 		
 		return ((uint32)Mesh->LightMapCoordinateIndex < Mesh->RenderData->LODResources[MeshMinLOD].VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords());

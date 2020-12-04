@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "AssetData.h"
+#include "PackageTools.h"
 #include "ISourceControlProvider.h"
 #include "UObject/TextProperty.h"
 #include "FileHelpers.generated.h"
@@ -162,6 +163,17 @@ public:
 	*/
 	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Editor Loading and Saving")
 	static UNREALED_API void UnloadPackages(const TArray<UPackage*>& PackagesToUnload, bool& bOutAnyPackagesUnloaded, FText& OutErrorMessage);
+
+	/**
+	 * Helper function that attempts to reload the specified top-level packages.
+	 *
+	 * @param	PackagesToReload		The list of packages that should be reloaded
+	 * @param	bOutAnyPackagesReloaded	True if the set of loaded packages was changed
+	 * @param	OutErrorMessage			An error message specifying any problems with reloading packages
+	 * @param	InteractionMode			Whether the function is allowed to ask the user questions (such as whether to reload dirty packages)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Editor Scripting | Editor Loading and Saving")
+	static UNREALED_API void ReloadPackages(const TArray<UPackage*>& PackagesToReload, bool& bOutAnyPackagesReloaded, FText& OutErrorMessage, const EReloadPackagesInteractionMode InteractionMode = EReloadPackagesInteractionMode::Interactive);
 };
 
 
@@ -262,7 +274,7 @@ public:
 	static UNREALED_API bool SaveLevel(ULevel* Level, const FString& DefaultFilename = TEXT( "" ), FString* OutSavedFilename = nullptr );
 
 	/** Saves packages which contain map data but are not map packages themselves. */
-	static UNREALED_API void SaveMapDataPackages(UWorld* World, bool bCheckDirty);
+	static UNREALED_API void SaveMapDataPackages(UWorld* World, bool bCheckDirty, bool bSaveExternal = false);
 
 	/**
 	 * Does a SaveAs for the specified assets.
@@ -574,7 +586,7 @@ public:
 	 * @param	ObjectPath		The path to the package to test
 	 * @return					The package name from the string
 	 */
-	UNREALED_API static FString ExtractPackageName(const FString& ObjectPath);\
+	UNREALED_API static FString ExtractPackageName(const FString& ObjectPath);
 
 	////////////////////////////////////////////////////////////////////////////
 	// File

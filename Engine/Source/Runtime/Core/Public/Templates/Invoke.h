@@ -10,16 +10,22 @@
 
 namespace UE4Invoke_Private
 {
-	template <typename BaseType, typename CallableType>
-	FORCEINLINE auto DereferenceIfNecessary(CallableType&& Callable)
-		-> typename TEnableIf<TPointerIsConvertibleFromTo<typename TDecay<CallableType>::Type, typename TDecay<BaseType>::Type>::Value, decltype((CallableType&&)Callable)>::Type
+	template <
+		typename BaseType,
+		typename CallableType,
+		typename TEnableIf<TPointerIsConvertibleFromTo<typename TDecay<CallableType>::Type, typename TDecay<BaseType>::Type>::Value>::Type* = nullptr
+	>
+	FORCEINLINE auto DereferenceIfNecessary(CallableType&& Callable) -> decltype((CallableType&&)Callable)
 	{
 		return (CallableType&&)Callable;
 	}
 
-	template <typename BaseType, typename CallableType>
-	FORCEINLINE auto DereferenceIfNecessary(CallableType&& Callable)
-		-> typename TEnableIf<!TPointerIsConvertibleFromTo<typename TDecay<CallableType>::Type, typename TDecay<BaseType>::Type>::Value, decltype(*(CallableType&&)Callable)>::Type
+	template <
+		typename BaseType,
+		typename CallableType,
+		typename TEnableIf<!TPointerIsConvertibleFromTo<typename TDecay<CallableType>::Type, typename TDecay<BaseType>::Type>::Value>::Type* = nullptr
+	>
+	FORCEINLINE auto DereferenceIfNecessary(CallableType&& Callable) -> decltype(*(CallableType&&)Callable)
 	{
 		return *(CallableType&&)Callable;
 	}
@@ -79,10 +85,10 @@ FORCEINLINE auto Invoke(ReturnType (ObjType::*PtrMemFun)(PMFArgTypes...) const, 
  * Algo::SortBy(Array, &LexToString);
  *
  * // Works as expected
- * Algo::SortBy(Array, PROJECTION(LexToString));
+ * Algo::SortBy(Array, UE_PROJECTION(LexToString));
  */
-#define PROJECTION(FuncName) \
-	[](auto&&... Args) \
+#define UE_PROJECTION(FuncName) \
+	[](auto&&... Args) -> decltype(auto) \
 	{ \
 		return FuncName(Forward<decltype(Args)>(Args)...); \
 	}
@@ -100,10 +106,39 @@ FORCEINLINE auto Invoke(ReturnType (ObjType::*PtrMemFun)(PMFArgTypes...) const, 
  * Algo::SortBy(Array, &UObject::GetFullName);
  *
  * // Works as expected
- * Algo::SortBy(Array, PROJECTION_MEMBER(UObject, GetFullName));
+ * Algo::SortBy(Array, UE_PROJECTION_MEMBER(UObject, GetFullName));
  */
-#define PROJECTION_MEMBER(Type, FuncName) \
-	[](auto&& Obj, auto&&... Args) \
+#define UE_PROJECTION_MEMBER(Type, FuncName) \
+	[](auto&& Obj, auto&&... Args) -> decltype(auto) \
 	{ \
 		return UE4Invoke_Private::DereferenceIfNecessary<Type>(Forward<decltype(Obj)>(Obj)).FuncName(Forward<decltype(Args)>(Args)...); \
 	}
+
+#define PROJECTION(FuncName)              DEPRECATED_MACRO(4.26, "The PROJECTION macro is deprecated, please use UE_PROJECTION instead.") UE_PROJECTION(FuncName)
+#define PROJECTION_MEMBER(Type, FuncName) DEPRECATED_MACRO(4.26, "The PROJECTION_MEMBER macro is deprecated, please use UE_PROJECTION_MEMBER instead.") UE_PROJECTION_MEMBER(Type, FuncName)
+
+namespace UE4Invoke_Private
+{
+	template <typename, typename FuncType, typename... ArgTypes>
+	struct TInvokeResult_Impl
+	{
+	};
+
+	template <typename FuncType, typename... ArgTypes>
+	struct TInvokeResult_Impl<decltype((void)Invoke(DeclVal<FuncType>(), DeclVal<ArgTypes>()...)), FuncType, ArgTypes...>
+	{
+		using Type = decltype(Invoke(DeclVal<FuncType>(), DeclVal<ArgTypes>()...));
+	};
+}
+
+/**
+ * Trait for the type of the result when invoking a callable with the given argument types.
+ * Not defined (as thus usable in SFINAE contexts) when the callable cannot be invoked with the given argument types.
+ */
+template <typename FuncType, typename... ArgTypes>
+struct TInvokeResult : UE4Invoke_Private::TInvokeResult_Impl<void, FuncType, ArgTypes...>
+{
+};
+
+template <typename FuncType, typename... ArgTypes>
+using TInvokeResult_T = typename TInvokeResult<FuncType, ArgTypes...>::Type;

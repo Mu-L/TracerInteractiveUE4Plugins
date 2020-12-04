@@ -9,9 +9,13 @@
 #include "EngineDefines.h"
 #include "PhysicsPublic.h"
 #include "PhysXIncludes.h"
-#include "Chaos/ImplicitObject.h"
 
-#if WITH_PHYSX
+namespace Chaos
+{
+	class FImplicitObject;
+}
+
+#if PHYSICS_INTERFACE_PHYSX
 /** Draw PhysX geom with overlaps */
 void DrawGeomOverlaps(const UWorld* InWorld, const PxGeometry& PGeom, const PxTransform& PGeomPose, TArray<struct FOverlapResult>& Overlaps, float Lifetime);
 /** Draw PhysX geom being swept with hits */

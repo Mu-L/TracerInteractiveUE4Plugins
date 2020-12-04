@@ -22,6 +22,7 @@
 #include "UObject/WeakFieldPtr.h"
 
 struct FAssetData;
+struct FToolMenuSection;
 class FCanvas;
 class FMaterialCompiler;
 class FScopedTransaction;
@@ -51,7 +52,7 @@ public:
 	{
 		// Register this FMaterial derivative with AddEditorLoadedMaterialResource since it does not have a corresponding UMaterialInterface
 		FMaterial::AddEditorLoadedMaterialResource(this);
-		SetQualityLevelProperties(EMaterialQualityLevel::High, false, GMaxRHIFeatureLevel);
+		SetQualityLevelProperties(GMaxRHIFeatureLevel);
 	}
 
 	FMatExpressionPreview(UMaterialExpression* InExpression)
@@ -64,7 +65,7 @@ public:
 
 		check(InExpression->Material && InExpression->Material->Expressions.Contains(InExpression));
 		ReferencedTextures = InExpression->Material->GetReferencedTextures();
-		SetQualityLevelProperties(EMaterialQualityLevel::High, false, GMaxRHIFeatureLevel);
+		SetQualityLevelProperties(GMaxRHIFeatureLevel);
 	}
 
 	~FMatExpressionPreview()
@@ -275,6 +276,8 @@ public:
 	virtual FText GetToolkitName() const override;
 	virtual FText GetToolkitToolTipText() const override;
 	virtual FString GetWorldCentricTabPrefix() const override;
+	virtual void InitToolMenuContext(struct FToolMenuContext& MenuContext) override;
+
 
 	/** @return the documentation location for this editor */
 	virtual FString GetDocumentationLink() const override
@@ -382,6 +385,7 @@ public:
 	virtual UMaterialExpressionComment* CreateNewMaterialExpressionComment(const FVector2D& NodePos) override;
 	virtual void ForceRefreshExpressionPreviews() override;
 	virtual void AddToSelection(UMaterialExpression* Expression) override;
+	virtual void JumpToExpression(UMaterialExpression* Expression) override;
 	virtual void DeleteSelectedNodes() override;
 	virtual FText GetOriginalObjectName() const override;
 	virtual void UpdateMaterialAfterGraphChange() override;
@@ -392,7 +396,7 @@ public:
 	virtual void GetBoundsForNode(const UEdGraphNode* InNode, class FSlateRect& OutRect, float InPadding) const override;
 	virtual FMatExpressionPreview* GetExpressionPreview(UMaterialExpression* InExpression) override;
 	virtual void DeleteNodes(const TArray<class UEdGraphNode*>& NodesToDelete) override;
-
+	virtual void GenerateInheritanceMenu(class UToolMenu* Menu) override;
 
 	void UpdateStatsMaterials();
 
@@ -413,6 +417,11 @@ public:
 
 	/** Rebuilds the inheritance list for this material. */
 	void RebuildInheritanceList();
+
+	/** Add entry to hierarchy menu */
+	static void AddInheritanceMenuEntry(FToolMenuSection& Section, const FAssetData& AssetData, bool bIsFunctionPreviewMaterial);
+
+	virtual void AddGraphEditorPinActionsToContextMenu(FToolMenuSection& InSection) const override;
 
 public:
 	/** Set to true when modifications have been made to the material */
@@ -545,13 +554,12 @@ protected:
 private:
 	/** Builds the toolbar widget for the material editor */
 	void ExtendToolbar();
+	void RegisterToolBar();
 
 	/** Creates the toolbar buttons. Bound by ExtendToolbar*/
 	void FillToolbar(FToolBarBuilder& ToolbarBuilder);
 
-	TSharedRef<SWidget> GenerateInheritanceMenu();
-
-	TSharedRef< SWidget > GeneratePreviewMenuContent();
+	void GeneratePreviewMenuContent(class UToolMenu* Menu);
 
 	/** Allows editor to veto the setting of a preview asset */
 	virtual bool ApproveSetPreviewAsset(UObject* InAsset) override;
@@ -625,7 +633,7 @@ private:
 	void HideUnrelatedNodes();
 
 	/** Make a drop down menu to control the opacity of unrelated nodes */
-	TSharedRef<SWidget> MakeHideUnrelatedNodesOptionsMenu();
+	void MakeHideUnrelatedNodesOptionsMenu(class UToolMenu* Menu);
 	TOptional<float> HandleUnrelatedNodesOpacityBoxValue() const;
 	void HandleUnrelatedNodesOpacityBoxChanged(float NewOpacity);
 	void OnLockNodeStateCheckStateChanged(ECheckBoxState NewCheckedState);
@@ -660,13 +668,13 @@ private:
 	void OnFindInMaterial();
 
 	/** Will promote selected pin to a parameter of the pin type */
-	void OnPromoteToParameter();
+	void OnPromoteToParameter(const FToolMenuContext& InMenuContext) const;
 
 	/** Used to know if we can promote selected pin to a parameter of the pin type */
-	bool OnCanPromoteToParameter();
+	bool OnCanPromoteToParameter(const FToolMenuContext& InMenuContext) const;
 
 	/** Will  return the UClass to create from the Pin Type */
-	UClass* GetOnPromoteToParameterClass(UEdGraphPin* TargetPin);
+	UClass* GetOnPromoteToParameterClass(const UEdGraphPin* TargetPin) const;
 
 	/** Open documentation for the selected node class */
 	void OnGoToDocumentation();
@@ -687,6 +695,7 @@ private:
 
 	void OnVectorParameterDefaultChanged(class UMaterialExpression*, FName ParameterName, const FLinearColor& Value);
 	void OnScalarParameterDefaultChanged(class UMaterialExpression*, FName ParameterName, float Value);
+	void OnParameterDefaultChanged();
 
 	void SetVectorParameterDefaultOnDependentMaterials(FName ParameterName, const FLinearColor& Value, bool bOverride);
 	void SetScalarParameterDefaultOnDependentMaterials(FName ParameterName, float, bool bOverride);
@@ -881,6 +890,9 @@ private:
 
 	/** Stores the feature level used to preview the material graph */
 	ERHIFeatureLevel::Type NodeFeatureLevel;
+
+	/** True if we want to preview static switches, disabling inactive nodes in the graph */
+	bool bPreviewStaticSwitches;
 
 	/** True if the quality level or feature level to preview has been changed */
 	bool bPreviewFeaturesChanged;

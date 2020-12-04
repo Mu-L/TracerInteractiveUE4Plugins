@@ -374,6 +374,12 @@ public:
 	TArray<FSoftObjectPath> AssetsToOpen;
 
 	/**
+	 * Maps to PIE during the PIE test
+	 */
+	UPROPERTY(EditAnywhere, config, Category = "PIE Test Maps")
+	TArray<FString> MapsToPIETest;
+
+	/**
 	* Editor build promotion test settings
 	*/
 	UPROPERTY(EditAnywhere, config, Category = Automation)
@@ -426,4 +432,10 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, config, Category=Screenshots)
 	FIntPoint DefaultScreenshotResolution;
+
+	/**
+	 * PIE test duration in seconds. Only applied if you do PIETest
+	 */
+	UPROPERTY(EditAnywhere, config, Category = Automation)
+	float PIETestDuration;
 };

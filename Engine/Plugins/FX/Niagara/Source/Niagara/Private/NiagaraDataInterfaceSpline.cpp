@@ -29,6 +29,9 @@ void UNiagaraDataInterfaceSpline::PostInitProperties()
 static const FName SampleSplinePositionByUnitDistanceName("SampleSplinePositionByUnitDistance");
 static const FName SampleSplinePositionByUnitDistanceWSName("SampleSplinePositionByUnitDistanceWS");
 
+static const FName SampleSplineRotationByUnitDistanceName("SampleSplineRotationByUnitDistance");
+static const FName SampleSplineRotationByUnitDistanceWSName("SampleSplineRotationByUnitDistanceWS");
+
 static const FName SampleSplineUpVectorByUnitDistanceName("SampleSplineUpVectorByUnitDistance");
 static const FName SampleSplineUpVectorByUnitDistanceWSName("SampleSplineUpVectorByUnitDistanceWS");
 
@@ -74,6 +77,32 @@ void UNiagaraDataInterfaceSpline::GetFunctions(TArray<FNiagaraFunctionSignature>
 		Sig.bRequiresContext = false;
 		//Sig.Owner = *GetName();
 		Sig.SetDescription(LOCTEXT("DataInterfaceSpline_SampleSplinePositionByUnitDistanceWS", "Sample the spline Position where U is a 0 to 1 value representing the start and normalized length of the spline.\nThis is in the world space of the level."));
+		OutFunctions.Add(Sig);
+	}
+
+	{
+		FNiagaraFunctionSignature Sig;
+		Sig.Name = SampleSplineRotationByUnitDistanceName;
+		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition(GetClass()), TEXT("Spline")));
+		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("U")));
+		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetQuatDef(), TEXT("Rotation")));
+		Sig.bMemberFunction = true;
+		Sig.bRequiresContext = false;
+		//Sig.Owner = *GetName();
+		Sig.SetDescription(LOCTEXT("DataInterfaceSpline_SampleSplineRotationByUnitDistance", "Sample the spline Rotation where U is a 0 to 1 value representing the start and normalized length of the spline.\nThis is in the local space of the referenced USplineComponent."));
+		OutFunctions.Add(Sig);
+	}
+
+	{
+		FNiagaraFunctionSignature Sig;
+		Sig.Name = SampleSplineRotationByUnitDistanceWSName;
+		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition(GetClass()), TEXT("Spline")));
+		Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetFloatDef(), TEXT("U")));
+		Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetQuatDef(), TEXT("Rotation")));
+		Sig.bMemberFunction = true;
+		Sig.bRequiresContext = false;
+		//Sig.Owner = *GetName();
+		Sig.SetDescription(LOCTEXT("DataInterfaceSpline_SampleSplineRotationByUnitDistanceWS", "Sample the spline Rotation where U is a 0 to 1 value representing the start and normalized length of the spline.\nThis is in the world space of the level."));
 		OutFunctions.Add(Sig);
 	}
 
@@ -221,6 +250,7 @@ void UNiagaraDataInterfaceSpline::GetFunctions(TArray<FNiagaraFunctionSignature>
 }
 
 DEFINE_NDI_FUNC_BINDER(UNiagaraDataInterfaceSpline, SampleSplinePositionByUnitDistance);
+DEFINE_NDI_FUNC_BINDER(UNiagaraDataInterfaceSpline, SampleSplineRotationByUnitDistance);
 DEFINE_NDI_FUNC_BINDER(UNiagaraDataInterfaceSpline, SampleSplineUpVectorByUnitDistance);
 DEFINE_NDI_FUNC_BINDER(UNiagaraDataInterfaceSpline, SampleSplineRightVectorByUnitDistance);
 DEFINE_NDI_FUNC_BINDER(UNiagaraDataInterfaceSpline, SampleSplineDirectionByUnitDistance);
@@ -238,6 +268,16 @@ void UNiagaraDataInterfaceSpline::GetVMExternalFunction(const FVMExternalFunctio
 	{
 		check(BindingInfo.GetNumInputs() == 2 && BindingInfo.GetNumOutputs() == 3);
 		TNDIExplicitBinder<FNDITransformHandler, TNDIParamBinder<1, float, NDI_FUNC_BINDER(UNiagaraDataInterfaceSpline, SampleSplinePositionByUnitDistance)>>::Bind(this, BindingInfo, InstanceData, OutFunc);
+	}
+	else if (BindingInfo.Name == SampleSplineRotationByUnitDistanceName)
+	{
+		check(BindingInfo.GetNumInputs() == 2 && BindingInfo.GetNumOutputs() == 4);
+		TNDIExplicitBinder<FNDITransformHandlerNoop, TNDIParamBinder<0, float, NDI_FUNC_BINDER(UNiagaraDataInterfaceSpline, SampleSplineRotationByUnitDistance)>>::Bind(this, BindingInfo, InstanceData, OutFunc);
+	}
+	else if (BindingInfo.Name == SampleSplineRotationByUnitDistanceWSName)
+	{
+		check(BindingInfo.GetNumInputs() == 2 && BindingInfo.GetNumOutputs() == 4);
+		TNDIExplicitBinder<FNDITransformHandler, TNDIParamBinder<0, float, NDI_FUNC_BINDER(UNiagaraDataInterfaceSpline, SampleSplineRotationByUnitDistance)>>::Bind(this, BindingInfo, InstanceData, OutFunc);
 	}
 	else if (BindingInfo.Name == SampleSplineUpVectorByUnitDistanceName)
 	{
@@ -354,14 +394,11 @@ bool UNiagaraDataInterfaceSpline::PerInstanceTick(void* PerInstanceData, FNiagar
 		{
 			SplineComponent = Source->FindComponentByClass<USplineComponent>();
 		}
-		else
+		else if (USceneComponent* AttachComp = SystemInstance->GetAttachComponent())
 		{
-			if (UNiagaraComponent* SimComp = SystemInstance->GetComponent())
+			if (AActor* Owner = AttachComp->GetAttachmentRootActor())
 			{
-				if (AActor* Owner = SimComp->GetAttachmentRootActor())
-				{
-					SplineComponent = Owner->FindComponentByClass<USplineComponent>();
-				}
+				SplineComponent = Owner->FindComponentByClass<USplineComponent>();
 			}
 		}
 		InstData->Component = SplineComponent;
@@ -372,11 +409,153 @@ bool UNiagaraDataInterfaceSpline::PerInstanceTick(void* PerInstanceData, FNiagar
 	{
 		InstData->Transform = SplineComponent->GetComponentToWorld().ToMatrixWithScale();
 		InstData->TransformInverseTransposed = InstData->Transform.InverseFast().GetTransposed();
+		InstData->ComponentTransform = SplineComponent->GetComponentTransform();
+		InstData->DefaultUpVector = SplineComponent->DefaultUpVector;
+		if (InstData->SplineCurves.Version != SplineComponent->SplineCurves.Version)
+			InstData->SplineCurves = SplineComponent->SplineCurves;
 	}
 
 	//Any situations requiring a rebind?
 	return false;
 }
+
+float FNDISpline_InstanceData::GetSplineLength() const
+{
+	return SplineCurves.GetSplineLength();
+}
+
+bool FNDISpline_InstanceData::IsValid() const
+{
+	return Component.IsValid();
+}
+
+FVector FNDISpline_InstanceData::GetLocationAtDistanceAlongSpline(float Distance, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	const float Param = SplineCurves.ReparamTable.Eval(Distance, 0.0f);
+	return GetLocationAtSplineInputKey(Param, CoordinateSpace);
+}
+
+FVector FNDISpline_InstanceData::GetLocationAtSplineInputKey(float InKey, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	FVector Location = SplineCurves.Position.Eval(InKey, FVector::ZeroVector);
+
+	if (CoordinateSpace == ESplineCoordinateSpace::World)
+	{
+		Location = ComponentTransform.TransformPosition(Location);
+	}
+
+	return Location;
+}
+
+FQuat FNDISpline_InstanceData::GetQuaternionAtDistanceAlongSpline(float Distance, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	const float Param = SplineCurves.ReparamTable.Eval(Distance, 0.0f);
+	return GetQuaternionAtSplineInputKey(Param, CoordinateSpace);
+}
+
+FQuat FNDISpline_InstanceData::GetQuaternionAtSplineInputKey(float InKey, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	FQuat Quat = SplineCurves.Rotation.Eval(InKey, FQuat::Identity);
+	Quat.Normalize();
+
+	const FVector Direction = SplineCurves.Position.EvalDerivative(InKey, FVector::ZeroVector).GetSafeNormal();
+	const FVector UpVector = Quat.RotateVector(DefaultUpVector);
+
+	FQuat Rot = (FRotationMatrix::MakeFromXZ(Direction, UpVector)).ToQuat();
+
+	if (CoordinateSpace == ESplineCoordinateSpace::World)
+	{
+		Rot = ComponentTransform.GetRotation() * Rot;
+	}
+
+	return Rot;
+}
+
+
+FVector FNDISpline_InstanceData::GetUpVectorAtDistanceAlongSpline(float Distance, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	const float Param = SplineCurves.ReparamTable.Eval(Distance, 0.0f);
+	return GetUpVectorAtSplineInputKey(Param, CoordinateSpace);
+}
+
+FVector FNDISpline_InstanceData::GetUpVectorAtSplineInputKey(float InKey, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	const FQuat Quat = GetQuaternionAtSplineInputKey(InKey, ESplineCoordinateSpace::Local);
+	FVector UpVector = Quat.RotateVector(FVector::UpVector);
+
+	if (CoordinateSpace == ESplineCoordinateSpace::World)
+	{
+		UpVector = ComponentTransform.TransformVectorNoScale(UpVector);
+	}
+
+	return UpVector;
+}
+
+FVector FNDISpline_InstanceData::GetRightVectorAtDistanceAlongSpline(float Distance, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	const float Param = SplineCurves.ReparamTable.Eval(Distance, 0.0f);
+	return GetRightVectorAtSplineInputKey(Param, CoordinateSpace);
+}
+
+FVector FNDISpline_InstanceData::GetRightVectorAtSplineInputKey(float InKey, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	const FQuat Quat = GetQuaternionAtSplineInputKey(InKey, ESplineCoordinateSpace::Local);
+	FVector RightVector = Quat.RotateVector(FVector::RightVector);
+
+	if (CoordinateSpace == ESplineCoordinateSpace::World)
+	{
+		RightVector = ComponentTransform.TransformVectorNoScale(RightVector);
+	}
+
+	return RightVector;
+}
+
+FVector FNDISpline_InstanceData::GetTangentAtDistanceAlongSpline(float Distance, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	const float Param = SplineCurves.ReparamTable.Eval(Distance, 0.0f);
+	return GetTangentAtSplineInputKey(Param, CoordinateSpace);
+}
+
+
+FVector FNDISpline_InstanceData::GetDirectionAtDistanceAlongSpline(float Distance, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	const float Param = SplineCurves.ReparamTable.Eval(Distance, 0.0f);
+	return GetDirectionAtSplineInputKey(Param, CoordinateSpace);
+}
+
+FVector FNDISpline_InstanceData::GetTangentAtSplineInputKey(float InKey, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	FVector Tangent = SplineCurves.Position.EvalDerivative(InKey, FVector::ZeroVector);
+
+	if (CoordinateSpace == ESplineCoordinateSpace::World)
+	{
+		Tangent = ComponentTransform.TransformVector(Tangent);
+	}
+
+	return Tangent;
+}
+
+
+FVector FNDISpline_InstanceData::GetDirectionAtSplineInputKey(float InKey, ESplineCoordinateSpace::Type CoordinateSpace) const
+{
+	FVector Direction = SplineCurves.Position.EvalDerivative(InKey, FVector::ZeroVector).GetSafeNormal();
+
+	if (CoordinateSpace == ESplineCoordinateSpace::World)
+	{
+		Direction = ComponentTransform.TransformVector(Direction);
+		Direction.Normalize();
+	}
+
+	return Direction;
+}
+
+float FNDISpline_InstanceData::FindInputKeyClosestToWorldLocation(const FVector& WorldLocation) const
+{
+	const FVector LocalLocation = ComponentTransform.InverseTransformPosition(WorldLocation);
+	float Dummy;
+	return SplineCurves.Position.InaccurateFindNearest(LocalLocation, Dummy);
+}
+
 
 template<typename TransformHandlerType, typename SplineSampleType>
 void UNiagaraDataInterfaceSpline::SampleSplinePositionByUnitDistance(FVectorVMContext& Context)
@@ -388,14 +567,14 @@ void UNiagaraDataInterfaceSpline::SampleSplinePositionByUnitDistance(FVectorVMCo
 	VectorVM::FExternalFuncRegisterHandler<float> OutPosY(Context);
 	VectorVM::FExternalFuncRegisterHandler<float> OutPosZ(Context);
 
-	if (USplineComponent* SplineComponent = InstData->Component.Get())
+	if (InstData->IsValid())
 	{
-
+		const float SplineLength = InstData->GetSplineLength();
 		for (int32 i = 0; i < Context.NumInstances; ++i)
 		{
 			float DistanceUnitDistance = SplineSampleParam.Get();
 
-			FVector Pos = SplineComponent->GetLocationAtDistanceAlongSpline(DistanceUnitDistance * SplineComponent->GetSplineLength(), ESplineCoordinateSpace::Local);
+			FVector Pos = InstData->GetLocationAtDistanceAlongSpline(DistanceUnitDistance * SplineLength, ESplineCoordinateSpace::Local);
 			TransformHandler.TransformPosition(Pos, InstData->Transform);
 
 			*OutPosX.GetDest() = Pos.X;
@@ -428,6 +607,46 @@ void UNiagaraDataInterfaceSpline::SampleSplinePositionByUnitDistance(FVectorVMCo
 }
 
 template<typename TransformHandlerType, typename SplineSampleType>
+void UNiagaraDataInterfaceSpline::SampleSplineRotationByUnitDistance(FVectorVMContext& Context)
+{
+	TransformHandlerType TransformHandler;
+	SplineSampleType SplineSampleParam(Context);
+	VectorVM::FUserPtrHandler<FNDISpline_InstanceData> InstData(Context);
+	VectorVM::FExternalFuncRegisterHandler<float> OutQuatX(Context);
+	VectorVM::FExternalFuncRegisterHandler<float> OutQuatY(Context);
+	VectorVM::FExternalFuncRegisterHandler<float> OutQuatZ(Context);
+	VectorVM::FExternalFuncRegisterHandler<float> OutQuatW(Context);
+
+	if (InstData->IsValid())
+	{
+		const FQuat TransformQuat = InstData->Transform.ToQuat();
+		const float SplineLength = InstData->GetSplineLength();
+		for (int32 i = 0; i < Context.NumInstances; ++i)
+		{
+			const float DistanceUnitDistance = SplineSampleParam.GetAndAdvance();
+
+			FQuat Quat = InstData->GetQuaternionAtDistanceAlongSpline(DistanceUnitDistance * SplineLength, ESplineCoordinateSpace::Local);
+			TransformHandler.TransformRotation(Quat, TransformQuat);
+
+			*OutQuatX.GetDestAndAdvance() = Quat.X;
+			*OutQuatY.GetDestAndAdvance() = Quat.Y;
+			*OutQuatZ.GetDestAndAdvance() = Quat.Z;
+			*OutQuatW.GetDestAndAdvance() = Quat.W;
+		}
+	}
+	else
+	{
+		for (int32 i = 0; i < Context.NumInstances; ++i)
+		{
+			*OutQuatX.GetDestAndAdvance() = FQuat::Identity.X;
+			*OutQuatY.GetDestAndAdvance() = FQuat::Identity.Y;
+			*OutQuatZ.GetDestAndAdvance() = FQuat::Identity.Z;
+			*OutQuatW.GetDestAndAdvance() = FQuat::Identity.W;
+		}
+	}
+}
+
+template<typename TransformHandlerType, typename SplineSampleType>
 void UNiagaraDataInterfaceSpline::SampleSplineUpVectorByUnitDistance(FVectorVMContext& Context)
 {
 	VectorVM::FUserPtrHandler<FNDISpline_InstanceData> InstData(Context);
@@ -437,14 +656,14 @@ void UNiagaraDataInterfaceSpline::SampleSplineUpVectorByUnitDistance(FVectorVMCo
 	VectorVM::FExternalFuncRegisterHandler<float> OutPosY(Context);
 	VectorVM::FExternalFuncRegisterHandler<float> OutPosZ(Context);
 
-	if (USplineComponent* SplineComponent = InstData->Component.Get())
+	if (InstData->IsValid())
 	{
-
+		const float SplineLength = InstData->GetSplineLength();
 		for (int32 i = 0; i < Context.NumInstances; ++i)
 		{
 			float DistanceUnitDistance = SplineSampleParam.Get();
 
-			FVector Pos = SplineComponent->GetUpVectorAtDistanceAlongSpline(DistanceUnitDistance * SplineComponent->GetSplineLength(), ESplineCoordinateSpace::Local);
+			FVector Pos = InstData->GetUpVectorAtDistanceAlongSpline(DistanceUnitDistance * SplineLength, ESplineCoordinateSpace::Local);
 			TransformHandler.TransformVector(Pos, InstData->Transform);
 
 			*OutPosX.GetDest() = Pos.X;
@@ -487,13 +706,14 @@ void UNiagaraDataInterfaceSpline::SampleSplineRightVectorByUnitDistance(FVectorV
 	VectorVM::FExternalFuncRegisterHandler<float> OutPosZ(Context);
 	
 	
-	if (USplineComponent* SplineComponent = InstData->Component.Get())
+	if (InstData->IsValid())
 	{
+		const float SplineLength = InstData->GetSplineLength();
 		for (int32 i = 0; i < Context.NumInstances; ++i)
 		{
 			float DistanceUnitDistance = SplineSampleParam.Get();
 
-			FVector Pos = SplineComponent->GetRightVectorAtDistanceAlongSpline(DistanceUnitDistance * SplineComponent->GetSplineLength(), ESplineCoordinateSpace::Local);
+			FVector Pos = InstData->GetRightVectorAtDistanceAlongSpline(DistanceUnitDistance * SplineLength, ESplineCoordinateSpace::Local);
 			TransformHandler.TransformVector(Pos, InstData->Transform);
 
 			*OutPosX.GetDest() = Pos.X;
@@ -533,13 +753,14 @@ void UNiagaraDataInterfaceSpline::SampleSplineTangentByUnitDistance(FVectorVMCon
 	VectorVM::FExternalFuncRegisterHandler<float> OutPosY(Context);
 	VectorVM::FExternalFuncRegisterHandler<float> OutPosZ(Context);
 
-	if (USplineComponent* SplineComponent = InstData->Component.Get())
+	if (InstData->IsValid())
 	{
+		const float SplineLength = InstData->GetSplineLength();
 		for (int32 i = 0; i < Context.NumInstances; ++i)
 		{
 			float DistanceUnitDistance = SplineSampleParam.Get();
 
-			FVector Pos = SplineComponent->GetTangentAtDistanceAlongSpline(DistanceUnitDistance * SplineComponent->GetSplineLength(), ESplineCoordinateSpace::Local);
+			FVector Pos = InstData->GetTangentAtDistanceAlongSpline(DistanceUnitDistance * SplineLength, ESplineCoordinateSpace::Local);
 			TransformHandler.TransformVector(Pos, InstData->Transform);
 
 			*OutPosX.GetDest() = Pos.X;
@@ -581,13 +802,14 @@ void UNiagaraDataInterfaceSpline::SampleSplineDirectionByUnitDistance(FVectorVMC
 	VectorVM::FExternalFuncRegisterHandler<float> OutPosY(Context);
 	VectorVM::FExternalFuncRegisterHandler<float> OutPosZ(Context);
 
-	if (USplineComponent* SplineComponent = InstData->Component.Get())
+	if (InstData->IsValid())
 	{
+		const float SplineLength = InstData->GetSplineLength();
 		for (int32 i = 0; i < Context.NumInstances; ++i)
 		{
 			float DistanceUnitDistance = SplineSampleParam.Get();
 
-			FVector Pos = SplineComponent->GetDirectionAtDistanceAlongSpline(DistanceUnitDistance * SplineComponent->GetSplineLength(), ESplineCoordinateSpace::Local);
+			FVector Pos = InstData->GetDirectionAtDistanceAlongSpline(DistanceUnitDistance * SplineLength, ESplineCoordinateSpace::Local);
 			TransformHandler.TransformVector(Pos, InstData->Transform);
 
 			*OutPosX.GetDest() = Pos.X;
@@ -668,11 +890,11 @@ void UNiagaraDataInterfaceSpline::FindClosestUnitDistanceFromPositionWS(FVectorV
 	PosZType PosZParam(Context);
 	VectorVM::FExternalFuncRegisterHandler<float> OutUnitDistance(Context);
 
-	if (USplineComponent* SplineComponent = InstData->Component.Get())
+	if (InstData->IsValid())
 	{
 
-		const int32 NumPoints = SplineComponent->GetSplinePointsPosition().Points.Num();
-		const float FinalKeyTime = SplineComponent->GetSplinePointsPosition().Points[NumPoints - 1].InVal;
+		const int32 NumPoints = InstData->GetSplinePointsPosition().Points.Num();
+		const float FinalKeyTime = InstData->GetSplinePointsPosition().Points[NumPoints - 1].InVal;
 
 		for (int32 i = 0; i < Context.NumInstances; ++i)
 		{
@@ -683,7 +905,7 @@ void UNiagaraDataInterfaceSpline::FindClosestUnitDistanceFromPositionWS(FVectorV
 			FVector Pos(PosX, PosY, PosZ);
 
 			// This first call finds the key time, but this is not in 0..1 range for the spline. 
-			float KeyTime = SplineComponent->FindInputKeyClosestToWorldLocation(Pos);
+			float KeyTime = InstData->FindInputKeyClosestToWorldLocation(Pos);
 			// We need to convert into the range by dividing through by the overall duration of the spline according to the keys.
 			float UnitDistance = KeyTime / FinalKeyTime;
 

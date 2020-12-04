@@ -7,6 +7,7 @@
 #include "UObject/Object.h"
 #include "UObject/SoftObjectPath.h"
 #include "GameplayTagsManager.h"
+#include "Engine/DeveloperSettings.h"
 #include "GameplayTagsSettings.generated.h"
 
 /** A single redirect from a deleted tag to the new tag that should replace it */
@@ -127,7 +128,7 @@ class GAMEPLAYTAGS_API UGameplayTagsSettings : public UGameplayTagsList
 	bool ImportTagsFromConfig;
 
 	/** If true, will give load warnings when reading in saved tag references that are not in the dictionary */
-	UPROPERTY(config, EditAnywhere, Category = GameplayTags)
+	UPROPERTY(config, EditAnywhere, Category = GameplayTags, meta = (ConfigRestartRequired = true))
 	bool WarnOnInvalidTags;
 
 	/** If true, will replicate gameplay tags by index instead of name. For this to work, tags must be identical on client and server */
@@ -147,7 +148,7 @@ class GAMEPLAYTAGS_API UGameplayTagsSettings : public UGameplayTagsList
 	TArray<FSoftObjectPath> GameplayTagTableList;
 
 	/** List of active tag redirects */
-	UPROPERTY(config, EditAnywhere, Category = GameplayTags)
+	UPROPERTY(config, EditAnywhere, Category = GameplayTags, meta = (ConfigRestartRequired = true))
 	TArray<FGameplayTagRedirect> GameplayTagRedirects;
 
 	/** List of most frequently replicated tags */
@@ -186,12 +187,18 @@ private:
 #endif
 };
 
-UCLASS(config=GameplayTags, notplaceable)
-class GAMEPLAYTAGS_API UGameplayTagsDeveloperSettings : public UObject
+UCLASS(config=EditorPerProjectUserSettings, meta=(DisplayName="Gameplay Tag Editing"))
+class GAMEPLAYTAGS_API UGameplayTagsDeveloperSettings : public UDeveloperSettings
 {
 	GENERATED_UCLASS_BODY()
+
+	virtual FName GetCategoryName() const override;
 
 	/** Allows new tags to be saved into their own INI file. This is make merging easier for non technical developers by setting up their own ini file. */
 	UPROPERTY(config, EditAnywhere, Category=GameplayTags)
 	FString DeveloperConfigName;
+
+	/** Stores the favorite tag source, used as the default ini when adding new tags, can be toggled on/off using the button next to the tag source picker */
+	UPROPERTY(config, EditAnywhere, Category=GameplayTags)
+	FName FavoriteTagSource;
 };

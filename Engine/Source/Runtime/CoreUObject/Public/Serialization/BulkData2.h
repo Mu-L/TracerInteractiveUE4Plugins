@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "BulkDataCommon.h"
 #include "BulkDataBuffer.h"
 #include "Async/AsyncFileHandle.h"
 #include "IO/IoDispatcher.h"
@@ -10,6 +11,15 @@
 struct FOwnedBulkDataPtr;
 class IMappedFileHandle;
 class IMappedFileRegion;
+class FBulkDataBase;
+
+/** A loose hash value that can be created from either a filenames or a FIoChunkId */
+using FIoFilenameHash = uint32;
+const FIoFilenameHash INVALID_IO_FILENAME_HASH = 0;
+/** Helpers to create the hash from a filename. Returns IOFILENAMEHASH_NONE if and only if the filename is empty. */
+COREUOBJECT_API FIoFilenameHash MakeIoFilenameHash(const FString& Filename);
+/** Helpers to create the hash from a chunk id. Returns IOFILENAMEHASH_NONE if and only if the chunk id is invalid. */
+COREUOBJECT_API FIoFilenameHash MakeIoFilenameHash(const FIoChunkId& ChunkID);
 
 /**
  * Represents an IO request from the BulkData streaming API.
@@ -23,7 +33,7 @@ public:
 	virtual ~IBulkDataIORequest() {}
 
 	virtual bool PollCompletion() const = 0;
-	virtual bool WaitCompletion(float TimeLimitSeconds = 0.0f) const = 0;
+	virtual bool WaitCompletion(float TimeLimitSeconds = 0.0f) = 0;
 
 	virtual uint8* GetReadResults() = 0;
 	virtual int64 GetSize() const = 0;
@@ -31,24 +41,20 @@ public:
 	virtual void Cancel() = 0;
 };
 
-using FileToken = int32;
 struct FBulkDataOrId
 {
+	using FileToken = uint64;
+
 	union
 	{
-		// Inline data or fallback path
-		struct
-		{
-			uint64 BulkDataSize;
-			FileToken Token;
-
-		} Fallback;
-
-		// For IODispatcher
-		FIoChunkId ChunkID;
+		FileToken Token;
+		uint64 PackageID;
 	}; // Note that the union will end up being 16 bytes with padding
 };
 DECLARE_INTRINSIC_TYPE_LAYOUT(FBulkDataOrId);
+
+// Declare this here rather than BulkDataCommon.h
+DECLARE_INTRINSIC_TYPE_LAYOUT(EBulkDataFlags);
 
 /**
  * This is a wrapper for the BulkData memory allocation so we can use a single pointer to either
@@ -62,7 +68,6 @@ DECLARE_INTRINSIC_TYPE_LAYOUT(FBulkDataOrId);
  * Note: We use a flag set in the owning BulkData object to tell us what storage type we are using 
  * so all accessors require that a pointer to the parent object be passed in.
  */
-class FBulkDataBase;
 class FBulkDataAllocation
 {
 public:
@@ -71,7 +76,8 @@ public:
 	void Free(FBulkDataBase* Owner);
 
 	// Set as a raw buffer
-	void* AllocateData(FBulkDataBase* Owner, SIZE_T SizeInBytes); //DataBuffer = FMemory::Realloc(DataBuffer, SizeInBytes, DEFAULT_ALIGNMENT);
+	void* AllocateData(FBulkDataBase* Owner, SIZE_T SizeInBytes); 
+	void* ReallocateData(FBulkDataBase* Owner, SIZE_T SizeInBytes);
 	void SetData(FBulkDataBase* Owner, void* Buffer);
 
 	// Set as memory mapped
@@ -104,21 +110,27 @@ public:
 	using BulkDataRangeArray = TArray<FBulkDataBase*, TInlineAllocator<8>>;
 
 	static void				SetIoDispatcher(FIoDispatcher* InIoDispatcher) { IoDispatcher = InIoDispatcher; }
-	static FIoDispatcher* GetIoDispatcher() { return IoDispatcher; }
+	static FIoDispatcher*	GetIoDispatcher() { return IoDispatcher; }
 public:
-	static constexpr FileToken InvalidToken = INDEX_NONE;
+	static constexpr FBulkDataOrId::FileToken InvalidToken = FBulkDataOrId::FileToken(INDEX_NONE);
 
-	FBulkDataBase(const FBulkDataBase& Other) { *this = Other; }
+	FBulkDataBase()
+	{
+		Data.Token = InvalidToken;
+	}
+
+	FBulkDataBase(const FBulkDataBase& Other)
+	{
+		// Need some partial initialization of operator= will try to release the token!
+		Data.Token = InvalidToken;
+
+		*this = Other;
+	}
+
 	FBulkDataBase(FBulkDataBase&& Other);
 	FBulkDataBase& operator=(const FBulkDataBase& Other);
 
-	FBulkDataBase()
-	{ 
-		Data.Fallback.BulkDataSize = 0;
-		Data.Fallback.Token = InvalidToken;
-	}
 	~FBulkDataBase();
-
 protected:
 
 	void Serialize(FArchive& Ar, UObject* Owner, int32 Index, bool bAttemptFileMapping, int32 ElementSize);
@@ -168,7 +180,9 @@ public:
 	FORCEINLINE bool InSeperateFile() const { return IsInSeparateFile(); }
 	bool IsInSeparateFile() const;
 	bool IsSingleUse() const;
-	bool IsMemoryMapped() const;
+	UE_DEPRECATED(4.26, "Use ::IsFileMemoryMapped() instead")
+	bool IsMemoryMapped() const { return IsFileMemoryMapped(); }
+	bool IsFileMemoryMapped() const;
 	bool IsDataMemoryMapped() const;
 	bool IsUsingIODispatcher() const;
 
@@ -181,11 +195,29 @@ public:
 
 	void RemoveBulkData();
 
-	bool IsAsyncLoadingComplete() const { return true; }
+	/**
+	* Initiates a new asynchronous operation to load the bulkdata from disk assuming that it is not already
+	* loaded.
+	* Note that a new asynchronous loading operation will not be created if one is already in progress.
+	*
+	* @return True if an asynchronous loading operation is in progress by the time that the method returns
+	* and false if the data is already loaded or cannot be loaded from disk.
+	*/
+	bool StartAsyncLoading();
+	bool IsAsyncLoadingComplete() const;
 
 	// Added for compatibility with the older BulkData system
 	int64 GetBulkDataOffsetInFile() const;
+
 	FString GetFilename() const;
+
+	/** 
+	 * Returns the io filename hash associated with this bulk data.
+	 *
+	 * @return Hash or INVALID_IO_FILENAME_HASH if invalid.
+	 **/
+	FIoFilenameHash GetIoFilenameHash() const;
+
 
 public:
 	// The following methods are for compatibility with SoundWave.cpp which assumes memory mapping.
@@ -195,8 +227,13 @@ public:
 private:
 	friend FBulkDataAllocation;
 
+	FIoChunkId CreateChunkId() const;
+
 	void SetRuntimeBulkDataFlags(uint32 BulkDataFlagsToSet);
 	void ClearRuntimeBulkDataFlags(uint32 BulkDataFlagsToClear);
+
+	/** Returns if the offset needs fixing when serialized */
+	bool NeedsOffsetFixup() const;
 
 	/**
 	 * Poll to see if it is safe to discard the data owned by the Bulkdata object
@@ -205,29 +242,42 @@ private:
 	 */
 	bool CanDiscardInternalData() const;
 
-	void LoadDataDirectly(void** DstBuffer);
-
-	void ProcessDuplicateData(FArchive& Ar, const UPackage* Package, const FString* Filename, int64& InOutSizeOnDisk, int64& InOutOffsetInFile);
-	void SerializeDuplicateData(FArchive& Ar, uint32& OutBulkDataFlags, int64& OutBulkDataSizeOnDisk, int64& OutBulkDataOffsetInFile);
+	void ProcessDuplicateData(FArchive& Ar, const UPackage* Package, const FString* Filename, int64& InOutOffsetInFile);
+	void SerializeDuplicateData(FArchive& Ar, EBulkDataFlags& OutBulkDataFlags, int64& OutBulkDataSizeOnDisk, int64& OutBulkDataOffsetInFile);
 	void SerializeBulkData(FArchive& Ar, void* DstBuffer, int64 DataLength);
 
 	bool MemoryMapBulkData(const FString& Filename, int64 OffsetInBulkData, int64 BytesToRead);
 
 	// Methods for dealing with the allocated data
 	FORCEINLINE void* AllocateData(SIZE_T SizeInBytes) { return DataAllocation.AllocateData(this, SizeInBytes); }
+	FORCEINLINE void* ReallocateData(SIZE_T SizeInBytes) { return DataAllocation.ReallocateData(this, SizeInBytes); }
 	FORCEINLINE void  FreeData() { DataAllocation.Free(this); }
 	FORCEINLINE void* GetDataBufferForWrite() const { return DataAllocation.GetAllocationForWrite(this); }
 	FORCEINLINE const void* GetDataBufferReadOnly() const { return DataAllocation.GetAllocationReadOnly(this); }
 
+	/** Blocking call that waits until any pending async load finishes */
+	void FlushAsyncLoading();
+	
 	FString ConvertFilenameFromFlags(const FString& Filename) const;
 
 private:
+	using AsyncCallback = TFunction<void(TIoStatusOr<FIoBuffer>)>;
+
+	void LoadDataDirectly(void** DstBuffer);
+	void LoadDataAsynchronously(AsyncCallback&& Callback);
+
+	// Used by LoadDataDirectly/LoadDataAsynchronously
+	void InternalLoadFromFileSystem(void** DstBuffer);
+	void InternalLoadFromIoStore(void** DstBuffer);
+	void InternalLoadFromIoStoreAsync(void** DstBuffer, AsyncCallback&& Callback);
 
 	static FIoDispatcher* IoDispatcher;
 
 	LAYOUT_FIELD(FBulkDataOrId, Data);
 	LAYOUT_FIELD(FBulkDataAllocation, DataAllocation);
-	LAYOUT_FIELD_INITIALIZED(uint32, BulkDataFlags, 0);
+	LAYOUT_FIELD_INITIALIZED(int64, BulkDataSize, 0);
+	LAYOUT_FIELD_INITIALIZED(int64, BulkDataOffset, INDEX_NONE);
+	LAYOUT_FIELD_INITIALIZED(EBulkDataFlags, BulkDataFlags, EBulkDataFlags::BULKDATA_None);
 	LAYOUT_MUTABLE_FIELD_INITIALIZED(uint8, LockStatus, 0); // Mutable so that the read only lock can be const
 };
 

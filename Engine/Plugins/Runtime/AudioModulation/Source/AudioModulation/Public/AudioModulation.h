@@ -1,11 +1,15 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
+#include "AudioDeviceManager.h"
 #include "CoreMinimal.h"
 #include "HAL/ThreadSafeBool.h"
 #include "IAudioExtensionPlugin.h"
+#include "IAudioModulation.h"
 #include "Modules/ModuleInterface.h"
-#include "SoundModulationPatch.h"
+#include "SoundControlBus.h"
+#include "SoundControlBusMix.h"
+#include "SoundModulationGenerator.h"
 #include "Stats/Stats.h"
 
 
@@ -18,42 +22,82 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("Process Controls"), STAT_AudioModulationProcessC
 
 namespace AudioModulation
 {
-	class FAudioModulationImpl;
+	// Forward Declarations
+	class FAudioModulationSystem;
 
 	class AUDIOMODULATION_API FAudioModulation : public IAudioModulation
 	{
 	public:
 		FAudioModulation();
-		virtual ~FAudioModulation() = default;
+		virtual ~FAudioModulation();
 
 		//~ Begin IAudioModulation implementation
-		virtual float CalculateInitialVolume(const USoundModulationPluginSourceSettingsBase& InSettingsBase) override;
-
+		virtual Audio::FModulationParameter GetParameter(FName InParamName) override;
 		virtual void Initialize(const FAudioPluginInitializationParams& InitializationParams) override;
-		virtual void OnInitSound(ISoundModulatable& Sound, const USoundModulationPluginSourceSettingsBase& Settings) override;
-		virtual void OnInitSource(const uint32 SourceId, const FName& AudioComponentUserId, const uint32 NumChannels, const USoundModulationPluginSourceSettingsBase& Settings) override;
+
+		virtual void OnAuditionEnd() override;
+
+		void ActivateBus(const USoundControlBus& InBus);
+		void ActivateBusMix(const USoundControlBusMix& InBusMix);
+		void ActivateGenerator(const USoundModulationGenerator& InGenerator);
+
+		void DeactivateBus(const USoundControlBus& InBus);
+		void DeactivateBusMix(const USoundControlBusMix& InBusMix);
+		void DeactivateAllBusMixes();
+		void DeactivateGenerator(const USoundModulationGenerator& InGenerator);
+
+		void SaveMixToProfile(const USoundControlBusMix& InBusMix, const int32 InProfileIndex);
+		TArray<FSoundControlBusMixStage> LoadMixFromProfile(const int32 InProfileIndex, USoundControlBusMix& OutBusMix);
+
+		void UpdateMix(const TArray<FSoundControlBusMixStage>& InStages, USoundControlBusMix& InOutMix, bool bInUpdateObject = false, float InFadeTime = -1.0f);
+		void UpdateMix(const USoundControlBusMix& InMix, float InFadeTime = -1.0f);
+		void UpdateMixByFilter(const FString& InAddressFilter, const TSubclassOf<USoundModulationParameter>& InParamClassFilter, USoundModulationParameter* InParamFilter, float Value, float FadeTime, USoundControlBusMix& InOutMix, bool bInUpdateObject = false);
+
+		void SoloBusMix(const USoundControlBusMix& InBusMix);
 
 #if !UE_BUILD_SHIPPING
+		virtual void SetDebugBusFilter(const FString* InFilter);
+		virtual void SetDebugMixFilter(const FString* InFilter);
+		virtual void SetDebugMatrixEnabled(bool bInIsEnabled);
+		virtual void SetDebugGeneratorsEnabled(bool bInIsEnabled);
+		virtual void SetDebugGeneratorFilter(const FString* InFilter);
+		virtual void SetDebugGeneratorTypeFilter(const FString* InFilter, bool bInIsEnabled);
+
 		virtual bool OnPostHelp(FCommonViewportClient* ViewportClient, const TCHAR* Stream) override;
 		virtual int32 OnRenderStat(FViewport* Viewport, FCanvas* Canvas, int32 X, int32 Y, const UFont& Font, const FVector* ViewLocation, const FRotator* ViewRotation) override;
 		virtual bool OnToggleStat(FCommonViewportClient* ViewportClient, const TCHAR* Stream) override;
 #endif // !UE_BUILD_SHIPPING
 
-		virtual void OnReleaseSound(ISoundModulatable& Sound) override;
-		virtual void OnReleaseSource(const uint32 SourceId) override;
-		virtual bool ProcessControls(const uint32 SourceId, FSoundModulationControls& Controls) override;
-		virtual void ProcessModulators(const float Elapsed) override;
+		virtual void ProcessModulators(const double InElapsed) override;
+
+		virtual void UpdateModulator(const USoundModulatorBase& InModulator) override;
 		//~ End IAudioModulation implementation
 
-#if WITH_EDITOR
-		void OnEditPluginSettings(const USoundModulationPluginSourceSettingsBase& Settings);
-#endif // WITH_EDITOR
-
-		FAudioModulationImpl* GetImpl();
+	protected:
+		virtual Audio::FModulatorTypeId RegisterModulator(Audio::FModulatorHandleId InHandleId, const USoundModulatorBase* InModulatorBase, Audio::FModulationParameter& OutParameter) override;
+		virtual void RegisterModulator(Audio::FModulatorHandleId InHandleId, Audio::FModulatorId InModulatorId) override;
+		virtual bool GetModulatorValue(const Audio::FModulatorHandle& ModulatorHandle, float& OutValue) const override;
+		virtual void UnregisterModulator(const Audio::FModulatorHandle& InHandle) override;
 
 	private:
-		TUniquePtr<FAudioModulationImpl> Impl;
+		FAudioModulationSystem* ModSystem = nullptr;
 	};
+
+	static void IterateModulationImpl(TUniqueFunction<void(FAudioModulation&)> InFunction)
+	{
+		if (FAudioDeviceManager* DeviceManager = FAudioDeviceManager::Get())
+		{
+			TArray<FAudioDevice*> Devices = DeviceManager->GetAudioDevices();
+			DeviceManager->IterateOverAllDevices([ModFunction = MoveTemp(InFunction)](Audio::FDeviceId DeviceId, FAudioDevice* AudioDevice)
+			{
+				if (AudioDevice && AudioDevice->IsModulationPluginEnabled() && AudioDevice->ModulationInterface.IsValid())
+				{
+					auto ModulationInterface = static_cast<AudioModulation::FAudioModulation*>(AudioDevice->ModulationInterface.Get());
+					ModFunction(*ModulationInterface);
+				}
+			});
+		}
+	}
 } // namespace AudioModulation
 
 class FAudioModulationPluginFactory : public IAudioModulationFactory
@@ -66,11 +110,6 @@ public:
 	}
 
 	virtual TAudioModulationPtr CreateNewModulationPlugin(FAudioDevice* OwningDevice) override;
-
-	virtual UClass* GetCustomModulationSettingsClass() const override
-	{
-		return USoundModulationSettings::StaticClass();
-	}
 };
 
 class FAudioModulationModule : public IModuleInterface

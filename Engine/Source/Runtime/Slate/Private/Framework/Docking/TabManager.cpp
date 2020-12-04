@@ -78,6 +78,8 @@ TSharedPtr<SDockTab> FTabManager::FLastMajorOrNomadTab::Search(const FTabManager
 	return FoundTab;
 }
 
+const TSharedRef<FTabManager::FLayout> FTabManager::FLayout::NullLayout = FTabManager::NewLayout("NullLayout")->AddArea(FTabManager::NewPrimaryArea());
+
 static const FString UE4_TABMANAGER_OPENED_TAB_STRING = TEXT("OpenedTab");
 static const FString UE4_TABMANAGER_CLOSED_TAB_STRING = TEXT("ClosedTab");
 static const FString UE4_TABMANAGER_INVALID_TAB_STRING = TEXT("InvalidTab");
@@ -856,14 +858,18 @@ TSharedPtr<SWidget> FTabManager::RestoreFrom(const TSharedRef<FLayout>& Layout, 
 		if ( bShouldCreate )
 		{
 			TSharedPtr<SDockingArea> RestoredDockArea;
-			const bool bHasOpenTabs = bIsPrimaryArea || HasOpenTabs(ThisArea);
+			const bool bHasValidOpenTabs = bIsPrimaryArea || HasValidOpenTabs(ThisArea);
 
-			if ( bHasOpenTabs )
+			if (bHasValidOpenTabs)
 			{
 				RestoredDockArea = RestoreArea(ThisArea, ParentWindow, bEmbedTitleAreaContent, RestoreAreaOutputCanBeNullptr);
 				// Invalidate all tabs in ThisArea because they were not recognized
 				if (!RestoredDockArea)
 				{
+					if (bIsPrimaryArea)
+					{
+						UE_LOG(LogSlate, Warning, TEXT("Primary area was not valid for RestoreAreaOutputCanBeNullptr = %d."), RestoreAreaOutputCanBeNullptr);
+					}
 					SetTabsTo(ThisArea, ETabState::InvalidTab, ETabState::OpenedTab);
 					InvalidDockAreas.Add(ThisArea);
 				}
@@ -875,7 +881,7 @@ TSharedPtr<SWidget> FTabManager::RestoreFrom(const TSharedRef<FLayout>& Layout, 
 
 			if (bIsPrimaryArea && RestoredDockArea.IsValid() && ensure(!PrimaryDockArea.IsValid()))
 			{
-				PrimaryDockArea	= RestoredDockArea;
+				PrimaryDockArea = RestoredDockArea;
 			}
 		}
 	}
@@ -1032,7 +1038,7 @@ void FTabManager::PopulateTabSpawnerMenu( FMenuBuilder& PopulateMe, TSharedRef<F
 		const TSharedRef<FTabSpawnerEntry>& SpawnerEntry = SpawnerIterator.Value();
 		if ( SpawnerEntry->bAutoGenerateMenuEntry )
 		{
-			if (SpawnerEntry->TabType == NAME_None || TabBlacklist->PassesFilter(SpawnerEntry->TabType))
+			if (IsAllowedTab(SpawnerEntry->TabType))
 			{
 				AllSpawners->AddUnique(SpawnerEntry);
 			}
@@ -1045,7 +1051,7 @@ void FTabManager::PopulateTabSpawnerMenu( FMenuBuilder& PopulateMe, TSharedRef<F
 		const TSharedRef<FTabSpawnerEntry>& SpawnerEntry = SpawnerIterator.Value();
 		if ( SpawnerEntry->bAutoGenerateMenuEntry )
 		{
-			if (SpawnerEntry->TabType == NAME_None || TabBlacklist->PassesFilter(SpawnerEntry->TabType))
+			if (IsAllowedTab(SpawnerEntry->TabType))
 			{
 				AllSpawners->AddUnique(SpawnerEntry);
 			}
@@ -1157,20 +1163,33 @@ void FTabManager::RestoreDocumentTab( FName PlaceholderId, ESearchPreference::Ty
 	}
 }
 
-TSharedRef<SDockTab> FTabManager::InvokeTab( const FTabId& TabId )
+TSharedRef<SDockTab> FTabManager::InvokeTab(const FTabId& TabId)
 {
-	TSharedPtr<SDockTab> NewTab = InvokeTab_Internal( TabId );
-	check(NewTab.IsValid());
+	if (TSharedPtr<SDockTab> NewTab = TryInvokeTab(TabId))
+	{
+		return NewTab.ToSharedRef();
+	}
+
+	return SNew(SDockTab);
+}
+
+TSharedPtr<SDockTab> FTabManager::TryInvokeTab(const FTabId& TabId)
+{
+	TSharedPtr<SDockTab> NewTab = InvokeTab_Internal(TabId);
+	if (!NewTab.IsValid())
+	{
+		return NewTab;
+	}
+
 	TSharedPtr<SWindow> ParentWindowPtr = NewTab->GetParentWindow();
 	if ((NewTab->GetTabRole() == ETabRole::MajorTab || NewTab->GetTabRole() == ETabRole::NomadTab) && ParentWindowPtr.IsValid() && ParentWindowPtr != FGlobalTabmanager::Get()->GetRootWindow())
 	{
-		ParentWindowPtr->SetTitle( NewTab->GetTabLabel() );
+		ParentWindowPtr->SetTitle(NewTab->GetTabLabel());
 	}
 #if PLATFORM_MAC
 	FPlatformApplicationMisc::bChachedMacMenuStateNeedsUpdate = true;
 #endif
-	// Note: we expect tabs that are manually invoked to always succeed
-	return NewTab.ToSharedRef();
+	return NewTab;
 }
 
 TSharedPtr<SDockTab> FTabManager::InvokeTab_Internal( const FTabId& TabId )
@@ -1191,6 +1210,12 @@ TSharedPtr<SDockTab> FTabManager::InvokeTab_Internal( const FTabId& TabId )
 	//         | no
 	//         v
 	//     * Spawn in a new window.
+
+	if (!IsAllowedTab(TabId))
+	{
+		UE_LOG(LogTabManager, Warning, TEXT("Cannot spawn tab for '%s'"), *(TabId.ToString()));
+		return nullptr;
+	}
 
 	TSharedPtr<FTabSpawnerEntry> Spawner = FindTabSpawnerFor(TabId.TabType);
 
@@ -1290,7 +1315,7 @@ TSharedPtr<SDockingTabStack> FTabManager::FindPotentiallyClosedTab( const FTabId
 
 void FTabManager::InvokeTabForMenu( FName TabId )
 {
-	InvokeTab(TabId);
+	TryInvokeTab(TabId);
 }
 
 void FTabManager::InsertDocumentTab(FName PlaceholderId, const FSearchPreference& SearchPreference, const TSharedRef<SDockTab>& UnmanagedTab, bool bPlaySpawnAnim)
@@ -1643,7 +1668,7 @@ TSharedRef<FBlacklistNames>& FTabManager::GetTabBlacklist()
 
 bool FTabManager::IsValidTabForSpawning( const FTab& SomeTab ) const
 {
-	if (SomeTab.TabId.TabType != NAME_None && !TabBlacklist->PassesFilter(SomeTab.TabId.TabType))
+	if (!IsAllowedTab(SomeTab.TabId))
 	{
 		return false;
 	}
@@ -1651,6 +1676,16 @@ bool FTabManager::IsValidTabForSpawning( const FTab& SomeTab ) const
 	// Nomad tabs being restored from layouts should not be spawned if the nomad tab is already spawned.
 	TSharedRef<FTabSpawnerEntry>* NomadSpawner = NomadTabSpawner->Find( SomeTab.TabId.TabType );
 	return ( !NomadSpawner || !NomadSpawner->Get().IsSoleTabInstanceSpawned() );
+}
+
+bool FTabManager::IsAllowedTab(const FTabId& TabId) const
+{
+	return IsAllowedTabType(TabId.TabType);
+}
+
+bool FTabManager::IsAllowedTabType(const FName TabType) const
+{
+	return TabType == NAME_None || TabBlacklist->PassesFilter(TabType);
 }
 
 TSharedPtr<SDockTab> FTabManager::SpawnTab(const FTabId& TabId, const TSharedPtr<SWindow>& ParentWindow, const bool bCanOutputBeNullptr)
@@ -1853,7 +1888,7 @@ bool FTabManager::HasAnyMatchingTabs( const TSharedRef<FTabManager::FLayoutNode>
 	}
 }
 
-bool FTabManager::HasOpenTabs( const TSharedRef<FTabManager::FLayoutNode>& SomeNode ) const
+bool FTabManager::HasValidOpenTabs( const TSharedRef<FTabManager::FLayoutNode>& SomeNode ) const
 {
 	// Search for valid and open tabs
 	struct OpenTabMatcher

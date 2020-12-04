@@ -10,6 +10,8 @@
 #include "Windows/HideWindowsPlatformTypes.h"
 #endif
 
+class UDisplayClusterConfigurationInputDeviceButton;
+
 
 /**
  * VRPN button device implementation
@@ -18,7 +20,7 @@ class FDisplayClusterVrpnButtonInputDevice
 	: public FDisplayClusterVrpnButtonInputDataHolder
 {
 public:
-	FDisplayClusterVrpnButtonInputDevice(const FDisplayClusterConfigInput& config);
+	FDisplayClusterVrpnButtonInputDevice(const FString& DeviceId, const UDisplayClusterConfigurationInputDeviceButton* CfgDevice);
 	virtual ~FDisplayClusterVrpnButtonInputDevice();
 
 public:
@@ -31,7 +33,7 @@ public:
 
 private:
 	// Data update handler
-	static void VRPN_CALLBACK HandleButtonDevice(void *userData, vrpn_BUTTONCB const b);
+	static void VRPN_CALLBACK HandleButtonDevice(void *UserData, vrpn_BUTTONCB const ButtonData);
 
 private:
 	// The device (PIMPL)

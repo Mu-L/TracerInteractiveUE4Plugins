@@ -53,6 +53,17 @@ private:
 	TUniquePtr<FAutomationTaskStatusBase> Task;
 };
 
+USTRUCT(BlueprintType)
+struct FAutomationWaitForLoadingOptions
+{
+	GENERATED_BODY()
+
+public:
+
+	UPROPERTY(BlueprintReadWrite, Category = "Automation")
+	bool WaitForReplicationToSettle = false;
+};
+
 /**
  * 
  */
@@ -64,7 +75,9 @@ class FUNCTIONALTESTING_API UAutomationBlueprintFunctionLibrary : public UBluepr
 public:
 	static void FinishLoadingBeforeScreenshot();
 
-	static bool TakeAutomationScreenshotInternal(UObject* WorldContextObject, const FString& Name, const FString& Notes, FAutomationScreenshotOptions Options);
+	static bool TakeAutomationScreenshotInternal(UObject* WorldContextObject, const FString& ScreenShotName, const FString& Notes, FAutomationScreenshotOptions Options);
+
+	static FAutomationScreenshotData BuildScreenshotData(const FString& MapOrContext, const FString& ScreenShotName, int32 Width, int32 Height);
 
 	static FIntPoint GetAutomationScreenshotSize(const FAutomationScreenshotOptions& Options);
 
@@ -116,13 +129,13 @@ public:
 	static bool AreAutomatedTestsRunning();
 
 	UFUNCTION(BlueprintCallable, Category = "Automation", meta = (Latent, HidePin = "WorldContextObject", DefaultToSelf = "WorldContextObject", LatentInfo = "LatentInfo"))
-	static void AutomationWaitForLoading(UObject* WorldContextObject, FLatentActionInfo LatentInfo);
+	static void AutomationWaitForLoading(UObject* WorldContextObject, FLatentActionInfo LatentInfo, FAutomationWaitForLoadingOptions Options);
 
 	/**
 	* take high res screenshot in editor.
 	*/
 	UFUNCTION(BlueprintCallable, Category = "Automation", meta = (AdvancedDisplay="Camera, bMaskEnabled, bCaptureHDR, ComparisonTolerance, ComparisonNotes"))
-	static UAutomationEditorTask* TakeHighResScreenshot(int32 ResX, int32 ResY, FString Filename, ACameraActor* Camera = nullptr, bool bMaskEnabled = false, bool bCaptureHDR = false, EComparisonTolerance ComparisonTolerance = EComparisonTolerance::Low, FString ComparisonNotes = TEXT(""));
+	static UAutomationEditorTask* TakeHighResScreenshot(int32 ResX, int32 ResY, FString Filename, ACameraActor* Camera = nullptr, bool bMaskEnabled = false, bool bCaptureHDR = false, EComparisonTolerance ComparisonTolerance = EComparisonTolerance::Low, FString ComparisonNotes = TEXT(""), float Delay = 0.0);
 
 	/**
 	 * 

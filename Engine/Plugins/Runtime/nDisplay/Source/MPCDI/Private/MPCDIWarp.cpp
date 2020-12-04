@@ -1,8 +1,9 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MPCDIWarp.h"
-#include "MPCDIHelpers.h"
 #include "MPCDIWarpHelpers.h"
+
+#include "Misc/DisplayClusterHelpers.h"
 
 
 // Select mpcdi frustum calc method
@@ -399,7 +400,7 @@ bool FMPCDIWarp::CalcFrustum_simpleAABB(const IMPCDI::FFrustum& OutFrustum, cons
 	for (int i = 0; i < 8; ++i)
 	{
 		const FVector4& Pts = OutFrustum.AABBoxPts[i];
-		if (!CalcFrustumFromVertex(Pts, World2Local, Top, Bottom, Left, Right))
+		if (!GetProjectionClip(Pts, World2Local, Top, Bottom, Left, Right))
 		{
 			bResult = false;
 		}

@@ -6,11 +6,12 @@
 #define VOXEL_TRAVERSAL_TYPE VOXEL_TRAVERSAL_LINEAR_MIPMAP
 //#define VOXEL_TRAVERSAL_TYPE VOXEL_TRAVERSAL_LINEAR
 
+#include "../HairStrands/HairStrandsVoxelPageCommonStruct.ush"
 #include "../HairStrands/HairStrandsVoxelPageCommon.ush"
 #include "../HairStrands/HairStrandsVoxelPageTraversal.ush"
 
 
-float InternalTraverseHair(uint2 PixelCoord, float3 RayOrigin, float3 RayDirection, float InMinT, float3 VoxelRandom, float RayRandom)
+float InternalTraverseHair(uint2 PixelCoord, float3 RayOrigin, float3 RayDirection, float InMinT, float InOcclusionThreshold, float3 VoxelRandom, float RayRandom)
 {
 	float HitT = InMinT;
 
@@ -47,11 +48,11 @@ float InternalTraverseHair(uint2 PixelCoord, float3 RayOrigin, float3 RayDirecti
 		const FVirtualVoxelNodeDesc NodeDesc = UnpackVoxelNode(PackedNode, VirtualVoxel.PageResolution);
 
 		FHairTraversalSettings TraversalSettings = InitHairTraversalSettings();
-		TraversalSettings.DensityScale = VirtualVoxel.DensityScale;
-		TraversalSettings.CountThreshold = 1;
+		TraversalSettings.DensityScale = VirtualVoxel.DensityScale_Raytracing;
+		TraversalSettings.CountThreshold = InOcclusionThreshold;
 		TraversalSettings.DistanceThreshold = DistanceThreshold;
 		TraversalSettings.bDebugEnabled = bDebugEnabled;
-		TraversalSettings.SteppingScale = VirtualVoxel.SteppingScale;
+		TraversalSettings.SteppingScale = VirtualVoxel.SteppingScale_Raytracing;
 		TraversalSettings.Random = VoxelRandom;
 		TraversalSettings.bUseOpaqueVisibility = false;
 
@@ -61,6 +62,7 @@ float InternalTraverseHair(uint2 PixelCoord, float3 RayOrigin, float3 RayDirecti
 			CommonDesc,
 			NodeDesc,
 			VirtualVoxel.PageIndexBuffer,
+			VirtualVoxel.PageIndexOccupancyBuffer,
 			VirtualVoxel.PageTexture,
 			TraversalSettings);
 
@@ -74,16 +76,16 @@ float InternalTraverseHair(uint2 PixelCoord, float3 RayOrigin, float3 RayDirecti
 	return HitT;
 }
 
-float TraverseHair(uint2 PixelCoord, float3 RayOrigin, float3 RayDirection, float InMinT)
+float TraverseHair(uint2 PixelCoord, float3 RayOrigin, float3 RayDirection, float InMinT, float InOcclusionThreshold)
 {
 	float HitT = InMinT;
 
 	const float3 VoxelRandom = 0.5f;
 	const float  RayRandom   = 1;
-	return InternalTraverseHair(PixelCoord, RayOrigin, RayDirection, InMinT, VoxelRandom, RayRandom);
+	return InternalTraverseHair(PixelCoord, RayOrigin, RayDirection, InMinT, InOcclusionThreshold, VoxelRandom, RayRandom);
 }
 
-float TraverseHair(uint2 PixelCoord, inout RandomSequence RandSequence, float3 RayOrigin, float3 RayDirection, float InMinT)
+float TraverseHair(uint2 PixelCoord, inout RandomSequence RandSequence, float3 RayOrigin, float3 RayDirection, float InMinT, float InOcclusionThreshold)
 {
 	float HitT = InMinT;
 
@@ -91,5 +93,5 @@ float TraverseHair(uint2 PixelCoord, inout RandomSequence RandSequence, float3 R
 	const float3 VoxelRandom = RandomSequence_GenerateSample3D(RandSequence, DummyVariable);
 	const float RayRandom 	 = RandomSequence_GenerateSample1D(RandSequence, DummyVariable);
 
-	return InternalTraverseHair(PixelCoord, RayOrigin, RayDirection, InMinT, VoxelRandom, RayRandom);
+	return InternalTraverseHair(PixelCoord, RayOrigin, RayDirection, InMinT, InOcclusionThreshold, VoxelRandom, RayRandom);
 }

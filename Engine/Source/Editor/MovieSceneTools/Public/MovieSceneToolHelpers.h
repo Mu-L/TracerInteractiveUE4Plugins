@@ -17,20 +17,25 @@
 #include "MovieSceneCaptureSettings.h"
 #include "SEnumCombobox.h"
 #include "Animation/AnimSequence.h"
+#include "INodeAndChannelMappings.h"
 
 
 class ISequencer;
 class UMovieScene;
 class UMovieSceneSection;
+class UMovieSceneSequence;
 class UInterpTrackMoveAxis;
 struct FMovieSceneObjectBindingID;
 class UMovieSceneTrack;
 struct FMovieSceneEvaluationTrack;
 class UMovieSceneUserImportFBXSettings;
+class UMovieSceneUserImportFBXControlRigSettings;
 struct FMovieSceneFloatValue;
 class INodeNameAdapter;
 struct FMovieSceneSequenceTransform;
+class UAnimSeqExportOption;
 template<typename ChannelType> struct TMovieSceneChannelData;
+enum class EVisibilityBasedAnimTickOption : uint8;
 
 namespace fbxsdk
 {
@@ -49,6 +54,39 @@ struct FFBXInOutParameters
 	bool bConvertSceneUnitBackup;
 	bool bForceFrontXAxisBackup;
 };
+
+//callback's used by skel mesh recorders
+
+DECLARE_DELEGATE(FInitAnimationCB);
+DECLARE_DELEGATE(FStartAnimationCB);
+DECLARE_DELEGATE_OneParam(FTickAnimationCB, float);
+DECLARE_DELEGATE(FEndAnimationCB);
+
+
+//Skel Mesh Recorder to set up and restore various parameters on the skelmesh
+struct MOVIESCENETOOLS_API FSkelMeshRecorderState
+{
+public:
+	FSkelMeshRecorderState() {}
+	~FSkelMeshRecorderState() {}
+
+	void Init(USkeletalMeshComponent* InComponent);
+	void FinishRecording();
+
+
+public:
+	TWeakObjectPtr<USkeletalMeshComponent> SkelComp;;
+
+	/** Original ForcedLodModel setting on the SkelComp, so we can modify it and restore it when we are done. */
+	int CachedSkelCompForcedLodModel;
+
+	/** Used to store/restore update flag when recording */
+	EVisibilityBasedAnimTickOption CachedVisibilityBasedAnimTickOption;
+
+	/** Used to store/restore URO when recording */
+	bool bCachedEnableUpdateRateOptimizations;
+};
+
 
 class MOVIESCENETOOLS_API MovieSceneToolHelpers
 {
@@ -246,7 +284,7 @@ public:
 	* @param bCreateCameras Whether to allow creation of cameras if found in the fbx file.
 	* @return Whether the import was successful
 	*/
-	static bool ImportFBXWithDialog(UMovieScene* InMovieScene, ISequencer& InSequencer, const TMap<FGuid, FString>& InObjectBindingNameMap, TOptional<bool> bCreateCameras);
+	static bool ImportFBXWithDialog(UMovieSceneSequence* InSequence, ISequencer& InSequencer, const TMap<FGuid, FString>& InObjectBindingNameMap, TOptional<bool> bCreateCameras);
 
 	/**
 	* Get FBX Ready for Import. This make sure the passed in file make be imported. After calling this call ImportReadiedFbx. It returns out some parameters that we forcably change so we reset them later.
@@ -271,7 +309,7 @@ public:
 	* @return Whether the fbx file was ready and is ready to be import.
 	*/
 
-	static bool ImportFBXIfReady(UWorld* World, UMovieScene* InMovieScene, IMovieScenePlayer* Player, FMovieSceneSequenceIDRef TemplateID, TMap<FGuid, FString>& ObjectBindingMap, UMovieSceneUserImportFBXSettings* ImportFBXSettings,
+	static bool ImportFBXIfReady(UWorld* World, UMovieSceneSequence* InSequence, IMovieScenePlayer* Player, FMovieSceneSequenceIDRef TemplateID, TMap<FGuid, FString>& ObjectBindingMap, UMovieSceneUserImportFBXSettings* ImportFBXSettings,
 		const FFBXInOutParameters& InFBXParams);
 
 	/**
@@ -287,7 +325,7 @@ public:
 	* @return Whether the import was successful
 	*/
 
-	static void ImportFBXCameraToExisting(UnFbx::FFbxImporter* FbxImporter, UMovieScene* InMovieScene, IMovieScenePlayer* Player, FMovieSceneSequenceIDRef TemplateID, TMap<FGuid, FString>& InObjectBindingMap, bool bMatchByNameOnly, bool bNotifySlate);
+	static void ImportFBXCameraToExisting(UnFbx::FFbxImporter* FbxImporter, UMovieSceneSequence* InSequence, IMovieScenePlayer* Player, FMovieSceneSequenceIDRef TemplateID, TMap<FGuid, FString>& InObjectBindingMap, bool bMatchByNameOnly, bool bNotifySlate);
 
 	/**
 	* Import FBX Node to existing actor/node
@@ -300,7 +338,7 @@ public:
 	* @param ObjectBinding Guid of the object we are importing onto.
 	* @return Whether the import was successful
 	*/
-	static bool ImportFBXNode(FString NodeName, UnFbx::FFbxCurvesAPI& CurveAPI, UMovieScene* InMovieScene, IMovieScenePlayer* Player, FMovieSceneSequenceIDRef TemplateID, FGuid ObjectBinding);
+	static bool ImportFBXNode(FString NodeName, UnFbx::FFbxCurvesAPI& CurveAPI, UMovieSceneSequence* InSequence, IMovieScenePlayer* Player, FMovieSceneSequenceIDRef TemplateID, FGuid ObjectBinding);
 
 
 	/**
@@ -347,12 +385,42 @@ public:
 	 */
 	static UObject* ExportToCameraAnim(UMovieScene* InMovieScene, FGuid& InObjectBinding);
 
+
 	/*
-	
+	 * Export the SkelMesh to an Anim Sequence for specified MovieScene and Player
+	 *
+	 * @param AnimSequence The sequence to save to.
+	 * @param ExportOptions The options to use when saving.
+	 * @param MovieScene The movie scene to export the object binding from
+	 * @param Player The Player to evaluate
+	 * @param SkelMesh The Player to evaluate
+	 * @param Template ID of the sequence template.
+	 * @param RootToLocalTransform Transform Offset to apply to exported anim sequence.
+	 * @return Whether or not it succeeds
+
+	*/
+	static bool ExportToAnimSequence(UAnimSequence* AnimSequence, UAnimSeqExportOption* ExportOptions, UMovieScene* MovieScene, IMovieScenePlayer* Player,
+		USkeletalMeshComponent* SkelMesh, FMovieSceneSequenceIDRef& Template, FMovieSceneSequenceTransform& RootToLocalTransform);
+
+	/*
+	 * Bake the SkelMesh to a generic object wich implements a set of callbacks
+	 *
+	 * @param MovieScene The movie scene to export the object binding from
+	 * @param Player The Player to evaluate
+	 * @param SkelMesh The Player to evaluate
+	 * @param Template ID of the sequence template.
+	 * @param RootToLocalTransform Transform Offset to apply to exported anim sequence.
+	 * @param InitCallback Callback before it starts running, maybe performance heavy.
+	 * @param StartCallback Callback right before starting if needed, should be lightweight.
+	 * @param TickCallback Callback per tick where you can bake the skelmesh.
+	 * @param EndCallback Callback at end to finalize the baking.
+	 * @return Whether or not it succeeds
 	
 	*/
-	static bool ExportToAnimSequence(UAnimSequence* AnimSequence, UMovieScene* MovieScene, IMovieScenePlayer* Player,
-		USkeletalMeshComponent* SkelMesh, FMovieSceneSequenceIDRef& Template, FMovieSceneSequenceTransform& RootToLocalTransform);
+
+	static bool BakeToSkelMeshToCallbacks(UMovieScene* MovieScene, IMovieScenePlayer* Player,
+		USkeletalMeshComponent* SkelMesh, FMovieSceneSequenceIDRef& Template, FMovieSceneSequenceTransform& RootToLocalTransform,
+		FInitAnimationCB InitCallback, FStartAnimationCB StartCallback, FTickAnimationCB TickCallback, FEndAnimationCB EndCallback);
 
 
 	/*
@@ -366,7 +434,42 @@ public:
 	*@aram Track The movie scene track whose evaluation counterpart we want
 	*@return Returns the evaluation track for the given movie scene track. May do a re-compile if needed.
 	*/
-	static FMovieSceneEvaluationTrack* GetEvaluationTrack(ISequencer *Sequencer, const FGuid& TrackSignature);
+	static const FMovieSceneEvaluationTrack* GetEvaluationTrack(ISequencer *Sequencer, const FGuid& TrackSignature);
+
+
+	/*
+	* Get the location at time for the specified transform evaluation track
+	*@param Track The sequencer we are evaluating
+	*@param Object The object that owns this track
+	*@param KeyTime the time to evaluate
+	*@param KeyPos The position at this time
+	*@param KeyRot The rotation at this time
+	*@param Sequencer The Sequence that owns this track
+	*/
+	static void GetLocationAtTime(const FMovieSceneEvaluationTrack* Track, UObject* Object, FFrameTime KeyTime, FVector& KeyPos, FRotator& KeyRot, const TSharedPtr<ISequencer>& Sequencer);
+	
+	/* Get the Parents (Scene/Actors) of this object.
+	* @param Parents Returned Parents
+	* @param InObject Object to find parents for
+	*/
+	static void GetParents(TArray<const UObject*>& Parents, const UObject* InObject);
+	
+	/* Return Reference Frame from the passed in paretns
+	* @param Sequencer The Sequence that's driving these parents.
+	* @param Parents Parents in sequencer to evaluate to find reference transforms
+	* @param KeyTime Time to Evaluate At
+	* @return Returns Reference Transform.
+	*/
+	static FTransform GetRefFrameFromParents(const TSharedPtr<ISequencer>& Sequencer, const TArray<const UObject*>& Parents, FFrameTime KeyTime);
+
+	/* Return Return ParentTm for current Parent Object
+	* @param CurrentRefTM Current Referemnce TM
+	* @param Sequencer The Sequence that's driving these parents.
+	* @param ParentObject The Parent
+	* @param KeyTime Time to Evaluate At
+	* @return Returns true if succesful in evaluating the parent in the sequencer and getting a transform.
+	*/
+	static bool GetParentTM(FTransform& CurrentRefTM, const TSharedPtr<ISequencer>& Sequencer, UObject* ParentObject, FFrameTime KeyTime);
 
 	/*
 	 * Get the fbx cameras from the requested parent node
@@ -378,6 +481,16 @@ public:
 	 */
 	static FString GetCameraName(fbxsdk::FbxCamera* InCamera);
 
+	/*
+	 * Import FBX into Channels With Dialog
+	 */
+	static bool ImportFBXIntoChannelsWithDialog(const TSharedRef<ISequencer>& InSequencer, TArray<FFBXNodeAndChannels>* NodeAndChannels);
+
+	/*
+	* Import FBX into Channels
+	*/	
+	static bool ImportFBXIntoControlRigChannels(UMovieScene* MovieScene, const FString& ImportFilename,  UMovieSceneUserImportFBXControlRigSettings *ControlRigSettings,
+		TArray<FFBXNodeAndChannels>* NodeAndChannels, const TArray<FName>& SelectedControlNames, FFrameRate FrameRate);
 };
 
 // Helper to make spawnables persist throughout the export process and then restore properly afterwards

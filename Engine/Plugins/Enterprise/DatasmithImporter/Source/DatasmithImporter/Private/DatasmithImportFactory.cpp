@@ -35,6 +35,7 @@
 #include "Templates/UniquePtr.h"
 
 #include "Editor/EditorEngine.h"
+#include "MeshUtilities.h"
 
 #if PLATFORM_WINDOWS
 #include "Windows/AllowWindowsPlatformTypes.h"
@@ -140,7 +141,7 @@ namespace DatasmithImportFactoryImpl
 		UDatasmithScene* SceneAsset = FDatasmithImporterUtils::FindObject< UDatasmithScene >( nullptr, PackageName );
 		if ( !SceneAsset )
 		{
-			UPackage* Package = CreatePackage( nullptr, *PackageName );
+			UPackage* Package = CreatePackage( *PackageName );
 			if ( !ensure(Package) )
 			{
 				InContext.LogError( CreateAssetFailure );
@@ -656,6 +657,17 @@ EReimportResult::Type UDatasmithImportFactory::ReimportStaticMesh(UStaticMesh* M
 	ImportContext.Options->BaseOptions.AssetOptions = MeshImportData->AssetImportOptions;
 
 	ImportContext.SceneAsset = FDatasmithImporterUtils::FindDatasmithSceneForAsset( Mesh );
+
+	// Restore additional import options
+	UDatasmithTranslatedSceneImportData* SceneAssetImportData = ExactCast<UDatasmithTranslatedSceneImportData>(ImportContext.SceneAsset->AssetImportData);
+	if (SceneAssetImportData)
+	{
+		ImportContext.AdditionalImportOptions.Empty();
+		for (UDatasmithOptionsBase* AdditionalOption : SceneAssetImportData->AdditionalOptions)
+		{
+			ImportContext.AdditionalImportOptions.Emplace(AdditionalOption);
+		}
+	}
 
 	TSharedRef< IDatasmithScene > Scene = FDatasmithSceneFactory::CreateScene(*Source.GetSceneName());
 	bool bIsSilent = true;

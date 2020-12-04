@@ -133,7 +133,10 @@ class IConsoleVariable;
 #if !NO_CVARS
 
 /** Console variable delegate type  This is a void callback function. */
-DECLARE_DELEGATE_OneParam( FConsoleVariableDelegate, IConsoleVariable* );
+DECLARE_DELEGATE_OneParam(FConsoleVariableDelegate, IConsoleVariable*);
+
+/** Console variable multicast delegate type. */
+DECLARE_MULTICAST_DELEGATE_OneParam(FConsoleVariableMulticastDelegate, IConsoleVariable*);
 
 /** Console command delegate type (takes no arguments.)  This is a void callback function. */
 DECLARE_DELEGATE( FConsoleCommandDelegate );
@@ -425,6 +428,8 @@ public:
 	 * We also don't call for the SetOnChangedCallback() call as this is up to the caller.
 	 **/
 	virtual void SetOnChangedCallback(const FConsoleVariableDelegate& Callback) = 0;
+
+	virtual FConsoleVariableMulticastDelegate& OnChangedDelegate() = 0;
 
 	// convenience methods
 
@@ -1019,6 +1024,19 @@ public:
 	}
 
 	/**
+	 * Create a bool console variable
+	 * @param Name must not be 0
+	 * @param Help must not be 0
+	 * @param Callback Delegate called when the variable changes. @see IConsoleVariable::SetOnChangedCallback
+	 * @param Flags bitmask combined from EConsoleVariableFlags
+	 */
+	FAutoConsoleVariable(const TCHAR* Name, bool DefaultValue, const TCHAR* Help, const FConsoleVariableDelegate& Callback, uint32 Flags = ECVF_Default)
+		: FAutoConsoleObject(IConsoleManager::Get().RegisterConsoleVariable(Name, DefaultValue, Help, Flags))
+	{
+		AsVariable()->SetOnChangedCallback(Callback);
+	}
+	
+	/**
 	 * Create a int console variable
 	 * @param Name must not be 0
 	 * @param Help must not be 0
@@ -1228,11 +1246,27 @@ public:
 	{
 	}
 
+	FAutoConsoleVariableRef(const TCHAR* Name, bool& RefValue, const TCHAR* Help, uint32 Flags = ECVF_Default)
+	{
+	}
+
+	FAutoConsoleVariableRef(const TCHAR* Name, FString& RefValue, const TCHAR* Help, uint32 Flags = ECVF_Default)
+	{
+	}
+
 	FAutoConsoleVariableRef(const TCHAR* Name, int32& RefValue, const TCHAR* Help, const FConsoleVariableDelegate& Callback, uint32 Flags = ECVF_Default)
 	{
 	}
 
 	FAutoConsoleVariableRef(const TCHAR* Name, float& RefValue, const TCHAR* Help, const FConsoleVariableDelegate& Callback, uint32 Flags = ECVF_Default)
+	{
+	}
+	
+	FAutoConsoleVariableRef(const TCHAR* Name, bool& RefValue, const TCHAR* Help, const FConsoleVariableDelegate& Callback, uint32 Flags = ECVF_Default)
+	{
+	}
+
+	FAutoConsoleVariableRef(const TCHAR* Name, FString& RefValue, const TCHAR* Help, const FConsoleVariableDelegate& Callback, uint32 Flags = ECVF_Default)
 	{
 	}
 };
@@ -1461,6 +1495,13 @@ public:
 	virtual void SetOnChangedCallback(const FConsoleVariableDelegate &) override
 	{
 		check(false);
+	}
+
+	virtual FConsoleVariableMulticastDelegate& OnChangedDelegate()override
+	{
+		static FConsoleVariableMulticastDelegate Dummy;
+		check(false);
+		return Dummy;
 	}
 
 	virtual EConsoleVariableFlags GetFlags() const override

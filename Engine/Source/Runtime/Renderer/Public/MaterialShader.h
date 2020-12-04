@@ -89,11 +89,7 @@ public:
 
 	static FName UniformBufferLayoutName;
 
-	FMaterialShader()
-#if WITH_EDITORONLY_DATA
-		: DebugUniformExpressionUBLayout(FRHIUniformBufferLayout::Zero)
-#endif
-	{}
+	FMaterialShader() = default;
 
 	FMaterialShader(const FMaterialShaderType::CompiledShaderInitializerType& Initializer);
 
@@ -118,34 +114,12 @@ public:
 
 	/** Sets pixel parameters that are material specific but not FMeshBatch specific. */
 	template< typename TRHIShader >
-	void SetParametersInner(
+	void SetParameters(
 		FRHICommandList& RHICmdList,
 		TRHIShader* ShaderRHI,
 		const FMaterialRenderProxy* MaterialRenderProxy, 
 		const FMaterial& Material,
 		const FSceneView& View);
-
-	/** Sets pixel parameters that are material specific but not FMeshBatch specific. */
-	template< typename TRHIShader >
-	void SetParameters(
-		FRHICommandList& RHICmdList,
-		TRHIShader* ShaderRHI,
-		const FMaterialRenderProxy* MaterialRenderProxy, 
-		const FMaterial& Material,
-		const FSceneView& View, 
-		const TUniformBufferRef<FViewUniformShaderParameters>& ViewUniformBuffer,
-		ESceneTextureSetupMode SceneTextureSetupMode);
-
-	/** Like SetParameters above, but takes a FViewInfo rather than FSceneView, which allows additional per-view parameters to be set */
-	template< typename TRHIShader >
-	void SetParameters(
-		FRHICommandList& RHICmdList,
-		TRHIShader* ShaderRHI,
-		const FMaterialRenderProxy* MaterialRenderProxy,
-		const FMaterial& Material,
-		const FViewInfo& View,
-		const TUniformBufferRef<FViewUniformShaderParameters>& ViewUniformBuffer,
-		ESceneTextureSetupMode SceneTextureSetupMode);
 
 	void GetShaderBindings(
 		const FScene* Scene,
@@ -173,8 +147,6 @@ private:
 	LAYOUT_FIELD(FShaderResourceParameter, VTFeedbackBuffer);
 
 protected:
-	LAYOUT_FIELD(FSceneTextureShaderParameters, SceneTextureParameters);
-
 	LAYOUT_FIELD_EDITORONLY(FDebugUniformExpressionSet, DebugUniformExpressionSet);
 	LAYOUT_FIELD_EDITORONLY(FRHIUniformBufferLayout, DebugUniformExpressionUBLayout);
 	LAYOUT_FIELD_EDITORONLY(FMemoryImageString, DebugDescription);

@@ -17,9 +17,9 @@
 #define SMALL_THRESHOLD 1e-4
 
 #define RESET_PQ(Particle) Particle->P() = Particle->X(); Particle->Q() = Particle->R()
-#define INVARIANT_XR_START(Particle) TVector<T,3> InvariantPreX_##Particle = Particle->X(); TRotation<T,3> InvariantPreR_##Particle = Particle->R()
+#define INVARIANT_XR_START(Particle) TVector<T, 3> InvariantPreX_##Particle = Particle->X(); TRotation<T, 3> InvariantPreR_##Particle = Particle->R()
 #define INVARIANT_XR_END(Particle) EXPECT_TRUE(InvariantPreX_##Particle.Equals(Particle->X())); EXPECT_TRUE(InvariantPreR_##Particle.Equals(Particle->R()))
-#define INVARIANT_VW_START(Particle) TVector<T,3> InvariantPreV_##Particle = Particle->V(); TVector<T,3> InvariantPreW_##Particle = Particle->W()
+#define INVARIANT_VW_START(Particle) TVector<T, 3> InvariantPreV_##Particle = Particle->V(); TVector<T, 3> InvariantPreW_##Particle = Particle->W()
 #define INVARIANT_VW_END(Particle) EXPECT_TRUE(InvariantPreV_##Particle.Equals(Particle->V())); EXPECT_TRUE(InvariantPreW_##Particle.Equals(Particle->W()))
 
 namespace ChaosTest {
@@ -36,10 +36,12 @@ namespace ChaosTest {
 		PhysicsMaterial->Friction = (T)0;
 		PhysicsMaterial->Restitution = (T)0;
 		TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>> PhysicsMaterials;
+		TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>> PerParticlePhysicsMaterials;
 		
 		TPBDRigidsSOAs<T, 3> Particles;
 		Particles.GetParticleHandles().AddArray(&Collided);
 		Particles.GetParticleHandles().AddArray(&PhysicsMaterials);
+		Particles.GetParticleHandles().AddArray(&PerParticlePhysicsMaterials);
 
 		auto Box1 = AppendDynamicParticleBox<T>(Particles);
 		Box1->X() = TVector<T, 3>(1.f);
@@ -55,17 +57,17 @@ namespace ChaosTest {
 		Box2->Q() = Box2->R();
 		Box2->AuxilaryValue(PhysicsMaterials) = MakeSerializable(PhysicsMaterial);
 
-		TPBDCollisionConstraintAccessor<T, 3> Collisions(Particles, Collided, PhysicsMaterials, 1, 1, T(0));
+		FPBDCollisionConstraintAccessor Collisions(Particles, Collided, PhysicsMaterials, PerParticlePhysicsMaterials, 1, 1, T(0));
 		Collisions.ComputeConstraints(0.f);
 		EXPECT_EQ(Collisions.NumConstraints(), 1);
 
-		TPBDCollisionConstraints<T, 3>::FConstraintBase& Constraint = Collisions.GetConstraint(0);
+		FCollisionConstraintBase& Constraint = Collisions.GetConstraint(0);
 		if (auto PBDRigid = Constraint.Particle[0]->CastToRigidParticle())
 		{
 			//Question: non dynamics don't have collision particles, seems wrong if the levelset is dynamic and the static is something like a box
 			PBDRigid->CollisionParticles()->UpdateAccelerationStructures();
 		}
-		Collisions.UpdateLevelsetConstraint(*Constraint.template As<TPBDCollisionConstraints<T,3>::FPointContactConstraint>());
+		Collisions.UpdateLevelsetConstraint(*Constraint.template As<FPBDCollisionConstraints::FPointContactConstraint>());
 
 		EXPECT_EQ(Constraint.Particle[0], Box2);
 		EXPECT_EQ(Constraint.Particle[1], Box1);
@@ -83,12 +85,14 @@ namespace ChaosTest {
 		PhysicsMaterial->Friction = (T)0;
 		PhysicsMaterial->Restitution = (T)0;
 		TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>> PhysicsMaterials;
+		TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>> PerParticlePhysicsMaterials;
 
 		TPBDRigidsSOAs<T, 3> Particles;
 		Particles.GetParticleHandles().AddArray(&Collided);
 		Particles.GetParticleHandles().AddArray(&PhysicsMaterials);
+		Particles.GetParticleHandles().AddArray(&PerParticlePhysicsMaterials);
 
-		auto Box1 = AppendDynamicParticleConvexBox<T>(Particles, TVector<T,3>(1.f) );
+		auto Box1 = AppendDynamicParticleConvexBox<T>(Particles, TVector<T, 3>(1.f) );
 		Box1->X() = TVector<T, 3>(0.f);
 		Box1->R() = TRotation<T, 3>(FQuat::Identity);
 		Box1->P() = Box1->X();
@@ -102,12 +106,12 @@ namespace ChaosTest {
 		Box2->Q() = Box2->R();
 		Box2->AuxilaryValue(PhysicsMaterials) = MakeSerializable(PhysicsMaterial);
 
-		TPBDCollisionConstraintAccessor<T, 3> Collisions(Particles, Collided, PhysicsMaterials, 1, 1, T(0));
+		FPBDCollisionConstraintAccessor Collisions(Particles, Collided, PhysicsMaterials, PerParticlePhysicsMaterials, 1, 1, T(0));
 		Collisions.ComputeConstraints(0.f);
 		EXPECT_EQ(Collisions.NumConstraints(), 1);
 
-		TPBDCollisionConstraints<T, 3>::FConstraintBase & Constraint = Collisions.GetConstraint(0);
-		Collisions.UpdateLevelsetConstraint(*Constraint.template As<TPBDCollisionConstraints<T,3>::FPointContactConstraint>());
+		FCollisionConstraintBase & Constraint = Collisions.GetConstraint(0);
+		Collisions.UpdateLevelsetConstraint(*Constraint.template As<FPBDCollisionConstraints::FPointContactConstraint>());
 		
 		EXPECT_EQ(Constraint.Particle[0], Box2);
 		EXPECT_EQ(Constraint.Particle[1], Box1);
@@ -125,33 +129,36 @@ namespace ChaosTest {
 		PhysicsMaterial->Friction = (T)0;
 		PhysicsMaterial->Restitution = (T)1;
 		TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>> PhysicsMaterials;
+		TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>> PerParticlePhysicsMaterials;
 
 		TPBDRigidsSOAs<T, 3> Particles;
 		Particles.GetParticleHandles().AddArray(&Collided);
 		Particles.GetParticleHandles().AddArray(&PhysicsMaterials);
+		Particles.GetParticleHandles().AddArray(&PerParticlePhysicsMaterials);
 
 		auto Floor = AppendStaticAnalyticFloor<T>(Particles);
 		auto Box = AppendDynamicParticleBox<T>(Particles);
 		Box->X() = TVector<T, 3>(0, 1, 0);
 		Box->R() = TRotation<T, 3>(FQuat::Identity);
 		Box->V() = TVector<T, 3>(0, 0, -1);
+		Box->PreV() = Box->V();
 		Box->P() = Box->X();
 		Box->Q() = Box->R();
 		Box->AuxilaryValue(PhysicsMaterials) = MakeSerializable(PhysicsMaterial);
 
 		const float Dt = 1 / 24.;
 
-		TPBDCollisionConstraintAccessor<T, 3> Collisions(Particles, Collided, PhysicsMaterials, 2, 5, T(0));
+		FPBDCollisionConstraintAccessor Collisions(Particles, Collided, PhysicsMaterials, PerParticlePhysicsMaterials, 2, 5, T(0));
 
 		Collisions.ComputeConstraints(Dt);
 		EXPECT_EQ(Collisions.NumConstraints(), 1);
 
-		TPBDCollisionConstraints<T, 3>::FConstraintBase & Constraint = Collisions.GetConstraint(0);
+		FCollisionConstraintBase & Constraint = Collisions.GetConstraint(0);
 		if (auto PBDRigid = Constraint.Particle[0]->CastToRigidParticle())
 		{
 			PBDRigid->CollisionParticles()->UpdateAccelerationStructures();
 		}
-		Collisions.UpdateLevelsetConstraint(*Constraint.template As<TPBDCollisionConstraints<T, 3>::FPointContactConstraint>());
+		Collisions.UpdateLevelsetConstraint(*Constraint.template As<FPBDCollisionConstraints::FPointContactConstraint>());
 
 		EXPECT_EQ(Constraint.Particle[0], Box);
 		EXPECT_EQ(Constraint.Particle[1], Floor);
@@ -174,7 +181,7 @@ namespace ChaosTest {
 			{
 				INVARIANT_XR_START(Box);
 				INVARIANT_VW_START(Box);
-				Collisions.ApplyPushOut(Dt, { Collisions.GetConstraintHandle(0) }, TSet<const TGeometryParticleHandle<T,3>*>(), 0, 1);
+				Collisions.ApplyPushOut(Dt, { Collisions.GetConstraintHandle(0) }, TSet<const TGeometryParticleHandle<T, 3>*>(), 0, 1);
 				INVARIANT_XR_END(Box);
 				INVARIANT_VW_END(Box);
 			}
@@ -195,36 +202,40 @@ namespace ChaosTest {
 		PhysicsMaterial->Friction = (T)0;
 		PhysicsMaterial->Restitution = (T)0;
 		TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>> PhysicsMaterials;
+		TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>> PerParticlePhysicsMaterials;
 
 		TPBDRigidsSOAs<T, 3> Particles;
 		Particles.GetParticleHandles().AddArray(&Collided);
 		Particles.GetParticleHandles().AddArray(&PhysicsMaterials);
+		Particles.GetParticleHandles().AddArray(&PerParticlePhysicsMaterials);
 
 		auto Floor = AppendStaticConvexFloor<T>(Particles);
 		auto Box = AppendDynamicParticleConvexBox<T>( Particles, TVector<T, 3>(50) );
 		Box->X() = TVector<T, 3>(0, 0, 49);
 		Box->R() = TRotation<T, 3>(FQuat::Identity);
 		Box->V() = TVector<T, 3>(0, 0, -1);
+		Box->PreV() = Box->V();
 		Box->P() = Box->X();
 		Box->Q() = Box->R();
 		Box->AuxilaryValue(PhysicsMaterials) = MakeSerializable(PhysicsMaterial);
 
 		const float Dt = 1 / 24.;
 
-		TPBDCollisionConstraintAccessor<T, 3> Collisions(Particles, Collided, PhysicsMaterials, 2, 5, T(0));
+		FPBDCollisionConstraintAccessor Collisions(Particles, Collided, PhysicsMaterials, PerParticlePhysicsMaterials, 2, 5, T(0));
 
 		Collisions.ComputeConstraints(Dt);
 		EXPECT_EQ(Collisions.NumConstraints(), 1);
 
-		TPBDCollisionConstraints<T, 3>::FMultiPointContactConstraint * Constraint = Collisions.GetConstraint(0).template As<TPBDCollisionConstraints<T, 3>::FMultiPointContactConstraint>();
+		FRigidBodyMultiPointContactConstraint * Constraint = Collisions.GetConstraint(0).template As<FRigidBodyMultiPointContactConstraint>();
 		EXPECT_TRUE(Constraint != nullptr);
 
-		Collisions.UpdateManifold(*Constraint);
+		//Collisions.UpdateManifold(*Constraint);
+		Collisions.Update(*Constraint);
 
 		EXPECT_EQ(Constraint->Particle[0], Box);
 		EXPECT_EQ(Constraint->Particle[1], Floor);
 		EXPECT_TRUE(Constraint->GetNormal().operator==(TVector<T, 3>(0, 0, 1)));
-		EXPECT_TRUE(FMath::Abs( Constraint->GetLocation().Z - TVector<T,3>(0,0,-1).Z ) < SMALL_THRESHOLD);
+		EXPECT_TRUE(FMath::Abs( Constraint->GetLocation().Z - TVector<T, 3>(0,0,-1).Z ) < SMALL_THRESHOLD);
 		EXPECT_TRUE(FMath::Abs(Constraint->GetPhi() - T(-1.0)) < SMALL_THRESHOLD);
 
 		{
@@ -264,33 +275,36 @@ namespace ChaosTest {
 		PhysicsMaterial->Friction = (T)0;
 		PhysicsMaterial->Restitution = (T)0;
 		TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>> PhysicsMaterials;
+		TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>> PerParticlePhysicsMaterials;
 		
 		TPBDRigidsSOAs<T, 3> Particles;
 		Particles.GetParticleHandles().AddArray(&Collided);
 		Particles.GetParticleHandles().AddArray(&PhysicsMaterials);
+		Particles.GetParticleHandles().AddArray(&PerParticlePhysicsMaterials);
 
 		auto Floor = AppendStaticAnalyticFloor<T>(Particles);
 		auto Box = AppendDynamicParticleBox<T>(Particles);
 		Box->X() = TVector<T, 3>(0, 1, 0);
 		Box->R() = TRotation<T, 3>(FQuat::Identity);
 		Box->V() = TVector<T, 3>(0, 0, -1);
+		Box->PreV() = Box->V();
 		Box->P() = Box->X();
 		Box->Q() = Box->R();
 		Box->AuxilaryValue(PhysicsMaterials) = MakeSerializable(PhysicsMaterial);
 
 		const float Dt = 1 / 24.;
 
-		TPBDCollisionConstraintAccessor<T, 3> Collisions(Particles, Collided, PhysicsMaterials, 2, 5, T(0));
+		FPBDCollisionConstraintAccessor Collisions(Particles, Collided, PhysicsMaterials, PerParticlePhysicsMaterials, 2, 5, T(0));
 
 		Collisions.ComputeConstraints(Dt);
 		EXPECT_EQ(Collisions.NumConstraints(), 1);
 
-		TPBDCollisionConstraints<T, 3>::FConstraintBase & Constraint = Collisions.GetConstraint(0);
+		FCollisionConstraintBase & Constraint = Collisions.GetConstraint(0);
 		if (auto PBDRigid = Constraint.Particle[0]->CastToRigidParticle())
 		{
 			PBDRigid->CollisionParticles()->UpdateAccelerationStructures();
 		}
-		Collisions.UpdateLevelsetConstraint(*Constraint.template As<TPBDCollisionConstraints<T,3>::FPointContactConstraint>());
+		Collisions.UpdateLevelsetConstraint(*Constraint.template As<FPBDCollisionConstraints::FPointContactConstraint>());
 
 		EXPECT_EQ(Constraint.Particle[0], Box);
 		EXPECT_EQ(Constraint.Particle[1], Floor);
@@ -313,7 +327,7 @@ namespace ChaosTest {
 			{
 				INVARIANT_XR_START(Box);
 				INVARIANT_VW_START(Box);
-				Collisions.ApplyPushOut(Dt, { Collisions.GetConstraintHandle(0) }, TSet<const TGeometryParticleHandle<T,3>*>(), 0, 1);
+				Collisions.ApplyPushOut(Dt, { Collisions.GetConstraintHandle(0) }, TSet<const TGeometryParticleHandle<T, 3>*>(), 0, 1);
 				INVARIANT_XR_END(Box);
 				INVARIANT_VW_END(Box);
 			}
@@ -333,32 +347,35 @@ namespace ChaosTest {
 		PhysicsMaterial->Friction = (T)0;
 		PhysicsMaterial->Restitution = (T)1;
 		TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>> PhysicsMaterials;
+		TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>> PerParticlePhysicsMaterials;
 		TPBDRigidsSOAs<T, 3> Particles;
 		Particles.GetParticleHandles().AddArray(&Collided);
 		Particles.GetParticleHandles().AddArray(&PhysicsMaterials);
+		Particles.GetParticleHandles().AddArray(&PerParticlePhysicsMaterials);
 
 		auto Floor = AppendStaticAnalyticFloor<T>(Particles);
 		auto Box = AppendDynamicParticleBox<T>(Particles);
 		Box->X() = TVector<T, 3>(0, 0, 0);
 		Box->R() = TRotation<T, 3>(FQuat::Identity);
 		Box->V() = TVector<T, 3>(0, 0, -100);
+		Box->PreV() = Box->V();
 		Box->P() = Box->X();
 		Box->Q() = Box->R();
 		Box->AuxilaryValue(PhysicsMaterials) = MakeSerializable(PhysicsMaterial);
 
 		const float Dt = 1 / 24.;
 
-		TPBDCollisionConstraintAccessor<T, 3> Collisions(Particles, Collided, PhysicsMaterials, 2, 5, T(0));
+		FPBDCollisionConstraintAccessor Collisions(Particles, Collided, PhysicsMaterials, PerParticlePhysicsMaterials, 2, 5, T(0));
 
 		Collisions.ComputeConstraints(Dt);
 		EXPECT_EQ(Collisions.NumConstraints(), 1);
 
-		TPBDCollisionConstraints<T, 3>::FConstraintBase & Constraint = Collisions.GetConstraint(0);
+		FCollisionConstraintBase & Constraint = Collisions.GetConstraint(0);
 		if (auto PBDRigid = Constraint.Particle[0]->CastToRigidParticle())
 		{
 			PBDRigid->CollisionParticles()->UpdateAccelerationStructures();
 		}
-		Collisions.UpdateLevelsetConstraint(*Constraint.template As<TPBDCollisionConstraints<T,3>::FPointContactConstraint>());
+		Collisions.UpdateLevelsetConstraint(*Constraint.template As<FPBDCollisionConstraints::FPointContactConstraint>());
 		EXPECT_EQ(Constraint.Particle[0], Box);
 		EXPECT_EQ(Constraint.Particle[1], Floor);
 		EXPECT_TRUE(Constraint.GetNormal().operator==(TVector<T, 3>(0, 0, 1)));
@@ -382,10 +399,8 @@ namespace ChaosTest {
 			RESET_PQ(Box);
 			{
 				INVARIANT_XR_START(Box);
-				INVARIANT_VW_START(Box);
-				Collisions.ApplyPushOut(Dt, { Collisions.GetConstraintHandle(0) }, TSet<const TGeometryParticleHandle<T,3>*>(), 0, 1);
+				Collisions.ApplyPushOut(Dt, { Collisions.GetConstraintHandle(0) }, TSet<const TGeometryParticleHandle<T, 3>*>(), 0, 1);
 				INVARIANT_XR_END(Box);
-				INVARIANT_VW_END(Box);
 			}
 		}
 
@@ -395,6 +410,69 @@ namespace ChaosTest {
 	}
 	template void CollisionBoxPlaneRestitution<float>();
 
+	// This test will make sure that a dynamic cube colliding with a static floor will have the correct bounce velocity
+	// for a restitution of 0.5
+	// The dynamic cube will collide with one of its vertices onto a face of the static cube
+	template<class T>
+	void CollisionCubeCubeRestitution()
+	{
+		TArrayCollectionArray<bool> Collided;
+		TUniquePtr<FChaosPhysicsMaterial> PhysicsMaterial = MakeUnique<FChaosPhysicsMaterial>();
+		PhysicsMaterial->Friction = (T)0;
+		PhysicsMaterial->Restitution = (T)0.5;
+		TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>> PhysicsMaterials;
+		TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>> PerParticlePhysicsMaterials;
+		TPBDRigidsSOAs<T, 3> Particles;
+		Particles.GetParticleHandles().AddArray(&Collided);
+		Particles.GetParticleHandles().AddArray(&PhysicsMaterials);
+		Particles.GetParticleHandles().AddArray(&PerParticlePhysicsMaterials);
+
+		TGeometryParticleHandle<T, 3>* StaticCube = AppendStaticParticleBox<T>(Particles, TVector<T, 3>(100.0f));
+		StaticCube->X() = TVector<T, 3>(0, 0, -50.0f);
+		TPBDRigidParticleHandle<T, 3>* DynamicCube = AppendDynamicParticleBox<T>(Particles, TVector<T, 3>(100.0f));
+		DynamicCube->X() = TVector<T, 3>(0, 0, 80); // Penetrating by about 5cm
+		DynamicCube->R() = TRotation<T, 3>::FromElements( 0.27059805f, 0.27059805f, 0.0f, 0.923879532f ); // Rotate so that vertex collide
+		DynamicCube->V() = TVector<T, 3>(0, 0, -100);
+		DynamicCube->PreV() = DynamicCube->V();
+		DynamicCube->P() = DynamicCube->X();
+		DynamicCube->Q() = DynamicCube->R();
+		DynamicCube->AuxilaryValue(PhysicsMaterials) = MakeSerializable(PhysicsMaterial);
+
+		const float Dt = 1 / 24.;
+
+		FPBDCollisionConstraintAccessor Collisions(Particles, Collided, PhysicsMaterials, PerParticlePhysicsMaterials, 2, 5, T(0));
+
+		Collisions.ComputeConstraints(Dt);
+		EXPECT_EQ(Collisions.NumConstraints(), 1);
+
+		if (Collisions.NumConstraints() <= 0)
+		{
+			return;
+		}
+
+		FCollisionConstraintBase& Constraint = Collisions.GetConstraint(0);
+		if (TPBDRigidParticleHandle<T, 3>* PBDRigid = Constraint.Particle[0]->CastToRigidParticle())
+		{
+			PBDRigid->CollisionParticles()->UpdateAccelerationStructures();
+		}
+		Collisions.UpdateLevelsetConstraint(*Constraint.template As<FPBDCollisionConstraints::FPointContactConstraint>());
+		EXPECT_EQ(Constraint.Particle[0], DynamicCube);
+		EXPECT_EQ(Constraint.Particle[1], StaticCube);
+		EXPECT_TRUE(Constraint.GetNormal().operator==(TVector<T, 3>(0, 0, 1)));
+		EXPECT_TRUE(FMath::Abs(ChaosTest::SignedDistance(*Constraint.Particle[0], Constraint.GetLocation())) < SMALL_THRESHOLD);
+		{
+			INVARIANT_XR_START(DynamicCube);
+			Collisions.Apply(Dt, { Collisions.GetConstraintHandle(0) }, 0, 1);
+			INVARIANT_XR_END(DynamicCube);
+		}
+
+		// This test's tolerances are set to be very crude as to not be over sensitive (for now)
+		EXPECT_TRUE(DynamicCube->V().Z > 10.0f);  // restitution not too low
+		EXPECT_TRUE(DynamicCube->V().Z < 70.0f);  // restitution not too high
+		EXPECT_TRUE(FMath::Abs(DynamicCube->V().X) < 1.0f);
+		EXPECT_TRUE(FMath::Abs(DynamicCube->V().Y) < 1.0f);
+	}
+	template void CollisionCubeCubeRestitution<float>();
 
 	template<class T>
 	void CollisionBoxToStaticBox()
@@ -404,9 +482,11 @@ namespace ChaosTest {
 		PhysicsMaterial->Friction = (T)0;
 		PhysicsMaterial->Restitution = (T)0;
 		TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>> PhysicsMaterials;
+		TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>> PerParticlePhysicsMaterials;
 		TPBDRigidsSOAs<T, 3> Particles;
 		Particles.GetParticleHandles().AddArray(&Collided);
 		Particles.GetParticleHandles().AddArray(&PhysicsMaterials);
+		Particles.GetParticleHandles().AddArray(&PerParticlePhysicsMaterials);
 
 		auto StaticBox = AppendStaticParticleBox<T>(Particles);
 		StaticBox->X() = TVector<T, 3>(-0.05f, -0.05f, -0.1f);
@@ -418,17 +498,19 @@ namespace ChaosTest {
 		Box2->P() = Box2->X();
 		Box2->Q() = Box2->R();
 		Box2->V() = TVector<T, 3>(0, 0, -1);
+		Box2->PreV() = Box2->V();
 		Box2->AuxilaryValue(PhysicsMaterials) = MakeSerializable(PhysicsMaterial);
 
 		FBox Region(FVector(.2), FVector(.5));
 
 		float Dt = 1 / 24.;
 
-		TPBDCollisionConstraintAccessor<T, 3> Collisions(Particles, Collided, PhysicsMaterials, 1, 1, T(0));
+		FPBDCollisionConstraintAccessor Collisions(Particles, Collided, PhysicsMaterials, PerParticlePhysicsMaterials, 1, 1, T(0));
 		Collisions.ComputeConstraints(Dt);
 		EXPECT_EQ(Collisions.NumConstraints(), 1);
 
-		TPBDCollisionConstraints<T, 3>::FConstraintBase & Constraint = Collisions.GetConstraint(0);
+		FCollisionConstraintBase & Constraint = Collisions.GetConstraint(0);
+		Collisions.Update(Constraint, 100.0f);
 
 		//Collisions.UpdateLevelsetConstraintGJK(Particles, Constraint);
 		//EXPECT_EQ(Constraint.ParticleIndex, 1);
@@ -490,6 +572,7 @@ namespace ChaosTest {
 		PhysicsMaterial->Friction = (T)0;
 		PhysicsMaterial->Restitution = (T)0;
 		TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>> PhysicsMaterials;
+		TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>> PerParticlePhysicsMaterials;
 		Chaos::TPBDRigidParticles<T, 3> Particles;
 		Particles.AddArray(&Collided);
 		Particles.AddArray(&PhysicsMaterials);
@@ -546,6 +629,7 @@ namespace ChaosTest {
 		PhysicsMaterial->Friction = (T)0;
 		PhysicsMaterial->Restitution = (T)0;
 		TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>> PhysicsMaterials;
+		TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>> PerParticlePhysicsMaterials;
 		Chaos::TPBDRigidParticles<T, 3> Particles;
 		Particles.AddArray(&Collided);
 		Particles.AddArray(&PhysicsMaterials);

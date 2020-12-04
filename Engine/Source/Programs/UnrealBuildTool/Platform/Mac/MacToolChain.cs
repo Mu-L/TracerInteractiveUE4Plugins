@@ -17,13 +17,6 @@ namespace UnrealBuildTool
 {
 	class MacToolChainSettings : AppleToolChainSettings
 	{
-		/***********************************************************************
-		 * NOTE:
-		 *  Do NOT change the defaults to set your values, instead you should set the environment variables
-		 *  properly in your system, as other tools make use of them to work properly!
-		 *  The defaults are there simply for examples so you know what to put in your env vars...
-		 ***********************************************************************/
-
 		/// <summary>
 		/// Which version of the Mac OS SDK to target at build time
 		/// </summary>
@@ -33,7 +26,7 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Which version of the Mac OS X to allow at run time
 		/// </summary>
-		public string MacOSVersion = "10.13";
+		public string MacOSVersion = "10.14";
 
 		/// <summary>
 		/// Minimum version of Mac OS X to actually run on, running on earlier versions will display the system minimum version error dialog and exit.
@@ -115,10 +108,27 @@ namespace UnrealBuildTool
 		/// </summary>
 		MacToolChainOptions Options;
 
-		public MacToolChain(FileReference InProjectFile, MacToolChainOptions InOptions)
+		/// <summary>
+		/// Architectures to build for
+		/// </summary>
+		public List<string> Architectures = new List<string>();
+
+		public MacToolChain(FileReference InProjectFile, MacToolChainOptions InOptions, IReadOnlyList<string> InArchitectures)
 			: base(InProjectFile)
 		{
 			this.Options = InOptions;
+
+			// Mac-Arm todo: Change this to the host architecture? Should it be different for local tools vs UE targets?
+			const string DefaultArchitecture = "x86_64";
+
+			if (InArchitectures.Any())
+			{
+				Architectures.AddRange(InArchitectures);
+			}
+			else
+			{
+				Architectures.Add(DefaultArchitecture);			
+			}
 		}
 
 		public static Lazy<MacToolChainSettings> SettingsPrivate = new Lazy<MacToolChainSettings>(() => new MacToolChainSettings(false));
@@ -126,6 +136,11 @@ namespace UnrealBuildTool
 		public static MacToolChainSettings Settings
 		{
 			get { return SettingsPrivate.Value; }
+		}
+
+		public static string SDKPath
+		{
+			get { return Settings.BaseSDKDir + "/MacOSX" + Settings.MacOSSDKVersion + ".sdk"; }
 		}
 
 		/// <summary>
@@ -206,7 +221,7 @@ namespace UnrealBuildTool
 			{
 				Result += " -Wshadow" + ((CompileEnvironment.ShadowVariableWarningLevel == WarningLevel.Error) ? "" : " -Wno-error=shadow");
 			}
-
+			
 			if (CompileEnvironment.bEnableUndefinedIdentifierWarnings)
 			{
 				Result += " -Wundef" + (CompileEnvironment.bUndefinedIdentifierWarningsAsErrors ? "" : " -Wno-error=undef");
@@ -214,8 +229,10 @@ namespace UnrealBuildTool
 
 			Result += " -c";
 
-			Result += " -arch x86_64";
-			Result += " -isysroot " + Settings.BaseSDKDir + "/MacOSX" + Settings.MacOSSDKVersion + ".sdk";
+			// Pass through the list of architectures			
+			Result += string.Format(" -arch {0}", string.Join(" -arch ", Architectures));				
+
+			Result += string.Format(" -isysroot \"{0}\"", SDKPath);
 			Result += " -mmacosx-version-min=" + (CompileEnvironment.bEnableOSX109Support ? "10.9" : Settings.MacOSVersion);
 
 			bool bStaticAnalysis = false;
@@ -362,8 +379,10 @@ namespace UnrealBuildTool
 		{
 			string Result = "";
 
-			Result += " -arch x86_64";
-			Result += " -isysroot " + Settings.BaseSDKDir + "/MacOSX" + Settings.MacOSSDKVersion + ".sdk";
+			// Pass through the list of architectures			
+			Result += string.Format(" -arch {0}", string.Join(" ", Architectures));
+
+			Result += string.Format(" -isysroot \"{0}\"", SDKPath);
 			Result += " -mmacosx-version-min=" + Settings.MacOSVersion;
 			Result += " -dead_strip";
 
@@ -736,7 +755,8 @@ namespace UnrealBuildTool
 			if (!bIsBuildingLibrary)
 			{
 				// Add the additional libraries to the argument list.
-				foreach (string AdditionalLibrary in LinkEnvironment.AdditionalLibraries)
+				IEnumerable<string> AdditionalLibraries = Enumerable.Concat(LinkEnvironment.SystemLibraries, LinkEnvironment.Libraries.Select(x => x.FullName));
+				foreach (string AdditionalLibrary in AdditionalLibraries)
 				{
 					// Can't link dynamic libraries when creating a static one
 					if (bIsBuildingLibrary && (Path.GetExtension(AdditionalLibrary) == ".dylib" || AdditionalLibrary == "z"))
@@ -784,7 +804,7 @@ namespace UnrealBuildTool
 					LinkCommand += string.Format(" -weak_library \"{0}\"", Path.GetFullPath(AdditionalLibrary));
 
 					AddLibraryPathToRPaths(AdditionalLibrary, AbsolutePath, ref RPaths, ref LinkCommand, bIsBuildingAppBundle);
-                }
+				}
 			}
 
 			// Add frameworks
@@ -823,7 +843,13 @@ namespace UnrealBuildTool
 			List<string> InputFileNames = new List<string>();
 			foreach (FileItem InputFile in LinkEnvironment.InputFiles)
 			{
-				InputFileNames.Add(string.Format("\"{0}\"", InputFile.AbsolutePath));
+				string InputFilePath = InputFile.AbsolutePath;
+				if (InputFile.Location.IsUnderDirectory(UnrealBuildTool.RootDirectory))
+				{
+					InputFilePath = InputFile.Location.MakeRelativeTo(UnrealBuildTool.EngineSourceDirectory);
+				}
+
+				InputFileNames.Add(string.Format("\"{0}\"", InputFilePath));
 				LinkAction.PrerequisiteItems.Add(InputFile);
 			}
 
@@ -1049,11 +1075,11 @@ namespace UnrealBuildTool
 					AppendMacLine(FinalizeAppBundleScript, FormatCopyCommand(InfoPlistFile, TempInfoPlist));
 
 					// Fix contents of Info.plist
-					AppendMacLine(FinalizeAppBundleScript, "sed -i \"\" -e \"s/\\${0}/{1}/g\" \"{2}\"", "{EXECUTABLE_NAME}", ExeName, TempInfoPlist);
-					AppendMacLine(FinalizeAppBundleScript, "sed -i \"\" -e \"s/\\${0}/{1}/g\" \"{2}\"", "{APP_NAME}", bBuildingEditor ? ("com.epicgames." + GameName) : (BundleIdentifier.Replace("[PROJECT_NAME]", GameName).Replace("_", "")), TempInfoPlist);
-					AppendMacLine(FinalizeAppBundleScript, "sed -i \"\" -e \"s/\\${0}/{1}/g\" \"{2}\"", "{MACOSX_DEPLOYMENT_TARGET}", Settings.MinMacOSVersion, TempInfoPlist);
-					AppendMacLine(FinalizeAppBundleScript, "sed -i \"\" -e \"s/\\${0}/{1}/g\" \"{2}\"", "{ICON_NAME}", GameName, TempInfoPlist);
-					AppendMacLine(FinalizeAppBundleScript, "sed -i \"\" -e \"s/\\${0}/{1}/g\" \"{2}\"", "{BUNDLE_VERSION}", BundleVersion, TempInfoPlist);
+					AppendMacLine(FinalizeAppBundleScript, "/usr/bin/sed -i \"\" -e \"s/\\${0}/{1}/g\" \"{2}\"", "{EXECUTABLE_NAME}", ExeName, TempInfoPlist);
+					AppendMacLine(FinalizeAppBundleScript, "/usr/bin/sed -i \"\" -e \"s/\\${0}/{1}/g\" \"{2}\"", "{APP_NAME}", bBuildingEditor ? ("com.epicgames." + GameName) : (BundleIdentifier.Replace("[PROJECT_NAME]", GameName).Replace("_", "")), TempInfoPlist);
+					AppendMacLine(FinalizeAppBundleScript, "/usr/bin/sed -i \"\" -e \"s/\\${0}/{1}/g\" \"{2}\"", "{MACOSX_DEPLOYMENT_TARGET}", Settings.MinMacOSVersion, TempInfoPlist);
+					AppendMacLine(FinalizeAppBundleScript, "/usr/bin/sed -i \"\" -e \"s/\\${0}/{1}/g\" \"{2}\"", "{ICON_NAME}", GameName, TempInfoPlist);
+					AppendMacLine(FinalizeAppBundleScript, "/usr/bin/sed -i \"\" -e \"s/\\${0}/{1}/g\" \"{2}\"", "{BUNDLE_VERSION}", BundleVersion, TempInfoPlist);
 
 					// Copy it into place
 					AppendMacLine(FinalizeAppBundleScript, FormatCopyCommand(TempInfoPlist, String.Format("{0}.app/Contents/Info.plist", ExeName)));
@@ -1387,7 +1413,9 @@ namespace UnrealBuildTool
 
 			FixDylibOutputFile = FixDylibDependencies(BinaryLinkEnvironment, Executable, Graph);
 			OutputFiles.Add(FixDylibOutputFile);
-			if (!BinaryLinkEnvironment.bIsBuildingConsoleApplication)
+
+			bool bIsBuildingAppBundle = !BinaryLinkEnvironment.bIsBuildingDLL && !BinaryLinkEnvironment.bIsBuildingLibrary && !BinaryLinkEnvironment.bIsBuildingConsoleApplication;
+			if (bIsBuildingAppBundle)
 			{
 				OutputFiles.Add(FinalizeAppBundle(BinaryLinkEnvironment, Executable, FixDylibOutputFile, Graph));
 			}

@@ -25,8 +25,11 @@ enum class ESimplifyTargetType : uint8
 	/** Target triangle count */
 	TriangleCount = 1 UMETA(DisplayName = "Triangle Count"),
 
+	/** Target vertex count */
+	VertexCount = 2 UMETA(DisplayName = "Vertex Count"),
+
 	/** Target edge length */
-	EdgeLength = 2 UMETA(DisplayName = "Edge Length")
+	EdgeLength = 3 UMETA(DisplayName = "Edge Length")
 };
 
 UENUM()
@@ -54,7 +57,7 @@ public:
 	ESimplifyType SimplifierType;
 	int TargetPercentage, TargetCount;
 	float TargetEdgeLength;
-	bool bDiscardAttributes, bReproject, bPreventNormalFlips, bPreserveSharpEdges;
+	bool bDiscardAttributes, bReproject, bPreventNormalFlips, bPreserveSharpEdges, bAllowSeamCollapse;
 	EEdgeRefineFlags MeshBoundaryConstraint, GroupBoundaryConstraint, MaterialBoundaryConstraint;
 
 	// stored for the UE4 Standard path

@@ -11,8 +11,13 @@
 
 DECLARE_STATS_GROUP(TEXT("BackChannel"), STATGROUP_BackChannel, STATCAT_Advanced);
 
-DECLARE_DWORD_COUNTER_STAT(TEXT("BC_BytesSent"), STAT_BackChannelBytesSent, STATGROUP_BackChannel);
-DECLARE_DWORD_COUNTER_STAT(TEXT("BC_BytesRecv"), STAT_BackChannelBytesRecv, STATGROUP_BackChannel);
+DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("BC.PacketsSent/s"), STAT_BackChannelPacketsSent, STATGROUP_BackChannel);
+DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("BC.PacketsRecv/s"), STAT_BackChannelPacketsRecv, STATGROUP_BackChannel);
+
+DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("BC.BytesSent/s"), STAT_BackChannelBytesSent, STATGROUP_BackChannel);
+DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("BC.BytesRecv/s"), STAT_BackChannelBytesRecv, STATGROUP_BackChannel);
+DECLARE_DWORD_ACCUMULATOR_STAT(TEXT("BC.Errors/s"), STAT_BackChannelErrors, STATGROUP_BackChannel);
+
 
 int32 FBackChannelConnection::SendBufferSize = 2 * 1024 * 1024;
 int32 FBackChannelConnection::ReceiveBufferSize = 2 * 1024 * 1024;
@@ -33,7 +38,7 @@ FBackChannelConnection::FBackChannelConnection()
 {
 	Socket = nullptr;
 	IsListener = false;
-	PacketsReceived = 0;
+	TimeSinceStatsSet = 0;
 	// Allow the app to override
 	GConfig->GetInt(TEXT("BackChannel"), TEXT("SendBufferSize"), SendBufferSize, GEngineIni);
 	GConfig->GetInt(TEXT("BackChannel"), TEXT("RecvBufferSize"), ReceiveBufferSize, GEngineIni);
@@ -50,7 +55,7 @@ FBackChannelConnection::~FBackChannelConnection()
 /* Todo - Proper stats */
 uint32	FBackChannelConnection::GetPacketsReceived() const
 {
-	return PacketsReceived;
+	return ConnectionStats.PacketsReceived;
 }
 
 bool FBackChannelConnection::IsConnected() const
@@ -82,7 +87,6 @@ void FBackChannelConnection::Close()
 		Socket->Close();
 		ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->DestroySocket(Socket);
 		Socket = nullptr;
-		PacketsReceived = 0;
 	}
 }
 
@@ -153,12 +157,27 @@ bool FBackChannelConnection::Connect(const TCHAR* InEndPoint)
 		}
 		else
 		{
+
 			CloseWithError(*FString::Printf(TEXT("Failed to open connection to %s."), InEndPoint), NewSocket);
 			ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->DestroySocket(NewSocket);
 		}
 	}
 
 	return Socket != nullptr;
+}
+
+// public version that is applied to our socket
+void FBackChannelConnection::SetBufferSizes(int32 DesiredSendSize, int32 DesiredReceiveSize)
+{
+	// Save these for any future connections
+	SendBufferSize = FMath::Max(DesiredSendSize, SendBufferSize);
+	ReceiveBufferSize = FMath::Max(DesiredReceiveSize, ReceiveBufferSize);
+
+	// If we have a socket, apply it now
+	if (Socket != nullptr)
+	{
+		SetSocketBufferSizes(Socket, SendBufferSize, SendBufferSize);
+	}
 }
 
 void FBackChannelConnection::SetSocketBufferSizes(FSocket* NewSocket, int32 DesiredSendSize, int32 DesiredReceiveSize)
@@ -171,14 +190,16 @@ void FBackChannelConnection::SetSocketBufferSizes(FSocket* NewSocket, int32 Desi
 	bool bWasSet = false;
 		
 	// Send Buffer
-	while (AllocatedSendSize != RequestedSendSize && !bWasSet)
+	while (AllocatedSendSize < RequestedSendSize && !bWasSet)
 	{
+		// note - it's possible for AllocatedSize to change and bWasSet = false if the socket has already had a buffer
+		// size set that's the mac supported.
 		bWasSet = NewSocket->SetSendBufferSize(RequestedSendSize, AllocatedSendSize);
 
 		// If we didn't get what we want assume failure could mean
 		// no change (unsupported size), an OS default, or an OS max so
 		// try again if its less than 50% of what we asked for
-		if (!bWasSet && AllocatedSendSize < RequestedSendSize/2)
+		if (!bWasSet && AllocatedSendSize < RequestedSendSize)
 		{
 			RequestedSendSize = RequestedSendSize / 2;
 		}
@@ -196,14 +217,14 @@ void FBackChannelConnection::SetSocketBufferSizes(FSocket* NewSocket, int32 Desi
 	bWasSet = false;
 
 	// Set Receive buffer
-	while (AllocatedReceiveSize != RequestedReceiveSize && !bWasSet)
+	while (AllocatedReceiveSize < RequestedReceiveSize && !bWasSet)
 	{
 		bWasSet = NewSocket->SetReceiveBufferSize(RequestedReceiveSize, AllocatedReceiveSize);
 		
 		// If we didn't get what we want assume failure could mean
 		// no change (unsupported size), an OS default, or an OS max so
 		// try again if its less than 50% of what we asked for
-		if (!bWasSet && AllocatedReceiveSize < (RequestedReceiveSize/2))
+		if (!bWasSet && AllocatedReceiveSize < RequestedReceiveSize)
 		{
 			RequestedReceiveSize = RequestedReceiveSize / 2;
 		}
@@ -280,7 +301,7 @@ bool FBackChannelConnection::Listen(const int16 Port)
 	return NewSocket != nullptr;
 }
 
-bool FBackChannelConnection::WaitForConnection(double InTimeout, TFunction<bool(TSharedRef<IBackChannelConnection>)> InDelegate)
+bool FBackChannelConnection::WaitForConnection(double InTimeout, TFunction<bool(TSharedRef<IBackChannelSocketConnection>)> InDelegate)
 {
 	FScopeLock Lock(&SocketMutex);
 
@@ -307,8 +328,17 @@ bool FBackChannelConnection::WaitForConnection(double InTimeout, TFunction<bool(
 
 		if (State == ESocketConnectionState::SCS_ConnectionError)
 		{
-			const TCHAR* SocketErr = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetSocketError(SE_GET_LAST_ERROR_CODE);
-			UE_LOG(LogBackChannel, Warning, TEXT("Socket has error %s"), SocketErr);
+			ESocketErrors Err = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetLastErrorCode();
+
+			if (Err == ESocketErrors::SE_NO_ERROR)
+			{
+				CheckSucceeded = true;
+			}
+			else
+			{
+				const TCHAR* SocketErr = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetSocketError(Err);
+				UE_LOG(LogBackChannel, Warning, TEXT("Socket has error %s"), SocketErr);
+			}
 		}
 		else
 		{
@@ -353,7 +383,7 @@ bool FBackChannelConnection::WaitForConnection(double InTimeout, TFunction<bool(
 					}
 					else
 					{
-						UE_LOG(LogBackChannel, Log, TEXT("Accepted connection on %s"), *Socket->GetDescription());
+						UE_LOG(LogBackChannel, Log, TEXT("Accepted connection from %s on %s"), *RemoteAddress->ToString(true),  *Socket->GetDescription());
 					}
 				}
 			}
@@ -389,6 +419,8 @@ int32 FBackChannelConnection::SendData(const void* InData, const int32 InSize)
 	int32 BytesSent(0);
 	Socket->Send((const uint8*)InData, InSize, BytesSent);
 
+	ResetStatsIfTime();
+
 	if (BytesSent == -1)
 	{
 		if (GBackChannelLogErrors)
@@ -397,10 +429,16 @@ int32 FBackChannelConnection::SendData(const void* InData, const int32 InSize)
 			const TCHAR* SocketErr = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->GetSocketError(LastError);
 			UE_CLOG(GBackChannelLogErrors, LogBackChannel, Error, TEXT("Failed to send %d bytes of data to %s. Err: %s"), InSize, *GetDescription(), SocketErr);
 		}
+
+		ConnectionStats.Errors++;
+		ConnectionStats.LastErrorTime = FPlatformTime::Seconds();
 	}
 	else
 	{
-		INC_DWORD_STAT_BY(STAT_BackChannelBytesSent, BytesSent);
+		ConnectionStats.PacketsSent++;
+		ConnectionStats.BytesSent += BytesSent;
+		ConnectionStats.LastSuccessTime = FPlatformTime::Seconds();
+		ConnectionStats.LastSendTime = ConnectionStats.LastSuccessTime;
 
 		UE_CLOG(GBackChannelLogPackets, LogBackChannel, Log, TEXT("Sent %d bytes of data"), BytesSent);
 	}
@@ -416,15 +454,46 @@ int32 FBackChannelConnection::ReceiveData(void* OutBuffer, const int32 BufferSiz
 	}
 
 	int32 BytesRead(0);
-	Socket->Recv((uint8*)OutBuffer, BufferSize, BytesRead, ESocketReceiveFlags::None);
+	Socket->Recv((uint8*)OutBuffer, BufferSize, BytesRead, ESocketReceiveFlags::None);	
+
+	ResetStatsIfTime();
 
 	// todo - close connection on certain errors
 	if (BytesRead > 0)
 	{
-		INC_DWORD_STAT_BY(STAT_BackChannelBytesRecv, BytesRead);
-
-		PacketsReceived++;
+		ConnectionStats.PacketsReceived++;
+		ConnectionStats.BytesReceived += BytesRead;
+		ConnectionStats.LastSuccessTime = FPlatformTime::Seconds();
+		ConnectionStats.LastReceiveTime = ConnectionStats.LastSuccessTime;
 		UE_CLOG(GBackChannelLogPackets, LogBackChannel, Log, TEXT("Received %d bytes of data"), BytesRead);
 	}
+	else if (BytesRead < 0)
+	{
+		// note - FSocket consumes WOULDBLOCk errors so there's not a lot to do here..
+	}
+
 	return BytesRead;
+}
+
+void FBackChannelConnection::ResetStatsIfTime()
+{
+	const double TimeNow = FPlatformTime::Seconds();
+
+	if (TimeNow - TimeSinceStatsSet  >= 1.0)
+	{
+		// stats reflect the last second
+		int PacketsReceived = ConnectionStats.PacketsReceived - LastStats.PacketsReceived;
+		int BytesReceived = ConnectionStats.BytesReceived - LastStats.BytesReceived;
+		int PacketsSent = ConnectionStats.PacketsSent - LastStats.PacketsSent;
+		int BytesSent = ConnectionStats.BytesSent - LastStats.BytesSent;
+		int Errors = ConnectionStats.Errors - LastStats.Errors;
+
+		SET_DWORD_STAT(STAT_BackChannelPacketsRecv, PacketsReceived);
+		SET_DWORD_STAT(STAT_BackChannelBytesRecv, BytesReceived);
+		SET_DWORD_STAT(STAT_BackChannelPacketsSent, PacketsSent);
+		SET_DWORD_STAT(STAT_BackChannelBytesSent, BytesSent);
+		SET_DWORD_STAT(STAT_BackChannelErrors, Errors);
+
+		LastStats = ConnectionStats;
+	}
 }

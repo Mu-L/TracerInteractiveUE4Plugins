@@ -241,6 +241,7 @@ namespace UnrealGameSync
 
 		IssueMonitor IssueMonitor;
 		IssueData Issue;
+		List<IssueBuildData> IssueBuilds;
 		List<IssueDiagnosticData> Diagnostics;
 		PerforceConnection Perforce;
 		TimeSpan? ServerTimeOffset;
@@ -257,10 +258,11 @@ namespace UnrealGameSync
 		System.Windows.Forms.Timer UpdateTimer;
 		StatusElementResources StatusElementResources;
 
-		IssueDetailsWindow(IssueMonitor IssueMonitor, IssueData Issue, List<IssueDiagnosticData> Diagnostics, string ServerAndPort, string UserName, TimeSpan? ServerTimeOffset, TextWriter Log, string CurrentStream)
+		IssueDetailsWindow(IssueMonitor IssueMonitor, IssueData Issue, List<IssueBuildData> IssueBuilds, List<IssueDiagnosticData> Diagnostics, string ServerAndPort, string UserName, TimeSpan? ServerTimeOffset, TextWriter Log, string CurrentStream)
 		{
 			this.IssueMonitor = IssueMonitor;
 			this.Issue = Issue;
+			this.IssueBuilds = IssueBuilds;
 			this.Diagnostics = Diagnostics;
 			this.Perforce = new PerforceConnection(UserName, null, ServerAndPort);
 			this.ServerTimeOffset = ServerTimeOffset;
@@ -294,7 +296,7 @@ namespace UnrealGameSync
 			}
 
 			int SelectIdx = 0;
-			foreach(string Stream in Issue.Builds.Select(x => x.Stream).Distinct().OrderBy(x => x))
+			foreach(string Stream in IssueBuilds.Select(x => x.Stream).Distinct().OrderBy(x => x))
 			{
 				StreamComboBox.Items.Add(Stream);
 				if(Stream == CurrentStream)
@@ -321,7 +323,13 @@ namespace UnrealGameSync
 				components.Dispose();
 			}
 
-			IssueMonitor.Release();
+			if (IssueMonitor != null)
+			{
+				IssueMonitor.StopTracking(Issue.Id);
+				IssueMonitor.OnIssuesChanged -= OnUpdateIssuesAsync;
+				IssueMonitor.Release();
+				IssueMonitor = null;
+			}
 
 			base.Dispose(disposing);
 		}
@@ -410,7 +418,7 @@ namespace UnrealGameSync
 			RichText.Append(@"}");
 		}
 
-		static string CreateRichTextErrors(IssueData Issue, List<IssueDiagnosticData> Diagnostics)
+		static string CreateRichTextErrors(IssueData Issue, List<IssueBuildData> IssueBuilds, List<IssueDiagnosticData> Diagnostics)
 		{
 			StringBuilder RichText = new StringBuilder();
 
@@ -422,7 +430,7 @@ namespace UnrealGameSync
 			foreach (IGrouping<long, IssueDiagnosticData> Group in Diagnostics.GroupBy(x => x.BuildId ?? -1))
 			{
 				// Step 'Foo'
-				IssueBuildData Build = Issue.Builds.FirstOrDefault(x => x.Id == Group.Key);
+				IssueBuildData Build = IssueBuilds.FirstOrDefault(x => x.Id == Group.Key);
 				if (Build != null)
 				{
 					RichText.Append(@"\pard");   // Paragraph default
@@ -494,7 +502,8 @@ namespace UnrealGameSync
 		{
 			UpdateSummaryTextIfChanged(SummaryTextBox, Issue.Summary.ToString());
 
-			BuildLinkLabel.Text = (Issue.Builds.Count > 0) ? Issue.Builds[0].JobName : "Unknown";
+			IssueBuildData FirstFailingBuild = IssueBuilds.FirstOrDefault(x => x.ErrorUrl != null);
+			BuildLinkLabel.Text = (FirstFailingBuild != null)? FirstFailingBuild.JobName : "Unknown";
 
 			StringBuilder Status = new StringBuilder();
 			if(IssueMonitor.HasPendingUpdate())
@@ -567,10 +576,10 @@ namespace UnrealGameSync
 				BuildListView.Invalidate();
 			}
 
-			UpdateSummaryTextIfChanged(StepNamesTextBox, String.Join(", ", Issue.Builds.Select(x => x.JobStepName).Distinct().OrderBy(x => x)));
-			UpdateSummaryTextIfChanged(StreamNamesTextBox, String.Join(", ", Issue.Builds.Select(x => x.Stream).Distinct().OrderBy(x => x)));
+			UpdateSummaryTextIfChanged(StepNamesTextBox, String.Join(", ", IssueBuilds.Select(x => x.JobStepName).Distinct().OrderBy(x => x)));
+			UpdateSummaryTextIfChanged(StreamNamesTextBox, String.Join(", ", IssueBuilds.Select(x => x.Stream).Distinct().OrderBy(x => x)));
 
-			string RtfText = CreateRichTextErrors(Issue, Diagnostics);
+			string RtfText = CreateRichTextErrors(Issue, IssueBuilds, Diagnostics);
 			if (LastDetailsText != RtfText)
 			{
 				using (MemoryStream Stream = new MemoryStream(Encoding.UTF8.GetBytes(RtfText), false))
@@ -595,13 +604,6 @@ namespace UnrealGameSync
 		{
 			bIsDisposing = true;
 			DestroyWorker();
-
-			if(IssueMonitor != null)
-			{
-				IssueMonitor.StopTracking(Issue.Id);
-				IssueMonitor.OnIssuesChanged -= OnUpdateIssuesAsync;
-				IssueMonitor = null;
-			}
 		}
 
 		void FetchAllBuildChanges()
@@ -891,7 +893,7 @@ namespace UnrealGameSync
 					SelectedStreamRanges = new List<PerforceChangeRange>();
 
 					int MaxChange = -1;
-					foreach(IGrouping<string, IssueBuildData> Group in Issue.Builds.Where(x => x.Stream == SelectedStream).OrderByDescending(x => x.Change).ThenByDescending(x => x.JobUrl).GroupBy(x => x.JobUrl))
+					foreach(IGrouping<string, IssueBuildData> Group in IssueBuilds.Where(x => x.Stream == SelectedStream).OrderByDescending(x => x.Change).ThenByDescending(x => x.JobUrl).GroupBy(x => x.JobUrl))
 					{
 						BuildGroup BuildGroup = new BuildGroup();
 						BuildGroup.JobName = Group.First().JobName;
@@ -1032,6 +1034,20 @@ namespace UnrealGameSync
 
 		public static void Show(Form Owner, IssueMonitor IssueMonitor, string ServerAndPort, string UserName, TimeSpan? ServerTimeOffset, IssueData Issue, TextWriter Log, string CurrentStream)
 		{
+			List<IssueBuildData> IssueBuilds = new List<IssueBuildData>();
+			try
+			{
+				IssueBuilds = RESTApi.GET<List<IssueBuildData>>(IssueMonitor.ApiUrl, String.Format("issues/{0}/builds", Issue.Id));
+			}
+			catch (Exception Ex)
+			{
+				MessageBox.Show(Owner, Ex.ToString(), String.Format("Error querying builds for issue {0}", Issue.Id), MessageBoxButtons.OK);
+			}
+			Show(Owner, IssueMonitor, ServerAndPort, UserName, ServerTimeOffset, Issue, IssueBuilds, Log, CurrentStream);
+		}
+
+		public static void Show(Form Owner, IssueMonitor IssueMonitor, string ServerAndPort, string UserName, TimeSpan? ServerTimeOffset, IssueData Issue, List<IssueBuildData> IssueBuilds, TextWriter Log, string CurrentStream)
+		{
 			IssueDetailsWindow Window = ExistingWindows.FirstOrDefault(x => x.IssueMonitor == IssueMonitor && x.Issue.Id == Issue.Id);
 			if(Window == null)
 			{
@@ -1043,10 +1059,17 @@ namespace UnrealGameSync
 					return;
 				}
 
-				Window = new IssueDetailsWindow(IssueMonitor, Issue, Diagnostics, ServerAndPort, UserName, ServerTimeOffset, Log, CurrentStream);
+				Window = new IssueDetailsWindow(IssueMonitor, Issue, IssueBuilds, Diagnostics, ServerAndPort, UserName, ServerTimeOffset, Log, CurrentStream);
 				Window.Owner = Owner;
-				Window.StartPosition = FormStartPosition.Manual;
-				Window.Location = new Point(Owner.Location.X + (Owner.Width - Window.Width) / 2, Owner.Location.Y + (Owner.Height - Window.Height) / 2);
+				if (Owner.Visible && Owner.WindowState != FormWindowState.Minimized)
+				{
+					Window.StartPosition = FormStartPosition.Manual;
+					Window.Location = new Point(Owner.Location.X + (Owner.Width - Window.Width) / 2, Owner.Location.Y + (Owner.Height - Window.Height) / 2);
+				}
+				else
+				{
+					Window.StartPosition = FormStartPosition.CenterScreen;
+				}
 				Window.Show();
 
 				ExistingWindows.Add(Window);
@@ -1054,6 +1077,7 @@ namespace UnrealGameSync
 			}
 			else
 			{
+				Window.Location = new Point(Owner.Location.X + (Owner.Width - Window.Width) / 2, Owner.Location.Y + (Owner.Height - Window.Height) / 2);
 				Window.Activate();
 			}
 		}
@@ -1348,7 +1372,7 @@ namespace UnrealGameSync
 
 		private void DescriptionLabel_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
 		{
-			IssueBuildData LastBuild = Issue.Builds.Where(x => x.Stream == SelectedStream).OrderByDescending(x => x.Change).ThenByDescending(x => x.ErrorUrl).FirstOrDefault();
+			IssueBuildData LastBuild = IssueBuilds.Where(x => x.Stream == SelectedStream).OrderByDescending(x => x.Change).ThenByDescending(x => x.ErrorUrl).FirstOrDefault();
 			if(LastBuild != null)
 			{
 				System.Diagnostics.Process.Start(LastBuild.ErrorUrl);
@@ -1390,7 +1414,7 @@ namespace UnrealGameSync
 
 		private void BuildLinkLabel_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
 		{
-			IssueBuildData Build = Issue.Builds.FirstOrDefault(x => x.ErrorUrl != null);
+			IssueBuildData Build = IssueBuilds.FirstOrDefault(x => x.ErrorUrl != null);
 			if (Build != null)
 			{
 				System.Diagnostics.Process.Start(Build.ErrorUrl);

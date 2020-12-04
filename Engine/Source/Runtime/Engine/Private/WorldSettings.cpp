@@ -37,6 +37,7 @@
 #include "MeshMergeModule.h"
 #include "Settings/EditorExperimentalSettings.h"
 #include "Landscape.h"
+#include "Rendering/StaticLightingSystemInterface.h"
 #endif 
 
 #define LOCTEXT_NAMESPACE "ErrorChecking"
@@ -518,17 +519,6 @@ void AWorldSettings::CheckForErrors()
 			->AddToken(FTextToken::Create(LOCTEXT( "MapCheck_Message_RebuildLighting", "Maps need lighting rebuilt" ) ))
 			->AddToken(FMapErrorToken::Create(FMapErrors::RebuildLighting));
 	}
-
-	static const auto CVarAnisotropicBRDF			= IConsoleManager::Get().FindConsoleVariable(TEXT("r.AnisotropicBRDF"));
-	static const auto CVarBasePassOutputVelocity	= IConsoleManager::Get().FindConsoleVariable(TEXT("r.BasePassOutputsVelocity"));
-
-	if (CVarAnisotropicBRDF && CVarBasePassOutputVelocity && CVarAnisotropicBRDF->GetInt() && CVarBasePassOutputVelocity->GetInt())
-	{
-		FMessageLog("MapCheck").Error()
-			->AddToken(FUObjectToken::Create(this))
-			->AddToken(FTextToken::Create(LOCTEXT("MapCheck_Message_AnisotropicBRDF_or_BasePassVelocity", "Anisotropic BRDF and 'output velocity during base pass' options are mutually exclusive. See Project Settings (Rendering) or r.AnisotropicBRDF, r.BasePassOutputsVelocity")))
-			->AddToken(FMapErrorToken::Create(FMapErrors::AnisotropicBRDF_or_BasePassVelocity));
-	}
 }
 
 bool AWorldSettings::CanEditChange(const FProperty* InProperty) const
@@ -596,6 +586,13 @@ void AWorldSettings::PostEditChangeProperty(FPropertyChangedEvent& PropertyChang
 	LightmassSettings.FullyOccludedSamplesFraction = FMath::Clamp(LightmassSettings.FullyOccludedSamplesFraction, 0.0f, 1.0f);
 	LightmassSettings.MaxOcclusionDistance = FMath::Max(LightmassSettings.MaxOcclusionDistance, 0.0f);
 	LightmassSettings.EnvironmentIntensity = FMath::Max(LightmassSettings.EnvironmentIntensity, 0.0f);
+
+#if WITH_EDITOR
+	if (PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(FLightmassWorldInfoSettings, VolumetricLightmapDetailCellSize))
+	{
+		FStaticLightingSystemInterface::OnLightmassImportanceVolumeModified.Broadcast();
+	}
+#endif
 
 	// Ensure texture size is power of two between 512 and 4096.
 	PackedLightAndShadowMapTextureSize = FMath::Clamp<uint32>( FMath::RoundUpToPowerOfTwo( PackedLightAndShadowMapTextureSize ), 512, 4096 );

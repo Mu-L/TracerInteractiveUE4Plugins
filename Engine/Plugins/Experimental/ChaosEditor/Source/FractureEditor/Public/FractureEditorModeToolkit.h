@@ -7,7 +7,6 @@
 #include "Toolkits/BaseToolkit.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Layout/SSplitter.h"
-#include "GeometryCollection/GeometryCollectionActor.h"
 
 class IDetailsView;
 class SScrollBox;
@@ -16,6 +15,14 @@ class UEditableMesh;
 struct FFractureContext;
 class FGeometryCollection;
 class SGeometryCollectionOutliner;
+class AGeometryCollectionActor;
+class UGeometryCollectionComponent;
+class UGeometryCollection;
+
+namespace GeometryCollection
+{
+enum class ESelectionMode: uint8;
+}
 
 class FFractureEditorModeToolkit : public FModeToolkit, public FGCObject
 {
@@ -65,6 +72,7 @@ public:
 	void OnMerge(){}
 	void OnMoveUp();
 	void GenerateAsset();
+	void ResetAsset();
 
 	void ViewUpOneLevel();
 	void ViewDownOneLevel();

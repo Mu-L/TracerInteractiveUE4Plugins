@@ -443,29 +443,38 @@ void RadixSort_Spine(
 	}
 
 	// Scan raking totals.
-	[unroll]
-	for ( uint RakingOffset = 1; RakingOffset < RAKING_THREADS_PER_DIGIT; RakingOffset <<= 1 )
 	{
-		// Acquire LocalRakingTotals.
-		PPS_BARRIER();
-		Total = Total + LocalRakingTotals[RakingIndex - RakingOffset];
-		LocalRakingTotals[RakingIndex] = Total;
+		[unroll]
+		for ( uint RakingOffset = 1; RakingOffset < RAKING_THREADS_PER_DIGIT; RakingOffset <<= 1 )
+		{
+			// Acquire LocalRakingTotals.
+			PPS_BARRIER();
+			Total = Total + LocalRakingTotals[RakingIndex - RakingOffset];
+			LocalRakingTotals[RakingIndex] = Total;
+		}
 	}
 
 	// Acquire LocalRakingTotals.
 	GroupMemoryBarrierWithGroupSync();
 
-	uint DigitSum = LocalRakingTotals[RAKING_COUNTERS_PER_DIGIT * (ThreadId+1) - 1];
+	uint DigitSum = 0;
+	if(ThreadId < RAKING_THREAD_COUNT)
+	{
+		DigitSum = LocalRakingTotals[RAKING_COUNTERS_PER_DIGIT * (ThreadId+1) - 1];
+	}
 	LocalTotals[ThreadId + DIGIT_SCAN_PADDING] = DigitSum;
 
 	// Scan local totals.
-	[unroll]
-	for ( uint RakingOffset = 1; RakingOffset < DIGIT_COUNT; RakingOffset <<= 1 )
 	{
-		// Acquire LocalTotals.
-		PPS_BARRIER();
-		DigitSum += LocalTotals[ThreadId + DIGIT_SCAN_PADDING - RakingOffset];
-		LocalTotals[ThreadId + DIGIT_SCAN_PADDING] = DigitSum;
+		[unroll]
+		for ( uint RakingOffset = 1; RakingOffset < DIGIT_COUNT; RakingOffset <<= 1 )
+		{
+			// Acquire LocalTotals.
+			PPS_BARRIER();
+			DigitSum += LocalTotals[ThreadId + DIGIT_SCAN_PADDING - RakingOffset];
+			GroupMemoryBarrierWithGroupSync();
+			LocalTotals[ThreadId + DIGIT_SCAN_PADDING] = DigitSum;
+		}
 	}
 
 	// Acquire LocalTotals.
@@ -625,7 +634,11 @@ void ScanKeys(
 	// Acquire LocalRakingTotals.
 	GroupMemoryBarrierWithGroupSync();
 
-	uint DigitSum = LocalRakingTotals[RAKING_COUNTERS_PER_DIGIT * (ThreadId+1) - 1];
+	uint DigitSum = 0;
+	if(ThreadId < RAKING_THREAD_COUNT)
+	{
+		DigitSum = LocalRakingTotals[RAKING_COUNTERS_PER_DIGIT * (ThreadId+1) - 1];
+	}
 	DigitTotalThisTile = DigitSum;
 	LocalTotals[ThreadId + DIGIT_SCAN_PADDING] = DigitSum;
 
@@ -636,6 +649,7 @@ void ScanKeys(
 		// Acquire LocalTotals.
 		PPS_BARRIER();
 		DigitSum += LocalTotals[ThreadId + DIGIT_SCAN_PADDING - RakingOffset];
+		GroupMemoryBarrierWithGroupSync();
 		LocalTotals[ThreadId + DIGIT_SCAN_PADDING] = DigitSum;
 	}
 

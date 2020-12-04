@@ -105,7 +105,8 @@ void FShaderMapBase::UnfreezeContent()
 {
 	if (Content && FrozenContentSize > 0u)
 	{
-		void* UnfrozenMemory = FMemory::Malloc(ContentTypeLayout.Size, ContentTypeLayout.Alignment);
+		// Invoke 'operator new' rather than malloc, as unfrozen memory is expected to be allocate via 'new'
+		void* UnfrozenMemory = ::operator new(ContentTypeLayout.Size);
 
 		FMemoryUnfreezeContent Context;
 		Context.PrevPointerTable = PointerTable;
@@ -119,7 +120,7 @@ void FShaderMapBase::UnfreezeContent()
 
 #define CHECK_SHADERMAP_DEPENDENCIES (WITH_EDITOR || !(UE_BUILD_SHIPPING || UE_BUILD_TEST))
 
-bool FShaderMapBase::Serialize(FArchive& Ar, bool bInlineShaderResources, bool bLoadedByCookedMaterial)
+bool FShaderMapBase::Serialize(FArchive& Ar, bool bInlineShaderResources, bool bLoadedByCookedMaterial, bool bInlineShaderCode)
 {
 	LLM_SCOPE(ELLMTag::Shaders);
 	bool bContentValid = true;
@@ -165,7 +166,7 @@ bool FShaderMapBase::Serialize(FArchive& Ar, bool bInlineShaderResources, bool b
 
 		bool bShareCode = false;
 #if WITH_EDITOR
-		bShareCode = FShaderCodeLibrary::IsEnabled() && Ar.IsCooking();
+		bShareCode = !bInlineShaderCode && FShaderCodeLibrary::IsEnabled() && Ar.IsCooking();
 #endif // WITH_EDITOR
 		Ar << bShareCode;
 #if WITH_EDITOR
@@ -178,7 +179,7 @@ bool FShaderMapBase::Serialize(FArchive& Ar, bool bInlineShaderResources, bool b
 		{
 			FSHAHash ResourceHash = Code->ResourceHash;
 			Ar << ResourceHash;
-			FShaderCodeLibrary::AddShaderCode(GetShaderPlatform(), Code);
+			FShaderCodeLibrary::AddShaderCode(GetShaderPlatform(), Code, GetAssociatedAssets());
 		}
 		else
 #endif // WITH_EDITOR
@@ -715,6 +716,7 @@ void FShaderMapContent::Finalize(const FShaderMapResourceCode* Code)
 	for (int32 SortedIndex = 0; SortedIndex < SortedEntries.Num(); ++SortedIndex)
 	{
 		const FSortedShaderEntry& SortedEntry = SortedEntries[SortedIndex];
+
 		const uint16 Key = MakeShaderHash(SortedEntry.TypeName, SortedEntry.PermutationId);
 		NewShaders.Add(Shaders[SortedEntry.Index]);
 		ShaderTypes.Add(SortedEntry.TypeName);
@@ -730,16 +732,16 @@ void FShaderMapContent::UpdateHash(FSHA1& Hasher) const
 {
 	for (int32 ShaderIndex = 0; ShaderIndex < Shaders.Num(); ++ShaderIndex)
 	{
-		const FHashedName& TypeName = ShaderTypes[ShaderIndex];
+		const uint64 TypeNameHash = ShaderTypes[ShaderIndex].GetHash();
 		const int32 PermutationId = ShaderPermutations[ShaderIndex];
-		Hasher.Update((uint8*)&TypeName, sizeof(TypeName));
+		Hasher.Update((uint8*)&TypeNameHash, sizeof(TypeNameHash));
 		Hasher.Update((uint8*)&PermutationId, sizeof(PermutationId));
 	}
 
 	for (const FShaderPipeline* Pipeline : GetShaderPipelines())
 	{
-		const FHashedName& TypeName = Pipeline->TypeName;
-		Hasher.Update((uint8*)&TypeName, sizeof(TypeName));
+		const uint64 TypeNameHash = Pipeline->TypeName.GetHash();
+		Hasher.Update((uint8*)&TypeNameHash, sizeof(TypeNameHash));
 	}
 }
 

@@ -3,7 +3,7 @@
 #include "LightmapUniformShaderParameters.h"
 #include "SceneManagement.h"
 #include "LightMap.h"
-#include "VT/VirtualTexture.h"
+#include "VT/LightmapVirtualTexture.h"
 #include "UnrealEngine.h"
 
 IMPLEMENT_GLOBAL_SHADER_PARAMETER_STRUCT(FPrecomputedLightingUniformParameters, "PrecomputedLightingBuffer");
@@ -103,7 +103,7 @@ void GetPrecomputedLightingParameters(
 			IAllocatedVirtualTexture* AllocatedVT = ResourceCluster->AcquireAllocatedVT();
 			check(AllocatedVT);
 
-			AllocatedVT->GetPackedPageTableUniform(&Parameters.LightmapVTPackedPageTableUniform[0], true);
+			AllocatedVT->GetPackedPageTableUniform(&Parameters.LightmapVTPackedPageTableUniform[0]);
 			NumLightmapVTLayers = AllocatedVT->GetNumTextureLayers();
 			for (uint32 LayerIndex = 0u; LayerIndex < NumLightmapVTLayers; ++LayerIndex)
 			{

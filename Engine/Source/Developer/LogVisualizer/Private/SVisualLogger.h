@@ -65,7 +65,7 @@ public:
 
 	void OnFiltersSearchChanged(const FText& Filter);
 	void OnLogLineSelectionChanged(TSharedPtr<struct FLogEntryItem> SelectedItem, int64 UserData, FName TagName);
-	FReply OnKeyboaedRedirection(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent);
+	FReply OnKeyboardRedirection(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent);
 
 
 	bool HandleStartRecordingCommandCanExecute() const;
@@ -102,6 +102,7 @@ public:
 	void HandleTabManagerPersistLayout(const TSharedRef<FTabManager::FLayout>& LayoutToSave);
 
 	void OnNewWorld(UWorld* NewWorld);
+	void OnWorldDestroyed(UWorld* InWorld);
 	void ResetData();
 
 protected:

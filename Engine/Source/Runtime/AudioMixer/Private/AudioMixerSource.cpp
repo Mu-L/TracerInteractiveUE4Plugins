@@ -10,6 +10,7 @@
 #include "IAudioExtensionPlugin.h"
 #include "ProfilingDebugging/CsvProfiler.h"
 #include "Sound/AudioSettings.h"
+#include "Sound/SoundModulationDestination.h"
 
 // Link to "Audio" profiling category
 CSV_DECLARE_CATEGORY_MODULE_EXTERN(AUDIOMIXERCORE_API, Audio);
@@ -25,6 +26,224 @@ FAutoConsoleVariableRef CVarUseListenerOverrideForSpread(
 
 namespace Audio
 {
+	namespace ModulationUtils
+	{
+		static const FSoundModulationDestinationSettings DefaultDestination;
+
+		const FSoundModulationDestinationSettings& GetRoutedVolumeModulation(const FWaveInstance& InWaveInstance, const USoundWave& InWaveData, FActiveSound* InActiveSound)
+		{
+			const FSoundModulationDefaultRoutingSettings& RoutingSettings = InActiveSound->ModulationRouting;
+			switch (RoutingSettings.VolumeRouting)
+			{
+				case EModulationRouting::Inherit:
+				{
+					switch (InWaveData.ModulationSettings.VolumeRouting)
+					{
+						case EModulationRouting::Inherit:
+						{
+							USoundClass* SoundClass = InActiveSound->GetSoundClass();
+							if (InWaveInstance.SoundClass)
+							{
+								SoundClass = InWaveInstance.SoundClass;
+							}
+							if (SoundClass)
+							{
+								return SoundClass->Properties.ModulationSettings.VolumeModulationDestination;
+							}
+						}
+						break;
+
+						case EModulationRouting::Override:
+						{
+							return InWaveData.ModulationSettings.VolumeModulationDestination;
+						}
+						break;
+
+						case EModulationRouting::Disable:
+						default:
+						break;
+					}
+				}
+				break;
+
+				case EModulationRouting::Override:
+				{
+					return RoutingSettings.VolumeModulationDestination;
+				}
+				break;
+
+				case EModulationRouting::Disable:
+				default:
+				break;
+			}
+
+			return DefaultDestination;
+		}
+
+		const FSoundModulationDestinationSettings& GetRoutedPitchModulation(const FWaveInstance& InWaveInstance, const USoundWave& InWaveData, FActiveSound* InActiveSound)
+		{
+			const FSoundModulationDefaultRoutingSettings& RoutingSettings = InActiveSound->ModulationRouting;
+			switch (RoutingSettings.PitchRouting)
+			{
+				case EModulationRouting::Inherit:
+				{
+					switch (InWaveData.ModulationSettings.PitchRouting)
+					{
+						case EModulationRouting::Inherit:
+						{
+							USoundClass* SoundClass = InActiveSound->GetSoundClass();
+							if (InWaveInstance.SoundClass)
+							{
+								SoundClass = InWaveInstance.SoundClass;
+							}
+							if (SoundClass)
+							{
+								return SoundClass->Properties.ModulationSettings.PitchModulationDestination;
+							}
+						}
+						break;
+
+						case EModulationRouting::Override:
+						{
+							return InWaveData.ModulationSettings.PitchModulationDestination;
+						}
+						break;
+
+						case EModulationRouting::Disable:
+						default:
+						break;
+					}
+				}
+				break;
+
+				case EModulationRouting::Override:
+				{
+					return RoutingSettings.PitchModulationDestination;
+				}
+				break;
+				case EModulationRouting::Disable:
+				default:
+				break;
+			}
+
+			return DefaultDestination;
+		}
+
+		const FSoundModulationDestinationSettings& GetRoutedHighpassModulation(const FWaveInstance& InWaveInstance, const USoundWave& InWaveData, FActiveSound* InActiveSound)
+		{
+			const FSoundModulationDefaultRoutingSettings& RoutingSettings = InActiveSound->ModulationRouting;
+			switch (RoutingSettings.HighpassRouting)
+			{
+				case EModulationRouting::Inherit:
+				{
+					switch (InWaveData.ModulationSettings.HighpassRouting)
+					{
+						case EModulationRouting::Inherit:
+						{
+							USoundClass* SoundClass = InActiveSound->GetSoundClass();
+							if (InWaveInstance.SoundClass)
+							{
+								SoundClass = InWaveInstance.SoundClass;
+							}
+							if (SoundClass)
+							{
+								return SoundClass->Properties.ModulationSettings.HighpassModulationDestination;
+							}
+						}
+						break;
+
+						case EModulationRouting::Override:
+						{
+							return InWaveData.ModulationSettings.HighpassModulationDestination;
+						}
+						break;
+
+						case EModulationRouting::Disable:
+						default:
+						break;
+					}
+				}
+				break;
+
+				case EModulationRouting::Override:
+				{
+					return RoutingSettings.HighpassModulationDestination;
+				}
+				break;
+
+				case EModulationRouting::Disable:
+				default:
+				break;
+			}
+
+			return DefaultDestination;
+		}
+
+		const FSoundModulationDestinationSettings& GetRoutedLowpassModulation(const FWaveInstance& InWaveInstance, const USoundWave& InWaveData, FActiveSound* InActiveSound)
+		{
+			const FSoundModulationDefaultRoutingSettings& RoutingSettings = InActiveSound->ModulationRouting;
+			switch (RoutingSettings.LowpassRouting)
+			{
+				case EModulationRouting::Inherit:
+				{
+					switch (InWaveData.ModulationSettings.LowpassRouting)
+					{
+						case EModulationRouting::Inherit:
+						{
+							USoundClass* SoundClass = InActiveSound->GetSoundClass();
+							if (InWaveInstance.SoundClass)
+							{
+								SoundClass = InWaveInstance.SoundClass;
+							}
+							if (SoundClass)
+							{
+								return SoundClass->Properties.ModulationSettings.LowpassModulationDestination;
+							}
+						}
+						break;
+
+						case EModulationRouting::Override:
+						{
+							return InWaveData.ModulationSettings.LowpassModulationDestination;
+						}
+						break;
+
+						case EModulationRouting::Disable:
+						default:
+						break;
+					}
+				}
+				break;
+
+				case EModulationRouting::Override:
+				{
+					return RoutingSettings.LowpassModulationDestination;
+				}
+				break;
+
+				case EModulationRouting::Disable:
+				default:
+				break;
+			}
+
+			return DefaultDestination;
+		}
+
+		FSoundModulationDefaultSettings GetRoutedModulation(const FWaveInstance& InWaveInstance, const USoundWave& InWaveData, FActiveSound* InActiveSound)
+		{
+			FSoundModulationDefaultSettings Settings;
+			if (InActiveSound)
+			{
+				Settings.VolumeModulationDestination = GetRoutedVolumeModulation(InWaveInstance, InWaveData, InActiveSound);
+				Settings.PitchModulationDestination = GetRoutedPitchModulation(InWaveInstance, InWaveData, InActiveSound);
+				Settings.HighpassModulationDestination = GetRoutedHighpassModulation(InWaveInstance, InWaveData, InActiveSound);
+				Settings.LowpassModulationDestination = GetRoutedLowpassModulation(InWaveInstance, InWaveData, InActiveSound);
+			}
+
+			return Settings;
+		}
+	} // namespace ModulationUtils
+
 	FMixerSource::FMixerSource(FAudioDevice* InAudioDevice)
 		: FSoundSource(InAudioDevice)
 		, MixerDevice(static_cast<FMixerDevice*>(InAudioDevice))
@@ -46,6 +265,7 @@ namespace Audio
 		, bIsVorbis(false)
 		, bIsStoppingVoicesEnabled(InAudioDevice->IsStoppingVoicesEnabled())
 		, bSendingAudioToBuses(false)
+		, bPrevAllowedSpatializationSetting(false)
 	{
 	}
 
@@ -66,29 +286,32 @@ namespace Audio
 
 		FSoundSource::InitCommon();
 
-		check(WaveInstance->WaveData);
+		check(WaveInstance);
 
-		if (WaveInstance->WaveData->NumChannels == 0)
+		USoundWave* WaveData = WaveInstance->WaveData;
+		check(WaveData);
+
+		if (WaveData->NumChannels == 0)
 		{
-			UE_LOG(LogAudioMixer, Warning, TEXT("Soundwave %s has invalid compressed data."), *(WaveInstance->WaveData->GetName()));
+			UE_LOG(LogAudioMixer, Warning, TEXT("Soundwave %s has invalid compressed data."), *(WaveData->GetName()));
 			FreeResources();
 			return false;
 		}
 
 		// Get the number of frames before creating the buffer
 		int32 NumFrames = INDEX_NONE;
-		if (WaveInstance->WaveData->DecompressionType != DTYPE_Procedural)
+		if (WaveData->DecompressionType != DTYPE_Procedural)
 		{
-			check(!InWaveInstance->WaveData->RawPCMData || InWaveInstance->WaveData->RawPCMDataSize);
-			const int32 NumBytes = WaveInstance->WaveData->RawPCMDataSize;
+			check(!WaveData->RawPCMData || WaveData->RawPCMDataSize);
+			const int32 NumBytes = WaveData->RawPCMDataSize;
 			if (WaveInstance->WaveData->NumChannels > 0)
 			{
-				NumFrames = NumBytes / (WaveInstance->WaveData->NumChannels * sizeof(int16));
+				NumFrames = NumBytes / (WaveData->NumChannels * sizeof(int16));
 			}
 		}
 
 		// Unfortunately, we need to know if this is a vorbis source since channel maps are different for 5.1 vorbis files
-		bIsVorbis = WaveInstance->WaveData->bDecompressedFromOgg;
+		bIsVorbis = WaveData->bDecompressedFromOgg;
 
 		bIsStoppingVoicesEnabled = AudioDevice->IsStoppingVoicesEnabled();
 
@@ -113,16 +336,25 @@ namespace Audio
 			// Initialize the source voice with the necessary format information
 			FMixerSourceVoiceInitParams InitParams;
 			InitParams.SourceListener = this;
-			InitParams.NumInputChannels = WaveInstance->WaveData->NumChannels;
+			InitParams.NumInputChannels = WaveData->NumChannels;
 			InitParams.NumInputFrames = NumFrames;
 			InitParams.SourceVoice = MixerSourceVoice;
 			InitParams.bUseHRTFSpatialization = UseObjectBasedSpatialization();
 			InitParams.bIsExternalSend = MixerDevice->bSpatializationIsExternalSend;
-			InitParams.bIsAmbisonics = WaveInstance->bIsAmbisonics && (WaveInstance->WaveData->NumChannels == 4);
+			InitParams.bIsSoundfield = WaveInstance->bIsAmbisonics && (WaveData->NumChannels == 4);
 
-			if (WaveInstance->bIsAmbisonics && (WaveInstance->WaveData->NumChannels != 4))
+			FActiveSound* ActiveSound = WaveInstance->ActiveSound;
+			InitParams.ModulationSettings = ModulationUtils::GetRoutedModulation(*WaveInstance, *WaveData, ActiveSound);
+
+			// Copy quantization request data
+			if (WaveInstance->QuantizedRequestData)
 			{
-				UE_LOG(LogAudioMixer, Warning, TEXT("Sound wave %s was flagged as being ambisonics but had a channel count of %d. Currently the audio engine only supports FOA sources that have four channels."), *InWaveInstance->GetName(), WaveInstance->WaveData->NumChannels);
+				InitParams.QuantizedRequestData = *WaveInstance->QuantizedRequestData;
+			}
+
+			if (WaveInstance->bIsAmbisonics && (WaveData->NumChannels != 4))
+			{
+				UE_LOG(LogAudioMixer, Warning, TEXT("Sound wave %s was flagged as being ambisonics but had a channel count of %d. Currently the audio engine only supports FOA sources that have four channels."), *InWaveInstance->GetName(), WaveData->NumChannels);
 			}
 
 			InitParams.AudioComponentUserID = WaveInstance->ActiveSound->GetAudioComponentUserID();
@@ -157,53 +389,34 @@ namespace Audio
 				}
 
 				// Setup the bus Id if this source is a bus
-				if (WaveInstance->WaveData->bIsBus)
+				if (WaveData->bIsSourceBus)
 				{
-					InitParams.BusId = WaveInstance->WaveData->GetUniqueID();
-					if (!WaveInstance->WaveData->IsLooping())
+					// We need to check if the source bus has an audio bus specified
+					USoundSourceBus* SoundSourceBus = CastChecked<USoundSourceBus>(WaveData);
+
+					// If it does, we will use that audio bus as the source of the audio data for the source bus
+					if (SoundSourceBus->AudioBus)
 					{
-						InitParams.BusDuration = WaveInstance->WaveData->GetDuration();
+						InitParams.AudioBusId = SoundSourceBus->AudioBus->GetUniqueID();
 					}
-				}
-
-				// Toggle muting the source if sending only to output bus.
-				// This can get set even if the source doesn't have bus sends since bus sends can be dynamically enabled.
-				InitParams.bOutputToBusOnly = WaveInstance->bOutputToBusOnly;
-				DynamicBusSendInfos.Reset();
-
-				// If this source is sending its audio to a bus
-				for (int32 BusSendType = 0; BusSendType < (int32)EBusSendType::Count; ++BusSendType)
-				{
-					// And add all the source bus sends
-					for (FSoundSourceBusSendInfo& SendInfo : WaveInstance->SoundSourceBusSends[BusSendType])
+					else
 					{
-						if (SendInfo.SoundSourceBus != nullptr)
-						{
-							FMixerBusSend BusSend;
-							BusSend.BusId = SendInfo.SoundSourceBus->GetUniqueID();
-							BusSend.SendLevel = SendInfo.SendLevel;
-							InitParams.BusSends[BusSendType].Add(BusSend);
+						InitParams.AudioBusId = WaveData->GetUniqueID();
+					}
 
-							FDynamicBusSendInfo DynamicBusSendInfo;
-							DynamicBusSendInfo.SendLevel = SendInfo.SendLevel;
-							DynamicBusSendInfo.BusId = BusSend.BusId;
-							DynamicBusSendInfo.BusSendLevelControlMethod = SendInfo.SourceBusSendLevelControlMethod;
-							DynamicBusSendInfo.BusSendType = (EBusSendType)BusSendType;
-							DynamicBusSendInfo.MinSendLevel = SendInfo.MinSendLevel;
-							DynamicBusSendInfo.MaxSendLevel = SendInfo.MaxSendLevel;
-							DynamicBusSendInfo.MinSendDistance = SendInfo.MinSendDistance;
-							DynamicBusSendInfo.MaxSendDistance = SendInfo.MaxSendDistance;
-							DynamicBusSendInfo.CustomSendLevelCurve = SendInfo.CustomSendLevelCurve;
-
-							// Copy the bus SourceBusSendInfo structs to a local copy so we can update it in the update tick
-							DynamicBusSendInfos.Add(DynamicBusSendInfo);
-
-							// Flag that we're sending audio to buses so we can check for updates to send levels
-							bSendingAudioToBuses = true;
-						}
+					if (!WaveData->IsLooping())
+					{
+						InitParams.SourceBusDuration = WaveData->GetDuration();
 					}
 				}
 			}
+
+			// Toggle muting the source if sending only to output bus.
+			// This can get set even if the source doesn't have bus sends since bus sends can be dynamically enabled.
+			InitParams.bOutputToBusOnly = WaveInstance->bOutputToBusOnly;
+			DynamicBusSendInfos.Reset();
+
+			SetupBusData(InitParams.AudioBusSends);
 
 			// Don't set up any submixing if we're set to output to bus only
 			if (!InitParams.bOutputToBusOnly)
@@ -218,6 +431,7 @@ namespace Audio
 
 					FMixerSourceSubmixSend SubmixSend;
 					SubmixSend.Submix = SubmixPtr;
+					SubmixSend.SubmixSendStage = EMixerSourceSubmixSendStage::PostDistanceAttenuation;
 					SubmixSend.SendLevel = 1.0f;
 					SubmixSend.bIsMainSend = true;
 					SubmixSend.SoundfieldFactory = MixerDevice->GetFactoryForSubmixInstance(SubmixSend.Submix);
@@ -231,6 +445,12 @@ namespace Audio
 					{
 						FMixerSourceSubmixSend SubmixSend;
 						SubmixSend.Submix = MixerDevice->GetSubmixInstance(SendInfo.SoundSubmix);
+
+						SubmixSend.SubmixSendStage = EMixerSourceSubmixSendStage::PostDistanceAttenuation;
+						if (SendInfo.SendStage == ESubmixSendStage::PreDistanceAttenuation)
+						{
+							SubmixSend.SubmixSendStage = EMixerSourceSubmixSendStage::PreDistanceAttenuation;
+						}
 						SubmixSend.SendLevel = SendInfo.SendLevel;
 						SubmixSend.bIsMainSend = false;
 						SubmixSend.SoundfieldFactory = MixerDevice->GetFactoryForSubmixInstance(SubmixSend.Submix);
@@ -266,6 +486,9 @@ namespace Audio
 			// Whether or not we're 3D
 			bIs3D = !UseObjectBasedSpatialization() && WaveInstance->GetUseSpatialization() && SoundBuffer->NumChannels < 3;
 
+			// Pass on the fact that we're 3D to the init params
+			InitParams.bIs3D = bIs3D;
+
 			// Grab the source's reverb plugin settings
 			InitParams.SpatializationPluginSettings = UseSpatializationPlugin() ? WaveInstance->SpatializationPluginSettings : nullptr;
 
@@ -275,14 +498,11 @@ namespace Audio
 			// Grab the source's reverb plugin settings
 			InitParams.ReverbPluginSettings = UseReverbPlugin() ? WaveInstance->ReverbPluginSettings : nullptr;
 
-			// Grab the source's modulation plugin settings
-			InitParams.ModulationPluginSettings = UseModulationPlugin() ? WaveInstance->ModulationPluginSettings : nullptr;
-
 			// We support reverb
 			SetReverbApplied(true);
 
 			// Update the buffer sample rate to the wave instance sample rate in case it was serialized incorrectly
-			MixerBuffer->InitSampleRate(WaveInstance->WaveData->GetSampleRateForCurrentPlatform());
+			MixerBuffer->InitSampleRate(WaveData->GetSampleRateForCurrentPlatform());
 
 			// Retrieve the raw pcm buffer data and the precached buffers before initializing so we can avoid having USoundWave ptrs in audio renderer thread
 			EBufferType::Type BufferType = MixerBuffer->GetType();
@@ -295,7 +515,6 @@ namespace Audio
 #if PLATFORM_NUM_AUDIODECOMPRESSION_PRECACHE_BUFFERS > 0
 			else if (BufferType == EBufferType::PCMRealTime || BufferType == EBufferType::Streaming)
 			{
-				USoundWave* WaveData = WaveInstance->WaveData;
 				if (WaveData->CachedRealtimeFirstBuffer)
 				{
 					const uint32 NumPrecacheSamples = (uint32)(WaveData->NumPrecacheFrames * WaveData->NumChannels);
@@ -342,6 +561,90 @@ namespace Audio
 		return false;
 	}
 
+	void FMixerSource::SetupBusData(TArray<FInitAudioBusSend>* OutAudioBusSends)
+	{
+		for (int32 BusSendType = 0; BusSendType < (int32)EBusSendType::Count; ++BusSendType)
+		{
+			// And add all the source bus sends
+			for (FSoundSourceBusSendInfo& SendInfo : WaveInstance->BusSends[BusSendType])
+			{
+				// Avoid redoing duplicate code for sending audio to source bus or audio bus. Most of it is the same other than the bus id.
+				auto SetupBusSend = [this](TArray<FInitAudioBusSend>* AudioBusSends, const FSoundSourceBusSendInfo& InSendInfo, int32 InBusSendType, uint32 InBusId)
+				{
+					FInitAudioBusSend BusSend;
+					BusSend.AudioBusId = InBusId;
+					BusSend.SendLevel = InSendInfo.SendLevel;
+
+					if (AudioBusSends)
+					{
+						AudioBusSends[InBusSendType].Add(BusSend);
+					}
+
+					FDynamicBusSendInfo NewDynamicBusSendInfo;
+					NewDynamicBusSendInfo.SendLevel = InSendInfo.SendLevel;
+					NewDynamicBusSendInfo.BusId = BusSend.AudioBusId;
+					NewDynamicBusSendInfo.BusSendLevelControlMethod = InSendInfo.SourceBusSendLevelControlMethod;
+					NewDynamicBusSendInfo.BusSendType = (EBusSendType)InBusSendType;
+					NewDynamicBusSendInfo.MinSendLevel = InSendInfo.MinSendLevel;
+					NewDynamicBusSendInfo.MaxSendLevel = InSendInfo.MaxSendLevel;
+					NewDynamicBusSendInfo.MinSendDistance = InSendInfo.MinSendDistance;
+					NewDynamicBusSendInfo.MaxSendDistance = InSendInfo.MaxSendDistance;
+					NewDynamicBusSendInfo.CustomSendLevelCurve = InSendInfo.CustomSendLevelCurve;
+
+					// Copy the bus SourceBusSendInfo structs to a local copy so we can update it in the update tick
+					bool bIsNew = true;
+					for (FDynamicBusSendInfo& BusSendInfo : DynamicBusSendInfos)
+					{
+						if (BusSendInfo.BusId == NewDynamicBusSendInfo.BusId)
+						{
+							BusSendInfo = NewDynamicBusSendInfo;
+							BusSendInfo.bIsInit = false;
+							bIsNew = false;
+							break;
+						}
+					}
+
+					if (bIsNew)
+					{
+						DynamicBusSendInfos.Add(NewDynamicBusSendInfo);
+					}
+
+					// Flag that we're sending audio to buses so we can check for updates to send levels
+					bSendingAudioToBuses = true;
+				};
+
+				// Retrieve bus id of the audio bus to use
+				if (SendInfo.SoundSourceBus)
+				{						
+					uint32 BusId;
+
+					// Either use the bus id of the source bus's audio bus id if it was specified
+					if (SendInfo.SoundSourceBus->AudioBus)
+					{
+						BusId = SendInfo.SoundSourceBus->AudioBus->GetUniqueID();
+					}
+					else
+					{
+						// otherwise, use the id of the source bus itself (for an automatic source bus)
+						BusId = SendInfo.SoundSourceBus->GetUniqueID();
+					}
+
+					// Call lambda w/ the correctly derived bus id
+					SetupBusSend(OutAudioBusSends, SendInfo, BusSendType, BusId);
+				}
+
+				if (SendInfo.AudioBus)
+				{
+					// Only need to send audio to just the specified audio bus
+					uint32 BusId = SendInfo.AudioBus->GetUniqueID();
+
+					// Note we will be sending audio to both the specified source bus and the audio bus with the same send level
+					SetupBusSend(OutAudioBusSends, SendInfo, BusSendType, BusId);
+				}
+			}
+		}
+	}
+
 	void FMixerSource::Update()
 	{
 		CSV_SCOPED_TIMING_STAT(Audio, UpdateSources);
@@ -362,8 +665,6 @@ namespace Audio
 
 		++TickCount;
 
-		UpdateModulation();
-
 		UpdatePitch();
 
 		UpdateVolume();
@@ -377,7 +678,7 @@ namespace Audio
 		UpdateChannelMaps();
 
 #if ENABLE_AUDIO_DEBUG
-		FAudioDebugger::DrawDebugInfo(*this);
+		Audio::FAudioDebugger::DrawDebugInfo(*this);
 #endif // ENABLE_AUDIO_DEBUG
 	}
 
@@ -430,7 +731,7 @@ namespace Audio
 		// Not all wave data types have a non-zero duration
 		if (SoundWave.Duration > 0.0f)
 		{
-			if (!SoundWave.bIsBus)
+			if (!SoundWave.bIsSourceBus)
 			{
 				NumTotalFrames = SoundWave.Duration * SoundWave.GetSampleRateForCurrentPlatform();
 				check(NumTotalFrames > 0);
@@ -440,10 +741,12 @@ namespace Audio
 				NumTotalFrames = SoundWave.Duration * AudioDevice->GetSampleRate();
 				check(NumTotalFrames > 0);
 			}
+
+			StartFrame = FMath::Clamp<int32>((InWaveInstance->StartTime / SoundWave.Duration) * NumTotalFrames, 0, NumTotalFrames);
 		}
 
-		check(!MixerSourceBuffer.IsValid());
-		MixerSourceBuffer = FMixerSourceBuffer::Create(*MixerBuffer, SoundWave, InWaveInstance->LoopingMode, bIsSeeking);
+		check(!MixerSourceBuffer.IsValid());		
+		MixerSourceBuffer = FMixerSourceBuffer::Create(AudioDevice->GetSampleRate(), *MixerBuffer, SoundWave, InWaveInstance->LoopingMode, bIsSeeking);
 		
 		if (!MixerSourceBuffer.IsValid())
 		{
@@ -477,7 +780,7 @@ namespace Audio
 			}
 			else if (WaveInstance)
 			{
-				if (WaveInstance->WaveData->bIsBus)
+				if (WaveInstance->WaveData->bIsSourceBus)
 				{
 					// Buses don't need to do anything to play audio
 					return true;
@@ -489,7 +792,7 @@ namespace Audio
 					if ((BufferType == EBufferType::PCMRealTime || BufferType == EBufferType::Streaming) && WaveInstance->WaveData)
 					{
 						// If any of these conditions meet, we need to do an initial async decode before we're ready to start playing the sound
-						if (WaveInstance->StartTime > 0.0f || WaveInstance->WaveData->bProcedural || WaveInstance->WaveData->bIsBus || !WaveInstance->WaveData->CachedRealtimeFirstBuffer)
+						if (WaveInstance->StartTime > 0.0f || WaveInstance->WaveData->bProcedural || WaveInstance->WaveData->bIsSourceBus || !WaveInstance->WaveData->CachedRealtimeFirstBuffer)
 						{
 							// Before reading more PCMRT data, we first need to seek the buffer
 							if (WaveInstance->IsSeekable())
@@ -719,7 +1022,7 @@ namespace Audio
 
 		if (MixerSourceVoice && NumTotalFrames > 0)
 		{
-			int64 NumFrames = MixerSourceVoice->GetNumFramesPlayed();
+			int64 NumFrames = StartFrame + MixerSourceVoice->GetNumFramesPlayed();
 			AUDIO_MIXER_CHECK(NumTotalFrames > 0);
 			PreviousPlaybackPercent = (float)NumFrames / NumTotalFrames;
 			if (WaveInstance->LoopingMode == LOOP_Never)
@@ -753,7 +1056,6 @@ namespace Audio
 	{
 		bIsDone = true;
 	}
-
 
 	void FMixerSource::OnEffectTailsDone()
 	{
@@ -805,29 +1107,14 @@ namespace Audio
 		InitializationState = EMixerSourceInitializationState::NotInitialized;
 	}
 
-	void FMixerSource::UpdateModulation()
-	{
-		check(AudioDevice);
-		check(MixerSourceVoice);
-		check(WaveInstance);
-
-		if (AudioDevice->IsModulationPluginEnabled())
-		{
-			const int32 SourceId = MixerSourceVoice->GetSourceId();
-			const bool bUpdatePending = AudioDevice->ModulationInterface->ProcessControls(SourceId, WaveInstance->SoundModulationControls);
-
-			if (bUpdatePending)
-			{
-				AudioDevice->UpdateModulationControls(SourceId, WaveInstance->SoundModulationControls);
-			}
-		}
-	}
-
 	void FMixerSource::UpdatePitch()
 	{
 		AUDIO_MIXER_CHECK(MixerBuffer);
 
 		check(WaveInstance);
+
+		FActiveSound* ActiveSound = WaveInstance->ActiveSound;
+		check(ActiveSound);
 
 		Pitch = WaveInstance->GetPitch();
 
@@ -848,6 +1135,11 @@ namespace Audio
 
 			MixerSourceVoice->SetPitch(Pitch);
 		}
+
+		USoundWave* WaveData = WaveInstance->WaveData;
+		check(WaveData);
+		const FSoundModulationDestinationSettings& PitchSettings = ModulationUtils::GetRoutedPitchModulation(*WaveInstance, *WaveData, ActiveSound);
+		MixerSourceVoice->SetModPitch(PitchSettings.Value);
 	}
 
 	void FMixerSource::UpdateVolume()
@@ -867,6 +1159,14 @@ namespace Audio
 
 			// 3. Apply editor gain stage(s)
 			CurrentVolume = FMath::Clamp<float>(GetDebugVolume(CurrentVolume), 0.0f, MAX_VOLUME);
+
+			FActiveSound* ActiveSound = WaveInstance->ActiveSound;
+			check(ActiveSound);
+
+			USoundWave* WaveData = WaveInstance->WaveData;
+			check(WaveData);
+			const FSoundModulationDestinationSettings& VolumeSettings = ModulationUtils::GetRoutedVolumeModulation(*WaveInstance, *WaveData, ActiveSound);
+			MixerSourceVoice->SetModVolume(VolumeSettings.Value);
 		}
 		MixerSourceVoice->SetVolume(CurrentVolume);
 	}
@@ -896,6 +1196,19 @@ namespace Audio
 			MixerSourceVoice->SetHPFFrequency(HPFFrequency);
 			LastHPFFrequency = HPFFrequency;
 		}
+
+		check(WaveInstance);
+		FActiveSound* ActiveSound = WaveInstance->ActiveSound;
+		check(ActiveSound);
+
+		USoundWave* WaveData = WaveInstance->WaveData;
+		check(WaveData);
+
+		const FSoundModulationDestinationSettings& HighpassSettings = ModulationUtils::GetRoutedHighpassModulation(*WaveInstance, *WaveData, ActiveSound);
+		MixerSourceVoice->SetModHPFFrequency(HighpassSettings.Value);
+
+		const FSoundModulationDestinationSettings& LowpassSettings = ModulationUtils::GetRoutedLowpassModulation(*WaveInstance, *WaveData, ActiveSound);
+		MixerSourceVoice->SetModLPFFrequency(LowpassSettings.Value);
 
 		// If reverb is applied, figure out how of the source to "send" to the reverb.
 		if (bReverbApplied)
@@ -973,6 +1286,34 @@ namespace Audio
 			}
 		}
 
+		// Clear submix sends if they need clearing.
+		if (PreviousSubmixSendSettings.Num() > 0)
+		{
+			// Loop through every previous send setting
+			for (FSoundSubmixSendInfo& PreviousSendSetting : PreviousSubmixSendSettings)
+			{
+				bool bFound = false;
+
+				// See if it's in the current send list
+				for (const FSoundSubmixSendInfo& CurrentSendSettings : WaveInstance->SoundSubmixSends)
+				{
+					if (CurrentSendSettings.SoundSubmix == PreviousSendSetting.SoundSubmix)
+					{
+						bFound = true;
+						break;
+					}
+				}
+
+				// If it's not in the current send list, add to submixes to clear
+				if (!bFound)
+				{
+					FMixerSubmixPtr SubmixPtr = MixerDevice->GetSubmixInstance(PreviousSendSetting.SoundSubmix).Pin();
+					MixerSourceVoice->ClearSubmixSendInfo(SubmixPtr);
+				}
+			}
+		}
+		PreviousSubmixSendSettings = WaveInstance->SoundSubmixSends;
+
 		// Update submix send levels
 		for (FSoundSubmixSendInfo& SendInfo : WaveInstance->SoundSubmixSends)
 		{
@@ -1016,9 +1357,26 @@ namespace Audio
 		// 2) check for any bus sends that are set to update non-manually
 		// 3) Cache previous send level and only do update if it's changed in any significant amount
 
+		SetupBusData();
+
 		if (!bSendingAudioToBuses)
 		{
 			return;
+		}
+
+		//If the user actively called a function that alters bus sends since the last update
+		FActiveSound* ActiveSound = WaveInstance->ActiveSound;
+		check(ActiveSound);
+
+		if (ActiveSound->HasNewBusSends())
+		{
+			TArray<TTuple<EBusSendType, FSoundSourceBusSendInfo>> NewBusSends = ActiveSound->GetNewBusSends();
+			for (TTuple<EBusSendType, FSoundSourceBusSendInfo>& newSend : NewBusSends)
+			{
+				MixerSourceVoice->SetAudioBusSendInfo(newSend.Key, newSend.Value.SoundSourceBus->GetUniqueID(), newSend.Value.SendLevel);
+			}
+
+			ActiveSound->ResetNewBusSends();
 		}
 
 		// If this source is sending its audio to a bus, we need to check if it needs to be updated
@@ -1026,11 +1384,7 @@ namespace Audio
 		{
 			float SendLevel = 0.0f;
 
-			if (DynamicBusSendInfo.BusSendLevelControlMethod == ESourceBusSendLevelControlMethod::Manual)
-			{
-				SendLevel = FMath::Clamp(DynamicBusSendInfo.SendLevel, 0.0f, 1.0f);
-			}
-			else
+			if (DynamicBusSendInfo.BusSendLevelControlMethod != ESourceBusSendLevelControlMethod::Manual)
 			{
 				// The alpha value is determined identically between linear and custom curve methods
 				const FVector2D SendRadialRange = { DynamicBusSendInfo.MinSendDistance, DynamicBusSendInfo.MaxSendDistance};
@@ -1046,19 +1400,17 @@ namespace Audio
 				{
 					SendLevel = FMath::Clamp(DynamicBusSendInfo.CustomSendLevelCurve.GetRichCurveConst()->Eval(Alpha), 0.0f, 1.0f);
 				}
+
+				// If the send level changed, then we need to send an update to the audio render thread
+				if (!FMath::IsNearlyEqual(SendLevel, DynamicBusSendInfo.SendLevel) || DynamicBusSendInfo.bIsInit)
+				{
+					DynamicBusSendInfo.SendLevel = SendLevel;
+					DynamicBusSendInfo.bIsInit = false;
+
+					MixerSourceVoice->SetAudioBusSendInfo(DynamicBusSendInfo.BusSendType, DynamicBusSendInfo.BusId, SendLevel);
+				}
 			}
 
-			// If the send level changed, then we need to send an update to the audio render thread
-			if (!FMath::IsNearlyEqual(SendLevel, DynamicBusSendInfo.SendLevel))
-			{
-				DynamicBusSendInfo.SendLevel = SendLevel;
-
-				FMixerBusSend BusSend;
-				BusSend.BusId = DynamicBusSendInfo.BusId;
-				BusSend.SendLevel = SendLevel;
-
-				MixerSourceVoice->SetBusSendInfo(DynamicBusSendInfo.BusSendType, BusSend);
-			}
 		}
 	}
 
@@ -1075,6 +1427,8 @@ namespace Audio
 		{
 			MixerSourceVoice->SetChannelMap(NumChannels, ChannelMap, bIs3D, WaveInstance->bCenterChannelOnly);
 		}
+
+		bPrevAllowedSpatializationSetting = IsSpatializationCVarEnabled();
 	}
 
 	bool FMixerSource::ComputeMonoChannelMap(Audio::AlignedFloatBuffer& OutChannelMap)
@@ -1098,7 +1452,7 @@ namespace Audio
 			MixerDevice->Get3DChannelMap(MixerDevice->GetNumDeviceChannels(), WaveInstance, WaveInstance->AbsoluteAzimuth, SpatializationParams.NormalizedOmniRadius, OutChannelMap);
 			return true;
 		}
-		else if (!OutChannelMap.Num())
+		else if (!OutChannelMap.Num() || (IsSpatializationCVarEnabled() != bPrevAllowedSpatializationSetting))
 		{
 			// Only need to compute the 2D channel map once
 			MixerDevice->Get2DChannelMap(bIsVorbis, 1, WaveInstance->bCenterChannelOnly, OutChannelMap);
@@ -1160,7 +1514,7 @@ namespace Audio
 			}
 		}
 
-		if (!OutChannelMap.Num())
+		if (!OutChannelMap.Num() || (IsSpatializationCVarEnabled() != bPrevAllowedSpatializationSetting))
 		{
 			MixerDevice->Get2DChannelMap(bIsVorbis, 2, WaveInstance->bCenterChannelOnly, OutChannelMap);
 			return true;
@@ -1222,12 +1576,6 @@ namespace Audio
 		return (Buffer->NumChannels == 1 || Buffer->NumChannels == 2) &&
 			AudioDevice->IsOcclusionPluginEnabled() &&
 			WaveInstance->OcclusionPluginSettings != nullptr;
-	}
-
-	bool FMixerSource::UseModulationPlugin() const
-	{
-		return AudioDevice->IsModulationPluginEnabled() &&
-			WaveInstance->ModulationPluginSettings != nullptr;
 	}
 
 	bool FMixerSource::UseReverbPlugin() const

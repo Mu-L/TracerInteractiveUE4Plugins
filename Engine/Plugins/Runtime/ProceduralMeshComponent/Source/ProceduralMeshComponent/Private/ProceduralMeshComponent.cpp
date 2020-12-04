@@ -30,6 +30,11 @@ DECLARE_CYCLE_STAT(TEXT("Update Collision"), STAT_ProcMesh_UpdateCollision, STAT
 
 DEFINE_LOG_CATEGORY_STATIC(LogProceduralComponent, Log, All);
 
+static TAutoConsoleVariable<int32> CVarRayTracingProceduralMesh(
+	TEXT("r.RayTracing.Geometry.ProceduralMeshes"),
+	1,
+	TEXT("Include procedural meshes in ray tracing effects (default = 1 (procedural meshes enabled in ray tracing))"));
+
 /** Resource array to pass  */
 class FProcMeshVertexResourceArray : public FResourceArrayInterface
 {
@@ -173,9 +178,10 @@ public:
 				if (IsRayTracingEnabled())
 				{
 					ENQUEUE_RENDER_COMMAND(InitProceduralMeshRayTracingGeometry)(
-						[this, NewSection/*, VertexBufferRHI, IndexBufferRHI, VertexBufferStride, TrianglesCount, RenderSections*/](FRHICommandListImmediate& RHICmdList)
+						[this, DebugName = Component->GetFName(), NewSection](FRHICommandListImmediate& RHICmdList)
 					{
 						FRayTracingGeometryInitializer Initializer;
+						Initializer.DebugName = DebugName;
 						Initializer.IndexBuffer = nullptr;
 						Initializer.TotalPrimitiveCount = 0;
 						Initializer.GeometryType = RTGT_Triangles;
@@ -427,6 +433,11 @@ public:
 
 	virtual void GetDynamicRayTracingInstances(FRayTracingMaterialGatheringContext& Context, TArray<FRayTracingInstance>& OutRayTracingInstances) override final
 	{
+		if (!CVarRayTracingProceduralMesh.GetValueOnRenderThread())
+		{
+			return;
+		}
+
 		for (int32 SegmentIndex = 0; SegmentIndex < Sections.Num(); ++SegmentIndex)
 		{
 			const FProcMeshProxySection* Section = Sections[SegmentIndex];

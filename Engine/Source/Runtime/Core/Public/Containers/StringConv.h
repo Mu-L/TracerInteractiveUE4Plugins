@@ -208,7 +208,10 @@ public:
 	static int32 Utf8FromCodepoint(uint32 Codepoint, BufferType OutputIterator, uint32 OutputIteratorByteSizeRemaining)
 	{
 		// Ensure we have at least one character in size to write
-		checkSlow(OutputIteratorByteSizeRemaining >= sizeof(ANSICHAR));
+		if (OutputIteratorByteSizeRemaining < sizeof(ANSICHAR))
+		{
+			return 0;
+		}
 
 		const BufferType OutputIteratorStartPosition = OutputIterator;
 
@@ -233,10 +236,6 @@ public:
 				*(OutputIterator++) = (ANSICHAR)((Codepoint >> 6)         | 128 | 64);
 				*(OutputIterator++) = (ANSICHAR) (Codepoint       & 0x3F) | 128;
 			}
-			else
-			{
-				*(OutputIterator++) = (ANSICHAR)UNICODE_BOGUS_CHAR_CODEPOINT;
-			}
 		}
 		else if (Codepoint < 0x10000)
 		{
@@ -245,10 +244,6 @@ public:
 				*(OutputIterator++) = (ANSICHAR)((Codepoint >> 12)        | 128 | 64 | 32);
 				*(OutputIterator++) = (ANSICHAR)((Codepoint >> 6) & 0x3F) | 128;
 				*(OutputIterator++) = (ANSICHAR) (Codepoint       & 0x3F) | 128;
-			}
-			else
-			{
-				*(OutputIterator++) = (ANSICHAR)UNICODE_BOGUS_CHAR_CODEPOINT;
 			}
 		}
 		else
@@ -260,26 +255,25 @@ public:
 				*(OutputIterator++) = (ANSICHAR)((Codepoint >> 6 ) & 0x3F) | 128;
 				*(OutputIterator++) = (ANSICHAR) (Codepoint        & 0x3F) | 128;
 			}
-			else
-			{
-				*(OutputIterator++) = (ANSICHAR)UNICODE_BOGUS_CHAR_CODEPOINT;
-			}
 		}
 
 		return UE_PTRDIFF_TO_INT32(OutputIterator - OutputIteratorStartPosition);
 	}
 
 	/**
-	 * Converts the string to the desired format.
+	 * Converts a Source string into UTF8 and stores it in Dest.
 	 *
-	 * @param Dest      The destination buffer of the converted string.
+	 * @param Dest      The destination output iterator. Usually ANSICHAR*, but you can supply your own output iterator.
+	 *                  One can determine the number of characters written by checking the offset of Dest when the function returns.
 	 * @param DestLen   The length of the destination buffer.
 	 * @param Source    The source string to convert.
 	 * @param SourceLen The length of the source string.
+	 * @return          The number of bytes written to Dest, up to DestLen, or -1 if the entire Source string could did not fit in DestLen bytes.
 	 */
-	static FORCEINLINE void Convert(ANSICHAR* Dest, int32 DestLen, const TCHAR* Source, int32 SourceLen)
+	template <typename DestBufferType>
+	static FORCEINLINE int32 Convert(DestBufferType Dest, int32 DestLen, const TCHAR* Source, int32 SourceLen)
 	{
-		Convert_Impl(Dest, DestLen, Source, SourceLen);
+		return Convert_Impl(Dest, DestLen, Source, SourceLen);
 	}
 
 	/**
@@ -298,8 +292,9 @@ public:
 
 private:
 	template <typename DestBufferType>
-	static void Convert_Impl(DestBufferType& Dest, int32 DestLen, const TCHAR* Source, const int32 SourceLen)
+	static int32 Convert_Impl(DestBufferType& Dest, int32 DestLen, const TCHAR* Source, const int32 SourceLen)
 	{
+		DestBufferType DestStartingPosition = Dest;
 #if PLATFORM_TCHAR_IS_4_BYTES
 		for (int32 i = 0; i < SourceLen; ++i)
 		{
@@ -308,7 +303,7 @@ private:
 			if (!WriteCodepointToBuffer(Codepoint, Dest, DestLen))
 			{
 				// Could not write data, bail out
-				return;
+				return -1;
 			}
 		}
 #else	// PLATFORM_TCHAR_IS_4_BYTES
@@ -322,15 +317,15 @@ private:
 			// Check if this character is a high-surrogate
 			if (StringConv::IsHighSurrogate(Codepoint))
 			{
-				// Ensure we don't already have a high-surrogate set
-				if (bHighSurrogateIsSet)
+				// Ensure we don't already have a high-surrogate set or end without a matching low-surrogate
+				if (bHighSurrogateIsSet || i == SourceLen - 1)
 				{
-					// Already have a high-surrogate in this pair
+					// Already have a high-surrogate in this pair or string ends with lone high-surrogate
 					// Write our stored value (will be converted into bogus character)
 					if (!WriteCodepointToBuffer(HighSurrogate, Dest, DestLen))
 					{
 						// Could not write data, bail out
-						return;
+						return -1;
 					}
 				}
 
@@ -354,7 +349,7 @@ private:
 					if (!WriteCodepointToBuffer(HighSurrogate, Dest, DestLen))
 					{
 						// Could not write data, bail out
-						return;
+						return -1;
 					}
 				}
 
@@ -365,10 +360,11 @@ private:
 			if (!WriteCodepointToBuffer(Codepoint, Dest, DestLen))
 			{
 				// Could not write data, bail out
-				return;
+				return -1;
 			}
 		}
 #endif	// PLATFORM_TCHAR_IS_4_BYTES
+		return UE_PTRDIFF_TO_INT32(Dest - DestStartingPosition);
 	}
 
 	template <typename DestBufferType>
@@ -654,40 +650,78 @@ private:
 	static void Convert_Impl(DestBufferType& ConvertedBuffer, int32 DestLen, const ANSICHAR* Source, const int32 SourceLen)
 	{
 		const ANSICHAR* SourceEnd = Source + SourceLen;
+
+		const uint64 ExtendedCharMask = 0x8080808080808080;
 		while (Source < SourceEnd && DestLen > 0)
 		{
-			// Read our codepoint, advancing the source pointer
-			uint32 Codepoint = CodepointFromUtf8(Source, UE_PTRDIFF_TO_UINT32(SourceEnd - Source));
-
-#if !PLATFORM_TCHAR_IS_4_BYTES
-			// We want to write out two chars
-			if (StringConv::IsEncodedSurrogate(Codepoint))
+			// In case we're given an unaligned pointer, we'll
+			// fallback to the slow path until properly aligned.
+			if (IsAligned(Source, 8))
 			{
-				// We need two characters to write the surrogate pair
-				if (DestLen >= 2)
+				// Fast path for most common case
+				while (Source < SourceEnd - 8 && DestLen >= 8)
 				{
-					uint16 HighSurrogate = 0;
-					uint16 LowSurrogate = 0;
-					StringConv::DecodeSurrogate(Codepoint, HighSurrogate, LowSurrogate);
+					// Detect any extended characters 8 chars at a time
+					if ((*(const uint64*)Source) & ExtendedCharMask)
+					{
+						// Move to slow path since we got extended characters to process
+						break;
+					}
 
-					*(ConvertedBuffer++) = (ToType)HighSurrogate;
-					*(ConvertedBuffer++) = (ToType)LowSurrogate;
-					DestLen -= 2;
-					continue;
+					// This should get unrolled on most compiler
+					// ROI of diminished return to vectorize this as we 
+					// would have to deal with alignment, endianness and
+					// rewrite the iterators to support bulk writes
+					for (int32 Index = 0; Index < 8; ++Index)
+					{
+						*(ConvertedBuffer++) = (ToType)(uint8)*(Source++);
+					}
+					DestLen -= 8;
 				}
-
-				// If we don't have space, write a bogus character instead (we should have space for it)
-				Codepoint = UNICODE_BOGUS_CHAR_CODEPOINT;
 			}
-			else if (Codepoint > StringConv::ENCODED_SURROGATE_END_CODEPOINT)
+
+			// Slow path for extended characters
+			while (Source < SourceEnd && DestLen > 0)
 			{
-				// Ignore values higher than the supplementary plane range
-				Codepoint = UNICODE_BOGUS_CHAR_CODEPOINT;
-			}
-#endif	// !PLATFORM_TCHAR_IS_4_BYTES
+				// Read our codepoint, advancing the source pointer
+				uint32 Codepoint = CodepointFromUtf8(Source, UE_PTRDIFF_TO_UINT32(SourceEnd - Source));
 
-			*(ConvertedBuffer++) = (ToType)Codepoint;
-			--DestLen;
+	#if !PLATFORM_TCHAR_IS_4_BYTES
+				// We want to write out two chars
+				if (StringConv::IsEncodedSurrogate(Codepoint))
+				{
+					// We need two characters to write the surrogate pair
+					if (DestLen >= 2)
+					{
+						uint16 HighSurrogate = 0;
+						uint16 LowSurrogate = 0;
+						StringConv::DecodeSurrogate(Codepoint, HighSurrogate, LowSurrogate);
+
+						*(ConvertedBuffer++) = (ToType)HighSurrogate;
+						*(ConvertedBuffer++) = (ToType)LowSurrogate;
+						DestLen -= 2;
+						continue;
+					}
+
+					// If we don't have space, write a bogus character instead (we should have space for it)
+					Codepoint = UNICODE_BOGUS_CHAR_CODEPOINT;
+				}
+				else if (Codepoint > StringConv::ENCODED_SURROGATE_END_CODEPOINT)
+				{
+					// Ignore values higher than the supplementary plane range
+					Codepoint = UNICODE_BOGUS_CHAR_CODEPOINT;
+				}
+	#endif	// !PLATFORM_TCHAR_IS_4_BYTES
+
+				*(ConvertedBuffer++) = (ToType)Codepoint;
+				--DestLen;
+
+				// Return to the fast path once aligned and back to simple ASCII chars
+				if (Codepoint < 128 && IsAligned(Source, 8))
+				{
+					break;
+				}
+			}
 		}
 	}
 };
@@ -714,7 +748,10 @@ public:
 	static int32 Utf16FromCodepoint(uint32 Codepoint, BufferType OutputIterator, uint32 OutputIteratorNumRemaining)
 	{
 		// Ensure we have at least one character in size to write
-		checkSlow(OutputIteratorNumRemaining >= 1);
+		if (OutputIteratorNumRemaining < 1)
+		{
+			return 0;
+		}
 
 		const BufferType OutputIteratorStartPosition = OutputIterator;
 
@@ -739,11 +776,6 @@ public:
 
 				*(OutputIterator++) = (ToType)HighSurrogate;
 				*(OutputIterator++) = (ToType)LowSurrogate;
-			}
-			else
-			{
-				// If we don't have space, write a bogus character instead (we should have space for it)
-				*(OutputIterator++) = UNICODE_BOGUS_CHAR_CODEPOINT;
 			}
 		}
 		else if (Codepoint > StringConv::ENCODED_SURROGATE_END_CODEPOINT)

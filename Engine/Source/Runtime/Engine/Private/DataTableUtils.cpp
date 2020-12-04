@@ -431,8 +431,11 @@ bool DataTableUtils::IsSupportedTableProperty(const FProperty* InProp)
 			InProp->IsA(FArrayProperty::StaticClass()) ||
 			InProp->IsA(FSetProperty::StaticClass()) ||
 			InProp->IsA(FMapProperty::StaticClass()) ||
-			InProp->IsA(FEnumProperty::StaticClass()))
-			);
+			InProp->IsA(FEnumProperty::StaticClass()) ||
+			InProp->IsA(FFieldPathProperty::StaticClass())
+			)
+		
+		);
 }
 
 FString DataTableUtils::GetPropertyExportName(const FProperty* Prop, const EDataTableExportFlags InDTExportFlags)
@@ -447,12 +450,18 @@ FString DataTableUtils::GetPropertyExportName(const FProperty* Prop, const EData
 TArray<FString> DataTableUtils::GetPropertyImportNames(const FProperty* Prop)
 {
 	TArray<FString> Result;
+	GetPropertyImportNames(Prop, Result);
+	return Result;
+}
+
+void DataTableUtils::GetPropertyImportNames(const FProperty* Prop, TArray<FString>& OutResult)
+{
+	OutResult.Reset();
 	if (ensure(Prop))
 	{
-		Result.AddUnique(Prop->GetName());
+		OutResult.AddUnique(Prop->GetName());
 	}
-	Result.AddUnique(GetPropertyExportName(Prop));
-	return Result;
+	OutResult.AddUnique(GetPropertyExportName(Prop));
 }
 
 FText DataTableUtils::GetPropertyDisplayName(const FProperty* Prop, const FString& DefaultName)

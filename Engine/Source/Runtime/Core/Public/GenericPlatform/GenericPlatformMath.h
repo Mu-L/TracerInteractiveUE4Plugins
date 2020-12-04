@@ -16,6 +16,122 @@
  */
 struct FGenericPlatformMath
 {
+	//https://gist.github.com/rygorous/2156668
+	static FORCEINLINE float LoadHalf(const uint16* Ptr)
+	{
+		uint16 FP16 = *Ptr;
+		uint32 shifted_exp = 0x7c00 << 13;			// exponent mask after shift
+		union FP32T
+		{
+			uint32 u;
+			float f;		
+		} FP32, magic = { 113 << 23 };
+
+		FP32.u = (FP16 & 0x7fff) << 13;				// exponent/mantissa bits
+		uint32 exp = shifted_exp & FP32.u;			// just the exponent
+		FP32.u += uint32(127 - 15) << 23;			// exponent adjust
+
+		// handle exponent special cases
+		if (exp == shifted_exp)						// Inf/NaN?
+		{
+			FP32.u += uint32(128 - 16) << 23;		// extra exp adjust
+		}
+		else if (exp == 0)							// Zero/Denormal?
+		{
+			FP32.u += 1 << 23;						// extra exp adjust
+			FP32.f -= magic.f;						// renormalize
+		}
+
+		FP32.u |= (FP16 & 0x8000) << 16;			// sign bit
+		return FP32.f;
+	}
+
+	//https://gist.github.com/rygorous/2156668
+	static FORCEINLINE void StoreHalf(uint16* Ptr, float Value)
+	{
+		union FP32T
+		{
+			uint32 u;
+			float f;
+		} FP32 = {};
+		uint16 FP16 = {};
+
+		FP32.f = Value;
+
+		FP32T f32infty = { uint32(255 << 23) };
+		FP32T f16max = { uint32(127 + 16) << 23 };
+		FP32T denorm_magic = { (uint32(127 - 15) + uint32(23 - 10) + 1) << 23 };
+		uint32 sign_mask = 0x80000000u;
+
+		uint32 sign = FP32.u & sign_mask;
+		FP32.u ^= sign;
+
+		// NOTE all the integer compares in this function can be safely
+		// compiled into signed compares since all operands are below
+		// 0x80000000. Important if you want fast straight SSE2 code
+		// (since there's no unsigned PCMPGTD).
+
+		if (FP32.u >= f16max.u) // result is Inf or NaN (all exponent bits set)
+		{
+			FP16 = (FP32.u > f32infty.u) ? 0x7e00 : 0x7c00; // NaN->qNaN and Inf->Inf
+		}
+		else // (De)normalized number or zero
+		{
+			if (FP32.u < uint32(113 << 23)) // resulting FP16 is subnormal or zero
+			{
+				// use a magic value to align our 10 mantissa bits at the bottom of
+				// the float. as long as FP addition is round-to-nearest-even this
+				// just works.
+				FP32.f += denorm_magic.f;
+
+				// and one integer subtract of the bias later, we have our final float!
+				FP16 = uint16(FP32.u - denorm_magic.u);
+			}
+			else
+			{
+				uint32 mant_odd = (FP32.u >> 13) & 1; // resulting mantissa is odd
+
+				// update exponent, rounding bias part 1
+				FP32.u += (uint32(15 - 127) << 23) + 0xfff;
+				// rounding bias part 2
+				FP32.u += mant_odd;
+				// take the bits!
+				FP16 = uint16(FP32.u >> 13);
+			}
+		}
+
+		FP16 |= sign >> 16;
+		*Ptr = FP16;
+	}
+
+	static FORCEINLINE void VectorLoadHalf(float* RESTRICT Dst, const uint16* RESTRICT Src)
+	{
+		Dst[0] = LoadHalf(&Src[0]);
+		Dst[1] = LoadHalf(&Src[1]);
+		Dst[2] = LoadHalf(&Src[2]);
+		Dst[3] = LoadHalf(&Src[3]);
+	}
+
+	static FORCEINLINE void VectorStoreHalf(uint16* RESTRICT Dst, const float* RESTRICT Src)
+	{
+		StoreHalf(&Dst[0], Src[0]);
+		StoreHalf(&Dst[1], Src[1]);
+		StoreHalf(&Dst[2], Src[2]);
+		StoreHalf(&Dst[3], Src[3]);
+	}
+
+	static FORCEINLINE void WideVectorLoadHalf(float* RESTRICT Dst, const uint16* RESTRICT Src)
+	{
+		VectorLoadHalf(Dst, Src);
+		VectorLoadHalf(Dst + 4, Src + 4);
+	}
+
+	static FORCEINLINE void WideVectorStoreHalf(uint16* RESTRICT Dst, const float* RESTRICT Src)
+	{
+		VectorStoreHalf(Dst, Src);
+		VectorStoreHalf(Dst + 4, Src + 4);
+	}
+
 	/**
 	 * Converts a float to an integer with truncation towards zero.
 	 * @param F		Floating point value to convert
@@ -258,7 +374,12 @@ struct FGenericPlatformMath
 	static FORCEINLINE void RandInit(int32 Seed) { srand( Seed ); }
 
 	/** Returns a random float between 0 and 1, inclusive. */
-	static FORCEINLINE float FRand() { return Rand() / (float)RAND_MAX; }
+	static FORCEINLINE float FRand() 
+	{ 
+		// FP32 mantissa can only represent 24 bits before losing precision
+		constexpr int32 RandMax = 0x00ffffff < RAND_MAX ? 0x00ffffff : RAND_MAX;
+		return (Rand() & RandMax) / (float)RandMax;
+	}
 
 	/** Seeds future calls to SRand() */
 	static CORE_API void SRandInit( int32 Seed );
@@ -362,7 +483,20 @@ struct FGenericPlatformMath
 	}
 
 	/**
-	 * Counts the number of leading zeros in the bit representation of the value
+	 * Counts the number of leading zeros in the bit representation of the 8-bit value
+	 *
+	 * @param Value the value to determine the number of leading zeros for
+	 *
+	 * @return the number of zeros before the first "on" bit
+	 */
+	static FORCEINLINE uint8 CountLeadingZeros8(uint8 Value)
+	{
+		if (Value == 0) return 8;
+		return uint8(7 - FloorLog2(uint32(Value)));
+	}
+
+	/**
+	 * Counts the number of leading zeros in the bit representation of the 32-bit value
 	 *
 	 * @param Value the value to determine the number of leading zeros for
 	 *
@@ -469,6 +603,17 @@ struct FGenericPlatformMath
 		return x;
 	}
 
+	static FORCEINLINE uint64 MortonCode2_64( uint64 x )
+	{
+		x &= 0x00000000ffffffff;
+		x = (x ^ (x << 16)) & 0x0000ffff0000ffff;
+		x = (x ^ (x << 8)) & 0x00ff00ff00ff00ff;
+		x = (x ^ (x << 4)) & 0x0f0f0f0f0f0f0f0f;
+		x = (x ^ (x << 2)) & 0x3333333333333333;
+		x = (x ^ (x << 1)) & 0x5555555555555555;
+		return x;
+	}
+
 	/** Reverses MortonCode2. Compacts every other bit to the right. */
 	static FORCEINLINE uint32 ReverseMortonCode2( uint32 x )
 	{
@@ -477,6 +622,17 @@ struct FGenericPlatformMath
 		x = (x ^ (x >> 2)) & 0x0f0f0f0f;
 		x = (x ^ (x >> 4)) & 0x00ff00ff;
 		x = (x ^ (x >> 8)) & 0x0000ffff;
+		return x;
+	}
+
+	static FORCEINLINE uint64 ReverseMortonCode2_64( uint64 x )
+	{
+		x &= 0x5555555555555555;
+		x = (x ^ (x >> 1)) & 0x3333333333333333;
+		x = (x ^ (x >> 2)) & 0x0f0f0f0f0f0f0f0f;
+		x = (x ^ (x >> 4)) & 0x00ff00ff00ff00ff;
+		x = (x ^ (x >> 8)) & 0x0000ffff0000ffff;
+		x = (x ^ (x >> 16)) & 0x00000000ffffffff;
 		return x;
 	}
 

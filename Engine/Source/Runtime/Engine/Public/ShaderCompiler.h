@@ -10,6 +10,7 @@
 #include "Templates/RefCounting.h"
 #include "HAL/PlatformProcess.h"
 #include "ShaderCore.h"
+#include "ShaderCompilerCore.h"
 #include "Shader.h"
 #include "HAL/RunnableThread.h"
 #include "HAL/Runnable.h"
@@ -20,6 +21,7 @@
 class FShaderCompileJob;
 class FShaderPipelineCompileJob;
 class FVertexFactoryType;
+class IDistributedBuildController;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogShaderCompilers, Log, All);
 
@@ -320,27 +322,34 @@ public:
 	static bool IsSupported();
 };
 
-class FShaderCompileXGEThreadRunnable_InterceptionInterface : public FShaderCompileThreadRunnableBase
+#endif // PLATFORM_WINDOWS
+
+class FShaderCompileDistributedThreadRunnable_Interface : public FShaderCompileThreadRunnableBase
 {
 	uint32 NumDispatchedJobs;
 
-	TSparseArray<class FXGEShaderCompilerTask*> DispatchedTasks;
+	TSparseArray<class FDistributedShaderCompilerTask*> DispatchedTasks;
 
 public:
 	/** Initialization constructor. */
-	FShaderCompileXGEThreadRunnable_InterceptionInterface(class FShaderCompilingManager* InManager);
-	virtual ~FShaderCompileXGEThreadRunnable_InterceptionInterface();
+	FShaderCompileDistributedThreadRunnable_Interface(class FShaderCompilingManager* InManager, class IDistributedBuildController& InController);
+	virtual ~FShaderCompileDistributedThreadRunnable_Interface();
 
 	/** Main work loop. */
 	virtual int32 CompilingLoop() override;
 
 	static bool IsSupported();
 
+protected:
+	
+	IDistributedBuildController& CachedController;
+	TMap<EShaderPlatform, TArray<FString> >	PlatformShaderInputFilesCache;
+
 private:
 	void DispatchShaderCompileJobsBatch(TArray<TSharedRef<FShaderCommonCompileJob, ESPMode::ThreadSafe>>& JobsToSerialize);
-};
 
-#endif // PLATFORM_WINDOWS
+	TArray<FString> GetDependencyFilesForJobs(TArray<TSharedRef<FShaderCommonCompileJob, ESPMode::ThreadSafe>> Jobs);
+};
 
 /** Results for a single compiled shader map. */
 struct FShaderMapCompileResults
@@ -429,8 +438,8 @@ class FShaderCompilingManager
 
 #if PLATFORM_WINDOWS
 	friend class FShaderCompileXGEThreadRunnable_XmlInterface;
-	friend class FShaderCompileXGEThreadRunnable_InterceptionInterface;
 #endif // PLATFORM_WINDOWS
+	friend class FShaderCompileDistributedThreadRunnable_Interface;
 
 private:
 
@@ -471,6 +480,8 @@ private:
 	uint32 NumShaderCompilingThreadsDuringGame;
 	/** Largest number of jobs that can be put in the same batch. */
 	int32 MaxShaderJobBatchSize;
+	/** Number of runs through single-threaded compiling before we can retry to compile through workers. -1 if not used. */
+	int32 NumSingleThreadedRunsBeforeRetry;
 	/** Process Id of UE4. */
 	uint32 ProcessId;
 	/** Whether to allow compiling shaders through the worker application, which allows multiple cores to be used. */
@@ -503,6 +514,12 @@ private:
 	 */
 	uint64 SuppressedShaderPlatforms;
 
+	/** Cached Engine loop initialization state */
+	bool bIsEngineLoopInitialized;
+
+	/** Interface to the build distribution controller (XGE/SN-DBS) */
+	IDistributedBuildController* BuildDistributionController;
+
 	/** Launches the worker, returns the launched process handle. */
 	FProcHandle LaunchWorker(const FString& WorkingDirectory, uint32 ProcessId, uint32 ThreadId, const FString& WorkerInputFile, const FString& WorkerOutputFile);
 
@@ -523,6 +540,12 @@ private:
 
 	/** Recompiles shader jobs with errors if requested, and returns true if a retry was needed. */
 	bool HandlePotentialRetryOnError(TMap<int32, FShaderMapFinalizeResults>& CompletedShaderMaps);
+	
+	/** Checks if any target platform down't support remote shader compiling */
+	bool AllTargetPlatformSupportsRemoteShaderCompiling();
+	
+	/** Returns the first remote compiler controller found */
+	IDistributedBuildController* FindRemoteCompilerController() const;
 
 public:
 	
@@ -576,7 +599,17 @@ public:
 		NumExternalJobs = NumJobs;
 	}
 
-	ENGINE_API bool GetDumpShaderDebugInfo() const;
+	enum class EDumpShaderDebugInfo : int32
+	{
+		Never				= 0,
+		Always				= 1,
+		OnError				= 2,
+		OnErrorOrWarning	= 3
+	};
+
+	ENGINE_API EDumpShaderDebugInfo GetDumpShaderDebugInfo() const;
+	ENGINE_API FString CreateShaderDebugInfoPath(const FShaderCompilerInput& ShaderCompilerInput) const;
+	ENGINE_API bool ShouldRecompileToDumpShaderDebugInfo(const FShaderCompileJob& Job) const;
 
 	const FString& GetAbsoluteShaderDebugInfoDirectory() const
 	{
@@ -670,13 +703,20 @@ extern bool RecompileShaders(const TCHAR* Cmd, FOutputDevice& Ar);
 /** Returns whether all global shader types containing the substring are complete and ready for rendering. if type name is null, check everything */
 extern ENGINE_API bool IsGlobalShaderMapComplete(const TCHAR* TypeNameSubstring = nullptr);
 
+/** Returns the delegate triggered when global shaders compilation jobs start. */
+DECLARE_MULTICAST_DELEGATE(FOnGlobalShadersCompilation);
+extern ENGINE_API FOnGlobalShadersCompilation& GetOnGlobalShaderCompilation();
+
 /**
 * Makes sure all global shaders are loaded and/or compiled for the passed in platform.
 * Note: if compilation is needed, this only kicks off the compile.
 *
-* @param	Platform	Platform to verify global shaders for
+* @param	Platform						Platform to verify global shaders for
+* @param	bLoadedFromCacheFile			Load the shaders from cache, will error out and not compile shaders if missing
+* @param	OutdatedShaderTypes				Optional list of shader types, will trigger compilation job for shader types found in this list even if the map already has the shader.
+* @param	OutdatedShaderPipelineTypes		Optional list of shader pipeline types, will trigger compilation job for shader pipeline types found in this list even if the map already has the pipeline.
 */
-extern ENGINE_API void VerifyGlobalShaders(EShaderPlatform Platform, bool bLoadedFromCacheFile);
+extern ENGINE_API void VerifyGlobalShaders(EShaderPlatform Platform, bool bLoadedFromCacheFile, const TArray<const FShaderType*>* OutdatedShaderTypes = nullptr, const TArray<const FShaderPipelineType*>* OutdatedShaderPipelineTypes = nullptr);
 
 /**
 * Forces a recompile of the global shaders.

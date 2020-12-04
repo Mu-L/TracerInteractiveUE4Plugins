@@ -27,7 +27,7 @@ D3D12_RESOURCE_DESC CreateStructuredBufferResourceDesc(uint32 Size, uint32 InUsa
 	return Desc;
 }
 
-FStructuredBufferRHIRef FD3D12DynamicRHI::CreateStructuredBuffer_RenderThread(FRHICommandListImmediate& RHICmdList, uint32 Stride, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
+FStructuredBufferRHIRef FD3D12DynamicRHI::CreateStructuredBuffer_RenderThread(FRHICommandListImmediate& RHICmdList, uint32 Stride, uint32 Size, uint32 InUsage, ERHIAccess InResourceState, FRHIResourceCreateInfo& CreateInfo)
 {
 	// Check for values that will cause D3D calls to fail
 	check(Size / Stride > 0 && Size % Stride == 0);
@@ -38,7 +38,7 @@ FStructuredBufferRHIRef FD3D12DynamicRHI::CreateStructuredBuffer_RenderThread(FR
 	// can be addressed correctly with element based offsets.
 	const uint32 Alignment = ((InUsage & (BUF_ByteAddressBuffer | BUF_DrawIndirect)) == 0) ? Stride : 4;
 
-	FD3D12StructuredBuffer* NewBuffer = GetAdapter().CreateRHIBuffer<FD3D12StructuredBuffer>(&RHICmdList, Desc, Alignment, Stride, Size, InUsage, CreateInfo);
+	FD3D12StructuredBuffer* NewBuffer = GetAdapter().CreateRHIBuffer<FD3D12StructuredBuffer>(&RHICmdList, Desc, Alignment, Stride, Size, InUsage, ED3D12ResourceStateMode::Default, CreateInfo);
 	if (NewBuffer->ResourceLocation.IsTransient())
 	{
 		// TODO: this should ideally be set in platform-independent code, since this tracking is for the high level
@@ -48,7 +48,7 @@ FStructuredBufferRHIRef FD3D12DynamicRHI::CreateStructuredBuffer_RenderThread(FR
 	return NewBuffer;
 }
 
-FStructuredBufferRHIRef FD3D12DynamicRHI::RHICreateStructuredBuffer(uint32 Stride, uint32 Size, uint32 InUsage, FRHIResourceCreateInfo& CreateInfo)
+FStructuredBufferRHIRef FD3D12DynamicRHI::RHICreateStructuredBuffer(uint32 Stride, uint32 Size, uint32 InUsage, ERHIAccess InResourceState, FRHIResourceCreateInfo& CreateInfo)
 {
 	// Check for values that will cause D3D calls to fail
 	check(Size / Stride > 0 && Size % Stride == 0);
@@ -59,7 +59,7 @@ FStructuredBufferRHIRef FD3D12DynamicRHI::RHICreateStructuredBuffer(uint32 Strid
 	// can be addressed correctly with element based offsets.
 	const uint32 Alignment = ((InUsage & (BUF_ByteAddressBuffer | BUF_DrawIndirect)) == 0) ? Stride : 4;
 
-	FD3D12StructuredBuffer* NewBuffer = GetAdapter().CreateRHIBuffer<FD3D12StructuredBuffer>(nullptr, Desc, Alignment, Stride, Size, InUsage, CreateInfo);
+	FD3D12StructuredBuffer* NewBuffer = GetAdapter().CreateRHIBuffer<FD3D12StructuredBuffer>(nullptr, Desc, Alignment, Stride, Size, InUsage, ED3D12ResourceStateMode::Default, CreateInfo);
 	if (NewBuffer->ResourceLocation.IsTransient())
 	{
 		// TODO: this should ideally be set in platform-independent code, since this tracking is for the high level
@@ -74,57 +74,14 @@ FD3D12StructuredBuffer::~FD3D12StructuredBuffer()
 	UpdateBufferStats<FD3D12StructuredBuffer>(&ResourceLocation, false);
 }
 
-void FD3D12StructuredBuffer::Rename(FD3D12ResourceLocation& NewLocation)
-{
-	FD3D12ResourceLocation::TransferOwnership(ResourceLocation, NewLocation);
-
-	FScopeLock Lock(&DynamicSRVsCS);
-	for(FD3D12BaseShaderResourceView* DynamicSRVBase : DynamicSRVs)
-	{
-		FD3D12ShaderResourceView* DynamicSRV = static_cast<FD3D12ShaderResourceView*>(DynamicSRVBase);
-		if (DynamicSRV->IsValid())
-		{
-			DynamicSRV->Rename(ResourceLocation);
-		}
-	}
-}
-
-void FD3D12StructuredBuffer::RenameLDAChain(FD3D12ResourceLocation& NewLocation)
-{
-	// Dynamic buffers use cross-node resources.
-	ensure(GetUsage() & BUF_AnyDynamic);
-	Rename(NewLocation);
-
-	if (GNumExplicitGPUsForRendering > 1)
-	{
-		// This currently crashes at exit time because NewLocation isn't tracked in the right allocator.
-		ensure(IsHeadLink());
-		ensure(GetParentDevice() == NewLocation.GetParentDevice());
-
-		// Update all of the resources in the LDA chain to reference this cross-node resource
-		for (FD3D12StructuredBuffer* NextBuffer = GetNextObject(); NextBuffer; NextBuffer = NextBuffer->GetNextObject())
-		{
-			FD3D12ResourceLocation::ReferenceNode(NextBuffer->GetParentDevice(), NextBuffer->ResourceLocation, ResourceLocation);
-
-			FScopeLock Lock(&NextBuffer->DynamicSRVsCS);
-			for (FD3D12BaseShaderResourceView* DynamicSRVBase : NextBuffer->DynamicSRVs)
-			{
-				FD3D12ShaderResourceView* DynamicSRV = static_cast<FD3D12ShaderResourceView*>(DynamicSRVBase);
-				if (DynamicSRV->IsValid())
-				{
-					DynamicSRV->Rename(NextBuffer->ResourceLocation);
-				}
-			}
-		}
-	}
-}
-
 void* FD3D12DynamicRHI::RHILockStructuredBuffer(FRHICommandListImmediate& RHICmdList, FRHIStructuredBuffer* StructuredBufferRHI, uint32 Offset, uint32 Size, EResourceLockMode LockMode)
 {
-	return LockBuffer(&RHICmdList, FD3D12DynamicRHI::ResourceCast(StructuredBufferRHI), Offset, Size, LockMode);
+	FD3D12StructuredBuffer* Buffer = FD3D12DynamicRHI::ResourceCast(StructuredBufferRHI);
+	return LockBuffer(&RHICmdList, Buffer, Buffer->GetSize(), Buffer->GetUsage(), Offset, Size, LockMode);
 }
 
 void FD3D12DynamicRHI::RHIUnlockStructuredBuffer(FRHICommandListImmediate& RHICmdList, FRHIStructuredBuffer* StructuredBufferRHI)
 {
-	UnlockBuffer(&RHICmdList, FD3D12DynamicRHI::ResourceCast(StructuredBufferRHI));
+	FD3D12StructuredBuffer* Buffer = FD3D12DynamicRHI::ResourceCast(StructuredBufferRHI);
+	UnlockBuffer(&RHICmdList, Buffer, Buffer->GetUsage());
 }

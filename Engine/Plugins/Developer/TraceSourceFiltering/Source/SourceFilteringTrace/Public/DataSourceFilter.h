@@ -9,15 +9,12 @@
 
 #include "DataSourceFilter.generated.h"
 
-struct FFilterLedger : public TThreadSingleton<FFilterLedger>
-{
-public:
-	TArray<const UDataSourceFilter*> RejectedFilters;
-};
-
 UCLASS(Blueprintable)
 class SOURCEFILTERINGTRACE_API UDataSourceFilter : public UObject, public IDataSourceFilterInterface
 {
+	friend class FSourceFilterManager;
+	friend class FSourceFilterSetup;
+
 	GENERATED_BODY()
 public:
 	UDataSourceFilter();
@@ -25,17 +22,22 @@ public:
 
 	UFUNCTION(BlueprintNativeEvent, Category = TraceSourceFiltering)
 	bool DoesActorPassFilter(const AActor* InActor) const;
-	bool DoesActorPassFilter_Implementation(const AActor* InActor) const;
+	virtual bool DoesActorPassFilter_Implementation(const AActor* InActor) const;
 
 	/** Begin IDataSourceFilterInterface overrides */
 	virtual void SetEnabled(bool bState) override;	
 	virtual bool IsEnabled() const final;
+	virtual const FDataSourceFilterConfiguration& GetConfiguration() const final;
 protected:
 	virtual void GetDisplayText_Internal(FText& OutDisplayText) const override;
 	/** End IDataSourceFilterInterface overrides */
 
 	virtual bool DoesActorPassFilter_Internal(const AActor* InActor) const;
 protected:
+	/** Filter specific settings */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = Filtering)
+	FDataSourceFilterConfiguration Configuration;
+
 	/** Whether or not this filter is enabled */
 	bool bIsEnabled;
 };

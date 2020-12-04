@@ -17,6 +17,10 @@ public class MovieRenderPipelineCore : ModuleRules
 				"Landscape", // To flush grass
 				"AudioMixer",
 				"NonRealtimeAudioRenderer",
+				"Sockets", 
+				"Networking",
+				"Http",
+				"DeveloperSettings"
 			}
 		);
 
@@ -27,8 +31,14 @@ public class MovieRenderPipelineCore : ModuleRules
                 "MovieSceneTracks",
 				"LevelSequence",
 				"Engine",
-                "ImageWriteQueue", // For debug tile writing
-            }
-        );
+				"ImageWriteQueue", // For debug tile writing
+				"OpenColorIO",
+			}
+		);
+
+		if (Target.bBuildEditor == true)
+        {
+			PublicDependencyModuleNames.Add("MovieSceneTools");
+        }
 	}
 }

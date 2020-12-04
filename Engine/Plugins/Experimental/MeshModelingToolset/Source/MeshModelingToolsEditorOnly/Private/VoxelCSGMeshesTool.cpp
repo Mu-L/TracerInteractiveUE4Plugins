@@ -74,13 +74,16 @@ void UVoxelCSGMeshesTool::Setup()
 	UInteractiveTool::Setup();
 
 	CSGProps = NewObject<UVoxelCSGMeshesToolProperties>();
-	CSGProps->VoxelCount = 128;
-	CSGProps->MeshAdaptivity = 0.01f;
-	CSGProps->OffsetDistance = 0.0f;
+	CSGProps->RestoreProperties(this);
 	AddToolPropertySource(CSGProps);
 
 	MeshStatisticsProperties = NewObject<UMeshStatisticsProperties>(this);
 	AddToolPropertySource(MeshStatisticsProperties);
+
+	HandleSourcesProperties = NewObject<UOnAcceptHandleSourcesProperties>(this);
+	HandleSourcesProperties->RestoreProperties(this);
+	AddToolPropertySource(HandleSourcesProperties);
+
 
 	// Hide the source meshes
 	for (auto& ComponentTarget : ComponentTargets)
@@ -115,57 +118,36 @@ void UVoxelCSGMeshesTool::Setup()
 
 void UVoxelCSGMeshesTool::Shutdown(EToolShutdownType ShutdownType)
 {
+	CSGProps->SaveProperties(this);
+	HandleSourcesProperties->SaveProperties(this);
+
 	FDynamicMeshOpResult Result = Preview->Shutdown();
+	// Restore (unhide) the source meshes
+	for (auto& ComponentTarget : ComponentTargets)
+	{
+		ComponentTarget->SetOwnerVisibility(true);
+	}
 	if (ShutdownType == EToolShutdownType::Accept)
 	{
+		GetToolManager()->BeginUndoTransaction(LOCTEXT("BooleanMeshes", "Boolean Meshes"));
+
 		// Generate the result
-		{
-			GetToolManager()->BeginUndoTransaction(LOCTEXT("BooleanMeshes", "Boolean Meshes"));
+		GenerateAsset(Result);
 
-			GenerateAsset(Result);
-
-			GetToolManager()->EndUndoTransaction();
-		}
-
-		// Hide or destroy the sources
-		{
-			
-			if (CSGProps->bDeleteInputActors) 
-				GetToolManager()->BeginUndoTransaction(LOCTEXT("RemoveSources", "Remove Sources"));
-			
-			for (auto& ComponentTarget : ComponentTargets)
-			{
-				ComponentTarget->SetOwnerVisibility(true);
-				AActor* Actor = ComponentTarget->GetOwnerActor();
-				if (CSGProps->bDeleteInputActors)
-				{
-					Actor->Destroy();
-				}
-				else
-				{
-					Actor->SetIsTemporarilyHiddenInEditor(true);
-				}
-			}
-
-			if (CSGProps->bDeleteInputActors) 
-				GetToolManager()->EndUndoTransaction();
-			
-		}
-		
-	}
-	else
-	{
-		// Restore (unhide) the source meshes
+		TArray<AActor*> Actors;
 		for (auto& ComponentTarget : ComponentTargets)
 		{
-			ComponentTarget->SetOwnerVisibility(true);
+			Actors.Add(ComponentTarget->GetOwnerActor());
 		}
+		HandleSourcesProperties->ApplyMethod(Actors, GetToolManager());
+
+		GetToolManager()->EndUndoTransaction();
 	}
 }
 
 
 
-void UVoxelCSGMeshesTool::Tick(float DeltaTime)
+void UVoxelCSGMeshesTool::OnTick(float DeltaTime)
 {
 	Preview->Tick(DeltaTime);
 }
@@ -174,14 +156,9 @@ void UVoxelCSGMeshesTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
 }
 
-bool UVoxelCSGMeshesTool::HasAccept() const
-{
-	return true;
-}
-
 bool UVoxelCSGMeshesTool::CanAccept() const
 {
-	return Preview->HaveValidResult();
+	return Super::CanAccept() && Preview->HaveValidResult();
 }
 
 void UVoxelCSGMeshesTool::OnPropertyModified(UObject* PropertySet, FProperty* Property)

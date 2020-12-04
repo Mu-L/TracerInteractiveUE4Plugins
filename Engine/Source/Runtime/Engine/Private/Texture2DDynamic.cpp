@@ -44,9 +44,9 @@ void FTexture2DDynamicResource::InitRHI()
 		SamplerAddressMode,
 		SamplerAddressMode
 	);
-	SamplerStateRHI = RHICreateSamplerState( SamplerStateInitializer );
+	SamplerStateRHI = GetOrCreateSamplerState( SamplerStateInitializer );
 
-	uint32 Flags = 0;
+	ETextureCreateFlags  Flags = TexCreate_None;
 	if ( Owner->bIsResolveTarget )
 	{
 		Flags |= TexCreate_ResolveTargetable;

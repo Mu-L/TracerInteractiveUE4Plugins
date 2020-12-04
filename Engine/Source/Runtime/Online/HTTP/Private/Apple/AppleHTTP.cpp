@@ -17,6 +17,12 @@
 #include "Ssl.h"
 #endif
 
+#if !defined(__MAC_10_14) || (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_12_0) || (defined(__TV_OS_VERSION_MIN_REQUIRED) && __TV_OS_VERSION_MIN_REQUIRED < __TVOS_12_0)
+#define USE_DEPRECATED_SECTRUST 1
+#else
+#define USE_DEPRECATED_SECTRUST 0
+#endif
+
 /****************************************************************************
  * FAppleHttpRequest implementation
  ***************************************************************************/
@@ -187,9 +193,34 @@ const TArray<uint8>& FAppleHttpRequest::GetContent() const
 
 void FAppleHttpRequest::SetContent(const TArray<uint8>& ContentPayload)
 {
+	if (CompletionStatus == EHttpRequestStatus::Processing)
+	{
+		UE_LOG(LogHttp, Warning, TEXT("FAppleHttpRequest::SetContent() - attempted to set content on a request that is inflight"));
+		return;
+	}
+
 	UE_LOG(LogHttp, Verbose, TEXT("FAppleHttpRequest::SetContent()"));
 	Request.HTTPBody = [NSData dataWithBytes:ContentPayload.GetData() length:ContentPayload.Num()];
 	RequestPayloadByteLength = ContentPayload.Num();
+	bIsPayloadFile = false;
+
+	ContentData.Empty();
+}
+
+
+void FAppleHttpRequest::SetContent(TArray<uint8>&& ContentPayload)
+{
+	if (CompletionStatus == EHttpRequestStatus::Processing)
+	{
+		UE_LOG(LogHttp, Warning, TEXT("FAppleHttpRequest::SetContent() - attempted to set content on a request that is inflight"));
+		return;
+	}
+
+	UE_LOG(LogHttp, Verbose, TEXT("FAppleHttpRequest::SetContent()"));
+	ContentData = MoveTemp(ContentPayload);
+
+	Request.HTTPBody = [NSData dataWithBytesNoCopy:ContentData.GetData() length:ContentData.Num() freeWhenDone:false];
+	RequestPayloadByteLength = ContentData.Num();
 	bIsPayloadFile = false;
 }
 
@@ -211,13 +242,21 @@ int32 FAppleHttpRequest::GetContentLength() const
 
 void FAppleHttpRequest::SetContentAsString(const FString& ContentString)
 {
+	if (CompletionStatus == EHttpRequestStatus::Processing)
+	{
+		UE_LOG(LogHttp, Warning, TEXT("FAppleHttpRequest::SetContentAsString() - attempted to set content on a request that is inflight"));
+		return;
+	}
+
 	UE_LOG(LogHttp, Verbose, TEXT("FAppleHttpRequest::SetContentAsString() - %s"), *ContentString);
 	FTCHARToUTF8 Converter(*ContentString);
-	
+
 	// The extra length computation here is unfortunate, but it's technically not safe to assume the length is the same.
 	Request.HTTPBody = [NSData dataWithBytes:(ANSICHAR*)Converter.Get() length:Converter.Length()];
 	RequestPayloadByteLength = Converter.Length();
 	bIsPayloadFile = false;
+
+	ContentData.Empty();
 }
 
 bool FAppleHttpRequest::SetContentAsStreamedFile(const FString& Filename)
@@ -233,6 +272,9 @@ bool FAppleHttpRequest::SetContentAsStreamedFile(const FString& Filename)
 
 	NSString* PlatformFilename = Filename.GetNSString();
 
+	Request.HTTPBody = nil;
+	ContentData.Empty();
+
 	struct stat FileAttrs = { 0 };
 	if (stat(PlatformFilename.fileSystemRepresentation, &FileAttrs) == 0)
 	{
@@ -246,7 +288,6 @@ bool FAppleHttpRequest::SetContentAsStreamedFile(const FString& Filename)
 	else
 	{
 		UE_LOG(LogHttp, VeryVerbose, TEXT("FAppleHttpRequest::SetContentAsStreamedFile failed to get file size"));
-		Request.HTTPBody = nil;
 		Request.HTTPBodyStream = nil;
 		RequestPayloadByteLength = 0;
 		bIsPayloadFile = false;
@@ -278,6 +319,20 @@ void FAppleHttpRequest::SetVerb(const FString& Verb)
 	Request.HTTPMethod = Verb.GetNSString();
 }
 
+void FAppleHttpRequest::SetTimeout(float InTimeoutSecs)
+{
+	Request.timeoutInterval = InTimeoutSecs;
+}
+
+void FAppleHttpRequest::ClearTimeout()
+{
+	Request.timeoutInterval = FHttpModule::Get().GetHttpTimeout();
+}
+
+TOptional<float> FAppleHttpRequest::GetTimeout() const
+{
+	return TOptional<float>(Request.timeoutInterval);
+}
 
 bool FAppleHttpRequest::ProcessRequest()
 {
@@ -312,7 +367,18 @@ bool FAppleHttpRequest::ProcessRequest()
 
 	if( !bStarted )
 	{
-		FinishedRequest();
+		// Ensure we run on game thread
+		if (!IsInGameThread())
+		{
+			FHttpModule::Get().GetHttpManager().AddGameThreadTask([StrongThis = StaticCastSharedRef<FAppleHttpRequest>(AsShared())]()
+			{
+				StrongThis->FinishedRequest();
+			});
+		}
+		else
+		{
+			FinishedRequest();
+		}
 	}
 
 	return bStarted;
@@ -430,7 +496,19 @@ void FAppleHttpRequest::CancelRequest()
 	{
 		[Connection cancel];
 	}
-	FinishedRequest();
+
+	// Ensure we run on game thread
+	if (!IsInGameThread())
+	{
+		FHttpModule::Get().GetHttpManager().AddGameThreadTask([StrongThis = StaticCastSharedRef<FAppleHttpRequest>(AsShared())]()
+		{
+			StrongThis->FinishedRequest();
+		});
+	}
+	else
+	{
+		FinishedRequest();
+	}
 }
 
 
@@ -446,10 +524,9 @@ const FHttpResponsePtr FAppleHttpRequest::GetResponse() const
 	return Response;
 }
 
-
 void FAppleHttpRequest::Tick(float DeltaSeconds)
 {
-	if( CompletionStatus == EHttpRequestStatus::Processing || Response->HadError() )
+	if (Response.IsValid() && (CompletionStatus == EHttpRequestStatus::Processing || Response->HadError()))
 	{
 		if (OnRequestProgress().IsBound())
 		{
@@ -460,7 +537,7 @@ void FAppleHttpRequest::Tick(float DeltaSeconds)
 				OnRequestProgress().Execute(SharedThis(this), BytesWritten, BytesRead);
 			}
 		}
-		if( Response->IsReady() )
+		if (Response->IsReady())
 		{
 			FinishedRequest();
 		}
@@ -617,21 +694,31 @@ static const unsigned char ecdsaSecp384r1Asn1Header[] =
                 [challenge.sender cancelAuthenticationChallenge: challenge];
                 return;
             }
-            // we check the default trust to verify against the system roots before we dig deeper
-            SecTrustResultType DefaultTrustResult;
-            if (SecTrustEvaluate(RemoteTrust, &DefaultTrustResult) != errSecSuccess)
-            {
-                UE_LOG(LogHttp, Error, TEXT("failed certificate pinning validation: could not evaluate default trust parameters for domain '%s'"), *RemoteHost);
-                [challenge.sender cancelAuthenticationChallenge: challenge];
-                return;
-            }
-            if ((DefaultTrustResult != kSecTrustResultProceed) && (DefaultTrustResult != kSecTrustResultUnspecified))
-            {
-                UE_LOG(LogHttp, Error, TEXT("failed certificate pinning validation: default certificate trust evaluation failed for domain '%s'"), *RemoteHost);
-                [challenge.sender cancelAuthenticationChallenge: challenge];
-                return;
-            }
-            
+
+#if USE_DEPRECATED_SECTRUST
+			// we check the default trust to verify against the system roots before we dig deeper
+			SecTrustResultType DefaultTrustResult;
+			if (SecTrustEvaluate(RemoteTrust, &DefaultTrustResult) != errSecSuccess)
+			{
+				UE_LOG(LogHttp, Error, TEXT("failed certificate pinning validation: could not evaluate default trust parameters for domain '%s'"), *RemoteHost);
+				[challenge.sender cancelAuthenticationChallenge: challenge];
+				return;
+			}
+
+			if ((DefaultTrustResult != kSecTrustResultProceed) && (DefaultTrustResult != kSecTrustResultUnspecified))
+			{
+				UE_LOG(LogHttp, Error, TEXT("failed certificate pinning validation: default certificate trust evaluation failed for domain '%s'"), *RemoteHost);
+				[challenge.sender cancelAuthenticationChallenge: challenge];
+				return;
+			}
+#else
+			if (!SecTrustEvaluateWithError(RemoteTrust, nil))
+			{
+				UE_LOG(LogHttp, Error, TEXT("failed certificate pinning validation: default certificate trust evaluation failed for domain '%s'"), *RemoteHost);
+				[challenge.sender cancelAuthenticationChallenge: challenge];
+				return;
+			}
+#endif            
             // look at all certs in the remote chain and calculate the SHA256 hash of their DER-encoded SPKI
             // the chain starts with the server's cert itself, so walk backwards to optimize for roots first
             TArray<TArray<uint8, TFixedAllocator<ISslCertificateManager::PUBLIC_KEY_DIGEST_SIZE>>> CertDigests;
@@ -647,8 +734,12 @@ static const unsigned char ecdsaSecp384r1Asn1Header[] =
                 TCFRef<SecTrustRef> CertTrust;
                 TCFRef<SecPolicyRef> TrustPolicy = SecPolicyCreateBasicX509();
                 SecTrustCreateWithCertificates(Cert, TrustPolicy, CertTrust.GetForAssignment());
+#if USE_DEPRECATED_SECTRUST
                 SecTrustResultType CertEvalResult;
                 SecTrustEvaluate(CertTrust, &CertEvalResult);
+#else
+                SecTrustEvaluateWithError(CertTrust, nil);
+#endif
                 TCFRef<SecKeyRef> CertPubKey = SecTrustCopyPublicKey(CertTrust);
 				TCFRef<CFDataRef> CertPubKeyData = SecKeyCopyExternalRepresentation(CertPubKey, NULL);
                 if (!CertPubKeyData)

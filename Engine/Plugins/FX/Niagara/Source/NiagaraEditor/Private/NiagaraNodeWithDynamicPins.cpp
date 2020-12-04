@@ -69,25 +69,27 @@ UEdGraphPin* GetAddPin(TArray<UEdGraphPin*> Pins, EEdGraphPinDirection Direction
 
 bool UNiagaraNodeWithDynamicPins::AllowNiagaraTypeForAddPin(const FNiagaraTypeDefinition& InType)
 {
-	return  InType != FNiagaraTypeDefinition::GetGenericNumericDef() && InType.GetScriptStruct() != nullptr;
+	return InType.GetScriptStruct() != nullptr
+		&& InType != FNiagaraTypeDefinition::GetGenericNumericDef()
+		&& !InType.IsInternalType();
 }
 
 UEdGraphPin* UNiagaraNodeWithDynamicPins::RequestNewTypedPin(EEdGraphPinDirection Direction, const FNiagaraTypeDefinition& Type)
 {
-	FString DefaultName;
+	TStringBuilder<128> DefaultName;
 	if (Direction == EGPD_Input)
 	{
-		TArray<UEdGraphPin*> InPins;
+		FPinCollectorArray InPins;
 		GetInputPins(InPins);
-		DefaultName = TEXT("Input ") + LexToString(InPins.Num());
+		DefaultName << TEXT("Input ") << InPins.Num();
 	}
 	else
 	{
-		TArray<UEdGraphPin*> OutPins;
+		FPinCollectorArray OutPins;
 		GetOutputPins(OutPins);
-		DefaultName = TEXT("Output ") + LexToString(OutPins.Num());
+		DefaultName << TEXT("Output ") << OutPins.Num();
 	}
-	return RequestNewTypedPin(Direction, Type, *DefaultName);
+	return RequestNewTypedPin(Direction, Type, DefaultName.ToString());
 }
 
 UEdGraphPin* UNiagaraNodeWithDynamicPins::RequestNewTypedPin(EEdGraphPinDirection Direction, const FNiagaraTypeDefinition& Type, const FName InName)
@@ -154,7 +156,7 @@ bool UNiagaraNodeWithDynamicPins::CanMovePin(const UEdGraphPin* Pin) const
 
 void UNiagaraNodeWithDynamicPins::MoveDynamicPin(UEdGraphPin* Pin, int32 DirectionToMove)
 {
-	TArray<UEdGraphPin*> SameDirectionPins;
+	FPinCollectorArray SameDirectionPins;
 	if (Pin->Direction == EEdGraphPinDirection::EGPD_Input)
 	{
 		GetInputPins(SameDirectionPins);
@@ -239,7 +241,7 @@ void UNiagaraNodeWithDynamicPins::GetNodeContextMenuActions(UToolMenu* Menu, UGr
 		}
 		if (CanMovePin(Context->Pin))
 		{
-			TArray<UEdGraphPin*> SameDirectionPins;
+			FPinCollectorArray SameDirectionPins;
 			if (Context->Pin->Direction == EEdGraphPinDirection::EGPD_Input)
 			{
 				GetInputPins(SameDirectionPins);
@@ -275,7 +277,7 @@ void UNiagaraNodeWithDynamicPins::GetNodeContextMenuActions(UToolMenu* Menu, UGr
 
 void UNiagaraNodeWithDynamicPins::CollectAddPinActions(FGraphActionListBuilderBase& OutActions, bool& bOutCreateRemainingActions, UEdGraphPin* Pin)
 {
-	TArray<FNiagaraTypeDefinition> Types = FNiagaraTypeRegistry::GetRegisteredTypes();
+	TArray<FNiagaraTypeDefinition> Types(FNiagaraTypeRegistry::GetRegisteredTypes());
 	Types.Sort([](const FNiagaraTypeDefinition& A, const FNiagaraTypeDefinition& B) { return (A.GetNameText().ToLower().ToString() < B.GetNameText().ToLower().ToString()); });
 
 	for (const FNiagaraTypeDefinition& RegisteredType : Types)
@@ -288,10 +290,11 @@ void UNiagaraNodeWithDynamicPins::CollectAddPinActions(FGraphActionListBuilderBa
 			FNiagaraVariable Var(RegisteredType, FName(*RegisteredType.GetName()));
 			FNiagaraEditorUtilities::ResetVariableToDefaultValue(Var);
 
+			FText Category = FNiagaraEditorUtilities::GetVariableTypeCategory(Var);
 			const FText DisplayName = RegisteredType.GetNameText();
 			const FText Tooltip = FText::Format(LOCTEXT("AddButtonTypeEntryToolTipFormat", "Add a new {0} pin"), RegisteredType.GetNameText());
 			TSharedPtr<FNiagaraMenuAction> Action(new FNiagaraMenuAction(
-				FText::GetEmpty(), DisplayName, Tooltip, 0, FText::GetEmpty(),
+				Category, DisplayName, Tooltip, 0, FText::GetEmpty(),
 				FNiagaraMenuAction::FOnExecuteStackAction::CreateUObject(this, &UNiagaraNodeWithDynamicPins::AddParameter, Var, (const UEdGraphPin*)Pin)));
 
 			OutActions.AddAction(Action);

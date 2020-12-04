@@ -14,6 +14,7 @@
 #include "UObject/WeakObjectPtrTemplates.h"
 
 #include "MediaPlayer.h"
+#include "IMediaPlayer.h"
 #include "Misc/MediaTextureResource.h"
 #include "IMediaTextureSample.h"
 
@@ -62,12 +63,17 @@ UMediaTexture::UMediaTexture(const FObjectInitializer& ObjectInitializer)
 	, ClearColor(FLinearColor::Black)
 	, EnableGenMips(false)
 	, NumMips(1)
+	, NewStyleOutput(false)
+	, OutputFormat(MTOF_Default)
+	, CurrentAspectRatio(0.0f)
+	, CurrentOrientation(MTORI_Original)
 	, DefaultGuid(FGuid::NewGuid())
 	, Dimensions(FIntPoint::ZeroValue)
 	, Size(0)
 	, CachedNextSampleTime(FTimespan::MinValue())
 {
 	NeverStream = true;
+	SRGB = true;
 }
 
 
@@ -106,7 +112,7 @@ int32 UMediaTexture::GetWidth() const
 void UMediaTexture::SetMediaPlayer(UMediaPlayer* NewMediaPlayer)
 {
 	CurrentPlayer = NewMediaPlayer;
-	UpdateQueue();
+	UpdatePlayerAndQueue();
 }
 
 
@@ -150,6 +156,10 @@ FTextureResource* UMediaTexture::CreateResource()
 
 EMaterialValueType UMediaTexture::GetMaterialType() const
 {
+	if (NewStyleOutput)
+	{
+		return MCT_Texture2D;
+	}
 	return EnableGenMips ? MCT_Texture2D : MCT_TextureExternal;
 }
 
@@ -304,18 +314,14 @@ void UMediaTexture::TickResource(FTimespan Timecode)
 	const FGuid PreviousGuid = CurrentGuid;
 
 	// media player bookkeeping
-	if (CurrentPlayer.IsValid())
+	UpdatePlayerAndQueue();
+
+	if (!CurrentPlayer.IsValid())
 	{
-		UpdateQueue();
-	}
-	else if (CurrentGuid != DefaultGuid)
-	{
-		SampleQueue.Reset();
-		CurrentGuid = DefaultGuid;
-	}
-	else if ((LastClearColor == ClearColor) && (LastSrgb == SRGB))
-	{
-		return; // nothing to render
+		if ((LastClearColor == ClearColor) && (LastSrgb == SRGB))
+		{
+			return; // nothing to render
+		}
 	}
 
 	LastClearColor = ClearColor;
@@ -330,15 +336,69 @@ void UMediaTexture::TickResource(FTimespan Timecode)
 
 		if (PlayerActive)
 		{
-			RenderParams.SampleSource = SampleQueue;
-		}
-		else if (!AutoClear)
-		{
-			return; // retain last frame
-		}
+			check(CurrentPlayerPtr->GetPlayerFacade()->GetPlayer());
 
-		RenderParams.Rate = CurrentPlayerPtr->GetRate();
-		RenderParams.Time = CurrentPlayerPtr->GetTime();
+			if (CurrentPlayerPtr->GetPlayerFacade()->GetPlayer()->GetPlayerFeatureFlag(IMediaPlayer::EFeatureFlag::UsePlaybackTimingV2))
+			{
+				/*
+					We are using the old-style "1sample queue to sink" architecture to actually just pass long only ONE sample at a time from the logic
+					inside the player facade to the sinks. The selection as to what to render this frame is expected to be done earlier
+					this frame on the gamethread, hence only a single output frame is selected and passed along...
+				*/
+				TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe> Sample;
+				while (SampleQueue->Dequeue(Sample))
+					;
+
+				if (!Sample.IsValid())
+				{
+					// Player is active (do not clear), but we have no new data
+					// -> we do not need to trigger anything on the renderthread
+					return;
+				}
+
+				UpdateSampleInfo(Sample);
+
+				RenderParams.TextureSample = Sample;
+
+				RenderParams.Rate = CurrentPlayerPtr->GetRate();
+				RenderParams.Time = Sample->GetTime();
+
+				if (NewStyleOutput)
+				{
+					// For new-style output the sample's sRGB state controls what we output
+					// (FOR NOW: this is too simplified if we have more then Rec703 material)
+					SRGB = Sample->IsOutputSrgb();
+					// Ensure sRGB changes will not trigger rendering the next time around
+					LastSrgb = SRGB;
+				}
+			}
+			else
+			{
+				//
+				// Old style: pass queue along and dequeue only at render time
+				//
+				TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe> Sample;
+				if (SampleQueue->Peek(Sample))
+				{
+					UpdateSampleInfo(Sample);
+				}
+
+				RenderParams.SampleSource = SampleQueue;
+
+				RenderParams.Rate = CurrentPlayerPtr->GetRate();
+				RenderParams.Time = CurrentPlayerPtr->GetTime();
+			}
+		}
+		else 
+		{
+			CurrentAspectRatio = 0.0f;
+			CurrentOrientation = MTORI_Original;
+
+			if (!AutoClear)
+			{
+				return; // retain last frame
+			}
+		}
 	}
 	else if (!AutoClear && (CurrentGuid == PreviousGuid))
 	{
@@ -365,15 +425,33 @@ void UMediaTexture::TickResource(FTimespan Timecode)
 		});
 }
 
+void UMediaTexture::UpdateSampleInfo(const TSharedPtr<IMediaTextureSample, ESPMode::ThreadSafe> & Sample)
+{
+	CurrentAspectRatio = (float)Sample->GetAspectRatio();
+	switch (Sample->GetOrientation())
+	{
+		case EMediaOrientation::Original: CurrentOrientation = MTORI_Original; break;
+		case EMediaOrientation::CW90: CurrentOrientation = MTORI_CW90; break;
+		case EMediaOrientation::CW180: CurrentOrientation = MTORI_CW180; break;
+		case EMediaOrientation::CW270: CurrentOrientation = MTORI_CW270; break;
+		default: CurrentOrientation = MTORI_Original;
+	}
+}
 
-void UMediaTexture::UpdateQueue()
+void UMediaTexture::UpdatePlayerAndQueue()
 {
 	if (UMediaPlayer* CurrentPlayerPtr = CurrentPlayer.Get())
 	{
 		const FGuid PlayerGuid = CurrentPlayerPtr->GetGuid();
 
+		// Player changed?
 		if (CurrentGuid != PlayerGuid)
 		{
+			if (FMediaTextureResource* MediaResource = static_cast<FMediaTextureResource*>(Resource))
+			{
+				MediaResource->FlushPendingData();
+			}
+
 			SampleQueue = MakeShared<FMediaTextureSampleQueue, ESPMode::ThreadSafe>();
 			CurrentPlayerPtr->GetPlayerFacade()->AddVideoSampleSink(SampleQueue.ToSharedRef());
 			CurrentGuid = PlayerGuid;
@@ -381,7 +459,19 @@ void UMediaTexture::UpdateQueue()
 	}
 	else
 	{
-		SampleQueue.Reset();
+		// No player. Did we already reset to default?
+		if (CurrentGuid != DefaultGuid)
+		{
+			// No, do so now...
+			SampleQueue.Reset();
+			CurrentGuid = DefaultGuid;
+
+			if (FMediaTextureResource* MediaResource = static_cast<FMediaTextureResource*>(Resource))
+			{
+				MediaResource->FlushPendingData();
+			}
+
+		}
 	}
 }
 
@@ -395,3 +485,12 @@ int32 UMediaTexture::GetAvailableSampleCount() const
 	return SampleQueue->Num();
 }
 
+float UMediaTexture::GetCurrentAspectRatio() const
+{
+	return CurrentAspectRatio;
+}
+
+MediaTextureOrientation UMediaTexture::GetCurrentOrientation() const
+{
+	return CurrentOrientation;
+}

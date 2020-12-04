@@ -13,6 +13,7 @@
 #include "SequencerSettings.h"
 #include "AssetRegistryModule.h"
 #include "ThumbnailRendering/ThumbnailManager.h"
+#include "Stats/Stats.h"
 
 #include "AssetTypeActions/AssetTypeActions_NiagaraSystem.h"
 #include "AssetTypeActions/AssetTypeActions_NiagaraEmitter.h"
@@ -73,6 +74,8 @@
 #include "NiagaraSystemEditorData.h"
 #include "NiagaraEditorCommands.h"
 #include "NiagaraClipboard.h"
+#include "NiagaraMessageManager.h"
+#include "NiagaraComponentBroker.h"
 
 #include "MovieScene/Parameters/MovieSceneNiagaraBoolParameterTrack.h"
 #include "MovieScene/Parameters/MovieSceneNiagaraFloatParameterTrack.h"
@@ -102,6 +105,7 @@
 #include "Customizations/NiagaraScriptDetails.h"
 #include "Customizations/NiagaraStaticSwitchNodeDetails.h"
 #include "Customizations/NiagaraTypeCustomizations.h"
+#include "Customizations/NiagaraComponentRendererPropertiesDetails.h"
 
 #include "NiagaraComponent.h"
 #include "NiagaraNodeStaticSwitch.h"
@@ -109,6 +113,7 @@
 #include "NiagaraScript.h"
 #include "NiagaraCommon.h"
 #include "NiagaraScriptHighlight.h"
+#include "NiagaraComponentRendererProperties.h"
 
 #include "HAL/IConsoleManager.h"
 #include "NiagaraHlslTranslator.h"
@@ -136,9 +141,11 @@
 #include "Containers/Ticker.h"
 #include "NiagaraConstants.h"
 
-IMPLEMENT_MODULE( FNiagaraEditorModule, NiagaraEditor );
+#include "ViewModels/Stack/NiagaraStackObjectIssueGenerator.h"
+#include "NiagaraPlatformSet.h"
 
-PRAGMA_DISABLE_OPTIMIZATION
+
+IMPLEMENT_MODULE( FNiagaraEditorModule, NiagaraEditor );
 
 #define LOCTEXT_NAMESPACE "NiagaraEditorModule"
 
@@ -227,8 +234,8 @@ public:
 				}
 				else
 				{
-					UE_LOG(LogNiagaraEditor, Error, TEXT("Pin type is invalid! Pin Name '%s' Owning Node '%s'. Turning into standard int definition!"), *InPin->PinName.ToString(),
-						*InPin->GetOwningNode()->GetName());
+					UE_LOG(LogNiagaraEditor, Warning, TEXT("Pin type is invalid! Pin Name '%s' Owning Node '%s'. Turning into standard int definition!"), *InPin->PinName.ToString(),
+						*InPin->GetOwningNode()->GetFullName());
 					InPin->PinType.PinSubCategoryObject = MakeWeakObjectPtr(const_cast<UScriptStruct*>(FNiagaraTypeDefinition::GetIntStruct()));
 					InPin->DefaultValue.Empty();
 					return CreatePin(InPin);
@@ -239,8 +246,8 @@ public:
 				const UEnum* Enum = Cast<const UEnum>(InPin->PinType.PinSubCategoryObject.Get());
 				if (Enum == nullptr)
 				{
-					UE_LOG(LogNiagaraEditor, Error, TEXT("Pin states that it is of Enum type, but is missing its Enum! Pin Name '%s' Owning Node '%s'. Turning into standard int definition!"), *InPin->PinName.ToString(),
-						*InPin->GetOwningNode()->GetName());
+					UE_LOG(LogNiagaraEditor, Warning, TEXT("Pin states that it is of Enum type, but is missing its Enum! Pin Name '%s' Owning Node '%s'. Turning into standard int definition!"), *InPin->PinName.ToString(),
+						*InPin->GetOwningNode()->GetFullName());
 					InPin->PinType.PinCategory = UEdGraphSchema_Niagara::PinCategoryType;
 					InPin->PinType.PinSubCategoryObject = MakeWeakObjectPtr(const_cast<UScriptStruct*>(FNiagaraTypeDefinition::GetIntStruct()));
 					InPin->DefaultValue.Empty();
@@ -736,6 +743,10 @@ class FNiagaraSystemColorParameterTrackEditor : public FNiagaraSystemParameterTr
 void FNiagaraEditorModule::OnPreExit()
 {
 	UDeviceProfileManager::Get().OnManagerUpdated().Remove(DeviceProfileManagerUpdatedHandle);
+	if (GEditor)
+	{
+		CastChecked<UEditorEngine>(GEngine)->OnPreviewPlatformChanged().Remove(PreviewPlatformChangedHandle);
+	}
 
 	// Ensure that we don't have any lingering compiles laying around that will explode after this module shuts down.
 	for (TObjectIterator<UNiagaraSystem> It; It; ++It)
@@ -798,6 +809,10 @@ void FNiagaraEditorModule::StartupModule()
 	PropertyModule.RegisterCustomClassLayout(
 		UNiagaraScript::StaticClass()->GetFName(),
 		FOnGetDetailCustomizationInstance::CreateStatic(&FNiagaraScriptDetails::MakeInstance));
+
+	PropertyModule.RegisterCustomClassLayout(
+		UNiagaraComponentRendererProperties::StaticClass()->GetFName(), 
+		FOnGetDetailCustomizationInstance::CreateStatic(&FNiagaraComponentRendererPropertiesDetails::MakeInstance));
 	
 	PropertyModule.RegisterCustomPropertyTypeLayout(
 		FNiagaraFloat::StaticStruct()->GetFName(),
@@ -833,22 +848,32 @@ void FNiagaraEditorModule::StartupModule()
 
 	PropertyModule.RegisterCustomPropertyTypeLayout(
 		FNiagaraPlatformSet::StaticStruct()->GetFName(),
-		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FNiagaraPlatformSetCustomization::MakeInstance)
-	);
+		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FNiagaraPlatformSetCustomization::MakeInstance));
+
+	PropertyModule.RegisterCustomPropertyTypeLayout(
+		FNiagaraPlatformSetCVarCondition::StaticStruct()->GetFName(),
+		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FNiagaraPlatformSetCVarConditionCustomization::MakeInstance));
 	
 	PropertyModule.RegisterCustomPropertyTypeLayout(
 		FNiagaraUserParameterBinding::StaticStruct()->GetFName(),
 		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FNiagaraUserParameterBindingCustomization::MakeInstance));
 
+
+	PropertyModule.RegisterCustomPropertyTypeLayout(
+		FNiagaraMaterialAttributeBinding::StaticStruct()->GetFName(),
+		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FNiagaraMaterialAttributeBindingCustomization::MakeInstance));
+
 	PropertyModule.RegisterCustomPropertyTypeLayout(
 		FNiagaraScriptHighlight::StaticStruct()->GetFName(),
 		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FNiagaraScriptHighlightDetails::MakeInstance));
 
-
 	PropertyModule.RegisterCustomPropertyTypeLayout(
 	    FNiagaraVariableDataInterfaceBinding::StaticStruct()->GetFName(),
-		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FNiagaraDataInterfaceBindingCustomization::MakeInstance)
-	);
+		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FNiagaraDataInterfaceBindingCustomization::MakeInstance));
+
+	//Register Stack Object Issue Generators.
+	RegisterStackIssueGenerator(FNiagaraPlatformSet::StaticStruct()->GetFName(), new FNiagaraPlatformSetIssueGenerator());
+
 
 	FNiagaraEditorStyle::Initialize();
 	ReinitializeStyleCommand = IConsoleManager::Get().RegisterConsoleCommand(
@@ -857,6 +882,9 @@ void FNiagaraEditorModule::StartupModule()
 		FConsoleCommandDelegate::CreateRaw(this, &FNiagaraEditorModule::ReinitializeStyle));
 
 	FNiagaraEditorCommands::Register();
+
+	NiagaraComponentBroker = MakeShareable(new FNiagaraComponentBroker);
+	FComponentAssetBrokerage::RegisterBroker(NiagaraComponentBroker, UNiagaraComponent::StaticClass(), true, true);
 
 	TSharedPtr<FNiagaraScriptGraphPanelPinFactory> GraphPanelPinFactory = MakeShareable(new FNiagaraScriptGraphPanelPinFactory());
 
@@ -901,6 +929,7 @@ void FNiagaraEditorModule::StartupModule()
 	RegisterTypeUtilities(FNiagaraTypeDefinition::GetQuatDef(), MakeShareable(new FNiagaraEditorQuatTypeUtilities()));
 	RegisterTypeUtilities(FNiagaraTypeDefinition::GetColorDef(), MakeShareable(new FNiagaraEditorColorTypeUtilities()));
 	RegisterTypeUtilities(FNiagaraTypeDefinition::GetMatrix4Def(), MakeShareable(new FNiagaraEditorMatrixTypeUtilities()));
+	RegisterTypeUtilities(FNiagaraTypeDefinition::GetIDDef(), MakeShareable(new FNiagaraEditorNiagaraIDTypeUtilities()));
 
 	RegisterTypeUtilities(FNiagaraTypeDefinition(UNiagaraDataInterfaceCurve::StaticClass()), MakeShared<FNiagaraDataInterfaceCurveTypeEditorUtilities, ESPMode::ThreadSafe>());
 	RegisterTypeUtilities(FNiagaraTypeDefinition(UNiagaraDataInterfaceVector2DCurve::StaticClass()), MakeShared<FNiagaraDataInterfaceCurveTypeEditorUtilities, ESPMode::ThreadSafe>());
@@ -1041,6 +1070,10 @@ void FNiagaraEditorModule::StartupModule()
 	RegisterParameterScopeInfo(FNiagaraConstants::OutputScopeName, FNiagaraParameterScopeInfo(ENiagaraParameterScope::Output, PARAM_MAP_OUTPUT_STR));
 	RegisterParameterScopeInfo(FNiagaraConstants::UniqueOutputScopeName, FNiagaraParameterScopeInfo(ENiagaraParameterScope::Output, PARAM_MAP_OUTPUT_MODULE_STR));
 	RegisterParameterScopeInfo(FNiagaraConstants::CustomScopeName, FNiagaraParameterScopeInfo(ENiagaraParameterScope::Custom, FString()));
+
+	FNiagaraMessageManager* MessageManager = FNiagaraMessageManager::Get();
+	MessageManager->RegisterMessageTopic(FNiagaraMessageTopics::CompilerTopicName);
+	MessageManager->RegisterMessageTopic(FNiagaraMessageTopics::ObjectTopicName);
 }
 
 
@@ -1079,6 +1112,11 @@ void FNiagaraEditorModule::ShutdownModule()
 	FNiagaraEditorStyle::Shutdown();
 
 	UnregisterSettings();
+
+	if (UObjectInitialized())
+	{
+		FComponentAssetBrokerage::UnregisterBroker(NiagaraComponentBroker);
+	}
 
 	ISequencerModule* SequencerModule = FModuleManager::GetModulePtr<ISequencerModule>("Sequencer");
 	if (SequencerModule != nullptr)
@@ -1138,6 +1176,15 @@ void FNiagaraEditorModule::ShutdownModule()
 		UThumbnailManager::Get().UnregisterCustomRenderer(UNiagaraEmitter::StaticClass());
 		UThumbnailManager::Get().UnregisterCustomRenderer(UNiagaraSystem::StaticClass());
 	}
+
+	for (auto& Pair : StackIssueGenerators)
+	{
+		if (Pair.Value)
+		{
+			delete Pair.Value;
+		}
+	}
+	StackIssueGenerators.Empty();
 }
 
 void FNiagaraEditorModule::OnPostEngineInit()
@@ -1153,10 +1200,12 @@ void FNiagaraEditorModule::OnPostEngineInit()
 	if (GEditor)
 	{
 		GEditor->OnExecParticleInvoked().AddRaw(this, &FNiagaraEditorModule::OnExecParticleInvoked);
+
+		PreviewPlatformChangedHandle = CastChecked<UEditorEngine>(GEngine)->OnPreviewPlatformChanged().AddRaw(this, &FNiagaraEditorModule::OnPreviewPlatformChanged);
 	}
 	else
 	{
-		UE_LOG(LogNiagaraEditor, Warning, TEXT("GEditor isn't valid! Particle reset commands will not work for Niagara components!"));
+		UE_LOG(LogNiagaraEditor, Log, TEXT("GEditor isn't valid! Particle reset commands will not work for Niagara components!"));
 	}
 }
 
@@ -1165,14 +1214,28 @@ void FNiagaraEditorModule::OnDeviceProfileManagerUpdated()
 	FNiagaraPlatformSet::InvalidateCachedData();
 }
 
+void FNiagaraEditorModule::OnPreviewPlatformChanged()
+{
+	FNiagaraPlatformSet::InvalidateCachedData();
+
+	for (TObjectIterator<UNiagaraSystem> It; It; ++It)
+	{
+		UNiagaraSystem* System = *It;
+		check(System);
+		System->OnScalabilityCVarChanged();
+	}
+}
+
 FNiagaraEditorModule& FNiagaraEditorModule::Get()
 {
 	return FModuleManager::LoadModuleChecked<FNiagaraEditorModule>("NiagaraEditor");
 }
 
-void FNiagaraEditorModule::OnNiagaraSettingsChangedEvent(const FString& PropertyName, const UNiagaraSettings* Settings)
+void FNiagaraEditorModule::OnNiagaraSettingsChangedEvent(const FName& PropertyName, const UNiagaraSettings* Settings)
 {
-	if (PropertyName == "AdditionalParameterTypes" || PropertyName == "AdditionalPayloadTypes")
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UNiagaraSettings, AdditionalParameterTypes)
+		|| PropertyName == GET_MEMBER_NAME_CHECKED(UNiagaraSettings, AdditionalPayloadTypes)
+		|| PropertyName == GET_MEMBER_NAME_CHECKED(UNiagaraSettings, AdditionalParameterEnums))
 	{
 		FNiagaraTypeDefinition::RecreateUserDefinedTypeRegistry();
 	}
@@ -1405,18 +1468,21 @@ void FNiagaraEditorModule::AddReferencedObjects(FReferenceCollector& Collector)
 
 void FNiagaraEditorModule::OnPreGarbageCollection()
 {
-	// For commandlets like GenerateDistillFileSetsCommandlet, they just load the package and do some hierarchy navigation within it 
-	// tracking sub-assets, then they garbage collect. Since nothing is holding onto the system at the root level, it will be summarily
-	// killed and any of references will also be killed. To thwart this for now, we are forcing the compilations to complete BEFORE
-	// garbage collection kicks in. To do otherwise for now has too many loose ends (a system may be left around after the level has been
-	// unloaded, leaving behind weird external references, etc). This should be revisited when more time is available (i.e. not days before a 
-	// release is due to go out).
-	for (TObjectIterator<UNiagaraSystem> It; It; ++It)
+	if (IsRunningCommandlet())
 	{
-		UNiagaraSystem* System = *It;
-		if (System && System->HasOutstandingCompilationRequests())
+		// For commandlets like GenerateDistillFileSetsCommandlet, they just load the package and do some hierarchy navigation within it 
+		// tracking sub-assets, then they garbage collect. Since nothing is holding onto the system at the root level, it will be summarily
+		// killed and any of references will also be killed. To thwart this for now, we are forcing the compilations to complete BEFORE
+		// garbage collection kicks in. To do otherwise for now has too many loose ends (a system may be left around after the level has been
+		// unloaded, leaving behind weird external references, etc). This should be revisited when more time is available (i.e. not days before a 
+		// release is due to go out).
+		for (TObjectIterator<UNiagaraSystem> It; It; ++It)
 		{
-			System->WaitForCompilationComplete();
+			UNiagaraSystem* System = *It;
+			if (System && System->HasOutstandingCompilationRequests())
+			{
+				System->WaitForCompilationComplete();
+			}
 		}
 	}
 }
@@ -1471,10 +1537,9 @@ void FNiagaraEditorModule::EnqueueObjectForDeferredDestructionInternal(FDeferred
 
 bool FNiagaraEditorModule::DeferredDestructObjects(float InDeltaTime)
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_FNiagaraEditorModule_DeferredDestructObjects);
 	EnqueuedForDeferredDestruction.Empty();
 	return false;
 }
-
-PRAGMA_ENABLE_OPTIMIZATION
 
 #undef LOCTEXT_NAMESPACE

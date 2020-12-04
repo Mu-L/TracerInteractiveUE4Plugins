@@ -20,13 +20,14 @@ namespace UnrealBuildTool.Rules
 					"Analytics",
 					"AssetRegistry",
 					"Projects",
-					"Python",
+					"Python3",
 					"Slate",
 					"SlateCore",
 					"InputCore",
 					"Sockets",
 					"Networking",
 					"Json",
+					"DeveloperSettings"
 				}
 			);
 
@@ -47,6 +48,9 @@ namespace UnrealBuildTool.Rules
 						"EditorSubsystem",
 						"BlueprintGraph",
 						"KismetCompiler",
+						"AssetTools",
+						"ContentBrowserData",
+						"ContentBrowserFileDataSource",
 					}
 				);
 			}

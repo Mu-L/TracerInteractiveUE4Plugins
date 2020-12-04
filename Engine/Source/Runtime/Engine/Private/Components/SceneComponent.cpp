@@ -35,6 +35,10 @@
 #include "DeviceProfiles/DeviceProfile.h"
 #include "Net/Core/PushModel/PushModel.h"
 
+#if WITH_EDITOR
+#include "Settings/LevelEditorViewportSettings.h"	// For legacy post edit move behavior
+#endif // WITH_EDITOR
+
 #define LOCTEXT_NAMESPACE "SceneComponent"
 
 namespace SceneComponentStatics
@@ -49,7 +53,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogSceneComponent, Log, All);
 
 DECLARE_CYCLE_STAT(TEXT("UpdateComponentToWorld"), STAT_UpdateComponentToWorld, STATGROUP_Component);
 DECLARE_CYCLE_STAT(TEXT("UpdateChildTransforms"), STAT_UpdateChildTransforms, STATGROUP_Component);
-DECLARE_CYCLE_STAT(TEXT("Component UpdateBounds"), STAT_ComponentUpdateBounds, STATGROUP_Component);
+DECLARE_CYCLE_STAT(TEXT("Component CalcBounds"), STAT_ComponentCalcBounds, STATGROUP_Component);
 DECLARE_CYCLE_STAT(TEXT("Component UpdateNavData"), STAT_ComponentUpdateNavData, STATGROUP_Component);
 DECLARE_CYCLE_STAT(TEXT("Component PostUpdateNavData"), STAT_ComponentPostUpdateNavData, STATGROUP_Component);
 
@@ -527,7 +531,10 @@ void USceneComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChan
 	const bool bLocationChanged = (PropertyName == LocationName || MemberPropertyName == LocationName);
 	if (bLocationChanged || (PropertyName == RotationName || MemberPropertyName == RotationName) || (PropertyName == ScaleName || MemberPropertyName == ScaleName))
 	{
+		TransformUpdated.Broadcast(this, EUpdateTransformFlags::None, ETeleportType::ResetPhysics);
+
 		FNavigationSystem::UpdateComponentData(*this);
+
 		if (!GIsDemoMode)
 		{
 			InvalidateLightingCacheDetailed(true, bLocationChanged);
@@ -1195,8 +1202,6 @@ void USceneComponent::CalcBoundingCylinder(float& CylinderRadius, float& Cylinde
 
 void USceneComponent::UpdateBounds()
 {
-	SCOPE_CYCLE_COUNTER(STAT_ComponentUpdateBounds);
-
 	// if use parent bound if attach parent exists, and the flag is set
 	// since parents tick first before child, this should work correctly
 	if ( bUseAttachParentBound && GetAttachParent() != nullptr )
@@ -1205,6 +1210,7 @@ void USceneComponent::UpdateBounds()
 	}
 	else
 	{
+		SCOPE_CYCLE_COUNTER(STAT_ComponentCalcBounds);
 		// Calculate new bounds
 		Bounds = CalcBounds(GetComponentTransform());
 	}
@@ -1352,6 +1358,14 @@ void USceneComponent::AddWorldTransform(const FTransform& DeltaTransform, bool b
 	const FQuat NewWorldRotation = DeltaTransform.GetRotation() * LocalComponentTransform.GetRotation();
 	const FVector NewWorldLocation = FTransform::AddTranslations(DeltaTransform, LocalComponentTransform);
 	SetWorldTransform(FTransform(NewWorldRotation, NewWorldLocation, FVector(1,1,1)),bSweep, OutSweepHitResult, Teleport);
+}
+
+void USceneComponent::AddWorldTransformKeepScale(const FTransform& DeltaTransform, bool bSweep, FHitResult* OutSweepHitResult, ETeleportType Teleport)
+{
+	const FTransform& LocalComponentTransform = GetComponentTransform();
+	const FQuat NewWorldRotation = DeltaTransform.GetRotation() * LocalComponentTransform.GetRotation();
+	const FVector NewWorldLocation = FTransform::AddTranslations(DeltaTransform, LocalComponentTransform);
+	SetWorldTransform(FTransform(NewWorldRotation, NewWorldLocation, LocalComponentTransform.GetScale3D()), bSweep, OutSweepHitResult, Teleport);
 }
 
 void USceneComponent::SetRelativeScale3D(FVector NewScale3D)
@@ -2296,9 +2310,7 @@ void FSceneComponentInstanceData::ApplyToComponent(UActorComponent* Component, c
 		// and so the rebuilt component should not take back attachment ownership
 		if (ChildComponent && (ChildComponent->GetAttachParent() == nullptr || ChildComponent->GetAttachParent()->IsPendingKill()))
 		{
-			ChildComponent->SetRelativeLocation_Direct(ChildComponentPair.Value.GetLocation());
-			ChildComponent->SetRelativeRotation_Direct(ChildComponentPair.Value.GetRotation().Rotator());
-			ChildComponent->SetRelativeScale3D_Direct(ChildComponentPair.Value.GetScale3D());
+			ChildComponent->SetRelativeTransform_Direct(ChildComponentPair.Value);
 			ChildComponent->AttachToComponent(SceneComponent, FAttachmentTransformRules::KeepRelativeTransform);
 		}
 	}
@@ -3194,9 +3206,9 @@ void USceneComponent::OnRep_AttachChildren()
 	{
 		for (USceneComponent* AttachChild : AttachChildren)
 		{
-			if (AttachChild)
+			// Clear out any initially attached components from the ClientAttachedChildren array that end up becoming replicated, but only if the child now is NetSimulating.
+			if (AttachChild && AttachChild->IsNetSimulating())
 			{
-				// Clear out any initially attached components from the client attached list that end up becoming replicated
 				ClientAttachedChildren.Remove(AttachChild);
 			}
 		}
@@ -3254,11 +3266,11 @@ void USceneComponent::PostRepNotifies()
 		Exchange(NetOldAttachSocketName, AttachSocketName);
 		
 		// Note: This is a local fix for JIRA UE-43355.
-		if (bShouldSnapLocationWhenAttached)
+		if (bShouldSnapLocationWhenAttached && !bNetUpdateTransform)
 		{
 			SetRelativeLocation_Direct(FVector::ZeroVector);
 		}
-		if (bShouldSnapRotationWhenAttached)
+		if (bShouldSnapRotationWhenAttached && !bNetUpdateTransform)
 		{
 			SetRelativeRotation_Direct(FRotator::ZeroRotator);
 		}
@@ -3323,6 +3335,21 @@ void USceneComponent::PostEditComponentMove(bool bFinished)
 		// Snapshot the transaction buffer for this component if we've not finished moving yet
 		// This allows listeners to be notified of intermediate changes of state
 		SnapshotTransactionBuffer(this);
+	}
+
+	PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	if (!GetDefault<ULevelEditorViewportSettings>()->bUseLegacyPostEditBehavior)
+	PRAGMA_ENABLE_DEPRECATION_WARNINGS
+	{
+		// Call on all attached children
+		TArray<USceneComponent*> AttachChildrenCopy(GetAttachChildren());
+		for (USceneComponent* ChildComponent : AttachChildrenCopy)
+		{
+			if (ChildComponent)
+			{
+				ChildComponent->PostEditComponentMove(bFinished);
+			}
+		}
 	}
 }
 
@@ -3832,6 +3859,11 @@ void USceneComponent::K2_AddWorldRotation(FRotator DeltaRotation, bool bSweep, F
 void USceneComponent::K2_AddWorldTransform(const FTransform& DeltaTransform, bool bSweep, FHitResult& SweepHitResult, bool bTeleport)
 {
 	AddWorldTransform(DeltaTransform, bSweep, (bSweep ? &SweepHitResult : nullptr), TeleportFlagToEnum(bTeleport));
+}
+
+void USceneComponent::K2_AddWorldTransformKeepScale(const FTransform& DeltaTransform, bool bSweep, FHitResult& SweepHitResult, bool bTeleport)
+{
+	AddWorldTransformKeepScale(DeltaTransform, bSweep, (bSweep ? &SweepHitResult : nullptr), TeleportFlagToEnum(bTeleport));
 }
 
 void USceneComponent::SetVisibleFlag(const bool bNewVisible)

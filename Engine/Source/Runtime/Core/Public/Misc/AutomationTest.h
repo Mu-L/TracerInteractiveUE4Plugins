@@ -24,6 +24,7 @@
 #include "Misc/Guid.h"
 #include "Math/Vector.h"
 #include "Math/Color.h"
+#include "Math/Rotator.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/AutomationEvent.h"
 #include "Internationalization/Regex.h"
@@ -552,8 +553,9 @@ struct FAutomationExpectedError
 
 struct FAutomationScreenshotData
 {
-	FString Name;
+	FString ScreenShotName;
 	FString Context;
+	FString TestName;
 	FString Notes;
 
 	FGuid Id;
@@ -634,22 +636,12 @@ struct FAutomationScreenshotData
 
 struct CORE_API FAutomationScreenshotCompareResults
 {
-	FAutomationScreenshotCompareResults()
-		: UniqueId()
-		, bWasNew(false)
-		, bWasSimilar(false)
-		, MaxLocalDifference(0)
-		, GlobalDifference(0)
-		, ErrorMessage()
-	{
-	}
-
 	FGuid UniqueId;
-	bool bWasNew;
-	bool bWasSimilar;
-	double MaxLocalDifference;
-	double GlobalDifference;
 	FString ErrorMessage;
+	double MaxLocalDifference = 0.0;
+	double GlobalDifference = 0.0;
+	bool bWasNew = false;
+	bool bWasSimilar = false;
 
 	FAutomationEvent ToAutomationEvent(const FString& ScreenhotName) const;
 };
@@ -889,17 +881,14 @@ public:
 
 private:
 
-	/** Special feedback context used exclusively while automation testing */
-	 class FAutomationTestFeedbackContext : public FFeedbackContext
+	/** Special output device used during automation testing to gather messages that happen during tests */
+	 class FAutomationTestOutputDevice : public FOutputDevice
 	{
 	public:
-
-		/** Constructor */
-		FAutomationTestFeedbackContext() 
+		FAutomationTestOutputDevice() 
 			: CurTest( NULL ) {}
 
-		/** Destructor */
-		~FAutomationTestFeedbackContext()
+		~FAutomationTestOutputDevice()
 		{
 			CurTest = NULL;
 		}
@@ -907,16 +896,16 @@ private:
 		/**
 		 * FOutputDevice interface
 		 *
-		 * @param	V		String to serialize within the context
+		 * @param	V		String to serialize within the output device
 		 * @param	Event	Event associated with the string
 		 */
 		virtual void Serialize( const TCHAR* V, ELogVerbosity::Type Verbosity, const class FName& Category ) override;
 
 		/**
-		 * Set the automation test associated with the feedback context. The automation test is where all warnings, errors, etc.
+		 * Set the automation test associated with the output device. The automation test is where all warnings, errors, etc.
 		 * will be routed to.
 		 *
-		 * @param	InAutomationTest	Automation test to associate with the feedback context.
+		 * @param	InAutomationTest	Automation test to associate with the output device.
 		 */
 		void SetCurrentAutomationTest( class FAutomationTestBase* InAutomationTest )
 		{
@@ -924,10 +913,57 @@ private:
 		}
 
 	private:
-
 		/** Associated automation test; all warnings, errors, etc. are routed to the automation test to track */
 		class FAutomationTestBase* CurTest;
 	};
+
+	 /** Special feedback context used during automated testing to filter messages that happen during tests */
+	 class FAutomationTestMessageFilter: public FFeedbackContext
+	 {
+	 public:
+		 FAutomationTestMessageFilter()
+			 : CurTest(nullptr) {}
+
+		 ~FAutomationTestMessageFilter()
+		 {
+			 CurTest = nullptr;
+		 }
+
+		 /**
+		  * FOutputDevice interface
+		  *
+		  * @param	V		String to serialize within the context
+		  * @param	Event	Event associated with the string
+		  */
+		 virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const class FName& Category) override;
+
+		 /**
+		  * Set the automation test associated with the feedback context. The automation test is what will be used
+		  * to determine if a given warning or error is expected and thus should not be treated as a warning or error
+		  * by the destination context.
+		  *
+		  * @param	InAutomationTest	Automation test to associate with the feedback context.
+		  */
+		 void SetCurrentAutomationTest(class FAutomationTestBase* InAutomationTest)
+		 {
+			 CurTest = InAutomationTest;
+		 }
+
+		 /**
+		  * Set the destination associated with the feedback context. The automation test is where all warnings, errors, etc.
+		  * will be routed to.
+		  *
+		  * @param	InAutomationTest	Automation test to associate with the feedback context.
+		  */
+		 void SetDestinationContext(FFeedbackContext* InDestinationContext)
+		 {
+			 DestinationContext = InDestinationContext;
+		 }
+
+	 private:
+		 class FAutomationTestBase* CurTest;
+		 FFeedbackContext* DestinationContext = nullptr;
+	 };
 
 	//** Store information about blacklisted test */
 	struct FBlacklistEntry
@@ -942,7 +978,7 @@ private:
 		bool bWarn;
 	};
 
-	friend class FAutomationTestFeedbackContext;
+	friend class FAutomationTestOutputDevice;
 	/** Helper method called to prepare settings for automation testing to follow */
 	void PrepForAutomationTests();
 
@@ -994,8 +1030,13 @@ private:
 	FAutomationTestFramework( const FAutomationTestFramework& );
 	FAutomationTestFramework& operator=( const FAutomationTestFramework& );
 
-	/** Specialized feedback context used for automation testing */
-	FAutomationTestFeedbackContext AutomationTestFeedbackContext;
+	/** Specialized output device used for automation testing */
+	FAutomationTestOutputDevice AutomationTestOutputDevice;
+
+	/** Specialized feedback context used for message filtering during automated testing */
+	FAutomationTestMessageFilter AutomationTestMessageFilter;
+
+	FFeedbackContext* OriginalGWarn = nullptr;
 
 	/** Mapping of automation test names to their respective object instances */
 	TMap<FString, class FAutomationTestBase*> AutomationTestClassNameToInstanceMap;
@@ -1225,7 +1266,7 @@ public:
 	}
 
 	/**
-	 * If true logs will not be included in test events
+	 * If true no logging will be included in test events
 	 *
 	 * @return true to suppress logs
 	 */
@@ -1235,18 +1276,25 @@ public:
 	}
 
 	/**
-	 * If true (and SuppressLogs=false) then LogErrors will be treated as test errors
+	 * If returns true then logging with a level of Error will not be recorded in test results
 	 *
-	 * @return true to make errors errors
+	 * @return false to make errors errors
 	 */
-	virtual bool TreatLogErrorsAsErrors() { return true; }
+	virtual bool SuppressLogErrors() { return false; }
 
 	/**
-	 * If true (and SuppressLogs=false) then LogWarnings will be treated as test errors
+	 * If returns true then logging with a level of Warning will not be recorded in test results
 	 *
 	 * @return true to make warnings errors
 	 */
-	virtual bool TreatLogWarningsAsErrors() { return false; }
+	virtual bool SuppressLogWarnings() { return false; }
+
+	/**
+	 * If returns true then logging with a level of Warning will be treated as an error
+	 *
+	 * @return true to make warnings errors
+	 */
+	virtual bool ElevateLogWarningsToErrors() { return false; }
 
 	/**
 	 * Enqueues a new latent command.
@@ -1298,9 +1346,13 @@ public:
 
 	bool TestEqual(const TCHAR* What, int32 Actual, int32 Expected);
 	bool TestEqual(const TCHAR* What, int64 Actual, int64 Expected);
+#if PLATFORM_64BITS
+	bool TestEqual(const TCHAR* What, SIZE_T Actual, SIZE_T Expected);
+#endif
 	bool TestEqual(const TCHAR* What, float Actual, float Expected, float Tolerance = KINDA_SMALL_NUMBER);
 	bool TestEqual(const TCHAR* What, double Actual, double Expected, double Tolerance = KINDA_SMALL_NUMBER);
 	bool TestEqual(const TCHAR* What, FVector Actual, FVector Expected, float Tolerance = KINDA_SMALL_NUMBER);
+	bool TestEqual(const TCHAR* What, FRotator Actual, FRotator Expected, float Tolerance = KINDA_SMALL_NUMBER);
 	bool TestEqual(const TCHAR* What, FColor Actual, FColor Expected);
 	bool TestEqual(const TCHAR* What, const TCHAR* Actual, const TCHAR* Expected);
 	bool TestEqualInsensitive(const TCHAR* What, const TCHAR* Actual, const TCHAR* Expected);
@@ -1321,6 +1373,11 @@ public:
 	}
 
 	bool TestEqual(const FString& What, FVector Actual, FVector Expected, float Tolerance = KINDA_SMALL_NUMBER)
+	{
+		return TestEqual(*What, Actual, Expected, Tolerance);
+	}
+
+	bool TestEqual(const FString& What, FRotator Actual, FRotator Expected, float Tolerance = KINDA_SMALL_NUMBER)
 	{
 		return TestEqual(*What, Actual, Expected, Tolerance);
 	}

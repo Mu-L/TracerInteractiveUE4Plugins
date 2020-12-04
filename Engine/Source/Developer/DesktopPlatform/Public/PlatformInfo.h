@@ -99,6 +99,22 @@ namespace PlatformInfo
 		FString XLargePath;
 	};
 
+
+	/** Information for feature level menu item added by this platform */
+	struct FPreviewPlatformMenuItem
+	{
+		FName PlatformName;
+		FName ShaderFormat;
+		FString ActiveIconPath;
+		FName ActiveIconName;
+		FString InactiveIconPath;
+		FName InactiveIconName;
+		FText MenuText;
+		FText MenuTooltip;
+		FText IconText;
+		FName DeviceProfileName;
+	};
+
 	/** Information about a given platform */
 	struct FPlatformInfo
 	{
@@ -298,4 +314,11 @@ namespace PlatformInfo
 	* @return An array of FNames.
 	*/
 	DESKTOPPLATFORM_API const TArray<FName>& GetAllVanillaPlatformNames();
+
+	/**
+	* Returns a map of all preview platform shader format names to their menu items
+	* Used to generate the editor preview platform menu 
+	* @return the map of shader format names to the menu items
+	*/
+	DESKTOPPLATFORM_API const TMap<FName, PlatformInfo::FPreviewPlatformMenuItem>& GetPreviewPlatformMenuItems();
 }

@@ -6,6 +6,7 @@
 #include "UObject/ObjectMacros.h"
 #include "Engine/DeveloperSettings.h"
 #include "Math/UnitConversion.h"
+#include "Components/ChildActorComponent.h"
 
 #include "EditorProjectSettings.generated.h"
 
@@ -158,7 +159,7 @@ public:
 };
 
 
-UCLASS(config=Editor, meta=(DisplayName="Blueprints"), defaultconfig)
+UCLASS(config=Editor, meta=(DisplayName="Blueprint Project Settings"), defaultconfig)
 class UNREALED_API UBlueprintEditorProjectSettings : public UDeveloperSettings
 {
 	GENERATED_UCLASS_BODY()
@@ -170,11 +171,17 @@ public:
 	 * compile when no changes are detected. Report any issues immediately.
 	 */
 	UPROPERTY(EditAnywhere, config, Category=Blueprints, DisplayName = "Force All Dependencies To Recompile (DEPRECATED)")
-	uint32 bForceAllDependenciesToRecompile:1;
+	uint8 bForceAllDependenciesToRecompile:1;
 
 	/** If enabled, the editor will load packages to look for soft references to actors when deleting/renaming them. This can be slow in large projects so disable this to improve performance but increase the chance of breaking blueprints/sequences that use soft actor references */
 	UPROPERTY(EditAnywhere, config, Category=Actors)
-	uint32 bValidateUnloadedSoftActorReferences : 1;
+	uint8 bValidateUnloadedSoftActorReferences : 1;
+
+	/**
+	 * Enable the option to expand child actor components within component tree views (experimental).
+	 */
+	UPROPERTY(EditAnywhere, config, Category = Experimental)
+	uint8 bEnableChildActorExpansionInTreeView : 1;
 
 	/** 
 	 * List of compiler messages that have been suppressed outside of full, interactive editor sessions for 
@@ -191,5 +198,19 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, config, Category= Blueprints, DisplayName = "Compiler Messages Disabled Entirely")
 	TArray<FName> DisabledCompilerMessages;
+
+	// The list of namespaces to always expose in any Blueprint (for all users of the game/project)
+	UPROPERTY(EditAnywhere, config, Category=Experimental)
+	TArray<FString> NamespacesToAlwaysInclude;
+	
+	/**
+	 * Default view mode to use for child actor components in a Blueprint actor's component tree hierarchy (experimental).
+	 */
+	UPROPERTY(EditAnywhere, config, Category=Experimental, meta=(EditCondition="bEnableChildActorExpansionInTreeView"))
+	EChildActorComponentTreeViewVisualizationMode DefaultChildActorTreeViewMode;
+
+	// UObject interface
+	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+	// End of UObject interface
 };
 

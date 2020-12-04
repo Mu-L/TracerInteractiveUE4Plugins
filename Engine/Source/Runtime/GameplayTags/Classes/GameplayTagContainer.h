@@ -15,7 +15,7 @@ struct FPropertyTag;
 
 GAMEPLAYTAGS_API DECLARE_LOG_CATEGORY_EXTERN(LogGameplayTags, Log, All);
 
-DECLARE_STATS_GROUP_VERBOSE(TEXT("Gameplay Tags"), STATGROUP_GameplayTags, STATCAT_Advanced);
+DECLARE_STATS_GROUP(TEXT("Gameplay Tags"), STATGROUP_GameplayTags, STATCAT_Advanced);
 
 DECLARE_CYCLE_STAT_EXTERN(TEXT("FGameplayTagContainer::HasTag"), STAT_FGameplayTagContainer_HasTag, STATGROUP_GameplayTags, GAMEPLAYTAGS_API);
 DECLARE_CYCLE_STAT_EXTERN(TEXT("FGameplayTagContainer::DoesTagContainerMatch"), STAT_FGameplayTagContainer_DoesTagContainerMatch, STATGROUP_GameplayTags, GAMEPLAYTAGS_API);
@@ -48,7 +48,7 @@ typedef uint16 FGameplayTagNetIndex;
  * A single gameplay tag, which represents a hierarchical name of the form x.y that is registered in the GameplayTagsManager
  * You can filter the gameplay tags displayed in the editor using, meta = (Categories = "Tag1.Tag2.Tag3"))
  */
-USTRUCT(BlueprintType, meta = (HasNativeMake = "GameplayTags.BlueprintGameplayTagLibrary.MakeLiteralGameplayTag", HasNativeBreak = "GameplayTags.BlueprintGameplayTagLibrary.GetTagName"))
+USTRUCT(BlueprintType, meta = (HasNativeMake = "GameplayTags.BlueprintGameplayTagLibrary.MakeLiteralGameplayTag", HasNativeBreak = "GameplayTags.BlueprintGameplayTagLibrary.GetTagName", DisableSplitPin))
 struct GAMEPLAYTAGS_API FGameplayTag
 {
 	GENERATED_USTRUCT_BODY()
@@ -580,6 +580,9 @@ struct GAMEPLAYTAGS_API FGameplayTagContainer
 	/** Returns abbreviated human readable Tag list without parens or property names. If bQuoted is true it will quote each tag */
 	FString ToStringSimple(bool bQuoted = false) const;
 
+	/** Returns abbreviated human readable Tag list without parens or property names, but will limit each string to specified len.  This is to get around output restrictions*/
+	TArray<FString> ToStringsMaxLen(int32 MaxLen) const;
+
 	/** Returns human readable description of what match is being looked for on the readable tag list. */
 	FText ToMatchingText(EGameplayContainerMatchType MatchType, bool bInvertCondition) const;
 
@@ -879,6 +882,7 @@ struct TStructOpsTypeTraits<FGameplayTagContainer> : public TStructOpsTypeTraits
 	};
 };
 
+/** Class that can be subclassed by a game/plugin to allow easily adding native gameplay tags at startup */
 struct GAMEPLAYTAGS_API FGameplayTagNativeAdder
 {
 	FGameplayTagNativeAdder();
@@ -886,12 +890,10 @@ struct GAMEPLAYTAGS_API FGameplayTagNativeAdder
 	virtual void AddTags() = 0;
 };
 
-/**
- *	Helper struct for viewing tag references (assets that reference a tag). Drop this into a struct and set the OnGetgameplayStatName. A details customization
- *	will display a tree view of assets referencing the tag
- */
 USTRUCT()
-struct FGameplayTagReferenceHelper
+struct 
+	UE_DEPRECATED(4.26, "FGameplayTagReferenceHelper has been deprecated, to find references right click a normal gameplay tag")
+	FGameplayTagReferenceHelper
 {
 	GENERATED_USTRUCT_BODY()
 
@@ -899,15 +901,6 @@ struct FGameplayTagReferenceHelper
 	{
 	}
 
-	/** 
-	 *	Delegate to be called to get the tag we want to inspect. The void* is a raw pointer to the outer struct's data. You can do a static cast to access it. Eg:
-	 *	
-	 *	ReferenceHelper.OnGetGameplayTagName.BindLambda([this](void* RawData) {
-	 *		FMyStructType* ThisData = static_cast<FMyStructType*>(RawData);
-	 *		return ThisData->MyTag.GetTagName();
-	 *	});
-	 *
-	*/
 	DECLARE_DELEGATE_RetVal_OneParam(FName, FOnGetGameplayTagName, void* /**RawOuterStructData*/);
 	FOnGetGameplayTagName OnGetGameplayTagName;
 };

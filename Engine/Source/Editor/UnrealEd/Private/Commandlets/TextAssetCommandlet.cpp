@@ -88,6 +88,171 @@ static void RepairDamagedFiles()
 	IFileManager::Get().IterateDirectoryRecursively(*FPaths::EngineContentDir(), RepairVisitor);
 }
 
+typedef TFunction<void(FStructuredArchiveRecord, TArray<FString>&)> FSimpleSchemaFieldPropertyGenerator;
+
+namespace StringConstants
+{
+	static FString Object(TEXT("object"));
+	static FString String(TEXT("string"));
+	static FString Number(TEXT("number"));
+	static FString Array(TEXT("array"));
+	static FString Boolean(TEXT("boolean"));
+	static FString Properties(TEXT("properties"));
+	static FString Type(TEXT("type"));
+}
+
+inline void WriteSimpleSchemaField(FStructuredArchiveRecord Record, const TCHAR* FieldName, FString& Type, FSimpleSchemaFieldPropertyGenerator PropertiesCallback = FSimpleSchemaFieldPropertyGenerator())
+{
+	FStructuredArchiveRecord FieldRecord = Record.EnterField(SA_FIELD_NAME(FieldName)).EnterRecord();
+	FieldRecord << SA_VALUE(TEXT("type"), Type);
+
+	if (PropertiesCallback)
+	{
+		FStructuredArchiveRecord PropertiesRecord = FieldRecord.EnterField(SA_FIELD_NAME(TEXT("properties"))).EnterRecord();
+		TArray<FString> Required;
+		PropertiesCallback(PropertiesRecord, Required);
+		if (Required.Num() > 0)
+		{
+			int32 NumRequired = Required.Num();
+			FStructuredArchiveArray RequiredArray = FieldRecord.EnterField(SA_FIELD_NAME(TEXT("required"))).EnterArray(NumRequired);
+			for (FString& RequiredProperty : Required)
+			{
+				RequiredArray.EnterElement() << RequiredProperty;
+			}
+		}
+	}
+}
+
+TSet<FName> GMissingThings;
+
+void GeneratePropertySchema(FProperty* Property, FStructuredArchiveRecord Record, TArray<FString>& Required)
+{
+	static const FName NAME_ClassProperty(TEXT("ClassProperty"));
+	static const FName NAME_WeakObjectProperty(TEXT("WeakObjectProperty"));
+
+	const FFieldClass* PropertyClass = Property->GetClass();
+	const FName PropertyClassName = PropertyClass->GetFName();
+
+	if (PropertyClassName == NAME_ArrayProperty)
+	{
+		WriteSimpleSchemaField(Record, TEXT("__Type"), StringConstants::String);
+		WriteSimpleSchemaField(Record, TEXT("__InnerType"), StringConstants::String);
+		WriteSimpleSchemaField(Record, TEXT("__InnerStructName"), StringConstants::String);
+		WriteSimpleSchemaField(Record, TEXT("__Value"), StringConstants::Array);
+
+		FStructuredArchiveRecord ItemsRecord = Record.EnterRecord(SA_FIELD_NAME(TEXT("items")));
+	}
+	else
+	{
+		WriteSimpleSchemaField(Record, TEXT("__Type"), StringConstants::String);
+		
+		// We need to describe the data that this property writes out, which only the derived property class knows. We'll have to add something to the FProperty API to do that
+		// but for now I'm just going to hardcode things here
+		if (PropertyClassName == NAME_StrProperty
+ 		||  PropertyClassName == NAME_ObjectProperty
+		||  PropertyClassName == NAME_NameProperty)
+		{
+			WriteSimpleSchemaField(Record, TEXT("__Value"), StringConstants::String);
+		}
+		else if (PropertyClassName == NAME_EnumProperty || (PropertyClassName == NAME_ByteProperty && ((const FByteProperty*)(Property))->Enum != nullptr))
+		{
+			WriteSimpleSchemaField(Record, TEXT("__EnumName"), StringConstants::String);
+			WriteSimpleSchemaField(Record, TEXT("__Value"), StringConstants::String);
+		}
+		else if (PropertyClass->IsChildOf(FNumericProperty::StaticClass()))
+		{
+			WriteSimpleSchemaField(Record, TEXT("__Value"), StringConstants::Number);
+		}
+		else if (PropertyClassName == NAME_StructProperty || PropertyClassName == NAME_ClassProperty)
+		{
+			WriteSimpleSchemaField(Record, TEXT("__StructName"), StringConstants::String);
+			WriteSimpleSchemaField(Record, TEXT("__Value"), StringConstants::Object);
+		}
+		else if (PropertyClassName == NAME_TextProperty)
+		{
+			WriteSimpleSchemaField(Record, TEXT("__Value"), StringConstants::Object);
+		}
+		else if (PropertyClassName == NAME_BoolProperty)
+		{
+			WriteSimpleSchemaField(Record, TEXT("__Value"), StringConstants::Boolean);
+		}
+		else if (PropertyClassName == NAME_SetProperty)
+		{
+			WriteSimpleSchemaField(Record, TEXT("__InnerType"), StringConstants::String);
+			WriteSimpleSchemaField(Record, TEXT("__Value"), StringConstants::Object);
+		}
+		else if (PropertyClassName == NAME_InterfaceProperty)
+		{
+			WriteSimpleSchemaField(Record, TEXT("__Value"), StringConstants::Object);
+		}
+		else if (PropertyClassName == NAME_WeakObjectProperty)
+		{
+			WriteSimpleSchemaField(Record, TEXT("__Value"), StringConstants::Object);
+		}
+		else if (PropertyClassName == NAME_MapProperty)
+		{
+			WriteSimpleSchemaField(Record, TEXT("__InnerType"), StringConstants::String);
+			WriteSimpleSchemaField(Record, TEXT("__ValueType"), StringConstants::String);
+			WriteSimpleSchemaField(Record, TEXT("__Value"), StringConstants::Object);
+		}
+		else
+		{
+			if (!GMissingThings.Contains(PropertyClassName))
+			{
+				UE_LOG(LogTextAsset, Warning, TEXT("Unhandled property type: %s"), *PropertyClassName.ToString());
+				GMissingThings.Add(PropertyClassName);
+			}
+		}
+	}
+}
+
+void GenerateClassSchema(UClass* Class, FStructuredArchiveRecord Record, TArray<FString>& Required)
+{
+	FProperty* CurProperty = Class->PropertyLink;
+	while (CurProperty != nullptr)
+	{
+		WriteSimpleSchemaField(Record, *CurProperty->GetName(), StringConstants::Object, [CurProperty](FStructuredArchiveRecord InRecord, TArray<FString>& InRequired) { GeneratePropertySchema(CurProperty, InRecord, InRequired); });
+		CurProperty = CurProperty->PropertyLinkNext;
+	}
+}
+
+void GenerateSchema()
+{
+	//static const FName NAME_SpecificClass(TEXT("TextAssetTestObject"));
+	static const FName NAME_SpecificClass(NAME_None);
+
+	FString OutputFilename;
+	if (!FParse::Value(FCommandLine::Get(), TEXT("-schemaoutput="), OutputFilename))
+	{
+		OutputFilename = FPaths::ProjectConfigDir() / TEXT("Schemas/TextAssetExports.json");
+	}
+
+	TUniquePtr<FArchive> OutputAr(IFileManager::Get().CreateFileWriter(*OutputFilename));
+	FJsonArchiveOutputFormatter JsonFormatter(*OutputAr.Get());
+	FStructuredArchive StructuredArchive(JsonFormatter);
+	FStructuredArchiveRecord RootRecord = StructuredArchive.Open().EnterRecord();
+
+	for (FObjectIterator It(UClass::StaticClass()); It; ++It)
+	{
+		UClass* Class = Cast<UClass>(*It);
+		if (Class)
+		{
+			if (NAME_SpecificClass == NAME_None || Class->GetFName() == NAME_SpecificClass)
+			{
+				FStructuredArchiveRecord ClassRecord = RootRecord.EnterRecord(SA_FIELD_NAME(*Class->GetFullName()));
+				ClassRecord << SA_VALUE(*StringConstants::Type, StringConstants::Object);
+
+				WriteSimpleSchemaField(ClassRecord, TEXT("__Class"), StringConstants::Object);
+				WriteSimpleSchemaField(ClassRecord, TEXT("__Outer"), StringConstants::String);
+				WriteSimpleSchemaField(ClassRecord, TEXT("__bNotAlwaysLoadedForEditorGame"), StringConstants::Boolean);
+				WriteSimpleSchemaField(ClassRecord, TEXT("__Value"), StringConstants::Object, [Class](FStructuredArchiveRecord Record, TArray<FString>& Required) { GenerateClassSchema(Class, Record, Required); });
+			}
+		}
+	}
+
+	StructuredArchive.Close();
+}
+
 bool UTextAssetCommandlet::DoTextAssetProcessing(const FString& InCommandLine)
 {
 	FProcessingArgs Args;
@@ -142,10 +307,18 @@ bool UTextAssetCommandlet::DoTextAssetProcessing(const FProcessingArgs& InArgs)
 
 	TArray<FString> Blacklist;
 
-	if (InArgs.ProcessingMode == ETextAssetCommandletMode::FindMismatchedSerializers)
+	switch (InArgs.ProcessingMode)
 	{
+	case ETextAssetCommandletMode::FindMismatchedSerializers:
 		FindMismatchedSerializers();
 		return true;
+
+	case ETextAssetCommandletMode::GenerateSchema:
+		GenerateSchema();
+		break;
+
+	default:
+		break;
 	}
 
 	TArray<UObject*> Objects;		
@@ -444,27 +617,27 @@ bool UTextAssetCommandlet::DoTextAssetProcessing(const FProcessingArgs& InArgs)
 						UPackage* Package = nullptr;
 						
 						{
-							TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("LoadPackage"));
+							TRACE_CPUPROFILER_EVENT_SCOPE(LoadPackage);
 							Package = LoadPackage(nullptr, *SourceLongPackageName, LOAD_None);
 						}
 						
 						{
-							TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("SavePackage")); 
+							TRACE_CPUPROFILER_EVENT_SCOPE(SavePackage); 
 							SavePackageHelper(Package, *WorkingFilenames[Bucket], RF_Standalone, GWarn, nullptr, SAVE_KeepGUID);
 						}
 						
 						{
-							TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("ResetLoaders")); 
+							TRACE_CPUPROFILER_EVENT_SCOPE(ResetLoaders); 
 							ResetLoaders(Package);
 						}
 
 						{
-							TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("CollectGarbage"));
+							TRACE_CPUPROFILER_EVENT_SCOPE(CollectGarbage);
 							CollectGarbage(RF_NoFlags, true);
 						}
 
 						{
-							TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("RoundtripTestCleanup"));
+							TRACE_CPUPROFILER_EVENT_SCOPE(RoundtripTestCleanup);
 							FSHAHash& Hash = PhaseHashes[PhaseHashes.AddDefaulted()];
 							HashFile(*WorkingFilenames[Bucket], Hash);
 
@@ -578,12 +751,12 @@ bool UTextAssetCommandlet::DoTextAssetProcessing(const FProcessingArgs& InArgs)
 				UPackage* Package = nullptr;
 
 				UE_LOG(LogTextAsset, Display, TEXT("Resaving asset %s"), *SourceFilename);
-				TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("UTextAssetCommandlet::Resave"));
+				TRACE_CPUPROFILER_EVENT_SCOPE(UTextAssetCommandlet::Resave);
 
 				double Timer = 0.0;
 				{
 					SCOPE_SECONDS_COUNTER(Timer);
-					TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("UTextAssetCommandlet::LoadPackage"));
+					TRACE_CPUPROFILER_EVENT_SCOPE(UTextAssetCommandlet::LoadPackage);
 					Package = LoadPackage(nullptr, *SourceFilename, 0);
 				}
 				IterationPackageLoadTime += Timer;
@@ -595,7 +768,7 @@ bool UTextAssetCommandlet::DoTextAssetProcessing(const FProcessingArgs& InArgs)
 				{
 					{
 						SCOPE_SECONDS_COUNTER(Timer);
-						TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("UTextAssetCommandlet::SavePackage"));
+						TRACE_CPUPROFILER_EVENT_SCOPE(UTextAssetCommandlet::SavePackage);
 						IFileManager::Get().Delete(*DestinationFilename, false, true, true);
 						bSaveSuccessful = SavePackageHelper(Package, *DestinationFilename, RF_Standalone, GWarn, nullptr, SAVE_KeepGUID);
 					}
@@ -607,7 +780,7 @@ bool UTextAssetCommandlet::DoTextAssetProcessing(const FProcessingArgs& InArgs)
 				{
 					if (InArgs.bVerifyJson && InArgs.ProcessingMode == ETextAssetCommandletMode::ResaveText)
 					{
-						TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("UTextAssetCommandlet::VerifyJson"));
+						TRACE_CPUPROFILER_EVENT_SCOPE(UTextAssetCommandlet::VerifyJson);
 						FArchive* File = IFileManager::Get().CreateFileReader(*DestinationFilename);
 						TSharedPtr< FJsonObject > RootObject;
 						TSharedRef< TJsonReader<char> > Reader = TJsonReaderFactory<char>::Create(File);
@@ -617,7 +790,7 @@ bool UTextAssetCommandlet::DoTextAssetProcessing(const FProcessingArgs& InArgs)
 
 					if (InArgs.OutputPath.Len() > 0)
 					{
-						TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(TEXT("UTextAssetCommandlet::CopyToExternalOutput"));
+						TRACE_CPUPROFILER_EVENT_SCOPE(UTextAssetCommandlet::CopyToExternalOutput);
 						FString CopyFilename = DestinationFilename;
 						FPaths::MakePathRelativeTo(CopyFilename, *FPaths::RootDir());
 						CopyFilename = InArgs.OutputPath / CopyFilename;

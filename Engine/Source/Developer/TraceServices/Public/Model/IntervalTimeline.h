@@ -42,6 +42,7 @@ public:
 		{
 			Callback(true, InStartTime, InEvent);
 			Callback(false, InEndTime, InEvent);
+			return Trace::EEventEnumerate::Continue;
 		});
 	}
 	
@@ -64,7 +65,10 @@ public:
 			{
 				if (!(Event->EndTime < IntervalStart || IntervalEnd < Event->StartTime))
 				{
-					Callback(Event->StartTime, Event->EndTime, 0, Event->Event);
+					if (Callback(Event->StartTime, Event->EndTime, 0, Event->Event) == EEventEnumerate::Stop)
+					{
+						return;
+					}
 				}
 				Event = EventIterator.NextItem();
 			}
@@ -73,14 +77,17 @@ public:
 	
 	uint64 AppendBeginEvent(double StartTime, const EventType& Event)
 	{
+		return EmplaceBeginEvent(StartTime, Event);
+	}
+
+	template <typename... ArgsType>
+	uint64 EmplaceBeginEvent(double StartTime, ArgsType&&... Args)
+	{
 		//check(StartTime >= LastTime);
 		//LastTime = StartTime;
 
 		uint64 Index = Events.Num();
-		FEventInternal& EventInternal = Events.PushBack();
-		EventInternal.StartTime = StartTime;
-		EventInternal.EndTime = std::numeric_limits<double>::infinity();
-		EventInternal.Event = Event;
+		Events.EmplaceBack(StartTime, std::numeric_limits<double>::infinity(), Forward<ArgsType>(Args)...);
 
 		FEventPage* LastPage = Events.GetLastPage();
 		if (LastPage != CurrentPage)
@@ -118,12 +125,26 @@ public:
 		return EventInternal.Event;
 	}
 
+	virtual bool GetEventInfo(double InTime, double DeltaTime, int32 Depth, typename ITimeline<EventType>::FTimelineEventInfo& EventInfo) const override
+	{
+		//Not implemented
+		check(false);
+		return false;
+	}
+
 private:
 	struct FEventInternal
 	{
 		double StartTime;
 		double EndTime;
 		EventType Event;
+
+		FEventInternal() = default;
+		FEventInternal(double InStartTime, double InEndTime, EventType InEvent)
+			: StartTime(InStartTime)
+			, EndTime(InEndTime)
+			, Event(MoveTempIfPossible(InEvent))
+		{ }
 	};
 
 	struct FEventPage

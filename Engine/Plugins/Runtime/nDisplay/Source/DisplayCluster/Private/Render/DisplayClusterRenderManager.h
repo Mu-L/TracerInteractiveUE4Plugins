@@ -31,7 +31,7 @@ public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	virtual bool Init(EDisplayClusterOperationMode OperationMode) override;
 	virtual void Release() override;
-	virtual bool StartSession(const FString& configPath, const FString& nodeId) override;
+	virtual bool StartSession(const UDisplayClusterConfigurationData* InConfigData, const FString& InNodeId) override;
 	virtual void EndSession() override;
 	virtual bool StartScene(UWorld* InWorld) override;
 	virtual void EndScene() override;
@@ -42,6 +42,7 @@ public:
 	// IDisplayClusterRenderManager
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	// Device
+	virtual IDisplayClusterRenderDevice* GetRenderDevice() const override;
 	virtual bool RegisterRenderDeviceFactory(const FString& InDeviceType, TSharedPtr<IDisplayClusterRenderDeviceFactory>& InFactory) override;
 	virtual bool UnregisterRenderDeviceFactory(const FString& InDeviceType) override;
 	// Synchronization
@@ -52,30 +53,12 @@ public:
 	virtual bool RegisterProjectionPolicyFactory(const FString& InProjectionType, TSharedPtr<IDisplayClusterProjectionPolicyFactory>& InFactory) override;
 	virtual bool UnregisterProjectionPolicyFactory(const FString& InProjectionType) override;
 	virtual TSharedPtr<IDisplayClusterProjectionPolicyFactory> GetProjectionPolicyFactory(const FString& InProjectionType) override;
+	virtual void GetRegisteredProjectionPolicies(TArray<FString>& OutPolicyIDs) const override;
 	// Post-process
 	virtual bool RegisterPostprocessOperation(const FString& InName, TSharedPtr<IDisplayClusterPostProcess>& InOperation, int InPriority = 0) override;
 	virtual bool RegisterPostprocessOperation(const FString& InName, IPDisplayClusterRenderManager::FDisplayClusterPPInfo& InPPInfo) override;
 	virtual bool UnregisterPostprocessOperation(const FString& InName) override;
 	virtual TMap<FString, IPDisplayClusterRenderManager::FDisplayClusterPPInfo> GetRegisteredPostprocessOperations() const override;
-	// Custom Rendering Post-process
-	virtual void SetStartPostProcessingSettings(const FString& ViewportID, const FPostProcessSettings& StartPostProcessingSettings) override;
-	virtual void SetOverridePostProcessingSettings(const FString& ViewportID, const FPostProcessSettings& OverridePostProcessingSettings, float BlendWeight = 1.0f) override;
-	virtual void SetFinalPostProcessingSettings(const FString& ViewportID, const FPostProcessSettings& FinalPostProcessingSettings) override;
-
-	// Camera
-	virtual void SetViewportCamera(const FString& InCameraId = FString(), const FString& InViewportId = FString()) override;
-
-	// Viewports
-	virtual bool GetViewportRect(const FString& InViewportID, FIntRect& Rect) override;
-	virtual bool SetBufferRatio(const FString& InViewportID, float InBufferRatio) override;
-	virtual bool GetBufferRatio(const FString& InViewportID, float &OutBufferRatio) const override;
-
-	// Camera API
-	virtual float GetInterpupillaryDistance(const FString& CameraId) const override;
-	virtual void  SetInterpupillaryDistance(const FString& CameraId, float EyeDistance) override;
-	virtual bool  GetEyesSwap(const FString& CameraId) const override;
-	virtual void  SetEyesSwap(const FString& CameraId, bool EyeSwapped) override;
-	virtual bool  ToggleEyesSwap(const FString& CameraId) override;
 
 public:
 	//////////////////////////////////////////////////////////////////////////////////////////////
@@ -87,18 +70,15 @@ private:
 	// FDisplayClusterRenderManager
 	//////////////////////////////////////////////////////////////////////////////////////////////
 	void ResizeWindow(int32 WinX, int32 WinY, int32 ResX, int32 ResY);
-	void OnViewportCreatedHandler_SetCustomPresent();
-	void OnViewportCreatedHandler_CheckViewportClass();
-	void OnBeginDrawHandler();
+	void OnViewportCreatedHandler_SetCustomPresent() const;
+	void OnViewportCreatedHandler_CheckViewportClass() const;
+	void OnBeginDrawHandler() const;
 
 private:
 	EDisplayClusterOperationMode CurrentOperationMode;
-	FString ConfigPath;
-	FString ClusterNodeId;
 
 	// Interface pointer to avoid type casting
 	IDisplayClusterRenderDevice* RenderDevicePtr = nullptr;
-	bool bWindowAdjusted = false;
 
 private:
 	// Rendering device factories
@@ -110,7 +90,7 @@ private:
 	// Synchronization internals
 	TMap<FString, TSharedPtr<IDisplayClusterRenderSyncPolicyFactory>> SyncPolicyFactories;
 	TSharedPtr<IDisplayClusterRenderSyncPolicy> CreateRenderSyncPolicy() const;
-	TSharedPtr<IDisplayClusterRenderSyncPolicy> SyncPolicy;
+	mutable TSharedPtr<IDisplayClusterRenderSyncPolicy> SyncPolicy;
 
 private:
 	// Projection internals
@@ -123,4 +103,7 @@ private:
 private:
 	// Internal data access synchronization
 	mutable FCriticalSection CritSecInternals;
+
+	// This flag is used to auto-focus the UE4 window once on start
+	bool bWasWindowFocused = false;
 };

@@ -78,6 +78,7 @@ REGISTER_NAME(104,ObjectArchetype)
 REGISTER_NAME(105,Class)
 REGISTER_NAME(106,ScriptStruct)
 REGISTER_NAME(107,Function)
+REGISTER_NAME(108,Pawn)
 
 // Misc.
 REGISTER_NAME(200,State)
@@ -138,6 +139,7 @@ REGISTER_NAME(256,Voice)
 REGISTER_NAME(257, Zlib)
 REGISTER_NAME(258, Gzip)
 REGISTER_NAME(259, LZ4)
+REGISTER_NAME(260, Mobile)
 
 // Online
 REGISTER_NAME(280,DGram)
@@ -154,6 +156,7 @@ REGISTER_NAME(290,BeaconPort)
 REGISTER_NAME(291,MeshPort)
 REGISTER_NAME(292,MeshNetDriver)
 REGISTER_NAME(293,LiveStreamVoice)
+REGISTER_NAME(294,LiveStreamAnimation)
 
 // Texture settings.
 REGISTER_NAME(300,Linear)
@@ -206,3 +209,4 @@ REGISTER_NAME(602,GameUserSettings)
 // Commonly multicased names - defined globally to prevent non-determinism in package name tables
 REGISTER_NAME(700,Filename)
 REGISTER_NAME(701,Lerp)
+REGISTER_NAME(702,Root)

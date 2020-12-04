@@ -111,6 +111,9 @@ public:
 	/** Gets the tooltip that should be shown for the value of this input. */
 	FText GetValueToolTip() const;
 
+	/** Gets the tooltip that should be shown for the value of this input. */
+	FText GetCollapsedStateText() const;
+
 	/** Gets the path of parameter handles from the owning module to the function call which owns this input. */
 	const TArray<FNiagaraParameterHandle>& GetInputParameterHandlePath() const;
 
@@ -170,6 +173,9 @@ public:
 
 	/** Resets the value and handle of this input to the value and handle defined in the module. */
 	void Reset();
+
+	/** Checks if any data needs a fixup after the module definition changed. */
+	void ApplyModuleChanges();
 
 	/** Determine if this field is editable */
 	bool IsEditable() const;
@@ -246,9 +252,12 @@ public:
 
 	bool IsScratchDynamicInput() const;
 
-public:
+	virtual bool IsSemanticChild() const;
+	void SetSemanticChild(bool IsSemanticChild);
+
 	//~ UNiagaraStackEntry interface
 	virtual void GetSearchItems(TArray<FStackSearchItem>& SearchItems) const override;
+	virtual bool HasFrontDivider() const override;
 
 	/** If false then the stack parameter is not visible */
 	bool bIsVisible = true;
@@ -336,7 +345,11 @@ private:
 	FNiagaraVariable CreateRapidIterationVariable(const FName& InName);
 
 	/** Handles the message manager refreshing messages. */
-	void OnMessageManagerRefresh(const FGuid& MessageJobBatchAssetKey, const TArray<TSharedRef<const INiagaraMessage>> NewMessages);
+	void OnMessageManagerRefresh(const TArray<TSharedRef<const INiagaraMessage>>& NewMessages);
+
+	TArray<UNiagaraStackFunctionInput*> GetChildInputs() const;
+
+	void ResetDataInterfaceOverride();
 
 private:
 	/** The module function call which owns this input entry. NOTE: This input might not be an input to the module function
@@ -406,6 +419,9 @@ private:
 	/** A tooltip to show for the value of this input. */
 	mutable TOptional<FText> ValueToolTipCache;
 
+	/** Text to display on a collapsed node. */
+	mutable TOptional<FText> CollapsedTextCache;
+
 	mutable TOptional<bool> bIsScratchDynamicInputCache;
 
 	/** A flag to prevent handling graph changes when it's being updated directly by this object. */
@@ -446,6 +462,14 @@ private:
 	/** Whether or not the dynamic input for this input has a function script reassignment pending due to a request to fix a missing script. */
 	bool bIsDynamicInputScriptReassignmentPending;
 
-	/** A handled to the refresh delegate on the message manager if it's bound. */
-	FDelegateHandle MessageManagerRefreshHandle;
+	/** A key to the message manager registration and its delegate binding. */
+	FGuid MessageManagerRegistrationKey;
+
+	//** Issues created outside of the RefreshChildren call that will be committed the next time the UI state is refreshed. */
+	TArray<FStackIssue> MessageManagerIssues;
+
+	FGuid MessageLogGuid;
+
+	// If true then this stack entry is the semantic child of another stack entry
+	bool bIsSemanticChild = false;
 };

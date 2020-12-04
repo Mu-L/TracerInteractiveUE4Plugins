@@ -18,6 +18,10 @@ namespace Chaos
 		virtual ~TPerParticleDampVelocity() {}
 
 		template<class T_PARTICLES>
+		void UpdatePositionBasedState(const T_PARTICLES& Particles, const int32 Offset, const int32 Range);
+
+		template<class T_PARTICLES>
+		UE_DEPRECATED(4.26, "Use offset range version instead")
 		inline void UpdatePositionBasedState(const T_PARTICLES& InParticles, const TArray<int32>& InActiveIndices)
 		{
 			static_assert(d == 3, "Damp Velocities currently only supports 3D vectors.");
@@ -92,7 +96,7 @@ namespace Chaos
 			{
 				return; // Do not damp kinematic particles
 			}
-			ApplyHelper(InParticles, Dt, Index);
+			ApplyFast(InParticles, Dt, Index);
 		}
 
 		inline void Apply(TRigidParticles<T, d>& InParticles, const T Dt, const int32 Index) const override //-V762
@@ -101,23 +105,30 @@ namespace Chaos
 			{
 				return; // Do not damp kinematic rigid bodies
 			}
-			ApplyHelper(InParticles, Dt, Index);
+			ApplyFast(InParticles, Dt, Index);
 		}
 
-	protected:
+		// Apply damping without first checking for kinematic particles
 		template<class T_PARTICLES>
-		inline void ApplyHelper(T_PARTICLES& InParticles, const T Dt, const int32 Index) const
+		inline void ApplyFast(T_PARTICLES& Particles, const T /*Dt*/, const int32 Index) const
 		{
-			TVector<T, d> R = InParticles.X(Index) - MXcm;
-			TVector<T, d> Dv = MVcm - InParticles.V(Index) + TVector<T, d>::CrossProduct(R, MOmega);
-			InParticles.V(Index) += MCoefficient * Dv;
+			const TVector<T, d> R = Particles.X(Index) - MXcm;
+			const TVector<T, d> Dv = MVcm - Particles.V(Index) + TVector<T, d>::CrossProduct(R, MOmega);
+			Particles.V(Index) += MCoefficient * Dv;
 		}
-
-	protected:
-		mutable T MCoefficient;  // The mutable allows to be modified in derived classes Apply const functions
 
 	private:
-		TArray<int32> ActiveIndices;
+		T MCoefficient;
 		TVector<T, d> MXcm, MVcm, MOmega;
+		TArray<int32> ActiveIndices;
 	};
 }
+
+// Support ISPC enable/disable in non-shipping builds
+#if !INTEL_ISPC
+const bool bChaos_DampVelocity_ISPC_Enabled = false;
+#elif UE_BUILD_SHIPPING
+const bool bChaos_DampVelocity_ISPC_Enabled = true;
+#else
+extern CHAOS_API bool bChaos_DampVelocity_ISPC_Enabled;
+#endif

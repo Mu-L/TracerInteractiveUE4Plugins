@@ -5,6 +5,8 @@
 #include "Misc/ScopeLock.h"
 #include "TraceFilters.h"
 #include "TraceFilter.h"
+#include "Engine/World.h"
+#include "Engine/Level.h"
 
 #include "ObjectTrace.h"
 #include "SourceFilterManager.h"
@@ -40,6 +42,7 @@ void FTraceWorldFiltering::Initialize()
 
 	// Disable engine level world filter
 	DISABLE_ENGINE_WORLD_TRACE_FILTERING();
+	DISABLE_ENGINE_ACTOR_TRACE_FILTERING();
 }
 
 void FTraceWorldFiltering::Destroy()
@@ -210,7 +213,7 @@ void FTraceWorldFiltering::OnWorldPostInit(UWorld* World, const UWorld::Initiali
 
 	// Handle all loaded AActors within this world, to handle duplicated UWorlds (PIE)
 	FSourceFilterManager* Manager = WorldSourceFilterManagers.FindChecked(World);
-	Manager->Tick(0.f);
+	Manager->OnFilterSetupChanged();
 }
 
 void FTraceWorldFiltering::OnWorldCleanup(UWorld* InWorld, bool bSessionEnded, bool bCleanupResources)

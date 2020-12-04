@@ -25,7 +25,7 @@
 
 static void HandleHyperlinkNavigate()
 {
-	FGlobalTabmanager::Get()->InvokeTab(FName("OutputLog"));
+	FGlobalTabmanager::Get()->TryInvokeTab(FName("OutputLog"));
 }
 
 static void HandleCancelButtonClicked(ILauncherWorkerPtr LauncherWorker)

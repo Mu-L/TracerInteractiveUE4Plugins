@@ -9,7 +9,6 @@
 #include "DynamicMesh3.h"
 #include "DynamicMeshAABBTree3.h"
 #include "MeshOpPreviewHelpers.h"
-#include "Changes/ValueWatcher.h"
 #include "CleaningOps/SimplifyMeshOp.h"
 #include "Properties/MeshStatisticsProperties.h"
 #include "Properties/RemeshProperties.h"
@@ -46,15 +45,13 @@ class MESHMODELINGTOOLSEDITORONLY_API USimplifyMeshToolProperties : public UMesh
 public:
 	USimplifyMeshToolProperties();
 
-	void SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving) override;
+	/** Simplification Scheme  */
+	UPROPERTY(EditAnywhere, Category = Options)
+	ESimplifyType SimplifierType;
 
 	/** Simplification Target Type  */
 	UPROPERTY(EditAnywhere, Category = Options)
 	ESimplifyTargetType TargetMode;
-
-	/** Simplification Scheme  */
-	UPROPERTY(EditAnywhere, Category = Options)
-	ESimplifyType SimplifierType;
 
 	/** Target percentage of original triangle count */
 	UPROPERTY(EditAnywhere, Category = Options, meta = (UIMin = "0", UIMax = "100", EditCondition = "TargetMode == ESimplifyTargetType::Percentage"))
@@ -65,7 +62,7 @@ public:
 	float TargetEdgeLength;
 
 	/** Target triangle count */
-	UPROPERTY(EditAnywhere, Category = Options, meta = (UIMin = "4", UIMax = "10000", ClampMin = "1", ClampMax = "9999999999", EditCondition = "TargetMode == ESimplifyTargetType::TriangleCount"))
+	UPROPERTY(EditAnywhere, Category = Options, meta = (UIMin = "4", UIMax = "10000", ClampMin = "1", ClampMax = "9999999999", EditCondition = "TargetMode == ESimplifyTargetType::TriangleCount || TargetMode == ESimplifyTargetType::VertexCount"))
 	int TargetCount;
 
 	/** If true, UVs and Normals are discarded  */
@@ -103,11 +100,11 @@ public:
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 
-	virtual void Tick(float DeltaTime) override;
+	virtual void OnTick(float DeltaTime) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
 
 	virtual bool HasCancel() const override { return true; }
-	virtual bool HasAccept() const override;
+	virtual bool HasAccept() const override { return true; }
 	virtual bool CanAccept() const override;
 
 	virtual void OnPropertyModified(UObject* PropertySet, FProperty* Property) override;
@@ -127,9 +124,6 @@ private:
 
 	UWorld* TargetWorld;
 	IToolsContextAssetAPI* AssetAPI;
-
-	TValueWatcher<bool> ShowWireFrameWatcher;
-	TValueWatcher<bool> ShowGroupsWatcher;
 
 	TSharedPtr<FMeshDescription> OriginalMeshDescription;
 	// Dynamic Mesh versions precomputed in Setup (rather than recomputed for every simplify op)

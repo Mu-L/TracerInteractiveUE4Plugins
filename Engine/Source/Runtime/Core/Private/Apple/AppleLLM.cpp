@@ -6,7 +6,7 @@
 #if ENABLE_LOW_LEVEL_MEM_TRACKER
 
 #include <objc/runtime.h>
-#if PLATFORM_MAC
+#if PLATFORM_MAC_X86
 #include "rd_route.h"
 #endif
 
@@ -93,7 +93,7 @@ void NSDeallocateObjectInterposer(id Obj)
  */
 void AppleLLM::Initialise()
 {
-	int32 TagCount = sizeof(ELLMTagApple) / sizeof(FLLMTagInfoApple);
+	int32 TagCount = sizeof(ELLMTagNamesApple) / sizeof(FLLMTagInfoApple);
 
 	for (int32 Index = 0; Index < TagCount; ++Index)
 	{
@@ -103,7 +103,7 @@ void AppleLLM::Initialise()
 		FLowLevelMemTracker::Get().RegisterPlatformTag(Tag, TagInfo.Name, TagInfo.StatName, TagInfo.SummaryStatName);
 	}
 	
-#if PLATFORM_MAC
+#if PLATFORM_MAC_X86
 	// Use rd_route to hook NSAllocateObject/_os_object_alloc_realized/NSDeallocateObject that are used in custom allocators within Apple's libraries
 	// Necessary to avoid crashes because we otherwise can't track these allocations.
 	// For this to work on iOS we would need to get TPS approval for libevil which performs the same function and handle the function-name -> ptr search available separately.

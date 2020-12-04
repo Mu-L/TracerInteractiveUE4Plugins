@@ -5,7 +5,6 @@
 #include "CoreMinimal.h"
 #include "UObject/NoExportTypes.h"
 #include "BaseTools/MeshSurfacePointTool.h"
-#include "Changes/ValueWatcher.h"
 #include "Mechanics/PlaneDistanceFromHitMechanic.h"
 #include "Mechanics/SpatialCurveDistanceMechanic.h"
 #include "Mechanics/CollectSurfacePathMechanic.h"
@@ -75,20 +74,23 @@ public:
 	UPROPERTY(EditAnywhere, Category = Shape, meta = (UIMin = "0.0001", UIMax = "1000", ClampMin = "0", ClampMax = "999999"))
 	float Width = 10.0f;
 
-	UPROPERTY(EditAnywhere, Category = Shape)
+	UPROPERTY(EditAnywhere, Category = Shape, meta = (
+		EditCondition = "OutputType != EDrawPolyPathOutputMode::Ribbon", EditConditionHides))
 	EDrawPolyPathHeightMode HeightMode = EDrawPolyPathHeightMode::Interactive;
 
-	UPROPERTY(EditAnywhere, Category = Shape, meta = (UIMin = "-1000", UIMax = "1000", ClampMin = "-10000", ClampMax = "10000"))
+	UPROPERTY(EditAnywhere, Category = Shape, meta = (
+		EditCondition = "OutputType != EDrawPolyPathOutputMode::Ribbon", 
+		EditConditionHides, UIMin = "-1000", UIMax = "1000", ClampMin = "-10000", ClampMax = "10000"))
 	float Height = 10.0f;
 
-	UPROPERTY(EditAnywhere, Category = Shape, meta = (UIMin = "0.01", UIMax = "1.0", ClampMin = "0", ClampMax = "100.0"))
+	UPROPERTY(EditAnywhere, Category = Shape, meta = (
+		EditCondition = "OutputType == EDrawPolyPathOutputMode::Ramp", EditConditionHides,
+		UIMin = "0.01", UIMax = "1.0", ClampMin = "0", ClampMax = "100.0"))
 	float RampStartRatio = 0.05f;
 
 
 	UPROPERTY(EditAnywhere, Category = Snapping)
 	bool bSnapToWorldGrid = true;
-
-	virtual void SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving) override;
 };
 
 
@@ -129,8 +131,6 @@ class MESHMODELINGTOOLS_API UDrawPolyPathTool : public UInteractiveTool, public 
 	GENERATED_BODY()
 
 public:
-	UDrawPolyPathTool();
-
 	virtual void RegisterActions(FInteractiveToolActionSet& ActionSet) override;
 
 	virtual void SetWorld(UWorld* World);
@@ -139,7 +139,7 @@ public:
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 
-	virtual void Tick(float DeltaTime) override;
+	virtual void OnTick(float DeltaTime) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
 
 	virtual bool HasCancel() const override { return false; }

@@ -33,11 +33,6 @@
 			"Name": "MeshConversion",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
-		},
-		{
-			"Name": "MeshSolverUtilities",
-			"Type": "Runtime",
-			"LoadingPhase": "Default"
 		}
 	]
 }

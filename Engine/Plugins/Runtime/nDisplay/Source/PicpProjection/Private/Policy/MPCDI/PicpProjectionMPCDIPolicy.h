@@ -2,7 +2,6 @@
 
 #pragma once
 
-#include "Policy/DisplayClusterProjectionPolicyBase.h"
 #include "Policy/PicpProjectionPolicyBase.h"
 
 #include "IMPCDI.h"
@@ -30,7 +29,7 @@ public:
 		Mesh
 	};
 
-	FPicpProjectionMPCDIPolicy(const FString& ViewportId);
+	FPicpProjectionMPCDIPolicy(const FString& ViewportId, const TMap<FString, FString>& Parameters);
 	virtual ~FPicpProjectionMPCDIPolicy();
 
 	//////////////////////////////////////////////////////////////////////////////////////////////
@@ -49,6 +48,7 @@ public:
 
 	void UpdateOverlayViewportData(FPicpProjectionOverlayFrameData& OverlayFrameData);
 	void SetOverlayData_RenderThread(const FPicpProjectionOverlayViewportData* Source);
+	void GetOverlayData_RenderThread(FPicpProjectionOverlayViewportData& Output);
 
 	void SetWarpTextureCapture(const uint32 ViewIdx, FRHITexture2D* target);
 	IMPCDI::FFrustum GetWarpFrustum(const uint32 ViewIdx, bool bIsCaptureWarpTextureFrustum);
@@ -68,8 +68,10 @@ protected:
 
 	IMPCDI& MPCDIAPI;
 	IMPCDI::FRegionLocator WarpRef;
+	mutable FCriticalSection WarpRefCS;
 
-	FPicpProjectionOverlayViewportData OverlayViewportData;
+	FPicpProjectionOverlayViewportData LocalOverlayViewportData;
+	mutable FCriticalSection LocalOverlayViewportDataCS;
 
 	struct FViewData
 	{

@@ -688,7 +688,7 @@ void USocialManager::RegisterSecondaryPlayer(int32 LocalPlayerNum, const FOnJoin
 
 		if (PrimaryUserId.IsValid() && SecondaryUserId.IsValid())
 		{
-			// FORT-245799 If P2 is already in the party, leave first so we can join cleanly
+			// If P2 is already in the party, leave first so we can join cleanly
 			if (PersistentParty->GetPartyMember(SecondaryUserId))
 			{
 				PersistentParty->RemoveLocalMember(SecondaryUserId, USocialParty::FOnLeavePartyAttemptComplete::CreateWeakLambda(this, [this, LocalPlayerNum, JoinDelegate](ELeavePartyCompletionResult LeaveResult)
@@ -707,12 +707,14 @@ void USocialManager::RegisterSecondaryPlayer(int32 LocalPlayerNum, const FOnJoin
 					}
 				}));
 			}
-
-			FString JoinInfoStr = PartyInterface->MakeJoinInfoJson(*PrimaryUserId, PersistentParty->GetPartyId());
-			IOnlinePartyJoinInfoConstPtr JoinInfo = PartyInterface->MakeJoinInfoFromJson(JoinInfoStr);
-			if (JoinInfo && JoinInfo->IsValid())
+			else
 			{
-				PartyInterface->JoinParty(*SecondaryUserId, *JoinInfo, JoinDelegate);
+				FString JoinInfoStr = PartyInterface->MakeJoinInfoJson(*PrimaryUserId, PersistentParty->GetPartyId());
+				IOnlinePartyJoinInfoConstPtr JoinInfo = PartyInterface->MakeJoinInfoFromJson(JoinInfoStr);
+				if (JoinInfo && JoinInfo->IsValid())
+				{
+					PartyInterface->JoinParty(*SecondaryUserId, *JoinInfo, JoinDelegate);
+				}
 			}
 		}
 	}
@@ -857,12 +859,12 @@ USocialParty* USocialManager::GetPartyInternal(const FOnlinePartyId& PartyId, bo
 
 TSharedPtr<const IOnlinePartyJoinInfo> USocialManager::GetJoinInfoFromSession(const FOnlineSessionSearchResult& PlatformSession)
 {
-	static const FName JoinInfoSettingName = PLATFORM_XBOXONE ? SETTING_CUSTOM_JOIN_INFO : SETTING_CUSTOM;
+	static const FName JoinInfoSettingName = PARTY_PLATFORM_SESSIONS_XBL ? SETTING_CUSTOM_JOIN_INFO : SETTING_CUSTOM;
 
 	FString JoinInfoJson;
 	if (PlatformSession.Session.SessionSettings.Get(JoinInfoSettingName, JoinInfoJson))
 	{
-#if PLATFORM_XBOXONE
+#if PARTY_PLATFORM_SESSIONS_XBL 
 		// On Xbox we encode our party data in base64 to avoid XboxLive trying to parse our json, so now we need to decode that
 		FBase64::Decode(JoinInfoJson, JoinInfoJson);
 #endif 
@@ -1012,8 +1014,11 @@ void USocialManager::HandleCreatePartyComplete(const FUniqueNetId& LocalUserId, 
 	ECreatePartyCompletionResult LocalCreationResult = Result;
 	if (Result == ECreatePartyCompletionResult::Succeeded)
 	{
-		USocialParty* NewParty = EstablishNewParty(LocalUserId, *PartyId, PartyTypeId);
-		if (!NewParty)
+		if (USocialParty* NewParty = EstablishNewParty(LocalUserId, *PartyId, PartyTypeId))
+		{
+			NewParty->ResetPrivacySettings();
+		}
+		else
 		{
 			LocalCreationResult = ECreatePartyCompletionResult::UnknownClientFailure;
 		}
@@ -1121,68 +1126,75 @@ void USocialManager::HandlePersistentPartyStateChanged(EPartyState NewState, EPa
 
 void USocialManager::HandleLeavePartyForJoinComplete(ELeavePartyCompletionResult LeaveResult, USocialParty* LeftParty)
 {
-	UE_LOG(LogParty, Verbose, TEXT("Attempt to leave party [%s] for pending join completed with result [%s]"), *LeftParty->ToDebugString(), ToString(LeaveResult));
+	if (LeftParty)
+	{
+		UE_LOG(LogParty, Verbose, TEXT("Attempt to leave party [%s] for pending join completed with result [%s]"), *LeftParty->ToDebugString(), ToString(LeaveResult));
+	}
 }
 
 void USocialManager::HandlePartyDisconnected(USocialParty* DisconnectingParty)
 {
-	const FOnlinePartyTypeId& PartyTypeId = DisconnectingParty->GetPartyTypeId();
-	JoinedPartiesByTypeId.Remove(PartyTypeId);
-	DisconnectingParty->MarkPendingKill();
+	if (DisconnectingParty)
+	{
+		const FOnlinePartyTypeId& PartyTypeId = DisconnectingParty->GetPartyTypeId();
+		JoinedPartiesByTypeId.Remove(PartyTypeId);
+		DisconnectingParty->MarkPendingKill();
+	}
 }
 
 void USocialManager::HandlePartyLeaveBegin(EMemberExitedReason Reason, USocialParty* LeavingParty)
 {
-	const FOnlinePartyTypeId& PartyTypeId = LeavingParty->GetPartyTypeId();
-	JoinedPartiesByTypeId.Remove(PartyTypeId);
-	LeavingPartiesByTypeId.Add(PartyTypeId, LeavingParty);
+	if (LeavingParty)
+	{
+		const FOnlinePartyTypeId& PartyTypeId = LeavingParty->GetPartyTypeId();
+		JoinedPartiesByTypeId.Remove(PartyTypeId);
+		LeavingPartiesByTypeId.Add(PartyTypeId, LeavingParty);
+	}
 }
 
 void USocialManager::HandlePartyLeft(EMemberExitedReason Reason, USocialParty* LeftParty)
 {
-	if (!ensure(LeftParty))
+	if (LeftParty)
 	{
-		return;
-	}
+		const FOnlinePartyTypeId& PartyTypeId = LeftParty->GetPartyTypeId();
+		LeavingPartiesByTypeId.Remove(PartyTypeId);
 
-	const FOnlinePartyTypeId& PartyTypeId = LeftParty->GetPartyTypeId();
-	LeavingPartiesByTypeId.Remove(PartyTypeId);
-
-	if (!ensure(!JoinedPartiesByTypeId.Contains(PartyTypeId)))
-	{
-		// Really shouldn't be any scenario wherein we receive a PartyLeft event without a prior PartyLeaveBegin
-		JoinedPartiesByTypeId.Remove(PartyTypeId);
-	}
-
-	OnPartyLeftInternal(*LeftParty, Reason);
-	LeftParty->MarkPendingKill();
-
-	if (FJoinPartyAttempt* JoinAttempt = JoinAttemptsByTypeId.Find(PartyTypeId))
-	{
-		JoinAttempt->ActionTimeTracker.CompleteStep(FJoinPartyAttempt::Step_LeaveCurrentParty);
-
-		// We're in the process of joining another party of the same type - do we know where we're heading yet?
-		if (JoinAttempt->JoinInfo.IsValid() || JoinAttempt->RejoinInfo.IsValid())
+		if (!ensure(!JoinedPartiesByTypeId.Contains(PartyTypeId)))
 		{
-			// Join the new party immediately and early out
-			JoinPartyInternal(*JoinAttempt);
-			return;
+			// Really shouldn't be any scenario wherein we receive a PartyLeft event without a prior PartyLeaveBegin
+			JoinedPartiesByTypeId.Remove(PartyTypeId);
 		}
-		else
+
+		OnPartyLeftInternal(*LeftParty, Reason);
+		LeftParty->MarkPendingKill();
+
+		if (FJoinPartyAttempt* JoinAttempt = JoinAttemptsByTypeId.Find(PartyTypeId))
 		{
-			// An attempt to join a party of this type has been initiated, but something/someone decided to leave the party before the attempt was ready to do so
-			// It's not worth accounting for the potential limbo that this could put us into, so just abort the join attempt and let the explicit leave action win
-			UE_LOG(LogParty, Verbose, TEXT("Finished leaving party [%s] before the current join attempt established join info. Cancelling join attempt."), *LeftParty->ToDebugString());
-			FinishJoinPartyAttempt(*JoinAttempt, FJoinPartyResult(EPartyJoinDenialReason::JoinAttemptAborted));
+			JoinAttempt->ActionTimeTracker.CompleteStep(FJoinPartyAttempt::Step_LeaveCurrentParty);
+
+			// We're in the process of joining another party of the same type - do we know where we're heading yet?
+			if (JoinAttempt->JoinInfo.IsValid() || JoinAttempt->RejoinInfo.IsValid())
+			{
+				// Join the new party immediately and early out
+				JoinPartyInternal(*JoinAttempt);
+				return;
+			}
+			else
+			{
+				// An attempt to join a party of this type has been initiated, but something/someone decided to leave the party before the attempt was ready to do so
+				// It's not worth accounting for the potential limbo that this could put us into, so just abort the join attempt and let the explicit leave action win
+				UE_LOG(LogParty, Verbose, TEXT("Finished leaving party [%s] before the current join attempt established join info. Cancelling join attempt."), *LeftParty->ToDebugString());
+				FinishJoinPartyAttempt(*JoinAttempt, FJoinPartyResult(EPartyJoinDenialReason::JoinAttemptAborted));
+			}
 		}
-	}
 
-	if (LeftParty->IsPersistentParty() && GetFirstLocalUserToolkit()->IsOwnerLoggedIn())
-	{
-		UE_LOG(LogParty, Verbose, TEXT("Finished leaving persistent party without a join/rejoin target. Creating a new persistent party now."));
+		if (LeftParty->IsPersistentParty() && GetFirstLocalUserToolkit()->IsOwnerLoggedIn())
+		{
+			UE_LOG(LogParty, Verbose, TEXT("Finished leaving persistent party without a join/rejoin target. Creating a new persistent party now."));
 
-		// This wasn't part of a join process, so immediately create a new persistent party
-		CreatePersistentParty();
+			// This wasn't part of a join process, so immediately create a new persistent party
+			CreatePersistentParty();
+		}
 	}
 }
 
@@ -1233,6 +1245,15 @@ bool USocialManager::Exec(class UWorld* InWorld, const TCHAR* Cmd, FOutputDevice
 			SocialDebugTools->Exec(InWorld, Cmd, Out))
 		{
 			return true;
+		}
+
+		for (USocialToolkit* Toolkit : SocialToolkits)
+		{
+			if (Toolkit && 
+				Toolkit->Exec(InWorld, Cmd, Out))
+			{
+				return true;
+			}
 		}
 		return true;
 	}

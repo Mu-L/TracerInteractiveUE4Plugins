@@ -5,8 +5,16 @@
 #include "Containers/Array.h"
 #include "Math/Transform.h"
 #include "Math/Vector.h"
+#include "Stats/Stats.h"
 
 class USkeletalMeshComponent;
+
+// Common simulation stats
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Compute Clothing Normals"), STAT_ClothComputeNormals, STATGROUP_Physics, CLOTHINGSYSTEMRUNTIMECOMMON_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Internal Solve"), STAT_ClothInternalSolve, STATGROUP_Physics, CLOTHINGSYSTEMRUNTIMECOMMON_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Update Collisions"), STAT_ClothUpdateCollisions, STATGROUP_Physics, CLOTHINGSYSTEMRUNTIMECOMMON_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Skin Physics Mesh"), STAT_ClothSkinPhysMesh, STATGROUP_Physics, CLOTHINGSYSTEMRUNTIMECOMMON_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Fill Context"), STAT_ClothFillContext, STATGROUP_Physics, CLOTHINGSYSTEMRUNTIMECOMMON_API);
 
 /** Base simulation data that just about every simulation would need. */
 class CLOTHINGSYSTEMRUNTIMECOMMON_API FClothingSimulationContextCommon : public IClothingSimulationContext
@@ -27,13 +35,10 @@ protected:
 	virtual void FillWindVelocity(const USkeletalMeshComponent* InComponent);
 	virtual void FillDeltaSeconds(float InDeltaSeconds, float InMaxPhysicsDelta);
 	virtual void FillTeleportMode(const USkeletalMeshComponent* InComponent, float InDeltaSeconds, float InMaxPhysicsDelta);
-	virtual void FillMaxDistanceScale(const USkeletalMeshComponent* Component);
-
-	// Set the wind velocity and return the wind adaptation if required
-	float SetWindFromComponent(const USkeletalMeshComponent* Component);
+	virtual void FillMaxDistanceScale(const USkeletalMeshComponent* InComponent);
 
 public:
-	// World space bone transforms of the owning component
+	// Component space bone transforms of the owning component
 	TArray<FTransform> BoneTransforms;
 
 	// Ref to local matrices from the owning component (for skinning fixed verts)
@@ -48,6 +53,10 @@ public:
 	// Wind velocity at the component location
 	FVector WindVelocity;
 
+	// Wind adaption, a measure of how quickly to adapt to the wind speed
+	// when using the legacy wind calculation mode
+	float WindAdaption;
+
 	// Delta for this tick
 	float DeltaSeconds;
 
@@ -56,6 +65,9 @@ public:
 
 	// Scale for the max distance constraints of the simulation mesh
 	float MaxDistanceScale;
+
+	// The predicted LOD of the skeletal mesh component running the simulation
+	int32 PredictedLod;
 };
 
 // Base simulation to fill in common data for the base context

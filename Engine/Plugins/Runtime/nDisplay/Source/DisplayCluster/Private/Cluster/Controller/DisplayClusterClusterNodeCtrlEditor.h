@@ -4,11 +4,6 @@
 
 #include "Cluster/Controller/DisplayClusterClusterNodeCtrlMaster.h"
 
-#include "Network/DisplayClusterMessage.h"
-
-class FDisplayClusterClusterEventsClient;
-class FDisplayClusterClusterEventsService;
-
 
 /**
  * Editor node controller implementation.
@@ -17,7 +12,7 @@ class FDisplayClusterClusterNodeCtrlEditor
 	: public FDisplayClusterClusterNodeCtrlMaster
 {
 public:
-	FDisplayClusterClusterNodeCtrlEditor(const FString& ctrlName, const FString& nodeName);
+	FDisplayClusterClusterNodeCtrlEditor(const FString& CtrlName, const FString& NodeName);
 	virtual ~FDisplayClusterClusterNodeCtrlEditor();
 
 protected:

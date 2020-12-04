@@ -66,6 +66,28 @@ void FFXSystemSet::DrawDebug(FCanvas* Canvas)
 	}
 }
 
+bool FFXSystemSet::ShouldDebugDraw_RenderThread() const
+{
+	for (const FFXSystemInterface* FXSystem : FXSystems)
+	{
+		check(FXSystem);
+		if (FXSystem->ShouldDebugDraw_RenderThread())
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void FFXSystemSet::DrawDebug_RenderThread(class FRDGBuilder& GraphBuilder, const class FViewInfo& View, const struct FScreenPassRenderTarget& Output)
+{
+	for (FFXSystemInterface* FXSystem : FXSystems)
+	{
+		check(FXSystem);
+		FXSystem->DrawDebug_RenderThread(GraphBuilder, View, Output);
+	}
+}
+
 void FFXSystemSet::AddVectorField(UVectorFieldComponent* VectorFieldComponent)
 {
 	for (FFXSystemInterface* FXSystem : FXSystems)

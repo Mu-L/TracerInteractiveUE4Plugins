@@ -4,7 +4,7 @@
 #include "DynamicMeshAttributeSet.h"
 #include "MeshWeights.h"
 
-
+#include "Async/ParallelFor.h"
 
 
 void FRemesher::SetTargetEdgeLength(double fLength)
@@ -43,6 +43,11 @@ void FRemesher::BasicRemeshPass()
 	if (Mesh->TriangleCount() == 0)    // badness if we don't catch this...
 	{
 		return;
+	}
+
+	if (Mesh->HasAttributes() && GetConstraints().IsSet() == false)
+	{
+		ensureMsgf(false, TEXT("Input Mesh has Attribute overlays but no Constraints are configured. Use FMeshConstraintsUtil::ConstrainAllBoundariesAndSeams() to create a Constraint Set for Attribute seams."));
 	}
 
 	ProfileBeginPass();
@@ -104,7 +109,7 @@ void FRemesher::BasicRemeshPass()
 	ProfileBeginProject();
 	if (ProjTarget != nullptr && ProjectionMode == ETargetProjectionMode::AfterRefinement)
 	{
-		FullProjectionPass();
+		FullProjectionPass(bEnableParallelProjection);
 		DoDebugChecks();
 	}
 	ProfileEndProject();
@@ -139,8 +144,9 @@ FRemesher::EProcessResult FRemesher::ProcessEdge(int edgeID)
 	{
 		return EProcessResult::Failed_NotAnEdge;
 	}
-	FIndex4i edge_info = Mesh->GetEdge(edgeID);
-	int a = edge_info.A, b = edge_info.B, t0 = edge_info.C, t1 = edge_info.D;
+	const FDynamicMesh3::FEdge Edge = Mesh->GetEdge(edgeID);
+	int a = Edge.Vert[0], b = Edge.Vert[1];
+	int t0 = Edge.Tri[0], t1 = Edge.Tri[1];
 	bool bIsBoundaryEdge = (t1 == IndexConstants::InvalidID);
 
 	// look up 'other' verts c (from t0) and d (from t1, if it exists)
@@ -169,17 +175,18 @@ FRemesher::EProcessResult FRemesher::ProcessEdge(int edgeID)
 	bool bTriedCollapse = false;
 	if (bCanCollapse) 
 	{
-		int iKeep = b, iCollapse = a;
 		double collapse_t = 0.5;		// need to know t-value along edge to update lerpable attributes properly
 		FVector3d vNewPos = (vA + vB) * collapse_t;
 
+		int iKeep = b;
+		int iCollapse = a;
 		// if either vtx is fixed, collapse to that position
-		if (collapse_to == b) 
+		if (collapse_to == b)
 		{
-			collapse_t = 0;
+			collapse_t = 1.0;
 			vNewPos = vB;
 		}
-		else if (collapse_to == a) 
+		else if (collapse_to == a)
 		{
 			iKeep = a; iCollapse = b;
 			collapse_t = 0;
@@ -242,24 +249,35 @@ abort_collapse:
 	if (bEnableFlips && constraint.CanFlip() && bIsBoundaryEdge == false) 
 	{
 		// can we do this more efficiently somehow?
-		bool a_is_boundary_vtx = (bMeshIsClosed) ? false : (bIsBoundaryEdge || Mesh->IsBoundaryVertex(a));
-		bool b_is_boundary_vtx = (bMeshIsClosed) ? false : (bIsBoundaryEdge || Mesh->IsBoundaryVertex(b));
-		bool c_is_boundary_vtx = (bMeshIsClosed) ? false : Mesh->IsBoundaryVertex(c);
-		bool d_is_boundary_vtx = (bMeshIsClosed) ? false : Mesh->IsBoundaryVertex(d);
-		int valence_a = Mesh->GetVtxEdgeCount(a), valence_b = Mesh->GetVtxEdgeCount(b);
-		int valence_c = Mesh->GetVtxEdgeCount(c), valence_d = Mesh->GetVtxEdgeCount(d);
-		int valence_a_target = (a_is_boundary_vtx) ? valence_a : 6;
-		int valence_b_target = (b_is_boundary_vtx) ? valence_b : 6;
-		int valence_c_target = (c_is_boundary_vtx) ? valence_c : 6;
-		int valence_d_target = (d_is_boundary_vtx) ? valence_d : 6;
+		bool bTryFlip = false;
+		if (FlipMetric == EFlipMetric::OptimalValence)
+		{
+			bool a_is_boundary_vtx = (bMeshIsClosed) ? false : (bIsBoundaryEdge || Mesh->IsBoundaryVertex(a));
+			bool b_is_boundary_vtx = (bMeshIsClosed) ? false : (bIsBoundaryEdge || Mesh->IsBoundaryVertex(b));
+			bool c_is_boundary_vtx = (bMeshIsClosed) ? false : Mesh->IsBoundaryVertex(c);
+			bool d_is_boundary_vtx = (bMeshIsClosed) ? false : Mesh->IsBoundaryVertex(d);
+			int valence_a = Mesh->GetVtxEdgeCount(a), valence_b = Mesh->GetVtxEdgeCount(b);
+			int valence_c = Mesh->GetVtxEdgeCount(c), valence_d = Mesh->GetVtxEdgeCount(d);
+			int valence_a_target = (a_is_boundary_vtx) ? valence_a : 6;
+			int valence_b_target = (b_is_boundary_vtx) ? valence_b : 6;
+			int valence_c_target = (c_is_boundary_vtx) ? valence_c : 6;
+			int valence_d_target = (d_is_boundary_vtx) ? valence_d : 6;
 
-		// if total valence error improves by flip, we want to do it
-		int curr_err = abs(valence_a - valence_a_target) + abs(valence_b - valence_b_target)
-			+ abs(valence_c - valence_c_target) + abs(valence_d - valence_d_target);
-		int flip_err = abs((valence_a - 1) - valence_a_target) + abs((valence_b - 1) - valence_b_target)
-			+ abs((valence_c + 1) - valence_c_target) + abs((valence_d + 1) - valence_d_target);
+			// if total valence error improves by flip, we want to do it
+			int curr_err = abs(valence_a - valence_a_target) + abs(valence_b - valence_b_target)
+				+ abs(valence_c - valence_c_target) + abs(valence_d - valence_d_target);
+			int flip_err = abs((valence_a - 1) - valence_a_target) + abs((valence_b - 1) - valence_b_target)
+				+ abs((valence_c + 1) - valence_c_target) + abs((valence_d + 1) - valence_d_target);
 
-		bool bTryFlip = flip_err < curr_err;
+			bTryFlip = flip_err < curr_err;
+		}
+		else
+		{
+			double CurDistSqr = Mesh->GetVertex(a).DistanceSquared(Mesh->GetVertex(b));
+			double FlipDistSqr = Mesh->GetVertex(c).DistanceSquared(Mesh->GetVertex(d));
+			bTryFlip = (FlipDistSqr < MinLengthFlipThresh*MinLengthFlipThresh * CurDistSqr);
+		}
+
 		if (bTryFlip && bPreventNormalFlips && CheckIfFlipInvertsNormals(a, b, c, d, t0))
 		{
 			bTryFlip = false;
@@ -335,7 +353,7 @@ void FRemesher::UpdateAfterSplit(int edgeID, int va, int vb, const FDynamicMesh3
 		// inherit edge constraint
 		Constraints->SetOrUpdateEdgeConstraint(SplitInfo.NewEdges.A, Constraints->GetEdgeConstraint(edgeID));
 
-		// [RMS] update vertex constraints. Note that there is some ambiguity here.
+		// Update vertex constraints. Note that there is some ambiguity here.
 		//   Both verts being constrained doesn't inherently mean that the edge is on
 		//   a constraint, that's why these checks are only applied if edge is constrained.
 		//   But constrained edge doesn't necessarily mean we want to inherit vert constraints!!
@@ -343,24 +361,24 @@ void FRemesher::UpdateAfterSplit(int edgeID, int va, int vb, const FDynamicMesh3
 		//   although, pretty safe to assume that we would at least disable flips
 		//   if both vertices are constrained to same line/curve. So, maybe this makes sense...
 		//
-		//   (perhaps edge constraint should be explicitly tagged to resolve this ambiguity??)
+		//   (TODO: perhaps edge constraint should be explicitly tagged to resolve this ambiguity??)
 
 		// vert inherits Fixed if both orig edge verts Fixed, and both tagged with same SetID
 		FVertexConstraint ca = Constraints->GetVertexConstraint(va);
 		FVertexConstraint cb = Constraints->GetVertexConstraint(vb);
-		if (ca.Fixed && cb.Fixed) 
+		if (ca.bCannotDelete && cb.bCannotDelete)
 		{
 			int nSetID = (ca.FixedSetID > 0 && ca.FixedSetID == cb.FixedSetID) ?
 				ca.FixedSetID : FVertexConstraint::InvalidSetID;
-			bool bMovable = ca.Movable && cb.Movable;
+			bool bMovable = ca.bCanMove && cb.bCanMove;
 			Constraints->SetOrUpdateVertexConstraint(SplitInfo.NewVertex,
 				FVertexConstraint(true, bMovable, nSetID));
 			bPositionFixed = true;
 		}
 
 		// vert inherits Target if:
-		//  1) both source verts and edge have same Target, and is same as edge target
-		//  2) either vert has same target as edge, and other vert is fixed
+		//  1) both source verts and edge have same Target, and is same as edge target, or
+		//  2) either vert has same target as edge, and other vert can't move
 		if (ca.Target != nullptr || cb.Target != nullptr) 
 		{
 			IProjectionTarget* edge_target = Constraints->GetEdgeConstraint(edgeID).Target;
@@ -369,11 +387,11 @@ void FRemesher::UpdateAfterSplit(int edgeID, int va, int vb, const FDynamicMesh3
 			{
 				set_target = edge_target;
 			}
-			else if (ca.Target == edge_target && cb.Fixed)
+			else if (ca.Target == edge_target && !cb.bCanMove)
 			{
 				set_target = edge_target;
 			}
-			else if (cb.Target == edge_target && ca.Fixed)
+			else if (cb.Target == edge_target && !ca.bCanMove)
 			{
 				set_target = edge_target;
 			}
@@ -413,7 +431,7 @@ FVector3d FRemesher::GetProjectedCollapsePosition(int vid, const FVector3d& vNew
 		{
 			return vc.Target->Project(vNewPos, vid);
 		}
-		if (vc.Fixed)
+		if (vc.bCanMove == false)
 		{
 			return vNewPos;
 		}
@@ -475,30 +493,38 @@ TFunction<FVector3d(const FDynamicMesh3&, int, double)> FRemesher::GetSmoothFunc
 
 void FRemesher::FullSmoothPass_Buffer(bool bParallel)
 {
-	InitializeVertexBufferForPass();
-
 	TFunction<FVector3d(const FDynamicMesh3&, int, double)> UseSmoothFunc = GetSmoothFunction();
 
-	auto SmoothAndUpdateFunc = [&](int vID) 
+	if (bParallel)
 	{
-		bool bModified = false;
-		FVector3d vSmoothed = ComputeSmoothedVertexPos(vID, UseSmoothFunc, bModified);
-		if (bModified) 
+		auto VertexMoveFunction = [&UseSmoothFunc, this](int VertexID, bool& bModified)
 		{
-			TempFlagBuffer[vID] = true;
-			TempPosBuffer[vID] = vSmoothed;
-		}
-	};
+			return ComputeSmoothedVertexPos(VertexID, UseSmoothFunc, bModified);
+		};
 
-	//if (bParallel) {
-	//    gParallel.ForEach<int>(smooth_vertices(), smooth);
-	//} else {
-	//    foreach (int vID in smooth_vertices())
-	//        smooth(vID);
-	//}
-	ApplyToSmoothVertices(SmoothAndUpdateFunc);
+		MoveVerticesParallel(VertexMoveFunction);
+	}
+	else
+	{
+		// Serial
 
-	ApplyVertexBuffer(bParallel);
+		InitializeVertexBufferForPass();
+
+		auto SmoothAndUpdateFunc = [this, UseSmoothFunc](int vID)
+		{
+			bool bModified = false;
+			FVector3d vSmoothed = ComputeSmoothedVertexPos(vID, UseSmoothFunc, bModified);
+			if (bModified)
+			{
+				TempFlagBuffer[vID] = true;
+				TempPosBuffer[vID] = vSmoothed;
+			}
+		};
+
+		ApplyToSmoothVertices(SmoothAndUpdateFunc);
+
+		ApplyVertexBuffer(false);
+	}
 }
 
 
@@ -512,42 +538,59 @@ void FRemesher::InitializeVertexBufferForPass()
 	{
 		TempPosBuffer.Resize(Mesh->MaxVertexID() + Mesh->MaxVertexID() / 5);
 	}
-	if (TempFlagBuffer.Num() < Mesh->MaxVertexID()) 
+	if (TempFlagBuffer.Num() < Mesh->MaxVertexID())
 	{
 		TempFlagBuffer.SetNum(2 * Mesh->MaxVertexID());
 	}
-
 	TempFlagBuffer.Init(false, TempFlagBuffer.Num());
-	//TempFlagBuffer.assign(TempFlagBuffer.size(), false);
 }
+
 
 void FRemesher::ApplyVertexBuffer(bool bParallel)
 {
-	for (int vid : Mesh->VertexIndicesItr()) 
+	check(TempFlagBuffer.Num() >= Mesh->MaxVertexID());
+	check(static_cast<int>(TempPosBuffer.Num()) >= Mesh->MaxVertexID());
+
+	if (!bParallel)
 	{
-		if (TempFlagBuffer[vid])
+		// Serial
+		for (int vid : Mesh->VertexIndicesItr())
 		{
-			Mesh->SetVertex(vid, TempPosBuffer[vid]);
+			if (TempFlagBuffer[vid])
+			{
+				Mesh->SetVertex(vid, TempPosBuffer[vid]);
+			}
 		}
 	}
+	else
+	{
+		// The serial version calls Mesh->SetVertex which sets the vertex position and also updates the timestamps. In
+		// the parallel version, to avoid contention for the timestamps we work in batches, calling 
+		// SetVertex_NoTimeStampUpdate several times for each async task, then finally locking and incrementing the 
+		// timestamp once per task.
 
-	// [TODO] can probably use block-parallel here...
-	//if (bParallel) {
-	//    gParallel.BlockStartEnd(0, Mesh->MaxVertexID-1, (a,b) => {
-	//        for (int vid = a; vid <= b; vid++) {
-	//            if (TempFlagBuffer[vid])
-	//                Mesh->SetVertex(vid, TempPosBuffer[vid]);
-	//        }
-	//    });
-	//} else {
-	//    foreach (int vid in Mesh->VertexIndices()) {
-	//        if (TempFlagBuffer[vid])
-	//            Mesh->SetVertex(vid, TempPosBuffer[vid]);
-	//    }
-	//}
+		// TODO: Try varying the batch size to observe a trade-off between work done per thread and overhead due to 
+		// locking.
+
+		const int BatchSize = 1000;
+		const int NumBatches = FMath::CeilToInt(Mesh->MaxVertexID() / static_cast<float>(BatchSize));
+
+		ParallelFor(NumBatches, [this, BatchSize](int32 BatchID)
+		{
+			int NumVerticesSetThisBatch = 0;
+			for (int VertexID = BatchID * BatchSize; VertexID < (BatchID + 1) * BatchSize; ++VertexID)
+			{
+				if (VertexID < TempFlagBuffer.Num() && TempFlagBuffer[VertexID] && Mesh->IsVertex(VertexID))
+				{
+					Mesh->SetVertex_NoTimeStampUpdate(VertexID, TempPosBuffer[VertexID]);
+					++NumVerticesSetThisBatch;
+				}
+			}
+			Mesh->IncrementTimeStamps(NumVerticesSetThisBatch, true, false);
+
+		}, false);
+	}
 }
-
-
 
 FVector3d FRemesher::ComputeSmoothedVertexPos(int vID,
 	TFunction<FVector3d(const FDynamicMesh3&, int, double)> smoothFunc, bool& bModified)
@@ -555,7 +598,7 @@ FVector3d FRemesher::ComputeSmoothedVertexPos(int vID,
 	bModified = false;
 	FVertexConstraint vConstraint = FVertexConstraint::Unconstrained();
 	GetVertexConstraint(vID, vConstraint);
-	if (vConstraint.Fixed && vConstraint.Movable == false)
+	if (vConstraint.bCanMove == false)
 	{
 		return Mesh->GetVertex(vID);
 	}
@@ -609,33 +652,54 @@ void FRemesher::ApplyToSmoothVertices(const TFunction<void(int)>& VertexSmoothFu
 
 
 // Project vertices onto projection target. 
-// We can do projection in parallel if we have .net 
-void FRemesher::FullProjectionPass()
+void FRemesher::FullProjectionPass(bool bParallel)
 {
-	auto UseProjectionFunc = [&](int vID) 
+	if (bParallel)
 	{
-		if (IsVertexConstrained(vID))
+		auto VertexMoveFunction = [this](int VertexID, bool& bModified)
 		{
-			return;
-		}
-		if (VertexControlF != nullptr && ((int)VertexControlF(vID) & (int)EVertexControl::NoProject) != 0)
+			bModified = false;
+			FVector3d CurrentPosition = Mesh->GetVertex(VertexID);
+
+			if (IsVertexPositionConstrained(VertexID))
+			{
+				return CurrentPosition;
+			}
+			if (VertexControlF != nullptr && ((int)VertexControlF(VertexID) & (int)EVertexControl::NoProject) != 0)
+			{
+				return CurrentPosition;
+			}
+
+			FVector3d ProjectedPosition = ProjTarget->Project(CurrentPosition, VertexID);
+			bModified = !VectorUtil::EpsilonEqual(CurrentPosition, ProjectedPosition, FMathd::ZeroTolerance);
+
+			return ProjectedPosition;
+		};
+
+		MoveVerticesParallel(VertexMoveFunction);
+	}
+	else
+	{
+		// Serial
+
+		auto UseProjectionFunc = [this](int vID)
 		{
-			return;
-		}
-		FVector3d curpos = Mesh->GetVertex(vID);
-		FVector3d projected = ProjTarget->Project(curpos, vID);
-		Mesh->SetVertex(vID, projected);
-	};
+			if (IsVertexPositionConstrained(vID))
+			{
+				return;
+			}
+			if (VertexControlF != nullptr && ((int)VertexControlF(vID) & (int)EVertexControl::NoProject) != 0)
+			{
+				return;
+			}
+			FVector3d curpos = Mesh->GetVertex(vID);
+			FVector3d projected = ProjTarget->Project(curpos, vID);
+			Mesh->SetVertex(vID, projected);
+		};
 
-	ApplyToProjectVertices(UseProjectionFunc);
+		ApplyToProjectVertices(UseProjectionFunc);
+	}
 
-	// [RMS] not sure how to do this...
-	//if (EnableParallelProjection) {
-	//    gParallel.ForEach<int>(project_vertices(), project);
-	//} else {
-	//    foreach (int vid in project_vertices())
-	//        project(vid);
-	//}
 }
 
 
@@ -651,5 +715,35 @@ void FRemesher::ApplyToProjectVertices(const TFunction<void(int)>& VertexProject
 
 
 
+void FRemesher::MoveVerticesParallel(TFunction<FVector3d(int, bool&)> NewVertexPosition)
+{
+	// This is done in two passes:
+	// 1. Looping over all vertices, compute new vertex positions and put them in a buffer. Simultaneously fill a 
+	//    parallel buffer of bools indicating which vertices were given new positions.
+	// 2. Copy all vertex positions saved in step 1 from the buffer into the Mesh data structure. Update the timestamps.
 
+	InitializeVertexBufferForPass();
 
+	check(TempFlagBuffer.Num() >= Mesh->MaxVertexID());
+	check(static_cast<int>(TempPosBuffer.Num()) >= Mesh->MaxVertexID());
+
+	// First compute all vertex displacements and put them into a buffer
+	ParallelFor(Mesh->MaxVertexID(), [this, NewVertexPosition](int32 VertexID)
+	{
+		if (!Mesh->IsVertex(VertexID)) { return; }
+
+		const FVector3d CurrentPosition = Mesh->GetVertex(VertexID);
+		bool bModified = false;
+		const FVector3d NewPosition = NewVertexPosition(VertexID, bModified);
+
+		if (bModified)
+		{
+			TempFlagBuffer[VertexID] = true;
+			TempPosBuffer[VertexID] = NewPosition;
+		}
+	}, false);
+
+	// Finally move the vertex positions according to the buffer
+	ApplyVertexBuffer(true);
+
+}

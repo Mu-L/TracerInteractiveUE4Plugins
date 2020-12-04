@@ -8,7 +8,18 @@
 #include "MetalResources.h"
 #include "MetalViewport.h"
 
+#define UE_METAL_RHI_SUPPORT_CLEAR_UAV_WITH_BLIT_ENCODER	1
+
 class FMetalContext;
+struct FMetalCommandBufferFence;
+
+#if UE_METAL_RHI_SUPPORT_CLEAR_UAV_WITH_BLIT_ENCODER
+enum class EMetalRHIClearUAVType : uint8
+{
+	VertexBuffer,
+	StructuredBuffer
+};
+#endif // UE_METAL_RHI_SUPPORT_CLEAR_UAV_WITH_BLIT_ENCODER
 
 /** The interface RHI command context. */
 class FMetalRHICommandContext : public IRHICommandContext
@@ -35,10 +46,6 @@ public:
 	
 	virtual void RHIDispatchIndirectComputeShader(FRHIVertexBuffer* ArgumentBuffer, uint32 ArgumentOffset) final override;
 	
-	virtual void RHIAutomaticCacheFlushAfterComputeShader(bool bEnable) final override;
-	
-	virtual void RHIFlushComputeShaderCache() final override;
-	
 	// Useful when used with geometry shader (emit polygons to different viewports), otherwise SetViewPort() is simpler
 	// @param Count >0
 	// @param Data must not be 0
@@ -50,6 +57,8 @@ public:
 	
 	virtual void RHICopyTexture(FRHITexture* SourceTextureRHI, FRHITexture* DestTextureRHI, const FRHICopyTextureInfo& CopyInfo) final override;
 	
+	virtual void RHICopyBufferRegion(FRHIVertexBuffer* DstBufferRHI, uint64 DstOffset, FRHIVertexBuffer* SrcBufferRHI, uint64 SrcOffset, uint64 NumBytes) final override;
+
 	/**
 	 * Resolves from one texture to another.
 	 * @param SourceTexture - texture to resolve from, 0 is silenty ignored
@@ -112,8 +121,8 @@ public:
 	// @param MaxY excluding like Win32 RECT
 	virtual void RHISetScissorRect(bool bEnable, uint32 MinX, uint32 MinY, uint32 MaxX, uint32 MaxY) final override;
 	
-	virtual void RHISetGraphicsPipelineState(FRHIGraphicsPipelineState* GraphicsState) final override;
-
+	virtual void RHISetGraphicsPipelineState(FRHIGraphicsPipelineState* GraphicsState, bool bApplyAdditionalState) final override;
+	
 	virtual void RHISetGlobalUniformBuffers(const FUniformBufferStaticBindings& InUniformBuffers) final override;
 
 	/** Set the shader resource view of a surface. */
@@ -163,9 +172,9 @@ public:
 
 	virtual void RHISetBlendFactor(const FLinearColor& BlendFactor) final override;
 
-	virtual void RHISetRenderTargets(uint32 NumSimultaneousRenderTargets, const FRHIRenderTargetView* NewRenderTargets, const FRHIDepthRenderTargetView* NewDepthStencilTarget) final override;
+	void SetRenderTargets(uint32 NumSimultaneousRenderTargets, const FRHIRenderTargetView* NewRenderTargets, const FRHIDepthRenderTargetView* NewDepthStencilTarget);
 	
-	virtual void RHISetRenderTargetsAndClear(const FRHISetRenderTargetsInfo& RenderTargetsInfo) final override;
+	void SetRenderTargetsAndClear(const FRHISetRenderTargetsInfo& RenderTargetsInfo);
 	
 	virtual void RHIDrawPrimitive(uint32 BaseVertexIndex, uint32 NumPrimitives, uint32 NumInstances) final override;
 	
@@ -192,53 +201,15 @@ public:
 	
 	virtual void RHIUpdateTextureReference(FRHITextureReference* TextureRef, FRHITexture* NewTexture) final override;
 	
-	/**
-	 * Explicitly transition a UAV from readable -> writable by the GPU or vice versa.
-	 * Also explicitly states which pipeline the UAV can be used on next.  For example, if a Compute job just wrote this UAV for a Pixel shader to read
-	 * you would do EResourceTransitionAccess::Readable and EResourceTransitionPipeline::EComputeToGfx
-	 *
-	 * @param TransitionType - direction of the transition
-	 * @param EResourceTransitionPipeline - How this UAV is transitioning between Gfx and Compute, if at all.
-	 * @param InUAVs - array of UAV objects to transition
-	 * @param NumUAVs - number of UAVs to transition
-	 * @param WriteComputeFence - Optional ComputeFence to write as part of this transition
-	 */
-	virtual void RHITransitionResources(EResourceTransitionAccess TransitionType, EResourceTransitionPipeline TransitionPipeline, FRHIUnorderedAccessView** InUAVs, int32 NumUAVs, FRHIComputeFence* WriteComputeFence) final override;
-	
 	virtual void RHICopyToStagingBuffer(FRHIVertexBuffer* SourceBufferRHI, FRHIStagingBuffer* DestinationStagingBufferRHI, uint32 Offset, uint32 NumBytes) final override;
 	virtual void RHIWriteGPUFence(FRHIGPUFence* FenceRHI) final override;
 
-	/**
-	 * Explicitly transition a texture resource from readable -> writable by the GPU or vice versa.
-	 * We know rendertargets are only used as rendered targets on the Gfx pipeline, so these transitions are assumed to be implemented such
-	 * Gfx->Gfx and Gfx->Compute pipeline transitions are both handled by this call by the RHI implementation.  Hence, no pipeline parameter on this call.
-	 *
-	 * @param TransitionType - direction of the transition
-	 * @param InTextures - array of texture objects to transition
-	 * @param NumTextures - number of textures to transition
-	 */
-	virtual void RHITransitionResources(EResourceTransitionAccess TransitionType, FRHITexture** InTextures, int32 NumTextures) final override;
-	
-	virtual void RHITransitionResources(FExclusiveDepthStencil DepthStencilMode, FRHITexture* DepthTexture) final override
-	{
-		IRHICommandContext::RHITransitionResources(DepthStencilMode, DepthTexture);
-	}
-	virtual void RHITransitionResources(EResourceTransitionAccess TransitionType, EResourceTransitionPipeline TransitionPipeline, FRHITexture** InTextures, int32 NumTextures) final override
-	{
-		RHITransitionResources(TransitionType, InTextures, NumTextures);
-	}
-	/**
-	 * Compute queue will wait for the fence to be written before continuing.
-	 */
-	virtual void RHIWaitComputeFence(FRHIComputeFence* InFence) final override;
+	virtual void RHIBeginTransitions(TArrayView<const FRHITransition*> Transitions);
+	virtual void RHIEndTransitions(TArrayView<const FRHITransition*> Transitions);
 
 	virtual void RHIBeginRenderPass(const FRHIRenderPassInfo& InInfo, const TCHAR* InName) final override;
 
 	virtual void RHIEndRenderPass() final override;
-	
-	virtual void RHIBeginComputePass(const TCHAR* InName) final override;
-	
-	virtual void RHIEndComputePass() final override;
 	
 	virtual void RHINextSubpass() final override;
 
@@ -250,7 +221,7 @@ protected:
 	
 	/** Occlusion query batch fence */
 	TSharedPtr<FMetalCommandBufferFence, ESPMode::ThreadSafe> CommandBufferFence;
-
+	
 	/** Profiling implementation details. */
 	class FMetalProfiler* Profiler;
 	
@@ -276,6 +247,11 @@ protected:
 	TArray<FRHIUniformBuffer*> GlobalUniformBuffers;
 
 private:
+#if UE_METAL_RHI_SUPPORT_CLEAR_UAV_WITH_BLIT_ENCODER
+	void ClearUAVWithBlitEncoder(FRHIUnorderedAccessView* UnorderedAccessViewRHI, EMetalRHIClearUAVType Type, uint32 Pattern);
+#endif // UE_METAL_RHI_SUPPORT_CLEAR_UAV_WITH_BLIT_ENCODER
+	void ClearUAV(TRHICommandList_RecursiveHazardous<FMetalRHICommandContext>& RHICmdList, FMetalUnorderedAccessView* UnorderedAccessView, const void* ClearValue, bool bFloat);
+
 	void RHIClearMRT(bool bClearColor, int32 NumClearColors, const FLinearColor* ColorArray, bool bClearDepth, float Depth, bool bClearStencil, uint32 Stencil);
 };
 

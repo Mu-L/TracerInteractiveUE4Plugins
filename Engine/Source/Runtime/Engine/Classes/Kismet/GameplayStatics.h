@@ -185,13 +185,21 @@ class ENGINE_API UGameplayStatics : public UBlueprintFunctionLibrary
 
 	// --- Level Streaming functions ------------------------
 	
-	/** Stream the level with the LevelName ; Calling again before it finishes has no effect */
-	UFUNCTION(BlueprintCallable, meta=(WorldContext="WorldContextObject", Latent = "", LatentInfo = "LatentInfo"), Category="Game")
+	/** Stream the level (by Name); Calling again before it finishes has no effect */
+	UFUNCTION(BlueprintCallable, meta=(WorldContext="WorldContextObject", Latent = "", LatentInfo = "LatentInfo", DisplayName = "Load Stream Level (by Name)"), Category="Game")
 	static void LoadStreamLevel(const UObject* WorldContextObject, FName LevelName, bool bMakeVisibleAfterLoad, bool bShouldBlockOnLoad, FLatentActionInfo LatentInfo);
 
-	/** Unload a streamed in level */
-	UFUNCTION(BlueprintCallable, meta=(WorldContext="WorldContextObject", Latent = "", LatentInfo = "LatentInfo"), Category="Game")
+	/** Stream the level (by Object Reference); Calling again before it finishes has no effect */
+	UFUNCTION(BlueprintCallable, meta=(WorldContext="WorldContextObject", Latent = "", LatentInfo = "LatentInfo", DisplayName = "Load Stream Level (by Object Reference)"), Category="Game")
+	static void LoadStreamLevelBySoftObjectPtr(const UObject* WorldContextObject, const TSoftObjectPtr<UWorld> Level, bool bMakeVisibleAfterLoad, bool bShouldBlockOnLoad, FLatentActionInfo LatentInfo);
+	
+	/** Unload a streamed in level (by Name)*/
+	UFUNCTION(BlueprintCallable, meta=(WorldContext="WorldContextObject", Latent = "", LatentInfo = "LatentInfo", DisplayName = "Unload Stream Level (by Name)"), Category="Game")
 	static void UnloadStreamLevel(const UObject* WorldContextObject, FName LevelName, FLatentActionInfo LatentInfo, bool bShouldBlockOnUnload);
+
+	/** Unload a streamed in level (by Object Reference)*/
+	UFUNCTION(BlueprintCallable, meta=(WorldContext="WorldContextObject", Latent = "", LatentInfo = "LatentInfo", DisplayName = "Unload Stream Level (by Object Reference)"), Category="Game")
+	static void UnloadStreamLevelBySoftObjectPtr(const UObject* WorldContextObject, const TSoftObjectPtr<UWorld> Level, FLatentActionInfo LatentInfo, bool bShouldBlockOnUnload);
 	
 	/** Returns level streaming object with specified level package name */
 	UFUNCTION(BlueprintPure, meta=(WorldContext="WorldContextObject"), Category="Game")
@@ -213,9 +221,19 @@ class ENGINE_API UGameplayStatics : public UBlueprintFunctionLibrary
 	 * @param	bAbsolute			if true options are reset, if false options are carried over from current level
 	 * @param	Options				a string of options to use for the travel URL
 	 */
-	UFUNCTION(BlueprintCallable, meta=(WorldContext="WorldContextObject", AdvancedDisplay = "2"), Category="Game")
+	UFUNCTION(BlueprintCallable, meta=(WorldContext="WorldContextObject", AdvancedDisplay = "2", DisplayName = "Open Level (by Name)"), Category="Game")
 	static void OpenLevel(const UObject* WorldContextObject, FName LevelName, bool bAbsolute = true, FString Options = FString(TEXT("")));
 
+	/**
+	 * Travel to another level
+	 *
+	 * @param	Level				the level to open
+	 * @param	bAbsolute			if true options are reset, if false options are carried over from current level
+	 * @param	Options				a string of options to use for the travel URL
+	 */
+	UFUNCTION(BlueprintCallable, meta=(WorldContext="WorldContextObject", AdvancedDisplay = "2", DisplayName = "Open Level (by Object Reference)"), Category="Game")
+	static void OpenLevelBySoftObjectPtr(const UObject* WorldContextObject, const TSoftObjectPtr<UWorld> Level, bool bAbsolute = true, FString Options = FString(TEXT("")));
+	
 	/**
 	* Get the name of the currently-open level.
 	*
@@ -312,6 +330,7 @@ class ENGINE_API UGameplayStatics : public UBlueprintFunctionLibrary
 	 * @param Origin - Epicenter of the damage area.
 	 * @param DamageRadius - Radius of the damage area, from Origin
 	 * @param DamageTypeClass - Class that describes the damage that was done.
+	 * @param IgnoreActors - List of Actors to ignore
 	 * @param DamageCauser - Actor that actually caused the damage (e.g. the grenade that exploded).  This actor will not be damaged and it will not block damage.
 	 * @param InstigatedByController - Controller that was responsible for causing this damage (e.g. player who threw the grenade)
 	 * @param bFullDamage - if true, damage not scaled based on distance from Origin
@@ -328,6 +347,7 @@ class ENGINE_API UGameplayStatics : public UBlueprintFunctionLibrary
 	 * @param DamageOuterRadius - Radius of the minimum damage area, from Origin
 	 * @param DamageFalloff - Falloff exponent of damage from DamageInnerRadius to DamageOuterRadius
 	 * @param DamageTypeClass - Class that describes the damage that was done.
+	 * @param IgnoreActors - List of Actors to ignore
 	 * @param DamageCauser - Actor that actually caused the damage (e.g. the grenade that exploded)
 	 * @param InstigatedByController - Controller that was responsible for causing this damage (e.g. player who threw the grenade)
 	 * @param bFullDamage - if true, damage not scaled based on distance from Origin
@@ -374,7 +394,7 @@ class ENGINE_API UGameplayStatics : public UBlueprintFunctionLibrary
 	 * @param bOrientShakeTowardsEpicenter - Changes the rotation of shake to point towards epicenter instead of forward
 	 */
 	UFUNCTION(BlueprintCallable, Category="Game|Feedback", meta=(WorldContext="WorldContextObject", UnsafeDuringActorConstruction = "true"))
-	static void PlayWorldCameraShake(const UObject* WorldContextObject, TSubclassOf<class UCameraShake> Shake, FVector Epicenter, float InnerRadius, float OuterRadius, float Falloff = 1.f, bool bOrientShakeTowardsEpicenter = false);
+	static void PlayWorldCameraShake(const UObject* WorldContextObject, TSubclassOf<class UCameraShakeBase> Shake, FVector Epicenter, float InnerRadius, float OuterRadius, float Falloff = 1.f, bool bOrientShakeTowardsEpicenter = false);
 
 	// --- Particle functions ------------------------------
 
@@ -505,9 +525,10 @@ public:
 	 * @param StartTime - How far in to the sound to begin playback at
 	 * @param ConcurrencySettings - Override concurrency settings package to play sound with
 	 * @param OwningActor - The actor to use as the "owner" for concurrency settings purposes. Allows PlaySound calls to do a concurrency limit per owner.
+	 * @param bIsUISound - True if sound is UI related, else false
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintCosmetic, Category="Audio", meta=( WorldContext="WorldContextObject", AdvancedDisplay = "2", UnsafeDuringActorConstruction = "true" ))
-	static void PlaySound2D(const UObject* WorldContextObject, USoundBase* Sound, float VolumeMultiplier = 1.f, float PitchMultiplier = 1.f, float StartTime = 0.f, USoundConcurrency* ConcurrencySettings = nullptr, AActor* OwningActor = nullptr);
+	static void PlaySound2D(const UObject* WorldContextObject, USoundBase* Sound, float VolumeMultiplier = 1.f, float PitchMultiplier = 1.f, float StartTime = 0.f, USoundConcurrency* ConcurrencySettings = nullptr, AActor* OwningActor = nullptr, bool bIsUISound = true);
 
 	/**
 	 * Spawns a sound with no attenuation, perfect for UI sounds.
@@ -1271,5 +1292,15 @@ public:
 	*/
 	UFUNCTION(BlueprintPure, Category = "Utilities")
 	static bool HasLaunchOption(const FString& OptionToCheck);
+
+	/**
+	 * If accessibility is enabled, have the platform announce a string to the player.
+	 * These announcements can be interrupted by system accessibiliity announcements or other accessibility announcement requests.
+	 * This should be used judiciously as flooding a player with announcements can be overrwhelming and confusing.
+	 * Try to make announcements concise and clear.
+	 * NOTE: Currently only supported on Win10, Mac, iOS
+	*/
+	UFUNCTION(BlueprintCallable, Category = "Utilities")
+	static void AnnounceAccessibleString(const FString& AnnouncementString);
 };
 

@@ -141,7 +141,16 @@ void FBlueprintNativeCodeGenModule::ReadConfig()
 			TSoftClassPtr<UBlueprint> ClassPtr;
 			ClassPtr = FSoftObjectPath(Path);
 			ClassPtr.LoadSynchronous();
-			ExcludedBlueprintTypes.Add(ClassPtr);
+			if (ClassPtr.IsValid())
+			{
+				ExcludedBlueprintTypes.Add(ClassPtr);
+
+				UE_LOG(LogBlueprintCodeGen, Log, TEXT("Excluding all Blueprint assets of type \'%s\'"), *Path);
+			}
+			else
+			{
+				UE_LOG(LogBlueprintCodeGen, Warning, TEXT("Unable to exclude Blueprints of type \'%s\' - perhaps the class path is incorrect, or it does not represent a UBlueprint subtype?"), *Path);
+			}
 		}
 	}
 
@@ -194,7 +203,7 @@ namespace
 	void GetFieldFormPackage(const UPackage* Package, UStruct*& OutStruct, UEnum*& OutEnum, EObjectFlags ExcludedFlags = RF_Transient)
 	{
 		TArray<UObject*> Objects;
-		GetObjectsWithOuter(Package, Objects, false);
+		GetObjectsWithPackage(Package, Objects, false);
 		for (UObject* Entry : Objects)
 		{
 			if (Entry->HasAnyFlags(ExcludedFlags))
@@ -874,8 +883,12 @@ EReplacementResult FBlueprintNativeCodeGenModule::IsTargetedForReplacement(const
 		}
 		// DATA ONLY BP
 		{
+			// @todo - Temp; remove once DOBPs based on UActorComponent can be successfully nativized. These were only recently
+			// added to DOBP consideration and they currently break nativization if data-only and excluded. Needs more investigation.
+			const bool bIsComponentBasedBPClass = BlueprintClass && BlueprintClass->IsChildOf<UActorComponent>();
+
 			static const FBoolConfigValueHelper DontNativizeDataOnlyBP(TEXT("BlueprintNativizationSettings"), TEXT("bDontNativizeDataOnlyBP"));
-			if (DontNativizeDataOnlyBP && !bNativizeOnlySelectedBPs && Blueprint && FBlueprintEditorUtils::IsDataOnlyBlueprint(Blueprint))
+			if (DontNativizeDataOnlyBP && !bNativizeOnlySelectedBPs && Blueprint && FBlueprintEditorUtils::IsDataOnlyBlueprint(Blueprint) && !bIsComponentBasedBPClass)
 			{
 				return true;
 			}
@@ -971,11 +984,7 @@ EReplacementResult FBlueprintNativeCodeGenModule::IsTargetedForReplacement(const
 			for (TSoftClassPtr<UBlueprint> ExcludedBlueprintTypeAsset : ExcludedBlueprintTypes)
 			{
 				UClass* ExcludedBPClass = ExcludedBlueprintTypeAsset.Get();
-				if (!ExcludedBPClass)
-				{
-					ExcludedBPClass = ExcludedBlueprintTypeAsset.LoadSynchronous();
-				}
-				if (ExcludedBPClass && Blueprint->IsA(ExcludedBPClass))
+				if (ensure(ExcludedBPClass) && Blueprint->IsA(ExcludedBPClass))
 				{
 					return true;
 				}

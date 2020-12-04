@@ -39,6 +39,14 @@ private:
 
 	void RefreshAssetInRegistry(const FAssetData& InAssetData);
 
+	FText GetFilterText() const;
+
+	void OnFilterTextChanged(const FText& InFilterText);
+
+	TSharedRef<SWidget> ConstructAddActionMenu();
+	TSharedPtr<SWidget> OnContextMenuOpening();
+	TSharedPtr<SSearchBox> FilterBox;
+
 	// The options for the category selection
 	FText AllCategory;
 	FText SelectorsCategory;

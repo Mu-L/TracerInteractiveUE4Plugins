@@ -24,7 +24,9 @@
 #include "Engine/VolumeTexture.h"
 #include "Engine/TextureRenderTarget.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "Engine/TextureRenderTarget2DArray.h"
 #include "Engine/TextureRenderTargetCube.h"
+#include "Engine/TextureRenderTargetVolume.h"
 #include "Interfaces/ITextureEditorModule.h"
 #include "TextureEditor.h"
 #include "Slate/SceneViewport.h"
@@ -37,6 +39,7 @@
 #include "Widgets/Input/SNumericEntryBox.h"
 #include "DeviceProfiles/DeviceProfile.h"
 #include "Curves/CurveLinearColorAtlas.h"
+#include "TextureEditorSettings.h"
 
 #define LOCTEXT_NAMESPACE "FTextureEditorToolkit"
 
@@ -160,6 +163,9 @@ void FTextureEditorToolkit::InitTextureEditor( const EToolkitMode::Type Mode, co
 
 	SavedCompressionSetting = false;
 
+	// Start at whatever the last used zoom mode was
+	const UTextureEditorSettings& Settings = *GetDefault<UTextureEditorSettings>();
+	ZoomMode = Settings.ZoomMode;
 	Zoom = 1.0f;
 
 	// Register our commands. This will only register them if not previously registered
@@ -259,10 +265,12 @@ void FTextureEditorToolkit::CalculateTextureDimensions( uint32& Width, uint32& H
 	uint32 MaxWidth; 
 	uint32 MaxHeight;
 
-	const bool bFitToViewport = GetFitToViewport();
-	if (bFitToViewport)
+	// Fit is the same as fill, but doesn't scale up past 100%
+	const ETextureEditorZoomMode CurrentZoomMode = GetZoomMode();
+	if (CurrentZoomMode == ETextureEditorZoomMode::Fit || CurrentZoomMode == ETextureEditorZoomMode::Fill)
 	{
 		const UVolumeTexture* VolumeTexture = Cast<UVolumeTexture>(Texture);
+		const UTextureRenderTargetVolume* VolumeTextureRT = Cast< UTextureRenderTargetVolume>(Texture);
 
 		// Subtract off the viewport space devoted to padding (2 * PreviewPadding)
 		// so that the texture is padded on all sides
@@ -276,7 +284,7 @@ void FTextureEditorToolkit::CalculateTextureDimensions( uint32& Width, uint32& H
 			const bool bNoSourceImage = Texture->Source.GetNumSlices() == 0;
 			Width *= (bNoSourceImage || bMultipleSourceImages) ? 2 : 1;
 		}
-		else if (VolumeTexture)
+		else if (VolumeTexture || VolumeTextureRT)
 		{
 			UTextureEditorSettings& Settings = *GetMutableDefault<UTextureEditorSettings>();
 			if (Settings.VolumeViewMode == ETextureEditorVolumeViewMode::TextureEditorVolumeViewMode_VolumeTrace)
@@ -285,7 +293,7 @@ void FTextureEditorToolkit::CalculateTextureDimensions( uint32& Width, uint32& H
 			}
 			else
 			{
-				Width = (uint32)((float)Height * (float)PreviewEffectiveTextureWidth / (float)PreviewEffectiveTextureHeight);
+				Width = FMath::CeilToInt((float)Height * (float)PreviewEffectiveTextureWidth / (float)PreviewEffectiveTextureHeight);
 			}
 		}
 
@@ -311,6 +319,17 @@ void FTextureEditorToolkit::CalculateTextureDimensions( uint32& Width, uint32& H
 		{
 			Width = Width * MaxHeight / Height;
 			Height = MaxHeight;
+		}
+		
+		// If fit, then we only want to scale down
+		// So if our natural dimensions are smaller than the viewport, we can just use those
+		if (CurrentZoomMode == ETextureEditorZoomMode::Fit)
+		{
+			if (PreviewEffectiveTextureWidth < Width && PreviewEffectiveTextureHeight < Height)
+			{
+				Width = PreviewEffectiveTextureWidth;
+				Height = PreviewEffectiveTextureHeight;
+			}
 		}
 	}
 	else
@@ -343,13 +362,15 @@ ESimpleElementBlendMode FTextureEditorToolkit::GetColourChannelBlendMode( ) cons
 	return (ESimpleElementBlendMode)Result;
 }
 
-
-bool FTextureEditorToolkit::GetFitToViewport( ) const
+bool FTextureEditorToolkit::IsFitToViewport() const
 {
-	const UTextureEditorSettings& Settings = *GetDefault<UTextureEditorSettings>();
-	return Settings.FitToViewport;
+	return IsCurrentZoomMode(ETextureEditorZoomMode::Fit);
 }
 
+bool FTextureEditorToolkit::IsFillToViewport() const
+{
+	return IsCurrentZoomMode(ETextureEditorZoomMode::Fill);
+}
 
 int32 FTextureEditorToolkit::GetMipLevel( ) const
 {
@@ -391,7 +412,7 @@ bool FTextureEditorToolkit::GetUseSpecifiedMip( ) const
 }
 
 
-double FTextureEditorToolkit::GetZoom( ) const
+double FTextureEditorToolkit::GetCustomZoomLevel( ) const
 {
 	return Zoom;
 }
@@ -401,21 +422,35 @@ void FTextureEditorToolkit::PopulateQuickInfo( )
 {
 	UTexture2D* Texture2D = Cast<UTexture2D>(Texture);
 	UTextureRenderTarget2D* Texture2DRT = Cast<UTextureRenderTarget2D>(Texture);
-	UTextureRenderTargetCube* TextureCubeRT = Cast<UTextureRenderTargetCube>(Texture);
 	UTextureCube* TextureCube = Cast<UTextureCube>(Texture);
 	UTexture2DArray* Texture2DArray = Cast<UTexture2DArray>(Texture);
+	UTextureRenderTarget2DArray* Texture2DArrayRT = Cast<UTextureRenderTarget2DArray>(Texture);
 	UTexture2DDynamic* Texture2DDynamic = Cast<UTexture2DDynamic>(Texture);
 	UVolumeTexture* VolumeTexture = Cast<UVolumeTexture>(Texture);
+	UTextureRenderTargetVolume* VolumeTextureRT = Cast<UTextureRenderTargetVolume>(Texture);
 
 	const uint32 SurfaceWidth = (uint32)Texture->GetSurfaceWidth();
 	const uint32 SurfaceHeight = (uint32)Texture->GetSurfaceHeight();
-	const uint32 SurfaceDepth =  VolumeTexture ? (uint32)VolumeTexture->GetSizeZ() : 1;
+	const uint32 SurfaceDepth =
+		[&]() -> uint32
+		{
+			if (VolumeTexture)
+			{
+				return (uint32)VolumeTexture->GetSizeZ();
+			}
+			else if (VolumeTextureRT)
+			{
+				return (uint32)VolumeTextureRT->SizeZ;
+			}
+			return 1;
+		}();
 
 	const uint32 ImportedWidth = FMath::Max<uint32>(SurfaceWidth, Texture->Source.GetSizeX());
 	const uint32 ImportedHeight =  FMath::Max<uint32>(SurfaceHeight, Texture->Source.GetSizeY());
-	const uint32 ImportedDepth =  FMath::Max<uint32>(SurfaceDepth, VolumeTexture ? Texture->Source.GetNumSlices() : 1);
+	const uint32 ImportedDepth = FMath::Max<uint32>(SurfaceDepth, VolumeTexture || VolumeTextureRT ? Texture->Source.GetNumSlices() : 1);
 
-	const int32 ActualMipBias = Texture2D ? (Texture2D->GetNumMips() - Texture2D->GetNumResidentMips())	: Texture->GetCachedLODBias();
+	const FStreamableRenderResourceState SRRState = Texture->GetStreamableResourceState();
+	const int32 ActualMipBias = SRRState.IsValid() ? (SRRState.ResidentFirstLODIdx() + SRRState.AssetLODBias) : Texture->GetCachedLODBias();
 	const uint32 ActualWidth = FMath::Max<uint32>(SurfaceWidth >> ActualMipBias, 1);
 	const uint32 ActualHeight = FMath::Max<uint32>(SurfaceHeight >> ActualMipBias, 1);
 	const uint32 ActualDepth =  FMath::Max<uint32>(SurfaceDepth >> ActualMipBias, 1);
@@ -447,7 +482,7 @@ void FTextureEditorToolkit::PopulateQuickInfo( )
 	Options.UseGrouping = false;
 
 
-	if (VolumeTexture)
+	if (VolumeTexture || VolumeTextureRT)
 	{
 		ImportedText->SetText(FText::Format( NSLOCTEXT("TextureEditor", "QuickInfo_Imported_3x", "Imported: {0}x{1}x{2}"), FText::AsNumber(ImportedWidth, &Options), FText::AsNumber(ImportedHeight, &Options), FText::AsNumber(ImportedDepth, &Options)));
 		CurrentText->SetText(FText::Format( NSLOCTEXT("TextureEditor", "QuickInfo_Displayed_3x", "Displayed: {0}x{1}x{2}"), FText::AsNumber(PreviewEffectiveTextureWidth, &Options ), FText::AsNumber(PreviewEffectiveTextureHeight, &Options), FText::AsNumber(PreviewEffectiveTextureDepth, &Options)));
@@ -483,7 +518,7 @@ void FTextureEditorToolkit::PopulateQuickInfo( )
 	SizeText->SetText(FText::Format(NSLOCTEXT("TextureEditor", "QuickInfo_ResourceSize", "Resource Size: {0} Kb"), FText::AsNumber(Size, &SizeOptions)));
 
 	FText Method = Texture->IsCurrentlyVirtualTextured() ? NSLOCTEXT("TextureEditor", "QuickInfo_MethodVirtualStreamed", "Virtual Streamed")
-													: (!Texture->bIsStreamable ? NSLOCTEXT("TextureEditor", "QuickInfo_MethodNotStreamed", "Not Streamed") 
+													: (!Texture->IsStreamable() ? NSLOCTEXT("TextureEditor", "QuickInfo_MethodNotStreamed", "Not Streamed") 
 																			: NSLOCTEXT("TextureEditor", "QuickInfo_MethodStreamed", "Streamed") );
 
 	MethodText->SetText(FText::Format(NSLOCTEXT("TextureEditor", "QuickInfo_Method", "Method: {0}"), Method));
@@ -503,6 +538,10 @@ void FTextureEditorToolkit::PopulateQuickInfo( )
 	{
 		TextureFormatIndex = Texture2DArray->GetPixelFormat();
 	}
+	else if (Texture2DArrayRT)
+	{
+		TextureFormatIndex = Texture2DArrayRT->GetFormat();
+	}
 	else if (Texture2DRT)
 	{
 		TextureFormatIndex = Texture2DRT->GetFormat();
@@ -514,6 +553,10 @@ void FTextureEditorToolkit::PopulateQuickInfo( )
 	else if (VolumeTexture)
 	{
 		TextureFormatIndex = VolumeTexture->GetPixelFormat();
+	}
+	else if (VolumeTextureRT)
+	{
+		TextureFormatIndex = VolumeTextureRT->GetFormat();
 	}
 
 	if (TextureFormatIndex != PF_MAX)
@@ -534,6 +577,10 @@ void FTextureEditorToolkit::PopulateQuickInfo( )
 	{
 		NumMips = Texture2DArray->GetNumMips();
 	}
+	else if (Texture2DArrayRT)
+	{
+		NumMips = Texture2DArrayRT->GetNumMips();
+	}
 	else if (Texture2DRT)
 	{
 		NumMips = Texture2DRT->GetNumMips();
@@ -545,6 +592,10 @@ void FTextureEditorToolkit::PopulateQuickInfo( )
 	else if (VolumeTexture)
 	{
 		NumMips = VolumeTexture->GetNumMips();
+	}
+	else if (VolumeTextureRT)
+	{
+		NumMips = VolumeTextureRT->GetNumMips();
 	}
 
 	NumMipsText->SetText(FText::Format(NSLOCTEXT("TextureEditor", "QuickInfo_NumMips", "Number of Mips: {0}"), FText::AsNumber(NumMips)));
@@ -559,30 +610,85 @@ void FTextureEditorToolkit::PopulateQuickInfo( )
 }
 
 
-void FTextureEditorToolkit::SetFitToViewport( const bool bFitToViewport )
+void FTextureEditorToolkit::SetZoomMode( const ETextureEditorZoomMode InZoomMode )
 {
+	// Update our own zoom mode
+	ZoomMode = InZoomMode;
+	
+	// And also save it so it's used for new texture editors
 	UTextureEditorSettings& Settings = *GetMutableDefault<UTextureEditorSettings>();
-	Settings.FitToViewport = bFitToViewport;
+	Settings.ZoomMode = ZoomMode;
 	Settings.PostEditChange();
 }
 
+ETextureEditorZoomMode FTextureEditorToolkit::GetZoomMode() const
+{
+	// Each texture editors keeps a local zoom mode so that it can be changed without affecting other open editors
+	return ZoomMode;
+}
 
-void FTextureEditorToolkit::SetZoom( double ZoomValue )
+double FTextureEditorToolkit::CalculateDisplayedZoomLevel() const
+{
+	// Avoid calculating dimensions if we're custom anyway
+	if (GetZoomMode() == ETextureEditorZoomMode::Custom)
+	{
+		return Zoom;
+	}
+
+	uint32 DisplayWidth, DisplayHeight;
+	CalculateTextureDimensions(DisplayWidth, DisplayHeight);
+	if (PreviewEffectiveTextureHeight != 0)
+	{
+		return (double)DisplayHeight / PreviewEffectiveTextureHeight;
+	}
+	else if (PreviewEffectiveTextureWidth != 0)
+	{
+		return (double)DisplayWidth / PreviewEffectiveTextureWidth;
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+void FTextureEditorToolkit::SetCustomZoomLevel( double ZoomValue )
 {
 	Zoom = FMath::Clamp(ZoomValue, MinZoom, MaxZoom);
-	SetFitToViewport(false);
+	
+	// For now we also want to be in custom mode whenever this is changed
+	SetZoomMode(ETextureEditorZoomMode::Custom);
 }
 
 
+void FTextureEditorToolkit::OffsetZoom(double OffsetValue, bool bSnapToStepSize)
+{
+	// Offset from our current "visual" zoom level so that you can
+	// smoothly transition from Fit/Fill mode into a custom zoom level
+	const double CurrentZoom = CalculateDisplayedZoomLevel();
+
+	if (bSnapToStepSize)
+	{
+		// Snap to the zoom step when offsetting to avoid zooming all the way to the min (0.01)
+		// then back up (+0.1) causing your zoom level to be off by 0.01 (eg. 11%)
+		// If we were in a fit view mode then our current zoom level could also be off the grid
+		const double FinalZoom = FMath::GridSnap(CurrentZoom + OffsetValue, ZoomStep);
+		SetCustomZoomLevel(FinalZoom);
+	}
+	else
+	{
+		SetCustomZoomLevel(CurrentZoom + OffsetValue);
+	}
+}
+
 void FTextureEditorToolkit::ZoomIn( )
 {
-	SetZoom(Zoom + ZoomStep);
+	OffsetZoom(ZoomStep);
 }
 
 
 void FTextureEditorToolkit::ZoomOut( )
 {
-	SetZoom(Zoom - ZoomStep);
+	OffsetZoom(-ZoomStep);
 }
 
 float FTextureEditorToolkit::GetVolumeOpacity() const
@@ -590,9 +696,9 @@ float FTextureEditorToolkit::GetVolumeOpacity() const
 	return VolumeOpacity;
 }
 
-void FTextureEditorToolkit::SetVolumeOpacity(float ZoomValue)
+void FTextureEditorToolkit::SetVolumeOpacity(float InVolumeOpacity)
 {
-	VolumeOpacity = FMath::Clamp(ZoomValue, 0.f, 1.f);
+	VolumeOpacity = FMath::Clamp(InVolumeOpacity, 0.f, 1.f);
 }
 
 const FRotator& FTextureEditorToolkit::GetVolumeOrientation() const
@@ -694,10 +800,17 @@ void FTextureEditorToolkit::BindCommands( )
 		FIsActionChecked::CreateSP(this, &FTextureEditorToolkit::HandleDesaturationChannelActionIsChecked));
 
 	ToolkitCommands->MapAction(
+		Commands.FillToViewport,
+		FExecuteAction::CreateSP(this, &FTextureEditorToolkit::HandleFillToViewportActionExecute));
+
+	ToolkitCommands->MapAction(
 		Commands.FitToViewport,
-		FExecuteAction::CreateSP(this, &FTextureEditorToolkit::HandleFitToViewportActionExecute),
-		FCanExecuteAction(),
-		FIsActionChecked::CreateSP(this, &FTextureEditorToolkit::HandleFitToViewportActionIsChecked));
+		FExecuteAction::CreateSP(this, &FTextureEditorToolkit::HandleFitToViewportActionExecute));
+
+	ToolkitCommands->MapAction(
+		Commands.ZoomToNatural,
+		FExecuteAction::CreateSP(this, &FTextureEditorToolkit::HandleZoomToNaturalActionExecute));
+	
 
 	ToolkitCommands->MapAction(
 		Commands.CheckeredBackground,
@@ -1075,7 +1188,9 @@ TOptional<int32> FTextureEditorToolkit::GetMaxMipLevel( ) const
 	const UTextureCube* TextureCube = Cast<UTextureCube>(Texture);
 	const UTexture2DArray* Texture2DArray = Cast<UTexture2DArray>(Texture);
 	const UTextureRenderTargetCube* RTTextureCube = Cast<UTextureRenderTargetCube>(Texture);
+	const UTextureRenderTargetVolume* RTTextureVolume = Cast<UTextureRenderTargetVolume>(Texture);
 	const UTextureRenderTarget2D* RTTexture2D = Cast<UTextureRenderTarget2D>(Texture);
+	const UTextureRenderTarget2DArray* RTTexture2DArray = Cast<UTextureRenderTarget2DArray>(Texture);
 	const UVolumeTexture* VolumeTexture = Cast<UVolumeTexture>(Texture);
 
 	if (Texture2D)
@@ -1098,9 +1213,19 @@ TOptional<int32> FTextureEditorToolkit::GetMaxMipLevel( ) const
 		return RTTextureCube->GetNumMips() - 1;
 	}
 
+	if (RTTextureVolume)
+	{
+		return RTTextureVolume->GetNumMips() - 1;
+	}
+
 	if (RTTexture2D)
 	{
 		return RTTexture2D->GetNumMips() - 1;
+	}
+
+	if (RTTexture2DArray)
+	{
+		return RTTexture2DArray->GetNumMips() - 1;
 	}
 
 	if (VolumeTexture)
@@ -1220,15 +1345,19 @@ bool FTextureEditorToolkit::HandleCompressNowActionCanExecute( ) const
 
 void FTextureEditorToolkit::HandleFitToViewportActionExecute( )
 {
-	ToggleFitToViewport();
+	SetZoomMode(ETextureEditorZoomMode::Fit);
 }
 
 
-bool FTextureEditorToolkit::HandleFitToViewportActionIsChecked( ) const
+void FTextureEditorToolkit::HandleFillToViewportActionExecute()
 {
-	return GetFitToViewport();
+	SetZoomMode(ETextureEditorZoomMode::Fill);
 }
 
+void FTextureEditorToolkit::HandleZoomToNaturalActionExecute()
+{
+	SetCustomZoomLevel(1);
+}
 
 void FTextureEditorToolkit::HandleGreenChannelActionExecute( )
 {

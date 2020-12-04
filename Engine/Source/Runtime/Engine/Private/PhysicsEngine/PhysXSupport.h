@@ -21,7 +21,7 @@ class UPhysicalMaterial;
 struct FCollisionShape;
 class FPhysScene_PhysX;
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 
 // binary serialization requires 128 byte alignment
 #ifndef PHYSX_SERIALIZATION_ALIGNMENT
@@ -59,9 +59,6 @@ extern ENGINE_API TArray<PxTriangleMesh*>	GPhysXPendingKillTriMesh;
 
 /** Array of PxHeightField objects which are awaiting cleaning up. */
 extern ENGINE_API TArray<PxHeightField*>	GPhysXPendingKillHeightfield;
-
-/** Array of PxMaterial objects which are awaiting cleaning up. */
-extern TArray<PxMaterial*>		GPhysXPendingKillMaterial;
 
 
 extern const physx::PxQuat U2PSphylBasis;

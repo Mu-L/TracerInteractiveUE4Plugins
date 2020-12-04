@@ -13,12 +13,14 @@
 #include "LevelEditorViewport.h"
 #endif
 
+#define LOCTEXT_NAMESPACE "NiagaraDataInterfaceCamera"
+
 
 IMPLEMENT_TYPE_LAYOUT(FNiagaraDataInterfaceParametersCS_CameraQuery);
 
 void FNiagaraDataInterfaceParametersCS_CameraQuery::Bind(const FNiagaraDataInterfaceGPUParamInfo& ParameterInfo, const class FShaderParameterMap& ParameterMap)
 {
-	PassUniformBuffer.Bind(ParameterMap, FSceneTexturesUniformParameters::StaticStructMetadata.GetShaderVariableName());
+	PassUniformBuffer.Bind(ParameterMap, FSceneTextureUniformParameters::StaticStructMetadata.GetShaderVariableName());
 }
 
 void FNiagaraDataInterfaceParametersCS_CameraQuery::Set(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) const
@@ -26,7 +28,7 @@ void FNiagaraDataInterfaceParametersCS_CameraQuery::Set(FRHICommandList& RHICmdL
 	check(IsInRenderingThread());
 	FRHIComputeShader* ComputeShaderRHI = RHICmdList.GetBoundComputeShader();
 
-	TUniformBufferRef<FSceneTexturesUniformParameters> SceneTextureUniformParams = GNiagaraViewDataManager.GetSceneTextureUniformParameters();
+	TUniformBufferRef<FSceneTextureUniformParameters> SceneTextureUniformParams = GNiagaraViewDataManager.GetSceneTextureUniformParameters();
 	SetUniformBufferParameter(RHICmdList, ComputeShaderRHI, PassUniformBuffer, SceneTextureUniformParams);
 }
 
@@ -36,6 +38,8 @@ const FName UNiagaraDataInterfaceCamera::GetClipSpaceTransformsName(TEXT("GetCli
 const FName UNiagaraDataInterfaceCamera::GetViewSpaceTransformsName(TEXT("GetViewSpaceTransformsGPU"));
 const FName UNiagaraDataInterfaceCamera::GetCameraPropertiesName(TEXT("GetCameraPropertiesCPU/GPU"));
 const FName UNiagaraDataInterfaceCamera::GetFieldOfViewName(TEXT("GetFieldOfView"));
+const FName UNiagaraDataInterfaceCamera::CalculateDistancesName(TEXT("CalculateParticleDistancesCPU"));
+const FName UNiagaraDataInterfaceCamera::QueryClosestName(TEXT("QueryClosestParticlesCPU"));
 
 UNiagaraDataInterfaceCamera::UNiagaraDataInterfaceCamera(FObjectInitializer const& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -55,18 +59,28 @@ void UNiagaraDataInterfaceCamera::PostInitProperties()
 
 bool UNiagaraDataInterfaceCamera::InitPerInstanceData(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance)
 {
-	CameraDataInterface_InstanceData* PIData = new (PerInstanceData) CameraDataInterface_InstanceData;
+	FCameraDataInterface_InstanceData* PIData = new (PerInstanceData) FCameraDataInterface_InstanceData;
 	return true;
 }
 
 bool UNiagaraDataInterfaceCamera::PerInstanceTick(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance, float DeltaSeconds)
 {
-	CameraDataInterface_InstanceData* PIData = (CameraDataInterface_InstanceData*)PerInstanceData;
+	FCameraDataInterface_InstanceData* PIData = (FCameraDataInterface_InstanceData*)PerInstanceData;
 	if (!PIData)
 	{
 		return true;
 	}
-	
+
+	// calculate the distance for each particle and sort by distance (if required)
+	PIData->ParticlesSortedByDistance.Empty();
+	FDistanceData DistanceData;
+	while (PIData->DistanceSortQueue.Dequeue(DistanceData))
+	{
+		PIData->ParticlesSortedByDistance.Add(DistanceData);
+	}
+	PIData->ParticlesSortedByDistance.StableSort([](const FDistanceData& A, const FDistanceData& B) { return A.DistanceSquared < B.DistanceSquared; });
+
+	// grab the current camera data
 	UWorld* World = SystemInstance->GetWorldManager()->GetWorld();
 	if (World && PlayerControllerIndex < World->GetNumPlayerControllers())
 	{
@@ -187,6 +201,34 @@ void UNiagaraDataInterfaceCamera::GetFunctions(TArray<FNiagaraFunctionSignature>
 	Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("Up Vector World")));
 	Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("Right Vector World")));
 	OutFunctions.Add(Sig);
+
+	Sig = FNiagaraFunctionSignature();
+	Sig.Name = QueryClosestName;
+#if WITH_EDITORONLY_DATA
+	Sig.Description = NSLOCTEXT("Niagara", "QueryClosestDescription", "This function checks the previously calculated distance of each particle and then returns true for the closest particles and false for the other ones.");
+#endif
+	Sig.bMemberFunction = true;
+	Sig.bRequiresContext = false;
+	Sig.bSupportsGPU = false;
+	Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition(GetClass()), TEXT("Camera interface")));
+	Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIDDef(), TEXT("Particle ID")));
+	Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIntDef(), TEXT("Max Valid Results")));
+	Sig.Outputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetBoolDef(), TEXT("Is Closest")));
+	OutFunctions.Add(Sig);
+
+	Sig = FNiagaraFunctionSignature();
+	Sig.Name = CalculateDistancesName;
+#if WITH_EDITORONLY_DATA
+	Sig.Description = NSLOCTEXT("Niagara", "CalculateDistancesDescription", "This function compares the particle position against the camera position and stores the result to be queried in the next frame.");
+#endif
+	Sig.bMemberFunction = true;
+	Sig.bRequiresContext = false;
+	Sig.bSupportsGPU = false;
+	Sig.bRequiresExecPin = true;
+	Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition(GetClass()), TEXT("Camera interface")));
+	Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetIDDef(), TEXT("Particle ID")));
+	Sig.Inputs.Add(FNiagaraVariable(FNiagaraTypeDefinition::GetVec3Def(), TEXT("Particle Position World")));
+	OutFunctions.Add(Sig);
 }
 
 bool UNiagaraDataInterfaceCamera::GetFunctionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, const FNiagaraDataInterfaceGeneratedFunction& FunctionInfo, int FunctionInstanceIndex, FString& OutHLSL)
@@ -207,7 +249,7 @@ bool UNiagaraDataInterfaceCamera::GetFunctionHLSL(const FNiagaraDataInterfaceGPU
 				Out_ScreenToViewSpace = View.ScreenToViewSpace;
 				Out_Current_TAAJitter = View.TemporalAAJitter.xy;
 				Out_Previous_TAAJitter = View.TemporalAAJitter.zw;
-			}
+			} 
 		)");
 		OutHLSL += FString::Format(FormatSample, ArgsSample);
 		return true;
@@ -276,6 +318,8 @@ bool UNiagaraDataInterfaceCamera::GetFunctionHLSL(const FNiagaraDataInterfaceGPU
 	return false;
 }
 
+DEFINE_NDI_DIRECT_FUNC_BINDER(UNiagaraDataInterfaceCamera, GetClosestParticles);
+DEFINE_NDI_DIRECT_FUNC_BINDER(UNiagaraDataInterfaceCamera, CalculateParticleDistances);
 DEFINE_NDI_DIRECT_FUNC_BINDER(UNiagaraDataInterfaceCamera, GetCameraFOV);
 DEFINE_NDI_DIRECT_FUNC_BINDER(UNiagaraDataInterfaceCamera, GetCameraProperties);
 DEFINE_NDI_DIRECT_FUNC_BINDER(UNiagaraDataInterfaceCamera, GetViewPropertiesGPU);
@@ -286,6 +330,14 @@ void UNiagaraDataInterfaceCamera::GetVMExternalFunction(const FVMExternalFunctio
 	if (BindingInfo.Name == GetFieldOfViewName)
 	{
 		NDI_FUNC_BINDER(UNiagaraDataInterfaceCamera, GetCameraFOV)::Bind(this, OutFunc);
+	}
+	else if (BindingInfo.Name == CalculateDistancesName)
+	{
+		NDI_FUNC_BINDER(UNiagaraDataInterfaceCamera, CalculateParticleDistances)::Bind(this, OutFunc);
+	}
+	else if (BindingInfo.Name == QueryClosestName)
+	{
+		NDI_FUNC_BINDER(UNiagaraDataInterfaceCamera, GetClosestParticles)::Bind(this, OutFunc);
 	}
 	else if (BindingInfo.Name == GetCameraPropertiesName)
 	{
@@ -311,7 +363,7 @@ void UNiagaraDataInterfaceCamera::GetVMExternalFunction(const FVMExternalFunctio
 
 void UNiagaraDataInterfaceCamera::GetCameraFOV(FVectorVMContext& Context)
 {
-	VectorVM::FUserPtrHandler<CameraDataInterface_InstanceData> InstData(Context);
+	VectorVM::FUserPtrHandler<FCameraDataInterface_InstanceData> InstData(Context);
 	VectorVM::FExternalFuncRegisterHandler<float> OutFov(Context);
 
 	float Fov = InstData.Get()->CameraFOV;
@@ -324,7 +376,7 @@ void UNiagaraDataInterfaceCamera::GetCameraFOV(FVectorVMContext& Context)
 
 void UNiagaraDataInterfaceCamera::GetCameraProperties(FVectorVMContext& Context)
 {
-	VectorVM::FUserPtrHandler<CameraDataInterface_InstanceData> InstData(Context);
+	VectorVM::FUserPtrHandler<FCameraDataInterface_InstanceData> InstData(Context);
 
 	VectorVM::FExternalFuncRegisterHandler<float> CamPosX(Context);
 	VectorVM::FExternalFuncRegisterHandler<float> CamPosY(Context);
@@ -342,7 +394,7 @@ void UNiagaraDataInterfaceCamera::GetCameraProperties(FVectorVMContext& Context)
 	VectorVM::FExternalFuncRegisterHandler<float> CamRightY(Context);
 	VectorVM::FExternalFuncRegisterHandler<float> CamRightZ(Context);
 
-	CameraDataInterface_InstanceData* CamData = InstData.Get();
+	FCameraDataInterface_InstanceData* CamData = InstData.Get();
 	float XPos = CamData->CameraLocation.X;
 	float YPos = CamData->CameraLocation.Y;
 	float ZPos = CamData->CameraLocation.Z;
@@ -372,16 +424,134 @@ void UNiagaraDataInterfaceCamera::GetCameraProperties(FVectorVMContext& Context)
 	}
 }
 
-ETickingGroup UNiagaraDataInterfaceCamera::CalculateTickGroup(void * PerInstanceData) const
+void UNiagaraDataInterfaceCamera::GetClosestParticles(FVectorVMContext& Context)
 {
+	VectorVM::FUserPtrHandler<FCameraDataInterface_InstanceData> InstData(Context);
+
+	FNDIInputParam<FNiagaraID> ParticleIDParam(Context);
+	FNDIInputParam<int32> CountParam(Context);
+	FNDIOutputParam<FNiagaraBool> ResultOutParam(Context);
+
+	int32 Count = Context.NumInstances > 0 ? CountParam.GetAndAdvance() : 0;
+	if (Count == 0 || InstData->ParticlesSortedByDistance.Num() == 0)
+	{
+		for (int32 i = 0; i < Context.NumInstances; ++i)
+		{
+			ResultOutParam.SetAndAdvance(false);
+		}
+		return;
+	}
+
+	// grab the IDs of the closest n particles
+	TSet<FNiagaraID> ClosestParticleIDs;
+	for (int32 i = 0; i < Count; ++i)
+	{
+		ClosestParticleIDs.Add(InstData->ParticlesSortedByDistance[i].ParticleID);
+	}
+
+	// Assign each particles their result
+	for (int32 i = 0; i < Context.NumInstances; ++i)
+	{
+		FNiagaraID ParticleID = ParticleIDParam.GetAndAdvance();
+		ResultOutParam.SetAndAdvance(ClosestParticleIDs.Contains(ParticleID));
+	}
+}
+
+void UNiagaraDataInterfaceCamera::CalculateParticleDistances(FVectorVMContext& Context)
+{
+	VectorVM::FUserPtrHandler<FCameraDataInterface_InstanceData> InstData(Context);
+
+	FNDIInputParam<FNiagaraID> IDParam(Context);
+	FNDIInputParam<FVector> ParticlePosParam(Context);
+
+	FVector CameraPos = InstData->CameraLocation;
+	for (int32 i = 0; i < Context.NumInstances; ++i)
+	{
+		FDistanceData DistanceData;
+		FVector ParticlePos = ParticlePosParam.GetAndAdvance();
+		DistanceData.ParticleID = IDParam.GetAndAdvance();
+		DistanceData.DistanceSquared = (ParticlePos - CameraPos).SizeSquared();
+		InstData->DistanceSortQueue.Enqueue(DistanceData);
+	}
+}
+
+ETickingGroup UNiagaraDataInterfaceCamera::CalculateTickGroup(const void* PerInstanceData) const
+{
+	if (!bRequireCurrentFrameData)
+		return NiagaraFirstTickGroup;
 	return ETickingGroup::TG_PostUpdateWork;
 }
+
+#if WITH_EDITOR	
+void UNiagaraDataInterfaceCamera::GetFeedback(UNiagaraSystem* Asset, UNiagaraComponent* Component,
+	TArray<FNiagaraDataInterfaceError>& OutErrors, TArray<FNiagaraDataInterfaceFeedback>& Warnings,
+	TArray<FNiagaraDataInterfaceFeedback>& Info)
+{
+	if (Asset == nullptr)
+	{
+		return;
+	}
+
+	// we need to check if the DI is used to access camera properties in a cpu context to warn the user that
+	// the Niagara viewport does not support cpu cameras and it only works correctly in the level viewport and PIE
+
+	TArray<UNiagaraScript*> Scripts;
+	Scripts.Add(Asset->GetSystemSpawnScript());
+	Scripts.Add(Asset->GetSystemUpdateScript());
+	for (auto&& EmitterHandle : Asset->GetEmitterHandles())
+	{
+		if (EmitterHandle.GetInstance()->SimTarget == ENiagaraSimTarget::GPUComputeSim)
+		{
+			// Ignore gpu emitters
+			continue;
+		}
+		TArray<UNiagaraScript*> OutScripts;
+		EmitterHandle.GetInstance()->GetScripts(OutScripts, false);
+		Scripts.Append(OutScripts);
+	}
+
+	// Check if any CPU script uses camera functions
+	//TODO: This is the same as in the skel mesh DI, it doesn't guarantee that the DI used by these functions are THIS DI.
+	// Has a possibility of false positives
+	bool bHasCameraAccessWarning = [this, &Scripts]()
+	{
+		for (const auto Script : Scripts)
+		{
+			for (const auto& Info : Script->GetVMExecutableData().DataInterfaceInfo)
+			{
+				if (Info.MatchesClass(GetClass()))
+				{
+					for (const auto& Func : Info.RegisteredFunctions)
+					{
+						if (Func.Name == GetCameraPropertiesName || Func.Name == GetFieldOfViewName)
+						{
+							return true;
+						}
+					}
+				}
+			}
+		}
+		return false;
+	}();
+
+	if (bHasCameraAccessWarning)
+	{
+		FNiagaraDataInterfaceFeedback CPUAccessNotAllowedWarning(
+         LOCTEXT("CPUCameraAccessWarning", "The cpu camera is bound to a player controller and will therefore not work correctly in the Niagara viewport.\nTo correctly preview the effect, use it in the level editor or switch to a GPU emitter."),
+         LOCTEXT("CPUCameraAccessWarningSummary", "Camera properties cannot be previewed on CPU emitters!"),
+         FNiagaraDataInterfaceFix());
+
+		Warnings.Add(CPUAccessNotAllowedWarning);
+	}
+}
+
+#endif
 
 // ------- Dummy implementations for CPU execution ------------
 
 void UNiagaraDataInterfaceCamera::GetViewPropertiesGPU(FVectorVMContext& Context)
 {
-	VectorVM::FUserPtrHandler<CameraDataInterface_InstanceData> InstData(Context);
+	VectorVM::FUserPtrHandler<FCameraDataInterface_InstanceData> InstData(Context);
 	TArray<VectorVM::FExternalFuncRegisterHandler<float>> OutParams;
 	OutParams.Reserve(24);
 	for (int i = 0; i < 24; i++)
@@ -400,7 +570,7 @@ void UNiagaraDataInterfaceCamera::GetViewPropertiesGPU(FVectorVMContext& Context
 
 void UNiagaraDataInterfaceCamera::GetClipSpaceTransformsGPU(FVectorVMContext& Context)
 {
-	VectorVM::FUserPtrHandler<CameraDataInterface_InstanceData> InstData(Context);
+	VectorVM::FUserPtrHandler<FCameraDataInterface_InstanceData> InstData(Context);
 	TArray<VectorVM::FExternalFuncRegisterHandler<float>> OutParams;
 	OutParams.Reserve(128);
 	for (int i = 0; i < 128; i++)
@@ -419,7 +589,7 @@ void UNiagaraDataInterfaceCamera::GetClipSpaceTransformsGPU(FVectorVMContext& Co
 
 void UNiagaraDataInterfaceCamera::GetViewSpaceTransformsGPU(FVectorVMContext& Context)
 {
-	VectorVM::FUserPtrHandler<CameraDataInterface_InstanceData> InstData(Context);
+	VectorVM::FUserPtrHandler<FCameraDataInterface_InstanceData> InstData(Context);
 	TArray<VectorVM::FExternalFuncRegisterHandler<float>> OutParams;
 	OutParams.Reserve(96);
 	for (int i = 0; i < 96; i++)
@@ -436,4 +606,32 @@ void UNiagaraDataInterfaceCamera::GetViewSpaceTransformsGPU(FVectorVMContext& Co
 	}
 }
 
+
+bool UNiagaraDataInterfaceCamera::CopyToInternal(UNiagaraDataInterface* Destination) const
+{
+	if (!Super::CopyToInternal(Destination))
+	{
+		return false;
+	}
+
+	UNiagaraDataInterfaceCamera* OtherTyped = CastChecked<UNiagaraDataInterfaceCamera>(Destination);
+	OtherTyped->PlayerControllerIndex = PlayerControllerIndex;
+	OtherTyped->bRequireCurrentFrameData = bRequireCurrentFrameData;
+	return true;
+}
+
+bool UNiagaraDataInterfaceCamera::Equals(const UNiagaraDataInterface* Other) const
+{
+	if (!Super::Equals(Other))
+	{
+		return false;
+	}
+	const UNiagaraDataInterfaceCamera* OtherTyped = CastChecked<const UNiagaraDataInterfaceCamera>(Other);
+	return OtherTyped->PlayerControllerIndex == PlayerControllerIndex &&
+		OtherTyped->bRequireCurrentFrameData == bRequireCurrentFrameData ;
+}
+
+
 IMPLEMENT_NIAGARA_DI_PARAMETER(UNiagaraDataInterfaceCamera, FNiagaraDataInterfaceParametersCS_CameraQuery);
+
+#undef LOCTEXT_NAMESPACE

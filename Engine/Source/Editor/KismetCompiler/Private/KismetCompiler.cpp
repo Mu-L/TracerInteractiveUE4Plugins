@@ -54,7 +54,6 @@
 #include "Engine/InheritableComponentHandler.h"
 #include "BlueprintCompilerCppBackendInterface.h"
 #include "Serialization/ArchiveScriptReferenceCollector.h"
-#include "AnimBlueprintCompiler.h"
 #include "UObject/UnrealTypePrivate.h"
 
 static bool bDebugPropertyPropagation = false;
@@ -140,7 +139,6 @@ FKismetCompilerContext::FKismetCompilerContext(UBlueprint* SourceSketch, FCompil
 	, OldLinker(nullptr)
 	, TargetClass(nullptr)
 	, bAssignDelegateSignatureFunction(false)
-	, bGenerateLinkedAnimGraphVariables(false)
 {
 	MacroRowMaxHeight = 0;
 
@@ -282,7 +280,7 @@ void FKismetCompilerContext::CleanAndSanitizeClass(UBlueprintGeneratedClass* Cla
 		// transaction buffer references to these UObjects. The UBlueprint may not have a reference to
 		// the ICH at the moment, and therefore might not have added it to SubObjectsToSave (and
 		// removed the ICH from ClassSubObjects):
-		if(Cast<UInheritableComponentHandler>(CurrSubObj) || CurrSubObj->IsInA(InheritableComponentHandlerClass))
+		if(Cast<UInheritableComponentHandler>(CurrSubObj) || CurrSubObj->IsInA(InheritableComponentHandlerClass) || CurrSubObj->HasAnyFlags(RF_InheritableComponentTemplate))
 		{
 			continue;
 		}
@@ -354,7 +352,8 @@ void FKismetCompilerContext::SaveSubObjectsFromCleanAndSanitizeClass(FSubobjectC
 	{
 		SubObjectsToSave.AddObject(Blueprint->InheritableComponentHandler);
 		TArray<UActorComponent*> AllTemplates;
-		Blueprint->InheritableComponentHandler->GetAllTemplates(AllTemplates);
+		const bool bIncludeTransientTemplates = true;
+		Blueprint->InheritableComponentHandler->GetAllTemplates(AllTemplates, bIncludeTransientTemplates);
 		SubObjectsToSave.AddObjects(AllTemplates);
 	}
 }
@@ -634,6 +633,53 @@ void FKismetCompilerContext::ValidateComponentClassOverrides()
 	}
 }
 
+void FKismetCompilerContext::ValidateClassPropertyDefaults()
+{
+	// We cannot check the default value if there is no generated class yet (i.e. opening a BP for the first time)
+	if (!Blueprint->GeneratedClass)
+	{
+		return;
+	}
+
+	UObject* CDO = Blueprint->GeneratedClass->GetDefaultObject(false);
+	if (!CDO)
+	{
+		return;
+	}
+
+	// Check the New Variables in case the user has changed a type since the last check and a newer
+	// CDO has not been generated yet
+	for (FBPVariableDescription& VarDesc : Blueprint->NewVariables)
+	{
+		if (VarDesc.VarType.PinCategory == UEdGraphSchema_K2::PC_Class)
+		{
+			const UObject* ExpectedObject = VarDesc.VarType.PinSubCategoryObject.Get();
+			const UClass* ExpectedClass = Cast<UClass>(ExpectedObject);
+
+			if (FClassProperty* AsClassProperty = FindFProperty<FClassProperty>(Blueprint->GeneratedClass, VarDesc.VarName))
+			{
+				if (UObject* SetDefaultProp = AsClassProperty->GetObjectPropertyValue_InContainer(CDO))
+				{
+					// Object may be of a type that is also being compiled and therefore REINST_, so get the real class
+					const UClass* SetDefaultClass = Cast<UClass>(SetDefaultProp);
+					const UClass* RealClass = SetDefaultClass ? SetDefaultClass->GetAuthoritativeClass() : nullptr;
+
+					if (RealClass && ExpectedClass && !RealClass->IsChildOf(ExpectedClass))
+					{
+						MessageLog.Error(
+							*FText::Format(
+								LOCTEXT("InvalidClassPropertyDefaultValue_ErrorFmt", "Invalid default type '{0}' on property '{1}' in @@"),
+								FText::FromString(RealClass->GetName()), FText::FromString(AsClassProperty->GetName())
+							).ToString(),
+							Blueprint
+						);
+					}
+				}
+			}
+		}
+	}
+}
+
 void FKismetCompilerContext::ValidateTimelineNames()
 {
 	TSharedPtr<FKismetNameValidator> ParentBPNameValidator;
@@ -719,12 +765,6 @@ void FKismetCompilerContext::CreateClassVariablesFromBlueprint()
 			if(!Variable.DefaultValue.IsEmpty())
 			{
 				SetPropertyDefaultValue(NewProperty, Variable.DefaultValue);
-
-				// We're copying the value to the real CDO, so clear the version stored in the blueprint editor data
-				if (CompileOptions.CompileType == EKismetCompileType::Full)
-				{
-					Variable.DefaultValue.Empty();
-				}
 			}
 
 			if (NewProperty->HasAnyPropertyFlags(CPF_Net))
@@ -743,7 +783,7 @@ void FKismetCompilerContext::CreateClassVariablesFromBlueprint()
 					{
 						MessageLog.Warning(
 							*FText::Format(
-								LOCTEXT("ExposeToSpawnButPrivateWarningFmt", "Variable {0} is marked as 'Expose on Spawn' but not marked as 'Editable'; please make it 'Editable'"),
+								LOCTEXT("ExposeToSpawnButPrivateWarningFmt", "Variable {0} is marked as 'Expose on Spawn' but not marked as 'Instance Editable'; please make it 'Instance Editable'"),
 								FText::FromString(NewProperty->GetName())
 							).ToString()
 						);
@@ -876,7 +916,7 @@ void FKismetCompilerContext::CreatePropertiesFromList(UStruct* Scope, FField**& 
 			);
 		}
 
-		if (FProperty* NewProperty = FKismetCompilerUtilities::CreatePropertyOnScope(Scope, FName(*Term.Name), Term.Type, NewClass, PropertyFlags, Schema, MessageLog))
+		if (FProperty* NewProperty = FKismetCompilerUtilities::CreatePropertyOnScope(Scope, FName(*Term.Name), Term.Type, NewClass, PropertyFlags, Schema, MessageLog, Term.SourcePin))
 		{
 			if (bPropertiesAreParameters && Term.Type.bIsConst)
 			{
@@ -1433,6 +1473,16 @@ bool FKismetCompilerContext::ShouldForceKeepNode(const UEdGraphNode* Node) const
 	}
 }
 
+void FKismetCompilerContext::PruneIsolatedNodes(UEdGraph* InGraph, bool bInIncludeNodesThatCouldBeExpandedToRootSet)
+{
+	TArray<UEdGraphNode*> RootSet;
+	// Find any all entry points caused by special nodes
+	GatherRootSet(InGraph, RootSet, bInIncludeNodesThatCouldBeExpandedToRootSet);
+
+	// Find the connected subgraph starting at the root node and prune out unused nodes
+	PruneIsolatedNodes(RootSet, InGraph->Nodes);
+}
+
 /** Prunes any nodes that weren't visited from the graph, printing out a warning */
 void FKismetCompilerContext::PruneIsolatedNodes(const TArray<UEdGraphNode*>& RootSet, TArray<UEdGraphNode*>& GraphNodes)
 {
@@ -1637,15 +1687,9 @@ void FKismetCompilerContext::PrecompileFunction(FKismetFunctionContext& Context,
 			);
 		}
 
-		{
-			TArray<UEdGraphNode*> RootSet;
-			const bool bIncludePotentialRootNodes = false;
-			// Find any all entry points caused by special nodes
-			GatherRootSet(Context.SourceGraph, RootSet, bIncludePotentialRootNodes);
-
-			// Find the connected subgraph starting at the root node and prune out unused nodes
-			PruneIsolatedNodes(RootSet, Context.SourceGraph->Nodes);
-		}
+		// Find the connected subgraph starting at the root node and prune out unused nodes
+		const bool bIncludePotentialRootNodes = false;
+		PruneIsolatedNodes(Context.SourceGraph, bIncludePotentialRootNodes);
 
 		if (bIsFullCompile)
 		{
@@ -2500,11 +2544,6 @@ void FKismetCompilerContext::FinishCompilingClass(UClass* Class)
 		UBlueprintGeneratedClass* BPGClass = Cast<UBlueprintGeneratedClass>(Class);
 		check(BPGClass);
 
-		BPGClass->ComponentTemplates.Empty();
-		BPGClass->Timelines.Empty();
-		BPGClass->SimpleConstructionScript = NULL;
-		BPGClass->InheritableComponentHandler = NULL;
-
 		BPGClass->ComponentTemplates = Blueprint->ComponentTemplates;
 		BPGClass->Timelines = Blueprint->Timelines;
 		BPGClass->SimpleConstructionScript = Blueprint->SimpleConstructionScript;
@@ -3090,13 +3129,9 @@ void FKismetCompilerContext::ExpansionStep(UEdGraph* Graph, bool bAllowUbergraph
 {
 	auto PruneInner = [=]()
 	{
-		TArray<UEdGraphNode*> RootSet;
-		const bool bIncludePotentialRootNodes = true;
-		// Find any all entry points caused by special nodes
-		GatherRootSet(Graph, RootSet, bIncludePotentialRootNodes);
-
 		// Find the connected subgraph starting at the root node and prune out unused nodes
-		PruneIsolatedNodes(RootSet, Graph->Nodes);
+		const bool bIncludePotentialRootNodes = true;
+		PruneIsolatedNodes(Graph, bIncludePotentialRootNodes);
 	};
 
 	// Node expansion may affect the signature of a static function
@@ -3141,6 +3176,8 @@ void FKismetCompilerContext::ExpansionStep(UEdGraph* Graph, bool bAllowUbergraph
 		// Expand timeline nodes, in skeleton classes only the events will be generated
 		ExpandTimelineNodes(Graph);
 	}
+
+	PostExpansionStep(Graph);
 }
 
 void FKismetCompilerContext::DetermineNodeExecLinks(UEdGraphNode* SourceNode, TMap<UEdGraphPin*, UEdGraphPin*>& SourceNodeLinks) const
@@ -3755,44 +3792,63 @@ void FKismetCompilerContext::ProcessOneFunctionGraph(UEdGraph* SourceGraph, bool
 	// If a function in the graph cannot be overridden/placed as event make sure that it is not.
 	VerifyValidOverrideFunction(FunctionGraph);
 
-	// First do some cursory validation (pin types match, inputs to outputs, pins never point to their parent node, etc...)
-	// If this fails we don't proceed any further to avoid crashes or infinite loops
-	// When compiling only the skeleton class, we want the UFunction to be generated and processed so it contains all the local variables, this is unsafe to do during any other compilation mode
-	//
-	// NOTE: the order of this conditional check is intentional, and should not
-	//       be rearranged; we do NOT want ValidateGraphIsWellFormed() ran for 
-	//       skeleton-only compiles (that's why we have that check second) 
-	//       because it would most likely result in errors (the function hasn't
-	//       been added to the class yet, etc.)
+	// NOTE: The Blueprint compilation manager generates the skeleton class using a different
+	// code path. We do NOT want ValidateGraphIsWellFormed() ran for skeleton-only compiles here
+	// because it can result in errors (the function hasn't been added to the class yet, etc.)
 	check(CompileOptions.CompileType != EKismetCompileType::SkeletonOnly);
-	if ((CompileOptions.CompileType == EKismetCompileType::SkeletonOnly) || ValidateGraphIsWellFormed(FunctionGraph))
+
+	// First do some cursory validation (pin types match, inputs to outputs, pins never point to their parent node, etc...)
+	// If this fails we will "stub" the function graph (if callable) or stop altogether to avoid crashes or infinite loops
+	const bool bIsInvalidFunctionGraph = !ValidateGraphIsWellFormed(FunctionGraph);
+	if (bIsInvalidFunctionGraph)
 	{
-		const UEdGraphSchema_K2* FunctionGraphSchema = CastChecked<const UEdGraphSchema_K2>(FunctionGraph->GetSchema());
-		FKismetFunctionContext& Context = *new FKismetFunctionContext(MessageLog, FunctionGraphSchema, NewClass, Blueprint, CompileOptions.DoesRequireCppCodeGeneration());
-		FunctionList.Add(&Context);
-		Context.SourceGraph = FunctionGraph;
-
-		if(FBlueprintEditorUtils::IsDelegateSignatureGraph(SourceGraph))
+		if(bInternalFunction)
 		{
-			Context.SetDelegateSignatureName(SourceGraph->GetFName());
+			// Internal functions that are not well-formed can be culled, since they're not exposed or callable.
+			return;
 		}
-
-		// If this is an interface blueprint, mark the function contexts as stubs
-		if (FBlueprintEditorUtils::IsInterfaceBlueprint(Blueprint))
+		else
 		{
-			Context.MarkAsInterfaceStub();
+			// Break all links to the entry point in the cloned graph to create a "stub" context that's still exposed
+			// as a callable function. This way external dependencies can still rely on the public interface if they're
+			// not themselves being fully recompiled as a dependency of this Blueprint class.
+			TArray<UK2Node_FunctionEntry*> EntryNodes;
+			FunctionGraph->GetNodesOfClass<UK2Node_FunctionEntry>(EntryNodes);
+			for (UK2Node_FunctionEntry* EntryNode : EntryNodes)
+			{
+				if (EntryNode)
+				{
+					EntryNode->BreakAllNodeLinks();
+				}
+			}
 		}
+	}
 
-		bool bEnforceConstCorrectness = true;
-		if (FBlueprintEditorUtils::IsBlueprintConst(Blueprint) || Context.Schema->IsConstFunctionGraph(Context.SourceGraph, &bEnforceConstCorrectness))
-		{
-			Context.MarkAsConstFunction(bEnforceConstCorrectness);
-		}
+	const UEdGraphSchema_K2* FunctionGraphSchema = CastChecked<const UEdGraphSchema_K2>(FunctionGraph->GetSchema());
+	FKismetFunctionContext& Context = *new FKismetFunctionContext(MessageLog, FunctionGraphSchema, NewClass, Blueprint, CompileOptions.DoesRequireCppCodeGeneration());
+	FunctionList.Add(&Context);
+	Context.SourceGraph = FunctionGraph;
 
-		if ( bInternalFunction )
-		{
-			Context.MarkAsInternalOrCppUseOnly();
-		}
+	if (FBlueprintEditorUtils::IsDelegateSignatureGraph(SourceGraph))
+	{
+		Context.SetDelegateSignatureName(SourceGraph->GetFName());
+	}
+
+	// If this is an interface blueprint, mark the function contexts as stubs
+	if (FBlueprintEditorUtils::IsInterfaceBlueprint(Blueprint))
+	{
+		Context.MarkAsInterfaceStub();
+	}
+
+	bool bEnforceConstCorrectness = true;
+	if (FBlueprintEditorUtils::IsBlueprintConst(Blueprint) || Context.Schema->IsConstFunctionGraph(Context.SourceGraph, &bEnforceConstCorrectness))
+	{
+		Context.MarkAsConstFunction(bEnforceConstCorrectness);
+	}
+
+	if (bInternalFunction)
+	{
+		Context.MarkAsInternalOrCppUseOnly();
 	}
 }
 
@@ -4792,14 +4848,7 @@ TMap< UClass*, CompilerContextFactoryFunction> CustomCompilerMap;
 
 TSharedPtr<FKismetCompilerContext> FKismetCompilerContext::GetCompilerForBP(UBlueprint* BP, FCompilerResultsLog& InMessageLog, const FKismetCompilerOptions& InCompileOptions)
 {
-	// Typically whatever loads the compiler module can also register it (or the module can self register). Due to load order
-	// issues anim blueprint is part of Engine and so there is no obvious place to register FAnimBlueprintCompilerContext,
-	// so I have simply hard-coded it:
-	if(UAnimBlueprint* AnimBP = Cast<UAnimBlueprint>(BP))
-	{
-		return TSharedPtr<FKismetCompilerContext>(new FAnimBlueprintCompilerContext(AnimBP, InMessageLog, InCompileOptions));
-	}
-	else if(CompilerContextFactoryFunction* FactoryFunction = CustomCompilerMap.Find(BP->GetClass()))
+	if(CompilerContextFactoryFunction* FactoryFunction = CustomCompilerMap.Find(BP->GetClass()))
 	{
 		return (*FactoryFunction)(BP, InMessageLog, InCompileOptions);
 	}

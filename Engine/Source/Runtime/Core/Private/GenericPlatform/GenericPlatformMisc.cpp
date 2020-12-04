@@ -324,23 +324,23 @@ FString FGenericPlatformMisc::GetMacAddressString()
 FString FGenericPlatformMisc::GetHashedMacAddressString()
 {
 	PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	return FMD5::HashAnsiString(*FPlatformMisc::GetMacAddressString());
-	PRAGMA_ENABLE_DEPRECATION_WARNINGS
-}
-
-FString FGenericPlatformMisc::GetUniqueDeviceId()
-{
-	PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	return FPlatformMisc::GetHashedMacAddressString();
+	// ensure empty MAC addresses don't return a hash of zero bytes.
+	FString MacAddr = FPlatformMisc::GetMacAddressString();
+	if (!MacAddr.IsEmpty())
+	{
+		return FMD5::HashAnsiString(*MacAddr);
+	}
+	else
+	{
+		return FString();
+	}
 	PRAGMA_ENABLE_DEPRECATION_WARNINGS
 }
 
 FString FGenericPlatformMisc::GetDeviceId()
 {
-	// @todo: When this function is finally removed, the functionality used will need to be moved in here.
-	PRAGMA_DISABLE_DEPRECATION_WARNINGS
-	return GetUniqueDeviceId();
-	PRAGMA_ENABLE_DEPRECATION_WARNINGS
+	// not implemented at the base level. Each platform must decide how to implement this, if possible.
+	return FString();
 }
 
 FString FGenericPlatformMisc::GetUniqueAdvertisingId()
@@ -483,12 +483,6 @@ void FGenericPlatformMisc::BeginNamedEvent(const struct FColor& Color, const ANS
 		CurrentProfiler->StartScopedEvent(ANSI_TO_TCHAR(Text));
 	}
 #endif
-#if CPUPROFILERTRACE_ENABLED
-	if (CpuChannel)
-	{
-		FCpuProfilerTrace::OutputBeginDynamicEvent(Text);
-	}
-#endif
 }
 
 void FGenericPlatformMisc::BeginNamedEvent(const struct FColor& Color, const TCHAR* Text)
@@ -502,12 +496,6 @@ void FGenericPlatformMisc::BeginNamedEvent(const struct FColor& Color, const TCH
 		CurrentProfiler->StartScopedEvent(Text);
 	}
 #endif
-#if CPUPROFILERTRACE_ENABLED
-	if (CpuChannel)
-	{
-		FCpuProfilerTrace::OutputBeginDynamicEvent(Text);
-	}
-#endif
 }
 
 void FGenericPlatformMisc::EndNamedEvent()
@@ -519,12 +507,6 @@ void FGenericPlatformMisc::EndNamedEvent()
 	if (CurrentProfiler != NULL)
 	{
 		CurrentProfiler->EndScopedEvent();
-	}
-#endif
-#if CPUPROFILERTRACE_ENABLED
-	if (CpuChannel)
-	{
-		FCpuProfilerTrace::OutputEndEvent();
 	}
 #endif
 }
@@ -590,7 +572,7 @@ bool FGenericPlatformMisc::GetStoredValue(const FString& InStoreId, const FStrin
 }
 
 bool FGenericPlatformMisc::DeleteStoredValue(const FString& InStoreId, const FString& InSectionName, const FString& InKeyName)
-{	
+{
 	check(!InStoreId.IsEmpty());
 	check(!InSectionName.IsEmpty());
 	check(!InKeyName.IsEmpty());
@@ -608,6 +590,26 @@ bool FGenericPlatformMisc::DeleteStoredValue(const FString& InStoreId, const FSt
 
 		ConfigFile.Dirty = true;
 		return ConfigFile.Write(ConfigPath) && RemovedNum == 1;
+	}
+
+	return false;
+}
+
+bool FGenericPlatformMisc::DeleteStoredSection(const FString& InStoreId, const FString& InSectionName)
+{
+	check(!InStoreId.IsEmpty());
+	check(!InSectionName.IsEmpty());
+
+	// This assumes that FPlatformProcess::ApplicationSettingsDir() returns a user-specific directory; it doesn't on Windows, but Windows overrides this behavior to use the registry
+	const FString ConfigPath = FString(FPlatformProcess::ApplicationSettingsDir()) / InStoreId / FString(TEXT("KeyValueStore.ini"));
+
+	FConfigFile ConfigFile;
+	ConfigFile.Read(ConfigPath);
+
+	if (ConfigFile.Remove(InSectionName) != 0)
+	{
+		ConfigFile.Dirty = true;
+		return ConfigFile.Write(ConfigPath);
 	}
 
 	return false;
@@ -1075,12 +1077,7 @@ const TCHAR* FGenericPlatformMisc::GamePersistentDownloadDir()
 
 	if (GamePersistentDownloadDir.Len() == 0)
 	{
-		FString BaseProjectDir = ProjectDir();
-
-		if (BaseProjectDir.Len() > 0)
-		{
-			GamePersistentDownloadDir = BaseProjectDir / TEXT("PersistentDownloadDir");
-		}
+		GamePersistentDownloadDir = FPaths::ProjectSavedDir() / TEXT("PersistentDownloadDir");
 	}
 	return *GamePersistentDownloadDir;
 }
@@ -1235,7 +1232,7 @@ FString FGenericPlatformMisc::GetTimeZoneId()
 	return FString();
 }
 
-#if DO_CHECK
+#if DO_ENSURE
 namespace GenericPlatformMisc
 {
 	/** Chances for handling an ensure (0.0 - never, 1.0 - always). */
@@ -1268,7 +1265,7 @@ void FGenericPlatformMisc::UpdateHotfixableEnsureSettings()
 	else
 	{
 		float HandleEnsurePercentOnCmdLine = 100.0f;
-		if (!FCommandLine::IsInitialized() && FParse::Value(FCommandLine::Get(), TEXT("handleensurepercent="), HandleEnsurePercentOnCmdLine))
+		if (FCommandLine::IsInitialized() && FParse::Value(FCommandLine::Get(), TEXT("handleensurepercent="), HandleEnsurePercentOnCmdLine))
 		{
 			GenericPlatformMisc::GEnsureChance = HandleEnsurePercentOnCmdLine / 100.0f;
 		}
@@ -1282,7 +1279,7 @@ void FGenericPlatformMisc::UpdateHotfixableEnsureSettings()
 
 	GenericPlatformMisc::GEnsureSettingsEverUpdated = true;
 }
-#endif // !DO_CHECK
+#endif // #if DO_ENSURE
 
 void FGenericPlatformMisc::TickHotfixables()
 {
@@ -1425,6 +1422,11 @@ bool FGenericPlatformMisc::RequestDeviceCheckToken(TFunction<void(const TArray<u
 	return false;
 }
 
+TArray<FCustomChunk> FGenericPlatformMisc::GetOnDemandChunksForPakchunkIndices(const TArray<int32>& PakchunkIndices)
+{
+	return TArray<FCustomChunk>();
+}
+
 TArray<FCustomChunk> FGenericPlatformMisc::GetAllOnDemandChunks()
 {
 	return TArray<FCustomChunk>();
@@ -1451,14 +1453,19 @@ FString FGenericPlatformMisc::LoadTextFileFromPlatformPackage(const FString& Rel
 {
 	FString Path = RootDir() / RelativePath;
 	FString Result;
-	FFileHelper::LoadFileToString(Result, *Path);
+	if (FFileHelper::LoadFileToString(Result, &IPlatformFile::GetPlatformPhysical(), *Path))
+	{
+		return Result;
+	}
+
+	Result.Empty();
 	return Result;
 }
 
 bool FGenericPlatformMisc::FileExistsInPlatformPackage(const FString& RelativePath)
 {
 	FString Path = RootDir() / RelativePath;
-	return IFileManager::Get().FileExists(*Path);
+	return IPlatformFile::GetPlatformPhysical().FileExists(*Path);
 }
 
 void FGenericPlatformMisc::TearDown()

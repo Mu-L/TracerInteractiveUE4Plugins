@@ -24,6 +24,12 @@ USkeletalMeshEditorData::USkeletalMeshEditorData(const FObjectInitializer& Objec
 
 #if WITH_EDITORONLY_DATA
 
+void USkeletalMeshEditorData::PostLoad()
+{
+	ClearFlags(RF_Standalone);
+	Super::PostLoad();
+}
+
 FRawSkeletalMeshBulkData& USkeletalMeshEditorData::GetLODImportedData(int32 LODIndex)
 {
 
@@ -51,6 +57,16 @@ FRawSkeletalMeshBulkData& USkeletalMeshEditorData::GetLODImportedData(int32 LODI
 bool USkeletalMeshEditorData::IsLODImportDataValid(int32 LODIndex)
 {
 	return RawSkeletalMeshBulkDatas.IsValidIndex(LODIndex);
+}
+
+bool USkeletalMeshEditorData::RemoveLODImportedData(int32 LODIndex)
+{
+	if(RawSkeletalMeshBulkDatas.IsValidIndex(LODIndex))
+	{
+		RawSkeletalMeshBulkDatas.RemoveAt(LODIndex);
+		return true;
+	}
+	return false;
 }
 
 void USkeletalMeshEditorData::Serialize(FArchive& Ar)

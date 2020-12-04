@@ -31,40 +31,32 @@ namespace
 		}
 	}
 #endif // WITH_EDITORONLY_DATA
-	/** Used to trigger the trigger the data table changed delegate. This allows us to trigger the delegate once from more complex changes */
-	struct FScopedDataTableChange
-	{
-		FScopedDataTableChange(UDataTable* InTable)
-			: Table(InTable)
-		{
-			FScopeLock Lock(&CriticalSection);
-			int32& Count = ScopeCount.FindOrAdd(Table);
-			++Count;
-		}
-		~FScopedDataTableChange()
-		{
-			FScopeLock Lock(&CriticalSection);
-			int32& Count = ScopeCount.FindChecked(Table);
-			--Count;
-			if (Count == 0)
-			{
-				Table->OnDataTableChanged().Broadcast();
-				ScopeCount.Remove(Table);
-			}
-		}
-
-	private:
-		UDataTable* Table;
-
-		static TMap<UDataTable*, int32> ScopeCount;
-		static FCriticalSection CriticalSection;
-	};
-
-	TMap< UDataTable*, int32> FScopedDataTableChange::ScopeCount;
-	FCriticalSection FScopedDataTableChange::CriticalSection;
-
-#define DATATABLE_CHANGE_SCOPE()	FScopedDataTableChange ActiveScope(this);
 }
+
+UDataTable::FScopedDataTableChange::FScopedDataTableChange(UDataTable* InTable)
+	: Table(InTable)
+{
+	FScopeLock Lock(&CriticalSection);
+	int32& Count = ScopeCount.FindOrAdd(Table);
+	++Count;
+}
+
+UDataTable::FScopedDataTableChange::~FScopedDataTableChange()
+{
+	FScopeLock Lock(&CriticalSection);
+	int32& Count = ScopeCount.FindChecked(Table);
+	--Count;
+	if (Count == 0)
+	{
+		Table->HandleDataTableChanged();
+		ScopeCount.Remove(Table);
+	}
+}
+
+TMap<UDataTable*, int32> UDataTable::FScopedDataTableChange::ScopeCount;
+FCriticalSection UDataTable::FScopedDataTableChange::CriticalSection;
+
+#define DATATABLE_CHANGE_SCOPE()	UDataTable::FScopedDataTableChange ActiveScope(this);
 
 UDataTable::UDataTable(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -84,7 +76,7 @@ void UDataTable::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEv
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 
 #if WITH_EDITORONLY_DATA
-	OnDataTableChanged().Broadcast();
+	HandleDataTableChanged();
 #endif
 }
 #endif
@@ -182,9 +174,9 @@ void UDataTable::OnPostDataImported(TArray<FString>& OutCollectedImportProblems)
 		{
 			if (bIsNativeRowStruct)
 			{
-			FTableRowBase* CurRow = reinterpret_cast<FTableRowBase*>(TableRowPair.Value);
-			CurRow->OnPostDataImport(this, TableRowPair.Key, OutCollectedImportProblems);
-		}
+				FTableRowBase* CurRow = reinterpret_cast<FTableRowBase*>(TableRowPair.Value);
+				CurRow->OnPostDataImport(this, TableRowPair.Key, OutCollectedImportProblems);
+			}
 
 #if WITH_EDITOR
 			// Perform automatic fix-up on any text properties that have been imported from a raw string to assign them deterministic keys
@@ -193,8 +185,39 @@ void UDataTable::OnPostDataImported(TArray<FString>& OutCollectedImportProblems)
 #endif
 		}
 	}
+	
+	// Don't need to call HandleDataTableChanged because it gets called by the scope and post edit callbacks
+	// If you need to handle an import-specific problem, register with FDataTableEditorUtils
+}
 
-	OnDataTableImported().Broadcast();
+void UDataTable::HandleDataTableChanged(FName ChangedRowName)
+{
+	if (IsPendingKillOrUnreachable() || HasAnyFlags(RF_BeginDestroyed))
+	{
+		// This gets called during destruction, don't broadcast callbacks
+		return;
+	}
+
+	// Do the row fixup before global callback
+	if (RowStruct)
+	{
+		const bool bIsNativeRowStruct = RowStruct->IsChildOf(FTableRowBase::StaticStruct());
+
+		if (bIsNativeRowStruct)
+		{
+			for (const TPair<FName, uint8*>& TableRowPair : RowMap)
+			{
+				if (ChangedRowName != NAME_None && ChangedRowName != TableRowPair.Key)
+				{
+					continue;
+				}
+
+				FTableRowBase* CurRow = reinterpret_cast<FTableRowBase*>(TableRowPair.Value);
+				CurRow->OnDataTableChanged(this, TableRowPair.Key);
+			}
+		}
+	}
+
 	OnDataTableChanged().Broadcast();
 }
 
@@ -408,8 +431,8 @@ FProperty* UDataTable::FindTableProperty(const FName& PropertyName) const
 			{
 				if (PropertyNameStr == RowStruct->GetAuthoredNameForField(*It))
 				{
-				Property = *It;
-				break;
+					Property = *It;
+					break;
 				}
 			}
 		}
@@ -622,6 +645,7 @@ TArray<FProperty*> UDataTable::GetTablePropertyArray(const TArray<const TCHAR*>&
 		ColumnProps.AddZeroed( Cells.Num() );
 
 		// Skip first column depending on option
+		TArray<FString> TempPropertyImportNames;
 		for (int32 ColIdx = 0; ColIdx < Cells.Num(); ++ColIdx)
 		{
 			if (ColIdx == KeyColumn)
@@ -642,16 +666,17 @@ TArray<FProperty*> UDataTable::GetTablePropertyArray(const TArray<const TCHAR*>&
 
 				for (TFieldIterator<FProperty> It(InRowStruct); It && !ColumnProp; ++It)
 				{
-					ColumnProp = DataTableUtils::GetPropertyImportNames(*It).Contains(ColumnValue) ? *It : nullptr;
+					DataTableUtils::GetPropertyImportNames(*It, TempPropertyImportNames);
+					ColumnProp = TempPropertyImportNames.Contains(ColumnValue) ? *It : nullptr;
 				}
 
 				// Didn't find a property with this name, problem..
 				if(ColumnProp == nullptr)
 				{
 					if (!bIgnoreExtraFields)
-				{
-					OutProblems.Add(FString::Printf(TEXT("Cannot find Property for column '%s' in struct '%s'."), *PropName.ToString(), *InRowStruct->GetName()));
-				}
+					{
+						OutProblems.Add(FString::Printf(TEXT("Cannot find Property for column '%s' in struct '%s'."), *PropName.ToString(), *InRowStruct->GetName()));
+					}
 				}
 				// Found one!
 				else
@@ -681,24 +706,24 @@ TArray<FProperty*> UDataTable::GetTablePropertyArray(const TArray<const TCHAR*>&
 
 	if (!bIgnoreMissingFields)
 	{
-	// Generate warning for any properties in struct we are not filling in
+		// Generate warning for any properties in struct we are not filling in
 		for (int32 PropIdx = 0; PropIdx < ExpectedPropNames.Num(); PropIdx++)
-	{
-		const FProperty* const ColumnProp = FindFProperty<FProperty>(InRowStruct, ExpectedPropNames[PropIdx]);
+		{
+			const FProperty* const ColumnProp = FindFProperty<FProperty>(InRowStruct, ExpectedPropNames[PropIdx]);
 
 #if WITH_EDITOR
-		// If the structure has specified the property as optional for import (gameplay code likely doing a custom fix-up or parse of that property),
-		// then avoid warning about it
-		static const FName DataTableImportOptionalMetadataKey(TEXT("DataTableImportOptional"));
-		if (ColumnProp->HasMetaData(DataTableImportOptionalMetadataKey))
-		{
-			continue;
-		}
+			// If the structure has specified the property as optional for import (gameplay code likely doing a custom fix-up or parse of that property),
+			// then avoid warning about it
+			static const FName DataTableImportOptionalMetadataKey(TEXT("DataTableImportOptional"));
+			if (ColumnProp->HasMetaData(DataTableImportOptionalMetadataKey))
+			{
+				continue;
+			}
 #endif // WITH_EDITOR
 
 			const FString DisplayName = DataTableUtils::GetPropertyExportName(ColumnProp);
-		OutProblems.Add(FString::Printf(TEXT("Expected column '%s' not found in input."), *DisplayName));
-	}
+			OutProblems.Add(FString::Printf(TEXT("Expected column '%s' not found in input."), *DisplayName));
+		}
 	}
 
 	return ColumnProps;
@@ -761,8 +786,6 @@ TArray<FString> UDataTable::CreateTableFromOtherTable(const UDataTable* InTable)
 		EmptyUsingStruct.CopyScriptStruct(NewRawRowData, RowMapIter.Value());
 		RowMap.Add(RowMapIter.Key(), NewRawRowData);
 	}
-
-	OnDataTableChanged().Broadcast();
 
 	return OutProblems;
 }

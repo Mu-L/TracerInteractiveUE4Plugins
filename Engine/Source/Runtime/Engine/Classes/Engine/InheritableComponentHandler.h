@@ -47,7 +47,7 @@ struct ENGINE_API FComponentKey
 	}
 
 	USCS_Node* FindSCSNode() const;
-	UActorComponent* GetOriginalTemplate() const;
+	UActorComponent* GetOriginalTemplate(const FName& TemplateName = NAME_None) const;
 	bool RefreshVariableName();
 
 	UClass* GetComponentOwner()  const { return OwnerClass; }
@@ -110,7 +110,7 @@ public:
 	void UpdateOwnerClass(UBlueprintGeneratedClass* OwnerClass);
 	void ValidateTemplates();
 	bool IsValid() const;
-	UActorComponent* FindBestArchetype(const FComponentKey& Key) const;
+	UActorComponent* FindBestArchetype(const FComponentKey& Key, const FName& TemplateName = NAME_None) const;
 
 	bool IsEmpty() const
 	{
@@ -129,7 +129,7 @@ public:
 	virtual void PostLoad() override;
 	//~ End UObject Interface
 
-	void PreloadAllTempates();
+	void PreloadAllTemplates();
 	void PreloadAll();
 
 	FComponentKey FindKey(const FName VariableName) const;
@@ -142,12 +142,17 @@ public:
 		return Records.CreateIterator();
 	}
 
-	void GetAllTemplates(TArray<UActorComponent*>& OutArray) const
+	void GetAllTemplates(TArray<UActorComponent*>& OutArray, bool bIncludeTransientTemplates = false) const
 	{
-		OutArray.Reserve(OutArray.Num() + Records.Num());
+		OutArray.Reserve(OutArray.Num() + Records.Num() + (bIncludeTransientTemplates ? UnnecessaryComponents.Num() : 0));
 		for (const FComponentOverrideRecord& Record : Records)
 		{
 			OutArray.Add(Record.ComponentTemplate);
+		}
+
+		if (bIncludeTransientTemplates)
+		{
+			OutArray.Append(UnnecessaryComponents);
 		}
 	}
 

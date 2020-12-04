@@ -27,9 +27,9 @@ namespace BuildPatchServices
 
 	uint64 FStatsCollector::SecondsToCycles(double Seconds)
 	{
-		const double Result = Seconds / FPlatformTime::GetSecondsPerCycle64();
+		const long double Result = Seconds / FPlatformTime::GetSecondsPerCycle64();
 		// We upper clamp to cover cases where Seconds is too high to represent the resulting cycles as uint64.
-		if (Result >= TNumericLimits<uint64>::Max())
+		if (Result >= double(TNumericLimits<uint64>::Max()))
 		{
 			return TNumericLimits<uint64>::Max();
 		}

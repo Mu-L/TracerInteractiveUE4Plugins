@@ -10,6 +10,8 @@
 #include "PrimitiveUniformShaderParameters.h"
 #include "VT/RuntimeVirtualTextureEnum.h"
 
+#define USE_MESH_BATCH_VALIDATION !UE_BUILD_SHIPPING
+
 class FLightCacheInterface;
 
 enum EPrimitiveIdMode
@@ -145,21 +147,10 @@ struct FMeshBatchElement
 	}
 };
 
-FORCEINLINE bool IsCompatibleWithHairStrands(const FMaterial* Material, const ERHIFeatureLevel::Type FeatureLevel)
-{
-	return
-		ERHIFeatureLevel::SM5 == FeatureLevel &&
-		Material && Material->IsUsedWithHairStrands() && Material->GetShadingModels().HasShadingModel(MSM_Hair) &&
-		(Material->GetBlendMode() == BLEND_Opaque || Material->GetBlendMode() == BLEND_Masked);
-}
-
-FORCEINLINE bool IsCompatibleWithHairStrands(EShaderPlatform Platform, const FMaterialShaderParameters& Parameters)
-{
-	return
-		IsPCPlatform(Platform) && GetMaxSupportedFeatureLevel(Platform) == ERHIFeatureLevel::SM5 &&
-		Parameters.bIsUsedWithHairStrands && Parameters.ShadingModels.HasShadingModel(MSM_Hair) &&
-		(Parameters.BlendMode == BLEND_Opaque || Parameters.BlendMode == BLEND_Masked);
-}
+// Helper functions for hair strands shaders
+ENGINE_API bool IsHairStrandsGeometrySupported(const EShaderPlatform Platform);
+ENGINE_API bool IsCompatibleWithHairStrands(const FMaterial* Material, const ERHIFeatureLevel::Type FeatureLevel);
+ENGINE_API bool IsCompatibleWithHairStrands(EShaderPlatform Platform, const FMaterialShaderParameters& Parameters);
 
 /**
  * A batch of mesh elements, all with the same material and vertex buffer
@@ -225,9 +216,6 @@ struct FMeshBatch
 
 	/** Whether the mesh batch can be selected through editor selection, aka hit proxies. */
 	uint32 bSelectable : 1;
-
-	/** Whether the mesh batch needs VertexFactory->GetStaticBatchElementVisibility to be called each frame to determine which elements of the batch are visible. */
-	uint32 bRequiresPerElementVisibility : 1;
 	
 	/** Whether the mesh batch should apply dithered LOD. */
 	uint32 bDitheredLODTransition : 1;
@@ -319,6 +307,12 @@ struct FMeshBatch
 
 	ENGINE_API void PreparePrimitiveUniformBuffer(const FPrimitiveSceneProxy* PrimitiveSceneProxy, ERHIFeatureLevel::Type FeatureLevel);
 
+#if USE_MESH_BATCH_VALIDATION
+	ENGINE_API bool Validate(const FPrimitiveSceneProxy* SceneProxy, ERHIFeatureLevel::Type FeatureLevel) const;
+#else
+	FORCEINLINE bool Validate(const FPrimitiveSceneProxy* SceneProxy, ERHIFeatureLevel::Type FeatureLevel) const { return true; }
+#endif
+
 	/** Default constructor. */
 	FMeshBatch()
 	:	VertexFactory(nullptr)
@@ -341,7 +335,6 @@ struct FMeshBatch
 	,	bUseWireframeSelectionColoring(false)
 	,	bUseSelectionOutline(true)
 	,	bSelectable(true)
-	,	bRequiresPerElementVisibility(false)
 	,	bDitheredLODTransition(false)
 	,	bRenderToVirtualTexture(false)
 	,	RuntimeVirtualTextureMaterialType(0)

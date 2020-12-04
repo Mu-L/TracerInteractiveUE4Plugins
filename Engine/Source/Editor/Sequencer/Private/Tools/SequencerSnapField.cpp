@@ -52,7 +52,7 @@ struct FSnapGridVisitor : ISequencerEntityVisitor
 	mutable TArray<FSequencerSnapPoint> Snaps;
 };
 
-FSequencerSnapField::FSequencerSnapField(const ISequencer& InSequencer, ISequencerSnapCandidate& Candidate, uint32 EntityMask)
+FSequencerSnapField::FSequencerSnapField(const FSequencer& InSequencer, ISequencerSnapCandidate& Candidate, uint32 EntityMask)
 {
 	TSharedPtr<SSequencerTreeView> TreeView = StaticCastSharedRef<SSequencer>(InSequencer.GetSequencerWidget())->GetTreeView();
 
@@ -73,10 +73,10 @@ FSequencerSnapField::FSequencerSnapField(const ISequencer& InSequencer, ISequenc
 
 	// Add the playback range start/end bounds as potential snap candidates
 	TRange<FFrameNumber> PlaybackRange = InSequencer.GetFocusedMovieSceneSequence()->GetMovieScene()->GetPlaybackRange();
-	if(MovieScene::DiscreteSize(PlaybackRange) > 0)
+	if(UE::MovieScene::DiscreteSize(PlaybackRange) > 0)
 	{
-		Visitor.Snaps.Add(FSequencerSnapPoint{ FSequencerSnapPoint::PlaybackRange, MovieScene::DiscreteInclusiveLower(PlaybackRange)});
-		Visitor.Snaps.Add(FSequencerSnapPoint{ FSequencerSnapPoint::PlaybackRange, MovieScene::DiscreteExclusiveUpper(PlaybackRange)});
+		Visitor.Snaps.Add(FSequencerSnapPoint{ FSequencerSnapPoint::PlaybackRange, UE::MovieScene::DiscreteInclusiveLower(PlaybackRange)});
+		Visitor.Snaps.Add(FSequencerSnapPoint{ FSequencerSnapPoint::PlaybackRange, UE::MovieScene::DiscreteExclusiveUpper(PlaybackRange)});
 	}
 
 	// Add the current time as a potential snap candidate
@@ -84,16 +84,22 @@ FSequencerSnapField::FSequencerSnapField(const ISequencer& InSequencer, ISequenc
 
 	// Add the selection range bounds as a potential snap candidate
 	TRange<FFrameNumber> SelectionRange = InSequencer.GetFocusedMovieSceneSequence()->GetMovieScene()->GetSelectionRange();
-	if (MovieScene::DiscreteSize(SelectionRange) > 0)
+	if (UE::MovieScene::DiscreteSize(SelectionRange) > 0)
 	{
-		Visitor.Snaps.Add(FSequencerSnapPoint{ FSequencerSnapPoint::InOutRange, MovieScene::DiscreteInclusiveLower(SelectionRange)});
-		Visitor.Snaps.Add(FSequencerSnapPoint{ FSequencerSnapPoint::InOutRange, MovieScene::DiscreteExclusiveUpper(SelectionRange) - 1});
+		Visitor.Snaps.Add(FSequencerSnapPoint{ FSequencerSnapPoint::InOutRange, UE::MovieScene::DiscreteInclusiveLower(SelectionRange)});
+		Visitor.Snaps.Add(FSequencerSnapPoint{ FSequencerSnapPoint::InOutRange, UE::MovieScene::DiscreteExclusiveUpper(SelectionRange) - 1});
 	}
 
 	// Add in the marked frames
 	for (const FMovieSceneMarkedFrame& MarkedFrame : InSequencer.GetFocusedMovieSceneSequence()->GetMovieScene()->GetMarkedFrames())
 	{
 		Visitor.Snaps.Add( FSequencerSnapPoint{ FSequencerSnapPoint::Mark, MarkedFrame.FrameNumber } );
+	}
+
+	// Add in the global marked frames
+	for (const FMovieSceneMarkedFrame& MarkedFrame : InSequencer.GetGlobalMarkedFrames())
+	{
+		Visitor.Snaps.Add(FSequencerSnapPoint{ FSequencerSnapPoint::Mark, MarkedFrame.FrameNumber });
 	}
 
 	// Sort

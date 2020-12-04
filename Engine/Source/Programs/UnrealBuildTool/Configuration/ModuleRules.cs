@@ -53,6 +53,44 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
+		/// Override the settings of the UHTModuleType to have a different set of
+		/// PKG_ flags. Cannot set on a plugin because that value already set in
+		/// the '.uplugin' file
+		/// </summary>
+		public enum PackageOverrideType
+		{
+			/// <summary>
+			/// Do not override the package type on this module
+			/// </summary>
+			None,
+
+			/// <summary>
+			/// Set the PKG_EditorOnly flag on this module
+			/// </summary>
+			EditorOnly,
+
+			/// <summary>
+			/// Set the PKG_Developer on this module
+			/// </summary>
+			EngineDeveloper,
+
+			/// <summary>
+			/// Set the PKG_Developer on this module
+			/// </summary>
+			GameDeveloper,
+
+			/// <summary>
+			/// Set the PKG_UncookedOnly flag on this module
+			/// </summary>
+			EngineUncookedOnly,
+
+			/// <summary>
+			/// Set the PKG_UncookedOnly flag on this module as a game
+			/// </summary>
+			GameUncookedOnly
+		}
+
+		/// <summary>
 		/// Code optimization settings
 		/// </summary>
 		public enum CodeOptimization
@@ -316,9 +354,9 @@ namespace UnrealBuildTool
 			internal string Name;
 
 			/// <summary>
-			/// For non-system frameworks, specifies the path to a zip file that contains it.
+			/// Specifies the path to a zip file that contains it or where the framework is located on disk
 			/// </summary>
-			internal string ZipPath;
+			internal string Path;
 
 			/// <summary>
 			/// 
@@ -326,16 +364,31 @@ namespace UnrealBuildTool
 			internal string CopyBundledAssets = null;
 
 			/// <summary>
+			/// Copy the framework to the target's Framework directory
+			/// </summary>
+			internal bool bCopyFramework = false;
+
+			/// <summary>
 			/// Constructor
 			/// </summary>
 			/// <param name="Name">Name of the framework</param>
-			/// <param name="ZipPath">Path to a zip file containing the framework. May be null.</param>
+			/// <param name="Path">Path to a zip file containing the framework or a framework on disk</param>
 			/// <param name="CopyBundledAssets"></param>
-			public Framework(string Name, string ZipPath = null, string CopyBundledAssets = null)
+			/// <param name="bCopyFramework">Copy the framework to the target's Framework directory</param>
+			public Framework(string Name, string Path, string CopyBundledAssets = null, bool bCopyFramework = false)
 			{
 				this.Name = Name;
-				this.ZipPath = ZipPath;
+				this.Path = Path;
 				this.CopyBundledAssets = CopyBundledAssets;
+				this.bCopyFramework = bCopyFramework;
+			}
+
+			/// <summary>
+			/// Specifies if the file is a zip file
+			/// </summary>
+			public bool IsZipFile()
+			{
+				return Path.EndsWith(".zip");
 			}
 		}
 
@@ -349,9 +402,9 @@ namespace UnrealBuildTool
 			/// Constructor
 			/// </summary>
 			/// <param name="Name">Name of the framework</param>
-			/// <param name="ZipPath">Path to a zip file containing the framework. May be null.</param>
+			/// <param name="ZipPath">Path to a zip file containing the framework</param>
 			/// <param name="CopyBundledAssets"></param>
-			public UEBuildFramework(string Name, string ZipPath = null, string CopyBundledAssets = null)
+			public UEBuildFramework(string Name, string ZipPath, string CopyBundledAssets = null)
 				: base(Name, ZipPath, CopyBundledAssets)
 			{
 			}
@@ -469,9 +522,25 @@ namespace UnrealBuildTool
 		internal Dictionary<Type, DirectoryReference> DirectoriesForModuleSubClasses;
 
 		/// <summary>
+		/// Additional directories that contribute to this module but are not based on a subclass (NotForLicensees, etc)
+		/// </summary>
+		private List<DirectoryReference> AdditionalModuleDirectories = new List<DirectoryReference>();
+
+		/// <summary>
 		/// Plugin containing this module
 		/// </summary>
 		internal PluginInfo Plugin;
+
+		/// <summary>
+		/// True if a Plugin contains this module
+		/// </summary>
+		public bool IsPlugin
+		{
+			get
+			{
+				return Plugin != null;
+			}
+		}
 
 		/// <summary>
 		/// The rules context for this instance
@@ -487,6 +556,40 @@ namespace UnrealBuildTool
 		/// Type of module
 		/// </summary>
 		public ModuleType Type = ModuleType.CPlusPlus;
+
+		/// <summary>
+		/// Overridden type of module that will set different package flags.
+		/// Cannot be used for modules that are a part of a plugin because that is 
+		/// set in the `.uplugin` file already. 
+		/// </summary>
+		public PackageOverrideType OverridePackageType
+		{
+			get { return overridePackageType ?? PackageOverrideType.None; }
+			set
+			{
+				if (!IsPlugin)
+				{
+					overridePackageType = value;
+				}
+				else
+				{
+					throw new BuildException("Module '{0}' cannot override package type because it is part of a plugin!", Name);
+				}
+			}
+		}
+
+		private PackageOverrideType? overridePackageType;
+
+		/// <summary>
+		/// Returns true if there has been an override type specified on this module
+		/// </summary>
+		public bool HasPackageOverride
+		{
+			get
+			{
+				return OverridePackageType != PackageOverrideType.None;
+			}
+		}
 
 		/// <summary>
 		/// Subfolder of Binaries/PLATFORM folder to put this module in when building DLLs. This should only be used by modules that are found via searching like the
@@ -834,6 +937,11 @@ namespace UnrealBuildTool
 		public List<string> PublicAdditionalLibraries = new List<string>();
 
 		/// <summary>
+		/// List of additional pre-build libraries (names of the .lib files including extension) - typically used for additional targets which are still built, but using either TargetRules.PreBuildSteps or TargetRules.PreBuildTargets.
+		/// </summary>
+		public List<string> PublicPreBuildLibraries = new List<string>();
+
+		/// <summary>
 		/// List of system libraries to use - these are typically referenced via name and then found via the system paths. If you need to reference a .lib file use the PublicAdditionalLibraries instead
 		/// </summary>
 		public List<string> PublicSystemLibraries = new List<string>();
@@ -949,6 +1057,11 @@ namespace UnrealBuildTool
 		/// External files which invalidate the makefile if modified. Relative paths are resolved relative to the .build.cs file.
 		/// </summary>
 		public List<string> ExternalDependencies = new List<string>();
+
+		/// <summary>
+		/// External directories containing generated interop files.
+		/// </summary>
+		public List<string> AdditionalCodeGenDirectories = new List<string>();
 
 		/// <summary>
 		/// Subclass rules files which invalidate the makefile if modified.
@@ -1097,28 +1210,19 @@ namespace UnrealBuildTool
 		/// </summary>
 		public void SetupModulePhysicsSupport(ReadOnlyTargetRules Target)
 		{
-			PublicIncludePathModuleNames.Add("PhysicsCore");
 			PublicDependencyModuleNames.Add("PhysicsCore");
 
 			bool bUseNonPhysXInterface = Target.bUseChaos == true;
-            PublicIncludePathModuleNames.AddRange(
-                new string[] {
-                    "Chaos",
-					"FieldSystemCore"
-                }
-            );
-            PublicDependencyModuleNames.AddRange(
+			PublicDependencyModuleNames.AddRange(
 				new string[] {
 					"Chaos",
-					"FieldSystemCore"
-                }
-            );
-
-            // 
-            if (Target.bCompileChaos == true || Target.bUseChaos == true)
+				}
+				);
+			// 
+			if (Target.bCompileChaos == true || Target.bUseChaos == true)
             {
                 PublicDefinitions.Add("INCLUDE_CHAOS=1");
-            }
+			}
             else
             {
                 PublicDefinitions.Add("INCLUDE_CHAOS=0");
@@ -1126,9 +1230,13 @@ namespace UnrealBuildTool
             // definitions used outside of PhysX/APEX need to be set here, not in PhysX.Build.cs or APEX.Build.cs, 
             // since we need to make sure we always set it, even to 0 (because these are Private dependencies, the
             // defines inside their Build.cs files won't leak out)
-            if (Target.bCompilePhysX == true)
+            if (Target.bCompilePhysX == true && Target.bCompileChaos == false && Target.bUseChaos == false)
 			{
 				PrivateDependencyModuleNames.Add("PhysX");
+			}
+
+			if(Target.bCompileChaos || Target.bUseChaos || Target.bCompilePhysX)
+			{
 				PublicDefinitions.Add("WITH_PHYSX=1");
 			}
 			else
@@ -1277,7 +1385,7 @@ namespace UnrealBuildTool
 					case ModuleRules.PrecompileTargetsType.None:
 						return false;
 					case ModuleRules.PrecompileTargetsType.Default:
-						return (Target.Type == TargetType.Editor || !UnrealBuildTool.GetAllEngineDirectories("Source/Developer").Any(Dir => RulesFile.IsUnderDirectory(Dir)) || Plugin != null);
+						return (Target.Type == TargetType.Editor || !UnrealBuildTool.GetExtensionDirs(UnrealBuildTool.EngineDirectory, "Source/Developer").Any(Dir => RulesFile.IsUnderDirectory(Dir)) || Plugin != null);
 					case ModuleRules.PrecompileTargetsType.Game:
 						return (Target.Type == TargetType.Client || Target.Type == TargetType.Server || Target.Type == TargetType.Game);
 					case ModuleRules.PrecompileTargetsType.Editor:
@@ -1310,12 +1418,36 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
-		/// Returns the directories for all subclasses of this module
+		/// Returns the directories for all subclasses of this module, as well as any additional directories specified by the rules
 		/// </summary>
 		/// <returns>List of directories, or null if none were added</returns>
-		public DirectoryReference[] GetModuleDirectoriesForAllSubClasses()
+		public DirectoryReference[] GetAllModuleDirectories()
 		{
-			return DirectoriesForModuleSubClasses == null ? null : DirectoriesForModuleSubClasses.Values.ToArray();
+			List<DirectoryReference> AllDirectories = new List<DirectoryReference> { Directory };
+			AllDirectories.AddRange(AdditionalModuleDirectories);
+
+			if (DirectoriesForModuleSubClasses != null)
+			{
+				AllDirectories.AddRange(DirectoriesForModuleSubClasses.Values);
+			}
+
+			return AllDirectories.ToArray();
+		}
+
+		/// <summary>
+		/// Adds an additional module directory, if it exists (useful for NotForLicensees/NoRedist)
+		/// </summary>
+		/// <param name="Directory"></param>
+		/// <returns>true if the directory exists</returns>
+		protected bool ConditionalAddModuleDirectory(DirectoryReference Directory)
+		{
+			if (DirectoryReference.Exists(Directory))
+			{
+				AdditionalModuleDirectories.Add(Directory);
+				return true;
+			}
+
+			return false;
 		}
 	}
 }

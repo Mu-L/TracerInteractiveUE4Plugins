@@ -12,6 +12,8 @@
 #include "UObject/UObjectIterator.h"
 #include "Logging/TokenizedMessage.h"
 #include "Logging/MessageLog.h"
+#include "Animation/AnimationPoseData.h"
+#include "Animation/CustomAttributesRuntime.h"
 
 #define LOCTEXT_NAMESPACE "BlendSpaceBase"
 
@@ -303,13 +305,13 @@ void UBlendSpaceBase::TickAssetPlayer(FAnimTickRecord& Instance, struct FAnimNot
 					const FBlendSample& Sample = SampleData[SampleDataItem.SampleDataIndex];
 
 					bool bResetMarkerDataOnFollowers = false;
-					if (!Instance.MarkerTickRecord->IsValid())
+					if (!Instance.MarkerTickRecord->IsValid(Instance.bLooping))
 					{
 						SampleDataItem.MarkerTickRecord.Reset();
 						bResetMarkerDataOnFollowers = true;
 						SampleDataItem.Time = NormalizedCurrentTime * Sample.Animation->SequenceLength;
 					}
-					else if (!SampleDataItem.MarkerTickRecord.IsValid() && Context.MarkerTickContext.GetMarkerSyncStartPosition().IsValid())
+					else if (!SampleDataItem.MarkerTickRecord.IsValid(Instance.bLooping) && Context.MarkerTickContext.GetMarkerSyncStartPosition().IsValid())
 					{
 						Sample.Animation->GetMarkerIndicesForPosition(Context.MarkerTickContext.GetMarkerSyncStartPosition(), true, SampleDataItem.MarkerTickRecord.PreviousMarker, SampleDataItem.MarkerTickRecord.NextMarker, SampleDataItem.Time);
 					}
@@ -318,8 +320,8 @@ void UBlendSpaceBase::TickAssetPlayer(FAnimTickRecord& Instance, struct FAnimNot
 					if (!FMath::IsNearlyZero(NewDeltaTime))
 					{
 						Context.SetLeaderDelta(NewDeltaTime);
-						Sample.Animation->TickByMarkerAsLeader(SampleDataItem.MarkerTickRecord, Context.MarkerTickContext, SampleDataItem.Time, SampleDataItem.PreviousTime, NewDeltaTime, true);
-						check(Context.MarkerTickContext.IsMarkerSyncStartValid());
+						Sample.Animation->TickByMarkerAsLeader(SampleDataItem.MarkerTickRecord, Context.MarkerTickContext, SampleDataItem.Time, SampleDataItem.PreviousTime, NewDeltaTime, Instance.bLooping);
+						check(!Instance.bLooping || Context.MarkerTickContext.IsMarkerSyncStartValid());
 						TickFollowerSamples(SampleDataList, HighestMarkerSyncWeightIndex, Context, bResetMarkerDataOnFollowers);
 					}
 					NormalizedCurrentTime = SampleDataItem.Time / Sample.Animation->SequenceLength;
@@ -351,7 +353,7 @@ void UBlendSpaceBase::TickAssetPlayer(FAnimTickRecord& Instance, struct FAnimNot
 
 					if (Context.GetDeltaTime() != 0.f)
 					{
-						if(!Instance.MarkerTickRecord->IsValid())
+						if(!Instance.MarkerTickRecord->IsValid(Instance.bLooping))
 						{
 							SampleDataItem.Time = NormalizedCurrentTime * Sample.Animation->SequenceLength;
 						}
@@ -567,10 +569,20 @@ void UBlendSpaceBase::ResetToRefPose(FCompactPose& OutPose)
 
 void UBlendSpaceBase::GetAnimationPose(TArray<FBlendSampleData>& BlendSampleDataCache, /*out*/ FCompactPose& OutPose, /*out*/ FBlendedCurve& OutCurve)
 {
+	FStackCustomAttributes TempAttributes;
+	FAnimationPoseData AnimationPoseData = { OutPose, OutCurve, TempAttributes };
+	GetAnimationPose(BlendSampleDataCache, AnimationPoseData);
+}
+
+void UBlendSpaceBase::GetAnimationPose(TArray<FBlendSampleData>& BlendSampleDataCache, /*out*/ FAnimationPoseData& OutAnimationPoseData)
+{
 	SCOPE_CYCLE_COUNTER(STAT_BlendSpace_GetAnimPose);
 	FScopeCycleCounterUObject BlendSpaceScope(this);
 
-	if(BlendSampleDataCache.Num() == 0)
+	FCompactPose& OutPose = OutAnimationPoseData.GetPose();
+	FBlendedCurve& OutCurve = OutAnimationPoseData.GetCurve();
+
+	if (BlendSampleDataCache.Num() == 0)
 	{
 		ResetToRefPose(OutPose);
 		return;
@@ -583,6 +595,9 @@ void UBlendSpaceBase::GetAnimationPose(TArray<FBlendSampleData>& BlendSampleData
 
 	TArray<FBlendedCurve, TInlineAllocator<8>> ChildrenCurves;
 	ChildrenCurves.AddZeroed(NumPoses);
+
+	TArray<FStackCustomAttributes, TInlineAllocator<8>> ChildrenAttributes;
+	ChildrenAttributes.AddZeroed(NumPoses);
 
 	TArray<float, TInlineAllocator<8>> ChildrenWeights;
 	ChildrenWeights.AddZeroed(NumPoses);
@@ -612,8 +627,9 @@ void UBlendSpaceBase::GetAnimationPose(TArray<FBlendSampleData>& BlendSampleData
 			{
 				const float Time = FMath::Clamp<float>(BlendSampleDataCache[I].Time, 0.f, Sample.Animation->SequenceLength);
 
+				FAnimationPoseData ChildAnimationPoseData = { Pose, ChildrenCurves[I], ChildrenAttributes[I] };
 				// first one always fills up the source one
-				Sample.Animation->GetAnimationPose(Pose, ChildrenCurves[I], FAnimExtractContext(Time, true));
+				Sample.Animation->GetAnimationPose(ChildAnimationPoseData, FAnimExtractContext(Time, true));
 			}
 			else
 			{
@@ -634,21 +650,21 @@ void UBlendSpaceBase::GetAnimationPose(TArray<FBlendSampleData>& BlendSampleData
 		{
 			if (bRotationBlendInMeshSpace)
 			{
-				FAnimationRuntime::BlendPosesTogetherPerBoneInMeshSpace(ChildrenPosesView, ChildrenCurves, this, BlendSampleDataCache, OutPose, OutCurve);
+				FAnimationRuntime::BlendPosesTogetherPerBoneInMeshSpace(ChildrenPosesView, ChildrenCurves, ChildrenAttributes, this, BlendSampleDataCache, OutAnimationPoseData);
 			}
 			else
 			{
-				FAnimationRuntime::BlendPosesTogetherPerBone(ChildrenPosesView, ChildrenCurves, this, BlendSampleDataCache, OutPose, OutCurve);
+				FAnimationRuntime::BlendPosesTogetherPerBone(ChildrenPosesView, ChildrenCurves, ChildrenAttributes, this, BlendSampleDataCache, OutAnimationPoseData);
 			}
 		}
 		else
 		{
-			FAnimationRuntime::BlendPosesTogetherPerBone(ChildrenPosesView, ChildrenCurves, this, BlendSampleDataCache, OutPose, OutCurve);
+			FAnimationRuntime::BlendPosesTogetherPerBone(ChildrenPosesView, ChildrenCurves, ChildrenAttributes, this, BlendSampleDataCache, OutAnimationPoseData);
 		}
 	}
 	else
 	{
-		FAnimationRuntime::BlendPosesTogether(ChildrenPosesView, ChildrenCurves, ChildrenWeights, OutPose, OutCurve);
+		FAnimationRuntime::BlendPosesTogether(ChildrenPosesView, ChildrenCurves, ChildrenAttributes, ChildrenWeights, OutAnimationPoseData);
 	}
 
 	// Once all the accumulation and blending has been done, normalize rotations.

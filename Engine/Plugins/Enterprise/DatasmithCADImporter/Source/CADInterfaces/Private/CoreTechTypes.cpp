@@ -14,6 +14,8 @@ namespace CADLibrary
 	// Note: CTKIO_* functions are not functionally useful.
 	// This wrapping allows a correct profiling of the CT API.
 
+	double CTKIO_MetricUnit = -1;
+
 	CT_IO_ERROR CTKIO_InitializeKernel(double Unit, const TCHAR* EnginePluginsPath)
 	{
 		FString KernelIOPath;
@@ -27,18 +29,41 @@ namespace CADLibrary
 			}
 		}
 
+		if (FMath::IsNearlyEqual(Unit, CTKIO_MetricUnit))
+		{
+			// Kernel_IO is already initialized with requested Unit value
+			return IO_OK;
+		}
+
+		// Kernel_IO is already initialized, so it is stopped to be able to restart it with the good unit value
+		CTKIO_ShutdownKernel();
+
 		CT_STR appName = CoreTechLicenseKey;
-		return CT_KERNEL_IO::InitializeKernel(appName, Unit, 0.00001 / Unit, *KernelIOPath);
+		CT_IO_ERROR Status = CT_KERNEL_IO::InitializeKernel(appName, Unit, 0.00001 / Unit, *KernelIOPath);
+
+		if (Status == IO_OK)
+		{
+			CTKIO_MetricUnit = Unit;
+		}
+
+		return Status;
 	}
 
 	CT_IO_ERROR CTKIO_ShutdownKernel()
 	{
+		CTKIO_MetricUnit = -1;
 		return CT_KERNEL_IO::ShutdownKernel(); // ignorable. Just in case CT was not previously stopped
 	}
 
 	CT_IO_ERROR CTKIO_UnloadModel()
 	{
 		return CT_KERNEL_IO::UnloadModel();
+	}
+
+	CT_IO_ERROR CTKIO_CreateModel(CT_OBJECT_ID& OutMainObjectId)
+	{
+		CT_OBJECT_ID NullParent = 0;
+		return CT_COMPONENT_IO::Create(OutMainObjectId, NullParent);
 	}
 
 	CT_IO_ERROR CTKIO_AskNbObjectsType(CT_UINT32& object_count, CT_OBJECT_TYPE type)
@@ -195,8 +220,8 @@ namespace CADLibrary
 		}
 
 		// Apply retrieved tessellation parameters to CoreTech tessellation engine
-		static CT_LOGICAL high_quality = CT_FALSE;
-		Result = CTKIO_ChangeTesselationParameters(ImportParams.ChordTolerance / ImportParams.ScaleFactor, MaxEdgeLength_modelUnit, ImportParams.MaxNormalAngle, high_quality, VertexType, NormalType, UVType);
+		static CT_LOGICAL bHighQuality = CT_TRUE;
+		Result = CTKIO_ChangeTesselationParameters(ImportParams.ChordTolerance / ImportParams.ScaleFactor, MaxEdgeLength_modelUnit, ImportParams.MaxNormalAngle, bHighQuality, VertexType, NormalType, UVType);
 
 		return Result;
 	}
@@ -217,7 +242,9 @@ namespace CADLibrary
 		// Create a main object to hold the BRep
 		CT_OBJECT_ID nullParent = 0;
 		Result = CT_COMPONENT_IO::Create(MainObjectId, nullParent);
+		ensure(Result == IO_OK);
 		Result = CTKIO_AskMainObject(MainObjectId); // not required, just a validation.
+		ensure(Result == IO_OK);
 	}
 
 	CoreTechSessionBase::~CoreTechSessionBase()

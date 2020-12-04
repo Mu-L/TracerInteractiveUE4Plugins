@@ -50,18 +50,12 @@
 
 struct FCustomStructureParamHelper
 {
-	static FName GetCustomStructureParamName()
-	{
-		static FName Name(TEXT("CustomStructureParam"));
-		return Name;
-	}
-
 	static void FillCustomStructureParameterNames(const UFunction* Function, TArray<FString>& OutNames)
 	{
 		OutNames.Reset();
 		if (Function)
 		{
-			const FString& MetaDataValue = Function->GetMetaData(GetCustomStructureParamName());
+			const FString& MetaDataValue = Function->GetMetaData(FBlueprintMetadata::MD_CustomStructureParam);
 			if (!MetaDataValue.IsEmpty())
 			{
 				MetaDataValue.ParseIntoArray(OutNames, TEXT(","), true);
@@ -261,12 +255,6 @@ UEdGraphPin* FDynamicOutputHelper::GetTypePickerPin(const UK2Node_CallFunction* 
 			TypePickerPin = FuncNode->FindPin(TypeDeterminingPinName);
 		}
 	}
-
-	if (TypePickerPin && !ensure(TypePickerPin->Direction == EGPD_Input))
-	{
-		TypePickerPin = nullptr;
-	}
-
 	return TypePickerPin;
 }
 
@@ -369,8 +357,9 @@ bool FDynamicOutputHelper::IsTypePickerPin(UEdGraphPin* Pin) const
 		}
 	}
 
-	bool const bPinIsClassPicker = (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Class);
-	bool const bPinIsObjectPicker = (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Object);
+	bool const bPinIsClassPicker = (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Class || Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_SoftClass);
+	bool const bPinIsObjectPicker = (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Object || Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_SoftObject);
+
 	return bIsTypeDeterminingPin && (bPinIsClassPicker || bPinIsObjectPicker) && (Pin->Direction == EGPD_Input);
 }
 
@@ -422,15 +411,15 @@ void FDynamicOutputHelper::GetDynamicOutPins(const UK2Node_CallFunction* FuncNod
 			{
 				// Check against each property that the user has specified
 				for (const FString& OutputPinName : UserDefinedDynamicProprties)
-		{
+				{
 					// If this is the return parameter of this function or the pin name matches that which the user has specified
 					if (OutputPinName == ParamIt->GetName())
-			{
+					{
 						AddPinToOutputLambda(*ParamIt, OutPins);
 						break;
+					}
+				}
 			}
-		}
-	}
 		}
 	}
 }
@@ -445,7 +434,9 @@ bool FDynamicOutputHelper::CanConformPinType(const UK2Node_CallFunction* FuncNod
 		const FName PinCategory = TypeToTest.PinCategory;
 		if ((PinCategory == UEdGraphSchema_K2::PC_Object) ||
 			(PinCategory == UEdGraphSchema_K2::PC_Interface) ||
-			(PinCategory == UEdGraphSchema_K2::PC_Class))
+			(PinCategory == UEdGraphSchema_K2::PC_Class) ||
+			(PinCategory == UEdGraphSchema_K2::PC_SoftObject) || 
+			(PinCategory == UEdGraphSchema_K2::PC_SoftClass))
 		{
 			if (UClass* TypeClass = Cast<UClass>(TypeToTest.PinSubCategoryObject.Get()))
 			{
@@ -454,6 +445,32 @@ bool FDynamicOutputHelper::CanConformPinType(const UK2Node_CallFunction* FuncNod
 		}
 	}
 	return bIsProperType;
+}
+
+static bool WantsExecPinsForParams(const UFunction* TargetFunction)
+{
+	check(TargetFunction);
+	return TargetFunction->HasMetaData(FBlueprintMetadata::MD_ExpandEnumAsExecs) ||
+		TargetFunction->HasMetaData(FBlueprintMetadata::MD_ExpandBoolAsExecs);
+}
+
+static FString GetAllExecParams(const UFunction* TargetFunction)
+{
+	check(TargetFunction);
+	FString Ret = TargetFunction->GetMetaData(FBlueprintMetadata::MD_ExpandEnumAsExecs);
+	const FString& ExpandBools = TargetFunction->GetMetaData(FBlueprintMetadata::MD_ExpandBoolAsExecs);
+	if (!ExpandBools.IsEmpty())
+	{
+		if(!Ret.IsEmpty())
+		{
+			Ret += ", " + ExpandBools;
+		}
+		else
+		{
+			Ret = ExpandBools;
+		}
+	}
+	return Ret;
 }
 
 /*******************************************************************************
@@ -793,8 +810,12 @@ void UK2Node_CallFunction::CreateExecPinsForFunctionCall(const UFunction* Functi
 					Prop = EnumProp;
 					Enum = EnumProp->GetEnum();
 				}
+				else if (FBoolProperty* BoolProp = FindFProperty<FBoolProperty>(Function, EnumParamName))
+				{
+					Prop = BoolProp;
+				}
 
-				if (Prop != nullptr && Enum != nullptr)
+				if (Prop != nullptr)
 				{
 					const bool bIsFunctionInput = !Prop->HasAnyPropertyFlags(CPF_ReturnParm) &&
 						(!Prop->HasAnyPropertyFlags(CPF_OutParm) ||
@@ -813,45 +834,56 @@ void UK2Node_CallFunction::CreateExecPinsForFunctionCall(const UFunction* Functi
 						PreviousInput = Prop;
 					}
 
-					// yay, found it! Now create exec pin for each
-					int32 NumExecs = (Enum->NumEnums() - 1);
-					for (int32 ExecIdx = 0; ExecIdx < NumExecs; ExecIdx++)
+					if (Enum)
 					{
-						bool const bShouldBeHidden = Enum->HasMetaData(TEXT("Hidden"), ExecIdx) || Enum->HasMetaData(TEXT("Spacer"), ExecIdx);
-						if (!bShouldBeHidden)
+						// yay, found it! Now create exec pin for each
+						int32 NumExecs = (Enum->NumEnums() - 1);
+						for (int32 ExecIdx = 0; ExecIdx < NumExecs; ExecIdx++)
 						{
-							// Can't use Enum->GetNameByIndex here because it doesn't do namespace mangling
-							const FString NameStr = Enum->GetNameStringByIndex(ExecIdx);
-							
-							UEdGraphPin* CreatedPin = nullptr;
-
-							// todo: really only makes sense if there are multiple outputs
-							if (bIsFunctionInput || EnumNames.Num() == 1)
+							bool const bShouldBeHidden = Enum->HasMetaData(TEXT("Hidden"), ExecIdx) || Enum->HasMetaData(TEXT("Spacer"), ExecIdx);
+							if (!bShouldBeHidden)
 							{
-								CreatedPin = CreatePin(Direction, UEdGraphSchema_K2::PC_Exec, *NameStr);
-							}
-							else
-							{
-								CreatedPin = CreatePin(Direction, UEdGraphSchema_K2::PC_Exec, *NameStr);
-								CreatedPin->PinFriendlyName = FText::FromString(FString::Printf(TEXT("(%s) %s"), *Prop->GetDisplayNameText().ToString(), *NameStr));
-							}
+								// Can't use Enum->GetNameByIndex here because it doesn't do namespace mangling
+								const FString NameStr = Enum->GetNameStringByIndex(ExecIdx);
 
-							ExpandAsEnumPins.Add(CreatedPin);
+								UEdGraphPin* CreatedPin = nullptr;
 
-							if (Enum->HasMetaData(TEXT("Tooltip"), ExecIdx))
-							{
-								FString EnumTooltip = Enum->GetMetaData(TEXT("Tooltip"), ExecIdx);
-
-								if (const UEdGraphSchema_K2* const K2Schema = Cast<const UEdGraphSchema_K2>(GetSchema()))
+								// todo: really only makes sense if there are multiple outputs
+								if (bIsFunctionInput || EnumNames.Num() == 1)
 								{
-									K2Schema->ConstructBasicPinTooltip(*CreatedPin, FText::FromString(EnumTooltip), CreatedPin->PinToolTip);
+									CreatedPin = CreatePin(Direction, UEdGraphSchema_K2::PC_Exec, *NameStr);
 								}
 								else
 								{
-									CreatedPin->PinToolTip = EnumTooltip;
+									CreatedPin = CreatePin(Direction, UEdGraphSchema_K2::PC_Exec, *NameStr);
+									CreatedPin->PinFriendlyName = FText::FromString(FString::Printf(TEXT("(%s) %s"), *Prop->GetDisplayNameText().ToString(), *NameStr));
+								}
+
+								ExpandAsEnumPins.Add(CreatedPin);
+
+								if (Enum->HasMetaData(TEXT("Tooltip"), ExecIdx))
+								{
+									FString EnumTooltip = Enum->GetMetaData(TEXT("Tooltip"), ExecIdx);
+
+									if (const UEdGraphSchema_K2* const K2Schema = Cast<const UEdGraphSchema_K2>(GetSchema()))
+									{
+										K2Schema->ConstructBasicPinTooltip(*CreatedPin, FText::FromString(EnumTooltip), CreatedPin->PinToolTip);
+									}
+									else
+									{
+										CreatedPin->PinToolTip = EnumTooltip;
+									}
 								}
 							}
 						}
+					}
+					else
+					{
+						check(Prop->IsA<FBoolProperty>());
+						// Create a pin for true and false, note that the order here does not match the
+						// numeric order of bool, but it is more natural to put true first (e.g. to match branch node):
+						ExpandAsEnumPins.Add(CreatePin(Direction, UEdGraphSchema_K2::PC_Exec, TEXT("True")));
+						ExpandAsEnumPins.Add(CreatePin(Direction, UEdGraphSchema_K2::PC_Exec, TEXT("False")));
 					}
 
 					if (bIsFunctionInput)
@@ -886,11 +918,16 @@ void UK2Node_CallFunction::CreateExecPinsForFunctionCall(const UFunction* Functi
 	}
 }
 
+FName UK2Node_CallFunction::GetFunctionName() const
+{
+	return FunctionReference.GetMemberName();
+}
+
 void UK2Node_CallFunction::DetermineWantsEnumToExecExpansion(const UFunction* Function)
 {
 	bWantsEnumToExecExpansion = false;
 
-	if (Function->HasMetaData(FBlueprintMetadata::MD_ExpandEnumAsExecs))
+	if (WantsExecPinsForParams(Function))
 	{
 		TArray<FName> EnumNamesToCheck;
 		GetExpandEnumPinNames(Function, EnumNamesToCheck);
@@ -904,6 +941,15 @@ void UK2Node_CallFunction::DetermineWantsEnumToExecExpansion(const UFunction* Fu
 			{
 				bWantsEnumToExecExpansion = true;
 				EnumNamesToCheck.RemoveAt(i);
+			}
+			else
+			{
+				FBoolProperty* BoolProp = FindFProperty<FBoolProperty>(Function, EnumParamName);
+				if (BoolProp)
+				{
+					bWantsEnumToExecExpansion = true;
+					EnumNamesToCheck.RemoveAt(i);
+				}
 			}
 		}
 		
@@ -941,7 +987,7 @@ void UK2Node_CallFunction::GetExpandEnumPinNames(const UFunction* Function, TArr
 	EnumNamesToCheck.Reset();
 
 	// todo: use metadatacache if/when that's accepted.
-	const FString& EnumParamString = Function->GetMetaData(FBlueprintMetadata::MD_ExpandEnumAsExecs);
+	const FString EnumParamString = GetAllExecParams(Function);
 
 	TArray<FString> RawGroupings;
 	EnumParamString.ParseIntoArray(RawGroupings, TEXT(","), false);
@@ -1640,6 +1686,7 @@ FString UK2Node_CallFunction::GetDefaultTooltipForFunction(const UFunction* Func
 
 		Tooltip.Split(DoxygenParam, &Tooltip, nullptr, ESearchCase::IgnoreCase, ESearchDir::FromStart);
 		Tooltip.Split(DoxygenReturn, &Tooltip, nullptr, ESearchCase::IgnoreCase, ESearchDir::FromStart);
+
 		Tooltip.ReplaceInline(*DoxygenSee, *TooltipSee);
 		Tooltip.ReplaceInline(*DoxygenNote, *TooltipNote);
 
@@ -1896,29 +1943,32 @@ void UK2Node_CallFunction::FixupSelfMemberContext()
 	UClass* MemberClass = FunctionReference.GetMemberParentClass();
 	if (FunctionReference.IsSelfContext())
 	{
-		if (MemberClass == nullptr)
+		// if there is a function that matches the reference in the new context
+		// and there are no connections to the self pin, we just want to call
+		// that function
+		UEdGraphPin* SelfPin = GetDefault<UEdGraphSchema_K2>()->FindSelfPin(*this, EGPD_Input);
+		if (!FunctionReference.ResolveMember<UFunction>(Blueprint) || (SelfPin && SelfPin->HasAnyConnections()))
 		{
-			// the self pin may have type information stored on it
-			if (UEdGraphPin* SelfPin = GetDefault<UEdGraphSchema_K2>()->FindSelfPin(*this, EGPD_Input))
+			if (MemberClass == nullptr)
 			{
-				MemberClass = Cast<UClass>(SelfPin->PinType.PinSubCategoryObject.Get());
+				// the self pin may have type information stored on it
+				if (SelfPin)
+				{
+					MemberClass = Cast<UClass>(SelfPin->PinType.PinSubCategoryObject.Get());
+				}
 			}
-		}
-		// if we happened to retain the ParentClass for a self reference 
-		// (unlikely), then we know where this node came from... let's keep it
-		// referencing that function
-		if (MemberClass != nullptr)
-		{
-			if (!IsBlueprintOfType(MemberClass))
+			// if we happened to retain the ParentClass for a self reference 
+			// (unlikely), then we know where this node came from... let's keep it
+			// referencing that function
+			if (MemberClass != nullptr)
 			{
-				FunctionReference.SetExternalMember(FunctionReference.GetMemberName(), MemberClass);
+				if (!IsBlueprintOfType(MemberClass))
+				{
+					FunctionReference.SetExternalMember(FunctionReference.GetMemberName(), MemberClass);
+				}
 			}
+			// else, there is nothing we can do... the node will produce an error later during compilation
 		}
-		// else, there is nothing we can do... if there is an function matching 
-		// the member name in this Blueprint, then it will reference that 
-		// function (even if it came from a different Blueprint, one with an 
-		// identically named function)... if there is no function matching this 
-		// reference, then the node will produce an error later during compilation
 	}
 	else if (MemberClass != nullptr)
 	{
@@ -1999,20 +2049,35 @@ void UK2Node_CallFunction::ValidateNodeDuringCompilation(class FCompilerResultsL
 		FText const WarningFormat = LOCTEXT("FunctionNotFoundFmt", "Could not find a function named \"{0}\" in '{1}'.\nMake sure '{2}' has been compiled for @@");
 		MessageLog.Error(*FText::Format(WarningFormat, FText::FromString(FunctName), FText::FromString(OwnerName), FText::FromString(OwnerName)).ToString(), this);
 	}
-	else if (Function->HasMetaData(FBlueprintMetadata::MD_ExpandEnumAsExecs) && bWantsEnumToExecExpansion == false)
+	else if (WantsExecPinsForParams(Function) && bWantsEnumToExecExpansion == false)
 	{
 		// will technically not have a properly formatted output for multiple params... but /shrug. 
-		const FString& EnumParamName = Function->GetMetaData(FBlueprintMetadata::MD_ExpandEnumAsExecs);
+		const FString EnumParamName = GetAllExecParams(Function);
 		MessageLog.Warning(*FText::Format(LOCTEXT("EnumToExecExpansionFailedFmt", "Unable to find enum parameter with name '{0}' to expand for @@"), FText::FromString(EnumParamName)).ToString(), this);
 	}
+
+	const UClass* BlueprintClass = Blueprint ? Blueprint->ParentClass : nullptr;
+	const bool bIsEditorOnlyBlueprintBaseClass = !BlueprintClass || IsEditorOnlyObject(BlueprintClass);
+
+	// This error is disabled while we figure out how we can identify uncooked only
+	// blueprints that want to make use of uncooked only APIs:
+	#if 0
+	const bool bIsUncookedOnlyFunction = Function && Function->GetOutermost()->HasAllPackagesFlags(PKG_UncookedOnly);
+	if (	bIsUncookedOnlyFunction &&
+			// Only allow calls to uncooked only functions from editor only/uncooked only
+			// contexts:
+			!(	GetOutermost()->HasAnyPackageFlags(PKG_UncookedOnly|PKG_EditorOnly) ||
+				bIsEditorOnlyBlueprintBaseClass ))
+	{
+		MessageLog.Error(*LOCTEXT("UncookedOnlyError", "Attempting to call uncooked only function @@ in runtime blueprint").ToString(), this);
+	}
+	#endif //0
 	
 	// Ensure that editor module BP exposed UFunctions can only be called in blueprints for which the base class is also part of an editor module
 	// Also check for functions wrapped in WITH_EDITOR 
 	if (Function && Blueprint &&
 		(IsEditorOnlyObject(Function) || Function->HasAnyFunctionFlags(FUNC_EditorOnly)))
 	{	
-		const UClass* BlueprintClass = Blueprint->ParentClass;
-		bool bIsEditorOnlyBlueprintBaseClass = !BlueprintClass || IsEditorOnlyObject(BlueprintClass);
 		if (!bIsEditorOnlyBlueprintBaseClass)
 		{
 			FString const FunctName = Function->GetName();
@@ -2124,6 +2189,8 @@ void UK2Node_CallFunction::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
 
+	Ar.UsingCustomVersion(FReleaseObjectVersion::GUID);
+
 	if (Ar.IsLoading())
 	{
 		if (Ar.UE4Ver() < VER_UE4_SWITCH_CALL_NODE_TO_USE_MEMBER_REFERENCE)
@@ -2142,6 +2209,53 @@ void UK2Node_CallFunction::Serialize(FArchive& Ar)
 			{
 				const bool bSelf = FunctionReference.IsSelfContext();
 				FunctionReference.SetDirect(FunctionReference.GetMemberName(), FunctionGuid, (bSelf ? NULL : FunctionReference.GetMemberParentClass((UClass*)NULL)), bSelf);
+			}
+		}
+
+		// Consider the 'CPF_UObjectWrapper' flag on native function call parameters and return values.
+		if (Ar.CustomVer(FReleaseObjectVersion::GUID) < FReleaseObjectVersion::PinTypeIncludesUObjectWrapperFlag)
+		{
+			if (UFunction* TargetFunction = GetTargetFunction())
+			{
+				if (TargetFunction->IsNative())
+				{
+					for (TFieldIterator<FProperty> PropIt(TargetFunction); PropIt && (PropIt->PropertyFlags & CPF_Parm); ++PropIt)
+					{
+						if (UEdGraphPin* Pin = FindPin(PropIt->GetFName()))
+						{
+							if (const FMapProperty* MapProperty = CastField<FMapProperty>(*PropIt))
+							{
+								if (MapProperty->KeyProp && MapProperty->KeyProp->HasAllPropertyFlags(CPF_UObjectWrapper))
+								{
+									Pin->PinType.bIsUObjectWrapper = 1;
+								}
+
+								if (MapProperty->ValueProp && MapProperty->ValueProp->HasAllPropertyFlags(CPF_UObjectWrapper))
+								{
+									Pin->PinType.PinValueType.bTerminalIsUObjectWrapper = true;
+								}
+							}
+							else if (const FSetProperty* SetProperty = CastField<FSetProperty>(*PropIt))
+							{
+								if (SetProperty->ElementProp && SetProperty->ElementProp->HasAllPropertyFlags(CPF_UObjectWrapper))
+								{
+									Pin->PinType.PinValueType.bTerminalIsUObjectWrapper = true;
+								}
+							}
+							else if(const FArrayProperty* ArrayProperty = CastField<FArrayProperty>(*PropIt))
+							{
+								if(ArrayProperty->Inner && ArrayProperty->Inner->HasAllPropertyFlags(CPF_UObjectWrapper))
+								{
+									Pin->PinType.PinValueType.bTerminalIsUObjectWrapper = true;
+								}
+							}
+							else if (PropIt->HasAllPropertyFlags(CPF_UObjectWrapper))
+							{
+								Pin->PinType.bIsUObjectWrapper = 1;
+							}
+						}
+					}
+				}
 			}
 		}
 
@@ -2250,6 +2364,45 @@ void UK2Node_CallFunction::ExpandNode(class FKismetCompilerContext& CompilerCont
 			UK2Node_ExecutionSequence* SpawnedSequenceNode = nullptr;
 			int32 OutSequenceIndex = 0;
 
+			const auto LinkIntoOutputChain = [&OutMainExecutePin, &SpawnedSequenceNode, &OutSequenceIndex, &CompilerContext, this, SourceGraph, Schema](UK2Node* Node)
+			{
+				if (!OutMainExecutePin)
+				{
+					// Create normal exec output -- only once though.
+					OutMainExecutePin = CreatePin(EGPD_Output, UEdGraphSchema_K2::PC_Exec, UEdGraphSchema_K2::PN_Then);
+				}
+				else
+				{
+					// set up a sequence so we can call one after another.
+					if (!SpawnedSequenceNode)
+					{
+						SpawnedSequenceNode = CompilerContext.SpawnIntermediateNode<UK2Node_ExecutionSequence>(this, SourceGraph);
+						SpawnedSequenceNode->AllocateDefaultPins();
+						CompilerContext.MovePinLinksToIntermediate(*OutMainExecutePin, *SpawnedSequenceNode->GetThenPinGivenIndex(OutSequenceIndex++));
+						Schema->TryCreateConnection(OutMainExecutePin, SpawnedSequenceNode->Pins[0]);
+					}
+				}
+
+				// Hook up execution to the branch node
+				if (!SpawnedSequenceNode)
+				{
+					Schema->TryCreateConnection(OutMainExecutePin, Node->GetExecPin());
+				}
+				else
+				{
+					UEdGraphPin* SequenceOutput = SpawnedSequenceNode->GetThenPinGivenIndex(OutSequenceIndex);
+
+					if (!SequenceOutput)
+					{
+						SpawnedSequenceNode->AddInputPin();
+						SequenceOutput = SpawnedSequenceNode->GetThenPinGivenIndex(OutSequenceIndex);
+					}
+
+					Schema->TryCreateConnection(SequenceOutput, Node->GetExecPin());
+					OutSequenceIndex++;
+				}
+			};
+
 			for (const FName& EnumParamName : EnumNamesToCheck)
 			{
 				UEnum* Enum = nullptr;
@@ -2325,47 +2478,14 @@ void UK2Node_CallFunction::ExpandNode(class FKismetCompilerContext& CompilerCont
 					// Expanded as output execs pins
 					else if (EnumParamPin->Direction == EGPD_Output)
 					{
-						if (!OutMainExecutePin)
-						{
-							// Create normal exec output -- only once though.
-							OutMainExecutePin = CreatePin(EGPD_Output, UEdGraphSchema_K2::PC_Exec, UEdGraphSchema_K2::PN_Then);
-						}
-						else
-						{	
-							// set up a sequence so we can call one after another.
-							if (!SpawnedSequenceNode)
-							{
-								SpawnedSequenceNode = CompilerContext.SpawnIntermediateNode<UK2Node_ExecutionSequence>(this, SourceGraph);
-								SpawnedSequenceNode->AllocateDefaultPins();
-								CompilerContext.MovePinLinksToIntermediate(*OutMainExecutePin, *SpawnedSequenceNode->GetThenPinGivenIndex(OutSequenceIndex++));
-								Schema->TryCreateConnection(OutMainExecutePin, SpawnedSequenceNode->Pins[0]);
-							}
-						}
-
 						// Create a SwitchEnum node to switch on the output enum
 						UK2Node_SwitchEnum* SwitchEnumNode = CompilerContext.SpawnIntermediateNode<UK2Node_SwitchEnum>(this, SourceGraph);
 						UEnum* EnumObject = Cast<UEnum>(EnumParamPin->PinType.PinSubCategoryObject.Get());
 						SwitchEnumNode->SetEnum(EnumObject);
 						SwitchEnumNode->AllocateDefaultPins();
 
-						// Hook up execution to the switch node
-						if (!SpawnedSequenceNode)
-						{
-							Schema->TryCreateConnection(OutMainExecutePin, SwitchEnumNode->GetExecPin());
-						}
-						else
-						{
-							UEdGraphPin* SequenceOutput = SpawnedSequenceNode->GetThenPinGivenIndex(OutSequenceIndex);
+						LinkIntoOutputChain(SwitchEnumNode);
 
-							if (!SequenceOutput)
-							{
-								SpawnedSequenceNode->AddInputPin();
-								SequenceOutput = SpawnedSequenceNode->GetThenPinGivenIndex(OutSequenceIndex);
-							}
-
-							Schema->TryCreateConnection(SequenceOutput, SwitchEnumNode->GetExecPin());
-							OutSequenceIndex++;
-						}
 						// Connect (hidden) enum pin to switch node's selection pin
 						Schema->TryCreateConnection(EnumParamPin, SwitchEnumNode->GetSelectionPin());
 
@@ -2399,6 +2519,74 @@ void UK2Node_CallFunction::ExpandNode(class FKismetCompilerContext& CompilerCont
 								}
 							}
 						}
+					}
+				}
+				else if(EnumParamPin && !EnumParamPin->PinType.IsContainer() && EnumParamPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Boolean)
+				{
+					if (EnumParamPin->Direction == EGPD_Input)
+					{
+						// Create normal exec input
+						UEdGraphPin* ExecutePin = CreatePin(EGPD_Input, UEdGraphSchema_K2::PC_Exec, UEdGraphSchema_K2::PN_Execute);
+						// Create temp bool variable
+						UK2Node_TemporaryVariable* TempBoolVarNode = CompilerContext.SpawnIntermediateNode<UK2Node_TemporaryVariable>(this, SourceGraph);
+						TempBoolVarNode->VariableType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
+						TempBoolVarNode->AllocateDefaultPins();
+						// Get the output pin
+						UEdGraphPin* TempBoolVarOutput = TempBoolVarNode->GetVariablePin();
+						// Connect temp enum variable to (hidden) bool pin
+						Schema->TryCreateConnection(TempBoolVarOutput, EnumParamPin);
+						
+						// create a true entry and a false:
+						const auto CreateAssignNode = [Schema, &CompilerContext, this, SourceGraph, TempBoolVarOutput, ExecutePin](UEdGraphPin* FakePin, const TCHAR* DefaultValue)
+						{
+							UK2Node_AssignmentStatement* AssignNode = CompilerContext.SpawnIntermediateNode<UK2Node_AssignmentStatement>(this, SourceGraph);
+							AssignNode->AllocateDefaultPins();
+
+							// Move connections from fake 'enum exec' pint to this assignment node
+							CompilerContext.MovePinLinksToIntermediate(*FakePin, *AssignNode->GetExecPin());
+
+							// Connect this to out temp enum var
+							Schema->TryCreateConnection(AssignNode->GetVariablePin(), TempBoolVarOutput);
+
+							// Connect exec output to 'real' exec pin
+							Schema->TryCreateConnection(AssignNode->GetThenPin(), ExecutePin);
+
+							// set the literal enum value to set to
+							AssignNode->GetValuePin()->DefaultValue = DefaultValue;
+						};
+
+						UEdGraphPin* TruePin = FindPinChecked(TEXT("True"), EEdGraphPinDirection::EGPD_Input);
+						UEdGraphPin* FalsePin = FindPinChecked(TEXT("False"), EEdGraphPinDirection::EGPD_Input);
+
+						CreateAssignNode(TruePin, TEXT("True"));
+						CreateAssignNode(FalsePin, TEXT("False"));
+
+						// remove fake false/true nodes:
+						RemovePin(TruePin);
+						RemovePin(FalsePin);
+					}
+					else if (EnumParamPin->Direction == EGPD_Output)
+					{
+						// Create a Branch node to switch on the output bool:
+						UK2Node_IfThenElse* IfElseNode = CompilerContext.SpawnIntermediateNode<UK2Node_IfThenElse>(this, SourceGraph);
+						IfElseNode->AllocateDefaultPins();
+
+						LinkIntoOutputChain(IfElseNode);
+
+						// Connect (hidden) bool pin to branch node
+						Schema->TryCreateConnection(EnumParamPin, IfElseNode->GetConditionPin());
+
+						UEdGraphPin* TruePin = FindPinChecked(TEXT("True"), EEdGraphPinDirection::EGPD_Output);
+						UEdGraphPin* FalsePin = FindPinChecked(TEXT("False"), EEdGraphPinDirection::EGPD_Output);
+
+						// move true connection to branch node:
+						CompilerContext.MovePinLinksToIntermediate(*TruePin, *IfElseNode->GetThenPin());
+						// move false connection to branch node:
+						CompilerContext.MovePinLinksToIntermediate(*FalsePin, *IfElseNode->GetElsePin());
+
+						// remove fake false/true nodes:
+						RemovePin(TruePin);
+						RemovePin(FalsePin);
 					}
 				}
 			}
@@ -2735,6 +2923,9 @@ void UK2Node_CallFunction::ConformContainerPins()
 					Pin->PinType.PinCategory = TerminalType.TerminalCategory;
 					Pin->PinType.PinSubCategory = TerminalType.TerminalSubCategory;
 					Pin->PinType.PinSubCategoryObject = TerminalType.TerminalSubCategoryObject;
+
+					// Also propagate the CPF_UObjectWrapper flag, which will be set for "wrapped" object ptr types (e.g. TSubclassOf).
+					Pin->PinType.bIsUObjectWrapper = TerminalType.bTerminalIsUObjectWrapper;
 				
 					// Reset default values
 					if (!Schema->IsPinDefaultValid(Pin, Pin->DefaultValue, Pin->DefaultObject, Pin->DefaultTextValue).IsEmpty())
@@ -2754,6 +2945,7 @@ void UK2Node_CallFunction::ConformContainerPins()
 				Pin->PinType.PinCategory = UEdGraphSchema_K2::PC_Wildcard;
 				Pin->PinType.PinSubCategory = NAME_None;
 				Pin->PinType.PinSubCategoryObject = nullptr;
+				Pin->PinType.bIsUObjectWrapper = false;
 				Schema->ResetPinToAutogeneratedDefaultValue(Pin, false);
 			}
 		}
@@ -3179,6 +3371,11 @@ bool UK2Node_CallFunction::IsConnectionDisallowed(const UEdGraphPin* MyPin, cons
 		}
 		else if (UFunction* TargetFunction = GetTargetFunction())
 		{
+			const bool bIsObjectType = (MyPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Object ||
+				MyPin->PinType.PinCategory == UEdGraphSchema_K2::PC_SoftObject) &&
+				(OtherPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Object ||
+				OtherPin->PinType.PinCategory == UEdGraphSchema_K2::PC_SoftObject);
+
 			if (// Strictly speaking this first check is not needed, but by not disabling the connection here we get a better reason later:
 				(	OtherPin->PinType.IsContainer() 
 					// make sure we don't allow connections of mismatched container types (e.g. maps to arrays)
@@ -3193,6 +3390,61 @@ bool UK2Node_CallFunction::IsConnectionDisallowed(const UEdGraphPin* MyPin, cons
 			{
 				bIsDisallowed = true;
 				OutReason = LOCTEXT("PinSetConnectionDisallowed", "Containers of containers are not supported - consider wrapping a container in a Structure object").ToString();
+			}
+			// Do not allow exec pins to be connected to a wildcard if this is a container function
+			else if(MyPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Wildcard && OtherPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+			{
+				bIsDisallowed = true;
+				OutReason = LOCTEXT("PinExecConnectionDisallowed", "Cannot create a container of Exec pins.").ToString();
+			}
+			else if (bIsObjectType && MyPin->Direction == EGPD_Input && MyPin->PinType.IsContainer() && OtherPin->PinType.IsContainer())
+			{
+				// Check that we can actually connect the dependent pins to this new array
+				const UEdGraphSchema_K2* K2Schema = Cast<UEdGraphSchema_K2>(GetSchema());
+
+				// Gather all pins that would be dependent on on the container type
+				TArray<UEdGraphPin*> DependentPins;
+				{
+					for (UEdGraphPin* Pin : Pins)
+					{
+						if (Pin->Direction == EGPD_Input && Pin != MyPin && FEdGraphUtilities::IsDynamicContainerParam(TargetFunction, Pin->PinName))
+						{
+							DependentPins.Add(Pin);
+						}
+					}
+				}
+
+				for (UEdGraphPin* Pin : DependentPins)
+				{
+					// #TODO Maps need special validation for the key/value together, not just one pin type. 
+					// otherwise you will end up with false failures. 
+					if (OtherPin->PinType.IsMap() && !Pin->PinType.IsMap())
+					{
+						continue;
+					}
+
+					UClass* Context = nullptr;
+					UBlueprint* Blueprint = GetBlueprint();
+					if (Blueprint)
+					{
+						Context = Blueprint->GeneratedClass;
+					}
+
+					const bool ConnectResponse = K2Schema->ArePinTypesCompatible(Pin->PinType, OtherPin->PinType, Context, /* bIgnoreArray = */ true);
+
+					if (!ConnectResponse)
+					{
+						// Display the necessary tooltip on the pin hover, and log it if we are compiling
+						FFormatNamedArguments MessageArgs;
+						MessageArgs.Add(TEXT("PinAType"), UEdGraphSchema_K2::TypeToText(Pin->PinType));
+						MessageArgs.Add(TEXT("PinBType"), UEdGraphSchema_K2::TypeToText(OtherPin->PinType));
+						UBlueprint* BP = GetBlueprint();
+						UEdGraph* OwningGraph = GetGraph();
+
+						OutReason = FText::Format(LOCTEXT("DefaultPinIncompatibilityMessage", "{PinAType} is not compatible with {PinBType}."), MessageArgs).ToString();
+						return true;
+					}
+				}
 			}
 		}
 	}

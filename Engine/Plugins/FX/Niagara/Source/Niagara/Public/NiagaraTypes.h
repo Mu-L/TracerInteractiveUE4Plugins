@@ -3,21 +3,17 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "UObject/UnrealType.h"
 #include "Engine/UserDefinedStruct.h"
-#include "Templates/SharedPointer.h"
 #include "Misc/SecureHash.h"
+#include "Templates/SharedPointer.h"
+#include "UObject/GCObject.h"
+#include "UObject/UnrealType.h"
+
 #include "NiagaraTypes.generated.h"
 
 class UNiagaraDataInterfaceBase;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogNiagara, Log, Verbose);
-
-// helper methods for basic struct definitions
-struct NIAGARA_API FNiagaraTypeUtilities
-{
-	static FString GetNamespaceStringForScriptParameterScope(const ENiagaraParameterScope& InScope);
-};
 
 // basic type struct definitions
 
@@ -67,7 +63,61 @@ struct FNiagaraBool
 
 private:
 	UPROPERTY(EditAnywhere, Category = Parameters)// Must be either FNiagaraBool::True or FNiagaraBool::False.
-	int32 Value;
+	int32 Value = FNiagaraBool::False;
+};
+
+USTRUCT(meta = (DisplayName = "Half", NiagaraInternalType = "true"))
+struct FNiagaraHalf
+{
+	GENERATED_USTRUCT_BODY()
+
+	UPROPERTY(EditAnywhere, Category = Parameters)
+	uint16 Value = 0;
+};
+
+USTRUCT(meta = (DisplayName = "Half Vector2", NiagaraInternalType = "true"))
+struct FNiagaraHalfVector2
+{
+	GENERATED_USTRUCT_BODY()
+
+	UPROPERTY(EditAnywhere, Category = Parameters)
+	uint16 x = 0;
+
+	UPROPERTY(EditAnywhere, Category = Parameters)
+	uint16 y = 0;
+};
+
+USTRUCT(meta = (DisplayName = "Half Vector3", NiagaraInternalType = "true"))
+struct FNiagaraHalfVector3
+{
+	GENERATED_USTRUCT_BODY()
+
+	UPROPERTY(EditAnywhere, Category = Parameters)
+	uint16 x = 0;
+
+	UPROPERTY(EditAnywhere, Category = Parameters)
+	uint16 y = 0;
+
+	UPROPERTY(EditAnywhere, Category = Parameters)
+	uint16 z = 0;
+};
+
+USTRUCT(meta = (DisplayName = "Half Vector4", NiagaraInternalType = "true"))
+struct FNiagaraHalfVector4
+{
+	GENERATED_USTRUCT_BODY()
+
+	UPROPERTY(EditAnywhere, Category = Parameters)
+	uint16 x = 0;
+
+	UPROPERTY(EditAnywhere, Category = Parameters)
+	uint16 y = 0;
+
+	UPROPERTY(EditAnywhere, Category = Parameters)
+	uint16 z = 0;
+
+	UPROPERTY(EditAnywhere, Category = Parameters)
+	uint16 w = 0;
 };
 
 USTRUCT()
@@ -83,35 +133,6 @@ struct FNiagaraParameterMap
 	GENERATED_USTRUCT_BODY()
 };
 
-USTRUCT()
-struct FNiagaraTestStructInner
-{
-	GENERATED_USTRUCT_BODY()
-
-	UPROPERTY(EditAnywhere, Category = TestStruct)
-	FVector InnerVector1;
-
-	UPROPERTY(EditAnywhere, Category = TestStruct)
-	FVector InnerVector2;
-};
-
-USTRUCT()
-struct FNiagaraTestStruct
-{
-	GENERATED_USTRUCT_BODY()
-
-	UPROPERTY(EditAnywhere, Category = TestStruct)
-	FVector Vector1;
-
-	UPROPERTY(EditAnywhere, Category = TestStruct)
-	FVector Vector2;
-
-	UPROPERTY(EditAnywhere, Category = TestStruct)
-	FNiagaraTestStructInner InnerStruct1;
-
-	UPROPERTY(EditAnywhere, Category = TestStruct)
-	FNiagaraTestStructInner InnerStruct2;
-};
 
 USTRUCT(meta = (DisplayName = "Matrix"))
 struct FNiagaraMatrix
@@ -119,50 +140,43 @@ struct FNiagaraMatrix
 	GENERATED_USTRUCT_BODY()
 
 	UPROPERTY(EditAnywhere, Category=NiagaraMatrix)
-	FVector4 Row0;
+	FVector4 Row0 = FVector4(EForceInit::ForceInitToZero);
 
 	UPROPERTY(EditAnywhere, Category = NiagaraMatrix)
-	FVector4 Row1;
+	FVector4 Row1 = FVector4(EForceInit::ForceInitToZero);
 
 	UPROPERTY(EditAnywhere, Category = NiagaraMatrix)
-	FVector4 Row2;
+	FVector4 Row2 = FVector4(EForceInit::ForceInitToZero);
 
 	UPROPERTY(EditAnywhere, Category = NiagaraMatrix)
-	FVector4 Row3;
+	FVector4 Row3 = FVector4(EForceInit::ForceInitToZero);
 };
 
 /** Data controlling the spawning of particles */
-USTRUCT(meta = (DisplayName = "Spawn Info", NiagaraClearEachFrame = "true"))
+USTRUCT(BlueprintType, meta = (DisplayName = "Spawn Info", NiagaraClearEachFrame = "true"))
 struct FNiagaraSpawnInfo
 {
 	GENERATED_USTRUCT_BODY();
 	
-	FNiagaraSpawnInfo()
-		: Count(0)
-		, InterpStartDt(0.0f)
-		, IntervalDt(1.0f)
-		, SpawnGroup(0)
-	{}
-
 	/** How many particles to spawn. */
-	UPROPERTY(EditAnywhere, Category = SpawnInfo)
-	int32 Count;
+	UPROPERTY(BlueprintReadWrite, Category = SpawnInfo)
+	int32 Count = 0;
 	/** The sub frame delta time at which to spawn the first particle. */
-	UPROPERTY(EditAnywhere, Category = SpawnInfo)
-	float InterpStartDt;
+	UPROPERTY(BlueprintReadWrite, Category = SpawnInfo)
+	float InterpStartDt = 0.0f;
 	/** The sub frame delta time between each particle. */
-	UPROPERTY(EditAnywhere, Category = SpawnInfo)
-	float IntervalDt;
+	UPROPERTY(BlueprintReadWrite, Category = SpawnInfo)
+	float IntervalDt = 1.0f;
 	/**
 	 * An integer used to identify this spawn info.
 	 * Typically this is unused.
 	 * An example usage is when using multiple spawn modules to spawn from multiple discreet locations.
 	 */
-	UPROPERTY(EditAnywhere, Category = SpawnInfo)
-	int32 SpawnGroup;
+	UPROPERTY(BlueprintReadWrite, Category = SpawnInfo)
+	int32 SpawnGroup = 0;
 };
 
-USTRUCT(Blueprintable, meta = (DisplayName = "Niagara ID"))
+USTRUCT(BlueprintType, meta = (DisplayName = "Niagara ID"))
 struct FNiagaraID
 {
 	GENERATED_USTRUCT_BODY()
@@ -171,22 +185,22 @@ struct FNiagaraID
 	Index in the indirection table for this particle. Allows fast access to this particles data.
 	Is always unique among currently living particles but will be reused after the particle dies.
 	*/
-	UPROPERTY(EditAnywhere, Category = ID)
-	int32 Index;
+	UPROPERTY(BlueprintReadWrite, Category = ID)
+	int32 Index = 0;
 
 	/** 
 	A unique tag for when this ID was acquired. 
 	Allows us to differentiate between particles when one dies and another reuses it's Index.
 	*/
-	UPROPERTY(EditAnywhere, Category = ID)
-	int32 AcquireTag;
+	UPROPERTY(BlueprintReadWrite, Category = ID)
+	int32 AcquireTag = 0;
 
 	FNiagaraID() : Index(INDEX_NONE), AcquireTag(INDEX_NONE) {}
 	FNiagaraID(int32 InIndex, int32 InAcquireTag): Index(InIndex), AcquireTag(InAcquireTag){}
 
 	bool operator==(const FNiagaraID& Other)const { return Index == Other.Index && AcquireTag == Other.AcquireTag; }
 	bool operator!=(const FNiagaraID& Other)const { return !(*this == Other); }
-	bool operator<(const FNiagaraID& Other)const { return Index < Other.Index && AcquireTag < Other.AcquireTag; }
+	bool operator<(const FNiagaraID& Other)const { return Index < Other.Index || (Index == Other.Index && AcquireTag < Other.AcquireTag); }
 };
 
 #define NIAGARA_INVALID_ID (FNiagaraID({(INDEX_NONE), (INDEX_NONE)}))
@@ -221,7 +235,13 @@ struct FNiagaraTypeLayoutInfo
 	UPROPERTY()
 	TArray<uint32> Int32ComponentRegisterOffsets;
 
-	FORCEINLINE uint32 GetNumComponents()const { return FloatComponentByteOffsets.Num() + Int32ComponentByteOffsets.Num(); }
+	/** Byte offset of each half component in a structured layout. */
+	UPROPERTY()
+	TArray<uint32> HalfComponentByteOffsets;
+
+	/** Offset into register table for each half component. */
+	UPROPERTY()
+	TArray<uint32> HalfComponentRegisterOffsets;
 
 	static void GenerateLayoutInfo(FNiagaraTypeLayoutInfo& Layout, const UScriptStruct* Struct)
 	{
@@ -229,6 +249,8 @@ struct FNiagaraTypeLayoutInfo
 		Layout.FloatComponentRegisterOffsets.Empty();
 		Layout.Int32ComponentByteOffsets.Empty();
 		Layout.Int32ComponentRegisterOffsets.Empty();
+		Layout.HalfComponentByteOffsets.Empty();
+		Layout.HalfComponentRegisterOffsets.Empty();
 		GenerateLayoutInfoInternal(Layout, Struct);
 	}
 
@@ -241,12 +263,17 @@ private:
 			int32 PropOffset = BaseOffest + Property->GetOffset_ForInternal();
 			if (Property->IsA(FFloatProperty::StaticClass()))
 			{
-				Layout.FloatComponentRegisterOffsets.Add(Layout.GetNumComponents());
+				Layout.FloatComponentRegisterOffsets.Add(Layout.FloatComponentByteOffsets.Num());
 				Layout.FloatComponentByteOffsets.Add(PropOffset);
+			}
+			else if (Property->IsA(FUInt16Property::StaticClass()))
+			{
+				Layout.HalfComponentRegisterOffsets.Add(Layout.HalfComponentByteOffsets.Num());
+				Layout.HalfComponentByteOffsets.Add(PropOffset);
 			}
 			else if (Property->IsA(FIntProperty::StaticClass()) || Property->IsA(FBoolProperty::StaticClass()))
 			{
-				Layout.Int32ComponentRegisterOffsets.Add(Layout.GetNumComponents());
+				Layout.Int32ComponentRegisterOffsets.Add(Layout.Int32ComponentByteOffsets.Num());
 				Layout.Int32ComponentByteOffsets.Add(PropOffset);
 			}
 			//Should be able to support double easily enough
@@ -316,6 +343,8 @@ enum class ENiagaraExecutionState : uint32
 	// insert new states before
 	Num UMETA(Hidden)
 };
+
+
 
 USTRUCT()
 struct NIAGARA_API FNiagaraCompileHashVisitorDebugInfo
@@ -434,14 +463,14 @@ public:
 	/**
 	Adds an string value to the hash.
 	*/
-	bool UpdateString(const TCHAR* InDebugName, const FString& InData)
+	bool UpdateString(const TCHAR* InDebugName, FStringView InData)
 	{
-		HashState.Update((const uint8 *)(*InData), sizeof(TCHAR)*InData.Len());
+		HashState.Update((const uint8 *)InData.GetData(), sizeof(TCHAR)*InData.Len());
 #if WITH_EDITORONLY_DATA
 		if (LogCompileIdGeneration != 0)
 		{
 			Values.Top().PropertyKeys.Push(InDebugName);
-			Values.Top().PropertyValues.Push(InData);
+			Values.Top().PropertyValues.Push(FString(InData));
 		}
 #endif
 		return true;
@@ -493,6 +522,12 @@ enum class ENiagaraParameterScope : uint32
 	None UMETA(Hidden),
 
 	Num UMETA(Hidden)
+};
+
+// helper methods for basic struct definitions
+struct NIAGARA_API FNiagaraTypeUtilities
+{
+	static FString GetNamespaceStringForScriptParameterScope(const ENiagaraParameterScope& InScope);
 };
 
 UENUM()
@@ -608,7 +643,7 @@ USTRUCT()
 struct NIAGARA_API FNiagaraVariableMetaData
 {
 	GENERATED_USTRUCT_BODY()
-public:
+
 	FNiagaraVariableMetaData()
 		: bAdvancedDisplay(false)
 		, EditorSortPriority(0)
@@ -622,7 +657,7 @@ public:
 		, bCreatedInSystemEditor(false)
 		, bUseLegacyNameString(false)
 	{};
-public:
+
 	UPROPERTY(EditAnywhere, Category = "Variable", meta = (MultiLine = true, SkipForCompileHash = "true"))
 	FText Description;
 
@@ -652,7 +687,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Variable", DisplayName = "Property Metadata", meta = (ToolTip = "Property Metadata", SkipForCompileHash = "true"))
 	TMap<FName, FString> PropertyMetaData;
 
-public:
+	UPROPERTY(EditAnywhere, Category = "Variable", meta = (ToolTip = "If set, this attribute is visually displayed as a child under the given parent attribute. Currently, only static switches are supported as parent attributes!", SkipForCompileHash = "true"))
+	FName ParentAttribute;
 
 	const FName& GetScopeName() const { return ScopeName; };
 	void SetScopeName(const FName& InScopeName) { ScopeName = InScopeName; };
@@ -686,6 +722,9 @@ public:
 	void SetIsUsingLegacyNameString(bool bInUseLegacyNameString) { bUseLegacyNameString = bInUseLegacyNameString; };
 
 	void CopyPerScriptMetaData(const FNiagaraVariableMetaData& OtherMetaData);
+
+	/** Copies all the properties that are marked as editable for the user (e.g. EditAnywhere). */
+	void CopyUserEditableMetaData(const FNiagaraVariableMetaData& OtherMetaData);
 
 private:
 	/** Defines the scope of a variable that is an input to a script. Used to lookup registered scope infos and resolve the actual ENiagaraParameterScope and Namespace string to use. */
@@ -908,6 +947,10 @@ public:
 
 	bool AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor) const;
 
+#if WITH_EDITORONLY_DATA
+	bool IsInternalType() const;
+#endif
+
 	/*
 	Underlying type for this variable, use FUnderlyingType to determine type without casting
 	This can be a UClass, UStruct or UEnum.  Pointing to something like the struct for an FVector, etc.
@@ -937,7 +980,9 @@ private:
 
 public:
 	static void Init();
+#if WITH_EDITOR
 	static void RecreateUserDefinedTypeRegistry();
+#endif
 	static const FNiagaraTypeDefinition& GetFloatDef() { return FloatDef; }
 	static const FNiagaraTypeDefinition& GetBoolDef() { return BoolDef; }
 	static const FNiagaraTypeDefinition& GetIntDef() { return IntDef; }
@@ -952,6 +997,13 @@ public:
 	static const FNiagaraTypeDefinition& GetIDDef() { return IDDef; }
 	static const FNiagaraTypeDefinition& GetUObjectDef() { return UObjectDef; }
 	static const FNiagaraTypeDefinition& GetUMaterialDef() { return UMaterialDef; }
+	static const FNiagaraTypeDefinition& GetUTextureDef() { return UTextureDef; }
+	static const FNiagaraTypeDefinition& GetUTextureRenderTargetDef() { return UTextureRenderTargetDef; }
+
+	static const FNiagaraTypeDefinition& GetHalfDef() { return HalfDef; }
+	static const FNiagaraTypeDefinition& GetHalfVec2Def() { return HalfVec2Def; }
+	static const FNiagaraTypeDefinition& GetHalfVec3Def() { return HalfVec3Def; }
+	static const FNiagaraTypeDefinition& GetHalfVec4Def() { return HalfVec4Def; }
 
 	template<typename T>
 	static const FNiagaraTypeDefinition& Get();
@@ -969,10 +1021,16 @@ public:
 	static UScriptStruct* GetParameterMapStruct() { return ParameterMapStruct; }
 	static UScriptStruct* GetIDStruct() { return IDStruct; }
 
+	static UScriptStruct* GetHalfStruct() { return HalfStruct; }
+	static UScriptStruct* GetHalfVec2Struct() { return HalfVec2Struct; }
+	static UScriptStruct* GetHalfVec3Struct() { return HalfVec3Struct; }
+	static UScriptStruct* GetHalfVec4Struct() { return HalfVec4Struct; }
+
 	static UEnum* GetExecutionStateEnum() { return ExecutionStateEnum; }
 	static UEnum* GetExecutionStateSouceEnum() { return ExecutionStateSourceEnum; }
 	static UEnum* GetSimulationTargetEnum() { return SimulationTargetEnum; }
 	static UEnum* GetScriptUsageEnum() { return ScriptUsageEnum; }
+	static UEnum* GetScriptContextEnum() { return ScriptContextEnum; }
 	static UEnum* GetParameterPanelCategoryEnum() { return ParameterPanelCategoryEnum; }
 
 	static UEnum* GetParameterScopeEnum() { return ParameterScopeEnum; }
@@ -1013,6 +1071,13 @@ private:
 	static FNiagaraTypeDefinition IDDef;
 	static FNiagaraTypeDefinition UObjectDef;
 	static FNiagaraTypeDefinition UMaterialDef;
+	static FNiagaraTypeDefinition UTextureDef;
+	static FNiagaraTypeDefinition UTextureRenderTargetDef;
+
+	static FNiagaraTypeDefinition HalfDef;
+	static FNiagaraTypeDefinition HalfVec2Def;
+	static FNiagaraTypeDefinition HalfVec3Def;
+	static FNiagaraTypeDefinition HalfVec4Def;
 
 	static UScriptStruct* FloatStruct;
 	static UScriptStruct* BoolStruct;
@@ -1025,11 +1090,19 @@ private:
 	static UScriptStruct* Matrix4Struct;
 	static UScriptStruct* NumericStruct;
 
+	static UScriptStruct* HalfStruct;
+	static UScriptStruct* HalfVec2Struct;
+	static UScriptStruct* HalfVec3Struct;
+	static UScriptStruct* HalfVec4Struct;
+
 	static UClass* UObjectClass;
 	static UClass* UMaterialClass;
+	static UClass* UTextureClass;
+	static UClass* UTextureRenderTargetClass;
 
 	static UEnum* SimulationTargetEnum;
 	static UEnum* ScriptUsageEnum;
+	static UEnum* ScriptContextEnum;
 	static UEnum* ExecutionStateEnum;
 	static UEnum* ExecutionStateSourceEnum;
 
@@ -1067,15 +1140,20 @@ template<typename T>
 const FNiagaraTypeDefinition& FNiagaraTypeDefinition::Get()
 {
 	if (TIsSame<T, float>::Value) { return FNiagaraTypeDefinition::GetFloatDef(); }
-	if (TIsSame<T, int32>::Value) { return FNiagaraTypeDefinition::GetIntDef(); }
-	if (TIsSame<T, FNiagaraBool>::Value) { return FNiagaraTypeDefinition::GetBoolDef(); }
 	if (TIsSame<T, FVector2D>::Value) { return FNiagaraTypeDefinition::GetVec2Def(); }
 	if (TIsSame<T, FVector>::Value) { return FNiagaraTypeDefinition::GetVec3Def(); }
 	if (TIsSame<T, FVector4>::Value) { return FNiagaraTypeDefinition::GetVec4Def(); }
+	if (TIsSame<T, int32>::Value) { return FNiagaraTypeDefinition::GetIntDef(); }
+	if (TIsSame<T, FNiagaraBool>::Value) { return FNiagaraTypeDefinition::GetBoolDef(); }
 	if (TIsSame<T, FQuat>::Value) { return FNiagaraTypeDefinition::GetQuatDef(); }
 	if (TIsSame<T, FMatrix>::Value) { return FNiagaraTypeDefinition::GetMatrix4Def(); }
 	if (TIsSame<T, FLinearColor>::Value) { return FNiagaraTypeDefinition::GetColorDef(); }
 	if (TIsSame<T, FNiagaraID>::Value) { return FNiagaraTypeDefinition::GetIDDef(); }
+}
+
+FORCEINLINE uint32 GetTypeHash(const FNiagaraTypeDefinition& Type)
+{
+	return HashCombine(GetTypeHash(Type.GetStruct()), GetTypeHash(Type.GetEnum()));
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -1085,109 +1163,167 @@ const FNiagaraTypeDefinition& FNiagaraTypeDefinition::Get()
 * Used by UI to provide selection; new uniforms and variables
 * may be instanced using the types provided here
 */
-class NIAGARA_API FNiagaraTypeRegistry
+class NIAGARA_API FNiagaraTypeRegistry : public FGCObject
 {
 public:
-	static const TArray<FNiagaraTypeDefinition> &GetRegisteredTypes()
+	enum
 	{
-		return RegisteredTypes;
+		MaxRegisteredTypes = 512,
+	};
+
+	using RegisteredTypesArray = TArray<FNiagaraTypeDefinition, TFixedAllocator<MaxRegisteredTypes>>;
+
+	static const RegisteredTypesArray& GetRegisteredTypes()
+	{
+		return Get().RegisteredTypes;
 	}
 
 	static const TArray<FNiagaraTypeDefinition> &GetRegisteredParameterTypes()
 	{
-		return RegisteredParamTypes;
+		return Get().RegisteredParamTypes;
 	}
 
 	static const TArray<FNiagaraTypeDefinition> &GetRegisteredPayloadTypes()
 	{
-		return RegisteredPayloadTypes;
+		return Get().RegisteredPayloadTypes;
 	}
 
 	static const TArray<FNiagaraTypeDefinition>& GetUserDefinedTypes()
 	{
-		return RegisteredUserDefinedTypes;
+		return Get().RegisteredUserDefinedTypes;
 	}
 
 	static const TArray<FNiagaraTypeDefinition>& GetNumericTypes()
 	{ 
-		return RegisteredNumericTypes;
+		return Get().RegisteredNumericTypes;
 	}
 
 	static UNiagaraDataInterfaceBase* GetDefaultDataInterfaceByName(const FString& DIClassName);
 
 	static void ClearUserDefinedRegistry()
 	{
-		for (const FNiagaraTypeDefinition& Def : RegisteredUserDefinedTypes)
+		FNiagaraTypeRegistry& Registry = Get();
+
+		FRWScopeLock Lock(Registry.RegisteredTypesLock, FRWScopeLockType::SLT_Write);
+
+		for (const FNiagaraTypeDefinition& Def : Registry.RegisteredUserDefinedTypes)
 		{
-			RegisteredTypes.Remove(Def);
-			RegisteredPayloadTypes.Remove(Def);
-			RegisteredParamTypes.Remove(Def);
+			Registry.RegisteredPayloadTypes.Remove(Def);
+			Registry.RegisteredParamTypes.Remove(Def);
+			Registry.RegisteredNumericTypes.Remove(Def);
 		}
 
-		RegisteredNumericTypes.Empty();
-		RegisteredUserDefinedTypes.Empty();
+		Registry.RegisteredUserDefinedTypes.Empty();
+
+		// note that we don't worry about cleaning up RegisteredTypes or RegisteredTypeIndexMap because we don't
+		// want to invalidate any indexes that are already stored in FNiagaraTypeDefinitionHandle.  If re-registered
+		// they will be given the same index, and if they are orphaned we don't want to have invalid indices on the handle.
 	}
 
 	static void Register(const FNiagaraTypeDefinition &NewType, bool bCanBeParameter, bool bCanBePayload, bool bIsUserDefined)
 	{
+		FNiagaraTypeRegistry& Registry = Get();
+
+		FRWScopeLock Lock(Registry.RegisteredTypesLock, FRWScopeLockType::SLT_Write);
+
 		//TODO: Make this a map of type to a more verbose set of metadata? Such as the hlsl defs, offset table for conversions etc.
-		RegisteredTypes.AddUnique(NewType);
+		Registry.RegisteredTypeIndexMap.Add(GetTypeHash(NewType), Registry.RegisteredTypes.AddUnique(NewType));
 
 		if (bCanBeParameter)
 		{
-			RegisteredParamTypes.AddUnique(NewType);
+			Registry.RegisteredParamTypes.AddUnique(NewType);
 		}
 
 		if (bCanBePayload)
 		{
-			RegisteredPayloadTypes.AddUnique(NewType);
+			Registry.RegisteredPayloadTypes.AddUnique(NewType);
 		}
 
 		if (bIsUserDefined)
 		{
-			RegisteredUserDefinedTypes.AddUnique(NewType);
+			Registry.RegisteredUserDefinedTypes.AddUnique(NewType);
 		}
 
 		if (FNiagaraTypeDefinition::IsValidNumericInput(NewType))
 		{
-			RegisteredNumericTypes.AddUnique(NewType);
+			Registry.RegisteredNumericTypes.AddUnique(NewType);
 		}
 	}
 
-	static void Deregister(const FNiagaraTypeDefinition& Type)
+	static int32 RegisterIndexed(const FNiagaraTypeDefinition& NewType)
 	{
-		RegisteredTypes.Remove(Type);
-		RegisteredParamTypes.Remove(Type);
-		RegisteredPayloadTypes.Remove(Type);
-		RegisteredUserDefinedTypes.Remove(Type);
-		RegisteredNumericTypes.Remove(Type);
-	}
+		FNiagaraTypeRegistry& Registry = Get();
 
-	FNiagaraTypeDefinition GetTypeDefFromStruct(UStruct* Struct)
-	{
-		for (FNiagaraTypeDefinition& TypeDef : RegisteredTypes)
 		{
-			if (Struct == TypeDef.GetStruct())
+			FReadScopeLock Lock(Registry.RegisteredTypesLock);
+			const uint32 TypeHash = GetTypeHash(NewType);
+			if (const int32* ExistingIndex = Registry.RegisteredTypeIndexMap.Find(TypeHash))
 			{
-				return TypeDef;
+				return *ExistingIndex;
 			}
 		}
 
-		return FNiagaraTypeDefinition();
+		FRWScopeLock Lock(Registry.RegisteredTypesLock, FRWScopeLockType::SLT_Write);
+		const int32 Index = Registry.RegisteredTypes.AddUnique(NewType);
+		Registry.RegisteredTypeIndexMap.Add(GetTypeHash(NewType), Index);
+		return Index;
+	}
+
+	/** LazySingleton interface */
+	static FNiagaraTypeRegistry& Get();
+	static void TearDown();
+
+	/** FGCObject interface */
+	virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
+	virtual FString GetReferencerName() const;
+
+private:
+	RegisteredTypesArray RegisteredTypes;
+
+	TArray<FNiagaraTypeDefinition> RegisteredParamTypes;
+	TArray<FNiagaraTypeDefinition> RegisteredPayloadTypes;
+	TArray<FNiagaraTypeDefinition> RegisteredUserDefinedTypes;
+	TArray<FNiagaraTypeDefinition> RegisteredNumericTypes;
+
+	TMap<uint32, int32> RegisteredTypeIndexMap;
+	FRWLock RegisteredTypesLock;
+};
+
+USTRUCT()
+struct FNiagaraTypeDefinitionHandle
+{
+	GENERATED_USTRUCT_BODY()
+
+	FNiagaraTypeDefinitionHandle() : RegisteredTypeIndex(INDEX_NONE) {}
+	explicit FNiagaraTypeDefinitionHandle(const FNiagaraTypeDefinition& Type) : RegisteredTypeIndex(Register(Type)) {}
+	explicit FNiagaraTypeDefinitionHandle(const FNiagaraTypeDefinitionHandle& Handle) : RegisteredTypeIndex(Handle.RegisteredTypeIndex) {}
+
+	const FNiagaraTypeDefinition& operator*() const { return Resolve(); }
+	const FNiagaraTypeDefinition* operator->() const { return &Resolve(); }
+
+	bool operator==(const FNiagaraTypeDefinitionHandle& Other) const
+	{
+		return RegisteredTypeIndex == Other.RegisteredTypeIndex;
+	}
+	bool operator!=(const FNiagaraTypeDefinitionHandle& Other) const
+	{
+		return RegisteredTypeIndex != Other.RegisteredTypeIndex;
+	}
+
+	bool AppendCompileHash(FNiagaraCompileHashVisitor* InVisitor) const
+	{
+		return Resolve().AppendCompileHash(InVisitor);
 	}
 
 private:
-	static TArray<FNiagaraTypeDefinition> RegisteredTypes;
-	static TArray<FNiagaraTypeDefinition> RegisteredParamTypes;
-	static TArray<FNiagaraTypeDefinition> RegisteredPayloadTypes;
-	static TArray<FNiagaraTypeDefinition> RegisteredUserDefinedTypes;
-	static TArray<FNiagaraTypeDefinition> RegisteredNumericTypes;
-};
+	friend FArchive& operator<<(FArchive& Ar, FNiagaraTypeDefinitionHandle& Handle);
 
-FORCEINLINE uint32 GetTypeHash(const FNiagaraTypeDefinition& Type)
-{
-	return HashCombine(GetTypeHash(Type.GetStruct()), GetTypeHash(Type.GetEnum()));
-}
+	NIAGARA_API const FNiagaraTypeDefinition& Resolve() const;
+	NIAGARA_API int32 Register(const FNiagaraTypeDefinition& TypeDef) const;
+
+	UPROPERTY()
+	int32 RegisteredTypeIndex = INDEX_NONE;
+};
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -1196,14 +1332,34 @@ struct FNiagaraVariableBase
 {
 	GENERATED_USTRUCT_BODY()
 
-	FORCEINLINE FNiagaraVariableBase() : Name(NAME_None), TypeDef(FNiagaraTypeDefinition::GetVec4Def()) { }
-	FORCEINLINE FNiagaraVariableBase(const FNiagaraVariableBase &Other) : Name(Other.Name), TypeDef(Other.TypeDef) { }
-	FORCEINLINE FNiagaraVariableBase(const FNiagaraTypeDefinition& InType, const FName& InName) : Name(InName), TypeDef(InType) { }
+	FORCEINLINE FNiagaraVariableBase()
+		: Name(NAME_None)
+		, TypeDefHandle(FNiagaraTypeDefinition::GetVec4Def())
+#if WITH_EDITORONLY_DATA
+		, TypeDef_DEPRECATED(FNiagaraTypeDefinition::GetVec4Def())
+#endif
+		{}
+
+	FORCEINLINE FNiagaraVariableBase(const FNiagaraVariableBase &Other)
+		: Name(Other.Name)
+		, TypeDefHandle(Other.TypeDefHandle)
+#if WITH_EDITORONLY_DATA
+		, TypeDef_DEPRECATED(Other.TypeDef_DEPRECATED)
+#endif
+		{}
+
+	FORCEINLINE FNiagaraVariableBase(const FNiagaraTypeDefinition& InType, const FName& InName)
+		: Name(InName)
+		, TypeDefHandle(InType)
+#if WITH_EDITORONLY_DATA
+		, TypeDef_DEPRECATED(InType)
+#endif
+		{}
 	
 	/** Check if Name and Type definition are the same. The actual stored value is not checked here.*/
 	bool operator==(const FNiagaraVariableBase& Other)const
 	{
-		return Name == Other.Name && TypeDef == Other.TypeDef;
+		return Name == Other.Name && TypeDefHandle == Other.TypeDefHandle;
 	}
 
 	/** Check if Name and Type definition are not the same. The actual stored value is not checked here.*/
@@ -1215,31 +1371,43 @@ struct FNiagaraVariableBase
 	/** Variables are the same name but if types are auto-assignable, allow them to match. */
 	bool IsEquivalent(const FNiagaraVariableBase& Other, bool bAllowAssignableTypes = true)const
 	{
-		return Name == Other.Name && (TypeDef == Other.TypeDef || (bAllowAssignableTypes && FNiagaraTypeDefinition::TypesAreAssignable(TypeDef, Other.TypeDef)));
+		return Name == Other.Name && (TypeDefHandle == Other.TypeDefHandle || (bAllowAssignableTypes && FNiagaraTypeDefinition::TypesAreAssignable(*TypeDefHandle, *Other.TypeDefHandle)));
 	}
 	
-	FORCEINLINE void SetName(FName InName) { Name = InName; }
-	FORCEINLINE const FName& GetName() const { return Name; }
+	FORCEINLINE void SetName(FName InName)
+	{
+		Name = InName;
+	}
+	FORCEINLINE const FName& GetName() const
+	{
+		return Name;
+	}
 
-	void SetType(const FNiagaraTypeDefinition& InTypeDef) { TypeDef = InTypeDef; }
-	const FNiagaraTypeDefinition& GetType()const { return TypeDef; }
+	void SetType(const FNiagaraTypeDefinition& InTypeDef)
+	{
+		TypeDefHandle = FNiagaraTypeDefinitionHandle(InTypeDef);
+	}
+	const FNiagaraTypeDefinition& GetType()const
+	{
+		return *TypeDefHandle;
+	}
 
 	FORCEINLINE bool IsDataInterface()const { return GetType().IsDataInterface(); }
 	FORCEINLINE bool IsUObject()const { return GetType().IsUObject(); }
 
 	int32 GetSizeInBytes() const
 	{
-		return TypeDef.GetSize();
+		return TypeDefHandle->GetSize();
 	}
 
 	int32 GetAlignment()const
 	{
-		return TypeDef.GetAlignment();
+		return TypeDefHandle->GetAlignment();
 	}
 
 	bool IsValid() const
 	{
-		return Name != NAME_None && TypeDef.IsValid();
+		return Name != NAME_None && TypeDefHandle->IsValid();
 	}
 
 	FORCEINLINE bool IsInNameSpace(FString Namespace) const
@@ -1247,12 +1415,39 @@ struct FNiagaraVariableBase
 		return Name.ToString().StartsWith(Namespace + TEXT("."));
 	}
 
+	FORCEINLINE bool IsInNameSpace(const FName& Namespace) const
+	{
+		return Name.ToString().StartsWith(Namespace.ToString() + TEXT("."));
+	}
+
+	bool Serialize(FArchive& Ar);
+#if WITH_EDITORONLY_DATA
+	void PostSerialize(const FArchive& Ar);
+#endif
+
 protected:
 	UPROPERTY(EditAnywhere, Category = "Variable")
 	FName Name;
 
 	UPROPERTY(EditAnywhere, Category = "Variable")
-	FNiagaraTypeDefinition TypeDef;
+	FNiagaraTypeDefinitionHandle TypeDefHandle;
+
+#if WITH_EDITORONLY_DATA
+	UPROPERTY(meta = (DeprecatedProperty))
+	FNiagaraTypeDefinition TypeDef_DEPRECATED;
+#endif
+};
+
+template<>
+struct TStructOpsTypeTraits<FNiagaraVariableBase> : public TStructOpsTypeTraitsBase2<FNiagaraVariableBase>
+{
+	enum
+	{
+		WithSerializer = true,
+#if WITH_EDITORONLY_DATA
+		WithPostSerialize = true,
+#endif
+	};
 };
 
 FORCEINLINE uint32 GetTypeHash(const FNiagaraVariableBase& Var)
@@ -1272,7 +1467,7 @@ struct FNiagaraVariable : public FNiagaraVariableBase
 	FNiagaraVariable(const FNiagaraVariable &Other)
 		: FNiagaraVariableBase(Other)
 	{
-		if (Other.TypeDef.IsValid() && Other.IsDataAllocated())
+		if (Other.GetType().IsValid() && Other.IsDataAllocated())
 		{
 			SetData(Other.GetData());
 		}
@@ -1292,7 +1487,7 @@ struct FNiagaraVariable : public FNiagaraVariableBase
 	bool operator==(const FNiagaraVariable& Other)const
 	{
 		//-TODO: Should this check the value???
-		return Name == Other.Name && TypeDef == Other.TypeDef;
+		return Name == Other.Name && TypeDefHandle == Other.TypeDefHandle;
 	}
 
 	/** Check if Name and Type definition are not the same. The actual stored value is not checked here.*/
@@ -1304,7 +1499,7 @@ struct FNiagaraVariable : public FNiagaraVariableBase
 	/** Checks if the types match and either both variables are uninitialized or both hold exactly the same data.*/
 	bool HoldsSameData(const FNiagaraVariable& Other) const
 	{
-		if (TypeDef != Other.TypeDef) {
+		if (TypeDefHandle != Other.TypeDefHandle) {
 			return false;
 		}
 		if (!IsDataAllocated() && !Other.IsDataAllocated()) {
@@ -1316,17 +1511,20 @@ struct FNiagaraVariable : public FNiagaraVariableBase
 	// Var data operations
 	void AllocateData()
 	{
-		if (VarData.Num() != TypeDef.GetSize())
+		if (VarData.Num() != TypeDefHandle->GetSize())
 		{
-			VarData.SetNumZeroed(TypeDef.GetSize());
+			VarData.SetNumZeroed(TypeDefHandle->GetSize());
 		}
 	}
 
-	bool IsDataAllocated()const { return VarData.Num() > 0 && VarData.Num() == TypeDef.GetSize(); }
+	bool IsDataAllocated() const
+	{
+		return VarData.Num() > 0 && VarData.Num() == TypeDefHandle->GetSize();
+	}
 
 	void CopyTo(uint8* Dest) const
 	{
-		check(TypeDef.GetSize() == VarData.Num());
+		check(TypeDefHandle->GetSize() == VarData.Num());
 		check(IsDataAllocated());
 		FMemory::Memcpy(Dest, VarData.GetData(), VarData.Num());
 	}
@@ -1334,7 +1532,7 @@ struct FNiagaraVariable : public FNiagaraVariableBase
 	template<typename T>
 	void SetValue(const T& Data)
 	{
-		check(sizeof(T) == TypeDef.GetSize());
+		check(sizeof(T) == TypeDefHandle->GetSize());
 		AllocateData();
 		FMemory::Memcpy(VarData.GetData(), &Data, VarData.Num());
 	}
@@ -1342,10 +1540,10 @@ struct FNiagaraVariable : public FNiagaraVariableBase
 	template<typename T>
 	T GetValue() const
 	{
-		check(sizeof(T) == TypeDef.GetSize());
+		check(sizeof(T) == TypeDefHandle->GetSize());
 		check(IsDataAllocated());
 		T Value;
-		FMemory::Memcpy(&Value, GetData(), TypeDef.GetSize());
+		FMemory::Memcpy(&Value, GetData(), TypeDefHandle->GetSize());
 		return Value;
 	}
 
@@ -1379,37 +1577,12 @@ struct FNiagaraVariable : public FNiagaraVariableBase
 	FString ToString()const
 	{
 		FString Ret = Name.ToString() + TEXT("(");
-		Ret += TypeDef.ToString(VarData.GetData());
+		Ret += TypeDefHandle->ToString(VarData.GetData());
 		Ret += TEXT(")");
 		return Ret;
 	}
 
-	static FNiagaraVariable ResolveAliases(const FNiagaraVariable& InVar, const TMap<FString, FString>& InAliases, const TCHAR* InJoinSeparator = TEXT("."))
-	{
-		FNiagaraVariable OutVar = InVar;
-
-		FString OutVarStrName = InVar.GetName().ToString();
-		TArray<FString> SplitName;
-		OutVarStrName.ParseIntoArray(SplitName, TEXT("."));
-
-		for (int32 i = 0; i < SplitName.Num() - 1; i++)
-		{
-			TMap<FString, FString>::TConstIterator It = InAliases.CreateConstIterator();
-			while (It)
-			{
-				if (SplitName[i].Equals(It.Key()))
-				{
-					SplitName[i] = It.Value();
-				}
-				++It;
-			}
-		}
-
-		OutVarStrName = FString::Join(SplitName, InJoinSeparator);
-
-		OutVar.SetName(*OutVarStrName);
-		return OutVar;
-	}
+	static NIAGARA_API FNiagaraVariable ResolveAliases(const FNiagaraVariable& InVar, const TMap<FString, FString>& InAliases, const TMap<FString, FString>& InStartOnlyAliases = TMap<FString, FString>(), const TCHAR* InJoinSeparator = TEXT("."));
 
 	static int32 SearchArrayForPartialNameMatch(const TArray<FNiagaraVariable>& Variables, const FName& VariableName)
 	{
@@ -1435,6 +1608,11 @@ struct FNiagaraVariable : public FNiagaraVariableBase
 		return BestMatchIdx;
 	}
 
+	bool Serialize(FArchive& Ar);
+#if WITH_EDITORONLY_DATA
+	void PostSerialize(const FArchive& Ar);
+#endif
+
 private:
 	//This gets serialized but do we need to worry about endianness doing things like this? If not, where does that get handled?
 	//TODO: Remove storage here entirely and move everything to an FNiagaraParameterStore.
@@ -1443,9 +1621,21 @@ private:
 };
 
 template<>
+struct TStructOpsTypeTraits<FNiagaraVariable> : public TStructOpsTypeTraitsBase2<FNiagaraVariable>
+{
+	enum
+	{
+		WithSerializer = true,
+#if WITH_EDITORONLY_DATA
+		WithPostSerialize = true,
+#endif
+	};
+};
+
+template<>
 inline bool FNiagaraVariable::GetValue<bool>() const
 {
-	check(TypeDef == FNiagaraTypeDefinition::GetBoolDef());
+	check(*TypeDefHandle == FNiagaraTypeDefinition::GetBoolDef());
 	check(IsDataAllocated());
 	FNiagaraBool* BoolStruct = (FNiagaraBool*)GetData();
 	return BoolStruct->GetValue();
@@ -1454,7 +1644,7 @@ inline bool FNiagaraVariable::GetValue<bool>() const
 template<>
 inline void FNiagaraVariable::SetValue<bool>(const bool& Data)
 {
-	check(TypeDef == FNiagaraTypeDefinition::GetBoolDef());
+	check(*TypeDefHandle == FNiagaraTypeDefinition::GetBoolDef());
 	AllocateData();
 	FNiagaraBool* BoolStruct = (FNiagaraBool*)GetData();
 	BoolStruct->SetValue(Data);
@@ -1462,6 +1652,7 @@ inline void FNiagaraVariable::SetValue<bool>(const bool& Data)
 
 // Any change to this structure, or it's GetVariables implementation will require a bump in the CustomNiagaraVersion so that we
 // properly rebuild the scripts
+// You must pad this struct and the results of GetVariables() to a 16 byte boundry.
 struct alignas(16) FNiagaraGlobalParameters
 {
 #if WITH_EDITOR
@@ -1472,10 +1663,16 @@ struct alignas(16) FNiagaraGlobalParameters
 	float EngineInvDeltaTime = 0.0f;
 	float EngineTime = 0.0f;
 	float EngineRealTime = 0.0f;
+	int32 QualityLevel = 0;
+
+	int32 _Pad0;
+	int32 _Pad1;
+	int32 _Pad2;
 };
 
 // Any change to this structure, or it's GetVariables implementation will require a bump in the CustomNiagaraVersion so that we
 // properly rebuild the scripts
+// You must pad this struct and the results of GetVariables() to a 16 byte boundry.
 struct alignas(16) FNiagaraSystemParameters
 {
 #if WITH_EDITOR
@@ -1490,10 +1687,16 @@ struct alignas(16) FNiagaraSystemParameters
 	int32 EngineTickCount = 0;
 	int32 EngineEmitterCount = 0;
 	int32 EngineAliveEmitterCount = 0;
+	int32 SignificanceIndex = 0;
+
+	int32 _Pad0;
+	int32 _Pad1;
+	int32 _Pad2;
 };
 
 // Any change to this structure, or it's GetVariables implementation will require a bump in the CustomNiagaraVersion so that we
 // properly rebuild the scripts
+// You must pad this struct and the results of GetVariables() to a 16 byte boundry.
 struct alignas(16) FNiagaraOwnerParameters
 {
 #if WITH_EDITOR
@@ -1517,6 +1720,7 @@ struct alignas(16) FNiagaraOwnerParameters
 
 // Any change to this structure, or it's GetVariables implementation will require a bump in the CustomNiagaraVersion so that we
 // properly rebuild the scripts
+// You must pad this struct and the results of GetVariables() to a 16 byte boundry.
 struct alignas(16) FNiagaraEmitterParameters
 {
 #if WITH_EDITOR
@@ -1528,9 +1732,9 @@ struct alignas(16) FNiagaraEmitterParameters
 	float EmitterSpawnCountScale = 1.0f;
 	float EmitterAge = 0.0f;
 	int32 EmitterRandomSeed = 0;
+	int32 EmitterInstanceSeed = 0;
 
 	// todo - what else should be inserted here?  we could put an array of spawninfos/interp spawn values
 	int32 _Pad0;
 	int32 _Pad1;
-	int32 _Pad2;
 };

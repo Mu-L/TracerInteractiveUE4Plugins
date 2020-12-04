@@ -142,10 +142,8 @@ static void FD3D11DumpLiveObjects()
 {
 	if (D3D11RHI_ShouldCreateWithD3DDebug())
 	{
-		FD3D11DynamicRHI* D3DRHI = (FD3D11DynamicRHI*)GDynamicRHI;
-
 		TRefCountPtr<ID3D11Debug> DebugDevice = nullptr;
-		VERIFYD3D11RESULT_EX(D3DRHI->GetDevice()->QueryInterface(__uuidof(ID3D11Debug), (void**)DebugDevice.GetInitReference()), D3DRHI->GetDevice());
+		VERIFYD3D11RESULT_EX(GD3D11RHI->GetDevice()->QueryInterface(__uuidof(ID3D11Debug), (void**)DebugDevice.GetInitReference()), GD3D11RHI->GetDevice());
 		if (DebugDevice)
 		{
 			HRESULT HR = DebugDevice->ReportLiveDeviceObjects(D3D11_RLDO_SUMMARY|D3D11_RLDO_DETAIL);
@@ -194,13 +192,12 @@ static FCreateDXGIFactory2 CreateDXGIFactory2FnPtr = nullptr;
  * doesn't have VistaSP2/DX10, calling CreateDXGIFactory1 will throw an exception.
  * We use SEH to detect that case and fail gracefully.
  */
-static void SafeCreateDXGIFactory(IDXGIFactory1** DXGIFactory1, bool bWithDebug)
+static void SafeCreateDXGIFactory(IDXGIFactory1** DXGIFactory1)
 {
 #if !defined(D3D11_CUSTOM_VIEWPORT_CONSTRUCTOR) || !D3D11_CUSTOM_VIEWPORT_CONSTRUCTOR
 	__try
 	{
-		bool bQuadBufferStereoRequested = FParse::Param(FCommandLine::Get(), TEXT("quad_buffer_stereo"));
-		if (bQuadBufferStereoRequested || bWithDebug)
+		if (FParse::Param(FCommandLine::Get(), TEXT("quad_buffer_stereo")))
 		{
 			// CreateDXGIFactory2 is only available on Win8.1+, find it if it exists
 			HMODULE DxgiDLL = (HMODULE)FPlatformProcess::GetDllHandle(TEXT("dxgi.dll"));
@@ -212,25 +209,20 @@ static void SafeCreateDXGIFactory(IDXGIFactory1** DXGIFactory1, bool bWithDebug)
 #pragma warning(pop)
 				FPlatformProcess::FreeDllHandle(DxgiDLL);
 			}
-
-			if (bQuadBufferStereoRequested)
+			if (CreateDXGIFactory2FnPtr)
 			{
-				if (CreateDXGIFactory2FnPtr)
-				{
-					bIsQuadBufferStereoEnabled = true;
-				}
-				else
-				{
-					UE_LOG(LogD3D11RHI, Warning, TEXT("Win8.1 or above ir required for quad_buffer_stereo support."));
-				}
+				bIsQuadBufferStereoEnabled = true;
+			}
+			else
+			{
+				UE_LOG(LogD3D11RHI, Warning, TEXT("Win8.1 or above ir required for quad_buffer_stereo support."));
 			}
 		}
 
-		// IDXGIFactory2 required for dx11.1 active stereo and DXGI debug (dxgi1.3)
-		if (CreateDXGIFactory2FnPtr)
+		// IDXGIFactory2 required for dx11.1 active stereo (dxgi1.2)
+		if (bIsQuadBufferStereoEnabled && CreateDXGIFactory2FnPtr)
 		{
-			uint32 Flags = bWithDebug ? DXGI_CREATE_FACTORY_DEBUG : 0;
-			CreateDXGIFactory2FnPtr(Flags, __uuidof(IDXGIFactory2), (void**)DXGIFactory1);
+			CreateDXGIFactory2FnPtr(0, __uuidof(IDXGIFactory2), (void**)DXGIFactory1);
 		}
 		else
 		{
@@ -656,7 +648,7 @@ static bool SupportsHDROutput(FD3D11DynamicRHI* D3DRHI)
 			for (uint16 AMDDeviceIndex = 0; AMDDeviceIndex < AmdInfo.AmdGpuInfo.numDevices; ++AMDDeviceIndex)
 			{
 				const AGSDeviceInfo& DeviceInfo = AmdInfo.AmdGpuInfo.devices[AMDDeviceIndex];
-				for (uint16 AMDDisplayIndex = 0; AMDDisplayIndex < DeviceInfo.numDisplays; ++AMDDisplayIndex)
+				for (uint16 AMDDisplayIndex = 0; DeviceInfo.displays != nullptr && AMDDisplayIndex < DeviceInfo.numDisplays; ++AMDDisplayIndex)
 				{
 					const AGSDisplayInfo& DisplayInfo = DeviceInfo.displays[AMDDisplayIndex];
 					if (FCStringAnsi::Strcmp(TCHAR_TO_ANSI(OutputDesc.DeviceName), DisplayInfo.displayDeviceName) == 0)
@@ -842,7 +834,7 @@ void FD3D11DynamicRHIModule::FindAdapter()
 
 	// Try to create the DXGIFactory1.  This will fail if we're not running Vista SP2 or higher.
 	TRefCountPtr<IDXGIFactory1> DXGIFactory1;
-	SafeCreateDXGIFactory(DXGIFactory1.GetInitReference(), D3D11RHI_ShouldCreateWithD3DDebug());
+	SafeCreateDXGIFactory(DXGIFactory1.GetInitReference());
 	if(!DXGIFactory1)
 	{
 		return;
@@ -951,7 +943,18 @@ void FD3D11DynamicRHIModule::FindAdapter()
 				if(bIsNVIDIA) bIsAnyNVIDIA = true;
 
 				// Simple heuristic but without profiling it's hard to do better
-				const bool bIsIntegrated = bIsIntel;
+				bool bIsNonLocalMemoryPresent = false;
+				if (bIsIntel)
+				{
+					TRefCountPtr<IDXGIAdapter3> TempDxgiAdapter3;
+					DXGI_QUERY_VIDEO_MEMORY_INFO NonLocalVideoMemoryInfo;
+					if (SUCCEEDED(TempAdapter->QueryInterface(_uuidof(IDXGIAdapter3), (void**)TempDxgiAdapter3.GetInitReference())) &&
+						TempDxgiAdapter3.IsValid() && SUCCEEDED(TempDxgiAdapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &NonLocalVideoMemoryInfo)))
+					{
+						bIsNonLocalMemoryPresent = NonLocalVideoMemoryInfo.Budget != 0;
+					}
+				}
+				const bool bIsIntegrated = bIsIntel && !bIsNonLocalMemoryPresent;
 				// PerfHUD is for performance profiling
 				const bool bIsPerfHUD = !FCString::Stricmp(AdapterDesc.Description,TEXT("NVIDIA PerfHUD"));
 
@@ -1006,7 +1009,7 @@ void FD3D11DynamicRHIModule::FindAdapter()
 		}
 	}
 
-	if(bFavorNonIntegrated && (bIsAnyAMD || bIsAnyNVIDIA))
+	if(bFavorNonIntegrated)
 	{
 		ChosenAdapter = FirstWithoutIntegratedAdapter;
 
@@ -1040,24 +1043,20 @@ FDynamicRHI* FD3D11DynamicRHIModule::CreateRHI(ERHIFeatureLevel::Type RequestedF
 #endif
 
 	TRefCountPtr<IDXGIFactory1> DXGIFactory1;
-	SafeCreateDXGIFactory(DXGIFactory1.GetInitReference(), D3D11RHI_ShouldCreateWithD3DDebug());
+	SafeCreateDXGIFactory(DXGIFactory1.GetInitReference());
 	check(DXGIFactory1);
 
 	GD3D11RHI = new FD3D11DynamicRHI(DXGIFactory1,ChosenAdapter.MaxSupportedFeatureLevel,ChosenAdapter.AdapterIndex,ChosenDescription);
+	FDynamicRHI* FinalRHI = GD3D11RHI;
+
 #if ENABLE_RHI_VALIDATION
 	if (FParse::Param(FCommandLine::Get(), TEXT("RHIValidation")))
 	{
-		GValidationRHI = new FValidationRHI(GD3D11RHI);
+		FinalRHI = new FValidationRHI(FinalRHI);
 	}
-	else
-	{
-		check(!GValidationRHI);
-	}
-
-	return GValidationRHI ? (FDynamicRHI*)GValidationRHI : (FDynamicRHI*)GD3D11RHI;
-#else
-	return GD3D11RHI;
 #endif
+
+	return FinalRHI;
 }
 
 void FD3D11DynamicRHI::Init()
@@ -2063,8 +2062,13 @@ void FD3D11DynamicRHI::InitD3DDevice()
 		GRHISupportsFirstInstance = true;
 		GRHINeedsExtraDeletionLatency = false;
 
-		GRHICommandList.GetImmediateCommandList().SetContext(RHIGetDefaultContext());
-		GRHICommandList.GetImmediateAsyncComputeCommandList().SetComputeContext(RHIGetDefaultAsyncComputeContext());
+		// Command lists need the validation RHI context if enabled, so call the global scope version of RHIGetDefaultContext() and RHIGetDefaultAsyncComputeContext().
+		GRHICommandList.GetImmediateCommandList().SetContext(::RHIGetDefaultContext());
+		GRHICommandList.GetImmediateAsyncComputeCommandList().SetComputeContext(::RHIGetDefaultAsyncComputeContext());
+
+		// Now that the driver extensions have been initialized, turn on UAV overlap for the first time.
+		EnableUAVOverlap();
+
 		FRenderResource::InitPreRHIResources();
 		GIsRHIInitialized = true;
 	}
@@ -2156,6 +2160,7 @@ bool FD3D11DynamicRHI::RHIGetAvailableResolutions(FScreenResolutionArray& Resolu
 		//  We might want to work around some DXGI badness here.
 		const DXGI_FORMAT DisplayFormats[] = {DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM};
 		DXGI_FORMAT Format = DisplayFormats[0];
+		bool bFoundValidResult = false;
 		uint32 NumModes = 0;	
 
 		for (DXGI_FORMAT CurrentFormat : DisplayFormats)
@@ -2185,13 +2190,36 @@ bool FD3D11DynamicRHI::RHIGetAvailableResolutions(FScreenResolutionArray& Resolu
 					return false;
 				}
 			}
-			else if(NumModes)
+			else
 			{
-				Format = CurrentFormat;
-				break;
+				bFoundValidResult = true;
+				if (NumModes)
+				{
+					Format = CurrentFormat;
+					break;
+				}
 			}
 		}
 
+		// If we couldn't iterate any formats for this output, it might be dead in the driver and there's nothing we can do here except move on.
+		if (!bFoundValidResult)
+		{
+			// Grab diagnostic information from the output, if at all possible.
+			DXGI_OUTPUT_DESC OutputDesc;
+			FMemory::Memzero(OutputDesc);
+			HRESULT OutputDescRes = Output->GetDesc(&OutputDesc);
+
+			UE_LOG(LogD3D11RHI, Warning,
+				TEXT("RHIGetAvailableResolutions could not get any display modes from output %i (D:%i) (Res:'%s'(0x%08X)"),
+				CurrentOutput,
+				OutputDesc.AttachedToDesktop,
+				*GetD3D11ErrorString(OutputDescRes, GetDevice()), OutputDescRes);
+
+			++CurrentOutput;
+			continue;
+		}
+
+		// It's still invalid to "succeed" and be given no modes.
 		checkf(NumModes > 0, TEXT("No display modes found for DXGI_FORMAT_R8G8B8A8_UNORM or DXGI_FORMAT_B8G8R8A8_UNORM formats!"));
 
 		DXGI_MODE_DESC* ModeList = new DXGI_MODE_DESC[ NumModes ];

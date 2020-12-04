@@ -23,6 +23,7 @@ namespace EMeshPass
 	{
 		DepthPass,
 		BasePass,
+		AnisotropyPass,
 		SkyPass,
 		SingleLayerWaterPass,
 		CSMShadowDepth,
@@ -39,6 +40,7 @@ namespace EMeshPass
 		MobileBasePassCSM,  /** Mobile base pass with CSM shading enabled */
 		MobileInverseOpacity,  /** Mobile specific scene capture, Non-cached */
 		VirtualTexture,
+		DitheredLODFadingOutMaskPass, /** A mini depth pass used to mark pixels with dithered LOD fading out. Currently only used by ray tracing shadows. */
 
 #if WITH_EDITOR
 		HitProxy,
@@ -58,6 +60,7 @@ inline const TCHAR* GetMeshPassName(EMeshPass::Type MeshPass)
 	{
 	case EMeshPass::DepthPass: return TEXT("DepthPass");
 	case EMeshPass::BasePass: return TEXT("BasePass");
+	case EMeshPass::AnisotropyPass: return TEXT("AnisotropyPass");
 	case EMeshPass::SkyPass: return TEXT("SkyPass");
 	case EMeshPass::SingleLayerWaterPass: return TEXT("SingleLayerWaterPass");
 	case EMeshPass::CSMShadowDepth: return TEXT("CSMShadowDepth");
@@ -205,7 +208,7 @@ class FGraphicsMinimalPipelineStateInitializer
 public:
 	// Can't use TEnumByte<EPixelFormat> as it changes the struct to be non trivially constructible, breaking memset
 	using TRenderTargetFormats = TStaticArray<uint8/*EPixelFormat*/, MaxSimultaneousRenderTargets>;
-	using TRenderTargetFlags = TStaticArray<uint32, MaxSimultaneousRenderTargets>;
+	using TRenderTargetFlags = TStaticArray<uint32/*ETextureCreateFlags*/, MaxSimultaneousRenderTargets>;
 
 	FGraphicsMinimalPipelineStateInitializer()
 		: BlendState(nullptr)
@@ -241,6 +244,7 @@ public:
 		, DepthStencilState(InMinimalState.DepthStencilState)
 		, ImmutableSamplerState(InMinimalState.ImmutableSamplerState)
 		, bDepthBounds(InMinimalState.bDepthBounds)
+		, DrawShadingRate(InMinimalState.DrawShadingRate)
 		, PrimitiveType(InMinimalState.PrimitiveType)
 	{
 	}
@@ -258,7 +262,7 @@ public:
 			, FGraphicsPipelineStateInitializer::TRenderTargetFormats(PF_Unknown)
 			, FGraphicsPipelineStateInitializer::TRenderTargetFlags(0)
 			, PF_Unknown
-			, 0
+			, TexCreate_None
 			, ERenderTargetLoadAction::ENoAction
 			, ERenderTargetStoreAction::ENoAction
 			, ERenderTargetLoadAction::ENoAction
@@ -269,8 +273,9 @@ public:
 			, 0
 			, 0
 			, bDepthBounds
-			, bMultiView
+			, MultiViewCount
 			, bHasFragmentDensityAttachment
+			, DrawShadingRate
 		);
 	}
 
@@ -296,8 +301,9 @@ public:
 			DepthStencilState != rhs.DepthStencilState ||
 			ImmutableSamplerState != rhs.ImmutableSamplerState ||
 			bDepthBounds != rhs.bDepthBounds ||
-			bMultiView != rhs.bMultiView ||
+			MultiViewCount != rhs.MultiViewCount ||
 			bHasFragmentDensityAttachment != rhs.bHasFragmentDensityAttachment ||
+			DrawShadingRate != rhs.DrawShadingRate ||
 			PrimitiveType != rhs.PrimitiveType)
 		{
 			return false;
@@ -363,8 +369,9 @@ public:
 			COMPARE_FIELD(RasterizerState)
 			COMPARE_FIELD(DepthStencilState)
 			COMPARE_FIELD(bDepthBounds)
-			COMPARE_FIELD(bMultiView)
+			COMPARE_FIELD(MultiViewCount)
 			COMPARE_FIELD(bHasFragmentDensityAttachment)
+			COMPARE_FIELD(DrawShadingRate)
 			COMPARE_FIELD(PrimitiveType)
 		COMPARE_FIELD_END;
 
@@ -394,8 +401,9 @@ public:
 			COMPARE_FIELD(RasterizerState)
 			COMPARE_FIELD(DepthStencilState)
 			COMPARE_FIELD(bDepthBounds)
-			COMPARE_FIELD(bMultiView)
+			COMPARE_FIELD(MultiViewCount)
 			COMPARE_FIELD(bHasFragmentDensityAttachment)
+			COMPARE_FIELD(DrawShadingRate)
 			COMPARE_FIELD(PrimitiveType)
 			COMPARE_FIELD_END;
 
@@ -418,9 +426,9 @@ public:
 	// as it is sometimes hashed and compared as raw bytes. Explicit padding is therefore required between
 	// all data members and at the end of the structure.
 	bool							bDepthBounds = false;
-	bool							bMultiView = false;
+	uint8							MultiViewCount = 0;
 	bool							bHasFragmentDensityAttachment = false;
-	uint8							Padding[1] = {};
+	EVRSShadingRate					DrawShadingRate  = EVRSShadingRate::VRSSR_1x1;
 
 	EPrimitiveType			PrimitiveType;
 };
@@ -534,6 +542,23 @@ private:
 	static bool NeedsShaderInitialisation;
 };
 
+class FShaderBindingState
+{
+	enum { MAX_SRVS_PER_STAGE = 128 };
+	enum { MAX_UNIFORM_BUFFERS_PER_STAGE = 14 };
+	enum { MAX_SAMPLERS_PER_STAGE = 32 };
+
+public:
+	int32 MaxSRVUsed = -1;
+	FRHIShaderResourceView* SRVs[MAX_SRVS_PER_STAGE] = {};
+	int32 MaxUniformBufferUsed = -1;
+	FRHIUniformBuffer* UniformBuffers[MAX_UNIFORM_BUFFERS_PER_STAGE] = {};
+	int32 MaxTextureUsed = -1;
+	FRHITexture* Textures[MAX_SRVS_PER_STAGE] = {};
+	int32 MaxSamplerUsed = -1;
+	FRHISamplerState* Samplers[MAX_SAMPLERS_PER_STAGE] = {};
+};
+
 struct FMeshProcessorShaders
 {
 	mutable TShaderRef<FMeshMaterialShader> VertexShader;
@@ -598,12 +623,12 @@ struct FMeshDrawCommandDebugData
 {
 #if MESH_DRAW_COMMAND_DEBUG_DATA
 	const FPrimitiveSceneProxy* PrimitiveSceneProxyIfNotUsingStateBuckets;
-	const FMaterial* Material;
 	const FMaterialRenderProxy* MaterialRenderProxy;
 	TShaderRef<FMeshMaterialShader> VertexShader;
 	TShaderRef<FMeshMaterialShader> PixelShader;
 	const FVertexFactory* VertexFactory;
 	FName ResourceName;
+	FString MaterialName;
 #endif
 };
 
@@ -704,16 +729,16 @@ public:
 
 	/** Set shader bindings on the commandlist, filtered by state cache. */
 	void SetOnCommandList(FRHICommandList& RHICmdList, FBoundShaderStateInput Shaders, class FShaderBindingState* StateCacheShaderBindings) const;
-	void SetOnCommandList(FRHIComputeCommandList& RHICmdList, FRHIComputeShader* Shader) const;
+	void SetOnCommandList(FRHIComputeCommandList& RHICmdList, FRHIComputeShader* Shader, class FShaderBindingState* StateCacheShaderBindings = nullptr) const;
 
 #if RHI_RAYTRACING
-	void SetRayTracingShaderBindingsForHitGroup(FRayTracingLocalShaderBindingWriter* BindingWriter, uint32 InstanceIndex, uint32 SegmentIndex, uint32 HitGroupIndex, uint32 ShaderSlot) const;
+	RENDERER_API void SetRayTracingShaderBindingsForHitGroup(FRayTracingLocalShaderBindingWriter* BindingWriter, uint32 InstanceIndex, uint32 SegmentIndex, uint32 HitGroupIndex, uint32 ShaderSlot) const;
 #endif // RHI_RAYTRACING
 
 	/** Returns whether this set of shader bindings can be merged into an instanced draw call with another. */
-	bool MatchesForDynamicInstancing(const FMeshDrawShaderBindings& Rhs) const;
+	bool RENDERER_API MatchesForDynamicInstancing(const FMeshDrawShaderBindings& Rhs) const;
 
-	uint32 GetDynamicInstancingHash() const;
+	uint32 RENDERER_API GetDynamicInstancingHash() const;
 
 	SIZE_T GetAllocatedSize() const
 	{
@@ -1383,7 +1408,7 @@ struct FMeshPassProcessorRenderState
 	{
 	}
 
-	FMeshPassProcessorRenderState(const TUniformBufferRef<FViewUniformShaderParameters>& InViewUniformBuffer, FRHIUniformBuffer* InPassUniformBuffer) :
+	FMeshPassProcessorRenderState(const TUniformBufferRef<FViewUniformShaderParameters>& InViewUniformBuffer, FRHIUniformBuffer* InPassUniformBuffer = nullptr) :
 		  BlendState(nullptr)
 		, DepthStencilState(nullptr)
 		, DepthStencilAccess(FExclusiveDepthStencil::DepthRead_StencilRead)
@@ -1699,15 +1724,15 @@ inline FMeshDrawCommandSortKey CalculateMeshStaticSortKey(const TShaderRef<FMesh
 	return CalculateMeshStaticSortKey(VertexShader.GetShader(), PixelShader.GetShader());
 }
 
-#if RHI_RAYTRACING
 class FRayTracingMeshCommand
 {
 public:
 	FMeshDrawShaderBindings ShaderBindings;
 
+	FRHIRayTracingShader* MaterialShader = nullptr;
 	uint32 MaterialShaderIndex = UINT_MAX;
 
-	uint8 GeometrySegmentIndex = 0xFF;
+	uint32 GeometrySegmentIndex = ~0u;
 	uint8 InstanceMask = 0xFF;
 
 	bool bCastRayTracedShadows = true;
@@ -1782,7 +1807,7 @@ public:
 	(
 		FDynamicRayTracingMeshCommandStorage& InDynamicCommandStorage,
 		FRayTracingMeshCommandOneFrameArray& InVisibleCommands,
-		uint8 InGeometrySegmentIndex = 0xFF,
+		uint32 InGeometrySegmentIndex = ~0u,
 		uint32 InRayTracingInstanceIndex = ~0u
 	) :
 		DynamicCommandStorage(InDynamicCommandStorage),
@@ -1810,8 +1835,6 @@ public:
 private:
 	FDynamicRayTracingMeshCommandStorage& DynamicCommandStorage;
 	FRayTracingMeshCommandOneFrameArray& VisibleCommands;
-	uint8 GeometrySegmentIndex;
+	uint32 GeometrySegmentIndex;
 	uint32 RayTracingInstanceIndex;
 };
-
-#endif

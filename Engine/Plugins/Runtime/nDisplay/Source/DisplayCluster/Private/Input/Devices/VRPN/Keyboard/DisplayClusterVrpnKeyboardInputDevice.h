@@ -10,6 +10,8 @@
 #include "Windows/HideWindowsPlatformTypes.h"
 #endif
 
+class UDisplayClusterConfigurationInputDeviceKeyboard;
+
 
 /**
  * VRPN button device implementation
@@ -18,7 +20,7 @@ class FDisplayClusterVrpnKeyboardInputDevice
 	: public FDisplayClusterVrpnKeyboardInputDataHolder
 {
 public:
-	FDisplayClusterVrpnKeyboardInputDevice(const FDisplayClusterConfigInput& config);
+	FDisplayClusterVrpnKeyboardInputDevice(const FString& DeviceId, const UDisplayClusterConfigurationInputDeviceKeyboard* CfgDevice);
 	virtual ~FDisplayClusterVrpnKeyboardInputDevice();
 
 public:
@@ -31,7 +33,7 @@ public:
 
 private:
 	// Data update handler
-	static void VRPN_CALLBACK HandleKeyboardDevice(void *userData, vrpn_BUTTONCB const b);
+	static void VRPN_CALLBACK HandleKeyboardDevice(void *UserData, vrpn_BUTTONCB const ButtonData);
 
 private:
 	// The device (PIMPL)

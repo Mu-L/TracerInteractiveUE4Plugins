@@ -33,7 +33,6 @@ public class ModelingOperatorsEditorOnly : ModuleRules
 				"GeometricObjects",
 				"DynamicMesh",
 				"MeshConversion",
-				"MeshSolverUtilities",
 				"GeometryAlgorithms", // required for constrained Delaunay triangulation
                 "ProxyLODMeshReduction", // currently required to be public due to IVoxelBasedCSG API
 				"MeshUtilitiesCommon", // required by uvlayoutop
@@ -51,6 +50,7 @@ public class ModelingOperatorsEditorOnly : ModuleRules
 				"MeshBuilder",
 				"MeshUtilitiesCommon",  
 				"MeshReductionInterface", // for UE4 standard simplification 
+				"MeshUtilities",			// for tangents calculation
 			}
 			);
 		
@@ -61,5 +61,9 @@ public class ModelingOperatorsEditorOnly : ModuleRules
 				// ... add any modules that your module loads dynamically here ...
 			}
 			);
+
+
+		AddEngineThirdPartyPrivateStaticDependencies(Target, "MikkTSpace");
+
 	}
 }

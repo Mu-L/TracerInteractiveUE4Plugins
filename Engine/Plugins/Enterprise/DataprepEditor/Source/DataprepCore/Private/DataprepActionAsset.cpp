@@ -5,7 +5,7 @@
 // Dataprep include
 #include "DataprepAsset.h"
 #include "DataprepCoreLogCategory.h"
-#include "DataprepCorePrivateUtils.h"
+#include "Shared/DataprepCorePrivateUtils.h"
 #include "DataprepCoreUtils.h"
 #include "DataprepOperation.h"
 #include "DataprepParameterizableObject.h"
@@ -28,9 +28,7 @@
 #include "UObject/ObjectMacros.h"
 #include "UObject/UObjectHash.h"
 
-#ifdef WITH_EDITOR
 #include "Editor.h"
-#endif //WITH_EDITOR
 
 void UDataprepActionStep::PostLoad()
 {
@@ -56,6 +54,7 @@ UDataprepActionAsset::UDataprepActionAsset()
 	, Label(TEXT("New Action"))
 {
 	bExecutionInterrupted = false;
+	bIsEnabled = true;
 
 	if(!HasAnyFlags(RF_ClassDefaultObject))
 	{
@@ -74,9 +73,7 @@ UDataprepActionAsset::UDataprepActionAsset()
 
 UDataprepActionAsset::~UDataprepActionAsset()
 {
-#ifdef WITH_EDITOR
 	FEditorDelegates::OnAssetsDeleted.Remove( OnAssetDeletedHandle );
-#endif //WITH_EDITOR
 }
 
 void UDataprepActionAsset::PostTransacted(const FTransactionObjectEvent& TransactionEvent)
@@ -555,6 +552,27 @@ void UDataprepActionAsset::ExecuteAction(const TSharedPtr<FDataprepActionContext
 	check(ContextPtr.IsValid());
 
 	TArray<UObject*>& SelectedObjects = OperationContext->Context->Objects;
+
+	// Make sure cached packages are pointing to the right path, if not reset
+	if (PackageForTexture.IsValid() && !PackageForTexture->GetName().StartsWith(ContextPtr->TransientContentFolder))
+	{
+		PackageForTexture.Reset();
+	}
+
+	if (PackageForMaterial.IsValid() && !PackageForMaterial->GetName().StartsWith(ContextPtr->TransientContentFolder))
+	{
+		PackageForMaterial.Reset();
+	}
+
+	if (PackageForStaticMesh.IsValid() && !PackageForStaticMesh->GetName().StartsWith(ContextPtr->TransientContentFolder))
+	{
+		PackageForStaticMesh.Reset();
+	}
+
+	if (PackageForAnimation.IsValid() && !PackageForAnimation->GetName().StartsWith(ContextPtr->TransientContentFolder))
+	{
+		PackageForAnimation.Reset();
+	}
 
 	// Collect all objects the action to work on
 	SelectedObjects.Empty( ContextPtr->Assets.Num() );

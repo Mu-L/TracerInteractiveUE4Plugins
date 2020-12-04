@@ -620,7 +620,7 @@ void UWidget::InvalidateLayoutAndVolatility()
 	TSharedPtr<SWidget> SafeWidget = GetCachedWidget();
 	if ( SafeWidget.IsValid() )
 	{
-		SafeWidget->Invalidate(EInvalidateWidget::LayoutAndVolatility);
+		SafeWidget->Invalidate(EInvalidateWidgetReason::LayoutAndVolatility);
 	}
 }
 
@@ -1310,6 +1310,30 @@ TSharedPtr<SWidget> UWidget::GetAccessibleWidget() const
 	return GetCachedWidget();
 }
 #endif
+
+FText UWidget::GetAccessibleText() const
+{
+#if WITH_ACCESSIBILITY
+	TSharedPtr<SWidget> AccessibleWidget = GetAccessibleWidget();
+	if (AccessibleWidget.IsValid())
+	{
+		return AccessibleWidget->GetAccessibleText();
+	}
+#endif
+	return FText::GetEmpty();
+}
+
+FText UWidget::GetAccessibleSummaryText() const
+{
+#if WITH_ACCESSIBILITY
+	TSharedPtr<SWidget> AccessibleWidget = GetAccessibleWidget();
+	if (AccessibleWidget.IsValid())
+	{
+		return AccessibleWidget->GetAccessibleSummary();
+	}
+#endif
+	return FText::GetEmpty();
+}
 
 UObject* UWidget::GetSourceAssetOrClass() const
 {

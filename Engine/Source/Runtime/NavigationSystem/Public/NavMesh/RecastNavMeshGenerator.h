@@ -13,7 +13,6 @@
 #include "AI/NavDataGenerator.h"
 #include "NavMesh/RecastHelpers.h"
 #include "NavDebugTypes.h"
-#include "Math/MovingWindowAverageFast.h"
 
 #if WITH_RECAST
 
@@ -38,6 +37,8 @@ struct FTileCacheCompressor;
 struct FTileCacheAllocator;
 struct FTileGenerationContext;
 class dtNavMesh;
+class FNavRegenTimeSliceManager;
+class UNavigationSystemV1;
 
 #define MAX_VERTS_PER_POLY	6
 
@@ -52,6 +53,9 @@ struct FRecastBuildConfig : public rcConfig
 	uint32 bGenerateBVTree:1;
 	/** if set, mark areas with insufficient free height instead of cutting them out  */
 	uint32 bMarkLowHeightAreas : 1;
+	/** Expand the top of the area nav modifier's bounds by one cell height when applying to the navmesh.
+		If unset, navmesh on top of surfaces might not be marked by marking bounds flush with top surfaces (since navmesh is generated slightly above collision, depending on cell height). */
+	uint32 bUseExtraTopCellWhenMarkingAreas : 1;
 	/** if set, only single low height span will be allowed under valid one */
 	uint32 bFilterLowSpanSequences : 1;
 	/** if set, only low height spans with corresponding area modifier will be stored in tile cache (reduces memory, can't modify without full tile rebuild) */
@@ -89,6 +93,7 @@ struct FRecastBuildConfig : public rcConfig
 		bGenerateDetailedMesh = true;
 		bGenerateBVTree = true;
 		bMarkLowHeightAreas = false;
+		bUseExtraTopCellWhenMarkingAreas = true;
 		bFilterLowSpanSequences = false;
 		bFilterLowSpanFromTileCache = false;
 		// Still initializing, even though the property is deprecated, to avoid static analysis warnings
@@ -166,6 +171,8 @@ struct FRecastAreaNavModifierElement
 	// Per instance transformations in unreal coords
 	// When empty areas are in world space
 	TArray<FTransform>	PerInstanceTransform;
+
+	bool bMaskFillCollisionUnderneathForNavmesh = false;
 };
 
 struct FRcTileBox
@@ -191,39 +198,12 @@ struct FRcTileBox
 };
 
 /**
+ * TIME SLICING 
  * The general idea is that any function that handles time slicing internally will be named XXXXTimeSliced
  * and returns a ETimeSliceWorkResult. These functions also call TestTimeSliceFinished() internally when required,
  * IsTimeSliceFinishedCached() can be called externally after they have finished. Non time sliced functions are 
  * managed externally and the calling function should call TestTimeSliceFinished() when necessary.
  */
-struct NAVIGATIONSYSTEM_API FTimeSlicer
-{
-public:
-	FTimeSlicer()
-		: TimeSliceDuration(0.)
-		, TimeSliceStartTime(0.)
-		, bTimeSliceFinishedCached(false)
-	{
-	}
-
-	FTimeSlicer(double SliceDuration)
-		: TimeSliceDuration(SliceDuration)
-		, TimeSliceStartTime(0.)
-		, bTimeSliceFinishedCached(false)
-	{
-	}
-
-	void SetTimeSliceDuration(double SliceDuration);
-	void StartTimeSlice();
-	double GetStartTime() const;
-	bool TestTimeSliceFinished() const;
-	bool IsTimeSliceFinishedCached() const;
-
-private:
-	double TimeSliceDuration;
-	double TimeSliceStartTime;
-	mutable bool bTimeSliceFinishedCached;
-};
 
 /** Return state of calling time sliced functions */
 enum class ETimeSliceWorkResult : uint8
@@ -264,7 +244,7 @@ enum class ERasterizeGeomTimeSlicedState : uint8
 enum class EDoWorkTimeSlicedState : uint8
 {
 	Invalid,
-	DoAsyncGeometryGathering,
+	GatherGeometryFromSources,
 	GenerateTile,
 };
 
@@ -332,6 +312,8 @@ public:
 	FRecastInternalDebugData& GetMutableDebugData() { return DebugData; }
 #endif
 		
+	typedef TArray<int32, TInlineAllocator<4096>> TInlineMaskArray;
+
 protected:
 	/** Does the actual TimeSliced tile generation. 
 	 *	@note always trigger tile generation only via DoWorkTimeSliced(). This is a worker function
@@ -351,10 +333,16 @@ protected:
 
 	void Setup(const FRecastNavMeshGenerator& ParentGenerator, const TArray<FBox>& DirtyAreas);
 	
+	/** Gather geometry */
 	void GatherGeometry(const FRecastNavMeshGenerator& ParentGenerator, bool bGeometryChanged);
+	/** Gather geometry sources to be processed later by the GatherGeometryFromSources */
 	void PrepareGeometrySources(const FRecastNavMeshGenerator& ParentGenerator, bool bGeometryChanged);
-	/** Returns true if there is any NavigationRelevantData */
-	bool DoAsyncGeometryGathering();
+	/** Gather geometry from the prefetched sources */
+	void GatherGeometryFromSources();
+	/** Gather geometry from the prefetched sources time sliced version */
+	ETimeSliceWorkResult GatherGeometryFromSourcesTimeSliced();
+	/** Gather geometry from a specified Navigation Data */
+	void GatherNavigationDataGeometry(const TSharedRef<FNavigationRelevantData, ESPMode::ThreadSafe>& ElementData, UNavigationSystemV1& NavSys, const FNavDataConfig& OwnerNavDataConfig, bool bGeometryChanged);
 
 	/** Start functions used by GenerateCompressedLayersTimeSliced / GenerateCompressedLayers */
 	bool CreateHeightField(FNavMeshBuildContext& BuildContext, FTileRasterizationContext& RasterContext);
@@ -388,6 +376,12 @@ protected:
 
 	void ApplyVoxelFilter(struct rcHeightfield* SolidHF, float WalkableRadius);
 
+	/** Compute rasterization mask */
+	void InitRasterizationMaskArray(const rcHeightfield* SolidHF, TInlineMaskArray& OutRasterizationMasks);
+	void ComputeRasterizationMasks(FNavMeshBuildContext& BuildContext, FTileRasterizationContext& RasterContext);
+	void MarkRasterizationMask(rcContext* /*BuildContext*/, rcHeightfield* SolidHF,
+		const FAreaNavModifier& Modifier, const FTransform& LocalToWorld, const int32 Mask, TInlineMaskArray& OutMaskArray);
+
 	/** apply areas from DynamicAreas to layer */
 	void MarkDynamicAreas(dtTileCacheLayer& Layer);
 	void MarkDynamicArea(const FAreaNavModifier& Modifier, const FTransform& LocalToWorld, dtTileCacheLayer& Layer);
@@ -395,7 +389,7 @@ protected:
 
 	void AppendModifier(const FCompositeNavModifier& Modifier, const FNavDataPerInstanceTransformDelegate& InTransformsDelegate);
 	/** Appends specified geometry to tile's geometry */
-	void ValidateAndAppendGeometry(TSharedRef<FNavigationRelevantData, ESPMode::ThreadSafe> ElementData, const FCompositeNavModifier& InModifier);
+	void ValidateAndAppendGeometry(const TSharedRef<FNavigationRelevantData, ESPMode::ThreadSafe>& ElementData, const FCompositeNavModifier& InModifier);
 	void AppendGeometry(const TNavStatArray<uint8>& RawCollisionCache, const FCompositeNavModifier& InModifier, const FNavDataPerInstanceTransformDelegate& InTransformsDelegate);
 	void AppendVoxels(rcSpanCache* SpanData, int32 NumSpans);
 	
@@ -428,7 +422,7 @@ protected:
 	int32 RasterizeTrianglesTimeSlicedRawGeomIdx;
 	int32 RasterizeTrianglesTimeSlicedInstTransformIdx;
 	TNavStatArray<uint8> RasterizeGeomRecastTriAreas;
-	const FTimeSlicer& TimeSlicer;
+	const FNavRegenTimeSliceManager* TimeSliceManager;
 
 	TUniquePtr<struct FTileCacheAllocator> GenNavDataTimeSlicedAllocator;
 	TUniquePtr<struct FTileGenerationContext> GenNavDataTimeSlicedGenerationContext;
@@ -473,7 +467,7 @@ protected:
 	TWeakPtr<FNavDataGenerator, ESPMode::ThreadSafe> ParentGeneratorWeakPtr;
 
 	TNavStatArray<TSharedRef<FNavigationRelevantData, ESPMode::ThreadSafe> > NavigationRelevantData;
-	TSharedPtr<FNavigationOctree, ESPMode::ThreadSafe> NavOctree; 
+	TWeakObjectPtr<UNavigationSystemV1> NavSystem; 
 	FNavDataConfig NavDataConfig;
 
 #if RECAST_INTERNAL_DEBUG_DATA
@@ -623,7 +617,16 @@ public:
 
 	/** Asks generator to update navigation affected by DirtyAreas */
 	virtual void RebuildDirtyAreas(const TArray<FNavigationDirtyArea>& DirtyAreas) override;
-	virtual bool IsBuildInProgress(bool bCheckDirtyToo = false) const override;
+
+	/** determines whether this generator is performing navigation building actions at the moment, dirty areas are also checked */
+	virtual bool IsBuildInProgressCheckDirty() const override;
+
+#if !RECAST_ASYNC_REBUILDING
+	/** returns true if we are time slicing and the data is valid to use false otherwise*/
+	virtual bool GetTimeSliceData(int32& OutNumRemainingBuildTasks, double& OutCurrentBuildTaskDuration) const override;
+#endif
+
+	int32 GetNumRemaningBuildTasksHelper() const { return RunningDirtyTiles.Num() + PendingDirtyTiles.Num() + static_cast<int32>(SyncTimeSlicedData.TileGeneratorSync.IsValid()); }
 	virtual int32 GetNumRemaningBuildTasks() const override;
 	virtual int32 GetNumRunningBuildTasks() const override;
 
@@ -660,6 +663,7 @@ public:
 	int32 GetDirtyTilesCount(const FBox& AreaBounds) const;
 
 	bool GatherGeometryOnGameThread() const;
+	bool IsTimeSliceRegenActive() const;
 
 	FBox GrowBoundingBox(const FBox& BBox, bool bIncludeAgentHeight) const;
 	
@@ -683,7 +687,7 @@ public:
 	static void GetDebugGeometry(const FNavigationRelevantData& EncodedData, FNavDebugMeshData& DebugMeshData);
 #endif  // !UE_BUILD_SHIPPING
 
-	FTimeSlicer& GetTimeSlicer() { return SyncTimeSlicedData.TimeSlicer; }
+	const FNavRegenTimeSliceManager* GetTimeSliceManager() const { return SyncTimeSlicedData.TimeSliceManager; }
 	
 	void SetNextTimeSliceRegenActive(bool bRegenState) { SyncTimeSlicedData.bNextTimeSliceRegenActive = bRegenState; }
 
@@ -841,15 +845,6 @@ protected:
 		FSyncTimeSlicedData();
 
 		double CurrentTileRegenDuration;
-		double MinTimeSliceDuration;
-		double MaxTimeSliceDuration;
-		float RealTimeSecsLastCall; //no need to reset this
-		/** The max real world desired time to Regen all the tiles in PendingDirtyTiles,
-		 *  Note it could take longer than this, as the time slice is clamped per frame between
-		 *	MinTimeSliceDuration and MaxTimeSliceDuration.
-		 */
-		float MaxDesiredTileRegenDuration;
-
 		/** if we are currently using time sliced regen or not - currently an experimental feature.
 		 *  do not manipulate this value directly instead call SetNextTimeSliceRegenState()
 		 */
@@ -874,13 +869,9 @@ protected:
 		/** Used by AddGeneratedTilesTimeSliced */
 		int32 AddGenTilesLayerIndex;
 
-		/** Used to calculate the moving window average of the actual time spent inside functions used to regenerate a a tile, this is processing time not actual time over multiple frames */
-		FMovingWindowAverageFast<double, 128> MovingWindowTileRegenTime;
-		/** Used to calculate the actual moving window delta time */
-		FMovingWindowAverageFast<float, 128> MovingWindowDeltaTime;
 		/** Do not null or Reset this directly instead call ResetTimeSlicedTileGeneratorSync(). The only exception currently is in ProcessTileTasksSyncTimeSliced */
 		TSharedPtr<FRecastTileGenerator> TileGeneratorSync;
-		FTimeSlicer TimeSlicer;
+		FNavRegenTimeSliceManager* TimeSliceManager;
 	};
 
 	FSyncTimeSlicedData SyncTimeSlicedData;

@@ -29,6 +29,10 @@ UWorldComposition::FWorldCompositionChangedEvent UWorldComposition::WorldComposi
 
 UWorldComposition::UWorldComposition(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
+#if WITH_EDITOR
+	, bTemporallyDisableOriginTracking(false)
+	, bTemporarilyDisableOriginTracking(false)
+#endif
 	, TilesStreamingTimeThreshold(1.0)
 	, bLoadAllTilesDuringCinematic(false)
 	, bRebaseOriginIn3DSpace(false)
@@ -871,7 +875,7 @@ bool UWorldComposition::CommitTileStreamingState(UWorld* PersistentWorld, int32 
 void UWorldComposition::OnLevelAddedToWorld(ULevel* InLevel)
 {
 #if WITH_EDITOR
-	if (bTemporallyDisableOriginTracking)
+	if (bTemporarilyDisableOriginTracking)
 	{
 		return;
 	}
@@ -885,7 +889,7 @@ void UWorldComposition::OnLevelAddedToWorld(ULevel* InLevel)
 void UWorldComposition::OnLevelRemovedFromWorld(ULevel* InLevel)
 {
 #if WITH_EDITOR
-	if (bTemporallyDisableOriginTracking)
+	if (bTemporarilyDisableOriginTracking)
 	{
 		return;
 	}

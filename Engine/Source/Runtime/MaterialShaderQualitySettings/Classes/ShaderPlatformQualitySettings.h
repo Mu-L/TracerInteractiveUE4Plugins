@@ -13,7 +13,7 @@
 * 
 */
 UENUM()
-enum class EMobileCSMQuality : uint8
+enum class EMobileShadowQuality : uint8
 {
 	// Lowest quality, no filtering.
 	NoFiltering,
@@ -41,7 +41,7 @@ public:
 		, bForceLQReflections(false)
 		, bForceDisablePreintegratedGF(false)
 		, bDisableMaterialNormalCalculation(false)
-		, MobileCSMQuality(EMobileCSMQuality::PCF_2x2)
+		, MobileShadowQuality(EMobileShadowQuality::PCF_2x2)
 	{
 	}
 
@@ -69,11 +69,11 @@ public:
 	UPROPERTY(EditAnywhere, Config, Meta = (DisplayName = "Disable material normal calculation"), Category = "Quality")
 	bool bDisableMaterialNormalCalculation;
 
-	UPROPERTY(EditAnywhere, Config, Meta = (DisplayName = "Cascade shadow mapping quality"), Category = "Quality")
-	EMobileCSMQuality MobileCSMQuality;
+	UPROPERTY(EditAnywhere, Config, Meta = (DisplayName = "Mobile shadow mapping quality"), Category = "Quality")
+	EMobileShadowQuality MobileShadowQuality;
 
 	MATERIALSHADERQUALITYSETTINGS_API bool CanOverride(EShaderPlatform ShaderPlatform) const;
-	bool HasAnyOverridesSet() const;
+	MATERIALSHADERQUALITYSETTINGS_API bool HasAnyOverridesSet() const;
 };
 
 
@@ -92,12 +92,7 @@ public:
 		return QualityOverrides[(int32)QualityLevel];
 	}
 
-	const FMaterialQualityOverrides& GetQualityOverrides(EMaterialQualityLevel::Type QualityLevel) const
-	{
-		check(QualityLevel < EMaterialQualityLevel::Num);
-		return QualityOverrides[(int32)QualityLevel];
-	}
-
+	const FMaterialQualityOverrides& GetQualityOverrides(EMaterialQualityLevel::Type QualityLevel) const;
 	void BuildHash(EMaterialQualityLevel::Type QualityLevel, class FSHAHash& OutHash) const;
 	void AppendToHashState(EMaterialQualityLevel::Type QualityLevel, class FSHA1& HashState) const;
 	

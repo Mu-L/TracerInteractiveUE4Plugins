@@ -27,6 +27,7 @@
 #include "Engine/VolumeTexture.h"
 #include "VT/VirtualTextureBuildSettings.h"
 #include "VT/VirtualTextureBuiltData.h"
+#include "HAL/FileManager.h"
 
 #if WITH_EDITOR
 
@@ -47,7 +48,7 @@
 // In case of merge conflicts with DDC versions, you MUST generate a new GUID and set this new
 // guid as version
 
-#define TEXTURE_DERIVEDDATA_VER		TEXT("564290F8998644E39A2118D5C683187B")
+#define TEXTURE_DERIVEDDATA_VER		TEXT("2D528FAD496A42E180956107C6FFBD67")
 
 // This GUID is mixed into DDC version for virtual textures only, this allows updating DDC version for VT without invalidating DDC for all textures
 // This is useful during development, but once large numbers of VT are present in shipped content, it will have the same problem as TEXTURE_DERIVEDDATA_VER
@@ -148,6 +149,13 @@ static void SerializeForKey(FArchive& Ar, const FTextureBuildSettings& Settings)
 		TempByte = Settings.bVirtualTextureEnableCompressCrunch; Ar << TempByte;
 		TempByte = Settings.LossyCompressionAmount; Ar << TempByte; // Lossy compression currently only used by VT
 		TempByte = Settings.bApplyYCoCgBlockScale; Ar << TempByte; // YCoCg currently only used by VT
+	}
+
+	// Avoid changing key if texture is not being downscaled
+	if (Settings.Downscale > 1.0)
+	{
+		TempFloat = Settings.Downscale; Ar << TempFloat;
+		TempByte = Settings.DownscaleOptions; Ar << TempByte;
 	}
 }
 
@@ -331,11 +339,13 @@ static void FinalizeBuildSettingsForLayer(const UTexture& Texture, int32 LayerIn
 static void GetTextureBuildSettings(
 	const UTexture& Texture,
 	const UTextureLODSettings& TextureLODSettings,
-	bool bPlatformSupportsTextureStreaming,
-	bool bPlatformSupportsVirtualTextureStreaming,
+	const ITargetPlatform& CurrentPlatform,
 	FTextureBuildSettings& OutBuildSettings
 	)
 {
+	const bool bPlatformSupportsTextureStreaming = CurrentPlatform.SupportsFeature(ETargetPlatformFeatures::TextureStreaming);
+	const bool bPlatformSupportsVirtualTextureStreaming = CurrentPlatform.SupportsFeature(ETargetPlatformFeatures::VirtualTextureStreaming);
+		
 	OutBuildSettings.ColorAdjustment.AdjustBrightness = Texture.AdjustBrightness;
 	OutBuildSettings.ColorAdjustment.AdjustBrightnessCurve = Texture.AdjustBrightnessCurve;
 	OutBuildSettings.ColorAdjustment.AdjustVibrance = Texture.AdjustVibrance;
@@ -354,6 +364,9 @@ static void GetTextureBuildSettings(
 	OutBuildSettings.bVolume = false;
 	OutBuildSettings.bCubemap = false;
 	OutBuildSettings.bTextureArray = false;
+	OutBuildSettings.DiffuseConvolveMipLevel = 0;
+	OutBuildSettings.bLongLatSource = false;
+	OutBuildSettings.bStreamable = false;
 
 	if (Texture.MaxTextureSize > 0)
 	{
@@ -374,20 +387,17 @@ static void GetTextureBuildSettings(
 	}
 	else if (Texture.IsA(UTexture2DArray::StaticClass()))
 	{
+		OutBuildSettings.bStreamable = GSupportsTexture2DArrayStreaming;
 		OutBuildSettings.bTextureArray = true;
-		OutBuildSettings.DiffuseConvolveMipLevel = 0;
-		OutBuildSettings.bLongLatSource = false;
 	}
 	else if (Texture.IsA(UVolumeTexture::StaticClass()))
 	{
+		OutBuildSettings.bStreamable = GSupportsVolumeTextureStreaming;
 		OutBuildSettings.bVolume = true;
-		OutBuildSettings.DiffuseConvolveMipLevel = 0;
-		OutBuildSettings.bLongLatSource = false;
 	}
-	else
+	else if (Texture.IsA(UTexture2D::StaticClass()))
 	{
-		OutBuildSettings.DiffuseConvolveMipLevel = 0;
-		OutBuildSettings.bLongLatSource = false;
+		OutBuildSettings.bStreamable = true;
 	}
 
 	bool bDownsampleWithAverage;
@@ -417,7 +427,7 @@ static void GetTextureBuildSettings(
 	OutBuildSettings.CompositePower = Texture.CompositePower;
 	OutBuildSettings.LODBias = TextureLODSettings.CalculateLODBias(SourceSize.X, SourceSize.Y, Texture.MaxTextureSize, Texture.LODGroup, Texture.LODBias, Texture.NumCinematicMipLevels, Texture.MipGenSettings, bVirtualTextureStreaming);
 	OutBuildSettings.LODBiasWithCinematicMips = TextureLODSettings.CalculateLODBias(SourceSize.X, SourceSize.Y, Texture.MaxTextureSize, Texture.LODGroup, Texture.LODBias, 0, Texture.MipGenSettings, bVirtualTextureStreaming);
-	OutBuildSettings.bStreamable = bPlatformSupportsTextureStreaming && !Texture.NeverStream && (Texture.LODGroup != TEXTUREGROUP_UI) && (Cast<const UTexture2D>(&Texture) != NULL);
+	OutBuildSettings.bStreamable &= bPlatformSupportsTextureStreaming && !Texture.NeverStream && (Texture.LODGroup != TEXTUREGROUP_UI);
 	OutBuildSettings.bVirtualStreamable = bVirtualTextureStreaming;
 	OutBuildSettings.PowerOfTwoMode = Texture.PowerOfTwoMode;
 	OutBuildSettings.PaddingColor = Texture.PaddingColor;
@@ -428,13 +438,30 @@ static void GetTextureBuildSettings(
 	// TODO - get default value from config/CVAR/LODGroup?
 	OutBuildSettings.LossyCompressionAmount = (Texture.LossyCompressionAmount == TLCA_Default) ? TLCA_Lowest : Texture.LossyCompressionAmount.GetValue();
 
+	OutBuildSettings.Downscale = 1.0f;
+	if (MipGenSettings == TMGS_NoMipmaps && 
+		Texture.IsA(UTexture2D::StaticClass()))	// TODO: support more texture types
+	{
+		TextureLODSettings.GetDownscaleOptions(Texture, CurrentPlatform, OutBuildSettings.Downscale, (ETextureDownscaleOptions&)OutBuildSettings.DownscaleOptions);
+	}
+	
 	// For virtual texturing we take the address mode into consideration
 	if (OutBuildSettings.bVirtualStreamable)
 	{
 		const UTexture2D *Texture2D = Cast<UTexture2D>(&Texture);
 		checkf(Texture2D, TEXT("Virtual texturing is only supported on 2D textures"));
-		OutBuildSettings.VirtualAddressingModeX = Texture2D->AddressX;
-		OutBuildSettings.VirtualAddressingModeY = Texture2D->AddressY;
+		if (Texture.Source.GetNumBlocks() > 1)
+		{
+			// Multi-block textures (UDIM) interpret UVs outside [0,1) range as different blocks, so wrapping within a given block doesn't make sense
+			// We want to make sure address mode is set to clamp here, otherwise border pixels along block edges will have artifacts
+			OutBuildSettings.VirtualAddressingModeX = TA_Clamp;
+			OutBuildSettings.VirtualAddressingModeY = TA_Clamp;
+		}
+		else
+		{
+			OutBuildSettings.VirtualAddressingModeX = Texture2D->AddressX;
+			OutBuildSettings.VirtualAddressingModeY = Texture2D->AddressY;
+		}
 
 		FVirtualTextureBuildSettings VirtualTextureBuildSettings;
 		Texture.GetVirtualTextureBuildSettings(VirtualTextureBuildSettings);
@@ -442,7 +469,12 @@ static void GetTextureBuildSettings(
 		OutBuildSettings.bVirtualTextureEnableCompressCrunch = VirtualTextureBuildSettings.bEnableCompressCrunch;
 		OutBuildSettings.VirtualTextureTileSize = FMath::RoundUpToPowerOfTwo(VirtualTextureBuildSettings.TileSize);
 
-		// don't all max resolution to be less than VT tile size
+		// Apply any LOD group tile size bias here
+		const int32 TileSizeBias = TextureLODSettings.GetTextureLODGroup(Texture.LODGroup).VirtualTextureTileSizeBias;
+		OutBuildSettings.VirtualTextureTileSize >>= (TileSizeBias < 0) ? -TileSizeBias : 0;
+		OutBuildSettings.VirtualTextureTileSize <<= (TileSizeBias > 0) ? TileSizeBias : 0;
+
+		// Don't allow max resolution to be less than VT tile size
 		OutBuildSettings.MaxTextureResolution = FMath::Max<uint32>(OutBuildSettings.MaxTextureResolution, OutBuildSettings.VirtualTextureTileSize);
 
 		// 0 is a valid value for border size
@@ -498,11 +530,8 @@ static void GetBuildSettingsForRunningPlatform(
 		check(CurrentPlatform != NULL);
 
 		const UTextureLODSettings* LODSettings = (UTextureLODSettings*)UDeviceProfileManager::Get().FindProfile(CurrentPlatform->PlatformName());
-		const bool bPlatformSupportsTextureStreaming = CurrentPlatform->SupportsFeature(ETargetPlatformFeatures::TextureStreaming);
-		const bool bPlatformSupportsVirtualTextureStreaming = CurrentPlatform->SupportsFeature(ETargetPlatformFeatures::VirtualTextureStreaming);
-
 		FTextureBuildSettings SourceBuildSettings;
-		GetTextureBuildSettings(Texture, *LODSettings, bPlatformSupportsTextureStreaming, bPlatformSupportsVirtualTextureStreaming, SourceBuildSettings);
+		GetTextureBuildSettings(Texture, *LODSettings, *CurrentPlatform, SourceBuildSettings);
 
 		TArray< TArray<FName> > PlatformFormats;
 		CurrentPlatform->GetTextureFormats(&Texture, PlatformFormats);
@@ -517,6 +546,11 @@ static void GetBuildSettingsForRunningPlatform(
 			FTextureBuildSettings& OutSettings = OutSettingPerLayer.Add_GetRef(SourceBuildSettings);
 			OutSettings.TextureFormatName = PlatformFormats[0][LayerIndex];
 			FinalizeBuildSettingsForLayer(Texture, LayerIndex, OutSettings);
+
+			if (SourceBuildSettings.bVirtualStreamable)
+			{
+				OutSettings.TextureFormatName = CurrentPlatform->FinalizeVirtualTextureLayerFormat(OutSettings.TextureFormatName);
+			}
 		}
 	}
 }
@@ -539,6 +573,11 @@ static void GetBuildSettingsPerFormat(const UTexture& Texture, const FTextureBui
 			FTextureBuildSettings& OutSettings = OutSettingPerLayer.Add_GetRef(SourceBuildSettings);
 			OutSettings.TextureFormatName = PlatformFormatsPerLayer[LayerIndex];
 			FinalizeBuildSettingsForLayer(Texture, LayerIndex, OutSettings);
+
+			if (SourceBuildSettings.bVirtualStreamable)
+			{
+				OutSettings.TextureFormatName = TargetPlatform->FinalizeVirtualTextureLayerFormat(OutSettings.TextureFormatName);
+			}
 		}
 	}
 }
@@ -769,7 +808,7 @@ static float ComputePSNR(const FImage& SrcImage, const FCompressedImage2D& Compr
 				{
 					SquaredError += ComputeDXTColorBlockSquaredError(
 						CompressedData + (BlockY * NumBlocksX + BlockX) * 8,
-						SrcImage.AsBGRA8() + (BlockY * NumBlocksX * 16 + BlockX * 4),
+						(&SrcImage.AsBGRA8()[0]) + (BlockY * NumBlocksX * 16 + BlockX * 4),
 						SrcImage.SizeX
 						);
 					NumErrors += 16 * 3;
@@ -778,12 +817,12 @@ static float ComputePSNR(const FImage& SrcImage, const FCompressedImage2D& Compr
 				{
 					SquaredError += ComputeDXTAlphaBlockSquaredError(
 						CompressedData + (BlockY * NumBlocksX + BlockX) * 16,
-						SrcImage.AsBGRA8() + (BlockY * NumBlocksX * 16 + BlockX * 4),
+						(&SrcImage.AsBGRA8()[0]) + (BlockY * NumBlocksX * 16 + BlockX * 4),
 						SrcImage.SizeX
 						);
 					SquaredError += ComputeDXTColorBlockSquaredError(
 						CompressedData + (BlockY * NumBlocksX + BlockX) * 16 + 8,
-						SrcImage.AsBGRA8() + (BlockY * NumBlocksX * 16 + BlockX * 4),
+						(&SrcImage.AsBGRA8()[0]) + (BlockY * NumBlocksX * 16 + BlockX * 4),
 						SrcImage.SizeX
 						);
 					NumErrors += 16 * 4;
@@ -1052,6 +1091,7 @@ bool FTexturePlatformData::TryLoadMips(int32 FirstMipToLoad, void** OutMipData, 
 {
 	int32 NumMipsCached = 0;
 	const int32 LoadableMips = Mips.Num() - ((GetNumMipsInTail() > 0) ? (GetNumMipsInTail() - 1) : 0);
+	check(LoadableMips >= 0);
 
 #if WITH_EDITOR
 	TArray<uint8> TempData;
@@ -1081,7 +1121,7 @@ bool FTexturePlatformData::TryLoadMips(int32 FirstMipToLoad, void** OutMipData, 
 		{
 			if (OutMipData != nullptr)
 			{
-#if PLATFORM_SUPPORTS_TEXTURE_STREAMING && !TEXTURE2DMIPMAP_USE_COMPACT_BULKDATA
+#if PLATFORM_SUPPORTS_TEXTURE_STREAMING
 				// We want to make sure that any non-streamed mips are coming from the texture asset file, and not from an external bulk file.
 				// But because "r.TextureStreaming" is driven by the project setting as well as the command line option "-NoTextureStreaming", 
 				// is it possible for streaming mips to be loaded in non streaming ways.
@@ -1177,7 +1217,14 @@ int32 FTexturePlatformData::GetNumNonStreamingMips() const
 			}
 		}
 
-		return NumNonStreamingMips;
+		if (NumNonStreamingMips == 0 && Mips.Num())
+		{
+			return 1;
+		}
+		else
+		{
+			return NumNonStreamingMips;
+		}
 	}
 	else if (Mips.Num() > 0)
 	{
@@ -1203,6 +1250,59 @@ int32 FTexturePlatformData::GetNumNonStreamingMips() const
 		return 0;
 	}
 }
+
+int32 FTexturePlatformData::GetNumNonOptionalMips() const
+{
+	// TODO : Count from last mip to first.
+	if (FPlatformProperties::RequiresCookedData())
+	{
+		int32 NumNonOptionalMips = Mips.Num();
+
+		for (const FTexture2DMipMap& Mip : Mips)
+		{
+			if (Mip.BulkData.IsOptional())
+			{
+				--NumNonOptionalMips;
+			}
+			else
+			{
+				break;
+			}
+		}
+
+		if (NumNonOptionalMips == 0 && Mips.Num())
+		{
+			return 1;
+		}
+		else
+		{
+			return NumNonOptionalMips;
+		}
+	}
+	else // Otherwise, all mips are available.
+	{
+		return Mips.Num();
+	}
+}
+
+bool FTexturePlatformData::CanBeLoaded() const
+{
+	for (const FTexture2DMipMap& Mip : Mips)
+	{
+#if WITH_EDITORONLY_DATA
+		if (!Mip.DerivedDataKey.IsEmpty())
+		{
+			return true;
+		}
+#endif 
+		if (Mip.BulkData.CanLoadFromDisk())
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 
 int32 FTexturePlatformData::GetNumVTMips() const
 {
@@ -1617,10 +1717,7 @@ void UTexture::BeginCacheForCookedPlatformData( const ITargetPlatform *TargetPla
 		//TArray<FName> PlatformFormats;
 
 		FTextureBuildSettings BuildSettings;
-		const bool bPlatformSupportsTextureStreaming = TargetPlatform->SupportsFeature(ETargetPlatformFeatures::TextureStreaming);
-		const bool bPlatformSupportsVirtualTextureStreaming = TargetPlatform->SupportsFeature(ETargetPlatformFeatures::VirtualTextureStreaming);
-
-		GetTextureBuildSettings(*this, TargetPlatform->GetTextureLODSettings(), bPlatformSupportsTextureStreaming, bPlatformSupportsVirtualTextureStreaming, BuildSettings);
+		GetTextureBuildSettings(*this, TargetPlatform->GetTextureLODSettings(), *TargetPlatform, BuildSettings);
 		
 		TArray< TArray<FTextureBuildSettings> > BuildSettingsToCache;
 		GetBuildSettingsPerFormat(*this, BuildSettings, TargetPlatform, BuildSettingsToCache);
@@ -1701,10 +1798,7 @@ void UTexture::ClearCachedCookedPlatformData( const ITargetPlatform* TargetPlatf
 
 		// Retrieve formats to cache for targetplatform.
 		FTextureBuildSettings BuildSettings;
-		const bool bPlatformSupportsTextureStreaming = TargetPlatform->SupportsFeature(ETargetPlatformFeatures::TextureStreaming);
-		const bool bPlatformSupportsVirtualTextureStreaming = TargetPlatform->SupportsFeature(ETargetPlatformFeatures::VirtualTextureStreaming);
-
-		GetTextureBuildSettings(*this, TargetPlatform->GetTextureLODSettings(), bPlatformSupportsTextureStreaming, bPlatformSupportsVirtualTextureStreaming, BuildSettings);
+		GetTextureBuildSettings(*this, TargetPlatform->GetTextureLODSettings(), *TargetPlatform, BuildSettings);
 
 		TArray< TArray<FTextureBuildSettings> > BuildSettingsToCache;
 		GetBuildSettingsPerFormat(*this, BuildSettings, TargetPlatform, BuildSettingsToCache);
@@ -1762,11 +1856,7 @@ bool UTexture::IsCachedCookedPlatformDataLoaded( const ITargetPlatform* TargetPl
 
 	FTextureBuildSettings BuildSettings;
 	TArray<FTexturePlatformData*> PlatformDataToSerialize;
-
-	const bool bPlatformSupportsTextureStreaming = TargetPlatform->SupportsFeature(ETargetPlatformFeatures::TextureStreaming);
-	const bool bPlatformSupportsVirtualTextureStreaming = TargetPlatform->SupportsFeature(ETargetPlatformFeatures::VirtualTextureStreaming);
-
-	GetTextureBuildSettings(*this, TargetPlatform->GetTextureLODSettings(), bPlatformSupportsTextureStreaming, bPlatformSupportsVirtualTextureStreaming, BuildSettings);
+	GetTextureBuildSettings(*this, TargetPlatform->GetTextureLODSettings(), *TargetPlatform, BuildSettings);
 
 	TArray< TArray<FTextureBuildSettings> > BuildSettingsToCache;
 	GetBuildSettingsPerFormat(*this, BuildSettings, TargetPlatform, BuildSettingsToCache);
@@ -1968,10 +2058,7 @@ void UTexture::SerializeCookedPlatformData(FArchive& Ar)
 		if (!Ar.CookingTarget()->IsServerOnly())
 		{
 			FTextureBuildSettings BuildSettings;
-			const bool bPlatformSupportsTextureStreaming = Ar.CookingTarget()->SupportsFeature(ETargetPlatformFeatures::TextureStreaming);
-			const bool bPlatformSupportsVirtualTextureStreaming = Ar.CookingTarget()->SupportsFeature(ETargetPlatformFeatures::VirtualTextureStreaming);
-
-			GetTextureBuildSettings(*this, Ar.CookingTarget()->GetTextureLODSettings(), bPlatformSupportsTextureStreaming, bPlatformSupportsVirtualTextureStreaming, BuildSettings);
+			GetTextureBuildSettings(*this, Ar.CookingTarget()->GetTextureLODSettings(), *Ar.CookingTarget(), BuildSettings);
 
 			TArray<FTexturePlatformData*> PlatformDataToSerialize;
 
@@ -2087,9 +2174,9 @@ void UTexture::SerializeCookedPlatformData(FArchive& Ar)
 	}
 }
 
-int32 UTexture2D::GMinTextureResidentMipCount = NUM_INLINE_DERIVED_MIPS;
+int32 UTexture::GMinTextureResidentMipCount = NUM_INLINE_DERIVED_MIPS;
 
-void UTexture2D::SetMinTextureResidentMipCount(int32 InMinTextureResidentMipCount)
+void UTexture::SetMinTextureResidentMipCount(int32 InMinTextureResidentMipCount)
 {
 	int32 MinAllowedMipCount = FPlatformProperties::RequiresCookedData() ? 1 : NUM_INLINE_DERIVED_MIPS;
 	GMinTextureResidentMipCount = FMath::Max(InMinTextureResidentMipCount, MinAllowedMipCount);

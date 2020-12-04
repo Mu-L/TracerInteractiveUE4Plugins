@@ -113,7 +113,7 @@ namespace Gauntlet
 				ContextOptions.TestList.Add(TestRequest.CreateRequest(DefaultTestName));
 			}
 
-			bool EditorForAllRoles = Globals.Params.ParseParam("editor") || string.Equals(Globals.Params.ParseValue("build", ""), "editor", StringComparison.OrdinalIgnoreCase);
+			bool EditorForAllRoles = Globals.Params.ParseParam("editor") || string.Equals(ContextOptions.Build, "editor", StringComparison.OrdinalIgnoreCase);
 
 			if (EditorForAllRoles)
 			{
@@ -235,7 +235,10 @@ namespace Gauntlet
 						{
 							Role.Type = UnrealTargetRole.EditorGame;
 							Role.Platform = DefaultPlatform;
-							Role.Configuration = UnrealTargetConfiguration.Development;
+							if (Role.Configuration > UnrealTargetConfiguration.Development)
+							{
+								Role.Configuration = UnrealTargetConfiguration.Development;
+							}
 						}
 					}
 					else if (Type.IsServer())
@@ -247,7 +250,10 @@ namespace Gauntlet
 						{
 							Role.Type = UnrealTargetRole.EditorServer;
 							Role.Platform = DefaultPlatform;
-							Role.Configuration = UnrealTargetConfiguration.Development;
+							if (Role.Configuration > UnrealTargetConfiguration.Development)
+							{
+								Role.Configuration = UnrealTargetConfiguration.Development;
+							}
 						}
 					}
 
@@ -284,7 +290,7 @@ namespace Gauntlet
 
 			if (UsedPlatforms.Contains(UnrealTargetPlatform.PS4))
 			{
-				String DevKitUtilPath = Path.Combine(Environment.CurrentDirectory, "Engine/Binaries/DotNET/PS4/PS4DevKitUtil.exe");
+				String DevKitUtilPath = Path.Combine(Environment.CurrentDirectory, "Engine/Platforms/PS4/Binaries/DotNET/PS4DevKitUtil.exe");
 				Gauntlet.Log.Verbose("PS4DevkitUtil executing 'removeall'");
 				IProcessResult BootResult = CommandUtils.Run(DevKitUtilPath, "removeall");
 			}
@@ -391,7 +397,14 @@ namespace Gauntlet
 				// This will throw if the test cannot be created
 				ITestNode NewTest = Utils.TestConstructor.ConstructTest<ITestNode, UnrealTestContext>(Test.TestName, TestContext, Namespaces);
 
-				NodeList.Add(NewTest);
+				if (CombinedParams.ParseParam("listargs") || CombinedParams.ParseParam("listallargs"))
+				{
+					NewTest.DisplayCommandlineHelp();
+				}
+				else
+				{
+					NodeList.Add(NewTest);
+				}
 			}
 
 			return NodeList;

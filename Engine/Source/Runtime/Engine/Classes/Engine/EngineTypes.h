@@ -589,6 +589,20 @@ enum EMaterialStencilCompare
 	MSC_Count			UMETA(Hidden),
 };
 
+UENUM()
+enum EMaterialShadingRate
+{
+	MSR_1x1				UMETA(DisplayName = "1x1"),
+	MSR_2x1				UMETA(DisplayName = "2x1"),
+	MSR_1x2				UMETA(DisplayName = "1x2"),
+	MSR_2x2				UMETA(DisplayName = "2x2"),
+	MSR_4x2				UMETA(DisplayName = "4x2"),
+	MSR_2x4				UMETA(DisplayName = "2x4"),
+	MSR_4x4				UMETA(DisplayName = "4x4"),
+	MSR_Count			UMETA(Hidden),
+};
+
+
 /**	Lighting build quality enumeration */
 UENUM()
 enum ELightingBuildQuality
@@ -648,10 +662,6 @@ enum class ENetworkSmoothingMode : uint8
 	/** Special linear interpolation designed specifically for replays. Not intended as a selectable mode in-editor. */
 	Replay			UMETA(Hidden, DisplayName="Replay"),
 };
-
-/** This filter allows us to refine queries (channel, object) with an additional level of ignore by tagging entire classes of objects (e.g. "Red team", "Blue team")
-    If(QueryIgnoreMask & ShapeFilter != 0) filter out */
-typedef uint8 FMaskFilter;
 
 // Number of bits used currently from FMaskFilter.
 enum { NumExtraFilterBits = 6 };
@@ -1154,29 +1164,6 @@ private:
 	friend class UCollisionProfile;
 };
 
-/** Enum for controlling the falloff of strength of a radial impulse as a function of distance from Origin. */
-UENUM()
-enum ERadialImpulseFalloff
-{
-	/** Impulse is a constant strength, up to the limit of its range. */
-	RIF_Constant,
-	/** Impulse should get linearly weaker the further from origin. */
-	RIF_Linear,
-	RIF_MAX,
-};
-
-/** Presets of values used in considering when put this body to sleep. */
-UENUM()
-enum class ESleepFamily : uint8
-{
-	/** Engine defaults. */
-	Normal,
-	/** A family of values with a lower sleep threshold; good for slower pendulum-like physics. */
-	Sensitive,
-	/** Specify your own sleep threshold multiplier */
-	Custom,
-};
-
 /** Enum used to indicate what type of timeline signature a function matches. */
 UENUM()
 enum ETimelineSigType
@@ -1216,6 +1203,16 @@ FORCEINLINE bool CollisionEnabledHasQuery(ECollisionEnabled::Type CollisionEnabl
 {
 	return (CollisionEnabled == ECollisionEnabled::QueryOnly) ||
 			(CollisionEnabled == ECollisionEnabled::QueryAndPhysics);
+}
+
+FORCEINLINE ECollisionEnabled::Type CollisionEnabledIntersection(ECollisionEnabled::Type CollisionEnabledA, ECollisionEnabled::Type CollisionEnabledB)
+{
+	const bool bHasQuery = (CollisionEnabledHasQuery(CollisionEnabledA) && CollisionEnabledHasQuery(CollisionEnabledB));
+	const bool bHasPhysics = (CollisionEnabledHasPhysics(CollisionEnabledA) && CollisionEnabledHasPhysics(CollisionEnabledB));
+	if (bHasQuery && bHasPhysics) { return ECollisionEnabled::QueryAndPhysics; }
+	if (bHasQuery) { return ECollisionEnabled::QueryOnly; }
+	if (bHasPhysics) { return ECollisionEnabled::PhysicsOnly; }
+	return ECollisionEnabled::NoCollision;
 }
 
 /** Describes the physical state of a rigid body. */
@@ -1425,9 +1422,13 @@ struct ENGINE_API FCollisionImpactData
 	UPROPERTY()
 	FVector TotalFrictionImpulse;
 
+	UPROPERTY()
+	bool bIsVelocityDeltaUnderThreshold;
+
 	FCollisionImpactData()
 	: TotalNormalImpulse(ForceInit)
 	, TotalFrictionImpulse(ForceInit)
+    , bIsVelocityDeltaUnderThreshold(true)
 	{}
 
 	/** Iterate over ContactInfos array and swap order of information */
@@ -1582,17 +1583,17 @@ private:
 };
 
 /** A line of subtitle text and the time at which it should be displayed. */
-USTRUCT()
+USTRUCT(BlueprintType)
 struct FSubtitleCue
 {
 	GENERATED_BODY()
 
 	/** The text to appear in the subtitle. */
-	UPROPERTY(EditAnywhere, Category=SubtitleCue)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=SubtitleCue)
 	FText Text;
 
 	/** The time at which the subtitle is to be displayed, in seconds relative to the beginning of the line. */
-	UPROPERTY(EditAnywhere, Category=SubtitleCue)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=SubtitleCue)
 	float Time;
 
 	FSubtitleCue()
@@ -2015,6 +2016,10 @@ struct ENGINE_API FHitResult
 	/** Extra data about item that was hit (hit primitive specific). */
 	UPROPERTY()
 	int32 Item;
+
+	/** Index to item that was hit, also hit primitive specific. */
+	UPROPERTY()
+	uint8 ElementIndex;
 
 	/**
 	 * Physical material that was hit.
@@ -2542,81 +2547,81 @@ struct FPOV
 /**
  * Settings applied when building a mesh.
  */
-USTRUCT()
+USTRUCT(BlueprintType)
 struct FMeshBuildSettings
 {
 	GENERATED_BODY()
 
 	/** If true, degenerate triangles will be removed. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bUseMikkTSpace:1;
 
 	/** If true, normals in the raw mesh are ignored and recomputed. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bRecomputeNormals:1;
 
 	/** If true, tangents in the raw mesh are ignored and recomputed. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bRecomputeTangents:1;
 
 	/** If true, we will use the surface area and the corner angle of the triangle as a ratio when computing the normals. */
-	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = BuildSettings)
 	uint8 bComputeWeightedNormals : 1;
 
 	/** If true, degenerate triangles will be removed. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bRemoveDegenerates:1;
 	
 	/** Required for PNT tessellation but can be slow. Recommend disabling for larger meshes. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bBuildAdjacencyBuffer:1;
 
 	/** Required to optimize mesh in mirrored transform. Double index buffer size. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bBuildReversedIndexBuffer:1;
 
 	/** If true, Tangents will be stored at 16 bit vs 8 bit precision. */
-	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = BuildSettings)
 	uint8 bUseHighPrecisionTangentBasis:1;
 
 	/** If true, UVs will be stored at full floating point precision. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bUseFullPrecisionUVs:1;
 
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bGenerateLightmapUVs:1;
 
 	/** 
 	 * Whether to generate the distance field treating every triangle hit as a front face.  
 	 * When enabled prevents the distance field from being discarded due to the mesh being open, but also lowers Distance Field AO quality.
 	 */
-	UPROPERTY(EditAnywhere, Category=BuildSettings, meta=(DisplayName="Two-Sided Distance Field Generation"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings, meta=(DisplayName="Two-Sided Distance Field Generation"))
 	uint8 bGenerateDistanceFieldAsIfTwoSided:1;
 
-	UPROPERTY(EditAnywhere, Category=BuildSettings, meta=(DisplayName="Enable Physical Material Mask"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings, meta=(DisplayName="Enable Physical Material Mask"))
 	uint8 bSupportFaceRemap : 1;
 
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	int32 MinLightmapResolution;
 
-	UPROPERTY(EditAnywhere, Category=BuildSettings, meta=(DisplayName="Source Lightmap Index"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings, meta=(DisplayName="Source Lightmap Index"))
 	int32 SrcLightmapIndex;
 
-	UPROPERTY(EditAnywhere, Category=BuildSettings, meta=(DisplayName="Destination Lightmap Index"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings, meta=(DisplayName="Destination Lightmap Index"))
 	int32 DstLightmapIndex;
 
 	UPROPERTY()
 	float BuildScale_DEPRECATED;
 
 	/** The local scale applied when building the mesh */
-	UPROPERTY(EditAnywhere, Category=BuildSettings, meta=(DisplayName="Build Scale"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings, meta=(DisplayName="Build Scale"))
 	FVector BuildScale3D;
 
 	/** 
 	 * Scale to apply to the mesh when allocating the distance field volume texture.
 	 * The default scale is 1, which is assuming that the mesh will be placed unscaled in the world.
 	 */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	float DistanceFieldResolutionScale;
 
 #if WITH_EDITORONLY_DATA
@@ -2624,7 +2629,7 @@ struct FMeshBuildSettings
 	float DistanceFieldBias_DEPRECATED;
 #endif
 
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	class UStaticMesh* DistanceFieldReplacementMesh;
 
 	/** Default settings. */
@@ -2685,57 +2690,57 @@ struct FMeshBuildSettings
 /**
  * Settings applied when building a mesh.
  */
-USTRUCT()
+USTRUCT(BlueprintType)
 struct FSkeletalMeshBuildSettings
 {
 	GENERATED_BODY()
 
 	/** If true, normals in the raw mesh are ignored and recomputed. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bRecomputeNormals:1;
 
 	/** If true, tangents in the raw mesh are ignored and recomputed. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bRecomputeTangents:1;
 	
 	/** If true, degenerate triangles will be removed. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bUseMikkTSpace:1;
 	
 	/** If true, we will use the surface area and the corner angle of the triangle as a ratio when computing the normals. */
-	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = BuildSettings)
 	uint8 bComputeWeightedNormals : 1;
 
 	/** If true, degenerate triangles will be removed. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bRemoveDegenerates:1;
 	
 	/** If true, Tangents will be stored at 16 bit vs 8 bit precision. */
-	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = BuildSettings)
 	uint8 bUseHighPrecisionTangentBasis:1;
 
 	/** If true, UVs will be stored at full floating point precision. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bUseFullPrecisionUVs:1;
 	
 	/** Required for PNT tessellation but can be slow. Recommend disabling for larger meshes. */
-	UPROPERTY(EditAnywhere, Category=BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=BuildSettings)
 	uint8 bBuildAdjacencyBuffer:1;
 
 	/** Threshold use to decide if two vertex position are equal. */
-	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = BuildSettings)
 	float ThresholdPosition;
 
 	/** Threshold use to decide if two normal, tangents or bi-normals are equal. */
-	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = BuildSettings)
 	float ThresholdTangentNormal;
 
 	/** Threshold use to decide if two UVs are equal. */
-	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = BuildSettings)
 	float ThresholdUV;
 
 	/** Threshold to compare vertex position equality when computing morph target deltas. */
-	UPROPERTY(EditAnywhere, Category = BuildSettings)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = BuildSettings)
 	float MorphThresholdPosition;
 
 	/** Default settings. */
@@ -2939,7 +2944,7 @@ enum ENetRole
 };
 
 /** Describes if an actor can enter a low network bandwidth dormant mode */
-UENUM()
+UENUM(BlueprintType)
 enum ENetDormancy
 {
 	/** This actor can never go network dormant. */
@@ -3554,19 +3559,22 @@ struct FConstrainComponentPropName
  *	Struct that allows for different ways to reference a component. 
  *	If just an Actor is specified, will return RootComponent of that Actor.
  */
-USTRUCT()
+USTRUCT(BlueprintType)
 struct ENGINE_API FComponentReference
 {
 	GENERATED_BODY()
 
 	FComponentReference() : OtherActor(nullptr) {}
 
-	/** Pointer to a different Actor that owns the Component.  */
-	UPROPERTY(EditInstanceOnly, Category=Component)
+	/** 
+	 * Pointer to a different Actor that owns the Component.  
+	 * If this is not provided the reference refers to a component on this / the same actor.
+	 */
+	UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category=Component, meta = (DisplayName = "Referenced Actor"))
 	AActor* OtherActor;
 
-	/** Name of component property to use */
-	UPROPERTY(EditAnywhere, Category=Component)
+	/** Name of component to use. If this is not specified the reference refers to the root component. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=Component, meta = (DisplayName = "Component Name"))
 	FName ComponentProperty;
 
 	/** Path to the component from its owner actor */
@@ -3583,76 +3591,6 @@ struct ENGINE_API FComponentReference
 	{
 		return OtherActor == Other.OtherActor && ComponentProperty == Other.ComponentProperty && PathToComponent == Other.PathToComponent && OverrideComponent == Other.OverrideComponent;
 	}
-};
-
-/** Types of surfaces in the game, used by Physical Materials */
-UENUM(BlueprintType)
-enum EPhysicalSurface
-{
-	SurfaceType_Default UMETA(DisplayName="Default"),
-	SurfaceType1 UMETA(Hidden),
-	SurfaceType2 UMETA(Hidden),
-	SurfaceType3 UMETA(Hidden),
-	SurfaceType4 UMETA(Hidden),
-	SurfaceType5 UMETA(Hidden),
-	SurfaceType6 UMETA(Hidden),
-	SurfaceType7 UMETA(Hidden),
-	SurfaceType8 UMETA(Hidden),
-	SurfaceType9 UMETA(Hidden),
-	SurfaceType10 UMETA(Hidden),
-	SurfaceType11 UMETA(Hidden),
-	SurfaceType12 UMETA(Hidden),
-	SurfaceType13 UMETA(Hidden),
-	SurfaceType14 UMETA(Hidden),
-	SurfaceType15 UMETA(Hidden),
-	SurfaceType16 UMETA(Hidden),
-	SurfaceType17 UMETA(Hidden),
-	SurfaceType18 UMETA(Hidden),
-	SurfaceType19 UMETA(Hidden),
-	SurfaceType20 UMETA(Hidden),
-	SurfaceType21 UMETA(Hidden),
-	SurfaceType22 UMETA(Hidden),
-	SurfaceType23 UMETA(Hidden),
-	SurfaceType24 UMETA(Hidden),
-	SurfaceType25 UMETA(Hidden),
-	SurfaceType26 UMETA(Hidden),
-	SurfaceType27 UMETA(Hidden),
-	SurfaceType28 UMETA(Hidden),
-	SurfaceType29 UMETA(Hidden),
-	SurfaceType30 UMETA(Hidden),
-	SurfaceType31 UMETA(Hidden),
-	SurfaceType32 UMETA(Hidden),
-	SurfaceType33 UMETA(Hidden),
-	SurfaceType34 UMETA(Hidden),
-	SurfaceType35 UMETA(Hidden),
-	SurfaceType36 UMETA(Hidden),
-	SurfaceType37 UMETA(Hidden),
-	SurfaceType38 UMETA(Hidden),
-	SurfaceType39 UMETA(Hidden),
-	SurfaceType40 UMETA(Hidden),
-	SurfaceType41 UMETA(Hidden),
-	SurfaceType42 UMETA(Hidden),
-	SurfaceType43 UMETA(Hidden),
-	SurfaceType44 UMETA(Hidden),
-	SurfaceType45 UMETA(Hidden),
-	SurfaceType46 UMETA(Hidden),
-	SurfaceType47 UMETA(Hidden),
-	SurfaceType48 UMETA(Hidden),
-	SurfaceType49 UMETA(Hidden),
-	SurfaceType50 UMETA(Hidden),
-	SurfaceType51 UMETA(Hidden),
-	SurfaceType52 UMETA(Hidden),
-	SurfaceType53 UMETA(Hidden),
-	SurfaceType54 UMETA(Hidden),
-	SurfaceType55 UMETA(Hidden),
-	SurfaceType56 UMETA(Hidden),
-	SurfaceType57 UMETA(Hidden),
-	SurfaceType58 UMETA(Hidden),
-	SurfaceType59 UMETA(Hidden),
-	SurfaceType60 UMETA(Hidden),
-	SurfaceType61 UMETA(Hidden),
-	SurfaceType62 UMETA(Hidden),
-	SurfaceType_Max UMETA(Hidden)
 };
 
 /** Types of valid physical material mask colors which may be associated with a physical material */
@@ -3766,31 +3704,6 @@ struct FComponentSocketDescription
 
 /** Dynamic delegate to use by components that want to route the broken-event into blueprints */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FConstraintBrokenSignature, int32, ConstraintIndex);
-
-/** Specifies angular degrees of freedom */
-UENUM()
-enum EAngularConstraintMotion
-{
-	/** No constraint against this axis. */ 
-	ACM_Free		UMETA(DisplayName="Free"),
-	/** Limited freedom along this axis. */ 
-	ACM_Limited		UMETA(DisplayName="Limited"),
-	/** Fully constraint against this axis. */
-	ACM_Locked		UMETA(DisplayName="Locked"),
-
-	ACM_MAX,
-};
-
-/** Enum to indicate which context frame we use for physical constraints */
-UENUM()
-namespace EConstraintFrame
-{
-	enum Type
-	{
-		Frame1,
-		Frame2
-	};
-}
 
 /** Structure for file paths that are displayed in the editor with a picker UI. */
 USTRUCT(BlueprintType)

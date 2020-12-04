@@ -47,14 +47,13 @@ NIAGARASHADER_API void FNiagaraShaderCompilationManager::AddJobs(TArray<TSharedR
 
 		UE_LOG(LogNiagaraShaderCompiler, Verbose, TEXT("Adding niagara gpu shader compile job... %s"), *CurrentJob->Input.DebugGroupName);
 
-		static ITargetPlatformManagerModule& TPM = GetTargetPlatformManagerRef();
-		const FName Format = LegacyShaderPlatformToShaderFormat(EShaderPlatform(CurrentJob->Input.Target.Platform));
-		FString AbsoluteDebugInfoDirectory = IFileManager::Get().ConvertToAbsolutePathForExternalAppForWrite(*(FPaths::ProjectSavedDir() / TEXT("ShaderDebugInfo")));
-		FPaths::NormalizeDirectoryName(AbsoluteDebugInfoDirectory);
-		CurrentJob->Input.DumpDebugInfoPath = AbsoluteDebugInfoDirectory / Format.ToString() / CurrentJob->Input.DebugGroupName;
-		if (!IFileManager::Get().DirectoryExists(*CurrentJob->Input.DumpDebugInfoPath))
+		CurrentJob->Input.DumpDebugInfoRootPath = GShaderCompilingManager->GetAbsoluteShaderDebugInfoDirectory() / LegacyShaderPlatformToShaderFormat(EShaderPlatform(CurrentJob->Input.Target.Platform)).ToString();
+		FPaths::NormalizeDirectoryName(CurrentJob->Input.DumpDebugInfoRootPath);
+		CurrentJob->Input.DebugExtension.Empty();
+		CurrentJob->Input.DumpDebugInfoPath.Empty();
+		if (GShaderCompilingManager->GetDumpShaderDebugInfo() == FShaderCompilingManager::EDumpShaderDebugInfo::Always)
 		{
-			verifyf(IFileManager::Get().MakeDirectory(*CurrentJob->Input.DumpDebugInfoPath, true), TEXT("Failed to create directory for shader debug info '%s'"), *CurrentJob->Input.DumpDebugInfoPath);
+			CurrentJob->Input.DumpDebugInfoPath = GShaderCompilingManager->CreateShaderDebugInfoPath(CurrentJob->Input);
 		}
 	}
 	GShaderCompilingManager->AddJobs(InNewJobs, true, false, FString(), FString(), true);
@@ -63,19 +62,6 @@ NIAGARASHADER_API void FNiagaraShaderCompilationManager::AddJobs(TArray<TSharedR
 void FNiagaraShaderCompilationManager::ProcessAsyncResults()
 {
 	check(IsInGameThread());
-
-	TArray<int32> FinalizedShaderMapIDs;
-	for (int32 JobIndex = JobQueue.Num() - 1; JobIndex >= 0; JobIndex--)
-	{
-		TSharedRef<FShaderCompileJob, ESPMode::ThreadSafe> Job = StaticCastSharedRef<FShaderCompileJob>(JobQueue[JobIndex]);
-		if (Job->bFinalized)
-		{
-			FinalizedShaderMapIDs.Add(Job->Id);
-		}
-	}
-
-	// We do this because the finalization flag is set by another thread, so the manager might not have had a chance to fully process the result.
-	GShaderCompilingManager->FinishCompilation(NULL, FinalizedShaderMapIDs);
 
 	// Process the results from the shader compile worker
 	for (int32 JobIndex = JobQueue.Num() - 1; JobIndex >= 0; JobIndex--)

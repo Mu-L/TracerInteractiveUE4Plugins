@@ -9,11 +9,14 @@
 #include "CoreMinimal.h"
 #include "IAudioExtensionPlugin.h"
 #include "SoundConcurrency.h"
+#include "SoundModulationDestination.h"
 #include "SoundSourceBusSend.h"
 #include "SoundSubmixSend.h"
+#include "SoundGenerator.h"
 #include "UObject/Object.h"
 #include "UObject/ObjectMacros.h"
 #include "AudioDeviceManager.h"
+#include "Interfaces/Interface_AssetUserData.h"
 #include "SoundBase.generated.h"
 
 
@@ -21,6 +24,7 @@ class USoundEffectSourcePreset;
 class USoundSourceBus;
 class USoundSubmix;
 class USoundEffectSourcePresetChain;
+class UAssetUserData;
 
 struct FActiveSound;
 struct FSoundParseParameters;
@@ -49,7 +53,7 @@ enum class EVirtualizationMode : uint8
 };
 
 UCLASS(config=Engine, hidecategories=Object, abstract, editinlinenew, BlueprintType)
-class ENGINE_API USoundBase : public UObject
+class ENGINE_API USoundBase : public UObject, public IInterface_AssetUserData
 {
 	GENERATED_UCLASS_BODY()
 
@@ -61,8 +65,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = Sound, meta = (DisplayName = "Class"), AssetRegistrySearchable)
 	USoundClass* SoundClassObject;
 
-	/** When "stat sounds -debug" has been specified, draw this sound's attenuation shape when the sound is audible. For debugging purpose only. */
-	UPROPERTY(EditAnywhere, Category = Debug)
+	/** When "au.debug.Sounds -debug" has been specified, draw this sound's attenuation shape when the sound is audible. For debugging purpose only. */
+	UPROPERTY(EditAnywhere, Category = Developer)
 	uint8 bDebug : 1;
 
 	/** Whether or not to override the sound concurrency object with local concurrency settings. */
@@ -123,15 +127,15 @@ public:
 #endif
 
 	/** Duration of sound in seconds. */
-	UPROPERTY(Category=Info, AssetRegistrySearchable, VisibleAnywhere, BlueprintReadOnly)
+	UPROPERTY(Category = Developer, AssetRegistrySearchable, VisibleAnywhere, BlueprintReadOnly)
 	float Duration;
 
 	/** The max distance of the asset, as determined by attenuation settings. */
-	UPROPERTY(Category = Info, AssetRegistrySearchable, VisibleAnywhere, BlueprintReadOnly)
+	UPROPERTY(Category = Developer, AssetRegistrySearchable, VisibleAnywhere, BlueprintReadOnly)
 	float MaxDistance;
 
 	/** Total number of samples (in the thousands). Useful as a metric to analyze the relative size of a given sound asset in content browser. */
-	UPROPERTY(Category = Info, AssetRegistrySearchable, VisibleAnywhere, BlueprintReadOnly)
+	UPROPERTY(Category = Developer, AssetRegistrySearchable, VisibleAnywhere, BlueprintReadOnly)
 	float TotalSamples;
 
 	/** Used to determine whether sound can play or remain active if channel limit is met, where higher value is higher priority
@@ -145,9 +149,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = Attenuation)
 	USoundAttenuation* AttenuationSettings;
 
-	/** Modulation for the sound */
-	UPROPERTY(EditAnywhere, Category = Modulation)
-	FSoundModulation Modulation;
+	/** Modulation Settings */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Modulation")
+	FSoundModulationDefaultRoutingSettings ModulationSettings;
 
 	/** Submix to route sound output to. If unset, falls back to referenced SoundClass submix.
 	  * If SoundClass submix is unset, sends to the 'Master Submix' as set in the 'Audio' category of Project Settings'. */
@@ -169,6 +173,10 @@ public:
 	/** This sound will send its audio output to this list of buses if there are bus instances playing before source effects are processed. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Effects|Source", meta = (DisplayName = "Pre-Effect Bus Sends"))
 	TArray<FSoundSourceBusSendInfo> PreEffectBusSends;
+
+	/** Array of user data stored with the asset */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Instanced, Category = Sound)
+	TArray<UAssetUserData*> AssetUserData;
 
 public:
 
@@ -257,5 +265,16 @@ public:
 	/** Queries if the sound has cooked FFT or envelope data. */
 	virtual bool HasCookedFFTData() const { return false; }
 	virtual bool HasCookedAmplitudeEnvelopeData() const { return false; }
+
+	//~ Begin IInterface_AssetUserData Interface
+	virtual void AddAssetUserData(UAssetUserData* InUserData) override;
+	virtual void RemoveUserDataOfClass(TSubclassOf<UAssetUserData> InUserDataClass) override;
+	virtual UAssetUserData* GetAssetUserDataOfClass(TSubclassOf<UAssetUserData> InUserDataClass) override;
+	virtual const TArray<UAssetUserData*>* GetAssetUserDataArray() const override;
+	//~ End IInterface_AssetUserData Interface
+
+	/** Creates a sound generator instance from this sound base. Return true if this is being implemented by a subclass. Sound generators procedurally generate audio in the audio render thread. */
+	virtual ISoundGeneratorPtr CreateSoundGenerator(int32 InSampleRate, int32 InNumChannels) { return nullptr; }
+
 };
 

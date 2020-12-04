@@ -22,9 +22,11 @@ namespace Chaos
 		}
 		
 		FPBDRigidSpringConstraintHandle(FConstraintContainer* InConstraintContainer, int32 InConstraintIndex) 
-		: TContainerConstraintHandle<FPBDRigidSpringConstraints>(InConstraintContainer, InConstraintIndex) 
+		: TContainerConstraintHandle<FPBDRigidSpringConstraints>(StaticType(), InConstraintContainer, InConstraintIndex) 
 		{
 		}
+
+		static FConstraintHandle::EType StaticType() { return FConstraintHandle::EType::RigidSpring; }
 
 		const TVector<FVec3, 2>& GetConstraintPositions() const;
 		void SetConstraintPositions(const TVector<FVec3, 2>& ConstraintPositions);
@@ -34,6 +36,7 @@ namespace Chaos
 		// Get the rest length of the spring
 		FReal GetRestLength() const;
 		void SetRestLength(const FReal SpringLength);
+
 	};
 
 
@@ -50,7 +53,6 @@ namespace Chaos
 
 		FPBDRigidSpringConstraints();
 		virtual ~FPBDRigidSpringConstraints();
-
 		//
 		// Constraint Container API
 		//
@@ -77,8 +79,14 @@ namespace Chaos
 		 */
 		void RemoveConstraint(int ConstraintIndex);
 
-		// @todo(ccaulfield): rename/remove  this
-		void RemoveConstraints(const TSet<TGeometryParticleHandle<FReal, 3>*>& RemovedParticles);
+		/**
+		 * Disabled the specified constraint.
+		 */
+		void DisableConstraints(const TSet<TGeometryParticleHandle<FReal, 3>*>& RemovedParticles) 
+		{
+			// @todo(chaos)
+		}
+
 
 		//
 		// Constraint API
@@ -147,17 +155,15 @@ namespace Chaos
 		// Island Rule API
 		//
 
-		void PrepareConstraints(FReal Dt)
-		{
-		}
+		void PrepareTick() {}
 
-		void UnprepareConstraints(FReal Dt)
-		{
-		}
+		void UnprepareTick() {}
 
-		void UpdatePositionBasedState(const FReal Dt)
-		{
-		}
+		void PrepareIteration(FReal Dt) {}
+
+		void UnprepareIteration(FReal Dt) {}
+
+		void UpdatePositionBasedState(const FReal Dt) {}
 
 		bool Apply(const FReal Dt, const int32 It, const int32 NumIts);
 

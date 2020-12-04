@@ -7,7 +7,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Containers/StringFwd.h"
+#include "Containers/ArrayView.h"
+#include "Containers/StringView.h"
 
 struct FFileStatData;
 
@@ -125,7 +126,7 @@ public:
 	 */
 	static bool IsValidLongPackageName(const FString& InLongPackageName, bool bIncludeReadOnlyRoots = false, FText* OutReason = nullptr);
 
-	/** 
+	/**
 	 * Returns true if the path starts with a valid root (i.e. /Game/, /Engine/, etc) and contains no illegal characters.
 	 * This validates that the packagename is valid, and also makes sure the object after package name is also correct.
 	 * This will return false if passed a path starting with Classname'
@@ -135,6 +136,15 @@ public:
 	 * @return							true if a valid object path
 	 */
 	static bool IsValidObjectPath(const FString& InObjectPath, FText* OutReason = nullptr);
+
+	/**
+	 * Returns true if the path starts with a valid root (i.e. /Game/, /Engine/, etc).
+	 * 
+	 *
+	 * @param InObjectPath				The object path to test
+	 * @return							true if a valid object path
+	 */
+	static bool IsValidPath(const FString& InPath);
 
 	/**
 	 * Checks if the given string is a long package name or not.
@@ -175,6 +185,18 @@ public:
 	static FName GetShortFName(const TCHAR* LongName);
 
 	/**
+	 * Tries to convert a file or directory in game-relative package name format to the corresponding local path
+	 * Game-relative package names can be a full package path (/Game/Folder/File, /Engine/Folder/File, /PluginName/Folder/File) or
+	 * a relative path (Folder/File).
+	 * Full package paths must be in a mounted directory to be successfully converted.
+	 *
+	 * @param RelativePackagePath The path in game-relative package format (allowed to have or not have an extension).
+	 * @param OutLocalPath The corresponding local-path file (with the extension or lack of extension from the input).
+	 * @return Whether the conversion was successful.
+	 */
+	static bool TryConvertGameRelativePackagePathToLocalPath(FStringView RelativePackagePath, FString& OutLocalPath);
+
+	/**
 	 * This will insert a mount point at the head of the search chain (so it can overlap an existing mount point and win).
 	 *
 	 * @param RootPath Logical Root Path.
@@ -191,12 +213,18 @@ public:
 	static void UnRegisterMountPoint(const FString& RootPath, const FString& ContentPath);
 
 	/**
+	 * Returns whether the specific logical root path is a valid mount point.
+	 */
+	static bool MountPointExists(const FString& RootPath);
+
+	/**
 	 * Get the mount point for a given package path
 	 * 
 	 * @param InPackagePath The package path to get the mount point for
+	 * @param InWithoutSlashes Optional parameters that keeps the slashes around the mount point if false
 	 * @return FName corresponding to the mount point, or Empty if invalid
 	 */
-	static FName GetPackageMountPoint(const FString& InPackagePath);
+	static FName GetPackageMountPoint(const FString& InPackagePath, bool InWithoutSlashes = true);
 
 	/**
 	 * Checks if the package exists on disk.
@@ -383,11 +411,20 @@ public:
 	/**
 	 * This will recurse over a directory structure looking for packages.
 	 * 
-	 * @param	OutPackages			The output array that is filled out with a file paths
-	 * @param	RootDirectory		The root of the directory structure to recurse through
+	 * @param	OutPackages			The output array that is filled out with the discovered file paths
+	 * @param	RootDir				The root of the directory structure to recurse through
 	 * @return	Returns true if any packages have been found, otherwise false
 	 */
 	static bool FindPackagesInDirectory(TArray<FString>& OutPackages, const FString& RootDir);
+
+	/**
+	 * This will recurse over the given list of directory structures looking for packages.
+	 *
+	 * @param	OutPackages			The output array that is filled out with the discovered file paths
+	 * @param	RootDirss			The roots of the directory structures to recurse through
+	 * @return	Returns true if any packages have been found, otherwise false
+	 */
+	static bool FindPackagesInDirectories(TArray<FString>& OutPackages, const TArrayView<const FString>& RootDirs);
 
 	/**
 	 * This will recurse over a directory structure looking for packages.
@@ -459,35 +496,40 @@ public:
 	static FString ObjectPathToObjectName(const FString& InObjectPath);
 
 	/**
+	 * Checks the root of the package's path to see if it's an extra package
+	 */
+	static bool IsExtraPackage(FStringView InPackageName);
+
+	/**
 	 * Checks the root of the package's path to see if it is a script package
 	 * @return true if the root of the path matches the script path
 	 */
-	static bool IsScriptPackage(const FString& InPackageName);
+	static bool IsScriptPackage(FStringView InPackageName);
 
 	/**
 	 * Checks the root of the package's path to see if it's a memory package
 	 * This should be set for packages that reside in memory and not on disk, we treat them similar to a script package
 	 * @return true if the root of the patch matches the memory path
 	 */
-	static bool IsMemoryPackage(const FString& InPackageName);
+	static bool IsMemoryPackage(FStringView InPackageName);
 
 	/**
 	 * Checks the root of the package's path to see if it is a temp package
 	 * Temp packages are sometimes saved to disk, and sometimes only exist in memory. They are never in source control
 	 * @return true if the root of the patch matches the temp path
 	 */
-	static bool IsTempPackage(const FString& InPackageName);
+	static bool IsTempPackage(FStringView InPackageName);
 
 	/**
 	 * Checks the root of the package's path to see if it is a localized package
 	 * @return true if the root of the path matches any localized root path
 	 */
-	static bool IsLocalizedPackage(const FString& InPackageName);
+	static bool IsLocalizedPackage(FStringView InPackageName);
 
 	/**
 	 * Checks if a package name contains characters that are invalid for package names.
 	 */
-	static bool DoesPackageNameContainInvalidCharacters(const FString& InLongPackageName, FText* OutReason = NULL);
+	static bool DoesPackageNameContainInvalidCharacters(FStringView InLongPackageName, FText* OutReason = NULL);
 	
 	/**
 	* Checks if a package can be found using known package extensions.

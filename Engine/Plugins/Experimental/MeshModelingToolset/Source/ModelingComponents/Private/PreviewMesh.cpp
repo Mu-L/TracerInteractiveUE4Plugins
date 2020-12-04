@@ -34,7 +34,7 @@ void UPreviewMesh::CreateInWorld(UWorld* World, const FTransform& WithTransform)
 	FActorSpawnParameters SpawnInfo;
 	TemporaryParentActor = World->SpawnActor<APreviewMeshActor>(FVector::ZeroVector, Rotation, SpawnInfo);
 
-	DynamicMeshComponent = NewObject<USimpleDynamicMeshComponent>(TemporaryParentActor, "Mesh");
+	DynamicMeshComponent = NewObject<USimpleDynamicMeshComponent>(TemporaryParentActor);
 	TemporaryParentActor->SetRootComponent(DynamicMeshComponent);
 	//DynamicMeshComponent->SetupAttachment(TemporaryParentActor->GetRootComponent());
 	DynamicMeshComponent->RegisterComponent();
@@ -87,12 +87,26 @@ void UPreviewMesh::SetMaterials(const TArray<UMaterialInterface*>& Materials)
 	DynamicMeshComponent->NotifyMeshUpdated();
 }
 
+int32 UPreviewMesh::GetNumMaterials() const
+{
+	check(DynamicMeshComponent);
+	return DynamicMeshComponent->GetNumMaterials();
+}
+
 UMaterialInterface* UPreviewMesh::GetMaterial(int MaterialIndex) const
 {
 	check(DynamicMeshComponent);
 	return DynamicMeshComponent->GetMaterial(MaterialIndex);
 }
 
+void UPreviewMesh::GetMaterials(TArray<UMaterialInterface*>& OutMaterials) const
+{
+	check(DynamicMeshComponent);
+	for (int32 i = 0; i < DynamicMeshComponent->GetNumMaterials(); ++i)
+	{
+		OutMaterials.Add(DynamicMeshComponent->GetMaterial(i));
+	}
+}
 
 void UPreviewMesh::SetOverrideRenderMaterial(UMaterialInterface* Material)
 {
@@ -148,7 +162,7 @@ void UPreviewMesh::SetTangentsMode(EDynamicMeshTangentCalcType TangentsType)
 	DynamicMeshComponent->TangentsType = TangentsType;
 }
 
-FMeshTangentsf* UPreviewMesh::GetTangents() const
+const TMeshTangents<float>* UPreviewMesh::GetTangents() const
 {
 	return DynamicMeshComponent->GetTangents();
 }
@@ -182,7 +196,7 @@ void UPreviewMesh::SetVisible(bool bVisible)
 {
 	if (DynamicMeshComponent != nullptr)
 	{
-		DynamicMeshComponent->SetVisibility(bVisible);
+		DynamicMeshComponent->SetVisibility(bVisible, true);
 	}
 }
 
@@ -223,6 +237,19 @@ void UPreviewMesh::UpdatePreview(const FDynamicMesh3* Mesh)
 	}
 }
 
+void UPreviewMesh::UpdatePreview(FDynamicMesh3&& Mesh)
+{
+	DynamicMeshComponent->SetDrawOnTop(this->bDrawOnTop);
+
+	*(DynamicMeshComponent->GetMesh()) = MoveTemp(Mesh);
+	DynamicMeshComponent->NotifyMeshUpdated();
+
+	if (bBuildSpatialDataStructure)
+	{
+		MeshAABBTree.SetMesh(DynamicMeshComponent->GetMesh(), true);
+	}
+}
+
 
 const FDynamicMesh3* UPreviewMesh::GetMesh() const
 {
@@ -232,6 +259,19 @@ const FDynamicMesh3* UPreviewMesh::GetMesh() const
 	}
 	return nullptr;
 }
+
+FDynamicMeshAABBTree3* UPreviewMesh::GetSpatial()
+{
+	if (DynamicMeshComponent != nullptr && bBuildSpatialDataStructure)
+	{
+		if (MeshAABBTree.IsValid())
+		{
+			return &MeshAABBTree;
+		}
+	}
+	return nullptr;
+}
+
 
 
 
@@ -371,7 +411,7 @@ void UPreviewMesh::ForceRebuildSpatial()
 }
 
 
-void UPreviewMesh::NotifyDeferredEditCompleted(ERenderUpdateMode UpdateMode, bool bRebuildSpatial)
+void UPreviewMesh::NotifyDeferredEditCompleted(ERenderUpdateMode UpdateMode, EMeshRenderAttributeFlags ModifiedAttribs, bool bRebuildSpatial)
 {
 	if (bBuildSpatialDataStructure && bRebuildSpatial)
 	{
@@ -382,9 +422,20 @@ void UPreviewMesh::NotifyDeferredEditCompleted(ERenderUpdateMode UpdateMode, boo
 	{
 		DynamicMeshComponent->NotifyMeshUpdated();
 	}
-	else
+	else if (UpdateMode == ERenderUpdateMode::FastUpdate)
 	{
-		DynamicMeshComponent->FastNotifyPositionsUpdated();
+		bool bPositions = (ModifiedAttribs & EMeshRenderAttributeFlags::Positions) != EMeshRenderAttributeFlags::None;
+		bool bNormals = (ModifiedAttribs & EMeshRenderAttributeFlags::VertexNormals) != EMeshRenderAttributeFlags::None;
+		bool bColors = (ModifiedAttribs & EMeshRenderAttributeFlags::VertexColors) != EMeshRenderAttributeFlags::None;
+		bool bUVs = (ModifiedAttribs & EMeshRenderAttributeFlags::VertexUVs) != EMeshRenderAttributeFlags::None;
+		if (bPositions)
+		{
+			DynamicMeshComponent->FastNotifyPositionsUpdated(bNormals, bColors, bUVs);
+		}
+		else
+		{
+			DynamicMeshComponent->FastNotifyVertexAttributesUpdated(bNormals, bColors, bUVs);
+		}
 	}
 }
 

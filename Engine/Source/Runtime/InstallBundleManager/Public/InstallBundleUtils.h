@@ -19,6 +19,8 @@ namespace InstallBundleUtil
 
 	INSTALLBUNDLEMANAGER_API const FString& GetInstallBundleSectionPrefix();
 
+	constexpr float MinimumBundleWeight = 0.05f;
+
 	// It would really be nice to have these in core
 	template<class EnumType>
 	constexpr auto& CastAsUnderlying(EnumType &Type)
@@ -126,6 +128,8 @@ namespace InstallBundleUtil
 	using FInstallBundleTask = FAsyncTask<FInstallBundleWork>;
 
 	INSTALLBUNDLEMANAGER_API void StartInstallBundleAsyncIOTask(TArray<TUniquePtr<FInstallBundleTask>>& Tasks, TUniqueFunction<void()> WorkFunc, TUniqueFunction<void()> OnComplete);
+
+	INSTALLBUNDLEMANAGER_API void StartInstallBundleAsyncIOTask(FQueuedThreadPool* ThreadPool, TArray<TUniquePtr<FInstallBundleTask>>& Tasks, TUniqueFunction<void()> WorkFunc, TUniqueFunction<void()> OnComplete);
 
 	INSTALLBUNDLEMANAGER_API void FinishInstallBundleAsyncIOTasks(TArray<TUniquePtr<FInstallBundleTask>>& Tasks);
 
@@ -435,24 +439,28 @@ namespace InstallBundleUtil
 			virtual void StartSessionPersistentStatTracking(const FString& SessionName, const TArray<FName>& RequiredBundles = TArray<FName>(), const FString& ExpectedAnalyticsID = FString(), bool bForceResetStatData = false);
 
 			virtual void StopBundlePersistentStatTracking(FName BundleName, bool bStopAllActiveTimers = true);
-			virtual void StopSessionPersistentStatTracking(FString SessionName, bool bStopAllActiveTimers = true);
+			virtual void StopSessionPersistentStatTracking(const FString& SessionName, bool bStopAllActiveTimers = true);
 
 			virtual void StartBundlePersistentStatTimer(FName BundleName, ETimingStatNames TimerToStart);
-			virtual void StartSessionPersistentStatTimer(FString SessionName, ETimingStatNames TimerToStart);
+			virtual void StartSessionPersistentStatTimer(const FString& SessionName, ETimingStatNames TimerToStart);
 
 			virtual void StopBundlePersistentStatTimer(FName BundleName, ETimingStatNames TimerToStop);
-			virtual void StopSessionPersistentStatTimer(FString SessionName, ETimingStatNames TimerToStop);
+			virtual void StopSessionPersistentStatTimer(const FString& SessionName, ETimingStatNames TimerToStop);
 
 			virtual void UpdateBundlePersistentStatTimer(FName BundleName, ETimingStatNames TimerToUpdate);
-			virtual void UpdateSessionPersistentStatTimer(FString SessionName, ETimingStatNames TimerToUpdate);
+			virtual void UpdateSessionPersistentStatTimer(const FString& SessionName, ETimingStatNames TimerToUpdate);
 
 			virtual void IncrementBundlePersistentCounter(FName BundleName, ECountStatNames CounterToUpdate);
-			virtual void IncrementSessionPersistentCounter(FString SessionName, ECountStatNames CounterToUpdate);
+			virtual void IncrementSessionPersistentCounter(const FString& SessionName, ECountStatNames CounterToUpdate);
 
 			virtual const FBundlePersistentStats* GetBundleStat(FName BundleName) const;
 			virtual const FSessionPersistentStats* GetSessionStat(const FString& SessionName) const;
 
 			virtual void SaveAllDirtyStatsToDisk();
+			
+			//Deletes persistent stat information from our stats for this Session/Bundle to reduce memory useage
+			virtual void RemoveSessionStats(const FString& SessionName);
+			virtual void RemoveBundleStats(FName BundleName);
 			
 		protected:
 			virtual bool Tick(float dt);

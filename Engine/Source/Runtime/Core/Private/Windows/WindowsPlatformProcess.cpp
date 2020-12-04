@@ -23,6 +23,7 @@
 #include "Windows/WindowsHWrapper.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/CoreDelegates.h"
+#include "Misc/Fork.h"
 #include "ProfilingDebugging/CsvProfiler.h"
 
 #include "Windows/AllowWindowsPlatformTypes.h"
@@ -288,12 +289,6 @@ FProcHandle FWindowsPlatformProcess::CreateProc( const TCHAR* URL, const TCHAR* 
 {
 	//UE_LOG(LogWindows, Log,  TEXT("CreateProc %s %s"), URL, Parms );
 
-	// initialize process attributes
-	SECURITY_ATTRIBUTES Attr;
-	Attr.nLength = sizeof(SECURITY_ATTRIBUTES);
-	Attr.lpSecurityDescriptor = NULL;
-	Attr.bInheritHandle = true;
-
 	// initialize process creation flags
 	uint32 CreateFlags = NORMAL_PRIORITY_CLASS;
 	if (PriorityModifier < 0)
@@ -345,11 +340,13 @@ FProcHandle FWindowsPlatformProcess::CreateProc( const TCHAR* URL, const TCHAR* 
 		HANDLE(PipeWriteChild)
 	};
 
+	bool bInheritHandles = (dwFlags & STARTF_USESTDHANDLES) != 0;
+
 	// create the child process
 	FString CommandLine = FString::Printf(TEXT("\"%s\" %s"), URL, Parms);
 	PROCESS_INFORMATION ProcInfo;
 
-	if (!CreateProcess(NULL, CommandLine.GetCharArray().GetData(), &Attr, &Attr, true, (::DWORD)CreateFlags, NULL, OptionalWorkingDirectory, &StartupInfo, &ProcInfo))
+	if (!CreateProcess(NULL, CommandLine.GetCharArray().GetData(), nullptr, nullptr, bInheritHandles, (::DWORD)CreateFlags, NULL, OptionalWorkingDirectory, &StartupInfo, &ProcInfo))
 	{
 		DWORD ErrorCode = GetLastError();
 
@@ -380,6 +377,26 @@ FProcHandle FWindowsPlatformProcess::CreateProc( const TCHAR* URL, const TCHAR* 
 	::CloseHandle( ProcInfo.hThread );
 
 	return FProcHandle(ProcInfo.hProcess);
+}
+
+bool FWindowsPlatformProcess::SetProcPriority(FProcHandle& InProcHandle, int32 PriorityModifier)
+{
+	DWORD PriorityClass = NORMAL_PRIORITY_CLASS;
+	if (PriorityModifier < 0)
+	{
+		PriorityClass = (PriorityModifier == -1) ? BELOW_NORMAL_PRIORITY_CLASS : IDLE_PRIORITY_CLASS;
+	}
+	else if (PriorityModifier > 0)
+	{
+		PriorityClass = (PriorityModifier == 1) ? ABOVE_NORMAL_PRIORITY_CLASS : HIGH_PRIORITY_CLASS;
+	}
+
+	if (InProcHandle.IsValid())
+	{
+		return SetPriorityClass(InProcHandle.Get(), PriorityClass);
+	}
+	return false;
+
 }
 
 FProcHandle FWindowsPlatformProcess::OpenProcess(uint32 ProcessID)
@@ -554,7 +571,7 @@ bool FWindowsPlatformProcess::GetPerFrameProcessorUsage(uint32 ProcessId, float&
 			LastProcessTime = (double)DeltaProcessCycleTime / DeltaCyclesPerFrame;
 
 			// Idle cycles are stored per core and flipped to allow per-frame calculation
-			const uint32 BufferLength = 512;
+			const uint32 BufferLength = 1024;
 			check(BufferLength >= NumCores * 8);
 
 			static uint64 IdleCycleTimeBuffers[2][BufferLength] = {{0}};
@@ -923,12 +940,9 @@ const TCHAR* FWindowsPlatformProcess::BaseDir()
 			GetModuleFileName(hCurrentModule, Result, UE_ARRAY_COUNT(Result));
 			FString TempResult(Result);
 			TempResult = TempResult.Replace(TEXT("\\"), TEXT("/"));
+
 			FCString::Strcpy(Result, *TempResult);
 			int32 StringLength = FCString::Strlen(Result);
-			int32 NumSubDirectories = 0;
-#ifdef ENGINE_BASE_DIR_ADJUST
-			NumSubDirectories = ENGINE_BASE_DIR_ADJUST;
-#endif
 			if (StringLength > 0)
 			{
 				--StringLength;
@@ -936,16 +950,16 @@ const TCHAR* FWindowsPlatformProcess::BaseDir()
 				{
 					if (Result[StringLength - 1] == TEXT('/') || Result[StringLength - 1] == TEXT('\\'))
 					{
-						if(--NumSubDirectories < 0) //-V547
-						{
-							break;
-						}
+						break;
 					}
 				}
 			}
 			Result[StringLength] = 0;
 
 			FString CollapseResult(Result);
+#ifdef UE_RELATIVE_BASE_DIR
+			CollapseResult /= UE_RELATIVE_BASE_DIR;
+#endif
 			FPaths::CollapseRelativeDirectories(CollapseResult);
 			FCString::Strcpy(Result, *CollapseResult);
 		}
@@ -1073,11 +1087,20 @@ const TCHAR* FWindowsPlatformProcess::UserName(bool bOnlyAlphaNumeric/* = true*/
 void FWindowsPlatformProcess::SetCurrentWorkingDirectoryToBaseDir()
 {
 #if defined(DISABLE_CWD_CHANGES) && DISABLE_CWD_CHANGES != 0
-	check(false);
+	checkf(false, TEXT("Attempting to call 'SetCurrentWorkingDirectoryToBaseDir' while DISABLE_CWD_CHANGES is set!"));
 #else
 	FPlatformMisc::CacheLaunchDir();
-	verify(SetCurrentDirectoryW(BaseDir()));
-#endif
+
+	// Ideally we would log the following errors but this is most likely to fail right at the start of the 
+	// program and any call to UE_LOG at this point will not actually result in anything being written to disk.
+#if DO_CHECK
+	TCHAR SystemError[1024];
+#endif //DO_CHECK
+	
+	verifyf(::SetCurrentDirectoryW(BaseDir()),	TEXT("Failed to set the working directory to '%s' (%s)"), 
+												BaseDir(), 
+												FWindowsPlatformMisc::GetSystemErrorMessage(SystemError, UE_ARRAY_COUNT(SystemError), 0));
+#endif //DISABLE_CWD_CHANGES
 }
 
 /** Get the current working directory (only really makes sense on desktop platforms) */
@@ -1301,9 +1324,12 @@ void FWindowsPlatformProcess::SleepInfinite()
 
 FEvent* FWindowsPlatformProcess::CreateSynchEvent(bool bIsManualReset)
 {
+	// While windows does not support forking we can still simulate the forking codeflow and test the singlethread to multithread switch on Win targets
+	const bool bIsMultithread = FPlatformProcess::SupportsMultithreading() || FForkProcessHelper::SupportsMultithreadingPostFork();
+
 	// Allocate the new object
 	FEvent* Event = NULL;	
-	if (FPlatformProcess::SupportsMultithreading())
+	if (bIsMultithread)
 	{
 		Event = new FEventWin();
 	}

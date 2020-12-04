@@ -68,12 +68,16 @@ public:
 		, LoadRequests(new(MemStack) FVirtualTextureLocalTile[LoadRequestCapacity])
 		, MappingRequests(new(MemStack) FMappingRequest[MappingRequestCapacity])
 		, DirectMappingRequests(new(MemStack) FDirectMappingRequest[DirectMappingRequestCapacity])
+		, ContinuousUpdateRequests(new(MemStack) FVirtualTextureLocalTile[LoadRequestCapacity])
+		, AdaptiveAllocationsRequests(new(MemStack) uint32[LoadRequestCapacity])
 		, LoadRequestCount(new(MemStack) uint16[LoadRequestCapacity])
 		, LoadRequestGroupMask(new(MemStack) uint8[LoadRequestCapacity])
 		, NumLoadRequests(0u)
 		, NumLockRequests(0u)
 		, NumMappingRequests(0u)
 		, NumDirectMappingRequests(0u)
+		, NumContinuousUpdateRequests(0u)
+		, NumAdaptiveAllocationRequests(0u)
 	{
 	}
 
@@ -82,15 +86,21 @@ public:
 		LoadRequestHash.Clear();
 		MappingRequestHash.Clear();
 		DirectMappingRequestHash.Clear();
+		ContinuousUpdateRequestHash.Clear();
 	}
 
 	inline uint32 GetNumLoadRequests() const { return NumLoadRequests; }
 	inline uint32 GetNumMappingRequests() const { return NumMappingRequests; }
-	inline uint32 GetNumDirectMappingRequests() { return NumDirectMappingRequests; }
+	inline uint32 GetNumDirectMappingRequests() const { return NumDirectMappingRequests; }
+	inline uint32 GetNumContinuousUpdateRequests() const { return NumContinuousUpdateRequests; }
+	inline uint32 GetNumAdaptiveAllocationRequests() const { return NumAdaptiveAllocationRequests; }
 
 	inline const FVirtualTextureLocalTile& GetLoadRequest(uint32 i) const { checkSlow(i < NumLoadRequests); return LoadRequests[i]; }
 	inline const FMappingRequest& GetMappingRequest(uint32 i) const { checkSlow(i < NumMappingRequests); return MappingRequests[i]; }
 	inline const FDirectMappingRequest& GetDirectMappingRequest(uint32 i) const { checkSlow(i < NumDirectMappingRequests); return DirectMappingRequests[i]; }
+	inline const FVirtualTextureLocalTile& GetContinuousUpdateRequest(uint32 i) const { checkSlow(i < NumContinuousUpdateRequests); return ContinuousUpdateRequests[i]; }
+	inline const uint32& GetAdaptiveAllocationRequest(uint32 i) const { checkSlow(i < NumAdaptiveAllocationRequests); return AdaptiveAllocationsRequests[i]; }
+	
 	inline uint8 GetGroupMask(uint32 i) const { checkSlow(i < NumLoadRequests); return LoadRequestGroupMask[i]; }
 	inline bool IsLocked(uint32 i) const { checkSlow(i < NumLoadRequests); return i < NumLockRequests; }
 
@@ -102,6 +112,10 @@ public:
 	void AddDirectMappingRequest(uint8 InSpaceID, uint16 InPhysicalSpaceID, uint8 InPageTableLayerIndex, uint8 InLogSize, uint32 InAddress, uint8 InLevel, uint16 InPhysicalAddress);
 	void AddDirectMappingRequest(const FDirectMappingRequest& Request);
 
+	void AddContinuousUpdateRequest(const FVirtualTextureLocalTile& Request);
+
+	void AddAdaptiveAllocationRequest(uint32 Request);
+
 	void MergeRequests(const FUniqueRequestList* RESTRICT Other, FMemStack& MemStack);
 
 	void SortRequests(FVirtualTextureProducerCollection& Producers, FMemStack& MemStack, uint32 MaxNumRequests);
@@ -110,14 +124,20 @@ private:
 	static const uint32 LoadRequestCapacity = 4u * 1024;
 	static const uint32 MappingRequestCapacity = 8u * 1024 - 256u;
 	static const uint32 DirectMappingRequestCapacity = MappingRequestCapacity;
+	static const uint32 ContinuousUpdateRequestCapacity = LoadRequestCapacity;
+	static const uint32 AdaptiveAllocationRequestCapacity = LoadRequestCapacity;
 
 	TStaticHashTable<1024u, LoadRequestCapacity> LoadRequestHash;
 	TStaticHashTable<1024u, MappingRequestCapacity> MappingRequestHash;
 	TStaticHashTable<512u, DirectMappingRequestCapacity> DirectMappingRequestHash;
+	TStaticHashTable<1024u, ContinuousUpdateRequestCapacity> ContinuousUpdateRequestHash;
 
 	FVirtualTextureLocalTile* LoadRequests;
 	FMappingRequest* MappingRequests;
 	FDirectMappingRequest* DirectMappingRequests;
+	FVirtualTextureLocalTile* ContinuousUpdateRequests;
+	uint32* AdaptiveAllocationsRequests;
+	
 	uint16* LoadRequestCount;
 	uint8* LoadRequestGroupMask;
 
@@ -125,6 +145,8 @@ private:
 	uint32 NumLockRequests;
 	uint32 NumMappingRequests;
 	uint32 NumDirectMappingRequests;
+	uint32 NumContinuousUpdateRequests;
+	uint32 NumAdaptiveAllocationRequests;
 };
 
 
@@ -240,6 +262,33 @@ inline void FUniqueRequestList::AddDirectMappingRequest(const FDirectMappingRequ
 	}
 }
 
+inline void FUniqueRequestList::AddContinuousUpdateRequest(const FVirtualTextureLocalTile& Request)
+{
+	const uint16 Hash = MurmurFinalize64(Request.PackedValue);
+	for (uint16 Index = ContinuousUpdateRequestHash.First(Hash); ContinuousUpdateRequestHash.IsValid(Index); Index = ContinuousUpdateRequestHash.Next(Index))
+	{
+		if (Request == ContinuousUpdateRequests[Index])
+		{
+			return;
+		}
+	}
+
+	if (ensure(NumContinuousUpdateRequests < ContinuousUpdateRequestCapacity))
+	{
+		const uint32 Index = NumContinuousUpdateRequests++;
+		ContinuousUpdateRequestHash.Add(Hash, Index);
+		ContinuousUpdateRequests[Index] = Request;
+	}
+}
+
+void FUniqueRequestList::AddAdaptiveAllocationRequest(uint32 Request)
+{
+	if (ensure(NumAdaptiveAllocationRequests < AdaptiveAllocationRequestCapacity))
+	{
+		AdaptiveAllocationsRequests[NumAdaptiveAllocationRequests++] = Request;
+	}
+}
+
 inline void FUniqueRequestList::MergeRequests(const FUniqueRequestList* RESTRICT Other, FMemStack& MemStack)
 {
 	FMemMark Mark(MemStack);
@@ -271,6 +320,16 @@ inline void FUniqueRequestList::MergeRequests(const FUniqueRequestList* RESTRICT
 	for (uint32 Index = 0u; Index < Other->NumDirectMappingRequests; ++Index)
 	{
 		AddDirectMappingRequest(Other->GetDirectMappingRequest(Index));
+	}
+
+	for (uint32 Index = 0u; Index < Other->NumContinuousUpdateRequests; ++Index)
+	{
+		AddContinuousUpdateRequest(Other->GetContinuousUpdateRequest(Index));
+	}
+
+	for (uint32 Index = 0u; Index < Other->NumAdaptiveAllocationRequests; ++Index)
+	{
+		AddAdaptiveAllocationRequest(Other->GetAdaptiveAllocationRequest(Index));
 	}
 }
 

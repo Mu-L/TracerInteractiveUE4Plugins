@@ -27,8 +27,8 @@ struct FCameraShakeData
 	: public TSharedFromThis<FCameraShakeData>
 	, public FGCObject
 {
-	TSubclassOf<UCameraShake> ShakeClass;
-	UCameraShake* ShakeInstance = nullptr;
+	TSubclassOf<UCameraShakeBase> ShakeClass;
+	UCameraShakeBase* ShakeInstance = nullptr;
 	bool bIsPlaying = false;
 	bool bIsHidden = false;
 
@@ -197,7 +197,7 @@ void SCameraShakePreviewer::Construct(const FArguments& InArgs)
 			.Padding(1.0f)
 			[
 				SNew(SWrapBox)
-				.UseAllottedWidth(true)
+				.UseAllottedSize(true)
 				+SWrapBox::Slot()
 				.Padding(FMargin(2.0f))
 				[
@@ -643,7 +643,7 @@ void SCameraShakePreviewer::PlayCameraShake(TSharedPtr<FCameraShakeData> CameraS
 {
 	FAddCameraShakeParams Params;
 	Params.SourceComponent = CameraShake->SourceComponent.Get();
-	UCameraShake* ShakeInstance = CameraShakePreviewUpdater->ShakeModifier().AddCameraShake(CameraShake->ShakeClass, Params);
+	UCameraShakeBase* ShakeInstance = CameraShakePreviewUpdater->ShakeModifier().AddCameraShake(CameraShake->ShakeClass, Params);
 	CameraShake->ShakeInstance = ShakeInstance;
 	CameraShake->bIsPlaying = true;
 }

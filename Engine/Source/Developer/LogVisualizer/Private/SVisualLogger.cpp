@@ -94,30 +94,18 @@ SVisualLogger::SVisualLogger()
 	class FVisualLoggerDevice : public FVisualLogDevice
 	{
 	public:
-		FVisualLoggerDevice(SVisualLogger* InVisualLogger, FOnWorldChanged OnWorldChangedDelegate) : VisualLoggerWidget(InVisualLogger), LastUsedWorld(nullptr), OnWorldChanged(OnWorldChangedDelegate) {}
+		FVisualLoggerDevice(SVisualLogger& InVisualLogger) : VisualLoggerWidget(InVisualLogger) {}
 
 		virtual ~FVisualLoggerDevice(){}
 		virtual void Serialize(const UObject* LogOwner, FName OwnerName, FName OwnerClassName, const FVisualLogEntry& LogEntry) override
 		{
-			VisualLoggerWidget->OnNewLogEntry(FVisualLogDevice::FVisualLogEntryItem(OwnerName, OwnerClassName, LogEntry));
-			UWorld* CurrentWorld = nullptr;
-			if (FVisualLogger::Get().GetObjectToWorldMap().Contains(LogOwner))
-			{
-				CurrentWorld = const_cast<UWorld*>(FVisualLogger::Get().GetObjectToWorldMap()[LogOwner].Get());
-			}
-			if (LastUsedWorld != CurrentWorld && CurrentWorld != nullptr)
-			{
-				OnWorldChanged.ExecuteIfBound(LastUsedWorld, CurrentWorld);
-				LastUsedWorld = CurrentWorld;
-			}
+			VisualLoggerWidget.OnNewLogEntry(FVisualLogDevice::FVisualLogEntryItem(OwnerName, OwnerClassName, LogEntry));
 		}
 		
-		SVisualLogger* VisualLoggerWidget;
-		UWorld* LastUsedWorld;
-		FOnWorldChanged OnWorldChanged;
+		SVisualLogger& VisualLoggerWidget;
 	};
 
-	InternalDevice = MakeShareable(new FVisualLoggerDevice(this, FOnWorldChanged::CreateLambda([this](UWorld* PreviousWorld, UWorld* CurrentWorld){ OnNewWorld(CurrentWorld); })));
+	InternalDevice = MakeShareable(new FVisualLoggerDevice(*this));
 	FVisualLogger::Get().AddDevice(InternalDevice.Get());
 }
 
@@ -169,7 +157,7 @@ void SVisualLogger::Construct(const FArguments& InArgs, const TSharedRef<SDockTa
 	// Visual Logger Events
 	FLogVisualizer::Get().GetEvents().OnFiltersChanged.AddRaw(this, &SVisualLogger::OnFiltersChanged);
 	FLogVisualizer::Get().GetEvents().OnLogLineSelectionChanged = FOnLogLineSelectionChanged::CreateRaw(this, &SVisualLogger::OnLogLineSelectionChanged);
-	FLogVisualizer::Get().GetEvents().OnKeyboardEvent = FOnKeyboardEvent::CreateRaw(this, &SVisualLogger::OnKeyboaedRedirection);
+	FLogVisualizer::Get().GetEvents().OnKeyboardEvent = FOnKeyboardEvent::CreateRaw(this, &SVisualLogger::OnKeyboardRedirection);
 	FLogVisualizer::Get().GetTimeSliderController().Get()->GetTimeSliderArgs().OnScrubPositionChanged = FVisualLoggerTimeSliderArgs::FOnScrubPositionChanged::CreateRaw(this, &SVisualLogger::OnScrubPositionChanged);
 
 	FVisualLoggerDatabase::Get().GetEvents().OnRowSelectionChanged.AddRaw(this, &SVisualLogger::OnObjectSelectionChanged);
@@ -177,6 +165,7 @@ void SVisualLogger::Construct(const FArguments& InArgs, const TSharedRef<SDockTa
 	FVisualLoggerDatabase::Get().GetEvents().OnItemSelectionChanged.AddRaw(this, &SVisualLogger::OnItemsSelectionChanged);
 
 	GEngine->OnWorldAdded().AddRaw(this, &SVisualLogger::OnNewWorld);
+	GEngine->OnWorldAdded().AddRaw(this, &SVisualLogger::OnWorldDestroyed);
 
 	//////////////////////////////////////////////////////////////////////////
 	// Command Action Lists
@@ -184,6 +173,7 @@ void SVisualLogger::Construct(const FArguments& InArgs, const TSharedRef<SDockTa
 	FUICommandList& ActionList = *CommandList;
 
 	ULogVisualizerSettings* Settings = ULogVisualizerSettings::StaticClass()->GetDefaultObject<ULogVisualizerSettings>();
+	Settings->ConfigureVisLog();
 	Settings->LoadPresistentData();
 
 	ActionList.MapAction(Commands.StartRecording, FExecuteAction::CreateRaw(this, &SVisualLogger::HandleStartRecordingCommandExecute), FCanExecuteAction::CreateRaw(this, &SVisualLogger::HandleStartRecordingCommandCanExecute), FIsActionChecked(), FIsActionButtonVisible::CreateRaw(this, &SVisualLogger::HandleStartRecordingCommandIsVisible));
@@ -733,19 +723,23 @@ void SVisualLogger::ResetData()
 	}
 
 	FLogVisualizer::Get().GetEvents().OnLogLineSelectionChanged = FOnLogLineSelectionChanged::CreateRaw(this, &SVisualLogger::OnLogLineSelectionChanged);
-	FLogVisualizer::Get().GetEvents().OnKeyboardEvent = FOnKeyboardEvent::CreateRaw(this, &SVisualLogger::OnKeyboaedRedirection);
+	FLogVisualizer::Get().GetEvents().OnKeyboardEvent = FOnKeyboardEvent::CreateRaw(this, &SVisualLogger::OnKeyboardRedirection);
 	FLogVisualizer::Get().GetTimeSliderController().Get()->GetTimeSliderArgs().OnScrubPositionChanged = FVisualLoggerTimeSliderArgs::FOnScrubPositionChanged::CreateRaw(this, &SVisualLogger::OnScrubPositionChanged);
+}
+
+void SVisualLogger::OnWorldDestroyed(UWorld* NewWorld)
+{
+	if (NewWorld)
+	{
+		for (TActorIterator<AVisualLoggerRenderingActor> It(NewWorld); It; ++It)
+		{
+			NewWorld->DestroyActor(*It);
+		}
+	}
 }
 
 void SVisualLogger::OnNewWorld(UWorld* NewWorld)
 {
-	if (LastUsedWorld.IsValid() && LastUsedWorld != NewWorld)
-	{
-		for (TActorIterator<AVisualLoggerRenderingActor> It(LastUsedWorld.Get()); It; ++It)
-		{
-			LastUsedWorld->DestroyActor(*It);
-		}
-	}
 	LastUsedWorld = NewWorld;
 
 	AVisualLoggerRenderingActor* HelperActor = Cast<AVisualLoggerRenderingActor>(FVisualLoggerEditorInterface::Get()->GetHelperActor(LastUsedWorld.Get()));
@@ -1010,9 +1004,19 @@ void SVisualLogger::OnScrubPositionChanged(float NewScrubPosition, bool bScrubbi
 			DBRow.MoveTo(ClosestItem);
 		}
 	}
+
+	const TMap<FName, FVisualLogExtensionInterface*>& AllExtensions = FVisualLogger::Get().GetAllExtensions();
+	for (auto Iterator = AllExtensions.CreateConstIterator(); Iterator; ++Iterator)
+	{
+		FVisualLogExtensionInterface* Extension = (*Iterator).Value;
+		if (Extension != NULL)
+		{
+			Extension->OnScrubPositionChanged(FVisualLoggerEditorInterface::Get(), NewScrubPosition, bScrubbing);
+		}
+	}
 }
 
-FReply SVisualLogger::OnKeyboaedRedirection(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
+FReply SVisualLogger::OnKeyboardRedirection(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
 	FReply ReturnValue = FReply::Unhandled();
 

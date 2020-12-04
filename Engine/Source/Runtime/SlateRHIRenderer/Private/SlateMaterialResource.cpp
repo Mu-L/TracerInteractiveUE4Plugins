@@ -4,41 +4,126 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Styling/SlateBrush.h"
 
+namespace SlateMaterialResource
+{
 
-FSlateMaterialResource::FSlateMaterialResource(const UMaterialInterface& InMaterial, const FVector2D& InImageSize, FSlateShaderResource* InTextureMask )
-	: MaterialObject( &InMaterial )
+#if SLATE_CHECK_UOBJECT_RENDER_RESOURCES
+	void CheckInvalidUMaterial(const UMaterialInterface& InMaterialResource, const FName& InDebugName)
+	{
+		if (GSlateCheckUObjectRenderResources)
+		{
+			bool bIsValidLowLevel = InMaterialResource.IsValidLowLevelFast(false);
+			if (!bIsValidLowLevel || InMaterialResource.IsPendingKill() || InMaterialResource.GetClass() == UMaterialInterface::StaticClass())
+			{
+				UE_LOG(LogSlate, Error, TEXT("Material '%s' is not valid. PendingKill:'%d'. ValidLowLevelFast:'%d'. InvalidClass:'%d'")
+					, *InDebugName.ToString()
+					, (bIsValidLowLevel ? InMaterialResource.IsPendingKill() : false)
+					, bIsValidLowLevel
+					, (bIsValidLowLevel ? InMaterialResource.GetClass() == UMaterialInterface::StaticClass() : false));
+
+				const TCHAR* Message = TEXT("We detected an invalid resource in FSlateMaterialResource. Check the log for more detail.");
+				if (GSlateCheckUObjectRenderResourcesShouldLogFatal)
+				{
+					UE_LOG(LogSlate, Fatal, TEXT("%s"), Message);
+				}
+				else
+				{
+					ensureAlwaysMsgf(false, TEXT("%s"), Message);
+				}
+			}
+		}
+	}
+
+	void CheckInvalidMaterialProxy(const FMaterialRenderProxy* MaterialProxy, const FName& InDebugName)
+	{
+		if (GSlateCheckUObjectRenderResources)
+		{
+			if (MaterialProxy == nullptr || MaterialProxy->IsDeleted() || MaterialProxy->IsMarkedForGarbageCollection())
+			{
+				UE_LOG(LogSlate, Error, TEXT("Material '%s' Render Proxy is: nullptr:'%d'. Deleted:'%d'. Marked for GC:'%d'")
+					, *InDebugName.ToString()
+					, (MaterialProxy == nullptr)
+					, (MaterialProxy ? MaterialProxy->IsDeleted() : false)
+					, (MaterialProxy ? MaterialProxy->IsMarkedForGarbageCollection() : false));
+
+				const TCHAR* Message = TEXT("We detected an invalid resource render proxy in FSlateMaterialResource. Check the log for more detail.");
+				if (GSlateCheckUObjectRenderResourcesShouldLogFatal)
+				{
+					UE_LOG(LogSlate, Fatal, TEXT("%s"), Message);
+				}
+				else
+				{
+					ensureAlwaysMsgf(false, TEXT("%s"), Message);
+				}
+			}
+		}
+	}
+#endif
+
+}
+
+FSlateMaterialResource::FSlateMaterialResource(const UMaterialInterface& InMaterialResource, const FVector2D& InImageSize, FSlateShaderResource* InTextureMask )
+	: MaterialObject( &InMaterialResource)
 	, SlateProxy( new FSlateShaderResourceProxy )
 	, TextureMaskResource( InTextureMask )
 	, Width(FMath::RoundToInt(InImageSize.X))
 	, Height(FMath::RoundToInt(InImageSize.Y))
 {
+#if SLATE_CHECK_UOBJECT_RENDER_RESOURCES
+	SlateMaterialResource::CheckInvalidUMaterial(InMaterialResource, NAME_None);
+
+	MaterialProxy = InMaterialResource.GetRenderProxy();
+
+	MaterialObjectWeakPtr = MaterialObject;
+	UpdateMaterialName();
+
+	SlateMaterialResource::CheckInvalidMaterialProxy(MaterialProxy, DebugName);
+#else
+	MaterialProxy = InMaterialResource.GetRenderProxy();
+#endif
+
 	SlateProxy->ActualSize = InImageSize.IntPoint();
 	SlateProxy->Resource = this;
 
-#if SLATE_CHECK_UOBJECT_RENDER_RESOURCES
-	MaterialObjectWeakPtr = MaterialObject; 
-	UpdateMaterialName();
-#endif
+	if (MaterialProxy && (MaterialProxy->IsDeleted() || MaterialProxy->IsMarkedForGarbageCollection()))
+	{
+		MaterialProxy = nullptr;
+	}
 }
 
 FSlateMaterialResource::~FSlateMaterialResource()
 {
-	if(SlateProxy)
+	if (SlateProxy)
 	{
 		delete SlateProxy;
 	}
 }
 
-void FSlateMaterialResource::UpdateMaterial(const UMaterialInterface& InMaterialResource, const FVector2D& InImageSize, FSlateShaderResource* InTextureMask )
+void FSlateMaterialResource::UpdateMaterial(const UMaterialInterface& InMaterialResource, const FVector2D& InImageSize, FSlateShaderResource* InTextureMask)
 {
-	MaterialObject = &InMaterialResource;
-
 #if SLATE_CHECK_UOBJECT_RENDER_RESOURCES
+	SlateMaterialResource::CheckInvalidUMaterial(InMaterialResource, DebugName);
+
+	MaterialObject = &InMaterialResource;
+	MaterialProxy = InMaterialResource.GetRenderProxy();
+
 	MaterialObjectWeakPtr = MaterialObject;
 	UpdateMaterialName();
+
+	SlateMaterialResource::CheckInvalidMaterialProxy(MaterialProxy, DebugName);
+
+#else
+
+	MaterialObject = &InMaterialResource;
+	MaterialProxy = InMaterialResource.GetRenderProxy();
 #endif
 
-	if( !SlateProxy )
+	if (MaterialProxy && (MaterialProxy->IsDeleted() || MaterialProxy->IsMarkedForGarbageCollection()))
+	{
+		MaterialProxy = nullptr;
+	}
+
+	if (!SlateProxy)
 	{
 		SlateProxy = new FSlateShaderResourceProxy;
 	}
@@ -55,6 +140,7 @@ void FSlateMaterialResource::UpdateMaterial(const UMaterialInterface& InMaterial
 void FSlateMaterialResource::ResetMaterial()
 {
 	MaterialObject = nullptr;
+	MaterialProxy = nullptr;
 
 #if SLATE_CHECK_UOBJECT_RENDER_RESOURCES
 	MaterialObjectWeakPtr = nullptr;

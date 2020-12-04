@@ -10,6 +10,7 @@
 #include "NiagaraNodeFunctionCall.generated.h"
 
 class UNiagaraScript;
+class UNiagaraMessageData;
 
 USTRUCT()
 struct FNiagaraPropagatedVariable
@@ -115,7 +116,7 @@ public:
 	ENiagaraScriptUsage GetCalledUsage() const;
 
 	/** Walk through the internal script graph for an ParameterMapGet nodes and see if any of them specify a default for VariableName.*/
-	UEdGraphPin* FindParameterMapDefaultValuePin(const FName VariableName, ENiagaraScriptUsage InParentUsage) const;
+	UEdGraphPin* FindParameterMapDefaultValuePin(const FName VariableName, ENiagaraScriptUsage InParentUsage, FCompileConstantResolver ConstantResolver) const;
 
 	/** Attempts to find the input pin for a static switch with the given name in the internal script graph. Returns nullptr if no such pin can be found. */
 	UEdGraphPin* FindStaticSwitchInputPin(const FName& VariableName) const;
@@ -134,6 +135,11 @@ public:
 	void UpgradeDIFunctionCalls();
 
 	virtual TSharedPtr<SGraphNode> CreateVisualWidget() override;
+
+	NIAGARAEDITOR_API const TMap<FGuid, UNiagaraMessageData*>& GetMessages() const { return MessageKeyToMessageMap; };
+	NIAGARAEDITOR_API void AddMessage(const FGuid& MessageKey, UNiagaraMessageData* NewMessage) { MessageKeyToMessageMap.Add(MessageKey, NewMessage); };
+	NIAGARAEDITOR_API void RemoveMessage(const FGuid& MessageKey) { MessageKeyToMessageMap.Remove(MessageKey); };
+	void RemoveMessageDelegateable(const FGuid MessageKey) { MessageKeyToMessageMap.Remove(MessageKey); };
 protected:
 
 	virtual bool GetValidateDataInterfaces() const { return true; };
@@ -158,6 +164,9 @@ protected:
 
 	UPROPERTY()
 	FString FunctionDisplayName;
+
+	UPROPERTY(meta = (SkipForCompileHash="true"))
+	TMap<FGuid, UNiagaraMessageData*> MessageKeyToMessageMap;
 
 	FOnInputsChanged OnInputsChangedDelegate;
 };

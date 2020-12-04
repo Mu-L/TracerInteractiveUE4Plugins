@@ -3,12 +3,49 @@
 #include "VariantSet.h"
 
 #include "LevelVariantSets.h"
+#include "ThumbnailGenerator.h"
 #include "Variant.h"
-#include "CoreMinimal.h"
 #include "VariantManagerObjectVersion.h"
+
+#include "CoreMinimal.h"
+#include "Engine/Texture2D.h"
 
 #define LOCTEXT_NAMESPACE "VariantManagerVariantSet"
 
+UVariantSet::FOnVariantSetChanged UVariantSet::OnThumbnailUpdated;
+
+namespace VariantSetImpl
+{
+	/** Makes it so that all others variants that depend on 'Variant' have those particular dependencies reset to nullptr */
+	void ResetVariantDependents( UVariant* Variant )
+	{
+		if ( !Variant )
+		{
+			return;
+		}
+
+		ULevelVariantSets* LevelVariantSets = Variant->GetTypedOuter<ULevelVariantSets>();
+		if ( !LevelVariantSets )
+		{
+			return;
+		}
+
+		// Reset dependencies if we're being removed
+		const bool bOnlyEnabledDependencies = false;
+		for ( UVariant* Dependent : Variant->GetDependents( LevelVariantSets, bOnlyEnabledDependencies ) )
+		{
+			for ( int32 DependencyIndex = 0; DependencyIndex < Dependent->GetNumDependencies(); ++DependencyIndex )
+			{
+				FVariantDependency& Dependency = Dependent->GetDependency( DependencyIndex );
+				UVariant* TargetVariant = Dependency.Variant.Get();
+				if ( TargetVariant == Variant )
+				{
+					Dependency.Variant = nullptr;
+				}
+			}
+		}
+	}
+}
 
 UVariantSet::UVariantSet(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -47,7 +84,7 @@ void UVariantSet::Serialize(FArchive& Ar)
 	}
 }
 
-bool UVariantSet::IsExpanded()
+bool UVariantSet::IsExpanded() const
 {
 	return bExpanded;
 }
@@ -69,7 +106,7 @@ FText UVariantSet::GetDisplayText() const
 	return DisplayText;
 }
 
-FString UVariantSet::GetUniqueVariantName(const FString& InPrefix)
+FString UVariantSet::GetUniqueVariantName(const FString& InPrefix) const
 {
 	TSet<FString> UniqueNames;
 	for (UVariant* Variant : Variants)
@@ -147,6 +184,7 @@ void UVariantSet::AddVariants(const TArray<UVariant*>& NewVariants, int32 Index)
 					ParentsModified.Add(OldParent);
 				}
 				OldParent->Variants.RemoveSingle(NewVariant);
+				VariantSetImpl::ResetVariantDependents(NewVariant);
 			}
 			else
 			{
@@ -198,7 +236,7 @@ void UVariantSet::AddVariants(const TArray<UVariant*>& NewVariants, int32 Index)
 	}
 }
 
-int32 UVariantSet::GetVariantIndex(UVariant* Var)
+int32 UVariantSet::GetVariantIndex(UVariant* Var) const
 {
 	if (Var == nullptr)
 	{
@@ -220,10 +258,12 @@ void UVariantSet::RemoveVariants(const TArray<UVariant*>& InVariants)
 	for (UVariant* Variant : InVariants)
 	{
 		Variants.RemoveSingle(Variant);
+		Variant->Rename(nullptr, GetTransientPackage());
+		VariantSetImpl::ResetVariantDependents( Variant );
 	}
 }
 
-int32 UVariantSet::GetNumVariants()
+int32 UVariantSet::GetNumVariants() const
 {
 	return Variants.Num();
 }
@@ -250,6 +290,65 @@ UVariant* UVariantSet::GetVariantByName(FString VariantName)
 		return *VarPtr;
 	}
 	return nullptr;
+}
+
+void UVariantSet::SetThumbnailFromTexture(UTexture2D* Texture)
+{
+	if (Texture == nullptr)
+	{
+		SetThumbnailInternal(nullptr);
+	}
+	else
+	{
+		if (UTexture2D* NewThumbnail = ThumbnailGenerator::GenerateThumbnailFromTexture(Texture))
+		{
+			SetThumbnailInternal(NewThumbnail);
+		}
+	}
+}
+
+void UVariantSet::SetThumbnailFromFile(FString FilePath)
+{
+	if (UTexture2D* NewThumbnail = ThumbnailGenerator::GenerateThumbnailFromFile(FilePath))
+	{
+		SetThumbnailInternal(NewThumbnail);
+	}
+}
+
+void UVariantSet::SetThumbnailFromCamera(UObject* WorldContextObject, const FTransform& CameraTransform, float FOVDegrees, float MinZ, float Gamma)
+{
+	if (UTexture2D* NewThumbnail = ThumbnailGenerator::GenerateThumbnailFromCamera(WorldContextObject, CameraTransform, FOVDegrees, MinZ, Gamma))
+	{
+		SetThumbnailInternal(NewThumbnail);
+	}
+}
+
+void UVariantSet::SetThumbnailFromEditorViewport()
+{
+	if (UTexture2D* NewThumbnail = ThumbnailGenerator::GenerateThumbnailFromEditorViewport())
+	{
+		SetThumbnailInternal(NewThumbnail);
+	}
+}
+
+UTexture2D* UVariantSet::GetThumbnail()
+{
+	return Thumbnail;
+}
+
+void UVariantSet::SetThumbnailInternal(UTexture2D* NewThumbnail)
+{
+	Modify();
+	Thumbnail = NewThumbnail;
+
+	if (NewThumbnail)
+	{
+		// This variant set will now fully own this texture. It cannot be standalone or else we won't be able to delete it
+		NewThumbnail->Rename(nullptr, this);
+		NewThumbnail->ClearFlags( RF_Transient | RF_Standalone );
+	}
+
+	UVariantSet::OnThumbnailUpdated.Broadcast(this);
 }
 
 #undef LOCTEXT_NAMESPACE

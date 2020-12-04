@@ -4,10 +4,11 @@
 #include "ToolSceneQueriesUtil.h"
 #include "VectorUtil.h"
 #include "Quaternion.h"
+#include "GameFramework/Actor.h"
+#include "Components/PrimitiveComponent.h"
 
 
 static double VISUAL_ANGLE_SNAP_THRESHOLD_DEG = 1.0;
-
 
 double ToolSceneQueriesUtil::GetDefaultVisualAngleSnapThreshD()
 {
@@ -25,11 +26,51 @@ bool ToolSceneQueriesUtil::PointSnapQuery(const UInteractiveTool* Tool, const FV
 
 bool ToolSceneQueriesUtil::PointSnapQuery(const FViewCameraState& CameraState, const FVector3d& Point1, const FVector3d& Point2, double VisualAngleThreshold)
 {
-	double UseThreshold = (VisualAngleThreshold <= 0) ? GetDefaultVisualAngleSnapThreshD() : VisualAngleThreshold;
-	double VisualAngle = VectorUtil::OpeningAngleD(Point1, Point2, (FVector3d)CameraState.Position);
-	return FMathd::Abs(VisualAngle) < UseThreshold;
+	if (!CameraState.bIsOrthographic)
+	{
+		double UseThreshold = (VisualAngleThreshold <= 0) ? GetDefaultVisualAngleSnapThreshD() : VisualAngleThreshold;
+		UseThreshold *= CameraState.GetFOVAngleNormalizationFactor();
+		double VisualAngle = VectorUtil::OpeningAngleD(Point1, Point2, (FVector3d)CameraState.Position);
+		return FMathd::Abs(VisualAngle) < UseThreshold;
+	}
+	else
+	{
+		// Whereas in perspective mode we can compare the angle difference to the camera, we can't do that in ortho mode, since the camera isn't a point
+		// but a plane. Instead we need to project into the camera plane and measure distance here. To be analogous to our tolerance in perspective mode,
+		// where we divide the FOV into 90 visual angle degrees, we divide the plane into 90 segments and use the same tolerance.
+		double AngleThreshold = (VisualAngleThreshold <= 0) ? GetDefaultVisualAngleSnapThreshD() : VisualAngleThreshold;
+		double OrthoThreshold = AngleThreshold * CameraState.OrthoWorldCoordinateWidth / 90.0;
+		FVector3d ViewPlaneNormal = CameraState.Orientation.GetForwardVector();
+		FVector3d DistanceVector = Point1 - Point2;
+
+		// Project the vector into the plane and check its length
+		DistanceVector = DistanceVector - (DistanceVector).Dot(ViewPlaneNormal) * ViewPlaneNormal;
+		return DistanceVector.SquaredLength() < (OrthoThreshold * OrthoThreshold);
+	}
 }
 
+double ToolSceneQueriesUtil::PointSnapMetric(const FViewCameraState& CameraState, const FVector3d& Point1, const FVector3d& Point2)
+{
+	if (!CameraState.bIsOrthographic)
+	{
+		double VisualAngle = VectorUtil::OpeningAngleD(Point1, Point2, (FVector3d)CameraState.Position);
+
+		// To go from a world space angle to a 90 degree division of the view, we divide by TrueFOVDegrees/90 (our normalization factor)
+		VisualAngle /= CameraState.GetFOVAngleNormalizationFactor();
+		return FMathd::Abs(VisualAngle);
+	}
+	else
+	{
+		FVector3d ViewPlaneNormal = CameraState.Orientation.GetForwardVector();
+
+		// Get projected distance in the plane
+		FVector3d DistanceVector = Point1 - Point2;
+		DistanceVector = DistanceVector - (DistanceVector).Dot(ViewPlaneNormal) * ViewPlaneNormal;
+
+		// We have one visual angle degree correspond to the width of the viewport divided by 90, so we divide by width/90.
+		return DistanceVector.Length() * 90.0 / CameraState.OrthoWorldCoordinateWidth;
+	}
+}
 
 
 double ToolSceneQueriesUtil::CalculateViewVisualAngleD(const UInteractiveTool* Tool, const FVector3d& Point1, const FVector3d& Point2)
@@ -46,6 +87,14 @@ double ToolSceneQueriesUtil::CalculateViewVisualAngleD(const FViewCameraState& C
 	return FMathd::Abs(VisualAngle);
 }
 
+double ToolSceneQueriesUtil::CalculateNormalizedViewVisualAngleD(const FViewCameraState& CameraState, const FVector3d& Point1, const FVector3d& Point2)
+{
+	double VisualAngle = VectorUtil::OpeningAngleD(Point1, Point2, (FVector3d)CameraState.Position);
+	double FOVNormalization = CameraState.GetFOVAngleNormalizationFactor();
+	return FMathd::Abs(VisualAngle) / FOVNormalization;
+}
+
+
 
 
 double ToolSceneQueriesUtil::CalculateDimensionFromVisualAngleD(const UInteractiveTool* Tool, const FVector3d& Point, double TargetVisualAngleDeg)
@@ -59,6 +108,7 @@ double ToolSceneQueriesUtil::CalculateDimensionFromVisualAngleD(const FViewCamer
 {
 	FVector3d EyePos = (FVector3d)CameraState.Position;
 	FVector3d PointVec = Point - EyePos;
+	TargetVisualAngleDeg *= CameraState.GetFOVAngleNormalizationFactor();
 	FVector3d RotPointPos = EyePos + FQuaterniond(CameraState.Up(), TargetVisualAngleDeg, true)*PointVec;
 	double ActualAngleDeg = CalculateViewVisualAngleD(CameraState, Point, RotPointPos);
 	return Point.Distance(RotPointPos) * (TargetVisualAngleDeg/ActualAngleDeg);
@@ -91,6 +141,11 @@ bool ToolSceneQueriesUtil::FindSceneSnapPoint(const UInteractiveTool* Tool, cons
 	FSnapGeometry* SnapGeometry, FVector* DebugTriangleOut)
 {
 	double UseThreshold = (VisualAngleThreshold <= 0) ? GetDefaultVisualAngleSnapThreshD() : VisualAngleThreshold;
+
+	FViewCameraState CameraState;
+	Tool->GetToolManager()->GetContextQueriesAPI()->GetCurrentViewState(CameraState);
+	UseThreshold *= CameraState.GetFOVAngleNormalizationFactor();
+
 	IToolsContextQueriesAPI* QueryAPI = Tool->GetToolManager()->GetContextQueriesAPI();
 	FSceneSnapQueryRequest Request;
 	Request.RequestType = ESceneSnapQueryType::Position;
@@ -104,7 +159,8 @@ bool ToolSceneQueriesUtil::FindSceneSnapPoint(const UInteractiveTool* Tool, cons
 		Request.TargetTypes |= ESceneSnapQueryTargetType::MeshEdge;
 	}
 	Request.Position = (FVector)Point;
-	Request.VisualAngleThresholdDegrees = VISUAL_ANGLE_SNAP_THRESHOLD_DEG;
+	Request.VisualAngleThresholdDegrees = UseThreshold;
+	
 	TArray<FSceneSnapQueryResult> Results;
 	if (QueryAPI->ExecuteSceneSnapQuery(Request, Results))
 	{
@@ -149,4 +205,88 @@ bool ToolSceneQueriesUtil::FindWorldGridSnapPoint(const UInteractiveTool* Tool, 
 		return true;
 	};
 	return false;
+}
+
+
+
+
+
+bool ToolSceneQueriesUtil::IsVisibleObjectHit(const FHitResult& HitResult)
+{
+	AActor* Actor = HitResult.GetActor();
+	if (Actor != nullptr)
+	{
+#if WITH_EDITOR
+		if (Actor->IsHidden() || Actor->IsHiddenEd())
+		{
+			return false;
+		}
+#else
+		if (Actor->IsHidden())
+		{
+			return false;
+		}
+#endif
+	}
+
+	UPrimitiveComponent* Component = HitResult.GetComponent();
+	if (Component != nullptr)
+	{
+#if WITH_EDITOR
+		if (Component->IsVisible() == false && Component->IsVisibleInEditor() == false)
+		{
+			return false;
+		}
+#else
+		if (Component->IsVisible() == false)
+		{
+			return false;
+		}
+#endif
+	}
+
+	return true;
+}
+
+
+
+
+bool ToolSceneQueriesUtil::FindNearestVisibleObjectHit(UWorld* World, FHitResult& HitResultOut, const FVector& Start, const FVector& End,
+	const TArray<UPrimitiveComponent*>* IgnoreComponents, const TArray<UPrimitiveComponent*>* InvisibleComponentsToInclude)
+{
+	FCollisionObjectQueryParams ObjectQueryParams(FCollisionObjectQueryParams::AllObjects);
+	FCollisionQueryParams QueryParams = FCollisionQueryParams::DefaultQueryParam;
+	QueryParams.bTraceComplex = true;
+
+	TArray<FHitResult> OutHits;
+	if (World->LineTraceMultiByObjectType(OutHits, Start, End, ObjectQueryParams, QueryParams) == false)
+	{
+		return false;
+	}
+
+	float NearestVisible = TNumericLimits<float>::Max();
+	for (const FHitResult& CurResult : OutHits)
+	{
+		if (CurResult.Distance < NearestVisible)
+		{
+			if (IsVisibleObjectHit(CurResult) 
+				|| (InvisibleComponentsToInclude && InvisibleComponentsToInclude->Contains(CurResult.GetComponent())))
+			{
+				if (IgnoreComponents == nullptr || IgnoreComponents->Contains(CurResult.GetComponent()) == false)
+				{
+					HitResultOut = CurResult;
+					NearestVisible = CurResult.Distance;
+				}
+			}
+		}
+	}
+
+	return NearestVisible < TNumericLimits<float>::Max();
+}
+
+
+bool ToolSceneQueriesUtil::FindNearestVisibleObjectHit(UWorld* World, FHitResult& HitResultOut, const FRay& Ray,
+	const TArray<UPrimitiveComponent*>* IgnoreComponents, const TArray<UPrimitiveComponent*>* InvisibleComponentsToInclude)
+{
+	return FindNearestVisibleObjectHit(World, HitResultOut, Ray.Origin, Ray.PointAt(HALF_WORLD_MAX), IgnoreComponents, InvisibleComponentsToInclude);
 }

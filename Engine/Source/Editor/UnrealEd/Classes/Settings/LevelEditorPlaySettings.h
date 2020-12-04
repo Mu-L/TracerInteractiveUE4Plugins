@@ -5,13 +5,16 @@
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
 #include "UObject/Object.h"
+#include "UObject/Class.h"
 #include "Layout/Margin.h"
 #include "Layout/Visibility.h"
 #include "Misc/App.h"
 #include "Settings/LevelEditorPlayNetworkEmulationSettings.h"
+#include "ToolMenuContext.h"
 #include "LevelEditorPlaySettings.generated.h"
 
 class SWindow;
+class UToolMenu;
 
 /**
  * Enumerates label anchor modes.
@@ -85,8 +88,8 @@ enum EPlayModeType
 UENUM()
 enum EPlayNetMode
 {
-	/** A non-networked game will be started. This can be used in combination with bLaunchSeparateServer to test menu -> server flow in your game. */
-	PIE_Standalone UMETA(DisplayName="Play Offline"),
+	/** A standalone game will be started. This will not create a dedicated server, nor automatically connect to one. A server can be launched by enabling bLaunchSeparateServer if you need to test offline -> server connection flow for your game. */
+	PIE_Standalone UMETA(DisplayName="Play Standalone"),
 	/** The editor will act as both a Server and a Client. Additional instances may be opened beyond that depending on the number of clients. */
 	PIE_ListenServer UMETA(DisplayName="Play As Listen Server"),
 	/** The editor will act as a Client. A server will be started for you behind the scenes to connect to. */
@@ -162,6 +165,28 @@ public:
 	/** The name of the device profile this links to */
 	UPROPERTY(config)
 	FString ProfileName;
+
+	UPROPERTY(transient)
+	float ScaleFactor;
+
+	UPROPERTY(transient)
+	int32 LogicalHeight;
+	
+	UPROPERTY(transient)
+	int32 LogicalWidth;
+
+	void PostInitProperties();
+};
+
+UCLASS()
+class UNREALED_API UCommonResolutionMenuContext
+	: public UToolMenuContextBase
+{
+	GENERATED_BODY()
+
+public:
+	DECLARE_DELEGATE_RetVal_OneParam(FUIAction, FGetUIActionFromLevelPlaySettings, const FPlayScreenResolution&);
+	FGetUIActionFromLevelPlaySettings GetUIActionFromLevelPlaySettings;
 };
 
 /**
@@ -220,6 +245,10 @@ public:
 	/** Which quality level to use when playing in editor */
 	UPROPERTY(config, EditAnywhere, Category=PlayInEditor)
 	int32 PlayInEditorSoundQualityLevel;
+
+	/** Whether to use a non-realtime audio device during PIE */
+	UPROPERTY(config)
+	bool bUseNonRealtimeAudioDevice;
 
 	/** True if Play In Editor should only load currently-visible levels in PIE. */
 	UPROPERTY(config)
@@ -365,10 +394,38 @@ private:
 	UPROPERTY(config)
 	FString AdditionalLaunchOptions;
 
+	/** Controls the default value of the show flag ServerDrawDebug */
+	UPROPERTY(config, EditAnywhere, Category = MultiplayerOptions)
+	bool bShowServerDebugDrawingByDefault;
+
+	/** How strongly debug drawing originating from the server will be biased towards the tint color */
+	UPROPERTY(config, EditAnywhere, Category=MultiplayerOptions, meta=(ClampMin=0, ClampMax=1, UIMin=0, UIMax=1))
+	float ServerDebugDrawingColorTintStrength;
+
+	/** Debug drawing originating from the server will be biased towards this color */
+	UPROPERTY(config, EditAnywhere, Category=MultiplayerOptions)
+	FLinearColor ServerDebugDrawingColorTint;
+
+private:
+	void PushDebugDrawingSettings();
+
 public:
+	bool ShowServerDebugDrawingByDefault() const
+	{
+		return bShowServerDebugDrawingByDefault;
+	}
+
 	/** Additional options that will be passed to the server as arguments, for example -debug. Only works with separate process servers. */
 	UPROPERTY(config, EditAnywhere, Category = "Multiplayer Options|Server")
 	FString AdditionalServerLaunchParameters;
+
+	/** If > 0, Tick dedicated server at a fixed frame rate. Does not impact Listen Server (use ClientFixedFPS setting). This is the target frame rate, e.g, "20" for 20fps, which will result in 1/20 second tick steps. */
+	UPROPERTY(config, EditAnywhere, Category = "Multiplayer Options|Server", meta=(EditCondition = "PlayNetMode == EPlayNetMode::PIE_Client && RunUnderOneProcess"))
+	int32 ServerFixedFPS;
+
+	/** If > 0, Tick clients at a fixed frame rate. Each client instance will map to an element in the list, wrapping around if num clients exceeds size of list. Includes Listen Server. This is the target frame rate, e.g, "20" for 20fps, which will result in 1/20 second tick steps. */
+	UPROPERTY(config, EditAnywhere, Category = "Multiplayer Options|Client", meta=(EditCondition = "PlayNetMode != EPlayNetMode::PIE_Standalone && RunUnderOneProcess"))
+	TArray<int32> ClientFixedFPS;
 
 public:
 
@@ -465,13 +522,9 @@ public:
 
 public:
 
-	/** The last used height for multiple instance windows (in pixels). */
+	/** The last known screen size for the first instance window (in pixels). */
 	UPROPERTY(config)
-	int32 MultipleInstanceLastHeight;
-
-	/** The last used width for multiple instance windows (in pixels). */
-	UPROPERTY(config)
-	int32 MultipleInstanceLastWidth;
+	FIntPoint LastSize;
 
 	/** The last known screen positions of multiple instance windows (in pixels). */
 	UPROPERTY(config)
@@ -550,4 +603,22 @@ public:
 	FMargin CalculateCustomUnsafeZones(TArray<FVector2D>& CustomSafeZoneStarts, TArray<FVector2D>& CustomSafeZoneDimensions, FString& DeviceType, FVector2D PreviewSize);
 	FMargin FlipCustomUnsafeZones(TArray<FVector2D>& CustomSafeZoneStarts, TArray<FVector2D>& CustomSafeZoneDimensions, FString& DeviceType, FVector2D PreviewSize);
 	void RescaleForMobilePreview(const class UDeviceProfile* DeviceProfile, int32 &PreviewWidth, int32 &PreviewHeight, float &ScaleFactor);
+
+	/**
+     * Creates a widget for the resolution picker.
+     *
+     * @return The widget.
+     */
+	void RegisterCommonResolutionsMenu();
+	static FName GetCommonResolutionsMenuName();
+
+protected:
+	/**
+	 * Adds a section to the screen resolution menu.
+	 *
+	 * @param MenuBuilder The menu builder to add the section to.
+	 * @param Resolutions The collection of screen resolutions to add.
+	 * @param SectionName The name of the section to add.
+	 */
+	static void AddScreenResolutionSection( UToolMenu* InToolMenu, const TArray<FPlayScreenResolution>* Resolutions, const FString SectionName );
 };

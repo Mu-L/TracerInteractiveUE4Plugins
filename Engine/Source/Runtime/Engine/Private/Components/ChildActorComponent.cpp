@@ -12,13 +12,28 @@ DEFINE_LOG_CATEGORY_STATIC(LogChildActorComponent, Warning, All);
 
 UChildActorComponent::UChildActorComponent(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
+	, ActorOuter(nullptr)
 {
 	bAllowReregistration = false;
+
+#if WITH_EDITORONLY_DATA
+	EditorTreeViewVisualizationMode = EChildActorComponentTreeViewVisualizationMode::UseDefault;
+#endif
 }
 
 void UChildActorComponent::OnRegister()
 {
 	Super::OnRegister();
+
+	if (ActorOuter)
+	{
+		if (ActorOuter != GetOwner()->GetOuter())
+		{
+			ChildActorName = NAME_None;
+		}
+
+		ActorOuter = nullptr;
+	}
 
 	if (ChildActor)
 	{
@@ -35,8 +50,20 @@ void UChildActorComponent::OnRegister()
 		if (bNeedsRecreate)
 		{
 			bNeedsRecreate = false;
+
+			// Avoid dirtying packages if not necessary
+			FName PreviousChildActorName = ChildActorName;
+			bool bChildActorPackageWasDirty = ChildActor->GetPackage()->IsDirty();
+			bool bPackageWasDirty = GetPackage()->IsDirty();
+
 			DestroyChildActor();
 			CreateChildActor();
+			
+			if (ChildActor && ChildActorName == PreviousChildActorName)
+			{
+				ChildActor->GetPackage()->SetDirtyFlag(bChildActorPackageWasDirty);
+				GetPackage()->SetDirtyFlag(bPackageWasDirty);
+			}
 		}
 		else
 		{
@@ -137,6 +164,12 @@ void UChildActorComponent::Serialize(FArchive& Ar)
 }
 
 #if WITH_EDITOR
+void UChildActorComponent::SetPackageExternal(bool bExternal, bool bShouldDirty)
+{
+	DestroyChildActor();
+	CreateChildActor();
+}
+
 void UChildActorComponent::PostEditImport()
 {
 	Super::PostEditImport();
@@ -241,16 +274,10 @@ void UChildActorComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>&
 	DOREPLIFETIME(UChildActorComponent, ChildActor);
 }
 
-struct FActorParentComponentSetter
+void FActorParentComponentSetter::Set(AActor* ChildActor, UChildActorComponent* ParentComponent)
 {
-private:
-	static void Set(AActor* ChildActor, UChildActorComponent* ParentComponent)
-	{
-		ChildActor->ParentComponent = ParentComponent;
-	}
-
-	friend UChildActorComponent;
-};
+	ChildActor->ParentComponent = ParentComponent;
+}
 
 void UChildActorComponent::PostRepNotifies()
 {
@@ -280,7 +307,7 @@ void UChildActorComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
 void UChildActorComponent::OnUnregister()
 {
 	Super::OnUnregister();
-
+	ActorOuter = GetOwner()->GetOuter();
 	DestroyChildActor();
 }
 
@@ -292,6 +319,9 @@ FChildActorComponentInstanceData::FChildActorComponentInstanceData(const UChildA
 {
 	if (AActor* ChildActor = Component->GetChildActor())
 	{
+#if WITH_EDITOR
+		ChildActorGUID = ChildActor->GetActorGuid();
+#endif
 		if (ChildActorName.IsNone())
 		{
 			ChildActorName = ChildActor->GetFName();
@@ -585,6 +615,11 @@ void UChildActorComponent::CreateChildActor()
 				Params.OverrideLevel = (MyOwner ? MyOwner->GetLevel() : nullptr);
 				Params.Name = ChildActorName;
 				Params.NameMode = FActorSpawnParameters::ESpawnActorNameMode::Requested;
+#if WITH_EDITOR
+				Params.OverridePackage = GetOwner()->GetExternalPackage();
+				Params.OverrideParentComponent = this;
+				Params.OverrideActorGuid = CachedInstanceData ? CachedInstanceData->ChildActorGUID : FGuid();
+#endif
 				if (ChildActorTemplate && ChildActorTemplate->GetClass() == ChildActorClass)
 				{
 					Params.Template = ChildActorTemplate;
@@ -594,9 +629,10 @@ void UChildActorComponent::CreateChildActor()
 				{
 					Params.ObjectFlags &= ~RF_Transactional;
 				}
-				if (HasAllFlags(RF_Transient) || IsEditorOnly())
+				if (HasAllFlags(RF_Transient) || IsEditorOnly() || (MyOwner && (MyOwner->HasAllFlags(RF_Transient) || MyOwner->IsEditorOnly())))
 				{
-					// If we are either transient or editor only, set our created actor to transient. We can't programatically set editor only on an actor so this is the best option
+					// If this component or its owner are transient or editor only, set our created actor to transient. 
+					// We can't programatically set editor only on an actor so this is the best option
 					Params.ObjectFlags |= RF_Transient;
 				}
 
@@ -656,9 +692,22 @@ void UChildActorComponent::CreateChildActor()
 void UChildActorComponent::DestroyChildActor()
 {
 	// If we own an Actor, kill it now unless we don't have authority on it, for that we rely on the server
-	// If the level that the child actor is being removed then don't destory the child actor so re-adding it doesn't
+	// If the level is being removed then don't destroy the child actor so re-adding it doesn't
 	// need to create a new actor
-	if (ChildActor && ChildActor->HasAuthority() && !GetOwner()->GetLevel()->bIsBeingRemoved)
+	auto IsLevelBeingRemoved = [this]() -> bool
+	{
+		if (AActor* MyOwner = GetOwner())
+		{
+			if (ULevel* MyLevel = MyOwner->GetLevel())
+			{
+				return MyLevel->bIsBeingRemoved;
+			}
+		}
+
+		return false;
+	};
+
+	if (ChildActor && ChildActor->HasAuthority() && !IsLevelBeingRemoved())
 	{
 		if (!GExitPurge)
 		{
@@ -732,3 +781,12 @@ void UChildActorComponent::BeginPlay()
 		ChildActor->DispatchBeginPlay(bFromLevelStreaming);
 	}
 }
+
+#if WITH_EDITOR
+void UChildActorComponent::SetEditorTreeViewVisualizationMode(EChildActorComponentTreeViewVisualizationMode InMode)
+{
+	Modify();
+
+	EditorTreeViewVisualizationMode = InMode;
+}
+#endif

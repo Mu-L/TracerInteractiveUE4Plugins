@@ -29,6 +29,8 @@ struct FShaderCompilerEnvironment;
 */
 BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FNiagaraMeshUniformParameters, NIAGARAVERTEXFACTORIES_API)
 	SHADER_PARAMETER(uint32, bLocalSpace)
+	SHADER_PARAMETER(FVector, PivotOffset)
+	SHADER_PARAMETER(int, bPivotOffsetIsWorldSpace)
 	SHADER_PARAMETER(FVector4, SubImageSize)
 	SHADER_PARAMETER(uint32, TexCoordWeightA)
 	SHADER_PARAMETER(uint32, TexCoordWeightB)
@@ -55,6 +57,9 @@ BEGIN_GLOBAL_SHADER_PARAMETER_STRUCT(FNiagaraMeshUniformParameters, NIAGARAVERTE
 	SHADER_PARAMETER(uint32, bLockedAxisEnable)
 	SHADER_PARAMETER(FVector, LockedAxis)
 	SHADER_PARAMETER(uint32, LockedAxisSpace)
+	SHADER_PARAMETER(uint32, NiagaraFloatDataStride)
+	SHADER_PARAMETER_SRV(Buffer<float>, NiagaraParticleDataFloat)
+	SHADER_PARAMETER_SRV(Buffer<float>, NiagaraParticleDataHalf)
 END_GLOBAL_SHADER_PARAMETER_STRUCT()
 
 typedef TUniformBufferRef<FNiagaraMeshUniformParameters> FNiagaraMeshUniformBufferRef;
@@ -104,28 +109,13 @@ public:
 		// Set a define so we can tell in MaterialTemplate.usf when we are compiling a mesh particle vertex factory
 		OutEnvironment.SetDefine(TEXT("NIAGARA_MESH_FACTORY"), TEXT("1"));
 		OutEnvironment.SetDefine(TEXT("NIAGARA_MESH_INSTANCED"), TEXT("1"));
-	}
-
-	void SetParticleData(const FShaderResourceViewRHIRef& InParticleDataFloatSRV, uint32 InFloatDataStride)
-	{
-		ParticleDataFloatSRV = InParticleDataFloatSRV;
-		FloatDataStride = InFloatDataStride;
+		OutEnvironment.SetDefine(TEXT("NiagaraVFLooseParameters"), TEXT("NiagaraMeshVF"));
 	}
 
 	void SetSortedIndices(const FShaderResourceViewRHIRef& InSortedIndicesSRV, uint32 InSortedIndicesOffset)
 	{
 		SortedIndicesSRV = InSortedIndicesSRV;
 		SortedIndicesOffset = InSortedIndicesOffset;
-	}
-
-	FORCEINLINE FRHIShaderResourceView* GetParticleDataFloatSRV()
-	{
-		return ParticleDataFloatSRV;
-	}
-
-	FORCEINLINE int32 GetFloatDataStride()
-	{
-		return FloatDataStride;
 	}
 
 	FORCEINLINE FRHIShaderResourceView* GetSortedIndicesSRV()
@@ -189,6 +179,9 @@ protected:
 
 	FShaderResourceViewRHIRef ParticleDataFloatSRV;
 	uint32 FloatDataStride;
+
+	FShaderResourceViewRHIRef ParticleDataHalfSRV;
+	uint32 HalfDataStride;
 
 	FShaderResourceViewRHIRef SortedIndicesSRV;
 	uint32 SortedIndicesOffset;

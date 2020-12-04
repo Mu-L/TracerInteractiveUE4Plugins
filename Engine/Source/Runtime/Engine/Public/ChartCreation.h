@@ -190,6 +190,10 @@ public:
 	int32 MinPlayerTicks;
 	int32 TotalPlayerTicks;
 
+	/** Total number of vehicle ticks */
+	int32 MaxVehicleTicks;
+	int32 TotalVehicleTicks;
+
 	/** Total number of primitives drawn */
 	int32 MaxDrawnPrimitives;
 	int32 MinDrawnPrimitives;
@@ -216,6 +220,14 @@ public:
 	FDelegateHandle DeviceProfilesUpdatedDelegateHandle;
 
 	bool bIsChartingPaused;
+	
+	// memory stats
+	uint64 MaxPhysicalMemory;
+	uint64 MaxVirtualMemory;
+	uint64 MinPhysicalMemory;
+	uint64 MinVirtualMemory;
+	uint64 TotalPhysicalMemoryUsed;
+	uint64 TotalVirtualMemoryUsed;
 
 public:
 	FPerformanceTrackingChart();

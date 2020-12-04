@@ -14,8 +14,71 @@
 #include "Widgets/SBoxPanel.h"
 #include "DetailWidgetRow.h"
 #include "PropertyCustomizationHelpers.h"
+#include "KismetCompilerMisc.h"
+#include "AnimBlueprintCompilerHandler_Base.h"
+#include "IAnimBlueprintCompilerHandlerCollection.h"
+#include "IAnimBlueprintCompilerHandler.h"
+#include "KismetCompiler.h"
+#include "IAnimBlueprintCompilationContext.h"
 
 #define LOCTEXT_NAMESPACE "CustomPropNode"
+
+void UAnimGraphNode_CustomProperty::CreateClassVariablesFromBlueprint(IAnimBlueprintVariableCreationContext& InCreationContext)
+{
+	for (UEdGraphPin* Pin : Pins)
+	{
+		if (!Pin->bOrphanedPin && !UAnimationGraphSchema::IsPosePin(Pin->PinType))
+		{
+			// avoid to add properties which already exist on the custom node.
+			// for example the ControlRig_CustomNode has a pin called "alpha" which is not custom.
+			if (FStructProperty* NodeProperty = CastField<FStructProperty>(GetClass()->FindPropertyByName(TEXT("Node"))))
+			{
+				if(NodeProperty->Struct->FindPropertyByName(Pin->GetFName()))
+				{
+					continue;
+				}
+			}
+
+			// Add prefix to avoid collisions
+			FString PrefixedName = GetPinTargetVariableName(Pin);
+
+			// Create a property on the new class to hold the pin data
+			InCreationContext.CreateVariable(FName(*PrefixedName), Pin->PinType);
+		}
+	}
+}
+
+void UAnimGraphNode_CustomProperty::OnProcessDuringCompilation(IAnimBlueprintCompilationContext& InCompilationContext, IAnimBlueprintGeneratedClassCompiledData& OutCompiledData)
+{
+	for (UEdGraphPin* Pin : Pins)
+	{
+		if (!Pin->bOrphanedPin && !UAnimationGraphSchema::IsPosePin(Pin->PinType))
+		{
+			// avoid to add properties which already exist on the custom node.
+			// for example the ControlRig_CustomNode has a pin called "alpha" which is not custom.
+			if (FStructProperty* NodeProperty = CastField<FStructProperty>(GetClass()->FindPropertyByName(TEXT("Node"))))
+			{
+				if(NodeProperty->Struct->FindPropertyByName(Pin->GetFName()))
+				{
+					continue;
+				}
+			}
+			
+			FString PrefixedName = GetPinTargetVariableName(Pin);
+
+			// Add mappings to the node
+			UClass* InstClass = GetTargetSkeletonClass();
+			if (FProperty* FoundProperty = FindFProperty<FProperty>(InstClass, Pin->PinName))
+			{
+				AddSourceTargetProperties(*PrefixedName, FoundProperty->GetFName());
+			}
+			else
+			{
+				AddSourceTargetProperties(*PrefixedName, Pin->GetFName());
+			}
+		}
+	}
+}
 
 void UAnimGraphNode_CustomProperty::ValidateAnimNodeDuringCompilation(USkeleton* ForSkeleton, FCompilerResultsLog& MessageLog)
 {
@@ -99,12 +162,12 @@ void UAnimGraphNode_CustomProperty::ReallocatePinsDuringReconstruction(TArray<UE
 	}
 }
 
-void UAnimGraphNode_CustomProperty::GetInstancePinProperty(const UClass* InOwnerInstanceClass, UEdGraphPin* InInputPin, FProperty*& OutProperty)
+void UAnimGraphNode_CustomProperty::GetInstancePinProperty(const IAnimBlueprintCompilationContext& InCompilationContext, UEdGraphPin* InInputPin, FProperty*& OutProperty)
 {
 	// The actual name of the instance property
 	FString FullName = GetPinTargetVariableName(InInputPin);
 
-	if(FProperty* Property = FindFProperty<FProperty>(InOwnerInstanceClass, *FullName))
+	if(FProperty* Property = InCompilationContext.FindClassFProperty<FProperty>(*FullName))
 	{
 		OutProperty = Property;
 	}
@@ -205,6 +268,7 @@ void UAnimGraphNode_CustomProperty::OnPropertyExposeCheckboxChanged(ECheckBoxSta
 		ExposedPropertyNames.Remove(PropertyName);
 	}
 
+	FGuardValue_Bitfield(bDisableOrphanPinSaving, true);
 	ReconstructNode();
 }
 

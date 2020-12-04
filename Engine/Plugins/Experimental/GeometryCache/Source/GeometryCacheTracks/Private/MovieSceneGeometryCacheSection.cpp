@@ -1,11 +1,11 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "MovieSceneGeometryCacheSection.h"
-#include "MovieSceneGeometryCacheTemplate.h"
 #include "Logging/MessageLog.h"
 #include "MovieScene.h"
 #include "UObject/SequencerObjectVersion.h"
 #include "MovieSceneTimeHelpers.h"
+#include "MovieSceneGeometryCacheTemplate.h"
 
 #define LOCTEXT_NAMESPACE "MovieSceneGeometryCacheSection"
 
@@ -46,8 +46,15 @@ void UMovieSceneGeometryCacheSection::PostLoad()
 {
 	Super::PostLoad();
 
-	FFrameRate DisplayRate = GetTypedOuter<UMovieScene>()->GetDisplayRate();
-	FFrameRate TickResolution = GetTypedOuter<UMovieScene>()->GetTickResolution();
+	UMovieScene* MovieSceneOuter = GetTypedOuter<UMovieScene>();
+
+	if (!MovieSceneOuter)
+	{
+		return;
+	}
+
+	FFrameRate DisplayRate = MovieSceneOuter->GetDisplayRate();
+	FFrameRate TickResolution = MovieSceneOuter->GetTickResolution();
 
 	if (Params.StartOffset_DEPRECATED != GeometryCacheDeprecatedMagicNumber)
 	{
@@ -78,12 +85,6 @@ void UMovieSceneGeometryCacheSection::Serialize(FArchive& Ar)
 {
 	Ar.UsingCustomVersion(FSequencerObjectVersion::GUID);
 	Super::Serialize(Ar);
-}
-
-
-FMovieSceneEvalTemplatePtr UMovieSceneGeometryCacheSection::GenerateTemplate() const
-{
-	return FMovieSceneGeometryCacheSectionTemplate(*this);
 }
 
 FFrameNumber GetFirstLoopStartOffsetAtTrimTime(FQualifiedFrameTime TrimTime, const FMovieSceneGeometryCacheParams& Params, FFrameNumber StartFrame, FFrameRate FrameRate)
@@ -212,7 +213,7 @@ void UMovieSceneGeometryCacheSection::PostEditChangeProperty(FPropertyChangedEve
 
 		if (!FMath::IsNearlyZero(NewPlayRate))
 		{
-			float CurrentDuration = MovieScene::DiscreteSize(GetRange());
+			float CurrentDuration = UE::MovieScene::DiscreteSize(GetRange());
 			float NewDuration = CurrentDuration * (PreviousPlayRate / NewPlayRate);
 			SetEndFrame(GetInclusiveStartFrame() + FMath::FloorToInt(NewDuration));
 

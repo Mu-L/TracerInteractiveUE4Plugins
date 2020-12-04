@@ -18,6 +18,8 @@ public class MovieSceneTools : ModuleRules
             }
         );
 
+		OverridePackageType = PackageOverrideType.EngineDeveloper;
+
 		PublicDependencyModuleNames.AddRange(
 			new string[] {
 				"Core",
@@ -34,7 +36,8 @@ public class MovieSceneTools : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[] {
                 "ActorPickerMode",
-                "CinematicCamera",
+				"AppFramework",
+				"CinematicCamera",
                 "CurveEditor",
                 "DesktopPlatform",
                 "Json",

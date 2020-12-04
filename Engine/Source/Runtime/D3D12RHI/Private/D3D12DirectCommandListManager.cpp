@@ -12,15 +12,15 @@ static TAutoConsoleVariable<int32> CVarD3D12GPUTimeout(
 	ECVF_ReadOnly
 );
 
+static int32 GD3D12ExecuteCommandListTask = 0;
+static TAutoConsoleVariable<int32> CVarD3D12ExecuteCommandListTask(
+	TEXT("r.D3D12.ExecuteCommandListTask"),
+	GD3D12ExecuteCommandListTask,
+	TEXT("0: Execute command lists on RHI Thread instead of separate task!\n")
+	TEXT("1: Execute command lists on task created from RHIThread to offload expensive work (default)\n")
+);
+
 extern bool D3D12RHI_ShouldCreateWithD3DDebug();
-
-FComputeFenceRHIRef FD3D12DynamicRHI::RHICreateComputeFence(const FName& Name)
-{
-	FD3D12Fence* Fence = new FD3D12Fence(&GetAdapter(), FRHIGPUMask::All(), Name);
-	Fence->CreateFence();
-
-	return Fence;
-}
 
 void FD3D12GPUFence::WriteInternal(ED3D12CommandQueueType QueueType)
 {
@@ -55,7 +55,8 @@ FGPUFenceRHIRef FD3D12DynamicRHI::RHICreateGPUFence(const FName& Name)
 
 FStagingBufferRHIRef FD3D12DynamicRHI::RHICreateStagingBuffer()
 {
-	return new FD3D12StagingBuffer();
+	// Don't know the device yet - will be decided at copy time (lazy creation)
+	return new FD3D12StagingBuffer(nullptr);
 }
 
 void* FD3D12DynamicRHI::RHILockStagingBuffer(FRHIStagingBuffer* StagingBufferRHI, FRHIGPUFence* Fence, uint32 Offset, uint32 SizeRHI)
@@ -98,12 +99,12 @@ FD3D12FenceCore::~FD3D12FenceCore()
 }
 
 FD3D12Fence::FD3D12Fence(FD3D12Adapter* InParent, FRHIGPUMask InGPUMask, const FName& InName)
-	: FRHIComputeFence(InName)
-	, FD3D12AdapterChild(InParent)
+	: FD3D12AdapterChild(InParent)
 	, FD3D12MultiNodeGPUObject(InGPUMask, InGPUMask)
 	, CurrentFence(0)
 	, LastSignaledFence(0)
 	, LastCompletedFence(0)
+	, Name(InName)
 {
 	FMemory::Memzero(FenceCores);
 	FMemory::Memzero(LastCompletedFences);
@@ -124,7 +125,7 @@ void FD3D12Fence::Destroy()
 			// If not fence was signaled since CreateFence() was called, then the last completed value is the last signaled value for this GPU.
 			GetParentAdapter()->GetFenceCorePool().ReleaseFenceCore(FenceCores[GPUIndex], LastSignaledFence > 0 ? LastSignaledFence : LastCompletedFences[GPUIndex]);
 #if DEBUG_FENCES
-			UE_LOG(LogD3D12RHI, Log, TEXT("*** GPU FENCE DESTROY Fence: %016llX (%s) Gpu (%d), Last Completed: %u ***"), FenceCores[GPUIndex]->GetFence(), *GetName().ToString(), GPUIndex, LastSignaledFence > 0 ? LastSignaledFence : LastCompletedFences[GPUIndex]);
+			UE_LOG(LogD3D12RHI, Log, TEXT("*** GPU FENCE DESTROY Fence: %016llX (%s) Gpu (%d), Last Completed: %u ***"), FenceCores[GPUIndex]->GetFence(), *Name.ToString(), GPUIndex, LastSignaledFence > 0 ? LastSignaledFence : LastCompletedFences[GPUIndex]);
 #endif
 			FenceCores[GPUIndex] = nullptr;
 		}
@@ -148,7 +149,7 @@ void FD3D12Fence::CreateFence()
 
 		LastCompletedFences[GPUIndex] = FenceCore->FenceValueAvailableAt;
 
-		SetName(FenceCore->GetFence(), *GetName().ToString());
+		SetName(FenceCore->GetFence(), *Name.ToString());
 
 		LastCompletedFence = LastCompletedFences[GPUIndex];
 		CurrentFence = LastCompletedFences[GPUIndex] + 1;
@@ -169,10 +170,10 @@ void FD3D12Fence::CreateFence()
 
 			LastCompletedFences[GPUIndex] = FenceCore->FenceValueAvailableAt;
 #if DEBUG_FENCES
-			UE_LOG(LogD3D12RHI, Log, TEXT("*** GPU FENCE CREATE Fence: %016llX (%s) Gpu (%d), Last Completed: %u ***"), FenceCores[GPUIndex]->GetFence(), *GetName().ToString(), GPUIndex, LastCompletedFences[GPUIndex]);
+			UE_LOG(LogD3D12RHI, Log, TEXT("*** GPU FENCE CREATE Fence: %016llX (%s) Gpu (%d), Last Completed: %u ***"), FenceCores[GPUIndex]->GetFence(), *Name.ToString(), GPUIndex, LastCompletedFences[GPUIndex]);
 #endif
 			// Append the GPU index to the fence.
-			SetName(FenceCore->GetFence(), *FString::Printf(TEXT("%s%u"), *GetName().ToString(), GPUIndex));
+			SetName(FenceCore->GetFence(), *FString::Printf(TEXT("%s%u"), *Name.ToString(), GPUIndex));
 
 			LastCompletedFence = FMath::Min(LastCompletedFence, LastCompletedFences[GPUIndex]);
 			CurrentFence = FMath::Max(CurrentFence, LastCompletedFences[GPUIndex]);
@@ -204,7 +205,7 @@ void FD3D12Fence::GpuWait(uint32 DeviceGPUIndex, ED3D12CommandQueueType InQueueT
 	check(FenceCore);
 
 #if DEBUG_FENCES
-	UE_LOG(LogD3D12RHI, Log, TEXT("*** GPU WAIT (CmdQueueType: %d) Fence: %016llX (%s), Gpu (%d <- %d) Value: %llu ***"), (uint32)InQueueType, FenceCore->GetFence(), *GetName().ToString(), Device->GetGPUIndex(), FenceGPUIndex, FenceValue);
+	UE_LOG(LogD3D12RHI, Log, TEXT("*** GPU WAIT (CmdQueueType: %d) Fence: %016llX (%s), Gpu (%d <- %d) Value: %llu ***"), (uint32)InQueueType, FenceCore->GetFence(), *Name.ToString(), Device->GetGPUIndex(), FenceGPUIndex, FenceValue);
 #endif
 	VERIFYD3D12RESULT(CommandQueue->Wait(FenceCore->GetFence(), FenceValue));}
 
@@ -266,7 +267,7 @@ uint64 FD3D12Fence::UpdateLastCompletedFence()
 	return CompletedFence;
 }
 
-uint64 FD3D12ManualFence::Signal(ED3D12CommandQueueType InQueueType, uint64 FenceToSignal)
+uint64 FD3D12ManualFence::ManualSignal(ED3D12CommandQueueType InQueueType, uint64 FenceToSignal)
 {
 	check(LastSignaledFence != FenceToSignal);
 	InternalSignal(InQueueType, FenceToSignal);
@@ -329,10 +330,16 @@ FD3D12CommandListManager::FD3D12CommandListManager(FD3D12Device* InParent, D3D12
 	, CommandListType(InCommandListType)
 	, QueueType(InQueueType)
 	, BreadCrumbResourceAddress(nullptr)
-#if WITH_PROFILEGPU
+#if WITH_PROFILEGPU || D3D12_SUBMISSION_GAP_RECORDER
 	, bShouldTrackCmdListTime(false)
 #endif
 {
+#if WITH_PROFILEGPU || D3D12_SUBMISSION_GAP_RECORDER
+	for (int32 Idx = 0; Idx < UE_ARRAY_COUNT(CmdListTimingQueryBatchTokens); ++Idx)
+	{
+		CmdListTimingQueryBatchTokens[Idx] = INDEX_NONE;
+	}
+#endif
 }
 
 FD3D12CommandListManager::~FD3D12CommandListManager()
@@ -376,7 +383,7 @@ void FD3D12CommandListManager::Create(const TCHAR* Name, uint32 NumCommandLists,
 	FD3D12Device* Device = GetParentDevice();
 	FD3D12Adapter* Adapter = Device->GetParentAdapter();
 
-	CommandListFence = new FD3D12Fence(Adapter, GetGPUMask(), L"Command List Fence");
+	CommandListFence = new FD3D12CommandListFence(Adapter, GetGPUMask(), L"Command List Fence");
 	CommandListFence->CreateFence();
 
 	check(D3DCommandQueue.GetReference() == nullptr);
@@ -415,12 +422,13 @@ void FD3D12CommandListManager::Create(const TCHAR* Name, uint32 NumCommandLists,
 		if (SUCCEEDED(hr))
 		{
 			// find out how many entries we can much push in a single event (limit to MAX_GPU_BREADCRUMB_DEPTH)
-			int32 GPUCrashDataDepth = GetParentDevice()->GetParentAdapter()->GetGPUProfiler().GPUCrashDataDepth;
+			int32 GPUCrashDataDepth = GetParentDevice()->GetGPUProfiler().GPUCrashDataDepth;
 			int32 MaxEventCount = GPUCrashDataDepth > 0 ? FMath::Min(GPUCrashDataDepth, MAX_GPU_BREADCRUMB_DEPTH) : MAX_GPU_BREADCRUMB_DEPTH;			
 
-			// Allocate persistent CPU reabable memory which will still be valid after a device lost and wrap this data in a placed resource
+			// Allocate persistent CPU readable memory which will still be valid after a device lost and wrap this data in a placed resource
 			// so the GPU command list can write to it
-			BreadCrumbResourceAddress = VirtualAlloc(nullptr, MaxEventCount, MEM_COMMIT, PAGE_READWRITE);
+			const uint32 BreadCrumbBufferSize = MaxEventCount * sizeof(uint32);
+			BreadCrumbResourceAddress = VirtualAlloc(nullptr, BreadCrumbBufferSize, MEM_COMMIT, PAGE_READWRITE);
 			if (BreadCrumbResourceAddress)
 			{
 				// Create non refcounted heap because SetHeap function will take ownership without perform AddRef
@@ -434,7 +442,7 @@ void FD3D12CommandListManager::Create(const TCHAR* Name, uint32 NumCommandLists,
 					TCHAR TempStr[MAX_SPRINTF] = TEXT("");
 					FCString::Sprintf(TempStr, TEXT("BreadCrumbResource_%s"), Name);
 
-					const D3D12_RESOURCE_DESC BufferDesc = CD3DX12_RESOURCE_DESC::Buffer(MaxEventCount * sizeof(uint32), D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER);
+					const D3D12_RESOURCE_DESC BufferDesc = CD3DX12_RESOURCE_DESC::Buffer(BreadCrumbBufferSize, D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER);
 					hr = Adapter->CreatePlacedResource(BufferDesc, BreadCrumbHeap.GetReference(), 0, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, BreadCrumbResource.GetInitReference(), TempStr, false);
 					if (SUCCEEDED(hr))
 					{
@@ -524,6 +532,8 @@ void FD3D12CommandListManager::ExecuteCommandList(FD3D12CommandListHandle& hList
 
 uint64 FD3D12CommandListManager::ExecuteAndIncrementFence(FD3D12CommandListPayload& Payload, FD3D12Fence &Fence)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ExecuteCommandListAndIncrementFence);
+
 	FScopeLock Lock(&FenceCS);
 
 	// Execute, signal, and wait (if requested)
@@ -576,7 +586,47 @@ uint64 FD3D12CommandListManager::ExecuteAndIncrementFence(FD3D12CommandListPaylo
 	return Fence.Signal(QueueType);
 }
 
+
+void FD3D12CommandListManager::WaitOnExecuteTask()
+{
+	if (ExecuteTask != nullptr)
+	{
+		FTaskGraphInterface::Get().WaitUntilTaskCompletes(ExecuteTask, ENamedThreads::AnyThread);
+		ExecuteTask = nullptr;
+	}
+}
+
 void FD3D12CommandListManager::ExecuteCommandLists(TArray<FD3D12CommandListHandle>& Lists, bool WaitForCompletion)
+{
+	// Still has a pending execute task, then make sure the current one is finished before executing a new command list set
+	WaitOnExecuteTask();
+
+	check(ExecuteCommandListHandles.Num() == 0);
+
+	// Do we want to kick via a task - only for direct/graphics queue for now
+	bool bUseExecuteTask = (CommandListType == D3D12_COMMAND_LIST_TYPE_DIRECT) && !WaitForCompletion && GD3D12ExecuteCommandListTask;
+	if (bUseExecuteTask)
+	{		
+		ExecuteCommandListHandles = Lists;
+
+		// Increment the pending fence value so all object can be corrected fenced again future pending signal
+		CommandListFence->AdvancePendingFenceValue();
+
+		ExecuteTask = FFunctionGraphTask::CreateAndDispatchWhenReady(
+			[this]()
+			{	
+				ExecuteCommandListInteral(ExecuteCommandListHandles, false);
+				ExecuteCommandListHandles.Reset();
+			}, TStatId(), nullptr, ENamedThreads::AnyThread);
+	}
+	else
+	{
+		ExecuteCommandListInteral(Lists, WaitForCompletion);
+	}
+}
+
+
+void FD3D12CommandListManager::ExecuteCommandListInteral(TArray<FD3D12CommandListHandle>& Lists, bool WaitForCompletion)
 {
 	SCOPE_CYCLE_COUNTER(STAT_D3D12ExecuteCommandListTime);
 	check(CommandListFence);
@@ -631,6 +681,14 @@ void FD3D12CommandListManager::ExecuteCommandLists(TArray<FD3D12CommandListHandl
 			check(0);
 		}
 #endif
+		
+		// If not direct queue, then make sure the direct queue is done executing commands 
+		// before trying to use the barrier command list from it
+		if (CommandListType != D3D12_COMMAND_LIST_TYPE_DIRECT)
+		{
+			DirectCommandListManager.WaitOnExecuteTask();
+		}
+
 		FScopeLock Lock(&ResourceStateCS);
 
 		for (int32 i = 0; i < Lists.Num(); i++)
@@ -720,6 +778,8 @@ void FD3D12CommandListManager::ReleaseResourceBarrierCommandListAllocator()
 	// Release the resource barrier command allocator.
 	if (ResourceBarrierCommandAllocator != nullptr)
 	{
+		WaitOnExecuteTask();
+
 		ResourceBarrierCommandAllocatorManager.ReleaseCommandAllocator(ResourceBarrierCommandAllocator);
 		ResourceBarrierCommandAllocator = nullptr;
 	}
@@ -727,63 +787,103 @@ void FD3D12CommandListManager::ReleaseResourceBarrierCommandListAllocator()
 
 void FD3D12CommandListManager::StartTrackingCommandListTime()
 {
-#if WITH_PROFILEGPU
-	check(QueueType == ED3D12CommandQueueType::Default && !bShouldTrackCmdListTime);
-	PendingTimingPairs.Reset();
+#if WITH_PROFILEGPU || D3D12_SUBMISSION_GAP_RECORDER
+	check(QueueType == ED3D12CommandQueueType::Default && !GetShouldTrackCmdListTime());
 	ResolvedTimingPairs.Reset();
-	bShouldTrackCmdListTime = true;
+	SetShouldTrackCmdListTime(true);
 #endif
 }
 
 void FD3D12CommandListManager::EndTrackingCommandListTime()
 {
-#if WITH_PROFILEGPU
-	check(QueueType == ED3D12CommandQueueType::Default && bShouldTrackCmdListTime);
-	bShouldTrackCmdListTime = false;
+#if WITH_PROFILEGPU || D3D12_SUBMISSION_GAP_RECORDER
+	check(QueueType == ED3D12CommandQueueType::Default && GetShouldTrackCmdListTime());
+	SetShouldTrackCmdListTime(false);
 #endif
 }
 
-void FD3D12CommandListManager::GetCommandListTimingResults(TArray<FResolvedCmdListExecTime>& OutTimingPairs)
+void FD3D12CommandListManager::GetCommandListTimingResults(TArray<FResolvedCmdListExecTime>& OutTimingPairs, bool bUseBlockingCall)
 {
-#if WITH_PROFILEGPU
-	check(!bShouldTrackCmdListTime && QueueType == ED3D12CommandQueueType::Default);
-	FlushPendingTimingPairs();
+#if WITH_PROFILEGPU || D3D12_SUBMISSION_GAP_RECORDER
+	check(!GetShouldTrackCmdListTime() && QueueType == ED3D12CommandQueueType::Default);
+	FlushPendingTimingPairs(bUseBlockingCall);
+	if (bUseBlockingCall)
+	{
+		SortTimingResults();
+	}
 	OutTimingPairs = MoveTemp(ResolvedTimingPairs);
 #endif
 }
 
-void FD3D12CommandListManager::AddCommandListTimingPair(int32 StartTimeQueryIdx, int32 EndTimeQueryIdx)
+void FD3D12CommandListManager::SortTimingResults()
 {
-#if WITH_PROFILEGPU
-	check(StartTimeQueryIdx >= 0 && EndTimeQueryIdx >= 0);
-	FScopeLock Lock(&CmdListTimingCS);
-	new (PendingTimingPairs) FCmdListExecTime(StartTimeQueryIdx, EndTimeQueryIdx);
+#if WITH_PROFILEGPU || D3D12_SUBMISSION_GAP_RECORDER
+	const int32 NumTimingPairs = ResolvedTimingPairs.Num();
+	GetStartTimestamps().Empty(NumTimingPairs);
+	GetEndTimestamps().Empty(NumTimingPairs);
+	GetIdleTime().Empty(NumTimingPairs);
+
+	if (NumTimingPairs > 0)
+	{
+		GetStartTimestamps().Add(ResolvedTimingPairs[0].StartTimestamp);
+		GetEndTimestamps().Add(ResolvedTimingPairs[0].EndTimestamp);
+		GetIdleTime().Add(0);
+		for (int32 Idx = 1; Idx < NumTimingPairs; ++Idx)
+		{
+			const FResolvedCmdListExecTime& Prev = ResolvedTimingPairs[Idx - 1];
+			const FResolvedCmdListExecTime& Cur = ResolvedTimingPairs[Idx];
+			GetStartTimestamps().Add(Cur.StartTimestamp);
+			GetEndTimestamps().Add(Cur.EndTimestamp);
+			const uint64 Bubble = Cur.StartTimestamp >= Prev.EndTimestamp ? Cur.StartTimestamp - Prev.EndTimestamp : 0;
+			uint64 &LastIdx = GetIdleTime().Last();
+			GetIdleTime().Add(LastIdx + Bubble);
+		}
+	}
 #endif
 }
 
-void FD3D12CommandListManager::FlushPendingTimingPairs()
+void FD3D12CommandListManager::FlushPendingTimingPairs(bool bBlock)
 {
-#if WITH_PROFILEGPU
-	check(!ResolvedTimingPairs.Num() && !bShouldTrackCmdListTime);
+#if WITH_PROFILEGPU || D3D12_SUBMISSION_GAP_RECORDER
+	check(!GetShouldTrackCmdListTime());
 
 	TArray<uint64> AllTimestamps;
-	GetParentDevice()->GetCmdListExecTimeQueryHeap()->FlushAndGetResults(AllTimestamps);
+	const uint64 NewToken = GetParentDevice()->GetCmdListExecTimeQueryHeap()->ResolveAndGetResults(AllTimestamps, CmdListTimingQueryBatchTokens[0], bBlock);
 
-	const int32 NumPending = PendingTimingPairs.Num();
-	ResolvedTimingPairs.Empty(NumPending);
-	for (int32 Idx = 0; Idx < NumPending; ++Idx)
+	if (bBlock)
 	{
-		const FCmdListExecTime& QueryIdxPair = PendingTimingPairs[Idx];
-		const uint64 StartStamp = AllTimestamps[QueryIdxPair.StartTimeQueryIdx];
-		const uint64 EndStamp = AllTimestamps[QueryIdxPair.EndTimeQueryIdx];
-		new (ResolvedTimingPairs) FResolvedCmdListExecTime(StartStamp, EndStamp);
+		for (int32 Idx = 0; Idx < UE_ARRAY_COUNT(CmdListTimingQueryBatchTokens); ++Idx)
+		{
+			CmdListTimingQueryBatchTokens[Idx] = INDEX_NONE;
+		}
 	}
-	PendingTimingPairs.Reset();
+	else
+	{
+		const int32 NumTokens = UE_ARRAY_COUNT(CmdListTimingQueryBatchTokens);
+		for (int32 Idx = 1; Idx < NumTokens; ++Idx)
+		{
+			CmdListTimingQueryBatchTokens[Idx - 1] = CmdListTimingQueryBatchTokens[Idx];
+		}
+		CmdListTimingQueryBatchTokens[NumTokens - 1] = NewToken;
+	}
+
+	if (AllTimestamps.Num())
+	{
+		Algo::Sort(AllTimestamps, TLess<>());
+		const int32 NumTimestamps = AllTimestamps.Num();
+		check(!(NumTimestamps & 1));
+		const int32 NumPairs = NumTimestamps >> 1;
+		ResolvedTimingPairs.Empty(NumPairs);
+		ResolvedTimingPairs.AddUninitialized(NumPairs);
+		FMemory::Memcpy(ResolvedTimingPairs.GetData(), AllTimestamps.GetData(), NumTimestamps * sizeof(uint64));
+	}
 #endif
 }
 
 uint32 FD3D12CommandListManager::GetResourceBarrierCommandList(FD3D12CommandListHandle& hList, FD3D12CommandListHandle& hResourceBarrierList)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(GetResourceBarrierCommandList);
+
 	TArray<FD3D12PendingResourceBarrier>& PendingResourceBarriers = hList.PendingResourceBarriers();
 	const uint32 NumPendingResourceBarriers = PendingResourceBarriers.Num();
 	if (NumPendingResourceBarriers)
@@ -791,6 +891,9 @@ uint32 FD3D12CommandListManager::GetResourceBarrierCommandList(FD3D12CommandList
 		// Reserve space for the descs
 		TArray<D3D12_RESOURCE_BARRIER> BarrierDescs;
 		BarrierDescs.Reserve(NumPendingResourceBarriers);
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+		TArray<D3D12_RESOURCE_BARRIER> BackBufferBarrierDescs;
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
 
 		// Fill out the descs
 		D3D12_RESOURCE_BARRIER Desc = {};
@@ -817,7 +920,16 @@ uint32 FD3D12CommandListManager::GetResourceBarrierCommandList(FD3D12CommandList
 				Desc.Transition.StateAfter = After;
 
 				// Add the desc
-				BarrierDescs.Add(Desc);
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+				if (PRB.Resource->IsBackBuffer() && (After & BackBufferBarrierWriteTransitionTargets))
+				{
+					BackBufferBarrierDescs.Add(Desc);
+				}
+				else
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+				{
+					BarrierDescs.Add(Desc);
+				}
 			}
 
 			// Update the state to the what it will be after hList executes
@@ -830,7 +942,14 @@ uint32 FD3D12CommandListManager::GetResourceBarrierCommandList(FD3D12CommandList
 			}
 		}
 
-		if (BarrierDescs.Num() > 0)
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+		const uint32 BarrierCount = BarrierDescs.Num() + BackBufferBarrierDescs.Num();
+		if (BarrierDescs.Num() > 0 || BackBufferBarrierDescs.Num() > 0)
+#else // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+		const uint32 BarrierCount = BarrierDescs.Num();
+#endif // #else // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+
+		if (BarrierCount > 0)
 		{
 			// Get a new resource barrier command allocator if we don't already have one.
 			if (ResourceBarrierCommandAllocator == nullptr)
@@ -847,33 +966,61 @@ uint32 FD3D12CommandListManager::GetResourceBarrierCommandList(FD3D12CommandList
 				const FD3D12PendingResourceBarrier& PRB = PendingResourceBarriers[i];
 				hResourceBarrierList.UpdateResidency(PRB.Resource);
 			}
-#endif
+#endif // #if ENABLE_RESIDENCY_MANAGEMENT
 #if DEBUG_RESOURCE_STATES
 			LogResourceBarriers(BarrierDescs.Num(), BarrierDescs.GetData(), hResourceBarrierList.CommandList());
-#endif
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+			LogResourceBarriers(BackBufferBarrierDescs.Num(), BackBufferBarrierDescs.GetData(), BackBufferBarrierDescs.CommandList());
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+#endif // #if DEBUG_RESOURCE_STATES
+			const int32 BarrierBatchMax = FD3D12DynamicRHI::GetResourceBarrierBatchSizeLimit();
 
-#if USE_PIX && PLATFORM_XBOXONE 
-			//there was a bug in the instrumented driver that corrupts the cmdBuffer if more than 2000 Barrieres are submitted at once
-			if (BarrierDescs.Num() > 1900)
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+			if (BackBufferBarrierDescs.Num())
 			{
-				int Num = BarrierDescs.Num();
-				D3D12_RESOURCE_BARRIER* Ptr = BarrierDescs.GetData();
-				while (Num > 0)
+				check(hList.GetCurrentOwningContext());
+				FD3D12ScopedTimedIntervalQuery BarrierScopeTimer(GetParentDevice()->GetBackBufferWriteBarrierTracker(), hResourceBarrierList.GraphicsCommandList());
+				if (BackBufferBarrierDescs.Num() > BarrierBatchMax)
 				{
-					int DispatchNum = FMath::Min(Num, 1900);
-					hResourceBarrierList->ResourceBarrier(DispatchNum, Ptr);
-					Ptr += 1900;
-					Num -= 1900;
+					int Num = BackBufferBarrierDescs.Num();
+					D3D12_RESOURCE_BARRIER* Ptr = BackBufferBarrierDescs.GetData();
+					while (Num > 0)
+					{
+						const int DispatchNum = FMath::Min(Num, BarrierBatchMax);
+						hResourceBarrierList->ResourceBarrier(DispatchNum, Ptr);
+						Ptr += BarrierBatchMax;
+						Num -= BarrierBatchMax;
+					}
+				}
+				else
+				{
+					hResourceBarrierList->ResourceBarrier(BackBufferBarrierDescs.Num(), BackBufferBarrierDescs.GetData());
 				}
 			}
-			else
-#endif
+
+			if (BarrierDescs.Num())
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
 			{
-				hResourceBarrierList->ResourceBarrier(BarrierDescs.Num(), BarrierDescs.GetData());
+				if (BarrierDescs.Num() > BarrierBatchMax)
+				{
+					int Num = BarrierDescs.Num();
+					D3D12_RESOURCE_BARRIER* Ptr = BarrierDescs.GetData();
+					while (Num > 0)
+					{
+						const int DispatchNum = FMath::Min(Num, BarrierBatchMax);
+						hResourceBarrierList->ResourceBarrier(DispatchNum, Ptr);
+						Ptr += BarrierBatchMax;
+						Num -= BarrierBatchMax;
+					}
+				}
+				else
+				{
+					hResourceBarrierList->ResourceBarrier(BarrierDescs.Num(), BarrierDescs.GetData());
+				}
 			}
 		}
 
-		return BarrierDescs.Num();
+		return BarrierCount;
 	}
 
 	return 0;
@@ -909,6 +1056,9 @@ CommandListState FD3D12CommandListManager::GetCommandListState(const FD3D12CLSyn
 
 void FD3D12CommandListManager::WaitForCommandQueueFlush()
 {
+	// Make sure pending execute tasks are done
+	WaitOnExecuteTask();
+
 	if (D3DCommandQueue)
 	{
 		check(CommandListFence);
@@ -926,8 +1076,8 @@ FD3D12CommandListHandle FD3D12CommandListManager::CreateCommandListHandle(FD3D12
 
 bool FD3D12CommandListManager::ShouldTrackCommandListTime() const
 {
-#if WITH_PROFILEGPU
-	return bShouldTrackCmdListTime;
+#if WITH_PROFILEGPU || D3D12_SUBMISSION_GAP_RECORDER
+	return GetShouldTrackCmdListTime();
 #else
 	return false;
 #endif

@@ -19,7 +19,7 @@ FPicpProjectionModule::FPicpProjectionModule()
 	TSharedPtr<IDisplayClusterProjectionPolicyFactory> Factory;
 
 	// Picp_MPCDI + Picp_MESH projections:
-	Factory = MakeShareable(new FPicpProjectionMPCDIPolicyFactory);
+	Factory = MakeShared<FPicpProjectionMPCDIPolicyFactory>();
 	ProjectionPolicyFactories.Emplace(PicpProjectionStrings::projection::PicpMPCDI, Factory);
 	ProjectionPolicyFactories.Emplace(PicpProjectionStrings::projection::PicpMesh,  Factory); // Add overried projection for mesh
 
@@ -121,27 +121,29 @@ void FPicpProjectionModule::SetOverlayFrameData(const FString& PolicyType, FPicp
 bool FPicpProjectionModule::AssignWarpMeshToViewport(const FString& ViewportId, UStaticMeshComponent* MeshComponent, USceneComponent* OriginComponent)
 {
 	TSharedPtr<IDisplayClusterProjectionPolicyFactory> Factory = GetProjectionFactory(PicpProjectionStrings::projection::PicpMesh);
-	if (Factory.IsValid())
+	if (MeshComponent != nullptr)
 	{
-		FPicpProjectionMPCDIPolicyFactory* PicpMPCDIFactory = static_cast<FPicpProjectionMPCDIPolicyFactory*>(Factory.Get());
-		if (PicpMPCDIFactory)
+		if (Factory.IsValid())
 		{
-			TSharedPtr<FPicpProjectionPolicyBase> ViewportPolicy = PicpMPCDIFactory->GetPicpPolicyByViewport(ViewportId);
-			if (ViewportPolicy.IsValid())
+			FPicpProjectionMPCDIPolicyFactory* PicpMPCDIFactory = static_cast<FPicpProjectionMPCDIPolicyFactory*>(Factory.Get());
+			if (PicpMPCDIFactory)
 			{
-				FPicpProjectionMeshPolicy* PicpMeshPolicy = static_cast<FPicpProjectionMeshPolicy*>(ViewportPolicy.Get());
-				if (PicpMeshPolicy != nullptr)
+				TSharedPtr<FPicpProjectionPolicyBase> ViewportPolicy = PicpMPCDIFactory->GetPicpPolicyByViewport(ViewportId);
+				if (ViewportPolicy.IsValid())
 				{
-					if (PicpMeshPolicy->GetWarpType() == FPicpProjectionMPCDIPolicy::EWarpType::Mesh)
+					FPicpProjectionMeshPolicy* PicpMeshPolicy = static_cast<FPicpProjectionMeshPolicy*>(ViewportPolicy.Get());
+					if (PicpMeshPolicy != nullptr)
 					{
-						return PicpMeshPolicy->AssignWarpMesh(MeshComponent, OriginComponent);
+						if (PicpMeshPolicy->GetWarpType() == FPicpProjectionMPCDIPolicy::EWarpType::Mesh)
+						{
+							return PicpMeshPolicy->AssignWarpMesh(MeshComponent, OriginComponent);
+						}
 					}
 				}
 			}
 		}
 	}
 
-	UE_LOG(LogPicpProjection, Error, TEXT("Viewport '%s' with 'picp_mesh' projection not found"), *ViewportId);
 	return false;
 }
 

@@ -205,16 +205,6 @@ void FEmptyDynamicRHI::RHISetBlendState(FRHIBlendState* NewStateRHI, const FLine
 }
 
 
-void FEmptyDynamicRHI::RHISetRenderTargets(uint32 NumSimultaneousRenderTargets, const FRHIRenderTargetView* NewRenderTargets, 
-	FRHITexture* NewDepthStencilTargetRHI)
-{
-
-}
-
-void FEmptyDynamicRHI::RHISetRenderTargetsAndClear(const FRHISetRenderTargetsInfo& RenderTargetsInfo)
-{
-}
-
 // Occlusion/Timer queries.
 void FEmptyDynamicRHI::RHIBeginRenderQuery(FRHIRenderQuery* QueryRHI)
 {
@@ -328,10 +318,6 @@ void FEmptyDynamicRHI::RHIClearMRT(bool bClearColor,int32 NumClearColors,const F
 
 }
 
-void FEmptyDynamicRHI::RHIBindClearMRTValues(bool bClearColor, bool bClearDepth, bool bClearStencil)
-{
-}
-
 void FEmptyDynamicRHI::RHIBlockUntilGPUIdle()
 {
 
@@ -340,16 +326,6 @@ void FEmptyDynamicRHI::RHIBlockUntilGPUIdle()
 uint32 FEmptyDynamicRHI::RHIGetGPUFrameCycles(uint32 GPUIndex)
 {
 	return GGPUFrameTime;
-}
-
-void FEmptyDynamicRHI::RHIAutomaticCacheFlushAfterComputeShader(bool bEnable) 
-{
-
-}
-
-void FEmptyDynamicRHI::RHIFlushComputeShaderCache()
-{
-
 }
 
 void* FEmptyDynamicRHI::RHIGetNativeDevice()

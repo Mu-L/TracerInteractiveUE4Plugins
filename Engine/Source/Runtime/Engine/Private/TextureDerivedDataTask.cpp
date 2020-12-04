@@ -25,6 +25,7 @@
 
 #include "DerivedDataCacheInterface.h"
 #include "Engine/TextureCube.h"
+#include "Engine/VolumeTexture.h"
 #include "GenericPlatform/GenericPlatformMath.h"
 #include "Interfaces/ITargetPlatform.h"
 #include "Interfaces/ITargetPlatformManagerModule.h"
@@ -249,8 +250,16 @@ void FTextureCacheDerivedDataWorker::BuildTexture()
 	else if (bHasValidMip0)
 	{
 		// Only support single Block/Layer here (Blocks and Layers are intended for VT support)
-		ensure(TextureData.Blocks.Num() == 1);
-		ensure(TextureData.Layers.Num() == 1);
+		if (TextureData.Blocks.Num() > 1)
+		{
+			// This warning can happen if user attempts to import a UDIM without VT enabled
+			UE_LOG(LogTexture, Warning, TEXT("Texture %s was imported as UDIM with %d blocks but VirtualTexturing is not enabled, only the 1001 block will be availiable"),
+				*Texture.GetName(), TextureData.Blocks.Num());
+		}
+
+		// No user-facing way to generated multi-layered textures currently, so this should not occur
+		ensureMsgf(TextureData.Layers.Num() == 1, TEXT("Texture %s has %d layers bu VirtualTexturing is not enabled, only layer0 will be availiable"),
+			*Texture.GetName(), TextureData.Blocks.Num());
 
 		check(DerivedData->Mips.Num() == 0);
 		DerivedData->SizeX = 0;
@@ -282,6 +291,7 @@ void FTextureCacheDerivedDataWorker::BuildTexture()
 				NewMip->SizeX = CompressedImage.SizeX;
 				NewMip->SizeY = CompressedImage.SizeY;
 				NewMip->SizeZ = CompressedImage.SizeZ;
+				NewMip->FileRegionType = FFileRegion::SelectType(EPixelFormat(CompressedImage.PixelFormat));
 				check(NewMip->SizeZ == 1 || BuildSettingsPerLayer[0].bVolume || BuildSettingsPerLayer[0].bTextureArray); // Only volume & arrays can have SizeZ != 1
 				NewMip->BulkData.Lock(LOCK_READ_WRITE);
 				check(CompressedImage.RawData.GetTypeSize() == 1);
@@ -309,7 +319,7 @@ void FTextureCacheDerivedDataWorker::BuildTexture()
 			// @todo: This will remove the streaming bulk data, which we immediately reload below!
 			// Should ideally avoid this redundant work, but it only happens when we actually have 
 			// to build the texture, which should only ever be once.
-			this->BytesCached = PutDerivedDataInCache(DerivedData, KeySuffix, Texture.GetPathName(), BuildSettingsPerLayer[0].bCubemap || BuildSettingsPerLayer[0].bVolume || BuildSettingsPerLayer[0].bTextureArray);
+			this->BytesCached = PutDerivedDataInCache(DerivedData, KeySuffix, Texture.GetPathName(), BuildSettingsPerLayer[0].bCubemap || (BuildSettingsPerLayer[0].bVolume && !GSupportsVolumeTextureStreaming) || (BuildSettingsPerLayer[0].bTextureArray && !GSupportsTexture2DArrayStreaming));
 		}
 
 		if (DerivedData->Mips.Num())

@@ -10,6 +10,7 @@
 #include "Installer/InstallerAnalytics.h"
 #include "Common/HttpManager.h"
 #include "Common/FileSystem.h"
+#include "Stats/Stats.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(LogDownloadService, Warning, All);
 DEFINE_LOG_CATEGORY(LogDownloadService);
@@ -230,7 +231,7 @@ namespace BuildPatchServices
 		IDownloadServiceStat::FDownloadRecord MakeDownloadRecord(int32 RequestId, FString Uri);
 		TFunction<void()> MakeFileLoadTask(const int32& RequestId, const FString& FileUri, FFileRequest* FileRequest);
 
-		void RegisterRequest(int32 RequestId, TSharedRef<IHttpRequest> HttpRequest);
+		void RegisterRequest(int32 RequestId, TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest);
 		void RegisterRequest(int32 RequestId, TUniquePtr<FFileRequest> FileRequest);
 		void UnregisterRequest(int32 RequestId);
 		void HttpRequestProgress(FHttpRequestPtr Request, int32 BytesSent, int32 BytesReceived, int32 RequestId);
@@ -259,7 +260,7 @@ namespace BuildPatchServices
 		TArray<int32> CancelRequests;
 
 		FCriticalSection ActiveRequestsCS;
-		TMap<int32, TSharedRef<IHttpRequest>> ActiveHttpRequests;
+		TMap<int32, TSharedRef<IHttpRequest, ESPMode::ThreadSafe>> ActiveHttpRequests;
 		TMap<int32, TUniquePtr<FFileRequest>> ActiveFileRequests;
 
 		FCriticalSection ProgressUpdatesCS;
@@ -322,7 +323,7 @@ namespace BuildPatchServices
 		SharedShouldRunState->AtomicSet(false);
 		// Cancel all HTTP requests and wait for all file downloads threads to exit.
 		ActiveRequestsCS.Lock();
-		for (const TPair<int32, TSharedRef<IHttpRequest>>& ActiveHttpRequest : ActiveHttpRequests)
+		for (const TPair<int32, TSharedRef<IHttpRequest, ESPMode::ThreadSafe>>& ActiveHttpRequest : ActiveHttpRequests)
 		{
 			ActiveHttpRequest.Value->OnRequestProgress().Unbind();
 			ActiveHttpRequest.Value->OnProcessRequestComplete().Unbind();
@@ -373,6 +374,8 @@ namespace BuildPatchServices
 
 	bool FDownloadService::Tick(float DeltaTime)
 	{
+		QUICK_SCOPE_CYCLE_COUNTER(STAT_FDownloadService_Tick);
+
 		ProcessCancelRequests();
 
 		ProcessNewRequests();
@@ -453,7 +456,7 @@ namespace BuildPatchServices
 			if (bIsHttpRequest)
 			{
 				// Kick off http request.
-				TSharedRef<IHttpRequest> HttpRequest = HttpManager->CreateRequest();
+				TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = HttpManager->CreateRequest();
 				HttpRequest->OnRequestProgress().BindThreadSafeSP(HttpDelegates, &FHttpDelegates::HttpRequestProgress, NewRequest.Key);
 				HttpRequest->OnProcessRequestComplete().BindThreadSafeSP(HttpDelegates, &FHttpDelegates::HttpRequestComplete, MakeDownloadRecord(NewRequest.Key, NewRequest.Value));
 				HttpRequest->SetURL(NewRequest.Value);
@@ -584,7 +587,7 @@ namespace BuildPatchServices
 		ActiveFileRequests.Add(RequestId, MoveTemp(FileRequest));
 	}
 
-	void FDownloadService::RegisterRequest(int32 RequestId, TSharedRef<IHttpRequest> HttpRequest)
+	void FDownloadService::RegisterRequest(int32 RequestId, TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest)
 	{
 		FScopeLock ScopeLock(&ActiveRequestsCS);
 		ActiveHttpRequests.Add(RequestId, MoveTemp(HttpRequest));

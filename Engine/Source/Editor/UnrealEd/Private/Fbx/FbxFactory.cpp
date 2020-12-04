@@ -1,35 +1,38 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Factories/FbxFactory.h"
-#include "Misc/Paths.h"
-#include "Misc/FeedbackContext.h"
-#include "Engine/SkeletalMesh.h"
+
 #include "Animation/AnimSequence.h"
+#include "AssetImportTask.h"
+#include "AssetRegistryModule.h"
+#include "ContentBrowserModule.h"
+#include "Editor.h"
 #include "Editor/EditorEngine.h"
+#include "EditorReimportHandler.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
 #include "Factories/FbxAnimSequenceImportData.h"
+#include "Factories/FbxImportUI.h"
 #include "Factories/FbxSkeletalMeshImportData.h"
 #include "Factories/FbxStaticMeshImportData.h"
 #include "Factories/FbxTextureImportData.h"
-#include "Factories/FbxImportUI.h"
-#include "Engine/StaticMesh.h"
-#include "Editor.h"
-#include "SkelImport.h"
-
-#include "EditorReimportHandler.h"
-
-#include "Logging/TokenizedMessage.h"
+#include "Factories/ReimportFbxAnimSequenceFactory.h"
+#include "Factories/ReimportFbxSkeletalMeshFactory.h"
+#include "Factories/ReimportFbxStaticMeshFactory.h"
 #include "FbxImporter.h"
-
-#include "Misc/FbxErrors.h"
-#include "AssetRegistryModule.h"
-#include "ObjectTools.h"
-#include "JsonObjectConverter.h"
-#include "AssetImportTask.h"
 #include "HAL/FileManager.h"
-
+#include "IContentBrowserSingleton.h"
+#include "JsonObjectConverter.h"
 #include "LODUtilities.h"
-#include "UObject/UnrealType.h"
+#include "Logging/TokenizedMessage.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Misc/FbxErrors.h"
+#include "Misc/FeedbackContext.h"
+#include "Misc/Paths.h"
+#include "Misc/ScopedSlowTask.h"
+#include "ObjectTools.h"
+#include "SkelImport.h"
+#include "UObject/UnrealType.h"
 
 #define LOCTEXT_NAMESPACE "FBXFactory"
 
@@ -89,7 +92,6 @@ UClass* UFbxFactory::ResolveSupportedClass()
 bool UFbxFactory::DetectImportType(const FString& InFilename)
 {
 	UnFbx::FFbxImporter* FFbxImporter = UnFbx::FFbxImporter::GetInstance();
-	UnFbx::FFbxLoggerSetter Logger(FFbxImporter);
 	int32 ImportType = FFbxImporter->GetImportType(InFilename);
 	if ( ImportType == -1)
 	{
@@ -107,9 +109,12 @@ bool UFbxFactory::DetectImportType(const FString& InFilename)
 }
 
 
-UObject* UFbxFactory::ImportANode(void* VoidFbxImporter, TArray<void*> VoidNodes, UObject* InParent, FName InName, EObjectFlags Flags, int32& NodeIndex, int32 Total, UObject* InMesh, int LODIndex)
+UObject* UFbxFactory::ImportANode(UnFbx::FFbxImporter* FbxImporter, TArray<void*> VoidNodes, UObject* InParent, FName InName, EObjectFlags Flags, FScopedSlowTask& SlowTask, UObject* InMesh, int LODIndex)
 {
-	UnFbx::FFbxImporter* FFbxImporter = (UnFbx::FFbxImporter*)VoidFbxImporter;
+	FFormatNamedArguments Args;
+	Args.Add(TEXT("NodeIndex"), SlowTask.CompletedWork + 1);
+	Args.Add(TEXT("ArrayLength"), SlowTask.TotalAmountOfWork);
+	SlowTask.EnterProgressFrame(1, GetImportTaskText(FText::Format(NSLOCTEXT("UnrealEd", "Importingf", "Importing ({NodeIndex} of {ArrayLength})"), Args)));
 	TArray<FbxNode*> Nodes;
 	for (void* VoidNode : VoidNodes)
 	{
@@ -118,7 +123,7 @@ UObject* UFbxFactory::ImportANode(void* VoidFbxImporter, TArray<void*> VoidNodes
 	check(Nodes.Num() > 0 && Nodes[0] != nullptr);
 
 	UObject* CreatedObject = NULL;
-	FName OutputName = FFbxImporter->MakeNameForMesh(InName.ToString(), Nodes[0]);
+	FName OutputName = FbxImporter->MakeNameForMesh(InName.ToString(), Nodes[0]);
 	
 	{
 		// skip collision models
@@ -129,19 +134,16 @@ UObject* UFbxFactory::ImportANode(void* VoidFbxImporter, TArray<void*> VoidNodes
 			return NULL;
 		}
 
-		CreatedObject = FFbxImporter->ImportStaticMeshAsSingle( InParent, Nodes, OutputName, Flags, ImportUI->StaticMeshImportData, Cast<UStaticMesh>(InMesh), LODIndex );
-	}
-
-	if (CreatedObject)
-	{
-		NodeIndex++;
-		FFormatNamedArguments Args;
-		Args.Add( TEXT("NodeIndex"), NodeIndex );
-		Args.Add( TEXT("ArrayLength"), Total );
-		GWarn->StatusUpdate( NodeIndex, Total, FText::Format( NSLOCTEXT("UnrealEd", "Importingf", "Importing ({NodeIndex} of {ArrayLength})"), Args ) );
+		CreatedObject = FbxImporter->ImportStaticMeshAsSingle( InParent, Nodes, OutputName, Flags, ImportUI->StaticMeshImportData, Cast<UStaticMesh>(InMesh), LODIndex );
+		bOperationCanceled |= FbxImporter->GetImportOperationCancelled();
 	}
 
 	return CreatedObject;
+	}
+
+FText UFbxFactory::GetImportTaskText(const FText& TaskText) const
+{
+	return bOperationCanceled ? LOCTEXT("CancellingImportingFbxMeshTask", "Cancelling FBX mesh import") : TaskText;
 }
 
 bool UFbxFactory::ConfigureProperties()
@@ -164,6 +166,14 @@ UObject* UFbxFactory::FactoryCreateFile
  bool& bOutOperationCanceled
  )
 {
+	FScopedSlowTask SlowTask(5, GetImportTaskText(NSLOCTEXT("FbxFactory", "BeginReadFbxFile", "Opening FBX file.")), true);
+	if (Warn->GetScopeStack().Num() == 0)
+	{
+		// We only display this slow task if there is no parent slowtask, because otherwise it is redundant and doesn't display any relevant information on the progress.
+		// It is primarly used to regroup all the smaller import sub-tasks for a smoother progression.
+		SlowTask.MakeDialog(true);
+	}
+	SlowTask.EnterProgressFrame(0);
 	AdditionalImportedObjects.Empty();
 	FString FileExtension = FPaths::GetExtension(InFilename);
 	const TCHAR* Type = *FileExtension;
@@ -188,45 +198,96 @@ UObject* UFbxFactory::FactoryCreateFile
 	GEditor->GetEditorSubsystem<UImportSubsystem>()->BroadcastAssetPreImport(this, Class, InParent, Name, Type);
 
 	UObject* CreatedObject = NULL;
-	//Look if its a re-import, in that cazse we must call the re-import factory
+	//Look if its a re-import, in that case we must call the re-import factory
 	UObject *ExistingObject = nullptr;
 	if (InParent != nullptr)
 	{
 		ExistingObject = StaticFindObject(UObject::StaticClass(), InParent, *(Name.ToString()));
 		if (ExistingObject)
 		{
-			UStaticMesh *ExistingStaticMesh = Cast<UStaticMesh>(ExistingObject);
-			USkeletalMesh *ExistingSkeletalMesh = Cast<USkeletalMesh>(ExistingObject);
-			UAnimSequence* ExistingAnimSequence = Cast<UAnimSequence>(ExistingObject);
-			UObject *ObjectToReimport = nullptr;
-			if (ExistingStaticMesh)
+			FReimportHandler* ReimportHandler = nullptr;
+			UFactory* ReimportHandlerFactory = nullptr;
+			UAssetImportTask* HandlerOriginalImportTask = nullptr;
+			bool bIsObjectSupported = true;
+			if (Cast<UStaticMesh>(ExistingObject))
 			{
-				ObjectToReimport = ExistingStaticMesh;
+				bIsObjectSupported = true;
+				// Using RF_NoFlags because we want to include class default object, which are used by the reimport manager.
+				for (TObjectIterator<UReimportFbxStaticMeshFactory> ReimportFactoryIterator(RF_NoFlags); ReimportFactoryIterator; ++ReimportFactoryIterator)
+				{
+					HandlerOriginalImportTask = ReimportFactoryIterator->AssetImportTask;
+					ReimportFactoryIterator->AssetImportTask = AssetImportTask;
+					ReimportHandler = *ReimportFactoryIterator;
+					ReimportHandlerFactory = *ReimportFactoryIterator;
+					break;
+				}
 			}
-			else if (ExistingSkeletalMesh)
+			else if (Cast<USkeletalMesh>(ExistingObject))
 			{
-				ObjectToReimport = ExistingSkeletalMesh;
+				bIsObjectSupported = true;
+				// Using RF_NoFlags because we want to include class default object, which are used by the reimport manager.
+				for (TObjectIterator<UReimportFbxSkeletalMeshFactory> ReimportFactoryIterator(RF_NoFlags); ReimportFactoryIterator; ++ReimportFactoryIterator)
+				{
+					HandlerOriginalImportTask = ReimportFactoryIterator->AssetImportTask;
+					ReimportFactoryIterator->AssetImportTask = AssetImportTask;
+					ReimportHandler = *ReimportFactoryIterator;
+					ReimportHandlerFactory = *ReimportFactoryIterator;
+					break;
+				}
 			}
-			else if (ExistingAnimSequence)
+			else if (Cast<UAnimSequence>(ExistingObject))
 			{
-				ObjectToReimport = ExistingAnimSequence;
+				bIsObjectSupported = true;
+				// Using RF_NoFlags because we want to include class default object, which are used by the reimport manager.
+				for (TObjectIterator<UReimportFbxAnimSequenceFactory> ReimportFactoryIterator(RF_NoFlags); ReimportFactoryIterator; ++ReimportFactoryIterator)
+				{
+					HandlerOriginalImportTask = ReimportFactoryIterator->AssetImportTask;
+					ReimportFactoryIterator->AssetImportTask = AssetImportTask;
+					ReimportHandler = *ReimportFactoryIterator;
+					ReimportHandlerFactory = *ReimportFactoryIterator;
+					break;
+				}
 			}
 
-			if (ObjectToReimport != nullptr)
+			if (bIsObjectSupported)
 			{
 				TArray<UObject*> ToReimportObjects;
-				ToReimportObjects.Add(ObjectToReimport);
+				ToReimportObjects.Add(ExistingObject);
 				TArray<FString> Filenames;
 				Filenames.Add(UFactory::CurrentFilename);
 				//Set the new fbx source path before starting the re-import
-				FReimportManager::Instance()->UpdateReimportPaths(ObjectToReimport, Filenames);
+				FReimportManager::Instance()->UpdateReimportPaths(ExistingObject, Filenames);
 				//Do the re-import and exit
-				const bool bShowNotification = !(AssetImportTask && AssetImportTask->bAutomated);
-				FReimportManager::Instance()->ValidateAllSourceFileAndReimport(ToReimportObjects, bShowNotification);
-				return ObjectToReimport;
+				const bool bIsAutomated = IsAutomatedImport();
+				const bool bShowNotification = !bIsAutomated;
+				const int32 SourceFileIndex = INDEX_NONE;
+				const bool bForceNewFile = false;
+
+				if (ReimportHandler)
+				{
+					const bool bAskForNewFileIfMissing = true;
+					const FString PreferedReimportFile;
+
+					FReimportManager::Instance()->Reimport(ExistingObject, bAskForNewFileIfMissing, bShowNotification, PreferedReimportFile, ReimportHandler, SourceFileIndex, bForceNewFile, bIsAutomated);
+					
+					if (ReimportHandlerFactory)
+					{
+						ReimportHandlerFactory->AssetImportTask = HandlerOriginalImportTask;
+					}
+				}
+				else
+				{
+					FReimportManager::Instance()->ValidateAllSourceFileAndReimport(ToReimportObjects, bShowNotification, SourceFileIndex, bForceNewFile, bIsAutomated);
+				}
+
+				return ExistingObject;
 			}
 		}
 	}
+
+	// logger for all error/warnings
+	UnFbx::FFbxImporter* FbxImporter = UnFbx::FFbxImporter::GetInstance();
+	UnFbx::FFbxLoggerSetter Logger(FbxImporter);
 
 	if ( bDetectImportTypeOnImport)
 	{
@@ -237,9 +298,8 @@ UObject* UFbxFactory::FactoryCreateFile
 			return NULL;
 		}
 	}
-	// logger for all error/warnings
+	
 	// this one prints all messages that are stored in FFbxImporter
-	UnFbx::FFbxImporter* FbxImporter = UnFbx::FFbxImporter::GetInstance();
 	UnFbx::FBXImportOptions* ImportOptions = FbxImporter->GetImportOptions();
 	if (bShowOption)
 	{
@@ -247,8 +307,6 @@ UObject* UFbxFactory::FactoryCreateFile
 		UnFbx::FBXImportOptions::ResetOptions(ImportOptions);
 	}
 	
-	UnFbx::FFbxLoggerSetter Logger(FbxImporter);
-
 	EFBXImportType ForcedImportType = FBXIT_StaticMesh;
 
 	bool bIsObjFormat = false;
@@ -288,7 +346,7 @@ UObject* UFbxFactory::FactoryCreateFile
 	}
 	else if(AssetImportTask && AssetImportTask->Options)
 	{
-		UE_LOG(LogFbx, Warning, TEXT("The options set in the Asset Import Task are not of type UFbxImportUI and will be ignored"));
+		UE_LOG(LogFbx, Display, TEXT("The options set in the Asset Import Task are not of type UFbxImportUI and will be ignored"));
 	}
 
 	//We are not re-importing
@@ -303,6 +361,7 @@ UObject* UFbxFactory::FactoryCreateFile
 	
 	ImportOptions = GetImportOptions(FbxImporter, ImportUI, bShowImportDialog, bIsAutomated, InParent->GetPathName(), bOperationCanceled, bImportAll, bIsObjFormat, UFactory::CurrentFilename, false, ForcedImportType);
 	bOutOperationCanceled = bOperationCanceled;
+	SlowTask.EnterProgressFrame(4, GetImportTaskText(NSLOCTEXT("FbxFactory", "BeginImportingFbxMeshTask", "Importing FBX mesh")));
 	
 	if( bImportAll )
 	{
@@ -320,6 +379,7 @@ UObject* UFbxFactory::FactoryCreateFile
 	if (ImportOptions)
 	{
 		ImportOptions->bCanShowDialog = !(GIsAutomationTesting || FApp::IsUnattended());
+		ImportOptions->bIsImportCancelable = true;
 		
 		if (ImportUI->MeshTypeToImport == FBXIT_SkeletalMesh)
 		{
@@ -339,7 +399,6 @@ UObject* UFbxFactory::FactoryCreateFile
 			}
 		}
 		
-		Warn->BeginSlowTask( NSLOCTEXT("FbxFactory", "BeginImportingFbxMeshTask", "Importing FBX mesh"), true );
 		if ( !FbxImporter->ImportFromFile( *UFactory::CurrentFilename, Type, true ) )
 		{
 			// Log the error message and fail the import.
@@ -420,10 +479,13 @@ UObject* UFbxFactory::FactoryCreateFile
 						FbxImporter->FillFbxMeshArray(RootNodeToImport, FbxMeshArray, FbxImporter);
 						if (FbxMeshArray.Num() > 0)
 						{
-							NewStaticMesh = FbxImporter->ImportStaticMeshAsSingle(InParent, FbxMeshArray, Name, Flags, ImportUI->StaticMeshImportData, NULL, 0);
-							if (NewStaticMesh != nullptr)
+							NewStaticMesh = FbxImporter->ImportStaticMeshAsSingle(InParent, FbxMeshArray, Name, Flags, ImportUI->StaticMeshImportData, NULL, 0, nullptr);
+							bOperationCanceled |= SlowTask.ShouldCancel() || FbxImporter->GetImportOperationCancelled();
+
+							if (!bOperationCanceled && NewStaticMesh != nullptr)
 							{
 								//Build the staticmesh
+								SlowTask.EnterProgressFrame(1, GetImportTaskText(NSLOCTEXT("FbxFactory", "EndingImportingFbxMeshTask", "Finalizing static mesh import.")));
 								FbxImporter->PostImportStaticMesh(NewStaticMesh, FbxMeshArray);
 								FbxImporter->UpdateStaticMeshImportData(NewStaticMesh, nullptr);
 							}
@@ -472,16 +534,27 @@ UObject* UFbxFactory::FactoryCreateFile
 							}
 						}
 
+						FFormatNamedArguments Args;
+						Args.Add(TEXT("NodeIndex"), 1);
+						Args.Add(TEXT("ArrayLength"), FbxMeshesLod.Num());
+						FText SlowtaskText = NSLOCTEXT("UnrealEd", "Importingf", "Importing ({NodeIndex} of {ArrayLength})");
+						FScopedSlowTask ImportStaticMeshSlowTask(FbxMeshesLod.Num(), GetImportTaskText(FText::Format(SlowtaskText, Args)));
+						ImportStaticMeshSlowTask.MakeDialog();
+
 						//Import the LOD root
 						if (FbxMeshesLod.Num() > 0)
 						{
+							ImportStaticMeshSlowTask.EnterProgressFrame(1, GetImportTaskText(FText::Format(SlowtaskText, Args)));
 							TArray<FbxNode*> &LODMeshesArray = FbxMeshesLod[0];
 							NewStaticMesh = FbxImporter->ImportStaticMeshAsSingle(InParent, LODMeshesArray, Name, Flags, ImportUI->StaticMeshImportData, NULL, 0);
+							bOperationCanceled |= FbxImporter->GetImportOperationCancelled();
 						}
 						//Import all LODs
-						for (int32 LODIndex = 1; LODIndex < FbxMeshesLod.Num(); ++LODIndex)
+						for (int32 LODIndex = 1; LODIndex < FbxMeshesLod.Num() && !bOperationCanceled; ++LODIndex)
 						{
 							TArray<FbxNode*> &LODMeshesArray = FbxMeshesLod[LODIndex];
+							Args[TEXT("NodeIndex")] = LODIndex + 1;
+							ImportStaticMeshSlowTask.EnterProgressFrame(1, GetImportTaskText(FText::Format(SlowtaskText, Args)));
 
 							if (LODMeshesArray[0]->GetMesh() == nullptr)
 							{
@@ -495,24 +568,29 @@ UObject* UFbxFactory::FactoryCreateFile
 									NewStaticMesh->GetSourceModel(LODIndex).bImportWithBaseMesh = true;
 								}
 							}
+							bOperationCanceled |= FbxImporter->GetImportOperationCancelled() || SlowTask.ShouldCancel();
 						}
 						
-						//Build the staticmesh
-						if (NewStaticMesh)
+						if (!bOperationCanceled && NewStaticMesh)
 						{
 							FbxImporter->PostImportStaticMesh(NewStaticMesh, FbxMeshesLod[0]);
 							FbxImporter->UpdateStaticMeshImportData(NewStaticMesh, nullptr);
 						}
 					}
-					else
+					else // !bCombineMeshes && !bCombineMeshesLOD
 					{
+						FFormatNamedArguments Args;
+						Args.Add(TEXT("NodeIndex"), 1);
+						Args.Add(TEXT("ArrayLength"), InterestingNodeCount);
+						FScopedSlowTask ImportNodeSlowTask(InterestingNodeCount, GetImportTaskText(FText::Format(NSLOCTEXT("UnrealEd", "Importingf", "Importing ({NodeIndex} of {ArrayLength})"), Args)));
+						ImportNodeSlowTask.MakeDialog(true);
 						TArray<UObject*> AllNewAssets;
-						UObject* Object = RecursiveImportNode(FbxImporter,RootNodeToImport,InParent,Name,Flags,NodeIndex,InterestingNodeCount, AllNewAssets);
-
+						UObject* Object = RecursiveImportNode(FbxImporter, RootNodeToImport, InParent, Name, Flags, ImportNodeSlowTask, AllNewAssets);
+						bOperationCanceled |= SlowTask.ShouldCancel();
 						NewStaticMesh = Cast<UStaticMesh>( Object );
 
 						// Make sure to notify the asset registry of all assets created other than the one returned, which will notify the asset registry automatically.
-						for ( auto AssetIt = AllNewAssets.CreateConstIterator(); AssetIt; ++AssetIt )
+						for ( auto AssetIt = AllNewAssets.CreateConstIterator(); !bOperationCanceled && AssetIt; ++AssetIt )
 						{
 							UObject* Asset = *AssetIt;
 							if ( Asset != NewStaticMesh )
@@ -529,7 +607,7 @@ UObject* UFbxFactory::FactoryCreateFile
 					}
 
 					// Importing static mesh global sockets only if one mesh is imported
-					if( ImportedMeshCount == 1 && NewStaticMesh)
+					if(!bOperationCanceled && ImportedMeshCount == 1 && NewStaticMesh)
 					{
 						FbxImporter->ImportStaticMeshGlobalSockets( NewStaticMesh );
 					}
@@ -541,35 +619,34 @@ UObject* UFbxFactory::FactoryCreateFile
 				{
 					int32 TotalNumNodes = 0;
 
-					for (int32 i = 0; i < SkelMeshArray.Num(); i++)
+					for (int32 i = 0; i < SkelMeshArray.Num() && !bOperationCanceled; i++)
 					{
 						USkeletalMesh* BaseSkeletalMesh = nullptr;
 						TArray<FbxNode*> NodeArray = *SkelMeshArray[i];
 					
 						TotalNumNodes += NodeArray.Num();
 						// check if there is LODGroup for this skeletal mesh
-						int32 MaxLODLevel = 1;
+						int32 MaxNumberOfLOD = 1;
 						for (int32 j = 0; j < NodeArray.Num(); j++)
 						{
 							FbxNode* Node = NodeArray[j];
 							if (Node->GetNodeAttribute() && Node->GetNodeAttribute()->GetAttributeType() == FbxNodeAttribute::eLODGroup)
 							{
 								// get max LODgroup level
-								if (MaxLODLevel < Node->GetChildCount())
+								if (MaxNumberOfLOD < Node->GetChildCount())
 								{
-									MaxLODLevel = Node->GetChildCount();
+									MaxNumberOfLOD = Node->GetChildCount();
 								}
 							}
 						}
 					
-						int32 LODIndex;
 						int32 SuccessfulLodIndex = 0;
 						bool bImportSkeletalMeshLODs = ImportUI->SkeletalMeshImportData->bImportMeshLODs;
 						
 						//The skeletalmesh will be set after we import the LOD 0 since it is not created yet.
 						FScopedSkeletalMeshPostEditChange ScopedPostEditChange(nullptr);
 
-						for (LODIndex = 0; LODIndex < MaxLODLevel; LODIndex++)
+						for (int32 LODIndex = 0; LODIndex < MaxNumberOfLOD && !bOperationCanceled; LODIndex++)
 						{
 							//We need to know what is the imported lod index when importing the morph targets
 							int32 ImportedSuccessfulLodIndex = INDEX_NONE;
@@ -616,21 +693,12 @@ UObject* UFbxFactory::FactoryCreateFile
 								ImportSkeletalMeshArgs.Flags = Flags;
 								ImportSkeletalMeshArgs.TemplateImportData = ImportUI->SkeletalMeshImportData;
 								ImportSkeletalMeshArgs.LodIndex = LODIndex;
-								ImportSkeletalMeshArgs.bCancelOperation = &bOperationCanceled;
 								ImportSkeletalMeshArgs.OutData = &OutData;
 
 								BaseSkeletalMesh = FbxImporter->ImportSkeletalMesh( ImportSkeletalMeshArgs );
+								bOperationCanceled |= FbxImporter->GetImportOperationCancelled() || SlowTask.ShouldCancel();
 								
-								if(bOperationCanceled)
-								{
-									// User cancelled, clean up and return
-									FbxImporter->ReleaseScene();
-									Warn->EndSlowTask();
-									bOperationCanceled = true;
-									return nullptr;
-								}
-
-								if (BaseSkeletalMesh)
+								if ( BaseSkeletalMesh && !bOperationCanceled)
 								{
 									//Set the base skeletalmesh to the scoped post edit change variable
 									ScopedPostEditChange.SetSkeletalMesh(BaseSkeletalMesh);
@@ -674,13 +742,12 @@ UObject* UFbxFactory::FactoryCreateFile
 								ImportSkeletalMeshArgs.Flags = RF_Transient;
 								ImportSkeletalMeshArgs.TemplateImportData = ImportUI->SkeletalMeshImportData;
 								ImportSkeletalMeshArgs.LodIndex = SuccessfulLodIndex;
-								ImportSkeletalMeshArgs.bCancelOperation = &bOperationCanceled;
 								ImportSkeletalMeshArgs.OutData = &OutData;
 
 								USkeletalMesh *LODObject = FbxImporter->ImportSkeletalMesh( ImportSkeletalMeshArgs );
-								bool bImportSucceeded = !bOperationCanceled && FbxImporter->ImportSkeletalMeshLOD(LODObject, BaseSkeletalMesh, SuccessfulLodIndex);
+								bOperationCanceled |= FbxImporter->GetImportOperationCancelled();
 
-								if (bImportSucceeded)
+								if (!bOperationCanceled && FbxImporter->ImportSkeletalMeshLOD(LODObject, BaseSkeletalMesh, SuccessfulLodIndex))
 								{
 									FSkeletalMeshLODInfo* LODInfo = BaseSkeletalMesh->GetLODInfo(SuccessfulLodIndex);
 									LODInfo->bImportWithBaseMesh = true;
@@ -694,8 +761,10 @@ UObject* UFbxFactory::FactoryCreateFile
 								}
 							}
 						
+							bOperationCanceled |= SlowTask.ShouldCancel();
+
 							// import morph target
-							if (BaseSkeletalMesh && ImportOptions->bImportMorph && ImportedSuccessfulLodIndex != INDEX_NONE)
+							if (!bOperationCanceled && BaseSkeletalMesh && ImportOptions->bImportMorph && ImportedSuccessfulLodIndex != INDEX_NONE)
 							{
 								// Disable material importing when importing morph targets
 								uint32 bImportMaterials = ImportOptions->bImportMaterials;
@@ -704,19 +773,22 @@ UObject* UFbxFactory::FactoryCreateFile
 								ImportOptions->bImportTextures = 0;
 
 								FbxImporter->ImportFbxMorphTarget(SkelMeshNodeArray, BaseSkeletalMesh, ImportedSuccessfulLodIndex, OutData);
+								bOperationCanceled |= FbxImporter->GetImportOperationCancelled();
 							
 								ImportOptions->bImportMaterials = !!bImportMaterials;
 								ImportOptions->bImportTextures = !!bImportTextures;
 							}
+
+							bOperationCanceled |= SlowTask.ShouldCancel();
 						}
 					
-						if (BaseSkeletalMesh)
+						if (BaseSkeletalMesh && !bOperationCanceled)
 						{
 							NodeIndex++;
 							FFormatNamedArguments Args;
 							Args.Add( TEXT("NodeIndex"), NodeIndex );
 							Args.Add( TEXT("ArrayLength"), SkelMeshArray.Num() );
-							GWarn->StatusUpdate( NodeIndex, SkelMeshArray.Num(), FText::Format( NSLOCTEXT("UnrealEd", "Importingf", "Importing ({NodeIndex} of {ArrayLength})"), Args ) );
+							SlowTask.EnterProgressFrame(0, GetImportTaskText(FText::Format(NSLOCTEXT("UnrealEd", "Importingf", "Importing ({NodeIndex} of {ArrayLength})"), Args)));
 							
 							UnFbx::FFbxImporter::UpdateSkeletalMeshImportData(BaseSkeletalMesh, ImportUI->SkeletalMeshImportData, INDEX_NONE, nullptr, nullptr);
 							
@@ -729,6 +801,8 @@ UObject* UFbxFactory::FactoryCreateFile
 								AdditionalImportedObjects.Add(BaseSkeletalMesh);
 							}
 						}
+
+						bOperationCanceled |= SlowTask.ShouldCancel();
 					}
 				
 					for (int32 i = 0; i < SkelMeshArray.Num(); i++)
@@ -769,31 +843,99 @@ UObject* UFbxFactory::FactoryCreateFile
 			}
 		}
 
-		if (CreatedObject == NULL)
+		if (CreatedObject == NULL && !bOperationCanceled)
 		{
 			FbxImporter->AddTokenizedErrorMessage(FTokenizedMessage::Create(EMessageSeverity::Error, LOCTEXT("FailedToImport_NoObject", "Import failed.")), FFbxErrors::Generic_ImportingNewObjectFailed);
 		}
-
-		FbxImporter->ReleaseScene();
-		Warn->EndSlowTask();
 	}
-	else // ImportOptions == NULL
+
+	if (bOperationCanceled)
+	{
+		FbxImporter->AddTokenizedErrorMessage(FTokenizedMessage::Create(EMessageSeverity::Info, LOCTEXT("FailedToImport_OperationCanceled", "Import was canceled.")), FFbxErrors::Generic_ImportingNewObjectFailed);
+		AdditionalImportedObjects.Empty();
+		CancelObjectCreation(FbxImporter);
+		CreatedObject = nullptr;
+	}
+	else
 	{
 		FbxImporter->ReleaseScene();
+		GEditor->GetEditorSubsystem<UImportSubsystem>()->BroadcastAssetPostImport(this, CreatedObject);
 	}
-
-	GEditor->GetEditorSubsystem<UImportSubsystem>()->BroadcastAssetPostImport(this, CreatedObject);
+	bOutOperationCanceled = bOperationCanceled;
 
 	return CreatedObject;
 }
 
+void UFbxFactory::CancelObjectCreation(UnFbx::FFbxImporter* FbxImporter) const
+{
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+	const TArray<TWeakObjectPtr<UObject>>& CreatedObjects = FbxImporter->GetCreatedObjects();
+	TArray<FAssetData> AssetsToDelete;
+	TArray<TWeakObjectPtr<UPackage>> PotentialPackageToDeleteReferences;
+	
+	// Flag for deletion the newly created objects in memory.
+	for (int32 CreatedObjectIndex = 0; CreatedObjectIndex < CreatedObjects.Num(); ++CreatedObjectIndex)
+	{
+		const TWeakObjectPtr<UObject>& CurrentObject = CreatedObjects[CreatedObjectIndex];
+		if (CurrentObject.IsValid())
+		{
+			AssetsToDelete.Emplace(AssetRegistryModule.Get().GetAssetByObjectPath(FName(*CurrentObject->GetPathName())));
+			PotentialPackageToDeleteReferences.Add(CurrentObject->GetOutermost());
+			CurrentObject->ClearFlags(RF_Standalone | RF_Public);
+			CurrentObject->RemoveFromRoot();
+			CurrentObject->MarkPendingKill();
+		}
+	}
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 
-UObject* UFbxFactory::RecursiveImportNode(void* VoidFbxImporter, void* VoidNode, UObject* InParent, FName InName, EObjectFlags Flags, int32& NodeIndex, int32 Total, TArray<UObject*>& OutNewAssets)
+	// Delete any remaining newly created assets.
+	TArray<UObject*> CreatedObjectsPtr;
+	for (int32 CreatedObjectIndex = 0; CreatedObjectIndex < AssetsToDelete.Num(); ++CreatedObjectIndex)
+	{
+		const FAssetData& CurrentObject = AssetsToDelete[CreatedObjectIndex];
+		UObject* AssetToDelete = CurrentObject.GetAsset();
+		if (AssetToDelete != nullptr)
+		{
+			CreatedObjectsPtr.AddUnique(AssetToDelete);
+	}
+	}
+	bool bObjectsDeleted = ObjectTools::ForceDeleteObjects(CreatedObjectsPtr, false) > 0;
+	if (bObjectsDeleted)
+	{
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+	}
+
+	FbxImporter->ReleaseScene();
+
+	//We make sure sure to cleanup any remaining empty packages, otherwise we will be prompted to save them even if they don't contain any asset.
+	TArray<UPackage*> PotentialPackageToDelete;
+	for (int32 PackageIndex = PotentialPackageToDeleteReferences.Num() - 1; PackageIndex >= 0; --PackageIndex)
+	{
+		if (PotentialPackageToDeleteReferences[PackageIndex].IsValid())
+		{
+			PotentialPackageToDelete.Add(PotentialPackageToDeleteReferences[PackageIndex].Get());
+		}
+}
+	ObjectTools::CleanupAfterSuccessfulDelete(PotentialPackageToDelete);
+
+	//Make sure the content browser is in sync after we delete, to avoid stale references.
+	FContentBrowserModule& ContentBrowserModule = FModuleManager::Get().LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
+	const bool bAllowLockedBrowser = true;
+	ContentBrowserModule.Get().SyncBrowserToAssets(AssetsToDelete, bAllowLockedBrowser);
+}
+
+UObject* UFbxFactory::RecursiveImportNode(UnFbx::FFbxImporter* FbxImporter, void* VoidNode, UObject* InParent, FName InName, EObjectFlags Flags, FScopedSlowTask& SlowTask, TArray<UObject*>& OutNewAssets)
 {
 	TArray<void*> TmpVoidArray;
 	UObject* CreatedObject = NULL;
-	UnFbx::FFbxImporter *FbxImporter = (UnFbx::FFbxImporter *)VoidFbxImporter;
 	FbxNode* Node = (FbxNode*)VoidNode;
+	bOperationCanceled |= SlowTask.ShouldCancel();
+
+	if (bOperationCanceled)
+	{
+		return CreatedObject;
+	}
+
 	if (Node->GetNodeAttribute() && Node->GetNodeAttribute()->GetAttributeType() == FbxNodeAttribute::eLODGroup && Node->GetChildCount() > 0 )
 	{
 		TArray<FbxNode*> AllNodeInLod;
@@ -806,7 +948,7 @@ UObject* UFbxFactory::RecursiveImportNode(void* VoidFbxImporter, void* VoidNode,
 			{
 				TmpVoidArray.Add(LodNode);
 			}
-			CreatedObject = ImportANode(VoidFbxImporter, TmpVoidArray, InParent, InName, Flags, NodeIndex, Total);
+			CreatedObject = ImportANode(FbxImporter, TmpVoidArray, InParent, InName, Flags, SlowTask);
 		}
 
 		if (CreatedObject)
@@ -819,16 +961,24 @@ UObject* UFbxFactory::RecursiveImportNode(void* VoidFbxImporter, void* VoidNode,
 		if (CreatedObject && bImportMeshLODs)
 		{
 			// import LOD meshes
-			
+			SlowTask.TotalAmountOfWork += Node->GetChildCount();
 			for (int32 LODIndex = 1; LODIndex < Node->GetChildCount(); LODIndex++)
 			{
 				if (LODIndex >= MAX_STATIC_MESH_LODS)
 				{
+					SlowTask.CompletedWork += Node->GetChildCount() - LODIndex;
 					FbxImporter->AddTokenizedErrorMessage(FTokenizedMessage::Create(EMessageSeverity::Warning, FText::Format(
 						LOCTEXT("ImporterLimits_MaximumStaticMeshLODReach", "Reached the maximum number of LODs for a Static Mesh({0}) - discarding {1} LOD meshes."), FText::AsNumber(MAX_STATIC_MESH_LODS), FText::AsNumber(Node->GetChildCount() - MAX_STATIC_MESH_LODS))
 					), FFbxErrors::Generic_Mesh_TooManyLODs);
 					break;
 				}
+				
+				bOperationCanceled |= SlowTask.ShouldCancel();
+				if (bOperationCanceled)
+				{
+					break;
+				}
+
 				AllNodeInLod.Empty();
 				FbxImporter->FindAllLODGroupNode(AllNodeInLod, Node, LODIndex);
 				if (AllNodeInLod.Num() > 0)
@@ -842,7 +992,7 @@ UObject* UFbxFactory::RecursiveImportNode(void* VoidFbxImporter, void* VoidNode,
 							NewStaticMesh->AddSourceModel();
 						}
 						
-						ImportANode(VoidFbxImporter, TmpVoidArray, InParent, InName, Flags, NodeIndex, Total, CreatedObject, LODIndex);
+						ImportANode(FbxImporter, TmpVoidArray, InParent, InName, Flags, SlowTask, CreatedObject, LODIndex);
 
 						FStaticMeshSourceModel& ThisSourceModel = NewStaticMesh->GetSourceModel(LODIndex);
 
@@ -872,7 +1022,7 @@ UObject* UFbxFactory::RecursiveImportNode(void* VoidFbxImporter, void* VoidNode,
 						{
 							TmpVoidArray.Add(LodNode);
 						}
-						ImportANode(VoidFbxImporter, TmpVoidArray, InParent, InName, Flags, NodeIndex, Total, CreatedObject, LODIndex);
+						ImportANode(FbxImporter, TmpVoidArray, InParent, InName, Flags, SlowTask, CreatedObject, LODIndex);
 						UStaticMesh* NewStaticMesh = Cast<UStaticMesh>(CreatedObject);
 						if(NewStaticMesh->IsSourceModelValid(LODIndex))
 						{
@@ -906,7 +1056,7 @@ UObject* UFbxFactory::RecursiveImportNode(void* VoidFbxImporter, void* VoidNode,
 		{
 			TmpVoidArray.Empty();
 			TmpVoidArray.Add(Node);
-			CreatedObject = ImportANode(VoidFbxImporter, TmpVoidArray, InParent, InName, Flags, NodeIndex, Total);
+			CreatedObject = ImportANode(FbxImporter, TmpVoidArray, InParent, InName, Flags, SlowTask);
 
 			if (CreatedObject)
 			{
@@ -922,10 +1072,15 @@ UObject* UFbxFactory::RecursiveImportNode(void* VoidFbxImporter, void* VoidNode,
 				OutNewAssets.AddUnique(CreatedObject);
 			}
 		}
+		else
+		{
+			SlowTask.CompletedWork++;
+		}
 		
+		SlowTask.TotalAmountOfWork += Node->GetChildCount();
 		for (int32 ChildIndex=0; ChildIndex<Node->GetChildCount(); ++ChildIndex)
 		{
-			UObject* SubObject = RecursiveImportNode(VoidFbxImporter,Node->GetChild(ChildIndex),InParent,InName,Flags,NodeIndex,Total,OutNewAssets);
+			UObject* SubObject = RecursiveImportNode(FbxImporter, Node->GetChild(ChildIndex), InParent, InName, Flags, SlowTask, OutNewAssets);
 
 			if ( SubObject )
 			{
@@ -956,6 +1111,7 @@ void UFbxFactory::CleanUp()
 		{
 			ImportOptions->SkeletonForAnimation = NULL;
 			ImportOptions->PhysicsAsset = NULL;
+			ImportOptions->bIsImportCancelable = false;
 		}
 	}
 
@@ -971,6 +1127,11 @@ bool UFbxFactory::FactoryCanImport(const FString& Filename)
 		return true;
 	}
 	return false;
+}
+
+bool UFbxFactory::CanImportBeCanceled() const
+{
+	return true;
 }
 
 IImportSettingsParser* UFbxFactory::GetImportSettingsParser()

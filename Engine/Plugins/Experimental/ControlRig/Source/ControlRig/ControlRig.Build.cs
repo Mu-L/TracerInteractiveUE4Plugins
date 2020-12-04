@@ -22,7 +22,8 @@ namespace UnrealBuildTool.Rules
                     "MovieSceneTracks",
                     "PropertyPath",
 					"TimeManagement",
-                }
+					"DeveloperSettings"
+				}
             );
 
             PublicDependencyModuleNames.AddRange(
@@ -31,6 +32,7 @@ namespace UnrealBuildTool.Rules
                     "AnimationCore",
                     "LevelSequence",
                     "RigVM",
+                    "RHI",
                 }
             );
 
@@ -39,6 +41,9 @@ namespace UnrealBuildTool.Rules
                 PublicDependencyModuleNames.AddRange(
 				    new string[]
 					{
+						"Slate",
+						"SlateCore",
+						"EditorStyle",
 						"RigVMDeveloper",
                         "AnimGraph",
                     }

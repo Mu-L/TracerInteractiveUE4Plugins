@@ -16,7 +16,6 @@
 #include "Templates/UnrealTemplate.h"
 #include "Math/NumericLimits.h"
 #include "Containers/Array.h"
-#include "Containers/StringFwd.h"
 #include "Misc/CString.h"
 #include "Misc/Crc.h"
 #include "Math/UnrealMathUtility.h"
@@ -33,15 +32,8 @@ template<typename KeyType,typename ValueType,typename SetAllocator ,typename Key
 typedef TMap<FString, FStringFormatArg> FStringFormatNamedArguments;
 typedef TArray<FStringFormatArg> FStringFormatOrderedArguments;
 
-template <>
-struct TIsContiguousContainer<FString>
-{
-	enum { Value = true };
-};
-
-TCHAR* GetData(FString& String);
-const TCHAR* GetData(const FString& String);
-int32 GetNum(const FString& String);
+TCHAR*       GetData(FString&);
+const TCHAR* GetData(const FString&);
 
 /**
  * A dynamically sizeable string.
@@ -55,6 +47,33 @@ private:
 	/** Array holding the character data */
 	typedef TArray<TCHAR> DataType;
 	DataType Data;
+
+	template <typename RangeType>
+	using TRangeElementType = typename TRemoveCV<typename TRemovePointer<decltype(GetData(DeclVal<RangeType>()))>::Type>::Type;
+
+	template <typename CharRangeType>
+	struct TIsRangeOfCharType : TIsCharType<TRangeElementType<CharRangeType>>
+	{
+	};
+
+	template <typename CharRangeType>
+	struct TIsRangeOfTCHAR : TIsSame<TCHAR, TRangeElementType<CharRangeType>>
+	{
+	};
+
+	/** Trait testing whether a type is a contiguous range of characters, and not CharType[]. */
+	template <typename CharRangeType>
+	using TIsCharRangeNotCArray = TAnd<
+		TIsContiguousContainer<CharRangeType>,
+		TNot<TIsArray<typename TRemoveReference<CharRangeType>::Type>>,
+		TIsRangeOfCharType<CharRangeType>>;
+
+	/** Trait testing whether a type is a contiguous range of TCHAR, and not TCHAR[]. */
+	template <typename CharRangeType>
+	using TIsTCharRangeNotCArray = TAnd<
+		TIsContiguousContainer<CharRangeType>,
+		TNot<TIsArray<typename TRemoveReference<CharRangeType>::Type>>,
+		TIsRangeOfTCHAR<CharRangeType>>;
 
 public:
 	using ElementType = TCHAR;
@@ -121,10 +140,10 @@ public:
 	>
 	FORCEINLINE explicit FString(int32 InCount, const CharType* InSrc)
 	{
-		if (InSrc && *InSrc)
+		if (InSrc)
 		{
 			int32 DestLen = FPlatformString::ConvertedLength<TCHAR>(InSrc, InCount);
-			if (DestLen > 0)
+			if (DestLen > 0 && *InSrc)
 			{
 				Data.Reserve(DestLen + 1);
 				Data.AddUninitialized(DestLen + 1);
@@ -135,7 +154,69 @@ public:
 		}
 	}
 
-	explicit FString(const FStringView& Other);
+	/**
+	 * Constructor to create FString with specified number of characters from another string with additional character zero
+	 *
+	 * @param Other the other string to create a new copy from
+	 * @param ExtraSlack number of extra characters to add to the end of the other string in this string
+	 */
+	template <
+		typename CharType,
+		typename = typename TEnableIf<TIsCharType<CharType>::Value>::Type // This TEnableIf is to ensure we don't instantiate this constructor for non-char types, like id* in Obj-C
+	>
+		FORCEINLINE FString(const CharType* Src, int32 ExtraSlack)
+	{
+		if (Src && *Src)
+		{
+			int32 SrcLen = TCString<CharType>::Strlen(Src) + 1;
+			int32 DestLen = FPlatformString::ConvertedLength<TCHAR>(Src, SrcLen);
+			Data.Reserve(DestLen + ExtraSlack);
+			Data.AddUninitialized(DestLen);
+
+			FPlatformString::Convert(Data.GetData(), DestLen, Src, SrcLen);
+		}
+		else
+		{
+			Reserve(ExtraSlack); 
+		}
+	}
+
+	/**
+	 * Create an FString from a contiguous range of characters
+	 *
+	 * @param Other The contiguous character range to copy from
+	 */
+	template <typename CharRangeType, typename TEnableIf<TIsCharRangeNotCArray<CharRangeType>::Value>::Type* = nullptr>
+	explicit FString(CharRangeType&& Other)
+	{
+		if (const auto OtherNum = GetNum(Other))
+		{
+			const int32 OtherLen = int32(OtherNum);
+			checkf(decltype(OtherNum)(OtherLen) == OtherNum, TEXT("Invalid number of characters to add to this string type: %" UINT64_FMT), uint64(OtherNum));
+			Reserve(OtherLen);
+			AppendChars(GetData(Forward<CharRangeType>(Other)), OtherLen);
+		}
+	}
+
+	/**
+	 * Create an FString from a contiguous range of characters, with extra slack at the end of the string
+	 *
+	 * @param Other The contiguous character range to copy from
+	 * @param ExtraSlack The number of extra characters to reserve space for in the new string
+	 */
+	template <typename CharRangeType, typename TEnableIf<TIsCharRangeNotCArray<CharRangeType>::Value>::Type* = nullptr>
+	explicit FString(CharRangeType&& Other, int32 ExtraSlack)
+	{
+		const auto OtherNum = GetNum(Other);
+		const int32 OtherLen = int32(OtherNum);
+		checkf(decltype(OtherNum)(OtherLen) == OtherNum, TEXT("Invalid number of characters to add to this string type: %" UINT64_FMT), uint64(OtherNum));
+
+		Reserve(OtherLen + ExtraSlack);
+		if (OtherLen)
+		{
+			AppendChars(GetData(Forward<CharRangeType>(Other)), OtherLen);
+		}
+	}
 
 #ifdef __OBJC__
 	/** Convert Objective-C NSString* to FString */
@@ -187,14 +268,43 @@ public:
 	}
 
 	/**
-	 * Copy assignment from a string view
+	 * Copy assignment from a contiguous range of characters
 	 */
-	FString& operator=(const FStringView& Other);
+	template <typename CharRangeType, typename TEnableIf<TIsTCharRangeNotCArray<CharRangeType>::Value>::Type* = nullptr>
+	FString& operator=(CharRangeType&& Other)
+	{
+		const auto OtherNum = GetNum(Other);
+		const int32 OtherLen = int32(OtherNum);
+		checkf(decltype(OtherNum)(OtherLen) == OtherNum, TEXT("Invalid number of characters to assign to this string type: %" UINT64_FMT), uint64(OtherNum));
 
-	/**
-	 * Implicit conversion to a string view
-	 */
-	operator FStringView() const;
+		if (OtherLen == 0)
+		{
+			Empty();
+		}
+		else
+		{
+			const TCHAR* const OtherData = GetData(Other);
+			const int32 ThisLen = Len();
+			if (OtherLen <= ThisLen)
+			{
+				// Unless the input is longer, this might be assigned from a view of itself.
+				TCHAR* DataPtr = Data.GetData();
+				FMemory::Memmove(DataPtr, OtherData, OtherLen * sizeof(TCHAR));
+				DataPtr[OtherLen] = TEXT('\0');
+				Data.RemoveAt(OtherLen + 1, ThisLen - OtherLen);
+			}
+			else
+			{
+				Data.Empty(OtherLen + 1);
+				Data.AddUninitialized(OtherLen + 1);
+				TCHAR* DataPtr = Data.GetData();
+				FMemory::Memcpy(DataPtr, OtherData, OtherLen * sizeof(TCHAR));
+				DataPtr[OtherLen] = TEXT('\0');
+			}
+		}
+
+		return *this;
+	}
 
 	/**
 	 * Return specific character from this string
@@ -390,12 +500,11 @@ public:
 		AppendChars(Str, TCString<typename TRemoveConst<CharType>::Type>::Strlen(Str));
 		return *this;
 	}
-	
+
 	/** Append a string and return a reference to this */
-	template <typename StrType, typename = decltype(GetData(DeclVal<StrType>()))>
-	FORCEINLINE FString& Append(StrType&& Str)
+	template <typename CharRangeType, typename TEnableIf<TIsCharRangeNotCArray<CharRangeType>::Value>::Type* = nullptr>
+	FORCEINLINE FString& Append(CharRangeType&& Str)
 	{
-		static_assert(!TIsArray<StrType>::Value, "Char arrays shouldn't use this overload");
 		AppendChars(GetData(Str), GetNum(Str));
 		return *this;
 	}
@@ -1007,7 +1116,7 @@ public:
 	 */
 	FORCEINLINE friend bool operator==(const FString& Lhs, const FString& Rhs)
 	{
-		return FPlatformString::Stricmp(*Lhs, *Rhs) == 0;
+		return Lhs.Equals(Rhs, ESearchCase::IgnoreCase);
 	}
 
 	/**
@@ -1048,7 +1157,7 @@ public:
 	 */
 	FORCEINLINE friend bool operator!=(const FString& Lhs, const FString& Rhs)
 	{
-		return FPlatformString::Stricmp(*Lhs, *Rhs) != 0;
+		return !(Lhs == Rhs);
 	}
 
 	/**
@@ -1307,16 +1416,29 @@ public:
 	 * @param SearchCase 	Whether or not the comparison should ignore case
 	 * @return true if this string is lexicographically equivalent to the other, otherwise false
 	 */
-	FORCEINLINE bool Equals( const FString& Other, ESearchCase::Type SearchCase = ESearchCase::CaseSensitive ) const
+	FORCEINLINE bool Equals(const FString& Other, ESearchCase::Type SearchCase = ESearchCase::CaseSensitive) const
 	{
-		if( SearchCase == ESearchCase::CaseSensitive )
+		int32 Num = Data.Num();
+		int32 OtherNum = Other.Data.Num();
+
+		if (Num != OtherNum)
 		{
-			return FCString::Strcmp( **this, *Other )==0; 
+			// Handle special case where FString() == FString("")
+			return Num + OtherNum == 1;
 		}
-		else
+		else if (Num > 1)
 		{
-			return FCString::Stricmp( **this, *Other )==0;
+			if (SearchCase == ESearchCase::CaseSensitive)
+			{
+				return FCString::Strcmp(Data.GetData(), Other.Data.GetData()) == 0; 
+			}
+			else
+			{
+				return FCString::Stricmp(Data.GetData(), Other.Data.GetData()) == 0;
+			}
 		}
+
+		return true;
 	}
 
 	/**
@@ -1342,8 +1464,8 @@ public:
 	 * Splits this string at given string position case sensitive.
 	 *
 	 * @param InStr The string to search and split at
-	 * @param LeftS out the string to the left of InStr, not updated if return is false
-	 * @param RightS out the string to the right of InStr, not updated if return is false
+	 * @param LeftS out the string to the left of InStr, not updated if return is false. LeftS must not point to the same location as RightS, but can point to this.
+	 * @param RightS out the string to the right of InStr, not updated if return is false. RightS must not point to the same location as LeftS, but can point to this.
 	 * @param SearchCase		Indicates whether the search is case sensitive or not ( defaults to ESearchCase::IgnoreCase )
 	 * @param SearchDir			Indicates whether the search starts at the beginning or at the end ( defaults to ESearchDir::FromStart )
 	 * @return true if string is split, otherwise false
@@ -1351,12 +1473,30 @@ public:
 	bool Split(const FString& InS, FString* LeftS, FString* RightS, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase,
 		ESearchDir::Type SearchDir = ESearchDir::FromStart) const
 	{
+		check(LeftS != RightS || LeftS == nullptr);
+
 		int32 InPos = Find(InS, SearchCase, SearchDir);
 
-		if (InPos < 0)	{ return false; }
+		if (InPos < 0) { return false; }
 
-		if (LeftS)		{ *LeftS = Left(InPos); }
-		if (RightS)	{ *RightS = Mid(InPos + InS.Len()); }
+		if (LeftS)
+		{
+			if (LeftS != this)
+			{
+				*LeftS = Left(InPos);
+				if (RightS) { *RightS = Mid(InPos + InS.Len()); }
+			}
+			else
+			{
+				// we know that RightS can't be this so we can safely modify it before we deal with LeftS
+				if (RightS) { *RightS = Mid(InPos + InS.Len()); }
+				*LeftS = Left(InPos);
+			}
+		}
+		else if (RightS)
+		{
+			*RightS = Mid(InPos + InS.Len());
+		}
 
 		return true;
 	}
@@ -1657,7 +1797,12 @@ public:
 	/**
 	 * Returns a copy of this string, with the characters in reverse order
 	 */
-	FString Reverse() const;
+	FString Reverse() const &;
+
+	/**
+	 * Returns this string, with the characters in reverse order
+	 */
+	FString Reverse() &&;
 
 	/**
 	 * Reverses the order of characters in this string
@@ -1672,7 +1817,17 @@ public:
 	 * @param SearchCase	Indicates whether the search is case sensitive or not ( defaults to ESearchCase::IgnoreCase )
 	 * @return a copy of this string with the replacement made
 	 */
-	FString Replace(const TCHAR* From, const TCHAR* To, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase) const;
+	FString Replace(const TCHAR* From, const TCHAR* To, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase) const &;
+
+	/**
+	 * Replace all occurrences of a substring in this string
+	 *
+	 * @param From substring to replace
+	 * @param To substring to replace From with
+	 * @param SearchCase	Indicates whether the search is case sensitive or not ( defaults to ESearchCase::IgnoreCase )
+	 * @return a copy of this string with the replacement made
+	 */
+	FString Replace(const TCHAR* From, const TCHAR* To, ESearchCase::Type SearchCase = ESearchCase::IgnoreCase) &&;
 
 	/**
 	 * Replace all occurrences of SearchText with ReplacementText in this string.
@@ -1714,7 +1869,16 @@ public:
 	/**
 	 * Returns a copy of this string with all quote marks escaped (unless the quote is already escaped)
 	 */
-	FString ReplaceQuotesWithEscapedQuotes() const;
+	FString ReplaceQuotesWithEscapedQuotes() const &
+	{
+		FString Result(*this);
+		return MoveTemp(Result).ReplaceQuotesWithEscapedQuotes();
+	}
+
+	/**
+	 * Returns a copy of this string with all quote marks escaped (unless the quote is already escaped)
+	 */
+	FString ReplaceQuotesWithEscapedQuotes() &&;
 
 	/**
 	 * Replaces certain characters with the "escaped" version of that character (i.e. replaces "\n" with "\\n").
@@ -1724,14 +1888,39 @@ public:
 	 *
 	 * @return	a string with all control characters replaced by the escaped version.
 	 */
-	FString ReplaceCharWithEscapedChar( const TArray<TCHAR>* Chars = nullptr ) const;
+	FString ReplaceCharWithEscapedChar( const TArray<TCHAR>* Chars = nullptr ) const &
+	{
+		FString Result(*this);
+		return MoveTemp(Result).ReplaceCharWithEscapedChar(Chars);
+	}
+
+	/**
+	 * Replaces certain characters with the "escaped" version of that character (i.e. replaces "\n" with "\\n").
+	 * The characters supported are: { \n, \r, \t, \', \", \\ }.
+	 *
+	 * @param	Chars	by default, replaces all supported characters; this parameter allows you to limit the replacement to a subset.
+	 *
+	 * @return	a string with all control characters replaced by the escaped version.
+	 */
+	FString ReplaceCharWithEscapedChar( const TArray<TCHAR>* Chars = nullptr ) &&;
 
 	/**
 	 * Removes the escape backslash for all supported characters, replacing the escape and character with the non-escaped version.  (i.e.
 	 * replaces "\\n" with "\n".  Counterpart to ReplaceCharWithEscapedChar().
 	 * @return copy of this string with replacement made
 	 */
-	FString ReplaceEscapedCharWithChar( const TArray<TCHAR>* Chars = nullptr ) const;
+	FString ReplaceEscapedCharWithChar( const TArray<TCHAR>* Chars = nullptr ) const &
+	{
+		FString Result(*this);
+		return MoveTemp(Result).ReplaceEscapedCharWithChar(Chars);
+	}
+
+	/**
+	 * Removes the escape backslash for all supported characters, replacing the escape and character with the non-escaped version.  (i.e.
+	 * replaces "\\n" with "\n".  Counterpart to ReplaceCharWithEscapedChar().
+	 * @return copy of this string with replacement made
+	 */
+	FString ReplaceEscapedCharWithChar( const TArray<TCHAR>* Chars = nullptr ) &&;
 
 	/**
 	 * Replaces all instances of '\t' with TabWidth number of spaces
@@ -1744,11 +1933,22 @@ public:
 	 * @param InSpacesPerTab - Number of spaces that a tab represents
 	 * @return copy of this string with replacement made
 	 */
-	FString ConvertTabsToSpaces(const int32 InSpacesPerTab) const
+	FString ConvertTabsToSpaces(const int32 InSpacesPerTab) const &
 	{
 		FString FinalString(*this);
 		FinalString.ConvertTabsToSpacesInline(InSpacesPerTab);
 		return FinalString;
+	}
+
+	/**
+	 * Replaces all instances of '\t' with TabWidth number of spaces
+	 * @param InSpacesPerTab - Number of spaces that a tab represents
+	 * @return copy of this string with replacement made
+	 */
+	FString ConvertTabsToSpaces(const int32 InSpacesPerTab) &&
+	{
+		ConvertTabsToSpacesInline(InSpacesPerTab);
+		return MoveTemp(*this);
 	}
 
 	// Takes the number passed in and formats the string in comma format ( 12345 becomes "12,345")
@@ -1758,7 +1958,10 @@ public:
 	FORCEINLINE void Reserve(int32 CharacterCount)
 	{
 		checkSlow(CharacterCount >= 0 && CharacterCount < MAX_int32);
-		Data.Reserve(CharacterCount + 1);
+		if (CharacterCount > 0)
+		{
+			Data.Reserve(CharacterCount + 1);
+		}	
 	}
 
 	/**
@@ -2104,7 +2307,8 @@ template<typename T>
 typename TEnableIf<TIsArithmetic<T>::Value, FString>::Type
 LexToString(const T& Value)
 {
-	return FString::Printf( TFormatSpecifier<T>::GetFormatSpecifier(), Value );
+	// TRemoveCV to remove potential volatile decorations. Removing const is pointless, but harmless because it's specified in the param declaration.
+	return FString::Printf( TFormatSpecifier<typename TRemoveCV<T>::Type>::GetFormatSpecifier(), Value );
 }
 
 template<typename CharType>
@@ -2269,6 +2473,12 @@ public:
 	}
 };
 
+template <>
+struct TIsContiguousContainer<FStringOutputDevice>
+{
+	enum { Value = true };
+};
+
 //
 // String output device.
 //
@@ -2317,7 +2527,7 @@ public:
 	}
 
 	/**
-	 * Appends other FString (as well as it's specializations like FStringOutputDevice)
+	 * Appends other FString (as well as its specializations like FStringOutputDevice)
 	 * object to this.
 	 */
 	virtual FString& operator+=(const FString& Other) override
@@ -2353,6 +2563,12 @@ public:
 		}
 		return *this;
 	}
+};
+
+template <>
+struct TIsContiguousContainer<FStringOutputDeviceCountLines>
+{
+	enum { Value = true };
 };
 
 /**

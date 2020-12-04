@@ -58,7 +58,7 @@ void FEditorSessionSummarySender::Shutdown()
 	SendStoredSessions(/*bForceSendCurrentSession*/true);
 }
 
-void FEditorSessionSummarySender::SetMonitorDiagnosticLogs(TMap<uint32, FString>&& Logs)
+void FEditorSessionSummarySender::SetMonitorDiagnosticLogs(TMap<uint32, TTuple<FString, FDateTime>>&& Logs)
 {
 	MonitorMiniLogs = Logs;
 }
@@ -127,6 +127,9 @@ void FEditorSessionSummarySender::SendStoredSessions(const bool bForceSendOwnedS
 
 			FEditorAnalyticsSession::SaveStoredSessionIDs(SessionIDs);
 
+			// Trim left-over sessions that were written using an older format (so weren't loaded above) and that are now expired because the corresponding Editor version wasn't used recently.
+			FEditorAnalyticsSession::CleanupOutdatedIncompatibleSessions(EditorSessionSenderDefs::SessionExpiration);
+
 			FEditorAnalyticsSession::Unlock();
 			bSessionsLoaded = true;
 		}
@@ -172,18 +175,22 @@ void FEditorSessionSummarySender::SendSessionSummaryEvent(const FEditorAnalytics
 	AnalyticsAttributes.Emplace(TEXT("Platform"), FPlatformProperties::IniPlatformName());
 	AnalyticsAttributes.Emplace(TEXT("SessionId"), SessionIdString); // The provider is expected to add it as "SessionID" param in the HTTP request, but keep it for completness, because the formats are slightly different.
 	AnalyticsAttributes.Emplace(TEXT("EngineVersion"), Session.EngineVersion); // The provider is expected to add it as "AppVersion" param in the HTTP request, but keep it for completness, because the formats are slightly different.
+	AnalyticsAttributes.Emplace(TEXT("CommandLine"), Session.CommandLine);
 	AnalyticsAttributes.Emplace(TEXT("ShutdownType"), ShutdownTypeString);
 	AnalyticsAttributes.Emplace(TEXT("StartupTimestamp"), Session.StartupTimestamp.ToIso8601());
 	AnalyticsAttributes.Emplace(TEXT("Timestamp"), Session.Timestamp.ToIso8601());
+	AnalyticsAttributes.Emplace(TEXT("LastTickTimestamp"), Session.LastTickTimestamp.ToIso8601());
 	AnalyticsAttributes.Emplace(TEXT("SessionDurationWall"), FMath::FloorToInt(static_cast<float>((Session.Timestamp - Session.StartupTimestamp).GetTotalSeconds()))); // Session duration from system date/time.
-	AnalyticsAttributes.Emplace(TEXT("SessionDuration"), Session.TotalUserInactivitySeconds); // Session duration using FTimePlatform::Seconds(). Less accurate (+/- few seconds per day) but doesn't depend on system date time.	
+	AnalyticsAttributes.Emplace(TEXT("SessionDuration"), Session.SessionDuration);
 	AnalyticsAttributes.Emplace(TEXT("1MinIdle"), Session.Idle1Min);
 	AnalyticsAttributes.Emplace(TEXT("5MinIdle"), Session.Idle5Min);
 	AnalyticsAttributes.Emplace(TEXT("30MinIdle"), Session.Idle30Min);
-	//AnalyticsAttributes.Emplace(TEXT("TotalUserInactivitySecs"), Session.TotalUserInactivitySeconds); // To avoid breaking public API, Session.TotalUserInactivitySeconds was repurposed to contain the session duration in 4.25.1. Should be removed in 4.26
 	AnalyticsAttributes.Emplace(TEXT("TotalEditorInactivitySecs"), Session.TotalEditorInactivitySeconds);
 	AnalyticsAttributes.Emplace(TEXT("CurrentUserActivity"), Session.CurrentUserActivity);
 	AnalyticsAttributes.Emplace(TEXT("AverageFPS"), Session.AverageFPS);
+	AnalyticsAttributes.Emplace(TEXT("SessionTickCount"), Session.SessionTickCount);
+	AnalyticsAttributes.Emplace(TEXT("EngineTickCount"), Session.EngineTickCount);
+	AnalyticsAttributes.Emplace(TEXT("UserInteractionCount"), Session.UserInteractionCount);
 	AnalyticsAttributes.Emplace(TEXT("Plugins"), PluginsString);
 	AnalyticsAttributes.Emplace(TEXT("DesktopGPUAdapter"), Session.DesktopGPUAdapter);
 	AnalyticsAttributes.Emplace(TEXT("RenderingGPUAdapter"), Session.RenderingGPUAdapter);
@@ -192,6 +199,7 @@ void FEditorSessionSummarySender::SendSessionSummaryEvent(const FEditorAnalytics
 	AnalyticsAttributes.Emplace(TEXT("GRHIDeviceRevision"), Session.GRHIDeviceRevision);
 	AnalyticsAttributes.Emplace(TEXT("GRHIAdapterInternalDriverVersion"), Session.GRHIAdapterInternalDriverVersion);
 	AnalyticsAttributes.Emplace(TEXT("GRHIAdapterUserDriverVersion"), Session.GRHIAdapterUserDriverVersion);
+	AnalyticsAttributes.Emplace(TEXT("GRHIName"), Session.GRHIName);
 	AnalyticsAttributes.Emplace(TEXT("TotalPhysicalRAM"), Session.TotalPhysicalRAM);
 	AnalyticsAttributes.Emplace(TEXT("CPUPhysicalCores"), Session.CPUPhysicalCores);
 	AnalyticsAttributes.Emplace(TEXT("CPULogicalCores"), Session.CPULogicalCores);
@@ -203,12 +211,15 @@ void FEditorSessionSummarySender::SendSessionSummaryEvent(const FEditorAnalytics
 	AnalyticsAttributes.Emplace(TEXT("Is64BitOS"), Session.bIs64BitOS);
 	AnalyticsAttributes.Emplace(TEXT("GPUCrash"), Session.bGPUCrashed);
 	AnalyticsAttributes.Emplace(TEXT("WasDebugged"), Session.bWasEverDebugger);
+	AnalyticsAttributes.Emplace(TEXT("WasDebuggerIgnored"), Session.bIsDebuggerIgnored);
 	AnalyticsAttributes.Emplace(TEXT("IsVanilla"), Session.bIsVanilla);
 	AnalyticsAttributes.Emplace(TEXT("WasShutdown"), Session.bWasShutdown);
+	AnalyticsAttributes.Emplace(TEXT("IsUserLoggingOut"), Session.bIsUserLoggingOut);
 	AnalyticsAttributes.Emplace(TEXT("IsInPIE"), Session.bIsInPIE);
 	AnalyticsAttributes.Emplace(TEXT("IsInEnterprise"), Session.bIsInEnterprise);
 	AnalyticsAttributes.Emplace(TEXT("IsInVRMode"), Session.bIsInVRMode);
 	AnalyticsAttributes.Emplace(TEXT("IsLowDriveSpace"), Session.bIsLowDriveSpace);
+	AnalyticsAttributes.Emplace(TEXT("IsCrcMissing"), Session.bIsCrcExeMissing);
 	AnalyticsAttributes.Emplace(TEXT("SentFrom"), Sender);
 	AnalyticsAttributes.Emplace(TEXT("MonitorPid"), Session.MonitorProcessID); // For out-of-process monitoring, if this is 0, this will mean CRC failed to launch or crashed very early.
 
@@ -225,6 +236,17 @@ void FEditorSessionSummarySender::SendSessionSummaryEvent(const FEditorAnalytics
 		bShouldAttachMonitorLog = true; // Try to figure out why exit code could not be set.
 	}
 
+	if (Session.DeathTimestamp.IsSet())
+	{
+		AnalyticsAttributes.Emplace(TEXT("DeathTimestamp"), Session.DeathTimestamp->ToIso8601());
+	}
+
+	if (Session.MonitorExitCode.IsSet())
+	{
+		AnalyticsAttributes.Emplace(TEXT("MonitorExitCode"), Session.MonitorExitCode.GetValue());
+		bShouldAttachMonitorLog = true; // Try to figure out why CRC exited prematurely.
+	}
+
 	// Add the monitor exception code in case the out-of-process monitor (CrashReportClientEditor) crashed itself, caught the exception and was able to store it in the session before dying.
 	TOptional<int32> MonitorExceptCode = Session.MonitorExceptCode;
 	bShouldAttachMonitorLog |= MonitorExceptCode.IsSet();
@@ -233,9 +255,10 @@ void FEditorSessionSummarySender::SendSessionSummaryEvent(const FEditorAnalytics
 	if (bShouldAttachMonitorLog && !Session.bWasEverDebugger)
 	{
 		// Check if a monitor log is available. (Set by CrashReportClientEditor before sending the summary events).
-		if (const FString* MonitorLog = MonitorMiniLogs.Find(Session.MonitorProcessID))
+		if (const TTuple<FString, FDateTime>* MonitorLog = MonitorMiniLogs.Find(Session.MonitorProcessID))
 		{
-			AnalyticsAttributes.Emplace(TEXT("MonitorLog"), *MonitorLog);
+			AnalyticsAttributes.Emplace(TEXT("MonitorLog"), MonitorLog->Get<0>()); // CRC diagnostic mini-log.
+			AnalyticsAttributes.Emplace(TEXT("MonitorTimestamp"), MonitorLog->Get<1>().ToIso8601()); // Last time CRC timestamped the diagnostic mini-log, i.e. the approximative CRC death time.
 
 			// If no monitor exception code is set, check in the log if one exists. The exception may have occurred before the session was created or
 			// the out of process might not have been able to acquire the session lock.
@@ -243,23 +266,35 @@ void FEditorSessionSummarySender::SendSessionSummaryEvent(const FEditorAnalytics
 			{
 				// Find the first entry in the log that match an exception reported like: "CRC/Crash:-1073741819"
 				FRegexPattern CrashPattern(TEXT(R"(CRC\/Crash:([-0-9]+).*)")); // Need help with regex? Try https://regex101.com/
-				FRegexMatcher CrashMatcher(CrashPattern, *MonitorLog);
+				FRegexMatcher CrashMatcher(CrashPattern, MonitorLog->Get<0>());
 				if (CrashMatcher.FindNext())
 				{
-					AnalyticsAttributes.Emplace(TEXT("MonitorExceptCode"), CrashMatcher.GetCaptureGroup(1)); // Report the first exception code found in the log.
+					AnalyticsAttributes.Emplace(TEXT("MonitorExceptCode"), FCString::Atoi(*CrashMatcher.GetCaptureGroup(1))); // Report the first exception code found in the log.
 					MonitorExceptCode.Reset(); // Except code was added, prevent adding it again below.
 				}
 				else
 				{
 					// Check for 'CRC/Error'. Those are errors reported in log and the interesting one are the failed 'check()'. Normally CRC doesn't output errors.
 					FRegexPattern ErrorPattern(TEXT(R"(CRC\/Error)")); // Need help with regex? Try https://regex101.com/
-					FRegexMatcher ErrorMatcher(ErrorPattern, *MonitorLog);
+					FRegexMatcher ErrorMatcher(ErrorPattern, MonitorLog->Get<0>());
 					if (ErrorMatcher.FindNext())
 					{
-						constexpr int32 CrcErrorCode = /*CrashReporterError*/777007; // Added in 4.25.2 but to avoid breaking public API in a dot release wasn't added to ECrashExitCodes. Should be added to the enum in 4.26.
-						AnalyticsAttributes.Emplace(TEXT("MonitorExceptCode"), CrcErrorCode);
+						AnalyticsAttributes.Emplace(TEXT("MonitorExceptCode"), static_cast<int32>(ECrashExitCodes::OutOfProcessReporterCheckFailed));
 						MonitorExceptCode.Reset(); // Except code was added, prevent adding it again below.
 					}
+				}
+			}
+
+			// Because lock contention, CRC doesn't always have time to save the exit code in the session when the user close the Editor and logoff very quickly, especially if the
+			// user has several Editors opened, but it usually have time to write it to the mini log. Try to parse it.
+			if (!Session.ExitCode.IsSet())
+			{
+				// Search for a pattern like: "Editor/ExitCode:0"
+				FRegexPattern ExitCodePattern(TEXT(R"(Editor\/ExitCode:([-0-9]+).*)")); // Need help with regex? Try https://regex101.com/
+				FRegexMatcher ExitCodeMatcher(ExitCodePattern, MonitorLog->Get<0>());
+				if (ExitCodeMatcher.FindNext())
+				{
+					AnalyticsAttributes.Emplace(TEXT("ExitCode"), FCString::Atoi(*ExitCodeMatcher.GetCaptureGroup(1)));
 				}
 			}
 		}

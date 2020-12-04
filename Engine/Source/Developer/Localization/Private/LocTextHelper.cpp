@@ -27,30 +27,21 @@ const TArray<FString>& FLocTextPlatformSplitUtils::GetPlatformsToSplit(const ELo
 {
 	switch (InSplitMode)
 	{
-	case ELocTextPlatformSplitMode::Restricted:
+	case ELocTextPlatformSplitMode::Confidential:
 		{
-			static TArray<FString> RestrictedPlatformNames = []()
+			static const TArray<FString> ConfidentialPlatformNames = []()
 			{
-				TArray<FString> TmpArray;
-				for (const FString& PlatformName : FDataDrivenPlatformInfoRegistry::GetConfidentialPlatforms())
-				{
-					const FDataDrivenPlatformInfoRegistry::FPlatformInfo& PlatformInfo = FDataDrivenPlatformInfoRegistry::GetPlatformInfo(PlatformName);
-					check(PlatformInfo.bIsConfidential);
-					if (PlatformInfo.bRestrictLocalization)
-					{
-						TmpArray.Add(PlatformName);
-					}
-				}
+				TArray<FString> TmpArray = FDataDrivenPlatformInfoRegistry::GetConfidentialPlatforms();
 				TmpArray.Sort();
 				return TmpArray;
 			}();
-			return RestrictedPlatformNames;
+			return ConfidentialPlatformNames;
 		}
 		break;
 
 	case ELocTextPlatformSplitMode::All:
 		{
-			static TArray<FString> AllPlatformNames = []()
+			static const TArray<FString> AllPlatformNames = []()
 			{
 				TArray<FString> TmpArray;
 				for (const PlatformInfo::FPlatformInfo& Info : PlatformInfo::GetPlatformInfoArray())
@@ -1593,7 +1584,7 @@ bool FLocTextHelper::SaveManifestImpl(const TSharedRef<const FInternationalizati
 		}
 
 		bSavedAll &= SaveSingleManifest(PlatformAgnosticManifest, InManifestFilePath);
-		for (const auto PerPlatformManifestPair : PerPlatformManifests)
+		for (const auto& PerPlatformManifestPair : PerPlatformManifests)
 		{
 			const FString PlatformManifestFilePath = PlatformLocalizationPath / PerPlatformManifestPair.Key.ToString() / PlatformManifestName;
 			bSavedAll &= SaveSingleManifest(PerPlatformManifestPair.Value, PlatformManifestFilePath);
@@ -1774,7 +1765,7 @@ bool FLocTextHelper::SaveArchiveImpl(const TSharedRef<const FInternationalizatio
 		}
 
 		bSavedAll &= SaveSingleArchive(PlatformAgnosticArchive, InArchiveFilePath);
-		for (const auto PerPlatformArchivePair : PerPlatformArchives)
+		for (const auto& PerPlatformArchivePair : PerPlatformArchives)
 		{
 			const FString PlatformArchiveFilePath = PlatformLocalizationPath / PerPlatformArchivePair.Key.ToString() / PlatformArchiveCulture / PlatformArchiveName;
 			bSavedAll &= SaveSingleArchive(PerPlatformArchivePair.Value, PlatformArchiveFilePath);

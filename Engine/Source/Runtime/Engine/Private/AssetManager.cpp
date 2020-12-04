@@ -8,6 +8,7 @@
 #include "Containers/StringView.h"
 #include "Engine/Engine.h"
 #include "Engine/BlueprintGeneratedClass.h"
+#include "Interfaces/IPluginManager.h"
 #include "UObject/ConstructorHelpers.h"
 #include "UObject/UObjectHash.h"
 #include "Misc/FileHelper.h"
@@ -20,6 +21,9 @@
 #include "IPlatformFilePak.h"
 #include "Stats/StatsMisc.h"
 #include "Internationalization/PackageLocalizationManager.h"
+#include "HAL/PlatformMisc.h"
+#include "HAL/PlatformApplicationMisc.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 
 #if WITH_EDITOR
 #include "Editor.h"
@@ -77,21 +81,10 @@ struct FPrimaryAssetData
 	/** Pending state of this asset, will be copied to CurrentState when load finishes */
 	FPrimaryAssetLoadState PendingState;
 
-	/** The set of primary asset names used to initiate the request */
-	TSharedPtr<const TArray<FName>> PendingPrimaryAssetNames;
-	
+	FPrimaryAssetData() {}
+
 	/** Asset is considered loaded at all if there is an active handle for it */
 	bool IsLoaded() const { return CurrentState.IsValid(); }
-
-	void MovePendingToCurrent()
-	{
-		Swap(PendingState.BundleNames, CurrentState.BundleNames);
-		Swap(PendingState.Handle, CurrentState.Handle);
-
-		PendingState.Reset(/* don't cancel handle */ false);	
-
-		PendingPrimaryAssetNames = nullptr;
-	}
 };
 
 /** Structure representing all items of a specific asset type */
@@ -129,6 +122,7 @@ UAssetManager::UAssetManager()
 	bIsPrimaryAssetDirectoryCurrent = false;
 	bUpdateManagementDatabaseAfterScan = false;
 	bIncludeOnlyOnDiskAssets = true;
+	bHasCompletedInitialScan = false;
 	NumberOfSpawnedNotifications = 0;
 }
 
@@ -383,8 +377,144 @@ bool UAssetManager::IsAssetDataBlueprintOfClassSet(const FAssetData& AssetData, 
 	return false;
 }
 
+void UAssetManager::SearchAssetRegistryPaths(TArray<FAssetData>& OutAssetDataList, TSet<FName>& OutDerivedClassNames, const TArray<FString>& Directories, const TArray<FString>& PackageNames, UClass* BaseClass, bool bHasBlueprintClasses) const
+{
+	FARFilter ARFilter;
+	TArray<FName> ClassNames;
+
+	IAssetRegistry& AssetRegistry = GetAssetRegistry();
+
+	if (BaseClass)
+	{
+		// Class check
+		if (!bHasBlueprintClasses)
+		{
+			// For base classes, can do the filter before hand
+			ARFilter.ClassNames.Add(BaseClass->GetFName());
+
+#if WITH_EDITOR
+			// Add any old names to the list in case things haven't been resaved
+			TArray<FName> OldNames = FLinkerLoad::FindPreviousNamesForClass(BaseClass->GetPathName(), false);
+			ARFilter.ClassNames.Append(OldNames);
+#endif
+
+			ARFilter.bRecursiveClasses = true;
+		}
+		else
+		{
+			TArray<UClass*> BlueprintCoreDerivedClasses;
+			GetDerivedClasses(UBlueprintCore::StaticClass(), BlueprintCoreDerivedClasses);
+			for (UClass* BPCoreClass : BlueprintCoreDerivedClasses)
+			{
+				ARFilter.ClassNames.Add(BPCoreClass->GetFName());
+			}
+
+			ClassNames.Add(BaseClass->GetFName());
+			GetAssetRegistry().GetDerivedClassNames(ClassNames, TSet<FName>(), OutDerivedClassNames);
+		}
+	}
+
+	const bool bBothDirectoriesAndPackageNames = (Directories.Num() > 0 && PackageNames.Num() > 0);
+	for (const FString& Directory : Directories)
+	{
+		ARFilter.PackagePaths.Add(FName(*Directory));
+	}
+
+	if (!bBothDirectoriesAndPackageNames)
+	{
+		// To get both the directories and package names we have to do two queries, since putting both in the same query only returns assets of those package names AND are in those directories.
+		for (const FString& PackageName : PackageNames)
+		{
+			ARFilter.PackageNames.Add(FName(*PackageName));
+		}
+	}
+
+	ARFilter.bRecursivePaths = true;
+	ARFilter.bIncludeOnlyOnDiskAssets = !GIsEditor; // In editor check in memory, otherwise don't
+
+	if (bBothDirectoriesAndPackageNames)
+	{
+		// To get both the directories and package names we have to do two queries, since putting both in the same query only returns assets of those package names AND are in those directories.
+		AssetRegistry.GetAssets(ARFilter, OutAssetDataList);
+
+		for (const FString& PackageName : PackageNames)
+		{
+			ARFilter.PackageNames.Add(FName(*PackageName));
+		}
+		ARFilter.PackagePaths.Empty();
+	}
+	AssetRegistry.GetAssets(ARFilter, OutAssetDataList);
+}
+
+void UAssetManager::ScanPathsSynchronous(const TArray<FString>& PathsToScan) const
+{
+	TArray<FString> Directories;
+	TArray<FString> PackageFilenames;
+
+	for (const FString& Path : PathsToScan)
+	{
+		bool bAlreadyScanned = false;
+		int32 DotIndex = INDEX_NONE;
+		if (Path.FindChar('.', DotIndex))
+		{
+			FString PackageName = FPackageName::ObjectPathToPackageName(Path);
+
+			for (const FString& AlreadyScanned : AlreadyScannedDirectories)
+			{
+				if (PackageName == AlreadyScanned || PackageName.StartsWith(AlreadyScanned + TEXT("/")))
+				{
+					bAlreadyScanned = true;
+					break;
+				}
+			}
+
+			if (!bAlreadyScanned)
+			{
+				FString AssetFilename;
+				// Try both extensions
+				if (FPackageName::TryConvertLongPackageNameToFilename(PackageName, AssetFilename, FPackageName::GetAssetPackageExtension()))
+				{
+					PackageFilenames.AddUnique(AssetFilename);
+				}
+
+				if (FPackageName::TryConvertLongPackageNameToFilename(PackageName, AssetFilename, FPackageName::GetMapPackageExtension()))
+				{
+					PackageFilenames.AddUnique(AssetFilename);
+				}
+			}
+		}
+		else
+		{
+			for (const FString& AlreadyScanned : AlreadyScannedDirectories)
+			{
+				if (Path == AlreadyScanned || Path.StartsWith(AlreadyScanned + TEXT("/")))
+				{
+					bAlreadyScanned = true;
+					break;
+				}
+			}
+
+			if (!bAlreadyScanned)
+			{
+				AlreadyScannedDirectories.Add(Path);
+				Directories.AddUnique(Path);
+			}
+		}
+	}
+
+	if (Directories.Num() > 0)
+	{
+		GetAssetRegistry().ScanPathsSynchronous(Directories);
+	}
+	if (PackageFilenames.Num() > 0)
+	{
+		GetAssetRegistry().ScanFilesSynchronous(PackageFilenames);
+	}
+}
+
 int32 UAssetManager::ScanPathsForPrimaryAssets(FPrimaryAssetType PrimaryAssetType, const TArray<FString>& Paths, UClass* BaseClass, bool bHasBlueprintClasses, bool bIsEditorOnly, bool bForceSynchronousScan)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(UAssetManager::ScanPathsForPrimaryAssets)
 	TArray<FString> Directories, PackageNames;
 	TSharedRef<FPrimaryAssetTypeData>* FoundType = AssetTypeMap.Find(PrimaryAssetType);
 
@@ -431,8 +561,6 @@ int32 UAssetManager::ScanPathsForPrimaryAssets(FPrimaryAssetType PrimaryAssetTyp
 		}
 	}
 
-	IAssetRegistry& AssetRegistry = GetAssetRegistry();
-
 #if WITH_EDITOR
 	// Cooked data has the asset data already set up
 	const bool bShouldDoSynchronousScan = !bIsGlobalAsyncScanEnvironment || bForceSynchronousScan;
@@ -442,7 +570,7 @@ int32 UAssetManager::ScanPathsForPrimaryAssets(FPrimaryAssetType PrimaryAssetTyp
 	}
 	else
 	{
-		if (AssetRegistry.IsLoadingAssets())
+		if (GetAssetRegistry().IsLoadingAssets())
 		{
 			// Keep track of the paths we asked for so once assets are discovered we will refresh the list
 			for (const FString& Path : Paths)
@@ -453,58 +581,10 @@ int32 UAssetManager::ScanPathsForPrimaryAssets(FPrimaryAssetType PrimaryAssetTyp
 	}
 #endif
 
-	FARFilter ARFilter;
-
-	TSet<FName> DerivedClassNames;
-	TArray<FName> ClassNames;
-
-	if (BaseClass)
-	{
-		// Class check
-		if (!bHasBlueprintClasses)
-		{
-			// For base classes, can do the filter before hand
-			ARFilter.ClassNames.Add(BaseClass->GetFName());
-
-#if WITH_EDITOR
-			// Add any old names to the list in case things haven't been resaved
-			TArray<FName> OldNames = FLinkerLoad::FindPreviousNamesForClass(BaseClass->GetPathName(), false);
-			ARFilter.ClassNames.Append(OldNames);
-#endif
-
-			ARFilter.bRecursiveClasses = true;
-		}
-		else
-		{
-			TArray<UClass*> BlueprintCoreDerivedClasses;
-			GetDerivedClasses(UBlueprintCore::StaticClass(), BlueprintCoreDerivedClasses);
-			for (UClass* BPCoreClass : BlueprintCoreDerivedClasses)
-			{
-				ARFilter.ClassNames.Add(BPCoreClass->GetFName());
-			}
-
-			// Make sure this works, if it does remove post load check
-			ClassNames.Add(BaseClass->GetFName());
-			AssetRegistry.GetDerivedClassNames(ClassNames, TSet<FName>(), DerivedClassNames);
-		}
-	}
-
-	for (const FString& Directory : Directories)
-	{
-		ARFilter.PackagePaths.Add(FName(*Directory));
-	}
-
-	for (const FString& PackageName : PackageNames)
-	{
-		ARFilter.PackageNames.Add(FName(*PackageName));
-	}
-
-	ARFilter.bRecursivePaths = true;
-	ARFilter.bIncludeOnlyOnDiskAssets = !GIsEditor; // In editor check in memory, otherwise don't
-
 	TArray<FAssetData> AssetDataList;
+	TSet<FName> DerivedClassNames;
 
-	AssetRegistry.GetAssets(ARFilter, AssetDataList);
+	SearchAssetRegistryPaths(AssetDataList, DerivedClassNames, Directories, PackageNames, BaseClass, bHasBlueprintClasses);
 
 	int32 NumAdded = 0;
 	// Now add to map or update as needed
@@ -525,7 +605,6 @@ int32 UAssetManager::ScanPathsForPrimaryAssets(FPrimaryAssetType PrimaryAssetTyp
 			}
 		}
 
-
 		FPrimaryAssetId PrimaryAssetId = ExtractPrimaryAssetIdFromData(Data, PrimaryAssetType);
 
 		// Remove invalid or wrong type assets
@@ -545,7 +624,7 @@ int32 UAssetManager::ScanPathsForPrimaryAssets(FPrimaryAssetType PrimaryAssetTyp
 				{
 					FString ConflictMsg = FString::Printf(TEXT("Ignoring PrimaryAssetType %s - Conflicts with %s"), *PrimaryAssetType.ToString(), *PrimaryAssetId.PrimaryAssetType.ToString());
 
-					UE_LOG(LogAssetManager, Display, TEXT("%s"), *ConflictMsg);
+					UE_LOG(LogAssetManager, Warning, TEXT("%s"), *ConflictMsg);
 					IssuedWarnings.Add(ConflictPair);
 				}
 			}
@@ -571,12 +650,9 @@ void UAssetManager::StartBulkScanning()
 	{
 		bIsBulkScanning = true;
 		NumberOfSpawnedNotifications = 0;
-
-		if (!WITH_EDITOR)
-		{
-			// Go into temporary caching mode to speed up class queries, not guaranteed safe in editor builds
-			GetAssetRegistry().SetTemporaryCachingMode(true);
-		}
+		bOldTemporaryCachingMode = GetAssetRegistry().GetTemporaryCachingMode();
+		// Go into temporary caching mode to speed up class queries
+		GetAssetRegistry().SetTemporaryCachingMode(true);
 	}
 }
 
@@ -585,12 +661,9 @@ void UAssetManager::StopBulkScanning()
 	if (ensure(bIsBulkScanning))
 	{
 		bIsBulkScanning = false;
-	}
 
-	if (!WITH_EDITOR)
-	{
 		// Leave temporary caching mode
-		GetAssetRegistry().SetTemporaryCachingMode(false);
+		GetAssetRegistry().SetTemporaryCachingMode(bOldTemporaryCachingMode);
 	}
 	
 	RebuildObjectReferenceList();
@@ -696,7 +769,7 @@ void UAssetManager::UpdateCachedAssetData(const FPrimaryAssetId& PrimaryAssetId,
 
 				if (bStripBundleData)
 				{
-					GetAssetRegistry().StripAssetRegistryKeyForObject(NewAssetData.ObjectPath, FAssetBundleData::StaticStruct()->GetFName());
+					GetAssetRegistry().StripAssetRegistryKeyForObject(NewAssetData.ObjectPath, TBaseStructure<FAssetBundleData>::Get()->GetFName());
 				}
 			}
 		}
@@ -1136,41 +1209,11 @@ void UAssetManager::GetPrimaryAssetTypeInfoList(TArray<FPrimaryAssetTypeInfo>& A
 	}
 }
 
-static TArray<FName>* ExtractNames(const TArray<FPrimaryAssetId>& Ids)
-{
-	TArray<FName>* Out = new TArray<FName>();
-	Out->Reserve(Ids.Num());
-	for (const FPrimaryAssetId& Id : Ids)
-	{
-		Out->Add(Id.PrimaryAssetName);
-	}
-	Out->Sort(FNameFastLess());
-
-	return Out;
-}
-
 TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(const TArray<FPrimaryAssetId>& AssetsToChange, const TArray<FName>& AddBundles, const TArray<FName>& RemoveBundles, bool bRemoveAllBundles, FStreamableDelegate DelegateToCall, TAsyncLoadPriority Priority)
 {
-	// ExistingHandles are both primary and secondary assets who are already being loaded.
-	// We need to return a combined handle that waits for newly requested assets as well as
-	// these previously requested assets.
-	//
-	// The code relies on TSet iteraton order being the insertion order.
-	// This matters since FStreamableHandle::GetLoadedAsset() returns the first requested asset
-	// or the first requested asset of the first child handle. 
-
-	TSet<TSharedPtr<FStreamableHandle>> ExistingHandles;
-	TSet<FSoftObjectPath> PathsToLoad;
-	PathsToLoad.Reserve(AssetsToChange.Num());
-
-	TArray<FName> AddBundlesSorted(AddBundles);
-	AddBundlesSorted.Sort(FNameLexicalLess());
-	TArray<FName> TempBundles;
-
-	TArray<FPrimaryAssetId> IdsToLoad;
-	IdsToLoad.Reserve(AssetsToChange.Num());
-
-	TSharedPtr<const TArray<FName>> PrimaryAssetNames(ExtractNames(AssetsToChange));
+	TArray<TSharedPtr<FStreamableHandle> > NewHandles, ExistingHandles;
+	TArray<FPrimaryAssetId> NewAssets;
+	TSharedPtr<FStreamableHandle> ReturnHandle;
 
 	for (const FPrimaryAssetId& PrimaryAssetId : AssetsToChange)
 	{
@@ -1178,93 +1221,69 @@ TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(c
 
 		if (NameData)
 		{
+			FPlatformMisc::PumpEssentialAppMessages();
+
 			// Iterate list of changes, compute new bundle set
 			bool bLoadIfNeeded = false;
 			
-			// NewBundles will be the set of bundle tags we want to have loaded,
-			// i.e. AddBundles + CurrentBundles - RemoveBundles
-			const TArray<FName>& CurrentBundles = NameData->PendingState.IsValid() ? NameData->PendingState.BundleNames : NameData->CurrentState.BundleNames;
-			const TArray<FName>* NewBundles;
+			// Use pending state if valid
+			TArray<FName> CurrentBundleState = NameData->PendingState.IsValid() ? NameData->PendingState.BundleNames : NameData->CurrentState.BundleNames;
+			TArray<FName> NewBundleState;
 
-			if (bRemoveAllBundles || CurrentBundles.Num() == 0)
+			if (!bRemoveAllBundles)
 			{
-				// Use AddBundlesSorted to avoid creating temporary array
-				NewBundles = &AddBundlesSorted;
-			}
-			else
-			{
-				// Reuse TempBundles to avoid allocations and start with the bundles we want to be loaded
-				NewBundles = &TempBundles;
-				TempBundles = AddBundlesSorted;
+				NewBundleState = CurrentBundleState;
 
-				// Keep CurrentBundles unless they already exist or we explictly should remove them
-				// It is assumed that RemoveBundles do not overlap with AddBundles
-				for (FName CurrentBundle : CurrentBundles)
+				for (const FName& RemoveBundle : RemoveBundles)
 				{
-					if (RemoveBundles.Find(CurrentBundle) == INDEX_NONE &&
-						TempBundles.Find(CurrentBundle) == INDEX_NONE)
-					{
-						TempBundles.Add(CurrentBundle);
-					}
-				}
-
-				// Sort bundles if we added anything on top of AddBundlesSorted
-				if (TempBundles.Num() > AddBundlesSorted.Num())
-				{
-					TempBundles.Sort(FNameLexicalLess());
+					NewBundleState.Remove(RemoveBundle);
 				}
 			}
+
+			for (const FName& AddBundle : AddBundles)
+			{
+				NewBundleState.AddUnique(AddBundle);
+			}
+
+			NewBundleState.Sort(FNameLexicalLess());
 
 			// If the pending state is valid, check if it is different
 			if (NameData->PendingState.IsValid())
 			{
-				if (NameData->PendingState.BundleNames == *NewBundles)
+				if (NameData->PendingState.BundleNames == NewBundleState)
 				{
 					// This will wait on any existing handles to finish
 					ExistingHandles.Add(NameData->PendingState.Handle);
 					continue;
 				}
-				// Only cancel previous handle if the same set of assets was requested
-				bool bCancelPreviousHandle = true;
-				if (PrimaryAssetNames.Get() != NameData->PendingPrimaryAssetNames.Get())
-				{
-					if (*PrimaryAssetNames.Get() != *NameData->PendingPrimaryAssetNames.Get())
-					{
-						bCancelPreviousHandle = false;
-					}
-					else
-					{
-						// Re-use old array to avoid O(N^2) comparisons
-						PrimaryAssetNames = NameData->PendingPrimaryAssetNames;
-					}
-				}
 
 				// Clear pending state
-				NameData->PendingState.Reset(bCancelPreviousHandle);
+				NameData->PendingState.Reset(true);
 			}
-			else if (NameData->CurrentState.IsValid() && NameData->CurrentState.BundleNames == *NewBundles)
+			else if (NameData->CurrentState.IsValid() && NameData->CurrentState.BundleNames == NewBundleState)
 			{
 				// If no pending, compare with current
 				continue;
 			}
 
+			TSet<FSoftObjectPath> PathsToLoad;
+
 			// Gather asset refs
 			const FSoftObjectPath& AssetPath = NameData->AssetPtr.ToSoftObjectPath();
-			bool bNothingToLoadForAsset = AssetPath.IsNull();
+
 			if (!AssetPath.IsNull())
 			{
 				// Dynamic types can have no base asset path
 				PathsToLoad.Add(AssetPath);
 			}
 			
-			for (const FName& BundleName : *NewBundles)
+			for (const FName& BundleName : NewBundleState)
 			{
 				FAssetBundleEntry Entry = GetAssetBundleEntry(PrimaryAssetId, BundleName);
 
 				if (Entry.IsValid())
 				{
 					PathsToLoad.Append(Entry.BundleAssets);
-					bNothingToLoadForAsset &= Entry.BundleAssets.Num() == 0;
 				}
 				else
 				{
@@ -1272,103 +1291,100 @@ TSharedPtr<FStreamableHandle> UAssetManager::ChangeBundleStateForPrimaryAssets(c
 				}
 			}
 
-			if (bNothingToLoadForAsset)
+			TSharedPtr<FStreamableHandle> NewHandle;
+
+			FString DebugName = PrimaryAssetId.ToString();
+
+			if (NewBundleState.Num() > 0)
+			{
+				DebugName += TEXT(" (");
+
+				for (int32 i = 0; i < NewBundleState.Num(); i++)
+				{
+					if (i != 0)
+					{
+						DebugName += TEXT(", ");
+					}
+					DebugName += NewBundleState[i].ToString();
+				}
+
+				DebugName += TEXT(")");
+			}
+
+			if (PathsToLoad.Num() == 0)
 			{
 				// New state has no assets to load. Set the CurrentState's bundles and clear the handle
-				NameData->CurrentState.BundleNames = *NewBundles;
+				NameData->CurrentState.BundleNames = NewBundleState;
 				NameData->CurrentState.Handle.Reset();
 				continue;
 			}
 
-			NameData->PendingState.BundleNames = *NewBundles;
-			NameData->PendingPrimaryAssetNames = PrimaryAssetNames;
-			IdsToLoad.Add(PrimaryAssetId);
-		}
-	}
+			NewHandle = LoadAssetList(PathsToLoad.Array(), FStreamableDelegate(), Priority, DebugName);
 
-	TSharedPtr<FStreamableHandle> ReturnHandle;
-	TStringBuilder<256> DebugName;
-	if (PathsToLoad.Num() > 0)
-	{
-		DebugName << *PathsToLoad.CreateConstIterator();
-
-		if (IdsToLoad.Num() > 1)
-		{
-			DebugName << " and " << IdsToLoad.Num() - 1 << " more";
-		}
-			
-		DebugName << TEXT(" (");
-		int32 LenWithoutElements = DebugName.Len();
-		for (FName AddBundle : AddBundlesSorted)
-		{
-			if (!bRemoveAllBundles)
+			if (!NewHandle.IsValid())
 			{
-				DebugName << '+';
-			}					
-				
-			DebugName << AddBundle << ", ";
-		}
-
-		for (FName RemoveBundle : RemoveBundles)
-		{
-			DebugName << '-' << RemoveBundle << ", ";
-		}
-
-		// Trim last comma and space
-		if (DebugName.Len() > LenWithoutElements)
-		{
-			DebugName.RemoveSuffix(2);
-		}
-		DebugName << TEXT(")");
-
-
-		ReturnHandle = LoadAssetList(PathsToLoad.Array(), FStreamableDelegate(), Priority, FString(DebugName));
-
-		// Update FPrimaryAssetData pending handle
-		for (const FPrimaryAssetId& PrimaryAssetId : IdsToLoad)
-		{
-			if (FPrimaryAssetData* NameData = GetNameData(PrimaryAssetId))
-			{
-				NameData->PendingState.Handle = ReturnHandle;
+				// LoadAssetList already throws an error, no need to do it here as well
+				continue;
 			}
-		}
-	}
-		
-	// Create combined wrapper handle from existing handles
-	if (ExistingHandles.Num() > 0)
-	{
-		TArray<TSharedPtr<FStreamableHandle>> AllHandles;
-		AllHandles.Reserve(ReturnHandle.IsValid() + ExistingHandles.Num());
-		if (ReturnHandle.IsValid())
-		{
-			AllHandles.Add(ReturnHandle);
-		}
-		for (const TSharedPtr<FStreamableHandle>& ExistingHandle : ExistingHandles)
-		{
-			AllHandles.Add(ExistingHandle);
-		}
 
-		DebugName << " combined";
-
-		ReturnHandle = StreamableManager.CreateCombinedHandle(AllHandles, *DebugName);
-	}
-
-	// Call delegate and update NameDatasToLoad when done
-	if (!ReturnHandle.IsValid() || ReturnHandle->HasLoadCompleted())
-	{
-		for (const FPrimaryAssetId& PrimaryAssetId : IdsToLoad)
-		{
-			if (FPrimaryAssetData* NameData = GetNameData(PrimaryAssetId))
+			if (NewHandle->HasLoadCompleted())
 			{
-				NameData->MovePendingToCurrent();
+				// Copy right into active
+				NameData->CurrentState.BundleNames = NewBundleState;
+				NameData->CurrentState.Handle = NewHandle;
 			}
-		}
+			else
+			{
+				// Copy into pending and set delegate
+				NameData->PendingState.BundleNames = NewBundleState;
+				NameData->PendingState.Handle = NewHandle;
 
-		DelegateToCall.ExecuteIfBound();
+				NewHandle->BindCompleteDelegate(FStreamableDelegate::CreateUObject(this, &UAssetManager::OnAssetStateChangeCompleted, PrimaryAssetId, NewHandle, FStreamableDelegate()));
+			}
+
+			NewHandles.Add(NewHandle);
+			NewAssets.Add(PrimaryAssetId);
+		}
+	}
+
+	if (NewHandles.Num() > 1 || ExistingHandles.Num() > 0)
+	{
+		// If multiple handles or we have an old handle, need to make wrapper handle
+		NewHandles.Append(ExistingHandles);
+
+		ReturnHandle = StreamableManager.CreateCombinedHandle(NewHandles, FString::Printf(TEXT("%s CreateCombinedHandle"), *GetName()));
+
+		// Call delegate or bind to meta handle
+		if (ReturnHandle->HasLoadCompleted())
+		{
+			FStreamableHandle::ExecuteDelegate(DelegateToCall);
+		}
+		else
+		{
+			// Call external callback when completed
+			ReturnHandle->BindCompleteDelegate(DelegateToCall);
+		}
+	}
+	else if (NewHandles.Num() == 1)
+	{
+		ReturnHandle = NewHandles[0];
+		ensure(NewAssets.Num() == 1);
+
+		// If only one handle, return it and add callback
+		if (ReturnHandle->HasLoadCompleted())
+		{
+			FStreamableHandle::ExecuteDelegate(DelegateToCall);
+		}
+		else
+		{
+			// Call internal callback and external callback when it finishes
+			ReturnHandle->BindCompleteDelegate(FStreamableDelegate::CreateUObject(this, &UAssetManager::OnAssetStateChangeCompleted, NewAssets[0], ReturnHandle, DelegateToCall));
+		}
 	}
 	else
 	{
-		ReturnHandle->BindCompleteDelegate(FStreamableDelegate::CreateUObject(this, &UAssetManager::OnAssetStateChangeCompleted, MoveTemp(IdsToLoad), ReturnHandle, DelegateToCall));
+		// Call completion callback, nothing to do
+		FStreamableHandle::ExecuteDelegate(DelegateToCall);
 	}
 
 	return ReturnHandle;
@@ -1459,28 +1475,31 @@ TSharedPtr<FStreamableHandle> UAssetManager::PreloadPrimaryAssets(const TArray<F
 	return ReturnHandle;
 }
 
-void UAssetManager::OnAssetStateChangeCompleted(TArray<FPrimaryAssetId> PrimaryAssetIds,  TSharedPtr<FStreamableHandle> BoundHandle, FStreamableDelegate WrappedDelegate)
+void UAssetManager::OnAssetStateChangeCompleted(FPrimaryAssetId PrimaryAssetId, TSharedPtr<FStreamableHandle> BoundHandle, FStreamableDelegate WrappedDelegate)
 {
-	for (const FPrimaryAssetId& PrimaryAssetId : PrimaryAssetIds)
+	FPrimaryAssetData* NameData = GetNameData(PrimaryAssetId);
+
+	if (NameData)
 	{
-		if (FPrimaryAssetData* NameData = GetNameData(PrimaryAssetId))
+		if (NameData->PendingState.Handle == BoundHandle)
 		{
-			if (NameData->PendingState.Handle == BoundHandle)
-			{
-				NameData->MovePendingToCurrent();
-			}
-			else
-			{
-				UE_LOG(LogAssetManager, Verbose, TEXT("OnAssetStateChangeCompleted: Received after pending data changed, ignoring (%s)"), *PrimaryAssetId.ToString());
-			}
+			NameData->CurrentState.Handle = NameData->PendingState.Handle;
+			NameData->CurrentState.BundleNames = NameData->PendingState.BundleNames;
+
+			WrappedDelegate.ExecuteIfBound();
+
+			// Clear old state, but don't cancel handle as we just copied it into current
+			NameData->PendingState.Reset(false);
 		}
 		else
 		{
-			UE_LOG(LogAssetManager, Error, TEXT("OnAssetStateChangeCompleted: Received for invalid asset! (%s)"), *PrimaryAssetId.ToString());
+			UE_LOG(LogAssetManager, Verbose, TEXT("OnAssetStateChangeCompleted: Received after pending data changed, ignoring (%s)"), *PrimaryAssetId.ToString());
 		}
 	}
-
-	WrappedDelegate.ExecuteIfBound();
+	else
+	{
+		UE_LOG(LogAssetManager, Error, TEXT("OnAssetStateChangeCompleted: Received for invalid asset! (%s)"), *PrimaryAssetId.ToString());
+	}
 }
 
 TSharedPtr<FStreamableHandle> UAssetManager::LoadPrimaryAssets(const TArray<FPrimaryAssetId>& AssetsToLoad, const TArray<FName>& LoadBundles, FStreamableDelegate DelegateToCall, TAsyncLoadPriority Priority)
@@ -2074,7 +2093,7 @@ bool UAssetManager::OnAssetRegistryAvailableAfterInitialization(FName InName, FA
 
 FPrimaryAssetData* UAssetManager::GetNameData(const FPrimaryAssetId& PrimaryAssetId, bool bCheckRedirector)
 {
-	return const_cast<FPrimaryAssetData*>(AsConst(this)->GetNameData(PrimaryAssetId));
+	return const_cast<FPrimaryAssetData*>(AsConst(*this).GetNameData(PrimaryAssetId));
 }
 
 const FPrimaryAssetData* UAssetManager::GetNameData(const FPrimaryAssetId& PrimaryAssetId, bool bCheckRedirector) const
@@ -2656,7 +2675,7 @@ void UAssetManager::DumpReferencersForPackage(const TArray< FString >& PackageNa
 	{
 		TArray<FAssetIdentifier> FoundReferencers;
 
-		AssetRegistry.GetReferencers(FName(*PackageString), FoundReferencers, EAssetRegistryDependencyType::Packages);
+		AssetRegistry.GetReferencers(FName(*PackageString), FoundReferencers, UE::AssetRegistry::EDependencyCategory::Package);
 
 		for (const FAssetIdentifier& Identifier : FoundReferencers)
 		{
@@ -2784,6 +2803,27 @@ bool UAssetManager::DoesPrimaryAssetMatchCustomOverride(FPrimaryAssetId PrimaryA
 	return true;
 }
 
+void UAssetManager::CallOrRegister_OnCompletedInitialScan(FSimpleMulticastDelegate::FDelegate Delegate)
+{
+	if (bHasCompletedInitialScan)
+	{
+		Delegate.Execute();
+	}
+	else
+	{
+		bool bAlreadyBound = Delegate.GetUObject() != nullptr ? OnCompletedInitialScanDelegate.IsBoundToObject(Delegate.GetUObject()) : false;
+		if (!bAlreadyBound)
+		{
+			OnCompletedInitialScanDelegate.Add(Delegate);
+		}
+	}
+}
+
+bool UAssetManager::HasInitialScanCompleted() const
+{
+	return bHasCompletedInitialScan;
+}
+
 void UAssetManager::PostInitialAssetScan()
 {
 	// Don't apply rules until scanning is done
@@ -2798,6 +2838,14 @@ void UAssetManager::PostInitialAssetScan()
 		UpdateManagementDatabase(true);
 	}
 #endif
+
+	if (!bHasCompletedInitialScan)
+	{
+		// Done with initial scan, fire delegate exactly once. This does not happen on editor refreshes
+		bHasCompletedInitialScan = true;
+		OnCompletedInitialScanDelegate.Broadcast();
+		OnCompletedInitialScanDelegate.Clear();
+	}
 }
 
 bool UAssetManager::GetManagedPackageList(FPrimaryAssetId PrimaryAssetId, TArray<FName>& PackagePathList) const
@@ -2807,7 +2855,7 @@ bool UAssetManager::GetManagedPackageList(FPrimaryAssetId PrimaryAssetId, TArray
 	TArray<FString> DependencyStrings;
 
 	IAssetRegistry& AssetRegistry = GetAssetRegistry();
-	AssetRegistry.GetDependencies(PrimaryAssetId, FoundDependencies, EAssetRegistryDependencyType::Manage);
+	AssetRegistry.GetDependencies(PrimaryAssetId, FoundDependencies, UE::AssetRegistry::EDependencyCategory::Manage);
 
 	for (const FAssetIdentifier& Identifier : FoundDependencies)
 	{
@@ -2828,7 +2876,7 @@ bool UAssetManager::GetPackageManagers(FName PackageName, bool bRecurseToParents
 	TArray<FAssetIdentifier> ReferencingPrimaryAssets;
 	ReferencingPrimaryAssets.Reserve(128);
 
-	AssetRegistry.GetReferencers(PackageName, ReferencingPrimaryAssets, EAssetRegistryDependencyType::Manage);
+	AssetRegistry.GetReferencers(PackageName, ReferencingPrimaryAssets, UE::AssetRegistry::EDependencyCategory::Manage);
 
 	for (int32 IdentifierIndex = 0; IdentifierIndex < ReferencingPrimaryAssets.Num(); IdentifierIndex++)
 	{
@@ -2848,7 +2896,8 @@ bool UAssetManager::GetPackageManagers(FName PackageName, bool bRecurseToParents
 					{
 						if (!ManagerSet.Contains(Manager))
 						{
-							// Add to end of list, this will recurse again if needed
+							ManagerSet.Add(Manager);
+							// Add to end of list to recurse into the parent
 							ReferencingPrimaryAssets.Add(Manager);
 						}
 					}
@@ -2904,6 +2953,13 @@ bool UAssetManager::IsPathExcludedFromScan(const FString& Path) const
 
 EAssetSetManagerResult::Type UAssetManager::ShouldSetManager(const FAssetIdentifier& Manager, const FAssetIdentifier& Source, const FAssetIdentifier& Target, EAssetRegistryDependencyType::Type DependencyType, EAssetSetManagerFlags::Type Flags) const
 {
+	checkf(false, TEXT("Call ShouldSetManager that takes a Category instead"));
+	return EAssetSetManagerResult::DoNotSet;
+}
+
+EAssetSetManagerResult::Type UAssetManager::ShouldSetManager(const FAssetIdentifier& Manager, const FAssetIdentifier& Source, const FAssetIdentifier& Target,
+	UE::AssetRegistry::EDependencyCategory Category, UE::AssetRegistry::EDependencyProperty Properties, EAssetSetManagerFlags::Type Flags) const
+{
 	FPrimaryAssetId ManagerPrimaryAssetId = Manager.GetPrimaryAssetId();
 	FPrimaryAssetId TargetPrimaryAssetId = Target.GetPrimaryAssetId();
 	if (TargetPrimaryAssetId.IsValid())
@@ -2955,72 +3011,6 @@ EAssetSetManagerResult::Type UAssetManager::ShouldSetManager(const FAssetIdentif
 		}
 	}
 	return EAssetSetManagerResult::SetAndRecurse;
-}
-
-void UAssetManager::ScanPathsSynchronous(const TArray<FString>& PathsToScan) const
-{
-	TArray<FString> Directories;
-	TArray<FString> PackageFilenames;
-
-	for (const FString& Path : PathsToScan)
-	{
-		bool bAlreadyScanned = false;
-		int32 DotIndex = INDEX_NONE;
-		if (Path.FindChar('.', DotIndex))
-		{
-			FString PackageName = FPackageName::ObjectPathToPackageName(Path);
-
-			for (const FString& AlreadyScanned : AlreadyScannedDirectories)
-			{
-				if (PackageName == AlreadyScanned || PackageName.StartsWith(AlreadyScanned + TEXT("/")))
-				{
-					bAlreadyScanned = true;
-					break;
-				}
-			}
-
-			if (!bAlreadyScanned)
-			{
-				FString AssetFilename;
-				// Try both extensions
-				if (FPackageName::TryConvertLongPackageNameToFilename(PackageName, AssetFilename, FPackageName::GetAssetPackageExtension()))
-				{
-					PackageFilenames.AddUnique(AssetFilename);
-				}
-
-				if (FPackageName::TryConvertLongPackageNameToFilename(PackageName, AssetFilename, FPackageName::GetMapPackageExtension()))
-				{
-					PackageFilenames.AddUnique(AssetFilename);
-				}
-			}
-		}
-		else
-		{
-			for (const FString& AlreadyScanned : AlreadyScannedDirectories)
-			{
-				if (Path == AlreadyScanned || Path.StartsWith(AlreadyScanned + TEXT("/")))
-				{
-					bAlreadyScanned = true;
-					break;
-				}
-			}
-
-			if (!bAlreadyScanned)
-			{
-				AlreadyScannedDirectories.Add(Path);
-				Directories.AddUnique(Path);
-			}
-		}
-	}
-
-	if (Directories.Num() > 0)
-	{
-		GetAssetRegistry().ScanPathsSynchronous(Directories);
-	}
-	if (PackageFilenames.Num() > 0)
-	{
-		GetAssetRegistry().ScanFilesSynchronous(PackageFilenames);
-	}
 }
 
 void UAssetManager::OnAssetRegistryFilesLoaded()
@@ -3101,8 +3091,15 @@ void UAssetManager::UpdateManagementDatabase(bool bForceRefresh)
 			{
 				FName PackageName = FName(*AssetRef.GetLongPackageName());
 
-				AssetPackagesReferenced.AddUnique(PackageName);
-				PackagesToUpdateChunksFor.Add(PackageName);
+				if (PackageName == NAME_None)
+				{
+					UE_LOG(LogAssetManager, Warning, TEXT("Ignoring 'None' reference originating from %s from NameData"), *PrimaryAssetId.ToString());
+				}
+				else
+				{
+					AssetPackagesReferenced.AddUnique(PackageName);
+					PackagesToUpdateChunksFor.Add(PackageName);
+				}
 			}
 
 			TMap<FName, FAssetBundleEntry>* BundleMap = CachedAssetBundles.Find(PrimaryAssetId);
@@ -3116,20 +3113,21 @@ void UAssetManager::UpdateManagementDatabase(bool bForceRefresh)
 					{
 						FName PackageName = FName(*BundleAssetRef.GetLongPackageName());
 
-						AssetPackagesReferenced.AddUnique(PackageName);
-						PackagesToUpdateChunksFor.Add(PackageName);
+						if (PackageName == NAME_None)
+						{
+							UE_LOG(LogAssetManager, Warning, TEXT("Ignoring 'None' reference originating from %s from Bundle %s"), *PrimaryAssetId.ToString(), *BundlePair.Key.ToString());
+						}
+						else
+						{
+							AssetPackagesReferenced.AddUnique(PackageName);
+							PackagesToUpdateChunksFor.Add(PackageName);
+						}
 					}
 				}
 			}
 
 			for (const FName& AssetPackage : AssetPackagesReferenced)
 			{
-				if (AssetPackage == NAME_None)
-				{
-					UE_LOG(LogAssetManager, Warning, TEXT("Ignoring 'None' reference originating from %s"), *PrimaryAssetId.ToString());
-					continue;
-				}
-
 				TMultiMap<FAssetIdentifier, FAssetIdentifier>& ManagerMap = Rules.bApplyRecursively ? PriorityManagementMap.FindOrAdd(Rules.Priority) : NoReferenceManagementMap;
 
 				ManagerMap.Add(PrimaryAssetId, AssetPackage);
@@ -3148,9 +3146,10 @@ void UAssetManager::UpdateManagementDatabase(bool bForceRefresh)
 	const bool bAllowInPIE = true;
 	SlowTask.MakeDialog(bShowCancelButton, bAllowInPIE);
 
-	auto SetManagerPredicate = [this, &PackagesToUpdateChunksFor](const FAssetIdentifier& Manager, const FAssetIdentifier& Source, const FAssetIdentifier& Target, EAssetRegistryDependencyType::Type DependencyType, EAssetSetManagerFlags::Type Flags)
+	auto SetManagerPredicate = [this, &PackagesToUpdateChunksFor](const FAssetIdentifier& Manager, const FAssetIdentifier& Source, const FAssetIdentifier& Target,
+		UE::AssetRegistry::EDependencyCategory Category, UE::AssetRegistry::EDependencyProperty Properties, EAssetSetManagerFlags::Type Flags)
 	{
-		EAssetSetManagerResult::Type Result = this->ShouldSetManager(Manager, Source, Target, DependencyType, Flags);
+		EAssetSetManagerResult::Type Result = this->ShouldSetManager(Manager, Source, Target, Category, Properties, Flags);
 		if (Result != EAssetSetManagerResult::DoNotSet && Target.IsPackage())
 		{
 			PackagesToUpdateChunksFor.Add(Target.PackageName);
@@ -3158,19 +3157,20 @@ void UAssetManager::UpdateManagementDatabase(bool bForceRefresh)
 		return Result;
 	};
 
+	TSet<FDependsNode*> ExistingManagedNodes;
 	for (int32 PriorityIndex = 0; PriorityIndex < PriorityArray.Num(); PriorityIndex++)
 	{
 		TMultiMap<FAssetIdentifier, FAssetIdentifier>* ManagerMap = PriorityManagementMap.Find(PriorityArray[PriorityIndex]);
 
 		SlowTask.EnterProgressFrame(1);
 
-		AssetRegistry.SetManageReferences(*ManagerMap, PriorityIndex == 0, EAssetRegistryDependencyType::Packages, SetManagerPredicate);
+		AssetRegistry.SetManageReferences(*ManagerMap, PriorityIndex == 0, UE::AssetRegistry::EDependencyCategory::Package, ExistingManagedNodes, SetManagerPredicate);
 	}
 
 	// Do non recursive set last
 	if (NoReferenceManagementMap.Num() > 0)
 	{
-		AssetRegistry.SetManageReferences(NoReferenceManagementMap, false, EAssetRegistryDependencyType::None);
+		AssetRegistry.SetManageReferences(NoReferenceManagementMap, false, UE::AssetRegistry::EDependencyCategory::None, ExistingManagedNodes);
 	}
 
 
@@ -3233,7 +3233,7 @@ void UAssetManager::UpdateManagementDatabase(bool bForceRefresh)
 
 	if (PrimaryAssetIdManagementMap.Num() > 0)
 	{
-		AssetRegistry.SetManageReferences(PrimaryAssetIdManagementMap, false, EAssetRegistryDependencyType::None);
+		AssetRegistry.SetManageReferences(PrimaryAssetIdManagementMap, false, UE::AssetRegistry::EDependencyCategory::None, ExistingManagedNodes);
 	}
 
 	UProjectPackagingSettings* ProjectPackagingSettings = GetMutableDefault<UProjectPackagingSettings>();
@@ -3353,6 +3353,37 @@ void UAssetManager::ModifyCook(TArray<FName>& PackagesToCook, TArray<FName>& Pac
 	}
 }
 
+void UAssetManager::ModifyDLCCook(const FString& DLCName, TArray<FName>& PackagesToCook, TArray<FName>& PackagesToNeverCook)
+{
+	UE_LOG(LogAssetManager, Display, TEXT("ModifyDLCCook: Scanning Plugin Directory %s for assets, and adding them to the cook list"), *DLCName);
+	FString DLCPath;
+	FString ExternalMountPointName;
+	if (TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(DLCName))
+	{
+		DLCPath = Plugin->GetContentDir();
+		ExternalMountPointName = Plugin->GetMountedAssetPath();
+	}
+	else
+	{
+		DLCPath = FPaths::ProjectPluginsDir() / DLCName / TEXT("Content");
+		ExternalMountPointName = FString::Printf(TEXT("/%s/"), *DLCName);
+	}
+
+	TArray<FString> Files;
+	IFileManager::Get().FindFilesRecursive(Files, *DLCPath, *(FString(TEXT("*")) + FPackageName::GetAssetPackageExtension()), true, false, false);
+	IFileManager::Get().FindFilesRecursive(Files, *DLCPath, *(FString(TEXT("*")) + FPackageName::GetMapPackageExtension()), true, false, false);
+	for (const FString& CurrentFile : Files)
+	{
+		const FString StdFile = FPaths::CreateStandardFilename(CurrentFile);
+		PackagesToCook.AddUnique(FName(StdFile));
+		FString LongPackageName;
+		if (!FPackageName::IsValidLongPackageName(StdFile) && !FPackageName::TryConvertFilenameToLongPackageName(StdFile, LongPackageName))
+		{
+			FPackageName::RegisterMountPoint(ExternalMountPointName, DLCPath);
+		}
+	}
+}
+
 bool UAssetManager::ShouldCookForPlatform(const UPackage* Package, const ITargetPlatform* TargetPlatform)
 {
 	return true;
@@ -3360,6 +3391,7 @@ bool UAssetManager::ShouldCookForPlatform(const UPackage* Package, const ITarget
 
 EPrimaryAssetCookRule UAssetManager::GetPackageCookRule(FName PackageName) const
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(UAssetManager::GetPackageCookRule);
 	FPrimaryAssetRules BestRules;
 	FPrimaryAssetId BestId;
 	TSet<FPrimaryAssetId> Managers;

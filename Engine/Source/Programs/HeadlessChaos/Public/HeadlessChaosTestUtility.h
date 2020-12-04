@@ -16,16 +16,55 @@
 #include "Chaos/UniformGrid.h"
 #include "Chaos/Utilities.h"
 #include "Chaos/ParticleHandleFwd.h"
+#include "Chaos/PBDRigidsEvolutionFwd.h"
+#include "Chaos/EvolutionTraits.h"
 
 namespace Chaos
 {
-	class FPBDRigidsEvolutionGBF;
 	template <typename T, int d> class TPBDRigidsSOAs;
 }
 
 namespace ChaosTest {
 	
 	using namespace Chaos;
+
+	template <typename... T>
+	struct TTypesWithoutVoid
+	{
+		using Types = ::testing::Types<T...>;
+	};
+
+	template <typename... T>
+	struct TTypesWithoutVoid<void,T...>
+	{
+		using Types = ::testing::Types<T...>;
+	};
+
+	//should be TAllEvolutions, but used in macros and logs and this makes it more readable
+	template <typename T>
+	class AllEvolutions : public ::testing::Test {};
+
+#define EVOLUTION_TRAIT(Trait) ,TPBDRigidsEvolutionGBF<Trait>
+	using AllEvolutionTypesTmp = TTypesWithoutVoid <
+		void
+#include "Chaos/EvolutionTraits.inl"
+	>;
+	using AllEvolutionTypes = AllEvolutionTypesTmp::Types;
+#undef EVOLUTION_TRAIT
+	TYPED_TEST_SUITE(AllEvolutions,AllEvolutionTypes);
+
+	//should be TAllTraits, but used in macros and logs and this makes it more readable
+	template <typename T>
+	class AllTraits : public ::testing::Test {};
+
+#define EVOLUTION_TRAIT(Trait) ,Trait
+	using AllTraitsTypesTmp = TTypesWithoutVoid <
+		void
+#include "Chaos/EvolutionTraits.inl"
+	>;
+	using AllTraitsTypes = AllTraitsTypesTmp::Types;
+#undef EVOLUTION_TRAIT
+	TYPED_TEST_SUITE(AllTraits,AllTraitsTypes);
 
 	MATCHER_P2(VectorNear, V, Tolerance, "") { return arg.Equals(V, Tolerance); }
 
@@ -44,25 +83,20 @@ namespace ChaosTest {
 	/**/
 	template<class T>
 	int32 AppendAnalyticSphere(TPBDRigidParticles<T, 3> & InParticles, T Scale = (T)1);
-	template<class T>
-	TPBDRigidParticleHandle<T, 3>* AppendAnalyticSphere2(FPBDRigidsEvolutionGBF& Evolution, T Scale = (T)1);
 
 	/**/
 	template<class T>
 	int32 AppendAnalyticBox(TPBDRigidParticles<T, 3>& InParticles, TVector<T, 3> Scale = TVector<T, 3>(1));
-	template<class T>
-	TKinematicGeometryParticleHandle<T, 3>* AppendKinematicAnalyticBox2(FPBDRigidsEvolutionGBF& Evolution, TVector<T, 3> Scale = TVector<T, 3>(1));
-	template<class T>
-	TPBDRigidParticleHandle<T, 3>* AppendDynamicAnalyticBox2(FPBDRigidsEvolutionGBF& Evolution, TVector<T, 3> Scale = TVector<T, 3>(1));
 
 	/**/
 	template<class T>
 	int32 AppendParticleBox(TPBDRigidParticles<T, 3>& InParticles, TVector<T, 3> Scale = TVector<T, 3>(1), TArray<TVector<int32, 3>>* OutElements = nullptr);
-	template<class T>
-	TPBDRigidParticleHandle<T, 3>* AppendDynamicParticleBox(FPBDRigidsEvolutionGBF& Evolution, const TVector<T, 3>& Scale = TVector<T, 3>(1), TArray<TVector<int32, 3>>* OutElements = nullptr);
 
 	template<class T>
 	TPBDRigidParticleHandle<T, 3>* AppendDynamicParticleBox(TPBDRigidsSOAs<T, 3>& SOAs, const TVector<T, 3>& Scale = TVector<T, 3>(1), TArray<TVector<int32, 3>>* OutElements = nullptr);
+
+	template<class T>
+	TPBDRigidParticleHandle<T, 3>* AppendDynamicParticleBoxMargin(TPBDRigidsSOAs<T, 3>& SOAs, const TVector<T, 3>& Scale, FReal Margin, TArray<TVector<int32, 3>>* OutElements = nullptr);
 
 	template<class T>
 	TPBDRigidParticleHandle<T, 3>* AppendDynamicParticleSphere(TPBDRigidsSOAs<T, 3>& SOAs, const TVector<T, 3>& Scale = TVector<T, 3>(1), TArray<TVector<int32, 3>>* OutElements = nullptr);
@@ -77,16 +111,11 @@ namespace ChaosTest {
 	TGeometryParticleHandle<T, 3>* AppendStaticParticleBox(TPBDRigidsSOAs<T, 3>& SOAs, const TVector<T, 3>& Scale = TVector<T, 3>(1), TArray<TVector<int32, 3>>* OutElements = nullptr);
 
 	template<class T>
-	TPBDRigidParticleHandle<T, 3>* AppendClusteredParticleBox(FPBDRigidsEvolutionGBF& Evolution, const TVector<T, 3>& Scale = TVector<T, 3>(1), TArray<TVector<int32, 3>>* OutElements = nullptr);
-
-	template<class T>
 	TPBDRigidParticleHandle<T, 3>* AppendClusteredParticleBox(TPBDRigidsSOAs<T, 3>& SOAs, const TVector<T, 3>& Scale = TVector<T, 3>(1), TArray<TVector<int32, 3>>* OutElements = nullptr);
 		
 	/**/
 	template<class T>
 	int32 AppendStaticAnalyticFloor(TPBDRigidParticles<T, 3>& InParticles);
-	template<class T>
-	TKinematicGeometryParticleHandle<T, 3>* AppendStaticAnalyticFloor(FPBDRigidsEvolutionGBF& Evolution);
 
 	template<class T>
 	TKinematicGeometryParticleHandle<T, 3>* AppendStaticAnalyticFloor(TPBDRigidsSOAs<T, 3>& SOAs);
@@ -100,10 +129,13 @@ namespace ChaosTest {
 
 	/**/
 	template<class T>
-	void AppendDynamicParticleConvexBox(TPBDRigidParticleHandle<T, 3> & InParticles, const TVector<T, 3>& Scale);
+	void AppendDynamicParticleConvexBox(TPBDRigidParticleHandle<T, 3> & InParticles, const TVector<T, 3>& Scale, FReal Margin);
 	
 	template<class T>
 	TPBDRigidParticleHandle<T, 3>* AppendDynamicParticleConvexBox(TPBDRigidsSOAs<T, 3>& SOAs, const TVector<T, 3>& Scale = TVector<T, 3>(1));
+
+	template<class T>
+	TPBDRigidParticleHandle<T, 3>* AppendDynamicParticleConvexBoxMargin(TPBDRigidsSOAs<T, 3>& SOAs, const TVector<T, 3>& Scale, FReal Margin);
 
 	/**/
 	template<class T>
@@ -168,5 +200,24 @@ namespace ChaosTest {
 	void SetParticleSimDataToCollide(TArray< Chaos::TGeometryParticle<float, 3>* > ParticleArray);
 	void SetParticleSimDataToCollide(TArray< Chaos::TGeometryParticleHandle<float, 3>* > ParticleArray);
 
-	
+
+	/**
+	 * Set settings on Evolution to those used by the tests
+	 */
+	template<typename T_Evolution>
+	void InitEvolutionSettings(T_Evolution& Evolution)
+	{
+		// Settings used for unit tests
+		const float CullDistance = 0.0f;
+		Evolution.GetCollisionConstraints().SetCullDistance(CullDistance);
+		Evolution.GetBroadPhase().SetCullDistance(CullDistance);
+		Evolution.GetBroadPhase().SetBoundsThickness(CullDistance);
+	}
+
+	template<typename T_SOLVER>
+	void InitSolverSettings(T_SOLVER& Solver)
+	{
+		InitEvolutionSettings(*Solver->GetEvolution());
+	}
+
 }

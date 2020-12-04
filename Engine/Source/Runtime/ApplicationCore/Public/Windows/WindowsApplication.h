@@ -378,6 +378,7 @@ public:
 
 	virtual void AddExternalInputDevice(TSharedPtr<class IInputDevice> InputDevice);
 
+	virtual void FinishedInputThisFrame() override;
 public:
 
 	// IInputInterface overrides

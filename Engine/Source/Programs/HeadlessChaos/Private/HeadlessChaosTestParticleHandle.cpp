@@ -135,6 +135,23 @@ namespace ChaosTest {
 		}
 	}
 
+	template <typename TPBDRigid>
+	void ParticleHandleTestHelperObjectState(TPBDRigid* PBDRigid);
+
+	template <>
+	void ParticleHandleTestHelperObjectState<TPBDRigidParticle<float, 3>>(TPBDRigidParticle<float, 3>* PBDRigid)
+	{
+		PBDRigid->SetObjectState(EObjectStateType::Dynamic);
+		EXPECT_EQ(PBDRigid->ObjectState(), EObjectStateType::Dynamic);
+	}
+
+	template <>
+	void ParticleHandleTestHelperObjectState<TPBDRigidParticleHandleImp<float, 3, true>>(TPBDRigidParticleHandleImp<float, 3, true>* PBDRigid)
+	{
+		PBDRigid->SetObjectStateLowLevel(EObjectStateType::Dynamic);
+		EXPECT_EQ(PBDRigid->ObjectState(), EObjectStateType::Dynamic);
+	}
+
 	template void ParticleIteratorTest<float>();
 
 	template <typename T, typename TGeometry, typename TKinematicGeometry, typename TPBDRigid>
@@ -172,23 +189,6 @@ namespace ChaosTest {
 
 		//more polymorphism
 		ParticleHandleTestHelperObjectState(PBDRigid);
-	}
-
-	template <typename TPBDRigid>
-	void ParticleHandleTestHelperObjectState(TPBDRigid* PBDRigid);
-
-	template <>
-	void ParticleHandleTestHelperObjectState<TPBDRigidParticle<float,3>>(TPBDRigidParticle<float,3>* PBDRigid)
-	{
-		PBDRigid->SetObjectState(EObjectStateType::Dynamic);
-		EXPECT_EQ(PBDRigid->ObjectState(), EObjectStateType::Dynamic);
-	}
-
-	template <>
-	void ParticleHandleTestHelperObjectState<TPBDRigidParticleHandleImp<float,3,true>>(TPBDRigidParticleHandleImp<float,3,true>* PBDRigid)
-	{
-		PBDRigid->SetObjectStateLowLevel(EObjectStateType::Dynamic);
-		EXPECT_EQ(PBDRigid->ObjectState(), EObjectStateType::Dynamic);
 	}
 
 	template <typename T>
@@ -338,6 +338,23 @@ namespace ChaosTest {
 			}
 			*/
 		}
+	}
+
+	GTEST_TEST(WeakParticleHandle,BasicTest)
+	{
+		FWeakParticleHandle WeakHandle;
+		{
+			TPBDRigidsSOAs<FReal,3> SOAs;
+			SOAs.CreateStaticParticles(1);
+			for(auto& Particle : SOAs.GetAllParticlesView())
+			{
+				WeakHandle = Particle.WeakParticleHandle();
+				EXPECT_EQ(WeakHandle.GetHandleUnsafe(),Particle.Handle());
+			}
+		}
+
+		//weak handle properly updated
+		EXPECT_EQ(WeakHandle.GetHandleUnsafe(),nullptr);
 	}
 
 	template<class T>

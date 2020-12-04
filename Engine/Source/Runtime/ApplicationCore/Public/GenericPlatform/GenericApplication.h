@@ -334,6 +334,7 @@ struct FMonitorInfo
 	FString ID;
 	int32 NativeWidth;
 	int32 NativeHeight;
+	FIntPoint MaxResolution = FIntPoint(ForceInitToZero);
 	FPlatformRect DisplayRect;
 	FPlatformRect WorkArea;
 	bool bIsPrimary;
@@ -551,6 +552,7 @@ public:
 
 	virtual bool IsAllowedToRender() const { return true; }
 
+	virtual void FinishedInputThisFrame() {}
 public:
 
 	const TSharedPtr< ICursor > Cursor;

@@ -1137,7 +1137,7 @@ void UAnimMontage::TickAssetPlayer(FAnimTickRecord& Instance, struct FAnimNotify
 				FMarkerTickRecord* MarkerTickRecord = Instance.MarkerTickRecord;
 				FMarkerTickContext& MarkerTickContext = Context.MarkerTickContext;
 
-				if (MarkerTickRecord->IsValid())
+				if (MarkerTickRecord->IsValid(Instance.bLooping))
 				{
 					MarkerTickContext.SetMarkerSyncStartPosition(GetMarkerSyncPositionfromMarkerIndicies(MarkerTickRecord->PreviousMarker.MarkerIndex, MarkerTickRecord->NextMarker.MarkerIndex, PreviousTime));
 
@@ -1282,7 +1282,7 @@ FAnimMontageInstance::FAnimMontageInstance()
 	, NotifyWeight(0.f)
 	, DeltaMoved(0.f)
 	, PreviousPosition(0.f)
-	, SyncGroupIndex(INDEX_NONE)
+	, SyncGroupName(NAME_None)
 	, DisableRootMotionCount(0)
 	, MontageSyncLeader(NULL)
 	, MontageSyncUpdateFrameCounter(INDEX_NONE)
@@ -1304,7 +1304,7 @@ FAnimMontageInstance::FAnimMontageInstance(UAnimInstance * InAnimInstance)
 	, NotifyWeight(0.f)
 	, DeltaMoved(0.f)
 	, PreviousPosition(0.f)
-	, SyncGroupIndex(INDEX_NONE)
+	, SyncGroupName(NAME_None)
 	, DisableRootMotionCount(0)
 	, MontageSyncLeader(NULL)
 	, MontageSyncUpdateFrameCounter(INDEX_NONE)
@@ -1421,7 +1421,7 @@ void FAnimMontageInstance::Initialize(class UAnimMontage * InMontage)
 
 		if (AnimInstance.IsValid() && Montage->CanUseMarkerSync())
 		{
-			SyncGroupIndex = AnimInstance.Get()->GetSyncGroupIndexFromName(Montage->SyncGroup);
+			SyncGroupName = Montage->SyncGroup;
 		}
 
 		MontageSubStepper.Initialize(*this);
@@ -2866,7 +2866,7 @@ UAnimMontage* UAnimMontage::CreateSlotAnimationAsDynamicMontage(UAnimSequenceBas
 bool FAnimMontageInstance::CanUseMarkerSync() const
 {
 	// for now we only allow non-full weight and when blending out
-	return SyncGroupIndex != INDEX_NONE && IsStopped() && Blend.IsComplete() == false;
+	return SyncGroupName != NAME_None && IsStopped() && Blend.IsComplete() == false;
 }
 
 void UAnimMontage::BakeTimeStretchCurve()
@@ -2879,7 +2879,8 @@ void UAnimMontage::BakeTimeStretchCurve()
 	{
 		if (const FSmartNameMapping* CurveNameMapping = MySkeleton->GetSmartNameContainer(USkeleton::AnimCurveMappingName))
 		{
-			if (const USkeleton::AnimCurveUID CurveUID = CurveNameMapping->FindUID(TimeStretchCurveName))
+			const USkeleton::AnimCurveUID CurveUID = CurveNameMapping->FindUID(TimeStretchCurveName);
+			if (CurveUID != SmartName::MaxUID)
 			{
 				TimeStretchFloatCurve = (FFloatCurve*)(GetCurveData().GetCurveData(CurveUID));
 			}

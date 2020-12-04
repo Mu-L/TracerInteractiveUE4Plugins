@@ -352,6 +352,8 @@ namespace UnrealBuildTool
 			ConfigHierarchy Ini = ConfigCache.ReadHierarchy(ConfigHierarchyType.Engine, DirectoryReference.FromFile(ProjectFile), UnrealTargetPlatform.Android);
 			Arches = new List<string>();
 			bool bBuild = true;
+			bool bUnsupportedBinaryBuildArch = false;
+
 			if (Ini.GetBool("/Script/AndroidRuntimeSettings.AndroidRuntimeSettings", "bBuildForArmV7", out bBuild) && bBuild
 				|| (AdditionalArches != null && (AdditionalArches.Contains("armv7", StringComparer.OrdinalIgnoreCase) || AdditionalArches.Contains("-armv7", StringComparer.OrdinalIgnoreCase))))
 			{
@@ -367,6 +369,7 @@ namespace UnrealBuildTool
 			{
 				if (File.Exists(Path.Combine(UnrealBuildTool.EngineDirectory.FullName, "Build", "InstalledBuild.txt")))
 				{
+					bUnsupportedBinaryBuildArch = true;
 					Log.TraceWarningOnce("Please install source to build for x86 (-x86); ignoring this architecture target.");
 				}
 				else
@@ -379,6 +382,7 @@ namespace UnrealBuildTool
 			{
 				if (File.Exists(Path.Combine(UnrealBuildTool.EngineDirectory.FullName, "Build", "InstalledBuild.txt")))
 				{
+					bUnsupportedBinaryBuildArch = true;
 					Log.TraceWarningOnce("Please install source to build for x86_64 (-x64); ignoring this architecture target.");
 				}
 				else
@@ -390,7 +394,14 @@ namespace UnrealBuildTool
 			// force armv7 if something went wrong
 			if (Arches.Count == 0)
 			{
-				Arches.Add("-armv7");
+				if (bUnsupportedBinaryBuildArch)
+				{
+					throw new BuildException("Only architectures unsupported by binary-only engine selected.");
+				}
+				else
+				{
+					Arches.Add("-armv7");
+				}
 			}
 
 			// For android just set the GPUArchitecture to an empty string
@@ -464,7 +475,7 @@ namespace UnrealBuildTool
 			return GPUArchitectures;
 		}
 
-		public int GetNdkApiLevelInt(int MinNdk = 19)
+		public int GetNdkApiLevelInt(int MinNdk = 21)
 		{
 			string NDKVersion = GetNdkApiLevel();
 			int NDKVersionInt = MinNdk;
@@ -774,7 +785,6 @@ namespace UnrealBuildTool
 			{
 				Result += " -funwind-tables";           // Just generates any needed static data, affects no code
 				Result += " -fstack-protector-strong";  // Emits extra code to check for buffer overflows
-				Result += " -fstrict-aliasing";
 				Result += " -fPIC";                     // Generates position-independent code (PIC) suitable for use in a shared library
 				Result += " -fno-omit-frame-pointer";
 				Result += " -fno-strict-aliasing";
@@ -793,7 +803,6 @@ namespace UnrealBuildTool
 			{
 				Result += " -funwind-tables";           // Just generates any needed static data, affects no code
 				Result += " -fstack-protector-strong";  // Emits extra code to check for buffer overflows
-				Result += " -fstrict-aliasing";
 				Result += " -fPIC";                     // Generates position-independent code (PIC) suitable for use in a shared library
 				Result += " -fno-omit-frame-pointer";
 				Result += " -fno-strict-aliasing";
@@ -872,9 +881,9 @@ namespace UnrealBuildTool
 			Result += " -shared";
 			Result += " -Wl,-Bsymbolic";
 			Result += " -Wl,--no-undefined";
-			if (bEnableGcSections)
+			if (bEnableGcSections && !DisableFunctionDataSections())
 			{
-				Result += " -Wl,-gc-sections"; // Enable garbage collection of unused input sections. works best with -ffunction-sections, -fdata-sections
+				Result += " -Wl,--gc-sections"; // Enable garbage collection of unused input sections. works best with -ffunction-sections, -fdata-sections
 			}
 
 			if (!LinkEnvironment.bCreateDebugInfo)
@@ -961,8 +970,8 @@ namespace UnrealBuildTool
 				string NDKRoot = Environment.GetEnvironmentVariable("NDKROOT").Replace("\\", "/");
 				if (File.Exists(Path.Combine(NDKRoot, "source.properties")))
 				{
-					LinkEnvironment.AdditionalLibraries.Add(Path.Combine(UnrealBuildTool.EngineDirectory.FullName, "Build/Android/Prebuilt/bsdsignal/lib/armeabi-v7a/libbsdsignal.a"));
-					LinkEnvironment.AdditionalLibraries.Add(Path.Combine(UnrealBuildTool.EngineDirectory.FullName, "Build/Android/Prebuilt/bsdsignal/lib/x86/libbsdsignal.a"));
+					LinkEnvironment.Libraries.Add(FileReference.Combine(UnrealBuildTool.EngineDirectory, "Build/Android/Prebuilt/bsdsignal/lib/armeabi-v7a/libbsdsignal.a"));
+					LinkEnvironment.Libraries.Add(FileReference.Combine(UnrealBuildTool.EngineDirectory, "Build/Android/Prebuilt/bsdsignal/lib/x86/libbsdsignal.a"));
 				}
 			}
 		}
@@ -2090,7 +2099,7 @@ namespace UnrealBuildTool
 						List<string> AdditionalLibraries = new List<string>();
 
 						// Add the library paths to the additional path list
-						foreach (DirectoryReference LibraryPath in LinkEnvironment.LibraryPaths)
+						foreach (DirectoryReference LibraryPath in LinkEnvironment.SystemLibraryPaths)
 						{
 							// LinkerPaths could be relative or absolute
 							string AbsoluteLibraryPath = Utils.ExpandVariables(LibraryPath.FullName);
@@ -2110,39 +2119,42 @@ namespace UnrealBuildTool
 						}
 
 						// discover additional libraries and their paths
-						foreach (string AdditionalLibrary in LinkEnvironment.AdditionalLibraries)
+						foreach (string SystemLibrary in LinkEnvironment.SystemLibraries)
 						{
-							if (!ShouldSkipLib(AdditionalLibrary, Arch, GPUArchitecture))
+							if (!ShouldSkipLib(SystemLibrary, Arch, GPUArchitecture))
 							{
-								if (String.IsNullOrEmpty(Path.GetDirectoryName(AdditionalLibrary)))
+								if (String.IsNullOrEmpty(Path.GetDirectoryName(SystemLibrary)))
 								{
-									if (AdditionalLibrary.StartsWith("lib"))
+									if (SystemLibrary.StartsWith("lib"))
 									{
-										AdditionalLibraries.Add(AdditionalLibrary);
+										AdditionalLibraries.Add(SystemLibrary);
 									}
 									else
 									{
-										AdditionalLibraries.Add("lib" + AdditionalLibrary);
+										AdditionalLibraries.Add("lib" + SystemLibrary);
+									}
+								}
+							}
+						}
+						foreach (FileReference Library in LinkEnvironment.Libraries)
+						{
+							if (!ShouldSkipLib(Library.FullName, Arch, GPUArchitecture))
+							{
+								string AbsoluteLibraryPath = Path.GetDirectoryName(Library.FullName);
+								LinkAction.PrerequisiteItems.Add(FileItem.GetItemByFileReference(Library));
+
+								string Lib = Path.GetFileNameWithoutExtension(Library.FullName);
+								if (Lib.StartsWith("lib"))
+								{
+									AdditionalLibraries.Add(Lib);
+									if (!AdditionalLibraryPaths.Contains(AbsoluteLibraryPath))
+									{
+										AdditionalLibraryPaths.Add(AbsoluteLibraryPath);
 									}
 								}
 								else
 								{
-									string AbsoluteLibraryPath = Path.GetDirectoryName(Path.GetFullPath(AdditionalLibrary));
-									LinkAction.PrerequisiteItems.Add(FileItem.GetItemByPath(AdditionalLibrary));
-
-									string Lib = Path.GetFileNameWithoutExtension(AdditionalLibrary);
-									if (Lib.StartsWith("lib"))
-									{
-										AdditionalLibraries.Add(Lib);
-										if (!AdditionalLibraryPaths.Contains(AbsoluteLibraryPath))
-										{
-											AdditionalLibraryPaths.Add(AbsoluteLibraryPath);
-										}
-									}
-									else
-									{
-										AdditionalLibraries.Add(AbsoluteLibraryPath);
-									}
+									AdditionalLibraries.Add(AbsoluteLibraryPath);
 								}
 							}
 						}
@@ -2203,6 +2215,8 @@ namespace UnrealBuildTool
 					{
 						SetupActionToExecuteCompilerThroughShell(ref LinkAction, LinkAction.CommandPath.FullName, LinkAction.CommandArguments, "Link");
 					}
+
+					//Log.TraceInformation("Link: {0} {1}", LinkAction.CommandPath.FullName, LinkAction.CommandArguments);
 
 					// Windows can run into an issue with too long of a commandline when clang tries to call ld to link.
 					// To work around this we call clang to just get the command it would execute and generate a
@@ -2276,11 +2290,11 @@ namespace UnrealBuildTool
 			{
 				ObjectFileDirectories.Add(InputFile.Location.Directory);
 			}
-			foreach (string AdditionalLibrary in LinkEnvironment.AdditionalLibraries.Where(x => Path.IsPathRooted(x)))
+			foreach (FileReference Library in LinkEnvironment.Libraries)
 			{
-				ObjectFileDirectories.Add(new FileReference(AdditionalLibrary).Directory);
+				ObjectFileDirectories.Add(Library.Directory);
 			}
-			foreach (DirectoryReference LibraryPath in LinkEnvironment.LibraryPaths)
+			foreach (DirectoryReference LibraryPath in LinkEnvironment.SystemLibraryPaths)
 			{
 				ObjectFileDirectories.Add(LibraryPath);
 			}

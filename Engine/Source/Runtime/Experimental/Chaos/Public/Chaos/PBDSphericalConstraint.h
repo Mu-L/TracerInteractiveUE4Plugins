@@ -3,87 +3,259 @@
 
 #include "ParticleRule.h"
 #include "ChaosStats.h"
+#include "Containers/ArrayView.h"
+#include "Containers/ContainersFwd.h"
+#include "Chaos/Framework/Parallel.h"
 
 DECLARE_CYCLE_STAT(TEXT("Chaos PBD Spherical Constraints"), STAT_PBD_Spherical, STATGROUP_Chaos);
+DECLARE_CYCLE_STAT(TEXT("Chaos PBD Spherical Backstop Constraints"), STAT_PBD_SphericalBackstop, STATGROUP_Chaos);
+
+// Support ISPC enable/disable in non-shipping builds
+#if !INTEL_ISPC
+const bool bChaos_Spherical_ISPC_Enabled = false;
+#elif UE_BUILD_SHIPPING
+const bool bChaos_Spherical_ISPC_Enabled = true;
+#else
+extern CHAOS_API bool bChaos_Spherical_ISPC_Enabled;
+#endif
 
 namespace Chaos
 {
-
-template<typename T, int d>
-class PBDSphericalConstraint : public TParticleRule<T, d>
-{
-public:
-	PBDSphericalConstraint(
-		const uint32 InFirstParticleIndex
-		, const uint32 InParticleCount
-		, bool bInside
-		, const TArray<TVector<T, d>>* const InSpherePositions
-		, const TArray<T>* const InSphereRadii
-		, const TArray <T>* const InSphereOffsetDistances = nullptr
-		, const TArray<TVector<T, d>>* const InSphereOffsetDirections = nullptr
-	)
-		: FirstParticleIndex(InFirstParticleIndex), ParticleCount(InParticleCount)
-		, bConstraintInsideOfSphere(bInside)
-		, SpherePositions(InSpherePositions)
-		, SphereRadii(InSphereRadii)
-		, SphereOffsetDistances(InSphereOffsetDistances)
-		, SphereOffsetDirections(InSphereOffsetDirections)
-		, SphereRadiiMultiplier(1.f)
+	template<typename T, int d>
+	class CHAOS_API TPBDSphericalConstraint : public TParticleRule<T, d>
 	{
-		check(SphereRadii);
-		check(SpherePositions);
-	}
-	virtual ~PBDSphericalConstraint() {}
-
-	inline void Apply(TPBDParticles<T, d>& InParticles, const T Dt) const override
-	{
-		SCOPE_CYCLE_COUNTER(STAT_PBD_Spherical);
-		const T CenterDeadZoneRadius = KINDA_SMALL_NUMBER; // We will not push the particle away in the dead zone
-
-		PhysicsParallelFor(ParticleCount, [&](int32 Index)
+	public:
+		TPBDSphericalConstraint(
+			const uint32 InParticleOffset,
+			const uint32 InParticleCount,
+			const TArray<TVector<T, d>>& InAnimationPositions,  // Use global indexation (will need adding ParticleOffset)
+			const TConstArrayView<T>& InSphereRadii  // Use local indexation
+		)
+			: AnimationPositions(InAnimationPositions)
+			, SphereRadii(InSphereRadii)
+			, ParticleOffset(InParticleOffset)
+			, SphereRadiiMultiplier((T)1.)
 		{
-			if (InParticles.InvM(FirstParticleIndex + Index) == 0)
-			{
-				return;
-			}
-			
-			const T Radius = (*SphereRadii)[Index] * SphereRadiiMultiplier;
-			TVector<T, d> Centre = (*SpherePositions)[Index + FirstParticleIndex];
-			if (SphereOffsetDistances && SphereOffsetDirections)
-			{
-				Centre -= (*SphereOffsetDistances)[Index] * (*SphereOffsetDirections)[Index + FirstParticleIndex];
-			}
+			check(InSphereRadii.Num() == InParticleCount);
+		}
+		virtual ~TPBDSphericalConstraint() {}
 
-			const TVector<T, d> CenterToParticle = InParticles.P(FirstParticleIndex + Index) - Centre;
-			const T DistanceSquared = CenterToParticle.SizeSquared();
-			const bool bPushParticleToShpericalBoundery = ((DistanceSquared < Radius * Radius) ^ bConstraintInsideOfSphere) && DistanceSquared > CenterDeadZoneRadius * CenterDeadZoneRadius;
+		inline virtual void Apply(TPBDParticles<T, d>& Particles, const T Dt) const override
+		{
+			SCOPE_CYCLE_COUNTER(STAT_PBD_Spherical);
 
-			if (bPushParticleToShpericalBoundery)
+			if (bChaos_Spherical_ISPC_Enabled)
 			{
-				const T Distance = sqrt(DistanceSquared);
-				const TVector<T, d> PositionOnSphere = (Radius / Distance) * (CenterToParticle);
-				InParticles.P(FirstParticleIndex + Index) = Centre + PositionOnSphere;
+				ApplyHelperISPC(Particles, Dt);
 			}
-		});
-	}
+			else
+			{
+				ApplyHelper(Particles, Dt);
+			}
+		}
 
-	inline void SetSphereRadiiMultiplier(const T InSphereRadiiMultiplier)
+		inline void SetSphereRadiiMultiplier(const T InSphereRadiiMultiplier)
+		{
+			SphereRadiiMultiplier = FMath::Max((T)0., InSphereRadiiMultiplier);
+		}
+
+	private:
+		inline void ApplyHelper(TPBDParticles<T, d>& Particles, const T Dt) const
+		{
+			const int32 ParticleCount = SphereRadii.Num();
+
+			PhysicsParallelFor(ParticleCount, [&](int32 Index)  // TODO: profile need for parallel loop based on particle count
+			{
+				const int32 ParticleIndex = ParticleOffset + Index;
+
+				if (Particles.InvM(ParticleIndex) == 0)
+				{
+					return;
+				}
+
+				const T Radius = SphereRadii[Index] * SphereRadiiMultiplier;
+				const TVector<T, d>& Center = AnimationPositions[ParticleIndex];
+
+				const TVector<T, d> CenterToParticle = Particles.P(ParticleIndex) - Center;
+				const T DistanceSquared = CenterToParticle.SizeSquared();
+
+				static const T DeadZoneSquareRadius = SMALL_NUMBER; // We will not push the particle away in the dead zone
+				if (DistanceSquared > FMath::Square(Radius) + DeadZoneSquareRadius)
+				{
+					const T Distance = sqrt(DistanceSquared);
+					const TVector<T, d> PositionOnSphere = (Radius / Distance) * CenterToParticle;
+					Particles.P(ParticleIndex) = Center + PositionOnSphere;
+				}
+			});
+		}
+
+		void ApplyHelperISPC(TPBDParticles<T, d>& Particles, const T Dt) const;
+
+	protected:
+		const TArray<TVector<T, d>>& AnimationPositions;  // Use global indexation (will need adding ParticleOffset)
+		const TConstArrayView<T> SphereRadii;  // Use local indexation
+		const int32 ParticleOffset;
+		T SphereRadiiMultiplier;
+	};
+
+	template<typename T, int d>
+	class CHAOS_API TPBDSphericalBackstopConstraint : public TParticleRule<T, d>
 	{
-		SphereRadiiMultiplier = InSphereRadiiMultiplier;
-	}
+	public:
+		TPBDSphericalBackstopConstraint(
+			const int32 InParticleOffset,
+			const int32 InParticleCount,
+			const TArray<TVector<T, d>>& InAnimationPositions,  // Use global indexation (will need adding ParticleOffset)
+			const TArray<TVector<T, d>>& InAnimationNormals,  // Use global indexation (will need adding ParticleOffset)
+			const TConstArrayView<T>& InSphereRadii,  // Use local indexation
+			const TConstArrayView<T>& InSphereOffsetDistances,  // Use local indexation
+			const bool bInUseLegacyBackstop  // Do not include the sphere radius in the distance calculations when this is true
+		)
+			: AnimationPositions(InAnimationPositions)
+			, AnimationNormals(InAnimationNormals)
+			, SphereRadii(InSphereRadii)
+			, SphereOffsetDistances(InSphereOffsetDistances)
+			, ParticleOffset(InParticleOffset)
+			, SphereRadiiMultiplier((T)1.)
+			, bUseLegacyBackstop(bInUseLegacyBackstop)
+		{
+			check(InSphereRadii.Num() == InParticleCount);
+			check(InSphereOffsetDistances.Num() == InParticleCount);
+		}
+		virtual ~TPBDSphericalBackstopConstraint() {}
 
-private:	
-	const uint32 FirstParticleIndex; // TODO: Get rid of this member variable (this is specific to a temporary cloth instancing implementation)
-	const uint32 ParticleCount;
-	const bool bConstraintInsideOfSphere; // Should the points be constrained to the inside of their respective spheres or the outsides
+		inline virtual void Apply(TPBDParticles<T, d>& Particles, const T Dt) const override
+		{
+			SCOPE_CYCLE_COUNTER(STAT_PBD_SphericalBackstop);
 
-	const TArray<TVector<T, d>>* const SpherePositions;  // Positions of spheres without adding an offset vector // Start at index FirstParticleIndex
-	const TArray<T>* const SphereRadii; // Start at index 0
+			if (bUseLegacyBackstop)
+			{
+				// SphereOffsetDistances includes the sphere radius
+				// This is harder to author, and does not follow the NvCloth specs.
+				// However, this is how it's been done in the Unreal Engine PhysX cloth implementation.
+				if (bChaos_Spherical_ISPC_Enabled)
+				{
+					ApplyLegacyHelperISPC(Particles, Dt);
+				}
+				else
+				{
+					ApplyLegacyHelper(Particles, Dt);
+				}
+			}
+			else
+			{
+				// SphereOffsetDistances doesn't include the sphere radius
+				if (bChaos_Spherical_ISPC_Enabled)
+				{
+					ApplyHelperISPC(Particles, Dt);
+				}
+				else
+				{
+					ApplyHelper(Particles, Dt);
+				}
+			}
+		}
 
-	const TArray<T>* const SphereOffsetDistances;  // Optional Sphere position offsets // start at index 0
-	const TArray<TVector<T, d>>* const SphereOffsetDirections; //	Optional Sphere offset directions (TBD: This is really implementation specific to backstop constraints, consider creating a specialized constraint instead).
+		inline void SetSphereRadiiMultiplier(const T InSphereRadiiMultiplier)
+		{
+			SphereRadiiMultiplier = FMath::Max((T)0., InSphereRadiiMultiplier);
+		}
 
-	T SphereRadiiMultiplier;
-};
+		inline T GetSphereRadiiMultiplier() const
+		{
+			return SphereRadiiMultiplier;
+		}
 
+		inline bool UseLegacyBackstop() const
+		{
+			return bUseLegacyBackstop;
+		}
+
+	private:
+		inline void ApplyHelper(TPBDParticles<T, d>& Particles, const T Dt) const
+		{
+			const int32 ParticleCount = SphereRadii.Num();
+
+			PhysicsParallelFor(ParticleCount, [&](int32 Index)  // TODO: profile need for parallel loop based on particle count
+			{
+				const int32 ParticleIndex = ParticleOffset + Index;
+
+				if (Particles.InvM(ParticleIndex) == 0)
+				{
+					return;
+				}
+
+				const TVector<T, d>& AnimationPosition = AnimationPositions[Index];
+				const TVector<T, d>& AnimationNormal = AnimationNormals[Index];
+
+				const T SphereOffsetDistance = SphereOffsetDistances[Index];
+				const T Radius = SphereRadii[Index] * SphereRadiiMultiplier;
+
+				const TVector<T, d> Center = AnimationPosition - (Radius + SphereOffsetDistance) * AnimationNormal;  // Non legacy version adds radius to the distance
+				const TVector<T, d> CenterToParticle = Particles.P(ParticleIndex) - Center;
+				const T DistanceSquared = CenterToParticle.SizeSquared();
+
+				static const T DeadZoneSquareRadius = SMALL_NUMBER;
+				if (DistanceSquared < DeadZoneSquareRadius)
+				{
+					Particles.P(ParticleIndex) = AnimationPosition - SphereOffsetDistance * AnimationNormal;  // Non legacy version adds radius to the distance
+				}
+				else if (DistanceSquared < FMath::Square(Radius))
+				{
+					const TVector<T, d> PositionOnSphere = (Radius / sqrt(DistanceSquared)) * CenterToParticle;
+					Particles.P(ParticleIndex) = Center + PositionOnSphere;
+				}
+				// Else the particle is outside the sphere, and there is nothing to do
+			});
+		}
+
+		inline void ApplyLegacyHelper(TPBDParticles<T, d>& Particles, const T Dt) const
+		{
+			const int32 ParticleCount = SphereRadii.Num();
+
+			PhysicsParallelFor(ParticleCount, [&](int32 Index)  // TODO: profile need for parallel loop based on particle count
+			{
+				const int32 ParticleIndex = ParticleOffset + Index;
+
+				if (Particles.InvM(ParticleIndex) == 0)
+				{
+					return;
+				}
+
+				const TVector<T, d>& AnimationPosition = AnimationPositions[Index];
+				const TVector<T, d>& AnimationNormal = AnimationNormals[Index];
+
+				const T SphereOffsetDistance = SphereOffsetDistances[Index];
+				const T Radius = SphereRadii[Index] * SphereRadiiMultiplier;
+
+				const TVector<T, d> Center = AnimationPosition - SphereOffsetDistance * AnimationNormal;  // Legacy version already includes the radius within the distance
+				const TVector<T, d> CenterToParticle = Particles.P(ParticleIndex) - Center;
+				const T DistanceSquared = CenterToParticle.SizeSquared();
+
+				static const T DeadZoneSquareRadius = SMALL_NUMBER;
+				if (DistanceSquared < DeadZoneSquareRadius)
+				{
+					Particles.P(ParticleIndex) = AnimationPosition - (SphereOffsetDistance - Radius) * AnimationNormal;  // Legacy version already includes the radius to the distance
+				}
+				else if (DistanceSquared < FMath::Square(Radius))
+				{
+					const TVector<T, d> PositionOnSphere = (Radius / sqrt(DistanceSquared)) * CenterToParticle;
+					Particles.P(ParticleIndex) = Center + PositionOnSphere;
+				}
+				// Else the particle is outside the sphere, and there is nothing to do
+			});
+		}
+
+		void ApplyLegacyHelperISPC(TPBDParticles<T, d>& Particles, const T Dt) const;
+		void ApplyHelperISPC(TPBDParticles<T, d>& Particles, const T Dt) const;
+
+	private:
+		const TArray<TVector<T, d>>& AnimationPositions;  // Positions of spheres, use global indexation (will need adding ParticleOffset)
+		const TArray<TVector<T, d>>& AnimationNormals; // Sphere offset directions, use global indexation (will need adding ParticleOffset)
+		const TConstArrayView<T> SphereRadii; // Start at index 0, use local indexation
+		const TConstArrayView<T> SphereOffsetDistances;  // Sphere position offsets, use local indexation
+		const int32 ParticleOffset;
+		T SphereRadiiMultiplier;
+		bool bUseLegacyBackstop;
+	};
 }

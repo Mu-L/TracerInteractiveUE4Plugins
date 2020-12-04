@@ -162,7 +162,8 @@ public:
 
 };
 
-enum ESpatialAcceleration
+using SpatialAccelerationType = uint8;	//see ESpatialAcceleration. Projects can add their own custom types by using enum values higher than ESpatialAcceleration::Unknown
+enum class ESpatialAcceleration : SpatialAccelerationType
 {
 	BoundingVolume,
 	AABBTree,
@@ -172,7 +173,11 @@ enum ESpatialAcceleration
 	//For custom types continue the enum after ESpatialAcceleration::Unknown
 };
 
-using SpatialAccelerationType = uint8;	//see ESpatialAcceleration. Projects can add their own custom types by using enum values higher than ESpatialAcceleration::Unknown
+inline bool SpatialAccelerationEqual(ESpatialAcceleration A, SpatialAccelerationType B) { return (SpatialAccelerationType)A == B; }
+inline bool operator==(ESpatialAcceleration A, SpatialAccelerationType B) { return SpatialAccelerationEqual(A,B); }
+inline bool operator==(SpatialAccelerationType A, ESpatialAcceleration B) { return SpatialAccelerationEqual(B,A); }
+inline bool operator!=(ESpatialAcceleration A, SpatialAccelerationType B) { return !SpatialAccelerationEqual(A,B); }
+inline bool operator!=(SpatialAccelerationType A, ESpatialAcceleration B) { return !SpatialAccelerationEqual(B,A); }
 
 template <typename TPayload>
 typename TEnableIf<!TIsPointer<TPayload>::Value, FUniqueIdx>::Type GetUniqueIdx(const TPayload& Payload)
@@ -240,10 +245,14 @@ class CHAOS_API ISpatialAcceleration
 {
 public:
 
-	ISpatialAcceleration(SpatialAccelerationType InType = ESpatialAcceleration::Unknown)
-		: Type(InType), AsyncTimeSlicingComplete(true)
-	{
-	}
+	ISpatialAcceleration(SpatialAccelerationType InType = static_cast<SpatialAccelerationType>(ESpatialAcceleration::Unknown))
+		: Type(InType), SyncTimestamp(0), AsyncTimeSlicingComplete(true)
+	{}
+
+	ISpatialAcceleration(ESpatialAcceleration InType)
+		: ISpatialAcceleration(static_cast<SpatialAccelerationType>(InType))
+	{}
+
 	virtual ~ISpatialAcceleration() = default;
 
 	virtual bool IsAsyncTimeSlicingComplete() { return AsyncTimeSlicingComplete; }
@@ -319,11 +328,24 @@ public:
 		return static_cast<const TConcrete&>(*this);
 	}
 
+	/** This is the time the acceleration structure is synced up with. */
+	int32 GetSyncTimestamp()
+	{
+		return SyncTimestamp;
+	}
+
+	/** Call this whenever updating the acceleration structure for a new sync point */
+	void SetSyncTimestamp(int32 InTimestamp)
+	{
+		SyncTimestamp = InTimestamp;
+	}
+
 protected:
 	virtual void SetAsyncTimeSlicingComplete(bool InState) { AsyncTimeSlicingComplete = InState; }
 
 private:
 	SpatialAccelerationType Type;
+	int32 SyncTimestamp;	//The set of inputs the acceleration structure is in sync with. GT moves forward in time and enqueues inputs
 	bool AsyncTimeSlicingComplete;
 };
 
@@ -396,7 +418,22 @@ public:
 		return nullptr;
 	}
 
+	const TValue* Find(const TKey& Key) const
+	{
+		const int32 Idx = GetUniqueIdx(Key).Idx;
+		if(Idx < Entries.Num() && Entries[Idx].bSet)
+		{
+			return &Entries[Idx].Value;
+		}
+		return nullptr;
+	}
+
 	TValue& FindChecked(const TKey& Key)
+	{
+		return Entries[GetUniqueIdx(Key).Idx].Value;
+	}
+
+	const TValue& FindChecked(const TKey& Key) const
 	{
 		return Entries[GetUniqueIdx(Key).Idx].Value;
 	}

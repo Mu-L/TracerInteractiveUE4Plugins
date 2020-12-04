@@ -26,6 +26,10 @@ class FAssetTypeActions_Base : public IAssetTypeActions
 public:
 
 	// IAssetTypeActions interface
+	virtual FString GetObjectDisplayName(UObject* Object) const override
+	{
+		return Object->GetName();
+	}
 
 	virtual bool HasActions( const TArray<UObject*>& InObjects ) const override
 	{
@@ -68,6 +72,11 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 	virtual bool AssetsActivatedOverride(const TArray<UObject*>& InObjects, EAssetTypeActivationMethod::Type ActivationType) override
 	{
 		return false;
+	}
+
+	virtual TArray<FAssetData> GetValidAssetsForPreviewOrEdit(TArrayView<const FAssetData> InAssetDatas, bool bIsPreview) override
+	{
+		return TArray<FAssetData>(InAssetDatas);
 	}
 
 	virtual bool CanFilter() override
@@ -162,7 +171,7 @@ PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		InFilter.bRecursiveClasses = true;
 	}
 	
-	virtual FText GetDisplayNameFromAssetData(const FAssetData& AssetData) const
+	virtual FText GetDisplayNameFromAssetData(const FAssetData& AssetData) const override
 	{
 		return FText::GetEmpty();
 	}

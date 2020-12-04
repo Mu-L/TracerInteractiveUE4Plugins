@@ -40,6 +40,7 @@
 #include "PhysicsEngine/ConstraintInstance.h"
 #include "PhysicsReplication.h"
 #include "ProfilingDebugging/CsvProfiler.h"
+
 #include "PhysTestSerializer.h"
 
 /** Physics stats **/
@@ -1200,6 +1201,26 @@ void FPhysScene_PhysX::WaitPhysScenes()
 		QUICK_SCOPE_CYCLE_COUNTER(STAT_FPhysScene_WaitPhysScenes);
 		FTaskGraphInterface::Get().WaitUntilTasksComplete(ThingsToComplete, ENamedThreads::GameThread);
 	}
+
+
+}
+
+FGraphEventArray FPhysScene_PhysX::GetCompletionEvents()
+{
+	FGraphEventArray CompletionEvents;
+	CompletionEvents.Add(PhysicsSceneCompletion);
+	return CompletionEvents;
+
+}
+
+bool FPhysScene_PhysX::IsCompletionEventComplete() const
+{
+	if (PhysicsSceneCompletion && !PhysicsSceneCompletion->IsComplete())
+	{
+		return false;
+	}
+
+	return true;
 }
 
 void FPhysScene_PhysX::SceneCompletionTask(ENamedThreads::Type CurrentThread, const FGraphEventRef& MyCompletionGraphEvent)
@@ -1440,7 +1461,7 @@ void FPhysScene_PhysX::DispatchPhysNotifications_AssumesLocked()
 
 }
 
-void FPhysScene_PhysX::SetUpForFrame(const FVector* NewGrav, float InDeltaSeconds, float InMaxPhysicsDeltaTime, float InMaxSubstepDeltaTime, int32 InMaxSubsteps)
+void FPhysScene_PhysX::SetUpForFrame(const FVector* NewGrav, float InDeltaSeconds, float InMaxPhysicsDeltaTime, float InMaxSubstepDeltaTime, int32 InMaxSubsteps, bool bUnused)
 {
 	DeltaSeconds = InDeltaSeconds;
 	MaxPhysicsDeltaTime = InMaxPhysicsDeltaTime;

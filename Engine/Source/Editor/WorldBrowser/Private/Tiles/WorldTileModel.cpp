@@ -229,7 +229,7 @@ bool FWorldTileModel::ShouldBeVisible(FBox EditableArea) const
 	}
 
 	// When this hack is activated level should be visible regardless of current world origin
-	if (LevelCollectionModel.GetWorld()->WorldComposition->bTemporallyDisableOriginTracking)
+	if (LevelCollectionModel.GetWorld()->WorldComposition->bTemporarilyDisableOriginTracking)
 	{
 		return true;
 	}
@@ -337,6 +337,11 @@ bool FWorldTileModel::IsLandscapeBased() const
 
 bool FWorldTileModel::IsTiledLandscapeBased() const
 {
+	return CanReimportHeightmap();
+}
+
+bool FWorldTileModel::CanReimportHeightmap() const
+{
 	if (IsLandscapeBased() && !GetLandscape()->ReimportHeightmapFilePath.IsEmpty())
 	{
 		// Check if single landscape actor resolution matches heightmap file size
@@ -363,6 +368,11 @@ bool FWorldTileModel::IsTiledLandscapeBased() const
 }
 
 bool FWorldTileModel::IsLandscapeProxy() const
+{
+	return IsLandscapeStreamingProxy();
+}
+
+bool FWorldTileModel::IsLandscapeStreamingProxy() const
 {
 	return (Landscape.IsValid() && Landscape.Get()->IsA(ALandscapeStreamingProxy::StaticClass()));
 }

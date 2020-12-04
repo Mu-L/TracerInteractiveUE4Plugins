@@ -5,7 +5,9 @@
 =============================================================================*/
 
 #include "MetalRHIPrivate.h"
-
+#include "MetalShaderTypes.h"
+#include "MetalGraphicsPipelineState.h"
+#include "MetalComputePipelineState.h"
 #include "GlobalShader.h"
 #include "OneColorShader.h"
 #include "RHICommandList.h"
@@ -112,7 +114,14 @@ void FMetalRHICommandContext::RHISetStreamSource(uint32 StreamIndex, FRHIVertexB
 {
 	@autoreleasepool {
 		FMetalVertexBuffer* VertexBuffer = ResourceCast(VertexBufferRHI);
-		Context->GetCurrentState().SetVertexStream(StreamIndex, VertexBuffer ? &VertexBuffer->Buffer : nil, VertexBuffer ? VertexBuffer->Data : nil, Offset, VertexBuffer ? VertexBuffer->GetSize() : 0);
+		
+		FMetalBuffer TheBuffer = nil;
+		if(VertexBuffer && !VertexBuffer->Data)
+		{
+			TheBuffer = VertexBuffer->GetCurrentBuffer();
+		}
+		
+		Context->GetCurrentState().SetVertexStream(StreamIndex, VertexBuffer ? &TheBuffer : nil, VertexBuffer ? VertexBuffer->Data : nil, Offset, VertexBuffer ? VertexBuffer->GetSize() : 0);
 	}
 }
 
@@ -243,7 +252,7 @@ void FMetalRHICommandContext::RHISetScissorRect(bool bEnable,uint32 MinX,uint32 
 	}
 }
 
-void FMetalRHICommandContext::RHISetGraphicsPipelineState(FRHIGraphicsPipelineState* GraphicsState)
+void FMetalRHICommandContext::RHISetGraphicsPipelineState(FRHIGraphicsPipelineState* GraphicsState, bool bApplyAdditionalState)
 {
 	@autoreleasepool {
 		FMetalGraphicsPipelineState* PipelineState = ResourceCast(GraphicsState);
@@ -256,12 +265,15 @@ void FMetalRHICommandContext::RHISetGraphicsPipelineState(FRHIGraphicsPipelineSt
 		RHISetStencilRef(0);
 		RHISetBlendFactor(FLinearColor(1.0f, 1.0f, 1.0f));
 
-		ApplyGlobalUniformBuffers(PipelineState->VertexShader.GetReference());
+		if (bApplyAdditionalState)
+		{
+			ApplyGlobalUniformBuffers(PipelineState->VertexShader.GetReference());
 #if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
-		ApplyGlobalUniformBuffers(PipelineState->HullShader.GetReference());
-		ApplyGlobalUniformBuffers(PipelineState->DomainShader.GetReference());
+			ApplyGlobalUniformBuffers(PipelineState->HullShader.GetReference());
+			ApplyGlobalUniformBuffers(PipelineState->DomainShader.GetReference());
 #endif
-		ApplyGlobalUniformBuffers(PipelineState->PixelShader.GetReference());
+			ApplyGlobalUniformBuffers(PipelineState->PixelShader.GetReference());
+		}
 	}
 }
 
@@ -399,81 +411,6 @@ void FMetalRHICommandContext::RHISetShaderParameter(FRHIComputeShader* ComputeSh
 	}
 }
 
-void FMetalRHICommandContext::RHISetShaderUniformBuffer(FRHIGraphicsShader* ShaderRHI, uint32 BufferIndex, FRHIUniformBuffer* BufferRHI)
-{
-	@autoreleasepool {
-		EMetalShaderStages Stage = EMetalShaderStages::Num;
-		FMetalShaderBindings* Bindings = nullptr;
-		switch (ShaderRHI->GetFrequency())
-		{
-			case SF_Vertex:
-				{
-					FMetalVertexShader* VertexShader = ResourceCast(static_cast<FRHIVertexShader*>(ShaderRHI));
-					Bindings = &VertexShader->Bindings;
-					Stage = EMetalShaderStages::Vertex;
-				}
-				break;
-
-#if PLATFORM_SUPPORTS_TESSELLATION_SHADERS
-			case SF_Hull:
-				{
-					FMetalHullShader* HullShader = ResourceCast(static_cast<FRHIHullShader*>(ShaderRHI));
-					Bindings = &HullShader->Bindings;
-					Stage = EMetalShaderStages::Hull;
-				}
-				break;
-
-			case SF_Domain:
-				{
-					FMetalDomainShader* DomainShader = ResourceCast(static_cast<FRHIDomainShader*>(ShaderRHI));
-					Bindings = &DomainShader->Bindings;
-					Stage = EMetalShaderStages::Domain;
-				}
-				break;
-
-#endif // PLATFORM_SUPPORTS_TESSELLATION_SHADERS
-			case SF_Pixel:
-				{
-					FMetalPixelShader* PixelShader = ResourceCast(static_cast<FRHIPixelShader*>(ShaderRHI));
-					Bindings = &PixelShader->Bindings;
-					Stage = EMetalShaderStages::Pixel;
-				}
-				break;
-
-			default:
-				checkf(0, TEXT("FRHIShader Type %d is invalid or unsupported!"), (int32)ShaderRHI->GetFrequency());
-				NOT_SUPPORTED("RHIShaderStage");
-				break;
-		}
-
-		Context->GetCurrentState().BindUniformBuffer(Stage, BufferIndex, BufferRHI);
-
-		check(BufferIndex < Bindings->NumUniformBuffers);
-		if ((Bindings->ConstantBuffers) & 1 << BufferIndex)
-		{
-			auto* UB = (FMetalUniformBuffer*)BufferRHI;
-			Context->GetCurrentState().SetShaderBuffer(Stage, UB->Buffer, UB->Data, 0, UB->GetSize(), BufferIndex, mtlpp::ResourceUsage::Read);
-		}
-	}
-}
-
-void FMetalRHICommandContext::RHISetShaderUniformBuffer(FRHIComputeShader* ComputeShaderRHI, uint32 BufferIndex, FRHIUniformBuffer* BufferRHI)
-{
-	@autoreleasepool {
-		FMetalComputeShader* ComputeShader = ResourceCast(ComputeShaderRHI);
-		Context->GetCurrentState().BindUniformBuffer(EMetalShaderStages::Compute, BufferIndex, BufferRHI);
-
-		auto& Bindings = ComputeShader->Bindings;
-		check(BufferIndex < Bindings.NumUniformBuffers);
-		if ((Bindings.ConstantBuffers) & 1 << BufferIndex)
-		{
-			auto* UB = (FMetalUniformBuffer*)BufferRHI;
-			Context->GetCurrentState().SetShaderBuffer(EMetalShaderStages::Compute, UB->Buffer, UB->Data, 0, UB->GetSize(), BufferIndex, mtlpp::ResourceUsage::Read);
-		}
-	}
-}
-
-
 void FMetalRHICommandContext::RHISetStencilRef(uint32 StencilRef)
 {
 	Context->GetCurrentState().SetStencilRef(StencilRef);
@@ -484,7 +421,7 @@ void FMetalRHICommandContext::RHISetBlendFactor(const FLinearColor& BlendFactor)
 	Context->GetCurrentState().SetBlendFactor(BlendFactor);
 }
 
-void FMetalRHICommandContext::RHISetRenderTargets(uint32 NumSimultaneousRenderTargets, const FRHIRenderTargetView* NewRenderTargets,
+void FMetalRHICommandContext::SetRenderTargets(uint32 NumSimultaneousRenderTargets, const FRHIRenderTargetView* NewRenderTargets,
 	const FRHIDepthRenderTargetView* NewDepthStencilTargetRHI)
 {
 	@autoreleasepool {
@@ -500,11 +437,11 @@ void FMetalRHICommandContext::RHISetRenderTargets(uint32 NumSimultaneousRenderTa
 	}
 
 	FRHISetRenderTargetsInfo Info(NumSimultaneousRenderTargets, NewRenderTargets, DepthView);
-	RHISetRenderTargetsAndClear(Info);
+	SetRenderTargetsAndClear(Info);
 	}
 }
 
-void FMetalRHICommandContext::RHISetRenderTargetsAndClear(const FRHISetRenderTargetsInfo& RenderTargetsInfo)
+void FMetalRHICommandContext::SetRenderTargetsAndClear(const FRHISetRenderTargetsInfo& RenderTargetsInfo)
 {
 	@autoreleasepool {
 		
@@ -611,7 +548,7 @@ void FMetalRHICommandContext::RHIDrawIndexedPrimitive(FRHIIndexBuffer* IndexBuff
 	RHI_DRAW_CALL_STATS(PrimitiveType,FMath::Max(NumInstances,1u)*NumPrimitives);
 
 	FMetalIndexBuffer* IndexBuffer = ResourceCast(IndexBufferRHI);
-	Context->DrawIndexedPrimitive(IndexBuffer->Buffer, IndexBuffer->GetStride(), IndexBuffer->IndexType, PrimitiveType, BaseVertexIndex, FirstInstance, NumVertices, StartIndex, NumPrimitives, NumInstances);
+	Context->DrawIndexedPrimitive(IndexBuffer->GetCurrentBuffer(), IndexBuffer->GetStride(), IndexBuffer->IndexType, PrimitiveType, BaseVertexIndex, FirstInstance, NumVertices, StartIndex, NumPrimitives, NumInstances);
 	}
 }
 
@@ -756,17 +693,8 @@ void FMetalDynamicRHI::RHIBlockUntilGPUIdle()
 
 uint32 FMetalDynamicRHI::RHIGetGPUFrameCycles(uint32 GPUIndex)
 {
+	check(GPUIndex == 0);
 	return GGPUFrameTime;
-}
-
-void FMetalRHICommandContext::RHIAutomaticCacheFlushAfterComputeShader(bool bEnable)
-{
-	METAL_IGNORED(FMetalRHICommandContextRHIAutomaticCacheFlushAfterComputeShader);
-}
-
-void FMetalRHICommandContext::RHIFlushComputeShaderCache()
-{
-	METAL_IGNORED(FMetalRHICommandContextRHIFlushComputeShaderCache);
 }
 
 void FMetalDynamicRHI::RHIExecuteCommandList(FRHICommandList* RHICmdList)

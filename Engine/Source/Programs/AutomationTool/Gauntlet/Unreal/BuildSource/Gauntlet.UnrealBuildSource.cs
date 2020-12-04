@@ -274,11 +274,11 @@ namespace Gauntlet
 			}
 
 			// Editor?
-			IBuild EditorBuild = CreateEditorBuild(UnrealPath);
+			List<EditorBuild> EditorBuilds = CreateEditorBuilds(UnrealPath);
 
-			if (EditorBuild != null)
+			if (EditorBuilds.Count > 0)
 			{
-				BuildList.Add(EditorBuild);
+				BuildList.AddRange(EditorBuilds);
 			}
 			else
 			{
@@ -395,6 +395,7 @@ namespace Gauntlet
 			Config.Platform = Role.Platform;
 			Config.Configuration = Role.Configuration;
 			Config.CommandLine = "";
+			Config.CommandLineParams = Role.CommandLineParams;
             Config.FilesToCopy = new List<UnrealFileToCopy>();
 
 			// new system of retrieving and encapsulating the info needed to install/launch. Android & Mac
@@ -416,7 +417,7 @@ namespace Gauntlet
 
 			if (string.IsNullOrEmpty(Role.CommandLine) == false)
 			{
-				Config.CommandLine += " " + Role.CommandLine;
+				Config.CommandLine += Role.CommandLine;
 			}
 
 			// Cleanup the commandline
@@ -431,11 +432,11 @@ namespace Gauntlet
 				// add in -game or -server
 				if (Role.RoleType.IsClient())
 				{
-					Config.CommandLine = "-game " + Config.CommandLine;
+					Config.CommandLineParams.Add("game");
 				}
 				else if (Role.RoleType.IsServer())
 				{
-					Config.CommandLine = "-server " + Config.CommandLine;
+					Config.CommandLineParams.Add("server");
 				}
 
 				string ProjectParam = ProjectPath.FullName;
@@ -445,16 +446,13 @@ namespace Gauntlet
 				{
 					ProjectParam = string.Format("../../../{0}/{0}.uproject", ProjectName);
 				}
-
-				// project must be first
-				Config.CommandLine = String.Format("\"{0}\"", ProjectParam) + " " + Config.CommandLine;
+				Config.CommandLineParams.Project = ProjectParam;
 			}
 
             if (Role.FilesToCopy != null)
             {
                 Config.FilesToCopy = Role.FilesToCopy;
             }
-			
 			return Config;
 		}
 
@@ -469,7 +467,7 @@ namespace Gauntlet
 			// Break down Commandline into individual tokens 
 			Dictionary<string, string> CommandlineTokens = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 			// turn Name(p1,etc) into a collection of Name|(p1,etc) groups
-			MatchCollection Matches = Regex.Matches(InCommandLine, "(?<option>\\-?[\\w\\d.:\\[\\]\\/\\\\]+)(=(?<value>(\"([^\"]*)\")|(\\S+)))?");
+			MatchCollection Matches = Regex.Matches(InCommandLine, "(?<option>\\-?[\\w\\d.:\\[\\]\\/\\\\\\?]+)(=(?<value>(\"([^\"]*)\")|(\\S+)))?");
 
 			foreach (Match M in Matches)
 			{
@@ -543,7 +541,15 @@ namespace Gauntlet
 
 			if (TargetType.UsesEditor())
 			{
-				ExePath = string.Format("Engine/Binaries/{0}/UE4Editor{1}", BuildHostPlatform.Current.Platform, Platform.GetExeExtension(TargetPlatform));
+				string ExeFileName = "UE4Editor";
+				if (TargetConfiguration != UnrealTargetConfiguration.Development)
+				{
+					ExeFileName += string.Format("-{0}-{1}", TargetPlatform.ToString(), TargetConfiguration.ToString());
+				}
+
+				ExeFileName += Platform.GetExeExtension(TargetPlatform);
+
+				ExePath = string.Format("Engine/Binaries/{0}/{1}", BuildHostPlatform.Current.Platform, ExeFileName);
 			}
 			else
 			{
@@ -688,24 +694,26 @@ namespace Gauntlet
 			return PlatformPath;
 		}
 
-		EditorBuild CreateEditorBuild(DirectoryReference InUnrealPath)
+		List<EditorBuild> CreateEditorBuilds(DirectoryReference InUnrealPath)
 		{
+			List<EditorBuild> EditorBuildList = new List<EditorBuild>();
 			if (InUnrealPath == null)
 			{
-				return null;
+				return EditorBuildList;
 			}
 
 			// check for the editor
-			string EditorExe = Path.Combine(InUnrealPath.FullName, GetRelativeExecutablePath(UnrealTargetRole.Editor, BuildHostPlatform.Current.Platform, UnrealTargetConfiguration.Development));
-
-			if (!Utils.SystemHelpers.ApplicationExists(EditorExe))
+			List<UnrealTargetConfiguration> ConfigsToCheck = new List<UnrealTargetConfiguration>() { UnrealTargetConfiguration.Development, UnrealTargetConfiguration.DebugGame, UnrealTargetConfiguration.Debug };
+			foreach (UnrealTargetConfiguration Config in ConfigsToCheck)
 			{
-				return null;
+				string EditorExe = Path.Combine(InUnrealPath.FullName, GetRelativeExecutablePath(UnrealTargetRole.Editor, BuildHostPlatform.Current.Platform, Config));
+				if (Utils.SystemHelpers.ApplicationExists(EditorExe))
+				{
+					EditorBuildList.Add(new EditorBuild(EditorExe, Config));
+				}
 			}
 
-			EditorBuild NewBuild = new EditorBuild(EditorExe);
-
-			return NewBuild;
+			return EditorBuildList;
 		}
 	}
 }

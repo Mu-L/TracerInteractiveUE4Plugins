@@ -470,59 +470,24 @@ PyTypeObject InitializePyWrapperObjectType()
 				}
 			}
 
+			// Deprecated classes emit a warning
+			{
+				FString DeprecationMessage;
+				if (FPyWrapperObjectMetaData::IsClassDeprecated(InSelf, &DeprecationMessage) &&
+					PyUtil::SetPythonWarning(PyExc_DeprecationWarning, InSelf, *FString::Printf(TEXT("Class '%s' is deprecated: %s"), UTF8_TO_TCHAR(Py_TYPE(InSelf)->tp_name), *DeprecationMessage)) == -1
+					)
+				{
+					// -1 from SetPythonWarning means the warning should be an exception
+					return -1;
+				}
+			}
+
+			// Create the instance
 			UClass* ObjClass = FPyWrapperObjectMetaData::GetClass(InSelf);
-			if (ObjClass)
-			{
-				// Deprecated classes emit a warning
-				{
-					FString DeprecationMessage;
-					if (FPyWrapperObjectMetaData::IsClassDeprecated(InSelf, &DeprecationMessage) &&
-						PyUtil::SetPythonWarning(PyExc_DeprecationWarning, InSelf, *FString::Printf(TEXT("Class '%s' is deprecated: %s"), UTF8_TO_TCHAR(Py_TYPE(InSelf)->tp_name), *DeprecationMessage)) == -1
-						)
-					{
-						// -1 from SetPythonWarning means the warning should be an exception
-						return -1;
-					}
-				}
-
-				if (ObjClass == UPackage::StaticClass())
-				{
-					if (ObjectName.IsNone())
-					{
-						PyUtil::SetPythonError(PyExc_Exception, InSelf, TEXT("Name cannot be 'None' when creating a 'Package'"));
-						return -1;
-					}
-				}
-				else if (!ObjectOuter)
-				{
-					PyUtil::SetPythonError(PyExc_Exception, InSelf, *FString::Printf(TEXT("Outer cannot be null when creating a '%s'"), *ObjClass->GetName()));
-					return -1;
-				}
-
-				if (ObjectOuter && !ObjectOuter->IsA(ObjClass->ClassWithin))
-				{
-					PyUtil::SetPythonError(PyExc_TypeError, InSelf, *FString::Printf(TEXT("Outer '%s' was of type '%s' but must be of type '%s'"), *ObjectOuter->GetPathName(), *ObjectOuter->GetClass()->GetName(), *ObjClass->ClassWithin->GetName()));
-					return -1;
-				}
-
-				if (ObjClass->HasAnyClassFlags(CLASS_Abstract))
-				{
-					PyUtil::SetPythonError(PyExc_Exception, InSelf, *FString::Printf(TEXT("Class '%s' is abstract"), UTF8_TO_TCHAR(Py_TYPE(InSelf)->tp_name)));
-					return -1;
-				}
-				
-				InitValue = NewObject<UObject>(ObjectOuter, ObjClass, ObjectName);
-			}
-			else
-			{
-				PyUtil::SetPythonError(PyExc_Exception, InSelf, TEXT("Class is null"));
-				return -1;
-			}
-
-			// Do we have an object instance to wrap?
+			InitValue = PyUtil::NewObject(ObjClass, ObjectOuter, ObjectName, nullptr, *PyUtil::GetErrorContext(InSelf));
 			if (!InitValue)
 			{
-				PyUtil::SetPythonError(PyExc_Exception, InSelf, TEXT("Object instance was null during init"));
+				// PyUtil::NewObject should have set an error state
 				return -1;
 			}
 
@@ -943,6 +908,67 @@ PyTypeObject InitializePyWrapperObjectType()
 
 			Py_RETURN_NONE;
 		}
+
+		static PyObject* CallMethod(FPyWrapperObject* InSelf, PyObject* InArgs, PyObject* InKwds)
+		{
+			if (!FPyWrapperObject::ValidateInternalState(InSelf))
+			{
+				return nullptr;
+			}
+
+			PyObject* PyNameObj = nullptr;
+			PyObject* PyArgsObj = nullptr;
+			PyObject* PyKwargsObj = nullptr;
+
+			static const char* ArgsKwdList[] = { "name", "args", "kwargs", nullptr };
+			if (!PyArg_ParseTupleAndKeywords(InArgs, InKwds, "O|OO:call_method", (char**)ArgsKwdList, &PyNameObj, &PyArgsObj, &PyKwargsObj))
+			{
+				return nullptr;
+			}
+
+			FName Name;
+			if (!PyConversion::Nativize(PyNameObj, Name))
+			{
+				PyUtil::SetPythonError(PyExc_TypeError, InSelf, *FString::Printf(TEXT("Failed to convert 'name' (%s) to 'Name'"), *PyUtil::GetFriendlyTypename(PyNameObj)));
+				return nullptr;
+			}
+
+			// Args must be a tuple
+			if (PyArgsObj && !PyTuple_Check(PyArgsObj))
+			{
+				PyUtil::SetPythonError(PyExc_TypeError, InSelf, *FString::Printf(TEXT("'args' (%s) must be 'tuple'"), *PyUtil::GetFriendlyTypename(PyArgsObj)));
+				return nullptr;
+			}
+
+			// Kwargs must be a dict
+			if (PyKwargsObj && !PyDict_Check(PyKwargsObj))
+			{
+				PyUtil::SetPythonError(PyExc_TypeError, InSelf, *FString::Printf(TEXT("'kwargs' (%s) must be 'dict'"), *PyUtil::GetFriendlyTypename(PyKwargsObj)));
+				return nullptr;
+			}
+
+			// Find the named function we want to call
+			const UFunction* Func = InSelf->ObjectInstance->GetClass()->FindFunctionByName(Name);
+			if (!Func)
+			{
+				PyUtil::SetPythonError(PyExc_Exception, InSelf, *FString::Printf(TEXT("Failed to find function '%s' on '%s'"), *Name.ToString(), *InSelf->ObjectInstance->GetClass()->GetName()));
+				return nullptr;
+			}
+
+			// Args must always be set to a tuple, even if empty, for the parameter validation to work
+			FPyObjectPtr EmptyArgs;
+			if (!PyArgsObj)
+			{
+				EmptyArgs = FPyObjectPtr::StealReference(PyTuple_New(0));
+				PyArgsObj = EmptyArgs;
+			}
+
+			// Build temporary glue for this function and call it
+			const FString PythonFunctionName = PyGenUtil::PythonizeName(Func->GetName(), PyGenUtil::EPythonizeNameCase::Lower);
+			PyGenUtil::FGeneratedWrappedFunction GeneratedWrappedFunction;
+			GeneratedWrappedFunction.SetFunction(Func);
+			return FPyWrapperObject::CallFunction(InSelf, PyArgsObj, PyKwargsObj, GeneratedWrappedFunction, TCHAR_TO_UTF8(*PythonFunctionName));
+		}
 	};
 
 	static PyMethodDef PyMethods[] = {
@@ -964,6 +990,7 @@ PyTypeObject InitializePyWrapperObjectType()
 		{ "get_editor_property", PyCFunctionCast(&FMethods::GetEditorProperty), METH_VARARGS | METH_KEYWORDS, "x.get_editor_property(name) -> object -- get the value of any property visible to the editor" },
 		{ "set_editor_property", PyCFunctionCast(&FMethods::SetEditorProperty), METH_VARARGS | METH_KEYWORDS, "x.set_editor_property(name, value, notify_mode=PropertyAccessChangeNotifyMode.DEFAULT) -> None -- set the value of any property visible to the editor, ensuring that the pre/post change notifications are called" },
 		{ "set_editor_properties", PyCFunctionCast(&FMethods::SetEditorProperties), METH_VARARGS, "x.set_editor_properties(property_info) -> None -- set the value of any properties visible to the editor (from a name->value dict), ensuring that the pre/post change notifications are called" },
+		{ "call_method", PyCFunctionCast(&FMethods::CallMethod), METH_VARARGS | METH_KEYWORDS, "x.call_method(name, args=tuple(), kwargs=dict()) -> object -- call a method on this object via Unreal reflection using the given ordered (tuple) or named (dict) argument data - allows calling methods that don't have Python glue" },
 		{ nullptr, nullptr, 0, nullptr }
 	};
 
@@ -1456,16 +1483,17 @@ public:
 			// Check for a malformed function rather than assert in the remove
 			if (FuncArgNames.Num() > 0 && FuncArgDefaults.Num() > 0)
 			{
-			// Strip the zero'th 'self' argument when processing a non-static function
-			FuncArgNames.RemoveAt(0, 1, /*bAllowShrinking*/false);
-			FuncArgDefaults.RemoveAt(0, 1, /*bAllowShrinking*/false);
-		}
+				// Strip the zero'th 'self' argument when processing a non-static function
+				FuncArgNames.RemoveAt(0, 1, /*bAllowShrinking*/false);
+				FuncArgDefaults.RemoveAt(0, 1, /*bAllowShrinking*/false);
+			}
 			else
 			{
 				PyUtil::SetPythonError(PyExc_Exception, PyType, *FString::Printf(TEXT("Incorrect number of arguments specified for '%s' (missing self?)"), *InFieldName));
 				return false;
 			}
 		}
+		// Build the arguments struct if not overriding a function
 		if (!SuperFunc)
 		{
 			// Make sure the number of function arguments matches the number of argument types specified
@@ -1476,25 +1504,7 @@ public:
 				return false;
 			}
 
-			{			
-				// Adding properties to a function inserts them into a linked list, so we loop backwards to get the order right
-				int32 ArgIndex = FuncArgNames.Num() - 1;
-				while (ArgIndex >= 0)
-				{
-					PyObject* ArgTypeObj = PySequence_GetItem(InPyFuncDef->FuncParamTypes, ArgIndex);
-					FProperty* ArgProp = PyUtil::CreateProperty(ArgTypeObj, 1, Func, *FuncArgNames[ArgIndex]);
-					if (!ArgProp)
-					{
-						PyUtil::SetPythonError(PyExc_Exception, PyType, *FString::Printf(TEXT("Failed to create property (%s) for function '%s' argument '%s'"), *PyUtil::GetFriendlyTypename(ArgTypeObj), *InFieldName, *FuncArgNames[ArgIndex]));
-						return false;
-					}
-					ArgProp->PropertyFlags |= CPF_Parm;
-					Func->AddCppProperty(ArgProp);
-					ArgIndex--;
-				}
-			}
-
-			// Build the arguments struct if not overriding a function
+			// Adding properties to a function inserts them into a linked list, so we add the return and output values first so that they appear at the end
 			if (InPyFuncDef->FuncRetType && InPyFuncDef->FuncRetType != Py_None)
 			{
 				// If we have a tuple, then we actually want to return a bool but add every type within the tuple as output parameters
@@ -1526,6 +1536,24 @@ public:
 						Func->AddCppProperty(ArgProp);
 						Func->FunctionFlags |= FUNC_HasOutParms;
 					}
+				}
+			}
+
+			// Adding properties to a function inserts them into a linked list, so we loop backwards to get the order right
+			{
+				int32 ArgIndex = FuncArgNames.Num() - 1;
+				while (ArgIndex >= 0)
+				{
+					PyObject* ArgTypeObj = PySequence_GetItem(InPyFuncDef->FuncParamTypes, ArgIndex);
+					FProperty* ArgProp = PyUtil::CreateProperty(ArgTypeObj, 1, Func, *FuncArgNames[ArgIndex]);
+					if (!ArgProp)
+					{
+						PyUtil::SetPythonError(PyExc_Exception, PyType, *FString::Printf(TEXT("Failed to create property (%s) for function '%s' argument '%s'"), *PyUtil::GetFriendlyTypename(ArgTypeObj), *InFieldName, *FuncArgNames[ArgIndex]));
+						return false;
+					}
+					ArgProp->PropertyFlags |= CPF_Parm;
+					Func->AddCppProperty(ArgProp);
+					ArgIndex--;
 				}
 			}
 		}
@@ -1965,23 +1993,23 @@ DEFINE_FUNCTION(UPythonGeneratedClass::CallPythonFunction)
 		}
 	}
 
+	// Find the Python object to call the function on
+	FPyObjectPtr PySelf;
+	bool bSelfError = false;
+	if (!Func->HasAnyFunctionFlags(FUNC_Static))
+	{
+		FPyScopedGIL GIL;
+		PySelf = FPyObjectPtr::StealReference((PyObject*)FPyWrapperObjectFactory::Get().CreateInstance(P_THIS_OBJECT));
+		if (!PySelf)
+		{
+			UE_LOG(LogPython, Error, TEXT("Failed to create a Python wrapper for '%s'"), *P_THIS_OBJECT->GetName());
+			bSelfError = true;
+		}
+	}
+
 	// Execute Python code within this block
 	{
 		FPyScopedGIL GIL;
-
-		// Find the Python object to call the function on
-		FPyObjectPtr PySelf;
-		bool bSelfError = false;
-		if (!Func->HasAnyFunctionFlags(FUNC_Static))
-		{
-			PySelf = FPyObjectPtr::StealReference((PyObject*)FPyWrapperObjectFactory::Get().CreateInstance(P_THIS_OBJECT));
-			if (!PySelf)
-			{
-				UE_LOG(LogPython, Error, TEXT("Failed to create a Python wrapper for '%s'"), *P_THIS_OBJECT->GetName());
-				bSelfError = true;
-			}
-		}
-	
 		if (!PyGenUtil::InvokePythonCallableFromUnrealFunctionThunk(PySelf, FuncDef ? FuncDef->PyFunction.GetPtr() : nullptr, Func, Context, Stack, RESULT_PARAM) || bSelfError)
 		{
 			PyUtil::ReThrowPythonError();

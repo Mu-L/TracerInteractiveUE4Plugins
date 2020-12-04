@@ -6,16 +6,20 @@ namespace UnrealBuildTool.Rules
 	public class DatasmithCore : ModuleRules
 	{
 		public DatasmithCore(ReadOnlyTargetRules Target)
-            : base(Target)
+			: base(Target)
 		{
 			PublicDependencyModuleNames.AddRange(
 				new string[]
 				{
+					"Cbor",
 					"Core",
 					"CoreUObject",
-					"RawMesh",
+					"DirectLink",
 					"MeshDescription",
-					"StaticMeshDescription"
+					"Messaging",
+					"MessagingCommon",
+					"RawMesh",
+					"StaticMeshDescription",
 				}
 			);
 
@@ -26,6 +30,6 @@ namespace UnrealBuildTool.Rules
 					"XmlParser",
 				}
 			);
-        }
+		}
 	}
 }

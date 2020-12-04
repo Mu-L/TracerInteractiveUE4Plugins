@@ -34,6 +34,11 @@ PRAGMA_DISABLE_UNSAFE_TYPECAST_WARNINGS
 #ifndef FNAME_WRITE_PROTECT_PAGES
 #define FNAME_WRITE_PROTECT_PAGES 0
 #endif
+#if FNAME_WRITE_PROTECT_PAGES
+#	define FNAME_BLOCK_ALIGNMENT FPlatformMemory::GetConstants().PageSize
+#else
+#	define FNAME_BLOCK_ALIGNMENT alignof(FNameEntry)
+#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealNames, Log, All);
 
@@ -271,7 +276,7 @@ public:
 	FNameEntryAllocator()
 	{
 		LLM_SCOPE(ELLMTag::FName);
-		Blocks[0] = (uint8*)FMemory::MallocPersistentAuxiliary(BlockSizeBytes, FPlatformMemory::GetConstants().PageSize);
+		Blocks[0] = (uint8*)FMemory::MallocPersistentAuxiliary(BlockSizeBytes, FNAME_BLOCK_ALIGNMENT);
 	}
 
 	~FNameEntryAllocator()
@@ -404,7 +409,7 @@ private:
 
 	static uint8* AllocBlock()
 	{
-		return (uint8*)FMemory::MallocPersistentAuxiliary(BlockSizeBytes, FPlatformMemory::GetConstants().PageSize);
+		return (uint8*)FMemory::MallocPersistentAuxiliary(BlockSizeBytes, FNAME_BLOCK_ALIGNMENT);
 	}
 	
 	void AllocateNewBlock()
@@ -1932,14 +1937,6 @@ FName::FName(int32 Len, const ANSICHAR* Name, EFindName FindType)
 	: FName(FNameHelper::MakeDetectNumber(MakeUnconvertedView(Name, Len), FindType))
 {}
 
-FName::FName(const FStringView& Name, EFindName FindType)
-	: FName(FNameHelper::MakeDetectNumber(MakeUnconvertedView(Name.GetData(), Name.Len()), FindType))
-{}
-
-FName::FName(const FAnsiStringView& Name, EFindName FindType)
-	: FName(FNameHelper::MakeDetectNumber(MakeUnconvertedView(Name.GetData(), Name.Len()), FindType))
-{}
-
 FName::FName(const WIDECHAR* Name, int32 InNumber, EFindName FindType)
 	: FName(FNameHelper::MakeWithNumber(MakeUnconvertedView(Name), FindType, InNumber))
 {}
@@ -1956,14 +1953,6 @@ FName::FName(int32 Len, const WIDECHAR* Name, int32 InNumber, EFindName FindType
 FName::FName(int32 Len, const ANSICHAR* Name, int32 InNumber, EFindName FindType)
 	: FName(InNumber != NAME_NO_NUMBER_INTERNAL ? FNameHelper::MakeWithNumber(MakeUnconvertedView(Name, Len), FindType, InNumber)
 												: FNameHelper::MakeDetectNumber(MakeUnconvertedView(Name, Len), FindType))
-{}
-
-FName::FName(const FStringView& Name, int32 InNumber, EFindName FindType)
-	: FName(Name.Len(), Name.GetData(), InNumber, FindType)
-{}
-
-FName::FName(const FAnsiStringView& Name, int32 InNumber, EFindName FindType)
-	: FName(Name.Len(), Name.GetData(), InNumber, FindType)
 {}
 
 FName::FName(const TCHAR* Name, int32 InNumber, EFindName FindType, bool bSplitName)
@@ -2165,7 +2154,24 @@ FString FName::SafeString(FNameEntryId InDisplayIndex, int32 InstanceNumber)
 	return FName(InDisplayIndex, InDisplayIndex, InstanceNumber).ToString();
 }
 
+bool FName::IsValidXName(const FName InName, const FString& InInvalidChars, FText* OutReason, const FText* InErrorCtx)
+{
+	TStringBuilder<FName::StringBufferSize> NameStr;
+	InName.ToString(NameStr);
+	return IsValidXName(FStringView(NameStr), InInvalidChars, OutReason, InErrorCtx);
+}
+
+bool FName::IsValidXName(const TCHAR* InName, const FString& InInvalidChars, FText* OutReason, const FText* InErrorCtx)
+{
+	return IsValidXName(FStringView(InName), InInvalidChars, OutReason, InErrorCtx);
+}
+
 bool FName::IsValidXName(const FString& InName, const FString& InInvalidChars, FText* OutReason, const FText* InErrorCtx)
+{
+	return IsValidXName(FStringView(InName), InInvalidChars, OutReason, InErrorCtx);
+}
+
+bool FName::IsValidXName(const FStringView& InName, const FString& InInvalidChars, FText* OutReason, const FText* InErrorCtx)
 {
 	if (InName.IsEmpty() || InInvalidChars.IsEmpty())
 	{
@@ -2177,7 +2183,8 @@ bool FName::IsValidXName(const FString& InName, const FString& InInvalidChars, F
 	TSet<TCHAR> AlreadyMatchedInvalidChars;
 	for (const TCHAR InvalidChar : InInvalidChars)
 	{
-		if (!AlreadyMatchedInvalidChars.Contains(InvalidChar) && InName.GetCharArray().Contains(InvalidChar))
+		int32 InvalidCharIndex = INDEX_NONE;
+		if (!AlreadyMatchedInvalidChars.Contains(InvalidChar) && InName.FindChar(InvalidChar, InvalidCharIndex))
 		{
 			MatchedInvalidChars.AppendChar(InvalidChar);
 			AlreadyMatchedInvalidChars.Add(InvalidChar);
@@ -2484,8 +2491,7 @@ FArchive& operator<<(FArchive& Ar, FNameEntrySerialized& E)
 			// If StringLen cannot be negated due to integer overflow, Ar is corrupted.
 			if (StringLen == MIN_int32)
 			{
-				Ar.ArIsError = 1;
-				Ar.ArIsCriticalError = 1;
+				Ar.SetCriticalError();
 				UE_LOG(LogUnrealNames, Error, TEXT("Archive is corrupted"));
 				return Ar;
 			}
@@ -2496,8 +2502,7 @@ FArchive& operator<<(FArchive& Ar, FNameEntrySerialized& E)
 			// Protect against network packets allocating too much memory
 			if ((MaxSerializeSize > 0) && (StringLen > MaxSerializeSize))
 			{
-				Ar.ArIsError = 1;
-				Ar.ArIsCriticalError = 1;
+				Ar.SetCriticalError();
 				UE_LOG(LogUnrealNames, Error, TEXT("String is too large"));
 				return Ar;
 			}
@@ -2524,8 +2529,7 @@ FArchive& operator<<(FArchive& Ar, FNameEntrySerialized& E)
 			// Protect against network packets allocating too much memory
 			if ((MaxSerializeSize > 0) && (StringLen > MaxSerializeSize))
 			{
-				Ar.ArIsError = 1;
-				Ar.ArIsCriticalError = 1;
+				Ar.SetCriticalError();
 				UE_LOG(LogUnrealNames, Error, TEXT("String is too large"));
 				return Ar;
 			}
@@ -3211,9 +3215,30 @@ uint8** FNameDebugVisualizer::GetBlocks()
 	return ((FNamePool*)(NamePoolData))->GetBlocksForDebugVisualizer();
 }
 
+FString FScriptName::ToString() const
+{
+	return ScriptNameToName(*this).ToString();
+}
+
 void Freeze::IntrinsicWriteMemoryImage(FMemoryImageWriter& Writer, const FName& Object, const FTypeLayoutDesc&)
 {
 	Writer.WriteFName(Object);
+}
+
+uint32 Freeze::IntrinsicAppendHash(const FName* DummyObject, const FTypeLayoutDesc& TypeDesc, const FPlatformTypeLayoutParameters& LayoutParams, FSHA1& Hasher)
+{
+	const uint32 SizeFromFields = LayoutParams.WithCasePreservingFName() ? sizeof(FScriptName) : sizeof(FMinimalName);
+	return Freeze::AppendHashForNameAndSize(TypeDesc.Name, SizeFromFields, Hasher);
+}
+
+void Freeze::IntrinsicWriteMemoryImage(FMemoryImageWriter& Writer, const FMinimalName& Object, const FTypeLayoutDesc&)
+{
+	Writer.WriteFMinimalName(Object);
+}
+
+void Freeze::IntrinsicWriteMemoryImage(FMemoryImageWriter& Writer, const FScriptName& Object, const FTypeLayoutDesc&)
+{
+	Writer.WriteFScriptName(Object);
 }
 
 PRAGMA_ENABLE_UNSAFE_TYPECAST_WARNINGS

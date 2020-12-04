@@ -132,6 +132,7 @@ bool FVoiceCaptureWindows::Init(const FString& DeviceName, int32 SampleRate, int
 	NoiseGateAttenuator.Init(SampleRate);
 
 	bIsMicActive = false;
+	bWasMicAboveNoiseGateThreshold = false;
 
 	return CreateCaptureBuffer(DeviceName.IsEmpty() ? VoiceDev->DefaultVoiceCaptureDevice.DeviceName : DeviceName, SampleRate, NumChannels);
 }
@@ -164,7 +165,7 @@ bool FVoiceCaptureWindows::CreateCaptureBuffer(const FString& DeviceName, int32 
 	FVoiceCaptureDeviceWindows::FCaptureDeviceInfo* DeviceInfo = nullptr;
 	if (DeviceName.IsEmpty())
 	{
-		DeviceInfo = VoiceDev->Devices.Find(DEFAULT_DEVICE_NAME);
+		DeviceInfo = &VoiceDev->DefaultVoiceCaptureDevice;
 	}
 	else
 	{

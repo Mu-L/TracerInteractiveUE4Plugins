@@ -24,7 +24,13 @@
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <objc/runtime.h>
+#if PLATFORM_IOS && defined(__IPHONE_13_0)
+#include <os/proc.h>
+#endif
 #include <CoreFoundation/CFBase.h>
+#include <mach/vm_map.h>
+#include <mach/vm_region.h>
+#include <mach/vm_statistics.h>
 #include "HAL/LowLevelMemTracker.h"
 #include "Apple/AppleLLM.h"
 
@@ -183,10 +189,84 @@ void FApplePlatformMemory::ConfigureDefaultCFAllocator(void)
 	CFAllocatorSetDefault(Alloc);
 }
 
+vm_address_t FApplePlatformMemory::NanoRegionStart = 0;
+vm_address_t FApplePlatformMemory::NanoRegionEnd = 0;
+
+void FApplePlatformMemory::NanoMallocInit()
+{
+	/*
+		iOS reserves 512MB of address space for 'nano' allocations (allocations <= 256 bytes)
+		Nano malloc has buckets for sizes 16, 32, 48....256
+		The number of buckets and their sizes are fixed and do not grow
+		We'll walk through the buckets and ask the VM about the backing regions
+		We may have to check several sizes because we can hit a case where all the buckets
+		for a specific size are full - which means malloc will put that allocation into
+		the MALLOC_TINY region instead.
+	 
+		The OS always tags the nano VM region with user_tag == VM_MEMORY_MALLOC_NANO (which is 11)
+	 
+		Being apple this is subject to change at any time and may be different in debug modes, etc.
+		We'll fall back to the UE allocators if we can't find the nano region.
+	 
+		We want to detect this as early as possible, before any of the memory system is initialized.
+	*/
+	
+	NanoRegionStart = 0;
+	NanoRegionEnd = 0;
+	
+	size_t MallocSize = 16;
+	while(true)
+	{
+		void* NanoMalloc = ::malloc(MallocSize);
+		FMemory::Memzero(NanoMalloc, MallocSize); // This will wire the memory. Shouldn't be necessary but better safe than sorry.
+	
+		kern_return_t kr = KERN_SUCCESS;
+		vm_address_t address = (vm_address_t)(NanoMalloc);
+		vm_size_t regionSizeInBytes = 0;
+		mach_port_t regionObjectOut;
+		vm_region_extended_info_data_t regionInfo;
+		mach_msg_type_number_t infoSize = sizeof(vm_region_extended_info_data_t);
+		kr = vm_region_64(mach_task_self(), &address, &regionSizeInBytes, VM_REGION_EXTENDED_INFO, (vm_region_info_t) &regionInfo, &infoSize, &regionObjectOut);
+		check(kr == KERN_SUCCESS);
+		
+		::free(NanoMalloc);
+		
+		if(regionInfo.user_tag == VM_MEMORY_MALLOC_NANO)
+		{
+			uint8_t* Start = (uint8_t*) address;
+			uint8_t* End = Start + regionSizeInBytes;
+			NanoRegionStart = address;
+			NanoRegionEnd = (vm_address_t) End;
+			break;
+		}
+		
+		MallocSize += 16;
+		
+		if(MallocSize > 256)
+		{
+			// Nano region wasn't found.
+			// We'll fall back to the UE allocator
+			// This can happen when using various tools
+			check(NanoRegionStart == 0 && NanoRegionEnd == 0);
+			break;
+		}
+	}
+	
+//	if(NanoRegionStart == 0 && NanoRegionEnd == 0)
+//	{
+//		FPlatformMisc::LowLevelOutputDebugStringf(TEXT("WARNING: No nano malloc region found. We will always use UE allocators\n"));
+//	}
+//	else
+//	{
+//		FPlatformMisc::LowLevelOutputDebugStringf(TEXT("Detected nanozone %p - %p\n"), (void*) NanoRegionStart, (void*) NanoRegionEnd);
+//	}
+}
+
 void FApplePlatformMemory::Init()
 {
 	FGenericPlatformMemory::Init();
     
+	LLM(AppleLLM::Initialise());
 
 	const FPlatformMemoryConstants& MemoryConstants = FPlatformMemory::GetConstants();
 	UE_LOG(LogInit, Log, TEXT("Memory total: Physical=%.1fGB (%dGB approx) Pagefile=%.1fGB Virtual=%.1fGB"),
@@ -194,6 +274,7 @@ void FApplePlatformMemory::Init()
 		   MemoryConstants.TotalPhysicalGB,
 		   float((MemoryConstants.TotalVirtual-MemoryConstants.TotalPhysical)/1024.0/1024.0/1024.0),
 		   float(MemoryConstants.TotalVirtual/1024.0/1024.0/1024.0) );
+	
 }
 
 // Set rather to use BinnedMalloc2 for binned malloc, can be overridden below
@@ -205,7 +286,6 @@ FMalloc* FApplePlatformMemory::BaseAllocator()
 	FPlatformMemoryStats MemStats = FApplePlatformMemory::GetStats();
 	FLowLevelMemTracker::Get().SetProgramSize(MemStats.UsedPhysical);
 #endif
-	LLM(AppleLLM::Initialise());
 
 	if (FORCE_ANSI_ALLOCATOR)
 	{
@@ -256,27 +336,56 @@ FMalloc* FApplePlatformMemory::BaseAllocator()
 FPlatformMemoryStats FApplePlatformMemory::GetStats()
 {
 	const FPlatformMemoryConstants& MemoryConstants = FPlatformMemory::GetConstants();
-	
+#if PLATFORM_IOS
+	const uint64 MaxVirtualMemory = 1ull << 34; // set to 16GB for now since IOS can see a maximum of 8GB
+#endif
 	static FPlatformMemoryStats MemoryStats;
 	
 	// Gather platform memory stats.
-	vm_statistics Stats;
-	mach_msg_type_number_t StatsSize = sizeof(Stats);
-	host_statistics(mach_host_self(), HOST_VM_INFO, (host_info_t)&Stats, &StatsSize);
-	uint64_t FreeMem = (Stats.free_count + Stats.inactive_count) * MemoryConstants.PageSize;
+	uint64_t FreeMem = 0;
+#if PLATFORM_IOS
+#if defined(__IPHONE_13_0)
+	if (@available(iOS 13.0,*))
+	{
+		FreeMem = os_proc_available_memory();
+	}
+	else
+#endif
+#endif
+	{
+		vm_statistics Stats;
+		mach_msg_type_number_t StatsSize = sizeof(Stats);
+		host_statistics(mach_host_self(), HOST_VM_INFO, (host_info_t)&Stats, &StatsSize);
+		FreeMem = (Stats.free_count + Stats.inactive_count) * MemoryConstants.PageSize;
+	}
 	MemoryStats.AvailablePhysical = FreeMem;
 	
 	// Just get memory information for the process and report the working set instead
 	mach_task_basic_info_data_t TaskInfo;
 	mach_msg_type_number_t TaskInfoCount = MACH_TASK_BASIC_INFO_COUNT;
 	task_info( mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&TaskInfo, &TaskInfoCount );
-	MemoryStats.UsedPhysical = TaskInfo.resident_size;
+#if PLATFORM_IOS
+#if defined(__IPHONE_13_0)
+	if (@available(iOS 13.0,*))
+	{
+		MemoryStats.UsedPhysical = MemoryConstants.TotalPhysical - FreeMem;
+	}
+	else
+#endif
+#endif
+	{
+		MemoryStats.UsedPhysical = TaskInfo.resident_size;
+	}
 	if(MemoryStats.UsedPhysical > MemoryStats.PeakUsedPhysical)
 	{
 		MemoryStats.PeakUsedPhysical = MemoryStats.UsedPhysical;
 	}
 	MemoryStats.UsedVirtual = TaskInfo.virtual_size;
+#if PLATFORM_IOS
+	if(MemoryStats.UsedVirtual > MemoryStats.PeakUsedVirtual || MemoryStats.PeakUsedVirtual > MaxVirtualMemory)
+#else
 	if(MemoryStats.UsedVirtual > MemoryStats.PeakUsedVirtual)
+#endif
 	{
 		MemoryStats.PeakUsedVirtual = MemoryStats.UsedVirtual;
 	}
@@ -298,9 +407,43 @@ const FPlatformMemoryConstants& FApplePlatformMemory::GetConstants()
 		
 		// Get memory.
 		int64 AvailablePhysical = 0;
-		int Mib[] = {CTL_HW, HW_MEMSIZE};
-		size_t Length = sizeof(int64);
-		sysctl(Mib, 2, &AvailablePhysical, &Length, NULL, 0);
+#if PLATFORM_IOS
+#if defined(__IPHONE_13_0)
+		if (@available(iOS 13.0,*))
+		{
+			AvailablePhysical = os_proc_available_memory();
+			
+			// quantize to the known jetsam limits, we should be within 50MB of the correct one
+			uint64 JetsamLimits[] = { 1520435200, 1939865600, 2201170740, 2252710350, 3006477100 }; // { 2GB, gimped 3GB, gimped 4GB, 3GB, 4GB
+			if (AvailablePhysical < JetsamLimits[0])
+			{
+				AvailablePhysical = JetsamLimits[0];
+			}
+			else if (AvailablePhysical < JetsamLimits[1])
+			{
+				AvailablePhysical = JetsamLimits[1];
+			}
+			else if (AvailablePhysical < JetsamLimits[2])
+			{
+				AvailablePhysical = JetsamLimits[2];
+			}
+			else if (AvailablePhysical < JetsamLimits[3])
+			{
+				AvailablePhysical = JetsamLimits[3];
+			}
+			else if (AvailablePhysical < JetsamLimits[4])
+			{
+				AvailablePhysical = JetsamLimits[4];
+			}
+		}
+		else
+#endif
+#endif
+		{
+			int Mib[] = {CTL_HW, HW_MEMSIZE};
+			size_t Length = sizeof(int64);
+			sysctl(Mib, 2, &AvailablePhysical, &Length, NULL, 0);
+		}
 		
 		MemoryConstants.TotalPhysical = AvailablePhysical;
 		MemoryConstants.TotalVirtual = AvailablePhysical;
@@ -551,6 +694,21 @@ void FApplePlatformMemory::BinnedFreeToOS(void* Ptr, SIZE_T Size)
 			ErrNo, StringCast< TCHAR >(strerror(ErrNo)).Get());
 	}
 #endif // USE_MALLOC_BINNED2
+}
+
+bool FApplePlatformMemory::PtrIsOSMalloc( void* Ptr)
+{
+	return malloc_zone_from_ptr(Ptr) != nullptr;
+}
+
+bool FApplePlatformMemory::IsNanoMallocAvailable()
+{
+	return (NanoRegionStart != 0) && (NanoRegionEnd != 0);
+}
+
+bool FApplePlatformMemory::PtrIsFromNanoMalloc( void* Ptr)
+{
+	return IsNanoMallocAvailable() && ((uintptr_t) Ptr >= NanoRegionStart && (uintptr_t) Ptr < NanoRegionEnd);
 }
 
 size_t FApplePlatformMemory::FPlatformVirtualMemoryBlock::GetVirtualSizeAlignment()

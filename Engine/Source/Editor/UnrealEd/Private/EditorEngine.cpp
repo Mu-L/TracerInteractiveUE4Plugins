@@ -84,6 +84,7 @@
 #include "BSPOps.h"
 #include "EditorCommandLineUtils.h"
 #include "Engine/NetDriver.h"
+#include "Engine/NetConnection.h"
 #include "Net/NetworkProfiler.h"
 #include "Interfaces/IPluginManager.h"
 #include "UObject/PackageReload.h"
@@ -91,6 +92,8 @@
 #include "HAL/PlatformApplicationMisc.h"
 #include "IMediaModule.h"
 #include "Scalability.h"
+#include "PlatformInfo.h"
+#include "Interfaces/ITargetPlatform.h"
 
 // needed for the RemotePropagator
 #include "AudioDevice.h"
@@ -214,16 +217,22 @@
 #include "ComponentRecreateRenderStateContext.h"
 #include "RenderTargetPool.h"
 #include "RenderGraphBuilder.h"
+#include "CustomResourcePool.h"
 #include "ToolMenus.h"
 #include "IToolMenusEditorModule.h"
 #include "Subsystems/AssetEditorSubsystem.h"
 #include "StudioAnalytics.h"
 #include "Engine/LevelScriptActor.h"
 #include "UObject/UnrealType.h"
-
+#include "Factories/TextureFactory.h"
+#include "Engine/TextureCube.h"
 #if WITH_CHAOS
 #include "ChaosSolversModule.h"
 #endif
+
+#include "DeviceProfiles/DeviceProfile.h"
+#include "DeviceProfiles/DeviceProfileManager.h"
+#include "Rendering/StaticLightingSystemInterface.h"
 
 
 DEFINE_LOG_CATEGORY_STATIC(LogEditor, Log, All);
@@ -592,6 +601,13 @@ void UEditorEngine::SetSelectionStateOfLevel(const FSelectionStateOfLevel& InSel
 	}
 
 	NoteSelectionChange();
+}
+
+void UEditorEngine::ResetAllSelectionSets()
+{
+	GetSelectedObjects()->DeselectAll();
+	GetSelectedActors()->DeselectAll();
+	GetSelectedComponents()->DeselectAll();
 }
 
 static bool GetSmallToolBarIcons()
@@ -1066,13 +1082,6 @@ void UEditorEngine::Init(IEngineLoop* InEngineLoop)
 			FModuleManager::Get().LoadModule(TEXT("PListEditor"));
 		}
 
-		bool bEnvironmentQueryEditor = false;
-		GConfig->GetBool(TEXT("EnvironmentQueryEd"), TEXT("EnableEnvironmentQueryEd"), bEnvironmentQueryEditor, GEngineIni);
-		if (bEnvironmentQueryEditor || GetDefault<UEditorExperimentalSettings>()->bEQSEditor)
-		{
-			FModuleManager::Get().LoadModule(TEXT("EnvironmentQueryEditor"));
-		}
-
 		FModuleManager::Get().LoadModule(TEXT("LogVisualizer"));
 		FModuleManager::Get().LoadModule(TEXT("HotReload"));
 
@@ -1289,6 +1298,18 @@ void UEditorEngine::AddReferencedObjects(UObject* InThis, FReferenceCollector& C
 		Collector.AddReferencedObject( This->ActorFactories[ Index ], This );
 	}
 
+	// If a PIE session is about to start, keep the settings object alive.
+	if (This->PlaySessionRequest.IsSet() && This->PlaySessionRequest->EditorPlaySettings)
+	{
+		Collector.AddReferencedObject(This->PlaySessionRequest->EditorPlaySettings, This);
+	}
+
+	// If we're in a PIE session, ensure we keep the current settings object alive.
+	if (This->PlayInEditorSessionInfo.IsSet() && This->PlayInEditorSessionInfo->OriginalRequestParams.EditorPlaySettings)
+	{
+		Collector.AddReferencedObject(This->PlayInEditorSessionInfo->OriginalRequestParams.EditorPlaySettings, This);
+	}
+
 	Super::AddReferencedObjects( This, Collector );
 }
 
@@ -1495,15 +1516,6 @@ void UEditorEngine::Tick( float DeltaSeconds, bool bIdleMode )
 	bool bAWorldTicked = false;
 	ELevelTick TickType = IsRealtime ? LEVELTICK_ViewportsOnly : LEVELTICK_TimeOnly;
 
-#if WITH_CHAOS
-	// Before we begin ticking any of our worlds, dispatch the global command lists and queues for physics
-	FChaosSolversModule* ChaosModule = FChaosSolversModule::GetModule();
-	if(ensure(ChaosModule))
-	{
-		ChaosModule->DispatchGlobalCommands();
-	}
-#endif
-
 	if( bShouldTickEditorWorld )
 	{ 
 		//EditorContext.World()->FXSystem->Resume();
@@ -1657,58 +1669,69 @@ void UEditorEngine::Tick( float DeltaSeconds, bool bIdleMode )
 			{
 				OldGWorld->TransferBlueprintDebugReferences(PlayWorld);
 			}
-
-			// Tick all travel and Pending NetGames (Seamless, server, client)
-			TickWorldTravel(PieContext, DeltaSeconds);
-
-			// Updates 'connecting' message in PIE network games
-			UpdateTransitionType(PlayWorld);
-
-			// Update streaming for dedicated servers in PIE
-			if (PieContext.RunAsDedicated)
+			
+			float TickDeltaSeconds; // How much time to use per tick
+			
+			if (PieContext.PIEFixedTickSeconds > 0.f)
 			{
-				SCOPE_CYCLE_COUNTER(STAT_UpdateLevelStreaming);
-				PlayWorld->UpdateLevelStreaming();
+				PieContext.PIEAccumulatedTickSeconds += DeltaSeconds;
+				TickDeltaSeconds = PieContext.PIEFixedTickSeconds;
 			}
-
-			// Release mouse if the game is paused. The low level input code might ignore the request when e.g. in fullscreen mode.
-			if ( GameViewport != NULL && GameViewport->Viewport != NULL )
+			else
 			{
-				// Decide whether to drop high detail because of frame rate
-				GameViewport->SetDropDetail(DeltaSeconds);
+				PieContext.PIEAccumulatedTickSeconds = DeltaSeconds;
+				TickDeltaSeconds = DeltaSeconds;
 			}
-
-			// Update the level.
-			GameCycles=0;
-			CLOCK_CYCLES(GameCycles);
-
+			
+			for ( ; PieContext.PIEAccumulatedTickSeconds >= TickDeltaSeconds; PieContext.PIEAccumulatedTickSeconds -= TickDeltaSeconds)
 			{
-				// So that hierarchical stats work in PIE
-				SCOPE_CYCLE_COUNTER(STAT_FrameTime);
+				// Tick all travel and Pending NetGames (Seamless, server, client)
+				TickWorldTravel(PieContext, TickDeltaSeconds);
 
-				FKismetDebugUtilities::NotifyDebuggerOfStartOfGameFrame(PieContext.World());
+				// Updates 'connecting' message in PIE network games
+				UpdateTransitionType(PlayWorld);
 
-				// tick the level
-				PieContext.World()->Tick( LEVELTICK_All, DeltaSeconds );
-				bAWorldTicked = true;
-				TickType = LEVELTICK_All;
-
-				if (!bFirstTick)
+				// Update streaming for dedicated servers in PIE
+				if (PieContext.RunAsDedicated)
 				{
-					// Update sky light first because sky diffuse will be visible in reflection capture indirect specular
-					USkyLightComponent::UpdateSkyCaptureContents(PlayWorld);
-					UReflectionCaptureComponent::UpdateReflectionCaptureContents(PlayWorld);
+					SCOPE_CYCLE_COUNTER(STAT_UpdateLevelStreaming);
+					PlayWorld->UpdateLevelStreaming();
 				}
 
-				FKismetDebugUtilities::NotifyDebuggerOfEndOfGameFrame(PieContext.World());
-			}
+				// Release mouse if the game is paused. The low level input code might ignore the request when e.g. in fullscreen mode.
+				if ( GameViewport != NULL && GameViewport->Viewport != NULL )
+				{
+					// Decide whether to drop high detail because of frame rate
+					GameViewport->SetDropDetail(TickDeltaSeconds);
+				}
 
-			UNCLOCK_CYCLES(GameCycles);
+				// Update the level.
+				{
+					// So that hierarchical stats work in PIE
+					SCOPE_CYCLE_COUNTER(STAT_FrameTime);
 
-			// Tick the viewports.
-			if ( GameViewport != NULL )
-			{
-				GameViewport->Tick(DeltaSeconds);
+					FKismetDebugUtilities::NotifyDebuggerOfStartOfGameFrame(PieContext.World());
+
+					// tick the level
+					PieContext.World()->Tick( LEVELTICK_All, TickDeltaSeconds );
+					bAWorldTicked = true;
+					TickType = LEVELTICK_All;
+
+					if (!bFirstTick)
+					{
+						// Update sky light first because sky diffuse will be visible in reflection capture indirect specular
+						USkyLightComponent::UpdateSkyCaptureContents(PlayWorld);
+						UReflectionCaptureComponent::UpdateReflectionCaptureContents(PlayWorld);
+					}
+
+					FKismetDebugUtilities::NotifyDebuggerOfEndOfGameFrame(PieContext.World());
+				}
+
+				// Tick the viewports.
+				if ( GameViewport != NULL )
+				{
+					GameViewport->Tick(TickDeltaSeconds);
+				}
 			}
 
 			// Pop the world
@@ -1948,6 +1971,7 @@ void UEditorEngine::Tick( float DeltaSeconds, bool bIdleMode )
 				}
 				GRenderTargetPool.TickPoolElements();
 				FRDGBuilder::TickPoolElements();
+				ICustomResourcePool::TickPoolElements(RHICmdList);
 			});
 	}
 
@@ -2199,7 +2223,7 @@ void UEditorEngine::Cleanse( bool ClearSelection, bool Redraw, const FText& Tran
 		// Reset the transaction tracking system.
 		ResetTransaction( TransReset );
 
-		// Invalidate hit proxies as they can retain references to objects over a few frames
+		// Notify any handlers of the cleanse.
 		FEditorSupportDelegates::CleanseEditor.Broadcast();
 
 		// Redraw the levels.
@@ -2239,7 +2263,7 @@ void UEditorEngine::Cleanse( bool ClearSelection, bool Redraw, const FText& Tran
 			}
 
 			TArray<UObject*> PackageObjects;
-			GetObjectsWithOuter(RedirectorPackage, PackageObjects);
+			GetObjectsWithPackage(RedirectorPackage, PackageObjects);
 
 			if (!PackageObjects.ContainsByPredicate(
 					[](UObject* Object)
@@ -2262,7 +2286,7 @@ void UEditorEngine::Cleanse( bool ClearSelection, bool Redraw, const FText& Tran
 		for (UPackage* PackageToUnload : PackagesToUnload)
 		{
 			TArray<UObject*> PackageObjects;
-			GetObjectsWithOuter(PackageToUnload, PackageObjects);
+			GetObjectsWithPackage(PackageToUnload, PackageObjects);
 			for (UObject* Object : PackageObjects)
 			{
 				Object->ClearFlags(FlagsToClear);
@@ -2859,6 +2883,13 @@ void UEditorEngine::ApplyDeltaToComponent(USceneComponent* InComponent,
 
 	// Update the actor before leaving.
 	InComponent->MarkPackageDirty();
+
+	PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	if (!GetDefault<ULevelEditorViewportSettings>()->bUseLegacyPostEditBehavior)
+	PRAGMA_ENABLE_DEPRECATION_WARNINGS
+	{
+		InComponent->PostEditComponentMove(false);
+	}
 
 	// Fire callbacks
 	FEditorSupportDelegates::RefreshPropertyWindows.Broadcast();
@@ -4020,12 +4051,47 @@ void UEditorEngine::BuildReflectionCaptures(UWorld* World)
 		FString UpdateReason = LightingScenario ? LightingScenario->GetOuter()->GetName() : TEXT("all levels");
 
 		// Passing in flag to verify all recaptures, no uploads
-		UReflectionCaptureComponent::UpdateReflectionCaptureContents(World, *UpdateReason, true);
+		const bool bVerifyOnlyCapturing = true;
+		
+		// First capture data we will use to generate endcoded data for a mobile renderer
+		bool bCapturingForMobile = true;
+		TArray<UTextureCube*> EncodedCaptures;
+		EncodedCaptures.AddDefaulted(ReflectionCapturesToBuild.Num());
+		{
+			UReflectionCaptureComponent::UpdateReflectionCaptureContents(World, *UpdateReason, bVerifyOnlyCapturing, bCapturingForMobile);
+			bool bIsReflectionCaptureCompressionProjectSetting = (bool)IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.Mobile.ReflectionCaptureCompression"))->GetValueOnAnyThread();
+			for (int32 CaptureIndex = 0; CaptureIndex < ReflectionCapturesToBuild.Num(); CaptureIndex++)
+			{ 
+				UReflectionCaptureComponent* CaptureComponent = ReflectionCapturesToBuild[CaptureIndex];
+				FReflectionCaptureData ReadbackCaptureData;
+				World->Scene->GetReflectionCaptureData(CaptureComponent, ReadbackCaptureData);
+				// Capture can fail if there are more than GMaxNumReflectionCaptures captures
+				if (ReadbackCaptureData.CubemapSize > 0)
+				{
+					ULevel* StorageLevel = LightingScenarios[LevelIndex] ? LightingScenarios[LevelIndex] : CaptureComponent->GetOwner()->GetLevel();
+					UMapBuildDataRegistry* Registry = StorageLevel->GetOrCreateMapBuildData();
+					if (!CaptureComponent->bModifyMaxValueRGBM)
+					{
+						CaptureComponent->MaxValueRGBM = GetMaxValueRGBM(ReadbackCaptureData.FullHDRCapturedData, ReadbackCaptureData.CubemapSize, ReadbackCaptureData.Brightness);
+					}
+					FString TextureName = CaptureComponent->GetName() + TEXT("Texture");
+					TextureName += LexToString(CaptureComponent->MapBuildDataId);
+					GenerateEncodedHDRTextureCube(Registry, ReadbackCaptureData, TextureName, CaptureComponent->MaxValueRGBM, CaptureComponent, bIsReflectionCaptureCompressionProjectSetting);
+					EncodedCaptures[CaptureIndex] = ReadbackCaptureData.EncodedCaptureData;
+				}
+			}
+		}
 
+		// Capture reflection data for a general use
+		bCapturingForMobile = false;
+		for (UReflectionCaptureComponent* CaptureComponent : ReflectionCapturesToBuild)
+		{
+			CaptureComponent->MarkDirtyForRecaptureOrUpload();	
+		}
+		UReflectionCaptureComponent::UpdateReflectionCaptureContents(World, *UpdateReason, bVerifyOnlyCapturing, bCapturingForMobile);
 		for (int32 CaptureIndex = 0; CaptureIndex < ReflectionCapturesToBuild.Num(); CaptureIndex++)
 		{ 
 			UReflectionCaptureComponent* CaptureComponent = ReflectionCapturesToBuild[CaptureIndex];
-
 			FReflectionCaptureData ReadbackCaptureData;
 			World->Scene->GetReflectionCaptureData(CaptureComponent, ReadbackCaptureData);
 
@@ -4036,9 +4102,8 @@ void UEditorEngine::BuildReflectionCaptures(UWorld* World)
 				UMapBuildDataRegistry* Registry = StorageLevel->GetOrCreateMapBuildData();
 				FReflectionCaptureMapBuildData& CaptureBuildData = Registry->AllocateReflectionCaptureBuildData(CaptureComponent->MapBuildDataId, true);
 				(FReflectionCaptureData&)CaptureBuildData = ReadbackCaptureData;
-
+				CaptureBuildData.EncodedCaptureData = EncodedCaptures[CaptureIndex];
 				CaptureBuildData.FinalizeLoad();
-
 				// Recreate capture render state now that we have valid BuildData
 				CaptureComponent->MarkRenderStateDirty();
 			}
@@ -4047,7 +4112,7 @@ void UEditorEngine::BuildReflectionCaptures(UWorld* World)
 				UE_LOG(LogEditor, Warning, TEXT("Unable to build Reflection Capture %s, max number of reflection captures exceeded"), *CaptureComponent->GetPathName());
 			}
 		}
-				// Queue an update
+		// Queue an update
 		// Update sky light first because it's considered direct lighting, sky diffuse will be visible in reflection capture indirect specular
 		if (LightingScenario)
 		{
@@ -4397,12 +4462,12 @@ void UEditorEngine::CleanupPhysicsSceneThatWasInitializedForSave(UWorld* World, 
 
 	World->SetPhysicsScene(nullptr);
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	if (GPhysCommandHandler)
 	{
 		GPhysCommandHandler->Flush();
 	}
-#endif // WITH_PHYSX
+#endif // PHYSICS_INTERFACE_PHYSX
 
 	// Update components again in case it was a world without a physics scene but did have rendered components.
 	World->UpdateWorldComponents(true, true);
@@ -4418,9 +4483,29 @@ FSavePackageResultStruct UEditorEngine::Save( UPackage* InOuter, UObject* InBase
 	FScopedSlowTask SlowTask(100, FText(), bSlowTask);
 
 	UObject* Base = InBase;
-	if ( !Base && InOuter && InOuter->HasAnyPackageFlags(PKG_ContainsMap) )
+	if (!Base && InOuter)
 	{
-		Base = UWorld::FindWorldInPackage(InOuter);
+		// Check if the package contains a map and set the world object as base
+		if (InOuter->HasAnyPackageFlags(PKG_ContainsMap) )
+		{
+			Base = UWorld::FindWorldInPackage(InOuter);
+		}
+		else
+		{
+			// Look at top level object for the base root candidate,
+			// this should find the world if the package contains a map, however worlds are sometimes not properly flagged as asset when saved
+			// This will also allow other asset types that need to have Pre/PostSaveRoot called on them to be done so properly
+			TArray<UObject*> PotentialAssets;
+			GetObjectsWithPackage(InOuter, PotentialAssets, false);
+			for (UObject* Object : PotentialAssets)
+			{
+				if (Object->IsAsset())
+				{
+					Base = Object;
+					break;
+				}
+			}
+		}
 	}
 
 	// Record the package flags before OnPreSaveWorld. They will be used in OnPostSaveWorld.
@@ -5206,6 +5291,11 @@ void UEditorEngine::ReplaceActors(UActorFactory* Factory, const FAssetData& Asse
 				{
 					NewActorRootComponent->SetRelativeScale3D( OldActor->GetRootComponent()->GetRelativeScale3D() );
 				}
+
+				if (OldActor->GetRootComponent() != NULL)
+				{
+					NewActorRootComponent->SetMobility(OldActor->GetRootComponent()->Mobility);
+				}
 			}
 
 			NewActor->Layers.Empty();
@@ -5718,7 +5808,7 @@ AActor* UEditorEngine::ConvertBrushesToStaticMesh(const FString& InStaticMeshPac
 	FName ObjName = *FPackageName::GetLongPackageAssetName(InStaticMeshPackageName);
 
 
-	UPackage* Pkg = CreatePackage(NULL, *InStaticMeshPackageName);
+	UPackage* Pkg = CreatePackage( *InStaticMeshPackageName);
 	check(Pkg != nullptr);
 
 	FVector Location(0.0f, 0.0f, 0.0f);
@@ -6163,7 +6253,27 @@ void UEditorEngine::SetViewportsRealtimeOverride(bool bShouldBeRealtime, FText S
 	{
 		if (VC)
 		{
-			VC->SetRealtimeOverride(bShouldBeRealtime, SystemDisplayName);
+			VC->AddRealtimeOverride(bShouldBeRealtime, SystemDisplayName);
+		}
+	}
+
+	RedrawAllViewports();
+
+	FEditorSupportDelegates::UpdateUI.Broadcast();
+}
+
+void UEditorEngine::RemoveViewportsRealtimeOverride(FText SystemDisplayName)
+{
+	// We don't check that we had an override on all the viewport clients because since the caller added their override, there could have
+	// been new viewport clients added to the list by someone else. It's probably that the caller just wants to make sure no viewport has
+	// their override anymore so it's a sensible default to ignore those who don't have it.
+	const bool bCheckMissingOverride = false;
+
+	for (FEditorViewportClient* VC : AllViewportClients)
+	{
+		if (VC)
+		{
+			VC->RemoveRealtimeOverride(SystemDisplayName, bCheckMissingOverride);
 		}
 	}
 
@@ -6178,7 +6288,7 @@ void UEditorEngine::RemoveViewportsRealtimeOverride()
 	{
 		if (VC)
 		{
-			VC->RemoveRealtimeOverride();
+			VC->PopRealtimeOverride();
 		}
 	}
 
@@ -6240,6 +6350,11 @@ bool UEditorEngine::IsAnyViewportRealtime()
 
 bool UEditorEngine::ShouldThrottleCPUUsage() const
 {
+	if (IsRunningCommandlet())
+	{
+		return false;
+	}
+
 	bool bShouldThrottle = false;
 
 	const bool bRunningCommandlet = IsRunningCommandlet();
@@ -6252,25 +6367,28 @@ bool UEditorEngine::ShouldThrottleCPUUsage() const
 		bShouldThrottle = Settings->bThrottleCPUWhenNotForeground;
 
 		// Check if we should throttle due to all windows being minimized
-		if ( !bShouldThrottle )
+		if (FSlateApplication::IsInitialized())
 		{
-			 bShouldThrottle = AreAllWindowsHidden();
-		}
+			if (!bShouldThrottle)
+			{
+				bShouldThrottle = AreAllWindowsHidden();
+			}
 
-		// Do not throttle during drag and drop
-		if (bShouldThrottle && FSlateApplication::Get().IsDragDropping())
-		{
-			bShouldThrottle = false;
-		}
-
-		if (bShouldThrottle)
-		{
-			static const FName AssetRegistryName(TEXT("AssetRegistry"));
-			FAssetRegistryModule* AssetRegistryModule = FModuleManager::GetModulePtr<FAssetRegistryModule>(AssetRegistryName);
-			// Don't throttle during amortized export, greatly increases export time
-			if (IsLightingBuildCurrentlyExporting() || GShaderCompilingManager->IsCompiling() || (AssetRegistryModule && AssetRegistryModule->Get().IsLoadingAssets()))
+			// Do not throttle during drag and drop
+			if (bShouldThrottle && FSlateApplication::Get().IsDragDropping())
 			{
 				bShouldThrottle = false;
+			}
+
+			if (bShouldThrottle)
+			{
+				static const FName AssetRegistryName(TEXT("AssetRegistry"));
+				FAssetRegistryModule* AssetRegistryModule = FModuleManager::GetModulePtr<FAssetRegistryModule>(AssetRegistryName);
+				// Don't throttle during amortized export, greatly increases export time
+				if (IsLightingBuildCurrentlyExporting() || FStaticLightingSystemInterface::IsStaticLightingSystemRunning() || GShaderCompilingManager->IsCompiling() || (AssetRegistryModule && AssetRegistryModule->Get().IsLoadingAssets()))
+				{
+					bShouldThrottle = false;
+				}
 			}
 		}
 	}
@@ -6280,6 +6398,10 @@ bool UEditorEngine::ShouldThrottleCPUUsage() const
 
 bool UEditorEngine::AreAllWindowsHidden() const
 {
+	if (!FSlateApplication::IsInitialized())
+	{
+		return true;
+	}
 	const TArray< TSharedRef<SWindow> > AllWindows = FSlateApplication::Get().GetInteractiveTopLevelWindows();
 
 	bool bAllHidden = true;
@@ -6355,6 +6477,7 @@ AActor* UEditorEngine::AddActor(ULevel* InLevel, UClass* Class, const FTransform
 		FActorSpawnParameters SpawnInfo;
 		SpawnInfo.OverrideLevel = DesiredLevel;
 		SpawnInfo.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		SpawnInfo.bCreateActorPackage = true;
 		SpawnInfo.ObjectFlags = InObjectFlags;
 		const auto Location = Transform.GetLocation();
 		const auto Rotation = Transform.GetRotation().Rotator();
@@ -7031,6 +7154,18 @@ FORCEINLINE bool NetworkRemapPath_local(FWorldContext& Context, FString& Str, bo
 	return false;
 }
 
+bool UEditorEngine::NetworkRemapPath(UNetConnection* Connection, FString& Str, bool bReading)
+{
+	if (Connection == nullptr)
+	{
+		return false;
+	}
+
+	// Pretty sure there's no case where you can't have a world by this point.
+	FWorldContext& Context = GetWorldContextFromWorldChecked(Connection->GetWorld());
+	return NetworkRemapPath_local(Context, Str, bReading, Connection->IsReplay());
+}
+
 bool UEditorEngine::NetworkRemapPath(UNetDriver* Driver, FString& Str, bool bReading)
 {
 	if (Driver == nullptr)
@@ -7039,15 +7174,15 @@ bool UEditorEngine::NetworkRemapPath(UNetDriver* Driver, FString& Str, bool bRea
 	}
 
 	// Pretty sure there's no case where you can't have a world by this point.
-	bool bIsAReplay = (Driver->GetWorld()) ? (Driver->GetWorld()->DemoNetDriver != NULL) : false;
+	const bool bIsReplay = Driver->GetWorld() ? (Driver->GetWorld()->GetDemoNetDriver() != nullptr) : false;
 	FWorldContext& Context = GetWorldContextFromWorldChecked(Driver->GetWorld());
-	return NetworkRemapPath_local(Context, Str, bReading, bIsAReplay);
+	return NetworkRemapPath_local(Context, Str, bReading, bIsReplay);
 }
 
 bool UEditorEngine::NetworkRemapPath( UPendingNetGame *PendingNetGame, FString& Str, bool bReading)
 {
 	FWorldContext& Context = GetWorldContextFromPendingNetGameChecked(PendingNetGame);
-	return NetworkRemapPath_local(Context, Str, bReading, PendingNetGame->DemoNetDriver != NULL);
+	return NetworkRemapPath_local(Context, Str, bReading, PendingNetGame->GetDemoNetDriver() != nullptr);
 }
 
 void UEditorEngine::VerifyLoadMapWorldCleanup()
@@ -7173,11 +7308,11 @@ FWorldContext& UEditorEngine::GetEditorWorldContext(bool bEnsureIsGWorld)
 	return CreateNewWorldContext(EWorldType::Editor);
 }
 
-FWorldContext* UEditorEngine::GetPIEWorldContext()
+FWorldContext* UEditorEngine::GetPIEWorldContext(int32 WorldPIEInstance)
 {
-	for(auto& WorldContext : WorldList)
+	for (FWorldContext& WorldContext : WorldList)
 	{
-		if(WorldContext.WorldType == EWorldType::PIE)
+		if (WorldContext.WorldType == EWorldType::PIE && WorldContext.PIEInstance == WorldPIEInstance)
 		{
 			return &WorldContext;
 		}
@@ -7213,6 +7348,10 @@ void UEditorEngine::InitializeNewlyCreatedInactiveWorld(UWorld* World)
 	{
 		const bool bOldDirtyState = World->GetOutermost()->IsDirty();
 
+		// Make sure we have a navigation system if we are cooking the asset.
+		// Typically nav bounds are added when AddNavigationSystemToWorld() is called from UEditorEngine::Map_Load().
+		const bool bCooking = (IsCookByTheBookInEditorFinished() == false);
+
 		// Create the world without a physics scene because creating too many physics scenes causes deadlock issues in PhysX. The scene will be created when it is opened in the level editor.
 		// Also, don't create an FXSystem because it consumes too much video memory. This is also created when the level editor opens this world.
 		// Do not create AISystem/Navigation for inactive world. These ones will also be created when the level editor opens this world. if required.
@@ -7220,11 +7359,20 @@ void UEditorEngine::InitializeNewlyCreatedInactiveWorld(UWorld* World)
 			.CreatePhysicsScene(false)
 			.CreateFXSystem(false)
 			.CreateAISystem(false)
-			.CreateNavigation(false)
+			.CreateNavigation(bCooking)
 			);
 
 		// Update components so the scene is populated
 		World->UpdateWorldComponents(true, true);
+
+		if (bCooking)
+		{
+			// When calling World->InitWorld() with bCreateNavigation=true (just above), 
+			// it calls internally FNavigationSystem::AddNavigationSystemToWorld() with bInitializeForWorld=false.
+			// That does not gather nav bounds. When cooking, the nav system and nav bounds are needed on the navmesh serialize-save for tiles to be added to the archive.
+			// Also this call needs to occur after World->UpdateWorldComponents() else no bounds are found.
+			FNavigationSystem::AddNavigationSystemToWorld(*World, FNavigationSystemRunMode::InferFromWorldMode);
+		}
 
 		// Need to restore the dirty state as registering components dirties the world
 		if (!bOldDirtyState)
@@ -7520,9 +7668,11 @@ void UEditorEngine::SetPreviewPlatform(const FPreviewPlatformInfo& NewPreviewPla
 #endif
 
 	// If we have specified a MaterialQualityPlatform ensure its feature level matches the requested feature level.
-	check(NewPreviewPlatform.PreviewShaderPlatformName.IsNone() || GetMaxSupportedFeatureLevel(ShaderFormatToLegacyShaderPlatform(NewPreviewPlatform.PreviewShaderPlatformName)) == NewPreviewPlatform.PreviewFeatureLevel);
+	EShaderPlatform ShaderPlatform = ShaderFormatToLegacyShaderPlatform(NewPreviewPlatform.PreviewShaderFormatName);
+	ERHIFeatureLevel::Type MaxFeatureLevel = GetMaxSupportedFeatureLevel(ShaderPlatform);
+	check(NewPreviewPlatform.PreviewShaderFormatName.IsNone() || MaxFeatureLevel == NewPreviewPlatform.PreviewFeatureLevel);
 
-	const bool bChangedPreviewShaderPlatform = NewPreviewPlatform.PreviewShaderPlatformName != PreviewPlatform.PreviewShaderPlatformName;
+	const bool bChangedPreviewShaderPlatform = NewPreviewPlatform.PreviewShaderFormatName != PreviewPlatform.PreviewShaderFormatName;
 	const bool bChangedFeatureLevel = NewPreviewPlatform.PreviewFeatureLevel != PreviewPlatform.PreviewFeatureLevel ||
 		NewPreviewPlatform.bPreviewFeatureLevelActive != PreviewPlatform.bPreviewFeatureLevelActive;
 	const ERHIFeatureLevel::Type EffectiveFeatureLevel = NewPreviewPlatform.GetEffectivePreviewFeatureLevel();
@@ -7535,7 +7685,7 @@ void UEditorEngine::SetPreviewPlatform(const FPreviewPlatformInfo& NewPreviewPla
 	if (bChangedPreviewShaderPlatform)
 	{
 		UMaterialShaderQualitySettings* MaterialShaderQualitySettings = UMaterialShaderQualitySettings::Get();
-		MaterialShaderQualitySettings->SetPreviewPlatform(PreviewPlatform.PreviewShaderPlatformName);
+		MaterialShaderQualitySettings->SetPreviewPlatform(PreviewPlatform.PreviewShaderFormatName);
 	}
 
 	if (bChangedFeatureLevel)
@@ -7593,6 +7743,19 @@ void UEditorEngine::SetPreviewPlatform(const FPreviewPlatformInfo& NewPreviewPla
 
 	Scalability::ChangeScalabilityPreviewPlatform(PreviewPlatform.GetEffectivePreviewPlatformName());
 
+	UDeviceProfileManager::Get().RestoreDefaultDeviceProfile();
+
+	//Override the current device profile.
+	if (PreviewPlatform.DeviceProfileName != NAME_None)
+	{
+		if (UDeviceProfile* DP = UDeviceProfileManager::Get().FindProfile(PreviewPlatform.DeviceProfileName.ToString(), false))
+		{
+			UDeviceProfileManager::Get().SetOverrideDeviceProfile(DP, true);
+		}
+	}
+
+	PreviewPlatformChanged.Broadcast();
+
 	if (bSaveSettings)
 	{
 		SaveEditorFeatureLevel();
@@ -7610,6 +7773,27 @@ void UEditorEngine::ToggleFeatureLevelPreview()
 
 	Scalability::ChangeScalabilityPreviewPlatform(PreviewPlatform.GetEffectivePreviewPlatformName());
 
+	if (PreviewPlatform.bPreviewFeatureLevelActive)
+	{
+		if (PreviewPlatform.DeviceProfileName != NAME_None)
+		{
+			if (UDeviceProfile* DP = UDeviceProfileManager::Get().FindProfile(PreviewPlatform.DeviceProfileName.ToString(), false))
+			{
+				UDeviceProfileManager::Get().SetOverrideDeviceProfile(DP, true);
+			}
+		}
+		else
+		{
+			UDeviceProfileManager::Get().RestoreDefaultDeviceProfile();
+		}
+	}
+	else
+	{
+		UDeviceProfileManager::Get().RestoreDefaultDeviceProfile();
+	}
+
+	PreviewPlatformChanged.Broadcast();
+
 	GEditor->RedrawAllViewports();
 	
 	SaveEditorFeatureLevel();
@@ -7617,7 +7801,7 @@ void UEditorEngine::ToggleFeatureLevelPreview()
 
 bool UEditorEngine::IsFeatureLevelPreviewEnabled() const
 {
-	return PreviewPlatform.PreviewFeatureLevel != GMaxRHIFeatureLevel || PreviewPlatform.PreviewShaderPlatformName != NAME_None;
+	return PreviewPlatform.PreviewFeatureLevel != GMaxRHIFeatureLevel || PreviewPlatform.PreviewShaderFormatName != NAME_None;
 }
 
 bool UEditorEngine::IsFeatureLevelPreviewActive() const
@@ -7635,7 +7819,18 @@ void UEditorEngine::LoadEditorFeatureLevel()
 	auto* Settings = GetMutableDefault<UEditorPerProjectUserSettings>();
 	if (Settings->PreviewFeatureLevel >= 0 && Settings->PreviewFeatureLevel < (int32)ERHIFeatureLevel::Num)
 	{
-		SetPreviewPlatform(FPreviewPlatformInfo((ERHIFeatureLevel::Type)Settings->PreviewFeatureLevel, Settings->PreviewShaderFormatName, Settings->bPreviewFeatureLevelActive), false);
+		// Try to map a saved ShaderFormatName to the PreviewPlatformName using ITargetPlatform if we don't have one. 
+		// We now store the PreviewPlatformName explicitly to support preview for platforms we don't have an ITargetPlatform of.
+		if (Settings->PreviewPlatformName == NAME_None && Settings->PreviewShaderFormatName != NAME_None)
+		{
+			const ITargetPlatform* TargetPlatform = GetTargetPlatformManager()->FindTargetPlatformWithSupport(TEXT("ShaderFormat"), Settings->PreviewShaderFormatName);
+			if (TargetPlatform)
+			{
+				Settings->PreviewPlatformName = FName(*TargetPlatform->IniPlatformName());
+			}
+		}
+
+		SetPreviewPlatform(FPreviewPlatformInfo((ERHIFeatureLevel::Type)Settings->PreviewFeatureLevel, Settings->PreviewPlatformName, Settings->PreviewShaderFormatName, Settings->PreviewDeviceProfileName, Settings->bPreviewFeatureLevelActive), false);
 	}
 }
 
@@ -7643,18 +7838,25 @@ void UEditorEngine::SaveEditorFeatureLevel()
 {
 	auto* Settings = GetMutableDefault<UEditorPerProjectUserSettings>();
 	Settings->PreviewFeatureLevel = (int32)PreviewPlatform.PreviewFeatureLevel;
-	Settings->PreviewShaderFormatName = PreviewPlatform.PreviewShaderPlatformName;
+	Settings->PreviewPlatformName = PreviewPlatform.PreviewPlatformName;
+	Settings->PreviewShaderFormatName = PreviewPlatform.PreviewShaderFormatName;
 	Settings->bPreviewFeatureLevelActive = PreviewPlatform.bPreviewFeatureLevelActive;
+	Settings->PreviewDeviceProfileName = PreviewPlatform.DeviceProfileName;
 	Settings->PostEditChange();
 }
 
-void UEditorEngine::AddReferencedObjects(FReferenceCollector& Collector)
+bool UEditorEngine::GetPreviewPlatformName(FName& PlatformGroupName, FName& VanillaPlatformName) const
 {
-	if (PlayInEditorSessionInfo.IsSet())
+	FName PlatformName = PreviewPlatform.GetEffectivePreviewPlatformName();
+	const PlatformInfo::FPlatformInfo* PlatInfo;
+	if (PlatformName != NAME_None && (PlatInfo = PlatformInfo::FindPlatformInfo(PlatformName)) != nullptr)
 	{
-		Collector.AddReferencedObject(PlayInEditorSessionInfo->OriginalRequestParams.EditorPlaySettings, this);
+		VanillaPlatformName = PlatInfo->VanillaPlatformName;
+		PlatformGroupName = PlatInfo->PlatformGroupName;
+		return true;
 	}
-}
 
+	return false;
+}
 
 #undef LOCTEXT_NAMESPACE 

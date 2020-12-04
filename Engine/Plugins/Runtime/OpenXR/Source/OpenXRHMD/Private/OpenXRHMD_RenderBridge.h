@@ -23,10 +23,11 @@ public:
 	virtual uint64 GetGraphicsAdapterLuid() { return AdapterLuid; }
 
 	virtual void* GetGraphicsBinding() = 0;
-	virtual FXRSwapChainPtr CreateSwapchain(XrSession InSession, uint8 Format, uint32 SizeX, uint32 SizeY, uint32 ArraySize, uint32 NumMips, uint32 NumSamples, uint32 Flags, uint32 TargetableTextureFlags) = 0;
+	virtual FXRSwapChainPtr CreateSwapchain(XrSession InSession, uint8 Format, uint32 SizeX, uint32 SizeY, uint32 ArraySize, uint32 NumMips, uint32 NumSamples, ETextureCreateFlags Flags, ETextureCreateFlags TargetableTextureFlags, const FClearValueBinding& ClearValueBinding) = 0;
 
 	/** FRHICustomPresent */
-	virtual bool Present(int32& InOutSyncInterval);
+	virtual void BeginDrawing() override;
+	virtual bool Present(int32& InOutSyncInterval) override;
 
 protected:
 	uint64 AdapterLuid;

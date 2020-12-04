@@ -10,6 +10,7 @@
 #include "Misc/App.h"
 #include "Containers/Ticker.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
+#include "Stats/Stats.h"
 
 #if WITH_EDITOR
 	#include "ISettingsModule.h"
@@ -327,8 +328,15 @@ public:
 			return true;
 		}
 
-		// otherwise only allow if explicitly desired
-		return FParse::Param(FCommandLine::Get(), TEXT("Messaging"));
+		// otherwise allow if explicitly desired
+		if (FParse::Param(FCommandLine::Get(), TEXT("Messaging")))
+		{
+			return true;
+		}
+
+		// check the project setting
+		const UUdpMessagingSettings& Settings = *GetDefault<UUdpMessagingSettings>();
+		return Settings.EnabledByDefault;
 #endif
 	}
 
@@ -627,6 +635,7 @@ private:
 		uint32 CheckNumber = 1;
 		AutoRepairHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakTransport = WeakBridgeTransport, LastTime = FDateTime::UtcNow(), CheckDelay, CheckNumber](float DeltaTime) mutable
 		{
+			QUICK_SCOPE_CYCLE_COUNTER(STAT_FUdpMessagingModule_AutoRepair);
 			bool bContinue = true;
 			FDateTime UtcNow = FDateTime::UtcNow();
 			if (LastTime + (CheckDelay * CheckNumber) <= UtcNow)

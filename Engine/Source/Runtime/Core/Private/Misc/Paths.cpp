@@ -17,6 +17,7 @@
 #include "Misc/DataDrivenPlatformInfoRegistry.h"
 #include "Misc/EngineVersion.h"
 #include "Misc/LazySingleton.h"
+#include "Containers/StringView.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPaths, Log, All);
 
@@ -31,6 +32,7 @@ struct FPaths::FStaticData
 
 	FString         UserDirArg;
 	FString         GameSavedDir;
+	FString         EngineSavedDir;
 	FString         ShaderDir;
 	FString         UserFolder;
 	TArray<FString> EngineLocalizationPaths;
@@ -44,6 +46,7 @@ struct FPaths::FStaticData
 
 	bool bUserDirArgInitialized                    = false;
 	bool bGameSavedDirInitialized                  = false;
+	bool bEngineSavedDirInitialized                = false;
 	bool bShaderDirInitialized                     = false;
 	bool bUserFolderInitialized                    = false;
 	bool bEngineLocalizationPathsInitialized       = false;
@@ -65,12 +68,12 @@ namespace UE4Paths_Private
 	auto IsSlashOrBackslash    = [](TCHAR C) { return C == TEXT('/') || C == TEXT('\\'); };
 	auto IsNotSlashOrBackslash = [](TCHAR C) { return C != TEXT('/') && C != TEXT('\\'); };
 
-	FString GameSavedDir()
+	FString GetSavedDirSuffix(const FString& BaseDir, const TCHAR* CommandLineArgument)
 	{
-		FString Result = FPaths::ProjectUserDir();
+		FString Result = BaseDir + TEXT("Saved");
 
 		FString NonDefaultSavedDirSuffix;
-		if (FParse::Value(FCommandLine::Get(), TEXT("-saveddirsuffix="), NonDefaultSavedDirSuffix))
+		if (FParse::Value(FCommandLine::Get(), CommandLineArgument, NonDefaultSavedDirSuffix))
 		{
 			for (int32 CharIdx = 0; CharIdx < NonDefaultSavedDirSuffix.Len(); ++CharIdx)
 			{
@@ -80,18 +83,26 @@ namespace UE4Paths_Private
 					--CharIdx;
 				}
 			}
+		}
 
-			if (!NonDefaultSavedDirSuffix.IsEmpty())
-			{
-				Result += TEXT("Saved_") + NonDefaultSavedDirSuffix + TEXT("/");
-			}
-		}
-		else
+		if (!NonDefaultSavedDirSuffix.IsEmpty())
 		{
-			Result += TEXT("Saved/");
+			Result += TEXT("_") + NonDefaultSavedDirSuffix;
 		}
+
+		Result += TEXT("/");
 
 		return Result;
+	}
+
+	FString GameSavedDir()
+	{
+		return GetSavedDirSuffix(FPaths::ProjectUserDir(), TEXT("-saveddirsuffix="));
+	}
+
+	FString EngineSavedDir()
+	{
+		return GetSavedDirSuffix(FPaths::EngineUserDir(), TEXT("-enginesaveddirsuffix="));
 	}
 
 	FString ConvertRelativePathToFullInternal(FString&& BasePath, FString&& InPath)
@@ -189,7 +200,13 @@ FString FPaths::EngineIntermediateDir()
 
 FString FPaths::EngineSavedDir()
 {
-	return EngineUserDir() + TEXT("Saved/");
+	FStaticData& StaticData = TLazySingleton<FStaticData>::Get();
+	if (!StaticData.bEngineSavedDirInitialized)
+	{
+		StaticData.EngineSavedDir = UE4Paths_Private::EngineSavedDir();
+		StaticData.bEngineSavedDirInitialized = true;
+	}
+	return StaticData.EngineSavedDir;
 }
 
 FString FPaths::EnginePluginsDir()
@@ -200,6 +217,11 @@ FString FPaths::EnginePluginsDir()
 FString FPaths::EngineDefaultLayoutDir()
 {
 	return FPaths::EngineConfigDir() + TEXT("Layouts/");
+}
+
+FString FPaths::EngineProjectLayoutDir()
+{
+	return FPaths::ProjectConfigDir() + TEXT("Layouts/");
 }
 
 FString FPaths::EngineUserLayoutDir()
@@ -230,6 +252,43 @@ FString FPaths::EnginePlatformExtensionsDir()
 FString FPaths::ProjectPlatformExtensionsDir()
 {
 	return FPaths::ProjectDir() + TEXT("Platforms/");
+}
+
+
+static void AddIfDirectoryExists(TArray<FString>& ExtensionDirs, FString&& Dir)
+{
+	if (FPaths::DirectoryExists(Dir))
+	{
+		ExtensionDirs.Add(Dir);
+	}
+}
+
+static void GetExtensionDirsInternal(TArray<FString>& ExtensionDirs, const FString& BaseDir, const FString& SubDir)
+{
+	AddIfDirectoryExists(ExtensionDirs, FPaths::Combine(BaseDir, SubDir));
+
+	FString PlatformExtensionBaseDir = FPaths::Combine(BaseDir, TEXT("Platforms"));
+	for (const FString& PlatformName : FDataDrivenPlatformInfoRegistry::GetValidPlatformDirectoryNames())
+	{
+		AddIfDirectoryExists(ExtensionDirs, FPaths::Combine(PlatformExtensionBaseDir, PlatformName, SubDir));
+	}
+
+	FString RestrictedBaseDir = FPaths::Combine(BaseDir, TEXT("Restricted"));
+	IFileManager::Get().IterateDirectory(*RestrictedBaseDir, [&ExtensionDirs, SubDir](const TCHAR* FilenameOrDirectory, bool bIsDirectory)  -> bool
+	{
+		if (bIsDirectory)
+		{
+			GetExtensionDirsInternal(ExtensionDirs, FilenameOrDirectory, SubDir);
+		}
+		return true;
+	});
+}
+
+TArray<FString> FPaths::GetExtensionDirs(const FString& BaseDir, const FString& SubDir)
+{
+	TArray<FString> ExtensionDirs;
+	GetExtensionDirsInternal(ExtensionDirs, BaseDir, SubDir);
+	return ExtensionDirs;
 }
 
 FString FPaths::RootDir()
@@ -395,7 +454,12 @@ FString FPaths::AutomationDir()
 
 FString FPaths::AutomationTransientDir()
 {
-	return FPaths::AutomationDir() + TEXT("Transient/");
+	return FPaths::AutomationDir() + TEXT("Tmp/");
+}
+
+FString FPaths::AutomationReportsDir()
+{
+	return FPaths::AutomationDir() + TEXT("Reports/");
 }
 
 FString FPaths::AutomationLogDir()
@@ -1128,46 +1192,52 @@ void FPaths::RemoveDuplicateSlashes(FString& InPath)
 	InPath.TrimToNullTerminator();
 }
 
-void FPaths::MakeStandardFilename(FString& InPath)
+FString FPaths::CreateStandardFilename(const FString& InPath)
 {
 	// if this is an empty path, use the relative base dir
 	if (InPath.Len() == 0)
 	{
-		InPath = FPlatformProcess::BaseDir();
+		FString BaseDir = FPlatformProcess::BaseDir();
 		// if the base directory is nothing then this function will recurse infinitely instead of returning nothing.
-		if (InPath.Len() == 0)
-			return;
-		FPaths::MakeStandardFilename(InPath);
-		return;
+		if (BaseDir.Len() == 0)
+			return BaseDir;
+		return FPaths::CreateStandardFilename(BaseDir);
 	}
 
-	FString WithSlashes = InPath.Replace(TEXT("\\"), TEXT("/"), ESearchCase::CaseSensitive);
+	FString WithSlashes = InPath;
+	WithSlashes.ReplaceInline(TEXT("\\"), TEXT("/"), ESearchCase::CaseSensitive);
+	const FStringView SlashesView(WithSlashes);
 
-	FString RootDirectory = FPaths::RootDir();
+	const TCHAR* RootDirectory = FPlatformMisc::RootDir();
+	const FStringView RootDirectoryView(RootDirectory);
 
 	// look for paths that cannot be made relative, and are therefore left alone
 	// UNC (windows) network path
 	bool bCannotBeStandardized = InPath.StartsWith(TEXT("\\\\"), ESearchCase::CaseSensitive);
 	// windows drive letter path that doesn't start with base dir
-	bCannotBeStandardized |= ((InPath.Len() > 1) && (InPath[1] == ':') && !WithSlashes.StartsWith(RootDirectory));
+	bCannotBeStandardized |= ((InPath.Len() > 1) && (InPath[1] == ':') && !SlashesView.StartsWith(RootDirectoryView));
 	// Unix style absolute path that doesn't start with base dir
-	bCannotBeStandardized |= (WithSlashes.GetCharArray()[0] == '/' && !WithSlashes.StartsWith(RootDirectory));
+	bCannotBeStandardized |= (WithSlashes.GetCharArray()[0] == '/' && !SlashesView.StartsWith(RootDirectoryView));
 
 	// if it can't be standardized, just return itself
 	if (bCannotBeStandardized)
 	{
-		return;
+		return InPath;
 	}
 
 	// make an absolute path
-	
-	FString Standardized = FPaths::ConvertRelativePathToFull(InPath);
+	FString Standardized = FPaths::ConvertRelativePathToFull(WithSlashes);
 
 	// remove duplicate slashes
 	FPaths::RemoveDuplicateSlashes(Standardized);
-
 	// make it relative to Engine\Binaries\Platform
-	InPath = Standardized.Replace(*RootDirectory, *FPaths::GetRelativePathToRoot());
+	Standardized.ReplaceInline(RootDirectory, *FPaths::GetRelativePathToRoot());
+	return Standardized;
+}
+
+void FPaths::MakeStandardFilename(FString& InPath)
+{
+	InPath = FPaths::CreateStandardFilename(InPath);
 }
 
 void FPaths::MakePlatformFilename( FString& InPath )
@@ -1192,7 +1262,7 @@ bool FPaths::MakePathRelativeTo( FString& InPath, const TCHAR* InRelativeTo )
 	if (TargetArray.Num() && SourceArray.Num())
 	{
 		// Check for being on different drives
-		if ((TargetArray[0][1] == TEXT(':')) && (SourceArray[0][1] == TEXT(':')))
+		if ((TargetArray[0].Len() > 1) && (TargetArray[0][1] == TEXT(':')) && (SourceArray[0].Len() > 1) && (SourceArray[0][1] == TEXT(':')))
 		{
 			if (FChar::ToUpper(TargetArray[0][0]) != FChar::ToUpper(SourceArray[0][0]))
 			{
@@ -1508,11 +1578,11 @@ void FPaths::CombineInternal(FString& OutPath, const TCHAR** Pathes, int32 NumPa
 
 bool FPaths::IsSamePath(const FString& PathA, const FString& PathB)
 {
-	FString TmpA = PathA;
-	FString TmpB = PathB;
+	FString TmpA = FPaths::ConvertRelativePathToFull(PathA);
+	FString TmpB = FPaths::ConvertRelativePathToFull(PathB);
 
-	MakeStandardFilename(TmpA);
-	MakeStandardFilename(TmpB);
+	FPaths::RemoveDuplicateSlashes(TmpA);
+	FPaths::RemoveDuplicateSlashes(TmpB);
 
 #if PLATFORM_MICROSOFT
 	return FCString::Stricmp(*TmpA, *TmpB) == 0;

@@ -11,7 +11,7 @@
 #include "PhysXInterfaceWrapperCore.h"
 #include "CollisionQueryFilterCallbackCore.h"
 #include "ChaosInterfaceWrapperCore.h"
-
+#include "Chaos/PBDRigidsEvolutionFwd.h"
 
 class FPhysTestSerializer;
 
@@ -24,8 +24,6 @@ namespace ChaosInterface
 
 namespace Chaos
 {
-	class FPBDRigidsEvolutionGBF;
-
 	class FChaosArchive;
 }
 
@@ -43,7 +41,7 @@ struct PHYSICSCORE_API FSQCapture
 		Overlap
 	} SQType;
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	void StartCapturePhysXSweep(const PxScene& Scene, const PxGeometry& InQueryGeom, const FTransform& InStartTM, const FVector& InDir, float InDeltaMag, FHitFlags InOutputFlags, const FQueryFilterData& QueryFilter, const FCollisionFilterData& FilterData, ICollisionQueryFilterCallbackBase& Callback);
 	void EndCapturePhysXSweep(const PxHitCallback<PxSweepHit>& Results);
 
@@ -54,18 +52,18 @@ struct PHYSICSCORE_API FSQCapture
 	void EndCapturePhysXOverlap(const PxHitCallback<PxOverlapHit>& Results);
 #endif
 
-	void StartCaptureChaosSweep(const Chaos::FPBDRigidsEvolutionGBF& Evolution, const Chaos::FImplicitObject& InQueryGeom, const FTransform& InStartTM, const FVector& InDir, float InDeltaMag, FHitFlags InOutputFlags, const FQueryFilterData& QueryFilter, const FCollisionFilterData& FilterData, ICollisionQueryFilterCallbackBase& Callback);
+	void StartCaptureChaosSweep(const Chaos::FPBDRigidsEvolution& Evolution, const Chaos::FImplicitObject& InQueryGeom, const FTransform& InStartTM, const FVector& InDir, float InDeltaMag, FHitFlags InOutputFlags, const FQueryFilterData& QueryFilter, const FCollisionFilterData& FilterData, ICollisionQueryFilterCallbackBase& Callback);
 	void EndCaptureChaosSweep(const ChaosInterface::FSQHitBuffer<ChaosInterface::FSweepHit>& Results);
 
-	void StartCaptureChaosRaycast(const Chaos::FPBDRigidsEvolutionGBF& Evolution, const FVector& InStartPoint, const FVector& InDir, float InDeltaMag, FHitFlags InOutputFlags, const FQueryFilterData& QueryFilter, const FCollisionFilterData& FilterData, ICollisionQueryFilterCallbackBase& Callback);
+	void StartCaptureChaosRaycast(const Chaos::FPBDRigidsEvolution& Evolution, const FVector& InStartPoint, const FVector& InDir, float InDeltaMag, FHitFlags InOutputFlags, const FQueryFilterData& QueryFilter, const FCollisionFilterData& FilterData, ICollisionQueryFilterCallbackBase& Callback);
 	void EndCaptureChaosRaycast(const ChaosInterface::FSQHitBuffer<ChaosInterface::FRaycastHit>& Results);
 
-	void StartCaptureChaosOverlap(const Chaos::FPBDRigidsEvolutionGBF& Evolution, const Chaos::FImplicitObject& InQueryGeom, const FTransform& InStartTM, const FQueryFilterData& QueryFilter, const FCollisionFilterData& FilterData, ICollisionQueryFilterCallbackBase& Callback);
+	void StartCaptureChaosOverlap(const Chaos::FPBDRigidsEvolution& Evolution, const Chaos::FImplicitObject& InQueryGeom, const FTransform& InStartTM, const FQueryFilterData& QueryFilter, const FCollisionFilterData& FilterData, ICollisionQueryFilterCallbackBase& Callback);
 	void EndCaptureChaosOverlap(const ChaosInterface::FSQHitBuffer<ChaosInterface::FOverlapHit>& Results);
 
-	ECollisionQueryHitType GetFilterResult(const Chaos::TPerShapeData<float,3>* Shape, const Chaos::TGeometryParticle<float,3>* Actor) const;
+	ECollisionQueryHitType GetFilterResult(const Chaos::FPerShapeData* Shape, const Chaos::TGeometryParticle<float,3>* Actor) const;
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	ECollisionQueryHitType GetFilterResult(const physx::PxShape* Shape, const physx::PxActor* Actor) const;
 #endif
 	
@@ -78,7 +76,7 @@ struct PHYSICSCORE_API FSQCapture
 	FQueryFilterData QueryFilterData;
 	TUniquePtr<ICollisionQueryFilterCallbackBase> FilterCallback;
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	PhysXInterface::FDynamicHitBuffer<PxSweepHit> PhysXSweepBuffer;
 	PhysXInterface::FDynamicHitBuffer<PxRaycastHit> PhysXRaycastBuffer;
 	PhysXInterface::FDynamicHitBuffer<PxOverlapHit> PhysXOverlapBuffer;
@@ -88,7 +86,7 @@ struct PHYSICSCORE_API FSQCapture
 	TUniquePtr<Chaos::FImplicitObject> ChaosOwnerObject;	//should be private, do not access directly
 	const Chaos::FImplicitObject* ChaosGeometry;
 	TUniquePtr<Chaos::FImplicitObject> SerializableChaosGeometry;
-#if WITH_PHYSX
+#if WITH_CHAOS
 	//for now just use physx hit buffer
 	ChaosInterface::FSQHitBuffer<ChaosInterface::FSweepHit> ChaosSweepBuffer;
 	TArray<ChaosInterface::FSweepHit> ChaosSweepTouches;
@@ -104,7 +102,7 @@ private:
 	FSQCapture(FPhysTestSerializer& OwningPhysSerializer);	//This should be created by PhysTestSerializer
 	void Serialize(Chaos::FChaosArchive& Ar);
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 	void SerializeActorToShapeHitsArray(FArchive& Ar);
 #endif
 
@@ -113,10 +111,12 @@ private:
 	TArray<uint8> GeomData;
 	TArray<uint8> HitData;
 
+#if 0
 	void CreateChaosDataFromPhysX();
 	void CreateChaosFilterResults();
+#endif
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 
 	static constexpr uint64 ShapeCollectionID = 1;
 
@@ -157,9 +157,9 @@ private:
 
 	FPhysTestSerializer& PhysSerializer;
 
-	void CaptureChaosFilterResults(const Chaos::FPBDRigidsEvolutionGBF& Evolution, const FCollisionFilterData& FilterData, ICollisionQueryFilterCallbackBase& Callback);
+	void CaptureChaosFilterResults(const Chaos::FPBDRigidsEvolution& Evolution, const FCollisionFilterData& FilterData, ICollisionQueryFilterCallbackBase& Callback);
 
-	TMap<Chaos::TGeometryParticle<float,3>*, TArray<TPair<Chaos::TPerShapeData<float,3>*, ECollisionQueryHitType>>> ChaosActorToShapeHitsArray;
+	TMap<Chaos::TGeometryParticle<float,3>*, TArray<TPair<Chaos::FPerShapeData*, ECollisionQueryHitType>>> ChaosActorToShapeHitsArray;
 
 	template <typename THit>
 	void SerializeChaosBuffers(Chaos::FChaosArchive& Ar, int32 Version, ChaosInterface::FSQHitBuffer<THit>& ChaosBuffer);

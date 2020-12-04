@@ -56,7 +56,12 @@
 
 // World bluring radius for a miss.
 #define WORLD_RADIUS_INVALID -1
-#define WORLD_RADIUS_MISS (INFINITE_FLOAT)
+#define WORLD_RADIUS_MISS (100000)
+
+// World bluring radius for a miss.
+#define CONFUSION_FACTOR_INVALID -1
+#define CONFUSION_FACTOR_MISS 1
+
 
 // Mip level for sample that are invalid or missed.
 #define MIP_LEVEL_INVALID -1
@@ -91,14 +96,6 @@
 	/** Buffer layout for the shadow penumbra given as input. */
 	#define SIGNAL_BUFFER_LAYOUT_PENUMBRA_INJESTION_NSPP 16
 
-	/** Internal buffer layout for the shadow penumbra multiplexed into buffers.
-	 * This buffer layout is able to pack two signals per render target.
-	 */
-	#define SIGNAL_BUFFER_LAYOUT_PENUMBRA_RECONSTRUCTION 12
-
-	/** Internal buffer to encode history rejection preconvolution. */
-	#define SIGNAL_BUFFER_LAYOUT_PENUMBRA_REJECTION 17
-
 	/** Internal buffer layout for the shadow penumbra to be stored in indivual per light histories. */
 	#define SIGNAL_BUFFER_LAYOUT_PENUMBRA_HISTORY 11
 
@@ -115,9 +112,6 @@
 
 	/** Buffer layout for the reflection given by the ray generation shader. */
 	#define SIGNAL_BUFFER_LAYOUT_REFLECTIONS_INPUT 3
-
-	/** Buffer layout for the rejection output. */
-	#define SIGNAL_BUFFER_LAYOUT_REFLECTIONS_REJECTION 9
 
 	/** Buffer layout for the reflection output. */
 	#define SIGNAL_BUFFER_LAYOUT_REFLECTIONS_HISTORY 4
@@ -205,6 +199,9 @@
 	// Stocastic 2x2 that only take one sample.
 	#define SAMPLE_SET_2X2_STOCASTIC 13
 
+	// Adapt between bilinear and stocastic 2x2.
+	#define SAMPLE_SET_2X2_ADAPTIVE 17
+
 	// Square kernel
 	#define SAMPLE_SET_3X3 2
 	#define SAMPLE_SET_3X3_SOBEK2018 3
@@ -219,8 +216,6 @@
 	#define SAMPLE_SET_STACKOWIAK_4_SETS 8
 
 	#define SAMPLE_SET_HEXAWEB 11
-
-	#define SAMPLE_SET_STOCASTIC_HIERARCHY 12
 
 	#define SAMPLE_SET_DIRECTIONAL_RECT 14
 	#define SAMPLE_SET_DIRECTIONAL_ELLIPSE 15
@@ -282,6 +277,8 @@
 
 	#define BILATERAL_PRESET_SPHERICAL_HARMONIC 0x3001
 
+	#define BILATERAL_PRESET_AO 0x4001
+	#define BILATERAL_PRESET_AO_HISTORY 0x4002
 
 
 

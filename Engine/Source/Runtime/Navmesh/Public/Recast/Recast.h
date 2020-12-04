@@ -441,6 +441,8 @@ struct rcContourSet
 	int borderSize;		///< The AABB border size used to generate the source data from which the contours were derived.
 };
 
+// @UE4 BEGIN
+#if WITH_NAVMESH_CLUSTER_LINKS
 /// Represents group of clusters
 /// @ingroup recast
 struct rcClusterSet
@@ -450,6 +452,8 @@ struct rcClusterSet
 	unsigned short* nlinks;	///< Number of links per cluster [Size: #nclusters]
 	unsigned short* links;	///< Neighbor Ids per cluster [Size: sum of #nlinks]
 };
+#endif // WITH_NAVMESH_CLUSTER_LINKS
+// @UE4 END 
  
 /// Represents a polygon mesh suitable for use in building a navigation mesh. 
 /// @ingroup recast
@@ -537,6 +541,8 @@ NAVMESH_API rcContourSet* rcAllocContourSet();
 ///  @see rcAllocContourSet
 NAVMESH_API void rcFreeContourSet(rcContourSet* cset);
 
+// @UE4 BEGIN
+#if WITH_NAVMESH_CLUSTER_LINKS
 /// Allocates a cluster set object using the Recast allocator.
 ///  @return A cluster set that is ready for initialization, or null on failure.
 ///  @ingroup recast
@@ -548,6 +554,8 @@ NAVMESH_API rcClusterSet* rcAllocClusterSet();
 ///  @ingroup recast
 ///  @see rcAllocClusterSet
 NAVMESH_API void rcFreeClusterSet(rcClusterSet* clset);
+#endif // WITH_NAVMESH_CLUSTER_LINKS
+// @UE4 END 
 
 /// Allocates a polygon mesh object using the Recast allocator.
 ///  @return A polygon mesh that is ready for initialization, or null on failure.
@@ -925,9 +933,12 @@ NAVMESH_API void rcCacheSpans(rcContext* ctx, rcHeightfield& hf, rcSpanCache* ca
 ///  @param[in,out]	solid			An initialized heightfield.
 ///  @param[in]		flagMergeThr	The distance where the walkable flag is favored over the non-walkable flag.
 ///  								[Limit: >= 0] [Units: vx]
+///  @param[in]     rtzFlags		Flags to change the rasterization behavior			//UE4
+///  @param[in]     rtzMasks		Mask for the rasterization flags [Size: hf.w*hf.h]	//UE4
 NAVMESH_API void rcRasterizeTriangle(rcContext* ctx, const float* v0, const float* v1, const float* v2,
 						 const unsigned char area, rcHeightfield& solid,
-						 const int flagMergeThr = 1);
+						 const int flagMergeThr = 1, 
+						 const int rasterizationFlags = 0, const int* rasterizationMasks = nullptr); //UE4
 
 /// Rasterizes an indexed triangle mesh into the specified heightfield.
 ///  @ingroup recast
@@ -940,10 +951,12 @@ NAVMESH_API void rcRasterizeTriangle(rcContext* ctx, const float* v0, const floa
 ///  @param[in,out]	solid			An initialized heightfield.
 ///  @param[in]		flagMergeThr	The distance where the walkable flag is favored over the non-walkable flag. 
 ///  								[Limit: >= 0] [Units: vx]
-///  @param[in]     int				Flags to change the rasterization behavior		//UE4
+///  @param[in]     rtzFlags		Flags to change the rasterization behavior			//UE4
+///  @param[in]     rtzMasks		Mask for the rasterization flags [Size: hf.w*hf.h]	//UE4
 NAVMESH_API void rcRasterizeTriangles(rcContext* ctx, const float* verts, const int nv,
 						  const int* tris, const unsigned char* areas, const int nt,
-						  rcHeightfield& solid, const int flagMergeThr = 1, const int rasterizationFlags = 0 /*UE4*/);
+						  rcHeightfield& solid, const int flagMergeThr = 1, 
+						  const int rasterizationFlags = 0, const int* rasterizationMasks = nullptr); //UE4
 
 /// Rasterizes an indexed triangle mesh into the specified heightfield.
 ///  @ingroup recast
@@ -956,10 +969,12 @@ NAVMESH_API void rcRasterizeTriangles(rcContext* ctx, const float* verts, const 
 ///  @param[in,out]	solid			An initialized heightfield.
 ///  @param[in]		flagMergeThr	The distance where the walkable flag is favored over the non-walkable flag. 
 ///  								[Limit: >= 0] [Units: vx]
-///  @param[in]     int				Flags to change the rasterization behavior		//UE4
+///  @param[in]     rtzFlags		Flags to change the rasterization behavior			//UE4
+///  @param[in]     rtzMasks		Mask for the rasterization flags [Size: hf.w*hf.h]	//UE4
 NAVMESH_API void rcRasterizeTriangles(rcContext* ctx, const float* verts, const int nv,
 						  const unsigned short* tris, const unsigned char* areas, const int nt,
-						  rcHeightfield& solid, const int flagMergeThr = 1, const int rasterizationFlags = 0 /*UE4*/);
+						  rcHeightfield& solid, const int flagMergeThr = 1, 
+						  const int rasterizationFlags = 0, const int* rasterizationMasks = nullptr); //UE4
 
 /// Rasterizes triangles into the specified heightfield.
 ///  @ingroup recast
@@ -970,8 +985,11 @@ NAVMESH_API void rcRasterizeTriangles(rcContext* ctx, const float* verts, const 
 ///  @param[in,out]	solid			An initialized heightfield.
 ///  @param[in]		flagMergeThr	The distance where the walkable flag is favored over the non-walkable flag. 
 ///  								[Limit: >= 0] [Units: vx]
+///  @param[in]     rtzFlags		Flags to change the rasterization behavior			//UE4
+///  @param[in]     rtzMasks		Mask for the rasterization flags [Size: hf.w*hf.h]	//UE4
 NAVMESH_API void rcRasterizeTriangles(rcContext* ctx, const float* verts, const unsigned char* areas, const int nt,
-						  rcHeightfield& solid, const int flagMergeThr = 1);
+						  rcHeightfield& solid, const int flagMergeThr = 1,
+						  const int rasterizationFlags = 0, const int* rasterizationMasks = nullptr); //UE4
 
 /// Marks non-walkable spans as walkable if their maximum is within @p walkableClimp of a walkable neighbor. 
 ///  @ingroup recast
@@ -1306,12 +1324,16 @@ NAVMESH_API bool rcBuildContours(rcContext* ctx, rcCompactHeightfield& chf,
 					 const float maxError, const int maxEdgeLen,
 					 rcContourSet& cset, const int flags = RC_CONTOUR_TESS_WALL_EDGES);
 
+//@UE4 BEGIN
+#if WITH_NAVMESH_CLUSTER_LINKS
 /// Builds a cluster set from contours
 /// @ingroup recast
-/// @param[in,out]	ctx			The build context to use during the operaiton
-/// @param[in]		cset		Countour set
+/// @param[in,out]	ctx			The build context to use during the operation
+/// @param[in]		cset		Contour set
 /// @param[out]		clusters	Resulting cluster set
 NAVMESH_API bool rcBuildClusters(rcContext* ctx, rcContourSet& cset, rcClusterSet& clusters);
+#endif // WITH_NAVMESH_CLUSTER_LINKS
+//@UE4 END
 
 /// Builds a polygon mesh from the provided contours.
 ///  @ingroup recast

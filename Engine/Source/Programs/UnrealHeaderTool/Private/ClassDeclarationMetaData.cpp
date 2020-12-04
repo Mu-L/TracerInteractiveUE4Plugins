@@ -184,6 +184,12 @@ void FClassDeclarationMetaData::ParseClassProperties(TArray<FPropertySpecifier>&
 				ClassFlags |= CLASS_GlobalUserConfig;
 				break;
 
+			case EClassMetadataSpecifier::ProjectUserConfig:
+
+				// Save object config only to project user overrides, never to INIs that are checked in
+				ClassFlags |= CLASS_ProjectUserConfig;
+				break;
+
 			case EClassMetadataSpecifier::ShowCategories:
 
 				FHeaderParser::RequireSpecifierValue(PropSpecifier);
@@ -287,7 +293,7 @@ void FClassDeclarationMetaData::ParseClassProperties(TArray<FPropertySpecifier>&
 			case EClassMetadataSpecifier::AdvancedClassDisplay:
 
 				// By default the class properties are shown in advanced sections in UI
-				ClassFlags |= CLASS_AdvancedDisplay;
+				MetaData.Add(FHeaderParserNames::NAME_AdvancedClassDisplay, TEXT("true"));
 				break;
 
 			case EClassMetadataSpecifier::ConversionRoot:

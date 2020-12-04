@@ -20,6 +20,7 @@
 #include "IPersonaToolkit.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Engine/Font.h"
 
 #define LOCTEXT_NAMESPACE "PhysicsAssetEditorEditMode"
 
@@ -30,7 +31,7 @@ FPhysicsAssetEditorEditMode::FPhysicsAssetEditorEditMode()
 	, PhysicsAssetEditor_TranslateSpeed(0.25f)
 	, PhysicsAssetEditor_RotateSpeed(1.0f * (PI / 180.0f))
 	, PhysicsAssetEditor_LightRotSpeed(0.22f)
-	, SimGrabCheckDistance(5000.0f)
+	, SimGrabCheckDistance(500.0f)
 	, SimHoldDistanceChangeDelta(20.0f)
 	, SimMinHoldDistance(10.0f)
 	, SimGrabMoveSpeed(1.0f)
@@ -307,6 +308,25 @@ bool FPhysicsAssetEditorEditMode::InputDelta(FEditorViewportClient* InViewportCl
 		return Rotation;
 	};
 
+	auto GetLocalTranslation = [this](FEditorViewportClient* InLocalViewportClient, const FVector& InDrag, const FTransform& InWidgetTM)
+	{
+		FVector Translation = InDrag;
+
+		if (InLocalViewportClient->GetWidgetCoordSystemSpace() == COORD_Local)
+		{
+			// When using local coords, we should translate in EACH objects local space, not the space of the first selected.
+			// We receive deltas in the local coord space, so we need to transform back
+			FMatrix CoordSpace;
+			GetCustomInputCoordinateSystem(CoordSpace, nullptr);
+
+			// Now transform into this object's local space
+			FMatrix ObjectMatrix = InWidgetTM.ToMatrixNoScale().RemoveTranslation();
+			Translation = ObjectMatrix.TransformVector(CoordSpace.Inverse().TransformVector(InDrag));
+		}
+
+		return Translation;
+	};
+
 	bool bHandled = false;
 	const EAxisList::Type CurrentAxis = InViewportClient->GetCurrentWidgetAxis();
 	if (!SharedData->bRunningSimulation && SharedData->bManipulating && CurrentAxis != EAxisList::None)
@@ -330,8 +350,9 @@ bool FPhysicsAssetEditorEditMode::InputDelta(FEditorViewportClient* InViewportCl
 				{
 					if (InViewportClient->GetWidgetMode() == FWidget::WM_Translate)
 					{
-						FVector Dir = SelectedObject.WidgetTM.InverseTransformVector(InDrag.GetSafeNormal());
-						FVector DragVec = Dir * InDrag.Size() / BoneScale;
+						FVector DragToUse = GetLocalTranslation(InViewportClient, InDrag, SelectedObject.WidgetTM);
+						FVector Dir = SelectedObject.WidgetTM.InverseTransformVector(DragToUse.GetSafeNormal());
+						FVector DragVec = Dir * DragToUse.Size() / BoneScale;
 						SelectedObject.ManipulateTM.AddToTranslation(DragVec);
 					}
 					else if (InViewportClient->GetWidgetMode() == FWidget::WM_Rotate)
@@ -400,8 +421,9 @@ bool FPhysicsAssetEditorEditMode::InputDelta(FEditorViewportClient* InViewportCl
 
 				if (InViewportClient->GetWidgetMode() == FWidget::WM_Translate)
 				{
-					FVector Dir = SelectedObject.WidgetTM.InverseTransformVector(InDrag.GetSafeNormal());
-					FVector DragVec = Dir * InDrag.Size() / BoneScale;
+					FVector DragToUse = GetLocalTranslation(InViewportClient, InDrag, SelectedObject.WidgetTM);
+					FVector Dir = SelectedObject.WidgetTM.InverseTransformVector(DragToUse.GetSafeNormal());
+					FVector DragVec = Dir * DragToUse.Size() / BoneScale;
 					SelectedObject.ManipulateTM.AddToTranslation(DragVec);
 				}
 				else if (InViewportClient->GetWidgetMode() == FWidget::WM_Rotate)
@@ -527,7 +549,7 @@ void FPhysicsAssetEditorEditMode::DrawHUD(FEditorViewportClient* ViewportClient,
 		}
 		else if (ViewportClient->GetWidgetMode() == FWidget::WM_Rotate)
 		{
-			TextItem.Text = LOCTEXT("DoubleRotate", "Hold ALT to rotate both reference frames");
+			TextItem.Text = LOCTEXT("SingleRotate", "Hold ALT to rotate single reference frame");
 		}
 	}
 
@@ -801,23 +823,28 @@ bool FPhysicsAssetEditorEditMode::SimMousePress(FEditorViewportClient* InViewpor
 	FSceneView* View = InViewportClient->CalcSceneView(&ViewFamily);
 
 	const FViewportClick Click(View, InViewportClient, EKeys::Invalid, IE_Released, Viewport->GetMouseX(), Viewport->GetMouseY());
-#if DEBUG_CLICK_VIEWPORT	
+	FHitResult Result(1.f);
+	bool bHit = SharedData->EditorSkelComp->LineTraceComponent(Result, Click.GetOrigin(), Click.GetOrigin() + Click.GetDirection() * SimGrabCheckDistance, FCollisionQueryParams(NAME_None, true));
+
+	SharedData->LastClickPos = Click.GetClickPos();
 	SharedData->LastClickOrigin = Click.GetOrigin();
 	SharedData->LastClickDirection = Click.GetDirection();
-#endif
-	SharedData->LastClickPos = Click.GetClickPos();
-	FHitResult Result(1.f);
-	bool bHit = SharedData->EditorSkelComp->LineTraceComponent(Result, Click.GetOrigin() - Click.GetDirection() * SimGrabCheckDistance, Click.GetOrigin() + Click.GetDirection() * SimGrabCheckDistance, FCollisionQueryParams(NAME_None, true));
+	SharedData->bLastClickHit = bHit;
+	if (bHit)
+	{
+		SharedData->LastClickHitPos = Result.Location;
+		SharedData->LastClickHitNormal = Result.Normal;
+	}
 
 	if (bHit)
 	{
+		check(Result.Item != INDEX_NONE);
+		FName BoneName = SharedData->PhysicsAsset->SkeletalBodySetups[Result.Item]->BoneName;
+
+		UE_LOG(LogPhysics, Log, TEXT("Physics Asset Editor Click Hit Bone (%s)"), *BoneName.ToString());
+
 		if(bCtrlDown || bShiftDown)
 		{
-			check(Result.Item != INDEX_NONE);
-			FName BoneName = SharedData->PhysicsAsset->SkeletalBodySetups[Result.Item]->BoneName;
-
-			//UE_LOG(LogPhysics, Warning, TEXT("Hit Bone Name (%s)"), *BoneName.ToString());
-
 			// Right mouse is for dragging things around
 			if (Key == EKeys::RightMouseButton)
 			{
@@ -851,11 +878,12 @@ bool FPhysicsAssetEditorEditMode::SimMousePress(FEditorViewportClient* InViewpor
 				SharedData->EditorSkelComp->AddImpulseAtLocation(Click.GetDirection() * SharedData->EditorOptions->PokeStrength, Result.Location, BoneName);
 			}
 		}
-
-		return true;
 	}
 
-	return false;
+	// @todo(ccaulfield): really this should return false if we don't have Ctrl or Shift help down. This would allow the mouse-fly
+	// behaviour to work even when clicking on a space occupied by a body. However we don't want to change this until we have a way
+	// to enable/disable the fly and orbit camera behaviours.
+	return bHit;
 }
 
 void FPhysicsAssetEditorEditMode::SimMouseMove(FEditorViewportClient* InViewportClient, float DeltaX, float DeltaY)

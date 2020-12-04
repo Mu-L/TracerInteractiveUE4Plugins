@@ -8,6 +8,7 @@
 #include "MovieSceneImagePlateTrack.h"
 #include "MovieSceneImagePlateSection.h"
 #include "ImagePlateFileSequence.h"
+#include "ImagePlateComponent.h"
 
 #include "Engine/Texture2D.h"
 #include "Engine/Texture2DDynamic.h"
@@ -133,6 +134,12 @@ struct FImagePlateExecutionToken : IMovieSceneExecutionToken
 				// @todo: do we need to block here? It'll get picked up on the render thread anyway before our frame is out
 				//TextureCopied.Wait();
 			}
+
+			UImagePlateComponent* ImagePlateComponent = Cast<UImagePlateComponent>(Object);
+			if (ImagePlateComponent)
+			{
+				ImagePlateComponent->OnRenderTextureChanged();
+			}
 		}
 	}
 };
@@ -146,7 +153,7 @@ FMovieSceneImagePlateSectionTemplate::FMovieSceneImagePlateSectionTemplate()
 {}
 
 FMovieSceneImagePlateSectionTemplate::FMovieSceneImagePlateSectionTemplate(const UMovieSceneImagePlateSection& InSection, const UMovieSceneImagePlateTrack& InTrack)
-	: PropertyData(InTrack.GetPropertyName(), InTrack.GetPropertyPath(), NAME_None, "OnRenderTextureChanged")
+	: PropertyData(InTrack.GetPropertyName(), InTrack.GetPropertyPath().ToString())
 {
 	Params.FileSequence = InSection.FileSequence;
 	Params.SectionStartTime = InSection.GetInclusiveStartFrame();

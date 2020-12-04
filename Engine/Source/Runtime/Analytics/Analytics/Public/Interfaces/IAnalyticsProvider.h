@@ -7,7 +7,34 @@
 
 class Error;
 
-/** Generic interface for an analytics provider. Other modules can define more and register them with this module. */
+/** 
+ * Generic interface for an analytics provider. 
+ * Other modules can define more and register them with this module. See FAnalytics for details.
+ *
+ * Easiest way to use this is like so:
+ *
+ *   // MakeAnalyticsEventAttributeArray is a convenient way to efficiently make an array of attributes
+ *   // Since it returns an unnamed temporary, the compiler automatically selects the move-aware version.
+ *   AnalyticsProvider->RecordEvent(TEXT("MyEvent"), MakeAnalyticsEventAttributeArray("Attr1", "Value1", ... ));
+ * or:
+ *   TArray<FAnalyticEventAttribute> Attrs;
+ *   Attrs.Add(...);
+ *   AnalyticsProvider->RecordEvent(TEXT("MyEvent"), Attrs);
+ * 
+ * Several APIs build off the pure virtual ones. The following pure virtuals must be implemented by a derived class.
+ * 
+ * 	virtual bool StartSession(const TArray<FAnalyticsEventAttribute>& Attributes)
+ * 	virtual void EndSession()
+ * 	virtual FString GetSessionID() const
+ * 	virtual bool SetSessionID(const FString& InSessionID)
+ * 	virtual void FlushEvents()
+ * 	virtual void SetUserID(const FString& InUserID)
+ * 	virtual FString GetUserID() const
+ *  virtual void RecordEvent(const FString& EventName, const TArray<FAnalyticsEventAttribute>& Attributes)
+ *
+ * There are several other methods to record specific types of events. They were added for legacy reasons to support
+ * specific third party implementations. Derived classes generally do not have to worry about them.
+ */
 class IAnalyticsProvider
 {
 public:
@@ -16,21 +43,23 @@ public:
 	 * The use case is for backends and dedicated servers to send events on behalf of a user
 	 * without technically affecting the session length of the local player.
 	 * Local players log in and start/end the session, but remote players simply
-	 * call SetUserID and start sending events, which is legal and analytics providers should 
+	 * call SetUserID and start sending events, which is legal and analytics providers should
 	 * gracefully handle this.
 	 * Repeated calls to this method will be ignored.
-	 * *param Attributes attributes of the session. Arbitrary set of key/value pairs.
+	 *
 	 * @returns true if the session started successfully.
-	 */
-	virtual bool StartSession(const TArray<FAnalyticsEventAttribute>& Attributes) = 0;
-
-	/**
-	 * Overload for StartSession that takes no attributes
 	 */
 	bool StartSession()
 	{
 		return StartSession(TArray<FAnalyticsEventAttribute>());
 	}
+
+	/**
+	 * Starts a session. See parameterless-version for contract details.
+	 * @param Attributes attributes of the session. Arbitrary set of key/value pairs that will be sent
+	                     with the StartSession event that this should also trigger.
+	 */
+	virtual bool StartSession(const TArray<FAnalyticsEventAttribute>& Attributes) = 0;
 
 	/**
 	 * Overload for StartSession that takes a single attribute
@@ -39,9 +68,7 @@ public:
 	 */
 	bool StartSession(const FAnalyticsEventAttribute& Attribute)
 	{
-		TArray<FAnalyticsEventAttribute> Attributes;
-		Attributes.Add(Attribute);
-		return StartSession(Attributes);
+		return StartSession(TArray<FAnalyticsEventAttribute> { Attribute });
 	}
 
 	/**
@@ -52,13 +79,11 @@ public:
 	 */
 	bool StartSession(const FString& ParamName, const FString& ParamValue)
 	{
-		TArray<FAnalyticsEventAttribute> Attributes;
-		Attributes.Add(FAnalyticsEventAttribute(ParamName, ParamValue));
-		return StartSession(Attributes);
+		return StartSession(TArray<FAnalyticsEventAttribute> { FAnalyticsEventAttribute(ParamName, ParamValue) });
 	}
 
 	/**
-	 * Ends the session. No need to call explicitly, as the provider should do this for you when the instance is destroyed.
+	 * Ends the session. Usually no need to call explicitly, as the provider should do this for you when the instance is destroyed.
 	 */
 	virtual void EndSession() = 0;
 
@@ -102,7 +127,7 @@ public:
 	 */
 	virtual void SetBuildInfo(const FString& InBuildInfo)
 	{
-		RecordEvent(TEXT("BuildInfo"), TEXT("BuildInfo"), InBuildInfo);
+		RecordEvent(TEXT("BuildInfo"), TArray<FAnalyticsEventAttribute> { FAnalyticsEventAttribute(TEXT("BuildInfo"), InBuildInfo) });
 	}
 
 	/**
@@ -110,7 +135,7 @@ public:
 	 */
 	virtual void SetGender(const FString& InGender)
 	{
-		RecordEvent(TEXT("Gender"), TEXT("Gender"), InGender);
+		RecordEvent(TEXT("Gender"), TArray<FAnalyticsEventAttribute> { FAnalyticsEventAttribute(TEXT("Gender"), InGender) });
 	}
 
 	/**
@@ -118,7 +143,7 @@ public:
 	 */
 	virtual void SetLocation(const FString& InLocation)
 	{
-		RecordEvent(TEXT("Location"), TEXT("Location"), InLocation);
+		RecordEvent(TEXT("Location"), TArray<FAnalyticsEventAttribute> { FAnalyticsEventAttribute(TEXT("Location"), InLocation) });
 	}
 
 	/**
@@ -126,14 +151,14 @@ public:
 	 */
 	virtual void SetAge(const int32 InAge)
 	{
-		RecordEvent(TEXT("Age"), TEXT("Age"), *TTypeToString<int32>::ToString(InAge));
+		RecordEvent(TEXT("Age"), TArray<FAnalyticsEventAttribute> { FAnalyticsEventAttribute(TEXT("Age"), InAge) });
 	}
 
 	/**
 	 * Records a named event with an array of attributes
 	 *
 	 * @param EventName name of the event
-	 * @param ParamArray array of attribute name/value pairs
+	 * @param Attributes array of attribute name/value pairs
 	 */
 	virtual void RecordEvent(const FString& EventName, const TArray<FAnalyticsEventAttribute>& Attributes) = 0;
 
@@ -155,9 +180,7 @@ public:
 	 */
 	void RecordEvent(const FString& EventName, const FAnalyticsEventAttribute& Attribute)
 	{
-		TArray<FAnalyticsEventAttribute> Attributes;
-		Attributes.Add(Attribute);
-		RecordEvent(EventName, Attributes);
+		RecordEvent(EventName, TArray<FAnalyticsEventAttribute> { Attribute });
 	}
 
 	/**
@@ -169,9 +192,7 @@ public:
 	 */
 	void RecordEvent(const FString& EventName, const FString& ParamName, const FString& ParamValue)
 	{
-		TArray<FAnalyticsEventAttribute> Attributes;
-		Attributes.Add(FAnalyticsEventAttribute(ParamName, ParamValue));
-		RecordEvent(EventName, Attributes);
+		RecordEvent(EventName, TArray<FAnalyticsEventAttribute> { FAnalyticsEventAttribute(ParamName, ParamValue) });
 	}
 
 	/**

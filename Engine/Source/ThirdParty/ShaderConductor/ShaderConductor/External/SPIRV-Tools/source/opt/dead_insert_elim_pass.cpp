@@ -142,6 +142,9 @@ void DeadInsertElimPass::MarkInsertChain(
   if (insInst->opcode() != SpvOpPhi) return;
   // Mark phi visited to prevent potential infinite loop. If phi is already
   // visited, return to avoid infinite loop.
+  /* UE Change Begin: Verify phi before dereferencing. */
+  if (nullptr == visited_phis) return;
+  /* UE Change End: Verify phi before dereferencing. */
   if (visited_phis->count(insInst->result_id()) != 0) return;
   visited_phis->insert(insInst->result_id());
 
@@ -215,8 +218,7 @@ bool DeadInsertElimPass::EliminateDeadInsertsOnePass(Function* func) {
           } break;
           default: {
             // Mark inserts in chain for all components
-            std::unordered_set<uint32_t> visited_phis;
-            MarkInsertChain(&*ii, nullptr, 0, &visited_phis);
+            MarkInsertChain(&*ii, nullptr, 0, nullptr);
           } break;
         }
       });

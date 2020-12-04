@@ -19,6 +19,7 @@ public:
 
 	void Construct( const FArguments& InArgs, AUsdStageActor* InUsdStageActor );
 	void RefreshStageInfos( AUsdStageActor* InUsdStageActor );
+	~SUsdStageInfo();
 
 private:
 	struct FStageInfos
@@ -33,6 +34,7 @@ private:
 	FText GetRootLayerDisplayName() const { return StageInfos.RootLayerDisplayName; }
 	FText GetMetersPerUnit() const;
 
+	void OnStageInfoChanged( const TArray<FString>& ChangedFields );
 	void OnMetersPerUnitCommitted( const FText& InUnitsPerMeterText, ETextCommit::Type InCommitInfo );
 };
 

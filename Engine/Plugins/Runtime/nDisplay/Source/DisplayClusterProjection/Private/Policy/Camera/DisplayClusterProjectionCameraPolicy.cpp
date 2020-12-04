@@ -5,21 +5,18 @@
 #include "DisplayClusterProjectionLog.h"
 #include "DisplayClusterProjectionStrings.h"
 
-#include "DisplayClusterUtils/DisplayClusterCommonHelpers.h"
-
-#include "Config/IDisplayClusterConfigManager.h"
 #include "Game/IDisplayClusterGameManager.h"
 
-#include "DisplayClusterCameraComponent.h"
-#include "DisplayClusterRootComponent.h"
-#include "DisplayClusterScreenComponent.h"
+#include "Misc/DisplayClusterHelpers.h"
 
+#include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
 #include "Camera/CameraComponent.h"
 #include "ComposurePostMoves.h"
 
 
-FDisplayClusterProjectionCameraPolicy::FDisplayClusterProjectionCameraPolicy(const FString& ViewportId)
-	: FDisplayClusterProjectionPolicyBase(ViewportId)
+FDisplayClusterProjectionCameraPolicy::FDisplayClusterProjectionCameraPolicy(const FString& ViewportId, const TMap<FString, FString>& Parameters)
+	: FDisplayClusterProjectionPolicyBase(ViewportId, Parameters)
 {
 }
 
@@ -31,9 +28,11 @@ FDisplayClusterProjectionCameraPolicy::~FDisplayClusterProjectionCameraPolicy()
 //////////////////////////////////////////////////////////////////////////////////////////////
 // IDisplayClusterProjectionPolicy
 //////////////////////////////////////////////////////////////////////////////////////////////
-void FDisplayClusterProjectionCameraPolicy::StartScene(UWorld* World)
+void FDisplayClusterProjectionCameraPolicy::StartScene(UWorld* InWorld)
 {
 	check(IsInGameThread());
+
+	World = InWorld;
 }
 
 void FDisplayClusterProjectionCameraPolicy::EndScene()
@@ -62,8 +61,32 @@ bool FDisplayClusterProjectionCameraPolicy::CalculateView(const uint32 ViewIdx, 
 {
 	check(IsInGameThread());
 
-	InOutViewLocation = (AssignedCamera ? AssignedCamera->GetComponentLocation() : FVector::ZeroVector);
-	InOutViewRotation = (AssignedCamera ? AssignedCamera->GetComponentRotation() : FRotator::ZeroRotator);
+	InOutViewLocation = FVector::ZeroVector;
+	InOutViewRotation = FRotator::ZeroRotator;
+
+	// Use transform of an assigned camera
+	if (AssignedCamera)
+	{
+		InOutViewLocation = AssignedCamera->GetComponentLocation();
+		InOutViewRotation = AssignedCamera->GetComponentRotation();
+	}
+	// Otherwise default UE4 camera is used
+	else
+	{
+		if (World)
+		{
+			APlayerController* const CurPlayerController = World->GetFirstPlayerController();
+			if (CurPlayerController)
+			{
+				APlayerCameraManager* const CurPlayerCameraManager = CurPlayerController->PlayerCameraManager;
+				if (CurPlayerCameraManager)
+				{
+					InOutViewLocation = CurPlayerCameraManager->GetCameraLocation();
+					InOutViewRotation = CurPlayerCameraManager->GetCameraRotation();
+				}
+			}
+		}
+	}
 
 	return true;
 }
@@ -72,15 +95,31 @@ bool FDisplayClusterProjectionCameraPolicy::GetProjectionMatrix(const uint32 Vie
 {
 	check(IsInGameThread());
 
-	if (!AssignedCamera)
+	FComposurePostMoveSettings ComposureSettings;
+
+	if (AssignedCamera)
 	{
-		return false;
+		OutPrjMatrix = ComposureSettings.GetProjectionMatrix(AssignedCamera->FieldOfView * CurrentFovMultiplier, AssignedCamera->AspectRatio);
+		return true;
+	}
+	else
+	{
+		if (World)
+		{
+			APlayerController* const CurPlayerController = World->GetFirstPlayerController();
+			if (CurPlayerController)
+			{
+				APlayerCameraManager* const CurPlayerCameraManager = CurPlayerController->PlayerCameraManager;
+				if (CurPlayerCameraManager)
+				{
+					OutPrjMatrix = ComposureSettings.GetProjectionMatrix(CurPlayerCameraManager->GetFOVAngle() * CurrentFovMultiplier, CurPlayerCameraManager->DefaultAspectRatio);
+					return true;
+				}
+			}
+		}
 	}
 
-	FComposurePostMoveSettings ComposureSettings;
-	OutPrjMatrix = ComposureSettings.GetProjectionMatrix(AssignedCamera->FieldOfView * CurrentFovMultiplier, AssignedCamera->AspectRatio);
-
-	return true;
+	return false;
 }
 
 

@@ -50,6 +50,11 @@ URigVMNode* URigVMGraph::FindNodeByName(const FName& InNodeName) const
 {
 	for (URigVMNode* Node : Nodes)
 	{
+		if (Node == nullptr)
+		{
+			continue;
+		}
+
 		if (Node->GetFName() == InNodeName)
 		{
 			return Node;
@@ -119,7 +124,7 @@ TSharedPtr<FRigVMParserAST> URigVMGraph::GetDiagnosticsAST(bool bForceRefresh)
 	if (DiagnosticsAST == nullptr || bForceRefresh)
 	{
 		FRigVMParserASTSettings Settings = FRigVMParserASTSettings::Fast();
-		DiagnosticsAST = MakeShareable(new FRigVMParserAST(this, Settings));
+		DiagnosticsAST = MakeShareable(new FRigVMParserAST(this, nullptr, Settings));
 	}
 	return DiagnosticsAST;
 }
@@ -128,8 +133,7 @@ TSharedPtr<FRigVMParserAST> URigVMGraph::GetRuntimeAST(const FRigVMParserASTSett
 {
 	if (RuntimeAST == nullptr || bForceRefresh)
 	{
-		FRigVMParserASTSettings Settings = FRigVMParserASTSettings::Fast();
-		RuntimeAST = MakeShareable(new FRigVMParserAST(this, InSettings));
+		RuntimeAST = MakeShareable(new FRigVMParserAST(this, nullptr, InSettings));
 	}
 	return RuntimeAST;
 }

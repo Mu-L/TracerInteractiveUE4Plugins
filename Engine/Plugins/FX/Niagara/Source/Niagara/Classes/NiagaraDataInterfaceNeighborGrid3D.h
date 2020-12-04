@@ -19,10 +19,10 @@ class NeighborGrid3DRWInstanceData
 {
 public:
 
-	FIntVector NumVoxels;
-	float VoxelSize;
-	bool SetGridFromVoxelSize;
-	uint32 MaxNeighborsPerVoxel;	
+	FIntVector NumCells;
+	float CellSize;
+	bool SetGridFromCellSize;
+	uint32 MaxNeighborsPerCell;	
 	FVector WorldBBoxSize;
 
 	FRWBuffer NeighborhoodBuffer;
@@ -31,9 +31,11 @@ public:
 
 struct FNiagaraDataInterfaceProxyNeighborGrid3D : public FNiagaraDataInterfaceProxyRW
 {	
-	virtual void PreStage(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceSetArgs& Context) override;	
+	virtual void PreStage(FRHICommandList& RHICmdList, const FNiagaraDataInterfaceStageArgs& Context) override;
 	virtual void ConsumePerInstanceDataFromGameThread(void* PerInstanceData, const FNiagaraSystemInstanceID& Instance) override {}
 	virtual int32 PerInstanceDataPassedToRenderThreadSize() const override { return sizeof(NeighborGrid3DRWInstanceData); }	
+
+	virtual FIntVector GetElementCount(FNiagaraSystemInstanceID SystemInstanceID) const override;
 
 	/* List of proxy data for each system instances*/
 	// #todo(dmp): this should all be refactored to avoid duplicate code
@@ -48,7 +50,7 @@ class NIAGARA_API UNiagaraDataInterfaceNeighborGrid3D : public UNiagaraDataInter
 public:	
 
 	UPROPERTY(EditAnywhere, Category = "Grid")
-		uint32 MaxNeighborsPerVoxel;
+		uint32 MaxNeighborsPerCell;
 
 public:
 
@@ -81,9 +83,12 @@ public:
 	virtual void DestroyPerInstanceData(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance) override;
 	virtual bool PerInstanceTick(void* PerInstanceData, FNiagaraSystemInstance* SystemInstance, float DeltaSeconds) override { return false;  }
 	virtual int32 PerInstanceDataSize()const override { return sizeof(NeighborGrid3DRWInstanceData); }
+	virtual bool HasPreSimulateTick() const override { return true; }
 	//~ UNiagaraDataInterface interface END
 
 	void GetWorldBBoxSize(FVectorVMContext& Context);
+	void GetNumCells(FVectorVMContext& Context);
+	void GetMaxNeighborsPerCell(FVectorVMContext& Context);
 
 protected:
 	//~ UNiagaraDataInterface interface

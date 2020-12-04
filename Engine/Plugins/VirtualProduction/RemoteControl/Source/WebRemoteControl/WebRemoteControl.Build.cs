@@ -15,10 +15,26 @@ public class WebRemoteControl : ModuleRules
 
         PrivateDependencyModuleNames.AddRange(
 			new string[] {
+				"AssetRegistry",
 				"HTTPServer",
 				"RemoteControl",
 				"Serialization",
+				"Sockets",
+				"WebSocketNetworking"
 			}
         );
-    }
+
+		if (Target.Type == TargetType.Editor)
+		{
+			PrivateDependencyModuleNames.AddRange(
+				new string[] {
+					"ImageWrapper",
+					"Settings",
+					"Slate",
+					"SlateCore",
+					"UnrealEd",
+				}
+			);
+		}
+	}
 }

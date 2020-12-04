@@ -82,6 +82,8 @@ public:
 			{	
 				OpenSerializer(InObjectToRecord->GetName(), Binding.GetPropertyName(), TrackDisplayName, InGuid);
 			}
+
+			PostCreate(InRecordingHost, InObjectToRecord, InMovieScene, InGuid, bOpenSerializer);
 		}
 	}
 
@@ -171,7 +173,7 @@ public:
 
 		if (TrackRecorderSettings.bReduceKeys)
 		{
-			ReduceKeys(MovieSceneSection.Get());
+			ReduceKeys(MovieSceneSection.Get(), TrackRecorderSettings.ReduceKeysTolerance);
 		}
 
 		if (TrackRecorderSettings.bRemoveRedundantTracks)
@@ -188,66 +190,65 @@ public:
 		{
 			return;
 		}
-
+		
 		FTrackRecorderSettings TrackRecorderSettings = OwningTakeRecorderSource->GetTrackRecorderSettings();
+			
+		// The section can be removed if this is a spawnable since the spawnable template should have the same default values
+		bool bRemoveSection = true;
 
-		// If any channel has more than 1 key, the track cannot be removed
-		FMovieSceneChannelProxy& ChannelProxy = InSection->GetChannelProxy();
-		for (const FMovieSceneChannelEntry& Entry : InSection->GetChannelProxy().GetAllEntries())
+		bool bExclude = FTrackRecorderSettings::IsExcludePropertyTrack(InObjectToRecord, Binding.GetPropertyPath(), TrackRecorderSettings.DefaultTracks);
+		if (!bExclude)
 		{
-			TArrayView<FMovieSceneChannel* const> Channels = Entry.GetChannels();
-
-			for (int32 Index = 0; Index < Channels.Num(); ++Index)
+			// If any channel has more than 1 key, the track cannot be removed
+			FMovieSceneChannelProxy& ChannelProxy = InSection->GetChannelProxy();
+			for (const FMovieSceneChannelEntry& Entry : InSection->GetChannelProxy().GetAllEntries())
 			{
-				if (Channels[Index]->GetNumKeys() > 1)
+				TArrayView<FMovieSceneChannel* const> Channels = Entry.GetChannels();
+
+				for (int32 Index = 0; Index < Channels.Num(); ++Index)
 				{
-					return;
+					if (Channels[Index]->GetNumKeys() > 1)
+					{
+						return;
+					}
+				}
+			}
+
+			// Assumes each channel is left with 1 or no keys, so the keys can be removed and the default value set
+			PropertyType DefaultValue = GetDefaultValue(InSection);
+
+			// Reset channels
+			for (const FMovieSceneChannelEntry& Entry : InSection->GetChannelProxy().GetAllEntries())
+			{
+				TArrayView<FMovieSceneChannel* const> Channels = Entry.GetChannels();
+
+				for (int32 Index = 0; Index < Channels.Num(); ++Index)
+				{
+					Channels[Index]->Reset();
+				}
+			}
+
+			SetDefaultValue(InSection, DefaultValue);
+
+			// If recording to a possessable, this section can only be removed if the CDO value is the same and it's not on the whitelist of default property tracks
+			if (TrackRecorderSettings.bRecordToPossessable)
+			{
+				bRemoveSection = false;
+
+				UObject* DefaultObject = InObjectToRecord->GetClass()->GetDefaultObject();
+				if (DefaultObject && Binding.GetCurrentValue<PropertyType>(*DefaultObject) == DefaultValue)
+				{
+					bRemoveSection = true;
+				}
+
+				if (bRemoveSection && FTrackRecorderSettings::IsDefaultPropertyTrack(InObjectToRecord, Binding.GetPropertyPath(), TrackRecorderSettings.DefaultTracks))
+				{
+					bRemoveSection = false;
 				}
 			}
 		}
 
-		// Assumes each channel is left with 1 or no keys, so the keys can be removed and the default value set
-		PropertyType DefaultValue = GetDefaultValue(InSection);
-
-		// Reset channels
-		for (const FMovieSceneChannelEntry& Entry : InSection->GetChannelProxy().GetAllEntries())
-		{
-			TArrayView<FMovieSceneChannel* const> Channels = Entry.GetChannels();
-
-			for (int32 Index = 0; Index < Channels.Num(); ++Index)
-			{
-				Channels[Index]->Reset();
-			}
-		}
-
-		SetDefaultValue(InSection, DefaultValue);
-
-		// The section can be removed if this is a spawnable since the spawnable template should have the same default values
-		bool bRemoveSection = true;
-
-		// If recording to a possessable, this section can only be removed if the CDO value is the same and it's not on the whitelist of default property tracks
-		if (TrackRecorderSettings.bRecordToPossessable)
-		{
-			bRemoveSection = false;
-
-			UObject* DefaultObject = InObjectToRecord->GetClass()->GetDefaultObject();
-			if (DefaultObject && Binding.GetCurrentValue<PropertyType>(*DefaultObject) == DefaultValue)
-			{
-				bRemoveSection = true;
-			}
-
-			if (bRemoveSection && FTrackRecorderSettings::IsDefaultPropertyTrack(InObjectToRecord, Binding.GetPropertyPath(), TrackRecorderSettings.DefaultTracks))
-			{
-				bRemoveSection = false;
-			}
-		}
-
-		if (!bRemoveSection && FTrackRecorderSettings::IsExcludePropertyTrack(InObjectToRecord, Binding.GetPropertyPath(), TrackRecorderSettings.DefaultTracks))
-		{
-			bRemoveSection = true;
-		}
-
-		if (bRemoveSection)
+		if (bRemoveSection || bExclude)
 		{
 			UMovieSceneTrack* MovieSceneTrack = CastChecked<UMovieSceneTrack>(InSection->GetOuter());
 			UMovieScene* MovieScene = CastChecked<UMovieScene>(MovieSceneTrack->GetOuter());
@@ -276,11 +277,14 @@ private:
 	/** Helper function, specialized by type, used to add an appropriate section to the movie scene */
 	class UMovieSceneSection* AddSection(const FString& TrackDisplayName, class UMovieScene* InMovieScene, const FGuid& InGuid, bool bSetDefault = true);
 
+	/** Helper function, specialized by type, after create */
+	void PostCreate(IMovieSceneTrackRecorderHost* InRecordingHost, UObject* InObjectToRecord, class UMovieScene* InMovieScene, const FGuid& InGuid, bool bOpenSerializer = false);
+
 	/** Helper function, specialized by type, used to add keys to the movie scene section at Finalize() time */
 	void AddKeyToSection(UMovieSceneSection* InSection, const FPropertyKey<PropertyType>& InKey);
 
 	/** Helper function, specialized by type, used to reduce keys */
-	void ReduceKeys(UMovieSceneSection* InSection);
+	void ReduceKeys(UMovieSceneSection* InSection, float ReduceKeysTolerance);
 
 	/** Get the default value of the track - if there's one key, the value of that key. Otherwise, the default value of the track. */
 	PropertyType GetDefaultValue(UMovieSceneSection* InSection);
@@ -309,180 +313,4 @@ private:
 
 	/** Serializer*/
 	TMovieSceneSerializer<FPropertyFileHeader, FSerializedProperty<PropertyType>> Serializer;
-};
-
-/** Recorder for a simple property of type enum */
-class  FMovieSceneTrackPropertyRecorderEnum : public IMovieSceneTrackPropertyRecorder
-{
-public:
-	FMovieSceneTrackPropertyRecorderEnum(const FTrackInstancePropertyBindings& InBinding)
-		: Binding(InBinding)
-	{
-	}
-	virtual ~FMovieSceneTrackPropertyRecorderEnum() { }
-
-	virtual void Create(IMovieSceneTrackRecorderHost* InRecordingHost, UObject* InObjectToRecord, class UMovieScene* InMovieScene, const FGuid& InGuid, bool bOpenSerializer) override
-	{
-		OwningTakeRecorderSource = InRecordingHost;
-		if (InObjectToRecord)
-		{
-			PreviousValue = Binding.GetCurrentValueForEnum(*InObjectToRecord);
-		}
-
-		if (!InObjectToRecord)
-		{
-			MovieSceneSection = nullptr;
-		}
-		else
-		{
-			FString TrackDisplayName = *Binding.GetProperty(*InObjectToRecord)->GetDisplayNameText().ToString();
-			MovieSceneSection = AddSection(TrackDisplayName, InMovieScene, InGuid, bOpenSerializer);
-			if (bOpenSerializer)
-			{
-				if (OpenSerializer(InObjectToRecord->GetName(), Binding.GetPropertyName(), TrackDisplayName, InGuid))
-				{
-					// FSerializedProperty<int64> Frame;
-					// FFrameRate   TickResolution = MovieSceneSection->GetTypedOuter<UMovieScene>()->GetTickResolution();
-					// FFrameNumber CurrentFrame = (InTime * TickResolution).FloorToFrame();
-					// Frame.Time = CurrentFrame;
-					// Frame.Value = PreviousValue;
-					// Serializer.WriteFrameData(Serializer.FramesWritten, Frame);
-				}
-			}
-		}
-	}
-
-	virtual void SetSectionStartTimecode(const FTimecode& InSectionStartTimecode, const FFrameNumber& InSectionFirstFrame) override
-	{
-		if (!MovieSceneSection.IsValid())
-		{
-			return;
-		}
-
-		MovieSceneSection->TimecodeSource = FMovieSceneTimecodeSource(InSectionStartTimecode);
-		MovieSceneSection->ExpandToFrame(InSectionFirstFrame + FFrameNumber(1));
-		MovieSceneSection->SetStartFrame(TRangeBound<FFrameNumber>::Inclusive(InSectionFirstFrame));
-	}
-
-	virtual void Record(UObject* InObjectToRecord, const FQualifiedFrameTime& InCurrentTime) override
-	{
-		if (!MovieSceneSection.IsValid())
-		{
-			return;
-		}
-
-		if (InObjectToRecord != nullptr)
-		{
-			FFrameRate   TickResolution  = MovieSceneSection->GetTypedOuter<UMovieScene>()->GetTickResolution();
-			FFrameNumber CurrentFrame    = InCurrentTime.ConvertTo(TickResolution).FloorToFrame();
-
-			MovieSceneSection->SetEndFrame(CurrentFrame);
-
-			int64 NewValue = Binding.GetCurrentValueForEnum(*InObjectToRecord);
-			if (ShouldAddNewKey(NewValue))
-			{
-				if (PreviousFrame.IsSet())
-				{
-					FPropertyKey<int64> Key;
-					Key.Time = PreviousFrame.GetValue();
-					Key.Value = PreviousValue;
-					Keys.Add(Key);
-					FSerializedProperty<int64> Frame;
-					Frame.Time = Key.Time;
-					Frame.Value = Key.Value;
-					Serializer.WriteFrameData(Serializer.FramesWritten, Frame);
-				}
-
-				FPropertyKey<int64> Key;
-				Key.Time = CurrentFrame;
-				Key.Value = NewValue;
-				Keys.Add(Key);
-				FSerializedProperty<int64> Frame;
-				Frame.Time = Key.Time;
-				Frame.Value = Key.Value;
-				Serializer.WriteFrameData(Serializer.FramesWritten, Frame);
-
-				PreviousValue = NewValue;
-				PreviousFrame.Reset();
-			}
-			else
-			{
-				PreviousFrame = CurrentFrame;
-			}
-		}
-	}
-
-	virtual void Finalize(UObject* InObjectToRecord) override
-	{
-		if (!MovieSceneSection.IsValid())
-		{
-			return;
-		}
-
-		for (const FPropertyKey<int64>& Key : Keys)
-		{
-			AddKeyToSection(MovieSceneSection.Get(), Key);
-		}
-
-		FTrackRecorderSettings TrackRecorderSettings = OwningTakeRecorderSource->GetTrackRecorderSettings();
-
-		if (TrackRecorderSettings.bReduceKeys)
-		{
-			ReduceKeys(MovieSceneSection.Get());
-		}
-
-		if (TrackRecorderSettings.bRemoveRedundantTracks)
-		{
-			RemoveRedundantTracks(MovieSceneSection.Get(), InObjectToRecord);
-		}
-
-		Serializer.Close();
-
-	}
-
-	virtual void SetSavedRecordingDirectory(const FString& InDirectory) override
-	{
-		Serializer.SetLocalCaptureDir(InDirectory);
-	}
-	virtual bool LoadRecordedFile(const FString& InFileName, UMovieScene *InMovieScene, TMap<FGuid, AActor*>& ActorGuidToActorMap,  TFunction<void()> InCompletionCallback) override;
-
-private:
-	/** 
-	 * Helper function, specialized by type, used to check if we do capture-time filtering of keys based
-	 * on previous values
-	 */
-	bool ShouldAddNewKey(const int64& InNewValue) const;
-
-	/** Helper function, specialized by type, used to add an appropriate section to the movie scene */
-	class UMovieSceneSection* AddSection(const FString& TrackDisplayName, class UMovieScene* InMovieScene, const FGuid& InGuid, bool bSetDefault = true);
-
-	/** Helper function, specialized by type, used to add keys to the movie scene section at Finalize() time */
-	void AddKeyToSection(UMovieSceneSection* InSection, const FPropertyKey<int64>& InKey);
-
-	/** Helper function, specialized by type, used to reduce keys */
-	void ReduceKeys(UMovieSceneSection* InSection);
-
-	/** Helper function, used to remove redundant tracks */
-	void RemoveRedundantTracks(UMovieSceneSection* InSection, UObject* InObjectToRecord);
-
-	/** Open the Serializer of the right PropertyType*/
-	bool OpenSerializer(const FString& InObjectName, const FName& InPropertyName, const FString& InTrackDisplayName, const FGuid& InGuid);
-
-
-private:
-	/** Binding for this property */
-	FTrackInstancePropertyBindings Binding;
-
-	/** The keys that are being recorded */
-	TArray<FPropertyKey<int64>> Keys;
-
-	/** Section we are recording */
-	TWeakObjectPtr<class UMovieSceneSection> MovieSceneSection;
-
-	/** Previous value we use to establish whether we should key */
-	int64 PreviousValue;
-	TOptional<FFrameNumber> PreviousFrame;
-
-	/** Serializer */
-	FPropertySerializerEnum Serializer;
 };

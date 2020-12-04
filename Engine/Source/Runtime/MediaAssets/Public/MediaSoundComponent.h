@@ -156,6 +156,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "TimeSynth")
 	TArray<FMediaSoundComponentSpectralData> GetSpectralData();
 
+	/** Retrieves and normalizes the spectral data if spectral analysis is enabled. */
+	UFUNCTION(BlueprintCallable, Category = "TimeSynth")
+	TArray<FMediaSoundComponentSpectralData> GetNormalizedSpectralData();
+
 	/** Turns on amplitude envelope following the audio in the media sound component. */
 	UFUNCTION(BlueprintCallable, Category = "Media|MediaSoundComponent")
 	void SetEnableEnvelopeFollowing(bool bInEnvelopeFollowing);
@@ -274,10 +278,10 @@ private:
 	/** Which frequencies to analyze. */
 	TArray<float> FrequenciesToAnalyze;
 
-	/** The FFT bin-size to use for FFT analysis. Smaller sizes make it more reactive but less acurrate in the frequency space. */
+	/** The FFT bin-size to use for FFT analysis. Smaller sizes make it more reactive but less accurate in the frequency space. */
 	EMediaSoundComponentFFTSize FFTSize;
 
-	/** Spectrum analyzer used for anlayzing audio in media. */
+	/** Spectrum analyzer used for analyzing audio in media. */
 	Audio::FSpectrumAnalyzer SpectrumAnalyzer;
 	Audio::FSpectrumAnalyzerSettings SpectrumAnalyzerSettings;
 

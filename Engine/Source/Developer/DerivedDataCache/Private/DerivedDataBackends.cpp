@@ -12,8 +12,10 @@
 #include "DerivedDataBackendInterface.h"
 #include "DerivedDataCacheUsageStats.h"
 #include "MemoryDerivedDataBackend.h"
+#include "HttpDerivedDataBackend.h"
 #include "DerivedDataBackendAsyncPutWrapper.h"
 #include "PakFileDerivedDataBackend.h"
+#include "S3DerivedDataBackend.h"
 #include "HierarchicalDerivedDataBackend.h"
 #include "DerivedDataLimitKeyLengthWrapper.h"
 #include "DerivedDataBackendCorruptionWrapper.h"
@@ -23,12 +25,13 @@
 #include "Modules/ModuleManager.h"
 #include "Misc/ConfigCacheIni.h"
 
+
 DEFINE_LOG_CATEGORY(LogDerivedDataCache);
 
 #define MAX_BACKEND_KEY_LENGTH (120)
 #define LOCTEXT_NAMESPACE "DerivedDataBackendGraph"
 
-FDerivedDataBackendInterface* CreateFileSystemDerivedDataBackend(const TCHAR* CacheDirectory, bool bForceReadOnly = false, bool bTouchFiles = false, bool bPurgeTransient = false, bool bDeleteOldFiles = false, int32 InDaysToDeleteUnusedFiles = 60, int32 InMaxNumFoldersToCheck = -1, int32 InMaxContinuousFileChecks = -1);
+FDerivedDataBackendInterface* CreateFileSystemDerivedDataBackend(const TCHAR* CacheDirectory, const TCHAR* InParams, const TCHAR* InAccessLogFileName = nullptr);
 
 /**
   * This class is used to create a singleton that represents the derived data cache hierarchy and all of the wrappers necessary
@@ -160,7 +163,7 @@ public:
 					}
 					else
 					{
-						UE_LOG( LogDerivedDataCache, Warning, TEXT("FDerivedDataBackendGraph:  Unable to create %s Boot cache because only one Boot cache node is supported."), *NodeName );
+						UE_LOG( LogDerivedDataCache, Warning, TEXT("FDerivedDataBackendGraph:  Unable to create %s Boot cache because only one Boot or Sparse cache node is supported."), *NodeName );
 					}
 				}
 				else if( NodeType == TEXT("Memory") )
@@ -207,6 +210,14 @@ public:
 				{
 					ParsedNode = ParsePak( NodeName, *Entry, true );
 				}
+				else if (NodeType == TEXT("S3"))
+				{
+					ParsedNode = ParseS3Cache(NodeName, *Entry);
+				}
+				else if (NodeType == TEXT("Http"))
+				{
+					ParsedNode = ParseHttpCache(NodeName, *Entry);
+				}
 			}
 		}
 
@@ -216,6 +227,17 @@ public:
 			InParsedNodes.Add( NodeName, ParsedNode );
 			// Keep references to all created nodes.
 			CreatedBackends.AddUnique( ParsedNode );
+
+			// parse any debug options for this backend. E.g. -ddc-<name>-missrate
+			FDerivedDataBackendInterface::FBackendDebugOptions DebugOptions;
+
+			if (FDerivedDataBackendInterface::FBackendDebugOptions::ParseFromTokens(DebugOptions, NodeName, FCommandLine::Get()))
+			{
+				if (!ParsedNode->ApplyDebugOptions(DebugOptions))
+				{
+					UE_LOG(LogDerivedDataCache, Warning, TEXT("Node %s is ignoring one or mode -ddc-<nodename>-opt debug options"), NodeName);
+				}
+			}
 		}
 
 		return ParsedNode;
@@ -552,54 +574,172 @@ public:
 		}
 		else
 		{
-			const bool bReadOnly = GetParsedBool( Entry, TEXT("ReadOnly=") );
-			const bool bClean = GetParsedBool( Entry, TEXT("Clean=") );
-			const bool bFlush = GetParsedBool( Entry, TEXT("Flush=") );
-			const bool bTouch = GetParsedBool( Entry, TEXT("Touch=") );
-			const bool bPurgeTransient = GetParsedBool( Entry, TEXT("PurgeTransient=") );
-
-			bool bDeleteUnused = true; // On by default
-			FParse::Bool( Entry, TEXT("DeleteUnused="), bDeleteUnused );
-			int32 UnusedFileAge = 17;
-			FParse::Value( Entry, TEXT("UnusedFileAge="), UnusedFileAge );
-			int32 MaxFoldersToClean = -1;
-			FParse::Value( Entry, TEXT("FoldersToClean="), MaxFoldersToClean );
-			int32 MaxFileChecksPerSec = -1;
-			FParse::Value( Entry, TEXT("MaxFileChecksPerSec="), MaxFileChecksPerSec );
-
-			if( bFlush )
-			{
-				IFileManager::Get().DeleteDirectory( *(Path / TEXT("")), false, true );
-			}
-			else if( bClean )
-			{
-				DeleteOldFiles( *Path );
-			}
-
 			FDerivedDataBackendInterface* InnerFileSystem = NULL;
-			
-			// Don't create the file system if shared data cache directory is not mounted
-			bool bShared = FCString::Stricmp(NodeName, TEXT("Shared")) == 0;
-			if( !bShared || IFileManager::Get().DirectoryExists(*Path) )
-			{
-				InnerFileSystem = CreateFileSystemDerivedDataBackend( *Path, bReadOnly, bTouch, bPurgeTransient, bDeleteUnused, UnusedFileAge, MaxFoldersToClean, MaxFileChecksPerSec);
-			}
 
-			if( InnerFileSystem )
+			// Try to set up the shared drive, allow user to correct any issues that may exist.
+			bool RetryOnFailure = false;
+			do
 			{
-				bUsingSharedDDC = bUsingSharedDDC ? bUsingSharedDDC : bShared;
+				RetryOnFailure = false;
 
-				DataCache = new FDerivedDataBackendCorruptionWrapper( InnerFileSystem );
-				UE_LOG( LogDerivedDataCache, Log, TEXT("Using %s data cache path %s: %s"), NodeName, *Path, bReadOnly ? TEXT("ReadOnly") : TEXT("Writable") );
-				Directories.AddUnique(Path);
-			}
-			else
+				// Don't create the file system if shared data cache directory is not mounted
+				bool bShared = FCString::Stricmp(NodeName, TEXT("Shared")) == 0;
+				
+				// parameters we read here from the ini file
+				FString WriteAccessLog;
+				bool bPromptIfMissing = false;
+
+				FParse::Value( Entry, TEXT("WriteAccessLog="), WriteAccessLog );		
+				FParse::Bool(Entry, TEXT("PromptIfMissing="), bPromptIfMissing);
+
+				if (!bShared || IFileManager::Get().DirectoryExists(*Path))
+				{
+					InnerFileSystem = CreateFileSystemDerivedDataBackend( *Path, Entry, *WriteAccessLog);
+				}
+
+				if (InnerFileSystem)
+				{
+					bUsingSharedDDC = bUsingSharedDDC ? bUsingSharedDDC : bShared;
+	
+					DataCache = new FDerivedDataBackendCorruptionWrapper(InnerFileSystem);
+					UE_LOG(LogDerivedDataCache, Log, TEXT("Using %s data cache path %s: %s"), NodeName, *Path, !InnerFileSystem->IsWritable() ? TEXT("ReadOnly") : TEXT("Writable"));
+					Directories.AddUnique(Path);
+				}
+				else
+				{
+					FString Message = FString::Printf(TEXT("%s data cache path (%s) is unavailable so cache will be disabled."), NodeName, *Path);
+					
+					UE_LOG(LogDerivedDataCache, Warning, TEXT("%s"), *Message);
+
+					// Give the user a chance to retry incase they need to connect a network drive or something.
+					if (bPromptIfMissing && !FApp::IsUnattended() && !IS_PROGRAM)
+					{
+						Message += FString::Printf(TEXT("\n\nRetry connection to %s?"), *Path);
+						EAppReturnType::Type MessageReturn = FPlatformMisc::MessageBoxExt(EAppMsgType::YesNo, *Message, TEXT("Could not access DDC"));
+						RetryOnFailure = MessageReturn == EAppReturnType::Yes;
+					}
+				}
+			} while (RetryOnFailure);
+		}
+
+
+
+		return DataCache;
+	}
+
+	/**
+	 * Creates an S3 data cache interface.
+	 */
+	FDerivedDataBackendInterface* ParseS3Cache(const TCHAR* NodeName, const TCHAR* Entry)
+	{
+#if WITH_S3_DDC_BACKEND
+		FString ManifestPath;
+		if (!FParse::Value(Entry, TEXT("Manifest="), ManifestPath))
+		{
+			UE_LOG(LogDerivedDataCache, Error, TEXT("Node %s does not specify 'Manifest'."), NodeName);
+			return nullptr;
+		}
+
+		FString BaseUrl;
+		if (!FParse::Value(Entry, TEXT("BaseUrl="), BaseUrl))
+		{
+			UE_LOG(LogDerivedDataCache, Error, TEXT("Node %s does not specify 'BaseUrl'."), NodeName);
+			return nullptr;
+		}
+
+		FString CanaryObjectKey;
+		FParse::Value(Entry, TEXT("Canary="), CanaryObjectKey);
+
+		FString Region;
+		if (!FParse::Value(Entry, TEXT("Region="), Region))
+		{
+			UE_LOG(LogDerivedDataCache, Error, TEXT("Node %s does not specify 'Region'."), NodeName);
+			return nullptr;
+		}
+
+		// Check the EnvPathOverride environment variable to allow persistent overriding of data cache path, eg for offsite workers.
+		FString EnvPathOverride;
+		FString CachePath = FPaths::ProjectSavedDir() / TEXT("S3DDC");
+		if (FParse::Value(Entry, TEXT("EnvPathOverride="), EnvPathOverride))
+		{
+			FString FilesystemCachePathEnv = FPlatformMisc::GetEnvironmentVariable(*EnvPathOverride);
+			if (FilesystemCachePathEnv.Len() > 0)
 			{
-				UE_LOG( LogDerivedDataCache, Warning, TEXT("%s data cache path (%s) was not usable, will not use it."), NodeName, *Path );
+				if (FilesystemCachePathEnv == TEXT("None"))
+				{
+					UE_LOG(LogDerivedDataCache, Log, TEXT("Node %s disabled due to %s=None"), NodeName, *EnvPathOverride);
+					return nullptr;
+				}
+				else
+				{
+					CachePath = FilesystemCachePathEnv;
+					UE_LOG(LogDerivedDataCache, Log, TEXT("Found environment variable %s=%s"), *EnvPathOverride, *CachePath);
+				}
 			}
 		}
 
-		return DataCache;
+		// Insert the backend corruption wrapper. Since the filesystem already uses this, and we're recycling the data with the trailer intact, we need to use it for the S3 cache too.
+		FS3DerivedDataBackend* Backend = new FS3DerivedDataBackend(*ManifestPath, *BaseUrl, *Region, *CanaryObjectKey, *CachePath);
+		return new FDerivedDataBackendCorruptionWrapper(Backend);
+#else
+		UE_LOG(LogDerivedDataCache, Log, TEXT("S3 backend is not supported on the current platform."));
+		return nullptr;
+#endif
+	}
+
+	/**
+	 * Creates a HTTP data cache interface.
+	 */
+	FDerivedDataBackendInterface* ParseHttpCache(const TCHAR* NodeName, const TCHAR* Entry)
+	{
+#if WITH_HTTP_DDC_BACKEND
+		FString ServiceUrl;
+		if (!FParse::Value(Entry, TEXT("Host="), ServiceUrl))
+		{
+			UE_LOG(LogDerivedDataCache, Error, TEXT("Node %s does not specify 'Host'."), NodeName);
+			return nullptr;
+		}
+
+		FString Namespace;
+		if (!FParse::Value(Entry, TEXT("Namespace="), Namespace))
+		{
+			Namespace = FApp::GetProjectName();
+			UE_LOG(LogDerivedDataCache, Warning, TEXT("Node %s does not specify 'Namespace', falling back to '%s'"), NodeName, *Namespace);
+		}
+
+		FString OAuthProvider;
+		if (!FParse::Value(Entry, TEXT("OAuthProvider="), OAuthProvider))
+		{
+			UE_LOG(LogDerivedDataCache, Error, TEXT("Node %s does not specify 'OAuthProvider'."), NodeName);
+			return nullptr;
+		}
+
+		FString OAuthSecret;
+		if (!FParse::Value(Entry, TEXT("OAuthSecret="), OAuthSecret))
+		{
+			UE_LOG(LogDerivedDataCache, Error, TEXT("Node %s does not specify 'OAuthSecret'."), NodeName);
+			return nullptr;
+		}
+
+		FString OAuthClientId;
+		if (!FParse::Value(Entry, TEXT("OAuthClientId="), OAuthClientId))
+		{
+			UE_LOG(LogDerivedDataCache, Error, TEXT("Node %s does not specify 'OAuthClientId'."), NodeName);
+			return nullptr;
+		}
+
+		FHttpDerivedDataBackend* backend = new FHttpDerivedDataBackend(*ServiceUrl, *Namespace, *OAuthProvider, *OAuthClientId, *OAuthSecret);
+		if (!backend->IsUsable())
+		{
+			UE_LOG(LogDerivedDataCache, Warning, TEXT("%s could not contact the service (%s), will not use it."), NodeName, *ServiceUrl);
+			delete backend;
+			return nullptr;
+		}
+		return backend;
+#else
+		UE_LOG(LogDerivedDataCache, Warning, TEXT("HTTP backend is not yet supported in the current build configuration."));
+		return nullptr;
+#endif
 	}
 
 	/**
@@ -610,7 +750,7 @@ public:
 	 * @param OutFilename filename specified for the cache
 	 * @return Boot data cache backend interface instance or NULL if unsuccessful
 	 */
-	FMemoryDerivedDataBackend* ParseBootCache( const TCHAR* NodeName, const TCHAR* Entry, FString& OutFilename )
+	FFileBackedDerivedDataBackend* ParseBootCache( const TCHAR* NodeName, const TCHAR* Entry, FString& OutFilename )
 	{
 		FMemoryDerivedDataBackend* Cache = NULL;
 
@@ -641,7 +781,6 @@ public:
 				if (MaxCacheSize > 0 && IFileManager::Get().FileSize(*Filename) >= (MaxCacheSize * 1024 * 1024))
 				{
 					UE_LOG( LogDerivedDataCache, Warning, TEXT("FDerivedDataBackendGraph:  %s filename exceeds max size."), NodeName );
-					return Cache;
 				}
 
 				if (IFileManager::Get().FileSize(*Filename) < 0)
@@ -788,6 +927,11 @@ public:
 		return bUsingSharedDDC;
 	}
 
+	virtual const TCHAR* GetGraphName() const override
+	{
+		return *GraphName;
+	}
+
 	virtual void AddToAsyncCompletionCounter(int32 Addend) override
 	{
 		AsyncCompletionCounter.Add(Addend);
@@ -859,15 +1003,6 @@ public:
 
 private:
 
-	/** Delete the old files in a directory **/
-	void DeleteOldFiles(const TCHAR* Directory)
-	{
-		float MinimumDaysToKeepFile = 7;
-		GConfig->GetFloat( *GraphName, TEXT("MinimumDaysToKeepFile"), MinimumDaysToKeepFile, GEngineIni );
-		check(MinimumDaysToKeepFile > 0.0f); // sanity
-		//@todo 
-	}
-
 	/** Delete all created backends in the reversed order they were created. */
 	void DestroyCreatedBackends()
 	{
@@ -913,7 +1048,7 @@ private:
 	TArray< FDerivedDataBackendInterface* > CreatedBackends;
 
 	/** Instances of backend interfaces which exist in only one copy */
-	FMemoryDerivedDataBackend*		BootCache;
+	FFileBackedDerivedDataBackend*	BootCache;
 	FPakFileDerivedDataBackend*		WritePakCache;
 	FDerivedDataBackendInterface*	AsyncPutWrapper;
 	FDerivedDataBackendInterface*	KeyLengthWrapper;
@@ -936,6 +1071,122 @@ private:
 FDerivedDataBackend& FDerivedDataBackend::Get()
 {
 	return FDerivedDataBackendGraph::Get();
+}
+
+
+/**
+ * Parse debug options for the provided node name. Returns true if any options were specified
+ */
+bool FDerivedDataBackendInterface::FBackendDebugOptions::ParseFromTokens(FDerivedDataBackendInterface::FBackendDebugOptions& OutOptions, const TCHAR* InNodeName, const TCHAR* InInputTokens)
+{
+	// check if the input stream has any ddc options for this node
+	FString PrefixKey = FString(TEXT("-ddc-")) + InNodeName;
+
+	if (FCString::Stristr(InInputTokens, *PrefixKey) == nullptr)
+	{
+		// check if it has any -ddc-all- args
+		PrefixKey = FString(TEXT("-ddc-all"));
+
+		if (FCString::Stristr(InInputTokens, *PrefixKey) == nullptr)
+		{
+			return false;
+		}
+	}
+
+	// turn -arg= into arg= for parsing
+	PrefixKey.RightChopInline(1);
+
+	/** types that can be set to ignored (-ddc-<name>-misstypes="foo+bar" etc) */
+	// look for -ddc-local-misstype=AnimSeq+Audio -ddc-shared-misstype=AnimSeq+Audio 
+	FString ArgName = FString::Printf(TEXT("%s-misstypes="), *PrefixKey);
+
+	FString TempArg;
+	FParse::Value(InInputTokens, *ArgName, TempArg);
+	TempArg.ParseIntoArray(OutOptions.SimulateMissTypes, TEXT("+"), true);
+
+	// look for -ddc-local-missrate=, -ddc-shared-missrate= etc
+	ArgName = FString::Printf(TEXT("%s-missrate="), *PrefixKey);
+	int MissRate = 0;
+	FParse::Value(InInputTokens, *ArgName, OutOptions.RandomMissRate);
+
+	// look for -ddc-local-speed=, -ddc-shared-speed= etc
+	ArgName = FString::Printf(TEXT("%s-speed="), *PrefixKey);
+	if (FParse::Value(InInputTokens, *ArgName, TempArg))
+	{
+		if (!TempArg.IsEmpty())
+		{
+			LexFromString(OutOptions.SpeedClass, *TempArg);
+		}
+	}
+
+	return true;
+}
+
+/* Convenience function for backends that check if the key should be missed or not */
+bool FDerivedDataBackendInterface::FBackendDebugOptions::ShouldSimulateMiss(const TCHAR* InCacheKey)
+{
+	bool bDoMiss = false;
+
+	if (SimulateMissTypes.Num() > 0)
+	{
+		FString TypeStr = FString(InCacheKey);
+		TypeStr = TypeStr.Left(TypeStr.Find(TEXT("_")));
+
+		if (SimulateMissTypes.Contains(TypeStr))
+		{
+			bDoMiss = true;
+		}
+	}
+
+	if (!bDoMiss && RandomMissRate > 0)
+	{
+		bDoMiss = FMath::RandHelper(100) < RandomMissRate;
+	}
+
+	return bDoMiss;
+}
+
+
+const TCHAR* LexToString(FDerivedDataBackendInterface::ESpeedClass SpeedClass)
+{
+	switch (SpeedClass)
+	{
+	case FDerivedDataBackendInterface::ESpeedClass::Unknown:
+		return TEXT("Unknown");
+	case FDerivedDataBackendInterface::ESpeedClass::Slow:
+		return TEXT("Slow");
+	case FDerivedDataBackendInterface::ESpeedClass::Ok:
+		return TEXT("Ok");
+	case FDerivedDataBackendInterface::ESpeedClass::Fast:
+		return TEXT("Fast");
+	case FDerivedDataBackendInterface::ESpeedClass::Local:
+		return TEXT("Local");
+	}
+
+	return TEXT("Unknow value! (Update LexToString!)");
+}
+
+
+void LexFromString(FDerivedDataBackendInterface::ESpeedClass& OutValue, const TCHAR* Buffer)
+{
+	OutValue = FDerivedDataBackendInterface::ESpeedClass::Unknown;
+
+	if (FCString::Stricmp(Buffer, TEXT("Slow")) == 0)
+	{
+		OutValue = FDerivedDataBackendInterface::ESpeedClass::Slow;
+	}
+	else if (FCString::Stricmp(Buffer, TEXT("Ok")) == 0)
+	{
+		OutValue = FDerivedDataBackendInterface::ESpeedClass::Ok;
+	}
+	if (FCString::Stricmp(Buffer, TEXT("Fast")) == 0)
+	{
+		OutValue = FDerivedDataBackendInterface::ESpeedClass::Fast;
+	}
+	if (FCString::Stricmp(Buffer, TEXT("Local")) == 0)
+	{
+		OutValue = FDerivedDataBackendInterface::ESpeedClass::Local;
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

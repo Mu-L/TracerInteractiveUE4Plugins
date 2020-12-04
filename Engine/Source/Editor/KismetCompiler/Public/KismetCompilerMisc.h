@@ -54,7 +54,7 @@ public:
 	static FProperty* CreatePrimitiveProperty( FFieldVariant PropertyScope, const FName& ValidatedPropertyName, const FName& PinCategory, const FName& PinSubCategory, UObject* PinSubCategoryObject, UClass* SelfClass, bool bIsWeakPointer, const class UEdGraphSchema_K2* Schema, FCompilerResultsLog& MessageLog);
 
 	/** Creates a property named PropertyName of type PropertyType in the Scope or returns NULL if the type is unknown, but does *not* link that property in */
-	static FProperty* CreatePropertyOnScope(UStruct* Scope, const FName& PropertyName, const FEdGraphPinType& Type, UClass* SelfClass, EPropertyFlags PropertyFlags, const class UEdGraphSchema_K2* Schema, FCompilerResultsLog& MessageLog);
+	static FProperty* CreatePropertyOnScope(UStruct* Scope, const FName& PropertyName, const FEdGraphPinType& Type, UClass* SelfClass, EPropertyFlags PropertyFlags, const class UEdGraphSchema_K2* Schema, FCompilerResultsLog& MessageLog, UEdGraphPin* SourcePin = nullptr);
 
 	/**
 	 * Checks that the property name isn't taken in the given scope (used by CreatePropertyOnScope())
@@ -204,10 +204,12 @@ public:
 	// The resulting name is stable across multiple calls if given the same pointer.
 	FString MakeValidName(const UEdGraphNode* Net, const FString& Context = TEXT("")) { return MakeValidNameImpl(Net, Context); }
 	FString MakeValidName(const UEdGraphPin* Net, const FString& Context = TEXT("")) { return MakeValidNameImpl(Net, Context); }
+	FString MakeValidName(const UObject* Net, const FString& Context = TEXT("")) { return MakeValidNameImpl(Net, Context); }
 
 private:
 	KISMETCOMPILER_API static FString MakeBaseName(const UEdGraphNode* Net);
 	KISMETCOMPILER_API static FString MakeBaseName(const UEdGraphPin* Net);
+	KISMETCOMPILER_API static FString MakeBaseName(const UObject* Net);
 
 	template< typename NetType >
 	FString MakeValidNameImpl(NetType Net, const FString& Context)

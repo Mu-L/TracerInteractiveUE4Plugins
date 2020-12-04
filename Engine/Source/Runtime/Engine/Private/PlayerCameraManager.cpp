@@ -18,9 +18,11 @@
 #include "Camera/CameraModifier.h"
 #include "Camera/CameraModifier_CameraShake.h"
 #include "Camera/CameraPhotography.h"
+#include "Camera/CameraShake.h"
 #include "GameFramework/PlayerState.h"
 #include "IXRTrackingSystem.h" // for IsHeadTrackingAllowed()
 #include "GameFramework/GameNetworkManager.h"
+#include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPlayerCameraManager, Log, All);
 
@@ -94,33 +96,48 @@ APlayerController* APlayerCameraManager::GetOwningPlayerController() const
 	return PCOwner;
 }
 
+void APlayerCameraManager::SwapPendingViewTargetWhenUsingClientSideCameraUpdates()
+{
+	if (PendingViewTarget.Target)
+	{
+		AssignViewTarget(PendingViewTarget.Target, ViewTarget);
+		ViewTarget.CheckViewTarget(PCOwner);
+		// remove old pending ViewTarget so we don't still try to switch to it
+		PendingViewTarget.Target = NULL;
+	}
+}
 
 void APlayerCameraManager::SetViewTarget(class AActor* NewTarget, struct FViewTargetTransitionParams TransitionParams)
 {
 	// Make sure view target is valid
-	if( NewTarget == NULL )
+	if (NewTarget == NULL)
 	{
 		NewTarget = PCOwner;
 	}
 
 	// Update current ViewTargets
 	ViewTarget.CheckViewTarget(PCOwner);
-	if( PendingViewTarget.Target )
+	if (PendingViewTarget.Target)
 	{
 		PendingViewTarget.CheckViewTarget(PCOwner);
 	}
 
 	// If we're already transitioning to this new target, don't interrupt.
-	if( PendingViewTarget.Target != NULL && NewTarget == PendingViewTarget.Target )
+	if (PendingViewTarget.Target != NULL && NewTarget == PendingViewTarget.Target)
 	{
 		return;
 	}
 
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(SwapPendingViewTargetWhenUsingClientSideCameraUpdatesTimerHandle);
+	}
+
 	// if viewtarget different then new one or we're transitioning from the same target with locked outgoing, then assign it
-	if((NewTarget != ViewTarget.Target) || (PendingViewTarget.Target && BlendParams.bLockOutgoing))
+	if ((NewTarget != ViewTarget.Target) || (PendingViewTarget.Target && BlendParams.bLockOutgoing))
 	{
 		// if a transition time is specified, then set pending view target accordingly
-		if( TransitionParams.BlendTime > 0 )
+		if (TransitionParams.BlendTime > 0)
 		{
 			// band-aid fix so that EndViewTarget() gets called properly in this case
 			if (PendingViewTarget.Target == NULL)
@@ -132,9 +149,17 @@ void APlayerCameraManager::SetViewTarget(class AActor* NewTarget, struct FViewTa
 			ViewTarget.POV = GetLastFrameCameraCachePOV();
 			BlendParams = TransitionParams;
 			BlendTimeToGo = TransitionParams.BlendTime;
-			
+
 			AssignViewTarget(NewTarget, PendingViewTarget, TransitionParams);
 			PendingViewTarget.CheckViewTarget(PCOwner);
+
+			if (bUseClientSideCameraUpdates && GetNetMode() != NM_Client)
+			{
+				if (UWorld* World = GetWorld())
+				{
+					World->GetTimerManager().SetTimer(SwapPendingViewTargetWhenUsingClientSideCameraUpdatesTimerHandle, this, &ThisClass::SwapPendingViewTargetWhenUsingClientSideCameraUpdates, TransitionParams.BlendTime, false);
+				}
+			}
 		}
 		else
 		{
@@ -165,7 +190,13 @@ void APlayerCameraManager::SetViewTarget(class AActor* NewTarget, struct FViewTa
 
 void APlayerCameraManager::AssignViewTarget(AActor* NewTarget, FTViewTarget& VT, struct FViewTargetTransitionParams TransitionParams)
 {
-	if( !NewTarget || (NewTarget == VT.Target) )
+	if (!NewTarget)
+	{
+		return;
+	}
+
+	// Skip assigning to the same target unless we have a pending view target that's bLockOutgoing
+	if (NewTarget == VT.Target && !(PendingViewTarget.Target && BlendParams.bLockOutgoing))
 	{
 		return;
 	}
@@ -375,7 +406,7 @@ UCameraAnimInst* APlayerCameraManager::FindInstanceOfCameraAnim(UCameraAnim cons
 	return NULL;
 }
 
-UCameraAnimInst* APlayerCameraManager::PlayCameraAnim(UCameraAnim* Anim, float Rate, float Scale, float BlendInTime, float BlendOutTime, bool bLoop, bool bRandomStartTime, float Duration, ECameraAnimPlaySpace::Type PlaySpace, FRotator UserPlaySpaceRot)
+UCameraAnimInst* APlayerCameraManager::PlayCameraAnim(UCameraAnim* Anim, float Rate, float Scale, float BlendInTime, float BlendOutTime, bool bLoop, bool bRandomStartTime, float Duration, ECameraShakePlaySpace PlaySpace, FRotator UserPlaySpaceRot)
 {
 	// get a new instance and play it
 	if (AnimCameraActor != NULL)
@@ -591,6 +622,12 @@ void APlayerCameraManager::UpdateCameraLensEffects(const FTViewTarget& OutVT)
 
 void APlayerCameraManager::ApplyAudioFade()
 {
+	// If an audio fade event has been bound, we'd like it to override the default fade behavior.
+	if (OnAudioFadeChangeEvent.IsBound())
+	{
+		return;
+	}
+
 	if (GEngine)
 	{
 		UWorld* World = GetWorld();
@@ -606,6 +643,14 @@ void APlayerCameraManager::ApplyAudioFade()
 
 void APlayerCameraManager::StopAudioFade()
 {
+	// If an audio fade event has been bound, we'd like it to override the default fade behavior.
+	if (OnAudioFadeChangeEvent.IsBound())
+	{
+		const bool bFadeOut = false;
+		OnAudioFadeChangeEvent.Broadcast(bFadeOut, 0.f);
+		return;
+	}
+
 	if (GEngine)
 	{
 		UWorld* World = GetWorld();
@@ -1118,7 +1163,10 @@ void APlayerCameraManager::ProcessViewRotation(float DeltaTime, FRotator& OutVie
 	OutViewRotation += OutDeltaRot;
 	OutDeltaRot = FRotator::ZeroRotator;
 
-	if(GEngine->XRSystem.IsValid() && GEngine->XRSystem->IsHeadTrackingAllowed())
+	const bool bIsHeadTrackingAllowed =
+		GEngine->XRSystem.IsValid() &&
+		(GetWorld() != nullptr ? GEngine->XRSystem->IsHeadTrackingAllowedForWorld(*GetWorld()) : GEngine->XRSystem->IsHeadTrackingAllowed());
+	if(bIsHeadTrackingAllowed)
 	{
 		// With the HMD devices, we can't limit the view pitch, because it's bound to the player's head.  A simple normalization will suffice
 		OutViewRotation.Normalize();
@@ -1269,7 +1317,7 @@ void APlayerCameraManager::ClearCameraLensEffects()
  *  Camera Shakes
  *  ------------------------------------------------------------ */
 
-UCameraShake* APlayerCameraManager::PlayCameraShake(TSubclassOf<UCameraShake> ShakeClass, float Scale, ECameraAnimPlaySpace::Type PlaySpace, FRotator UserPlaySpaceRot)
+UCameraShakeBase* APlayerCameraManager::StartCameraShake(TSubclassOf<UCameraShakeBase> ShakeClass, float Scale, ECameraShakePlaySpace PlaySpace, FRotator UserPlaySpaceRot)
 {
 	if (ShakeClass && CachedCameraShakeMod && (Scale > 0.0f) )
 	{
@@ -1279,17 +1327,27 @@ UCameraShake* APlayerCameraManager::PlayCameraShake(TSubclassOf<UCameraShake> Sh
 	return nullptr;
 }
 
-UCameraShake* APlayerCameraManager::PlayCameraShakeFromSource(TSubclassOf<class UCameraShake> ShakeClass, class UCameraShakeSourceComponent* SourceComponent)
+UMatineeCameraShake* APlayerCameraManager::StartMatineeCameraShake(TSubclassOf<UMatineeCameraShake> ShakeClass, float Scale, ECameraShakePlaySpace PlaySpace, FRotator UserPlaySpaceRot)
+{
+	return Cast<UMatineeCameraShake>(StartCameraShake(ShakeClass, Scale, PlaySpace, UserPlaySpaceRot));
+}
+
+UCameraShakeBase* APlayerCameraManager::StartCameraShakeFromSource(TSubclassOf<UCameraShakeBase> ShakeClass, UCameraShakeSourceComponent* SourceComponent, float Scale, ECameraShakePlaySpace PlaySpace, FRotator UserPlaySpaceRot)
 {
 	if (ShakeClass && CachedCameraShakeMod)
 	{
-		return CachedCameraShakeMod->AddCameraShake(ShakeClass, FAddCameraShakeParams(1.0f, ECameraAnimPlaySpace::CameraLocal, FRotator::ZeroRotator, SourceComponent));
+		return CachedCameraShakeMod->AddCameraShake(ShakeClass, FAddCameraShakeParams(Scale, PlaySpace, UserPlaySpaceRot, SourceComponent));
 	}
 
 	return nullptr;
 }
 
-void APlayerCameraManager::StopCameraShake(UCameraShake* ShakeInst, bool bImmediately)
+UMatineeCameraShake* APlayerCameraManager::StartMatineeCameraShakeFromSource(TSubclassOf<UMatineeCameraShake> ShakeClass, UCameraShakeSourceComponent* SourceComponent, float Scale, ECameraShakePlaySpace PlaySpace, FRotator UserPlaySpaceRot)
+{
+	return Cast<UMatineeCameraShake>(StartCameraShakeFromSource(ShakeClass, SourceComponent, Scale, PlaySpace, UserPlaySpaceRot));
+}
+
+void APlayerCameraManager::StopCameraShake(UCameraShakeBase* ShakeInst, bool bImmediately)
 {
 	if (ShakeInst && CachedCameraShakeMod)
 	{
@@ -1297,19 +1355,11 @@ void APlayerCameraManager::StopCameraShake(UCameraShake* ShakeInst, bool bImmedi
 	}
 }
 
-void APlayerCameraManager::StopAllInstancesOfCameraShake(TSubclassOf<class UCameraShake> ShakeClass, bool bImmediately)
+void APlayerCameraManager::StopAllInstancesOfCameraShake(TSubclassOf<UCameraShakeBase> ShakeClass, bool bImmediately)
 {
 	if (ShakeClass && CachedCameraShakeMod)
 	{
 		CachedCameraShakeMod->RemoveAllCameraShakesOfClass(ShakeClass, bImmediately);
-	}
-}
-
-void APlayerCameraManager::StopAllInstancesOfCameraShakeFromSource(class UCameraShakeSourceComponent* SourceComponent, bool bImmediately)
-{
-	if (SourceComponent && CachedCameraShakeMod)
-	{
-		CachedCameraShakeMod->RemoveAllCameraShakesFromSource(SourceComponent, bImmediately);
 	}
 }
 
@@ -1318,6 +1368,22 @@ void APlayerCameraManager::StopAllCameraShakes(bool bImmediately)
 	if (CachedCameraShakeMod)
 	{
 		CachedCameraShakeMod->RemoveAllCameraShakes(bImmediately);
+	}
+}
+
+void APlayerCameraManager::StopAllInstancesOfCameraShakeFromSource(TSubclassOf<UCameraShakeBase> ShakeClass, UCameraShakeSourceComponent* SourceComponent, bool bImmediately)
+{
+	if (ShakeClass && SourceComponent && CachedCameraShakeMod)
+	{
+		CachedCameraShakeMod->RemoveAllCameraShakesOfClassFromSource(ShakeClass, SourceComponent, bImmediately);
+	}
+}
+
+void APlayerCameraManager::StopAllCameraShakesFromSource(UCameraShakeSourceComponent* SourceComponent, bool bImmediately)
+{
+	if (SourceComponent && CachedCameraShakeMod)
+	{
+		CachedCameraShakeMod->RemoveAllCameraShakesFromSource(SourceComponent, bImmediately);
 	}
 }
 
@@ -1341,7 +1407,7 @@ float APlayerCameraManager::CalcRadialShakeScale(APlayerCameraManager* Camera, F
 }
 
 
-void APlayerCameraManager::PlayWorldCameraShake(UWorld* InWorld, TSubclassOf<class UCameraShake> Shake, FVector Epicenter, float InnerRadius, float OuterRadius, float Falloff, bool bOrientShakeTowardsEpicenter )
+void APlayerCameraManager::PlayWorldCameraShake(UWorld* InWorld, TSubclassOf<class UCameraShakeBase> Shake, FVector Epicenter, float InnerRadius, float OuterRadius, float Falloff, bool bOrientShakeTowardsEpicenter )
 {
 	for( FConstPlayerControllerIterator Iterator = InWorld->GetPlayerControllerIterator(); Iterator; ++Iterator )
 	{
@@ -1353,11 +1419,11 @@ void APlayerCameraManager::PlayWorldCameraShake(UWorld* InWorld, TSubclassOf<cla
 			if (bOrientShakeTowardsEpicenter && PlayerController->GetPawn() != NULL)
 			{
 				const FVector CamLoc = PlayerController->PlayerCameraManager->GetCameraLocation();
-				PlayerController->ClientPlayCameraShake(Shake, ShakeScale, ECameraAnimPlaySpace::UserDefined, (Epicenter - CamLoc).Rotation());
+				PlayerController->ClientStartCameraShake(Shake, ShakeScale, ECameraShakePlaySpace::UserDefined, (Epicenter - CamLoc).Rotation());
 			}
 			else
 			{
-				PlayerController->ClientPlayCameraShake(Shake, ShakeScale);
+				PlayerController->ClientStartCameraShake(Shake, ShakeScale);
 			}
 		}
 	}
@@ -1377,6 +1443,12 @@ void APlayerCameraManager::StartCameraFade(float FromAlpha, float ToAlpha, float
 	FadeTime = InFadeTime;
 	FadeTimeRemaining = InFadeTime;
 	bFadeAudio = bInFadeAudio;
+
+	if (bInFadeAudio && OnAudioFadeChangeEvent.IsBound())
+	{
+		const bool bFadeOut = FromAlpha < ToAlpha || FMath::IsNearlyEqual(ToAlpha, 1.0f);
+		OnAudioFadeChangeEvent.Broadcast(bFadeOut, FadeTime);
+	}
 
 	bAutoAnimateFade = true;
 	bHoldFadeWhenFinished = bInHoldWhenFinished;

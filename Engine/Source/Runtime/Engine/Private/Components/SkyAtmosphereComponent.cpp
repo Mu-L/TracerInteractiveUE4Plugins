@@ -68,8 +68,10 @@ USkyAtmosphereComponent::USkyAtmosphereComponent(const FObjectInitializer& Objec
 	MultiScatteringFactor = 1.0f;
 	AerialPespectiveViewDistanceScale = 1.0f;
 	HeightFogContribution = 1.0f;
-
 	TransmittanceMinLightElevationAngle = -90.0f;
+	AerialPerspectiveStartDepth = 0.1f;
+
+	TraceSampleCountScale = 1.0f;
 
 	memset(OverrideAtmosphericLight, 0, sizeof(OverrideAtmosphericLight));
 
@@ -222,6 +224,7 @@ void USkyAtmosphereComponent::CheckForErrors()
 					break;
 				}
 			}
+			PRAGMA_DISABLE_DEPRECATION_WARNINGS 
 			for (TObjectIterator<UAtmosphericFogComponent> ComponentIt; ComponentIt; ++ComponentIt)
 			{
 				UAtmosphericFogComponent* Component = *ComponentIt;
@@ -236,6 +239,7 @@ void USkyAtmosphereComponent::CheckForErrors()
 					break;
 				}
 			}
+			PRAGMA_ENABLE_DEPRECATION_WARNINGS
 		}
 
 		if (bMultipleFound)
@@ -426,6 +430,8 @@ FSkyAtmosphereSceneProxy::FSkyAtmosphereSceneProxy(const USkyAtmosphereComponent
 	SkyLuminanceFactor = InComponent->SkyLuminanceFactor;
 	AerialPespectiveViewDistanceScale = InComponent->AerialPespectiveViewDistanceScale;
 	HeightFogContribution = InComponent->HeightFogContribution;
+	AerialPerspectiveStartDepthKm = InComponent->AerialPerspectiveStartDepth;
+	TraceSampleCountScale = InComponent->TraceSampleCountScale;
 
 	InComponent->GetOverrideLightStatus(OverrideAtmosphericLight, OverrideAtmosphericLightDirection);
 

@@ -12,7 +12,6 @@
 
 #include "ApexDestructibleAssetImport.h"
 
-
 #if WITH_EDITOR
 #include "Modules/ModuleManager.h"
 #include "Engine/SkeletalMesh.h"
@@ -34,6 +33,8 @@ DEFINE_LOG_CATEGORY_STATIC(LogApexDestructibleAssetImport, Log, All);
 #include "Rendering/SkeletalMeshModel.h"
 #include "DestructibleMesh.h"
 #include "Factories/FbxSkeletalMeshImportData.h"
+
+PRAGMA_DISABLE_DEPRECATION_WARNINGS
 
 #if WITH_APEX
 
@@ -220,28 +221,25 @@ static void ApplyTransformationToApexDestructibleAsset( apex::DestructibleAsset&
 #endif // #if USE_TEMPORARY_TRANSFORMATION_FUNCTION
 
 // Storage for destructible mesh settings (including base skeletal mesh)
-struct ExistingDestMeshData
+struct FExistingDestMeshData
 {
-	ExistingDestMeshData() : SkelMeshData(NULL), BodySetup(NULL) {}
+	FExistingDestMeshData() : BodySetup(NULL) {}
 
-	ExistingSkelMeshData*			SkelMeshData;
-	UBodySetup*						BodySetup;
-	TArray<struct FFractureEffect>	FractureEffects;
+	TSharedPtr<FExistingSkelMeshData>	SkelMeshData;
+	UBodySetup*							BodySetup;
+	TArray<struct FFractureEffect>		FractureEffects;
 };
 
-ExistingDestMeshData* SaveExistingDestMeshData(UDestructibleMesh* ExistingDestructibleMesh)
+TSharedPtr<FExistingDestMeshData> SaveExistingDestMeshData(UDestructibleMesh* ExistingDestructibleMesh)
 {
-	ExistingDestMeshData* ExistingDestMeshDataPtr = NULL;
+	TSharedPtr<FExistingDestMeshData> ExistingDestMeshDataPtr;
 
 	if (ExistingDestructibleMesh)
 	{
-		ExistingDestMeshDataPtr = new ExistingDestMeshData();
+		ExistingDestMeshDataPtr = MakeShared<FExistingDestMeshData>();
 
 		// Only save off SkelMeshData if it's been created
-		ExistingDestMeshDataPtr->SkelMeshData = NULL;
-		
-		ExistingDestMeshDataPtr->SkelMeshData = SaveExistingSkelMeshData(ExistingDestructibleMesh, true, INDEX_NONE);
-		
+		ExistingDestMeshDataPtr->SkelMeshData = SkeletalMeshHelper::SaveExistingSkelMeshData(ExistingDestructibleMesh, true, INDEX_NONE);
 		ExistingDestMeshDataPtr->BodySetup = ExistingDestructibleMesh->BodySetup;
 		ExistingDestMeshDataPtr->FractureEffects = ExistingDestructibleMesh->FractureEffects;
 	}
@@ -249,14 +247,14 @@ ExistingDestMeshData* SaveExistingDestMeshData(UDestructibleMesh* ExistingDestru
 	return ExistingDestMeshDataPtr;
 }
 
-static void RestoreExistingDestMeshData(ExistingDestMeshData* MeshData, UDestructibleMesh* DestructibleMesh)
+static void RestoreExistingDestMeshData(const TSharedPtr<FExistingDestMeshData>& MeshData, UDestructibleMesh* DestructibleMesh)
 {
 	if (MeshData && DestructibleMesh)
 	{
 		// Restore old settings, but resize arrays to make sense with the new NxDestructibleAsset
-		if (MeshData->SkelMeshData != NULL)
+		if (MeshData->SkelMeshData)
 		{
-			RestoreExistingSkelMeshData(MeshData->SkelMeshData, DestructibleMesh, INDEX_NONE, false, false, false);
+			SkeletalMeshHelper::RestoreExistingSkelMeshData(MeshData->SkelMeshData, DestructibleMesh, INDEX_NONE, false, false, false);
 		}
 		DestructibleMesh->BodySetup =  MeshData->BodySetup;
 		DestructibleMesh->FractureEffects = MeshData->FractureEffects;
@@ -764,11 +762,12 @@ apex::DestructibleAsset* CreateApexDestructibleAssetFromFile(const FString& File
 
 bool SetApexDestructibleAsset(UDestructibleMesh& DestructibleMesh, apex::DestructibleAsset& ApexDestructibleAsset, FSkeletalMeshImportData* OutData, EDestructibleImportOptions::Type Options)
 {
+	using namespace SkeletalMeshHelper;
 	DestructibleMesh.PreEditChange(NULL);
 
 	DestructibleMesh.InvalidateDeriveDataCacheGUID();
 
-	ExistingDestMeshData * ExistDestMeshDataPtr = nullptr;
+	TSharedPtr<FExistingDestMeshData> ExistDestMeshDataPtr;
 	if(Options & EDestructibleImportOptions::PreserveSettings)
 	{
 		ExistDestMeshDataPtr = SaveExistingDestMeshData(&DestructibleMesh);
@@ -835,8 +834,6 @@ bool SetApexDestructibleAsset(UDestructibleMesh& DestructibleMesh, apex::Destruc
 		if (ExistDestMeshDataPtr)
 		{
 			RestoreExistingDestMeshData(ExistDestMeshDataPtr, &DestructibleMesh);
-			delete ExistDestMeshDataPtr;
-			ExistDestMeshDataPtr = NULL;
 		}
 		return false;
 	}
@@ -866,18 +863,15 @@ bool SetApexDestructibleAsset(UDestructibleMesh& DestructibleMesh, apex::Destruc
 		if (ExistDestMeshDataPtr)
 		{
 			RestoreExistingDestMeshData(ExistDestMeshDataPtr, &DestructibleMesh);
-			delete ExistDestMeshDataPtr;
-			ExistDestMeshDataPtr = NULL;
 		}
 		return false;
 	}
 	UE_LOG(LogApexDestructibleAssetImport, Warning, TEXT("Bones digested - %i  Depth of hierarchy - %i"), DestructibleMesh.RefSkeleton.GetNum(), SkeletalDepth);
 
 	// process bone influences from import data
-	ProcessImportMeshInfluences(*SkelMeshImportDataPtr);
+	ProcessImportMeshInfluences(*SkelMeshImportDataPtr, FString("ApexMesh"));
 
 	FSkeletalMeshModel& DestructibleMeshResource = *DestructibleMesh.GetImportedModel();
-	check(DestructibleMeshResource.LODModels.Num() == 0);
 	DestructibleMeshResource.LODModels.Empty();
 	DestructibleMeshResource.EmptyOriginalReductionSourceMeshData();
 	DestructibleMeshResource.LODModels.Add(new FSkeletalMeshLODModel());
@@ -918,12 +912,9 @@ bool SetApexDestructibleAsset(UDestructibleMesh& DestructibleMesh, apex::Destruc
 		BuildOptions.bComputeWeightedNormals = true;
 
 		// Create actual rendering data.
-		if (!MeshUtilities.BuildSkeletalMesh(DestructibleMeshResource.LODModels[0], DestructibleMesh.RefSkeleton, LODInfluences,LODWedges,LODFaces,LODPoints,LODPointToRawMap,BuildOptions))
+		if (!MeshUtilities.BuildSkeletalMesh(DestructibleMeshResource.LODModels[0], DestructibleMesh.GetPathName(), DestructibleMesh.RefSkeleton, LODInfluences,LODWedges,LODFaces,LODPoints,LODPointToRawMap,BuildOptions))
 		{
 			DestructibleMesh.MarkPendingKill();
-
-			delete ExistDestMeshDataPtr;
-			ExistDestMeshDataPtr = NULL;
 
 			return false;
 		}
@@ -931,8 +922,6 @@ bool SetApexDestructibleAsset(UDestructibleMesh& DestructibleMesh, apex::Destruc
 		if (ExistDestMeshDataPtr)
 		{
 			RestoreExistingDestMeshData(ExistDestMeshDataPtr, &DestructibleMesh);
-			delete ExistDestMeshDataPtr;
-			ExistDestMeshDataPtr = NULL;
 		}
 
 		DestructibleMesh.CalculateInvRefMatrices();
@@ -1111,4 +1100,7 @@ UDestructibleMesh* ImportDestructibleMeshFromApexDestructibleAsset(UObject* InPa
 }
 
 #endif // WITH_APEX
+
+PRAGMA_ENABLE_DEPRECATION_WARNINGS
+
 #endif // WITH_EDITOR

@@ -36,17 +36,16 @@ bool FMeshPaintStaticMeshComponentAdapter::Construct(UMeshComponent* InComponent
 
 FMeshPaintStaticMeshComponentAdapter::~FMeshPaintStaticMeshComponentAdapter()
 {
+#if WITH_EDITOR
 	if (StaticMeshComponent != nullptr)
 	{
-#if WITH_EDITOR
-		if (ReferencedStaticMesh != nullptr)
-		{
-			ReferencedStaticMesh->OnPostMeshBuild().RemoveAll(this);
-		}
-
 		StaticMeshComponent->OnStaticMeshChanged().RemoveAll(this);
-#endif
 	}
+	if (ReferencedStaticMesh != nullptr)
+	{
+		ReferencedStaticMesh->OnPostMeshBuild().RemoveAll(this);
+	}
+#endif
 }
 
 void FMeshPaintStaticMeshComponentAdapter::OnPostMeshBuild(UStaticMesh* StaticMesh)
@@ -59,12 +58,13 @@ void FMeshPaintStaticMeshComponentAdapter::OnStaticMeshChanged(UStaticMeshCompon
 {
 	check(StaticMeshComponent == InStaticMeshComponent);
 	OnRemoved();
-#if WITH_EDITOR
-	ReferencedStaticMesh->OnPostMeshBuild().RemoveAll(this);
-#endif
-	ReferencedStaticMesh = InStaticMeshComponent->GetStaticMesh();
 	if (ReferencedStaticMesh)
 	{
+#if WITH_EDITOR
+		ReferencedStaticMesh->OnPostMeshBuild().RemoveAll(this);
+#endif
+		ReferencedStaticMesh = InStaticMeshComponent->GetStaticMesh();
+
 #if WITH_EDITOR
 		ReferencedStaticMesh->OnPostMeshBuild().AddRaw(this, &FMeshPaintStaticMeshComponentAdapter::OnPostMeshBuild);
 #endif
@@ -212,28 +212,25 @@ bool FMeshPaintStaticMeshComponentAdapter::LineTraceComponent(struct FHitResult&
 		const FVector& P1 = MeshVertices[FoundTriangle.B];
 		const FVector& P2 = MeshVertices[FoundTriangle.C];
 
-		const FVector TriNorm = (P1 - P0) ^ (P2 - P0);
+		FTriangle3d Triangle((FVector3d)P0, (FVector3d)P1, (FVector3d)P2);
+		FVector3d TriNormal = Triangle.Normal();
 
 		//check collinearity of A,B,C
-		if (TriNorm.SizeSquared() > SMALL_NUMBER)
+		if (TriNormal.SquaredLength() > (double)SMALL_NUMBER)
 		{
-			FVector IntersectPoint;
-			FVector HitNormal;
-
-			bool bHit = FMath::SegmentTriangleIntersection(LocalStart, LocalEnd, P0, P1, P2, IntersectPoint, HitNormal);
-
-			if (bHit)
+			FRay3d LocalRay((FVector3d)LocalStart, ((FVector3d)LocalEnd - (FVector3d)LocalStart).Normalized());
+			FIntrRay3Triangle3d RayTriIntersection(LocalRay, Triangle);
+			if (RayTriIntersection.Find())
 			{
-				const float Distance = (LocalStart - IntersectPoint).SizeSquared();
+				double Distance = RayTriIntersection.RayParameter;
 				if (Distance < MinDistance)
 				{
-					MinDistance = Distance;
-					Intersect = IntersectPoint;
-					Normal = HitNormal;
+					MinDistance = (float)Distance;
+					Intersect = (FVector)LocalRay.PointAt(RayTriIntersection.RayParameter);
+					Normal = (FVector)TriNormal;
 				}
 			}
 		}
-
 
 		if (MinDistance != FLT_MAX)
 		{

@@ -413,14 +413,24 @@ namespace UnrealBuildTool
 					XElement CustomBuildCommand = new XElement("BuildCommand");
 					CodeLiteConfigurationCustomBuild.Add(CustomBuildCommand);
 
-					string BuildTarget = UnrealBuildTool.GetUBTPath().GetFileName() + " " + TargetName + " " + ProjectPlatformName + " " + CurConf.ToString();
+					string BuildTarget = TargetName + " " + ProjectPlatformName + " " + CurConf.ToString();
 					if( (BuildHostPlatform.Current.Platform != UnrealTargetPlatform.Win64) &&
 						(BuildHostPlatform.Current.Platform != UnrealTargetPlatform.Win32))
 					{
-						BuildTarget = "mono " + BuildTarget;
+						string PlatformName = "Linux";
+						if (BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Mac)
+						{
+							PlatformName = "Mac";
+						}
+
+						BuildTarget = Path.Combine(UnrealBuildTool.EngineDirectory.FullName, "Build/BatchFiles", PlatformName, "Build.sh") + " " + BuildTarget;
+					}
+					else
+					{
+						BuildTarget = UnrealBuildTool.GetUBTPath().GetFileName() + " " + BuildTarget;
 					}
 
-					if (GameProjectFile.Length > 0) 
+					if (GameProjectFile.Length > 0)
 					{
 						BuildTarget += " -project=" + "\"" + GameProjectFile + "\"";
 					}

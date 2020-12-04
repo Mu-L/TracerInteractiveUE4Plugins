@@ -43,9 +43,9 @@ namespace UnrealBuildTool
 		public bool bAddGeneratedCodeIncludePath;
 
 		/// <summary>
-		/// Wildcard matching the *.gen.cpp files for this module.  If this is null then this module doesn't have any UHT-produced code.
+		/// Paths containing *.gen.cpp files for this module.  If this is null then this module doesn't have any generated code.
 		/// </summary>
-		public string GeneratedCodeWildcard;
+		public List<string> GeneratedCppDirectories;
 
 		/// <summary>
 		/// List of invalid include directives. These are buffered up and output before we start compiling.
@@ -76,60 +76,80 @@ namespace UnrealBuildTool
 		/// </summary>
 		static readonly KeyValuePair<string, string>[] WhitelistedCircularDependencies =
 		{
-			new KeyValuePair<string, string>("Engine", "Landscape"),
-			new KeyValuePair<string, string>("Engine", "UMG"),
-			new KeyValuePair<string, string>("Engine", "GameplayTags"),
-			new KeyValuePair<string, string>("Engine", "MaterialShaderQualitySettings"),
-			new KeyValuePair<string, string>("Engine", "UnrealEd"),
-			new KeyValuePair<string, string>("Engine", "AudioMixer"),
-			new KeyValuePair<string, string>("PacketHandler", "ReliabilityHandlerComponent"),
-			new KeyValuePair<string, string>("GameplayDebugger", "AIModule"),
-			new KeyValuePair<string, string>("GameplayDebugger", "GameplayTasks"),
-			new KeyValuePair<string, string>("Engine", "CinematicCamera"),
-			new KeyValuePair<string, string>("Engine", "CollisionAnalyzer"),
-			new KeyValuePair<string, string>("Engine", "LogVisualizer"),
-			new KeyValuePair<string, string>("Engine", "Kismet"),
-			new KeyValuePair<string, string>("Landscape", "UnrealEd"),
-			new KeyValuePair<string, string>("Landscape", "MaterialUtilities"),
-			new KeyValuePair<string, string>("LocalizationDashboard", "LocalizationService"),
-			new KeyValuePair<string, string>("LocalizationDashboard", "MainFrame"),
-			new KeyValuePair<string, string>("LocalizationDashboard", "TranslationEditor"),
-			new KeyValuePair<string, string>("Documentation", "SourceControl"),
-			new KeyValuePair<string, string>("UnrealEd", "GraphEditor"),
-			new KeyValuePair<string, string>("UnrealEd", "Kismet"),
-			new KeyValuePair<string, string>("UnrealEd", "AudioEditor"),
+			new KeyValuePair<string, string>("AIModule", "AITestSuite"),
+			new KeyValuePair<string, string>("AnimGraph", "UnrealEd"),
+			new KeyValuePair<string, string>("AnimGraph", "GraphEditor"),
+			new KeyValuePair<string, string>("AudioMixer", "NonRealtimeAudioRenderer"),
+			new KeyValuePair<string, string>("AudioMixer", "SoundFieldRendering"),
+			new KeyValuePair<string, string>("AudioEditor", "DetailCustomizations"),
 			new KeyValuePair<string, string>("BlueprintGraph", "KismetCompiler"),
 			new KeyValuePair<string, string>("BlueprintGraph", "UnrealEd"),
 			new KeyValuePair<string, string>("BlueprintGraph", "GraphEditor"),
 			new KeyValuePair<string, string>("BlueprintGraph", "Kismet"),
 			new KeyValuePair<string, string>("BlueprintGraph", "CinematicCamera"),
 			new KeyValuePair<string, string>("ConfigEditor", "PropertyEditor"),
-			new KeyValuePair<string, string>("SourceControl", "UnrealEd"),
-			new KeyValuePair<string, string>("Kismet", "BlueprintGraph"),
-			new KeyValuePair<string, string>("Kismet", "UMGEditor"),
-			new KeyValuePair<string, string>("MovieSceneTools", "Sequencer"),
-			new KeyValuePair<string, string>("Sequencer", "MovieSceneTools"),
-			new KeyValuePair<string, string>("AIModule", "AITestSuite"),
-			new KeyValuePair<string, string>("GameplayTasks", "UnrealEd"),
-			new KeyValuePair<string, string>("AnimGraph", "UnrealEd"),
-			new KeyValuePair<string, string>("AnimGraph", "GraphEditor"),
-			new KeyValuePair<string, string>("MaterialUtilities", "Landscape"),
-			new KeyValuePair<string, string>("HierarchicalLODOutliner", "UnrealEd"),
-			new KeyValuePair<string, string>("PixelInspectorModule", "UnrealEd"),
+			new KeyValuePair<string, string>("Documentation", "SourceControl"),
+			new KeyValuePair<string, string>("Engine", "Landscape"),
+			new KeyValuePair<string, string>("Engine", "UMG"),
+			new KeyValuePair<string, string>("Engine", "GameplayTags"),
+			new KeyValuePair<string, string>("Engine", "MaterialShaderQualitySettings"),
+			new KeyValuePair<string, string>("Engine", "UnrealEd"),
+			new KeyValuePair<string, string>("Engine", "AudioMixer"),
+			new KeyValuePair<string, string>("Engine", "CinematicCamera"),
+			new KeyValuePair<string, string>("Engine", "CollisionAnalyzer"),
+			new KeyValuePair<string, string>("Engine", "LogVisualizer"),
+			new KeyValuePair<string, string>("Engine", "Kismet"),
+			new KeyValuePair<string, string>("FoliageEdit", "ViewportInteraction"),
+			new KeyValuePair<string, string>("FoliageEdit", "VREditor"),
+			new KeyValuePair<string, string>("FunctionalTesting", "UnrealEd"),
 			new KeyValuePair<string, string>("GameplayAbilitiesEditor", "BlueprintGraph"),
-            new KeyValuePair<string, string>("UnrealEd", "ViewportInteraction"),
-            new KeyValuePair<string, string>("UnrealEd", "VREditor"),
-            new KeyValuePair<string, string>("LandscapeEditor", "ViewportInteraction"),
-            new KeyValuePair<string, string>("LandscapeEditor", "VREditor"),
-            new KeyValuePair<string, string>("FoliageEdit", "ViewportInteraction"),
-            new KeyValuePair<string, string>("FoliageEdit", "VREditor"),
-            new KeyValuePair<string, string>("MeshPaint", "ViewportInteraction"),
-            new KeyValuePair<string, string>("MeshPaint", "VREditor"),
-            new KeyValuePair<string, string>("MeshPaintMode", "ViewportInteraction"),
-            new KeyValuePair<string, string>("MeshPaintMode", "VREditor"),
-            new KeyValuePair<string, string>("Sequencer", "ViewportInteraction"),
-            new KeyValuePair<string, string>("NavigationSystem", "UnrealEd"),
-        };
+			new KeyValuePair<string, string>("GameplayDebugger", "AIModule"),
+			new KeyValuePair<string, string>("GameplayDebugger", "GameplayTasks"),
+			new KeyValuePair<string, string>("GameplayTasks", "UnrealEd"),
+			new KeyValuePair<string, string>("GraphEditor", "Kismet"),
+			new KeyValuePair<string, string>("HierarchicalLODOutliner", "UnrealEd"),
+			new KeyValuePair<string, string>("Kismet", "BlueprintGraph"),
+			new KeyValuePair<string, string>("Kismet", "BlueprintNativeCodeGen"),
+			new KeyValuePair<string, string>("Kismet", "UMGEditor"),
+			new KeyValuePair<string, string>("Kismet", "Merge"),
+			new KeyValuePair<string, string>("KismetWidgets", "BlueprintGraph"),
+			new KeyValuePair<string, string>("Landscape", "UnrealEd"),
+			new KeyValuePair<string, string>("Landscape", "MaterialUtilities"),
+			new KeyValuePair<string, string>("LandscapeEditor", "ViewportInteraction"),
+			new KeyValuePair<string, string>("LandscapeEditor", "VREditor"),
+			new KeyValuePair<string, string>("LocalizationDashboard", "LocalizationService"),
+			new KeyValuePair<string, string>("LocalizationDashboard", "MainFrame"),
+			new KeyValuePair<string, string>("LocalizationDashboard", "TranslationEditor"),
+			new KeyValuePair<string, string>("MaterialUtilities", "Landscape"),
+			new KeyValuePair<string, string>("MeshPaint", "ViewportInteraction"),
+			new KeyValuePair<string, string>("MeshPaint", "VREditor"),
+			new KeyValuePair<string, string>("MeshPaintMode", "ViewportInteraction"),
+			new KeyValuePair<string, string>("MeshPaintMode", "VREditor"),
+			new KeyValuePair<string, string>("MovieSceneTools", "Sequencer"),
+			new KeyValuePair<string, string>("NavigationSystem", "UnrealEd"),
+			new KeyValuePair<string, string>("PacketHandler", "ReliabilityHandlerComponent"),
+			new KeyValuePair<string, string>("PIEPreviewDeviceProfileSelector", "UnrealEd"),
+			new KeyValuePair<string, string>("PixelInspectorModule", "UnrealEd"),
+			new KeyValuePair<string, string>("Sequencer", "MovieSceneTools"),
+			new KeyValuePair<string, string>("Sequencer", "ViewportInteraction"),
+			new KeyValuePair<string, string>("SourceControl", "UnrealEd"),
+			new KeyValuePair<string, string>("UnrealEd", "AudioEditor"),
+			new KeyValuePair<string, string>("UnrealEd", "ClothingSystemEditor"),
+			new KeyValuePair<string, string>("UnrealEd", "Documentation"),
+			new KeyValuePair<string, string>("UnrealEd", "EditorInteractiveToolsFramework"),
+			new KeyValuePair<string, string>("UnrealEd", "GraphEditor"),
+			new KeyValuePair<string, string>("UnrealEd", "InputBindingEditor"),
+			new KeyValuePair<string, string>("UnrealEd", "Kismet"),
+			new KeyValuePair<string, string>("UnrealEd", "MeshPaint"),
+			new KeyValuePair<string, string>("UnrealEd", "MeshPaintMode"),
+			new KeyValuePair<string, string>("UnrealEd", "PluginWarden"),
+			new KeyValuePair<string, string>("UnrealEd", "PropertyEditor"),
+			new KeyValuePair<string, string>("UnrealEd", "ToolMenusEditor"),
+			new KeyValuePair<string, string>("UnrealEd", "ViewportInteraction"),
+			new KeyValuePair<string, string>("UnrealEd", "VREditor"),
+			new KeyValuePair<string, string>("WebBrowser", "WebBrowserTexture"),
+			new KeyValuePair<string, string>("WindowsMixedRealityHMD", "WindowsMixedRealityHandTracking"),
+		};
 
 
 		public UEBuildModuleCPP(ModuleRules Rules, DirectoryReference IntermediateDirectory, DirectoryReference GeneratedCodeDirectory)
@@ -259,17 +279,28 @@ namespace UnrealBuildTool
 			if(bAddGeneratedCodeIncludePath || (ProjectFileGenerator.bGenerateProjectFiles && GeneratedCodeDirectory != null))
 			{
 				IncludePaths.Add(GeneratedCodeDirectory);
+
+				if (Rules.AdditionalCodeGenDirectories != null)
+				{
+					foreach (string CodeGenDir in Rules.AdditionalCodeGenDirectories)
+					{
+						if (Directory.Exists(CodeGenDir))
+						{
+							IncludePaths.Add(new DirectoryReference(CodeGenDir));
+						}
+					}
+				}
 			}
 
 			base.AddModuleToCompileEnvironment(SourceBinary, IncludePaths, SystemIncludePaths, Definitions, AdditionalFrameworks, AdditionalPrerequisites, bLegacyPublicIncludePaths);
 		}
 
 		// UEBuildModule interface.
-		public override List<FileItem> Compile(ReadOnlyTargetRules Target, UEToolChain ToolChain, CppCompileEnvironment BinaryCompileEnvironment, FileReference SingleFileToCompile, ISourceFileWorkingSet WorkingSet, IActionGraphBuilder Graph)
+		public override List<FileItem> Compile(ReadOnlyTargetRules Target, UEToolChain ToolChain, CppCompileEnvironment BinaryCompileEnvironment, List<FileReference> SpecificFilesToCompile, ISourceFileWorkingSet WorkingSet, IActionGraphBuilder Graph)
 		{
 			//UEBuildPlatform BuildPlatform = UEBuildPlatform.GetBuildPlatform(BinaryCompileEnvironment.Platform);
 
-			List<FileItem> LinkInputFiles = base.Compile(Target, ToolChain, BinaryCompileEnvironment, SingleFileToCompile, WorkingSet, Graph);
+			List<FileItem> LinkInputFiles = base.Compile(Target, ToolChain, BinaryCompileEnvironment, SpecificFilesToCompile, WorkingSet, Graph);
 
 			CppCompileEnvironment ModuleCompileEnvironment = CreateModuleCompileEnvironment(Target, BinaryCompileEnvironment);
 
@@ -310,15 +341,16 @@ namespace UnrealBuildTool
 				Graph.AddSourceFiles(Pair.Key, Pair.Value);
 			}
 
-			// If we're compiling a single file, strip out anything else. This prevents us clobbering response files for anything we're 
+			// If we're compiling only specific files, strip out anything else. This prevents us clobbering response files for anything we're 
 			// not going to build, triggering a larger build than necessary when we do a regular build again.
-			if(SingleFileToCompile != null)
+			if(SpecificFilesToCompile.Count > 0)
 			{
-				InputFiles.CPPFiles.RemoveAll(x => x.Location != SingleFileToCompile);
-				InputFiles.CCFiles.RemoveAll(x => x.Location != SingleFileToCompile);
-				InputFiles.CFiles.RemoveAll(x => x.Location != SingleFileToCompile);
+				InputFiles.CPPFiles.RemoveAll(x => !SpecificFilesToCompile.Contains(x.Location));
+				InputFiles.CCFiles.RemoveAll(x => !SpecificFilesToCompile.Contains(x.Location));
+				InputFiles.CFiles.RemoveAll(x => !SpecificFilesToCompile.Contains(x.Location));
 
-				if(InputFiles.CPPFiles.Count == 0 && InputFiles.CCFiles.Count == 0 && InputFiles.CFiles.Count == 0 && !ContainsFile(SingleFileToCompile))
+				if (InputFiles.CPPFiles.Count == 0 && InputFiles.CCFiles.Count == 0 && InputFiles.CFiles.Count == 0 &&
+					!SpecificFilesToCompile.Any(x => ContainsFile(x)))
 				{
 					return new List<FileItem>();
 				}
@@ -421,10 +453,15 @@ namespace UnrealBuildTool
 			}
 
 			// Compile all the generated CPP files
-			if (GeneratedCodeWildcard != null && !CompileEnvironment.bHackHeaderGenerator)
+			if (GeneratedCppDirectories != null && !CompileEnvironment.bHackHeaderGenerator && SpecificFilesToCompile.Count == 0)
 			{
-				string[] GeneratedFiles = Directory.GetFiles(Path.GetDirectoryName(GeneratedCodeWildcard), Path.GetFileName(GeneratedCodeWildcard));
-				if(GeneratedFiles.Length > 0)
+				List<string> GeneratedFiles = new List<string>();
+				foreach (string GeneratedDir in GeneratedCppDirectories)
+				{
+					GeneratedFiles.AddRange(Directory.GetFiles(GeneratedDir, "*.gen.cpp"));
+				}
+
+				if(GeneratedFiles.Count > 0)
 				{
 					// Create a compile environment for the generated files. We can disable creating debug info here to improve link times.
 					CppCompileEnvironment GeneratedCPPCompileEnvironment = CompileEnvironment;
@@ -452,7 +489,7 @@ namespace UnrealBuildTool
 					foreach (string GeneratedFilename in GeneratedFiles)
 					{
 						FileItem GeneratedCppFileItem = FileItem.GetItemByPath(GeneratedFilename);
-						if (SingleFileToCompile == null || GeneratedCppFileItem.Location == SingleFileToCompile)
+						if (SpecificFilesToCompile.Count == 0 || SpecificFilesToCompile.Contains(GeneratedCppFileItem.Location))
 						{
 							GeneratedFileItems.Add(GeneratedCppFileItem);
 						}
@@ -676,6 +713,10 @@ namespace UnrealBuildTool
 			{
 				return false;
 			}
+			if (ModuleCompileEnvironment.CppStandard != CompileEnvironment.CppStandard)
+			{
+				return false;
+			}
 			return true;
 		}
 
@@ -764,6 +805,12 @@ namespace UnrealBuildTool
 					Variant += ".NoUndef";
 				}
 			}
+
+			if (CompileEnvironment.CppStandard != BaseCompileEnvironment.CppStandard)
+			{
+				Variant += String.Format(".{0}", CompileEnvironment.CppStandard);
+			}
+
 			return Variant;
 		}
 
@@ -780,6 +827,7 @@ namespace UnrealBuildTool
 			CompileEnvironment.ShadowVariableWarningLevel = ModuleCompileEnvironment.ShadowVariableWarningLevel;
 			CompileEnvironment.UnsafeTypeCastWarningLevel = ModuleCompileEnvironment.UnsafeTypeCastWarningLevel;
 			CompileEnvironment.bEnableUndefinedIdentifierWarnings = ModuleCompileEnvironment.bEnableUndefinedIdentifierWarnings;
+			CompileEnvironment.CppStandard = ModuleCompileEnvironment.CppStandard;
 		}
 
 		/// <summary>

@@ -9,7 +9,7 @@ public class FBX : ModuleRules
 	{
 		Type = ModuleType.External;
 
-		string FBXSDKDir = Target.UEThirdPartySourceDirectory + "FBX/2018.1.1/";
+		string FBXSDKDir = Target.UEThirdPartySourceDirectory + "FBX/2020.1.1/";
 		PublicSystemIncludePaths.AddRange(
 			new string[] {
 					FBXSDKDir + "include",
@@ -20,7 +20,7 @@ public class FBX : ModuleRules
 
 		if ( Target.Platform == UnrealTargetPlatform.Win64 )
 		{
-			string FBxLibPath = FBXSDKDir + "lib/vs" + Target.WindowsPlatform.GetVisualStudioCompilerVersionName() + "/";
+			string FBxLibPath = FBXSDKDir + "lib/vs2017/";
 
 			FBxLibPath += "x64/release/";
 
@@ -38,10 +38,14 @@ public class FBX : ModuleRules
 				if (Target.bUseStaticCRT)
 				{
 					PublicAdditionalLibraries.Add(FBxLibPath + "libfbxsdk-mt.lib");
+					PublicAdditionalLibraries.Add(FBxLibPath + "libxml2-mt.lib");
+					PublicAdditionalLibraries.Add(FBxLibPath + "zlib-mt.lib");
 				}
 				else
 				{
 					PublicAdditionalLibraries.Add(FBxLibPath + "libfbxsdk-md.lib");
+					PublicAdditionalLibraries.Add(FBxLibPath + "libxml2-md.lib");
+					PublicAdditionalLibraries.Add(FBxLibPath + "zlib-md.lib");
 				}
 			}
 		}
@@ -53,7 +57,7 @@ public class FBX : ModuleRules
 		}
 		else if (Target.IsInPlatformGroup(UnrealPlatformGroup.Unix))
 		{
-			string LibDir = FBXSDKDir + "lib/gcc4/" + Target.Architecture + "/release/";
+			string LibDir = FBXSDKDir + "lib/gcc/" + Target.Architecture + "/release/";
 			if (!Target.bIsEngineInstalled && !Directory.Exists(LibDir))
 			{
 				string Err = string.Format("FBX SDK not found in {0}", LibDir);
@@ -61,13 +65,26 @@ public class FBX : ModuleRules
 				throw new BuildException(Err);
 			}
 
-			PublicAdditionalLibraries.Add(LibDir + "/libfbxsdk.a");
+			/* There seems to be an issue with static linking since FBXSDK 2019 on Linux,
+			 * we use the shared library */
+			PublicDefinitions.Add("FBXSDK_SHARED");
+
+			PublicRuntimeLibraryPaths.Add(LibDir);
+			PublicAdditionalLibraries.Add(LibDir + "libfbxsdk.so");
+			RuntimeDependencies.Add(LibDir + "libfbxsdk.so");
+			
 			/* There is a bug in fbxarch.h where is doesn't do the check
 			 * for clang under linux */
 			PublicDefinitions.Add("FBXSDK_COMPILER_CLANG");
 
 			// libfbxsdk has been built against libstdc++ and as such needs this library
 			PublicSystemLibraries.Add("stdc++");
+
+			AddEngineThirdPartyPrivateStaticDependencies(Target, new string[]
+			{
+				"libxml2",
+				"zlib"
+			});
 		}
 	}
 }

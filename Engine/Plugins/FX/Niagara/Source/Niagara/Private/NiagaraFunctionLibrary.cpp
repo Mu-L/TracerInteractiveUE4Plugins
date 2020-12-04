@@ -5,6 +5,7 @@
 #include "GameFramework/WorldSettings.h"
 #include "Engine/Engine.h"
 #include "NiagaraComponent.h"
+#include "NiagaraComponentSettings.h"
 #include "NiagaraSystem.h"
 #include "ContentStreaming.h"
 #include "Internationalization/Internationalization.h"
@@ -56,11 +57,19 @@ UNiagaraComponent* CreateNiagaraSystem(UNiagaraSystem* SystemTemplate, UWorld* W
 	{
 		if (PoolingMethod == ENCPoolMethod::None)
 		{
-			NiagaraComponent = NewObject<UNiagaraComponent>((Actor ? Actor : (UObject*)World));
-			NiagaraComponent->SetAsset(SystemTemplate);
-			NiagaraComponent->bAutoActivate = false;
-			NiagaraComponent->SetAutoDestroy(bAutoDestroy);
-			NiagaraComponent->bAllowAnyoneToDestroyMe = true;
+			if (UNiagaraComponentSettings::ShouldForceAutoPooling(SystemTemplate))
+			{
+				UNiagaraComponentPool* ComponentPool = FNiagaraWorldManager::Get(World)->GetComponentPool();
+				NiagaraComponent = ComponentPool->CreateWorldParticleSystem(SystemTemplate, World, ENCPoolMethod::AutoRelease);
+			}
+			else
+			{
+				NiagaraComponent = NewObject<UNiagaraComponent>((Actor ? Actor : (UObject*)World));
+				NiagaraComponent->SetAsset(SystemTemplate);
+				NiagaraComponent->bAutoActivate = false;
+				NiagaraComponent->SetAutoDestroy(bAutoDestroy);
+				NiagaraComponent->bAllowAnyoneToDestroyMe = true;
+			}
 		}
 		else
 		{
@@ -97,9 +106,13 @@ UNiagaraComponent* UNiagaraFunctionLibrary::SpawnSystemAtLocation(const UObject*
 				if(PSC)
 				{
 #if WITH_EDITORONLY_DATA
-					PSC->bWaitForCompilationOnActivate = true;
+					PSC->bWaitForCompilationOnActivate = GIsAutomationTesting;
 #endif
-					PSC->RegisterComponentWithWorld(World);
+
+					if (!PSC->IsRegistered())
+					{
+						PSC->RegisterComponentWithWorld(World);
+					}
 
 					PSC->SetAbsolute(true, true, true);
 					PSC->SetWorldLocationAndRotation(SpawnLocation, SpawnRotation);
@@ -153,7 +166,10 @@ UNiagaraComponent* UNiagaraFunctionLibrary::SpawnSystemAttached(UNiagaraSystem* 
 						PSC->SetForceSolo(true);
 					}
 #endif
-					PSC->RegisterComponentWithWorld(AttachToComponent->GetWorld());
+					if(!PSC->IsRegistered())
+					{
+						PSC->RegisterComponentWithWorld(AttachToComponent->GetWorld());
+					}
 
 					PSC->AttachToComponent(AttachToComponent, FAttachmentTransformRules::KeepRelativeTransform, AttachPointName);
 					if (LocationType == EAttachLocation::KeepWorldPosition)
@@ -227,36 +243,49 @@ UNiagaraComponent* UNiagaraFunctionLibrary::SpawnSystemAttached(
 							PSC->SetForceSolo(true);
 						}
 #endif
-						PSC->SetupAttachment(AttachToComponent, AttachPointName);
-
-						if (LocationType == EAttachLocation::KeepWorldPosition)
+						auto SetupRelativeTransforms = [&]()
 						{
-							const FTransform ParentToWorld = AttachToComponent->GetSocketTransform(AttachPointName);
-							const FTransform ComponentToWorld(Rotation, Location, Scale);
-							const FTransform RelativeTM = ComponentToWorld.GetRelativeTransform(ParentToWorld);
-							PSC->SetRelativeLocation_Direct(RelativeTM.GetLocation());
-							PSC->SetRelativeRotation_Direct(RelativeTM.GetRotation().Rotator());
-							PSC->SetRelativeScale3D_Direct(RelativeTM.GetScale3D());
-						}
-						else
-						{
-							PSC->SetRelativeLocation_Direct(Location);
-							PSC->SetRelativeRotation_Direct(Rotation);
-
-							if (LocationType == EAttachLocation::SnapToTarget)
+							if (LocationType == EAttachLocation::KeepWorldPosition)
 							{
-								// SnapToTarget indicates we "keep world scale", this indicates we we want the inverse of the parent-to-world scale 
-								// to calculate world scale at Scale 1, and then apply the passed in Scale
 								const FTransform ParentToWorld = AttachToComponent->GetSocketTransform(AttachPointName);
-								PSC->SetRelativeScale3D_Direct(Scale * ParentToWorld.GetSafeScaleReciprocal(ParentToWorld.GetScale3D()));
+								const FTransform ComponentToWorld(Rotation, Location, Scale);
+								const FTransform RelativeTM = ComponentToWorld.GetRelativeTransform(ParentToWorld);
+								PSC->SetRelativeLocation_Direct(RelativeTM.GetLocation());
+								PSC->SetRelativeRotation_Direct(RelativeTM.GetRotation().Rotator());
+								PSC->SetRelativeScale3D_Direct(RelativeTM.GetScale3D());
 							}
 							else
 							{
-								PSC->SetRelativeScale3D_Direct(Scale);
+								PSC->SetRelativeLocation_Direct(Location);
+								PSC->SetRelativeRotation_Direct(Rotation);
+
+								if (LocationType == EAttachLocation::SnapToTarget)
+								{
+									// SnapToTarget indicates we "keep world scale", this indicates we we want the inverse of the parent-to-world scale 
+									// to calculate world scale at Scale 1, and then apply the passed in Scale
+									const FTransform ParentToWorld = AttachToComponent->GetSocketTransform(AttachPointName);
+									PSC->SetRelativeScale3D_Direct(Scale * ParentToWorld.GetSafeScaleReciprocal(ParentToWorld.GetScale3D()));
+								}
+								else
+								{
+									PSC->SetRelativeScale3D_Direct(Scale);
+								}
 							}
+						};
+
+						if (PSC->IsRegistered())
+						{
+							//It is now possible for us to be already regisetered so we must use AttachToComponent() instead.
+							SetupRelativeTransforms();
+							PSC->AttachToComponent(AttachToComponent, FAttachmentTransformRules::KeepRelativeTransform);
+						}
+						else
+						{
+							PSC->SetupAttachment(AttachToComponent, AttachPointName);
+							SetupRelativeTransforms();
+							PSC->RegisterComponentWithWorld(World);
 						}
 
-						PSC->RegisterComponentWithWorld(World);
 						if (bAutoActivate)
 						{
 							PSC->Activate(true);
@@ -297,13 +326,13 @@ void UNiagaraFunctionLibrary::OverrideSystemUserVariableStaticMeshComponent(UNia
 {
 	if (!NiagaraSystem)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem in \"Set Niagara Static Mesh Component\" is NULL, OverrideName \"%s\" and StaticMeshComponent \"%s\", skipping."), *OverrideName, StaticMeshComponent ? *StaticMeshComponent->GetName() : TEXT("NULL"));
+		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem in \"Set Niagara Static Mesh Component\" is NULL, OverrideName \"%s\" and StaticMeshComponent \"%s\", skipping."), *OverrideName, *GetFullNameSafe(StaticMeshComponent));
 		return;
 	}
 
 	if (!StaticMeshComponent)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("StaticMeshComponent in \"Set Niagara Static Mesh Component\" is NULL, OverrideName \"%s\" and NiagaraSystem \"%s\", skipping."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("StaticMeshComponent in \"Set Niagara Static Mesh Component\" is NULL, OverrideName \"%s\" and NiagaraSystem \"%s\", skipping."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
@@ -314,14 +343,14 @@ void UNiagaraFunctionLibrary::OverrideSystemUserVariableStaticMeshComponent(UNia
 	int32 Index = OverrideParameters.IndexOf(Variable);
 	if (Index == INDEX_NONE)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("Could not find index of variable \"%s\" in the OverrideParameters map of NiagaraSystem \"%s\"."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("Could not find index of variable \"%s\" in the OverrideParameters map of NiagaraSystem \"%s\"."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 	
 	UNiagaraDataInterfaceStaticMesh* StaticMeshInterface = Cast<UNiagaraDataInterfaceStaticMesh>(OverrideParameters.GetDataInterface(Index));
 	if (!StaticMeshInterface)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("Did not find a matching Static Mesh Data Interface variable named \"%s\" in the User variables of NiagaraSystem \"%s\" ."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("Did not find a matching Static Mesh Data Interface variable named \"%s\" in the User variables of NiagaraSystem \"%s\" ."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
@@ -332,13 +361,13 @@ void UNiagaraFunctionLibrary::OverrideSystemUserVariableStaticMesh(UNiagaraCompo
 {
 	if (!NiagaraSystem)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem in \"Set Niagara Static Mesh Component\" is NULL, OverrideName \"%s\" and StaticMesh \"%s\", skipping."), *OverrideName, StaticMesh ? *StaticMesh->GetName() : TEXT("NULL"));
+		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem in \"Set Niagara Static Mesh Component\" is NULL, OverrideName \"%s\" and StaticMesh \"%s\", skipping."), *OverrideName, *GetFullNameSafe(StaticMesh));
 		return;
 	}
 
 	if (!StaticMesh)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("StaticMesh in \"Set Niagara Static Mesh Component\" is NULL, OverrideName \"%s\" and NiagaraSystem \"%s\", skipping."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("StaticMesh in \"Set Niagara Static Mesh Component\" is NULL, OverrideName \"%s\" and NiagaraSystem \"%s\", skipping."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
@@ -349,67 +378,87 @@ void UNiagaraFunctionLibrary::OverrideSystemUserVariableStaticMesh(UNiagaraCompo
 	int32 Index = OverrideParameters.IndexOf(Variable);
 	if (Index == INDEX_NONE)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("Could not find index of variable \"%s\" in the OverrideParameters map of NiagaraSystem \"%s\"."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("Could not find index of variable \"%s\" in the OverrideParameters map of NiagaraSystem \"%s\"."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
 	UNiagaraDataInterfaceStaticMesh* StaticMeshInterface = Cast<UNiagaraDataInterfaceStaticMesh>(OverrideParameters.GetDataInterface(Index));
 	if (!StaticMeshInterface)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("Did not find a matching Static Mesh Data Interface variable named \"%s\" in the User variables of NiagaraSystem \"%s\" ."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("Did not find a matching Static Mesh Data Interface variable named \"%s\" in the User variables of NiagaraSystem \"%s\" ."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
 	StaticMeshInterface->SetDefaultMeshFromBlueprints(StaticMesh);
 }
 
+UNiagaraDataInterfaceSkeletalMesh* UNiagaraFunctionLibrary::GetSkeletalMeshDataInterface(UNiagaraComponent* NiagaraSystem, const FString& OverrideName)
+{
+	if (!NiagaraSystem)
+	{
+		return nullptr;
+	}
+
+	const FNiagaraParameterStore& OverrideParameters = NiagaraSystem->GetOverrideParameters();
+	FNiagaraVariable Variable(FNiagaraTypeDefinition(UNiagaraDataInterfaceSkeletalMesh::StaticClass()), *OverrideName);
+
+	const int32 Index = OverrideParameters.IndexOf(Variable);
+	return Index != INDEX_NONE ? Cast<UNiagaraDataInterfaceSkeletalMesh>(OverrideParameters.GetDataInterface(Index)) : nullptr;
+}
 
 void UNiagaraFunctionLibrary::OverrideSystemUserVariableSkeletalMeshComponent(UNiagaraComponent* NiagaraSystem, const FString& OverrideName, USkeletalMeshComponent* SkeletalMeshComponent)
 {
 	if (!NiagaraSystem)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem in \"Set Niagara Skeletal Mesh Component\" is NULL, OverrideName \"%s\" and SkeletalMeshComponent \"%s\", skipping."), *OverrideName, SkeletalMeshComponent ? *SkeletalMeshComponent->GetName() : TEXT("NULL"));
+		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem in \"Set Niagara Skeletal Mesh Component\" is NULL, OverrideName \"%s\" and SkeletalMeshComponent \"%s\", skipping."), *OverrideName, *GetFullNameSafe(SkeletalMeshComponent));
 		return;
 	}
 
 	if (!SkeletalMeshComponent)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("SkeletalMeshComponent in \"Set Niagara Skeletal Mesh Component\" is NULL, OverrideName \"%s\" and NiagaraSystem \"%s\", skipping."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("SkeletalMeshComponent in \"Set Niagara Skeletal Mesh Component\" is NULL, OverrideName \"%s\" and NiagaraSystem \"%s\", skipping."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
-	const FNiagaraParameterStore& OverrideParameters = NiagaraSystem->GetOverrideParameters();
-
-	FNiagaraVariable Variable(FNiagaraTypeDefinition(UNiagaraDataInterfaceSkeletalMesh::StaticClass()), *OverrideName);
-	
-	int32 Index = OverrideParameters.IndexOf(Variable);
-	if (Index == INDEX_NONE)
-	{
-		UE_LOG(LogNiagara, Warning, TEXT("Could not find index of variable \"%s\" in the OverrideParameters map of NiagaraSystem \"%s\"."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
-		return;
-	}
-	
-	UNiagaraDataInterfaceSkeletalMesh* SkeletalMeshInterface = Cast<UNiagaraDataInterfaceSkeletalMesh>(OverrideParameters.GetDataInterface(Index));
+	UNiagaraDataInterfaceSkeletalMesh* SkeletalMeshInterface = GetSkeletalMeshDataInterface(NiagaraSystem, OverrideName);
 	if (!SkeletalMeshInterface)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("Did not find a matching Skeletal Mesh Data Interface variable named \"%s\" in the User variables of NiagaraSystem \"%s\" ."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("Did not find a matching Skeletal Mesh Data Interface variable named \"%s\" in the User variables of NiagaraSystem \"%s\" ."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
 	SkeletalMeshInterface->SetSourceComponentFromBlueprints(SkeletalMeshComponent);
 }
 
+void UNiagaraFunctionLibrary::SetSkeletalMeshDataInterfaceSamplingRegions(UNiagaraComponent* NiagaraSystem, const FString& OverrideName, const TArray<FName>& SamplingRegions)
+{
+	if (!NiagaraSystem)
+	{
+		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem in \"Set Skeletal Mesh Data Interface Sampling Regions\" is NULL, OverrideName \"%s\", skipping."), *OverrideName);
+		return;
+	}
+
+	UNiagaraDataInterfaceSkeletalMesh* SkeletalMeshInterface = GetSkeletalMeshDataInterface(NiagaraSystem, OverrideName);
+	if (!SkeletalMeshInterface)
+	{
+		UE_LOG(LogNiagara, Warning, TEXT("Did not find a matching Skeletal Mesh Data Interface variable named \"%s\" in the User variables of NiagaraSystem \"%s\" ."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
+		return;
+	}
+
+	SkeletalMeshInterface->SetSamplingRegionsFromBlueprints(SamplingRegions);
+}
+
 void UNiagaraFunctionLibrary::SetTextureObject(UNiagaraComponent* NiagaraSystem, const FString& OverrideName, UTexture* Texture)
 {
 	if (!NiagaraSystem)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem in \"SetTextureObject\" is NULL, OverrideName \"%s\" and Texture \"%s\", skipping."), *OverrideName, Texture ? *Texture->GetName() : TEXT("NULL"));
+		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem in \"SetTextureObject\" is NULL, OverrideName \"%s\" and Texture \"%s\", skipping."), *OverrideName, *GetFullNameSafe(Texture));
 		return;
 	}
 
 	if (!Texture)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("Texture in \"SetTextureObject\" is NULL, OverrideName \"%s\" and NiagaraSystem \"%s\", skipping."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("Texture in \"SetTextureObject\" is NULL, OverrideName \"%s\" and NiagaraSystem \"%s\", skipping."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
@@ -420,14 +469,14 @@ void UNiagaraFunctionLibrary::SetTextureObject(UNiagaraComponent* NiagaraSystem,
 	int32 Index = OverrideParameters.IndexOf(Variable);
 	if (Index == INDEX_NONE)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("Could not find index of variable \"%s\" in the OverrideParameters map of NiagaraSystem \"%s\"."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("Could not find index of variable \"%s\" in the OverrideParameters map of NiagaraSystem \"%s\"."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
 	UNiagaraDataInterfaceTexture* TextureDI = Cast<UNiagaraDataInterfaceTexture>(OverrideParameters.GetDataInterface(Index));
 	if (!TextureDI)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("Did not find a matching Texture Data Interface variable named \"%s\" in the User variables of NiagaraSystem \"%s\" ."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("Did not find a matching Texture Data Interface variable named \"%s\" in the User variables of NiagaraSystem \"%s\" ."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
@@ -441,13 +490,13 @@ void UNiagaraFunctionLibrary::SetVolumeTextureObject(UNiagaraComponent* NiagaraS
 {
 	if (!NiagaraSystem)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem in \"SetVolumeTextureObject\" is NULL, OverrideName \"%s\" and Texture \"%s\", skipping."), *OverrideName, Texture ? *Texture->GetName() : TEXT("NULL"));
+		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem in \"SetVolumeTextureObject\" is NULL, OverrideName \"%s\" and Texture \"%s\", skipping."), *OverrideName, *GetFullNameSafe(Texture));
 		return;
 	}
 
 	if (!Texture)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("Volume Texture in \"SetVolumeTextureObject\" is NULL, OverrideName \"%s\" and NiagaraSystem \"%s\", skipping."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("Volume Texture in \"SetVolumeTextureObject\" is NULL, OverrideName \"%s\" and NiagaraSystem \"%s\", skipping."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
@@ -458,14 +507,14 @@ void UNiagaraFunctionLibrary::SetVolumeTextureObject(UNiagaraComponent* NiagaraS
 	int32 Index = OverrideParameters.IndexOf(Variable);
 	if (Index == INDEX_NONE)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("Could not find index of variable \"%s\" in the OverrideParameters map of NiagaraSystem \"%s\"."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("Could not find index of variable \"%s\" in the OverrideParameters map of NiagaraSystem \"%s\"."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
 	UNiagaraDataInterfaceVolumeTexture* TextureDI = Cast<UNiagaraDataInterfaceVolumeTexture>(OverrideParameters.GetDataInterface(Index));
 	if (!TextureDI)
 	{
-		UE_LOG(LogNiagara, Warning, TEXT("Did not find a matching Volume Texture Data Interface variable named \"%s\" in the User variables of NiagaraSystem \"%s\" ."), *OverrideName, *NiagaraSystem->GetOwner()->GetName());
+		UE_LOG(LogNiagara, Warning, TEXT("Did not find a matching Volume Texture Data Interface variable named \"%s\" in the User variables of NiagaraSystem \"%s\" ."), *OverrideName, *GetFullNameSafe(NiagaraSystem));
 		return;
 	}
 
@@ -473,6 +522,32 @@ void UNiagaraFunctionLibrary::SetVolumeTextureObject(UNiagaraComponent* NiagaraS
 	NiagaraSystem->SetParameterOverride(Variable, FNiagaraVariant(TextureDI));
 #endif
 	TextureDI->SetTexture(Texture);
+}
+
+UNiagaraDataInterface* UNiagaraFunctionLibrary::GetDataInterface(UClass* DIClass, UNiagaraComponent* NiagaraSystem, FName OverrideName)
+{
+	if (NiagaraSystem == nullptr)
+	{
+		UE_LOG(LogNiagara, Warning, TEXT("NiagaraSystem was nullptr for OverrideName \"%s\"."), *OverrideName.ToString());
+		return nullptr;
+	}
+
+	const FNiagaraParameterStore& OverrideParameters = NiagaraSystem->GetOverrideParameters();
+	FNiagaraVariableBase Variable(FNiagaraTypeDefinition(DIClass), OverrideName);
+	const int32* Index = OverrideParameters.FindParameterOffset(Variable, true);
+	if (Index == nullptr)
+	{
+		UE_LOG(LogNiagara, Warning, TEXT("OverrideParameter\"%s\" DataInterface \"%s\" was not found"), *OverrideName.ToString(), *GetNameSafe(DIClass));
+		return nullptr;
+	}
+
+	UNiagaraDataInterface* UntypedDI = OverrideParameters.GetDataInterface(*Index);
+	if (UntypedDI->IsA(DIClass))
+	{
+		return UntypedDI;
+	}
+	UE_LOG(LogNiagara, Warning, TEXT("OverrideParameter\"%s\" DataInterface is a \"%s\" and not expected type \"%s\""), *OverrideName.ToString(), *GetNameSafe(UntypedDI->GetClass()), *GetNameSafe(DIClass));
+	return nullptr;
 }
 
 UNiagaraParameterCollectionInstance* UNiagaraFunctionLibrary::GetNiagaraParameterCollection(UObject* WorldContextObject, UNiagaraParameterCollection* Collection)

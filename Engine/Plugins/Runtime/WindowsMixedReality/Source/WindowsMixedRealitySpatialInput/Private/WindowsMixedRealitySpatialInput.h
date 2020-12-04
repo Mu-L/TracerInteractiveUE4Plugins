@@ -11,6 +11,7 @@
 #include "IHapticDevice.h"
 #include "InputCoreTypes.h"
 #include "XRMotionControllerBase.h"
+#include "XRGestureConfig.h"
 
 #include "Features/IModularFeatures.h"
 

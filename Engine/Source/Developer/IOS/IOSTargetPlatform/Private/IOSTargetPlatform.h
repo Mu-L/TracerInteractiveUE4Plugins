@@ -98,14 +98,14 @@ public:
 
 	virtual bool SupportsFeature( ETargetPlatformFeatures Feature ) const override;
 
-	virtual bool CanSupportXGEShaderCompile() const override;
+	virtual bool CanSupportRemoteShaderCompile() const override;
 
 	virtual bool IsSdkInstalled(bool bProjectHasCode, FString& OutTutorialPath) const override;
 	virtual int32 CheckRequirements(bool bProjectHasCode, EBuildConfiguration Configuration, bool bRequiresAssetNativization, FString& OutTutorialPath, FString& OutDocumentationPath, FText& CustomizedLogMessage) const override;
 
 
 #if WITH_ENGINE
-	virtual void GetReflectionCaptureFormats(TArray<FName>& OutFormats) const override;
+	virtual void GetReflectionCaptureFormats( TArray<FName>& OutFormats ) const override;
 
 	virtual void GetAllPossibleShaderFormats( TArray<FName>& OutFormats ) const override;
 
@@ -118,6 +118,8 @@ public:
 	virtual void GetTextureFormats( const UTexture* Texture, TArray< TArray<FName> >& OutFormats) const override;
 
 	virtual void GetAllTextureFormats( TArray<FName>& OutFormats) const override;
+
+	virtual FName FinalizeVirtualTextureLayerFormat(FName Format) const override;
 
 	virtual const UTextureLODSettings& GetTextureLODSettings() const override;
 
@@ -134,7 +136,6 @@ public:
 	virtual void GetBuildProjectSettingKeys(FString& OutSection, TArray<FString>& InBoolKeys, TArray<FString>& InIntKeys, TArray<FString>& InStringKeys) const override
 	{
 		OutSection = TEXT("/Script/IOSRuntimeSettings.IOSRuntimeSettings");
-		InBoolKeys.Add(TEXT("EnableRemoteShaderCompile"));
 		InBoolKeys.Add(TEXT("bGeneratedSYMFile"));
 		InBoolKeys.Add(TEXT("bGeneratedSYMBundle"));
 		InBoolKeys.Add(TEXT("bGenerateXCArchive"));
@@ -146,8 +147,6 @@ public:
 		else
 		{
 			InStringKeys.Add(TEXT("MinimumiOSVersion"));
-			InBoolKeys.Add(TEXT("bDevForArmV7")); InBoolKeys.Add(TEXT("bDevForArm64")); InBoolKeys.Add(TEXT("bDevForArmV7S"));
-			InBoolKeys.Add(TEXT("bShipForArmV7")); InBoolKeys.Add(TEXT("bShipForArm64")); InBoolKeys.Add(TEXT("bShipForArmV7S"));
 		}
 	}
 

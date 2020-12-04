@@ -6,9 +6,10 @@
 #include "DrawDebugHelpers.h"
 #include "PhysXPublic.h"
 
-#include "Chaos/Sphere.h"
 #include "Chaos/Box.h"
 #include "Chaos/Capsule.h"
+#include "Chaos/ImplicitObject.h"
+#include "Chaos/Sphere.h"
 
 
 #if ENABLE_DRAW_DEBUG
@@ -201,7 +202,7 @@ ENGINE_API void DrawCapsuleOverlap(const UWorld* InWorld,const FVector& Pos, con
 	}
 }
 
-#if WITH_PHYSX
+#if PHYSICS_INTERFACE_PHYSX
 
 
 void DrawGeomOverlaps(const UWorld* InWorld, const PxGeometry& PGeom, const PxTransform& PGeomPose, TArray<struct FOverlapResult>& Overlaps, float Lifetime)

@@ -91,7 +91,7 @@ void UNiagaraNodeParameterMapSet::OnNewTypedPinAdded(UEdGraphPin* NewPin)
 
 	if (NewPin->Direction == EEdGraphPinDirection::EGPD_Input)
 	{
-		TArray<UEdGraphPin*> InputPins;
+		FPinCollectorArray InputPins;
 		GetInputPins(InputPins);
 		
 		// Determine if this is already namespaced or not. We need to do things differently below if not...
@@ -105,6 +105,7 @@ void UNiagaraNodeParameterMapSet::OnNewTypedPinAdded(UEdGraphPin* NewPin)
 		}
 
 		TSet<FName> Names;
+		Names.Reserve(InputPins.Num());
 		for (const UEdGraphPin* Pin : InputPins)
 		{
 			if (Pin != NewPin)
@@ -201,14 +202,15 @@ bool UNiagaraNodeParameterMapSet::CommitEditablePinName(const FText& InName, UEd
 
 void UNiagaraNodeParameterMapSet::Compile(class FHlslNiagaraTranslator* Translator, TArray<int32>& Outputs)
 {
-	TArray<UEdGraphPin*> InputPins;
+	FPinCollectorArray InputPins;
 	GetInputPins(InputPins);
 
-	TArray<UEdGraphPin*> OutputPins;
+	FPinCollectorArray OutputPins;
 	GetOutputPins(OutputPins);
 
 	// Initialize the outputs to invalid values.
 	check(Outputs.Num() == 0);
+	Outputs.Reserve(OutputPins.Num());
 	for (int32 i = 0; i < OutputPins.Num(); i++)
 	{
 		Outputs.Add(INDEX_NONE);
@@ -217,7 +219,8 @@ void UNiagaraNodeParameterMapSet::Compile(class FHlslNiagaraTranslator* Translat
 	const UEdGraphSchema_Niagara* Schema = CastChecked<UEdGraphSchema_Niagara>(GetSchema());
 
 	// First compile fully down the hierarchy for our predecessors..
-	TArray<FCompiledPin> CompileInputs;
+	TArray<FCompiledPin, TInlineAllocator<16>> CompileInputs;
+	CompileInputs.Reserve(InputPins.Num());
 	for (UEdGraphPin* InputPin : InputPins)
 	{
 		if (IsAddPin(InputPin))
@@ -258,7 +261,7 @@ FText UNiagaraNodeParameterMapSet::GetNodeTitle(ENodeTitleType::Type TitleType) 
 void UNiagaraNodeParameterMapSet::BuildParameterMapHistory(FNiagaraParameterMapHistoryBuilder& OutHistory, bool bRecursive /*= true*/, bool bFilterForCompilation /*= true*/) const
 {
 	const UEdGraphSchema_Niagara* Schema = GetDefault<UEdGraphSchema_Niagara>();
-	TArray<UEdGraphPin*> InputPins;
+	FPinCollectorArray InputPins;
 	GetInputPins(InputPins);
 	
 	int32 ParamMapIdx = INDEX_NONE;
@@ -266,12 +269,13 @@ void UNiagaraNodeParameterMapSet::BuildParameterMapHistory(FNiagaraParameterMapH
 
 	for (int32 i = 0; i < InputPins.Num(); i++)
 	{
-		if (IsAddPin(InputPins[i]))
+		UEdGraphPin* InputPin = InputPins[i];
+		if (IsAddPin(InputPin))
 		{
 			continue;
 		}
 
-		OutHistory.VisitInputPin(InputPins[i], this, bFilterForCompilation);
+		OutHistory.VisitInputPin(InputPin, this, bFilterForCompilation);
 
 
 		if (!IsNodeEnabled() && OutHistory.GetIgnoreDisabled())
@@ -279,13 +283,13 @@ void UNiagaraNodeParameterMapSet::BuildParameterMapHistory(FNiagaraParameterMapH
 			continue;
 		}
 
-		FNiagaraTypeDefinition VarTypeDef = Schema->PinToTypeDefinition(InputPins[i]);
-		if (i == 0 && InputPins[i] != nullptr && VarTypeDef == FNiagaraTypeDefinition::GetParameterMapDef())
+		FNiagaraTypeDefinition VarTypeDef = Schema->PinToTypeDefinition(InputPin);
+		if (i == 0 && InputPin != nullptr && VarTypeDef == FNiagaraTypeDefinition::GetParameterMapDef())
 		{
 			UEdGraphPin* PriorParamPin = nullptr;
-			if (InputPins[i]->LinkedTo.Num() > 0)
+			if (InputPin->LinkedTo.Num() > 0)
 			{
-				PriorParamPin = InputPins[i]->LinkedTo[0];
+				PriorParamPin = InputPin->LinkedTo[0];
 			}
 
 			// Now plow into our ancestor node
@@ -295,9 +299,9 @@ void UNiagaraNodeParameterMapSet::BuildParameterMapHistory(FNiagaraParameterMapH
 				NodeIdx = OutHistory.BeginNodeVisitation(ParamMapIdx, this);
 			}
 		}
-		else if (i > 0 && InputPins[i] != nullptr && ParamMapIdx != INDEX_NONE)
+		else if (i > 0 && InputPin != nullptr && ParamMapIdx != INDEX_NONE)
 		{
-			OutHistory.HandleVariableWrite(ParamMapIdx, InputPins[i]);
+			OutHistory.HandleVariableWrite(ParamMapIdx, InputPin);
 		}
 	}
 

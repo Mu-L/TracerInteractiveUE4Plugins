@@ -209,6 +209,13 @@ bool UNiagaraNode::ReallocatePins(bool bMarkNeedsResynchronizeOnChange)
 			
 			// This copies the existing default values, pin linkages, advanced pin view, pin splitting, etc.
 			(*MatchingNewPin)->MovePersistentDataFromOldPin(*OldPin);
+			
+			// Somehow this pin was considered orphaned before, but now exists, so it is orphaned no longer.
+			if (OldPin->bOrphanedPin)
+			{
+				OldPin->bOrphanedPin = false;
+				UE_LOG(LogNiagaraEditor, Log, TEXT("Pin \"%s\" in node \"%s\" was orphaned, but is now matched. De-orphaning."), *OldPin->GetName(), *GetFullName());
+			}
 
 			// The prior call would have clobbered our default values, which causes a crash down the line when we attempt to compile.
 			// This resets to the default values prior to copying over the persistent data.
@@ -284,7 +291,7 @@ bool UNiagaraNode::CompileInputPins(FHlslNiagaraTranslator *Translator, TArray<i
 {
 	bool bError = false;
 	
-	TArray<UEdGraphPin*> InputPins;
+	FPinCollectorArray InputPins;
 	GetInputPins(InputPins);
 
 	for (int32 i = 0; i < InputPins.Num(); ++i)
@@ -334,10 +341,14 @@ void UNiagaraNode::AutowireNewNode(UEdGraphPin* FromPin)
 		for (UEdGraphPin* Pin : Pins)
 		{
 			//ENiagaraCompoundType ToType = Schema->GetPinDataType(Pin);
-			if (/*FromType == ToType &&*/ Pin->Direction == DesiredDirection)
+			if (Pin->Direction == DesiredDirection)
 			{
-				FirstPinOfSameType = Pin;
-				break;
+				const FPinConnectionResponse Response = Schema->CanCreateConnection(FromPin, Pin);
+				if (Response.Response != ECanCreateConnectionResponse::CONNECT_RESPONSE_DISALLOW)
+				{
+					FirstPinOfSameType = Pin;
+					break;
+				}
 			}			
 		}
 
@@ -586,30 +597,6 @@ void UNiagaraNode::BuildParameterMapHistory(FNiagaraParameterMapHistoryBuilder& 
 	}
 }
 
-template<typename PinType>
-void GetInputPinsInternal(const TArray<UEdGraphPin*>& Pins, TArray<PinType*>& OutInputPins)
-{
-	OutInputPins.Empty();
-
-	for (int32 PinIndex = 0; PinIndex < Pins.Num(); PinIndex++)
-	{
-		if (Pins[PinIndex]->Direction == EGPD_Input)
-		{
-			OutInputPins.Add(Pins[PinIndex]);
-		}
-	}
-}
-
-void UNiagaraNode::GetInputPins(TArray<class UEdGraphPin*>& OutInputPins) const
-{
-	GetInputPinsInternal<class UEdGraphPin>(Pins, OutInputPins);
-}
-
-void UNiagaraNode::GetInputPins(TArray<const class UEdGraphPin*>& OutInputPins) const
-{
-	GetInputPinsInternal<const class UEdGraphPin>(Pins, OutInputPins);
-}
-
 UEdGraphPin* UNiagaraNode::GetOutputPin(int32 OutputIndex) const
 {
 	for (int32 PinIndex = 0, FoundOutputs = 0; PinIndex < Pins.Num(); PinIndex++)
@@ -630,30 +617,6 @@ UEdGraphPin* UNiagaraNode::GetOutputPin(int32 OutputIndex) const
 	return NULL;
 }
 
-template<typename PinType>
-void GetOutputPinsInternal(const TArray<UEdGraphPin*>& Pins, TArray<PinType*>& OutOutputPins)
-{
-	OutOutputPins.Empty();
-
-	for (int32 PinIndex = 0; PinIndex < Pins.Num(); PinIndex++)
-	{
-		if (Pins[PinIndex]->Direction == EGPD_Output)
-		{
-			OutOutputPins.Add(Pins[PinIndex]);
-		}
-	}
-}
-
-void UNiagaraNode::GetOutputPins(TArray<class UEdGraphPin*>& OutOutputPins) const
-{
-	return GetOutputPinsInternal<class UEdGraphPin>(Pins, OutOutputPins);
-}
-
-void UNiagaraNode::GetOutputPins(TArray<const class UEdGraphPin*>& OutOutputPins) const
-{
-	return GetOutputPinsInternal<const class UEdGraphPin>(Pins, OutOutputPins);
-}
-
 UEdGraphPin* UNiagaraNode::GetPinByPersistentGuid(const FGuid& InPersistentGuid) const
 {
 	for (UEdGraphPin* Pin : Pins)
@@ -667,7 +630,7 @@ UEdGraphPin* UNiagaraNode::GetPinByPersistentGuid(const FGuid& InPersistentGuid)
 	return nullptr;
 }
 
-void UNiagaraNode::NumericResolutionByPins(const UEdGraphSchema_Niagara* Schema, TArray<UEdGraphPin*>& InputPins, TArray<UEdGraphPin*>& OutputPins, 
+void UNiagaraNode::NumericResolutionByPins(const UEdGraphSchema_Niagara* Schema, TArrayView<UEdGraphPin* const> InputPins, TArrayView<UEdGraphPin* const> OutputPins, 
 	bool bFixInline, TMap<TPair<FGuid, UEdGraphNode*>, FNiagaraTypeDefinition>* PinCache)
 {
 	TArray<FNiagaraTypeDefinition> InputTypes;
@@ -756,9 +719,9 @@ void UNiagaraNode::NumericResolutionByPins(const UEdGraphSchema_Niagara* Schema,
 void UNiagaraNode::ResolveNumerics(const UEdGraphSchema_Niagara* Schema, bool bSetInline, TMap<TPair<FGuid, UEdGraphNode*>, FNiagaraTypeDefinition>* PinCache)
 {
 	// Fix up numeric input pins and keep track of numeric types to decide the output type.
-	TArray<UEdGraphPin*> InputPins;
+	FPinCollectorArray InputPins;
 	GetInputPins(InputPins);
-	TArray<UEdGraphPin*> OutputPins;
+	FPinCollectorArray OutputPins;
 	GetOutputPins(OutputPins);
 	NumericResolutionByPins(Schema, InputPins, OutputPins, bSetInline, PinCache);
 }
@@ -777,7 +740,7 @@ UEdGraphPin* UNiagaraNode::TraceOutputPin(UEdGraphPin* LocallyOwnedOutputPin, bo
 	}
 
 	UNiagaraNode* LinkedNode = CastChecked<UNiagaraNode>(LocallyOwnedOutputPin->GetOwningNode());
-	return LinkedNode->GetTracedOutputPin(LocallyOwnedOutputPin);
+	return LinkedNode->GetTracedOutputPin(LocallyOwnedOutputPin, bFilterForCompilation);
 }
 
 bool UNiagaraNode::SubstituteCompiledPin(FHlslNiagaraTranslator* Translator, UEdGraphPin** LocallyOwnedPin)
@@ -789,9 +752,9 @@ void UNiagaraNode::RouteParameterMapAroundMe(FNiagaraParameterMapHistoryBuilder&
 {
 	const UEdGraphSchema_Niagara* Schema = CastChecked<UEdGraphSchema_Niagara>(GetSchema());
 
-	TArray<UEdGraphPin*> InputPins;
+	FPinCollectorArray InputPins;
 	GetInputPins(InputPins);
-	TArray<UEdGraphPin*> OutputPins;
+	FPinCollectorArray OutputPins;
 	GetOutputPins(OutputPins);
 
 	const UEdGraphPin* InputPin = nullptr;

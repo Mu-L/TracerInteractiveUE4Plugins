@@ -8,8 +8,11 @@
 #include "Modules/ModuleManager.h"
 #include "Windows/AllowWindowsPlatformTypes.h"
 #include <delayimp.h>
-#if !PLATFORM_CPU_ARM_FAMILY
-	#include "amd_ags.h"
+#if !PLATFORM_HOLOLENS && !PLATFORM_CPU_ARM_FAMILY
+#include "amd_ags.h"
+#define AMD_API_ENABLE 1
+#else
+#define AMD_API_ENABLE 0
 #endif
 #if !PLATFORM_HOLOLENS && !PLATFORM_CPU_ARM_FAMILY
 	#define NV_API_ENABLE 1
@@ -102,7 +105,11 @@ static void SafeCreateDXGIFactory(IDXGIFactory4** DXGIFactory)
 	{
 		bIsQuadBufferStereoEnabled = FParse::Param(FCommandLine::Get(), TEXT("quad_buffer_stereo"));
 
+#if PLATFORM_HOLOLENS
+		CreateDXGIFactory1(__uuidof(IDXGIFactory4), (void**)DXGIFactory);
+#else
 		CreateDXGIFactory(__uuidof(IDXGIFactory4), (void**)DXGIFactory);
+#endif
 	}
 	__except (IsDelayLoadException(GetExceptionInformation()))
 	{
@@ -221,10 +228,12 @@ static bool SupportsHDROutput(FD3D12DynamicRHI* D3DRHI)
 
 bool FD3D12DynamicRHIModule::IsSupported()
 {
+#if !PLATFORM_HOLOLENS
 	if (!FPlatformMisc::VerifyWindowsVersion(10, 0))
 	{
 		return false;
 	}
+#endif
 
 	// If not computed yet
 	if (ChosenAdapters.Num() == 0)
@@ -356,14 +365,26 @@ void FD3D12DynamicRHIModule::FindAdapter()
 				if (bIsNVIDIA) bIsAnyNVIDIA = true;
 
 				// Simple heuristic but without profiling it's hard to do better
-				const bool bIsIntegrated = bIsIntel;
+				bool bIsNonLocalMemoryPresent = false;
+				if (bIsIntel)
+				{
+					TRefCountPtr<IDXGIAdapter3> TempDxgiAdapter3;
+					DXGI_QUERY_VIDEO_MEMORY_INFO NonLocalVideoMemoryInfo;
+					if (SUCCEEDED(TempAdapter->QueryInterface(_uuidof(IDXGIAdapter3), (void**)TempDxgiAdapter3.GetInitReference())) &&
+						TempDxgiAdapter3.IsValid() && SUCCEEDED(TempDxgiAdapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &NonLocalVideoMemoryInfo)))
+					{
+						bIsNonLocalMemoryPresent = NonLocalVideoMemoryInfo.Budget != 0;
+					}
+				}
+				const bool bIsIntegrated = bIsIntel && !bIsNonLocalMemoryPresent;
+
 				// PerfHUD is for performance profiling
 				const bool bIsPerfHUD = !FCString::Stricmp(AdapterDesc.Description, TEXT("NVIDIA PerfHUD"));
 
 				FD3D12AdapterDesc CurrentAdapter(AdapterDesc, AdapterIndex, MaxSupportedFeatureLevel, NumNodes);
 				
-				// Requested WARP, reject all other adapters.
-				const bool bSkipRequestedWARP = bRequestedWARP && !bIsWARP;
+				// If requested WARP, then reject all other adapters. If WARP not requested, then reject the WARP device.
+				const bool bSkipRequestedWARP = (bRequestedWARP && !bIsWARP) || (!bRequestedWARP && bIsWARP);
 
 				// we don't allow the PerfHUD adapter
 				const bool bSkipPerfHUDAdapter = bIsPerfHUD && !bAllowPerfHUD;
@@ -411,7 +432,7 @@ void FD3D12DynamicRHIModule::FindAdapter()
 #endif
 
 	TSharedPtr<FD3D12Adapter> NewAdapter;
-	if (bFavorNonIntegrated && (bIsAnyAMD || bIsAnyNVIDIA))
+	if (bFavorNonIntegrated)
 	{
 		// We assume Intel is integrated graphics (slower than discrete) than NVIDIA or AMD cards and rather take a different one
 		if (FirstWithoutIntegratedAdapter.IsValid())
@@ -461,21 +482,20 @@ FDynamicRHI* FD3D12DynamicRHIModule::CreateRHI(ERHIFeatureLevel::Type RequestedF
 		GMaxRHIShaderPlatform = SP_PCD3D_SM5;
 	}
 
-	GD3D12RHI = new FD3D12DynamicRHI(ChosenAdapters);
+#if USE_PIX
+	bool bPixEventEnabled = (WindowsPixDllHandle != nullptr);
+#else
+	bool bPixEventEnabled = false;
+#endif // USE_PIX
+
+	GD3D12RHI = new FD3D12DynamicRHI(ChosenAdapters, bPixEventEnabled);
 #if ENABLE_RHI_VALIDATION
 	if (FParse::Param(FCommandLine::Get(), TEXT("RHIValidation")))
 	{
-		GValidationRHI = new FValidationRHI(GD3D12RHI);
+		return new FValidationRHI(GD3D12RHI);
 	}
-	else
-	{
-		check(!GValidationRHI);
-	}
-
-	return GValidationRHI ? (FDynamicRHI*)GValidationRHI : (FDynamicRHI*)GD3D12RHI;
-#else
-	return GD3D12RHI;
 #endif
+	return GD3D12RHI;
 }
 
 void FD3D12DynamicRHIModule::StartupModule()
@@ -546,7 +566,7 @@ void FD3D12DynamicRHI::Init()
 	// Need to set GRHIVendorId before calling IsRHIDevice* functions
 	GRHIVendorId = AdapterDesc.VendorId;
 
-#if !PLATFORM_CPU_ARM_FAMILY
+#if AMD_API_ENABLE
 	// Initialize the AMD AGS utility library, when running on an AMD device
 	if (IsRHIDeviceAMD() && bAllowVendorDevice)
 	{
@@ -566,7 +586,7 @@ void FD3D12DynamicRHI::Init()
 		Adapter->InitializeDevices();
 	}
 
-#if !PLATFORM_CPU_ARM_FAMILY
+#if AMD_API_ENABLE
 	// Warn if we are trying to use RGP frame markers but are either running on a non-AMD device
 	// or using an older AMD driver without RGP marker support
 	if (GEmitRgpFrameMarkers && !IsRHIDeviceAMD())
@@ -699,7 +719,7 @@ void FD3D12DynamicRHI::Init()
 	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM4_REMOVED] = SP_NumPlatforms;
 	GShaderPlatformForFeatureLevel[ERHIFeatureLevel::SM5] = SP_PCD3D_SM5;
 
-	GSupportsEfficientAsyncCompute = GRHISupportsParallelRHIExecute && IsRHIDeviceAMD();
+	GSupportsEfficientAsyncCompute = FParse::Param(FCommandLine::Get(), TEXT("ForceAsyncCompute")) || (GRHISupportsParallelRHIExecute && IsRHIDeviceAMD());
 
 	GSupportsDepthBoundsTest = SupportsDepthBoundsTest(this);
 
@@ -735,13 +755,29 @@ void FD3D12DynamicRHI::Init()
 	// - Standalones are added to the deferred deletion queue of its parent FD3D12Adapter
 	GRHIForceNoDeletionLatencyForStreamingTextures = !!PLATFORM_WINDOWS;
 
-#if D3D12_RHI_RAYTRACING
+#if 0//D3D12_RHI_RAYTRACING
 	GRHISupportsRayTracing = GetAdapter().GetD3DRayTracingDevice() != nullptr;
-	GRHISupportsRayTracingMissShaderBindings = true;
 #endif
 
-	GRHICommandList.GetImmediateCommandList().SetContext(RHIGetDefaultContext());
-	GRHICommandList.GetImmediateAsyncComputeCommandList().SetComputeContext(RHIGetDefaultAsyncComputeContext());
+	D3D12_FEATURE_DATA_D3D12_OPTIONS6 options = {};
+	HRESULT hr = GetAdapter().GetD3DDevice()->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS6, &options, sizeof(options));
+	if(hr == S_OK)
+	{
+		GVariableRateShadingTier 			= options.VariableShadingRateTier;
+		GRHISupportsVariableRateShading 	= GVariableRateShadingTier != D3D12_VARIABLE_SHADING_RATE_TIER_NOT_SUPPORTED;
+		GVariableRateShadingImageTileSize 	= options.ShadingRateImageTileSize;
+	}
+	else
+	{
+		GVariableRateShadingTier 			= D3D12_VARIABLE_SHADING_RATE_TIER_NOT_SUPPORTED;
+		GRHISupportsVariableRateShading 	= false;
+		GVariableRateShadingImageTileSize 	= 1;
+	}
+
+	// Command lists need the validation RHI context if enabled, so call the global scope version of RHIGetDefaultContext() and RHIGetDefaultAsyncComputeContext().
+	GRHICommandList.GetImmediateCommandList().SetContext(::RHIGetDefaultContext());
+	GRHICommandList.GetImmediateAsyncComputeCommandList().SetComputeContext(::RHIGetDefaultAsyncComputeContext());
+
 	FRenderResource::InitPreRHIResources();
 	GIsRHIInitialized = true;
 }
@@ -783,6 +819,11 @@ void FD3D12DynamicRHI::DisableQuadBufferStereo()
 	bIsQuadBufferStereoEnabled = false;
 }
 
+int32 FD3D12DynamicRHI::GetResourceBarrierBatchSizeLimit()
+{
+	return INT32_MAX;
+}
+
 void FD3D12Device::Initialize()
 {
 	check(IsInGameThread());
@@ -809,6 +850,15 @@ void FD3D12Device::CreateSamplerInternal(const D3D12_SAMPLER_DESC& Desc, D3D12_C
 {
 	GetDevice()->CreateSampler(&Desc, Descriptor);
 }
+
+#if D3D12_RHI_RAYTRACING
+TRefCountPtr<ID3D12StateObject> FD3D12Device::DeserializeRayTracingStateObject(D3D12_SHADER_BYTECODE Bytecode, ID3D12RootSignature* RootSignature)
+{
+	checkNoEntry();
+	TRefCountPtr<ID3D12StateObject> Result;
+	return Result;
+}
+#endif // D3D12_RHI_RAYTRACING
 
 /**
  *	Retrieve available screen resolutions.
@@ -884,6 +934,7 @@ bool FD3D12DynamicRHI::RHIGetAvailableResolutions(FScreenResolutionArray& Resolu
 		HResult = Output->GetDisplayModeList(Format, 0, &NumModes, nullptr);
 		if (HResult == DXGI_ERROR_NOT_FOUND)
 		{
+			++CurrentOutput;
 			continue;
 		}
 		else if (HResult == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE)

@@ -251,6 +251,12 @@ public:
 	/** Find index of customization settings for a menu */
 	int32 FindMenuCustomizationIndex(const FName InName);
 
+	/** Find runtime customization settings for a menu */
+	FCustomizedToolMenu* FindRuntimeMenuCustomization(const FName InName);
+
+	/** Find or add runtime customization settings for a menu */
+	FCustomizedToolMenu* AddRuntimeMenuCustomization(const FName InName);
+
 	/** Generates sub menu by entry name in the given generated menu parent */
 	UToolMenu* GenerateSubMenu(const UToolMenu* InGeneratedParent, const FName InBlockName);
 
@@ -265,6 +271,9 @@ public:
 
 	/* Remove substitute one menu for another during generate */
 	void RemoveSubstitutionDuringGenerate(const FName InMenu);
+
+	/** Release references to UObjects of widgets that have been deleted. Combines multiple requests in one frame together for improved performance. */
+	void CleanupStaleWidgetsNextTick(bool bGarbageCollect = false);
 
 	/** Displaying extension points is for debugging menus */
 	DECLARE_DELEGATE_RetVal(bool, FShouldDisplayExtensionPoints);
@@ -286,25 +295,25 @@ public:
 	/** Break apart a menu path into components */
 	static bool SplitMenuPath(const FName MenuPath, FName& OutLeft, FName& OutRight);
 
+	/** Returns true if safe to call into script */
+	static bool CanSafelyRouteCall();
+
 	friend struct FToolMenuOwnerScoped;
 	friend struct FToolMenuStringCommand;
 
 	//~ Begin UObject Interface
 	static void AddReferencedObjects(UObject* InThis, FReferenceCollector& Collector);
 	virtual void BeginDestroy() override;
-	virtual bool IsDestructionThreadSafe() const override { return false; }
 	//~ End UObject Interface
 
 private:
+	friend class FPopulateMenuBuilderWithToolMenuEntry;
 
 	/** Create a finalized menu that combines given hierarchy array that will generate a widget. Advanced special use cases only. */
 	UToolMenu* GenerateMenuFromHierarchy(const TArray<UToolMenu*>& Hierarchy, const FToolMenuContext& InMenuContext);
 
 	/** Sets a timer to be called next engine tick so that multiple repeated actions can be combined together. */
 	void SetNextTickTimer();
-
-	/** Release references to UObjects of widgets that have been deleted. Combines multiple requests in one frame together for improved performance. */
-	void CleanupStaleWidgetsNextTick();
 
 	/** Release references to UObjects of widgets that have been deleted */
 	void CleanupStaleWidgets();
@@ -361,13 +370,15 @@ private:
 
 	static void ModifyEntryForEditDialog(FToolMenuEntry& Entry);
 
+	UToolMenu* NewToolMenuObject(const FName NewBaseName, const FName InMenuName);
+
 private:
 
-	UPROPERTY(config, EditAnywhere, Category = Misc)
+	UPROPERTY(EditAnywhere, Category = Misc)
 	TArray<FCustomizedToolMenu> CustomizedMenus;
 
 	/* Allow substituting one menu for another during generate but not during find or extend */
-	UPROPERTY(config, EditAnywhere, Category = Misc)
+	UPROPERTY(EditAnywhere, Category = Misc)
 	TMap<FName, FName> MenuSubstitutionsDuringGenerate;
 
 	UPROPERTY()
@@ -381,11 +392,15 @@ private:
 
 	TMap<FName, FToolMenuExecuteString> StringCommandHandlers;
 
+	/** Transient customizations made during runtime that will not be saved */
+	TArray<FCustomizedToolMenu> RuntimeCustomizedMenus;
+
 	FSimpleDelegate SetTimerForNextTickDelegate;
 
 	bool bNextTickTimerIsSet;
 	bool bRefreshWidgetsNextTick;
 	bool bCleanupStaleWidgetsNextTick;
+	bool bCleanupStaleWidgetsNextTickGC;
 	bool bEditMenusMode;
 
 	static UToolMenus* Singleton;

@@ -16,7 +16,6 @@
 #include "MobileBasePassRendering.h"
 #include "RendererModule.h"
 #include "ScenePrivate.h"
-#include "Containers/AllocatorFixedSizeFreeList.h"
 #include "MaterialShared.h"
 #include "HAL/LowLevelMemTracker.h"
 
@@ -28,11 +27,7 @@ FAutoConsoleVariableRef CVarUnbuiltPreviewShadowsInGame(
 	ECVF_Scalability | ECVF_RenderThreadSafe
 	);
 
-/**
- * Fixed Size pool allocator for FLightPrimitiveInteractions
- */
-#define FREE_LIST_GROW_SIZE ( 16384 / sizeof(FLightPrimitiveInteraction) )
-TAllocatorFixedSizeFreeList<sizeof(FLightPrimitiveInteraction), FREE_LIST_GROW_SIZE> GLightPrimitiveInteractionAllocator;
+static int64 GAllocateLightPrimitiveInteractionSize = 0;
 
 uint32 FRendererModule::GetNumDynamicLightsAffectingPrimitive(const FPrimitiveSceneInfo* PrimitiveSceneInfo,const FLightCacheInterface* LCI)
 {
@@ -67,40 +62,12 @@ uint32 FRendererModule::GetNumDynamicLightsAffectingPrimitive(const FPrimitiveSc
 -----------------------------------------------------------------------------*/
 
 /**
- * Custom new
- */
-void* FLightPrimitiveInteraction::operator new(size_t Size)
-{
-	// doesn't support derived classes with a different size
-	checkSlow(Size == sizeof(FLightPrimitiveInteraction));
-	return GLightPrimitiveInteractionAllocator.Allocate();
-	//return FMemory::Malloc(Size);
-}
-
-/**
- * Custom delete
- */
-void FLightPrimitiveInteraction::operator delete(void *RawMemory)
-{
-	GLightPrimitiveInteractionAllocator.Free(RawMemory);
-	//FMemory::Free(RawMemory);
-}	
-
-/**
  * Initialize the memory pool with a default size from the ini file.
  * Called at render thread startup. Since the render thread is potentially
  * created/destroyed multiple times, must make sure we only do it once.
  */
 void FLightPrimitiveInteraction::InitializeMemoryPool()
 {
-	static bool bAlreadyInitialized = false;
-	if (!bAlreadyInitialized)
-	{
-		bAlreadyInitialized = true;
-		int32 InitialBlockSize = 0;
-		GConfig->GetInt(TEXT("MemoryPools"), TEXT("FLightPrimitiveInteractionInitialBlockSize"), InitialBlockSize, GEngineIni);
-		GLightPrimitiveInteractionAllocator.Grow(InitialBlockSize);
-	}
 }
 
 /**
@@ -108,7 +75,7 @@ void FLightPrimitiveInteraction::InitializeMemoryPool()
 */
 uint32 FLightPrimitiveInteraction::GetMemoryPoolSize()
 {
-	return GLightPrimitiveInteractionAllocator.GetAllocatedSize();
+	return GAllocateLightPrimitiveInteractionSize;
 }
 
 void FLightPrimitiveInteraction::Create(FLightSceneInfo* LightSceneInfo,FPrimitiveSceneInfo* PrimitiveSceneInfo)
@@ -140,15 +107,25 @@ void FLightPrimitiveInteraction::Create(FLightSceneInfo* LightSceneInfo,FPrimiti
 		if (LightSceneInfo->Proxy->GetLightType() != LightType_Directional || LightSceneInfo->Proxy->HasStaticShadowing() || bTranslucentObjectShadow || bInsetObjectShadow)
 		{
 			// Create the light interaction.
-			FLightPrimitiveInteraction* Interaction = new FLightPrimitiveInteraction(LightSceneInfo, PrimitiveSceneInfo, bDynamic, bIsLightMapped, bShadowMapped, bTranslucentObjectShadow, bInsetObjectShadow);
+			check(LightSceneInfo->Scene == PrimitiveSceneInfo->Scene);
+			STAT(FPlatformAtomics::InterlockedAdd(&GAllocateLightPrimitiveInteractionSize, -(int64)LightSceneInfo->Scene->LightPrimitiveInteractionAllocator.GetAllocatedSize()));
+			new (LightSceneInfo->Scene->LightPrimitiveInteractionAllocator.Allocate()) FLightPrimitiveInteraction(LightSceneInfo, PrimitiveSceneInfo, bDynamic, bIsLightMapped, bShadowMapped, bTranslucentObjectShadow, bInsetObjectShadow);
+			STAT(FPlatformAtomics::InterlockedAdd(&GAllocateLightPrimitiveInteractionSize, (int64)LightSceneInfo->Scene->LightPrimitiveInteractionAllocator.GetAllocatedSize()));
 		} //-V773
 	}
 }
 
 void FLightPrimitiveInteraction::Destroy(FLightPrimitiveInteraction* LightPrimitiveInteraction)
 {
-	delete LightPrimitiveInteraction;
+	check(!!LightPrimitiveInteraction->LightSceneInfo->Scene);
+	FScene* Scene = LightPrimitiveInteraction->LightSceneInfo->Scene;
+	LightPrimitiveInteraction->~FLightPrimitiveInteraction();
+	STAT(FPlatformAtomics::InterlockedAdd(&GAllocateLightPrimitiveInteractionSize, -(int64)Scene->LightPrimitiveInteractionAllocator.GetAllocatedSize()));
+	Scene->LightPrimitiveInteractionAllocator.Free(LightPrimitiveInteraction);
+	STAT(FPlatformAtomics::InterlockedAdd(&GAllocateLightPrimitiveInteractionSize, (int64)Scene->LightPrimitiveInteractionAllocator.GetAllocatedSize()));
 }
+
+extern bool ShouldCreateObjectShadowForStationaryLight(const FLightSceneInfo* LightSceneInfo, const FPrimitiveSceneProxy* PrimitiveSceneProxy, bool bInteractionShadowMapped);
 
 FLightPrimitiveInteraction::FLightPrimitiveInteraction(
 	FLightSceneInfo* InLightSceneInfo,
@@ -243,9 +220,7 @@ FLightPrimitiveInteraction::FLightPrimitiveInteraction(
 			{
 				bMobileDynamicPointLight = true;
 				PrimitiveSceneInfo->NumMobileMovablePointLights++;
-				// enable dynamic path for primitives affected by dynamic point lights
-				PrimitiveSceneInfo->Proxy->bHasMobileMovablePointLightInteraction = (PrimitiveSceneInfo->NumMobileMovablePointLights != 0);
-				// The mobile renderer needs to use a different shader for movable point lights, so we have to update any static meshes in drawlists
+				// The mobile renderer needs to update the shader bindings of movable point lights uniform buffer, so we have to update any static meshes in drawlists
 				PrimitiveSceneInfo->BeginDeferredUpdateStaticMeshes();
 			} 
 		}
@@ -268,6 +243,21 @@ FLightPrimitiveInteraction::FLightPrimitiveInteraction(
 		(*PrevLightLink)->PrevLightLink = &NextLight;
 	}
 	*PrevLightLink = this;
+
+	if (HasShadow()
+		&& LightSceneInfo->bRecordInteractionShadowPrimitives
+		&& (HasTranslucentObjectShadow() || HasInsetObjectShadow() || ShouldCreateObjectShadowForStationaryLight(LightSceneInfo, PrimitiveSceneInfo->Proxy, IsShadowMapped())))
+	{
+		if (LightSceneInfo->InteractionShadowPrimitives.Num() < 16)
+		{
+			LightSceneInfo->InteractionShadowPrimitives.Add(this);
+		}
+		else
+		{
+			LightSceneInfo->bRecordInteractionShadowPrimitives = false;
+			LightSceneInfo->InteractionShadowPrimitives.Empty();
+		}
+	}
 }
 
 FLightPrimitiveInteraction::~FLightPrimitiveInteraction()
@@ -292,8 +282,6 @@ FLightPrimitiveInteraction::~FLightPrimitiveInteraction()
 	if (bMobileDynamicPointLight)
 	{
 		PrimitiveSceneInfo->NumMobileMovablePointLights--;
-		// enable dynamic path for primitives affected by dynamic point lights
-		PrimitiveSceneInfo->Proxy->bHasMobileMovablePointLightInteraction = (PrimitiveSceneInfo->NumMobileMovablePointLights != 0);
 		// The mobile renderer needs to use a different shader for movable point lights, so we have to update any static meshes in drawlists
 		PrimitiveSceneInfo->BeginDeferredUpdateStaticMeshes();
 	}
@@ -311,6 +299,8 @@ FLightPrimitiveInteraction::~FLightPrimitiveInteraction()
 		NextLight->PrevLightLink = PrevLightLink;
 	}
 	*PrevLightLink = NextLight;
+
+	LightSceneInfo->InteractionShadowPrimitives.RemoveSingleSwap(this);
 }
 
 void FLightPrimitiveInteraction::FlushCachedShadowMapData()
@@ -358,11 +348,6 @@ FStaticMeshBatch::~FStaticMeshBatch()
 	FScene* Scene = PrimitiveSceneInfo->Scene;
 	// Remove this static mesh from the scene's list.
 	Scene->StaticMeshes.RemoveAt(Id);
-
-	if (BatchVisibilityId != INDEX_NONE)
-	{
-		Scene->StaticMeshBatchVisibility.RemoveAt(BatchVisibilityId);
-	}
 }
 
 /** Initialization constructor. */

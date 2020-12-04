@@ -7,10 +7,14 @@
 #include "IIdentifiableXRDevice.h"
 #include "UObject/ObjectMacros.h"
 #include "Features/IModularFeature.h"
-#include "Engine/GameViewportClient.h"
 #include "IXRInput.h"
+#include "XRGestureConfig.h"
+#include "StereoRendering.h"
 
 class IXRCamera;
+class UARPin;
+class FSceneViewFamily;
+struct FWorldContext;
 
 /**
  * Struct representing the properties of an external tracking sensor.
@@ -35,6 +39,7 @@ struct FXRSensorProperties
 };
 
 
+
 /**
  * Main access point to an XR tracking system. Use it to enumerate devices and query their poses.
  */
@@ -51,6 +56,11 @@ public:
 	 * Returns version string.
 	 */
 	virtual FString GetVersionString() const = 0;
+
+	/**
+	 * Returns device specific flags.
+	 */
+	virtual int32 GetXRSystemFlags() const = 0;
 
 	/**
 	 * Device id 0 is reserved for an HMD. This should represent the HMD or the first HMD in case multiple HMDs are supported.
@@ -145,6 +155,20 @@ public:
 	 * @return true if the device tracking is valid and supports returning tracking sensor properties.
 	 */
 	virtual bool GetTrackingSensorProperties(int32 DeviceId, FQuat& OutOrientation, FVector& OutPosition, FXRSensorProperties& OutSensorProperties) = 0;
+
+	/**
+	 * If the device id represents a tracking sensor, reports the device type.
+	 * @param DeviceId the device to request information for.
+	 * @return the device type enum.
+	 */
+	virtual EXRTrackedDeviceType GetTrackedDeviceType(int32 DeviceId) const = 0;
+
+	/**
+	 * If the device id represents a tracking sensor, reports the serial number as a string if the device supports it.
+	 * @param DeviceId the device to request information for.
+	 * @return the serial number of the device if it's available.
+	 */
+	virtual FString GetTrackedDevicePropertySerialNumber(int32 DeviceId) = 0;
 
 	/**
 	 * Sets tracking origin (either 'eye'-level or 'floor'-level).
@@ -322,6 +346,11 @@ public:
 	*/
 	virtual bool IsHeadTrackingAllowed() const = 0;
 
+	/**
+	 * Same as IsHeadTrackingAllowed, but returns false if the World is not using VR (such as with the non-VR PIE instances when using VR Preview)
+	 **/
+	virtual bool IsHeadTrackingAllowedForWorld(UWorld & World) const;
+
 	/** 
 	* Can be used to enforce tracking even when stereo rendering is disabled. 
 	* The default implementation does not allow enforcing tracking and always returns false.
@@ -374,4 +403,22 @@ public:
 	 * Called just after the late update on the render thread passing back the current relative transform.
 	 */
 	virtual void OnLateUpdateApplied_RenderThread(const FTransform& NewRelativeTransform) {}
+
+	/**
+	 * Platform Agnostic Query about HMD details
+	 */
+	virtual void GetHMDData(UObject* WorldContext, FXRHMDData& HMDData);
+
+	/**
+	 * Platform Agnostic Query about MotionControllers details
+	 */
+	virtual void GetMotionControllerData(UObject* WorldContext, const EControllerHand Hand, FXRMotionControllerData& MotionControllerData) = 0;
+
+	virtual bool ConfigureGestures(const FXRGestureConfig& GestureConfig) = 0;
+
+	virtual EXRDeviceConnectionResult::Type ConnectRemoteXRDevice(const FString& IpAddress, const int32 BitRate)
+	{ 
+		return EXRDeviceConnectionResult::FeatureNotSupported;
+	};
+	virtual void DisconnectRemoteXRDevice() {};
 };

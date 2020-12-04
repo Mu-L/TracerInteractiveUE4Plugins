@@ -40,19 +40,27 @@ public:
 
 	void SetValuesFromClipboardFunctionInputs(const TArray<const UNiagaraClipboardFunctionInput*>& ClipboardFunctionInputs);
 
+	void GetChildInputs(TArray<UNiagaraStackFunctionInput*>& OutResult) const;
+
+	void ApplyModuleChanges();
+
+	static FText UncategorizedName;
+
 protected:
 	virtual void FinalizeInternal() override;
 
 	virtual void RefreshChildrenInternal(const TArray<UNiagaraStackEntry*>& CurrentChildren, TArray<UNiagaraStackEntry*>& NewChildren, TArray<FStackIssue>& NewIssues) override;
 	
 private:
-	void RefreshIssues(TArray<FName> DuplicateInputNames, TArray<FName> ValidAliasedInputNames, TArray<const UEdGraphPin*> PinsWithInvalidTypes, TMap<FName, UEdGraphPin*> StaticSwitchInputs, TArray<FStackIssue>& NewIssues);
+	void RefreshIssues(const TArray<FName>& DuplicateInputNames, const TArray<FName>& ValidAliasedInputNames, const TArray<const UEdGraphPin*>& PinsWithInvalidTypes, const TMap<FName, UEdGraphPin*>& StaticSwitchInputs, TArray<FStackIssue>& NewIssues);
 
 	void OnFunctionInputsChanged();
 
 	UNiagaraStackEntry::FStackIssueFix GetNodeRemovalFix(UEdGraphPin* PinToRemove, FText FixDescription);
 
 	UNiagaraStackEntry::FStackIssueFix GetResetPinFix(UEdGraphPin* PinToReset, FText FixDescription);
+
+	void AddInvalidChildStackIssue(FName PinName, TArray<FStackIssue>& OutIssues);
 
 	struct FInputData
 	{
@@ -62,7 +70,12 @@ private:
 		FText Category;
 		bool bIsStatic;
 		bool bIsVisible;
+
+		TArray<FInputData*> Children;
+		bool bIsChild = false;
 	};
+
+	void AddInputToCategory(const FInputData& InputData, const TArray<UNiagaraStackEntry*>& CurrentChildren, TArray<UNiagaraStackEntry*>& NewChildren);
 
 	UNiagaraNodeFunctionCall* ModuleNode;
 	UNiagaraNodeFunctionCall* InputFunctionCallNode;

@@ -36,10 +36,15 @@ class AUDIOSYNESTHESIA_API UOnsetNRTSettings : public UAudioSynesthesiaNRTSettin
 		/** Starting frequency for onset anlaysis. */
 		UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=AudioAnalyzer, meta = (ClampMin = "20.0", ClampMax = "20000"))
 		float MaximumFrequency;
-
-
+		
 		/** Convert UOnsetNRTSettings to FOnsetNRTSettings */
 		TUniquePtr<Audio::IAnalyzerNRTSettings> GetSettings(const float InSampleRate, const int32 InNumChannels) const;
+
+#if WITH_EDITOR
+		virtual FText GetAssetActionName() const override;
+
+		virtual UClass* GetSupportedClass() const override;
+#endif
 };
 
 
@@ -72,6 +77,11 @@ class AUDIOSYNESTHESIA_API UOnsetNRT : public UAudioSynesthesiaNRT
 		/** Convert ULoudnessNRTSettings to FLoudnessNRTSettings */
  		virtual TUniquePtr<Audio::IAnalyzerNRTSettings> GetSettings(const float InSampleRate, const int32 InNumChannels) const override;
 
+#if WITH_EDITOR
+		virtual FText GetAssetActionName() const override;
+
+		virtual UClass* GetSupportedClass() const override;
+#endif
 	protected:
 
 		/** Return the name of the IAudioAnalyzerNRTFactory associated with this UAudioAnalyzerNRT */

@@ -6,11 +6,13 @@
 #include "GLTFMaterialElement.h"
 #include "GLTFTexture.h"
 
+#include "AssetRegistryModule.h"
 #include "EditorFramework/AssetImportData.h"
 #include "Engine/Texture2D.h"
 #include "Factories/TextureFactory.h"
 #include "ObjectTools.h"
 #include "PackageTools.h"
+
 
 namespace GLTFImporterImpl
 {
@@ -103,7 +105,7 @@ GLTF::ITextureElement* FGLTFTextureFactory::CreateTexture(const GLTF::FTexture& 
 	Factory->SuppressImportOverwriteDialog();
 
 	const FString PackageName  = UPackageTools::SanitizePackageName(FPaths::Combine(ParentPackage->GetName(), TEXT("Textures"), TextureName));
-	UPackage*     AssetPackage = CreatePackage(nullptr, *PackageName);
+	UPackage*     AssetPackage = CreatePackage(*PackageName);
 
 	UTexture2D* Texture = nullptr;
 	if (!FPaths::GetExtension(GltfTexture.Source.FilePath).IsEmpty())
@@ -155,6 +157,7 @@ GLTF::ITextureElement* FGLTFTextureFactory::CreateTexture(const GLTF::FTexture& 
 		Texture->UpdateResource();
 		Texture->PostEditChange();
 		Texture->MarkPackageDirty();
+		FAssetRegistryModule::AssetCreated(Texture);
 	}
 
 	TSharedPtr<GLTF::ITextureElement> TextureElement(new FGLTFTextureElement(*Texture));

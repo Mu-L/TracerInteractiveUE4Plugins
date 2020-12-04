@@ -16,14 +16,15 @@ class FHlslNiagaraTranslator;
 class FCompileConstantResolver
 {
 public:
-	FCompileConstantResolver() : Emitter(nullptr), Translator(nullptr) {}
-	FCompileConstantResolver(UNiagaraEmitter* Emitter) : Emitter(Emitter), Translator(nullptr) {}
-	FCompileConstantResolver(FHlslNiagaraTranslator* Translator) : Emitter(nullptr), Translator(Translator) {}
+	FCompileConstantResolver() : Emitter(nullptr), Translator(nullptr), Usage(ENiagaraScriptUsage::Function) {}
+	FCompileConstantResolver(const UNiagaraEmitter* Emitter, ENiagaraScriptUsage Usage) : Emitter(Emitter), Translator(nullptr), Usage(Usage) {}
+	FCompileConstantResolver(const FHlslNiagaraTranslator* Translator) : Emitter(nullptr), Translator(Translator), Usage(ENiagaraScriptUsage::Function) {}
 
 	bool ResolveConstant(FNiagaraVariable& OutConstant) const;
 private:
-	UNiagaraEmitter* Emitter;
-	FHlslNiagaraTranslator* Translator;
+	const UNiagaraEmitter* Emitter;
+	const FHlslNiagaraTranslator* Translator;
+	ENiagaraScriptUsage Usage;
 };
 
 /** Traverses a Niagara node graph to identify the variables that have been written and read from a parameter map. 
@@ -44,6 +45,7 @@ public:
 	TArray<FNiagaraVariableMetaData> VariableMetaData;
 
 	TArray<FNiagaraVariable> VariablesWithOriginalAliasesIntact;
+
 
 	/** Used parameter collections identified during the traversal. TODO: Need to ensure these cannot be GCd if the asset is deleted while it's being used in an in flight compilation. */
 	TArray<UNiagaraParameterCollection*> ParameterCollections;
@@ -72,6 +74,11 @@ public:
 
 	/** List of emitter namespaces encountered as this parameter map was built.*/
 	TArray<FString> EmitterNamespacesEncountered;
+
+	/** List of all the custom iteration source override namespaces encountered */
+	TArray<FName> IterationNamespaceOverridesEncountered;
+
+	bool IsVariableFromCustomIterationNamespaceOverride(const FNiagaraVariable& InVar) const;
 	
 	/**
 	* Called in a depth-first traversal to identify a given Niagara Parameter Map pin that was touched during traversal.
@@ -91,7 +98,7 @@ public:
 	/**
 	* Find a variable by both name and type. 
 	*/
-	int32 FindVariable(const FName& VariableName, const FNiagaraTypeDefinition& Type);
+	int32 FindVariable(const FName& VariableName, const FNiagaraTypeDefinition& Type) const;
 
 
 	/**
@@ -118,10 +125,11 @@ public:
 	/**
 	* Use the input alias map to resolve any aliases in this input variable name.
 	*/
-	static FNiagaraVariable ResolveAliases(const FNiagaraVariable& InVar, const TMap<FString, FString>& InAliases, const TCHAR* InJoinSeparator);
+	static FNiagaraVariable ResolveAliases(const FNiagaraVariable& InVar, const TMap<FString, FString>& InAliases, const TMap<FString, FString>& InStartAliases = TMap<FString, FString>(), const TCHAR* InJoinSeparator = TEXT("."));
 
 	static FName ResolveEmitterAlias(const FName& InName, const FString& InAlias);
 
+	
 	/**
 	* Remove the Particles namespace if it exists.
 	*/
@@ -157,7 +165,7 @@ public:
 	static bool IsPerInstanceEngineParameter(const FNiagaraVariable& InVar, const FString& EmitterAlias);
 	static bool IsUserParameter(const FNiagaraVariable& InVar);
 	static bool IsRapidIterationParameter(const FNiagaraVariable& InVar);
-	static bool SplitRapidIterationParameterName(const FNiagaraVariable& InVar, FString& EmitterName, FString& FunctionCallName, FString& InputName);
+	static bool SplitRapidIterationParameterName(const FNiagaraVariable& InVar, ENiagaraScriptUsage InUsage, FString& EmitterName, FString& FunctionCallName, FString& InputName);
 	
 	/** Take an input string and make it hlsl safe.*/
 	static FString MakeSafeNamespaceString(const FString& InStr);
@@ -176,8 +184,9 @@ public:
 	static bool IsValidNamespaceForReading(ENiagaraScriptUsage InScriptUsage, int32 InUsageBitmask, FString Namespace);
 
 	/** Called to determine if a given variable should be output from a script. It is not static as it requires the overall context to include emitter namespaces visited for system scripts.*/
-	bool IsPrimaryDataSetOutput(const FNiagaraVariable& InVar, const UNiagaraScript* InScript, bool bAllowDataInterfaces = false) const;
+	bool IsPrimaryDataSetOutput(const FNiagaraVariable& InVar, const UNiagaraScript* InScript,   bool bAllowDataInterfaces = false) const;
 	bool IsPrimaryDataSetOutput(const FNiagaraVariable& InVar, ENiagaraScriptUsage InUsage, bool bAllowDataInterfaces = false) const;
+	static bool IsWrittenToScriptUsage(const FNiagaraVariable& InVar, ENiagaraScriptUsage InUsage, bool bAllowDataInterfaces);
 
 	/** Are we required to export this variable as an external constant?*/
 	bool IsExportableExternalConstant(const FNiagaraVariable& InVar, const UNiagaraScript* InScript);
@@ -197,11 +206,17 @@ public:
 	/** Does this parameter contain the "Initial" namespace as one of its intermediate namespaces?*/
 	static bool IsInitialValue(const FNiagaraVariable& InVar);
 
+	/** Does this parameter contain the "Previous" namespace as one of its intermediate namespaces?*/
+	static bool IsPreviousValue(const FNiagaraVariable& InVar);
+
 	/** Get the output node associated with this graph.*/
 	const UNiagaraNodeOutput* GetFinalOutputNode() const;
 
 	/** Does this parameter contain the "Initial" namespace as one of its intermediate namespaces? If so, remove the "Initial" namespace and return the original value.*/
 	static FNiagaraVariable GetSourceForInitialValue(const FNiagaraVariable& InVar);
+
+	/** Does this parameter contain the "Previous" namespace as one of its intermediate namespaces? If so, remove the "Previous" namespace and return the original value.*/
+	static FNiagaraVariable GetSourceForPreviousValue(const FNiagaraVariable& InVar);
 
 	/**
 	* Helper to add a variable to the known list for a parameter map.
@@ -346,6 +361,9 @@ public:
 
 	void EndTranslation(const UNiagaraEmitter* Emitter);
 
+	void BeginUsage(ENiagaraScriptUsage InUsage, FName InStageName = FName());
+	void EndUsage();
+
 	/**
 	* Record that we have entered a new function scope.
 	*/
@@ -482,6 +500,8 @@ protected:
 	TArray<ENiagaraScriptUsage> RelevantScriptUsageContext;
 	/** Resolved alias map for the current context level. Rebuilt by BuildCurrentAliases.*/
 	TMap<FString, FString> AliasMap;
+	TMap<FString, FString> StartOnlyAliasMap;
+	TArray<FName> ScriptUsageContextNameStack;
 
 	TArray<TArray<FString> > EncounteredFunctionNames;
 	TArray<FString> EncounteredEmitterNames;

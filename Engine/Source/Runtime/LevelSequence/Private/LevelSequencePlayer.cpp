@@ -148,10 +148,11 @@ void ULevelSequencePlayer::OnStopped()
 	LastViewTarget.Reset();
 }
 
-void ULevelSequencePlayer::UpdateMovieSceneInstance(FMovieSceneEvaluationRange InRange, EMovieScenePlayerStatus::Type PlayerStatus, bool bHasJumped)
+void ULevelSequencePlayer::UpdateMovieSceneInstance(FMovieSceneEvaluationRange InRange, EMovieScenePlayerStatus::Type PlayerStatus, const FMovieSceneUpdateArgs& Args)
 {
-	UMovieSceneSequencePlayer::UpdateMovieSceneInstance(InRange, PlayerStatus, bHasJumped);
+	UMovieSceneSequencePlayer::UpdateMovieSceneInstance(InRange, PlayerStatus, Args);
 
+	// TODO-ludovic: we should move this to a post-evaluation callback when the evaluation is asynchronous.
 	FLevelSequencePlayerSnapshot NewSnapshot;
 	TakeFrameSnapshot(NewSnapshot);
 
@@ -314,6 +315,7 @@ void ULevelSequencePlayer::UpdateCameraCut(UObject* CameraObject, const EMovieSc
 		// Convert known easing functions to their corresponding view target blend parameters.
 		TTuple<EViewTargetBlendFunction, float> BlendFunctionAndExp = BuiltInEasingTypeToBlendFunction(CameraCutParams.BlendType.GetValue());
 		TransitionParams.BlendTime = CameraCutParams.BlendTime;
+		TransitionParams.bLockOutgoing = CameraCutParams.bLockPreviousCamera;
 		TransitionParams.BlendFunction = BlendFunctionAndExp.Get<0>();
 		TransitionParams.BlendExp = BlendFunctionAndExp.Get<1>();
 
@@ -352,7 +354,10 @@ void ULevelSequencePlayer::UpdateCameraCut(UObject* CameraObject, const EMovieSc
 		}
 	}
 
-	if (CameraComponent)
+	// we want to notify of cuts on hard cuts and time jumps, but not on blend cuts
+	const bool bIsStraightCut = !CameraCutParams.BlendType.IsSet() || CameraCutParams.bJumpCut;
+
+	if (CameraComponent && bIsStraightCut)
 	{
 		CameraComponent->NotifyCameraCut();
 	}
@@ -360,12 +365,19 @@ void ULevelSequencePlayer::UpdateCameraCut(UObject* CameraObject, const EMovieSc
 	if (PC->PlayerCameraManager)
 	{
 		PC->PlayerCameraManager->bClientSimulatingViewTarget = (CameraActor != nullptr);
-		PC->PlayerCameraManager->SetGameCameraCutThisFrame();
+
+		if (bIsStraightCut)
+		{
+			PC->PlayerCameraManager->SetGameCameraCutThisFrame();
+		}
 	}
 
-	if (OnCameraCut.IsBound())
+	if (bIsStraightCut)
 	{
-		OnCameraCut.Broadcast(CameraComponent);
+		if (OnCameraCut.IsBound())
+		{
+			OnCameraCut.Broadcast(CameraComponent);
+		}
 	}
 }
 
@@ -380,18 +392,6 @@ TArray<UObject*> ULevelSequencePlayer::GetEventContexts() const
 	if (World.IsValid())
 	{
 		GetEventContexts(*World, EventContexts);
-	}
-
-	ALevelSequenceActor* OwningActor = GetTypedOuter<ALevelSequenceActor>();
-	if (OwningActor)
-	{
-		for (AActor* Actor : OwningActor->AdditionalEventReceivers)
-		{
-			if (Actor)
-			{
-				EventContexts.Add(Actor);
-			}
-		}
 	}
 
 	return EventContexts;

@@ -14,6 +14,7 @@ class IMediaClock;
 class IMediaPlayerFactory;
 class IMediaTicker;
 class IMediaTimeSource;
+class IMediaInfo;
 
 
 /**
@@ -34,6 +35,23 @@ class IMediaModule
 	: public IModuleInterface
 {
 public:
+
+	//~ Platform management
+
+	/*
+	 * Register a platform
+	*/
+	virtual void RegisterPlatform(const FName & PlatformName, const FGuid& PlatformGuid, IMediaInfo* MediaInfo) = 0;
+
+	/*
+	 * Get a nice platform name from a GUID
+	*/
+	virtual FName GetPlatformName(const FGuid& PlatformGuid) const = 0;
+
+	/*
+	 * Get a GUID from a nice platform name
+	*/
+	virtual FGuid GetPlatformGuid(const FName & PlatformName) const = 0;
 
 	//~ Capture devices
 
@@ -83,6 +101,15 @@ public:
 	virtual IMediaPlayerFactory* GetPlayerFactory(const FName& FactoryName) const = 0;
 
 	/**
+	 * Get a media player factory by GUID.
+	 *
+	 * @param FactoryGuid The GUID of the factory / player.
+	 * @return The factory, or nullptr if not found.
+	 * @see GetPlayerFactories, RegisterPlayerFactory, UnregisterPlayerFactory
+	 */
+	virtual IMediaPlayerFactory* GetPlayerFactory(const FGuid& PlayerPluginGuid) const = 0;
+
+	/**
 	 * Register a media player factory.
 	 *
 	 * @param Factory The media player factory to register.
@@ -117,6 +144,11 @@ public:
 	 * @see GetClock
 	 */
 	virtual IMediaTicker& GetTicker() = 0;
+
+	/**
+	 * Get frame's processing approximate real time start time in seconds
+	 */
+	virtual double GetFrameStartTime() const = 0;
 
 	/**
 	 * Get a Delegate that is trigger once all MediaClockSink are TickInput

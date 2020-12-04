@@ -30,6 +30,7 @@
 #define SAMPLE_PHASE_ACCUM      2
 #define SAMPLE_PHASE_RESOLVE    3
 
+#include "../HairStrands/HairStrandsVoxelPageCommonStruct.ush"
 #include "../Common.ush"
 
 #define SUPPORT_CONTACT_SHADOWS		0
@@ -45,7 +46,6 @@
 
 #include "../DeferredShadingCommon.ush"
 #include "../DeferredLightingCommon.ush"
-#include "../ReflectionEnvironmentShared.ush"
 #include "../Montecarlo.ush"
 #include "../PathTracing/Utilities/PathTracingRandomSequence.ush" 
 #include "../HeightFogCommon.ush"
@@ -53,6 +53,7 @@
 #include "../ScreenSpaceDenoise/SSDPublic.ush"
 #include "../SobolRandom.ush"
 #include "../SceneTextureParameters.ush"
+
 #include "RayTracingCommon.ush"
 #include "RayTracingDeferredShadingCommon.ush"
 #include "RayTracingHitGroupCommon.ush"
@@ -63,28 +64,7 @@
 #include "RayTracingPointLight.ush"
 #include "RayTracingLightingCommon.ush"
 #include "RayTracingReflectionsCommon.ush"
-
-
-// Setup the reflection composite to sample the sky and reflection captures.
-#define REFLECTION_COMPOSITE_HAS_BOX_CAPTURES 1
-#define REFLECTION_COMPOSITE_HAS_SPHERE_CAPTURES 1
-#define REFLECTION_COMPOSITE_USE_BLENDED_REFLECTION_CAPTURES 1
-#define REFLECTION_COMPOSITE_SUPPORT_SKYLIGHT_BLEND 1
-// Enable skly light sampling as last fallback after reflection captures
-#ifdef ENABLE_SKY_LIGHT
-#undef ENABLE_SKY_LIGHT
-#endif
-#define ENABLE_SKY_LIGHT 1
-// Disable static lighting as this is not needed in this case.
-#ifdef ALLOW_STATIC_LIGHTING
-#undef ALLOW_STATIC_LIGHTING
-#endif
-#define ALLOW_STATIC_LIGHTING 0
-// Also specify that we are going to go over a range of reflection captures without culling available.
-// All reflection captures available are always available here even if completely outside the view.
-#define REFLECTION_COMPOSITE_NO_CULLING_DATA
-#include "../ReflectionEnvironmentComposite.ush"
-
+#include "RayTracingReflectionEnvironment.ush"
 
 uint SamplesPerPixel;
 uint MaxBounces;
@@ -93,6 +73,7 @@ uint UseReflectionCaptures;
 uint ReflectedShadowsType;
 uint ShouldDoDirectLighting;
 uint ShouldDoEmissiveAndIndirectLighting;
+uint ShouldReflectOnlyWater;
 uint UpscaleFactor;
 uint SortTileSize;
 uint2 RayTracingResolution;
@@ -106,11 +87,13 @@ uint EnableTranslucency;
 uint SkyLightDecoupleSampleGeneration;
 uint SampleMode;
 uint SampleOffset;
+uint ReflectionEnableTwoSidedGeometry;
 
 float ReflectionMinRayDistance;
 float ReflectionMaxRayDistance;
 float ReflectionMaxRoughness;
 float ReflectionMaxNormalBias;
+float ShadowMaxNormalBias;
 
 RaytracingAccelerationStructure TLAS;
 
@@ -186,14 +169,15 @@ void FixSampleDirectionIfNeeded(float3 SmoothSurfaceNormal, inout float3 SampleD
 }
 
 // Volume rendering ala emission-absorption model along an arbitrary ray
-float Transmit(in RayDesc TransmissionRay, inout RandomSequence RandSequence, inout float3 OutRadiance)
+float Transmit(in RayDesc TransmissionRay, in uint2 PixelCoord, inout RandomSequence RandSequence, inout float3 OutRadiance)
 {
 	float Transmission = 1.0;
 
-	const uint RayFlags = 0;
+	const uint RayFlags = !ReflectionEnableTwoSidedGeometry ? RAY_FLAG_CULL_BACK_FACING_TRIANGLES : 0;
 	const uint InstanceInclusionMask = RAY_TRACING_MASK_TRANSLUCENT;
 	FRayCone RayCone = (FRayCone)0;
 	bool bEnableSkyLightContribution = true;
+	bool bIgnoreTranslucentMaterials = false;
 
 	FMaterialClosestHitPayload TransmPayload = TraceMaterialRay(
 		TLAS,
@@ -201,7 +185,9 @@ float Transmit(in RayDesc TransmissionRay, inout RandomSequence RandSequence, in
 		InstanceInclusionMask,
 		TransmissionRay,
 		RayCone,
-		bEnableSkyLightContribution);
+		PixelCoord,
+		bEnableSkyLightContribution,
+		bIgnoreTranslucentMaterials);
 
 	const uint HitCountMax = 32;
 	uint HitCount = 0;
@@ -229,7 +215,9 @@ float Transmit(in RayDesc TransmissionRay, inout RandomSequence RandSequence, in
 			RAY_TRACING_MASK_TRANSLUCENT,
 			TransmissionRay,
 			RayCone,
-			bEnableSkyLightContribution);
+			PixelCoord,
+			bEnableSkyLightContribution,
+			bIgnoreTranslucentMaterials);
 
 		bIsHit = TransmPayload.IsHit();
 	}
@@ -259,7 +247,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 	uint2 DispatchThreadId = DispatchRaysIndex().xy + uint2(RenderTileOffsetX, RenderTileOffsetY);
 #endif
 
-	DispatchThreadId += (uint2)View.ViewRectMin;
+	DispatchThreadId += (uint2)View.ViewRectMin.xy;
 
 	uint2 PixelCoord = GetPixelCoord(DispatchThreadId, UpscaleFactor); // GBuffer pixel coordinates (full resolution)
 
@@ -281,7 +269,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 	uint LocalSamplesPerPixel = SamplesPerPixel; 
 
 	// Mask out depth values that are infinitely far away
-	float DeviceZ = SceneDepthBuffer.Load(int3(PixelCoord, 0)).r;
+	float DeviceZ = SceneDepthTexture.Load(int3(PixelCoord, 0)).r;
 	bool IsFiniteDepth = DeviceZ > 0.0;
 	if (!IsFiniteDepth)
 	{
@@ -332,6 +320,12 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 	// * Hair material is not for RT reflection at the moment. Their indirect contributuion is based on diffuse SH evaluation in ReflectionEnvironemenPixelShader.usf
 	// * Unlit materials do not participate in lighting computations, results are unused.
 	bool bIsValidPixel = (RoughnessFade > 0 || ClearCoatRoughnessFade > 0) && GBufferData.ShadingModelID != SHADINGMODELID_HAIR && GBufferData.ShadingModelID != SHADINGMODELID_UNLIT;
+
+	if (ShouldReflectOnlyWater)
+	{
+		// Cull underwater reflections
+		bIsValidPixel = bIsValidPixel && GBufferData.ShadingModelID == SHADINGMODELID_SINGLELAYERWATER && dot(GBufferData.WorldNormal, CameraDirection) < 0.0;
+	}
 
     const uint LocalMaxBounces = DIM_HYBRID ? 1 : MaxBounces;
 
@@ -423,9 +417,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 				TopLayerRay.TMin = 0.0;
 				TopLayerRay.TMax = LocalMaxRayDistance;
 
-#if GBUFFER_HAS_TANGENT
 				ModifyGGXAnisotropicNormalRoughness(TopLayerWorldTangent, TopLayerAnisotropy, TopLayerRoughness, TopLayerWorldNormal, IncidentDirection);
-#endif
 
 				TopLayerRay.Direction = GenerateReflectionDirection(RandSequence, DispatchThreadId, BounceIndex, LocalSamplesPerPixel, IncidentDirection, TopLayerWorldNormal, TopLayerRoughness);
 
@@ -453,6 +445,10 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 						// Material gather rays are traced as opaque to find the closest hit.
 						// Shading pass then traces a shortened ray from position right before first opaque hit to handle masked materials, translucency, etc.
 						uint RayFlags = RAY_FLAG_FORCE_OPAQUE;
+						if (!ReflectionEnableTwoSidedGeometry)
+						{
+							RayFlags |= RAY_FLAG_CULL_BACK_FACING_TRIANGLES;
+						}
 						DeferredMaterialPayload.SortKey = RAY_TRACING_DEFERRED_MATERIAL_KEY_RAY_MISS;
 						TraceRay(
 							TLAS,								// AccelerationStructure
@@ -476,7 +472,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 								if (all(abs(RayHitScreenPos) < float2(1, 1)))
 								{
 									float2 RayHitUV = RayHitScreenPos * View.ScreenPositionScaleBias.xy + View.ScreenPositionScaleBias.wz;
-									float GBufferHitDepth  = ConvertFromDeviceZ(SceneDepthBuffer.SampleLevel(GlobalPointClampedSampler, RayHitUV, 0).r);
+									float GBufferHitDepth  = ConvertFromDeviceZ(SceneDepthTexture.SampleLevel(GlobalPointClampedSampler, RayHitUV, 0).r);
 									float RayHitDepth = RayHitClipPos.w;
 									float ScreenSpaceReflectionDepthDeltaThreshold = 5.0; // Arbitrary threshold
 									if (RayHitDepth - GBufferHitDepth < ScreenSpaceReflectionDepthDeltaThreshold)
@@ -518,9 +514,8 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 					BottomLayerRay.TMin = 0.0;
 					BottomLayerRay.TMax = LocalMaxRayDistance;
 
-#if GBUFFER_HAS_TANGENT
 					ModifyGGXAnisotropicNormalRoughness(BottomLayerWorldTangent, BottomLayerAnisotropy, BottomLayerRoughness, BottomLayerWorldNormal, IncidentDirection);
-#endif
+
 					BottomLayerRay.Direction = GenerateReflectionDirection(RandSequence, DispatchThreadId, BounceIndex, LocalSamplesPerPixel, IncidentDirection, BottomLayerWorldNormal, BottomLayerRoughness);
 					ApplyPositionBias(BottomLayerRay, BottomLayerWorldNormal, ReflectionMaxNormalBias);
 					if (BounceIndex == 0 && dot(GBufferData.WorldNormal, BottomLayerRay.Direction) < 0.0)
@@ -532,7 +527,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 
 					if (TraceBottomRay)
 					{
-						const uint RayFlags = 0;
+						const uint RayFlags = !ReflectionEnableTwoSidedGeometry ? RAY_FLAG_CULL_BACK_FACING_TRIANGLES : 0;
 						const uint InstanceInclusionMask = RAY_TRACING_MASK_OPAQUE;
 						const bool bEnableSkyLightContribution = bSkyLightAffectReflection;
 
@@ -543,7 +538,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 							InstanceInclusionMask,
 							RandSequence,
 							PixelCoord,
-							ReflectionMaxNormalBias,
+							ShadowMaxNormalBias,
 							ReflectedShadowsType,
 							ShouldDoDirectLighting,
 							ShouldDoEmissiveAndIndirectLighting,
@@ -663,7 +658,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 				}
 				else
 				{
-					const uint RayFlags = 0;
+					const uint RayFlags = !ReflectionEnableTwoSidedGeometry ? RAY_FLAG_CULL_BACK_FACING_TRIANGLES : 0;
 					const uint InstanceInclusionMask = RAY_TRACING_MASK_OPAQUE;
 					bool bEnableSkyLightContribution = bSkyLightAffectReflection;
 
@@ -680,6 +675,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 						InstanceInclusionMask,
 						TopLayerRay,
 						RayCone,
+						PixelCoord,
 						bEnableSkyLightContribution);
 
 					// Trace separate ray for translucent objects
@@ -690,7 +686,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 						RayDesc TransmissionRay = TopLayerRay;
 						TransmissionRay.TMin = 0.01;
 						TransmissionRay.TMax = PackedPayload.HitT;
-						Transmission = Transmit(TransmissionRay, RandSequence, TopLayerRadiance);
+						Transmission = Transmit(TransmissionRay, PixelCoord, RandSequence, TopLayerRadiance);
 					}
 
 					float3 RayHitWorldPos = TopLayerRay.Origin + PackedPayload.HitT * TopLayerRay.Direction;
@@ -711,7 +707,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 						TLAS,
 						RandSequence,
 						PixelCoord,
-						ReflectionMaxNormalBias,
+						ShadowMaxNormalBias,
 						ReflectedShadowsType,
 						ShouldDoDirectLighting,
 						ShouldDoEmissiveAndIndirectLighting,
@@ -969,12 +965,17 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 			CurrentImaginaryReflectionGBufferData.ValidSamples = 1;
 		}
 
+		float ConfusionFactor = ComputeDenoiserConfusionFactor(
+			ClosestHitDistance != DENOISER_INVALID_HIT_DISTANCE,
+			length(WorldPosition - View.WorldCameraOrigin),
+			ClosestHitDistance);
+
 		// Accumulate output information if it has been set by the initial sample
 		if (SampleMode == SAMPLE_PHASE_ACCUM || SampleMode == SAMPLE_PHASE_RESOLVE)
 		{
 			// Read the previous sample's output information
 			float4 PreviousColor = ColorOutput[DispatchThreadId];
-			float PreviousClosestHitDistance = RayHitDistanceOutput[DispatchThreadId];
+			float PreviousConfusionFactor = RayHitDistanceOutput[DispatchThreadId];
 			FImaginaryReflectionGBufferData PreviousImaginaryReflectionGBufferData;
 
 #if DIM_RAY_TRACE_SKY_LIGHT_CONTRIBUTION
@@ -992,13 +993,13 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 				ReflectedColor += PreviousColor;
 				ReflectedWeight += PreviousColor.a;
 
-				if (ClosestHitDistance > 0.0 && PreviousClosestHitDistance > 0.0)
+				if (ConfusionFactor >= 0.0 && PreviousConfusionFactor >= 0.0)
 				{
-					ClosestHitDistance = min(ClosestHitDistance, PreviousClosestHitDistance);
+					ConfusionFactor = min(ConfusionFactor, PreviousConfusionFactor);
 				}
 				else
 				{
-					ClosestHitDistance = max(ClosestHitDistance, PreviousClosestHitDistance);
+					ConfusionFactor = max(ConfusionFactor, PreviousConfusionFactor);
 				}
 
 				if (DIM_RAY_TRACE_SKY_LIGHT_CONTRIBUTION)
@@ -1014,7 +1015,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 				// no data this pass, use accumulated data
 				ReflectedColor = PreviousColor;
 				ReflectedWeight = PreviousColor.a;
-				ClosestHitDistance = PreviousClosestHitDistance;
+				ConfusionFactor = PreviousConfusionFactor;
 
 				if (DIM_RAY_TRACE_SKY_LIGHT_CONTRIBUTION)
 				{
@@ -1042,7 +1043,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 			TransmissionRay.TMax = length(WorldPosition - View.WorldCameraOrigin);
 			float3 Inscattering = 0.0;
 			RandomSequence RandSequence;
-			float Transmission = Transmit(TransmissionRay, RandSequence, Inscattering);
+			float Transmission = Transmit(TransmissionRay, PixelCoord, RandSequence, Inscattering);
 			//#dxr_todo: add Inscattering support (this is emission only so far)
 			//#dxr_todo: depending on if there is a translucency pass the component might already be attenuated. Check for double contribution
 			ReflectedColor.rgb *= Transmission;
@@ -1056,7 +1057,7 @@ RAY_TRACING_ENTRY_RAYGEN(RayTracingReflectionsRGS)
 
 		// Output required information
 		ColorOutput[DispatchThreadId] = ClampToHalfFloatRange(ReflectedColor);
-		RayHitDistanceOutput[DispatchThreadId] = ClosestHitDistance;
+		RayHitDistanceOutput[DispatchThreadId] = ConfusionFactor;
 		RayImaginaryDepthOutput[DispatchThreadId] = ImaginaryClosestSVDepth; // TODO(Denoiser): shader permutation?
 
 #if DIM_RAY_TRACE_SKY_LIGHT_CONTRIBUTION

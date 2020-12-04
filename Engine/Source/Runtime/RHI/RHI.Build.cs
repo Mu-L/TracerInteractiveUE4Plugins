@@ -33,6 +33,7 @@ public class RHI : ModuleRules
 				if ((Target.Platform == UnrealTargetPlatform.HoloLens))
 				{
 					DynamicallyLoadedModuleNames.Add("D3D11RHI");
+					DynamicallyLoadedModuleNames.Add("D3D12RHI");
 				}
 
 				if ((Target.Platform == UnrealTargetPlatform.Win64) ||
@@ -57,5 +58,7 @@ public class RHI : ModuleRules
 		}
 
 		PrivateIncludePaths.Add("Runtime/RHI/Private");
-	}
+
+        AddEngineThirdPartyPrivateStaticDependencies(Target, "GeForceNOW");
+    }
 }

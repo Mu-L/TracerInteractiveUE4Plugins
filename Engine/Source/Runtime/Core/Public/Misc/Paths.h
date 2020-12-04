@@ -91,14 +91,18 @@ public:
 
 	/**
 	 * Returns the directory for default Editor UI Layout files of the engine
-	 *
 	 * @return Directory for default Editor UI Layout files.
 	 */
 	static FString EngineDefaultLayoutDir();
 
 	/**
+	 * Returns the directory for project Editor UI Layout files of the engine
+	 * @return Directory for project Editor UI Layout files.
+	 */
+	static FString EngineProjectLayoutDir();
+
+	/**
 	 * Returns the directory for user-generated Editor UI Layout files of the engine
-	 *
 	 * @return Directory for user-generated Editor UI Layout files.
 	 */
 	static FString EngineUserLayoutDir();
@@ -137,6 +141,13 @@ public:
 	 * @return project platform extensions directory
 	 */
 	static FString ProjectPlatformExtensionsDir();
+
+	/**
+	 * Returns platform and restricted extensions that are present and valid (for platforms, it uses FDataDrivePlatformInfo to determine valid platforms, it doesn't just use what's present)
+	 *
+	 * @return BaseDir and usable extension directories under BaseDir (either Engine or Project)
+	 */
+	static TArray<FString> GetExtensionDirs(const FString& BaseDir, const FString& SubDir=FString());
 
 	/**
 	 * Returns the root directory of the engine directory tree
@@ -280,6 +291,9 @@ public:
 
 	/** Returns the directory for automation save files that are meant to be deleted every run */
 	static FString AutomationTransientDir();
+
+	/** Returns the directory for results of automation tests. May be deleted every run. */
+	static FString AutomationReportsDir();
 
 	/** Returns the directory for automation log files */
 	static FString AutomationLogDir();
@@ -474,6 +488,8 @@ public:
 	 *    - Collapses internal ..'s
 	 *    - Makes relative to Engine\Binaries\<Platform> (will ALWAYS start with ..\..\..)
 	 */
+	static FString CreateStandardFilename(const FString& InPath);
+
 	static void MakeStandardFilename(FString& InPath);
 
 	/** Takes an "Unreal" pathname and converts it to a platform filename. */

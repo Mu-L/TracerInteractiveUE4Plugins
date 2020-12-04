@@ -15,19 +15,35 @@ public class PhysicsCore: ModuleRules
 			}
 		);
 
-		SetupModulePhysicsSupport(Target); 
+		PublicDependencyModuleNames.AddRange(
+		   new string[] {
+				"DeveloperSettings"
+		   }
+	   );
 
-		if(Target.bCompilePhysX)
+		SetupModulePhysicsSupport(Target);
+		
+
+		// SetupModulePhysicsSupport adds a dependency on PhysicsCore, but we are PhysicsCore!
+		PublicIncludePathModuleNames.Remove("PhysicsCore");
+		PublicDependencyModuleNames.Remove("PhysicsCore");
+
+		if (Target.bCompileChaos == false && Target.bUseChaos == false)
         {
-			// Not ideal but as this module publicly exposes PhysX types
-			// to other modules when PhysX is enabled it requires that its
-			// public files have access to PhysX includes
-            PublicDependencyModuleNames.Add("PhysX");
+            if (Target.bCompilePhysX)
+            {
+                // Not ideal but as this module publicly exposes PhysX types
+                // to other modules when PhysX is enabled it requires that its
+                // public files have access to PhysX includes
+                PublicDependencyModuleNames.Add("PhysX");
+            }
+
+            if (Target.bCompileAPEX)
+            {
+                PublicDependencyModuleNames.Add("APEX");
+            }
         }
 
-		if(Target.bCompileAPEX)
-        {
-            PublicDependencyModuleNames.Add("APEX");
-        }
+		PrivateDefinitions.Add("CHAOS_INCLUDE_LEVEL_1=1");
 	}
 }

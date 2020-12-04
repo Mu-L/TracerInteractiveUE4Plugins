@@ -445,7 +445,7 @@ UObject* FAnimationUtils::GetDefaultAnimSequenceOuter(UAnimSet* InAnimSet, bool 
 
 		// Try to create a new package with Group named <AnimSetName>_Group.
 		FString NewPackageString = FString::Printf(TEXT("%s.%s_Group"), *AnimSetPackage->GetFName().ToString(), *InAnimSet->GetFName().ToString());
-		UPackage* NewPackage = CreatePackage( NULL, *NewPackageString );
+		UPackage* NewPackage = CreatePackage( *NewPackageString );
 
 		// New Outer to use
 		return NewPackage;
@@ -697,7 +697,11 @@ void FAnimationUtils::TallyErrorsFromPerturbation(
 
 	for (int32 TrackToTest = 0; TrackToTest < NumTracks; TrackToTest++)
 	{
-		TracksAndBonesToTest.Emplace(TrackToTest, CompressibleAnimData.TrackToSkeletonMapTable[TrackToTest].BoneTreeIndex, CompressibleAnimData.BoneData);
+		const int32 BoneIndex = CompressibleAnimData.TrackToSkeletonMapTable[TrackToTest].BoneTreeIndex;
+		if (BoneIndex != INDEX_NONE)
+		{
+			TracksAndBonesToTest.Emplace(TrackToTest, BoneIndex, CompressibleAnimData.BoneData);
+		}
 	}
 
 	Algo::SortBy(TracksAndBonesToTest, &FTrackBoneMapping::BoneIndex);

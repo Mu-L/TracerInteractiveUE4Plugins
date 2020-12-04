@@ -691,7 +691,7 @@ void FSlateMacMenu::UpdateMenu(FMacMenu* Menu)
 						[MenuItem setState:MenuItemState.State];
 					}
 				}
-				else if (MenuItemState.Type == EMultiBlockType::MenuSeparator)
+				else if (MenuItemState.Type == EMultiBlockType::Separator)
 				{
 					if (MenuItem && ![MenuItem isSeparatorItem])
 					{
@@ -970,11 +970,11 @@ int32 FSlateMacMenu::GetMenuItemState(const TSharedRef<const class FMenuEntryBlo
 	switch(CheckState)
 	{
 	case ECheckBoxState::Checked:
-		return NSOnState;
+		return NSControlStateValueOn;
 	case ECheckBoxState::Undetermined:
-		return NSMixedState;
+		return NSControlStateValueMixed;
 	default:
 		break;
 	}
-	return NSOffState;
+	return NSControlStateValueOff;
 }

@@ -5,6 +5,7 @@
 #include "EngineGlobals.h"
 #include "PhysicsPublic.h"
 #include "PhysxUserData.h"
+#include "PhysicsEngine/RigidBodyIndexPair.h"
 #include "Physics/PhysicsInterfaceTypes.h"
 
 class ISQAccelerator;
@@ -167,7 +168,7 @@ public:
 	void ApplyWorldOffset(FVector InOffset);
 
 	/** Set the gravity and timing of all physics scenes */
-	ENGINE_API void SetUpForFrame(const FVector* NewGrav, float InDeltaSeconds = 0.0f, float InMaxPhysicsDeltaTime = 0.0f, float InMaxSubstepDeltaTime = 0.f, int32 InMaxSubsteps = 1);
+	ENGINE_API void SetUpForFrame(const FVector* NewGrav, float InDeltaSeconds = 0.0f, float InMaxPhysicsDeltaTime = 0.0f, float InMaxSubstepDeltaTime = 0.f, int32 InMaxSubsteps = 1, bool bUnused = false);
 
 	/** Starts a frame */
 	ENGINE_API void StartFrame();
@@ -183,6 +184,9 @@ public:
 	{
 		return PhysicsSceneCompletion;
 	}
+
+	FGraphEventArray GetCompletionEvents();
+	bool IsCompletionEventComplete() const;
 
 	/** Handle exec commands related to scene (PXVIS and APEXVIS) */
 	bool HandleExecCommands(const TCHAR* Cmd, FOutputDevice* Ar);

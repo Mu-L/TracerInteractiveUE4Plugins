@@ -19,15 +19,37 @@ using TNDISkelMesh_SkinningModePreSkin = TIntegralConstant<ENDISkeletalMesh_Skin
 
 struct FSkeletalMeshAccessorHelper
 {
+	FSkeletalMeshAccessorHelper()
+	{
+	}
+	~FSkeletalMeshAccessorHelper()
+	{
+		if (SkinningData != nullptr)
+		{
+			SkinningData->ExitRead();
+		}
+	}
+
+	FSkeletalMeshAccessorHelper(const FSkeletalMeshAccessorHelper&) = delete;
+	FSkeletalMeshAccessorHelper(FSkeletalMeshAccessorHelper&&) = delete;
+	FSkeletalMeshAccessorHelper operator=(const FSkeletalMeshAccessorHelper&) = delete;
+	FSkeletalMeshAccessorHelper operator=(FSkeletalMeshAccessorHelper&&) = delete;
+
 	template<typename FilterMode, typename AreaWeightingMode>
 	FORCEINLINE void Init(FNDISkeletalMesh_InstanceData* InstData)
 	{
-		Comp = Cast<USkeletalMeshComponent>(InstData->Component.Get());
-		Mesh = InstData->Mesh;
-		LODData = InstData->GetLODRenderDataAndSkinWeights(SkinWeightBuffer);
+		Comp = Cast<USkeletalMeshComponent>(InstData->SceneComponent.Get());
+		Mesh = InstData->SkeletalMesh.Get();
+		LODData = InstData->CachedLODData;
+		SkinWeightBuffer = InstData->GetSkinWeights();
 		IndexBuffer = LODData ? LODData->MultiSizeIndexContainer.GetIndexBuffer() : nullptr;
 		SkinningData = InstData->SkinningData.SkinningData.Get();
 		Usage = InstData->SkinningData.Usage;
+
+		if (SkinningData != nullptr)
+		{
+			SkinningData->EnterRead();
+		}
 	}
 
 	FORCEINLINE bool AreBonesAccessible() const
@@ -43,9 +65,9 @@ struct FSkeletalMeshAccessorHelper
 	USkeletalMeshComponent* Comp = nullptr;
 	USkeletalMesh* Mesh = nullptr;
 	TWeakObjectPtr<USkeletalMesh> MeshSafe;
-	FSkeletalMeshLODRenderData* LODData = nullptr;
-	FSkinWeightVertexBuffer* SkinWeightBuffer = nullptr;
-	FRawStaticIndexBuffer16or32Interface* IndexBuffer = nullptr;
+	const FSkeletalMeshLODRenderData* LODData = nullptr;
+	const FSkinWeightVertexBuffer* SkinWeightBuffer = nullptr;
+	const FRawStaticIndexBuffer16or32Interface* IndexBuffer = nullptr;
 	const FSkeletalMeshSamplingRegion* SamplingRegion = nullptr;
 	const FSkeletalMeshSamplingRegionBuiltData* SamplingRegionBuiltData = nullptr;
 	FSkeletalMeshSkinningData* SkinningData = nullptr;
@@ -229,7 +251,7 @@ struct FSkinnedPositionAccessorHelper<TNDISkelMesh_SkinningModeNone>
 		const int32 NumRealBones = Accessor.Mesh->RefSkeleton.GetRawBoneNum();
 		if (BoneIndex < NumRealBones)
 		{
-			return Accessor.Mesh->GetComposedRefPoseMatrix(BoneIndex).ToQuat();
+			return Accessor.Mesh->GetComposedRefPoseMatrix(BoneIndex).GetMatrixWithoutScale().ToQuat();
 		}
 
 		const FTransform& RefTransform = Accessor.Mesh->RefSkeleton.GetRefBonePose()[BoneIndex];
@@ -391,7 +413,7 @@ struct FSkinnedPositionAccessorHelper<TNDISkelMesh_SkinningModePreSkin>
 template<bool bUseFullPrecisionUVs>
 struct FSkelMeshVertexAccessor
 {
-	FORCEINLINE FVector2D GetVertexUV(FSkeletalMeshLODRenderData* LODData, int32 VertexIdx, int32 UVChannel)const
+	FORCEINLINE FVector2D GetVertexUV(const FSkeletalMeshLODRenderData* LODData, int32 VertexIdx, int32 UVChannel)const
 	{
 		check(LODData);
 		if (bUseFullPrecisionUVs)
@@ -413,12 +435,12 @@ struct FSkelMeshVertexAccessor
 
 struct FSkelMeshVertexAccessorNoop
 {
-	FORCEINLINE FVector2D GetVertexUV(FSkeletalMeshLODRenderData* LODData, int32 VertexIdx, int32 UVChannel)const
+	FORCEINLINE FVector2D GetVertexUV(const FSkeletalMeshLODRenderData* LODData, int32 VertexIdx, int32 UVChannel)const
 	{
 		return FVector2D(0.0f, 0.0f);
 	}
 
-	FORCEINLINE FLinearColor GetVertexColor(FSkeletalMeshLODRenderData* LODData, int32 VertexIdx)const
+	FORCEINLINE FLinearColor GetVertexColor(const FSkeletalMeshLODRenderData* LODData, int32 VertexIdx)const
 	{
 		return FLinearColor::White;
 	}
@@ -448,14 +470,14 @@ struct TAreaWeightingModeBinder
 			}
 			else if (InstData->SamplingRegionIndices.Num() == 1)
 			{
-				const FSkeletalMeshSamplingInfo& SamplingInfo = InstData->Mesh->GetSamplingInfo();
+				const FSkeletalMeshSamplingInfo& SamplingInfo = InstData->SkeletalMesh->GetSamplingInfo();
 				const FSkeletalMeshSamplingRegion& Region = SamplingInfo.GetRegion(InstData->SamplingRegionIndices[0]);
 				bAreaWeighting = Region.bSupportUniformlyDistributedSampling;
 			}
 			else
 			{
 				int32 LODIndex = InstData->GetLODIndex();
-				bAreaWeighting = InstData->Mesh->GetLODInfo(LODIndex)->bSupportUniformlyDistributedSampling;
+				bAreaWeighting = InstData->SkeletalMesh->GetLODInfo(LODIndex)->bSupportUniformlyDistributedSampling;
 			}
 		}
 
@@ -507,8 +529,7 @@ struct TVertexAccessorBinder
 
 		if (InstData->bAllowCPUMeshDataAccess)
 		{
-			FSkinWeightVertexBuffer* SkinWeightBuffer = nullptr;
-			FSkeletalMeshLODRenderData* LODData = InstData->GetLODRenderDataAndSkinWeights(SkinWeightBuffer);
+			const FSkeletalMeshLODRenderData* LODData = InstData->CachedLODData;
 			if (LODData->StaticVertexBuffers.StaticMeshVertexBuffer.GetUseFullPrecisionUVs())
 			{
 				NextBinder::template Bind<ParamTypes..., FSkelMeshVertexAccessor<true>>(Interface, BindingInfo, InstanceData, OutFunc);
@@ -534,7 +555,7 @@ struct TSkinningModeBinder
 	{
 		FNDISkeletalMesh_InstanceData* InstData = (FNDISkeletalMesh_InstanceData*)InstanceData;
 		UNiagaraDataInterfaceSkeletalMesh* MeshInterface = CastChecked<UNiagaraDataInterfaceSkeletalMesh>(Interface);
-		USkeletalMeshComponent* Component = Cast<USkeletalMeshComponent>(InstData->Component.Get());
+		USkeletalMeshComponent* Component = Cast<USkeletalMeshComponent>(InstData->SceneComponent.Get());
 		if (MeshInterface->SkinningMode == ENDISkeletalMesh_SkinningMode::None || !Component) // Can't skin if we have no component.
 		{
 			NextBinder::template Bind<ParamTypes..., FSkinnedPositionAccessorHelper<TNDISkelMesh_SkinningModeNone>>(Interface, BindingInfo, InstanceData, OutFunc);

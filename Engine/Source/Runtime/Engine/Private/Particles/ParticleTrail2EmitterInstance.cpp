@@ -492,20 +492,25 @@ void FParticleTrailsEmitterInstance_Base::KillParticles()
 					check(!TEXT("What the hell are you doing in here?"));
 				}
 
-				//Be certain we've broken links to this particle				
-				int32 Next = TRAIL_EMITTER_GET_NEXT(TrailData->Flags);
-				if (Next != TRAIL_EMITTER_NULL_NEXT)
+				//Be certain we've broken links to this particle.
+				//Some spawn paths leave zombie "forcekill" particles in the buffer so we avoid doing these. Event spawning being one.
+				//These particles have malformed flags so clearing their next/prev can corrupt other particle data.
+				if (!TRAIL_EMITTER_IS_FORCEKILL(TrailData->Flags))
 				{
-					DECLARE_PARTICLE_PTR(NextParticle, ParticleData + ParticleStride * Next);
-					FTrailsBaseTypeDataPayload* NextTrailData = ((FTrailsBaseTypeDataPayload*)((uint8*)NextParticle + TypeDataOffset));
-					NextTrailData->Flags = TRAIL_EMITTER_SET_PREV(NextTrailData->Flags, TRAIL_EMITTER_NULL_PREV);
-				}
-				int32 Prev = TRAIL_EMITTER_GET_PREV(TrailData->Flags);
-				if (Prev != TRAIL_EMITTER_NULL_PREV)
-				{
-					DECLARE_PARTICLE_PTR(PrevParticle, ParticleData + ParticleStride * Prev);
-					FTrailsBaseTypeDataPayload* PrevTrailData = ((FTrailsBaseTypeDataPayload*)((uint8*)PrevParticle + TypeDataOffset));
-					PrevTrailData->Flags = TRAIL_EMITTER_SET_NEXT(PrevTrailData->Flags, TRAIL_EMITTER_NULL_NEXT);
+					int32 Next = TRAIL_EMITTER_GET_NEXT(TrailData->Flags);
+					if (Next != TRAIL_EMITTER_NULL_NEXT)
+					{
+						DECLARE_PARTICLE_PTR(NextParticle, ParticleData + ParticleStride * Next);
+						FTrailsBaseTypeDataPayload* NextTrailData = ((FTrailsBaseTypeDataPayload*)((uint8*)NextParticle + TypeDataOffset));
+						NextTrailData->Flags = TRAIL_EMITTER_SET_PREV(NextTrailData->Flags, TRAIL_EMITTER_NULL_PREV);
+					}
+					int32 Prev = TRAIL_EMITTER_GET_PREV(TrailData->Flags);
+					if (Prev != TRAIL_EMITTER_NULL_PREV)
+					{
+						DECLARE_PARTICLE_PTR(PrevParticle, ParticleData + ParticleStride * Prev);
+						FTrailsBaseTypeDataPayload* PrevTrailData = ((FTrailsBaseTypeDataPayload*)((uint8*)PrevParticle + TypeDataOffset));
+						PrevTrailData->Flags = TRAIL_EMITTER_SET_NEXT(PrevTrailData->Flags, TRAIL_EMITTER_NULL_NEXT);
+					}
 				}
 
 				// Clear it out... just to be safe when it gets pulled back to active
@@ -532,7 +537,7 @@ void FParticleTrailsEmitterInstance_Base::KillParticles()
 				if (TRAIL_EMITTER_IS_FORCEKILL(TrailData->Flags))
 				{
 					TrailData->Flags = TRAIL_EMITTER_SET_NEXT(TrailData->Flags, TRAIL_EMITTER_NULL_NEXT);
-					TrailData->Flags =TRAIL_EMITTER_SET_PREV(TrailData->Flags, TRAIL_EMITTER_NULL_PREV);
+					TrailData->Flags = TRAIL_EMITTER_SET_PREV(TrailData->Flags, TRAIL_EMITTER_NULL_PREV);
 
 					ParticleIndices[ParticleIdx] = ParticleIndices[ActiveParticles-1];
 					ParticleIndices[ActiveParticles-1]	= CurrentIndex;
@@ -1554,10 +1559,11 @@ float FParticleRibbonEmitterInstance::Spawn(float DeltaTime)
 				check(TEXT("Failed to add particle to trail!!!!"));
 			}
 
-			INC_DWORD_STAT_BY(STAT_TrailParticles, ActiveParticles);
 			INC_DWORD_STAT(STAT_SpriteParticlesSpawned);
 		}
 	}
+	INC_DWORD_STAT_BY(STAT_TrailParticles, ActiveParticles);
+
 
 //TickCount++;
 	return SpawnFraction;
@@ -1986,8 +1992,6 @@ bool FParticleRibbonEmitterInstance::Spawn_Source(float DeltaTime)
 				{
 					check(TEXT("Failed to add particle to trail!!!!"));
 				}
-
-				INC_DWORD_STAT_BY(STAT_TrailParticles, ActiveParticles);
 			}
 
 			// Update the last position
@@ -2008,6 +2012,8 @@ bool FParticleRibbonEmitterInstance::Spawn_Source(float DeltaTime)
 			}
 		}
 	}
+
+	INC_DWORD_STAT_BY(STAT_TrailParticles, ActiveParticles);
 
 	return bProcessSpawnRate;
 }

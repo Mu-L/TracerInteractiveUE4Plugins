@@ -87,6 +87,10 @@ UParticleSystemComponent* FPSCPool::Acquire(UWorld* World, UParticleSystem* Temp
 		check(RetElem.PSC->Template == Template);
 		check(!RetElem.PSC->IsPendingKill());
 
+		//Reset visibility in case the component was reclaimed by the pool while invisible.
+		RetElem.PSC->SetVisibility(true);
+		RetElem.PSC->SetHiddenInGame(false);
+
 		if (RetElem.PSC->GetWorld() != World)
 		{
 			// Rename the PSC to move it into the current PersistentLevel - it may have been spawned in one

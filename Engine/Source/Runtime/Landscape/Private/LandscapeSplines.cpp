@@ -1510,6 +1510,10 @@ ULandscapeSplineControlPoint::ULandscapeSplineControlPoint(const FObjectInitiali
 	bPlaceSplineMeshesInStreamingLevels = true;
 	bCastShadow = true;
 
+	bRenderCustomDepth = false;
+	CustomDepthStencilWriteMask = ERendererStencilMask::ERSM_Default;
+	CustomDepthStencilValue = 0;
+
 	// transients
 	bSelected = false;
 #endif
@@ -1829,6 +1833,8 @@ void ULandscapeSplineControlPoint::UpdateSplinePoints(bool bUpdateCollision, boo
 	auto ForeignMeshComponentsMap = GetForeignMeshComponents();
 
 	ModificationKey = FGuid::NewGuid();
+	// Clear Foreign world (will get updated if MeshComponent lives outside of Spline world)
+	ForeignWorld = nullptr;
 
 	UControlPointMeshComponent* MeshComponent = LocalMeshComponent;
 	ULandscapeSplinesComponent* MeshComponentOuterSplines = OuterSplines;
@@ -1889,22 +1895,27 @@ void ULandscapeSplineControlPoint::UpdateSplinePoints(bool bUpdateCollision, boo
 			}
 		}
 
+		// If something changed add MeshComponent to proper map
 		if (bUpdateLocalForeign)
 		{
 			if (MeshComponentOuterSplines == OuterSplines)
 			{
 				UObject*& ValueRef = MeshComponentOuterSplines->MeshComponentLocalOwnersMap.FindOrAdd(MeshComponent);
 				ValueRef = this;
-
 				LocalMeshComponent = MeshComponent;
 			}
 			else
 			{
 				MeshComponentOuterSplines->AddForeignMeshComponent(this, MeshComponent);
-				ForeignWorld = MeshComponentOuterSplines->GetTypedOuter<UWorld>();
 			}
 		}
-				
+		
+		// Update Foreign World
+		if (MeshComponent && MeshComponentOuterSplines != OuterSplines)
+		{
+			ForeignWorld = MeshComponentOuterSplines->GetTypedOuter<UWorld>();
+		}
+
 		FVector MeshLocation = Location;
 		FRotator MeshRotation = Rotation;
 		if (MeshComponentOuterSplines != OuterSplines)
@@ -1913,9 +1924,10 @@ void ULandscapeSplineControlPoint::UpdateSplinePoints(bool bUpdateCollision, boo
 			MeshLocation = RelativeTransform.TransformPosition(MeshLocation);
 		}
 
-		if (MeshComponent->GetRelativeLocation() != MeshLocation ||
-			MeshComponent->GetRelativeRotation() != MeshRotation ||
-			MeshComponent->GetRelativeScale3D() != MeshScale)
+		const float LocationErrorTolerance = 0.01f;
+		if (!MeshComponent->GetRelativeLocation().Equals(MeshLocation, LocationErrorTolerance) ||
+			!MeshComponent->GetRelativeRotation().Equals(MeshRotation) ||
+			!MeshComponent->GetRelativeScale3D().Equals(MeshScale))
 		{
 			MeshComponent->Modify();
 			MeshComponent->SetRelativeTransform(FTransform(MeshRotation, MeshLocation, MeshScale));
@@ -1969,6 +1981,7 @@ void ULandscapeSplineControlPoint::UpdateSplinePoints(bool bUpdateCollision, boo
 		{
 			MeshComponent->Modify();
 			MeshComponent->BodyInstance = BodyInstance;
+			MeshComponent->RecreatePhysicsState();
 			MeshComponent->MarkRenderStateDirty();
 		}
 #endif
@@ -2011,6 +2024,27 @@ void ULandscapeSplineControlPoint::UpdateSplinePoints(bool bUpdateCollision, boo
 		{
 			MeshComponent->Modify();
 			MeshComponent->VirtualTextureRenderPassType = VirtualTextureRenderPassType;
+			MeshComponent->MarkRenderStateDirty();
+		}
+
+		if (MeshComponent->bRenderCustomDepth != bRenderCustomDepth)
+		{
+			MeshComponent->Modify();
+			MeshComponent->bRenderCustomDepth = bRenderCustomDepth;
+			MeshComponent->MarkRenderStateDirty();
+		}
+
+		if (MeshComponent->CustomDepthStencilWriteMask != CustomDepthStencilWriteMask)
+		{
+			MeshComponent->Modify();
+			MeshComponent->CustomDepthStencilWriteMask = CustomDepthStencilWriteMask;
+			MeshComponent->MarkRenderStateDirty();
+		}
+
+		if (MeshComponent->CustomDepthStencilValue != CustomDepthStencilValue)
+		{
+			MeshComponent->Modify();
+			MeshComponent->CustomDepthStencilValue = CustomDepthStencilValue;
 			MeshComponent->MarkRenderStateDirty();
 		}
 
@@ -2270,6 +2304,10 @@ ULandscapeSplineSegment::ULandscapeSplineSegment(const FObjectInitializer& Objec
 	TranslucencySortPriority = 0;
 	bPlaceSplineMeshesInStreamingLevels = true;
 	bCastShadow = true;
+
+	bRenderCustomDepth = false;
+	CustomDepthStencilWriteMask = ERendererStencilMask::ERSM_Default;
+	CustomDepthStencilValue = 0;
 
 	bEnableCollision_DEPRECATED = true;
 	BodyInstance.SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
@@ -3003,6 +3041,10 @@ void ULandscapeSplineSegment::UpdateSplinePoints(bool bUpdateCollision, bool bUp
 			MeshComponent->VirtualTextureCullMips = VirtualTextureCullMips;
 			MeshComponent->VirtualTextureMainPassMaxDrawDistance = VirtualTextureMainPassMaxDrawDistance;
 			MeshComponent->VirtualTextureRenderPassType = VirtualTextureRenderPassType;
+
+			MeshComponent->SetRenderCustomDepth(bRenderCustomDepth);
+			MeshComponent->SetCustomDepthStencilWriteMask(CustomDepthStencilWriteMask);
+			MeshComponent->SetCustomDepthStencilValue(CustomDepthStencilValue);
 
 			MeshComponent->SetCastShadow(bCastShadow);
 			MeshComponent->InvalidateLightingCache();

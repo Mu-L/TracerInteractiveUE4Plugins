@@ -10,6 +10,7 @@
 #include "OnlineSessionInterfaceOculus.h"
 #include "OnlineUserCloudOculus.h"
 #include "OnlineVoiceOculus.h"
+#include "Stats/Stats.h"
 
 #if PLATFORM_ANDROID
 #include "Android/AndroidApplication.h"
@@ -151,6 +152,8 @@ IOnlineTournamentPtr FOnlineSubsystemOculus::GetTournamentInterface() const
 
 bool FOnlineSubsystemOculus::Tick(float DeltaTime)
 {
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_FOnlineSubsystemOculus_Tick);
+
 	if (!FOnlineSubsystemImpl::Tick(DeltaTime))
 	{
 		return false;
@@ -329,7 +332,7 @@ FString FOnlineSubsystemOculus::GetAppId() const
 #if PLATFORM_WINDOWS
 	auto AppId = GConfig->GetStr(TEXT("OnlineSubsystemOculus"), TEXT("RiftAppId"), GEngineIni);
 #elif PLATFORM_ANDROID
-	auto AppId = GConfig->GetStr(TEXT("OnlineSubsystemOculus"), TEXT("GearVRAppId"), GEngineIni);
+	auto AppId = GConfig->GetStr(TEXT("OnlineSubsystemOculus"), TEXT("MobileAppId"), GEngineIni);
 #endif
 	if (!AppId.IsEmpty()) {
 		return AppId;
@@ -337,7 +340,7 @@ FString FOnlineSubsystemOculus::GetAppId() const
 #if PLATFORM_WINDOWS
 	UE_LOG_ONLINE(Warning, TEXT("Could not find 'RiftAppId' key in engine config.  Trying 'OculusAppId'.  Move your oculus app id to 'RiftAppId' to use in your rift app and make this warning go away."));
 #elif PLATFORM_ANDROID
-	UE_LOG_ONLINE(Warning, TEXT("Could not find 'GearVRAppId' key in engine config.  Trying 'OculusAppId'.  Move your oculus app id to 'GearVRAppId' to use in your gearvr app make this warning go away."));
+	UE_LOG_ONLINE(Warning, TEXT("Could not find 'MobileAppId' key in engine config.  Trying 'OculusAppId'.  Move your oculus app id to 'MobileAppId' to use in your quest/go app make this warning go away."));
 #endif
 	return GConfig->GetStr(TEXT("OnlineSubsystemOculus"), TEXT("OculusAppId"), GEngineIni);
 }

@@ -51,7 +51,7 @@ public:
 	 * @param InSourceType    The class type of the source to add
 	 * @return An instance of the specified source type
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Take Recorder")
+	UFUNCTION(BlueprintCallable, Category = "Take Recorder", meta = (DeterminesOutputType = "InSourceType"))
 	UTakeRecorderSource* AddSource(TSubclassOf<UTakeRecorderSource> InSourceType);
 
 	/**
@@ -153,6 +153,11 @@ public:
 
 	/** Creates a sub-sequence asset for the specified sub sequence name based on the given master sequence. */
 	static ULevelSequence* CreateSubSequenceForSource(ULevelSequence* InMasterSequence, const FString& SubSequenceTrackName, const FString& SubSequenceAssetName);
+
+	/**
+	 * Array of pairs - key time and the corresponding timecode
+	 */
+	static TArray<TPair<FQualifiedFrameTime, FTimecode> > RecordedTimes;
 
 private:
 	/** Called at the end of each frame in both the Editor and in Game to update all Sources. */

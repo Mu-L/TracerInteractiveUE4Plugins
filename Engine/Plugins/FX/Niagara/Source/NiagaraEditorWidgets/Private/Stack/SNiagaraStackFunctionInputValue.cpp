@@ -20,7 +20,6 @@
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SComboButton.h"
 #include "Widgets/Images/SImage.h"
-#include "Widgets/Input/SCheckBox.h"
 #include "Editor/PropertyEditor/Public/PropertyEditorModule.h"
 #include "Framework/Application/SlateApplication.h"
 #include "IStructureDetailsView.h"
@@ -389,9 +388,18 @@ FText SNiagaraStackFunctionInputValue::GetDataValueText() const
 
 FText SNiagaraStackFunctionInputValue::GetDynamicValueText() const
 {
-	if (FunctionInput->GetDynamicInputNode() != nullptr)
+	if (UNiagaraNodeFunctionCall* NodeFunctionCall = FunctionInput->GetDynamicInputNode())
 	{
-		return FText::FromString(FName::NameToDisplayString(FunctionInput->GetDynamicInputNode()->GetFunctionName(), false));
+		if (!FunctionInput->GetIsExpanded())
+		{
+			FText CollapsedText = FunctionInput->GetCollapsedStateText();
+			if (!CollapsedText.IsEmptyOrWhitespace())
+			{
+				return CollapsedText;
+			}
+		}
+		FString FunctionName = NodeFunctionCall->FunctionScript ? NodeFunctionCall->FunctionScript->GetName() : NodeFunctionCall->Signature.Name.ToString();
+		return FText::FromString(FName::NameToDisplayString(FunctionName, false));
 	}
 	else
 	{
@@ -563,8 +571,9 @@ void SNiagaraStackFunctionInputValue::CollectAllActions(FGraphActionListBuilderB
 		FunctionInput->GetAvailableDynamicInputs(DynamicInputScripts, bLibraryOnly == false);
 		for (UNiagaraScript* DynamicInputScript : DynamicInputScripts)
 		{
-			const FText DynamicInputText = FNiagaraEditorUtilities::FormatScriptName(DynamicInputScript->GetFName(), DynamicInputScript->bExposeToLibrary);
-			const FText Tooltip = FNiagaraEditorUtilities::FormatScriptDescription(DynamicInputScript->Description, *DynamicInputScript->GetPathName(), DynamicInputScript->bExposeToLibrary);
+			bool bIsInLibrary = DynamicInputScript->LibraryVisibility == ENiagaraScriptLibraryVisibility::Library;
+			const FText DynamicInputText = FNiagaraEditorUtilities::FormatScriptName(DynamicInputScript->GetFName(), bIsInLibrary);
+			const FText Tooltip = FNiagaraEditorUtilities::FormatScriptDescription(DynamicInputScript->Description, *DynamicInputScript->GetPathName(), bIsInLibrary);
 			TSharedPtr<FNiagaraMenuAction> DynamicInputAction(new FNiagaraMenuAction(CategoryName, DynamicInputText, Tooltip, 0, DynamicInputScript->Keywords,
 				FNiagaraMenuAction::FOnExecuteStackAction::CreateSP(this, &SNiagaraStackFunctionInputValue::DynamicInputScriptSelected, DynamicInputScript)));
 
@@ -611,7 +620,7 @@ void SNiagaraStackFunctionInputValue::CollectAllActions(FGraphActionListBuilderB
 		}
 		FName InputName = *FString::Join(InputNames, TEXT("_")).Replace(TEXT("."), TEXT("_"));
 
-		for (const FName AvailableNamespace : AvailableNamespaces)
+		for (const FName& AvailableNamespace : AvailableNamespaces)
 		{
 			FNiagaraParameterHandle HandleToRead(AvailableNamespace, InputName);
 			bool bCanExecute = AvailableHandles.Contains(HandleToRead) == false;
@@ -860,8 +869,9 @@ void SNiagaraStackFunctionInputValue::CollectDynamicInputActionsForReassign(FGra
 	FunctionInput->GetAvailableDynamicInputs(DynamicInputScripts, bLibraryOnly == false);
 	for (UNiagaraScript* DynamicInputScript : DynamicInputScripts)
 	{
-		const FText DynamicInputText = FNiagaraEditorUtilities::FormatScriptName(DynamicInputScript->GetFName(), DynamicInputScript->bExposeToLibrary);
-		const FText Tooltip = FNiagaraEditorUtilities::FormatScriptDescription(DynamicInputScript->Description, *DynamicInputScript->GetPathName(), DynamicInputScript->bExposeToLibrary);
+		bool bIsInLibrary = DynamicInputScript->LibraryVisibility == ENiagaraScriptLibraryVisibility::Library;
+		const FText DynamicInputText = FNiagaraEditorUtilities::FormatScriptName(DynamicInputScript->GetFName(), bIsInLibrary);
+		const FText Tooltip = FNiagaraEditorUtilities::FormatScriptDescription(DynamicInputScript->Description, *DynamicInputScript->GetPathName(), bIsInLibrary);
 		TSharedPtr<FNiagaraMenuAction> DynamicInputAction(new FNiagaraMenuAction(CategoryName, DynamicInputText, Tooltip, 0, DynamicInputScript->Keywords,
 			FNiagaraMenuAction::FOnExecuteStackAction::CreateStatic(&ReassignDynamicInputScript, FunctionInput, DynamicInputScript)));
 		DynamicInputActions.AddAction(DynamicInputAction);

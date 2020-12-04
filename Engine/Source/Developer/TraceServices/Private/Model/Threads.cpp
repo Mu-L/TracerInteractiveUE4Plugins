@@ -32,10 +32,9 @@ void FThreadProvider::AddGameThread(uint32 Id)
 	check(!ThreadMap.Contains(Id));
 	FThreadInfoInternal* ThreadInfo = new FThreadInfoInternal();
 	ThreadInfo->Id = Id;
-	ThreadInfo->PrioritySortOrder = GetPrioritySortOrder(TPri_Normal);
+	ThreadInfo->PrioritySortOrder = -2;
 	ThreadInfo->Name = Session.StoreString(*FName(NAME_GameThread).GetPlainNameString());
 	ThreadInfo->FallbackSortOrder = SortedThreads.Num();
-	ThreadInfo->IsGameThread = true;
 	SortedThreads.Add(ThreadInfo);
 	ThreadMap.Add(Id, ThreadInfo);
 	++ModCount;
@@ -58,8 +57,17 @@ void FThreadProvider::AddThread(uint32 Id, const TCHAR* Name, EThreadPriority Pr
 	{
 		ThreadInfo = ThreadMap[Id];
 	}
-	ThreadInfo->PrioritySortOrder = GetPrioritySortOrder(Priority);
-	ThreadInfo->Name = Session.StoreString(Name);
+	if (Name != nullptr)
+	{
+		ThreadInfo->Name = Session.StoreString(Name);
+		if (!FCString::Strcmp(Name, TEXT("RHIThread")))
+		{
+			const TCHAR* GroupName = Session.StoreString(TEXT("Render"));
+			SetThreadGroup(Id, GroupName);
+		}
+
+		ThreadInfo->PrioritySortOrder = GetPrioritySortOrder(Priority);
+	}
 	SortThreads();
 	++ModCount;
 }
@@ -70,6 +78,7 @@ void FThreadProvider::SetThreadPriority(uint32 Id, EThreadPriority Priority)
 
 	check(ThreadMap.Contains(Id));
 	FThreadInfoInternal* ThreadInfo = ThreadMap[Id];
+	ensure(ThreadInfo->PrioritySortOrder != -2);
 	ThreadInfo->PrioritySortOrder = GetPrioritySortOrder(Priority);
 	SortThreads();
 	++ModCount;
@@ -169,7 +178,7 @@ uint32 FThreadProvider::GetGroupSortOrder(const TCHAR* GroupName)
 	}
 }
 
-uint32 FThreadProvider::GetPrioritySortOrder(EThreadPriority ThreadPriority)
+int32 FThreadProvider::GetPrioritySortOrder(EThreadPriority ThreadPriority)
 {
 	switch (ThreadPriority)
 	{
@@ -188,25 +197,26 @@ uint32 FThreadProvider::GetPrioritySortOrder(EThreadPriority ThreadPriority)
 	case TPri_Lowest:
 		return 6;
 	default:
-		return 7;
+		return int32(ThreadPriority);
 	}
 }
 
 bool FThreadProvider::FThreadInfoInternal::operator<(const FThreadInfoInternal& Other) const
 {
-	if (IsGameThread == Other.IsGameThread)
+	if (PrioritySortOrder < 0 || Other.PrioritySortOrder < 0)
 	{
-		if (GroupSortOrder == Other.GroupSortOrder)
-		{
-			if (PrioritySortOrder == Other.PrioritySortOrder)
-			{
-				return FallbackSortOrder < Other.FallbackSortOrder;
-			}
-			return PrioritySortOrder < Other.PrioritySortOrder;
-		}
-		return GroupSortOrder < Other.GroupSortOrder;
+		return PrioritySortOrder < Other.PrioritySortOrder;
 	}
-	return IsGameThread;
+
+	if (GroupSortOrder == Other.GroupSortOrder)
+	{
+		if (PrioritySortOrder == Other.PrioritySortOrder)
+		{
+			return FallbackSortOrder < Other.FallbackSortOrder;
+		}
+		return PrioritySortOrder < Other.PrioritySortOrder;
+	}
+	return GroupSortOrder < Other.GroupSortOrder;
 }
 
 const IThreadProvider& ReadThreadProvider(const IAnalysisSession& Session)

@@ -11,6 +11,8 @@
 #include "HairStrandsInterface.h"
 #include "SceneTypes.h"
 
+class FViewInfo;
+
 FIntRect ComputeProjectedScreenRect(const FBox& B, const FViewInfo& View);
 
 void ComputeWorldToLightClip(
@@ -28,6 +30,7 @@ struct FHairComponent
 	bool TRT = true;
 	bool GlobalScattering = true;
 	bool LocalScattering = true;
+	bool TTModel = false;
 };
 FHairComponent GetHairComponents();
 uint32 ToBitfield(const FHairComponent& Component);
@@ -52,7 +55,7 @@ EHairVisibilityVendor GetVendor();
 uint32 GetVendorOptimalGroupSize1D();
 FIntPoint GetVendorOptimalGroupSize2D();
 
-RENDERER_API bool IsHairStrandsSupported(const EShaderPlatform Platform);
+bool IsHairStrandsComposeAfterTranslucency();
 
 FVector4 PackHairRenderInfo(
 	float PrimaryRadiusAtDepth1,

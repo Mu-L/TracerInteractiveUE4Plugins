@@ -75,10 +75,6 @@ public:
 	virtual void TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	// End UActorComponent
 	
-	// Begin UObject interface
-	virtual bool IsDestructionThreadSafe() const override { return false; }
-	// End UObject
-
 	/**
 	 * Presses a key as if the mouse/pointer were the source of it.  Normally you would just use
 	 * Left/Right mouse button for the Key.  However - advanced uses could also be imagined where you
@@ -209,7 +205,7 @@ public:
 	 * Each user virtual controller or virtual finger tips being simulated should use a different pointer index.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Interaction", meta=( ClampMin = "0", UIMin = "0", UIMax = "9", ExposeOnSpawn = true ))
-	float PointerIndex;
+	int32 PointerIndex;
 
 public:
 
@@ -251,9 +247,21 @@ public:
 	bool bShowDebug;
 
 	/**
+	 * Determines the line thickness of the debug sphere.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debugging", AdvancedDisplay, meta=( ClampMin = "0.001" ))
+	float DebugSphereLineThickness;
+
+	/**
+	 * Determines the thickness of the debug lines.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debugging", AdvancedDisplay, meta=( ClampMin = "0.001", ClampMax = "50"))
+	float DebugLineThickness;
+
+	/**
 	 * Determines the color of the debug lines.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debugging")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debugging", AdvancedDisplay)
 	FLinearColor DebugColor;
 
 protected:

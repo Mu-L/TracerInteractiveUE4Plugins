@@ -30,6 +30,7 @@
 #include "EngineAnalytics.h"
 #include "AnalyticsEventAttribute.h"
 #include "Interfaces/IAnalyticsProvider.h"
+#include "GameFramework/InputSettings.h"
 
 #include "GameProjectGenerationModule.h"
 
@@ -37,7 +38,7 @@
 
 #include "IVREditorModule.h"
 
-UUnrealEdEngine* GUnrealEd;
+UUnrealEdEngine* GUnrealEd = nullptr;
 
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealEd, Log, All);
 
@@ -173,6 +174,12 @@ int32 EditorInit( IEngineLoop& EngineLoop )
 	}
 
 	FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("HierarchicalLODOutliner"));
+
+	//we have to remove invalid keys * after * all the plugins and modules have been loaded.  Doing this in the editor should be caught during a config save
+	if (UInputSettings* InputSettings = UInputSettings::GetInputSettings())
+	{
+		InputSettings->RemoveInvalidKeys();
+	}
 
 	// This will be ultimately returned from main(), so no error should be 0.
 	return 0;

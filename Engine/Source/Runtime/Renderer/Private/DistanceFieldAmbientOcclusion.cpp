@@ -14,7 +14,6 @@
 #include "OneColorShader.h"
 #include "GlobalDistanceField.h"
 #include "FXSystem.h"
-#include "DistanceFieldGlobalIllumination.h"
 #include "RendererModule.h"
 #include "PipelineStateCache.h"
 #include "VisualizeTexture.h"
@@ -59,12 +58,6 @@ FAutoConsoleVariableRef CVarDistanceFieldAOSpecularOcclusionMode(
 	TEXT("1: (default) Intersect the reflection cone with the unoccluded cone produced by DFAO.  This gives more accurate occlusion than 0, but can bring out DFAO sampling artifacts.\n"),
 	ECVF_Scalability | ECVF_RenderThreadSafe
 	);
-
-bool IsDistanceFieldGIAllowed(const FViewInfo& View)
-{
-	return DoesPlatformSupportDistanceFieldGI(View.GetShaderPlatform())
-		&& (View.Family->EngineShowFlags.VisualizeDistanceFieldGI || (View.Family->EngineShowFlags.DistanceFieldGI && GDistanceFieldGI && View.Family->EngineShowFlags.GlobalIllumination));
-}
 
 float GAOStepExponentScale = .5f;
 FAutoConsoleVariableRef CVarAOStepExponentScale(
@@ -132,8 +125,6 @@ bool UseAOObjectDistanceField()
 {
 	return GAOObjectDistanceField && GDistanceFieldAOQuality >= 2;
 }
-
-TGlobalResource<FTemporaryIrradianceCacheResources> GTemporaryIrradianceCacheResources;
 
 int32 GDistanceFieldAOTileSizeX = 16;
 int32 GDistanceFieldAOTileSizeY = 16;
@@ -279,8 +270,14 @@ FAutoConsoleCommandWithWorld ListMeshDistanceFieldsMemoryConsoleCommand(
 
 class FComputeDistanceFieldNormalPS : public FGlobalShader
 {
-	DECLARE_SHADER_TYPE(FComputeDistanceFieldNormalPS, Global);
 public:
+	DECLARE_GLOBAL_SHADER(FComputeDistanceFieldNormalPS);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, View)
+		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FSceneTextureUniformParameters, SceneTextures)
+		RENDER_TARGET_BINDING_SLOTS()
+	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
@@ -294,29 +291,21 @@ public:
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEY"), GDistanceFieldAOTileSizeY);
 	}
 
-	/** Default constructor. */
-	FComputeDistanceFieldNormalPS() {}
-
-	/** Initialization constructor. */
+	FComputeDistanceFieldNormalPS() = default;
 	FComputeDistanceFieldNormalPS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
 		: FGlobalShader(Initializer)
 	{
-		SceneTextureParameters.Bind(Initializer);
+		BindForLegacyShaderParameters<FParameters>(this, Initializer.PermutationId, Initializer.ParameterMap, false);
 		AOParameters.Bind(Initializer.ParameterMap);
 	}
 
 	void SetParameters(FRHICommandList& RHICmdList, const FSceneView& View, const FDistanceFieldAOParameters& Parameters)
 	{
 		FRHIPixelShader* ShaderRHI = RHICmdList.GetBoundPixelShader();
-
-		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, ShaderRHI, View.ViewUniformBuffer);
 		AOParameters.Set(RHICmdList, ShaderRHI, Parameters);
-		SceneTextureParameters.Set(RHICmdList, ShaderRHI, View.FeatureLevel, ESceneTextureSetupMode::All);
 	}
 
 private:
-
-	LAYOUT_FIELD(FSceneTextureShaderParameters, SceneTextureParameters);
 	LAYOUT_FIELD(FAOParameters, AOParameters);
 };
 
@@ -325,8 +314,14 @@ IMPLEMENT_SHADER_TYPE(,FComputeDistanceFieldNormalPS,TEXT("/Engine/Private/Dista
 
 class FComputeDistanceFieldNormalCS : public FGlobalShader
 {
-	DECLARE_SHADER_TYPE(FComputeDistanceFieldNormalCS, Global);
 public:
+	DECLARE_GLOBAL_SHADER(FComputeDistanceFieldNormalCS);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, View)
+		SHADER_PARAMETER_RDG_UNIFORM_BUFFER(FSceneTextureUniformParameters, SceneTextures)
+		SHADER_PARAMETER_RDG_TEXTURE_UAV(RWTexture2D<float4>, RWDistanceFieldNormal)
+	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
@@ -340,105 +335,101 @@ public:
 		OutEnvironment.SetDefine(TEXT("THREADGROUP_SIZEY"), GDistanceFieldAOTileSizeY);
 	}
 
-	/** Default constructor. */
-	FComputeDistanceFieldNormalCS() {}
-
-	/** Initialization constructor. */
+	FComputeDistanceFieldNormalCS() = default;
 	FComputeDistanceFieldNormalCS(const ShaderMetaType::CompiledShaderInitializerType& Initializer)
 		: FGlobalShader(Initializer)
 	{
-		DistanceFieldNormal.Bind(Initializer.ParameterMap, TEXT("DistanceFieldNormal"));
-		SceneTextureParameters.Bind(Initializer);
+		BindForLegacyShaderParameters<FParameters>(this, Initializer.PermutationId, Initializer.ParameterMap, false);
 		AOParameters.Bind(Initializer.ParameterMap);
 	}
 
-	void SetParameters(FRHICommandList& RHICmdList, const FSceneView& View, FSceneRenderTargetItem& DistanceFieldNormalValue, const FDistanceFieldAOParameters& Parameters)
+	void SetParameters(FRHICommandList& RHICmdList, const FDistanceFieldAOParameters& Parameters)
 	{
 		FRHIComputeShader* ShaderRHI = RHICmdList.GetBoundComputeShader();
-
-		FGlobalShader::SetParameters<FViewUniformShaderParameters>(RHICmdList, ShaderRHI, View.ViewUniformBuffer);
-
-		RHICmdList.TransitionResource(EResourceTransitionAccess::ERWBarrier, EResourceTransitionPipeline::EComputeToCompute, DistanceFieldNormalValue.UAV);
-		DistanceFieldNormal.SetTexture(RHICmdList, ShaderRHI, DistanceFieldNormalValue.ShaderResourceTexture, DistanceFieldNormalValue.UAV);
 		AOParameters.Set(RHICmdList, ShaderRHI, Parameters);
-		SceneTextureParameters.Set(RHICmdList, ShaderRHI, View.FeatureLevel, ESceneTextureSetupMode::All);
-	}
-
-	void UnsetParameters(FRHICommandList& RHICmdList, FSceneRenderTargetItem& DistanceFieldNormalValue)
-	{
-		DistanceFieldNormal.UnsetUAV(RHICmdList, RHICmdList.GetBoundComputeShader());
-		RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, EResourceTransitionPipeline::EComputeToCompute, DistanceFieldNormalValue.UAV);
 	}
 
 private:
-
-	LAYOUT_FIELD(FRWShaderParameter, DistanceFieldNormal);
-	LAYOUT_FIELD(FSceneTextureShaderParameters, SceneTextureParameters);
 	LAYOUT_FIELD(FAOParameters, AOParameters);
 };
 
 IMPLEMENT_SHADER_TYPE(,FComputeDistanceFieldNormalCS,TEXT("/Engine/Private/DistanceFieldScreenGridLighting.usf"),TEXT("ComputeDistanceFieldNormalCS"),SF_Compute);
 
-void ComputeDistanceFieldNormal(FRHICommandListImmediate& RHICmdList, const TArray<FViewInfo>& Views, FSceneRenderTargetItem& DistanceFieldNormal, const FDistanceFieldAOParameters& Parameters)
+void ComputeDistanceFieldNormal(
+	FRDGBuilder& GraphBuilder,
+	const TArray<FViewInfo>& Views,
+	TRDGUniformBufferRef<FSceneTextureUniformParameters> SceneTexturesUniformBuffer,
+	FRDGTextureRef DistanceFieldNormal,
+	const FDistanceFieldAOParameters& Parameters)
 {
 	if (GAOComputeShaderNormalCalculation)
 	{
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		UnbindRenderTargets(RHICmdList);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
-
 		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
 		{
 			const FViewInfo& View = Views[ViewIndex];
+			RDG_GPU_MASK_SCOPE(GraphBuilder, View.GPUMask);
 
 			uint32 GroupSizeX = FMath::DivideAndRoundUp(View.ViewRect.Size().X / GAODownsampleFactor, GDistanceFieldAOTileSizeX);
 			uint32 GroupSizeY = FMath::DivideAndRoundUp(View.ViewRect.Size().Y / GAODownsampleFactor, GDistanceFieldAOTileSizeY);
 
+			auto* PassParameters = GraphBuilder.AllocParameters<FComputeDistanceFieldNormalCS::FParameters>();
+			PassParameters->View = View.ViewUniformBuffer;
+			PassParameters->SceneTextures = SceneTexturesUniformBuffer;
+			PassParameters->RWDistanceFieldNormal = GraphBuilder.CreateUAV(DistanceFieldNormal);
+
+			TShaderMapRef<FComputeDistanceFieldNormalCS> ComputeShader(View.ShaderMap);
+
+			GraphBuilder.AddPass(
+				RDG_EVENT_NAME("ComputeNormalCS"),
+				PassParameters,
+				ERDGPassFlags::Compute,
+				[ComputeShader, PassParameters, Parameters, GroupSizeX, GroupSizeY](FRHICommandList& RHICmdList)
 			{
-				SCOPED_GPU_MASK(RHICmdList, View.GPUMask);
-				SCOPED_DRAW_EVENT(RHICmdList, ComputeNormalCS);
-				TShaderMapRef<FComputeDistanceFieldNormalCS> ComputeShader(View.ShaderMap);
-
+				FRHIComputeShader* ShaderRHI = ComputeShader.GetComputeShader();
 				RHICmdList.SetComputeShader(ComputeShader.GetComputeShader());
-				ComputeShader->SetParameters(RHICmdList, View, DistanceFieldNormal, Parameters);
+				ComputeShader->SetParameters(RHICmdList, Parameters);
+				SetShaderParameters(RHICmdList, ComputeShader, ShaderRHI, *PassParameters);
 				DispatchComputeShader(RHICmdList, ComputeShader.GetShader(), GroupSizeX, GroupSizeY, 1);
-
-				ComputeShader->UnsetParameters(RHICmdList, DistanceFieldNormal);
-			}
+				UnsetShaderUAVs(RHICmdList, ComputeShader, ShaderRHI);
+			});
 		}
 	}
 	else
 	{
-		FRHIRenderPassInfo RPInfo(DistanceFieldNormal.TargetableTexture, ERenderTargetActions::Clear_Store);
-		TransitionRenderPassTargets(RHICmdList, RPInfo);
-		RHICmdList.BeginRenderPass(RPInfo, TEXT("ComputeDistanceFieldNormal"));
+		for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
 		{
-			FGraphicsPipelineStateInitializer GraphicsPSOInit;
-			RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
+			const FViewInfo& View = Views[ViewIndex];
+			RDG_GPU_MASK_SCOPE(GraphBuilder, View.GPUMask);
 
-			GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
-			GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
-			GraphicsPSOInit.BlendState = TStaticBlendState<>::GetRHI();
-			GraphicsPSOInit.PrimitiveType = PT_TriangleList;
+			auto* PassParameters = GraphBuilder.AllocParameters<FComputeDistanceFieldNormalPS::FParameters>();
+			PassParameters->View = View.ViewUniformBuffer;
+			PassParameters->SceneTextures = SceneTexturesUniformBuffer;
+			PassParameters->RenderTargets[0] = FRenderTargetBinding(DistanceFieldNormal, ViewIndex == 0 ? ERenderTargetLoadAction::EClear : ERenderTargetLoadAction::ELoad);
 
-			for (int32 ViewIndex = 0; ViewIndex < Views.Num(); ViewIndex++)
+			GraphBuilder.AddPass(
+				RDG_EVENT_NAME("ComputeNormal"),
+				PassParameters,
+				ERDGPassFlags::Raster,
+				[&View, PassParameters, Parameters](FRHICommandList& RHICmdList)
 			{
-				const FViewInfo& View = Views[ViewIndex];
-
-				SCOPED_GPU_MASK(RHICmdList, View.GPUMask);
-				SCOPED_DRAW_EVENT(RHICmdList, ComputeNormal);
-
 				RHICmdList.SetViewport(0, 0, 0.0f, View.ViewRect.Width() / GAODownsampleFactor, View.ViewRect.Height() / GAODownsampleFactor, 1.0f);
 
 				TShaderMapRef<FPostProcessVS> VertexShader(View.ShaderMap);
 				TShaderMapRef<FComputeDistanceFieldNormalPS> PixelShader(View.ShaderMap);
 
+				FGraphicsPipelineStateInitializer GraphicsPSOInit;
+				RHICmdList.ApplyCachedRenderTargets(GraphicsPSOInit);
+				GraphicsPSOInit.RasterizerState = TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
+				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
+				GraphicsPSOInit.BlendState = TStaticBlendState<>::GetRHI();
+				GraphicsPSOInit.PrimitiveType = PT_TriangleList;
 				GraphicsPSOInit.BoundShaderState.VertexDeclarationRHI = GFilterVertexDeclaration.VertexDeclarationRHI;
 				GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader.GetVertexShader();
 				GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader.GetPixelShader();
 
 				SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit);
 
+				SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), *PassParameters);
 				PixelShader->SetParameters(RHICmdList, View, Parameters);
 
 				DrawRectangle(
@@ -450,11 +441,8 @@ void ComputeDistanceFieldNormal(FRHICommandListImmediate& RHICmdList, const TArr
 					FIntPoint(View.ViewRect.Width() / GAODownsampleFactor, View.ViewRect.Height() / GAODownsampleFactor),
 					FSceneRenderTargets::Get(RHICmdList).GetBufferSizeXY(),
 					VertexShader);
-			}
+			});
 		}
-		RHICmdList.EndRenderPass();
-
-		RHICmdList.TransitionResource(EResourceTransitionAccess::EReadable, DistanceFieldNormal.TargetableTexture);
 	}
 }
 
@@ -632,7 +620,6 @@ void ListDistanceFieldLightingMemory(const FViewInfo& View, FSceneRenderer& Scen
 	UE_LOG(LogRenderer, Log, TEXT(""));
 	UE_LOG(LogRenderer, Log, TEXT("Distance Field AO"));
 	
-	UE_LOG(LogRenderer, Log, TEXT("   Temporary cache %.3fMb"), GTemporaryIrradianceCacheResources.GetSizeBytes() / 1024.0f / 1024.0f);
 	UE_LOG(LogRenderer, Log, TEXT("   Culled objects %.3fMb"), GAOCulledObjectBuffers.Buffers.GetSizeBytes() / 1024.0f / 1024.0f);
 
 	FTileIntersectionResources* TileIntersectionResources = ((FSceneViewState*)View.State)->AOTileIntersectionResources;
@@ -673,26 +660,6 @@ void ListDistanceFieldLightingMemory(const FViewInfo& View, FSceneRenderer& Scen
 	extern void ListGlobalDistanceFieldMemory();
 	ListGlobalDistanceFieldMemory();
 
-	UE_LOG(LogRenderer, Log, TEXT(""));
-	UE_LOG(LogRenderer, Log, TEXT("Distance Field GI"));
-
-	if (Scene->DistanceFieldSceneData.SurfelBuffers)
-	{
-		UE_LOG(LogRenderer, Log, TEXT("   Scene surfel data %.3fMb"), Scene->DistanceFieldSceneData.SurfelBuffers->GetSizeBytes() / 1024.0f / 1024.0f);
-	}
-	
-	if (Scene->DistanceFieldSceneData.InstancedSurfelBuffers)
-	{
-		UE_LOG(LogRenderer, Log, TEXT("   Instanced scene surfel data %.3fMb"), Scene->DistanceFieldSceneData.InstancedSurfelBuffers->GetSizeBytes() / 1024.0f / 1024.0f);
-	}
-	
-	if (ScreenGridResources)
-	{
-		UE_LOG(LogRenderer, Log, TEXT("   Screen grid temporaries %.3fMb"), ScreenGridResources->GetSizeBytesForGI() / 1024.0f / 1024.0f);
-	}
-
-	extern void ListDistanceFieldGIMemory(const FViewInfo& View);
-	ListDistanceFieldGIMemory(View);
 #endif // !NO_LOGGING
 }
 
@@ -712,7 +679,7 @@ bool SupportsDistanceFieldAO(ERHIFeatureLevel::Type FeatureLevel, EShaderPlatfor
 bool ShouldRenderDeferredDynamicSkyLight(const FScene* Scene, const FSceneViewFamily& ViewFamily)
 {
 	return Scene->SkyLight
-		&& Scene->SkyLight->ProcessedTexture
+		&& (Scene->SkyLight->ProcessedTexture || Scene->SkyLight->bRealTimeCaptureEnabled)
 		&& !ShouldRenderRayTracingSkyLight(Scene->SkyLight) // Disable diffuse sky contribution if evaluated by RT Sky.
 		&& !Scene->SkyLight->bWantsStaticShadowing
 		&& !Scene->SkyLight->bHasStaticLighting
@@ -729,7 +696,6 @@ bool FDeferredShadingSceneRenderer::ShouldPrepareForDistanceFieldAO() const
 			|| ViewFamily.EngineShowFlags.VisualizeMeshDistanceFields
 			|| ViewFamily.EngineShowFlags.VisualizeGlobalDistanceField
 			|| ViewFamily.EngineShowFlags.VisualizeDistanceFieldAO
-			|| ViewFamily.EngineShowFlags.VisualizeDistanceFieldGI
 			|| (GDistanceFieldAOApplyToStaticIndirect && ViewFamily.EngineShowFlags.DistanceFieldAO));
 }
 
@@ -764,160 +730,140 @@ bool FDeferredShadingSceneRenderer::ShouldPrepareGlobalDistanceField() const
 	bool bShouldPrepareForAO = SupportsDistanceFieldAO(Scene->GetFeatureLevel(), Scene->GetShaderPlatform())
 		&& (ShouldPrepareForDistanceFieldAO()
 			|| ((Views.Num() > 0) && Views[0].bUsesGlobalDistanceField)
-			|| ((Scene->FXSystem != nullptr) && Scene->FXSystem->UsesGlobalDistanceField()));
+			|| ((FXSystem != nullptr) && FXSystem->UsesGlobalDistanceField()));
 
 	return bShouldPrepareForAO && UseGlobalDistanceField();
 }
 
 void FDeferredShadingSceneRenderer::RenderDFAOAsIndirectShadowing(
-	FRHICommandListImmediate& RHICmdList,
-	const TRefCountPtr<IPooledRenderTarget>& VelocityTexture, 
-	TRefCountPtr<IPooledRenderTarget>& DynamicBentNormalAO)
+	FRDGBuilder& GraphBuilder,
+	TRDGUniformBufferRef<FSceneTextureUniformParameters> SceneTexturesUniformBuffer,
+	FRDGTextureRef SceneColorTexture,
+	FRDGTextureRef VelocityTexture,
+	FRDGTextureRef& DynamicBentNormalAO)
 {
-	if (GDistanceFieldAOApplyToStaticIndirect && ShouldRenderDistanceFieldAO())
+	if (GDistanceFieldAOApplyToStaticIndirect && ShouldRenderDistanceFieldAO() && ShouldRenderDistanceFieldLighting())
 	{
 		// Use the skylight's max distance if there is one, to be consistent with DFAO shadowing on the skylight
 		const float OcclusionMaxDistance = Scene->SkyLight && !Scene->SkyLight->bWantsStaticShadowing ? Scene->SkyLight->OcclusionMaxDistance : Scene->DefaultMaxDistanceFieldOcclusionDistance;
-		TRefCountPtr<IPooledRenderTarget> DummyOutput;
-		RenderDistanceFieldLighting(RHICmdList, FDistanceFieldAOParameters(OcclusionMaxDistance), VelocityTexture, DynamicBentNormalAO, true, false);
+		RenderDistanceFieldLighting(GraphBuilder, SceneTexturesUniformBuffer, FDistanceFieldAOParameters(OcclusionMaxDistance), SceneColorTexture, VelocityTexture, DynamicBentNormalAO, true, false);
 	}
 }
 
-bool FDeferredShadingSceneRenderer::RenderDistanceFieldLighting(
-	FRHICommandListImmediate& RHICmdList, 
-	const FDistanceFieldAOParameters& Parameters, 
-	const TRefCountPtr<IPooledRenderTarget>& VelocityTexture,
-	TRefCountPtr<IPooledRenderTarget>& OutDynamicBentNormalAO,
-	bool bModulateToSceneColor,
-	bool bVisualizeAmbientOcclusion)
+bool FDeferredShadingSceneRenderer::ShouldRenderDistanceFieldLighting() const
 {
-	check(RHICmdList.IsOutsideRenderPass());
-
 	//@todo - support multiple views
 	const FViewInfo& View = Views[0];
-	FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(RHICmdList);
 
-	SCOPED_GPU_MASK(RHICmdList, View.GPUMask);
-	SCOPED_DRAW_EVENT(RHICmdList, RenderDistanceFieldLighting);
-
-	if (SupportsDistanceFieldAO(View.GetFeatureLevel(), View.GetShaderPlatform())
+	return SupportsDistanceFieldAO(View.GetFeatureLevel(), View.GetShaderPlatform())
 		&& Views.Num() == 1
 		// ViewState is used to cache tile intersection resources which have to be sized based on the view
 		&& View.State
-		&& View.IsPerspectiveProjection())
+		&& View.IsPerspectiveProjection()
+		&& GDistanceFieldVolumeTextureAtlas.VolumeTextureRHI
+		&& Scene->DistanceFieldSceneData.NumObjectsInBuffer;
+}
+
+void FDeferredShadingSceneRenderer::RenderDistanceFieldLighting(
+	FRDGBuilder& GraphBuilder,
+	TRDGUniformBufferRef<FSceneTextureUniformParameters> SceneTexturesUniformBuffer,
+	const FDistanceFieldAOParameters& Parameters,
+	FRDGTextureRef SceneColorTexture,
+	FRDGTextureRef VelocityTexture,
+	FRDGTextureRef& OutDynamicBentNormalAO,
+	bool bModulateToSceneColor,
+	bool bVisualizeAmbientOcclusion)
+{
+	check(ShouldRenderDistanceFieldLighting());
+	check(!Scene->DistanceFieldSceneData.HasPendingOperations());
+
+	//@todo - support multiple views
+	const FViewInfo& View = Views[0];
+	FSceneRenderTargets& SceneContext = FSceneRenderTargets::Get(GraphBuilder.RHICmdList);
+
+	RDG_GPU_MASK_SCOPE(GraphBuilder, View.GPUMask);
+	RDG_EVENT_SCOPE(GraphBuilder, "DistanceFieldLighting");
+	QUICK_SCOPE_CYCLE_COUNTER(STAT_RenderDistanceFieldLighting);
+
+	GenerateBestSpacedVectors();
+
+	if (bListMemoryNextFrame)
 	{
-		QUICK_SCOPE_CYCLE_COUNTER(STAT_RenderDistanceFieldLighting);
-
-		if (GDistanceFieldVolumeTextureAtlas.VolumeTextureRHI && Scene->DistanceFieldSceneData.NumObjectsInBuffer)
-		{
-			check(!Scene->DistanceFieldSceneData.HasPendingOperations());
-
-			SCOPED_DRAW_EVENT(RHICmdList, DistanceFieldLighting);
-
-			GenerateBestSpacedVectors();
-
-			if (bListMemoryNextFrame)
-			{
-				bListMemoryNextFrame = false;
-				ListDistanceFieldLightingMemory(View, *this);
-			}
-
-			if (bListMeshDistanceFieldsMemoryNextFrame)
-			{
-				bListMeshDistanceFieldsMemoryNextFrame = false;
-				GDistanceFieldVolumeTextureAtlas.ListMeshDistanceFields();
-			}
-
-			if (UseAOObjectDistanceField())
-			{
-				CullObjectsToView(RHICmdList, Scene, View, Parameters, GAOCulledObjectBuffers);
-			}
-
-			TRefCountPtr<IPooledRenderTarget> DistanceFieldNormal;
-
-			{
-				const FIntPoint BufferSize = GetBufferSizeForAO();
-				FPooledRenderTargetDesc Desc(FPooledRenderTargetDesc::Create2DDesc(BufferSize, PF_FloatRGBA, FClearValueBinding::Transparent, TexCreate_None, TexCreate_RenderTargetable | TexCreate_UAV | TexCreate_ShaderResource, false));
-				Desc.Flags |= GFastVRamConfig.DistanceFieldNormal;
-				GRenderTargetPool.FindFreeElement(RHICmdList, Desc, DistanceFieldNormal, TEXT("DistanceFieldNormal"));
-			}
-
-			ComputeDistanceFieldNormal(RHICmdList, Views, DistanceFieldNormal->GetRenderTargetItem(), Parameters);
-
-			// Intersect objects with screen tiles, build lists
-			if (UseAOObjectDistanceField())
-			{
-				BuildTileObjectLists(RHICmdList, Scene, Views, DistanceFieldNormal->GetRenderTargetItem(), Parameters);
-			}
-
-			GVisualizeTexture.SetCheckPoint(RHICmdList, DistanceFieldNormal);
-
-			TRefCountPtr<IPooledRenderTarget> BentNormalOutput;
-
-			RenderDistanceFieldAOScreenGrid(
-				RHICmdList, 
-				View,
-				Parameters, 
-				VelocityTexture,
-				DistanceFieldNormal, 
-				BentNormalOutput);
-
-			if (IsTransientResourceBufferAliasingEnabled() && UseAOObjectDistanceField())
-			{
-				GAOCulledObjectBuffers.Buffers.DiscardTransientResource();
-
-				FTileIntersectionResources* TileIntersectionResources = ((FSceneViewState*)View.State)->AOTileIntersectionResources;
-				TileIntersectionResources->DiscardTransientResource();
-			}
-
-			RenderCapsuleShadowsForMovableSkylight(RHICmdList, BentNormalOutput);
-
-			GVisualizeTexture.SetCheckPoint(RHICmdList, BentNormalOutput);
-
-			if (bVisualizeAmbientOcclusion)
-			{
-				SceneContext.BeginRenderingSceneColor(RHICmdList, ESimpleRenderTargetMode::EExistingColorAndDepth, FExclusiveDepthStencil::DepthRead_StencilRead);
-			}
-			else
-			{
-				FRHIRenderPassInfo RPInfo(	SceneContext.GetSceneColorSurface(), 
-											ERenderTargetActions::Load_Store, 
-											SceneContext.GetSceneDepthSurface(), 
-											EDepthStencilTargetActions::LoadDepthStencil_StoreStencilNotDepth, 
-											FExclusiveDepthStencil::DepthRead_StencilWrite);
-				RHICmdList.BeginRenderPass(RPInfo, TEXT("DistanceFieldAO"));
-			}
-
-			// Upsample to full resolution, write to output in case of debug AO visualization or scene color modulation (standard upsampling is done later together with sky lighting and reflection environment)
-			if (bModulateToSceneColor || bVisualizeAmbientOcclusion)
-			{
-				UpsampleBentNormalAO(RHICmdList, Views, BentNormalOutput, bModulateToSceneColor && !bVisualizeAmbientOcclusion);
-			}
-
-			OutDynamicBentNormalAO = BentNormalOutput;
-
-			if (bVisualizeAmbientOcclusion)
-			{
-				SceneContext.FinishRenderingSceneColor(RHICmdList);
-			}
-			else
-			{
-				RHICmdList.EndRenderPass();
-				RHICmdList.CopyToResolveTarget(OutDynamicBentNormalAO->GetRenderTargetItem().TargetableTexture, OutDynamicBentNormalAO->GetRenderTargetItem().ShaderResourceTexture, FResolveParams());
-			}
-
-			return true;
-		}
+		bListMemoryNextFrame = false;
+		ListDistanceFieldLightingMemory(View, *this);
 	}
 
-	return false;
+	if (bListMeshDistanceFieldsMemoryNextFrame)
+	{
+		bListMeshDistanceFieldsMemoryNextFrame = false;
+		GDistanceFieldVolumeTextureAtlas.ListMeshDistanceFields();
+	}
+
+	FRDGTextureRef DistanceFieldNormal = nullptr;
+
+	{
+		const FIntPoint BufferSize = GetBufferSizeForAO();
+		const FRDGTextureDesc Desc = FRDGTextureDesc::Create2D(BufferSize, PF_FloatRGBA, FClearValueBinding::Transparent, GFastVRamConfig.DistanceFieldNormal | TexCreate_RenderTargetable | TexCreate_UAV | TexCreate_ShaderResource);
+		DistanceFieldNormal = GraphBuilder.CreateTexture(Desc, TEXT("DistanceFieldNormal"));
+	}
+
+	if (UseAOObjectDistanceField())
+	{
+		CullObjectsToView(GraphBuilder, Scene, View, Parameters, GAOCulledObjectBuffers);
+	}
+
+	ComputeDistanceFieldNormal(GraphBuilder, Views, SceneTexturesUniformBuffer, DistanceFieldNormal, Parameters);
+
+	// Intersect objects with screen tiles, build lists
+	if (UseAOObjectDistanceField())
+	{
+		BuildTileObjectLists(GraphBuilder, Scene, Views, DistanceFieldNormal, Parameters);
+	}
+
+	FRDGTextureRef BentNormalOutput = nullptr;
+
+	RenderDistanceFieldAOScreenGrid(
+		GraphBuilder,
+		View,
+		Parameters,
+		SceneTexturesUniformBuffer,
+		VelocityTexture,
+		DistanceFieldNormal,
+		BentNormalOutput);
+
+	if (IsTransientResourceBufferAliasingEnabled() && UseAOObjectDistanceField())
+	{
+		AddPass(GraphBuilder, [&View](FRHICommandListImmediate&)
+		{
+			GAOCulledObjectBuffers.Buffers.DiscardTransientResource();
+
+			FTileIntersectionResources* TileIntersectionResources = ((FSceneViewState*)View.State)->AOTileIntersectionResources;
+			TileIntersectionResources->DiscardTransientResource();
+		});
+	}
+
+	RenderCapsuleShadowsForMovableSkylight(GraphBuilder, SceneTexturesUniformBuffer, BentNormalOutput);
+
+	// Upsample to full resolution, write to output in case of debug AO visualization or scene color modulation (standard upsampling is done later together with sky lighting and reflection environment)
+	if (bModulateToSceneColor || bVisualizeAmbientOcclusion)
+	{
+		UpsampleBentNormalAO(GraphBuilder, Views, SceneTexturesUniformBuffer, SceneColorTexture, BentNormalOutput, bModulateToSceneColor && !bVisualizeAmbientOcclusion);
+	}
+
+	OutDynamicBentNormalAO = BentNormalOutput;
 }
 
 bool FDeferredShadingSceneRenderer::ShouldRenderDistanceFieldAO() const
 {
-	return ViewFamily.EngineShowFlags.DistanceFieldAO 
+	bool bShouldRenderRTAO = false;
+	for (int ViewIndex = 0; ViewIndex < Views.Num(); ++ViewIndex)
+	{
+		bShouldRenderRTAO = bShouldRenderRTAO || ShouldRenderRayTracingAmbientOcclusion(Views[ViewIndex]);
+	}
+
+	return ViewFamily.EngineShowFlags.DistanceFieldAO
+		&& !bShouldRenderRTAO
 		&& !ViewFamily.EngineShowFlags.VisualizeDistanceFieldAO
-		&& !ViewFamily.EngineShowFlags.VisualizeDistanceFieldGI
 		&& !ViewFamily.EngineShowFlags.VisualizeMeshDistanceFields
 		&& !ViewFamily.EngineShowFlags.VisualizeGlobalDistanceField;
 }

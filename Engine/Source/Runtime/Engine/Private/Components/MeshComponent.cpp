@@ -7,6 +7,9 @@
 #include "ContentStreaming.h"
 #include "Streaming/TextureStreamingHelpers.h"
 #include "Engine/World.h"
+#if WITH_EDITOR
+#include "Rendering/StaticLightingSystemInterface.h"
+#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogMaterialParameter, Warning, All);
 
@@ -52,7 +55,7 @@ void UMeshComponent::SetMaterial(int32 ElementIndex, UMaterialInterface* Materia
 			if (Material != nullptr)
 			{
 				UMaterialInstanceDynamic* DynamicMaterial = Cast<UMaterialInstanceDynamic>(Material);
-				if ( (DynamicMaterial != nullptr && DynamicMaterial->Parent != OverrideMaterials[ElementIndex]) || OverrideMaterials[ElementIndex] == nullptr)
+				if (!((DynamicMaterial != nullptr && DynamicMaterial->Parent == OverrideMaterials[ElementIndex]) || OverrideMaterials[ElementIndex] == nullptr))
 				{
 					// Mark cached material parameter names dirty
 					MarkCachedMaterialParameterNameIndicesDirty();
@@ -72,6 +75,14 @@ void UMeshComponent::SetMaterial(int32 ElementIndex, UMaterialInterface* Materia
 			{
 				BodyInst->UpdatePhysicalMaterials();
 			}
+
+#if WITH_EDITOR
+			FStaticLightingSystemInterface::OnPrimitiveComponentUnregistered.Broadcast(this);
+			if (HasValidSettingsForStaticLighting(false))
+			{
+				FStaticLightingSystemInterface::OnPrimitiveComponentRegistered.Broadcast(this);
+			}
+#endif
 		}
 	}
 }
@@ -183,6 +194,12 @@ void UMeshComponent::PrestreamTextures( float Seconds, bool bPrioritizeCharacter
 			Texture2D->SetForceMipLevelsToBeResident(Seconds, CinematicTextureGroups);
 		}
 	}
+}
+
+void UMeshComponent::RegisterLODStreamingCallback(FLODStreamingCallback&& Callback, int32 LODIdx, float TimeoutSecs, bool bOnStreamIn)
+{
+	check(IsInGameThread());
+	Callback(this, nullptr, ELODStreamingCallbackResult::NotImplemented);
 }
 
 void UMeshComponent::SetTextureForceResidentFlag( bool bForceMiplevelsToBeResident )

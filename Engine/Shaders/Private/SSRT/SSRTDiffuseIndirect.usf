@@ -89,7 +89,7 @@ Texture2D ColorTexture;
 #if SUPPORTS_INDEPENDENT_SAMPLERS
 
 #define FurthestHZBTextureSampler GlobalPointClampedSampler
-#define ColorTextureSampler GlobalBilinearClampedSampler
+#define ColorTextureSampler GlobalPointClampedSampler
 
 #else
 
@@ -100,6 +100,7 @@ SamplerState ColorTextureSampler;
 
 float4 HZBUvFactorAndInvFactor;
 float4 ColorBufferScaleBias;
+float2 ReducedColorUVMax;
 
 float PixelPositionToFullResPixel;
 float2 FullResPixelOffset;
@@ -344,9 +345,9 @@ void MainCS(
 	
 				FGBufferData GBuffer = GetGBufferDataFromSceneTextures(BufferUV);
 				float3 N = mul(float4(GBuffer.WorldNormal, 0), View.TranslatedWorldToView).xyz;
-				float DeviceZ = SceneDepthBuffer.SampleLevel(SceneDepthBufferSampler, BufferUV, 0).r;
+				float DeviceZ = SampleDeviceZFromSceneTextures(BufferUV);
 
-				bool bTraceRay = GBuffer.ShadingModelID != SHADINGMODELID_UNLIT && GBuffer.ShadingModelID != SHADINGMODELID_SUBSURFACE_PROFILE;
+				bool bTraceRay = GBuffer.ShadingModelID != SHADINGMODELID_UNLIT;// && GBuffer.ShadingModelID != SHADINGMODELID_SUBSURFACE_PROFILE;
 				
 				SharedMemory[TILE_PIXEL_COUNT * 0 | GroupPixelId] = CompressN(N);
 				SharedMemory[TILE_PIXEL_COUNT * 1 | GroupPixelId] = asuint(bTraceRay ? DeviceZ : -1.0);
@@ -413,10 +414,10 @@ void MainCS(
 			{
 				uint DestPos = SelectedBinStartingPos + OffsetInBin;
 
-				#if 1 // Uncomment me to measure performance improvement.
-					if (View.GeneralPurposeTweak > 0.5)
-						DestPos = GroupPixelId + RaySequenceId * TILE_PIXEL_COUNT;
-				#endif
+				//#if 1 // Uncomment me to measure performance improvement.
+				//	if (View.GeneralPurposeTweak > 0.5)
+				//		DestPos = GroupPixelId + RaySequenceId * TILE_PIXEL_COUNT;
+				//#endif
 		
 				#if LANE_PER_GROUPS > 256
 					#error "LANE_PER_GROUPS needs to be encodable in 8bits."
@@ -539,6 +540,7 @@ void MainCS(
 			if (bHit)
 			{
 				float2 ReducedColorUV =  HitUVz.xy * ColorBufferScaleBias.xy + ColorBufferScaleBias.zw;
+				ReducedColorUV = min(ReducedColorUV, ReducedColorUVMax);
 
 				float4 SampleColor = ColorTexture.SampleLevel(ColorTextureSampler, ReducedColorUV, Level);
 				

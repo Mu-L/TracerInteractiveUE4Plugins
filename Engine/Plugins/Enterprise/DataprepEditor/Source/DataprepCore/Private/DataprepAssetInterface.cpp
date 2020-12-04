@@ -6,13 +6,13 @@
 #include "DataprepAssetProducers.h"
 #include "DataprepContentConsumer.h"
 #include "DataprepCoreLogCategory.h"
-#include "DataprepCorePrivateUtils.h"
+#include "Shared/DataprepCorePrivateUtils.h"
 #include "DataprepCoreUtils.h"
 
 #include "AssetRegistryModule.h"
-#ifdef WITH_EDITOR
+
 #include "Editor.h"
-#endif //WITH_EDITOR
+
 #include "Kismet2/KismetEditorUtilities.h"
 #include "UObject/EnterpriseObjectVersion.h"
 
@@ -161,7 +161,7 @@ void UDataprepAssetInterface::ExecuteRecipe_Internal(const TSharedPtr<FDataprepA
 
 	for (UDataprepActionAsset* ActionAsset : ActionAssets)
 	{
-		if (ActionAsset != nullptr)
+		if (ActionAsset != nullptr && ActionAsset->bIsEnabled)
 		{
 			Task.ReportNextStep(FText::Format(LOCTEXT("ExecutingAction", "Executing \"{0}\" ..."), FText::FromString(ActionAsset->GetLabel())));
 

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/ContainersFwd.h"
 #include "Curves/KeyHandle.h"
 #include "Channels/MovieSceneChannelHandle.h"
 
@@ -10,8 +11,6 @@ struct FFrameNumber;
 
 class IKeyArea;
 class UMovieSceneSection;
-
-template<typename> class TArrayView;
 
 /**
  * Represents a selected key in the sequencer
@@ -32,7 +31,7 @@ public:
 	/** Create and initialize a new instance. */
 	FSequencerSelectedKey(UMovieSceneSection& InSection, TSharedPtr<IKeyArea> InKeyArea, FKeyHandle InKeyHandle)
 		: Section(&InSection)
-		, KeyArea(InKeyArea)
+		, KeyArea(MoveTemp(InKeyArea))
 		, KeyHandle(InKeyHandle)
 	{}
 

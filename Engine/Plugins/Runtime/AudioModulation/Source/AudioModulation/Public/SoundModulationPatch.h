@@ -2,323 +2,80 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "IAudioModulation.h"
+#include "SoundModulationParameter.h"
+#include "SoundModulationTransform.h"
 #include "UObject/ObjectMacros.h"
 #include "UObject/Object.h"
-#include "SoundModulationTransform.h"
-#include "SoundControlBus.h"
-#include "SoundControlBusMix.h"
 
 #include "SoundModulationPatch.generated.h"
 
-
 // Forward Declarations
-namespace AudioModulation
-{
-	struct FModulationInputProxy;
-} // namespace AudioModulation
+class USoundControlBus;
 
 
 USTRUCT(BlueprintType)
-struct FSoundModulationOutputBase
+struct AUDIOMODULATION_API FSoundControlModulationInput
 {
 	GENERATED_USTRUCT_BODY()
 
-	virtual ~FSoundModulationOutputBase() = default;
-
-	/** Final transform before passing to output */
-	UPROPERTY(EditAnywhere, Category = Modulation, BlueprintReadWrite, meta = (ShowOnlyInnerProperties))
-	FSoundModulationOutputTransform Transform;
-
-	virtual ESoundModulatorOperator GetOperator() const PURE_VIRTUAL(FSoundModulationOutputBase::GetOperator, return ESoundModulatorOperator::Multiply;);
-};
-
-USTRUCT(BlueprintType)
-struct FSoundModulationOutputFixedOperator : public FSoundModulationOutputBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	FSoundModulationOutputFixedOperator();
-
-protected:
-	/** Operator used when mixing input values */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Modulation)
-	ESoundModulatorOperator Operator;
-
-public:
-	ESoundModulatorOperator GetOperator() const override { return Operator; }
-	void SetOperator(ESoundModulatorOperator InOperator) { Operator = InOperator; }
-};
-
-USTRUCT(BlueprintType)
-struct FSoundModulationOutput : public FSoundModulationOutputBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	FSoundModulationOutput();
-
-protected:
-	/** Operator used when mixing input values */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Modulation)
-	ESoundModulatorOperator Operator;
-
-public:
-	ESoundModulatorOperator GetOperator() const override { return Operator; }
-	void SetOperator(ESoundModulatorOperator InOperator) { Operator = InOperator; }
-};
-
-USTRUCT(BlueprintType)
-struct FSoundModulationInputBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	FSoundModulationInputBase();
-	virtual ~FSoundModulationInputBase() = default;
+	FSoundControlModulationInput();
 
 	/** Get the modulated input value on parent patch initialization and hold that value for its lifetime */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Input, meta = (DisplayName = "Sample-And-Hold"))
 	uint8 bSampleAndHold : 1;
 
 	/** Transform to apply to the input prior to mix phase */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Input, meta = (DisplayName = "Advanced"))
-	FSoundModulationInputTransform Transform;
-
-	virtual const USoundControlBusBase* GetBus() const PURE_VIRTUAL(FSoundModulationInputBase::GetBus, return nullptr; );
-};
-
-USTRUCT(BlueprintType)
-struct FSoundVolumeModulationInput : public FSoundModulationInputBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	FSoundVolumeModulationInput();
+	UPROPERTY(EditAnywhere, Category = Input)
+	FSoundModulationTransform Transform;
 
 	/** The input bus */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Input)
-	USoundVolumeControlBus* Bus;
+	USoundControlBus* Bus = nullptr;
 
-	virtual const USoundControlBusBase* GetBus() const { return Cast<USoundControlBusBase>(Bus); }
+	const USoundControlBus* GetBus() const;
+	const USoundControlBus& GetBusChecked() const;
 };
 
 USTRUCT(BlueprintType)
-struct FSoundPitchModulationInput : public FSoundModulationInputBase
+struct AUDIOMODULATION_API FSoundControlModulationPatch
 {
 	GENERATED_USTRUCT_BODY()
 
-	FSoundPitchModulationInput();
-
-	/** The input bus */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Input)
-	USoundPitchControlBus* Bus;
-
-	virtual const USoundControlBusBase* GetBus() const { return Cast<USoundControlBusBase>(Bus); }
-};
-
-USTRUCT(BlueprintType)
-struct FSoundLPFModulationInput : public FSoundModulationInputBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	FSoundLPFModulationInput();
-
-	/** The input bus */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Input)
-	USoundLPFControlBus* Bus;
-
-	virtual const USoundControlBusBase* GetBus() const { return Cast<USoundControlBusBase>(Bus); }
-};
-
-USTRUCT(BlueprintType)
-struct FSoundHPFModulationInput : public FSoundModulationInputBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	FSoundHPFModulationInput();
-
-	/** The input bus */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Input)
-	USoundHPFControlBus* Bus;
-
-	virtual const USoundControlBusBase* GetBus() const { return Cast<USoundControlBusBase>(Bus); }
-};
-
-USTRUCT(BlueprintType)
-struct FSoundControlModulationInput : public FSoundModulationInputBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	FSoundControlModulationInput();
-
-	/** The input bus */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Input)
-	USoundControlBus* Bus;
-
-	virtual const USoundControlBusBase* GetBus() const { return Cast<USoundControlBusBase>(Bus); }
-};
-
-USTRUCT(BlueprintType)
-struct FSoundModulationPatchBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	FSoundModulationPatchBase();
-
-	virtual ~FSoundModulationPatchBase() = default;
-
-	/** Default value of patch, included in mix calculation regardless of number of active buses referenced. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Inputs, meta = (UIMin = "0", UIMax = "1"))
-	float DefaultInputValue;
-
-	/** Whether or not patch is bypassed */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Inputs, meta = (UIMin = "0", UIMax = "1"))
-	uint8 bBypass : 1;
-
-	virtual TArray<const FSoundModulationInputBase*> GetInputs() const PURE_VIRTUAL(FSoundModulationPatchBase::GetInputs(), return TArray<const FSoundModulationInputBase*>(););
-	virtual FSoundModulationOutputBase* GetOutput() PURE_VIRTUAL(FSoundModulationPatchBase::GetOutput(), return nullptr;);
-	virtual const FSoundModulationOutputBase* GetOutput() const PURE_VIRTUAL(FSoundModulationPatchBase::GetOutput(), return nullptr;);
-
-#if WITH_EDITOR
-	virtual void Clamp();
-#endif // WITH_EDITOR
-};
-
-USTRUCT(BlueprintType)
-struct FSoundVolumeModulationPatch : public FSoundModulationPatchBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	/** Modulation inputs */
+	/** Whether or not patch is bypassed (patch is still active, but always returns output parameter default value when modulated) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Inputs)
-	TArray<FSoundVolumeModulationInput> Inputs;
+	bool bBypass = true;
 
-	/** Final modulation parameters to apply */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Output, meta = (ShowOnlyInnerProperties))
-	FSoundModulationOutputFixedOperator Output;
-
-	virtual TArray<const FSoundModulationInputBase*> GetInputs() const override;
-	virtual FSoundModulationOutputBase* GetOutput() override { return static_cast<FSoundModulationOutputBase*>(&Output); }
-	virtual const FSoundModulationOutputBase* GetOutput() const override { return static_cast<const FSoundModulationOutputBase*>(&Output); }
-
-#if WITH_EDITOR
-	virtual void Clamp() override;
-#endif // WITH_EDITOR
-};
-
-USTRUCT(BlueprintType)
-struct FSoundPitchModulationPatch : public FSoundModulationPatchBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	/** Modulation inputs */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Inputs)
-	TArray<FSoundPitchModulationInput> Inputs;
-
-	/** Final modulation parameters to apply */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Output, meta = (ShowOnlyInnerProperties))
-	FSoundModulationOutputFixedOperator Output;
-
-	virtual TArray<const FSoundModulationInputBase*> GetInputs() const override;
-	virtual FSoundModulationOutputBase* GetOutput() override { return static_cast<FSoundModulationOutputBase*>(&Output); }
-	virtual const FSoundModulationOutputBase* GetOutput() const override { return static_cast<const FSoundModulationOutputBase*>(&Output); }
-
-#if WITH_EDITOR
-	virtual void Clamp() override;
-#endif // WITH_EDITOR
-};
-
-USTRUCT(BlueprintType)
-struct FSoundLPFModulationPatch : public FSoundModulationPatchBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	/** Modulation inputs */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Inputs)
-	TArray<FSoundLPFModulationInput> Inputs;
-
-	/** Final modulation parameters to apply */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Output, meta = (ShowOnlyInnerProperties))
-	FSoundModulationOutputFixedOperator Output;
-
-	virtual TArray<const FSoundModulationInputBase*> GetInputs() const override;
-	virtual FSoundModulationOutputBase* GetOutput() override { return static_cast<FSoundModulationOutputBase*>(&Output); }
-	virtual const FSoundModulationOutputBase* GetOutput() const override { return static_cast<const FSoundModulationOutputBase*>(&Output); }
-
-#if WITH_EDITOR
-	virtual void Clamp() override;
-#endif // WITH_EDITOR
-};
-
-USTRUCT(BlueprintType)
-struct FSoundHPFModulationPatch : public FSoundModulationPatchBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	/** Modulation inputs */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Inputs)
-	TArray<FSoundHPFModulationInput> Inputs;
-
-	/** Final modulation parameters to apply */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Output, meta = (ShowOnlyInnerProperties))
-	FSoundModulationOutputFixedOperator Output;
-
-	virtual TArray<const FSoundModulationInputBase*> GetInputs() const override;
-	virtual FSoundModulationOutputBase* GetOutput() override { return static_cast<FSoundModulationOutputBase*>(&Output); }
-	virtual const FSoundModulationOutputBase* GetOutput() const override { return static_cast<const FSoundModulationOutputBase*>(&Output); }
-
-#if WITH_EDITOR
-	virtual void Clamp() override;
-#endif // WITH_EDITOR
-};
-
-USTRUCT(BlueprintType)
-struct FSoundControlModulationPatch : public FSoundModulationPatchBase
-{
-	GENERATED_USTRUCT_BODY()
-
-	/** Name of modulation control for sounds referencing this ModulationSettings asset. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Inputs)
-	FName Control;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Output, meta = (DisplayName = "Parameter"))
+	USoundModulationParameter* OutputParameter = nullptr;
 
 	/** Modulation inputs */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Inputs)
 	TArray<FSoundControlModulationInput> Inputs;
 
-	/** Final modulation parameters to apply */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Output, meta = (ShowOnlyInnerProperties))
-	FSoundModulationOutput Output;
-
-	virtual TArray<const FSoundModulationInputBase*> GetInputs() const override;
-	virtual FSoundModulationOutputBase* GetOutput() override { return static_cast<FSoundModulationOutputBase*>(&Output); }
-	virtual const FSoundModulationOutputBase* GetOutput() const override { return static_cast<const FSoundModulationOutputBase*>(&Output); }
 };
 
-UCLASS(config = Engine, editinlinenew, BlueprintType, MinimalAPI, autoExpandCategories = (Volume, Pitch, Highpass, Lowpass))
-class USoundModulationSettings : public USoundModulationPluginSourceSettingsBase
+UCLASS(config = Engine, editinlinenew, BlueprintType)
+class AUDIOMODULATION_API USoundModulationPatch : public USoundModulatorBase
 {
 	GENERATED_UCLASS_BODY()
 
 public:
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Volume)
-	FSoundVolumeModulationPatch Volume;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Modulation, meta = (ShowOnlyInnerProperties))
+	FSoundControlModulationPatch PatchSettings;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Pitch)
-	FSoundPitchModulationPatch Pitch;
+	virtual FName GetOutputParameterName() const override
+	{
+		if (PatchSettings.OutputParameter)
+		{
+			return PatchSettings.OutputParameter->GetFName();
+		}
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Highpass)
-	FSoundHPFModulationPatch Highpass;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Lowpass)
-	FSoundLPFModulationPatch Lowpass;
-
-	// Array of named generic controls for use with modulateable parameters on source effects
-	// Properties hidden as Generic Control Modulation is still in development
-	UPROPERTY()
-	TArray<FSoundControlModulationPatch> Controls;
+		return Super::GetOutputParameterName();
+	}
 
 #if WITH_EDITOR
-	AUDIOMODULATION_API void OnPostEditChange(UWorld* World);
-
-	virtual void PostDuplicate(EDuplicateMode::Type DuplicateMode) override;
-	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
-	virtual void PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChangedEvent) override;
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& InPropertyChangedEvent) override;
+	virtual void PostEditChangeChainProperty(FPropertyChangedChainEvent& InPropertyChangedEvent) override;
 #endif // WITH_EDITOR
 };

@@ -105,6 +105,16 @@ int32 UToolMenu::FindInsertIndex(const FToolMenuSection& InSection) const
 	if (InInsertPosition.Position == EToolMenuInsertType::After)
 	{
 		++DestIndex;
+
+		// Insert after the final entry that has the exact same InsertPosition
+		for (int32 i = DestIndex; i < Sections.Num(); ++i)
+		{
+			if (Sections[i].InsertPosition == InInsertPosition)
+			{
+				DestIndex = i + 1;
+				// Do not break because EToolMenuInsertType::Before may have been used
+			}
+		}
 	}
 
 	for (int32 i = DestIndex; i < Sections.Num(); ++i)
@@ -184,6 +194,7 @@ FToolMenuSection& UToolMenu::AddSection(const FName SectionName, const TAttribut
 
 	FToolMenuSection& NewSection = Sections.InsertDefaulted_GetRef(InsertIndex);
 	NewSection.InitSection(SectionName, InLabel, InPosition);
+	NewSection.Owner = UToolMenus::Get()->CurrentOwner();
 	NewSection.bIsRegistering = IsRegistering();
 	NewSection.bAddedDuringRegister = IsRegistering();
 	return NewSection;
@@ -413,11 +424,16 @@ FCustomizedToolMenuHierarchy UToolMenu::GetMenuCustomizationHierarchy() const
 	
 	UToolMenus* ToolMenus = UToolMenus::Get();
 	TArray<FName> HierarchyNames = GetMenuHierarchyNames(true);
-	for (const FName ItName : HierarchyNames)
+	for (const FName& ItName : HierarchyNames)
 	{
 		if (FCustomizedToolMenu* Found = ToolMenus->FindMenuCustomization(ItName))
 		{
 			Result.Hierarchy.Add(Found);
+		}
+
+		if (FCustomizedToolMenu* FoundRuntime = ToolMenus->FindRuntimeMenuCustomization(ItName))
+		{
+			Result.RuntimeHierarchy.Add(FoundRuntime);
 		}
 	}
 
@@ -505,4 +521,12 @@ FString UToolMenu::GetSubMenuNamePath() const
 void UToolMenu::SetExtendersEnabled(bool bEnabled)
 {
 	bExtendersEnabled = bEnabled;
+}
+
+void UToolMenu::Empty()
+{
+	Context.Empty();
+	Sections.Empty();
+	SubMenuParent = nullptr;
+	ModifyBlockWidgetAfterMake.Unbind();
 }

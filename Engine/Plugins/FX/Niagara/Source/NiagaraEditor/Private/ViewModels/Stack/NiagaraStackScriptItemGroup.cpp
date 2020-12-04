@@ -69,8 +69,9 @@ public:
 			Category = LOCTEXT("ModuleNotCategorized", "Uncategorized Modules");
 		}
 
-		FText DisplayName = FNiagaraEditorUtilities::FormatScriptName(ModuleScript->GetFName(), ModuleScript->bExposeToLibrary);
-		FText Description = FNiagaraEditorUtilities::FormatScriptDescription(ModuleScript->Description, *ModuleScript->GetPathName(), ModuleScript->bExposeToLibrary);
+		bool bIsInLibrary = ModuleScript->LibraryVisibility == ENiagaraScriptLibraryVisibility::Library;
+		FText DisplayName = FNiagaraEditorUtilities::FormatScriptName(ModuleScript->GetFName(), bIsInLibrary);
+		FText Description = FNiagaraEditorUtilities::FormatScriptDescription(ModuleScript->Description, *ModuleScript->GetPathName(), bIsInLibrary);
 		FText Keywords = ModuleScript->Keywords;
 
 		return MakeShareable(new FScriptGroupAddAction(Category, DisplayName, Description, Keywords, FNiagaraVariable(), false, FAssetData(), ModuleScript, false, false));
@@ -906,12 +907,11 @@ TOptional<UNiagaraStackEntry::FDropRequestResponse> UNiagaraStackScriptItemGroup
 	if (DropRequest.DropOptions != UNiagaraStackEntry::EDropOptions::Overview)
 	{
 		// Only allow dropping in the overview stacks.
-		return FDropRequestResponse(TOptional<EItemDropZone>(), LOCTEXT("CantDropParameterOnStack", 
-			"Parameters can only be dropped onto 'Set Variables' modules, or correctly\ntyped inputs in the selection view.  If you want to add a new 'Set Variables' module for\n this parameter, you can drop it into one of the nodes in the System Overview graph."));
+		return FDropRequestResponse(TOptional<EItemDropZone>(), LOCTEXT("CantDropParameterOnStack", "Parameters can only be dropped onto 'Set Parameters' modules, or correctly\ntyped inputs in the selection view.  If you want to add a new 'Set Parameters' module for\n this parameter, you can drop it into one of the nodes in the System Overview graph."));
 	}
 	if (ParameterAction.IsValid())
 	{
-		if (FNiagaraStackGraphUtilities::CanWriteParameterFromUsage(ParameterAction->GetParameter(), ScriptUsage) == false)
+		if (FNiagaraStackGraphUtilities::CanWriteParameterFromUsageViaOutput(ParameterAction->GetParameter(), GetScriptOutputNode()) == false)
 		{
 			return FDropRequestResponse(TOptional<EItemDropZone>(), LOCTEXT("CantDropParameterByUsage", "Can not drop this parameter here because\nit can't be written in this usage context."));
 		}
@@ -1213,6 +1213,7 @@ void UNiagaraStackScriptItemGroup::PasteModules(const UNiagaraClipboardContent* 
 						NewFunctionScript = GetSystemViewModel()->GetScriptScratchPadViewModel()->CreateNewScriptAsDuplicate(ClipboardFunctionScript)->GetOriginalScript();
 					}
 					NewFunctionCallNode = FNiagaraStackGraphUtilities::AddScriptModuleToStack(NewFunctionScript, *OutputNode, CurrentPasteIndex);
+
 				}
 				else
 				{
@@ -1227,6 +1228,7 @@ void UNiagaraStackScriptItemGroup::PasteModules(const UNiagaraClipboardContent* 
 			if (NewFunctionCallNode != nullptr)
 			{
 				NewFunctionCallNode->SuggestName(ClipboardFunction->FunctionName);
+				ClipboardFunction->OnPastedFunctionCallNodeDelegate.ExecuteIfBound(NewFunctionCallNode);
 				ClipboardFunctionAndNodeFunctionPairs.Add(TPair<const UNiagaraClipboardFunction*, UNiagaraNodeFunctionCall*>(ClipboardFunction, NewFunctionCallNode));
 				CurrentPasteIndex++;
 			}

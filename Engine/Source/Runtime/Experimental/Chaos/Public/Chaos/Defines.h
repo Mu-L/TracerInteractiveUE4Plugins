@@ -1,12 +1,31 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 #pragma once
 
+#include "HAL/Platform.h"
+
+#ifndef CHAOS_TEMPLATE_API
+#if PLATFORM_MAC || PLATFORM_LINUX
+#define CHAOS_TEMPLATE_API CHAOS_API
+#else
+#define CHAOS_TEMPLATE_API
+#endif
+#endif
+
+#ifndef CHAOSSOLVERS_TEMPLATE_API
+#if PLATFORM_MAC || PLATFORM_LINUX
+#define CHAOSSOLVERS_TEMPLATE_API CHAOS_API
+#else
+#define CHAOSSOLVERS_TEMPLATE_API
+#endif
+#endif
+
 #if COMPILE_WITHOUT_UNREAL_SUPPORT
 	#include <stdint.h>
 #else
 	#include "CoreTypes.h"
 	#include "Logging/MessageLog.h"
 	#include "Misc/CoreMiscDefines.h"
+	#include "UObject/ExternalPhysicsCustomObjectVersion.h"
 #endif
 #include "Serializable.h"
 
@@ -25,19 +44,34 @@ namespace Chaos
 	{
 	public:
 
-		Chaos::FReal Friction;
-		Chaos::FReal StaticFriction;
-		Chaos::FReal Restitution;
-		Chaos::FReal LinearEtherDrag;
-		Chaos::FReal AngularEtherDrag;
-		Chaos::FReal SleepingLinearThreshold;
-		Chaos::FReal SleepingAngularThreshold;
-		Chaos::FReal DisabledLinearThreshold;
-		Chaos::FReal DisabledAngularThreshold;
+		/** The different combine modes to determine the friction / restitution of two actors.
+		    If the two materials have two different combine modes, we use the largest one (Min beats Avg, Max beats Multiply, etc...)
+			*/
+		enum class ECombineMode : uint8
+		{
+			Avg,
+			Min,
+			Multiply,
+			Max
+		};
+
+		FReal Friction;
+		FReal StaticFriction;
+		FReal Restitution;
+		FReal LinearEtherDrag;
+		FReal AngularEtherDrag;
+		FReal SleepingLinearThreshold;
+		FReal SleepingAngularThreshold;
+		FReal DisabledLinearThreshold;
+		FReal DisabledAngularThreshold;
 		int32 SleepCounterThreshold;
 		void* UserData;
 
 		/** Variable defaults are used for \c UChaosPhysicalMaterial \c UPROPERTY defaults. */
+		ECombineMode FrictionCombineMode;
+		ECombineMode RestitutionCombineMode;
+
+
 		FChaosPhysicsMaterial()
 			: Friction(0.5)
 			, StaticFriction(0.0)
@@ -50,7 +84,29 @@ namespace Chaos
 			, DisabledAngularThreshold(0)
 			, SleepCounterThreshold(0)
 			, UserData(nullptr)
+			, FrictionCombineMode(ECombineMode::Avg)
+			, RestitutionCombineMode(ECombineMode::Avg)
 		{
+		}
+
+		static FReal CombineHelper(FReal A, FReal B, ECombineMode Mode)
+		{
+			switch(Mode)
+			{
+			case ECombineMode::Avg: return (A+B)*(FReal)0.5;
+			case ECombineMode::Min: return FMath::Min(A,B);
+			case ECombineMode::Max: return FMath::Max(A,B);
+			case ECombineMode::Multiply: return A*B;
+			default: ensure(false);
+			}
+
+			return 0;
+		}
+
+		static ECombineMode ChooseCombineMode(ECombineMode A, ECombineMode B)
+		{
+			const uint8 MaxVal = FMath::Max(static_cast<uint8>(A),static_cast<uint8>(B));
+			return static_cast<ECombineMode>(MaxVal);
 		}
 
 		static constexpr bool IsSerializablePtr = true;

@@ -47,6 +47,8 @@ public:
 	virtual bool HandleKeyUpEvent(FSlateApplication& SlateApp, const FKeyEvent& InKeyEvent) override;
 	virtual bool HandleAnalogInputEvent(FSlateApplication& SlateApp, const FAnalogInputEvent& InAnalogInputEvent) override;
 	virtual bool HandleMouseMoveEvent(FSlateApplication& SlateApp, const FPointerEvent& MouseEvent) override;
+	virtual const TCHAR* GetDebugName() const override { return TEXT("AnalogCursor"); }
+
 
 	virtual int32 GetOwnerUserIndex() const { return 0; };
 
@@ -59,6 +61,9 @@ public:
 protected:
 
 	virtual bool IsRelevantInput(const FInputEvent& InputEvent) const;
+	virtual bool IsRelevantInput(const FKeyEvent& KeyEvent) const;
+	virtual bool IsRelevantInput(const FAnalogInputEvent& AnalogInputEvent) const;
+	virtual bool IsRelevantInput(const FPointerEvent& MouseEvent) const;
 
 	/** Getter */
 	FORCEINLINE const FVector2D& GetAnalogValues( EAnalogStick Stick = EAnalogStick::Left ) const

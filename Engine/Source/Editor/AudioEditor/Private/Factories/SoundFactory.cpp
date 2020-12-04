@@ -215,7 +215,7 @@ UObject* USoundFactory::CreateObject
 		}
 
 		// if we are creating the cue move it when necessary
-		UPackage* CuePackage = bMoveCue ? CreatePackage(nullptr, *CuePackageName) : nullptr;
+		UPackage* CuePackage = bMoveCue ? CreatePackage( *CuePackageName) : nullptr;
 
 		// if the sound already exists, remember the user settings
 		USoundWave* ExistingSound = FindObject<USoundWave>(InParent, *Name.ToString());
@@ -493,10 +493,11 @@ UObject* USoundFactory::CreateObject
 		Sound->AssetImportData->Update(CurrentFilename);
 
 		// Compressed data is now out of date.
-		Sound->InvalidateCompressedData(true /* bFreeResources */);
+		const bool bRebuildStreamingChunks = FPlatformCompressionUtilities::IsCurrentPlatformUsingStreamCaching();
+		Sound->InvalidateCompressedData(true /* bFreeResources */, bRebuildStreamingChunks);
 
 		// If stream caching is enabled, we need to make sure this asset is ready for playback.
-		if (FPlatformCompressionUtilities::IsCurrentPlatformUsingStreamCaching() && Sound->IsStreaming(nullptr))
+		if (bRebuildStreamingChunks && Sound->IsStreaming(nullptr))
 		{
 			Sound->EnsureZerothChunkIsLoaded();
 		}

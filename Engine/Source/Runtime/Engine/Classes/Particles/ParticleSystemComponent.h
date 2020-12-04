@@ -337,12 +337,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Effects|Components|ParticleSystem")
 	virtual void SetBoolParameter(FName ParameterName, bool Param) {}
 
-	/** Change a named float parameter */
+	/** Change a named int parameter */
 	UFUNCTION(BlueprintCallable, Category="Effects|Components|ParticleSystem")
+	virtual void SetIntParameter(FName ParameterName, int Param) {}
+
+	/** Change a named float parameter */
+	UFUNCTION(BlueprintCallable, Category = "Effects|Components|ParticleSystem")
 	virtual void SetFloatParameter(FName ParameterName, float Param) {}
 
 	/** 
-	 *	Set a named vector instance parameter on this ParticleSystemComponent. 
+	 *	Set a named vector instance parameter on this ParticleSystemComponent.
 	 *	Updates the parameter if it already exists, or creates a new entry if not. 
 	 */
 	UFUNCTION(BlueprintCallable, Category="Effects|Components|ParticleSystem")
@@ -410,6 +414,8 @@ public:
 
 	/** Returns an approximate memory usage value for this component. */
 	virtual uint32 GetApproxMemoryUsage() const { return 0; }
+
+	virtual void ActivateSystem(bool bFlagAsJustAttached = false) { };
 };
 
 
@@ -1060,7 +1066,20 @@ public:
 	 */
 	void SetEmitterEnable(FName EmitterName, bool bNewEnableState) override;
 
+
+	/**
+	 *	Set a named float instance parameter on this ParticleSystemComponent.
+	 *	This is for function parity with the VFX Marshaller. The bool is converted
+	 *  and then set to a float.
+	 */
 	void SetBoolParameter(FName ParameterName, bool Param) override;
+
+	/**
+	 *	Set a named float instance parameter on this ParticleSystemComponent.
+	 *	This is for function parity with the VFX Marshaller. The int is converted
+	 *  and then set to a float.
+	 */
+	void SetIntParameter(FName ParameterName, int Param) override;
 
 	/** Change a named float parameter */
 	void SetFloatParameter(FName ParameterName, float Param) override;
@@ -1364,7 +1383,7 @@ public:
 	//~ End USceneComponent Interface
 
 	/** Activate the system */
-	void ActivateSystem(bool bFlagAsJustAttached = false);
+	virtual void ActivateSystem(bool bFlagAsJustAttached = false) override;
 	/** Deactivate the system */
 	void DeactivateSystem();
 	// Collision Handling...

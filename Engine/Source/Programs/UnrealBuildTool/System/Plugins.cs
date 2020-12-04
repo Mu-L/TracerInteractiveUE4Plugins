@@ -163,6 +163,17 @@ namespace UnrealBuildTool
 		static Dictionary<DirectoryReference, List<FileReference>> PluginFileCache = new Dictionary<DirectoryReference, List<FileReference>>();
 
 		/// <summary>
+		/// Invalidate cached plugin data so that we can pickup new things
+		/// Warning: Will make subsequent plugin lookups and directory scans slow until the caches are repopulated
+		/// </summary>
+		public static void InvalidateCaches_SLOW()
+		{
+			PluginInfoCache = new Dictionary<DirectoryReference, List<PluginInfo>>();
+			PluginFileCache = new Dictionary<DirectoryReference, List<FileReference>>();
+			DirectoryItem.ResetAllCachedInfo_SLOW();
+		}
+
+		/// <summary>
 		/// Filters the list of plugins to ensure that any game plugins override engine plugins with the same name, and otherwise that no two
 		/// plugins with the same name exist. 
 		/// </summary>
@@ -229,32 +240,15 @@ namespace UnrealBuildTool
 		/// <returns>List of project files</returns>
 		public static IEnumerable<FileReference> EnumeratePlugins(FileReference ProjectFile)
 		{
-			DirectoryReference EnginePluginsDir = DirectoryReference.Combine(UnrealBuildTool.EngineDirectory, "Plugins");
-			foreach(FileReference PluginFile in EnumeratePlugins(EnginePluginsDir))
-			{
-				yield return PluginFile;
-			}
-
-			DirectoryReference EnterprisePluginsDir = DirectoryReference.Combine(UnrealBuildTool.EnterpriseDirectory, "Plugins");
-			foreach(FileReference PluginFile in EnumeratePlugins(EnterprisePluginsDir))
-			{
-				yield return PluginFile;
-			}
-
+			List<DirectoryReference> BaseDirs = new List<DirectoryReference>();
+			BaseDirs.AddRange(UnrealBuildTool.GetExtensionDirs(UnrealBuildTool.EngineDirectory, "Plugins"));
+			BaseDirs.AddRange(UnrealBuildTool.GetExtensionDirs(UnrealBuildTool.EnterpriseDirectory, "Plugins"));
 			if(ProjectFile != null)
 			{
-				DirectoryReference ProjectPluginsDir = DirectoryReference.Combine(ProjectFile.Directory, "Plugins");
-				foreach(FileReference PluginFile in EnumeratePlugins(ProjectPluginsDir))
-				{
-					yield return PluginFile;
-				}
-
-				DirectoryReference ProjectModsDir = DirectoryReference.Combine(ProjectFile.Directory, "Mods");
-				foreach(FileReference PluginFile in EnumeratePlugins(ProjectModsDir))
-				{
-					yield return PluginFile;
-				}
+				BaseDirs.AddRange(UnrealBuildTool.GetExtensionDirs(ProjectFile.Directory, "Plugins"));
+				BaseDirs.AddRange(UnrealBuildTool.GetExtensionDirs(ProjectFile.Directory, "Mods"));
 			}
+			return BaseDirs.SelectMany(x => EnumeratePlugins(x)).ToList();
 		}
 
 		/// <summary>
@@ -297,6 +291,11 @@ namespace UnrealBuildTool
 		/// <returns>List of the found PluginInfo objects</returns>
 		public static IReadOnlyList<PluginInfo> ReadAdditionalPlugins(DirectoryReference AdditionalDirectory)
 		{
+			DirectoryReference FullPath = DirectoryReference.Combine(AdditionalDirectory, "");
+			if (!DirectoryReference.Exists(FullPath))
+			{
+				Log.TraceWarning("AdditionalPluginDirectory {0} not found. Path should be relative to the project", FullPath);
+			}
 			return ReadPluginsFromDirectory(AdditionalDirectory, "", PluginType.External);
 		}
 
@@ -350,11 +349,15 @@ namespace UnrealBuildTool
 					}
 				}
 			}
+			else
+			{
+				throw new BuildException("Platform extension plugin {0} was named improperly. It must be in the form <ParentPlugin>_<Platform>.uplugin", Filename);
+			}
 
 			// did we find a parent plugin?
 			if (Parent == null)
 			{
-				throw new BuildException("Child plugin {0} was not named properly. It should be in the form <ParentPlugin>_<Platform>.uplugin", Filename);
+				throw new BuildException("Unable to find parent plugin {0} for platform extension plugin {1}. Make sure {0}.uplugin exists.", Tokens[0], Filename);
 			}
 
 			// validate child plugin file name
@@ -486,18 +489,8 @@ namespace UnrealBuildTool
 		/// <returns>Sequence of the found PluginInfo object.</returns>
 		public static IReadOnlyList<PluginInfo> ReadPluginsFromDirectory(DirectoryReference RootDirectory, string Subdirectory, PluginType Type)
 		{
-			// look for directories in RootDirectory and and Platform directories under RootDirectory
-			List<DirectoryReference> RootDirectories = new List<DirectoryReference>() { DirectoryReference.Combine(RootDirectory, Subdirectory) };
-
-			// now look for platform subdirectories with the Subdirectory
-			DirectoryReference PlatformDirectory = DirectoryReference.Combine(RootDirectory, "Platforms");
-			if (DirectoryReference.Exists(PlatformDirectory))
-			{
-				foreach (DirectoryReference Dir in DirectoryReference.EnumerateDirectories(PlatformDirectory))
-				{
-					RootDirectories.Add(DirectoryReference.Combine(Dir, Subdirectory));
-				}
-			}
+			// look for directories in RootDirectory and and extension directories under RootDirectory
+			List<DirectoryReference> RootDirectories = UnrealBuildTool.GetExtensionDirs(RootDirectory, Subdirectory);
 
 			Dictionary<PluginInfo, FileReference> ChildPlugins = new Dictionary<PluginInfo, FileReference>();
 			List<PluginInfo> AllParentPlugins = new List<PluginInfo>();

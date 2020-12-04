@@ -106,8 +106,16 @@ public:
 	DECLARE_DELEGATE_RetVal(int32, FGetIntegerDelegate);
 	DECLARE_DELEGATE_OneParam(FSetIntegerDelegate, int32);
 
+	DECLARE_DELEGATE_RetVal(uint32, FGetUnsignedIntegerDelegate);
+	DECLARE_DELEGATE_OneParam(FSetUnsignedIntegerDelegate, uint32);
+
 	DECLARE_DELEGATE_RetVal(ECheckBoxState, FGetCheckBoxStateDelegate);
 	DECLARE_DELEGATE_OneParam(FSetCheckBoxStateDelegate, ECheckBoxState);
+
+	void UnbindReductionSettings()
+	{
+		IsLODSettingsEnabledDelegate.Unbind();
+	}
 private:
 	/** IDetailCustomNodeBuilder Interface*/
 	virtual void SetOnRebuildChildren(FSimpleDelegate InOnRegenerateChildren) override {}
@@ -124,6 +132,7 @@ private:
 	FDetailWidgetRow& AddFloatRow(IDetailChildrenBuilder& ChildrenBuilder, const FText RowTitleText, const FText RowNameContentText, const FText RowNameContentTootlipText, const float MinSliderValue, const float MaxSliderValue, FGetFloatDelegate GetterDelegate, FSetFloatDelegate SetterDelegate);
 	FDetailWidgetRow& AddBoolRow(IDetailChildrenBuilder& ChildrenBuilder, const FText RowTitleText, const FText RowNameContentText, const FText RowNameContentToolitipText, FGetCheckBoxStateDelegate GetterDelegate, FSetCheckBoxStateDelegate SetterDelegate);
 	FDetailWidgetRow& AddIntegerRow(IDetailChildrenBuilder& ChildrenBuilder, const FText RowTitleText, const FText RowNameContentText, const FText RowNameContentTootlipText, const int32 MinSliderValue, const int32 MaxSliderValue, FGetIntegerDelegate GetterDelegate, FSetIntegerDelegate SetterDelegate);
+	FDetailWidgetRow& AddUnsignedIntegerRow(IDetailChildrenBuilder& ChildrenBuilder, const FText RowTitleText, const FText RowNameContentText, const FText RowNameContentTootlipText, const uint32 MinSliderValue, const uint32 MaxSliderValue, FGetUnsignedIntegerDelegate GetterDelegate, FSetUnsignedIntegerDelegate SetterDelegate);
 	void AddBaseLODRow(IDetailChildrenBuilder& ChildrenBuilder);
 
 	void SetPercentAndAbsoluteVisibility(FDetailWidgetRow& Row, SkeletalMeshTerminationCriterion FirstCriterion, SkeletalMeshTerminationCriterion SecondCriterion);
@@ -156,6 +165,12 @@ private:
 
 	int32 GetNumMaxVerticesCount() const;
 	void SetNumMaxVerticesCount(int32 Value);
+
+	uint32 GetNumMaxTrianglesPercentageCount() const;
+	void SetNumMaxTrianglesPercentageCount(uint32 Value);
+
+	uint32 GetNumMaxVerticesPercentageCount() const;
+	void SetNumMaxVerticesPercentageCount(uint32 Value);
 
 	float GetAccuracyPercentage() const;
 	void SetAccuracyPercentage(float Value);
@@ -220,6 +235,7 @@ private:
 	{
 		float MovementValueFloat = 0.0f;
 		int32 MovementValueInt = 0;
+		uint32 MovementValueUnsignedInt = 0;
 		bool bSliderActiveMode = false;
 	};
 	TArray<FSliderStateData> SliderStateDataArray;
@@ -231,8 +247,14 @@ public:
 	FSkeletalMeshBuildSettingsLayout(FSkeletalMeshBuildSettings& InBuildSettings, int32 InLODIndex, FIsLODSettingsEnabledDelegate InIsBuildSettingsEnabledDelegate, FModifyMeshLODSettingsDelegate InModifyMeshLODSettingsDelegate);
 	virtual ~FSkeletalMeshBuildSettingsLayout() {};
 
+
 	DECLARE_DELEGATE_RetVal(float, FGetFloatDelegate);
 	DECLARE_DELEGATE_OneParam(FSetFloatDelegate, float);
+
+	void UnbindBuildSettings()
+	{
+		IsBuildSettingsEnabledDelegate.Unbind();
+	}
 
 private:
 	/** IDetailCustomNodeBuilder Interface*/
@@ -309,6 +331,11 @@ public:
 	virtual void CustomizeDetails( IDetailLayoutBuilder& DetailLayout ) override;
 
 private:
+	//Prevent attribute change calling post edit change
+	void OnAttributePreChangePreventPostEditChange(int32 LODIndex, FName LODInfoPropertyName) const;
+	void OnAttributeChangedPreventPostEditChange(const int32 LODIndex, const FName LODInfoPropertyName, const bool bForceComponentRefresh) const;
+	void PreventAttributePostEditChange(TSharedPtr<IPropertyHandle> AttributeHandle, const int32 LODIndex, const FName PropertyName, const bool bForceComponentRefresh) const;
+
 	//This function customize the LODInfo temporary object
 	void CustomizeLODInfoSetingsDetails(IDetailLayoutBuilder& DetailLayout, class ULODInfoUILayout* LODInfoUILayout, TSharedRef<IPropertyHandle> LODInfoProperty, IDetailCategoryBuilder& LODCategory);
 
@@ -516,6 +543,17 @@ private:
 	void OnSectionRecomputeTangentChanged(ECheckBoxState NewState, int32 LODIndex, int32 SectionIndex);
 
 	/**
+	* Handler for selecting which vertex color to mask the blending of recomputing tangents
+	*
+	* @param LODIndex	The LODIndex we want to change
+	* @param SectionIndex	The SectionIndex we change the RecomputeTangent
+	*/
+	TSharedRef<class SWidget> OnGenerateRecomputeTangentsVertexChannelMaskPicker(int32 LODIndex, int32 SectionIndex);
+	bool IsGenerateRecomputeTangentsVertexChannelMaskPicker(int32 LODIndex, int32 SectionIndex) const;
+	FText GetCurrentRecomputeTangentsVertexChannelMaskName(int32 LODIndex, int32 SectionIndex) const;
+	void SetCurrentRecomputeTangentsVertexChannel(int32 LODIndex, int32 SectionIndex, int32 Index);
+
+	/**
 	 * Handler for enabling delete button on materials
 	 *
 	 * @param SectionIndex - index of the section to check
@@ -544,6 +582,8 @@ private:
 
 	FText GetMaterialSlotNameText(int32 MaterialIndex) const;
 
+	void RefreshMeshDetailLayout();
+
 	/** apply LOD changes if the user modified LOD reduction settings */
 	FReply OnApplyChanges();
 	/** regenerate one specific LOD Index no dependencies*/
@@ -556,6 +596,8 @@ private:
 	FReply RegenerateLOD(int32 LODIndex);
 	/** Removes the specified lod from the skeletal mesh */
 	FReply RemoveOneLOD(int32 LODIndex);
+	/** Restore the LOD imported data if the LOD is no longer reduced */
+	void RestoreNonReducedLOD(int32 LODIndex);
 	/** hide properties which don't need to be showed to end users */
 	void HideUnnecessaryProperties(IDetailLayoutBuilder& DetailLayout);
 

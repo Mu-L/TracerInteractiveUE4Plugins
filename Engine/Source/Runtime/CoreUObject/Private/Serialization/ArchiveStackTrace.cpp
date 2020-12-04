@@ -616,13 +616,13 @@ void FArchiveStackTrace::CompareWithInternal(const FPackageData& SourcePackage, 
 						SourceVal.Serialize(SourceReader);
 						DestVal  .Serialize(DestReader);
 
-						if (!SourceReader.ArIsError && !DestReader.ArIsError)
-						{
-							SourceVal.ExportText(BeforePropertyVal);
-							DestVal  .ExportText(AfterPropertyVal);
-						}
-					}
-				}
+									if (!SourceReader.IsError() && !DestReader.IsError())
+									{
+										SourceVal.ExportText(BeforePropertyVal);
+										DestVal  .ExportText(AfterPropertyVal);
+									}
+								}
+							}
 
 				FString DiffValues;
 				if (BeforePropertyVal != AfterPropertyVal)
@@ -961,7 +961,7 @@ FLinkerLoad* FArchiveStackTrace::CreateLinkerForPackage(FUObjectSerializeContext
 	UPackage* Package = FindObjectFast<UPackage>(nullptr, *InPackageName);
 	if (!Package)
 	{
-		Package = CreatePackage(nullptr, *InPackageName);
+		Package = CreatePackage(*InPackageName);
 	}
 	// Create an archive for the linker. The linker will take ownership of it.
 	FLargeMemoryReader* PackageReader = new FLargeMemoryReader(PackageData.Data, PackageData.Size, ELargeMemoryReaderFlags::None, *InPackageName);	
@@ -1182,7 +1182,7 @@ static bool IsExportMapIdentical(FLinkerLoad* SourceLinker, FLinkerLoad* DestLin
 	{
 		for (int32 ExportIndex = 0; ExportIndex < SourceLinker->ExportMap.Num(); ++ExportIndex)
 		{
-			if (CompareTableItem(SourceLinker, DestLinker, SourceLinker->ExportMap[ExportIndex], DestLinker->ExportMap[ExportIndex]))
+			if (!CompareTableItem(SourceLinker, DestLinker, SourceLinker->ExportMap[ExportIndex], DestLinker->ExportMap[ExportIndex]))
 			{
 				bIdentical = false;
 				break;

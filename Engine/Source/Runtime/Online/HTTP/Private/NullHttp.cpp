@@ -72,11 +72,16 @@ void FNullHttpRequest::SetContent(const TArray<uint8>& ContentPayload)
 	Payload = ContentPayload;
 }
 
+void FNullHttpRequest::SetContent(TArray<uint8>&& ContentPayload)
+{
+	Payload = MoveTemp(ContentPayload);
+}
+
 void FNullHttpRequest::SetContentAsString(const FString& ContentString)
 {
-	FTCHARToUTF8 Converter(*ContentString);
-	Payload.SetNum(Converter.Length());
-	FMemory::Memcpy(Payload.GetData(), (uint8*)(ANSICHAR*)Converter.Get(), Payload.Num());
+	int32 Utf8Length = FTCHARToUTF8_Convert::ConvertedLength(*ContentString, ContentString.Len());
+	Payload.SetNumUninitialized(Utf8Length);
+	FTCHARToUTF8_Convert::Convert((ANSICHAR*)Payload.GetData(), Payload.Num(), *ContentString, ContentString.Len());
 }
 
 bool FNullHttpRequest::SetContentAsStreamedFile(const FString& Filename)
@@ -126,7 +131,17 @@ bool FNullHttpRequest::ProcessRequest()
 
 void FNullHttpRequest::CancelRequest()
 {
-	FinishedRequest();
+	if (!IsInGameThread())
+	{
+		FHttpModule::Get().GetHttpManager().AddGameThreadTask([StrongThis = StaticCastSharedRef<FNullHttpRequest>(AsShared())]()
+		{
+			StrongThis->FinishedRequest();
+		});
+	}
+	else
+	{
+		FinishedRequest();
+	}
 }
 
 EHttpRequestStatus::Type FNullHttpRequest::GetStatus() const
@@ -144,7 +159,7 @@ void FNullHttpRequest::Tick(float DeltaSeconds)
 	if (CompletionStatus == EHttpRequestStatus::Processing)
 	{
 		ElapsedTime += DeltaSeconds;
-		const float HttpTimeout = FHttpModule::Get().GetHttpTimeout();
+		const float HttpTimeout = GetTimeoutOrDefault();
 		if (HttpTimeout > 0 && ElapsedTime >= HttpTimeout)
 		{
 			UE_LOG(LogHttp, Warning, TEXT("Timeout processing Http request. %p"),
@@ -163,7 +178,7 @@ float FNullHttpRequest::GetElapsedTime() const
 void FNullHttpRequest::FinishedRequest()
 {
 	CompletionStatus = EHttpRequestStatus::Failed;
-	TSharedRef<IHttpRequest> Request = SharedThis(this);
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = SharedThis(this);
 	FHttpModule::Get().GetHttpManager().RemoveRequest(Request);
 
 	UE_LOG(LogHttp, Log, TEXT("Finished request %p. no response %s url=%s elapsed=%.3f"),

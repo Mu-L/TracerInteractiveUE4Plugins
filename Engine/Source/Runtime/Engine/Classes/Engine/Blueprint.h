@@ -430,7 +430,7 @@ class ENGINE_API UBlueprint : public UBlueprintCore
 	 * deleting the parent blueprint. Exported as Alphabetical in GetAssetRegistryTags
 	 */
 	UPROPERTY()
-	TSubclassOf<class UObject> ParentClass;
+	TSubclassOf<UObject> ParentClass;
 
 	/** The type of this blueprint */
 	UPROPERTY(AssetRegistrySearchable)
@@ -531,6 +531,10 @@ public:
 	/** Shows up in the content browser tooltip when the blueprint is hovered */
 	UPROPERTY(EditAnywhere, Category=BlueprintOptions, meta=(MultiLine=true), DuplicateTransient)
 	FString BlueprintDescription;
+
+	/** The namespace of this blueprint (if set, the Blueprint will be treated differently for the context menu) */
+	UPROPERTY(EditAnywhere, Category = BlueprintOptions, AssetRegistrySearchable)
+	FString BlueprintNamespace;
 
 	/** The category of the Blueprint, used to organize this Blueprint class when displayed in palette windows */
 	UPROPERTY(EditAnywhere, Category=BlueprintOptions)
@@ -671,7 +675,10 @@ public:
 
 protected:
 	/** Current object being debugged for this blueprint */
-	TWeakObjectPtr< class UObject > CurrentObjectBeingDebugged;
+	TWeakObjectPtr< UObject > CurrentObjectBeingDebugged;
+
+	/** Raw path of object to be debugged, this might have been spawned inside a specific PIE level so is not stored as an object path type */
+	FString ObjectPathToDebug;
 
 	/** Current world being debugged for this blueprint */
 	TWeakObjectPtr< class UWorld > CurrentWorldBeingDebugged;
@@ -786,6 +793,9 @@ public:
 	/** Sets the current object being debugged */
 	virtual void SetObjectBeingDebugged(UObject* NewObject);
 
+	/** Clears the current object being debugged because it is gone, but do not reset the saved information */
+	virtual void UnregisterObjectBeingDebugged();
+
 	virtual void SetWorldBeingDebugged(UWorld* NewWorld);
 
 	virtual void GetReparentingRules(TSet< const UClass* >& AllowedChildrenOfClasses, TSet< const UClass* >& DisallowedChildrenOfClasses) const;
@@ -817,6 +827,12 @@ public:
 		return CurrentObjectBeingDebugged.Get(bEvenIfPendingKill);
 	}
 
+	/** @return path to object that should be debugged next, may be inside a nonexistent world */
+	const FString& GetObjectPathToDebug() const
+	{
+		return ObjectPathToDebug;
+	}
+
 	/** @return the current world being debugged, which can be nullptr */
 	class UWorld* GetWorldBeingDebugged(EGetObjectOrWorldBeingDebuggedFlags InFlags = EGetObjectOrWorldBeingDebuggedFlags::None) const
 	{
@@ -832,10 +848,7 @@ public:
 	virtual bool Rename(const TCHAR* NewName = nullptr, UObject* NewOuter = nullptr, ERenameFlags Flags = REN_None) override;
 	virtual UClass* RegenerateClass(UClass* ClassToRegenerate, UObject* PreviousCDO) override;
 	virtual void PostLoad() override;
-	virtual void PostLoadSubobjects( FObjectInstancingGraph* OuterInstanceGraph ) override;
-#if WITH_EDITOR
 	virtual bool Modify(bool bAlwaysMarkDirty = true) override;
-#endif
 	virtual void GetAssetRegistryTags(TArray<FAssetRegistryTag>& OutTags) const override;
 	virtual FPrimaryAssetId GetPrimaryAssetId() const override;
 	virtual void BeginCacheForCookedPlatformData(const ITargetPlatform *TargetPlatform) override;
@@ -885,6 +898,7 @@ public:
 	 */
 	virtual bool FindDiffs(const UBlueprint* OtherBlueprint, FDiffResults& Results) const;
 
+	void ConformNativeComponents();
 #endif	//#if WITH_EDITOR
 
 	//~ Begin UObject Interface
@@ -1062,7 +1076,7 @@ public:
 	virtual bool SupportsGlobalVariables() const { return true; }
 
 	/**
-	 * Returns true if this blueprint supports lobal variables
+	 * Returns true if this blueprint supports global variables
 	 */
 	virtual bool SupportsLocalVariables() const { return true; }
 

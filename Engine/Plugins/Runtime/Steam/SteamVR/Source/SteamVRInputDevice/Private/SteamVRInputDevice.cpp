@@ -44,7 +44,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "Runtime/HeadMountedDisplay/Public/IXRTrackingSystem.h"
 #include "SteamVRSkeletonDefinition.h"
 #include "Misc/MessageDialog.h"
-#include "ISteamVRPlugin.h"
 
 #if PLATFORM_WINDOWS
 #include "Windows/WindowsHWrapper.h"
@@ -383,7 +382,7 @@ bool FSteamVRInputDevice::Exec(UWorld* InWorld, const TCHAR* Cmd, FOutputDevice&
 	return false;
 }
 
-bool FSteamVRInputDevice::GetControllerOrientationAndPosition(const int32 ControllerIndex, const EControllerHand DeviceHand, FRotator& OutOrientation, FVector& OutPosition, float WorldToMetersScale) const
+bool FSteamVRInputDevice::GetControllerOrientationAndPosition(const int32 ControllerIndex, const FName MotionSource, FRotator& OutOrientation, FVector& OutPosition, float WorldToMetersScale) const
 {
 	if (SteamVRHMDModule && SteamVRHMDModule->GetVRSystem() && VRInput() && VRCompositor())
 	{
@@ -393,9 +392,9 @@ bool FSteamVRInputDevice::GetControllerOrientationAndPosition(const int32 Contro
 		VRActionHandle_t LeftActionHandle = bUseSkeletonPose ? VRSkeletalHandleLeft : VRControllerHandleLeft;
 		VRActionHandle_t RightActionHandle = bUseSkeletonPose ? VRSkeletalHandleRight : VRControllerHandleRight;
 
-		switch (DeviceHand)
+		//UE_LOG(LogSteamVRInputDevice, Warning, TEXT("MOTION SOURCE: %s"), *MotionSource.ToString());
+		if (MotionSource.IsEqual(TEXT("Left")) || MotionSource.IsEqual(TEXT("EControllerHand::Left")))
 		{
-		case EControllerHand::Left:
 			if (LeftActionHandle != vr::k_ulInvalidActionHandle)
 			{
 				if (GlobalPredictedSecondsFromNow <= -9999.f)
@@ -412,9 +411,9 @@ bool FSteamVRInputDevice::GetControllerOrientationAndPosition(const int32 Contro
 					return false;
 				}
 			}
-			break;
-		case EControllerHand::Right:
-
+		}
+		else if (MotionSource.IsEqual(TEXT("Right")) || MotionSource.IsEqual(TEXT("EControllerHand::Right")))
+		{
 			if (RightActionHandle != vr::k_ulInvalidActionHandle)
 			{
 				if (GlobalPredictedSecondsFromNow <= -9999.f)
@@ -431,173 +430,252 @@ bool FSteamVRInputDevice::GetControllerOrientationAndPosition(const int32 Contro
 					return false;
 				}
 			}
-			break;
-		case EControllerHand::Special_1:
-
-			if (VRSpecial1 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Camera")))
+		{
+			if (VRTRackerCamera == k_ulInvalidActionHandle)
 			{
 				return false;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial1, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTRackerCamera, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial1, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTRackerCamera, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return false;
 			}
-			break;
-		case EControllerHand::Special_2:
-
-			if (VRSpecial2 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Chest")))
+		{
+			if (VRTrackerChest == k_ulInvalidActionHandle)
 			{
 				return false;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial2, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerChest, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial2, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerChest, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return false;
 			}
-			break;
-		case EControllerHand::Special_3:
-
-			if (VRSpecial3 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Waist")))
+		{
+			if (VRTrackerWaist == k_ulInvalidActionHandle)
 			{
 				return false;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial3, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerWaist, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial3, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerWaist, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return false;
 			}
-
-			break;
-		case EControllerHand::Special_4:
-
-			if (VRSpecial4 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Foot_Left")))
+		{
+			if (VRTrackerFootL == k_ulInvalidActionHandle)
 			{
 				return false;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial4, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerFootL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial4, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerFootL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return false;
 			}
-
-			break;
-		case EControllerHand::Special_5:
-
-			if (VRSpecial5 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Foot_Right")))
+		{
+			if (VRTrackerFootR == k_ulInvalidActionHandle)
 			{
 				return false;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial5, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerFootR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial5, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerFootR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return false;
 			}
-
-			break;
-		case EControllerHand::Special_6:
-
-			if (VRSpecial6 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Shoulder_Left")))
+		{
+			if (VRTrackerShoulderL == k_ulInvalidActionHandle)
 			{
 				return false;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial6, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerShoulderL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial6, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerShoulderL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return false;
 			}
-
-			break;
-		case EControllerHand::Special_7:
-
-			if (VRSpecial7 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Shoulder_Right")))
+		{
+			if (VRTrackerShoulderR == k_ulInvalidActionHandle)
 			{
 				return false;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial7, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerShoulderR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial7, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerShoulderR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return false;
 			}
-
-			break;
-		case EControllerHand::Special_8:
-
-			if (VRSpecial8 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Elbow_Left")))
+		{
+			if (VRTrackerElbowL == k_ulInvalidActionHandle)
 			{
 				return false;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial8, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerElbowL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial8, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerElbowL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Elbow_Right")))
+		{
+			if (VRTrackerElbowR == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerElbowR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerElbowR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Knee_Left")))
+		{
+			if (VRTrackerKneeL == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerKneeL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerKneeL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Knee_Right")))
+		{
+			if (VRTrackerKneeR == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerKneeR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerKneeR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_RawPose_Left")))
+		{
+			if (VRTrackerHandedPoseL == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedPoseL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedPoseL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
@@ -605,8 +683,219 @@ bool FSteamVRInputDevice::GetControllerOrientationAndPosition(const int32 Contro
 				return false;
 			}
 
-			break;
-		default:
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_RawPose_Right")))
+		{
+			if (VRTrackerHandedPoseR == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedPoseR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedPoseR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_Back_Left")))
+		{
+			if (VRTrackerHandedBackL == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedBackL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedBackL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_Back_Right")))
+		{
+			if (VRTrackerHandedBackR == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedBackR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedBackR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_Front_Left")))
+		{
+			if (VRTrackerHandedFrontL == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedFrontL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedFrontL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_Front_Right")))
+		{
+			if (VRTrackerHandedFrontR == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedFrontR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedFrontR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_FrontRolled_Left")))
+		{
+			if (VRTrackerHandedFrontRL == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedFrontRL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedFrontRL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_FrontRolled_Right")))
+		{
+			if (VRTrackerHandedFrontRR == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedFrontRR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedFrontRR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_PistolGrip_Left")))
+		{
+			if (VRTrackerHandedGripL == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedGripL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedGripL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_PistolGrip_Right")))
+		{
+			if (VRTrackerHandedGripR == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedGripR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedGripR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Keyboard")))
+		{
+			if (VRTrackerKeyboard == k_ulInvalidActionHandle)
+			{
+				return false;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerKeyboard, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerKeyboard, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return false;
+			}
+		}
+		else
+		{
 			return false;
 		}
 
@@ -640,26 +929,30 @@ bool FSteamVRInputDevice::GetControllerOrientationAndPosition(const int32 Contro
 			OrientationQuat.Normalize();
 			OutOrientation = OrientationQuat.Rotator();
 
-			return true;
 		}
 	}
 
-	return false;
+			return true;
+		}
+
+bool FSteamVRInputDevice::GetControllerOrientationAndPosition(const int32 ControllerIndex, const EControllerHand DeviceHand, FRotator& OutOrientation, FVector& OutPosition, float WorldToMetersScale) const
+{
+	return GetControllerOrientationAndPosition(ControllerIndex, GetMotionSourceName(DeviceHand), OutOrientation, OutPosition, WorldToMetersScale);
 }
 
-ETrackingStatus FSteamVRInputDevice::GetControllerTrackingStatus(const int32 ControllerIndex, const EControllerHand DeviceHand) const
+ETrackingStatus FSteamVRInputDevice::GetControllerTrackingStatus(const int32 ControllerIndex, const FName MotionSource) const
 {
 	ETrackingStatus TrackingStatus = ETrackingStatus::NotTracked;
+	//UE_LOG(LogSteamVRInputDevice, Warning, TEXT("STATUS MOTION SOURCE: %s"), *MotionSource.ToString());
 
-	if (SteamVRHMDModule && SteamVRHMDModule->GetVRSystem() && VRInput() && VRCompositor())
+	if (VRInput() && VRCompositor())
 	{
+		//FName MotionSource = GetMotionSourceName(DeviceHand);
 		InputPoseActionData_t PoseData = {};
 		EVRInputError InputError = VRInputError_NoData;
 
-		switch (DeviceHand)
+		if (MotionSource.IsEqual(TEXT("Left")) || MotionSource.IsEqual(TEXT("EControllerHand::Left")))
 		{
-		case EControllerHand::Left:
-
 			if (VRControllerHandleLeft == k_ulInvalidActionHandle)
 			{
 				return ETrackingStatus::NotTracked;
@@ -678,10 +971,9 @@ ETrackingStatus FSteamVRInputDevice::GetControllerTrackingStatus(const int32 Con
 			{
 				return ETrackingStatus::NotTracked;
 			}
-
-			break;
-		case EControllerHand::Right:
-
+		}
+		else if (MotionSource.IsEqual(TEXT("Right")) || MotionSource.IsEqual(TEXT("EControllerHand::Right")))
+		{
 			if (VRControllerHandleRight == k_ulInvalidActionHandle)
 			{
 				return ETrackingStatus::NotTracked;
@@ -700,186 +992,458 @@ ETrackingStatus FSteamVRInputDevice::GetControllerTrackingStatus(const int32 Con
 			{
 				return ETrackingStatus::NotTracked;
 			}
-
-			break;
-		case EControllerHand::Special_1:
-
-			if (VRSpecial1 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Camera")))
+		{
+			if (VRTRackerCamera == k_ulInvalidActionHandle)
 			{
 				return ETrackingStatus::NotTracked;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial1, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTRackerCamera, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial1, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTRackerCamera, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return ETrackingStatus::NotTracked;
 			}
-
-			break;
-		case EControllerHand::Special_2:
-
-			if (VRSpecial2 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Chest")))
+		{
+			if (VRTrackerChest == k_ulInvalidActionHandle)
 			{
 				return ETrackingStatus::NotTracked;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial2, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerChest, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial2, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerChest, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return ETrackingStatus::NotTracked;
 			}
-
-			break;
-		case EControllerHand::Special_3:
-
-			if (VRSpecial3 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Waist")))
+		{
+			if (VRTrackerWaist == k_ulInvalidActionHandle)
 			{
 				return ETrackingStatus::NotTracked;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial3, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerWaist, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial3, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerWaist, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return ETrackingStatus::NotTracked;
 			}
-
-			break;
-		case EControllerHand::Special_4:
-
-			if (VRSpecial4 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Foot_Left")))
+		{
+			if (VRTrackerFootL == k_ulInvalidActionHandle)
 			{
 				return ETrackingStatus::NotTracked;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial4, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerFootL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial4, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerFootL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return ETrackingStatus::NotTracked;
 			}
-
-			break;
-		case EControllerHand::Special_5:
-
-			if (VRSpecial5 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Foot_Right")))
+		{
+			if (VRTrackerFootR == k_ulInvalidActionHandle)
 			{
 				return ETrackingStatus::NotTracked;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial5, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerFootR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial5, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerFootR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return ETrackingStatus::NotTracked;
 			}
-
-			break;
-		case EControllerHand::Special_6:
-
-			if (VRSpecial6 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Shoulder_Left")))
+		{
+			if (VRTrackerShoulderL == k_ulInvalidActionHandle)
 			{
 				return ETrackingStatus::NotTracked;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial6, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerShoulderL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial6, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerShoulderL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return ETrackingStatus::NotTracked;
 			}
-
-			break;
-		case EControllerHand::Special_7:
-
-			if (VRSpecial7 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Shoulder_Right")))
+		{
+			if (VRTrackerShoulderR == k_ulInvalidActionHandle)
 			{
 				return ETrackingStatus::NotTracked;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial7, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerShoulderR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial7, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerShoulderR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return ETrackingStatus::NotTracked;
 			}
-
-			break;
-		case EControllerHand::Special_8:
-
-			if (VRSpecial8 == k_ulInvalidActionHandle)
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Elbow_Left")))
+		{
+			if (VRTrackerElbowL == k_ulInvalidActionHandle)
 			{
 				return ETrackingStatus::NotTracked;
 			}
 
 			if (GlobalPredictedSecondsFromNow <= -9999.f)
 			{
-				InputError = VRInput()->GetPoseActionDataForNextFrame(VRSpecial8, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerElbowL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 			else
 			{
-				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRSpecial8, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerElbowL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
 			}
 
 			if (InputError != VRInputError_None)
 			{
 				return ETrackingStatus::NotTracked;
 			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Elbow_Right")))
+		{
+			if (VRTrackerElbowR == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
 
-			break;
-		default:
-			break;
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerElbowR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerElbowR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Knee_Left")))
+		{
+			if (VRTrackerKneeL == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerKneeL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerKneeL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Knee_Right")))
+		{
+			if (VRTrackerKneeR == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerKneeR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerKneeR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_RawPose_Left")))
+		{
+			if (VRTrackerHandedPoseL == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedPoseL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedPoseL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_RawPose_Right")))
+		{
+			if (VRTrackerHandedPoseR == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedPoseR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedPoseR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_Back_Left")))
+		{
+			if (VRTrackerHandedBackL == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedBackL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedBackL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_Back_Right")))
+		{
+			if (VRTrackerHandedBackR == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedBackR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedBackR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_Front_Left")))
+		{
+			if (VRTrackerHandedFrontL == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedFrontL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedFrontL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_Front_Right")))
+		{
+			if (VRTrackerHandedFrontR == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedFrontR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedFrontR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_FrontRolled_Left")))
+		{
+			if (VRTrackerHandedFrontRL == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedFrontRL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedFrontRL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_FrontRolled_Right")))
+		{
+			if (VRTrackerHandedFrontRR == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedFrontRR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedFrontRR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_PistolGrip_Left")))
+		{
+			if (VRTrackerHandedGripL == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedGripL, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedGripL, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Handheld_PistolGrip_Right")))
+		{
+			if (VRTrackerHandedGripR == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerHandedGripR, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerHandedGripR, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+		}
+		else if (MotionSource.IsEqual(TEXT("Tracker_Keyboard")))
+		{
+			if (VRTrackerKeyboard == k_ulInvalidActionHandle)
+			{
+				return ETrackingStatus::NotTracked;
+			}
+
+			if (GlobalPredictedSecondsFromNow <= -9999.f)
+			{
+				InputError = VRInput()->GetPoseActionDataForNextFrame(VRTrackerKeyboard, VRCompositor()->GetTrackingSpace(), &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+			else
+			{
+				InputError = VRInput()->GetPoseActionDataRelativeToNow(VRTrackerKeyboard, VRCompositor()->GetTrackingSpace(), GlobalPredictedSecondsFromNow, &PoseData, sizeof(PoseData), k_ulInvalidInputValueHandle);
+			}
+
+			if (InputError != VRInputError_None)
+			{
+				return ETrackingStatus::NotTracked;
+			}
 		}
 
 		if (InputError == VRInputError_None && PoseData.pose.bDeviceIsConnected)
@@ -891,6 +1455,11 @@ ETrackingStatus FSteamVRInputDevice::GetControllerTrackingStatus(const int32 Con
 	return TrackingStatus;
 }
 
+ETrackingStatus FSteamVRInputDevice::GetControllerTrackingStatus(const int32 ControllerIndex, const EControllerHand DeviceHand) const
+{
+	return GetControllerTrackingStatus(ControllerIndex, GetMotionSourceName(DeviceHand));
+}
+
 FName FSteamVRInputDevice::GetMotionControllerDeviceTypeName() const
 {
 	return FName(TEXT("SteamVRInputDevice"));
@@ -899,6 +1468,177 @@ FName FSteamVRInputDevice::GetMotionControllerDeviceTypeName() const
 bool FSteamVRInputDevice::GetHandJointPosition(const FName MotionSource, int jointIndex, FVector& OutPosition) const
 {
 	return false;
+}
+
+
+FName FSteamVRInputDevice::GetMotionSourceName(const EControllerHand MotionSource) const
+{
+	switch ((uint32)MotionSource)
+	{
+	case 0:
+		return FName(TEXT("Left"));
+		break;
+	case 1:
+		return FName(TEXT("Right"));
+		break;
+	case 2:
+		return FName(TEXT("AnyHand"));
+		break;
+	case 3:
+		return FName(TEXT("Pad"));
+		break;
+	case 4:
+		return FName(TEXT("ExternalCamera"));
+		break;
+	case 5:
+		return FName(TEXT("Gun"));
+		break;
+	case 6:
+		return FName(TEXT("Special_1"));
+		break;
+	case 7:
+		return FName(TEXT("Special_2"));
+		break;
+	case 8:
+		return FName(TEXT("Special_3"));
+		break;
+	case 9:
+		return FName(TEXT("Special_4"));
+		break;
+	case 10:
+		return FName(TEXT("Special_5"));
+		break;
+	case 11:
+		return FName(TEXT("Special_6"));
+		break;
+	case 12:
+		return FName(TEXT("Special_7"));
+		break;
+	case 13:
+		return FName(TEXT("Special_8"));
+		break;
+	case 14:
+		return FName(TEXT("Special_9"));
+		break;
+	case 15:
+		return FName(TEXT("Special_10"));
+		break;
+	case 16:
+		return FName(TEXT("Special_11"));
+		break;
+	case 17:
+		return FName(TEXT("Tracker_Camera"));
+		break;
+	case 18:
+		return FName(TEXT("Tracker_Chest"));
+		break;
+	case 19:
+		return FName(TEXT("Tracker_Handheld_Back_Left"));
+		break;
+	case 20:
+		return FName(TEXT("Tracker_Handheld_Back_Right"));
+		break;
+	case 21:
+		return FName(TEXT("Tracker_Handheld_Front_Left"));
+		break;
+	case 22:
+		return FName(TEXT("Tracker_Handheld_Front_Right"));
+		break;
+	case 23:
+		return FName(TEXT("Tracker_Handheld_FrontRolled_Left"));
+		break;
+	case 24:
+		return FName(TEXT("Tracker_Handheld_FrontRolled_Right"));
+		break;
+	case 25:
+		return FName(TEXT("Tracker_Handheld_PistolGrip_Left"));
+		break;
+	case 26:
+		return FName(TEXT("Tracker_Handheld_PistolGrip_Right"));
+		break;
+	case 27:
+		return FName(TEXT("Tracker_Handheld_RawPose_Left"));
+		break;
+	case 28:
+		return FName(TEXT("Tracker_Handheld_RawPose_Right"));
+		break;
+	case 29:
+		return FName(TEXT("Tracker_Foot_Left"));
+		break;
+	case 30:
+		return FName(TEXT("Tracker_Foot_Right"));
+		break;
+	case 31:
+		return FName(TEXT("Tracker_Shoulder_Left"));
+		break;
+	case 32:
+		return FName(TEXT("Tracker_Shoulder_Right"));
+		break;
+	case 33:
+		return FName(TEXT("Tracker_Keyboard"));
+		break;
+	case 34:
+		return FName(TEXT("Tracker_Waist"));
+		break;
+	case 35:
+		return FName(TEXT("Tracker_Elbow_Left"));
+		break;
+	case 36:
+		return FName(TEXT("Tracker_Elbow_Right"));
+		break;
+	case 37:
+		return FName(TEXT("Tracker_Knee_Left"));
+		break;
+	case 38:
+		return FName(TEXT("Tracker_Knee_Right"));
+		break;
+	default:
+		return NAME_None;
+		break;
+	}
+}
+
+void FSteamVRInputDevice::EnumerateSources(TArray<FMotionControllerSource>& SourcesOut) const
+{
+	SourcesOut.Add(FMotionControllerSource(TEXT("Left")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Right")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("AnyHand")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Pad")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("ExternalCamera")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Gun")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Camera")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Chest")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Elbow_Left")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Elbow_Right")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Foot_Left")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Foot_Right")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Knee_Left")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Knee_Right")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Shoulder_Left")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Shoulder_Right")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Keyboard")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Waist")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Handheld_RawPose_Left")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Handheld_RawPose_Right")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Handheld_Back_Left")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Handheld_Back_Right")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Handheld_Front_Left")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Handheld_Front_Right")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Handheld_FrontRolled_Left")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Handheld_FrontRolled_Right")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Handheld_PistolGrip_Left")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Tracker_Handheld_PistolGrip_Right")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Special_1")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Special_2")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Special_3")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Special_4")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Special_5")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Special_6")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Special_7")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Special_8")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Special_9")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Special_10")));
+	SourcesOut.Add(FMotionControllerSource(TEXT("Special_11")));
 }
 
 void FSteamVRInputDevice::SetHapticFeedbackValues(int32 ControllerId, int32 Hand, const FHapticFeedbackValues& Values)
@@ -1166,13 +1906,13 @@ void FSteamVRInputDevice::InitControllerKeys()
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Y_Touch, LOCTEXT("Cosmos_Left_Y_Touch", "Cosmos (L) Y Touch"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Menu_Click, LOCTEXT("Cosmos_Left_Menu_Click", "Cosmos (L) Menu"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Grip_Click, LOCTEXT("Cosmos_Left_Grip_Click", "Cosmos (L) Grip"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
-	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Grip_Axis, LOCTEXT("Cosmos_Left_Grip_Axis", "Cosmos (L) Grip Axis"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
+	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Grip_Axis, LOCTEXT("Cosmos_Left_Grip_Axis", "Cosmos (L) Grip Axis"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Trigger_Click, LOCTEXT("Cosmos_Left_Trigger_Click", "Cosmos (L) Trigger"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
-	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Trigger_Axis, LOCTEXT("Cosmos_Left_Trigger_Axis", "Cosmos (L) Trigger Axis"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
+	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Trigger_Axis, LOCTEXT("Cosmos_Left_Trigger_Axis", "Cosmos (L) Trigger Axis"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Trigger_Touch, LOCTEXT("Cosmos_Left_Trigger_Touch", "Cosmos (L) Trigger Touch"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
-	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Thumbstick_Vector, LOCTEXT("Cosmos_Left_Thumbstick_Vector", "Cosmos (L) Thumbstick Vector"), FKeyDetails::GamepadKey | FKeyDetails::VectorAxis | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
-	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Thumbstick_X, LOCTEXT("Cosmos_Left_Thumbstick_X", "Cosmos (L) Thumbstick X"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
-	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Thumbstick_Y, LOCTEXT("Cosmos_Left_Thumbstick_Y", "Cosmos (L) Thumbstick Y"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
+	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Thumbstick_Vector, LOCTEXT("Cosmos_Left_Thumbstick_Vector", "Cosmos (L) Thumbstick Vector"), FKeyDetails::GamepadKey | FKeyDetails::Axis2D | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
+	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Thumbstick_X, LOCTEXT("Cosmos_Left_Thumbstick_X", "Cosmos (L) Thumbstick X"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
+	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Thumbstick_Y, LOCTEXT("Cosmos_Left_Thumbstick_Y", "Cosmos (L) Thumbstick Y"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Thumbstick_Click, LOCTEXT("Cosmos_Left_Thumbstick_Click", "Cosmos (L) Thumbstick"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Bumper_Click, LOCTEXT("Cosmos_Left_Bumper_Click", "Cosmos (L) Bumper"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Left_Thumbstick_Touch, LOCTEXT("Cosmos_Left_Thumbstick_Touch", "Cosmos (L) Thumbstick Touch"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
@@ -1182,13 +1922,13 @@ void FSteamVRInputDevice::InitControllerKeys()
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_B_Touch, LOCTEXT("Cosmos_Right_B_Touch", "Cosmos (R) B Touch"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_System_Click, LOCTEXT("Cosmos_Right_System_Click", "Cosmos (R) System"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Grip_Click, LOCTEXT("Cosmos_Right_Grip_Click", "Cosmos (R) Grip"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
-	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Grip_Axis, LOCTEXT("Cosmos_Right_Grip_Axis", "Cosmos (R) Grip Axis"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
+	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Grip_Axis, LOCTEXT("Cosmos_Right_Grip_Axis", "Cosmos (R) Grip Axis"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Trigger_Click, LOCTEXT("Cosmos_Right_Trigger_Click", "Cosmos (R) Trigger"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
-	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Trigger_Axis, LOCTEXT("Cosmos_Right_Trigger_Axis", "Cosmos (R) Trigger Axis"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
+	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Trigger_Axis, LOCTEXT("Cosmos_Right_Trigger_Axis", "Cosmos (R) Trigger Axis"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Trigger_Touch, LOCTEXT("Cosmos_Right_Trigger_Touch", "Cosmos (R) Trigger Touch"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
-	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Thumbstick_Vector, LOCTEXT("Cosmos_Right_Thumbstick_Vector", "Cosmos (R) Thumbstick Vector"), FKeyDetails::GamepadKey | FKeyDetails::VectorAxis | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
-	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Thumbstick_X, LOCTEXT("Cosmos_Right_Thumbstick_X", "Cosmos (R) Thumbstick X"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
-	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Thumbstick_Y, LOCTEXT("Cosmos_Right_Thumbstick_Y", "Cosmos (R) Thumbstick Y"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
+	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Thumbstick_Vector, LOCTEXT("Cosmos_Right_Thumbstick_Vector", "Cosmos (R) Thumbstick Vector"), FKeyDetails::GamepadKey | FKeyDetails::Axis2D | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
+	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Thumbstick_X, LOCTEXT("Cosmos_Right_Thumbstick_X", "Cosmos (R) Thumbstick X"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
+	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Thumbstick_Y, LOCTEXT("Cosmos_Right_Thumbstick_Y", "Cosmos (R) Thumbstick Y"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Thumbstick_Click, LOCTEXT("Cosmos_Right_Thumbstick_Click", "Cosmos (R) Thumbstick"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Thumbstick_Touch, LOCTEXT("Cosmos_Right_Thumbstick_Touch", "Cosmos (R) Thumbstick Touch"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
 	EKeys::AddKey(FKeyDetails(CosmosKeys::Cosmos_Right_Bumper_Click, LOCTEXT("Cosmos_Right_Bumper_Click", "Cosmos (R) Bumper"), FKeyDetails::GamepadKey | FKeyDetails::NotBlueprintBindableKey, "Cosmos"));
@@ -1282,7 +2022,7 @@ void FSteamVRInputDevice::OnVREditingModeEnter()
 			const FName Action = KeyToAction.Value.ActionType;
 			FName CombinedName = FName("VREditor_" + Hand.ToString() + "_" + Action.ToString());
 
-			if (Key.IsFloatAxis())
+			if (Key.IsAxis1D())
 			{
 				InputSettings->AddAxisMapping(FInputAxisKeyMapping(CombinedName, Key), false);
 			}
@@ -1323,7 +2063,7 @@ void FSteamVRInputDevice::OnVREditingModeExit()
 			const FName Action = KeyToAction.Value.ActionType;
 			FName CombinedName = FName("VREditor_" + Hand.ToString() + "_" + Action.ToString());
 
-			if (Key.IsFloatAxis())
+			if (Key.IsAxis1D())
 			{
 				InputSettings->RemoveAxisMapping(FInputAxisKeyMapping(CombinedName, Key), false);
 			}
@@ -1421,7 +2161,7 @@ void FSteamVRInputDevice::ReloadActionManifest()
 		// Set Action Manifest
 		EVRInputError InputError = VRInput()->SetActionManifestPath(TCHAR_TO_UTF8(*IFileManager::Get().ConvertToAbsolutePathForExternalAppForRead(*ManifestPath)));
 		UE_LOG( LogSteamVRInputDevice, Display, TEXT( "[STEAMVR INPUT] Reloading Action Manifest Path [%s]" ), *ManifestPath );
-		GetInputError(InputError, FString(TEXT("Setting Action Manifest Path to")));
+		GetInputError(InputError, FString(TEXT("Setting Action Manifest Path")));
 	}
 }
 #endif
@@ -1449,6 +2189,13 @@ void FSteamVRInputDevice::GenerateControllerBindings(const FString& BindingsPath
 
 			// Create Action Bindings in JSON Format
 			TArray<TSharedPtr<FJsonValue>> JsonValuesArray;
+
+			// Create Action Set
+			TSharedRef<FJsonObject> ActionSetJsonObject = MakeShareable(new FJsonObject());
+
+			// Do not generate any controller bindings for trackers
+			if (!SupportedController.Description.Contains(TEXT("Vive Tracker")))
+			{
 			GenerateActionBindings(InInputMapping, JsonValuesArray, SupportedController);
 
 			// Ensure we also handle generic UE4 Motion Controllers
@@ -1458,96 +2205,18 @@ void FSteamVRInputDevice::GenerateControllerBindings(const FString& BindingsPath
 				GenerateActionBindings(InInputMapping, JsonValuesArray, SupportedController, true);
 			}
 
-			// Create Action Set
-			TSharedRef<FJsonObject> ActionSetJsonObject = MakeShareable(new FJsonObject());
 			ActionSetJsonObject->SetArrayField(TEXT("sources"), JsonValuesArray);
-
-			// Add tracker poses
-			if (SupportedController.KeyEquivalent.Equals(TEXT("SteamVR_Vive_Tracker")))
+			}
+			else
 			{
-				// Add Controller Pose Mappings
-				TArray<TSharedPtr<FJsonValue>> TrackerPoseArray;
-
-				// Add Pose: Special 1
-				TSharedRef<FJsonObject> Special1JsonObject = MakeShareable(new FJsonObject());
-				Special1JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_SPECIAL_BACK_L));
-				Special1JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_BACK_LEFT));
-				Special1JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
-
-				TSharedRef<FJsonValueObject> Special1JsonValueObject = MakeShareable(new FJsonValueObject(Special1JsonObject));
-				TrackerPoseArray.Add(Special1JsonValueObject);
-
-				// Add Pose: Special 2
-				TSharedRef<FJsonObject> Special2JsonObject = MakeShareable(new FJsonObject());
-				Special2JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_SPECIAL_BACK_R));
-				Special2JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_BACK_RIGHT));
-				Special2JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
-
-				TSharedRef<FJsonValueObject> Special2JsonObjectJsonValueObject = MakeShareable(new FJsonValueObject(Special2JsonObject));
-				TrackerPoseArray.Add(Special2JsonObjectJsonValueObject);
-
-				// Add Pose: Special 3
-				TSharedRef<FJsonObject> Special3JsonObject = MakeShareable(new FJsonObject());
-				Special3JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_SPECIAL_FRONT_L));
-				Special3JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_FRONT_LEFT));
-				Special3JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
-
-				TSharedRef<FJsonValueObject> Special3JsonValueObject = MakeShareable(new FJsonValueObject(Special3JsonObject));
-				TrackerPoseArray.Add(Special3JsonValueObject);
-
-				// Add Pose: Special 4
-				TSharedRef<FJsonObject> Special4JsonObject = MakeShareable(new FJsonObject());
-				Special4JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_SPECIAL_FRONT_R));
-				Special4JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_FRONT_RIGHT));
-				Special4JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
-
-				TSharedRef<FJsonValueObject> Special4JsonValueObject = MakeShareable(new FJsonValueObject(Special4JsonObject));
-				TrackerPoseArray.Add(Special4JsonValueObject);
-
-				// Add Pose: Special 5
-				TSharedRef<FJsonObject> Special5JsonObject = MakeShareable(new FJsonObject());
-				Special5JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_SPECIAL_FRONTR_L));
-				Special5JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_FRONTR_LEFT));
-				Special5JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
-
-				TSharedRef<FJsonValueObject> Special5JsonValueObject = MakeShareable(new FJsonValueObject(Special5JsonObject));
-				TrackerPoseArray.Add(Special5JsonValueObject);
-
-				// Add Pose: Special 6
-				TSharedRef<FJsonObject> Special6JsonObject = MakeShareable(new FJsonObject());
-				Special6JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_SPECIAL_FRONTR_R));
-				Special6JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_FRONTR_RIGHT));
-				Special6JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
-
-				TSharedRef<FJsonValueObject> Special6JsonValueObject = MakeShareable(new FJsonValueObject(Special6JsonObject));
-				TrackerPoseArray.Add(Special6JsonValueObject);
-
-				// Add Pose: Special 7
-				TSharedRef<FJsonObject> Special7JsonObject = MakeShareable(new FJsonObject());
-				Special7JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_SPECIAL_PISTOL_L));
-				Special7JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_PISTOL_LEFT));
-				Special7JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
-
-				TSharedRef<FJsonValueObject> Special7JsonValueObject = MakeShareable(new FJsonValueObject(Special7JsonObject));
-				TrackerPoseArray.Add(Special7JsonValueObject);
-
-				// Add Pose: Special 8
-				TSharedRef<FJsonObject> Special8JsonObject = MakeShareable(new FJsonObject());
-				Special8JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_SPECIAL_PISTOL_R));
-				Special8JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_PISTOL_RIGHT));
-				Special8JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
-
-				TSharedRef<FJsonValueObject> Special8JsonValueObject = MakeShareable(new FJsonValueObject(Special8JsonObject));
-				TrackerPoseArray.Add(Special8JsonValueObject);
-
-				// Add Controller Input Array To Action Set
-				ActionSetJsonObject->SetArrayField(TEXT("poses"), TrackerPoseArray);
+			// Add tracker poses
+				SetTrackerPose(SupportedController, ActionSetJsonObject, SupportedController.OutputPath, SupportedController.RawDriverPath);
 			}
 
 			// Do not add any default bindings for headsets and misc devices
 			if (!SupportedController.Description.Contains(TEXT("Headset"))
 				&& !SupportedController.KeyEquivalent.Equals(TEXT("SteamVR_Gamepads"))
-				&& !SupportedController.KeyEquivalent.Equals(TEXT("SteamVR_Vive_Tracker"))
+				&& !SupportedController.KeyEquivalent.Contains(TEXT("SteamVR_Vive_Tracker"))
 				)
 			{
 				// Add Controller Pose Mappings
@@ -1656,6 +2325,121 @@ void FSteamVRInputDevice::GenerateControllerBindings(const FString& BindingsPath
 	}
 }
 
+void FSteamVRInputDevice::SetTrackerPose(FControllerType& TrackerType, TSharedRef<FJsonObject> ActionSetJsonObject, const FString& TrackerOutput, const FString& TrackerPath)
+{
+	TArray<TSharedPtr<FJsonValue>> TrackerPoseArray;
+
+	if (TrackerType.Name.IsEqual(TEXT("vive_tracker_handed")) || TrackerType.Name.IsEqual(TEXT("vive_tracker")))
+	{
+		// Add Pose: Handed, Pose Left
+		TSharedRef<FJsonObject> Special1JsonObject = MakeShareable(new FJsonObject());
+		Special1JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_TRACKER_HANDED_POSE_LEFT));
+		Special1JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_CONT_RAW_LEFT));
+		Special1JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
+
+		TSharedRef<FJsonValueObject> Special1JsonValueObject = MakeShareable(new FJsonValueObject(Special1JsonObject));
+		TrackerPoseArray.Add(Special1JsonValueObject);
+
+		// Add Pose: Handed, Pose Right
+		TSharedRef<FJsonObject> Special2JsonObject = MakeShareable(new FJsonObject());
+		Special2JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_TRACKER_HANDED_POSE_RIGHT));
+		Special2JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_CONT_RAW_RIGHT));
+		Special2JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
+
+		TSharedRef<FJsonValueObject> Special2JsonObjectJsonValueObject = MakeShareable(new FJsonValueObject(Special2JsonObject));
+		TrackerPoseArray.Add(Special2JsonObjectJsonValueObject);
+
+		// Add Pose: Handed, Back Left
+		TSharedRef<FJsonObject> Special3JsonObject = MakeShareable(new FJsonObject());
+		Special3JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_TRACKER_HANDED_BACK_LEFT));
+		Special3JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_BACK_LEFT));
+		Special3JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
+
+		TSharedRef<FJsonValueObject> Special3JsonValueObject = MakeShareable(new FJsonValueObject(Special3JsonObject));
+		TrackerPoseArray.Add(Special3JsonValueObject);
+
+		// Add Pose: Handed, Back Right
+		TSharedRef<FJsonObject> Special4JsonObject = MakeShareable(new FJsonObject());
+		Special4JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_TRACKER_HANDED_BACK_RIGHT));
+		Special4JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_BACK_RIGHT));
+		Special4JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
+
+		TSharedRef<FJsonValueObject> Special4JsonValueObject = MakeShareable(new FJsonValueObject(Special4JsonObject));
+		TrackerPoseArray.Add(Special4JsonValueObject);
+
+		// Add Pose: Handed, Front Left
+		TSharedRef<FJsonObject> Special5JsonObject = MakeShareable(new FJsonObject());
+		Special5JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_TRACKER_HANDED_FRONT_LEFT));
+		Special5JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_FRONT_LEFT));
+		Special5JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
+
+		TSharedRef<FJsonValueObject> Special5JsonValueObject = MakeShareable(new FJsonValueObject(Special5JsonObject));
+		TrackerPoseArray.Add(Special5JsonValueObject);
+
+		// Add Pose: Handed, Front Right
+		TSharedRef<FJsonObject> Special6JsonObject = MakeShareable(new FJsonObject());
+		Special6JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_TRACKER_HANDED_FRONT_RIGHT));
+		Special6JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_TRACKER_HANDED_FRONT_RIGHT));
+		Special6JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
+
+		TSharedRef<FJsonValueObject> Special6JsonValueObject = MakeShareable(new FJsonValueObject(Special6JsonObject));
+		TrackerPoseArray.Add(Special6JsonValueObject);
+
+		// Add Pose: Handed, Front Rolled Left
+		TSharedRef<FJsonObject> Special7JsonObject = MakeShareable(new FJsonObject());
+		Special7JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_TRACKER_HANDED_FRONTR_LEFT));
+		Special7JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_FRONTR_LEFT));
+		Special7JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
+
+		TSharedRef<FJsonValueObject> Special7JsonValueObject = MakeShareable(new FJsonValueObject(Special7JsonObject));
+		TrackerPoseArray.Add(Special7JsonValueObject);
+
+		// Add Pose: Handed, Front Rolled Right
+		TSharedRef<FJsonObject> Special8JsonObject = MakeShareable(new FJsonObject());
+		Special8JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_TRACKER_HANDED_FRONTR_RIGHT));
+		Special8JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_FRONTR_RIGHT));
+		Special8JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
+
+		TSharedRef<FJsonValueObject> Special8JsonValueObject = MakeShareable(new FJsonValueObject(Special8JsonObject));
+		TrackerPoseArray.Add(Special8JsonValueObject);
+
+		// Add Pose: Handed, Pistol Grip Left
+		TSharedRef<FJsonObject> Special9JsonObject = MakeShareable(new FJsonObject());
+		Special9JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_TRACKER_HANDED_GRIP_LEFT));
+		Special9JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_PISTOL_LEFT));
+		Special9JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
+
+		TSharedRef<FJsonValueObject> Special9JsonValueObject = MakeShareable(new FJsonValueObject(Special9JsonObject));
+		TrackerPoseArray.Add(Special9JsonValueObject);
+
+		// Add Pose: Handed, Pistol Grip Right
+		TSharedRef<FJsonObject> Special10JsonObject = MakeShareable(new FJsonObject());
+		Special10JsonObject->SetStringField(TEXT("output"), TEXT(ACTION_PATH_TRACKER_HANDED_GRIP_RIGHT));
+		Special10JsonObject->SetStringField(TEXT("path"), TEXT(ACTION_PATH_SPCL_PISTOL_RIGHT));
+		Special10JsonObject->SetStringField(TEXT("requirement"), TEXT("optional"));
+
+		TSharedRef<FJsonValueObject> Special10JsonValueObject = MakeShareable(new FJsonValueObject(Special10JsonObject));
+		TrackerPoseArray.Add(Special10JsonValueObject);
+
+		// Add Tracker Pose Array To Action Set
+		ActionSetJsonObject->SetArrayField(TEXT("poses"), TrackerPoseArray);
+	}
+	else
+	{
+		// Add Raw Pose
+		TSharedRef<FJsonObject> TrackerJsonObjectRaw = MakeShareable(new FJsonObject());
+		TrackerJsonObjectRaw->SetStringField(TEXT("output"), TrackerOutput);
+		TrackerJsonObjectRaw->SetStringField(TEXT("path"), TrackerPath);
+		TrackerJsonObjectRaw->SetStringField(TEXT("requirement"), TEXT("optional"));
+
+		TSharedRef<FJsonValueObject> TrackerJsonValueObjectRaw = MakeShareable(new FJsonValueObject(TrackerJsonObjectRaw));
+		TrackerPoseArray.Add(TrackerJsonValueObjectRaw);
+	}
+
+	// Add Tracker Pose Array To Action Set
+	ActionSetJsonObject->SetArrayField(TEXT("poses"), TrackerPoseArray);
+}
+
 void FSteamVRInputDevice::GenerateActionBindings(TArray<FInputMapping> &InInputMapping, TArray<TSharedPtr<FJsonValue>> &JsonValuesArray, FControllerType Controller, bool bIsGenericController)
 {
 	// Check for headsets
@@ -1741,26 +2525,22 @@ void FSteamVRInputDevice::GenerateActionBindings(TArray<FInputMapping> &InInputM
 					continue;
 				}
 
+				// Check cap sense
+				InputState.bIsCapSense = CurrentInputKeyName.EndsWith(TEXT("CapSense"))
+					|| CurrentInputKeyName.EndsWith(TEXT("_Touch"));
+
 				// Handle Oculus Touch
 				InputState.bIsXButton = InputState.bIsYButton = false;
-				if (CurrentInputKeyName.Contains(TEXT("OculusTouch"))
-					|| CurrentInputKeyName.Contains(TEXT("Cosmos"))
+				if (CurrentInputKeyName.StartsWith(TEXT("OculusTouch"))
+					|| CurrentInputKeyName.StartsWith(TEXT("Cosmos"))
+					|| CurrentInputKeyName.StartsWith(TEXT("HPMixedRealityController"))
 					)
 				{
-					// Check cap sense
-					FString ActualKeyName = CurrentInputKeyName.RightChop(19);
-					InputState.bIsCapSense = ActualKeyName.Contains(TEXT("_Touch"), ESearchCase::CaseSensitive, ESearchDir::FromEnd);
-
 					// Check for left X & Y buttons specific to Oculus Touch
-					InputState.bIsXButton = CurrentInputKeyName.Contains(TEXT("_X_Click")) || 
-						CurrentInputKeyName.Contains(TEXT("_X_Touch"));
+					InputState.bIsXButton = CurrentInputKeyName.EndsWith(TEXT("_X_Click")) || 
+						CurrentInputKeyName.EndsWith(TEXT("_X_Touch"));
 					InputState.bIsYButton = CurrentInputKeyName.Contains(TEXT("_Y_Click")) ||
-						CurrentInputKeyName.Contains(TEXT("_Y_Touch"));
-				}
-				else
-				{
-					InputState.bIsCapSense = CurrentInputKeyName.Contains(TEXT("CapSense"), ESearchCase::CaseSensitive, ESearchDir::FromEnd) ||
-						CurrentInputKeyName.Contains(TEXT("_Touch"), ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+						CurrentInputKeyName.EndsWith(TEXT("_Y_Touch"));
 				}
 
 				// Check for DPad Keys
@@ -1791,6 +2571,20 @@ void FSteamVRInputDevice::GenerateActionBindings(TArray<FInputMapping> &InInputM
 					InputState.bIsDpadDown = false;
 					InputState.bIsDpadLeft = false;
 					InputState.bIsDpadRight = true;
+				}
+				else if (CurrentInputKeyName.EndsWith(TEXT("_X")))
+				{
+					InputState.bIsDpadUp = false;
+					InputState.bIsDpadDown = false;
+					InputState.bIsDpadLeft = true;
+					InputState.bIsDpadRight = true;
+				}
+				else if (CurrentInputKeyName.EndsWith(TEXT("_Y")))
+				{
+					InputState.bIsDpadUp = true;
+					InputState.bIsDpadDown = true;
+					InputState.bIsDpadLeft = false;
+					InputState.bIsDpadRight = false;
 				}
 
 				// Handle Special Grip & Grab actions for supported controllers
@@ -1847,6 +2641,7 @@ void FSteamVRInputDevice::GenerateActionBindings(TArray<FInputMapping> &InInputM
 					// Any other controller should use the button cache mode
 					CacheMode = InputState.bIsGrip ? FName(TEXT("button")) : CacheMode;
 				}
+
 
 				// Set Cache Path
 				if (InputState.bIsTrigger)
@@ -1938,13 +2733,13 @@ void FSteamVRInputDevice::GenerateActionBindings(TArray<FInputMapping> &InInputM
 				{
 					// Create Submode
 					TSharedRef<FJsonObject> SubmodeJsonObject = MakeShareable(new FJsonObject());
-					if ( CurrentInputKeyName.Right(5).Equals( TEXT( "Touch" ) ) )
+					if (CurrentInputKeyName.Contains(TEXT("Trackpad")))
 					{
-						SubmodeJsonObject->SetStringField( TEXT( "sub_mode" ), TEXT( "touch" ) );
+						SubmodeJsonObject->SetStringField( TEXT( "sub_mode" ), TEXT( "click" ) );
 					}
 					else
 					{
-						SubmodeJsonObject->SetStringField( TEXT( "sub_mode" ), TEXT( "click" ) );
+						SubmodeJsonObject->SetStringField( TEXT( "sub_mode" ), TEXT( "touch" ) );
 					}
 					
 					// Create Parameter
@@ -2004,24 +2799,6 @@ void FSteamVRInputDevice::GenerateActionBindings(TArray<FInputMapping> &InInputM
 					CacheType = "";
 				}
 
-				// Handle Dpad values
-				if (InputState.bIsDpadUp)
-				{
-					CacheType = "north";
-				}
-				else if (InputState.bIsDpadDown)
-				{
-					CacheType = "south";
-				}
-				else if (InputState.bIsDpadLeft)
-				{
-					CacheType = "west";
-				}
-				else if (InputState.bIsDpadRight)
-				{
-					CacheType = "east";
-				}
-
 				// Handle special actions
 				if (InputState.bIsPinchGrab || InputState.bIsGripGrab)
 				{
@@ -2046,8 +2823,35 @@ void FSteamVRInputDevice::GenerateActionBindings(TArray<FInputMapping> &InInputM
 
 				if (!CacheType.IsEmpty())
 				{
-					// Set Action Input Type
-					ActionInputJsonObject->SetObjectField(CacheType, ActionPathJsonObject);
+					// Handle Dpad
+					if (InputState.bIsDpadUp || InputState.bIsDpadDown || InputState.bIsDpadLeft || InputState.bIsDpadRight)
+					{
+						// Handle Dpad values
+						if (InputState.bIsDpadUp)
+						{
+							ActionInputJsonObject->SetObjectField(FString(TEXT("north")), ActionPathJsonObject);
+						}
+
+						if (InputState.bIsDpadDown)
+						{
+							ActionInputJsonObject->SetObjectField(FString(TEXT("south")), ActionPathJsonObject);
+						}
+
+						if (InputState.bIsDpadLeft)
+						{
+							ActionInputJsonObject->SetObjectField(FString(TEXT("west")), ActionPathJsonObject);
+						}
+
+						if (InputState.bIsDpadRight)
+						{
+							ActionInputJsonObject->SetObjectField(FString(TEXT("east")), ActionPathJsonObject);
+						}
+					}
+					else
+					{
+						// Set Action Input Type
+						ActionInputJsonObject->SetObjectField(CacheType, ActionPathJsonObject);
+					}
 
 					// Set Inputs
 					ActionSourceJsonObject->SetObjectField(TEXT("inputs"), ActionInputJsonObject);
@@ -2092,7 +2896,8 @@ void FSteamVRInputDevice::GenerateActionBindings(TArray<FInputMapping> &InInputM
 				if ((bIsGenericController && !bHasSteamVRInputs) || (!bIsGenericController && Controller.KeyEquivalent.Contains(TEXT("SteamVR")) && !SteamVRAxisKeyMapping.ControllerName.Contains(TEXT("MotionController"))))
 				{
 					// Check this input mapping is of the correct controller type
-					if (!Controller.KeyEquivalent.Contains(SteamVRAxisKeyMapping.ControllerName) && !SteamVRAxisKeyMapping.InputAxisKeyMapping.Key.GetFName().ToString().Contains(TEXT("MotionController")))
+				FString ControllerType = SteamVRAxisKeyMapping.ControllerName;
+				if (!Controller.KeyEquivalent.Contains(ControllerType) && !SteamVRAxisKeyMapping.InputAxisKeyMapping.Key.GetFName().ToString().Contains(TEXT("MotionController")))
 					{
 						continue;
 					}
@@ -2145,8 +2950,7 @@ void FSteamVRInputDevice::GenerateActionBindings(TArray<FInputMapping> &InInputM
 						if (CurrentInputKeyName.Contains(TEXT("OculusTouch")))
 						{
 							// Check cap sense
-							FString OculusKeyName = CurrentInputKeyName.RightChop(20);
-							InputState.bIsCapSense = OculusKeyName.Contains(TEXT("_Touch"), ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+							InputState.bIsCapSense = CurrentInputKeyName.Contains(TEXT("_Touch"), ESearchCase::CaseSensitive, ESearchDir::FromEnd);
 	
 							// Check for left X & Y buttons specific to Oculus Touch
 							InputState.bIsXButton = CurrentInputKeyName.Contains(TEXT("_X_Click")) ||
@@ -2233,7 +3037,7 @@ void FSteamVRInputDevice::GenerateActionBindings(TArray<FInputMapping> &InInputM
 	
 						// If key being mapped is not an axis key (hardware-wise), set mode as an analog action (scalar_constant to 1.0f)
 						// https://github.com/ValveSoftware/steamvr_unreal_plugin/issues/12
-						if ( !SteamVRAxisKeyMapping.InputAxisKeyMapping.Key.IsFloatAxis()
+					if (!SteamVRAxisKeyMapping.InputAxisKeyMapping.Key.IsAxis1D()
 							&& ( !CurrentInputKeyName.Contains( TEXT( "Trackpad" ), ESearchCase::CaseSensitive, ESearchDir::FromEnd )
 								&& !CurrentInputKeyName.Contains( TEXT( "Touch" ), ESearchCase::CaseSensitive, ESearchDir::FromEnd ) ) )
 						{
@@ -2339,7 +3143,6 @@ void FSteamVRInputDevice::GenerateActionBindings(TArray<FInputMapping> &InInputM
 							{
 								SubmodeJsonObject->SetStringField( TEXT( "sub_mode" ), TEXT( "click" ) );
 							}
-
 
 							// Create Parameter
 							TSharedPtr<FJsonObject> ParametersJsonObject = MakeShareable(new FJsonObject());
@@ -2484,19 +3287,35 @@ void FSteamVRInputDevice::GenerateActionManifest(bool GenerateActions, bool Gene
 	// Define Controller Types supported by SteamVR
 	TArray<TSharedPtr<FJsonValue>> ControllerBindings;
 	ControllerTypes.Empty();
-	ControllerTypes.Emplace(FControllerType(TEXT("knuckles"), TEXT("ValveIndex"), TEXT("SteamVR_ValveIndex")));
-	ControllerTypes.Emplace(FControllerType(TEXT("vive_controller"), TEXT("Vive"), TEXT("SteamVR_Vive")));
-	ControllerTypes.Emplace(FControllerType(TEXT("vive_cosmos_controller"), TEXT("Cosmos"), TEXT("SteamVR_Cosmos")));
-	ControllerTypes.Emplace(FControllerType(TEXT("oculus_touch"), TEXT("OculusTouch"), TEXT("SteamVR_OculusTouch")));
-	ControllerTypes.Emplace(FControllerType(TEXT("holographic_controller"), TEXT("MixedReality"), TEXT("SteamVR_MixedReality")));
 	
-	ControllerTypes.Emplace(FControllerType(TEXT("indexhmd"), TEXT("Valve Index Headset"), TEXT("SteamVR_Valve_Index_Headset")));
-	ControllerTypes.Emplace(FControllerType(TEXT("vive"), TEXT("Vive Headset"), TEXT("SteamVR_Vive_Headset")));
-	ControllerTypes.Emplace(FControllerType(TEXT("vive_pro"), TEXT("Vive Pro Headset"), TEXT("SteamVR_Vive_Pro_Headset")));
-	ControllerTypes.Emplace(FControllerType(TEXT("rift"), TEXT("Rift Headset"), TEXT("SteamVR_Rift_Headset")));
+	ControllerTypes.Add(FControllerType(TEXT("knuckles"), TEXT("ValveIndex"), TEXT("SteamVR_ValveIndex")));
+	ControllerTypes.Add(FControllerType(TEXT("vive_controller"), TEXT("Vive"), TEXT("SteamVR_Vive")));
+	ControllerTypes.Add(FControllerType(TEXT("vive_cosmos_controller"), TEXT("Cosmos"), TEXT("SteamVR_Cosmos")));
+	ControllerTypes.Add(FControllerType(TEXT("oculus_touch"), TEXT("OculusTouch"), TEXT("SteamVR_OculusTouch")));
+	ControllerTypes.Add(FControllerType(TEXT("holographic_controller"), TEXT("MixedReality"), TEXT("SteamVR_MixedReality")));
+	ControllerTypes.Add(FControllerType(TEXT("hpmotioncontroller"), TEXT("HPMixedRealityController"), TEXT("SteamVR_HPMixedRealityController")));
 
-	ControllerTypes.Emplace(FControllerType(TEXT("vive_tracker_camera"), TEXT("Vive Trackers"), TEXT("SteamVR_Vive_Tracker")));
-	ControllerTypes.Emplace(FControllerType(TEXT("gamepad"), TEXT("Gamepads"), TEXT("SteamVR_Gamepads")));
+	ControllerTypes.Add(FControllerType(TEXT("indexhmd"), TEXT("Valve Index Headset"), TEXT("SteamVR_Valve_Index_Headset")));
+	ControllerTypes.Add(FControllerType(TEXT("vive"), TEXT("Vive Headset"), TEXT("SteamVR_Vive_Headset")));
+	ControllerTypes.Add(FControllerType(TEXT("vive_pro"), TEXT("Vive Pro Headset"), TEXT("SteamVR_Vive_Pro_Headset")));
+	ControllerTypes.Add(FControllerType(TEXT("rift"), TEXT("Rift Headset"), TEXT("SteamVR_Rift_Headset")));
+
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker"), TEXT("Vive Tracker"), TEXT("SteamVR_Vive_Tracker")));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_camera"), TEXT("Vive Tracker (Camera)"), TEXT("SteamVR_Vive_Tracker_Camera"), TEXT(ACTION_PATH_TRACKER_CAMERA), TEXT(ACTION_PATH_SPCL_CAMERA)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_waist"), TEXT("Vive Tracker (Waist)"), TEXT("SteamVR_Vive_Tracker_Waist"), TEXT(ACTION_PATH_TRACKER_WAIST), TEXT(ACTION_PATH_SPCL_WAIST)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_left_foot"), TEXT("Vive Tracker (Left Foot)"), TEXT("SteamVR_Vive_Tracker_Left_Foot"), TEXT(ACTION_PATH_TRACKER_FOOT_LEFT), TEXT(ACTION_PATH_SPCL_FOOT_LEFT)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_right_foot"), TEXT("Vive Tracker (Right Foot)"), TEXT("SteamVR_Vive_Tracker_Right_Foot"), TEXT(ACTION_PATH_TRACKER_FOOT_RIGHT), TEXT(ACTION_PATH_SPCL_FOOT_RIGHT)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_left_shoulder"), TEXT("Vive Tracker (Left Shoulder)"), TEXT("SteamVR_Vive_Tracker_Left_Shoulder"), TEXT(ACTION_PATH_TRACKER_SHOULDER_LEFT), TEXT(ACTION_PATH_SPCL_SHOULDER_LEFT)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_right_shoulder"), TEXT("Vive Tracker (Right Shoulder)"), TEXT("SteamVR_Vive_Tracker_Right_Shoulder"), TEXT(ACTION_PATH_TRACKER_SHOULDER_RIGHT), TEXT(ACTION_PATH_SPCL_SHOULDER_RIGHT)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_left_elbow"), TEXT("Vive Tracker (Left Elbow)"), TEXT("SteamVR_Vive_Tracker_Left_Elbow"), TEXT(ACTION_PATH_TRACKER_ELBOW_LEFT), TEXT(ACTION_PATH_SPCL_ELBOW_LEFT)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_right_elbow"), TEXT("Vive Tracker (Right Elbow)"), TEXT("SteamVR_Vive_Tracker_Right_Elbow"), TEXT(ACTION_PATH_TRACKER_ELBOW_RIGHT), TEXT(ACTION_PATH_SPCL_ELBOW_RIGHT)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_left_knee"), TEXT("Vive Tracker (Left knee)"), TEXT("SteamVR_Vive_Tracker_Left_Knee"), TEXT(ACTION_PATH_TRACKER_KNEE_LEFT), TEXT(ACTION_PATH_SPCL_KNEE_LEFT)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_right_knee"), TEXT("Vive Tracker (Right Knee)"), TEXT("SteamVR_Vive_Tracker_Right_Knee"), TEXT(ACTION_PATH_TRACKER_KNEE_RIGHT), TEXT(ACTION_PATH_SPCL_KNEE_RIGHT)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_chest"), TEXT("Vive Tracker (Chest)"), TEXT("SteamVR_Vive_Tracker_Chest"), TEXT(ACTION_PATH_TRACKER_CHEST), TEXT(ACTION_PATH_SPCL_CHEST)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_keyboard"), TEXT("Vive Tracker (Keyboard)"), TEXT("SteamVR_Vive_Tracker_Keyboard"), TEXT(ACTION_PATH_TRACKER_KEYBOARD), TEXT(ACTION_PATH_SPCL_KEYBOARD)));
+	ControllerTypes.Add(FControllerType(TEXT("vive_tracker_handed"), TEXT("Vive Tracker (Handed)"), TEXT("SteamVR_Vive_Tracker_Handed")));
+
+	ControllerTypes.Add(FControllerType(TEXT("gamepad"), TEXT("Gamepads"), TEXT("SteamVR_Gamepads")));
 	
 #pragma region ACTIONS
 	// Clear Actions cache
@@ -2530,46 +3349,116 @@ void FSteamVRInputDevice::GenerateActionManifest(bool GenerateActions, bool Gene
 				FName(TEXT("Right Controller [Pose]")), FString(TEXT(ACTION_PATH_CONT_RAW_RIGHT))));
 		}
 
-		// Other poses
+		// Tracker Poses
 		{
-			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_BACK_L));
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_CAMERA));
 			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
-				FName(TEXT("Special 1 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_BACK_LEFT))));
+				FName(TEXT("Camera [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_CAMERA))));
 		}
 		{
-			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_BACK_R));
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_CHEST));
 			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
-				FName(TEXT("Special 2 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_BACK_RIGHT))));
+				FName(TEXT("Chest [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_CHEST))));
 		}
 		{
-			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_FRONT_L));
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_SHOULDER_LEFT));
 			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
-				FName(TEXT("Special 3 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONT_LEFT))));
+				FName(TEXT("Shoulder Left [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_SHOULDER_LEFT))));
 		}
 		{
-			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_FRONT_R));
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_SHOULDER_RIGHT));
 			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
-				FName(TEXT("Special 4 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONT_RIGHT))));
+				FName(TEXT("Shoulder Right [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_SHOULDER_RIGHT))));
 		}
 		{
-			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_FRONTR_L));
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_ELBOW_LEFT));
 			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
-				FName(TEXT("Special 5 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONTR_LEFT))));
+				FName(TEXT("Elbow Left [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_ELBOW_LEFT))));
 		}
 		{
-			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_FRONTR_R));
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_ELBOW_RIGHT));
 			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
-				FName(TEXT("Special 6 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONTR_RIGHT))));
+				FName(TEXT("Elbow Right [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_ELBOW_RIGHT))));
 		}
 		{
-			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_PISTOL_L));
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_KNEE_LEFT));
 			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
-				FName(TEXT("Special 7 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_PISTOL_LEFT))));
+				FName(TEXT("Knee Left [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_KNEE_LEFT))));
 		}
 		{
-			FString ConstActionPath = FString(TEXT(ACTION_PATH_SPECIAL_PISTOL_R));
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_KNEE_RIGHT));
 			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
-				FName(TEXT("Special 8 [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_PISTOL_RIGHT))));
+				FName(TEXT("Knee Right [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_KNEE_RIGHT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_WAIST));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Waist [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_WAIST))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_FOOT_LEFT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Foot Left [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FOOT_LEFT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_FOOT_RIGHT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Foot Right [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FOOT_RIGHT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_KEYBOARD));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Keyboard [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_KEYBOARD))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_HANDED_POSE_LEFT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Raw Pose Left [Tracker]")), FString(TEXT(ACTION_PATH_CONT_RAW_LEFT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_HANDED_POSE_RIGHT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Raw Pose Right [Tracker]")), FString(TEXT(ACTION_PATH_CONT_RAW_RIGHT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_HANDED_BACK_LEFT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Handed Back Left [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_BACK_LEFT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_HANDED_BACK_RIGHT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Handed Back Right [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_BACK_RIGHT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_HANDED_FRONT_LEFT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Handed Front Left [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONT_LEFT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_HANDED_FRONT_RIGHT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Handed Front Right [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONT_RIGHT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_HANDED_FRONTR_LEFT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Handed Front Rolled Left [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONTR_LEFT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_HANDED_FRONTR_RIGHT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Handed Front Rolled Right [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_FRONTR_RIGHT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_HANDED_GRIP_LEFT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Handed Pistol Grip Left [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_PISTOL_LEFT))));
+		}
+		{
+			FString ConstActionPath = FString(TEXT(ACTION_PATH_TRACKER_HANDED_GRIP_RIGHT));
+			Actions.Add(FSteamVRInputAction(ConstActionPath, ESteamVRActionType::Pose, false,
+				FName(TEXT("Handed Pistol Grip Right [Tracker]")), FString(TEXT(ACTION_PATH_SPCL_PISTOL_RIGHT))));
 		}
 
 		// Skeletal Data
@@ -2729,7 +3618,18 @@ void FSteamVRInputDevice::GenerateActionManifest(bool GenerateActions, bool Gene
 							if (ActionNameArray.Num() > 0)
 							{
 								// Grab only the first action name & remove _X
+								if (ActionNameArray[0].EndsWith(TEXT("_X")))
+								{
 								ActionName = FString(ActionNameArray[0]).Replace(TEXT("_X"), TEXT("")); 
+							}
+								else if (ActionNameArray[0].EndsWith(TEXT(" X")))
+								{
+									ActionName = FString(ActionNameArray[0]).Replace(TEXT(" X"), TEXT(""));
+								}
+								else if (ActionNameArray[0].EndsWith(TEXT("X")))
+								{
+									ActionName = FString(ActionNameArray[0]).Replace(TEXT("X"), TEXT(""));
+								}
 							}
 						}
 						else
@@ -3144,44 +4044,39 @@ void FSteamVRInputDevice::ProcessKeyAxisMappings(const UInputSettings* InputSett
 	// Retrieve Key Axis names
 	TArray<FName> KeyAxisNames;
 	InputSettings->GetAxisNames(KeyAxisNames);
+
+	// Setup caches
 	KeyAxisMappings.Empty();
 	SteamVRKeyAxisMappings.Empty();
 
-	// Iterate over every axis name found in this project, and process for Vector 1, 2 or 3
-	for (const FName& XAxisName : KeyAxisNames)
+	TArray<FSteamVRAxisKeyMapping> X_AxisMappings;
+	TArray<FSteamVRAxisKeyMapping> Y_AxisMappings;
+
+	// (EXTRAPOLATE DEV INTENT STEP 1) Iterate over every axis name found in this project
+	for (const FName& AxisAction : KeyAxisNames)
 	{
-		// Set X Axis Key Name Cache
-		FName XAxisNameKey = NAME_None;	
-		FName YAxisNameKey = NAME_None;
-		FName YAxisName = NAME_None;
-		FName ZAxisNameKey = NAME_None;
-		FName ZAxisName = NAME_None;
+		// (1) Get all input axis mappings for this action
+		FindAxisMappings(InputSettings, AxisAction, KeyAxisMappings);
 
-		// Retrieve input axes associated with this action
-		FindAxisMappings(InputSettings, XAxisName, KeyAxisMappings);
-
-		// Create a SteamVR Axis Key Mapping that holds metadata for us
+		// (2) Create a SteamVR Axis Key Mapping that holds metadata for us
 		GetSteamVRMappings(KeyAxisMappings, SteamVRKeyAxisMappings);
 
-		// STEP 1: Go through all X axis mappings, checking for which type of Vector this is (1, 2 or 3)
+		// (3) Process all SteamVR axis key mappings and look for potential Vector2s
 		for (FSteamVRAxisKeyMapping& AxisMapping : SteamVRKeyAxisMappings)
 		{
-			// Add axes names here for use in the auto-generation of controller bindings
+			// (a) Get the string version of the key id we are dealing with
+			FString CurrentKey = AxisMapping.InputAxisKeyMapping.Key.GetFName().ToString();
+
+			// (b) Add axis key here for use in the auto-generation of controller bindings
 			InOutUniqueInputs.AddUnique(AxisMapping.InputAxisKeyMapping.Key.GetFName());
 
-			// Default to "MotionController" Generic UE type
+			// (c) Default to "MotionController" Generic UE type
 			FString CurrentControllerType = FString(TEXT("MotionController"));
 
-			// If this is an X Axis key, check for the corresponding Y & Z Axes as well
-			uint32 KeyHand = 0;
-
-			// Get the string version of the key id we are dealing with for analysis
-			FString CurrentKey = AxisMapping.InputAxisKeyMapping.Key.GetFName().ToString();
-			
-			// Determine which supported controller type we are working with
+			// (d) Determine which supported controller type we are working with
 			if (CurrentKey.Contains(TEXT("ValveIndex")))
 			{
-				CurrentControllerType = FString(TEXT("ValveIndex"));
+				CurrentControllerType = FString(TEXT("ValveIndex"));;
 			}
 			else if (CurrentKey.Contains(TEXT("Vive")))
 			{
@@ -3208,305 +4103,127 @@ void FSteamVRInputDevice::ProcessKeyAxisMappings(const UInputSettings* InputSett
 				continue;
 			}
 
-			// Set the Controller Type for this axis mapping
+			// (e) Set the Controller Type for this axis mapping
 			AxisMapping.ControllerName = CurrentControllerType;
 
-			// Create a Y Equivalent of the X Action to ensure we are matching the action and not just the controller type
-			FString CurrentActionName_Y = AxisMapping.InputAxisKeyMapping.AxisName.ToString().Replace(TEXT("_X"), TEXT("_Y"));
-			FString CurrentActionName_Z = AxisMapping.InputAxisKeyMapping.AxisName.ToString().Replace(TEXT("_X"), TEXT("_Z"));
-
-			// Convert the controller key id name to a string we can do some quick checks on it
-			FString KeyString_X = AxisMapping.InputAxisKeyMapping.Key.GetFName().ToString();
-			FString KeyString_Y = "";
-			FString KeyString_Z = "";
-			bool bIsXAxis = false;
-
-			if (KeyString_X.Contains(TEXT("_X_"), ESearchCase::CaseSensitive, ESearchDir::FromEnd))
+			// (f) Sort out potential Vector 2s
+			if (CurrentKey.Len() > 2)
 			{
-				bIsXAxis = true;
-				KeyString_Y = KeyString_X.Replace(TEXT("_X_"), TEXT("_Y_"));
-				KeyString_Z = KeyString_X.Replace(TEXT("_X_"), TEXT("_Z_"));
+				if (CurrentKey.EndsWith(TEXT("_X")))
+			{
+					// Potential Vector2, holding X axis key
+					X_AxisMappings.Add(AxisMapping);
 			}
-			else if (KeyString_X.Contains(TEXT("_X"), ESearchCase::CaseSensitive, ESearchDir::FromEnd))
+				else if (CurrentKey.EndsWith(TEXT("_Y")))
 			{
-				bIsXAxis = true;
-				KeyString_Y = KeyString_X.Replace(TEXT("_X"), TEXT("_Y"));
-				KeyString_Z = KeyString_X.Replace(TEXT("_X"), TEXT("_Z"));
+					// Potential Vector2, holding Y axis key
+					Y_AxisMappings.Add(AxisMapping);
 			}
-			else if (KeyString_X.Contains(TEXT("X-Axis"), ESearchCase::CaseSensitive, ESearchDir::FromEnd))
-			{
-				bIsXAxis = true;
-				KeyString_Y = KeyString_X.Replace(TEXT("X-Axis"), TEXT("Y-Axis"));
-				KeyString_Z = KeyString_X.Replace(TEXT("X-Axis"), TEXT("Z-Axis"));
-			}
-
-
-			// Check if this controller is meant to be a float X axis key
-			if (bIsXAxis)
-			{
-				// Set X Axis
-				XAxisNameKey = FName(*KeyString_X);
-
-				// Go through all the axis names again looking for Y and Z inputs that correspond to this X input
-				for (const FName& KeyAxisNameInner : KeyAxisNames)
-				{
-					// Retrieve input axes associated with this action
-					TArray<FInputAxisKeyMapping> AxisMappingsInner;
-					FindAxisMappings(InputSettings, KeyAxisNameInner, AxisMappingsInner);
-
-					for (auto& AxisMappingInner : AxisMappingsInner)
-					{
-						// Get the name of the key for this action
-						FString KeyNameString = (AxisMappingInner.Key.GetFName().ToString());
-
-						// Check if we are dealing with the same controller for this action
-						if (!KeyNameString.Contains(CurrentControllerType))
-						{
-							// Skip this action if not
-							continue;
-						}
-
-						// Check if this is an equivalent Y Axis key for our current X Axis key
-						if (KeyString_Y.Equals(KeyNameString) && AxisMappingInner.AxisName.ToString().Equals(CurrentActionName_Y))
-						{
-							YAxisName = FName(KeyAxisNameInner);
-							YAxisNameKey = FName(*KeyString_Y);
-							AxisMapping.bIsPartofVector2 = true;
-						}
-						else if (KeyString_Z.Equals(KeyNameString) && AxisMappingInner.AxisName.ToString().Equals(CurrentActionName_Z))
-						{
-							ZAxisName = KeyAxisNameInner;
-							ZAxisNameKey = AxisMappingInner.Key.GetFName();
-							AxisMapping.bIsPartofVector3 = true;
 						}
 					}
 				}
 
-				// Set the Axis Names
-				if (YAxisName != NAME_None && ZAxisName == NAME_None)
+	// (EXTRAPOLATE DEV INTENT STEP 2) Go through sorted actions with X & Y input keys and attempt to match them
+	for (FSteamVRAxisKeyMapping& X_AxisMapping : X_AxisMappings)
 				{
-					// [2D] There's a Y Axis but no Z, this must be a Vector2
-					AxisMapping.XAxisName = FName(AxisMapping.InputAxisKeyMapping.AxisName);
-					AxisMapping.YAxisName = FName(YAxisName);
+		// (1) Reset vector2 tag for this action
+		X_AxisMapping.bIsPartofVector2 = false;
 					
-					AxisMapping.XAxisKey = FName(XAxisNameKey);
-					AxisMapping.YAxisKey = FName(YAxisNameKey);
-					
-					AxisMapping.bIsPartofVector2 = true;
-				}
-				else if (YAxisName != NAME_None && ZAxisName != NAME_None)
+		// (2) Check Y Axis Mappings for an equivalent action name
+		for (FSteamVRAxisKeyMapping& Y_AxisMapping : Y_AxisMappings)
 				{
-					// [3D] There's a Z Axis, this must be a Vector3
-					AxisMapping.XAxisName = FName(AxisMapping.InputAxisKeyMapping.AxisName);
-					AxisMapping.YAxisName = FName(YAxisName);
-					AxisMapping.ZAxisName = FName(ZAxisName);
-					
-					AxisMapping.XAxisKey = FName(XAxisNameKey);
-					AxisMapping.YAxisKey = FName(YAxisNameKey);
-					AxisMapping.ZAxisKey = FName(ZAxisNameKey);
-
-					AxisMapping.bIsPartofVector3 = true;
-				}
-
-				// Reset Name Caches
-				YAxisNameKey = NAME_None;
-				YAxisName = NAME_None;
-				ZAxisNameKey = NAME_None;
-				ZAxisName = NAME_None;
-			}
-		}
-
-		// STEP 2: Go through all Y axis mappings, checking for which type of Vector this is (1, 2 or 3)
-		for (auto& AxisMapping : SteamVRKeyAxisMappings)
-		{
-			// Add axes names here for use in the auto-generation of controller bindings
-			InOutUniqueInputs.AddUnique(AxisMapping.InputAxisKeyMapping.Key.GetFName());
-
-			// Default to "MotionController" Generic UE type
-			FString CurrentControllerType = FString(TEXT("MotionController"));
-
-			// If this is an X Axis key, check for the corresponding Y & Z Axes as well
-			uint32 KeyHand = 0;
-
-			// Get the string version of the key id we are dealing with for analysis
-			FString CurrentKey = AxisMapping.InputAxisKeyMapping.Key.GetFName().ToString();
-
-			// Determine which supported controller type we are working with
-			if (CurrentKey.Contains(TEXT("ValveIndex")))
-			{
-				CurrentControllerType = FString(TEXT("ValveIndex"));
-			}
-			else if (CurrentKey.Contains(TEXT("Vive")))
-			{
-				CurrentControllerType = FString(TEXT("Vive"));
-			}
-			else if (CurrentKey.Contains(TEXT("Cosmos")))
-			{
-				CurrentControllerType = FString(TEXT("Cosmos"));
-			}
-			else if (CurrentKey.Contains(TEXT("OculusTouch")))
-			{
-				CurrentControllerType = FString(TEXT("OculusTouch"));
-			}
-			else if (CurrentKey.Contains(TEXT("MixedReality")))
-			{
-				CurrentControllerType = FString(TEXT("MixedReality"));
-			} 
-			else if (CurrentKey.Contains(TEXT("MotionController")))
-			{
-				// empty on purpose (readability)
-			}
-			else
-			{
-				continue;
-			}
-
-			// Set the Controller Type for this axis mapping
-			AxisMapping.ControllerName = CurrentControllerType;
-
-			// Convert the controller key id name to a string so we can do some quick checks on it
-			FString KeyString_X = "";
-			FString KeyString_Y = AxisMapping.InputAxisKeyMapping.Key.GetFName().ToString();
-			FString KeyString_Z = "";
-			bool bIsYAxis = false;
-
-			if (KeyString_Y.Contains(TEXT("_Y_"), ESearchCase::CaseSensitive, ESearchDir::FromEnd))
-			{
-				bIsYAxis = true;
-				KeyString_X = KeyString_Y.Replace(TEXT("_Y_"), TEXT("_X_"));
-				KeyString_Z = KeyString_Y.Replace(TEXT("_Y_"), TEXT("_Z_"));
-			}
-			else if (KeyString_Y.Contains(TEXT("_Y"), ESearchCase::CaseSensitive, ESearchDir::FromEnd))
-			{
-				bIsYAxis = true;
-				KeyString_X = KeyString_Y.Replace(TEXT("_Y"), TEXT("_X"));
-				KeyString_Z = KeyString_Y.Replace(TEXT("_Y"), TEXT("_Z"));
-			}
-			else if (KeyString_Y.Contains(TEXT("Y-Axis"), ESearchCase::CaseSensitive, ESearchDir::FromEnd))
-			{
-				bIsYAxis = true;
-				KeyString_X = KeyString_Y.Replace(TEXT("Y-Axis"), TEXT("X-Axis"));
-				KeyString_Z = KeyString_Y.Replace(TEXT("Y-Axis"), TEXT("Z-Axis"));
-			}
-
-			// Check if this controller is meant to be a float Y axis key
-			if (bIsYAxis)
-			{
-				// Go through all the axis names again looking for X and Z inputs that correspond to this Y input
-				for (const FName& KeyAxisNameInner : KeyAxisNames)
-				{
-					// Retrieve input axes associated with this action
-					TArray<FInputAxisKeyMapping> AxisMappingsInner;
-					FindAxisMappings(InputSettings, KeyAxisNameInner, AxisMappingsInner);
-
-					for (auto& AxisMappingInner : AxisMappingsInner)
-					{
-						// Get the name of the key for this action
-						FString KeyNameString = (AxisMappingInner.Key.GetFName().ToString());
-
-						// Check if we are dealing with the same controller for this action
-						if (!KeyNameString.Contains(CurrentControllerType))
-						{
-							// Skip this action if not
-							continue;
-						}
-
-						// Check if this is an equivalent X Axis key for our current Y Axis key
-						if (KeyString_X.Equals(KeyNameString))
-						{
-							AxisMapping.bIsPartofVector2 = true;
-						}
-						else if (KeyString_Z.Equals(KeyNameString))
-						{
-							AxisMapping.bIsPartofVector3 = true;
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// STEP 3: Create the axis action names
-	for (FSteamVRAxisKeyMapping& AxisMapping : SteamVRKeyAxisMappings)
-	{
-		// Only process valid controllers
-		if ((!IsVRKey(AxisMapping.InputAxisKeyMapping.Key.GetFName())
-			&& !AxisMapping.InputAxisKeyMapping.Key.GetFName().ToString().Contains(TEXT("MotionController"))))
-		{
-			continue;
-		} 
-
-		// Only process Motion Controller if there are no SteamVR actions
-		if (AxisMapping.InputAxisKeyMapping.Key.GetFName().ToString().Contains(TEXT("MotionController")))
-		{
-			bool bFound = false;
-			for (FSteamVRAxisKeyMapping& AxisMappingInner : SteamVRKeyAxisMappings)
-			{
-				//UE_LOG(LogTemp, Warning, TEXT("SEARCH: \nActionName: %s \nActionNameInner:%s \n%s \n%s"), 
-				//	*AxisMapping.InputAxisKeyMapping.AxisName.ToString(), 
-				//	*AxisMappingInner.InputAxisKeyMapping.AxisName.ToString(),
-				//	*AxisMapping.InputAxisKeyMapping.Key.GetFName().ToString(),
-				//	*AxisMappingInner.InputAxisKeyMapping.Key.GetFName().ToString());
-
-				if (AxisMapping.InputAxisKeyMapping.AxisName.ToString().Contains(AxisMappingInner.InputAxisKeyMapping.AxisName.ToString())
-					&& IsVRKey(AxisMappingInner.InputAxisKeyMapping.Key.GetFName()))
-				{
-					//UE_LOG(LogTemp, Warning, TEXT("SEARCH: MOTION CONTROLLER with STEAMVR Paired action found!"));
-					bFound = true;
-					break;
-				}
-			}
-
-			if (bFound)
-			{
-				continue;
-			}
-		}
-
-		if (AxisMapping.bIsPartofVector2)
-		{
-			// Check for empty actions
-			if (AxisMapping.InputAxisKeyMapping.AxisName == NAME_None ||
-				AxisMapping.YAxisName == NAME_None
+			// (2.1) Try to find an action pair
+			if (X_AxisMapping.InputAxisKeyMapping.Key.GetFName().ToString().LeftChop(2).Equals(Y_AxisMapping.InputAxisKeyMapping.Key.GetFName().ToString().LeftChop(2)) &&
+				X_AxisMapping.InputAxisKeyMapping.AxisName.ToString().LeftChop(2).Equals(Y_AxisMapping.InputAxisKeyMapping.AxisName.ToString().LeftChop(2))
 				)
-			{
-				AxisMapping.bIsPartofVector2 = false;
-			}
-			else
-			{
-				// Add a Vector 2 Action to our Actions list
-				FString AxisName2D = AxisMapping.InputAxisKeyMapping.AxisName.ToString() +
+		{
+				// (2.1.a) Action pair found with matching X & Y keys for a specific controller
+				FString AxisName2D = X_AxisMapping.InputAxisKeyMapping.AxisName.ToString() +
 					TEXT(",") +
-					AxisMapping.YAxisName.ToString() +
+					Y_AxisMapping.InputAxisKeyMapping.AxisName.ToString() +
 					TEXT(" X Y_axis2d");
 				FString ActionPath2D = FString(ACTION_PATH_IN) / AxisName2D;
 
-				Actions.Add(FSteamVRInputAction(ActionPath2D, FName(*AxisName2D), AxisMapping.XAxisKey, AxisMapping.YAxisKey, FVector2D()));
-				AxisMapping.ActionName = FString(AxisName2D);
-				AxisMapping.ActionNameWithPath = FString(ActionPath2D);
+				// (2.1.b) Setup X & Y axis keys for this action
+				X_AxisMapping.XAxisName = FName(X_AxisMapping.InputAxisKeyMapping.AxisName);
+				X_AxisMapping.YAxisName = FName(Y_AxisMapping.InputAxisKeyMapping.AxisName);
+				X_AxisMapping.XAxisKey = X_AxisMapping.InputAxisKeyMapping.Key.GetFName();
+				X_AxisMapping.YAxisKey = Y_AxisMapping.InputAxisKeyMapping.Key.GetFName();
+
+				// (2.1.c) Create a Vector 2 Action
+				X_AxisMapping.ActionName = FString(AxisName2D);
+				X_AxisMapping.ActionNameWithPath = FString(ActionPath2D);
+
+				// (2.1.d) Tag this action as a Vector 2
+				X_AxisMapping.bIsPartofVector2 = true;
 			}
-		}
-		else if (AxisMapping.bIsPartofVector3)
-		{
-			// Check for empty actions
-			if (AxisMapping.InputAxisKeyMapping.AxisName == NAME_None ||
-				AxisMapping.YAxisName == NAME_None ||
-				AxisMapping.ZAxisName == NAME_None
-				)
+			}
+			}
+
+	// (EXTRAPOLATE DEV INTENT STEP 3) Tag Vector1s from Vector2s
+	for (FSteamVRAxisKeyMapping& AxisMapping : SteamVRKeyAxisMappings)
 			{
+		// Check if this AxisMapping belongs to a Vector2
+		bool bIsVector2 = false;
+		for (FSteamVRAxisKeyMapping& X_AxisMapping : X_AxisMappings)
+			{
+			if (X_AxisMapping.bIsPartofVector2 &&
+				(AxisMapping.InputAxisKeyMapping.Key.GetFName().IsEqual(X_AxisMapping.XAxisKey) || AxisMapping.InputAxisKeyMapping.Key.GetFName().IsEqual(X_AxisMapping.YAxisKey)))
+			{
+				// Set X & Y axis keys
+				AxisMapping.XAxisName = FName(X_AxisMapping.XAxisName);
+				AxisMapping.XAxisKey = FName(X_AxisMapping.XAxisKey);
+				AxisMapping.YAxisName = FName(X_AxisMapping.YAxisName);
+				AxisMapping.YAxisKey = FName(X_AxisMapping.YAxisKey);
+
+				// Check for duplicates
+				bool bIsDuplicate = false;
+				for (auto& TestAction : Actions)
+			{
+					if (TestAction.KeyX.IsEqual(AxisMapping.XAxisKey) && TestAction.KeyY.IsEqual(AxisMapping.YAxisKey))
+			{
+						bIsDuplicate = true;
+						break;
+			}
+			}
+
+				if (!bIsDuplicate)
+					{
+					// Set action name and path
+					AxisMapping.ActionName = FString(X_AxisMapping.ActionName);
+					AxisMapping.ActionNameWithPath = FString(X_AxisMapping.ActionNameWithPath);
+
+					Actions.Add(FSteamVRInputAction(AxisMapping.ActionNameWithPath, FName(*AxisMapping.ActionName), AxisMapping.XAxisKey, AxisMapping.YAxisKey, FVector2D()));
+						}
+
+				// Tag this axis mapping as a vector2
+							AxisMapping.bIsPartofVector2 = true;
+				bIsVector2 = true;
+				break;
+		}
+	}
+
+		// Create a Vector1 action
+		if (!bIsVector2)
+	{
+			// Set axis name and paths
+			FString AxisName1D = AxisMapping.InputAxisKeyMapping.AxisName.ToString() + TEXT(" axis");
+			FString ActionPath = FString(ACTION_PATH_IN) / AxisName1D;
+
+			// Set X & Y axis keys
+			AxisMapping.XAxisName = FName(AxisMapping.InputAxisKeyMapping.AxisName);
+			AxisMapping.XAxisKey = AxisMapping.InputAxisKeyMapping.Key.GetFName();
+
+			// Create a Vector 1 action
+			Actions.Add(FSteamVRInputAction(ActionPath, FName(*AxisName1D), AxisMapping.XAxisKey, 0.0f));
+			AxisMapping.ActionName = FString(AxisName1D);
+			AxisMapping.ActionNameWithPath = FString(ActionPath);
+
+			// Ensure this axis mapping is recognized as a Vector1 later on
+				AxisMapping.bIsPartofVector2 = false;
 				AxisMapping.bIsPartofVector3 = false;
 			}
 		}
-		else
-		{
-			// Add a Vector 1 to our Actions List
-			FString AxisName1D = AxisMapping.InputAxisKeyMapping.AxisName.ToString() + TEXT(" axis");
-			FString ActionPath = FString(ACTION_PATH_IN) / AxisName1D;
-			Actions.Add(FSteamVRInputAction(ActionPath, FName(*AxisName1D), AxisMapping.InputAxisKeyMapping.Key.GetFName(), 0.0f));
-			AxisMapping.ActionName = FString(AxisName1D);
-			AxisMapping.ActionNameWithPath = FString(ActionPath);
-		}
-	}
 
 	// Cleanup action set
 	SanitizeActions();
@@ -3649,37 +4366,93 @@ void FSteamVRInputDevice::RegisterApplication(FString ManifestPath)
 			{
 				VRControllerHandleRight = Action.Handle;
 			}
-			else if (Action.Path == TEXT(ACTION_PATH_SPECIAL_BACK_L))
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_CAMERA))
 			{
-				VRSpecial1 = Action.Handle;
+				VRTRackerCamera = Action.Handle;
 			}
-			else if (Action.Path == TEXT(ACTION_PATH_SPECIAL_BACK_R))
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_CHEST))
 			{
-				VRSpecial2 = Action.Handle;
+				VRTrackerChest = Action.Handle;
 			}
-			else if (Action.Path == TEXT(ACTION_PATH_SPECIAL_FRONT_L))
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_HANDED_BACK_LEFT))
 			{
-				VRSpecial3 = Action.Handle;
+				VRTrackerHandedBackL = Action.Handle;
 			}
-			else if (Action.Path == TEXT(ACTION_PATH_SPECIAL_FRONT_R))
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_HANDED_BACK_RIGHT))
 			{
-				VRSpecial4 = Action.Handle;
+				VRTrackerHandedBackR = Action.Handle;
 			}
-			else if (Action.Path == TEXT(ACTION_PATH_SPECIAL_FRONTR_L))
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_HANDED_FRONT_LEFT))
 			{
-				VRSpecial5 = Action.Handle;
+				VRTrackerHandedFrontL = Action.Handle;
 			}
-			else if (Action.Path == TEXT(ACTION_PATH_SPECIAL_FRONTR_R))
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_HANDED_FRONT_RIGHT))
 			{
-				VRSpecial6 = Action.Handle;
+				VRTrackerHandedFrontR = Action.Handle;
 			}
-			else if (Action.Path == TEXT(ACTION_PATH_SPECIAL_PISTOL_L))
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_HANDED_FRONTR_LEFT))
 			{
-				VRSpecial7 = Action.Handle;
+				VRTrackerHandedFrontRL = Action.Handle;
 			}
-			else if (Action.Path == TEXT(ACTION_PATH_SPECIAL_PISTOL_R))
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_HANDED_FRONTR_RIGHT))
 			{
-				VRSpecial8 = Action.Handle;
+				VRTrackerHandedFrontRR = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_HANDED_GRIP_LEFT))
+			{
+				VRTrackerHandedGripL = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_HANDED_GRIP_RIGHT))
+			{
+				VRTrackerHandedGripR = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_HANDED_POSE_LEFT))
+			{
+				VRTrackerHandedPoseL = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_HANDED_POSE_RIGHT))
+			{
+				VRTrackerHandedPoseR = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_FOOT_LEFT))
+			{
+				VRTrackerFootL = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_FOOT_RIGHT))
+			{
+				VRTrackerFootR = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_SHOULDER_LEFT))
+			{
+				VRTrackerShoulderL = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_SHOULDER_RIGHT))
+			{
+				VRTrackerShoulderR = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_ELBOW_LEFT))
+			{
+				VRTrackerElbowL = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_ELBOW_RIGHT))
+			{
+				VRTrackerElbowR = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_KNEE_LEFT))
+			{
+				VRTrackerKneeL = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_KNEE_RIGHT))
+			{
+				VRTrackerKneeR = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_KEYBOARD))
+			{
+				VRTrackerKeyboard = Action.Handle;
+			}
+			else if (Action.Path == TEXT(ACTION_PATH_TRACKER_WAIST))
+			{
+				VRTrackerWaist = Action.Handle;
 			}
 
 			UE_LOG(LogSteamVRInputDevice, Display, TEXT("Retrieving Action Handle: %s"), *Action.Path);

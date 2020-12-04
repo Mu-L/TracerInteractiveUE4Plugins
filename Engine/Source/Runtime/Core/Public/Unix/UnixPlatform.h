@@ -41,6 +41,7 @@ typedef FUnixPlatformTypes FPlatformTypes;
 
 // Base defines, defaults are commented out
 
+#define PLATFORM_SEH_EXCEPTIONS_DISABLED				1
 #define PLATFORM_LITTLE_ENDIAN							1
 #define PLATFORM_SUPPORTS_UNALIGNED_LOADS				((!PLATFORM_CPU_ARM_FAMILY) || PLATFORM_64BITS) // 32-bit ARM doesn't support unaligned loads, other arch's do
 #define PLATFORM_COMPILER_DISTINGUISHES_INT_AND_LONG	1
@@ -65,6 +66,7 @@ typedef FUnixPlatformTypes FPlatformTypes;
 #define PLATFORM_IS_ANSI_MALLOC_THREADSAFE				1
 #define PLATFORM_ALLOW_ALLOCATIONS_IN_FASYNCWRITER_SERIALIZEBUFFERTOARCHIVE 0
 #define PLATFORM_RHITHREAD_DEFAULT_BYPASS				0
+#define PLATFORM_SUPPORTS_VIRTUAL_TEXTURE_STREAMING		1
 
 #if PLATFORM_CPU_X86_FAMILY
 	#define PLATFORM_BREAK()							__asm__ volatile("int $0x03")

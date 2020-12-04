@@ -58,6 +58,7 @@ public:
 		ZUp_RightHanded,
 		YUp_LeftHanded,
 		YUp_RightHanded,
+		ZUp_RightHanded_FBXLegacy,
 	};
 
 	static void ConvertVectorArray(EModelCoordSystem ModelCoordSys, TArray<FVector>& Array)
@@ -85,6 +86,13 @@ public:
 			}
 			break;
 
+		case EModelCoordSystem::ZUp_RightHanded_FBXLegacy:
+			for (FVector& Vector : Array)
+			{
+				Vector.Set(Vector[0], -Vector[1], Vector[2]);
+			}
+			break;
+
 		case EModelCoordSystem::ZUp_LeftHanded:
 		default:
 			break;
@@ -104,7 +112,10 @@ public:
 
 		case EModelCoordSystem::ZUp_RightHanded:
 			return FVector(-V[0], V[1], V[2]);
-
+		
+		case EModelCoordSystem::ZUp_RightHanded_FBXLegacy:
+			return FVector(V[0], -V[1], V[2]);
+		
 		case EModelCoordSystem::ZUp_LeftHanded:
 		default:
 			return FVector(V[0], V[1], V[2]);
@@ -206,6 +217,13 @@ public:
 
 	static bool IsMaterialIDUsedInScene(const TSharedPtr<class IDatasmithScene>& Scene, const TSharedPtr<class IDatasmithMaterialIDElement>& MaterialElement);
 	static bool IsPostProcessUsedInScene(const TSharedPtr<class IDatasmithScene>& Scene, const TSharedPtr<class IDatasmithPostProcessElement>& PostProcessElement);
+
+	/**
+	 * Fixes all missing references, remove all unused meshes, materials, textures, etc
+	 * @param Scene Scene to perform the cleanup on
+	 * @param bRemoveUnused Indicates if the cleanup includes the removal of unused assets
+	 */
+	static void CleanUpScene(TSharedRef<class IDatasmithScene> Scene, bool bRemoveUnused = false);
 };
 
 /**
@@ -270,5 +288,4 @@ protected:
 private:
 	TSet<FString> KnownNames;
 };
-
 

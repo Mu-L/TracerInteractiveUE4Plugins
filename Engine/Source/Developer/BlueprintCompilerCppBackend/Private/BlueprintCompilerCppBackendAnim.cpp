@@ -37,8 +37,8 @@ void FBackendHelperAnim::CreateAnimClassData(FEmitterLocalContext& Context)
 				, FEmitDefaultValueHelper::EPropertyGenerationControlFlags::AllowTransient);
 		}
 
-		Context.AddLine(FString::Printf(TEXT("%s->ResolvePropertyPaths();"), *LocalNativeName));
 		Context.AddLine(FString::Printf(TEXT("InDynamicClass->%s = %s;"), GET_MEMBER_NAME_STRING_CHECKED(UDynamicClass, AnimClassImplementation), *LocalNativeName));
+		Context.AddLine(FString::Printf(TEXT("%s->DynamicClassInitialization(InDynamicClass);"), *LocalNativeName));
 	}
 }
 
@@ -83,9 +83,9 @@ void FBackendHelperAnim::AddAnimNodeInitializationFunction(FEmitterLocalContext&
 			// anim nodes constructed, finish anim node initialization:
 			if (UAnimBlueprintGeneratedClass* AnimClass = Cast<UAnimBlueprintGeneratedClass>(Context.GetCurrentlyGeneratedClass()))
 			{
-				for (int32 i = 0; i < AnimClass->EvaluateGraphExposedInputs.Num(); ++i)
+				for (int32 i = 0; i < AnimClass->GetExposedValueHandlers().Num(); ++i)
 				{
-					if (AnimClass->EvaluateGraphExposedInputs[i].ValueHandlerNodeProperty == InProperty)
+					if (AnimClass->GetExposedValueHandlers()[i].ValueHandlerNodeProperty == InProperty)
 					{
 						const FString ClassName = FEmitHelper::GetCppName(Context.GetCurrentlyGeneratedClass());
 						const FString MemberName = FEmitHelper::GetCppName(const_cast<FProperty*>(InProperty));

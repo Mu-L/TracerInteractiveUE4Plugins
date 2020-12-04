@@ -10,6 +10,9 @@
 
 class SLevelEditor;
 class UActorComponent;
+class SLevelViewport;
+class SLevelViewportToolBar;
+class FLevelEditorViewportClient;
 
 UCLASS()
 class LEVELEDITOR_API ULevelEditorMenuContext : public UObject
@@ -39,3 +42,13 @@ public:
 	ELevelEditorMenuContext ContextType;
 };
 
+UCLASS()
+class LEVELEDITOR_API ULevelViewportToolBarContext : public UObject
+{
+	GENERATED_BODY()
+public:
+	TWeakPtr<SLevelViewportToolBar> LevelViewportToolBarWidget;
+	TWeakPtr<const SLevelViewportToolBar> LevelViewportToolBarWidgetConst;
+
+	FLevelEditorViewportClient* GetLevelViewportClient();
+};

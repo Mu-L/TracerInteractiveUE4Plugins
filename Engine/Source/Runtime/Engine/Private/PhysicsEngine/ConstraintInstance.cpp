@@ -123,11 +123,14 @@ void FConstraintProfileProperties::SyncChangedConstraintProperties(FPropertyChan
 FConstraintProfileProperties::FConstraintProfileProperties()
 	: ProjectionLinearTolerance(5.f)
 	, ProjectionAngularTolerance(180.f)
+	, ProjectionLinearAlpha(1.0f)
+	, ProjectionAngularAlpha(0.0f)
 	, LinearBreakThreshold(300.f)
 	, AngularBreakThreshold(500.f)
 	, bDisableCollision(false)
 	, bParentDominates(false)
 	, bEnableProjection(true)
+	, bEnableSoftProjection(false)
 	, bAngularBreakable(false)
 	, bLinearBreakable(false)
 {
@@ -175,15 +178,28 @@ void FConstraintInstance::UpdateDriveTarget()
 }
 
 /** Constructor **/
+FConstraintInstanceBase::FConstraintInstanceBase()
+{
+	Reset();
+}
+
+void FConstraintInstanceBase::Reset()
+{
+	ConstraintIndex = 0;
+#if WITH_CHAOS
+	ConstraintHandle.Reset();
+#endif
+	PhysScene = nullptr;
+}
+
+
+/** Constructor **/
 FConstraintInstance::FConstraintInstance()
-	: ConstraintIndex(0)
-	, PhysScene(nullptr)
+	: FConstraintInstanceBase()
 	, AngularRotationOffset(ForceInitToZero)
 	, bScaleLinearLimits(true)
 	, AverageMass(0.f)
-#if WITH_PHYSX
-	, PhysxUserData(this)
-#endif
+	, UserData(this)
 	, LastKnownScale(1.f)
 #if WITH_EDITORONLY_DATA
 	, bDisableCollision_DEPRECATED(false)
@@ -378,7 +394,7 @@ bool FConstraintInstance::CreateJoint_AssumesLocked(const FPhysicsActorHandle& I
 		return false;
 	}
 
-	FPhysicsInterface::SetConstraintUserData(ConstraintHandle, &PhysxUserData);
+	FPhysicsInterface::SetConstraintUserData(ConstraintHandle, &UserData);
 
 	return true;
 }
@@ -390,7 +406,11 @@ void FConstraintProfileProperties::UpdateConstraintFlags_AssumesLocked(const FPh
 #endif
 
 	FPhysicsInterface::SetCollisionEnabled(InConstraintRef, !bDisableCollision);
+#if WITH_CHAOS
+	FPhysicsInterface::SetProjectionEnabled_AssumesLocked(InConstraintRef, bEnableProjection, ProjectionLinearAlpha, ProjectionAngularAlpha);
+#else
 	FPhysicsInterface::SetProjectionEnabled_AssumesLocked(InConstraintRef, bEnableProjection, ProjectionLinearTolerance, ProjectionAngularTolerance);
+#endif
 	FPhysicsInterface::SetParentDominates_AssumesLocked(InConstraintRef, bParentDominates);
 }
 
@@ -398,26 +418,6 @@ void FConstraintProfileProperties::UpdateConstraintFlags_AssumesLocked(const FPh
 void FConstraintInstance::UpdateAverageMass_AssumesLocked(const FPhysicsActorHandle& InActorRef1, const FPhysicsActorHandle& InActorRef2)
 {
 	AverageMass = ComputeAverageMass_AssumesLocked(InActorRef1, InActorRef2);
-}
-
-void EnsureSleepingActorsStaySleeping_AssumesLocked(const FPhysicsActorHandle& InActorRef1, const FPhysicsActorHandle& InActorRef2)
-{
-	const bool bActor1Asleep = FPhysicsInterface::IsSleeping(InActorRef1);
-	const bool bActor2Asleep = FPhysicsInterface::IsSleeping(InActorRef2);
-
-	// creation of joints wakes up rigid bodies, so we put them to sleep again if both were initially asleep
-	if (bActor1Asleep && bActor2Asleep)
-	{
-		if(FPhysicsInterface::IsValid(InActorRef1) && !FPhysicsInterface::IsKinematic_AssumesLocked(InActorRef1))
-		{
-			FPhysicsInterface::PutToSleep_AssumesLocked(InActorRef1);
-		}
-
-		if(FPhysicsInterface::IsValid(InActorRef2) && !FPhysicsInterface::IsKinematic_AssumesLocked(InActorRef2))
-		{
-			FPhysicsInterface::PutToSleep_AssumesLocked(InActorRef2);
-		}
-	}
 }
 
 /** 
@@ -448,7 +448,11 @@ void FConstraintInstance::InitConstraint_AssumesLocked(const FPhysicsActorHandle
 	OnConstraintBrokenDelegate = InConstraintBrokenDelegate;
 	LastKnownScale = InScale;
 
-	PhysxUserData = FPhysxUserData(this);
+	UserData = FChaosUserData(this);
+
+	// Creating/Destroying a joint between two bodies will wake them, so we may want to re-sleep them
+	const bool bActor1WasAsleep = FPhysicsInterface::IsValid(ActorRef1) && FPhysicsInterface::IsSleeping(ActorRef1);
+	const bool bActor2WasAsleep = FPhysicsInterface::IsValid(ActorRef2) && FPhysicsInterface::IsSleeping(ActorRef2);
 
 	// if there's already a constraint, get rid of it first
 	if (ConstraintHandle.IsValid())
@@ -465,7 +469,13 @@ void FConstraintInstance::InitConstraint_AssumesLocked(const FPhysicsActorHandle
 	UpdateAverageMass_AssumesLocked(ActorRef1, ActorRef2);
 
 	ProfileInstance.Update_AssumesLocked(ConstraintHandle, AverageMass, bScaleLinearLimits ? LastKnownScale : 1.f);
-	EnsureSleepingActorsStaySleeping_AssumesLocked(ActorRef1, ActorRef2);
+
+	// Put the bodies back to sleep both bodies were asleep
+	if (bActor1WasAsleep && bActor2WasAsleep)
+	{
+		FPhysicsInterface::PutToSleep_AssumesLocked(ActorRef1);
+		FPhysicsInterface::PutToSleep_AssumesLocked(ActorRef2);
+	}
 }
 
 void FConstraintInstance::SetConstraintBrokenDelegate(FOnConstraintBroken InConstraintBrokenDelegate)

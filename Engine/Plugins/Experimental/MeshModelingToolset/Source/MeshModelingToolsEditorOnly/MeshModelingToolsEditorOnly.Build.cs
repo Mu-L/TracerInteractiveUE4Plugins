@@ -33,12 +33,13 @@ public class MeshModelingToolsEditorOnly : ModuleRules
 				"DynamicMesh",
 				"MeshConversion",
 				"MeshModelingTools",
-                "MeshSolverUtilities",
 				"ModelingComponents",
 				"ModelingOperators",
 				"ModelingOperatorsEditorOnly",
                 "ProxyLODMeshReduction", // currently required to be public due to IVoxelBasedCSG API
 				// ... add other public dependencies that you statically link with here ...
+
+				"HairStrandsCore"		// required for Hair toolset
 			}
             );
 			
@@ -52,7 +53,7 @@ public class MeshModelingToolsEditorOnly : ModuleRules
                 "RHI",
 				"InputCore",
 
-				"MeshUtilities",    // temp for saving mesh asset
+				"MeshUtilities",		// tangents calculation
 				"UnrealEd",
 				"MeshBuilder",
 				"MeshUtilitiesCommon",  

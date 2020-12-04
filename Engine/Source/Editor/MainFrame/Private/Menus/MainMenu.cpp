@@ -220,7 +220,7 @@ void FMainMenu::RegisterWindowMenu()
 		// Make sure at least one is enabled before creating the section
 		if (bLocalizationDashboard || bTranslationPicker)
 		{
-			FToolMenuSection& Section = Menu->AddSection("ExperimentalTabSpawners", LOCTEXT("ExperimentalTabSpawnersHeading", "Experimental"));
+			FToolMenuSection& Section = Menu->AddSection("ExperimentalTabSpawners", LOCTEXT("ExperimentalTabSpawnersHeading", "Experimental"), FToolMenuInsert("WindowGlobalTabSpawners", EToolMenuInsertType::After));
 			{
 				// Localization Dashboard
 				if (bLocalizationDashboard)
@@ -286,7 +286,7 @@ void FMainMenu::RegisterWindowMenu()
 		// Enable Fullscreen section
 #if !PLATFORM_MAC && !PLATFORM_LINUX // On Mac/Linux windowed fullscreen mode in the editor is currently unavailable
 		// Separator
-		Section.AddMenuSeparator("FullscreenSeparator");
+		Section.AddSeparator("FullscreenSeparator");
 		// Fullscreen
 		Section.AddMenuEntry(FMainFrameCommands::Get().ToggleFullscreen);
 #endif
@@ -312,15 +312,15 @@ void FMainMenu::RegisterHelpMenu()
 		HelpOnlineSection.AddMenuEntry(FMainFrameCommands::Get().VisitSupportWebSite);
 		HelpOnlineSection.AddMenuEntry(FMainFrameCommands::Get().VisitForums);
 		HelpOnlineSection.AddMenuEntry(FMainFrameCommands::Get().VisitSearchForAnswersPage);
-		HelpOnlineSection.AddMenuEntry(FMainFrameCommands::Get().VisitWiki);
+		HelpOnlineSection.AddMenuEntry(FMainFrameCommands::Get().VisitOnlineLearning);
 
 
 		const FText SupportWebSiteLabel = NSLOCTEXT("MainHelpMenu", "VisitUnrealEngineSupportWebSite", "Unreal Engine Support Web Site...");
 
-		HelpOnlineSection.AddMenuSeparator("EpicGamesHelp");
+		HelpOnlineSection.AddSeparator("EpicGamesHelp");
 		HelpOnlineSection.AddMenuEntry(FMainFrameCommands::Get().VisitEpicGamesDotCom);
 
-		HelpOnlineSection.AddMenuSeparator("Credits");
+		HelpOnlineSection.AddSeparator("Credits");
 		HelpOnlineSection.AddMenuEntry(FMainFrameCommands::Get().CreditsUnrealEd);
 	}
 

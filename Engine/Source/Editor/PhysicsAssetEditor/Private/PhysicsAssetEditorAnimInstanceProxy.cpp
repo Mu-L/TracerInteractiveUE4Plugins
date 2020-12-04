@@ -7,6 +7,7 @@
 #include "Physics/ImmediatePhysics/ImmediatePhysicsJointHandle.h"
 #include "Physics/ImmediatePhysics/ImmediatePhysicsSimulation.h"
 
+//PRAGMA_DISABLE_OPTIMIZATION
 
 FPhysicsAssetEditorAnimInstanceProxy::FPhysicsAssetEditorAnimInstanceProxy()
 	: TargetActor(nullptr)
@@ -79,6 +80,7 @@ bool FPhysicsAssetEditorAnimInstanceProxy::Evaluate_WithRoot(FPoseContext& Outpu
 	if (Simulation != nullptr)
 	{
 		Simulation->SetSolverIterations(
+			SolverIterations.FixedTimeStep,
 			SolverIterations.SolverIterations,
 			SolverIterations.JointIterations,
 			SolverIterations.CollisionIterations,
@@ -95,6 +97,11 @@ bool FPhysicsAssetEditorAnimInstanceProxy::Evaluate_WithRoot(FPoseContext& Outpu
 	}
 	else
 	{
+		if ((InRootNode != NULL) && (InRootNode == GetRootNode()))
+		{
+			EvaluationCounter.Increment();
+		}
+
 		InRootNode->Evaluate_AnyThread(Output);
 		return true;
 	}

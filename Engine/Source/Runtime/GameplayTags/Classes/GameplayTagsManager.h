@@ -84,7 +84,7 @@ enum class EGameplayTagSelectionType : uint8
 
 /** Struct defining where gameplay tags are loaded/saved from. Mostly for the editor */
 USTRUCT()
-struct FGameplayTagSource
+struct GAMEPLAYTAGS_API FGameplayTagSource
 {
 	GENERATED_USTRUCT_BODY()
 
@@ -114,24 +114,16 @@ struct FGameplayTagSource
 	{
 	}
 
-	static FName GetNativeName()
-	{
-		static FName NativeName = FName(TEXT("Native"));
-		return NativeName;
-	}
+	static FName GetNativeName();
 
-	static FName GetDefaultName()
-	{
-		static FName DefaultName = FName(TEXT("DefaultGameplayTags.ini"));
-		return DefaultName;
-	}
+	static FName GetDefaultName();
 
 #if WITH_EDITOR
-	static FName GetTransientEditorName()
-	{
-		static FName TransientEditorName = FName(TEXT("TransientEditor"));
-		return TransientEditorName;
-	}
+	static FName GetFavoriteName();
+
+	static void SetFavoriteName(FName TagSourceToFavorite);
+
+	static FName GetTransientEditorName();
 #endif
 };
 
@@ -676,6 +668,8 @@ private:
 
 	void AddChildrenTags(FGameplayTagContainer& TagContainer, TSharedPtr<FGameplayTagNode> GameplayTagNode, bool RecurseAll=true, bool OnlyIncludeDictionaryTags=false) const;
 
+	void AddRestrictedGameplayTagSource(const FString& FileName);
+
 	void AddTagsFromAdditionalLooseIniFiles(const TArray<FString>& IniFileList);
 
 	/**
@@ -692,6 +686,9 @@ private:
 
 	/** Constructs the net indices for each tag */
 	void ConstructNetIndex();
+
+	/** Reads the restricted config info from the specified ini */
+	void GetRestrictedConfigsFromIni(const FString& IniFilePath, TArray<struct FRestrictedConfigInfo>& OutRestrictedConfigs) const;
 
 	/** Marks all of the nodes that descend from CurNode as having an ancestor node that has a source conflict. */
 	void MarkChildrenOfNodeConflict(TSharedPtr<FGameplayTagNode> CurNode);

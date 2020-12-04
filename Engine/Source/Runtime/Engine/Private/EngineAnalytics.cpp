@@ -33,31 +33,9 @@ static TSharedPtr<FEditorSessionSummaryWriter> SessionSummaryWriter;
 static TSharedPtr<FEditorSessionSummarySender> SessionSummarySender;
 #endif
 
-/**
-* Default config func.
-*/
-FAnalyticsET::Config DefaultEngineAnalyticsConfigFunc()
-{
-	return FAnalyticsET::Config();
-}
-
-/**
-* Engine analytics config to initialize the analytics provider.
-* External code should bind this delegate if engine analytics are desired,
-* preferably in private code that won't be redistributed.
-*/
-TFunction<FAnalyticsET::Config()>& GetEngineAnalyticsConfigFunc()
-{
-	static TFunction<FAnalyticsET::Config()> Config = &DefaultEngineAnalyticsConfigFunc;
-	return Config;
-}
-
 static TSharedPtr<IAnalyticsProviderET> CreateEpicAnalyticsProvider()
 {
-	// Get the default config.
-	FAnalyticsET::Config Config = GetEngineAnalyticsConfigFunc()();
-	// Set any fields that weren't set by default.
-	if (Config.APIKeyET.IsEmpty())
+	FAnalyticsET::Config Config;
 	{
 		// We always use the "Release" analytics account unless we're running in analytics test mode (usually with
 		// a command-line parameter), or we're an internal Epic build
@@ -72,18 +50,9 @@ static TSharedPtr<IAnalyticsProviderET> CreateEpicAnalyticsProvider()
 		const TCHAR* UE4TypeStr = bHasOverride ? *UE4TypeOverride : FEngineBuildSettings::IsPerforceBuild() ? TEXT("Perforce") : TEXT("UnrealEngine");
 		Config.APIKeyET = FString::Printf(TEXT("UEEditor.%s.%s"), UE4TypeStr, BuildTypeStr);
 	}
-	if (Config.APIServerET.IsEmpty())
-	{
-		Config.APIServerET = TEXT("https://datarouter.ol.epicgames.com/");
-	}
-	if (Config.AppEnvironment.IsEmpty())
-	{
-		Config.AppEnvironment = TEXT("datacollector-source");
-	}
-	if (Config.AppVersionET.IsEmpty())
-	{
-		Config.AppVersionET = FEngineVersion::Current().ToString();
-	}
+	Config.APIServerET = TEXT("https://datarouter.ol.epicgames.com/");
+	Config.AppEnvironment = TEXT("datacollector-binary");
+	Config.AppVersionET = FEngineVersion::Current().ToString();
 
 	// Connect the engine analytics provider (if there is a configuration delegate installed)
 	return FAnalyticsET::Get().CreateAnalyticsProvider(Config);
@@ -154,6 +123,13 @@ void FEngineAnalytics::Initialize()
 			StartSessionAttributes.Emplace(TEXT("OSMinor"), OSMinor);
 			StartSessionAttributes.Emplace(TEXT("OSVersion"), FPlatformMisc::GetOSVersion());
 			StartSessionAttributes.Emplace(TEXT("Is64BitOS"), FPlatformMisc::Is64bitOperatingSystem());
+
+			// allow editor events to be correlated to StudioAnalytics events (if there is a studio analytics provider)
+			if (FStudioAnalytics::IsAvailable())
+			{
+				Analytics->SetDefaultEventAttributes(MakeAnalyticsEventAttributeArray(TEXT("StudioAnalyticsSessionID"), FStudioAnalytics::GetProvider().GetSessionID()));
+			}
+
 			Analytics->StartSession(MoveTemp(StartSessionAttributes));
 
 			bIsInitialized = true;
@@ -234,16 +210,6 @@ void FEngineAnalytics::Tick(float DeltaTime)
 		SessionSummarySender->Tick(DeltaTime);
 	}
 #endif
-}
-
-void FEngineAnalytics::ReportEvent(const FString& EventName, const TArray<FAnalyticsEventAttribute>& Attributes)
-{
-	if (FEngineAnalytics::IsAvailable())
-	{
-		FEngineAnalytics::GetProvider().RecordEvent(EventName, Attributes);
-	}
-
-	FStudioAnalytics::ReportEvent(EventName, Attributes);
 }
 
 void FEngineAnalytics::LowDriveSpaceDetected()

@@ -463,6 +463,21 @@ bool FDelegateEditorBinding::IsBindingValid(UClass* BlueprintGeneratedClass, UWi
 					return false;
 				}
 
+				// We allow for widget delegates to have deprecated metadata without fully deprecating.
+				// Since full deprecation breaks existing widgets, checking as below allows for slow deprecation.
+				FString DeprecationWarning = DelegateProperty->GetMetaData("DeprecationMessage");
+				if (!DeprecationWarning.IsEmpty())
+				{
+					MessageLog.Warning(
+						*FText::Format(
+							LOCTEXT("BindingWarningDeprecated", "Binding: Deprecated property '@@' on Widget '@@': {0}"),
+							FText::FromString(DeprecationWarning)
+						).ToString(),
+						DelegateProperty,
+						TargetWidget
+					);
+				}
+
 				return true;
 			}
 			else
@@ -547,7 +562,6 @@ bool FWidgetAnimation_DEPRECATED::SerializeFromMismatchedTag(struct FPropertyTag
 
 UWidgetBlueprint::UWidgetBlueprint(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
-	, SupportDynamicCreation(EWidgetSupportsDynamicCreation::Default)
 	, TickFrequency(EWidgetTickFrequency::Auto)
 {
 }
@@ -598,6 +612,88 @@ void UWidgetBlueprint::NotifyGraphRenamed(class UEdGraph* Graph, FName OldName, 
 			Widget->Navigation->TryToRenameBinding(OldName, NewName);
 		}
 	});
+}
+
+EDataValidationResult UWidgetBlueprint::IsDataValid(TArray<FText>& ValidationErrors)
+{
+	EDataValidationResult Result = UBlueprint::IsDataValid(ValidationErrors);
+
+	const bool bFoundLeak = DetectSlateWidgetLeaks(ValidationErrors);
+
+	return bFoundLeak ? EDataValidationResult::Invalid : Result;
+}
+
+bool UWidgetBlueprint::DetectSlateWidgetLeaks(TArray<FText>& ValidationErrors)
+{
+	// We can't safely run this in anything but a running editor, since widgets
+	// rely on a functioning slate application.
+	if (IsRunningCommandlet())
+	{
+		return false;
+	}
+
+	UWorld* DummyWorld = NewObject<UWorld>();
+	UUserWidget* TempUserWidget = NewObject<UUserWidget>(DummyWorld, GeneratedClass);
+	TempUserWidget->ClearFlags(RF_Transactional);
+	TempUserWidget->SetDesignerFlags(EWidgetDesignFlags::Designing);
+
+	// If there's no widget tree, there's no test to be performed.
+	if (WidgetTree == nullptr)
+	{
+		return false;
+	}
+
+	// Update the widget tree directly to match the blueprint tree.  That way the preview can update
+	// without needing to do a full recompile.
+	TempUserWidget->DuplicateAndInitializeFromWidgetTree(WidgetTree);
+
+	// We don't want this widget doing all the normal startup and acting like it's the real deal
+	// trying to do gameplay stuff, so make sure it's in design mode.
+	TempUserWidget->SetDesignerFlags(EWidgetDesignFlags::Designing);
+
+	// Force construction of the slate widgets, and immediately let it go.
+	TWeakPtr<SWidget> PreviewSlateWidgetWeak = TempUserWidget->TakeWidget();
+
+	bool bFoundLeak = false;
+
+	// NOTE: This doesn't explore sub UUserWidget trees, searching for leaks there on purpose,
+	//       those widgets will be handled by their own validation steps.
+
+	// Verify everything is going to be garbage collected.
+	TempUserWidget->WidgetTree->ForEachWidget([&ValidationErrors, &bFoundLeak](UWidget* Widget) {
+		if (!bFoundLeak)
+		{
+			TWeakPtr<SWidget> PreviewChildWidget = Widget->GetCachedWidget();
+			if (PreviewChildWidget.IsValid())
+			{
+				bFoundLeak = true;
+				if (UPanelWidget* ParentWidget = Widget->GetParent())
+				{
+					ValidationErrors.Add(
+						FText::Format(
+							LOCTEXT("LeakingWidgetsWithParent_WarningFmt", "Leak Detected!  {0} ({1}) still has living Slate widgets, it or the parent {2} ({3}) is keeping them in memory.  Make sure all Slate resources (TSharedPtr<SWidget>'s) are being released in the UWidget's ReleaseSlateResources().  Also check the USlot's ReleaseSlateResources()."),
+							FText::FromString(Widget->GetName()),
+							FText::FromString(Widget->GetClass()->GetName()),
+							FText::FromString(ParentWidget->GetName()),
+							FText::FromString(ParentWidget->GetClass()->GetName())
+						)
+					);
+				}
+				else
+				{
+					ValidationErrors.Add(
+						FText::Format(
+							LOCTEXT("LeakingWidgetsWithoutParent_WarningFmt", "Leak Detected!  {0} ({1}) still has living Slate widgets, it or the parent widget is keeping them in memory.  Make sure all Slate resources (TSharedPtr<SWidget>'s) are being released in the UWidget's ReleaseSlateResources().  Also check the USlot's ReleaseSlateResources()."),
+							FText::FromString(Widget->GetName()),
+							FText::FromString(Widget->GetClass()->GetName())
+						)
+					);
+				}
+			}
+		}
+	});
+
+	return bFoundLeak;
 }
 
 bool UWidgetBlueprint::FindDiffs(const UBlueprint* OtherBlueprint, FDiffResults& Results) const
@@ -747,6 +843,8 @@ void UWidgetBlueprint::PostLoad()
 {
 	Super::PostLoad();
 
+	WidgetTree->ClearFlags(RF_ArchetypeObject);
+
 	WidgetTree->ForEachWidget([&] (UWidget* Widget) {
 		Widget->ConnectEditorData();
 	});
@@ -878,17 +976,19 @@ bool UWidgetBlueprint::ValidateGeneratedClass(const UClass* InClass)
 		}
 	}
 
-	if ( !ensure(GeneratedClass->WidgetTree && ( GeneratedClass->WidgetTree->GetOuter() == GeneratedClass )) )
+	UWidgetTree* WidgetTree = GeneratedClass->GetWidgetTreeArchetype();
+
+	if ( !ensure(WidgetTree && (WidgetTree->GetOuter() == GeneratedClass )) )
 	{
 		return false;
 	}
 	else
 	{
-		TArray < UWidget* > AllWidgets;
-		GeneratedClass->WidgetTree->GetAllWidgets(AllWidgets);
+		TArray<UWidget*> AllWidgets;
+		WidgetTree->GetAllWidgets(AllWidgets);
 		for ( UWidget* Widget : AllWidgets )
 		{
-			if ( !ensure(Widget->GetOuter() == GeneratedClass->WidgetTree) )
+			if ( !ensure(Widget->GetOuter() == WidgetTree) )
 			{
 				return false;
 			}
@@ -966,6 +1066,11 @@ UPackage* UWidgetBlueprint::GetWidgetTemplatePackage() const
 
 static bool HasLatentActions(UEdGraph* Graph)
 {
+	if (!Graph)
+	{
+		return false;
+	}
+
 	for (const UEdGraphNode* Node : Graph->Nodes)
 	{
 		if (const UK2Node_CallFunction* CallFunctionNode = Cast<UK2Node_CallFunction>(Node))
@@ -1104,20 +1209,6 @@ void UWidgetBlueprint::UpdateTickabilityStats(bool& OutHasLatentActions, bool& O
 		OutHasLatentActions = bHasLatentActions;
 		OutHasAnimations = bHasAnimations;
 		OutClassRequiresNativeTick = bClassRequiresNativeTick;
-	}
-}
-
-bool UWidgetBlueprint::WidgetSupportsDynamicCreation() const
-{
-	switch (SupportDynamicCreation)
-	{
-	case EWidgetSupportsDynamicCreation::Yes:
-		return true;
-	case EWidgetSupportsDynamicCreation::No:
-		return false;
-	case EWidgetSupportsDynamicCreation::Default:
-	default:
-		return GetDefault<UUMGEditorProjectSettings>()->CompilerOption_SupportsDynamicCreation(this);
 	}
 }
 

@@ -24,6 +24,8 @@ public:
 	virtual FText GetTooltipText() const override;
 
 	virtual bool GetIsEnabled() const override;
+	virtual void SetIsEnabled(bool bEnabled) {}
+	virtual bool SupportsChangeEnabled() const { return false; }
 
 	INiagaraStackItemGroupAddUtilities* GetAddUtilities() const;
 
@@ -37,7 +39,7 @@ protected:
 
 	virtual int32 GetChildIndentLevel() const override;
 
-	virtual void ChlildStructureChangedInternal() override;
+	virtual void ChildStructureChangedInternal() override;
 
 private:
 	bool FilterChildrenWithIssues(const UNiagaraStackEntry& Child) const;

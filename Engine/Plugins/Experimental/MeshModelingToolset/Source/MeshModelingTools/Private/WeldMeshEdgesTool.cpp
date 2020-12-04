@@ -80,6 +80,10 @@ void UWeldMeshEdgesTool::Setup()
 	ToolPropertyObjects.Add(this);
 
 	bResultValid = false;
+
+	GetToolManager()->DisplayMessage(
+		LOCTEXT("WeldMeshEdgesToolDescription", "Weld overlapping/identical border edges of the selected Mesh, by merging the vertices."),
+		EToolMessageLevel::UserNotification);
 }
 
 
@@ -115,6 +119,7 @@ void UWeldMeshEdgesTool::Render(IToolsContextRenderAPI* RenderAPI)
 	FTransform Transform = ComponentTarget->GetWorldTransform(); //Actor->GetTransform();
 
 	FColor LineColor(200, 200, 200);
+	float PDIScale = RenderAPI->GetCameraState().GetPDIScalingFactor();
 	FDynamicMesh3* TargetMesh = DynamicMeshComponent->GetMesh();
 	FDynamicMeshUVOverlay* UVOverlay = TargetMesh->Attributes()->PrimaryUV();
 	for (int eid : TargetMesh->EdgeIndicesItr()) 
@@ -124,7 +129,7 @@ void UWeldMeshEdgesTool::Render(IToolsContextRenderAPI* RenderAPI)
 			FVector3d A, B;
 			TargetMesh->GetEdgeV(eid, A, B);
 			PDI->DrawLine(Transform.TransformPosition((FVector)A), Transform.TransformPosition((FVector)B),
-				LineColor, 0, 1.0, 1.0f, true);
+				LineColor, 0, 1.0f*PDIScale, 1.0f, true);
 		}
 	}
 
@@ -135,7 +140,7 @@ void UWeldMeshEdgesTool::Render(IToolsContextRenderAPI* RenderAPI)
 		FVector3d A, B;
 		TargetMesh->GetEdgeV(eid, A, B);
 		PDI->DrawLine(Transform.TransformPosition((FVector)A), Transform.TransformPosition((FVector)B),
-			LineColor2, 0, 2.0, 1.0f, true);
+			LineColor2, 0, 2.0f*PDIScale, 1.0f, true);
 	}
 
 }
@@ -180,15 +185,6 @@ void UWeldMeshEdgesTool::UpdateResult()
 	bResultValid = true;
 }
 
-bool UWeldMeshEdgesTool::HasAccept() const
-{
-	return true;
-}
-
-bool UWeldMeshEdgesTool::CanAccept() const
-{
-	return true;
-}
 
 
 

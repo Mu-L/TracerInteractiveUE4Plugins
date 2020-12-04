@@ -8,9 +8,13 @@
 #include "Engine/TextureStreamingTypes.h"
 #include "Components/PrimitiveComponent.h"
 #include "PerPlatformProperties.h"
+#include "LandscapePhysicalMaterial.h"
 #include "LandscapeWeightmapUsage.h"
+#include "Engine/StreamableRenderAsset.h"
 
 #include "LandscapeComponent.generated.h"
+
+#define LANDSCAPE_LOD_STREAMING_USE_TOKEN (!WITH_EDITORONLY_DATA && USE_BULKDATA_STREAMING_TOKEN)
 
 class ALandscape;
 class ALandscapeProxy;
@@ -107,9 +111,19 @@ class FLandscapeComponentDerivedData
 	/** The compressed Landscape component data for mobile rendering. Serialized to disk. 
 	    On device, freed once it has been decompressed. */
 	TArray<uint8> CompressedLandscapeData;
+
+#if LANDSCAPE_LOD_STREAMING_USE_TOKEN
+	TArray<FBulkDataStreamingToken> StreamingLODDataArray;
+#else
+	TArray<FByteBulkData> StreamingLODDataArray;
+#endif
 	
 	/** Cached render data. Only valid on device. */
 	TSharedPtr<FLandscapeMobileRenderData, ESPMode::ThreadSafe > CachedRenderData;
+
+	FString CachedLODDataFileName;
+
+	friend class ULandscapeLODStreamingProxy;
 
 public:
 	/** Returns true if there is any valid platform data */
@@ -127,11 +141,16 @@ public:
 	/** Returns the size of the platform data if there is any. */
 	int32 GetPlatformDataSize() const
 	{
-		return CompressedLandscapeData.Num();
+		int32 Result = CompressedLandscapeData.Num();
+		for (int32 Idx = 0; Idx < StreamingLODDataArray.Num(); ++Idx)
+		{
+			Result += (int32)StreamingLODDataArray[Idx].GetBulkDataSize();
+		}
+		return Result;
 	}
 
 	/** Initializes the compressed data from an uncompressed source. */
-	void InitializeFromUncompressedData(const TArray<uint8>& UncompressedData);
+	void InitializeFromUncompressedData(const TArray<uint8>& UncompressedData, const TArray<TArray<uint8>>& StreamingLODs);
 
 	/** Decompresses data if necessary and returns the render data object. 
      *  On device, this frees the compressed data and keeps a reference to the render data. */
@@ -147,7 +166,7 @@ public:
 	void SaveToDDC(const FGuid& StateId, UObject* Component);
 
 	/* Serializer */
-	friend FArchive& operator<<(FArchive& Ar, FLandscapeComponentDerivedData& Data);
+	void Serialize(FArchive& Ar, UObject* Owner);
 };
 
 /* Used to uniquely reference a landscape vertex in a component. */
@@ -232,10 +251,17 @@ struct FLandscapeComponentGrassData
 #if WITH_EDITORONLY_DATA
 	// Height data for LODs 1+, keyed on LOD index
 	TMap<int32, TArray<uint16>> HeightMipData;
+
+	// Grass data was updated but not saved yet
+	bool bIsDirty;
 #endif
 	TMap<ULandscapeGrassType*, TArray<uint8>> WeightData;
 
-	FLandscapeComponentGrassData() {}
+	FLandscapeComponentGrassData()
+#if WITH_EDITORONLY_DATA
+		: bIsDirty(false) 
+#endif
+	{}
 
 #if WITH_EDITOR
 	FLandscapeComponentGrassData(ULandscapeComponent* Component);
@@ -358,6 +384,39 @@ enum ELandscapeClearMode
 	Clear_All = Clear_Weightmap | Clear_Heightmap UMETA(DisplayName = "All")
 };
 
+UCLASS(MinimalAPI)
+class ULandscapeLODStreamingProxy : public UStreamableRenderAsset
+{
+	GENERATED_UCLASS_BODY()
+
+	//~ Begin UStreamableRenderAsset Interface
+	virtual LANDSCAPE_API int32 CalcCumulativeLODSize(int32 NumLODs) const final override;
+	virtual LANDSCAPE_API FIoFilenameHash GetMipIoFilenameHash(const int32 MipIndex) const  final override;
+	virtual LANDSCAPE_API bool HasPendingRenderResourceInitialization() const final override;
+	virtual bool StreamOut(int32 NewMipCount) final override;
+	virtual bool StreamIn(int32 NewMipCount, bool bHighPrio) final override;
+	virtual EStreamableRenderAssetType GetRenderAssetType() const final override { return EStreamableRenderAssetType::LandscapeMeshMobile; }
+	//~ End UStreamableRenderAsset Interface
+
+	LANDSCAPE_API bool GetMipDataFilename(const int32 MipIndex, FString& OutBulkDataFilename) const;
+
+
+	LANDSCAPE_API TArray<float> GetLODScreenSizeArray() const;
+	LANDSCAPE_API TSharedPtr<FLandscapeMobileRenderData, ESPMode::ThreadSafe> GetRenderData() const;
+
+	typedef typename TChooseClass<LANDSCAPE_LOD_STREAMING_USE_TOKEN, FBulkDataStreamingToken, FByteBulkData>::Result BulkDataType;
+	LANDSCAPE_API BulkDataType& GetStreamingLODBulkData(int32 LODIdx) const;
+
+	static LANDSCAPE_API void CancelAllPendingStreamingActions();
+
+	void ClearStreamingResourceState();
+	void InitResourceStateForMobileStreaming();
+
+private:
+
+	ULandscapeComponent* LandscapeComponent = nullptr;
+};
+
 UCLASS(hidecategories=(Display, Attachment, Physics, Debug, Collision, Movement, Rendering, PrimitiveComponent, Object, Transform, Mobility, VirtualTexture), showcategories=("Rendering|Material"), MinimalAPI, Within=LandscapeProxy)
 class ULandscapeComponent : public UPrimitiveComponent
 {
@@ -472,6 +531,10 @@ private:
 	UPROPERTY(TextExportTransient)
 	TArray<UTexture2D*> WeightmapTextures;
 
+	/** Used to interface the component to the LOD streamer. */
+	UPROPERTY()
+	ULandscapeLODStreamingProxy* LODStreamingProxy;
+
 public:
 
 	/** Uniquely identifies this component's built map data. */
@@ -536,7 +599,7 @@ public:
 	UPROPERTY(Transient, DuplicateTransient, NonTransactional)
 	FLandscapeEditToolRenderData EditToolRenderData;
 
-	/** Hash of source for ES2 generated data. Used determine if we need to re-generate ES2 pixel data. */
+	/** Hash of source for mobile generated data. Used determine if we need to re-generate mobile pixel data. */
 	UPROPERTY(DuplicateTransient)
 	FGuid MobileDataSourceHash;
 
@@ -549,9 +612,13 @@ public:
 
 	UPROPERTY()
 	uint32 SplineHash;
+
+	/** Represents hash for last PhysicalMaterialTask */
+	UPROPERTY()
+	uint32 PhysicalMaterialHash;
 #endif
 
-	/** For ES2 */
+	/** For mobile */
 	UPROPERTY()
 	uint8 MobileBlendableLayerMask;
 
@@ -562,7 +629,7 @@ public:
 	UPROPERTY(NonPIEDuplicateTransient)
 	TArray<UMaterialInterface*> MobileMaterialInterfaces;
 
-	/** Generated weightmap textures used for ES2. The first entry is also used for the normal map. 
+	/** Generated weightmap textures used for mobile. The first entry is also used for the normal map. 
 	  * Serialized only when cooking or loading cooked builds. */
 	UPROPERTY(NonPIEDuplicateTransient)
 	TArray<UTexture2D*> MobileWeightmapTextures;
@@ -589,6 +656,11 @@ public:
 	TArray<FBox> ActiveExcludedBoxes;
 	uint32 ChangeTag;
 
+#if WITH_EDITOR
+	/** Physical material update task */
+	FLandscapePhysicalMaterialRenderTask PhysicalMaterialTask;
+	uint32 CalculatePhysicalMaterialTaskHash() const;
+#endif
 
 	//~ Begin UObject Interface.	
 	virtual void PostInitProperties() override;	
@@ -907,6 +979,11 @@ public:
 	 */
 	LANDSCAPE_API void UpdateCollisionLayerData();
 
+	/** Update physical material render tasks. */
+	void UpdatePhysicalMaterialTasks();
+	/** Update collision component physical materials from render task results. */
+	void UpdateCollisionPhysicalMaterialData(TArray<UPhysicalMaterial*> const& InPhysicalMaterials, TArray<uint8> const& InMaterialIds);
+
 	/**
 	 * Create weightmaps for this component for the layers specified in the WeightmapLayerAllocations array
 	 */
@@ -974,6 +1051,7 @@ public:
 
 	friend class FLandscapeComponentSceneProxy;
 	friend struct FLandscapeComponentDataInterface;
+	friend class ULandscapeLODStreamingProxy;
 
 	void SetLOD(bool bForced, int32 InLODValue);
 

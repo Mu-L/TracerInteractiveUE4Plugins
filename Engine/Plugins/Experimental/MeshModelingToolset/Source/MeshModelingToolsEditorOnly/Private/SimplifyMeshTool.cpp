@@ -75,30 +75,6 @@ USimplifyMeshToolProperties::USimplifyMeshToolProperties()
 	MaterialBoundaryConstraint = EMaterialBoundaryConstraint::Ignore;
 }
 
-void
-USimplifyMeshToolProperties::SaveRestoreProperties(UInteractiveTool* RestoreToTool, bool bSaving)
-{
-	USimplifyMeshToolProperties* PropertyCache = GetPropertyCache<USimplifyMeshToolProperties>();
-
-	// MeshConstraintProperties
-	SaveRestoreProperty(PropertyCache->bPreserveSharpEdges, this->bPreserveSharpEdges, bSaving);
-	SaveRestoreProperty(PropertyCache->MeshBoundaryConstraint, this->MeshBoundaryConstraint, bSaving);
-	SaveRestoreProperty(PropertyCache->GroupBoundaryConstraint, this->GroupBoundaryConstraint, bSaving);
-	SaveRestoreProperty(PropertyCache->MaterialBoundaryConstraint, this->MaterialBoundaryConstraint, bSaving);
-	SaveRestoreProperty(PropertyCache->bPreventNormalFlips, this->bPreventNormalFlips, bSaving);
-
-	// SimplifyMeshToolProperties
-	SaveRestoreProperty(PropertyCache->TargetMode, this->TargetMode, bSaving);
-	SaveRestoreProperty(PropertyCache->SimplifierType, this->SimplifierType, bSaving);
-	SaveRestoreProperty(PropertyCache->TargetPercentage, this->TargetPercentage, bSaving);
-	SaveRestoreProperty(PropertyCache->TargetEdgeLength, this->TargetEdgeLength, bSaving);
-	SaveRestoreProperty(PropertyCache->TargetCount, this->TargetCount, bSaving);
-	SaveRestoreProperty(PropertyCache->bDiscardAttributes, this->bDiscardAttributes, bSaving);
-	SaveRestoreProperty(PropertyCache->bShowWireframe, this->bShowWireframe, bSaving);
-	SaveRestoreProperty(PropertyCache->bShowGroupColors, this->bShowGroupColors, bSaving);
-	SaveRestoreProperty(PropertyCache->bReproject, this->bReproject, bSaving);
-}
-
 void USimplifyMeshTool::SetWorld(UWorld* World)
 {
 	this->TargetWorld = World;
@@ -159,12 +135,10 @@ void USimplifyMeshTool::Setup()
 	SimplifyProperties->RestoreProperties(this);
 	AddToolPropertySource(SimplifyProperties);
 
-	ShowGroupsWatcher.Initialize(
-		[this]() { return SimplifyProperties->bShowGroupColors; },
-		[this](bool bNewValue) { UpdateVisualization(); }, SimplifyProperties->bShowGroupColors );
-	ShowWireFrameWatcher.Initialize(
-		[this]() { return SimplifyProperties->bShowWireframe; },
-		[this](bool bNewValue) { UpdateVisualization(); }, SimplifyProperties->bShowWireframe );
+	SimplifyProperties->WatchProperty(SimplifyProperties->bShowGroupColors,
+									  [this](bool bNewValue) { UpdateVisualization(); });
+	SimplifyProperties->WatchProperty(SimplifyProperties->bShowWireframe,
+									  [this](bool bNewValue) { UpdateVisualization(); });
 
 	MeshStatisticsProperties = NewObject<UMeshStatisticsProperties>(this);
 	AddToolPropertySource(MeshStatisticsProperties);
@@ -176,6 +150,16 @@ void USimplifyMeshTool::Setup()
 
 	UpdateVisualization();
 	Preview->InvalidateResult();
+
+	GetToolManager()->DisplayMessage(
+		LOCTEXT("OnStartTool", "Reduce the number of triangles in the selected Mesh using various strategies."),
+		EToolMessageLevel::UserNotification);
+}
+
+
+bool USimplifyMeshTool::CanAccept() const
+{
+	return Super::CanAccept() && Preview->HaveValidResult();
 }
 
 
@@ -191,11 +175,8 @@ void USimplifyMeshTool::Shutdown(EToolShutdownType ShutdownType)
 }
 
 
-void USimplifyMeshTool::Tick(float DeltaTime)
+void USimplifyMeshTool::OnTick(float DeltaTime)
 {
-	ShowWireFrameWatcher.CheckAndUpdate();
-	ShowGroupsWatcher.CheckAndUpdate();
-
 	Preview->Tick(DeltaTime);
 }
 
@@ -206,6 +187,7 @@ TUniquePtr<FDynamicMeshOperator> USimplifyMeshTool::MakeNewOperator()
 	Op->bDiscardAttributes = SimplifyProperties->bDiscardAttributes;
 	Op->bPreventNormalFlips = SimplifyProperties->bPreventNormalFlips;
 	Op->bPreserveSharpEdges = SimplifyProperties->bPreserveSharpEdges;
+	Op->bAllowSeamCollapse = !SimplifyProperties->bPreserveSharpEdges;
 	Op->bReproject = SimplifyProperties->bReproject;
 	Op->SimplifierType = SimplifyProperties->SimplifierType;
 	Op->TargetCount = SimplifyProperties->TargetCount;
@@ -230,7 +212,6 @@ TUniquePtr<FDynamicMeshOperator> USimplifyMeshTool::MakeNewOperator()
 
 void USimplifyMeshTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
-
 	FPrimitiveDrawInterface* PDI = RenderAPI->GetPrimitiveDrawInterface();
 	FTransform Transform = ComponentTarget->GetWorldTransform(); //Actor->GetTransform();
 
@@ -238,6 +219,8 @@ void USimplifyMeshTool::Render(IToolsContextRenderAPI* RenderAPI)
 	const FDynamicMesh3* TargetMesh = Preview->PreviewMesh->GetPreviewDynamicMesh();
 	if (TargetMesh->HasAttributes())
 	{
+		float PDIScale = RenderAPI->GetCameraState().GetPDIScalingFactor();
+
 		const FDynamicMeshUVOverlay* UVOverlay = TargetMesh->Attributes()->PrimaryUV();
 		for (int eid : TargetMesh->EdgeIndicesItr())
 		{
@@ -246,7 +229,7 @@ void USimplifyMeshTool::Render(IToolsContextRenderAPI* RenderAPI)
 				FVector3d A, B;
 				TargetMesh->GetEdgeV(eid, A, B);
 				PDI->DrawLine(Transform.TransformPosition((FVector)A), Transform.TransformPosition((FVector)B),
-					LineColor, 0, 2.0, 1.0f, true);
+					LineColor, 0, 2.0*PDIScale, 1.0f, true);
 			}
 		}
 	}
@@ -288,16 +271,6 @@ void USimplifyMeshTool::UpdateVisualization()
 	}
 	Preview->ConfigureMaterials(MaterialSet.Materials,
 								ToolSetupUtil::GetDefaultWorkingMaterial(GetToolManager()));
-}
-
-bool USimplifyMeshTool::HasAccept() const
-{
-	return true;
-}
-
-bool USimplifyMeshTool::CanAccept() const
-{
-	return true;
 }
 
 void USimplifyMeshTool::GenerateAsset(const FDynamicMeshOpResult& Result)

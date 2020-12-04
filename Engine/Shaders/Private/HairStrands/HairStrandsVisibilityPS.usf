@@ -8,7 +8,6 @@
 //#define SceneTexturesStruct DeepShadowPass.SceneTextures
 
 #include "../SceneTexturesCommon.ush"
-#include "HairStrandsDeepShadowCommon.ush"
 #include "../DeferredShadingCommon.ush"
 #include "HairStrandsVisibilityCommon.ush"
 #include "../VelocityCommon.ush"
@@ -145,8 +144,8 @@ void MainVisibility(
 		Tangent = mul(normalize(GetMaterialNormalRaw(PixelMaterialInputs)), MaterialParameters.TangentToWorld);
 	}
 	{
-		Velocity = Calculate2DVelocity(PackedVelocityA, PackedVelocityC);
-		EncodedVelocity = EncodeVelocityToTexture(Velocity);
+		Velocity = Calculate3DVelocity(PackedVelocityA, PackedVelocityC).xy;
+		EncodedVelocity = EncodeVelocityToTexture(float3(Velocity, 0.0)).xy;
 	}
 	#endif
 #endif

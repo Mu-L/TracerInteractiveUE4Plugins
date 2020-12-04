@@ -6,6 +6,7 @@
 #include "WindowsMixedRealityStatics.h"
 #include "WindowsMixedRealityInteropUtility.h"
 #include "Misc/Parse.h"
+#include "WindowsMixedRealitySpatialInputFunctionLibrary.h"
 #include "WindowsMixedRealitySpatialInputTypes.h"
 #include "WindowsMixedRealityAvailability.h"
 
@@ -27,6 +28,9 @@ namespace WindowsMixedReality
 
 	FWindowsMixedRealitySpatialInput::~FWindowsMixedRealitySpatialInput()
 	{
+		FWindowsMixedRealityStatics::OnConfigureGesturesDelegate.Remove(FWindowsMixedRealityStatics::ConfigureGesturesHandle);
+		FWindowsMixedRealityStatics::ConfigureGesturesHandle.Reset();
+
 		UninitializeSpatialInput();
 	}
 
@@ -739,12 +743,12 @@ namespace WindowsMixedReality
 		FHapticFeedbackValues rightHaptics = FHapticFeedbackValues(
 			values.RightSmall,		// frequency
 			values.RightLarge);		// amplitude
-		
+
 		SetHapticFeedbackValues(
 			ControllerId,
 			(int32)EControllerHand::Left,
 			leftHaptics);
-		
+
 		SetHapticFeedbackValues(
 			ControllerId,
 			(int32)EControllerHand::Right,
@@ -824,24 +828,24 @@ namespace WindowsMixedReality
 		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightHoldGesture, LOCTEXT(RightHoldGestureName, "Windows Spatial Input Right Hold Gesture"), FKeyDetails::GamepadKey));
 
 		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftManipulationGesture, LOCTEXT(LeftManipulationGestureName, "Windows Spatial Input Left Manipulation Gesture"), FKeyDetails::GamepadKey));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftManipulationXGesture, LOCTEXT(LeftManipulationXGestureName, "Windows Spatial Input Left Manipulation X Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftManipulationYGesture, LOCTEXT(LeftManipulationYGestureName, "Windows Spatial Input Left Manipulation Y Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftManipulationZGesture, LOCTEXT(LeftManipulationZGestureName, "Windows Spatial Input Left Manipulation Z Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftManipulationXGesture, LOCTEXT(LeftManipulationXGestureName, "Windows Spatial Input Left Manipulation X Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftManipulationYGesture, LOCTEXT(LeftManipulationYGestureName, "Windows Spatial Input Left Manipulation Y Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftManipulationZGesture, LOCTEXT(LeftManipulationZGestureName, "Windows Spatial Input Left Manipulation Z Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
 
 		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftNavigationGesture, LOCTEXT(LeftNavigationGestureName, "Windows Spatial Input Left Navigation Gesture"), FKeyDetails::GamepadKey));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftNavigationXGesture, LOCTEXT(LeftNavigationXGestureName, "Windows Spatial Input Left Navigation X Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftNavigationYGesture, LOCTEXT(LeftNavigationYGestureName, "Windows Spatial Input Left Navigation Y Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftNavigationZGesture, LOCTEXT(LeftNavigationZGestureName, "Windows Spatial Input Left Navigation Z Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftNavigationXGesture, LOCTEXT(LeftNavigationXGestureName, "Windows Spatial Input Left Navigation X Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftNavigationYGesture, LOCTEXT(LeftNavigationYGestureName, "Windows Spatial Input Left Navigation Y Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::LeftNavigationZGesture, LOCTEXT(LeftNavigationZGestureName, "Windows Spatial Input Left Navigation Z Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
 
 		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightManipulationGesture, LOCTEXT(RightManipulationGestureName, "Windows Spatial Input Right Manipulation Gesture"), FKeyDetails::GamepadKey));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightManipulationXGesture, LOCTEXT(RightManipulationXGestureName, "Windows Spatial Input Right Manipulation X Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightManipulationYGesture, LOCTEXT(RightManipulationYGestureName, "Windows Spatial Input Right Manipulation Y Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightManipulationZGesture, LOCTEXT(RightManipulationZGestureName, "Windows Spatial Input Right Manipulation Z Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightManipulationXGesture, LOCTEXT(RightManipulationXGestureName, "Windows Spatial Input Right Manipulation X Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightManipulationYGesture, LOCTEXT(RightManipulationYGestureName, "Windows Spatial Input Right Manipulation Y Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightManipulationZGesture, LOCTEXT(RightManipulationZGestureName, "Windows Spatial Input Right Manipulation Z Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
 
 		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightNavigationGesture, LOCTEXT(RightNavigationGestureName, "Windows Spatial Input Right Navigation Gesture"), FKeyDetails::GamepadKey));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightNavigationXGesture, LOCTEXT(RightNavigationXGestureName, "Windows Spatial Input Right Navigation X Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightNavigationYGesture, LOCTEXT(RightNavigationYGestureName, "Windows Spatial Input Right Navigation Y Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
-		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightNavigationZGesture, LOCTEXT(RightNavigationZGestureName, "Windows Spatial Input Right Navigation Z Gesture"), FKeyDetails::GamepadKey | FKeyDetails::FloatAxis));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightNavigationXGesture, LOCTEXT(RightNavigationXGestureName, "Windows Spatial Input Right Navigation X Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightNavigationYGesture, LOCTEXT(RightNavigationYGestureName, "Windows Spatial Input Right Navigation Y Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
+		EKeys::AddKey(FKeyDetails(FSpatialInputKeys::RightNavigationZGesture, LOCTEXT(RightNavigationZGestureName, "Windows Spatial Input Right Navigation Z Gesture"), FKeyDetails::GamepadKey | FKeyDetails::Axis1D));
 	}
 
 	void FWindowsMixedRealitySpatialInput::InitializeSpatialInput() noexcept
@@ -867,7 +871,7 @@ namespace WindowsMixedReality
 		{
 			return;
 		}
-		
+
 #if SUPPORTS_WINDOWS_MIXED_REALITY_GESTURES
 		GestureRecognizer = nullptr;
 #endif

@@ -74,7 +74,9 @@ private:
 	void Initialize();
 	void ShutdownInternal();
 
-	void CreateSession();
+	void CreateSession(const FUniqueNetIdRepl& LocalUserPlatformId);
+	void AddLocalPlayerToSession(UPartyMember* InitializedMember);
+	void RemoveLocalPlayerFromSession(UPartyMember* PartyMember);
 	void FindSession(const FPartyPlatformSessionInfo& SessionInfo);
 	void JoinSession(const FOnlineSessionSearchResult& SessionSearchResult);
 	void LeaveSession();
@@ -95,13 +97,14 @@ private:
 	void HandlePartyLeft(EMemberExitedReason Reason);
 	void HandlePartyMemberCreated(UPartyMember& NewMember);
 	void HandlePartyMemberInitialized(UPartyMember* InitializedMember);
-	void HandlePartyMemberLeft(UPartyMember* OldMember);
+	void HandlePartyMemberLeft(UPartyMember* OldMember, const EMemberExitedReason Reason);
 
 	void HandleCreateSessionComplete(const FName SessionName, bool bWasSuccessful);
 	void HandleFindSessionComplete(bool bWasSuccessful, const FOnlineSessionSearchResult& FoundSession);
 	void HandleJoinSessionComplete(FName SessionName, EOnJoinSessionCompleteResult::Type JoinSessionResult);
 	void HandleDestroySessionComplete(FName SessionName, bool bWasSuccessful);
 	bool HandleRetryEstablishingSession(float);
+	void HandleSessionFailure(const FUniqueNetId& LocalUserId, ESessionFailure::Type FailureType);
 
 	bool HandleQueuedSessionUpdate(float);
 
@@ -112,7 +115,8 @@ private:
 
 	FSessionId TargetSessionId;
 
-	bool bIsSessionMissing = false;
+	/** Last session id we attempted to find to prevent repeated failures to find the same session */
+	TOptional<FSessionId> LastAttemptedFindSessionId;
 
 	/** Do we have a console session update queued? */
 	bool bHasQueuedSessionUpdate = false;

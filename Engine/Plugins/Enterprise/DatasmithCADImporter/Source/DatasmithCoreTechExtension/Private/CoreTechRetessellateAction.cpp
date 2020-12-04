@@ -163,7 +163,7 @@ void FCoreTechRetessellate_Impl::ApplyOnAssets(const TArray<FAssetData>& Selecte
 #endif // CAD_LIBRARY
 }
 
-bool FCoreTechRetessellate_Impl::ApplyOnOneAsset(UStaticMesh& StaticMesh, UCoreTechParametricSurfaceData& CoreTechData, const FDatasmithTessellationOptions& RetessellateOptions)
+bool FCoreTechRetessellate_Impl::ApplyOnOneAsset(UStaticMesh& StaticMesh, UCoreTechParametricSurfaceData& CoreTechData, const FDatasmithRetessellationOptions& RetessellateOptions)
 {
 	bool bSuccessfulTessellation = false;
 
@@ -181,7 +181,7 @@ bool FCoreTechRetessellate_Impl::ApplyOnOneAsset(UStaticMesh& StaticMesh, UCoreT
 	ImportParameters.ChordTolerance = RetessellateOptions.ChordTolerance;
 	ImportParameters.MaxEdgeLength = RetessellateOptions.MaxEdgeLength;
 	ImportParameters.MaxNormalAngle = RetessellateOptions.NormalTolerance;
-	ImportParameters.ModelCoordSys = CADLibrary::EModelCoordSystem(CoreTechData.SceneParameters.ModelCoordSys);
+	ImportParameters.ModelCoordSys = static_cast<FDatasmithUtils::EModelCoordSystem>(CoreTechData.SceneParameters.ModelCoordSys);
 	ImportParameters.StitchingTechnique = CADLibrary::EStitchingTechnique(RetessellateOptions.StitchingTechnique);
 
 	CADLibrary::FMeshParameters MeshParameters;
@@ -196,6 +196,11 @@ bool FCoreTechRetessellate_Impl::ApplyOnOneAsset(UStaticMesh& StaticMesh, UCoreT
 		FMeshDescription MeshDescription;
 		FStaticMeshAttributes MeshDescriptionAttributes(MeshDescription);
 		MeshDescriptionAttributes.Register();
+
+		if (RetessellateOptions.RetessellationRule == EDatasmithCADRetessellationRule::SkipDeletedSurfaces)
+		{
+			CADLibrary::CopyPatchGroups(*DestinationMeshDescription, MeshDescription);
+		}
 
 		if ( Loader.LoadFile(ResourceFile, MeshDescription, ImportParameters, MeshParameters))
 		{

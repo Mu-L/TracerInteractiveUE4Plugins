@@ -22,10 +22,10 @@ namespace VulkanRHI
 class FVulkanBackBuffer : public FVulkanTexture2D
 {
 public:
-	FVulkanBackBuffer(FVulkanDevice& Device, FVulkanViewport* InViewport, EPixelFormat Format, uint32 SizeX, uint32 SizeY, uint32 UEFlags);
+	FVulkanBackBuffer(FVulkanDevice& Device, FVulkanViewport* InViewport, EPixelFormat Format, uint32 SizeX, uint32 SizeY, ETextureCreateFlags UEFlags);
 	virtual ~FVulkanBackBuffer();
 	
-	virtual void OnTransitionResource(FVulkanCommandListContext& Context, EResourceTransitionAccess TransitionType) override final;
+	virtual void OnLayoutTransition(FVulkanCommandListContext& Context, VkImageLayout NewLayout) override final;
 
 	void OnGetBackBufferImage(FRHICommandListImmediate& RHICmdList);
 	void OnAdvanceBackBufferFrame(FRHICommandListImmediate& RHICmdList);
@@ -84,6 +84,26 @@ public:
 	{
 		return bIsFullscreen;
 	}
+
+	inline VkImage GetBackBufferImage(uint32 Index)
+	{
+		if (BackBufferImages.Num() > 0)
+		{
+			return BackBufferImages[Index];
+		}
+		else
+		{
+			return VK_NULL_HANDLE;
+		}
+	}
+
+	inline FVulkanSwapChain* GetSwapChain()
+	{
+		return SwapChain;
+	}
+
+	VkSurfaceTransformFlagBitsKHR GetSwapchainQCOMRenderPassTransform() const;
+	VkFormat GetSwapchainImageFormat() const;
 
 protected:
 	// NUM_BUFFERS don't have to match exactly as the driver can require a minimum number larger than NUM_BUFFERS. Provide some slack

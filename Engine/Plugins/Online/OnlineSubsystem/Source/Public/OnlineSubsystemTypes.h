@@ -25,16 +25,12 @@ extern ONLINESUBSYSTEM_API bool IsUniqueIdLocal(const FUniqueNetId& UniqueId);
 
 /** Maximum players supported on a given platform */
 #if !defined(MAX_LOCAL_PLAYERS)
-	#if PLATFORM_XBOXONE
-	#define MAX_LOCAL_PLAYERS 4
-	#elif PLATFORM_PS4
-	#define MAX_LOCAL_PLAYERS 4
-	#elif PLATFORM_SWITCH
-	#define MAX_LOCAL_PLAYERS 8
+	#if PLATFORM_MAX_LOCAL_PLAYERS
+		#define MAX_LOCAL_PLAYERS PLATFORM_MAX_LOCAL_PLAYERS
 	#elif PLATFORM_WINDOWS
-	#define MAX_LOCAL_PLAYERS 4
+		#define MAX_LOCAL_PLAYERS 4
 	#else
-	#define MAX_LOCAL_PLAYERS 1
+		#define MAX_LOCAL_PLAYERS 1
 	#endif
 #endif //MAX_LOCAL_PLAYERS
 
@@ -1554,3 +1550,36 @@ public:
 
 	bool bNeverShowAgain;
 };
+
+/**
+ * Parse an array of strings in the format (Key=Value) into an array of pairs of those keys and values
+ *
+ * @param InEntries array of strings in the format (Key=Value)
+ * @param OutPairs the split key/value pairs
+ */
+inline void ParseOnlineSubsystemConfigPairs(TArrayView<const FString> InEntries, TArray<TPair<FString, FString>>& OutPairs)
+{
+	OutPairs.Reserve(InEntries.Num());
+	// Takes on the pattern "(Key=Value)"
+	for (const FString& Entry : InEntries)
+	{
+		FString TrimmedConfigEntry = Entry.TrimStartAndEnd();
+		FString KeyString;
+		FString ValueString;
+
+		if (TrimmedConfigEntry.Left(1) == TEXT("("))
+		{
+			TrimmedConfigEntry.RightChopInline(1, false);
+		}
+		if (TrimmedConfigEntry.Right(1) == TEXT(")"))
+		{
+			TrimmedConfigEntry.LeftChopInline(1, false);
+		}
+		if (TrimmedConfigEntry.Split(TEXT("="), &KeyString, &ValueString, ESearchCase::CaseSensitive))
+		{
+			KeyString.TrimStartAndEndInline();
+			ValueString.TrimStartAndEndInline();
+		}
+		OutPairs.Emplace(MoveTemp(KeyString), MoveTemp(ValueString));
+	}
+}

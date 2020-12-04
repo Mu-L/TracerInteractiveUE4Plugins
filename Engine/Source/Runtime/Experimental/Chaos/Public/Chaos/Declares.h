@@ -3,15 +3,14 @@
 #pragma once
 
 #include "Chaos/ParticleHandleFwd.h"
+#include "Chaos/PBDRigidsEvolutionFwd.h"
 
 namespace Chaos
 {
-	class FPBDRigidsSolver;
-
 	typedef FPBDRigidsSolver FPhysicsSolver;
 
 	class FImplicitObject;
-	template <typename T, int d> class TPerShapeData;
+	class FPerShapeData;
 	template <typename TSOA> class TParticleView;
 	template<class T, int d> class TPBDRigidParticles;
 }

@@ -247,6 +247,17 @@ public:
 	ERHIFeatureLevel::Type GetFeatureLevel() { return FeatureLevel; }
 };
 
+enum class ELODStreamingCallbackResult
+{
+	Success,
+	TimedOut,
+	AssetRemoved,
+	ComponentRemoved,
+	StreamingDisabled,
+	NotImplemented
+};
+
+typedef TFunction<void(UPrimitiveComponent*, UStreamableRenderAsset*, ELODStreamingCallbackResult)> FLODStreamingCallback;
 
 /**
  * A Map that gives the (smallest) texture coordinate scale used when sampling each texture register of a shader.
@@ -265,13 +276,6 @@ ENGINE_API bool BuildTextureStreamingComponentData(UWorld* InWorld, EMaterialQua
 
 /** Check if the lighting build is dirty. Updates the needs rebuild status of the level and world. */
 ENGINE_API void CheckTextureStreamingBuildValidity(UWorld* InWorld);
-
-/**
- * Checks whether a UStreamableRenderAsset is a texture/mesh with streamable mips
- * @param Asset		Asset to check
- * @return			true if the UStreamableRenderAsset is supposed to be streaming
- */
-ENGINE_API bool IsStreamingRenderAsset( const UStreamableRenderAsset* Asset );
 
 ENGINE_API uint32 PackRelativeBox(const FVector& RefOrigin, const FVector& RefExtent, const FVector& Origin, const FVector& Extent);
 ENGINE_API uint32 PackRelativeBox(const FBox& RefBox, const FBox& Box);

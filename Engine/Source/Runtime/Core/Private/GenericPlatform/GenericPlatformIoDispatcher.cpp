@@ -7,6 +7,7 @@
 #include "HAL/PlatformFilemanager.h"
 #include "ProfilingDebugging/CountersTrace.h"
 #include "HAL/RunnableThread.h"
+#include "HAL/IConsoleManager.h"
 #include "Misc/ScopeLock.h"
 
 //PRAGMA_DISABLE_OPTIMIZATION
@@ -15,198 +16,144 @@ TRACE_DECLARE_INT_COUNTER(IoDispatcherSequentialReads, TEXT("IoDispatcher/Sequen
 TRACE_DECLARE_INT_COUNTER(IoDispatcherForwardSeeks, TEXT("IoDispatcher/ForwardSeeks"));
 TRACE_DECLARE_INT_COUNTER(IoDispatcherBackwardSeeks, TEXT("IoDispatcher/BackwardSeeks"));
 TRACE_DECLARE_MEMORY_COUNTER(IoDispatcherTotalSeekDistance, TEXT("IoDispatcher/TotalSeekDistance"));
-TRACE_DECLARE_INT_COUNTER(IoDispatcherPendingBlocksCount, TEXT("IoDispatcher/PendingBlocksCount"));
 
 FGenericIoDispatcherEventQueue::FGenericIoDispatcherEventQueue()
-	: Event(FPlatformProcess::GetSynchEventFromPool())
+	: DispatcherEvent(FPlatformProcess::GetSynchEventFromPool())
+	, ServiceEvent(FPlatformProcess::GetSynchEventFromPool())
 {
 }
 
 FGenericIoDispatcherEventQueue::~FGenericIoDispatcherEventQueue()
 {
-	FPlatformProcess::ReturnSynchEventToPool(Event);
+	FPlatformProcess::ReturnSynchEventToPool(ServiceEvent);
+	FPlatformProcess::ReturnSynchEventToPool(DispatcherEvent);
 }
 
-void FGenericIoDispatcherEventQueue::Notify()
+void FGenericIoDispatcherEventQueue::DispatcherNotify()
 {
-	Event->Trigger();
+	DispatcherEvent->Trigger();
 }
 
-void FGenericIoDispatcherEventQueue::Wait()
+void FGenericIoDispatcherEventQueue::DispatcherWait()
 {
-	Event->Wait();
+	DispatcherEvent->Wait();
 }
 
-FGenericFileIoStoreImpl::FGenericFileIoStoreImpl(FGenericIoDispatcherEventQueue& InEventQueue)
+void FGenericIoDispatcherEventQueue::ServiceNotify()
+{
+	ServiceEvent->Trigger();
+}
+
+void FGenericIoDispatcherEventQueue::ServiceWait()
+{
+	ServiceEvent->Wait();
+}
+
+FGenericFileIoStoreImpl::FGenericFileIoStoreImpl(FGenericIoDispatcherEventQueue& InEventQueue, FFileIoStoreBufferAllocator& InBufferAllocator, FFileIoStoreBlockCache& InBlockCache)
 	: EventQueue(InEventQueue)
-	, PendingBlockEvent(FPlatformProcess::GetSynchEventFromPool())
+	, BufferAllocator(InBufferAllocator)
+	, BlockCache(InBlockCache)
 {
-	Thread = FRunnableThread::Create(this, TEXT("IoService"), 0, TPri_AboveNormal);
 }
 
 FGenericFileIoStoreImpl::~FGenericFileIoStoreImpl()
 {
-	delete Thread;
-	FPlatformProcess::ReturnSynchEventToPool(PendingBlockEvent);
 }
 
 bool FGenericFileIoStoreImpl::OpenContainer(const TCHAR* ContainerFilePath, uint64& ContainerFileHandle, uint64& ContainerFileSize)
 {
-	IPlatformFile& Ipf = FPlatformFileManager::Get().GetPlatformFile();
+	IPlatformFile& Ipf = IPlatformFile::GetPlatformPhysical();
+	int64 FileSize = Ipf.FileSize(ContainerFilePath);
+	if (FileSize < 0)
+	{
+		return false;
+	}
 	IFileHandle* FileHandle = Ipf.OpenReadNoBuffering(ContainerFilePath);
 	if (!FileHandle)
 	{
 		return false;
 	}
 	ContainerFileHandle = reinterpret_cast<UPTRINT>(FileHandle);
-	ContainerFileSize = FileHandle->Size();
+	ContainerFileSize = uint64(FileSize);
 	return true;
 }
 
-void FGenericFileIoStoreImpl::BeginReadsForRequest(FFileIoStoreResolvedRequest& ResolvedRequest)
+bool FGenericFileIoStoreImpl::StartRequests(FFileIoStoreRequestQueue& RequestQueue)
 {
-	if (!ResolvedRequest.Request->IoBuffer.DataSize())
+	FFileIoStoreReadRequest* NextRequest = RequestQueue.Pop();
+	if (!NextRequest)
 	{
-		ResolvedRequest.Request->IoBuffer = FIoBuffer(ResolvedRequest.ResolvedSize);
+		return false;
 	}
-}
 
-void FGenericFileIoStoreImpl::ReadBlockFromFile(FFileIoStoreReadBlock* Block)
-{
+	uint8* Dest;
+	if (!NextRequest->ImmediateScatter.Request)
 	{
-		FScopeLock Lock(&PendingBlocksCritical);
-		if (!PendingBlocksHead)
+		NextRequest->Buffer = BufferAllocator.AllocBuffer();
+		if (!NextRequest->Buffer)
 		{
-			PendingBlocksHead = PendingBlocksTail = Block;
+			RequestQueue.Push(*NextRequest);
+			return false;
 		}
-		else
+		Dest = NextRequest->Buffer->Memory;
+	}
+	else
+	{
+		Dest = NextRequest->ImmediateScatter.Request->IoBuffer.Data() + NextRequest->ImmediateScatter.DstOffset;
+	}
+	
+	if (!BlockCache.Read(NextRequest))
+	{
+		IFileHandle* FileHandle = reinterpret_cast<IFileHandle*>(static_cast<UPTRINT>(NextRequest->FileHandle));
+		if (FileHandle->Tell() != NextRequest->Offset)
 		{
-			PendingBlocksTail->Next = Block;
-			PendingBlocksTail = Block;
-		}
-		Block->Next = nullptr;
-		TRACE_COUNTER_INCREMENT(IoDispatcherPendingBlocksCount);
-	}
-	PendingBlockEvent->Trigger();
-}
-
-void FGenericFileIoStoreImpl::EndReadsForRequest()
-{
-
-}
-
-FFileIoStoreReadBlock* FGenericFileIoStoreImpl::GetNextCompletedBlock()
-{
-	FScopeLock _(&CompletedBlocksCritical);
-	FFileIoStoreReadBlock* CompletedBlock = CompletedBlocksHead;
-	if (!CompletedBlocksHead)
-	{
-		return nullptr;
-	}
-	CompletedBlocksHead = CompletedBlocksHead->Next;
-	if (!CompletedBlocksHead)
-	{
-		CompletedBlocksTail = nullptr;
-	}
-	return CompletedBlock;
-}
-
-bool FGenericFileIoStoreImpl::Init()
-{
-	return true;
-}
-
-void FGenericFileIoStoreImpl::Stop()
-{
-	bStopRequested = true;
-	PendingBlockEvent->Trigger();
-}
-
-uint32 FGenericFileIoStoreImpl::Run()
-{
-	FFileIoStoreReadBlock* ScheduledBlocksHead = nullptr;
-	FFileIoStoreReadBlock* ScheduledBlocksTail = nullptr;
-
-	while (!bStopRequested)
-	{
-		while (!bStopRequested)
-		{
+			if (uint64(FileHandle->Tell()) > NextRequest->Offset)
 			{
-				FScopeLock PendingBlocksLock(&PendingBlocksCritical);
-				if (PendingBlocksHead)
-				{
-					if (!ScheduledBlocksTail)
-					{
-						ScheduledBlocksHead = PendingBlocksHead;
-						ScheduledBlocksTail = PendingBlocksTail;
-					}
-					else
-					{
-						ScheduledBlocksTail->Next = PendingBlocksHead;
-						ScheduledBlocksTail = PendingBlocksTail;
-					}
-					PendingBlocksHead = PendingBlocksTail = nullptr;
-				}
-			}
-
-			if (!ScheduledBlocksHead)
-			{
-				break;
-			}
-
-			FFileIoStoreReadBlock* BlockToRead = ScheduledBlocksHead;
-			ScheduledBlocksHead = ScheduledBlocksHead->Next;
-			if (!ScheduledBlocksHead)
-			{
-				ScheduledBlocksTail = nullptr;
-			}
-			
-			if (!BlockToRead->Buffer.DataSize())
-			{
-				BlockToRead->Buffer = FIoBuffer(BlockToRead->Size);
-			}
-
-			/*FString ScopeNameString;
-			ScopeNameString.Appendf(TEXT("ReadBlockFromFile: %lld (%lld)"), BlockToRead->Key.BlockIndex, BlockToRead->Size);
-			TRACE_CPUPROFILER_EVENT_SCOPE_TEXT(*ScopeNameString);
-			*/
-			TRACE_CPUPROFILER_EVENT_SCOPE(ReadBlockFromFile);
-			IFileHandle* FileHandle = reinterpret_cast<IFileHandle*>(static_cast<UPTRINT>(BlockToRead->Key.FileHandle));
-			if (FileHandle->Tell() != BlockToRead->Offset)
-			{
-				if (uint64(FileHandle->Tell()) > BlockToRead->Offset)
-				{
-					TRACE_COUNTER_INCREMENT(IoDispatcherBackwardSeeks);
-				}
-				else
-				{
-					TRACE_COUNTER_INCREMENT(IoDispatcherForwardSeeks);
-				}
-				TRACE_COUNTER_ADD(IoDispatcherTotalSeekDistance, FMath::Abs(FileHandle->Tell() - int64(BlockToRead->Offset)));
-				FileHandle->Seek(BlockToRead->Offset);
+				TRACE_COUNTER_INCREMENT(IoDispatcherBackwardSeeks);
 			}
 			else
 			{
-				TRACE_COUNTER_INCREMENT(IoDispatcherSequentialReads);
+				TRACE_COUNTER_INCREMENT(IoDispatcherForwardSeeks);
 			}
-			FileHandle->Read(BlockToRead->Buffer.Data(), BlockToRead->Size);
-			TRACE_COUNTER_DECREMENT(IoDispatcherPendingBlocksCount);
-			{
-				FScopeLock _(&CompletedBlocksCritical);
-				if (!CompletedBlocksHead)
-				{
-					CompletedBlocksHead = CompletedBlocksTail = BlockToRead;
-				}
-				else
-				{
-					CompletedBlocksTail->Next = BlockToRead;
-					CompletedBlocksTail = BlockToRead;
-				}
-				BlockToRead->Next = nullptr;
-			}
-			EventQueue.Notify();
+			TRACE_COUNTER_ADD(IoDispatcherTotalSeekDistance, FMath::Abs(FileHandle->Tell() - int64(NextRequest->Offset)));
 		}
-		PendingBlockEvent->Wait();
+		else
+		{
+			TRACE_COUNTER_INCREMENT(IoDispatcherSequentialReads);
+		}
+		{
+			TRACE_CPUPROFILER_EVENT_SCOPE(ReadBlockFromFile);
+			NextRequest->bFailed = true;
+			int32 RetryCount = 0;
+			while (RetryCount++ < 10)
+			{
+				if (!FileHandle->Seek(NextRequest->Offset))
+				{
+					UE_LOG(LogIoDispatcher, Warning, TEXT("Failed seeking to offset %lld (Retries: %d)"), NextRequest->Offset, (RetryCount - 1));
+					continue;
+				}
+				if (!FileHandle->Read(Dest, NextRequest->Size))
+				{
+					UE_LOG(LogIoDispatcher, Warning, TEXT("Failed reading %lld bytes at offset %lld (Retries: %d)"), NextRequest->Size, NextRequest->Offset, (RetryCount - 1));
+					continue;
+				}
+				NextRequest->bFailed = false;
+				BlockCache.Store(NextRequest);
+				break;
+			}
+		}
 	}
-	return 0;
+	{
+		FScopeLock _(&CompletedRequestsCritical);
+		CompletedRequests.Add(NextRequest);
+	}
+	EventQueue.DispatcherNotify();
+	return true;
+}
+
+void FGenericFileIoStoreImpl::GetCompletedRequests(FFileIoStoreReadRequestList& OutRequests)
+{
+	FScopeLock _(&CompletedRequestsCritical);
+	OutRequests.Append(CompletedRequests);
+	CompletedRequests.Clear();
 }

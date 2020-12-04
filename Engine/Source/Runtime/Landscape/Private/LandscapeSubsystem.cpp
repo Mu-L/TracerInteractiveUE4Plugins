@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "ContentStreaming.h"
 #include "Landscape.h"
+#include "LandscapeProxy.h"
 #include "ProfilingDebugging/CsvProfiler.h"
 
 static int32 GUseStreamingManagerForCameras = 1;
@@ -17,29 +18,11 @@ static FAutoConsoleVariableRef CVarUseStreamingManagerForCameras(
 DECLARE_CYCLE_STAT(TEXT("LandscapeSubsystem Tick"), STAT_LandscapeSubsystemTick, STATGROUP_Landscape);
 
 ULandscapeSubsystem::ULandscapeSubsystem()
-	: TickFunction(this)
-{}
+{
+}
 
 ULandscapeSubsystem::~ULandscapeSubsystem()
 {
-
-}
-
-void ULandscapeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
-{
-	// Register Tick 
-	TickFunction.bCanEverTick = true;
-	TickFunction.bTickEvenWhenPaused = true;
-	TickFunction.bStartWithTickEnabled = true;
-	TickFunction.TickGroup = TG_DuringPhysics;
-	TickFunction.bAllowTickOnDedicatedServer = false;
-	TickFunction.RegisterTickFunction(GetWorld()->PersistentLevel);
-}
-
-void ULandscapeSubsystem::Deinitialize()
-{
-	TickFunction.UnRegisterTickFunction();
-	Proxies.Empty();
 }
 
 void ULandscapeSubsystem::RegisterActor(ALandscapeProxy* Proxy)
@@ -52,7 +35,39 @@ void ULandscapeSubsystem::UnregisterActor(ALandscapeProxy* Proxy)
 	Proxies.Remove(Proxy);
 }
 
-void ULandscapeSubsystem::Tick(float DeltaTime, enum ELevelTick TickType, ENamedThreads::Type CurrentThread, const FGraphEventRef& MyCompletionGraphEvent)
+void ULandscapeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
+{
+	Super::Initialize(Collection);
+
+#if WITH_EDITOR
+	GrassMapsBuilder = new FLandscapeGrassMapsBuilder(GetWorld());
+#endif
+}
+
+void ULandscapeSubsystem::Deinitialize()
+{
+#if WITH_EDITOR
+	if (GrassMapsBuilder)
+	{
+		delete GrassMapsBuilder;
+	}
+#endif
+	Proxies.Empty();
+
+	Super::Deinitialize();
+}
+
+TStatId ULandscapeSubsystem::GetStatId() const
+{
+	RETURN_QUICK_DECLARE_CYCLE_STAT(ULandscapeSubsystem, STATGROUP_Tickables);
+}
+
+ETickableTickType ULandscapeSubsystem::GetTickableTickType() const
+{
+	return HasAnyFlags(RF_ClassDefaultObject) || !GetWorld() || GetWorld()->IsNetMode(NM_DedicatedServer) ? ETickableTickType::Never : ETickableTickType::Always;
+}
+
+void ULandscapeSubsystem::Tick(float DeltaTime)
 {
 	SCOPE_CYCLE_COUNTER(STAT_LandscapeSubsystemTick);
 	TRACE_CPUPROFILER_EVENT_SCOPE(ULandscapeSubsystem::Tick);
@@ -93,7 +108,7 @@ void ULandscapeSubsystem::Tick(float DeltaTime, enum ELevelTick TickType, ENamed
 	}
 
 	int32 InOutNumComponentsCreated = 0;
-	for(ALandscapeProxy* Proxy : Proxies)
+	for (ALandscapeProxy* Proxy : Proxies)
 	{
 #if WITH_EDITOR
 		if (GIsEditor)
@@ -107,6 +122,7 @@ void ULandscapeSubsystem::Tick(float DeltaTime, enum ELevelTick TickType, ENamed
 			if (!World->IsPlayInEditor())
 			{
 				Proxy->UpdateBakedTextures();
+				Proxy->UpdatePhysicalMaterialTasks();
 			}
 		}
 #endif
@@ -115,21 +131,23 @@ void ULandscapeSubsystem::Tick(float DeltaTime, enum ELevelTick TickType, ENamed
 			Proxy->TickGrass(*Cameras, InOutNumComponentsCreated);
 		}
 	}
+
+#if WITH_EDITOR
+	if (GIsEditor && !World->IsPlayInEditor())
+	{
+		LandscapePhysicalMaterial::GarbageCollectTasks();
+	}
+#endif
 }
 
-void FLandscapeSubsystemTickFunction::ExecuteTick(float DeltaTime, enum ELevelTick TickType, ENamedThreads::Type CurrentThread, const FGraphEventRef& MyCompletionGraphEvent)
+#if WITH_EDITOR
+void ULandscapeSubsystem::BuildGrassMaps()
 {
-	Subsystem->Tick(DeltaTime, TickType, CurrentThread, MyCompletionGraphEvent);
+	GrassMapsBuilder->Build();
 }
 
-FString FLandscapeSubsystemTickFunction::DiagnosticMessage()
+int32 ULandscapeSubsystem::GetOutdatedGrassMapCount()
 {
-	static const FString Message(TEXT("FLandscapeSubsystemTickFunction"));
-	return Message;
+	return GrassMapsBuilder->GetOutdatedGrassMapCount(/*bInForceUpdate*/false);
 }
-
-FName FLandscapeSubsystemTickFunction::DiagnosticContext(bool bDetailed)
-{
-	static const FName Context(TEXT("FLandscapeSubsystemTickFunction"));
-	return Context;
-}
+#endif

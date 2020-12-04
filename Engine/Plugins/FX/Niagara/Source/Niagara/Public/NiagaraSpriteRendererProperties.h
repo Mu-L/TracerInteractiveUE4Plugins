@@ -38,6 +38,32 @@ enum class ENiagaraSpriteFacingMode : uint8
 	FaceCameraDistanceBlend
 };
 
+namespace ENiagaraSpriteVFLayout
+{
+	enum Type
+	{
+		Position,
+		Color,
+		Velocity,
+		Rotation,
+		Size,
+		Facing,
+		Alignment,
+		SubImage,
+		MaterialParam0,
+		MaterialParam1,
+		MaterialParam2,
+		MaterialParam3,
+		CameraOffset,
+		UVScale,
+		MaterialRandom,
+		CustomSorting,
+		NormalizedAge,
+
+		Num,
+	};
+};
+
 class FAssetThumbnailPool;
 class SWidget;
 
@@ -54,17 +80,21 @@ public:
 	virtual void PostInitProperties() override;
 	virtual void Serialize(FStructuredArchive::FRecord Record) override;
 #if WITH_EDITORONLY_DATA
-	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;	
+	virtual void RenameVariable(const FNiagaraVariableBase& OldVariable, const FNiagaraVariableBase& NewVariable, const UNiagaraEmitter* InEmitter) override;
+	virtual void RemoveVariable(const FNiagaraVariableBase& OldVariable, const UNiagaraEmitter* InEmitter) override;
+
 #endif // WITH_EDITORONLY_DATA
 	//UObject Interface END
 
 	static void InitCDOPropertiesAfterModuleStartup();
 
 	//UNiagaraRendererProperties interface
-	virtual FNiagaraRenderer* CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel, const FNiagaraEmitterInstance* Emitter) override;
+	virtual FNiagaraRenderer* CreateEmitterRenderer(ERHIFeatureLevel::Type FeatureLevel, const FNiagaraEmitterInstance* Emitter, const UNiagaraComponent* InComponent) override;
 	virtual class FNiagaraBoundsCalculator* CreateBoundsCalculator() override;
 	virtual void GetUsedMaterials(const FNiagaraEmitterInstance* InEmitter, TArray<UMaterialInterface*>& OutMaterials) const override;
-	virtual bool IsSimTargetSupported(ENiagaraSimTarget InSimTarget) const override { return true; };
+	virtual bool IsSimTargetSupported(ENiagaraSimTarget InSimTarget) const override { return true; };	
+	virtual bool PopulateRequiredBindings(FNiagaraParameterStore& InParameterStore)  override;
 #if WITH_EDITOR
 	virtual bool IsMaterialValidForRenderer(UMaterial* Material, FText& InvalidMessage) override;
 	virtual void FixMaterial(UMaterial* Material) override;
@@ -73,6 +103,9 @@ public:
 	virtual void GetRendererTooltipWidgets(const FNiagaraEmitterInstance* InEmitter, TArray<TSharedPtr<SWidget>>& OutWidgets, TSharedPtr<FAssetThumbnailPool> InThumbnailPool) const override;
 	virtual void GetRendererFeedback(const UNiagaraEmitter* InEmitter, TArray<FText>& OutErrors, TArray<FText>& OutWarnings, TArray<FText>& OutInfo) const override;
 #endif
+	virtual ENiagaraRendererSourceDataMode GetCurrentSourceMode() const override { return SourceMode; }
+
+	virtual void CacheFromCompiledData(const FNiagaraDataSetCompiledData* CompiledData) override;
 	//UNiagaraMaterialRendererProperties interface END
 
 	int32 GetNumCutoutVertexPerSubimage() const;
@@ -81,6 +114,10 @@ public:
 	/** The material used to render the particle. Note that it must have the Use with Niagara Sprites flag checked.*/
 	UPROPERTY(EditAnywhere, Category = "Sprite Rendering")
 	UMaterialInterface* Material;
+
+	/** Whether or not to draw a single element for the Emitter or to draw the particles.*/
+	UPROPERTY(EditAnywhere, Category = "Sprite Rendering")
+	ENiagaraRendererSourceDataMode SourceMode;
 
 	/** Use the UMaterialInterface bound to this user variable if it is set to a valid value. If this is bound to a valid value and Material is also set, UserParamBinding wins.*/
 	UPROPERTY(EditAnywhere, Category = "Sprite Rendering")
@@ -118,6 +155,14 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Sorting")
 	uint32 bSortOnlyWhenTranslucent : 1;
 
+	/**
+	If true and a GPU emitter, we will use the current frames data to render with regardless of where the batcher may execute the dispatches.
+	If you have other emitters that are not translucent and using data that forces it to be a frame latent (i.e. view uniform buffer) you may need to disable
+	on renderers with translucent materials if you need the frame they are reading to match exactly.
+	*/
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Rendering")
+	uint32 bGpuLowLatencyTranslucency : 1;
+
 	/** When FacingMode is FacingCameraDistanceBlend, the distance at which the sprite is fully facing the camera plane. */
 	UPROPERTY(EditAnywhere, Category = "Sprite Rendering", meta = (UIMin = "0"))
 	float MinFacingCameraBlendDistance;
@@ -125,6 +170,20 @@ public:
 	/** When FacingMode is FacingCameraDistanceBlend, the distance at which the sprite is fully facing the camera position */
 	UPROPERTY(EditAnywhere, Category = "Sprite Rendering", meta = (UIMin = "0"))
 	float MaxFacingCameraBlendDistance;
+
+	/** Enables frustum culling of individual sprites */
+	UPROPERTY(EditAnywhere, Category = "Visibility")
+	uint32 bEnableCameraDistanceCulling : 1;
+
+	UPROPERTY(EditAnywhere, Category = "Visibility", meta = (EditCondition = "bEnableCameraDistanceCulling", UIMin = 0.0f))
+	float MinCameraDistance;
+
+	UPROPERTY(EditAnywhere, Category = "Visibility", meta = (EditCondition = "bEnableCameraDistanceCulling", UIMin = 0.0f))
+	float MaxCameraDistance = 1000.0f;
+
+	/** If a render visibility tag is present, particles whose tag matches this value will be visible in this renderer. */
+	UPROPERTY(EditAnywhere, Category = "Visibility")
+	uint32 RendererVisibility = 0;
 
 	/** Which attribute should we use for position when generating sprites?*/
 	UPROPERTY(EditAnywhere, Category = "Bindings")
@@ -187,16 +246,28 @@ public:
 	FNiagaraVariableAttributeBinding MaterialRandomBinding;
 
 	/** Which attribute should we use for custom sorting? Defaults to Particles.NormalizedAge. */
-	UPROPERTY(EditAnywhere, Category = "Bindings")
+	UPROPERTY(EditAnywhere, Category = "Bindings", meta = (EditCondition = "SourceMode != ENiagaraRendererSourceDataMode::Emitter"))
 	FNiagaraVariableAttributeBinding CustomSortingBinding;
 
 	/** Which attribute should we use for Normalized Age? */
 	UPROPERTY(EditAnywhere, Category = "Bindings")
 	FNiagaraVariableAttributeBinding NormalizedAgeBinding;
 
+	/** Which attribute should we use for RendererVisibilityTag? */
+	UPROPERTY(EditAnywhere, Category = "Bindings")
+	FNiagaraVariableAttributeBinding RendererVisibilityTagBinding;
+
+	/** If this array has entries, we will create a MaterialInstanceDynamic per Emitter instance from Material and set the Material parameters using the Niagara simulation variables listed.*/
+	UPROPERTY(EditAnywhere, Category = "Bindings")
+	TArray< FNiagaraMaterialAttributeBinding > MaterialParameterBindings;
+
 	void InitBindings();
 
+	virtual bool NeedsMIDsForMaterials() const { return MaterialParameterBindings.Num() > 0; }
+
+
 #if WITH_EDITORONLY_DATA
+	virtual bool IsSupportedVariableForBinding(const FNiagaraVariableBase& InSourceForBinding, const FName& InTargetBindingName) const override;
 
 	/** Use the cutout texture from the material opacity mask, or if none exist, from the material opacity.	*/
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cutout")
@@ -230,8 +301,14 @@ public:
 
 	const TArray<FVector2D>& GetCutoutData() const { return DerivedData.BoundingGeometry; }
 
-private:
+	FNiagaraRendererLayout RendererLayoutWithCustomSort;
+	FNiagaraRendererLayout RendererLayoutWithoutCustomSort;
+	uint32 MaterialParamValidMask = 0;
+	
+protected:
+	void UpdateSourceModeDerivates(ENiagaraRendererSourceDataMode InSourceMode, bool bFromPropertyEdit = false) override;
 
+private:
 	/** Derived data for this asset, generated off of SubUVTexture. */
 	FSubUVDerivedData DerivedData;
 

@@ -223,7 +223,7 @@ public:
 		TPolygonGroupAttributesRef<FName> OutPolygonGroupMaterialNames = OutReducedMesh.PolygonGroupAttributes().GetAttributesRef<FName>(MeshAttribute::PolygonGroup::ImportedMaterialSlotName);
 
 		int32 WedgeIndex = 0;
-		for (const FPolygonID& PolygonID : InMesh.Polygons().GetElementIDs())
+		for (const FPolygonID PolygonID : InMesh.Polygons().GetElementIDs())
 		{
 			const FPolygonGroupID PolygonGroupID = InMesh.GetPolygonPolygonGroup(PolygonID);
 
@@ -437,11 +437,8 @@ public:
 		
 		float MaxErrorSqr = MeshSimp->SimplifyMesh(MAX_FLT, TargetNumTriangles, TargetNumVertices);
 
-		NumVerts = MeshSimp->GetNumVerts();
-		NumTris = MeshSimp->GetNumTris();
-		NumIndexes = NumTris * 3;
-
-		MeshSimp->OutputMesh(Verts.GetData(), Indexes.GetData());
+		MeshSimp->OutputMesh(Verts.GetData(), Indexes.GetData(), &NumVerts, &NumIndexes);
+		NumTris = NumIndexes / 3;
 		delete MeshSimp;
 
 		OutMaxDeviation = FMath::Sqrt(MaxErrorSqr) / 8.0f;
@@ -455,7 +452,7 @@ public:
 			OutReducedMesh.Vertices().Reset();
 
 			//Fill the PolygonGroups from the InMesh
-			for (const FPolygonGroupID& PolygonGroupID : InMesh.PolygonGroups().GetElementIDs())
+			for (const FPolygonGroupID PolygonGroupID : InMesh.PolygonGroups().GetElementIDs())
 			{
 				OutReducedMesh.CreatePolygonGroupWithID(PolygonGroupID);
 				OutPolygonGroupMaterialNames[PolygonGroupID] = InPolygonGroupMaterialNames[PolygonGroupID];
@@ -552,7 +549,7 @@ public:
 				// Insert a polygon into the mesh
 				TArray<FEdgeID> NewEdgeIDs;
 				const FPolygonID NewPolygonID = OutReducedMesh.CreatePolygon(MaterialPolygonGroupID, CornerInstanceIDs, &NewEdgeIDs);
-				for (const FEdgeID NewEdgeID : NewEdgeIDs)
+				for (const FEdgeID& NewEdgeID : NewEdgeIDs)
 				{
 					// @todo: set NewEdgeID edge hardness?
 				}
@@ -562,7 +559,7 @@ public:
 
 			//Remove the unused polygon group (reduce can remove all polygons from a group)
 			TArray<FPolygonGroupID> ToDeletePolygonGroupIDs;
-			for (const FPolygonGroupID& PolygonGroupID : OutReducedMesh.PolygonGroups().GetElementIDs())
+			for (const FPolygonGroupID PolygonGroupID : OutReducedMesh.PolygonGroups().GetElementIDs())
 			{
 				if (OutReducedMesh.GetPolygonGroupPolygons(PolygonGroupID).Num() == 0)
 				{

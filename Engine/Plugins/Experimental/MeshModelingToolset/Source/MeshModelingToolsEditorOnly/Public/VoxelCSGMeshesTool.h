@@ -9,6 +9,8 @@
 #include "MultiSelectionTool.h"
 #include "ProxyLODVolume.h"
 #include "Properties/MeshStatisticsProperties.h"
+#include "PropertySets/OnAcceptProperties.h"
+
 #include "VoxelCSGMeshesTool.generated.h"
 
 
@@ -62,7 +64,7 @@ class MESHMODELINGTOOLSEDITORONLY_API UVoxelCSGMeshesToolProperties : public UIn
 public:
 	/** The type of operation  */
 	UPROPERTY(EditAnywhere, Category = Options)
-	EVoxelCSGOperation Operation;
+	EVoxelCSGOperation Operation = EVoxelCSGOperation::DifferenceAB;
 
 	/** The size of the geometry bounding box major axis measured in voxels.*/
 	UPROPERTY(EditAnywhere, Category = Options, meta = (UIMin = "8", UIMax = "1024", ClampMin = "8", ClampMax = "1024"))
@@ -70,19 +72,15 @@ public:
 
 	/** Remeshing adaptivity, prior to optional simplification */
 	UPROPERTY(EditAnywhere, Category = Options, meta = (UIMin = "0", UIMax = "1", ClampMin = "0", ClampMax = "1"))
-	float MeshAdaptivity = 0.001f;
+	float MeshAdaptivity = 0.01f;
 
 	/** Offset when remeshing, note large offsets with high voxels counts will be slow */
 	UPROPERTY(EditAnywhere, Category = Options, meta = (UIMin = "-10", UIMax = "10", ClampMin = "-10", ClampMax = "10"))
-	float OffsetDistance = 0;
+	float OffsetDistance = 0.0f;
 
 	/** Automatically simplify the result of voxel-based merge.*/
 	UPROPERTY(EditAnywhere, Category = Options)
 	bool bAutoSimplify = false;
-
-	/** Remove the source Actors/Components when accepting results of tool.*/
-	UPROPERTY(EditAnywhere, Category = Options)
-	bool bDeleteInputActors = true;
 };
 
 
@@ -105,11 +103,11 @@ public:
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 
-	virtual void Tick(float DeltaTime) override;
+	virtual void OnTick(float DeltaTime) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
 
 	virtual bool HasCancel() const override { return true; }
-	virtual bool HasAccept() const override;
+	virtual bool HasAccept() const override { return true; }
 	virtual bool CanAccept() const override;
 
 	virtual void OnPropertyModified(UObject* PropertySet, FProperty* Property) override;
@@ -124,6 +122,9 @@ protected:
 
 	UPROPERTY()
 	UMeshStatisticsProperties* MeshStatisticsProperties;
+
+	UPROPERTY()
+	UOnAcceptHandleSourcesProperties* HandleSourcesProperties;
 
 	UPROPERTY()
 	UMeshOpPreviewWithBackgroundCompute* Preview;

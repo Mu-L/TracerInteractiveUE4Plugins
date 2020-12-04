@@ -22,6 +22,7 @@
 #include "Interfaces/ITargetPlatform.h"
 #include "Engine/TextureLODSettings.h"
 #include "RenderUtils.h"
+#include "Rendering/StreamableTextureResource.h"
 
 #if WITH_EDITORONLY_DATA
 	#include "EditorFramework/AssetImportData.h"
@@ -94,7 +95,8 @@ UTexture::UTexture(const FObjectInitializer& ObjectInitializer)
 	ChromaKeyThreshold = 1.0f / 255.0f;
 	VirtualTextureStreaming = 0;
 	CompressionYCoCg = 0;
-	
+	Downscale = 0.f;
+	DownscaleOptions = ETextureDownscaleOptions::Default;
 #endif // #if WITH_EDITORONLY_DATA
 
 	if (FApp::CanEverRender() && !IsTemplate())
@@ -107,13 +109,24 @@ void UTexture::ReleaseResource()
 {
 	if (Resource)
 	{
-		UTexture2D* Texture2D = Cast<UTexture2D>(this);
-		check( !Texture2D  || !Texture2D->HasPendingUpdate() );
+		UnlinkStreaming();
+
+		// When using PlatformData, the resource shouldn't be released before it is initialized to prevent threading issues
+		// where the platform data could be updated at the same time InitRHI is reading it on the renderthread.
+		if (GetRunningPlatformData())
+		{
+			WaitForPendingInitOrStreaming();
+		}
+
+		CachedSRRState.Clear();
 
 		// Free the resource.
-		ReleaseResourceAndFlush(Resource);
-		delete Resource;
-		Resource = NULL;
+		ENQUEUE_RENDER_COMMAND(DeleteResource)([ToDelete = Resource](FRHICommandListImmediate& RHICmdList)
+		{
+			ToDelete->ReleaseResource();
+			delete ToDelete;
+		});
+		Resource = nullptr;
 	}
 }
 
@@ -127,10 +140,30 @@ void UTexture::UpdateResource()
 	{
 		// Create a new texture resource.
 		Resource = CreateResource();
-		if( Resource )
+
+		if (Resource)
 		{
 			LLM_SCOPE(ELLMTag::Textures);
+
+			if (FStreamableTextureResource* StreamableResource = Resource->GetStreamableTextureResource())
+			{
+				// State the gamethread coherent resource state.
+				CachedSRRState = StreamableResource->GetPostInitState();
+				if (CachedSRRState.IsValid())
+				{
+					// Cache the pending InitRHI flag.
+					CachedSRRState.bHasPendingInitHint = true;
+				}
+			}
+
+			// Init the texture reference, which needs to be set from a render command, since TextureReference.TextureReferenceRHI is gamethread coherent.
+			ENQUEUE_RENDER_COMMAND(SetTextureReference)([this](FRHICommandListImmediate& RHICmdList)
+			{
+				Resource->SetTextureReference(TextureReference.TextureReferenceRHI);
+			});
 			BeginInitResource(Resource);
+			// Now that the resource is ready for streaming, bind it to the streamer.
+			LinkStreaming();
 		}
 	}
 }
@@ -172,6 +205,7 @@ void UTexture::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEven
 	// Determine whether any property that requires recompression of the texture, or notification to Materials has changed.
 	bool RequiresNotifyMaterials = false;
 	bool DeferCompressionWasEnabled = false;
+	bool bInvalidatesMaterialShaders = true;	// too conservative, but as to not change the current behavior
 
 	FProperty* PropertyThatChanged = PropertyChangedEvent.Property;
 	if( PropertyThatChanged )
@@ -220,6 +254,7 @@ void UTexture::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEven
 		else if (PropertyName == CompressionQualityName)
 		{
 			RequiresNotifyMaterials = true;
+			bInvalidatesMaterialShaders = false;
 		}
 		else if (PropertyName == MaxTextureSizeName)
 		{
@@ -238,7 +273,7 @@ void UTexture::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEven
 		}
 #endif //WITH_EDITORONLY_DATA
 
-		bool bPreventSRGB = (CompressionSettings == TC_Alpha || CompressionSettings == TC_Normalmap || CompressionSettings == TC_Masks || CompressionSettings == TC_HDR || CompressionSettings == TC_HDR_Compressed);
+		bool bPreventSRGB = (CompressionSettings == TC_Alpha || CompressionSettings == TC_Normalmap || CompressionSettings == TC_Masks || CompressionSettings == TC_HDR || CompressionSettings == TC_HDR_Compressed || CompressionSettings == TC_HalfFloat);
 		if(bPreventSRGB && SRGB == true)
 		{
 			SRGB = false;
@@ -293,7 +328,7 @@ void UTexture::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEven
 	// Notify any loaded material instances if changed our compression format
 	if (RequiresNotifyMaterials)
 	{
-		NotifyMaterials();
+		NotifyMaterials(bInvalidatesMaterialShaders ? ENotifyMaterialsEffectOnShaders::Default : ENotifyMaterialsEffectOnShaders::DoesNotInvalidate);
 	}
 		
 #if WITH_EDITORONLY_DATA
@@ -400,56 +435,45 @@ void UTexture::PostLoad()
 	}
 }
 
+void UTexture::BeginFinalReleaseResource()
+{
+	check(!bAsyncResourceReleaseHasBeenStarted);
+	// Send the rendering thread a release message for the texture's resource.
+	if (Resource)
+	{
+		BeginReleaseResource(Resource);
+	}
+	if (TextureReference.IsInitialized_GameThread())
+	{
+		TextureReference.BeginRelease_GameThread();
+	}
+	ReleaseFence.BeginFence();
+	// Keep track that we already kicked off the async release.
+	bAsyncResourceReleaseHasBeenStarted = true;
+}
+
+
 void UTexture::BeginDestroy()
 {
 	Super::BeginDestroy();
-	if( !UpdateStreamingStatus() && (Resource || TextureReference.IsInitialized_GameThread()) )
+
+	if (!HasPendingInitOrStreaming())
 	{
-		// Send the rendering thread a release message for the texture's resource.
-		if (Resource)
-		{
-			BeginReleaseResource(Resource);
-		}
-		if (TextureReference.IsInitialized_GameThread())
-		{
-			TextureReference.BeginRelease_GameThread();
-		}
-		ReleaseFence.BeginFence();
-		// Keep track that we already kicked off the async release.
-		bAsyncResourceReleaseHasBeenStarted = true;
+		BeginFinalReleaseResource();
 	}
 }
 
 bool UTexture::IsReadyForFinishDestroy()
 {
-	bool bReadyForFinishDestroy = false;
-	// Check whether super class is ready and whether we have any pending streaming requests in flight.
-	if( Super::IsReadyForFinishDestroy() && !UpdateStreamingStatus() )
+	if (!Super::IsReadyForFinishDestroy())
 	{
-		// Kick off async resource release if we haven't already.
-		if( !bAsyncResourceReleaseHasBeenStarted && (Resource || TextureReference.IsInitialized_GameThread()) )
-		{
-			// Send the rendering thread a release message for the texture's resource.
-			if (Resource)
-			{
-				BeginReleaseResource(Resource);
-			}
-			if (TextureReference.IsInitialized_GameThread())
-			{
-				TextureReference.BeginRelease_GameThread();
-			}
-			ReleaseFence.BeginFence();
-			// Keep track that we already kicked off the async release.
-			bAsyncResourceReleaseHasBeenStarted = true;
-		}
-
-		// Only allow FinishDestroy to be called once the texture resource has finished its rendering thread cleanup.
-		if( !bAsyncResourceReleaseHasBeenStarted || ReleaseFence.IsFenceComplete() )
-		{
-			bReadyForFinishDestroy = true;
-		}
+		return false;
 	}
-	return bReadyForFinishDestroy;
+	if (!bAsyncResourceReleaseHasBeenStarted)
+	{
+		BeginFinalReleaseResource();
+	}
+	return ReleaseFence.IsFenceComplete();
 }
 
 void UTexture::FinishDestroy()
@@ -511,6 +535,75 @@ void UTexture::GetAssetRegistryTags(TArray<FAssetRegistryTag>& OutTags) const
 }
 #endif
 
+FIoFilenameHash UTexture::GetMipIoFilenameHash(const int32 MipIndex) const
+{
+	FTexturePlatformData** PlatformData = const_cast<UTexture*>(this)->GetRunningPlatformData();
+	if (PlatformData && *PlatformData)
+	{
+		const TIndirectArray<struct FTexture2DMipMap>& PlatformMips = (*PlatformData)->Mips;
+		if (PlatformMips.IsValidIndex(MipIndex))
+		{
+			return PlatformMips[MipIndex].BulkData.GetIoFilenameHash();
+		}
+	}
+	return INVALID_IO_FILENAME_HASH;
+}
+
+bool UTexture::DoesMipDataExist(const int32 MipIndex) const
+{
+	FTexturePlatformData** PlatformData = const_cast<UTexture*>(this)->GetRunningPlatformData();
+	if (PlatformData && *PlatformData)
+	{
+		const TIndirectArray<struct FTexture2DMipMap>& PlatformMips = (*PlatformData)->Mips;
+		if (PlatformMips.IsValidIndex(MipIndex))
+		{
+			return PlatformMips[MipIndex].BulkData.DoesExist();
+		}
+	}
+	return false;
+}
+
+bool UTexture::HasPendingRenderResourceInitialization() const
+{
+	return Resource && !Resource->IsInitialized();
+}
+
+bool UTexture::HasPendingLODTransition() const
+{
+	return Resource && Resource->MipBiasFade.IsFading();
+}
+
+float UTexture::GetLastRenderTimeForStreaming() const
+{
+	float LastRenderTime = -FLT_MAX;
+	if (Resource)
+	{
+		// The last render time is the last time the resource was directly bound or the last
+		// time the texture reference was cached in a resource table, whichever was later.
+		LastRenderTime = FMath::Max<double>(Resource->LastRenderTime,TextureReference.GetLastRenderTime());
+	}
+	return LastRenderTime;
+}
+
+void UTexture::InvalidateLastRenderTimeForStreaming()
+{
+	if (Resource)
+	{
+		Resource->LastRenderTime = -FLT_MAX;
+	}
+	TextureReference.InvalidateLastRenderTime();
+}
+
+
+bool UTexture::ShouldMipLevelsBeForcedResident() const
+{
+	if (LODGroup == TEXTUREGROUP_Skybox || Super::ShouldMipLevelsBeForcedResident())
+	{
+		return true;
+	}
+	return false;
+}
+
 float UTexture::GetAverageBrightness(bool bIgnoreTrueBlack, bool bUseGrayscale)
 {
 	// Indicate the action was not performed...
@@ -555,6 +648,28 @@ TextureMipGenSettings UTexture::GetMipGenSettingsFromString(const TCHAR* InStr, 
 	return bTextureGroup ? TMGS_SimpleAverage : TMGS_FromTextureGroup;
 }
 
+void UTexture::SetDeterministicLightingGuid()
+{
+#if WITH_EDITORONLY_DATA
+	// Compute a 128-bit hash based on the texture name and use that as a GUID to fix this issue.
+	FTCHARToUTF8 Converted(*GetFullName());
+	FMD5 MD5Gen;
+	MD5Gen.Update((const uint8*)Converted.Get(), Converted.Length());
+	uint32 Digest[4];
+	MD5Gen.Final((uint8*)Digest);
+
+	// FGuid::NewGuid() creates a version 4 UUID (at least on Windows), which will have the top 4 bits of the
+	// second field set to 0100. We'll set the top bit to 1 in the GUID we create, to ensure that we can never
+	// have a collision with textures which use implicitly generated GUIDs.
+	Digest[1] |= 0x80000000;
+	FGuid TextureGUID(Digest[0], Digest[1], Digest[2], Digest[3]);
+
+	LightingGuid = TextureGUID;
+#else
+	LightingGuid = FGuid(0, 0, 0, 0);
+#endif // WITH_EDITORONLY_DATA
+}
+
 UEnum* UTexture::GetPixelFormatEnum()
 {
 	// Lookup the pixel format enum so that the pixel format can be serialized by name.
@@ -573,7 +688,6 @@ void UTexture::PostCDOContruct()
 {
 	GetPixelFormatEnum();
 }
-
 
 bool UTexture::ForceUpdateTextureStreaming()
 {
@@ -644,6 +758,80 @@ const TArray<UAssetUserData*>* UTexture::GetAssetUserDataArray() const
 	return &AssetUserData;
 }
 
+FStreamableRenderResourceState UTexture::GetResourcePostInitState(FTexturePlatformData* PlatformData, bool bAllowStreaming, int32 MinRequestMipCount, int32 MaxMipCount) const
+{
+	// Create the resource with a mip count limit taking in consideration the asset LODBias.
+	// This ensures that the mip count stays constant when toggling asset streaming at runtime.
+	const int32 NumMips = [&]() -> int32 
+	{
+		const int32 ExpectedAssetLODBias = FMath::Clamp<int32>(GetCachedLODBias() - NumCinematicMipLevels, 0, PlatformData->Mips.Num() - 1);
+		const int32 MaxRuntimeMipCount = FMath::Min<int32>(GMaxTextureMipCount, FStreamableRenderResourceState::MAX_LOD_COUNT);
+		if (MaxMipCount > 0)
+		{
+			return FMath::Min3<int32>(PlatformData->Mips.Num() - ExpectedAssetLODBias, MaxMipCount, MaxRuntimeMipCount);
+		}
+		else
+		{
+			return FMath::Min<int32>(PlatformData->Mips.Num() - ExpectedAssetLODBias, MaxRuntimeMipCount);
+		}
+	}();
+
+	const int32 NumOfNonOptionalMips = FMath::Min<int32>(NumMips, PlatformData->GetNumNonOptionalMips());
+	const int32 NumOfNonStreamingMips = FMath::Min<int32>(NumMips, PlatformData->GetNumNonStreamingMips());
+	const int32 AssetMipIdxForResourceFirstMip = FMath::Max<int32>(0, PlatformData->Mips.Num() - NumMips);
+
+	bool bMakeStreamble = false;
+	int32 NumRequestedMips = 0;
+
+#if PLATFORM_SUPPORTS_TEXTURE_STREAMING
+	if (!NeverStream && 
+		NumOfNonStreamingMips < NumMips && 
+		LODGroup != TEXTUREGROUP_UI && 
+		bAllowStreaming &&
+		PlatformData->CanBeLoaded())
+	{
+		bMakeStreamble  = true;
+	}
+#endif
+
+	if (bMakeStreamble && IStreamingManager::Get().IsRenderAssetStreamingEnabled(EStreamableRenderAssetType::Texture))
+	{
+		NumRequestedMips = NumOfNonStreamingMips;
+	}
+	else
+	{
+		// Adjust CachedLODBias so that it takes into account FStreamableRenderResourceState::AssetLODBias.
+		const int32 ResourceLODBias = FMath::Max<int32>(0, GetCachedLODBias() - AssetMipIdxForResourceFirstMip);
+
+		// Ensure NumMipsInTail is within valid range to safeguard on the above expressions. 
+		const int32 NumMipsInTail = FMath::Clamp<int32>(PlatformData->GetNumMipsInTail(), 1, NumMips);
+
+		// Bias is not allowed to shrink the mip count bellow NumMipsInTail.
+		NumRequestedMips = FMath::Max<int32>(NumMips - ResourceLODBias, NumMipsInTail);
+
+		// If trying to load optional mips, check if the first resource mip is available.
+		if (NumRequestedMips > NumOfNonOptionalMips && !DoesMipDataExist(AssetMipIdxForResourceFirstMip))
+		{
+			NumRequestedMips = NumOfNonOptionalMips;
+		}
+	}
+
+	if (NumRequestedMips < MinRequestMipCount && MinRequestMipCount < NumMips)
+	{
+		NumRequestedMips = MinRequestMipCount;
+	}
+
+	FStreamableRenderResourceState PostInitState;
+	PostInitState.bSupportsStreaming = bMakeStreamble;
+	PostInitState.NumNonStreamingLODs = (uint8)NumOfNonStreamingMips;
+	PostInitState.NumNonOptionalLODs = (uint8)NumOfNonOptionalMips;
+	PostInitState.MaxNumLODs = (uint8)NumMips;
+	PostInitState.AssetLODBias = (uint8)AssetMipIdxForResourceFirstMip;
+	PostInitState.NumResidentLODs = (uint8)NumRequestedMips;
+	PostInitState.NumRequestedLODs = (uint8)NumRequestedMips;
+
+	return PostInitState;
+}
 
 /*------------------------------------------------------------------------------
 	Texture source data.
@@ -1304,7 +1492,7 @@ FName GetDefaultTextureFormatName( const ITargetPlatform* TargetPlatform, const 
 	FName TextureFormatName = NAME_None;
 
 	/**
-	 * IF you add a format to this function don't forget to update GetAllDefaultTextureFormats 
+	 * IF you add a format to this function don't forget to update GetAllDefaultTextureFormatNames 
 	 */
 
 #if WITH_EDITOR
@@ -1322,6 +1510,7 @@ FName GetDefaultTextureFormatName( const ITargetPlatform* TargetPlatform, const 
 	static FName NameG16(TEXT("G16"));
 	static FName NameVU8(TEXT("VU8"));
 	static FName NameRGBA16F(TEXT("RGBA16F"));
+	static FName NameR16F(TEXT("R16F"));
 	static FName NameBC6H(TEXT("BC6H"));
 	static FName NameBC7(TEXT("BC7"));
 
@@ -1339,7 +1528,8 @@ FName GetDefaultTextureFormatName( const ITargetPlatform* TargetPlatform, const 
 		|| (Texture->LODGroup == TEXTUREGROUP_ColorLookupTable)	// Textures in certain LOD groups should remain uncompressed.
 		|| (Texture->LODGroup == TEXTUREGROUP_Bokeh)
 		|| (Texture->LODGroup == TEXTUREGROUP_IESLightProfile)
-		|| (Texture->GetMaterialType() == MCT_VolumeTexture && !bSupportCompressedVolumeTexture);
+		|| (Texture->GetMaterialType() == MCT_VolumeTexture && !bSupportCompressedVolumeTexture)
+		|| FormatSettings.CompressionSettings == TC_ReflectionCapture;
 
 	if (!bNoCompression && Texture->PowerOfTwoMode == ETexturePowerOfTwoSetting::None)
 	{
@@ -1426,6 +1616,10 @@ FName GetDefaultTextureFormatName( const ITargetPlatform* TargetPlatform, const 
 	{
 		TextureFormatName = NameBC7;
 	}
+	else if (FormatSettings.CompressionSettings == TC_HalfFloat)
+	{
+		TextureFormatName = NameR16F;
+	}
 	else if (FormatSettings.CompressionNoAlpha)
 	{
 		TextureFormatName = NameDXT1;
@@ -1491,6 +1685,7 @@ void GetAllDefaultTextureFormats(const class ITargetPlatform* TargetPlatform, TA
 	static FName NameG16(TEXT("G16"));
 	static FName NameVU8(TEXT("VU8"));
 	static FName NameRGBA16F(TEXT("RGBA16F"));
+	static FName NameR16F(TEXT("R16F"));
 	static FName NameBC6H(TEXT("BC6H"));
 	static FName NameBC7(TEXT("BC7"));
 
@@ -1507,6 +1702,7 @@ void GetAllDefaultTextureFormats(const class ITargetPlatform* TargetPlatform, TA
 	OutFormats.Add(NameG16);
 	OutFormats.Add(NameVU8);
 	OutFormats.Add(NameRGBA16F);
+	OutFormats.Add(NameR16F);
 	if (bSupportDX11TextureFormats)
 	{
 		OutFormats.Add(NameBC6H);
@@ -1517,7 +1713,7 @@ void GetAllDefaultTextureFormats(const class ITargetPlatform* TargetPlatform, TA
 
 #if WITH_EDITOR
 
-void UTexture::NotifyMaterials()
+void UTexture::NotifyMaterials(const ENotifyMaterialsEffectOnShaders EffectOnShaders)
 {
 	// Create a material update context to safely update materials.
 	{
@@ -1541,9 +1737,20 @@ void UTexture::NotifyMaterials()
 		}
 
 		// Go ahead and update any base materials that need to be.
-		for (TSet<UMaterial*>::TConstIterator It(BaseMaterialsThatUseThisTexture); It; ++It)
+		if (EffectOnShaders == ENotifyMaterialsEffectOnShaders::Default)
 		{
-			(*It)->PostEditChange();
+			for (TSet<UMaterial*>::TConstIterator It(BaseMaterialsThatUseThisTexture); It; ++It)
+			{
+				(*It)->PostEditChange();
+			}
+		}
+		else
+		{
+			FPropertyChangedEvent EmptyPropertyUpdateStruct(nullptr);
+			for (TSet<UMaterial*>::TConstIterator It(BaseMaterialsThatUseThisTexture); It; ++It)
+			{
+				(*It)->PostEditChangePropertyInternal(EmptyPropertyUpdateStruct, UMaterial::EPostEditChangeEffectOnShaders::DoesNotInvalidate);
+			}
 		}
 	}
 }

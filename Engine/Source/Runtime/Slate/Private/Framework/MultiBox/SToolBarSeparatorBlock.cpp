@@ -10,7 +10,7 @@
  * Constructor
  */
 FToolBarSeparatorBlock::FToolBarSeparatorBlock(const FName& InExtensionHook)
-	: FMultiBlock( nullptr, nullptr, InExtensionHook, EMultiBlockType::ToolBarSeparator )
+	: FMultiBlock( nullptr, nullptr, InExtensionHook, EMultiBlockType::Separator )
 {
 }
 
@@ -18,7 +18,7 @@ FToolBarSeparatorBlock::FToolBarSeparatorBlock(const FName& InExtensionHook)
 
 void FToolBarSeparatorBlock::CreateMenuEntry(FMenuBuilder& MenuBuilder) const
 {
-	MenuBuilder.AddMenuSeparator();
+	MenuBuilder.AddSeparator();
 }
 
 
@@ -65,6 +65,5 @@ void SToolBarSeparatorBlock::BuildMultiBlockWidget(const ISlateStyle* StyleSet, 
 	];
 
 	// Add this widget to the search list of the multibox and hide it
-	if (MultiBlock->GetSearchable())
-		OwnerMultiBoxWidget.Pin()->AddSearchElement(this->AsWidget(), FText::GetEmpty());
+	OwnerMultiBoxWidget.Pin()->AddElement(this->AsWidget(), FText::GetEmpty(), MultiBlock->GetSearchable());
 }

@@ -17,9 +17,10 @@ UMoviePipelineOutputSetting::UMoviePipelineOutputSetting()
 	, bUseCustomPlaybackRange(false)
 	, CustomStartFrame(0)
 	, CustomEndFrame(0)
+	, VersionNumber(1)
+	, bAutoVersion(true)
 	, ZeroPadFrameNumbers(4)
 	, FrameNumberOffset(0)
-	, bDisableToneCurve(false)
 {
 	FileNameFormat = TEXT("{sequence_name}.{frame_number}");
 	OutputDirectory.Path = FPaths::ProjectSavedDir() / TEXT("MovieRenders/");
@@ -39,11 +40,11 @@ void UMoviePipelineOutputSetting::PostLoad()
 	}
 }
 
+#if WITH_EDITOR
 FText UMoviePipelineOutputSetting::GetFooterText(UMoviePipelineExecutorJob* InJob) const 
 {
 	FTextBuilder TextBuilder;
-	TextBuilder.AppendLine(NSLOCTEXT("MovieRenderPipeline", "OutputSettingFooterText_Fmt",
-		"A list of {format_strings} and example values that are valid to use in the File Name Format:\n"));
+	TextBuilder.AppendLine(NSLOCTEXT("MovieRenderPipeline", "OutputSettingFooterText_Fmt", "A list of {format_strings} and example values that are valid to use in the File Name Format:\n"));
 
 	FMoviePipelineFormatArgs FormatArgs;
 	FormatArgs.InJob = InJob;
@@ -52,10 +53,10 @@ FText UMoviePipelineOutputSetting::GetFooterText(UMoviePipelineExecutorJob* InJo
 	UMoviePipelineMasterConfig* MasterConfig = GetTypedOuter<UMoviePipelineMasterConfig>();
 	if (MasterConfig)
 	{
-		MasterConfig->GetFilenameFormatArguments(FormatArgs);
+		MasterConfig->GetFormatArguments(FormatArgs);
 	}
 
-	for (const TPair<FString, FStringFormatArg>& KVP : FormatArgs.Arguments)
+	for (const TPair<FString, FStringFormatArg>& KVP : FormatArgs.FilenameArguments)
 	{
 		FStringFormatOrderedArguments OrderedArgs = { KVP.Key, KVP.Value };
 		FString FormattedArgs = FString::Format(TEXT("{0} => {1}"), OrderedArgs);
@@ -65,14 +66,25 @@ FText UMoviePipelineOutputSetting::GetFooterText(UMoviePipelineExecutorJob* InJo
 	
 	return TextBuilder.ToText();
 }
+#endif
 
-void UMoviePipelineOutputSetting::GetFilenameFormatArguments(FMoviePipelineFormatArgs& InOutFormatArgs) const
+void UMoviePipelineOutputSetting::GetFormatArguments(FMoviePipelineFormatArgs& InOutFormatArgs) const
 {
 	// Resolution Arguments
 	{
 		FString Resolution = FString::Printf(TEXT("%d_%d"), OutputResolution.X, OutputResolution.Y);
-		InOutFormatArgs.Arguments.Add(TEXT("output_resolution"), Resolution);
-		InOutFormatArgs.Arguments.Add(TEXT("output_width"), OutputResolution.X);
-		InOutFormatArgs.Arguments.Add(TEXT("output_height"), OutputResolution.Y);
+		InOutFormatArgs.FilenameArguments.Add(TEXT("output_resolution"), Resolution);
+		InOutFormatArgs.FilenameArguments.Add(TEXT("output_width"), OutputResolution.X);
+		InOutFormatArgs.FilenameArguments.Add(TEXT("output_height"), OutputResolution.Y);
+	}
+
+	if (bAutoVersion)
+	{
+		InOutFormatArgs.FilenameArguments.Add(TEXT("version"), TEXT("v00x"));
+	}
+	else
+	{
+		FString VersionText = FString::Printf(TEXT("v%0*d"), 3, VersionNumber);
+		InOutFormatArgs.FilenameArguments.Add(TEXT("version"), VersionText);
 	}
 }

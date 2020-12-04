@@ -13,9 +13,6 @@
 #include "Materials/MaterialExpressionTextureProperty.h"
 #include "Materials/MaterialLayersFunctions.h"
 
-// Temporary flag for toggling experimental material layers functionality
-bool AreExperimentalMaterialLayersEnabled();
-
 /**
  * Represents a subclass of FMaterialUniformExpression.
  */
@@ -219,7 +216,6 @@ public:
 	FMaterialUniformExpressionVectorParameter() {}
 	FMaterialUniformExpressionVectorParameter(const FMaterialParameterInfo& InParameterInfo, int32 InParameterIndex)
 		: ParameterInfo(InParameterInfo)
-		, ParameterName(InParameterInfo.Name)
 		, ParameterIndex(InParameterIndex)
 	{
 		check(InParameterIndex >= 0 && InParameterIndex <= 0xffff);
@@ -229,7 +225,7 @@ public:
 	virtual void WriteNumberOpcodes(FMaterialPreshaderData& OutData) const override
 	{
 		OutData.WriteOpcode(EMaterialPreshaderOpcode::VectorParameter);
-		OutData.Write<uint16>(ParameterIndex);
+		OutData.Write((uint16)ParameterIndex);
 	}
 
 	virtual bool IsConstant() const
@@ -237,19 +233,14 @@ public:
 		return false;
 	}
 
-	FMaterialParameterInfo GetParameterInfo() const
-	{
-		return FMaterialParameterInfo(ParameterName, ParameterInfo.Association, ParameterInfo.Index);
-	}
-
-	const FHashedMaterialParameterInfo& GetHashedParameterInfo() const
+	const FHashedMaterialParameterInfo& GetParameterInfo() const
 	{
 		return ParameterInfo;
 	}
 
-	const FName& GetParameterName() const
+	FName GetParameterName() const
 	{
-		return ParameterName;
+		return ParameterInfo.GetName();
 	}
 
 	virtual bool IsIdentical(const FMaterialUniformExpression* OtherExpression) const
@@ -264,7 +255,6 @@ public:
 
 private:
 	FHashedMaterialParameterInfo ParameterInfo;
-	FName ParameterName;
 	int32 ParameterIndex;
 };
 
@@ -278,7 +268,6 @@ public:
 	FMaterialUniformExpressionScalarParameter() {}
 	FMaterialUniformExpressionScalarParameter(const FMaterialParameterInfo& InParameterInfo, int32 InParameterIndex)
 		: ParameterInfo(InParameterInfo)
-		, ParameterName(InParameterInfo.Name)
 		, ParameterIndex(InParameterIndex)
 	{
 		check(InParameterIndex >= 0 && InParameterIndex <= 0xffff);
@@ -288,7 +277,7 @@ public:
 	virtual void WriteNumberOpcodes(FMaterialPreshaderData& OutData) const override
 	{
 		OutData.WriteOpcode(EMaterialPreshaderOpcode::ScalarParameter);
-		OutData.Write<uint16>(ParameterIndex);
+		OutData.Write((uint16)ParameterIndex);
 	}
 
 	virtual bool IsConstant() const
@@ -296,19 +285,14 @@ public:
 		return false;
 	}
 
-	FMaterialParameterInfo GetParameterInfo() const
-	{
-		return FMaterialParameterInfo(ParameterName, ParameterInfo.Association, ParameterInfo.Index);
-	}
-
-	const FHashedMaterialParameterInfo& GetHashedParameterInfo() const
+	const FHashedMaterialParameterInfo& GetParameterInfo() const
 	{
 		return ParameterInfo;
 	}
 
-	const FName& GetParameterName() const
+	FName GetParameterName() const
 	{
-		return ParameterName;
+		return ParameterInfo.GetName();
 	}
 
 	virtual bool IsIdentical(const FMaterialUniformExpression* OtherExpression) const
@@ -323,7 +307,6 @@ public:
 
 private:
 	FHashedMaterialParameterInfo ParameterInfo;
-	FName ParameterName;
 	int32 ParameterIndex;
 };
 
@@ -366,13 +349,11 @@ public:
 	FMaterialUniformExpressionTextureParameter(const FMaterialParameterInfo& InParameterInfo, int32 InTextureIndex, EMaterialSamplerType InSamplerType, ESamplerSourceMode InSourceMode, bool InVirtualTexture)
 		: Super(InTextureIndex, InSamplerType, InSourceMode, InVirtualTexture)
 		, ParameterInfo(InParameterInfo)
-		, ParameterName(InParameterInfo.Name)
 	{}
 
 	FMaterialUniformExpressionTextureParameter(const FMaterialParameterInfo& InParameterInfo, int32 InTextureIndex, int32 InTextureLayerIndex, int32 InPageTableLayerIndex, EMaterialSamplerType InSamplerType)
 		: Super(InTextureIndex, InTextureLayerIndex, InPageTableLayerIndex, InSamplerType)
 		, ParameterInfo(InParameterInfo)
-		, ParameterName(InParameterInfo.Name)
 	{}
 
 	// FMaterialUniformExpression interface.
@@ -382,7 +363,6 @@ public:
 	{
 		Super::GetTextureParameterInfo(OutParameter);
 		OutParameter.ParameterInfo = ParameterInfo;
-		OutParameter.ParameterName = ParameterName.ToString();
 	}
 
 	virtual bool IsConstant() const
@@ -390,17 +370,12 @@ public:
 		return false;
 	}
 
-	FMaterialParameterInfo GetParameterInfo() const
+	FName GetParameterName() const
 	{
-		return FMaterialParameterInfo(ParameterName, ParameterInfo.Association, ParameterInfo.Index);
+		return ParameterInfo.GetName();
 	}
 
-	const FName& GetParameterName() const
-	{
-		return ParameterName;
-	}
-
-	const FHashedMaterialParameterInfo& GetHashedParameterInfo() const
+	const FHashedMaterialParameterInfo& GetParameterInfo() const
 	{
 		return ParameterInfo;
 	}
@@ -417,7 +392,6 @@ public:
 
 private:
 	FHashedMaterialParameterInfo ParameterInfo;
-	FName ParameterName;
 	int32 ParameterIndex;
 };
 
@@ -629,7 +603,7 @@ public:
 	virtual void WriteNumberOpcodes(FMaterialPreshaderData& OutData) const override
 	{
 		X->WriteNumberOpcodes(OutData);
-		OutData.WriteOpcode(EMaterialPreshaderOpcode::Length).Write<uint8>(ValueType);
+		OutData.WriteOpcode(EMaterialPreshaderOpcode::Length).Write((uint8)ValueType);
 	}
 	virtual bool IsConstant() const
 	{
@@ -761,8 +735,8 @@ public:
 		case FMO_Sub: OutData.WriteOpcode(EMaterialPreshaderOpcode::Sub); break;
 		case FMO_Mul: OutData.WriteOpcode(EMaterialPreshaderOpcode::Mul); break;
 		case FMO_Div: OutData.WriteOpcode(EMaterialPreshaderOpcode::Div); break;
-		case FMO_Dot: OutData.WriteOpcode(EMaterialPreshaderOpcode::Dot).Write<uint8>(ValueType); break;
-		case FMO_Cross: OutData.WriteOpcode(EMaterialPreshaderOpcode::Cross).Write<uint8>(ValueType); break;
+		case FMO_Dot: OutData.WriteOpcode(EMaterialPreshaderOpcode::Dot).Write((uint8)ValueType); break;
+		case FMO_Cross: OutData.WriteOpcode(EMaterialPreshaderOpcode::Cross).Write((uint8)ValueType); break;
 		default: checkNoEntry(); break;
 		}
 	}
@@ -844,7 +818,7 @@ public:
 	{
 		A->WriteNumberOpcodes(OutData);
 		B->WriteNumberOpcodes(OutData);
-		OutData.WriteOpcode(EMaterialPreshaderOpcode::AppendVector).Write<uint8>(NumComponentsA);
+		OutData.WriteOpcode(EMaterialPreshaderOpcode::AppendVector).Write((uint8)NumComponentsA);
 	}
 	virtual bool IsConstant() const
 	{
@@ -1065,7 +1039,7 @@ public:
 	virtual void WriteNumberOpcodes(FMaterialPreshaderData& OutData) const override
 	{
 		X->WriteNumberOpcodes(OutData);
-		OutData.WriteOpcode(EMaterialPreshaderOpcode::ComponentSwizzle).Write<uint8>(NumElements).Write<uint8>(IndexR).Write<uint8>(IndexG).Write<uint8>(IndexB).Write<uint8>(IndexA);
+		OutData.WriteOpcode(EMaterialPreshaderOpcode::ComponentSwizzle).Write((uint8)NumElements).Write((uint8)IndexR).Write((uint8)IndexG).Write((uint8)IndexB).Write((uint8)IndexA);
 	}
 	virtual bool IsConstant() const
 	{
@@ -1413,7 +1387,7 @@ public:
 		case TMTM_TexelSize: Op = EMaterialPreshaderOpcode::TexelSize; break;
 		default: checkNoEntry(); break;
 		}
-		OutData.WriteOpcode(Op).Write(TextureParameter.ParameterInfo).Write<int32>(TextureParameter.TextureIndex);
+		OutData.WriteOpcode(Op).Write(TextureParameter.ParameterInfo).Write((int32)TextureParameter.TextureIndex);
 	}
 	virtual bool IsIdentical(const FMaterialUniformExpression* OtherExpression) const override
 	{

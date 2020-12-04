@@ -3,6 +3,7 @@
 #include "Tools/EditorToolAssetAPI.h"
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Engine/Classes/Engine/World.h"
 
 
 #include "AssetRegistryModule.h"
@@ -19,6 +20,18 @@ FString FEditorToolAssetAPI::GetActiveAssetFolderPath()
 	IContentBrowserSingleton& ContentBrowser = FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser").Get();
 	return ContentBrowser.GetCurrentPath();
 }
+
+FString FEditorToolAssetAPI::GetWorldRelativeAssetRootPath(const UWorld* World)
+{
+	if (ensure(World->GetOutermost() != nullptr) == false)
+	{
+		return TEXT("/Game/");
+	}
+	FString WorldPackageName = World->GetOutermost()->GetName();
+	FString WorldPackageFolder = FPackageName::GetLongPackagePath(WorldPackageName);
+	return WorldPackageFolder;
+}
+
 
 FString FEditorToolAssetAPI::InteractiveSelectAssetPath(const FString& DefaultAssetName, const FText& DialogTitleMessage)
 {
@@ -46,7 +59,7 @@ UPackage* FEditorToolAssetAPI::MakeNewAssetPackage(const FString& FolderPath, co
 	AssetToolsModule.Get().CreateUniqueAssetName(
 		FolderPath + TEXT("/") + AssetBaseName, TEXT(""), UniquePackageName, UniqueAssetName);
 
-	UPackage* AssetPackage = CreatePackage(nullptr, *UniquePackageName);
+	UPackage* AssetPackage = CreatePackage( *UniquePackageName);
 	return AssetPackage;
 }
 

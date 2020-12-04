@@ -10,6 +10,7 @@
 #include "BaseBehaviors/MouseHoverBehavior.h"
 #include "ToolDataVisualizer.h"
 #include "Util/ColorConstants.h"
+#include "Drawing/LineSetComponent.h"
 
 #include "MeshDescriptionToDynamicMesh.h"
 #include "DynamicMeshToMeshDescription.h"
@@ -62,7 +63,7 @@ void UPolygonOnMeshToolActionPropertySet::PostAction(EPolygonOnMeshToolActions A
 
 UPolygonOnMeshTool::UPolygonOnMeshTool()
 {
-	SetToolDisplayName(LOCTEXT("PolygonOnMeshToolName", "Polygon Cut"));
+	SetToolDisplayName(LOCTEXT("PolygonOnMeshToolName", "Polygon Cut Tool"));
 }
 
 void UPolygonOnMeshTool::SetWorld(UWorld* World)
@@ -96,7 +97,28 @@ void UPolygonOnMeshTool::Setup()
 	AddToolPropertySource(ActionProperties);
 
 	// initialize the PreviewMesh+BackgroundCompute object
-	UpdateNumPreviews();
+	SetupPreview();
+
+	DrawnLineSet = NewObject<ULineSetComponent>(Preview->PreviewMesh->GetRootComponent());
+	DrawnLineSet->SetupAttachment(Preview->PreviewMesh->GetRootComponent());
+	DrawnLineSet->SetLineMaterial(ToolSetupUtil::GetDefaultLineComponentMaterial(GetToolManager()));
+	DrawnLineSet->RegisterComponent();
+
+	Preview->OnOpCompleted.AddLambda(
+		[this](const FDynamicMeshOperator* Op)
+		{
+			const FEmbedPolygonsOp* PolygonsOp = (const FEmbedPolygonsOp*)(Op);
+			EmbeddedEdges = PolygonsOp->EmbeddedEdges;
+			bEmbedSucceeded = PolygonsOp->bEmbedSucceeded;
+		}
+	);
+	Preview->OnMeshUpdated.AddLambda(
+		[this](const UMeshOpPreviewWithBackgroundCompute*)
+		{
+			GetToolManager()->PostInvalidation();
+			UpdateVisualization();
+		}
+	);
 
 	DrawPlaneWorld = FFrame3d(WorldTransform.GetTranslation());
 
@@ -118,9 +140,32 @@ void UPolygonOnMeshTool::Setup()
 	LastDrawnPolygon = FPolygon2d();
 	UpdatePolygonType();
 	UpdateDrawPlane();
+
+	GetToolManager()->DisplayMessage(
+		LOCTEXT("PolygonOnMeshToolDescription", "Cut the Mesh with a swept Polygon, creating a Hole or new Polygroup. Use the Draw Polygon button to draw a custom polygon on the work plane. Ctrl-click to reposition the work plane."),
+		EToolMessageLevel::UserNotification);
 }
 
 
+void UPolygonOnMeshTool::UpdateVisualization()
+{
+	FColor PartialPathEdgeColor(240, 15, 15);
+	float PartialPathEdgeThickness = 2.0;
+	float PartialPathEdgeDepthBias = 2.0f;
+
+	const FDynamicMesh3* TargetMesh = Preview->PreviewMesh->GetPreviewDynamicMesh();
+	FVector3d A, B;
+
+	DrawnLineSet->Clear();
+	if (!bEmbedSucceeded)
+	{
+		for (int EID : EmbeddedEdges)
+		{
+			TargetMesh->GetEdgeV(EID, A, B);
+			DrawnLineSet->AddLine((FVector)A, (FVector)B, PartialPathEdgeColor, PartialPathEdgeThickness, PartialPathEdgeDepthBias);
+		}
+	}
+}
 
 
 void UPolygonOnMeshTool::UpdatePolygonType()
@@ -162,7 +207,7 @@ void UPolygonOnMeshTool::UpdateDrawPlane()
 }
 
 
-void UPolygonOnMeshTool::UpdateNumPreviews()
+void UPolygonOnMeshTool::SetupPreview()
 {
 	Preview = NewObject<UMeshOpPreviewWithBackgroundCompute>(this);
 	Preview->Setup(this->TargetWorld, this);
@@ -251,8 +296,10 @@ void UPolygonOnMeshTool::Render(IToolsContextRenderAPI* RenderAPI)
 	}
 }
 
-void UPolygonOnMeshTool::Tick(float DeltaTime)
+void UPolygonOnMeshTool::OnTick(float DeltaTime)
 {
+	GetToolManager()->GetContextQueriesAPI()->GetCurrentViewState(this->CameraState);
+
 	PlaneMechanic->Tick(DeltaTime);
 	Preview->Tick(DeltaTime);
 
@@ -296,7 +343,7 @@ void UPolygonOnMeshTool::BeginDrawPolygon()
 	double SnapTol = ToolSceneQueriesUtil::GetDefaultVisualAngleSnapThreshD();
 	DrawPolygonMechanic->SpatialSnapPointsFunc = [this, SnapTol](FVector3d Position1, FVector3d Position2)
 	{
-		return true && ToolSceneQueriesUtil::CalculateViewVisualAngleD(this->CameraState, Position1, Position2) < SnapTol;
+		return true && ToolSceneQueriesUtil::PointSnapQuery(this->CameraState, Position1, Position2, SnapTol);
 	};
 	DrawPolygonMechanic->SetDrawClosedLoopMode();
 
@@ -335,14 +382,9 @@ void UPolygonOnMeshTool::CompleteDrawPolygon()
 
 
 
-bool UPolygonOnMeshTool::HasAccept() const
-{
-	return true;
-}
-
 bool UPolygonOnMeshTool::CanAccept() const
 {
-	return Preview != nullptr && Preview->HaveValidResult();
+	return Super::CanAccept() && Preview != nullptr && Preview->HaveValidResult();
 }
 
 

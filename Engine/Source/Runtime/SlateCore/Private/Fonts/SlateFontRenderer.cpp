@@ -189,7 +189,7 @@ uint16 FSlateFontRenderer::GetMaxHeight(const FSlateFontInfo& InFontInfo, const 
 	const FFontData& FontData = CompositeFontCache->GetDefaultFontData(InFontInfo);
 	const FFreeTypeFaceGlyphData FaceGlyphData = GetFontFaceForCodepoint(FontData, Char, InFontInfo.FontFallback);
 
-	if (FaceGlyphData.FaceAndMemory.IsValid())
+	if (FaceGlyphData.FaceAndMemory.IsValid() && FaceGlyphData.FaceAndMemory->IsFaceValid())
 	{
 		FreeTypeUtils::ApplySizeAndScale(FaceGlyphData.FaceAndMemory->GetFace(), InFontInfo.Size, InScale);
 
@@ -212,7 +212,7 @@ int16 FSlateFontRenderer::GetBaseline(const FSlateFontInfo& InFontInfo, const fl
 	const FFontData& FontData = CompositeFontCache->GetDefaultFontData(InFontInfo);
 	const FFreeTypeFaceGlyphData FaceGlyphData = GetFontFaceForCodepoint(FontData, Char, InFontInfo.FontFallback);
 
-	if (FaceGlyphData.FaceAndMemory.IsValid())
+	if (FaceGlyphData.FaceAndMemory.IsValid() && FaceGlyphData.FaceAndMemory->IsFaceValid())
 	{
 		FreeTypeUtils::ApplySizeAndScale(FaceGlyphData.FaceAndMemory->GetFace(), InFontInfo.Size, InScale);
 
@@ -342,6 +342,17 @@ FFreeTypeFaceGlyphData FSlateFontRenderer::GetFontFaceForCodepoint(const FFontDa
 		}
 	}
 
+	// If we have valid face and memory but it just hasn't finished loading,
+	// return like we found it, so that we don't immediately trigger falling back to yet another font
+	// when it may have the glyph once it's actually done loading.
+	if (ReturnVal.FaceAndMemory.IsValid() && ReturnVal.FaceAndMemory->IsFaceLoading())
+	{
+		ReturnVal.FaceAndMemory.Reset();
+		ReturnVal.GlyphIndex = 0;
+		ReturnVal.CharFallbackLevel = EFontFallback::FF_NoFallback;
+		return ReturnVal;
+	}
+
 	// If the requested glyph doesn't exist, use the last resort fallback font
 	if (!ReturnVal.FaceAndMemory.IsValid() || (InCodepoint != 0 && ReturnVal.GlyphIndex == 0))
 	{
@@ -390,12 +401,15 @@ bool FSlateFontRenderer::GetRenderData(const FShapedGlyphEntry& InShapedGlyph, c
 
 	if (FaceGlyphData.FaceAndMemory.IsValid())
 	{
-		check(FaceGlyphData.FaceAndMemory->IsValid());
+		ensure(FaceGlyphData.FaceAndMemory->IsFaceValid());
 
-		FT_Error Error = FreeTypeUtils::LoadGlyph(FaceGlyphData.FaceAndMemory->GetFace(), FaceGlyphData.GlyphIndex, FaceGlyphData.GlyphFlags, InShapedGlyph.FontFaceData->FontSize, InShapedGlyph.FontFaceData->FontScale);
-		if (Error == 0)
+		if (FaceGlyphData.FaceAndMemory->IsFaceValid())
 		{
-			return GetRenderDataInternal(FaceGlyphData, InShapedGlyph.FontFaceData->FontScale, InOutlineSettings, OutRenderData);
+			FT_Error Error = FreeTypeUtils::LoadGlyph(FaceGlyphData.FaceAndMemory->GetFace(), FaceGlyphData.GlyphIndex, FaceGlyphData.GlyphFlags, InShapedGlyph.FontFaceData->FontSize, InShapedGlyph.FontFaceData->FontScale);
+			if (Error == 0)
+			{
+				return GetRenderDataInternal(FaceGlyphData, InShapedGlyph.FontFaceData->FontScale, InOutlineSettings, OutRenderData);
+			}
 		}
 	}
 #endif // WITH_FREETYPE
@@ -506,23 +520,26 @@ bool FSlateFontRenderer::GetRenderDataInternal(const FFreeTypeFaceGlyphData& InF
 
 		FRasterizerSpanList OutlineSpans;
 		
-		FT_Stroker Stroker = nullptr;
-		FT_Glyph Glyph = nullptr;
-
 		// If there is an outline, render it second after applying a border stroke to the font to produce an outline
 		if(ScaledOutlineSize > 0)
 		{
+			FT_Stroker Stroker = nullptr;
 			FT_Stroker_New(FTLibrary->GetLibrary(), &Stroker);
 			FT_Stroker_Set(Stroker, FMath::TruncToInt(FreeTypeUtils::ConvertPixelTo26Dot6<float>(ScaledOutlineSize)), FT_STROKER_LINECAP_ROUND, FT_STROKER_LINEJOIN_ROUND, 0);
 
+			FT_Glyph Glyph = nullptr;
 			FT_Get_Glyph(Slot, &Glyph);
 
 			FT_Bool bInner = false;
-			FT_Glyph_StrokeBorder(&Glyph, Stroker, bInner, 0);
+			FT_Bool bDestroy = true; // FT_Glyph_StrokeBorder may reassign Glyph, so have it destroy the original if that happens to avoid leaking the glyph made via FT_Get_Glyph above
+			FT_Glyph_StrokeBorder(&Glyph, Stroker, bInner, bDestroy);
 
 			FT_Outline* Outline = &reinterpret_cast<FT_OutlineGlyph>(Glyph)->outline;
 
 			RenderOutlineRows(FTLibrary->GetLibrary(), Outline, OutlineSpans);
+
+			FT_Stroker_Done(Stroker);
+			FT_Done_Glyph(Glyph);
 		}
 
 		const FBox2D BoundingBox = FillSpans.BoundingBox + OutlineSpans.BoundingBox;
@@ -594,9 +611,6 @@ bool FSlateFontRenderer::GetRenderDataInternal(const FFreeTypeFaceGlyphData& InF
 				}
 			}
 		}
-
-		FT_Stroker_Done(Stroker);
-		FT_Done_Glyph(Glyph);
 
 		// Note: in order to render the stroke properly AND to get proper measurements this must be done after rendering the stroke
 		FT_Render_Glyph(Slot, EnableFontAntiAliasing ? FT_RENDER_MODE_NORMAL : FT_RENDER_MODE_MONO);

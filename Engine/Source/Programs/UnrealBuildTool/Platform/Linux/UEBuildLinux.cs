@@ -179,6 +179,15 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
+		/// Returns SDK string as required by the platform
+		/// </summary>
+		/// <returns>Valid SDK string</returns>
+		public override string GetRequiredSDKString()
+		{
+			return SDK.GetRequiredSDKString();
+		}
+
+		/// <summary>
 		/// Find the default architecture for the given project
 		/// </summary>
 		public override string GetDefaultArchitecture(FileReference ProjectFile)
@@ -219,6 +228,33 @@ namespace UnrealBuildTool
 			if(Target.LinuxPlatform.bEnableThinLTO)
 			{
 				Target.bAllowLTCG = true;
+			}
+
+			if (!Target.IsNameOverriden())
+			{
+				string SanitizerSuffix = null;
+
+				if (Target.LinuxPlatform.bEnableAddressSanitizer)
+				{
+					SanitizerSuffix = "ASan";
+				}
+				else if (Target.LinuxPlatform.bEnableThreadSanitizer)
+				{
+					SanitizerSuffix = "TSan";
+				}
+				else if (Target.LinuxPlatform.bEnableUndefinedBehaviorSanitizer)
+				{
+					SanitizerSuffix = "UBSan";
+				}
+				else if (Target.LinuxPlatform.bEnableMemorySanitizer)
+				{
+					SanitizerSuffix = "MSan";
+				}
+
+				if (!String.IsNullOrEmpty(SanitizerSuffix))
+				{
+					Target.Name = Target.Name + "-" + SanitizerSuffix;
+				}
 			}
 
 			if (Target.bAllowLTCG && Target.LinkType != TargetLinkType.Monolithic)
@@ -507,7 +543,7 @@ namespace UnrealBuildTool
 			}
 
 			// link with Linux libraries.
-			LinkEnvironment.AdditionalLibraries.Add("pthread");
+			LinkEnvironment.SystemLibraries.Add("pthread");
 
 			// let this class or a sub class do settings specific to that class
 			SetUpSpecificEnvironment(Target, CompileEnvironment, LinkEnvironment);
@@ -531,46 +567,6 @@ namespace UnrealBuildTool
 			};
 		}
 
-		public override List<FileReference> FinalizeBinaryPaths(FileReference BinaryName, FileReference ProjectFile, ReadOnlyTargetRules Target)
-		{
-			List<FileReference> FinalBinaryPath = new List<FileReference>();
-
-			string SanitizerSuffix = null;
-
-			// Only append these for monolithic builds. non-monolithic runs into issues dealing with target/modules files
-			if (Target.LinkType == TargetLinkType.Monolithic)
-			{
-				if(Target.LinuxPlatform.bEnableAddressSanitizer)
-				{
-					SanitizerSuffix = "ASan";
-				}
-				else if(Target.LinuxPlatform.bEnableThreadSanitizer)
-				{
-					SanitizerSuffix = "TSan";
-				}
-				else if(Target.LinuxPlatform.bEnableUndefinedBehaviorSanitizer)
-				{
-					SanitizerSuffix = "UBSan";
-				}
-				else if(Target.LinuxPlatform.bEnableMemorySanitizer)
-				{
-					SanitizerSuffix = "MSan";
-				}
-			}
-
-			if (String.IsNullOrEmpty(SanitizerSuffix))
-			{
-				FinalBinaryPath.Add(BinaryName);
-			}
-			else
-			{
-				// Append the sanitizer suffix to the binary name but before the extension type
-				FinalBinaryPath.Add(new FileReference(Path.Combine(BinaryName.Directory.FullName, BinaryName.GetFileNameWithoutExtension() + "-" + SanitizerSuffix + BinaryName.GetExtension())));
-			}
-
-			return FinalBinaryPath;
-		}
-
 		/// <summary>
 		/// Creates a toolchain instance for the given platform.
 		/// </summary>
@@ -580,7 +576,7 @@ namespace UnrealBuildTool
 		{
 			LinuxToolChainOptions Options = LinuxToolChainOptions.None;
 
-			if(Target.LinuxPlatform.bEnableAddressSanitizer)
+			if (Target.LinuxPlatform.bEnableAddressSanitizer)
 			{
 				Options |= LinuxToolChainOptions.EnableAddressSanitizer;
 
@@ -589,7 +585,7 @@ namespace UnrealBuildTool
 					Options |= LinuxToolChainOptions.EnableSharedSanitizer;
 				}
 			}
-			if(Target.LinuxPlatform.bEnableThreadSanitizer)
+			if (Target.LinuxPlatform.bEnableThreadSanitizer)
 			{
 				Options |= LinuxToolChainOptions.EnableThreadSanitizer;
 
@@ -598,7 +594,7 @@ namespace UnrealBuildTool
 					throw new BuildException("Thread Sanitizer (TSan) unsupported for non-monolithic builds");
 				}
 			}
-			if(Target.LinuxPlatform.bEnableUndefinedBehaviorSanitizer)
+			if (Target.LinuxPlatform.bEnableUndefinedBehaviorSanitizer)
 			{
 				Options |= LinuxToolChainOptions.EnableUndefinedBehaviorSanitizer;
 
@@ -607,7 +603,7 @@ namespace UnrealBuildTool
 					Options |= LinuxToolChainOptions.EnableSharedSanitizer;
 				}
 			}
-			if(Target.LinuxPlatform.bEnableMemorySanitizer)
+			if (Target.LinuxPlatform.bEnableMemorySanitizer)
 			{
 				Options |= LinuxToolChainOptions.EnableMemorySanitizer;
 
@@ -616,9 +612,19 @@ namespace UnrealBuildTool
 					throw new BuildException("Memory Sanitizer (MSan) unsupported for non-monolithic builds");
 				}
 			}
-			if(Target.LinuxPlatform.bEnableThinLTO)
+			if (Target.LinuxPlatform.bEnableThinLTO)
 			{
 				Options |= LinuxToolChainOptions.EnableThinLTO;
+			}
+
+			// When building a monolithic editor we have to avoid using objcopy.exe as it cannot handle files
+			// larger then 4GB. This is only an issue with our binutils objcopy.exe.
+			// llvm-objcopy.exe does not have this issue and once we switch over to using that in clang 10.0.1 we can remove this!
+			if ((BuildHostPlatform.Current.Platform == UnrealTargetPlatform.Win64) &&
+				(Target.LinkType == TargetLinkType.Monolithic) &&
+				(Target.Type == TargetType.Editor))
+			{
+				Options |= LinuxToolChainOptions.DisableSplitDebugInfoWithObjCopy;
 			}
 
 			return new LinuxToolChain(Target.Architecture, SDK, Target.LinuxPlatform.bPreservePSYM, Options);
@@ -638,7 +644,7 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// This is the SDK version we support
 		/// </summary>
-		static string ExpectedSDKVersion = "v16_clang-9.0.1-centos7";	// now unified for all the architectures
+		static string ExpectedSDKVersion = "v17_clang-10.0.1-centos7";	// now unified for all the architectures
 
 		/// <summary>
 		/// Platform name (embeds architecture for now)
@@ -679,10 +685,35 @@ namespace UnrealBuildTool
 		}
 
 		/// <summary>
+		/// Returns a path to the internal SDK
+		/// </summary>
+		/// <returns>Valid path to the internal SDK, null otherwise</returns>
+		static public string GetInternalSDKPath()
+		{
+			string SDKRoot = Environment.GetEnvironmentVariable(SDKRootEnvVar);
+			if (!String.IsNullOrEmpty(SDKRoot))
+			{
+				string AutoSDKPath = Path.Combine(SDKRoot, "Host" + BuildHostPlatform.Current.Platform, TargetPlatformName, ExpectedSDKVersion, LinuxPlatform.DefaultHostArchitecture);
+				if (DirectoryReference.Exists(new DirectoryReference(AutoSDKPath)))
+				{
+					return AutoSDKPath;
+				}
+			}
+
+			string InTreeSDKPath = Path.Combine(LinuxPlatformSDK.GetInTreeSDKRoot().FullName, ExpectedSDKVersion, LinuxPlatform.DefaultHostArchitecture);
+			if (DirectoryReference.Exists(new DirectoryReference(InTreeSDKPath)))
+			{
+				return InTreeSDKPath;
+			}
+
+			return null;
+		}
+
+		/// <summary>
 		/// Returns SDK string as required by the platform
 		/// </summary>
 		/// <returns>Valid SDK string</returns>
-		protected override string GetRequiredSDKString()
+		public override string GetRequiredSDKString()
 		{
 			return ExpectedSDKVersion;
 		}

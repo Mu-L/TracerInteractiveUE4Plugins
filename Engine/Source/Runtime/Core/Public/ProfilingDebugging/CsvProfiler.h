@@ -17,6 +17,8 @@
 #include "ProfilingDebugging/MiscTrace.h"
 #include "ProfilingDebugging/CsvProfilerTrace.h"
 
+#include <atomic>
+
 // Whether to allow the CSV profiler in shipping builds.
 // Enable in a .Target.cs file if required.
 #ifndef CSV_PROFILER_ENABLE_IN_SHIPPING
@@ -241,6 +243,8 @@ public:
 
 	CORE_API static void SetMetadata(const TCHAR* Key, const TCHAR* Value);
 
+	static CORE_API int32 RegisterCategory(const FString& Name, bool bEnableByDefault, bool bIsGlobal);
+
 	template <typename FmtType, typename... Types>
 	FORCEINLINE static void RecordEventf(int32 CategoryIndex, const FmtType& Fmt, Types... Args)
 	{
@@ -264,6 +268,7 @@ public:
 	CORE_API int32 GetNumFrameToCaptureOnEvent();
 
 	CORE_API bool EnableCategoryByString(const FString& CategoryName) const;
+	CORE_API void EnableCategoryByIndex(uint32 CategoryIndex, bool bEnable) const;
 
 	/** Per-frame update */
 	CORE_API void BeginFrame();
@@ -282,6 +287,9 @@ public:
 	 */
 	CORE_API TSharedFuture<FString> EndCapture(FGraphEventRef EventToSignal = nullptr);
 
+	/** Called at the end of the first frame after forking */
+	CORE_API void OnEndFramePostFork();
+
 	/** Renderthread begin/end frame */
 	CORE_API void BeginFrameRT();
 	CORE_API void EndFrameRT();
@@ -299,10 +307,19 @@ public:
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnCSVProfileFinished, const FString& /*Filename */);
 	FOnCSVProfileFinished& OnCSVProfileFinished() { return OnCSVProfileFinishedDelegate; }
 
+	CORE_API void SetRenderThreadId(uint32 InRenderThreadId)
+	{
+		RenderThreadId = InRenderThreadId;
+	}
+
+	CORE_API void SetRHIThreadId(uint32 InRHIThreadId)
+	{
+		RHIThreadId = InRHIThreadId;
+	}
+
 private:
 	CORE_API static void VARARGS RecordEventfInternal(int32 CategoryIndex, const TCHAR* Fmt, ...);
 
-	static CORE_API int32 RegisterCategory(const FString& Name, bool bEnableByDefault, bool bIsGlobal);
 	static int32 GetCategoryIndex(const FString& Name);
 
 	void FinalizeCsvFile();
@@ -337,6 +354,9 @@ private:
 	FOnCSVProfileEnd OnCSVProfileEndDelegate;
 	
 	FOnCSVProfileFinished OnCSVProfileFinishedDelegate;
+
+	std::atomic<uint32> RenderThreadId{ 0 };
+	std::atomic<uint32> RHIThreadId{ 0 };
 };
 
 class FScopedCsvStat

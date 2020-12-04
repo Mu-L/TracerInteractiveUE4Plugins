@@ -75,12 +75,12 @@ public:
 	virtual FString GetInfo() const = 0;
 
 	/**
-	 * Get the name of this player.
+	 * Get the GUID for this player plugin.
 	 *
-	 * @return Media player name, i.e. 'AndroidMedia' or 'WmfMedia'.
-	 * @see GetMediaName
+	 * @return Media player GUID (usually corresponds to a player name)
+	 * @see GetPlayerName
 	 */
-	virtual FName GetPlayerName() const = 0;
+	virtual FGuid GetPlayerPluginGUID() const = 0;
 
 	/**
 	 * Get the player's sample queue.
@@ -305,11 +305,14 @@ public:
 		// Override in child class if needed.
 	}
 
-	enum class FeatureFlag {
+	enum class EFeatureFlag {
 		AllowShutdownOnClose = 0,	//!< Allow player to be shutdown right after 'close' event is received from it
+		UsePlaybackTimingV2,		//!< Use v2 playback timing and AV sync
+		UseRealtimeWithVideoOnly,	//!< Use realtime rather then game deltatime to control video playback if no audio is present
+		AlwaysPullNewestVideoFrame,	//!< Mediaframework will not gate video frame output with its own timing, but assumes "ASAP" as output time for every sample
 	};
 	
-	virtual bool GetPlayerFeatureFlag(FeatureFlag /*flag*/) const
+	virtual bool GetPlayerFeatureFlag(EFeatureFlag /*flag*/) const
 	{
 		// Override in child class if needed.
 		return false;

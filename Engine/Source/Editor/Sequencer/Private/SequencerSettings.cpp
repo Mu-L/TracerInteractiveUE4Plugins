@@ -45,7 +45,9 @@ USequencerSettings::USequencerSettings( const FObjectInitializer& ObjectInitiali
 	bShowCombinedKeyframes = true;
 	bInfiniteKeyAreas = false;
 	bShowChannelColors = false;
+	ReduceKeysTolerance = KINDA_SMALL_NUMBER;
 	bDeleteKeysWhenTrimming = true;
+	bDisableSectionsAfterBaking = true;
 	bCleanPlaybackMode = true;
 	bActivateRealtimeViewports = true;
 	bEvaluateSubSequencesInIsolation = false;
@@ -563,6 +565,20 @@ void USequencerSettings::SetShowChannelColors(bool InbShowChannelColors)
 	}
 }
 
+float USequencerSettings::GetReduceKeysTolerance() const
+{
+	return ReduceKeysTolerance;
+}
+
+void USequencerSettings::SetReduceKeysTolerance(float InReduceKeysTolerance)
+{
+	if (ReduceKeysTolerance != InReduceKeysTolerance)
+	{
+		ReduceKeysTolerance = InReduceKeysTolerance;
+		SaveConfig();
+	}
+}
+
 bool USequencerSettings::GetDeleteKeysWhenTrimming() const
 {
 	return bDeleteKeysWhenTrimming;
@@ -573,6 +589,20 @@ void USequencerSettings::SetDeleteKeysWhenTrimming(bool bInDeleteKeysWhenTrimmin
 	if (bDeleteKeysWhenTrimming != bInDeleteKeysWhenTrimming)
 	{
 		bDeleteKeysWhenTrimming = bInDeleteKeysWhenTrimming;
+		SaveConfig();
+	}
+}
+
+bool USequencerSettings::GetDisableSectionsAfterBaking() const
+{
+	return bDisableSectionsAfterBaking;
+}
+
+void USequencerSettings::SetDisableSectionsAfterBaking(bool bInDisableSectionsAfterBaking)
+{
+	if (bDisableSectionsAfterBaking != bInDisableSectionsAfterBaking)
+	{
+		bDisableSectionsAfterBaking = bInDisableSectionsAfterBaking;
 		SaveConfig();
 	}
 }

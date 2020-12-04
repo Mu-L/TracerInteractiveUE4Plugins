@@ -35,6 +35,12 @@ This structure allows a single RHI to control several different hardware setups.
 
 #pragma once
 
+THIRD_PARTY_INCLUDES_START
+#if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
+#include "dxgidebug.h"
+#endif // PLATFORM_WINDOWS || PLATFORM_HOLOLENS
+THIRD_PARTY_INCLUDES_END
+
 class FD3D12DynamicRHI;
 
 struct FD3D12AdapterDesc
@@ -96,7 +102,8 @@ public:
 	FORCEINLINE ID3D12Device2* GetD3DDevice2() const { return RootDevice2.GetReference(); }
 #endif
 #if D3D12_RHI_RAYTRACING
-	FORCEINLINE ID3D12Device5* GetD3DRayTracingDevice() { return RootRayTracingDevice.GetReference(); }
+	FORCEINLINE ID3D12Device5* GetD3DDevice5() { return RootDevice5.GetReference(); }
+	FORCEINLINE ID3D12Device7* GetD3DDevice7() { return RootDevice7.GetReference(); }
 #endif // D3D12_RHI_RAYTRACING
 	FORCEINLINE void SetDeviceRemoved(bool value) { bDeviceRemoved = value; }
 	FORCEINLINE const bool IsDeviceRemoved() const { return bDeviceRemoved; }
@@ -107,6 +114,7 @@ public:
 	FORCEINLINE const D3D12_RESOURCE_BINDING_TIER GetResourceBindingTier() const { return ResourceBindingTier; }
 	FORCEINLINE const D3D_ROOT_SIGNATURE_VERSION GetRootSignatureVersion() const { return RootSignatureVersion; }
 	FORCEINLINE const bool IsDepthBoundsTestSupported() const { return bDepthBoundsTestSupported; }
+	FORCEINLINE const bool IsHeapNotZeroedSupported() const { return bHeapNotZeroedSupported; }
 	FORCEINLINE const DXGI_ADAPTER_DESC& GetD3DAdapterDesc() const { return Desc.Desc; }
 	FORCEINLINE IDXGIAdapter* GetAdapter() { return DxgiAdapter; }
 	FORCEINLINE const FD3D12AdapterDesc& GetDesc() const { return Desc; }
@@ -133,15 +141,28 @@ public:
 		static const FD3D12RootSignature StaticComputeRootSignature(this, FD3D12RootSignatureDesc::GetStaticComputeRootSignatureDesc());
 		return &StaticComputeRootSignature;
 	}
-#else
+	FORCEINLINE const FD3D12RootSignature* GetStaticRayTracingGlobalRootSignature()
+	{
+		static const FD3D12RootSignature StaticRootSignature(this, FD3D12RootSignatureDesc::GetStaticRayTracingGlobalRootSignatureDesc(), 1 /*RAY_TRACING_REGISTER_SPACE_GLOBAL*/);
+		return &StaticRootSignature;
+	}
+	FORCEINLINE const FD3D12RootSignature* GetStaticRayTracingLocalRootSignature()
+	{
+		static const FD3D12RootSignature StaticRootSignature(this, FD3D12RootSignatureDesc::GetStaticRayTracingLocalRootSignatureDesc(), 0 /*RAY_TRACING_REGISTER_SPACE_LOCAL*/);
+		return &StaticRootSignature;
+	}
+#else // USE_STATIC_ROOT_SIGNATURE
 	FORCEINLINE const FD3D12RootSignature* GetStaticGraphicsRootSignature(){ return nullptr; }
 	FORCEINLINE const FD3D12RootSignature* GetStaticComputeRootSignature() { return nullptr; }
+	FORCEINLINE const FD3D12RootSignature* GetStaticRayTracingGlobalRootSignature() { return nullptr; }
+	FORCEINLINE const FD3D12RootSignature* GetStaticRayTracingLocalRootSignature() { return nullptr; }
+#endif // USE_STATIC_ROOT_SIGNATURE
 
 	FORCEINLINE FD3D12RootSignature* GetRootSignature(const FD3D12QuantizedBoundShaderState& QBSS) 
 	{
 		return RootSignatureManager.GetRootSignature(QBSS);
 	}
-#endif
+
 	FORCEINLINE FD3D12RootSignatureManager* GetRootSignatureManager()
 	{
 		return &RootSignatureManager;
@@ -168,8 +189,6 @@ public:
 		return *(UploadHeapAllocator[GPUIndex]); 
 	}
 
-	FORCEINLINE FD3DGPUProfiler& GetGPUProfiler() { return GPUProfilingData; }
-
 	FORCEINLINE uint32 GetDebugFlags() const { return DebugFlags; }
 
 	void Cleanup();
@@ -177,19 +196,47 @@ public:
 	void EndFrame();
 
 	// Resource Creation
+	HRESULT CreateCommittedResource(const D3D12_RESOURCE_DESC& InDesc,
+		FRHIGPUMask CreationNode,
+		const D3D12_HEAP_PROPERTIES& HeapProps,
+		D3D12_RESOURCE_STATES InInitialState,
+		const D3D12_CLEAR_VALUE* ClearValue,
+		FD3D12Resource** ppOutResource,
+		const TCHAR* Name,
+		bool bVerifyHResult = true)
+	{
+		return CreateCommittedResource(InDesc, CreationNode, HeapProps, InInitialState, ED3D12ResourceStateMode::Default, D3D12_RESOURCE_STATE_TBD, ClearValue, ppOutResource, Name, bVerifyHResult);
+	}
+
 	HRESULT CreateCommittedResource(const D3D12_RESOURCE_DESC& Desc,
 		FRHIGPUMask CreationNode,
 		const D3D12_HEAP_PROPERTIES& HeapProps,
-		const D3D12_RESOURCE_STATES& InitialUsage,
+		D3D12_RESOURCE_STATES InInitialState,
+		ED3D12ResourceStateMode InResourceStateMode,
+		D3D12_RESOURCE_STATES InDefaultState,
 		const D3D12_CLEAR_VALUE* ClearValue,
 		FD3D12Resource** ppOutResource,
 		const TCHAR* Name,
 		bool bVerifyHResult = true);
 
+	HRESULT CreatePlacedResource(const D3D12_RESOURCE_DESC& InDesc,
+		FD3D12Heap* BackingHeap,
+		uint64 HeapOffset,
+		D3D12_RESOURCE_STATES InInitialState,
+		const D3D12_CLEAR_VALUE* ClearValue,
+		FD3D12Resource** ppOutResource,
+		const TCHAR* Name,
+		bool bVerifyHResult = true)
+	{
+		return CreatePlacedResource(InDesc, BackingHeap, HeapOffset, InInitialState, ED3D12ResourceStateMode::Default, D3D12_RESOURCE_STATE_TBD, ClearValue, ppOutResource, Name, bVerifyHResult);
+	}
+
 	HRESULT CreatePlacedResource(const D3D12_RESOURCE_DESC& Desc,
 		FD3D12Heap* BackingHeap,
 		uint64 HeapOffset,
-		const D3D12_RESOURCE_STATES& InitialUsage,
+		D3D12_RESOURCE_STATES InInitialState,
+		ED3D12ResourceStateMode InResourceStateMode,
+		D3D12_RESOURCE_STATES InDefaultState,
 		const D3D12_CLEAR_VALUE* ClearValue,
 		FD3D12Resource** ppOutResource,
 		const TCHAR* Name,
@@ -207,6 +254,7 @@ public:
 		FRHIGPUMask CreationNode,
 		FRHIGPUMask VisibleNodes,
 		D3D12_RESOURCE_STATES InitialState,
+		ED3D12ResourceStateMode InResourceStateMode,
 		uint64 HeapSize,
 		FD3D12Resource** ppOutResource,
 		const TCHAR* Name,
@@ -214,7 +262,9 @@ public:
 
 	HRESULT CreateBuffer(const D3D12_HEAP_PROPERTIES& HeapProps,
 		FRHIGPUMask CreationNode,
-		D3D12_RESOURCE_STATES InitialState,
+		D3D12_RESOURCE_STATES InInitialState,
+		ED3D12ResourceStateMode InResourceStateMode,
+		D3D12_RESOURCE_STATES InDefaultState,
 		uint64 HeapSize,
 		FD3D12Resource** ppOutResource,
 		const TCHAR* Name,
@@ -224,57 +274,27 @@ public:
 	BufferType* CreateRHIBuffer(FRHICommandListImmediate* RHICmdList,
 		const D3D12_RESOURCE_DESC& Desc,
 		uint32 Alignment, uint32 Stride, uint32 Size, uint32 InUsage,
+		ED3D12ResourceStateMode InResourceStateMode,
 		FRHIResourceCreateInfo& CreateInfo);
 
-	template<typename ObjectType, typename CreationCoreFunction>
+	template <typename ObjectType, typename CreationCoreFunction>
 	inline ObjectType* CreateLinkedObject(FRHIGPUMask GPUMask, const CreationCoreFunction& pfnCreationCore)
 	{
-		ObjectType* ObjectOut = nullptr;
-		ObjectType* Previous = nullptr;
-
-		for (uint32 GPUIndex : GPUMask)
-		{
-			ObjectType* NewObject = pfnCreationCore(GetDevice(GPUIndex));
-
-			// For AFR link up the resources so they can be implicitly destroyed.
-			if (!Previous)
-			{
-				ObjectOut = NewObject;
-			}
-			else // This will also configure the head link flag.
-			{
-				Previous->SetNextObject(NewObject);
-			}
-
-			Previous = NewObject;
-		}
-
-		return ObjectOut;
+		return FD3D12LinkedAdapterObject<typename ObjectType::LinkedObjectType>::template CreateLinkedObjects<ObjectType>(
+			GPUMask,
+			[this](uint32 GPUIndex) { return GetDevice(GPUIndex); },
+			pfnCreationCore
+		);
 	}
 
-	template<typename ResourceType, typename ViewType, typename CreationCoreFunction>
+	template <typename ResourceType, typename ViewType, typename CreationCoreFunction>
 	inline ViewType* CreateLinkedViews(ResourceType* Resource, const CreationCoreFunction& pfnCreationCore)
 	{
-		ViewType* ViewOut = nullptr;
-		ViewType* Previous = nullptr;
-
-		while (Resource)
-		{
-			ViewType* NewView = pfnCreationCore(Resource);
-			// For AFR link up the resources so they can be implicitly destroyed
-			if (!Previous)
-			{
-				ViewOut = NewView;
-			}
-			else // This will also configure the head link flag.
-			{
-				Previous->SetNextObject(NewView);
-			}
-			Previous = NewView;
-			Resource = (ResourceType*)Resource->GetNextObject();
-		}
-
-		return ViewOut;
+		return FD3D12LinkedAdapterObject<typename ViewType::LinkedObjectType>::template CreateLinkedObjects<ViewType>(
+			Resource->GetLinkedObjectsGPUMask(),
+			[Resource](uint32 GPUIndex) { return static_cast<ResourceType*>(Resource->GetLinkedObject(GPUIndex)); },
+			pfnCreationCore
+		);
 	}
 
 	inline FD3D12CommandContextRedirector& GetDefaultContextRedirector() { return DefaultContextRedirector; }
@@ -288,6 +308,14 @@ public:
 
 	void GetLocalVideoMemoryInfo(DXGI_QUERY_VIDEO_MEMORY_INFO* LocalVideoMemoryInfo);
 
+	FORCEINLINE uint32 GetFrameCount() const { return FrameCounter; }
+
+#if D3D12_SUBMISSION_GAP_RECORDER
+	FD3D12SubmissionGapRecorder SubmissionGapRecorder;
+
+	void SubmitGapRecorderTimestamps();
+#endif
+
 protected:
 
 	virtual void CreateRootDevice(bool bWithDebug);
@@ -296,6 +324,7 @@ protected:
 		const D3D12_RESOURCE_DESC& Desc,
 		uint32 Size,
 		uint32 InUsage,
+		ED3D12ResourceStateMode InResourceStateMode,
 		FRHIResourceCreateInfo& CreateInfo,
 		uint32 Alignment,
 		FD3D12TransientResource& TransientResource,
@@ -311,16 +340,19 @@ protected:
 	TRefCountPtr<ID3D12Device1> RootDevice1;
 #if PLATFORM_WINDOWS || PLATFORM_HOLOLENS
 	TRefCountPtr<ID3D12Device2> RootDevice2;
+	TRefCountPtr<IDXGIDebug> DXGIDebug;
 
 	HANDLE ExceptionHandlerHandle = INVALID_HANDLE_VALUE;
 #endif
 #if D3D12_RHI_RAYTRACING
-	TRefCountPtr<ID3D12Device5> RootRayTracingDevice;
+	TRefCountPtr<ID3D12Device5> RootDevice5;
+	TRefCountPtr<ID3D12Device7> RootDevice7;
 #endif // D3D12_RHI_RAYTRACING
 	D3D12_RESOURCE_HEAP_TIER ResourceHeapTier;
 	D3D12_RESOURCE_BINDING_TIER ResourceBindingTier;
 	D3D_ROOT_SIGNATURE_VERSION RootSignatureVersion;
 	bool bDepthBoundsTestSupported;
+	bool bHeapNotZeroedSupported;
 
 	/** Running with debug device */
 	bool bDebugDevice;
@@ -365,7 +397,12 @@ protected:
 	FD3D12CommandContextRedirector DefaultContextRedirector;
 	FD3D12CommandContextRedirector DefaultAsyncComputeContextRedirector;
 
-	FD3DGPUProfiler GPUProfilingData;
+	uint32 FrameCounter;
+
+#if D3D12_SUBMISSION_GAP_RECORDER
+	TArray<uint64> StartOfSubmissionTimestamps;
+	TArray<uint64> EndOfSubmissionTimestamps;
+#endif
 
 #if WITH_MGPU
 	TMap<FName, FD3D12TemporalEffect> TemporalEffectMap;

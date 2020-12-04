@@ -192,7 +192,7 @@ void SRigWindow::CreateBoneMappingList( const FString& SearchText, TArray< TShar
 		bool bDoFiltering = !SearchText.IsEmpty();
 		const TArray<FNode>& Nodes = Rig->GetNodes();
 
-		for ( const auto Node : Nodes )
+		for ( const auto& Node : Nodes )
 		{
 			const FName& Name = Node.Name;
 			const FString& DisplayName = Node.DisplayName;
@@ -371,8 +371,7 @@ FReply SRigWindow::OnAutoMapping()
 		if (!Rig->IsSourceReferenceSkeletonAvailable())
 		{
 			//ask if they want to set up source skeleton
-			EAppReturnType::Type Response = FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("TheRigNeedsSkeleton", 
-				"In order to attempt to auto-map bones, the rig should have the source skeleton. However, the current rig is missing the source skeleton. Would you like to choose one? It's best to select the skeleton this rig is from."));
+			EAppReturnType::Type Response = FMessageDialog::Open(EAppMsgType::YesNo, LOCTEXT("TheRigNeedsSkeleton", "In order to attempt to auto-map bones, the rig should have the source skeleton. However, the current rig is missing the source skeleton. Would you like to choose one? It's best to select the skeleton this rig is from."));
 
 			if (Response == EAppReturnType::No)
 			{
@@ -447,7 +446,7 @@ FReply SRigWindow::OnSaveMapping()
 			const FString SaveAssetName = FPaths::GetBaseFilename(SavePackageName);
 			
 			// create package and create object
-			UPackage* Package = CreatePackage(nullptr, *SavePackageName);
+			UPackage* Package = CreatePackage( *SavePackageName);
 			UNodeMappingContainer* MapperClass = NewObject<UNodeMappingContainer>(Package, *SaveAssetName, RF_Public | RF_Standalone);
 			USkeletalMeshComponent* PreviewMeshComp = PreviewScenePtr.Pin()->GetPreviewMeshComponent();
 			USkeletalMesh* PreviewMesh = PreviewMeshComp->SkeletalMesh;

@@ -8,8 +8,7 @@
 #include "Chaos/PBDCollisionConstraints.h"
 #include "Chaos/PBDCollisionConstraintsContact.h"
 #include "Chaos/CollisionResolution.h"
-#include "Chaos/Collision/CollisionContext.h"
-#include "Chaos/Collision/CollisionDetector.h"
+#include "Chaos/Collision/SpatialAccelerationCollisionDetector.h"
 #include "Chaos/CollisionResolutionUtil.h"
 #include "Chaos/Plane.h"
 #include "Chaos/Sphere.h"
@@ -23,70 +22,68 @@ namespace Chaos
 /**
  * Test collision constraints.
  */
-template <class T, int d>
-class TPBDCollisionConstraintAccessor
+class FPBDCollisionConstraintAccessor
 {
 public:
-	using FCollisionConstraints = TPBDCollisionConstraints<T, d>;
-	using FConstraintContainerHandle = TPBDCollisionConstraintHandle<T, d>;
-	using FContactConstraintBase = TCollisionConstraintBase<T, d>;
-	using FMultiPointContactConstraint = TRigidBodyMultiPointContactConstraint<T, d>;
-	using FPointContactConstraint = TRigidBodyPointContactConstraint<T, d>;
-	using FMultiPointContactConstraint = TRigidBodyMultiPointContactConstraint<T, d>;
-	using FConstraintHandleAllocator = TConstraintHandleAllocator<TPBDCollisionConstraints<T, d>>;
-	using FConstraintHandleID = TPair<const TGeometryParticleHandle<T, d>*, const TGeometryParticleHandle<T, d>*>;
-	using FCollisionDetector = TCollisionDetector<FSpatialAccelerationBroadPhase, FNarrowPhase, FAsyncCollisionReceiver, FCollisionConstraints>;
-	using FAccelerationStructure = TBoundingVolume<TAccelerationStructureHandle<T, d>, T, d>;
+	using FCollisionConstraints = FPBDCollisionConstraints;
+	using FConstraintContainerHandle = FPBDCollisionConstraintHandle;
+	using FMultiPointContactConstraint = FRigidBodyMultiPointContactConstraint;
+	using FPointContactConstraint = FRigidBodyPointContactConstraint;
+	using FConstraintHandleAllocator = TConstraintHandleAllocator<FPBDCollisionConstraints>;
+	using FConstraintHandleID = TPair<const TGeometryParticleHandle<FReal, 3>*, const TGeometryParticleHandle<FReal, 3>*>;
+	using FCollisionDetector = FSpatialAccelerationCollisionDetector;
+	using FAccelerationStructure = TBoundingVolume<TAccelerationStructureHandle<FReal, 3>, FReal, 3>;
 
-	TPBDCollisionConstraintAccessor() 
+	FPBDCollisionConstraintAccessor()
 		: SpatialAcceleration(EmptyParticles.GetNonDisabledView())
-		, BroadPhase(EmptyParticles, (T)1, (T)0)
-		, CollisionConstraints(EmptyParticles, EmptyCollided, EmptyPhysicsMaterials, 1, 1)
-		, CollisionDetector(BroadPhase, CollisionConstraints)
+		, BroadPhase(EmptyParticles, (FReal)1, (FReal)0, (FReal)0)
+		, CollisionConstraints(EmptyParticles, EmptyCollided, EmptyPhysicsMaterials, EmptyUniquePhysicsMaterials, 1, 1)
+		, CollisionDetector(BroadPhase, NarrowPhase, CollisionConstraints)
 	{}
 
-	TPBDCollisionConstraintAccessor(const TPBDRigidsSOAs<T, d>& InParticles, TArrayCollectionArray<bool>& Collided, const TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>>& PerParticleMaterials,
-	const int32 PushOutIterations, const int32 PushOutPairIterations, const T Thickness) 
+	FPBDCollisionConstraintAccessor(const TPBDRigidsSOAs<FReal, 3>& InParticles, TArrayCollectionArray<bool>& Collided, const TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>>& PerParticleMaterials, const TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>>& PerParticleUniqueMaterials,
+	const int32 PushOutIterations, const int32 PushOutPairIterations, const FReal Thickness) 
 		: SpatialAcceleration(InParticles.GetNonDisabledView())
-		, BroadPhase(InParticles, (T)1, (T)0)
-		, CollisionConstraints(InParticles, Collided, PerParticleMaterials, 1, 1, Thickness)
-		, CollisionDetector(BroadPhase, CollisionConstraints)
+		, BroadPhase(InParticles, (FReal)1, (FReal)0, (FReal)0)
+		, CollisionConstraints(InParticles, Collided, PerParticleMaterials, PerParticleUniqueMaterials, 1, 1, Thickness)
+		, CollisionDetector(BroadPhase, NarrowPhase, CollisionConstraints)
 	{}
 
-	virtual ~TPBDCollisionConstraintAccessor() {}
+	virtual ~FPBDCollisionConstraintAccessor() {}
 	
-	void ComputeConstraints(T Dt)
+	void ComputeConstraints(FReal Dt)
 	{
-		CollisionStats::FStatData StatData(false);
 		CollisionDetector.GetBroadPhase().SetSpatialAcceleration(&SpatialAcceleration);
-		CollisionDetector.DetectCollisions(Dt, StatData);
+		CollisionDetector.DetectCollisions(Dt);
 	}
 
-	void Update(FContactConstraintBase& Constraint, T CullDistance = T(0) )
+	void Update(FCollisionConstraintBase& Constraint, FReal CullDistance = FReal(0) )
 	{
 		if (Constraint.GetType() == FPointContactConstraint::StaticType())
 		{
-			Collisions::Update(*Constraint.As<FPointContactConstraint>(), CullDistance);
+			Collisions::Update(*Constraint.As<FPointContactConstraint>(), CullDistance, 1/30.0f);
 		}
 		else if(Constraint.GetType() == FMultiPointContactConstraint::StaticType())
 		{
-			Collisions::Update(*Constraint.As<FMultiPointContactConstraint>(), CullDistance);
+			Collisions::Update(*Constraint.As<FMultiPointContactConstraint>(), CullDistance, 1/30.0f);
 		}
 	}
 
-	void UpdateManifold(FContactConstraintBase& Constraint, T CullDistance = T(0))
+	void UpdateManifold(FCollisionConstraintBase& Constraint, FReal CullDistance = FReal(0))
 	{
-		if (Constraint.GetType() == FContactConstraintBase::FType::MultiPoint)
+		if (Constraint.GetType() == FCollisionConstraintBase::FType::MultiPoint)
 		{
-			FCollisionContext Context;
-			Collisions::UpdateManifold(*Constraint.As<FRigidBodyMultiPointContactConstraint>(), CullDistance, Context);
+			Collisions::UpdateManifold(*Constraint.As<FRigidBodyMultiPointContactConstraint>(), CullDistance);
 		}
 	}
 
 
 	void UpdateLevelsetConstraint(FPointContactConstraint& Constraint) 
 	{
-		Collisions::UpdateLevelsetLevelsetConstraint<ECollisionUpdateType::Deepest>(T(0), Constraint);
+		FRigidTransform3 WorldTransform0 = Constraint.ImplicitTransform[0] * Collisions::GetTransform(Constraint.Particle[0]);
+		FRigidTransform3 WorldTransform1 = Constraint.ImplicitTransform[1] * Collisions::GetTransform(Constraint.Particle[1]);
+
+		Collisions::UpdateLevelsetLevelsetConstraint<ECollisionUpdateType::Deepest>(WorldTransform0, WorldTransform1, FReal(0), FReal(1 / 30.0f), Constraint);
 	}
 
 	int32 NumConstraints() const
@@ -94,7 +91,7 @@ public:
 		return CollisionConstraints.NumConstraints();
 	}
 
-	TCollisionConstraintBase<T,d>& GetConstraint(int32 Index)
+	FCollisionConstraintBase& GetConstraint(int32 Index)
 	{
 		if (Index < CollisionConstraints.NumConstraints())
 		{
@@ -113,23 +110,28 @@ public:
 		return CollisionConstraints.GetAllConstraintHandles()[ConstraintIndex];
 	}
 
-	void Apply(const T Dt, const TArray<FConstraintContainerHandle*>& InConstraintHandles, const int32 It, const int32 NumIts)
+	void Apply(const FReal Dt, const TArray<FConstraintContainerHandle*>& InConstraintHandles, const int32 It, const int32 NumIts)
 	{
+		// This sets up the materials...
+		CollisionConstraints.PrepareIteration(Dt);
+
 		CollisionConstraints.Apply(Dt, InConstraintHandles, It, NumIts);
 	}
 
-	bool ApplyPushOut(const T Dt, const TArray<FConstraintContainerHandle*>& InConstraintHandles, const TSet<const TGeometryParticleHandle<T, d>*>& IsTemporarilyStatic, int32 Iteration, int32 NumIterations)
+	bool ApplyPushOut(const FReal Dt, const TArray<FConstraintContainerHandle*>& InConstraintHandles, const TSet<const TGeometryParticleHandle<FReal, 3>*>& IsTemporarilyStatic, int32 Iteration, int32 NumIterations)
 	{
 		return CollisionConstraints.ApplyPushOut(Dt, InConstraintHandles, IsTemporarilyStatic, Iteration, NumIterations);
 	}
 
 	FPointContactConstraint EmptyConstraint;
-	TPBDRigidsSOAs<T, d> EmptyParticles;
+	TPBDRigidsSOAs<FReal, 3> EmptyParticles;
 	TArrayCollectionArray<bool> EmptyCollided;
 	TArrayCollectionArray<TSerializablePtr<FChaosPhysicsMaterial>> EmptyPhysicsMaterials;
+	TArrayCollectionArray<TUniquePtr<FChaosPhysicsMaterial>> EmptyUniquePhysicsMaterials;
 
 	FAccelerationStructure SpatialAcceleration;
 	FSpatialAccelerationBroadPhase BroadPhase;
+	FNarrowPhase NarrowPhase;
 	FCollisionConstraints CollisionConstraints;
 	FCollisionDetector CollisionDetector;
 };

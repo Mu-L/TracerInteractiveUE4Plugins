@@ -49,6 +49,12 @@ bool USocialSettings::ShouldLeavePartyOnDisconnect()
 	return SettingsCDO.bLeavePartyOnDisconnect;
 }
 
+bool USocialSettings::ShouldSetDesiredPrivacyOnLocalPlayerBecomesLeader()
+{
+	const USocialSettings& SettingsCDO = *GetDefault<USocialSettings>();
+	return SettingsCDO.bSetDesiredPrivacyOnLocalPlayerBecomesLeader;
+}
+
 int32 USocialSettings::GetDefaultMaxPartySize()
 {
 #if !UE_BUILD_SHIPPING
@@ -84,4 +90,10 @@ int32 USocialSettings::GetMaxNicknameLength()
 {
 	const USocialSettings& SettingsCDO = *GetDefault<USocialSettings>();
 	return SettingsCDO.MaxNicknameLength;
+}
+
+const TArray<FSocialPlatformDescription>& USocialSettings::GetSocialPlatformDescriptions()
+{
+	const USocialSettings& SettingsCDO = *GetDefault<USocialSettings>();
+	return SettingsCDO.SocialPlatformDescriptions;
 }

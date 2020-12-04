@@ -12,6 +12,7 @@
 #include "Physics/PhysicsInterfaceCore.h"
 #include "Physics/PhysicsInterfaceTypes.h"
 #include "PhysicsPublic.h"
+#include "BodyInstanceCore.h"
 #include "BodyInstance.generated.h"
 
 class UBodySetup;
@@ -54,7 +55,7 @@ namespace EDOFMode
 
 struct FBodyInstnace;
 
-#define USE_BODYINSTANCE_DEBUG_NAMES ((WITH_EDITORONLY_DATA || UE_BUILD_DEBUG || LOOKING_FOR_PERF_ISSUES) && !(UE_BUILD_SHIPPING || UE_BUILD_TEST) && !NO_LOGGING)
+#define USE_BODYINSTANCE_DEBUG_NAMES ((WITH_EDITORONLY_DATA || UE_BUILD_DEBUG || LOOKING_FOR_PERF_ISSUES || CHAOS_CHECKED) && !(UE_BUILD_SHIPPING || UE_BUILD_TEST) && !NO_LOGGING)
 
 /** Helper struct to specify spawn behavior */
 struct FInitBodySpawnParams
@@ -245,7 +246,7 @@ enum class BodyInstanceSceneState : uint8
 
 /** Container for a physics representation of an object */
 USTRUCT(BlueprintType)
-struct ENGINE_API FBodyInstance
+struct ENGINE_API FBodyInstance : public FBodyInstanceCore
 {
 	GENERATED_USTRUCT_BODY()
 
@@ -278,6 +279,16 @@ private:
 	UPROPERTY(EditAnywhere, Category=Custom)
 	TEnumAsByte<ECollisionEnabled::Type> CollisionEnabled;
 
+	/** When per-shape collision is changed at runtime, state is stored in an optional array of per-shape collision state.
+	*	Before this array's IsSet state is true, collision values from the BodySetup's AggGeom are used in GetShapeCollisionEnabled.
+	*/
+	TOptional<TArray<TEnumAsByte<ECollisionEnabled::Type>>> ShapeCollisionEnabled;
+
+	/** When per-shape collision responses are changed at runtime, state is stored in an optional array of per-shape
+	*	collision response settings. If this is not set, the base body instance's CollisionResponses member is used for all shapes.
+	*/
+	TOptional<TArray<TPair<int32, FCollisionResponse>>> ShapeCollisionResponses;
+
 public:
 	// Current state of the physics body for tracking deferred addition and removal.
 	BodyInstanceSceneState CurrentSceneState;
@@ -286,7 +297,7 @@ public:
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, Category = Physics)
 	ESleepFamily SleepFamily;
 
-	/** Locks physical movement along specified axis.*/
+	/** [Physx Only] Locks physical movement along specified axis.*/
 	UPROPERTY(EditAnywhere, Category = Physics, meta = (DisplayName = "Mode"))
 	TEnumAsByte<EDOFMode::Type> DOFMode;
 
@@ -310,67 +321,35 @@ public:
 	/////////
 	// SIM SETTINGS
 
-	/** 
-	 * If true, this body will use simulation. If false, will be 'fixed' (ie kinematic) and move where it is told. 
-	 * For a Skeletal Mesh Component, simulating requires a physics asset setup and assigned on the SkeletalMesh asset.
-	 * For a Static Mesh Component, simulating requires simple collision to be setup on the StaticMesh asset.
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Physics)
-	uint8 bSimulatePhysics : 1;
-
-	/** If true, mass will not be automatically computed and you must set it directly */
-	UPROPERTY(EditAnywhere, Category = Physics, meta = (InlineEditConditionToggle))
-	uint8 bOverrideMass : 1;
-
-	/** If object should have the force of gravity applied */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Physics)
-	uint8 bEnableGravity : 1;
-
-	/** If true and is attached to a parent, the two bodies will be joined into a single rigid body. Physical settings like collision profile and body settings are determined by the root */
-	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadWrite, Category = Physics, meta = (editcondition = "!bSimulatePhysics"))
-	uint8 bAutoWeld : 1;
-
-	/** If object should start awake, or if it should initially be sleeping */
-	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Physics, meta = (editcondition = "bSimulatePhysics"))
-	uint8 bStartAwake:1;
-
-	/**	Should 'wake/sleep' events fire when this object is woken up or put to sleep by the physics simulation. */
-	UPROPERTY(EditAnywhere,AdvancedDisplay, BlueprintReadOnly, Category = Physics)
-	uint8 bGenerateWakeEvents : 1;
-
-	/** If true, it will update mass when scale changes **/
-	UPROPERTY()
-	uint8 bUpdateMassWhenScaleChanges:1;
-
-	/** When a Locked Axis Mode is selected, will lock translation on the specified axis*/
+	/** [Physx Only] When a Locked Axis Mode is selected, will lock translation on the specified axis*/
 	UPROPERTY(EditAnywhere, Category = Physics, meta=(DisplayName = "Lock Axis Translation"))
 	uint8 bLockTranslation : 1;
 	
-	/** When a Locked Axis Mode is selected, will lock rotation to the specified axis*/
+	/** [Physx Only] When a Locked Axis Mode is selected, will lock rotation to the specified axis*/
 	UPROPERTY(EditAnywhere, Category = Physics, meta=(DisplayName = "Lock Axis Rotation"))
 	uint8 bLockRotation : 1;
 
-	/** Lock translation along the X-axis*/
+	/** [Physx Only] Lock translation along the X-axis*/
 	UPROPERTY(EditAnywhere, Category = Physics, meta = (DisplayName = "X"))
 	uint8 bLockXTranslation : 1;
 
-	/** Lock translation along the Y-axis*/
+	/** [Physx Only] Lock translation along the Y-axis*/
 	UPROPERTY(EditAnywhere, Category = Physics, meta = (DisplayName = "Y"))
 	uint8 bLockYTranslation : 1;
 
-	/** Lock translation along the Z-axis*/
+	/** [Physx Only] Lock translation along the Z-axis*/
 	UPROPERTY(EditAnywhere, Category = Physics, meta = (DisplayName = "Z"))
 	uint8 bLockZTranslation : 1;
 
-	/** Lock rotation about the X-axis*/
+	/** [Physx Only] Lock rotation about the X-axis*/
 	UPROPERTY(EditAnywhere, Category = Physics, meta = (DisplayName = "X"))
 	uint8 bLockXRotation : 1;
 
-	/** Lock rotation about the Y-axis*/
+	/** [Physx Only] Lock rotation about the Y-axis*/
 	UPROPERTY(EditAnywhere, Category = Physics, meta = (DisplayName = "Y"))
 	uint8 bLockYRotation : 1;
 
-	/** Lock rotation about the Z-axis*/
+	/** [Physx Only] Lock rotation about the Z-axis*/
 	UPROPERTY(EditAnywhere, Category = Physics, meta = (DisplayName = "Z"))
 	uint8 bLockZRotation : 1;
 
@@ -391,7 +370,7 @@ public:
 
 protected:
 
-	/** Whether this body instance has its own custom MaxDepenetrationVelocity*/
+	/** [PhysX Only] Whether this body instance has its own custom MaxDepenetrationVelocity*/
 	UPROPERTY(EditAnywhere, Category = Physics, meta=(InlineEditConditionToggle))
 	uint8 bOverrideMaxDepenetrationVelocity : 1;
 
@@ -432,11 +411,11 @@ private:
 
 public:
 
-	/** This physics body's solver iteration count for position. Increasing this will be more CPU intensive, but better stabilized.  */
+	/** [PhysX Only] This physics body's solver iteration count for position. Increasing this will be more CPU intensive, but better stabilized.  */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category=Physics)
 	uint8 PositionSolverIterationCount;
 
-	/** This physics body's solver iteration count for velocity. Increasing this will be more CPU intensive, but better stabilized. */
+	/** [PhysX Only] This physics body's solver iteration count for velocity. Increasing this will be more CPU intensive, but better stabilized. */
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Physics)
 	uint8 VelocitySolverIterationCount;
 
@@ -446,7 +425,7 @@ private:
 	struct FCollisionResponse CollisionResponses;
 
 protected:
-	/** The maximum velocity used to depenetrate this object*/
+	/** [PhysX Only] The maximum velocity used to depenetrate this object*/
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Physics, meta = (editcondition = "bOverrideMaxDepenetrationVelocity", ClampMin = "0.0", UIMin = "0.0"))
 	float MaxDepenetrationVelocity;
 
@@ -504,15 +483,16 @@ public:
 
 	void ClearExternalCollisionProfile();
 
-	/** Locks physical movement along axis. */
+	/** [Physx Only] Locks physical movement along axis. */
 	void SetDOFLock(EDOFMode::Type NewDOFMode);
 
+	/** [Physx Only] */
 	FVector GetLockedAxis() const;
 	void CreateDOFLock();
 
 	static EDOFMode::Type ResolveDOFMode(EDOFMode::Type DOFMode);
 
-	/** Constraint used to allow for easy DOF setup per bodyinstance */
+	/** [Physx Only] Constraint used to allow for easy DOF setup per bodyinstance */
 	FConstraintInstance* DOFConstraint;
 
 	/** The parent body that we are welded to*/
@@ -532,7 +512,7 @@ protected:
 	class UPhysicalMaterial* PhysMaterialOverride;
 
 public:
-	/** The maximum angular velocity for this instance */
+	/** The maximum angular velocity for this instance [degrees/s]*/
 	UPROPERTY(EditAnywhere, AdvancedDisplay, BlueprintReadOnly, Category = Physics, meta = (editcondition = "bOverrideMaxAngularVelocity"))
 	float MaxAngularVelocity;
 
@@ -550,17 +530,10 @@ public:
 	UPROPERTY()
 	float PhysicsBlendWeight;
 
-	/** True if we want to use deferred body instance creation */
-	static bool UseDeferredPhysicsBodyCreation();
-
-private:
-	TArray<FInitBodiesHelperWithData<true>> InitBodiesDeferredListStatic;
-	TArray<FInitBodiesHelperWithData<false>> InitBodiesDeferredListDynamic;
-
 public:
 
-	void InitAllBodies(FPhysScene* PhysScene);
-
+	UBodySetup* GetBodySetup() const;
+	
 	FPhysicsActorHandle& GetPhysicsActorHandle();
 	const FPhysicsActorHandle& GetPhysicsActorHandle() const;
 	const FPhysicsActorHandle& GetActorReferenceWithWelding() const;
@@ -574,9 +547,6 @@ public:
 
 	/** PrimitiveComponent containing this body.   */
 	TWeakObjectPtr<class UPrimitiveComponent> OwnerComponent;
-
-	/** BodySetup pointer that this instance is initialized from */
-	TWeakObjectPtr<UBodySetup> BodySetup;
 
 	/** Constructor **/
 	FBodyInstance();
@@ -633,7 +603,7 @@ public:
 	void InitDynamicProperties_AssumesLocked();
 
 	/** Build the sim and query filter data (for simple and complex shapes) based on the settings of this BodyInstance (and its associated BodySetup)  */
-	void BuildBodyFilterData(FBodyCollisionFilterData& OutFilterData) const;
+	void BuildBodyFilterData(FBodyCollisionFilterData& OutFilterData, const int32 ShapeIndex = INDEX_NONE) const;
 
 	/** Build the flags to control which types of collision (sim and query) shapes owned by this BodyInstance should have. */
 	static void BuildBodyCollisionFlags(FBodyCollisionFlags& OutFlags, ECollisionEnabled::Type UseCollisionEnabled, bool bUseComplexAsSimple);
@@ -751,8 +721,6 @@ public:
 	void UpdateInstanceSimulatePhysics();
 	/** Returns true if this body is simulating, false if it is fixed (kinematic) */
 	bool IsInstanceSimulatingPhysics() const;
-	/** Should Simulate Physics **/
-	bool ShouldInstanceSimulatingPhysics() const;
 	/** Returns whether this body is awake */
 	bool IsInstanceAwake() const;
 	/** Wake this body */
@@ -915,10 +883,17 @@ public:
 	bool ReplaceResponseToChannels(ECollisionResponse OldResponse, ECollisionResponse NewResponse);
 
 	/** Set the response of this body to the supplied settings */
-	bool SetResponseToChannels(const FCollisionResponseContainer& NewReponses);
+	bool SetResponseToChannels(const FCollisionResponseContainer& NewResponses);
+
+	/** Set the response of a specific shape on this body to the supplied settings */
+	bool SetShapeResponseToChannels(const int32 ShapeIndex, const FCollisionResponseContainer& NewResponses);
 
 	/** Get Collision ResponseToChannels container for this component **/
 	FORCEINLINE_DEBUGGABLE const FCollisionResponseContainer& GetResponseToChannels() const { return CollisionResponses.GetResponseContainer(); }
+
+	/** Get Collision ResponseToChannels container for a specific shape in this component **/
+	const FCollisionResponseContainer& GetShapeResponseToChannels(const int32 ShapeIndex) const;
+	const FCollisionResponseContainer& GetShapeResponseToChannels(const int32 ShapeIndex, const FCollisionResponseContainer& DefaultResponseContainer) const;
 
 	/** Set the movement channel of this body to the one supplied */
 	void SetObjectType(ECollisionChannel Channel);
@@ -928,6 +903,9 @@ public:
 
 	/** Controls what kind of collision is enabled for this body and allows optional disable physics rebuild */
 	void SetCollisionEnabled(ECollisionEnabled::Type NewType, bool bUpdatePhysicsFilterData = true);
+
+	/** Controls what kind of collision is enabled for a particular shape */
+	void SetShapeCollisionEnabled(const int32 ShapeIndex, ECollisionEnabled::Type NewType, bool bUpdatePhysicsFilterData = true);
 
 private:
 
@@ -939,6 +917,9 @@ public:
 	{
 		return (bCheckOwner ? GetCollisionEnabled_CheckOwner() : CollisionEnabled.GetValue());
 	}
+
+	/** Get the current type of collision enabled for a particular shape */
+	ECollisionEnabled::Type GetShapeCollisionEnabled(const int32 ShapeIndex) const;
 
 	/**  
 	 * Set Collision Profile Name (deferred)
@@ -1033,6 +1014,18 @@ public:
 	 *  @return true if the geometry associated with this body instance overlaps the query shape at the specified location/rotation
 	 */
 	bool OverlapTest(const FVector& Position, const FQuat& Rotation, const struct FCollisionShape& CollisionShape, FMTDResult* OutMTD = nullptr) const;
+
+	/**
+	 *  Test if the bodyinstance overlaps with the specified shape at the specified position/rotation
+	 *  Note: This function is not thread safe. Make sure you obtain the physics scene read lock before calling it
+	 *
+	 *  @param  Position		Position to place the shape at before testing
+	 *  @param  Rotation		Rotation to apply to the shape before testing
+	 *	@param	CollisionShape	Shape to test against
+	 *  @param  OutMTD			The minimum translation direction needed to push the shape out of this BodyInstance. (Optional)
+	 *  @return true if the geometry associated with this body instance overlaps the query shape at the specified location/rotation
+	 */
+	bool OverlapTest_AssumesLocked(const FVector& Position, const FQuat& Rotation, const struct FCollisionShape& CollisionShape, FMTDResult* OutMTD = nullptr) const;
 
 	/**
 	 *  Test if the bodyinstance overlaps with the specified body instances

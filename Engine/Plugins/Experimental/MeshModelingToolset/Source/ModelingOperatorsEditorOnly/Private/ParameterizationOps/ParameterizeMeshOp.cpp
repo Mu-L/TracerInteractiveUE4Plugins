@@ -3,11 +3,11 @@
 #include "ParameterizationOps/ParameterizeMeshOp.h"
 
 #include "DynamicMeshAttributeSet.h"
-#include "MeshDescriptionToDynamicMesh.h"
 #include "ProxyLODParameterization.h"
 #include "Selections/MeshConnectedComponents.h"
 
 #include "Parameterization/MeshLocalParam.h"
+#include "Parameterization/DynamicMeshUVEditor.h"
 #include "DynamicMeshAABBTree3.h"
 #include "MeshNormals.h"
 #include "DynamicSubmesh3.h"
@@ -159,8 +159,19 @@ bool FParameterizeMeshOp::ComputeUVs(FDynamicMesh3& Mesh,  TFunction<bool(float)
 		return false;
 	}
 
+	// IProxyLODParameterization module calls into UVAtlas, which (appears to) assume mesh orientation that is opposite
+	// if what we use in UE. As a result the UV islands come back mirrored. So we send a reverse-orientation mesh instead,
+	// and then fix up the UVs when we set them below. 
+	const bool bFixOrientation = true;
+	FDynamicMesh3 FlippedMesh(EMeshComponents::FaceGroups);
+	FlippedMesh.Copy(Mesh, false, false, false, false);
+	if (bFixOrientation)
+	{
+		FlippedMesh.ReverseOrientation(false);
+	}
+
 	// Convert to a dense form.
-	FLinearMesh LinearMesh(Mesh, bUsePolygroups);
+	FLinearMesh LinearMesh(FlippedMesh, bUsePolygroups);
 
 	// Data to be populated by the UV generation tool
 	TArray<FVector2D> UVVertexBuffer;
@@ -184,7 +195,7 @@ bool FParameterizeMeshOp::ComputeUVs(FDynamicMesh3& Mesh,  TFunction<bool(float)
 		if (bHasAttributes)
 		{
 			FDynamicMeshAttributeSet* Attributes = Mesh.Attributes();
-			Attributes->PrimaryUV()->ClearElements(); // delete existing UVs
+			Attributes->GetUVLayer(UVLayer)->ClearElements(); // delete existing UVs
 		}
 		else
 		{
@@ -192,7 +203,7 @@ bool FParameterizeMeshOp::ComputeUVs(FDynamicMesh3& Mesh,  TFunction<bool(float)
 			Mesh.EnableAttributes();
 		}
 
-		FDynamicMeshUVOverlay* UVOverlay = Mesh.Attributes()->PrimaryUV();
+		FDynamicMeshUVOverlay* UVOverlay = Mesh.Attributes()->GetUVLayer(UVLayer);
 
 		// This mesh shouldn't already have UVs.
 
@@ -204,14 +215,13 @@ bool FParameterizeMeshOp::ComputeUVs(FDynamicMesh3& Mesh,  TFunction<bool(float)
 
 		for (int32 i = 0; i < NumUVs; ++i)
 		{
-			const FVector2D UV = UVVertexBuffer[i];
+			FVector2D UV = UVVertexBuffer[i];
 
 			// The associated VertID in the dynamic mesh
 			const int32 VertOffset = VertexRemapArray[i];
-			const int32 VertID = LinearMesh.VertToID[VertOffset];
 
 			// add the UV to the mesh overlay
-			const int32 NewID = UVOverlay->AppendElement(FVector2f(UV), VertID);
+			const int32 NewID = UVOverlay->AppendElement(FVector2f(UV));
 			UVOffsetToElID.Add(NewID);
 		}
 
@@ -235,11 +245,19 @@ bool FParameterizeMeshOp::ComputeUVs(FDynamicMesh3& Mesh,  TFunction<bool(float)
 			}
 
 			// NB: this could be slow.. 
-			int32 TriID = Mesh.FindTriangle(TriVertIDs[0], TriVertIDs[1], TriVertIDs[2]);
+			int32 TriID = FlippedMesh.FindTriangle(TriVertIDs[0], TriVertIDs[1], TriVertIDs[2]);
 
 			checkSlow(TriID != FDynamicMesh3::InvalidID);
 
-			FIndex3i ElTri(UVOffsetToElID[ UVTri[0]], UVOffsetToElID[UVTri[1]], UVOffsetToElID[UVTri[2]]);
+			FIndex3i ElTri;
+			if (bFixOrientation)
+			{
+				ElTri = FIndex3i(UVOffsetToElID[UVTri[1]], UVOffsetToElID[UVTri[0]], UVOffsetToElID[UVTri[2]]);
+			}
+			else
+			{
+				ElTri = FIndex3i(UVOffsetToElID[ UVTri[0]], UVOffsetToElID[UVTri[1]], UVOffsetToElID[UVTri[2]]);
+			}
 
 			// add the triangle to the overlay
 			UVOverlay->SetTriangle(TriID, ElTri);
@@ -264,50 +282,37 @@ bool FParameterizeMeshOp::ComputeUVs(FDynamicMesh3& Mesh,  TFunction<bool(float)
 
 bool FParameterizeMeshOp::ComputeUVs_ExpMap(FDynamicMesh3& Mesh, TFunction<bool(float)>& Interrupter, float GlobalScale)
 {
-	FMeshNormals::QuickComputeVertexNormals(Mesh);
+	FDynamicMeshUVEditor UVEditor(&Mesh, UVLayer, true);
 
-	FDynamicMeshAABBTree3 AABBTree(&Mesh, true);
-	double NearDistSqr;
-	int32 SeedTriangleID = AABBTree.FindNearestTriangle(Mesh.GetBounds().Center(), NearDistSqr);
-	FFrame3d SeedFrame = Mesh.GetTriFrame(SeedTriangleID);
-	FIndex3i SeedNbrs = Mesh.GetTriangle(SeedTriangleID);
-
-	// try to generate consistent frame alignment...
-	SeedFrame.ConstrainedAlignPerpAxes(0, 1, 2, FVector3d::UnitX(), FVector3d::UnitY(), 0.95 );
-
-	TMeshLocalParam<FDynamicMesh3> Param(&Mesh);
-	//Param.ParamMode = ELocalParamTypes::PlanarProjection;
-	//Param.ParamMode = ELocalParamTypes::ExponentialMap;
-	Param.ParamMode = ELocalParamTypes::ExponentialMapUpwindAvg;
-	Param.ComputeToMaxDistance(FFrame3d(SeedFrame), SeedNbrs, TNumericLimits<float>::Max());
-
-	Mesh.EnableAttributes();
-	FDynamicMeshAttributeSet* Attributes = Mesh.Attributes();
-	FDynamicMeshUVOverlay* UVOverlay = Mesh.Attributes()->PrimaryUV();
-	UVOverlay->ClearElements(); // delete existing UVs
-	checkSlow(UVOverlay->ElementCount() == 0);
-
-	FAxisAlignedBox2d Bounds = Param.GetUVBounds();
-	FVector2d Center = Bounds.Center();
-
-	for (int32 VertexID : Mesh.VertexIndicesItr())
+	TArray<int32> AllTriangles;
+	for (int32 tid : Mesh.TriangleIndicesItr())
 	{
-		check(Param.HasUV(VertexID));
-		FVector2d UV = Param.GetUV(VertexID) - Center;
-		int32 NewElemID = UVOverlay->AppendElement(FVector2f(UV), VertexID);
-		check(NewElemID == VertexID);
+		AllTriangles.Add(tid);
 	}
 
-	for (int32 TriangleID : Mesh.TriangleIndicesItr())
-	{
-		FIndex3i Tri = Mesh.GetTriangle(TriangleID);
-		UVOverlay->SetTriangle(TriangleID, Tri);
-	}
+	UVEditor.SetTriangleUVsFromExpMap(AllTriangles);
 
 	return true;
 }
 
 
+
+
+bool FParameterizeMeshOp::ComputeUVs_ConformalFreeBoundary(FDynamicMesh3& InOutMesh, TFunction<bool(float)>& Interrupter, float GlobalScale)
+{
+	FDynamicMeshUVEditor UVEditor(&InOutMesh, UVLayer, true);
+
+	TArray<int32> AllTriangles;
+	for (int32 tid : InOutMesh.TriangleIndicesItr())
+	{
+		AllTriangles.Add(tid);
+	}
+
+	bool bUseExistingUVTopology = (IslandMode == EParamOpIslandMode::UVIslands);
+	UVEditor.SetTriangleUVsFromFreeBoundaryConformal(AllTriangles, bUseExistingUVTopology);
+
+	return true;
+}
 
 
 
@@ -364,22 +369,12 @@ void FParameterizeMeshOp::NormalizeUVAreas(const FDynamicMesh3& Mesh, FDynamicMe
 
 void FParameterizeMeshOp::CalculateResult(FProgressCancel* Progress)
 {
-
 	if (!InputMesh.IsValid())
 	{
 		return;
 	}
-	// Need access to the source mesh:
 
-	const FMeshDescription* MeshDescription = InputMesh.Get();
-
-	// Convert to FDynamic Mesh
-	{
-		FMeshDescriptionToDynamicMesh Converter;
-		Converter.bPrintDebugMessages = true;
-		ResultMesh->Clear();
-		Converter.Convert(MeshDescription, *ResultMesh);
-	}
+	ResultMesh = MakeUnique<FDynamicMesh3>(*InputMesh);
 
 	if (Progress->Cancelled())
 	{
@@ -387,6 +382,8 @@ void FParameterizeMeshOp::CalculateResult(FProgressCancel* Progress)
 	}
 
 	FDynamicMesh3* BaseMesh = ResultMesh.Get();
+	FDynamicMeshUVOverlay* UVOverlay = (BaseMesh->HasAttributes()) ?
+		BaseMesh->Attributes()->GetUVLayer(UVLayer) : nullptr;
 
 	// We can either split the mesh into multiple meshes - one for each poly group and create UVs for each with calls to UVAtlas (potentially in parallel)
 	// or we can update the adjacency and use a single call to UVAtlas.
@@ -410,25 +407,28 @@ void FParameterizeMeshOp::CalculateResult(FProgressCancel* Progress)
 	// Count the number of components for which we successufully generate UVs
 	int32 SuccessCount = 0;
 
-	// Predicate that reports true if two triangles are in the same group.
-	auto GroupPredicate = [this](int32 CurTri, int32 NbrTri)->bool
-	{
-		const int CurTriGroup = this->ResultMesh->GetTriangleGroup(CurTri);
-		const int NbrTriGroup = this->ResultMesh->GetTriangleGroup(NbrTri);
-			
-		return (CurTriGroup == NbrTriGroup);
-	};
-
 	// find group-connected-components
 	FMeshConnectedComponents ConnectedComponents(ResultMesh.Get());
-	ConnectedComponents.FindConnectedTriangles(GroupPredicate); 
+	if (IslandMode == EParamOpIslandMode::PolyGroups)
+	{
+		ConnectedComponents.FindConnectedTriangles([this](int32 CurTri, int32 NbrTri) {
+			return ResultMesh->GetTriangleGroup(CurTri) == ResultMesh->GetTriangleGroup(NbrTri);
+		});
+	}
+	else
+	{
+		check(UVOverlay);
+		ConnectedComponents.FindConnectedTriangles([&](int32 Triangle0, int32 Triangle1) {
+			return UVOverlay->AreTrianglesConnected(Triangle0, Triangle1);
+		});
+	}
 
 	// Create an array of meshes - one for each poly group
 	// NB TIndirectArray automatically deletes the meshes when it goes out of scope.
 	TIndirectArray<FDynamicSubmesh3> SubmeshArray;
 	for ( FMeshConnectedComponents::FComponent& Component : ConnectedComponents)
 	{
-		FDynamicSubmesh3* ComponentSubmesh = new FDynamicSubmesh3(BaseMesh, Component.Indices, (int)EMeshComponents::None, false);
+		FDynamicSubmesh3* ComponentSubmesh = new FDynamicSubmesh3(BaseMesh, Component.Indices, (int)EMeshComponents::None, true);
 		SubmeshArray.Add(ComponentSubmesh);
 	}
 
@@ -438,9 +438,21 @@ void FParameterizeMeshOp::CalculateResult(FProgressCancel* Progress)
 		FDynamicMesh3& ComponentMesh = ComponentSubmesh.GetSubmesh();
 		if (ComponentMesh.TriangleCount() > 0)
 		{
-			bool bComputedUVs = (UnwrapType == EParamOpUnwrapType::ExpMap) ? 
-				ComputeUVs_ExpMap(ComponentMesh, Iterrupter, AreaScaling) : 
-				ComputeUVs(ComponentMesh, Iterrupter, false, AreaScaling);
+			bool bComputedUVs = false;
+			switch (UnwrapType)
+			{
+			case EParamOpUnwrapType::ExpMap:
+				bComputedUVs = ComputeUVs_ExpMap(ComponentMesh, Iterrupter, AreaScaling);
+				break;
+
+			case EParamOpUnwrapType::ConformalFreeBoundary:
+				bComputedUVs = ComputeUVs_ConformalFreeBoundary(ComponentMesh, Iterrupter, AreaScaling);
+				break;
+
+			case EParamOpUnwrapType::MinStretch:
+				bComputedUVs = ComputeUVs(ComponentMesh, Iterrupter, false, AreaScaling);
+				break;
+			}
 
 			if (bComputedUVs) SuccessCount++;
 		}
@@ -458,7 +470,7 @@ void FParameterizeMeshOp::CalculateResult(FProgressCancel* Progress)
 		{
 			ResultMesh->EnableAttributes();
 		}
-		FDynamicMeshUVOverlay* UVOverlay = ResultMesh->Attributes()->PrimaryUV();
+
 		UVOverlay->ClearElements(); // delete existing UVs
 
 		for (FDynamicSubmesh3& ComponentSubmesh : SubmeshArray)
@@ -470,14 +482,13 @@ void FParameterizeMeshOp::CalculateResult(FProgressCancel* Progress)
 			}
 
 			// copy the elements
-			const FDynamicMeshUVOverlay* ComponentUVOverlay = ComponentMesh.Attributes()->PrimaryUV();
+			const FDynamicMeshUVOverlay* ComponentUVOverlay = ComponentMesh.Attributes()->GetUVLayer(UVLayer);
 			TArray<int32> ElemIDMap;
 			ElemIDMap.SetNum(ComponentUVOverlay->MaxElementID());
 			for (int32 ElemID : ComponentUVOverlay->ElementIndicesItr())
 			{
 				int ParentVertexID = ComponentUVOverlay->GetParentVertex(ElemID);
-				int32 BaseVertexID = ComponentSubmesh.MapVertexToBaseMesh(ParentVertexID);
-				int32 BaseElemID = UVOverlay->AppendElement(ComponentUVOverlay->GetElement(ElemID), BaseVertexID);
+				int32 BaseElemID = UVOverlay->AppendElement(ComponentUVOverlay->GetElement(ElemID));
 				ElemIDMap[ElemID] = BaseElemID;
 			}
 

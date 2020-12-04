@@ -23,6 +23,33 @@ protected:
 	FNDIStaticMesh_InstanceData* Owner;
 };
 
+UENUM()
+enum class ENDIStaticMesh_SourceMode : uint8
+{
+	/**
+	Default behavior.
+	- Use "Source" when specified (either set explicitly or via blueprint with Set Niagara Static Mesh Component).
+	- When no source is specified, attempt to find a Static Mesh Component on an attached actor or component.
+	- If no source actor/component specified and no attached component found, fall back to the "Default Mesh" specified.
+	*/
+	Default,
+
+	/**
+	Only use "Source" (either set explicitly or via blueprint with Set Niagara Static Mesh Component).
+	*/
+	Source,
+
+	/**
+	Only use the parent actor or component the system is attached to.
+	*/
+	AttachParent,
+
+	/**
+	Only use the "Default Mesh" specified.
+	*/
+	DefaultMeshOnly,
+};
+
 USTRUCT()
 struct FNDIStaticMeshSectionFilter
 {
@@ -48,8 +75,7 @@ public:
 
 	virtual ~FStaticMeshGpuSpawnBuffer();
 
-	void Initialise(const FStaticMeshLODResources* Res, const UNiagaraDataInterfaceStaticMesh& Interface,
-		bool bIsGpuUniformlyDistributedSampling, const TArray<int32>& ValidSection, const FStaticMeshFilteredAreaWeightedSectionSampler& SectionSampler);
+	void Initialise(const FStaticMeshLODResources* Res, const UNiagaraDataInterfaceStaticMesh& Interface, struct FNDIStaticMesh_InstanceData* InstanceData);
 
 	virtual void InitRHI() override;
 	virtual void ReleaseRHI() override;
@@ -68,6 +94,11 @@ public:
 	FRHIShaderResourceView* GetBufferUniformTriangleSamplingSRV() const { return BufferUniformTriangleSamplingSRV; }
 
 	uint32 GetNumTexCoord() const { return NumTexCoord; }
+
+	FRHIShaderResourceView* GetSocketTransformsSRV() const { return SocketTransformsSRV; }
+	FRHIShaderResourceView* GetFilteredAndUnfilteredSocketsSRV() const { return FilteredAndUnfilteredSocketsSRV; }
+	uint32 GetNumSockets() const { return NumSockets; }
+	uint32 GetNumFilteredSockets() const { return NumFilteredSockets; }
 
 protected:
 
@@ -97,28 +128,52 @@ protected:
 	FShaderResourceViewRHIRef MeshTexCoordBufferSrv;
 	uint32 NumTexCoord;
 	FShaderResourceViewRHIRef MeshColorBufferSRV;
+
+	TResourceArray<FVector4> SocketTransformsResourceArray;
+	FVertexBufferRHIRef SocketTransformsBuffer;
+	FShaderResourceViewRHIRef SocketTransformsSRV;
+
+	TResourceArray<uint16> FilteredAndUnfilteredSocketsResourceArray;
+	FVertexBufferRHIRef FilteredAndUnfilteredSocketsBuffer;
+	FShaderResourceViewRHIRef FilteredAndUnfilteredSocketsSRV;
+
+	uint32 NumSockets = 0;
+	uint32 NumFilteredSockets = 0;
+
+#if STATS
+	int64 GPUMemoryUsage = 0;
+#endif
 };
 
 struct FNDIStaticMesh_InstanceData
 {
-	 //Cached ptr to component we sample from. 
-	TWeakObjectPtr<USceneComponent> Component;
+	/** Cached ptr to StaticMeshComponent we sample from, when found. Otherwise, the SceneComponent to use to transform the Default or Preview mesh. */
+	TWeakObjectPtr<USceneComponent> SceneComponent;
 
-	//Cached ptr to actual mesh we sample from. 
-	UStaticMesh* Mesh;
+	/** Cached ptr to the mesh so that we can make sure that we haven't been deleted. */
+	TWeakObjectPtr<UStaticMesh> StaticMesh;
 
-	//Cached ComponentToWorld.
+	/** Cached ComponentToWorld. (Falls back to WorldTransform of the system instance) */
 	FMatrix Transform;
-	//InverseTranspose of above for transforming normals/tangents.
+	/** InverseTranspose of above for transforming normals/tangents. */
 	FMatrix TransformInverseTransposed;
 
-	//Cached ComponentToWorld from previous tick.
+	/** Cached ComponentToWorld from previous tick. */
 	FMatrix PrevTransform;
-	//InverseTranspose of above for transforming normals/tangents.
-	FMatrix PrevTransformInverseTransposed;
 
 	/** Time separating Transform and PrevTransform. */
 	float DeltaSeconds;
+
+	/** Velocity set by the physics body of the mesh component */
+	FVector PhysicsVelocity;
+	/** True if velocity should not be calculated via the transforms, but rather read the physics data from the mesh component */
+	uint32 bUsePhysicsVelocity : 1;
+
+	/** True if SceneComponent was valid on initialization (used to track invalidation of the component on tick) */
+	uint32 bComponentValid : 1;
+	
+	/** True if StaticMesh was valid on initialization (used to track invalidation of the mesh on tick) */
+	uint32 bMeshValid : 1;
 
 	/** True if the mesh allows CPU access. Use to reset the instance in the editor*/
 	uint32 bMeshAllowsCpuAccess : 1;
@@ -143,11 +198,16 @@ struct FNDIStaticMesh_InstanceData
 	/** The cached LODIdx used to initialize the FNDIStaticMesh_InstanceData.*/
 	int32 CachedLODIdx = 0;
 
-	FORCEINLINE UStaticMesh* GetActualMesh()const { return Mesh; }
+	/** Cached socket information, if available */
+	TArray<FTransform> CachedSockets;
+
+	/** Number of filtered sockets. */
+	int32 NumFilteredSockets = 0;
+
+	/** Filter sockets followed by unfiltered sockets */
+	TArray<uint16> FilteredAndUnfilteredSockets;
+
 	FORCEINLINE bool UsesCpuUniformlyDistributedSampling() const { return bIsCpuUniformlyDistributedSampling; }
-	FORCEINLINE bool MeshHasPositions()const { return Mesh && Mesh->RenderData->LODResources[0].VertexBuffers.PositionVertexBuffer.GetNumVertices() > 0; }
-	FORCEINLINE bool MeshHasVerts()const { return Mesh && Mesh->RenderData->LODResources[0].VertexBuffers.StaticMeshVertexBuffer.GetNumVertices() > 0; }
-	FORCEINLINE bool MeshHasColors()const { return Mesh && Mesh->RenderData->LODResources[0].VertexBuffers.ColorVertexBuffer.GetNumVertices() > 0; }
 
 	FORCEINLINE_DEBUGGABLE bool ResetRequired(UNiagaraDataInterfaceStaticMesh* Interface)const;
 
@@ -162,6 +222,8 @@ struct FNDIStaticMesh_InstanceData
 
 	FORCEINLINE const FStaticMeshLODResources* GetCurrentFirstLOD()
 	{
+		UStaticMesh* Mesh = StaticMesh.Get();
+		check(Mesh); // sanity - should have been checked for GC earlier
 		return Mesh->RenderData->GetCurrentFirstLOD(MinLOD);
 	}
 };
@@ -182,6 +244,10 @@ public:
 	};
 
 	DECLARE_NIAGARA_DI_PARAMETER();
+
+	/** Controls how to retrieve the Static Mesh Component to attach to. */
+	UPROPERTY(EditAnywhere, Category = "Mesh")
+	ENDIStaticMesh_SourceMode SourceMode;
 	
 #if WITH_EDITORONLY_DATA
 	/** Mesh used to sample from when not overridden by a source actor from the scene. Only available in editor for previewing. This is removed in cooked builds. */
@@ -205,6 +271,14 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Mesh")
 	FNDIStaticMeshSectionFilter SectionFilter;
 
+	/** If true then the mesh velocity is taken from the mesh component's physics data. Otherwise it will be calculated by diffing the component transforms between ticks, which is more reliable but won't work on the first frame. */
+	UPROPERTY(EditAnywhere, AdvancedDisplay, Category = "Mesh")
+    bool bUsePhysicsBodyVelocity;
+
+	/** List of filtered sockets to use. */
+	UPROPERTY(EditAnywhere, Category = "Mesh")
+	TArray<FName> FilteredSockets;
+
     /** Changed within the editor on PostEditChangeProperty. Should be changed whenever a refresh is desired.*/
 	uint32 ChangeId;
 
@@ -215,6 +289,7 @@ public:
 	virtual void PostInitProperties()override;
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual bool CanEditChange(const FProperty* InProperty) const override;
 #endif
 
 public:
@@ -230,8 +305,11 @@ public:
 	virtual void GetVMExternalFunction(const FVMExternalFunctionBindingInfo& BindingInfo, void* InstanceData, FVMExternalFunction &OutFunc) override;
 	virtual bool Equals(const UNiagaraDataInterface* Other) const override;
 	virtual bool CanExecuteOnTarget(ENiagaraSimTarget Target) const override { return true; }
+	virtual bool HasPreSimulateTick() const override { return true; }
+
 #if WITH_EDITOR
-	virtual TArray<FNiagaraDataInterfaceError> GetErrors() override;
+	virtual void GetFeedback(UNiagaraSystem* Asset, UNiagaraComponent* Component, TArray<FNiagaraDataInterfaceError>& OutErrors,
+		TArray<FNiagaraDataInterfaceFeedback>& OutWarnings, TArray<FNiagaraDataInterfaceFeedback>& OutInfo) override;
 #endif
 
 	virtual void GetParameterDefinitionHLSL(const FNiagaraDataInterfaceGPUParamInfo& ParamInfo, FString& OutHLSL) override;
@@ -250,13 +328,20 @@ public:
 	static const FString InstanceTransformName;
 	static const FString InstanceTransformInverseTransposedName;
 	static const FString InstancePrevTransformName;
+	static const FString InstanceRotationName;
+	static const FString InstancePrevRotationName;
 	static const FString InstanceInvDeltaTimeName;
 	static const FString InstanceWorldVelocityName;
 	static const FString AreaWeightedSamplingName;
 	static const FString NumTexCoordName;
 	static const FString UseColorBufferName;
+	static const FString SocketTransformsName;
+	static const FString FilteredAndUnfilteredSocketsName;
+	static const FString NumSocketsAndFilteredName;
 
 public:
+	UStaticMesh* GetStaticMesh(TWeakObjectPtr<USceneComponent>& OutComponent, class FNiagaraSystemInstance* SystemInstance = nullptr);
+
 	void IsValid(FVectorVMContext& Context);
 
 	template<typename TSampleMode>
@@ -292,6 +377,17 @@ public:
 
 	template<typename TransformHandlerType>
 	void GetVertexPosition(FVectorVMContext& Context);
+
+	// Socket Functions
+	void GetSocketCount(FVectorVMContext& Context);
+	void GetFilteredSocketCount(FVectorVMContext& Context);
+	void GetUnfilteredSocketCount(FVectorVMContext& Context);
+	template<bool bWorldSpace>
+	void GetSocketTransform(FVectorVMContext& Context);
+	template<bool bWorldSpace>
+	void GetFilteredSocketTransform(FVectorVMContext& Context);
+	template<bool bWorldSpace>
+	void GetUnfilteredSocketTransform(FVectorVMContext& Context);
 
 	void SetSourceComponentFromBlueprints(UStaticMeshComponent* ComponentToUse);
 	void SetDefaultMeshFromBlueprints(UStaticMesh* MeshToUse);

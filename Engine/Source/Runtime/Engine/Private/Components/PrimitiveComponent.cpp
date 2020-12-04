@@ -37,6 +37,7 @@
 
 #if WITH_EDITOR
 #include "Engine/LODActor.h"
+#include "Rendering/StaticLightingSystemInterface.h"
 #endif // WITH_EDITOR
 
 #if DO_CHECK
@@ -329,6 +330,7 @@ UPrimitiveComponent::UPrimitiveComponent(const FObjectInitializer& ObjectInitial
 	LpvBiasMultiplier = 1.0f;
 	bCastStaticShadow = true;
 	bCastVolumetricTranslucentShadow = false;
+	bCastContactShadow = true;
 	IndirectLightingCacheQuality = ILCQ_Point;
 	bSelectable = true;
 	bFillCollisionUnderneathForNavmesh = false;
@@ -337,6 +339,7 @@ UPrimitiveComponent::UPrimitiveComponent(const FObjectInitializer& ObjectInitial
 	SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
 	bAlwaysCreatePhysicsState = false;
 	bVisibleInReflectionCaptures = true;
+	bVisibleInRealTimeSkyCaptures = true;
 	bVisibleInRayTracing = true;
 	bRenderInMainPass = true;
 	bRenderInDepthPass = true;
@@ -470,7 +473,7 @@ void UPrimitiveComponent::GetStreamingRenderAssetInfoWithNULLRemoval(FStreamingT
 		for (int32 Index = 0; Index < OutStreamingRenderAssets.Num(); Index++)
 		{
 			const FStreamingRenderAssetPrimitiveInfo& Info = OutStreamingRenderAssets[Index];
-			if (!IsStreamingRenderAsset(Info.RenderAsset))
+			if (!Info.RenderAsset || !Info.RenderAsset->IsStreamable())
 			{
 				OutStreamingRenderAssets.RemoveAtSwap(Index--);
 			}
@@ -613,6 +616,13 @@ void UPrimitiveComponent::OnRegister()
 		bNavigationRelevant = false;
 	}
 
+#if WITH_EDITOR
+	if (HasValidSettingsForStaticLighting(false))
+	{
+		FStaticLightingSystemInterface::OnPrimitiveComponentRegistered.Broadcast(this);
+	}
+#endif
+
 	// Update our Owner's LastRenderTime
 	SetLastRenderTime(LastRenderTime);
 }
@@ -642,6 +652,10 @@ void UPrimitiveComponent::OnUnregister()
 	{
 		FNavigationSystem::OnComponentUnregistered(*this);
 	}
+
+#if WITH_EDITOR
+	FStaticLightingSystemInterface::OnPrimitiveComponentUnregistered.Broadcast(this);
+#endif
 }
 
 FPrimitiveComponentInstanceData::FPrimitiveComponentInstanceData(const UPrimitiveComponent* SourceComponent)
@@ -1257,6 +1271,9 @@ void UPrimitiveComponent::PostEditImport()
 	{
 		BodyInstance.FixupData(this);
 	}
+
+	// Setup the transient internal primitive data array here after import (to support duplicate/paste)
+	ResetCustomPrimitiveData();
 }
 #endif
 
@@ -1697,7 +1714,8 @@ void UPrimitiveComponent::ResetCustomPrimitiveData()
 	CustomPrimitiveDataInternal.Data = CustomPrimitiveData.Data;
 }
 
-void UPrimitiveComponent::SetCustomPrimitiveDataInternal(int32 DataIndex, const TArray<float>& Values)
+/** Attempt to set the primitive data and return true if successful */
+bool SetPrimitiveData(FCustomPrimitiveData& PrimitiveData, int32 DataIndex, const TArray<float>& Values)
 {
 	// Can only set data on valid indices and only if there's actually any data to set
 	if (DataIndex >= 0 && DataIndex < FCustomPrimitiveData::NumCustomPrimitiveDataFloats && Values.Num() > 0)
@@ -1709,22 +1727,41 @@ void UPrimitiveComponent::SetCustomPrimitiveDataInternal(int32 DataIndex, const 
 		const int32 NumValuesToSet = FMath::Min(Values.Num(), FCustomPrimitiveData::NumCustomPrimitiveDataFloats - DataIndex);
 
 		// If trying to set data on an index which doesn't exist yet, allocate up to it
-		if (NeededFloats > CustomPrimitiveDataInternal.Data.Num())
+		if (NeededFloats > PrimitiveData.Data.Num())
 		{
-			CustomPrimitiveDataInternal.Data.SetNumZeroed(NeededFloats);
+			PrimitiveData.Data.SetNumZeroed(NeededFloats);
 		}
 
 		// Only update data if it has changed
-		if (FMemory::Memcmp(&CustomPrimitiveDataInternal.Data[DataIndex], Values.GetData(), NumValuesToSet * sizeof(float)) != 0)
+		if (FMemory::Memcmp(&PrimitiveData.Data[DataIndex], Values.GetData(), NumValuesToSet * sizeof(float)) != 0)
 		{
-			FMemory::Memcpy(&CustomPrimitiveDataInternal.Data[DataIndex], Values.GetData(), NumValuesToSet * sizeof(float));
+			FMemory::Memcpy(&PrimitiveData.Data[DataIndex], Values.GetData(), NumValuesToSet * sizeof(float));
 
-			UWorld* World = GetWorld();
-			if (World && World->Scene)
-			{
-				World->Scene->UpdateCustomPrimitiveData(this);
-			}
+			return true;
 		}
+	}
+
+	return false;
+}
+
+void UPrimitiveComponent::SetCustomPrimitiveDataInternal(int32 DataIndex, const TArray<float>& Values)
+{
+	if (SetPrimitiveData(CustomPrimitiveDataInternal, DataIndex, Values))
+	{
+		UWorld* World = GetWorld();
+		if (World && World->Scene)
+		{
+			World->Scene->UpdateCustomPrimitiveData(this);
+		}
+	}
+}
+
+void UPrimitiveComponent::SetDefaultCustomPrimitiveData(int32 DataIndex, const TArray<float>& Values)
+{
+	if (SetPrimitiveData(CustomPrimitiveData, DataIndex, Values))
+	{
+		ResetCustomPrimitiveData();
+		MarkRenderStateDirty();
 	}
 }
 
@@ -1746,6 +1783,26 @@ void UPrimitiveComponent::SetCustomPrimitiveDataVector3(int32 DataIndex, FVector
 void UPrimitiveComponent::SetCustomPrimitiveDataVector4(int32 DataIndex, FVector4 Value)
 {
 	SetCustomPrimitiveDataInternal(DataIndex, {Value.X, Value.Y, Value.Z, Value.W});
+}
+
+void UPrimitiveComponent::SetDefaultCustomPrimitiveDataFloat(int32 DataIndex, float Value)
+{
+	SetDefaultCustomPrimitiveData(DataIndex, { Value });
+}
+
+void UPrimitiveComponent::SetDefaultCustomPrimitiveDataVector2(int32 DataIndex, FVector2D Value)
+{
+	SetDefaultCustomPrimitiveData(DataIndex, { Value.X, Value.Y });
+}
+
+void UPrimitiveComponent::SetDefaultCustomPrimitiveDataVector3(int32 DataIndex, FVector Value)
+{
+	SetDefaultCustomPrimitiveData(DataIndex, { Value.X, Value.Y, Value.Z });
+}
+
+void UPrimitiveComponent::SetDefaultCustomPrimitiveDataVector4(int32 DataIndex, FVector4 Value)
+{
+	SetDefaultCustomPrimitiveData(DataIndex, { Value.X, Value.Y, Value.Z, Value.W });
 }
 
 UMaterialInterface* UPrimitiveComponent::GetMaterialFromCollisionFaceIndex(int32 FaceIndex, int32& SectionIndex) const
@@ -2148,7 +2205,7 @@ bool UPrimitiveComponent::MoveComponentImpl( const FVector& Delta, const FQuat& 
 					{
 						if (!ShouldIgnoreHitResult(MyWorld, TestHit, Delta, Actor, MoveFlags))
 						{
-							if (TestHit.Time == 0.f)
+							if (TestHit.bStartPenetrating)
 							{
 								// We may have multiple initial hits, and want to choose the one with the normal most opposed to our movement.
 								const float NormalDotDelta = (TestHit.ImpactNormal | Delta);
@@ -2440,7 +2497,8 @@ bool UPrimitiveComponent::IsNavigationRelevant() const
 
 FBox UPrimitiveComponent::GetNavigationBounds() const
 {
-	return Bounds.GetBox();
+	// Return invalid box when retrieving NavigationBounds before they are being computed at component registration
+	return bRegistered ? Bounds.GetBox() : FBox(ForceInit);
 }
 
 //////////////////////////////////////////////////////////////////////////

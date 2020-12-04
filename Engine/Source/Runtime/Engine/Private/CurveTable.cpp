@@ -124,11 +124,6 @@ void UCurveTable::Serialize(FArchive& Ar)
 				FSimpleCurve* NewCurve = new FSimpleCurve();
 				FSimpleCurve::StaticStruct()->SerializeTaggedProperties(Ar, (uint8*)NewCurve, FSimpleCurve::StaticStruct(), nullptr);
 
-				if (!GIsEditor && CVar_CurveTable_RemoveRedundantKeys > 0)
-				{
-					NewCurve->RemoveRedundantKeys(0.f);
-				}
-
 				// Add to map
 				RowMap.Add(RowName, NewCurve);
 			}
@@ -136,11 +131,6 @@ void UCurveTable::Serialize(FArchive& Ar)
 			{
 				FRichCurve* NewCurve = new FRichCurve();
 				FRichCurve::StaticStruct()->SerializeTaggedProperties(Ar, (uint8*)NewCurve, FRichCurve::StaticStruct(), nullptr);
-
-				if (!GIsEditor && CVar_CurveTable_RemoveRedundantKeys > 0)
-				{
-					NewCurve->RemoveRedundantKeys(0.f);
-				}
 
 				// Add to map
 				RowMap.Add(RowName, NewCurve);
@@ -205,12 +195,20 @@ void UCurveTable::Serialize(FArchive& Ar)
 			if (CurveTableMode == ECurveTableMode::SimpleCurves)
 			{
 				FSimpleCurve* Curve = (FSimpleCurve*)RowIt.Value();
+				if (Ar.IsCooking() && Ar.IsPersistent() && !Ar.IsObjectReferenceCollector() && !Ar.ShouldSkipBulkData() && CVar_CurveTable_RemoveRedundantKeys > 0)
+				{
+					Curve->RemoveRedundantKeys(0.f);
+				}
 				FSimpleCurve::StaticStruct()->SerializeTaggedProperties(Ar, (uint8*)Curve, FSimpleCurve::StaticStruct(), nullptr);
 			}
 			else
 			{
 				check(CurveTableMode == ECurveTableMode::RichCurves);
 				FRichCurve* Curve = (FRichCurve*)RowIt.Value();
+				if (Ar.IsCooking() && Ar.IsPersistent() && !Ar.IsObjectReferenceCollector() && !Ar.ShouldSkipBulkData() && CVar_CurveTable_RemoveRedundantKeys > 0)
+				{
+					Curve->RemoveRedundantKeys(0.f);
+				}
 				FRichCurve::StaticStruct()->SerializeTaggedProperties(Ar, (uint8*)Curve, FRichCurve::StaticStruct(), nullptr);
 			}
 		}
@@ -224,7 +222,7 @@ void UCurveTable::Serialize(FArchive& Ar)
 			const size_t SizeOfDirectCurveAllocs = sizeof(FSimpleCurve) * RowMap.Num();
 			Ar.CountBytes(SizeOfDirectCurveAllocs, SizeOfDirectCurveAllocs);
 
-			for (const TPair<FName, FRealCurve*> CurveRow : RowMap)
+			for (const TPair<FName, FRealCurve*>& CurveRow : RowMap)
 			{
 				FSimpleCurve* Curve = (FSimpleCurve*)CurveRow.Value;
 				Curve->Keys.CountBytes(Ar);
@@ -235,7 +233,7 @@ void UCurveTable::Serialize(FArchive& Ar)
 			const size_t SizeOfDirectCurveAllocs = sizeof(FRichCurve) * RowMap.Num();
 			Ar.CountBytes(SizeOfDirectCurveAllocs, SizeOfDirectCurveAllocs);
 
-			for (const TPair<FName, FRealCurve*> CurveRow : RowMap)
+			for (const TPair<FName, FRealCurve*>& CurveRow : RowMap)
 			{
 				FRichCurve* Curve = (FRichCurve*)CurveRow.Value;
 				Curve->Keys.CountBytes(Ar);

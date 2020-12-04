@@ -32,6 +32,7 @@ class UPhysicalMaterial;
 class UPhysicalMaterialMask;
 class USubsurfaceProfile;
 class UTexture;
+class UMaterialInstance;
 struct FMaterialParameterInfo;
 struct FMaterialResourceLocOnDisk;
 #if WITH_EDITORONLY_DATA
@@ -60,6 +61,7 @@ enum EMaterialUsage
 	MATUSAGE_Water,
 	MATUSAGE_HairStrands,
 	MATUSAGE_LidarPointCloud,
+	MATUSAGE_VirtualHeightfieldMesh,
 
 	MATUSAGE_MAX,
 };
@@ -333,6 +335,11 @@ public:
 	virtual bool IsDependent(UMaterialInterface* TestDependency) { return TestDependency == this; }
 
 	/**
+	 * Same as above, but can be called concurrently
+	 */
+	virtual bool IsDependent_Concurrent(UMaterialInterface* TestDependency, TMicRecursionGuard RecursionGuard = TMicRecursionGuard()) { return TestDependency == this; }
+
+	/**
 	* Return a pointer to the FMaterialRenderProxy used for rendering.
 	* @param	Selected	specify true to return an alternate material used for rendering this material when part of a selection
 	*						@note: only valid in the editor!
@@ -572,6 +579,9 @@ public:
 		PURE_VIRTUAL(UMaterialInterface::GetStaticSwitchParameterDefaultValue,return false;);
 	virtual bool GetStaticComponentMaskParameterDefaultValue(const FHashedMaterialParameterInfo& ParameterInfo, bool& OutR, bool& OutG, bool& OutB, bool& OutA, FGuid& OutExpressionGuid, bool bCheckOwnedGlobalOverrides = false) const
 		PURE_VIRTUAL(UMaterialInterface::GetStaticComponentMaskParameterDefaultValue,return false;);
+	/** Add to the set any texture referenced by expressions, including nested functions, as well as any overrides from parameters. */
+	virtual void GetReferencedTexturesAndOverrides(TSet<const UTexture*>& InOutTextures) const
+		PURE_VIRTUAL(UMaterialInterface::GetReferencedTexturesAndOverrides, );
 #endif // WITH_EDITOR
 
 	virtual int32 GetLayerParameterIndex(EMaterialParameterAssociation Association, UMaterialFunctionInterface * LayerFunction) const
@@ -973,5 +983,13 @@ extern void SerializeInlineShaderMaps(
 	TArray<FMaterialResource>& OutLoadedResources,
 	uint32* OutOffsetToFirstResource = nullptr);
 /** Helper function to process (register) serialized inline shader maps for the given material resources. */
-extern void ProcessSerializedInlineShaderMaps(UMaterialInterface* Owner, TArray<FMaterialResource>& LoadedResources, FMaterialResource* (&OutMaterialResourcesLoaded)[EMaterialQualityLevel::Num][ERHIFeatureLevel::Num]);
+extern void ProcessSerializedInlineShaderMaps(UMaterialInterface* Owner, TArray<FMaterialResource>& LoadedResources, TArray<FMaterialResource*>& OutMaterialResourcesLoaded);
 
+extern FMaterialResource* FindMaterialResource(const TArray<FMaterialResource*>& MaterialResources, ERHIFeatureLevel::Type InFeatureLevel, EMaterialQualityLevel::Type QualityLevel, bool bAllowDefaultQuality);
+extern FMaterialResource* FindMaterialResource(TArray<FMaterialResource*>& MaterialResources, ERHIFeatureLevel::Type InFeatureLevel, EMaterialQualityLevel::Type QualityLevel, bool bAllowDefaultQuality);
+
+extern FMaterialResource* FindOrCreateMaterialResource(TArray<FMaterialResource*>& MaterialResources,
+	UMaterial* OwnerMaterial,
+	UMaterialInstance* OwnerMaterialInstance,
+	ERHIFeatureLevel::Type InFeatureLevel,
+	EMaterialQualityLevel::Type QualityLevel);

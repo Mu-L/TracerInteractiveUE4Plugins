@@ -5,7 +5,9 @@
 #include "CoreMinimal.h"
 #include "Stats/Stats.h"
 #include "Debugging/SlateDebugging.h"
+#include "Trace/SlateTrace.h"
 
+// Enabled cvar GSlateCheckUObjectRenderResources that will check for invalid reference in the slate resources manager
 #define SLATE_CHECK_UOBJECT_RENDER_RESOURCES !UE_BUILD_SHIPPING
 
 #ifndef SLATE_CULL_WIDGETS
@@ -26,6 +28,11 @@
 
 #ifndef SLATE_VERBOSE_NAMED_EVENTS
 	#define SLATE_VERBOSE_NAMED_EVENTS !UE_BUILD_SHIPPING
+#endif
+
+/** Generate an unique identifier  */
+#ifndef UE_SLATE_WITH_WIDGET_UNIQUE_IDENTIFIER
+	#define UE_SLATE_WITH_WIDGET_UNIQUE_IDENTIFIER UE_SLATE_TRACE_ENABLED || WITH_SLATE_DEBUGGING
 #endif
 
 // HOW TO GET AN IN-DEPTH PERFORMANCE ANALYSIS OF SLATE
@@ -50,7 +57,7 @@ DECLARE_STATS_GROUP_VERBOSE(TEXT("SlateVerbose"), STATGROUP_SlateVerbose, STATCA
 DECLARE_STATS_GROUP_MAYBE_COMPILED_OUT(TEXT("SlateVeryVerbose"), STATGROUP_SlateVeryVerbose, STATCAT_Advanced, WITH_VERY_VERBOSE_SLATE_STATS);
 
 /** Whether or not we've enabled fast widget pathing which validates paths to widgets without arranging children. */
-extern SLATECORE_API int32 GSlateFastWidgetPath;
+extern SLATECORE_API bool GSlateFastWidgetPath;
 
 extern SLATECORE_API bool GSlateEnableGlobalInvalidation;
 
@@ -58,8 +65,15 @@ extern SLATECORE_API bool GSlateIsOnFastUpdatePath;
 
 extern SLATECORE_API bool GSlateIsInInvalidationSlowPath;
 
+extern SLATECORE_API int32 GSlateLayoutGeneration;
+
+#if SLATE_CHECK_UOBJECT_RENDER_RESOURCES 
+extern SLATECORE_API bool GSlateCheckUObjectRenderResources;
+// When we detect a none valid resource, should we log a fatal error (crash) or log it (ensure).
+extern SLATECORE_API bool GSlateCheckUObjectRenderResourcesShouldLogFatal;
+#endif
+
 #if WITH_SLATE_DEBUGGING
-extern SLATECORE_API bool GSlateInvalidationDebugging;
 extern SLATECORE_API bool GSlateHitTestGridDebugging;
 #endif
 /* Forward declarations

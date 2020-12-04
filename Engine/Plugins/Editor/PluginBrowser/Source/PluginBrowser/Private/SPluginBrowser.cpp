@@ -14,6 +14,7 @@
 #include "PluginStyle.h"
 #include "Widgets/Navigation/SBreadcrumbTrail.h"
 #include "SPluginCategoryTree.h"
+#include "SPluginTile.h"
 #include "Widgets/Input/SSearchBox.h"
 #include "PluginBrowserModule.h"
 #include "IDirectoryWatcher.h"
@@ -82,12 +83,11 @@ void SPluginBrowser::Construct( const FArguments& Args )
 
 	struct Local
 	{
-		static void PluginToStringArray( const IPlugin* Plugin, OUT TArray< FString >& StringArray )
+		static void PluginToStringArray(const IPlugin* Plugin, OUT TArray< FString >& StringArray)
 		{
-			// NOTE: Only the friendly name is searchable for now.  We don't display the actual plugin name in the UI.
 			const FPluginDescriptor& Descriptor = Plugin->GetDescriptor();
-			StringArray.Add( Descriptor.FriendlyName );
-			StringArray.Add( Descriptor.Description );
+			StringArray.Add(Plugin->GetFriendlyName());
+			StringArray.Add(Descriptor.Description);
 		}
 	};
 
@@ -269,6 +269,15 @@ void SPluginBrowser::Construct( const FArguments& Args )
 	];
 }
 
+void SPluginBrowser::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
+{
+	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+
+	if (!bInitialFocusTaken)
+	{
+		bInitialFocusTaken = FSlateApplication::Get().SetKeyboardFocus(SearchBoxPtr);
+	}
+}
 
 EVisibility SPluginBrowser::HandleRestartEditorNoticeVisibility() const
 {
@@ -291,7 +300,7 @@ void SPluginBrowser::SearchBox_OnPluginSearchTextChanged( const FText& NewText )
 
 TSharedPtr< FPluginCategory > SPluginBrowser::GetSelectedCategory() const
 {
-	return PluginCategories->GetSelectedCategory();
+	return PluginCategories.IsValid() ? PluginCategories->GetSelectedCategory() : nullptr;
 }
 
 
@@ -390,7 +399,7 @@ void SPluginBrowser::BreadcrumbTrail_OnCrumbClicked( const TSharedPtr<FPluginCat
 
 FReply SPluginBrowser::HandleNewPluginButtonClicked() const
 {
-	FGlobalTabmanager::Get()->InvokeTab( FPluginBrowserModule::PluginCreatorTabName );
+	FGlobalTabmanager::Get()->TryInvokeTab( FPluginBrowserModule::PluginCreatorTabName );
 
 	return FReply::Handled();
 }

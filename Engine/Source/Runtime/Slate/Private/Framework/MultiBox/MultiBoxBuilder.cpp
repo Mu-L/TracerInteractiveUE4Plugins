@@ -216,15 +216,20 @@ void FMenuBuilder::EndSection()
 
 void FMenuBuilder::AddMenuSeparator(FName InExtensionHook)
 {
+	AddSeparator(InExtensionHook);
+}
+
+void FMenuBuilder::AddSeparator(FName InExtensionHook /*= NAME_None*/)
+{
 	ApplySectionBeginning();
 
 	ApplyHook(InExtensionHook, EExtensionHook::Before);
 
 	// Never add a menu separate as the first item, even if we were asked to
-	if( MultiBox->GetBlocks().Num() > 0 || FMultiBoxSettings::DisplayMultiboxHooks.Get() )
+	if (MultiBox->GetBlocks().Num() > 0 || FMultiBoxSettings::DisplayMultiboxHooks.Get())
 	{
-		TSharedRef< FMenuSeparatorBlock > NewMenuSeparatorBlock( new FMenuSeparatorBlock(InExtensionHook, /* bInIsPartOfHeading=*/ false) );
-		MultiBox->AddMultiBlock( NewMenuSeparatorBlock );
+		TSharedRef< FMenuSeparatorBlock > NewMenuSeparatorBlock(new FMenuSeparatorBlock(InExtensionHook, /* bInIsPartOfHeading=*/ false));
+		MultiBox->AddMultiBlock(NewMenuSeparatorBlock);
 	}
 
 	ApplyHook(InExtensionHook, EExtensionHook::After);
@@ -302,22 +307,21 @@ void FMenuBuilder::AddWidget( TSharedRef<SWidget> InWidget, const FText& Label, 
 
 void FMenuBuilder::AddSearchWidget()
 {
-	MultiBox->SearchTextWidget = SNew(STextBlock)
-		.Visibility( EVisibility::Visible )
-		.Text( FText::FromString("Search Start") );
-
-	AddWidget( MultiBox->SearchTextWidget.ToSharedRef(), FText::GetEmpty(), false, false );
+	MultiBox->bHasSearchWidget = true;
 }
 
 void FMenuBuilder::ApplyHook(FName InExtensionHook, EExtensionHook::Position HookPosition)
 {
-	// this is a virtual function to get a properly typed "this" pointer
-	auto& Extender = ExtenderStack.Top();
-	if (InExtensionHook != NAME_None && Extender.IsValid())
+	if (ExtendersEnabled())
 	{
-		if (!MultiBox->IsInEditMode())
+		// this is a virtual function to get a properly typed "this" pointer
+		auto& Extender = ExtenderStack.Top();
+		if (InExtensionHook != NAME_None && Extender.IsValid())
 		{
-			Extender->Apply(InExtensionHook, HookPosition, *this);
+			if (!MultiBox->IsInEditMode())
+			{
+				Extender->Apply(InExtensionHook, HookPosition, *this);
+			}
 		}
 	}
 }
@@ -325,8 +329,8 @@ void FMenuBuilder::ApplyHook(FName InExtensionHook, EExtensionHook::Position Hoo
 void FMenuBuilder::ApplySectionBeginning()
 {
 	if (bSectionNeedsToBeApplied)
-	{
-		// Do not count search block, which starts as invisible
+	{			
+        // Do not count search block, which starts as invisible
 		if( MultiBox->GetBlocks().Num() > 1 || FMultiBoxSettings::DisplayMultiboxHooks.Get() )
 		{
 			MultiBox->AddMultiBlock( MakeShareable( new FMenuSeparatorBlock(CurrentSectionExtensionHook, /* bInIsPartOfHeading=*/ true) ) );
@@ -360,11 +364,14 @@ void FMenuBarBuilder::AddPullDownMenu(const FText& InMenuLabel, const FText& InT
 
 void FMenuBarBuilder::ApplyHook(FName InExtensionHook, EExtensionHook::Position HookPosition)
 {
-	// this is a virtual function to get a properly typed "this" pointer
-	auto& Extender = ExtenderStack.Top();
-	if (InExtensionHook != NAME_None && Extender.IsValid())
+	if (ExtendersEnabled())
 	{
-		Extender->Apply(InExtensionHook, HookPosition, *this);
+		// this is a virtual function to get a properly typed "this" pointer
+		auto& Extender = ExtenderStack.Top();
+		if (InExtensionHook != NAME_None && Extender.IsValid())
+		{
+			Extender->Apply(InExtensionHook, HookPosition, *this);
+		}
 	}
 }
 
@@ -537,11 +544,14 @@ void FToolBarBuilder::EndSection()
 
 void FToolBarBuilder::ApplyHook(FName InExtensionHook, EExtensionHook::Position HookPosition)
 {
-	// this is a virtual function to get a properly typed "this" pointer
-	auto& Extender = ExtenderStack.Top();
-	if (InExtensionHook != NAME_None && Extender.IsValid())
+	if (ExtendersEnabled())
 	{
-		Extender->Apply(InExtensionHook, HookPosition, *this);
+		// this is a virtual function to get a properly typed "this" pointer
+		auto& Extender = ExtenderStack.Top();
+		if (InExtensionHook != NAME_None && Extender.IsValid())
+		{
+			Extender->Apply(InExtensionHook, HookPosition, *this);
+		}
 	}
 }
 

@@ -11,8 +11,18 @@ public class DynamicMesh : ModuleRules
         PublicDependencyModuleNames.AddRange(
 			new string[] {
 				"Core",
-				"GeometricObjects"
+				"GeometricObjects",
+				"GeometryAlgorithms",
+
+				"MeshUtilitiesCommon"		// currently required for FAllocator2D used in FDynamicMeshUVPacker
 			}
-			);
+		);
+
+		PrivateDependencyModuleNames.AddRange(
+			new string[] {
+				"Eigen"
+			}
+		);
+
 	}
 }

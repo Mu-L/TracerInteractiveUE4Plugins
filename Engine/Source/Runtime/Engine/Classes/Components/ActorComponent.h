@@ -25,6 +25,9 @@ class ULevel;
 class UWorld;
 class UPrimitiveComponent;
 
+
+ENGINE_API extern int32 GEnableDeferredPhysicsCreation;
+
 class FRegisterComponentContext
 {
 public:
@@ -282,6 +285,9 @@ private:
 	/** Tracks whether the component has been added to one of the world's end of frame update lists */
 	uint8 MarkedForEndOfFrameUpdateState:2;
 
+	/** Tracks whether the component has been added to the world's pre end of frame sync list */
+	uint8 bMarkedForPreEndOfFrameSync : 1;
+
 public:
 	/** Describes how a component instance will be created */
 	UPROPERTY()
@@ -309,6 +315,9 @@ public:
 
 	/** Tracks whether the component has been added to one of the world's end of frame update lists */
 	uint32 GetMarkedForEndOfFrameUpdateState() const { return MarkedForEndOfFrameUpdateState; }
+
+	/** Tracks whether the component has been added to one of the world's end of frame update lists */
+	uint32 GetMarkedForPreEndOfFrameSync() const { return bMarkedForPreEndOfFrameSync; }
 
 	/** Initializes the list of properties that are modified by the UserConstructionScript */
 	void DetermineUCSModifiedProperties();
@@ -354,6 +363,13 @@ public:
 	/** Follow the Outer chain to get the  AActor  that 'Owns' this component */
 	UFUNCTION(BlueprintCallable, Category="Components", meta=(Keywords = "Actor Owning Parent"))
 	AActor* GetOwner() const;
+
+	/** Templated version of GetOwner(), will return nullptr if cast fails */
+	template< class T >
+	T* GetOwner() const
+	{
+		return Cast<T>(GetOwner());
+	}
 
 	/** Getter for the cached world pointer, will return null if the component is not actually spawned in a level */
 	virtual UWorld* GetWorld() const override final { return (WorldPrivate ? WorldPrivate : GetWorld_Uncached()); }
@@ -424,7 +440,7 @@ public:
 	void SetTickableWhenPaused(bool bTickableWhenPaused);
 
 	/** Create any physics engine information for this component */
-	void CreatePhysicsState();
+	void CreatePhysicsState(bool bAllowDeferral = false);
 
 	/** Shut down any physics engine structure for this component */
 	void DestroyPhysicsState();
@@ -508,6 +524,9 @@ public:
 
 	/** Allows components to handle an EOF update happening mid tick. Can be used to block on in-flight async tasks etc. This should ensure the the component's tick is complete so that it's render update is correct. */
 	virtual void OnEndOfFrameUpdateDuringTick() {}
+
+	/** Allows components to wait on outstanding tasks prior to sending EOF update data. Executed on Game Thread and may await tasks. */
+	virtual void OnPreEndOfFrameSync() {}
 
 private:
 	/** Cached pointer to owning actor */
@@ -688,6 +707,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Utilities")
 	void SetComponentTickInterval(float TickInterval);
 
+	/**
+	* Sets the tick interval for this component's primary tick function. Does not enable the tick interval. Takes effect imediately.
+	* @param TickInterval	The duration between ticks for this component's primary tick function
+	*/
+	UFUNCTION(BlueprintCallable, Category = "Utilities")
+	void SetComponentTickIntervalAndCooldown(float TickInterval);
+
 	/** Returns the tick interval for this component's primary tick function, which is the frequency in seconds at which it will be executed */
 	UFUNCTION(BlueprintCallable, Category="Utilities")
 	float GetComponentTickInterval() const;
@@ -780,6 +806,9 @@ public:
 	/** return true if this component requires end of frame recreates to happen from the game thread. */
 	virtual bool RequiresGameThreadEndOfFrameRecreate() const;
 
+	/** return true if this component needs to sync to tasks before end of frame updates are executed */
+	virtual bool RequiresPreEndOfFrameSync() const;
+
 	/** 
 	 * Recreate the render state right away. Generally you always want to call MarkRenderStateDirty instead. 
 	 * @warning This is called concurrently on multiple threads (but never the same component concurrently)
@@ -855,6 +884,7 @@ public:
 	virtual void PreEditUndo() override;
 	virtual void PostEditUndo() override;
 	virtual bool IsSelectedInEditor() const override;
+	virtual void SetPackageExternal(bool bExternal, bool bShouldDirty) {}
 #endif // WITH_EDITOR
 	//~ End UObject Interface.
 

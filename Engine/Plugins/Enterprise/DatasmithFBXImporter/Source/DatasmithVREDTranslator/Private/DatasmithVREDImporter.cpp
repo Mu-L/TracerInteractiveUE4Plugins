@@ -885,8 +885,21 @@ TSharedPtr<IDatasmithActorElement> FDatasmithVREDImporter::ConvertNode(const TSh
 		LightActor->SetColor(Light->DiffuseColor);
 		LightActor->SetTemperature(Light->Temperature);
 		LightActor->SetUseTemperature(Light->UseTemperature);
-		LightActor->SetIesFile(*Light->IESPath);
 		LightActor->SetUseIes(Light->UseIESProfile);
+		if (Light->UseIESProfile && !Light->IESPath.IsEmpty())
+		{
+			// Create IES texture
+			const FString BaseFilename = FPaths::GetBaseFilename(Light->IESPath);
+			FString TextureName = FDatasmithUtils::SanitizeObjectName(BaseFilename + TEXT("_IES"));
+			TSharedPtr<IDatasmithTextureElement> Texture = FDatasmithSceneFactory::CreateTexture(*TextureName);
+			Texture->SetTextureMode(EDatasmithTextureMode::Ies);
+			Texture->SetLabel(*BaseFilename);
+			Texture->SetFile(*Light->IESPath);
+			DatasmithScene->AddTexture(Texture);
+
+			// Assign IES texture to light
+			LightActor->SetIesTexturePathName(*TextureName);
+		}
 
 		ActorElement = LightActor;
 	}
@@ -918,7 +931,7 @@ TSharedPtr<IDatasmithActorElement> FDatasmithVREDImporter::ConvertNode(const TSh
 	ActorElement->SetTranslation(Transform.GetTranslation());
 	ActorElement->SetScale(Transform.GetScale3D());
 	ActorElement->SetRotation(Transform.GetRotation());
-	ActorElement->SetVisibility( FMath::IsNearlyZero( Node->Visibility ) );
+	ActorElement->SetVisibility( Node->Visibility >= 0.5f );
 
 #if !REVERSE_ATTACH_ORDER
 	for (int32 Index = 0; Index < Node->Children.Num(); Index++)
@@ -1116,6 +1129,18 @@ namespace VREDImporterImpl
 		}
 
 		return FString();
+	}
+
+	/* Recursively propagate the visibility so that hidden parents hide their children, like in VRED */
+	void PropagateVisibility( TSharedPtr<FDatasmithFBXSceneNode>& Node, bool bRollingVisibility = true )
+	{
+		bool bNewVisibility = ( Node->Visibility >= 0.5f ) && bRollingVisibility;
+		Node->Visibility = bNewVisibility ? 1.0f : 0.0f;
+
+		for ( TSharedPtr<FDatasmithFBXSceneNode>& Child : Node->Children )
+		{
+			PropagateVisibility( Child, bNewVisibility );
+		}
 	}
 }
 
@@ -1925,6 +1950,8 @@ bool FDatasmithVREDImporter::SendSceneToDatasmith()
 	// Ensure nodes, meshes and materials have unique names
 	FNameDuplicateFinder NameDupContext;
 	NameDupContext.ResolveDuplicatedObjectNamesRecursive(IntermediateScene->RootNode);
+
+	VREDImporterImpl::PropagateVisibility(IntermediateScene->RootNode);
 
 	// Perform conversion
 	TSharedPtr<IDatasmithActorElement> NodeActor = ConvertNode(IntermediateScene->RootNode);

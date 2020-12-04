@@ -87,9 +87,14 @@ public:
 	}
 #endif //WITH_ENGINE
 
-	virtual FTimespan GetTime() const override
+	virtual IMediaTextureSampleConverter* GetMediaTextureSampleConverter() override
 	{
-		return Time;
+		return Frame.GetSampleConverter();
+	}
+
+	virtual FMediaTimeStamp GetTime() const override
+	{
+		return FMediaTimeStamp(Time);
 	}
 
 	virtual bool IsCacheable() const override

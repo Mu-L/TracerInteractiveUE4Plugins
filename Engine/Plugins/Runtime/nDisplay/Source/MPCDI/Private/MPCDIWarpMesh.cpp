@@ -2,8 +2,8 @@
 
 #include "MPCDIWarpMesh.h"
 #include "MPCDIData.h"
-#include "MPCDIHelpers.h"
 #include "MPCDIWarpHelpers.h"
+#include "MPCDILog.h"
 
 #include "Shader.h"
 #include "GlobalShader.h"
@@ -31,18 +31,31 @@ bool FMPCDIWarpMesh::IsValidWarpData() const
 	check(!bIsDirtyFrustumData);
 
 	FScopeLock lock(&MeshDataGuard);
-	return bIsValidFrustumData && MeshComponent;
+	return bIsValidFrustumData && MeshComponentRef.IsDefinedSceneComponent();
 }
 
 void FMPCDIWarpMesh::BeginBuildFrustum(IMPCDI::FFrustum& OutFrustum)
 {
 	FScopeLock lock(&MeshDataGuard);
 
+	UStaticMeshComponent* MeshComponent   = MeshComponentRef.GetOrFindWarpMeshComponent();
+	USceneComponent*      OriginComponent = OriginComponentRef.GetOrFindSceneComponent();
+
 	if (MeshComponent)
 	{
-		//@todo: Now not updated runtime (internal mesh geometry)
-		// add detect cave  changes. and update when need
-		// bIsDirtyFrustumData = true; // Need update cave data
+		// If StaticMesh geometry changed, update mpcdi math and RHI resources
+		if (MeshComponentRef.IsWarpMeshChanged())
+		{
+			// Update mesh geometry reference and reset bStaticMeshChanged flag
+			MeshComponentRef.SetWarpMeshComponent(MeshComponent);
+
+			// Mesh geometry changed, update related RHI data
+			ReleaseRHIResources();
+
+			// Support runtime dynamic changes (new mesh to exist viewport)
+			bIsDirtyFrustumData = true;
+			bIsValidFrustumData = false;
+		}
 
 		if (OriginComponent)
 		{
@@ -83,7 +96,11 @@ bool FMPCDIWarpMesh::CalcFrustum_TextureBOX(int DivX, int DivY, const IMPCDI::FF
 
 bool FMPCDIWarpMesh::CalcFrustum_fullCPU(const IMPCDI::FFrustum& OutFrustum, const FMatrix& World2Local, float& Top, float& Bottom, float& Left, float& Right) const
 {
-	check(MeshComponent);
+	UStaticMeshComponent* MeshComponent = MeshComponentRef.GetOrFindWarpMeshComponent();
+	if (!MeshComponent)
+	{
+		return false;
+	}
 
 	FScopeLock lock(&MeshDataGuard);
 
@@ -99,7 +116,7 @@ bool FMPCDIWarpMesh::CalcFrustum_fullCPU(const IMPCDI::FFrustum& OutFrustum, con
 		for (uint32 i = 0; i < VertexPosition.GetNumVertices(); i++)
 		{
 			const FVector4 Pts = FVector4(VertexPosition.VertexPosition(i),1);
-			if (!CalcFrustumFromVertex(Pts, WorldToMesh, Top, Bottom, Left, Right))
+			if (!GetProjectionClip(Pts, WorldToMesh, Top, Bottom, Left, Right))
 			{
 				bResult = false;
 			}
@@ -111,7 +128,11 @@ bool FMPCDIWarpMesh::CalcFrustum_fullCPU(const IMPCDI::FFrustum& OutFrustum, con
 
 void FMPCDIWarpMesh::BuildMeshAABBox()
 {
-	check(MeshComponent);
+	UStaticMeshComponent* MeshComponent = MeshComponentRef.GetOrFindWarpMeshComponent();
+	if (!MeshComponent)
+	{
+		return;
+	}
 
 	FScopeLock lock(&MeshDataGuard);
 
@@ -193,18 +214,34 @@ void FMPCDIWarpMesh::BuildAABBox()
 
 bool FMPCDIWarpMesh::SetStaticMeshWarp(UStaticMeshComponent* InMeshComponent, USceneComponent* InOriginComponent)
 {
+	// Inside the BeginBuildFrustum() function, we always check for changes to the mesh components IsWarpMeshChanged(), and update the corresponding resources and data.
+	// No assignment needed when changing a mesh component
+	UStaticMeshComponent* MeshComponent = MeshComponentRef.GetOrFindWarpMeshComponent();
+	USceneComponent* OriginComponent = OriginComponentRef.GetOrFindSceneComponent();
+	if (MeshComponent == InMeshComponent && OriginComponent == InOriginComponent)
+	{
+		// Same values, use current warpmesh
+		return true;
+	}
+
+	// Reset previous one
 	ReleaseRHIResources();
+	MeshComponentRef.ResetMeshComponent();
+	OriginComponentRef.ResetSceneComponent();
 
 	FScopeLock lock(&MeshDataGuard);
 
 	// Just setup data ptr
 	// calcs only if data used on node viewports from BeginBuildFrustum() & BeginRender() calls
-	MeshComponent = InMeshComponent;
-	OriginComponent = InOriginComponent;
+	MeshComponentRef.SetWarpMeshComponent(InMeshComponent);
+	OriginComponentRef.SetSceneComponent(InOriginComponent);
 
 	// Support runtime dynamic changes (new mesh to exist viewport)
 	bIsDirtyFrustumData = true;
 	bIsValidFrustumData = false;
+	FString MeshName = "";
+	InMeshComponent->GetName(MeshName);
+	UE_LOG(LogMPCDI, Log, TEXT("Warp mesh [%s] assigned."), *MeshName);
 
 	return true;
 }
@@ -254,6 +291,7 @@ void FMPCDIWarpMesh::CreateRHIResources()
 	bIsDirtyRHI = false;
 
 	FScopeLock lock(&MeshDataGuard);
+	UStaticMeshComponent* MeshComponent = MeshComponentRef.GetOrFindWarpMeshComponent();
 	if (MeshComponent)
 	{
 		UStaticMesh* StaticMesh = MeshComponent->GetStaticMesh();
@@ -292,3 +330,77 @@ void FMPCDIWarpMesh::CreateRHIResources()
 		}
 	}
 };
+
+//*************************************************************************
+//* FDisplayClusterWarpMeshComponentRef
+//*************************************************************************
+inline FName GetStaticMeshName(UStaticMeshComponent* StaticMeshComponent)
+{
+	if (StaticMeshComponent)
+	{
+		UStaticMesh* StaticMesh = StaticMeshComponent->GetStaticMesh();
+
+		// Return null geometry ptr as text
+		if (StaticMesh == nullptr)
+		{
+			return FName(TEXT("nullptr"));
+		}
+
+		// Return geometry asset name
+		return StaticMesh->GetFName();
+	}
+
+	// Return empty FName for null component ptr
+	return FName();
+}
+
+UStaticMeshComponent* FDisplayClusterWarpMeshComponentRef::GetOrFindWarpMeshComponent() const
+{
+	FScopeLock lock(&DataGuard);
+
+	USceneComponent* SceneComponent = GetOrFindSceneComponent();
+	if (SceneComponent)
+	{
+		UStaticMeshComponent* StaticMeshComponent = Cast<UStaticMeshComponent>(SceneComponent);
+		if (StaticMeshComponent)
+		{
+			// Raise the flag [mutable bIsStaticMeshChanged] for the changed mesh geometry and store the new mesh name in [mutable StaticMeshName]
+			if (!bIsStaticMeshChanged && GetStaticMeshName(StaticMeshComponent) != StaticMeshName)
+			{
+				bIsStaticMeshChanged = true;
+			}
+
+			return StaticMeshComponent;
+		}
+	}
+
+	return nullptr;
+}
+
+void FDisplayClusterWarpMeshComponentRef::ResetWarpMeshChangedFlag()
+{
+	bIsStaticMeshChanged = false;
+	StaticMeshName = FName();
+}
+
+void FDisplayClusterWarpMeshComponentRef::ResetMeshComponent()
+{
+	ResetWarpMeshChangedFlag();
+	ResetSceneComponent();
+}
+
+bool FDisplayClusterWarpMeshComponentRef::SetWarpMeshComponent(UStaticMeshComponent* StaticMeshComponent)
+{
+	FScopeLock lock(&DataGuard);
+
+	ResetWarpMeshChangedFlag();
+	if(SetSceneComponent(StaticMeshComponent))
+	{ 
+		// Store the name of the current mesh geometry
+		StaticMeshName = GetStaticMeshName(StaticMeshComponent);
+		return true;
+	}
+
+	return false;
+}
+

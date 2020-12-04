@@ -36,6 +36,7 @@ inline bool operator!=(const FVirtualTextureProducerHandle& Lhs, const FVirtualT
 /** Maximum dimension of VT page table texture */
 #define VIRTUALTEXTURE_LOG2_MAX_PAGETABLE_SIZE 12u
 #define VIRTUALTEXTURE_MAX_PAGETABLE_SIZE (1u << VIRTUALTEXTURE_LOG2_MAX_PAGETABLE_SIZE)
+#define VIRTUALTEXTURE_MIN_PAGETABLE_SIZE 32u
 
 /**
  * Parameters needed to create an IAllocatedVirtualTexture
@@ -48,6 +49,10 @@ struct FAllocatedVTDescription
 	uint8 Dimensions = 0u;
 	uint8 NumTextureLayers = 0u;
 	
+	uint32 MaxSpaceSize = 0u;
+	uint8 ForceSpaceID = 0xff;
+	uint32 IndirectionTextureSize = 0u;
+
 	/** Producer for each texture layer. */
 	FVirtualTextureProducerHandle ProducerHandle[VIRTUALTEXTURE_SPACE_MAXLAYERS];
 	/** Local layer inside producer for each texture layer. */
@@ -178,6 +183,7 @@ enum class EVTProducePageFlags : uint8
 {
 	None = 0u,
 	SkipPageBorders = (1u << 0),
+	ContinuousUpdate = (1u << 1),
 };
 ENUM_CLASS_FLAGS(EVTProducePageFlags);
 
@@ -199,7 +205,12 @@ struct FVTProduceTargetLayer
 	FRHITexture* TextureRHI = nullptr;
 	/** The UAV to write to. This may be nullptr if no suitable UAV can be created for the texture format.  */
 	FRHIUnorderedAccessView* UnorderedAccessViewRHI = nullptr;
-
+	/**
+	 * Pooled render target. For FRDGBuilder::RegisterExternalTexture() which only accepts pooled render targets.
+	 * To avoid cost of manipulating ref counting pointers a raw pointer is used instead - it is valid until returning from your Finalize().
+	 * So do not try to store the pointer
+	 */
+	struct IPooledRenderTarget* PooledRenderTarget = nullptr;
 	/** Location within the texture to write */
 	FIntVector pPageLocation;
 };
@@ -236,7 +247,7 @@ public:
 	* @param Priority Priority of the request, used to drive async IO/task priority needed to generate data for request
 	* @return FVTRequestPageResult describing the availability of the request
 	*/
-	virtual FVTRequestPageResult RequestPageData(const FVirtualTextureProducerHandle& ProducerHandle, uint8 LayerMask, uint8 vLevel, uint32 vAddress, EVTRequestPagePriority Priority) = 0;
+	virtual FVTRequestPageResult RequestPageData(const FVirtualTextureProducerHandle& ProducerHandle, uint8 LayerMask, uint8 vLevel, uint64 vAddress, EVTRequestPagePriority Priority) = 0;
 
 	/**
 	* Upload page data to the cache, data must have been previously requested, and reported either 'Available' or 'Pending'
@@ -257,7 +268,7 @@ public:
 	virtual IVirtualTextureFinalizer* ProducePageData(FRHICommandListImmediate& RHICmdList,
 		ERHIFeatureLevel::Type FeatureLevel,
 		EVTProducePageFlags Flags,
-		const FVirtualTextureProducerHandle& ProducerHandle, uint8 LayerMask, uint8 vLevel, uint32 vAddress,
+		const FVirtualTextureProducerHandle& ProducerHandle, uint8 LayerMask, uint8 vLevel, uint64 vAddress,
 		uint64 RequestHandle,
 		const FVTProduceTargetLayer* TargetLayers) = 0;
 
@@ -301,15 +312,15 @@ public:
 		, VirtualAddress(~0u)
 	{}
 
+	virtual uint32 GetNumPageTableTextures() const = 0;
 	virtual FRHITexture* GetPageTableTexture(uint32 InPageTableIndex) const = 0;
+	virtual FRHITexture* GetPageTableIndirectionTexture() const = 0;
+	virtual uint32 GetPhysicalTextureSize(uint32 InLayerIndex) const = 0;
 	virtual FRHITexture* GetPhysicalTexture(uint32 InLayerIndex) const = 0;
 	virtual FRHIShaderResourceView* GetPhysicalTextureSRV(uint32 InLayerIndex, bool bSRGB) const = 0;
-	virtual uint32 GetPhysicalTextureSize(uint32 InLayerIndex) const = 0;
-	virtual uint32 GetNumPageTableTextures() const = 0;
 
 	/** Writes 2x FUintVector4 */
-	virtual void GetPackedPageTableUniform(FUintVector4* OutUniform, bool bApplyBlockScale) const = 0;
-
+	virtual void GetPackedPageTableUniform(FUintVector4* OutUniform) const = 0;
 	/** Writes 1x FUintVector4 */
 	virtual void GetPackedUniform(FUintVector4* OutUniform, uint32 LayerIndex) const = 0;
 
@@ -356,6 +367,31 @@ protected:
 	uint32 VirtualAddress;
 };
 
+/** 
+ * Interface for adaptive virtual textures. 
+ * This manages multiple allocated virtual textures in a space to simulate a single larger virtual texture. 
+ */
+class IAdaptiveVirtualTexture
+{
+public:
+	/** Get the persistent allocated virtual texture for low mips from the adaptive virtual texture. */
+	virtual IAllocatedVirtualTexture* GetAllocatedVirtualTexture() = 0;
+
+protected:
+	friend class FVirtualTextureSystem;
+	virtual ~IAdaptiveVirtualTexture() {}
+	virtual int32 GetSpaceID() const = 0;
+	virtual void Destroy(class FVirtualTextureSystem* InSystem) = 0;
+};
+
+/** Describes an adaptive virtual texture. */
+struct FAdaptiveVTDescription
+{
+	uint32 TileCountX;
+	uint32 TileCountY;
+	uint32 MaxAdaptiveLevel;
+};
+
 /**
  * Identifies a VT tile within a given producer
  */
@@ -382,6 +418,8 @@ static_assert(sizeof(FVirtualTextureLocalTile) == sizeof(uint64), "Bad packing")
 inline uint64 GetTypeHash(const FVirtualTextureLocalTile& T) { return T.PackedValue; }
 inline bool operator==(const FVirtualTextureLocalTile& Lhs, const FVirtualTextureLocalTile& Rhs) { return Lhs.PackedValue == Rhs.PackedValue; }
 inline bool operator!=(const FVirtualTextureLocalTile& Lhs, const FVirtualTextureLocalTile& Rhs) { return Lhs.PackedValue != Rhs.PackedValue; }
+
+RENDERCORE_API DECLARE_LOG_CATEGORY_EXTERN(LogVirtualTexturing, Log, All);
 
 DECLARE_STATS_GROUP(TEXT("Virtual Texturing"), STATGROUP_VirtualTexturing, STATCAT_Advanced);
 DECLARE_STATS_GROUP(TEXT("Virtual Texture Memory"), STATGROUP_VirtualTextureMemory, STATCAT_Advanced);

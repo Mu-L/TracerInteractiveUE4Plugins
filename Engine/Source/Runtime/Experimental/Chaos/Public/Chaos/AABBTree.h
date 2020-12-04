@@ -199,6 +199,21 @@ struct TAABBTreeLeafArray : public TBoundsWrapperHelper<TPayloadType, T, bComput
 		}
 	}
 
+	void UpdateElement(const TPayloadType& Payload, const TAABB<T, 3>& NewBounds, bool bHasBounds)
+	{
+		if (!bHasBounds)
+			return;
+
+		for (int32 Idx = 0; Idx < Elems.Num(); ++Idx)
+		{
+			if (Elems[Idx].Payload == Payload)
+			{
+				Elems[Idx].Bounds = NewBounds;
+				break;
+			}
+		}
+	}
+
 	const TAABB<T, 3>& GetBounds() const
 	{
 		return Bounds;
@@ -494,6 +509,8 @@ public:
 						const TAABB<T,3>& LeafBounds = Leaves[PayloadInfo->LeafIdx].GetBounds();
 						if (LeafBounds.Contains(NewBounds.Min()) && LeafBounds.Contains(NewBounds.Max()))
 						{
+							// We still need to update the constituent bounds
+							Leaves[PayloadInfo->LeafIdx].UpdateElement(Payload, NewBounds, bHasBounds);
 							return;
 						}
 					}
@@ -591,7 +608,12 @@ public:
 	{
 		Ar.UsingCustomVersion(FExternalPhysicsCustomObjectVersion::GUID);
 
-		TBox<FReal, 3>::SerializeAsAABB(Ar, FullBounds);
+		if (Ar.CustomVer(FExternalPhysicsCustomObjectVersion::GUID) < FExternalPhysicsCustomObjectVersion::RemovedAABBTreeFullBounds)
+		{
+			// Serialize out unused aabb for earlier versions
+			TAABB<T, 3> Dummy(TVector<T, 3>((T)0), TVector<T, 3>((T)0));
+			TBox<FReal, 3>::SerializeAsAABB(Ar, Dummy);
+		}
 		Ar << Nodes;
 		Ar << Leaves;
 		Ar << DirtyElements;
@@ -1191,7 +1213,6 @@ private:
 
 	TAABBTree(const TAABBTree<TPayloadType, TLeafType, T, bMutable>& Other)
 		: ISpatialAcceleration<TPayloadType, T, 3>(StaticType)
-		, FullBounds(Other.FullBounds)
 		, Nodes(Other.Nodes)
 		, Leaves(Other.Leaves)
 		, DirtyElements(Other.DirtyElements)
@@ -1216,7 +1237,6 @@ private:
 		WorkPoolFreeList.Empty();
 		if(this != &Rhs)
 		{
-			FullBounds = Rhs.FullBounds;
 			Nodes = Rhs.Nodes;
 			Leaves = Rhs.Leaves;
 			DirtyElements = Rhs.DirtyElements;
@@ -1232,7 +1252,6 @@ private:
 		return *this;
 	}
 
-	TAABB<T, 3> FullBounds;
 	TArray<FNode> Nodes;
 	TArray<TLeafType> Leaves;
 	TArray<FElement> DirtyElements;

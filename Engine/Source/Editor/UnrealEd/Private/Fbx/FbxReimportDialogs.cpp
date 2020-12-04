@@ -136,16 +136,16 @@ void FFbxImporter::ShowFbxSkeletonConflictWindow(USkeletalMesh* SkeletalMesh, US
 			const FName SelectedPackageName = SelectedObject->GetOutermost()->GetFName();
 			//Get the Hard dependencies
 			TArray<FName> HardDependencies;
-			AssetRegistryModule.Get().GetReferencers(SelectedPackageName, HardDependencies, EAssetRegistryDependencyType::Hard);
+			AssetRegistryModule.Get().GetReferencers(SelectedPackageName, HardDependencies, UE::AssetRegistry::EDependencyCategory::Package, UE::AssetRegistry::EDependencyQuery::Hard);
 			//Get the Soft dependencies
 			TArray<FName> SoftDependencies;
-			AssetRegistryModule.Get().GetReferencers(SelectedPackageName, SoftDependencies, EAssetRegistryDependencyType::Soft);
+			AssetRegistryModule.Get().GetReferencers(SelectedPackageName, SoftDependencies, UE::AssetRegistry::EDependencyCategory::Package, UE::AssetRegistry::EDependencyQuery::Soft);
 			//Compose the All dependencies array
 			TArray<FName> AllDependencies = HardDependencies;
 			AllDependencies += SoftDependencies;
 			if (AllDependencies.Num() > 0)
 			{
-				for (const FName AssetDependencyName : AllDependencies)
+				for (const FName& AssetDependencyName : AllDependencies)
 				{
 					const FString PackageString = AssetDependencyName.ToString();
 					const FString FullAssetPathName = FString::Printf(TEXT("%s.%s"), *PackageString, *FPackageName::GetLongPackageAssetName(PackageString));

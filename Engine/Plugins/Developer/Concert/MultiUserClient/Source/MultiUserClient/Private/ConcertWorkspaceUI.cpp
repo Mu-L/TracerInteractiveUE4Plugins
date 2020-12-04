@@ -365,7 +365,7 @@ public:
 		WorkspaceFrontend = MoveTemp(InWorkspaceFrontend);	
 		SetVisibility(MakeAttributeSP(this, &SConcertWorkspaceSequencerToolbarExtension::GetVisibility));
 
-		FToolBarBuilder ToolbarBuilder(TSharedPtr<const FUICommandList>(), FMultiBoxCustomization::None, TSharedPtr<FExtender>(), Orient_Horizontal, true);
+		FToolBarBuilder ToolbarBuilder(TSharedPtr<const FUICommandList>(), FMultiBoxCustomization::None, TSharedPtr<FExtender>(), true);
 
 		ToolbarBuilder.BeginSection("Concert Sequencer");
 		{
@@ -848,8 +848,8 @@ void FConcertWorkspaceUI::OnMarkPackageDirty(UPackage* InPackage, bool /*bWasDir
 {
 	TSharedPtr<IConcertClientWorkspace> ClientWorkspacePin = ClientWorkspace.Pin();
 	if (ClientWorkspacePin.IsValid()
-		&& !ClientWorkspacePin->ShouldIgnorePackageDirtyEvent(InPackage)
-		&& !ClientWorkspacePin->HasLiveTransactionSupport(InPackage))
+		&& !ClientWorkspacePin->HasLiveTransactionSupport(InPackage)
+		&& !ClientWorkspacePin->ShouldIgnorePackageDirtyEvent(InPackage))
 	{
 		FGuid ResourceLockId = ClientWorkspacePin->GetResourceLockId(InPackage->GetFName());
 

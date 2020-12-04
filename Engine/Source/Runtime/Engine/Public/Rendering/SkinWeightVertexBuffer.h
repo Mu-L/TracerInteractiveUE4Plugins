@@ -218,7 +218,7 @@ public:
 	/** Delete existing resources */
 	ENGINE_API void CleanUp();
 
-	void Init(uint32 InNumBones, uint32 InNumVertices);
+	ENGINE_API void Init(uint32 InNumBones, uint32 InNumVertices);
 
 	friend FArchive& operator<<(FArchive& Ar, FSkinWeightDataVertexBuffer& VertexBuffer);
 
@@ -226,8 +226,8 @@ public:
 	void CopyMetaData(const FSkinWeightDataVertexBuffer& Other);
 
 	// FRenderResource interface.
-	virtual void InitRHI() override;
-	virtual void ReleaseRHI() override;
+	ENGINE_API virtual void InitRHI() override;
+	ENGINE_API virtual void ReleaseRHI() override;
 
 	virtual FString GetFriendlyName() const override 
 	{ return TEXT("SkeletalMesh Vertex Weights Data"); }
@@ -271,7 +271,7 @@ public:
 	{ return bVariableBonesPerVertex; }
 
 	/** Set if this will have extra streams for bone indices & weights. */
-	void SetMaxBoneInfluences(uint32 InMaxBoneInfluences);
+	ENGINE_API void SetMaxBoneInfluences(uint32 InMaxBoneInfluences);
 
 	FORCEINLINE uint32 GetMaxBoneInfluences() const
 	{ return MaxBoneInfluences; }
@@ -282,13 +282,15 @@ public:
 	FORCEINLINE bool Use16BitBoneIndex() const
 	{ return bUse16BitBoneIndex; }
 
-	GPUSkinBoneInfluenceType GetBoneInfluenceType() const;
-	bool GetRigidWeightBone(uint32 VertexWeightOffset, uint32 VertexInfluenceCount, int32& OutBoneIndex) const;
-	uint32 GetBoneIndex(uint32 VertexWeightOffset, uint32 VertexInfluenceCount, uint32 InfluenceIndex) const;
-	void SetBoneIndex(uint32 VertexWeightOffset, uint32 VertexInfluenceCount, uint32 InfluenceIndex, uint32 BoneIndex);
-	uint8 GetBoneWeight(uint32 VertexWeightOffset, uint32 VertexInfluenceCount, uint32 InfluenceIndex) const;
-	void SetBoneWeight(uint32 VertexWeightOffset, uint32 VertexInfluenceCount, uint32 InfluenceIndex, uint8 BoneWeight);
-	void ResetVertexBoneWeights(uint32 VertexWeightOffset, uint32 VertexInfluenceCount);
+	ENGINE_API GPUSkinBoneInfluenceType GetBoneInfluenceType() const;
+	ENGINE_API bool GetRigidWeightBone(uint32 VertexWeightOffset, uint32 VertexInfluenceCount, int32& OutBoneIndex) const;
+	ENGINE_API uint32 GetBoneIndex(uint32 VertexWeightOffset, uint32 VertexInfluenceCount, uint32 InfluenceIndex) const;
+	ENGINE_API void SetBoneIndex(uint32 VertexWeightOffset, uint32 VertexInfluenceCount, uint32 InfluenceIndex, uint32 BoneIndex);
+	ENGINE_API uint8 GetBoneWeight(uint32 VertexWeightOffset, uint32 VertexInfluenceCount, uint32 InfluenceIndex) const;
+	ENGINE_API void SetBoneWeight(uint32 VertexWeightOffset, uint32 VertexInfluenceCount, uint32 InfluenceIndex, uint8 BoneWeight);
+	ENGINE_API void ResetVertexBoneWeights(uint32 VertexWeightOffset, uint32 VertexInfluenceCount);
+
+	ENGINE_API void CopyDataFromBuffer(const TArrayView<const FSkinWeightInfo>& SkinWeightData);
 
 	/** Create an RHI vertex buffer with CPU data. CPU data may be discarded after creation (see TResourceArray::Discard) */
 	FVertexBufferRHIRef CreateRHIBuffer_RenderThread();
@@ -317,6 +319,13 @@ public:
 		{
 			Batcher.QueueUpdateRequest(SRVValue, nullptr, 0, 0);
 		}
+	}
+
+	bool IsWeightDataValid() const;
+
+	FSkinWeightInfo* GetWeightData() const
+	{
+		return (FSkinWeightInfo*)Data;
 	}
 
 protected:
@@ -387,9 +396,11 @@ public:
 #endif // WITH_EDITOR
 
 	/** Assignment operator for assigning array of weights to this buffer */
-	FSkinWeightVertexBuffer& operator=(const TArray<FSkinWeightInfo>& InWeights);
-	void GetSkinWeights(TArray<FSkinWeightInfo>& OutVertices) const;
-	FSkinWeightInfo GetVertexSkinWeights(uint32 VertexIndex) const;
+	ENGINE_API FSkinWeightVertexBuffer& operator=(const TArray<FSkinWeightInfo>& InWeights);
+	ENGINE_API void GetSkinWeights(TArray<FSkinWeightInfo>& OutVertices) const;
+	ENGINE_API FSkinWeightInfo GetVertexSkinWeights(uint32 VertexIndex) const;
+
+	ENGINE_API void CopySkinWeightInfoData(const TArrayView<const FSkinWeightInfo>& SkinWeightData);
 
 	friend FArchive& operator<<(FArchive& Ar, FSkinWeightVertexBuffer& VertexBuffer);
 
@@ -447,17 +458,17 @@ public:
 	FSkinWeightRHIInfo CreateRHIBuffer_Async();
 
 	ENGINE_API GPUSkinBoneInfluenceType GetBoneInfluenceType() const;
-	void GetVertexInfluenceOffsetCount(uint32 VertexIndex, uint32& VertexWeightOffset, uint32& VertexInfluenceCount) const;
+	ENGINE_API void GetVertexInfluenceOffsetCount(uint32 VertexIndex, uint32& VertexWeightOffset, uint32& VertexInfluenceCount) const;
 	ENGINE_API bool GetRigidWeightBone(uint32 VertexIndex, int32& OutBoneIndex) const;
-	uint32 GetBoneIndex(uint32 VertexIndex, uint32 InfluenceIndex) const;
-	void SetBoneIndex(uint32 VertexIndex, uint32 InfluenceIndex, uint32 BoneIndex);
-	uint8 GetBoneWeight(uint32 VertexIndex, uint32 InfluenceIndex) const;
-	void SetBoneWeight(uint32 VertexIndex, uint32 InfluenceIndex, uint8 BoneWeight);
-	void ResetVertexBoneWeights(uint32 VertexIndex);
+	ENGINE_API uint32 GetBoneIndex(uint32 VertexIndex, uint32 InfluenceIndex) const;
+	ENGINE_API void SetBoneIndex(uint32 VertexIndex, uint32 InfluenceIndex, uint32 BoneIndex);
+	ENGINE_API uint8 GetBoneWeight(uint32 VertexIndex, uint32 InfluenceIndex) const;
+	ENGINE_API void SetBoneWeight(uint32 VertexIndex, uint32 InfluenceIndex, uint8 BoneWeight);
+	ENGINE_API void ResetVertexBoneWeights(uint32 VertexIndex);
 
-	void BeginInitResources();
-	void BeginReleaseResources();
-	void ReleaseResources();
+	ENGINE_API void BeginInitResources();
+	ENGINE_API void BeginReleaseResources();
+	ENGINE_API void ReleaseResources();
 
 	/** Similar to Init/ReleaseRHI but only update existing SRV so references to the SRV stays valid */
 	template <uint32 MaxNumUpdates>

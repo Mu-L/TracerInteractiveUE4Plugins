@@ -27,6 +27,7 @@
 #include "Containers/Ticker.h"
 #include "Features/IModularFeatures.h"
 #include "ProfilingDebugging/ScopedTimers.h"
+#include "Stats/Stats.h"
 
 #if WITH_EDITOR
 #include "EditorSupportDelegates.h"
@@ -38,6 +39,11 @@
 #include "ToolMenus.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/MessageDialog.h"
+#include "AssetViewUtils.h"
+#include "IContentBrowserDataModule.h"
+#include "ContentBrowserDataSubsystem.h"
+#include "ContentBrowserFileDataCore.h"
+#include "ContentBrowserFileDataSource.h"
 #endif	// WITH_EDITOR
 
 #if PLATFORM_WINDOWS
@@ -620,15 +626,15 @@ void FPythonScriptPlugin::InitializePython()
 		const int StdErrMode = _setmode(_fileno(stderr), _O_TEXT);
 #endif	// PLATFORM_WINDOWS && PY_MAJOR_VERSION >= 3
 
-#if PY_MAJOR_VERSION >= 3 && PY_MINOR_VERSION >= 8
-		// Python 3.8+ changes the C locale which affects UE4 functions using C string APIs
+#if PY_MAJOR_VERSION >= 3 && PY_MINOR_VERSION >= 7
+		// Python 3.7+ changes the C locale which affects UE4 functions using C string APIs
 		// So change the C locale back to its current setting after Py_Initialize has been called
 		FString CurrentLocale;
 		if (const char* CurrentLocalePtr = setlocale(LC_ALL, nullptr))
 		{
 			CurrentLocale = ANSI_TO_TCHAR(CurrentLocalePtr);
 		}
-#endif	// PY_MAJOR_VERSION >= 3 && PY_MINOR_VERSION >= 8
+#endif	// PY_MAJOR_VERSION >= 3 && PY_MINOR_VERSION >= 7
 
 #if PY_MAJOR_VERSION >= 3 && PY_MINOR_VERSION >= 4
 		Py_SetStandardStreamEncoding("utf-8", nullptr);
@@ -662,18 +668,18 @@ void FPythonScriptPlugin::InitializePython()
 		}
 #endif	// PLATFORM_WINDOWS && PY_MAJOR_VERSION >= 3
 
-#if PY_MAJOR_VERSION >= 3 && PY_MINOR_VERSION >= 8
+#if PY_MAJOR_VERSION >= 3 && PY_MINOR_VERSION >= 7
 		// We call setlocale here to restore the previous state
 		if (!CurrentLocale.IsEmpty())
 		{
 			setlocale(LC_ALL, TCHAR_TO_ANSI(*CurrentLocale));
 		}
-#endif	// PY_MAJOR_VERSION >= 3 && PY_MINOR_VERSION >= 8
+#endif	// PY_MAJOR_VERSION >= 3 && PY_MINOR_VERSION >= 7
 
 		PySys_SetArgvEx(1, NullPyArgPtrs, 0);
 
 		// Enable developer warnings if requested
-		if (GetDefault<UPythonScriptPluginSettings>()->bDeveloperMode)
+		if (IsDeveloperModeEnabled())
 		{
 			PyUtil::EnableDeveloperWarnings();
 		}
@@ -757,10 +763,116 @@ void FPythonScriptPlugin::InitializePython()
 		// Initialize the tick handler
 		TickHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([this](float DeltaTime)
 		{
+			QUICK_SCOPE_CYCLE_COUNTER(STAT_FPythonScriptPlugin_Tick);
 			Tick(DeltaTime);
 			return true;
 		}));
 	}
+
+#if WITH_EDITOR
+	// Initialize the Content Browser integration
+	if (GIsEditor && !IsRunningCommandlet() && GetDefault<UPythonScriptPluginUserSettings>()->bEnableContentBrowserIntegration)
+	{
+		ContentBrowserFileData::FFileConfigData PythonFileConfig;
+		{
+			auto PyItemPassesFilter = [](const FName InFilePath, const FString& InFilename, const FContentBrowserDataFilter& InFilter, const bool bIsFile)
+			{
+				const FContentBrowserDataPackageFilter* PackageFilter = InFilter.ExtraFilters.FindFilter<FContentBrowserDataPackageFilter>();
+				if (PackageFilter && PackageFilter->PathBlacklist && PackageFilter->PathBlacklist->HasFiltering())
+				{
+					return PackageFilter->PathBlacklist->PassesStartsWithFilter(InFilePath, /*bAllowParentPaths*/!bIsFile);
+				}
+
+				return true;
+			};
+
+			auto GetPyItemAttribute = [](const FName InFilePath, const FString& InFilename, const bool InIncludeMetaData, const FName InAttributeKey, FContentBrowserItemDataAttributeValue& OutAttributeValue)
+			{
+				// TODO: Need to way to avoid all this ToString() churn (FPackageNameView?)
+
+				if (InAttributeKey == ContentBrowserItemAttributes::ItemIsDeveloperContent)
+				{
+					const bool bIsDevelopersFolder = AssetViewUtils::IsDevelopersFolder(InFilePath.ToString());
+					OutAttributeValue.SetValue(bIsDevelopersFolder);
+					return true;
+				}
+
+				if (InAttributeKey == ContentBrowserItemAttributes::ItemIsLocalizedContent)
+				{
+					const bool bIsLocalizedFolder = FPackageName::IsLocalizedPackage(InFilePath.ToString());
+					OutAttributeValue.SetValue(bIsLocalizedFolder);
+					return true;
+				}
+
+				if (InAttributeKey == ContentBrowserItemAttributes::ItemIsEngineContent)
+				{
+					const bool bIsEngineFolder = AssetViewUtils::IsEngineFolder(InFilePath.ToString(), /*bIncludePlugins*/true);
+					OutAttributeValue.SetValue(bIsEngineFolder);
+					return true;
+				}
+
+				if (InAttributeKey == ContentBrowserItemAttributes::ItemIsProjectContent)
+				{
+					const bool bIsProjectFolder = AssetViewUtils::IsProjectFolder(InFilePath.ToString(), /*bIncludePlugins*/true);
+					OutAttributeValue.SetValue(bIsProjectFolder);
+					return true;
+				}
+
+				if (InAttributeKey == ContentBrowserItemAttributes::ItemIsPluginContent)
+				{
+					const bool bIsPluginFolder = AssetViewUtils::IsPluginFolder(InFilePath.ToString());
+					OutAttributeValue.SetValue(bIsPluginFolder);
+					return true;
+				}
+
+				return false;
+			};
+
+			auto PyItemPreview = [this](const FName InFilePath, const FString& InFilename)
+			{
+				ExecPythonCommand(*InFilename);
+				return true;
+			};
+
+			ContentBrowserFileData::FDirectoryActions PyDirectoryActions;
+			PyDirectoryActions.PassesFilter.BindLambda(PyItemPassesFilter, false);
+			PyDirectoryActions.GetAttribute.BindLambda(GetPyItemAttribute);
+			PythonFileConfig.SetDirectoryActions(PyDirectoryActions);
+
+			ContentBrowserFileData::FFileActions PyFileActions;
+			PyFileActions.TypeExtension = TEXT("py");
+			PyFileActions.TypeName = "Python";
+			PyFileActions.TypeDisplayName = LOCTEXT("PythonTypeName", "Python");
+			PyFileActions.TypeShortDescription = LOCTEXT("PythonTypeShortDescription", "Python Script");
+			PyFileActions.TypeFullDescription = LOCTEXT("PythonTypeFullDescription", "A file used to script the editor using Python");
+			PyFileActions.DefaultNewFileName = TEXT("new_python_script");
+			PyFileActions.TypeColor = FColor(255, 156, 0);
+			PyFileActions.PassesFilter.BindLambda(PyItemPassesFilter, true);
+			PyFileActions.GetAttribute.BindLambda(GetPyItemAttribute);
+			PyFileActions.Preview.BindLambda(PyItemPreview);
+			PythonFileConfig.RegisterFileActions(PyFileActions);
+		}
+
+		PythonFileDataSource.Reset(NewObject<UContentBrowserFileDataSource>(GetTransientPackage(), "PythonData"));
+		PythonFileDataSource->Initialize("/", PythonFileConfig);
+
+		TArray<FString> RootPaths;
+		FPackageName::QueryRootContentPaths(RootPaths);
+		for (const FString& RootPath : RootPaths)
+		{
+			const FString RootFilesystemPath = FPackageName::LongPackageNameToFilename(RootPath);
+			PythonFileDataSource->AddFileMount(*(RootPath / TEXT("Python")), RootFilesystemPath / TEXT("Python"));
+		}
+
+		{
+			FToolMenuOwnerScoped OwnerScoped(this);
+			if (UToolMenu* Menu = UToolMenus::Get()->ExtendMenu("ContentBrowser.ItemContextMenu.PythonData"))
+			{
+				Menu->AddDynamicSection(TEXT("DynamicSection_PythonScriptPlugin"), FNewToolMenuDelegate::CreateRaw(this, &FPythonScriptPlugin::PopulatePythonFileContextMenu));
+			}
+		}
+	}
+#endif	// WITH_EDITOR
 }
 
 void FPythonScriptPlugin::ShutdownPython()
@@ -769,6 +881,12 @@ void FPythonScriptPlugin::ShutdownPython()
 	{
 		return;
 	}
+
+#if WITH_EDITOR
+	// Remove the Content Browser integration
+	UToolMenus::UnregisterOwner(this);
+	PythonFileDataSource.Reset();
+#endif	// WITH_EDITOR
 
 	// Notify any external listeners
 	OnPythonShutdownDelegate.Broadcast();
@@ -841,6 +959,8 @@ void FPythonScriptPlugin::RequestStubCodeGeneration()
 	ModuleDelayedHandle = FTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
 		[this](float DeltaTime)
 		{
+			QUICK_SCOPE_CYCLE_COUNTER(STAT_FPythonScriptPlugin_ModuleDelayed);
+
 			// Once ticked, the delegate will be removed so reset the handle to indicate that it isn't set.
 			ModuleDelayedHandle.Reset();
 
@@ -855,7 +975,7 @@ void FPythonScriptPlugin::RequestStubCodeGeneration()
 
 void FPythonScriptPlugin::GenerateStubCode()
 {
-	if (GetDefault<UPythonScriptPluginSettings>()->bDeveloperMode)
+	if (IsDeveloperModeEnabled())
 	{
 		// Generate stub code if developer mode enabled
 		FPyWrapperTypeRegistry::Get().GenerateStubCodeForWrappedTypes();
@@ -896,6 +1016,13 @@ void FPythonScriptPlugin::Tick(const float InDeltaTime)
 		OnPythonInitializedDelegate.Broadcast();
 
 #if WITH_EDITOR
+		// Activate the Content Browser integration (now that editor subsystems are available)
+		if (PythonFileDataSource)
+		{
+			UContentBrowserDataSubsystem* ContentBrowserData = IContentBrowserDataModule::Get().GetSubsystem();
+			ContentBrowserData->ActivateDataSource("PythonData");
+		}
+
 		// Register to generate stub code after a short delay
 		RequestStubCodeGeneration();
 #endif	// WITH_EDITOR
@@ -1185,14 +1312,37 @@ void FPythonScriptPlugin::OnModulesChanged(FName InModuleName, EModuleChangeReas
 
 void FPythonScriptPlugin::OnContentPathMounted(const FString& InAssetPath, const FString& InFilesystemPath)
 {
-	FPyScopedGIL GIL;
-	PyUtil::AddSystemPath(FPaths::ConvertRelativePathToFull(InFilesystemPath / TEXT("Python")));
+	{
+		FPyScopedGIL GIL;
+		PyUtil::AddSystemPath(FPaths::ConvertRelativePathToFull(InFilesystemPath / TEXT("Python")));
+	}
+
+#if WITH_EDITOR
+	if (PythonFileDataSource)
+	{
+		PythonFileDataSource->AddFileMount(*(InAssetPath / TEXT("Python")), InFilesystemPath / TEXT("Python"));
+	}
+#endif	// WITH_EDITOR
 }
 
 void FPythonScriptPlugin::OnContentPathDismounted(const FString& InAssetPath, const FString& InFilesystemPath)
 {
-	FPyScopedGIL GIL;
-	PyUtil::RemoveSystemPath(FPaths::ConvertRelativePathToFull(InFilesystemPath / TEXT("Python")));
+	{
+		FPyScopedGIL GIL;
+		PyUtil::RemoveSystemPath(FPaths::ConvertRelativePathToFull(InFilesystemPath / TEXT("Python")));
+	}
+
+#if WITH_EDITOR
+	if (PythonFileDataSource)
+	{
+		PythonFileDataSource->RemoveFileMount(*(InAssetPath / TEXT("Python")));
+	}
+#endif	// WITH_EDITOR
+}
+
+bool FPythonScriptPlugin::IsDeveloperModeEnabled()
+{
+	return GetDefault<UPythonScriptPluginSettings>()->bDeveloperMode || GetDefault<UPythonScriptPluginUserSettings>()->bDeveloperMode;
 }
 
 void FPythonScriptPlugin::OnAssetRenamed(const FAssetData& Data, const FString& OldName)
@@ -1262,6 +1412,56 @@ void FPythonScriptPlugin::OnAssetUpdated(const UObject* InObj)
 void FPythonScriptPlugin::OnPrepareToCleanseEditorObject(UObject* InObject)
 {
 	FPyReferenceCollector::Get().PurgeUnrealObjectReferences(InObject, true);
+}
+
+void FPythonScriptPlugin::PopulatePythonFileContextMenu(UToolMenu* InMenu)
+{
+	const UContentBrowserDataMenuContext_FileMenu* ContextObject = InMenu->FindContext<UContentBrowserDataMenuContext_FileMenu>();
+	checkf(ContextObject, TEXT("Required context UContentBrowserDataMenuContext_FileMenu was missing!"));
+
+	if (!PythonFileDataSource)
+	{
+		return;
+	}
+
+	// Extract the internal file paths that belong to this data source from the full list of selected paths given in the context
+	TArray<TSharedRef<const FContentBrowserFileItemDataPayload>> SelectedPythonFiles;
+	for (const FContentBrowserItem& SelectedItem : ContextObject->SelectedItems)
+	{
+		if (const FContentBrowserItemData* ItemDataPtr = SelectedItem.GetPrimaryInternalItem())
+		{
+			if (TSharedPtr<const FContentBrowserFileItemDataPayload> FilePayload = ContentBrowserFileData::GetFileItemPayload(PythonFileDataSource.Get(), *ItemDataPtr))
+			{
+				SelectedPythonFiles.Add(FilePayload.ToSharedRef());
+			}
+		}
+	}
+
+	// Only add the file items if we have a file path selected
+	if (SelectedPythonFiles.Num() > 0)
+	{
+		// Run
+		{
+			FToolMenuSection& Section = InMenu->AddSection("PythonScript", LOCTEXT("PythonScriptMenuHeading", "Python Script"));
+			Section.InsertPosition.Position = EToolMenuInsertType::First;
+
+			const FExecuteAction ExecuteRunAction = FExecuteAction::CreateLambda([this, SelectedPythonFiles]()
+			{
+				for (const TSharedRef<const FContentBrowserFileItemDataPayload>& SelectedPythonFile : SelectedPythonFiles)
+				{
+					ExecPythonCommand(*SelectedPythonFile->GetFilename());
+				}
+			});
+
+			Section.AddMenuEntry(
+				"RunPythonScript",
+				LOCTEXT("RunPythonScript", "Run..."),
+				LOCTEXT("RunPythonScriptToolTip", "Run this script."),
+				FSlateIcon(),
+				FUIAction(ExecuteRunAction)
+			);
+		}
+	}
 }
 
 #endif	// WITH_EDITOR

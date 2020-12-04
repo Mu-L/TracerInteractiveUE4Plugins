@@ -96,13 +96,23 @@ protected:
 	virtual bool CustomPrepass(float LayoutScaleMultiplier) override;
 
 	/** FSlateInvalidationRoot interface */
-	int32 PaintSlowPath(const FSlateInvalidationContext& Context);
+	virtual int32 PaintSlowPath(const FSlateInvalidationContext& Context) override;
+
+	enum class EPaintRetainedContentResult
+	{
+		NotPainted,
+		Painted,
+		Queued,
+		InvalidSize,
+	};
+	EPaintRetainedContentResult PaintRetainedContentImpl(const FSlateInvalidationContext& Context, const FGeometry& AllottedGeometry);
 
 	void RefreshRenderingMode();
 	bool ShouldBeRenderingOffscreen() const;
 	bool IsAnythingVisibleToRender() const;
 	void OnRetainerModeChanged();
-	void OnGlobalInvalidate(bool bClearResourcesImmediately);
+	void OnRootInvalidated();
+
 private:
 	void OnGlobalInvalidationToggled(bool bGlobalInvalidationEnabled);
 #if !UE_BUILD_SHIPPING
@@ -120,7 +130,7 @@ private:
 	TSharedPtr<SWidget> MyWidget;
 	TSharedRef<SVirtualWindow> VirtualWindow;
 
-	mutable FHittestGrid HittestGrid;
+	TSharedRef<FHittestGrid> HittestGrid;
 
 	int32 Phase;
 	int32 PhaseCount;
@@ -132,6 +142,7 @@ private:
 	bool RenderOnInvalidation;
 
 	bool bRenderRequested;
+	bool bInvalidSizeLogged;
 
 	double LastDrawTime;
 	int64 LastTickedFrame;

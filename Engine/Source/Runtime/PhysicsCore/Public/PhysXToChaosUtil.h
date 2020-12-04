@@ -2,6 +2,7 @@
 
 #pragma once 
 
+#if 0
 #include "CoreMinimal.h"
 
 #if WITH_PHYSX
@@ -125,7 +126,7 @@ inline TUniquePtr<Chaos::TImplicitObjectTransformed<float, 3>> PxShapeToChaosGeo
 
 		ShapeTM = U2PTransform(FTransform(LandscapeComponentMatrix));
 
-		InnerObj = MakeUnique<THeightField<float>>(MoveTemp(Height), MoveTemp(MaterialIndices), NumRows, NumCols, TVector<float, 3>(HeightFieldGeom.columnScale, HeightFieldGeom.rowScale, HeightFieldGeom.heightScale));
+		InnerObj = MakeUnique<FHeightField>(MoveTemp(Height), MoveTemp(MaterialIndices), NumRows, NumCols, TVector<float, 3>(HeightFieldGeom.columnScale, HeightFieldGeom.rowScale, HeightFieldGeom.heightScale));
 		break;
 	}
 	case PxGeometryType::eTRIANGLEMESH:
@@ -195,5 +196,7 @@ inline TUniquePtr<Chaos::TImplicitObjectTransformed<float, 3>> PxShapeToChaosGeo
 
 	return MakeUnique<TImplicitObjectTransformed<float, 3>>(MoveTemp(InnerObj), P2UTransform(ShapeTM));
 }
+
+#endif
 
 #endif

@@ -15,6 +15,7 @@
 #include "Sound/AudioVolume.h"
 #include "Sound/SoundConcurrency.h"
 #include "Sound/SoundSourceBus.h"
+#include "Sound/QuartzQuantizationUtilities.h"
 
 class FAudioDevice;
 class USoundBase;
@@ -132,7 +133,7 @@ struct FSoundParseParameters
 	TArray<FSoundSubmixSendInfo> SoundSubmixSends;
 
 	// The source bus sends to use
-	TArray<FSoundSourceBusSendInfo> SoundSourceBusSends[(int32)EBusSendType::Count];
+	TArray<FSoundSourceBusSendInfo> BusSends[(int32)EBusSendType::Count];
 
 	// Reverb wet-level parameters
 	EReverbSendMethod ReverbSendMethod;
@@ -155,9 +156,6 @@ struct FSoundParseParameters
 
 	// What occlusion plugin source settings to use
 	UOcclusionPluginSourceSettingsBase* OcclusionPluginSettings;
-
-	/** Instance of modulation source settings to use. */
-	USoundModulationPluginSourceSettingsBase* ModulationPluginSettings;
 
 	// What reverb plugin source settings to use
 	UReverbPluginSourceSettingsBase* ReverbPluginSettings;
@@ -229,7 +227,6 @@ struct FSoundParseParameters
 		, SpatializationMethod(ESoundSpatializationAlgorithm::SPATIALIZATION_Default)
 		, SpatializationPluginSettings(nullptr)
 		, OcclusionPluginSettings(nullptr)
-		, ModulationPluginSettings(nullptr)
 		, ReverbPluginSettings(nullptr)
 		, SourceEffectChain(nullptr)
 		, LowPassFilterFrequency(MAX_FILTER_FREQUENCY)
@@ -272,12 +269,12 @@ private:
 	FName AudioComponentName;
 	FName OwnerName;
 
+	uint32 PlayOrder;
 
 public:
-	// ISoundModulatable Implementation
-	USoundModulationPluginSourceSettingsBase* FindModulationSettings() const override;
 	uint32 GetObjectId() const override { return Sound ? Sound->GetUniqueID() : INDEX_NONE; }
 	int32 GetPlayCount() const override;
+	uint32 GetPlayOrder() const { return PlayOrder; }
 	bool IsPreviewSound() const override { return bIsPreviewSound; }
 	void Stop() override;
 
@@ -353,7 +350,7 @@ private:
 	TArray<FSoundSubmixSendInfo> SoundSubmixSendsOverride;
 
 	/** Optional override for the source bus sends for the sound. */
-	TArray<FSoundSourceBusSendInfo> SoundSourceBusSendsOverride[(int32)EBusSendType::Count];
+	TArray<FSoundSourceBusSendInfo> BusSendsOverride[(int32)EBusSendType::Count];
 
 	TMap<UPTRINT, FWaveInstance*> WaveInstances;
 
@@ -527,8 +524,13 @@ public:
 
 	FSoundAttenuationSettings AttenuationSettings;
 
+	/** Quantization information */
+	Audio::FQuartzQuantizedRequestData QuantizedRequestData;
+
 	/** Cache what volume settings we had last time so we don't have to search again if we didn't move */
 	FInteriorSettings InteriorSettings;
+	TArray<FAudioVolumeSubmixSendSettings> AudioVolumeSubmixSendSettings;
+	TArray<FAudioVolumeSubmixSendSettings> PreviousAudioVolumeSubmixSendSettings;
 
 	uint32 AudioVolumeID;
 
@@ -547,6 +549,14 @@ public:
 	TArray<uint8> SoundNodeData;
 
 	TArray<FAudioComponentParam> InstanceParameters;
+
+	// Whether or not there are Source Bus Sends that have not been sent to the render thread
+	bool bHasNewBusSends;
+
+	// Bus send(s) that have not yet been sent to the render thread
+	TArray<TTuple<EBusSendType, FSoundSourceBusSendInfo>> newBusSends;
+
+	FSoundModulationDefaultRoutingSettings ModulationRouting;
 
 #if ENABLE_AUDIO_DEBUG
 	FColor DebugColor;
@@ -642,7 +652,22 @@ public:
 	void GetSoundSubmixSends(TArray<FSoundSubmixSendInfo>& OutSends) const;
 
 	/** Gets the sound source bus sends to use for this sound instance. */
-	void GetSoundSourceBusSends(EBusSendType BusSendType, TArray<FSoundSourceBusSendInfo>& OutSends) const;
+	void GetBusSends(EBusSendType BusSendType, TArray<FSoundSourceBusSendInfo>& OutSends) const;
+
+	/**
+	 * Checks whether there are Source Bus Sends that have not yet been updated
+	 * @return true when there are new Source Bus Sends, false otherwise
+	 */
+	bool HasNewBusSends() const;
+
+	/** Lets the audio thread know if additional Source Bus Send information has been added 
+	*
+	*  @return the array of Sound Bus Sends that have not yet been added to the render thread
+	*/
+	TArray< TTuple<EBusSendType, FSoundSourceBusSendInfo> > const & GetNewBusSends() const;
+
+	/** Resets internal data of new Source Bus Sends */
+	void ResetNewBusSends();
 
 	/* Determines which of the provided listeners is the closest to the sound */
 	int32 FindClosestListener( const TArray<struct FListener>& InListeners ) const;
@@ -668,8 +693,13 @@ public:
 	/** Applies the active sound's attenuation settings to the input parse params using the given listener */
 	void ParseAttenuation(FSoundParseParameters& OutParseParams, int32 ListenerIndex, const FSoundAttenuationSettings& InAttenuationSettings);
 
-	/** Returns the highest effective priority of the child wave instances */
-	float GetHighestPriority() const;
+	/** Returns whether or not sound or any active wave instances it manages are set to always play */
+	bool GetAlwaysPlay() const;
+
+	/** Returns the highest effective priority of the child wave instances. If bIgnoreAlwaysPlay set to true, gives highest
+	  * priority disregarding always play priority override.
+	  */
+	float GetHighestPriority(bool bIgnoreAlwaysPlay = false) const;
 
 	/** Sets the amount of audio from this active sound to send to the submix. */
 	void SetSubmixSend(const FSoundSubmixSendInfo& SubmixSendInfo);

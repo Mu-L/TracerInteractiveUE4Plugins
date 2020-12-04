@@ -8,7 +8,7 @@
 #include "DataprepContentConsumer.h"
 #include "DataprepContentProducer.h"
 #include "DataprepCoreLogCategory.h"
-#include "DataprepCorePrivateUtils.h"
+#include "Shared/DataprepCorePrivateUtils.h"
 #include "DataprepCoreUtils.h"
 #include "DataprepParameterizableObject.h"
 #include "Parameterization/DataprepParameterization.h"
@@ -22,9 +22,8 @@
 #include "Misc/SecureHash.h"
 #include "UObject/UObjectGlobals.h"
 
-#ifdef WITH_EDITOR
 #include "Editor.h"
-#endif //WITH_EDITOR
+
 #include "EdGraph/EdGraphSchema.h"
 #include "EdGraphSchema_K2.h"
 #include "EdGraph/EdGraphNode.h"

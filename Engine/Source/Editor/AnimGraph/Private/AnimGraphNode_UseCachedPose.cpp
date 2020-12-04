@@ -8,6 +8,9 @@
 #include "BlueprintActionFilter.h"
 #include "BlueprintNodeSpawner.h"
 #include "BlueprintActionDatabaseRegistrar.h"
+#include "AnimBlueprintCompilerHandler_CachedPose.h"
+#include "IAnimBlueprintCompilerHandlerCollection.h"
+#include "IAnimBlueprintCompilationContext.h"
 
 /////////////////////////////////////////////////////
 // UAnimGraphNode_UseCachedPose
@@ -174,6 +177,41 @@ bool UAnimGraphNode_UseCachedPose::IsActionFilteredOut(class FBlueprintActionFil
 		}
 	}
 	return bIsFilteredOut;
+}
+
+void UAnimGraphNode_UseCachedPose::OnProcessDuringCompilation(IAnimBlueprintCompilationContext& InCompilationContext, IAnimBlueprintGeneratedClassCompiledData& OutCompiledData)
+{	
+	FAnimBlueprintCompilerHandler_CachedPose* CompilerHandler = InCompilationContext.GetHandler<FAnimBlueprintCompilerHandler_CachedPose>("AnimBlueprintCompilerHandler_CachedPose");
+	check(CompilerHandler);
+
+	bool bSuccessful = false;
+
+	// Link to the saved cached pose
+	if(SaveCachedPoseNode.IsValid())
+	{
+		if (UAnimGraphNode_SaveCachedPose* AssociatedSaveNode = CompilerHandler->GetSaveCachedPoseNodes().FindRef(SaveCachedPoseNode->CacheName))
+		{
+			FStructProperty* LinkProperty = FindFProperty<FStructProperty>(FAnimNode_UseCachedPose::StaticStruct(), TEXT("LinkToCachingNode"));
+			check(LinkProperty);
+
+			FPoseLinkMappingRecord LinkRecord = FPoseLinkMappingRecord::MakeFromMember(this, AssociatedSaveNode, LinkProperty);
+			if (LinkRecord.IsValid())
+			{
+				InCompilationContext.AddPoseLinkMappingRecord(LinkRecord);
+			}
+			bSuccessful = true;
+
+			// Save CachePoseName for debug
+			FName CachePoseName = FName(*SaveCachedPoseNode->CacheName);
+			SaveCachedPoseNode->Node.CachePoseName = CachePoseName;
+			Node.CachePoseName = CachePoseName;
+		}
+	}
+	
+	if(!bSuccessful)
+	{
+		InCompilationContext.GetMessageLog().Error(*LOCTEXT("NoAssociatedSaveNode", "@@ does not have an associated Save Cached Pose node").ToString(), this);
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

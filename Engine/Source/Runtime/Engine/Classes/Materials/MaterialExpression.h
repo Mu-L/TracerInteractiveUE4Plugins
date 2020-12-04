@@ -282,7 +282,7 @@ class ENGINE_API UMaterialExpression : public UObject
 	virtual void GetConnectorToolTip(int32 InputIndex, int32 OutputIndex, TArray<FString>& OutToolTip);
 
 	/** Get a tooltip for the expression itself. */
-	virtual void GetExpressionToolTip(TArray<FString>& OutToolTip) {}
+	virtual void GetExpressionToolTip(TArray<FString>& OutToolTip);
 	/**
 	 *	Returns the amount of padding to use for the label.
 	 *
@@ -420,8 +420,6 @@ class ENGINE_API UMaterialExpression : public UObject
 
 	virtual bool HasConnectedOutputs() const;
 
-#endif // WITH_EDITOR
-
 	/** Checks whether any inputs to this expression create a loop */
 	bool ContainsInputLoop(const bool bStopOnFunctionCall = true);
 
@@ -434,6 +432,7 @@ protected:
 	 * @param VisitedExpressions List of all expression keys that have been visited
 	 */
 	bool ContainsInputLoopInternal(TArray<class FMaterialExpressionKey>& ExpressionStack, TSet<class FMaterialExpressionKey>& VisitedExpressions, const bool bStopOnFunctionCall);
+#endif // WITH_EDITOR
 };
 
 

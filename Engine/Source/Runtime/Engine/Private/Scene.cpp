@@ -394,6 +394,7 @@ FPostProcessSettings::FPostProcessSettings()
 
 	BlueCorrection = 0.6f;
 	ExpandGamut = 1.0f;
+	ToneCurveAmount = 1.0;
 
 	// default values:
 	FilmWhitePoint = FLinearColor(1.0f, 1.0f, 1.0f);
@@ -524,8 +525,11 @@ FPostProcessSettings::FPostProcessSettings()
 	AmbientOcclusionMipScale = 1.7f;
 	AmbientOcclusionMipThreshold = 0.01f;
 	AmbientOcclusionRadiusInWS = false;
+	AmbientOcclusionTemporalBlendWeight = 0.1f;
 	RayTracingAO = 1;
 	RayTracingAOSamplesPerPixel = 1;
+	RayTracingAOIntensity = 1.0;
+	RayTracingAORadius = 200.0f;
 	IndirectLightingColor = FLinearColor(1.0f, 1.0f, 1.0f);
 	IndirectLightingIntensity = 1.0f;
 	ColorGradingIntensity = 1.0f;
@@ -623,6 +627,7 @@ FPostProcessSettings::FPostProcessSettings(const FPostProcessSettings& Settings)
 	, bOverride_ColorCorrectionHighlightsMin(Settings.bOverride_ColorCorrectionHighlightsMin)
 	, bOverride_BlueCorrection(Settings.bOverride_BlueCorrection)
 	, bOverride_ExpandGamut(Settings.bOverride_ExpandGamut)
+	, bOverride_ToneCurveAmount(Settings.bOverride_ToneCurveAmount)
 	, bOverride_FilmWhitePoint(Settings.bOverride_FilmWhitePoint)
 	, bOverride_FilmSaturation(Settings.bOverride_FilmSaturation)
 	, bOverride_FilmChannelMixerRed(Settings.bOverride_FilmChannelMixerRed)
@@ -710,8 +715,11 @@ FPostProcessSettings::FPostProcessSettings(const FPostProcessSettings& Settings)
 	, bOverride_AmbientOcclusionMipBlend(Settings.bOverride_AmbientOcclusionMipBlend)
 	, bOverride_AmbientOcclusionMipScale(Settings.bOverride_AmbientOcclusionMipScale)
 	, bOverride_AmbientOcclusionMipThreshold(Settings.bOverride_AmbientOcclusionMipThreshold)
+	, bOverride_AmbientOcclusionTemporalBlendWeight(Settings.bOverride_AmbientOcclusionTemporalBlendWeight)
 	, bOverride_RayTracingAO(Settings.bOverride_RayTracingAO)
 	, bOverride_RayTracingAOSamplesPerPixel(Settings.bOverride_RayTracingAOSamplesPerPixel)
+	, bOverride_RayTracingAOIntensity(Settings.bOverride_RayTracingAOIntensity)
+	, bOverride_RayTracingAORadius(Settings.bOverride_RayTracingAORadius)
 	, bOverride_LPVIntensity(Settings.bOverride_LPVIntensity)
 	, bOverride_LPVDirectionalOcclusionIntensity(Settings.bOverride_LPVDirectionalOcclusionIntensity)
 	, bOverride_LPVDirectionalOcclusionRadius(Settings.bOverride_LPVDirectionalOcclusionRadius)
@@ -803,6 +811,7 @@ FPostProcessSettings::FPostProcessSettings(const FPostProcessSettings& Settings)
 	, ColorCorrectionShadowsMax(Settings.ColorCorrectionShadowsMax)
 	, BlueCorrection(Settings.BlueCorrection)
 	, ExpandGamut(Settings.ExpandGamut)
+	, ToneCurveAmount(Settings.ToneCurveAmount)
 	, FilmSlope(Settings.FilmSlope)
 	, FilmToe(Settings.FilmToe)
 	, FilmShoulder(Settings.FilmShoulder)
@@ -891,8 +900,11 @@ FPostProcessSettings::FPostProcessSettings(const FPostProcessSettings& Settings)
 	, AmbientOcclusionMipBlend(Settings.AmbientOcclusionMipBlend)
 	, AmbientOcclusionMipScale(Settings.AmbientOcclusionMipScale)
 	, AmbientOcclusionMipThreshold(Settings.AmbientOcclusionMipThreshold)
+	, AmbientOcclusionTemporalBlendWeight(Settings.AmbientOcclusionTemporalBlendWeight)
 	, RayTracingAO(Settings.RayTracingAO)
 	, RayTracingAOSamplesPerPixel(Settings.RayTracingAOSamplesPerPixel)
+	, RayTracingAOIntensity(Settings.RayTracingAOIntensity)
+	, RayTracingAORadius(Settings.RayTracingAORadius)
 	, IndirectLightingColor(Settings.IndirectLightingColor)
 	, IndirectLightingIntensity(Settings.IndirectLightingIntensity)
 	, RayTracingGIType(Settings.RayTracingGIType)

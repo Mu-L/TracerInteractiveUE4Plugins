@@ -39,6 +39,8 @@
 #define SETTING_BROADCASTER FName(TEXT("BROADCASTER"))
 /** Setting defining if we are a party member spectator (value is bool) */
 #define SETTING_PARTYMEMBERSPECTATOR FName(TEXT("PARTYMEMBERSPECTATOR"))
+/** Setting describing the number of spectator slots in the session (value is int32) */
+#define SETTING_MAXSPECTATORS FName(TEXT("MAXSPECTATORS"))
 
 /** 8 user defined integer params to be used when filtering searches for sessions */
 #define SETTING_CUSTOMSEARCHINT1 FName(TEXT("CUSTOMSEARCHINT1"))
@@ -304,6 +306,9 @@ public:
 	int32 BuildUniqueId;
 	/** Array of custom session settings */
 	FSessionSettings Settings;
+
+	/** Map of custom settings per session member (Not currently used by every OSS) */
+	TUniqueNetIdMap<FSessionSettings> MemberSettings;
 
 public:
 	/** Default constructor, used when serializing a network packet */
@@ -621,12 +626,18 @@ public:
 #define SEARCH_USER FName(TEXT("SEARCHUSER"))
 /** Keywords to match in session search */
 #define SEARCH_KEYWORDS FName(TEXT("SEARCHKEYWORDS"))
+/** The matchmaking queue name to matchmake in, e.g. "TeamDeathmatch" (value is string) */
+#define SEARCH_MATCHMAKING_QUEUE FName(TEXT("MATCHMAKINGQUEUE"))
 /** If set, use the named Xbox Live hopper to find a session via matchmaking (value is a string) */
 #define SEARCH_XBOX_LIVE_HOPPER_NAME FName(TEXT("LIVEHOPPERNAME"))
 /** Which session template from the service configuration to use */
 #define SEARCH_XBOX_LIVE_SESSION_TEMPLATE_NAME FName(TEXT("LIVESESSIONTEMPLATE"))
 /** Selection method used to determine which match to join when multiple are returned (valid only on Switch) */
 #define SEARCH_SWITCH_SELECTION_METHOD FName(TEXT("SWITCHSELECTIONMETHOD"))
+
+// User attributes for searching (FSessionMatchmakingUser::Attributes)
+/** Team a user is searching for */
+#define SEARCH_USER_ATTRIBUTE_TEAM TEXT("TEAM")
 
 /**
  * Encapsulation of a search for sessions request.
@@ -667,10 +678,11 @@ public:
 		, PlatformHash(0)
 		, TimeoutInSeconds(0.0f)
 	{
-		QuerySettings.Set(SETTING_MAPNAME, FString(), EOnlineComparisonOp::Equals);
-		QuerySettings.Set(SEARCH_DEDICATED_ONLY, false, EOnlineComparisonOp::Equals);
-		QuerySettings.Set(SEARCH_EMPTY_SERVERS_ONLY, false, EOnlineComparisonOp::Equals);
-		QuerySettings.Set(SEARCH_SECURE_SERVERS_ONLY, false, EOnlineComparisonOp::Equals);
+		// Examples of setting search parameters
+		// QuerySettings.Set(SETTING_MAPNAME, FString(), EOnlineComparisonOp::Equals);
+		// QuerySettings.Set(SEARCH_DEDICATED_ONLY, false, EOnlineComparisonOp::Equals);
+		// QuerySettings.Set(SEARCH_EMPTY_SERVERS_ONLY, false, EOnlineComparisonOp::Equals);
+		// QuerySettings.Set(SEARCH_SECURE_SERVERS_ONLY, false, EOnlineComparisonOp::Equals);
 	}
 
 	virtual ~FOnlineSessionSearch()

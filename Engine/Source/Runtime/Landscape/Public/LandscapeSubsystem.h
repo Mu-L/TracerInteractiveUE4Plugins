@@ -5,49 +5,44 @@
 #include "CoreMinimal.h"
 #include "UObject/ObjectMacros.h"
 #include "Subsystems/WorldSubsystem.h"
-#include "Engine/EngineBaseTypes.h"
+#include "Tickable.h"
 #include "LandscapeSubsystem.generated.h"
 
 class ALandscapeProxy;
 
-struct FLandscapeSubsystemTickFunction : public FTickFunction
-{
-	FLandscapeSubsystemTickFunction() : FLandscapeSubsystemTickFunction(nullptr) {}
-	FLandscapeSubsystemTickFunction(ULandscapeSubsystem* InSubsystem) : Subsystem(InSubsystem) {}
-	virtual ~FLandscapeSubsystemTickFunction() {}
-
-	// Begin FTickFunction overrides
-	virtual void ExecuteTick(float DeltaTime, enum ELevelTick TickType, ENamedThreads::Type CurrentThread, const FGraphEventRef& MyCompletionGraphEvent) override;
-	virtual FString DiagnosticMessage() override;
-	virtual FName DiagnosticContext(bool bDetailed) override;
-	// End FTickFunction overrides
-
-	class ULandscapeSubsystem* Subsystem;
-};
-
-UCLASS()
-class ULandscapeSubsystem : public UWorldSubsystem, public FTickFunction
+UCLASS(MinimalAPI)
+class ULandscapeSubsystem : public UWorldSubsystem, public FTickableGameObject
 {
 	GENERATED_BODY()
 
+public:
 	ULandscapeSubsystem();
 	virtual ~ULandscapeSubsystem();
 
-public:
+	void RegisterActor(ALandscapeProxy* Proxy);
+	void UnregisterActor(ALandscapeProxy* Proxy);
+
+	// Begin FTickableGameObject overrides
+	virtual void Tick(float DeltaTime) override;
+	virtual bool IsTickableInEditor() const override { return true; }
+	virtual ETickableTickType GetTickableTickType() const override;
+	virtual TStatId GetStatId() const override;
+	// End FTickableGameObject overrides
+
+#if WITH_EDITOR
+	LANDSCAPE_API void BuildGrassMaps();
+	LANDSCAPE_API int32 GetOutdatedGrassMapCount();
+#endif
+
+private:
 	// Begin USubsystem
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 	// End USubsystem
-		
-	void RegisterActor(ALandscapeProxy* Proxy);
-	void UnregisterActor(ALandscapeProxy* Proxy);
-
-private:
-	void Tick(float DeltaTime, enum ELevelTick TickType, ENamedThreads::Type CurrentThread, const FGraphEventRef& MyCompletionGraphEvent);
-
-	friend struct FLandscapeSubsystemTickFunction;
-	FLandscapeSubsystemTickFunction TickFunction;
 
 	TArray<ALandscapeProxy*> Proxies;
-};
 
+#if WITH_EDITOR
+	class FLandscapeGrassMapsBuilder* GrassMapsBuilder;
+#endif
+};

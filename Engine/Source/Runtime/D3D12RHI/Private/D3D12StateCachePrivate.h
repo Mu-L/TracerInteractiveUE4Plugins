@@ -347,7 +347,7 @@ protected:
 	bool bNeedSetBlendFactor;
 	bool bNeedSetStencilRef;
 	bool bNeedSetDepthBounds;
-	bool bAutoFlushComputeShaderCache;
+	bool bNeedSetShadingRate;
 	D3D12_RESOURCE_BINDING_TIER ResourceBindingTier;
 
 	struct
@@ -403,6 +403,9 @@ protected:
 
 			float MinDepth;
 			float MaxDepth;
+
+			EVRSShadingRate  DrawShadingRate;
+			EVRSRateCombiner Combiner;
 		} Graphics;
 
 		struct
@@ -918,7 +921,7 @@ public:
 
 	FD3D12StateCacheBase(FRHIGPUMask Node);
 
-	void Init(FD3D12Device* InParent, FD3D12CommandContext* InCmdContext, const FD3D12StateCacheBase* AncestralState, FD3D12SubAllocatedOnlineHeap::SubAllocationDesc& SubHeapDesc);
+	void Init(FD3D12Device* InParent, FD3D12CommandContext* InCmdContext, const FD3D12StateCacheBase* AncestralState);
 
 	virtual ~FD3D12StateCacheBase()
 	{
@@ -981,14 +984,24 @@ public:
 		}
 	}
 
+	void SetShadingRate(EVRSShadingRate ShadingRate, EVRSRateCombiner Combiner)
+	{
+		if (PipelineState.Graphics.DrawShadingRate != ShadingRate )
+		{
+			PipelineState.Graphics.DrawShadingRate = ShadingRate;
+			bNeedSetShadingRate = GRHISupportsVariableRateShading;
+		}
+
+		if (PipelineState.Graphics.Combiner != Combiner)
+		{
+			PipelineState.Graphics.Combiner = Combiner;
+			bNeedSetShadingRate = GRHISupportsVariableRateShading;
+		}
+	}
+
 	void SetComputeBudget(EAsyncComputeBudget ComputeBudget)
 	{
 		PipelineState.Compute.ComputeBudget = ComputeBudget;
-	}
-
-	D3D12_STATE_CACHE_INLINE void AutoFlushComputeShaderCache(bool bEnable)
-	{
-		bAutoFlushComputeShaderCache = bEnable;
 	}
 
 	void FlushComputeShaderCache(bool bForce = false);

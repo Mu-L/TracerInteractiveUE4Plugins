@@ -27,7 +27,8 @@ enum EThreadPriority
 	TPri_Highest,
 	TPri_Lowest,
 	TPri_SlightlyBelowNormal,
-	TPri_TimeCritical
+	TPri_TimeCritical,
+	TPri_Num,
 };
 
 enum class EThreadCreateFlags : int8
@@ -52,6 +53,11 @@ public:
 	}
 
 	static const CORE_API uint64 GetRHIThreadMask()
+	{
+		return 0xFFFFFFFFFFFFFFFF;
+	}
+
+	static const CORE_API uint64 GetRHIFrameOffsetThreadMask()
 	{
 		return 0xFFFFFFFFFFFFFFFF;
 	}
@@ -97,6 +103,16 @@ public:
 	}
 
 	static const CORE_API uint64 GetAsyncLoadingThreadMask()
+	{
+		return 0xFFFFFFFFFFFFFFFF;
+	}
+
+	static const CORE_API uint64 GetIoDispatcherThreadMask()
+	{
+		return 0xFFFFFFFFFFFFFFFF;
+	}
+
+	static const CORE_API uint64 GetTraceThreadMask()
 	{
 		return 0xFFFFFFFFFFFFFFFF;
 	}

@@ -8,6 +8,16 @@
 #include "UObject/UObjectIterator.h"
 #include "HAL/IConsoleManager.h"
 
+#include "DeviceProfiles/DeviceProfileFragment.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogDeviceProfile, Log, All);
+
+UDeviceProfileFragment::UDeviceProfileFragment(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{
+}
+
+
 UDeviceProfile::UDeviceProfile(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
@@ -55,6 +65,13 @@ void UDeviceProfile::PostInitProperties()
 {
 	Super::PostInitProperties();
 	ValidateTextureLODGroups();
+}
+
+void UDeviceProfile::BeginDestroy()
+{
+	UE_LOG(LogDeviceProfile, Log, TEXT("Device profile begin destroy: [%p] %s"), this, *GetName());
+
+	Super::BeginDestroy();
 }
 
 void UDeviceProfile::ValidateProfile()

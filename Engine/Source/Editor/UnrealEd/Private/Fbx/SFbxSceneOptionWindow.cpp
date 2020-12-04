@@ -1319,17 +1319,17 @@ void SFbxSceneOptionWindow::Construct(const FArguments& InArgs)
 	//By default we want to see the Scene tab
 	if (!SceneInfoOriginal.IsValid())
 	{
-		FbxSceneImportTabManager->InvokeTab(FTabId("Scene"));
+		FbxSceneImportTabManager->TryInvokeTab(FTabId("Scene"));
 	}
 	else
 	{
 		if (bCanReimportHierarchy)
 		{
-			FbxSceneImportTabManager->InvokeTab(FTabId("SceneReImport"));
+			FbxSceneImportTabManager->TryInvokeTab(FTabId("SceneReImport"));
 		}
 		else
 		{
-			FbxSceneImportTabManager->InvokeTab(FTabId("StaticMeshesReimport"));
+			FbxSceneImportTabManager->TryInvokeTab(FTabId("StaticMeshesReimport"));
 		}
 	}
 }
@@ -1406,13 +1406,13 @@ void SFbxSceneOptionWindow::CopyStaticMeshOptionsToFbxOptions(UnFbx::FBXImportOp
 	ImportSettings->StaticMeshLODGroup = StaticMeshOptions->StaticMeshLODGroup;
 	switch (StaticMeshOptions->VertexColorImportOption)
 	{
-	case EFbxSceneVertexColorImportOption::Type::Replace:
+	case EFbxSceneVertexColorImportOption::Replace:
 		ImportSettings->VertexColorImportOption = EVertexColorImportOption::Type::Replace;
 		break;
-	case EFbxSceneVertexColorImportOption::Type::Override:
+	case EFbxSceneVertexColorImportOption::Override:
 		ImportSettings->VertexColorImportOption = EVertexColorImportOption::Type::Override;
 		break;
-	case EFbxSceneVertexColorImportOption::Type::Ignore:
+	case EFbxSceneVertexColorImportOption::Ignore:
 		ImportSettings->VertexColorImportOption = EVertexColorImportOption::Type::Ignore;
 		break;
 	default:
@@ -1454,16 +1454,16 @@ void SFbxSceneOptionWindow::CopyFbxOptionsToStaticMeshOptions(UnFbx::FBXImportOp
 	switch (ImportSettings->VertexColorImportOption)
 	{
 	case EVertexColorImportOption::Type::Replace:
-		StaticMeshOptions->VertexColorImportOption = EFbxSceneVertexColorImportOption::Type::Replace;
+		StaticMeshOptions->VertexColorImportOption = EFbxSceneVertexColorImportOption::Replace;
 		break;
 	case EVertexColorImportOption::Type::Override:
-		StaticMeshOptions->VertexColorImportOption = EFbxSceneVertexColorImportOption::Type::Override;
+		StaticMeshOptions->VertexColorImportOption = EFbxSceneVertexColorImportOption::Override;
 		break;
 	case EVertexColorImportOption::Type::Ignore:
-		StaticMeshOptions->VertexColorImportOption = EFbxSceneVertexColorImportOption::Type::Ignore;
+		StaticMeshOptions->VertexColorImportOption = EFbxSceneVertexColorImportOption::Ignore;
 		break;
 	default:
-		StaticMeshOptions->VertexColorImportOption = EFbxSceneVertexColorImportOption::Type::Replace;
+		StaticMeshOptions->VertexColorImportOption = EFbxSceneVertexColorImportOption::Replace;
 	}
 	StaticMeshOptions->VertexOverrideColor = ImportSettings->VertexOverrideColor;
 	switch (ImportSettings->NormalImportMethod)
@@ -1507,6 +1507,7 @@ void SFbxSceneOptionWindow::CopySkeletalMeshOptionsToFbxOptions(UnFbx::FBXImport
 	ImportSettings->bDeleteExistingMorphTargetCurves = SkeletalMeshOptions->bDeleteExistingMorphTargetCurves;
 	ImportSettings->bImportCustomAttribute = SkeletalMeshOptions->bImportCustomAttribute;
 	ImportSettings->bDeleteExistingCustomAttributeCurves = SkeletalMeshOptions->bDeleteExistingCustomAttributeCurves;
+	ImportSettings->bDeleteExistingNonCurveCustomAttributes = SkeletalMeshOptions->bDeleteExistingNonCurveCustomAttributes;	
 	ImportSettings->bPreserveLocalTransform = SkeletalMeshOptions->bPreserveLocalTransform;
 	ImportSettings->bResample = !SkeletalMeshOptions->bUseDefaultSampleRate;
 	ImportSettings->ResampleRate = SkeletalMeshOptions->CustomSampleRate;
@@ -1532,6 +1533,7 @@ void SFbxSceneOptionWindow::CopyFbxOptionsToSkeletalMeshOptions(UnFbx::FBXImport
 	SkeletalMeshOptions->bDeleteExistingMorphTargetCurves = ImportSettings->bDeleteExistingMorphTargetCurves;
 	SkeletalMeshOptions->bImportCustomAttribute = ImportSettings->bImportCustomAttribute;
 	SkeletalMeshOptions->bDeleteExistingCustomAttributeCurves = ImportSettings->bDeleteExistingCustomAttributeCurves;
+	SkeletalMeshOptions->bDeleteExistingNonCurveCustomAttributes = ImportSettings->bDeleteExistingNonCurveCustomAttributes;	
 	SkeletalMeshOptions->bPreserveLocalTransform = ImportSettings->bPreserveLocalTransform;
 	SkeletalMeshOptions->bUseDefaultSampleRate = !ImportSettings->bResample;
 	SkeletalMeshOptions->CustomSampleRate = ImportSettings->ResampleRate;

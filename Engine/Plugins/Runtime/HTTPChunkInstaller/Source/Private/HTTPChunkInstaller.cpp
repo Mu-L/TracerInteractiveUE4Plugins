@@ -21,6 +21,7 @@
 #include "HAL/RunnableThread.h"
 #include "Misc/CommandLine.h"
 #include "Modules/ModuleManager.h"
+#include "Stats/Stats.h"
 
 #define LOCTEXT_NAMESPACE "HTTPChunkInstaller"
 
@@ -293,7 +294,7 @@ public:
 		else
 		{
 			// Create the Http request and add to pending request list
-			TSharedRef<IHttpRequest> HttpRequest = FHttpModule::Get().CreateRequest();
+			TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
 			EnumerateFilesRequests.Add(HttpRequest, Page);
 
 			HttpRequest->OnProcessRequestComplete().BindRaw(this, &FOnlineTitleFileHttp::EnumerateFiles_HttpRequestComplete);
@@ -392,6 +393,8 @@ public:
 	/** Used to check that async tasks have completed and can be completed */
 	virtual void Tick(float DeltaTime)
 	{
+		QUICK_SCOPE_CYCLE_COUNTER(STAT_FOnlineTitleFileHttp_Tick);
+
 		TArray<int32> ItemsToRemove;
 		ItemsToRemove.Reserve(AsyncLocalReads.Num());
 
@@ -505,7 +508,7 @@ private:
 			CloudFile->AsyncState = ECloudAsyncTaskState::InProgress;
 
 			// Create the Http request and add to pending request list
-			TSharedRef<IHttpRequest> HttpRequest = FHttpModule::Get().CreateRequest();
+			TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
 			FileRequests.Add(HttpRequest, FPendingFileRequest(FileName));
 			FileProgressRequestsMap.Add(HttpRequest, FPendingFileRequest(FileName));
 

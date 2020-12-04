@@ -39,13 +39,19 @@ struct FOptionalVulkanDeviceExtensions
 			uint32 HasEXTValidationCache : 1;
 			uint32 HasAMDBufferMarker : 1;
 			uint32 HasNVDiagnosticCheckpoints : 1;
-			uint32 HasGoogleDisplayTiming : 1;
+			uint32 HasNVDeviceDiagnosticConfig : 1;
 			uint32 HasYcbcrSampler : 1;
 			uint32 HasMemoryPriority : 1;
+			uint32 HasMemoryBudget : 1;
 			uint32 HasDriverProperties : 1;
 			uint32 HasEXTFragmentDensityMap : 1;
 			uint32 HasEXTFullscreenExclusive : 1;
 			uint32 HasKHRImageFormatList : 1;
+			uint32 HasEXTASTCDecodeMode : 1;
+			uint32 HasQcomRenderPassTransform : 1;
+			uint32 HasAtomicInt64 : 1;
+			uint32 HasBufferAtomicInt64 : 1;
+			uint32 HasScalarBlockLayoutFeatures : 1;
 		};
 		uint32 Packed;
 	};
@@ -88,6 +94,7 @@ namespace VulkanRHI
 			ShaderModule,
 			Event,
 			ResourceAllocation,
+			DeviceMemoryAllocation,
 			BufferSuballocation,
 		};
 
@@ -99,11 +106,8 @@ namespace VulkanRHI
 		}
 
 
-		void EnqueueResourceAllocation(TRefCountPtr<VulkanRHI::FOldResourceAllocation> ResourceAllocation);
-		void EnqueueBufferSuballocation(TRefCountPtr<VulkanRHI::FBufferSuballocation> Allocation);
-		void EnqueueBufferSuballocationDirect(FBufferSuballocation* SubAllocation);
-
-		
+		void EnqueueResourceAllocation(FVulkanAllocation& Allocation);
+		void EnqueueDeviceAllocation(FDeviceMemoryAllocation* DeviceMemoryAllocation);
 
 		void ReleaseResources(bool bDeleteImmediately = false);
 
@@ -124,10 +128,8 @@ namespace VulkanRHI
 			FVulkanCmdBuffer* CmdBuffer;
 
 			uint64 Handle;
-			TRefCountPtr<VulkanRHI::FOldResourceAllocation> ResourceAllocation;
-			TRefCountPtr<VulkanRHI::FBufferSuballocation> SubAllocation;
-			VulkanRHI::FBufferSuballocation* SubAllocationDirect;
-
+			FVulkanAllocation Allocation;
+			FDeviceMemoryAllocation* DeviceMemoryAllocation;
 		};
 		FCriticalSection CS;
 		TArray<FEntry> Entries;
@@ -235,9 +237,14 @@ public:
 		return PhysicalFeatures;
 	}
 
+	inline bool HasSeparateDepthStencilLayouts() const
+	{
+		return bHasSeparateDepthStencilLayouts;
+	}
+
 	inline bool HasUnifiedMemory() const
 	{
-		return MemoryManager.HasUnifiedMemory();
+		return DeviceMemoryManager.HasUnifiedMemory();
 	}
 
 	inline uint64 GetTimestampValidBitsMask() const
@@ -270,19 +277,19 @@ public:
 		return FormatProperties;
 	}
 
-	inline VulkanRHI::FDeviceMemoryManager& GetMemoryManager()
+	inline VulkanRHI::FDeviceMemoryManager& GetDeviceMemoryManager()
 	{
-		return MemoryManager;
+		return DeviceMemoryManager;
 	}
 
 	inline const VkPhysicalDeviceMemoryProperties& GetDeviceMemoryProperties() const
 	{
-		return MemoryManager.GetMemoryProperties();
+		return DeviceMemoryManager.GetMemoryProperties();
 	}
 
-	inline VulkanRHI::FResourceHeapManager& GetResourceHeapManager()
+	inline VulkanRHI::FMemoryManager& GetMemoryManager()
 	{
-		return ResourceHeapManager;
+		return MemoryManager;
 	}
 
 	inline VulkanRHI::FDeferredDeletionQueue2& GetDeferredDeletionQueue()
@@ -369,7 +376,7 @@ public:
 
 	void SubmitCommandsAndFlushGPU();
 
-	FVulkanOcclusionQueryPool* AcquireOcclusionQueryPool(uint32 NumQueries);
+	FVulkanOcclusionQueryPool* AcquireOcclusionQueryPool(FVulkanCommandBufferManager* CommandBufferManager, uint32 NumQueries);
 	void ReleaseUnusedOcclusionQueryPools();
 
 	inline class FVulkanPipelineStateCacheManager* GetPipelineStateCache()
@@ -424,9 +431,9 @@ private:
 
 	VkDevice Device;
 
-	VulkanRHI::FDeviceMemoryManager MemoryManager;
+	VulkanRHI::FDeviceMemoryManager DeviceMemoryManager;
 
-	VulkanRHI::FResourceHeapManager ResourceHeapManager;
+	VulkanRHI::FMemoryManager MemoryManager;
 
 	VulkanRHI::FDeferredDeletionQueue2 DeferredDeletionQueue;
 
@@ -450,7 +457,9 @@ private:
 #if VULKAN_SUPPORTS_PHYSICAL_DEVICE_PROPERTIES2
 	VkPhysicalDeviceIDPropertiesKHR GpuIdProps;
 #endif
+
 	VkPhysicalDeviceFeatures PhysicalFeatures;
+	bool bHasSeparateDepthStencilLayouts = false;
 
 	TArray<VkQueueFamilyProperties> QueueFamilyProps;
 	VkFormatProperties FormatProperties[VK_FORMAT_RANGE_SIZE];

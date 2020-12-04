@@ -71,6 +71,11 @@ SkeletalSimplifier::FSimplifierMeshManager::FSimplifierMeshManager(const MeshVer
 
 	GroupVerts(VertArray);
 
+	// Set the Attribute ElementIDs on the verts - used to track split and non-split attributes. 
+	// Note: this requires that GroupVerts() has already been called.
+
+	SetAttributeIDS(VertArray);
+
 	// Populate EdgeArray
 
 	MakeEdges(VertArray, NumSrcTris, EdgeArray);
@@ -166,6 +171,153 @@ void SkeletalSimplifier::FSimplifierMeshManager::GroupVerts(TArray<SimpVertType>
 	}
 }
 
+void SkeletalSimplifier::FSimplifierMeshManager::SetAttributeIDS(TArray<SimpVertType>& Verts)
+{
+
+	const int32 NumVerts = Verts.Num();
+
+	// set element ids on the verts.
+
+	VertPtrArray CoincidentSimpVerts;
+	int NormalID = 0;
+	int TangentID = 0;
+	int BiTangetID = 0;
+	int ColorID = 0;
+	int UVIDs[MAX_TEXCOORDS];
+	for (int i = 0; i < MAX_TEXCOORDS; ++i) UVIDs[i] = 0;
+
+	for (int i = 0; i < NumVerts; ++i)
+	{
+		CoincidentSimpVerts.Reset();
+		SimpVertType& HeadSimpVert = Verts[i];
+		auto& HeadVertAttrs = HeadSimpVert.vert.BasicAttributes;
+
+		// already processed this vert ( and all the coincident verts with it).
+		if (HeadVertAttrs.ElementIDs.ColorID != -1) continue;
+
+		// give this vert the next available element Id
+		HeadVertAttrs.ElementIDs.NormalID = NormalID++;
+		HeadVertAttrs.ElementIDs.TangentID = TangentID++;
+		HeadVertAttrs.ElementIDs.BiTangentID = BiTangetID++;
+		HeadVertAttrs.ElementIDs.ColorID = ColorID++;
+
+		for (int t = 0; t < MAX_TEXCOORDS; ++t)
+		{
+			HeadVertAttrs.ElementIDs.TexCoordsID[t] = UVIDs[t]++;
+		}
+
+		// collect the verts in the linklist - they share the same location.
+		GetVertsInGroup(HeadSimpVert, CoincidentSimpVerts);
+
+		// The HeadSimpVert is the j=0 one..
+		for (int j = 1; j < CoincidentSimpVerts.Num(); ++j)
+		{
+			SimpVertType* ActiveSimpVert = CoincidentSimpVerts[j];
+			auto& ActiveVertAttrs = ActiveSimpVert->vert.BasicAttributes;
+			checkSlow(ActiveVertAttrs.ElementIDs.NormalID == -1);
+			
+			// If normals match another vert at this location, they should share ID
+			for (int k = 0; k < j; ++k)
+			{
+				SimpVertType* ProcessedSimpVert = CoincidentSimpVerts[k];
+				auto& ProcessedVertAttrs = ProcessedSimpVert->vert.BasicAttributes;
+
+				if (ProcessedVertAttrs.Normal == ActiveVertAttrs.Normal)
+				{
+					ActiveVertAttrs.ElementIDs.NormalID = ProcessedVertAttrs.ElementIDs.NormalID;
+					break;
+				}
+			}
+			// If normal didn't mach with any earlier vert at this location. Give new ID
+			if (ActiveVertAttrs.ElementIDs.NormalID == -1)
+			{
+				ActiveVertAttrs.ElementIDs.NormalID = NormalID++;
+			}
+
+			// If tangents match another vert at this location, they should share ID
+			for (int k = 0; k < j; ++k)
+			{
+				SimpVertType* ProcessedSimpVert = CoincidentSimpVerts[k];
+				auto& ProcessedVertAttrs = ProcessedSimpVert->vert.BasicAttributes;
+
+				if (ProcessedVertAttrs.Tangent == ActiveVertAttrs.Tangent)
+				{
+					ActiveVertAttrs.ElementIDs.TangentID = ProcessedVertAttrs.ElementIDs.TangentID;
+					break;
+				}
+
+			}
+			// If tangent didn't mach with any earlier vert at this location. Give new ID
+			if (ActiveVertAttrs.ElementIDs.TangentID == -1)
+			{
+				ActiveVertAttrs.ElementIDs.TangentID = TangentID++;
+			}
+
+			// If Bitangents match another vert at this location, they should share ID
+			for (int k = 0; k < j; ++k)
+			{
+				SimpVertType* ProcessedSimpVert = CoincidentSimpVerts[k];
+				auto& ProcessedVertAttrs = ProcessedSimpVert->vert.BasicAttributes;
+
+				if (ProcessedVertAttrs.BiTangent == ActiveVertAttrs.BiTangent)
+				{
+					ActiveVertAttrs.ElementIDs.BiTangentID = ProcessedVertAttrs.ElementIDs.BiTangentID;
+					break;
+				}
+			}
+			// If BiTangent didn't mach with any earlier vert at this location. Give new ID
+			if (ActiveVertAttrs.ElementIDs.BiTangentID == -1)
+			{
+				ActiveVertAttrs.ElementIDs.BiTangentID = BiTangetID++;
+			}
+
+			// If Color match another vert at this location, they should share ID
+			for (int k = 0; k < j; ++k)
+			{
+				SimpVertType* ProcessedSimpVert = CoincidentSimpVerts[k];
+				auto& ProcessedVertAttrs = ProcessedSimpVert->vert.BasicAttributes;
+
+				if (ProcessedVertAttrs.Color == ActiveVertAttrs.Color)
+				{
+					ActiveVertAttrs.ElementIDs.ColorID = ProcessedVertAttrs.ElementIDs.ColorID;
+					break;
+				}
+			}
+			//If  Color didn't mach with any earlier vert at this location. Give new ID
+			if (ActiveVertAttrs.ElementIDs.ColorID == -1)
+			{
+				ActiveVertAttrs.ElementIDs.ColorID = ColorID++;
+			}
+
+			for (int t = 0; t < MAX_TEXCOORDS; ++t)
+			{
+				// look for texture match
+				for (int k = 0; k < j; ++k)
+				{
+					SimpVertType* ProcessedSimpVert = CoincidentSimpVerts[k];
+					auto& ProcessedVertAttrs = ProcessedSimpVert->vert.BasicAttributes;
+
+					if (ProcessedVertAttrs.TexCoords[t] == ActiveVertAttrs.TexCoords[t])
+					{
+						ActiveVertAttrs.ElementIDs.TexCoordsID[t] = ProcessedVertAttrs.ElementIDs.TexCoordsID[t];
+
+						break;
+					}
+				}
+				// If TexCoord didn't mach with any earlier vert at this location. Give new ID
+				if (ActiveVertAttrs.ElementIDs.TexCoordsID[t] == -1)
+				{
+					ActiveVertAttrs.ElementIDs.TexCoordsID[t] = UVIDs[t]++;
+				}
+			}
+
+		}
+	}
+
+	// @todo Maybe add one pass at to split element bow-ties.  
+	// These could have formed along a UV seam if a both sides of the seam shared the same value at a isolated vertex - but in that case a split vertex might not have been generated..
+
+}
 
 void SkeletalSimplifier::FSimplifierMeshManager::MakeEdges(const TArray<SimpVertType>& Verts, const int32 NumTris, TArray<SimpEdgeType>& Edges)
 {
@@ -334,6 +486,169 @@ void SkeletalSimplifier::FSimplifierMeshManager::GetCoincidentVertGroups(VertPtr
 	}
 }
 
+void  SkeletalSimplifier::FSimplifierMeshManager::WeldNonSplitBasicAttributes(EVtxElementWeld WeldType)
+{
+
+	// Gather the split-vertex groups.  
+	VertPtrArray CoincidentVertGroups;
+	GetCoincidentVertGroups(CoincidentVertGroups);
+
+	// For each split group, weld the attributes that have the same element ID
+	int32 NumCoincidentVertGroups = CoincidentVertGroups.Num();
+
+	for (int32 i = 0; i < NumCoincidentVertGroups; ++i)
+	{
+		SimpVertType* HeadVert = CoincidentVertGroups[i];
+
+		if (!HeadVert) continue;
+
+		// Get the verts that are in this group.
+		VertPtrArray VertGroup;
+		GetVertsInGroup(*HeadVert, VertGroup);
+
+		int32  NumVertsInGroup = VertGroup.Num();
+
+		// reject any groups that weren't really split.
+		if (NumVertsInGroup < 2) continue;
+
+
+		// functor that partitions attributes by attribute ID and welds attributes in a partition to the average value.
+		auto Weld = [&VertGroup, NumVertsInGroup](auto& IDAccessor, auto& ValueAccessor, auto ZeroValue)
+		{
+			// container used to sort coincident vert by ID.  
+			// used to find groups with same ID to weld together.
+
+			TArray<FVertAndID, TInlineAllocator<5>> VertAndIDArray;
+			for (SimpVertType* v : VertGroup)
+			{
+				VertAndIDArray.Emplace(v, IDAccessor(v));
+			}
+			// sort by ID
+			VertAndIDArray.Sort([](const FVertAndID& A, const FVertAndID& B)->bool {return A.ID < B.ID; });
+
+			// find and process the partitions.
+
+			int32 PartitionStart = 0;
+			while (PartitionStart < NumVertsInGroup)
+			{
+				auto AveValue = ZeroValue;
+				int32 PartitionElID = VertAndIDArray[PartitionStart].ID;
+				int32 PartitionEnd = NumVertsInGroup;
+				for (int32 n = PartitionStart; n < NumVertsInGroup; ++n)
+				{
+					if (VertAndIDArray[n].ID == PartitionElID)
+					{
+						AveValue += ValueAccessor(VertAndIDArray[n].SrcVert);
+					}
+					else
+					{
+						PartitionEnd = n;
+						break;
+					}
+				}
+				AveValue /= (PartitionEnd - PartitionStart);
+				for (int32 n = PartitionStart; n < PartitionEnd; ++n)
+				{
+					ValueAccessor(VertAndIDArray[n].SrcVert) = AveValue;
+				}
+
+				PartitionStart = PartitionEnd;
+			}
+
+		};
+
+		// Weld Normals with the same NormalID.
+		if (WeldType == EVtxElementWeld::Normal)
+		{
+			auto NormalIDAccessor = [](SimpVertType* SimpVert)->int32
+			{
+				return SimpVert->vert.BasicAttributes.ElementIDs.NormalID;
+			};
+			auto NormalValueAccessor = [](SimpVertType* SimpVert)->FVector&
+			{
+				return SimpVert->vert.BasicAttributes.Normal;
+			};
+
+			FVector ZeroValue(0, 0, 0);
+			Weld(NormalIDAccessor, NormalValueAccessor, ZeroValue);
+		}
+		// Weld Tangents with same TangentID
+		if (WeldType == EVtxElementWeld::Tangent)
+		{
+
+			auto TangentIDAccessor = [](SimpVertType* SimpVert)->int32
+			{
+				return SimpVert->vert.BasicAttributes.ElementIDs.TangentID;
+			};
+			auto TangentValueAccessor = [](SimpVertType* SimpVert)->FVector&
+			{
+				return SimpVert->vert.BasicAttributes.Tangent;
+			};
+
+			FVector ZeroValue(0, 0, 0);
+			Weld(TangentIDAccessor, TangentValueAccessor, ZeroValue);
+		}
+		// Weld BiTangent with same BiTangentID
+		if (WeldType == EVtxElementWeld::BiTangent)
+		{
+			auto BiTangentIDAccessor = [](SimpVertType* SimpVert)->int32
+			{
+				return SimpVert->vert.BasicAttributes.ElementIDs.BiTangentID;
+			};
+			auto BiTangentValueAccessor = [](SimpVertType* SimpVert)->FVector&
+			{
+				return SimpVert->vert.BasicAttributes.BiTangent;
+			};
+
+			FVector ZeroValue(0, 0, 0);
+			Weld(BiTangentIDAccessor, BiTangentValueAccessor, ZeroValue);
+		}
+		// Weld Color with same ColorID
+		if (WeldType == EVtxElementWeld::Color)
+		{
+
+			auto ColorIDAccessor = [](SimpVertType* SimpVert)->int32
+			{
+				return SimpVert->vert.BasicAttributes.ElementIDs.ColorID;
+			};
+			auto ColorValueAccessor = [](SimpVertType* SimpVert)->FLinearColor&
+			{
+				return SimpVert->vert.BasicAttributes.Color;
+			};
+
+			FLinearColor ZeroValue = FLinearColor::Transparent;
+			Weld(ColorIDAccessor, ColorValueAccessor, ZeroValue);
+		}
+		// Weld UVs with same TexCoordsID
+		if (WeldType == EVtxElementWeld::UV)
+		{
+			int32 NumTexCoords = SkeletalSimplifier::BasicAttrArray::NumUVs;
+			for (int32 t = 0; t < NumTexCoords; ++t)
+			{
+
+				auto TexCoordIDAccessor = [t](SimpVertType* SimpVert)->int32
+				{
+					return SimpVert->vert.BasicAttributes.ElementIDs.TexCoordsID[t];
+				};
+				auto TexCoordValueAccessor = [t](SimpVertType* SimpVert)->FVector2D&
+				{
+					return SimpVert->vert.BasicAttributes.TexCoords[t];
+				};
+
+				FVector2D ZeroValue(0, 0);
+				Weld(TexCoordIDAccessor, TexCoordValueAccessor, ZeroValue);
+			}
+		}
+
+		// After welding, need to "correct" the vert to make sure the vector attributes are normalized etc.
+		for (SimpVertType* v : VertGroup)
+		{
+			v->vert.Correct();
+		}
+	}
+}
+
+
 // @todo, this shares a lot of code with GroupEdges - they should be unified..
 void SkeletalSimplifier::FSimplifierMeshManager::RebuildEdgeLinkLists(EdgePtrArray& CandidateEdgePtrArray)
 {
@@ -424,6 +739,111 @@ void SkeletalSimplifier::FSimplifierMeshManager::RebuildEdgeLinkLists(EdgePtrArr
 }
 
 
+void SkeletalSimplifier::FSimplifierMeshManager::VisitEdges(TFunctionRef<void(SimpVertType*, SimpVertType*, int32)> EdgeVisitor)
+{
+
+	TArray< SimpVertType*, TInlineAllocator<64> > adjVerts;
+	if (NumSrcVerts == 0 || NumSrcTris == 0)
+	{
+		//Avoid trying to compute an empty mesh
+		return;
+	}
+
+	// clear the mark2 flags. We use these to determine if we have visited a vert group.
+	for (int32 i = 0; i < NumSrcVerts; ++i)
+	{
+		SimpVertType* v0 = &VertArray[i];
+		v0->DisableFlags(SIMP_MARK2);
+	}
+
+	for (int i = 0; i < NumSrcVerts; i++)
+	{
+
+		SimpVertType* v0 = &VertArray[i];
+		checkSlow(v0 != NULL);
+		check(v0->adjTris.Num() > 0);
+
+		// we have already visited this vertex group
+		if (v0->TestFlags(SIMP_MARK2))
+		{
+			continue;
+		}
+
+		if (v0->TestFlags(SIMP_REMOVED))
+		{
+			continue;
+		}
+
+		//Find all the verts that are adjacent to any vert in this group.
+		adjVerts.Reset();
+		SimpVertType* v0Smallest = v0;
+		{
+			SimpVertType* v = v0;
+			do {
+				for (TriIterator triIter = v->adjTris.Begin(); triIter != v->adjTris.End(); ++triIter)
+				{
+					for (int j = 0; j < 3; j++)
+					{
+						SimpVertType* TriVert = (*triIter)->verts[j];
+						if (TriVert != v)
+						{
+							adjVerts.AddUnique(TriVert);
+						}
+					}
+				}
+				v = v->next;
+				if (v0Smallest > v)
+				{
+					v0Smallest = v;
+				}
+			} while (v != v0);
+		}
+
+		for (SimpVertType* v1 : adjVerts)
+		{
+			// visit edges that are incoming to this vertex group
+			// note, we may end up visiting a few edges twice.
+			if (v0Smallest < v1)
+			{
+
+				// set if this edge is boundary
+				// find faces that share v0 and v1
+				v0->EnableAdjTriFlagsGroup(SIMP_MARK1);
+				v1->DisableAdjTriFlagsGroup(SIMP_MARK1);
+
+				int32 AdjFaceCount = 0;
+				SimpVertType* vert = v0;
+				do
+				{
+					for (TriIterator j = vert->adjTris.Begin(); j != vert->adjTris.End(); ++j)
+					{
+						SimpTriType* tri = *j;
+						AdjFaceCount += tri->TestFlags(SIMP_MARK1) ? 0 : 1;
+					}
+					vert = vert->next;
+				} while (vert != v0);
+
+				// reset v0-group flag.
+				v0->DisableAdjTriFlagsGroup(SIMP_MARK1);
+
+				// process this edge.
+				EdgeVisitor(v0, v1, AdjFaceCount);
+			}
+		}
+
+		// visited this vert and all the incoming edges.
+		v0->EnableFlagsGroup(SIMP_MARK2);
+	}
+
+	for (int32 i = 0; i < NumSrcVerts; ++i)
+	{
+		SimpVertType* v0 = &VertArray[i];
+		v0->DisableFlags(SIMP_MARK2);
+	}
+}
+
+
+//[TODO]  convert this to use the VisitEdges method.
 void SkeletalSimplifier::FSimplifierMeshManager::FlagBoundary(const ESimpElementFlags Flag)
 { 
 
@@ -441,6 +861,7 @@ void SkeletalSimplifier::FSimplifierMeshManager::FlagBoundary(const ESimpElement
 		checkSlow(v0 != NULL);
 		check(v0->adjTris.Num() > 0);
 
+		// not sure if this test is valid.  
 		if (v0->TestFlags(Flag))
 		{
 			// we must have visited this vert already in a vert group
@@ -1021,7 +1442,126 @@ int32 SkeletalSimplifier::FSimplifierMeshManager::RemoveIfDegenerate(EdgePtrArra
 	return RemovedEdgeIdxArray.Num();
 }
 
+void SkeletalSimplifier::FSimplifierMeshManager::UpdateVertexAttriuteIDs(EdgePtrArray& InCoincidentEdges)
+{
 
+	// some of the edges may be null / removed.  Need to filter these out.
+
+	EdgePtrArray CoincidentEdges;
+	for (SimpEdgeType* EdgePtr : InCoincidentEdges)
+	{
+		if (!EdgePtr || !EdgePtr->v0 || !EdgePtr->v1 || IsRemoved(EdgePtr))
+		{
+			continue;
+		}
+
+		CoincidentEdges.Add(EdgePtr);
+	}
+
+
+	int32 NumCoincidentEdges = CoincidentEdges.Num();
+
+	if (NumCoincidentEdges == 0)
+	{
+		return;
+	}
+
+	if (NumCoincidentEdges > 2)
+	{
+		// this is the collapse of a non-manifold edge.  Not going to track the element Ids in this badness. 
+		return;
+	}
+
+	// Update the Attribute element IDs on the loose v0 verts (since v0 collapses onto v1)
+	// Loose verts updated any non-split element IDs to those of the v1.
+	if (NumCoincidentEdges == 1)
+	{
+
+		SimpEdgeType* EdgePtr = CoincidentEdges[0];
+
+
+		auto v0IDs = EdgePtr->v0->vert.BasicAttributes.ElementIDs;
+		auto v1IDs = EdgePtr->v1->vert.BasicAttributes.ElementIDs;
+
+		// loop over the v0 loose verts and update any non-split element IDs to v1ID.
+		SimpVertType* v0 = EdgePtr->v0;
+		SimpVertType* vCurrent = v0;
+		while (vCurrent->next != v0)
+		{
+			vCurrent = vCurrent->next;
+			// create a mask that is zero where the elements are the same as the v0 elements.
+			// those elements should be merged with their v1 counterparts, retaining the v1 ids. 
+			auto MaskIDs = vCurrent->vert.BasicAttributes.ElementIDs - v0IDs;
+
+			// copy element ids from v1IDs to vCurrent where the mask is off (zero)
+			vCurrent->vert.BasicAttributes.ElementIDs.MaskedCopy(MaskIDs, v1IDs);
+		}
+
+	}
+
+	if (NumCoincidentEdges == 2)
+	{
+		// the edge is split.  There are two verts at each location
+		SimpVertType* v0[2];
+		SimpVertType* v1[2];
+
+		for (int i = 0; i < 2; ++i)
+		{
+			SimpEdgeType* EdgePtr = CoincidentEdges[i];
+
+			v0[i] = EdgePtr->v0;
+			v1[i] = EdgePtr->v1;
+		}
+
+		// force attrs that are split on v0 to be split on v1.  If an attribute is split on v0 and not on v1
+		// then this copies the ids from v0 to v1 for this attribute.
+		// Why do this?  When an attribute seam starts on a mesh, one vertex may have a split and the other not.
+		// This can even happen in the middle of a seam, for example to neighboring UV patches might agree at a single
+		// point.
+		//  An Example helps:  Say color ID is split on the v0 vertex but not the v1 vertex
+		//      v0[0] ColorID = 7,  v0[1] ColorID =8       v1[0] ColorID = 11, v1[1] ColorID = 11    
+		//
+		//      this should result in copying that split to the v1 vertex.  =>  v1[0] ColorID =7  v1[1] ColorID = 8
+		//
+		if (v1[0] != v1[1] && v0[0] != v0[1]) // only apply this to the case of two distinct edges.
+		{
+			// Identify the elements that are not split on the v0 vertex (zeros of mask)
+			auto v0MaskIDs = v0[0]->vert.BasicAttributes.ElementIDs - v0[1]->vert.BasicAttributes.ElementIDs;
+
+			// Identify the elements that are not split on the v1 vertex ( zero of mask )
+			auto v1MaskIDs = v1[0]->vert.BasicAttributes.ElementIDs - v1[1]->vert.BasicAttributes.ElementIDs;
+
+			// Copy values from v0 IDs where v1Mask is off (zero) and v0 mask is on (non-zero)
+			v1[0]->vert.BasicAttributes.ElementIDs.MaskedCopy(v1MaskIDs, v0MaskIDs, v0[0]->vert.BasicAttributes.ElementIDs);
+			v1[1]->vert.BasicAttributes.ElementIDs.MaskedCopy(v1MaskIDs, v0MaskIDs, v0[1]->vert.BasicAttributes.ElementIDs);
+		}
+
+		// Update the Attribute element IDs on the loose v0 verts (since v0 collapses onto v1)
+		// Loose verts updated any non-split element IDs to those of the v1.
+		for (int i = 0; i < 2; ++i)
+		{
+			SimpEdgeType* EdgePtr = CoincidentEdges[i];
+			auto v0IDs = v0[i]->vert.BasicAttributes.ElementIDs;
+			auto v1IDs = v1[i]->vert.BasicAttributes.ElementIDs;
+
+			SimpVertType* vCurrent = v0[i];
+			while (vCurrent->next != v0[i])
+			{
+				vCurrent = vCurrent->next;
+				if (vCurrent != v0[0] && vCurrent != v0[1]) // only look at the v0 loose verts
+				{
+					// create a mask where the elements are the same
+					auto MaskIDs = vCurrent->vert.BasicAttributes.ElementIDs - v0IDs;
+
+					// copy elements from V1IDs to tmp where the mask is off (zero)
+					vCurrent->vert.BasicAttributes.ElementIDs.MaskedCopy(MaskIDs, v1IDs);
+				}
+			}
+		}
+
+	}
+
+}
 
 bool SkeletalSimplifier::FSimplifierMeshManager::CollapseEdge(SimpEdgeType * EdgePtr, IdxArray& RemovedEdgeIdxArray)
 {
@@ -1313,3 +1853,148 @@ int32 SkeletalSimplifier::FSimplifierMeshManager::CountDegenerateEdges() const
 
 	return DegenerateCount;
 }
+
+#if 0
+// disabled because static analysis insists that NonManifoldEdgeCounter.EdgeCount != 0 is always false.
+float  SkeletalSimplifier::FSimplifierMeshManager::FractionNonManifoldEdges(bool bLockNonManifoldEdges)
+{
+
+	FNonManifoldEdgeCounter NonManifoldEdgeCounter;
+	NonManifoldEdgeCounter.EdgeCount = 0;
+	NonManifoldEdgeCounter.NumNonManifoldEdges = 0;
+	NonManifoldEdgeCounter.bLockNonManifoldEdges = bLockNonManifoldEdges;
+
+
+	VisitEdges(NonManifoldEdgeCounter);
+
+	float FractionBadEdges =  0.f;
+	if (NonManifoldEdgeCounter.EdgeCount != 0)
+	{ 
+		FractionBadEdges = float(NonManifoldEdgeCounter.NumNonManifoldEdges) / NonManifoldEdgeCounter.EdgeCount;
+	}
+
+	return FractionBadEdges;
+}
+#else
+
+float SkeletalSimplifier::FSimplifierMeshManager::FractionNonManifoldEdges(bool bLockNonManifoldEdges)
+{
+
+	int32 NumVisitedEdges = 0;
+	int32 NumNonManifoldEdges = 0;
+
+	TArray< SimpVertType*, TInlineAllocator<64> > adjVerts;
+	if (NumSrcVerts == 0 || NumSrcTris == 0)
+	{
+		//Avoid trying to compute an empty mesh
+		return 0.f;
+	}
+
+	// clear the mark2 flags. We use these to determine if we have visited a vert group.
+	for (int32 i = 0; i < NumSrcVerts; ++i)
+	{
+		SimpVertType* v0 = &VertArray[i];
+		v0->DisableFlags(SIMP_MARK2);
+	}
+
+	for (int i = 0; i < NumSrcVerts; i++)
+	{
+
+		SimpVertType* v0 = &VertArray[i];
+		checkSlow(v0 != NULL);
+		check(v0->adjTris.Num() > 0);
+
+		// we have already visited this vertex group
+		if (v0->TestFlags(SIMP_MARK2))
+		{
+			continue;
+		}
+
+		if (v0->TestFlags(SIMP_REMOVED))
+		{
+			continue;
+		}
+
+		//Find all the verts that are adjacent to any vert in this group.
+		adjVerts.Reset();
+		SimpVertType* v0Smallest = v0;
+		{
+			SimpVertType* v = v0;
+			do {
+				for (TriIterator triIter = v->adjTris.Begin(); triIter != v->adjTris.End(); ++triIter)
+				{
+					for (int j = 0; j < 3; j++)
+					{
+						SimpVertType* TriVert = (*triIter)->verts[j];
+						if (TriVert != v)
+						{
+							adjVerts.AddUnique(TriVert);
+						}
+					}
+				}
+				v = v->next;
+				if (v0Smallest > v)
+				{
+					v0Smallest = v;
+				}
+			} while (v != v0);
+		}
+
+		for (SimpVertType* v1 : adjVerts)
+		{
+			// visit edges that are incoming to this vertex group
+			// note, we may end up visiting a few edges twice.
+			if (v0Smallest < v1)
+			{
+
+				// set if this edge is boundary
+				// find faces that share v0 and v1
+				v0->EnableAdjTriFlagsGroup(SIMP_MARK1);
+				v1->DisableAdjTriFlagsGroup(SIMP_MARK1);
+
+				int32 AdjFaceCount = 0;
+				SimpVertType* vert = v0;
+				do
+				{
+					for (TriIterator j = vert->adjTris.Begin(); j != vert->adjTris.End(); ++j)
+					{
+						SimpTriType* tri = *j;
+						AdjFaceCount += tri->TestFlags(SIMP_MARK1) ? 0 : 1;
+					}
+					vert = vert->next;
+				} while (vert != v0);
+
+				// reset v0-group flag.
+				v0->DisableAdjTriFlagsGroup(SIMP_MARK1);
+
+				// process this edge.
+				{
+					NumVisitedEdges++;
+					if (AdjFaceCount > 2)
+					{
+						NumNonManifoldEdges++;
+						if (bLockNonManifoldEdges)
+						{
+							// lock these verts.
+							v0->EnableFlagsGroup(SIMP_LOCKED);
+							v1->EnableFlagsGroup(SIMP_LOCKED);
+						}
+					}
+				}
+			}
+		}
+
+		// visited this vert and all the incoming edges.
+		v0->EnableFlagsGroup(SIMP_MARK2);
+	}
+
+	for (int32 i = 0; i < NumSrcVerts; ++i)
+	{
+		SimpVertType* v0 = &VertArray[i];
+		v0->DisableFlags(SIMP_MARK2);
+	}
+
+	return float(NumNonManifoldEdges) / (float(NumVisitedEdges) +0.01f);
+}
+
+#endif

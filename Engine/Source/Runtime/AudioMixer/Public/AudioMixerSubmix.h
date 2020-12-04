@@ -10,7 +10,7 @@
 #include "DSP/EnvelopeFollower.h"
 #include "DSP/SpectrumAnalyzer.h"
 #include "Templates/SharedPointer.h"
-
+#include "AudioDynamicParameter.h"
 
 // Forward Declarations
 class FOnSubmixEnvelopeBP;
@@ -24,12 +24,23 @@ namespace Audio
 	class FMixerSourceVoice;
 	class FMixerDevice;
 
+	enum EMixerSourceSubmixSendStage
+	{
+		// Whether to do the send pre distance attenuation
+		PostDistanceAttenuation,
+
+		// Whether to do the send post distance attenuation
+		PreDistanceAttenuation,
+	};
+
 	struct FSubmixVoiceData
 	{
 		float SendLevel;
+		EMixerSourceSubmixSendStage SubmixSendStage;
 
 		FSubmixVoiceData()
 			: SendLevel(1.0f)
+			, SubmixSendStage(EMixerSourceSubmixSendStage::PostDistanceAttenuation)
 		{
 		}
 	};
@@ -86,11 +97,14 @@ namespace Audio
 		// Removes the given submix from this submix's children
 		void RemoveChildSubmix(TWeakPtr<FMixerSubmix, ESPMode::ThreadSafe> SubmixWeakPtr);
 
-		// Sets the static output volume of the submix
-		void SetOutputVolume(float InVolume);
+		// Sets the output level of the submix
+		void SetOutputVolume(float InOutputLevel);
 
-		// Sets the dynamic output volume
-		void SetDynamicOutputVolume(float InVolume);
+		// Sets the static output volume of the submix
+		void SetDryLevel(float InDryLevel);
+
+		// Sets the wet level of the submix
+		void SetWetLevel(float InWetLevel);
 
 		// Gets the submix channels channels
 		int32 GetSubmixChannels() const;
@@ -108,13 +122,13 @@ namespace Audio
 		int32 GetSizeOfSubmixChain() const;
 
 		// Add (if not already added) or sets the amount of the source voice's send amount
-		void AddOrSetSourceVoice(FMixerSourceVoice* InSourceVoice, const float SendLevel);
+		void AddOrSetSourceVoice(FMixerSourceVoice* InSourceVoice, const float SendLevel, EMixerSourceSubmixSendStage InSubmixSendStage);
 
 		/** Removes the given source voice from the submix. */
 		void RemoveSourceVoice(FMixerSourceVoice* InSourceVoice);
 
 		/** Appends the effect submix to the effect submix chain. */
-		void AddSoundEffectSubmix(uint32 SubmixPresetId, FSoundEffectSubmixPtr InSoundEffectSubmix);
+		void AddSoundEffectSubmix(FSoundEffectSubmixPtr InSoundEffectSubmix);
 
 		/** Removes the submix effect from the effect submix chain. */
 		void RemoveSoundEffectSubmix(uint32 SubmixPresetId);
@@ -125,8 +139,14 @@ namespace Audio
 		/** Clears all submix effects from the effect submix chain. */
 		void ClearSoundEffectSubmixes();
 
+		/** Sets a submix effect chain override with the given fade time in seconds. */
+		void SetSubmixEffectChainOverride(const TArray<FSoundEffectSubmixPtr>& InSubmixEffectPresetChain, float InFadeTimeSec);
+
+		/** Clears any submix effect chain overrides in the given fade time in seconds. */
+		void ClearSubmixEffectChainOverride(float InFadeTimeSec);
+
 		/** Swaps effect for provided submix at the given index.  Fails if effect at index doesn't exist */
-		void ReplaceSoundEffectSubmix(int32 InIndex, int32 InPresetId, FSoundEffectSubmixPtr InEffectInstance);
+		void ReplaceSoundEffectSubmix(int32 InIndex, FSoundEffectSubmixPtr InEffectInstance);
 
 		/** Whether or not this submix instance is muted. */
 		void SetBackgroundMuted(bool bInMuted);
@@ -146,7 +166,7 @@ namespace Audio
 		int32 GetNumOutputChannels() const;
 
 		// Returns the number of effects in this submix's effect chain
-		int32 GetNumChainEffects() const;
+		int32 GetNumChainEffects();
 
 		// Returns the submix effect at the given effect chain index
 		FSoundEffectSubmixPtr GetSubmixEffect(const int32 InIndex);
@@ -192,10 +212,16 @@ namespace Audio
 		void AddEnvelopeFollowerDelegate(const FOnSubmixEnvelopeBP& OnSubmixEnvelopeBP);
 
 		// Initializes a new FFT analyzer for this submix and immediately begins feeding audio to it.
-		void StartSpectrumAnalysis(const FSpectrumAnalyzerSettings& InSettings);
+		void StartSpectrumAnalysis(const FSoundSpectrumAnalyzerSettings& InSettings);
 
 		// Terminates whatever FFT Analyzer is being used for this submix.
 		void StopSpectrumAnalysis();
+
+		// Adds an spectral analysis delegate
+		void AddSpectralAnalysisDelegate(const FSoundSpectrumAnalyzerDelegateSettings& InDelegateSettings, const FOnSubmixSpectralAnalysisBP& OnSubmixSpectralAnalysisBP);
+
+		// Removes an existing spectral analysis delegate
+		void RemoveSpectralAnalysisDelegate(const FOnSubmixSpectralAnalysisBP& OnSubmixSpectralAnalysisBP);
 
 		// Gets the most recent magnitude values for each corresponding value in InFrequencies (in Hz).
 		// This requires StartSpectrumAnalysis to be called first.
@@ -205,8 +231,8 @@ namespace Audio
 		// This requires StartSpectrumAnalysis to be called first.
 		void GetPhaseForFrequencies(const TArray<float>& InFrequencies, TArray<float>& OutPhases);
 
-		// Broadcast the envelope value on the game thread
-		void BroadcastEnvelope();
+		// Broadcast the envelope and submix delegates on the game thread
+		void BroadcastDelegates();
 
 		// returns true if this submix is encoded to a soundfield.
 		bool IsSoundfieldSubmix() const;
@@ -270,6 +296,9 @@ namespace Audio
 		// Add command to the command queue
 		void SubmixCommand(TFunction<void()> Command);
 
+		// Generates audio from the given effect chain into the given buffer
+		bool GenerateEffectChainAudio(FSoundEffectSubmixInputData& InputData, AlignedFloatBuffer& InAudioBuffer, TArray<FSoundEffectSubmixPtr>& InEffectChain, AlignedFloatBuffer& OutBuffer);
+
 		// This mixer submix's Id
 		uint32 Id;
 
@@ -279,23 +308,23 @@ namespace Audio
 		// Child submixes
 		TMap<uint32, FChildSubmixInfo> ChildSubmixes;
 
-		// Info struct for a submix effect instance
-		struct FSubmixEffectInfo
+		// Struct to hold record keeping data about effect chain overrides
+		struct FSubmixEffectFadeInfo
 		{
-			// The preset object id used to spawn this effect instance
-			uint32 PresetId;
+			TArray<FSoundEffectSubmixPtr> EffectChain;
 
-			// The effect instance ptr
-			FSoundEffectSubmixPtr EffectInstance;
+			FDynamicParameter FadeVolume = FDynamicParameter(1.0f);
 
-			FSubmixEffectInfo()
-				: PresetId(INDEX_NONE)
-			{
-			}
+			// If true, this effect override will be fading in or all the way faded in
+			bool bIsCurrentChain = false;
+
+			// If this effect fade info is the base effect
+			bool bIsBaseEffect = false;
 		};
 
-		// The effect chain of this submix, based on the sound submix preset chain
-		TArray<FSubmixEffectInfo> EffectSubmixChain;
+		// The array of submix effect overrides. There may be more than one if multiple are fading out. There should be only one fading in (the current override).
+		TArray<FSubmixEffectFadeInfo> EffectChains;
+		AlignedFloatBuffer EffectChainOutputBuffer;
 
 		// Owning mixer device. 
 		FMixerDevice* MixerDevice;
@@ -304,6 +333,7 @@ namespace Audio
 		TMap<FMixerSourceVoice*, FSubmixVoiceData> MixerSourceVoices;
 
 		AlignedFloatBuffer ScratchBuffer;
+		AlignedFloatBuffer SubmixChainMixBuffer;
 		AlignedFloatBuffer InputBuffer;
 		AlignedFloatBuffer DownmixedBuffer;
 		AlignedFloatBuffer SourceInputBuffer;
@@ -429,15 +459,12 @@ namespace Audio
 
 		FEndpointData EndpointData;
 		
-
-		// The output volume of the submix set via the USoundSubmix property. Can be set in the editor.
-		float InitializedOutputVolume;
-		
-		// The current dynamic output volume
-		float OutputVolume;
-		
-		// The target dynamic output volume
+		float CurrentOutputVolume;
 		float TargetOutputVolume;
+		float CurrentWetLevel;
+		float TargetWetLevel;
+		float CurrentDryLevel;
+		float TargetDryLevel;
 
 		// Envelope following data
 		float EnvelopeValues[AUDIO_MIXER_MAX_OUTPUT_CHANNELS];
@@ -445,11 +472,16 @@ namespace Audio
 		int32 EnvelopeNumChannels;
 		FCriticalSection EnvelopeCriticalSection;
 
-		// Spectrum analyzer:
+		// Spectrum analyzer. Created and destroyed on the audio thread.
+		FCriticalSection SpectrumAnalyzerCriticalSection;
+		FSoundSpectrumAnalyzerSettings SpectrumAnalyzerSettings;
 		TUniquePtr<FSpectrumAnalyzer> SpectrumAnalyzer;
 		
 		// This buffer is used to downmix the submix output to mono before submitting it to the SpectrumAnalyzer.
 		AlignedFloatBuffer MonoMixBuffer;
+
+		// The dry channel buffer
+		AlignedFloatBuffer DryChannelBuffer;
 
 		// Submix command queue to shuffle commands from audio thread to audio render thread.
 		TQueue<TFunction<void()>> CommandQueue;
@@ -472,14 +504,50 @@ namespace Audio
 		// Whether or not this submix is muted.
 		uint8 bIsBackgroundMuted : 1;
 
-		// Whether or not to apply a volume scale to output
-		uint8 bApplyOutputVolumeScale : 1;
-
 		// Bool set to true when envelope following is enabled
 		FThreadSafeBool bIsEnvelopeFollowing;
 
 		// Multi-cast delegate to broadcast envelope data from this submix instance
 		FOnSubmixEnvelope OnSubmixEnvelope;
+
+		struct FSpectralAnalysisBandInfo
+		{
+			FEnvelopeFollower EnvelopeFollower;
+		};
+
+		struct FSpectrumAnalysisDelegateInfo
+		{
+			FSoundSpectrumAnalyzerDelegateSettings DelegateSettings;
+
+			FOnSubmixSpectralAnalysis OnSubmixSpectralAnalysis;
+
+			TUniquePtr<ISpectrumBandExtractor> SpectrumBandExtractor;
+			TArray<FSpectralAnalysisBandInfo> SpectralBands;
+
+			float LastUpdateTime = -1.0f;
+			float UpdateDelta = 0.0f;
+
+			FSpectrumAnalysisDelegateInfo()
+			{
+			}
+
+			FSpectrumAnalysisDelegateInfo(FSpectrumAnalysisDelegateInfo&& Other)
+			{
+				OnSubmixSpectralAnalysis = Other.OnSubmixSpectralAnalysis;
+				SpectrumBandExtractor.Reset(Other.SpectrumBandExtractor.Release());
+				DelegateSettings = Other.DelegateSettings;
+				SpectralBands = Other.SpectralBands;
+			}
+
+			~FSpectrumAnalysisDelegateInfo()
+			{
+			}
+		};
+
+		TArray<FSpectrumAnalysisDelegateInfo> SpectralAnalysisDelegates;
+
+		// Bool set to true when spectrum analysis is enabled
+		FThreadSafeBool bIsSpectrumAnalyzing;
 
 		// Critical section used for when we are appending recorded data.
 		FCriticalSection RecordingCriticalSection;

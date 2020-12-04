@@ -203,9 +203,37 @@ int32 UEditorValidatorSubsystem::ValidateAssets(TArray<FAssetData> AssetDataList
 	int32 NumInvalidFiles = 0;
 	int32 NumFilesSkipped = 0;
 	int32 NumFilesUnableToValidate = 0;
-	bool bAtLeastOneWarning = false;
+	int32 NumFilesWithWarnings = 0;
 
 	int32 NumFilesToValidate = AssetDataList.Num();
+
+	auto AddAssetLogTokens = [&DataValidationLog](EMessageSeverity::Type Severity, const TArray<FText>& TextMessages, FName PackageName)
+	{
+		const FString PackageNameString = PackageName.ToString();
+		for (const FText& Msg : TextMessages)
+		{
+			const FString AssetLogString = FAssetMsg::GetAssetLogString(*PackageNameString, Msg.ToString());
+			FString BeforeAsset;
+			FString AfterAsset;
+			TSharedRef<FTokenizedMessage> TokenizedMessage = DataValidationLog.Message(Severity);
+			if (AssetLogString.Split(PackageNameString, &BeforeAsset, &AfterAsset))
+			{
+				if (!BeforeAsset.IsEmpty())
+				{
+					TokenizedMessage->AddToken(FTextToken::Create(FText::FromString(BeforeAsset)));
+				}
+				TokenizedMessage->AddToken(FAssetNameToken::Create(PackageNameString));
+				if (!AfterAsset.IsEmpty())
+				{
+					TokenizedMessage->AddToken(FTextToken::Create(FText::FromString(AfterAsset)));
+				}
+			}
+			else
+			{
+				TokenizedMessage->AddToken(FTextToken::Create(FText::FromString(AssetLogString)));
+			}
+		}
+	};
 
 	// Now add to map or update as needed
 	for (FAssetData& Data : AssetDataList)
@@ -227,19 +255,13 @@ int32 UEditorValidatorSubsystem::ValidateAssets(TArray<FAssetData> AssetDataList
 		EDataValidationResult Result = IsAssetValid(Data, ValidationErrors, ValidationWarnings);
 		++NumFilesChecked;
 
-		for (const FText& ErrorMsg : ValidationErrors)
-		{
-			DataValidationLog.Error()->AddToken(FTextToken::Create(ErrorMsg));
-		}
+		AddAssetLogTokens(EMessageSeverity::Error, ValidationErrors, Data.PackageName);
 
 		if (ValidationWarnings.Num() > 0)
 		{
-			bAtLeastOneWarning = true;
+			++NumFilesWithWarnings;
 
-			for (const FText& WarningMsg : ValidationWarnings)
-			{
-				DataValidationLog.Warning()->AddToken(FTextToken::Create(WarningMsg));
-			}
+			AddAssetLogTokens(EMessageSeverity::Warning, ValidationWarnings, Data.PackageName);
 		}
 
 		if (Result == EDataValidationResult::Valid)
@@ -272,6 +294,7 @@ int32 UEditorValidatorSubsystem::ValidateAssets(TArray<FAssetData> AssetDataList
 	}
 
 	const bool bFailed = (NumInvalidFiles > 0);
+	const bool bAtLeastOneWarning = (NumFilesWithWarnings > 0);
 
 	if (bFailed || bAtLeastOneWarning || bShowIfNoFailures)
 	{
@@ -289,7 +312,7 @@ int32 UEditorValidatorSubsystem::ValidateAssets(TArray<FAssetData> AssetDataList
 		DataValidationLog.Open(EMessageSeverity::Info, true);
 	}
 
-	return NumInvalidFiles;
+	return NumInvalidFiles + NumFilesWithWarnings;
 }
 
 void UEditorValidatorSubsystem::ValidateOnSave(TArray<FAssetData> AssetDataList) const
@@ -309,7 +332,7 @@ void UEditorValidatorSubsystem::ValidateOnSave(TArray<FAssetData> AssetDataList)
 	FMessageLog DataValidationLog("AssetCheck");
 	FText SavedAsset = AssetDataList.Num() == 1 ? FText::FromName(AssetDataList[0].AssetName) : LOCTEXT("MultipleErrors", "multiple assets");
 	DataValidationLog.NewPage(FText::Format(LOCTEXT("DataValidationLogPage", "Asset Save: {0}"), SavedAsset));
-	if (ValidateAssets(AssetDataList, true, false) > 0)
+	if (ValidateAssets(MoveTemp(AssetDataList), true, false) > 0)
 	{
 		const FText ErrorMessageNotification = FText::Format(
 			LOCTEXT("ValidationFailureNotification", "Validation failed when saving {0}, check Data Validation log"), SavedAsset);
@@ -380,14 +403,15 @@ void UEditorValidatorSubsystem::ValidateAllSavedPackages()
 		}
 	}
 
-	TArray<FAssetData> Assets;
-	for (FName PackageName : SavedPackagesToValidate)
-	{
-		// We need to query the in-memory data as the disk cache may not be accurate
-		AssetRegistry.GetAssetsByPackageName(PackageName, Assets);
-	}
+	// We need to query the in-memory data as the disk cache may not be accurate
+	FARFilter Filter;
+	Filter.PackageNames = SavedPackagesToValidate;
+	Filter.bIncludeOnlyOnDiskAssets = false;
 
-	ValidateOnSave(Assets);
+	TArray<FAssetData> Assets;
+	AssetRegistry.GetAssets(Filter, Assets);
+
+	ValidateOnSave(MoveTemp(Assets));
 
 	SavedPackagesToValidate.Empty();
 }

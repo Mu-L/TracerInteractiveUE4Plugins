@@ -20,6 +20,8 @@ DECLARE_LOG_CATEGORY_EXTERN(OodleHandlerComponentLog, Log, All);
 // The maximum compress/decompress buffer size - overkill, as buffers are statically allocated, and can't use Oodle runtime buffer calc
 #define MAX_OODLE_BUFFER	(MAX_OODLE_PACKET_BYTES * 2)
 
+static_assert(MAX_OODLE_PACKET_BYTES <= 16384, "Never allow DecompressedLength values bigger than this, due to performance/security considerations");
+
 /**
  * Specifies when compression is enabled. Used to make compression optional, for some platforms/clients
  */
@@ -370,14 +372,6 @@ public:
 	virtual void Incoming(FBitReader& Packet) override;
 
 	virtual void Outgoing(FBitWriter& Packet, FOutPacketTraits& Traits) override;
-
-	virtual void IncomingConnectionless(const TSharedPtr<const FInternetAddr>& Address, FBitReader& Packet) override
-	{
-	}
-
-	virtual void OutgoingConnectionless(const TSharedPtr<const FInternetAddr>& Address, FBitWriter& Packet, FOutPacketTraits& Traits) override
-	{
-	}
 
 	virtual int32 GetReservedPacketBits() const override;
 

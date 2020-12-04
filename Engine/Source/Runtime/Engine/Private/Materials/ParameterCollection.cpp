@@ -24,6 +24,7 @@ TMultiMap<FGuid, FMaterialParameterCollectionInstanceResource*> GDefaultMaterial
 
 UMaterialParameterCollection::UMaterialParameterCollection(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
+	, ReleasedByRT(true)
 {
 	DefaultResource = nullptr;
 }
@@ -63,24 +64,27 @@ void UMaterialParameterCollection::BeginDestroy()
 {
 	if (DefaultResource)
 	{
+		ReleasedByRT = false;
+
 		FMaterialParameterCollectionInstanceResource* Resource = DefaultResource;
 		FGuid Id = StateId;
+		FThreadSafeBool* Released = &ReleasedByRT;
 		ENQUEUE_RENDER_COMMAND(RemoveDefaultResourceCommand)(
-			[Resource, Id](FRHICommandListImmediate& RHICmdList)
+			[Resource, Id, Released](FRHICommandListImmediate& RHICmdList)
 			{	
 				GDefaultMaterialParameterCollectionInstances.RemoveSingle(Id, Resource);
+				*Released = true;
 			}
 		);
 	}
 
-	ReleaseFence.BeginFence();
 	Super::BeginDestroy();
 }
 
 bool UMaterialParameterCollection::IsReadyForFinishDestroy()
 {
 	bool bIsReady = Super::IsReadyForFinishDestroy();
-	return bIsReady && ReleaseFence.IsFenceComplete();
+	return bIsReady && ReleasedByRT;
 }
 
 void UMaterialParameterCollection::FinishDestroy()
@@ -602,6 +606,8 @@ void UMaterialParameterCollectionInstance::UpdateRenderState(bool bRecreateUnifo
 	{
 		DeferredUpdateRenderState(bRecreateUniformBuffer);
 	}
+
+	ParametersUpdatedDelegate.Broadcast();
 }
 
 void UMaterialParameterCollectionInstance::DeferredUpdateRenderState(bool bRecreateUniformBuffer)
@@ -680,7 +686,15 @@ void FMaterialParameterCollectionInstanceResource::GameThread_Destroy()
 	ENQUEUE_RENDER_COMMAND(DestroyCollectionCommand)(
 		[Resource](FRHICommandListImmediate& RHICmdList)
 		{
-			delete Resource;
+			Resource->UniformBuffer.SafeRelease();
+
+			// FRHIUniformBuffer instances take raw pointers to the layout struct.
+			// Delete the resource instance (and its layout) on the RHI thread to avoid deleting the layout
+			// whilst the RHI is using it, and also avoid having to completely flush the RHI thread.
+			RHICmdList.EnqueueLambda([Resource](FRHICommandListImmediate&)
+			{
+				delete Resource;
+			});
 		}
 	);
 }
@@ -692,8 +706,7 @@ FMaterialParameterCollectionInstanceResource::FMaterialParameterCollectionInstan
 
 FMaterialParameterCollectionInstanceResource::~FMaterialParameterCollectionInstanceResource()
 {
-	check(IsInRenderingThread());
-	UniformBuffer.SafeRelease();
+	check(!UniformBuffer.IsValid());
 }
 
 void FMaterialParameterCollectionInstanceResource::UpdateContents(const FGuid& InId, const TArray<FVector4>& Data, const FName& InOwnerName, bool bRecreateUniformBuffer)

@@ -13,7 +13,7 @@
 class FHttpRequestAdapterBase : public FHttpRequestImpl
 {
 public:
-    FHttpRequestAdapterBase(const TSharedRef<IHttpRequest>& InHttpRequest) 
+    FHttpRequestAdapterBase(const TSharedRef<IHttpRequest, ESPMode::ThreadSafe>& InHttpRequest) 
 		: HttpRequest(InHttpRequest)
     {}
 
@@ -29,17 +29,21 @@ public:
 	virtual void                          SetVerb(const FString& Verb) override                                    { HttpRequest->SetVerb(Verb); }
 	virtual void                          SetURL(const FString& URL) override                                      { HttpRequest->SetURL(URL); }
 	virtual void                          SetContent(const TArray<uint8>& ContentPayload) override                 { HttpRequest->SetContent(ContentPayload); }
+	virtual void                          SetContent(TArray<uint8>&& ContentPayload) override                      { HttpRequest->SetContent(MoveTemp(ContentPayload)); }
 	virtual void                          SetContentAsString(const FString& ContentString) override                { HttpRequest->SetContentAsString(ContentString); }
     virtual bool                          SetContentAsStreamedFile(const FString& Filename) override               { return HttpRequest->SetContentAsStreamedFile(Filename); }
 	virtual bool                          SetContentFromStream(TSharedRef<FArchive, ESPMode::ThreadSafe> Stream) override { return HttpRequest->SetContentFromStream(Stream); }
 	virtual void                          SetHeader(const FString& HeaderName, const FString& HeaderValue) override { HttpRequest->SetHeader(HeaderName, HeaderValue); }
 	virtual void                          AppendToHeader(const FString& HeaderName, const FString& AdditionalHeaderValue) override { HttpRequest->AppendToHeader(HeaderName, AdditionalHeaderValue); }
+	virtual void                          SetTimeout(float InTimeoutSecs) override                                 { HttpRequest->SetTimeout(InTimeoutSecs); }
+	virtual void                          ClearTimeout() override                                                  { HttpRequest->ClearTimeout(); }
+	virtual TOptional<float>              GetTimeout() const override                                              { return HttpRequest->GetTimeout(); }
 	virtual const FHttpResponsePtr        GetResponse() const override                                             { return HttpRequest->GetResponse(); }
 	virtual float                         GetElapsedTime() const override                                          { return HttpRequest->GetElapsedTime(); }
 	virtual EHttpRequestStatus::Type	  GetStatus() const override                                               { return HttpRequest->GetStatus(); }
 	virtual void                          Tick(float DeltaSeconds) override                                        { HttpRequest->Tick(DeltaSeconds); }
 
 protected:
-    TSharedRef<IHttpRequest> HttpRequest;
+    TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest;
 };
 

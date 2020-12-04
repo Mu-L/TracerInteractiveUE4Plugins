@@ -15,9 +15,10 @@
 UENUM()
 enum class EEmbeddedPolygonOpMethod : uint8
 {
-	CutAndFill,
+	TrimOutside,
+	TrimInside,
+	InsertPolygon,
 	CutThrough
-	//, Extrude  // TODO: extrude(/intrude?) would also be easy/natural to support here
 };
 
 
@@ -31,7 +32,7 @@ public:
 	FFrame3d PolygonFrame;
 	FPolygon2d EmbedPolygon;
 
-	// TODO: stop hardcoding the polygon shape, switch to FGeneralPolygon2d
+	// TODO: switch to FGeneralPolygon2d?
 	FPolygon2d GetPolygon()
 	{
 		return EmbedPolygon;
@@ -50,6 +51,14 @@ public:
 	// 
 
 	virtual void CalculateResult(FProgressCancel* Progress) override;
+
+
+	// Outputs
+	TArray<int> EmbeddedEdges;
+	bool bEmbedSucceeded = false;
+
+private:
+	void RecordEmbeddedEdges(TArray<int>& PathVertIDs);
 };
 
 

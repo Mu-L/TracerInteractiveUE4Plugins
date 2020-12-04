@@ -96,9 +96,22 @@ EDetailNodeType FDetailItemNode::GetNodeType() const
 
 TSharedPtr<IPropertyHandle> FDetailItemNode::CreatePropertyHandle() const
 {
-	if (Customization.HasPropertyNode() && ParentCategory.IsValid() && ParentCategory.Pin()->IsParentLayoutValid())
+	TSharedPtr<FDetailCategoryImpl> ParentCategoryPtr = ParentCategory.Pin();
+	if (Customization.HasPropertyNode() && ParentCategoryPtr && ParentCategoryPtr->IsParentLayoutValid())
 	{
-		return ParentCategory.Pin()->GetParentLayoutImpl().GetPropertyHandle(Customization.GetPropertyNode());
+		return ParentCategoryPtr->GetParentLayoutImpl().GetPropertyHandle(Customization.GetPropertyNode());
+	}
+	else if (Customization.HasCustomWidget())
+	{
+		const TArray<TSharedPtr<IPropertyHandle>>& Handles = Customization.WidgetDecl->GetPropertyHandles();
+		if (Handles.Num() > 0)
+		{
+			return Handles[0];
+		}
+		else
+		{
+			return nullptr;
+		}
 	}
 	else
 	{
@@ -696,6 +709,11 @@ TSharedPtr<FComplexPropertyNode> FDetailItemNode::GetExternalRootPropertyNode() 
 void FDetailItemNode::FilterNode(const FDetailFilter& InFilter)
 {
 	bShouldBeVisibleDueToFiltering = PassesAllFilters( this, Customization, InFilter, ParentCategory.Pin()->GetDisplayName().ToString() );
+
+	if (!bShouldBeVisibleDueToFiltering && ParentGroup.IsValid() && !ParentGroup.Pin()->GetGroupName().IsNone())
+	{
+		bShouldBeVisibleDueToFiltering = PassesAllFilters( this, Customization, InFilter, ParentGroup.Pin()->GetGroupName().ToString() );
+	}
 
 	bShouldBeVisibleDueToChildFiltering = false;
 

@@ -41,25 +41,29 @@ public:
 		SceneDepthTexture = Params.DepthTexture;
 		ViewUniformBuffer = Params.ViewUniformBuffer;
 		SceneNormalTexture = Params.NormalTexture;
+		SceneVelocityTexture = Params.VelocityTexture;
 		SceneTexturesUniformParams = Params.SceneTexturesUniformParams;
 	}
 
 	FRHITexture2D* GetSceneDepthTexture() { return SceneDepthTexture; }
 	FRHITexture2D* GetSceneNormalTexture() { return SceneNormalTexture; }
+	FRHITexture2D* GetSceneVelocityTexture() { return SceneVelocityTexture; }
 	FRHIUniformBuffer* GetViewUniformBuffer() { return ViewUniformBuffer; }
-	TUniformBufferRef<FSceneTexturesUniformParameters> GetSceneTextureUniformParameters() { return SceneTexturesUniformParams; }
+	TUniformBufferRef<FSceneTextureUniformParameters> GetSceneTextureUniformParameters() { return SceneTexturesUniformParams; }
 
 	virtual void InitDynamicRHI() override;
 
 	virtual void ReleaseDynamicRHI() override;
 
 private:
-	FRHITexture2D* SceneDepthTexture;
-	FRHITexture2D* SceneNormalTexture;
-	FRHIUniformBuffer* ViewUniformBuffer;
+	FRHITexture2D* SceneDepthTexture = nullptr;
+	FRHITexture2D* SceneNormalTexture = nullptr;
+	FRHITexture2D* SceneVelocityTexture = nullptr;
+	FRHIUniformBuffer* ViewUniformBuffer = nullptr;
 
-	TUniformBufferRef<FSceneTexturesUniformParameters> SceneTexturesUniformParams;
+	TUniformBufferRef<FSceneTextureUniformParameters> SceneTexturesUniformParams;
 	FPostOpaqueRenderDelegate PostOpaqueDelegate;
+	FDelegateHandle PostOpaqueDelegateHandle;
 };
 
 extern TGlobalResource<FNiagaraViewDataMgr> GNiagaraViewDataManager;
@@ -94,8 +98,10 @@ class FNiagaraWorldManager : public FGCObject
 {
 public:
 	
-	FNiagaraWorldManager(UWorld* InWorld);
+	FNiagaraWorldManager();
 	~FNiagaraWorldManager();
+
+	void Init(UWorld* InWorld);
 
 	static NIAGARA_API FNiagaraWorldManager* Get(const UWorld* World);
 	static void OnStartup();
@@ -112,11 +118,12 @@ public:
 	//~ GCObject Interface
 	
 	UNiagaraParameterCollectionInstance* GetParameterCollection(UNiagaraParameterCollection* Collection);
-	void SetParameterCollection(UNiagaraParameterCollectionInstance* NewInstance);
 	void CleanupParameterCollections();
 	TSharedRef<FNiagaraSystemSimulation, ESPMode::ThreadSafe> GetSystemSimulation(ETickingGroup TickGroup, UNiagaraSystem* System);
 	void DestroySystemSimulation(UNiagaraSystem* System);
 	void DestroySystemInstance(TUniquePtr<FNiagaraSystemInstance>& InPtr);	
+
+	void MarkSimulationForPostActorWork(FNiagaraSystemSimulation* SystemSimulation);
 
 	void Tick(ETickingGroup TickGroup, float DeltaSeconds, ELevelTick TickType, ENamedThreads::Type CurrentThread, const FGraphEventRef& MyCompletionGraphEvent);
 
@@ -137,7 +144,7 @@ public:
 
 	UNiagaraComponentPool* GetComponentPool() { return ComponentPool; }
 
-	void UpdateScalabilityManagers();
+	void UpdateScalabilityManagers(bool bNewSpawnsOnly);
 
 	// Dump details about what's inside the world manager
 	void DumpDetails(FOutputDevice& Ar);
@@ -157,14 +164,22 @@ public:
 	void CalculateScalabilityState(UNiagaraSystem* System, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, UNiagaraEffectType* EffectType, UNiagaraComponent* Component, bool bIsPreCull, FNiagaraScalabilityState& OutState);
 	void CalculateScalabilityState(UNiagaraSystem* System, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, UNiagaraEffectType* EffectType, FVector Location, bool bIsPreCull, FNiagaraScalabilityState& OutState);
 
-	/*FORCEINLINE_DEBUGGABLE*/ void SortedSignificanceCull(UNiagaraEffectType* EffectType, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, float Significance, int32 Index, FNiagaraScalabilityState& OutState);
+	/*FORCEINLINE_DEBUGGABLE*/ void SortedSignificanceCull(UNiagaraEffectType* EffectType, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, float Significance, int32& EffectTypeInstCount, int32& SystemInstCount, FNiagaraScalabilityState& OutState);
 
 #if DEBUG_SCALABILITY_STATE
 	void DumpScalabilityState();
 #endif
 
-private:
+	template<typename TAction>
+	void ForAllSystemSimulations(TAction Func);
 
+	template<typename TAction>
+	static void ForAllWorldManagers(TAction Func);
+
+	static void PrimePoolForAllWorlds(UNiagaraSystem* System);
+	void PrimePoolForAllSystems();
+	void PrimePool(UNiagaraSystem* System);
+private:
 	// Callback function registered with global world delegates to instantiate world manager when a game world is created
 	static void OnWorldInit(UWorld* World, const UWorld::InitializationValues IVS);
 
@@ -197,13 +212,11 @@ private:
 
 	FORCEINLINE_DEBUGGABLE bool CanPreCull(UNiagaraEffectType* EffectType);
 
-	FORCEINLINE_DEBUGGABLE void SignificanceCull(UNiagaraEffectType* EffectType, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, float Significance, FNiagaraScalabilityState& OutState);
+	FORCEINLINE_DEBUGGABLE void DistanceCull(UNiagaraEffectType* EffectType, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, FVector Location, FNiagaraScalabilityState& OutState);
+	FORCEINLINE_DEBUGGABLE void DistanceCull(UNiagaraEffectType* EffectType, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, UNiagaraComponent* Component, FNiagaraScalabilityState& OutState);
 	FORCEINLINE_DEBUGGABLE void VisibilityCull(UNiagaraEffectType* EffectType, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, UNiagaraComponent* Component, FNiagaraScalabilityState& OutState);
-	FORCEINLINE_DEBUGGABLE void InstanceCountCull(UNiagaraEffectType* EffectType, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, FNiagaraScalabilityState& OutState);
+	FORCEINLINE_DEBUGGABLE void InstanceCountCull(UNiagaraEffectType* EffectType, UNiagaraSystem* System, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, FNiagaraScalabilityState& OutState);
 
-	/** Calculate significance contribution from the distance to nearest view. */
-	FORCEINLINE_DEBUGGABLE float DistanceSignificance(UNiagaraEffectType* EffectType, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, FVector Location);
-	FORCEINLINE_DEBUGGABLE float DistanceSignificance(UNiagaraEffectType* EffectType, const FNiagaraSystemScalabilitySettings& ScalabilitySettings, UNiagaraComponent* Component);
 	
 	static FDelegateHandle OnWorldInitHandle;
 	static FDelegateHandle OnWorldCleanupHandle;
@@ -225,12 +238,15 @@ private:
 
 	TMap<UNiagaraSystem*, TSharedRef<FNiagaraSystemSimulation, ESPMode::ThreadSafe>> SystemSimulations[NiagaraNumTickGroups];
 
+	TArray<TSharedRef<FNiagaraSystemSimulation, ESPMode::ThreadSafe>> SimulationsWithPostActorWork;
+
 	int32 CachedEffectsQuality;
 
 	bool bCachedPlayerViewLocationsValid = false;
 	TArray<FVector, TInlineAllocator<8> > CachedPlayerViewLocations;
 
 	UNiagaraComponentPool* ComponentPool;
+	bool bPoolIsPrimed = false;
 
 	/** Generated data used by data interfaces */
 	FNDI_SkeletalMesh_GeneratedData SkeletalMeshGeneratedData;
@@ -245,3 +261,27 @@ private:
 	bool bAppHasFocus;
 };
 
+
+template<typename TAction>
+void FNiagaraWorldManager::ForAllSystemSimulations(TAction Func)
+{
+	for (int TG = 0; TG < NiagaraNumTickGroups; ++TG)
+	{
+		for (TPair<UNiagaraSystem*, TSharedRef<FNiagaraSystemSimulation, ESPMode::ThreadSafe>>& SimPair : SystemSimulations[TG])
+		{
+			Func(SimPair.Value.Get());
+		}
+	}
+}
+
+template<typename TAction>
+void FNiagaraWorldManager::ForAllWorldManagers(TAction Func)
+{
+	for (auto& Pair : WorldManagers)
+	{
+		if (Pair.Value)
+		{
+			Func(*Pair.Value);
+		}
+	}
+}

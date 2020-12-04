@@ -82,41 +82,6 @@ UPlaneCutToolProperties::UPlaneCutToolProperties() :
 {
 }
 
-void UPlaneCutToolProperties::SaveProperties(UInteractiveTool* SaveFromTool)
-{
-	UPlaneCutToolProperties* PropertyCache = GetPropertyCache<UPlaneCutToolProperties>();
-	PropertyCache->bKeepBothHalves = this->bKeepBothHalves;
-	PropertyCache->bFillCutHole = this->bFillCutHole;
-	PropertyCache->SpacingBetweenHalves = this->SpacingBetweenHalves;
-	PropertyCache->bSnapToWorldGrid = this->bSnapToWorldGrid;
-	PropertyCache->bFillSpans = this->bFillSpans;
-	PropertyCache->bShowPreview = this->bShowPreview;
-}
-
-void UPlaneCutToolProperties::RestoreProperties(UInteractiveTool* RestoreToTool)
-{
-	UPlaneCutToolProperties* PropertyCache = GetPropertyCache<UPlaneCutToolProperties>();
-	this->bKeepBothHalves = PropertyCache->bKeepBothHalves;
-	this->bFillCutHole = PropertyCache->bFillCutHole;
-	this->SpacingBetweenHalves = PropertyCache->SpacingBetweenHalves;
-	this->bSnapToWorldGrid = PropertyCache->bSnapToWorldGrid;
-	this->bFillSpans = PropertyCache->bFillSpans;
-	this->bShowPreview = PropertyCache->bShowPreview;
-}
-
-void UAcceptOutputProperties::SaveProperties(UInteractiveTool* SaveFromTool)
-{
-	UAcceptOutputProperties* PropertyCache = GetPropertyCache<UAcceptOutputProperties>();
-	PropertyCache->bExportSeparatedPiecesAsNewMeshAssets = this->bExportSeparatedPiecesAsNewMeshAssets;
-}
-
-void UAcceptOutputProperties::RestoreProperties(UInteractiveTool* RestoreToTool)
-{
-	UAcceptOutputProperties* PropertyCache = GetPropertyCache<UAcceptOutputProperties>();
-	this->bExportSeparatedPiecesAsNewMeshAssets = PropertyCache->bExportSeparatedPiecesAsNewMeshAssets;
-}
-
-
 UPlaneCutTool::UPlaneCutTool()
 {
 	CutPlaneOrigin = FVector::ZeroVector;
@@ -192,9 +157,17 @@ void UPlaneCutTool::Setup()
 	// click to set plane behavior
 	FSelectClickedAction* SetPlaneAction = new FSelectClickedAction();
 	SetPlaneAction->World = this->TargetWorld;
+
+	// Include the original components even though we made them invisible, since we want
+	// to be able to reposition the plane onto the original mesh.
+	for (const TUniquePtr<FPrimitiveComponentTarget>& Target : ComponentTargets)
+	{
+		SetPlaneAction->InvisibleComponentsToHitTest.Add(Target->GetOwnerComponent());
+	}
+
 	SetPlaneAction->OnClickedPositionFunc = [this](const FHitResult& Hit)
 	{
-		SetCutPlaneFromWorldPos(Hit.ImpactPoint, Hit.ImpactNormal);
+		SetCutPlaneFromWorldPos(Hit.ImpactPoint, Hit.ImpactNormal, false);
 		for (UMeshOpPreviewWithBackgroundCompute* Preview : Previews)
 		{
 			Preview->InvalidateResult();
@@ -235,7 +208,7 @@ void UPlaneCutTool::Setup()
 		ComponentTarget->GetOwnerActor()->GetActorBounds(false, ComponentOrigin, ComponentExtents);
 		CombinedBounds += FBox::BuildAABB(ComponentOrigin, ComponentExtents);
 	}
-	SetCutPlaneFromWorldPos(CombinedBounds.GetCenter(), FVector::UpVector);
+	SetCutPlaneFromWorldPos(CombinedBounds.GetCenter(), FVector::UpVector, true);
 	// hook up callback so further changes trigger recut
 	PlaneTransformProxy->OnTransformChanged.AddUObject(this, &UPlaneCutTool::TransformChanged);
 
@@ -406,17 +379,17 @@ TUniquePtr<FDynamicMeshOperator> UPlaneCutOperatorFactory::MakeNewOperator()
 
 void UPlaneCutTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
+	FViewCameraState RenderCameraState = RenderAPI->GetCameraState();
 	FPrimitiveDrawInterface* PDI = RenderAPI->GetPrimitiveDrawInterface();
 	FColor GridColor(128, 128, 128, 32);
-	float GridThickness = 0.5f;
-	float GridLineSpacing = 25.0f;   // @todo should be relative to view
+	float GridThickness = 0.5f*RenderCameraState.GetPDIScalingFactor();
 	int NumGridLines = 10;
 	
 	FFrame3f DrawFrame(CutPlaneOrigin, CutPlaneOrientation);
-	MeshDebugDraw::DrawSimpleGrid(DrawFrame, NumGridLines, GridLineSpacing, GridThickness, GridColor, false, PDI, FTransform::Identity);
+	MeshDebugDraw::DrawSimpleFixedScreenAreaGrid(RenderCameraState, DrawFrame, NumGridLines, 45.0, GridThickness, GridColor, false, PDI, FTransform::Identity);
 }
 
-void UPlaneCutTool::Tick(float DeltaTime)
+void UPlaneCutTool::OnTick(float DeltaTime)
 {
 	if (PlaneTransformGizmo != nullptr)
 	{
@@ -482,21 +455,22 @@ void UPlaneCutTool::TransformChanged(UTransformProxy* Proxy, FTransform Transfor
 }
 
 
-void UPlaneCutTool::SetCutPlaneFromWorldPos(const FVector& Position, const FVector& Normal)
+void UPlaneCutTool::SetCutPlaneFromWorldPos(const FVector& Position, const FVector& Normal, bool bIsInitializing)
 {
 	CutPlaneOrigin = Position;
 
 	FFrame3f CutPlane(Position, Normal);
 	CutPlaneOrientation = (FQuat)CutPlane.Rotation;
 
-	PlaneTransformGizmo->SetActiveTarget(PlaneTransformProxy);
-	PlaneTransformGizmo->SetNewGizmoTransform(CutPlane.ToFTransform());
-}
-
-
-bool UPlaneCutTool::HasAccept() const
-{
-	return true;
+	PlaneTransformGizmo->SetActiveTarget(PlaneTransformProxy, GetToolManager());
+	if (bIsInitializing)
+	{
+		PlaneTransformGizmo->ReinitializeGizmoTransform(CutPlane.ToFTransform());
+	}
+	else
+	{
+		PlaneTransformGizmo->SetNewGizmoTransform(CutPlane.ToFTransform());
+	}
 }
 
 bool UPlaneCutTool::CanAccept() const
@@ -508,7 +482,7 @@ bool UPlaneCutTool::CanAccept() const
 			return false;
 		}
 	}
-	return true;
+	return Super::CanAccept();
 }
 
 

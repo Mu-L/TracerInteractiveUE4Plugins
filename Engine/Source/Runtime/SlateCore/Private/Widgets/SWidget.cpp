@@ -16,6 +16,7 @@
 #include "Input/HittestGrid.h"
 #include "Debugging/SlateDebugging.h"
 #include "Widgets/SWindow.h"
+#include "Trace/SlateTrace.h"
 #include "Types/ReflectionMetadata.h"
 #include "Stats/Stats.h"
 #include "Containers/StringConv.h"
@@ -26,6 +27,18 @@
 #if WITH_ACCESSIBILITY
 #include "Widgets/Accessibility/SlateCoreAccessibleWidgets.h"
 #include "Widgets/Accessibility/SlateAccessibleMessageHandler.h"
+#endif
+
+// Enabled to assign FindWidgetMetaData::FoundWidget to the widget that has the matching reflection data 
+#define WITH_SLATE_FIND_WIDGET_REFLECTION_METADATA 0
+
+#if WITH_SLATE_FIND_WIDGET_REFLECTION_METADATA
+namespace FindWidgetMetaData
+{
+	SWidget* FoundWidget = nullptr;
+	FName WidgeName = "ItemNameToFind";
+	FName AssetName = "AssetNameToFind";
+}
 #endif
 
 DEFINE_STAT(STAT_SlateTotalWidgetsPerFrame);
@@ -166,6 +179,13 @@ void SWidget::UpdateWidgetProxy(int32 NewLayerId, FSlateCachedElementsHandle& Ca
 	}
 }
 
+#if UE_SLATE_WITH_WIDGET_UNIQUE_IDENTIFIER
+namespace SlateTraceMetaData
+{
+	uint64 UniqueIdGenerator = 0;
+}
+#endif
+
 FName NAME_MouseButtonDown(TEXT("MouseButtonDown"));
 FName NAME_MouseButtonUp(TEXT("MouseButtonUp"));
 FName NAME_MouseMove(TEXT("MouseMove"));
@@ -205,6 +225,9 @@ SWidget::SWidget()
 	, RenderTransformPivot(FVector2D::ZeroVector)
 	, Cursor( TOptional<EMouseCursor::Type>() )
 	, ToolTip()
+#if UE_SLATE_WITH_WIDGET_UNIQUE_IDENTIFIER
+	, UniqueIdentifier(++SlateTraceMetaData::UniqueIdGenerator)
+#endif
 #if ENABLE_STATNAMEDEVENTS
 	, StatIDStringStorage(nullptr)
 #endif
@@ -214,10 +237,19 @@ SWidget::SWidget()
 		INC_DWORD_STAT(STAT_SlateTotalWidgets);
 		INC_DWORD_STAT(STAT_SlateTotalWidgetsPerFrame);
 	}
+
+	UE_TRACE_SLATE_WIDGET_ADDED(this);
 }
 
 SWidget::~SWidget()
 {
+#if WITH_SLATE_FIND_WIDGET_REFLECTION_METADATA
+	if (FindWidgetMetaData::FoundWidget == this)
+	{
+		FindWidgetMetaData::FoundWidget = nullptr;
+	}
+#endif
+
 	// Unregister all ActiveTimers so they aren't left stranded in the Application's list.
 	if (FSlateApplicationBase::IsInitialized())
 	{
@@ -226,9 +258,14 @@ SWidget::~SWidget()
 			FSlateApplicationBase::Get().UnRegisterActiveTimer(ActiveTimerHandle);
 		}
 
-		if (FSlateInvalidationRoot* Root = FastPathProxyHandle.GetInvalidationRoot())
+		// Warn the invalidation root
+		FSlateInvalidationRootHandle SlateInvalidationRootHandle = FastPathProxyHandle.GetInvalidationRootHandle();
+#if WITH_SLATE_DEBUGGING
+		ensure(!SlateInvalidationRootHandle.IsStale());
+#endif
+		if (FSlateInvalidationRoot* InvalidationRoot = SlateInvalidationRootHandle.GetInvalidationRoot())
 		{
-			Root->OnWidgetDestroyed(this);
+			InvalidationRoot->OnWidgetDestroyed(this);
 		}
 
 		// Reset handle
@@ -250,6 +287,7 @@ SWidget::~SWidget()
 	StatIDStringStorage = nullptr;
 #endif
 
+	UE_TRACE_SLATE_WIDGET_REMOVED(this);
 	DEC_DWORD_STAT(STAT_SlateTotalWidgets);
 	DEC_MEMORY_STAT_BY(STAT_SlateSWidgetAllocSize, AllocSize);
 }
@@ -553,7 +591,7 @@ FPopupMethodReply SWidget::OnQueryPopupMethod() const
 	return FPopupMethodReply::Unhandled();
 }
 
-TSharedPtr<struct FVirtualPointerPosition> SWidget::TranslateMouseCoordinateFor3DChild(const TSharedRef<SWidget>& ChildWidget, const FGeometry& MyGeometry, const FVector2D& ScreenSpaceMouseCoordinate, const FVector2D& LastScreenSpaceMouseCoordinate) const
+TSharedPtr<struct FVirtualPointerPosition> SWidget::TranslateMouseCoordinateForCustomHitTestChild(const TSharedRef<SWidget>& ChildWidget, const FGeometry& MyGeometry, const FVector2D& ScreenSpaceMouseCoordinate, const FVector2D& LastScreenSpaceMouseCoordinate) const
 {
 	return nullptr;
 }
@@ -618,10 +656,11 @@ void SWidget::InvalidatePrepass()
 
 void SWidget::InvalidateChildRemovedFromTree(SWidget& Child)
 {
-	if (Child.FastPathProxyHandle.IsValid())
+	// If the root is invalidated, we need to clear out its PersistentState regardless.
+	if (FSlateInvalidationRoot* ChildInvalidationRoot = Child.FastPathProxyHandle.GetInvalidationRootHandle().GetInvalidationRoot())
 	{
 		SCOPED_NAMED_EVENT(SWidget_InvalidateChildRemovedFromTree, FColor::Red);
-		Child.UpdateFastPathVisibility(false, true, Child.FastPathProxyHandle.GetInvalidationRoot()->GetHittestGrid());
+		Child.UpdateFastPathVisibility(false, true, ChildInvalidationRoot->GetHittestGrid());
 	}
 }
 
@@ -649,7 +688,7 @@ void SWidget::AssignParentWidget(TSharedPtr<SWidget> InParent)
 #endif
 	if (InParent.IsValid())
 	{
-		InParent->Invalidate(EInvalidateWidget::ChildOrder);
+		InParent->Invalidate(EInvalidateWidgetReason::ChildOrder);
 	}
 }
 
@@ -672,7 +711,7 @@ bool SWidget::ConditionallyDetatchParentWidget(SWidget* InExpectedParent)
 
 		if (Parent.IsValid())
 		{
-			Parent->Invalidate(EInvalidateWidget::ChildOrder);
+			Parent->Invalidate(EInvalidateWidgetReason::ChildOrder);
 		}
 
 		InvalidateChildRemovedFromTree(*this);
@@ -775,9 +814,15 @@ void SWidget::UpdateFastPathVisibility(bool bParentVisible, bool bWidgetRemoved,
 			FastPathProxyHandle.GetInvalidationRoot()->RemoveWidgetFromFastPath(Proxy);
 		}
 	}
-	else
+	else if (bWidgetRemoved)
 	{
-		ensure(FastPathProxyHandle.GetIndex() == INDEX_NONE);
+		// The widget can be deleted before the next FastWidgetPathList is built. Remove it now from its InvalidationRoot
+		if (FSlateInvalidationRoot* InvalidationRoot = FastPathProxyHandle.GetInvalidationRootHandle().GetInvalidationRoot())
+		{
+			InvalidationRoot->OnWidgetDestroyed(this);
+		}
+
+		FastPathProxyHandle = FWidgetProxyHandle();
 	}
 
 	if (HittestGridToRemoveFrom)
@@ -785,9 +830,16 @@ void SWidget::UpdateFastPathVisibility(bool bParentVisible, bool bWidgetRemoved,
 		HittestGridToRemoveFrom->RemoveWidget(SharedThis(this));
 	}
 
+	if (bWidgetRemoved)
+	{
+		PersistentState.CachedElementHandle.RemoveFromCache();
+	}
+	else
+	{
+		PersistentState.CachedElementHandle.ClearCachedElements();
+	}
 
-	PersistentState.CachedElementHandle.ClearCachedElements();
-
+	// Loop through children
 	FChildren* MyChildren = GetAllChildren();
 	const int32 NumChildren = MyChildren->Num();
 	for (int32 ChildIndex = 0; ChildIndex < NumChildren; ++ChildIndex)
@@ -1069,15 +1121,15 @@ void SWidget::Invalidate(EInvalidateWidgetReason InvalidateReason)
 	SCOPED_NAMED_EVENT_TEXT("SWidget::Invalidate", FColor::Orange);
 	const bool bWasVolatile = IsVolatileIndirectly() || IsVolatile();
 
-	// Backwards compatibility fix:  Its no longer valid to just invalidate volatility since we need to repaint to cache elements if a widget becoems non-volatile. So after volatility changes force repaint
-	if (InvalidateReason == EInvalidateWidget::Volatility)
+	// Backwards compatibility fix:  Its no longer valid to just invalidate volatility since we need to repaint to cache elements if a widget becomes non-volatile. So after volatility changes force repaint
+	if (InvalidateReason == EInvalidateWidgetReason::Volatility)
 	{
-		InvalidateReason = EInvalidateWidget::PaintAndVolatility;
+		InvalidateReason = EInvalidateWidgetReason::PaintAndVolatility;
 	}
 
-	const bool bVolatilityChanged = EnumHasAnyFlags(InvalidateReason, EInvalidateWidget::Volatility) ? Advanced_InvalidateVolatility() : false;
+	const bool bVolatilityChanged = EnumHasAnyFlags(InvalidateReason, EInvalidateWidgetReason::Volatility) ? Advanced_InvalidateVolatility() : false;
 
-	if (EnumHasAnyFlags(InvalidateReason, EInvalidateWidget::ChildOrder) || !PrepassLayoutScaleMultiplier.IsSet())
+	if (EnumHasAnyFlags(InvalidateReason, EInvalidateWidgetReason::ChildOrder) || !PrepassLayoutScaleMultiplier.IsSet())
 	{
 		InvalidatePrepass();
 	}
@@ -1085,7 +1137,7 @@ void SWidget::Invalidate(EInvalidateWidgetReason InvalidateReason)
 	if(FastPathProxyHandle.IsValid())
 	{
 		// Current thinking is that visibility and volatility should be updated right away, not during fast path invalidation processing next frame
-		if (EnumHasAnyFlags(InvalidateReason, EInvalidateWidget::Visibility))
+		if (EnumHasAnyFlags(InvalidateReason, EInvalidateWidgetReason::Visibility))
 		{
 			SCOPED_NAMED_EVENT(SWidget_UpdateFastPathVisibility, FColor::Red);
 			TSharedPtr<SWidget> ParentWidget = GetParentWidget();
@@ -1105,6 +1157,13 @@ void SWidget::Invalidate(EInvalidateWidgetReason InvalidateReason)
 
 		FastPathProxyHandle.MarkWidgetDirty(InvalidateReason);
 	}
+	else
+	{
+#if WITH_SLATE_DEBUGGING
+		FSlateDebugging::BroadcastWidgetInvalidate(this, nullptr, InvalidateReason);
+#endif
+		UE_TRACE_SLATE_WIDGET_INVALIDATED(this, nullptr, InvalidateReason);
+	}
 }
 
 void SWidget::SetCursor( const TAttribute< TOptional<EMouseCursor::Type> >& InCursor )
@@ -1123,6 +1182,8 @@ void SWidget::SetDebugInfo( const ANSICHAR* InType, const ANSICHAR* InFile, int3
 	CreatedInLocation = FName( InFile );
 	CreatedInLocation.SetNumber(OnLine);
 #endif
+
+	UE_TRACE_SLATE_WIDGET_DEBUG_INFO(this);
 }
 
 void SWidget::OnClippingChanged()
@@ -1180,10 +1241,13 @@ FSlateRect SWidget::CalculateCullingAndClippingRules(const FGeometry& AllottedGe
 
 int32 SWidget::Paint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
 {
+	const EWidgetUpdateFlags PreviousUpdateFlag = UpdateFlags;
+
 	// TODO, Maybe we should just make Paint non-const and keep OnPaint const.
 	TSharedRef<SWidget> MutableThis = ConstCastSharedRef<SWidget>(AsShared());
 
 	INC_DWORD_STAT(STAT_SlateNumPaintedWidgets);
+	UE_TRACE_SCOPED_SLATE_WIDGET_PAINT(this);
 
 	const SWidget* PaintParent = Args.GetPaintParent();
 	//if (GSlateEnableGlobalInvalidation)
@@ -1412,8 +1476,12 @@ int32 SWidget::Paint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, 
 
 	MutableThis->UpdateWidgetProxy(NewLayerId, NewCacheHandle);
 
-	return NewLayerId;
+#if WITH_SLATE_DEBUGGING
+	FSlateDebugging::BroadcastWidgetUpdatedByPaint(this, PreviousUpdateFlag);
+#endif
+	UE_TRACE_SLATE_WIDGET_UPDATED(this, PreviousUpdateFlag);
 
+	return NewLayerId;
 }
 
 float SWidget::GetRelativeLayoutScale(int32 ChildIndex, float LayoutScaleMultiplier) const
@@ -1479,7 +1547,7 @@ void SWidget::Prepass_Internal(float InLayoutScaleMultiplier)
 
 TSharedRef<FActiveTimerHandle> SWidget::RegisterActiveTimer(float TickPeriod, FWidgetActiveTimerDelegate TickFunction)
 {
-	TSharedRef<FActiveTimerHandle> ActiveTimerHandle = MakeShareable(new FActiveTimerHandle(TickPeriod, TickFunction, FSlateApplicationBase::Get().GetCurrentTime() + TickPeriod));
+	TSharedRef<FActiveTimerHandle> ActiveTimerHandle = MakeShared<FActiveTimerHandle>(TickPeriod, TickFunction, FSlateApplicationBase::Get().GetCurrentTime() + TickPeriod);
 	FSlateApplicationBase::Get().RegisterActiveTimer(ActiveTimerHandle);
 	ActiveTimers.Add(ActiveTimerHandle);
 
@@ -1585,6 +1653,28 @@ void SWidget::SetOnMouseEnter(FNoReplyPointerEventHandler EventHandler)
 void SWidget::SetOnMouseLeave(FSimpleNoReplyPointerEventHandler EventHandler)
 {
 	MouseLeaveHandler = EventHandler;
+}
+
+void SWidget::AddMetadataInternal(const TSharedRef<ISlateMetaData>& AddMe)
+{
+	MetaData.Add(AddMe);
+
+
+#if WITH_SLATE_FIND_WIDGET_REFLECTION_METADATA || UE_SLATE_TRACE_ENABLED
+	if (AddMe->IsOfType<FReflectionMetaData>())
+	{
+#if WITH_SLATE_FIND_WIDGET_REFLECTION_METADATA
+		TSharedRef<FReflectionMetaData> Reflection = StaticCastSharedRef<FReflectionMetaData>(AddMe);
+		if (Reflection->Name == FindWidgetMetaData::WidgeName && Reflection->Asset.Get() && Reflection->Asset.Get()->GetFName() == FindWidgetMetaData::AssetName)
+		{
+			FindWidgetMetaData::FoundWidget = this;
+		}
+#endif
+#if UE_SLATE_TRACE_ENABLED
+		UE_TRACE_SLATE_WIDGET_DEBUG_INFO(this);
+#endif
+	}
+#endif
 }
 
 #if WITH_ACCESSIBILITY
@@ -1776,3 +1866,4 @@ bool SWidget::IsChildWidgetCulled(const FSlateRect& MyCullingRect, const FArrang
 }
 
 #endif
+#undef WITH_SLATE_FIND_WIDGET_REFLECTION_METADATA

@@ -22,11 +22,9 @@
 #include "IContentBrowserSingleton.h"
 #include "ContentBrowserModule.h"
 #include "SequencerUtilities.h"
+#include "Misc/PackageName.h"
 
 #define LOCTEXT_NAMESPACE "FCameraShakeTrackEditor"
-
-static const FString CameraShakeClassPath(TEXT("Class'/Script/Engine.CameraShake'"));
-
 
 class FCameraShakeSection : public FSequencerSection
 {
@@ -72,40 +70,14 @@ TSharedRef<ISequencerSection> FCameraShakeTrackEditor::MakeSectionInterface(UMov
 	return MakeShareable(new FCameraShakeSection(SectionObject));
 }
 
-
-void FCameraShakeTrackEditor::AddKey(const FGuid& ObjectGuid)
-{
-	// Load the asset registry module
-	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
-
-	// Collect a full list of assets with the specified class
-	TArray<FAssetData> AssetDataList;
-	AssetRegistryModule.Get().GetAssetsByClass(UCameraShake::StaticClass()->GetFName(), AssetDataList);
-
-	if (AssetDataList.Num())
-	{
-		TSharedPtr< SWindow > Parent = FSlateApplication::Get().GetActiveTopLevelWindow();
-		if (Parent.IsValid())
-		{
-			FSlateApplication::Get().PushMenu(
-				Parent.ToSharedRef(),
-				FWidgetPath(),
-				BuildCameraShakeSubMenu(ObjectGuid),
-				FSlateApplication::Get().GetCursorPos(),
-				FPopupTransitionEffect(FPopupTransitionEffect::TypeInPopup)
-				);
-		}
-	}
-}
-
 bool FCameraShakeTrackEditor::HandleAssetAdded(UObject* Asset, const FGuid& TargetObjectGuid)
 {
 	if (TargetObjectGuid.IsValid())
 	{
 		UBlueprint* const SelectedObject = dynamic_cast<UBlueprint*>(Asset);
-		if (SelectedObject && SelectedObject->GeneratedClass && SelectedObject->GeneratedClass->IsChildOf(UCameraShake::StaticClass()))
+		if (SelectedObject && SelectedObject->GeneratedClass && SelectedObject->GeneratedClass->IsChildOf(UCameraShakeBase::StaticClass()))
 		{
-			TSubclassOf<UCameraShake> const ShakeClass = *(SelectedObject->GeneratedClass);
+			TSubclassOf<UCameraShakeBase> const ShakeClass = *(SelectedObject->GeneratedClass);
 
 			TArray<TWeakObjectPtr<>> OutObjects;
 			for (TWeakObjectPtr<> Object : GetSequencer()->FindObjectsInCurrentSequence(TargetObjectGuid))
@@ -130,21 +102,6 @@ void FCameraShakeTrackEditor::BuildObjectBindingTrackMenu(FMenuBuilder& MenuBuil
 	UCameraComponent const* const CamComponent = AcquireCameraComponentFromObjectGuid(ObjectBindings[0]);
 	if (CamComponent)
 	{
-		const TSharedPtr<ISequencer> ParentSequencer = GetSequencer();
-
-		// Load the asset registry module
-		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
-
-		// Collect a full list of assets with the specified class
-		TArray<FAssetData> AssetDataList;
-		{
-			FARFilter Filter;
-			Filter.ClassNames.Add(UBlueprint::StaticClass()->GetFName());
-			Filter.TagsAndValues.Add(FBlueprintTags::ParentClassPath, CameraShakeClassPath);
-
-			AssetRegistryModule.Get().GetAssets(Filter, AssetDataList);
-		}
-
 		MenuBuilder.AddSubMenu(
 			LOCTEXT("AddCameraShake", "Camera Shake"), NSLOCTEXT("Sequencer", "AddCameraShakeTooltip", "Adds an additive camera shake track."),
 			FNewMenuDelegate::CreateRaw(this, &FCameraShakeTrackEditor::AddCameraShakeSubMenu, ObjectBindings)
@@ -164,7 +121,6 @@ TSharedRef<SWidget> FCameraShakeTrackEditor::BuildCameraShakeSubMenu(FGuid Objec
 	return MenuBuilder.MakeWidget();
 }
 
-
 void FCameraShakeTrackEditor::AddCameraShakeSubMenu(FMenuBuilder& MenuBuilder, TArray<FGuid> ObjectBindings)
 {
 	FAssetPickerConfig AssetPickerConfig;
@@ -174,7 +130,28 @@ void FCameraShakeTrackEditor::AddCameraShakeSubMenu(FMenuBuilder& MenuBuilder, T
 		AssetPickerConfig.bAllowNullSelection = false;
 		AssetPickerConfig.InitialAssetViewType = EAssetViewType::List;
 		AssetPickerConfig.Filter.ClassNames.Add(UBlueprint::StaticClass()->GetFName());
-		AssetPickerConfig.Filter.TagsAndValues.Add(FBlueprintTags::ParentClassPath, CameraShakeClassPath);
+
+		IAssetRegistry & AssetRegistry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get();
+		TArray<FName> ClassNames;
+		TSet<FName> DerivedClassNames;
+		ClassNames.Add(UCameraShakeBase::StaticClass()->GetFName());
+		AssetRegistry.GetDerivedClassNames(ClassNames, TSet<FName>(), DerivedClassNames);
+						
+		AssetPickerConfig.OnShouldFilterAsset = FOnShouldFilterAsset::CreateLambda([DerivedClassNames](const FAssetData& AssetData)
+		{
+			const FString ParentClassFromData = AssetData.GetTagValueRef<FString>(FBlueprintTags::ParentClassPath);
+			if (!ParentClassFromData.IsEmpty())
+			{
+				const FString ClassObjectPath = FPackageName::ExportTextPathToObjectPath(ParentClassFromData);
+				const FName ClassName = FName(*FPackageName::ObjectPathToObjectName(ClassObjectPath));
+
+				if (DerivedClassNames.Contains(ClassName))
+				{
+					return false;
+				}
+			}
+			return true;
+		});
 	}
 
 	FContentBrowserModule& ContentBrowserModule = FModuleManager::Get().LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
@@ -209,9 +186,9 @@ void FCameraShakeTrackEditor::OnCameraShakeAssetSelected(const FAssetData& Asset
 	FSlateApplication::Get().DismissAllMenus();
 
 	UBlueprint* const SelectedObject = dynamic_cast<UBlueprint*>(AssetData.GetAsset());
-	if (SelectedObject && SelectedObject->GeneratedClass && SelectedObject->GeneratedClass->IsChildOf(UCameraShake::StaticClass()))
+	if (SelectedObject && SelectedObject->GeneratedClass && SelectedObject->GeneratedClass->IsChildOf(UCameraShakeBase::StaticClass()))
 	{
-		TSubclassOf<UCameraShake> const ShakeClass = *(SelectedObject->GeneratedClass);
+		TSubclassOf<UCameraShakeBase> const ShakeClass = *(SelectedObject->GeneratedClass);
 
 		TArray<TWeakObjectPtr<>> OutObjects;
 		for (FGuid ObjectBinding : ObjectBindings)
@@ -229,7 +206,7 @@ void FCameraShakeTrackEditor::OnCameraShakeAssetSelected(const FAssetData& Asset
 }
 
 
-FKeyPropertyResult FCameraShakeTrackEditor::AddKeyInternal(FFrameNumber KeyTime, const TArray<TWeakObjectPtr<UObject>> Objects, TSubclassOf<UCameraShake> ShakeClass)
+FKeyPropertyResult FCameraShakeTrackEditor::AddKeyInternal(FFrameNumber KeyTime, const TArray<TWeakObjectPtr<UObject>> Objects, TSubclassOf<UCameraShakeBase> ShakeClass)
 {
 	FKeyPropertyResult KeyPropertyResult;
 
@@ -250,6 +227,7 @@ FKeyPropertyResult FCameraShakeTrackEditor::AddKeyInternal(FFrameNumber KeyTime,
 			{
 				UMovieSceneSection* NewSection = Cast<UMovieSceneCameraShakeTrack>(Track)->AddNewCameraShake(KeyTime, ShakeClass);
 				KeyPropertyResult.bTrackModified = true;
+				KeyPropertyResult.SectionsCreated.Add(NewSection);
 				
 				GetSequencer()->EmptySelection();
 				GetSequencer()->SelectSection(NewSection);

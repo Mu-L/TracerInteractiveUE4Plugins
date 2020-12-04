@@ -6,6 +6,7 @@
 #include "CollisionQueryParams.h"
 #include "Engine/Engine.h"
 #include "AISystem.h"
+#include "AIHelpers.h"
 #include "Perception/AIPerceptionComponent.h"
 #include "VisualLogger/VisualLogger.h"
 #include "Perception/AISightTargetInterface.h"
@@ -14,8 +15,8 @@
 #define DO_SIGHT_VLOGGING (0 && ENABLE_VISUAL_LOG)
 
 #if DO_SIGHT_VLOGGING
-	#define SIGHT_LOG_SEGMENT UE_VLOG_SEGMENT
-	#define SIGHT_LOG_LOCATION UE_VLOG_LOCATION
+	#define SIGHT_LOG_SEGMENT(LogOwner, SegmentStart, SegmentEnd, Color, Format, ...) UE_VLOG_SEGMENT(LogOwner, LogAIPerception, Verbose, SegmentStart, SegmentEnd, Color, Format, ##__VA_ARGS__)
+	#define SIGHT_LOG_LOCATION(LogOwner, Location, Radius, Color, Format, ...) UE_VLOG_LOCATION(LogOwner, LogAIPerception, Verbose, Location, Radius, Color, Format, ##__VA_ARGS__)
 #else
 	#define SIGHT_LOG_SEGMENT(...)
 	#define SIGHT_LOG_LOCATION(...)
@@ -31,20 +32,6 @@ DECLARE_CYCLE_STAT(TEXT("Perception Sense: Sight, Remove To Target"), STAT_AI_Se
 
 static const int32 DefaultMaxTracesPerTick = 6;
 static const int32 DefaultMinQueriesPerTimeSliceCheck = 40;
-
-//----------------------------------------------------------------------//
-// helpers
-//----------------------------------------------------------------------//
-FORCEINLINE_DEBUGGABLE bool CheckIsTargetInSightPie(const FPerceptionListener& Listener, const UAISense_Sight::FDigestedSightProperties& DigestedProps, const FVector& TargetLocation, const float SightRadiusSq)
-{
-	if (FVector::DistSquared(Listener.CachedLocation, TargetLocation) <= SightRadiusSq) 
-	{
-		const FVector DirectionToTarget = (TargetLocation - Listener.CachedLocation).GetUnsafeNormal();
-		return FVector::DotProduct(DirectionToTarget, Listener.CachedDirection) > DigestedProps.PeripheralVisionAngleCos;
-	}
-
-	return false;
-}
 
 enum class EForEachResult : uint8
 {
@@ -108,8 +95,10 @@ FAISightTarget::FAISightTarget(AActor* InTarget, FGenericTeamId InTeamId)
 //----------------------------------------------------------------------//
 UAISense_Sight::FDigestedSightProperties::FDigestedSightProperties(const UAISenseConfig_Sight& SenseConfig)
 {
-	SightRadiusSq = FMath::Square(SenseConfig.SightRadius);
-	LoseSightRadiusSq = FMath::Square(SenseConfig.LoseSightRadius);
+	SightRadiusSq = FMath::Square(SenseConfig.SightRadius + SenseConfig.PointOfViewBackwardOffset);
+	LoseSightRadiusSq = FMath::Square(SenseConfig.LoseSightRadius + SenseConfig.PointOfViewBackwardOffset);
+	PointOfViewBackwardOffset = SenseConfig.PointOfViewBackwardOffset;
+	NearClippingRadiusSq = FMath::Square(SenseConfig.NearClippingRadius);
 	PeripheralVisionAngleCos = FMath::Cos(FMath::Clamp(FMath::DegreesToRadians(SenseConfig.PeripheralVisionAngleDegrees), 0.f, PI));
 	AffiliationFlags = SenseConfig.DetectionByAffiliation.GetAsFlags();
 	// keep the special value of FAISystem::InvalidRange (-1.f) if it's set.
@@ -117,7 +106,7 @@ UAISense_Sight::FDigestedSightProperties::FDigestedSightProperties(const UAISens
 }
 
 UAISense_Sight::FDigestedSightProperties::FDigestedSightProperties()
-	: PeripheralVisionAngleCos(0.f), SightRadiusSq(-1.f), AutoSuccessRangeSqFromLastSeenLocation(FAISystem::InvalidRange), LoseSightRadiusSq(-1.f), AffiliationFlags(-1)
+	: PeripheralVisionAngleCos(0.f), SightRadiusSq(-1.f), AutoSuccessRangeSqFromLastSeenLocation(FAISystem::InvalidRange), LoseSightRadiusSq(-1.f), PointOfViewBackwardOffset(0.0f), NearClippingRadiusSq(0.0f), AffiliationFlags(-1)
 {}
 
 //----------------------------------------------------------------------//
@@ -299,9 +288,9 @@ float UAISense_Sight::Update()
 					Listener.RegisterStimulus(TargetActor, FAIStimulus(*this, StimulusStrength, SightQuery->LastSeenLocation, Listener.CachedLocation));
 					SightQuery->bLastResult = true;
 				}
-				else if (CheckIsTargetInSightPie(Listener, PropDigest, TargetLocation, SightRadiusSq))
+				else if (FAISystem::CheckIsTargetInSightCone(Listener.CachedLocation, Listener.CachedDirection, PropDigest.PeripheralVisionAngleCos, PropDigest.PointOfViewBackwardOffset, PropDigest.NearClippingRadiusSq, SightRadiusSq, TargetLocation))
 				{
-					SIGHT_LOG_SEGMENT(ListenerPtr->GetOwner(), Listener.CachedLocation, TargetLocation, FColor::Green, TEXT("%s"), *(Target.TargetId.ToString()));
+					SIGHT_LOG_SEGMENT(ListenerPtr->GetOwner(), Listener.CachedLocation, TargetLocation, FColor::Green, TEXT("TargetID %d"), Target.TargetId);
 
 					FVector OutSeenLocation(0.f);
 					// do line checks
@@ -369,7 +358,7 @@ float UAISense_Sight::Update()
 				// communicate failure only if we've seen give actor before
 				else if (SightQuery->bLastResult)
 				{
-					SIGHT_LOG_SEGMENT(ListenerPtr->GetOwner(), Listener.CachedLocation, TargetLocation, FColor::Red, TEXT("%s"), *(Target.TargetId.ToString()));
+					SIGHT_LOG_SEGMENT(ListenerPtr->GetOwner(), Listener.CachedLocation, TargetLocation, FColor::Red, TEXT("TargetID %d"), Target.TargetId);
 					Listener.RegisterStimulus(TargetActor, FAIStimulus(*this, 0.f, TargetLocation, Listener.CachedLocation, FAIStimulus::SensingFailed));
 					SightQuery->bLastResult = false;
 				}

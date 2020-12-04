@@ -182,6 +182,31 @@ public:
 		check(UAVs.Num() > 0);
 	}
 
+	void GetReadableTransitions(FTileIntersectionResources& TileIntersectionResources, TArray<FRHITransitionInfo>& TransitionInfos)
+	{
+		if (NumCulledTilesArray.IsUAVBound())
+		{
+			TransitionInfos.Add(FRHITransitionInfo(TileIntersectionResources.NumCulledTilesArray.UAV, ERHIAccess::Unknown, ERHIAccess::SRVMask));
+		}
+
+		if (CulledTilesStartOffsetArray.IsUAVBound())
+		{
+			TransitionInfos.Add(FRHITransitionInfo(TileIntersectionResources.CulledTilesStartOffsetArray.UAV, ERHIAccess::Unknown, ERHIAccess::SRVMask));
+		}
+
+		if (CulledTileDataArray.IsUAVBound())
+		{
+			TransitionInfos.Add(FRHITransitionInfo(TileIntersectionResources.CulledTileDataArray.UAV, ERHIAccess::Unknown, ERHIAccess::SRVMask));
+		}
+
+		if (ObjectTilesIndirectArguments.IsUAVBound())
+		{
+			TransitionInfos.Add(FRHITransitionInfo(TileIntersectionResources.ObjectTilesIndirectArguments.UAV, ERHIAccess::Unknown, ERHIAccess::SRVMask | ERHIAccess::IndirectArgs));
+		}
+
+		check(TransitionInfos.Num() > 0);
+	}
+
 	template<typename TParamRef>
 	void UnsetParameters(FRHICommandList& RHICmdList, const TParamRef& ShaderRHI)
 	{
@@ -216,8 +241,7 @@ class FAOScreenGridResources : public FRenderResource
 {
 public:
 
-	FAOScreenGridResources() :
-		bAllocateResourceForGI(false)
+	FAOScreenGridResources()
 	{}
 
 	virtual void InitDynamicRHI() override;
@@ -226,51 +250,26 @@ public:
 	{
 		ScreenGridConeVisibility.Release();
 		ConeDepthVisibilityFunction.Release();
-		StepBentNormal.Release();
-		SurfelIrradiance.Release();
-		HeightfieldIrradiance.Release();
 	}
 
 	void AcquireTransientResource()
 	{
 		ScreenGridConeVisibility.AcquireTransientResource();
-		if (bAllocateResourceForGI)
-		{
-			StepBentNormal.AcquireTransientResource();
-			SurfelIrradiance.AcquireTransientResource();
-			HeightfieldIrradiance.AcquireTransientResource();
-		}
 	}
 
 	void DiscardTransientResource()
 	{
 		ScreenGridConeVisibility.DiscardTransientResource();
-		if (bAllocateResourceForGI)
-		{
-			StepBentNormal.DiscardTransientResource();
-			SurfelIrradiance.DiscardTransientResource();
-			HeightfieldIrradiance.DiscardTransientResource();
-		}
 	}
 
 	FIntPoint ScreenGridDimensions;
 
 	FRWBuffer ScreenGridConeVisibility;
-
-	bool bAllocateResourceForGI;
 	FRWBuffer ConeDepthVisibilityFunction;
-	FRWBuffer StepBentNormal;
-	FRWBuffer SurfelIrradiance;
-	FRWBuffer HeightfieldIrradiance;
 
 	size_t GetSizeBytesForAO() const
 	{
 		return ScreenGridConeVisibility.NumBytes;
-	}
-
-	size_t GetSizeBytesForGI() const
-	{
-		return ConeDepthVisibilityFunction.NumBytes + StepBentNormal.NumBytes + SurfelIrradiance.NumBytes + HeightfieldIrradiance.NumBytes;
 	}
 };
 
@@ -437,49 +436,6 @@ protected:
 	int32 MaxSize;
 };
 
-// Must match usf
-const int32 RecordConeDataStride = 10;
-// In float4s, must match usf
-const int32 NumVisibilitySteps = 10;
-
-/**  */
-class FTemporaryIrradianceCacheResources : public FMaxSizedRWBuffers
-{
-public:
-
-	virtual void InitDynamicRHI()
-	{
-		if (MaxSize > 0)
-		{
-			ConeVisibility.Initialize(sizeof(float), MaxSize * NumConeSampleDirections, PF_R32_FLOAT, BUF_Static);
-			ConeData.Initialize(sizeof(float), MaxSize * NumConeSampleDirections * RecordConeDataStride, PF_R32_FLOAT, BUF_Static);
-			StepBentNormal.Initialize(sizeof(float) * 4, MaxSize * NumVisibilitySteps, PF_A32B32G32R32F, BUF_Static);
-			SurfelIrradiance.Initialize(sizeof(FFloat16Color), MaxSize, PF_FloatRGBA, BUF_Static);
-			HeightfieldIrradiance.Initialize(sizeof(FFloat16Color), MaxSize, PF_FloatRGBA, BUF_Static);
-		}
-	}
-
-	virtual void ReleaseDynamicRHI()
-	{
-		ConeVisibility.Release();
-		ConeData.Release();
-		StepBentNormal.Release();
-		SurfelIrradiance.Release();
-		HeightfieldIrradiance.Release();
-	}
-
-	size_t GetSizeBytes() const
-	{
-		return ConeVisibility.NumBytes + ConeData.NumBytes + StepBentNormal.NumBytes + SurfelIrradiance.NumBytes + HeightfieldIrradiance.NumBytes;
-	}
-
-	FRWBuffer ConeVisibility;
-	FRWBuffer ConeData;
-	FRWBuffer StepBentNormal;
-	FRWBuffer SurfelIrradiance;
-	FRWBuffer HeightfieldIrradiance;
-};
-
 class FScreenGridParameters
 {
 	DECLARE_TYPE_LAYOUT(FScreenGridParameters, NonVirtual);
@@ -537,6 +493,6 @@ extern void TrackGPUProgress(FRHICommandListImmediate& RHICmdList, uint32 DebugI
 
 extern bool ShouldRenderDeferredDynamicSkyLight(const FScene* Scene, const FSceneViewFamily& ViewFamily);
 
-extern void CullObjectsToView(FRHICommandListImmediate& RHICmdList, FScene* Scene, const FViewInfo& View, const FDistanceFieldAOParameters& Parameters, FDistanceFieldObjectBufferResource& CulledObjectBuffers);
-extern void BuildTileObjectLists(FRHICommandListImmediate& RHICmdList, FScene* Scene, TArray<FViewInfo>& Views, FSceneRenderTargetItem& DistanceFieldNormal, const FDistanceFieldAOParameters& Parameters);
+extern void CullObjectsToView(FRDGBuilder& GraphBuilder, FScene* Scene, const FViewInfo& View, const FDistanceFieldAOParameters& Parameters, FDistanceFieldObjectBufferResource& CulledObjectBuffers);
+extern void BuildTileObjectLists(FRDGBuilder& GraphBuilder, FScene* Scene, TArray<FViewInfo>& Views, FRDGTextureRef DistanceFieldNormal, const FDistanceFieldAOParameters& Parameters);
 extern FIntPoint GetTileListGroupSizeForView(const FViewInfo& View);

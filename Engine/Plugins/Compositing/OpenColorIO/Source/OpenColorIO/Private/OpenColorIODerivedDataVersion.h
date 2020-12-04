@@ -10,4 +10,4 @@ OpenColorIOShaderDerivedDataVersion.h: Derived data version for OpenColorIO shad
 
 // In case of merge conflicts with DDC versions, you MUST generate a new GUID and set this new
 // guid as version
-#define OPENCOLORIO_DERIVEDDATA_VER		TEXT("23080399-42C0-4309-ACF5-7035E7514120")
+#define OPENCOLORIO_DERIVEDDATA_VER		TEXT("81942FF5-13A1-4DB5-BCB4-8E37999842E2")

@@ -9,6 +9,11 @@
 #include "BoundShaderStateCache.h"
 #include "D3D12ShaderResources.h"
 
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+constexpr D3D12_RESOURCE_STATES BackBufferBarrierWriteTransitionTargets = D3D12_RESOURCE_STATE_RENDER_TARGET | D3D12_RESOURCE_STATE_UNORDERED_ACCESS |
+	D3D12_RESOURCE_STATE_STREAM_OUT | D3D12_RESOURCE_STATE_COPY_DEST | D3D12_RESOURCE_STATE_RESOLVE_DEST;
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+
 // Forward Decls
 class FD3D12Resource;
 class FD3D12StateCacheBase;
@@ -25,6 +30,13 @@ class FD3D12RayTracingScene;
 class FD3D12RayTracingPipelineState;
 class FD3D12RayTracingShader;
 #endif // D3D12_RHI_RAYTRACING
+
+enum class ED3D12ResourceStateMode
+{
+	Default,					//< Decide if tracking is required based on flags
+	SingleState,				//< Force disable state tracking of resource - resource will always be in the initial resource state
+	MultiState,					//< Force enable state tracking of resource
+};
 
 class FD3D12PendingResourceBarrier
 {
@@ -112,18 +124,16 @@ private:
 	D3D12_RESOURCE_STATES CompressedState;
 #endif
 
-	bool bRequiresResourceStateTracking;
-	bool bDepthStencil;
-	bool bDeferDelete;
+	bool bRequiresResourceStateTracking : 1;
+	bool bDepthStencil : 1;
+	bool bDeferDelete : 1;
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+	bool bBackBuffer : 1;
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
 	D3D12_HEAP_TYPE HeapType;
 	D3D12_GPU_VIRTUAL_ADDRESS GPUVirtualAddress;
 	void* ResourceBaseAddress;
 	FName DebugName;
-
-#if NV_AFTERMATH
-	// Note: should be removed, kept for binary compatibility.
-	GFSDK_Aftermath_ContextHandle AftermathHandle;
-#endif
 
 #if UE_BUILD_DEBUG
 	static int64 TotalResourceCount;
@@ -134,10 +144,20 @@ public:
 	explicit FD3D12Resource(FD3D12Device* ParentDevice,
 		FRHIGPUMask VisibleNodes,
 		ID3D12Resource* InResource,
-		D3D12_RESOURCE_STATES InitialState,
+		D3D12_RESOURCE_STATES InInitialResourceState,
 		D3D12_RESOURCE_DESC const& InDesc,
 		FD3D12Heap* InHeap = nullptr,
 		D3D12_HEAP_TYPE InHeapType = D3D12_HEAP_TYPE_DEFAULT);
+
+	explicit FD3D12Resource(FD3D12Device* ParentDevice,
+		FRHIGPUMask VisibleNodes,
+		ID3D12Resource* InResource,
+		D3D12_RESOURCE_STATES InInitialResourceState,
+		ED3D12ResourceStateMode InResourceStateMode,
+		D3D12_RESOURCE_STATES InDefaultResourceState,
+		D3D12_RESOURCE_DESC const& InDesc,
+		FD3D12Heap* InHeap,
+		D3D12_HEAP_TYPE InHeapType);
 
 	virtual ~FD3D12Resource();
 
@@ -184,6 +204,10 @@ public:
 	void SetCompressedState(D3D12_RESOURCE_STATES State) { CompressedState = State; }
 #endif
 	bool RequiresResourceStateTracking() const { return bRequiresResourceStateTracking; }
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+	inline bool IsBackBuffer() const { return bBackBuffer; }
+	inline void SetIsBackBuffer(bool bBackBufferIn) { bBackBuffer = bBackBufferIn; }
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
 
 	void SetName(const TCHAR* Name)
 	{
@@ -278,33 +302,42 @@ public:
 	};
 
 private:
-	void InitalizeResourceState(D3D12_RESOURCE_STATES InitialState)
+	void InitalizeResourceState(D3D12_RESOURCE_STATES InInitialState, ED3D12ResourceStateMode InResourceStateMode, D3D12_RESOURCE_STATES InDefaultState)
 	{
 		SubresourceCount = GetMipLevels() * GetArraySize() * GetPlaneCount();
 
-#if D3D12_RHI_RAYTRACING
-		if (InitialState == D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE)
+		if (InResourceStateMode == ED3D12ResourceStateMode::SingleState)
 		{
-			// Ray-tracing acceleration structure resources can never be transitioned out of their initial state.
+			// make sure a valid default state is set
+			check(IsValidD3D12ResourceState(InDefaultState));
+
+#if UE_BUILD_DEBUG
+			FPlatformAtomics::InterlockedIncrement(&NoStateTrackingResourceCount);
+#endif
+			DefaultResourceState = InDefaultState;
+			WritableState = D3D12_RESOURCE_STATE_CORRUPT;
+			ReadableState = D3D12_RESOURCE_STATE_CORRUPT;
 			bRequiresResourceStateTracking = false;
-			WritableState = InitialState;
-			ReadableState = InitialState;
 		}
 		else
-#endif // D3D12_RHI_RAYTRACING
 		{
-			DetermineResourceStates();
+			DetermineResourceStates(InDefaultState);
 		}
 
 		if (bRequiresResourceStateTracking)
 		{
+#if D3D12_RHI_RAYTRACING
+			// No state tracking for acceleration structures because they can't have another state
+			check(InDefaultState != D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+#endif // D3D12_RHI_RAYTRACING
+
 			// Only a few resources (~1%) actually need resource state tracking
 			ResourceState.Initialize(SubresourceCount);
-			ResourceState.SetResourceState(InitialState);
+			ResourceState.SetResourceState(InInitialState);
 		}
 	}
 
-	void DetermineResourceStates()
+	void DetermineResourceStates(D3D12_RESOURCE_STATES InDefaultState)
 	{
 		const FD3D12ResourceTypeHelper Type(Desc, HeapType);
 
@@ -347,7 +380,14 @@ private:
 #if UE_BUILD_DEBUG
 				FPlatformAtomics::InterlockedIncrement(&NoStateTrackingResourceCount);
 #endif
-				DefaultResourceState = (HeapType == D3D12_HEAP_TYPE_READBACK) ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_GENERIC_READ;
+				if (InDefaultState != D3D12_RESOURCE_STATE_TBD)
+				{
+					DefaultResourceState = InDefaultState;
+				}
+				else
+				{
+					DefaultResourceState = (HeapType == D3D12_HEAP_TYPE_READBACK) ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_GENERIC_READ;
+				}
 				bRequiresResourceStateTracking = false;
 				return;
 			}
@@ -361,7 +401,14 @@ private:
 #if UE_BUILD_DEBUG
 				FPlatformAtomics::InterlockedIncrement(&NoStateTrackingResourceCount);
 #endif
-				DefaultResourceState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+				if (InDefaultState != D3D12_RESOURCE_STATE_TBD)
+				{
+					DefaultResourceState = InDefaultState;
+				}
+				else
+				{
+					DefaultResourceState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+				}
 				bRequiresResourceStateTracking = false;
 				return;
 			}
@@ -503,7 +550,7 @@ public:
 	}
 
 
-	inline void AsFastAllocation(FD3D12Resource* Resource, uint32 BufferSize, D3D12_GPU_VIRTUAL_ADDRESS GPUBase, void* CPUBase, uint64 Offset, bool bMultiFrame = false)
+	inline void AsFastAllocation(FD3D12Resource* Resource, uint32 BufferSize, D3D12_GPU_VIRTUAL_ADDRESS GPUBase, void* CPUBase, uint64 ResourceOffsetBase, uint64 Offset, bool bMultiFrame = false)
 	{
 		if (bMultiFrame)
 		{
@@ -516,7 +563,7 @@ public:
 		}
 		SetResource(Resource);
 		SetSize(BufferSize);
-		SetOffsetFromBaseOfResource(Offset);
+		SetOffsetFromBaseOfResource(ResourceOffsetBase + Offset);
 
 		if (CPUBase != nullptr)
 		{
@@ -541,6 +588,12 @@ public:
 	}
 
 	void Swap(FD3D12ResourceLocation& Other);
+
+	/**  Get an address used by LLM to track the GPU allocation that this location represents. */
+	void* GetAddressForLLMTracking() const
+	{
+		return (uint8*)this + 1;
+	}
 
 private:
 
@@ -584,6 +637,11 @@ private:
 
 class FD3D12DeferredDeletionQueue : public FD3D12AdapterChild
 {
+public:
+	using FFencePair = TPair<FD3D12Fence*, uint64>;
+	using FFenceList = TArray<FFencePair, TInlineAllocator<1>>;
+
+private:
 	enum class EObjectType
 	{
 		RHI,
@@ -597,8 +655,7 @@ class FD3D12DeferredDeletionQueue : public FD3D12AdapterChild
 			FD3D12Resource* RHIObject;
 			ID3D12Object*   D3DObject;
 		};
-		FD3D12Fence* Fence;
-		uint64 FenceValue;
+		FFenceList FenceList;
 		EObjectType Type;
 	};
 	FThreadsafeQueue<FencedObjectType> DeferredReleaseQueue;
@@ -607,7 +664,7 @@ public:
 
 	inline const uint32 QueueSize() const { return DeferredReleaseQueue.GetSize(); }
 
-	void EnqueueResource(FD3D12Resource* pResource, FD3D12Fence* Fence);
+	void EnqueueResource(FD3D12Resource* pResource, FFenceList&& FenceList);
 	void EnqueueResource(ID3D12Object* pResource, FD3D12Fence* Fence);
 
 	bool ReleaseResources(bool bDeleteImmediately, bool bIsShutDown);
@@ -690,11 +747,6 @@ public:
 		check(InSRV->DynamicResource == nullptr);
 		InSRV->DynamicResource = this;
 		DynamicSRVs.Add(InSRV);
-		if (DynamicSRVs.Num() == 4)
-		{
-			static int dbg = 0;
-			dbg++;
-		}
 	}
 
 	void RemoveDynamicSRV(FD3D12BaseShaderResourceView* InSRV)
@@ -704,6 +756,19 @@ public:
 		InSRV->DynamicResource = nullptr;
 		uint32 Removed = DynamicSRVs.Remove(InSRV);
 		check(Removed == 1);
+	}
+
+	void RemoveAllDynamicSRVs()
+	{
+		FScopeLock Lock(&DynamicSRVsCS);
+		for (FD3D12BaseShaderResourceView* DynamicSRV : DynamicSRVs)
+		{
+			if (DynamicSRV != nullptr)
+			{
+				DynamicSRV->DynamicResource = nullptr;
+			}
+		}
+		DynamicSRVs.Reset();
 	}
 
 	void Swap(FD3D12BaseShaderResource& Other)
@@ -799,25 +864,42 @@ public:
 };
 #endif
 
-/** Index buffer resource class that stores stride information. */
-class FD3D12IndexBuffer : public FRHIIndexBuffer, public FD3D12BaseShaderResource, public FD3D12TransientResource, public FD3D12LinkedAdapterObject<FD3D12IndexBuffer>
+class FD3D12Buffer : public FD3D12BaseShaderResource, public FD3D12TransientResource, public FD3D12LinkedAdapterObject<FD3D12Buffer>
 {
 public:
-	FD3D12IndexBuffer()
-		: FD3D12BaseShaderResource(nullptr)
-		, LockedData(nullptr)
-	{}
-
-	FD3D12IndexBuffer(FD3D12Device* InParent, uint32 InStride, uint32 InSize, uint32 InUsage)
-		: FRHIIndexBuffer(InStride, InSize, InUsage)
-		, FD3D12BaseShaderResource(InParent)
+	FD3D12Buffer(FD3D12Device* InParent)
+		: FD3D12BaseShaderResource(InParent)
 		, LockedData(InParent)
-	{}
-
-	virtual ~FD3D12IndexBuffer();
+	{
+	}
+	virtual ~FD3D12Buffer()
+	{
+	}
 
 	void Rename(FD3D12ResourceLocation& NewLocation);
 	void RenameLDAChain(FD3D12ResourceLocation& NewLocation);
+
+	void ReleaseUnderlyingResource();
+
+	FD3D12LockedResource LockedData;
+};
+
+/** Index buffer resource class that stores stride information. */
+class FD3D12IndexBuffer : public FRHIIndexBuffer, public FD3D12Buffer
+{
+public:
+	FD3D12IndexBuffer()
+		: FD3D12Buffer(nullptr)
+	{
+	}
+
+	FD3D12IndexBuffer(FD3D12Device* InParent, uint32 InStride, uint32 InSize, uint32 InUsage)
+		: FRHIIndexBuffer(InStride, InSize, InUsage)
+		, FD3D12Buffer(InParent)
+	{
+	}
+
+	virtual ~FD3D12IndexBuffer();
 
 	void Swap(FD3D12IndexBuffer& Other);
 
@@ -836,27 +918,19 @@ public:
 	{
 		return FRHIResource::GetRefCount();
 	}
-
-	FD3D12LockedResource LockedData;
 };
 
 class FD3D12ShaderResourceView;
 
 /** Structured buffer resource class. */
-class FD3D12StructuredBuffer : public FRHIStructuredBuffer, public FD3D12BaseShaderResource, public FD3D12TransientResource, public FD3D12LinkedAdapterObject<FD3D12StructuredBuffer>
+class FD3D12StructuredBuffer : public FRHIStructuredBuffer, public FD3D12Buffer
 {
 public:
-	// Current SRV
-
 	FD3D12StructuredBuffer(FD3D12Device* InParent, uint32 InStride, uint32 InSize, uint32 InUsage)
 		: FRHIStructuredBuffer(InStride, InSize, InUsage)
-		, FD3D12BaseShaderResource(InParent)
-		, LockedData(InParent)
+		, FD3D12Buffer(InParent)
 	{
 	}
-
-	void Rename(FD3D12ResourceLocation& NewLocation);
-	void RenameLDAChain(FD3D12ResourceLocation& NewLocation);
 
 	virtual ~FD3D12StructuredBuffer();
 
@@ -873,31 +947,24 @@ public:
 	{
 		return FRHIResource::GetRefCount();
 	}
-
-	FD3D12LockedResource LockedData;
 };
 
 /** Vertex buffer resource class. */
-class FD3D12VertexBuffer : public FRHIVertexBuffer, public FD3D12BaseShaderResource, public FD3D12TransientResource, public FD3D12LinkedAdapterObject<FD3D12VertexBuffer>
+class FD3D12VertexBuffer : public FRHIVertexBuffer, public FD3D12Buffer
 {
 public:
 	FD3D12VertexBuffer()
-		: FD3D12BaseShaderResource(nullptr)
-		, LockedData(nullptr)
+		: FD3D12Buffer(nullptr)
 	{}
 
 	FD3D12VertexBuffer(FD3D12Device* InParent, uint32 InStride, uint32 InSize, uint32 InUsage)
 		: FRHIVertexBuffer(InSize, InUsage)
-		, FD3D12BaseShaderResource(InParent)
-		, LockedData(InParent)
+		, FD3D12Buffer(InParent)
 	{
 		UNREFERENCED_PARAMETER(InStride);
 	}
 
 	virtual ~FD3D12VertexBuffer();
-
-	void Rename(FD3D12ResourceLocation& NewLocation);
-	void RenameLDAChain(FD3D12ResourceLocation& NewLocation);
 
 	void Swap(FD3D12VertexBuffer& Other);
 
@@ -916,8 +983,6 @@ public:
 	{
 		return FRHIResource::GetRefCount();
 	}
-
-	FD3D12LockedResource LockedData;
 };
 
 template<class BufferType>
@@ -964,7 +1029,7 @@ public:
 	}
 
 	// Add a transition resource barrier to the batch. Returns the number of barriers added, which may be negative if an existing barrier was cancelled.
-	int32 AddTransition(ID3D12Resource* pResource, D3D12_RESOURCE_STATES Before, D3D12_RESOURCE_STATES After, uint32 Subresource)
+	int32 AddTransition(FD3D12Resource* pResource, D3D12_RESOURCE_STATES Before, D3D12_RESOURCE_STATES After, uint32 Subresource)
 	{
 		check(Before != After);
 
@@ -975,7 +1040,7 @@ public:
 			// Instead of ping-ponging that underlying resource between COPY_DEST and GENERIC_READ, several copies can happen without a ResourceBarrier() in between.
 			// Doing this check also eliminates a D3D debug layer warning about multiple transitions of the same subresource.
 			const D3D12_RESOURCE_BARRIER& Last = Barriers.Last();
-			if (pResource == Last.Transition.pResource &&
+			if (pResource->GetResource() == Last.Transition.pResource &&
 				Subresource == Last.Transition.Subresource &&
 				Before == Last.Transition.StateAfter &&
 				After  == Last.Transition.StateBefore &&
@@ -986,14 +1051,28 @@ public:
 			}
 		}
 
-		Barriers.AddUninitialized();
-		D3D12_RESOURCE_BARRIER& Barrier = Barriers.Last();
-		Barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		Barrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-		Barrier.Transition.StateBefore = Before;
-		Barrier.Transition.StateAfter = After;
-		Barrier.Transition.Subresource = Subresource;
-		Barrier.Transition.pResource = pResource;
+		check(IsValidD3D12ResourceState(Before) && IsValidD3D12ResourceState(After));
+
+		D3D12_RESOURCE_BARRIER* Barrier = nullptr;
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+		if (pResource->IsBackBuffer() && (After & BackBufferBarrierWriteTransitionTargets))
+		{
+			BackBufferBarriers.AddUninitialized();
+			Barrier = &BackBufferBarriers.Last();
+		}
+		else
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+		{
+			Barriers.AddUninitialized();
+			Barrier = &Barriers.Last();
+		}
+
+		Barrier->Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		Barrier->Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+		Barrier->Transition.StateBefore = Before;
+		Barrier->Transition.StateAfter = After;
+		Barrier->Transition.Subresource = Subresource;
+		Barrier->Transition.pResource = pResource->GetResource();
 		return 1;
 	}
 
@@ -1008,39 +1087,18 @@ public:
 	}
 
 	// Flush the batch to the specified command list then reset.
-	void Flush(ID3D12GraphicsCommandList* pCommandList)
-	{
-		if (Barriers.Num())
-		{
-			check(pCommandList);
-#if USE_PIX && PLATFORM_XBOXONE 
-			//there was a bug in the instrumented driver that corrupts the cmdBuffer if more than 2000 Barrieres are submitted at once
-			if (Barriers.Num() > 1900)
-			{
-				int Num = Barriers.Num();
-				D3D12_RESOURCE_BARRIER* Ptr = Barriers.GetData();
-				while (Num > 0)
-				{
-					int DispatchNum = FMath::Min(Num, 1900);
-					pCommandList->ResourceBarrier(DispatchNum, Ptr);
-					Ptr += 1900;
-					Num -= 1900;
-				}
-			}
-			else
-#endif
-			{
-				pCommandList->ResourceBarrier(Barriers.Num(), Barriers.GetData());
-			}
-			Reset();
-		}
-	}
+	void Flush(FD3D12Device* Device, ID3D12GraphicsCommandList* pCommandList, int32 BarrierBatchMax);
 
 	// Clears the batch.
 	void Reset()
 	{
-		Barriers.SetNumUnsafeInternal(0);	// Reset the array without shrinking (Does not destruct items, does not de-allocate memory).
+		// Reset the arrays without shrinking (Does not destruct items, does not de-allocate memory).
+		Barriers.SetNumUnsafeInternal(0);
 		check(Barriers.Num() == 0);
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+		BackBufferBarriers.SetNumUnsafeInternal(0);
+		check(BackBufferBarriers.Num() == 0);
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
 	}
 
 	const TArray<D3D12_RESOURCE_BARRIER>& GetBarriers() const
@@ -1048,8 +1106,18 @@ public:
 		return Barriers;
 	}
 
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+	const TArray<D3D12_RESOURCE_BARRIER>& GetBackBufferBarriers() const
+	{
+		return BackBufferBarriers;
+	}
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+
 private:
 	TArray<D3D12_RESOURCE_BARRIER> Barriers;
+#if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
+	TArray<D3D12_RESOURCE_BARRIER> BackBufferBarriers;
+#endif // #if PLATFORM_USE_BACKBUFFER_WRITE_TRANSITION_TRACKING
 };
 
 class FD3D12StagingBuffer final : public FRHIStagingBuffer
@@ -1058,37 +1126,33 @@ class FD3D12StagingBuffer final : public FRHIStagingBuffer
 	friend class FD3D12DynamicRHI;
 
 public:
-	FD3D12StagingBuffer()
+	FD3D12StagingBuffer(FD3D12Device* InDevice)
 		: FRHIStagingBuffer()
-		, StagedRead(nullptr)
+		, ResourceLocation(InDevice)
 		, ShadowBufferSize(0)
 	{}
 	~FD3D12StagingBuffer() override;
 
 	void SafeRelease()
 	{
-		if (StagedRead)
-		{
-			StagedRead->Release();
-			StagedRead = nullptr;
-		}
+		ResourceLocation.Clear();
 	}
 
 	void* Lock(uint32 Offset, uint32 NumBytes) override;
 	void Unlock() override;
 
 private:
-	FD3D12Resource* StagedRead;
+	FD3D12ResourceLocation ResourceLocation;
 	uint32 ShadowBufferSize;
 };
 
-class FD3D12GPUFence : public FRHIGPUFence
+class D3D12RHI_API FD3D12GPUFence : public FRHIGPUFence
 {
 public:
 	FD3D12GPUFence(FName InName, FD3D12Fence* InFence)
 		: FRHIGPUFence(InName)
 		, Fence(InFence)
-		, Value(0)
+		, Value(MAX_uint64)
 	{}
 
 	void WriteInternal(ED3D12CommandQueueType QueueType);

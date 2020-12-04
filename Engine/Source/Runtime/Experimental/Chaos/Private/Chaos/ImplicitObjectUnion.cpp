@@ -64,6 +64,49 @@ FImplicitObjectUnion::FImplicitObjectUnion(TArray<TUniquePtr<FImplicitObject>>&&
 	CacheAllImplicitObjects();
 }
 
+void FImplicitObjectUnion::Combine(TArray<TUniquePtr<FImplicitObject>>& OtherObjects)
+{
+	ensure(MObjects.Num());
+
+	for (int32 i = 0; i < OtherObjects.Num(); ++i)
+	{
+		MLocalBoundingBox.GrowToInclude(OtherObjects[i]->BoundingBox());
+	}
+
+	for (TUniquePtr<FImplicitObject>& ChildObject: OtherObjects)
+	{
+		MObjects.Add(MoveTemp(ChildObject));
+	}
+
+	CacheAllImplicitObjects();
+}
+
+void FImplicitObjectUnion::RemoveAt(int32 RemoveIndex)
+{
+	if (RemoveIndex < MObjects.Num())
+	{
+		MObjects[RemoveIndex].Reset(nullptr);
+		MObjects.RemoveAt(RemoveIndex);
+	}
+
+	MLocalBoundingBox = TAABB<float, 3>::EmptyAABB();
+	for (int32 i = 0; i < MObjects.Num(); ++i)
+	{
+		if (i > 0)
+		{
+			MLocalBoundingBox.GrowToInclude(MObjects[i]->BoundingBox());
+		}
+		else
+		{
+			MLocalBoundingBox = MObjects[i]->BoundingBox();
+		}
+	}
+
+	CacheAllImplicitObjects();
+
+}
+
+
 FImplicitObjectUnion::FImplicitObjectUnion(FImplicitObjectUnion&& Other)
 	: FImplicitObject(EImplicitObject::HasBoundingBox, ImplicitObjectType::Union)
 	, MObjects(MoveTemp(Other.MObjects))
@@ -182,6 +225,42 @@ FImplicitObjectUnionClustered::FImplicitObjectUnionClustered(FImplicitObjectUnio
 	Type = ImplicitObjectType::UnionClustered;
 }
 
+void FImplicitObjectUnionClustered::FindAllIntersectingClusteredObjects(TArray<Pair<Pair<const FImplicitObject*,const TBVHParticles<FReal, 3>*>,FRigidTransform3>>& Out, const TAABB<FReal,3>& LocalBounds) const
+{
+	if (LargeUnionData)
+	{
+		TArray<int32> Overlaps = LargeUnionData->Hierarchy.FindAllIntersections(LocalBounds);
+		Out.Reserve(Out.Num() + Overlaps.Num());
+		for (int32 Idx : Overlaps)
+		{
+			const FImplicitObject* Obj = LargeUnionData->GeomParticles.Geometry(Idx).Get();
+			const TBVHParticles<FReal, 3>* Simplicial = MOriginalParticleLookupHack.IsValidIndex(Idx) ? MOriginalParticleLookupHack[Idx]->CollisionParticles().Get() : nullptr;
+			Out.Add(MakePair(MakePair(Obj,Simplicial),FRigidTransform3(LargeUnionData->GeomParticles.X(Idx), LargeUnionData->GeomParticles.R(Idx))));
+		}
+	}
+	else
+	{
+		TArray<Pair<const FImplicitObject*, FRigidTransform3>> LocalOut;
+		TArray<int32> Idxs;
+		for (int32 Idx = 0; Idx < MObjects.Num(); ++Idx)
+		{
+			int32 NumOut = LocalOut.Num();
+			const TUniquePtr<FImplicitObject>& Object = MObjects[Idx];
+			Object->FindAllIntersectingObjects(LocalOut, LocalBounds);
+			for (int32 i = NumOut; i < LocalOut.Num(); ++i)
+			{
+				Idxs.Add(Idx);
+			}
+		}
+		for (int32 Idx = 0; Idx < LocalOut.Num(); ++Idx)
+		{
+			auto& OutElem = LocalOut[Idx];
+			const TBVHParticles<FReal, 3>* Simplicial = MOriginalParticleLookupHack.IsValidIndex(Idxs[Idx]) ? MOriginalParticleLookupHack[Idxs[Idx]]->CollisionParticles().Get() : nullptr;
+			Out.Add(MakePair(MakePair(OutElem.First, Simplicial), OutElem.Second));
+		}
+	}
+}
+
 TArray<TPBDRigidParticleHandle<FReal, 3>*>
 FImplicitObjectUnionClustered::FindAllIntersectingChildren(const TAABB<FReal, 3>& LocalBounds) const
 {
@@ -205,5 +284,20 @@ FImplicitObjectUnionClustered::FindAllIntersectingChildren(const TAABB<FReal, 3>
 	return IntersectingChildren;
 }
 
+
+const TPBDRigidParticleHandle<FReal, 3>* FImplicitObjectUnionClustered::FindParticleForImplicitObject(const FImplicitObject* Object) const
+{
+	typedef TPBDRigidParticleHandle<FReal, 3>* ValueType;
+
+	const TImplicitObjectTransformed<FReal, 3>* AsTransformed = Object->template GetObject<TImplicitObjectTransformed<FReal, 3>>();
+	if(AsTransformed)
+	{
+		const ValueType* Handle = MCollisionParticleLookupHack.Find(AsTransformed->GetTransformedObject());
+		return Handle ? *Handle : nullptr;
+	}
+
+	const ValueType* Handle = MCollisionParticleLookupHack.Find(Object);
+	return Handle ? *Handle : nullptr;
+}
 
 } // namespace Chaos

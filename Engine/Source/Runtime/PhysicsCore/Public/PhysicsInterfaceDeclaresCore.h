@@ -28,8 +28,10 @@ namespace Chaos
 	template <typename T, int d>
 	class TGeometryParticle;
 
-	template <typename T, int d>
-	class TPerShapeData;
+	template<class T, int d>
+	struct TMassProperties;
+
+	class FPerShapeData;
 
 	class FPhysicalMaterial;
 	class FPhysicalMaterialMask;
@@ -42,6 +44,8 @@ namespace Chaos
 
 	class FChaosPhysicsMaterial;
 	class FChaosPhysicsMaterialMask;
+
+	using FShapesArray = TArray<TUniquePtr<FPerShapeData>, TInlineAllocator<1>>;
 }
 
 // Temporary dummy types until SQ implemented
@@ -67,7 +71,7 @@ using FPhysicsQueryHit = ChaosInterface::FQueryHit;
 
 using FPhysicsTransform = FTransform;
 
-using FPhysicsShape = Chaos::TPerShapeData<float, 3>;
+using FPhysicsShape = Chaos::FPerShapeData;
 using FPhysicsGeometry = Chaos::FImplicitObject;
 using FPhysicsCapsuleGeometry = Chaos::TCapsule<float>;
 using FPhysicsMaterial = Chaos::FChaosPhysicsMaterial;
@@ -91,6 +95,7 @@ namespace physx
 	struct PxSweepHit;
 	struct PxRaycastHit;
 	struct PxOverlapHit;
+	struct PxQueryFlag;
 	struct PxQueryHit;
 
 	class PxTransform;
@@ -207,14 +212,14 @@ class FPhysInterface_Chaos;
 class FPhysicsConstraintReference_Chaos;
 class FPhysicsAggregateReference_Chaos;
 class FPhysicsShapeReference_Chaos;
-class FPhysScene_ChaosInterface;
+class FPhysScene_Chaos;
 class FPhysicsShapeAdapter_Chaos;
 struct FPhysicsGeometryCollection_Chaos;
 class FPhysicsUserData_Chaos;
 
 typedef FPhysicsConstraintReference_Chaos	FPhysicsConstraintHandle;
 typedef FPhysInterface_Chaos				FPhysicsInterface;
-typedef FPhysScene_ChaosInterface			FPhysScene;
+typedef FPhysScene_Chaos					FPhysScene;
 typedef FPhysicsAggregateReference_Chaos	FPhysicsAggregateHandle;
 typedef FPhysInterface_Chaos				FPhysicsCommand;
 typedef FPhysicsShapeReference_Chaos		FPhysicsShapeHandle;

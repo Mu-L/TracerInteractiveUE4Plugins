@@ -2,7 +2,6 @@
 
 #include "Sections/MovieSceneCameraShakeSection.h"
 #include "Tracks/MovieSceneCameraShakeTrack.h"
-#include "Evaluation/MovieSceneCameraAnimTemplate.h"
 #include "UObject/SequencerObjectVersion.h"
 
 
@@ -11,7 +10,7 @@ UMovieSceneCameraShakeSection::UMovieSceneCameraShakeSection(const FObjectInitia
 {
 	ShakeClass_DEPRECATED = nullptr;
 	PlayScale_DEPRECATED = 1.f;
-	PlaySpace_DEPRECATED = ECameraAnimPlaySpace::CameraLocal;
+	PlaySpace_DEPRECATED = ECameraShakePlaySpace::CameraLocal;
 	UserDefinedPlaySpace_DEPRECATED = FRotator::ZeroRotator;
 
 	EvalOptions.EnableAndSetCompletionMode
@@ -32,7 +31,7 @@ void UMovieSceneCameraShakeSection::PostLoad()
 		ShakeData.PlayScale = PlayScale_DEPRECATED;
 	}
 
-	if (PlaySpace_DEPRECATED != ECameraAnimPlaySpace::CameraLocal)
+	if (PlaySpace_DEPRECATED != ECameraShakePlaySpace::CameraLocal)
 	{
 		ShakeData.PlaySpace = PlaySpace_DEPRECATED;
 	}
@@ -43,13 +42,4 @@ void UMovieSceneCameraShakeSection::PostLoad()
 	}
 
 	Super::PostLoad();
-}
-
-FMovieSceneEvalTemplatePtr UMovieSceneCameraShakeSection::GenerateTemplate() const
-{
-	if (*ShakeData.ShakeClass)
-	{
-		return FMovieSceneCameraShakeSectionTemplate(*this);
-	}
-	return FMovieSceneEvalTemplatePtr();
 }

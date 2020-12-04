@@ -9,19 +9,29 @@
 // Reroute SceneTexturesStruct uniform buffer references to the appropriate base pass uniform buffer
 #if MATERIALBLENDING_TRANSLUCENT || MATERIALBLENDING_ADDITIVE || MATERIALBLENDING_MODULATE
 	#define SceneTexturesStruct TranslucentBasePass.SceneTextures 
-	#define EyeAdaptationStruct TranslucentBasePass.SceneTextures
+	#define EyeAdaptationStruct TranslucentBasePass
+	#define SceneColorCopyTexture	TranslucentBasePass.SceneColorCopyTexture
+	#define PreIntegratedGF			TranslucentBasePass.PreIntegratedGFTexture
+	#if SUPPORTS_INDEPENDENT_SAMPLERS
+		#define PreIntegratedGFSampler	View.SharedBilinearClampedSampler
+		#define SceneColorCopySampler	View.SharedBilinearClampedSampler
+	#else
+		#define PreIntegratedGFSampler	TranslucentBasePass.PreIntegratedGFSampler
+		#define SceneColorCopySampler	TranslucentBasePass.SceneColorCopySampler
+	#endif
 #else
 	#define EyeAdaptationStruct OpaqueBasePass
 #endif
 
 // Material setting to allow forward shading (including mobile) to use preintegrated GF lut for simple IBL.
 #if MATERIAL_SHADINGMODEL_SINGLELAYERWATER || (FORWARD_SHADING && MATERIAL_USE_PREINTEGRATED_GF)
-#define PreIntegratedGF			OpaqueBasePass.PreIntegratedGFTexture
-#if SUPPORTS_INDEPENDENT_SAMPLERS
-#define PreIntegratedGFSampler	View.SharedBilinearClampedSampler
-#else
-#define PreIntegratedGFSampler	OpaqueBasePass.PreIntegratedGFSampler
-#endif
+	#define PreIntegratedGF			OpaqueBasePass.PreIntegratedGFTexture
+
+	#if SUPPORTS_INDEPENDENT_SAMPLERS
+		#define PreIntegratedGFSampler	View.SharedBilinearClampedSampler
+	#else
+		#define PreIntegratedGFSampler	OpaqueBasePass.PreIntegratedGFSampler
+	#endif
 #endif
 
 #include "SHCommon.ush"
@@ -45,6 +55,9 @@
 	#include "HeightFogCommon.ush"
 #if PROJECT_SUPPORT_SKY_ATMOSPHERE
 	#include "SkyAtmosphereCommon.ush"
+#endif
+#if MATERIAL_ENABLE_TRANSLUCENCY_CLOUD_FOGGING
+#include "VolumetricCloudCommon.ush"
 #endif
 #endif
 
@@ -70,6 +83,12 @@ float NormalCurvatureToRoughness(float3 WorldNormal)
 #include "ShadingModels.ush"
 #endif
 
+#if MATERIAL_SHADINGMODEL_HAIR
+#ifndef USE_HAIR_COMPLEX_TRANSMITTANCE
+#define USE_HAIR_COMPLEX_TRANSMITTANCE 0
+#endif
+#endif
+
 #ifndef COMPILER_GLSL
 	#define COMPILER_GLSL 0
 #endif
@@ -83,6 +102,7 @@ float NormalCurvatureToRoughness(float3 WorldNormal)
 #if SINGLE_LAYER_WATER_SIMPLE_FORWARD
 
 	// Use mobile like simple shading
+	#undef SIMPLE_SINGLE_LAYER_WATER
 	#define SIMPLE_SINGLE_LAYER_WATER 1
 
 	// Remove forward lighting directional light shadow
@@ -96,7 +116,7 @@ float NormalCurvatureToRoughness(float3 WorldNormal)
 
 #endif
 
-#include "SingleLayerWaterCommon.ush"
+#include "SingleLayerWaterShading.ush"
 
 #endif // MATERIAL_SHADINGMODEL_SINGLELAYERWATER
 
@@ -249,7 +269,7 @@ float3 GetTranslucencyVolumeLighting(
 
 #endif
 
-#if SIMPLE_FORWARD_SHADING
+#if SIMPLE_FORWARD_SHADING || PLATFORM_FORCE_SIMPLE_SKY_DIFFUSE
 	#define GetEffectiveSkySHDiffuse GetSkySHDiffuseSimple
 #else
 	#define GetEffectiveSkySHDiffuse GetSkySHDiffuse
@@ -339,15 +359,9 @@ void GetSkyLighting(FMaterialPixelParameters MaterialParameters, VTPageTableResu
 #if SUPPORTS_INDEPENDENT_SAMPLERS
 	#define ILCSharedSampler1 View.SharedBilinearClampedSampler
 	#define ILCSharedSampler2 View.SharedBilinearClampedSampler
-
-	#define SingleLayerWaterSceneColorSampler View.SharedBilinearClampedSampler
-	#define SingleLayerWaterSceneDepthSampler View.SharedPointClampedSampler
 #else
 	#define ILCSharedSampler1 IndirectLightingCache.IndirectLightingCacheTextureSampler1
 	#define ILCSharedSampler2 IndirectLightingCache.IndirectLightingCacheTextureSampler2
-
-	#define SingleLayerWaterSceneColorSampler OpaqueBasePass.SceneColorWithoutSingleLayerWaterSampler
-	#define SingleLayerWaterSceneDepthSampler OpaqueBasePass.SceneDepthWithoutSingleLayerWaterSampler
 #endif
 
 /** Calculates indirect lighting contribution on this object from precomputed data. */
@@ -746,8 +760,8 @@ void ApplyBentNormal( in FMaterialPixelParameters MaterialParameters, in float R
 uint GetSelectiveOutputMask()
 {
 	uint Mask = 0;
-#if !WRITES_CUSTOMDATA_TO_GBUFFER
-	Mask |= SKIP_CUSTOMDATA_MASK;
+#if MATERIAL_USES_ANISOTROPY
+	Mask |= HAS_ANISOTROPY_MASK;
 #endif
 #if !GBUFFER_HAS_PRECSHADOWFACTOR
 	Mask |= SKIP_PRECSHADOW_MASK;
@@ -786,9 +800,6 @@ void FPixelShaderInOut_MainPS(
 	// PreShadowFactor
 	float4 OutGBufferE = 0;
 	
-	// Wolrd Space Tangent 
-	float4 OutGBufferF = 0;
-
 	FMaterialPixelParameters MaterialParameters = GetMaterialPixelParameters(Interpolants, In.SvPosition);
 	FPixelMaterialInputs PixelMaterialInputs;
 
@@ -971,17 +982,24 @@ void FPixelShaderInOut_MainPS(
 
 #if WRITES_VELOCITY_TO_GBUFFER
 	BRANCH
-	if (GetPrimitiveData(MaterialParameters.PrimitiveId).OutputVelocity > 0)
+	if (GetPrimitiveData(MaterialParameters.PrimitiveId).OutputVelocity > 0 || View.ForceDrawAllVelocities != 0)
 	{
 		// 2d velocity, includes camera an object motion
 	#if WRITES_VELOCITY_TO_GBUFFER_USE_POS_INTERPOLATOR
-		float2 Velocity = Calculate2DVelocity(BasePassInterpolants.VelocityScreenPosition, BasePassInterpolants.VelocityPrevScreenPosition);
+		float3 Velocity = Calculate3DVelocity(BasePassInterpolants.VelocityScreenPosition, BasePassInterpolants.VelocityPrevScreenPosition);
 	#else
-		float2 Velocity = Calculate2DVelocity(MaterialParameters.ScreenPosition, BasePassInterpolants.VelocityPrevScreenPosition);
+		float3 Velocity = Calculate3DVelocity(MaterialParameters.ScreenPosition, BasePassInterpolants.VelocityPrevScreenPosition);
 	#endif
 
-		// Make sure not to touch 0,0 which is clear color
-		float4 EncodedVelocity = float4(EncodeVelocityToTexture(Velocity) * GetPrimitiveData(MaterialParameters.PrimitiveId).DrawsVelocity, 0, 0);
+		float4 EncodedVelocity = EncodeVelocityToTexture(Velocity);
+
+		FLATTEN
+		if (GetPrimitiveData(MaterialParameters.PrimitiveId).DrawsVelocity == 0.0 && View.ForceDrawAllVelocities == 0)
+		{
+			// TODO: remove one of the DrawsVelocity or OutputVelocity
+			EncodedVelocity = 0.0;
+		}
+
 	#if USES_GBUFFER
 		GBuffer.Velocity = EncodedVelocity;
 	#else
@@ -1084,13 +1102,16 @@ void FPixelShaderInOut_MainPS(
 		#if MATERIAL_SHADINGMODEL_HAIR
 		if (GBuffer.ShadingModelID == SHADINGMODELID_HAIR)
 		{
-			FHairTransmittanceData TransmittanceData = InitHairTransmittanceData();
+			FHairTransmittanceData TransmittanceData = InitHairTransmittanceData(true);
 			float3 N = MaterialParameters.WorldNormal;
 			float3 V = MaterialParameters.CameraVector;
 			float3 L = normalize( V - N * dot(V,N) );
 			DiffuseDir = L;
-			bool bEvalMultiScatter = true;
-			DiffuseColorForIndirect = 2*PI * HairShading( GBuffer, L, V, N, 1, TransmittanceData, 0, 0.2, uint2(0,0), bEvalMultiScatter);
+			DiffuseColorForIndirect = 2*PI * HairShading( GBuffer, L, V, N, 1, TransmittanceData, 0, 0.2, uint2(0,0));
+
+			#if USE_HAIR_COMPLEX_TRANSMITTANCE
+			GBuffer.CustomData.a = 1.f / 255.f;
+			#endif
 		}
 		#endif
 
@@ -1132,7 +1153,7 @@ void FPixelShaderInOut_MainPS(
 			uint GridIndex = 0;
 
 			#if FEATURE_LEVEL >= FEATURE_LEVEL_SM5
-				GridIndex = ComputeLightGridCellIndex((uint2)(MaterialParameters.SvPosition.xy - ResolvedView.ViewRectMin.xy), MaterialParameters.SvPosition.w, EyeIndex);
+				GridIndex = ComputeLightGridCellIndex((uint2)(MaterialParameters.SvPosition.xy * View.LightProbeSizeRatioAndInvSizeRatio.zw - ResolvedView.ViewRectMin.xy), MaterialParameters.SvPosition.w, EyeIndex);
 
 				#if FORWARD_SHADING || TRANSLUCENCY_LIGHTING_SURFACE_FORWARDSHADING || MATERIAL_SHADINGMODEL_SINGLELAYERWATER
 					const float Dither = InterleavedGradientNoise(MaterialParameters.SvPosition.xy, View.StateFrameIndexMod8);
@@ -1199,7 +1220,7 @@ void FPixelShaderInOut_MainPS(
 
 	float4 Fogging = HeightFogging;
 
-#if NEEDS_BASEPASS_PIXEL_VOLUMETRIC_FOGGING
+#if NEEDS_BASEPASS_PIXEL_VOLUMETRIC_FOGGING && COMPILE_BASEPASS_PIXEL_VOLUMETRIC_FOGGING
 	if (FogStruct.ApplyVolumetricFog > 0) 
 	{
 		float3 VolumeUV = ComputeVolumeUV(MaterialParameters.AbsoluteWorldPosition, ResolvedView.WorldToClip);
@@ -1207,15 +1228,19 @@ void FPixelShaderInOut_MainPS(
 	}
 #endif
 
+#if NEEDS_BASEPASS_PIXEL_FOGGING
+	const float OneOverPreExposure = USE_PREEXPOSURE ? ResolvedView.OneOverPreExposure : 1.0f;
+	float4 NDCPosition = mul(float4(MaterialParameters.AbsoluteWorldPosition.xyz, 1), ResolvedView.WorldToClip);
+#endif
+
 #if NEEDS_BASEPASS_PIXEL_FOGGING && PROJECT_SUPPORT_SKY_ATMOSPHERE && MATERIAL_IS_SKY==0 // Do not apply aerial perpsective on sky materials
 	if (ResolvedView.SkyAtmosphereApplyCameraAerialPerspectiveVolume > 0.0f)
 	{
-		const float OneOverPreExposure = USE_PREEXPOSURE ? ResolvedView.OneOverPreExposure : 1.0f;
 
-		float4 NDCPosition = mul(float4(MaterialParameters.AbsoluteWorldPosition.xyz, 1), ResolvedView.WorldToClip);
 
 		// Sample the aerial perspective (AP).
 		Fogging = GetAerialPerspectiveLuminanceTransmittanceWithFogOver(
+			ResolvedView.RealTimeReflectionCapture, ResolvedView.SkyAtmosphereCameraAerialPerspectiveVolumeSizeAndInvSize,
 			NDCPosition, MaterialParameters.AbsoluteWorldPosition.xyz*CM_TO_SKY_UNIT, ResolvedView.WorldCameraOrigin.xyz*CM_TO_SKY_UNIT,
 			View.CameraAerialPerspectiveVolume, View.CameraAerialPerspectiveVolumeSampler,
 			ResolvedView.SkyAtmosphereCameraAerialPerspectiveVolumeDepthResolutionInv,
@@ -1225,6 +1250,19 @@ void FPixelShaderInOut_MainPS(
 			ResolvedView.SkyAtmosphereCameraAerialPerspectiveVolumeDepthSliceLengthKmInv,
 			OneOverPreExposure, Fogging);
 	}
+#endif
+
+#if NEEDS_BASEPASS_PIXEL_FOGGING && MATERIAL_ENABLE_TRANSLUCENCY_CLOUD_FOGGING
+
+	if (TranslucentBasePass.ApplyVolumetricCloudOnTransparent > 0.0f)
+	{
+		Fogging = GetCloudLuminanceTransmittanceOverFog(
+			NDCPosition, MaterialParameters.AbsoluteWorldPosition.xyz, ResolvedView.WorldCameraOrigin.xyz,
+			TranslucentBasePass.VolumetricCloudColor, TranslucentBasePass.VolumetricCloudColorSampler,
+			TranslucentBasePass.VolumetricCloudDepth, TranslucentBasePass.VolumetricCloudDepthSampler,
+			OneOverPreExposure, Fogging);
+	}
+
 #endif
 
 	// Volume lighting for lit translucency
@@ -1244,7 +1282,8 @@ void FPixelShaderInOut_MainPS(
 
 	half3 Emissive = GetMaterialEmissive(PixelMaterialInputs);
 
-#if USE_DEVELOPMENT_SHADERS
+	// The following block is disabled on Vulkan because it triggers an nvidia driver bug (UE-101609).
+#if USE_DEVELOPMENT_SHADERS && !VULKAN_PROFILE_SM5
 	// this feature is only needed for development/editor - we can compile it out for a shipping build (see r.CompileShadersForDevelopment cvar help)
 	#if METAL_SM5_PROFILE || SM5_PROFILE || SM4_PROFILE || METAL_SM5_NOTESS_PROFILE || VULKAN_PROFILE_SM5
 		BRANCH
@@ -1419,7 +1458,7 @@ void FPixelShaderInOut_MainPS(
 
 		// -0.5 .. 0.5, could be optimzed as lower quality noise would be sufficient
 		float QuantizationBias = PseudoRandom( MaterialParameters.SvPosition.xy ) - 0.5f;
-		EncodeGBuffer(GBuffer, Out.MRT[1], Out.MRT[2], Out.MRT[3], OutGBufferD, OutGBufferE, OutGBufferF, OutVelocity, QuantizationBias);
+		EncodeGBuffer(GBuffer, Out.MRT[1], Out.MRT[2], Out.MRT[3], OutGBufferD, OutGBufferE, OutVelocity, QuantizationBias);
 	#endif 
 
 	if(bEditorWeightedZBuffering)
@@ -1451,14 +1490,12 @@ void FPixelShaderInOut_MainPS(
 #if USES_GBUFFER
 	#if GBUFFER_HAS_VELOCITY
 		Out.MRT[4] = OutVelocity;
-	#elif GBUFFER_HAS_TANGENT
-		Out.MRT[4] = OutGBufferF;
 	#endif
 
-	Out.MRT[GBUFFER_HAS_VELOCITY || GBUFFER_HAS_TANGENT ? 5 : 4] = OutGBufferD;
+	Out.MRT[GBUFFER_HAS_VELOCITY ? 5 : 4] = OutGBufferD;
 
 	#if GBUFFER_HAS_PRECSHADOWFACTOR
-		Out.MRT[GBUFFER_HAS_VELOCITY || GBUFFER_HAS_TANGENT ? 6 : 5] = OutGBufferE;
+		Out.MRT[GBUFFER_HAS_VELOCITY ? 6 : 5] = OutGBufferE;
 	#endif
 #else
 	// If not using the full gbuffer (forward shading) the velocity buffer can still be written to in the basepass.
@@ -1468,19 +1505,27 @@ void FPixelShaderInOut_MainPS(
 #endif
 
 #if !MATERIALBLENDING_MODULATE && USE_PREEXPOSURE
+#if MATERIAL_IS_SKY
+	// Dynamic capture exposure is 1 as of today.
+	const float ViewPreExposure = View.RealTimeReflectionCapture>0.0f ? View.RealTimeReflectionCapturePreExposure : View.PreExposure;
+#else
+	const float ViewPreExposure = View.PreExposure;
+#endif
 	// We need to multiply pre-exposure by all components including A, otherwise the ratio of
 	// diffuse to specular lighting will get messed up in the SSS pass.
 	// RGB: Full color (Diffuse + Specular)
 	// A:   Diffuse Intensity, but only if we are not blending
 	#if MATERIAL_DOMAIN_POSTPROCESS || MATERIAL_SHADINGMODEL_THIN_TRANSLUCENT || MATERIALBLENDING_ALPHAHOLDOUT || MATERIALBLENDING_ALPHACOMPOSITE || MATERIALBLENDING_TRANSLUCENT || MATERIALBLENDING_ADDITIVE
-		Out.MRT[0].rgb *= View.PreExposure;
+		Out.MRT[0].rgb  *= ViewPreExposure;
 	#else
-		Out.MRT[0].rgba *= View.PreExposure;
+		Out.MRT[0].rgba *= ViewPreExposure;
 	#endif
 #endif
 #if MATERIAL_IS_SKY
-	// Sky materials can result in high luminance values, e.g. the sun disk. So we make sure to at least stay within the boundaries of fp10 for some platforms.
-	Out.MRT[0].xyz = min(Out.MRT[0].xyz, Max10BitsFloat.xxx);
+	// Sky materials can result in high luminance values, e.g. the sun disk. 
+	// This is so we make sure to at least stay within the boundaries of fp10 and not cause NaN on some platforms.
+	// We also half that range to also make sure we have room for other additive elements such as bloom, clouds or particle visual effects.
+	Out.MRT[0].xyz = min(Out.MRT[0].xyz, Max10BitsFloat.xxx * 0.5f);
 #endif
 
 #if NUM_VIRTUALTEXTURE_SAMPLES || LIGHTMAP_VT_ENABLED
@@ -1514,11 +1559,11 @@ void FPixelShaderInOut_MainPS(
 #define PIXELSHADEROUTPUT_MRT1 ((!SELECTIVE_BASEPASS_OUTPUTS || !MATERIAL_SHADINGMODEL_UNLIT))
 #define PIXELSHADEROUTPUT_MRT2 ((!SELECTIVE_BASEPASS_OUTPUTS || !MATERIAL_SHADINGMODEL_UNLIT))
 #define PIXELSHADEROUTPUT_MRT3 ((!SELECTIVE_BASEPASS_OUTPUTS || !MATERIAL_SHADINGMODEL_UNLIT))
-	#if GBUFFER_HAS_VELOCITY || GBUFFER_HAS_TANGENT
-		#define PIXELSHADEROUTPUT_MRT4 WRITES_VELOCITY_TO_GBUFFER || GBUFFER_HAS_TANGENT
+	#if GBUFFER_HAS_VELOCITY
+		#define PIXELSHADEROUTPUT_MRT4 WRITES_VELOCITY_TO_GBUFFER
 		#define PIXELSHADEROUTPUT_MRT5 (!SELECTIVE_BASEPASS_OUTPUTS || WRITES_CUSTOMDATA_TO_GBUFFER)
 		#define PIXELSHADEROUTPUT_MRT6 (GBUFFER_HAS_PRECSHADOWFACTOR && (!SELECTIVE_BASEPASS_OUTPUTS || WRITES_PRECSHADOWFACTOR_TO_GBUFFER && !MATERIAL_SHADINGMODEL_UNLIT))
-	#else //GBUFFER_HAS_VELOCITY || GBUFFER_HAS_TANGENT
+	#else //GBUFFER_HAS_VELOCITY
 		#define PIXELSHADEROUTPUT_MRT4 (!SELECTIVE_BASEPASS_OUTPUTS || WRITES_CUSTOMDATA_TO_GBUFFER)
 		#define PIXELSHADEROUTPUT_MRT5 (GBUFFER_HAS_PRECSHADOWFACTOR && (!SELECTIVE_BASEPASS_OUTPUTS || WRITES_PRECSHADOWFACTOR_TO_GBUFFER && !MATERIAL_SHADINGMODEL_UNLIT))
 	#endif //GBUFFER_HAS_VELOCITY

@@ -309,28 +309,6 @@ struct TSQTraits
 	constexpr static bool IsSweep() { return GeometryQuery == ESweepOrRay::Sweep;  }
 };
 
-struct FScopeHelper
-{
-	FScopeHelper()
-	{
-		FChaosSolversModule* Module = FChaosSolversModule::GetModule();
-		Chaos::FPersistentPhysicsTask* PhysicsThread = Module ? Module->GetDedicatedTask() : nullptr;
-		MLock = PhysicsThread ? &PhysicsThread->CacheLock : nullptr;
-		if (MLock)
-		{
-			MLock->ReadLock();
-		}
-	}
-	~FScopeHelper()
-	{
-		if (MLock)
-		{
-			MLock->ReadUnlock();
-		}
-	}
-	FRWLock* MLock;
-};
-
 template <typename Traits, typename TGeomInputs>
 bool TSceneCastCommon(const UWorld* World, typename Traits::TOutHits& OutHits, const TGeomInputs& GeomInputs, const FVector Start, const FVector End, ECollisionChannel TraceChannel, const struct FCollisionQueryParams& Params, const struct FCollisionResponseParams& ResponseParams, const struct FCollisionObjectQueryParams& ObjectParams)
 {
@@ -378,8 +356,6 @@ bool TSceneCastCommon(const UWorld* World, typename Traits::TOutHits& OutHits, c
 		// Enable scene locks, in case they are required
 		FPhysScene& PhysScene = *World->GetPhysicsScene();
 		
-		FScopeHelper ChaosLockedScope;
-
 		FScopedSceneReadLock SceneLocks(PhysScene);
 		{
 			FScopedSQHitchRepeater<decltype(HitBufferSync)> HitchRepeater(HitBufferSync, QueryCallback, FHitchDetectionInfo(Start, End, TraceChannel, Params));
@@ -558,9 +534,17 @@ bool GeomOverlapMultiImp(const UWorld* World, const FPhysicsGeometry& Geom, cons
 		QueryCallback.bIgnoreTouches |= (InfoType == EQueryInfo::IsBlocking); // pre-filter to ignore touches and only get blocking hits, if that's what we're after.
 		QueryCallback.bIsOverlapQuery = true;
 
-		const EQueryFlags QueryFlags = InfoType == EQueryInfo::GatherAll ? EQueryFlags::PreFilter : (EQueryFlags::PreFilter | EQueryFlags::AnyHit);
-		
+		EQueryFlags QueryFlags = InfoType == EQueryInfo::GatherAll ? EQueryFlags::PreFilter : (EQueryFlags::PreFilter | EQueryFlags::AnyHit);
+		if (Params.bSkipNarrowPhase)
+		{
+			QueryFlags = QueryFlags | EQueryFlags::SkipNarrowPhase;
+		}
 		FDynamicHitBuffer<FHitOverlap> OverlapBuffer;
+
+		FQueryDebugParams DebugParams;
+#if !(UE_BUILD_TEST || UE_BUILD_SHIPPING) && WITH_CHAOS
+		DebugParams.bDebugQuery = Params.bDebugQuery;
+#endif
 
 		// Enable scene locks, in case they are required
 		FPhysScene& PhysScene = *World->GetPhysicsScene();
@@ -571,7 +555,7 @@ bool GeomOverlapMultiImp(const UWorld* World, const FPhysicsGeometry& Geom, cons
 				FScopedSQHitchRepeater<TRemoveReference<decltype(OverlapBuffer)>::Type> HitchRepeater(OverlapBuffer, QueryCallback, FHitchDetectionInfo(GeomPose, TraceChannel, Params));
 				do
 				{
-					LowLevelOverlap(PhysScene, Geom, GeomPose, HitchRepeater.GetBuffer(), QueryFlags, Filter, MakeQueryFilterData(Filter, QueryFlags, Params), &QueryCallback, FQueryDebugParams());
+					LowLevelOverlap(PhysScene, Geom, GeomPose, HitchRepeater.GetBuffer(), QueryFlags, Filter, MakeQueryFilterData(Filter, QueryFlags, Params), &QueryCallback, DebugParams);
 				} while(HitchRepeater.RepeatOnHitch());
 
 				if(GetHasBlock(OverlapBuffer) && InfoType != EQueryInfo::GatherAll)	//just want true or false so don't bother gathering info

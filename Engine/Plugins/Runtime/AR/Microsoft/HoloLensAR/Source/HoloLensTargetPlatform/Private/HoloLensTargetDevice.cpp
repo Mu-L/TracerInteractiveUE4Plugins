@@ -330,14 +330,16 @@ bool FHoloLensTargetDevice::IsDefault() const
 	return true;
 }
 
-TSharedPtr<IHttpRequest> FHoloLensTargetDevice::GenerateRequest() const
+TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> FHoloLensTargetDevice::GenerateRequest() const
 {
 	if (Info.IsLocal)
 	{
 		return nullptr;
 	}
 
-	auto HttpRequest = TSharedPtr<IHttpRequest>(FPlatformHttp::ConstructRequest());
+	SslCertDisabler disabler;
+	
+	auto HttpRequest = TSharedPtr<IHttpRequest, ESPMode::ThreadSafe>(FPlatformHttp::ConstructRequest());
 
 	if (Info.RequiresCredentials)
 	{

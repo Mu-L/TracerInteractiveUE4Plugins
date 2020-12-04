@@ -113,15 +113,14 @@ namespace IndexUtil
 	 * @param TriangleIndex which triangle in array to search
 	 * @return vertex id of other vertex, or InvalidID if not found
 	 */
-	template<typename T>
-	inline int FindTriOtherVtx(T VertexID1, T VertexID2, const TDynamicVector<T> & TriIndexArray, T TriangleIndex)
+	inline int FindTriOtherVtx(int VertexID1, int VertexID2, const TDynamicVector<FIndex3i> & TriIndexArray, int TriangleIndex)
 	{
-		int i = 3 * TriangleIndex;
-		for (int j = 0; j < 3; ++j) 
+		const FIndex3i& Triangle = TriIndexArray[TriangleIndex];
+		for (int j = 0; j < 3; ++j)
 		{
-			if (SamePairUnordered(VertexID1, VertexID2, TriIndexArray[i + j], TriIndexArray[i + ((j+1)%3)]))
+			if (SamePairUnordered(VertexID1, VertexID2, Triangle[j], Triangle[(j+1)%3]))
 			{
-				return TriIndexArray[i + ((j + 2) % 3)];
+				return Triangle[((j + 2) % 3)];
 			}
 		}
 		return IndexConstants::InvalidID;
@@ -273,6 +272,20 @@ namespace IndexUtil
 		return true;
 	}
 
+	/**
+	 * integer indices offsets in x/y directions
+	 */
+	extern GEOMETRICOBJECTS_API const FVector2i GridOffsets4[4];
+
+	/**
+	 * integer indices offsets in x/y directions and diagonals
+	 */
+	extern GEOMETRICOBJECTS_API const FVector2i GridOffsets8[8];
+
+	/**
+	 * integer indices offsets in x/y/z directions, corresponds w/ BoxFaces directions
+	 */
+	extern GEOMETRICOBJECTS_API const FVector3i GridOffsets6[6];
 
 	/**
 	 * all permutations of (+-1, +-1, +-1), can be used to iterate over connected face/edge/corner neighbours of a grid cell

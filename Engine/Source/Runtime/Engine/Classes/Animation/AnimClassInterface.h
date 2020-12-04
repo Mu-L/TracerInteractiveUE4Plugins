@@ -16,6 +16,7 @@
 
 class USkeleton;
 struct FExposedValueHandler;
+struct FPropertyAccessLibrary;
 
 /** Describes the input and output of an anim blueprint 'function' */
 USTRUCT()
@@ -162,8 +163,47 @@ public:
 	virtual const TMap<FName, FGraphAssetPlayerInformation>& GetGraphAssetPlayerInformation() const = 0;
 	virtual const TMap<FName, FAnimGraphBlendOptions>& GetGraphBlendOptions() const = 0;
 	virtual USkeleton* GetTargetSkeleton() const = 0;
-
 	virtual int32 GetSyncGroupIndex(FName SyncGroupName) const = 0;
+	virtual const FPropertyAccessLibrary& GetPropertyAccessLibrary() const = 0;
+	
+protected:
+	friend class UAnimBlueprintGeneratedClass;
+
+	// These direct accessors are here to allow internal access that doesnt redirect to the root class
+	virtual const TArray<FBakedAnimationStateMachine>& GetBakedStateMachines_Direct() const = 0;
+	virtual const TArray<FAnimNotifyEvent>& GetAnimNotifies_Direct() const = 0;
+	virtual const TArray<FName>& GetSyncGroupNames_Direct() const = 0;
+	virtual const TMap<FName, FCachedPoseIndices>& GetOrderedSavedPoseNodeIndicesMap_Direct() const = 0;
+	virtual const TMap<FName, FGraphAssetPlayerInformation>& GetGraphAssetPlayerInformation_Direct() const = 0;
+	virtual const TMap<FName, FAnimGraphBlendOptions>& GetGraphBlendOptions_Direct() const = 0;
+	virtual const FPropertyAccessLibrary& GetPropertyAccessLibrary_Direct() const = 0;
+
+public:
+
+	// Get the root anim class interface (i.e. if this is a derived class).
+	// Some properties that are derived from the compiled anim graph are routed to the 'Root' class
+	// as child classes don't get fully compiled. Instead they just override various asset players leaving the
+	// full compilation up to the base class. 
+	const IAnimClassInterface* GetRootClass() const
+	{
+		auto GetSuperClassInterface = [](const IAnimClassInterface* InClass) -> const IAnimClassInterface*
+		{
+			if(const UClass* ActualClass = GetActualAnimClass(InClass))
+			{
+				return GetFromClass(ActualClass->GetSuperClass());
+			}
+
+			return nullptr;
+		};
+
+		const IAnimClassInterface* RootClass = this;
+		while(const IAnimClassInterface* NextClass = GetSuperClassInterface(RootClass))
+		{
+			RootClass = NextClass;
+		}
+
+		return RootClass;
+	}
 
 	static IAnimClassInterface* GetFromClass(UClass* InClass)
 	{
@@ -179,6 +219,20 @@ public:
 		return nullptr;
 	}
 
+	static const IAnimClassInterface* GetFromClass(const UClass* InClass)
+	{
+		if (auto AnimClassInterface = Cast<const IAnimClassInterface>(InClass))
+		{
+			return AnimClassInterface;
+		}
+		if (auto DynamicClass = Cast<const UDynamicClass>(InClass))
+		{
+			DynamicClass->GetDefaultObject(true);
+			return CastChecked<const IAnimClassInterface>(DynamicClass->AnimClassImplementation, ECastCheckedType::NullAllowed);
+		}
+		return nullptr;
+	}
+
 	static UClass* GetActualAnimClass(IAnimClassInterface* AnimClassInterface)
 	{
 		if (UClass* ActualAnimClass = Cast<UClass>(AnimClassInterface))
@@ -188,6 +242,19 @@ public:
 		if (UObject* AsObject = Cast<UObject>(AnimClassInterface))
 		{
 			return Cast<UClass>(AsObject->GetOuter());
+		}
+		return nullptr;
+	}
+
+	static const UClass* GetActualAnimClass(const IAnimClassInterface* AnimClassInterface)
+	{
+		if (const UClass* ActualAnimClass = Cast<const UClass>(AnimClassInterface))
+		{
+			return ActualAnimClass;
+		}
+		if (const UObject* AsObject = Cast<const UObject>(AnimClassInterface))
+		{
+			return Cast<const UClass>(AsObject->GetOuter());
 		}
 		return nullptr;
 	}

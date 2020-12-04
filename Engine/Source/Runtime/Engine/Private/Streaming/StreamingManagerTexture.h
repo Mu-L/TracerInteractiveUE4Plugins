@@ -15,6 +15,7 @@ TextureStreamingManager.h: Definitions of classes used for texture streaming.
 
 class AActor;
 class FRenderAssetStreamingMipCalcTask;
+class IPakFile;
 class UPrimitiveComponent;
 
 template<typename TTask> class FAsyncTask;
@@ -131,9 +132,7 @@ struct FRenderAssetStreamingManager final : public IRenderAssetStreamingManager
 #endif // !UE_BUILD_SHIPPING
 
 	/** Adds a new texture/mesh to the streaming manager. */
-	virtual void AddStreamingRenderAsset( UTexture2D* Texture ) override;
-	virtual void AddStreamingRenderAsset(UStaticMesh* StaticMesh) override;
-	virtual void AddStreamingRenderAsset(USkeletalMesh* SkeletalMesh) override;
+	virtual void AddStreamingRenderAsset( UStreamableRenderAsset* RenderAsset ) override;
 
 	/** Removes a texture/mesh from the streaming manager. */
 	virtual void RemoveStreamingRenderAsset( UStreamableRenderAsset* RenderAsset ) override;
@@ -189,8 +188,9 @@ private:
 		 *
 		 * @param StageIndex		Current stage index
 		 * @param NumUpdateStages	Number of texture/mesh update stages
+		 * @Param bAsync			Whether this is called on an async task
 		 */
-		void UpdateStreamingRenderAssets( int32 StageIndex, int32 NumStages, bool bWaitForMipFading );
+		void UpdateStreamingRenderAssets(int32 StageIndex, int32 NumStages, bool bWaitForMipFading, bool bAsync = false);
 
 		/** Check visibility of fast response assets and initiate stream-in requests if necessary. */
 		void TickFastResponseAssets();
@@ -224,34 +224,22 @@ private:
 		 */
 		void StreamRenderAssets( bool bProcessEverything );
 
-		/**
-		 * If new files have loaded this function will return true once
-		 * bNewFilesLoaded is set on the game thread and reset on the async thread
-		 * no need for synchronization as if we are a frame behind then that's ok 
-		 */
-		FORCEINLINE bool GetAndResetNewFilesHaveLoaded()
-		{
-			bool bResult = bNewFilesLoaded;
-			if ( bResult )
-			{
-				bNewFilesLoaded = false;
-			}
-			return bResult;
-		}
-
-		int32 GetNumStreamedMipsArray(FStreamingRenderAsset::EAssetType AssetType, const int32*& OutArray)
+		int32 GetNumStreamedMipsArray(EStreamableRenderAssetType AssetType, const int32*& OutArray)
 		{
 			switch (AssetType)
 			{
-			case FStreamingRenderAsset::AT_Texture:
+			case EStreamableRenderAssetType::Texture:
 				OutArray = NumStreamedMips_Texture;
 				return TEXTUREGROUP_MAX;
-			case FStreamingRenderAsset::AT_StaticMesh:
+			case EStreamableRenderAssetType::StaticMesh:
 				OutArray = NumStreamedMips_StaticMesh.GetData();
 				return NumStreamedMips_StaticMesh.Num();
-			case FStreamingRenderAsset::AT_SkeletalMesh:
+			case EStreamableRenderAssetType::SkeletalMesh:
 				OutArray = NumStreamedMips_SkeletalMesh.GetData();
 				return NumStreamedMips_SkeletalMesh.Num();
+			case EStreamableRenderAssetType::LandscapeMeshMobile:
+				OutArray = NumStreamedMips_LandscapeMeshMobile.GetData();
+				return NumStreamedMips_LandscapeMeshMobile.Num();
 			default:
 				check(false);
 				OutArray = nullptr;
@@ -310,7 +298,11 @@ private:
 	 */
 	void ProcessPendingMipCopyRequests();
 
-	void AddStreamingRenderAsset_Internal(UStreamableRenderAsset* InAsset, FStreamingRenderAsset::EAssetType InType);
+	/**
+	 * Mip-change callbacks can only be called on the game thread.
+	 * When asset streamign status is updated on an async task, we need to tick their callabcks later.
+	 */
+	void TickDeferredMipLevelChangeCallbacks();
 
 	/** Next sync, dump texture group stats. */
 	bool	bTriggerDumpTextureGroupStats;
@@ -322,6 +314,7 @@ private:
 	int32 NumStreamedMips_Texture[TEXTUREGROUP_MAX];
 	TArray<int32> NumStreamedMips_StaticMesh;
 	TArray<int32> NumStreamedMips_SkeletalMesh;
+	TArray<int32> NumStreamedMips_LandscapeMeshMobile;
 
 	FRenderAssetStreamingSettings Settings;
 
@@ -336,10 +329,12 @@ private:
 
 	/** New textures/meshes, before they've been added to the thread-safe container. */
 	TArray<UStreamableRenderAsset*>	PendingStreamingRenderAssets;
-	TArray<typename FStreamingRenderAsset::EAssetType> PendingStreamingRenderAssetTypes;
 
 	/** The list of indices with null render asset in StreamingRenderAssets. */
 	TArray<int32>	RemovedRenderAssetIndices;
+
+	/** [Game/Task Thread] A list of assets whose callbacks need to be ticked on the game thread. */
+	TArray<UStreamableRenderAsset*> DeferredTickCBAssets;
 
 	/** [Game Thread] Forced fully resident assets that need to be loaded ASAP when visible. */
 	TSet<UStreamableRenderAsset*> FastResponseRenderAssets;
@@ -394,8 +389,6 @@ private:
 	/** Whether render asset streaming is paused or not. When paused, it won't stream any textures/meshes in or out. */
 	bool bPauseRenderAssetStreaming;
 
-	bool bNewFilesLoaded;
-
 	/** Last time all data were fully updated. Instances are considered visible if they were rendered between that last time and the current time. */
 	float LastWorldUpdateTime;
 
@@ -407,8 +400,15 @@ private:
 
 	TArray<int32> InflightRenderAssets;
 
-	TMap<FString, bool> CachedFileExistsChecks;
-	void OnPakFileMounted(const TCHAR* PakFilename, const int32 ChunkId);
+	/** A critical section to handle concurrent access on MountedStateDirtyFiles. */
+	FCriticalSection MountedStateDirtyFilesCS;
+	/** Whether all file mounted states needs to be re-evaluated. */
+	bool bRecacheAllFiles = false;
+	/** The file hashes which mounted state needs to be re-evaluated. */
+	typedef TSet<FIoFilenameHash> FIoFilenameHashSet;
+	FIoFilenameHashSet MountedStateDirtyFiles;
+
+	ENGINE_API virtual void MarkMountedStateDirty(FIoFilenameHash FilenameHash) override;
 
 	// A critical section use around code that could be called in parallel with NotifyPrimitiveUpdated() or NotifyPrimitiveUpdated_Concurrent().
 	FCriticalSection CriticalSection;

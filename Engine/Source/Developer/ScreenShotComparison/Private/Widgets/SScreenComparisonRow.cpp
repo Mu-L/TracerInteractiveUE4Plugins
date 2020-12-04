@@ -168,29 +168,71 @@ TSharedRef<SWidget> SScreenComparisonRow::GenerateWidgetForColumn(const FName& C
 {
 	if ( ColumnName == "Name" )
 	{
-		if ( Model->GetMetadata().IsSet() )
+		auto ModelMetaData = Model->GetMetadata();
+
+		if (ModelMetaData.IsSet())
 		{
-			return SNew(STextBlock).Text(FText::FromString(Model->GetMetadata()->Name));
+			const FImageComparisonResult& ComparisonResult = Model->Report.GetComparisonResult();
+
+			FSlateColor TextColor = FSlateColor::UseForeground();
+
+			FString Name = FString::Printf(TEXT("%s.%s"), *ModelMetaData->Context, *ModelMetaData->ScreenShotName);
+			if ((ModelMetaData->Context.Len() && ModelMetaData->TestName.Len())
+				|| !ModelMetaData->ScreenShotName.Len())
+			{
+				Name = FString::Printf(TEXT("%s.%s"), *ModelMetaData->Context, *ModelMetaData->TestName);
+			}
+
+			if (ComparisonResult.IsNew())
+			{
+				TextColor = FSlateColor(FLinearColor::Yellow);
+			}
+			else if (!ComparisonResult.AreSimilar())
+			{
+				TextColor = FSlateColor(FLinearColor(FColor::Orange));
+			}
+
+			return SNew(STextBlock)
+				.Text(FText::FromString(Name))
+				.ColorAndOpacity(TextColor);
 		}
 		else
 		{
 			return SNew(STextBlock).Text(LOCTEXT("Unknown", "Unknown Test, no metadata discovered."));
 		}
 	}
+	else if (ColumnName == "Date")
+	{
+		const FImageComparisonResult& ComparisonResult = Model->Report.GetComparisonResult();
+		const FDateTime& CreationTime = ComparisonResult.CreationTime;		
+		FString Entry = FString::Printf(TEXT("%04d/%02d/%02d - %02d:%02d"), 
+			CreationTime.GetYear(),CreationTime.GetMonth(), CreationTime.GetDay(),
+			CreationTime.GetHour(), CreationTime.GetMinute());
+		return SNew(STextBlock).Text(FText::FromString(Entry));
+	}
+	else if (ColumnName == "Platform")
+	{
+		const FImageComparisonResult& ComparisonResult = Model->Report.GetComparisonResult();
+		FString Entry = FString::Printf(TEXT("%s %s"), *ComparisonResult.SourcePlatform, *ComparisonResult.SourceRHI);
+		return SNew(STextBlock).Text(FText::FromString(Entry));
+	}
 	else if ( ColumnName == "Delta" )
 	{
 		FNumberFormattingOptions Format;
 		Format.MinimumFractionalDigits = 2;
 		Format.MaximumFractionalDigits = 2;
-		const FText GlobalDelta = FText::AsPercent(Model->Report.Comparison.GlobalDifference, &Format);
-		const FText LocalDelta = FText::AsPercent(Model->Report.Comparison.MaxLocalDifference, &Format);
+
+		const FImageComparisonResult& Comparison = Model->Report.GetComparisonResult();
+
+		const FText GlobalDelta = FText::AsPercent(Comparison.GlobalDifference, &Format);
+		const FText LocalDelta = FText::AsPercent(Comparison.MaxLocalDifference, &Format);
 
 		const FText Differences = FText::Format(LOCTEXT("LocalvGlobalDelta", "{0} | {1}"), LocalDelta, GlobalDelta);
 		return SNew(STextBlock).Text(Differences);
 	}
 	else if ( ColumnName == "Preview" )
 	{
-		const FImageComparisonResult& ComparisonResult = Model->Report.Comparison;
+		const FImageComparisonResult& ComparisonResult = Model->Report.GetComparisonResult();
 		if ( ComparisonResult.IsNew() )
 		{
 			return BuildAddedView();
@@ -257,6 +299,16 @@ TSharedRef<SWidget> SScreenComparisonRow::GenerateWidgetForColumn(const FName& C
 						.Text(LOCTEXT("AddAlternative", "Add As Alternative"))
 						.OnClicked(this, &SScreenComparisonRow::AddAlternative)
 					]
+
+					+ SHorizontalBox::Slot()
+					.Padding(10, 0, 0, 0)
+					.AutoWidth()
+					[
+						SNew(SButton)
+						.IsEnabled(true)
+						.Text(LOCTEXT("Delete", "Delete"))
+						.OnClicked(this, &SScreenComparisonRow::Remove)
+					]
 				];
 		}
 	}
@@ -269,19 +321,29 @@ bool SScreenComparisonRow::CanUseSourceControl() const
 	return ISourceControlModule::Get().IsEnabled();
 }
 
+FText SScreenComparisonRow::GetAddNewButtonTooltip() const
+{
+	if (ISourceControlModule::Get().IsEnabled())
+	{
+		return LOCTEXT("AddNewToolTip", "Add new ground truth image to source control.");
+	}
+	else
+	{
+		return LOCTEXT("AddNewToolTip_Disabled", "Cannot add new ground truth image. Please connect to source control.");
+	}
+}
+
 bool SScreenComparisonRow::IsComparingAgainstPlatformFallback() const
 {
-	// If the approved and incoming files are in different paths, that suggests a platform fallback
-	bool bHasApprovedFile = !Model->Report.Comparison.ApprovedFile.IsEmpty();
-	FString ApprovedPath = FPaths::GetPath(Model->Report.Comparison.ApprovedFile);
-	FString IncomingPath = FPaths::GetPath(Model->Report.Comparison.IncomingFile);
-	return bHasApprovedFile && ApprovedPath != IncomingPath;
+	const FImageComparisonResult& Comparison = Model->Report.GetComparisonResult();
+	bool bHasApprovedFile = !Comparison.ApprovedFilePath.IsEmpty();	
+	return bHasApprovedFile && !Comparison.IsIdeal();
 }
 
 TSharedRef<SWidget> SScreenComparisonRow::BuildAddedView()
 {
-	const FImageComparisonResult& ComparisonResult = Model->Report.Comparison;
-	FString IncomingFile = Model->Report.ReportFolder / ComparisonResult.ReportIncomingFile;
+	const FImageComparisonResult& ComparisonResult = Model->Report.GetComparisonResult();
+	FString IncomingFile = FPaths::Combine(Model->Report.GetReportPath(), ComparisonResult.ReportIncomingFilePath);
 
 	return
 		SNew(SVerticalBox)
@@ -308,6 +370,7 @@ TSharedRef<SWidget> SScreenComparisonRow::BuildAddedView()
 						[
 							SAssignNew(UnapprovedImageWidget, SAsyncImage)
 							.ImageFilePath(IncomingFile)
+							.ToolTipText(FText::FromString(IncomingFile))
 						]
 						
 					]
@@ -319,20 +382,44 @@ TSharedRef<SWidget> SScreenComparisonRow::BuildAddedView()
 		.AutoHeight()
 		.HAlign(HAlign_Center)
 		[
-			SNew(SButton)
-			.IsEnabled(this, &SScreenComparisonRow::CanUseSourceControl)
-			.Text(LOCTEXT("AddNew", "Add New!"))
-			.OnClicked(this, &SScreenComparisonRow::AddNew)
+			SNew(SHorizontalBox)
+
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			[
+				SNew(SButton)
+				.IsEnabled(this, &SScreenComparisonRow::CanUseSourceControl)
+				.Text(LOCTEXT("AddNew", "Add New!"))
+				.ToolTipText(this, &SScreenComparisonRow::GetAddNewButtonTooltip)
+				.OnClicked(this, &SScreenComparisonRow::AddNew)
+			]
+
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.Padding(10, 0, 0, 0)
+			[
+				SNew(SButton)
+				.IsEnabled(true)
+				.Text(LOCTEXT("Delete", "Delete"))
+				.OnClicked(this, &SScreenComparisonRow::Remove)
+			]
 		];
 }
 
 TSharedRef<SWidget> SScreenComparisonRow::BuildComparisonPreview()
 {
-	const FImageComparisonResult& ComparisonResult = Model->Report.Comparison;
+	const FImageComparisonResult& ComparisonResult = Model->Report.GetComparisonResult();
 
-	FString ApprovedFile = Model->Report.ReportFolder / ComparisonResult.ReportApprovedFile;
-	FString IncomingFile = Model->Report.ReportFolder / ComparisonResult.ReportIncomingFile;
-	FString DeltaFile = Model->Report.ReportFolder / ComparisonResult.ReportComparisonFile;
+	FString ApprovedFile = FPaths::Combine(Model->Report.GetReportPath(), ComparisonResult.ReportApprovedFilePath);
+
+	// If the actual approved file is on disk then use that so the tool-tip is more useful
+	if (IFileManager::Get().FileExists(*ComparisonResult.ApprovedFilePath))
+	{
+		ApprovedFile = ComparisonResult.ApprovedFilePath;
+	}
+
+	FString IncomingFile = FPaths::Combine(Model->Report.GetReportPath(), ComparisonResult.ReportIncomingFilePath);
+	FString DeltaFile = FPaths::Combine(Model->Report.GetReportPath(), ComparisonResult.ReportComparisonFilePath);
 
 	// Create the screen shot data widget.
 	return 
@@ -359,6 +446,7 @@ TSharedRef<SWidget> SScreenComparisonRow::BuildComparisonPreview()
 						[
 							SAssignNew(ApprovedImageWidget, SAsyncImage)
 							.ImageFilePath(ApprovedFile)
+							.ToolTipText(FText::FromString(ApprovedFile))
 						]
 
 						+ SHorizontalBox::Slot()
@@ -375,6 +463,7 @@ TSharedRef<SWidget> SScreenComparisonRow::BuildComparisonPreview()
 						[
 							SAssignNew(UnapprovedImageWidget, SAsyncImage)
 							.ImageFilePath(IncomingFile)
+							.ToolTipText(FText::FromString(IncomingFile))
 						]
 					]
 				]
@@ -419,19 +508,19 @@ bool SScreenComparisonRow::CanAddNew() const
 
 FReply SScreenComparisonRow::AddNew()
 {
-	Model->AddNew(ScreenshotManager);
+	Model->AddNew();
 
 	return FReply::Handled();
 }
 
 bool SScreenComparisonRow::CanAddPlatformSpecificNew() const
 {
-	return CanUseSourceControl();
+	return CanUseSourceControl() && IsComparingAgainstPlatformFallback();
 }
 
 FReply SScreenComparisonRow::AddPlatformSpecificNew()
 {
-	Model->AddNew(ScreenshotManager);
+	Model->AddNew();
 
 	return FReply::Handled();
 }
@@ -443,19 +532,28 @@ bool SScreenComparisonRow::CanReplace() const
 
 FReply SScreenComparisonRow::Replace()
 {
-	Model->Replace(ScreenshotManager);
-
+	Model->Replace();
 	return FReply::Handled();
 }
 
 bool SScreenComparisonRow::CanAddAsAlternative() const
 {
-	return CanUseSourceControl() && (Model->Report.Comparison.IncomingFile != Model->Report.Comparison.ApprovedFile) && !IsComparingAgainstPlatformFallback();
+	const FImageComparisonResult& Comparison = Model->Report.GetComparisonResult();
+	return CanUseSourceControl()
+		&& !Comparison.AreSimilar()
+		&& (Comparison.IncomingFilePath != Comparison.ApprovedFilePath) 
+		&& !IsComparingAgainstPlatformFallback();
 }
 
 FReply SScreenComparisonRow::AddAlternative()
 {
-	Model->AddAlternative(ScreenshotManager);
+	Model->AddAlternative();
+	return FReply::Handled();
+}
+
+FReply SScreenComparisonRow::Remove()
+{
+	Model->Complete(true);
 
 	return FReply::Handled();
 }
@@ -496,8 +594,9 @@ FReply SScreenComparisonRow::OnCompareImages(const FGeometry& InGeometry, const 
 
 FReply SScreenComparisonRow::OnCompareNewImage(const FGeometry& InGeometry, const FPointerEvent& InEvent)
 {
-	const FImageComparisonResult& ComparisonResult = Model->Report.Comparison;
-	FString IncomingFile = Model->Report.ReportFolder / ComparisonResult.ReportIncomingFile;
+
+	const FImageComparisonResult& ComparisonResult = Model->Report.GetComparisonResult();
+	FString IncomingFilePath = FPaths::Combine(Model->Report.GetReportPath(), ComparisonResult.ReportIncomingFilePath);
 
 	TSharedPtr<FSlateDynamicImageBrush> UnapprovedImage = UnapprovedImageWidget->GetDynamicBrush();
 

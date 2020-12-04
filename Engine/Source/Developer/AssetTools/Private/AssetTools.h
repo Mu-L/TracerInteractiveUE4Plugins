@@ -57,9 +57,6 @@ class UAssetToolsImpl : public UObject, public IAssetTools
 public:
 	UAssetToolsImpl(const FObjectInitializer& ObjectInitializer);
 
-	// UObject implementation
-	virtual bool IsDestructionThreadSafe() const override { return false; }
-
 	// IAssetTools implementation
 	virtual void RegisterAssetTypeActions(const TSharedRef<IAssetTypeActions>& NewActions) override;
 	virtual void UnregisterAssetTypeActions(const TSharedRef<IAssetTypeActions>& ActionsToRemove) override;
@@ -81,7 +78,7 @@ public:
 	virtual UObject* DuplicateAssetWithDialog(const FString& AssetName, const FString& PackagePath, UObject* OriginalObject) override;
 	virtual UObject* DuplicateAssetWithDialogAndTitle(const FString& AssetName, const FString& PackagePath, UObject* OriginalObject, FText DialogTitle) override;
 	virtual bool RenameAssets(const TArray<FAssetRenameData>& AssetsAndNames) override;
-	virtual void RenameAssetsWithDialog(const TArray<FAssetRenameData>& AssetsAndNames, bool bAutoCheckout = false) override;
+	virtual EAssetRenameResult RenameAssetsWithDialog(const TArray<FAssetRenameData>& AssetsAndNames, bool bAutoCheckout = false) override;
 	virtual void FindSoftReferencesToObject(FSoftObjectPath TargetObject, TArray<UObject*>& ReferencingObjects) override;
 	virtual void FindSoftReferencesToObjects(const TArray<FSoftObjectPath>& TargetObjects, TMap<FSoftObjectPath, TArray<UObject*>>& ReferencingObjects) override;
 	virtual void RenameReferencingSoftObjectPaths(const TArray<UPackage *> PackagesToCheck, const TMap<FSoftObjectPath, FSoftObjectPath>& AssetRedirectorMap) override;
@@ -102,7 +99,7 @@ public:
 	virtual bool CreateDiffProcess(const FString& DiffCommand, const FString& OldTextFilename, const FString& NewTextFilename, const FString& DiffArgs = FString("")) const override;
 	virtual void MigratePackages(const TArray<FName>& PackageNamesToMigrate) const override;
 	virtual void BeginAdvancedCopyPackages(const TArray<FName>& InputNamesToCopy, const FString& TargetPath) const override;
-	virtual void FixupReferencers(const TArray<UObjectRedirector*>& Objects) const override;
+	virtual void FixupReferencers(const TArray<UObjectRedirector*>& Objects, bool bCheckoutDialogPrompt = true) const override;
 	virtual bool IsFixupReferencersInProgress() const override;
 	virtual FAssetPostRenameEvent& OnAssetPostRename() override { return AssetRenameManager->OnAssetPostRenameEvent(); }
 	virtual void ExpandDirectories(const TArray<FString>& Files, const FString& DestinationPath, TArray<TPair<FString, FString>>& FilesAndDestinations) const override;
@@ -179,6 +176,15 @@ private:
 	/** Internal method that performs actions when asset class blacklist filter changes */
 	void AssetClassBlacklistChanged();
 
+	/**
+	 * Add sub content blacklist filter for a new mount point
+	 * @param InMount The mount point
+	 */
+	void AddSubContentBlacklist(const FString& InMount);
+
+	/** Called when a new mount is added to add the proper sub content blacklist to it. */
+	void OnContentPathMounted(const FString& InAssetPath, const FString& FileSystemPath);
+
 private:
 	/** The list of all registered AssetTypeActions */
 	TArray<TSharedRef<IAssetTypeActions>> AssetTypeActionsList;
@@ -200,6 +206,9 @@ private:
 
 	/** Blacklist of folder paths to write to */
 	TSharedRef<FBlacklistPaths> WritableFolderBlacklist;
+
+	/** List of sub content path blacklisted for every mount. */
+	TArray<FString> SubContentBlacklistPaths;
 };
 
 PRAGMA_ENABLE_DEPRECATION_WARNINGS

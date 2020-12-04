@@ -26,172 +26,6 @@
 
 #define LOCTEXT_NAMESPACE "StructureCompiler"
 
-template <class T>
-class TAllPropertiesIterator
-{
-private:
-	TObjectIterator<UStruct> StructIterator;
-	TFieldIterator<FProperty> PropertyIterator;
-	FProperty* CurrentProperty;
-
-public:
-	TAllPropertiesIterator(EObjectFlags AdditionalExclusionFlags = RF_ClassDefaultObject, EInternalObjectFlags InternalExclusionFlags = EInternalObjectFlags::None)
-		: StructIterator(AdditionalExclusionFlags, /*bIncludeDerivedClasses =*/ true, InternalExclusionFlags)
-		, PropertyIterator(nullptr)
-		, CurrentProperty(nullptr)
-	{
-		InitPropertyIterator();
-	}
-
-	/** conversion to "bool" returning true if the iterator is valid. */
-	FORCEINLINE explicit operator bool() const
-	{
-		return (bool)PropertyIterator || (bool)StructIterator;
-	}
-	/** inverse of the "bool" operator */
-	FORCEINLINE bool operator !() const
-	{
-		return !(bool)*this;
-	}
-
-	inline friend bool operator==(const TAllPropertiesIterator<T>& Lhs, const TAllPropertiesIterator<T>& Rhs) { return *Lhs.FieldIterator == *Rhs.FieldIterator; }
-	inline friend bool operator!=(const TAllPropertiesIterator<T>& Lhs, const TAllPropertiesIterator<T>& Rhs) { return *Lhs.FieldIterator != *Rhs.FieldIterator; }
-
-	inline void operator++()
-	{
-		IterateToNextProperty();
-		ConditionallyIterateToNextStruct();
-	}
-	inline T* operator*()
-	{
-		T* Property = CastField<T>(CurrentProperty);
-		check(Property || !CurrentProperty);
-		return Property;
-	}
-	inline T* operator->()
-	{
-		T* Property = CastField<T>(CurrentProperty);
-		check(Property || !CurrentProperty);
-		return Property;
-	}
-protected:
-	inline void IterateToNextProperty()
-	{
-		while (PropertyIterator)
-		{
-			do
-			{
-				FProperty* IteratedProperty = *PropertyIterator;
-				if (FArrayProperty* ArrayProp = CastField<FArrayProperty>(IteratedProperty))
-				{
-					if (CurrentProperty == IteratedProperty)
-					{
-						CurrentProperty = ArrayProp->Inner;
-					}
-					else
-					{
-						CurrentProperty = nullptr;
-					}
-				}
-				else if (FMapProperty* MapProp = CastField<FMapProperty>(IteratedProperty))
-				{
-					if (CurrentProperty == MapProp)
-					{
-						CurrentProperty = MapProp->KeyProp;
-					}
-					else if (CurrentProperty == MapProp->KeyProp)
-					{
-						CurrentProperty = MapProp->ValueProp;
-					}
-					else
-					{
-						CurrentProperty = nullptr;
-					}
-				}
-				else if (FSetProperty* SetProp = CastField<FSetProperty>(IteratedProperty))
-				{
-					if (CurrentProperty != SetProp->ElementProp)
-					{
-						CurrentProperty = SetProp->ElementProp;
-					}
-					else
-					{
-						CurrentProperty = nullptr;
-					}
-				}
-				else if (FEnumProperty* EnumProp = CastField<FEnumProperty>(IteratedProperty))
-				{
-					if (CurrentProperty == IteratedProperty)
-					{
-						CurrentProperty = EnumProp->GetUnderlyingProperty();
-					}
-					else
-					{
-						CurrentProperty = nullptr;
-					}
-				}
-				else
-				{
-					CurrentProperty = nullptr;
-				}
-			} while (CurrentProperty && !CurrentProperty->IsA<T>());
-
-			if (!CurrentProperty)
-			{
-				++PropertyIterator;
-				if (PropertyIterator)
-				{
-					CurrentProperty = *PropertyIterator;
-					if (CastField<T>(CurrentProperty))
-					{
-						break;
-					}
-				}
-			}
-			else
-			{
-				break;
-			}
-		}
-	}
-	inline void InitPropertyIterator()
-	{
-		while (StructIterator)
-		{
-			PropertyIterator.~TFieldIterator<FProperty>();
-			new (&PropertyIterator) TFieldIterator<FProperty>(*StructIterator, EFieldIteratorFlags::ExcludeSuper, EFieldIteratorFlags::IncludeDeprecated, EFieldIteratorFlags::IncludeInterfaces);
-			if (!PropertyIterator)
-			{
-				++StructIterator;
-			}
-			else
-			{
-				CurrentProperty = *PropertyIterator;
-				if (CurrentProperty && !CurrentProperty->IsA<T>())
-				{
-					IterateToNextProperty();
-				}
-				if (!CurrentProperty)
-				{
-					++StructIterator;
-				}
-				else
-				{
-					break;
-				}
-			}
-		}
-	}
-	inline void ConditionallyIterateToNextStruct()
-	{
-		if (!PropertyIterator)
-		{
-			++StructIterator;
-			InitPropertyIterator();
-		}
-	}
-};
-
 struct FUserDefinedStructureCompilerInner
 {
 	struct FBlueprintUserStructData
@@ -244,7 +78,10 @@ struct FUserDefinedStructureCompilerInner
 
 			CastChecked<UUserDefinedStructEditorData>(DuplicatedStruct->EditorData)->RecreateDefaultInstance();
 
-			for (TAllPropertiesIterator<FStructProperty> FieldIt(RF_NoFlags, EInternalObjectFlags::PendingKill); FieldIt; ++FieldIt)
+			// List of unique classes and structs to regenerate bytecode and property referenced objects list
+			TSet<UStruct*> StructsToRegenerateReferencesFor;
+
+			for (TAllFieldsIterator<FStructProperty> FieldIt(RF_NoFlags, EInternalObjectFlags::PendingKill); FieldIt; ++FieldIt)
 			{
 				FStructProperty* StructProperty = *FieldIt;
 				if (StructProperty && (StructureToReinstance == StructProperty->Struct))
@@ -255,6 +92,7 @@ struct FUserDefinedStructureCompilerInner
 						{
 							ClearStructReferencesInBP(FoundBlueprint, BlueprintsToRecompile);
 							StructProperty->Struct = DuplicatedStruct;
+							StructsToRegenerateReferencesFor.Add(OwnerClass);
 						}
 					}
 					else if (UUserDefinedStruct* OwnerStruct = Cast<UUserDefinedStruct>(StructProperty->GetOwnerStruct()))
@@ -272,6 +110,7 @@ struct FUserDefinedStructureCompilerInner
 							{
 								// Don't change this for a default value only change, it won't get correctly replaced later
 								StructProperty->Struct = DuplicatedStruct;
+								StructsToRegenerateReferencesFor.Add(OwnerStruct);
 							}
 						}
 					}
@@ -280,6 +119,12 @@ struct FUserDefinedStructureCompilerInner
 						UE_LOG(LogK2Compiler, Error, TEXT("ReplaceStructWithTempDuplicate unknown owner"));
 					}
 				}
+			}
+
+			// Make sure we update the list of objects referenced by structs after we replaced the struct in FStructProperties
+			for (UStruct* Struct : StructsToRegenerateReferencesFor)
+			{
+				Struct->CollectBytecodeAndPropertyReferencedObjects();
 			}
 
 			DuplicatedStruct->RemoveFromRoot();
@@ -314,6 +159,7 @@ struct FUserDefinedStructureCompilerInner
 			const FString TransientString = FString::Printf(TEXT("TRASHSTRUCT_%s"), *StructToClean->GetName());
 			const FName TransientName = MakeUniqueObjectName(GetTransientPackage(), UUserDefinedStruct::StaticClass(), FName(*TransientString));
 			TransientStruct = NewObject<UUserDefinedStruct>(GetTransientPackage(), TransientName, RF_Public | RF_Transient);
+			TransientStruct->PrepareCppStructOps();
 
 			TArray<UObject*> SubObjects;
 			GetObjectsWithOuter(StructToClean, SubObjects, true);
@@ -448,9 +294,9 @@ struct FUserDefinedStructureCompilerInner
 			{
 				const UClass* ClassObject = Cast<UClass>(VarType.PinSubCategoryObject.Get());
 
-				if (ClassObject && ClassObject->IsChildOf(AActor::StaticClass()) && (VarType.PinCategory == UEdGraphSchema_K2::PC_Object || VarType.PinCategory == UEdGraphSchema_K2::PC_Interface))
+				if (ClassObject && ClassObject->IsChildOf(AActor::StaticClass()) && (VarType.PinCategory == UEdGraphSchema_K2::PC_Object || VarType.PinCategory == UEdGraphSchema_K2::PC_Interface || VarType.PinCategory == UEdGraphSchema_K2::PC_SoftObject))
 				{
-					// prevent hard reference Actor variables from having default values (because Blueprint templates are library elements that can 
+					// prevent Actor reference variables from having default values (because Blueprint templates are library elements that can 
 					// bridge multiple levels and different levels might not have the actor that the default is referencing).
 					VarProperty->PropertyFlags |= CPF_DisableEditOnTemplate;
 				}
@@ -634,6 +480,43 @@ void FUserDefinedStructureCompilerUtils::CompileStruct(class UUserDefinedStruct*
 
 			if (bReconstruct)
 			{
+				// We need to recombine any nested subpins on this node, otherwise there will be an
+				// unexpected amount of pins during reconstruction. 
+				{
+					TArray<UEdGraphPin*> NestedSplitPins;
+					for (int32 i = Node->Pins.Num() - 1; i >= 0; --i)
+					{
+						UEdGraphPin* Pin = Node->Pins[i];
+						if (Pin->ParentPin != nullptr && Pin->ParentPin->ParentPin != nullptr && !Pin->bOrphanedPin)
+						{
+							NestedSplitPins.Add(Pin);
+							
+							// If there was nothing connected to or changed about this pin, then skip it
+							if (Pin->LinkedTo.Num() > 0 || !Pin->DoesDefaultValueMatchAutogenerated())
+							{
+								// Otherwise add an orphan pin so warning/connections are not silently lost
+								UEdGraphPin* OrphanPin = Node->CreatePin(Pin->Direction, Pin->PinType, Pin->PinName);
+								OrphanPin->bOrphanedPin = true;
+								OrphanPin->bNotConnectable = true;
+								OrphanPin->DefaultValue = Pin->DefaultValue;
+								OrphanPin->DefaultObject = Pin->DefaultObject;
+
+								for (UEdGraphPin* OldLink : Pin->LinkedTo)
+								{
+									OrphanPin->MakeLinkTo(OldLink);
+								}
+							}
+						}
+					}
+
+					// Wait to recombine because otherwise we could end up combining pins that that haven't had their orphan created yet
+					const UEdGraphSchema* Schema = Node->GetSchema();
+					for (int32 i = NestedSplitPins.Num() - 1; i >= 0; --i)
+					{
+						Schema->RecombinePin(NestedSplitPins[i]);
+					}
+				}
+
 				if (Node->HasValidBlueprint())
 				{
 					UBlueprint* FoundBlueprint = Node->GetBlueprint();

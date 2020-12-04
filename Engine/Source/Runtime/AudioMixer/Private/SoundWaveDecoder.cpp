@@ -28,7 +28,7 @@ namespace Audio
 
 	FDecodingSoundSource::~FDecodingSoundSource()
 	{
-		FScopeLock Lock(&DtorCritSec);
+		FScopeLock Lock(&MixerSourceBufferCritSec);
 
 		if (MixerSourceBuffer.IsValid())
 		{
@@ -56,8 +56,8 @@ namespace Audio
 
 		bool bIsValid = false;
 		{
-			FScopeLock Lock(&DtorCritSec);
-			MixerSourceBuffer = FMixerSourceBuffer::Create(*MixerBuffer, *SoundWave, LoopingMode, bIsSeeking, bForceSyncDecode);
+			FScopeLock Lock(&MixerSourceBufferCritSec);
+			MixerSourceBuffer = FMixerSourceBuffer::Create(InSampleRate, *MixerBuffer, *SoundWave, LoopingMode, bIsSeeking, bForceSyncDecode);
 			bIsValid = MixerSourceBuffer.IsValid();
 		}
 
@@ -66,7 +66,7 @@ namespace Audio
 
 	bool FDecodingSoundSource::IsReadyToInit()
 	{
-		FScopeLock Lock(&DtorCritSec);
+		FScopeLock Lock(&MixerSourceBufferCritSec);
 		if (!MixerSourceBuffer.IsValid())
 		{
 			return false;
@@ -114,7 +114,7 @@ namespace Audio
 	{
 		if (MixerBuffer->GetNumChannels() > 0 && MixerBuffer->GetNumChannels() <= 2)
 		{
-			FScopeLock Lock(&DtorCritSec);
+			FScopeLock Lock(&MixerSourceBufferCritSec);
 			if (MixerSourceBuffer.IsValid())
 			{
 
@@ -356,7 +356,7 @@ namespace Audio
 
 	bool FDecodingSoundSource::GetAudioBuffer(const int32 InNumFrames, const int32 InNumChannels, AlignedFloatBuffer& OutAudioBuffer)
 	{
-		FScopeTryLock Lock(&DtorCritSec);
+		FScopeTryLock Lock(&MixerSourceBufferCritSec);
 
 		if (!bInitialized || !Lock.IsLocked())
 		{
@@ -535,7 +535,7 @@ namespace Audio
 		}
 
 
-		if (InitData.SoundWave->bIsBus || InitData.SoundWave->bProcedural)
+		if (InitData.SoundWave->bIsSourceBus || InitData.SoundWave->bProcedural)
 		{
 			UE_LOG(LogAudioMixer, Warning, TEXT("Sound wave decoder does not support buses or procedural sounds."));
 			return false;
@@ -574,6 +574,8 @@ namespace Audio
 	{
 		PumpDecoderCommandQueue();
 
+		FScopeLock Lock(&DecodingSourcesCritSec);
+
 		DecodingSources.Reset();
 		InitializingDecodingSources.Reset();
 		PrecachingSources.Reset();
@@ -586,6 +588,7 @@ namespace Audio
 
 	void FSoundSourceDecoder::SetSourceVolumeScale(const FDecodingSoundSourceHandle& InHandle, float InVolumeScale)
 	{
+		FScopeLock Lock(&DecodingSourcesCritSec);
 		FDecodingSoundSourcePtr* DecodingSoundWaveDataPtr = DecodingSources.Find(InHandle.Id);
 		if (!DecodingSoundWaveDataPtr)
 		{
@@ -647,6 +650,8 @@ namespace Audio
 
 	bool FSoundSourceDecoder::IsFinished(const FDecodingSoundSourceHandle& InHandle) const
 	{
+		FScopeLock Lock(&DecodingSourcesCritSec);
+
 		const FDecodingSoundSourcePtr* DecodingSoundWaveDataPtr = DecodingSources.Find(InHandle.Id);
 		if (!DecodingSoundWaveDataPtr || !DecodingSoundWaveDataPtr->IsValid())
 		{
@@ -658,6 +663,8 @@ namespace Audio
 
 	bool FSoundSourceDecoder::IsInitialized(const FDecodingSoundSourceHandle& InHandle) const
 	{
+		FScopeLock Lock(&DecodingSourcesCritSec);
+
 		const FDecodingSoundSourcePtr* DecodingSoundWaveDataPtr = DecodingSources.Find(InHandle.Id);
 		if (!DecodingSoundWaveDataPtr)
 		{
@@ -671,6 +678,7 @@ namespace Audio
 	bool FSoundSourceDecoder::GetSourceBuffer(const FDecodingSoundSourceHandle& InHandle, const int32 NumOutFrames, const int32 NumOutChannels, AlignedFloatBuffer& OutAudioBuffer)
 	{
 		check(InHandle.Id != INDEX_NONE);
+		FScopeLock Lock(&DecodingSourcesCritSec);
 
 		FDecodingSoundSourcePtr DecodingSoundWaveDataPtr = DecodingSources.FindRef(InHandle.Id);
 		if (DecodingSoundWaveDataPtr.IsValid())

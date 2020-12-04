@@ -417,7 +417,7 @@ FReply FFindInBlueprintsProperty::OnClick()
 			{
 				// Open Viewport Tab
 				BlueprintEditor->FocusWindow();
-				BlueprintEditor->GetTabManager()->InvokeTab(FBlueprintEditorTabs::SCSViewportID);
+				BlueprintEditor->GetTabManager()->TryInvokeTab(FBlueprintEditorTabs::SCSViewportID);
 
 				// Find and Select the Component in the Viewport tab view
 				const TArray<USCS_Node*>& Nodes = Blueprint->SimpleConstructionScript->GetAllNodes();
@@ -629,7 +629,7 @@ void SFindInBlueprints::Construct( const FArguments& InArgs, TSharedPtr<FBluepri
 			[
 				SNew(SButton)
 				.OnClicked(this, &SFindInBlueprints::OnOpenGlobalFindResults)
-				.Visibility(BlueprintEditorPtr.IsValid() && bHostFindInBlueprintsInGlobalTab ? EVisibility::Visible : EVisibility::Collapsed)
+				.Visibility(!InArgs._bHideFindGlobalButton && BlueprintEditorPtr.IsValid() && bHostFindInBlueprintsInGlobalTab ? EVisibility::Visible : EVisibility::Collapsed)
 				.ToolTipText(LOCTEXT("OpenInGlobalFindResultsButtonTooltip", "Find in all Blueprints"))
 				[
 					SNew(STextBlock)
@@ -1093,6 +1093,14 @@ void SFindInBlueprints::MakeSearchQuery(FString InSearchString, bool bInIsFindWi
 				if (SearchResult.IsValid())
 				{
 					ItemsFound = SearchResult->Children;
+				}
+
+				// call SearchCompleted callback if bound (the only steps left are to update the TreeView, the search operation is complete)
+				if (InOnSearchComplete.IsBound())
+				{
+					TArray<FImaginaryFiBDataSharedPtr> FilteredImaginaryResults;
+					SearchInstance->CreateFilteredResultsListFromTree(InSearchOptions.ImaginaryDataFilter, FilteredImaginaryResults);
+					InOnSearchComplete.Execute(FilteredImaginaryResults);
 				}
 			}
 
@@ -1584,7 +1592,7 @@ void SFindInBlueprints::SelectAllItemsHelper(FSearchResult InItemToSelect)
 	// Iterates over all children and recursively selects all items in the results
 	TreeView->SetItemSelection(InItemToSelect, true);
 
-	for( const auto Child : InItemToSelect->Children )
+	for( const auto& Child : InItemToSelect->Children )
 	{
 		SelectAllItemsHelper(Child);
 	}
@@ -1592,7 +1600,7 @@ void SFindInBlueprints::SelectAllItemsHelper(FSearchResult InItemToSelect)
 
 void SFindInBlueprints::OnSelectAllAction()
 {
-	for( const auto Item : ItemsFound )
+	for( const auto& Item : ItemsFound )
 	{
 		SelectAllItemsHelper(Item);
 	}
@@ -1604,7 +1612,7 @@ void SFindInBlueprints::OnCopyAction()
 
 	FString SelectedText;
 
-	for( const auto SelectedItem : SelectedItems)
+	for( const auto& SelectedItem : SelectedItems)
 	{
 		// Add indents for each layer into the tree the item is
 		for(auto ParentItem = SelectedItem->Parent; ParentItem.IsValid(); ParentItem = ParentItem.Pin()->Parent)
@@ -1684,6 +1692,11 @@ void SFindInBlueprints::CloseHostTab()
 	}
 }
 
+bool SFindInBlueprints::IsSearchInProgress() const
+{
+	return StreamSearch.IsValid() && !StreamSearch->IsComplete();
+}
+
 FReply SFindInBlueprints::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
 	// BlueprintEditor's IToolkit code will handle shortcuts itself - but we can just use 
@@ -1696,6 +1709,16 @@ FReply SFindInBlueprints::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent
 		}
 	}
 	return SCompoundWidget::OnKeyDown(MyGeometry, InKeyEvent);
+}
+
+void SFindInBlueprints::ClearResults()
+{
+	ItemsFound.Empty();
+
+	if (TreeView.IsValid())
+	{
+		TreeView->RequestTreeRefresh();
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

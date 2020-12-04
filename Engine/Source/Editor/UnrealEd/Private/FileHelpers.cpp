@@ -57,18 +57,18 @@
 #include "IContentBrowserSingleton.h"
 #include "ContentBrowserModule.h"
 
-#include "PackageTools.h"
 #include "ObjectTools.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Engine/LevelStreaming.h"
+#include "GameFramework/WorldSettings.h"
 #include "AutoSaveUtils.h"
 #include "AssetRegistryModule.h"
 #include "Misc/BlacklistNames.h"
 #include "EngineAnalytics.h"
 #include "StudioAnalytics.h"
 #include "AnalyticsEventAttribute.h"
-
+#include "HierarchicalLOD.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFileHelpers, Log, All);
 
@@ -206,31 +206,7 @@ namespace FileDialogHelpers
 	}
 }
 
-namespace FileHelperPackageUtil
-{
-	/**
-	 * DoesPackageExist helper that rely on the AssetRegistry to validate if a package exists instead of hitting the FS
-	 * Fallback to the FS if the asset registry initial scan isn't done or we aren't in Editor
-	 */
-	bool DoesPackageExist(UPackage* Package, FString* OutFilename = nullptr)
-	{
-		// Test using asset registry to figure out existence
-		IAssetRegistry& AssetRegistry = FAssetRegistryModule::GetRegistry();
-		if (!AssetRegistry.IsLoadingAssets() || !GIsEditor)
-		{
-			TArray<FAssetData> Data;
-			FAssetRegistryModule::GetRegistry().GetAssetsByPackageName(Package->GetFName(), Data, true);
 
-			if (Data.Num() > 0 && OutFilename)
-			{
-				*OutFilename = FPackageName::LongPackageNameToFilename(Package->GetName(), Package->ContainsMap() ? FPackageName::GetMapPackageExtension() : FPackageName::GetAssetPackageExtension());
-			}
-
-			return Data.Num() > 0;
-		}
-		return FPackageName::DoesPackageExist(Package->GetName(), nullptr, OutFilename);
-	}
-}
 
 /**
  * Queries the user if they want to quit out of interpolation editing before save.
@@ -576,7 +552,7 @@ static bool SaveWorld(UWorld* World,
 	FString	CleanFilename;
 
 	// Does a filename already exist for this package?
-	const bool bPackageExists = FileHelperPackageUtil::DoesPackageExist(Package, &ExistingFilename );
+	const bool bPackageExists = FPackageName::DoesPackageExist( PackageName, NULL, &ExistingFilename );
 
 	if ( ForceFilename )
 	{
@@ -780,8 +756,8 @@ static bool SaveWorld(UWorld* World,
 		// @todo Autosaving should save build data as well
 		if (bSuccess && !bAutosaving)
 		{
-			// Also save MapBuildData packages when saving the current level
-			FEditorFileUtils::SaveMapDataPackages(DuplicatedWorld ? DuplicatedWorld : World, bCheckDirty || bPIESaving);
+			// Also save MapBuildData packages when saving the current level and save external packages if the world was duplicated
+			FEditorFileUtils::SaveMapDataPackages(DuplicatedWorld ? DuplicatedWorld : World, bCheckDirty || bPIESaving, DuplicatedWorld != nullptr);
 		}
 
 		SlowTask.EnterProgressFrame(25);
@@ -1202,7 +1178,7 @@ void FEditorFileUtils::SaveAssetsAs(const TArray<UObject*>& Assets, TArray<UObje
 		{
 			// duplicate asset at destination
 			const FString NewAssetName = FPackageName::GetLongPackageAssetName(NewPackageName);
-			UPackage* DuplicatedPackage = CreatePackage(nullptr, *NewPackageName);
+			UPackage* DuplicatedPackage = CreatePackage( *NewPackageName);
 			UObject* DuplicatedAsset = StaticDuplicateObject(Asset, DuplicatedPackage, *NewAssetName);
 
 			if (DuplicatedAsset != nullptr)
@@ -1396,7 +1372,7 @@ bool FEditorFileUtils::AddCheckoutPackageItems(bool bCheckDirty, TArray<UPackage
 				}
 				
 				FString Filename;
-				if (FileHelperPackageUtil::DoesPackageExist(Package, &Filename))
+				if (FPackageName::DoesPackageExist(Package->GetName(), NULL, &Filename))
 				{
 					if (IFileManager::Get().IsReadOnly(*Filename))
 					{
@@ -1450,7 +1426,7 @@ bool FEditorFileUtils::AddCheckoutPackageItems(bool bCheckDirty, TArray<UPackage
 		bool bPkgReadOnly = true;
 		bool bCareAboutReadOnly = SourceControlProvider.UsesLocalReadOnlyState();
 		// Find the filename for this package
-		bool bFoundFile = FileHelperPackageUtil::DoesPackageExist(CurPackage, &Filename);
+		bool bFoundFile = FPackageName::DoesPackageExist(CurPackage->GetName(), NULL, &Filename);
 		if (bFoundFile)
 		{
 			// determine if the package file is read only
@@ -1472,12 +1448,12 @@ bool FEditorFileUtils::AddCheckoutPackageItems(bool bCheckDirty, TArray<UPackage
 					if (!SourceControlState->IsCurrent())
 					{
 						// This package is not at the head revision and it should be ghosted as a result
-						CheckoutPackagesDialogModule.AddPackageItem(CurPackage, CurPackage->GetName(), ECheckBoxState::Unchecked, true, TEXT("SavePackages.SCC_DlgNotCurrent"), SourceControlState->GetDisplayTooltip().ToString());
+						CheckoutPackagesDialogModule.AddPackageItem(CurPackage, ECheckBoxState::Unchecked, true, TEXT("SavePackages.SCC_DlgNotCurrent"), SourceControlState->GetDisplayTooltip().ToString());
 					}
 					else if (SourceControlState->IsCheckedOutOther())
 					{
 						// This package is checked out by someone else so it should be ghosted
-						CheckoutPackagesDialogModule.AddPackageItem(CurPackage, CurPackage->GetName(), ECheckBoxState::Unchecked, true, TEXT("SavePackages.SCC_DlgCheckedOutOther"), SourceControlState->GetDisplayTooltip().ToString());
+						CheckoutPackagesDialogModule.AddPackageItem(CurPackage, ECheckBoxState::Unchecked, true, TEXT("SavePackages.SCC_DlgCheckedOutOther"), SourceControlState->GetDisplayTooltip().ToString());
 					}
 					bShowWarning = true;
 					bPackagesAdded = true;
@@ -1512,7 +1488,7 @@ bool FEditorFileUtils::AddCheckoutPackageItems(bool bCheckDirty, TArray<UPackage
 					bHavePackageToCheckOut = true;
 					//Add this package to the dialog if its not checked out, in the source control depot, dirty(if we are checking), and read only
 					//This package could also be marked for delete, which we will treat as SCC_ReadOnly until it is time to check it out. At that time, we will revert it.
-					CheckoutPackagesDialogModule.AddPackageItem(CurPackage, CurPackage->GetName(), ECheckBoxState::Checked, false, TEXT("SavePackages.SCC_DlgReadOnly"), Tooltip.ToString());
+					CheckoutPackagesDialogModule.AddPackageItem(CurPackage, ECheckBoxState::Checked, false, TEXT("SavePackages.SCC_DlgReadOnly"), Tooltip.ToString());
 					bPackagesAdded = true;
 				}
 				else if (OutPackagesNotNeedingCheckout)
@@ -1531,7 +1507,7 @@ bool FEditorFileUtils::AddCheckoutPackageItems(bool bCheckDirty, TArray<UPackage
 
 			// This package is read only but source control is not available, show the dialog so users can save the package by making the file writable or by connecting to source control.
 			// If we don't care about read-only state, we should allow the user to make the file writable whatever the state of source control.
-			CheckoutPackagesDialogModule.AddPackageItem(CurPackage, CurPackage->GetName(), ECheckBoxState::Unchecked, bIsDisabled, TEXT("SavePackages.SCC_DlgReadOnly"), Tooltip.ToString());
+			CheckoutPackagesDialogModule.AddPackageItem(CurPackage, ECheckBoxState::Unchecked, bIsDisabled, TEXT("SavePackages.SCC_DlgReadOnly"), Tooltip.ToString());
 			PackagesNotToPromptAnyMore.Remove(CurPackage->GetName());
 			bPackagesAdded = true;
 		}
@@ -1682,7 +1658,7 @@ bool FEditorFileUtils::PromptToCheckoutPackages(bool bCheckDirty, const TArray<U
 					UPackage* PackageToMakeWritable = *PkgsToMakeWritableIter;
 					FString Filename;
 
-					bool bFoundFile = FileHelperPackageUtil::DoesPackageExist( PackageToMakeWritable, &Filename );
+					bool bFoundFile = FPackageName::DoesPackageExist( PackageToMakeWritable->GetName(), NULL, &Filename );
 					if( bFoundFile )
 					{
 						// If we're ignoring the package due to the user ignoring it for saving, remove it from the ignore list
@@ -1813,7 +1789,7 @@ ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<UPackage*>&
 				{
 					// Cannot add unsaved packages to source control
 					FString Filename;
-					if (!PackageToCheckOut->HasAnyPackageFlags(PKG_NewlyCreated) || FPackageName::DoesPackageExist(PackageToCheckOut->GetName(), nullptr, &Filename))
+					if (FPackageName::DoesPackageExist(PackageToCheckOut->GetName(), nullptr, &Filename))
 					{
 						bShowCheckoutError = false;
 						FinalPackageMarkForAddList.Add(PackageToCheckOut);
@@ -1822,6 +1798,13 @@ ECommandResult::Type FEditorFileUtils::CheckoutPackages(const TArray<UPackage*>&
 					{
 						// Silently skip package that has not been saved yet
 						// Expected when called by InternalCheckoutAndSavePackages before packages saved
+						bShowCheckoutError = false;
+					}
+				}
+				else if (SourceControlState->IsAdded())
+				{
+					if (!bErrorIfAlreadyCheckedOut)
+					{
 						bShowCheckoutError = false;
 					}
 				}
@@ -2108,25 +2091,35 @@ bool FEditorFileUtils::PromptToCheckoutLevels(bool bCheckDirty, const TArray<ULe
 	bool bResult = true;
 
 	// Only attempt to display the dialog and check out packages if source control integration is present
-	TArray<UPackage*> WorldPackages;
+	TArray<UPackage*> PromptPackages;
 	bool bPackagesAdded = false;
 
 	// If levels were specified by the user, they should be the only ones considered potentially relevant
 	for ( TArray<ULevel*>::TConstIterator SpecificLevelsIter( SpecificLevelsToCheckOut ); SpecificLevelsIter; ++SpecificLevelsIter )
 	{
 		UPackage* LevelsWorldPackage = ( *SpecificLevelsIter )->GetOutermost();
+		check(LevelsWorldPackage);
 
 		// If the user has specified to check if the package is dirty, do so before deeming
 		// the package potentially relevant
-		if ( LevelsWorldPackage && ( !bCheckDirty || ( bCheckDirty && LevelsWorldPackage->IsDirty() ) )  )
+		if (!bCheckDirty || LevelsWorldPackage->IsDirty())
 		{
-			WorldPackages.AddUnique( LevelsWorldPackage );
+			PromptPackages.AddUnique( LevelsWorldPackage );
+		}
+
+		// When prompting for level check out, also add any dependent packages (i.e. external actors)
+		for (UPackage* OwnedPackage : LevelsWorldPackage->GetExternalPackages())
+		{
+			if (OwnedPackage && (!bCheckDirty || OwnedPackage->IsDirty()))
+			{
+				PromptPackages.Add(OwnedPackage);
+			}
 		}
 	}
 
 	// Prompt the user with the provided packages if they prove to be relevant (i.e. in source control and not checked out)
 	// Note: The user's dirty flag option is not passed in here because it's already been taken care of within the function (with a special case)
-	bResult = FEditorFileUtils::PromptToCheckoutPackages( false, WorldPackages, NULL, OutPackagesNotNeedingCheckout );
+	bResult = FEditorFileUtils::PromptToCheckoutPackages( false, PromptPackages, nullptr, OutPackagesNotNeedingCheckout );
 
 	return bResult;
 }
@@ -2743,20 +2736,36 @@ EAutosaveContentPackagesResult::Type FEditorFileUtils::AutosaveMapEx(const FStri
 
 				bResult |= bLevelWasSaved;
 			}
-			else
+
+			// Now gather the world external packages and save them if needed
+			if (World->PersistentLevel)
 			{
-				//UE_LOG(LogFileHelpers, Log,  TEXT("No need to autosave '%s', not dirty"), *Package->GetName() );
+				for (UPackage* ExternalPackage : World->PersistentLevel->GetLoadedExternalActorPackages())
+				{
+					if (ExternalPackage->IsDirty() && (bForceIfNotInList || DirtyPackagesForAutoSave.Contains(ExternalPackage))
+						&& FPackageName::IsValidLongPackageName(ExternalPackage->GetName(), /*bIncludeReadOnlyRoots=*/false))
+					{
+						const FString AutosaveFilename = GetAutoSaveFilename(ExternalPackage, AbsoluteAutosaveDir, AutosaveIndex, FPackageName::GetAssetPackageExtension());
+						if (!GEditor->Exec(nullptr, *FString::Printf(TEXT("OBJ SAVEPACKAGE PACKAGE=\"%s\" FILE=\"%s\" SILENT=false AUTOSAVING=true"), *ExternalPackage->GetName(), *AutosaveFilename)))
+						{
+							return EAutosaveContentPackagesResult::Failure;
+						}
+
+						// Re-mark the package as dirty, because autosaving it will have cleared the dirty flag
+						ExternalPackage->MarkPackageDirty();
+					}
+				}
 			}
 		}
 
 		// Track time spent saving map.
 		double ThisTime = FPlatformTime::Seconds() - SaveStartTime;
 		TotalSaveTime += ThisTime;
-		UE_LOG(LogFileHelpers, Log, TEXT("Editor autosave (incl. sublevels) for '%s' took %.3f"), *EditorContext.World()->GetOutermost()->GetName(), ThisTime  );
+		UE_LOG(LogFileHelpers, Log, TEXT("Editor autosave (incl. external actors) for '%s' took %.3f"), *EditorContext.World()->GetOutermost()->GetName(), ThisTime  );
 	}
 	if( bResult == true )
 	{
-		UE_LOG(LogFileHelpers, Log, TEXT("Editor autosave (incl. sublevels) for all levels took %.3f"), TotalSaveTime );
+		UE_LOG(LogFileHelpers, Log, TEXT("Editor autosave (incl. sublevels & external actors) for all levels took %.3f"), TotalSaveTime );
 	}
 	return bResult ? EAutosaveContentPackagesResult::Success : EAutosaveContentPackagesResult::NothingToDo;
 }
@@ -2789,7 +2798,7 @@ EAutosaveContentPackagesResult::Type FEditorFileUtils::AutosaveContentPackagesEx
 		{
 			bool bSkipPackage = false;
 			TArray<UObject*> ObjectsInPackage;
-			GetObjectsWithOuter(CurPackage, ObjectsInPackage, false);
+			GetObjectsWithPackage(CurPackage, ObjectsInPackage, false);
 			for (auto ObjIt = ObjectsInPackage.CreateConstIterator(); ObjIt; ++ObjIt)
 			{
 				// Also, make sure this is not a map package
@@ -2801,6 +2810,12 @@ EAutosaveContentPackagesResult::Type FEditorFileUtils::AutosaveContentPackagesEx
 				else if (Cast<UMapBuildDataRegistry>(*ObjIt))
 				{
 					// Do not auto save generated map build data packages
+					bSkipPackage = true;
+					break;
+				}
+				// handles external actor packages
+				else if ((*ObjIt)->GetTypedOuter<UWorld>())
+				{
 					bSkipPackage = true;
 					break;
 				}
@@ -2881,7 +2896,7 @@ static InternalSavePackageResult InternalSavePackage(UPackage* PackageToSave, bo
 	TRACE_CPUPROFILER_EVENT_SCOPE(InternalSavePackage);
 
 	// What we will be returning. Assume for now that everything will go fine
-	InternalSavePackageResult ReturnCode = InternalSavePackageResult::Success;
+	InternalSavePackageResult ReturnCode = InternalSavePackageResult::Error;
 
 	// Assume the package is locally writable in case SCC is disabled; if SCC is enabled, it will
 	// correctly set this value later
@@ -2889,7 +2904,9 @@ static InternalSavePackageResult InternalSavePackage(UPackage* PackageToSave, bo
 
 	bool bShouldRetrySave = true;
 	UWorld*	AssociatedWorld	= UWorld::FindWorldInPackage(PackageToSave);
-	const bool	bIsMapPackage = AssociatedWorld != NULL;
+	// Redirector to world saves with file extension for maps
+	const bool bSavingRedirectorToWorld = !AssociatedWorld && UWorld::FollowWorldRedirectorInPackage(PackageToSave);
+	const bool bIsMapPackage = AssociatedWorld != NULL || bSavingRedirectorToWorld;
 
 	// The name of the package
 	const FString PackageName = PackageToSave->GetName();
@@ -2900,15 +2917,17 @@ static InternalSavePackageResult InternalSavePackage(UPackage* PackageToSave, bo
 	FString FinalPackageFilename;
 
 	// True if we should attempt saving
-	bool bAttemptSave = true;
+	bool bAttemptSave = false;
 
 	// If the package already has a valid path to a non read-only location, use it to determine where the file should be saved
 	const bool bIncludeReadOnlyRoots = false;
 	const bool bIsValidPath = FPackageName::IsValidLongPackageName(PackageName, bIncludeReadOnlyRoots);
 	if( bIsValidPath )
 	{
+		bAttemptSave = true;
+
 		FString ExistingFilename;
-		const bool bPackageAlreadyExists = FileHelperPackageUtil::DoesPackageExist(PackageToSave, &ExistingFilename);
+		const bool bPackageAlreadyExists = FPackageName::DoesPackageExist(PackageName, NULL, &ExistingFilename);
 		if (!bPackageAlreadyExists)
 		{
 			// Construct a filename from long package name.
@@ -2919,7 +2938,7 @@ static InternalSavePackageResult InternalSavePackage(UPackage* PackageToSave, bo
 			FText ErrorText;
 			if (!FFileHelper::IsFilenameValidForSaving(ExistingFilename, ErrorText))
 			{
-				// Display the error (already localized) and exit gracefuly.
+				// Display the error (already localized) and exit gracefully.
 				FMessageDialog::Open(EAppMsgType::Ok, ErrorText);
 				bAttemptSave = false;
 			}
@@ -3045,6 +3064,7 @@ static InternalSavePackageResult InternalSavePackage(UPackage* PackageToSave, bo
 				{
 					FinalPackageSavePath = FinalPackageFilename;
 					// Stop looping, we successfully got a valid path and filename to save
+					bAttemptSave = true;
 					break;
 				}
 			}
@@ -3056,7 +3076,6 @@ static InternalSavePackageResult InternalSavePackage(UPackage* PackageToSave, bo
 				if( NumSkips == NumSkipsBeforeAbort )
 				{
 					// They really want to stop
-					bAttemptSave = false;
 					ReturnCode = InternalSavePackageResult::Cancel;
 				}
 			}
@@ -3068,7 +3087,8 @@ static InternalSavePackageResult InternalSavePackage(UPackage* PackageToSave, bo
 	while( bAttemptSave )
 	{
 		bool bWasSuccessful = false;
-		if ( bIsMapPackage )
+		// Note: Redirector to world uses SAVEPACKAGE instead of SaveMap
+		if (bIsMapPackage && !bSavingRedirectorToWorld)
 		{
 			// have a Helper attempt to save the map
 			SaveOutput.Log("LogFileHelpers", ELogVerbosity::Log, FString::Printf(TEXT("Saving Map: %s"), *PackageName));
@@ -3236,13 +3256,14 @@ static bool InternalSavePackagesFast(const TArray<UPackage*>& PackagesToSave, bo
 	FSaveErrorOutputDevice SaveErrors;
 	GWarn->BeginSlowTask(NSLOCTEXT("UnrealEd", "SavingPackagesE", "Saving packages..."), true);
 
+	TArray<UPackage*> PackagesToClean;
 	for (TArray<UPackage*>::TConstIterator PkgIter(PackagesToSave); PkgIter; ++PkgIter)
 	{
 		UPackage* CurPackage = *PkgIter;
 
 		// Check if a file exists for this package
 		FString Filename;
-		bool bFoundFile = FileHelperPackageUtil::DoesPackageExist(CurPackage, &Filename);
+		bool bFoundFile = FPackageName::DoesPackageExist(CurPackage->GetName(), NULL, &Filename);
 		if (bFoundFile)
 		{
 			// determine if the package file is read only
@@ -3267,30 +3288,46 @@ static bool InternalSavePackagesFast(const TArray<UPackage*>& PackagesToSave, bo
 				GWarn->StatusForceUpdate(PkgIter.GetIndex(), PackagesToSave.Num(), SavingPackageText);
 
 				// Save the package
-				bool bPackageLocallyWritable;
-				const InternalSavePackageResult SaveStatus = InternalSavePackage(CurPackage, bUseDialog, bPackageLocallyWritable, SaveErrors);
 
-				if (SaveStatus == InternalSavePackageResult::Cancel)
+				// if the package we are saving is considered empty, mark it for deletion on disk instead
+				if (UPackage::IsEmptyPackage(CurPackage))
 				{
-					// we don't want to pop up a message box about failing to save packages if they cancel
-					// instead warn here so there is some trace in the log and also unattended builds can find it
-					UE_LOG(LogFileHelpers, Warning, TEXT("Cancelled saving package %s"), *CurPackage->GetName());
+					PackagesToClean.Add(CurPackage);
 				}
-				else if (SaveStatus == InternalSavePackageResult::Continue || SaveStatus == InternalSavePackageResult::Error)
+				// Otherwise, save as usual
+				else
 				{
-					// The package could not be saved so add it to the failed array 
-					OutFailedPackages.Add(CurPackage);
+					bool bPackageLocallyWritable;
+					const InternalSavePackageResult SaveStatus = InternalSavePackage(CurPackage, bUseDialog, bPackageLocallyWritable, SaveErrors);
 
-					if (SaveStatus == InternalSavePackageResult::Error)
+					if (SaveStatus == InternalSavePackageResult::Cancel)
 					{
-						// exit gracefully.
-						bReturnCode = false;
+						// we don't want to pop up a message box about failing to save packages if they cancel
+						// instead warn here so there is some trace in the log and also unattended builds can find it
+						UE_LOG(LogFileHelpers, Warning, TEXT("Cancelled saving package %s"), *CurPackage->GetName());
+					}
+					else if (SaveStatus == InternalSavePackageResult::Continue || SaveStatus == InternalSavePackageResult::Error)
+					{
+						// The package could not be saved so add it to the failed array 
+						OutFailedPackages.Add(CurPackage);
+
+						if (SaveStatus == InternalSavePackageResult::Error)
+						{
+							// exit gracefully.
+							bReturnCode = false;
+						}
 					}
 				}
 			}
 		}
 	}
 
+	// if we have
+	if (PackagesToClean.Num() > 0)
+	{
+		ObjectTools::CleanupAfterSuccessfulDelete(PackagesToClean, true);
+	}
+	
 	GWarn->EndSlowTask();
 	SaveErrors.Flush();
 
@@ -3330,17 +3367,17 @@ static bool InternalSavePackages(const TArray<UPackage*>& PackagesToSave, bool b
 	return bReturnCode;
 }
 
-void FEditorFileUtils::SaveMapDataPackages(UWorld* WorldToSave, bool bCheckDirty)
+void FEditorFileUtils::SaveMapDataPackages(UWorld* WorldToSave, bool bCheckDirty, bool bSaveExternal)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(FEditorFileUtils_SaveMapDataPackages);
 
 	TArray<UPackage*> PackagesToSave;
-	ULevel* Level = WorldToSave->PersistentLevel;
 	UPackage* WorldPackage = WorldToSave->GetOutermost();
 
 	if (!WorldPackage->HasAnyPackageFlags(PKG_PlayInEditor)
 		&& !WorldPackage->HasAnyFlags(RF_Transient))
 	{
+		ULevel* Level = WorldToSave->PersistentLevel;
 		if (Level->MapBuildData)
 		{
 			UPackage* BuiltDataPackage = Level->MapBuildData->GetOutermost();
@@ -3349,6 +3386,11 @@ void FEditorFileUtils::SaveMapDataPackages(UWorld* WorldToSave, bool bCheckDirty
 			{
 				PackagesToSave.Add(BuiltDataPackage);
 			}
+		}
+
+		if (bSaveExternal)
+		{
+			PackagesToSave.Append(WorldPackage->GetExternalPackages());
 		}
 	}
 			
@@ -3495,7 +3537,7 @@ bool FEditorFileUtils::SaveDirtyContentPackages(TArray<UClass*>& SaveContentClas
 		if (!bShouldIgnorePackage)
 		{
 			TArray<UObject*> Objects;
-			GetObjectsWithOuter(Package, Objects);
+			GetObjectsWithPackage(Package, Objects);
 
 			for (auto Iter = Objects.CreateIterator(); Iter; ++Iter)
 			{
@@ -3540,16 +3582,36 @@ bool FEditorFileUtils::SaveDirtyContentPackages(TArray<UClass*>& SaveContentClas
  */
 bool FEditorFileUtils::SaveCurrentLevel()
 {
-	bool bReturnCode = false;
-
 	TRACE_CPUPROFILER_EVENT_SCOPE(FEditorFileUtils_SaveCurrentLevel);
 
+	bool bReturnCode = true;
 	ULevel* Level = GWorld->GetCurrentLevel();
-	if ( Level && FEditorFileUtils::PromptToCheckoutLevels( false, Level ) )
+	if (Level)
 	{
-		bReturnCode = FEditorFileUtils::SaveLevel( Level );
-	}
+		// Check dirtiness if the level is using external actors, no need to save it needlessly
+		bool bCheckDirty = Level->IsUsingExternalActors();
+		if (FEditorFileUtils::PromptToCheckoutLevels(bCheckDirty, Level))
+		{
+			UPackage* LevelPackage = Level->GetPackage();
+			// Save the level
+			if (!bCheckDirty || LevelPackage->IsDirty())
+			{
+				bReturnCode &= FEditorFileUtils::SaveLevel(Level);
+			}
 
+			// Gather the level owned packages (i.e external actors and save them)
+			TArray<UPackage*> PackagesToSave = Level->GetLoadedExternalActorPackages();
+			for (auto It = PackagesToSave.CreateIterator(); It; ++It)
+			{
+				UPackage* Package = *It;
+				if (bCheckDirty && !Package->IsDirty() && !UPackage::IsEmptyPackage(Package))
+				{
+					It.RemoveCurrent();
+				}
+			}
+			bReturnCode &= InternalSavePackages(PackagesToSave, false, false, false);
+		}
+	}
 	return bReturnCode;
 }
 
@@ -3565,8 +3627,8 @@ FEditorFileUtils::EPromptReturnCode InternalPromptForCheckoutAndSave(const TArra
 	const FScopedBusyCursor BusyCursor;
 	FSaveErrorOutputDevice SaveErrors;
 
-	TArray<UPackage*> WritablePackageFiles;
-
+	TArray<UPackage*, TInlineAllocator<2>> WritablePackageFiles;
+	TArray<UPackage*> PackagesToClean;
 	{
 		FScopedSlowTask SlowTask(FinalSaveList.Num() * 2, NSLOCTEXT("UnrealEd", "SavingPackagesE", "Saving packages..."));
 		SlowTask.MakeDialog();
@@ -3590,33 +3652,47 @@ FEditorFileUtils::EPromptReturnCode InternalPromptForCheckoutAndSave(const TArra
 
 			SlowTask.EnterProgressFrame(1, SavingPackageText);
 
-			// Save the package
-			bool bPackageLocallyWritable;
-			const InternalSavePackageResult SaveStatus = InternalSavePackage(Package, bUseDialog, bPackageLocallyWritable, SaveErrors);
-
-			// If InternalSavePackage reported that the provided package was locally writable, add it to the list of writable files
-			// to warn the user about
-			if (bPackageLocallyWritable)
+			// if the package we are saving is considered empty, mark it for deletion on disk instead
+			if (UPackage::IsEmptyPackage(Package))
 			{
-				WritablePackageFiles.Add(Package);
+				PackagesToClean.Add(Package);
 			}
+			// Otherwise, save as usual
+			else
+			{
+				// Save the package
+				bool bPackageLocallyWritable;
+				const InternalSavePackageResult SaveStatus = InternalSavePackage(Package, bUseDialog, bPackageLocallyWritable, SaveErrors);
 
-			if (SaveStatus == InternalSavePackageResult::Cancel)
-			{
-				// No need to save anything else, the user wants to cancel everything
-				ReturnResponse = FEditorFileUtils::PR_Cancelled;
-				break;
-			}
-			else if (SaveStatus == InternalSavePackageResult::Continue || SaveStatus == InternalSavePackageResult::Error)
-			{
-				// The package could not be saved so add it to the failed array and change the return response to indicate failure
-				OutFailedPackages.Add(Package);
-				ReturnResponse = FEditorFileUtils::PR_Failure;
+				// If InternalSavePackage reported that the provided package was locally writable, add it to the list of writable files
+				// to warn the user about
+				if (bPackageLocallyWritable)
+				{
+					WritablePackageFiles.Add(Package);
+				}
+
+				if (SaveStatus == InternalSavePackageResult::Cancel)
+				{
+					// No need to save anything else, the user wants to cancel everything
+					ReturnResponse = FEditorFileUtils::PR_Cancelled;
+					break;
+				}
+				else if (SaveStatus == InternalSavePackageResult::Continue || SaveStatus == InternalSavePackageResult::Error)
+				{
+					// The package could not be saved so add it to the failed array and change the return response to indicate failure
+					OutFailedPackages.Add(Package);
+					ReturnResponse = FEditorFileUtils::PR_Failure;
+				}
 			}
 		}
 	}
 
 	SaveErrors.Flush();
+
+	if (PackagesToClean.Num() > 0)
+	{
+		ObjectTools::CleanupAfterSuccessfulDelete(PackagesToClean, true);
+	}
 
 	// If any packages were saved that weren't actually in source control but instead forcibly made writable,
 	// then warn the user about those packages
@@ -3682,9 +3758,25 @@ FEditorFileUtils::EPromptReturnCode FEditorFileUtils::PromptForCheckoutAndSave( 
 		return PR_Cancelled;
 	}
 
+	// Gather packages owned by the packages we are saving so we can prompt for them as well.
+	TArray<UPackage*> PackagesToSave(InPackages);
+
+	// When saving a package which owns other packages, add those to the prompt as well,
+	// if we do not check dirty, we aren't already checked out and we prompt
+	if (!bAlreadyCheckedOut && !bCheckDirty && bPromptToSave)
+	{
+		for (UPackage* Package : InPackages)
+		{
+			for (UPackage* ExternalPackage : Package->GetExternalPackages())
+			{
+				PackagesToSave.AddUnique(ExternalPackage);
+			}
+		}
+	}
+
 	if (GIsRunningUnattendedScript)
 	{
-		return UEditorLoadingAndSavingUtils::SavePackages(InPackages, bCheckDirty) ? PR_Success : PR_Failure;
+		return UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, bCheckDirty) ? PR_Success : PR_Failure;
 	}
 
 	if ( FApp::IsUnattended() && !bAlreadyCheckedOut )
@@ -3720,7 +3812,7 @@ FEditorFileUtils::EPromptReturnCode FEditorFileUtils::PromptForCheckoutAndSave( 
 
 		TArray<UPackage*> AddPackageItemsChecked;
 		TArray<UPackage*> AddPackageItemsUnchecked;
-		for ( TArray<UPackage*>::TConstIterator PkgIter( InPackages ); PkgIter; ++PkgIter )
+		for ( TArray<UPackage*>::TConstIterator PkgIter(PackagesToSave); PkgIter; ++PkgIter )
 		{
 			UPackage* CurPackage = *PkgIter;
 			check( CurPackage );
@@ -3759,11 +3851,11 @@ FEditorFileUtils::EPromptReturnCode FEditorFileUtils::PromptForCheckoutAndSave( 
 		{
 			for (auto Iter = AddPackageItemsChecked.CreateIterator(); Iter; ++Iter)
 			{
-				PackagesDialogModule.AddPackageItem(*Iter, (*Iter)->GetName(), ECheckBoxState::Checked);
+				PackagesDialogModule.AddPackageItem(*Iter, ECheckBoxState::Checked);
 			}
 			for (auto Iter = AddPackageItemsUnchecked.CreateIterator(); Iter; ++Iter)
 			{
-				PackagesDialogModule.AddPackageItem(*Iter, (*Iter)->GetName(), ECheckBoxState::Unchecked);
+				PackagesDialogModule.AddPackageItem(*Iter, ECheckBoxState::Unchecked);
 			}
 
 			// If valid packages were added to the dialog, display it to the user
@@ -3772,7 +3864,8 @@ FEditorFileUtils::EPromptReturnCode FEditorFileUtils::PromptForCheckoutAndSave( 
 			// If the user has responded yes, they want to save the packages they have checked
 			if ( UserResponse == DRT_Save )
 			{
-				PackagesDialogModule.GetResults( FilteredPackages, ECheckBoxState::Checked );
+				PackagesToSave.Reset();
+				PackagesDialogModule.GetResults(PackagesToSave, ECheckBoxState::Checked );
 
 				TArray<UPackage*> UncheckedPackagesRaw;
 				PackagesDialogModule.GetResults( UncheckedPackagesRaw, ECheckBoxState::Unchecked );
@@ -3797,7 +3890,7 @@ FEditorFileUtils::EPromptReturnCode FEditorFileUtils::PromptForCheckoutAndSave( 
 	else
 	{
 		// The user will not be prompted about which files to save, so consider all provided packages directly
-		for ( TArray<UPackage*>::TConstIterator PkgIter( InPackages ); PkgIter; ++PkgIter )
+		for ( TArray<UPackage*>::TIterator PkgIter(PackagesToSave); PkgIter; ++PkgIter )
 		{
 			UPackage* CurPackage = *PkgIter;
 			check( CurPackage );
@@ -3809,26 +3902,26 @@ FEditorFileUtils::EPromptReturnCode FEditorFileUtils::PromptForCheckoutAndSave( 
 				if ( CurPackage != GetTransientPackage() )
 				{
 					// Never save compiled in packages
-					if (CurPackage->HasAnyPackageFlags(PKG_CompiledIn) == false)
+					if (CurPackage->HasAnyPackageFlags(PKG_CompiledIn))
 					{
-						FilteredPackages.Add( CurPackage );
-					}
-					else
-					{
+						PkgIter.RemoveCurrent();
 						UE_LOG(LogFileHelpers, Warning, TEXT("PromptForCheckoutAndSave attempted to save a compiled in package: %s"), *CurPackage->GetName());
 					}
 				}
 				else
 				{
+					PkgIter.RemoveCurrent();
 					UE_LOG(LogFileHelpers, Warning, TEXT("PromptForCheckoutAndSave attempted to save the transient package"));
 				}
+			}
+			else
+			{
+				PkgIter.RemoveCurrent();
 			}
 		}
 	}
 
 	// Assemble list of packages to save
-	const TArray<UPackage*>& PackagesToSave = FilteredPackages;
-
 	// If there are any packages to save and the user didn't decline/cancel, then first prompt to check out any that are under source control,
 	// and then go ahead and save the specified packages
 	if ( PackagesToSave.Num() > 0 && ReturnResponse == PR_Success )
@@ -3970,7 +4063,7 @@ void FEditorFileUtils::FindAllPackageFiles(TArray<FString>& OutPackages)
 
 	for (int32 PathIndex = 0; PathIndex < Paths.Num(); PathIndex++)
 	{
-		FPackageName::FindPackagesInDirectory(OutPackages, *Paths[PathIndex]);
+		FPackageName::FindPackagesInDirectory(OutPackages, Paths[PathIndex]);
 	}
 }
 
@@ -4121,6 +4214,7 @@ void FEditorFileUtils::GetDirtyWorldPackages(TArray<UPackage*>& OutDirtyPackages
 				OutDirtyPackages.Add(WorldPackage);
 			}
 
+			// Add the Map built data as well if world is
 			if (WorldIt->PersistentLevel && WorldIt->PersistentLevel->MapBuildData)
 			{
 				UPackage* BuiltDataPackage = WorldIt->PersistentLevel->MapBuildData->GetOutermost();
@@ -4129,9 +4223,12 @@ void FEditorFileUtils::GetDirtyWorldPackages(TArray<UPackage*>& OutDirtyPackages
 				{
 					if (WorldPackage->IsDirty() && !BuiltDataPackage->IsDirty())
 					{
-						// Must become dirty because new prompts to save should not be brought up after each individual map saves
-						// We also cannot bring up a second prompt to save because a recursion guard blocks it
-						BuiltDataPackage->MarkPackageDirty();
+						// Mark built data package dirty if has not been given name yet
+						// Otherwise SaveDirtyPackages will fail to create built data file on disk due to re-entrance guard in PromptForCheckoutAndSave preventing a second pop-up window
+						if (!FPackageName::IsValidLongPackageName(BuiltDataPackage->GetName(), /*bIncludeReadOnlyRoots= */ false))
+						{
+							BuiltDataPackage->MarkPackageDirty();
+						}
 					}
 
 					if (BuiltDataPackage->IsDirty())
@@ -4150,6 +4247,36 @@ void FEditorFileUtils::GetDirtyWorldPackages(TArray<UPackage*>& OutDirtyPackages
 						}
 
 						OutDirtyPackages.Add(BuiltDataPackage);
+					}
+				}
+			}
+
+			// Make sure we also save the dirty HLOD packages associated with this map.
+			if (WorldIt->HierarchicalLODBuilder)
+			{
+				const AWorldSettings* WorldSettings = WorldIt->GetWorldSettings();
+				if (WorldSettings && WorldSettings->bEnableHierarchicalLODSystem)
+				{
+					TSet<UPackage*> HLODPackages;
+					WorldIt->HierarchicalLODBuilder->GetMeshesPackagesToSave(WorldIt->PersistentLevel, HLODPackages);
+					for (UPackage* HLODPackage : HLODPackages)
+					{
+						if (HLODPackage->IsDirty())
+						{
+							OutDirtyPackages.Add(HLODPackage);
+						}
+					}
+				}
+			}
+
+			// Now gather the world external packages and save them if needed
+			if (WorldIt->PersistentLevel)
+			{
+				for (UPackage* ExternalPackage : WorldIt->PersistentLevel->GetLoadedExternalActorPackages())
+				{
+					if (ExternalPackage->IsDirty())
+					{
+						OutDirtyPackages.Add(ExternalPackage);
 					}
 				}
 			}
@@ -4182,11 +4309,15 @@ void FEditorFileUtils::GetDirtyContentPackages(TArray<UPackage*>& OutDirtyPackag
 
 		if (!bShouldIgnorePackage)
 		{
-			UWorld*		AssociatedWorld = UWorld::FindWorldInPackage(Package);
-			const bool	bIsMapPackage = AssociatedWorld != NULL;
+			UObject* Asset = Package->FindAssetInPackage();
+			const bool bIsMapPackage = Cast<UWorld>(Asset) != nullptr;
+			const bool bIsExternalMapObject = Asset && Asset->GetTypedOuter<UWorld>() != nullptr;
 
 			// Ignore map packages, they are caught above.
 			bShouldIgnorePackage |= bIsMapPackage;
+
+			// Ignore external actors, they are caught alongside maps
+			bShouldIgnorePackage |= bIsExternalMapObject;
 
 			if (!bShouldIgnorePackage)
 			{
@@ -4306,7 +4437,8 @@ static bool InternalCheckoutAndSavePackages(const TArray<UPackage*>& PackagesToS
 
 			TArray<UPackage*> PackagesCheckedOut;
 			const bool bErrorIfAlreadyCheckedOut = false;
-			const bool bConfirmPackageBranchCheckOutStatus = bUseDialog;
+			const bool bConfirmPackageBranchCheckOutStatus = false;
+
 			FEditorFileUtils::CheckoutPackages(PackagesToSave, &PackagesCheckedOut, bErrorIfAlreadyCheckedOut, bConfirmPackageBranchCheckOutStatus);
 
 			// Cannot mark files for add until after packages saved
@@ -4314,7 +4446,6 @@ static bool InternalCheckoutAndSavePackages(const TArray<UPackage*>& PackagesToS
 			for (UPackage* Package : PackagesToSave)
 			{
 				// List unsaved packages that were not checked out
-				if (Package->HasAnyPackageFlags(PKG_NewlyCreated) && !PackagesCheckedOut.Contains(Package))
 				if (!PackagesCheckedOut.Contains(Package))
 				{
 					PackagesToMarkForAdd.Add(Package);
@@ -4328,7 +4459,7 @@ static bool InternalCheckoutAndSavePackages(const TArray<UPackage*>& PackagesToS
 			PackagesToMarkForAdd.RemoveAll([&FailedPackages](UPackage* Package) { return FailedPackages.Contains(Package); });
 			if (PackagesToMarkForAdd.Num() > 0)
 			{
-				FEditorFileUtils::CheckoutPackages(PackagesToMarkForAdd, nullptr, bErrorIfAlreadyCheckedOut);
+				FEditorFileUtils::CheckoutPackages(PackagesToMarkForAdd, nullptr, bErrorIfAlreadyCheckedOut, bConfirmPackageBranchCheckOutStatus);
 			}
 
 			bResult = (ReturnResponse == FEditorFileUtils::PR_Success);
@@ -4417,6 +4548,11 @@ void UEditorLoadingAndSavingUtils::ExportScene(bool bExportSelectedActorsOnly)
 void UEditorLoadingAndSavingUtils::UnloadPackages(const TArray<UPackage*>& PackagesToUnload, bool& bOutAnyPackagesUnloaded, FText& OutErrorMessage)
 {
 	bOutAnyPackagesUnloaded = UPackageTools::UnloadPackages(PackagesToUnload, OutErrorMessage);
+}
+
+void UEditorLoadingAndSavingUtils::ReloadPackages(const TArray<UPackage*>& PackagesToReload, bool& bOutAnyPackagesReloaded, FText& OutErrorMessage, const EReloadPackagesInteractionMode InteractionMode)
+{
+	bOutAnyPackagesReloaded = UPackageTools::ReloadPackages(PackagesToReload, OutErrorMessage, InteractionMode);
 }
 
 #undef LOCTEXT_NAMESPACE

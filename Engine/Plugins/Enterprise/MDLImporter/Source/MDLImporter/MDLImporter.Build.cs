@@ -11,7 +11,7 @@ namespace UnrealBuildTool.Rules
     {
         private string ThirdPartyPath
         {
-            get { return Path.GetFullPath(Path.Combine(ModuleDirectory, "../ThirdParty/NotForLicensees/")); }
+            get { return Path.GetFullPath(Path.Combine(EngineDirectory, "Restricted/NotForLicensees/Source/ThirdParty/Enterprise/")); }
         }
 
         public MDLImporter(ReadOnlyTargetRules Target) : base(Target)
@@ -24,6 +24,7 @@ namespace UnrealBuildTool.Rules
                     "Analytics",
                     "Core",
                     "RenderCore",
+					"RHI",
                     "ImageCore",
                     "CoreUObject",
                     "Engine",
@@ -91,7 +92,7 @@ namespace UnrealBuildTool.Rules
             if (Directory.Exists(ThirdPartyPath))
             {
                 //third party libraries
-                string[] Libs = { "mdl-sdk-314800.830"};
+                string[] Libs = { "mdl-sdk-334300.2228"};
                 foreach (string Lib in Libs)
                 {
                     string IncludePath = Path.Combine(ThirdPartyPath, Lib, "include");
