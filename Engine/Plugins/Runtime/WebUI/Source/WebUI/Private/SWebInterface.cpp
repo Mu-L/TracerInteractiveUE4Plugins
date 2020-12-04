@@ -487,4 +487,28 @@ void SWebInterface::UnbindUObject( const FString& Name, UObject* Object, bool bI
 	if ( BrowserView.IsValid() )
 		BrowserView->UnbindUObject( Name, Object, bIsPermanent );
 }
+
+void SWebInterface::BindAdapter(const TSharedRef<IWebBrowserAdapter>& Adapter)
+{
+	if (BrowserView.IsValid())
+		BrowserView->BindAdapter(Adapter);
+}
+
+void SWebInterface::UnbindAdapter(const TSharedRef<IWebBrowserAdapter>& Adapter)
+{
+	if (BrowserView.IsValid())
+		BrowserView->UnbindAdapter(Adapter);
+}
+
+void SWebInterface::BindInputMethodSystem(ITextInputMethodSystem* TextInputMethodSystem)
+{
+	if (BrowserView.IsValid())
+		BrowserView->BindInputMethodSystem(TextInputMethodSystem);
+}
+
+void SWebInterface::UnbindInputMethodSystem()
+{
+	if (BrowserView.IsValid())
+		BrowserView->UnbindInputMethodSystem();
+}
 #endif

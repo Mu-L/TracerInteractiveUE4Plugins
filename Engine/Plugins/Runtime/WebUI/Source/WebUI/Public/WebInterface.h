@@ -56,6 +56,13 @@ public:
 	// Unbind an object from ue.name in the browser context.
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
 	void Unbind( const FString& Name, UObject* Object );
+	
+	// Enables input method editors for different languages.
+	UFUNCTION(BlueprintCallable, Category = "Web UI|Input")
+	void EnableIME();
+	// Disables input method editors for different languages.
+	UFUNCTION(BlueprintCallable, Category = "Web UI|Input")
+	void DisableIME();
 
 	// Set focus to the browser.
 	UFUNCTION(BlueprintCallable, meta = (AdvancedDisplay = "MouseLockMode"), Category = "Web UI|Helpers")

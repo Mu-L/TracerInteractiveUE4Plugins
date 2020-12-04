@@ -193,6 +193,22 @@ void UWebInterface::Unbind( const FString& Name, UObject* Object )
 #endif
 }
 
+void UWebInterface::EnableIME()
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		WebInterfaceWidget->BindInputMethodSystem( FSlateApplication::Get().GetTextInputMethodSystem() );
+#endif
+}
+
+void UWebInterface::DisableIME()
+{
+#if !UE_SERVER
+	if ( WebInterfaceWidget.IsValid() )
+		WebInterfaceWidget->UnbindInputMethodSystem();
+#endif
+}
+
 void FindChildWidgetsOfType( const FString& Type, TSharedRef<SWidget> Widget, TArray<TSharedRef<SWidget>>& Array )
 {
 	FChildren* Children = Widget->GetChildren();

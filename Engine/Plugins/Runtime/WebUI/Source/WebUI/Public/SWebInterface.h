@@ -11,6 +11,7 @@
 #include "SWebBrowserView.h"
 
 class SWebBrowserView;
+class IWebBrowserAdapter;
 class IWebBrowserDialog;
 class IWebBrowserWindow;
 struct FWebNavigationRequest;
@@ -148,5 +149,11 @@ public:
 
 	void BindUObject( const FString& Name, UObject* Object, bool bIsPermanent = true );
 	void UnbindUObject( const FString& Name, UObject* Object, bool bIsPermanent = true );
+
+	void BindAdapter( const TSharedRef<IWebBrowserAdapter>& Adapter );
+	void UnbindAdapter( const TSharedRef<IWebBrowserAdapter>& Adapter );
+
+	void BindInputMethodSystem( ITextInputMethodSystem* TextInputMethodSystem );
+	void UnbindInputMethodSystem();
 };
 #endif
