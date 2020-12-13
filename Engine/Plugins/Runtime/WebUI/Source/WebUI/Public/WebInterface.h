@@ -1,4 +1,4 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #pragma once
 #include "Components/Widget.h"
 #include "Engine/EngineBaseTypes.h"

@@ -1,4 +1,4 @@
-// Copyright 2020 Tracer Interactive, LLC. All Rights Reserved.
+// Copyright 2021 Tracer Interactive, LLC. All Rights Reserved.
 #include "WebInterfaceObject.h"
 #include "WebInterface.h"
 #include "WebInterfaceCallback.h"
