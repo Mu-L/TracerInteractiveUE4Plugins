@@ -26,6 +26,9 @@ public:
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams( FOnPopupEvent, const FString&, URL, const FString&, Frame );
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams( FOnInterfaceEvent, const FName, Name, FJsonLibraryValue, Data, FWebInterfaceCallback, Callback );
 
+	// Load the browser.
+	UFUNCTION(BlueprintCallable, Category = "Web UI", meta = (AdvancedDisplay = "Scheme"))
+	void Load( const FString& File, const FString& Scheme = "pak://" );
 	// Load HTML in the browser.
 	UFUNCTION(BlueprintCallable, Category = "Web UI")
 	void LoadHTML( const FString& HTML );
@@ -133,6 +136,8 @@ protected:
 	
 	UPROPERTY(EditAnywhere, Category = "Behavior", meta = (UIMin = 1, UIMax = 60))
 	int32 FrameRate;
+	UPROPERTY(EditAnywhere, Category = "Behavior")
+	FString ContentScheme;
 	UPROPERTY(EditAnywhere, Category = "Behavior")
 	FString InitialURL;
 

@@ -3,6 +3,7 @@
 #if !UE_SERVER
 #include "SWebBrowser.h"
 #include "WebBrowserModule.h"
+#include "WebInterfaceSchemeHandler.h"
 #include "IWebBrowserPopupFeatures.h"
 #include "IWebBrowserSingleton.h"
 #include "IWebBrowserWindow.h"
@@ -44,6 +45,12 @@ SWebInterface::~SWebInterface()
 		}
 	}
 #endif
+
+	IWebBrowserSingleton* Singleton = IWebBrowserModule::Get().GetSingleton();
+	if ( Singleton && SchemeFactory.IsValid() )
+		Singleton->UnregisterSchemeHandlerFactory( SchemeFactory.Get() );
+
+	SchemeFactory.Reset();
 }
 
 void SWebInterface::Construct( const FArguments& InArgs )
@@ -81,6 +88,16 @@ void SWebInterface::Construct( const FArguments& InArgs )
 	{
 		Singleton->SetDevToolsShortcutEnabled( Settings.bShowErrorMessage );
 		BrowserWindow = Singleton->CreateBrowserWindow( Settings );
+
+		FString Scheme = InArgs._ContentScheme.TrimStartAndEnd();
+		if ( Scheme.EndsWith( "://" ) )
+			Scheme = Scheme.LeftChop( 3 );
+
+		if ( Scheme.Len() > 0 )
+		{
+			SchemeFactory = MakeShareable( new FWebInterfaceSchemeHandlerFactory );
+			Singleton->RegisterSchemeHandlerFactory( Scheme, FString(), SchemeFactory.Get() );
+		}
 	}
 
 	ChildSlot

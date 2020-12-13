@@ -14,6 +14,7 @@ class SWebBrowserView;
 class IWebBrowserAdapter;
 class IWebBrowserDialog;
 class IWebBrowserWindow;
+class FWebInterfaceSchemeHandlerFactory;
 struct FWebNavigationRequest;
 enum class EWebBrowserDialogEventResponse;
 
@@ -28,6 +29,7 @@ public:
 
 	SLATE_BEGIN_ARGS( SWebInterface )
 		: _FrameRate( 60 )
+		, _ContentScheme( TEXT( "pak://" ) )
 		, _InitialURL( TEXT( "http://tracerinteractive.com" ) )
 		, _BackgroundColor( 255, 255, 255, 255 )
 		, _EnableMouseTransparency( false )
@@ -40,6 +42,7 @@ public:
 	}
 		SLATE_ARGUMENT( TSharedPtr<SWindow>, ParentWindow )
 		SLATE_ARGUMENT( int32, FrameRate )
+		SLATE_ARGUMENT( FString, ContentScheme )
 		SLATE_ARGUMENT( FString, InitialURL )
 		SLATE_ARGUMENT( TOptional<FString>, ContentsToLoad )
 		SLATE_ARGUMENT( FColor, BackgroundColor )
@@ -95,6 +98,8 @@ protected:
 #if UE_BUILD_DEVELOPMENT || UE_BUILD_DEBUG
 	TMap<TWeakPtr<IWebBrowserWindow>, TWeakPtr<SWindow>> BrowserWindowWidgets;
 #endif
+
+	TSharedPtr<FWebInterfaceSchemeHandlerFactory, ESPMode::ThreadSafe> SchemeFactory;
 
 	bool bMouseTransparency;
 	bool bVirtualPointerTransparency;
